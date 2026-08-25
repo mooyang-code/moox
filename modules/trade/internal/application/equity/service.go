@@ -8,13 +8,14 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
 type Service struct {
 	Store    *store.Store
 	Adapters interface {
-		Adapter(string) (exchange.Adapter, error)
+		Adapter(string) (execution.ExecutionAdapter, error)
 	}
 	Now          func() time.Time
 	SourceMaxAge time.Duration
@@ -122,11 +123,17 @@ func (s *Service) valueSpotSnapshot(ctx context.Context, account store.TradingAc
 		if err != nil {
 			return store.TradingAccountSnapshot{}, err
 		}
-		quotes, ok := adapter.(exchange.ReferencePriceSource)
+		quotes, ok := adapter.(execution.ReferencePriceSource)
 		if !ok {
 			return store.TradingAccountSnapshot{}, fmt.Errorf("equity: spot quote source is unavailable")
 		}
-		instruments, err := adapter.LoadInstruments(ctx)
+		instrumentSource, ok := adapter.(interface {
+			LoadInstruments(context.Context) ([]exchange.Instrument, error)
+		})
+		if !ok {
+			return store.TradingAccountSnapshot{}, fmt.Errorf("equity: instrument source is unavailable")
+		}
+		instruments, err := instrumentSource.LoadInstruments(ctx)
 		if err != nil {
 			return store.TradingAccountSnapshot{}, err
 		}

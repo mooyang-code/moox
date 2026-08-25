@@ -1,7 +1,6 @@
 package exchange
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -319,21 +318,4 @@ type Fill struct {
 	SettlementAsset string
 	LiquidityRole   string
 	TradedAt        time.Time
-}
-
-type EventHandler interface {
-	OnOrder(context.Context, Order) error
-	OnFill(context.Context, Fill) error
-	OnPosition(context.Context, Position) error
-	OnAccountSnapshot(context.Context, AccountSnapshot) error
-}
-
-type PrivateReadyHandler interface {
-	OnPrivateReady()
-}
-
-func NotifyPrivateReady(handler EventHandler) {
-	if ready, ok := handler.(PrivateReadyHandler); ok {
-		ready.OnPrivateReady()
-	}
 }

@@ -158,6 +158,9 @@ func (m *binanceHTTPMock) handle(
 	case "/api/v3/ticker/price":
 		require.Equal(t, "BTCUSDT", request.URL.Query().Get("symbol"))
 		_, _ = io.WriteString(writer, `{"symbol":"BTCUSDT","price":"50000"}`)
+	case "/api/v3/ticker/24hr":
+		require.Equal(t, "BTCUSDT", request.URL.Query().Get("symbol"))
+		_, _ = fmt.Fprintf(writer, `{"symbol":"BTCUSDT","bidPrice":"49999","askPrice":"50001","lastPrice":"50000","closeTime":%d}`, m.now.UnixMilli())
 	case "/api/v3/order":
 		m.handleOrder(t, writer, request)
 	case "/api/v3/openOrders":

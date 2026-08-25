@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
@@ -20,7 +21,10 @@ var errPrivateDisconnected = errors.New("trade runtime: private stream disconnec
 
 type ExchangeSession struct {
 	Account           store.TradingAccountRecord
-	Adapter           exchange.Adapter
+	Adapter           execution.ExecutionAdapter
+	MarketData        execution.MarketDataSource
+	AccountEvents     execution.AccountEventSource
+	ReservationPolicy execution.ReservationPolicy
 	Sync              *accountsync.Service
 	SyncInterval      time.Duration
 	PaperMatcherReady func() bool
@@ -37,11 +41,28 @@ func (s *ExchangeSession) Ready() bool {
 	return s != nil && s.ready.Load()
 }
 
-func (s *ExchangeSession) ExchangeAdapter() exchange.Adapter {
+func (s *ExchangeSession) ExecutionAdapter() execution.ExecutionAdapter {
 	if s == nil {
 		return nil
 	}
 	return s.Adapter
+}
+
+func (s *ExchangeSession) ExecutionBundle() execution.ExecutionBundle {
+	if s == nil {
+		return execution.ExecutionBundle{}
+	}
+	policy := s.ReservationPolicy
+	if policy == nil {
+		policy = execution.LiveReservationPolicy{}
+		if exchange.ExecutionMode(s.Account.ExecutionMode) == exchange.ExecutionModePaper {
+			policy = execution.PaperReservationPolicy{}
+		}
+	}
+	return execution.ExecutionBundle{
+		Adapter: s.Adapter, AccountEvents: s.AccountEvents, MarketData: s.MarketData,
+		ReservationPolicy: policy,
+	}
 }
 
 func (s *ExchangeSession) Run(ctx context.Context) error {
@@ -57,6 +78,10 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		return err
 	}
 	s.Account = account
+	marketData := s.MarketData
+	if marketData == nil {
+		marketData, _ = s.Adapter.(execution.MarketDataSource)
+	}
 	if exchange.MarketType(account.MarketType) == exchange.MarketTypeSpot &&
 		exchange.ExecutionMode(account.ExecutionMode) == exchange.ExecutionModeLive &&
 		len(account.SyncSymbols) == 0 {
@@ -64,6 +89,23 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	}
 	if exchange.ExecutionMode(account.ExecutionMode) == exchange.ExecutionModePaper {
 		return s.runPaper(ctx)
+	}
+	accountEvents := s.AccountEvents
+	if accountEvents == nil {
+		accountEvents, _ = s.Adapter.(execution.AccountEventSource)
+	}
+	if marketData == nil || accountEvents == nil {
+		return ErrSessionConfig
+	}
+	// Public metadata must be durable before private events are accepted. The
+	// handler only starts buffering once Subscribe begins, so the later REST
+	// snapshot can safely replay the buffered stream against canonical facts.
+	instruments, err := marketData.LoadInstruments(ctx)
+	if err != nil {
+		return s.disconnect(ctx, err)
+	}
+	if err := s.persistInstruments(ctx, instruments); err != nil {
+		return s.disconnect(ctx, err)
 	}
 	s.syncRequested = make(chan struct{}, 1)
 	s.ready.Store(false)
@@ -75,7 +117,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	streamDone := make(chan error, 1)
 	disconnected := make(chan struct{})
 	go func() {
-		err := s.Adapter.Subscribe(streamCtx, handler)
+		err := accountEvents.Subscribe(streamCtx, handler)
 		s.ready.Store(false)
 		close(disconnected)
 		streamDone <- err
@@ -91,17 +133,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		return s.disconnect(ctx, err)
 	}
 
-	instruments, err := s.Adapter.LoadInstruments(ctx)
-	if err != nil {
-		return s.disconnect(ctx, err)
-	}
-	if gate, ok := s.Adapter.(exchange.PrivateStreamMetadataGate); ok {
-		gate.MarkPrivateStreamMetadataReady()
-	}
 	if err, ended := privateStreamError(disconnected, streamDone); ended {
-		return s.disconnect(ctx, err)
-	}
-	if err := s.persistInstruments(ctx, instruments); err != nil {
 		return s.disconnect(ctx, err)
 	}
 	if exchange.MarketType(s.Account.MarketType) == exchange.MarketTypeSwap {
@@ -109,7 +141,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		for _, symbol := range symbols {
 			if err := s.Adapter.SetMarginMode(
 				ctx,
-				symbol,
+				shared.ExchangeSymbol(symbol),
 				exchange.MarginModeCross,
 			); err != nil {
 				return s.disconnect(ctx, err)
@@ -120,7 +152,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 			if parseErr != nil {
 				return s.disconnect(ctx, parseErr)
 			}
-			if err := s.Adapter.SetLeverage(ctx, symbol, leverage); err != nil {
+			if err := s.Adapter.SetLeverage(ctx, shared.ExchangeSymbol(symbol), leverage); err != nil {
 				return s.disconnect(ctx, err)
 			}
 		}
@@ -169,7 +201,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	for _, symbol := range symbols {
 		rows, cursor, listErr := s.Adapter.ListRecentFills(
 			ctx,
-			symbol,
+			shared.ExchangeSymbol(symbol),
 			cursors[symbol],
 		)
 		if listErr != nil {
@@ -260,7 +292,26 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 	if s.Adapter == nil || s.Sync == nil {
 		return ErrSessionConfig
 	}
-	instruments, err := s.Adapter.LoadInstruments(ctx)
+	marketData := s.MarketData
+	if marketData == nil {
+		marketData, _ = s.Adapter.(execution.MarketDataSource)
+	}
+	if marketData == nil {
+		return ErrSessionConfig
+	}
+	// Paper's adapter keeps the canonical instrument -> native symbol map used
+	// by reference quotes. Load through it when available, while retaining the
+	// public source fallback for lightweight adapters in tests.
+	instrumentLoader, _ := s.Adapter.(interface {
+		LoadInstruments(context.Context) ([]exchange.Instrument, error)
+	})
+	var instruments []exchange.Instrument
+	var err error
+	if instrumentLoader != nil {
+		instruments, err = instrumentLoader.LoadInstruments(ctx)
+	} else {
+		instruments, err = marketData.LoadInstruments(ctx)
+	}
 	if err != nil {
 		return s.disconnect(ctx, err)
 	}
@@ -288,7 +339,7 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 	symbols := sessionSymbols(s.Account, orders, localOrders, positions, instruments, accountSnapshot)
 	fills := make([]exchange.Fill, 0)
 	for _, symbol := range symbols {
-		rows, _, listErr := s.Adapter.ListRecentFills(ctx, symbol, "")
+		rows, _, listErr := s.Adapter.ListRecentFills(ctx, shared.ExchangeSymbol(symbol), "")
 		if listErr != nil {
 			return s.disconnect(ctx, listErr)
 		}
@@ -477,7 +528,7 @@ func newSessionHandler(
 	}
 }
 
-func (h *sessionHandler) OnPrivateReady() {
+func (h *sessionHandler) OnSubscribed() {
 	h.readyOnce.Do(func() { close(h.ready) })
 }
 
@@ -568,8 +619,12 @@ func sessionSymbols(
 		set[symbol] = struct{}{}
 	}
 	for _, current := range orders {
-		if current.ExchangeSymbol != "" {
-			set[current.ExchangeSymbol] = struct{}{}
+		symbol := current.ExchangeSymbol
+		if symbol == "" {
+			symbol = current.Symbol
+		}
+		if symbol != "" {
+			set[symbol] = struct{}{}
 		}
 	}
 	for _, current := range local {
@@ -578,8 +633,12 @@ func sessionSymbols(
 		}
 	}
 	for _, position := range positions {
-		if position.ExchangeSymbol != "" {
-			set[position.ExchangeSymbol] = struct{}{}
+		symbol := position.ExchangeSymbol
+		if symbol == "" {
+			symbol = position.Symbol
+		}
+		if symbol != "" {
+			set[symbol] = struct{}{}
 		}
 	}
 	if exchange.MarketType(account.MarketType) == exchange.MarketTypeSpot {
@@ -599,7 +658,13 @@ func sessionSymbols(
 				continue
 			}
 			if _, held := heldAssets[instrument.BaseAsset]; held {
-				set[instrument.ExchangeSymbol] = struct{}{}
+				symbol := instrument.ExchangeSymbol
+				if symbol == "" {
+					symbol = instrument.Symbol
+				}
+				if symbol != "" {
+					set[symbol] = struct{}{}
+				}
 			}
 		}
 	}
@@ -619,5 +684,4 @@ func cloneFillCursors(current store.FillCursors) store.FillCursors {
 	return result
 }
 
-var _ exchange.EventHandler = (*sessionHandler)(nil)
-var _ exchange.PrivateReadyHandler = (*sessionHandler)(nil)
+var _ execution.AccountEventHandler = (*sessionHandler)(nil)

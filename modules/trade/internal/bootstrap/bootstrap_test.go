@@ -11,6 +11,7 @@ import (
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -68,7 +69,7 @@ func TestExchangeCredentialPropagatesSingleSecretReadError(t *testing.T) {
 }
 
 func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
-	registry := exchange.NewRegistry()
+	registry := execution.NewRegistry()
 	registerBuiltins(registry)
 	for _, name := range []exchange.Exchange{
 		exchange.ExchangeBinance,
@@ -84,8 +85,9 @@ func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Bind(%s) error = %v", name, err)
 		}
-		if adapter.Exchange() != name {
-			t.Fatalf("Bind(%s) adapter Exchange = %s", name, adapter.Exchange())
+		identity, ok := adapter.(execution.ExchangeIdentity)
+		if !ok || identity.Exchange() != name {
+			t.Fatalf("Bind(%s) adapter identity = %v", name, identity)
 		}
 	}
 

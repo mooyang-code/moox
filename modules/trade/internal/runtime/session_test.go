@@ -12,15 +12,16 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
 
 type sessionAdapterSource struct {
-	adapter exchange.Adapter
+	adapter execution.ExecutionAdapter
 }
 
-func (s sessionAdapterSource) Adapter(string) (exchange.Adapter, error) {
+func (s sessionAdapterSource) Adapter(string) (execution.ExecutionAdapter, error) {
 	return s.adapter, nil
 }
 
@@ -63,6 +64,10 @@ func (a *scriptedSessionAdapter) LoadInstruments(context.Context) ([]exchange.In
 		PriceTick:           shared.MustDecimal("0.1"), Status: "TRADING",
 		ExchangeUpdatedAt: time.UnixMilli(1_000),
 	}}, nil
+}
+
+func (*scriptedSessionAdapter) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+	return execution.MarketQuote{Last: shared.MustDecimal("100"), SourceTime: time.UnixMilli(2_000)}, nil
 }
 
 func TestExchangeSessionNeverBecomesReadyAfterDisconnectDuringStartup(t *testing.T) {
@@ -111,24 +116,24 @@ func (a *scriptedSessionAdapter) ListOpenOrders(context.Context) ([]exchange.Ord
 }
 func (a *scriptedSessionAdapter) ListRecentFills(
 	context.Context,
-	string,
+	shared.ExchangeSymbol,
 	string,
 ) ([]exchange.Fill, string, error) {
 	a.record("ListRecentFills")
 	return nil, "9", nil
 }
-func (*scriptedSessionAdapter) GetOrder(context.Context, string, string) (exchange.Order, error) {
+func (*scriptedSessionAdapter) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
 	return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound}
 }
 func (*scriptedSessionAdapter) PlaceOrder(context.Context, exchange.OrderRequest) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
-func (*scriptedSessionAdapter) CancelOrder(context.Context, string, string) (exchange.Order, error) {
+func (*scriptedSessionAdapter) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
 func (a *scriptedSessionAdapter) SetLeverage(
 	context.Context,
-	string,
+	shared.ExchangeSymbol,
 	shared.Decimal,
 ) error {
 	a.record("SetLeverage")
@@ -136,7 +141,7 @@ func (a *scriptedSessionAdapter) SetLeverage(
 }
 func (a *scriptedSessionAdapter) SetMarginMode(
 	context.Context,
-	string,
+	shared.ExchangeSymbol,
 	exchange.MarginMode,
 ) error {
 	a.record("SetMarginMode")
@@ -144,10 +149,10 @@ func (a *scriptedSessionAdapter) SetMarginMode(
 }
 func (a *scriptedSessionAdapter) Subscribe(
 	ctx context.Context,
-	handler exchange.EventHandler,
+	handler execution.AccountEventHandler,
 ) error {
 	a.record("Subscribe")
-	exchange.NotifyPrivateReady(handler)
+	handler.OnSubscribed()
 	if err := handler.OnPosition(ctx, exchange.Position{
 		Symbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
 		SignedQuantity: shared.MustDecimal("0.25"),
@@ -187,8 +192,8 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 		return len(adapter.callSnapshot()) >= 12
 	}, 2*time.Second, 10*time.Millisecond)
 	require.Equal(t, []string{
-		"Subscribe",
 		"LoadInstruments",
+		"Subscribe",
 		"SetMarginMode",
 		"SetLeverage",
 		"GetAccountSnapshot",

@@ -25,6 +25,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	executionpaper "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/health"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -80,7 +81,7 @@ func initialize(
 			ExpireSecs: cfg.Admin.ServiceAuth.ExpireSeconds,
 		},
 	})
-	registry := exchange.NewRegistry()
+	registry := execution.NewRegistry()
 	registerBuiltins(registry)
 	tradeStore.SetModuleMetrics(registerMetricsReporter(serverInstance))
 
@@ -153,11 +154,26 @@ func initialize(
 	paperMatcher.DecideContext = func(ctx context.Context, candidate store.OrderRecord) (executionpaper.Decision, error) {
 		adapter, adapterErr := manager.Adapter(candidate.TradingAccountID)
 		if adapterErr != nil {
-			return executionpaper.Decision{Cancel: true, Reason: "paper market data unavailable"}, nil
+			return executionpaper.Decision{}, adapterErr
 		}
-		priceSource, ok := adapter.(exchange.ReferencePriceSource)
-		if !ok {
-			return executionpaper.Decision{Cancel: true, Reason: "paper reference quote unavailable"}, nil
+		priceSource, hasReferencePrice := adapter.(execution.ReferencePriceSource)
+		marketDataSource, hasMarketData := adapter.(execution.MarketDataSource)
+		if !hasReferencePrice && !hasMarketData {
+			return executionpaper.Decision{}, errors.New("paper reference quote unavailable")
+		}
+		paperConfig, configErr := tradeStore.GetPaperAccountConfig(ctx, candidate.SpaceID, candidate.TradingAccountID)
+		if configErr != nil {
+			return executionpaper.Decision{}, configErr
+		}
+		slippage := shared.Zero()
+		if candidate.OrderType == string(exchange.OrderTypeMarket) && candidate.PaperExecutionPrice == nil {
+			if paperConfig.SlippageBPS != "" {
+				parsed, parseErr := shared.ParseDecimal(paperConfig.SlippageBPS)
+				if parseErr != nil || parsed.IsNegative() || parsed.Cmp(shared.MustDecimal("10000")) >= 0 {
+					return executionpaper.Decision{}, fmt.Errorf("paper: invalid slippage bps %q", paperConfig.SlippageBPS)
+				}
+				slippage = parsed
+			}
 		}
 		price := shared.Zero()
 		if candidate.OrderType == string(exchange.OrderTypeMarket) && candidate.PaperExecutionPrice != nil {
@@ -172,22 +188,43 @@ func initialize(
 			}
 		}
 		if price.Cmp(shared.Zero()) <= 0 {
-			quote, quoteErr := priceSource.GetReferencePrice(ctx, candidate.ExchangeSymbol)
-			if quoteErr != nil || quote.Price.Cmp(shared.Zero()) <= 0 ||
-				(!quote.UpdatedAt.IsZero() && time.Since(quote.UpdatedAt) > 10*time.Second) {
+			var quoteErr error
+			if hasMarketData {
+				quote, marketErr := marketDataSource.GetQuote(ctx, shared.ExchangeSymbol(candidate.ExchangeSymbol))
+				quoteErr = marketErr
+				if quoteErr == nil && !executionpaper.QuoteFresh(quote, time.Now().UTC(), 10*time.Second) {
+					quoteErr = errors.New("paper public quote is stale")
+				}
+				if quoteErr == nil {
+					if candidate.OrderType == string(exchange.OrderTypeMarket) {
+						price, quoteErr = executionpaper.MarketExecutionPrice(exchange.Side(candidate.Side), quote, slippage)
+					} else {
+						price, quoteErr = executionpaper.MarketExecutionPrice(exchange.Side(candidate.Side), quote, shared.Zero())
+					}
+				}
+			} else {
+				quote, referenceErr := priceSource.GetReferencePrice(ctx, candidate.ExchangeSymbol)
+				quoteErr = referenceErr
+				if quoteErr == nil {
+					price = quote.Price
+					if quote.Price.Cmp(shared.Zero()) <= 0 ||
+						(!quote.UpdatedAt.IsZero() && time.Since(quote.UpdatedAt) > 10*time.Second) {
+						quoteErr = errors.New("paper reference quote is stale or empty")
+					}
+				}
+			}
+			if quoteErr != nil || price.Cmp(shared.Zero()) <= 0 {
 				if candidate.OrderType == string(exchange.OrderTypeLimit) && candidate.TimeInForce == string(exchange.FillPolicyGTC) {
 					return executionpaper.Decision{Rest: true}, nil
 				}
 				return executionpaper.Decision{Cancel: true, Reason: "paper reference quote unavailable"}, nil
 			}
-			price = quote.Price
 		}
-		paperConfig, _ := tradeStore.GetPaperAccountConfig(ctx, candidate.SpaceID, candidate.TradingAccountID)
-		if candidate.OrderType == string(exchange.OrderTypeMarket) && candidate.PaperExecutionPrice == nil {
-			if parsed, parseErr := shared.ParseDecimal(paperConfig.SlippageBPS); parseErr == nil && parsed.Cmp(shared.Zero()) > 0 {
-				factor := shared.MustDecimal("1").Add(parsed.Div(shared.MustDecimal("10000")))
+		if candidate.OrderType == string(exchange.OrderTypeMarket) && candidate.PaperExecutionPrice == nil && !hasMarketData {
+			if slippage.Cmp(shared.Zero()) > 0 {
+				factor := shared.MustDecimal("1").Add(slippage.Div(shared.MustDecimal("10000")))
 				if candidate.Side == string(exchange.SideSell) {
-					factor = shared.MustDecimal("1").Sub(parsed.Div(shared.MustDecimal("10000")))
+					factor = shared.MustDecimal("1").Sub(slippage.Div(shared.MustDecimal("10000")))
 				}
 				price = price.Mul(factor)
 			}
@@ -218,32 +255,44 @@ func initialize(
 			feeRateRaw = paperConfig.MakerFeeRate
 		}
 		feeRate, feeErr := shared.ParseDecimal(feeRateRaw)
-		if feeErr == nil {
-			fee = price.Mul(shared.MustDecimal(candidate.Quantity)).Mul(feeRate)
+		if feeErr != nil || feeRate.IsNegative() {
+			return executionpaper.Decision{}, fmt.Errorf("paper: invalid fee rate %q", feeRateRaw)
 		}
+		fee = price.Mul(shared.MustDecimal(candidate.Quantity)).Mul(feeRate)
 		realizedPnL := shared.Zero()
-		if account, accountErr := tradeStore.GetTradingAccountByID(ctx, candidate.TradingAccountID); accountErr == nil {
-			if account.SettlementAsset != "" {
-				feeAsset = account.SettlementAsset
+		account, accountErr := tradeStore.GetTradingAccountByID(ctx, candidate.TradingAccountID)
+		if accountErr != nil {
+			return executionpaper.Decision{}, accountErr
+		}
+		if account.SettlementAsset != "" {
+			feeAsset = account.SettlementAsset
+		}
+		if !candidate.ReduceOnly {
+			snapshot, snapshotErr := adapter.GetAccountSnapshot(ctx)
+			if snapshotErr != nil {
+				return executionpaper.Decision{}, snapshotErr
 			}
-			if account.MarketType == string(exchange.MarketTypeSwap) && !candidate.ReduceOnly &&
-				!paperOpeningReservationSufficient(candidate, account, price, fee) {
+			if !paperReservationSufficient(candidate, account, snapshot, price, fee) {
 				return executionpaper.Decision{Cancel: true, Reason: "paper reservation insufficient at match"}, nil
 			}
-			if account.MarketType == string(exchange.MarketTypeSwap) {
-				if position, found, positionErr := tradeStore.GetPosition(ctx, account.SpaceID, account.TradingAccountID, candidate.ExchangeSymbol, string(exchange.PositionSideNet)); positionErr == nil && found {
-					positionQty := decimal(position.SignedQuantity)
-					closeQty := decimal(candidate.Quantity)
-					if positionQty.Abs().Cmp(closeQty) < 0 {
-						closeQty = positionQty.Abs()
+		}
+		if account.MarketType == string(exchange.MarketTypeSwap) {
+			position, found, positionErr := tradeStore.GetPosition(ctx, account.SpaceID, account.TradingAccountID, candidate.ExchangeSymbol, string(exchange.PositionSideNet))
+			if positionErr != nil {
+				return executionpaper.Decision{}, positionErr
+			}
+			if found {
+				positionQty := decimal(position.SignedQuantity)
+				closeQty := decimal(candidate.Quantity)
+				if positionQty.Abs().Cmp(closeQty) < 0 {
+					closeQty = positionQty.Abs()
+				}
+				if !positionQty.IsZero() && !closeQty.IsZero() && ((positionQty.Cmp(shared.Zero()) > 0 && candidate.Side == string(exchange.SideSell)) || (positionQty.Cmp(shared.Zero()) < 0 && candidate.Side == string(exchange.SideBuy))) {
+					direction := shared.MustDecimal("1")
+					if positionQty.IsNegative() {
+						direction = direction.Neg()
 					}
-					if !positionQty.IsZero() && !closeQty.IsZero() && ((positionQty.Cmp(shared.Zero()) > 0 && candidate.Side == string(exchange.SideSell)) || (positionQty.Cmp(shared.Zero()) < 0 && candidate.Side == string(exchange.SideBuy))) {
-						direction := shared.MustDecimal("1")
-						if positionQty.IsNegative() {
-							direction = direction.Neg()
-						}
-						realizedPnL = price.Sub(decimal(position.EntryPrice)).Mul(closeQty).Mul(direction)
-					}
+					realizedPnL = price.Sub(decimal(position.EntryPrice)).Mul(closeQty).Mul(direction)
 				}
 			}
 		}
@@ -308,7 +357,9 @@ func initialize(
 			SettlementAsset:  record.SettlementAsset,
 			MarginMode:       exchange.MarginMode(record.MarginMode),
 		}
-		var adapter exchange.Adapter
+		var adapter execution.ExecutionAdapter
+		var marketData execution.MarketDataSource
+		var accountEvents execution.AccountEventSource
 		if accountConfig.ExecutionMode == exchange.ExecutionModePaper {
 			publicConfig := accountConfig
 			// Public market-data endpoints do not require private credentials. Keep
@@ -320,18 +371,30 @@ func initialize(
 			if bindErr != nil {
 				return nil, bindErr
 			}
-			adapter = &executionpaper.LegacyAdapter{Adapter: &executionpaper.Adapter{
-				Account: record, Store: tradeStore, MarketData: publicAdapter, Wake: paperMatcherWorker.Wake,
-			}}
+			marketData = publicMarketData(publicAdapter)
+			if marketData == nil {
+				return nil, errors.New("trade bootstrap: paper adapter does not provide public market data")
+			}
+			adapter = &executionpaper.Adapter{Account: record, Store: tradeStore, MarketData: marketData, Wake: paperMatcherWorker.Wake}
 		} else {
 			var bindErr error
 			adapter, bindErr = registry.Bind(accountConfig, credential)
 			if bindErr != nil {
 				return nil, bindErr
 			}
+			marketData = publicMarketData(adapter)
+			accountEvents, _ = adapter.(execution.AccountEventSource)
+			if marketData == nil || accountEvents == nil {
+				return nil, errors.New("trade bootstrap: live adapter does not provide execution ports")
+			}
+		}
+		reservationPolicy := execution.ReservationPolicy(execution.LiveReservationPolicy{})
+		if accountConfig.ExecutionMode == exchange.ExecutionModePaper {
+			reservationPolicy = execution.PaperReservationPolicy{}
 		}
 		return &traderuntime.ExchangeSession{
-			Account: record, Adapter: adapter, Sync: syncService,
+			Account: record, Adapter: adapter, MarketData: marketData, AccountEvents: accountEvents,
+			ReservationPolicy: reservationPolicy, Sync: syncService,
 			PaperMatcherReady: paperMatcherWorker.Ready,
 			OnReady:           equitySampler.Enqueue,
 			SyncInterval:      30 * time.Second,
@@ -500,23 +563,28 @@ func initialize(
 	return serverInstance, nil
 }
 
-func registerBuiltins(registry *exchange.Registry) {
+func registerBuiltins(registry *execution.Registry) {
 	registry.Register(exchange.ExchangeBinance, func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
-	) (exchange.Adapter, error) {
+	) (execution.ExecutionAdapter, error) {
 		return binance.New(config, credential), nil
 	})
 	registry.Register(exchange.ExchangeOKX, func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
-	) (exchange.Adapter, error) {
+	) (execution.ExecutionAdapter, error) {
 		if config.ExecutionMode == exchange.ExecutionModeLive &&
 			strings.TrimSpace(credential.Passphrase) == "" {
 			return nil, errors.New("OKX live account requires passphrase")
 		}
 		return okx.New(config, credential), nil
 	})
+}
+
+func publicMarketData(adapter execution.ExecutionAdapter) execution.MarketDataSource {
+	source, _ := adapter.(execution.MarketDataSource)
+	return source
 }
 
 func exchangeCredential(
@@ -727,6 +795,57 @@ func paperSnapshotRecord(snapshot exchange.AccountSnapshot) store.TradingAccount
 	}
 }
 
+func paperReservationSufficient(
+	candidate store.OrderRecord,
+	account store.TradingAccountRecord,
+	snapshot exchange.AccountSnapshot,
+	price, fee shared.Decimal,
+) bool {
+	if account.MarketType != string(exchange.MarketTypeSpot) && account.MarketType != string(exchange.MarketTypeSwap) {
+		return true
+	}
+	reserved, err := shared.ParseDecimal(candidate.RemainingReservedQuantity)
+	if err != nil {
+		return false
+	}
+	quantity, err := shared.ParseDecimal(candidate.Quantity)
+	if err != nil {
+		return false
+	}
+	required := price.Mul(quantity).Add(fee)
+	if account.MarketType == string(exchange.MarketTypeSwap) {
+		leverage := account.LeverageSettings[candidate.InstrumentID]
+		if leverage == "" {
+			leverage = account.LeverageSettings[candidate.ExchangeSymbol]
+		}
+		if leverage == "" {
+			leverage = account.LeverageSettings[candidate.Symbol]
+		}
+		if leverage == "" && account.ExecutionMode == string(exchange.ExecutionModePaper) {
+			leverage = account.LeverageSettings["*"]
+		}
+		parsedLeverage, leverageErr := shared.ParseDecimal(leverage)
+		if leverageErr != nil || parsedLeverage.Cmp(shared.Zero()) <= 0 {
+			return false
+		}
+		required = price.Mul(quantity).Div(parsedLeverage).Add(fee)
+		return snapshot.AvailableFunds.Add(reserved).Cmp(required) >= 0
+	}
+	if candidate.Side != string(exchange.SideBuy) {
+		return true
+	}
+	for _, balance := range snapshot.Balances {
+		if balance.Asset != candidate.ReservedAsset {
+			continue
+		}
+		return balance.Available.Add(reserved).Cmp(required) >= 0
+	}
+	return false
+}
+
+// paperOpeningReservationSufficient is retained as a focused helper for
+// callers that only have the order reservation (the production matcher uses
+// paperReservationSufficient with a fresh account snapshot).
 func paperOpeningReservationSufficient(
 	candidate store.OrderRecord,
 	account store.TradingAccountRecord,
@@ -739,7 +858,7 @@ func paperOpeningReservationSufficient(
 	if leverage == "" {
 		leverage = account.LeverageSettings[candidate.Symbol]
 	}
-	if leverage == "" && account.ExecutionMode == "PAPER" {
+	if leverage == "" && account.ExecutionMode == string(exchange.ExecutionModePaper) {
 		leverage = account.LeverageSettings["*"]
 	}
 	parsedLeverage, leverageErr := shared.ParseDecimal(leverage)
@@ -748,8 +867,7 @@ func paperOpeningReservationSufficient(
 	if leverageErr != nil || reservedErr != nil || quantityErr != nil || parsedLeverage.Cmp(shared.Zero()) <= 0 {
 		return false
 	}
-	required := price.Mul(quantity).Div(parsedLeverage).Add(fee)
-	return reserved.Cmp(required) >= 0
+	return reserved.Cmp(price.Mul(quantity).Div(parsedLeverage).Add(fee)) >= 0
 }
 
 func registerMetricsReporter(serverInstance *server.Server) *report.ModuleMetrics {

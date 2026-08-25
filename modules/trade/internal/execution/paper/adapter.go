@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"sort"
 	"sync"
@@ -28,7 +29,7 @@ type Adapter struct {
 	// MarketData is the unauthenticated production public adapter. Paper never
 	// invokes its private or order methods; it is only used for instruments and
 	// reference quotes.
-	MarketData  exchange.Adapter
+	MarketData  execution.MarketDataSource
 	Wake        func()
 	Now         func() time.Time
 	mu          sync.RWMutex
@@ -227,17 +228,52 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	a.mu.Unlock()
 	return instruments, nil
 }
-func (a *Adapter) GetReferencePrice(ctx context.Context, symbol string) (exchange.ReferencePrice, error) {
-	source, ok := a.MarketData.(exchange.ReferencePriceSource)
-	if !ok {
-		return exchange.ReferencePrice{}, fmt.Errorf("paper: public reference price source is unavailable")
-	}
+
+func (a *Adapter) nativeSymbol(ctx context.Context, symbol string) string {
 	a.mu.RLock()
-	if native, found := a.instruments[symbol]; found {
-		symbol = native
-	}
+	native, found := a.instruments[symbol]
 	a.mu.RUnlock()
-	return source.GetReferencePrice(ctx, symbol)
+	if found {
+		return native
+	}
+	// RPC/operator paths can request a quote before the session's initial
+	// snapshot. Lazily populate the same map used by runPaper so canonical
+	// instrument IDs never leak into a broker's public endpoint.
+	if _, err := a.LoadInstruments(ctx); err == nil {
+		a.mu.RLock()
+		native, found = a.instruments[symbol]
+		a.mu.RUnlock()
+		if found {
+			return native
+		}
+	}
+	return symbol
+}
+
+func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (execution.MarketQuote, error) {
+	if a.MarketData == nil {
+		return execution.MarketQuote{}, fmt.Errorf("paper: public market data source is unavailable")
+	}
+	native := a.nativeSymbol(ctx, symbol.String())
+	return a.MarketData.GetQuote(ctx, shared.ExchangeSymbol(native))
+}
+
+func (a *Adapter) GetReferencePrice(ctx context.Context, symbol string) (exchange.ReferencePrice, error) {
+	quote, err := a.GetQuote(ctx, shared.ExchangeSymbol(symbol))
+	if err != nil {
+		return exchange.ReferencePrice{}, err
+	}
+	price := quote.Last
+	if price.IsZero() {
+		price = quote.Ask
+	}
+	if price.IsZero() {
+		price = quote.Bid
+	}
+	if price.Cmp(shared.Zero()) <= 0 {
+		return exchange.ReferencePrice{}, fmt.Errorf("paper: public reference quote is empty")
+	}
+	return exchange.ReferencePrice{Price: price, UpdatedAt: quote.SourceTime}, nil
 }
 
 func (a *Adapter) referencePrice(ctx context.Context, symbol string) (shared.Decimal, error) {
@@ -257,7 +293,7 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 	}
 	result := make([]exchange.Position, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, exchange.Position{
+		position := exchange.Position{
 			TradingAccountID: row.TradingAccountID, InstrumentID: row.InstrumentID,
 			ExchangeSymbol: row.ExchangeSymbol, Symbol: row.ExchangeSymbol,
 			PositionSide:   exchange.PositionSide(row.PositionSide),
@@ -266,7 +302,17 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			MarginMode: exchange.MarginMode(row.MarginMode), UsedMargin: decimalOrZero(row.UsedMargin),
 			LiquidationPrice: decimalOrZero(row.LiquidationPrice), UnrealizedPnL: decimalOrZero(row.UnrealizedPnL),
 			RealizedPnL: decimalOrZero(row.RealizedPnL), ExchangeUpdatedAt: time.UnixMilli(row.ExchangeUpdatedAt).UTC(),
-		})
+		}
+		if a.Account.MarketType == string(exchange.MarketTypeSwap) && !position.SignedQuantity.IsZero() {
+			if quote, quoteErr := a.GetReferencePrice(ctx, position.ExchangeSymbol); quoteErr == nil {
+				position.MarkPrice = quote.Price
+			}
+			position.UnrealizedPnL = position.MarkPrice.Sub(position.EntryPrice).Mul(position.SignedQuantity)
+			if position.Leverage.Cmp(shared.Zero()) > 0 {
+				position.UsedMargin = position.SignedQuantity.Abs().Mul(position.MarkPrice).Div(position.Leverage)
+			}
+		}
+		result = append(result, position)
 	}
 	return result, nil
 }

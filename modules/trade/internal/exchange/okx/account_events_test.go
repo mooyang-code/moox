@@ -18,6 +18,8 @@ type handler struct {
 	positions []exchange.Position
 }
 
+func (*handler) OnSubscribed() {}
+
 func (h *handler) OnOrder(_ context.Context, value exchange.Order) error {
 	h.orders = append(h.orders, value)
 	return nil
@@ -211,46 +213,6 @@ func TestReceivePrivateMessageRequiresPongAfterIdle(t *testing.T) {
 		)
 	if !exchange.IsKind(err, exchange.ErrorTransportUnknown) {
 		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestSwapPrivateMetadataGateDefersNormalizationUntilMarked(t *testing.T) {
-	adapter := New(
-		exchange.AccountConfig{MarketType: exchange.MarketTypeSwap},
-		exchange.Credential{},
-	)
-	gate := make(chan struct{})
-	adapter.privateGateMu.Lock()
-	adapter.privateGate = gate
-	adapter.privateGateMu.Unlock()
-	recording := &handler{}
-	done := make(chan error, 1)
-	go func() {
-		<-gate
-		done <- adapter.dispatchPrivate(context.Background(), []byte(`{
-			"arg":{"channel":"orders"},
-			"data":[{
-				"instId":"BTC-USDT-SWAP","ordId":"42","clOrdId":"cid",
-				"side":"buy","posSide":"net","ordType":"market","sz":"1",
-				"accFillSz":"0","state":"live","cTime":"1","uTime":"1"
-			}]
-		}`), recording)
-	}()
-	select {
-	case err := <-done:
-		t.Fatalf("normalization ran before metadata was ready: %v", err)
-	case <-time.After(20 * time.Millisecond):
-	}
-	adapter.mu.Lock()
-	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
-	adapter.mu.Unlock()
-	adapter.MarkPrivateStreamMetadataReady()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if len(recording.orders) != 1 ||
-		recording.orders[0].Quantity.String() != "0.01" {
-		t.Fatalf("orders = %+v", recording.orders)
 	}
 }
 

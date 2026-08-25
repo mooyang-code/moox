@@ -55,6 +55,9 @@ func TestPaperSwapCursorSurvivesClockRollback(t *testing.T) {
 	rolledBack := testNow.Add(-time.Minute)
 	f.orders.Now = func() time.Time { return rolledBack }
 	f.orders.Validator.Now = func() time.Time { return rolledBack }
+	f.fake.mu.Lock()
+	f.fake.reference.UpdatedAt = rolledBack
+	f.fake.mu.Unlock()
 	closeSpec := swapSpec("rollback-close", exchange.SideSell, "0.01", true)
 	closeSpec.ReferencePrice = shared.MustDecimal("51000")
 	closeSpec.ReferencePriceAt = rolledBack

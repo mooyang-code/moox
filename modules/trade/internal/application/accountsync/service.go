@@ -15,6 +15,7 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
 )
@@ -22,7 +23,7 @@ import (
 var ErrServiceConfig = errors.New("trade account sync: service is not configured")
 
 type AdapterSource interface {
-	Adapter(tradingAccountID string) (exchange.Adapter, error)
+	Adapter(tradingAccountID string) (execution.ExecutionAdapter, error)
 }
 
 type SessionState interface {
@@ -170,7 +171,7 @@ func (s *Service) syncAccountLocked(
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneCursors(account.FillCursors)
 	for _, symbol := range symbols {
-		rows, cursor, listErr := adapter.ListRecentFills(ctx, symbol, cursors[symbol])
+		rows, cursor, listErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(symbol), cursors[symbol])
 		if listErr != nil {
 			result, failErr := s.fail(ctx, account, listErr)
 			return result, maxDifference, failErr
@@ -193,7 +194,7 @@ func (s *Service) syncAccountLocked(
 		if _, found := openByClient[local.ClientOrderID]; found {
 			continue
 		}
-		current, lookupErr := adapter.GetOrder(ctx, local.Symbol, local.ClientOrderID)
+		current, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(local.Symbol), local.ClientOrderID)
 		switch {
 		case lookupErr == nil:
 			orders = append(orders, current)
@@ -713,8 +714,8 @@ func (s *Service) ensureOrderForFill(
 	var current exchange.Order
 	var lookupErr error
 	if fill.ClientOrderID != "" {
-		current, lookupErr = adapter.GetOrder(ctx, fill.Symbol, fill.ClientOrderID)
-	} else if lookup, ok := adapter.(exchange.ExchangeOrderLookup); ok {
+		current, lookupErr = adapter.GetOrder(ctx, shared.ExchangeSymbol(fill.Symbol), fill.ClientOrderID)
+	} else if lookup, ok := adapter.(execution.ExchangeOrderLookup); ok {
 		current, lookupErr = lookup.GetOrderByExchangeID(
 			ctx,
 			fill.Symbol,

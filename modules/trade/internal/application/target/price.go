@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 type AdapterSource interface {
-	Adapter(tradingAccountID string) (exchange.Adapter, error)
+	Adapter(tradingAccountID string) (execution.ExecutionAdapter, error)
 }
 
 type ExchangePriceSource struct {
@@ -27,7 +27,7 @@ func (s ExchangePriceSource) LatestPrice(
 	if err != nil {
 		return Quote{}, err
 	}
-	source, ok := adapter.(exchange.ReferencePriceSource)
+	source, ok := adapter.(execution.ReferencePriceSource)
 	if !ok {
 		return Quote{}, fmt.Errorf(
 			"%w: Exchange adapter has no reference price source",

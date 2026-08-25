@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 func TestPrivateOrderProbeAcceptsEventBeforeWait(t *testing.T) {
@@ -35,13 +37,15 @@ func TestPrivateOrderProbeWakesWaitingSubmit(t *testing.T) {
 }
 
 type capabilityAdapter struct {
-	exchange.Adapter
-	metadataReady bool
-	lookedUpID    string
+	execution.ExecutionAdapter
+	lookedUpID string
 }
 
-func (a *capabilityAdapter) MarkPrivateStreamMetadataReady() {
-	a.metadataReady = true
+func (*capabilityAdapter) GetReferencePrice(
+	context.Context,
+	string,
+) (exchange.ReferencePrice, error) {
+	return exchange.ReferencePrice{Price: shared.MustDecimal("1")}, nil
 }
 
 func (a *capabilityAdapter) GetOrderByExchangeID(
@@ -55,12 +59,7 @@ func (a *capabilityAdapter) GetOrderByExchangeID(
 
 func TestProbingAdapterPreservesOptionalCapabilities(t *testing.T) {
 	base := &capabilityAdapter{}
-	adapter := probingAdapter{Adapter: base, probe: newPrivateOrderProbe()}
-
-	adapter.MarkPrivateStreamMetadataReady()
-	if !base.metadataReady {
-		t.Fatal("metadata-ready signal was not forwarded")
-	}
+	adapter := newProbingAdapter(base, newPrivateOrderProbe())
 	order, err := adapter.GetOrderByExchangeID(
 		context.Background(),
 		"BTCUSDT",
@@ -73,7 +72,6 @@ func TestProbingAdapterPreservesOptionalCapabilities(t *testing.T) {
 		t.Fatalf("lookup was not forwarded: base=%q order=%+v", base.lookedUpID, order)
 	}
 
-	var _ exchange.PrivateStreamMetadataGate = adapter
-	var _ exchange.ExchangeOrderLookup = adapter
-	var _ exchange.ReferencePriceSource = adapter
+	var _ execution.ExchangeOrderLookup = adapter
+	var _ execution.ReferencePriceSource = adapter
 }

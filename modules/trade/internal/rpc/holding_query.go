@@ -10,6 +10,7 @@ import (
 	holdingapp "github.com/mooyang-code/moox/modules/trade/internal/application/holding"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
@@ -20,7 +21,7 @@ import (
 type HoldingQuery struct {
 	Store    *store.Store
 	Adapters interface {
-		Adapter(string) (exchange.Adapter, error)
+		Adapter(string) (execution.ExecutionAdapter, error)
 	}
 }
 
@@ -35,12 +36,20 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 	if account.MarketType != string(exchange.MarketTypeSpot) {
 		return nil, fmt.Errorf("holding query: account is not SPOT")
 	}
-	var quoteSource exchange.ReferencePriceSource
+	var quoteSource execution.ReferencePriceSource
+	var instrumentSource interface {
+		LoadInstruments(context.Context) ([]exchange.Instrument, error)
+	}
 	var instruments []exchange.Instrument
 	if q.Adapters != nil {
 		if adapter, adapterErr := q.Adapters.Adapter(accountID); adapterErr == nil {
-			quoteSource, _ = adapter.(exchange.ReferencePriceSource)
-			instruments, err = adapter.LoadInstruments(ctx)
+			quoteSource, _ = adapter.(execution.ReferencePriceSource)
+			instrumentSource, _ = adapter.(interface {
+				LoadInstruments(context.Context) ([]exchange.Instrument, error)
+			})
+			if instrumentSource != nil {
+				instruments, err = instrumentSource.LoadInstruments(ctx)
+			}
 			if err != nil && account.ExecutionMode != string(exchange.ExecutionModePaper) {
 				return nil, err
 			}

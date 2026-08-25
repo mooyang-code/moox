@@ -234,7 +234,7 @@ func TestSwapMarketOrderConvertsBaseQuantity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(instruments) != 1 || instruments[0].BaseAsset != "BTC" ||
+	if len(instruments) != 1 || instruments[0].ExchangeSymbol != "BTC-USDT-SWAP" || instruments[0].BaseAsset != "BTC" ||
 		instruments[0].QuoteAsset != "USDT" ||
 		instruments[0].InstrumentID != "BTC-USDT-SWAP" {
 		t.Fatalf("instruments = %+v", instruments)

@@ -8,11 +8,12 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
 type equityTestAdapter struct {
-	exchange.Adapter
+	execution.ExecutionAdapter
 	instruments []exchange.Instrument
 	price       exchange.ReferencePrice
 	symbol      string
@@ -27,9 +28,11 @@ func (a *equityTestAdapter) GetReferencePrice(_ context.Context, symbol string) 
 	return a.price, nil
 }
 
-type equityTestAdapters struct{ adapter exchange.Adapter }
+type equityTestAdapters struct{ adapter execution.ExecutionAdapter }
 
-func (a equityTestAdapters) Adapter(string) (exchange.Adapter, error) { return a.adapter, nil }
+func (a equityTestAdapters) Adapter(string) (execution.ExecutionAdapter, error) {
+	return a.adapter, nil
+}
 
 func TestSampleAccountValuesLiveSpotBalancesWhenSnapshotHasNoEquity(t *testing.T) {
 	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))

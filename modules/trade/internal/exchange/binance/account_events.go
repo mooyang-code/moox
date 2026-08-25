@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 var errListenKeyExpired = errors.New("binance: private stream listen key expired")
@@ -27,7 +28,7 @@ type spotSubscriptionRequest struct {
 	Params map[string]any `json:"params"`
 }
 
-func (a *Adapter) Subscribe(ctx context.Context, handler exchange.EventHandler) error {
+func (a *Adapter) Subscribe(ctx context.Context, handler execution.AccountEventHandler) error {
 	if handler == nil {
 		return typedRejected("private event handler is required", nil)
 	}
@@ -39,7 +40,7 @@ func (a *Adapter) Subscribe(ctx context.Context, handler exchange.EventHandler) 
 
 func (a *Adapter) subscribeSpotPrivate(
 	ctx context.Context,
-	handler exchange.EventHandler,
+	handler execution.AccountEventHandler,
 ) error {
 	connection, _, err := websocket.DefaultDialer.DialContext(
 		ctx,
@@ -76,7 +77,7 @@ func (a *Adapter) subscribeSpotPrivate(
 			acknowledgement.Error,
 		)
 	}
-	exchange.NotifyPrivateReady(handler)
+	handler.OnSubscribed()
 	return a.receivePrivate(ctx, connection, handler)
 }
 
@@ -134,7 +135,7 @@ func (a *Adapter) newSpotSubscriptionRequest(timestamp int64) spotSubscriptionRe
 
 func (a *Adapter) subscribeSwapPrivate(
 	ctx context.Context,
-	handler exchange.EventHandler,
+	handler execution.AccountEventHandler,
 ) error {
 	path := "/fapi/v1/listenKey"
 	raw, err := a.client().Do(ctx, &httpclient.Request{
@@ -166,14 +167,14 @@ func (a *Adapter) subscribeSwapPrivate(
 	defer close(keepaliveDone)
 	go a.keepListenKeyAlive(ctx, path, key.ListenKey, connection, keepaliveDone)
 
-	exchange.NotifyPrivateReady(handler)
+	handler.OnSubscribed()
 	return a.receivePrivate(ctx, connection, handler)
 }
 
 func (a *Adapter) receivePrivate(
 	ctx context.Context,
 	connection *websocket.Conn,
-	handler exchange.EventHandler,
+	handler execution.AccountEventHandler,
 ) error {
 	return a.receivePrivateWithHeartbeat(
 		ctx,
@@ -194,7 +195,7 @@ func (a *Adapter) privateHeartbeatTimeout() time.Duration {
 func (a *Adapter) receivePrivateWithHeartbeat(
 	ctx context.Context,
 	connection *websocket.Conn,
-	handler exchange.EventHandler,
+	handler execution.AccountEventHandler,
 	heartbeatTimeout time.Duration,
 ) error {
 	go func() {
@@ -292,7 +293,7 @@ type privateOrderFields struct {
 func (a *Adapter) dispatchPrivate(
 	ctx context.Context,
 	payload []byte,
-	handler exchange.EventHandler,
+	handler execution.AccountEventHandler,
 ) error {
 	var wrapper struct {
 		Event json.RawMessage `json:"event"`
@@ -383,6 +384,7 @@ func (a *Adapter) dispatchPrivate(
 		ExchangeTradeID: envelope.TradeID.String(),
 		ExchangeOrderID: envelope.OrderID.String(),
 		ClientOrderID:   envelope.ClientID,
+		ExchangeSymbol:  envelope.Symbol,
 		Symbol:          envelope.Symbol,
 		Side:            exchange.Side(envelope.Side),
 		PositionSide:    positionSide,
@@ -408,7 +410,7 @@ func (a *Adapter) dispatchFuturesAccount(
 	ctx context.Context,
 	eventTime int64,
 	raw json.RawMessage,
-	handler exchange.EventHandler,
+	handler execution.AccountEventHandler,
 ) error {
 	var payload struct {
 		Balances []struct {
@@ -462,7 +464,7 @@ func (a *Adapter) dispatchFuturesAccount(
 		}
 		position := exchange.Position{
 			TradingAccountID: a.config.TradingAccountID,
-			Symbol:           row.Symbol, PositionSide: exchange.PositionSideNet,
+			ExchangeSymbol:   row.Symbol, Symbol: row.Symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(eventTime),
 			Present: exchange.PositionPresence{
@@ -490,7 +492,7 @@ func (a *Adapter) dispatchFuturesAccount(
 func (a *Adapter) dispatchSpotAccount(
 	ctx context.Context,
 	raw []byte,
-	handler exchange.EventHandler,
+	handler execution.AccountEventHandler,
 ) error {
 	var payload struct {
 		Time     int64 `json:"u"`

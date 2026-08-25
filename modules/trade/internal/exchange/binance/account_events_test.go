@@ -113,6 +113,8 @@ type recordingHandler struct {
 	positions []exchange.Position
 }
 
+func (*recordingHandler) OnSubscribed() {}
+
 func (h *recordingHandler) OnOrder(_ context.Context, value exchange.Order) error {
 	h.orders = append(h.orders, value)
 	return nil

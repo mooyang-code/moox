@@ -5,7 +5,9 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 type privateOrderProbe struct {
@@ -61,25 +63,50 @@ func (p *privateOrderProbe) wait(
 }
 
 type probingAdapter struct {
-	exchange.Adapter
-	probe *privateOrderProbe
+	execution.ExecutionAdapter
+	marketData    execution.MarketDataSource
+	accountEvents execution.AccountEventSource
+	probe         *privateOrderProbe
+}
+
+func newProbingAdapter(adapter execution.ExecutionAdapter, probe *privateOrderProbe) probingAdapter {
+	marketData, _ := adapter.(execution.MarketDataSource)
+	accountEvents, _ := adapter.(execution.AccountEventSource)
+	return probingAdapter{ExecutionAdapter: adapter, marketData: marketData, accountEvents: accountEvents, probe: probe}
 }
 
 func (a probingAdapter) Subscribe(
 	ctx context.Context,
-	handler exchange.EventHandler,
+	handler execution.AccountEventHandler,
 ) error {
-	return a.Adapter.Subscribe(ctx, probingHandler{
-		EventHandler: handler,
-		probe:        a.probe,
+	if a.accountEvents == nil {
+		return errors.New("testnet adapter has no account-event source")
+	}
+	return a.accountEvents.Subscribe(ctx, probingHandler{
+		AccountEventHandler: handler,
+		probe:               a.probe,
 	})
+}
+
+func (a probingAdapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, error) {
+	if a.marketData == nil {
+		return nil, errors.New("testnet adapter has no market-data source")
+	}
+	return a.marketData.LoadInstruments(ctx)
+}
+
+func (a probingAdapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (execution.MarketQuote, error) {
+	if a.marketData == nil {
+		return execution.MarketQuote{}, errors.New("testnet adapter has no market-data source")
+	}
+	return a.marketData.GetQuote(ctx, symbol)
 }
 
 func (a probingAdapter) GetReferencePrice(
 	ctx context.Context,
 	symbol string,
 ) (exchange.ReferencePrice, error) {
-	source, ok := a.Adapter.(exchange.ReferencePriceSource)
+	source, ok := a.ExecutionAdapter.(execution.ReferencePriceSource)
 	if !ok {
 		return exchange.ReferencePrice{}, errors.New(
 			"testnet adapter has no reference price source",
@@ -93,7 +120,7 @@ func (a probingAdapter) GetOrderByExchangeID(
 	symbol string,
 	exchangeOrderID string,
 ) (exchange.Order, error) {
-	lookup, ok := a.Adapter.(exchange.ExchangeOrderLookup)
+	lookup, ok := a.ExecutionAdapter.(execution.ExchangeOrderLookup)
 	if !ok {
 		return exchange.Order{}, errors.New(
 			"testnet adapter has no Exchange order lookup",
@@ -102,19 +129,13 @@ func (a probingAdapter) GetOrderByExchangeID(
 	return lookup.GetOrderByExchangeID(ctx, symbol, exchangeOrderID)
 }
 
-func (a probingAdapter) MarkPrivateStreamMetadataReady() {
-	if gate, ok := a.Adapter.(exchange.PrivateStreamMetadataGate); ok {
-		gate.MarkPrivateStreamMetadataReady()
-	}
-}
-
 type probingHandler struct {
-	exchange.EventHandler
+	execution.AccountEventHandler
 	probe *privateOrderProbe
 }
 
-func (h probingHandler) OnPrivateReady() {
-	exchange.NotifyPrivateReady(h.EventHandler)
+func (h probingHandler) OnSubscribed() {
+	h.AccountEventHandler.OnSubscribed()
 }
 
 func (h probingHandler) OnOrder(
@@ -122,7 +143,7 @@ func (h probingHandler) OnOrder(
 	order exchange.Order,
 ) error {
 	h.probe.observe(order.ClientOrderID)
-	return h.EventHandler.OnOrder(ctx, order)
+	return h.AccountEventHandler.OnOrder(ctx, order)
 }
 
 func (h probingHandler) OnFill(
@@ -130,5 +151,13 @@ func (h probingHandler) OnFill(
 	fill exchange.Fill,
 ) error {
 	h.probe.observe(fill.ClientOrderID)
-	return h.EventHandler.OnFill(ctx, fill)
+	return h.AccountEventHandler.OnFill(ctx, fill)
+}
+
+func (h probingHandler) OnPosition(ctx context.Context, position exchange.Position) error {
+	return h.AccountEventHandler.OnPosition(ctx, position)
+}
+
+func (h probingHandler) OnAccountSnapshot(ctx context.Context, snapshot exchange.AccountSnapshot) error {
+	return h.AccountEventHandler.OnAccountSnapshot(ctx, snapshot)
 }

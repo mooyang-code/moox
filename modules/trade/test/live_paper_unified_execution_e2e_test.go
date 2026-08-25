@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/reservation"
@@ -69,6 +70,79 @@ func TestPaperMatcherRestartAndCASE2E(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "CANCELED", got.State)
 	require.Equal(t, "0", got.RemainingReservedQuantity)
+}
+
+func TestPaperMatcherProductionAdapterFillAndRestartE2E(t *testing.T) {
+	ctx := context.Background()
+	s := openUnifiedE2EStore(t)
+	fake := newFakeExchange(exchange.MarketTypeSpot)
+	seedFixture(t, s, exchange.MarketTypeSpot, fake.instrument)
+	account, err := s.GetTradingAccountByID(ctx, testAccount)
+	require.NoError(t, err)
+	market := deterministicMarketData{instrument: fake.instrument}
+	adapter := &paperexec.Adapter{Account: account, Store: s, MarketData: market}
+	_, err = adapter.LoadInstruments(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: testSpace, OrderID: "paper-match-order", TradingAccountID: testAccount,
+			ClientOrderID: "paper-match-client", ExchangeOrderID: "paper-order-e2e",
+			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: fake.instrument.InstrumentID,
+			ExchangeSymbol: testSymbol, Symbol: testSymbol, OrderType: "MARKET", Side: "BUY",
+			Quantity: "1", ReferencePrice: "100", ReferencePriceAt: testNow.UnixMilli(),
+			OwnerType: "EXTERNAL", OwnerID: "paper-match", State: "OPEN",
+			FilledQuantity: "0", AveragePrice: "0", ReservedAsset: "USDT",
+			ReservedQuantity: "101.2", RemainingReservedQuantity: "101.2",
+			FirstMatchPending: true, Version: 1,
+		})
+	}))
+
+	reducer := &consumer.Reducer{Store: s, Now: func() time.Time { return testNow }}
+	matcher := &paperexec.Matcher{Store: s, Reducer: reducer, DecideContext: func(ctx context.Context, candidate store.OrderRecord) (paperexec.Decision, error) {
+		quote, err := adapter.GetQuote(ctx, shared.ExchangeSymbol(candidate.ExchangeSymbol))
+		if err != nil {
+			return paperexec.Decision{}, err
+		}
+		price, err := paperexec.MarketExecutionPrice(exchange.SideBuy, quote, shared.Zero())
+		if err != nil {
+			return paperexec.Decision{}, err
+		}
+		return paperexec.Decision{Fill: exchange.Fill{
+			ExchangeTradeID: "paper-match-trade", ExchangeOrderID: candidate.ExchangeOrderID,
+			ClientOrderID: candidate.ClientOrderID, ExchangeSymbol: candidate.ExchangeSymbol,
+			Symbol: candidate.ExchangeSymbol, Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
+			Price: price, Fee: shared.Zero(), SettlementAsset: "USDT", FeeAsset: "USDT",
+			LiquidityRole: "TAKER", TradedAt: testNow,
+		}}, nil
+	}}
+	require.NoError(t, matcher.Scan(ctx))
+	order, err := s.GetOrder(ctx, testSpace, "paper-match-order")
+	require.NoError(t, err)
+	require.Equal(t, "FILLED", order.State)
+	require.Equal(t, "101", order.AveragePrice)
+	fills, _, err := s.ListFills(ctx, testSpace, store.FillQuery{TradingAccountID: testAccount, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, fills, 1)
+
+	// A restart/repeated tick must not create a second fill.
+	require.NoError(t, matcher.Scan(ctx))
+	fills, _, err = s.ListFills(ctx, testSpace, store.FillQuery{TradingAccountID: testAccount, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, fills, 1)
+}
+
+type deterministicMarketData struct{ instrument exchange.Instrument }
+
+func (m deterministicMarketData) LoadInstruments(context.Context) ([]exchange.Instrument, error) {
+	return []exchange.Instrument{m.instrument}, nil
+}
+
+func (deterministicMarketData) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+	return execution.MarketQuote{
+		Bid: shared.MustDecimal("100"), Ask: shared.MustDecimal("101"), Last: shared.MustDecimal("100.5"),
+		SourceTime: testNow,
+	}, nil
 }
 
 func TestEquitySamplerCoalescesAndPaperSimulationClosesE2E(t *testing.T) {

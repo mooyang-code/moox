@@ -27,6 +27,10 @@ type MarketDataSource interface {
 	GetQuote(context.Context, shared.ExchangeSymbol) (MarketQuote, error)
 }
 
+type ReferencePriceSource interface {
+	GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error)
+}
+
 type InstrumentResolver interface {
 	Resolve(context.Context, tradingaccount.Account, shared.InstrumentID) (exchange.Instrument, shared.ExchangeSymbol, error)
 }

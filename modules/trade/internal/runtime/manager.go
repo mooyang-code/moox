@@ -154,7 +154,7 @@ func (m *Manager) Invalidate(tradingAccountID string) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) Adapter(tradingAccountID string) (exchange.Adapter, error) {
+func (m *Manager) Adapter(tradingAccountID string) (execution.ExecutionAdapter, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	entry := m.sessions[tradingAccountID]
@@ -165,12 +165,12 @@ func (m *Manager) Adapter(tradingAccountID string) (exchange.Adapter, error) {
 		return nil, ErrSessionConfig
 	}
 	source, ok := entry.session.(interface {
-		ExchangeAdapter() exchange.Adapter
+		ExecutionAdapter() execution.ExecutionAdapter
 	})
 	if !ok {
 		return nil, ErrSessionConfig
 	}
-	adapter := source.ExchangeAdapter()
+	adapter := source.ExecutionAdapter()
 	if adapter == nil {
 		return nil, ErrSessionConfig
 	}
@@ -178,11 +178,31 @@ func (m *Manager) Adapter(tradingAccountID string) (exchange.Adapter, error) {
 }
 
 func (m *Manager) Bundle(tradingAccountID string) (execution.ExecutionBundle, error) {
+	m.mu.RLock()
+	entry := m.sessions[tradingAccountID]
+	stopping := entry == nil || entry.stopping
+	var session ManagedSession
+	if entry != nil {
+		session = entry.session
+	}
+	m.mu.RUnlock()
+	if stopping {
+		return execution.ExecutionBundle{}, ErrSessionConfig
+	}
+	if source, ok := session.(interface {
+		ExecutionBundle() execution.ExecutionBundle
+	}); ok {
+		bundle := source.ExecutionBundle()
+		if bundle.Adapter == nil {
+			return execution.ExecutionBundle{}, ErrSessionConfig
+		}
+		return bundle, nil
+	}
 	adapter, err := m.Adapter(tradingAccountID)
 	if err != nil {
 		return execution.ExecutionBundle{}, err
 	}
-	return execution.ExecutionBundle{Adapter: execution.LegacyAdapter{Adapter: adapter}, ReservationPolicy: execution.LiveReservationPolicy{}}, nil
+	return execution.ExecutionBundle{Adapter: adapter, ReservationPolicy: execution.LiveReservationPolicy{}}, nil
 }
 
 func (m *Manager) Snapshot() SessionSnapshot {

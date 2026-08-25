@@ -7,9 +7,8 @@ import (
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange/paper"
+	executionpaper "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
@@ -128,10 +127,11 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 	require.Len(t, recoveredFills, 2)
 
 	base := newFakeExchange(exchange.MarketTypeSpot)
-	recoveredPaper := paper.New(
-		base, restarted, testSpace, testAccount, exchange.MarketTypeSpot, "USDT",
-		shared.MustDecimal("100000"), exchange.MarginModeUnspecified, nil,
-	)
+	recoveredAccount, err := restarted.GetTradingAccountByID(ctx, testAccount)
+	require.NoError(t, err)
+	recoveredPaper := &executionpaper.Adapter{
+		Account: recoveredAccount, Store: restarted, MarketData: base,
+	}
 	_, err = recoveredPaper.LoadInstruments(ctx)
 	require.NoError(t, err)
 	snapshot, err := recoveredPaper.GetAccountSnapshot(ctx)

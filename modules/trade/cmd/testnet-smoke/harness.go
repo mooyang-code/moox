@@ -20,6 +20,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/rs/xid"
@@ -99,7 +100,7 @@ func openLiveHarness(
 			Environment:      exchange.AccountEnvironmentTestnet,
 			SettlementAsset:  record.SettlementAsset,
 		}
-		var adapter exchange.Adapter
+		var adapter execution.ExecutionAdapter
 		switch options.Exchange {
 		case exchange.ExchangeBinance:
 			adapter = binance.New(config, credential)
@@ -108,9 +109,17 @@ func openLiveHarness(
 		default:
 			return nil, errors.New("unsupported testnet Exchange")
 		}
-		adapter = probingAdapter{Adapter: adapter, probe: probe}
+		adapter = newProbingAdapter(adapter, probe)
+		marketData, ok := adapter.(execution.MarketDataSource)
+		if !ok {
+			return nil, errors.New("testnet adapter has no market-data source")
+		}
+		accountEvents, ok := adapter.(execution.AccountEventSource)
+		if !ok {
+			return nil, errors.New("testnet adapter has no account-event source")
+		}
 		return &traderuntime.ExchangeSession{
-			Account: record, Adapter: adapter, Sync: syncService,
+			Account: record, Adapter: adapter, MarketData: marketData, AccountEvents: accountEvents, Sync: syncService,
 			SyncInterval: 2 * time.Second,
 		}, nil
 	}
@@ -203,7 +212,7 @@ func (h *liveHarness) waitSessionReady(ctx context.Context) error {
 	}
 }
 
-func (h *liveHarness) adapter() (exchange.Adapter, error) {
+func (h *liveHarness) adapter() (execution.ExecutionAdapter, error) {
 	return h.manager.Adapter(h.identity.AccountID)
 }
 
@@ -238,7 +247,7 @@ func runSubmitPhase(
 	if err != nil {
 		return err
 	}
-	priceSource, ok := adapter.(exchange.ReferencePriceSource)
+	priceSource, ok := adapter.(execution.ReferencePriceSource)
 	if !ok {
 		return errors.New("testnet adapter has no reference price source")
 	}
@@ -318,7 +327,7 @@ func runSubmitPhase(
 	if err := writeState(options.State, state); err != nil {
 		return err
 	}
-	queried, err := adapter.GetOrder(ctx, options.Symbol, clientOrderID)
+	queried, err := adapter.GetOrder(ctx, shared.ExchangeSymbol(options.Symbol), clientOrderID)
 	if err != nil {
 		return fmt.Errorf("query accepted order by client ID: %w", err)
 	}
@@ -391,7 +400,7 @@ func runRecoverPhase(
 	if err != nil {
 		return err
 	}
-	queried, err := adapter.GetOrder(ctx, state.Symbol, state.ClientOrderID)
+	queried, err := adapter.GetOrder(ctx, shared.ExchangeSymbol(state.Symbol), state.ClientOrderID)
 	if err != nil {
 		return fmt.Errorf("restart query by client ID: %w", err)
 	}
@@ -430,7 +439,7 @@ func runRecoverPhase(
 	if err := waitLocalTerminal(ctx, harness, state.OrderID); err != nil {
 		return err
 	}
-	queried, err = adapter.GetOrder(ctx, state.Symbol, state.ClientOrderID)
+	queried, err = adapter.GetOrder(ctx, shared.ExchangeSymbol(state.Symbol), state.ClientOrderID)
 	if err != nil {
 		return fmt.Errorf("query terminal testnet order: %w", err)
 	}

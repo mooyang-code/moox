@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 const (
@@ -160,6 +161,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		instrument := exchange.Instrument{
 			Exchange:           exchange.ExchangeBinance,
 			MarketType:         a.config.MarketType,
+			ExchangeSymbol:     item.Symbol,
 			Symbol:             item.Symbol,
 			InstrumentID:       instrumentID,
 			BaseAsset:          item.BaseAsset,
@@ -243,15 +245,10 @@ func (a *Adapter) GetReferencePrice(
 	return exchange.ReferencePrice{Price: price, UpdatedAt: updatedAt}, nil
 }
 
-type Quote struct {
-	Bid, Ask, Last shared.Decimal
-	SourceTime     time.Time
-}
-
-func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (Quote, error) {
+func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (execution.MarketQuote, error) {
 	raw, err := a.client().Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: a.path("/api/v3/ticker/24hr", "/fapi/v1/ticker/24hr"), Query: url.Values{"symbol": []string{symbol.String()}}})
 	if err != nil {
-		return Quote{}, err
+		return execution.MarketQuote{}, err
 	}
 	var payload struct {
 		BidPrice  string `json:"bidPrice"`
@@ -260,9 +257,9 @@ func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (Q
 		CloseTime int64  `json:"closeTime"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return Quote{}, typedRejected("decode quote", err)
+		return execution.MarketQuote{}, typedRejected("decode quote", err)
 	}
-	return Quote{Bid: parseQuote(payload.BidPrice), Ask: parseQuote(payload.AskPrice), Last: parseQuote(payload.LastPrice), SourceTime: quoteTime(payload.CloseTime)}, nil
+	return execution.MarketQuote{Bid: parseQuote(payload.BidPrice), Ask: parseQuote(payload.AskPrice), Last: parseQuote(payload.LastPrice), SourceTime: quoteTime(payload.CloseTime)}, nil
 }
 
 func parseQuote(raw string) shared.Decimal {
@@ -464,7 +461,7 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		}
 		position := exchange.Position{
 			TradingAccountID: a.config.TradingAccountID,
-			Symbol:           row.Symbol, PositionSide: exchange.PositionSideNet,
+			ExchangeSymbol:   row.Symbol, Symbol: row.Symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(row.UpdateTime),
 		}
@@ -530,14 +527,15 @@ func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) 
 
 func (a *Adapter) GetOrder(
 	ctx context.Context,
-	symbol string,
+	symbol shared.ExchangeSymbol,
 	clientOrderID string,
 ) (exchange.Order, error) {
-	if strings.TrimSpace(symbol) == "" || strings.TrimSpace(clientOrderID) == "" {
+	symbolValue := symbol.String()
+	if strings.TrimSpace(symbolValue) == "" || strings.TrimSpace(clientOrderID) == "" {
 		return exchange.Order{}, typedRejected("symbol and client order id are required", nil)
 	}
 	raw, err := a.request(ctx, http.MethodGet, a.path("/api/v3/order", "/fapi/v1/order"), url.Values{
-		"symbol":            []string{symbol},
+		"symbol":            []string{symbolValue},
 		"origClientOrderId": []string{clientOrderID},
 	})
 	if err != nil {
@@ -633,11 +631,12 @@ func (a *Adapter) PlaceOrder(
 
 func (a *Adapter) CancelOrder(
 	ctx context.Context,
-	symbol string,
+	symbol shared.ExchangeSymbol,
 	clientOrderID string,
 ) (exchange.Order, error) {
+	symbolValue := symbol.String()
 	raw, err := a.request(ctx, http.MethodDelete, a.path("/api/v3/order", "/fapi/v1/order"), url.Values{
-		"symbol":            []string{symbol},
+		"symbol":            []string{symbolValue},
 		"origClientOrderId": []string{clientOrderID},
 	})
 	if err != nil {
@@ -667,15 +666,16 @@ type tradePayload struct {
 
 func (a *Adapter) ListRecentFills(
 	ctx context.Context,
-	symbol string,
+	symbol shared.ExchangeSymbol,
 	cursor string,
 ) ([]exchange.Fill, string, error) {
-	if strings.TrimSpace(symbol) == "" {
+	symbolValue := symbol.String()
+	if strings.TrimSpace(symbolValue) == "" {
 		return nil, cursor, typedRejected("symbol is required to list Binance fills", nil)
 	}
 	const pageSize = 1000
 	values := url.Values{
-		"symbol": []string{symbol},
+		"symbol": []string{symbolValue},
 		"limit":  []string{strconv.Itoa(pageSize)},
 	}
 	catchUp := true
@@ -718,7 +718,7 @@ func (a *Adapter) ListRecentFills(
 			orderID := row.OrderID.String()
 			clientOrderID, found := clientOrderIDs[orderID]
 			if !found {
-				clientOrderID, err = a.clientOrderIDByExchangeOrderID(ctx, symbol, orderID)
+				clientOrderID, err = a.clientOrderIDByExchangeOrderID(ctx, symbolValue, orderID)
 				if exchange.IsKind(err, exchange.ErrorOrderNotFound) {
 					clientOrderID = ""
 				} else if err != nil {
@@ -777,17 +777,18 @@ func (a *Adapter) clientOrderIDByExchangeOrderID(
 
 func (a *Adapter) SetLeverage(
 	ctx context.Context,
-	symbol string,
+	symbol shared.ExchangeSymbol,
 	leverage shared.Decimal,
 ) error {
+	symbolValue := symbol.String()
 	if a.config.MarketType != exchange.MarketTypeSwap ||
-		strings.TrimSpace(symbol) == "" ||
+		strings.TrimSpace(symbolValue) == "" ||
 		leverage.Cmp(shared.Zero()) <= 0 ||
 		strings.ContainsAny(leverage.String(), "./") {
 		return typedRejected("positive integer SWAP leverage is required", nil)
 	}
 	raw, err := a.request(ctx, http.MethodPost, "/fapi/v1/leverage", url.Values{
-		"symbol":   []string{symbol},
+		"symbol":   []string{symbolValue},
 		"leverage": []string{leverage.String()},
 	})
 	return classifyAPIError(err, raw)
@@ -795,16 +796,17 @@ func (a *Adapter) SetLeverage(
 
 func (a *Adapter) SetMarginMode(
 	ctx context.Context,
-	symbol string,
+	symbol shared.ExchangeSymbol,
 	mode exchange.MarginMode,
 ) error {
+	symbolValue := symbol.String()
 	if a.config.MarketType != exchange.MarketTypeSwap ||
 		mode != exchange.MarginModeCross ||
-		strings.TrimSpace(symbol) == "" {
+		strings.TrimSpace(symbolValue) == "" {
 		return typedRejected("only CROSS SWAP margin mode is supported", nil)
 	}
 	raw, err := a.request(ctx, http.MethodPost, "/fapi/v1/marginType", url.Values{
-		"symbol":     []string{symbol},
+		"symbol":     []string{symbolValue},
 		"marginType": []string{"CROSSED"},
 	})
 	if err != nil && apiCode(raw) == "-4046" {
@@ -866,6 +868,7 @@ func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
 	return exchange.Order{
 		ExchangeOrderID: row.OrderID.String(),
 		ClientOrderID:   row.ClientOrderID,
+		ExchangeSymbol:  row.Symbol,
 		Symbol:          row.Symbol,
 		OrderType:       exchange.OrderType(row.Type),
 		TimeInForce:     exchange.TimeInForce(row.TimeInForce),
@@ -917,6 +920,7 @@ func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
 	return exchange.Fill{
 		ExchangeTradeID: row.ID.String(),
 		ExchangeOrderID: row.OrderID.String(),
+		ExchangeSymbol:  row.Symbol,
 		Symbol:          row.Symbol,
 		Side:            side,
 		PositionSide:    positionSide,

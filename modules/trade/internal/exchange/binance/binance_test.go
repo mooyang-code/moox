@@ -168,7 +168,7 @@ func TestLoadSwapInstruments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(instruments) != 1 || !instruments[0].Linear ||
+	if len(instruments) != 1 || instruments[0].ExchangeSymbol != "BTCUSDT" || !instruments[0].Linear ||
 		instruments[0].InstrumentID != "BTC-USDT-SWAP" ||
 		instruments[0].ContractValue.String() != "1" ||
 		instruments[0].SettlementAsset != "USDT" {

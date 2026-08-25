@@ -9,6 +9,7 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/rs/xid"
 	"gorm.io/gorm"
@@ -25,7 +26,7 @@ var (
 )
 
 type AdapterSource interface {
-	Adapter(tradingAccountID string) (exchange.Adapter, error)
+	Adapter(tradingAccountID string) (execution.ExecutionAdapter, error)
 }
 
 type AccountSyncer interface {
@@ -91,6 +92,39 @@ func (s *Service) Place(
 	validation, err := s.Validator.Validate(ctx, spaceID, spec)
 	if err != nil {
 		return orderdomain.Order{}, err
+	}
+	// Paper reservations and the persisted MARKET execution price must use the
+	// side-executable quote, not a Last-only reference. Revalidate once with the
+	// fresh bid/ask so the reservation and matcher consume the same price.
+	if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
+		if s.Adapters == nil {
+			return orderdomain.Order{}, ErrServiceConfig
+		}
+		adapter, adapterErr := s.Adapters.Adapter(spec.TradingAccountID)
+		if adapterErr != nil {
+			return orderdomain.Order{}, adapterErr
+		}
+		marketData, ok := adapter.(execution.MarketDataSource)
+		if !ok {
+			return orderdomain.Order{}, errors.New("trade order: paper market data source is unavailable")
+		}
+		quote, quoteErr := marketData.GetQuote(ctx, shared.ExchangeSymbol(validation.Instrument.ExchangeSymbol))
+		if quoteErr != nil {
+			return orderdomain.Order{}, quoteErr
+		}
+		if !paperQuoteFresh(quote, s.now(), 10*time.Second) {
+			return orderdomain.Order{}, errors.New("trade order: paper quote is stale")
+		}
+		executable, executableErr := paperExecutablePrice(spec.Side, quote)
+		if executableErr != nil {
+			return orderdomain.Order{}, executableErr
+		}
+		spec.ReferencePrice = executable
+		spec.ReferencePriceAt = quote.SourceTime
+		validation, err = s.Validator.Validate(ctx, spaceID, spec)
+		if err != nil {
+			return orderdomain.Order{}, err
+		}
 	}
 
 	id := s.orderID()
@@ -383,7 +417,7 @@ func (s *Service) Cancel(
 		return orderdomain.Order{}, err
 	}
 
-	_, callErr := adapter.CancelOrder(ctx, record.Symbol, record.ClientOrderID)
+	_, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.Symbol), record.ClientOrderID)
 	if callErr == nil {
 		err = s.Syncer.SyncAccount(ctx, record.TradingAccountID)
 		return aggregate, err
@@ -439,7 +473,7 @@ func (s *Service) RecoverCancel(
 	if err != nil {
 		return current, err
 	}
-	_, callErr := adapter.CancelOrder(ctx, record.Symbol, record.ClientOrderID)
+	_, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.Symbol), record.ClientOrderID)
 	if callErr == nil {
 		if err := s.Syncer.SyncAccount(ctx, record.TradingAccountID); err != nil {
 			return current, err
@@ -583,14 +617,14 @@ func (s *Service) resolveUnknown(
 	if err != nil {
 		return current, err
 	}
-	found, lookupErr := adapter.GetOrder(ctx, record.Symbol, record.ClientOrderID)
+	found, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(record.Symbol), record.ClientOrderID)
 	if lookupErr == nil {
 		return s.resolveUnknownFound(ctx, record, current, found.ExchangeOrderID)
 	}
 	if !exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound) {
 		return current, lookupErr
 	}
-	fills, _, fillsErr := adapter.ListRecentFills(ctx, record.Symbol, "")
+	fills, _, fillsErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(record.Symbol), "")
 	if fillsErr != nil {
 		return current, fillsErr
 	}
@@ -871,6 +905,27 @@ func paperExecutionPrice(reference shared.Decimal, side exchange.Side, slippage 
 		factor = shared.MustDecimal("1").Sub(slippage.Div(shared.MustDecimal("10000")))
 	}
 	return reference.Mul(factor)
+}
+
+func paperExecutablePrice(side exchange.Side, quote execution.MarketQuote) (shared.Decimal, error) {
+	if side != exchange.SideBuy && side != exchange.SideSell {
+		return shared.Decimal{}, errors.New("trade order: paper order side is required")
+	}
+	price := quote.Ask
+	if side == exchange.SideSell {
+		price = quote.Bid
+	}
+	if price.IsZero() {
+		price = quote.Last
+	}
+	if price.Cmp(shared.Zero()) <= 0 {
+		return shared.Decimal{}, errors.New("trade order: paper executable quote is empty")
+	}
+	return price, nil
+}
+
+func paperQuoteFresh(quote execution.MarketQuote, now time.Time, maxAge time.Duration) bool {
+	return !quote.SourceTime.IsZero() && !quote.SourceTime.After(now) && now.Sub(quote.SourceTime) <= maxAge
 }
 
 func domainOrder(record store.OrderRecord) (orderdomain.Order, error) {

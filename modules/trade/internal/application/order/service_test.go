@@ -14,13 +14,14 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
 
 type adapterSourceStub struct{ adapter *adapterStub }
 
-func (s adapterSourceStub) Adapter(string) (exchange.Adapter, error) {
+func (s adapterSourceStub) Adapter(string) (execution.ExecutionAdapter, error) {
 	return s.adapter, nil
 }
 
@@ -52,14 +53,15 @@ func (a *adapterStub) ListPositionSnapshots(context.Context) ([]exchange.Positio
 func (a *adapterStub) ListOpenOrders(context.Context) ([]exchange.Order, error) {
 	return nil, nil
 }
+
 func (a *adapterStub) ListRecentFills(
 	context.Context,
-	string,
+	shared.ExchangeSymbol,
 	string,
 ) ([]exchange.Fill, string, error) {
 	return a.fills, "", a.fillsErr
 }
-func (a *adapterStub) GetOrder(context.Context, string, string) (exchange.Order, error) {
+func (a *adapterStub) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
 	a.getCalls++
 	return a.getResult, a.getErr
 }
@@ -71,17 +73,18 @@ func (a *adapterStub) PlaceOrder(_ context.Context, request exchange.OrderReques
 	}
 	return a.placeResult, a.placeErr
 }
-func (a *adapterStub) CancelOrder(context.Context, string, string) (exchange.Order, error) {
+func (a *adapterStub) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
 	a.cancelCalls++
 	return exchange.Order{}, a.cancelErr
 }
-func (a *adapterStub) SetLeverage(context.Context, string, shared.Decimal) error {
+func (a *adapterStub) SetLeverage(context.Context, shared.ExchangeSymbol, shared.Decimal) error {
 	return nil
 }
-func (a *adapterStub) SetMarginMode(context.Context, string, exchange.MarginMode) error {
+func (a *adapterStub) SetMarginMode(context.Context, shared.ExchangeSymbol, exchange.MarginMode) error {
 	return nil
 }
-func (a *adapterStub) Subscribe(context.Context, exchange.EventHandler) error {
+func (a *adapterStub) Subscribe(_ context.Context, handler execution.AccountEventHandler) error {
+	handler.OnSubscribed()
 	return nil
 }
 
