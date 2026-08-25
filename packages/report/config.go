@@ -35,8 +35,6 @@ type Config struct {
 	MaxLabelNameBytes    int
 	MaxLabelValueBytes   int
 	GzipLevel            int
-	IncludeRegex         string
-	ExcludeRegex         string
 }
 
 func DefaultConfig(module, serviceName string) Config {
@@ -59,8 +57,6 @@ func DefaultConfig(module, serviceName string) Config {
 		MaxLabelNameBytes:    128,
 		MaxLabelValueBytes:   512,
 		GzipLevel:            1,
-		IncludeRegex:         `^.*$`,
-		ExcludeRegex:         `^(go_gc_.*debug.*)$`,
 	}
 	c.MaxUncompressedBytes = envInt("MOOX_METRICS_MAX_UNCOMPRESSED_BYTES", c.MaxUncompressedBytes)
 	c.MaxCompressedBytes = envInt("MOOX_METRICS_MAX_COMPRESSED_BYTES", c.MaxCompressedBytes)
@@ -70,12 +66,6 @@ func DefaultConfig(module, serviceName string) Config {
 	c.MaxLabelNameBytes = envInt("MOOX_METRICS_MAX_LABEL_NAME_BYTES", c.MaxLabelNameBytes)
 	c.MaxLabelValueBytes = envInt("MOOX_METRICS_MAX_LABEL_VALUE_BYTES", c.MaxLabelValueBytes)
 	c.GzipLevel = envInt("MOOX_METRICS_GZIP_LEVEL", c.GzipLevel)
-	if value := firstEnv("MOOX_METRICS_INCLUDE_REGEX"); value != "" {
-		c.IncludeRegex = value
-	}
-	if value := firstEnv("MOOX_METRICS_EXCLUDE_REGEX"); value != "" {
-		c.ExcludeRegex = value
-	}
 	if c.EventBusURL == "" {
 		c.EventBusURL = DefaultBusURL
 	}
@@ -137,12 +127,6 @@ func (c Config) withDefaults() Config {
 	}
 	if c.GzipLevel == 0 {
 		c.GzipLevel = d.GzipLevel
-	}
-	if c.IncludeRegex == "" {
-		c.IncludeRegex = d.IncludeRegex
-	}
-	if c.ExcludeRegex == "" {
-		c.ExcludeRegex = d.ExcludeRegex
 	}
 	return c
 }

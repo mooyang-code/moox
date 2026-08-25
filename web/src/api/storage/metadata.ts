@@ -302,7 +302,14 @@ export async function registerArchiveFile(archive_file: ArchiveFile) {
   return rsp.archive_file;
 }
 
-export function listArchiveFiles(params: { space_id: string; dataset_id?: string; status?: string; page?: Page }) {
+export function listArchiveFiles(params: {
+  space_id: string;
+  dataset_id?: string;
+  status?: string;
+  sort_by?: "min_time" | "max_time" | "created_at" | "updated_at";
+  sort_order?: "asc" | "desc";
+  page?: Page;
+}) {
   return callMetadata<typeof params, RetRsp & { archive_files: ArchiveFile[]; page_result: PageResult }>(
     "ListArchiveFiles",
     params

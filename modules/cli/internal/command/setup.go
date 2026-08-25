@@ -1214,18 +1214,19 @@ func eventBusFirewallIP(
 func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string) setupdeploy.Options {
 	paths := snapshot.Manifest.Paths.Resolved()
 	return setupdeploy.Options{
-		RepositoryRoot:         repositoryRoot,
-		DeployRoot:             paths.DeployRoot,
-		ControlRoot:            paths.ControlRoot,
-		StorageRoot:            paths.StorageRoot,
-		PublicHost:             snapshot.Manifest.ControlHost.Address,
-		BrowserPort:            9527,
-		EventBusPublicAddress:  snapshot.Manifest.EventBus.PublicAddress,
-		EventBusPort:           snapshot.Manifest.EventBus.Port,
-		EventBusTLSEnabled:     snapshot.Manifest.EventBus.TLSEnabled,
-		MonitoringWeComWebhook: snapshot.Manifest.Monitoring.WeComWebhook,
-		TLSMode:                setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode),
-		InstallLocalCA:         true,
+		RepositoryRoot:          repositoryRoot,
+		DeployRoot:              paths.DeployRoot,
+		ControlRoot:             paths.ControlRoot,
+		StorageRoot:             paths.StorageRoot,
+		PublicHost:              snapshot.Manifest.ControlHost.Address,
+		BrowserPort:             9527,
+		EventBusPublicAddress:   snapshot.Manifest.EventBus.PublicAddress,
+		EventBusPort:            snapshot.Manifest.EventBus.Port,
+		EventBusTLSEnabled:      snapshot.Manifest.EventBus.TLSEnabled,
+		NotificationChannelType: snapshot.Manifest.Notification.ChannelType,
+		NotificationWebhookURL:  snapshot.Manifest.Notification.WebhookURL,
+		TLSMode:                 setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode),
+		InstallLocalCA:          true,
 	}
 }
 
@@ -1376,7 +1377,7 @@ func clearSetupSecrets(snapshot *setupconfig.Snapshot) {
 	snapshot.Manifest.Admin.Password = ""
 	snapshot.Manifest.TencentCloud.SecretID = ""
 	snapshot.Manifest.TencentCloud.SecretKey = ""
-	snapshot.Manifest.Monitoring.WeComWebhook = ""
+	snapshot.Manifest.Notification.WebhookURL = ""
 	snapshot.Manifest.ControlHost.Password = ""
 	snapshot.Manifest.CompileHost.Password = ""
 	for index := range snapshot.Manifest.OtherHosts {

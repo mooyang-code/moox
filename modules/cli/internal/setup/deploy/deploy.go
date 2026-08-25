@@ -32,34 +32,35 @@ type Options struct {
 	// DeployRoot is the shared parent on the target cloud disk. ControlRoot
 	// and StorageRoot are the independently managed package directories below
 	// it; empty values resolve to the canonical /data/moox layout.
-	DeployRoot             string
-	ControlRoot            string
-	StorageRoot            string
-	PublicHost             string
-	NodeID                 string
-	BrowserPort            int
-	TargetGOOS             string
-	TargetGOARCH           string
-	ResetControlData       bool
-	ResetStorageData       bool
-	ResetViewData          bool
-	UseControlGateway      bool
-	EventBusPublicAddress  string
-	EventBusPort           int
-	EventBusTLSEnabled     bool
-	MonitoringWeComWebhook string
-	StoragePrimarySecret   string
-	StorageViewSecret      string
-	StorageViewPolicy      setupconfig.StorageView
-	HealthAuthVersion      string
-	HealthAuthAccessKey    string
-	HealthAuthSecretKey    string
-	InstallStorageWatchdog bool
-	GatewayControlURL      string
-	GatewayControlKey      string
-	GatewayServiceKey      string
-	GatewayCABundle        []byte
-	TLSMode                TLSMode
+	DeployRoot              string
+	ControlRoot             string
+	StorageRoot             string
+	PublicHost              string
+	NodeID                  string
+	BrowserPort             int
+	TargetGOOS              string
+	TargetGOARCH            string
+	ResetControlData        bool
+	ResetStorageData        bool
+	ResetViewData           bool
+	UseControlGateway       bool
+	EventBusPublicAddress   string
+	EventBusPort            int
+	EventBusTLSEnabled      bool
+	NotificationChannelType string
+	NotificationWebhookURL  string
+	StoragePrimarySecret    string
+	StorageViewSecret       string
+	StorageViewPolicy       setupconfig.StorageView
+	HealthAuthVersion       string
+	HealthAuthAccessKey     string
+	HealthAuthSecretKey     string
+	InstallStorageWatchdog  bool
+	GatewayControlURL       string
+	GatewayControlKey       string
+	GatewayServiceKey       string
+	GatewayCABundle         []byte
+	TLSMode                 TLSMode
 	// InstallLocalCA makes an internal-TLS control deployment verify that the
 	// browser machine trusts the Caddy root certificate. This is intentionally
 	// opt-in at the deployment package boundary so tests and non-browser
@@ -535,7 +536,7 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		_ = os.Remove(archive)
 		return "", err
 	}
-	command.Env = monitoringCommandEnv(command.Env, opts.MonitoringWeComWebhook)
+	command.Env = notificationCommandEnv(command.Env, opts.NotificationChannelType, opts.NotificationWebhookURL)
 	if err := command.Run(); err != nil {
 		_ = os.Remove(archive)
 		return "", err
@@ -574,17 +575,18 @@ func eventBusCommandEnv(base []string, opts Options) ([]string, error) {
 	), nil
 }
 
-func monitoringCommandEnv(base []string, webhook string) []string {
-	const key = "MOOX_MSGBOX_WECOM_WEBHOOK"
-	env := make([]string, 0, len(base)+1)
+func notificationCommandEnv(base []string, channelType, webhook string) []string {
+	const typeKey = "MOOX_NOTIFICATION_CHANNEL_TYPE"
+	const urlKey = "MOOX_NOTIFICATION_WEBHOOK_URL"
+	env := make([]string, 0, len(base)+2)
 	for _, entry := range base {
 		entryKey, _, found := strings.Cut(entry, "=")
-		if found && entryKey == key {
+		if found && (entryKey == typeKey || entryKey == urlKey) {
 			continue
 		}
 		env = append(env, entry)
 	}
-	return append(env, key+"="+webhook)
+	return append(env, typeKey+"="+channelType, urlKey+"="+webhook)
 }
 
 type StoragePackager struct{}
@@ -1228,6 +1230,14 @@ install_control() {
   # which Storage roots exist on the target host.
   old_components="$deploy/config/components.env"
   next_components="$next/config/components.env"
+  rotate_eventbus=0
+  if [ "$reset_data" = 1 ] && [ -r "$deploy/start.sh" ] && [ -r "$next/start.sh" ]; then
+    old_eventbus_url=$(sed -n 's/^EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-\(.*\)}"$/\1/p' "$deploy/start.sh" | head -n 1)
+    next_eventbus_url=$(sed -n 's/^EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-\(.*\)}"$/\1/p' "$next/start.sh" | head -n 1)
+    if [ -n "$old_eventbus_url" ] && [ -n "$next_eventbus_url" ] && [ "$old_eventbus_url" != "$next_eventbus_url" ]; then
+      rotate_eventbus=1
+    fi
+  fi
   if [ -r "$old_components" ] && [ -r "$next_components" ] &&
     grep -q '^MOOX_PRESERVE_STORAGE_ROUTES=1$' "$old_components" &&
     ! grep -q '^MOOX_PRESERVE_STORAGE_ROUTES=1$' "$next_components"; then
@@ -1237,6 +1247,27 @@ install_control() {
     printf '%s\n' 'MOOX_PRESERVE_STORAGE_ROUTES=1' >>"$policy_tmp"
     chmod --reference="$next_components" "$policy_tmp" 2>/dev/null || chmod 0600 "$policy_tmp"
     mv -f "$policy_tmp" "$next_components"
+    trap - EXIT
+  fi
+  # A reset intentionally drops admin.db, but EventBus role files are shared
+  # with Storage and other peers. Persist the decision in the deployment
+  # package so restart.sh and the healthcheck keep those external identities
+  # instead of trying to export missing secrets from the fresh database.
+  if [ -r "$next_components" ]; then
+    preserve_external_eventbus=0
+    if [ "$rotate_eventbus" != 1 ] && { [ "$reset_data" = 1 ] || {
+      [ -r "$old_components" ] && grep -q '^MOOX_PRESERVE_EXTERNAL_EVENTBUS_CREDENTIALS=1$' "$old_components"
+    }; }; then
+      preserve_external_eventbus=1
+    fi
+    eventbus_policy_tmp="$next_components.eventbus.$$"
+    trap 'rm -f "$eventbus_policy_tmp"' EXIT
+    awk '!/^MOOX_PRESERVE_EXTERNAL_EVENTBUS_CREDENTIALS=/' "$next_components" >"$eventbus_policy_tmp"
+    if [ "$preserve_external_eventbus" = 1 ]; then
+      printf '%s\n' 'MOOX_PRESERVE_EXTERNAL_EVENTBUS_CREDENTIALS=1' >>"$eventbus_policy_tmp"
+    fi
+    chmod --reference="$next_components" "$eventbus_policy_tmp" 2>/dev/null || chmod 0600 "$eventbus_policy_tmp"
+    mv -f "$eventbus_policy_tmp" "$next_components"
     trap - EXIT
   fi
   printf '%s\n' "$activation_token" >"$next/.control-activation-token"
@@ -1293,8 +1324,8 @@ install_control() {
       rm -f "$packaged_storage_auth"
     fi
   fi
-  if [ -f "$next/secrets/msgbox.env.next" ]; then
-    mv -f "$next/secrets/msgbox.env.next" "$next/secrets/msgbox.env"
+  if [ -f "$next/secrets/notification.env.next" ]; then
+    mv -f "$next/secrets/notification.env.next" "$next/secrets/notification.env"
   fi
   chmod 700 "$HOME/.config/moox" "$HOME/.config/moox/credentials"
   encryption_key="$HOME/.config/moox/credentials/admin-encryption-key"
@@ -1324,6 +1355,23 @@ install_control() {
     caddy_stopped=0
     return 1
   fi
+  eventbus_backup=""
+  if [ "$rotate_eventbus" = 1 ] && [ -d "$HOME/.config/moox/eventbus" ]; then
+    eventbus_backup="$HOME/.config/moox/eventbus.previous.$activation_token"
+    rm -rf "$eventbus_backup"
+    cp -R "$HOME/.config/moox/eventbus" "$eventbus_backup"
+  fi
+  restore_eventbus_backup() {
+    [ -n "$eventbus_backup" ] || return 0
+    rm -rf "$HOME/.config/moox/eventbus"
+    mv "$eventbus_backup" "$HOME/.config/moox/eventbus"
+    eventbus_backup=""
+  }
+  discard_eventbus_backup() {
+    [ -n "$eventbus_backup" ] || return 0
+    rm -rf "$eventbus_backup"
+    eventbus_backup=""
+  }
   if [ -d "$deploy" ]; then mv "$deploy" "$previous"; fi
   mv "$next" "$deploy"
   caddy_ports="$browser_port,11001"
@@ -1338,6 +1386,7 @@ install_control() {
       return 1
     fi
     rm -rf "$deploy"
+    restore_eventbus_backup
     if [ -d "$previous" ]; then
       mv "$previous" "$deploy"
       "$deploy/start.sh" 8>&- || true
@@ -1346,13 +1395,14 @@ install_control() {
     caddy_stopped=0
     return 1
   fi
-  if ! "$deploy/start.sh" 8>&-; then
+  if ! MOOX_RESET_CONTROL_DATA="$reset_data" MOOX_EVENTBUS_ROTATE_CREDENTIALS="$rotate_eventbus" "$deploy/start.sh" 8>&-; then
     if [ -x "$deploy/lib/caddy-managed.sh" ] && ! "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch"; then
       echo 'managed Caddy could not be stopped; leaving the failed deployment in place for safe retry' >&2
       return 1
     fi
     "$deploy/stop.sh" || true
     rm -rf "$deploy"
+    restore_eventbus_backup
     if [ -d "$previous" ]; then
       mv "$previous" "$deploy"
       "$deploy/start.sh" 8>&- || true
@@ -1361,6 +1411,10 @@ install_control() {
     caddy_stopped=0
     return 1
   fi
+  # Keep the old credentials until the outer readiness probe succeeds. The
+  # finalize/rollback scripts own cleanup so a post-install probe failure can
+  # restore the previous deployment atomically.
+  eventbus_backup=""
   caddy_stopped=0
 }
 case "${1:-}" in
@@ -1381,6 +1435,7 @@ deploy="${2:-${HOME}/moox/prod}"
 root="${3:-$(dirname "$deploy")}"
 case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo 'control_activation_token_invalid' >&2; exit 1 ;; esac
 previous="$deploy.previous.$activation_token"
+eventbus_backup="$HOME/.config/moox/eventbus.previous.$activation_token"
 flock_command="${MOOX_FLOCK_COMMAND:-flock}"
 command -v "$flock_command" >/dev/null 2>&1 || { echo 'control_maintenance_lock_unavailable' >&2; exit 1; }
 exec 8>"$deploy.maintenance.lock"
@@ -1393,6 +1448,10 @@ if [ -x "$deploy/lib/caddy-managed.sh" ] && ! "$deploy/lib/caddy-managed.sh" sto
 fi
 if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
 rm -rf "$deploy"
+if [ -d "$eventbus_backup" ]; then
+  rm -rf "$HOME/.config/moox/eventbus"
+  mv "$eventbus_backup" "$HOME/.config/moox/eventbus"
+fi
 if [ -d "$previous" ]; then
   mv "$previous" "$deploy"
   "$deploy/start.sh" 8>&-
@@ -1404,6 +1463,7 @@ const finalizeControlScript = `set -eu
 activation_token="$1"
 deploy="${2:-${HOME}/moox/prod}"
 root="${3:-$(dirname "$deploy")}"
+eventbus_backup="$HOME/.config/moox/eventbus.previous.$activation_token"
 case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo 'control_activation_token_invalid' >&2; exit 1 ;; esac
 flock_command="${MOOX_FLOCK_COMMAND:-flock}"
 command -v "$flock_command" >/dev/null 2>&1 || { echo 'control_maintenance_lock_unavailable' >&2; exit 1; }
@@ -1413,4 +1473,5 @@ exec 8>"$deploy.maintenance.lock"
 [ "$(cat "$deploy/.control-activation-token")" = "$activation_token" ] || exit 0
 deploy_base=$(basename "$deploy")
 rm -rf "$root"/"$deploy_base".previous.*
+rm -rf "$eventbus_backup"
 rm -f "$deploy/.control-activation-token"`

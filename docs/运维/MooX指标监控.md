@@ -6,8 +6,8 @@
 
 ```text
 服务 registry -> 本地 timer -> MetricSnapshot -> moox-eventbus
-    -> Monitor Consumer -> Storage 历史 + SQLite catalog/latest
-    -> 看板查询 -> 结构化 AND/OR 规则 -> webhook
+    -> Monitor Consumer -> Storage 历史 + SQLite 最新值
+    -> 健康事实聚合 -> 健康监控页面 / 全局通知通道
 ```
 
 `/metrics` 仅保留作带 health HMAC 的本机调试入口，不再存在独立的未鉴权 Prometheus plugin listener。共享 `requestmetrics` filter 继续采集 tRPC 客户端/服务端请求量和耗时，写入同一个默认 registry。EventBus 不可用时业务服务继续启动，timer 记录错误并等待下一次快照；Monitor 消费失败时消息按至少一次语义重投递。
@@ -16,7 +16,7 @@
 
 - `MOOX_METRICS` 消息最多保留 24 小时或占用 512 MiB，达到任一边界后由 JetStream 淘汰最旧消息。
 - Monitor SQLite 中的检查结果和告警事件默认保留 14 天，由 `data_cleanup.timer` 启动时清理一次，之后每 6 小时清理。
-- 指标消息去重记录默认保留 7 天，由同一 Timer 删除过期记录；catalog、latest、规则和规则状态不随去重回执删除。
+- 指标消息去重记录默认保留 7 天，由同一 Timer 删除过期记录；最新值仅供内部健康聚合使用。
 - 服务指标历史写入 Storage 内部 Dataset `moox_service_metrics`，默认保留 24 小时；高基数指标应优先降低 label cardinality，不能仅依赖延长历史窗口。
 - Storage 对四个主机指标 Dataset 默认保留 48 小时，由每小时执行的 `host_metrics_cleanup.timer` 进行有界 10 批清理；Monitor 不删除 Storage 事实。
 - Archive Parquet 和通用行情/因子事实不受指标历史清理影响。
@@ -63,7 +63,7 @@ export MOOX_METRICS_STORAGE_METADATA_URL=http://storage-metadata:20200
 | max_samples | 20,000 | 展平 histogram/summary 后上限 |
 | max_labels_per_sample | 20 | 包括生成的 `le`/`quantile` |
 
-服务可以通过 `MOOX_METRICS_*` 环境变量覆盖大小、family、sample、label、gzip、include/exclude 限制；timer 周期仍以配置文件的 30 秒为准。Reporter 失败会记录日志并增加本地错误计数，不维护业务 outbox。
+服务可以通过 `MOOX_METRICS_*` 环境变量覆盖大小、family、sample、label 和 gzip 限制；业务指标白名单由代码维护，用户不能通过 include/exclude 环境变量重新引入 Go、进程、tRPC 或 HTTP 技术指标。timer 周期仍以配置文件的 30 秒为准。Reporter 失败会记录日志并增加本地错误计数，不维护业务 outbox。
 
 发布使用一个共享 `metrics-publisher` 发布角色和一个独立 `monitor-metrics-consumer` 消费角色。Publisher 只能发布 metrics snapshot；Monitor consumer 只订阅固定 metrics/host topic 和 durable。Monitor 为单实例，不能复用 Publisher 凭据消费，也不通过多实例抢占 durable。
 
@@ -95,13 +95,11 @@ View 驱动因子链路额外暴露以下固定低基数指标（不包含 subje
 
 这些指标只用于运行观测，不改变完成事件的 payload，也不作为是否发布 ready 的判定条件。
 
-## 看板和规则
+## 健康页面和通知
 
-看板从 Monitor catalog 选择已发现的 service、instance、metric 和 labels，查询 bounded history 后绘制趋势。不存在“新增监控目标”入口，服务发现来自 SysDeploy 注册表；未知 producer、缺失 schema、无 route 的消息会被拒绝。
+健康页面只展示中文的当前告警、行情采集、因子计算、交易与余额和核心服务状态，不展示原始 metric、labels、实例 JSON 或阈值编辑器。系统检查、业务新鲜度和主机阈值由代码和运行时事实维护。
 
-规则是 1-8 条条件的扁平结构，条件可命名 A-H，整组使用 AND 或 OR。每个条件依次选择：series selector、时间 reducer（CURRENT/AVG/MIN/MAX/SUM/RATE/INCREASE）、series reducer（AVG/MIN/MAX/SUM）、比较符和阈值。`MAX > 100` 表示任一匹配 series 超过阈值，`MIN > 100` 表示所有匹配 series 都超过阈值。每条条件独立设置 no-data 策略，规则设置连续触发/恢复次数和 evaluation interval；不使用自由文本 PromQL，也不支持嵌套表达式。
-
-Counter 保留绝对值，RATE/INCREASE 在 Monitor 使用按时间排序的历史点计算并处理 counter reset。通知状态按 rule、事件和 notification key 去重，网络失败会保留重试状态。历史数据在 Storage，catalog/latest、dedupe、rule state 和 evaluation 在 Monitor SQLite。
+Monitor 将所有告警发送到一个全局通知通道，支持企业微信或飞书二选一。通道 URL 为空时停止站外发送，但告警状态和事件仍会保存；页面只返回通道类型、配置状态和掩码 URL。
 
 ## 故障处理
 
@@ -126,7 +124,7 @@ SQLite dedupe 后 ACK，不重复写入 latest。
 ```bash
 go test -count=1 ./modules/monitor/... ./packages/metricspb
 ./scripts/test-deploy-moox-eventbus.sh
-cd web && node scripts/check-metric-monitor.mjs && pnpm build:prod
+cd web && node scripts/check-health-monitor.mjs && pnpm build:prod
 ```
 
 初始部署后用 `moox-cli doctor bootstrap --format json` 验证 inventory、身份、路径和 Reporter 覆盖；故障定位用 `moox-cli doctor diagnose --format json`。操作边界和恢复动作见 [MooX Doctor 运维](MooX-Doctor运维.md)。

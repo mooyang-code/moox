@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/msgbox"
+	"github.com/mooyang-code/moox/packages/notification"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -29,7 +29,7 @@ type certificateWatchFile struct {
 type certificateWatch struct {
 	Files  []certificateWatchFile
 	Now    func() time.Time
-	Sender msgbox.Sender
+	Sender notification.Sender
 }
 
 func newCertificateWatchFromEnvironment() certificateWatch {
@@ -44,8 +44,12 @@ func newCertificateWatchFromEnvironment() certificateWatch {
 		}
 	}
 	watch := certificateWatch{Files: files, Now: time.Now}
-	if webhookURL := strings.TrimSpace(os.Getenv("MOOX_MSGBOX_WECOM_WEBHOOK")); webhookURL != "" {
-		sender, err := msgbox.NewWeComSenderWithTimeout(webhookURL, 5*time.Second)
+	if webhookURL := strings.TrimSpace(os.Getenv("MOOX_NOTIFICATION_WEBHOOK_URL")); webhookURL != "" {
+		channelType := strings.TrimSpace(os.Getenv("MOOX_NOTIFICATION_CHANNEL_TYPE"))
+		if channelType == "" {
+			channelType = string(notification.ChannelTypeWeCom)
+		}
+		sender, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channelType), WebhookURL: webhookURL})
 		if err != nil {
 			log.Warnf("certificate watch notification disabled: %v", err)
 		} else {
@@ -83,9 +87,9 @@ func (w certificateWatch) notifyFailure(ctx context.Context, name string, err er
 	}
 	notifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if sendErr := w.Sender.Send(notifyCtx, msgbox.Message{
+	if sendErr := w.Sender.Send(notifyCtx, notification.Message{
 		Key:      "admin_certificate_watch_" + name,
-		Severity: msgbox.SeverityCritical,
+		Severity: notification.SeverityCritical,
 		Title:    "MooX 证书校验失败",
 		Body:     fmt.Sprintf("Admin 未通过 %s 的公有证书校验：%v。SCF 发布会拒绝使用未校验的证书，请检查控制机证书文件。", name, err),
 		Labels:   map[string]string{"certificate": name},

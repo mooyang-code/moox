@@ -38,8 +38,9 @@ control_root = "/data/moox/prod"
 storage_root = "/data/moox/storage"
 
 # 留空时仍采集和展示监控数据，但不发送站外告警。
-[monitoring]
-wecom_webhook = ""
+[notification]
+channel_type = "wecom"
+webhook_url = ""
 
 [control_host]
 name = "control"
@@ -71,7 +72,7 @@ TLS。用户不填写 EventBus 账号、token、CA 或私钥；MooX 在部署时
 `/data/moox/prod`，独立 Storage 在 `/data/moox/storage`；数据、日志、证书、密钥和
 升级暂存目录都只能落在这些目录下，不再使用用户 home 目录。
 
-`monitoring.wecom_webhook` 是唯一需要用户提前填写的监控专用信息。填写企微群机器人
+`notification.webhook_url` 是唯一需要用户提前填写的监控专用信息。填写企业微信或飞书机器人
 HTTPS webhook 后，部署会以 mode `0600` 的运行时环境文件交给 Monitor；留空不会
 关闭监控采集、查询和规则计算，只是不发送站外告警。
 

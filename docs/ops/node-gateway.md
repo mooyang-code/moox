@@ -19,8 +19,9 @@ set -a; source ./secrets/health-auth.env; set +a
 ./bin/moox-gateway-cli health --url http://127.0.0.1:11012/readyz
 ```
 
-`healthz` 证明进程及持久化目录可用；`readyz` 证明至少加载过一份有效路由。
-Admin 暂时不可用不会让已有路由变为 not ready。检查监听归属：
+`healthz` 证明进程及持久化目录可用；`readyz` 同时证明已加载有效路由，且最近一次
+控制面路由同步和心跳确认均未超过 90 秒。进程可能仍在使用缓存路由，但如果控制面
+失联，`readyz` 会返回 503，避免把“进程在线”误判为“节点健康”。检查监听归属：
 
 ```bash
 sudo ss -lntp | grep -E ':(443|9527|11002|11012|11409|11410)\b'
@@ -78,7 +79,10 @@ ssh ubuntu@106.53.107.122 'cp /home/ubuntu/moox/prod/data/admin.db /home/ubuntu/
 ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db ".mode insert t_ssh_host" "select * from t_ssh_host;"' > /tmp/moox-ssh-hosts.sql
 ```
 
-准备好双 CA bundle、control/service key 和 Admin 密码文件后，先部署广州：
+准备好双 CA bundle、control/service key 和 Admin 密码文件后，先部署广州。CA bundle
+必须包含控制端和对端 Caddy 根证书；部署脚本会在实际启动前用该 bundle 校验
+`--gateway-control-url`，不能使用 `moox-control-package-*` 这类 Gateway 内部证书代替
+Caddy 根证书：
 
 ```bash
 ./scripts/deploy-moox.sh \
@@ -92,6 +96,12 @@ ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db ".mode i
   --monitor-instance-id moox_monitor@gateway-gz-122 \
   --admin-password-file /tmp/moox-admin-password
 ```
+
+部署脚本会检查目标机是否已有其他目录启动的 Gateway。正常启动部署会先停止旧进程并
+记录迁移；`--no-start` 只生成或安装包时，如果发现端口上的旧 Gateway，则直接拒绝，
+避免双进程争抢端口。启动完成后脚本还会等待 `readyz`、路由缓存和节点 ID 验收通过。
+组件覆盖发布会在验收前保留旧 Gateway 文件；若新进程未能通过控制面验收，脚本会自动
+恢复旧文件并重新启动旧 Gateway，避免失败发布留在线上。
 
 若本次确实使用了 `--reset-data`，部署成功并完成新库初始化后立即恢复主机配置：
 

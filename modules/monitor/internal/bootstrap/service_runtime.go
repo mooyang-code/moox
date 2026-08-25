@@ -7,9 +7,9 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
@@ -19,23 +19,19 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, metricRules *monmetrics.MetricRuleStore, metricEvaluator *monmetrics.MetricEvaluator, doctorContext *monitordoctor.Builder) {
+func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, hostReader *hostmetrics.StorageReader, hostReady func() bool, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, doctorContext *monitordoctor.Builder, health *healthview.Builder) {
 	service := s.Service("trpc.moox.monitor.MonitorMgr")
 	if service == nil {
 		log.Warn("MonitorMgr service is not configured, skip register")
 		return
 	}
 	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(runtime.Repositories, monitorrpc.Options{
-		InstanceID: cfg.Instance.InstanceID, Runner: runner, OnResult: hook,
-		SyncSystem: syncSystem, MetricsQuery: metricsQuery, MetricRules: metricRules, MetricEvaluator: metricEvaluator,
-		HostStore: hostStore, HostReader: hostReader, HostStorageReady: hostReady,
-		DoctorContext: doctorContext,
-		ObservabilityOverview: &monitorobservability.Builder{
-			Metrics: metricsQuery, Hosts: hostStore,
-			Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
-			Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
-			BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
-		},
+		InstanceID:       cfg.Instance.InstanceID,
+		HostStore:        hostStore,
+		HostReader:       hostReader,
+		HostStorageReady: hostReady,
+		DoctorContext:    doctorContext,
+		HealthView:       health,
 	}))
 }
 
@@ -48,8 +44,12 @@ func buildProbeRunner(cfg *config.Config) probe.MultiRunner {
 	return runner
 }
 
-func monitorResultHook(runtime *Runtime, notifier alerting.Notifier) func(context.Context, domain.Check, domain.CheckResult) {
-	evaluator := alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{Notifier: notifier})
+func monitorResultHook(runtime *Runtime) func(context.Context, domain.Check, domain.CheckResult) {
+	evaluator := alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{
+		Channel: func(ctx context.Context) (*domain.NotificationChannel, error) {
+			return runtime.Repositories.Notifications.GetGlobal(ctx)
+		},
+	})
 	return func(ctx context.Context, check domain.Check, result domain.CheckResult) {
 		if err := evaluator.Evaluate(ctx, check, result); err != nil {
 			log.ErrorContextf(ctx, "monitor alert evaluation failed: %v", err)

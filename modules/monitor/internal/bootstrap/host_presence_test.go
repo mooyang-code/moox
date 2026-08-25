@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
-	"github.com/mooyang-code/moox/packages/msgbox"
+	"github.com/mooyang-code/moox/packages/notification"
 )
 
-type recordingPresenceSender struct{ messages []msgbox.Message }
+type recordingPresenceSender struct{ messages []notification.Message }
 
-func (s *recordingPresenceSender) Send(_ context.Context, message msgbox.Message) error {
+func (s *recordingPresenceSender) Send(_ context.Context, message notification.Message) error {
 	s.messages = append(s.messages, message)
 	return nil
 }
@@ -29,7 +29,7 @@ func TestHostPresenceTransitionSinkNotifiesFailureAndRecovery(t *testing.T) {
 	if len(sender.messages) != 2 {
 		t.Fatalf("messages = %d", len(sender.messages))
 	}
-	if sender.messages[0].Severity != msgbox.SeverityCritical || sender.messages[1].Severity != msgbox.SeverityInfo {
+	if sender.messages[0].Severity != notification.SeverityCritical || sender.messages[1].Severity != notification.SeverityInfo {
 		t.Fatalf("severities = %s, %s", sender.messages[0].Severity, sender.messages[1].Severity)
 	}
 }

@@ -16,7 +16,7 @@ require (
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/msgbox v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/notification v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/observabilitypb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
@@ -139,7 +139,7 @@ replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metric
 
 replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
 
-replace github.com/mooyang-code/moox/packages/msgbox => ../../packages/msgbox
+replace github.com/mooyang-code/moox/packages/notification => ../../packages/notification
 
 replace github.com/mooyang-code/moox/packages/observabilitypb => ../../packages/observabilitypb
 

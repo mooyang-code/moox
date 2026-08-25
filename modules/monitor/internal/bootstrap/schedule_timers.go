@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
@@ -21,11 +20,10 @@ import (
 
 const (
 	monitorCheckTimerService       = "trpc.moox.monitor.check_schedule.timer"
-	monitorMetricRuleTimerService  = "trpc.moox.monitor.metric_rule.timer"
 	monitorHostSilenceTimerService = "trpc.moox.monitor.host_silence.timer"
 )
 
-func registerMonitorScheduleTimers(s *server.Server, cfg *config.Config, runtime *Runtime, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), evaluator *monmetrics.MetricEvaluator, rules *monmetrics.MetricRuleStore, marketCanary func(context.Context) error) error {
+func registerMonitorScheduleTimers(s *server.Server, cfg *config.Config, runtime *Runtime, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), marketCanary func(context.Context) error) error {
 	if s == nil || cfg == nil || runtime == nil || runtime.Repositories == nil {
 		return fmt.Errorf("monitor schedule timers require server, config, and repositories")
 	}
@@ -55,18 +53,7 @@ func registerMonitorScheduleTimers(s *server.Server, cfg *config.Config, runtime
 		return err
 	}
 
-	var metricHandle func(context.Context) error = func(context.Context) error { return nil }
-	if evaluator != nil && rules != nil {
-		runtime.MetricScheduler = monmetrics.NewRuleScheduler(monmetrics.SchedulerOptions{
-			Evaluator: evaluator, Rules: rules,
-		})
-		metricHandle = runtime.MetricScheduler.EvaluateDueOnce
-	}
-	metricJob, err := timerjob.New("monitor_metric_rule", 30*time.Second, metricHandle)
-	if err != nil {
-		return err
-	}
-	return registerMonitorTimerJob(s, monitorMetricRuleTimerService, metricJob)
+	return nil
 }
 
 func registerMonitorHostSilenceTimer(s *server.Server, scanner *hostmetrics.SilenceScanner, refreshRules func(context.Context) error) error {

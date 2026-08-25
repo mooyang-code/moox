@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS t_monitor_checks (
     c_max_response_ms INTEGER NOT NULL DEFAULT 0,
     c_body_contains TEXT NOT NULL DEFAULT '',
     c_enabled INTEGER NOT NULL DEFAULT 1,
-    c_source TEXT NOT NULL DEFAULT 'manual',
+    c_source TEXT NOT NULL DEFAULT 'observability',
     c_labels TEXT NOT NULL DEFAULT '{}',
     c_description TEXT NOT NULL DEFAULT '',
     c_last_checked_at DATETIME,
@@ -74,29 +74,20 @@ CREATE TABLE IF NOT EXISTS t_monitor_host_agent_aliases (
 CREATE INDEX IF NOT EXISTS idx_monitor_host_agent_aliases_agent
 ON t_monitor_host_agent_aliases (c_agent_id);
 
-CREATE TABLE IF NOT EXISTS t_monitor_webhooks (
+CREATE TABLE IF NOT EXISTS t_monitor_notification_channels (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL DEFAULT '',
-    c_webhook_id TEXT NOT NULL,
-    c_name TEXT NOT NULL,
-    c_url TEXT NOT NULL,
-    c_method TEXT NOT NULL DEFAULT 'POST',
-    c_headers TEXT NOT NULL DEFAULT '{}',
-    c_body_template TEXT NOT NULL DEFAULT '{}',
-    c_enabled INTEGER NOT NULL DEFAULT 1,
+    c_channel_id TEXT NOT NULL UNIQUE CHECK (c_channel_id = 'global'),
+    c_channel_type TEXT NOT NULL DEFAULT 'wecom' CHECK (c_channel_type IN ('wecom', 'feishu')),
+    c_webhook_url TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_webhooks_key
-ON t_monitor_webhooks (c_space_id, c_webhook_id);
 
 CREATE TABLE IF NOT EXISTS t_monitor_alert_rules (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
     c_rule_id TEXT NOT NULL,
     c_check_id TEXT NOT NULL,
-    c_webhook_id TEXT NOT NULL,
     c_failure_threshold INTEGER NOT NULL DEFAULT 3,
     c_success_threshold INTEGER NOT NULL DEFAULT 2,
     c_minimum_reminder_interval_seconds INTEGER NOT NULL DEFAULT 0,
@@ -155,14 +146,6 @@ FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_monitor_checks SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_monitor_webhooks_mtime
-AFTER UPDATE ON t_monitor_webhooks
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_monitor_webhooks SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_monitor_alert_rules_mtime
@@ -251,64 +234,6 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_ingest_messages (
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_ingest_message ON t_monitor_metric_ingest_messages (c_message_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_metric_ingest_expiry ON t_monitor_metric_ingest_messages (c_expires_at);
-
-CREATE TABLE IF NOT EXISTS t_monitor_metric_rules (
-    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL DEFAULT '',
-    c_rule_id TEXT NOT NULL,
-    c_name TEXT NOT NULL DEFAULT '',
-    c_definition_json TEXT NOT NULL DEFAULT '{}',
-    c_evaluation_interval_seconds INTEGER NOT NULL DEFAULT 60,
-    c_enabled INTEGER NOT NULL DEFAULT 1,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_rules_key ON t_monitor_metric_rules (c_space_id, c_rule_id);
-
-CREATE TABLE IF NOT EXISTS t_monitor_metric_rule_states (
-    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL DEFAULT '',
-    c_rule_id TEXT NOT NULL,
-    c_status TEXT NOT NULL DEFAULT 'ok',
-    c_trigger_count INTEGER NOT NULL DEFAULT 0,
-    c_recovery_count INTEGER NOT NULL DEFAULT 0,
-    c_last_evaluated_at DATETIME,
-    c_last_triggered_at DATETIME,
-    c_last_recovered_at DATETIME,
-    c_notification_event TEXT NOT NULL DEFAULT '',
-    c_notification_key TEXT NOT NULL DEFAULT '',
-    c_notification_status TEXT NOT NULL DEFAULT '',
-    c_notification_error TEXT NOT NULL DEFAULT '',
-    c_notification_attempts INTEGER NOT NULL DEFAULT 0,
-    c_last_notification_at DATETIME,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_rule_states_key ON t_monitor_metric_rule_states (c_space_id, c_rule_id);
-
-CREATE TABLE IF NOT EXISTS t_monitor_metric_rule_evaluations (
-    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL DEFAULT '',
-    c_rule_id TEXT NOT NULL,
-    c_evaluated_at DATETIME NOT NULL,
-    c_status TEXT NOT NULL,
-    c_result_json TEXT NOT NULL DEFAULT '{}',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_monitor_metric_rule_evaluations_recent ON t_monitor_metric_rule_evaluations (c_space_id, c_rule_id, c_evaluated_at DESC);
-
-CREATE TABLE IF NOT EXISTS t_monitor_metric_rule_channels (
-    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL DEFAULT '',
-    c_rule_id TEXT NOT NULL,
-    c_webhook_id TEXT NOT NULL,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_rule_channels_key ON t_monitor_metric_rule_channels (c_space_id, c_rule_id, c_webhook_id);
 
 CREATE TRIGGER IF NOT EXISTS trg_monitor_metric_services_mtime
 AFTER UPDATE ON t_monitor_metric_services

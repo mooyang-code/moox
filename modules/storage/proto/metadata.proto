@@ -1500,6 +1500,10 @@ message ListArchiveFilesReq {
   TimeRange time_range = 6;
   // page 是分页参数。
   common.Page page = 7;
+  // sort_by 是排序字段：min_time、max_time、created_at 或 updated_at。
+  string sort_by = 8;
+  // sort_order 是排序方向：asc 或 desc。
+  string sort_order = 9;
 }
 
 // ListArchiveFilesRsp 表示列出归档文件的响应。

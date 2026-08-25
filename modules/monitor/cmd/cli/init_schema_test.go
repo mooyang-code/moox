@@ -25,7 +25,7 @@ func TestInitSchema(t *testing.T) {
 		for _, table := range []string{
 			"t_monitor_checks",
 			"t_monitor_check_results",
-			"t_monitor_webhooks",
+			"t_monitor_notification_channels",
 			"t_monitor_alert_rules",
 			"t_monitor_alert_states",
 			"t_monitor_alert_events",

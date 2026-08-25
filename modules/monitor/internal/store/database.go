@@ -3,6 +3,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -110,6 +111,74 @@ func (m *Store) ApplySchema(sql string) error {
 		return fmt.Errorf("schema sql is empty")
 	}
 	return m.db.Exec(sql).Error
+}
+
+// ResetLegacyMonitorTables detects the pre-global-notification alert schema.
+// The project is greenfield, so an old database is rebuilt rather than
+// attempting an unsafe SQLite ALTER that could leave a required webhook
+// column behind. The caller must apply the current schema afterwards.
+func (m *Store) ResetLegacyMonitorTables() (bool, error) {
+	if m == nil || m.db == nil {
+		return false, fmt.Errorf("monitor database is not open")
+	}
+	rows, err := m.db.Raw("PRAGMA table_info(t_monitor_alert_rules)").Rows()
+	if err != nil {
+		return false, err
+	}
+	legacy := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, columnType sql.NullString
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			_ = rows.Close()
+			return false, err
+		}
+		if name.Valid && name.String == "c_webhook_id" {
+			legacy = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return false, err
+	}
+	if err := rows.Close(); err != nil {
+		return false, err
+	}
+	if !legacy {
+		return false, nil
+	}
+	for _, table := range []string{
+		"t_monitor_checks", "t_monitor_check_results", "t_monitor_alert_rules",
+		"t_monitor_alert_states", "t_monitor_alert_events",
+	} {
+		if err := m.db.Exec("DROP TABLE IF EXISTS " + table).Error; err != nil {
+			return false, fmt.Errorf("reset legacy monitor table %s: %w", table, err)
+		}
+	}
+	return true, nil
+}
+
+// DropRetiredTables removes greenfield-era tables that no longer have a
+// runtime owner. This is intentionally destructive: the project has not
+// shipped a compatibility migration and these tables contain no supported
+// user data.
+func (m *Store) DropRetiredTables() error {
+	if m == nil || m.db == nil {
+		return fmt.Errorf("monitor database is not open")
+	}
+	for _, table := range []string{
+		"t_monitor_webhooks",
+		"t_monitor_metric_rules",
+		"t_monitor_metric_rule_states",
+		"t_monitor_metric_rule_evaluations",
+		"t_monitor_metric_rule_channels",
+	} {
+		if err := m.db.Exec("DROP TABLE IF EXISTS " + table).Error; err != nil {
+			return fmt.Errorf("drop retired table %s: %w", table, err)
+		}
+	}
+	return nil
 }
 
 func (m *Store) Close() error {

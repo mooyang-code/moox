@@ -85,13 +85,14 @@ type MaintenanceOptions struct {
 	// the tRPC cleanup Timer removes the retired physical slot later.
 	MaxViewFileBytes    int64
 	MaxPeriodsPerSeries uint64
-	// RebuildLookback is the minimum wall-clock history every newly built
-	// index must cover before activation. Production config supplies this;
-	// zero keeps direct unit-test callers backwards compatible.
+	// RebuildLookback is the preferred wall-clock history to backfill for every
+	// newly built index. If Primary has less history, the available rows are
+	// still activated; zero keeps direct unit-test callers backwards compatible.
 	RebuildLookback time.Duration
-	// RebuildLookbackPeriods specifies the minimum completed bars required for
+	// RebuildLookbackPeriods specifies the target number of completed bars for
 	// each time-series (subject, frequency, series tag) during Primary history
-	// backfill. A frequency-specific value wins over default.
+	// backfill. A frequency-specific value wins over default; a shortage does
+	// not block activation.
 	RebuildLookbackPeriods map[string]uint64
 	// RebuildMaxPending and RebuildIdleChecks gate optional size-limit
 	// rebuilds. Necessary repairs bypass this capacity gate.
@@ -371,6 +372,14 @@ func validateRebuildLookback(stats viewindex.ViewIndexStats, lookback time.Durat
 
 var errRebuildLookbackInsufficient = errors.New("rebuilt View lookback is insufficient")
 
+// incompleteHistoryIsAllowed reports the expected shortage for a newly-built
+// index. A lookback is a best-effort target: a fresh dataset may not have that
+// many rows yet, but the available rows still form a valid replacement and
+// live events can continue filling it after activation.
+func incompleteHistoryIsAllowed(err error) bool {
+	return errors.Is(err, errRebuildLookbackInsufficient)
+}
+
 func isPrimaryHistoryIndexNotReady(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "primary history index is still being materialized")
 }
@@ -589,11 +598,10 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 		case pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP:
 			if view.GetActiveIndexId() == "" && build.GetState() != pb.ViewIndexBuild_PREPARING {
 				if err := s.validatePendingBuildCoverage(ctx, build.GetIndexId(), build.GetEngine(), opts.RebuildLookback); err != nil {
-					if errors.Is(err, errRebuildLookbackInsufficient) {
-						log.Printf("storage view initial rebuild is still priming space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
-						return nil
+					if !incompleteHistoryIsAllowed(err) {
+						return err
 					}
-					return err
+					log.Printf("storage view initial rebuild has partial history; activating available rows space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
 				}
 				if err := s.catchUpAndActivateViewBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), build.GetEngine(), build.GetTargetViewVersion(), build.GetSchemaHash(), build.GetColumns(), build.GetEntriesWritten()); err != nil {
 					return err
@@ -615,12 +623,11 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 			}
 			if opts.RebuildLookback > 0 {
 				if err := s.validatePendingBuildCoverage(ctx, build.GetIndexId(), build.GetEngine(), opts.RebuildLookback); err != nil {
-					if errors.Is(err, errRebuildLookbackInsufficient) && view.GetActiveIndexId() == "" {
-						log.Printf("storage view READY rebuild is still priming space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
-						return nil
+					if !incompleteHistoryIsAllowed(err) {
+						s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), err)
+						return err
 					}
-					s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), err)
-					return err
+					log.Printf("storage view READY rebuild has partial history; activating available rows space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
 				}
 			}
 			if err := s.AttachPendingViewBuild(ctx, view); err != nil {
@@ -855,13 +862,12 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	}
 	if opts.RebuildLookback > 0 {
 		if err := s.validatePendingBuildCoverage(ctx, indexID, schema.Engine, opts.RebuildLookback); err != nil {
-			if view.GetActiveIndexId() == "" && errors.Is(err, errRebuildLookbackInsufficient) {
-				log.Printf("storage view initial rebuild is priming space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
-				return nil
+			if !incompleteHistoryIsAllowed(err) {
+				s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
+				finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, entriesWritten, err)
+				return err
 			}
-			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
-			finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, entriesWritten, err)
-			return err
+			log.Printf("storage view rebuild has partial history; activating available rows space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
 		}
 	}
 	s.updateRunningRebuildLogPhase(ctx, opts, auth, view, buildID, buildLog, "activate")
@@ -1253,7 +1259,10 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts MaintenanceOptions, 
 	}
 	if opts.RebuildLookback > 0 {
 		if err := s.validatePendingBuildCoverage(ctx, build.GetIndexId(), build.GetEngine(), opts.RebuildLookback); err != nil {
-			return err
+			if !incompleteHistoryIsAllowed(err) {
+				return err
+			}
+			log.Printf("storage view resumed rebuild has partial history; activating available rows space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
 		}
 	}
 	s.updateRunningRebuildLogPhase(ctx, opts, auth, view, build.GetBuildId(), nil, "activate")

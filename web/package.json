@@ -29,7 +29,7 @@
     "check:menu": "node scripts/check-menu-structure.mjs",
     "check:host-monitor": "node scripts/check-host-monitor-contract.mjs",
     "check:service-management": "node scripts/check-service-management-contract.mjs",
-    "check:metric-monitor": "node scripts/check-metric-monitor.mjs",
+    "check:health-monitor": "node scripts/check-health-monitor.mjs",
     "check:collector-task-style": "node scripts/check-collector-task-style.mjs",
     "preview": "vite preview",
     "lint:eslint": "eslint --fix --ext .js,.ts,.vue ./src",

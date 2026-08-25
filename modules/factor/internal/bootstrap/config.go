@@ -59,6 +59,7 @@ type EngineConfig struct {
 }
 
 const (
+	defaultDatabaseMaxConns  = 1
 	defaultPythonWorkers     = 32
 	defaultViewReadWorkers   = 64
 	defaultViewReadTimeoutMS = 10000
@@ -92,8 +93,8 @@ func Default() *Config {
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/factor/factor.db",
-			MaxIdleConns:    10,
-			MaxOpenConns:    30,
+			MaxIdleConns:    defaultDatabaseMaxConns,
+			MaxOpenConns:    defaultDatabaseMaxConns,
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
@@ -121,10 +122,10 @@ func (c *Config) applyDefaults() {
 		c.Database.Path = "./data/factor/factor.db"
 	}
 	if c.Database.MaxIdleConns == 0 {
-		c.Database.MaxIdleConns = 10
+		c.Database.MaxIdleConns = defaultDatabaseMaxConns
 	}
 	if c.Database.MaxOpenConns == 0 {
-		c.Database.MaxOpenConns = 30
+		c.Database.MaxOpenConns = defaultDatabaseMaxConns
 	}
 	if c.Database.ConnMaxLifetime == 0 {
 		c.Database.ConnMaxLifetime = time.Hour

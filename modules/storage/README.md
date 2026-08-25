@@ -89,7 +89,7 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
   时序 View 按每个 subject/frequency 回溯已完成的 K 线根数，不按自然时间计算，
   因此周末、节假日不会减少有效回溯量。默认所有频率均回溯 `1000` 根；根目录
   `custom.toml` 的 `[storage_view] rebuild_lookback_periods` 可统一覆盖该值。某个 subject 历史不足目标根数
-  时保持构建中，不发布不完整 View；`keep_duration` 仍只控制索引保留/容量整理，
+  时使用当前已有历史激活 View，后续由实时事件继续补齐；`keep_duration` 仍只控制索引保留/容量整理，
   不再决定时序回填根数。
 - `moox-cli storage force-rebuild-view` 可在确认后删除 View 的 A/B 物理索引、清理
   durable consumer、period/sync checkpoint 状态并从 `DeliverAll` 事件重新建 View。该命令要求显式指定
@@ -129,8 +129,8 @@ DuckDB 事务和事件数量。若机器内存不足，应优先降低因子分�
 Active 写失败时保持当前 Delivery 并本地退避；无法恢复的
 Subject/Proto/Payload 错误执行 `Term`，避免毒消息永久阻塞全部 Dataset。
 
-新增或重建 View 必须至少覆盖 `storage.view.rebuild_lookback_periods` 指定的每频率根数，未达到
-回溯水位不会激活新索引。未上线环境可使用 `moox-cli storage reset-view-consumers
+新增或重建 View 会尽量覆盖 `storage.view.rebuild_lookback_periods` 指定的每频率根数；Primary
+历史不足时不会阻塞激活，使用当前已有数据并由实时事件补齐。未上线环境可使用 `moox-cli storage reset-view-consumers
 --dry-run` 检查清理范围；确认后加 `--yes` 会停止整个 Storage 生命周期，删除旧/新 View
 durable，按精确 Dataset subject 清理时序队列并删除时序 View A/B 索引，但默认保留 Primary
 事实数据。Record/Bleve View 也会删除 A/B 索引并从清空后的新事件开始，历史记录不保留；只有

@@ -212,7 +212,7 @@ func TestMonitorResultHook(t *testing.T) {
 	require.NoError(t, rt.Repositories.Alerts.CreateEvent(context.Background(), &domain.AlertEvent{
 		EventID: "event-1", EventType: domain.AlertEventTriggered, CreatedAt: now,
 	}))
-	hook := monitorResultHook(rt, nil)
+	hook := monitorResultHook(rt)
 	require.NotNil(t, hook)
 	hook(context.Background(), domain.Check{SpaceID: "default", CheckID: "c1", Enabled: true}, domain.CheckResult{
 		SpaceID: "default", CheckID: "c1", Success: true, Status: domain.CheckStatusOK, CheckedAt: time.Now().UTC(),

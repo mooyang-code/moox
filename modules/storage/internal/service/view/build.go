@@ -55,7 +55,7 @@ func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID st
 		return 0, errors.New("view has no pending build")
 	}
 
-	// Every time-series rebuild must use Primary for the configured lookback;
+	// Every time-series rebuild uses Primary for the configured lookback;
 	// copying the active index can reproduce a short or stale View. Record
 	// Bleve Views retain the active-copy path because they have no time-series
 	// Primary history reader.
@@ -292,7 +292,10 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, n
 // configured bar budget. The subject catalog constrains one physical scan;
 // Primary rows remain authoritative for series and tag coverage.
 func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, view *pb.View, nextSchema viewindex.ViewIndexSchema, auth *pb.AuthInfo, frequency string, periods, maxHistoryScanRows uint64) (uint64, error) {
-	allowPartial := isFactorResultView(view)
+	// A configured lookback is the target retention for the replacement index,
+	// not an activation gate. Newly-created datasets and recently restarted
+	// collectors may legitimately have fewer bars; publishing the available
+	// history is preferable to leaving the View unprepared indefinitely.
 	// Use the metadata subject binding table to avoid repeating the time-first
 	// Primary walk for every subject. If it is unavailable or empty, fall back
 	// to an unconstrained Primary scan rather than publishing an incomplete B.
@@ -423,21 +426,13 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 		}
 		if len(rows) == 0 || rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
 			partial, empty := periodCoverageGaps(expected, counts, periods)
-			if allowPartial {
-				if len(partial) > 0 || len(empty) > 0 || len(expected) == 0 {
-					log.Printf("storage factor result history backfill accepted partial coverage space=%s view=%s expected_series=%d partial_series=%d empty_series=%d written=%d", spaceID, viewID, len(expected), len(partial), len(empty), written)
-				}
-				return written, nil
-			}
-			if len(partial) > 0 {
-				return written, fmt.Errorf("Primary history has fewer than %d bars for %d series (first missing: %s; %d series have no matching bars: %s)", periods, len(partial), formatPeriodCoverageCounts(partial, counts), len(empty), formatPeriodSeriesKeys(empty))
-			}
-			if len(expected) == 0 {
-				return written, fmt.Errorf("Primary history has no matching %s bars in %s/%s", frequency, view.GetSpaceId(), view.GetPrimaryDatasetId())
+			if len(partial) > 0 || len(empty) > 0 || len(expected) == 0 {
+				log.Printf("storage view history backfill accepted partial coverage space=%s view=%s expected_series=%d partial_series=%d empty_series=%d target_periods=%d written=%d", spaceID, viewID, len(expected), len(partial), len(empty), periods, written)
 			}
 			// A dataset subject catalog can contain instruments that have not
-			// produced a bar at this frequency yet. They must not block a
-			// rebuild for series that do have data.
+			// produced a bar at this frequency yet. They must not block a rebuild;
+			// the replacement contains whatever Primary history is currently
+			// available and live events will fill it after activation.
 			if len(empty) > 0 {
 				log.Printf("storage view history backfill skipped %d series without matching %s bars space=%s view=%s", len(empty), frequency, spaceID, viewID)
 			}
@@ -467,7 +462,6 @@ func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, sp
 	if reader == nil || rangeReader == nil {
 		return 0, errors.New("Primary readers are required for subject-catalog history backfill")
 	}
-	allowPartial := isFactorResultView(view)
 	var written uint64
 	for _, subject := range subjects {
 		counts := make(map[string]uint64)
@@ -538,14 +532,13 @@ func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, sp
 				return written, fmt.Errorf("encode Primary subject history cursor: %w", err)
 			}
 		}
-		if !allowPartial {
-			for seriesKey, count := range counts {
-				if count < periods {
-					return written, fmt.Errorf("Primary history has fewer than %d bars for series %s", periods, seriesKey)
-				}
+		for seriesKey, count := range counts {
+			if count < periods {
+				log.Printf("storage view history backfill accepted partial coverage space=%s view=%s subject=%s series=%s observed_periods=%d target_periods=%d", spaceID, viewID, subject, seriesKey, count, periods)
 			}
-		} else if len(counts) == 0 {
-			log.Printf("storage factor result history backfill subject has no rows space=%s view=%s subject=%s", spaceID, viewID, subject)
+		}
+		if len(counts) == 0 {
+			log.Printf("storage view history backfill subject has no rows space=%s view=%s subject=%s", spaceID, viewID, subject)
 		}
 	}
 	return written, nil

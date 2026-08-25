@@ -44,7 +44,7 @@ func TestHTTPProbeLeavesManualAndNonHealthChecksUnsigned(t *testing.T) {
 	defer srv.Close()
 	runner := HTTPRunner{HealthSigner: &HealthSigner{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"}}
 
-	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceManual, URL: srv.URL + "/readyz"})
+	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceObservability, URL: srv.URL + "/readyz"})
 	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, URL: srv.URL + "/status"})
 	require.Equal(t, []string{"", ""}, headers)
 }

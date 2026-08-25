@@ -416,7 +416,6 @@ func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, runner *tas
 
 func factorHealthSnapshot(cfg *Config, dbm *store.Store, runner *taskrunner.Service, pythonPool *engine.PythonWorkerPool, consumer realtimeStatus, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
-		databaseReady := dbm != nil && dbm.Ping(ctx) == nil
 		workerStatus := engine.ExecutorStatus{}
 		if pythonPool != nil {
 			workerStatus = pythonPool.Status()
@@ -426,6 +425,15 @@ func factorHealthSnapshot(cfg *Config, dbm *store.Store, runner *taskrunner.Serv
 		runnerStatus := taskrunner.Status{}
 		if runner != nil {
 			runnerStatus = runner.Status()
+		}
+		// A busy SQLite writer must not block /readyz behind the 5s busy
+		// timeout. Active task failures still surface through the dataset
+		// checks; probe the catalog when the runner is idle.
+		databaseReady := dbm != nil
+		if databaseReady && runnerStatus.ActiveTasks == 0 && runnerStatus.PendingTasks == 0 {
+			pingCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+			databaseReady = dbm.Ping(pingCtx) == nil
+			cancel()
 		}
 		eventBusReady := realtimeConsumerReady(cfg, consumer)
 		ready := databaseReady && workerReady && taskRunnerReady && eventBusReady

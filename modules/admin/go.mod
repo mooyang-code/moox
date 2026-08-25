@@ -11,6 +11,7 @@ require (
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/notification v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.17
@@ -62,6 +63,7 @@ replace (
 	github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 	github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 	github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
+	github.com/mooyang-code/moox/packages/notification => ../../packages/notification
 	github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 	github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
 )

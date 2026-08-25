@@ -169,7 +169,7 @@ func createCheck(t *testing.T, repo *store.CheckRepository, check domain.Check) 
 		check.Labels = "{}"
 	}
 	if check.Source == "" {
-		check.Source = domain.CheckSourceManual
+		check.Source = domain.CheckSourceObservability
 	}
 	if err := repo.Create(context.Background(), &check); err != nil {
 		t.Fatalf("create check %s: %v", check.CheckID, err)

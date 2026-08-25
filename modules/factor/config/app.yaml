@@ -1,8 +1,10 @@
 database:
   type: sqlite
   path: ./data/factor/factor.db
-  max_idle_conns: 10
-  max_open_conns: 30
+  # Factor tasks run concurrently, but SQLite must use one connection to
+  # serialize manifest writes and avoid WAL corruption under burst load.
+  max_idle_conns: 1
+  max_open_conns: 1
   conn_max_lifetime: 1h
   conn_max_idle_time: 10m
 

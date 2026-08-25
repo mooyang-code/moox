@@ -40,7 +40,7 @@ moox-cli storage reset-view-consumers \
 所有配置 Dataset 的精确 Storage subjects。该命令是破坏性“新一代”操作：Record/Bleve
 View 也会删除 A/B 索引和元数据，历史记录不保留；重启后只接收清理完成后的新事件。时序 View
 时序 View 会按 Storage 配置中的 `rebuild_lookback_periods` 从 Primary 回溯（默认所有频率 `1000` 根；
-根目录 `custom.toml` 的 `[storage_view] rebuild_lookback_periods` 可统一配置），未达到对应根数不会激活；`--lookback` 仅覆盖没有
+根目录 `custom.toml` 的 `[storage_view] rebuild_lookback_periods` 可统一配置），历史不足时使用当前已有数据激活并由实时事件补齐；`--lookback` 仅覆盖没有
 frequency 的旧 View 兼容兜底。默认不删 Primary 事实数据；只有明确传
 `--reset-all-storage-data` 才会停止全 Storage 并删除 Primary/DataNode Pebble 数据，此模式
 只等待服务健康，不要求不存在的历史回溯水位。若 purge 或索引清理中途失败，命令会保留 Storage
@@ -146,7 +146,7 @@ Admin、Gateway、Web、EventBus、CloudNode 和 Collector。
 `[paths]` 将部署根、控制面根和独立 Storage 根统一放到 `/data/moox` 云磁盘下；省略时
 默认分别为 `/data/moox`、`/data/moox/prod` 和 `/data/moox/storage`。
 
-`[monitoring].wecom_webhook` 填写企微群机器人 HTTPS webhook；留空时 Monitor
+`[notification].channel_type` 选择 `wecom` 或 `feishu`，`[notification].webhook_url` 填写对应机器人 HTTPS webhook；留空时 Monitor
 仍采集和计算状态，但不发送站外告警。标准服务、健康 URL 和实时 Dataset 清单不写入
 `custom.toml`：标准服务由 SysDeploy 维护，启用中的 TimeSeries Dataset + Frequency
 由运行时自动对账。需要 CPU、内存和磁盘监控的每台机器仍需部署 HostAgent。

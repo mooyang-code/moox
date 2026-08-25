@@ -8,13 +8,6 @@ const (
 	MaxDoctorContextBytes        = 2 << 20
 )
 
-func (r *CreateCheckReq) Validate() error {
-	if r == nil || r.Check == nil {
-		return fmt.Errorf("check is required")
-	}
-	return nil
-}
-
 func (r *GetDoctorContextReq) Validate() error {
 	if r == nil {
 		return fmt.Errorf("request is required")

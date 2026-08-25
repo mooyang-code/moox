@@ -68,7 +68,7 @@ func runResetViewConsumers(args []string, stdout, stderr io.Writer) error {
 	fs.StringVar(&opts.stream, "stream", opts.stream, "JetStream stream to purge")
 	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential YAML")
 	fs.StringVar(&opts.eventBusURL, "eventbus-url", "", "NATS URL override")
-	fs.DurationVar(&opts.lookback, "lookback", opts.lookback, "minimum history every rebuilt View must cover")
+	fs.DurationVar(&opts.lookback, "lookback", opts.lookback, "preferred history to backfill for every rebuilt View; shortage does not block activation")
 	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "overall operation timeout")
 	fs.BoolVar(&opts.yes, "yes", false, "confirm permanent consumer, queue and View index deletion")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "inspect the operation without mutating state")

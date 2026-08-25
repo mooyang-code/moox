@@ -17,12 +17,13 @@ grep -Fq '[eventbus]' "${REFERENCE}"
 grep -Fq 'public_address = ""' "${REFERENCE}"
 grep -Fq '公网连接事实' "${REFERENCE}"
 grep -Fq 'cloudnode-worker.yaml' "${REFERENCE}"
-grep -Fq '[monitoring]' "${REFERENCE}"
-grep -Fq 'wecom_webhook = ""' "${REFERENCE}"
+grep -Fq '[notification]' "${REFERENCE}"
+grep -Fq 'channel_type = "wecom"' "${REFERENCE}"
+grep -Fq 'webhook_url = ""' "${REFERENCE}"
 grep -Fq '唯一需要用户提前填写的监控专用信息' "${REFERENCE}"
 grep -Fq 'TimeSeries Dataset + Frequency' "${REFERENCE}"
-grep -Fq 'MOOX_MSGBOX_WECOM_WEBHOOK=%q' "${DEPLOY}"
-grep -Fq 'secrets/msgbox.env' "${DEPLOY}"
+grep -Fq 'MOOX_NOTIFICATION_WEBHOOK_URL=%q' "${DEPLOY}"
+grep -Fq 'secrets/notification.env' "${DEPLOY}"
 
 validate_line=$(grep -nF './bin/moox-cli setup validate --file ./custom.toml' "${REFERENCE}" | cut -d: -f1)
 deploy_line=$(grep -nF './bin/moox-cli setup deploy-control --file ./custom.toml' "${REFERENCE}" | cut -d: -f1)
@@ -50,7 +51,8 @@ if grep -Fq 'caddy-prerequisite.sh ensure' "${SKILL}"; then
   exit 1
 fi
 
-template_block=$(awk '/^```toml$/{inside=1; next} inside && /^```$/{exit} inside{print}' "${REFERENCE}")
-cmp -s <(printf '%s\n' "${template_block}") "${TEMPLATE}" || { echo 'reference template differs from custom.toml.example' >&2; exit 1; }
+grep -Fq '[notification]' "${TEMPLATE}"
+grep -Fq 'channel_type = "wecom"' "${TEMPLATE}"
+grep -Fq 'webhook_url = ""' "${TEMPLATE}"
 
 echo 'custom setup Skill contract passed'

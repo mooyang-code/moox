@@ -24,6 +24,7 @@
         :scroll="{ x: 'max-content' }"
         @page-change="onPageChange"
         @page-size-change="onPageSizeChange"
+        @sorter-change="onSorterChange"
       >
         <template #columns>
           <a-table-column title="归档ID" data-index="archive_file_id" :width="180" />
@@ -31,10 +32,20 @@
           <a-table-column title="分区" data-index="partition_key" :width="160" />
           <a-table-column title="文件URI" data-index="file_uri" :width="360" />
           <a-table-column title="格式" data-index="file_format" :width="100" />
-          <a-table-column title="最小时间" :width="180">
+          <a-table-column
+            title="最小时间"
+            data-index="min_time"
+            :width="180"
+            :sortable="{ sortDirections: ['ascend', 'descend'], sorter: true }"
+          >
             <template #cell="{ record }">{{ formatTime(record.min_time) }}</template>
           </a-table-column>
-          <a-table-column title="最大时间" :width="180">
+          <a-table-column
+            title="最大时间"
+            data-index="max_time"
+            :width="180"
+            :sortable="{ sortDirections: ['ascend', 'descend'], sorter: true }"
+          >
             <template #cell="{ record }">{{ formatTime(record.max_time) }}</template>
           </a-table-column>
           <a-table-column title="行数" data-index="row_count" :width="100" />
@@ -47,10 +58,20 @@
               <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
             </template>
           </a-table-column>
-          <a-table-column title="创建时间" :width="180">
+          <a-table-column
+            title="创建时间"
+            data-index="created_at"
+            :width="180"
+            :sortable="{ sortDirections: ['ascend', 'descend'], sorter: true }"
+          >
             <template #cell="{ record }">{{ formatTime(record.created_at) }}</template>
           </a-table-column>
-          <a-table-column title="更新时间" :width="180">
+          <a-table-column
+            title="更新时间"
+            data-index="updated_at"
+            :width="180"
+            :sortable="{ sortDirections: ['ascend', 'descend'], sorter: true }"
+          >
             <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
           </a-table-column>
         </template>
@@ -73,6 +94,9 @@ const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const rows = ref<ArchiveFile[]>([]);
 const loading = ref(false);
 const datasetFilter = ref("");
+type ArchiveSortField = "min_time" | "max_time" | "created_at" | "updated_at";
+const sortBy = ref<ArchiveSortField | "">("");
+const sortOrder = ref<"asc" | "desc">("asc");
 const pagination = reactive(defaultPagination());
 
 async function load() {
@@ -85,6 +109,8 @@ async function load() {
     const rsp = await listArchiveFiles({
       space_id: selectedSpaceId.value,
       dataset_id: datasetFilter.value,
+      sort_by: sortBy.value || undefined,
+      sort_order: sortBy.value ? sortOrder.value : undefined,
       page: { page: pagination.current, size: pagination.pageSize }
     });
     rows.value = rsp.archive_files || [];
@@ -95,6 +121,13 @@ async function load() {
 }
 
 function search() {
+  pagination.current = 1;
+  load();
+}
+
+function onSorterChange(field: string, direction: string) {
+  sortBy.value = direction ? (field as ArchiveSortField) : "";
+  sortOrder.value = direction === "descend" ? "desc" : "asc";
   pagination.current = 1;
   load();
 }

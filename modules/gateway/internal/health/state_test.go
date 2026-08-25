@@ -19,6 +19,8 @@ func TestStateHealthReadinessAndMetrics(t *testing.T) {
 	assertStatus(t, mux, "/readyz", http.StatusServiceUnavailable)
 
 	state.ApplyRoutes("hash", 2, true)
+	state.RouteSyncSucceeded(time.Now())
+	state.RouteReportSucceeded(time.Now())
 	assertStatus(t, mux, "/readyz", http.StatusOK)
 	if !state.Disabled() {
 		t.Fatal("Disabled() = false")
@@ -37,6 +39,7 @@ func TestStateHealthReadinessAndMetrics(t *testing.T) {
 	for _, want := range []string{
 		"gateway_route_sync_errors_total 1",
 		"gateway_route_validation_failures_total 1",
+		"gateway_route_report_errors_total 0",
 		"gateway_auth_failures_total 1",
 		"gateway_replay_failures_total 1",
 		`gateway_upstream_failures_total{type="connection"} 1`,
@@ -58,6 +61,30 @@ func TestStateHealthReadinessAndMetrics(t *testing.T) {
 	for _, path := range []string{"/", "/api/service/x/y", "/metrics/extra"} {
 		assertStatus(t, mux, path, http.StatusNotFound)
 	}
+}
+
+func TestReadinessRequiresFreshSyncAndHeartbeat(t *testing.T) {
+	now := time.Now()
+	state := NewState()
+	state.SetClock(func() time.Time { return now })
+	state.SetRouteSyncStaleAfter(time.Second)
+	state.ApplyRoutes("hash", 1, false)
+	assertStatus(t, state.Handler(), "/readyz", http.StatusServiceUnavailable)
+
+	state.RouteSyncSucceeded(now)
+	state.RouteReportSucceeded(now)
+	assertStatus(t, state.Handler(), "/readyz", http.StatusOK)
+
+	now = now.Add(2 * time.Second)
+	assertStatus(t, state.Handler(), "/readyz", http.StatusServiceUnavailable)
+	state.RouteSyncSucceeded(now)
+	assertStatus(t, state.Handler(), "/readyz", http.StatusServiceUnavailable)
+	state.RouteReportSucceeded(now)
+	assertStatus(t, state.Handler(), "/readyz", http.StatusOK)
+	state.RouteReportFailed()
+	assertStatus(t, state.Handler(), "/readyz", http.StatusOK)
+	now = now.Add(2 * time.Second)
+	assertStatus(t, state.Handler(), "/readyz", http.StatusServiceUnavailable)
 }
 
 func TestMetricsExposeSharedTimerJobs(t *testing.T) {

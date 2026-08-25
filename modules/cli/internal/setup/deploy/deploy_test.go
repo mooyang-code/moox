@@ -227,12 +227,12 @@ func TestEventBusCommandEnvPreservesBaseAndAddsEndpoint(t *testing.T) {
 }
 
 func TestMonitoringCommandEnvOverridesAmbientWebhook(t *testing.T) {
-	env := monitoringCommandEnv([]string{
-		"MOOX_MSGBOX_WECOM_WEBHOOK=https://example.test/ambient",
+	env := notificationCommandEnv([]string{
+		"MOOX_NOTIFICATION_WEBHOOK_URL=https://example.test/ambient",
 		"PATH=/bin",
-	}, "")
-	require.NotContains(t, env, "MOOX_MSGBOX_WECOM_WEBHOOK=https://example.test/ambient")
-	require.Contains(t, env, "MOOX_MSGBOX_WECOM_WEBHOOK=")
+	}, "wecom", "")
+	require.NotContains(t, env, "MOOX_NOTIFICATION_WEBHOOK_URL=https://example.test/ambient")
+	require.Contains(t, env, "MOOX_NOTIFICATION_WEBHOOK_URL=")
 	require.Contains(t, env, "PATH=/bin")
 }
 
@@ -246,7 +246,7 @@ func TestCommandPackagerPassesMonitoringWebhook(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts"), 0o700))
 	script := `#!/bin/sh
 set -eu
-test "$MOOX_MSGBOX_WECOM_WEBHOOK" = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
+	test "$MOOX_NOTIFICATION_WEBHOOK_URL" = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
 while [ "$#" -gt 0 ]; do
   if [ "$1" = --archive ]; then printf package >"$2"; exit 0; fi
   shift
@@ -258,7 +258,8 @@ exit 2
 	archive, err := (CommandPackager{}).Package(context.Background(), Options{
 		RepositoryRoot: root, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64",
 		EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222, EventBusTLSEnabled: true,
-		MonitoringWeComWebhook: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test",
+		NotificationChannelType: "wecom",
+		NotificationWebhookURL:  "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test",
 	})
 	require.NoError(t, err)
 	defer os.Remove(archive)
@@ -860,6 +861,15 @@ func TestRemoteInstallerScriptsParse(t *testing.T) {
 	require.Contains(t, installControlScript, `"$deploy.maintenance.lock"`, "installer and healthcheck must share a lock outside the renamed deployment directory")
 	require.Contains(t, installControlScript, `"$deploy/start.sh" 8>&-`, "services must not inherit the deployment maintenance lock")
 	require.Contains(t, installControlScript, `--config "$deploy/config/caddy/Caddyfile.next" 8>&-`, "Caddy must not inherit the deployment maintenance lock")
+	require.Contains(t, installControlScript, `MOOX_RESET_CONTROL_DATA="$reset_data" MOOX_EVENTBUS_ROTATE_CREDENTIALS="$rotate_eventbus" "$deploy/start.sh" 8>&-`, "control reset must preserve or rotate external EventBus identities before startup")
+	require.Contains(t, installControlScript, "MOOX_PRESERVE_EXTERNAL_EVENTBUS_CREDENTIALS=1", "control reset must persist external EventBus identity preservation for later restarts")
+	require.Contains(t, installControlScript, `grep -q '^MOOX_PRESERVE_EXTERNAL_EVENTBUS_CREDENTIALS=1$' "$old_components"`, "subsequent control upgrades must retain the reset EventBus identity policy")
+	require.Contains(t, installControlScript, `rotate_eventbus=1`, "reset with a changed EventBus endpoint must rotate the TLS bundle")
+	require.Contains(t, installControlScript, `restore_eventbus_backup`, "failed endpoint rotation must restore the previous EventBus credentials")
+	require.Contains(t, installControlScript, `eventbus.previous.$activation_token`, "EventBus rollback backup must be bound to the activation token")
+	require.Contains(t, installControlScript, "rm -rf \"$deploy\"\n    restore_eventbus_backup\n    if [ -d \"$previous\" ]; then\n      mv \"$previous\" \"$deploy\"\n      \"$deploy/start.sh\"", "rollback must restore old EventBus credentials before restarting the previous deployment")
+	require.Contains(t, rollbackControlScript, `mv "$eventbus_backup" "$HOME/.config/moox/eventbus"`, "outer rollback must restore EventBus credentials before starting the previous deployment")
+	require.Contains(t, finalizeControlScript, `rm -rf "$eventbus_backup"`, "finalize must remove the retained EventBus rollback backup")
 	require.Contains(t, rollbackControlScript, `"$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy"`, "control rollback must stop the active Caddy before restoring the previous path")
 	require.Contains(t, rollbackControlScript, `"$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy"`, "control rollback must restart Caddy after restoring the previous path")
 	require.Contains(t, rollbackControlScript, `"$deploy/start.sh" 8>&-`, "restored services must not inherit the deployment maintenance lock")

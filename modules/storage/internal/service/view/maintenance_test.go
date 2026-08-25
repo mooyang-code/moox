@@ -3,6 +3,7 @@ package view
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -233,6 +234,15 @@ func TestNeedsLookbackRepairDetectsShortTimeSeriesCoverage(t *testing.T) {
 	complete.IndexedFrom = time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano)
 	if needsLookbackRepair(view, complete, time.Hour) {
 		t.Fatal("complete active coverage requested an unnecessary repair")
+	}
+}
+
+func TestIncompleteHistoryDoesNotBlockActivation(t *testing.T) {
+	if !incompleteHistoryIsAllowed(fmt.Errorf("wrapped: %w", errRebuildLookbackInsufficient)) {
+		t.Fatal("insufficient history was not classified as activatable")
+	}
+	if incompleteHistoryIsAllowed(errors.New("invalid rebuilt View coverage")) {
+		t.Fatal("invalid coverage was incorrectly classified as an expected shortage")
 	}
 }
 

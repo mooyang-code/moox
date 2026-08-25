@@ -44,7 +44,6 @@ market_canary:
   enabled: true
   freshness: 3m
   return_threshold: 0.05
-  volume_ratio_threshold: 5
   subjects:
     - space_id: crypto_market
       dataset_id: binance_spot_kline_1m

@@ -19,7 +19,8 @@ control_root = "/data/moox/prod"
 storage_root = "/data/moox/storage"
 
 # View 维护策略。每个时序序列超过 max_periods_per_series 即触发 A/B 重建，
-# 新 View 至少回溯 rebuild_lookback_periods 根已完成 K 线后才允许激活。
+# 新 View 尝试回溯 rebuild_lookback_periods 根已完成 K 线；历史不足时使用已有数据激活，
+# 后续由实时事件继续补齐。
 [storage_view]
 maintenance_check_interval = "1m"
 rebuild_lookback_periods = 1000
@@ -38,8 +39,9 @@ rebuild_lookback_periods = 1000
 max_periods_per_series = 2000
 
 # 留空时仍采集和展示监控数据，但不发送站外告警。
-[monitoring]
-wecom_webhook = ""
+[notification]
+channel_type = "wecom"
+webhook_url = ""
 
 # setup init 导入本地 Python 因子，并建立默认 Source View 绑定。
 # outputs 同时作为结果列的 display_name，例如 bias_20、ma_20。

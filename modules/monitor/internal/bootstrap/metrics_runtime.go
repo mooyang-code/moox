@@ -235,6 +235,7 @@ func metricsObservabilityRoute(
 			monmetrics.RecordIngest(moduleMetrics, "rejected", time.Time{})
 			return observabilityconsumer.Permanent(err)
 		}
+		samples = monmetrics.FilterHealthSamples(samples)
 		duplicate, err := messageStore.IsDuplicate(ctx, message.GetEventId())
 		if err != nil || duplicate {
 			return err

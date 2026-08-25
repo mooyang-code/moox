@@ -31,7 +31,6 @@ func TestMonitorScheduleTimerConfigs(t *testing.T) {
 	}{
 		monitorDataCleanupTimerService: {11500, "0 0 */6 * * *?startAtOnce=1", 120000},
 		monitorCheckTimerService:       {11501, "*/30 * * * * *?startAtOnce=1", 30000},
-		monitorMetricRuleTimerService:  {11502, "0 * * * * *?startAtOnce=1", 30000},
 		monitorHostSilenceTimerService: {11503, "*/30 * * * * *?startAtOnce=1", 30000},
 	}
 	for _, service := range cfg.Server.Services {

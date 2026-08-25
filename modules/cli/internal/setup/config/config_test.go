@@ -152,6 +152,10 @@ public_address = "eventbus.example.test"
 port = 4222
 tls_enabled = true
 
+[notification]
+channel_type = "wecom"
+webhook_url = ""
+
 [control_host]
 name = "control"
 address = "192.0.2.10"
@@ -184,7 +188,7 @@ func TestLoadValidManifest(t *testing.T) {
 	assert.Equal(t, DefaultStorageRoot, snapshot.Manifest.Paths.StorageRoot)
 	assert.Equal(t, uint64(1000), snapshot.Manifest.StorageView.RebuildLookbackPeriods)
 	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
-	assert.Empty(t, snapshot.Manifest.Monitoring.WeComWebhook)
+	assert.Empty(t, snapshot.Manifest.Notification.WebhookURL)
 	assert.Empty(t, snapshot.Manifest.OtherHosts)
 	require.NoError(t, snapshot.VerifyUnchanged())
 }
@@ -286,16 +290,13 @@ func TestLoadDefaultsDisableFactors(t *testing.T) {
 	assert.False(t, snapshot.Manifest.Factors.Enabled)
 }
 
-func TestLoadMonitoringWeComWebhook(t *testing.T) {
+func TestLoadNotificationWebhook(t *testing.T) {
 	root := t.TempDir()
-	body := strings.Replace(validManifest, "[control_host]", `[monitoring]
-wecom_webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
-
-[control_host]`, 1)
+	body := strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"`, 1)
 
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
-	assert.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", snapshot.Manifest.Monitoring.WeComWebhook)
+	assert.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", snapshot.Manifest.Notification.WebhookURL)
 }
 
 func TestLoadDefaultsEventBusPort(t *testing.T) {
@@ -419,8 +420,10 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{name: "eventbus explicit zero port", body: strings.Replace(validManifest, "port = 4222", "port = 0", 1), want: "eventbus.port"},
 		{name: "eventbus invalid port", body: strings.Replace(validManifest, "port = 4222", "port = 70000", 1), want: "eventbus.port"},
 		{name: "eventbus tls disabled", body: strings.Replace(validManifest, "tls_enabled = true", "tls_enabled = false", 1), want: "eventbus.tls_enabled"},
-		{name: "monitoring webhook must use HTTPS", body: strings.Replace(validManifest, "[control_host]", "[monitoring]\nwecom_webhook = \"http://example.test/hook\"\n\n[control_host]", 1), want: "monitoring.wecom_webhook"},
-		{name: "monitoring webhook must be a URL", body: strings.Replace(validManifest, "[control_host]", "[monitoring]\nwecom_webhook = \"not-a-url\"\n\n[control_host]", 1), want: "monitoring.wecom_webhook"},
+		{name: "notification webhook must use HTTPS", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "http://example.test/hook"`, 1), want: "notification.webhook_url"},
+		{name: "notification webhook must be a URL", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "not-a-url"`, 1), want: "notification.webhook_url"},
+		{name: "notification webhook must match channel host", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "https://open.feishu.cn/hook"`, 1), want: "notification.webhook_url"},
+		{name: "notification webhook must use approved platform host", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "https://example.invalid/hook"`, 1), want: "notification.webhook_url"},
 		{name: "missing host address", body: strings.Replace(validManifest, `address = "192.0.2.10"`, `address = ""`, 1), want: "control_host.address"},
 		{name: "invalid host name", body: strings.Replace(validManifest, `name = "control"`, `name = "Storage A"`, 1), want: "control_host.name"},
 		{name: "missing compile host address", body: validManifest + `

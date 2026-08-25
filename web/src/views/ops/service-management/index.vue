@@ -18,17 +18,13 @@ import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import GatewayNodes from "./gateway-nodes.vue";
 import ServiceDeployments from "@/views/settings/service-deployments/index.vue";
-import ServiceMonitor from "@/views/ops/service-monitor/index.vue";
-import MetricMonitor from "@/views/ops/metric-monitor/index.vue";
-import ObservabilityOverview from "@/views/ops/metric-monitor/observability-overview.vue";
+import HealthMonitor from "@/views/ops/health-monitor/index.vue";
 
-type ServiceManagementTab = "overview" | "nodes" | "instances" | "availability" | "metrics";
+type ServiceManagementTab = "health" | "nodes" | "instances";
 const tabs = [
-  { key: "overview", label: "总览" },
   { key: "nodes", label: "网关节点" },
   { key: "instances", label: "服务实例" },
-  { key: "availability", label: "可用性监控" },
-  { key: "metrics", label: "应用指标" }
+  { key: "health", label: "健康监控" }
 ] as const;
 
 const route = useRoute();
@@ -41,16 +37,14 @@ if (route.query.tab !== undefined && normalizeTab(route.query.tab) !== route.que
 const activeComponent = computed(
   () =>
     ({
+      health: HealthMonitor,
       nodes: GatewayNodes,
-      overview: ObservabilityOverview,
-      instances: ServiceDeployments,
-      availability: ServiceMonitor,
-      metrics: MetricMonitor
+      instances: ServiceDeployments
     })[activeTab.value]
 );
 
 function normalizeTab(value: unknown): ServiceManagementTab {
-  return value === "nodes" || value === "instances" || value === "availability" || value === "metrics" ? value : "overview";
+  return value === "nodes" || value === "instances" || value === "health" ? value : "health";
 }
 
 function onTabChange(value: string | number) {
@@ -105,8 +99,7 @@ watch(
 }
 
 .management-content :deep(.moox-page),
-.management-content :deep(.monitor-page),
-.management-content :deep(.metric-monitor-page) {
+.management-content :deep(.monitor-page) {
   height: 100%;
   min-height: 0;
 }

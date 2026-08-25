@@ -32,14 +32,15 @@ type HistoryReader interface {
 }
 
 type Store struct {
-	writer   SnapshotWriter
-	reader   HistoryReader
-	alert    *AlertEvaluator
-	registry *Registry
-	presence PresenceTransitionSink
-	ready    func() bool
-	mu       sync.RWMutex
-	latest   map[string]AgentView
+	writer          SnapshotWriter
+	reader          HistoryReader
+	alert           *AlertEvaluator
+	registry        *Registry
+	presence        PresenceTransitionSink
+	presenceFailure func(context.Context, PresenceTransition, error)
+	ready           func() bool
+	mu              sync.RWMutex
+	latest          map[string]AgentView
 }
 
 func NewStore(writer SnapshotWriter, reader HistoryReader) *Store {
@@ -61,6 +62,14 @@ func (s *Store) SetRegistry(registry *Registry) {
 func (s *Store) SetPresenceTransitionSink(sink PresenceTransitionSink) {
 	if s != nil {
 		s.presence = sink
+	}
+}
+
+// SetPresenceTransitionFailureSink records notification failures without
+// blocking the host sample from being persisted.
+func (s *Store) SetPresenceTransitionFailureSink(sink func(context.Context, PresenceTransition, error)) {
+	if s != nil {
+		s.presenceFailure = sink
 	}
 }
 
@@ -245,7 +254,10 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 			canonicalAgentID = result.AgentID
 		}
 		if result.Transition != nil && s.presence != nil {
-			_ = s.presence.HandlePresenceTransition(ctx, *result.Transition)
+			transition := *result.Transition
+			if err := s.presence.HandlePresenceTransition(ctx, transition); err != nil && s.presenceFailure != nil {
+				s.presenceFailure(ctx, transition, err)
+			}
 		}
 	}
 	if !current {

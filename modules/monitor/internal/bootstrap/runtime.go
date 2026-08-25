@@ -28,7 +28,6 @@ type Runtime struct {
 	MetricStores             *monmetrics.Stores
 	HostRuleCache            *hostmetrics.RuleCache
 	Scheduler                *scheduler.Scheduler
-	MetricScheduler          *monmetrics.RuleScheduler
 	ObservabilityIngestReady atomic.Bool
 	MetricsReporterReady     atomic.Bool
 	observabilityIngestError atomic.Value

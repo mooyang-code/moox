@@ -38,7 +38,17 @@ func validateViewRebuildLog(item *pb.ViewRebuildLog) error {
 	if strings.TrimSpace(item.GetSpaceId()) == "" || strings.TrimSpace(item.GetViewId()) == "" {
 		return errors.New("space_id and view_id are required")
 	}
-	if item.GetTriggerReason() < pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_INITIAL_BUILD || item.GetTriggerReason() > pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_INTERRUPTED_RETRY {
+	switch item.GetTriggerReason() {
+	case pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_INITIAL_BUILD,
+		pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_DEFINITION_CHANGE,
+		pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_ACTIVE_MISSING,
+		pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_ACTIVE_INVALID,
+		pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_COVERAGE_REPAIR,
+		pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_SIZE_LIMIT,
+		pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_MANUAL_REPAIR,
+		pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_INTERRUPTED_RETRY,
+		pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_SERIES_CAPACITY:
+	default:
 		return errors.New("invalid view rebuild trigger reason")
 	}
 	if item.GetResult() < pb.ViewRebuildResult_VIEW_REBUILD_RESULT_RUNNING || item.GetResult() > pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SKIPPED {

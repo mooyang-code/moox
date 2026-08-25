@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,12 +66,6 @@ func newHandler(cfg Config, registerer prometheus.Registerer, gatherer prometheu
 	}
 	if err := cfg.validateIdentity(); err != nil {
 		return nil, err
-	}
-	if _, err := regexp.Compile(cfg.IncludeRegex); err != nil {
-		return nil, fmt.Errorf("include regex: %w", err)
-	}
-	if _, err := regexp.Compile(cfg.ExcludeRegex); err != nil {
-		return nil, fmt.Errorf("exclude regex: %w", err)
 	}
 	reportErrors, err := registerOrReuseCounter(registerer, prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "moox_" + cfg.Module + "_report_errors_total",
@@ -205,14 +198,12 @@ func (h *Handler) BuildSnapshot() (*metricspb.MetricSnapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gather prometheus metrics: %w", err)
 	}
-	include := regexp.MustCompile(h.cfg.IncludeRegex)
-	exclude := regexp.MustCompile(h.cfg.ExcludeRegex)
 	var raw bytes.Buffer
 	encoder := expfmt.NewEncoder(&raw, expfmt.NewFormat(expfmt.TypeTextPlain))
 	familyCount, sampleCount := 0, 0
 	for _, family := range families {
 		name := family.GetName()
-		if !include.MatchString(name) || exclude.MatchString(name) {
+		if !strings.HasPrefix(name, "moox_") {
 			continue
 		}
 		familyCount++

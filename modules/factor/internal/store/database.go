@@ -291,8 +291,10 @@ func applySQLitePoolConfig(db *gorm.DB, cfg *Options) {
 	if err != nil {
 		return
 	}
-	maxOpen := 30
-	maxIdle := 20
+	// Factor writes output manifests from many task workers. Keep a single
+	// SQLite connection so concurrent WAL writes cannot corrupt the catalog.
+	maxOpen := 1
+	maxIdle := 1
 	if cfg != nil {
 		if cfg.MaxOpenConns > 0 {
 			maxOpen = cfg.MaxOpenConns

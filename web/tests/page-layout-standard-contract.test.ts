@@ -182,7 +182,7 @@ describe("page layout standards", () => {
   it("keeps dashboard page boundaries on the compact spacing rhythm", () => {
     const theme = readStyle("var/global-theme.scss");
     const globalStyle = readStyle("index.scss");
-    const serviceMonitor = read("ops/service-monitor/index.vue");
+    const healthMonitor = read("ops/health-monitor/index.vue");
     const resourceMonitor = read("container/resource-monitor/resource-monitor.vue");
     const dataImport = read("data/import/index.vue");
     const strategyOverview = read("strategy/overview/index.vue");
@@ -193,13 +193,8 @@ describe("page layout standards", () => {
     expect(theme).toMatch(/\$space-4:\s*16px;/);
     expect(globalStyle).toContain("--moox-space-2: #{$space-2};");
     expect(globalStyle).toContain("--moox-space-4: #{$space-4};");
-    expect(serviceMonitor).toMatch(/\.monitor-page\s*\{[\s\S]*?padding:\s*var\(--moox-space-4\);/);
-    expectMargin(serviceMonitor, ".page-head", "margin-bottom", 8);
-    expect(serviceMonitor).toMatch(/\.page-head h2\s*\{[\s\S]*?font-size:\s*20px;[\s\S]*?font-weight:\s*600;/);
-    expectMargin(serviceMonitor, ".status-grid", "margin-bottom", 8);
-    expectMargin(serviceMonitor, ".group-band", "margin-bottom", 8);
-    expectMargin(serviceMonitor, ".failing-band", "margin-bottom", 8);
-    expectMargin(serviceMonitor, ".detail-table", "margin-top", 8);
+    expect(healthMonitor).toContain("健康监控");
+    expect(healthMonitor).toMatch(/\.health-section\s*\{[\s\S]*?margin-top:\s*24px;/);
 
     expect(resourceMonitor).toMatch(/\.resource-monitor-page\s*\{\s*padding:\s*var\(--moox-space-4\);\s*\}/);
     expect(resourceMonitor).toMatch(/\.page-header\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);

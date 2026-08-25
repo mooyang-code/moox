@@ -11,58 +11,33 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
-	"github.com/mooyang-code/moox/packages/msgbox"
+	"github.com/mooyang-code/moox/packages/notification"
 	"gorm.io/gorm"
 )
 
 const (
-	defaultWebhookID = "default-wecom"
 	maxDefaultChecks = 1000
 )
 
 func ensureDefaultCheckAlertRules(ctx context.Context, repositories *store.Repositories) error {
-	webhookURL := strings.TrimSpace(os.Getenv("MOOX_MSGBOX_WECOM_WEBHOOK"))
 	if repositories == nil {
 		return fmt.Errorf("default alerts require repositories")
 	}
-	if webhookURL != "" {
-		if _, err := msgbox.NewWeComSender(webhookURL); err != nil {
-			return fmt.Errorf("default WeCom webhook: %w", err)
-		}
+	if err := seedNotificationChannel(ctx, repositories); err != nil {
+		return err
 	}
 	checks, err := listDefaultAlertChecks(ctx, repositories)
 	if err != nil {
 		return err
 	}
-	if webhookURL == "" {
-		spaces := make(map[string]struct{})
-		for _, check := range checks {
-			spaces[check.SpaceID] = struct{}{}
-		}
-		return disableDefaultAlerts(ctx, repositories, spaces)
-	}
-	webhookSpaces := make(map[string]struct{})
 	for _, check := range checks {
-		if check.Enabled {
-			webhookSpaces[check.SpaceID] = struct{}{}
-		}
-	}
-	for spaceID := range webhookSpaces {
-		if err := ensureDefaultWebhook(ctx, repositories, spaceID, webhookURL); err != nil {
-			return err
-		}
-	}
-	for _, check := range checks {
-		if !check.Enabled {
-			continue
-		}
 		failureThreshold, successThreshold := 3, 2
 		if check.Kind == domain.CheckKindExternal {
 			failureThreshold, successThreshold = 1, 1
 		}
 		rule := &domain.AlertRule{
 			SpaceID: check.SpaceID, RuleID: "default:" + check.CheckID, CheckID: check.CheckID,
-			WebhookID: defaultWebhookID, FailureThreshold: failureThreshold, SuccessThreshold: successThreshold,
+			FailureThreshold: failureThreshold, SuccessThreshold: successThreshold,
 			MinimumReminderIntervalSeconds: 300, SendOnResolved: true, Enabled: true,
 			Description: "Default MooX monitoring notification",
 		}
@@ -111,51 +86,11 @@ func listDefaultAlertChecks(ctx context.Context, repositories *store.Repositorie
 	return checks, nil
 }
 
-func disableDefaultAlerts(ctx context.Context, repositories *store.Repositories, spaces map[string]struct{}) error {
-	for spaceID := range spaces {
-		rules, err := repositories.Alerts.ListRules(ctx, spaceID)
-		if err != nil {
-			return err
-		}
-		for index := range rules {
-			rule := &rules[index]
-			if rule.WebhookID != defaultWebhookID || !strings.HasPrefix(rule.RuleID, "default:") || !rule.Enabled {
-				continue
-			}
-			rule.Enabled = false
-			if err := repositories.Alerts.UpdateRule(ctx, rule); err != nil {
-				return err
-			}
-		}
-		webhook, err := repositories.Alerts.GetWebhook(ctx, spaceID, defaultWebhookID)
-		switch {
-		case err == nil:
-			if webhook.Enabled {
-				webhook.Enabled = false
-				if err := repositories.Alerts.UpdateWebhook(ctx, webhook); err != nil {
-					return err
-				}
-			}
-		case errors.Is(err, gorm.ErrRecordNotFound):
-		default:
-			return err
-		}
-	}
-	return nil
-}
-
 func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Repositories, registry *hostmetrics.Registry) error {
-	webhookURL := strings.TrimSpace(os.Getenv("MOOX_MSGBOX_WECOM_WEBHOOK"))
 	if repositories == nil || registry == nil {
 		return fmt.Errorf("default host alerts require repositories and registry")
 	}
-	if webhookURL == "" {
-		return disableDefaultAlerts(ctx, repositories, map[string]struct{}{hostmetrics.SpaceID: {}})
-	}
-	if _, err := msgbox.NewWeComSender(webhookURL); err != nil {
-		return fmt.Errorf("default WeCom webhook: %w", err)
-	}
-	if err := ensureDefaultWebhook(ctx, repositories, hostmetrics.SpaceID, webhookURL); err != nil {
+	if err := seedNotificationChannel(ctx, repositories); err != nil {
 		return err
 	}
 	agents, err := registry.List(ctx, time.Now().UTC())
@@ -184,7 +119,7 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 			checkID := hostmetrics.HostRuleKey(agent.AgentID, metric)
 			rule := &domain.AlertRule{
 				SpaceID: hostmetrics.SpaceID, RuleID: "default:" + checkID, CheckID: checkID,
-				WebhookID: defaultWebhookID, FailureThreshold: failureThreshold, SuccessThreshold: 1,
+				FailureThreshold: failureThreshold, SuccessThreshold: 1,
 				MinimumReminderIntervalSeconds: 300, SendOnResolved: true, Enabled: true,
 				Description: definition,
 			}
@@ -207,22 +142,17 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 	return nil
 }
 
-func ensureDefaultWebhook(ctx context.Context, repositories *store.Repositories, spaceID, webhookURL string) error {
-	if _, err := msgbox.NewWeComSender(webhookURL); err != nil {
-		return fmt.Errorf("default WeCom webhook: %w", err)
+func seedNotificationChannel(ctx context.Context, repositories *store.Repositories) error {
+	if repositories == nil || repositories.Notifications == nil {
+		return fmt.Errorf("notification repository is unavailable")
 	}
-	webhook := &domain.WebhookChannel{
-		SpaceID: spaceID, WebhookID: defaultWebhookID, Name: "MooX default WeCom",
-		URL: webhookURL, Method: "POST", Headers: "{}", Enabled: true,
+	typ := strings.TrimSpace(os.Getenv("MOOX_NOTIFICATION_CHANNEL_TYPE"))
+	if typ == "" {
+		typ = string(notification.ChannelTypeWeCom)
 	}
-	existing, err := repositories.Alerts.GetWebhook(ctx, spaceID, defaultWebhookID)
-	switch {
-	case err == nil:
-		webhook.ID = existing.ID
-		return repositories.Alerts.UpdateWebhook(ctx, webhook)
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		return repositories.Alerts.CreateWebhook(ctx, webhook)
-	default:
-		return err
+	url := strings.TrimSpace(os.Getenv("MOOX_NOTIFICATION_WEBHOOK_URL"))
+	if _, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(typ), WebhookURL: url}); err != nil {
+		return fmt.Errorf("notification channel: %w", err)
 	}
+	return repositories.Notifications.SeedIfAbsent(ctx, domain.NotificationChannel{ChannelID: domain.GlobalNotificationChannelID, ChannelType: typ, WebhookURL: url})
 }

@@ -711,6 +711,85 @@ func TestDuckDBSeriesCapacityTracksEachSeriesIndependently(t *testing.T) {
 	}
 }
 
+func TestDuckDBSeriesCapacityUsesCurrentPhysicalRows(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash"}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	row := func(minute int) viewindex.RowWrite {
+		return viewindex.RowWrite{Key: viewindex.RowKey{Key: duckRowKey("s", "prices", "BTC", "1m", fmt.Sprintf("2026-07-20T00:%02d:00Z", minute), "venue:binance")}}
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
+		RowWrites: []viewindex.RowWrite{row(0), row(1), row(2)}, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db, _, _, _, err := manager.getIndex(context.Background(), "idx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(context.Background(), `DELETE FROM view_rows WHERE subject_id = 'BTC' AND freq = '1m' AND data_time = TIMESTAMP '2026-07-20 00:00:00' AND series_tag = 'venue:binance'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := manager.SeriesCapacity(context.Background(), "idx", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Exceeded || got.Rows != 0 {
+		t.Fatalf("capacity should use current physical rows after deletion: %#v", got)
+	}
+	var repaired uint64
+	if err := db.QueryRowContext(context.Background(), `SELECT row_count FROM view_series_counts WHERE subject_id = 'BTC' AND freq = '1m' AND series_tag = 'venue:binance'`).Scan(&repaired); err != nil {
+		t.Fatal(err)
+	}
+	if repaired != 2 {
+		t.Fatalf("stale capacity counter was not repaired: got %d, want 2", repaired)
+	}
+}
+
+func TestDuckDBSeriesCapacityChecksAllStaleCandidates(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash"}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	row := func(subject string, minute int) viewindex.RowWrite {
+		hour, min := minute/60, minute%60
+		return viewindex.RowWrite{Key: viewindex.RowKey{Key: duckRowKey("s", "prices", subject, "1m", fmt.Sprintf("2026-07-20T%02d:%02d:00Z", hour, min), "venue:binance")}}
+	}
+	writes := make([]viewindex.RowWrite, 0, 66)
+	for i := 0; i < 65; i++ {
+		writes = append(writes, row(fmt.Sprintf("A%02d", i), 0))
+	}
+	writes = append(writes, row("ZZZ", 0), row("ZZZ", 1), row("ZZZ", 2))
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{RowWrites: writes, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite}); err != nil {
+		t.Fatal(err)
+	}
+	db, _, _, _, err := manager.getIndex(context.Background(), "idx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(context.Background(), `UPDATE view_series_counts SET row_count = 3 WHERE subject_id <> 'ZZZ'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := manager.SeriesCapacity(context.Background(), "idx", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Exceeded || got.SubjectID != "ZZZ" || got.Rows != 3 {
+		t.Fatalf("capacity should find the offender after stale candidates: %#v", got)
+	}
+}
+
 func TestMergeCoverageBoundsIsMonotonicAndCanonical(t *testing.T) {
 	from, to := mergeCoverageBounds(
 		"2026-08-12T00:00:00Z", "2026-08-12T01:00:00.1Z",

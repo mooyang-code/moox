@@ -38,6 +38,7 @@ type DatasetFrequencyStatus struct {
 	Producer, SpaceID, DatasetID, Freq, Status, Reason string
 	LastRunAt, LastSuccessAt                           time.Time
 	InputWatermarkAt, OutputWatermarkAt                time.Time
+	LastReportedAt                                     time.Time
 	LagSeconds                                         int64
 }
 
@@ -250,6 +251,7 @@ func serviceCheckLabels(raw string) (map[string]string, error) {
 func mergeServiceHealth(service ServiceStatus, result *domain.CheckResult) ServiceStatus {
 	healthStatus, healthReason := "unknown", "health not checked"
 	if result != nil {
+		service.LastSeenAt = maxTime(service.LastSeenAt, result.CheckedAt.UTC())
 		switch {
 		case !result.Success:
 			healthStatus, healthReason = "down", strings.TrimSpace(result.ErrorMessage)
@@ -313,6 +315,7 @@ type datasetKey struct {
 type datasetValues struct {
 	interval, inventory, lastRun, lastSuccess, input, output float64
 	reporterStale                                            bool
+	reportedAt                                               time.Time
 }
 
 func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Time) ([]DatasetFrequencyStatus, error) {
@@ -377,7 +380,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			instance: series.InstanceID, spaceID: labels["space_id"],
 			datasetID: labels["dataset_id"], freq: labels["freq"], labels: series.LabelsJSON,
 		}
-		values[key] = datasetValues{reporterStale: series.IsStale}
+		values[key] = datasetValues{reporterStale: series.IsStale, reportedAt: enabled.ObservedAt.UTC()}
 	}
 	if err := b.populateDatasetValues(ctx, values, enabledSeries); err != nil {
 		return nil, err
@@ -477,7 +480,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			}
 			observed := latest.ObservedAt.UTC().Unix()
 			key := datasetKey{service: series.ServiceName, producer: "storage_view", instance: series.InstanceID, spaceID: viewSpaceID, datasetID: viewID, freq: freq, labels: series.LabelsJSON}
-			values[key] = datasetValues{interval: interval.Seconds(), lastRun: float64(observed), lastSuccess: float64(observed), output: latest.Value, reporterStale: series.IsStale}
+			values[key] = datasetValues{interval: interval.Seconds(), lastRun: float64(observed), lastSuccess: float64(observed), output: latest.Value, reporterStale: series.IsStale, reportedAt: latest.ObservedAt.UTC()}
 		}
 	}
 	type aggregatedDataset struct {
@@ -503,6 +506,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			current.value.lastSuccess = max(current.value.lastSuccess, value.lastSuccess)
 			current.value.input = max(current.value.input, value.input)
 			current.value.output = max(current.value.output, value.output)
+			current.value.reportedAt = maxTime(current.value.reportedAt, value.reportedAt)
 			current.value.reporterStale = current.value.reporterStale && value.reporterStale
 		}
 		aggregated[identity] = current
@@ -525,6 +529,13 @@ func minPositive(left, right float64) float64 {
 	default:
 		return right
 	}
+}
+
+func maxTime(left, right time.Time) time.Time {
+	if right.After(left) {
+		return right
+	}
+	return left
 }
 
 func (b Builder) populateDatasetValues(
@@ -554,6 +565,7 @@ func (b Builder) populateDatasetValues(
 					return err
 				}
 				*target = latest.Value
+				current.reportedAt = maxTime(current.reportedAt, latest.ObservedAt.UTC())
 				break
 			}
 		}
@@ -574,6 +586,7 @@ func (b Builder) populateDatasetValues(
 				return err
 			}
 			current.inventory = latest.Value
+			current.reportedAt = maxTime(current.reportedAt, latest.ObservedAt.UTC())
 			break
 		}
 		values[key] = current
@@ -630,6 +643,7 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		Producer: key.producer, SpaceID: key.spaceID, DatasetID: key.datasetID, Freq: key.freq,
 		LastRunAt: unixTime(value.lastRun), LastSuccessAt: unixTime(value.lastSuccess),
 		InputWatermarkAt: unixTime(value.input), OutputWatermarkAt: unixTime(value.output),
+		LastReportedAt: value.reportedAt,
 	}
 	reference := item.OutputWatermarkAt
 	if reference.IsZero() {

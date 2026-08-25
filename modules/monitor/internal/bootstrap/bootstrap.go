@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
+	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
@@ -22,7 +24,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/msgbox"
+	"github.com/mooyang-code/moox/packages/notification"
 	"github.com/mooyang-code/moox/packages/report"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -50,9 +52,31 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 monitor schema 失败: %v", err)
 		return nil, err
 	}
-	alertNotifier := alerting.WebhookNotifier{Timeout: time.Duration(cfg.Alert.SendTimeoutSeconds) * time.Second}
+	if reset, err := mgr.ResetLegacyMonitorTables(); err != nil {
+		_ = mgr.Close()
+		return nil, fmt.Errorf("检查旧 monitor schema 失败: %w", err)
+	} else if reset {
+		if err := mgr.ApplySchema(schema.SQL()); err != nil {
+			_ = mgr.Close()
+			return nil, fmt.Errorf("重建 monitor schema 失败: %w", err)
+		}
+	}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
+	// This project has not shipped a compatibility migration. Remove retired
+	// custom-check/metric storage and rows before seeding the code-owned model.
+	if err := mgr.DropRetiredTables(); err != nil {
+		_ = runtime.Close()
+		return nil, fmt.Errorf("drop retired monitor tables: %w", err)
+	}
+	if _, err := runtime.Repositories.Alerts.PurgeRetiredRules(runtimeCtx); err != nil {
+		_ = runtime.Close()
+		return nil, fmt.Errorf("purge retired alert rules: %w", err)
+	}
+	if _, err := runtime.Repositories.Checks.PurgeRetiredChecks(runtimeCtx); err != nil {
+		_ = runtime.Close()
+		return nil, fmt.Errorf("purge retired monitor checks: %w", err)
+	}
 	hostRegistry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
 	if err != nil {
 		_ = runtime.Close()
@@ -62,16 +86,48 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, fmt.Errorf("migrate host agent identities: %w", err)
 	}
-	var presenceSender msgbox.Sender
-	if webhookURL := strings.TrimSpace(os.Getenv("MOOX_MSGBOX_WECOM_WEBHOOK")); webhookURL != "" {
-		presenceSender, err = msgbox.NewWeComSenderWithTimeout(webhookURL, alertNotifier.Timeout)
-		if err != nil {
-			_ = runtime.Close()
-			return nil, fmt.Errorf("initialize host presence notifier: %w", err)
+	var presenceFailureMu sync.Mutex
+	presenceFailures := make(map[string]struct{})
+	presenceNotificationFailure := func(_ context.Context, transition hostmetrics.PresenceTransition, sendErr error) {
+		key := fmt.Sprintf("%s:%s:%s:%d", transition.AgentID, transition.From, transition.To, transition.ObservedAt.UnixNano())
+		presenceFailureMu.Lock()
+		if _, exists := presenceFailures[key]; exists {
+			presenceFailureMu.Unlock()
+			return
 		}
+		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer func() { cancel(); presenceFailureMu.Unlock() }()
+		err := runtime.Repositories.Alerts.CreateEvent(auditCtx, &domain.AlertEvent{
+			EventID:   uuid.NewString(),
+			SpaceID:   hostmetrics.SpaceID,
+			RuleID:    "default:host-presence",
+			CheckID:   "host:" + transition.AgentID + ":presence",
+			EventType: domain.AlertEventSendFailed,
+			Status:    domain.AlertStatusFiring,
+			Message:   "主机状态通知发送失败：" + sendErr.Error(),
+			CreatedAt: transition.ObservedAt,
+		})
+		if err != nil {
+			log.ErrorContextf(auditCtx, "record host presence notification failure agent_id=%s: %v", transition.AgentID, err)
+			return
+		}
+		if len(presenceFailures) >= 4096 {
+			presenceFailures = make(map[string]struct{})
+		}
+		presenceFailures[key] = struct{}{}
 	}
-	presenceSink := hostPresenceTransitionSink(presenceSender)
-	hostSilence := hostmetrics.NewSilenceScanner(hostRegistry, hostmetrics.DefaultHostStaleAfter, presenceSink)
+	presenceProvider := func(ctx context.Context) (notification.Sender, error) {
+		channel, channelErr := runtime.Repositories.Notifications.GetGlobal(ctx)
+		if channelErr != nil || channel == nil || strings.TrimSpace(channel.WebhookURL) == "" {
+			return nil, channelErr
+		}
+		return notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channel.ChannelType), WebhookURL: channel.WebhookURL})
+	}
+	// The scanner and sample path use separate failure callbacks so a failed
+	// transition is audited exactly once.
+	presenceSink := hostPresenceTransitionSinkProviderWithFailure(presenceProvider, nil)
+	presenceScannerSink := hostPresenceTransitionSinkProviderWithFailure(presenceProvider, presenceNotificationFailure)
+	hostSilence := hostmetrics.NewSilenceScanner(hostRegistry, hostmetrics.DefaultHostStaleAfter, presenceScannerSink)
 
 	var hostStore *hostmetrics.Store
 	var hostReader *hostmetrics.StorageReader
@@ -103,9 +159,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{
 			Cache: hostRuleCache, Repository: runtime.Repositories.Alerts,
-			Notifier: alertNotifier,
-			Webhook: func(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) {
-				return runtime.Repositories.Alerts.GetWebhook(ctx, spaceID, webhookID)
+			Notification: func(ctx context.Context) (*domain.NotificationChannel, error) {
+				return runtime.Repositories.Notifications.GetGlobal(ctx)
 			},
 		})
 	} else {
@@ -113,11 +168,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	hostStore.SetRegistry(hostRegistry)
 	hostStore.SetPresenceTransitionSink(presenceSink)
+	hostStore.SetPresenceTransitionFailureSink(presenceNotificationFailure)
 
 	var metricsStorage *monmetrics.StorageAdapter
 	var metricsQuery *monmetrics.QueryService
-	var metricRules *monmetrics.MetricRuleStore
-	var metricEvaluator *monmetrics.MetricEvaluator
 	if cfg.Metrics.Enabled {
 		metricsStorage = monmetrics.NewStorageAdapterFromConfig(cfg.Metrics.Storage)
 		metricStores, err := store.WithDatabase(mgr, monmetrics.NewStores)
@@ -130,20 +184,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		if interval, err := time.ParseDuration(cfg.Metrics.Storage.Frequency); err == nil {
 			metricsQuery.Catalog().SetNoDataAfter(time.Duration(maxInt(cfg.Metrics.NoDataIntervals, 1)) * interval)
 		}
-		metricRules = metricStores.Rules
-		metricEvaluator = monmetrics.NewMetricEvaluator(monmetrics.EvaluatorOptions{
-			RuleStore: metricRules, Catalog: metricsQuery.Catalog(), Storage: metricsStorage,
-			Webhook: func(ctx context.Context, spaceID, id string) (*domain.WebhookChannel, error) {
-				return runtime.Repositories.Alerts.GetWebhook(ctx, spaceID, id)
-			},
-			Notifier: monmetrics.WebhookMetricNotifier{Sender: alertNotifier},
-		})
 	}
 	if err := registerHealth(s, cfg, runtime, metricsStorage, hostStore); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
-	resultHook := monitorResultHook(runtime, alertNotifier)
+	resultHook := monitorResultHook(runtime)
 	probeRunner := buildProbeRunner(cfg)
 	marketCanary, marketCanaryProbe, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, resultHook)
 	if err != nil {
@@ -205,13 +251,14 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		// must not create a false "missing completion" alert.
 		return errors.Join(marketErr, freshnessErr)
 	}
-	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator, doctorContext)
+	health := &healthview.Builder{Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold}, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
+	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, doctorContext, health)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
-	if err := registerMonitorScheduleTimers(s, cfg, runtime, probeRunner, resultHook, metricEvaluator, metricRules, watchdogRun); err != nil {
+	if err := registerMonitorScheduleTimers(s, cfg, runtime, probeRunner, resultHook, watchdogRun); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}

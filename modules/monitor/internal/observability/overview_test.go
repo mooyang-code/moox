@@ -139,6 +139,27 @@ func TestOverviewSortsAbnormalRowsFirst(t *testing.T) {
 	}
 }
 
+func TestMergeServiceHealthUsesLatestCheckTimeAsLastReport(t *testing.T) {
+	reporterAt := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	checkedAt := reporterAt.Add(2 * time.Minute)
+	service := ServiceStatus{Status: "healthy", ReporterStatus: "healthy", LastSeenAt: reporterAt}
+	got := mergeServiceHealth(service, &domain.CheckResult{Success: true, Status: domain.CheckStatusOK, CheckedAt: checkedAt})
+	if !got.LastSeenAt.Equal(checkedAt) {
+		t.Fatalf("last report = %s, want %s", got.LastSeenAt, checkedAt)
+	}
+}
+
+func TestDatasetStatusUsesMetricObservationAsLastReport(t *testing.T) {
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	reportedAt := now.Add(-30 * time.Second)
+	got := datasetStatus(now, datasetKey{producer: "collector", spaceID: "crypto", datasetID: "bars", freq: "1m"}, datasetValues{
+		interval: 60, lastRun: float64(now.Unix()), lastSuccess: float64(now.Unix()), reportedAt: reportedAt,
+	}, testRealtimePolicy())
+	if !got.LastReportedAt.Equal(reportedAt) {
+		t.Fatalf("last report = %s, want %s", got.LastReportedAt, reportedAt)
+	}
+}
+
 func TestBuilderDeduplicatesServiceBootHistory(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, repositories := openOverviewState(t, func(db *gorm.DB) {

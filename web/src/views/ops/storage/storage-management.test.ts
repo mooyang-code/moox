@@ -143,4 +143,14 @@ describe("storage configuration workbench", () => {
     const normalized = normalizeSource(routes);
     expect(normalized).not.toContain('path:"/data/datasets"');
   });
+
+  it("exposes sorting arrows for archive time columns", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "archive.vue"), "utf8");
+    for (const title of ["最小时间", "最大时间", "创建时间", "更新时间"]) {
+      expect(source).toContain(`title="${title}"`);
+    }
+    expect(source.match(/:sortable="\{ sortDirections: \['ascend', 'descend'\], sorter: true \}"/g)).toHaveLength(4);
+    expect(source).toContain('@sorter-change="onSorterChange"');
+    expect(source).toContain("sort_by: sortBy.value || undefined");
+  });
 });

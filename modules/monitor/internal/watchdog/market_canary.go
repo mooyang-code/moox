@@ -24,7 +24,7 @@ type MarketCanaryConfig struct {
 	SpaceID, DatasetID, SubjectID, Frequency string
 	SeriesTag                                *string
 	Freshness                                time.Duration
-	ReturnThreshold, VolumeRatioThreshold    float64
+	ReturnThreshold                          float64
 }
 
 type TimeSeriesReader interface {
@@ -70,24 +70,19 @@ func IsStorageAuthError(err error) bool {
 type marketBar struct {
 	DataTime time.Time
 	Close    float64
-	Volume   float64
 }
 
 // marketCanaryThresholdDiagnostic is persisted in CheckResult.BodyExcerpt so
 // the alerting layer can include the compared values without adding monitor
 // schema columns or coupling alert formatting to the watchdog package.
 type marketCanaryThresholdDiagnostic struct {
-	Type                 string  `json:"type"`
-	PreviousTime         string  `json:"previous_time"`
-	CurrentTime          string  `json:"current_time"`
-	PreviousClose        float64 `json:"previous_close"`
-	CurrentClose         float64 `json:"current_close"`
-	PriceReturn          float64 `json:"price_return"`
-	ReturnThreshold      float64 `json:"return_threshold"`
-	PreviousVolume       float64 `json:"previous_volume"`
-	CurrentVolume        float64 `json:"current_volume"`
-	VolumeRatio          float64 `json:"volume_ratio"`
-	VolumeRatioThreshold float64 `json:"volume_ratio_threshold"`
+	Type            string  `json:"type"`
+	PreviousTime    string  `json:"previous_time"`
+	CurrentTime     string  `json:"current_time"`
+	PreviousClose   float64 `json:"previous_close"`
+	CurrentClose    float64 `json:"current_close"`
+	PriceReturn     float64 `json:"price_return"`
+	ReturnThreshold float64 `json:"return_threshold"`
 }
 
 var (
@@ -131,7 +126,7 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	if c.Reader == nil || strings.TrimSpace(config.SpaceID) == "" || strings.TrimSpace(config.DatasetID) == "" ||
 		strings.TrimSpace(config.SubjectID) == "" || strings.TrimSpace(config.Frequency) == "" ||
 		config.SeriesTag == nil ||
-		config.Freshness <= 0 || config.ReturnThreshold <= 0 || config.VolumeRatioThreshold <= 0 {
+		config.Freshness <= 0 || config.ReturnThreshold <= 0 {
 		result.ErrorMessage = "invalid_config"
 		return result
 	}
@@ -160,7 +155,7 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		AuthInfo: c.AuthInfo,
 		SpaceId:  config.SpaceID, DatasetId: config.DatasetID,
 		Keys:        recentMarketCanaryKeys(config, storageFrequency, candidateTimes),
-		ColumnNames: []string{"close", "volume"},
+		ColumnNames: []string{"close"},
 	}, client.WithFilter(trpcretry.ReadOnly()))
 	result.LatencyMS = time.Since(startedAt).Milliseconds()
 	if err != nil {
@@ -187,17 +182,9 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		return result
 	}
 	priceReturn := math.Abs(current.Close/previous.Close - 1)
-	// A zero-volume bar is normal for thinly traded symbols. Treating it as
-	// an epsilon denominator turns the first non-zero bar into an infinite
-	// volume spike and creates a false canary alert. Only compare volume when
-	// the previous closed bar has an actual volume baseline.
-	volumeRatio := 0.0
-	if previous.Volume > 0 {
-		volumeRatio = current.Volume / previous.Volume
-	}
-	if priceReturn >= config.ReturnThreshold || volumeRatio >= config.VolumeRatioThreshold {
+	if priceReturn >= config.ReturnThreshold {
 		result.ErrorMessage = "threshold_exceeded"
-		result.BodyExcerpt = marketCanaryThresholdDetails(previous, current, priceReturn, volumeRatio, config)
+		result.BodyExcerpt = marketCanaryThresholdDetails(previous, current, priceReturn, config)
 		return result
 	}
 	result.Success = true
@@ -251,19 +238,15 @@ func (c MarketCanary) ProbeStorageAuth(ctx context.Context) error {
 	return fmt.Errorf("storage probe rejected: %s", storageRejectionError(retInfo))
 }
 
-func marketCanaryThresholdDetails(previous, current marketBar, priceReturn, volumeRatio float64, config MarketCanaryConfig) string {
+func marketCanaryThresholdDetails(previous, current marketBar, priceReturn float64, config MarketCanaryConfig) string {
 	diagnostic := marketCanaryThresholdDiagnostic{
-		Type:                 "market_canary_threshold",
-		PreviousTime:         previous.DataTime.UTC().Format(time.RFC3339Nano),
-		CurrentTime:          current.DataTime.UTC().Format(time.RFC3339Nano),
-		PreviousClose:        previous.Close,
-		CurrentClose:         current.Close,
-		PriceReturn:          priceReturn,
-		ReturnThreshold:      config.ReturnThreshold,
-		PreviousVolume:       previous.Volume,
-		CurrentVolume:        current.Volume,
-		VolumeRatio:          volumeRatio,
-		VolumeRatioThreshold: config.VolumeRatioThreshold,
+		Type:            "market_canary_threshold",
+		PreviousTime:    previous.DataTime.UTC().Format(time.RFC3339Nano),
+		CurrentTime:     current.DataTime.UTC().Format(time.RFC3339Nano),
+		PreviousClose:   previous.Close,
+		CurrentClose:    current.Close,
+		PriceReturn:     priceReturn,
+		ReturnThreshold: config.ReturnThreshold,
 	}
 	raw, err := json.Marshal(diagnostic)
 	if err != nil {
@@ -360,8 +343,8 @@ func decodeMarketBars(rows []*storagepb.TimeSeriesRow, seriesTag string) ([]mark
 		if err != nil {
 			return nil, fmt.Errorf("invalid_data_time")
 		}
-		var closeValue, volumeValue float64
-		var haveClose, haveVolume bool
+		var closeValue float64
+		var haveClose bool
 		for _, field := range row.GetFields() {
 			if field.GetValue() == nil {
 				continue
@@ -373,15 +356,12 @@ func decodeMarketBars(rows []*storagepb.TimeSeriesRow, seriesTag string) ([]mark
 			switch fieldID {
 			case "close":
 				closeValue, haveClose = field.GetValue().GetDoubleValue(), true
-			case "volume":
-				volumeValue, haveVolume = field.GetValue().GetDoubleValue(), true
 			}
 		}
-		if !haveClose || !haveVolume || closeValue <= 0 || volumeValue < 0 ||
-			math.IsNaN(closeValue) || math.IsNaN(volumeValue) || math.IsInf(closeValue, 0) || math.IsInf(volumeValue, 0) {
-			return nil, fmt.Errorf("invalid_close_or_volume")
+		if !haveClose || closeValue <= 0 || math.IsNaN(closeValue) || math.IsInf(closeValue, 0) {
+			return nil, fmt.Errorf("invalid_close")
 		}
-		bars = append(bars, marketBar{DataTime: dataTime.UTC(), Close: closeValue, Volume: volumeValue})
+		bars = append(bars, marketBar{DataTime: dataTime.UTC(), Close: closeValue})
 	}
 	return bars, nil
 }

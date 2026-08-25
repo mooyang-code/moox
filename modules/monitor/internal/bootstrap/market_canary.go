@@ -44,12 +44,11 @@ func buildMonitorMarketCanary(
 			SpaceID: subject.SpaceID, DatasetID: subject.DatasetID, SubjectID: subject.Symbol, Frequency: subject.Frequency,
 			SeriesTag: subject.SeriesTag,
 			Freshness: cfg.MarketCanary.Freshness, ReturnThreshold: cfg.MarketCanary.ReturnThreshold,
-			VolumeRatioThreshold: cfg.MarketCanary.VolumeRatioThreshold,
 		}
 		check := domain.Check{
 			SpaceID: canaryConfig.SpaceID, CheckID: watchdog.MarketCanaryCheckID(canaryConfig),
 			Name:      "Market canary " + watchdog.MarketCanaryTarget(canaryConfig),
-			GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceManual,
+			GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability,
 			Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000,
 		}
 		configuredCheckIDs[check.CheckID] = struct{}{}
@@ -76,7 +75,7 @@ func buildMonitorMarketCanary(
 	// old identity; otherwise its last failed result remains visible forever in
 	// the business overview and can continue to drive a stale alert.
 	checks, err := runtime.Repositories.Checks.List(ctx, store.ListChecksOptions{
-		Source: domain.CheckSourceManual,
+		Source: domain.CheckSourceObservability,
 		Page:   store.Page{PageSize: 500},
 	})
 	if err != nil {

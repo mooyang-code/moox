@@ -42,6 +42,15 @@ func (r *CheckRepository) Get(ctx context.Context, spaceID, checkID string) (*do
 	return &check, nil
 }
 
+func (r *CheckRepository) GetByCheckID(ctx context.Context, checkID string) (*domain.Check, error) {
+	var check domain.Check
+	err := r.db.WithContext(ctx).Where("c_check_id = ?", checkID).First(&check).Error
+	if err != nil {
+		return nil, err
+	}
+	return &check, nil
+}
+
 func (r *CheckRepository) Update(ctx context.Context, check *domain.Check) error {
 	return r.db.WithContext(ctx).
 		Model(&domain.Check{}).
@@ -70,10 +79,8 @@ func (r *CheckRepository) Update(ctx context.Context, check *domain.Check) error
 		}).Error
 }
 
-// UpdateSysDeployDefinition refreshes fields owned by deployment sync without
-// overwriting an explicit user override. The enabled column is only restored
-// to its deployment default when no override marker exists; keeping labels out
-// of this update prevents a sync tick from racing a user click.
+// UpdateSysDeployDefinition refreshes the complete system-owned definition.
+// System checks have no user enable/disable override in the greenfield model.
 func (r *CheckRepository) UpdateSysDeployDefinition(ctx context.Context, check *domain.Check) error {
 	return r.db.WithContext(ctx).
 		Model(&domain.Check{}).
@@ -93,16 +100,9 @@ func (r *CheckRepository) UpdateSysDeployDefinition(ctx context.Context, check *
 			"c_expected_status":  check.ExpectedStatus,
 			"c_max_response_ms":  check.MaxResponseMS,
 			"c_body_contains":    check.BodyContains,
-			// A deployment that is active again should restore the default
-			// enabled state, but never override an explicit user choice. The
-			// condition is evaluated in the same UPDATE to avoid a Get->Update
-			// race with the availability switch.
-			"c_enabled": gorm.Expr(
-				"CASE WHEN json_valid(c_labels) = 1 AND json_type(c_labels, '$."+EnabledOverrideLabel+"') IS NOT NULL THEN c_enabled ELSE ? END",
-				check.Enabled,
-			),
-			"c_source":      check.Source,
-			"c_description": check.Description,
+			"c_enabled":          check.Enabled,
+			"c_source":           check.Source,
+			"c_description":      check.Description,
 		}).Error
 }
 
@@ -151,16 +151,10 @@ func (r *CheckRepository) DisableSysDeployChecksExcept(ctx context.Context, spac
 			return err
 		}
 		for _, check := range checks {
-			// Keep a user override while the deployment is temporarily absent;
-			// only checks without an override are automatic lifecycle state.
-			if !check.Enabled {
-				continue
-			}
-			labels := check.Labels
 			disabled++
 			if err := tx.Model(&domain.Check{}).
 				Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).
-				Updates(map[string]any{"c_enabled": false, "c_labels": labels}).Error; err != nil {
+				Updates(map[string]any{"c_enabled": false}).Error; err != nil {
 				return err
 			}
 		}
@@ -228,7 +222,7 @@ func (r *CheckRepository) ListDue(ctx context.Context, now time.Time, limit int)
 	}
 	var candidates []domain.Check
 	err := r.db.WithContext(ctx).
-		Where("c_enabled = 1 AND c_kind IN ?", []string{domain.CheckKindHTTP, domain.CheckKindTCP}).
+		Where("c_enabled = 1 AND c_kind IN ? AND c_source IN ?", []string{domain.CheckKindHTTP, domain.CheckKindTCP}, []string{domain.CheckSourceSysDeploy, domain.CheckSourceObservability}).
 		Order("c_next_check_at ASC, c_id ASC").
 		Find(&candidates).Error
 	if err != nil {
@@ -244,6 +238,42 @@ func (r *CheckRepository) ListDue(ctx context.Context, now time.Time, limit int)
 		}
 	}
 	return checks, nil
+}
+
+// PurgeRetiredChecks removes user-defined checks from a pre-greenfield database.
+// Only SysDeploy and code-owned observability checks are executable now.
+func (r *CheckRepository) PurgeRetiredChecks(ctx context.Context) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, gorm.ErrInvalidDB
+	}
+	var deleted int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var checks []domain.Check
+		if err := tx.Where("c_source NOT IN ? OR c_source IS NULL OR c_source = ''", []string{domain.CheckSourceSysDeploy, domain.CheckSourceObservability}).Find(&checks).Error; err != nil {
+			return err
+		}
+		for _, check := range checks {
+			if err := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.AlertState{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.AlertEvent{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.AlertRule{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.CheckResult{}).Error; err != nil {
+				return err
+			}
+			result := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.Check{})
+			if result.Error != nil {
+				return result.Error
+			}
+			deleted += result.RowsAffected
+		}
+		return nil
+	})
+	return deleted, err
 }
 
 func (r *CheckRepository) MarkChecked(ctx context.Context, spaceID, checkID string, checkedAt, nextAt time.Time) error {

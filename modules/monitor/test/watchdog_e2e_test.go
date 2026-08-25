@@ -46,14 +46,14 @@ func TestMarketCanaryUsesStoragePrimaryReadContract(t *testing.T) {
 		Config: monitorwatchdog.MarketCanaryConfig{
 			SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
 			SeriesTag: testStringPtr("venue:binance"),
-			Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+			Freshness: 3 * time.Minute, ReturnThreshold: 0.05,
 		},
 		Now: func() time.Time { return now },
 	}).Run(t.Context())
 
 	require.True(t, result.Success)
 	require.NotNil(t, fixture.request)
-	require.Equal(t, []string{"close", "volume"}, fixture.request.GetColumnNames())
+	require.Equal(t, []string{"close"}, fixture.request.GetColumnNames())
 	require.Len(t, fixture.request.GetKeys(), 24)
 	require.Nil(t, fixture.request.GetTimeRange())
 	require.Equal(t, "crypto", fixture.request.GetKeys()[0].GetSpaceId())

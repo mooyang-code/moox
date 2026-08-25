@@ -89,6 +89,10 @@ STAGE_DEPLOY_LOCK_OWNER_PID=""
 STAGE_DEPLOY_LOCK_OWNER_CREATED_AT=""
 LOCAL_DEPLOY_ARCHIVE=""
 REMOTE_DEPLOY_ARCHIVE=""
+GATEWAY_ROLLBACK_ARCHIVE=""
+GATEWAY_ROLLBACK_DEPLOY_DIR=""
+GATEWAY_ROLLBACK_ACTIVE=0
+REMOTE_GATEWAY_ROLLBACK_PENDING=0
 
 usage() {
   cat <<'EOF'
@@ -139,7 +143,7 @@ Options:
   --cloud-account-id <id>         Tencent cloud account for CLS; default is the first account.
   --node-id <id>                  Stable Gateway node ID (required).
   --gateway-control-url <url>     Central Admin browser origin used by Gateway (required).
-  --gateway-ca-bundle <path>      Public PEM bundle containing peer Caddy roots (required).
+  --gateway-ca-bundle <path>      PEM bundle containing the control endpoint Caddy root (required; verified before deploy).
   --gateway-control-key-file <p>  Local 0600 raw cluster control key file (required).
   --gateway-service-key-file <p>  Local 0600 raw cluster service key file (required).
   --monitor-instance-id <id>      Stable Monitor instance ID (required when Monitor is enabled).
@@ -215,6 +219,9 @@ cleanup_stage_deploy_lock() {
 }
 
 cleanup_deploy_artifacts() {
+  if declare -F rollback_gateway_on_exit >/dev/null 2>&1; then
+    rollback_gateway_on_exit
+  fi
   cleanup_stage_deploy_lock
   if [[ -n "${LOCAL_DEPLOY_ARCHIVE}" ]]; then
     rm -f "${LOCAL_DEPLOY_ARCHIVE}"
@@ -580,6 +587,124 @@ is_local_target() {
   [[ "${TARGET}" == "localhost" || "${TARGET}" == "127.0.0.1" || "${TARGET}" == "::1" ]]
 }
 
+gateway_ready_at() {
+  local root="$1" timestamp nonce body_hash canonical signature auth
+  set -a
+  source "${root}/secrets/health-auth.env"
+  set +a
+  timestamp=$(date +%s)
+  nonce=$(openssl rand -hex 32)
+  body_hash=$(printf %s "" | openssl dgst -sha256); body_hash=${body_hash##* }
+  canonical=$(printf "%s\nGET\n/readyz\n%s\n%s\n%s" moox-request-v1 "${body_hash}" "${timestamp}" "${nonce}")
+  signature=$(printf "%s" "${canonical}" | openssl dgst -sha256 -hmac "${MOOX_HEALTH_AUTH_SECRET_KEY}"); signature=${signature##* }
+  auth="${MOOX_HEALTH_AUTH_VERSION}/${MOOX_HEALTH_AUTH_ACCESS_KEY}/${timestamp}/${nonce}/${signature}"
+  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: ${auth}" http://127.0.0.1:11012/readyz >/dev/null
+}
+
+prepare_local_gateway_rollback() {
+  [[ "${WITH_GATEWAY}" == "1" && "${NO_START}" == "0" && "${COMPONENT_OVERLAY}" == "1" ]] || return 0
+  local deploy_dir="$1"
+  [[ -d "${deploy_dir}/gateway" ]] || return 0
+  # Keep the archive beside the deployment: local rsync uses --delete and
+  # must not remove the only copy before an acceptance failure can restore it.
+  GATEWAY_ROLLBACK_DEPLOY_DIR="${deploy_dir}"
+  GATEWAY_ROLLBACK_ARCHIVE="${deploy_dir}.gateway-rollback.$$"
+  rm -f "${GATEWAY_ROLLBACK_ARCHIVE}"
+  local entries=(gateway)
+  [[ -f "${deploy_dir}/bin/moox-gateway" ]] && entries+=(bin/moox-gateway)
+  [[ -f "${deploy_dir}/bin/moox-gateway-cli" ]] && entries+=(bin/moox-gateway-cli)
+  tar -C "${deploy_dir}" -czf "${GATEWAY_ROLLBACK_ARCHIVE}" "${entries[@]}"
+  chmod 0600 "${GATEWAY_ROLLBACK_ARCHIVE}"
+  GATEWAY_ROLLBACK_ACTIVE=1
+}
+
+rollback_local_gateway() {
+  [[ "${GATEWAY_ROLLBACK_ACTIVE}" == "1" && -n "${GATEWAY_ROLLBACK_ARCHIVE}" && -s "${GATEWAY_ROLLBACK_ARCHIVE}" ]] || return 0
+  local deploy_dir="${GATEWAY_ROLLBACK_DEPLOY_DIR}" status=0
+  set +e
+  if [[ -x "${deploy_dir}/stop.sh" ]]; then
+    MOOX_WITH_GATEWAY=1 "${deploy_dir}/stop.sh" gateway >/dev/null 2>&1 || true
+  fi
+  rm -rf "${deploy_dir}/gateway"
+  rm -f "${deploy_dir}/bin/moox-gateway" "${deploy_dir}/bin/moox-gateway-cli"
+  tar -C "${deploy_dir}" -xzf "${GATEWAY_ROLLBACK_ARCHIVE}" || status=$?
+  if [[ "${status}" -eq 0 && -x "${deploy_dir}/start.sh" ]]; then
+    MOOX_WITH_GATEWAY=1 "${deploy_dir}/start.sh" gateway >/dev/null 2>&1 || status=$?
+  fi
+  if [[ "${status}" -eq 0 ]]; then
+    for _ in $(seq 1 30); do
+      if gateway_ready_at "${deploy_dir}" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+    done
+    gateway_ready_at "${deploy_dir}" >/dev/null 2>&1 || status=$?
+  fi
+  if [[ "${status}" -eq 0 ]]; then
+    rm -f "${GATEWAY_ROLLBACK_ARCHIVE}"
+    GATEWAY_ROLLBACK_ACTIVE=0
+  else
+    printf '[deploy-moox] ERROR: Gateway rollback failed; preserve %s for manual recovery\n' "${GATEWAY_ROLLBACK_ARCHIVE}" >&2
+  fi
+  set -e
+  return "${status}"
+}
+
+finalize_local_gateway_rollback() {
+  [[ "${GATEWAY_ROLLBACK_ACTIVE}" == "1" ]] || return 0
+  rm -f "${GATEWAY_ROLLBACK_ARCHIVE}"
+  GATEWAY_ROLLBACK_ACTIVE=0
+}
+
+rollback_remote_gateway() {
+  [[ "${REMOTE_GATEWAY_ROLLBACK_PENDING}" == "1" ]] || return 0
+  local quoted_dir status=0
+  quoted_dir="$(shell_quote "${DEPLOY_DIR%/}")"
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "bash -s -- ${quoted_dir}" <<'EOF' >/dev/null 2>&1 || status=$?
+set +e
+root="$1"
+archive="$root/.gateway-rollback.tgz"
+[[ -s "$archive" ]] || exit 1
+if [[ -x "$root/stop.sh" ]]; then MOOX_WITH_GATEWAY=1 "$root/stop.sh" gateway >/dev/null 2>&1 || true; fi
+rm -rf "$root/gateway"
+rm -f "$root/bin/moox-gateway" "$root/bin/moox-gateway-cli"
+tar -C "$root" -xzf "$archive" || exit 1
+if [[ -x "$root/start.sh" ]]; then MOOX_WITH_GATEWAY=1 "$root/start.sh" gateway >/dev/null 2>&1 || exit 1; fi
+set -a
+source "$root/secrets/health-auth.env"
+set +a
+for _ in $(seq 1 30); do
+  timestamp=$(date +%s); nonce=$(openssl rand -hex 32)
+  body_hash=$(printf %s "" | openssl dgst -sha256); body_hash=${body_hash##* }
+  canonical=$(printf "%s\nGET\n/readyz\n%s\n%s\n%s" moox-request-v1 "$body_hash" "$timestamp" "$nonce")
+  signature=$(printf "%s" "$canonical" | openssl dgst -sha256 -hmac "$MOOX_HEALTH_AUTH_SECRET_KEY"); signature=${signature##* }
+  auth="$MOOX_HEALTH_AUTH_VERSION/$MOOX_HEALTH_AUTH_ACCESS_KEY/$timestamp/$nonce/$signature"
+  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $auth" http://127.0.0.1:11012/readyz >/dev/null 2>&1 && break
+  sleep 1
+done
+curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $auth" http://127.0.0.1:11012/readyz >/dev/null 2>&1 || exit 1
+rm -f "$archive"
+EOF
+  if [[ "${status}" -ne 0 ]]; then
+    printf '[deploy-moox] ERROR: remote Gateway rollback failed; preserve %s/.gateway-rollback.tgz for manual recovery\n' "${DEPLOY_DIR%/}" >&2
+    return "${status}"
+  fi
+  REMOTE_GATEWAY_ROLLBACK_PENDING=0
+}
+
+rollback_gateway_on_exit() {
+  local status=$?
+  if [[ "${GATEWAY_ROLLBACK_ACTIVE}" == "1" ]] && ! rollback_local_gateway; then
+    printf '[deploy-moox] ERROR: local Gateway rollback did not complete\n' >&2
+  fi
+  if [[ "${REMOTE_GATEWAY_ROLLBACK_PENDING}" == "1" ]] && ! rollback_remote_gateway; then
+    printf '[deploy-moox] ERROR: remote Gateway rollback did not complete\n' >&2
+  fi
+  # EXIT traps preserve the original process status; returning success here
+  # lets the rest of cleanup remove transport archives and locks.
+  return 0
+}
+
 # A remote Collector fleet is reached by Tencent SCF, not by the target host's
 # loopback interface.  Refuse to produce a deployment which would publish a
 # loopback-only EventBus and leave the failure to surface later as completion
@@ -779,6 +904,26 @@ validate_gateway_ca_bundle() {
   [[ "${count}" -ge 2 && "${distinct}" -ge 2 ]] || \
     fail "--gateway-ca-bundle must contain at least two distinct public CA certificates"
 }
+
+validate_gateway_control_endpoint() {
+  [[ "${GATEWAY_CONTROL_URL}" == https://* ]] || return 0
+  local endpoint="${GATEWAY_CONTROL_URL%/}/"
+  # This preflight validates DNS, TCP, and TLS trust only. The control root
+  # may legitimately return an application-level 4xx/5xx while Admin is
+  # restarting; --fail would misdiagnose that as a bad CA bundle.
+  if ! curl --silent --show-error --max-time 5 --cacert "${GATEWAY_CA_BUNDLE}" \
+    --output /dev/null "${endpoint}"; then
+    fail "cannot establish trusted TLS to --gateway-control-url; verify DNS, endpoint availability, and the Caddy root in --gateway-ca-bundle"
+  fi
+}
+
+if [[ "${AUTO_GATEWAY_INPUTS}" -eq 0 ]]; then
+  validate_gateway_ca_bundle "${GATEWAY_CA_BUNDLE}"
+  # A package-only/no-start artifact may be prepared before the control
+  # endpoint is reachable. The real activation path performs the live TLS
+  # verification and the post-start control-plane acceptance below.
+  [[ "${NO_START}" == "1" ]] || validate_gateway_control_endpoint
+fi
 
 HOST_GOOS="$(go env GOOS)"
 HOST_GOARCH="$(go env GOARCH)"
@@ -1208,12 +1353,11 @@ validate_storage_internal_auth() {
   }
 }
 
-MSGBOX_ENV=()
-if [[ -r "${ROOT}/secrets/msgbox.env" ]]; then
-  msgbox_wecom_webhook=$(bash -c 'set -u; source "$1"; printf "%s" "${MOOX_MSGBOX_WECOM_WEBHOOK-}"' _ "${ROOT}/secrets/msgbox.env")
-  if [[ -n "${msgbox_wecom_webhook}" ]]; then
-    MSGBOX_ENV+=("MOOX_MSGBOX_WECOM_WEBHOOK=${msgbox_wecom_webhook}")
-  fi
+NOTIFICATION_ENV=()
+if [[ -r "${ROOT}/secrets/notification.env" ]]; then
+  notification_channel_type=$(bash -c 'set -u; source "$1"; printf "%s" "${MOOX_NOTIFICATION_CHANNEL_TYPE-wecom}"' _ "${ROOT}/secrets/notification.env")
+  notification_webhook_url=$(bash -c 'set -u; source "$1"; printf "%s" "${MOOX_NOTIFICATION_WEBHOOK_URL-}"' _ "${ROOT}/secrets/notification.env")
+  NOTIFICATION_ENV+=("MOOX_NOTIFICATION_CHANNEL_TYPE=${notification_channel_type}" "MOOX_NOTIFICATION_WEBHOOK_URL=${notification_webhook_url}")
 fi
 
 GATEWAY_CONTROL_ENV=(
@@ -2042,7 +2186,20 @@ PY
       storage-eventbus.yaml strategy-eventbus.yaml trade-eventbus.yaml; do
       [[ -s "${eventbus_credentials_dir}/${credential_name}" ]] || eventbus_credentials_complete=0
     done
-    if [[ "${eventbus_credentials_complete}" -eq 1 ]]; then
+    if [[ "${MOOX_EVENTBUS_ROTATE_CREDENTIALS:-0}" == "1" ]]; then
+      # A reset with a changed public EventBus endpoint must mint a new TLS
+      # bundle before EventBus starts; the old certificate SAN is no longer
+      # valid for clients using the new endpoint.
+      eventbus_credentials_complete=0
+      echo "rotate EventBus identities after endpoint change in ${eventbus_credentials_dir}"
+    fi
+    if [[ "${eventbus_credentials_complete}" -eq 1 && ( "${MOOX_RESET_CONTROL_DATA:-0}" == "1" || "${MOOX_PRESERVE_EXTERNAL_EVENTBUS_CREDENTIALS:-0}" == "1" ) ]]; then
+      # A destructive control reset removes admin.db, including the encrypted
+      # EventBus records.  The exported role files are still authoritative for
+      # the running EventBus and Storage peers, so keep them instead of
+      # rotating credentials or failing the fresh bootstrap.
+      echo "preserve EventBus identities after control data reset in ${eventbus_credentials_dir}"
+    elif [[ "${eventbus_credentials_complete}" -eq 1 ]]; then
       echo "reuse EventBus identities and refresh exported endpoints in ${eventbus_credentials_dir}"
     else
       mkdir -p "${eventbus_credentials_dir}"
@@ -2053,18 +2210,20 @@ PY
         >>"${ROOT}/logs/admin/stdout.log" 2>&1 ||
         { echo "EventBus credential provisioning failed" >&2; exit 1; }
     fi
-    "${ROOT}/bin/moox-admin-cli" eventbus-credentials export \
-      --db-path "${ROOT}/data/admin.db" \
-      --encryption-key-file "${encryption_key_file}" \
-      --node-id "${MOOX_ADMIN_NODE_ID}" \
-      --output-dir "${eventbus_credentials_dir}" \
-      >>"${ROOT}/logs/admin/stdout.log" 2>&1 ||
-      { echo "EventBus credential export failed" >&2; exit 1; }
+    if [[ ( "${MOOX_RESET_CONTROL_DATA:-0}" != "1" && "${MOOX_PRESERVE_EXTERNAL_EVENTBUS_CREDENTIALS:-0}" != "1" ) || "${eventbus_credentials_complete}" -eq 0 ]]; then
+      "${ROOT}/bin/moox-admin-cli" eventbus-credentials export \
+        --db-path "${ROOT}/data/admin.db" \
+        --encryption-key-file "${encryption_key_file}" \
+        --node-id "${MOOX_ADMIN_NODE_ID}" \
+        --output-dir "${eventbus_credentials_dir}" \
+        >>"${ROOT}/logs/admin/stdout.log" 2>&1 ||
+        { echo "EventBus credential export failed" >&2; exit 1; }
+    fi
   fi
   gateway_service_env_for admin-gateway
   runtime_identity_env admin_gateway "${ROOT}/admin/config/trpc_go.yaml"
   start_service "admin" "${ROOT}/admin" \
-    env "${RUNTIME_IDENTITY_ENV[@]}" "${ADMIN_SECRET_ENV[@]}" "${MSGBOX_ENV[@]+"${MSGBOX_ENV[@]}"}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${ADMIN_SECRET_ENV[@]}" "${NOTIFICATION_ENV[@]+"${NOTIFICATION_ENV[@]}"}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=${LOCAL_STORAGE_RPC_GATEWAY_ADDRESS}" "MOOX_NODE_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" \
       "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_DB_PATH=${ROOT}/data/admin.db" \
       "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
@@ -2073,6 +2232,41 @@ PY
 
 start_gateway() {
   [[ "${WITH_GATEWAY}" == "1" ]] || { echo "gateway is disabled in this deployment package" >&2; exit 2; }
+	# The native listener is the data-plane ingress used by short-lived SCF
+	# functions.  A binary-only/component deployment can leave an older
+	# loopback-only app.yaml in place even though the current topology publishes
+	# the native target on the public host.  Reconcile the listener from the
+	# persisted SCF target immediately before starting Gateway so a restart cannot
+	# silently bring the collector back to a connection-refused state.
+		local gateway_config="${ROOT}/gateway/config/app.yaml"
+		local expected_native="127.0.0.1:11003"
+		local current_native
+		# A non-loopback public host is the persisted control-plane topology. It
+		# wins over a stale loopback SCF override because Collector resolves its
+		# native target independently from SysDeploy.
+		if [[ "${PUBLIC_HOST}" != "" && "${PUBLIC_HOST}" != localhost && "${PUBLIC_HOST}" != 127.* &&
+		      "${PUBLIC_HOST}" != ::1 && "${PUBLIC_HOST}" != \[::1\] ]] ||
+			[[ "${SCF_STORAGE_RPC_GATEWAY_TARGET}" != ip://127.0.0.1:* &&
+		      "${SCF_STORAGE_RPC_GATEWAY_TARGET}" != ip://localhost:* &&
+		      "${SCF_STORAGE_RPC_GATEWAY_TARGET}" != ip://\[::1\]:* ]]; then
+		expected_native="0.0.0.0:11003"
+	fi
+	if [[ -r "${gateway_config}" ]]; then
+		current_native="$(awk '/^[[:space:]]+native_addr:/ {print $2; exit}' "${gateway_config}")"
+		if [[ "${expected_native}" == "0.0.0.0:11003" && "${current_native}" == "127.0.0.1:11003" ]]; then
+			perl -0pi -e 's#native_addr:\s*127\.0\.0\.1:11003#native_addr: 0.0.0.0:11003#' "${gateway_config}"
+			printf 'gateway: reconciled native listener to %s for SCF target %s\n' "${expected_native}" "${SCF_STORAGE_RPC_GATEWAY_TARGET}" >&2
+		fi
+		current_native="$(awk '/^[[:space:]]+native_addr:/ {print $2; exit}' "${gateway_config}")"
+		# Never downgrade a public listener solely because a runtime override says
+		# loopback. Collector resolves its native target from SysDeploy, so a
+		# conflicting override must not recreate a public connection refusal.
+		if [[ "${expected_native}" == "0.0.0.0:11003" && "${current_native}" != "0.0.0.0:11003" ]] ||
+			[[ "${expected_native}" == "127.0.0.1:11003" && "${current_native}" != "127.0.0.1:11003" && "${current_native}" != "0.0.0.0:11003" ]]; then
+			echo "gateway native listener ${current_native:-<missing>} does not match expected ${expected_native} for SCF target ${SCF_STORAGE_RPC_GATEWAY_TARGET}" >&2
+			exit 1
+		fi
+	fi
 	runtime_identity_env moox_gateway "${ROOT}/gateway/config/app.yaml"
 	start_service "gateway" "${ROOT}/gateway" \
 		env "${RUNTIME_IDENTITY_ENV[@]}" "MOOX_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" "MOOX_OTEL_SERVICE_NAME=moox-gateway" \
@@ -2089,7 +2283,7 @@ start_cloudnode() {
   runtime_identity_env moox_cloudnode "${ROOT}/cloudnode/config/app.yaml"
   start_service "cloudnode" "${ROOT}/cloudnode" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
-      "${MSGBOX_ENV[@]+"${MSGBOX_ENV[@]}"}" \
+      "${NOTIFICATION_ENV[@]+"${NOTIFICATION_ENV[@]}"}" \
       "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "MOOX_SERVICE_GATEWAY_HTTP_URL=http://127.0.0.1:11002" \
       "MOOX_SCF_SERVICE_GATEWAY_TARGET=${SCF_SERVICE_GATEWAY_TARGET}" \
@@ -2173,7 +2367,7 @@ start_monitor() {
   runtime_identity_env moox_monitor "${ROOT}/monitor/config/app.yaml"
   start_service "monitor" "${ROOT}/monitor" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
-      "${MSGBOX_ENV[@]+"${MSGBOX_ENV[@]}"}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
+      "${NOTIFICATION_ENV[@]+"${NOTIFICATION_ENV[@]}"}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
       "MOOX_MONITOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" "MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" \
       "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
 }
@@ -3074,8 +3268,8 @@ prepare_stage() {
     "${STAGE_DIR}/logs" \
     "${STAGE_DIR}/run"
   mkdir -p "${STAGE_DIR}/secrets" "${STAGE_DIR}/certs/gateway"
-  if [[ -n "${MOOX_MSGBOX_WECOM_WEBHOOK+x}" ]]; then
-    (umask 077; printf 'MOOX_MSGBOX_WECOM_WEBHOOK=%q\n' "${MOOX_MSGBOX_WECOM_WEBHOOK}" >"${STAGE_DIR}/secrets/msgbox.env.next")
+  if [[ -n "${MOOX_NOTIFICATION_WEBHOOK_URL+x}" ]]; then
+    (umask 077; printf 'MOOX_NOTIFICATION_CHANNEL_TYPE=%q\nMOOX_NOTIFICATION_WEBHOOK_URL=%q\n' "${MOOX_NOTIFICATION_CHANNEL_TYPE-wecom}" "${MOOX_NOTIFICATION_WEBHOOK_URL}" >"${STAGE_DIR}/secrets/notification.env.next")
   fi
   if [[ -n "${MOOX_HEALTH_AUTH_VERSION:-}${MOOX_HEALTH_AUTH_ACCESS_KEY:-}${MOOX_HEALTH_AUTH_SECRET_KEY:-}" ]]; then
     [[ -n "${MOOX_HEALTH_AUTH_VERSION:-}" && -n "${MOOX_HEALTH_AUTH_ACCESS_KEY:-}" && -n "${MOOX_HEALTH_AUTH_SECRET_KEY:-}" ]] || \
@@ -3409,6 +3603,13 @@ EOF
   if [[ "${WITH_HOSTAGENT}" -eq 1 ]]; then
     mkdir -p "${STAGE_DIR}/hostagent/config"
     cp -R "${ROOT}/modules/hostagent/config/." "${STAGE_DIR}/hostagent/config/"
+    # HostAgent normally reports the operating-system hostname. When it differs
+    # from the SSH host name, the Host Workbench cannot associate the live
+    # resource sample with its configured host row and renders a duplicate
+    # monitor-only entry. Use the deployment node identity as the default
+    # display/matching name; an explicitly configured host_name remains intact.
+    HOST_AGENT_NAME="${NODE_ID}" perl -0pi -e 's#(?m)^host_name:\s*""\s*$#host_name: $ENV{HOST_AGENT_NAME}#' \
+      "${STAGE_DIR}/hostagent/config/app.yaml"
     # The central deployment exports the role credential outside the release
     # tree. Point HostAgent at that durable file so credentials are never
     # copied into the package or process arguments.
@@ -3482,6 +3683,37 @@ persist_selected_components() {
   chmod 0600 "${file}"
 }
 
+stop_foreign_gateway() {
+  [[ "${WITH_GATEWAY}" == "1" ]] || return 0
+  local proc pid exe cwd start_time current_start
+  for proc in /proc/[0-9]*; do
+    [[ -d "${proc}" ]] || continue
+    pid="${proc##*/}"
+    [[ "${pid}" != "$$" ]] || continue
+    exe="$(readlink "${proc}/exe" 2>/dev/null || true)"
+    [[ "${exe}" == *"/moox-gateway" || "${exe}" == *"/moox-gateway (deleted)" ]] || continue
+    [[ "${exe}" == "${DEPLOY_DIR}/bin/moox-gateway" || "${exe}" == "${DEPLOY_DIR}/bin/moox-gateway (deleted)" ]] && continue
+    cwd="$(readlink "${proc}/cwd" 2>/dev/null || true)"
+    if [[ -r "${cwd}/config/app.yaml" ]] && ! grep -Eq "^  id: ${NODE_ID}$" "${cwd}/config/app.yaml"; then
+      continue
+    fi
+    start_time="$(awk '{print $22}' "${proc}/stat" 2>/dev/null || true)"
+    if [[ "${NO_START}" == "1" ]]; then
+      echo "foreign Gateway process is running from ${exe}; refuse --no-start deployment" >&2
+      exit 1
+    fi
+    echo "stopping foreign Gateway process pid=${pid} exe=${exe}" >&2
+    kill "${pid}" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      kill -0 "${pid}" 2>/dev/null || break
+      sleep 1
+    done
+    current_start="$(awk '{print $22}' "/proc/${pid}/stat" 2>/dev/null || true)"
+    [[ -n "${start_time}" && "${current_start}" == "${start_time}" ]] || continue
+    kill -9 "${pid}" 2>/dev/null || true
+  done
+}
+
 sync_local_stage() {
   local deploy_dir component_overlay="${COMPONENT_OVERLAY}"
   deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
@@ -3538,6 +3770,11 @@ sync_local_stage() {
     [[ "${NO_START}" -eq 0 ]] || fail "--no-start refuses to replace an existing managed Caddy deployment"
     [[ -n "${PUBLIC_HOST}" ]] || fail "existing managed Caddy deployment requires --public-host"
   fi
+
+  # All preflight checks above must pass before we stop or replace a running
+  # Gateway. This keeps a rejected package from causing avoidable downtime.
+  prepare_local_gateway_rollback "${deploy_dir}"
+  DEPLOY_DIR="${deploy_dir}" stop_foreign_gateway
 
   if [[ -x "${deploy_dir}/stop.sh" && "${NO_START}" -eq 0 ]]; then
     if [[ "${WITH_STORAGE}" -eq 1 ]]; then
@@ -3757,8 +3994,8 @@ sync_local_stage() {
     install -m 0600 "${STAGE_DIR}/secrets/gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env"
     install -m 0600 "${STAGE_DIR}/secrets/gateway-credentials.json" "${deploy_dir}/secrets/gateway-credentials.json"
   fi
-  if [[ -f "${STAGE_DIR}/secrets/msgbox.env.next" ]]; then
-    install -m 0600 "${STAGE_DIR}/secrets/msgbox.env.next" "${deploy_dir}/secrets/msgbox.env"
+  if [[ -f "${STAGE_DIR}/secrets/notification.env.next" ]]; then
+    install -m 0600 "${STAGE_DIR}/secrets/notification.env.next" "${deploy_dir}/secrets/notification.env"
   fi
   if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/certs/gateway/peers.pem" ]]; then
     install -m 0644 "${STAGE_DIR}/certs/gateway/peers.pem" "${deploy_dir}/certs/gateway/peers.pem"
@@ -3832,9 +4069,10 @@ sync_remote_stage() {
   scp -p "${archive}" "${TARGET}:${remote_archive}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_component_overlay quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_hostagent quoted_with_web_host quoted_with_admin quoted_with_gateway quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch quoted_local_storage_gateway_target quoted_local_storage_gateway_node_id quoted_storage_view_duckdb_memory_limit quoted_factor_python_workers quoted_factor_view_read_workers quoted_factor_view_read_timeout_ms quoted_control_root quoted_storage_root
+  local quoted_dir quoted_archive quoted_node_id quoted_no_start quoted_component_overlay quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_hostagent quoted_with_web_host quoted_with_admin quoted_with_gateway quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch quoted_local_storage_gateway_target quoted_local_storage_gateway_node_id quoted_storage_view_duckdb_memory_limit quoted_factor_python_workers quoted_factor_view_read_workers quoted_factor_view_read_timeout_ms quoted_control_root quoted_storage_root
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
+  quoted_node_id="$(shell_quote "${NODE_ID}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
   quoted_component_overlay="$(shell_quote "${COMPONENT_OVERLAY}")"
   quoted_with_storage="$(shell_quote "${WITH_STORAGE}")"
@@ -3875,7 +4113,7 @@ sync_remote_stage() {
   quoted_control_root="$(shell_quote "${MOOX_CONTROL_ROOT:-}")"
   quoted_storage_root="$(shell_quote "${MOOX_STORAGE_ROOT:-}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_HOSTAGENT=${quoted_with_hostagent} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64=${quoted_storage_view_maintenance_policy_b64} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NODE_ID=${quoted_node_id} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_HOSTAGENT=${quoted_with_hostagent} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64=${quoted_storage_view_maintenance_policy_b64} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 
 generate_secret() {
@@ -3909,11 +4147,104 @@ persist_selected_components() {
   chmod 0600 "${file}"
 }
 
+stop_foreign_gateway() {
+  [[ "${WITH_GATEWAY}" == "1" ]] || return 0
+  local proc pid exe cwd start_time current_start
+  for proc in /proc/[0-9]*; do
+    [[ -d "${proc}" ]] || continue
+    pid="${proc##*/}"
+    [[ "${pid}" != "$$" ]] || continue
+    exe="$(readlink "${proc}/exe" 2>/dev/null || true)"
+    [[ "${exe}" == *"/moox-gateway" || "${exe}" == *"/moox-gateway (deleted)" ]] || continue
+    [[ "${exe}" == "${DEPLOY_DIR}/bin/moox-gateway" || "${exe}" == "${DEPLOY_DIR}/bin/moox-gateway (deleted)" ]] && continue
+    cwd="$(readlink "${proc}/cwd" 2>/dev/null || true)"
+    if [[ -r "${cwd}/config/app.yaml" ]] && ! grep -Eq "^  id: ${NODE_ID}$" "${cwd}/config/app.yaml"; then
+      continue
+    fi
+    start_time="$(awk '{print $22}' "${proc}/stat" 2>/dev/null || true)"
+    if [[ "${NO_START}" == "1" ]]; then
+      echo "foreign Gateway process is running from ${exe}; refuse --no-start deployment" >&2
+      exit 1
+    fi
+    echo "stopping foreign Gateway process pid=${pid} exe=${exe}" >&2
+    kill "${pid}" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      kill -0 "${pid}" 2>/dev/null || break
+      sleep 1
+    done
+    current_start="$(awk '{print $22}' "/proc/${pid}/stat" 2>/dev/null || true)"
+    [[ -n "${start_time}" && "${current_start}" == "${start_time}" ]] || continue
+    kill -9 "${pid}" 2>/dev/null || true
+  done
+}
+
+GATEWAY_ROLLBACK_ACTIVE=0
+prepare_gateway_rollback() {
+  [[ "${WITH_GATEWAY}" == "1" && "${NO_START}" == "0" && "${COMPONENT_OVERLAY}" == "1" ]] || return 0
+  [[ -d "${DEPLOY_DIR}/gateway" ]] || return 0
+  rm -f "${GATEWAY_ROLLBACK_ARCHIVE}"
+  local entries=(gateway)
+  [[ -f "${DEPLOY_DIR}/bin/moox-gateway" ]] && entries+=(bin/moox-gateway)
+  [[ -f "${DEPLOY_DIR}/bin/moox-gateway-cli" ]] && entries+=(bin/moox-gateway-cli)
+  tar -C "${DEPLOY_DIR}" -czf "${GATEWAY_ROLLBACK_ARCHIVE}" "${entries[@]}"
+  chmod 0600 "${GATEWAY_ROLLBACK_ARCHIVE}"
+  GATEWAY_ROLLBACK_ACTIVE=1
+}
+
+rollback_gateway() {
+  [[ "${GATEWAY_ROLLBACK_ACTIVE}" == "1" && -s "${GATEWAY_ROLLBACK_ARCHIVE}" ]] || return 0
+  local status=0
+  set +e
+  if [[ -x "${DEPLOY_DIR}/stop.sh" ]]; then MOOX_WITH_GATEWAY=1 "${DEPLOY_DIR}/stop.sh" gateway >/dev/null 2>&1 || true; fi
+  rm -rf "${DEPLOY_DIR}/gateway"
+  rm -f "${DEPLOY_DIR}/bin/moox-gateway" "${DEPLOY_DIR}/bin/moox-gateway-cli"
+  tar -C "${DEPLOY_DIR}" -xzf "${GATEWAY_ROLLBACK_ARCHIVE}" || status=$?
+  if [[ "${status}" -eq 0 && -x "${DEPLOY_DIR}/start.sh" ]]; then
+    MOOX_WITH_GATEWAY=1 "${DEPLOY_DIR}/start.sh" gateway >/dev/null 2>&1 || status=$?
+  fi
+  if [[ "${status}" -eq 0 ]]; then
+    set -a
+    source "${DEPLOY_DIR}/secrets/health-auth.env"
+    set +a
+    ready=0
+    for _ in $(seq 1 30); do
+      timestamp=$(date +%s); nonce=$(openssl rand -hex 32)
+      body_hash=$(printf %s "" | openssl dgst -sha256); body_hash=${body_hash##* }
+      canonical=$(printf "%s\nGET\n/readyz\n%s\n%s\n%s" moox-request-v1 "${body_hash}" "${timestamp}" "${nonce}")
+      signature=$(printf "%s" "${canonical}" | openssl dgst -sha256 -hmac "${MOOX_HEALTH_AUTH_SECRET_KEY}"); signature=${signature##* }
+      auth="${MOOX_HEALTH_AUTH_VERSION}/${MOOX_HEALTH_AUTH_ACCESS_KEY}/${timestamp}/${nonce}/${signature}"
+      if curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: ${auth}" http://127.0.0.1:11012/readyz >/dev/null 2>&1; then
+        ready=1
+        break
+      fi
+      sleep 1
+    done
+    [[ "${ready}" == "1" ]] || status=1
+  fi
+  if [[ "${status}" -eq 0 ]]; then
+    rm -f "${GATEWAY_ROLLBACK_ARCHIVE}"
+    GATEWAY_ROLLBACK_ACTIVE=0
+  else
+    echo "Gateway rollback failed; preserve ${GATEWAY_ROLLBACK_ARCHIVE} for manual recovery" >&2
+  fi
+  set -e
+  return "${status}"
+}
+
+gateway_rollback_on_exit() {
+  local status=$?
+  if [[ "${status}" -ne 0 && "${GATEWAY_ROLLBACK_ACTIVE}" == "1" ]] && ! rollback_gateway; then
+    echo "automatic Gateway rollback did not complete" >&2
+  fi
+  exit "${status}"
+}
+
 if [[ "${DEPLOY_DIR}" == "~" ]]; then
   DEPLOY_DIR="${HOME}"
 elif [[ "${DEPLOY_DIR}" == "~/"* ]]; then
   DEPLOY_DIR="${HOME}/${DEPLOY_DIR#\~/}"
 fi
+GATEWAY_ROLLBACK_ARCHIVE="${DEPLOY_DIR}/.gateway-rollback.tgz"
 
 mkdir -p "${DEPLOY_DIR}"
 if command -v flock >/dev/null 2>&1; then
@@ -3987,6 +4318,13 @@ if [[ "${COMPONENT_OVERLAY}" == "0" && ( -e "${DEPLOY_DIR}/config/caddy/edge.env
     exit 1
   fi
 fi
+
+# All preflight checks above must pass before we stop or replace a running
+# Gateway. This keeps a rejected package from causing avoidable downtime.
+prepare_gateway_rollback
+trap gateway_rollback_on_exit EXIT
+stop_foreign_gateway
+
 if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
   if [[ "${WITH_STORAGE}" == "1" ]]; then
     MOOX_WITH_EVENTBUS="${WITH_EVENTBUS}" MOOX_WITH_ARCHIVE="${WITH_ARCHIVE}" "${DEPLOY_DIR}/stop.sh" || true
@@ -4101,9 +4439,9 @@ if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
       "MOOX_INSTALLED_WITH_HOSTAGENT:${WITH_HOSTAGENT}" \
     "MOOX_INSTALLED_WITH_WEB_HOST:${WITH_WEB_HOST}" "MOOX_INSTALLED_WITH_GATEWAY:${WITH_GATEWAY}"
 fi
-if [[ -f "${DEPLOY_DIR}/secrets/msgbox.env.next" ]]; then
-  mv -f "${DEPLOY_DIR}/secrets/msgbox.env.next" "${DEPLOY_DIR}/secrets/msgbox.env"
-  chmod 0600 "${DEPLOY_DIR}/secrets/msgbox.env"
+if [[ -f "${DEPLOY_DIR}/secrets/notification.env.next" ]]; then
+  mv -f "${DEPLOY_DIR}/secrets/notification.env.next" "${DEPLOY_DIR}/secrets/notification.env"
+  chmod 0600 "${DEPLOY_DIR}/secrets/notification.env"
 fi
 chmod +x "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh" "${DEPLOY_DIR}/bin/"*
 mkdir -p "${DEPLOY_DIR}/secrets"
@@ -4178,7 +4516,72 @@ if is_local_target; then
   sync_local_stage
 else
   sync_remote_stage
+  if [[ "${WITH_GATEWAY}" == "1" && "${NO_START}" == "0" && "${COMPONENT_OVERLAY}" == "1" ]]; then
+    REMOTE_GATEWAY_ROLLBACK_PENDING=1
+  fi
 fi
+
+verify_gateway_control_plane() {
+  [[ "${WITH_GATEWAY}" == "1" && "${NO_START}" == "0" ]] || return 0
+  local verify_script='set -euo pipefail
+root=$1
+node_id=$2
+gateway_ready() {
+  local timestamp nonce body_hash canonical signature auth
+  set -a
+  source "$root/secrets/health-auth.env"
+  set +a
+  timestamp=$(date +%s)
+  nonce=$(openssl rand -hex 32)
+  body_hash=$(printf %s "" | openssl dgst -sha256)
+  body_hash=${body_hash##* }
+  canonical=$(printf "%s\nGET\n/readyz\n%s\n%s\n%s" "moox-request-v1" "$body_hash" "$timestamp" "$nonce")
+  signature=$(printf "%s" "$canonical" | openssl dgst -sha256 -hmac "$MOOX_HEALTH_AUTH_SECRET_KEY")
+  signature=${signature##* }
+  auth="$MOOX_HEALTH_AUTH_VERSION/$MOOX_HEALTH_AUTH_ACCESS_KEY/$timestamp/$nonce/$signature"
+  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $auth" \
+    http://127.0.0.1:11012/readyz >/dev/null
+}
+for _ in $(seq 1 60); do
+  if gateway_ready &&
+    grep -Eq "^  id: ${node_id}$" "$root/gateway/config/app.yaml" &&
+    test -s "$root/data/gateway/routes.json" &&
+    grep -q "\"node_id\": \"${node_id}\"" "$root/data/gateway/routes.json"; then
+    echo "gateway control-plane readiness accepted: node_id=${node_id}"
+    exit 0
+  fi
+  sleep 1
+done
+echo "gateway control-plane readiness failed: node_id=${node_id}" >&2
+tail -80 "$root/logs/gateway/stdout.log" >&2 || true
+exit 1'
+  if is_local_target; then
+    if ! bash -s -- "$(expand_local_path "${DEPLOY_DIR}")" "${NODE_ID}" <<<"${verify_script}"; then
+      if rollback_local_gateway; then
+        fail "Gateway control-plane acceptance failed; previous Gateway restored"
+      fi
+      fail "Gateway control-plane acceptance failed; automatic rollback failed, preserve ${GATEWAY_ROLLBACK_ARCHIVE} for manual recovery"
+    fi
+    finalize_local_gateway_rollback
+  else
+    local quoted_dir quoted_node_id
+    quoted_dir="$(shell_quote "${DEPLOY_DIR%/}")"
+    quoted_node_id="$(shell_quote "${NODE_ID}")"
+    if ! ssh -o BatchMode=yes "${TARGET}" "bash -s -- ${quoted_dir} ${quoted_node_id}" <<<"${verify_script}"; then
+      if rollback_remote_gateway; then
+        fail "Gateway control-plane acceptance failed; previous Gateway restored"
+      fi
+      fail "Gateway control-plane acceptance failed; automatic rollback failed, preserve ${DEPLOY_DIR%/}/.gateway-rollback.tgz for manual recovery"
+    fi
+    if [[ "${REMOTE_GATEWAY_ROLLBACK_PENDING}" == "1" ]]; then
+      ssh -o BatchMode=yes "${TARGET}" "rm -f -- $(shell_quote "${DEPLOY_DIR%/}/.gateway-rollback.tgz")" >/dev/null 2>&1 || true
+      REMOTE_GATEWAY_ROLLBACK_PENDING=0
+    fi
+  fi
+  log "Gateway control-plane acceptance passed"
+}
+
+verify_gateway_control_plane
 
 configure_target_ca() {
   [[ "${TLS_MODE_RESOLVED}" == internal && -n "${PUBLIC_HOST}" && "${NO_START}" -eq 0 && "${TARGET_CA}" != skip ]] || return 0

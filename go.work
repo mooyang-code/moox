@@ -39,7 +39,7 @@ use (
 	./packages/jetstream
 	./packages/marketfetchpb
 	./packages/metricspb
-	./packages/msgbox
+	./packages/notification
 	./packages/observabilitypb
 	./packages/pyruntime
 	./packages/report

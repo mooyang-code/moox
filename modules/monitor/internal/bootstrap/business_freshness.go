@@ -143,6 +143,13 @@ func buildBusinessFreshnessReporter(
 			}
 		}
 		for _, check := range existing {
+			// Market canaries are evaluated by the dedicated watchdog below the
+			// scheduler. Business freshness must not synthesize a success for an
+			// absent overview item, otherwise a real canary failure is immediately
+			// resolved by a concurrent no_longer_expected result.
+			if strings.HasPrefix(check.CheckID, "market_canary:") {
+				continue
+			}
 			key := check.SpaceID + "\x00" + check.CheckID
 			if _, frozen := suppressed[key]; frozen {
 				// Suppression avoids duplicating a producer-stale signal, but the

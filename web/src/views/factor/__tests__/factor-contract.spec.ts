@@ -63,4 +63,11 @@ describe("factor management contract", () => {
     expect(factorDefinitionsView).toContain('data-index="lookback_periods"');
     expect(factorDefinitionsView).toContain("return result");
   });
+
+  it("keeps source hash and source code in the factor detail drawer", () => {
+    expect(factorDefinitionsView).not.toContain('title="源码Hash" data-index="source_hash"');
+    expect(factorDefinitionsView).toContain('label="源码Hash"');
+    expect(factorDefinitionsView).toContain("CodeBlock");
+    expect(factorDefinitionsView).toContain('language="python"');
+  });
 });

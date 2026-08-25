@@ -110,6 +110,31 @@ func TestPeriodBackfillRequiresPrimaryReaderForNewTimeSeriesView(t *testing.T) {
 	}
 }
 
+func TestPeriodBackfillActivatesWithAvailableHistoryBelowTarget(t *testing.T) {
+	engine := &primaryHistoryBackfillEngine{}
+	view := &pb.View{
+		SpaceId: "space", ViewId: "prices", Engine: "duckdb", PrimaryDatasetId: "market",
+		FilterJson: `{"freq":"1m"}`,
+	}
+	svc := &Service{
+		engines:      map[string]viewindex.Engine{"duckdb": engine},
+		indexEngine:  map[string]string{"prices-b": "duckdb"},
+		schemas:      map[string]viewindex.ViewIndexSchema{"prices-b": {SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market", Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema"}},
+		views:        map[viewRef]*viewRuntime{{spaceID: "space", viewID: "prices"}: {next: "prices-b"}},
+		catalogViews: map[viewRef]*pb.View{{spaceID: "space", viewID: "prices"}: view},
+	}
+	reader := &primaryHistoryRangeReader{rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{
+		SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-18T00:00:00Z", SeriesTag: "venue:binance",
+	}}}}
+	written, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 0, 1000, defaultMaxHistoryScanRows)
+	if err != nil {
+		t.Fatalf("partial period backfill: %v", err)
+	}
+	if written != 1 || engine.writeRows != 1 {
+		t.Fatalf("written=%d engine_rows=%d, want one available row", written, engine.writeRows)
+	}
+}
+
 func TestFactorResultViewMayStartEmptyBeforeFirstFactorPeriod(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
 	view := &pb.View{

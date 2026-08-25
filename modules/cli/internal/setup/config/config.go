@@ -161,8 +161,9 @@ func (s StorageView) ResolvePolicy(spaceID, viewID string) ResolvedStorageViewPo
 	return policy
 }
 
-type Monitoring struct {
-	WeComWebhook string `toml:"wecom_webhook"`
+type Notification struct {
+	ChannelType string `toml:"channel_type"`
+	WebhookURL  string `toml:"webhook_url"`
 }
 
 type Host struct {
@@ -281,7 +282,7 @@ type Manifest struct {
 	Paths        Paths        `toml:"paths"`
 	DNSResolver  DNSResolver  `toml:"dns_resolver"`
 	StorageView  StorageView  `toml:"storage_view"`
-	Monitoring   Monitoring   `toml:"monitoring"`
+	Notification Notification `toml:"notification"`
 	Factors      FactorSetup  `toml:"factors"`
 	SCFFetcher   SCFFetcher   `toml:"scf_fetcher"`
 	ControlHost  Host         `toml:"control_host"`
@@ -469,9 +470,16 @@ func validate(manifest *Manifest) error {
 	if !manifest.EventBus.TLSEnabled {
 		return fmt.Errorf("config_invalid: eventbus.tls_enabled must be true")
 	}
-	manifest.Monitoring.WeComWebhook = strings.TrimSpace(manifest.Monitoring.WeComWebhook)
-	if manifest.Monitoring.WeComWebhook != "" && !validHTTPSWebhook(manifest.Monitoring.WeComWebhook) {
-		return fmt.Errorf("config_invalid: monitoring.wecom_webhook must be a valid HTTPS URL")
+	manifest.Notification.ChannelType = strings.TrimSpace(manifest.Notification.ChannelType)
+	if manifest.Notification.ChannelType == "" {
+		manifest.Notification.ChannelType = "wecom"
+	}
+	if manifest.Notification.ChannelType != "wecom" && manifest.Notification.ChannelType != "feishu" {
+		return fmt.Errorf("config_invalid: notification.channel_type must be wecom or feishu")
+	}
+	manifest.Notification.WebhookURL = strings.TrimSpace(manifest.Notification.WebhookURL)
+	if manifest.Notification.WebhookURL != "" && !validNotificationWebhook(manifest.Notification.ChannelType, manifest.Notification.WebhookURL) {
+		return fmt.Errorf("config_invalid: notification.webhook_url must use HTTPS and match an approved %s platform host", manifest.Notification.ChannelType)
 	}
 	if err := validateSCFFetcher(&manifest.SCFFetcher); err != nil {
 		return err
@@ -1011,6 +1019,25 @@ func validHTTPSWebhook(rawURL string) bool {
 	parsed, err := url.ParseRequestURI(rawURL)
 	return err == nil && parsed.Scheme == "https" && parsed.Host != "" &&
 		parsed.User == nil && parsed.Fragment == ""
+}
+
+func validNotificationWebhook(channelType, rawURL string) bool {
+	if !validHTTPSWebhook(rawURL) {
+		return false
+	}
+	parsed, err := url.ParseRequestURI(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	switch channelType {
+	case "wecom":
+		return host == "qyapi.weixin.qq.com"
+	case "feishu":
+		return host == "open.feishu.cn" || strings.HasSuffix(host, ".feishu.cn") || strings.HasSuffix(host, ".larksuite.com")
+	default:
+		return false
+	}
 }
 
 var (

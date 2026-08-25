@@ -141,6 +141,38 @@ grep -Fq -- '--disable-storage-shard' "${TMP_ROOT}/unpacked/start.sh"
 ! grep -Fq -- '--disable-storage-node' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'SCF_SERVICE_GATEWAY_TARGET="${MOOX_SCF_SERVICE_GATEWAY_TARGET:-https://106.53.107.122:11001}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'SCF_STORAGE_RPC_GATEWAY_TARGET="${MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET:-ip://106.53.107.122:11003}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq "gateway: reconciled native listener to %s for SCF target %s" "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'gateway native listener ${current_native:-<missing>} does not match expected ${expected_native}' "${TMP_ROOT}/unpacked/start.sh"
+
+run_native_listener_guard() {
+  local target="$1"
+  local initial_native="$2"
+  local expected_native="$3"
+  local fixture="${TMP_ROOT}/native-guard-${RANDOM}"
+  local check_script="${fixture}/check.sh"
+  mkdir -p "${fixture}/gateway/config"
+  cp "${TMP_ROOT}/unpacked/gateway/config/app.yaml" "${fixture}/gateway/config/app.yaml"
+  perl -0pi -e "s#native_addr:\\s*[^\\n]+#native_addr: ${initial_native}#" "${fixture}/gateway/config/app.yaml"
+  awk '
+    /^start_gateway\(\) \{/ { inside = 1 }
+    inside && /^[[:space:]]+runtime_identity_env moox_gateway/ { exit }
+    inside { print }
+  ' "${TMP_ROOT}/unpacked/start.sh" >"${check_script}"
+  printf '%s\n' '  return 0' '}' \
+    'WITH_GATEWAY=1' \
+    "ROOT=\"${fixture}\"" \
+    'PUBLIC_HOST="106.53.107.122"' \
+    "SCF_STORAGE_RPC_GATEWAY_TARGET=\"${target}\"" \
+    'start_gateway' >>"${check_script}"
+  bash "${check_script}"
+  grep -Fq "native_addr: ${expected_native}" "${fixture}/gateway/config/app.yaml"
+}
+
+# Exercise both the public promotion and the conflict-safe loopback path. The
+# latter must keep a public listener rather than downgrade it and strand SCF.
+run_native_listener_guard "ip://106.53.107.122:11003" "127.0.0.1:11003" "0.0.0.0:11003"
+run_native_listener_guard "ip://127.0.0.1:11003" "0.0.0.0:11003" "0.0.0.0:11003"
+run_native_listener_guard "ip://127.0.0.1:11003" "127.0.0.1:11003" "0.0.0.0:11003"
 grep -Fq '"MOOX_SCF_SERVICE_GATEWAY_TARGET=${SCF_SERVICE_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq '"MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET=${SCF_STORAGE_RPC_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'LOCAL_STORAGE_RPC_GATEWAY_TARGET="${MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET:-ip://127.0.0.1:11003}"' "${TMP_ROOT}/unpacked/start.sh"
@@ -150,6 +182,8 @@ grep -Fq '"MOOX_MONITOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGE
 grep -Fq '"MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq '"MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'reuse EventBus identities and refresh exported endpoints in ${eventbus_credentials_dir}' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'preserve EventBus identities after control data reset in ${eventbus_credentials_dir}' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'MOOX_PRESERVE_EXTERNAL_EVENTBUS_CREDENTIALS' "${TMP_ROOT}/unpacked/start.sh"
 ! grep -Fq 'Reuse Collector' "${TMP_ROOT}/unpacked/start.sh"
 
 PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \

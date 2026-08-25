@@ -74,7 +74,7 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	config := MarketCanaryConfig{
 		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
 		SeriesTag: stringPtr("venue:binance"),
-		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+		Freshness: 3 * time.Minute, ReturnThreshold: 0.05,
 	}
 	auth := &commonpb.AuthInfo{AppId: "monitor-market-canary", AppKey: "derived-key"}
 	result := (MarketCanary{Reader: reader, AuthInfo: auth, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
@@ -89,7 +89,7 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	require.Len(t, reader.request.GetKeys(), 24)
 	require.Equal(t, now.Format(time.RFC3339Nano), reader.request.GetKeys()[0].GetDataTime())
 	require.Equal(t, now.Add(-23*time.Minute).Format(time.RFC3339Nano), reader.request.GetKeys()[23].GetDataTime())
-	require.Equal(t, []string{"close", "volume"}, reader.request.GetColumnNames())
+	require.Equal(t, []string{"close"}, reader.request.GetColumnNames())
 	require.Nil(t, reader.request.GetTimeRange())
 	require.Equal(t, auth, reader.request.GetAuthInfo())
 
@@ -105,22 +105,22 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	require.Equal(t, "market_canary_threshold", diagnostic.Type)
 	require.Equal(t, 100.0, diagnostic.PreviousClose)
 	require.Equal(t, 110.0, diagnostic.CurrentClose)
-	require.Equal(t, 10.0, diagnostic.PreviousVolume)
-	require.Equal(t, 12.0, diagnostic.CurrentVolume)
+	require.InDelta(t, 0.1, diagnostic.PriceReturn, 1e-12)
 }
 
-func TestMarketCanaryIgnoresVolumeRatioWithoutPreviousBaseline(t *testing.T) {
+func TestMarketCanaryIgnoresVolumeChanges(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
-		marketCanaryRow(now.Add(-2*time.Minute), 100, 0),
+		marketCanaryRow(now.Add(-2*time.Minute), 100, 10),
 		marketCanaryRow(now.Add(-time.Minute), 100.1, 5000),
 	}}
 	config := MarketCanaryConfig{
 		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "THIN-USDT", Frequency: "1m",
-		SeriesTag: stringPtr("venue:binance"),
-		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+		SeriesTag: stringPtr("venue:binance"), Freshness: 3 * time.Minute, ReturnThreshold: 0.05,
 	}
+
 	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
+
 	require.True(t, result.Success)
 }
 
@@ -135,7 +135,7 @@ func TestMarketCanaryPageDoesNotMixVenuesAtSameTimestamp(t *testing.T) {
 	config := MarketCanaryConfig{
 		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
 		SeriesTag: stringPtr("venue:binance"),
-		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+		Freshness: 3 * time.Minute, ReturnThreshold: 0.05,
 	}
 	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.True(t, result.Success)
@@ -151,7 +151,7 @@ func TestMarketCanaryPreservesStorageRejectionDetail(t *testing.T) {
 			SpaceID: "crypto", DatasetID: "spot_kline_1h",
 			SubjectID: "BTC-USDT", Frequency: "1m",
 			SeriesTag: stringPtr("venue:binance"),
-			Freshness: time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+			Freshness: time.Minute, ReturnThreshold: 0.05,
 		},
 	}).Run(t.Context())
 
@@ -169,7 +169,7 @@ func TestMarketCanaryExactWindowCoversConfiguredFreshness(t *testing.T) {
 		Config: MarketCanaryConfig{
 			SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
 			SeriesTag: stringPtr("venue:binance"),
-			Freshness: 150 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+			Freshness: 150 * time.Minute, ReturnThreshold: 0.05,
 		},
 		Now: func() time.Time { return now },
 	}).Run(t.Context())
@@ -186,7 +186,7 @@ func TestMarketCanaryRejectsInvalidFrequency(t *testing.T) {
 			SpaceID: "crypto", DatasetID: "spot_kline_1h",
 			SubjectID: "BTC-USDT", Frequency: "garbage",
 			SeriesTag: stringPtr("venue:binance"),
-			Freshness: time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+			Freshness: time.Minute, ReturnThreshold: 0.05,
 		},
 	}).Run(t.Context())
 

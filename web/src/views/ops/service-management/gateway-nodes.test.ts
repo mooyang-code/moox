@@ -29,14 +29,15 @@ const normalizeSource = (source: string) => source.replace(/\s+/g, "").replace(/
 describe("gateway node and service instance contracts", () => {
   beforeEach(() => mockedCallControl.mockReset());
 
-  it("keeps the observability overview and service management tabs in the required order", () => {
+  it("keeps the health and service management tabs in the required order", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     const normalized = normalizeSource(source);
-    const positions = ["总览", "网关节点", "服务实例", "可用性监控", "应用指标"].map(label =>
+    const positions = ["健康监控", "网关节点", "服务实例"].map(label =>
       normalized.indexOf(`label:"${label}"`)
     );
     expect(positions.every(position => position >= 0)).toBe(true);
-    expect(positions).toEqual([...positions].sort((left, right) => left - right));
+    expect(positions[0]).toBeGreaterThan(positions[2]);
+    expect(positions[1]).toBeLessThan(positions[2]);
   });
 
   it("labels heartbeat and route hash state without relying on color alone", () => {
@@ -146,5 +147,16 @@ describe("gateway node and service instance contracts", () => {
     expect(instancesSource).toContain("reportControlError");
     expect(normalizedNodes).toContain("},reportControlError);");
     expect(normalizedInstances).toContain("},reportControlError);");
+  });
+
+  it("keeps health monitoring as the last tab and removes its embedded duplicate title", () => {
+    const healthSource = fs.readFileSync(path.resolve(__dirname, "../health-monitor/index.vue"), "utf8");
+    expect(healthSource).toContain("props.embedded");
+    expect(healthSource).toContain("@click=\"openItem(item)\"");
+    expect(healthSource).not.toContain("@click.stop=\"openItem(item)\"");
+    expect(healthSource).not.toContain("@click.stop=\"openItem(item)\">详情");
+    expect(healthSource).toContain('width="min(860px, 100vw)"');
+    expect(healthSource).toContain("最后上报：");
+    expect(healthSource).toContain("displayConclusion");
   });
 });

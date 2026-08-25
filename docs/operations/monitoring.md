@@ -69,12 +69,12 @@ masking or being masked by the K-line View or Primary dataset.
 | Failure | Detection and recovery |
 | --- | --- |
 | Monitor process exits | systemd or cron restarts it. This does not detect a dead Monitor host. |
-| Monitor host is unreachable | The designated SCF Sentinel fails `monitor_ready` and sends directly through `msgbox`. |
+| Monitor host is unreachable | The designated SCF Sentinel fails `monitor_ready` and sends through the configured notification channel. |
 | HostAgent exits or its host disconnects | Monitor marks that stable four-character `agent_id` unreachable after 90 seconds. Presence state is in SQLite and survives Monitor restart; pre-migration UUIDs remain queryable as aliases. |
 | HostAgent identity upgrade/rollback | The runtime uses the compact ID, while the identity file keeps the legacy UUID and `compact_agent_id` during the compatibility window. Roll back HostAgent and Monitor as a versioned pair; do not mix a pre-compact Monitor with a database already migrated to compact alert identities. |
 | One of two same-named service instances exits | Report envelope identity keeps `instance_id` and `node_id` distinct; only the missing instance is stale. |
 | SCF heartbeat stops | CloudNode changes that function to timeout and excludes it from scheduling. |
-| EventBus is unavailable | Monitor readiness becomes false. SCF health publication fails and the Sentinel uses direct `msgbox`. |
+| EventBus is unavailable | Monitor readiness becomes false. SCF health publication fails and the Sentinel uses the configured notification channel. |
 | A business check fails while the central path is healthy | The result goes through EventBus and Monitor; SCF does not bypass Monitor. |
 
 When a HostAgent is registered and the WeCom webhook is configured, Monitor

@@ -235,7 +235,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 				// A from-scratch build is primed directly from the replayed
 				// durable stream. Once the row is safely written to B it may be
 				// ACKed; reconciliation keeps B non-authoritative until the
-				// configured minimum lookback is covered.
+				// replacement is durably READY and activated.
 				runtime.mu.Unlock()
 				continue
 			}

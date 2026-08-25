@@ -4,8 +4,8 @@
 实时 Dataset 健康事实，不把这些检查称为处理流水线。
 
 Monitor 还消费 `moox.metrics.snapshot.reported.v1`，将每个已注册 tRPC
-实例的有界 Prometheus snapshot 写入 Storage 时序历史，并提供 metric
-catalog/latest/history API、看板和扁平 AND/OR 规则。Monitor 不抓取服务的
+实例的有界 Prometheus snapshot 写入 Storage 时序历史，并在内部生成业务健康事实。
+原始指标目录、历史和技术标签不对用户开放，也不提供自定义规则。Monitor 不抓取服务的
 `/metrics`，也不依赖 Prometheus Server 或 Pushgateway；控制面与 Storage 部署完成后，
 由 `moox-cli setup init` 注册并校验 Storage 元数据。
 
@@ -16,7 +16,7 @@ catalog/latest/history API、看板和扁平 AND/OR 规则。Monitor 不抓取�
 ## 持久化边界
 
 `internal/store` 负责 Monitor 控制面数据（检查、结果和告警）。
-`internal/metrics` 是独立的指标持久化 bounded context，负责指标目录、去重、最新值和规则状态；两者共享同一个 SQLite 文件，但通过明确的 Store 类型隔离职责。
+`internal/metrics` 是独立的指标持久化 bounded context，负责消息去重、最新值和内部健康样本；两者共享同一个 SQLite 文件，但通过明确的 Store 类型隔离职责。
 
 ## 历史清理与容量
 
@@ -38,7 +38,7 @@ catalog/latest/history API、看板和扁平 AND/OR 规则。Monitor 不抓取�
 
 ## 定时任务
 
-检查调度和指标规则分别由 `check_schedule.timer`（30 秒）和 `metric_rule.timer`（60 秒）执行，均在启动时立即运行。所有维护 Handler 都同步返回错误、带显式超时并跳过同进程重入。Monitor 是单实例服务，不做跨实例 Owner 选举。
+检查调度由 `check_schedule.timer`（30 秒）执行，启动时立即运行；指标快照由 `metrics.timer`（30 秒）接收和过滤。所有维护 Handler 都同步返回错误、带显式超时并跳过同进程重入。Monitor 是单实例服务，不做跨实例 Owner 选举。
 
 ## 配置
 
@@ -70,15 +70,21 @@ Admin 只作为控制面和 SysDeploy 注册中心。Monitor 会有界分页读�
 管理 API 通过 `trpc.moox.monitor.MonitorMgr` 暴露，可由 Admin 网关转发：
 
 ```text
-/api/admin/moox_monitor/ListChecks
-/api/admin/moox_monitor/GetOverview
-/api/admin/moox_monitor/RunCheckOnce
+/api/admin/moox_monitor/GetHealthOverview
+/api/admin/moox_monitor/GetNotificationChannel
+/api/admin/moox_monitor/UpdateNotificationChannel
+/api/admin/moox_monitor/ListHostAgents
+/api/admin/moox_monitor/QueryHostMetricHistory
 /api/admin/moox_monitor/GetDoctorContext
 ```
 
 `GetDoctorContext` 只聚合 Manifest、SysDeploy、最新检查、Reporter/功能指标、主机资源和告警事实，组件最多 64 个、模块健康检查最多 32 个、响应最多 2 MiB。它不抓取 `/metrics`、不运行 Doctor Engine，也不执行恢复动作。Monitor V1 只能部署一个实例，不包含 Peer、Owner 或 Lease。
 
-SysDeploy 同步可手动触发 `SyncSystemChecks`；同步后的内置检查使用 `source=sysdeploy` 和 `group_name=moox-system`。
+SysDeploy 同步由 Monitor 内部定时任务触发；同步后的内置检查使用 `source=sysdeploy` 和
+`group_name=moox-system`。管理台只展示健康摘要，不提供检查项的增删改或手动运行。
+
+通知配置保存在 `t_monitor_notification_channels` 的固定 `global` 行，支持企业微信和飞书。
+Webhook 只返回掩码值；清空 URL 后仍记录告警状态和事件，但停止站外发送。
 
 ## 验证
 

@@ -11,23 +11,22 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
+	"github.com/mooyang-code/moox/packages/notification"
 	"gorm.io/gorm"
 )
 
 // AlertEvaluator computes host threshold transitions after Storage accepts a sample.
 // Alert failures never participate in the EventBus ACK decision.
 type AlertEvaluator struct {
-	Cache      *RuleCache
-	Repository *store.AlertRepository
-	Now        func() time.Time
-	Webhook    func(context.Context, string, string) (*domain.WebhookChannel, error)
-	Notifier   alerting.Notifier
-	mu         sync.Mutex
-	seen       map[string]struct{}
+	Cache        *RuleCache
+	Repository   *store.AlertRepository
+	Now          func() time.Time
+	Notification func(context.Context) (*domain.NotificationChannel, error)
+	mu           sync.Mutex
+	seen         map[string]struct{}
 }
 
 func (e *AlertEvaluator) Evaluate(ctx context.Context, agentID, messageID string, snapshot *hostmetricpb.HostSnapshot, observedAt time.Time) error {
@@ -38,6 +37,7 @@ func (e *AlertEvaluator) Evaluate(ctx context.Context, agentID, messageID string
 	if e.Now != nil {
 		now = e.Now().UTC()
 	}
+	var firstErr error
 	for metric, value := range hostValues(snapshot) {
 		for _, rule := range e.Cache.Rules(agentID, metric) {
 			if e.isSeen(messageID, rule.RuleID) {
@@ -48,12 +48,14 @@ func (e *AlertEvaluator) Evaluate(ctx context.Context, agentID, messageID string
 				continue
 			}
 			if err := e.transition(ctx, rule, agentID, messageID, value.value >= threshold, recovery, now, value.value); err != nil {
-				return err
+				if firstErr == nil {
+					firstErr = err
+				}
 			}
 			e.remember(messageID, rule.RuleID)
 		}
 	}
-	return nil
+	return firstErr
 }
 
 func (e *AlertEvaluator) isSeen(messageID, ruleID string) bool {
@@ -148,7 +150,9 @@ func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, 
 		return err
 	}
 	if state == nil {
-		state = &domain.AlertState{SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, Status: domain.AlertStatusOK}
+		state = &domain.AlertState{SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, Status: domain.AlertStatusOK, DedupeKey: rule.RuleID + ":" + rule.CheckID}
+	} else if strings.TrimSpace(state.DedupeKey) == "" {
+		state.DedupeKey = rule.RuleID + ":" + rule.CheckID
 	}
 	if failing {
 		state.FailureCount++
@@ -158,11 +162,11 @@ func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, 
 			state.TriggeredAt = &now
 			state.ResolvedAt = nil
 			state.LastReminderAt = &now
-			return e.record(ctx, rule, agentID, messageID, state, value, domain.AlertEventTriggered, now)
+			return e.record(ctx, rule, agentID, messageID, state, value, domain.AlertEventTriggered, now, true)
 		} else if state.Status == domain.AlertStatusFiring &&
 			reminderDue(state.LastReminderAt, now, rule.MinimumReminderIntervalSeconds) {
 			state.LastReminderAt = &now
-			return e.record(ctx, rule, agentID, messageID, state, value, domain.AlertEventReminder, now)
+			return e.record(ctx, rule, agentID, messageID, state, value, domain.AlertEventReminder, now, true)
 		}
 	} else {
 		state.SuccessCount++
@@ -170,9 +174,14 @@ func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, 
 		if state.Status == domain.AlertStatusFiring && state.SuccessCount >= positive(rule.SuccessThreshold) && value <= recovery {
 			state.Status = domain.AlertStatusResolved
 			state.ResolvedAt = &now
-			if err := e.record(ctx, rule, agentID, messageID, state, value, domain.AlertEventResolved, now); err != nil {
+			if err := e.record(ctx, rule, agentID, messageID, state, value, domain.AlertEventResolved, now, false); err != nil {
+				state.Status = domain.AlertStatusFiring
+				state.ResolvedAt = nil
+				state.SuccessCount = 0
+				state.LastReminderAt = nil
 				return err
 			}
+			return e.Repository.UpsertState(ctx, state)
 		}
 	}
 	return e.Repository.UpsertState(ctx, state)
@@ -188,35 +197,55 @@ func reminderDue(last *time.Time, now time.Time, intervalSeconds int) bool {
 	return now.Sub(*last) >= time.Duration(intervalSeconds)*time.Second
 }
 
-func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, agentID, messageID string, state *domain.AlertState, value float64, eventType string, now time.Time) error {
+func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, agentID, messageID string, state *domain.AlertState, value float64, eventType string, now time.Time, persistBeforeSend bool) error {
 	payload, _ := json.Marshal(map[string]any{"agent_id": agentID, "value": value, "metric": strings.TrimPrefix(rule.CheckID, HostRulePrefix)})
 	if err := e.Repository.CreateEventIdempotent(ctx, &domain.AlertEvent{EventID: deterministicEventID(messageID, rule.RuleID, eventType), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: eventType, Status: state.Status, Payload: string(payload), CreatedAt: now}); err != nil {
 		return err
 	}
-	if err := e.Repository.UpsertState(ctx, state); err != nil {
-		return err
-	}
-	if e.Webhook == nil || e.Notifier == nil || rule.WebhookID == "" {
-		return nil
-	}
-	webhook, err := e.Webhook(ctx, SpaceID, rule.WebhookID)
-	if err != nil || webhook == nil {
-		return nil
+	if persistBeforeSend {
+		if err := e.Repository.UpsertState(ctx, state); err != nil {
+			return err
+		}
 	}
 	metric := strings.TrimPrefix(rule.CheckID, HostRulePrefix)
-	event := alerting.Event{
-		EventID: uuid.NewString(), EventType: eventType, Status: state.Status,
-		Message: fmt.Sprintf("%s host metric %s=%v", agentID, metric, value),
-		Check:   domain.Check{SpaceID: SpaceID, CheckID: rule.CheckID, Name: fmt.Sprintf("主机 %s 的 %s 指标", agentID, metric)},
-		Result: domain.CheckResult{
-			SpaceID: SpaceID, CheckID: rule.CheckID, InstanceID: agentID,
-			Success: state.Status != domain.AlertStatusFiring, ErrorMessage: fmt.Sprintf("当前值：%v", value), CheckedAt: now,
-		},
-		Rule: rule, DedupeKey: rule.RuleID + ":" + rule.CheckID,
-	}
-	if err := e.Notifier.Send(ctx, *webhook, event); err != nil {
-		// Notification failure is recorded best-effort and never rolls back the sample.
-		_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
+	message := fmt.Sprintf("%s 主机指标 %s=%v", agentID, metric, value)
+	if e.Notification != nil {
+		channel, err := e.Notification(ctx)
+		if err != nil {
+			if persistBeforeSend {
+				state.LastReminderAt = nil
+				_ = e.Repository.UpsertState(ctx, state)
+			}
+			_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
+			return err
+		}
+		if channel == nil || strings.TrimSpace(channel.WebhookURL) == "" {
+			return nil
+		}
+		sender, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channel.ChannelType), WebhookURL: channel.WebhookURL})
+		if err != nil {
+			if persistBeforeSend {
+				state.LastReminderAt = nil
+				_ = e.Repository.UpsertState(ctx, state)
+			}
+			_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
+			return err
+		}
+		severity := notification.SeverityCritical
+		if eventType == domain.AlertEventResolved {
+			severity = notification.SeverityInfo
+		} else if eventType == domain.AlertEventReminder {
+			severity = notification.SeverityWarning
+		}
+		if err := sender.Send(ctx, notification.Message{Key: rule.RuleID + ":" + rule.CheckID, Severity: severity, Title: fmt.Sprintf("主机 %s 的 %s 指标", agentID, metric), Body: message}); err != nil {
+			if persistBeforeSend {
+				state.LastReminderAt = nil
+				_ = e.Repository.UpsertState(ctx, state)
+			}
+			_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
+			return err
+		}
+		return nil
 	}
 	return nil
 }

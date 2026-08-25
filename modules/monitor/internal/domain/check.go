@@ -7,7 +7,6 @@ const (
 	CheckKindTCP      = "tcp"
 	CheckKindExternal = "external"
 
-	CheckSourceManual        = "manual"
 	CheckSourceSysDeploy     = "sysdeploy"
 	CheckSourceObservability = "observability"
 )

@@ -37,7 +37,6 @@
             <template #cell="{ record }">{{ record.outputs.join(", ") }}</template>
           </a-table-column>
           <a-table-column title="回看周期数" data-index="lookback_periods" :width="110" />
-          <a-table-column title="源码Hash" data-index="source_hash" :width="220" :ellipsis="true" :tooltip="true" />
           <a-table-column title="状态" :width="100">
             <template #cell="{ record }">
               <a-tag size="small" :color="factorStatusColor(record.status)">{{ record.status }}</a-tag>
@@ -46,9 +45,10 @@
           <a-table-column title="更新时间" :width="180">
             <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
           </a-table-column>
-          <a-table-column title="操作" :width="230" align="center" :fixed="'right'">
+          <a-table-column title="操作" :width="260" align="center" :fixed="'right'">
             <template #cell="{ record }">
               <a-space>
+                <a-button size="mini" type="text" @click="openDetail(record)">详情</a-button>
                 <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
                 <a-button size="mini" type="text" @click="toggleStatus(record)">
                   {{ record.status === "enabled" ? "禁用" : "启用" }}
@@ -62,6 +62,31 @@
         </template>
       </a-table>
     </div>
+
+    <a-drawer v-model:visible="detailVisible" title="因子详情" :width="860">
+      <template v-if="selectedFactor">
+        <a-descriptions :column="2" bordered size="small">
+          <a-descriptions-item label="因子ID">{{ selectedFactor.factor_id }}</a-descriptions-item>
+          <a-descriptions-item label="模块名">{{ selectedFactor.name }}</a-descriptions-item>
+          <a-descriptions-item label="状态">
+            <a-tag size="small" :color="factorStatusColor(selectedFactor.status)">
+              {{ selectedFactor.status === "enabled" ? "启用" : "停用" }}
+            </a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="回看周期数">{{ selectedFactor.lookback_periods }}</a-descriptions-item>
+          <a-descriptions-item label="输入列" :span="2">{{ selectedFactor.input_columns.join(", ") || "-" }}</a-descriptions-item>
+          <a-descriptions-item label="输出列" :span="2">{{ selectedFactor.outputs.join(", ") || "-" }}</a-descriptions-item>
+          <a-descriptions-item label="源码Hash" :span="2">
+            <span class="source-hash">{{ selectedFactor.source_hash || "-" }}</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="更新时间" :span="2">{{ formatTime(selectedFactor.updated_at) }}</a-descriptions-item>
+        </a-descriptions>
+        <div class="detail-section">
+          <h3>源码</h3>
+          <CodeBlock :code="selectedFactor.source_code" language="python" />
+        </div>
+      </template>
+    </a-drawer>
 
     <a-modal
       v-model:visible="visible"
@@ -111,6 +136,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createFactorDef, deleteFactorDef, listFactorDefs, setFactorStatus, updateFactorDef } from "@/api/factor";
 import type { FactorDef } from "@/api/factor/types";
+import CodeBlock from "@/components/code-block/index.vue";
 import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
 import { validateFactorParamsJSON } from "./factor-form";
 
@@ -119,7 +145,9 @@ defineOptions({ name: "FactorDefinitions" });
 const rows = ref<FactorDef[]>([]);
 const loading = ref(false);
 const visible = ref(false);
+const detailVisible = ref(false);
 const editing = ref(false);
+const selectedFactor = ref<FactorDef | null>(null);
 const pagination = reactive(defaultPagination());
 const filters = reactive({ status: "" });
 const inputTags = ref<string[]>(["close"]);
@@ -185,6 +213,11 @@ function openCreate() {
   editing.value = false;
   resetForm();
   visible.value = true;
+}
+
+function openDetail(record: FactorDef) {
+  selectedFactor.value = record;
+  detailVisible.value = true;
 }
 
 function openEdit(record: FactorDef) {
@@ -289,6 +322,22 @@ onMounted(load);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.detail-section {
+  margin-top: 20px;
+}
+
+.detail-section h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.source-hash {
+  overflow-wrap: anywhere;
+  color: var(--color-text-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
 }
 
 @media (max-width: 768px) {

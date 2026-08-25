@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/notification"
 	"gorm.io/gorm"
 )
 
@@ -23,34 +25,26 @@ type Event struct {
 	DedupeKey string
 }
 
-type Notifier interface {
-	Send(context.Context, domain.WebhookChannel, Event) error
-}
-
 type Options struct {
-	Notifier Notifier
-	Now      func() time.Time
+	Channel func(context.Context) (*domain.NotificationChannel, error)
+	Now     func() time.Time
 }
 
 type Evaluator struct {
-	alerts   *store.AlertRepository
-	notifier Notifier
-	now      func() time.Time
+	alerts  *store.AlertRepository
+	channel func(context.Context) (*domain.NotificationChannel, error)
+	now     func() time.Time
 }
 
 func NewEvaluator(alerts *store.AlertRepository, opts Options) *Evaluator {
-	notifier := opts.Notifier
-	if notifier == nil {
-		notifier = WebhookNotifier{}
-	}
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Evaluator{
-		alerts:   alerts,
-		notifier: notifier,
-		now:      now,
+		alerts:  alerts,
+		channel: opts.Channel,
+		now:     now,
 	}
 }
 
@@ -98,12 +92,25 @@ func (e *Evaluator) evaluateFailure(ctx context.Context, check domain.Check, res
 		state.TriggeredAt = &now
 		state.ResolvedAt = nil
 		state.LastReminderAt = &now
+		if err := e.alerts.UpsertState(ctx, state); err != nil {
+			return err
+		}
 		if err := e.recordAndSend(ctx, check, result, rule, state, domain.AlertEventTriggered); err != nil {
+			// Do not suppress the next sample after a transient notification
+			// failure. A nil reminder timestamp makes the next firing result a
+			// retry instead of waiting for the normal five-minute reminder.
+			state.LastReminderAt = nil
+			_ = e.alerts.UpsertState(ctx, state)
 			return err
 		}
 	} else if state.Status == domain.AlertStatusFiring && reminderDue(state.LastReminderAt, now, rule.MinimumReminderIntervalSeconds) {
 		state.LastReminderAt = &now
+		if err := e.alerts.UpsertState(ctx, state); err != nil {
+			return err
+		}
 		if err := e.recordAndSend(ctx, check, result, rule, state, domain.AlertEventReminder); err != nil {
+			state.LastReminderAt = nil
+			_ = e.alerts.UpsertState(ctx, state)
 			return err
 		}
 	}
@@ -120,8 +127,18 @@ func (e *Evaluator) evaluateSuccess(ctx context.Context, check domain.Check, res
 		state.ResolvedAt = &now
 		if rule.SendOnResolved {
 			if err := e.recordAndSend(ctx, check, result, rule, state, domain.AlertEventResolved); err != nil {
+				// Keep the alert firing until the recovery notification is
+				// delivered; a later healthy sample retries the notification.
+				state.Status = domain.AlertStatusFiring
+				state.ResolvedAt = nil
+				state.SuccessCount = 0
+				state.LastReminderAt = nil
 				return err
 			}
+			return e.alerts.UpsertState(ctx, state)
+		}
+		if err := e.alerts.UpsertState(ctx, state); err != nil {
+			return err
 		} else if err := e.recordEvent(ctx, check, result, rule, state, domain.AlertEventResolved, ""); err != nil {
 			return err
 		}
@@ -143,20 +160,46 @@ func (e *Evaluator) recordAndSend(ctx context.Context, check domain.Check, resul
 	if err := e.recordEventObject(ctx, event); err != nil {
 		return err
 	}
-	if strings.TrimSpace(rule.WebhookID) == "" {
-		return nil
-	}
-	webhook, err := e.alerts.GetWebhook(ctx, rule.SpaceID, rule.WebhookID)
-	if err != nil {
-		return err
-	}
-	if err := e.notifier.Send(ctx, *webhook, event); err != nil {
-		if recordErr := e.recordEvent(ctx, check, result, rule, state, domain.AlertEventSendFailed, err.Error()); recordErr != nil {
-			return errors.Join(err, recordErr)
+	var sendErr error
+	if e.channel != nil {
+		channel, err := e.channel(ctx)
+		if err != nil {
+			return e.recordSendFailure(ctx, check, result, rule, state, err)
 		}
-		return fmt.Errorf("send alert notification: %w", err)
+		if channel == nil || strings.TrimSpace(channel.WebhookURL) == "" {
+			return nil
+		}
+		sender, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channel.ChannelType), WebhookURL: channel.WebhookURL})
+		if err != nil {
+			return e.recordSendFailure(ctx, check, result, rule, state, err)
+		}
+		sendErr = sender.Send(ctx, notification.Message{Key: event.DedupeKey, Severity: notificationSeverity(eventType), Title: event.Check.Name, Body: event.Message})
+	}
+	if sendErr != nil {
+		return e.recordSendFailure(ctx, check, result, rule, state, fmt.Errorf("send alert notification: %w", sendErr))
 	}
 	return nil
+}
+
+func (e *Evaluator) recordSendFailure(ctx context.Context, check domain.Check, result domain.CheckResult, rule domain.AlertRule, state *domain.AlertState, sendErr error) error {
+	if sendErr == nil {
+		return nil
+	}
+	if recordErr := e.recordEvent(ctx, check, result, rule, state, domain.AlertEventSendFailed, "通知发送失败："+sendErr.Error()); recordErr != nil {
+		return errors.Join(sendErr, recordErr)
+	}
+	return sendErr
+}
+
+func notificationSeverity(eventType string) notification.Severity {
+	switch eventType {
+	case domain.AlertEventResolved:
+		return notification.SeverityInfo
+	case domain.AlertEventReminder:
+		return notification.SeverityWarning
+	default:
+		return notification.SeverityCritical
+	}
 }
 
 func (e *Evaluator) recordEvent(ctx context.Context, check domain.Check, result domain.CheckResult, rule domain.AlertRule, state *domain.AlertState, eventType, message string) error {
@@ -204,8 +247,30 @@ func dedupeKey(rule domain.AlertRule, check domain.Check) string {
 }
 
 func eventMessage(eventType string, check domain.Check, result domain.CheckResult) string {
-	if result.ErrorMessage != "" {
-		return fmt.Sprintf("%s %s: %s", check.CheckID, eventType, result.ErrorMessage)
+	name := strings.TrimSpace(check.Name)
+	if name == "" {
+		name = check.CheckID
 	}
-	return fmt.Sprintf("%s %s", check.CheckID, eventType)
+	status := map[string]string{
+		domain.AlertEventTriggered:  "触发告警",
+		domain.AlertEventReminder:   "告警提醒",
+		domain.AlertEventResolved:   "告警恢复",
+		domain.AlertEventSendFailed: "通知发送失败",
+	}[eventType]
+	if status == "" {
+		status = eventType
+	}
+	parts := []string{fmt.Sprintf("监控项：%s", name), fmt.Sprintf("状态：%s", status)}
+	if result.ErrorMessage != "" {
+		parts = append(parts, "原因："+result.ErrorMessage)
+	}
+	if !result.CheckedAt.IsZero() {
+		parts = append(parts, "检查时间："+result.CheckedAt.UTC().Format(time.RFC3339))
+	}
+	if check.Description != "" {
+		parts = append(parts, "建议："+strings.TrimSpace(check.Description))
+	}
+	return strings.Join(parts, "；")
 }
+
+func newEventID() string { return uuid.NewString() }

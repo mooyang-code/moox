@@ -12,7 +12,7 @@ run_go_tests() {
 
 for module in \
   packages/report \
-  packages/msgbox \
+  packages/notification \
   packages/events \
   modules/hostagent \
   modules/monitor \

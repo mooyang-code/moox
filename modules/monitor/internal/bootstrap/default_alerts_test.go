@@ -13,7 +13,7 @@ import (
 )
 
 func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
-	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test")
+	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -26,7 +26,7 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	for _, check := range []domain.Check{
 		{CheckID: "sysdeploy:node-a:moox_collector", Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, Enabled: true},
-		{SpaceID: "crypto", CheckID: "market_canary:kline:BTC-USDT:1m", Kind: domain.CheckKindExternal, Source: domain.CheckSourceManual, Enabled: true},
+		{SpaceID: "crypto", CheckID: "market_canary:kline:BTC-USDT:1m", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
 	} {
 		check := check
 		if err := repositories.Checks.Create(ctx, &check); err != nil {
@@ -58,7 +58,7 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 }
 
 func TestEnsureDefaultHostAlertRulesCoversRegisteredAgent(t *testing.T) {
-	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test")
+	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestEnsureDefaultHostAlertRulesCoversRegisteredAgent(t *testing.T) {
 }
 
 func TestEnsureDefaultCheckAlertRulesDisablesPersistedDefaultsWhenWebhookCleared(t *testing.T) {
-	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old")
+	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestEnsureDefaultCheckAlertRulesDisablesPersistedDefaultsWhenWebhookCleared
 	repositories := manager.Repositories()
 	check := domain.Check{
 		SpaceID: "crypto", CheckID: "market_canary:kline:BTC-USDT:1m",
-		Kind: domain.CheckKindExternal, Source: domain.CheckSourceManual, Enabled: true,
+		Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true,
 	}
 	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestEnsureDefaultCheckAlertRulesDisablesPersistedDefaultsWhenWebhookCleared
 		t.Fatal(err)
 	}
 
-	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", "")
+	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
 	if err := ensureDefaultCheckAlertRules(t.Context(), repositories); err != nil {
 		t.Fatal(err)
 	}
@@ -136,20 +136,17 @@ func TestEnsureDefaultCheckAlertRulesDisablesPersistedDefaultsWhenWebhookCleared
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rule.Enabled {
-		t.Fatal("default rule remained enabled after webhook was cleared")
+	if !rule.Enabled {
+		t.Fatal("default rule was disabled after webhook was cleared")
 	}
-	webhook, err := repositories.Alerts.GetWebhook(t.Context(), "crypto", defaultWebhookID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if webhook.Enabled {
-		t.Fatal("default webhook remained enabled after configuration was cleared")
+	channel, err := repositories.Notifications.GetGlobal(t.Context())
+	if err != nil || channel.WebhookURL != "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old" {
+		t.Fatalf("global channel = %+v err=%v", channel, err)
 	}
 }
 
 func TestEnsureDefaultCheckAlertRulesRotatesPersistedWebhook(t *testing.T) {
-	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old")
+	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +158,7 @@ func TestEnsureDefaultCheckAlertRulesRotatesPersistedWebhook(t *testing.T) {
 	repositories := manager.Repositories()
 	check := domain.Check{
 		SpaceID: "crypto", CheckID: "market_canary:kline:BTC-USDT:1m",
-		Kind: domain.CheckKindExternal, Source: domain.CheckSourceManual, Enabled: true,
+		Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true,
 	}
 	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
 		t.Fatal(err)
@@ -171,15 +168,15 @@ func TestEnsureDefaultCheckAlertRulesRotatesPersistedWebhook(t *testing.T) {
 	}
 
 	const rotated = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=new"
-	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", rotated)
+	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", rotated)
 	if err := ensureDefaultCheckAlertRules(t.Context(), repositories); err != nil {
 		t.Fatal(err)
 	}
-	webhook, err := repositories.Alerts.GetWebhook(t.Context(), "crypto", defaultWebhookID)
+	channel, err := repositories.Notifications.GetGlobal(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if webhook.URL != rotated || !webhook.Enabled {
-		t.Fatalf("rotated webhook = %+v", webhook)
+	if channel.WebhookURL != "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old" {
+		t.Fatalf("seeded global channel was overwritten on restart: %+v", channel)
 	}
 }

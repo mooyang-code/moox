@@ -101,7 +101,7 @@ func TestBuildSnapshotPreservesFamiliesAndLimits(t *testing.T) {
 
 func TestBuildSnapshotFiltersAndRejectsOversize(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	for _, name := range []string{"included_metric", "excluded_metric"} {
+	for _, name := range []string{"moox_included_metric", "go_excluded_metric"} {
 		g := prometheus.NewGauge(prometheus.GaugeOpts{Name: name, Help: name})
 		if err := registry.Register(g); err != nil {
 			t.Fatal(err)
@@ -109,7 +109,6 @@ func TestBuildSnapshotFiltersAndRejectsOversize(t *testing.T) {
 		g.Set(1)
 	}
 	cfg := validConfig("monitor")
-	cfg.IncludeRegex = "^included_"
 	cfg.MaxUncompressedBytes = 8
 	h, err := NewHandlerWithPublisher(cfg, nil, registry)
 	if err != nil {

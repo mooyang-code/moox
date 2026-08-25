@@ -422,7 +422,8 @@ func TestControlDeployOptionsUseManifestEventBusEndpoint(t *testing.T) {
 	require.Equal(t, "eventbus.example.test", opts.EventBusPublicAddress)
 	require.Equal(t, 4333, opts.EventBusPort)
 	require.True(t, opts.EventBusTLSEnabled)
-	require.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", opts.MonitoringWeComWebhook)
+	require.Equal(t, "wecom", opts.NotificationChannelType)
+	require.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", opts.NotificationWebhookURL)
 }
 
 func TestEventBusFirewallIPResolvesDNSWithoutChangingAdvertisedAddress(t *testing.T) {
@@ -620,8 +621,9 @@ secret_key = "cloud-test-secret"
 public_address = "eventbus.example.test"
 port = 4333
 tls_enabled = true
-[monitoring]
-wecom_webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
+[notification]
+channel_type = "wecom"
+webhook_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
 [control_host]
 name = "control"
 address = "203.0.113.8"

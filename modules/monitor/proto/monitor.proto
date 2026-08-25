@@ -7,21 +7,6 @@ import "host_metric.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen;monitorpb";
 
-enum CheckKind {
-  CHECK_KIND_UNSPECIFIED = 0;
-  CHECK_KIND_HTTP = 1;
-  CHECK_KIND_TCP = 2;
-  // External checks are updated by business freshness/reporting pipelines.
-  CHECK_KIND_EXTERNAL = 3;
-}
-
-enum CheckStatus {
-  CHECK_STATUS_UNSPECIFIED = 0;
-  CHECK_STATUS_OK = 1;
-  CHECK_STATUS_DEGRADED = 2;
-  CHECK_STATUS_DOWN = 3;
-}
-
 enum AlertStatus {
   ALERT_STATUS_UNSPECIFIED = 0;
   ALERT_STATUS_OK = 1;
@@ -36,89 +21,6 @@ enum AlertEventType {
   ALERT_EVENT_TYPE_RESOLVED = 3;
 }
 
-message MonitorCheck {
-  string space_id = 1;
-  string check_id = 2;
-  string name = 3;
-  string group_name = 4;
-  CheckKind kind = 5;
-  string url = 6;
-  string method = 7;
-  string headers_json = 8;
-  string body = 9;
-  string tcp_host = 10;
-  int32 tcp_port = 11;
-  int32 interval_seconds = 12;
-  int32 timeout_ms = 13;
-  string expected_status = 14;
-  int32 max_response_ms = 15;
-  string body_contains = 16;
-  bool enabled = 17;
-  string source = 18;
-  string labels_json = 19;
-  string description = 20;
-  string last_checked_at = 21;
-  string next_check_at = 22;
-  string created_at = 23;
-  string updated_at = 24;
-}
-
-message CheckResult {
-  string result_id = 1;
-  string space_id = 2;
-  string check_id = 3;
-  string instance_id = 4;
-  bool success = 5;
-  CheckStatus status = 6;
-  int32 http_status = 7;
-  bool connected = 8;
-  int64 latency_ms = 9;
-  string error_message = 10;
-  string body_excerpt = 11;
-  string checked_at = 12;
-}
-
-message WebhookChannel {
-  string space_id = 1;
-  string webhook_id = 2;
-  string name = 3;
-  string url = 4;
-  string method = 5;
-  string headers_json = 6;
-  string body_template = 7;
-  bool enabled = 8;
-  string created_at = 9;
-  string updated_at = 10;
-}
-
-message AlertRule {
-  string space_id = 1;
-  string rule_id = 2;
-  string check_id = 3;
-  string webhook_id = 4;
-  int32 failure_threshold = 5;
-  int32 success_threshold = 6;
-  int32 minimum_reminder_interval_seconds = 7;
-  bool send_on_resolved = 8;
-  bool enabled = 9;
-  string description = 10;
-  string created_at = 11;
-  string updated_at = 12;
-}
-
-message AlertState {
-  string space_id = 1;
-  string rule_id = 2;
-  string check_id = 3;
-  AlertStatus status = 4;
-  int32 failure_count = 5;
-  int32 success_count = 6;
-  string triggered_at = 8;
-  string resolved_at = 9;
-  string last_reminder_at = 10;
-  string dedupe_key = 11;
-}
-
 message AlertEvent {
   string event_id = 1;
   string space_id = 2;
@@ -131,305 +33,55 @@ message AlertEvent {
   string created_at = 10;
 }
 
-// Metrics catalog and history APIs. These APIs intentionally expose bounded
-// reads only; callers must provide a page or point limit.
-message MetricServiceInfo {
-  string service_name = 1;
-  string instance_id = 2;
-  string boot_id = 3;
-  string node_id = 4;
-  string version = 5;
-  string last_seen_at = 6;
-  bool stale = 7;
+message HealthAlert {
+  string id = 1;
+  string title = 2;
+  string status = 3;
+  string reason = 4;
+  string checked_at = 5;
+  string severity = 6;
 }
-message MetricNameInfo {
-  string service_name = 1;
-  string metric_name = 2;
-  string metric_type = 3;
-  string help = 4;
-  uint32 series_count = 5;
-  string last_seen_at = 6;
-}
-message MetricSeriesInfo {
-  string series_id = 1;
-  string service_name = 2;
-  string instance_id = 3;
-  string metric_name = 4;
-  string metric_type = 5;
-  string labels_json = 6;
-  string last_seen_at = 7;
-  bool stale = 8;
-}
-enum MetricHistoryOrder {
-  METRIC_HISTORY_ORDER_UNSPECIFIED = 0;
-  METRIC_HISTORY_ORDER_ASC = 1;
-  METRIC_HISTORY_ORDER_DESC = 2;
-}
-message MetricLatestPoint {
-  string series_id = 1;
-  string service_name = 2;
-  string instance_id = 3;
-  string metric_name = 4;
-  string metric_type = 5;
-  string labels_json = 6;
-  double value = 7;
-  string observed_at = 8;
-  bool stale = 9;
-  string message_id = 10;
-}
-message MetricHistoryPoint {
-  string series_id = 1;
-  double value = 2;
-  string observed_at = 3;
-  string labels_json = 4;
-  string message_id = 5;
-}
-message ListMetricServicesReq { string space_id = 1; common.Page page = 2; }
-message ListMetricServicesRsp { common.RetInfo ret_info = 1; repeated MetricServiceInfo services = 2; common.PageResult page_result = 3; }
-message ListMetricNamesReq { string space_id = 1; string service_name = 2; common.Page page = 3; }
-message ListMetricNamesRsp { common.RetInfo ret_info = 1; repeated MetricNameInfo names = 2; common.PageResult page_result = 3; }
-message ListMetricSeriesReq { string space_id = 1; string service_name = 2; string metric_name = 3; string labels_json = 4; common.Page page = 5; }
-message ListMetricSeriesRsp { common.RetInfo ret_info = 1; repeated MetricSeriesInfo series = 2; common.PageResult page_result = 3; }
-message GetMetricLatestReq { string space_id = 1; string series_id = 2; }
-message GetMetricLatestRsp { common.RetInfo ret_info = 1; MetricLatestPoint latest = 2; }
-message QueryMetricHistoryReq {
-  string space_id = 1;
-  string series_id = 2;
-  string service_name = 3;
-  string metric_name = 4;
-  string start_at = 5;
-  string end_at = 6;
-  MetricHistoryOrder order = 7;
-  uint32 limit = 8;
-  string labels_json = 9;
-}
-message QueryMetricHistoryRsp { common.RetInfo ret_info = 1; repeated MetricHistoryPoint points = 2; }
-
-enum LogicalOperator {
-  LOGICAL_OPERATOR_UNSPECIFIED = 0;
-  LOGICAL_OPERATOR_AND = 1;
-  LOGICAL_OPERATOR_OR = 2;
-}
-enum CompareOperator {
-  COMPARE_OPERATOR_UNSPECIFIED = 0;
-  COMPARE_OPERATOR_GT = 1;
-  COMPARE_OPERATOR_GTE = 2;
-  COMPARE_OPERATOR_LT = 3;
-  COMPARE_OPERATOR_LTE = 4;
-  COMPARE_OPERATOR_EQ = 5;
-  COMPARE_OPERATOR_NEQ = 6;
-}
-enum TimeReducer {
-  TIME_REDUCER_UNSPECIFIED = 0;
-  TIME_REDUCER_CURRENT = 1;
-  TIME_REDUCER_AVG = 2;
-  TIME_REDUCER_MIN = 3;
-  TIME_REDUCER_MAX = 4;
-  TIME_REDUCER_SUM = 5;
-  TIME_REDUCER_RATE = 6;
-  TIME_REDUCER_INCREASE = 7;
-}
-enum SeriesReducer {
-  SERIES_REDUCER_UNSPECIFIED = 0;
-  SERIES_REDUCER_AVG = 1;
-  SERIES_REDUCER_MIN = 2;
-  SERIES_REDUCER_MAX = 3;
-  SERIES_REDUCER_SUM = 4;
-}
-enum NoDataPolicy {
-  NO_DATA_POLICY_UNSPECIFIED = 0;
-  NO_DATA_POLICY_KEEP_STATE = 1;
-  NO_DATA_POLICY_OK = 2;
-  NO_DATA_POLICY_FIRING = 3;
-}
-message LabelMatcher { string name = 1; string value = 2; bool negate = 3; }
-message MetricSelector { string service_name = 1; string metric_name = 2; repeated LabelMatcher matchers = 3; }
-message MetricQuery { MetricSelector selector = 1; TimeReducer time_reducer = 2; uint32 window_seconds = 3; SeriesReducer series_reducer = 4; }
-message MetricCondition { string condition_id = 1; MetricQuery query = 2; CompareOperator compare = 3; double threshold = 4; NoDataPolicy no_data_policy = 5; }
-message MetricRule {
-  string space_id = 1;
-  string rule_id = 2;
-  string name = 3;
-  repeated MetricCondition conditions = 4;
-  LogicalOperator connector = 5;
-  uint32 consecutive_trigger_count = 6;
-  uint32 consecutive_recovery_count = 7;
-  uint32 evaluation_interval_seconds = 8;
-  repeated string webhook_ids = 9;
-  bool enabled = 10;
-  string description = 11;
-  string created_at = 12;
-  string updated_at = 13;
-}
-message MetricConditionEvaluation {
-  string condition_id = 1;
-  uint32 selected_series_count = 2;
-  double value = 3;
-  double threshold = 4;
-  bool has_data = 5;
-  bool result = 6;
-  string no_data_reason = 7;
-}
-message MetricRuleEvaluation {
-  string evaluation_id = 1;
-  string space_id = 2;
-  string rule_id = 3;
-  string evaluated_at = 4;
-  AlertStatus status = 5;
-  bool result = 6;
-  repeated MetricConditionEvaluation conditions = 7;
-  string result_json = 8;
-}
-message MetricRuleState {
-  string space_id = 1;
-  string rule_id = 2;
-  AlertStatus status = 3;
-  uint32 trigger_count = 4;
-  uint32 recovery_count = 5;
-  string last_evaluated_at = 7;
-  string last_triggered_at = 8;
-  string last_recovered_at = 9;
-}
-message ListMetricRulesReq { string space_id = 1; bool enabled_only = 2; common.Page page = 3; }
-message ListMetricRulesRsp { common.RetInfo ret_info = 1; repeated MetricRule rules = 2; common.PageResult page_result = 3; }
-message GetMetricRuleReq { string space_id = 1; string rule_id = 2; }
-message GetMetricRuleRsp { common.RetInfo ret_info = 1; MetricRule rule = 2; }
-message CreateMetricRuleReq { MetricRule rule = 1; }
-message CreateMetricRuleRsp { common.RetInfo ret_info = 1; MetricRule rule = 2; }
-message UpdateMetricRuleReq { MetricRule rule = 1; }
-message UpdateMetricRuleRsp { common.RetInfo ret_info = 1; MetricRule rule = 2; }
-message DeleteMetricRuleReq { string space_id = 1; string rule_id = 2; }
-message DeleteMetricRuleRsp { common.RetInfo ret_info = 1; }
-message PreviewMetricRuleReq { MetricRule rule = 1; uint32 limit = 2; }
-message PreviewMetricRuleRsp { common.RetInfo ret_info = 1; MetricRuleEvaluation evaluation = 2; }
-message ListMetricRuleEvaluationsReq { string space_id = 1; string rule_id = 2; common.Page page = 3; }
-message ListMetricRuleEvaluationsRsp { common.RetInfo ret_info = 1; repeated MetricRuleEvaluation evaluations = 2; common.PageResult page_result = 3; }
-message GetMetricRuleStateReq { string space_id = 1; string rule_id = 2; }
-message GetMetricRuleStateRsp { common.RetInfo ret_info = 1; MetricRuleState state = 2; }
-
-message GroupSummary {
-  string group_name = 1;
-  int32 total_checks = 2;
-  int32 healthy_checks = 3;
-  int32 degraded_checks = 4;
-  int32 down_checks = 5;
-}
-
-message Overview {
-  int32 total_checks = 1;
-  int32 healthy_checks = 2;
-  int32 degraded_checks = 3;
-  int32 down_checks = 4;
-  int32 firing_alerts = 5;
-  double success_rate_24h = 7;
-  int64 p95_latency_ms = 8;
-  repeated GroupSummary groups = 9;
-}
-
-message ListChecksReq {
-  string space_id = 1;
-  string group_name = 2;
-  string source = 3;
-  common.Page page = 4;
-}
-message ListChecksRsp {
-  common.RetInfo ret_info = 1;
-  repeated MonitorCheck checks = 2;
-  common.PageResult page_result = 3;
-}
-
-message GetCheckReq { string space_id = 1; string check_id = 2; }
-message GetCheckRsp { common.RetInfo ret_info = 1; MonitorCheck check = 2; }
-message CreateCheckReq { MonitorCheck check = 1; }
-message CreateCheckRsp { common.RetInfo ret_info = 1; MonitorCheck check = 2; }
-message UpdateCheckReq { MonitorCheck check = 1; }
-message UpdateCheckRsp { common.RetInfo ret_info = 1; MonitorCheck check = 2; }
-message DeleteCheckReq { string space_id = 1; string check_id = 2; }
-message DeleteCheckRsp { common.RetInfo ret_info = 1; }
-message RunCheckOnceReq { string space_id = 1; string check_id = 2; }
-message RunCheckOnceRsp { common.RetInfo ret_info = 1; CheckResult result = 2; }
-
-message ListResultsReq { string space_id = 1; string check_id = 2; int32 limit = 3; }
-message ListResultsRsp { common.RetInfo ret_info = 1; repeated CheckResult results = 2; }
-message GetOverviewReq { string space_id = 1; }
-message GetOverviewRsp { common.RetInfo ret_info = 1; Overview overview = 2; }
-
-// Observability overview is a bounded operational projection. It keeps service,
-// host, dataset, and business-check state in one response without exposing
-// the underlying metric catalog.
-message ServiceObservabilityStatus {
-  string node_id = 1;
-  string service_name = 2;
+message HealthInstance {
+  string name = 1;
+  string node_id = 2;
   string instance_id = 3;
   string status = 4;
-  string reason = 5;
-  string last_seen_at = 6;
+  string conclusion = 5;
+  string last_checked_at = 6;
 }
-message HostObservabilityStatus {
-  string agent_id = 1;
-  string hostname = 2;
-  string status = 3;
-  string reason = 4;
-  string last_seen_at = 5;
-  double cpu_percent = 6;
-  double memory_percent = 7;
-  double filesystem_max_percent = 8;
-}
-message DatasetFrequencyStatus {
-  string producer = 1;
-  string space_id = 2;
-  string dataset_id = 3;
-  string freq = 4;
+message HealthItem {
+  string id = 1;
+  string group = 2;
+  string name = 3;
+  string description = 4;
   string status = 5;
   string reason = 6;
-  string last_run_at = 7;
-  string last_success_at = 8;
-  string input_watermark_at = 9;
-  string output_watermark_at = 10;
-  int64 lag_seconds = 11;
+  string checked_at = 7;
+  int32 omitted_instance_count = 8;
+  repeated HealthInstance instances = 9;
 }
-message BusinessObservabilityStatus {
-  string kind = 1;
-  string module = 2;
-  string status = 3;
-  string reason = 4;
-  string last_checked_at = 5;
-}
-message ObservabilityOverview {
+message HealthOverview {
   string generated_at = 1;
-  repeated ServiceObservabilityStatus services = 2;
-  repeated HostObservabilityStatus hosts = 3;
-  repeated DatasetFrequencyStatus datasets = 5;
-  repeated BusinessObservabilityStatus business_checks = 6;
+  repeated HealthAlert alerts = 2;
+  repeated HealthItem business_items = 3;
+  repeated HealthItem service_items = 4;
+  string notification_channel_type = 5;
+  bool notification_configured = 6;
+  string notification_webhook_masked = 7;
 }
-message GetObservabilityOverviewReq { string space_id = 1; }
-message GetObservabilityOverviewRsp {
-  common.RetInfo ret_info = 1;
-  ObservabilityOverview overview = 2;
+message GetHealthOverviewReq { string space_id = 1; }
+message GetHealthOverviewRsp { common.RetInfo ret_info = 1; HealthOverview overview = 2; }
+
+message NotificationChannelSetting {
+  string channel_type = 1;
+  bool configured = 2;
+  string masked_url = 3;
+  string updated_at = 4;
 }
-
-message ListWebhookChannelsReq { string space_id = 1; }
-message ListWebhookChannelsRsp { common.RetInfo ret_info = 1; repeated WebhookChannel channels = 2; }
-message CreateWebhookChannelReq { WebhookChannel channel = 1; }
-message CreateWebhookChannelRsp { common.RetInfo ret_info = 1; WebhookChannel channel = 2; }
-message UpdateWebhookChannelReq { WebhookChannel channel = 1; }
-message UpdateWebhookChannelRsp { common.RetInfo ret_info = 1; WebhookChannel channel = 2; }
-message DeleteWebhookChannelReq { string space_id = 1; string webhook_id = 2; }
-message DeleteWebhookChannelRsp { common.RetInfo ret_info = 1; }
-
-message ListAlertRulesReq { string space_id = 1; string check_id = 2; }
-message ListAlertRulesRsp { common.RetInfo ret_info = 1; repeated AlertRule rules = 2; }
-message CreateAlertRuleReq { AlertRule rule = 1; }
-message CreateAlertRuleRsp { common.RetInfo ret_info = 1; AlertRule rule = 2; }
-message UpdateAlertRuleReq { AlertRule rule = 1; }
-message UpdateAlertRuleRsp { common.RetInfo ret_info = 1; AlertRule rule = 2; }
-message DeleteAlertRuleReq { string space_id = 1; string rule_id = 2; }
-message DeleteAlertRuleRsp { common.RetInfo ret_info = 1; }
-
-message ListAlertEventsReq { string space_id = 1; int32 limit = 2; }
-message ListAlertEventsRsp { common.RetInfo ret_info = 1; repeated AlertEvent events = 2; }
-message SyncSystemChecksReq {}
-message SyncSystemChecksRsp { common.RetInfo ret_info = 1; int32 synced = 2; }
+message GetNotificationChannelReq {}
+message GetNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationChannelSetting channel = 2; }
+message UpdateNotificationChannelReq { string channel_type = 1; string webhook_url = 2; }
+message UpdateNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationChannelSetting channel = 2; }
 
 message HostAgentInfo {
   string agent_id = 1;
@@ -451,8 +103,6 @@ message HostMetricHistoryPoint {
 message QueryHostMetricHistoryReq { string agent_id = 1; string start_at = 2; string end_at = 3; uint32 limit = 4; }
 message QueryHostMetricHistoryRsp { common.RetInfo ret_info = 1; repeated HostMetricHistoryPoint points = 2; bool storage_available = 3; bool data_gap = 4; }
 
-// Doctor context is a bounded fact snapshot. It intentionally contains no
-// diagnosis or recovery execution; moox-cli owns that interpretation.
 message DoctorExpectedComponent {
   string component_id = 1;
   string service_name = 2;
@@ -519,39 +169,10 @@ message GetDoctorContextRsp {
 }
 
 service MonitorMgr {
-  rpc ListChecks(ListChecksReq) returns (ListChecksRsp);
-  rpc GetCheck(GetCheckReq) returns (GetCheckRsp);
-  rpc CreateCheck(CreateCheckReq) returns (CreateCheckRsp);
-  rpc UpdateCheck(UpdateCheckReq) returns (UpdateCheckRsp);
-  rpc DeleteCheck(DeleteCheckReq) returns (DeleteCheckRsp);
-  rpc RunCheckOnce(RunCheckOnceReq) returns (RunCheckOnceRsp);
-  rpc ListResults(ListResultsReq) returns (ListResultsRsp);
-  rpc GetOverview(GetOverviewReq) returns (GetOverviewRsp);
-  rpc GetObservabilityOverview(GetObservabilityOverviewReq) returns (GetObservabilityOverviewRsp);
-  rpc ListWebhookChannels(ListWebhookChannelsReq) returns (ListWebhookChannelsRsp);
-  rpc CreateWebhookChannel(CreateWebhookChannelReq) returns (CreateWebhookChannelRsp);
-  rpc UpdateWebhookChannel(UpdateWebhookChannelReq) returns (UpdateWebhookChannelRsp);
-  rpc DeleteWebhookChannel(DeleteWebhookChannelReq) returns (DeleteWebhookChannelRsp);
-  rpc ListAlertRules(ListAlertRulesReq) returns (ListAlertRulesRsp);
-  rpc CreateAlertRule(CreateAlertRuleReq) returns (CreateAlertRuleRsp);
-  rpc UpdateAlertRule(UpdateAlertRuleReq) returns (UpdateAlertRuleRsp);
-  rpc DeleteAlertRule(DeleteAlertRuleReq) returns (DeleteAlertRuleRsp);
-  rpc ListAlertEvents(ListAlertEventsReq) returns (ListAlertEventsRsp);
-  rpc SyncSystemChecks(SyncSystemChecksReq) returns (SyncSystemChecksRsp);
+  rpc GetHealthOverview(GetHealthOverviewReq) returns (GetHealthOverviewRsp);
+  rpc GetNotificationChannel(GetNotificationChannelReq) returns (GetNotificationChannelRsp);
+  rpc UpdateNotificationChannel(UpdateNotificationChannelReq) returns (UpdateNotificationChannelRsp);
   rpc ListHostAgents(ListHostAgentsReq) returns (ListHostAgentsRsp);
   rpc QueryHostMetricHistory(QueryHostMetricHistoryReq) returns (QueryHostMetricHistoryRsp);
   rpc GetDoctorContext(GetDoctorContextReq) returns (GetDoctorContextRsp);
-  rpc ListMetricServices(ListMetricServicesReq) returns (ListMetricServicesRsp);
-  rpc ListMetricNames(ListMetricNamesReq) returns (ListMetricNamesRsp);
-  rpc ListMetricSeries(ListMetricSeriesReq) returns (ListMetricSeriesRsp);
-  rpc GetMetricLatest(GetMetricLatestReq) returns (GetMetricLatestRsp);
-  rpc QueryMetricHistory(QueryMetricHistoryReq) returns (QueryMetricHistoryRsp);
-  rpc ListMetricRules(ListMetricRulesReq) returns (ListMetricRulesRsp);
-  rpc GetMetricRule(GetMetricRuleReq) returns (GetMetricRuleRsp);
-  rpc CreateMetricRule(CreateMetricRuleReq) returns (CreateMetricRuleRsp);
-  rpc UpdateMetricRule(UpdateMetricRuleReq) returns (UpdateMetricRuleRsp);
-  rpc DeleteMetricRule(DeleteMetricRuleReq) returns (DeleteMetricRuleRsp);
-  rpc PreviewMetricRule(PreviewMetricRuleReq) returns (PreviewMetricRuleRsp);
-  rpc ListMetricRuleEvaluations(ListMetricRuleEvaluationsReq) returns (ListMetricRuleEvaluationsRsp);
-  rpc GetMetricRuleState(GetMetricRuleStateReq) returns (GetMetricRuleStateRsp);
 }

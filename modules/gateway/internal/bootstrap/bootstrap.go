@@ -88,6 +88,9 @@ func New(options Options) *Runtime {
 	if warnEvery <= 0 {
 		warnEvery = 10 * time.Minute
 	}
+	if options.Health != nil {
+		options.Health.SetClock(now)
+	}
 	return &Runtime{
 		nodeID: options.NodeID, routes: options.Routes, control: options.Control, health: options.Health,
 		now: now, warn: warn, warnAfter: warnAfter, warnEvery: warnEvery,
@@ -115,7 +118,7 @@ func (runtime *Runtime) Initialize(ctx context.Context) error {
 			runtime.health.RouteValidationFailed()
 		}
 		if hasCache {
-			runtime.report(ctx, err.Error())
+			_ = runtime.report(ctx, err.Error())
 			return nil
 		}
 		return fmt.Errorf("initial route pull failed without a valid cache: %w", err)
@@ -124,13 +127,16 @@ func (runtime *Runtime) Initialize(ctx context.Context) error {
 		runtime.health.RouteSyncFailed()
 		runtime.noteSyncFailure()
 		if hasCache {
-			runtime.report(ctx, err.Error())
+			_ = runtime.report(ctx, err.Error())
 			return nil
 		}
 		return fmt.Errorf("apply initial route snapshot: %w", err)
 	}
 	runtime.resetSyncFailure()
-	runtime.report(ctx, "")
+	// Keep the process alive when the route pull succeeded but the heartbeat
+	// could not be acknowledged. Readiness remains degraded until a later
+	// refresh reports successfully.
+	_ = runtime.report(ctx, "")
 	return nil
 }
 
@@ -148,11 +154,13 @@ func (runtime *Runtime) Refresh(ctx context.Context) error {
 		if errors.Is(err, controlplane.ErrInvalidSnapshot) {
 			runtime.health.RouteValidationFailed()
 		}
-		runtime.report(ctx, err.Error())
+		_ = runtime.report(ctx, err.Error())
 		return err
 	}
 	runtime.resetSyncFailure()
-	runtime.report(ctx, "")
+	if err := runtime.report(ctx, ""); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -171,7 +179,7 @@ func (runtime *Runtime) noteSyncFailure() {
 	}
 	runtime.lastWarning = now
 	runtime.warn(fmt.Sprintf(
-		"gateway route sync stale: node_id=%s continuous_failure=%s; retaining cached routes and readiness",
+		"gateway route sync stale: node_id=%s continuous_failure=%s; retaining cached routes while readiness is degraded",
 		runtime.nodeID, now.Sub(runtime.failureSince).Truncate(time.Second),
 	))
 }
@@ -195,7 +203,7 @@ func (runtime *Runtime) apply(snapshot gatewayproxy.Snapshot, persist bool) erro
 	if persist {
 		currentHash, _ := runtime.health.Current()
 		if snapshot.RouteHash == currentHash {
-			runtime.health.RouteSyncSucceeded(time.Now())
+			runtime.health.RouteSyncSucceeded(runtime.now())
 			return nil
 		}
 		if err := runtime.routes.Save(snapshot); err != nil {
@@ -207,14 +215,20 @@ func (runtime *Runtime) apply(snapshot gatewayproxy.Snapshot, persist bool) erro
 	}
 	runtime.health.ApplyRoutes(snapshot.RouteHash, len(snapshot.Routes), snapshot.Disabled)
 	if persist {
-		runtime.health.RouteSyncSucceeded(time.Now())
+		runtime.health.RouteSyncSucceeded(runtime.now())
 	}
 	return nil
 }
 
-func (runtime *Runtime) report(ctx context.Context, lastError string) {
+func (runtime *Runtime) report(ctx context.Context, lastError string) error {
 	hash, count := runtime.health.Current()
-	_ = runtime.control.Report(ctx, hash, int32(count), lastError)
+	if err := runtime.control.Report(ctx, hash, int32(count), lastError); err != nil {
+		runtime.health.RouteReportFailed()
+		runtime.warn(fmt.Sprintf("gateway heartbeat report failed: node_id=%s", runtime.nodeID))
+		return err
+	}
+	runtime.health.RouteReportSucceeded(runtime.now())
+	return nil
 }
 
 func Run(ctx context.Context, cfg config.Config) error {

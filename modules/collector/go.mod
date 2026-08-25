@@ -71,7 +71,7 @@ replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstr
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
-replace github.com/mooyang-code/moox/packages/msgbox => ../../packages/msgbox
+replace github.com/mooyang-code/moox/packages/notification => ../../packages/notification
 
 replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
 
