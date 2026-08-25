@@ -1,6 +1,6 @@
 # Trade 实盘与模拟盘统一执行设计
 
-> 状态：设计已确认（第二版）
+> 状态：设计已确认（第三版）
 >
 > 日期：2026-08-25
 
@@ -18,25 +18,49 @@ Trade 当前已经通过 `exchange.Adapter` 统一部分 Live/Paper 流程，但
 - 没有 Live/Paper 共用的资金曲线。
 - Paper 的运行态部分依赖内存 map，不适合作为唯一事实。
 
+### 1.1 设计原则与取舍
+
+本设计按个人、单机、少量账户的真实使用规模取舍：
+
+1. **先保证交易正确，再减少组件。** 资金预占、订单状态、成交归并和持仓更新必须原子化；订阅 Ready
+   必须反映真实可执行状态。这些边界直接决定是否会重复下单、透支或丢失成交，不能为了少写代码而省略。
+2. **模式差异停留在执行边界。** Live/Paper 共用 OrderService、状态机、reducer、查询和页面；
+   行情来源、执行适配器、预占策略和账户事件来源由 ExecutionBundle 注入。
+3. **单进程问题用单进程方案。** 使用 SQLite 事务、进程内账户锁、一个 PaperMatcher 和一个
+   EquitySampler 队列；不引入分布式锁、独立撮合服务或跨进程一致性协议。
+4. **历史不可抹除，实验可以替换。** PaperConfig 不更新，已经产生的 Fill 和历史曲线不删除、
+   不改写；新实验创建新账户，旧实验通过不可逆 DISABLED 结束。
+5. **破坏式升级代替兼容层。** Trade 和 Strategy 一次停机后同时重建，事件流同时清空；
+   不实现旧 Schema 迁移、双读、事件 generation 或 Runner 自动重绑。
+6. **安全开关语义单一。** `live_trading_enabled` 只表达“是否允许 Production 新订单”；
+   关闭时允许观察和撤单，不额外实现容易误判的 EXIT_ONLY 通道。
+7. **只实现当前需要的能力。** V1 不增加 Archive、Paper 重新启用、自动回滚、盘口或部分成交模拟。
+
+选择这些约束，是为了把代码集中在会影响交易结果的正确性上。个人量化可以接受停机重建、手工重建
+少量配置和串行 worker，不能接受资金重复扣减、订单永久悬挂或账户错误地进入 Ready。
+
 ## 2. 目标
 
 1. 实盘和模拟盘共用订单、安全校验、目标收敛、成交归并、持仓、查询和前端主流程。
 2. 只有执行边界不同：实盘发送到真实交易所，模拟盘发送到进程内虚拟执行端。
 3. 用户创建模拟账户时设置初始结算资金、maker/taker 费率和滑点。
 4. 模拟盘支持 MARKET 和简化 LIMIT 撮合。
-5. Live/Paper 使用相同的 Order、Fill、Position 和 EquityPoint 数据结构。
+5. Live/Paper 使用相同的 Order、Fill、Holding/Position 和 EquityPoint 数据结构。
 6. Live/Paper 使用同一组 API 和页面。
 7. Trade 保持单进程、单 SQLite，不增加独立 Paper 服务。
-8. Paper 账户及其经济参数创建后不可修改、重置或删除；新一轮模拟交易创建新账户。
+8. Paper 账户标识和经济参数创建后不可修改、重置或删除；生命周期只允许一次
+   `ENABLED -> DISABLED`。
 
 ## 3. 非目标
 
-- 不实现盘口深度、排队优先级或部分成交。
+- Paper 不实现盘口深度、排队优先级或部分成交；Live 继续归并交易所返回的部分成交。
 - 不实现分布式锁、主从复制、跨进程调度或全局 exactly-once。
 - 不拆分独立订单、风控、Paper 或资金服务。
 - 不引入双式账本；Paper 资金由初始资金和 Fill 事实重建。
 - 不让浏览器或 Paper Matcher 直接消费 JetStream；内存信号只负责唤醒。
 - 不支持 Paper 账户配置更新、事实清空、Reset 或复用历史账户启动新实验。
+- 不实现 EXIT_ONLY；Production 开关关闭后不允许任何新订单，包括清仓订单。
+- 不实现旧 Trade/Strategy Schema 迁移、事件 generation、Runner 自动重绑或跨版本数据转换。
 - StrategyRunner 不直接关联 TradingAccount，继续关联 LogicalAccount。
 - 本设计不解决 Strategy 自动读取 View 并触发 `RunOnce` 的上游调度问题。
 
@@ -53,6 +77,8 @@ Trade 当前已经通过 `exchange.Adapter` 统一部分 Live/Paper 流程，但
 - PaperConfig 创建后不可修改。
 - Paper LogicalAccount 固定只有一个 Paper TradingAccount 成员，创建后不更换成员。
 - 新一轮模拟交易创建新的 Paper TradingAccount 和新的 Paper LogicalAccount。
+- Paper 模拟通过不可逆 `ENABLED -> DISABLED` 结束；DISABLED 后只保留历史查询。
+- `live_trading_enabled=false` 时，Production 只允许同步、查询和撤单。
 - StrategyRunner 通过 `logical_account_id` 选择本次执行账户，Live/Paper 主流程保持一致。
 
 ## 5. 总体架构
@@ -79,7 +105,7 @@ LiveAdapter                               PaperAdapter
 Binance / OKX REST + 账户事件流           MarketDataSource + PaperMatcher
   |                                           |
   v                                           v
-规范化 Live 回报                         OPEN + version CAS
+规范化 Live 回报                         MatchOnce + OPEN/version CAS
   |                                           |
   +--------------------+----------------------+
                        v
@@ -90,7 +116,7 @@ Binance / OKX REST + 账户事件流           MarketDataSource + PaperMatcher
   - reservation
                        |
                        v
-Order / Fill / Position / EquityPoint
+Order / Fill / Holding / Position / EquityPoint
 ```
 
 Order 状态机、FillReducer、Position 投影和查询层不得根据 `execution_mode` 分叉。
@@ -156,6 +182,7 @@ type AccountEventSource interface {
 }
 
 type AccountEventHandler interface {
+    OnSubscribed()
     OnOrder(context.Context, Order) error
     OnFill(context.Context, Fill) error
     OnPosition(context.Context, Position) error
@@ -168,7 +195,16 @@ type AccountEventHandler interface {
 - Binance/OKX LiveAdapter 实现 `AccountEventSource`。
 - PaperAdapter 不实现；PaperMatcher 直接调用共用 SQLite reducer。
 - TradingSession 仅在 ExecutionBundle 提供 `AccountEvents` 时启动订阅。
-- `Subscribe` 持续运行到 context 取消或连接失败，REST 同步继续作为兜底对账。
+- Paper TradingSession 加载 instrument、重建 AccountState，并确认 `matcher_ready` 后直接 Ready；
+  不创建伪事件流或伪订阅 ACK。
+- `AccountEventSource` 完成连接和交易所订阅确认后调用 `OnSubscribed`；该信号只表示事件流已建立，
+  不表示 TradingAccount 已 Ready。
+- TradingSession 先加载并持久化 instrument metadata，再启动 `Subscribe`。订阅前发生的变化由
+  后续 REST 快照和成交补拉覆盖，因此不再保留单独的 metadata gate 接口。
+- handler 从订阅启动时开始缓冲事件。Session 收到 `OnSubscribed` 后拉取 REST 快照，提交快照，
+  再按顺序回放缓冲事件；全部成功后才把 TradingAccount 设为 Ready。
+- `Subscribe` 持续运行到 context 取消或连接失败；意外返回立即把账户设为 Not Ready。
+  周期 REST 同步负责对账，不能代替订阅就绪握手。
 
 ### 6.4 ExecutionBundle 与 ReservationPolicy
 
@@ -188,11 +224,26 @@ type ReservationPolicy interface {
 }
 ```
 
-- Live ReservationPolicy 保留现有交易所快照 + 本地未反映 reservation 语义。
-- Paper ReservationPolicy 以初始资金、Fill 和所有活动订单预占为权威。
-- Paper MARKET BUY 按 `ask + slippage + taker fee` 预占。
-- Paper GTC LIMIT BUY 按 `limit + max(maker,taker fee)` 预占。
-- SELL 预占基础资产 quantity；Swap 按保证金和最坏费率预占结算资产。
+ReservationPolicy 同时负责计算所需预占和判断可用资金。OrderService 在持有账户锁时只调用一次
+Policy，不得先按 Policy 扣减后再套用另一套余额算法：
+
+- Live Policy 保留现有“交易所快照 + `GetUnreflectedReservation`”语义。
+- Paper Policy 完全替换 Live 算法，以初始资金、Fill 和全部活动订单 reservation 为权威；
+  Paper 路径禁止再次调用 `GetUnreflectedReservation`。
+- Spot MARKET BUY 按持久化成交价加 taker fee 预占结算资产；GTC LIMIT BUY 按
+  `limit × quantity × (1 + max(maker_fee_rate, taker_fee_rate))` 预占。
+- Spot SELL 预占基础资产 quantity。
+- Swap 只为增加敞口的部分预占
+  `worst_notional / leverage + worst_notional × fee_rate`；reduce-only 部分只预占手续费，
+  且继续禁止穿过零仓位。
+
+Policy 的资金读取、可用量判断和 Order 创建必须处于同一个 Store.Transaction；账户锁负责串行化
+同账户的本地下单与 Paper Match。Reservation 结果随 Order 持久化，后续 Fill/Cancel 只消费或释放，
+不重新估算。
+
+MARKET 的 `reference_price`、`reference_price_at` 和应用滑点后的成交价随 Order 持久化。
+MatchOnce 必须使用该成交价，保证实际成交金额不超过已预占金额。LIMIT 延迟成交以 limit 作为
+最坏名义价值，因此行情穿价后仍不会突破预占。
 
 ## 7. 代码组织
 
@@ -271,6 +322,8 @@ message PaperConfig {
 - SWAP 使用 CROSS margin mode，并保留按原生 symbol 配置的 leverage。
 - Live SPOT 必须保留 `sync_symbols`，以完成订单、成交和余额同步。
 - Paper 配置创建后不可修改；不存在替换配置或重置入口。
+- Paper TradingAccount 只允许一次 `ENABLED -> DISABLED`；通用账户更新接口不得重新启用它。
+  复用 DISABLED 可以避免新增只服务 V1 的 CLOSED 状态，同时保留不可逆结束语义。
 
 ### 8.1 settlement_asset
 
@@ -320,6 +373,9 @@ SELL = 50000 × (1 - 5/10000) = 49975
 三类事实同时保存 canonical `instrument_id` 和原生 `exchange_symbol`。Spot 不伪造成
 衍生品 Position：Spot 持仓通过账户余额生成统一 `Holding` 读模型；Swap 继续使用 Position。
 
+Paper Order 额外持久化提交报价、计算后的 MARKET 成交价和“首次撮合待处理”标记。该标记使
+MARKET、IOC/FOK 和可立即成交 LIMIT 在 wake 丢失或进程重启后仍能恢复首次决策；它不是内存状态。
+
 不新增 `t_paper_orders`、`t_paper_fills` 或独立资金账本。
 
 ### 9.3 资金曲线
@@ -351,7 +407,8 @@ t_logical_account_equity_points
 ```
 
 账户点唯一键为 `(space_id, trading_account_id, bucket_time)`；LogicalAccount 点唯一键为
-`(space_id, logical_account_id, bucket_time)`。同一分钟的 timer 和 Fill wake 使用最新快照覆盖。
+`(space_id, logical_account_id, bucket_time)`。同一分钟只在新点的 `source_time` 不早于旧点时
+执行 upsert，防止较慢的旧采样覆盖 Fill 后的新快照。
 
 Sampler 在采样当时按成员关系生成 LogicalAccount 点并持久化，从而冻结历史成员语义。
 任一启用成员缺少有效快照时，不写该 LogicalAccount 分钟点，不能把缺失成员按 0 计入。
@@ -404,9 +461,13 @@ ReservationPolicy，但 OrderService 只消费统一 Reservation 结果。
 
 `PaperMatcher`：
 
-- 只扫描 OPEN GTC Paper 订单。
+- 首次决策处理所有 OPEN 且“首次撮合待处理”的 Paper 订单，不限订单类型或 FillPolicy。
+- MARKET 使用提交时持久化的成交价并全量成交。
+- LIMIT 首次使用提交报价判断：可成交则按 TAKER 成交；GTC 不可成交则清除首次标记并保持 OPEN；
+  IOC/FOK 不可成交则取消。
+- 首次决策完成后，只继续扫描 OPEN GTC。
 - 默认每秒扫描一次。
-- 按 Exchange + symbol 合并报价请求。
+- 周期扫描同时覆盖丢失的首次 wake 和延迟 GTC；按 Exchange + symbol 合并新报价请求。
 - BUY 在可执行报价不高于 limit 时成交。
 - SELL 在可执行报价不低于 limit 时成交。
 - 延迟成交属于 MAKER，使用 `maker_fee_rate`。
@@ -435,11 +496,12 @@ SQLite 是 Paper 唯一事实源。内存 channel 只能发送可丢失 wake，�
 
 ```text
 OrderService
-  -> PENDING / SUBMITTING / OPEN 持久化
+  -> PENDING / SUBMITTING / OPEN + first_match_pending 持久化
   -> PaperAdapter 返回接受结果
-  -> Matcher wake（可丢失，周期扫描兜底）
-  -> OPEN + version CAS
-  -> 共用 reducer SQLite 事务
+  -> 释放账户锁
+  -> Matcher wake（可合并、可丢失，周期扫描兜底）
+  -> MatchOnce SQLite 事务
+       Reload OPEN order + expected version
        Insert Fill
        Update Order terminal state
        Update Position / Holding facts
@@ -448,20 +510,32 @@ OrderService
 
 协议要求：
 
-- PaperAdapter 不在 `PlaceOrder` 持账户锁期间同步回调 Fill。
-- PaperMatcher 只处理 SQLite 中的候选订单。
-- Matcher 用 `order_id + expected_version + OPEN` CAS 抢占；Cancel 和 Match 只有一方成功。
-- Fill 插入、Order 终态、Swap Position 和 reservation 更新复用 FillReducer 的同一个事务函数。
+- PaperAdapter 只返回接受结果，不同步回调 Fill。Matcher 可以提前收到 wake，但必须等待
+  OrderService 释放账户锁后执行 MatchOnce。
+- PaperMatcher 只处理 SQLite 中的候选订单。首次 wake 丢失时，周期扫描仍处理 MARKET、
+  IOC/FOK 和首次 LIMIT；重启不会留下永久 OPEN 的即时订单。
+- MatchOnce 在同一个 SQLite 事务内重新读取 Order，并校验
+  `order_id + expected_version + OPEN`。CAS 不得先提交；Cancel 和 Match 只有一个事务成功。
+- Fill 插入、Order 终态、Holding/Position 和 reservation 更新复用 FillReducer 的事务内核心函数。
+  现有 `ApplyFill` 只负责为 Live 路径包裹外层事务，Paper 不能在 MatchOnce 内再次开启事务。
+- Fill 来源增加 `PAPER_MATCHER`，与 `ACCOUNT_EVENT`、`REST_SYNC` 一起进入同一归一化校验和指标维度。
+- GTC 首次不成交时，清除首次撮合标记并更新 Order version；IOC/FOK 首次不成交时，在同一事务
+  进入 CANCELED 并释放 reservation。
 - 进程崩溃前未提交的 Match 不产生事实；已提交事实不依赖内存事件补写。
-- OPEN GTC 订单在重启后由周期扫描继续撮合。
+- OPEN GTC 订单在重启后由周期扫描继续撮合；所有报价请求都在事务外执行，事务内只验证候选版本
+  并提交确定的撮合结果。
 - `client_order_id`、`order_id` 和 `fill_id` 保持确定性与幂等。
+
+PaperMatcher 是 Paper 执行所必需的唯一 worker。worker 启动成功后设置 `matcher_ready=true`；
+意外退出立即清零该状态，并使所有启用的 Paper TradingAccount 变为 Not Ready。OrderService
+据此拒绝新 Paper Submit，避免接受永远无法撮合的订单。V1 不增加复杂 supervisor 状态机。
 
 ## 12. EquitySampler
 
 `EquitySampler` 同时服务 Live/Paper：
 
 - 每分钟采样所有启用且 Ready 的 TradingAccount。
-- Fill 成功入库后 Wake 对应账户，立即刷新当前分钟。
+- Fill 成功入库后 enqueue 对应账户，立即刷新当前分钟。
 - Spot 统一按“结算资产余额 + 非结算资产余额 × 新鲜报价”估值，解决部分真实交易所
   Spot 快照不直接返回 equity 的问题。
 - Swap 优先使用账户快照 equity、available funds、used margin 和 unrealized PnL。
@@ -479,13 +553,18 @@ OrderService
   timeout: 30000
 ```
 
-Timer Handler 通过 `timerjob.Job` 复用项目现有的执行超时和进程内防重入能力，并调用统一的
-`EquitySampler.SampleReadyAccounts`。不再创建自定义 ticker goroutine。
+Timer Handler 通过 `timerjob.Job` 复用项目现有的执行超时和 Timer 防重入能力，并调用
+`EquitySampler.EnqueueReadyAccounts`。`timerjob.Job` 不负责协调 Fill/Ready wake。
 
-配置不附加 `?startAtOnce=1`。Fill 成功提交后通过本地 wake 调用同一个
-`EquitySampler.SampleAccount`，立即刷新对应账户和 LogicalAccount 的当前分钟点；wake
-可以合并，下一次 Timer 是兜底。账户 Session 首次 Ready 时触发首个本地采样，避免 Timer
-在服务尚未 Ready 时阻塞启动。
+EquitySampler 内部只有一个进程内队列和一个 worker。Timer、Fill 和 Session Ready 都只 enqueue
+`trading_account_id`；队列按账户合并重复请求，worker 串行读取最新事实、计算账户点，再更新相关
+LogicalAccount 点。这个全局串行模型符合个人账户规模，也消除了三种入口并发覆盖的问题。
+
+配置不附加 `?startAtOnce=1`。账户 Session 首次 Ready 时 enqueue 首次采样，避免 Timer 在服务尚未
+Ready 时阻塞启动。同一分钟 upsert 继续使用 `source_time` 单调条件作为最后一道保护。
+
+Sampler 失败不影响下单，只记录 degraded 健康状态、失败计数和最后错误；下一次 wake 或 Timer
+继续重试。资金曲线是观测能力，PaperMatcher 才是执行可用性的硬依赖。
 
 ## 13. Paper 模拟生命周期
 
@@ -501,10 +580,21 @@ StrategyRunner       0..1 ──> LogicalAccount
 1. 创建新的 Paper TradingAccount，写入不可变 PaperConfig。
 2. 同一事务创建新的 Paper LogicalAccount，并把该账户作为唯一成员。
 3. 用户在 StrategyRunner 中选择新的 `logical_account_id`。
-4. 旧账户、旧 LogicalAccount、订单、成交、持仓和曲线保持只读。
+4. 创建新模拟不会自动关闭其他模拟；个人可以按需并行运行少量 Paper 实验。
 
-V1 不提供删除或归档。若只读历史数量明显影响使用，再增加严格的 Archive 生命周期；Archive
-不得修改经济参数或删除事实。
+结束模拟使用 `ClosePaperSimulation`：
+
+1. 前端先禁用或改绑关联的 StrategyRunner。
+2. Trade 获取 Paper TradingAccount 和 LogicalAccount 的执行锁。
+3. 在一个 SQLite 事务中取消全部活动 Paper 订单、释放 reservation、把 TradingAccount 设为
+   DISABLED，并把 LogicalAccount 固定为 PAUSED。
+4. 关闭后拒绝 Place、Submit、ClaimOwner 和 Resume；迟到的 Strategy target 直接拒绝。
+5. Session、PaperMatcher 和 EquitySampler 只处理 ENABLED 账户；历史订单、成交、持仓和曲线
+   继续查询。
+
+Paper 的 DISABLED 是不可逆终态，通用更新接口不能重新启用。复用现有状态可以避免引入 CLOSED、
+ARCHIVED 和额外状态机。V1 不提供删除或归档；历史数量影响使用时再单独设计查询归档。
+以上不可删除约束适用于同一 Schema 版本的产品生命周期；第 17 节的一次性破坏式升级可以整体丢弃旧库。
 
 `AddLogicalAccountMember` 和 `RemoveLogicalAccountMember` 对 Paper LogicalAccount 返回拒绝；
 Live LogicalAccount 保留现有 PAUSED 状态下的成员管理能力。
@@ -516,6 +606,7 @@ Live LogicalAccount 保留现有 PAUSED 状态下的成员管理能力。
 ```text
 CreateTradingAccount
 CreatePaperSimulation
+ClosePaperSimulation
 GetTradingAccountOverview
 GetExecutionCapabilities
 QueryEquityCurve
@@ -531,6 +622,9 @@ CancelOrder
 该 RPC 在一个事务中写入 TradingAccount、PaperConfig、LogicalAccount 和唯一成员关系，
 避免产生无法执行的孤立 Paper 账户。
 
+`ClosePaperSimulation` 只接受 Paper 账户：ENABLED 时执行不可逆关闭，DISABLED 时幂等返回当前
+结果，不重复产生取消事实。Live 账户继续使用现有账户管理和 Operator 流程。
+
 交互原则：
 
 - 不创建两套交易页面。
@@ -539,6 +633,7 @@ CancelOrder
 - Paper/Live 共用订单、成交、持仓和资金曲线组件。
 - 下单只提交 canonical `instrument_id`，服务端解析 Exchange symbol。
 - `CreatePaperSimulation` 原子创建不可变 Paper TradingAccount 和单成员 Paper LogicalAccount。
+- `ClosePaperSimulation` 结束实验但保留全部历史。
 - StrategyRunner 选择 `logical_account_id`，不直接持有物理账户 ID。
 - Spot 页面展示 Holding；Swap 页面展示 Position。
 
@@ -556,27 +651,31 @@ CancelOrder
 
 保留 `live_trading_enabled=false` 默认值，并在以下边界 fail closed：
 
-- 创建或启用 PRODUCTION Live TradingAccount。
-- 每次 OrderService Submit。
+- 每次 OrderService Place 和 Submit。
 - `GetExecutionCapabilities` 对浏览器返回不可下单原因。
 
-关闭开关时仍允许构造只读 LiveAdapter，继续执行账户同步、查单、撤单和风险退出；不得因开关关闭
-而失去观察或清理 Production 敞口的能力。
+关闭开关时允许创建、启用和同步 Production Live TradingAccount，也允许查单和撤单；禁止人工下单、
+Target 收敛、Flatten 和其他任何新 Production Order。需要通过 MooX 清仓时，用户必须显式重新开启
+开关；紧急情况下也可以直接使用交易所控制台。
+
+V1 不实现 EXIT_ONLY。可靠的 EXIT_ONLY 必须服务端核验 Spot 持有量、Swap 方向、数量上限、
+穿零风险和审计来源，不能信任调用方传入的 `reduce_only`。对个人项目而言，这套旁路会扩大安全面，
+却不能替代交易所控制台。TESTNET 不受该开关限制。
 
 ## 16. 测试与验收
 
-### 16.1 共用 ExecutionAdapter 契约
+### 16.1 分层契约
 
-Live fake adapter 与 PaperAdapter 必须通过同一套测试：
+幂等权威保留在 OrderService，不下沉到 ExecutionAdapter：
 
-- Place 幂等
-- Cancel 幂等
-- GetOrder
-- ListOpenOrders
-- 重启恢复
+- OrderService 测试相同 `client_order_id` 的 Place 幂等、参数冲突、重复 Submit/Cancel 和重启恢复。
+- ExecutionAdapter 测试稳定传递 client ID、请求字段映射、错误归类、GetOrder、ListOpenOrders
+  和 UNKNOWN 后通过查询恢复。
+- Binance/OKX Adapter 每次调用可以发送真实 HTTP 请求，不要求重复 POST/DELETE 返回相同结果。
+- AccountEventSource 测试订阅确认、启动缓冲、快照后回放和断线立即 Not Ready。
+- PaperAdapter 测试确定性接受；PaperMatcher 测试 MatchOnce、CAS 和共用 reducer 原子提交。
 
-Live 另外验证账户事件流回报归一化；Paper 另外验证 Matcher CAS 和共用 reducer 原子提交。
-两种路径最终都必须生成同结构的本地 Order/Fill/Position 事实，但不强制使用同一种传输机制。
+Live/Paper 最终都生成同结构的本地 Order、Fill、Holding/Position 事实，但不强制使用同一种传输机制。
 
 ### 16.2 Paper 专项
 
@@ -589,12 +688,18 @@ Live 另外验证账户事件流回报归一化；Paper 另外验证 Matcher CAS
 - 进程重启后续撮合
 - MARKET/GTC LIMIT 最坏价格与手续费预占
 - OPEN 订单 reservation 纳入 Paper available/locked
+- Paper Policy 替换 Live `GetUnreflectedReservation`，不会重复扣减
+- Swap 增仓保证金与手续费预占；reduce-only 只预占手续费
+- MARKET 使用持久化成交价，实际扣减不超过 reservation
+- 首次 MatchOnce 覆盖 MARKET、LIMIT、IOC 和 FOK；丢失 wake 后可恢复
 - Match/Cancel 使用 version CAS，只有一方提交
-- Match 的 Fill/Order/Position/reservation 同事务
+- CAS、Fill、Order、Holding/Position、reservation 同事务
+- 注入任一步失败后整个 Match 事务回滚
 - PaperConfig 不可更新，新的模拟运行创建新账户和新 LogicalAccount
-- 分钟采样与 Fill wake
-- tRPC equity timer 每分钟触发且不允许进程内重入
-- Session Ready 和 Fill wake 调用同一个 SampleAccount
+- ClosePaperSimulation 原子取消活动订单并永久 DISABLED
+- Matcher 停止后 Paper Not Ready，拒绝新 Submit
+- tRPC equity timer、Session Ready 和 Fill wake 进入同一个串行队列
+- 较旧 `source_time` 不能覆盖同分钟的新快照
 - Live Spot 成本未知时 unrealized_pnl 为 null
 - LogicalAccount 曲线不受后续成员变化影响
 
@@ -605,25 +710,41 @@ Live 另外验证账户事件流回报归一化；Paper 另外验证 Matcher CAS
 1. PaperAdapter
 2. mock LiveAdapter
 
-验收两条链路生成相同结构的 Order、Fill、Position 和 EquityPoint，并能由相同前端 API 查询。
+Spot 验收两条链路生成相同结构的 Order、Fill、Holding 和 EquityPoint；Swap 验收 Order、Fill、
+Position 和 EquityPoint。两种 market type 都必须通过相同前端 API 查询。
 
 此外必须运行现有真实 Testnet smoke，覆盖 Binance/OKX 的 submit、query、account event stream、
 sync、restart 和 cleanup。该验收需要显式凭据和确认变量，不作为无凭据 CI 的静默替代品。
 
 ## 17. 破坏式升级与回滚
 
-项目无需数据迁移，但 Schema/Proto 重命名必须按破坏式升级发布：
+本项目不迁移旧运行数据。Trade 和 Strategy 作为一组执行破坏式升级，避免旧
+`logical_account_id`、Strategy outbox 和 JetStream durable 指向已经重建的 Trade 事实。
 
-1. 停止 StrategyRunner 产生新目标。
-2. 暂停所有 LogicalAccount。
-3. 取消 Live 活动订单并处理非零敞口；未处理完不得升级。
-4. 停止 Strategy 和 Trade。
-5. 对 Trade SQLite 执行一致备份，并保留对应旧二进制和 Web 制品。
-6. 部署整套新 Trade、Strategy、Admin 路由和 Web；重建新的 Trade SQLite。
-7. 执行 Paper E2E、mock Live E2E 和真实 Testnet smoke。
+升级步骤：
 
-回滚时停止新进程，恢复旧二进制、旧 Web 和备份数据库。不得用新二进制打开旧库，也不得用旧二进制
-打开新库；`validateExistingTradeSchema` 应继续拒绝结构不匹配。
+1. 保持 `live_trading_enabled=true`，停止所有 StrategyRunner，暂停 LogicalAccount。
+2. 取消 Production 活动订单并清理非零敞口；未处理完不得继续。
+3. 等待 Strategy pending outbox 清空，再停止 Strategy、Trade 和 outbox relay，确认不再产生目标事件。
+4. 一致备份 Trade SQLite、Strategy SQLite、旧二进制和 Web 制品。备份只用于整组回滚，
+   不向新库导入旧行。
+5. 删除并重建 Trade SQLite 和 Strategy SQLite。旧账户、模拟历史、策略、Runner 和执行结果
+   都不迁移；需要的少量策略和配置由用户重新创建。
+6. 删除并重建 `MOOX_TRADE` JetStream Stream 及 `trade_target_v1` consumer。该 Stream 当前只承载
+   `trade.target.requested`，因此可以直接清空，不增加 event generation 或 fencing 协议。
+7. 部署同一版本的 Trade、Strategy、Admin 路由和 Web，并保持
+   `live_trading_enabled=false`。
+8. 重新创建 TradingAccount、LogicalAccount、Strategy 和 StrategyRunner，再建立新的
+   `logical_account_id` 关联。
+9. 执行 Paper E2E、mock Live E2E 和真实 Testnet smoke；全部通过后才允许开启 Production。
+
+这套流程用一次停机和少量手工重建换掉跨库迁移、Outbox 转换、Runner 自动重绑和旧事件兼容。
+个人部署的对象数量有限，手工重建成本低于长期维护兼容代码。
+
+自动回滚只支持“新版本尚未产生任何 Production Order”的阶段：停止新进程，恢复成对备份的
+Trade/Strategy SQLite、旧二进制和旧 Web，并重建空的 `MOOX_TRADE` Stream。新版本一旦产生
+Production Order，就禁止直接恢复旧数据库；此时关闭 Production 下单、撤销活动订单、从交易所
+对账并修复前进。`validateExistingTradeSchema` 继续拒绝新旧二进制打开不匹配的数据库。
 
 ## 18. 简洁性约束
 
@@ -632,7 +753,13 @@ sync、restart 和 cleanup。该验收需要显式凭据和确认变量，不作
 - 只有一套应用服务和事实表。
 - 核心 Order/Fill/Position reducer 不知道 Live/Paper；模式差异由 ExecutionBundle 注入。
 - PaperMatcher 只有一个进程内 worker。
-- 资金曲线只有一个 EquitySampler；周期触发复用 tRPC Timer，不自建调度器。
-- Paper 账户和 PaperConfig 创建后不可修改或重置。
+- 资金曲线只有一个串行 EquitySampler worker；周期触发复用 tRPC Timer，不自建调度器。
+- Paper 账户标识和 PaperConfig 创建后不可修改或重置；生命周期只允许不可逆 DISABLED。
+- Paper 复用不可逆 DISABLED，不增加 CLOSED 或 Archive 状态机。
 - 一个 Paper LogicalAccount 固定一个 Paper TradingAccount。
-- 模拟盘不实现盘口、部分成交、撮合优先级或独立账本。
+- Paper 不实现盘口、部分成交、撮合优先级或独立账本；Live 保留真实部分成交归并。
+- Production 开关关闭时不实现 EXIT_ONLY。
+- Trade、Strategy 和目标事件流整体重建，不实现迁移、generation 或自动重绑。
+
+简洁性不能越过三条正确性底线：Match/CAS/Fill/持仓/reservation 同事务，Paper 与 Live
+reservation 不重复计算，Live 订阅完成快照和缓冲回放后才 Ready。
