@@ -231,10 +231,11 @@ type ExecutionBundle struct {
 }
 
 type ReservationFacts struct {
-    AvailableByAsset       map[string]Decimal
-    AvailableFunds         Decimal
-    SignedPositionQuantity Decimal
-    Leverage               Decimal
+    AvailableByAsset           map[string]Decimal
+    AvailableFunds             Decimal
+    SignedPositionQuantity     Decimal
+    AvailableReducibleQuantity Decimal
+    Leverage                   Decimal
 }
 
 type ReservationPolicy interface {
@@ -262,14 +263,31 @@ OrderService 在事务外完成 instrument 解析、报价请求和 freshness �
 - Paper facts 使用初始资金和 Fill 重建余额，再减去全部活动订单 reservation；Paper 不调用
   `GetUnreflectedReservation`。
 
+Paper Swap reduce-only 还必须预占“可减仓容量”。`AvailableReducibleQuantity` 是针对当前
+account、instrument 和订单 side 的非负数量：
+
+```text
+available_reducible_quantity =
+  max(0, abs(signed_position_quantity)
+         - sum(active_reduce_only_order.remaining_quantity))
+
+remaining_quantity = order.quantity - order.filled_quantity
+```
+
+只有 SELL 减少多仓或 BUY 减少空仓时该值才可能大于 0。求和范围包括同方向的全部非终态
+reduce-only 订单，包括 CANCELING 和 CANCEL_UNKNOWN；不能使用只表示手续费的
+`remaining_reserved_quantity`。OrderService 在同一事务中加载这些订单，新订单尚未创建，
+因此不会重复扣除自身。
+
 Policy 只根据传入事实计算所需预占并判断余额，不得先按 Facts 扣减后再套用另一套余额算法：
 
 - Spot MARKET BUY 按持久化成交价加 taker fee 预占结算资产；GTC LIMIT BUY 按
   `limit × quantity × (1 + max(maker_fee_rate, taker_fee_rate))` 预占。
 - Spot SELL 预占基础资产 quantity。
-- Swap 只为增加敞口的部分预占
+- Paper Swap 只为增加敞口的部分预占
   `worst_notional / leverage + worst_notional × fee_rate`；reduce-only 部分只预占手续费，
-  且继续禁止穿过零仓位。
+  并要求 `order.quantity <= available_reducible_quantity`。超出时拒绝 Place，避免多个活动订单
+  合计穿过零仓位。
 
 事务内禁止通过普通 Store 查询；当前 SQLite 只有一个连接，嵌套普通查询会等待事务自己占用的连接。
 账户锁负责串行化同账户的本地下单与 Paper Match。Reservation 结果随 Order 持久化，后续
@@ -537,7 +555,8 @@ OrderService
   -> Matcher wake（可合并、可丢失，周期扫描兜底）
   -> MatchOnce SQLite 事务
        Reload OPEN order + expected version
-       Insert Fill
+       Recheck reduce-only position capacity
+       Insert Fill or cancel whole order
        Update Order terminal state
        Update Position / Holding facts
        Consume / release reservation
@@ -551,6 +570,11 @@ OrderService
   IOC/FOK 和首次 LIMIT；重启不会留下永久 OPEN 的即时订单。
 - MatchOnce 在同一个 SQLite 事务内重新读取 Order，并校验
   `order_id + expected_version + OPEN`。CAS 不得先提交；Cancel 和 Match 只有一个事务成功。
+- 对 reduce-only Swap Order，MatchOnce 在插入 Fill 前重新读取最新 Position，并校验订单 side
+  仍在减仓且 `order.remaining_quantity <= abs(current_position)`。这里使用实际仓位，不重复扣除
+  当前候选订单；一个 Match 提交仓位后，下一个候选再读取更新后的仓位。
+- 若最新仓位无法容纳整笔 reduce-only 剩余数量，MatchOnce 在同一事务中把 Order 置为 CANCELED
+  并释放手续费 reservation，不插入 Fill。Paper 不为此场景引入部分成交。
 - Fill 插入、Order 终态、Holding/Position 和 reservation 更新复用 FillReducer 的事务内核心函数。
   现有 `ApplyFill` 只负责为 Live 路径包裹外层事务，Paper 不能在 MatchOnce 内再次开启事务。
 - Fill 来源增加 `PAPER_MATCHER`，与 `ACCOUNT_EVENT`、`REST_SYNC` 一起进入同一归一化校验和指标维度。
@@ -726,6 +750,9 @@ Live/Paper 最终都生成同结构的本地 Order、Fill、Holding/Position 事
 - ReservationFacts 仅通过当前 `*store.Tx` 加载；Policy 不访问普通 Store
 - Paper Policy 替换 Live `GetUnreflectedReservation`，不会重复扣减
 - Swap 增仓保证金与手续费预占；reduce-only 只预占手续费
+- 1 BTC 多仓已有 0.8 BTC reduce-only SELL 时，第二笔 0.8 BTC 在 Place 阶段被拒绝
+- 多笔活动 reduce-only 的剩余数量合计不超过当前可减仓数量
+- reduce-only 接受后仓位发生变化时，MatchOnce 整单取消、不写 Fill 并释放手续费 reservation
 - MARKET 使用持久化成交价，实际扣减不超过 reservation
 - Binance SPOT/SWAP 使用相同 ExchangeSymbol 时分别请求、缓存并返回各自报价
 - 首次 MatchOnce 覆盖 MARKET、LIMIT、IOC 和 FOK；丢失 wake 后可恢复
