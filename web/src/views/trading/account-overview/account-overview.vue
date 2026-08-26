@@ -32,7 +32,7 @@
         :data="accounts"
         :loading="loading"
         :pagination="pagination"
-        :scroll="{ x: 1320 }"
+        :scroll="{ x: 1400 }"
         @page-change="changePage"
       >
         <template #columns>
@@ -42,24 +42,24 @@
               <div class="muted account-id">{{ record.trading_account_id }}</div>
             </template>
           </a-table-column>
-          <a-table-column title="Exchange / 市场" :width="150">
+          <a-table-column title="交易所/市场" :width="120">
             <template #cell="{ record }">
               {{ exchangeLabels[record.exchange] || "-" }} · {{ marketTypeLabels[record.market_type] || "-" }}
             </template>
           </a-table-column>
-          <a-table-column title="执行配置" :width="170">
+          <a-table-column title="执行配置" :width="140">
             <template #cell="{ record }">
               <div>{{ executionModeLabels[record.execution_mode] || "Unknown" }}</div>
               <div class="muted">{{ accountEnvironmentView(record) }}</div>
             </template>
           </a-table-column>
-          <a-table-column title="资金" :width="190">
+          <a-table-column title="资金" :width="180">
             <template #cell="{ record }">
               <div>Equity {{ snapshotValue(record.snapshot?.equity) }}</div>
               <div class="muted">Available {{ snapshotValue(record.snapshot?.available_funds) }}</div>
             </template>
           </a-table-column>
-          <a-table-column title="状态" :width="150">
+          <a-table-column title="状态" :width="140">
             <template #cell="{ record }">
               <a-space>
                 <a-tag :color="accountStatusView(record.status, record.ready).color">
@@ -72,7 +72,7 @@
           <a-table-column title="最近同步" :width="160">
             <template #cell="{ record }">{{ formatTimestamp(record.last_sync_at) }}</template>
           </a-table-column>
-          <a-table-column title="错误" :width="220" ellipsis>
+          <a-table-column title="错误" :width="200" ellipsis>
             <template #cell="{ record }">{{ record.last_error || "-" }}</template>
           </a-table-column>
           <a-table-column title="操作" fixed="right" :width="240">

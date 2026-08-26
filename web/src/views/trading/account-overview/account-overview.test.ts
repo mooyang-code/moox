@@ -118,4 +118,14 @@ describe("trading account workbench", () => {
     expect(source).toContain("const syncRequests = createLatestRequestGuard()");
     expect(source).toContain("can_close_paper_simulation");
   });
+
+  it("uses compact Chinese table headers and balanced column widths", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "account-overview.vue"), "utf8");
+    expect(source).toContain(':scroll="{ x: 1400 }"');
+    expect(source).toContain('<a-table-column title="交易所/市场" :width="120">');
+    expect(source).toContain('<a-table-column title="执行配置" :width="140">');
+    expect(source).toContain('<a-table-column title="资金" :width="180">');
+    expect(source).toContain('<a-table-column title="错误" :width="200" ellipsis>');
+    expect(source).not.toContain('title="Exchange / 市场"');
+  });
 });
