@@ -18,7 +18,7 @@ func TestManualOrderPausesAndCancelsTargetsBeforeSubmit(t *testing.T) {
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "target-child",
 		TradingAccountID: "account-a", ClientOrderID: "target-child",
-		Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+		ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 		PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
 		ReferencePriceAt: fixture.now.UnixMilli(),
 		OwnerType:        "TARGET", OwnerID: "target-1",
@@ -31,7 +31,7 @@ func TestManualOrderPausesAndCancelsTargetsBeforeSubmit(t *testing.T) {
 		ManualOrderCommand{
 			SpaceID: "space-1", ActionID: "manual-1",
 			TradingAccountID: "account-a", ClientOrderID: "manual-client",
-			InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+			InstrumentID: fixture.instrumentID(), Type: exchange.OrderTypeMarket,
 			Side: exchange.SideSell, PositionSide: exchange.PositionSideNet,
 			Quantity: shared.MustDecimal("1"), Reason: "operator override",
 		},
@@ -54,6 +54,7 @@ func TestManualOrderPausesAndCancelsTargetsBeforeSubmit(t *testing.T) {
 	require.Equal(t, "manual-1", fixture.orders.specs[0].Owner.OwnerID)
 	require.Equal(t, "logical-1", fixture.orders.specs[0].Owner.LogicalAccountID)
 	require.Nil(t, fixture.orders.specs[0].Owner.RunnerID)
+	require.Equal(t, []string{"BTCUSDT"}, *fixture.prices.calls)
 	account, err := fixture.store.GetLogicalAccount(
 		context.Background(), "space-1", "logical-1",
 	)
@@ -67,7 +68,7 @@ func TestManualOrderActionIDIsIdempotent(t *testing.T) {
 	command := ManualOrderCommand{
 		SpaceID: "space-1", ActionID: "manual-1",
 		TradingAccountID: "account-a", ClientOrderID: "manual-client",
-		InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+		InstrumentID: fixture.instrumentID(), Type: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, Quantity: shared.MustDecimal("0.1"),
 		Reason: "operator override",
 	}
@@ -92,7 +93,7 @@ func TestManualOrderTerminalReplayDoesNotPauseAfterResume(t *testing.T) {
 	command := ManualOrderCommand{
 		SpaceID: "space-1", ActionID: "manual-1",
 		TradingAccountID: "account-a", ClientOrderID: "manual-client",
-		InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+		InstrumentID: fixture.instrumentID(), Type: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, Quantity: shared.MustDecimal("0.1"),
 		Reason: "operator override",
 	}
@@ -124,7 +125,7 @@ func TestManualOrderRunningReplayFailsStablyAfterMemberRemoval(t *testing.T) {
 	command := ManualOrderCommand{
 		SpaceID: "space-1", ActionID: "manual-1",
 		TradingAccountID: "account-a", ClientOrderID: "manual-client",
-		InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+		InstrumentID: fixture.instrumentID(), Type: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, Quantity: shared.MustDecimal("0.1"),
 		Reason: "operator override",
 	}
@@ -168,7 +169,7 @@ func TestManualOrderRunningReplayFailsAfterAccountMovesLogicalAccount(t *testing
 	command := ManualOrderCommand{
 		SpaceID: "space-1", ActionID: "manual-1",
 		TradingAccountID: "account-a", ClientOrderID: "manual-client",
-		InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+		InstrumentID: fixture.instrumentID(), Type: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, Quantity: shared.MustDecimal("0.1"),
 		Reason: "operator override",
 	}
@@ -224,7 +225,7 @@ func TestManualOrderFreshSyncsTargetWithoutKnownTargetOrders(t *testing.T) {
 		ManualOrderCommand{
 			SpaceID: "space-1", ActionID: "manual-1",
 			TradingAccountID: "account-a", ClientOrderID: "manual-client",
-			InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+			InstrumentID: fixture.instrumentID(), Type: exchange.OrderTypeMarket,
 			Side: exchange.SideSell, PositionSide: exchange.PositionSideNet,
 			Quantity: shared.MustDecimal("1"), Reason: "operator override",
 		},
@@ -289,7 +290,7 @@ func TestManualOrderDoesNotCancelNonTargetOrders(t *testing.T) {
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "external",
 		TradingAccountID: "account-a", ClientOrderID: "external",
-		ExchangeOrderID: "exchange-1", Symbol: "BTCUSDT",
+		ExchangeOrderID: "exchange-1", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "SELL", Quantity: "0.1",
 		ReferencePrice: "100", ReferencePriceAt: fixture.now.UnixMilli(),
 		OwnerType: "EXTERNAL", OwnerID: "exchange-1",
@@ -301,7 +302,7 @@ func TestManualOrderDoesNotCancelNonTargetOrders(t *testing.T) {
 		ManualOrderCommand{
 			SpaceID: "space-1", ActionID: "manual-1",
 			TradingAccountID: "account-a", ClientOrderID: "manual-client",
-			InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+			InstrumentID: fixture.instrumentID(), Type: exchange.OrderTypeMarket,
 			Side: exchange.SideBuy, Quantity: shared.MustDecimal("0.1"),
 			Reason: "operator override",
 		},
@@ -321,7 +322,7 @@ func TestManualOrderRejectsTargetDiscoveredDuringCancellationSync(t *testing.T) 
 		fixture.order(t, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "late-target",
 			TradingAccountID: "account-a", ClientOrderID: "late-target",
-			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+			ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "0.1", ReferencePrice: "100",
 			ReferencePriceAt: fixture.now.UnixMilli(),
 			OwnerType:        "TARGET", OwnerID: "target-1",
@@ -336,7 +337,7 @@ func TestManualOrderRejectsTargetDiscoveredDuringCancellationSync(t *testing.T) 
 		ManualOrderCommand{
 			SpaceID: "space-1", ActionID: "manual-1",
 			TradingAccountID: "account-a", ClientOrderID: "manual-client",
-			InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+			InstrumentID: fixture.instrumentID(), Type: exchange.OrderTypeMarket,
 			Side: exchange.SideBuy, Quantity: shared.MustDecimal("0.1"),
 			Reason: "operator override",
 		},
@@ -351,7 +352,7 @@ func TestManualOrderCancelsEveryMemberAndReturnsPerAccountErrors(t *testing.T) {
 	fixture.order(t, activeOrder(fixture, "target-a", "TARGET"))
 	orderB := activeOrder(fixture, "target-b", "TARGET")
 	orderB.TradingAccountID = "account-b"
-	orderB.Symbol = "BTC-USDT-SWAP"
+	orderB.ExchangeSymbol = "BTC-USDT-SWAP"
 	fixture.order(t, orderB)
 	fixture.orders.leaveOpen = map[string]bool{"target-a": true}
 
@@ -360,7 +361,7 @@ func TestManualOrderCancelsEveryMemberAndReturnsPerAccountErrors(t *testing.T) {
 		ManualOrderCommand{
 			SpaceID: "space-1", ActionID: "manual-1",
 			TradingAccountID: "account-a", ClientOrderID: "manual-client",
-			InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+			InstrumentID: fixture.instrumentID(), Type: exchange.OrderTypeMarket,
 			Side: exchange.SideSell, PositionSide: exchange.PositionSideNet,
 			Quantity: shared.MustDecimal("1"), Reason: "operator override",
 		},
@@ -466,6 +467,7 @@ func newOperatorFixture(t *testing.T, market exchange.MarketType) *operatorFixtu
 			quote: Quote{
 				Price: shared.MustDecimal("100"), UpdatedAt: time.UnixMilli(2_000).UTC(),
 			},
+			calls: new([]string),
 		},
 	}
 	fixture.orders = &operatorOrderStub{
@@ -540,7 +542,7 @@ func (f *operatorFixture) instrument(accountID string) store.InstrumentRecord {
 		symbol = "BTC-USDT-SWAP"
 	}
 	instrument := store.InstrumentRecord{
-		Exchange: exchangeName, MarketType: string(f.market), Symbol: symbol,
+		Exchange: exchangeName, MarketType: string(f.market), ExchangeSymbol: symbol,
 		InstrumentID: "BTC-USDT-" + string(f.market),
 		BaseAsset:    "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 		ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
@@ -557,6 +559,10 @@ func (f *operatorFixture) instrument(accountID string) store.InstrumentRecord {
 	return instrument
 }
 
+func (f *operatorFixture) instrumentID() string {
+	return "BTC-USDT-" + string(f.market)
+}
+
 func (f *operatorFixture) order(t *testing.T, record store.OrderRecord) {
 	t.Helper()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
@@ -569,7 +575,7 @@ func (f *operatorFixture) position(t *testing.T, accountID, symbol, quantity str
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
 			SpaceID: "space-1", TradingAccountID: accountID,
-			Symbol: symbol, PositionSide: "NET", SignedQuantity: quantity,
+			ExchangeSymbol: symbol, PositionSide: "NET", SignedQuantity: quantity,
 			EntryPrice: "100", MarkPrice: "100", Leverage: "5",
 			MarginMode: "CROSS", ExchangeUpdatedAt: f.now.UnixMilli(),
 		})
@@ -608,7 +614,7 @@ func (s *operatorOrderStub) Place(
 	record := store.OrderRecord{
 		SpaceID: spaceID, OrderID: id,
 		TradingAccountID: spec.TradingAccountID,
-		ClientOrderID:    spec.ClientOrderID, Symbol: spec.InstrumentID,
+		ClientOrderID:    spec.ClientOrderID, ExchangeSymbol: spec.InstrumentID,
 		OrderType: string(spec.Type), TimeInForce: string(spec.FillPolicy),
 		Side: string(spec.Side), PositionSide: string(spec.PositionSide),
 		Quantity: spec.Quantity.String(), ReferencePrice: spec.ReferencePrice.String(),
@@ -746,13 +752,17 @@ func (s *operatorSyncStub) callsFor(accountID string) int {
 type operatorPriceStub struct {
 	quote Quote
 	err   error
+	calls *[]string
 }
 
 func (s operatorPriceStub) LatestPrice(
-	context.Context,
-	string,
-	string,
+	_ context.Context,
+	_ string,
+	symbol string,
 ) (Quote, error) {
+	if s.calls != nil {
+		*s.calls = append(*s.calls, symbol)
+	}
 	return s.quote, s.err
 }
 

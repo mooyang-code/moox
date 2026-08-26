@@ -50,7 +50,7 @@ run_exchange() {
     --database "$database"
     --state "$state"
     --config "$config"
-    --symbol "$symbol"
+    --exchange-symbol "$symbol"
     --max-notional "$max_notional"
   )
 

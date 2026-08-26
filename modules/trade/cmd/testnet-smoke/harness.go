@@ -234,15 +234,15 @@ func runSubmitPhase(
 	if _, err := harness.sync.SyncAccount(ctx, harness.identity.AccountID); err != nil {
 		return fmt.Errorf("fresh account sync: %w", err)
 	}
-	instrument, err := harness.store.GetInstrument(
+	instrumentRecord, err := harness.store.GetInstrumentInEnvironment(
 		ctx,
-		string(options.Exchange),
-		string(exchange.MarketTypeSpot),
-		options.Symbol,
+		string(options.Exchange), string(exchange.AccountEnvironmentTestnet),
+		string(exchange.MarketTypeSpot), options.ExchangeSymbol,
 	)
 	if err != nil {
 		return err
 	}
+	instrument := smokeInstrumentFromRecord(options.Exchange, exchange.MarketTypeSpot, instrumentRecord)
 	adapter, err := harness.adapter()
 	if err != nil {
 		return err
@@ -251,16 +251,16 @@ func runSubmitPhase(
 	if !ok {
 		return errors.New("testnet adapter has no reference price source")
 	}
-	quote, err := priceSource.GetReferencePrice(ctx, options.Symbol)
+	quote, err := priceSource.GetReferencePrice(ctx, options.ExchangeSymbol)
 	if err != nil {
 		return err
 	}
 	plan, err := planPassiveBuy(
 		quote.Price,
-		mustDecimal(instrument.PriceTick),
-		mustDecimal(instrument.ExchangeQuantityStep),
-		mustDecimal(instrument.MinExchangeQuantity),
-		mustDecimal(instrument.MinNotional),
+		instrument.PriceTick,
+		instrument.ExchangeQuantityStep,
+		instrument.MinExchangeQuantity,
+		instrument.MinNotional,
 		options.MaxNotional,
 	)
 	if err != nil {
@@ -280,7 +280,7 @@ func runSubmitPhase(
 		operatorapp.ManualOrderCommand{
 			SpaceID: smokeSpaceID, ActionID: xid.New().String(),
 			TradingAccountID: harness.identity.AccountID,
-			ClientOrderID:    clientOrderID, InstrumentID: options.Symbol,
+			ClientOrderID:    clientOrderID, InstrumentID: instrument.InstrumentID,
 			Type: exchange.OrderTypeLimit, FillPolicy: exchange.FillPolicyGTC,
 			Side: exchange.SideBuy, Quantity: plan.Quantity, LimitPrice: &plan.Price,
 			Reason: "real testnet smoke submit",
@@ -298,7 +298,8 @@ func runSubmitPhase(
 				Environment: exchange.AccountEnvironmentTestnet,
 				SpaceID:     smokeSpaceID, AccountID: harness.identity.AccountID,
 				LogicalAccountID: harness.identity.LogicalAccountID,
-				Symbol:           options.Symbol, BaseAsset: instrument.BaseAsset,
+				InstrumentID:     instrument.InstrumentID, ExchangeSymbol: instrument.ExchangeSymbol,
+				BaseAsset:         instrument.BaseAsset,
 				BaselineBaseTotal: baseline.String(),
 				ClientOrderID:     clientOrderID, OrderID: local.OrderID,
 				ExchangeOrderID: local.ExchangeOrderID,
@@ -319,7 +320,8 @@ func runSubmitPhase(
 		Environment: exchange.AccountEnvironmentTestnet,
 		SpaceID:     smokeSpaceID, AccountID: harness.identity.AccountID,
 		LogicalAccountID: harness.identity.LogicalAccountID,
-		Symbol:           options.Symbol, BaseAsset: instrument.BaseAsset,
+		InstrumentID:     instrument.InstrumentID, ExchangeSymbol: instrument.ExchangeSymbol,
+		BaseAsset:         instrument.BaseAsset,
 		BaselineBaseTotal: baseline.String(),
 		ClientOrderID:     clientOrderID, OrderID: result.Order.OrderID,
 		ExchangeOrderID: result.Order.ExchangeOrderID,
@@ -327,7 +329,7 @@ func runSubmitPhase(
 	if err := writeState(options.State, state); err != nil {
 		return err
 	}
-	queried, err := adapter.GetOrder(ctx, shared.ExchangeSymbol(options.Symbol), clientOrderID)
+	queried, err := adapter.GetOrder(ctx, shared.ExchangeSymbol(options.ExchangeSymbol), clientOrderID)
 	if err != nil {
 		return fmt.Errorf("query accepted order by client ID: %w", err)
 	}
@@ -400,7 +402,7 @@ func runRecoverPhase(
 	if err != nil {
 		return err
 	}
-	queried, err := adapter.GetOrder(ctx, shared.ExchangeSymbol(state.Symbol), state.ClientOrderID)
+	queried, err := adapter.GetOrder(ctx, shared.ExchangeSymbol(state.ExchangeSymbol), state.ClientOrderID)
 	if err != nil {
 		return fmt.Errorf("restart query by client ID: %w", err)
 	}
@@ -439,7 +441,7 @@ func runRecoverPhase(
 	if err := waitLocalTerminal(ctx, harness, state.OrderID); err != nil {
 		return err
 	}
-	queried, err = adapter.GetOrder(ctx, shared.ExchangeSymbol(state.Symbol), state.ClientOrderID)
+	queried, err = adapter.GetOrder(ctx, shared.ExchangeSymbol(state.ExchangeSymbol), state.ClientOrderID)
 	if err != nil {
 		return fmt.Errorf("query terminal testnet order: %w", err)
 	}
@@ -617,11 +619,8 @@ func cleanupTestExposure(
 	if filled.IsZero() {
 		return delta, errors.New("base balance changed without a recorded test fill; refusing cleanup")
 	}
-	instrument, err := harness.store.GetInstrument(
-		ctx,
-		string(state.Exchange),
-		string(exchange.MarketTypeSpot),
-		state.Symbol,
+	instrument, err := harness.store.GetInstrumentByIDForAccount(
+		ctx, smokeSpaceID, state.AccountID, state.InstrumentID,
 	)
 	if err != nil {
 		return delta, err
@@ -640,7 +639,7 @@ func cleanupTestExposure(
 		operatorapp.ManualOrderCommand{
 			SpaceID: smokeSpaceID, ActionID: xid.New().String(),
 			TradingAccountID: state.AccountID, ClientOrderID: xid.New().String(),
-			InstrumentID: state.Symbol, Type: exchange.OrderTypeMarket,
+			InstrumentID: state.InstrumentID, Type: exchange.OrderTypeMarket,
 			Side: exchange.SideSell, Quantity: quantity,
 			Reason: "real testnet smoke reverse cleanup",
 		},
@@ -713,12 +712,40 @@ func (s smokeInstrumentSource) GetInstrument(
 	market exchange.MarketType,
 	symbol string,
 ) (exchange.Instrument, error) {
-	record, err := s.store.GetInstrument(ctx, string(exchangeName), string(market), symbol)
+	record, err := s.store.GetInstrumentByIDScoped(ctx, symbol, string(exchangeName), string(market))
 	if err != nil {
 		return exchange.Instrument{}, err
 	}
+	return smokeInstrumentFromRecord(exchangeName, market, record), nil
+}
+
+func (s smokeInstrumentSource) GetInstrumentForAccount(
+	ctx context.Context,
+	tradingAccountID string,
+	exchangeName exchange.Exchange,
+	market exchange.MarketType,
+	instrumentID string,
+) (exchange.Instrument, error) {
+	account, err := s.store.GetTradingAccountByID(ctx, tradingAccountID)
+	if err != nil {
+		return exchange.Instrument{}, err
+	}
+	record, err := s.store.GetInstrumentByIDForAccount(
+		ctx, account.SpaceID, tradingAccountID, instrumentID,
+	)
+	if err != nil {
+		return exchange.Instrument{}, err
+	}
+	return smokeInstrumentFromRecord(exchangeName, market, record), nil
+}
+
+func smokeInstrumentFromRecord(
+	exchangeName exchange.Exchange,
+	market exchange.MarketType,
+	record store.InstrumentRecord,
+) exchange.Instrument {
 	return exchange.Instrument{
-		Exchange: exchangeName, MarketType: market, Symbol: record.Symbol,
+		Exchange: exchangeName, MarketType: market, ExchangeSymbol: record.ExchangeSymbol,
 		InstrumentID: record.InstrumentID, BaseAsset: record.BaseAsset,
 		QuoteAsset: record.QuoteAsset, SettlementAsset: record.SettlementAsset,
 		Linear: record.Linear, ContractValue: mustDecimal(record.ContractValue),
@@ -728,7 +755,7 @@ func (s smokeInstrumentSource) GetInstrument(
 		PriceTick:            mustDecimal(record.PriceTick),
 		MinNotional:          mustDecimal(record.MinNotional),
 		Status:               record.Status, ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
-	}, nil
+	}
 }
 
 type smokePositionSource struct {
@@ -757,11 +784,11 @@ func (s smokePositionSource) GetPosition(
 	if !found {
 		return exchange.Position{
 			TradingAccountID: tradingAccountID,
-			Symbol:           symbol, PositionSide: exchange.PositionSideNet,
+			ExchangeSymbol:   symbol, PositionSide: exchange.PositionSideNet,
 		}, nil
 	}
 	return exchange.Position{
-		TradingAccountID: tradingAccountID, Symbol: symbol,
+		TradingAccountID: tradingAccountID, ExchangeSymbol: symbol,
 		PositionSide:      exchange.PositionSide(record.PositionSide),
 		SignedQuantity:    mustDecimal(record.SignedQuantity),
 		EntryPrice:        mustDecimal(record.EntryPrice),

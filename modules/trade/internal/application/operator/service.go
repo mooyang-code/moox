@@ -207,8 +207,14 @@ func (s *Service) PlaceManualOrder(
 			accountErrors,
 		)
 	}
+	instrument, err := s.Store.GetInstrumentByIDForAccount(
+		ctx, logicalAccount.SpaceID, command.TradingAccountID, command.InstrumentID,
+	)
+	if err != nil {
+		return s.failManualAction(ctx, action, err, nil)
+	}
 	quote, err := s.Prices.LatestPrice(
-		ctx, command.TradingAccountID, command.InstrumentID,
+		ctx, command.TradingAccountID, instrument.ExchangeSymbol,
 	)
 	if err != nil {
 		return s.failManualAction(ctx, action, err, nil)

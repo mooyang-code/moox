@@ -51,7 +51,7 @@ func (*syncAdapter) GetAccountSnapshot(context.Context) (exchange.AccountSnapsho
 }
 func (*syncAdapter) ListPositionSnapshots(context.Context) ([]exchange.Position, error) {
 	return []exchange.Position{{
-		Symbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
+		ExchangeSymbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
 		SignedQuantity: shared.MustDecimal("0.5"),
 		EntryPrice:     shared.MustDecimal("100"), MarkPrice: shared.MustDecimal("101"),
 		Leverage: shared.MustDecimal("5"), MarginMode: exchange.MarginModeCross,
@@ -84,7 +84,7 @@ func (a *syncAdapter) GetOrderByExchangeID(
 		return exchange.Order{}, a.lookupErr
 	}
 	current := a.order
-	current.Symbol = symbol
+	current.ExchangeSymbol = symbol
 	current.ExchangeOrderID = exchangeOrderID
 	return current, nil
 }
@@ -111,7 +111,7 @@ func TestServiceSyncAccountImportsExternalOrderAndAppliesFacts(t *testing.T) {
 	adapter := &syncAdapter{
 		order: exchange.Order{
 			ExchangeOrderID: "exchange-1", ClientOrderID: "manual-1",
-			Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+			ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
 			Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 			Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.5"),
 			AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
@@ -119,7 +119,7 @@ func TestServiceSyncAccountImportsExternalOrderAndAppliesFacts(t *testing.T) {
 		},
 		fill: exchange.Fill{
 			ExchangeTradeID: "trade-1", ExchangeOrderID: "exchange-1",
-			ClientOrderID: "manual-1", Symbol: "BTC-USDT", Side: exchange.SideBuy,
+			ClientOrderID: "manual-1", ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy,
 			PositionSide: exchange.PositionSideNet,
 			Quantity:     shared.MustDecimal("0.5"), Price: shared.MustDecimal("100"),
 			SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_500),
@@ -178,7 +178,7 @@ func TestExternalOrderPausesOwningLogicalAccount(t *testing.T) {
 	}
 	current := exchange.Order{
 		ExchangeOrderID: "external-order", ClientOrderID: "outside-client",
-		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
 		CreatedAt: time.UnixMilli(2_000), UpdatedAt: time.UnixMilli(2_000),
@@ -215,7 +215,7 @@ func TestExternalFillImportsExternalOwnerAndPauses(t *testing.T) {
 
 	applied, err := service.ApplyFill(context.Background(), "account-1", exchange.Fill{
 		ExchangeTradeID: "external-trade", ExchangeOrderID: "external-order",
-		Symbol: "BTC-USDT", Side: exchange.SideBuy,
+		ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy,
 		PositionSide: exchange.PositionSideNet,
 		Quantity:     shared.MustDecimal("0.5"), Price: shared.MustDecimal("100"),
 		SettlementAsset: "USDT", TradedAt: time.UnixMilli(2_000),
@@ -251,7 +251,7 @@ func TestKnownExternalFillPausesOnceForNewFact(t *testing.T) {
 	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
 	current := exchange.Order{
 		ExchangeOrderID: "known-external-order", ClientOrderID: "known-external-client",
-		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
 		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_000),
@@ -264,7 +264,7 @@ func TestKnownExternalFillPausesOnceForNewFact(t *testing.T) {
 		ExchangeTradeID: "known-external-trade",
 		ExchangeOrderID: current.ExchangeOrderID,
 		ClientOrderID:   current.ClientOrderID,
-		Symbol:          current.Symbol,
+		ExchangeSymbol:  current.ExchangeSymbol,
 		Side:            current.Side,
 		PositionSide:    current.PositionSide,
 		Quantity:        shared.MustDecimal("0.25"),
@@ -298,7 +298,7 @@ func TestKnownExternalOrderUpdatePausesOnceForNewFact(t *testing.T) {
 	current := exchange.Order{
 		ExchangeOrderID: "updated-external-order",
 		ClientOrderID:   "updated-external-client",
-		Symbol:          "BTC-USDT",
+		ExchangeSymbol:  "BTC-USDT",
 		OrderType:       exchange.OrderTypeMarket,
 		Side:            exchange.SideBuy,
 		PositionSide:    exchange.PositionSideNet,
@@ -334,7 +334,7 @@ func TestKnownExternalAggregateFillAheadPausesLogicalAccount(t *testing.T) {
 	current := exchange.Order{
 		ExchangeOrderID: "aggregate-external-order",
 		ClientOrderID:   "aggregate-external-client",
-		Symbol:          "BTC-USDT",
+		ExchangeSymbol:  "BTC-USDT",
 		OrderType:       exchange.OrderTypeMarket,
 		Side:            exchange.SideBuy,
 		PositionSide:    exchange.PositionSideNet,
@@ -366,7 +366,7 @@ func TestTerminalExternalFillPausesSynchronouslyWithoutObserver(t *testing.T) {
 	current := exchange.Order{
 		ExchangeOrderID: "terminal-external-order",
 		ClientOrderID:   "terminal-external-client",
-		Symbol:          "BTC-USDT",
+		ExchangeSymbol:  "BTC-USDT",
 		OrderType:       exchange.OrderTypeMarket,
 		Side:            exchange.SideBuy,
 		PositionSide:    exchange.PositionSideNet,
@@ -383,7 +383,7 @@ func TestTerminalExternalFillPausesSynchronouslyWithoutObserver(t *testing.T) {
 		ExchangeTradeID: "terminal-external-trade",
 		ExchangeOrderID: current.ExchangeOrderID,
 		ClientOrderID:   current.ClientOrderID,
-		Symbol:          current.Symbol,
+		ExchangeSymbol:  current.ExchangeSymbol,
 		Side:            current.Side,
 		PositionSide:    current.PositionSide,
 		Quantity:        shared.MustDecimal("1"),
@@ -424,7 +424,7 @@ func TestAccountFactsWakeTargetWorkerAfterReleasingAccountLock(t *testing.T) {
 	}
 	current := exchange.Order{
 		ExchangeOrderID: "external-order", ClientOrderID: "outside-client",
-		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
 		CreatedAt: time.UnixMilli(2_000), UpdatedAt: time.UnixMilli(2_000),
@@ -465,7 +465,7 @@ func TestExternalFactsDoNotReenterLogicalAccountLock(t *testing.T) {
 	go func() {
 		done <- service.ApplyOrder(context.Background(), "account-1", exchange.Order{
 			ExchangeOrderID: "external-order", ClientOrderID: "outside-client",
-			Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+			ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
 			Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 			Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
 			CreatedAt: time.UnixMilli(2_000), UpdatedAt: time.UnixMilli(2_000),
@@ -496,7 +496,7 @@ func TestOrderReducerIgnoresOlderExchangeUpdateAndAggregateFill(t *testing.T) {
 	}
 	open := exchange.Order{
 		ExchangeOrderID: "exchange-monotonic", ClientOrderID: "client-monotonic",
-		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
 		CreatedAt: time.UnixMilli(2_000), UpdatedAt: time.UnixMilli(2_000),
@@ -532,7 +532,7 @@ func TestOrderReducerDoesNotRegressTerminalState(t *testing.T) {
 	}
 	current := exchange.Order{
 		ExchangeOrderID: "exchange-terminal", ClientOrderID: "client-terminal",
-		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
 		CreatedAt: time.UnixMilli(2_000), UpdatedAt: time.UnixMilli(2_000),
@@ -562,7 +562,7 @@ func TestOrderReducerIgnoresRegressingCumulativeFillSnapshot(t *testing.T) {
 	}
 	current := exchange.Order{
 		ExchangeOrderID: "exchange-fill-regression", ClientOrderID: "client-fill-regression",
-		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("2"), Status: exchange.OrderStatusOpen,
 		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
@@ -604,7 +604,7 @@ func TestApplySnapshotResolvesUnknownWithoutReenteringAccountLock(t *testing.T) 
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: "unknown-order",
 			TradingAccountID: "account-1", ClientOrderID: "unknown-client",
-			Symbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY",
+			ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY",
 			PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
 			ReferencePriceAt: 1_000, OwnerType: "TARGET", OwnerID: "target-1",
 			LogicalAccountID: "logical-1", RunnerID: "runner-1",
@@ -615,7 +615,7 @@ func TestApplySnapshotResolvesUnknownWithoutReenteringAccountLock(t *testing.T) 
 	}))
 	adapter := &syncAdapter{order: exchange.Order{
 		ExchangeOrderID: "exchange-unknown", ClientOrderID: "unknown-client",
-		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
 		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
@@ -653,7 +653,7 @@ func TestApplyPartialPositionUsesConfiguredLeverage(t *testing.T) {
 	}
 	err := service.ApplyPosition(context.Background(), "account-1", exchange.Position{
 		TradingAccountID:  "account-1",
-		Symbol:            "BTC-USDT",
+		ExchangeSymbol:    "BTC-USDT",
 		PositionSide:      exchange.PositionSideNet,
 		SignedQuantity:    shared.MustDecimal("1"),
 		EntryPrice:        shared.MustDecimal("100"),
@@ -700,7 +700,7 @@ func TestPartialPositionAndAccountPushDoNotWakeTargetBeforeFullSync(t *testing.T
 	}
 	require.NoError(t, service.ApplyPosition(
 		context.Background(), "account-1", exchange.Position{
-			Symbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
+			ExchangeSymbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
 			SignedQuantity:    shared.MustDecimal("1"),
 			EntryPrice:        shared.MustDecimal("100"),
 			MarginMode:        exchange.MarginModeCross,
@@ -745,7 +745,7 @@ func TestApplyUnknownPartialPositionDefersToFullSync(t *testing.T) {
 		Fills: &consumer.Reducer{Store: tradeStore},
 	}
 	require.NoError(t, service.ApplyPosition(context.Background(), "account-1", exchange.Position{
-		Symbol: "ETH-USDT", PositionSide: exchange.PositionSideNet,
+		ExchangeSymbol: "ETH-USDT", PositionSide: exchange.PositionSideNet,
 		SignedQuantity: shared.MustDecimal("1"),
 		EntryPrice:     shared.MustDecimal("100"), MarginMode: exchange.MarginModeCross,
 		ExchangeUpdatedAt: time.UnixMilli(2_000),
@@ -779,7 +779,7 @@ func TestApplyFillImportsEmptyClientIDPerSymbol(t *testing.T) {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SWAP", Symbol: "ETH-USDT",
+			Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SWAP", ExchangeSymbol: "ETH-USDT",
 			InstrumentID: "ETHUSDT", BaseAsset: "ETH", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "0.1",
 			ContractValueAsset: "ETH", ExchangeQuantityStep: "1",
@@ -800,7 +800,7 @@ func TestApplyFillImportsEmptyClientIDPerSymbol(t *testing.T) {
 		applied, err := service.ApplyFill(context.Background(), "account-1", exchange.Fill{
 			ExchangeTradeID: fmt.Sprintf("trade-%d", index),
 			ExchangeOrderID: "shared-exchange-id",
-			Symbol:          symbol,
+			ExchangeSymbol:  symbol,
 			Side:            exchange.SideBuy,
 			PositionSide:    exchange.PositionSideNet,
 			Quantity:        shared.MustDecimal("0.1"),
@@ -836,14 +836,14 @@ func TestApplySnapshotAggregatesSyntheticExternalOrderFills(t *testing.T) {
 	fills := []exchange.Fill{
 		{
 			ExchangeTradeID: "trade-1", ExchangeOrderID: "archived-order",
-			Symbol: "BTC-USDT", Side: exchange.SideBuy,
+			ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy,
 			PositionSide: exchange.PositionSideNet,
 			Quantity:     shared.MustDecimal("0.2"), Price: shared.MustDecimal("100"),
 			SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_000),
 		},
 		{
 			ExchangeTradeID: "trade-2", ExchangeOrderID: "archived-order",
-			Symbol: "BTC-USDT", Side: exchange.SideBuy,
+			ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy,
 			PositionSide: exchange.PositionSideNet,
 			Quantity:     shared.MustDecimal("0.3"), Price: shared.MustDecimal("110"),
 			SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_100),
@@ -990,14 +990,14 @@ func TestDisconnectReadinessWinsAgainstConcurrentManualSync(t *testing.T) {
 	adapter := &syncAdapter{
 		order: exchange.Order{
 			ExchangeOrderID: "exchange-1", ClientOrderID: "manual-1",
-			Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+			ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
 			Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 			Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
 			CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
 		},
 		fill: exchange.Fill{
 			ExchangeTradeID: "trade-1", ExchangeOrderID: "exchange-1",
-			ClientOrderID: "manual-1", Symbol: "BTC-USDT", Side: exchange.SideBuy,
+			ClientOrderID: "manual-1", ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy,
 			PositionSide: exchange.PositionSideNet,
 			Quantity:     shared.MustDecimal("0.1"), Price: shared.MustDecimal("100"),
 			SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_500),
@@ -1050,7 +1050,7 @@ func TestSyncSymbolsRetainsConfiguredSpotSymbolAfterSellToZero(t *testing.T) {
 		nil,
 		nil,
 		[]store.InstrumentRecord{{
-			Symbol: "BTC-USDT", BaseAsset: "BTC", SettlementAsset: "USDT",
+			ExchangeSymbol: "BTC-USDT", BaseAsset: "BTC", SettlementAsset: "USDT",
 			Status: "TRADING",
 		}},
 		exchange.AccountSnapshot{Balances: []exchange.AssetBalance{{
@@ -1063,7 +1063,7 @@ func TestSyncSymbolsRetainsConfiguredSpotSymbolAfterSellToZero(t *testing.T) {
 		store.TradingAccountRecord{MarketType: "SWAP"},
 		nil,
 		nil,
-		[]exchange.Position{{Symbol: "ETH-USDT"}},
+		[]exchange.Position{{ExchangeSymbol: "ETH-USDT"}},
 		nil,
 		exchange.AccountSnapshot{},
 	)
@@ -1165,7 +1165,7 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SWAP", Symbol: "BTC-USDT",
+			Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SWAP", ExchangeSymbol: "BTC-USDT",
 			InstrumentID: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "0.1",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",

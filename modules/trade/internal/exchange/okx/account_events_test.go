@@ -271,7 +271,7 @@ func TestDispatchPrivatePositionRequiresCrossAndUsesIMR(t *testing.T) {
 func testInstrument() exchange.Instrument {
 	return exchange.Instrument{
 		Exchange: exchange.ExchangeOKX, MarketType: exchange.MarketTypeSwap,
-		Symbol: "BTC-USDT-SWAP", BaseAsset: "BTC", SettlementAsset: "USDT",
+		ExchangeSymbol: "BTC-USDT-SWAP", BaseAsset: "BTC", SettlementAsset: "USDT",
 		Linear: true, ContractValue: must("0.01"), ContractValueAsset: "BTC",
 		ExchangeQuantityStep: must("1"), MinExchangeQuantity: must("1"),
 	}

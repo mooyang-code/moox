@@ -56,7 +56,7 @@ func (a *scriptedSessionAdapter) LoadInstruments(context.Context) ([]exchange.In
 	}
 	return []exchange.Instrument{{
 		Exchange: exchange.ExchangeBinance, MarketType: exchange.MarketTypeSwap,
-		Symbol: "BTC-USDT", InstrumentID: "BTCUSDT",
+		ExchangeSymbol: "BTC-USDT", InstrumentID: "BTCUSDT",
 		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 		Linear: true, ContractValue: shared.MustDecimal("0.1"),
 		ContractValueAsset: "BTC", ExchangeQuantityStep: shared.MustDecimal("1"),
@@ -154,7 +154,7 @@ func (a *scriptedSessionAdapter) Subscribe(
 	a.record("Subscribe")
 	handler.OnSubscribed()
 	if err := handler.OnPosition(ctx, exchange.Position{
-		Symbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
+		ExchangeSymbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
 		SignedQuantity: shared.MustDecimal("0.25"),
 		EntryPrice:     shared.MustDecimal("100"), MarkPrice: shared.MustDecimal("101"),
 		Leverage: shared.MustDecimal("5"), MarginMode: exchange.MarginModeCross,

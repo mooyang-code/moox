@@ -347,7 +347,7 @@ func (s *Service) flattenSwap(
 	bySymbol := make(map[string]store.InstrumentRecord, len(instruments))
 	for _, instrument := range instruments {
 		if tradableForSettlement(instrument, account.SettlementAsset) {
-			bySymbol[instrument.Symbol] = instrument
+			bySymbol[instrument.ExchangeSymbol] = instrument
 		}
 	}
 	for _, position := range positions {
@@ -359,13 +359,13 @@ func (s *Service) flattenSwap(
 		if quantity.IsZero() {
 			continue
 		}
-		instrument, found := bySymbol[position.Symbol]
+		instrument, found := bySymbol[position.ExchangeSymbol]
 		if !found {
-			reasons[position.Symbol] = "position has no tradable instrument mapping"
+			reasons[position.ExchangeSymbol] = "position has no tradable instrument mapping"
 			continue
 		}
 		if reason := quantityRuleReason(quantity.Abs(), instrument); reason != "" {
-			reasons[position.Symbol] = reason
+			reasons[position.ExchangeSymbol] = reason
 			continue
 		}
 		side := exchange.SideSell
@@ -375,7 +375,7 @@ func (s *Service) flattenSwap(
 		if err := s.placeOrContinueFlattenChild(
 			ctx, command, account, instrument, side, quantity.Abs(), result,
 		); err != nil {
-			reasons[position.Symbol] = err.Error()
+			reasons[position.ExchangeSymbol] = err.Error()
 		}
 	}
 }
@@ -436,7 +436,7 @@ func (s *Service) flattenSpot(
 			continue
 		}
 		quote, quoteErr := s.Prices.LatestPrice(
-			ctx, account.TradingAccountID, instrument.Symbol,
+			ctx, account.TradingAccountID, instrument.ExchangeSymbol,
 		)
 		if quoteErr != nil {
 			reasons["asset:"+balance.Asset] = quoteErr.Error()
@@ -471,7 +471,7 @@ func (s *Service) placeOrContinueFlattenChild(
 	result *FlattenAccountResult,
 ) error {
 	quote, err := s.Prices.LatestPrice(
-		ctx, account.TradingAccountID, instrument.Symbol,
+		ctx, account.TradingAccountID, instrument.ExchangeSymbol,
 	)
 	if err != nil {
 		return err
@@ -494,13 +494,13 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	clientOrderID := flattenClientOrderIDForSpec(
 		command.ActionID,
 		account.TradingAccountID,
-		instrument.Symbol,
+		instrument.ExchangeSymbol,
 		side,
 		quantity,
 	)
 	existing, found, err := s.flattenChild(
 		ctx, command.SpaceID, account.TradingAccountID,
-		command.ActionID, instrument.Symbol, clientOrderID,
+		command.ActionID, instrument.ExchangeSymbol, clientOrderID,
 	)
 	if err != nil {
 		return err
@@ -530,7 +530,7 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
 			TradingAccountID: account.TradingAccountID,
 			ClientOrderID:    clientOrderID,
-			InstrumentID:     instrument.Symbol, Type: exchange.OrderTypeMarket,
+			InstrumentID:     instrument.InstrumentID, Type: exchange.OrderTypeMarket,
 			Side: side, Quantity: quantity,
 		},
 		ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
@@ -622,7 +622,7 @@ func (s *Service) remainingForAccount(
 			if parseErr != nil || quantity.IsZero() {
 				continue
 			}
-			reason := reasonFor(reasons, position.Symbol, "position remains after final sync")
+			reason := reasonFor(reasons, position.ExchangeSymbol, "position remains after final sync")
 			instrumentID := position.InstrumentID
 			if instrumentID == "" {
 				instrumentID = position.ExchangeSymbol

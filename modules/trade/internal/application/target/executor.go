@@ -354,7 +354,7 @@ func (e *Executor) loadMembers(
 				continue
 			}
 			instruments[instrument.InstrumentID] = instrument
-			symbols[instrument.Symbol] = instrument.InstrumentID
+			symbols[instrument.ExchangeSymbol] = instrument.InstrumentID
 		}
 		positions := make(map[string]shared.Decimal)
 		blocked := make([]store.BlockedTarget, 0)
@@ -400,10 +400,10 @@ func (e *Executor) loadMembers(
 				if quantity.IsZero() {
 					continue
 				}
-				instrumentID := symbols[position.Symbol]
+				instrumentID := symbols[position.ExchangeSymbol]
 				if instrumentID == "" {
 					blocked = append(blocked, store.BlockedTarget{
-						InstrumentID: position.Symbol,
+						InstrumentID: position.ExchangeSymbol,
 						Quantity:     quantity.String(),
 						Reason: account.TradingAccountID +
 							": position has no tradable instrument mapping",
@@ -628,7 +628,7 @@ func (e *Executor) placeAction(
 		quote, err := e.Prices.LatestPrice(
 			ctx,
 			candidate.member.account.TradingAccountID,
-			candidate.instrument.Symbol,
+			candidate.instrument.ExchangeSymbol,
 		)
 		if err != nil {
 			return false, "", err
@@ -663,7 +663,7 @@ func (e *Executor) placeAction(
 			ClientOrderSpec: orderdomain.ClientOrderSpec{
 				TradingAccountID: candidate.member.account.TradingAccountID,
 				ClientOrderID:    childClientOrderID(),
-				InstrumentID:     candidate.instrument.Symbol,
+				InstrumentID:     candidate.instrument.InstrumentID,
 				Type:             exchange.OrderTypeMarket,
 				Side:             sideForDelta(candidate.delta),
 				Quantity:         quantity,

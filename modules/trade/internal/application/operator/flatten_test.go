@@ -36,7 +36,7 @@ func TestFlattenFreshSyncsBeforeCancelAndClose(t *testing.T) {
 			"flatten-1", "account-a", "BTCUSDT", exchange.SideSell,
 			shared.MustDecimal("2"),
 		),
-		"submit:child-account-a-BTCUSDT",
+		"submit:child-account-a-BTC-USDT-SWAP",
 		"sync:account-a",
 		"sync:account-b",
 		"sync:account-b",
@@ -207,7 +207,7 @@ func TestFlattenRetriesSameActionWithoutDuplicateChildren(t *testing.T) {
 			exchange.SideSell,
 			shared.MustDecimal("2"),
 		),
-		Symbol: "BTCUSDT", OrderType: "MARKET", Side: "SELL",
+		ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "SELL",
 		PositionSide: "NET", Quantity: "2", ReferencePrice: "100",
 		ReferencePriceAt: fixture.now.UnixMilli(), ReduceOnly: true,
 		OwnerType: "OPERATOR", OwnerID: "flatten-1",
@@ -322,7 +322,7 @@ func activeOrder(
 	record := store.OrderRecord{
 		SpaceID: "space-1", OrderID: orderID,
 		TradingAccountID: "account-a", ClientOrderID: orderID,
-		Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+		ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 		PositionSide: map[bool]string{
 			true: "NET", false: "",
 		}[fixture.market == exchange.MarketTypeSwap],
@@ -363,7 +363,7 @@ func TestFlattenRetriesDelayedFillUntilPositionIsZero(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	fixture.orders.nextID = ""
 	fixture.orders.leaveOpen = map[string]bool{
-		"child-account-a-BTCUSDT": true,
+		"child-account-a-BTC-USDT-SWAP": true,
 	}
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	fixture.syncer.onSync = func(ctx context.Context, accountID string, call int) error {
@@ -374,7 +374,7 @@ func TestFlattenRetriesDelayedFillUntilPositionIsZero(t *testing.T) {
 			ctx,
 			fixture.store,
 			"space-1",
-			"child-account-a-BTCUSDT",
+			"child-account-a-BTC-USDT-SWAP",
 			"FILLED",
 		))
 		fixture.position(t, "account-a", "BTCUSDT", "0")
@@ -401,7 +401,7 @@ func TestFlattenRetryStopsAtDeadline(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	fixture.orders.nextID = ""
 	fixture.orders.leaveOpen = map[string]bool{
-		"child-account-a-BTCUSDT": true,
+		"child-account-a-BTC-USDT-SWAP": true,
 	}
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	service := fixture.service()
@@ -452,7 +452,7 @@ func TestFlattenPartialReplayContinuesSameActionWithoutDuplicateChild(t *testing
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	fixture.orders.nextID = ""
 	fixture.orders.leaveOpen = map[string]bool{
-		"child-account-a-BTCUSDT": true,
+		"child-account-a-BTC-USDT-SWAP": true,
 	}
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	command := FlattenCommand{
@@ -468,7 +468,7 @@ func TestFlattenPartialReplayContinuesSameActionWithoutDuplicateChild(t *testing
 		context.Background(),
 		fixture.store,
 		"space-1",
-		"child-account-a-BTCUSDT",
+		"child-account-a-BTC-USDT-SWAP",
 		"FILLED",
 	))
 	fixture.position(t, "account-a", "BTCUSDT", "0")

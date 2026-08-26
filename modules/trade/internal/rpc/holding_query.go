@@ -65,7 +65,7 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 		for _, record := range records {
 			instruments = append(instruments, exchange.Instrument{
 				Exchange: exchange.Exchange(record.Exchange), MarketType: exchange.MarketType(record.MarketType),
-				ExchangeSymbol: record.ExchangeSymbol, Symbol: record.Symbol, InstrumentID: record.InstrumentID,
+				ExchangeSymbol: record.ExchangeSymbol, InstrumentID: record.InstrumentID,
 				BaseAsset: record.BaseAsset, QuoteAsset: record.QuoteAsset, SettlementAsset: record.SettlementAsset,
 			})
 		}
@@ -190,10 +190,7 @@ func paperAverageCostFromFills(fills []store.FillRecord) shared.Decimal {
 }
 
 func holdingQuoteSymbol(instrument exchange.Instrument) string {
-	if instrument.ExchangeSymbol != "" {
-		return instrument.ExchangeSymbol
-	}
-	return instrument.Symbol
+	return instrument.ExchangeSymbol
 }
 
 func unixMillis(value int64) (resultTime time.Time) {

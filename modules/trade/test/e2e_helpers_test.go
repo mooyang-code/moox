@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	testSpace   = "space-e2e"
-	testAccount = "account-e2e"
-	testSymbol  = "BTCUSDT"
+	testSpace        = "space-e2e"
+	testAccount      = "account-e2e"
+	testSymbol       = "BTCUSDT"
+	testInstrumentID = "BTC-USDT"
 )
 
 var testNow = time.Unix(1_700_000_000, 0).UTC()
@@ -72,7 +73,7 @@ type marginCall struct {
 func newFakeExchange(market exchange.MarketType) *fakeExchange {
 	instrument := exchange.Instrument{
 		Exchange: exchange.ExchangeBinance, MarketType: market,
-		Symbol: testSymbol, InstrumentID: "BTC-USDT",
+		ExchangeSymbol: testSymbol, InstrumentID: "BTC-USDT",
 		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 		ExchangeQuantityStep: shared.MustDecimal("0.001"),
 		MinExchangeQuantity:  shared.MustDecimal("0.001"),
@@ -169,7 +170,7 @@ func (f *fakeExchange) ListRecentFills(_ context.Context, symbol shared.Exchange
 			pastCursor = fill.ExchangeTradeID == cursor
 			continue
 		}
-		if fill.Symbol == symbolValue {
+		if fill.ExchangeSymbol == symbolValue {
 			result = append(result, fill)
 			next = fill.ExchangeTradeID
 		}
@@ -200,7 +201,7 @@ func (f *fakeExchange) PlaceOrder(_ context.Context, request exchange.OrderReque
 	now := testNow.Add(time.Duration(f.placeCalls) * time.Second)
 	current := exchange.Order{
 		ExchangeOrderID: fmt.Sprintf("exchange-%d", f.placeCalls),
-		ClientOrderID:   request.ClientOrderID, Symbol: request.Symbol,
+		ClientOrderID:   request.ClientOrderID, ExchangeSymbol: request.ExchangeSymbol,
 		OrderType: request.OrderType, TimeInForce: request.NativeTimeInForce(),
 		Side: request.Side, PositionSide: request.PositionSide,
 		Quantity: request.Quantity, ReduceOnly: request.ReduceOnly,
@@ -342,8 +343,8 @@ func (a *synchronousPaperAdapter) PlaceOrder(ctx context.Context, request exchan
 	fill := exchange.Fill{
 		ExchangeTradeID: "paper-trade-" + request.ClientOrderID,
 		ExchangeOrderID: response.ExchangeOrderID, ClientOrderID: request.ClientOrderID,
-		ExchangeSymbol: record.ExchangeSymbol, Symbol: record.ExchangeSymbol,
-		Side: exchange.Side(record.Side), PositionSide: exchange.PositionSide(record.PositionSide),
+		ExchangeSymbol: record.ExchangeSymbol,
+		Side:           exchange.Side(record.Side), PositionSide: exchange.PositionSide(record.PositionSide),
 		Quantity: request.Quantity, Price: price, Fee: shared.Zero(),
 		FeeAsset: record.ReservedAsset, SettlementAsset: "USDT",
 		RealizedPnL: realized, LiquidityRole: "TAKER", TradedAt: testNow,
@@ -452,7 +453,6 @@ func (a *synchronousPaperAdapter) ListPositionSnapshots(ctx context.Context) ([]
 				TradingAccountID:  a.Account.TradingAccountID,
 				InstrumentID:      fill.ExchangeSymbol,
 				ExchangeSymbol:    fill.ExchangeSymbol,
-				Symbol:            fill.ExchangeSymbol,
 				PositionSide:      exchange.PositionSideNet,
 				Leverage:          decimal(a.Account.LeverageSettings[fill.ExchangeSymbol]),
 				MarginMode:        exchange.MarginMode(a.Account.MarginMode),
@@ -482,7 +482,7 @@ func (f *fakeExchange) emitFill(clientID, tradeID, quantity, price, realized str
 	current := f.orders[clientID]
 	fill := exchange.Fill{
 		ExchangeTradeID: tradeID, ExchangeOrderID: current.ExchangeOrderID,
-		ClientOrderID: clientID, Symbol: current.Symbol, Side: current.Side,
+		ClientOrderID: clientID, ExchangeSymbol: current.ExchangeSymbol, Side: current.Side,
 		PositionSide: current.PositionSide, Quantity: shared.MustDecimal(quantity),
 		Price: shared.MustDecimal(price), Fee: shared.MustDecimal("0.1"), FeeAsset: "USDT",
 		RealizedPnL: shared.MustDecimal(realized), SettlementAsset: "USDT",
@@ -515,13 +515,10 @@ type instrumentSource struct{ store *store.Store }
 func (s instrumentSource) GetInstrument(ctx context.Context, name exchange.Exchange, market exchange.MarketType, symbol string) (exchange.Instrument, error) {
 	record, err := s.store.GetInstrumentByIDScoped(ctx, symbol, string(name), string(market))
 	if err != nil {
-		record, err = s.store.GetInstrument(ctx, string(name), string(market), symbol)
-	}
-	if err != nil {
 		return exchange.Instrument{}, err
 	}
 	return exchange.Instrument{
-		Exchange: name, MarketType: market, Symbol: record.Symbol, ExchangeSymbol: record.ExchangeSymbol,
+		Exchange: name, MarketType: market, ExchangeSymbol: record.ExchangeSymbol,
 		InstrumentID: record.InstrumentID, BaseAsset: record.BaseAsset,
 		QuoteAsset: record.QuoteAsset, SettlementAsset: record.SettlementAsset,
 		Linear: record.Linear, ContractValue: decimal(record.ContractValue),
@@ -543,10 +540,10 @@ func (s positionSource) GetPosition(ctx context.Context, accountID, symbol strin
 		}
 	}
 	if err != nil || !found {
-		return exchange.Position{TradingAccountID: accountID, Symbol: symbol, PositionSide: exchange.PositionSideNet}, err
+		return exchange.Position{TradingAccountID: accountID, ExchangeSymbol: symbol, PositionSide: exchange.PositionSideNet}, err
 	}
 	return exchange.Position{
-		TradingAccountID: accountID, Symbol: symbol,
+		TradingAccountID: accountID, ExchangeSymbol: symbol,
 		PositionSide:   exchange.PositionSide(record.PositionSide),
 		SignedQuantity: decimal(record.SignedQuantity),
 		EntryPrice:     decimal(record.EntryPrice), MarkPrice: decimal(record.MarkPrice),
@@ -683,7 +680,7 @@ func seedFixture(t *testing.T, tradeStore *store.Store, market exchange.MarketTy
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
 			Exchange: string(instrument.Exchange), MarketType: string(market),
-			Symbol: instrument.Symbol, InstrumentID: instrument.InstrumentID,
+			ExchangeSymbol: instrument.ExchangeSymbol, InstrumentID: instrument.InstrumentID,
 			BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
 			SettlementAsset: instrument.SettlementAsset, Linear: instrument.Linear,
 			ContractValue:        instrument.ContractValue.String(),
@@ -706,7 +703,7 @@ func marketSpec(clientID string, side exchange.Side, quantity string) orderdomai
 	return orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
 			TradingAccountID: testAccount, ClientOrderID: clientID,
-			InstrumentID: testSymbol, Type: exchange.OrderTypeMarket, Side: side,
+			InstrumentID: testInstrumentID, Type: exchange.OrderTypeMarket, Side: side,
 			Quantity: shared.MustDecimal(quantity),
 		},
 		ReferencePrice: shared.MustDecimal("50000"), ReferencePriceAt: testNow,

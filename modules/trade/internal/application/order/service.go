@@ -421,7 +421,7 @@ func (s *Service) Cancel(
 		return orderdomain.Order{}, err
 	}
 
-	response, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.Symbol), record.ClientOrderID)
+	response, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
 	if callErr == nil {
 		account, accountErr := s.Store.GetTradingAccountByID(ctx, record.TradingAccountID)
 		if accountErr != nil {
@@ -493,7 +493,7 @@ func (s *Service) RecoverCancel(
 	if err != nil {
 		return current, err
 	}
-	_, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.Symbol), record.ClientOrderID)
+	_, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
 	if callErr == nil {
 		if err := s.Syncer.SyncAccount(ctx, record.TradingAccountID); err != nil {
 			return current, err
@@ -637,14 +637,14 @@ func (s *Service) resolveUnknown(
 	if err != nil {
 		return current, err
 	}
-	found, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(record.Symbol), record.ClientOrderID)
+	found, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
 	if lookupErr == nil {
 		return s.resolveUnknownFound(ctx, record, current, found.ExchangeOrderID)
 	}
 	if !exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound) {
 		return current, lookupErr
 	}
-	fills, _, fillsErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(record.Symbol), "")
+	fills, _, fillsErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), "")
 	if fillsErr != nil {
 		return current, fillsErr
 	}
@@ -766,8 +766,7 @@ func (s *Service) submit(
 	}
 	response, callErr := adapter.PlaceOrder(ctx, exchange.OrderRequest{
 		ClientOrderID:  aggregate.Spec.ClientOrderID,
-		ExchangeSymbol: exchangeSymbol,
-		Symbol:         exchangeSymbol, OrderType: aggregate.Spec.Type,
+		ExchangeSymbol: exchangeSymbol, OrderType: aggregate.Spec.Type,
 		FillPolicy: aggregate.Spec.FillPolicy, Side: aggregate.Spec.Side,
 		PositionSide: aggregate.Spec.PositionSide, Quantity: aggregate.Spec.Quantity,
 		LimitPrice: aggregate.Spec.LimitPrice, ReferencePrice: aggregate.Spec.ReferencePrice,
@@ -885,7 +884,6 @@ func orderRecord(validation Validation, value orderdomain.Order) store.OrderReco
 		MarketType:       string(validation.Account.MarketType),
 		InstrumentID:     instrumentID,
 		ExchangeSymbol:   exchangeSymbol,
-		Symbol:           exchangeSymbol,
 		OrderType:        string(value.Spec.Type), TimeInForce: string(value.Spec.FillPolicy),
 		Side: string(value.Spec.Side), PositionSide: string(value.Spec.PositionSide),
 		Quantity: value.Spec.Quantity.String(), LimitPrice: limitPrice,

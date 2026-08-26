@@ -290,7 +290,7 @@ func (a *Adapter) dispatchPrivate(
 			}
 			position := exchange.Position{
 				TradingAccountID: a.config.TradingAccountID,
-				ExchangeSymbol:   row.InstID, Symbol: row.InstID, PositionSide: exchange.PositionSideNet,
+				ExchangeSymbol:   row.InstID, PositionSide: exchange.PositionSideNet,
 				SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 				ExchangeUpdatedAt: millisString(row.UTime),
 				Present: exchange.PositionPresence{

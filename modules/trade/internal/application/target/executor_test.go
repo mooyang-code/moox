@@ -172,7 +172,7 @@ func TestTargetExecutorPausedOwnerReleaseCancelsOwnedOrderWithoutError(t *testin
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "target-open",
 		TradingAccountID: "account-a", ClientOrderID: "target-open",
-		Exchange: "BINANCE", MarketType: "SWAP", Symbol: "BTCUSDT",
+		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
 		Quantity: "1", ReferencePrice: "100", ReferencePriceAt: 2_000,
 		OwnerType: "TARGET", OwnerID: "target-current",
@@ -268,7 +268,7 @@ func TestTargetExecutorFullOmissionCancelsOldTargetBeforeClosing(t *testing.T) {
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "old-child",
 		TradingAccountID: "account-a", ClientOrderID: "old-child",
-		Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+		ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 		PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "target-old",
 		LogicalAccountID: "logical-1", RunnerID: "runner-1",
@@ -291,7 +291,7 @@ func TestTargetExecutorPausesOnExternalOrderWithoutCancel(t *testing.T) {
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "external-order",
 		TradingAccountID: "account-a", ClientOrderID: "external-order",
-		ExchangeOrderID: "exchange-order", Symbol: "BTCUSDT",
+		ExchangeOrderID: "exchange-order", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
 		Quantity: "1", ReferencePrice: "100",
 		OwnerType: "EXTERNAL", OwnerID: "exchange-order",
@@ -450,7 +450,7 @@ func TestTargetExecutorCancelsCurrentOrderWhenExposureBecomesUnmapped(t *testing
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "current-child",
 		TradingAccountID: "account-a", ClientOrderID: "current-child",
-		Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "1",
 		ReferencePrice: "100", ReferencePriceAt: 2_000,
 		OwnerType: "TARGET", OwnerID: "target-current",
@@ -572,14 +572,14 @@ func (f *targetFixture) account(
 func (f *targetFixture) instruments() []store.InstrumentRecord {
 	values := []store.InstrumentRecord{
 		{
-			Exchange: "BINANCE", MarketType: string(f.market), Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: string(f.market), ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-" + string(f.market),
 			BaseAsset:    "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			ExchangeQuantityStep: "1", MinExchangeQuantity: "1",
 			PriceTick: "0.1", Status: "TRADING",
 		},
 		{
-			Exchange: "OKX", MarketType: string(f.market), Symbol: "BTC-USDT-SWAP",
+			Exchange: "OKX", MarketType: string(f.market), ExchangeSymbol: "BTC-USDT-SWAP",
 			InstrumentID: "BTC-USDT-" + string(f.market),
 			BaseAsset:    "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			ExchangeQuantityStep: "1", MinExchangeQuantity: "1",
@@ -621,7 +621,7 @@ func (f *targetFixture) position(
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
 			SpaceID: "space-1", TradingAccountID: accountID,
-			Symbol: symbol, PositionSide: "NET", SignedQuantity: quantity,
+			ExchangeSymbol: symbol, PositionSide: "NET", SignedQuantity: quantity,
 			EntryPrice: "100", MarkPrice: "100", Leverage: "5",
 			MarginMode: "CROSS", ExchangeUpdatedAt: 1_900,
 		})

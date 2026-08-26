@@ -97,6 +97,12 @@ func setFixtureLive(t *testing.T, f *fixture) {
 		WHERE c_space_id = ? AND c_trading_account_id = ?
 	`, testSpace, testAccount).Error
 	require.NoError(t, err)
+	err = f.store.DBForTest().Exec(`
+		UPDATE t_trade_instruments
+		SET c_environment = 'TESTNET'
+		WHERE c_exchange = 'BINANCE'
+	`).Error
+	require.NoError(t, err)
 }
 
 func newProductionPaperFixture(t *testing.T, market exchange.MarketType) *fixture {
@@ -161,8 +167,8 @@ func productionPaperMatch(t *testing.T, f *fixture) {
 			return paperexec.Decision{Fill: exchange.Fill{
 				ExchangeTradeID: candidate.TradingAccountID + ":" + candidate.ClientOrderID,
 				ExchangeOrderID: candidate.ExchangeOrderID, ClientOrderID: candidate.ClientOrderID,
-				ExchangeSymbol: candidate.ExchangeSymbol, Symbol: candidate.ExchangeSymbol,
-				Side: exchange.Side(candidate.Side), PositionSide: exchange.PositionSide(candidate.PositionSide),
+				ExchangeSymbol: candidate.ExchangeSymbol,
+				Side:           exchange.Side(candidate.Side), PositionSide: exchange.PositionSide(candidate.PositionSide),
 				Quantity: shared.MustDecimal(candidate.Quantity), Price: price, Fee: fee,
 				FeeAsset: candidate.ReservedAsset, SettlementAsset: candidate.ReservedAsset,
 				LiquidityRole: "TAKER", TradedAt: testNow,

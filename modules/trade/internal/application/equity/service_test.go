@@ -70,7 +70,7 @@ func TestSampleAccountValuesLiveSpotBalancesWhenSnapshotHasNoEquity(t *testing.T
 		t.Fatal(err)
 	}
 	adapter := &equityTestAdapter{
-		instruments: []exchange.Instrument{{MarketType: exchange.MarketTypeSpot, Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT"}},
+		instruments: []exchange.Instrument{{MarketType: exchange.MarketTypeSpot, ExchangeSymbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT"}},
 		price:       exchange.ReferencePrice{Price: shared.MustDecimal("50000"), UpdatedAt: time.UnixMilli(sourceMillis + 1)},
 	}
 	service := &Service{Store: tradeStore, Adapters: equityTestAdapters{adapter: adapter}, Now: func() time.Time { return time.UnixMilli(sourceMillis + 2) }}
@@ -85,7 +85,7 @@ func TestSampleAccountValuesLiveSpotBalancesWhenSnapshotHasNoEquity(t *testing.T
 		t.Fatalf("equity points = %+v", points)
 	}
 	if adapter.symbol != "BTCUSDT" {
-		t.Fatalf("quote symbol = %q, want legacy instrument Symbol", adapter.symbol)
+		t.Fatalf("quote symbol = %q, want instrument ExchangeSymbol", adapter.symbol)
 	}
 	logicalPoints, err := tradeStore.ListLogicalAccountEquityPoints(context.Background(), "space-1", "logical-1", 0, 0)
 	if err != nil {

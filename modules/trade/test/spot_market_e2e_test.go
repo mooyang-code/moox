@@ -99,7 +99,7 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 	require.Equal(t, exchange.SideBuy, requests[0].Side)
 	require.Equal(t, exchange.SideSell, requests[1].Side)
 	for _, request := range requests {
-		require.Equal(t, testSymbol, request.Symbol)
+		require.Equal(t, testSymbol, request.ExchangeSymbol)
 		require.Equal(t, exchange.PositionSideUnspecified, request.PositionSide)
 		require.False(t, request.ReduceOnly)
 		require.Equal(t, "0.01", request.Quantity.String())

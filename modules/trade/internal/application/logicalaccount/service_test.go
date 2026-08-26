@@ -17,7 +17,7 @@ func TestAddMemberRequiresAdoptionForExistingExposure(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
 			SpaceID: "space-1", TradingAccountID: "account-b",
-			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 			Leverage: "5", MarginMode: "CROSS",
 			ExchangeUpdatedAt: 1_900,
 		})
@@ -41,7 +41,7 @@ func TestRemoveMemberRejectsActiveOrdersOrPositions(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a",
-			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 			Leverage: "5", MarginMode: "CROSS",
 			ExchangeUpdatedAt: 1_900,
 		})
@@ -58,7 +58,7 @@ func TestDisableMemberCannotAdoptAwayExistingExposure(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a",
-			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 			Leverage: "5", MarginMode: "CROSS",
 			ExchangeUpdatedAt: 1_900,
 		})
@@ -206,7 +206,7 @@ func TestClaimOwnerWaitsForPreviousRunnerTargetOrdersToStop(t *testing.T) {
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: "old-target-order",
 			TradingAccountID: "account-a", ClientOrderID: "old-target-order",
-			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+			ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
 			ReferencePriceAt: 2_000,
 			OwnerType:        "TARGET", OwnerID: "old-target",
@@ -287,7 +287,7 @@ func TestLogicalReadinessRejectsTargetForDifferentSettlementAsset(t *testing.T) 
 	service, tradeStore := logicalAccountServiceFixture(t)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SWAP", Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDC", Linear: true, ContractValue: "0.001",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -388,7 +388,7 @@ func logicalAccountServiceFixture(t *testing.T) (*Service, *store.Store) {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SWAP", Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "0.001",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",

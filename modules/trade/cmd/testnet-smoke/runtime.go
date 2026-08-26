@@ -71,7 +71,7 @@ func seedSmokeStore(
 			CredentialSecretID: options.SecretID,
 			SettlementAsset:    "USDT",
 			Status:             string(exchange.AccountStatusEnabled),
-			SyncSymbols:        []string{options.Symbol},
+			SyncSymbols:        []string{options.ExchangeSymbol},
 			LeverageSettings:   store.LeverageSettings{},
 			FillCursors:        store.FillCursors{},
 		}); err != nil {
@@ -180,7 +180,7 @@ func validateQueriedOrder(state smokeState, current exchange.Order) error {
 		current.ExchangeOrderID != state.ExchangeOrderID {
 		return errors.New("queried Exchange order ID does not match persisted state")
 	}
-	if current.Symbol != state.Symbol {
+	if current.ExchangeSymbol != state.ExchangeSymbol {
 		return errors.New("queried symbol does not match persisted state")
 	}
 	return nil

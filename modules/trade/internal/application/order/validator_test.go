@@ -410,7 +410,7 @@ func executableAccount(market exchange.MarketType) tradingaccount.Account {
 
 func testInstrument(market exchange.MarketType) exchange.Instrument {
 	instrument := exchange.Instrument{
-		Exchange: exchange.ExchangeBinance, MarketType: market, Symbol: "BTC-USDT",
+		Exchange: exchange.ExchangeBinance, MarketType: market, ExchangeSymbol: "BTC-USDT",
 		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 		ExchangeQuantityStep: shared.MustDecimal("0.1"),
 		MinExchangeQuantity:  shared.MustDecimal("0.1"),

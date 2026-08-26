@@ -20,15 +20,15 @@ const (
 )
 
 type smokeOptions struct {
-	Phase       string
-	Exchange    exchange.Exchange
-	Environment exchange.AccountEnvironment
-	SecretID    string
-	Database    string
-	State       string
-	Config      string
-	Symbol      string
-	MaxNotional shared.Decimal
+	Phase          string
+	Exchange       exchange.Exchange
+	Environment    exchange.AccountEnvironment
+	SecretID       string
+	Database       string
+	State          string
+	Config         string
+	ExchangeSymbol string
+	MaxNotional    shared.Decimal
 }
 
 func parseOptions(args []string, getenv func(string) string) (smokeOptions, error) {
@@ -42,7 +42,7 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 	flags.StringVar(&options.Database, "database", "", "isolated Trade SQLite database")
 	flags.StringVar(&options.State, "state", "", "restart state file")
 	flags.StringVar(&options.Config, "config", "modules/trade/config/app.yaml", "Trade app config")
-	flags.StringVar(&options.Symbol, "symbol", "", "testnet native symbol")
+	flags.StringVar(&options.ExchangeSymbol, "exchange-symbol", "", "testnet native exchange symbol")
 	flags.StringVar(&maxNotional, "max-notional", "20", "maximum test order quote notional")
 	if err := flags.Parse(args); err != nil {
 		return options, err
@@ -69,11 +69,11 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 	if strings.TrimSpace(options.State) == "" {
 		return options, errors.New("restart state path is required")
 	}
-	if options.Symbol == "" {
+	if options.ExchangeSymbol == "" {
 		if options.Exchange == exchange.ExchangeBinance {
-			options.Symbol = "BTCUSDT"
+			options.ExchangeSymbol = "BTCUSDT"
 		} else {
-			options.Symbol = "BTC-USDT"
+			options.ExchangeSymbol = "BTC-USDT"
 		}
 	}
 	var err error
@@ -156,7 +156,8 @@ type smokeState struct {
 	SpaceID           string                      `json:"space_id"`
 	AccountID         string                      `json:"account_id"`
 	LogicalAccountID  string                      `json:"logical_account_id"`
-	Symbol            string                      `json:"symbol"`
+	InstrumentID      string                      `json:"instrument_id"`
+	ExchangeSymbol    string                      `json:"exchange_symbol"`
 	BaseAsset         string                      `json:"base_asset"`
 	BaselineBaseTotal string                      `json:"baseline_base_total"`
 	ClientOrderID     string                      `json:"client_order_id"`
@@ -225,7 +226,8 @@ func validateState(state smokeState, expected exchange.Exchange) error {
 	if state.SpaceID != smokeSpaceID ||
 		strings.TrimSpace(state.AccountID) == "" ||
 		strings.TrimSpace(state.LogicalAccountID) == "" ||
-		strings.TrimSpace(state.Symbol) == "" ||
+		strings.TrimSpace(state.InstrumentID) == "" ||
+		strings.TrimSpace(state.ExchangeSymbol) == "" ||
 		strings.TrimSpace(state.BaseAsset) == "" ||
 		strings.TrimSpace(state.BaselineBaseTotal) == "" ||
 		strings.TrimSpace(state.ClientOrderID) == "" ||

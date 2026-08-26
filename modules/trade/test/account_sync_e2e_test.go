@@ -29,14 +29,14 @@ func TestAccountSyncFailureRecoveryImportsExternalOrderAndFill(t *testing.T) {
 	fake.accountErr = nil
 	fake.orders["external-client"] = exchange.Order{
 		ExchangeOrderID: "external-order", ClientOrderID: "external-client",
-		Symbol: testSymbol, OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		ExchangeSymbol: testSymbol, OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal("0.02"), FilledQuantity: shared.MustDecimal("0.01"),
 		AveragePrice: shared.MustDecimal("50000"), Status: exchange.OrderStatusPartiallyFilled,
 		CreatedAt: testNow.Add(time.Second), UpdatedAt: testNow.Add(2 * time.Second),
 	}
 	fake.fills = append(fake.fills, exchange.Fill{
 		ExchangeTradeID: "external-trade", ExchangeOrderID: "external-order",
-		ClientOrderID: "external-client", Symbol: testSymbol, Side: exchange.SideBuy,
+		ClientOrderID: "external-client", ExchangeSymbol: testSymbol, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal("0.01"), Price: shared.MustDecimal("50000"),
 		Fee: shared.MustDecimal("0.1"), FeeAsset: "USDT", SettlementAsset: "USDT",
 		LiquidityRole: "TAKER", TradedAt: testNow.Add(3 * time.Second),

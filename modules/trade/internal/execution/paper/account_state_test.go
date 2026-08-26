@@ -18,7 +18,7 @@ func TestRebuildSpotStateIncludesFeesAndReservations(t *testing.T) {
 		},
 	}
 	instruments := []exchange.Instrument{{
-		Symbol: "BTCUSDT", ExchangeSymbol: "BTCUSDT", QuoteAsset: "USDT",
+		ExchangeSymbol: "BTCUSDT", QuoteAsset: "USDT",
 	}}
 	fee := shared.MustDecimal("0.4")
 	state, err := Rebuild(account, instruments, []exchange.Fill{{

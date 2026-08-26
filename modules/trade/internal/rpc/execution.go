@@ -15,7 +15,7 @@ type ManualOrderCommand struct {
 	ActionID         string
 	TradingAccountID string
 	ClientOrderID    string
-	Symbol           string
+	InstrumentID     string
 	OrderType        exchange.OrderType
 	FillPolicy       exchange.FillPolicy
 	Side             exchange.Side
@@ -76,7 +76,7 @@ func (h *ExecutionServer) PlaceManualOrder(
 		action, order, err = h.PlaceManual(ctx, ManualOrderCommand{
 			SpaceID: spaceID, ActionID: req.GetActionId(),
 			TradingAccountID: req.GetTradingAccountId(),
-			ClientOrderID:    req.GetClientOrderId(), Symbol: req.GetInstrumentId(),
+			ClientOrderID:    req.GetClientOrderId(), InstrumentID: req.GetInstrumentId(),
 			OrderType:    orderTypeFromPB(req.GetOrderType()),
 			FillPolicy:   fillPolicyFromPB(req.GetFillPolicy()),
 			Side:         sideFromPB(req.GetSide()),

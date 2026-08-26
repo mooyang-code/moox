@@ -162,7 +162,6 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 			Exchange:           exchange.ExchangeBinance,
 			MarketType:         a.config.MarketType,
 			ExchangeSymbol:     item.Symbol,
-			Symbol:             item.Symbol,
 			InstrumentID:       instrumentID,
 			BaseAsset:          item.BaseAsset,
 			QuoteAsset:         item.QuoteAsset,
@@ -209,7 +208,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	a.mu.Lock()
 	a.instruments = make(map[string]exchange.Instrument, len(out))
 	for _, instrument := range out {
-		a.instruments[instrument.Symbol] = instrument
+		a.instruments[instrument.ExchangeSymbol] = instrument
 	}
 	a.mu.Unlock()
 	return out, nil
@@ -461,7 +460,7 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		}
 		position := exchange.Position{
 			TradingAccountID: a.config.TradingAccountID,
-			ExchangeSymbol:   row.Symbol, Symbol: row.Symbol, PositionSide: exchange.PositionSideNet,
+			ExchangeSymbol:   row.Symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(row.UpdateTime),
 		}
@@ -583,7 +582,7 @@ func (a *Adapter) PlaceOrder(
 		return exchange.Order{}, err
 	}
 	values := url.Values{
-		"symbol":           []string{request.Symbol},
+		"symbol":           []string{request.ExchangeSymbol},
 		"newClientOrderId": []string{request.ClientOrderID},
 		"side":             []string{string(request.Side)},
 		"type":             []string{string(request.OrderType)},
@@ -619,7 +618,7 @@ func (a *Adapter) PlaceOrder(
 	}
 	// Some Binance acknowledgements omit these echoed fields.
 	order.ClientOrderID = request.ClientOrderID
-	order.Symbol = request.Symbol
+	order.ExchangeSymbol = request.ExchangeSymbol
 	order.OrderType = request.OrderType
 	order.TimeInForce = request.NativeTimeInForce()
 	order.Side = request.Side
@@ -869,7 +868,6 @@ func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
 		ExchangeOrderID: row.OrderID.String(),
 		ClientOrderID:   row.ClientOrderID,
 		ExchangeSymbol:  row.Symbol,
-		Symbol:          row.Symbol,
 		OrderType:       exchange.OrderType(row.Type),
 		TimeInForce:     exchange.TimeInForce(row.TimeInForce),
 		Side:            exchange.Side(row.Side),
@@ -921,7 +919,6 @@ func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
 		ExchangeTradeID: row.ID.String(),
 		ExchangeOrderID: row.OrderID.String(),
 		ExchangeSymbol:  row.Symbol,
-		Symbol:          row.Symbol,
 		Side:            side,
 		PositionSide:    positionSide,
 		Quantity:        quantity,
@@ -937,7 +934,7 @@ func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
 
 func validateOrderRequest(request exchange.OrderRequest, market exchange.MarketType) error {
 	if strings.TrimSpace(request.ClientOrderID) == "" ||
-		strings.TrimSpace(request.Symbol) == "" ||
+		strings.TrimSpace(request.ExchangeSymbol) == "" ||
 		!request.Side.Valid() ||
 		request.Quantity.Cmp(shared.Zero()) <= 0 {
 		return typedRejected("invalid order request", nil)

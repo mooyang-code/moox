@@ -40,7 +40,7 @@ func TestSubmitFailuresRemainUnknownAndRecoverByClientIDWithoutReplace(t *testin
 			fake.placeErr = nil
 			fake.orders[unknown.Spec.ClientOrderID] = exchange.Order{
 				ExchangeOrderID: "accepted-despite-response-loss",
-				ClientOrderID:   unknown.Spec.ClientOrderID, Symbol: testSymbol,
+				ClientOrderID:   unknown.Spec.ClientOrderID, ExchangeSymbol: testSymbol,
 				OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 				Quantity: unknown.Spec.Quantity, Status: exchange.OrderStatusOpen,
 				CreatedAt: testNow, UpdatedAt: testNow,

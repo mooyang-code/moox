@@ -178,7 +178,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		}
 		instrument := exchange.Instrument{
 			Exchange: exchange.ExchangeOKX, MarketType: a.config.MarketType,
-			ExchangeSymbol: row.InstID, Symbol: row.InstID, InstrumentID: instrumentID,
+			ExchangeSymbol: row.InstID, InstrumentID: instrumentID,
 			BaseAsset: baseAsset, QuoteAsset: quoteAsset,
 			Status: row.State, ExchangeUpdatedAt: time.Now().UTC(),
 		}
@@ -212,7 +212,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	a.mu.Lock()
 	a.instruments = make(map[string]exchange.Instrument, len(out))
 	for _, instrument := range out {
-		a.instruments[instrument.Symbol] = instrument
+		a.instruments[instrument.ExchangeSymbol] = instrument
 	}
 	a.mu.Unlock()
 	return out, nil
@@ -469,7 +469,7 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		}
 		position := exchange.Position{
 			TradingAccountID: a.config.TradingAccountID,
-			ExchangeSymbol:   row.InstID, Symbol: row.InstID, PositionSide: exchange.PositionSideNet,
+			ExchangeSymbol:   row.InstID, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millisString(row.UTime),
 		}
@@ -590,12 +590,12 @@ func (a *Adapter) PlaceOrder(
 	if err := validateRequest(request, a.config.MarketType); err != nil {
 		return exchange.Order{}, err
 	}
-	quantity, err := a.toExchangeQuantity(request.Symbol, request.Quantity)
+	quantity, err := a.toExchangeQuantity(request.ExchangeSymbol, request.Quantity)
 	if err != nil {
 		return exchange.Order{}, err
 	}
 	body := map[string]string{
-		"instId": request.Symbol, "clOrdId": request.ClientOrderID,
+		"instId": request.ExchangeSymbol, "clOrdId": request.ClientOrderID,
 		"tdMode": "cash", "side": strings.ToLower(string(request.Side)),
 		"ordType": strings.ToLower(string(request.OrderType)),
 		"sz":      quantity.String(),
@@ -632,7 +632,7 @@ func (a *Adapter) PlaceOrder(
 	return exchange.Order{
 		ExchangeOrderID: payload[0].OrdID,
 		ClientOrderID:   request.ClientOrderID,
-		Symbol:          request.Symbol,
+		ExchangeSymbol:  request.ExchangeSymbol,
 		OrderType:       request.OrderType,
 		TimeInForce:     request.NativeTimeInForce(),
 		Side:            request.Side,
@@ -857,7 +857,7 @@ func (a *Adapter) order(row orderPayload) (exchange.Order, error) {
 	}
 	return exchange.Order{
 		ExchangeOrderID: row.OrdID, ClientOrderID: row.ClOrdID,
-		ExchangeSymbol: row.InstID, Symbol: row.InstID, OrderType: orderType, TimeInForce: tif,
+		ExchangeSymbol: row.InstID, OrderType: orderType, TimeInForce: tif,
 		Side: exchange.Side(strings.ToUpper(row.Side)), PositionSide: positionSide,
 		Quantity: quantity, LimitPrice: limitPrice,
 		FilledQuantity: filled, AveragePrice: average,
@@ -897,7 +897,7 @@ func (a *Adapter) fill(row fillPayload) (exchange.Fill, error) {
 	}
 	return exchange.Fill{
 		ExchangeTradeID: row.TradeID, ExchangeOrderID: row.OrdID,
-		ClientOrderID: row.ClOrdID, ExchangeSymbol: row.InstID, Symbol: row.InstID,
+		ClientOrderID: row.ClOrdID, ExchangeSymbol: row.InstID,
 		Side: exchange.Side(strings.ToUpper(row.Side)), PositionSide: positionSide,
 		Quantity: quantity, Price: price, Fee: fee.Abs(), FeeAsset: row.FeeCcy,
 		RealizedPnL: pnl, SettlementAsset: a.config.SettlementAsset,
@@ -907,7 +907,7 @@ func (a *Adapter) fill(row fillPayload) (exchange.Fill, error) {
 
 func validateRequest(request exchange.OrderRequest, market exchange.MarketType) error {
 	if strings.TrimSpace(request.ClientOrderID) == "" ||
-		strings.TrimSpace(request.Symbol) == "" ||
+		strings.TrimSpace(request.ExchangeSymbol) == "" ||
 		!request.Side.Valid() ||
 		request.Quantity.Cmp(shared.Zero()) <= 0 {
 		return rejected("invalid order request", nil)

@@ -167,9 +167,6 @@ func (v Validator) Validate(
 		if !found && instrument.ExchangeSymbol != "" {
 			leverage, found = account.LeverageSettings[instrument.ExchangeSymbol]
 		}
-		if !found && instrument.Symbol != "" {
-			leverage, found = account.LeverageSettings[instrument.Symbol]
-		}
 		if !found && account.ExecutionMode == exchange.ExecutionModePaper {
 			leverage, found = account.LeverageSettings["*"]
 		}

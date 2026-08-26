@@ -300,8 +300,8 @@ func initialize(
 		return executionpaper.Decision{Fill: exchange.Fill{
 			ExchangeTradeID: candidate.TradingAccountID + ":" + candidate.ClientOrderID,
 			ExchangeOrderID: candidate.ExchangeOrderID, ClientOrderID: candidate.ClientOrderID,
-			ExchangeSymbol: candidate.ExchangeSymbol, Symbol: candidate.ExchangeSymbol,
-			Side: exchange.Side(candidate.Side), PositionSide: exchange.PositionSide(candidate.PositionSide),
+			ExchangeSymbol: candidate.ExchangeSymbol,
+			Side:           exchange.Side(candidate.Side), PositionSide: exchange.PositionSide(candidate.PositionSide),
 			Quantity: decimal(candidate.Quantity), Price: price, Fee: fee, RealizedPnL: realizedPnL,
 			FeeAsset: feeAsset, SettlementAsset: feeAsset, LiquidityRole: role,
 			TradedAt: time.Now().UTC(),
@@ -499,7 +499,7 @@ func initialize(
 						SpaceID: command.SpaceID, ActionID: command.ActionID,
 						TradingAccountID: command.TradingAccountID,
 						ClientOrderID:    command.ClientOrderID,
-						InstrumentID:     command.Symbol,
+						InstrumentID:     command.InstrumentID,
 						Type:             command.OrderType, FillPolicy: command.FillPolicy,
 						Side: command.Side, PositionSide: command.PositionSide,
 						Quantity: command.Quantity, LimitPrice: command.LimitPrice,
@@ -647,14 +647,9 @@ func (s instrumentSource) GetInstrument(
 	market exchange.MarketType,
 	symbol string,
 ) (exchange.Instrument, error) {
-	// Order specs carry the canonical InstrumentID. During the green-field
-	// cutover callers may still pass an exchange-native symbol, so resolve the
-	// canonical identity first and retain the native symbol only at the adapter
-	// boundary.
+	// Order specs carry the canonical InstrumentID. Resolve that identity and
+	// retain the native symbol only at the adapter boundary.
 	record, err := s.store.GetInstrumentByIDScoped(ctx, symbol, string(exchangeName), string(market))
-	if err != nil {
-		record, err = s.store.GetInstrument(ctx, string(exchangeName), string(market), symbol)
-	}
 	if err != nil {
 		return exchange.Instrument{}, err
 	}
@@ -674,9 +669,6 @@ func (s instrumentSource) GetInstrumentForAccount(
 	}
 	record, err := s.store.GetInstrumentByIDForAccount(ctx, account.SpaceID, tradingAccountID, symbol)
 	if err != nil {
-		record, err = s.store.GetInstrumentInEnvironment(ctx, string(exchangeName), string(account.Environment), string(market), symbol)
-	}
-	if err != nil {
 		return exchange.Instrument{}, err
 	}
 	return instrumentFromRecord(exchangeName, market, record), nil
@@ -684,7 +676,7 @@ func (s instrumentSource) GetInstrumentForAccount(
 
 func instrumentFromRecord(exchangeName exchange.Exchange, market exchange.MarketType, record store.InstrumentRecord) exchange.Instrument {
 	return exchange.Instrument{
-		Exchange: exchangeName, MarketType: market, ExchangeSymbol: record.ExchangeSymbol, Symbol: record.ExchangeSymbol,
+		Exchange: exchangeName, MarketType: market, ExchangeSymbol: record.ExchangeSymbol,
 		InstrumentID: record.InstrumentID, BaseAsset: record.BaseAsset,
 		QuoteAsset: record.QuoteAsset, SettlementAsset: record.SettlementAsset,
 		Linear: record.Linear, ContractValue: decimal(record.ContractValue),
@@ -721,12 +713,12 @@ func (s positionSource) GetPosition(
 	}
 	if !found {
 		return exchange.Position{
-			TradingAccountID: tradingAccountID, ExchangeSymbol: symbol, Symbol: symbol,
+			TradingAccountID: tradingAccountID, ExchangeSymbol: symbol,
 			PositionSide: exchange.PositionSideNet,
 		}, nil
 	}
 	return exchange.Position{
-		TradingAccountID: tradingAccountID, ExchangeSymbol: symbol, Symbol: symbol,
+		TradingAccountID: tradingAccountID, ExchangeSymbol: symbol,
 		PositionSide:   exchange.PositionSide(record.PositionSide),
 		SignedQuantity: decimal(record.SignedQuantity),
 		EntryPrice:     decimal(record.EntryPrice), MarkPrice: decimal(record.MarkPrice),
@@ -762,12 +754,12 @@ func (s positionSource) GetPositionForAccount(
 		}
 	}
 	if !found {
-		return exchange.Position{TradingAccountID: tradingAccountID, InstrumentID: symbol, ExchangeSymbol: symbol, Symbol: symbol, PositionSide: exchange.PositionSideNet}, nil
+		return exchange.Position{TradingAccountID: tradingAccountID, InstrumentID: symbol, ExchangeSymbol: symbol, PositionSide: exchange.PositionSideNet}, nil
 	}
 	return exchange.Position{
 		TradingAccountID: tradingAccountID, InstrumentID: record.InstrumentID,
-		ExchangeSymbol: record.ExchangeSymbol, Symbol: record.ExchangeSymbol,
-		PositionSide: exchange.PositionSide(record.PositionSide), SignedQuantity: decimal(record.SignedQuantity),
+		ExchangeSymbol: record.ExchangeSymbol,
+		PositionSide:   exchange.PositionSide(record.PositionSide), SignedQuantity: decimal(record.SignedQuantity),
 		EntryPrice: decimal(record.EntryPrice), MarkPrice: decimal(record.MarkPrice), Leverage: decimal(record.Leverage),
 		MarginMode: exchange.MarginMode(record.MarginMode), UsedMargin: decimal(record.UsedMargin),
 		LiquidationPrice: decimal(record.LiquidationPrice), UnrealizedPnL: decimal(record.UnrealizedPnL),
@@ -824,7 +816,7 @@ func paperReservationSufficient(
 			leverage = account.LeverageSettings[candidate.ExchangeSymbol]
 		}
 		if leverage == "" {
-			leverage = account.LeverageSettings[candidate.Symbol]
+			leverage = account.LeverageSettings[candidate.ExchangeSymbol]
 		}
 		if leverage == "" && account.ExecutionMode == string(exchange.ExecutionModePaper) {
 			leverage = account.LeverageSettings["*"]
@@ -861,7 +853,7 @@ func paperOpeningReservationSufficient(
 		leverage = account.LeverageSettings[candidate.ExchangeSymbol]
 	}
 	if leverage == "" {
-		leverage = account.LeverageSettings[candidate.Symbol]
+		leverage = account.LeverageSettings[candidate.ExchangeSymbol]
 	}
 	if leverage == "" && account.ExecutionMode == string(exchange.ExecutionModePaper) {
 		leverage = account.LeverageSettings["*"]

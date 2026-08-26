@@ -100,7 +100,7 @@ func (r *Reducer) ApplyFill(
 			source.TradingAccountID,
 			fill.ClientOrderID,
 			fill.ExchangeOrderID,
-			fill.Symbol,
+			fill.ExchangeSymbol,
 		)
 		if err != nil {
 			return err
@@ -159,8 +159,8 @@ func (r *Reducer) applyFillTx(
 		ExchangeOrderID:  fill.ExchangeOrderID,
 		TradingAccountID: source.TradingAccountID,
 		Exchange:         record.Exchange, MarketType: record.MarketType,
-		InstrumentID: record.InstrumentID, ExchangeSymbol: record.ExchangeSymbol,
-		Symbol: fill.Symbol, Side: string(fill.Side),
+		InstrumentID: record.InstrumentID, ExchangeSymbol: fill.ExchangeSymbol,
+		Side:         string(fill.Side),
 		PositionSide: string(fill.PositionSide), Price: fill.Price.String(),
 		Quantity: fill.Quantity.String(), Fee: fill.Fee.String(),
 		FeeAsset: fill.FeeAsset, SettlementAsset: fill.SettlementAsset,
@@ -216,7 +216,7 @@ func validateFillInput(r *Reducer, fill exchange.Fill, source Source) error {
 		return errors.New("trade: invalid Fill source")
 	}
 	if strings.TrimSpace(fill.ExchangeTradeID) == "" ||
-		strings.TrimSpace(fill.Symbol) == "" ||
+		strings.TrimSpace(fill.ExchangeSymbol) == "" ||
 		(strings.TrimSpace(fill.ClientOrderID) == "" &&
 			strings.TrimSpace(fill.ExchangeOrderID) == "") ||
 		!fill.Side.Valid() ||
@@ -235,7 +235,7 @@ func validateFillInput(r *Reducer, fill exchange.Fill, source Source) error {
 }
 
 func canonicalFillID(accountID string, fill exchange.Fill) string {
-	return accountID + ":" + fill.Symbol + ":" + fill.ExchangeTradeID
+	return accountID + ":" + fill.ExchangeSymbol + ":" + fill.ExchangeTradeID
 }
 
 func applyOrderFill(
@@ -345,9 +345,6 @@ func projectSwapPosition(
 	priceScale int,
 ) error {
 	exchangeSymbol := record.ExchangeSymbol
-	if exchangeSymbol == "" {
-		exchangeSymbol = record.Symbol
-	}
 	positionRecord, found, err := tx.GetPosition(
 		record.SpaceID, record.TradingAccountID, exchangeSymbol, string(exchange.PositionSideNet),
 	)
@@ -363,9 +360,6 @@ func projectSwapPosition(
 		if leverage == "" {
 			leverage = account.LeverageSettings[exchangeSymbol]
 		}
-		if leverage == "" {
-			leverage = account.LeverageSettings[record.Symbol]
-		}
 		// A wildcard leverage setting is a generic account fallback. Keep the
 		// reducer independent of execution mode; Live and Paper both project the
 		// same Position facts from a normalized Fill.
@@ -377,7 +371,7 @@ func projectSwapPosition(
 		}
 		positionRecord = store.PositionRecord{
 			SpaceID: record.SpaceID, TradingAccountID: record.TradingAccountID,
-			InstrumentID: record.InstrumentID, ExchangeSymbol: exchangeSymbol, Symbol: exchangeSymbol,
+			InstrumentID: record.InstrumentID, ExchangeSymbol: exchangeSymbol,
 			PositionSide:   string(exchange.PositionSideNet),
 			SignedQuantity: "0", EntryPrice: "0", MarkPrice: "0",
 			Leverage: leverage, MarginMode: account.MarginMode,

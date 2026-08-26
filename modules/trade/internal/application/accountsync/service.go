@@ -205,7 +205,7 @@ func (s *Service) syncAccountLocked(
 		if _, found := openByClient[local.ClientOrderID]; found {
 			continue
 		}
-		current, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(local.Symbol), local.ClientOrderID)
+		current, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(local.ExchangeSymbol), local.ClientOrderID)
 		switch {
 		case lookupErr == nil:
 			orders = append(orders, current)
@@ -537,14 +537,14 @@ func (s *Service) ApplyPosition(
 			current, found, getErr := tx.GetPosition(
 				account.SpaceID,
 				account.TradingAccountID,
-				position.Symbol,
+				position.ExchangeSymbol,
 				string(position.PositionSide),
 			)
 			if getErr != nil {
 				return getErr
 			}
 			if !found && position.RequiresSync && !position.Present.Leverage &&
-				account.LeverageSettings[position.Symbol] == "" {
+				account.LeverageSettings[position.ExchangeSymbol] == "" {
 				// A private partial update cannot create a valid SWAP
 				// projection without leverage. Keep the stream alive and let
 				// the queued full synchronization create the authoritative row.
@@ -698,7 +698,7 @@ func (s *Service) ensureOrderForFill(
 			ctx,
 			account.SpaceID,
 			account.TradingAccountID,
-			fill.Symbol,
+			fill.ExchangeSymbol,
 			fill.ExchangeOrderID,
 		); err == nil {
 			return record.OwnerType == string(orderdomain.OwnerExternal), nil
@@ -725,11 +725,11 @@ func (s *Service) ensureOrderForFill(
 	var current exchange.Order
 	var lookupErr error
 	if fill.ClientOrderID != "" {
-		current, lookupErr = adapter.GetOrder(ctx, shared.ExchangeSymbol(fill.Symbol), fill.ClientOrderID)
+		current, lookupErr = adapter.GetOrder(ctx, shared.ExchangeSymbol(fill.ExchangeSymbol), fill.ClientOrderID)
 	} else if lookup, ok := adapter.(execution.ExchangeOrderLookup); ok {
 		current, lookupErr = lookup.GetOrderByExchangeID(
 			ctx,
-			fill.Symbol,
+			fill.ExchangeSymbol,
 			fill.ExchangeOrderID,
 		)
 	} else {
@@ -747,7 +747,7 @@ func (s *Service) ensureOrderForFill(
 		}
 		current = exchange.Order{
 			ExchangeOrderID: fill.ExchangeOrderID, ClientOrderID: fill.ClientOrderID,
-			Symbol: fill.Symbol, OrderType: exchange.OrderTypeMarket,
+			ExchangeSymbol: fill.ExchangeSymbol, OrderType: exchange.OrderTypeMarket,
 			Side: fill.Side, PositionSide: fill.PositionSide,
 			Quantity: syntheticQuantity, Status: exchange.OrderStatusOpen,
 			CreatedAt: fill.TradedAt, UpdatedAt: fill.TradedAt,
@@ -756,17 +756,17 @@ func (s *Service) ensureOrderForFill(
 	// The fill stream is authoritative for symbol identity. Some exchange
 	// lookup adapters return a cached order without the requested symbol (or
 	// with a stale one); never let that collapse fills from two instruments.
-	current.Symbol = fill.Symbol
+	current.ExchangeSymbol = fill.ExchangeSymbol
 	_, err = s.importExternalOrder(ctx, account, current)
 	return err == nil, err
 }
 
 func fillBatchKey(fill exchange.Fill) string {
 	if fill.ExchangeOrderID != "" {
-		return fill.Symbol + "\x00exchange\x00" + fill.ExchangeOrderID
+		return fill.ExchangeSymbol + "\x00exchange\x00" + fill.ExchangeOrderID
 	}
 	if fill.ClientOrderID != "" {
-		return fill.Symbol + "\x00client\x00" + fill.ClientOrderID
+		return fill.ExchangeSymbol + "\x00client\x00" + fill.ClientOrderID
 	}
 	return ""
 }
@@ -791,7 +791,7 @@ func (s *Service) applyOrder(
 			ctx,
 			account.SpaceID,
 			account.TradingAccountID,
-			current.Symbol,
+			current.ExchangeSymbol,
 			current.ExchangeOrderID,
 		)
 	default:
@@ -926,21 +926,21 @@ func (s *Service) importExternalOrder(
 	current exchange.Order,
 ) (store.OrderRecord, error) {
 	if strings.TrimSpace(current.ExchangeOrderID) == "" ||
-		strings.TrimSpace(current.Symbol) == "" ||
+		strings.TrimSpace(current.ExchangeSymbol) == "" ||
 		!current.Side.Valid() ||
 		current.Quantity.Cmp(shared.Zero()) <= 0 {
 		return store.OrderRecord{}, fmt.Errorf("trade account sync: incomplete external order")
 	}
 	clientOrderID := current.ClientOrderID
 	if strings.TrimSpace(clientOrderID) == "" {
-		clientOrderID = "external-" + current.Symbol + "-" + current.ExchangeOrderID
+		clientOrderID = "external-" + current.ExchangeSymbol + "-" + current.ExchangeOrderID
 	}
 	environment := account.Environment
 	if account.ExecutionMode == "PAPER" || environment == "" {
 		environment = "PRODUCTION"
 	}
 	instrument, err := s.Store.GetInstrumentInEnvironment(
-		ctx, account.Exchange, environment, account.MarketType, current.Symbol,
+		ctx, account.Exchange, environment, account.MarketType, current.ExchangeSymbol,
 	)
 	if err != nil {
 		return store.OrderRecord{}, err
@@ -998,11 +998,11 @@ func (s *Service) importExternalOrder(
 	record := store.OrderRecord{
 		SpaceID: account.SpaceID,
 		OrderID: "external:" + account.TradingAccountID + ":" +
-			current.Symbol + ":" + current.ExchangeOrderID,
+			current.ExchangeSymbol + ":" + current.ExchangeOrderID,
 		TradingAccountID: account.TradingAccountID,
 		ClientOrderID:    clientOrderID, ExchangeOrderID: current.ExchangeOrderID,
 		Exchange: account.Exchange, MarketType: account.MarketType,
-		Symbol: current.Symbol, OrderType: string(orderType),
+		ExchangeSymbol: current.ExchangeSymbol, OrderType: string(orderType),
 		TimeInForce: string(tif), Side: string(current.Side),
 		PositionSide: string(positionSide), Quantity: current.Quantity.String(),
 		LimitPrice: limitPrice, ReferencePrice: reference.String(),
@@ -1144,18 +1144,18 @@ func syncSymbols(
 		set[symbol] = struct{}{}
 	}
 	for _, current := range openOrders {
-		if current.Symbol != "" {
-			set[current.Symbol] = struct{}{}
+		if current.ExchangeSymbol != "" {
+			set[current.ExchangeSymbol] = struct{}{}
 		}
 	}
 	for _, current := range localOrders {
-		if current.Symbol != "" {
-			set[current.Symbol] = struct{}{}
+		if current.ExchangeSymbol != "" {
+			set[current.ExchangeSymbol] = struct{}{}
 		}
 	}
 	for _, position := range positions {
-		if position.Symbol != "" {
-			set[position.Symbol] = struct{}{}
+		if position.ExchangeSymbol != "" {
+			set[position.ExchangeSymbol] = struct{}{}
 		}
 	}
 	if exchange.MarketType(account.MarketType) == exchange.MarketTypeSpot {
@@ -1175,7 +1175,7 @@ func syncSymbols(
 				continue
 			}
 			if _, held := heldAssets[instrument.BaseAsset]; held {
-				set[instrument.Symbol] = struct{}{}
+				set[instrument.ExchangeSymbol] = struct{}{}
 			}
 		}
 	}
@@ -1269,13 +1269,10 @@ func positionRecord(
 	position exchange.Position,
 ) store.PositionRecord {
 	exchangeSymbol := position.ExchangeSymbol
-	if exchangeSymbol == "" {
-		exchangeSymbol = position.Symbol
-	}
 	return store.PositionRecord{
 		SpaceID: account.SpaceID, TradingAccountID: account.TradingAccountID,
 		InstrumentID: position.InstrumentID, ExchangeSymbol: exchangeSymbol,
-		Symbol: position.Symbol, PositionSide: string(position.PositionSide),
+		PositionSide:   string(position.PositionSide),
 		SignedQuantity: position.SignedQuantity.String(),
 		EntryPrice:     position.EntryPrice.String(), MarkPrice: position.MarkPrice.String(),
 		Leverage: position.Leverage.String(), MarginMode: string(position.MarginMode),
@@ -1300,13 +1297,13 @@ func mergePositionRecord(
 		current.UsedMargin = "0"
 		current.LiquidationPrice = "0"
 		current.RealizedPnL = "0"
-		if leverage := account.LeverageSettings[incoming.Symbol]; leverage != "" {
+		if leverage := account.LeverageSettings[incoming.ExchangeSymbol]; leverage != "" {
 			current.Leverage = leverage
 		}
 	}
 	current.SpaceID = incoming.SpaceID
 	current.TradingAccountID = incoming.TradingAccountID
-	current.Symbol = incoming.Symbol
+	current.ExchangeSymbol = incoming.ExchangeSymbol
 	current.PositionSide = incoming.PositionSide
 	for _, field := range []struct {
 		present     bool

@@ -68,11 +68,11 @@ func TestTestnetRequestAddsSimulationHeader(t *testing.T) {
 func TestAdapterRequestValidationContract(t *testing.T) {
 	adapter := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{})
 	base := exchange.OrderRequest{
-		ClientOrderID: "contract-client",
-		Symbol:        "BTC-USDT",
-		OrderType:     exchange.OrderTypeMarket,
-		Side:          exchange.SideBuy,
-		Quantity:      shared.MustDecimal("1"),
+		ClientOrderID:  "contract-client",
+		ExchangeSymbol: "BTC-USDT",
+		OrderType:      exchange.OrderTypeMarket,
+		Side:           exchange.SideBuy,
+		Quantity:       shared.MustDecimal("1"),
 	}
 	price := shared.MustDecimal("100")
 	tests := []struct {
@@ -107,7 +107,7 @@ func TestAdapterRequestValidationContract(t *testing.T) {
 
 func TestOKXRejectsClientOrderIDWithDash(t *testing.T) {
 	err := validateRequest(exchange.OrderRequest{
-		ClientOrderID: "contains-dash", Symbol: "BTC-USDT",
+		ClientOrderID: "contains-dash", ExchangeSymbol: "BTC-USDT",
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal("1"),
 	}, exchange.MarketTypeSpot)
@@ -118,7 +118,7 @@ func TestOKXRejectsClientOrderIDWithDash(t *testing.T) {
 
 func TestOKXRejectsClientOrderIDLongerThan32(t *testing.T) {
 	err := validateRequest(exchange.OrderRequest{
-		ClientOrderID: strings.Repeat("a", 33), Symbol: "BTC-USDT",
+		ClientOrderID: strings.Repeat("a", 33), ExchangeSymbol: "BTC-USDT",
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal("1"),
 	}, exchange.MarketTypeSpot)
@@ -130,7 +130,7 @@ func TestOKXRejectsClientOrderIDLongerThan32(t *testing.T) {
 func TestOKXAcceptsGeneratedClientOrderID(t *testing.T) {
 	clientOrderID := xid.New().String()
 	err := validateRequest(exchange.OrderRequest{
-		ClientOrderID: clientOrderID, Symbol: "BTC-USDT",
+		ClientOrderID: clientOrderID, ExchangeSymbol: "BTC-USDT",
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal("1"),
 	}, exchange.MarketTypeSpot)
@@ -175,7 +175,7 @@ func TestMutationClassifiesItemErrorWhenTopLevelCodeIsOne(t *testing.T) {
 	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
 		httpclient.New(server.URL))
 	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
-		ClientOrderID: "cid", Symbol: "BTC-USDT",
+		ClientOrderID: "cid", ExchangeSymbol: "BTC-USDT",
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal("0.01"),
 	})
@@ -240,7 +240,7 @@ func TestSwapMarketOrderConvertsBaseQuantity(t *testing.T) {
 		t.Fatalf("instruments = %+v", instruments)
 	}
 	order, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
-		ClientOrderID: "cid", Symbol: "BTC-USDT-SWAP",
+		ClientOrderID: "cid", ExchangeSymbol: "BTC-USDT-SWAP",
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 		PositionSide: exchange.PositionSideNet,
 		Quantity:     shared.MustDecimal("0.05"), ReduceOnly: true,
@@ -285,7 +285,7 @@ func TestSpotMarketBuyUsesBaseQuantity(t *testing.T) {
 	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
 		httpclient.New(server.URL))
 	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
-		ClientOrderID: "cid", Symbol: "BTC-USDT",
+		ClientOrderID: "cid", ExchangeSymbol: "BTC-USDT",
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal("0.01"),
 	})
@@ -315,7 +315,7 @@ func TestSwapLimitAndLotValidation(t *testing.T) {
 	}
 	price := shared.MustDecimal("100")
 	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
-		ClientOrderID: "cid", Symbol: "BTC-USDT-SWAP",
+		ClientOrderID: "cid", ExchangeSymbol: "BTC-USDT-SWAP",
 		OrderType: exchange.OrderTypeLimit, FillPolicy: exchange.FillPolicyFOK,
 		Side: exchange.SideSell, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("0.04"), LimitPrice: &price,
@@ -327,7 +327,7 @@ func TestSwapLimitAndLotValidation(t *testing.T) {
 		t.Fatalf("body = %+v", body)
 	}
 	_, err = adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
-		ClientOrderID: "bad", Symbol: "BTC-USDT-SWAP",
+		ClientOrderID: "bad", ExchangeSymbol: "BTC-USDT-SWAP",
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("0.03"),
 	})
@@ -495,7 +495,7 @@ func TestMutationWithMalformedSuccessResponseIsTransportUnknown(t *testing.T) {
 	adapter := swapAdapter(server.URL)
 	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
 	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
-		ClientOrderID: "cid", Symbol: "BTC-USDT-SWAP",
+		ClientOrderID: "cid", ExchangeSymbol: "BTC-USDT-SWAP",
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("0.01"),
 	})

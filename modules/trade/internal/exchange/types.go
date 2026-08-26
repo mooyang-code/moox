@@ -185,7 +185,6 @@ type Instrument struct {
 	Exchange             Exchange
 	MarketType           MarketType
 	ExchangeSymbol       string
-	Symbol               string // legacy adapter input; normalized at boundaries
 	InstrumentID         string
 	BaseAsset            string
 	QuoteAsset           string
@@ -233,7 +232,6 @@ type Position struct {
 	TradingAccountID  string
 	InstrumentID      string
 	ExchangeSymbol    string
-	Symbol            string
 	PositionSide      PositionSide
 	SignedQuantity    shared.Decimal
 	EntryPrice        shared.Decimal
@@ -264,7 +262,6 @@ type PositionPresence struct {
 type OrderRequest struct {
 	ClientOrderID  string
 	ExchangeSymbol string
-	Symbol         string
 	OrderType      OrderType
 	FillPolicy     FillPolicy
 	Side           Side
@@ -287,7 +284,6 @@ type Order struct {
 	ExchangeOrderID string
 	ClientOrderID   string
 	ExchangeSymbol  string
-	Symbol          string
 	OrderType       OrderType
 	TimeInForce     TimeInForce
 	Side            Side
@@ -307,7 +303,6 @@ type Fill struct {
 	ExchangeOrderID string
 	ClientOrderID   string
 	ExchangeSymbol  string
-	Symbol          string
 	Side            Side
 	PositionSide    PositionSide
 	Quantity        shared.Decimal

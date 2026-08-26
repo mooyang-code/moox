@@ -443,7 +443,7 @@ func newWithClients(
 
 func orderRequest(orderType exchange.OrderType) exchange.OrderRequest {
 	return exchange.OrderRequest{
-		ClientOrderID: "cid", Symbol: "BTCUSDT", OrderType: orderType,
+		ClientOrderID: "cid", ExchangeSymbol: "BTCUSDT", OrderType: orderType,
 		Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
 	}
 }

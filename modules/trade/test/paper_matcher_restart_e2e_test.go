@@ -50,7 +50,6 @@ func TestPaperMatcherRestingGTCRecoversAfterSQLiteRestart(t *testing.T) {
 				ExchangeOrderID: candidate.ExchangeOrderID,
 				ClientOrderID:   candidate.ClientOrderID,
 				ExchangeSymbol:  candidate.ExchangeSymbol,
-				Symbol:          candidate.ExchangeSymbol,
 				Side:            exchange.SideBuy,
 				Quantity:        shared.MustDecimal("0.01"),
 				Price:           shared.MustDecimal("49000"),

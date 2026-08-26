@@ -449,7 +449,7 @@ func (s *ExchangeSession) persistInstruments(
 				Exchange:       string(instrument.Exchange),
 				Environment:    environment,
 				MarketType:     string(instrument.MarketType),
-				ExchangeSymbol: instrument.ExchangeSymbol, Symbol: instrument.Symbol, InstrumentID: instrument.InstrumentID,
+				ExchangeSymbol: instrument.ExchangeSymbol, InstrumentID: instrument.InstrumentID,
 				BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
 				SettlementAsset: instrument.SettlementAsset, Linear: instrument.Linear,
 				ContractValue:        instrument.ContractValue.String(),
@@ -698,12 +698,8 @@ func sessionSymbols(
 		set[symbol] = struct{}{}
 	}
 	for _, current := range orders {
-		symbol := current.ExchangeSymbol
-		if symbol == "" {
-			symbol = current.Symbol
-		}
-		if symbol != "" {
-			set[symbol] = struct{}{}
+		if current.ExchangeSymbol != "" {
+			set[current.ExchangeSymbol] = struct{}{}
 		}
 	}
 	for _, current := range local {
@@ -712,12 +708,8 @@ func sessionSymbols(
 		}
 	}
 	for _, position := range positions {
-		symbol := position.ExchangeSymbol
-		if symbol == "" {
-			symbol = position.Symbol
-		}
-		if symbol != "" {
-			set[symbol] = struct{}{}
+		if position.ExchangeSymbol != "" {
+			set[position.ExchangeSymbol] = struct{}{}
 		}
 	}
 	if exchange.MarketType(account.MarketType) == exchange.MarketTypeSpot {
@@ -738,9 +730,6 @@ func sessionSymbols(
 			}
 			if _, held := heldAssets[instrument.BaseAsset]; held {
 				symbol := instrument.ExchangeSymbol
-				if symbol == "" {
-					symbol = instrument.Symbol
-				}
 				if symbol != "" {
 					set[symbol] = struct{}{}
 				}

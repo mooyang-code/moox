@@ -40,7 +40,7 @@ func openFillStore(t *testing.T, market exchange.MarketType) *store.Store {
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
 			Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
-			Symbol: testSymbol, InstrumentID: testSymbol, BaseAsset: "BTC",
+			ExchangeSymbol: testSymbol, InstrumentID: testSymbol, BaseAsset: "BTC",
 			QuoteAsset: "USDT", SettlementAsset: "USDT", Linear: market == exchange.MarketTypeSwap,
 			ContractValue: "1", ContractValueAsset: "BTC", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
@@ -66,7 +66,7 @@ func seedFillOrder(
 		SpaceID: testSpace, OrderID: "order-1", TradingAccountID: testAccount,
 		ClientOrderID: "client-1", ExchangeOrderID: "exchange-order-1",
 		Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
-		Symbol: testSymbol, OrderType: string(exchange.OrderTypeMarket),
+		ExchangeSymbol: testSymbol, OrderType: string(exchange.OrderTypeMarket),
 		Side: string(exchange.SideBuy), PositionSide: positionSide,
 		Quantity: quantity, ReferencePrice: "100", ReferencePriceAt: time.Now().UnixMilli(),
 		OwnerType: "EXTERNAL", OwnerID: "exchange-order-1",
@@ -88,7 +88,7 @@ func fillSource() Source {
 func spotFill(id string, quantity string) exchange.Fill {
 	return exchange.Fill{
 		ExchangeTradeID: id, ExchangeOrderID: "exchange-order-1",
-		ClientOrderID: "client-1", Symbol: testSymbol, Side: exchange.SideBuy,
+		ClientOrderID: "client-1", ExchangeSymbol: testSymbol, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal(quantity), Price: shared.MustDecimal("100"),
 		Fee: shared.MustDecimal("1"), FeeAsset: "USDT", TradedAt: time.Now(),
 	}
@@ -219,7 +219,7 @@ func TestReducerApplyFillSwapRecordsPnLAndEstimatesPosition(t *testing.T) {
 	seedFillOrder(t, s, exchange.MarketTypeSwap, order.Open, "2", "20")
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: testSpace, TradingAccountID: testAccount, Symbol: testSymbol,
+			SpaceID: testSpace, TradingAccountID: testAccount, ExchangeSymbol: testSymbol,
 			PositionSide: string(exchange.PositionSideNet), SignedQuantity: "-1",
 			EntryPrice: "90", MarkPrice: "90", Leverage: "10",
 			MarginMode: string(exchange.MarginModeCross),
@@ -227,7 +227,7 @@ func TestReducerApplyFillSwapRecordsPnLAndEstimatesPosition(t *testing.T) {
 	}))
 	fill := exchange.Fill{
 		ExchangeTradeID: "swap-trade", ExchangeOrderID: "exchange-order-1",
-		ClientOrderID: "client-1", Symbol: testSymbol, Side: exchange.SideBuy,
+		ClientOrderID: "client-1", ExchangeSymbol: testSymbol, Side: exchange.SideBuy,
 		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("2"),
 		Price: shared.MustDecimal("100"), Fee: shared.MustDecimal("0.1"),
 		FeeAsset: "USDT", RealizedPnL: shared.MustDecimal("3"),
@@ -260,7 +260,7 @@ func TestReducerApplyFillCreatesFirstSwapPosition(t *testing.T) {
 	seedFillOrder(t, s, exchange.MarketTypeSwap, order.Open, "1", "10")
 	fill := exchange.Fill{
 		ExchangeTradeID: "first-swap-trade", ExchangeOrderID: "exchange-order-1",
-		ClientOrderID: "client-1", Symbol: testSymbol, Side: exchange.SideBuy,
+		ClientOrderID: "client-1", ExchangeSymbol: testSymbol, Side: exchange.SideBuy,
 		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("1"),
 		Price: shared.MustDecimal("100"), SettlementAsset: "USDT", TradedAt: time.Now(),
 	}

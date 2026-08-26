@@ -45,7 +45,7 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",

@@ -62,7 +62,7 @@ func Rebuild(account tradingaccount.Account, instruments []exchange.Instrument, 
 
 func instrumentQuote(instruments []exchange.Instrument, symbol string) string {
 	for _, i := range instruments {
-		if i.Symbol == symbol || i.ExchangeSymbol == symbol {
+		if i.ExchangeSymbol == symbol {
 			return i.QuoteAsset
 		}
 	}

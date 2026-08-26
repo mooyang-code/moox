@@ -385,7 +385,6 @@ func (a *Adapter) dispatchPrivate(
 		ExchangeOrderID: envelope.OrderID.String(),
 		ClientOrderID:   envelope.ClientID,
 		ExchangeSymbol:  envelope.Symbol,
-		Symbol:          envelope.Symbol,
 		Side:            exchange.Side(envelope.Side),
 		PositionSide:    positionSide,
 		Quantity:        quantity,
@@ -464,7 +463,7 @@ func (a *Adapter) dispatchFuturesAccount(
 		}
 		position := exchange.Position{
 			TradingAccountID: a.config.TradingAccountID,
-			ExchangeSymbol:   row.Symbol, Symbol: row.Symbol, PositionSide: exchange.PositionSideNet,
+			ExchangeSymbol:   row.Symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(eventTime),
 			Present: exchange.PositionPresence{

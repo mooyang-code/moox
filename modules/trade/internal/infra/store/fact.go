@@ -17,7 +17,6 @@ type InstrumentRecord struct {
 	Environment          string
 	MarketType           string
 	ExchangeSymbol       string
-	Symbol               string // in-memory alias; persisted as c_exchange_symbol
 	InstrumentID         string
 	BaseAsset            string
 	QuoteAsset           string
@@ -34,16 +33,14 @@ type InstrumentRecord struct {
 }
 
 func (tx *Tx) UpsertInstrument(record InstrumentRecord) error {
-	if record.ExchangeSymbol == "" {
-		record.ExchangeSymbol = record.Symbol
-	}
 	if record.InstrumentID == "" {
 		record.InstrumentID = record.ExchangeSymbol
 	}
 	if record.Environment == "" {
 		record.Environment = "PRODUCTION"
 	}
-	if record.Exchange == "" || record.Environment == "" || record.MarketType == "" || record.ExchangeSymbol == "" ||
+	if record.Exchange == "" || record.Environment == "" || record.MarketType == "" ||
+		record.ExchangeSymbol == "" || record.InstrumentID == "" ||
 		record.BaseAsset == "" || record.QuoteAsset == "" || record.PriceTick == "" ||
 		record.ExchangeQuantityStep == "" || record.Status == "" {
 		return fmt.Errorf("%w: incomplete instrument", ErrInvalidRecord)
@@ -213,7 +210,7 @@ func (s *Store) ListInstrumentsInEnvironment(
 	records := make([]InstrumentRecord, 0, len(rows))
 	for _, row := range rows {
 		records = append(records, InstrumentRecord{
-			Exchange: row.Exchange, Environment: row.Environment, MarketType: row.MarketType, ExchangeSymbol: row.ExchangeSymbol, Symbol: row.ExchangeSymbol,
+			Exchange: row.Exchange, Environment: row.Environment, MarketType: row.MarketType, ExchangeSymbol: row.ExchangeSymbol,
 			InstrumentID: row.InstrumentID, BaseAsset: row.BaseAsset,
 			QuoteAsset: row.QuoteAsset, SettlementAsset: row.SettlementAsset,
 			Linear: row.Linear, ContractValue: row.ContractValue,
@@ -299,14 +296,6 @@ func getInstrument(
 	err := db.Table("t_trade_instruments").
 		Where("c_exchange = ? AND c_environment = ? AND c_market_type = ? AND c_exchange_symbol = ?", exchange, environment, marketType, exchangeSymbol).
 		Take(&row).Error
-	// Existing installations may have instruments created before environment was
-	// introduced. Keep reads compatible during migration, while newly upserted
-	// rows remain environment-scoped and carry their explicit identity.
-	if errors.Is(err, gorm.ErrRecordNotFound) && environment != "PRODUCTION" {
-		err = db.Table("t_trade_instruments").
-			Where("c_exchange = ? AND c_environment = 'PRODUCTION' AND c_market_type = ? AND c_exchange_symbol = ?", exchange, marketType, exchangeSymbol).
-			Take(&row).Error
-	}
 	return InstrumentRecord{
 		Exchange: row.Exchange, Environment: row.Environment, MarketType: row.MarketType, ExchangeSymbol: row.ExchangeSymbol,
 		InstrumentID: row.InstrumentID, BaseAsset: row.BaseAsset,
@@ -354,24 +343,9 @@ func getInstrumentByID(db *gorm.DB, instrumentID string, scope ...string) (Instr
 		query = query.Where("c_market_type = ?", scope[2])
 	}
 	err := query.Take(&row).Error
-	// Testnet accounts may intentionally reuse the production instrument
-	// catalog when no environment-specific metadata has been loaded yet.
-	// Keep the same compatibility fallback as symbol-based lookup while still
-	// preferring an exact environment match whenever one exists.
-	if errors.Is(err, gorm.ErrRecordNotFound) && len(scope) >= 2 &&
-		scope[1] != "" && scope[1] != "PRODUCTION" {
-		fallback := db.Table("t_trade_instruments").Where("c_instrument_id = ?", instrumentID)
-		if len(scope) >= 1 && scope[0] != "" {
-			fallback = fallback.Where("c_exchange = ?", scope[0])
-		}
-		if len(scope) >= 3 && scope[2] != "" {
-			fallback = fallback.Where("c_market_type = ?", scope[2])
-		}
-		err = fallback.Where("c_environment = 'PRODUCTION'").Take(&row).Error
-	}
 	return InstrumentRecord{
 		Exchange: row.Exchange, Environment: row.Environment, MarketType: row.MarketType,
-		ExchangeSymbol: row.ExchangeSymbol, Symbol: row.ExchangeSymbol, InstrumentID: row.InstrumentID,
+		ExchangeSymbol: row.ExchangeSymbol, InstrumentID: row.InstrumentID,
 		BaseAsset: row.BaseAsset, QuoteAsset: row.QuoteAsset, SettlementAsset: row.SettlementAsset,
 		Linear: row.Linear, ContractValue: row.ContractValue, ContractValueAsset: row.ContractValueAsset,
 		ExchangeQuantityStep: row.ExchangeQuantityStep, MinExchangeQuantity: row.MinExchangeQuantity,
@@ -390,7 +364,6 @@ type OrderRecord struct {
 	MarketType                string
 	InstrumentID              string
 	ExchangeSymbol            string
-	Symbol                    string // in-memory alias
 	OrderType                 string
 	TimeInForce               string
 	Side                      string
@@ -462,9 +435,6 @@ type orderRow struct {
 }
 
 func (tx *Tx) CreateOrder(record OrderRecord) error {
-	if record.ExchangeSymbol == "" {
-		record.ExchangeSymbol = record.Symbol
-	}
 	if record.SpaceID == "" || record.OrderID == "" || record.TradingAccountID == "" ||
 		record.ClientOrderID == "" || record.ExchangeSymbol == "" ||
 		record.OrderType == "" || record.Side == "" ||
@@ -496,19 +466,7 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 	if err := tx.db.Raw(query, args...).Scan(&instrument).Error; err != nil {
 		return err
 	}
-	if instrument.InstrumentID == "" && identity.Environment != "PRODUCTION" {
-		if err := tx.db.Raw(`
-			SELECT c_instrument_id FROM t_trade_instruments
-			WHERE c_exchange = ? AND c_environment = 'PRODUCTION' AND c_market_type = ?
-				AND c_exchange_symbol = ?`, record.Exchange, record.MarketType, record.ExchangeSymbol).
-			Scan(&instrument).Error; err != nil {
-			return err
-		}
-	}
 	if instrument.InstrumentID == "" {
-		// Keep old in-memory test fixtures and pre-metadata pending orders
-		// writable. Real metadata-backed rows take the strict identity branch
-		// above and are checked against the canonical ID.
 		instrument.InstrumentID = record.InstrumentID
 		if instrument.InstrumentID == "" {
 			instrument.InstrumentID = record.ExchangeSymbol
@@ -703,7 +661,6 @@ type OrderQuery struct {
 	TradingAccountID string
 	InstrumentID     string
 	ExchangeSymbol   string
-	Symbol           string
 	State            string
 	OnlyOpen         bool
 	StartTime        int64
@@ -730,9 +687,6 @@ func (s *Store) ListOrders(
 	}
 	if query.ExchangeSymbol != "" {
 		db = db.Where("c_exchange_symbol = ?", query.ExchangeSymbol)
-	}
-	if query.Symbol != "" && query.ExchangeSymbol == "" {
-		db = db.Where("c_exchange_symbol = ?", query.Symbol)
 	}
 	if query.State != "" {
 		db = db.Where("c_state = ?", query.State)
@@ -882,7 +836,6 @@ func orderRecordFromRow(row orderRow) OrderRecord {
 		TradingAccountID: row.TradingAccountID, ClientOrderID: row.ClientOrderID,
 		ExchangeOrderID: row.ExchangeOrderID, Exchange: row.Exchange,
 		MarketType: row.MarketType, InstrumentID: row.InstrumentID, ExchangeSymbol: row.ExchangeSymbol, OrderType: row.OrderType,
-		Symbol:      row.ExchangeSymbol,
 		TimeInForce: row.TimeInForce, Side: row.Side, PositionSide: row.PositionSide,
 		Quantity: row.Quantity, LimitPrice: row.LimitPrice,
 		ReferencePrice: row.ReferencePrice, ReferencePriceAt: row.ReferencePriceAt,
@@ -925,7 +878,6 @@ type FillRecord struct {
 	MarketType       string
 	ExchangeSymbol   string
 	InstrumentID     string
-	Symbol           string // in-memory alias
 	Side             string
 	PositionSide     string
 	Price            string
@@ -940,12 +892,6 @@ type FillRecord struct {
 }
 
 func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
-	if record.ExchangeSymbol == "" {
-		record.ExchangeSymbol = record.Symbol
-	}
-	if record.ExchangeSymbol == "" {
-		record.ExchangeSymbol = record.Symbol
-	}
 	if record.SpaceID == "" || record.FillID == "" || record.ExchangeTradeID == "" ||
 		record.OrderID == "" || record.Price == "" || record.Quantity == "" {
 		return false, fmt.Errorf("%w: incomplete Fill", ErrInvalidRecord)
@@ -1083,7 +1029,6 @@ type FillQuery struct {
 	OrderID          string
 	InstrumentID     string
 	ExchangeSymbol   string
-	Symbol           string
 	StartTime        int64
 	EndTime          int64
 	Offset           int
@@ -1109,9 +1054,6 @@ func (s *Store) ListFills(
 	if query.ExchangeSymbol != "" {
 		db = db.Where("c_exchange_symbol = ?", query.ExchangeSymbol)
 	}
-	if query.Symbol != "" && query.ExchangeSymbol == "" {
-		db = db.Where("c_exchange_symbol = ?", query.Symbol)
-	}
 	if query.StartTime > 0 {
 		db = db.Where("c_traded_at >= ?", query.StartTime)
 	}
@@ -1134,7 +1076,7 @@ func (s *Store) ListFills(
 			ExchangeTradeID: row.ExchangeTradeID, OrderID: row.OrderID,
 			ExchangeOrderID:  row.ExchangeOrderID,
 			TradingAccountID: row.TradingAccountID, Exchange: row.Exchange,
-			MarketType: row.MarketType, InstrumentID: row.InstrumentID, ExchangeSymbol: row.ExchangeSymbol, Symbol: row.ExchangeSymbol, Side: row.Side,
+			MarketType: row.MarketType, InstrumentID: row.InstrumentID, ExchangeSymbol: row.ExchangeSymbol, Side: row.Side,
 			PositionSide: row.PositionSide, Price: row.Price, Quantity: row.Quantity,
 			Fee: row.Fee, FeeAsset: row.FeeAsset,
 			SettlementAsset: row.SettlementAsset, RealizedPnL: row.RealizedPnL,
@@ -1245,7 +1187,6 @@ type PositionRecord struct {
 	TradingAccountID  string
 	InstrumentID      string
 	ExchangeSymbol    string
-	Symbol            string
 	PositionSide      string
 	SignedQuantity    string
 	EntryPrice        string
@@ -1261,9 +1202,6 @@ type PositionRecord struct {
 }
 
 func (tx *Tx) UpsertPosition(record PositionRecord) error {
-	if record.ExchangeSymbol == "" {
-		record.ExchangeSymbol = record.Symbol
-	}
 	if record.SpaceID == "" || record.TradingAccountID == "" || record.ExchangeSymbol == "" ||
 		record.PositionSide == "" {
 		return fmt.Errorf("%w: incomplete position", ErrInvalidRecord)
@@ -1284,9 +1222,6 @@ func (tx *Tx) UpsertPosition(record PositionRecord) error {
 			return result.Error
 		}
 		if result.RowsAffected != 1 || instrument.InstrumentID == "" {
-			// Legacy position snapshots can arrive before public instrument
-			// metadata is persisted. Keep the fact writable and let the next
-			// metadata-backed projection repair the canonical identity.
 			record.InstrumentID = record.ExchangeSymbol
 		} else {
 			record.InstrumentID = instrument.InstrumentID
@@ -1406,7 +1341,7 @@ func (tx *Tx) GetPosition(
 	}
 	return PositionRecord{
 		SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID, InstrumentID: row.InstrumentID,
-		ExchangeSymbol: row.ExchangeSymbol, Symbol: row.ExchangeSymbol, PositionSide: row.PositionSide,
+		ExchangeSymbol: row.ExchangeSymbol, PositionSide: row.PositionSide,
 		SignedQuantity: row.SignedQuantity, EntryPrice: row.EntryPrice,
 		MarkPrice: row.MarkPrice, Leverage: row.Leverage,
 		MarginMode: row.MarginMode, UsedMargin: row.UsedMargin,
@@ -1495,7 +1430,7 @@ func (s *Store) listPositions(
 	for _, row := range rows {
 		records = append(records, PositionRecord{
 			SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID,
-			InstrumentID: row.InstrumentID, ExchangeSymbol: row.ExchangeSymbol, Symbol: row.ExchangeSymbol, PositionSide: row.PositionSide,
+			InstrumentID: row.InstrumentID, ExchangeSymbol: row.ExchangeSymbol, PositionSide: row.PositionSide,
 			SignedQuantity: row.SignedQuantity, EntryPrice: row.EntryPrice,
 			MarkPrice: row.MarkPrice, Leverage: row.Leverage,
 			MarginMode: row.MarginMode, UsedMargin: row.UsedMargin,

@@ -101,7 +101,7 @@ func TestHandleLogicalAccountTargetRejectsInstrumentForDifferentSettlementAsset(
 	seedLogicalTargetAccount(t, tradeStore, true, true)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDC",
+			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDC",
 			InstrumentID: "BTC-USDC-SPOT", BaseAsset: "BTC", QuoteAsset: "USDC",
 			SettlementAsset: "USDC", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
@@ -126,7 +126,7 @@ func TestHandleLogicalAccountTargetRejectsNonCanonicalInstrumentStatus(t *testin
 	seedLogicalTargetAccount(t, tradeStore, true, false)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "trading",
@@ -222,7 +222,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "OKX", MarketType: "SWAP", Symbol: "BTC-USDT-SWAP",
+			Exchange: "OKX", MarketType: "SWAP", ExchangeSymbol: "BTC-USDT-SWAP",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "0.01",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -320,7 +320,7 @@ func seedLogicalTargetAccount(
 			return nil
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",

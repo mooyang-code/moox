@@ -164,7 +164,7 @@ func TestSubmitTargetRejectsExternalFactBeforeExchangeCall(t *testing.T) {
 			SpaceID: "space-1", OrderID: "external-order",
 			TradingAccountID: "account-1", ClientOrderID: "external-client",
 			ExchangeOrderID: "external-exchange-order",
-			Symbol:          "BTC-USDT", OrderType: "MARKET", Side: "BUY",
+			ExchangeSymbol:  "BTC-USDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "1", ReferencePrice: "100",
 			ReferencePriceAt: service.now().UnixMilli(),
 			OwnerType:        "EXTERNAL", OwnerID: "external-exchange-order",
@@ -1080,7 +1080,7 @@ func newTestServiceForMarket(
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
 			Exchange: string(instrument.Exchange), MarketType: string(instrument.MarketType),
-			Symbol: instrument.Symbol, InstrumentID: "BTCUSDT",
+			ExchangeSymbol: instrument.ExchangeSymbol, InstrumentID: "BTCUSDT",
 			BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
 			SettlementAsset:      instrument.SettlementAsset,
 			Linear:               instrument.Linear,

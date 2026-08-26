@@ -83,7 +83,7 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		instrument := byID[fill.InstrumentID]
 		if instrument.InstrumentID == "" {
 			for _, candidate := range instruments {
-				if candidate.ExchangeSymbol == fill.ExchangeSymbol || candidate.Symbol == fill.ExchangeSymbol {
+				if candidate.ExchangeSymbol == fill.ExchangeSymbol {
 					instrument = candidate
 					break
 				}
@@ -249,9 +249,6 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	byID := make(map[string]string, len(instruments))
 	for _, instrument := range instruments {
 		native := instrument.ExchangeSymbol
-		if native == "" {
-			native = instrument.Symbol
-		}
 		if instrument.InstrumentID != "" && native != "" {
 			byID[instrument.InstrumentID] = native
 		}
@@ -328,7 +325,7 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 	for _, row := range rows {
 		position := exchange.Position{
 			TradingAccountID: row.TradingAccountID, InstrumentID: row.InstrumentID,
-			ExchangeSymbol: row.ExchangeSymbol, Symbol: row.ExchangeSymbol,
+			ExchangeSymbol: row.ExchangeSymbol,
 			PositionSide:   exchange.PositionSide(row.PositionSide),
 			SignedQuantity: decimalOrZero(row.SignedQuantity), EntryPrice: decimalOrZero(row.EntryPrice),
 			MarkPrice: decimalOrZero(row.MarkPrice), Leverage: decimalOrZero(row.Leverage),
@@ -406,14 +403,11 @@ func (a *Adapter) PlaceOrder(_ context.Context, req exchange.OrderRequest) (exch
 	}
 	now := a.now()
 	symbol := req.ExchangeSymbol
-	if symbol == "" {
-		symbol = req.Symbol
-	}
-	return exchange.Order{ExchangeOrderID: paperOrderID(a.Account.TradingAccountID, req.ClientOrderID), ClientOrderID: req.ClientOrderID, Symbol: symbol, ExchangeSymbol: symbol, Status: exchange.OrderStatusOpen, CreatedAt: now, UpdatedAt: now}, nil
+	return exchange.Order{ExchangeOrderID: paperOrderID(a.Account.TradingAccountID, req.ClientOrderID), ClientOrderID: req.ClientOrderID, ExchangeSymbol: symbol, Status: exchange.OrderStatusOpen, CreatedAt: now, UpdatedAt: now}, nil
 }
 func (a *Adapter) CancelOrder(_ context.Context, symbol shared.ExchangeSymbol, id string) (exchange.Order, error) {
 	now := a.now()
-	return exchange.Order{ExchangeOrderID: id, ClientOrderID: id, Symbol: symbol.String(), ExchangeSymbol: symbol.String(), Status: exchange.OrderStatusCanceled, CreatedAt: now, UpdatedAt: now}, nil
+	return exchange.Order{ExchangeOrderID: id, ClientOrderID: id, ExchangeSymbol: symbol.String(), Status: exchange.OrderStatusCanceled, CreatedAt: now, UpdatedAt: now}, nil
 }
 
 func orderFromRecord(row store.OrderRecord) exchange.Order {
@@ -422,11 +416,11 @@ func orderFromRecord(row store.OrderRecord) exchange.Order {
 		value, _ := shared.ParseDecimal(*row.LimitPrice)
 		limit = &value
 	}
-	return exchange.Order{ExchangeOrderID: row.ExchangeOrderID, ClientOrderID: row.ClientOrderID, ExchangeSymbol: row.ExchangeSymbol, Symbol: row.ExchangeSymbol, OrderType: exchange.OrderType(row.OrderType), TimeInForce: exchange.TimeInForce(row.TimeInForce), Side: exchange.Side(row.Side), PositionSide: exchange.PositionSide(row.PositionSide), Quantity: decimalOrZero(row.Quantity), LimitPrice: limit, FilledQuantity: decimalOrZero(row.FilledQuantity), AveragePrice: decimalOrZero(row.AveragePrice), ReduceOnly: row.ReduceOnly, Status: exchange.OrderStatus(row.State), CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	return exchange.Order{ExchangeOrderID: row.ExchangeOrderID, ClientOrderID: row.ClientOrderID, ExchangeSymbol: row.ExchangeSymbol, OrderType: exchange.OrderType(row.OrderType), TimeInForce: exchange.TimeInForce(row.TimeInForce), Side: exchange.Side(row.Side), PositionSide: exchange.PositionSide(row.PositionSide), Quantity: decimalOrZero(row.Quantity), LimitPrice: limit, FilledQuantity: decimalOrZero(row.FilledQuantity), AveragePrice: decimalOrZero(row.AveragePrice), ReduceOnly: row.ReduceOnly, Status: exchange.OrderStatus(row.State), CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
 func fillFromRecord(row store.FillRecord) exchange.Fill {
-	return exchange.Fill{ExchangeTradeID: row.ExchangeTradeID, ExchangeOrderID: row.ExchangeOrderID, ExchangeSymbol: row.ExchangeSymbol, Symbol: row.ExchangeSymbol, Side: exchange.Side(row.Side), PositionSide: exchange.PositionSide(row.PositionSide), Quantity: decimalOrZero(row.Quantity), Price: decimalOrZero(row.Price), Fee: decimalOrZero(row.Fee), FeeAsset: row.FeeAsset, RealizedPnL: decimalOrZero(row.RealizedPnL), SettlementAsset: row.SettlementAsset, LiquidityRole: row.Role, TradedAt: time.UnixMilli(row.TradedAt).UTC()}
+	return exchange.Fill{ExchangeTradeID: row.ExchangeTradeID, ExchangeOrderID: row.ExchangeOrderID, ExchangeSymbol: row.ExchangeSymbol, Side: exchange.Side(row.Side), PositionSide: exchange.PositionSide(row.PositionSide), Quantity: decimalOrZero(row.Quantity), Price: decimalOrZero(row.Price), Fee: decimalOrZero(row.Fee), FeeAsset: row.FeeAsset, RealizedPnL: decimalOrZero(row.RealizedPnL), SettlementAsset: row.SettlementAsset, LiquidityRole: row.Role, TradedAt: time.UnixMilli(row.TradedAt).UTC()}
 }
 
 func decimalOrZero(raw string) shared.Decimal {

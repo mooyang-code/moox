@@ -31,7 +31,7 @@ func TestLivePaperParityE2EUsesOneOrderPolicyAndPaperPrice(t *testing.T) {
 	}
 	instrument := exchange.Instrument{
 		Exchange: exchange.ExchangeBinance, MarketType: exchange.MarketTypeSpot,
-		Symbol: "BTCUSDT", ExchangeSymbol: "BTCUSDT", InstrumentID: "btc-usdt",
+		ExchangeSymbol: "BTCUSDT", InstrumentID: "btc-usdt",
 		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 		ExchangeQuantityStep: shared.MustDecimal("0.001"), PriceTick: shared.MustDecimal("0.1"), Status: "TRADING",
 	}
@@ -54,10 +54,10 @@ func TestPaperMatcherRestartAndCASE2E(t *testing.T) {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{SpaceID: "space-1", TradingAccountID: "paper-1", Name: "paper", Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
 			return err
 		}
-		if err := tx.UpsertInstrument(store.InstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT", InstrumentID: "btc-usdt", BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", PriceTick: "0.1", Status: "TRADING"}); err != nil {
+		if err := tx.UpsertInstrument(store.InstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "btc-usdt", BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", PriceTick: "0.1", Status: "TRADING"}); err != nil {
 			return err
 		}
-		return tx.CreateOrder(store.OrderRecord{SpaceID: "space-1", OrderID: "order-1", TradingAccountID: "paper-1", ClientOrderID: "client-1", Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: "e2e", State: "OPEN", FirstMatchPending: true, Version: 1})
+		return tx.CreateOrder(store.OrderRecord{SpaceID: "space-1", OrderID: "order-1", TradingAccountID: "paper-1", ClientOrderID: "client-1", ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: "e2e", State: "OPEN", FirstMatchPending: true, Version: 1})
 	}))
 	candidates, err := s.ListPaperMatchCandidates(ctx, 10)
 	require.NoError(t, err)
@@ -89,7 +89,7 @@ func TestPaperMatcherProductionAdapterFillAndRestartE2E(t *testing.T) {
 			SpaceID: testSpace, OrderID: "paper-match-order", TradingAccountID: testAccount,
 			ClientOrderID: "paper-match-client", ExchangeOrderID: "paper-order-e2e",
 			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: fake.instrument.InstrumentID,
-			ExchangeSymbol: testSymbol, Symbol: testSymbol, OrderType: "MARKET", Side: "BUY",
+			ExchangeSymbol: testSymbol, OrderType: "MARKET", Side: "BUY",
 			Quantity: "1", ReferencePrice: "100", ReferencePriceAt: testNow.UnixMilli(),
 			OwnerType: "EXTERNAL", OwnerID: "paper-match", State: "OPEN",
 			FilledQuantity: "0", AveragePrice: "0", ReservedAsset: "USDT",
@@ -111,7 +111,7 @@ func TestPaperMatcherProductionAdapterFillAndRestartE2E(t *testing.T) {
 		return paperexec.Decision{Fill: exchange.Fill{
 			ExchangeTradeID: "paper-match-trade", ExchangeOrderID: candidate.ExchangeOrderID,
 			ClientOrderID: candidate.ClientOrderID, ExchangeSymbol: candidate.ExchangeSymbol,
-			Symbol: candidate.ExchangeSymbol, Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
+			Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
 			Price: price, Fee: shared.Zero(), SettlementAsset: "USDT", FeeAsset: "USDT",
 			LiquidityRole: "TAKER", TradedAt: testNow,
 		}}, nil
