@@ -11,7 +11,7 @@ import * as trade from "./index";
 describe("Trade public API", () => {
   beforeEach(() => callTrade.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "ok" } }));
 
-  it("uses one Trade console service", () => {
+  it("registers the unified Trade console service", () => {
     expect(trade.tradeServiceMap).toEqual({ console: "trade_console" });
   });
 
@@ -35,12 +35,29 @@ describe("Trade public API", () => {
     });
   });
 
+  it("uses canonical unified account RPC names", async () => {
+    await trade.listTradingAccounts({ page: { page: 1, size: 20 } });
+    expect(callTrade).toHaveBeenLastCalledWith("console", "ListTradingAccounts", {
+      page: { page: 1, size: 20 }
+    });
+
+    await trade.syncTradingAccount("account-1");
+    expect(callTrade).toHaveBeenLastCalledWith("console", "SyncTradingAccount", {
+      trading_account_id: "account-1"
+    });
+  });
+
+  it("keeps Paper execution mode separate from AccountEnvironment", () => {
+    expect(trade.executionModeLabels).toEqual({ 0: "-", 1: "Paper", 2: "Live" });
+    expect(trade.environmentLabels).toEqual({ 0: "-", 1: "Testnet", 2: "Production" });
+  });
+
   it("keeps manual ownership fields server-controlled", async () => {
     await trade.placeManualOrder({
       action_id: "action-1",
       trading_account_id: "account-1",
       client_order_id: "client1",
-      instrument_id: "BTC-USDT-SWAP",
+      instrument_id: "instrument-1",
       order_type: 1,
       fill_policy: 0,
       side: 2,
@@ -53,7 +70,7 @@ describe("Trade public API", () => {
       action_id: "action-1",
       trading_account_id: "account-1",
       client_order_id: "client1",
-      instrument_id: "BTC-USDT-SWAP",
+      instrument_id: "instrument-1",
       order_type: 1,
       fill_policy: 0,
       side: 2,
@@ -83,7 +100,7 @@ describe("Trade public API", () => {
             {
               trading_account_id: "account-1",
               status: "PARTIAL",
-              remaining_positions: [{ instrument_id: "BTC-USDT-SWAP", quantity: "0.1", reason: "order rejected" }]
+              remaining_positions: [{ instrument_id: "instrument-1", quantity: "0.1", reason: "order rejected" }]
             }
           ]
         }),

@@ -4,7 +4,7 @@
       <div class="page-head">
         <h2>交易执行</h2>
         <a-space>
-          <a-select v-model="exchangeAccountId" placeholder="Exchange 账户" style="width: 260px" @change="accountChanged">
+          <a-select v-model="tradingAccountId" placeholder="Trading 账户" style="width: 260px" @change="accountChanged">
             <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
               {{ account.name }} · {{ marketTypeLabels[account.market_type] }}
             </a-option>
@@ -23,7 +23,7 @@
           <div class="filter-bar">
             <a-input v-model="filterSymbol" placeholder="Symbol" allow-clear style="width: 150px" @press-enter="loadOrders" />
             <a-checkbox v-model="onlyOpen" @change="loadOrders">仅未完成</a-checkbox>
-            <a-button :disabled="!exchangeAccountId" @click="loadOrders">
+            <a-button :disabled="!tradingAccountId" @click="loadOrders">
               <template #icon><icon-search /></template>
               查询
             </a-button>
@@ -71,7 +71,7 @@
         <a-tab-pane key="fills" title="Fills">
           <div class="filter-bar">
             <a-input v-model="filterSymbol" placeholder="Symbol" allow-clear style="width: 150px" @press-enter="loadFills" />
-            <a-button :disabled="!exchangeAccountId" @click="loadFills">
+            <a-button :disabled="!tradingAccountId" @click="loadFills">
               <template #icon><icon-search /></template>
               查询
             </a-button>
@@ -112,8 +112,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
+import { useRoute, useRouter } from "vue-router";
 import { createClientId } from "@/utils/client-id";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
@@ -133,9 +134,12 @@ import type { TradingAccount, Fill, Order } from "@/api/trade/types";
 defineOptions({ name: "trade-record" });
 
 const accounts = ref<TradingAccount[]>([]);
-const exchangeAccountId = ref("");
+const accountsLoaded = ref(false);
+const route = useRoute();
+const router = useRouter();
+const tradingAccountId = ref(typeof route.query.trading_account_id === "string" ? route.query.trading_account_id : "");
 const selectedAccount = computed(
-  () => accounts.value.find(account => account.trading_account_id === exchangeAccountId.value) || null
+  () => accounts.value.find(account => account.trading_account_id === tradingAccountId.value) || null
 );
 const activeTab = ref("orders");
 const filterSymbol = ref("");
@@ -153,12 +157,50 @@ async function loadAccounts() {
   const response = await listTradingAccounts({ page: { page: 1, size: 200 } });
   if (!request.isLatest()) return;
   accounts.value = response.accounts || [];
-  exchangeAccountId.value ||= accounts.value[0]?.trading_account_id || "";
+  accountsLoaded.value = true;
+  const requested = typeof route.query.trading_account_id === "string" ? route.query.trading_account_id : "";
+  const hasRequested = accounts.value.some(account => account.trading_account_id === requested);
+  tradingAccountId.value = hasRequested ? requested : requested ? "" : accounts.value[0]?.trading_account_id || "";
+  if (requested && !hasRequested) {
+    await router.replace({ query: { ...route.query, trading_account_id: undefined } });
+    Message.warning("账户不存在或无权限");
+  }
+}
+
+async function applyRouteAccount() {
+  if (!accountsLoaded.value) return;
+  const requested = typeof route.query.trading_account_id === "string" ? route.query.trading_account_id : "";
+  if (!requested) {
+    if (tradingAccountId.value) {
+      tradingAccountId.value = "";
+      orderRequests.invalidate();
+      fillRequests.invalidate();
+      loading.value = false;
+      orders.value = [];
+      fills.value = [];
+    }
+    return;
+  }
+  if (!accounts.value.some(account => account.trading_account_id === requested)) {
+    tradingAccountId.value = "";
+    orderRequests.invalidate();
+    fillRequests.invalidate();
+    loading.value = false;
+    orders.value = [];
+    fills.value = [];
+    await router.replace({ query: { ...route.query, trading_account_id: undefined } });
+    Message.warning("账户不存在或无权限");
+    return;
+  }
+  if (tradingAccountId.value === requested) return;
+  tradingAccountId.value = requested;
+  await loadActiveTab();
 }
 
 async function accountChanged() {
   orderPagination.current = 1;
   fillPagination.current = 1;
+  await router.replace({ query: { ...route.query, trading_account_id: tradingAccountId.value || undefined } });
   await loadActiveTab();
 }
 
@@ -168,9 +210,13 @@ async function refreshAccounts() {
 }
 
 async function loadOrders() {
-  if (!exchangeAccountId.value) return;
+  if (!tradingAccountId.value) {
+    loading.value = false;
+    orders.value = [];
+    return;
+  }
   const request = orderRequests.begin();
-  const accountId = exchangeAccountId.value;
+  const accountId = tradingAccountId.value;
   const query = {
     trading_account_id: accountId,
     instrument_id: filterSymbol.value.trim().toUpperCase(),
@@ -180,7 +226,7 @@ async function loadOrders() {
   loading.value = true;
   try {
     const response = await listOrders(query);
-    if (!request.isLatest() || exchangeAccountId.value !== accountId) return;
+    if (!request.isLatest() || tradingAccountId.value !== accountId) return;
     orders.value = response.orders || [];
     orderPagination.total = response.page_result?.total || 0;
   } finally {
@@ -189,9 +235,13 @@ async function loadOrders() {
 }
 
 async function loadFills() {
-  if (!exchangeAccountId.value) return;
+  if (!tradingAccountId.value) {
+    loading.value = false;
+    fills.value = [];
+    return;
+  }
   const request = fillRequests.begin();
-  const accountId = exchangeAccountId.value;
+  const accountId = tradingAccountId.value;
   const query = {
     trading_account_id: accountId,
     instrument_id: filterSymbol.value.trim().toUpperCase(),
@@ -200,7 +250,7 @@ async function loadFills() {
   loading.value = true;
   try {
     const response = await listFills(query);
-    if (!request.isLatest() || exchangeAccountId.value !== accountId) return;
+    if (!request.isLatest() || tradingAccountId.value !== accountId) return;
     fills.value = response.fills || [];
     fillPagination.total = response.page_result?.total || 0;
   } finally {
@@ -225,7 +275,7 @@ function changeFillPage(page: number) {
 const canCancel = canCancelOrderState;
 
 async function cancel(order: Order) {
-  if (order.trading_account_id !== exchangeAccountId.value) {
+  if (order.trading_account_id !== tradingAccountId.value) {
     Message.warning("账户已切换，请刷新后重试");
     return;
   }
@@ -233,6 +283,13 @@ async function cancel(order: Order) {
   Message.success("撤单请求已提交");
   await loadOrders();
 }
+
+watch(
+  () => route.query.trading_account_id,
+  () => {
+    void applyRouteAccount();
+  }
+);
 
 onMounted(async () => {
   await loadAccounts();

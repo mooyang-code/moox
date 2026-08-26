@@ -81,11 +81,10 @@ export function createPaperSimulation(req: CreatePaperSimulationReq) {
 }
 
 export function closePaperSimulation(trading_account_id: string) {
-  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }>(
-    "console",
-    "ClosePaperSimulation",
-    { trading_account_id }
-  );
+  return callTrade<
+    { trading_account_id: string },
+    { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }
+  >("console", "ClosePaperSimulation", { trading_account_id });
 }
 
 export function getExecutionCapabilities(trading_account_id: string) {
@@ -96,7 +95,12 @@ export function getExecutionCapabilities(trading_account_id: string) {
   );
 }
 
-export function queryEquityCurve(req: { trading_account_id?: string; logical_account_id?: string; start_time?: string; end_time?: string }) {
+export function queryEquityCurve(req: {
+  trading_account_id?: string;
+  logical_account_id?: string;
+  start_time?: string;
+  end_time?: string;
+}) {
   return callTrade<typeof req, { ret_info: RetInfo; points: EquityPoint[] }>("console", "QueryEquityCurve", req);
 }
 
@@ -125,11 +129,10 @@ export function listLogicalAccounts(page: Page = {}) {
 }
 
 export function updateLogicalAccount(logical_account_id: string, name: string) {
-  return callTrade<{ logical_account_id: string; name: string }, LogicalAccountResponse>(
-    "console",
-    "UpdateLogicalAccount",
-    { logical_account_id, name }
-  );
+  return callTrade<{ logical_account_id: string; name: string }, LogicalAccountResponse>("console", "UpdateLogicalAccount", {
+    logical_account_id,
+    name
+  });
 }
 
 export function addLogicalAccountMember(req: AddLogicalAccountMemberReq) {
@@ -145,11 +148,10 @@ export function removeLogicalAccountMember(logical_account_id: string, trading_a
 }
 
 export function pauseLogicalAccount(logical_account_id: string, reason: string) {
-  return callTrade<{ logical_account_id: string; reason: string }, LogicalAccountResponse>(
-    "console",
-    "PauseLogicalAccount",
-    { logical_account_id, reason }
-  );
+  return callTrade<{ logical_account_id: string; reason: string }, LogicalAccountResponse>("console", "PauseLogicalAccount", {
+    logical_account_id,
+    reason
+  });
 }
 
 export function resumeLogicalAccount(logical_account_id: string) {
@@ -201,11 +203,7 @@ export function getOrder(order_id: string) {
 }
 
 export function listOrders(req: ListOrdersReq = {}) {
-  return callTrade<ListOrdersReq, { ret_info: RetInfo; orders: Order[]; page_result: PageResult }>(
-    "console",
-    "ListOrders",
-    req
-  );
+  return callTrade<ListOrdersReq, { ret_info: RetInfo; orders: Order[]; page_result: PageResult }>("console", "ListOrders", req);
 }
 
 export function listFills(req: ListFillsReq = {}) {

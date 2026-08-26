@@ -80,6 +80,11 @@ func (s *Service) Create(
 	if err := value.Validate(); err != nil {
 		return tradingaccount.Account{}, err
 	}
+	if value.ExecutionMode == exchange.ExecutionModeLive &&
+		value.Environment == exchange.AccountEnvironmentProduction &&
+		!s.LiveTradingEnabled {
+		return tradingaccount.Account{}, ErrLiveTradingDisabled
+	}
 	if err := s.validateCredential(ctx, value); err != nil {
 		return tradingaccount.Account{}, err
 	}
@@ -113,6 +118,13 @@ func (s *Service) Update(
 	applyUpdate(&projected, command)
 	if err := projected.Validate(); err != nil {
 		return tradingaccount.Account{}, err
+	}
+	if current.Status != exchange.AccountStatusEnabled &&
+		projected.Status == exchange.AccountStatusEnabled &&
+		projected.ExecutionMode == exchange.ExecutionModeLive &&
+		projected.Environment == exchange.AccountEnvironmentProduction &&
+		!s.LiveTradingEnabled {
+		return tradingaccount.Account{}, ErrLiveTradingDisabled
 	}
 	if command.CredentialSecretID != nil ||
 		(command.Status != nil && *command.Status == exchange.AccountStatusEnabled) {

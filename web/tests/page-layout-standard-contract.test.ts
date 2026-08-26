@@ -48,6 +48,11 @@ describe("page layout standards", () => {
     expectMargin(spaces, ".page-head", "margin-bottom", 8);
     expect(spaces).toMatch(/\.page-head h2\s*\{[\s\S]*?margin:\s*0;/);
     expectMargin(accounts, ".page-head", "margin-bottom", 8);
+    expect(accounts).toContain("<h2>交易账户</h2>");
+    expect(accounts).toContain("创建账户");
+    expect(accounts).toContain('title="操作"');
+    expect(accounts).toContain('title="最近同步"');
+    expect(accounts).toContain("Readiness");
 
     expect(secrets).not.toContain('class="filter-bar"');
     expect(secrets.indexOf('placeholder="搜索名称或描述"')).toBeLessThan(secrets.indexOf('placeholder="分类"'));

@@ -69,7 +69,7 @@
         </a-form>
       </a-modal>
 
-      <a-drawer v-model:visible="detailVisible" :width="860" title="Logical Account 管理" @cancel="stopActionPolling">
+      <a-drawer v-model:visible="detailVisible" :width="860" title="Logical Account 管理" @cancel="closeDetail">
         <template v-if="selected">
           <div class="detail-head">
             <div>
@@ -99,7 +99,10 @@
           </a-descriptions>
 
           <div class="section">
-            <div class="section-title"><h3>资金曲线</h3><span>{{ selected.settlement_asset }}</span></div>
+            <div class="section-title">
+              <h3>资金曲线</h3>
+              <span>{{ selected.settlement_asset }}</span>
+            </div>
             <equity-curve :logical-account-id="selected.logical_account_id" />
           </div>
 
@@ -168,7 +171,7 @@
               class="section"
             >
               <template #columns>
-                <a-table-column title="Exchange Account" data-index="trading_account_id" />
+                <a-table-column title="Trading Account" data-index="trading_account_id" />
                 <a-table-column title="状态" data-index="status" :width="100" />
                 <a-table-column title="剩余仓位">
                   <template #cell="{ record }">
@@ -203,7 +206,7 @@
 
       <a-modal v-model:visible="memberVisible" title="添加物理账户" @ok="addMember">
         <a-form :model="memberForm" auto-label-width>
-          <a-form-item label="Exchange Account" required>
+          <a-form-item label="Trading Account" required>
             <a-select v-model="memberForm.trading_account_id" allow-search>
               <a-option v-for="item in eligibleAccounts" :key="item.trading_account_id" :value="item.trading_account_id">
                 {{ item.name }} ({{ item.trading_account_id }})
@@ -216,7 +219,7 @@
         </a-form>
       </a-modal>
 
-          <a-modal v-model:visible="manualVisible" title="人工下单" @ok="submitManual">
+      <a-modal v-model:visible="manualVisible" title="人工下单" @ok="submitManual">
         <a-alert v-if="capabilities && !capabilities.can_place_order" type="error" show-icon class="section">
           {{ capabilities.unavailable_reason || "当前账户不可下单" }}
         </a-alert>
@@ -240,7 +243,9 @@
           </a-form-item>
           <a-form-item v-if="manualForm.order_type === 2" label="成交策略">
             <a-select v-model="manualForm.fill_policy">
-              <a-option v-for="policy in capabilities?.fill_policies || [1, 2, 3]" :key="policy" :value="policy">{{ ["", "GTC", "IOC", "FOK"][policy] }}</a-option>
+              <a-option v-for="policy in capabilities?.fill_policies || [1, 2, 3]" :key="policy" :value="policy">{{
+                ["", "GTC", "IOC", "FOK"][policy]
+              }}</a-option>
             </a-select>
           </a-form-item>
           <a-form-item label="数量" required><a-input v-model="manualForm.quantity" /></a-form-item>
@@ -255,8 +260,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, reactive, ref } from "vue";
+import { computed, onUnmounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
+import { useRoute, useRouter } from "vue-router";
 import { createClientId } from "@/utils/client-id";
 import {
   addLogicalAccountMember,
@@ -276,8 +282,16 @@ import {
   removeLogicalAccountMember,
   resumeLogicalAccount
 } from "@/api/trade";
-import type { TradingAccount, LogicalAccount, LogicalAccountTarget, OperatorAction, ExecutionCapabilities, PlaceManualOrderReq } from "@/api/trade";
+import type {
+  TradingAccount,
+  LogicalAccount,
+  LogicalAccountTarget,
+  OperatorAction,
+  ExecutionCapabilities,
+  PlaceManualOrderReq
+} from "@/api/trade";
 import EquityCurve from "./equity-curve.vue";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 
 defineOptions({ name: "trading-logical-accounts" });
 const rows = ref<LogicalAccount[]>([]);
@@ -294,7 +308,12 @@ const reasonMode = ref<"pause" | "flatten">("pause");
 const memberVisible = ref(false);
 const manualVisible = ref(false);
 const actionPoller = ref<ReturnType<typeof setInterval> | null>(null);
+const route = useRoute();
+const router = useRouter();
 const pagination = reactive({ current: 1, pageSize: 20, total: 0 });
+const routeRequests = createLatestRequestGuard();
+const detailRequests = createLatestRequestGuard();
+const actionPollRequests = createLatestRequestGuard();
 const createForm = reactive({ name: "", execution_mode: 1 as 1 | 2, market_type: 1 as 1 | 2, settlement_asset: "USDT" });
 const reasonForm = reactive({ action_id: "", reason: "" });
 const memberForm = reactive({ trading_account_id: "", enabled: true, priority: 0, adopt_existing_exposure: false });
@@ -329,6 +348,7 @@ async function load() {
     const rsp = await listLogicalAccounts({ page: pagination.current, size: pagination.pageSize });
     rows.value = rsp.logical_accounts || [];
     pagination.total = rsp.page_result?.total || 0;
+    await openRouteDetail();
   } finally {
     loading.value = false;
   }
@@ -352,20 +372,69 @@ async function create() {
   return true;
 }
 async function openDetail(item: LogicalAccount) {
+  detailRequests.invalidate();
   selected.value = item;
+  target.value = null;
+  action.value = null;
+  capabilities.value = null;
   detailVisible.value = true;
   await reloadDetail();
 }
+function closeDetail() {
+  routeRequests.invalidate();
+  detailRequests.invalidate();
+  detailVisible.value = false;
+  stopActionPolling();
+  target.value = null;
+  action.value = null;
+  capabilities.value = null;
+  void router.replace({ query: { ...route.query, logical_account_id: undefined } });
+}
 async function reloadDetail() {
   if (!selected.value) return;
+  const request = detailRequests.begin();
   const id = selected.value.logical_account_id;
   const [accountRsp, targetRsp] = await Promise.all([
     getLogicalAccount(id),
     getLogicalAccountTarget(id).catch(() => ({ target: undefined }))
   ]);
+  if (!request.isLatest() || selected.value?.logical_account_id !== id) return;
   selected.value = accountRsp.logical_account;
   target.value = targetRsp.target || null;
 }
+
+async function openRouteDetail() {
+  const requestedId = typeof route.query.logical_account_id === "string" ? route.query.logical_account_id : "";
+  const request = routeRequests.begin();
+  if (!requestedId) {
+    if (detailVisible.value) {
+      detailRequests.invalidate();
+      detailVisible.value = false;
+      stopActionPolling();
+      selected.value = null;
+      target.value = null;
+      action.value = null;
+      capabilities.value = null;
+    }
+    return;
+  }
+  try {
+    const requested = await getLogicalAccount(requestedId);
+    if (!request.isLatest() || route.query.logical_account_id !== requestedId) return;
+    await openDetail(requested.logical_account);
+  } catch {
+    if (!request.isLatest() || route.query.logical_account_id !== requestedId) return;
+    await router.replace({ query: { ...route.query, logical_account_id: undefined } });
+    Message.warning("LogicalAccount 不存在或无权限");
+  }
+}
+
+watch(
+  () => route.query.logical_account_id,
+  () => {
+    void openRouteDetail();
+  }
+);
 function requestPause() {
   reasonMode.value = "pause";
   reasonForm.reason = "";
@@ -419,7 +488,7 @@ async function openMember() {
 }
 async function addMember() {
   if (!selected.value || !memberForm.trading_account_id) {
-    Message.warning("请选择 Exchange Account");
+    Message.warning("请选择 Trading Account");
     return false;
   }
   await addLogicalAccountMember({ logical_account_id: selected.value.logical_account_id, ...memberForm });
@@ -449,7 +518,13 @@ function openManual(exchangeAccountId: string) {
     reason: ""
   });
   capabilities.value = null;
-  getExecutionCapabilities(exchangeAccountId).then(response => { capabilities.value = response.capabilities; }).catch(() => { capabilities.value = null; });
+  getExecutionCapabilities(exchangeAccountId)
+    .then(response => {
+      capabilities.value = response.capabilities;
+    })
+    .catch(() => {
+      capabilities.value = null;
+    });
   manualVisible.value = true;
 }
 async function submitManual() {
@@ -490,13 +565,17 @@ async function submitManual() {
 function startActionPolling(actionId: string) {
   stopActionPolling();
   if (action.value?.status !== "RUNNING") return;
+  const request = actionPollRequests.begin();
+  const logicalAccountId = selected.value?.logical_account_id;
   actionPoller.value = setInterval(async () => {
     const rsp = await getOperatorAction(actionId);
+    if (!request.isLatest() || selected.value?.logical_account_id !== logicalAccountId) return;
     action.value = rsp.action;
     if (rsp.action.status !== "RUNNING") stopActionPolling();
   }, 1500);
 }
 function stopActionPolling() {
+  actionPollRequests.invalidate();
   if (actionPoller.value) clearInterval(actionPoller.value);
   actionPoller.value = null;
 }

@@ -189,7 +189,7 @@ func TestCreateDoesNotAliasSameNameAcrossExecutionModes(t *testing.T) {
 	}
 }
 
-func TestCreateProductionAccountCanBeCreatedWhileExecutionIsGated(t *testing.T) {
+func TestCreateProductionAccountIsRejectedWhileLiveTradingIsDisabled(t *testing.T) {
 	store := newMemoryStore()
 	value := validAccount()
 	value.ExecutionMode = exchange.ExecutionModeLive
@@ -201,11 +201,31 @@ func TestCreateProductionAccountCanBeCreatedWhileExecutionIsGated(t *testing.T) 
 	service := Service{Store: store, Secrets: secrets}
 
 	_, err := service.Create(context.Background(), value)
-	if err != nil {
-		t.Fatalf("Create() error = %v, want nil", err)
+	if !errors.Is(err, ErrLiveTradingDisabled) {
+		t.Fatalf("Create() error = %v, want ErrLiveTradingDisabled", err)
 	}
-	if secrets.getCalls != 1 {
-		t.Fatalf("GetExchangeSecret() calls = %d, want 1", secrets.getCalls)
+	if secrets.getCalls != 0 {
+		t.Fatalf("GetExchangeSecret() calls = %d, want 0", secrets.getCalls)
+	}
+	if store.createCalls != 0 {
+		t.Fatalf("Create() writes = %d, want 0", store.createCalls)
+	}
+}
+
+func TestCreateProductionAccountWhenLiveTradingIsEnabled(t *testing.T) {
+	store := newMemoryStore()
+	value := validAccount()
+	value.ExecutionMode = exchange.ExecutionModeLive
+	value.Environment = exchange.AccountEnvironmentProduction
+	value.SyncSymbols = []string{"BTCUSDT"}
+	service := Service{
+		Store:              store,
+		Secrets:            &fakeSecrets{secret: validSecret()},
+		LiveTradingEnabled: true,
+	}
+
+	if _, err := service.Create(context.Background(), value); err != nil {
+		t.Fatalf("Create() error = %v, want nil", err)
 	}
 	if store.createCalls != 1 {
 		t.Fatalf("Create() writes = %d, want 1", store.createCalls)
@@ -257,7 +277,7 @@ func TestUpdateChangesOnlyExplicitMutableFields(t *testing.T) {
 	}
 }
 
-func TestUpdateEnablingProductionAccountRemainsGatedAtExecution(t *testing.T) {
+func TestUpdateEnablingProductionAccountIsRejectedWhileLiveTradingIsDisabled(t *testing.T) {
 	store := newMemoryStore()
 	value := validAccount()
 	value.ExecutionMode = exchange.ExecutionModeLive
@@ -276,8 +296,33 @@ func TestUpdateEnablingProductionAccountRemainsGatedAtExecution(t *testing.T) {
 		TradingAccountID: value.ID,
 		Status:           &status,
 	})
+	if !errors.Is(err, ErrLiveTradingDisabled) {
+		t.Fatalf("Update() error = %v, want ErrLiveTradingDisabled", err)
+	}
+	if store.updateCalls != 0 {
+		t.Fatalf("Update() writes = %d, want 0", store.updateCalls)
+	}
+}
+
+func TestUpdateDisablingProductionAccountIsAllowedWhileLiveTradingIsDisabled(t *testing.T) {
+	store := newMemoryStore()
+	value := validAccount()
+	value.ExecutionMode = exchange.ExecutionModeLive
+	value.Environment = exchange.AccountEnvironmentProduction
+	value.Status = exchange.AccountStatusEnabled
+	store.accounts[value.ID] = value
+	status := exchange.AccountStatusDisabled
+	service := Service{Store: store}
+
+	got, err := service.Update(context.Background(), UpdateCommand{
+		TradingAccountID: value.ID,
+		Status:           &status,
+	})
 	if err != nil {
 		t.Fatalf("Update() error = %v, want nil", err)
+	}
+	if got.Status != exchange.AccountStatusDisabled {
+		t.Fatalf("Status = %q, want DISABLED", got.Status)
 	}
 	if store.updateCalls != 1 {
 		t.Fatalf("Update() writes = %d, want 1", store.updateCalls)
