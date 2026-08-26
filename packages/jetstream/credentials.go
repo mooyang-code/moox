@@ -73,7 +73,11 @@ func (c *Config) ApplyCredentialFile(path string) error {
 		caFile = filepath.Join(filepath.Dir(path), caFile)
 	}
 	c.Username, c.Password, c.TLSCAFile = file.Username, file.Password, caFile
-	if len(file.URLs) > 0 {
+	// The deployment endpoint is supplied by the module config or the
+	// deployment-wide environment. Credential exports on the control host may
+	// deliberately contain its loopback URL, which must not override a remote
+	// service endpoint.
+	if len(c.URLs) == 0 && len(file.URLs) > 0 {
 		c.URLs = append([]string(nil), file.URLs...)
 	}
 	return nil

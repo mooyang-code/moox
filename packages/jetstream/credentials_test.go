@@ -52,3 +52,18 @@ func TestApplyCredentialFileResolvesRelativeCA(t *testing.T) {
 		t.Fatalf("config=%+v", config)
 	}
 }
+
+func TestApplyCredentialFilePreservesExplicitEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "trade.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\nurls:\n  - tls://127.0.0.1:4222\nusername: trade-eventbus\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := Config{URLs: []string{"tls://106.53.107.122:4222"}}
+	if err := config.ApplyCredentialFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.URLs) != 1 || config.URLs[0] != "tls://106.53.107.122:4222" {
+		t.Fatalf("explicit endpoint was overwritten: %+v", config.URLs)
+	}
+}
