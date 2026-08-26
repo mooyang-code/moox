@@ -67,7 +67,7 @@
 - [ ] 在 `account-overview.vue` 增加 `embedded?: boolean` 属性，删除页面级 `<h2>交易账户</h2>`，保留刷新、创建账户、表格、详情抽屉和配置弹窗等业务操作。
 - [ ] 将现有“全部/真实账户/模拟账户”页签改成账户类型区域内的紧凑 `a-radio-group type="button"`，旁边显示中文标签“账户类型”；继续用 `mode` 查询参数驱动筛选，并保持向 API 映射为 `execution_mode` 的既有语义：全部不传、真实账户为 `1`、模拟账户为 `2`。
 - [ ] 将账户列表中进入逻辑账户的导航改为 `/trading/accounts?view=strategy&logical_account_id=...`，不再生成新的独立页面地址。
-- [ ] 在 `account-overview.test.ts` 更新标题、筛选控件和新导航契约；补充真实/模拟/全部三种筛选对应 API 参数的断言。
+- [ ] 在 `account-overview.test.ts` 更新标题、筛选控件和新导航契约；补充真实/模拟/全部三种筛选对应 API 参数的断言（真实账户为 `execution_mode=2`，模拟账户为 `execution_mode=1`）。
 - [ ] 内嵌模式只移除外层页面样式，不改变表格列宽、排序、分页、账户详情和创建 Paper 模拟账户流程。
 - [ ] 运行账户总览相关 Vitest，提交：`refactor(trade): embed trading accounts in workbench`。
 
