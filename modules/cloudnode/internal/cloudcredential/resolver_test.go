@@ -1,7 +1,9 @@
 package cloudcredential
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,28 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"google.golang.org/protobuf/encoding/protojson"
 )
+
+type flakyGatewayTransport struct {
+	attempts int
+	closed   int
+}
+
+func (t *flakyGatewayTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.attempts++
+	if t.attempts == 1 {
+		return nil, errors.New("server closed idle connection")
+	}
+	raw, err := protojson.Marshal(&adminpb.GetSecretValueRsp{
+		RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_SUCCESS},
+		Secret:  &adminpb.SecretMaterial{Category: "cloud", Provider: "tencent", Status: "active", KeyId: "sid", SecretValue: "skey"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(raw)), Header: make(http.Header), Request: req}, nil
+}
+
+func (t *flakyGatewayTransport) CloseIdleConnections() { t.closed++ }
 
 func TestResolverAcceptsActiveTencentCloudSecret(t *testing.T) {
 	resolver := &Resolver{getValue: func(context.Context, *adminpb.GetSecretValueReq) (*adminpb.GetSecretValueRsp, error) {
@@ -111,5 +135,19 @@ func TestNewFromEnvretrievesSecretThroughHTTPServiceGateway(t *testing.T) {
 	})
 	if err != nil || credential.SecretID != "sid" || credential.SecretKey != "skey" {
 		t.Fatalf("credential=%+v err=%v", credential, err)
+	}
+}
+
+func TestGetSecretValueRetriesAfterClosedIdleConnection(t *testing.T) {
+	transport := &flakyGatewayTransport{}
+	client := &http.Client{Transport: transport}
+	response, err := getSecretValue(context.Background(), client, "http://127.0.0.1:11002", "control", gatewayauth.Credentials{
+		KeyID: "cloudnode", Secret: "gateway-secret", Caller: "cloudnode", Expire: time.Minute,
+	}, &adminpb.GetSecretValueReq{SecretId: "cloud-secret"})
+	if err != nil {
+		t.Fatalf("getSecretValue() error = %v", err)
+	}
+	if response.GetSecret().GetKeyId() != "sid" || transport.attempts != 2 || transport.closed != 1 {
+		t.Fatalf("response=%v attempts=%d closed=%d", response, transport.attempts, transport.closed)
 	}
 }

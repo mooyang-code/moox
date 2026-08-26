@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"google.golang.org/protobuf/types/known/structpb"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -87,7 +88,9 @@ func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.
 			// trigger drift is visible even when the assignment hash is unchanged.
 			// The bounded slots avoid making a 50-node fleet serial or creating an
 			// unbounded Tencent API burst.
-			_ = s.refreshTimerTriggerMetadata(ctx, spaceID, &nodes[index])
+			if err := s.refreshTimerTriggerMetadata(ctx, spaceID, &nodes[index]); err != nil {
+				log.WarnContextf(ctx, "[CloudNode-TencentSCF] timer trigger readback failed node=%s: %v", nodes[index].NodeID, err)
+			}
 		}(index)
 	}
 	refreshWG.Wait()

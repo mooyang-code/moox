@@ -58,37 +58,48 @@ func getSecretValue(
 		return nil, fmt.Errorf("marshal getValue secret request: %w", err)
 	}
 	const path = "/api/service/secret/GetSecretValue"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create getValue secret request: %w", err)
+	for attempt := 0; attempt < 2; attempt++ {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("create getValue secret request: %w", err)
+		}
+		headers, err := gatewayauth.Sign(credentials, gatewayauth.Request{
+			Method: http.MethodPost, Path: path, Body: body,
+			TargetNode: targetNode, Caller: credentials.Caller,
+		}, time.Now())
+		if err != nil {
+			return nil, fmt.Errorf("sign getValue secret request: %w", err)
+		}
+		httpReq.Header = headers
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpRsp, err := client.Do(httpReq)
+		if err != nil {
+			if attempt == 0 && ctx.Err() == nil {
+				// GetSecretValue is an idempotent read. Re-sign the request after
+				// dropping stale keep-alive sockets so a gateway-side idle close
+				// does not make the CloudNode Tencent credentials unavailable.
+				gatewayauth.CloseIdleConnections(client)
+				continue
+			}
+			return nil, fmt.Errorf("send getValue secret request: %w", err)
+		}
+		if httpRsp.StatusCode < 200 || httpRsp.StatusCode >= 300 {
+			_, _ = io.Copy(io.Discard, io.LimitReader(httpRsp.Body, 4096))
+			_ = httpRsp.Body.Close()
+			return nil, fmt.Errorf("getValue secret HTTP %d", httpRsp.StatusCode)
+		}
+		var rsp adminpb.GetSecretValueRsp
+		raw, err := io.ReadAll(io.LimitReader(httpRsp.Body, 1<<20))
+		_ = httpRsp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read getValue secret response: %w", err)
+		}
+		if err := protojson.Unmarshal(raw, &rsp); err != nil {
+			return nil, fmt.Errorf("decode getValue secret response: %w", err)
+		}
+		return &rsp, nil
 	}
-	headers, err := gatewayauth.Sign(credentials, gatewayauth.Request{
-		Method: http.MethodPost, Path: path, Body: body,
-		TargetNode: targetNode, Caller: credentials.Caller,
-	}, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("sign getValue secret request: %w", err)
-	}
-	httpReq.Header = headers
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpRsp, err := client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("send getValue secret request: %w", err)
-	}
-	defer httpRsp.Body.Close()
-	if httpRsp.StatusCode < 200 || httpRsp.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(httpRsp.Body, 4096))
-		return nil, fmt.Errorf("getValue secret HTTP %d", httpRsp.StatusCode)
-	}
-	var rsp adminpb.GetSecretValueRsp
-	raw, err := io.ReadAll(io.LimitReader(httpRsp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read getValue secret response: %w", err)
-	}
-	if err := protojson.Unmarshal(raw, &rsp); err != nil {
-		return nil, fmt.Errorf("decode getValue secret response: %w", err)
-	}
-	return &rsp, nil
+	return nil, fmt.Errorf("send getValue secret request: retry exhausted")
 }
 
 func (r *Resolver) Resolve(ctx context.Context, account store.CloudAccount) (TencentCredential, error) {
