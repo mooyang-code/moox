@@ -2340,11 +2340,31 @@ start_strategy() {
       "${ROOT}/bin/moox-strategy" -conf=config/trpc_go.yaml
 }
 
+trade_eventbus_preflight() {
+  [[ -x "${ROOT}/bin/moox-trade-cli" ]] || {
+    echo "trade EventBus preflight requires moox-trade-cli" >&2
+    return 1
+  }
+  local credential_file="${MOOX_TRADE_EVENTBUS_CREDENTIAL_FILE:-${HOME}/.config/moox/eventbus/trade-eventbus.yaml}"
+  local result
+  if ! result=$(
+    MOOX_EVENTBUS_NATS_URL="${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
+    MOOX_EVENTBUS_CREDENTIAL_FILE="${credential_file}" \
+      "${ROOT}/bin/moox-trade-cli" eventbus-check \
+        --config "${ROOT}/trade/config/app.yaml"
+  ); then
+    echo "trade EventBus preflight failed" >&2
+    return 1
+  fi
+  echo "trade EventBus preflight: ${result}"
+}
+
 start_trade() {
   if [[ "${WITH_TRADE}" != "1" ]]; then
     echo "trade is disabled in this deployment package" >&2
     exit 2
   fi
+  trade_eventbus_preflight
   init_trade_schema
   wait_nats trade "${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" "${MOOX_WAIT_TRADE_NATS_SECONDS:-60}"
   gateway_service_env_for trade
@@ -2962,7 +2982,7 @@ probe_service() {
     hostagent) url=http://127.0.0.1:11425/healthz ;;
     factor) url=http://127.0.0.1:11414/healthz ;;
     strategy) url=http://127.0.0.1:11431/healthz ;;
-    trade) url=http://127.0.0.1:11210/healthz ;;
+    trade) url=http://127.0.0.1:11210/readyz; health_path=/readyz ;;
     monitor) url=http://127.0.0.1:11409/healthz ;;
     web-host) url=http://127.0.0.1:19527/healthz ;;
     storage-primary) url=http://127.0.0.1:20210/healthz ;;

@@ -217,6 +217,22 @@ while IFS= read -r entry; do
     ''|data|data/*|logs|logs/*|run|run/*|secrets|secrets/*|certs|certs/*|/*|../*|*/../*|*'/../'*|*'\\'*|*'	'*) exit 1 ;;
   esac
 done < <(unzip -Z1 -- "$archive")
+if [ "$service" = "trade" ]; then
+  [ -x "$stage/bin/moox-trade-cli" ] || {
+    echo "trade_eventbus_preflight_binary_missing" >&2
+    exit 1
+  }
+  trade_config="$stage/config/app.yaml"
+  [ -f "$trade_config" ] || trade_config="$stage/trade/config/app.yaml"
+  [ -f "$trade_config" ] || {
+    echo "trade_eventbus_preflight_config_missing" >&2
+    exit 1
+  }
+  "$stage/bin/moox-trade-cli" eventbus-check --config "$trade_config" || {
+    echo "trade_eventbus_preflight_failed" >&2
+    exit 1
+  }
+fi
 if [ -x "$deploy/stop.sh" ]; then
   if ! "$deploy/stop.sh" "$service"; then
     "$deploy/start.sh" "$service" >/dev/null 2>&1 || true

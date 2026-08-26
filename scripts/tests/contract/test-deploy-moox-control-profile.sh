@@ -118,8 +118,7 @@ grep -Fq 'WITH_TRADE="${MOOX_WITH_TRADE:-${MOOX_INSTALLED_WITH_TRADE:-1}}"' "${T
 grep -Fq 'RUNTIME_IDENTITY_ENV+=("MOOX_REPORT_IP=${PUBLIC_HOST}")' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'start_strategy' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'start_trade' "${TMP_ROOT}/unpacked/start.sh"
-grep -Fq 'trade) url=http://127.0.0.1:11210/healthz' "${TMP_ROOT}/unpacked/healthcheck.sh"
-! grep -Fq '/readyz' "${TMP_ROOT}/unpacked/healthcheck.sh"
+grep -Fq 'trade) url=http://127.0.0.1:11210/readyz; health_path=/readyz' "${TMP_ROOT}/unpacked/healthcheck.sh"
 grep -Fq 'path: ../data/trade/moox_trade.db' "${TMP_ROOT}/unpacked/trade/config/app.yaml"
 grep -Fq 'log_path: ../logs/trade' "${TMP_ROOT}/unpacked/trade/config/trpc_go.yaml"
 grep -Fq '"caller":"trade","secret_file":"gateway-trade.key"' \

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -99,6 +100,24 @@ func TestPrepareServiceAcceptsZipDirectoryEntries(t *testing.T) {
 	require.NoError(t, err, string(output))
 	require.FileExists(t, filepath.Join(deploy, "bin", "service"))
 	require.FileExists(t, filepath.Join(deploy, "config", "app.yaml"))
+}
+
+func TestPrepareTradeServiceRunsEventBusPreflightBeforeStopping(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "stopped")
+	archive := serviceArchive(t, map[string]string{
+		"start.sh":           "#!/bin/sh\nexit 0\n",
+		"stop.sh":            fmt.Sprintf("#!/bin/sh\necho stopped > %q\n", marker),
+		"healthcheck.sh":     "#!/bin/sh\nexit 0\n",
+		"bin/moox-trade":     "trade",
+		"bin/moox-trade-cli": "#!/bin/sh\nexit 1\n",
+		"config/app.yaml":    "eventbus:\n  enabled: true\n",
+	})
+	deploy := filepath.Join(t.TempDir(), "prod")
+	command := exec.Command("bash", "-c", prepareServiceScript, "prepare", deploy, "trade", archive)
+	output, err := command.CombinedOutput()
+	require.Error(t, err, string(output))
+	_, statErr := os.Stat(marker)
+	require.ErrorIs(t, statErr, os.ErrNotExist, "existing service must not stop before EventBus preflight")
 }
 
 func serviceArchive(t *testing.T, entries map[string]string) string {
