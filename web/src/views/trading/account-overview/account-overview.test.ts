@@ -8,7 +8,8 @@ const mocks = vi.hoisted(() => ({
   listTradingAccounts: vi.fn(),
   getExecutionCapabilities: vi.fn(),
   syncTradingAccount: vi.fn(),
-  routerPush: vi.fn()
+  routerPush: vi.fn(),
+  routeQuery: {} as Record<string, unknown>
 }));
 
 vi.mock("@/api/trade", async () => {
@@ -20,7 +21,10 @@ vi.mock("@/api/trade", async () => {
     syncTradingAccount: mocks.syncTradingAccount
   };
 });
-vi.mock("vue-router", () => ({ useRouter: () => ({ push: mocks.routerPush }) }));
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push: mocks.routerPush, replace: mocks.routerPush }),
+  useRoute: () => ({ query: mocks.routeQuery })
+}));
 
 import AccountOverview from "./account-overview.vue";
 
@@ -86,6 +90,7 @@ describe("trading account workbench", () => {
       warnings: ["symbol not found"]
     });
     mocks.routerPush.mockReset();
+    mocks.routeQuery = {};
   });
 
   it("renders server readiness, snapshot and last error", async () => {
@@ -121,11 +126,13 @@ describe("trading account workbench", () => {
 
   it("uses compact Chinese table headers and balanced column widths", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "account-overview.vue"), "utf8");
-    expect(source).toContain(':scroll="{ x: 1400 }"');
+    expect(source).toContain(':scroll="{ x: 1520 }"');
+    expect(source).toContain('<a-table-column title="账户类型" :width="120">');
     expect(source).toContain('<a-table-column title="交易所/市场" :width="120">');
-    expect(source).toContain('<a-table-column title="执行配置" :width="140">');
+    expect(source).toContain('<a-table-column title="运行环境" :width="140">');
     expect(source).toContain('<a-table-column title="资金" :width="180">');
     expect(source).toContain('<a-table-column title="错误" :width="200" ellipsis>');
     expect(source).not.toContain('title="Exchange / 市场"');
+    expect(source).not.toContain("创建 Paper 模拟");
   });
 });

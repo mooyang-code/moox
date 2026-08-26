@@ -52,7 +52,11 @@ describe("page layout standards", () => {
     expect(accounts).toContain("创建账户");
     expect(accounts).toContain('title="操作"');
     expect(accounts).toContain('title="最近同步"');
-    expect(accounts).toContain("Readiness");
+    expect(accounts).toContain('title="账户类型"');
+    expect(accounts).toContain('title="运行环境"');
+    expect(accounts).not.toContain("Readiness");
+    expect(accounts).not.toContain("创建 Paper 模拟");
+    expect(accounts).not.toContain("创建 Live 账户");
 
     expect(secrets).not.toContain('class="filter-bar"');
     expect(secrets.indexOf('placeholder="搜索名称或描述"')).toBeLessThan(secrets.indexOf('placeholder="分类"'));

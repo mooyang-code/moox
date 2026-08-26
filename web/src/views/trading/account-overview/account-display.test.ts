@@ -32,7 +32,7 @@ describe("account display helpers", () => {
     expect(accountStatusView("UNKNOWN", false).color).toBe("gray");
   });
 
-  it("keeps Paper separate from live environment labels", () => {
+  it("keeps simulated accounts separate from real environment labels", () => {
     expect(
       accountEnvironmentView(
         account({
@@ -41,8 +41,8 @@ describe("account display helpers", () => {
           live: undefined
         })
       )
-    ).toBe("Paper");
-    expect(accountEnvironmentView(account({ live: { environment: 2, credential_secret_id: "secret-1" } }))).toBe("Production");
+    ).toBe("模拟环境");
+    expect(accountEnvironmentView(account({ live: { environment: 2, credential_secret_id: "secret-1" } }))).toBe("生产环境");
   });
 
   it("formats empty snapshot values and PnL classes", () => {

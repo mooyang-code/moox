@@ -5,6 +5,7 @@ const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: 
 const paperRequests: Record<string, unknown>[] = [];
 const liveRequests: Record<string, unknown>[] = [];
 const closeRequests: Record<string, unknown>[] = [];
+const accountListRequests: Record<string, unknown>[] = [];
 
 const paperAccount = {
   trading_account_id: "ta-paper-1",
@@ -64,7 +65,11 @@ async function mockTradeGateway(route: Route) {
     });
   }
   if (method === "ListTradingAccounts") {
-    return route.fulfill({ json: ok({ accounts: [paperAccount, liveAccount], page_result: { page: 1, size: 20, total: 2 } }) });
+    const request = (route.request().postDataJSON?.() || {}) as Record<string, unknown>;
+    accountListRequests.push(request);
+    const executionMode = request.execution_mode;
+    const accounts = executionMode === 1 ? [paperAccount] : executionMode === 2 ? [liveAccount] : [paperAccount, liveAccount];
+    return route.fulfill({ json: ok({ accounts, page_result: { page: 1, size: 20, total: accounts.length } }) });
   }
   if (method === "GetExecutionCapabilities") {
     return route.fulfill({
@@ -113,6 +118,7 @@ test.beforeEach(async ({ page }) => {
   paperRequests.length = 0;
   liveRequests.length = 0;
   closeRequests.length = 0;
+  accountListRequests.length = 0;
   await installE2ESession(page, "space-1");
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, mockTradeGateway);
 });
@@ -122,12 +128,44 @@ test("renders Paper and Live accounts and keeps their fields isolated", async ({
   await expect(page.getByRole("heading", { name: "交易账户" })).toBeVisible();
   await expect(page.getByText("Paper Demo", { exact: true })).toBeVisible();
   await expect(page.getByText("Live Testnet", { exact: true })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "账户类型" })).toBeVisible();
+  await expect(page.getByText("模拟账户", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "创建账户" }).click();
+  await expect(page.getByText("创建模拟账户", { exact: true })).toBeVisible();
   await expect(page.getByText("初始资金", { exact: true })).toBeVisible();
-  await expect(page.getByText("Live Secret ID", { exact: true })).toHaveCount(0);
-  await page.getByText("Live", { exact: true }).last().click();
-  await expect(page.getByText("Live Secret ID", { exact: true })).toBeVisible();
+  await expect(page.getByText("真实账户密钥标识", { exact: true })).toHaveCount(0);
+  await page.locator('[data-test="execution-mode"]').getByText("真实账户", { exact: true }).click();
+  await expect(page.getByText("真实账户密钥标识", { exact: true })).toBeVisible();
   await expect(page.getByText("交易标的", { exact: true })).toBeVisible();
+});
+
+test("uses account type tabs and server-side execution mode filters", async ({ page }) => {
+  await page.goto("/#/trading/accounts");
+  await expect.poll(() => accountListRequests.length).toBe(1);
+  expect(accountListRequests[0]).not.toHaveProperty("execution_mode");
+
+  await page.getByRole("tab", { name: "真实账户", exact: true }).click();
+  await expect(page).toHaveURL(/trading\/accounts\?mode=live/);
+  await expect.poll(() => accountListRequests.length).toBe(2);
+  expect(accountListRequests[1]).toMatchObject({ execution_mode: 2 });
+  await expect(page.getByText("Live Testnet", { exact: true })).toBeVisible();
+  await expect(page.getByText("Paper Demo", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("tab", { name: "模拟账户", exact: true }).click();
+  await expect(page).toHaveURL(/trading\/accounts\?mode=paper/);
+  await expect.poll(() => accountListRequests.length).toBe(3);
+  expect(accountListRequests[2]).toMatchObject({ execution_mode: 1 });
+  await expect(page.getByText("Paper Demo", { exact: true })).toBeVisible();
+  await expect(page.getByText("Live Testnet", { exact: true })).toHaveCount(0);
+});
+
+test("supports a simulated account deep link and preselects the matching creation mode", async ({ page }) => {
+  await page.goto("/#/trading/accounts?mode=paper");
+  await expect(page.getByRole("tab", { name: "模拟账户", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect.poll(() => accountListRequests.length).toBe(1);
+  expect(accountListRequests[0]).toMatchObject({ execution_mode: 1 });
+  await page.getByRole("button", { name: "创建账户" }).click();
+  await expect(page.getByText("创建模拟账户", { exact: true })).toBeVisible();
 });
 
 test("surfaces sync warnings and canonical navigation without real orders", async ({ page }) => {
@@ -143,20 +181,20 @@ test("surfaces sync warnings and canonical navigation without real orders", asyn
   await expect(page).toHaveURL(/trading\/orders.*trading_account_id=ta-live-1/);
 });
 
-test("requires Production confirmation and exposes the Paper close capability", async ({ page }) => {
+test("requires production confirmation and exposes the simulated account close capability", async ({ page }) => {
   await page.goto("/#/trading/accounts");
   await page.getByRole("button", { name: "创建账户" }).click();
-  await page.getByText("Live", { exact: true }).last().click();
-  await page.getByText("Production", { exact: true }).click();
-  await page.getByRole("button", { name: "创建 Production 账户" }).click();
-  await expect(page.getByText("确认创建 Production 账户", { exact: true })).toBeVisible();
+  await page.locator('[data-test="execution-mode"]').getByText("真实账户", { exact: true }).click();
+  await page.getByText("生产环境", { exact: true }).click();
+  await page.getByRole("button", { name: "创建生产账户" }).click();
+  await expect(page.getByText("确认创建生产账户", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
-  const createModal = page.locator(".arco-modal").filter({ hasText: "创建 Live 账户" });
+  const createModal = page.locator(".arco-modal").filter({ hasText: "创建真实账户" });
   await createModal.getByRole("button", { name: "取消" }).click({ force: true });
   await expect(createModal).toBeHidden();
 
   await page.getByRole("button", { name: "详情" }).first().click();
-  await expect(page.getByRole("button", { name: "关闭 Paper 模拟" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "关闭模拟账户" }).last()).toBeEnabled();
 });
 
 test("submits a Paper request without Live-only fields and shows both IDs", async ({ page }) => {
@@ -172,10 +210,10 @@ test("submits a Paper request without Live-only fields and shows both IDs", asyn
   await expect(page.getByText("la-paper-1", { exact: false })).toBeVisible();
 });
 
-test("submits Live configuration, syncs it, and shows readiness feedback", async ({ page }) => {
+test("submits real account configuration, syncs it, and shows readiness feedback", async ({ page }) => {
   await page.goto("/#/trading/accounts");
   await page.getByRole("button", { name: "创建账户" }).click();
-  await page.getByText("Live", { exact: true }).last().click();
+  await page.locator('[data-test="execution-mode"]').getByText("真实账户", { exact: true }).click();
   await page.locator('input[name="account_name"]').fill("Live Created");
   await page.locator('input[name="credential_secret_id"]').fill("secret-live");
   await page.locator('input[name="sync_symbols"]').fill("BTCUSDT");
@@ -187,15 +225,15 @@ test("submits Live configuration, syncs it, and shows readiness feedback", async
     live: { environment: 1, credential_secret_id: "secret-live" }
   });
   expect(liveRequests[0]).not.toHaveProperty("initial_balance");
-  await expect(page.getByText("Live 账户已创建", { exact: false })).toBeVisible();
-  await expect(page.getByText("Not Ready", { exact: false }).last()).toBeVisible();
+  await expect(page.getByText("真实账户已创建", { exact: false })).toBeVisible();
+  await expect(page.getByText("未就绪", { exact: false }).last()).toBeVisible();
 });
 
-test("closes Paper only after capability confirmation and sends canonical ID", async ({ page }) => {
+test("closes simulated account only after capability confirmation and sends canonical ID", async ({ page }) => {
   await page.goto("/#/trading/accounts");
   await page.getByRole("button", { name: "详情" }).first().click();
-  await page.getByRole("button", { name: "关闭 Paper 模拟" }).click();
-  await expect(page.getByText("关闭 Paper 模拟", { exact: true }).last()).toBeVisible();
+  await page.getByRole("button", { name: "关闭模拟账户" }).last().click();
+  await expect(page.getByText("关闭模拟账户", { exact: true }).last()).toBeVisible();
   await page.getByRole("button", { name: "确定" }).last().click();
   await expect.poll(() => closeRequests.length).toBe(1);
   expect(closeRequests[0]).toEqual({ trading_account_id: "ta-paper-1" });

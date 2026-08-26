@@ -54,9 +54,9 @@ function isNonNegativeDecimal(value: string): boolean {
 export function validateAccountForm(form: AccountFormModel): string {
   if (!form.name.trim()) return "请输入账户名称";
   if (!form.settlement_asset.trim()) return "请输入结算资产";
-  if (form.execution_mode === 2 && !form.credential_secret_id.trim()) return "请输入 Live Secret ID";
+  if (form.execution_mode === 2 && !form.credential_secret_id.trim()) return "请输入真实账户密钥标识";
   if (form.execution_mode === 1 && (!isNonNegativeDecimal(form.initial_balance) || Number(form.initial_balance) <= 0)) {
-    return "Paper 初始资金必须大于 0";
+    return "模拟账户初始资金必须大于 0";
   }
   if (form.execution_mode === 2 && form.market_type === 1 && normalizeSymbols(form.sync_symbols).length === 0) {
     return "请至少填写一个交易标的";
@@ -68,7 +68,7 @@ export function validateAccountForm(form: AccountFormModel): string {
     if (Number(form.slippage_bps) >= 10000) return "滑点必须小于 10000 bps";
   }
   if (form.market_type === 2 && (form.settlement_asset.trim().toUpperCase() !== "USDT" || form.margin_mode !== "CROSS")) {
-    return "SWAP 仅支持 USDT/CROSS";
+    return "合约账户仅支持 USDT/全仓";
   }
   return "";
 }

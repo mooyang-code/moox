@@ -57,6 +57,19 @@ describe("account form builders", () => {
     expect(validateAccountForm(live)).toContain("交易标的");
   });
 
+  it("keeps validation feedback in Chinese", () => {
+    const live = createDefaultAccountForm();
+    live.name = "真实账户";
+    live.execution_mode = 2;
+    expect(validateAccountForm(live)).toBe("请输入真实账户密钥标识");
+
+    const swap = createDefaultAccountForm();
+    swap.name = "合约账户";
+    swap.market_type = 2;
+    swap.settlement_asset = "BTC";
+    expect(validateAccountForm(swap)).toBe("合约账户仅支持 USDT/全仓");
+  });
+
   it("normalizes and deduplicates Live symbols", () => {
     expect(buildLiveRequest({ ...form(), sync_symbols: "btc usdt, BTCUSDT, ETHUSDT" }).sync_symbols).toEqual([
       "BTC",
