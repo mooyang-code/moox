@@ -76,8 +76,8 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-func (s *Store) LockExchangeAccount(exchangeAccountID string) func() {
-	value, _ := s.accountLocks.LoadOrStore(exchangeAccountID, &sync.Mutex{})
+func (s *Store) LockTradingAccount(tradingAccountID string) func() {
+	value, _ := s.accountLocks.LoadOrStore(tradingAccountID, &sync.Mutex{})
 	mutex := value.(*sync.Mutex)
 	mutex.Lock()
 	return mutex.Unlock
@@ -116,10 +116,12 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		return fmt.Errorf("inspect trade schema: %w", err)
 	}
 	approved := map[string]struct{}{
-		"t_exchange_accounts": {}, "t_exchange_instruments": {},
-		"t_trade_orders": {}, "t_order_fills": {}, "t_exchange_positions": {},
+		"t_trading_accounts": {}, "t_trade_instruments": {},
+		"t_trade_orders": {}, "t_order_fills": {}, "t_trading_positions": {},
 		"t_logical_accounts": {}, "t_logical_account_members": {},
 		"t_logical_account_targets": {}, "t_operator_actions": {},
+		"t_paper_account_configs": {}, "t_account_equity_points": {},
+		"t_logical_account_equity_points": {},
 	}
 	for _, table := range tables {
 		if _, found := approved[table]; !found {

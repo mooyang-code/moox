@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"gorm.io/gorm"
 )
 
 type LeverageSettings map[string]string
@@ -21,7 +22,7 @@ type AssetBalance struct {
 	Total     string `json:"total"`
 }
 
-type ExchangeAccountSnapshot struct {
+type TradingAccountSnapshot struct {
 	Balances          []AssetBalance `json:"balances"`
 	Equity            string         `json:"equity"`
 	AvailableFunds    string         `json:"available_funds"`
@@ -31,14 +32,15 @@ type ExchangeAccountSnapshot struct {
 	ExchangeUpdatedAt int64          `json:"exchange_updated_at"`
 }
 
-type ExchangeAccountRecord struct {
+type TradingAccountRecord struct {
 	SpaceID            string
-	ExchangeAccountID  string
+	TradingAccountID   string
 	Name               string
 	Exchange           string
 	MarketType         string
 	ExecutionMode      string
 	Environment        string
+	PaperConfig        *PaperAccountConfigRecord
 	CredentialSecretID string
 	SettlementAsset    string
 	MarginMode         string
@@ -47,7 +49,7 @@ type ExchangeAccountRecord struct {
 	SyncSymbols        []string
 	LeverageSettings   LeverageSettings
 	FillCursors        FillCursors
-	Snapshot           ExchangeAccountSnapshot
+	Snapshot           TradingAccountSnapshot
 	SnapshotSourceTime int64
 	LastSyncAt         int64
 	LastReadyAt        int64
@@ -56,14 +58,14 @@ type ExchangeAccountRecord struct {
 	UpdatedAt          time.Time
 }
 
-type exchangeAccountRow struct {
+type tradingAccountRow struct {
 	SpaceID              string    `gorm:"column:c_space_id"`
-	ExchangeAccountID    string    `gorm:"column:c_exchange_account_id"`
+	TradingAccountID     string    `gorm:"column:c_trading_account_id"`
 	Name                 string    `gorm:"column:c_name"`
 	Exchange             string    `gorm:"column:c_exchange"`
 	MarketType           string    `gorm:"column:c_market_type"`
 	ExecutionMode        string    `gorm:"column:c_execution_mode"`
-	Environment          string    `gorm:"column:c_environment"`
+	Environment          string    `gorm:"column:c_live_environment"`
 	CredentialSecretID   string    `gorm:"column:c_credential_secret_id"`
 	SettlementAsset      string    `gorm:"column:c_settlement_asset"`
 	MarginMode           string    `gorm:"column:c_margin_mode"`
@@ -81,17 +83,23 @@ type exchangeAccountRow struct {
 	UpdatedAt            time.Time `gorm:"column:c_mtime"`
 }
 
-func (exchangeAccountRow) TableName() string {
-	return "t_exchange_accounts"
+func (tradingAccountRow) TableName() string {
+	return "t_trading_accounts"
 }
 
-func (tx *Tx) CreateExchangeAccount(record ExchangeAccountRecord) error {
-	if record.SpaceID == "" || record.ExchangeAccountID == "" || record.Name == "" ||
+func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
+	if record.SpaceID == "" || record.TradingAccountID == "" || record.Name == "" ||
 		record.Exchange == "" || record.MarketType == "" || record.ExecutionMode == "" ||
-		record.Environment == "" ||
 		record.SettlementAsset == "" || record.Status == "" ||
 		(record.ExecutionMode == "LIVE" && record.CredentialSecretID == "") {
 		return fmt.Errorf("%w: incomplete Exchange account", ErrInvalidRecord)
+	}
+	if record.ExecutionMode == "PAPER" {
+		if record.PaperConfig == nil {
+			record.PaperConfig = &PaperAccountConfigRecord{SpaceID: record.SpaceID, TradingAccountID: record.TradingAccountID, InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBPS: "0"}
+		}
+		record.Environment = ""
+		record.CredentialSecretID = ""
 	}
 	leverageJSON, err := encodeLeverageSettings(record.LeverageSettings)
 	if err != nil {
@@ -109,8 +117,8 @@ func (tx *Tx) CreateExchangeAccount(record ExchangeAccountRecord) error {
 	if err != nil {
 		return err
 	}
-	row := exchangeAccountRow{
-		SpaceID: record.SpaceID, ExchangeAccountID: record.ExchangeAccountID,
+	row := tradingAccountRow{
+		SpaceID: record.SpaceID, TradingAccountID: record.TradingAccountID,
 		Name: record.Name, Exchange: record.Exchange, MarketType: record.MarketType,
 		ExecutionMode: record.ExecutionMode, Environment: record.Environment,
 		CredentialSecretID: record.CredentialSecretID,
@@ -123,9 +131,9 @@ func (tx *Tx) CreateExchangeAccount(record ExchangeAccountRecord) error {
 		LastReadyAt: record.LastReadyAt, LastError: record.LastError,
 	}
 	err = tx.db.Exec(`
-		INSERT INTO t_exchange_accounts (
-			c_space_id, c_exchange_account_id, c_name, c_exchange, c_market_type,
-			c_execution_mode, c_environment, c_credential_secret_id,
+		INSERT INTO t_trading_accounts (
+			c_space_id, c_trading_account_id, c_name, c_exchange, c_market_type,
+		c_execution_mode, c_live_environment, c_credential_secret_id,
 			c_settlement_asset, c_margin_mode,
 			c_status, c_ready, c_sync_symbols_json,
 			c_leverage_settings_json,
@@ -134,7 +142,7 @@ func (tx *Tx) CreateExchangeAccount(record ExchangeAccountRecord) error {
 			c_last_error
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		row.SpaceID, row.ExchangeAccountID, row.Name, row.Exchange, row.MarketType,
+		row.SpaceID, row.TradingAccountID, row.Name, row.Exchange, row.MarketType,
 		row.ExecutionMode, row.Environment, row.CredentialSecretID,
 		row.SettlementAsset, row.MarginMode,
 		row.Status, row.Ready,
@@ -142,10 +150,16 @@ func (tx *Tx) CreateExchangeAccount(record ExchangeAccountRecord) error {
 		row.FillCursorsJSON, row.SnapshotJSON,
 		row.SnapshotSourceTime, row.LastSyncAt, row.LastReadyAt, row.LastError,
 	).Error
-	return writeError(err)
+	if err != nil {
+		return writeError(err)
+	}
+	if record.ExecutionMode == "PAPER" && record.PaperConfig != nil {
+		return tx.CreatePaperAccountConfig(*record.PaperConfig)
+	}
+	return nil
 }
 
-type ExchangeAccountConfiguration struct {
+type TradingAccountConfiguration struct {
 	Name               string
 	CredentialSecretID string
 	SettlementAsset    string
@@ -154,24 +168,25 @@ type ExchangeAccountConfiguration struct {
 	SyncSymbols        []string
 }
 
-func (tx *Tx) UpdateExchangeAccountConfiguration(
+func (tx *Tx) UpdateTradingAccountConfiguration(
 	spaceID string,
-	exchangeAccountID string,
-	config ExchangeAccountConfiguration,
+	tradingAccountID string,
+	config TradingAccountConfiguration,
 ) error {
-	if blank(spaceID) || blank(exchangeAccountID) || blank(config.Name) ||
+	if blank(spaceID) || blank(tradingAccountID) || blank(config.Name) ||
 		blank(config.SettlementAsset) || blank(config.Status) {
 		return fmt.Errorf("%w: incomplete Exchange account configuration", ErrInvalidRecord)
 	}
 	var current struct {
 		ExecutionMode   string `gorm:"column:c_execution_mode"`
 		SettlementAsset string `gorm:"column:c_settlement_asset"`
+		Status          string `gorm:"column:c_status"`
 	}
 	result := tx.db.Raw(`
-		SELECT c_execution_mode, c_settlement_asset
-		FROM t_exchange_accounts
-		WHERE c_space_id = ? AND c_exchange_account_id = ?
-	`, spaceID, exchangeAccountID).Scan(&current)
+		SELECT c_execution_mode, c_settlement_asset, c_status
+		FROM t_trading_accounts
+		WHERE c_space_id = ? AND c_trading_account_id = ?
+	`, spaceID, tradingAccountID).Scan(&current)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -181,13 +196,19 @@ func (tx *Tx) UpdateExchangeAccountConfiguration(
 	if current.ExecutionMode == "LIVE" && blank(config.CredentialSecretID) {
 		return fmt.Errorf("%w: LIVE requires an Exchange credential", ErrInvalidRecord)
 	}
+	if current.ExecutionMode == "PAPER" {
+		if current.Status == "DISABLED" && config.Status == "ENABLED" {
+			return fmt.Errorf("%w: closed paper account cannot be re-enabled", ErrConflict)
+		}
+		config.CredentialSecretID = ""
+	}
 	if current.SettlementAsset != config.SettlementAsset {
 		var membershipCount int64
 		if err := tx.db.Table("t_logical_account_members").
 			Where(
-				"c_space_id = ? AND c_exchange_account_id = ?",
+				"c_space_id = ? AND c_trading_account_id = ?",
 				spaceID,
-				exchangeAccountID,
+				tradingAccountID,
 			).
 			Count(&membershipCount).Error; err != nil {
 			return err
@@ -204,7 +225,7 @@ func (tx *Tx) UpdateExchangeAccountConfiguration(
 		return err
 	}
 	result = tx.db.Exec(`
-		UPDATE t_exchange_accounts
+		UPDATE t_trading_accounts
 		SET c_name = ?, c_credential_secret_id = ?, c_settlement_asset = ?,
 			c_margin_mode = ?, c_status = ?, c_sync_symbols_json = ?,
 			c_ready = CASE
@@ -217,21 +238,21 @@ func (tx *Tx) UpdateExchangeAccountConfiguration(
 				ELSE c_ready
 			END,
 			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_exchange_account_id = ?
+		WHERE c_space_id = ? AND c_trading_account_id = ?
 	`, config.Name, config.CredentialSecretID, config.SettlementAsset,
 		config.MarginMode, config.Status, syncSymbolsJSON,
 		config.CredentialSecretID, config.SettlementAsset,
 		config.MarginMode, config.Status, syncSymbolsJSON,
-		spaceID, exchangeAccountID)
+		spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account configuration")
 }
 
-func (tx *Tx) SetExchangeAccountLeverage(
+func (tx *Tx) SetTradingAccountLeverage(
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	settings LeverageSettings,
 ) error {
-	if blank(spaceID) || blank(exchangeAccountID) {
+	if blank(spaceID) || blank(tradingAccountID) {
 		return fmt.Errorf("%w: incomplete Exchange account leverage", ErrInvalidRecord)
 	}
 	encoded, err := encodeLeverageSettings(settings)
@@ -239,31 +260,31 @@ func (tx *Tx) SetExchangeAccountLeverage(
 		return err
 	}
 	result := tx.db.Exec(`
-		UPDATE t_exchange_accounts
+		UPDATE t_trading_accounts
 		SET c_leverage_settings_json = ?, c_ready = 0,
 			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_exchange_account_id = ?
-	`, encoded, spaceID, exchangeAccountID)
+		WHERE c_space_id = ? AND c_trading_account_id = ?
+	`, encoded, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account leverage")
 }
 
-type ExchangeAccountSyncState struct {
+type TradingAccountSyncState struct {
 	Ready              bool
 	LeverageSettings   LeverageSettings
 	FillCursors        FillCursors
-	Snapshot           ExchangeAccountSnapshot
+	Snapshot           TradingAccountSnapshot
 	SnapshotSourceTime int64
 	LastSyncAt         int64
 	LastReadyAt        int64
 	LastError          string
 }
 
-func (tx *Tx) UpdateExchangeAccountSync(
+func (tx *Tx) UpdateTradingAccountSync(
 	spaceID string,
-	exchangeAccountID string,
-	state ExchangeAccountSyncState,
+	tradingAccountID string,
+	state TradingAccountSyncState,
 ) error {
-	if blank(spaceID) || blank(exchangeAccountID) || state.LastSyncAt <= 0 {
+	if blank(spaceID) || blank(tradingAccountID) || state.LastSyncAt <= 0 {
 		return fmt.Errorf("%w: incomplete Exchange account sync state", ErrInvalidRecord)
 	}
 	leverageJSON, err := encodeLeverageSettings(state.LeverageSettings)
@@ -279,26 +300,26 @@ func (tx *Tx) UpdateExchangeAccountSync(
 		return err
 	}
 	result := tx.db.Exec(`
-		UPDATE t_exchange_accounts
+		UPDATE t_trading_accounts
 		SET c_ready = ?, c_leverage_settings_json = ?, c_fill_cursors_json = ?,
 			c_snapshot_json = ?,
 			c_snapshot_source_time = ?, c_last_sync_at = ?, c_last_ready_at = ?,
 			c_last_error = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_exchange_account_id = ?
+		WHERE c_space_id = ? AND c_trading_account_id = ?
 	`, state.Ready, leverageJSON, fillCursorsJSON, snapshotJSON, state.SnapshotSourceTime,
-		state.LastSyncAt, state.LastReadyAt, state.LastError, spaceID, exchangeAccountID)
+		state.LastSyncAt, state.LastReadyAt, state.LastError, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account sync state")
 }
 
-func (tx *Tx) UpdateExchangeAccountFacts(
+func (tx *Tx) UpdateTradingAccountFacts(
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	fillCursors FillCursors,
-	snapshot ExchangeAccountSnapshot,
+	snapshot TradingAccountSnapshot,
 	snapshotSourceTime int64,
 	lastSyncAt int64,
 ) error {
-	if blank(spaceID) || blank(exchangeAccountID) || lastSyncAt <= 0 {
+	if blank(spaceID) || blank(tradingAccountID) || lastSyncAt <= 0 {
 		return fmt.Errorf("%w: incomplete Exchange account facts", ErrInvalidRecord)
 	}
 	fillCursorsJSON, err := encodeFillCursors(fillCursors)
@@ -310,22 +331,22 @@ func (tx *Tx) UpdateExchangeAccountFacts(
 		return err
 	}
 	result := tx.db.Exec(`
-		UPDATE t_exchange_accounts
+		UPDATE t_trading_accounts
 		SET c_fill_cursors_json = ?, c_snapshot_json = ?,
 			c_snapshot_source_time = ?, c_last_sync_at = ?,
 			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_exchange_account_id = ?
+		WHERE c_space_id = ? AND c_trading_account_id = ?
 	`, fillCursorsJSON, snapshotJSON, snapshotSourceTime, lastSyncAt,
-		spaceID, exchangeAccountID)
+		spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account facts")
 }
 
-func (tx *Tx) UpdateExchangeAccountSnapshot(
+func (tx *Tx) UpdateTradingAccountSnapshot(
 	spaceID string,
-	exchangeAccountID string,
-	snapshot ExchangeAccountSnapshot,
+	tradingAccountID string,
+	snapshot TradingAccountSnapshot,
 ) error {
-	if blank(spaceID) || blank(exchangeAccountID) || snapshot.ExchangeUpdatedAt <= 0 {
+	if blank(spaceID) || blank(tradingAccountID) || snapshot.ExchangeUpdatedAt <= 0 {
 		return fmt.Errorf("%w: incomplete Exchange account snapshot", ErrInvalidRecord)
 	}
 	snapshotJSON, err := encodeSnapshot(snapshot)
@@ -333,31 +354,31 @@ func (tx *Tx) UpdateExchangeAccountSnapshot(
 		return err
 	}
 	result := tx.db.Exec(`
-		UPDATE t_exchange_accounts
+		UPDATE t_trading_accounts
 		SET c_snapshot_json = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_exchange_account_id = ?
-	`, snapshotJSON, spaceID, exchangeAccountID)
+		WHERE c_space_id = ? AND c_trading_account_id = ?
+	`, snapshotJSON, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account snapshot")
 }
 
-func (tx *Tx) UpdateExchangeAccountReadiness(
+func (tx *Tx) UpdateTradingAccountReadiness(
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	ready bool,
 	now int64,
 	lastError string,
 ) error {
-	if blank(spaceID) || blank(exchangeAccountID) || now <= 0 {
+	if blank(spaceID) || blank(tradingAccountID) || now <= 0 {
 		return fmt.Errorf("%w: incomplete Exchange account readiness", ErrInvalidRecord)
 	}
 	result := tx.db.Exec(`
-		UPDATE t_exchange_accounts
+		UPDATE t_trading_accounts
 		SET c_ready = ?,
 			c_last_ready_at = CASE WHEN ? THEN ? ELSE c_last_ready_at END,
 			c_last_error = ?,
 			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_exchange_account_id = ?
-	`, ready, ready, now, lastError, spaceID, exchangeAccountID)
+		WHERE c_space_id = ? AND c_trading_account_id = ?
+	`, ready, ready, now, lastError, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account readiness")
 }
 
@@ -371,50 +392,67 @@ func requireUpdated(err error, rowsAffected int64, label string) error {
 	return nil
 }
 
-func (s *Store) GetExchangeAccount(
+func (s *Store) GetTradingAccount(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
-) (ExchangeAccountRecord, error) {
-	var row exchangeAccountRow
+	tradingAccountID string,
+) (TradingAccountRecord, error) {
+	var row tradingAccountRow
 	err := s.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_exchange_account_id = ?", spaceID, exchangeAccountID).
+		Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, tradingAccountID).
 		Take(&row).Error
 	if err != nil {
-		return ExchangeAccountRecord{}, err
+		return TradingAccountRecord{}, err
 	}
-	return decodeAccountRow(row)
+	record, err := decodeAccountRow(row)
+	if err != nil {
+		return TradingAccountRecord{}, err
+	}
+	if err := loadPaperConfig(s.db, ctx, &record); err != nil {
+		return TradingAccountRecord{}, err
+	}
+	return record, nil
 }
 
-func (tx *Tx) GetExchangeAccount(
+func (tx *Tx) GetTradingAccount(
 	spaceID string,
-	exchangeAccountID string,
-) (ExchangeAccountRecord, error) {
-	var row exchangeAccountRow
+	tradingAccountID string,
+) (TradingAccountRecord, error) {
+	var row tradingAccountRow
 	err := tx.db.
-		Where("c_space_id = ? AND c_exchange_account_id = ?", spaceID, exchangeAccountID).
+		Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, tradingAccountID).
 		Take(&row).Error
 	if err != nil {
-		return ExchangeAccountRecord{}, err
+		return TradingAccountRecord{}, err
 	}
-	return decodeAccountRow(row)
+	record, err := decodeAccountRow(row)
+	if err != nil {
+		return TradingAccountRecord{}, err
+	}
+	if err := loadPaperConfig(tx.db, context.Background(), &record); err != nil {
+		return TradingAccountRecord{}, err
+	}
+	return record, nil
 }
 
-func (s *Store) ListExchangeAccounts(
+func (s *Store) ListTradingAccounts(
 	ctx context.Context,
 	spaceID string,
-) ([]ExchangeAccountRecord, error) {
-	var rows []exchangeAccountRow
+) ([]TradingAccountRecord, error) {
+	var rows []tradingAccountRow
 	if err := s.db.WithContext(ctx).
 		Where("c_space_id = ?", spaceID).
-		Order("c_name, c_exchange_account_id").
+		Order("c_name, c_trading_account_id").
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	records := make([]ExchangeAccountRecord, 0, len(rows))
+	records := make([]TradingAccountRecord, 0, len(rows))
 	for _, row := range rows {
 		record, err := decodeAccountRow(row)
 		if err != nil {
+			return nil, err
+		}
+		if err := loadPaperConfig(s.db, ctx, &record); err != nil {
 			return nil, err
 		}
 		records = append(records, record)
@@ -422,43 +460,72 @@ func (s *Store) ListExchangeAccounts(
 	return records, nil
 }
 
-func (s *Store) GetExchangeAccountByID(
-	ctx context.Context,
-	exchangeAccountID string,
-) (ExchangeAccountRecord, error) {
-	if blank(exchangeAccountID) {
-		return ExchangeAccountRecord{}, fmt.Errorf("%w: empty Exchange account ID", ErrInvalidRecord)
+func (s *Store) ListAllTradingAccounts(ctx context.Context) ([]TradingAccountRecord, error) {
+	var rows []tradingAccountRow
+	if err := s.db.WithContext(ctx).Order("c_space_id, c_name, c_trading_account_id").Find(&rows).Error; err != nil {
+		return nil, err
 	}
-	var rows []exchangeAccountRow
+	result := make([]TradingAccountRecord, 0, len(rows))
+	for _, row := range rows {
+		record, err := decodeAccountRow(row)
+		if err != nil {
+			return nil, err
+		}
+		if err := loadPaperConfig(s.db, ctx, &record); err != nil {
+			return nil, err
+		}
+		result = append(result, record)
+	}
+	return result, nil
+}
+
+func (s *Store) GetTradingAccountByID(
+	ctx context.Context,
+	tradingAccountID string,
+) (TradingAccountRecord, error) {
+	if blank(tradingAccountID) {
+		return TradingAccountRecord{}, fmt.Errorf("%w: empty Exchange account ID", ErrInvalidRecord)
+	}
+	var rows []tradingAccountRow
 	if err := s.db.WithContext(ctx).
-		Where("c_exchange_account_id = ?", exchangeAccountID).
+		Where("c_trading_account_id = ?", tradingAccountID).
 		Limit(2).
 		Find(&rows).Error; err != nil {
-		return ExchangeAccountRecord{}, err
+		return TradingAccountRecord{}, err
 	}
 	if len(rows) != 1 {
-		return ExchangeAccountRecord{}, fmt.Errorf(
+		return TradingAccountRecord{}, fmt.Errorf(
 			"%w: Exchange account ID must identify exactly one account",
 			ErrInvalidRecord,
 		)
 	}
-	return decodeAccountRow(rows[0])
+	record, err := decodeAccountRow(rows[0])
+	if err != nil {
+		return TradingAccountRecord{}, err
+	}
+	if err := loadPaperConfig(s.db, ctx, &record); err != nil {
+		return TradingAccountRecord{}, err
+	}
+	return record, nil
 }
 
-func (s *Store) ListEnabledExchangeAccounts(
+func (s *Store) ListEnabledTradingAccounts(
 	ctx context.Context,
-) ([]ExchangeAccountRecord, error) {
-	var rows []exchangeAccountRow
+) ([]TradingAccountRecord, error) {
+	var rows []tradingAccountRow
 	if err := s.db.WithContext(ctx).
 		Where("c_status = ?", "ENABLED").
-		Order("c_space_id, c_exchange_account_id").
+		Order("c_space_id, c_trading_account_id").
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	records := make([]ExchangeAccountRecord, 0, len(rows))
+	records := make([]TradingAccountRecord, 0, len(rows))
 	for _, row := range rows {
 		record, err := decodeAccountRow(row)
 		if err != nil {
+			return nil, err
+		}
+		if err := loadPaperConfig(s.db, ctx, &record); err != nil {
 			return nil, err
 		}
 		records = append(records, record)
@@ -466,37 +533,37 @@ func (s *Store) ListEnabledExchangeAccounts(
 	return records, nil
 }
 
-func decodeAccountRow(row exchangeAccountRow) (ExchangeAccountRecord, error) {
+func decodeAccountRow(row tradingAccountRow) (TradingAccountRecord, error) {
 	var syncSymbols []string
 	if err := json.Unmarshal([]byte(row.SyncSymbolsJSON), &syncSymbols); err != nil {
-		return ExchangeAccountRecord{}, fmt.Errorf("%w: sync symbols JSON: %v", ErrInvalidRecord, err)
+		return TradingAccountRecord{}, fmt.Errorf("%w: sync symbols JSON: %v", ErrInvalidRecord, err)
 	}
 	if _, err := encodeSyncSymbols(syncSymbols); err != nil {
-		return ExchangeAccountRecord{}, err
+		return TradingAccountRecord{}, err
 	}
 	var leverage LeverageSettings
 	if err := json.Unmarshal([]byte(row.LeverageSettingsJSON), &leverage); err != nil {
-		return ExchangeAccountRecord{}, fmt.Errorf("%w: leverage JSON: %v", ErrInvalidRecord, err)
+		return TradingAccountRecord{}, fmt.Errorf("%w: leverage JSON: %v", ErrInvalidRecord, err)
 	}
-	var snapshot ExchangeAccountSnapshot
+	var snapshot TradingAccountSnapshot
 	if err := json.Unmarshal([]byte(row.SnapshotJSON), &snapshot); err != nil {
-		return ExchangeAccountRecord{}, fmt.Errorf("%w: snapshot JSON: %v", ErrInvalidRecord, err)
+		return TradingAccountRecord{}, fmt.Errorf("%w: snapshot JSON: %v", ErrInvalidRecord, err)
 	}
 	if _, err := encodeLeverageSettings(leverage); err != nil {
-		return ExchangeAccountRecord{}, err
+		return TradingAccountRecord{}, err
 	}
 	var fillCursors FillCursors
 	if err := json.Unmarshal([]byte(row.FillCursorsJSON), &fillCursors); err != nil {
-		return ExchangeAccountRecord{}, fmt.Errorf("%w: Fill cursors JSON: %v", ErrInvalidRecord, err)
+		return TradingAccountRecord{}, fmt.Errorf("%w: Fill cursors JSON: %v", ErrInvalidRecord, err)
 	}
 	if _, err := encodeFillCursors(fillCursors); err != nil {
-		return ExchangeAccountRecord{}, err
+		return TradingAccountRecord{}, err
 	}
 	if _, err := encodeSnapshot(snapshot); err != nil {
-		return ExchangeAccountRecord{}, err
+		return TradingAccountRecord{}, err
 	}
-	return ExchangeAccountRecord{
-		SpaceID: row.SpaceID, ExchangeAccountID: row.ExchangeAccountID,
+	return TradingAccountRecord{
+		SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID,
 		Name: row.Name, Exchange: row.Exchange, MarketType: row.MarketType,
 		ExecutionMode: row.ExecutionMode, Environment: row.Environment,
 		CredentialSecretID: row.CredentialSecretID,
@@ -509,6 +576,31 @@ func decodeAccountRow(row exchangeAccountRow) (ExchangeAccountRecord, error) {
 		LastReadyAt: row.LastReadyAt, LastError: row.LastError,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}, nil
+}
+
+func loadPaperConfig(db *gorm.DB, ctx context.Context, record *TradingAccountRecord) error {
+	if record == nil || record.ExecutionMode != "PAPER" {
+		return nil
+	}
+	var row struct {
+		SpaceID          string `gorm:"column:c_space_id"`
+		TradingAccountID string `gorm:"column:c_trading_account_id"`
+		InitialBalance   string `gorm:"column:c_initial_balance"`
+		MakerFeeRate     string `gorm:"column:c_maker_fee_rate"`
+		TakerFeeRate     string `gorm:"column:c_taker_fee_rate"`
+		SlippageBPS      string `gorm:"column:c_slippage_bps"`
+	}
+	if err := db.WithContext(ctx).Table("t_paper_account_configs").
+		Where("c_space_id = ? AND c_trading_account_id = ?", record.SpaceID, record.TradingAccountID).
+		Take(&row).Error; err != nil {
+		return err
+	}
+	record.PaperConfig = &PaperAccountConfigRecord{
+		SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID,
+		InitialBalance: row.InitialBalance, MakerFeeRate: row.MakerFeeRate,
+		TakerFeeRate: row.TakerFeeRate, SlippageBPS: row.SlippageBPS,
+	}
+	return nil
 }
 
 func encodeSyncSymbols(symbols []string) (string, error) {
@@ -573,7 +665,7 @@ func encodeLeverageSettings(settings LeverageSettings) (string, error) {
 	return string(data), nil
 }
 
-func encodeSnapshot(snapshot ExchangeAccountSnapshot) (string, error) {
+func encodeSnapshot(snapshot TradingAccountSnapshot) (string, error) {
 	for i := range snapshot.Balances {
 		balance := &snapshot.Balances[i]
 		if balance.Asset == "" {

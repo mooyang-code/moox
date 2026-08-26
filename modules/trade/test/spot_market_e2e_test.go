@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange/paper"
+	executionpaper "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
@@ -44,7 +44,7 @@ func TestSpotPersistsNormalizedNonzeroExchangeFee(t *testing.T) {
 	fills, total, err := f.store.ListFills(
 		ctx,
 		testSpace,
-		store.FillQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.FillQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
@@ -67,7 +67,7 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 	require.Equal(t, orderdomain.Filled, sell.State)
 
 	orders, total, err := f.store.ListOrders(ctx, testSpace, store.OrderQuery{
-		ExchangeAccountID: testAccount, Limit: 10,
+		TradingAccountID: testAccount, Limit: 10,
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(2), total)
@@ -78,7 +78,7 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 		require.NotEmpty(t, current.ExchangeOrderID)
 	}
 	fills, fillTotal, err := f.store.ListFills(ctx, testSpace, store.FillQuery{
-		ExchangeAccountID: testAccount, Limit: 10,
+		TradingAccountID: testAccount, Limit: 10,
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(2), fillTotal)
@@ -86,7 +86,7 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 		require.Empty(t, fill.PositionSide)
 		require.Equal(t, "0", fill.Fee)
 	}
-	account, err := f.store.GetExchangeAccountByID(ctx, testAccount)
+	account, err := f.store.GetTradingAccountByID(ctx, testAccount)
 	require.NoError(t, err)
 	require.True(t, account.Ready)
 	require.Equal(t, "100000", account.Snapshot.AvailableFunds)
@@ -99,7 +99,7 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 	require.Equal(t, exchange.SideBuy, requests[0].Side)
 	require.Equal(t, exchange.SideSell, requests[1].Side)
 	for _, request := range requests {
-		require.Equal(t, testSymbol, request.Symbol)
+		require.Equal(t, testSymbol, request.ExchangeSymbol)
 		require.Equal(t, exchange.PositionSideUnspecified, request.PositionSide)
 		require.False(t, request.ReduceOnly)
 		require.Equal(t, "0.01", request.Quantity.String())
@@ -113,7 +113,7 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 	recoveredOrders, recoveredTotal, err := restarted.ListOrders(
 		ctx,
 		testSpace,
-		store.OrderQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.OrderQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), recoveredTotal)
@@ -121,17 +121,18 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 	recoveredFills, recoveredFillTotal, err := restarted.ListFills(
 		ctx,
 		testSpace,
-		store.FillQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.FillQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), recoveredFillTotal)
 	require.Len(t, recoveredFills, 2)
 
 	base := newFakeExchange(exchange.MarketTypeSpot)
-	recoveredPaper := paper.New(
-		base, restarted, testSpace, testAccount, exchange.MarketTypeSpot, "USDT",
-		shared.MustDecimal("100000"), exchange.MarginModeUnspecified, nil,
-	)
+	recoveredAccount, err := restarted.GetTradingAccountByID(ctx, testAccount)
+	require.NoError(t, err)
+	recoveredPaper := &executionpaper.Adapter{
+		Account: recoveredAccount, Store: restarted, MarketData: base, Now: func() time.Time { return testNow },
+	}
 	_, err = recoveredPaper.LoadInstruments(ctx)
 	require.NoError(t, err)
 	snapshot, err := recoveredPaper.GetAccountSnapshot(ctx)

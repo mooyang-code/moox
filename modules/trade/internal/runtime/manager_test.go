@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
@@ -17,14 +17,14 @@ import (
 
 type managerAccountSource struct {
 	mu       sync.Mutex
-	accounts []store.ExchangeAccountRecord
+	accounts []store.TradingAccountRecord
 	failures int
 	calls    int
 }
 
-func (s *managerAccountSource) ListEnabledExchangeAccounts(
+func (s *managerAccountSource) ListEnabledTradingAccounts(
 	context.Context,
-) ([]store.ExchangeAccountRecord, error) {
+) ([]store.TradingAccountRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -32,19 +32,19 @@ func (s *managerAccountSource) ListEnabledExchangeAccounts(
 		s.failures--
 		return nil, errors.New("temporary account enumeration failure")
 	}
-	return append([]store.ExchangeAccountRecord(nil), s.accounts...), nil
+	return append([]store.TradingAccountRecord(nil), s.accounts...), nil
 }
 
-func (s *managerAccountSource) set(accounts []store.ExchangeAccountRecord) {
+func (s *managerAccountSource) set(accounts []store.TradingAccountRecord) {
 	s.mu.Lock()
-	s.accounts = append([]store.ExchangeAccountRecord(nil), accounts...)
+	s.accounts = append([]store.TradingAccountRecord(nil), accounts...)
 	s.mu.Unlock()
 }
 
 func TestManagerRetriesInitialReconcileAndGatesReadiness(t *testing.T) {
-	account := store.ExchangeAccountRecord{ExchangeAccountID: "account-1"}
+	account := store.TradingAccountRecord{TradingAccountID: "account-1"}
 	source := &managerAccountSource{
-		accounts: []store.ExchangeAccountRecord{account},
+		accounts: []store.TradingAccountRecord{account},
 		failures: 1,
 	}
 	session := &managedSessionStub{
@@ -53,7 +53,7 @@ func TestManagerRetriesInitialReconcileAndGatesReadiness(t *testing.T) {
 	}
 	manager := &Manager{
 		Accounts: source,
-		NewSession: func(store.ExchangeAccountRecord) (ManagedSession, error) {
+		NewSession: func(store.TradingAccountRecord) (ManagedSession, error) {
 			return session, nil
 		},
 		PollInterval: time.Millisecond,
@@ -148,8 +148,8 @@ func (s *managedSessionStub) Run(ctx context.Context) error {
 func (s *managedSessionStub) Ready() bool { return s.ready.Load() }
 
 func TestManagerOwnsExactlyOneSessionPerEnabledAccount(t *testing.T) {
-	account := store.ExchangeAccountRecord{ExchangeAccountID: "account-1"}
-	source := &managerAccountSource{accounts: []store.ExchangeAccountRecord{account}}
+	account := store.TradingAccountRecord{TradingAccountID: "account-1"}
+	source := &managerAccountSource{accounts: []store.TradingAccountRecord{account}}
 	session := &managedSessionStub{
 		started: make(chan struct{}),
 		stopped: make(chan struct{}),
@@ -158,7 +158,7 @@ func TestManagerOwnsExactlyOneSessionPerEnabledAccount(t *testing.T) {
 	removed := make(chan string, 1)
 	manager := &Manager{
 		Accounts: source,
-		NewSession: func(store.ExchangeAccountRecord) (ManagedSession, error) {
+		NewSession: func(store.TradingAccountRecord) (ManagedSession, error) {
 			factoryCalls.Add(1)
 			return session, nil
 		},
@@ -192,21 +192,21 @@ func TestManagerOwnsExactlyOneSessionPerEnabledAccount(t *testing.T) {
 }
 
 func TestManagerReadyForRejectsStaleSessionConfiguration(t *testing.T) {
-	record := store.ExchangeAccountRecord{
-		SpaceID: "space-1", ExchangeAccountID: "account-1",
+	record := store.TradingAccountRecord{
+		SpaceID: "space-1", TradingAccountID: "account-1",
 		Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "LIVE",
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 		Status: "ENABLED", SyncSymbols: []string{"BTCUSDT"},
 		LeverageSettings: store.LeverageSettings{},
 	}
-	source := &managerAccountSource{accounts: []store.ExchangeAccountRecord{record}}
+	source := &managerAccountSource{accounts: []store.TradingAccountRecord{record}}
 	session := &managedSessionStub{
 		started: make(chan struct{}),
 		stopped: make(chan struct{}),
 	}
 	manager := &Manager{
 		Accounts: source,
-		NewSession: func(store.ExchangeAccountRecord) (ManagedSession, error) {
+		NewSession: func(store.TradingAccountRecord) (ManagedSession, error) {
 			return session, nil
 		},
 	}
@@ -214,7 +214,7 @@ func TestManagerReadyForRejectsStaleSessionConfiguration(t *testing.T) {
 	defer cancel()
 	require.NoError(t, manager.reconcile(ctx))
 	<-session.started
-	account := exchangeaccount.Account{
+	account := tradingaccount.Account{
 		ID: "account-1", SpaceID: "space-1",
 		Exchange: exchange.ExchangeBinance, MarketType: exchange.MarketTypeSpot,
 		ExecutionMode:      exchange.ExecutionModeLive,
@@ -232,8 +232,8 @@ func TestManagerReadyForRejectsStaleSessionConfiguration(t *testing.T) {
 }
 
 func TestManagerReplacesInvalidatedSessionWithUnchangedConfiguration(t *testing.T) {
-	record := store.ExchangeAccountRecord{ExchangeAccountID: "account-1"}
-	source := &managerAccountSource{accounts: []store.ExchangeAccountRecord{record}}
+	record := store.TradingAccountRecord{TradingAccountID: "account-1"}
+	source := &managerAccountSource{accounts: []store.TradingAccountRecord{record}}
 	first := &managedSessionStub{
 		started: make(chan struct{}),
 		stopped: make(chan struct{}),
@@ -245,7 +245,7 @@ func TestManagerReplacesInvalidatedSessionWithUnchangedConfiguration(t *testing.
 	var calls atomic.Int32
 	manager := &Manager{
 		Accounts: source,
-		NewSession: func(store.ExchangeAccountRecord) (ManagedSession, error) {
+		NewSession: func(store.TradingAccountRecord) (ManagedSession, error) {
 			if calls.Add(1) == 1 {
 				return first, nil
 			}
@@ -256,20 +256,20 @@ func TestManagerReplacesInvalidatedSessionWithUnchangedConfiguration(t *testing.
 	defer cancel()
 	require.NoError(t, manager.reconcile(ctx))
 	<-first.started
-	manager.Invalidate(record.ExchangeAccountID)
+	manager.Invalidate(record.TradingAccountID)
 	<-first.stopped
 	require.NoError(t, manager.reconcile(ctx))
 	<-second.started
 	require.Eventually(t, func() bool {
-		return manager.Ready(record.ExchangeAccountID)
+		return manager.Ready(record.TradingAccountID)
 	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, int32(2), calls.Load())
 	manager.stopAll()
 }
 
 func TestManagerWaitsForRemovedSessionBeforeReplacement(t *testing.T) {
-	account := store.ExchangeAccountRecord{ExchangeAccountID: "account-1"}
-	source := &managerAccountSource{accounts: []store.ExchangeAccountRecord{account}}
+	account := store.TradingAccountRecord{TradingAccountID: "account-1"}
+	source := &managerAccountSource{accounts: []store.TradingAccountRecord{account}}
 	first := &delayedStopSession{
 		started: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{}),
 	}
@@ -277,7 +277,7 @@ func TestManagerWaitsForRemovedSessionBeforeReplacement(t *testing.T) {
 	var calls atomic.Int32
 	manager := &Manager{
 		Accounts: source,
-		NewSession: func(store.ExchangeAccountRecord) (ManagedSession, error) {
+		NewSession: func(store.TradingAccountRecord) (ManagedSession, error) {
 			if calls.Add(1) == 1 {
 				return first, nil
 			}
@@ -293,7 +293,7 @@ func TestManagerWaitsForRemovedSessionBeforeReplacement(t *testing.T) {
 	removed := make(chan error, 1)
 	go func() { removed <- manager.reconcile(ctx) }()
 	<-first.canceled
-	source.set([]store.ExchangeAccountRecord{account})
+	source.set([]store.TradingAccountRecord{account})
 	require.Equal(t, int32(1), calls.Load())
 	require.NotEmpty(t, manager.sessions)
 
@@ -307,14 +307,14 @@ func TestManagerWaitsForRemovedSessionBeforeReplacement(t *testing.T) {
 }
 
 func TestManagerRunWaitsForSessionShutdown(t *testing.T) {
-	account := store.ExchangeAccountRecord{ExchangeAccountID: "account-1"}
-	source := &managerAccountSource{accounts: []store.ExchangeAccountRecord{account}}
+	account := store.TradingAccountRecord{TradingAccountID: "account-1"}
+	source := &managerAccountSource{accounts: []store.TradingAccountRecord{account}}
 	session := &delayedStopSession{
 		started: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{}),
 	}
 	manager := &Manager{
 		Accounts: source,
-		NewSession: func(store.ExchangeAccountRecord) (ManagedSession, error) {
+		NewSession: func(store.TradingAccountRecord) (ManagedSession, error) {
 			return session, nil
 		},
 	}
@@ -334,8 +334,8 @@ func TestManagerRunWaitsForSessionShutdown(t *testing.T) {
 }
 
 func TestManagerReconnectsTheExistingSessionAfterRunFailure(t *testing.T) {
-	account := store.ExchangeAccountRecord{ExchangeAccountID: "account-1"}
-	source := &managerAccountSource{accounts: []store.ExchangeAccountRecord{account}}
+	account := store.TradingAccountRecord{TradingAccountID: "account-1"}
+	source := &managerAccountSource{accounts: []store.TradingAccountRecord{account}}
 	session := &reconnectingSessionStub{
 		secondStarted: make(chan struct{}),
 		stopped:       make(chan struct{}),
@@ -343,7 +343,7 @@ func TestManagerReconnectsTheExistingSessionAfterRunFailure(t *testing.T) {
 	var factoryCalls atomic.Int32
 	manager := &Manager{
 		Accounts: source,
-		NewSession: func(store.ExchangeAccountRecord) (ManagedSession, error) {
+		NewSession: func(store.TradingAccountRecord) (ManagedSession, error) {
 			factoryCalls.Add(1)
 			return session, nil
 		},

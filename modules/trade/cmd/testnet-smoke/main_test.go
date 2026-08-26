@@ -103,7 +103,8 @@ func TestSmokeStateRoundTripContainsNoCredentialMaterial(t *testing.T) {
 		SpaceID:           smokeSpaceID,
 		AccountID:         "testnet-binance",
 		LogicalAccountID:  "logical-binance",
-		Symbol:            "BTCUSDT",
+		InstrumentID:      "BTC-USDT",
+		ExchangeSymbol:    "BTCUSDT",
 		BaseAsset:         "BTC",
 		BaselineBaseTotal: "0",
 		ClientOrderID:     "cid",
@@ -140,7 +141,8 @@ func TestReadStateRejectsProductionOrWrongExchange(t *testing.T) {
 		"space_id":"testnet-smoke",
 		"account_id":"account",
 		"logical_account_id":"logical",
-		"symbol":"BTCUSDT",
+		"instrument_id":"BTC-USDT",
+		"exchange_symbol":"BTCUSDT",
 		"base_asset":"BTC",
 		"baseline_base_total":"0",
 		"client_order_id":"cid",
@@ -158,7 +160,7 @@ func TestReadStateRejectsProductionOrWrongExchange(t *testing.T) {
 		Version: 1, Exchange: exchange.ExchangeBinance,
 		Environment: exchange.AccountEnvironmentTestnet,
 		SpaceID:     smokeSpaceID, AccountID: "account",
-		LogicalAccountID: "logical", Symbol: "BTCUSDT",
+		LogicalAccountID: "logical", InstrumentID: "BTC-USDT", ExchangeSymbol: "BTCUSDT",
 		BaseAsset: "BTC", BaselineBaseTotal: "0",
 		ClientOrderID: "cid", OrderID: "oid", ExchangeOrderID: "eid",
 	}
@@ -192,13 +194,13 @@ func TestSeedSmokeStoreCreatesOnlyTestnetLiveSpotAccount(t *testing.T) {
 	defer database.Close()
 	options := smokeOptions{
 		Exchange: exchange.ExchangeBinance, Environment: exchange.AccountEnvironmentTestnet,
-		SecretID: "binance-testnet", Symbol: "BTCUSDT",
+		SecretID: "binance-testnet", ExchangeSymbol: "BTCUSDT",
 	}
 	identity, err := seedSmokeStore(ctx, database, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	account, err := database.GetExchangeAccountByID(ctx, identity.AccountID)
+	account, err := database.GetTradingAccountByID(ctx, identity.AccountID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +221,7 @@ func TestSeedSmokeStoreCreatesOnlyTestnetLiveSpotAccount(t *testing.T) {
 		identity.LogicalAccountID,
 		false,
 	)
-	if err != nil || len(members) != 1 || members[0].ExchangeAccountID != identity.AccountID {
+	if err != nil || len(members) != 1 || members[0].TradingAccountID != identity.AccountID {
 		t.Fatalf("members = %+v, err = %v", members, err)
 	}
 }
@@ -233,12 +235,12 @@ func TestSeedSmokeStoreRejectsExistingNonTestnetAccount(t *testing.T) {
 	defer database.Close()
 	options := smokeOptions{
 		Exchange: exchange.ExchangeBinance, Environment: exchange.AccountEnvironmentTestnet,
-		SecretID: "binance-testnet", Symbol: "BTCUSDT",
+		SecretID: "binance-testnet", ExchangeSymbol: "BTCUSDT",
 	}
 	identity := smokeIdentityFor(options.Exchange)
 	if err := database.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: smokeSpaceID, ExchangeAccountID: identity.AccountID,
+		return tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: smokeSpaceID, TradingAccountID: identity.AccountID,
 			Name: "bad", Exchange: "BINANCE", MarketType: "SPOT",
 			ExecutionMode: "LIVE", Environment: "PRODUCTION",
 			CredentialSecretID: options.SecretID, SettlementAsset: "USDT",
@@ -289,12 +291,12 @@ func TestValidateQueriedOrderRequiresStableClientAndExchangeIdentity(t *testing.
 		Version: 1, Exchange: exchange.ExchangeBinance,
 		Environment: exchange.AccountEnvironmentTestnet,
 		SpaceID:     smokeSpaceID, AccountID: "account", LogicalAccountID: "logical",
-		Symbol: "BTCUSDT", BaseAsset: "BTC", BaselineBaseTotal: "0",
+		InstrumentID: "BTC-USDT", ExchangeSymbol: "BTCUSDT", BaseAsset: "BTC", BaselineBaseTotal: "0",
 		ClientOrderID: "cid", OrderID: "oid",
 		ExchangeOrderID: "eid",
 	}
 	order := exchange.Order{
-		ClientOrderID: "cid", ExchangeOrderID: "eid", Symbol: "BTCUSDT",
+		ClientOrderID: "cid", ExchangeOrderID: "eid", ExchangeSymbol: "BTCUSDT",
 		Status: exchange.OrderStatusOpen,
 	}
 	if err := validateQueriedOrder(state, order); err != nil {

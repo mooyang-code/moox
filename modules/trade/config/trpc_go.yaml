@@ -22,26 +22,10 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
-      ######## Exchange 账户 RPC ########
-    - name: trpc.moox.trade.ExchangeAccountService
+      ######## unified Trade console RPC ########
+    - name: trpc.moox.trade.TradeConsoleService
       ip: 127.0.0.1
       port: 11200
-      network: tcp
-      protocol: http
-      timeout: 5000
-
-      ######## 交易执行 RPC ########
-    - name: trpc.moox.trade.TradeExecutionService
-      ip: 127.0.0.1
-      port: 11201
-      network: tcp
-      protocol: http
-      timeout: 15000
-
-      ######## LogicalAccount RPC ########
-    - name: trpc.moox.trade.LogicalAccountService
-      ip: 127.0.0.1
-      port: 11202
       network: tcp
       protocol: http
       timeout: 15000
@@ -57,6 +41,12 @@ server:
     - name: trpc.moox.trade.metrics.timer
       port: 11210
       network: "*/30 * * * * *"
+      protocol: timer
+      timeout: 10000
+
+    - name: trpc.moox.trade.equity.timer
+      port: 11211
+      network: "0 * * * * *"
       protocol: timer
       timeout: 10000
 

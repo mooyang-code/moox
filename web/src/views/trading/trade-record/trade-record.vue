@@ -5,7 +5,7 @@
         <h2>交易执行</h2>
         <a-space>
           <a-select v-model="exchangeAccountId" placeholder="Exchange 账户" style="width: 260px" @change="accountChanged">
-            <a-option v-for="account in accounts" :key="account.exchange_account_id" :value="account.exchange_account_id">
+            <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
               {{ account.name }} · {{ marketTypeLabels[account.market_type] }}
             </a-option>
           </a-select>
@@ -37,7 +37,7 @@
             @page-change="changeOrderPage"
           >
             <template #columns>
-              <a-table-column title="Symbol" data-index="symbol" />
+              <a-table-column title="Symbol" data-index="instrument_id" />
               <a-table-column title="市场">
                 <template #cell="{ record }">{{ marketTypeLabels[record.market_type] }}</template>
               </a-table-column>
@@ -86,7 +86,7 @@
           >
             <template #columns>
               <a-table-column title="Fill ID" data-index="fill_id" ellipsis />
-              <a-table-column title="Symbol" data-index="symbol" />
+              <a-table-column title="Symbol" data-index="instrument_id" />
               <a-table-column title="市场">
                 <template #cell="{ record }">{{ marketTypeLabels[record.market_type] }}</template>
               </a-table-column>
@@ -120,7 +120,7 @@ import {
   canCancelOrderState,
   cancelOrder,
   formatTimestamp,
-  listAccounts,
+  listTradingAccounts,
   listFills,
   listOrders,
   marketTypeLabels,
@@ -128,14 +128,14 @@ import {
   orderSideLabels,
   orderTypeLabels
 } from "@/api/trade";
-import type { ExchangeAccount, Fill, Order } from "@/api/trade/types";
+import type { TradingAccount, Fill, Order } from "@/api/trade/types";
 
 defineOptions({ name: "trade-record" });
 
-const accounts = ref<ExchangeAccount[]>([]);
+const accounts = ref<TradingAccount[]>([]);
 const exchangeAccountId = ref("");
 const selectedAccount = computed(
-  () => accounts.value.find(account => account.exchange_account_id === exchangeAccountId.value) || null
+  () => accounts.value.find(account => account.trading_account_id === exchangeAccountId.value) || null
 );
 const activeTab = ref("orders");
 const filterSymbol = ref("");
@@ -150,10 +150,10 @@ const orderRequests = createLatestRequestGuard();
 const fillRequests = createLatestRequestGuard();
 async function loadAccounts() {
   const request = accountRequests.begin();
-  const response = await listAccounts({ page: { page: 1, size: 200 } });
+  const response = await listTradingAccounts({ page: { page: 1, size: 200 } });
   if (!request.isLatest()) return;
   accounts.value = response.accounts || [];
-  exchangeAccountId.value ||= accounts.value[0]?.exchange_account_id || "";
+  exchangeAccountId.value ||= accounts.value[0]?.trading_account_id || "";
 }
 
 async function accountChanged() {
@@ -172,8 +172,8 @@ async function loadOrders() {
   const request = orderRequests.begin();
   const accountId = exchangeAccountId.value;
   const query = {
-    exchange_account_id: accountId,
-    symbol: filterSymbol.value.trim().toUpperCase(),
+    trading_account_id: accountId,
+    instrument_id: filterSymbol.value.trim().toUpperCase(),
     only_open: onlyOpen.value,
     page: { page: orderPagination.current, size: orderPagination.pageSize }
   };
@@ -193,8 +193,8 @@ async function loadFills() {
   const request = fillRequests.begin();
   const accountId = exchangeAccountId.value;
   const query = {
-    exchange_account_id: accountId,
-    symbol: filterSymbol.value.trim().toUpperCase(),
+    trading_account_id: accountId,
+    instrument_id: filterSymbol.value.trim().toUpperCase(),
     page: { page: fillPagination.current, size: fillPagination.pageSize }
   };
   loading.value = true;
@@ -225,7 +225,7 @@ function changeFillPage(page: number) {
 const canCancel = canCancelOrderState;
 
 async function cancel(order: Order) {
-  if (order.exchange_account_id !== exchangeAccountId.value) {
+  if (order.trading_account_id !== exchangeAccountId.value) {
     Message.warning("账户已切换，请刷新后重试");
     return;
   }

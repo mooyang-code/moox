@@ -210,9 +210,7 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 		port int32
 		path string
 	}{
-		"trade_exchange_account": {11200, "trpc.moox.trade.ExchangeAccountService"},
-		"trade_execution":        {11201, "trpc.moox.trade.TradeExecutionService"},
-		"trade_logical_account":  {11202, "trpc.moox.trade.LogicalAccountService"},
+		"trade_console": {11200, "trpc.moox.trade.TradeConsoleService"},
 	} {
 		row, ok := byName[name]
 		if !ok || row.Port != expected.port || row.GatewayPath != expected.path ||

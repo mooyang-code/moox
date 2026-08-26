@@ -5,85 +5,85 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
 func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 	tests := []struct {
 		name       string
-		mutate     func(*exchangeaccount.Account)
+		mutate     func(*tradingaccount.Account)
 		secret     ExchangeSecret
 		want       error
 		wantWrites int
 	}{
 		{
 			name: "valid SPOT paper account without credential",
-			mutate: func(value *exchangeaccount.Account) {
+			mutate: func(value *tradingaccount.Account) {
 				value.CredentialSecretID = ""
 			},
 			wantWrites: 1,
 		},
 		{
 			name:   "missing ID",
-			mutate: func(value *exchangeaccount.Account) { value.ID = "" },
+			mutate: func(value *tradingaccount.Account) { value.ID = "" },
 			secret: validSecret(),
-			want:   exchangeaccount.ErrInvalidAccount,
+			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name:   "missing SpaceID",
-			mutate: func(value *exchangeaccount.Account) { value.SpaceID = "" },
+			mutate: func(value *tradingaccount.Account) { value.SpaceID = "" },
 			secret: validSecret(),
-			want:   exchangeaccount.ErrInvalidAccount,
+			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name:   "missing name",
-			mutate: func(value *exchangeaccount.Account) { value.Name = "" },
+			mutate: func(value *tradingaccount.Account) { value.Name = "" },
 			secret: validSecret(),
-			want:   exchangeaccount.ErrInvalidAccount,
+			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name:   "missing Exchange",
-			mutate: func(value *exchangeaccount.Account) { value.Exchange = exchange.ExchangeUnspecified },
+			mutate: func(value *tradingaccount.Account) { value.Exchange = exchange.ExchangeUnspecified },
 			secret: validSecret(),
-			want:   exchangeaccount.ErrInvalidAccount,
+			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name:   "missing market",
-			mutate: func(value *exchangeaccount.Account) { value.MarketType = exchange.MarketTypeUnspecified },
+			mutate: func(value *tradingaccount.Account) { value.MarketType = exchange.MarketTypeUnspecified },
 			secret: validSecret(),
-			want:   exchangeaccount.ErrInvalidAccount,
+			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name: "missing execution mode",
-			mutate: func(value *exchangeaccount.Account) {
+			mutate: func(value *tradingaccount.Account) {
 				value.ExecutionMode = exchange.ExecutionModeUnspecified
 			},
 			secret: validSecret(),
-			want:   exchangeaccount.ErrInvalidAccount,
+			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name: "missing credential secret ID",
-			mutate: func(value *exchangeaccount.Account) {
+			mutate: func(value *tradingaccount.Account) {
 				value.ExecutionMode = exchange.ExecutionModeLive
 				value.Environment = exchange.AccountEnvironmentTestnet
 				value.CredentialSecretID = ""
 			},
 			secret: validSecret(),
-			want:   exchangeaccount.ErrInvalidAccount,
+			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name: "missing settlement asset",
-			mutate: func(value *exchangeaccount.Account) {
+			mutate: func(value *tradingaccount.Account) {
 				value.SettlementAsset = ""
 			},
 			secret: validSecret(),
-			want:   exchangeaccount.ErrInvalidAccount,
+			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name: "wrong credential category",
-			mutate: func(value *exchangeaccount.Account) {
+			mutate: func(value *tradingaccount.Account) {
 				value.ExecutionMode = exchange.ExecutionModeLive
 				value.Environment = exchange.AccountEnvironmentTestnet
 			},
@@ -95,7 +95,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		},
 		{
 			name: "wrong credential Exchange",
-			mutate: func(value *exchangeaccount.Account) {
+			mutate: func(value *tradingaccount.Account) {
 				value.ExecutionMode = exchange.ExecutionModeLive
 				value.Environment = exchange.AccountEnvironmentTestnet
 			},
@@ -107,7 +107,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		},
 		{
 			name: "inactive credential",
-			mutate: func(value *exchangeaccount.Account) {
+			mutate: func(value *tradingaccount.Account) {
 				value.ExecutionMode = exchange.ExecutionModeLive
 				value.Environment = exchange.AccountEnvironmentTestnet
 			},
@@ -119,25 +119,25 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		},
 		{
 			name:   "SPOT rejects margin",
-			mutate: func(value *exchangeaccount.Account) { value.MarginMode = exchange.MarginModeCross },
+			mutate: func(value *tradingaccount.Account) { value.MarginMode = exchange.MarginModeCross },
 			secret: validSecret(),
-			want:   exchangeaccount.ErrInvalidAccount,
+			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name: "SPOT rejects leverage",
-			mutate: func(value *exchangeaccount.Account) {
+			mutate: func(value *tradingaccount.Account) {
 				value.LeverageSettings = map[string]shared.Decimal{"BTC-USDT": shared.MustDecimal("2")}
 			},
 			secret: validSecret(),
-			want:   exchangeaccount.ErrInvalidAccount,
+			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name: "SWAP requires CROSS",
-			mutate: func(value *exchangeaccount.Account) {
+			mutate: func(value *tradingaccount.Account) {
 				value.MarketType = exchange.MarketTypeSwap
 			},
 			secret: validSecret(),
-			want:   exchangeaccount.ErrInvalidAccount,
+			want:   tradingaccount.ErrInvalidAccount,
 		},
 	}
 
@@ -189,7 +189,7 @@ func TestCreateDoesNotAliasSameNameAcrossExecutionModes(t *testing.T) {
 	}
 }
 
-func TestCreateProductionAccountRequiresExplicitLiveTrading(t *testing.T) {
+func TestCreateProductionAccountCanBeCreatedWhileExecutionIsGated(t *testing.T) {
 	store := newMemoryStore()
 	value := validAccount()
 	value.ExecutionMode = exchange.ExecutionModeLive
@@ -201,14 +201,14 @@ func TestCreateProductionAccountRequiresExplicitLiveTrading(t *testing.T) {
 	service := Service{Store: store, Secrets: secrets}
 
 	_, err := service.Create(context.Background(), value)
-	if !errors.Is(err, ErrLiveTradingDisabled) {
-		t.Fatalf("Create() error = %v, want ErrLiveTradingDisabled", err)
+	if err != nil {
+		t.Fatalf("Create() error = %v, want nil", err)
 	}
-	if secrets.getCalls != 0 {
-		t.Fatalf("GetExchangeSecret() calls = %d, want 0", secrets.getCalls)
+	if secrets.getCalls != 1 {
+		t.Fatalf("GetExchangeSecret() calls = %d, want 1", secrets.getCalls)
 	}
-	if store.createCalls != 0 {
-		t.Fatalf("Create() writes = %d, want 0", store.createCalls)
+	if store.createCalls != 1 {
+		t.Fatalf("Create() writes = %d, want 1", store.createCalls)
 	}
 }
 
@@ -230,13 +230,16 @@ func TestCreatePaperAccountDoesNotRequireSecretSource(t *testing.T) {
 func TestUpdateChangesOnlyExplicitMutableFields(t *testing.T) {
 	store := newMemoryStore()
 	before := validSwapAccount()
+	before.ExecutionMode = exchange.ExecutionModeLive
+	before.Environment = exchange.AccountEnvironmentTestnet
+	before.Live = &tradingaccount.LiveConfig{Environment: exchange.AccountEnvironmentTestnet, CredentialSecretID: "secret-1"}
 	store.accounts[before.ID] = before
 	service := Service{Store: store, Secrets: &fakeSecrets{secret: validSecret()}}
 	name := "renamed"
 
 	got, err := service.Update(context.Background(), UpdateCommand{
-		ExchangeAccountID: before.ID,
-		Name:              &name,
+		TradingAccountID: before.ID,
+		Name:             &name,
 	})
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
@@ -254,7 +257,7 @@ func TestUpdateChangesOnlyExplicitMutableFields(t *testing.T) {
 	}
 }
 
-func TestUpdateEnablingProductionAccountRequiresLiveTrading(t *testing.T) {
+func TestUpdateEnablingProductionAccountRemainsGatedAtExecution(t *testing.T) {
 	store := newMemoryStore()
 	value := validAccount()
 	value.ExecutionMode = exchange.ExecutionModeLive
@@ -270,14 +273,14 @@ func TestUpdateEnablingProductionAccountRequiresLiveTrading(t *testing.T) {
 	}
 
 	_, err := service.Update(context.Background(), UpdateCommand{
-		ExchangeAccountID: value.ID,
-		Status:            &status,
+		TradingAccountID: value.ID,
+		Status:           &status,
 	})
-	if !errors.Is(err, ErrLiveTradingDisabled) {
-		t.Fatalf("Update() error = %v, want ErrLiveTradingDisabled", err)
+	if err != nil {
+		t.Fatalf("Update() error = %v, want nil", err)
 	}
-	if store.updateCalls != 0 {
-		t.Fatalf("Update() writes = %d, want 0", store.updateCalls)
+	if store.updateCalls != 1 {
+		t.Fatalf("Update() writes = %d, want 1", store.updateCalls)
 	}
 }
 
@@ -304,7 +307,7 @@ func TestExecutionEligibilityUsesCurrentSessionState(t *testing.T) {
 			}
 
 			_, err := service.ExecutionEligibility(context.Background(), value.ID)
-			if tt.wantErr && !errors.Is(err, exchangeaccount.ErrAccountNotExecutable) {
+			if tt.wantErr && !errors.Is(err, tradingaccount.ErrAccountNotExecutable) {
 				t.Fatalf("ExecutionEligibility() error = %v", err)
 			}
 			if !tt.wantErr && err != nil {
@@ -350,6 +353,9 @@ func TestExecutionEligibilityRejectsProductionWhenLiveTradingDisabled(t *testing
 func TestSetLeverageAndPauseUseCommandSpecificWrites(t *testing.T) {
 	store := newMemoryStore()
 	value := validSwapAccount()
+	value.ExecutionMode = exchange.ExecutionModeLive
+	value.Environment = exchange.AccountEnvironmentTestnet
+	value.Live = &tradingaccount.LiveConfig{Environment: exchange.AccountEnvironmentTestnet, CredentialSecretID: "secret-1"}
 	store.accounts[value.ID] = value
 	service := Service{Store: store}
 
@@ -366,8 +372,8 @@ func TestSetLeverageAndPauseUseCommandSpecificWrites(t *testing.T) {
 	}
 }
 
-func validAccount() exchangeaccount.Account {
-	return exchangeaccount.Account{
+func validAccount() tradingaccount.Account {
+	return tradingaccount.Account{
 		ID:                 "account-1",
 		SpaceID:            "space-1",
 		Name:               "main",
@@ -381,7 +387,7 @@ func validAccount() exchangeaccount.Account {
 	}
 }
 
-func validSwapAccount() exchangeaccount.Account {
+func validSwapAccount() tradingaccount.Account {
 	value := validAccount()
 	value.MarketType = exchange.MarketTypeSwap
 	value.MarginMode = exchange.MarginModeCross
@@ -399,7 +405,7 @@ func validSecret() ExchangeSecret {
 }
 
 type memoryStore struct {
-	accounts      map[string]exchangeaccount.Account
+	accounts      map[string]tradingaccount.Account
 	nameIndex     map[string]string
 	createCalls   int
 	updateCalls   int
@@ -408,12 +414,12 @@ type memoryStore struct {
 
 func newMemoryStore() *memoryStore {
 	return &memoryStore{
-		accounts:  make(map[string]exchangeaccount.Account),
+		accounts:  make(map[string]tradingaccount.Account),
 		nameIndex: make(map[string]string),
 	}
 }
 
-func (s *memoryStore) Create(_ context.Context, value exchangeaccount.Account) error {
+func (s *memoryStore) Create(_ context.Context, value tradingaccount.Account) error {
 	s.createCalls++
 	key := value.SpaceID + "\x00" + value.Name
 	if _, found := s.nameIndex[key]; found {
@@ -424,17 +430,17 @@ func (s *memoryStore) Create(_ context.Context, value exchangeaccount.Account) e
 	return nil
 }
 
-func (s *memoryStore) Get(_ context.Context, id string) (exchangeaccount.Account, error) {
+func (s *memoryStore) Get(_ context.Context, id string) (tradingaccount.Account, error) {
 	value, found := s.accounts[id]
 	if !found {
-		return exchangeaccount.Account{}, ErrAccountNotFound
+		return tradingaccount.Account{}, ErrAccountNotFound
 	}
 	return value, nil
 }
 
 func (s *memoryStore) Update(_ context.Context, command UpdateCommand) error {
 	s.updateCalls++
-	value, found := s.accounts[command.ExchangeAccountID]
+	value, found := s.accounts[command.TradingAccountID]
 	if !found {
 		return ErrAccountNotFound
 	}
@@ -478,5 +484,5 @@ func (f *fakeSecrets) GetExchangeSecret(
 
 type fakeSessionState struct{ ready bool }
 
-func (f fakeSessionState) ReadyFor(exchangeaccount.Account) bool { return f.ready }
-func (f fakeSessionState) Invalidate(string)                     {}
+func (f fakeSessionState) ReadyFor(tradingaccount.Account) bool { return f.ready }
+func (f fakeSessionState) Invalidate(string)                    {}

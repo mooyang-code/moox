@@ -16,7 +16,7 @@ import (
 const defaultLogicalAccountTimeout = 3 * time.Second
 
 type logicalAccountOwnerClient struct {
-	client  tradepb.LogicalAccountServiceClientProxy
+	client  tradepb.TradeConsoleServiceClientProxy
 	timeout time.Duration
 }
 
@@ -28,7 +28,7 @@ func newLogicalAccountOwnerClient(
 		timeout = defaultLogicalAccountTimeout
 	}
 	return &logicalAccountOwnerClient{
-		client: tradepb.NewLogicalAccountServiceClientProxy(
+		client: tradepb.NewTradeConsoleServiceClientProxy(
 			client.WithTarget(strings.TrimSpace(target)),
 			client.WithNetwork("tcp"),
 			client.WithProtocol("http"),

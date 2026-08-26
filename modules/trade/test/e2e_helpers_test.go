@@ -13,19 +13,21 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange/paper"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	executionpaper "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
 
 const (
-	testSpace   = "space-e2e"
-	testAccount = "account-e2e"
-	testSymbol  = "BTCUSDT"
+	testSpace        = "space-e2e"
+	testAccount      = "account-e2e"
+	testSymbol       = "BTCUSDT"
+	testInstrumentID = "BTC-USDT"
 )
 
 var testNow = time.Unix(1_700_000_000, 0).UTC()
@@ -47,6 +49,7 @@ type fakeExchange struct {
 	openOrdersErr  error
 	positionsErr   error
 	accountErr     error
+	quoteErr       error
 	fillsErr       error
 	subscribeErr   error
 	placeCalls     int
@@ -70,7 +73,7 @@ type marginCall struct {
 func newFakeExchange(market exchange.MarketType) *fakeExchange {
 	instrument := exchange.Instrument{
 		Exchange: exchange.ExchangeBinance, MarketType: market,
-		Symbol: testSymbol, InstrumentID: "BTC-USDT",
+		ExchangeSymbol: testSymbol, InstrumentID: "BTC-USDT",
 		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 		ExchangeQuantityStep: shared.MustDecimal("0.001"),
 		MinExchangeQuantity:  shared.MustDecimal("0.001"),
@@ -113,6 +116,14 @@ func (f *fakeExchange) GetReferencePrice(context.Context, string) (exchange.Refe
 	defer f.mu.Unlock()
 	return f.reference, nil
 }
+func (f *fakeExchange) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.quoteErr != nil {
+		return execution.MarketQuote{}, f.quoteErr
+	}
+	return execution.MarketQuote{Bid: f.reference.Price, Ask: f.reference.Price, Last: f.reference.Price, SourceTime: f.reference.UpdatedAt}, nil
+}
 func (f *fakeExchange) GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -144,7 +155,8 @@ func (f *fakeExchange) ListOpenOrders(context.Context) ([]exchange.Order, error)
 	}
 	return result, nil
 }
-func (f *fakeExchange) ListRecentFills(_ context.Context, symbol, cursor string) ([]exchange.Fill, string, error) {
+func (f *fakeExchange) ListRecentFills(_ context.Context, symbol shared.ExchangeSymbol, cursor string) ([]exchange.Fill, string, error) {
+	symbolValue := symbol.String()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.fillsErr != nil {
@@ -158,14 +170,14 @@ func (f *fakeExchange) ListRecentFills(_ context.Context, symbol, cursor string)
 			pastCursor = fill.ExchangeTradeID == cursor
 			continue
 		}
-		if fill.Symbol == symbol {
+		if fill.ExchangeSymbol == symbolValue {
 			result = append(result, fill)
 			next = fill.ExchangeTradeID
 		}
 	}
 	return result, next, nil
 }
-func (f *fakeExchange) GetOrder(_ context.Context, _ string, clientOrderID string) (exchange.Order, error) {
+func (f *fakeExchange) GetOrder(_ context.Context, _ shared.ExchangeSymbol, clientOrderID string) (exchange.Order, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lookupCalls++
@@ -189,7 +201,7 @@ func (f *fakeExchange) PlaceOrder(_ context.Context, request exchange.OrderReque
 	now := testNow.Add(time.Duration(f.placeCalls) * time.Second)
 	current := exchange.Order{
 		ExchangeOrderID: fmt.Sprintf("exchange-%d", f.placeCalls),
-		ClientOrderID:   request.ClientOrderID, Symbol: request.Symbol,
+		ClientOrderID:   request.ClientOrderID, ExchangeSymbol: request.ExchangeSymbol,
 		OrderType: request.OrderType, TimeInForce: request.NativeTimeInForce(),
 		Side: request.Side, PositionSide: request.PositionSide,
 		Quantity: request.Quantity, ReduceOnly: request.ReduceOnly,
@@ -198,7 +210,7 @@ func (f *fakeExchange) PlaceOrder(_ context.Context, request exchange.OrderReque
 	f.orders[request.ClientOrderID] = current
 	return current, nil
 }
-func (f *fakeExchange) CancelOrder(_ context.Context, _ string, clientOrderID string) (exchange.Order, error) {
+func (f *fakeExchange) CancelOrder(_ context.Context, _ shared.ExchangeSymbol, clientOrderID string) (exchange.Order, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	current, ok := f.orders[clientOrderID]
@@ -210,32 +222,56 @@ func (f *fakeExchange) CancelOrder(_ context.Context, _ string, clientOrderID st
 	f.orders[clientOrderID] = current
 	return current, nil
 }
-func (f *fakeExchange) SetLeverage(_ context.Context, symbol string, leverage shared.Decimal) error {
+func (f *fakeExchange) SetLeverage(_ context.Context, symbol shared.ExchangeSymbol, leverage shared.Decimal) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.leverageCalls = append(f.leverageCalls, leverageCall{symbol: symbol, leverage: leverage})
+	f.leverageCalls = append(f.leverageCalls, leverageCall{symbol: symbol.String(), leverage: leverage})
 	return nil
 }
-func (f *fakeExchange) SetMarginMode(_ context.Context, symbol string, mode exchange.MarginMode) error {
+func (f *fakeExchange) SetMarginMode(_ context.Context, symbol shared.ExchangeSymbol, mode exchange.MarginMode) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.marginCalls = append(f.marginCalls, marginCall{symbol: symbol, mode: mode})
+	f.marginCalls = append(f.marginCalls, marginCall{symbol: symbol.String(), mode: mode})
 	return nil
 }
-func (f *fakeExchange) SubscribePrivate(_ context.Context, handler exchange.EventHandler) error {
+func (f *fakeExchange) Subscribe(_ context.Context, handler execution.AccountEventHandler) error {
 	f.mu.Lock()
 	f.subscribeCalls++
 	err := f.subscribeErr
 	f.mu.Unlock()
 	if err == nil {
-		exchange.NotifyPrivateReady(handler)
+		handler.OnSubscribed()
 	}
 	return err
 }
 
 type recordingAdapter struct {
-	exchange.Adapter
+	execution.ExecutionAdapter
 	recorder *fakeExchange
+}
+
+func (a recordingAdapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, error) {
+	source, ok := a.ExecutionAdapter.(execution.MarketDataSource)
+	if !ok {
+		return nil, errors.New("recording adapter: market data source is unavailable")
+	}
+	return source.LoadInstruments(ctx)
+}
+
+func (a recordingAdapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (execution.MarketQuote, error) {
+	source, ok := a.ExecutionAdapter.(execution.MarketDataSource)
+	if !ok {
+		return execution.MarketQuote{}, errors.New("recording adapter: market data source is unavailable")
+	}
+	return source.GetQuote(ctx, symbol)
+}
+
+func (a recordingAdapter) GetReferencePrice(ctx context.Context, symbol string) (exchange.ReferencePrice, error) {
+	source, ok := a.ExecutionAdapter.(execution.ReferencePriceSource)
+	if !ok {
+		return exchange.ReferencePrice{}, errors.New("recording adapter: reference price source is unavailable")
+	}
+	return source.GetReferencePrice(ctx, symbol)
 }
 
 func (a recordingAdapter) PlaceOrder(ctx context.Context, request exchange.OrderRequest) (exchange.Order, error) {
@@ -243,24 +279,201 @@ func (a recordingAdapter) PlaceOrder(ctx context.Context, request exchange.Order
 	a.recorder.requests = append(a.recorder.requests, request)
 	a.recorder.placeCalls++
 	a.recorder.mu.Unlock()
-	return a.Adapter.PlaceOrder(ctx, request)
+	return a.ExecutionAdapter.PlaceOrder(ctx, request)
 }
 
-func (a recordingAdapter) SetLeverage(ctx context.Context, symbol string, leverage shared.Decimal) error {
+func (a recordingAdapter) SetLeverage(ctx context.Context, symbol shared.ExchangeSymbol, leverage shared.Decimal) error {
 	a.recorder.mu.Lock()
 	a.recorder.leverageCalls = append(
 		a.recorder.leverageCalls,
-		leverageCall{symbol: symbol, leverage: leverage},
+		leverageCall{symbol: symbol.String(), leverage: leverage},
 	)
 	a.recorder.mu.Unlock()
-	return a.Adapter.SetLeverage(ctx, symbol, leverage)
+	return a.ExecutionAdapter.SetLeverage(ctx, symbol, leverage)
 }
 
-func (a recordingAdapter) SetMarginMode(ctx context.Context, symbol string, mode exchange.MarginMode) error {
+func (a recordingAdapter) SetMarginMode(ctx context.Context, symbol shared.ExchangeSymbol, mode exchange.MarginMode) error {
 	a.recorder.mu.Lock()
-	a.recorder.marginCalls = append(a.recorder.marginCalls, marginCall{symbol: symbol, mode: mode})
+	a.recorder.marginCalls = append(a.recorder.marginCalls, marginCall{symbol: symbol.String(), mode: mode})
 	a.recorder.mu.Unlock()
-	return a.Adapter.SetMarginMode(ctx, symbol, mode)
+	return a.ExecutionAdapter.SetMarginMode(ctx, symbol, mode)
+}
+
+// synchronousPaperAdapter keeps the older unit-style E2E ergonomics while
+// exercising the production SQLite-backed paper adapter. The real runtime
+// matches these orders asynchronously; this test adapter queues a deterministic
+// fill for the normal account-sync path to consume immediately.
+type synchronousPaperAdapter struct {
+	*executionpaper.Adapter
+	Store   *store.Store
+	Fake    *fakeExchange
+	mu      sync.Mutex
+	pending map[string][]exchange.Fill
+}
+
+func (a *synchronousPaperAdapter) PlaceOrder(ctx context.Context, request exchange.OrderRequest) (exchange.Order, error) {
+	response, err := a.Adapter.PlaceOrder(ctx, request)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	record, err := a.Store.GetOrderByClientID(ctx, testSpace, testAccount, request.ClientOrderID)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	price := request.ReferencePrice
+	if request.LimitPrice != nil {
+		price = *request.LimitPrice
+	}
+	realized := shared.Zero()
+	if request.ReduceOnly && record.MarketType == string(exchange.MarketTypeSwap) {
+		position, found, positionErr := a.Store.GetPosition(ctx, testSpace, testAccount, record.ExchangeSymbol, string(exchange.PositionSideNet))
+		if positionErr != nil {
+			return exchange.Order{}, positionErr
+		}
+		if found {
+			entry := decimal(position.EntryPrice)
+			quantity := request.Quantity
+			if decimal(position.SignedQuantity).Cmp(shared.Zero()) >= 0 {
+				realized = price.Sub(entry).Mul(quantity)
+			} else {
+				realized = entry.Sub(price).Mul(quantity)
+			}
+		}
+	}
+	fill := exchange.Fill{
+		ExchangeTradeID: "paper-trade-" + request.ClientOrderID,
+		ExchangeOrderID: response.ExchangeOrderID, ClientOrderID: request.ClientOrderID,
+		ExchangeSymbol: record.ExchangeSymbol,
+		Side:           exchange.Side(record.Side), PositionSide: exchange.PositionSide(record.PositionSide),
+		Quantity: request.Quantity, Price: price, Fee: shared.Zero(),
+		FeeAsset: record.ReservedAsset, SettlementAsset: "USDT",
+		RealizedPnL: realized, LiquidityRole: "TAKER", TradedAt: testNow,
+	}
+	a.mu.Lock()
+	if a.pending == nil {
+		a.pending = make(map[string][]exchange.Fill)
+	}
+	a.pending[record.ExchangeSymbol] = append(a.pending[record.ExchangeSymbol], fill)
+	a.mu.Unlock()
+	response.Status = exchange.OrderStatusFilled
+	response.FilledQuantity = request.Quantity
+	response.AveragePrice = price
+	return response, nil
+}
+
+func (a *synchronousPaperAdapter) ListRecentFills(
+	ctx context.Context,
+	symbol shared.ExchangeSymbol,
+	cursor string,
+) ([]exchange.Fill, string, error) {
+	rows, next, err := a.Adapter.ListRecentFills(ctx, symbol, cursor)
+	if err != nil {
+		return nil, cursor, err
+	}
+	a.mu.Lock()
+	pending := append([]exchange.Fill(nil), a.pending[symbol.String()]...)
+	delete(a.pending, symbol.String())
+	a.mu.Unlock()
+	return append(rows, pending...), next, nil
+}
+
+func (a *synchronousPaperAdapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
+	snapshot, err := a.Adapter.GetAccountSnapshot(ctx)
+	if err != nil {
+		return exchange.AccountSnapshot{}, err
+	}
+	a.mu.Lock()
+	pending := make([]exchange.Fill, 0)
+	for _, fills := range a.pending {
+		pending = append(pending, fills...)
+	}
+	a.mu.Unlock()
+	if a.Account.MarketType != string(exchange.MarketTypeSpot) {
+		return snapshot, nil
+	}
+	balances := make(map[string]exchange.AssetBalance, len(snapshot.Balances))
+	for _, balance := range snapshot.Balances {
+		balances[balance.Asset] = balance
+	}
+	for _, fill := range pending {
+		instrument, instrumentErr := a.Store.GetInstrument(ctx, a.Account.Exchange, a.Account.MarketType, fill.ExchangeSymbol)
+		if instrumentErr != nil {
+			continue
+		}
+		if instrument.BaseAsset == "" || instrument.QuoteAsset == "" {
+			continue
+		}
+		base, quote := balances[instrument.BaseAsset], balances[instrument.QuoteAsset]
+		base.Asset, quote.Asset = instrument.BaseAsset, instrument.QuoteAsset
+		value := fill.Price.Mul(fill.Quantity)
+		if fill.Side == exchange.SideBuy {
+			base.Available = base.Available.Add(fill.Quantity)
+			base.Total = base.Total.Add(fill.Quantity)
+			quote.Available = quote.Available.Sub(value)
+			quote.Total = quote.Total.Sub(value)
+			snapshot.AvailableFunds = snapshot.AvailableFunds.Sub(value)
+		} else {
+			base.Available = base.Available.Sub(fill.Quantity)
+			base.Total = base.Total.Sub(fill.Quantity)
+			quote.Available = quote.Available.Add(value)
+			quote.Total = quote.Total.Add(value)
+			snapshot.AvailableFunds = snapshot.AvailableFunds.Add(value)
+		}
+		balances[instrument.BaseAsset], balances[instrument.QuoteAsset] = base, quote
+	}
+	snapshot.Balances = snapshot.Balances[:0]
+	for _, balance := range balances {
+		snapshot.Balances = append(snapshot.Balances, balance)
+	}
+	return snapshot, nil
+}
+
+func (a *synchronousPaperAdapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {
+	positions, err := a.Adapter.ListPositionSnapshots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	pending := make([]exchange.Fill, 0)
+	for _, fills := range a.pending {
+		pending = append(pending, fills...)
+	}
+	a.mu.Unlock()
+	if a.Account.MarketType != string(exchange.MarketTypeSwap) {
+		return positions, nil
+	}
+	bySymbol := make(map[string]int, len(positions))
+	for index := range positions {
+		bySymbol[positions[index].ExchangeSymbol] = index
+	}
+	for _, fill := range pending {
+		index, found := bySymbol[fill.ExchangeSymbol]
+		if !found {
+			positions = append(positions, exchange.Position{
+				TradingAccountID:  a.Account.TradingAccountID,
+				InstrumentID:      fill.ExchangeSymbol,
+				ExchangeSymbol:    fill.ExchangeSymbol,
+				PositionSide:      exchange.PositionSideNet,
+				Leverage:          decimal(a.Account.LeverageSettings[fill.ExchangeSymbol]),
+				MarginMode:        exchange.MarginMode(a.Account.MarginMode),
+				ExchangeUpdatedAt: testNow,
+			})
+			index = len(positions) - 1
+			bySymbol[fill.ExchangeSymbol] = index
+		}
+		position := &positions[index]
+		delta := fill.Quantity
+		if fill.Side == exchange.SideSell {
+			delta = delta.Neg()
+		}
+		if position.SignedQuantity.IsZero() {
+			position.EntryPrice = fill.Price
+		}
+		position.SignedQuantity = position.SignedQuantity.Add(delta)
+		position.MarkPrice = fill.Price
+		position.ExchangeUpdatedAt = testNow
+	}
+	return positions, nil
 }
 
 func (f *fakeExchange) emitFill(clientID, tradeID, quantity, price, realized string) exchange.Fill {
@@ -269,7 +482,7 @@ func (f *fakeExchange) emitFill(clientID, tradeID, quantity, price, realized str
 	current := f.orders[clientID]
 	fill := exchange.Fill{
 		ExchangeTradeID: tradeID, ExchangeOrderID: current.ExchangeOrderID,
-		ClientOrderID: clientID, Symbol: current.Symbol, Side: current.Side,
+		ClientOrderID: clientID, ExchangeSymbol: current.ExchangeSymbol, Side: current.Side,
 		PositionSide: current.PositionSide, Quantity: shared.MustDecimal(quantity),
 		Price: shared.MustDecimal(price), Fee: shared.MustDecimal("0.1"), FeeAsset: "USDT",
 		RealizedPnL: shared.MustDecimal(realized), SettlementAsset: "USDT",
@@ -287,25 +500,25 @@ func (f *fakeExchange) emitFill(clientID, tradeID, quantity, price, realized str
 	return fill
 }
 
-type adapterSource struct{ adapter exchange.Adapter }
+type adapterSource struct{ adapter execution.ExecutionAdapter }
 
-func (s adapterSource) Adapter(string) (exchange.Adapter, error) { return s.adapter, nil }
+func (s adapterSource) Adapter(string) (execution.ExecutionAdapter, error) { return s.adapter, nil }
 
 type readySession bool
 
-func (s readySession) ReadyFor(exchangeaccount.Account) bool { return bool(s) }
-func (readySession) Invalidate(string)                       {}
-func (s readySession) Ready(string) bool                     { return bool(s) }
+func (s readySession) ReadyFor(tradingaccount.Account) bool { return bool(s) }
+func (readySession) Invalidate(string)                      {}
+func (s readySession) Ready(string) bool                    { return bool(s) }
 
 type instrumentSource struct{ store *store.Store }
 
 func (s instrumentSource) GetInstrument(ctx context.Context, name exchange.Exchange, market exchange.MarketType, symbol string) (exchange.Instrument, error) {
-	record, err := s.store.GetInstrument(ctx, string(name), string(market), symbol)
+	record, err := s.store.GetInstrumentByIDScoped(ctx, symbol, string(name), string(market))
 	if err != nil {
 		return exchange.Instrument{}, err
 	}
 	return exchange.Instrument{
-		Exchange: name, MarketType: market, Symbol: record.Symbol,
+		Exchange: name, MarketType: market, ExchangeSymbol: record.ExchangeSymbol,
 		InstrumentID: record.InstrumentID, BaseAsset: record.BaseAsset,
 		QuoteAsset: record.QuoteAsset, SettlementAsset: record.SettlementAsset,
 		Linear: record.Linear, ContractValue: decimal(record.ContractValue),
@@ -321,11 +534,16 @@ type positionSource struct{ store *store.Store }
 
 func (s positionSource) GetPosition(ctx context.Context, accountID, symbol string) (exchange.Position, error) {
 	record, found, err := s.store.GetPosition(ctx, testSpace, accountID, symbol, string(exchange.PositionSideNet))
+	if !found && err == nil {
+		if instrument, instrumentErr := s.store.GetInstrumentByIDScoped(ctx, symbol, "BINANCE", "SWAP"); instrumentErr == nil {
+			record, found, err = s.store.GetPosition(ctx, testSpace, accountID, instrument.ExchangeSymbol, string(exchange.PositionSideNet))
+		}
+	}
 	if err != nil || !found {
-		return exchange.Position{ExchangeAccountID: accountID, Symbol: symbol, PositionSide: exchange.PositionSideNet}, err
+		return exchange.Position{TradingAccountID: accountID, ExchangeSymbol: symbol, PositionSide: exchange.PositionSideNet}, err
 	}
 	return exchange.Position{
-		ExchangeAccountID: accountID, Symbol: symbol,
+		TradingAccountID: accountID, ExchangeSymbol: symbol,
 		PositionSide:   exchange.PositionSide(record.PositionSide),
 		SignedQuantity: decimal(record.SignedQuantity),
 		EntryPrice:     decimal(record.EntryPrice), MarkPrice: decimal(record.MarkPrice),
@@ -341,18 +559,22 @@ func (s syncBridge) SyncAccount(ctx context.Context, accountID string) error {
 	return err
 }
 
+func (s syncBridge) ConfirmCancel(ctx context.Context, spaceID, orderID string) error {
+	return s.service.ConfirmCancel(ctx, spaceID, orderID)
+}
+
 type fixture struct {
 	path    string
 	store   *store.Store
 	fake    *fakeExchange
-	adapter exchange.Adapter
+	adapter execution.ExecutionAdapter
 	orders  *orderapp.Service
 	sync    *accountsync.Service
 	reducer *consumer.Reducer
 	account *accountapp.Service
 }
 
-func newFixture(t *testing.T, market exchange.MarketType, adapter exchange.Adapter) *fixture {
+func newFixture(t *testing.T, market exchange.MarketType, adapter execution.ExecutionAdapter) *fixture {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "trade.db")
 	tradeStore, err := store.Open(path)
@@ -381,23 +603,17 @@ func newPaperFixture(t *testing.T, market exchange.MarketType) *fixture {
 	})
 	fake := newFakeExchange(market)
 	seedFixture(t, tradeStore, market, fake.instrument)
-	margin := exchange.MarginModeUnspecified
-	settings := store.LeverageSettings{}
-	if market == exchange.MarketTypeSwap {
-		margin = exchange.MarginModeCross
-		settings[testSymbol] = "10"
-	}
-	adapter := paper.New(
-		fake, tradeStore, testSpace, testAccount, market, "USDT",
-		shared.MustDecimal("100000"), margin, settings,
-	)
-	_, err = adapter.LoadInstruments(context.Background())
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), testAccount)
 	require.NoError(t, err)
+	base := &executionpaper.Adapter{Account: account, Store: tradeStore, MarketData: fake, Now: func() time.Time { return testNow }}
+	_, err = base.LoadInstruments(context.Background())
+	require.NoError(t, err)
+	adapter := &synchronousPaperAdapter{Adapter: base, Store: tradeStore, Fake: fake}
 	return buildFixture(
 		tradeStore,
 		path,
 		fake,
-		recordingAdapter{Adapter: adapter, recorder: fake},
+		recordingAdapter{ExecutionAdapter: adapter, recorder: fake},
 	)
 }
 
@@ -405,7 +621,7 @@ func buildFixture(
 	tradeStore *store.Store,
 	path string,
 	fake *fakeExchange,
-	adapter exchange.Adapter,
+	adapter execution.ExecutionAdapter,
 ) *fixture {
 	source := adapterSource{adapter: adapter}
 	accountService := &accountapp.Service{
@@ -443,15 +659,15 @@ func seedFixture(t *testing.T, tradeStore *store.Store, market exchange.MarketTy
 		leverage[testSymbol] = "10"
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: testSpace, ExchangeAccountID: testAccount, Name: "E2E",
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: testSpace, TradingAccountID: testAccount, Name: "E2E",
 			Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
 			ExecutionMode:   string(exchange.ExecutionModePaper),
 			Environment:     string(exchange.AccountEnvironmentPaper),
 			SettlementAsset: "USDT",
 			MarginMode:      margin, Status: string(exchange.AccountStatusEnabled), Ready: true,
 			SyncSymbols: []string{testSymbol}, LeverageSettings: leverage,
-			Snapshot: store.ExchangeAccountSnapshot{
+			Snapshot: store.TradingAccountSnapshot{
 				Balances: []store.AssetBalance{
 					{Asset: "USDT", Available: "100000", Total: "100000"},
 					{Asset: "BTC", Available: "10", Total: "10"},
@@ -464,7 +680,7 @@ func seedFixture(t *testing.T, tradeStore *store.Store, market exchange.MarketTy
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
 			Exchange: string(instrument.Exchange), MarketType: string(market),
-			Symbol: instrument.Symbol, InstrumentID: instrument.InstrumentID,
+			ExchangeSymbol: instrument.ExchangeSymbol, InstrumentID: instrument.InstrumentID,
 			BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
 			SettlementAsset: instrument.SettlementAsset, Linear: instrument.Linear,
 			ContractValue:        instrument.ContractValue.String(),
@@ -486,8 +702,8 @@ func (f *fixture) close(t *testing.T) {
 func marketSpec(clientID string, side exchange.Side, quantity string) orderdomain.OrderSpec {
 	return orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
-			ExchangeAccountID: testAccount, ClientOrderID: clientID,
-			InstrumentID: testSymbol, Type: exchange.OrderTypeMarket, Side: side,
+			TradingAccountID: testAccount, ClientOrderID: clientID,
+			InstrumentID: testInstrumentID, Type: exchange.OrderTypeMarket, Side: side,
 			Quantity: shared.MustDecimal(quantity),
 		},
 		ReferencePrice: shared.MustDecimal("50000"), ReferencePriceAt: testNow,

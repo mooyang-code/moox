@@ -101,7 +101,7 @@ func TestHandleLogicalAccountTargetRejectsInstrumentForDifferentSettlementAsset(
 	seedLogicalTargetAccount(t, tradeStore, true, true)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDC",
+			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDC",
 			InstrumentID: "BTC-USDC-SPOT", BaseAsset: "BTC", QuoteAsset: "USDC",
 			SettlementAsset: "USDC", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
@@ -126,7 +126,7 @@ func TestHandleLogicalAccountTargetRejectsNonCanonicalInstrumentStatus(t *testin
 	seedLogicalTargetAccount(t, tradeStore, true, false)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "trading",
@@ -199,8 +199,8 @@ func TestHandleLogicalAccountTargetRetriesUntilMemberExists(t *testing.T) {
 func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: "space-1", ExchangeAccountID: "okx-1", Name: "okx",
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "okx-1", Name: "okx",
 			Exchange: "OKX", MarketType: "SWAP", ExecutionMode: "PAPER",
 			Environment: "PAPER", SettlementAsset: "USDT", MarginMode: "CROSS",
 			Status: "ENABLED", Ready: true,
@@ -217,12 +217,12 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "okx-1", Enabled: true,
+			TradingAccountID: "okx-1", Enabled: true,
 		}); err != nil {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "OKX", MarketType: "SWAP", Symbol: "BTC-USDT-SWAP",
+			Exchange: "OKX", MarketType: "SWAP", ExchangeSymbol: "BTC-USDT-SWAP",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "0.01",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -294,8 +294,8 @@ func seedLogicalTargetAccount(
 ) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: "space-1", ExchangeAccountID: "account-1", Name: "main",
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
 			Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
 			Environment: "PAPER", SettlementAsset: "USDT",
 			Status: "ENABLED", Ready: ready,
@@ -312,7 +312,7 @@ func seedLogicalTargetAccount(
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "account-1", Enabled: true, Priority: 1,
+			TradingAccountID: "account-1", Enabled: true, Priority: 1,
 		}); err != nil {
 			return err
 		}
@@ -320,7 +320,7 @@ func seedLogicalTargetAccount(
 			return nil
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",

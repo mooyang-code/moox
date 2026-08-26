@@ -1,7 +1,8 @@
 # Exchange API 映射
 
-Trade 领域只依赖统一 `exchange.Adapter`。Binance 和 OKX 的 REST/WebSocket 差异在
-各自适配器内完成，不进入应用层。
+Trade 应用层只依赖统一 `execution.ExecutionAdapter`；行情和账户事件分别通过
+`execution.MarketDataSource`、`execution.AccountEventSource` 注入。Binance 和 OKX 的
+REST/WebSocket 差异在各自适配器内完成，不进入应用层。
 
 ## 公共能力
 

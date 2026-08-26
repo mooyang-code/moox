@@ -16,20 +16,6 @@ const storageMetadataGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor
 const storagePrimaryGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\"]"
 const storageViewGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\"]"
 
-var obsoleteTradeDeploymentNames = []string{
-	"trade_account",
-	"trade_balance",
-	"trade_fund",
-	"trade_apikey",
-	"trade_channel",
-	"trade_tradeop",
-	"trade_order",
-	"trade_tradeq",
-	"trade_position",
-	"trade_rebalance",
-	"trade_ops",
-}
-
 func DefaultDeployments(nodeID string) []Deployment {
 	rows := []Deployment{
 		withExtra(deployment("admin_gateway", "gateway", "https", defaultPublicHost, 9527, "/api/admin", "public", "Caddy 管理台 HTTPS 入口，浏览器同源访问 /api/admin/*"), `{"health_url":"http://127.0.0.1:11010/readyz","health_kind":"readiness","monitor_enabled":true}`),
@@ -54,9 +40,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 		deployment("space", "admin_rpc", "http", "127.0.0.1", 11107, "trpc.moox.admin.SpaceMgr", "internal", "空间管理 RPC 服务"),
 		deployment("secret", "admin_rpc", "http", "127.0.0.1", 11108, "trpc.moox.ops.SecretMgr", "internal", "秘钥管理 RPC 服务"),
 		deployment("sysdeploy", "admin_rpc", "http", "127.0.0.1", 11109, "trpc.moox.ops.SysDeploy", "internal", "系统服务部署信息 RPC 服务"),
-		deployment("trade_exchange_account", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.ExchangeAccountService", "internal", "Exchange 账户管理与同步服务"),
-		deployment("trade_execution", "trade", "http", "127.0.0.1", 11201, "trpc.moox.trade.TradeExecutionService", "internal", "订单、成交、持仓与目标执行服务"),
-		deployment("trade_logical_account", "trade", "http", "127.0.0.1", 11202, "trpc.moox.trade.LogicalAccountService", "internal", "逻辑账户、执行归属与人工干预服务"),
+		deployment("trade_console", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.TradeConsoleService", "internal", "统一交易控制台与执行服务"),
 		withExtra(deployment("trade_dns_resolver", "trade", "http", "127.0.0.1", 11203, "trpc.moox.trade.TradeDNSResolverService", "internal", "交易节点 DNS 解析与连通性探测服务"), `{"gateway_methods":["ResolveDomains"],"gateway_callers":["collector"]}`),
 	}
 	canonical := map[string]string{

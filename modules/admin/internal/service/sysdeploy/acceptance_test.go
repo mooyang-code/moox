@@ -167,7 +167,7 @@ func TestSeedDefaultsBootstrapsConfiguredNodeAndAttachesMatchingHost(t *testing.
 			for _, serviceID := range []string{"collectmgr", "cloudnode", "factormgr", "strategymgr", "monitor", "hostagent", "sysdeploy", "secret"} {
 				assert.True(t, enabledIDs[serviceID], "canonical gateway service %s missing", serviceID)
 			}
-			for _, serviceID := range []string{"trade_exchange_account", "trade_execution", "trade_logical_account"} {
+			for _, serviceID := range []string{"trade_console"} {
 				assert.False(t, enabledIDs[serviceID], "sensitive gateway service %s exposed", serviceID)
 			}
 			assert.True(t, enabledIDs["trade_dns_resolver"], "trade DNS resolver gateway service missing")
@@ -236,48 +236,9 @@ func TestSeedDefaultsSensitiveServicesCannotEnterSnapshot(t *testing.T) {
 	for _, route := range snapshot.Routes {
 		ids[route.ServiceID] = true
 	}
-	for _, id := range []string{"trade_exchange_account", "trade_execution", "trade_logical_account"} {
+	for _, id := range []string{"trade_console"} {
 		assert.False(t, ids[id], "sensitive route %s compiled", id)
 	}
-}
-
-func TestSeedDefaultsDeletesOnlyNodeScopedObsoleteTradeDeployments(t *testing.T) {
-	db := setupEmptySysDeployTestDB(t)
-	ctx := context.Background()
-	for _, nodeID := range []string{"node-a", "node-b"} {
-		require.NoError(t, db.Create(&GatewayNode{
-			NodeID: nodeID, Name: nodeID,
-			PublicAddress: "https://" + nodeID + ".example", Status: "enabled",
-		}).Error)
-	}
-	for _, nodeID := range []string{"node-a", "node-b"} {
-		for _, serviceName := range obsoleteTradeDeploymentNames {
-			require.NoError(t, db.Create(&Deployment{
-				NodeID: nodeID, ServiceName: serviceName, ServiceKind: "trade",
-				Protocol: "http", Host: "127.0.0.1", Port: 11200,
-				GatewayPath: "trpc.moox.trade.Legacy", Scope: "internal", Status: "active",
-			}).Error)
-		}
-	}
-
-	svc := newTestService(db, "node-a")
-	require.NoError(t, svc.SeedDefaults(ctx))
-
-	var nodeAObsolete, nodeBObsolete int64
-	require.NoError(t, db.Model(&Deployment{}).
-		Where("c_node_id = ? AND c_service_name IN ?", "node-a", obsoleteTradeDeploymentNames).
-		Count(&nodeAObsolete).Error)
-	require.NoError(t, db.Model(&Deployment{}).
-		Where("c_node_id = ? AND c_service_name IN ?", "node-b", obsoleteTradeDeploymentNames).
-		Count(&nodeBObsolete).Error)
-	assert.Zero(t, nodeAObsolete)
-	assert.Equal(t, int64(len(obsoleteTradeDeploymentNames)), nodeBObsolete)
-
-	var canonical int64
-	require.NoError(t, db.Model(&Deployment{}).
-		Where("c_node_id = ? AND c_service_name IN ?", "node-a", []string{"trade_exchange_account", "trade_execution", "trade_logical_account"}).
-		Count(&canonical).Error)
-	assert.Equal(t, int64(3), canonical)
 }
 
 func TestUniqueConstraintClassificationIsNarrow(t *testing.T) {
@@ -295,7 +256,7 @@ func TestUniqueConstraintClassificationIsNarrow(t *testing.T) {
 
 func TestDefaultDeploymentsExposeOnlyMachineModuleManagers(t *testing.T) {
 	allowed := map[string]string{"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy", "secret": "secret"}
-	sensitive := map[string]bool{"trade_exchange_account": true, "trade_execution": true, "trade_logical_account": true}
+	sensitive := map[string]bool{"trade_console": true}
 	for _, row := range DefaultDeployments("node-a") {
 		if serviceID, ok := allowed[row.ServiceName]; ok {
 			assert.True(t, row.GatewayEnabled)

@@ -13,15 +13,15 @@ import (
 var ErrInvalidSpec = errors.New("trade: invalid order specification")
 
 type ClientOrderSpec struct {
-	ExchangeAccountID string
-	ClientOrderID     string
-	InstrumentID      string
-	Side              exchange.Side
-	PositionSide      exchange.PositionSide
-	Type              exchange.OrderType
-	FillPolicy        exchange.FillPolicy
-	Quantity          shared.Decimal
-	LimitPrice        *shared.Decimal
+	TradingAccountID string
+	ClientOrderID    string
+	InstrumentID     string
+	Side             exchange.Side
+	PositionSide     exchange.PositionSide
+	Type             exchange.OrderType
+	FillPolicy       exchange.FillPolicy
+	Quantity         shared.Decimal
+	LimitPrice       *shared.Decimal
 }
 
 type OwnerType string
@@ -77,7 +77,7 @@ func (s OrderSpec) Validate(
 	now time.Time,
 	maxReferenceAge time.Duration,
 ) error {
-	if strings.TrimSpace(s.ExchangeAccountID) == "" ||
+	if strings.TrimSpace(s.TradingAccountID) == "" ||
 		strings.TrimSpace(s.ClientOrderID) == "" ||
 		strings.TrimSpace(s.InstrumentID) == "" {
 		return invalidSpec("missing identity")

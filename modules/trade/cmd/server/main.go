@@ -25,7 +25,7 @@ func main() {
 		log.Fatalf("moox-trade 初始化失败: %v", err)
 	}
 
-	log.Info("启动 moox-trade ExchangeAccountService/TradeExecutionService...")
+	log.Info("启动 moox-trade TradeConsoleService...")
 	if err := server.Serve(); err != nil {
 		log.Fatalf("moox-trade 服务器出错: %v", err)
 	}

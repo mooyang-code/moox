@@ -12,15 +12,16 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
 
 type sessionAdapterSource struct {
-	adapter exchange.Adapter
+	adapter execution.ExecutionAdapter
 }
 
-func (s sessionAdapterSource) Adapter(string) (exchange.Adapter, error) {
+func (s sessionAdapterSource) Adapter(string) (execution.ExecutionAdapter, error) {
 	return s.adapter, nil
 }
 
@@ -55,7 +56,7 @@ func (a *scriptedSessionAdapter) LoadInstruments(context.Context) ([]exchange.In
 	}
 	return []exchange.Instrument{{
 		Exchange: exchange.ExchangeBinance, MarketType: exchange.MarketTypeSwap,
-		Symbol: "BTC-USDT", InstrumentID: "BTCUSDT",
+		ExchangeSymbol: "BTC-USDT", InstrumentID: "BTCUSDT",
 		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 		Linear: true, ContractValue: shared.MustDecimal("0.1"),
 		ContractValueAsset: "BTC", ExchangeQuantityStep: shared.MustDecimal("1"),
@@ -63,6 +64,10 @@ func (a *scriptedSessionAdapter) LoadInstruments(context.Context) ([]exchange.In
 		PriceTick:           shared.MustDecimal("0.1"), Status: "TRADING",
 		ExchangeUpdatedAt: time.UnixMilli(1_000),
 	}}, nil
+}
+
+func (*scriptedSessionAdapter) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+	return execution.MarketQuote{Last: shared.MustDecimal("100"), SourceTime: time.UnixMilli(2_000)}, nil
 }
 
 func TestExchangeSessionNeverBecomesReadyAfterDisconnectDuringStartup(t *testing.T) {
@@ -90,7 +95,7 @@ func TestExchangeSessionNeverBecomesReadyAfterDisconnectDuringStartup(t *testing
 	close(adapter.loadRelease)
 	require.ErrorIs(t, <-done, disconnectErr)
 	require.False(t, session.Ready())
-	stored, err := tradeStore.GetExchangeAccountByID(context.Background(), "account-1")
+	stored, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, stored.Ready)
 }
@@ -111,24 +116,24 @@ func (a *scriptedSessionAdapter) ListOpenOrders(context.Context) ([]exchange.Ord
 }
 func (a *scriptedSessionAdapter) ListRecentFills(
 	context.Context,
-	string,
+	shared.ExchangeSymbol,
 	string,
 ) ([]exchange.Fill, string, error) {
 	a.record("ListRecentFills")
 	return nil, "9", nil
 }
-func (*scriptedSessionAdapter) GetOrder(context.Context, string, string) (exchange.Order, error) {
+func (*scriptedSessionAdapter) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
 	return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound}
 }
 func (*scriptedSessionAdapter) PlaceOrder(context.Context, exchange.OrderRequest) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
-func (*scriptedSessionAdapter) CancelOrder(context.Context, string, string) (exchange.Order, error) {
+func (*scriptedSessionAdapter) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
 func (a *scriptedSessionAdapter) SetLeverage(
 	context.Context,
-	string,
+	shared.ExchangeSymbol,
 	shared.Decimal,
 ) error {
 	a.record("SetLeverage")
@@ -136,20 +141,20 @@ func (a *scriptedSessionAdapter) SetLeverage(
 }
 func (a *scriptedSessionAdapter) SetMarginMode(
 	context.Context,
-	string,
+	shared.ExchangeSymbol,
 	exchange.MarginMode,
 ) error {
 	a.record("SetMarginMode")
 	return nil
 }
-func (a *scriptedSessionAdapter) SubscribePrivate(
+func (a *scriptedSessionAdapter) Subscribe(
 	ctx context.Context,
-	handler exchange.EventHandler,
+	handler execution.AccountEventHandler,
 ) error {
-	a.record("SubscribePrivate")
-	exchange.NotifyPrivateReady(handler)
+	a.record("Subscribe")
+	handler.OnSubscribed()
 	if err := handler.OnPosition(ctx, exchange.Position{
-		Symbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
+		ExchangeSymbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
 		SignedQuantity: shared.MustDecimal("0.25"),
 		EntryPrice:     shared.MustDecimal("100"), MarkPrice: shared.MustDecimal("101"),
 		Leverage: shared.MustDecimal("5"), MarginMode: exchange.MarginModeCross,
@@ -187,8 +192,8 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 		return len(adapter.callSnapshot()) >= 12
 	}, 2*time.Second, 10*time.Millisecond)
 	require.Equal(t, []string{
-		"SubscribePrivate",
 		"LoadInstruments",
+		"Subscribe",
 		"SetMarginMode",
 		"SetLeverage",
 		"GetAccountSnapshot",
@@ -200,13 +205,13 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 		"GetAccountSnapshot",
 		"ListRecentFills",
 	}, adapter.callSnapshot())
-	stored, err := tradeStore.GetExchangeAccountByID(context.Background(), "account-1")
+	stored, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.True(t, stored.Ready)
 	var positionUpdatedAt int64
 	require.NoError(t, tradeStore.DBForTest().Raw(`
-		SELECT c_exchange_updated_at FROM t_exchange_positions
-		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+		SELECT c_exchange_updated_at FROM t_trading_positions
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?
 	`, "space-1", "account-1", "BTC-USDT").Scan(&positionUpdatedAt).Error)
 	require.Equal(t, int64(2_500), positionUpdatedAt,
 		"buffered private event must apply after REST snapshot and before READY")
@@ -215,10 +220,45 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 	adapter.disconnect <- disconnectErr
 	require.ErrorIs(t, <-done, disconnectErr)
 	require.False(t, session.Ready())
-	stored, err = tradeStore.GetExchangeAccountByID(context.Background(), "account-1")
+	stored, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, stored.Ready)
 	require.Contains(t, stored.LastError, "private stream disconnected")
+}
+
+func TestSessionHandlerActivationDrainsEventsBeforeReadyHandoff(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	applied := make(chan struct{}, 1)
+	handler := newSessionHandler(func(context.Context, privateEvent) error {
+		applied <- struct{}{}
+		return nil
+	})
+	activateDone := make(chan error, 1)
+	go func() {
+		activateDone <- handler.activate(context.Background(), func() error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+	eventDone := make(chan error, 1)
+	go func() { eventDone <- handler.handle(context.Background(), privateEvent{}) }()
+	select {
+	case <-eventDone:
+		t.Fatal("event must remain buffered during activation")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-activateDone)
+	require.NoError(t, handler.finishActivation(context.Background()))
+	select {
+	case <-applied:
+	case <-time.After(time.Second):
+		t.Fatal("activation did not apply the buffered event")
+	}
+	require.NoError(t, <-eventDone)
 }
 
 func openRuntimeStore(t *testing.T) *store.Store {
@@ -232,10 +272,10 @@ func openRuntimeStore(t *testing.T) *store.Store {
 func seedRuntimeAccount(
 	t *testing.T,
 	tradeStore *store.Store,
-) store.ExchangeAccountRecord {
+) store.TradingAccountRecord {
 	t.Helper()
-	account := store.ExchangeAccountRecord{
-		SpaceID: "space-1", ExchangeAccountID: "account-1", Name: "main",
+	account := store.TradingAccountRecord{
+		SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
 		Exchange: "BINANCE", MarketType: "SWAP", ExecutionMode: "LIVE",
 		Environment:        "TESTNET",
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
@@ -243,7 +283,7 @@ func seedRuntimeAccount(
 		LeverageSettings: store.LeverageSettings{"BTC-USDT": "5"},
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateExchangeAccount(account)
+		return tx.CreateTradingAccount(account)
 	}))
 	return account
 }

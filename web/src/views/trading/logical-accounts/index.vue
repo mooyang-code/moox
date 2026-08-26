@@ -98,6 +98,11 @@
             <a-descriptions-item label="Owner">{{ selected.owner_runner_id || "-" }}</a-descriptions-item>
           </a-descriptions>
 
+          <div class="section">
+            <div class="section-title"><h3>资金曲线</h3><span>{{ selected.settlement_asset }}</span></div>
+            <equity-curve :logical-account-id="selected.logical_account_id" />
+          </div>
+
           <div class="section-title">
             <h3>物理账户</h3>
             <a-button
@@ -109,9 +114,9 @@
               ><template #icon><icon-plus /></template>添加成员</a-button
             >
           </div>
-          <a-table size="small" row-key="exchange_account_id" :data="selected.members" :pagination="false">
+          <a-table size="small" row-key="trading_account_id" :data="selected.members" :pagination="false">
             <template #columns>
-              <a-table-column title="Exchange Account" data-index="exchange_account_id" />
+              <a-table-column title="Trading Account" data-index="trading_account_id" />
               <a-table-column title="启用" :width="80">
                 <template #cell="{ record }">{{ record.enabled ? "是" : "否" }}</template>
               </a-table-column>
@@ -119,8 +124,8 @@
               <a-table-column title="操作" :width="190">
                 <template #cell="{ record }">
                   <a-space>
-                    <a-button size="mini" type="text" @click="openManual(record.exchange_account_id)">人工下单</a-button>
-                    <a-popconfirm content="确认移除此成员？" @ok="removeMember(record.exchange_account_id)">
+                    <a-button size="mini" type="text" @click="openManual(record.trading_account_id)">人工下单</a-button>
+                    <a-popconfirm content="确认移除此成员？" @ok="removeMember(record.trading_account_id)">
                       <a-button size="mini" type="text" status="danger" :disabled="selected?.automation_state !== 'PAUSED'"
                         >移除</a-button
                       >
@@ -157,18 +162,18 @@
             <a-table
               v-if="flattenResult"
               size="small"
-              row-key="exchange_account_id"
+              row-key="trading_account_id"
               :data="flattenResult.accounts"
               :pagination="false"
               class="section"
             >
               <template #columns>
-                <a-table-column title="Exchange Account" data-index="exchange_account_id" />
+                <a-table-column title="Exchange Account" data-index="trading_account_id" />
                 <a-table-column title="状态" data-index="status" :width="100" />
                 <a-table-column title="剩余仓位">
                   <template #cell="{ record }">
-                    <div v-for="item in record.remaining_positions || []" :key="`${item.symbol}-${item.asset}`">
-                      {{ item.symbol || item.asset }}: {{ item.quantity }} ({{ item.reason }})
+                    <div v-for="item in record.remaining_positions || []" :key="`${item.instrument_id}-${item.asset}`">
+                      {{ item.instrument_id || item.asset }}: {{ item.quantity }} ({{ item.reason }})
                     </div>
                     <span v-if="!record.remaining_positions?.length">无</span>
                   </template>
@@ -199,9 +204,9 @@
       <a-modal v-model:visible="memberVisible" title="添加物理账户" @ok="addMember">
         <a-form :model="memberForm" auto-label-width>
           <a-form-item label="Exchange Account" required>
-            <a-select v-model="memberForm.exchange_account_id" allow-search>
-              <a-option v-for="item in eligibleAccounts" :key="item.exchange_account_id" :value="item.exchange_account_id">
-                {{ item.name }} ({{ item.exchange_account_id }})
+            <a-select v-model="memberForm.trading_account_id" allow-search>
+              <a-option v-for="item in eligibleAccounts" :key="item.trading_account_id" :value="item.trading_account_id">
+                {{ item.name }} ({{ item.trading_account_id }})
               </a-option>
             </a-select>
           </a-form-item>
@@ -211,13 +216,16 @@
         </a-form>
       </a-modal>
 
-      <a-modal v-model:visible="manualVisible" title="人工下单" @ok="submitManual">
+          <a-modal v-model:visible="manualVisible" title="人工下单" @ok="submitManual">
+        <a-alert v-if="capabilities && !capabilities.can_place_order" type="error" show-icon class="section">
+          {{ capabilities.unavailable_reason || "当前账户不可下单" }}
+        </a-alert>
         <a-alert type="warning" show-icon class="section">提交前会暂停整个 Logical Account 并取消活动 TARGET 订单。</a-alert>
         <a-form :model="manualForm" auto-label-width>
           <a-form-item label="Action ID" required><a-input v-model="manualForm.action_id" /></a-form-item>
           <a-form-item label="Client Order ID" required><a-input v-model="manualForm.client_order_id" /></a-form-item>
           <a-form-item label="Instrument" required
-            ><a-input v-model="manualForm.symbol" placeholder="BTC-USDT-SPOT"
+            ><a-input v-model="manualForm.instrument_id" placeholder="BTC-USDT-SPOT"
           /></a-form-item>
           <a-form-item label="方向" required>
             <a-radio-group v-model="manualForm.side" type="button">
@@ -226,12 +234,13 @@
           </a-form-item>
           <a-form-item label="订单类型">
             <a-radio-group v-model="manualForm.order_type" type="button">
-              <a-radio :value="1">MARKET</a-radio><a-radio :value="2">LIMIT</a-radio>
+              <a-radio v-if="capabilities?.order_types?.includes(1)" :value="1">MARKET</a-radio>
+              <a-radio v-if="capabilities?.order_types?.includes(2)" :value="2">LIMIT</a-radio>
             </a-radio-group>
           </a-form-item>
           <a-form-item v-if="manualForm.order_type === 2" label="成交策略">
             <a-select v-model="manualForm.fill_policy">
-              <a-option :value="1">GTC</a-option><a-option :value="2">IOC</a-option><a-option :value="3">FOK</a-option>
+              <a-option v-for="policy in capabilities?.fill_policies || [1, 2, 3]" :key="policy" :value="policy">{{ ["", "GTC", "IOC", "FOK"][policy] }}</a-option>
             </a-select>
           </a-form-item>
           <a-form-item label="数量" required><a-input v-model="manualForm.quantity" /></a-form-item>
@@ -253,11 +262,12 @@ import {
   addLogicalAccountMember,
   createLogicalAccount,
   executionModeLabels,
+  getExecutionCapabilities,
   flattenLogicalAccount,
   getLogicalAccount,
   getLogicalAccountTarget,
   getOperatorAction,
-  listAccounts,
+  listTradingAccounts,
   listLogicalAccounts,
   marketTypeLabels,
   parseFlattenResult,
@@ -266,14 +276,16 @@ import {
   removeLogicalAccountMember,
   resumeLogicalAccount
 } from "@/api/trade";
-import type { ExchangeAccount, LogicalAccount, LogicalAccountTarget, OperatorAction } from "@/api/trade";
+import type { TradingAccount, LogicalAccount, LogicalAccountTarget, OperatorAction, ExecutionCapabilities, PlaceManualOrderReq } from "@/api/trade";
+import EquityCurve from "./equity-curve.vue";
 
 defineOptions({ name: "trading-logical-accounts" });
 const rows = ref<LogicalAccount[]>([]);
-const accounts = ref<ExchangeAccount[]>([]);
+const accounts = ref<TradingAccount[]>([]);
 const selected = ref<LogicalAccount | null>(null);
 const target = ref<LogicalAccountTarget | null>(null);
 const action = ref<OperatorAction | null>(null);
+const capabilities = ref<ExecutionCapabilities | null>(null);
 const loading = ref(false);
 const createVisible = ref(false);
 const detailVisible = ref(false);
@@ -285,12 +297,12 @@ const actionPoller = ref<ReturnType<typeof setInterval> | null>(null);
 const pagination = reactive({ current: 1, pageSize: 20, total: 0 });
 const createForm = reactive({ name: "", execution_mode: 1 as 1 | 2, market_type: 1 as 1 | 2, settlement_asset: "USDT" });
 const reasonForm = reactive({ action_id: "", reason: "" });
-const memberForm = reactive({ exchange_account_id: "", enabled: true, priority: 0, adopt_existing_exposure: false });
+const memberForm = reactive({ trading_account_id: "", enabled: true, priority: 0, adopt_existing_exposure: false });
 const manualForm = reactive({
   action_id: "",
-  exchange_account_id: "",
+  trading_account_id: "",
   client_order_id: "",
-  symbol: "",
+  instrument_id: "",
   order_type: 1 as 1 | 2,
   fill_policy: 0 as 0 | 1 | 2 | 3,
   side: 1 as 1 | 2,
@@ -307,7 +319,7 @@ const eligibleAccounts = computed(() =>
       item.execution_mode === selected.value.execution_mode &&
       item.market_type === selected.value.market_type &&
       item.settlement_asset === selected.value.settlement_asset &&
-      !selected.value.members.some(member => member.exchange_account_id === item.exchange_account_id)
+      !selected.value.members.some(member => member.trading_account_id === item.trading_account_id)
   )
 );
 
@@ -400,13 +412,13 @@ async function resume() {
   });
 }
 async function openMember() {
-  const rsp = await listAccounts({ page: { page: 1, size: 200 } });
+  const rsp = await listTradingAccounts({ page: { page: 1, size: 200 } });
   accounts.value = rsp.accounts || [];
-  Object.assign(memberForm, { exchange_account_id: "", enabled: true, priority: 0, adopt_existing_exposure: false });
+  Object.assign(memberForm, { trading_account_id: "", enabled: true, priority: 0, adopt_existing_exposure: false });
   memberVisible.value = true;
 }
 async function addMember() {
-  if (!selected.value || !memberForm.exchange_account_id) {
+  if (!selected.value || !memberForm.trading_account_id) {
     Message.warning("请选择 Exchange Account");
     return false;
   }
@@ -425,9 +437,9 @@ async function removeMember(exchangeAccountId: string) {
 function openManual(exchangeAccountId: string) {
   Object.assign(manualForm, {
     action_id: createClientId(),
-    exchange_account_id: exchangeAccountId,
+    trading_account_id: exchangeAccountId,
     client_order_id: createClientId().replace(/-/g, ""),
-    symbol: "",
+    instrument_id: "",
     order_type: 1,
     fill_policy: 0,
     side: 1,
@@ -436,13 +448,15 @@ function openManual(exchangeAccountId: string) {
     limit_price: "",
     reason: ""
   });
+  capabilities.value = null;
+  getExecutionCapabilities(exchangeAccountId).then(response => { capabilities.value = response.capabilities; }).catch(() => { capabilities.value = null; });
   manualVisible.value = true;
 }
 async function submitManual() {
   if (
     !manualForm.action_id.trim() ||
     !manualForm.client_order_id.trim() ||
-    !manualForm.symbol.trim() ||
+    !manualForm.instrument_id.trim() ||
     !manualForm.quantity.trim() ||
     !manualForm.reason.trim() ||
     (manualForm.order_type === 2 && !manualForm.limit_price.trim())
@@ -450,11 +464,17 @@ async function submitManual() {
     Message.warning("请填写所有必填字段");
     return false;
   }
+  if (capabilities.value && !capabilities.value.can_place_order) {
+    Message.warning(capabilities.value.unavailable_reason || "当前账户不可下单");
+    return false;
+  }
+  const request: PlaceManualOrderReq = { ...manualForm };
+  if (selected.value?.market_type === 1) delete request.position_side;
   const rsp = await placeManualOrder({
-    ...manualForm,
+    ...request,
     action_id: manualForm.action_id.trim(),
     client_order_id: manualForm.client_order_id.trim(),
-    symbol: manualForm.symbol.trim().toUpperCase(),
+    instrument_id: manualForm.instrument_id.trim().toUpperCase(),
     quantity: manualForm.quantity.trim(),
     fill_policy: manualForm.order_type === 1 ? 0 : manualForm.fill_policy,
     limit_price: manualForm.order_type === 2 ? manualForm.limit_price.trim() : undefined,

@@ -1,7 +1,6 @@
 package exchange
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -73,6 +72,10 @@ func (e AccountEnvironment) Valid() bool {
 	return e == AccountEnvironmentPaper ||
 		e == AccountEnvironmentTestnet ||
 		e == AccountEnvironmentProduction
+}
+
+func (e AccountEnvironment) ValidLive() bool {
+	return e == AccountEnvironmentTestnet || e == AccountEnvironmentProduction
 }
 
 type MarginMode string
@@ -169,19 +172,19 @@ type Credential struct {
 }
 
 type AccountConfig struct {
-	ExchangeAccountID string
-	Exchange          Exchange
-	MarketType        MarketType
-	ExecutionMode     ExecutionMode
-	Environment       AccountEnvironment
-	SettlementAsset   string
-	MarginMode        MarginMode
+	TradingAccountID string
+	Exchange         Exchange
+	MarketType       MarketType
+	ExecutionMode    ExecutionMode
+	Environment      AccountEnvironment
+	SettlementAsset  string
+	MarginMode       MarginMode
 }
 
 type Instrument struct {
 	Exchange             Exchange
 	MarketType           MarketType
-	Symbol               string
+	ExchangeSymbol       string
 	InstrumentID         string
 	BaseAsset            string
 	QuoteAsset           string
@@ -226,8 +229,9 @@ type AccountSnapshotPresence struct {
 }
 
 type Position struct {
-	ExchangeAccountID string
-	Symbol            string
+	TradingAccountID  string
+	InstrumentID      string
+	ExchangeSymbol    string
 	PositionSide      PositionSide
 	SignedQuantity    shared.Decimal
 	EntryPrice        shared.Decimal
@@ -257,7 +261,7 @@ type PositionPresence struct {
 
 type OrderRequest struct {
 	ClientOrderID  string
-	Symbol         string
+	ExchangeSymbol string
 	OrderType      OrderType
 	FillPolicy     FillPolicy
 	Side           Side
@@ -279,7 +283,7 @@ func (r OrderRequest) NativeTimeInForce() TimeInForce {
 type Order struct {
 	ExchangeOrderID string
 	ClientOrderID   string
-	Symbol          string
+	ExchangeSymbol  string
 	OrderType       OrderType
 	TimeInForce     TimeInForce
 	Side            Side
@@ -298,7 +302,7 @@ type Fill struct {
 	ExchangeTradeID string
 	ExchangeOrderID string
 	ClientOrderID   string
-	Symbol          string
+	ExchangeSymbol  string
 	Side            Side
 	PositionSide    PositionSide
 	Quantity        shared.Decimal
@@ -309,21 +313,4 @@ type Fill struct {
 	SettlementAsset string
 	LiquidityRole   string
 	TradedAt        time.Time
-}
-
-type EventHandler interface {
-	OnOrder(context.Context, Order) error
-	OnFill(context.Context, Fill) error
-	OnPosition(context.Context, Position) error
-	OnAccountSnapshot(context.Context, AccountSnapshot) error
-}
-
-type PrivateReadyHandler interface {
-	OnPrivateReady()
-}
-
-func NotifyPrivateReady(handler EventHandler) {
-	if ready, ok := handler.(PrivateReadyHandler); ok {
-		ready.OnPrivateReady()
-	}
 }

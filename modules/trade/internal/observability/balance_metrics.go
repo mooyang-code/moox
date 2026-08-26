@@ -70,12 +70,12 @@ func NewBalanceMetrics(registerer prometheus.Registerer) (*BalanceMetrics, error
 }
 
 func (m *BalanceMetrics) Observe(
-	exchangeAccountID string,
+	tradingAccountID string,
 	now time.Time,
 	maxDifference float64,
 	err error,
 ) {
-	if m == nil || exchangeAccountID == "" {
+	if m == nil || tradingAccountID == "" {
 		return
 	}
 	result := "success"
@@ -86,7 +86,7 @@ func (m *BalanceMetrics) Observe(
 	m.runs.WithLabelValues(result).Inc()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	state := m.accounts[exchangeAccountID]
+	state := m.accounts[tradingAccountID]
 	state.lastRun = timestamp
 	if err == nil {
 		state.lastSuccess = timestamp
@@ -95,17 +95,17 @@ func (m *BalanceMetrics) Observe(
 	} else {
 		state.consecutiveFailures++
 	}
-	m.accounts[exchangeAccountID] = state
+	m.accounts[tradingAccountID] = state
 	m.updateAggregate()
 }
 
-func (m *BalanceMetrics) Remove(exchangeAccountID string) {
-	if m == nil || exchangeAccountID == "" {
+func (m *BalanceMetrics) Remove(tradingAccountID string) {
+	if m == nil || tradingAccountID == "" {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.accounts, exchangeAccountID)
+	delete(m.accounts, tradingAccountID)
 	m.updateAggregate()
 }
 

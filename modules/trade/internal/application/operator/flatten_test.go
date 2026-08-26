@@ -36,7 +36,7 @@ func TestFlattenFreshSyncsBeforeCancelAndClose(t *testing.T) {
 			"flatten-1", "account-a", "BTCUSDT", exchange.SideSell,
 			shared.MustDecimal("2"),
 		),
-		"submit:child-account-a-BTCUSDT",
+		"submit:child-account-a-BTC-USDT-SWAP",
 		"sync:account-a",
 		"sync:account-b",
 		"sync:account-b",
@@ -45,7 +45,7 @@ func TestFlattenFreshSyncsBeforeCancelAndClose(t *testing.T) {
 	require.Equal(t, "PARTIAL", result.Action.Status)
 	require.Len(t, fixture.orders.specs, 1)
 	spec := fixture.orders.specs[0]
-	require.Equal(t, "account-a", spec.ExchangeAccountID)
+	require.Equal(t, "account-a", spec.TradingAccountID)
 	require.Equal(t, exchange.SideSell, spec.Side)
 	require.Equal(t, "2", spec.Quantity.String())
 	require.True(t, spec.ReducePositionOnly)
@@ -164,7 +164,7 @@ func TestFlattenSkipsStaleFailedAccountAndContinuesOthers(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, fixture.orders.specs, 1)
-	require.Equal(t, "account-b", fixture.orders.specs[0].ExchangeAccountID)
+	require.Equal(t, "account-b", fixture.orders.specs[0].TradingAccountID)
 	require.Equal(t, exchange.SideBuy, fixture.orders.specs[0].Side)
 	require.Equal(t, "3", fixture.orders.specs[0].Quantity.String())
 	require.Equal(t, "PARTIAL", result.Action.Status)
@@ -199,7 +199,7 @@ func TestFlattenRetriesSameActionWithoutDuplicateChildren(t *testing.T) {
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "existing-child",
-		ExchangeAccountID: "account-a",
+		TradingAccountID: "account-a",
 		ClientOrderID: flattenClientOrderIDForSpec(
 			"flatten-1",
 			"account-a",
@@ -207,7 +207,7 @@ func TestFlattenRetriesSameActionWithoutDuplicateChildren(t *testing.T) {
 			exchange.SideSell,
 			shared.MustDecimal("2"),
 		),
-		Symbol: "BTCUSDT", OrderType: "MARKET", Side: "SELL",
+		ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "SELL",
 		PositionSide: "NET", Quantity: "2", ReferencePrice: "100",
 		ReferencePriceAt: fixture.now.UnixMilli(), ReduceOnly: true,
 		OwnerType: "OPERATOR", OwnerID: "flatten-1",
@@ -253,7 +253,7 @@ func TestFlattenIncludesDisabledMembersAndKeepsSpotSettlementCash(t *testing.T) 
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "account-b", Enabled: false, Priority: 2,
+			TradingAccountID: "account-b", Enabled: false, Priority: 2,
 		}); err != nil {
 			return err
 		}
@@ -261,16 +261,16 @@ func TestFlattenIncludesDisabledMembersAndKeepsSpotSettlementCash(t *testing.T) 
 			"space-1", "logical-1", "ACTIVE", "",
 		)
 	}))
-	account, err := fixture.store.GetExchangeAccountByID(context.Background(), "account-b")
+	account, err := fixture.store.GetTradingAccountByID(context.Background(), "account-b")
 	require.NoError(t, err)
 	account.Snapshot.Balances = []store.AssetBalance{
 		{Asset: "USDT", Available: "500", Total: "500"},
 		{Asset: "BTC", Available: "1", Total: "1"},
 	}
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateExchangeAccountSync(
-			account.SpaceID, account.ExchangeAccountID,
-			store.ExchangeAccountSyncState{
+		return tx.UpdateTradingAccountSync(
+			account.SpaceID, account.TradingAccountID,
+			store.TradingAccountSyncState{
 				Ready: true, Snapshot: account.Snapshot,
 				SnapshotSourceTime: fixture.now.UnixMilli(),
 				LastSyncAt:         fixture.now.UnixMilli(),
@@ -289,7 +289,7 @@ func TestFlattenIncludesDisabledMembersAndKeepsSpotSettlementCash(t *testing.T) 
 	require.NoError(t, err)
 	require.Contains(t, fixture.trace, "sync:account-b")
 	require.Len(t, fixture.orders.specs, 1)
-	require.Equal(t, "account-b", fixture.orders.specs[0].ExchangeAccountID)
+	require.Equal(t, "account-b", fixture.orders.specs[0].TradingAccountID)
 	require.Equal(t, exchange.SideSell, fixture.orders.specs[0].Side)
 	require.Equal(t, "1", fixture.orders.specs[0].Quantity.String())
 }
@@ -321,8 +321,8 @@ func activeOrder(
 ) store.OrderRecord {
 	record := store.OrderRecord{
 		SpaceID: "space-1", OrderID: orderID,
-		ExchangeAccountID: "account-a", ClientOrderID: orderID,
-		Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+		TradingAccountID: "account-a", ClientOrderID: orderID,
+		ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 		PositionSide: map[bool]string{
 			true: "NET", false: "",
 		}[fixture.market == exchange.MarketTypeSwap],
@@ -363,7 +363,7 @@ func TestFlattenRetriesDelayedFillUntilPositionIsZero(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	fixture.orders.nextID = ""
 	fixture.orders.leaveOpen = map[string]bool{
-		"child-account-a-BTCUSDT": true,
+		"child-account-a-BTC-USDT-SWAP": true,
 	}
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	fixture.syncer.onSync = func(ctx context.Context, accountID string, call int) error {
@@ -374,7 +374,7 @@ func TestFlattenRetriesDelayedFillUntilPositionIsZero(t *testing.T) {
 			ctx,
 			fixture.store,
 			"space-1",
-			"child-account-a-BTCUSDT",
+			"child-account-a-BTC-USDT-SWAP",
 			"FILLED",
 		))
 		fixture.position(t, "account-a", "BTCUSDT", "0")
@@ -401,7 +401,7 @@ func TestFlattenRetryStopsAtDeadline(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	fixture.orders.nextID = ""
 	fixture.orders.leaveOpen = map[string]bool{
-		"child-account-a-BTCUSDT": true,
+		"child-account-a-BTC-USDT-SWAP": true,
 	}
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	service := fixture.service()
@@ -452,7 +452,7 @@ func TestFlattenPartialReplayContinuesSameActionWithoutDuplicateChild(t *testing
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	fixture.orders.nextID = ""
 	fixture.orders.leaveOpen = map[string]bool{
-		"child-account-a-BTCUSDT": true,
+		"child-account-a-BTC-USDT-SWAP": true,
 	}
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	command := FlattenCommand{
@@ -468,7 +468,7 @@ func TestFlattenPartialReplayContinuesSameActionWithoutDuplicateChild(t *testing
 		context.Background(),
 		fixture.store,
 		"space-1",
-		"child-account-a-BTCUSDT",
+		"child-account-a-BTC-USDT-SWAP",
 		"FILLED",
 	))
 	fixture.position(t, "account-a", "BTCUSDT", "0")

@@ -28,12 +28,12 @@ func TestBinanceHTTPMockTargetToFilledOrderConvergesEndToEnd(t *testing.T) {
 	routeBinanceHTTPToMock(t, mock.server.URL)
 
 	adapter := binance.New(exchange.AccountConfig{
-		ExchangeAccountID: testAccount,
-		Exchange:          exchange.ExchangeBinance,
-		MarketType:        exchange.MarketTypeSpot,
-		ExecutionMode:     exchange.ExecutionModeLive,
-		Environment:       exchange.AccountEnvironmentTestnet,
-		SettlementAsset:   "USDT",
+		TradingAccountID: testAccount,
+		Exchange:         exchange.ExchangeBinance,
+		MarketType:       exchange.MarketTypeSpot,
+		ExecutionMode:    exchange.ExecutionModeLive,
+		Environment:      exchange.AccountEnvironmentTestnet,
+		SettlementAsset:  "USDT",
 	}, exchange.Credential{
 		APIKey:    "mock-api-key",
 		APISecret: "mock-api-secret",
@@ -89,7 +89,7 @@ func TestBinanceHTTPMockTargetToFilledOrderConvergesEndToEnd(t *testing.T) {
 	orders, total, err := f.store.ListOrders(
 		context.Background(),
 		testSpace,
-		store.OrderQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.OrderQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
@@ -102,14 +102,14 @@ func TestBinanceHTTPMockTargetToFilledOrderConvergesEndToEnd(t *testing.T) {
 	fills, fillTotal, err := f.store.ListFills(
 		context.Background(),
 		testSpace,
-		store.FillQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.FillQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), fillTotal)
 	require.Len(t, fills, 1)
 	require.Equal(t, "1", fills[0].ExchangeTradeID)
 
-	account, err := f.store.GetExchangeAccountByID(context.Background(), testAccount)
+	account, err := f.store.GetTradingAccountByID(context.Background(), testAccount)
 	require.NoError(t, err)
 	require.Equal(t, "9.99", accountAssetTotal(account.Snapshot, "BTC"))
 
@@ -158,6 +158,9 @@ func (m *binanceHTTPMock) handle(
 	case "/api/v3/ticker/price":
 		require.Equal(t, "BTCUSDT", request.URL.Query().Get("symbol"))
 		_, _ = io.WriteString(writer, `{"symbol":"BTCUSDT","price":"50000"}`)
+	case "/api/v3/ticker/24hr":
+		require.Equal(t, "BTCUSDT", request.URL.Query().Get("symbol"))
+		_, _ = fmt.Fprintf(writer, `{"symbol":"BTCUSDT","bidPrice":"49999","askPrice":"50001","lastPrice":"50000","closeTime":%d}`, m.now.UnixMilli())
 	case "/api/v3/order":
 		m.handleOrder(t, writer, request)
 	case "/api/v3/openOrders":
@@ -251,7 +254,7 @@ func routeBinanceHTTPToMock(t *testing.T, rawTarget string) {
 	})
 }
 
-func accountAssetTotal(snapshot store.ExchangeAccountSnapshot, asset string) string {
+func accountAssetTotal(snapshot store.TradingAccountSnapshot, asset string) string {
 	for _, balance := range snapshot.Balances {
 		if balance.Asset == asset {
 			return balance.Total

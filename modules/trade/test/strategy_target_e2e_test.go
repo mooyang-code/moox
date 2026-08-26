@@ -69,6 +69,7 @@ func TestLogicalAccountTargetConsumerPersistsLatestAndWorkerConverges(t *testing
 		Price: shared.MustDecimal("50000"), UpdatedAt: now,
 	}
 	f.orders.Validator.Now = func() time.Time { return now }
+	f.orders.Now = func() time.Time { return now }
 	executor := &targetapp.Executor{
 		Store: f.store, Orders: f.orders,
 		Prices:           targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: f.adapter}},
@@ -133,6 +134,7 @@ func testEmptyFullTargetClosesExistingPosition(t *testing.T) {
 		Price: shared.MustDecimal("50000"), UpdatedAt: now,
 	}
 	f.orders.Validator.Now = func() time.Time { return now }
+	f.orders.Now = func() time.Time { return now }
 	executor := targetapp.Executor{
 		Store: f.store, Orders: f.orders,
 		Prices:           targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: f.adapter}},
@@ -198,7 +200,7 @@ func seedLogicalAccount(t *testing.T, tradeStore *store.Store) {
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount,
-			ExchangeAccountID: testAccount, Enabled: true, Priority: 1,
+			TradingAccountID: testAccount, Enabled: true, Priority: 1,
 		}); err != nil {
 			return err
 		}

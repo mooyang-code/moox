@@ -16,8 +16,8 @@ func TestAddMemberRequiresAdoptionForExistingExposure(t *testing.T) {
 	service, tradeStore := logicalAccountServiceFixture(t)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", ExchangeAccountID: "account-b",
-			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+			SpaceID: "space-1", TradingAccountID: "account-b",
+			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 			Leverage: "5", MarginMode: "CROSS",
 			ExchangeUpdatedAt: 1_900,
 		})
@@ -25,13 +25,13 @@ func TestAddMemberRequiresAdoptionForExistingExposure(t *testing.T) {
 
 	err := service.AddMember(context.Background(), AddMemberCommand{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
-		ExchangeAccountID: "account-b", Enabled: true, Priority: 2,
+		TradingAccountID: "account-b", Enabled: true, Priority: 2,
 	})
 	require.ErrorIs(t, err, ErrAdoptionRequired)
 
 	require.NoError(t, service.AddMember(context.Background(), AddMemberCommand{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
-		ExchangeAccountID: "account-b", Enabled: true, Priority: 2,
+		TradingAccountID: "account-b", Enabled: true, Priority: 2,
 		AdoptExistingExposure: true,
 	}))
 }
@@ -40,8 +40,8 @@ func TestRemoveMemberRejectsActiveOrdersOrPositions(t *testing.T) {
 	service, tradeStore := logicalAccountServiceFixture(t)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", ExchangeAccountID: "account-a",
-			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+			SpaceID: "space-1", TradingAccountID: "account-a",
+			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 			Leverage: "5", MarginMode: "CROSS",
 			ExchangeUpdatedAt: 1_900,
 		})
@@ -57,8 +57,8 @@ func TestDisableMemberCannotAdoptAwayExistingExposure(t *testing.T) {
 	service, tradeStore := logicalAccountServiceFixture(t)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", ExchangeAccountID: "account-a",
-			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+			SpaceID: "space-1", TradingAccountID: "account-a",
+			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 			Leverage: "5", MarginMode: "CROSS",
 			ExchangeUpdatedAt: 1_900,
 		})
@@ -66,12 +66,12 @@ func TestDisableMemberCannotAdoptAwayExistingExposure(t *testing.T) {
 
 	err := service.AddMember(context.Background(), AddMemberCommand{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
-		ExchangeAccountID: "account-a", Enabled: false, Priority: 1,
+		TradingAccountID: "account-a", Enabled: false, Priority: 1,
 		AdoptExistingExposure: true,
 	})
 
 	require.ErrorIs(t, err, ErrMemberHasExposure)
-	_, member, findErr := tradeStore.FindLogicalAccountByExchangeAccount(
+	_, member, findErr := tradeStore.FindLogicalAccountByTradingAccount(
 		context.Background(), "space-1", "account-a",
 	)
 	require.NoError(t, findErr)
@@ -205,8 +205,8 @@ func TestClaimOwnerWaitsForPreviousRunnerTargetOrdersToStop(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: "old-target-order",
-			ExchangeAccountID: "account-a", ClientOrderID: "old-target-order",
-			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+			TradingAccountID: "account-a", ClientOrderID: "old-target-order",
+			ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
 			ReferencePriceAt: 2_000,
 			OwnerType:        "TARGET", OwnerID: "old-target",
@@ -253,7 +253,7 @@ func TestLogicalReadinessRequiresEveryEnabledMemberAndTargetMetadata(t *testing.
 	service, tradeStore := logicalAccountServiceFixture(t)
 	require.NoError(t, service.AddMember(context.Background(), AddMemberCommand{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
-		ExchangeAccountID: "account-b", Enabled: true, Priority: 2,
+		TradingAccountID: "account-b", Enabled: true, Priority: 2,
 	}))
 	_, _, err := tradeStore.AcceptLogicalAccountTarget(
 		context.Background(),
@@ -287,7 +287,7 @@ func TestLogicalReadinessRejectsTargetForDifferentSettlementAsset(t *testing.T) 
 	service, tradeStore := logicalAccountServiceFixture(t)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SWAP", Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDC", Linear: true, ContractValue: "0.001",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -365,17 +365,17 @@ func logicalAccountServiceFixture(t *testing.T) (*Service, *store.Store) {
 	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
 	now := time.UnixMilli(2_000).UTC()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		for _, account := range []store.ExchangeAccountRecord{
+		for _, account := range []store.TradingAccountRecord{
 			logicalFixtureAccount("account-a"),
 			logicalFixtureAccount("account-b"),
 		} {
-			if err := tx.CreateExchangeAccount(account); err != nil {
+			if err := tx.CreateTradingAccount(account); err != nil {
 				return err
 			}
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", ExecutionMode: "PAPER",
+			OwnerRunnerID: "runner-1", ExecutionMode: "LIVE",
 			MarketType: "SWAP", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -383,12 +383,12 @@ func logicalAccountServiceFixture(t *testing.T) (*Service, *store.Store) {
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "account-a", Enabled: true, Priority: 1,
+			TradingAccountID: "account-a", Enabled: true, Priority: 1,
 		}); err != nil {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SWAP", Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "0.001",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -406,15 +406,15 @@ type noopAccountSyncer struct{}
 
 func (noopAccountSyncer) SyncAccount(context.Context, string) error { return nil }
 
-func logicalFixtureAccount(id string) store.ExchangeAccountRecord {
-	return store.ExchangeAccountRecord{
-		SpaceID: "space-1", ExchangeAccountID: id, Name: id,
+func logicalFixtureAccount(id string) store.TradingAccountRecord {
+	return store.TradingAccountRecord{
+		SpaceID: "space-1", TradingAccountID: id, Name: id,
 		Exchange: "BINANCE", MarketType: "SWAP",
-		ExecutionMode: "PAPER", Environment: "PAPER",
+		ExecutionMode: "LIVE", Environment: "TESTNET", CredentialSecretID: "secret-1",
 		SettlementAsset: "USDT", MarginMode: "CROSS",
 		Status: "ENABLED", Ready: true,
 		LeverageSettings: store.LeverageSettings{"BTCUSDT": "5"},
-		Snapshot: store.ExchangeAccountSnapshot{
+		Snapshot: store.TradingAccountSnapshot{
 			AvailableFunds: "1000",
 			Balances: []store.AssetBalance{{
 				Asset: "USDT", Available: "1000", Total: "1000",
@@ -431,12 +431,12 @@ func setLogicalFixtureReady(
 	ready bool,
 ) {
 	t.Helper()
-	account, err := tradeStore.GetExchangeAccountByID(context.Background(), accountID)
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), accountID)
 	require.NoError(t, err)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateExchangeAccountSync(
-			account.SpaceID, account.ExchangeAccountID,
-			store.ExchangeAccountSyncState{
+		return tx.UpdateTradingAccountSync(
+			account.SpaceID, account.TradingAccountID,
+			store.TradingAccountSyncState{
 				Ready: ready, LeverageSettings: account.LeverageSettings,
 				Snapshot:           account.Snapshot,
 				SnapshotSourceTime: account.SnapshotSourceTime,

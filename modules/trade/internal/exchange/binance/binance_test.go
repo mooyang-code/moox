@@ -168,7 +168,7 @@ func TestLoadSwapInstruments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(instruments) != 1 || !instruments[0].Linear ||
+	if len(instruments) != 1 || instruments[0].ExchangeSymbol != "BTCUSDT" || !instruments[0].Linear ||
 		instruments[0].InstrumentID != "BTC-USDT-SWAP" ||
 		instruments[0].ContractValue.String() != "1" ||
 		instruments[0].SettlementAsset != "USDT" {
@@ -414,7 +414,7 @@ func TestSwapAccountSnapshotRejectsMultiAssetsMode(t *testing.T) {
 
 func testAdapter(market exchange.MarketType, baseURL string) *Adapter {
 	config := exchange.AccountConfig{
-		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeBinance,
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance,
 		MarketType: market, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
 	}
@@ -443,7 +443,7 @@ func newWithClients(
 
 func orderRequest(orderType exchange.OrderType) exchange.OrderRequest {
 	return exchange.OrderRequest{
-		ClientOrderID: "cid", Symbol: "BTCUSDT", OrderType: orderType,
+		ClientOrderID: "cid", ExchangeSymbol: "BTCUSDT", OrderType: orderType,
 		Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
 	}
 }

@@ -6,34 +6,34 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/stretchr/testify/require"
 )
 
 type accountEligibilityStub struct {
-	account exchangeaccount.Account
+	account tradingaccount.Account
 	err     error
 }
 
 type accountEligibilityFunc func(
 	context.Context,
 	string,
-) (exchangeaccount.Account, error)
+) (tradingaccount.Account, error)
 
 func (f accountEligibilityFunc) ExecutionEligibility(
 	ctx context.Context,
-	exchangeAccountID string,
-) (exchangeaccount.Account, error) {
-	return f(ctx, exchangeAccountID)
+	tradingAccountID string,
+) (tradingaccount.Account, error) {
+	return f(ctx, tradingAccountID)
 }
 
 func (s accountEligibilityStub) ExecutionEligibility(
 	context.Context,
 	string,
-) (exchangeaccount.Account, error) {
+) (tradingaccount.Account, error) {
 	return s.account, s.err
 }
 
@@ -164,13 +164,13 @@ func TestValidatorRejectsOwnershipAndStalePrice(t *testing.T) {
 
 func TestValidatorPropagatesNotExecutable(t *testing.T) {
 	validator := Validator{
-		Accounts: accountEligibilityStub{err: exchangeaccount.ErrAccountNotExecutable},
+		Accounts: accountEligibilityStub{err: tradingaccount.ErrAccountNotExecutable},
 		Instruments: instrumentSourceStub{
 			instrument: testInstrument(exchange.MarketTypeSpot),
 		}, MaxReferenceAge: time.Second,
 	}
 	_, err := validator.Validate(context.Background(), "space-1", testSpec(time.Now()))
-	require.True(t, errors.Is(err, exchangeaccount.ErrAccountNotExecutable))
+	require.True(t, errors.Is(err, tradingaccount.ErrAccountNotExecutable))
 }
 
 func TestValidatorRejectsDisabledInstrumentAndInvalidQuantity(t *testing.T) {
@@ -316,7 +316,7 @@ func TestValidatorRejectsInvalidReduceOnlyOrder(t *testing.T) {
 	}
 }
 
-func TestValidatorRejectsPaperLimitBeforeReservation(t *testing.T) {
+func TestValidatorAcceptsPaperLimitForMatcher(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	account := executableAccount(exchange.MarketTypeSpot)
 	account.ExecutionMode = exchange.ExecutionModePaper
@@ -327,7 +327,7 @@ func TestValidatorRejectsPaperLimitBeforeReservation(t *testing.T) {
 	spec.LimitPrice = decimalPointer("100")
 
 	_, err := validator.Validate(context.Background(), "space-1", spec)
-	require.ErrorIs(t, err, ErrPaperLimit)
+	require.NoError(t, err)
 }
 
 func TestValidatorAcceptsPaperMarket(t *testing.T) {
@@ -369,7 +369,7 @@ func TestValidatorRejectsFillPolicyForMarket(t *testing.T) {
 
 func testValidator(
 	now time.Time,
-	account exchangeaccount.Account,
+	account tradingaccount.Account,
 	instrument exchange.Instrument,
 ) Validator {
 	return Validator{
@@ -383,8 +383,8 @@ func testValidator(
 	}
 }
 
-func executableAccount(market exchange.MarketType) exchangeaccount.Account {
-	account := exchangeaccount.Account{
+func executableAccount(market exchange.MarketType) tradingaccount.Account {
+	account := tradingaccount.Account{
 		ID: "account-1", SpaceID: "space-1", Name: "main",
 		Exchange: exchange.ExchangeBinance, MarketType: market,
 		ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentTestnet,
@@ -410,7 +410,7 @@ func executableAccount(market exchange.MarketType) exchangeaccount.Account {
 
 func testInstrument(market exchange.MarketType) exchange.Instrument {
 	instrument := exchange.Instrument{
-		Exchange: exchange.ExchangeBinance, MarketType: market, Symbol: "BTC-USDT",
+		Exchange: exchange.ExchangeBinance, MarketType: market, ExchangeSymbol: "BTC-USDT",
 		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 		ExchangeQuantityStep: shared.MustDecimal("0.1"),
 		MinExchangeQuantity:  shared.MustDecimal("0.1"),
@@ -430,7 +430,7 @@ func testInstrument(market exchange.MarketType) exchange.Instrument {
 func testSpec(referenceAt time.Time) orderdomain.OrderSpec {
 	return orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
-			ExchangeAccountID: "account-1", ClientOrderID: "client-1",
+			TradingAccountID: "account-1", ClientOrderID: "client-1",
 			InstrumentID: "BTC-USDT", Type: exchange.OrderTypeMarket,
 			Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
 		},

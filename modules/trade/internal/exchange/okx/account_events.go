@@ -9,24 +9,14 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"golang.org/x/net/websocket"
 )
 
-func (a *Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHandler) error {
+func (a *Adapter) Subscribe(ctx context.Context, handler execution.AccountEventHandler) error {
 	if handler == nil {
 		return rejected("private event handler is required", nil)
 	}
-	gate := make(chan struct{})
-	a.privateGateMu.Lock()
-	a.privateGate = gate
-	a.privateGateMu.Unlock()
-	defer func() {
-		a.privateGateMu.Lock()
-		if a.privateGate == gate {
-			a.privateGate = nil
-		}
-		a.privateGateMu.Unlock()
-	}()
 	config, err := websocket.NewConfig(
 		privateStreamEndpoint(a.config.Environment),
 		"https://moox.local",
@@ -65,14 +55,7 @@ func (a *Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHa
 	if err != nil {
 		return err
 	}
-	exchange.NotifyPrivateReady(handler)
-	if a.config.MarketType == exchange.MarketTypeSwap {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-gate:
-		}
-	}
+	handler.OnSubscribed()
 	for _, payload := range pending {
 		if err := a.dispatchPrivate(ctx, payload, handler); err != nil {
 			return err
@@ -89,7 +72,7 @@ func (a *Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHa
 func (a *Adapter) receivePrivateMessage(
 	ctx context.Context,
 	connection *websocket.Conn,
-	handler exchange.EventHandler,
+	handler execution.AccountEventHandler,
 ) error {
 	return a.receivePrivateMessageWithTimeouts(
 		ctx,
@@ -103,7 +86,7 @@ func (a *Adapter) receivePrivateMessage(
 func (a *Adapter) receivePrivateMessageWithTimeouts(
 	ctx context.Context,
 	connection *websocket.Conn,
-	handler exchange.EventHandler,
+	handler execution.AccountEventHandler,
 	idleTimeout time.Duration,
 	pongTimeout time.Duration,
 ) error {
@@ -229,7 +212,7 @@ type privateMessage struct {
 func (a *Adapter) dispatchPrivate(
 	ctx context.Context,
 	payload []byte,
-	handler exchange.EventHandler,
+	handler execution.AccountEventHandler,
 ) error {
 	var message privateMessage
 	if err := json.Unmarshal(payload, &message); err != nil {
@@ -306,8 +289,8 @@ func (a *Adapter) dispatchPrivate(
 				return err
 			}
 			position := exchange.Position{
-				ExchangeAccountID: a.config.ExchangeAccountID,
-				Symbol:            row.InstID, PositionSide: exchange.PositionSideNet,
+				TradingAccountID: a.config.TradingAccountID,
+				ExchangeSymbol:   row.InstID, PositionSide: exchange.PositionSideNet,
 				SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 				ExchangeUpdatedAt: millisString(row.UTime),
 				Present: exchange.PositionPresence{

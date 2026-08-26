@@ -31,7 +31,7 @@ type FactsObserverSnapshot struct {
 
 func (o *LogicalAccountFactsObserver) AccountFactsChanged(
 	_ context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 	external bool,
 ) error {
 	if o == nil || o.Store == nil {
@@ -45,7 +45,7 @@ func (o *LogicalAccountFactsObserver) AccountFactsChanged(
 	}
 	o.init()
 	o.mu.Lock()
-	o.pending[exchangeAccountID] = struct{}{}
+	o.pending[tradingAccountID] = struct{}{}
 	o.mu.Unlock()
 	select {
 	case o.signal <- struct{}{}:
@@ -90,12 +90,12 @@ func (o *LogicalAccountFactsObserver) Snapshot() FactsObserverSnapshot {
 
 func (o *LogicalAccountFactsObserver) runOnce(ctx context.Context) error {
 	for {
-		exchangeAccountID, found := o.pop()
+		tradingAccountID, found := o.pop()
 		if !found {
 			return nil
 		}
-		if err := o.pause(ctx, exchangeAccountID); err != nil {
-			o.requeue(exchangeAccountID)
+		if err := o.pause(ctx, tradingAccountID); err != nil {
+			o.requeue(tradingAccountID)
 			return err
 		}
 	}
@@ -103,15 +103,15 @@ func (o *LogicalAccountFactsObserver) runOnce(ctx context.Context) error {
 
 func (o *LogicalAccountFactsObserver) pause(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 ) error {
-	account, err := o.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	account, err := o.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		return err
 	}
 	for {
-		logicalAccount, _, findErr := o.Store.FindLogicalAccountByExchangeAccount(
-			ctx, account.SpaceID, exchangeAccountID,
+		logicalAccount, _, findErr := o.Store.FindLogicalAccountByTradingAccount(
+			ctx, account.SpaceID, tradingAccountID,
 		)
 		if errors.Is(findErr, gorm.ErrRecordNotFound) {
 			return nil
@@ -123,8 +123,8 @@ func (o *LogicalAccountFactsObserver) pause(
 			logicalAccount.SpaceID,
 			logicalAccount.LogicalAccountID,
 		)
-		current, _, currentErr := o.Store.FindLogicalAccountByExchangeAccount(
-			ctx, account.SpaceID, exchangeAccountID,
+		current, _, currentErr := o.Store.FindLogicalAccountByTradingAccount(
+			ctx, account.SpaceID, tradingAccountID,
 		)
 		if currentErr == nil &&
 			current.LogicalAccountID != logicalAccount.LogicalAccountID {
@@ -144,7 +144,7 @@ func (o *LogicalAccountFactsObserver) pause(
 				current.SpaceID,
 				current.LogicalAccountID,
 				"PAUSED",
-				"EXTERNAL order or fill detected on "+exchangeAccountID,
+				"EXTERNAL order or fill detected on "+tradingAccountID,
 			)
 		})
 		unlock()
@@ -155,16 +155,16 @@ func (o *LogicalAccountFactsObserver) pause(
 func (o *LogicalAccountFactsObserver) pop() (string, bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	for exchangeAccountID := range o.pending {
-		delete(o.pending, exchangeAccountID)
-		return exchangeAccountID, true
+	for tradingAccountID := range o.pending {
+		delete(o.pending, tradingAccountID)
+		return tradingAccountID, true
 	}
 	return "", false
 }
 
-func (o *LogicalAccountFactsObserver) requeue(exchangeAccountID string) {
+func (o *LogicalAccountFactsObserver) requeue(tradingAccountID string) {
 	o.mu.Lock()
-	o.pending[exchangeAccountID] = struct{}{}
+	o.pending[tradingAccountID] = struct{}{}
 	o.mu.Unlock()
 }
 

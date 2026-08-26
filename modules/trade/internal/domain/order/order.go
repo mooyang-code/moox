@@ -36,7 +36,7 @@ type Order struct {
 
 func New(id shared.OrderID, spec OrderSpec) (*Order, []Event, error) {
 	if id == "" ||
-		strings.TrimSpace(spec.ExchangeAccountID) == "" ||
+		strings.TrimSpace(spec.TradingAccountID) == "" ||
 		strings.TrimSpace(spec.ClientOrderID) == "" ||
 		strings.TrimSpace(spec.InstrumentID) == "" ||
 		spec.Quantity.Cmp(shared.Zero()) <= 0 {

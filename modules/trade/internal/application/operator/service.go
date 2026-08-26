@@ -55,18 +55,18 @@ type Service struct {
 }
 
 type ManualOrderCommand struct {
-	SpaceID           string
-	ActionID          string
-	ExchangeAccountID string
-	ClientOrderID     string
-	InstrumentID      string
-	Type              exchange.OrderType
-	FillPolicy        exchange.FillPolicy
-	Side              exchange.Side
-	PositionSide      exchange.PositionSide
-	Quantity          shared.Decimal
-	LimitPrice        *shared.Decimal
-	Reason            string
+	SpaceID          string
+	ActionID         string
+	TradingAccountID string
+	ClientOrderID    string
+	InstrumentID     string
+	Type             exchange.OrderType
+	FillPolicy       exchange.FillPolicy
+	Side             exchange.Side
+	PositionSide     exchange.PositionSide
+	Quantity         shared.Decimal
+	LimitPrice       *shared.Decimal
+	Reason           string
 }
 
 type ManualOrderResult struct {
@@ -76,21 +76,21 @@ type ManualOrderResult struct {
 }
 
 type OperatorAccountError struct {
-	ExchangeAccountID string `json:"exchange_account_id"`
-	Error             string `json:"error"`
-	cause             error
+	TradingAccountID string `json:"trading_account_id"`
+	Error            string `json:"error"`
+	cause            error
 }
 
 type manualOrderRequest struct {
-	ExchangeAccountID string  `json:"exchange_account_id"`
-	ClientOrderID     string  `json:"client_order_id"`
-	InstrumentID      string  `json:"instrument_id"`
-	OrderType         string  `json:"order_type"`
-	FillPolicy        string  `json:"fill_policy,omitempty"`
-	Side              string  `json:"side"`
-	PositionSide      string  `json:"position_side,omitempty"`
-	Quantity          string  `json:"quantity"`
-	LimitPrice        *string `json:"limit_price,omitempty"`
+	TradingAccountID string  `json:"trading_account_id"`
+	ClientOrderID    string  `json:"client_order_id"`
+	InstrumentID     string  `json:"instrument_id"`
+	OrderType        string  `json:"order_type"`
+	FillPolicy       string  `json:"fill_policy,omitempty"`
+	Side             string  `json:"side"`
+	PositionSide     string  `json:"position_side,omitempty"`
+	Quantity         string  `json:"quantity"`
+	LimitPrice       *string `json:"limit_price,omitempty"`
 }
 
 type manualOrderActionResult struct {
@@ -131,7 +131,7 @@ func (s *Service) PlaceManualOrder(
 		return ManualOrderResult{}, getErr
 	}
 	logicalAccount, unlock, err := s.lockCurrentLogicalAccount(
-		ctx, command.SpaceID, command.ExchangeAccountID,
+		ctx, command.SpaceID, command.TradingAccountID,
 	)
 	if err != nil {
 		if runningAction != nil {
@@ -140,8 +140,8 @@ func (s *Service) PlaceManualOrder(
 				*runningAction,
 				fmt.Errorf("%w: execution account is no longer an enabled member", err),
 				[]OperatorAccountError{{
-					ExchangeAccountID: command.ExchangeAccountID,
-					Error:             err.Error(),
+					TradingAccountID: command.TradingAccountID,
+					Error:            err.Error(),
 				}},
 			)
 		}
@@ -155,8 +155,8 @@ func (s *Service) PlaceManualOrder(
 			*runningAction,
 			ErrInvalidCommand,
 			[]OperatorAccountError{{
-				ExchangeAccountID: command.ExchangeAccountID,
-				Error:             "execution account moved to another logical account",
+				TradingAccountID: command.TradingAccountID,
+				Error:            "execution account moved to another logical account",
 			}},
 		)
 	}
@@ -207,16 +207,22 @@ func (s *Service) PlaceManualOrder(
 			accountErrors,
 		)
 	}
+	instrument, err := s.Store.GetInstrumentByIDForAccount(
+		ctx, logicalAccount.SpaceID, command.TradingAccountID, command.InstrumentID,
+	)
+	if err != nil {
+		return s.failManualAction(ctx, action, err, nil)
+	}
 	quote, err := s.Prices.LatestPrice(
-		ctx, command.ExchangeAccountID, command.InstrumentID,
+		ctx, command.TradingAccountID, instrument.ExchangeSymbol,
 	)
 	if err != nil {
 		return s.failManualAction(ctx, action, err, nil)
 	}
 	spec := orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
-			ExchangeAccountID: command.ExchangeAccountID,
-			ClientOrderID:     command.ClientOrderID, InstrumentID: command.InstrumentID,
+			TradingAccountID: command.TradingAccountID,
+			ClientOrderID:    command.ClientOrderID, InstrumentID: command.InstrumentID,
 			Type: command.Type, FillPolicy: command.FillPolicy,
 			Side: command.Side, PositionSide: command.PositionSide,
 			Quantity: command.Quantity, LimitPrice: command.LimitPrice,
@@ -296,7 +302,7 @@ func (s *Service) ResumeOperatorAction(
 
 func manualOrderRequestJSON(command ManualOrderCommand) (string, error) {
 	if blank(command.SpaceID) || blank(command.ActionID) ||
-		blank(command.ExchangeAccountID) || blank(command.ClientOrderID) ||
+		blank(command.TradingAccountID) || blank(command.ClientOrderID) ||
 		blank(command.InstrumentID) || blank(command.Reason) ||
 		(command.Type != exchange.OrderTypeMarket &&
 			command.Type != exchange.OrderTypeLimit) ||
@@ -310,8 +316,8 @@ func manualOrderRequestJSON(command ManualOrderCommand) (string, error) {
 		limitPrice = &value
 	}
 	data, err := json.Marshal(manualOrderRequest{
-		ExchangeAccountID: command.ExchangeAccountID,
-		ClientOrderID:     command.ClientOrderID, InstrumentID: command.InstrumentID,
+		TradingAccountID: command.TradingAccountID,
+		ClientOrderID:    command.ClientOrderID, InstrumentID: command.InstrumentID,
 		OrderType: string(command.Type), FillPolicy: string(command.FillPolicy),
 		Side: string(command.Side), PositionSide: string(command.PositionSide),
 		Quantity: command.Quantity.String(), LimitPrice: limitPrice,
@@ -340,8 +346,8 @@ func manualOrderCommand(
 	}
 	return ManualOrderCommand{
 		SpaceID: action.SpaceID, ActionID: action.ActionID,
-		ExchangeAccountID: request.ExchangeAccountID,
-		ClientOrderID:     request.ClientOrderID, InstrumentID: request.InstrumentID,
+		TradingAccountID: request.TradingAccountID,
+		ClientOrderID:    request.ClientOrderID, InstrumentID: request.InstrumentID,
 		Type:         exchange.OrderType(request.OrderType),
 		FillPolicy:   exchange.FillPolicy(request.FillPolicy),
 		Side:         exchange.Side(request.Side),
@@ -436,16 +442,16 @@ func (s *Service) cancelLogicalAccountOrders(
 	var accountErrors []OperatorAccountError
 	for _, member := range members {
 		var currentErrors []error
-		if err := s.Syncer.SyncAccount(ctx, member.ExchangeAccountID); err != nil {
+		if err := s.Syncer.SyncAccount(ctx, member.TradingAccountID); err != nil {
 			currentErrors = append(currentErrors, fmt.Errorf("fresh sync: %w", err))
 		}
 		records, err := s.Store.ListOrdersForAccount(
-			ctx, spaceID, member.ExchangeAccountID, 1,
+			ctx, spaceID, member.TradingAccountID, 1,
 		)
 		if err != nil {
 			currentErrors = append(currentErrors, err)
 			accountErrors = appendAccountErrors(
-				accountErrors, member.ExchangeAccountID, currentErrors,
+				accountErrors, member.TradingAccountID, currentErrors,
 			)
 			continue
 		}
@@ -472,16 +478,16 @@ func (s *Service) cancelLogicalAccountOrders(
 				)
 			}
 		}
-		if err := s.Syncer.SyncAccount(ctx, member.ExchangeAccountID); err != nil {
+		if err := s.Syncer.SyncAccount(ctx, member.TradingAccountID); err != nil {
 			currentErrors = append(currentErrors, fmt.Errorf("confirm sync: %w", err))
 		}
 		confirmed, err := s.Store.ListOrdersForAccount(
-			ctx, spaceID, member.ExchangeAccountID, 1,
+			ctx, spaceID, member.TradingAccountID, 1,
 		)
 		if err != nil {
 			currentErrors = append(currentErrors, err)
 			accountErrors = appendAccountErrors(
-				accountErrors, member.ExchangeAccountID, currentErrors,
+				accountErrors, member.TradingAccountID, currentErrors,
 			)
 			continue
 		}
@@ -508,7 +514,7 @@ func (s *Service) cancelLogicalAccountOrders(
 			)
 		}
 		accountErrors = appendAccountErrors(
-			accountErrors, member.ExchangeAccountID, currentErrors,
+			accountErrors, member.TradingAccountID, currentErrors,
 		)
 	}
 	return accountErrors
@@ -541,11 +547,11 @@ func (s *Service) existingAction(
 func (s *Service) lockCurrentLogicalAccount(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 ) (store.LogicalAccountRecord, func(), error) {
 	for attempts := 0; attempts < 4; attempts++ {
-		current, member, err := s.Store.FindLogicalAccountByExchangeAccount(
-			ctx, spaceID, exchangeAccountID,
+		current, member, err := s.Store.FindLogicalAccountByTradingAccount(
+			ctx, spaceID, tradingAccountID,
 		)
 		if err != nil {
 			return store.LogicalAccountRecord{}, nil, err
@@ -554,8 +560,8 @@ func (s *Service) lockCurrentLogicalAccount(
 			return store.LogicalAccountRecord{}, nil, ErrInvalidCommand
 		}
 		unlock := s.Store.LockLogicalAccount(spaceID, current.LogicalAccountID)
-		confirmed, confirmedMember, err := s.Store.FindLogicalAccountByExchangeAccount(
-			ctx, spaceID, exchangeAccountID,
+		confirmed, confirmedMember, err := s.Store.FindLogicalAccountByTradingAccount(
+			ctx, spaceID, tradingAccountID,
 		)
 		if err == nil && confirmedMember.Enabled &&
 			confirmed.LogicalAccountID == current.LogicalAccountID {
@@ -572,16 +578,16 @@ func (s *Service) lockCurrentLogicalAccount(
 
 func appendAccountErrors(
 	values []OperatorAccountError,
-	exchangeAccountID string,
+	tradingAccountID string,
 	errs []error,
 ) []OperatorAccountError {
 	if len(errs) == 0 {
 		return values
 	}
 	return append(values, OperatorAccountError{
-		ExchangeAccountID: exchangeAccountID,
-		Error:             errors.Join(errs...).Error(),
-		cause:             errors.Join(errs...),
+		TradingAccountID: tradingAccountID,
+		Error:            errors.Join(errs...).Error(),
+		cause:            errors.Join(errs...),
 	})
 }
 
@@ -592,7 +598,7 @@ func accountErrorsAsErrors(values []OperatorAccountError) []error {
 		if cause == nil {
 			cause = errors.New(value.Error)
 		}
-		errs = append(errs, fmt.Errorf("%s: %w", value.ExchangeAccountID, cause))
+		errs = append(errs, fmt.Errorf("%s: %w", value.TradingAccountID, cause))
 	}
 	return errs
 }

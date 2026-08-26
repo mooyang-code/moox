@@ -27,8 +27,8 @@ func openFillStore(t *testing.T, market exchange.MarketType) *store.Store {
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: testSpace, ExchangeAccountID: testAccount, Name: "primary",
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: testSpace, TradingAccountID: testAccount, Name: "primary",
 			Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
 			ExecutionMode:      string(exchange.ExecutionModePaper),
 			Environment:        string(exchange.AccountEnvironmentPaper),
@@ -40,7 +40,7 @@ func openFillStore(t *testing.T, market exchange.MarketType) *store.Store {
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
 			Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
-			Symbol: testSymbol, InstrumentID: testSymbol, BaseAsset: "BTC",
+			ExchangeSymbol: testSymbol, InstrumentID: testSymbol, BaseAsset: "BTC",
 			QuoteAsset: "USDT", SettlementAsset: "USDT", Linear: market == exchange.MarketTypeSwap,
 			ContractValue: "1", ContractValueAsset: "BTC", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
@@ -63,10 +63,10 @@ func seedFillOrder(
 		positionSide = string(exchange.PositionSideNet)
 	}
 	record := store.OrderRecord{
-		SpaceID: testSpace, OrderID: "order-1", ExchangeAccountID: testAccount,
+		SpaceID: testSpace, OrderID: "order-1", TradingAccountID: testAccount,
 		ClientOrderID: "client-1", ExchangeOrderID: "exchange-order-1",
 		Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
-		Symbol: testSymbol, OrderType: string(exchange.OrderTypeMarket),
+		ExchangeSymbol: testSymbol, OrderType: string(exchange.OrderTypeMarket),
 		Side: string(exchange.SideBuy), PositionSide: positionSide,
 		Quantity: quantity, ReferencePrice: "100", ReferencePriceAt: time.Now().UnixMilli(),
 		OwnerType: "EXTERNAL", OwnerID: "exchange-order-1",
@@ -81,14 +81,14 @@ func seedFillOrder(
 
 func fillSource() Source {
 	return Source{
-		SpaceID: testSpace, ExchangeAccountID: testAccount, Kind: OriginPrivateSocket,
+		SpaceID: testSpace, TradingAccountID: testAccount, Kind: OriginPrivateSocket,
 	}
 }
 
 func spotFill(id string, quantity string) exchange.Fill {
 	return exchange.Fill{
 		ExchangeTradeID: id, ExchangeOrderID: "exchange-order-1",
-		ClientOrderID: "client-1", Symbol: testSymbol, Side: exchange.SideBuy,
+		ClientOrderID: "client-1", ExchangeSymbol: testSymbol, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal(quantity), Price: shared.MustDecimal("100"),
 		Fee: shared.MustDecimal("1"), FeeAsset: "USDT", TradedAt: time.Now(),
 	}
@@ -123,7 +123,7 @@ func TestReducerApplyFillSpotPersistsFillAndReservationOnce(t *testing.T) {
 	assert.Equal(t, uint64(2), got.Version)
 
 	applied, err = reducer.ApplyFill(context.Background(), fill, Source{
-		SpaceID: testSpace, ExchangeAccountID: testAccount, Kind: OriginRESTSnapshot,
+		SpaceID: testSpace, TradingAccountID: testAccount, Kind: OriginRESTSnapshot,
 	})
 	require.NoError(t, err)
 	assert.False(t, applied)
@@ -219,7 +219,7 @@ func TestReducerApplyFillSwapRecordsPnLAndEstimatesPosition(t *testing.T) {
 	seedFillOrder(t, s, exchange.MarketTypeSwap, order.Open, "2", "20")
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: testSpace, ExchangeAccountID: testAccount, Symbol: testSymbol,
+			SpaceID: testSpace, TradingAccountID: testAccount, ExchangeSymbol: testSymbol,
 			PositionSide: string(exchange.PositionSideNet), SignedQuantity: "-1",
 			EntryPrice: "90", MarkPrice: "90", Leverage: "10",
 			MarginMode: string(exchange.MarginModeCross),
@@ -227,7 +227,7 @@ func TestReducerApplyFillSwapRecordsPnLAndEstimatesPosition(t *testing.T) {
 	}))
 	fill := exchange.Fill{
 		ExchangeTradeID: "swap-trade", ExchangeOrderID: "exchange-order-1",
-		ClientOrderID: "client-1", Symbol: testSymbol, Side: exchange.SideBuy,
+		ClientOrderID: "client-1", ExchangeSymbol: testSymbol, Side: exchange.SideBuy,
 		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("2"),
 		Price: shared.MustDecimal("100"), Fee: shared.MustDecimal("0.1"),
 		FeeAsset: "USDT", RealizedPnL: shared.MustDecimal("3"),
@@ -246,8 +246,8 @@ func TestReducerApplyFillSwapRecordsPnLAndEstimatesPosition(t *testing.T) {
 	}
 	require.NoError(t, s.DBForTest().Raw(`
 		SELECT c_signed_quantity, c_entry_price, c_realized_pnl
-		FROM t_exchange_positions
-		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+		FROM t_trading_positions
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?
 	`, testSpace, testAccount, testSymbol).Scan(&position).Error)
 	assert.Equal(t, "1", position.SignedQuantity)
 	assert.Equal(t, "100", position.EntryPrice)
@@ -260,7 +260,7 @@ func TestReducerApplyFillCreatesFirstSwapPosition(t *testing.T) {
 	seedFillOrder(t, s, exchange.MarketTypeSwap, order.Open, "1", "10")
 	fill := exchange.Fill{
 		ExchangeTradeID: "first-swap-trade", ExchangeOrderID: "exchange-order-1",
-		ClientOrderID: "client-1", Symbol: testSymbol, Side: exchange.SideBuy,
+		ClientOrderID: "client-1", ExchangeSymbol: testSymbol, Side: exchange.SideBuy,
 		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("1"),
 		Price: shared.MustDecimal("100"), SettlementAsset: "USDT", TradedAt: time.Now(),
 	}
@@ -280,8 +280,8 @@ func TestReducerApplyFillCreatesFirstSwapPosition(t *testing.T) {
 	}
 	require.NoError(t, s.DBForTest().Raw(`
 		SELECT c_signed_quantity, c_entry_price, c_leverage
-		FROM t_exchange_positions
-		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+		FROM t_trading_positions
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?
 	`, testSpace, testAccount, testSymbol).Scan(&position).Error)
 	require.Equal(t, "1", position.SignedQuantity)
 	require.Equal(t, "100", position.EntryPrice)

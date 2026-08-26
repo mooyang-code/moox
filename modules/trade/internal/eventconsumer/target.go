@@ -142,8 +142,8 @@ func unsupportedLogicalTargetInstrument(
 	supportedIDs := make(map[string]struct{})
 	membersReady = true
 	for _, member := range members {
-		account, accountErr := tradeStore.GetExchangeAccountByID(
-			ctx, member.ExchangeAccountID,
+		account, accountErr := tradeStore.GetTradingAccountByID(
+			ctx, member.TradingAccountID,
 		)
 		if accountErr != nil {
 			return "", false, accountErr
@@ -151,9 +151,7 @@ func unsupportedLogicalTargetInstrument(
 		if !account.Ready {
 			membersReady = false
 		}
-		instruments, instrumentErr := tradeStore.ListInstruments(
-			ctx, account.Exchange, account.MarketType,
-		)
+		instruments, instrumentErr := tradeStore.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 		if instrumentErr != nil {
 			return "", false, instrumentErr
 		}

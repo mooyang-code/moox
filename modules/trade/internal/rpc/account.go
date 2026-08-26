@@ -9,8 +9,8 @@ import (
 	gonanoid "github.com/matoous/go-nanoid/v2"
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
@@ -26,28 +26,29 @@ type AccountServer struct {
 	NewID    func() string
 }
 
-func (h *AccountServer) CreateAccount(
+func (h *AccountServer) CreateTradingAccount(
 	ctx context.Context,
-	req *tradepb.CreateAccountReq,
-) (*tradepb.CreateAccountRsp, error) {
+	req *tradepb.CreateTradingAccountReq,
+) (*tradepb.CreateTradingAccountRsp, error) {
 	spaceID, err := requiredSpace(ctx)
 	if err != nil {
-		return &tradepb.CreateAccountRsp{RetInfo: errorInfo(err)}, nil
+		return &tradepb.CreateTradingAccountRsp{RetInfo: errorInfo(err)}, nil
 	}
 	if err := validatePB(req); err != nil {
-		return &tradepb.CreateAccountRsp{RetInfo: invalidInfo(err)}, nil
+		return &tradepb.CreateTradingAccountRsp{RetInfo: invalidInfo(err)}, nil
 	}
 	marginMode := exchange.MarginMode(normalized(req.GetMarginMode()))
 	if req.GetMarketType() == tradepb.MarketType_MARKET_TYPE_SPOT {
 		marginMode = exchange.MarginModeUnspecified
 	}
-	value := exchangeaccount.Account{
+	value := tradingaccount.Account{
 		ID: h.accountID(), SpaceID: spaceID, Name: strings.TrimSpace(req.GetName()),
 		Exchange:           exchangeFromPB(req.GetExchange()),
 		MarketType:         marketFromPB(req.GetMarketType()),
-		ExecutionMode:      executionModeFromPB(req.GetExecutionMode()),
-		Environment:        environmentFromPB(req.GetEnvironment()),
-		CredentialSecretID: strings.TrimSpace(req.GetCredentialSecretId()),
+		ExecutionMode:      exchange.ExecutionModeLive,
+		Environment:        environmentFromPB(req.GetLive().GetEnvironment()),
+		CredentialSecretID: strings.TrimSpace(req.GetLive().GetCredentialSecretId()),
+		Live:               &tradingaccount.LiveConfig{Environment: environmentFromPB(req.GetLive().GetEnvironment()), CredentialSecretID: strings.TrimSpace(req.GetLive().GetCredentialSecretId())},
 		SettlementAsset:    normalized(req.GetSettlementAsset()), MarginMode: marginMode,
 		Status:           exchange.AccountStatusEnabled,
 		SyncSymbols:      append([]string(nil), req.GetSyncSymbols()...),
@@ -55,27 +56,27 @@ func (h *AccountServer) CreateAccount(
 	}
 	created, err := h.Accounts.Create(ctx, value)
 	if err != nil {
-		return &tradepb.CreateAccountRsp{RetInfo: errorInfo(err)}, nil
+		return &tradepb.CreateTradingAccountRsp{RetInfo: errorInfo(err)}, nil
 	}
-	record, err := h.Store.GetExchangeAccount(ctx, spaceID, created.ID)
-	return &tradepb.CreateAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
+	record, err := h.Store.GetTradingAccount(ctx, spaceID, created.ID)
+	return &tradepb.CreateTradingAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
 }
 
-func (h *AccountServer) UpdateAccount(
+func (h *AccountServer) UpdateTradingAccount(
 	ctx context.Context,
-	req *tradepb.UpdateAccountReq,
-) (*tradepb.UpdateAccountRsp, error) {
+	req *tradepb.UpdateTradingAccountReq,
+) (*tradepb.UpdateTradingAccountRsp, error) {
 	spaceID, err := requiredSpace(ctx)
 	if err != nil {
-		return &tradepb.UpdateAccountRsp{RetInfo: errorInfo(err)}, nil
+		return &tradepb.UpdateTradingAccountRsp{RetInfo: errorInfo(err)}, nil
 	}
 	if err := validatePB(req); err != nil {
-		return &tradepb.UpdateAccountRsp{RetInfo: invalidInfo(err)}, nil
+		return &tradepb.UpdateTradingAccountRsp{RetInfo: invalidInfo(err)}, nil
 	}
-	if _, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
-		return &tradepb.UpdateAccountRsp{RetInfo: errorInfo(err)}, nil
+	if _, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId()); err != nil {
+		return &tradepb.UpdateTradingAccountRsp{RetInfo: errorInfo(err)}, nil
 	}
-	command := accountapp.UpdateCommand{ExchangeAccountID: req.GetExchangeAccountId()}
+	command := accountapp.UpdateCommand{TradingAccountID: req.GetTradingAccountId()}
 	if value := strings.TrimSpace(req.GetName()); value != "" {
 		command.Name = &value
 	}
@@ -98,41 +99,41 @@ func (h *AccountServer) UpdateAccount(
 		command.SyncSymbols = &values
 	}
 	if _, err := h.Accounts.Update(ctx, command); err != nil {
-		return &tradepb.UpdateAccountRsp{RetInfo: errorInfo(err)}, nil
+		return &tradepb.UpdateTradingAccountRsp{RetInfo: errorInfo(err)}, nil
 	}
-	record, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId())
-	return &tradepb.UpdateAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
+	record, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
+	return &tradepb.UpdateTradingAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
 }
 
-func (h *AccountServer) GetAccount(
+func (h *AccountServer) GetTradingAccount(
 	ctx context.Context,
-	req *tradepb.GetAccountReq,
-) (*tradepb.GetAccountRsp, error) {
+	req *tradepb.GetTradingAccountReq,
+) (*tradepb.GetTradingAccountRsp, error) {
 	spaceID, err := requiredSpace(ctx)
 	if err == nil {
 		err = validatePB(req)
 	}
 	if err != nil {
-		return &tradepb.GetAccountRsp{RetInfo: invalidOrErrorInfo(err)}, nil
+		return &tradepb.GetTradingAccountRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	record, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId())
-	return &tradepb.GetAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
+	record, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
+	return &tradepb.GetTradingAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
 }
 
-func (h *AccountServer) ListAccounts(
+func (h *AccountServer) ListTradingAccounts(
 	ctx context.Context,
-	req *tradepb.ListAccountsReq,
-) (*tradepb.ListAccountsRsp, error) {
+	req *tradepb.ListTradingAccountsReq,
+) (*tradepb.ListTradingAccountsRsp, error) {
 	spaceID, err := requiredSpace(ctx)
 	if err == nil {
 		err = validatePB(req)
 	}
 	if err != nil {
-		return &tradepb.ListAccountsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
+		return &tradepb.ListTradingAccountsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	records, err := h.Store.ListExchangeAccounts(ctx, spaceID)
+	records, err := h.Store.ListTradingAccounts(ctx, spaceID)
 	if err != nil {
-		return &tradepb.ListAccountsRsp{RetInfo: errorInfo(err)}, nil
+		return &tradepb.ListTradingAccountsRsp{RetInfo: errorInfo(err)}, nil
 	}
 	filtered := records[:0]
 	for _, record := range records {
@@ -144,10 +145,6 @@ func (h *AccountServer) ListAccounts(
 		}
 		if req.ExecutionMode != nil &&
 			record.ExecutionMode != string(executionModeFromPB(req.GetExecutionMode())) {
-			continue
-		}
-		if req.Environment != nil &&
-			record.Environment != string(environmentFromPB(req.GetEnvironment())) {
 			continue
 		}
 		if status := normalized(req.GetStatus()); status != "" && record.Status != status {
@@ -164,11 +161,11 @@ func (h *AccountServer) ListAccounts(
 	if end > len(filtered) {
 		end = len(filtered)
 	}
-	accounts := make([]*tradepb.ExchangeAccount, 0, end-start)
+	accounts := make([]*tradepb.TradingAccount, 0, end-start)
 	for _, record := range filtered[start:end] {
 		accounts = append(accounts, accountToPB(record))
 	}
-	return &tradepb.ListAccountsRsp{
+	return &tradepb.ListTradingAccountsRsp{
 		RetInfo: success(), Accounts: accounts, PageResult: pageResult(page, total),
 	}, nil
 }
@@ -184,36 +181,41 @@ func (h *AccountServer) SetLeverage(
 	if err != nil {
 		return &tradepb.SetLeverageRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	if _, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
+	if _, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId()); err != nil {
 		return &tradepb.SetLeverageRsp{RetInfo: errorInfo(err)}, nil
 	}
 	leverage, err := shared.ParseDecimal(req.GetLeverage())
 	if err == nil {
-		err = h.Accounts.SetLeverage(ctx, req.GetExchangeAccountId(), req.GetSymbol(), leverage)
+		instrument, resolveErr := h.Store.GetInstrumentByIDForAccount(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId())
+		if resolveErr != nil {
+			err = resolveErr
+		} else {
+			err = h.Accounts.SetLeverage(ctx, req.GetTradingAccountId(), instrument.ExchangeSymbol, leverage)
+		}
 	}
-	record, getErr := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId())
+	record, getErr := h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
 	if err == nil {
 		err = getErr
 	}
 	return &tradepb.SetLeverageRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
 }
 
-func (h *AccountServer) SyncAccount(
+func (h *AccountServer) SyncTradingAccount(
 	ctx context.Context,
-	req *tradepb.SyncAccountReq,
-) (*tradepb.SyncAccountRsp, error) {
+	req *tradepb.SyncTradingAccountReq,
+) (*tradepb.SyncTradingAccountRsp, error) {
 	spaceID, err := requiredSpace(ctx)
 	if err == nil {
 		err = validatePB(req)
 	}
 	if err != nil {
-		return &tradepb.SyncAccountRsp{RetInfo: invalidOrErrorInfo(err)}, nil
+		return &tradepb.SyncTradingAccountRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	if _, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
-		return &tradepb.SyncAccountRsp{RetInfo: errorInfo(err)}, nil
+	if _, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId()); err != nil {
+		return &tradepb.SyncTradingAccountRsp{RetInfo: errorInfo(err)}, nil
 	}
-	result, err := h.Sync.SyncAccount(ctx, req.GetExchangeAccountId())
-	return &tradepb.SyncAccountRsp{
+	result, err := h.Sync.SyncAccount(ctx, req.GetTradingAccountId())
+	return &tradepb.SyncTradingAccountRsp{
 		RetInfo: errorInfo(err), FillsIngested: int32(result.FillsIngested),
 		OrdersUpdated:          int32(result.OrdersUpdated),
 		PositionsUpdated:       int32(result.PositionsUpdated),

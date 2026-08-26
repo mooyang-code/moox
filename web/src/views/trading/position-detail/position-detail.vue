@@ -4,12 +4,12 @@
       <div class="page-head position-toolbar">
         <h2>持仓详情</h2>
         <a-space>
-          <a-select v-model="exchangeAccountId" placeholder="选择 Exchange 账户" style="width: 260px" @change="loadPositions">
-            <a-option v-for="account in accounts" :key="account.exchange_account_id" :value="account.exchange_account_id">
+          <a-select v-model="exchangeAccountId" placeholder="选择 Trading 账户" style="width: 260px" @change="loadPositions">
+            <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
               {{ account.name }} · {{ marketTypeLabels[account.market_type] }}
             </a-option>
           </a-select>
-          <a-input v-model="symbol" placeholder="Symbol" allow-clear style="width: 150px" @press-enter="loadPositions" />
+          <a-input v-model="instrument_id" placeholder="Symbol" allow-clear style="width: 150px" @press-enter="loadPositions" />
           <a-button :disabled="!exchangeAccountId" @click="loadPositions">
             <template #icon><icon-search /></template>
             查询
@@ -27,12 +27,26 @@
         {{ formatTimestamp(selectedAccount.last_sync_at) }}
       </a-alert>
 
-      <a-table row-key="symbol" :data="positions" :loading="loading" :pagination="false" :scroll="{ x: 'max-content' }">
+      <a-table v-if="selectedAccount?.market_type === 1" row-key="asset" :data="holdings" :loading="loading" :pagination="false">
+        <template #columns>
+          <a-table-column title="Asset" data-index="asset" />
+          <a-table-column title="数量" data-index="quantity" />
+          <a-table-column title="平均成本" data-index="average_cost" />
+          <a-table-column title="标记价" data-index="mark_price" />
+          <a-table-column title="市值" data-index="market_value" />
+          <a-table-column title="未实现 PnL">
+            <template #cell="{ record }"><span :class="pnlClass(record.unrealized_pnl)">{{ record.unrealized_pnl || "-" }}</span></template>
+          </a-table-column>
+          <a-table-column title="Instrument" data-index="instrument_id" />
+        </template>
+      </a-table>
+
+      <a-table v-else row-key="instrument_id" :data="positions" :loading="loading" :pagination="false" :scroll="{ x: 'max-content' }">
         <template #columns>
           <a-table-column title="市场">
             <template #cell>{{ selectedAccount ? marketTypeLabels[selectedAccount.market_type] : "-" }}</template>
           </a-table-column>
-          <a-table-column title="Symbol" data-index="symbol" />
+          <a-table-column title="Symbol" data-index="instrument_id" />
           <a-table-column title="方向">
             <template #cell="{ record }">{{ quantitySide(record.signed_quantity) }}</template>
           </a-table-column>
@@ -60,29 +74,30 @@
 import { computed, onMounted, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { exchangeLabels, formatTimestamp, listAccounts, listPositions, marketTypeLabels, syncAccount } from "@/api/trade";
-import type { ExchangeAccount, Position } from "@/api/trade/types";
+import { exchangeLabels, formatTimestamp, listTradingAccounts, listHoldings, listPositions, marketTypeLabels, syncTradingAccount } from "@/api/trade";
+import type { TradingAccount, Holding, Position } from "@/api/trade/types";
 
 defineOptions({ name: "position-detail" });
 
-const accounts = ref<ExchangeAccount[]>([]);
+const accounts = ref<TradingAccount[]>([]);
 const positions = ref<Position[]>([]);
+const holdings = ref<Holding[]>([]);
 const exchangeAccountId = ref("");
-const symbol = ref("");
+const instrument_id = ref("");
 const loading = ref(false);
 const syncing = ref(false);
 const accountRequests = createLatestRequestGuard();
 const positionRequests = createLatestRequestGuard();
 const selectedAccount = computed(
-  () => accounts.value.find(account => account.exchange_account_id === exchangeAccountId.value) || null
+  () => accounts.value.find(account => account.trading_account_id === exchangeAccountId.value) || null
 );
 
 async function loadAccounts() {
   const request = accountRequests.begin();
-  const response = await listAccounts({ page: { page: 1, size: 200 } });
+  const response = await listTradingAccounts({ page: { page: 1, size: 200 } });
   if (!request.isLatest()) return;
   accounts.value = response.accounts || [];
-  exchangeAccountId.value ||= accounts.value[0]?.exchange_account_id || "";
+  exchangeAccountId.value ||= accounts.value[0]?.trading_account_id || "";
 }
 
 async function loadPositions() {
@@ -93,10 +108,17 @@ async function loadPositions() {
   }
   const request = positionRequests.begin();
   const accountId = exchangeAccountId.value;
-  const requestedSymbol = symbol.value.trim().toUpperCase();
+  const requestedSymbol = instrument_id.value.trim().toUpperCase();
   loading.value = true;
   try {
-    const response = await listPositions({ exchange_account_id: accountId, symbol: requestedSymbol });
+    if (selectedAccount.value?.market_type === 1) {
+      const response = await listHoldings(accountId);
+      if (!request.isLatest() || exchangeAccountId.value !== accountId) return;
+      holdings.value = response.holdings || [];
+      positions.value = [];
+      return;
+    }
+    const response = await listPositions({ trading_account_id: accountId, instrument_id: requestedSymbol });
     if (!request.isLatest() || exchangeAccountId.value !== accountId) return;
     positions.value = response.positions || [];
   } finally {
@@ -108,7 +130,7 @@ async function sync() {
   const accountId = exchangeAccountId.value;
   syncing.value = true;
   try {
-    const response = await syncAccount(accountId);
+    const response = await syncTradingAccount(accountId);
     if (exchangeAccountId.value === accountId) Message.success(`同步完成：${response.positions_updated} positions`);
     await Promise.all([loadAccounts(), loadPositions()]);
   } finally {

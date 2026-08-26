@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
 CREATE TABLE IF NOT EXISTS t_logical_account_members (
     c_space_id TEXT NOT NULL,
     c_logical_account_id TEXT NOT NULL,
-    c_exchange_account_id TEXT NOT NULL,
+    c_trading_account_id TEXT NOT NULL,
     c_enabled INTEGER NOT NULL DEFAULT 1,
     c_priority INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -33,18 +33,18 @@ CREATE TABLE IF NOT EXISTS t_logical_account_members (
     PRIMARY KEY (
         c_space_id,
         c_logical_account_id,
-        c_exchange_account_id
+        c_trading_account_id
     ),
     FOREIGN KEY (c_space_id, c_logical_account_id)
         REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
         ON DELETE CASCADE,
-    FOREIGN KEY (c_space_id, c_exchange_account_id)
-        REFERENCES t_exchange_accounts (c_space_id, c_exchange_account_id),
+    FOREIGN KEY (c_space_id, c_trading_account_id)
+        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id),
     CHECK (c_enabled IN (0, 1))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_enabled_physical_account_membership
-ON t_logical_account_members (c_space_id, c_exchange_account_id)
+ON t_logical_account_members (c_space_id, c_trading_account_id)
 WHERE c_enabled = 1;
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_owner_runner
@@ -52,7 +52,7 @@ ON t_logical_accounts (c_space_id, c_owner_runner_id)
 WHERE c_owner_runner_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_logical_account_members_account
-ON t_logical_account_members (c_space_id, c_exchange_account_id);
+ON t_logical_account_members (c_space_id, c_trading_account_id);
 
 CREATE TABLE IF NOT EXISTS t_logical_account_targets (
     c_space_id TEXT NOT NULL,

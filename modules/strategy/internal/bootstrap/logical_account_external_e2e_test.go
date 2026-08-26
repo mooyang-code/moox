@@ -25,7 +25,7 @@ func TestExternalStrategyClaimsLogicalAccountFromTrade(t *testing.T) {
 
 	header := &thttp.ClientReqHeader{Header: make(http.Header)}
 	header.Header.Set("X-Space-Id", "space-e2e")
-	proxy := tradepb.NewLogicalAccountServiceClientProxy(
+	proxy := tradepb.NewTradeConsoleServiceClientProxy(
 		client.WithTarget(target),
 		client.WithNetwork("tcp"),
 		client.WithProtocol("http"),

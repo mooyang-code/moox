@@ -6,9 +6,7 @@ import type { RetInfo } from "./types";
 import { installSpaceAwareSignedClient } from "../admin/signed-client";
 
 export const tradeServiceMap = {
-  exchangeAccount: "trade_exchange_account",
-  execution: "trade_execution",
-  logicalAccount: "trade_logical_account"
+  console: "trade_console"
 } as const;
 
 const tradeClient = axios.create({

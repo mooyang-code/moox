@@ -24,13 +24,13 @@ type LogicalAccountRecord struct {
 }
 
 type LogicalAccountMemberRecord struct {
-	SpaceID           string
-	LogicalAccountID  string
-	ExchangeAccountID string
-	Enabled           bool
-	Priority          int
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	SpaceID          string
+	LogicalAccountID string
+	TradingAccountID string
+	Enabled          bool
+	Priority         int
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type logicalAccountRow struct {
@@ -52,13 +52,13 @@ func (logicalAccountRow) TableName() string {
 }
 
 type logicalAccountMemberRow struct {
-	SpaceID           string    `gorm:"column:c_space_id"`
-	LogicalAccountID  string    `gorm:"column:c_logical_account_id"`
-	ExchangeAccountID string    `gorm:"column:c_exchange_account_id"`
-	Enabled           bool      `gorm:"column:c_enabled"`
-	Priority          int       `gorm:"column:c_priority"`
-	CreatedAt         time.Time `gorm:"column:c_ctime"`
-	UpdatedAt         time.Time `gorm:"column:c_mtime"`
+	SpaceID          string    `gorm:"column:c_space_id"`
+	LogicalAccountID string    `gorm:"column:c_logical_account_id"`
+	TradingAccountID string    `gorm:"column:c_trading_account_id"`
+	Enabled          bool      `gorm:"column:c_enabled"`
+	Priority         int       `gorm:"column:c_priority"`
+	CreatedAt        time.Time `gorm:"column:c_ctime"`
+	UpdatedAt        time.Time `gorm:"column:c_mtime"`
 }
 
 func (logicalAccountMemberRow) TableName() string {
@@ -195,8 +195,8 @@ func (tx *Tx) SetLogicalAccountAutomation(
 func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 	member := logicalaccount.Member{
 		SpaceID: record.SpaceID, LogicalAccountID: record.LogicalAccountID,
-		ExchangeAccountID: record.ExchangeAccountID,
-		Enabled:           record.Enabled, Priority: record.Priority,
+		TradingAccountID: record.TradingAccountID,
+		Enabled:          record.Enabled, Priority: record.Priority,
 	}
 	if err := member.Validate(); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, err)
@@ -208,7 +208,7 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 	if account.AutomationState != string(logicalaccount.AutomationPaused) {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrMembershipChange)
 	}
-	physical, err := tx.GetExchangeAccount(record.SpaceID, record.ExchangeAccountID)
+	physical, err := tx.GetTradingAccount(record.SpaceID, record.TradingAccountID)
 	if err != nil {
 		return err
 	}
@@ -219,35 +219,39 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 	}
 	var environments []string
 	if err := tx.db.Raw(`
-		SELECT DISTINCT a.c_environment
+		SELECT DISTINCT COALESCE(NULLIF(a.c_live_environment, ''), 'PRODUCTION')
 		FROM t_logical_account_members AS m
-		JOIN t_exchange_accounts AS a
+		JOIN t_trading_accounts AS a
 			ON a.c_space_id = m.c_space_id
-			AND a.c_exchange_account_id = m.c_exchange_account_id
+			AND a.c_trading_account_id = m.c_trading_account_id
 		WHERE m.c_space_id = ? AND m.c_logical_account_id = ?
-			AND m.c_exchange_account_id <> ?
+			AND m.c_trading_account_id <> ?
 	`,
-		record.SpaceID, record.LogicalAccountID, record.ExchangeAccountID,
+		record.SpaceID, record.LogicalAccountID, record.TradingAccountID,
 	).Scan(&environments).Error; err != nil {
 		return err
 	}
 	for _, environment := range environments {
-		if environment != physical.Environment {
+		physicalEnvironment := physical.Environment
+		if physicalEnvironment == "" || physicalEnvironment == "PAPER" {
+			physicalEnvironment = "PRODUCTION"
+		}
+		if environment != physicalEnvironment {
 			return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrInhomogeneous)
 		}
 	}
 	err = tx.db.Exec(`
 		INSERT INTO t_logical_account_members (
-			c_space_id, c_logical_account_id, c_exchange_account_id,
+			c_space_id, c_logical_account_id, c_trading_account_id,
 			c_enabled, c_priority
 		) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(c_space_id, c_logical_account_id, c_exchange_account_id)
+		ON CONFLICT(c_space_id, c_logical_account_id, c_trading_account_id)
 		DO UPDATE SET
 			c_enabled = excluded.c_enabled,
 			c_priority = excluded.c_priority,
 			c_mtime = CURRENT_TIMESTAMP
 	`,
-		record.SpaceID, record.LogicalAccountID, record.ExchangeAccountID,
+		record.SpaceID, record.LogicalAccountID, record.TradingAccountID,
 		record.Enabled, record.Priority,
 	).Error
 	return writeError(err)
@@ -265,7 +269,7 @@ func (s *Store) ListLogicalAccountMembers(
 		query = query.Where("c_enabled = 1")
 	}
 	var rows []logicalAccountMemberRow
-	if err := query.Order("c_priority, c_exchange_account_id").Find(&rows).Error; err != nil {
+	if err := query.Order("c_priority, c_trading_account_id").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	records := make([]LogicalAccountMemberRecord, 0, len(rows))
@@ -278,7 +282,7 @@ func (s *Store) ListLogicalAccountMembers(
 func (tx *Tx) DeleteLogicalAccountMember(
 	spaceID string,
 	logicalAccountID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 ) error {
 	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
 	if err != nil {
@@ -290,20 +294,20 @@ func (tx *Tx) DeleteLogicalAccountMember(
 	result := tx.db.Exec(`
 		DELETE FROM t_logical_account_members
 		WHERE c_space_id = ? AND c_logical_account_id = ?
-			AND c_exchange_account_id = ?
-	`, spaceID, logicalAccountID, exchangeAccountID)
+			AND c_trading_account_id = ?
+	`, spaceID, logicalAccountID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account member")
 }
 
-func (s *Store) FindLogicalAccountByExchangeAccount(
+func (s *Store) FindLogicalAccountByTradingAccount(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 ) (LogicalAccountRecord, LogicalAccountMemberRecord, error) {
 	var member logicalAccountMemberRow
 	err := s.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_exchange_account_id = ? AND c_enabled = 1",
-			spaceID, exchangeAccountID).
+		Where("c_space_id = ? AND c_trading_account_id = ? AND c_enabled = 1",
+			spaceID, tradingAccountID).
 		Take(&member).Error
 	if err != nil {
 		return LogicalAccountRecord{}, LogicalAccountMemberRecord{}, err
@@ -342,8 +346,8 @@ func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {
 func logicalAccountMemberRecord(row logicalAccountMemberRow) LogicalAccountMemberRecord {
 	return LogicalAccountMemberRecord{
 		SpaceID: row.SpaceID, LogicalAccountID: row.LogicalAccountID,
-		ExchangeAccountID: row.ExchangeAccountID,
-		Enabled:           row.Enabled, Priority: row.Priority,
+		TradingAccountID: row.TradingAccountID,
+		Enabled:          row.Enabled, Priority: row.Priority,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 }

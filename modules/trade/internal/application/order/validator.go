@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
@@ -21,24 +21,33 @@ var (
 	ErrInsufficientFunds  = errors.New("trade order: insufficient available funds")
 	ErrLeverageLimit      = errors.New("trade order: leverage exceeds configured ceiling")
 	ErrReduceOnly         = errors.New("trade order: invalid reduce-only direction")
-	ErrPaperLimit         = errors.New("trade order: paper mode supports MARKET orders only")
 	ErrValidatorConfig    = errors.New("trade order: validator is not configured")
 )
 
 type AccountEligibility interface {
-	ExecutionEligibility(context.Context, string) (exchangeaccount.Account, error)
+	ExecutionEligibility(context.Context, string) (tradingaccount.Account, error)
 }
 
 type InstrumentSource interface {
 	GetInstrument(context.Context, exchange.Exchange, exchange.MarketType, string) (exchange.Instrument, error)
 }
 
+// AccountInstrumentSource lets production implementations include the
+// account's environment in instrument identity without burdening test stubs.
+type AccountInstrumentSource interface {
+	GetInstrumentForAccount(context.Context, string, exchange.Exchange, exchange.MarketType, string) (exchange.Instrument, error)
+}
+
 type PositionSource interface {
 	GetPosition(context.Context, string, string) (exchange.Position, error)
 }
 
+type AccountPositionSource interface {
+	GetPositionForAccount(context.Context, string, string) (exchange.Position, error)
+}
+
 type Validation struct {
-	Account          exchangeaccount.Account
+	Account          tradingaccount.Account
 	Instrument       exchange.Instrument
 	Notional         shared.Decimal
 	Leverage         shared.Decimal
@@ -69,26 +78,22 @@ func (v Validator) Validate(
 	if v.Now != nil {
 		now = v.Now()
 	}
-	account, err := v.Accounts.ExecutionEligibility(ctx, spec.ExchangeAccountID)
+	account, err := v.Accounts.ExecutionEligibility(ctx, spec.TradingAccountID)
 	if err != nil {
 		return Validation{}, err
 	}
 	if account.SpaceID != spaceID {
 		return Validation{}, ErrAccountOwnership
 	}
-	if account.ExecutionMode == exchange.ExecutionModePaper &&
-		spec.Type == exchange.OrderTypeLimit {
-		return Validation{}, ErrPaperLimit
-	}
 	if err := spec.Validate(account.MarketType, now, v.MaxReferenceAge); err != nil {
 		return Validation{}, err
 	}
-	instrument, err := v.Instruments.GetInstrument(
-		ctx,
-		account.Exchange,
-		account.MarketType,
-		spec.InstrumentID,
-	)
+	var instrument exchange.Instrument
+	if scoped, ok := v.Instruments.(AccountInstrumentSource); ok {
+		instrument, err = scoped.GetInstrumentForAccount(ctx, account.ID, account.Exchange, account.MarketType, spec.InstrumentID)
+	} else {
+		instrument, err = v.Instruments.GetInstrument(ctx, account.Exchange, account.MarketType, spec.InstrumentID)
+	}
 	if err != nil {
 		return Validation{}, err
 	}
@@ -128,13 +133,27 @@ func (v Validator) Validate(
 		Account: account, Instrument: instrument, Notional: referenceNotional,
 		Leverage: shared.MustDecimal("1"),
 	}
+	feeRate := v.FeeBufferRate
+	if account.ExecutionMode == exchange.ExecutionModePaper && account.Paper != nil {
+		// Paper reservations use the configured worst-case fee rather than the
+		// process-wide live safety buffer. A first MARKET/LIMIT match may be
+		// taker, while a resting GTC LIMIT may later be maker.
+		feeRate = maxDecimal(account.Paper.MakerFeeRate, account.Paper.TakerFeeRate)
+	}
 	switch account.MarketType {
 	case exchange.MarketTypeSpot:
 		if spec.Side == exchange.SideBuy {
 			result.ReservedAsset = instrument.QuoteAsset
-			result.ReservedQuantity = withFeeBuffer(referenceNotional, v.FeeBufferRate)
+			reserveNotional := referenceNotional
+			if account.ExecutionMode == exchange.ExecutionModePaper && spec.Type == exchange.OrderTypeMarket && account.Paper != nil {
+				reserveNotional = paperSlippagePrice(referenceNotional, spec.Side, account.Paper.SlippageBPS)
+			}
+			result.ReservedQuantity = withFeeBuffer(reserveNotional, feeRate)
 			if spec.Type == exchange.OrderTypeLimit {
 				result.ReservedQuantity = orderNotional
+				if account.ExecutionMode == exchange.ExecutionModePaper {
+					result.ReservedQuantity = withFeeBuffer(orderNotional, feeRate)
+				}
 			}
 		} else {
 			result.ReservedAsset = instrument.BaseAsset
@@ -145,6 +164,18 @@ func (v Validator) Validate(
 		}
 	case exchange.MarketTypeSwap:
 		leverage, found := account.LeverageSettings[spec.InstrumentID]
+		if !found && instrument.ExchangeSymbol != "" {
+			leverage, found = account.LeverageSettings[instrument.ExchangeSymbol]
+		}
+		if !found && account.ExecutionMode == exchange.ExecutionModePaper {
+			leverage, found = account.LeverageSettings["*"]
+		}
+		// Paper simulations intentionally keep the lifecycle small: when no
+		// per-symbol leverage was configured, use conservative 1x CROSS
+		// margin instead of creating an account that can never place an order.
+		if !found && account.ExecutionMode == exchange.ExecutionModePaper {
+			leverage, found = shared.MustDecimal("1"), true
+		}
 		if !found || leverage.Cmp(shared.Zero()) <= 0 {
 			return Validation{}, fmt.Errorf("%w: missing symbol leverage", ErrLeverageLimit)
 		}
@@ -153,28 +184,65 @@ func (v Validator) Validate(
 		}
 		result.Leverage = leverage
 		result.ReservedAsset = account.SettlementAsset
+		reserveNotional := referenceNotional
+		if account.ExecutionMode == exchange.ExecutionModePaper && spec.Type == exchange.OrderTypeLimit && spec.LimitPrice != nil {
+			reserveNotional = orderNotional
+		}
+		if account.ExecutionMode == exchange.ExecutionModePaper && spec.Type == exchange.OrderTypeMarket && account.Paper != nil {
+			reserveNotional = paperSlippagePrice(referenceNotional, spec.Side, account.Paper.SlippageBPS)
+		}
 		if spec.ReducePositionOnly {
 			if err := v.validateReduceOnly(ctx, spec); err != nil {
 				return Validation{}, err
 			}
-		} else {
-			result.ReservedQuantity = withFeeBuffer(
-				referenceNotional.Div(leverage),
-				v.FeeBufferRate,
-			)
-			if account.Snapshot.AvailableFunds.Cmp(result.ReservedQuantity) < 0 {
-				return Validation{}, ErrInsufficientFunds
+			if account.ExecutionMode == exchange.ExecutionModePaper {
+				result.ReservedQuantity = reserveNotional.Mul(feeRate)
 			}
+		} else {
+			margin := reserveNotional.Div(leverage)
+			result.ReservedQuantity = margin
+			if account.ExecutionMode == exchange.ExecutionModePaper {
+				result.ReservedQuantity = margin.Add(reserveNotional.Mul(feeRate))
+			} else {
+				result.ReservedQuantity = withFeeBuffer(margin, feeRate)
+			}
+		}
+		if account.Snapshot.AvailableFunds.Cmp(result.ReservedQuantity) < 0 {
+			return Validation{}, ErrInsufficientFunds
 		}
 	}
 	return result, nil
+}
+
+func maxDecimal(left, right shared.Decimal) shared.Decimal {
+	if left.Cmp(right) >= 0 {
+		return left
+	}
+	return right
+}
+
+func paperSlippagePrice(notional shared.Decimal, side exchange.Side, slippage shared.Decimal) shared.Decimal {
+	if slippage.Cmp(shared.Zero()) <= 0 {
+		return notional
+	}
+	factor := shared.MustDecimal("1").Add(slippage.Div(shared.MustDecimal("10000")))
+	if side == exchange.SideSell {
+		factor = shared.MustDecimal("1").Sub(slippage.Div(shared.MustDecimal("10000")))
+	}
+	return notional.Mul(factor)
 }
 
 func (v Validator) validateReduceOnly(ctx context.Context, spec orderdomain.OrderSpec) error {
 	if v.Positions == nil {
 		return ErrReduceOnly
 	}
-	position, err := v.Positions.GetPosition(ctx, spec.ExchangeAccountID, spec.InstrumentID)
+	var position exchange.Position
+	var err error
+	if scoped, ok := v.Positions.(AccountPositionSource); ok {
+		position, err = scoped.GetPositionForAccount(ctx, spec.TradingAccountID, spec.InstrumentID)
+	} else {
+		position, err = v.Positions.GetPosition(ctx, spec.TradingAccountID, spec.InstrumentID)
+	}
 	if err != nil {
 		return err
 	}

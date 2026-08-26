@@ -32,7 +32,7 @@ func TestPaperSwapFullCloseSyncPersistsClosingFill(t *testing.T) {
 	_, total, err := f.store.ListFills(
 		ctx,
 		testSpace,
-		store.FillQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.FillQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	if closeOrder.State != orderdomain.Filled || total != 2 {
@@ -55,6 +55,14 @@ func TestPaperSwapCursorSurvivesClockRollback(t *testing.T) {
 	rolledBack := testNow.Add(-time.Minute)
 	f.orders.Now = func() time.Time { return rolledBack }
 	f.orders.Validator.Now = func() time.Time { return rolledBack }
+	f.fake.mu.Lock()
+	f.fake.reference.UpdatedAt = rolledBack
+	f.fake.mu.Unlock()
+	// Keep the paper valuation clock aligned with the rolled-back quote. The
+	// cursor regression intentionally moves time backwards, so a fixed fixture
+	// clock would make the quote appear stale before the sync is exercised.
+	paperAdapter := f.adapter.(recordingAdapter).ExecutionAdapter.(*synchronousPaperAdapter).Adapter
+	paperAdapter.Now = func() time.Time { return rolledBack }
 	closeSpec := swapSpec("rollback-close", exchange.SideSell, "0.01", true)
 	closeSpec.ReferencePrice = shared.MustDecimal("51000")
 	closeSpec.ReferencePriceAt = rolledBack
@@ -66,7 +74,7 @@ func TestPaperSwapCursorSurvivesClockRollback(t *testing.T) {
 	_, total, err := f.store.ListFills(
 		ctx,
 		testSpace,
-		store.FillQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.FillQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), total)

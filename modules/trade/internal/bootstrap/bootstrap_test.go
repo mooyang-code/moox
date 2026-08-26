@@ -9,7 +9,11 @@ import (
 	"testing"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,7 +25,8 @@ func TestTRPCConfigContainsOnlyApprovedServices(t *testing.T) {
 	var config struct {
 		Server struct {
 			Service []struct {
-				Name string `yaml:"name"`
+				Name    string `yaml:"name"`
+				Network string `yaml:"network"`
 			} `yaml:"service"`
 		} `yaml:"server"`
 	}
@@ -34,11 +39,10 @@ func TestTRPCConfigContainsOnlyApprovedServices(t *testing.T) {
 	}
 	sort.Strings(names)
 	want := []string{
-		"trpc.moox.trade.ExchangeAccountService",
 		"trpc.moox.trade.Health",
-		"trpc.moox.trade.LogicalAccountService",
+		"trpc.moox.trade.TradeConsoleService",
 		"trpc.moox.trade.TradeDNSResolverService.trpc",
-		"trpc.moox.trade.TradeExecutionService",
+		"trpc.moox.trade.equity.timer",
 		"trpc.moox.trade.metrics.timer",
 	}
 	if len(names) != len(want) {
@@ -47,6 +51,11 @@ func TestTRPCConfigContainsOnlyApprovedServices(t *testing.T) {
 	for index := range want {
 		if names[index] != want[index] {
 			t.Fatalf("service names = %v, want %v", names, want)
+		}
+	}
+	for _, service := range config.Server.Service {
+		if service.Name == "trpc.moox.trade.equity.timer" {
+			require.Equal(t, "0 * * * * *", service.Network)
 		}
 	}
 }
@@ -67,33 +76,34 @@ func TestExchangeCredentialPropagatesSingleSecretReadError(t *testing.T) {
 }
 
 func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
-	registry := exchange.NewRegistry()
+	registry := execution.NewRegistry()
 	registerBuiltins(registry)
 	for _, name := range []exchange.Exchange{
 		exchange.ExchangeBinance,
 		exchange.ExchangeOKX,
 	} {
 		adapter, err := registry.Bind(exchange.AccountConfig{
-			ExchangeAccountID: "account-1",
-			Exchange:          name,
-			MarketType:        exchange.MarketTypeSpot,
-			ExecutionMode:     exchange.ExecutionModePaper,
-			SettlementAsset:   "USDT",
+			TradingAccountID: "account-1",
+			Exchange:         name,
+			MarketType:       exchange.MarketTypeSpot,
+			ExecutionMode:    exchange.ExecutionModePaper,
+			SettlementAsset:  "USDT",
 		}, exchange.Credential{})
 		if err != nil {
 			t.Fatalf("Bind(%s) error = %v", name, err)
 		}
-		if adapter.Exchange() != name {
-			t.Fatalf("Bind(%s) adapter Exchange = %s", name, adapter.Exchange())
+		identity, ok := adapter.(execution.ExchangeIdentity)
+		if !ok || identity.Exchange() != name {
+			t.Fatalf("Bind(%s) adapter identity = %v", name, identity)
 		}
 	}
 
 	_, err := registry.Bind(exchange.AccountConfig{
-		ExchangeAccountID: "account-1",
-		Exchange:          exchange.ExchangeOKX,
-		MarketType:        exchange.MarketTypeSpot,
-		ExecutionMode:     exchange.ExecutionModeLive,
-		SettlementAsset:   "USDT",
+		TradingAccountID: "account-1",
+		Exchange:         exchange.ExchangeOKX,
+		MarketType:       exchange.MarketTypeSpot,
+		ExecutionMode:    exchange.ExecutionModeLive,
+		SettlementAsset:  "USDT",
 	}, exchange.Credential{APIKey: "key", APISecret: "secret"})
 	if err == nil || !strings.Contains(err.Error(), "passphrase") {
 		t.Fatalf("OKX LIVE Bind() error = %v, want passphrase rejection", err)
@@ -134,4 +144,19 @@ func TestBootstrapOwnsOneStoreAndOneShutdownHook(t *testing.T) {
 			t.Fatalf("bootstrap still contains obsolete symbol %q", forbidden)
 		}
 	}
+}
+
+func TestPaperOpeningReservationRejectsPriceIncrease(t *testing.T) {
+	candidate := store.OrderRecord{
+		InstrumentID:              "BTC-USDT-SWAP",
+		ExchangeSymbol:            "BTCUSDT",
+		Quantity:                  "1",
+		RemainingReservedQuantity: "10.1",
+	}
+	account := store.TradingAccountRecord{LeverageSettings: map[string]string{
+		"BTC-USDT-SWAP": "10",
+	}}
+	fee := shared.MustDecimal("0.12")
+	require.False(t, paperOpeningReservationSufficient(candidate, account, shared.MustDecimal("120"), fee))
+	require.True(t, paperOpeningReservationSufficient(candidate, account, shared.MustDecimal("100"), shared.MustDecimal("0.1")))
 }

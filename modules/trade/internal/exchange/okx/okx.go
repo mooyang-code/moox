@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 const defaultBaseURL = "https://openapi.okx.com"
@@ -28,9 +29,6 @@ type Adapter struct {
 
 	mu          sync.RWMutex
 	instruments map[string]exchange.Instrument
-
-	privateGateMu sync.Mutex
-	privateGate   chan struct{}
 }
 
 func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter {
@@ -42,19 +40,6 @@ func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter
 }
 
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeOKX }
-
-func (a *Adapter) MarkPrivateStreamMetadataReady() {
-	a.privateGateMu.Lock()
-	gate := a.privateGate
-	if gate != nil {
-		select {
-		case <-gate:
-		default:
-			close(gate)
-		}
-	}
-	a.privateGateMu.Unlock()
-}
 
 type response struct {
 	Code string          `json:"code"`
@@ -193,7 +178,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		}
 		instrument := exchange.Instrument{
 			Exchange: exchange.ExchangeOKX, MarketType: a.config.MarketType,
-			Symbol: row.InstID, InstrumentID: instrumentID,
+			ExchangeSymbol: row.InstID, InstrumentID: instrumentID,
 			BaseAsset: baseAsset, QuoteAsset: quoteAsset,
 			Status: row.State, ExchangeUpdatedAt: time.Now().UTC(),
 		}
@@ -227,7 +212,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	a.mu.Lock()
 	a.instruments = make(map[string]exchange.Instrument, len(out))
 	for _, instrument := range out {
-		a.instruments[instrument.Symbol] = instrument
+		a.instruments[instrument.ExchangeSymbol] = instrument
 	}
 	a.mu.Unlock()
 	return out, nil
@@ -266,6 +251,32 @@ func (a *Adapter) GetReferencePrice(
 	return exchange.ReferencePrice{
 		Price: price, UpdatedAt: time.UnixMilli(timestamp),
 	}, nil
+}
+
+func parseQuote(raw string) shared.Decimal {
+	value, err := shared.ParseDecimal(raw)
+	if err != nil {
+		return shared.Zero()
+	}
+	return value
+}
+
+func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (execution.MarketQuote, error) {
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/market/ticker", url.Values{"instId": []string{symbol.String()}}, nil, false)
+	if err != nil {
+		return execution.MarketQuote{}, err
+	}
+	var rows []struct {
+		Bid  string `json:"bidPx"`
+		Ask  string `json:"askPx"`
+		Last string `json:"last"`
+		TS   string `json:"ts"`
+	}
+	if err := json.Unmarshal(data, &rows); err != nil || len(rows) != 1 {
+		return execution.MarketQuote{}, rejected("decode quote", err)
+	}
+	ms, _ := strconv.ParseInt(rows[0].TS, 10, 64)
+	return execution.MarketQuote{Bid: parseQuote(rows[0].Bid), Ask: parseQuote(rows[0].Ask), Last: parseQuote(rows[0].Last), SourceTime: time.UnixMilli(ms).UTC()}, nil
 }
 
 func (a *Adapter) instrument(symbol string) (exchange.Instrument, error) {
@@ -457,8 +468,8 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			return nil, err
 		}
 		position := exchange.Position{
-			ExchangeAccountID: a.config.ExchangeAccountID,
-			Symbol:            row.InstID, PositionSide: exchange.PositionSideNet,
+			TradingAccountID: a.config.TradingAccountID,
+			ExchangeSymbol:   row.InstID, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millisString(row.UTime),
 		}
@@ -531,11 +542,12 @@ func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) 
 
 func (a *Adapter) GetOrder(
 	ctx context.Context,
-	symbol string,
+	symbol shared.ExchangeSymbol,
 	clientOrderID string,
 ) (exchange.Order, error) {
+	symbolValue := symbol.String()
 	data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/order", url.Values{
-		"instId":  []string{symbol},
+		"instId":  []string{symbolValue},
 		"clOrdId": []string{clientOrderID},
 	}, nil, true)
 	if err != nil {
@@ -578,12 +590,12 @@ func (a *Adapter) PlaceOrder(
 	if err := validateRequest(request, a.config.MarketType); err != nil {
 		return exchange.Order{}, err
 	}
-	quantity, err := a.toExchangeQuantity(request.Symbol, request.Quantity)
+	quantity, err := a.toExchangeQuantity(request.ExchangeSymbol, request.Quantity)
 	if err != nil {
 		return exchange.Order{}, err
 	}
 	body := map[string]string{
-		"instId": request.Symbol, "clOrdId": request.ClientOrderID,
+		"instId": request.ExchangeSymbol, "clOrdId": request.ClientOrderID,
 		"tdMode": "cash", "side": strings.ToLower(string(request.Side)),
 		"ordType": strings.ToLower(string(request.OrderType)),
 		"sz":      quantity.String(),
@@ -620,7 +632,7 @@ func (a *Adapter) PlaceOrder(
 	return exchange.Order{
 		ExchangeOrderID: payload[0].OrdID,
 		ClientOrderID:   request.ClientOrderID,
-		Symbol:          request.Symbol,
+		ExchangeSymbol:  request.ExchangeSymbol,
 		OrderType:       request.OrderType,
 		TimeInForce:     request.NativeTimeInForce(),
 		Side:            request.Side,
@@ -635,11 +647,12 @@ func (a *Adapter) PlaceOrder(
 
 func (a *Adapter) CancelOrder(
 	ctx context.Context,
-	symbol string,
+	symbol shared.ExchangeSymbol,
 	clientOrderID string,
 ) (exchange.Order, error) {
+	symbolValue := symbol.String()
 	data, err := a.request(ctx, http.MethodPost, "/api/v5/trade/cancel-order", nil, map[string]string{
-		"instId": symbol, "clOrdId": clientOrderID,
+		"instId": symbolValue, "clOrdId": clientOrderID,
 	}, true)
 	if err != nil {
 		return exchange.Order{}, err
@@ -675,14 +688,15 @@ type fillPayload struct {
 
 func (a *Adapter) ListRecentFills(
 	ctx context.Context,
-	symbol string,
+	symbol shared.ExchangeSymbol,
 	cursor string,
 ) ([]exchange.Fill, string, error) {
-	if strings.TrimSpace(symbol) == "" {
+	symbolValue := symbol.String()
+	if strings.TrimSpace(symbolValue) == "" {
 		return nil, cursor, rejected("symbol is required to list OKX fills", nil)
 	}
 	const pageSize = 100
-	payload, err := a.fillPage(ctx, symbol, "before", cursor, pageSize)
+	payload, err := a.fillPage(ctx, symbolValue, "before", cursor, pageSize)
 	if err != nil {
 		return nil, cursor, err
 	}
@@ -697,7 +711,7 @@ func (a *Adapter) ListRecentFills(
 			(cursor != "" && compareBillID(oldest, cursor) <= 0) {
 			break
 		}
-		nextPage, pageErr := a.fillPage(ctx, symbol, "after", oldest, pageSize)
+		nextPage, pageErr := a.fillPage(ctx, symbolValue, "after", oldest, pageSize)
 		if pageErr != nil {
 			return nil, cursor, pageErr
 		}
@@ -763,24 +777,25 @@ func compareBillID(left string, right string) int {
 
 func (a *Adapter) SetLeverage(
 	ctx context.Context,
-	symbol string,
+	symbol shared.ExchangeSymbol,
 	leverage shared.Decimal,
 ) error {
+	symbolValue := symbol.String()
 	if a.config.MarketType != exchange.MarketTypeSwap ||
-		strings.TrimSpace(symbol) == "" ||
+		strings.TrimSpace(symbolValue) == "" ||
 		leverage.Cmp(shared.Zero()) <= 0 ||
 		strings.ContainsAny(leverage.String(), "./") {
 		return rejected("positive integer SWAP leverage is required", nil)
 	}
 	_, err := a.request(ctx, http.MethodPost, "/api/v5/account/set-leverage", nil, map[string]string{
-		"instId": symbol, "lever": leverage.String(), "mgnMode": "cross", "posSide": "net",
+		"instId": symbolValue, "lever": leverage.String(), "mgnMode": "cross", "posSide": "net",
 	}, true)
 	return err
 }
 
 func (a *Adapter) SetMarginMode(
 	_ context.Context,
-	_ string,
+	_ shared.ExchangeSymbol,
 	mode exchange.MarginMode,
 ) error {
 	if a.config.MarketType != exchange.MarketTypeSwap || mode != exchange.MarginModeCross {
@@ -842,7 +857,7 @@ func (a *Adapter) order(row orderPayload) (exchange.Order, error) {
 	}
 	return exchange.Order{
 		ExchangeOrderID: row.OrdID, ClientOrderID: row.ClOrdID,
-		Symbol: row.InstID, OrderType: orderType, TimeInForce: tif,
+		ExchangeSymbol: row.InstID, OrderType: orderType, TimeInForce: tif,
 		Side: exchange.Side(strings.ToUpper(row.Side)), PositionSide: positionSide,
 		Quantity: quantity, LimitPrice: limitPrice,
 		FilledQuantity: filled, AveragePrice: average,
@@ -882,7 +897,7 @@ func (a *Adapter) fill(row fillPayload) (exchange.Fill, error) {
 	}
 	return exchange.Fill{
 		ExchangeTradeID: row.TradeID, ExchangeOrderID: row.OrdID,
-		ClientOrderID: row.ClOrdID, Symbol: row.InstID,
+		ClientOrderID: row.ClOrdID, ExchangeSymbol: row.InstID,
 		Side: exchange.Side(strings.ToUpper(row.Side)), PositionSide: positionSide,
 		Quantity: quantity, Price: price, Fee: fee.Abs(), FeeAsset: row.FeeCcy,
 		RealizedPnL: pnl, SettlementAsset: a.config.SettlementAsset,
@@ -892,7 +907,7 @@ func (a *Adapter) fill(row fillPayload) (exchange.Fill, error) {
 
 func validateRequest(request exchange.OrderRequest, market exchange.MarketType) error {
 	if strings.TrimSpace(request.ClientOrderID) == "" ||
-		strings.TrimSpace(request.Symbol) == "" ||
+		strings.TrimSpace(request.ExchangeSymbol) == "" ||
 		!request.Side.Valid() ||
 		request.Quantity.Cmp(shared.Zero()) <= 0 {
 		return rejected("invalid order request", nil)

@@ -17,20 +17,24 @@ import (
 
 type FillOrigin string
 
+var ErrDuplicateFill = errors.New("trade: duplicate fill")
+
 const (
 	OriginPrivateSocket FillOrigin = "private_stream"
 	OriginRESTSnapshot  FillOrigin = "rest_sync"
+	OriginPaperMatcher  FillOrigin = "paper_matcher"
 )
 
 type Source struct {
-	SpaceID           string
-	ExchangeAccountID string
-	Kind              FillOrigin
+	SpaceID          string
+	TradingAccountID string
+	Kind             FillOrigin
 }
 
 type Reducer struct {
-	Store *store.Store
-	Now   func() time.Time
+	Store   *store.Store
+	Now     func() time.Time
+	Enqueue func(string)
 }
 
 func (r *Reducer) ConfirmCancel(
@@ -89,72 +93,117 @@ func (r *Reducer) ApplyFill(
 	}
 
 	applied := false
+	duplicate := false
 	err := r.Store.Transaction(ctx, func(tx *store.Tx) error {
 		record, err := tx.FindOrderForFill(
 			source.SpaceID,
-			source.ExchangeAccountID,
+			source.TradingAccountID,
 			fill.ClientOrderID,
 			fill.ExchangeOrderID,
-			fill.Symbol,
+			fill.ExchangeSymbol,
 		)
 		if err != nil {
 			return err
 		}
-		if fill.ExchangeOrderID != "" && record.ExchangeOrderID == "" {
-			record.ExchangeOrderID = fill.ExchangeOrderID
-		}
-		fillID := canonicalFillID(source.ExchangeAccountID, fill)
-		inserted, err := tx.InsertFill(store.FillRecord{
-			SpaceID: source.SpaceID, FillID: fillID,
-			ExchangeTradeID: fill.ExchangeTradeID, OrderID: record.OrderID,
-			ExchangeOrderID:   fill.ExchangeOrderID,
-			ExchangeAccountID: source.ExchangeAccountID,
-			Exchange:          record.Exchange, MarketType: record.MarketType,
-			Symbol: fill.Symbol, Side: string(fill.Side),
-			PositionSide: string(fill.PositionSide), Price: fill.Price.String(),
-			Quantity: fill.Quantity.String(), Fee: fill.Fee.String(),
-			FeeAsset: fill.FeeAsset, SettlementAsset: fill.SettlementAsset,
-			RealizedPnL: fill.RealizedPnL.String(), Role: fill.LiquidityRole,
-			TradedAt: fill.TradedAt.UnixMilli(),
-		})
-		if err != nil || !inserted {
-			return err
-		}
-
-		instrument, err := tx.GetInstrument(record.Exchange, record.MarketType, record.Symbol)
-		if err != nil {
-			return err
-		}
-		expectedVersion := record.Version
-		priceTick, err := shared.ParseDecimal(instrument.PriceTick)
-		if err != nil {
-			return fmt.Errorf("trade: corrupted instrument price tick")
-		}
-		if err := applyOrderFill(&record, fillID, fill, priceTick.Scale()); err != nil {
-			return err
-		}
-		if order.State(record.State).Terminal() && record.FinishedAt == 0 {
-			record.FinishedAt = fill.TradedAt.UnixMilli()
-		}
-		if _, err := consumeReservation(&record, fill); err != nil {
-			return err
-		}
-		if _, err := takeUnusedReservation(&record); err != nil {
-			return err
-		}
-		if record.MarketType == string(exchange.MarketTypeSwap) {
-			if err := projectSwapPosition(tx, record, fill, priceTick.Scale()); err != nil {
-				return err
+		if err := r.applyFillTx(ctx, tx, record, fill, source); err != nil {
+			if errors.Is(err, ErrDuplicateFill) {
+				duplicate = true
+				return nil
 			}
-		}
-		if err := tx.UpdateOrder(record, expectedVersion); err != nil {
 			return err
 		}
-		applied = true
+		applied = !duplicate
 		return nil
 	})
 	recordFillResult(source.Kind, applied, err)
+	if err == nil && applied && r.Enqueue != nil {
+		r.Enqueue(source.TradingAccountID)
+	}
 	return applied, err
+}
+
+// ApplyFillToOrderTx is the transaction-aware entry point used by the paper
+// matcher. The matcher owns the SQLite transaction and therefore must not
+// call ApplyFill, which would attempt to open a nested transaction on the
+// single-connection store.
+func (r *Reducer) ApplyFillToOrderTx(
+	ctx context.Context,
+	tx *store.Tx,
+	record store.OrderRecord,
+	fill exchange.Fill,
+	source Source,
+) error {
+	if err := validateFillInput(r, fill, source); err != nil {
+		return err
+	}
+	return r.applyFillTx(ctx, tx, record, fill, source)
+}
+
+func (r *Reducer) applyFillTx(
+	_ context.Context,
+	tx *store.Tx,
+	record store.OrderRecord,
+	fill exchange.Fill,
+	source Source,
+) error {
+	if tx == nil {
+		return errors.New("trade: Fill reducer transaction is required")
+	}
+	if fill.ExchangeOrderID != "" && record.ExchangeOrderID == "" {
+		record.ExchangeOrderID = fill.ExchangeOrderID
+	}
+	fillID := canonicalFillID(source.TradingAccountID, fill)
+	inserted, err := tx.InsertFill(store.FillRecord{
+		SpaceID: source.SpaceID, FillID: fillID,
+		ExchangeTradeID: fill.ExchangeTradeID, OrderID: record.OrderID,
+		ExchangeOrderID:  fill.ExchangeOrderID,
+		TradingAccountID: source.TradingAccountID,
+		Exchange:         record.Exchange, MarketType: record.MarketType,
+		InstrumentID: record.InstrumentID, ExchangeSymbol: fill.ExchangeSymbol,
+		Side:         string(fill.Side),
+		PositionSide: string(fill.PositionSide), Price: fill.Price.String(),
+		Quantity: fill.Quantity.String(), Fee: fill.Fee.String(),
+		FeeAsset: fill.FeeAsset, SettlementAsset: fill.SettlementAsset,
+		RealizedPnL: fill.RealizedPnL.String(), Role: fill.LiquidityRole,
+		TradedAt: fill.TradedAt.UnixMilli(),
+	})
+	if err != nil || !inserted {
+		if err == nil && !inserted {
+			return ErrDuplicateFill
+		}
+		return err
+	}
+	instrument, err := tx.GetInstrumentByIDForAccount(source.SpaceID, source.TradingAccountID, record.InstrumentID)
+	if err != nil {
+		return err
+	}
+	priceTick, err := shared.ParseDecimal(instrument.PriceTick)
+	if err != nil {
+		return fmt.Errorf("trade: corrupted instrument price tick")
+	}
+	expectedVersion := record.Version
+	if source.Kind == OriginPaperMatcher {
+		executionPrice := fill.Price.String()
+		record.PaperExecutionPrice = &executionPrice
+	}
+	if err := applyOrderFill(&record, fillID, fill, priceTick.Scale()); err != nil {
+		return err
+	}
+	if order.State(record.State).Terminal() && record.FinishedAt == 0 {
+		record.FinishedAt = fill.TradedAt.UnixMilli()
+	}
+	if _, err := consumeReservation(&record, fill); err != nil {
+		return err
+	}
+	if _, err := takeUnusedReservation(&record); err != nil {
+		return err
+	}
+	if record.MarketType == string(exchange.MarketTypeSwap) {
+		if err := projectSwapPosition(tx, record, fill, priceTick.Scale()); err != nil {
+			return err
+		}
+	}
+	return tx.UpdateOrder(record, expectedVersion)
 }
 
 func validateFillInput(r *Reducer, fill exchange.Fill, source Source) error {
@@ -162,12 +211,12 @@ func validateFillInput(r *Reducer, fill exchange.Fill, source Source) error {
 		return errors.New("trade: Fill reducer store is required")
 	}
 	if strings.TrimSpace(source.SpaceID) == "" ||
-		strings.TrimSpace(source.ExchangeAccountID) == "" ||
-		(source.Kind != OriginPrivateSocket && source.Kind != OriginRESTSnapshot) {
+		strings.TrimSpace(source.TradingAccountID) == "" ||
+		(source.Kind != OriginPrivateSocket && source.Kind != OriginRESTSnapshot && source.Kind != OriginPaperMatcher) {
 		return errors.New("trade: invalid Fill source")
 	}
 	if strings.TrimSpace(fill.ExchangeTradeID) == "" ||
-		strings.TrimSpace(fill.Symbol) == "" ||
+		strings.TrimSpace(fill.ExchangeSymbol) == "" ||
 		(strings.TrimSpace(fill.ClientOrderID) == "" &&
 			strings.TrimSpace(fill.ExchangeOrderID) == "") ||
 		!fill.Side.Valid() ||
@@ -186,7 +235,7 @@ func validateFillInput(r *Reducer, fill exchange.Fill, source Source) error {
 }
 
 func canonicalFillID(accountID string, fill exchange.Fill) string {
-	return accountID + ":" + fill.Symbol + ":" + fill.ExchangeTradeID
+	return accountID + ":" + fill.ExchangeSymbol + ":" + fill.ExchangeTradeID
 }
 
 func applyOrderFill(
@@ -295,27 +344,35 @@ func projectSwapPosition(
 	fill exchange.Fill,
 	priceScale int,
 ) error {
+	exchangeSymbol := record.ExchangeSymbol
 	positionRecord, found, err := tx.GetPosition(
-		record.SpaceID,
-		record.ExchangeAccountID,
-		record.Symbol,
-		string(exchange.PositionSideNet),
+		record.SpaceID, record.TradingAccountID, exchangeSymbol, string(exchange.PositionSideNet),
 	)
 	if err != nil {
 		return err
 	}
 	if !found {
-		account, err := tx.GetExchangeAccount(record.SpaceID, record.ExchangeAccountID)
+		account, err := tx.GetTradingAccount(record.SpaceID, record.TradingAccountID)
 		if err != nil {
 			return err
 		}
-		leverage := account.LeverageSettings[record.Symbol]
+		leverage := account.LeverageSettings[record.InstrumentID]
+		if leverage == "" {
+			leverage = account.LeverageSettings[exchangeSymbol]
+		}
+		// A wildcard leverage setting is a generic account fallback. Keep the
+		// reducer independent of execution mode; Live and Paper both project the
+		// same Position facts from a normalized Fill.
+		if leverage == "" {
+			leverage = account.LeverageSettings["*"]
+		}
 		if leverage == "" {
 			return errors.New("trade: missing leverage for estimated Position")
 		}
 		positionRecord = store.PositionRecord{
-			SpaceID: record.SpaceID, ExchangeAccountID: record.ExchangeAccountID,
-			Symbol: record.Symbol, PositionSide: string(exchange.PositionSideNet),
+			SpaceID: record.SpaceID, TradingAccountID: record.TradingAccountID,
+			InstrumentID: record.InstrumentID, ExchangeSymbol: exchangeSymbol,
+			PositionSide:   string(exchange.PositionSideNet),
 			SignedQuantity: "0", EntryPrice: "0", MarkPrice: "0",
 			Leverage: leverage, MarginMode: account.MarginMode,
 			UsedMargin: "0", LiquidationPrice: "0",
@@ -348,6 +405,17 @@ func projectSwapPosition(
 	positionRecord.EntryPrice = estimatedEntry.String()
 	positionRecord.SignedQuantity = next.String()
 	positionRecord.MarkPrice = fill.Price.String()
+	if next.IsZero() {
+		positionRecord.UsedMargin = "0"
+		positionRecord.UnrealizedPnL = "0"
+	} else {
+		leverage, parseErr := shared.ParseDecimal(positionRecord.Leverage)
+		if parseErr != nil || leverage.Cmp(shared.Zero()) <= 0 {
+			return errors.New("trade: corrupted Position leverage")
+		}
+		positionRecord.UsedMargin = next.Abs().Mul(fill.Price).Div(leverage).String()
+		positionRecord.UnrealizedPnL = fill.Price.Sub(estimatedEntry).Mul(next).String()
+	}
 	positionRecord.RealizedPnL = realizedPnL.Add(fill.RealizedPnL).String()
 	if fill.TradedAt.UnixMilli() > positionRecord.ExchangeUpdatedAt {
 		positionRecord.ExchangeUpdatedAt = fill.TradedAt.UnixMilli()

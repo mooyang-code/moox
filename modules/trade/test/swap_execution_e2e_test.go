@@ -49,7 +49,7 @@ func TestSwapNetCrossLeverageReduceOnlyAndRealizedPnL(t *testing.T) {
 
 	longRealized := realizedPnL(t, f.store, 3)
 	require.Equal(t, "10", longRealized.String())
-	account, err := f.store.GetExchangeAccountByID(ctx, testAccount)
+	account, err := f.store.GetTradingAccountByID(ctx, testAccount)
 	require.NoError(t, err)
 	require.Equal(t, string(exchange.MarginModeCross), account.MarginMode)
 	require.Equal(t, "10", account.LeverageSettings[testSymbol])
@@ -108,7 +108,7 @@ func realizedPnL(t *testing.T, tradeStore *store.Store, expected int64) shared.D
 	fills, total, err := tradeStore.ListFills(
 		context.Background(),
 		testSpace,
-		store.FillQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.FillQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, expected, total)

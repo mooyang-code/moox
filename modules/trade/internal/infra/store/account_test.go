@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCreateExchangeAccountValidatesAndCanonicalizesTypedJSON(t *testing.T) {
+func TestCreateTradingAccountValidatesAndCanonicalizesTypedJSON(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	account := testAccount()
@@ -15,7 +15,7 @@ func TestCreateExchangeAccountValidatesAndCanonicalizesTypedJSON(t *testing.T) {
 		"ETHUSDT": "5",
 		"BTCUSDT": "10.0",
 	}
-	account.Snapshot = ExchangeAccountSnapshot{
+	account.Snapshot = TradingAccountSnapshot{
 		Balances: []AssetBalance{
 			{Asset: "USDT", Available: "80", Locked: "20", Total: "100"},
 		},
@@ -28,16 +28,16 @@ func TestCreateExchangeAccountValidatesAndCanonicalizesTypedJSON(t *testing.T) {
 	}
 
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.CreateExchangeAccount(account)
+		return tx.CreateTradingAccount(account)
 	}))
 
 	var row struct {
 		Leverage string `gorm:"column:c_leverage_settings_json"`
 		Snapshot string `gorm:"column:c_snapshot_json"`
 	}
-	require.NoError(t, s.db.Table("t_exchange_accounts").
+	require.NoError(t, s.db.Table("t_trading_accounts").
 		Select("c_leverage_settings_json, c_snapshot_json").
-		Where("c_space_id = ? AND c_exchange_account_id = ?", account.SpaceID, account.ExchangeAccountID).
+		Where("c_space_id = ? AND c_trading_account_id = ?", account.SpaceID, account.TradingAccountID).
 		Take(&row).Error)
 	require.Equal(t, `{"BTCUSDT":"10","ETHUSDT":"5"}`, row.Leverage)
 	require.Equal(t,
@@ -46,26 +46,26 @@ func TestCreateExchangeAccountValidatesAndCanonicalizesTypedJSON(t *testing.T) {
 			`"maintenance_margin":"2","unrealized_pnl":"-1.5","exchange_updated_at":123}`,
 		row.Snapshot)
 
-	got, err := s.GetExchangeAccount(ctx, account.SpaceID, account.ExchangeAccountID)
+	got, err := s.GetTradingAccount(ctx, account.SpaceID, account.TradingAccountID)
 	require.NoError(t, err)
 	require.Equal(t, "10", got.LeverageSettings["BTCUSDT"])
 	require.Equal(t, "-1.5", got.Snapshot.UnrealizedPnL)
 }
 
-func TestCreateExchangeAccountRejectsMalformedTypedJSONValues(t *testing.T) {
+func TestCreateTradingAccountRejectsMalformedTypedJSONValues(t *testing.T) {
 	tests := []struct {
 		name   string
-		mutate func(*ExchangeAccountRecord)
+		mutate func(*TradingAccountRecord)
 	}{
 		{
 			name: "leverage",
-			mutate: func(account *ExchangeAccountRecord) {
+			mutate: func(account *TradingAccountRecord) {
 				account.LeverageSettings = LeverageSettings{"BTCUSDT": "many"}
 			},
 		},
 		{
 			name: "snapshot balance",
-			mutate: func(account *ExchangeAccountRecord) {
+			mutate: func(account *TradingAccountRecord) {
 				account.Snapshot.Balances = []AssetBalance{{
 					Asset: "USDT", Available: "not-a-number", Locked: "0", Total: "0",
 				}}
@@ -73,7 +73,7 @@ func TestCreateExchangeAccountRejectsMalformedTypedJSONValues(t *testing.T) {
 		},
 		{
 			name: "snapshot margin",
-			mutate: func(account *ExchangeAccountRecord) {
+			mutate: func(account *TradingAccountRecord) {
 				account.Snapshot.UsedMargin = "{}"
 			},
 		},
@@ -85,29 +85,29 @@ func TestCreateExchangeAccountRejectsMalformedTypedJSONValues(t *testing.T) {
 			tt.mutate(&account)
 
 			err := s.Transaction(context.Background(), func(tx *Tx) error {
-				return tx.CreateExchangeAccount(account)
+				return tx.CreateTradingAccount(account)
 			})
 			require.ErrorIs(t, err, ErrInvalidRecord)
 		})
 	}
 }
 
-func TestExchangeAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *testing.T) {
+func TestTradingAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	account := testAccount()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.CreateExchangeAccount(account)
+		return tx.CreateTradingAccount(account)
 	}))
 
-	staleConfig := ExchangeAccountConfiguration{
+	staleConfig := TradingAccountConfiguration{
 		Name: "renamed", CredentialSecretID: "secret-2",
 		SettlementAsset: "USDC", MarginMode: "CROSS", Status: "ENABLED",
 		SyncSymbols: []string{"BTCUSDT"},
 	}
-	syncState := ExchangeAccountSyncState{
+	syncState := TradingAccountSyncState{
 		Ready: true, LeverageSettings: LeverageSettings{"BTCUSDT": "5"},
-		Snapshot: ExchangeAccountSnapshot{
+		Snapshot: TradingAccountSnapshot{
 			Equity: "100", AvailableFunds: "80", UsedMargin: "20",
 			MaintenanceMargin: "2", UnrealizedPnL: "-1",
 			ExchangeUpdatedAt: 1000,
@@ -115,22 +115,22 @@ func TestExchangeAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *test
 		SnapshotSourceTime: 1000, LastSyncAt: 1001, LastReadyAt: 1001,
 	}
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpdateExchangeAccountSync("space-1", "account-1", syncState)
+		return tx.UpdateTradingAccountSync("space-1", "account-1", syncState)
 	}))
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpdateExchangeAccountConfiguration("space-1", "account-1", staleConfig)
+		return tx.UpdateTradingAccountConfiguration("space-1", "account-1", staleConfig)
 	}))
 	syncState.Ready = false
 	syncState.LastSyncAt = 1002
 	syncState.LastError = "disconnected"
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpdateExchangeAccountSync("space-1", "account-1", syncState)
+		return tx.UpdateTradingAccountSync("space-1", "account-1", syncState)
 	}))
 
-	got, err := s.GetExchangeAccount(ctx, "space-1", "account-1")
+	got, err := s.GetTradingAccount(ctx, "space-1", "account-1")
 	require.NoError(t, err)
 	require.Equal(t, "renamed", got.Name)
-	require.Equal(t, "secret-2", got.CredentialSecretID)
+	require.Empty(t, got.CredentialSecretID)
 	require.Equal(t, "USDC", got.SettlementAsset)
 	require.Equal(t, []string{"BTCUSDT"}, got.SyncSymbols)
 	require.False(t, got.Ready)
@@ -140,50 +140,50 @@ func TestExchangeAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *test
 	require.Equal(t, "disconnected", got.LastError)
 }
 
-func TestCreateExchangeAccountIsExplicitAndRejectsDuplicate(t *testing.T) {
+func TestCreateTradingAccountIsExplicitAndRejectsDuplicate(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	account := testAccount()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.CreateExchangeAccount(account)
+		return tx.CreateTradingAccount(account)
 	}))
 	err := s.Transaction(ctx, func(tx *Tx) error {
 		account.Status = "DISABLED"
-		return tx.CreateExchangeAccount(account)
+		return tx.CreateTradingAccount(account)
 	})
 	require.ErrorIs(t, err, ErrConflict)
 
-	got, err := s.GetExchangeAccount(ctx, account.SpaceID, account.ExchangeAccountID)
+	got, err := s.GetTradingAccount(ctx, account.SpaceID, account.TradingAccountID)
 	require.NoError(t, err)
 	require.Equal(t, "ENABLED", got.Status)
 }
 
-func TestExchangeAccountCredentialIsRequiredOnlyForLive(t *testing.T) {
+func TestTradingAccountCredentialIsRequiredOnlyForLive(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	paper := testAccount()
 	paper.CredentialSecretID = ""
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.CreateExchangeAccount(paper)
+		return tx.CreateTradingAccount(paper)
 	}))
 
 	live := testAccount()
-	live.ExchangeAccountID = "account-live"
+	live.TradingAccountID = "account-live"
 	live.Name = "live"
 	live.ExecutionMode = "LIVE"
 	live.Environment = "TESTNET"
 	live.CredentialSecretID = ""
 	err := s.Transaction(ctx, func(tx *Tx) error {
-		return tx.CreateExchangeAccount(live)
+		return tx.CreateTradingAccount(live)
 	})
 	require.ErrorIs(t, err, ErrInvalidRecord)
 }
 
-func TestExchangeAccountSettlementAssetCannotChangeWhileMember(t *testing.T) {
+func TestTradingAccountSettlementAssetCannotChangeWhileMember(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateExchangeAccount(testAccount()); err != nil {
+		if err := tx.CreateTradingAccount(testAccount()); err != nil {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
@@ -195,15 +195,15 @@ func TestExchangeAccountSettlementAssetCannotChangeWhileMember(t *testing.T) {
 		}
 		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "account-1", Enabled: true,
+			TradingAccountID: "account-1", Enabled: true,
 		})
 	}))
 
 	err := s.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpdateExchangeAccountConfiguration(
+		return tx.UpdateTradingAccountConfiguration(
 			"space-1",
 			"account-1",
-			ExchangeAccountConfiguration{
+			TradingAccountConfiguration{
 				Name: "main", CredentialSecretID: "secret-1",
 				SettlementAsset: "USDC", Status: "ENABLED",
 			},
@@ -213,9 +213,9 @@ func TestExchangeAccountSettlementAssetCannotChangeWhileMember(t *testing.T) {
 	require.ErrorIs(t, err, ErrConflict)
 }
 
-func testAccount() ExchangeAccountRecord {
-	return ExchangeAccountRecord{
-		SpaceID: "space-1", ExchangeAccountID: "account-1", Name: "main",
+func testAccount() TradingAccountRecord {
+	return TradingAccountRecord{
+		SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
 		Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
 		Environment:        "PAPER",
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",

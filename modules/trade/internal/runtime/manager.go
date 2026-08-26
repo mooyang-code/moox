@@ -8,13 +8,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
 type AccountSource interface {
-	ListEnabledExchangeAccounts(context.Context) ([]store.ExchangeAccountRecord, error)
+	ListEnabledTradingAccounts(context.Context) ([]store.TradingAccountRecord, error)
 }
 
 type ManagedSession interface {
@@ -22,7 +23,7 @@ type ManagedSession interface {
 	Ready() bool
 }
 
-type SessionFactory func(store.ExchangeAccountRecord) (ManagedSession, error)
+type SessionFactory func(store.TradingAccountRecord) (ManagedSession, error)
 
 type SessionSnapshot struct {
 	Enabled      int
@@ -48,7 +49,7 @@ type Manager struct {
 type managedEntry struct {
 	session  ManagedSession
 	cancel   context.CancelFunc
-	account  store.ExchangeAccountRecord
+	account  store.TradingAccountRecord
 	done     chan struct{}
 	stopping bool
 }
@@ -95,14 +96,14 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 }
 
-func (m *Manager) Ready(exchangeAccountID string) bool {
+func (m *Manager) Ready(tradingAccountID string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	entry := m.sessions[exchangeAccountID]
+	entry := m.sessions[tradingAccountID]
 	return entry != nil && !entry.stopping && entry.session.Ready()
 }
 
-func (m *Manager) ReadyFor(account exchangeaccount.Account) bool {
+func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	entry := m.sessions[account.ID]
@@ -113,23 +114,39 @@ func (m *Manager) ReadyFor(account exchangeaccount.Account) bool {
 	for symbol, value := range account.LeverageSettings {
 		leverage[symbol] = value.String()
 	}
-	current := store.ExchangeAccountRecord{
-		SpaceID: account.SpaceID, ExchangeAccountID: account.ID,
+	environment := string(account.Environment)
+	if account.ExecutionMode == exchange.ExecutionModePaper {
+		// Paper has no persisted live environment. Its market-data environment
+		// is derived at bind time, so do not compare the domain sentinel PAPER
+		// with the empty live-environment column.
+		environment = ""
+	}
+	current := store.TradingAccountRecord{
+		SpaceID: account.SpaceID, TradingAccountID: account.ID,
 		Exchange: string(account.Exchange), MarketType: string(account.MarketType),
 		ExecutionMode:      string(account.ExecutionMode),
-		Environment:        string(account.Environment),
+		Environment:        environment,
 		CredentialSecretID: account.CredentialSecretID,
 		SettlementAsset:    account.SettlementAsset, MarginMode: string(account.MarginMode),
 		Status:           string(account.Status),
 		SyncSymbols:      append([]string(nil), account.SyncSymbols...),
 		LeverageSettings: leverage,
 	}
+	if account.Paper != nil {
+		current.PaperConfig = &store.PaperAccountConfigRecord{
+			SpaceID: account.SpaceID, TradingAccountID: account.ID,
+			InitialBalance: account.Paper.InitialBalance.String(),
+			MakerFeeRate:   account.Paper.MakerFeeRate.String(),
+			TakerFeeRate:   account.Paper.TakerFeeRate.String(),
+			SlippageBPS:    account.Paper.SlippageBPS.String(),
+		}
+	}
 	return sameSessionConfig(entry.account, current)
 }
 
-func (m *Manager) Invalidate(exchangeAccountID string) {
+func (m *Manager) Invalidate(tradingAccountID string) {
 	m.mu.Lock()
-	entry := m.sessions[exchangeAccountID]
+	entry := m.sessions[tradingAccountID]
 	if entry != nil && !entry.stopping {
 		entry.stopping = true
 		entry.cancel()
@@ -137,10 +154,10 @@ func (m *Manager) Invalidate(exchangeAccountID string) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) Adapter(exchangeAccountID string) (exchange.Adapter, error) {
+func (m *Manager) Adapter(tradingAccountID string) (execution.ExecutionAdapter, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	entry := m.sessions[exchangeAccountID]
+	entry := m.sessions[tradingAccountID]
 	if entry == nil {
 		return nil, ErrSessionConfig
 	}
@@ -148,16 +165,44 @@ func (m *Manager) Adapter(exchangeAccountID string) (exchange.Adapter, error) {
 		return nil, ErrSessionConfig
 	}
 	source, ok := entry.session.(interface {
-		ExchangeAdapter() exchange.Adapter
+		ExecutionAdapter() execution.ExecutionAdapter
 	})
 	if !ok {
 		return nil, ErrSessionConfig
 	}
-	adapter := source.ExchangeAdapter()
+	adapter := source.ExecutionAdapter()
 	if adapter == nil {
 		return nil, ErrSessionConfig
 	}
 	return adapter, nil
+}
+
+func (m *Manager) Bundle(tradingAccountID string) (execution.ExecutionBundle, error) {
+	m.mu.RLock()
+	entry := m.sessions[tradingAccountID]
+	stopping := entry == nil || entry.stopping
+	var session ManagedSession
+	if entry != nil {
+		session = entry.session
+	}
+	m.mu.RUnlock()
+	if stopping {
+		return execution.ExecutionBundle{}, ErrSessionConfig
+	}
+	if source, ok := session.(interface {
+		ExecutionBundle() execution.ExecutionBundle
+	}); ok {
+		bundle := source.ExecutionBundle()
+		if bundle.Adapter == nil {
+			return execution.ExecutionBundle{}, ErrSessionConfig
+		}
+		return bundle, nil
+	}
+	adapter, err := m.Adapter(tradingAccountID)
+	if err != nil {
+		return execution.ExecutionBundle{}, err
+	}
+	return execution.ExecutionBundle{Adapter: adapter, ReservationPolicy: execution.LiveReservationPolicy{}}, nil
 }
 
 func (m *Manager) Snapshot() SessionSnapshot {
@@ -178,21 +223,21 @@ func (m *Manager) Snapshot() SessionSnapshot {
 }
 
 func (m *Manager) reconcile(ctx context.Context) error {
-	accounts, err := m.Accounts.ListEnabledExchangeAccounts(ctx)
+	accounts, err := m.Accounts.ListEnabledTradingAccounts(ctx)
 	if err != nil {
 		return err
 	}
-	wanted := make(map[string]store.ExchangeAccountRecord, len(accounts))
+	wanted := make(map[string]store.TradingAccountRecord, len(accounts))
 	configErrors := make([]string, 0)
 	for _, account := range accounts {
-		if _, duplicate := wanted[account.ExchangeAccountID]; duplicate {
+		if _, duplicate := wanted[account.TradingAccountID]; duplicate {
 			configErrors = append(
 				configErrors,
-				"duplicate enabled Exchange account ID "+account.ExchangeAccountID,
+				"duplicate enabled Exchange account ID "+account.TradingAccountID,
 			)
 			continue
 		}
-		wanted[account.ExchangeAccountID] = account
+		wanted[account.TradingAccountID] = account
 	}
 
 	m.mu.Lock()
@@ -253,11 +298,11 @@ func (m *Manager) reconcile(ctx context.Context) error {
 }
 
 func sameSessionConfig(
-	left store.ExchangeAccountRecord,
-	right store.ExchangeAccountRecord,
+	left store.TradingAccountRecord,
+	right store.TradingAccountRecord,
 ) bool {
 	return left.SpaceID == right.SpaceID &&
-		left.ExchangeAccountID == right.ExchangeAccountID &&
+		left.TradingAccountID == right.TradingAccountID &&
 		left.Exchange == right.Exchange &&
 		left.MarketType == right.MarketType &&
 		left.ExecutionMode == right.ExecutionMode &&
@@ -266,8 +311,21 @@ func sameSessionConfig(
 		left.SettlementAsset == right.SettlementAsset &&
 		left.MarginMode == right.MarginMode &&
 		left.Status == right.Status &&
-		reflect.DeepEqual(left.SyncSymbols, right.SyncSymbols) &&
-		reflect.DeepEqual(left.LeverageSettings, right.LeverageSettings)
+		equalStringSlices(left.SyncSymbols, right.SyncSymbols) &&
+		reflect.DeepEqual(left.LeverageSettings, right.LeverageSettings) &&
+		reflect.DeepEqual(left.PaperConfig, right.PaperConfig)
+}
+
+func equalStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) runSession(ctx context.Context, session ManagedSession) {

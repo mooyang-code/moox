@@ -24,15 +24,18 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 	`).Scan(&tables).Error)
 
 	want := []string{
-		"t_exchange_accounts",
-		"t_exchange_instruments",
-		"t_exchange_positions",
+		"t_trading_accounts",
+		"t_trade_instruments",
+		"t_trading_positions",
 		"t_logical_account_members",
 		"t_logical_account_targets",
 		"t_logical_accounts",
 		"t_operator_actions",
 		"t_order_fills",
 		"t_trade_orders",
+		"t_paper_account_configs",
+		"t_account_equity_points",
+		"t_logical_account_equity_points",
 	}
 	sort.Strings(want)
 	require.Equal(t, want, tables)
@@ -104,18 +107,18 @@ func TestAllSQLDefinesApprovedIdentityScopes(t *testing.T) {
 		table   string
 		columns []string
 	}{
-		{"t_exchange_accounts", []string{"c_space_id", "c_exchange_account_id"}},
-		{"t_exchange_accounts", []string{"c_space_id", "c_name"}},
-		{"t_exchange_instruments", []string{"c_exchange", "c_market_type", "c_symbol"}},
+		{"t_trading_accounts", []string{"c_space_id", "c_trading_account_id"}},
+		{"t_trading_accounts", []string{"c_space_id", "c_name"}},
+		{"t_trade_instruments", []string{"c_exchange", "c_environment", "c_market_type", "c_exchange_symbol"}},
 		{"t_trade_orders", []string{"c_space_id", "c_order_id"}},
-		{"t_trade_orders", []string{"c_space_id", "c_exchange_account_id", "c_client_order_id"}},
-		{"t_order_fills", []string{"c_space_id", "c_exchange_account_id", "c_symbol", "c_exchange_trade_id"}},
-		{"t_exchange_positions", []string{"c_space_id", "c_exchange_account_id", "c_symbol", "c_position_side"}},
+		{"t_trade_orders", []string{"c_space_id", "c_trading_account_id", "c_client_order_id"}},
+		{"t_order_fills", []string{"c_space_id", "c_trading_account_id", "c_exchange_symbol", "c_exchange_trade_id"}},
+		{"t_trading_positions", []string{"c_space_id", "c_trading_account_id", "c_exchange_symbol", "c_position_side"}},
 		{"t_logical_accounts", []string{"c_space_id", "c_logical_account_id"}},
 		{"t_logical_accounts", []string{"c_space_id", "c_name"}},
 		{"t_logical_accounts", []string{"c_space_id", "c_owner_runner_id"}},
-		{"t_logical_account_members", []string{"c_space_id", "c_logical_account_id", "c_exchange_account_id"}},
-		{"t_logical_account_members", []string{"c_space_id", "c_exchange_account_id"}},
+		{"t_logical_account_members", []string{"c_space_id", "c_logical_account_id", "c_trading_account_id"}},
+		{"t_logical_account_members", []string{"c_space_id", "c_trading_account_id"}},
 		{"t_logical_account_targets", []string{"c_space_id", "c_logical_account_id"}},
 		{"t_logical_account_targets", []string{"c_space_id", "c_target_id"}},
 		{"t_operator_actions", []string{"c_space_id", "c_action_id"}},
@@ -149,8 +152,8 @@ func TestInstrumentSchemaUsesApprovedSwapQuantityFields(t *testing.T) {
 func TestLogicalAccountSchemaKeepsSettlementAssetAndUsesAutomationState(t *testing.T) {
 	sql := AllSQL()
 	require.Contains(t, sql, "c_settlement_asset TEXT NOT NULL")
-	require.Contains(t, sql, "c_environment TEXT NOT NULL")
-	require.Contains(t, sql, "'PAPER', 'TESTNET', 'PRODUCTION'")
+	require.Contains(t, sql, "c_live_environment TEXT NOT NULL")
+	require.Contains(t, sql, "c_execution_mode = 'PAPER'")
 	require.Contains(t, sql, "c_automation_state TEXT NOT NULL")
 	require.NotContains(t, sql, "c_control_state")
 	require.NotContains(t, sql, "c_control_revision")

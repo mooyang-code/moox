@@ -30,11 +30,11 @@ func (s *targetOrderServiceStub) Place(
 	spec orderdomain.OrderSpec,
 ) (orderdomain.Order, error) {
 	s.specs = append(s.specs, spec)
-	if err := s.placeErrors[spec.ExchangeAccountID]; err != nil {
+	if err := s.placeErrors[spec.TradingAccountID]; err != nil {
 		return orderdomain.Order{}, err
 	}
 	return orderdomain.Order{
-		ID:   shared.OrderID("child-" + spec.ExchangeAccountID),
+		ID:   shared.OrderID("child-" + spec.TradingAccountID),
 		Spec: spec, State: orderdomain.Pending,
 	}, nil
 }
@@ -171,8 +171,8 @@ func TestTargetExecutorPausedOwnerReleaseCancelsOwnedOrderWithoutError(t *testin
 	}})
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "target-open",
-		ExchangeAccountID: "account-a", ClientOrderID: "target-open",
-		Exchange: "BINANCE", MarketType: "SWAP", Symbol: "BTCUSDT",
+		TradingAccountID: "account-a", ClientOrderID: "target-open",
+		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
 		Quantity: "1", ReferencePrice: "100", ReferencePriceAt: 2_000,
 		OwnerType: "TARGET", OwnerID: "target-current",
@@ -213,7 +213,7 @@ func TestTargetExecutorClosesOpposingBeforeOpening(t *testing.T) {
 	require.Equal(t, StatusConverging, result.Status)
 	require.Len(t, fixture.orders.specs, 1)
 	spec := fixture.orders.specs[0]
-	require.Equal(t, "account-a", spec.ExchangeAccountID)
+	require.Equal(t, "account-a", spec.TradingAccountID)
 	require.Equal(t, exchange.SideBuy, spec.Side)
 	require.Equal(t, "1", spec.Quantity.String())
 	require.True(t, spec.ReducePositionOnly)
@@ -235,7 +235,7 @@ func TestTargetExecutorReductionSelectsLargestPosition(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, fixture.orders.specs, 1)
 	spec := fixture.orders.specs[0]
-	require.Equal(t, "account-a", spec.ExchangeAccountID)
+	require.Equal(t, "account-a", spec.TradingAccountID)
 	require.Equal(t, exchange.SideSell, spec.Side)
 	require.Equal(t, "2", spec.Quantity.String())
 	require.True(t, spec.ReducePositionOnly)
@@ -256,8 +256,8 @@ func TestTargetExecutorIncreaseFallsThroughPriorityOnCapacity(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, fixture.orders.specs, 2)
-	require.Equal(t, "account-a", fixture.orders.specs[0].ExchangeAccountID)
-	require.Equal(t, "account-b", fixture.orders.specs[1].ExchangeAccountID)
+	require.Equal(t, "account-a", fixture.orders.specs[0].TradingAccountID)
+	require.Equal(t, "account-b", fixture.orders.specs[1].TradingAccountID)
 	require.Equal(t, []string{"child-account-b"}, fixture.orders.submitted)
 }
 
@@ -267,8 +267,8 @@ func TestTargetExecutorFullOmissionCancelsOldTargetBeforeClosing(t *testing.T) {
 	fixture.target(t, nil)
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "old-child",
-		ExchangeAccountID: "account-a", ClientOrderID: "old-child",
-		Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+		TradingAccountID: "account-a", ClientOrderID: "old-child",
+		ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 		PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "target-old",
 		LogicalAccountID: "logical-1", RunnerID: "runner-1",
@@ -290,8 +290,8 @@ func TestTargetExecutorPausesOnExternalOrderWithoutCancel(t *testing.T) {
 	fixture.target(t, nil)
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "external-order",
-		ExchangeAccountID: "account-a", ClientOrderID: "external-order",
-		ExchangeOrderID: "exchange-order", Symbol: "BTCUSDT",
+		TradingAccountID: "account-a", ClientOrderID: "external-order",
+		ExchangeOrderID: "exchange-order", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
 		Quantity: "1", ReferencePrice: "100",
 		OwnerType: "EXTERNAL", OwnerID: "exchange-order",
@@ -449,8 +449,8 @@ func TestTargetExecutorCancelsCurrentOrderWhenExposureBecomesUnmapped(t *testing
 	}})
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "current-child",
-		ExchangeAccountID: "account-a", ClientOrderID: "current-child",
-		Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+		TradingAccountID: "account-a", ClientOrderID: "current-child",
+		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "1",
 		ReferencePrice: "100", ReferencePriceAt: 2_000,
 		OwnerType: "TARGET", OwnerID: "target-current",
@@ -508,11 +508,11 @@ func newTargetFixture(t *testing.T, market exchange.MarketType) *targetFixture {
 		market: market, now: time.UnixMilli(2_000).UTC(),
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		for _, account := range []store.ExchangeAccountRecord{
+		for _, account := range []store.TradingAccountRecord{
 			fixture.account("account-a", "BINANCE"),
 			fixture.account("account-b", "OKX"),
 		} {
-			if err := tx.CreateExchangeAccount(account); err != nil {
+			if err := tx.CreateTradingAccount(account); err != nil {
 				return err
 			}
 		}
@@ -527,7 +527,7 @@ func newTargetFixture(t *testing.T, market exchange.MarketType) *targetFixture {
 		for index, accountID := range []string{"account-a", "account-b"} {
 			if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 				SpaceID: "space-1", LogicalAccountID: "logical-1",
-				ExchangeAccountID: accountID, Enabled: true, Priority: index + 1,
+				TradingAccountID: accountID, Enabled: true, Priority: index + 1,
 			}); err != nil {
 				return err
 			}
@@ -547,9 +547,9 @@ func newTargetFixture(t *testing.T, market exchange.MarketType) *targetFixture {
 func (f *targetFixture) account(
 	id string,
 	exchangeName string,
-) store.ExchangeAccountRecord {
-	return store.ExchangeAccountRecord{
-		SpaceID: "space-1", ExchangeAccountID: id, Name: id,
+) store.TradingAccountRecord {
+	return store.TradingAccountRecord{
+		SpaceID: "space-1", TradingAccountID: id, Name: id,
 		Exchange: exchangeName, MarketType: string(f.market),
 		ExecutionMode: "PAPER", Environment: "PAPER",
 		SettlementAsset: "USDT", MarginMode: map[bool]string{
@@ -559,7 +559,7 @@ func (f *targetFixture) account(
 		LeverageSettings: store.LeverageSettings{
 			"BTCUSDT": "5", "BTC-USDT-SWAP": "5",
 		},
-		Snapshot: store.ExchangeAccountSnapshot{
+		Snapshot: store.TradingAccountSnapshot{
 			AvailableFunds: "100000",
 			Balances: []store.AssetBalance{{
 				Asset: "USDT", Available: "100000", Total: "100000",
@@ -572,14 +572,14 @@ func (f *targetFixture) account(
 func (f *targetFixture) instruments() []store.InstrumentRecord {
 	values := []store.InstrumentRecord{
 		{
-			Exchange: "BINANCE", MarketType: string(f.market), Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: string(f.market), ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-" + string(f.market),
 			BaseAsset:    "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			ExchangeQuantityStep: "1", MinExchangeQuantity: "1",
 			PriceTick: "0.1", Status: "TRADING",
 		},
 		{
-			Exchange: "OKX", MarketType: string(f.market), Symbol: "BTC-USDT-SWAP",
+			Exchange: "OKX", MarketType: string(f.market), ExchangeSymbol: "BTC-USDT-SWAP",
 			InstrumentID: "BTC-USDT-" + string(f.market),
 			BaseAsset:    "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			ExchangeQuantityStep: "1", MinExchangeQuantity: "1",
@@ -620,8 +620,8 @@ func (f *targetFixture) position(
 	t.Helper()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", ExchangeAccountID: accountID,
-			Symbol: symbol, PositionSide: "NET", SignedQuantity: quantity,
+			SpaceID: "space-1", TradingAccountID: accountID,
+			ExchangeSymbol: symbol, PositionSide: "NET", SignedQuantity: quantity,
 			EntryPrice: "100", MarkPrice: "100", Leverage: "5",
 			MarginMode: "CROSS", ExchangeUpdatedAt: 1_900,
 		})
@@ -637,12 +637,12 @@ func (f *targetFixture) order(t *testing.T, record store.OrderRecord) {
 
 func (f *targetFixture) setReady(t *testing.T, accountID string, ready bool) {
 	t.Helper()
-	account, err := f.store.GetExchangeAccountByID(context.Background(), accountID)
+	account, err := f.store.GetTradingAccountByID(context.Background(), accountID)
 	require.NoError(t, err)
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateExchangeAccountSync(
-			account.SpaceID, account.ExchangeAccountID,
-			store.ExchangeAccountSyncState{
+		return tx.UpdateTradingAccountSync(
+			account.SpaceID, account.TradingAccountID,
+			store.TradingAccountSyncState{
 				Ready: ready, Snapshot: account.Snapshot,
 				SnapshotSourceTime: account.SnapshotSourceTime,
 				LastSyncAt:         f.now.UnixMilli(),
@@ -658,16 +658,16 @@ func (f *targetFixture) setBalance(
 	total string,
 ) {
 	t.Helper()
-	account, err := f.store.GetExchangeAccountByID(context.Background(), accountID)
+	account, err := f.store.GetTradingAccountByID(context.Background(), accountID)
 	require.NoError(t, err)
 	account.Snapshot.Balances = append(account.Snapshot.Balances, store.AssetBalance{
 		Asset: asset, Available: total, Total: total,
 	})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateExchangeAccountSync(
+		return tx.UpdateTradingAccountSync(
 			account.SpaceID,
-			account.ExchangeAccountID,
-			store.ExchangeAccountSyncState{
+			account.TradingAccountID,
+			store.TradingAccountSyncState{
 				Ready: account.Ready, Snapshot: account.Snapshot,
 				SnapshotSourceTime: account.SnapshotSourceTime,
 				LastSyncAt:         account.LastSyncAt,

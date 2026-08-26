@@ -40,7 +40,7 @@ func TestSubmitFailuresRemainUnknownAndRecoverByClientIDWithoutReplace(t *testin
 			fake.placeErr = nil
 			fake.orders[unknown.Spec.ClientOrderID] = exchange.Order{
 				ExchangeOrderID: "accepted-despite-response-loss",
-				ClientOrderID:   unknown.Spec.ClientOrderID, Symbol: testSymbol,
+				ClientOrderID:   unknown.Spec.ClientOrderID, ExchangeSymbol: testSymbol,
 				OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 				Quantity: unknown.Spec.Quantity, Status: exchange.OrderStatusOpen,
 				CreatedAt: testNow, UpdatedAt: testNow,
@@ -65,7 +65,7 @@ func TestCanceledOrderAcceptsLateFillAndDeduplicatesIt(t *testing.T) {
 	require.Equal(t, orderdomain.Open, open.State)
 	canceled, err := f.orders.Cancel(ctx, testSpace, string(open.ID))
 	require.NoError(t, err)
-	require.Equal(t, orderdomain.Canceling, canceled.State)
+	require.Equal(t, orderdomain.Canceled, canceled.State)
 	canceled, err = f.orders.Get(ctx, testSpace, string(open.ID))
 	require.NoError(t, err)
 	require.Equal(t, orderdomain.Canceled, canceled.State)
@@ -85,7 +85,7 @@ func TestCanceledOrderAcceptsLateFillAndDeduplicatesIt(t *testing.T) {
 	_, total, err := f.store.ListFills(
 		ctx,
 		testSpace,
-		store.FillQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.FillQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
@@ -102,7 +102,7 @@ func TestCanceledOrderAcceptsLateFillAndDeduplicatesIt(t *testing.T) {
 
 func consumerSource() consumer.Source {
 	return consumer.Source{
-		SpaceID: testSpace, ExchangeAccountID: testAccount,
+		SpaceID: testSpace, TradingAccountID: testAccount,
 		Kind: consumer.OriginPrivateSocket,
 	}
 }
