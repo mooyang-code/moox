@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const viewsRoot = path.resolve(__dirname, "../src/views");
+const staticMenuSource = fs.readFileSync(path.resolve(__dirname, "../src/api/modules/system/static-menu.ts"), "utf8");
 const read = (relativePath: string) => {
   const filePath = path.join(viewsRoot, relativePath);
   const source = fs.readFileSync(filePath, "utf8");
@@ -43,12 +44,12 @@ describe("page layout standards", () => {
     const spaces = read("settings/spaces/index.vue");
     const secrets = read("settings/secrets/index.vue");
     const accounts = read("trading/account-overview/account-overview.vue");
+    const accountWorkbench = read("trading/account-workbench/index.vue");
 
     expectMargin(subjects, ".page-head", "margin-bottom", 8);
     expectMargin(spaces, ".page-head", "margin-bottom", 8);
     expect(spaces).toMatch(/\.page-head h2\s*\{[\s\S]*?margin:\s*0;/);
     expectMargin(accounts, ".page-head", "margin-bottom", 8);
-    expect(accounts).toContain("<h2>交易账户</h2>");
     expect(accounts).toContain("创建账户");
     expect(accounts).toContain('title="操作"');
     expect(accounts).toContain('title="最近同步"');
@@ -57,6 +58,15 @@ describe("page layout standards", () => {
     expect(accounts).not.toContain("Readiness");
     expect(accounts).not.toContain("创建 Paper 模拟");
     expect(accounts).not.toContain("创建 Live 账户");
+    expect(accounts).not.toContain("<h2>交易账户</h2>");
+    expect(accounts).not.toContain("PageTitleTabs");
+    expect(accountWorkbench).toContain('label: "交易账户"');
+    expect(accountWorkbench).toContain('label: "策略账户"');
+    expect(accountWorkbench).toContain('class="trading-account-content"');
+    expect(accountWorkbench).toContain(':embedded="true"');
+    expect(staticMenuSource.match(/\/trading\/accounts/g)?.length).toBe(2);
+    expect(staticMenuSource).not.toContain('"0504"');
+    expect(staticMenuSource).not.toContain("/trading/logical-accounts");
 
     expect(secrets).not.toContain('class="filter-bar"');
     expect(secrets.indexOf('placeholder="搜索名称或描述"')).toBeLessThan(secrets.indexOf('placeholder="分类"'));

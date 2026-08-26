@@ -110,7 +110,8 @@ describe("trading account workbench", () => {
   it("keeps the account page on canonical IDs and exposes explicit navigation", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "account-overview.vue"), "utf8");
     expect(source).toContain("query: { trading_account_id: account.trading_account_id }");
-    expect(source).toContain("query: { logical_account_id: createdLogicalAccountId.value }");
+    expect(source).toContain('query: { view: "strategy", logical_account_id: createdLogicalAccountId.value }');
+    expect(source).toContain('query: { view: "strategy", logical_account_id: linkedLogicalAccount.value.logical_account_id }');
     expect(source).not.toContain("exchange_account_id");
   });
 
@@ -132,6 +133,10 @@ describe("trading account workbench", () => {
     expect(source).toContain('<a-table-column title="运行环境" :width="140">');
     expect(source).toContain('<a-table-column title="资金" :width="180">');
     expect(source).toContain('<a-table-column title="错误" :width="200" ellipsis>');
+    expect(source).toContain('aria-label="账户类型"');
+    expect(source).toContain('<a-radio-group :model-value="activeMode" type="button" @change="onModeChange">');
+    expect(source).not.toContain("PageTitleTabs");
+    expect(source).not.toContain("<h2>交易账户</h2>");
     expect(source).not.toContain('title="Exchange / 市场"');
     expect(source).not.toContain("创建 Paper 模拟");
   });

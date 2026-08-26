@@ -71,6 +71,25 @@ async function mockTradeGateway(route: Route) {
     const accounts = executionMode === 1 ? [paperAccount] : executionMode === 2 ? [liveAccount] : [paperAccount, liveAccount];
     return route.fulfill({ json: ok({ accounts, page_result: { page: 1, size: 20, total: accounts.length } }) });
   }
+  if (method === "ListLogicalAccounts") {
+    return route.fulfill({
+      json: ok({
+        logical_accounts: [
+          {
+            logical_account_id: "la-paper-1",
+            name: "动量策略账户",
+            execution_mode: 1,
+            market_type: 1,
+            settlement_asset: "USDT",
+            automation_state: "ACTIVE",
+            ready: true,
+            members: [{ trading_account_id: "ta-paper-1" }]
+          }
+        ],
+        page_result: { page: 1, size: 200, total: 1 }
+      })
+    });
+  }
   if (method === "GetExecutionCapabilities") {
     return route.fulfill({
       json: ok({
@@ -125,7 +144,7 @@ test.beforeEach(async ({ page }) => {
 
 test("renders Paper and Live accounts and keeps their fields isolated", async ({ page }) => {
   await page.goto("/#/trading/accounts");
-  await expect(page.getByRole("heading", { name: "交易账户" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "交易账户", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("Paper Demo", { exact: true })).toBeVisible();
   await expect(page.getByText("Live Testnet", { exact: true })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "账户类型" })).toBeVisible();
@@ -144,14 +163,15 @@ test("uses account type tabs and server-side execution mode filters", async ({ p
   await expect.poll(() => accountListRequests.length).toBe(1);
   expect(accountListRequests[0]).not.toHaveProperty("execution_mode");
 
-  await page.getByRole("tab", { name: "真实账户", exact: true }).click();
+  const modeFilter = page.locator(".account-mode-filter");
+  await modeFilter.getByText("真实账户", { exact: true }).click();
   await expect(page).toHaveURL(/trading\/accounts\?mode=live/);
   await expect.poll(() => accountListRequests.length).toBe(2);
   expect(accountListRequests[1]).toMatchObject({ execution_mode: 2 });
   await expect(page.getByText("Live Testnet", { exact: true })).toBeVisible();
   await expect(page.getByText("Paper Demo", { exact: true })).toHaveCount(0);
 
-  await page.getByRole("tab", { name: "模拟账户", exact: true }).click();
+  await modeFilter.getByText("模拟账户", { exact: true }).click();
   await expect(page).toHaveURL(/trading\/accounts\?mode=paper/);
   await expect.poll(() => accountListRequests.length).toBe(3);
   expect(accountListRequests[2]).toMatchObject({ execution_mode: 1 });
@@ -161,7 +181,7 @@ test("uses account type tabs and server-side execution mode filters", async ({ p
 
 test("supports a simulated account deep link and preselects the matching creation mode", async ({ page }) => {
   await page.goto("/#/trading/accounts?mode=paper");
-  await expect(page.getByRole("tab", { name: "模拟账户", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator('.account-mode-filter input[type="radio"][value="paper"]')).toBeChecked();
   await expect.poll(() => accountListRequests.length).toBe(1);
   expect(accountListRequests[0]).toMatchObject({ execution_mode: 1 });
   await page.getByRole("button", { name: "创建账户" }).click();
@@ -171,7 +191,7 @@ test("supports a simulated account deep link and preselects the matching creatio
 test("surfaces sync warnings and canonical navigation without real orders", async ({ page }) => {
   await page.goto("/#/trading/accounts");
   await page.getByRole("button", { name: "同步" }).last().click();
-  await expect(page.getByText("symbol not found", { exact: true })).toBeVisible();
+  await expect(page.getByRole("alert").getByText("symbol not found", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "详情" }).last().click();
   await page.getByRole("button", { name: "查看持仓" }).click();
   await expect(page).toHaveURL(/trading\/positions.*trading_account_id=ta-live-1/);
@@ -179,6 +199,16 @@ test("surfaces sync warnings and canonical navigation without real orders", asyn
   await page.getByRole("button", { name: "详情" }).last().click();
   await page.getByRole("button", { name: "查看订单" }).click();
   await expect(page).toHaveURL(/trading\/orders.*trading_account_id=ta-live-1/);
+});
+
+test("交易账户详情可进入策略账户工作台", async ({ page }) => {
+  await page.goto("/#/trading/accounts");
+  await page.getByRole("button", { name: "详情" }).first().click();
+  const strategyLink = page.getByRole("button", { name: /动量策略账户/ });
+  await expect(strategyLink).toBeVisible();
+  await strategyLink.click();
+  await expect(page).toHaveURL(/trading\/accounts\?view=strategy&logical_account_id=la-paper-1/);
+  await expect(page.getByRole("tab", { name: "策略账户", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
 test("requires production confirmation and exposes the simulated account close capability", async ({ page }) => {

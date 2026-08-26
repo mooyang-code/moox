@@ -51,7 +51,7 @@ export default {
     ["collector-rules"]: "采集任务",
     ["collector-tasks"]: "任务实例",
     ["trading-accounts"]: "账户总览",
-    ["trading-logical-accounts"]: "逻辑账户",
+    ["trading-logical-accounts"]: "策略账户",
     ["trading-positions"]: "持仓详情",
     ["trading-orders"]: "交易明细",
     ["ops"]: "资源与运维",

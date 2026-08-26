@@ -180,14 +180,14 @@ test("paused Logical Account exposes pending FULL target and per-account flatten
       }
     })
   );
-  await page.goto("/#/trading/logical-accounts");
-  await page.getByRole("button", { name: "管理" }).click();
-  await expect(page.getByText("当前 FULL 目标 sequence 8 已保存但不会执行")).toBeVisible();
+  await page.goto("/#/trading/accounts?view=strategy&logical_account_id=logical-paper");
+  await expect(page.getByRole("tab", { name: "策略账户", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("当前完整目标序号 8 已保存但不会执行；恢复后会继续收敛。")).toBeVisible();
   await page.getByRole("button", { name: "逐账户清仓" }).click();
   const modal = page.locator(".arco-modal:visible").filter({ hasText: "逐账户清仓" });
   await modal.locator("input").nth(0).fill("flatten-1");
   await modal.locator("input").nth(1).fill("risk cleanup");
   await modal.getByRole("button", { name: "确定" }).click();
   await expect(page.getByText("0.2 (minimum quantity)")).toBeVisible();
-  await expect(page.getByText("PARTIAL").first()).toBeVisible();
+  await expect(page.getByText("部分完成").first()).toBeVisible();
 });

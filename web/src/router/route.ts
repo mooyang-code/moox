@@ -1,6 +1,8 @@
 import { HOME_PATH } from "@/config/index";
 import Layout from "@/layout/index.vue";
 
+type RedirectLocation = { query: Record<string, unknown> };
+
 export const staticRoutes = [
   {
     path: "/",
@@ -117,13 +119,16 @@ export const staticRoutes = [
       {
         path: "/trading/accounts",
         name: "trading-accounts",
-        component: () => import("@/views/trading/account-overview/account-overview.vue"),
+        component: () => import("@/views/trading/account-workbench/index.vue"),
         meta: { title: "trading-accounts" }
       },
       {
         path: "/trading/logical-accounts",
         name: "trading-logical-accounts",
-        component: () => import("@/views/trading/logical-accounts/index.vue"),
+        redirect: (to: RedirectLocation) => ({
+          path: "/trading/accounts",
+          query: { ...to.query, mode: undefined, view: "strategy" }
+        }),
         meta: { title: "trading-logical-accounts" }
       },
       {

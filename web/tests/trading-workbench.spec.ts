@@ -2,6 +2,8 @@ import { expect, test, type Route } from "@playwright/test";
 import { installE2ESession } from "./e2e-session";
 
 const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: "success" }, ...data });
+const tradingAccountListRequests: Record<string, unknown>[] = [];
+const logicalAccountListRequests: Record<string, unknown>[] = [];
 
 const account = {
   trading_account_id: "ta-demo-1",
@@ -58,8 +60,10 @@ async function mockTradeGateway(route: Route) {
         json: ok({ user_info: { user_id: "e2e", username: "reviewer", nickname: "Reviewer", role: 3, status: 1 } })
       });
     case "ListTradingAccounts":
+      tradingAccountListRequests.push((route.request().postDataJSON?.() || {}) as Record<string, unknown>);
       return route.fulfill({ json: ok({ accounts: [account], page_result: { page: 1, size: 200, total: 1 } }) });
     case "ListLogicalAccounts":
+      logicalAccountListRequests.push((route.request().postDataJSON?.() || {}) as Record<string, unknown>);
       return route.fulfill({ json: ok({ logical_accounts: [logicalAccount], page_result: { page: 1, size: 20, total: 1 } }) });
     case "GetLogicalAccount":
       return route.fulfill({ json: ok({ logical_account: logicalAccount }) });
@@ -154,17 +158,45 @@ async function mockTradeGateway(route: Route) {
 }
 
 test.beforeEach(async ({ page }) => {
+  tradingAccountListRequests.length = 0;
+  logicalAccountListRequests.length = 0;
   await installE2ESession(page, "space-1");
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, mockTradeGateway);
 });
 
-test("逻辑账户使用中文高密度表格", async ({ page }) => {
-  await page.goto("/#/trading/logical-accounts");
-  await expect(page.getByRole("heading", { name: "逻辑账户" })).toBeVisible();
+test("工作台页签只加载当前视图并保留策略账户深链", async ({ page }) => {
+  await page.goto("/#/trading/accounts");
+  await expect(page.getByRole("tab", { name: "交易账户", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect.poll(() => tradingAccountListRequests.length).toBe(1);
+  expect(logicalAccountListRequests).toHaveLength(0);
+
+  await page.getByRole("tab", { name: "策略账户", exact: true }).click();
+  await expect(page).toHaveURL(/trading\/accounts\?view=strategy/);
+  await expect.poll(() => logicalAccountListRequests.length).toBe(1);
+  await expect(page.getByText("趋势组合", { exact: true })).toBeVisible();
+  const logicalRequestCount = logicalAccountListRequests.length;
+
+  await page.getByRole("tab", { name: "交易账户", exact: true }).click();
+  await expect(page).toHaveURL(/trading\/accounts$/);
+  await expect.poll(() => tradingAccountListRequests.length).toBe(2);
+  expect(logicalAccountListRequests.length).toBe(logicalRequestCount);
+});
+
+test("策略账户工作台使用中文高密度表格", async ({ page }) => {
+  await page.goto("/#/trading/accounts?view=strategy");
+  await expect(page.getByRole("tab", { name: "策略账户", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("运行中", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("趋势组合", { exact: true })).toBeVisible();
   await expect(page.getByRole("table").getByText("模拟", { exact: true })).toBeVisible();
   await expect(page.getByRole("table").getByText("就绪", { exact: true })).toBeVisible();
+});
+
+test("旧策略账户地址重定向到统一工作台并打开详情", async ({ page }) => {
+  await page.goto("/#/trading/logical-accounts?logical_account_id=la-demo-1");
+  await expect(page).toHaveURL(/trading\/accounts\?(?=.*view=strategy)(?=.*logical_account_id=la-demo-1)/);
+  await expect(page.getByRole("tab", { name: "策略账户", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("趋势组合", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "趋势组合", exact: true })).toBeVisible();
 });
 
 test("持仓显示账户摘要和中文现货字段", async ({ page }) => {
@@ -214,7 +246,7 @@ test("订单页切换页签只发起一次目标数据请求", async ({ page }) 
 test("交易工作台窄屏不产生页面横向溢出", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   for (const route of [
-    "/#/trading/logical-accounts",
+    "/#/trading/accounts?view=strategy",
     "/#/trading/positions?trading_account_id=ta-demo-1",
     "/#/trading/orders?trading_account_id=ta-demo-1"
   ]) {

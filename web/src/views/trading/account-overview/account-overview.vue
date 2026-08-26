@@ -1,8 +1,7 @@
 <template>
-  <div class="moox-page">
+  <div class="moox-page account-overview-page" :class="{ 'is-embedded': embedded }">
     <div class="moox-inner">
       <div class="page-head">
-        <h2>交易账户</h2>
         <a-space>
           <a-button :loading="loading" aria-label="刷新交易账户" @click="loadAccounts">
             <template #icon><icon-refresh /></template>
@@ -15,13 +14,18 @@
         </a-space>
       </div>
 
-      <PageTitleTabs :model-value="activeMode" :items="accountModeTabs" aria-label="账户类型" @change="onModeChange" />
+      <div class="account-mode-filter" aria-label="账户类型">
+        <span class="filter-label">账户类型</span>
+        <a-radio-group :model-value="activeMode" type="button" @change="onModeChange">
+          <a-radio v-for="item in accountModeTabs" :key="item.key" :value="item.key">{{ item.label }}</a-radio>
+        </a-radio-group>
+      </div>
 
       <a-alert v-if="createdAccountId" type="success" show-icon class="result-alert">
         {{ createdLogicalAccountId ? "模拟账户已创建" : "真实账户已创建" }}：交易账户编号 {{ createdAccountId }}
         <template v-if="createdLogicalAccountId">
-          ；逻辑账户编号 {{ createdLogicalAccountId }}
-          <a-button type="text" size="small" @click="goLogicalAccount">查看逻辑账户</a-button>
+          ；策略账户编号 {{ createdLogicalAccountId }}
+          <a-button type="text" size="small" @click="goLogicalAccount">查看策略账户</a-button>
         </template>
         <span v-else-if="syncResult && syncResultAccountId === createdAccountId">
           ；首次同步：{{ syncResult.ready ? "就绪" : "未就绪" }}
@@ -160,7 +164,7 @@
             <a-form-item field="maker_fee_rate" label="挂单费率" required><a-input v-model="form.maker_fee_rate" /></a-form-item>
             <a-form-item field="taker_fee_rate" label="吃单费率" required><a-input v-model="form.taker_fee_rate" /></a-form-item>
             <a-form-item field="slippage_bps" label="滑点（基点）" required><a-input v-model="form.slippage_bps" /></a-form-item>
-            <a-form-item field="logical_account_name" label="逻辑账户名称" required>
+            <a-form-item field="logical_account_name" label="策略账户名称" required>
               <a-input v-model="form.logical_account_name" name="logical_account_name" />
             </a-form-item>
           </template>
@@ -226,7 +230,7 @@
             <span>{{ selectedAccount.sync_symbols.length ? selectedAccount.sync_symbols.join(", ") : "-" }}</span>
           </div>
           <div class="section">
-            <h3>关联逻辑账户</h3>
+            <h3>关联策略账户</h3>
             <a-button v-if="linkedLogicalAccount" type="text" @click="goLinkedLogicalAccount">
               {{ linkedLogicalAccount.name }} · {{ linkedLogicalAccount.logical_account_id }}
             </a-button>
@@ -284,7 +288,6 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
-import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import {
   closePaperSimulation,
   createPaperSimulation,
@@ -319,6 +322,8 @@ import {
 } from "./account-mode";
 
 defineOptions({ name: "account-overview" });
+
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
 
 interface SyncResult {
   fills_ingested: number;
@@ -629,15 +634,18 @@ async function closePaper(account: TradingAccount) {
 
 function goLogicalAccount() {
   if (createdLogicalAccountId.value) {
-    void router.push({ path: "/trading/logical-accounts", query: { logical_account_id: createdLogicalAccountId.value } });
+    void router.push({
+      path: "/trading/accounts",
+      query: { view: "strategy", logical_account_id: createdLogicalAccountId.value }
+    });
   }
 }
 
 function goLinkedLogicalAccount() {
   if (linkedLogicalAccount.value) {
     void router.push({
-      path: "/trading/logical-accounts",
-      query: { logical_account_id: linkedLogicalAccount.value.logical_account_id }
+      path: "/trading/accounts",
+      query: { view: "strategy", logical_account_id: linkedLogicalAccount.value.logical_account_id }
     });
   }
 }
@@ -668,8 +676,21 @@ watch(
 .page-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   margin-bottom: var(--moox-space-2);
+}
+
+.account-mode-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--moox-space-2);
+  margin-bottom: var(--moox-space-3);
+}
+
+.filter-label {
+  color: var(--color-text-2);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .result-alert,
@@ -711,5 +732,20 @@ watch(
 
 .leverage-form {
   margin-top: var(--moox-space-3);
+}
+
+@media (max-width: 760px) {
+  .page-head {
+    align-items: stretch;
+  }
+
+  .page-head :deep(.arco-space) {
+    justify-content: flex-end;
+  }
+
+  .account-mode-filter {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 </style>

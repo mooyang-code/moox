@@ -90,16 +90,7 @@ export const systemMenu = [
   menu("025002", "0250", "/strategy/running", "strategy-running", "strategy-running", "strategy/running/index", 2),
 
   directory("05", "0", "/trading/accounts", "trading", "trading", 6, { svgIcon: "balance-inquiry", icon: "" }),
-  menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-overview/account-overview", 1),
-  menu(
-    "0504",
-    "05",
-    "/trading/logical-accounts",
-    "trading-logical-accounts",
-    "trading-logical-accounts",
-    "trading/logical-accounts/index",
-    2
-  ),
+  menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-workbench/index", 1),
   menu(
     "0502",
     "05",

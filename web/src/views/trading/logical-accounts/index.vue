@@ -1,26 +1,22 @@
 <template>
-  <div class="moox-page logical-page">
+  <div class="moox-page logical-page" :class="{ 'is-embedded': embedded }">
     <div class="moox-inner">
       <div class="page-head">
-        <div>
-          <h2>逻辑账户</h2>
-          <span>管理账户组合、自动执行状态和人工操作。</span>
-        </div>
         <a-space>
-          <a-button :loading="loading" aria-label="刷新逻辑账户" @click="load">
+          <a-button :loading="loading" aria-label="刷新策略账户" @click="load">
             <template #icon><icon-refresh /></template>
             刷新
           </a-button>
           <a-button type="primary" status="success" @click="createVisible = true">
             <template #icon><icon-plus /></template>
-            新建逻辑账户
+            新建策略账户
           </a-button>
         </a-space>
       </div>
 
       <div class="summary-grid">
         <div class="summary-card">
-          <span>逻辑账户</span>
+          <span>策略账户</span>
           <strong>{{ pagination.total }}</strong>
           <small>当前空间总数</small>
         </div>
@@ -56,7 +52,7 @@
         <span class="table-count">显示 {{ filteredRows.length }} 条</span>
       </div>
 
-      <a-empty v-if="!loading && !filteredRows.length" description="暂无逻辑账户" />
+      <a-empty v-if="!loading && !filteredRows.length" description="暂无策略账户" />
       <a-table
         v-else
         row-key="logical_account_id"
@@ -67,7 +63,7 @@
         @page-change="changePage"
       >
         <template #columns>
-          <a-table-column title="逻辑账户" :width="220">
+          <a-table-column title="策略账户" :width="220">
             <template #cell="{ record }">
               <a-link @click="openDetail(record)">{{ record.name }}</a-link>
               <div class="muted">{{ record.logical_account_id }}</div>
@@ -104,7 +100,7 @@
         </template>
       </a-table>
 
-      <a-modal v-model:visible="createVisible" title="新建逻辑账户" @ok="create">
+      <a-modal v-model:visible="createVisible" title="新建策略账户" @ok="create">
         <a-form :model="createForm" auto-label-width>
           <a-form-item label="名称" required><a-input v-model="createForm.name" /></a-form-item>
           <a-form-item label="账户类型" required>
@@ -123,7 +119,7 @@
         </a-form>
       </a-modal>
 
-      <a-drawer v-model:visible="detailVisible" :width="860" title="逻辑账户详情" @cancel="closeDetail">
+      <a-drawer v-model:visible="detailVisible" :width="860" title="策略账户详情" @cancel="closeDetail">
         <template v-if="selected">
           <div class="detail-head">
             <div>
@@ -163,7 +159,7 @@
           </div>
 
           <div class="section-title">
-            <h3>物理交易账户</h3>
+            <h3>实际交易账户</h3>
             <a-button
               size="small"
               type="primary"
@@ -173,6 +169,7 @@
               ><template #icon><icon-plus /></template>添加成员</a-button
             >
           </div>
+          <div class="member-hint">多个实际账户按优先级执行，当前账户容量不足时自动切换下一账户。</div>
           <a-table size="small" row-key="trading_account_id" :data="selected.members" :pagination="false">
             <template #columns>
               <a-table-column title="交易账户" data-index="trading_account_id" />
@@ -228,7 +225,9 @@
             >
               <template #columns>
                 <a-table-column title="交易账户" data-index="trading_account_id" />
-                <a-table-column title="状态" data-index="status" :width="100" />
+                <a-table-column title="状态" :width="100">
+                  <template #cell="{ record }">{{ flattenAccountStateLabel(record.status) }}</template>
+                </a-table-column>
                 <a-table-column title="剩余仓位">
                   <template #cell="{ record }">
                     <div v-for="item in record.remaining_positions || []" :key="`${item.instrument_id}-${item.asset}`">
@@ -244,9 +243,9 @@
         </template>
       </a-drawer>
 
-      <a-modal v-model:visible="reasonVisible" :title="reasonMode === 'pause' ? '暂停逻辑账户' : '逐账户清仓'" @ok="submitReason">
+      <a-modal v-model:visible="reasonVisible" :title="reasonMode === 'pause' ? '暂停策略账户' : '逐账户清仓'" @ok="submitReason">
         <a-alert v-if="reasonMode === 'flatten'" type="warning" show-icon class="section">
-          将分别清空每个物理账户的风险仓位，不进行跨账户净额；完成后保持 PAUSED。
+          将分别清空每个实际账户的风险仓位，不进行跨账户净额；完成后保持暂停。
         </a-alert>
         <a-form :model="reasonForm" auto-label-width>
           <a-form-item label="操作编号" v-if="reasonMode === 'flatten'" required>
@@ -256,7 +255,7 @@
         </a-form>
       </a-modal>
 
-      <a-modal v-model:visible="memberVisible" title="添加物理账户" @ok="addMember">
+      <a-modal v-model:visible="memberVisible" title="添加实际交易账户" @ok="addMember">
         <a-form :model="memberForm" auto-label-width>
           <a-form-item label="交易账户" required>
             <a-select v-model="memberForm.trading_account_id" allow-search>
@@ -275,7 +274,7 @@
         <a-alert v-if="capabilities && !capabilities.can_place_order" type="error" show-icon class="section">
           {{ capabilities.unavailable_reason || "当前账户不可下单" }}
         </a-alert>
-        <a-alert type="warning" show-icon class="section">提交前会暂停整个逻辑账户并取消活动目标订单。</a-alert>
+        <a-alert type="warning" show-icon class="section">提交前会暂停整个策略账户并取消活动目标订单。</a-alert>
         <a-form :model="manualForm" auto-label-width>
           <a-form-item label="操作编号" required><a-input v-model="manualForm.action_id" /></a-form-item>
           <a-form-item label="客户端订单编号" required><a-input v-model="manualForm.client_order_id" /></a-form-item>
@@ -347,6 +346,7 @@ import EquityCurve from "./equity-curve.vue";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 
 defineOptions({ name: "trading-logical-accounts" });
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
 const rows = ref<LogicalAccount[]>([]);
 const accounts = ref<TradingAccount[]>([]);
 const selected = ref<LogicalAccount | null>(null);
@@ -409,6 +409,11 @@ function actionTypeLabel(type?: string) {
 }
 function actionStateLabel(status?: string) {
   return status ? actionStateLabels[status.toUpperCase()] || "未知" : "-";
+}
+function flattenAccountStateLabel(status?: string) {
+  if (!status) return "-";
+  const labels: Record<string, string> = { ...actionStateLabels, PARTIAL: "部分完成" };
+  return labels[status.toUpperCase()] || "未知";
 }
 function automationStateLabel(status?: string) {
   return status ? logicalAutomationStateLabels[status.toUpperCase()] || "未知" : "-";
@@ -507,7 +512,7 @@ async function openRouteDetail() {
   } catch {
     if (!request.isLatest() || route.query.logical_account_id !== requestedId) return;
     await router.replace({ query: { ...route.query, logical_account_id: undefined } });
-    Message.warning("逻辑账户不存在或无权限");
+    Message.warning("策略账户不存在或无权限");
   }
 }
 
@@ -750,6 +755,11 @@ load();
 }
 .logical-page :deep(.arco-table-th) {
   white-space: nowrap;
+}
+.member-hint {
+  margin-top: 8px;
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 @media (max-width: 760px) {
   .summary-grid {
