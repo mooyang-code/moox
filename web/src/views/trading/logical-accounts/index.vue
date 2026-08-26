@@ -1,75 +1,129 @@
 <template>
-  <div class="moox-page">
+  <div class="moox-page logical-page">
     <div class="moox-inner">
       <div class="page-head">
         <div>
-          <h2>Logical Account</h2>
-          <span>同质 Exchange 账户组、自动执行状态与人工操作。</span>
+          <h2>逻辑账户</h2>
+          <span>管理账户组合、自动执行状态和人工操作。</span>
         </div>
         <a-space>
-          <a-button :loading="loading" @click="load"
-            ><template #icon><icon-refresh /></template>刷新</a-button
-          >
-          <a-button type="primary" status="success" @click="createVisible = true"
-            ><template #icon><icon-plus /></template>新增</a-button
-          >
+          <a-button :loading="loading" aria-label="刷新逻辑账户" @click="load">
+            <template #icon><icon-refresh /></template>
+            刷新
+          </a-button>
+          <a-button type="primary" status="success" @click="createVisible = true">
+            <template #icon><icon-plus /></template>
+            新建逻辑账户
+          </a-button>
         </a-space>
       </div>
-      <a-table row-key="logical_account_id" :data="rows" :loading="loading" :pagination="pagination" @page-change="changePage">
+
+      <div class="summary-grid">
+        <div class="summary-card">
+          <span>逻辑账户</span>
+          <strong>{{ pagination.total }}</strong>
+          <small>当前空间总数</small>
+        </div>
+        <div class="summary-card summary-card--green">
+          <span>运行中</span>
+          <strong>{{ stateCounts.active }}</strong>
+          <small>自动执行已开启</small>
+        </div>
+        <div class="summary-card summary-card--orange">
+          <span>已暂停</span>
+          <strong>{{ stateCounts.paused }}</strong>
+          <small>等待人工恢复</small>
+        </div>
+        <div class="summary-card summary-card--red">
+          <span>未就绪</span>
+          <strong>{{ stateCounts.notReady }}</strong>
+          <small>存在阻断原因</small>
+        </div>
+      </div>
+
+      <div class="table-toolbar">
+        <a-space wrap>
+          <span class="toolbar-label">筛选</span>
+          <a-select v-model="stateFilter" allow-clear placeholder="自动执行状态" style="width: 150px">
+            <a-option value="ACTIVE">运行中</a-option>
+            <a-option value="PAUSED">已暂停</a-option>
+          </a-select>
+          <a-select v-model="executionFilter" allow-clear placeholder="执行模式" style="width: 130px">
+            <a-option :value="1">模拟</a-option>
+            <a-option :value="2">实盘</a-option>
+          </a-select>
+        </a-space>
+        <span class="table-count">显示 {{ filteredRows.length }} 条</span>
+      </div>
+
+      <a-empty v-if="!loading && !filteredRows.length" description="暂无逻辑账户" />
+      <a-table
+        v-else
+        row-key="logical_account_id"
+        :data="filteredRows"
+        :loading="loading"
+        :pagination="pagination"
+        :scroll="{ x: 1040 }"
+        @page-change="changePage"
+      >
         <template #columns>
-          <a-table-column title="Logical Account">
+          <a-table-column title="逻辑账户" :width="220">
             <template #cell="{ record }">
               <a-link @click="openDetail(record)">{{ record.name }}</a-link>
               <div class="muted">{{ record.logical_account_id }}</div>
             </template>
           </a-table-column>
-          <a-table-column title="账户类型" :width="110">
-            <template #cell="{ record }">{{ marketTypeLabels[record.market_type] }}</template>
+          <a-table-column title="账户类型" :width="100">
+            <template #cell="{ record }">{{ localMarketTypeLabels[record.market_type] }}</template>
           </a-table-column>
-          <a-table-column title="执行模式" :width="110">
-            <template #cell="{ record }">{{ executionModeLabels[record.execution_mode] }}</template>
+          <a-table-column title="执行模式" :width="100">
+            <template #cell="{ record }">{{ localExecutionModeLabels[record.execution_mode] }}</template>
           </a-table-column>
           <a-table-column title="结算资产" data-index="settlement_asset" :width="110" />
-          <a-table-column title="自动执行" :width="120">
+          <a-table-column title="自动执行" :width="110">
             <template #cell="{ record }">
-              <a-tag :color="record.automation_state === 'ACTIVE' ? 'green' : 'orange'">{{ record.automation_state }}</a-tag>
+              <a-tag :color="record.automation_state === 'ACTIVE' ? 'green' : 'orange'">
+                {{ automationStateLabel(record.automation_state) }}
+              </a-tag>
             </template>
           </a-table-column>
-          <a-table-column title="Readiness" :width="120">
+          <a-table-column title="就绪状态" :width="110">
             <template #cell="{ record }">
-              <a-tag :color="record.ready ? 'green' : 'red'">{{ record.ready ? "Ready" : "Not Ready" }}</a-tag>
+              <a-tag :color="record.ready ? 'green' : 'red'">{{ record.ready ? "就绪" : "未就绪" }}</a-tag>
             </template>
           </a-table-column>
-          <a-table-column title="Owner Runner" data-index="owner_runner_id" :ellipsis="true" :tooltip="true" />
-          <a-table-column title="成员" :width="80">
+          <a-table-column title="执行器" data-index="owner_runner_id" :width="140" :ellipsis="true" :tooltip="true" />
+          <a-table-column title="成员数" :width="80">
             <template #cell="{ record }">{{ record.members?.length || 0 }}</template>
           </a-table-column>
-          <a-table-column title="操作" :width="100">
-            <template #cell="{ record }"><a-button size="mini" type="text" @click="openDetail(record)">管理</a-button></template>
+          <a-table-column title="操作" :width="90" fixed="right">
+            <template #cell="{ record }">
+              <a-button size="mini" type="text" @click="openDetail(record)">查看</a-button>
+            </template>
           </a-table-column>
         </template>
       </a-table>
 
-      <a-modal v-model:visible="createVisible" title="新增 Logical Account" @ok="create">
+      <a-modal v-model:visible="createVisible" title="新建逻辑账户" @ok="create">
         <a-form :model="createForm" auto-label-width>
           <a-form-item label="名称" required><a-input v-model="createForm.name" /></a-form-item>
           <a-form-item label="账户类型" required>
             <a-radio-group v-model="createForm.market_type" type="button">
-              <a-radio :value="1">SPOT</a-radio>
-              <a-radio :value="2">SWAP</a-radio>
+              <a-radio :value="1">现货</a-radio>
+              <a-radio :value="2">合约</a-radio>
             </a-radio-group>
           </a-form-item>
           <a-form-item label="执行模式" required>
             <a-radio-group v-model="createForm.execution_mode" type="button">
-              <a-radio :value="1">Paper</a-radio>
-              <a-radio :value="2">Live</a-radio>
+              <a-radio :value="1">模拟</a-radio>
+              <a-radio :value="2">实盘</a-radio>
             </a-radio-group>
           </a-form-item>
           <a-form-item label="结算资产" required><a-input v-model="createForm.settlement_asset" /></a-form-item>
         </a-form>
       </a-modal>
 
-      <a-drawer v-model:visible="detailVisible" :width="860" title="Logical Account 管理" @cancel="closeDetail">
+      <a-drawer v-model:visible="detailVisible" :width="860" title="逻辑账户详情" @cancel="closeDetail">
         <template v-if="selected">
           <div class="detail-head">
             <div>
@@ -77,8 +131,10 @@
               <span>{{ selected.logical_account_id }}</span>
             </div>
             <a-space>
-              <a-button v-if="selected.automation_state === 'ACTIVE'" status="warning" @click="requestPause">暂停</a-button>
-              <a-button v-else type="primary" status="success" :disabled="!selected.ready" @click="resume">恢复</a-button>
+              <a-button v-if="selected.automation_state === 'ACTIVE'" status="warning" @click="requestPause"
+                >暂停自动执行</a-button
+              >
+              <a-button v-else type="primary" status="success" :disabled="!selected.ready" @click="resume">恢复自动执行</a-button>
               <a-button status="danger" @click="openFlatten">逐账户清仓</a-button>
             </a-space>
           </div>
@@ -89,25 +145,25 @@
             {{ selected.readiness_reasons.join("；") }}
           </a-alert>
           <a-alert v-if="selected.automation_state === 'PAUSED' && target" type="info" show-icon class="section">
-            当前 FULL 目标 sequence {{ target.command_sequence }} 已保存但不会执行；恢复后会继续收敛。
+            当前完整目标序号 {{ target.command_sequence }} 已保存但不会执行；恢复后会继续收敛。
           </a-alert>
 
           <a-descriptions :column="3" bordered class="section">
-            <a-descriptions-item label="状态">{{ selected.automation_state }}</a-descriptions-item>
-            <a-descriptions-item label="Readiness">{{ selected.ready ? "Ready" : "Not Ready" }}</a-descriptions-item>
-            <a-descriptions-item label="Owner">{{ selected.owner_runner_id || "-" }}</a-descriptions-item>
+            <a-descriptions-item label="自动执行">{{ automationStateLabel(selected.automation_state) }}</a-descriptions-item>
+            <a-descriptions-item label="就绪状态">{{ selected.ready ? "就绪" : "未就绪" }}</a-descriptions-item>
+            <a-descriptions-item label="执行器">{{ selected.owner_runner_id || "-" }}</a-descriptions-item>
           </a-descriptions>
 
           <div class="section">
             <div class="section-title">
               <h3>资金曲线</h3>
-              <span>{{ selected.settlement_asset }}</span>
+              <span>结算资产：{{ selected.settlement_asset }}</span>
             </div>
             <equity-curve :logical-account-id="selected.logical_account_id" />
           </div>
 
           <div class="section-title">
-            <h3>物理账户</h3>
+            <h3>物理交易账户</h3>
             <a-button
               size="small"
               type="primary"
@@ -119,7 +175,7 @@
           </div>
           <a-table size="small" row-key="trading_account_id" :data="selected.members" :pagination="false">
             <template #columns>
-              <a-table-column title="Trading Account" data-index="trading_account_id" />
+              <a-table-column title="交易账户" data-index="trading_account_id" />
               <a-table-column title="启用" :width="80">
                 <template #cell="{ record }">{{ record.enabled ? "是" : "否" }}</template>
               </a-table-column>
@@ -140,16 +196,16 @@
           </a-table>
 
           <div class="section-title">
-            <h3>当前完整目标</h3>
-            <span>{{ target?.status || "暂无" }}</span>
+            <h3>当前目标</h3>
+            <span>{{ targetStatusLabel(target?.status) }}</span>
           </div>
           <a-table size="small" row-key="instrument_id" :data="target?.targets || []" :pagination="false">
             <template #columns>
-              <a-table-column title="Instrument" data-index="instrument_id" />
-              <a-table-column title="绝对目标持仓量" data-index="quantity" />
+              <a-table-column title="交易标的" data-index="instrument_id" />
+              <a-table-column title="目标持仓量" data-index="quantity" />
             </template>
           </a-table>
-          <a-empty v-if="target && !target.targets.length" description="空 FULL 目标：全部归零" />
+          <a-empty v-if="target && !target.targets.length" description="空目标：全部归零" />
 
           <template v-if="action">
             <div class="section-title">
@@ -157,8 +213,8 @@
               <span>{{ action.action_id }}</span>
             </div>
             <a-descriptions :column="2" bordered>
-              <a-descriptions-item label="类型">{{ action.action_type }}</a-descriptions-item>
-              <a-descriptions-item label="状态">{{ action.status }}</a-descriptions-item>
+              <a-descriptions-item label="类型">{{ actionTypeLabel(action.action_type) }}</a-descriptions-item>
+              <a-descriptions-item label="状态">{{ actionStateLabel(action.status) }}</a-descriptions-item>
               <a-descriptions-item label="原因">{{ action.reason }}</a-descriptions-item>
               <a-descriptions-item label="错误">{{ action.last_error || "-" }}</a-descriptions-item>
             </a-descriptions>
@@ -171,7 +227,7 @@
               class="section"
             >
               <template #columns>
-                <a-table-column title="Trading Account" data-index="trading_account_id" />
+                <a-table-column title="交易账户" data-index="trading_account_id" />
                 <a-table-column title="状态" data-index="status" :width="100" />
                 <a-table-column title="剩余仓位">
                   <template #cell="{ record }">
@@ -188,16 +244,12 @@
         </template>
       </a-drawer>
 
-      <a-modal
-        v-model:visible="reasonVisible"
-        :title="reasonMode === 'pause' ? '暂停 Logical Account' : '逐账户清仓'"
-        @ok="submitReason"
-      >
+      <a-modal v-model:visible="reasonVisible" :title="reasonMode === 'pause' ? '暂停逻辑账户' : '逐账户清仓'" @ok="submitReason">
         <a-alert v-if="reasonMode === 'flatten'" type="warning" show-icon class="section">
           将分别清空每个物理账户的风险仓位，不进行跨账户净额；完成后保持 PAUSED。
         </a-alert>
         <a-form :model="reasonForm" auto-label-width>
-          <a-form-item label="Action ID" v-if="reasonMode === 'flatten'" required>
+          <a-form-item label="操作编号" v-if="reasonMode === 'flatten'" required>
             <a-input v-model="reasonForm.action_id" />
           </a-form-item>
           <a-form-item label="原因" required><a-input v-model="reasonForm.reason" /></a-form-item>
@@ -206,7 +258,7 @@
 
       <a-modal v-model:visible="memberVisible" title="添加物理账户" @ok="addMember">
         <a-form :model="memberForm" auto-label-width>
-          <a-form-item label="Trading Account" required>
+          <a-form-item label="交易账户" required>
             <a-select v-model="memberForm.trading_account_id" allow-search>
               <a-option v-for="item in eligibleAccounts" :key="item.trading_account_id" :value="item.trading_account_id">
                 {{ item.name }} ({{ item.trading_account_id }})
@@ -223,11 +275,11 @@
         <a-alert v-if="capabilities && !capabilities.can_place_order" type="error" show-icon class="section">
           {{ capabilities.unavailable_reason || "当前账户不可下单" }}
         </a-alert>
-        <a-alert type="warning" show-icon class="section">提交前会暂停整个 Logical Account 并取消活动 TARGET 订单。</a-alert>
+        <a-alert type="warning" show-icon class="section">提交前会暂停整个逻辑账户并取消活动目标订单。</a-alert>
         <a-form :model="manualForm" auto-label-width>
-          <a-form-item label="Action ID" required><a-input v-model="manualForm.action_id" /></a-form-item>
-          <a-form-item label="Client Order ID" required><a-input v-model="manualForm.client_order_id" /></a-form-item>
-          <a-form-item label="Instrument" required
+          <a-form-item label="操作编号" required><a-input v-model="manualForm.action_id" /></a-form-item>
+          <a-form-item label="客户端订单编号" required><a-input v-model="manualForm.client_order_id" /></a-form-item>
+          <a-form-item label="交易标的" required
             ><a-input v-model="manualForm.instrument_id" placeholder="BTC-USDT-SPOT"
           /></a-form-item>
           <a-form-item label="方向" required>
@@ -237,14 +289,14 @@
           </a-form-item>
           <a-form-item label="订单类型">
             <a-radio-group v-model="manualForm.order_type" type="button">
-              <a-radio v-if="capabilities?.order_types?.includes(1)" :value="1">MARKET</a-radio>
-              <a-radio v-if="capabilities?.order_types?.includes(2)" :value="2">LIMIT</a-radio>
+              <a-radio v-if="capabilities?.order_types?.includes(1)" :value="1">市价</a-radio>
+              <a-radio v-if="capabilities?.order_types?.includes(2)" :value="2">限价</a-radio>
             </a-radio-group>
           </a-form-item>
           <a-form-item v-if="manualForm.order_type === 2" label="成交策略">
             <a-select v-model="manualForm.fill_policy">
               <a-option v-for="policy in capabilities?.fill_policies || [1, 2, 3]" :key="policy" :value="policy">{{
-                ["", "GTC", "IOC", "FOK"][policy]
+                ["", "一直有效（GTC）", "立即成交（IOC）", "全部成交（FOK）"][policy]
               }}</a-option>
             </a-select>
           </a-form-item>
@@ -267,7 +319,6 @@ import { createClientId } from "@/utils/client-id";
 import {
   addLogicalAccountMember,
   createLogicalAccount,
-  executionModeLabels,
   getExecutionCapabilities,
   flattenLogicalAccount,
   getLogicalAccount,
@@ -275,12 +326,14 @@ import {
   getOperatorAction,
   listTradingAccounts,
   listLogicalAccounts,
-  marketTypeLabels,
   parseFlattenResult,
   pauseLogicalAccount,
   placeManualOrder,
   removeLogicalAccountMember,
-  resumeLogicalAccount
+  resumeLogicalAccount,
+  logicalAutomationStateLabels,
+  targetStateLabels,
+  actionStateLabels
 } from "@/api/trade";
 import type {
   TradingAccount,
@@ -311,6 +364,8 @@ const actionPoller = ref<ReturnType<typeof setInterval> | null>(null);
 const route = useRoute();
 const router = useRouter();
 const pagination = reactive({ current: 1, pageSize: 20, total: 0 });
+const stateFilter = ref("");
+const executionFilter = ref<number | undefined>(undefined);
 const routeRequests = createLatestRequestGuard();
 const detailRequests = createLatestRequestGuard();
 const actionPollRequests = createLatestRequestGuard();
@@ -330,7 +385,34 @@ const manualForm = reactive({
   limit_price: "",
   reason: ""
 });
+const localMarketTypeLabels: Record<number, string> = { 0: "-", 1: "现货", 2: "合约" };
+const localExecutionModeLabels: Record<number, string> = { 0: "-", 1: "模拟", 2: "实盘" };
 const flattenResult = computed(() => parseFlattenResult(action.value || undefined));
+const filteredRows = computed(() =>
+  rows.value.filter(item => {
+    const matchesState = !stateFilter.value || item.automation_state === stateFilter.value;
+    const matchesExecution = executionFilter.value === undefined || item.execution_mode === executionFilter.value;
+    return matchesState && matchesExecution;
+  })
+);
+const stateCounts = computed(() => ({
+  active: rows.value.filter(item => item.automation_state === "ACTIVE").length,
+  paused: rows.value.filter(item => item.automation_state === "PAUSED").length,
+  notReady: rows.value.filter(item => !item.ready).length
+}));
+function targetStatusLabel(status?: string) {
+  return status ? targetStateLabels[status.toUpperCase()] || "未知" : "暂无";
+}
+function actionTypeLabel(type?: string) {
+  const labels: Record<string, string> = { FLATTEN: "逐账户清仓", MANUAL_ORDER: "人工下单", PAUSE: "暂停", RESUME: "恢复" };
+  return type ? labels[type.toUpperCase()] || "未知" : "-";
+}
+function actionStateLabel(status?: string) {
+  return status ? actionStateLabels[status.toUpperCase()] || "未知" : "-";
+}
+function automationStateLabel(status?: string) {
+  return status ? logicalAutomationStateLabels[status.toUpperCase()] || "未知" : "-";
+}
 const eligibleAccounts = computed(() =>
   accounts.value.filter(
     item =>
@@ -425,7 +507,7 @@ async function openRouteDetail() {
   } catch {
     if (!request.isLatest() || route.query.logical_account_id !== requestedId) return;
     await router.replace({ query: { ...route.query, logical_account_id: undefined } });
-    Message.warning("LogicalAccount 不存在或无权限");
+    Message.warning("逻辑账户不存在或无权限");
   }
 }
 
@@ -448,7 +530,7 @@ function openFlatten() {
 }
 async function submitReason() {
   if (!selected.value || !reasonForm.reason.trim() || (reasonMode.value === "flatten" && !reasonForm.action_id.trim())) {
-    Message.warning("请填写原因和 Action ID");
+    Message.warning("请填写原因和操作编号");
     return false;
   }
   if (reasonMode.value === "pause") {
@@ -488,7 +570,7 @@ async function openMember() {
 }
 async function addMember() {
   if (!selected.value || !memberForm.trading_account_id) {
-    Message.warning("请选择 Trading Account");
+    Message.warning("请选择交易账户");
     return false;
   }
   await addLogicalAccountMember({ logical_account_id: selected.value.logical_account_id, ...memberForm });
@@ -593,7 +675,7 @@ load();
   gap: 16px;
 }
 .page-head {
-  margin-bottom: var(--moox-space-2);
+  margin-bottom: var(--moox-space-4);
 }
 .page-head h2,
 .detail-head h3,
@@ -610,5 +692,76 @@ load();
 .section,
 .section-title {
   margin-top: 18px;
+}
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: var(--moox-space-4);
+}
+.summary-card {
+  display: grid;
+  gap: 4px;
+  min-height: 92px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: var(--color-bg-2);
+}
+.summary-card span,
+.summary-card small {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.summary-card strong {
+  color: var(--color-text-1);
+  font-size: 24px;
+  line-height: 1;
+}
+.summary-card--green {
+  border-color: rgb(var(--green-3));
+  background: rgb(var(--green-1));
+}
+.summary-card--orange {
+  border-color: rgb(var(--orange-3));
+  background: rgb(var(--orange-1));
+}
+.summary-card--red {
+  border-color: rgb(var(--red-3));
+  background: rgb(var(--red-1));
+}
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: var(--moox-space-3);
+}
+.toolbar-label,
+.table-count {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.table-count {
+  white-space: nowrap;
+}
+.logical-page :deep(.arco-table-container) {
+  border-radius: 8px;
+}
+.logical-page :deep(.arco-table-th) {
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .table-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .page-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 </style>

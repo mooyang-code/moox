@@ -104,8 +104,13 @@ describe("page layout standards", () => {
     expectMargin(storage, ".storage-config-content", "margin-top", 12);
     expect(storageNodes).toContain(".page-head");
     expectMargin(storageArchive, ".page-actions", "margin-bottom", 8);
-    expectMargin(tradeRecords, ".record-view-tabs", "margin-bottom", 12);
+    expect(tradeRecords).toContain('import PageTitleTabs from "@/components/page-title-tabs/index.vue";');
+    expect(tradeRecords).toContain('class="orders-workbench-content"');
+    expect(tradeRecords).not.toContain("<a-tabs");
+    expectMargin(tradeRecords, ".orders-workbench-content", "margin-top", 12);
     expectMargin(tradeRecords, ".filter-bar", "margin-bottom", 8);
+    expect(tradeRecords).toMatch(/\.orders-page\s*:deep\(\.state-select\)\s*\{[\s\S]*?width:\s*140px;/);
+    expect(tradeRecords).toMatch(/\.orders-page\s*:deep\(\.time-range\)\s*\{[\s\S]*?width:\s*300px;/);
   });
 
   it("normalizes special list workbenches", () => {
@@ -175,9 +180,9 @@ describe("page layout standards", () => {
     );
     expect(factorResults).toMatch(/\.factor-results-content :deep\(\.moox-page\)\s*\{[\s\S]*?overflow:\s*auto;/);
 
-    expect(positions).toContain("<h2>持仓详情</h2>");
+    expect(positions).toContain("<h2>持仓</h2>");
     expect(positions).not.toContain('<a-button @click="loadPositions">');
-    expectMargin(positions, ".position-toolbar", "margin-bottom", 8);
+    expectMargin(positions, ".filter-bar", "margin-bottom", 12);
 
     for (const source of [viewDefinitions, datasetDefinitions, datasetBrowse, viewBrowse]) {
       expectMargin(source, ".page-head", "margin-bottom", 8);

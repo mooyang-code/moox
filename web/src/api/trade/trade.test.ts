@@ -52,6 +52,23 @@ describe("Trade public API", () => {
     expect(trade.environmentLabels).toEqual({ 0: "-", 1: "Testnet", 2: "Production" });
   });
 
+  it("exposes canonical Chinese order state labels", () => {
+    expect(trade.orderStateLabels).toEqual({
+      PENDING: "等待提交",
+      SUBMITTING: "提交中",
+      SUBMIT_UNKNOWN: "提交状态未知",
+      OPEN: "挂单中",
+      PARTIALLY_FILLED: "部分成交",
+      CANCELING: "撤单中",
+      CANCEL_UNKNOWN: "撤单状态未知",
+      FILLED: "已成交",
+      CANCELED: "已撤销",
+      PARTIALLY_CANCELED: "部分撤销",
+      REJECTED: "已拒绝",
+      EXPIRED: "已过期"
+    });
+  });
+
   it("keeps manual ownership fields server-controlled", async () => {
     await trade.placeManualOrder({
       action_id: "action-1",

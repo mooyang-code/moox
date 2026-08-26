@@ -222,6 +222,38 @@ export const orderTypeLabels: Record<number, string> = { 0: "-", 1: "MARKET", 2:
 export const fillPolicyLabels: Record<number, string> = { 0: "-", 1: "GTC", 2: "IOC", 3: "FOK" };
 export const orderSideLabels: Record<number, string> = { 0: "-", 1: "买入", 2: "卖出" };
 export const orderSideColors: Record<number, string> = { 0: "gray", 1: "red", 2: "green" };
+export const logicalAutomationStateLabels: Record<string, string> = {
+  ACTIVE: "运行中",
+  PAUSED: "已暂停"
+};
+export const orderStateLabels: Record<string, string> = {
+  PENDING: "等待提交",
+  SUBMITTING: "提交中",
+  SUBMIT_UNKNOWN: "提交状态未知",
+  OPEN: "挂单中",
+  PARTIALLY_FILLED: "部分成交",
+  CANCELING: "撤单中",
+  CANCEL_UNKNOWN: "撤单状态未知",
+  FILLED: "已成交",
+  CANCELED: "已撤销",
+  PARTIALLY_CANCELED: "部分撤销",
+  REJECTED: "已拒绝",
+  EXPIRED: "已过期"
+};
+export const actionStateLabels: Record<string, string> = {
+  PENDING: "等待中",
+  RUNNING: "执行中",
+  SUCCEEDED: "已完成",
+  FAILED: "失败",
+  CANCELED: "已取消"
+};
+export const targetStateLabels: Record<string, string> = {
+  ACCEPTED: "已接收",
+  RUNNING: "执行中",
+  SUCCEEDED: "已完成",
+  BLOCKED: "已阻塞",
+  FAILED: "失败"
+};
 
 export function canCancelOrderState(state: string): boolean {
   return ["OPEN", "PARTIALLY_FILLED", "SUBMIT_UNKNOWN"].includes(state.toUpperCase());
