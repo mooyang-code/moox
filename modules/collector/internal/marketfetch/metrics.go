@@ -12,6 +12,7 @@ type Metrics struct {
 	assignmentActive       *prometheus.GaugeVec
 	assignmentLastSuccess  *prometheus.GaugeVec
 	assignmentHealthy      *prometheus.GaugeVec
+	assignmentFailure      *prometheus.GaugeVec
 	assignmentPending      *prometheus.GaugeVec
 	assignmentPendingSince *prometheus.GaugeVec
 	timerAvailable         *prometheus.GaugeVec
@@ -35,6 +36,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		assignmentActive:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_active", Help: "Active Timer SCF assignments."}, []string{"space_id", "dataset_id", "frequency"}),
 		assignmentLastSuccess:  prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", Help: "Last successful Timer assignment reconciliation timestamp."}, []string{"space_id"}),
 		assignmentHealthy:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_healthy", Help: "Whether the latest Timer assignment reconciliation completed (1 healthy, 0 failed)."}, []string{"space_id"}),
+		assignmentFailure:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_failure", Help: "Current Timer coordination failure reason (1 current, 0 inactive)."}, []string{"space_id", "reason"}),
 		assignmentPending:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_pending", Help: "Whether a Timer assignment reconciliation batch is pending or running (1 pending, 0 idle)."}, []string{"space_id"}),
 		assignmentPendingSince: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", Help: "Unix timestamp when the current Timer assignment reconciliation batch started."}, []string{"space_id"}),
 		timerAvailable:         prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_timer_available", Help: "Tencent Timer trigger availability for Collector nodes (1 available, 0 unavailable, -1 unknown)."}, []string{"space_id", "node_id", "enabled"}),
@@ -50,6 +52,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	metrics.assignmentActive = registerGaugeVec(reg, metrics.assignmentActive)
 	metrics.assignmentLastSuccess = registerGaugeVec(reg, metrics.assignmentLastSuccess)
 	metrics.assignmentHealthy = registerGaugeVec(reg, metrics.assignmentHealthy)
+	metrics.assignmentFailure = registerGaugeVec(reg, metrics.assignmentFailure)
 	metrics.assignmentPending = registerGaugeVec(reg, metrics.assignmentPending)
 	metrics.assignmentPendingSince = registerGaugeVec(reg, metrics.assignmentPendingSince)
 	metrics.timerAvailable = registerGaugeVec(reg, metrics.timerAvailable)
@@ -108,6 +111,27 @@ func (m *Metrics) ObserveAssignmentDesired(spaceID, datasetID, frequency string,
 	m.assignmentActive.WithLabelValues(spaceID, datasetID, frequency).Set(float64(active))
 }
 
+// ObserveAssignmentRequired updates the current desired shard count without
+// discarding the last confirmed active assignment during a reconciliation.
+func (m *Metrics) ObserveAssignmentRequired(spaceID, datasetID, frequency string, required int) {
+	if m == nil {
+		return
+	}
+	if required < 0 {
+		required = 0
+	}
+	m.assignmentRequired.WithLabelValues(spaceID, datasetID, frequency).Set(float64(required))
+}
+
+// ResetAssignmentRequirements removes desired scopes that disappeared while
+// retaining the last active assignment until a new plan has been built.
+func (m *Metrics) ResetAssignmentRequirements(spaceID string) {
+	if m == nil || strings.TrimSpace(spaceID) == "" {
+		return
+	}
+	m.assignmentRequired.DeletePartialMatch(prometheus.Labels{"space_id": spaceID})
+}
+
 // ResetAssignmentScope removes labels for rules which disappeared from the
 // current reconciliation result. GaugeVec keeps a child until it is deleted;
 // leaving those children around would make Monitor alert for disabled rules.
@@ -133,6 +157,7 @@ func (m *Metrics) ObserveAssignmentSuccess(spaceID string, reconciledAt int64) {
 	}
 	m.assignmentLastSuccess.WithLabelValues(spaceID).Set(float64(reconciledAt))
 	m.assignmentHealthy.WithLabelValues(spaceID).Set(1)
+	m.ClearAssignmentFailure(spaceID)
 }
 
 // ObserveAssignmentPending exposes the asynchronous CloudNode batch window so
@@ -157,14 +182,43 @@ func (m *Metrics) ObserveAssignmentFailure(spaceID, reason string) {
 		return
 	}
 	m.assignmentHealthy.WithLabelValues(spaceID).Set(0)
+	reason = normalizeAssignmentFailureReason(reason)
+	m.ClearAssignmentFailure(spaceID)
+	m.assignmentFailure.WithLabelValues(spaceID, reason).Set(1)
 	m.ObserveAssignmentError(spaceID, reason)
+}
+
+// ClearAssignmentFailure clears every bounded failure label. Setting the
+// values to zero (rather than deleting them) lets Monitor stop using the last
+// scraped failure immediately.
+func (m *Metrics) ClearAssignmentFailure(spaceID string) {
+	if m == nil || strings.TrimSpace(spaceID) == "" {
+		return
+	}
+	for _, reason := range assignmentFailureReasons {
+		m.assignmentFailure.WithLabelValues(spaceID, reason).Set(0)
+	}
 }
 
 func (m *Metrics) ObserveAssignmentError(spaceID, reason string) {
 	if m == nil {
 		return
 	}
-	m.assignmentErrors.WithLabelValues(spaceID, reason).Inc()
+	m.assignmentErrors.WithLabelValues(spaceID, normalizeAssignmentFailureReason(reason)).Inc()
+}
+
+var assignmentFailureReasons = []string{
+	"capacity", "rules", "symbols", "dns", "cloudnode", "environment", "task_instances", "submit_timeout",
+}
+
+func normalizeAssignmentFailureReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	for _, allowed := range assignmentFailureReasons {
+		if reason == allowed {
+			return reason
+		}
+	}
+	return "cloudnode"
 }
 
 // ObserveTimerState mirrors the last CloudNode trigger readback. The

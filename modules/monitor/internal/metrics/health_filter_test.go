@@ -5,6 +5,7 @@ import "testing"
 func TestFilterHealthSamplesKeepsBusinessFactsOnly(t *testing.T) {
 	keep := []string{
 		"moox_collector_market_fetch_timer_available",
+		"moox_collector_market_fetch_coordination_failure",
 		"moox_collector_market_fetch_assignment_errors_total",
 		"moox_collector_dataset_output_watermark_timestamp_seconds",
 		"moox_factor_dataset_output_watermark_timestamp_seconds",

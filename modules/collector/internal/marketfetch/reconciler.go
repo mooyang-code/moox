@@ -2,7 +2,9 @@ package marketfetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -139,6 +141,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		return r.fail(spaceID, "capacity", err)
 	}
 	r.observeTimerCapacity(spaceID, nodes, groups, assignments)
+	// Publish the complete desired plan before the remote submission. A client
+	// timeout is ambiguous: CloudNode may still have accepted the request, so
+	// Monitor must not reinterpret a temporary HTTP failure as zero capacity.
+	r.observeAssignmentDesiredMetrics(spaceID, groups, assignments)
 	dnsAvailable := len(dns) > 0
 	patches := make([]*cloudnodepb.NodeRuntimeConfigPatch, 0, len(assignments))
 	pendingFingerprints := make(map[string]string, len(assignments))
@@ -191,6 +197,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	}
 	jobID, err := r.Nodes.SubmitRuntimeConfigs(ctx, spaceID, patches)
 	if err != nil {
+		if isTimeoutError(err) {
+			pendingSince := r.markSubmitRetryPending()
+			r.observeAssignmentPending(spaceID, true, pendingSince)
+			return r.fail(spaceID, "submit_timeout", fmt.Errorf("submit timer runtime configs: %w", err))
+		}
+		r.clearSubmitRetryPending()
+		r.observeAssignmentPending(spaceID, false, time.Time{})
 		return r.fail(spaceID, "cloudnode", fmt.Errorf("submit timer runtime configs: %w", err))
 	}
 	r.mu.Lock()
@@ -205,12 +218,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		r.pendingAt[nodeID] = time.Now().UTC()
 	}
 	r.pendingJob = jobID
-	r.pendingSince = time.Now().UTC()
+	if r.pendingSince.IsZero() {
+		r.pendingSince = time.Now().UTC()
+	}
 	pendingSince := r.pendingSince
 	r.mu.Unlock()
+	if r.Metrics != nil {
+		r.Metrics.ClearAssignmentFailure(spaceID)
+	}
 	log.InfoContextf(ctx, "collector_scf_timer_reconciled space=%s nodes=%d patches=%d job=%s", spaceID, len(nodes), len(patches), jobID)
 	r.observeAssignmentPending(spaceID, true, pendingSince)
-	r.observeAssignmentDesiredMetrics(spaceID, groups, assignments)
 	return nil
 }
 
@@ -351,9 +368,9 @@ func (r *Reconciler) observeAssignmentRequirements(spaceID string, groups []Task
 	if r == nil || r.Metrics == nil {
 		return
 	}
-	r.Metrics.ResetAssignmentScope(spaceID)
+	r.Metrics.ResetAssignmentRequirements(spaceID)
 	for _, scope := range assignmentMetricScopes(groups, nil) {
-		r.Metrics.ObserveAssignmentDesired(spaceID, scope.DatasetID, scope.Frequency, scope.Required, 0)
+		r.Metrics.ObserveAssignmentRequired(spaceID, scope.DatasetID, scope.Frequency, scope.Required)
 	}
 }
 
@@ -453,6 +470,31 @@ func (r *Reconciler) pendingRuntimeJobState() (string, time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.pendingJob, r.pendingSince
+}
+
+func (r *Reconciler) markSubmitRetryPending() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pendingSince.IsZero() {
+		r.pendingSince = time.Now().UTC()
+	}
+	return r.pendingSince
+}
+
+func (r *Reconciler) clearSubmitRetryPending() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pendingJob == "" {
+		r.pendingSince = time.Time{}
+	}
+}
+
+func isTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var timeout net.Error
+	return errors.As(err, &timeout) && timeout.Timeout()
 }
 
 func (r *Reconciler) fail(spaceID, reason string, err error) error {

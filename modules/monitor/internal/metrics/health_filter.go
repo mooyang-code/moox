@@ -27,6 +27,7 @@ var healthMetricNames = map[string]struct{}{
 	"moox_collector_market_fetch_assignment_active":                            {},
 	"moox_collector_market_fetch_assignment_last_success_timestamp_seconds":    {},
 	"moox_collector_market_fetch_coordination_healthy":                         {},
+	"moox_collector_market_fetch_coordination_failure":                         {},
 	"moox_collector_market_fetch_coordination_pending":                         {},
 	"moox_collector_market_fetch_coordination_pending_since_timestamp_seconds": {},
 	"moox_collector_market_fetch_timer_capacity_total":                         {},

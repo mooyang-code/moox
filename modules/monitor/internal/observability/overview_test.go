@@ -300,6 +300,63 @@ func TestBuilderSuppressesShortPendingTimerBatch(t *testing.T) {
 	require.Contains(t, got.BusinessChecks[0].Reason, "协调进行中")
 }
 
+func TestBuilderExplainsShortRuntimeSubmitTimeout(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		labels := `{"space_id":"crypto_market","dataset_id":"bars","frequency":"1m"}`
+		seedOverviewMetricForInstance(t, db, "timeout-required", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 34, now)
+		seedOverviewMetricForInstance(t, db, "timeout-active", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 34, now)
+		seedOverviewMetricForInstance(t, db, "timeout-health", "moox_collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto_market"}`, 0, now)
+		seedOverviewMetricForInstance(t, db, "timeout-state", "moox_collector", "collector@control", "moox_collector_market_fetch_coordination_pending", `{"space_id":"crypto_market"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "timeout-since", "moox_collector", "collector@control", "moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", `{"space_id":"crypto_market"}`, float64(now.Add(-time.Minute).Unix()), now)
+		seedOverviewMetricForInstance(t, db, "timeout-reason", "moox_collector", "collector@control", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto_market","reason":"submit_timeout"}`, 1, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "healthy", got.BusinessChecks[0].Status)
+	require.Contains(t, got.BusinessChecks[0].Reason, "配置提交超时")
+	require.Contains(t, got.BusinessChecks[0].Reason, "自动重试")
+}
+
+func TestBuilderReportsPersistentRuntimeSubmitTimeout(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		labels := `{"space_id":"crypto_market","dataset_id":"bars","frequency":"1m"}`
+		seedOverviewMetricForInstance(t, db, "timeout-old-required", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 34, now)
+		seedOverviewMetricForInstance(t, db, "timeout-old-active", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 34, now)
+		seedOverviewMetricForInstance(t, db, "timeout-old-health", "moox_collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto_market"}`, 0, now)
+		seedOverviewMetricForInstance(t, db, "timeout-old-state", "moox_collector", "collector@control", "moox_collector_market_fetch_coordination_pending", `{"space_id":"crypto_market"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "timeout-old-since", "moox_collector", "collector@control", "moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", `{"space_id":"crypto_market"}`, float64(now.Add(-timerCoordinationPendingGrace-time.Minute).Unix()), now)
+		seedOverviewMetricForInstance(t, db, "timeout-old-reason", "moox_collector", "collector@control", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto_market","reason":"submit_timeout"}`, 1, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "down", got.BusinessChecks[0].Status)
+	require.Contains(t, got.BusinessChecks[0].Reason, "配置提交持续超时")
+	require.NotContains(t, got.BusinessChecks[0].Reason, "节点不足")
+}
+
+func TestBuilderDoesNotMislabelCloudNodeFailureAsCapacityShortage(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		labels := `{"space_id":"crypto_market","dataset_id":"bars","frequency":"1m"}`
+		seedOverviewMetricForInstance(t, db, "cloudnode-required", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 34, now)
+		seedOverviewMetricForInstance(t, db, "cloudnode-active", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 0, now)
+		seedOverviewMetricForInstance(t, db, "cloudnode-health", "moox_collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto_market"}`, 0, now)
+		seedOverviewMetricForInstance(t, db, "cloudnode-reason", "moox_collector", "collector@control", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto_market","reason":"cloudnode"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "cloudnode-capacity-total", "moox_collector", "collector@control", "moox_collector_market_fetch_timer_capacity_total", `{"space_id":"crypto_market"}`, 60, now)
+		seedOverviewMetricForInstance(t, db, "cloudnode-capacity-required", "moox_collector", "collector@control", "moox_collector_market_fetch_timer_capacity_required", `{"space_id":"crypto_market"}`, 34, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "down", got.BusinessChecks[0].Status)
+	require.Contains(t, got.BusinessChecks[0].Reason, "配置服务调用失败")
+	require.NotContains(t, got.BusinessChecks[0].Reason, "节点不足")
+}
+
 func TestBuilderAlertsWhenTimerBatchPendingTooLong(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {

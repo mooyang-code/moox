@@ -122,9 +122,10 @@ func normalizeDNSRoutes(snapshot map[string]sources.DNSResolution) (map[string][
 			delete(routes, host)
 			continue
 		}
-		if len(resolution.LatencyMS) == 0 {
-			sort.Strings(routes[host])
-		}
+		// The DNS snapshot may rank the same IP set differently after every
+		// latency probe. Keep the propagated routes canonical so an order-only
+		// change does not submit a full SCF fleet update.
+		sort.Strings(routes[host])
 		if resolution.ResolvedAt.After(latest) {
 			latest = resolution.ResolvedAt
 		}

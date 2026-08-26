@@ -17,6 +17,7 @@ func TestMetricsExposeCompactAssignmentSet(t *testing.T) {
 	metrics.ObserveTimerState("crypto_market", "timer-1", "true", 1)
 	metrics.ObserveTimerCapacity("crypto_market", 45, 52, 0)
 	metrics.ObserveAssignmentError("crypto_market", "capacity")
+	metrics.ObserveAssignmentFailure("crypto_market", "submit_timeout")
 	metrics.ObservePeriodPending("bars", "1m", 2)
 	metrics.ObservePeriodReportRetry("bars", "1m")
 	families, err := registry.Gather()
@@ -31,6 +32,7 @@ func TestMetricsExposeCompactAssignmentSet(t *testing.T) {
 		"moox_collector_market_fetch_assignment_active":                            {},
 		"moox_collector_market_fetch_assignment_last_success_timestamp_seconds":    {},
 		"moox_collector_market_fetch_coordination_healthy":                         {},
+		"moox_collector_market_fetch_coordination_failure":                         {},
 		"moox_collector_market_fetch_coordination_pending":                         {},
 		"moox_collector_market_fetch_coordination_pending_since_timestamp_seconds": {},
 		"moox_collector_market_fetch_timer_available":                              {},
@@ -136,4 +138,27 @@ func TestMetricsRecoveryCanSucceedWithoutAssignmentScopes(t *testing.T) {
 	metrics.ObserveAssignmentFailure("crypto_market", "rules")
 	metrics.ObserveAssignmentSuccess("crypto_market", 1722772800)
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto_market")))
+}
+
+func TestMetricsKeepOnlyCurrentCoordinationFailureReason(t *testing.T) {
+	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.ObserveAssignmentFailure("crypto_market", "submit_timeout")
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto_market", "submit_timeout")))
+
+	metrics.ObserveAssignmentFailure("crypto_market", "cloudnode")
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto_market", "submit_timeout")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto_market", "cloudnode")))
+
+	metrics.ObserveAssignmentSuccess("crypto_market", 1722772800)
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto_market", "cloudnode")))
+}
+
+func TestMetricsResetRequirementsPreservesLastActiveAssignment(t *testing.T) {
+	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.ObserveAssignmentDesired("crypto_market", "bars", "1m", 34, 34)
+	metrics.ResetAssignmentRequirements("crypto_market")
+	metrics.ObserveAssignmentRequired("crypto_market", "bars", "1m", 34)
+
+	require.Equal(t, float64(34), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto_market", "bars", "1m")))
+	require.Equal(t, float64(34), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto_market", "bars", "1m")))
 }

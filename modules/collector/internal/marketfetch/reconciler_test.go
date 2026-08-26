@@ -44,6 +44,7 @@ type reconcilerNodesStub struct {
 	listStarted chan struct{}
 	listRelease chan struct{}
 	listOnce    sync.Once
+	submitErr   error
 }
 
 func (s *reconcilerNodesStub) ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
@@ -59,6 +60,9 @@ func (s *reconcilerNodesStub) ListTimerMarketFetchers(context.Context, string) (
 func (s *reconcilerNodesStub) SubmitRuntimeConfigs(_ context.Context, _ string, patches []*cloudnodepb.NodeRuntimeConfigPatch) (string, error) {
 	s.submits++
 	s.patches = append([]*cloudnodepb.NodeRuntimeConfigPatch(nil), patches...)
+	if s.submitErr != nil {
+		return "", s.submitErr
+	}
 	for _, patch := range patches {
 		for index := range s.nodes {
 			if s.nodes[index].NodeID != patch.GetNodeId() {
@@ -80,6 +84,36 @@ func (s *reconcilerNodesStub) SubmitRuntimeConfigs(_ context.Context, _ string, 
 		}
 	}
 	return "job-1", nil
+}
+
+func TestReconcilerTreatsRuntimeSubmitTimeoutAsRetryPending(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
+	}
+	nodes := &reconcilerNodesStub{
+		nodes:     []scfinvoker.Node{{NodeID: "timer-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}},
+		submitErr: context.DeadlineExceeded,
+	}
+	metrics := NewMetrics(prometheus.NewRegistry())
+	reconciler := &Reconciler{
+		Rules:   reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}},
+		Nodes:   nodes,
+		Metrics: metrics,
+	}
+
+	require.ErrorIs(t, reconciler.Reconcile(context.Background(), "crypto_market"), context.DeadlineExceeded)
+	_, firstPendingSince := reconciler.pendingRuntimeJobState()
+	require.False(t, firstPendingSince.IsZero())
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto_market", "bars", "1m")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto_market")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto_market", "submit_timeout")))
+
+	time.Sleep(time.Millisecond)
+	require.ErrorIs(t, reconciler.Reconcile(context.Background(), "crypto_market"), context.DeadlineExceeded)
+	_, secondPendingSince := reconciler.pendingRuntimeJobState()
+	require.Equal(t, firstPendingSince, secondPendingSince, "retries must preserve the original pending time")
 }
 
 func (s *reconcilerNodesStub) GetRuntimeConfigBatchStatus(context.Context, string, string) (*cloudnodepb.NodeBatchSummary, error) {

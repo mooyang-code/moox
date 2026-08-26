@@ -867,6 +867,7 @@ type timerCoordinationState struct {
 	hasHealth                                                                     bool
 	staleSeries                                                                   bool
 	badNodes                                                                      []string
+	failureReasons                                                                map[string]bool
 }
 
 // A full Tencent runtime-config batch may touch dozens of functions. The
@@ -967,6 +968,19 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 	}); err != nil {
 		return nil, err
 	}
+	if err := load("moox_collector_market_fetch_coordination_failure", func(state *timerCoordinationState, labels map[string]string, value float64) {
+		if value <= 0 {
+			return
+		}
+		if state.failureReasons == nil {
+			state.failureReasons = make(map[string]bool)
+		}
+		if reason := strings.TrimSpace(labels["reason"]); reason != "" {
+			state.failureReasons[reason] = true
+		}
+	}); err != nil {
+		return nil, err
+	}
 	if err := load("moox_collector_market_fetch_coordination_pending", func(state *timerCoordinationState, _ map[string]string, value float64) {
 		if value > state.pending {
 			state.pending = value
@@ -1044,7 +1058,11 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 			now.Sub(unixTime(state.pendingSince)) >= 0 && now.Sub(unixTime(state.pendingSince)) <= timerCoordinationPendingGrace &&
 			state.active >= state.required && len(state.badNodes) == 0
 		if pendingGrace {
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: "Timer 配置协调进行中", LastCheckedAt: now})
+			reason := "Timer 配置协调进行中"
+			if state.failureReasons["submit_timeout"] {
+				reason = "Timer 配置提交超时，正在自动重试"
+			}
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: reason, LastCheckedAt: now})
 			continue
 		}
 		if state.hasCapacityTotal && state.hasCapacityRequired && state.capacityRequired > state.capacityTotal {
@@ -1055,7 +1073,18 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		}
 		if state.hasHealth && state.healthy <= 0 {
 			reason := "Collector Timer 协调失败：请检查 Timer 分片容量、触发器状态和 Collector 日志"
-			if state.hasRequired && state.required > state.active {
+			switch {
+			case state.failureReasons["submit_timeout"]:
+				reason = "Timer 配置提交持续超时：请检查 CloudNode、网关连接和批处理队列"
+			case state.failureReasons["cloudnode"]:
+				reason = "Timer 配置服务调用失败：请检查 CloudNode、网关连接和批处理队列"
+			case state.failureReasons["environment"]:
+				reason = "Timer 运行环境生成失败：请检查环境变量大小和 DNS 配置"
+			case state.failureReasons["rules"]:
+				reason = "Timer 采集规则读取失败：请检查 Collector 规则配置和存储连接"
+			case state.failureReasons["task_instances"]:
+				reason = "Timer 任务实例保存失败：请检查 Collector 数据库"
+			case state.failureReasons["capacity"] && state.hasRequired && state.required > state.active:
 				reason = fmt.Sprintf("Timer 分片节点不足：需要 %.0f 个，当前仅分配 %.0f 个", state.required, state.active)
 			}
 			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})

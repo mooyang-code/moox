@@ -24,6 +24,30 @@ func TestBuildManagedEnvironmentCanonicalizesDNS(t *testing.T) {
 	require.Equal(t, "2026-08-04T00:00:00Z", env["MOOX_MARKET_FETCH_DNS_UPDATED_AT"])
 }
 
+func TestManagedDNSHashIgnoresLatencyOrderedIPChanges(t *testing.T) {
+	resolvedAt := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+	first := map[string]sources.DNSResolution{
+		"api.binance.com": {
+			IPs:        []string{"203.0.113.2", "203.0.113.1"},
+			LatencyMS:  map[string]uint32{"203.0.113.2": 10, "203.0.113.1": 20},
+			ResolvedAt: resolvedAt,
+		},
+	}
+	second := map[string]sources.DNSResolution{
+		"api.binance.com": {
+			IPs:        []string{"203.0.113.1", "203.0.113.2"},
+			LatencyMS:  map[string]uint32{"203.0.113.1": 8, "203.0.113.2": 25},
+			ResolvedAt: resolvedAt.Add(time.Minute),
+		},
+	}
+
+	firstRoutes, firstHash, _ := normalizeDNSRoutes(first)
+	secondRoutes, secondHash, _ := normalizeDNSRoutes(second)
+	require.Equal(t, firstRoutes, secondRoutes)
+	require.Equal(t, firstHash, secondHash)
+	require.Equal(t, []string{"203.0.113.1", "203.0.113.2"}, firstRoutes["api.binance.com"])
+}
+
 func TestBuildManagedEnvironmentFitsTypicalThirtySymbols(t *testing.T) {
 	subjects := make([]string, 0, 30)
 	externals := make(map[string]string, 30)
