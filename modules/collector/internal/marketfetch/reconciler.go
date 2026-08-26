@@ -384,7 +384,11 @@ func (r *Reconciler) observeTimerStates(spaceID string, nodes []scfinvoker.Node)
 		status, hasStatus := node.Metadata["timer_available_status"]
 		available := strings.TrimSpace(fmt.Sprint(status))
 		value := -1.0
-		if hasStatus {
+		// CloudNode reports Unknown when the provider readback is unavailable
+		// (for example, a transient Tencent API limit). Unknown is not proof
+		// that the trigger is down; keep the documented -1 value so Monitor
+		// ignores this observation until the next bounded readback.
+		if hasStatus && available != "" && !strings.EqualFold(available, "unknown") {
 			actualEnabled, hasActualEnabled := metadataBoolValue(node.Metadata, "timer_actual_enabled")
 			actualType := strings.TrimSpace(fmt.Sprint(node.Metadata["timer_actual_type"]))
 			actualCron := strings.TrimSpace(fmt.Sprint(node.Metadata["timer_actual_cron"]))

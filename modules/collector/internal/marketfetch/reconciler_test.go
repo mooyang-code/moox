@@ -204,6 +204,16 @@ func TestReconcilerDetectsUnexpectedOpenDisabledTimer(t *testing.T) {
 	require.Equal(t, float64(0), testutil.ToFloat64(metrics.timerAvailable.WithLabelValues("crypto_market", "timer-id", "false")))
 }
 
+func TestReconcilerTreatsUnknownTimerReadbackAsUnknown(t *testing.T) {
+	metrics := NewMetrics(prometheus.NewRegistry())
+	(&Reconciler{Metrics: metrics}).observeTimerStates("crypto_market", []scfinvoker.Node{{
+		NodeID: "timer-id", Metadata: map[string]any{
+			"timer_enabled": true, "timer_available_status": "Unknown", "timer_status_error": "RequestLimitExceeded",
+		},
+	}})
+	require.Equal(t, float64(-1), testutil.ToFloat64(metrics.timerAvailable.WithLabelValues("crypto_market", "timer-id", "true")))
+}
+
 func TestReconcilerRejectsExhaustedRemoteEnvironmentBudget(t *testing.T) {
 	rule := domain.TaskRule{SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`}
