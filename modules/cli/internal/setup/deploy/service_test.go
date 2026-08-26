@@ -120,6 +120,25 @@ func TestPrepareTradeServiceRunsEventBusPreflightBeforeStopping(t *testing.T) {
 	require.ErrorIs(t, statErr, os.ErrNotExist, "existing service must not stop before EventBus preflight")
 }
 
+func TestPrepareTradeServiceUsesRemoteEventBusURLForPreflight(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "eventbus-url")
+	archive := serviceArchive(t, map[string]string{
+		"start.sh":           "#!/bin/sh\nexit 0\n",
+		"stop.sh":            "#!/bin/sh\nexit 0\n",
+		"healthcheck.sh":     "#!/bin/sh\nexit 0\n",
+		"bin/moox-trade":     "trade",
+		"bin/moox-trade-cli": fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"$MOOX_EVENTBUS_NATS_URL\" > %q\nexit 1\n", marker),
+		"config/app.yaml":    "eventbus:\n  enabled: true\n",
+	})
+	deploy := filepath.Join(t.TempDir(), "prod")
+	command := exec.Command("bash", "-c", prepareServiceScript, "prepare", deploy, "trade", archive, "tls://106.53.107.122:4222")
+	output, err := command.CombinedOutput()
+	require.Error(t, err, string(output))
+	got, readErr := os.ReadFile(marker)
+	require.NoError(t, readErr)
+	require.Equal(t, "tls://106.53.107.122:4222", string(got))
+}
+
 func serviceArchive(t *testing.T, entries map[string]string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "service.zip")

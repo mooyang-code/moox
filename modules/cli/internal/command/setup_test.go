@@ -226,6 +226,16 @@ func TestSetupDeployServicePassesPackageAndService(t *testing.T) {
 	require.JSONEq(t, `{"service_name":"admin","deploy_dir":"/home/ubuntu/moox/prod","remote_archive":"","local_sha256":"local","remote_sha256":"local"}`, output.String())
 }
 
+func TestSetupEventBusURLUsesManifestEndpoint(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	require.Equal(t, "tls://eventbus.example.test:4333", setupEventBusURL(snapshot.Manifest))
+	snapshot.Manifest.EventBus.TLSEnabled = false
+	require.Equal(t, "nats://eventbus.example.test:4333", setupEventBusURL(snapshot.Manifest))
+	snapshot.Manifest.EventBus.Port = 0
+	require.Empty(t, setupEventBusURL(snapshot.Manifest))
+}
+
 func TestSetupHostsListsSanitizedManifestHosts(t *testing.T) {
 	t.Parallel()
 	snapshot := setupSnapshot(t)

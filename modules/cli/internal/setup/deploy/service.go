@@ -26,6 +26,10 @@ type ServiceOptions struct {
 	PackagePath string
 	ServiceName string
 	DeployDir   string
+	// EventBusURL is supplied for Trade service preflight. A standalone
+	// service package otherwise only has the module's loopback default, while
+	// the deployed process receives the remote endpoint from start.sh.
+	EventBusURL string
 }
 
 type ServiceResult struct {
@@ -85,7 +89,7 @@ func Service(ctx context.Context, transport setupssh.Client, opts ServiceOptions
 		return result, fmt.Errorf("service_digest_mismatch")
 	}
 
-	if _, err := transport.Run(ctx, []string{"bash", "-lc", prepareServiceScript, "moox-prepare-service", deployDir, opts.ServiceName, result.RemoteArchive}, nil); err != nil {
+	if _, err := transport.Run(ctx, []string{"bash", "-lc", prepareServiceScript, "moox-prepare-service", deployDir, opts.ServiceName, result.RemoteArchive, opts.EventBusURL}, nil); err != nil {
 		return result, fmt.Errorf("service_prepare_failed")
 	}
 	prepared := true
@@ -199,6 +203,7 @@ const prepareServiceScript = `set -eu
 deploy=$1
 service=$2
 archive=$3
+eventbus_url=${4:-}
 stage="$deploy/.moox-service.next"
 previous="$deploy/.moox-service.previous"
 manifest="$previous/manifest"
@@ -228,7 +233,11 @@ if [ "$service" = "trade" ]; then
     echo "trade_eventbus_preflight_config_missing" >&2
     exit 1
   }
-  "$stage/bin/moox-trade-cli" eventbus-check --config "$trade_config" || {
+  if [ -n "$eventbus_url" ]; then
+    MOOX_EVENTBUS_NATS_URL="$eventbus_url" "$stage/bin/moox-trade-cli" eventbus-check --config "$trade_config"
+  else
+    "$stage/bin/moox-trade-cli" eventbus-check --config "$trade_config"
+  fi || {
     echo "trade_eventbus_preflight_failed" >&2
     exit 1
   }

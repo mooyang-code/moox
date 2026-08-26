@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1247,6 +1248,7 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 	}
 	result, err := setupdeploy.Service(ctx, transport, setupdeploy.ServiceOptions{
 		PackagePath: packagePath, ServiceName: service, DeployDir: deployDir,
+		EventBusURL: setupEventBusURL(snapshot.Manifest),
 	})
 	if err != nil {
 		return setupdeploy.ServiceResult{}, err
@@ -1274,6 +1276,18 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 	}
 	result.RegistrySynced = true
 	return result, nil
+}
+
+func setupEventBusURL(manifest setupconfig.Manifest) string {
+	address := strings.TrimSpace(manifest.EventBus.PublicAddress)
+	if address == "" || manifest.EventBus.Port < 1 || manifest.EventBus.Port > 65535 {
+		return ""
+	}
+	scheme := "nats"
+	if manifest.EventBus.TLSEnabled {
+		scheme = "tls"
+	}
+	return scheme + "://" + net.JoinHostPort(address, strconv.Itoa(manifest.EventBus.Port))
 }
 
 func isBrowserService(service string) bool {
