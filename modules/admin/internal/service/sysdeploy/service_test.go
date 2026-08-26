@@ -51,6 +51,28 @@ func TestServiceImpl_SeedDefaults_ShouldInsertRows(t *testing.T) {
 	}
 }
 
+func TestServiceImpl_SeedDefaults_RemovesObsoleteTradeDeployments(t *testing.T) {
+	db := setupSysDeployTestDB(t)
+	svc := NewService(&database.Manager{}, testAdminNodeID)
+	svc.dao = NewDAO(db)
+	ctx := context.Background()
+	for _, name := range obsoleteDefaultDeploymentNames {
+		require.NoError(t, svc.dao.Create(ctx, &Deployment{
+			NodeID: testAdminNodeID, ServiceName: name, Host: "127.0.0.1", Port: 11200, Status: "active",
+		}))
+	}
+
+	require.NoError(t, svc.SeedDefaults(ctx))
+	for _, name := range obsoleteDefaultDeploymentNames {
+		_, err := svc.dao.Get(ctx, testAdminNodeID, name)
+		assert.ErrorIs(t, err, gorm.ErrRecordNotFound, name)
+	}
+	row, err := svc.dao.Get(ctx, testAdminNodeID, "trade_console")
+	require.NoError(t, err)
+	assert.Equal(t, int32(11200), row.Port)
+	assert.Equal(t, "trpc.moox.trade.TradeConsoleService", row.GatewayPath)
+}
+
 func TestServiceImpl_CreateServiceDeployment_InvalidParam_ShouldReturnError(t *testing.T) {
 	db := setupSysDeployTestDB(t)
 	svc := NewService(&database.Manager{}, testAdminNodeID)

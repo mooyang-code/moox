@@ -78,7 +78,16 @@ func (s *ServiceImpl) SeedDefaults(ctx context.Context) error {
 			}
 		}
 	}
-	return s.dao.SeedDefaults(ctx, DefaultDeployments(nodeID), "", nil)
+	return s.dao.SeedDefaults(ctx, DefaultDeployments(nodeID), nodeID, obsoleteDefaultDeploymentNames)
+}
+
+// obsoleteDefaultDeploymentNames is intentionally destructive for the
+// unified Trade cutover: the old split endpoints must not remain as active
+// browser targets after Admin restarts.
+var obsoleteDefaultDeploymentNames = []string{
+	"trade_exchange_account",
+	"trade_execution",
+	"trade_logical_account",
 }
 
 func (s *ServiceImpl) ListServiceDeployments(ctx context.Context, req *pb.ListServiceDeploymentsReq) (*pb.ListServiceDeploymentsRsp, error) {
