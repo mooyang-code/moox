@@ -4,40 +4,22 @@ Use `moox-cli data kline get` when the user asks for collected candlestick data.
 
 ## Resolve the command and config
 
-First obtain the absolute directory containing the `SKILL.md` that was loaded for this request. Set that exact path as `SKILL_ROOT`; do not infer it from the shell's current working directory. Then resolve the CLI and packaged config once:
+From the currently loaded `SKILL.md`, obtain the absolute Skill directory and append `scripts/data-kline.sh`. Invoke that wrapper by its absolute path. Do not infer the Skill location from the shell working directory and do not call `moox-cli` directly.
+
+The wrapper locates its Skill root from `BASH_SOURCE`, injects the absolute packaged `config/data-access.yaml`, rejects caller-supplied `--config`, and resolves `moox-cli` from the repository's `../../bin/moox-cli` before checking `PATH`. It refuses a missing, symlinked, or non-`0600` config.
+
+The Skill archive deliberately does not contain a cross-platform `moox-cli` binary. It depends on that repository binary or an installed `moox-cli` on `PATH`; the wrapper fails clearly when neither exists.
+
+For example, if the loaded file is `/opt/moox-skill/moox/SKILL.md`, make one direct call:
 
 ```bash
-# Substitute the known absolute directory of the loaded SKILL.md here.
-SKILL_ROOT="/absolute/directory/of/the/loaded/moox-skill"
-CONFIG="${SKILL_ROOT}/config/data-access.yaml"
-
-if [[ -x "${SKILL_ROOT}/../../bin/moox-cli" ]]; then
-  CLI="$(cd "${SKILL_ROOT}/../../bin" && pwd -P)/moox-cli"
-elif CLI="$(command -v moox-cli)" && [[ -n "${CLI}" ]]; then
-  :
-else
-  echo "moox-cli not found: build repository bin/moox-cli or install it on PATH" >&2
-  exit 1
-fi
-[[ -f "${CONFIG}" && ! -L "${CONFIG}" ]] || {
-  echo "packaged data-access config is missing or unsafe" >&2
-  exit 1
-}
-```
-
-The Skill archive deliberately does not contain a cross-platform `moox-cli` binary. It depends on the repository binary at `${SKILL_ROOT}/../../bin/moox-cli` or an installed `moox-cli` on `PATH`; stop with the explicit error above when neither exists.
-
-Every query must use the resolved absolute variables and pass the packaged config explicitly:
-
-```bash
-"$CLI" data kline get \
-  --config "$CONFIG" \
+/opt/moox-skill/moox/scripts/data-kline.sh \
   --data-type crypto \
   --symbol BTC-USDT \
   --interval 1m
 ```
 
-Never rely on the CLI's relative default config path or `MOOX_SKILL_CONFIG`. Do not read, print, source, or copy `CONFIG`; it contains derived HMAC credentials and must remain mode `0600`.
+Never pass `--config`, rely on the CLI's relative default config path, or use `MOOX_SKILL_CONFIG`. Do not read, print, source, or copy the packaged config; it contains derived HMAC credentials.
 
 ## Map the request
 
@@ -53,19 +35,16 @@ Examples:
 
 ```bash
 # “获取加密货币 BTC-USDT 的 1m K 线”
-"$CLI" data kline get \
-  --config "$CONFIG" \
+/opt/moox-skill/moox/scripts/data-kline.sh \
   --data-type crypto --symbol BTC-USDT --interval 1m
 
 # “获取币安 BTC-USDT 最新 20 根 1m K 线”
-"$CLI" data kline get \
-  --config "$CONFIG" \
+/opt/moox-skill/moox/scripts/data-kline.sh \
   --data-type crypto --exchange binance \
   --symbol BTC-USDT --interval 1m --limit 20
 
 # “获取币安 BTC-USDT 在指定 UTC 时间范围内的 1m K 线”
-"$CLI" data kline get \
-  --config "$CONFIG" \
+/opt/moox-skill/moox/scripts/data-kline.sh \
   --data-type crypto --exchange binance \
   --symbol BTC-USDT --interval 1m \
   --start-time 2026-08-28T00:00:00Z --end-time 2026-08-28T01:00:00Z

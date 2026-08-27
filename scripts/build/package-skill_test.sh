@@ -17,7 +17,7 @@ file_mode() {
 
 assert_no_transient_files() {
   local dir="$1"
-  if find "${dir}" -maxdepth 1 \( -name 'moox-skill-stage.*' -o -name '*.tmp.*' \) -print -quit | grep -q .; then
+  if find "${dir}" \( -name 'moox-skill-stage.*' -o -name '*.tmp.*' \) -print -quit | grep -q .; then
     fail "temporary staging/archive files were not cleaned"
   fi
 }
@@ -61,6 +61,7 @@ CONFIG="${CONFIG}" MOOX_CLI="${FAKE_CLI}" OUT="${OUT}" \
 
 if tar -tzf "${OUT}" >"${TEST_ROOT}/archive.list"; then
   grep -qx 'moox/config/data-access.yaml' "${TEST_ROOT}/archive.list" || fail "generated config missing from archive"
+  grep -qx 'moox/scripts/data-kline.sh' "${TEST_ROOT}/archive.list" || fail "data-kline wrapper missing from archive"
   if grep -Eq '(^|/)custom\.toml$' "${TEST_ROOT}/archive.list"; then
     fail "custom.toml leaked into archive"
   fi
@@ -75,6 +76,7 @@ tar -xzf "${OUT}" -C "${EXTRACTED}"
 PACKAGED_CONFIG="${EXTRACTED}/moox/config/data-access.yaml"
 [[ -f "${PACKAGED_CONFIG}" && ! -L "${PACKAGED_CONFIG}" ]] || fail "packaged config is not a regular file"
 [[ "$(file_mode "${PACKAGED_CONFIG}")" == 600 ]] || fail "packaged config mode is not 0600"
+[[ -x "${EXTRACTED}/moox/scripts/data-kline.sh" ]] || fail "packaged data-kline wrapper is not executable"
 grep -q 'TEST_ONLY_EXPORTED_GATEWAY_SECRET' "${PACKAGED_CONFIG}" || fail "fake CLI output was not packaged"
 if rg --hidden -F "${SENTINEL_ROOT}" "${EXTRACTED}" >/dev/null || \
    rg --hidden -F "${SENTINEL_SSH}" "${EXTRACTED}" >/dev/null || \
