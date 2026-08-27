@@ -128,7 +128,7 @@ describe("page layout standards", () => {
     expect(tradeRecords).toContain('class="orders-workbench-content"');
     expect(tradeRecords).not.toContain("<a-tabs");
     expectMargin(tradeRecords, ".orders-workbench-content", "margin-top", 12);
-    expectMargin(tradeRecords, ".filter-bar", "margin-bottom", 8);
+    expect(tradeRecords).toMatch(/\.filter-bar\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-tight\);/);
     expect(tradeRecords).toMatch(/\.orders-page\s*:deep\(\.state-select\)\s*\{[\s\S]*?width:\s*140px;/);
     expect(tradeRecords).toMatch(/\.orders-page\s*:deep\(\.time-range\)\s*\{[\s\S]*?width:\s*300px;/);
   });

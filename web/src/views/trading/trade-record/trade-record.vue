@@ -22,18 +22,18 @@
         </div>
 
         <section v-if="activeTab === 'orders'" class="orders-tab-panel" aria-label="订单">
-          <div class="filter-bar">
+          <a-space class="filter-bar" wrap>
             <a-input v-model="filterSymbol" placeholder="交易标的" allow-clear class="symbol-input" @press-enter="searchOrders" />
             <a-select v-model="orderState" allow-clear placeholder="订单状态" class="state-select">
               <a-option v-for="item in orderStateOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
             </a-select>
             <a-checkbox v-model="onlyOpen" @change="searchOrders">仅未完成</a-checkbox>
             <a-range-picker v-model="orderTimeRange" value-format="timestamp" class="time-range" @change="searchOrders" />
-            <a-button :disabled="!tradingAccountId" @click="searchOrders">
+            <a-button type="primary" :disabled="!tradingAccountId" @click="searchOrders">
               <template #icon><icon-search /></template>
               查询
             </a-button>
-          </div>
+          </a-space>
           <div class="orders-table-region">
             <a-empty v-if="!loading && !orders.length" class="orders-empty-state" description="暂无订单" />
             <a-table
@@ -85,14 +85,14 @@
         </section>
 
         <section v-else class="orders-tab-panel" aria-label="成交">
-          <div class="filter-bar">
+          <a-space class="filter-bar" wrap>
             <a-input v-model="filterSymbol" placeholder="交易标的" allow-clear class="symbol-input" @press-enter="searchFills" />
             <a-range-picker v-model="fillTimeRange" value-format="timestamp" class="time-range" @change="searchFills" />
-            <a-button :disabled="!tradingAccountId" @click="searchFills">
+            <a-button type="primary" :disabled="!tradingAccountId" @click="searchFills">
               <template #icon><icon-search /></template>
               查询
             </a-button>
-          </div>
+          </a-space>
           <div class="orders-table-region">
             <a-empty v-if="!loading && !fills.length" class="orders-empty-state" description="暂无成交记录" />
             <a-table
@@ -435,15 +435,11 @@ onMounted(async () => {
 }
 .filter-bar {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--moox-space-3);
-  min-height: 42px;
-  margin-bottom: var(--moox-space-2);
-  padding: 8px 10px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-  background: var(--color-bg-2);
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  justify-content: flex-start;
+  margin-bottom: var(--moox-space-tight);
 }
 .orders-tab-panel {
   display: flex;
