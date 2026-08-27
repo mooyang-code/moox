@@ -111,6 +111,9 @@ func TestBuildSkillDataAccessConfigSelectsExactSpaceAndValidatesMaterial(t *test
 		case filepath.Join(paths.ControlRoot, "secrets/gateway-service.env"):
 			require.Equal(t, "control", host.Name)
 			return []byte("MOOX_GATEWAY_NODE_ID=control\n"), nil
+		case filepath.Join(paths.ControlRoot, "secrets/gateway-credentials.json"):
+			require.Equal(t, "control", host.Name)
+			return testSkillRegistryRaw(), nil
 		case filepath.Join(paths.ControlRoot, "secrets/storage-internal-auth.env"):
 			require.Equal(t, "control", host.Name)
 			return []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=" + testSkillPrimarySecret + "\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), nil
@@ -154,6 +157,9 @@ func TestBuildSkillDataAccessConfigRejectsMissingTargetNodeAndRemoteSecrets(t *t
 			if filepath.Base(path) == "gateway-service.env" {
 				return []byte("MOOX_GATEWAY_NODE_ID=control\n"), nil
 			}
+			if filepath.Base(path) == "gateway-credentials.json" {
+				return testSkillRegistryRaw(), nil
+			}
 			return []byte("MOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), nil
 		}, want: "Storage auth"},
 	}
@@ -181,6 +187,10 @@ func TestBuildSkillDataAccessConfigReadsGatewayIdentityFromTargetHost(t *testing
 			require.Equal(t, "Storage-Node", host.Name)
 			require.Equal(t, filepath.Join(paths.StorageRoot, "secrets/gateway-service.env"), path)
 			return []byte("MOOX_GATEWAY_NODE_ID=Storage-Node\n"), nil
+		case "gateway-credentials.json":
+			require.Equal(t, "Storage-Node", host.Name)
+			require.Equal(t, filepath.Join(paths.StorageRoot, "secrets/gateway-credentials.json"), path)
+			return testSkillRegistryRaw(), nil
 		case "storage-internal-auth.env":
 			require.Equal(t, "Primary-Control", host.Name)
 			require.Equal(t, filepath.Join(paths.ControlRoot, "secrets/storage-internal-auth.env"), path)
@@ -206,6 +216,8 @@ func TestBuildSkillDataAccessConfigCanonicalizesControlGatewayNode(t *testing.T)
 			return []byte(testSkillGatewaySecret), nil
 		case "gateway-service.env":
 			return []byte("MOOX_GATEWAY_NODE_ID=control\n"), nil
+		case "gateway-credentials.json":
+			return testSkillRegistryRaw(), nil
 		case "storage-internal-auth.env":
 			return []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=" + testSkillPrimarySecret + "\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), nil
 		default:
@@ -230,6 +242,8 @@ func TestBuildSkillDataAccessConfigRejectsMismatchedDeployedGatewayIdentity(t *t
 			return []byte(testSkillGatewaySecret), nil
 		case "gateway-service.env":
 			return []byte("MOOX_GATEWAY_NODE_ID=other-node\n"), nil
+		case "gateway-credentials.json":
+			return testSkillRegistryRaw(), nil
 		default:
 			return []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=" + testSkillPrimarySecret + "\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), nil
 		}
@@ -303,6 +317,69 @@ func TestBuildSkillDataAccessConfigRejectsUnsafeTargetGatewayKey(t *testing.T) {
 	}
 }
 
+func TestBuildSkillDataAccessConfigRequiresRegisteredSkillIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		prepare func(*testing.T, string)
+	}{
+		{name: "missing", prepare: func(*testing.T, string) {}},
+		{name: "symlink", prepare: func(t *testing.T, path string) {
+			target := path + ".target"
+			require.NoError(t, os.WriteFile(target, testSkillRegistryRaw(), 0o600))
+			require.NoError(t, os.Symlink(target, path))
+		}},
+		{name: "mode", prepare: func(t *testing.T, path string) {
+			require.NoError(t, os.WriteFile(path, testSkillRegistryRaw(), 0o644))
+		}},
+		{name: "malformed", prepare: func(t *testing.T, path string) {
+			require.NoError(t, os.WriteFile(path, []byte(`{"version":1`), 0o600))
+		}},
+		{name: "unknown field", prepare: func(t *testing.T, path string) {
+			require.NoError(t, os.WriteFile(path, []byte(`{"version":1,"credentials":[],"extra":true}`), 0o600))
+		}},
+		{name: "trailing value", prepare: func(t *testing.T, path string) {
+			require.NoError(t, os.WriteFile(path, append(testSkillRegistryRaw(), []byte(` {}`)...), 0o600))
+		}},
+		{name: "size", prepare: func(t *testing.T, path string) {
+			require.NoError(t, os.WriteFile(path, bytes.Repeat([]byte("x"), 4097), 0o600))
+		}},
+		{name: "unregistered", prepare: func(t *testing.T, path string) {
+			require.NoError(t, os.WriteFile(path, []byte(`{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"}]}`), 0o600))
+		}},
+		{name: "wrong caller", prepare: func(t *testing.T, path string) {
+			require.NoError(t, os.WriteFile(path, []byte(`{"version":1,"credentials":[{"key_id":"moox-skill","caller":"other","secret_file":"gateway-moox-skill.key"}]}`), 0o600))
+		}},
+		{name: "wrong secret file", prepare: func(t *testing.T, path string) {
+			require.NoError(t, os.WriteFile(path, []byte(`{"version":1,"credentials":[{"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-other.key"}]}`), 0o600))
+		}},
+		{name: "duplicate identity", prepare: func(t *testing.T, path string) {
+			require.NoError(t, os.WriteFile(path, []byte(`{"version":1,"credentials":[{"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"},{"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"}]}`), 0o600))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			controlRoot := filepath.Join(root, "control")
+			storageRoot := filepath.Join(root, "storage")
+			require.NoError(t, os.MkdirAll(filepath.Join(controlRoot, "secrets"), 0o700))
+			require.NoError(t, os.MkdirAll(filepath.Join(storageRoot, "secrets"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(storageRoot, "secrets/gateway-moox-skill.key"), []byte(testSkillGatewaySecret), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(storageRoot, "secrets/gateway-service.env"), []byte("MOOX_GATEWAY_NODE_ID=storage\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(controlRoot, "secrets/storage-internal-auth.env"), []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET="+testSkillPrimarySecret+"\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), 0o600))
+			test.prepare(t, filepath.Join(storageRoot, "secrets/gateway-credentials.json"))
+
+			snapshot := setupSkillSnapshot(t, "crypto_market", "ip://198.51.100.9:11003", "storage")
+			snapshot.Manifest.Paths.ControlRoot = controlRoot
+			snapshot.Manifest.Paths.StorageRoot = storageRoot
+			snapshot.Manifest.OtherHosts = []setupconfig.Host{{Name: "storage", Address: "198.51.100.9", Port: 22, Username: "ubuntu"}}
+			read := func(ctx context.Context, _ setupconfig.Host, path string) ([]byte, error) {
+				return readRemoteSkillSecret(ctx, localSkillSSH{}, path)
+			}
+			_, err := buildSkillDataAccessConfig(context.Background(), snapshot, "crypto_market", read)
+			require.ErrorContains(t, err, "Gateway credential registry")
+		})
+	}
+}
+
 func TestWriteSkillConfigAtomicFailurePreservesExistingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data-access.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("old"), 0o600))
@@ -345,6 +422,10 @@ func testSkillDataAccessConfig() dataAccessConfig {
 		Storage:   dataStorageAuthConfig{AppID: "moox-skill", AppKey: security.HMACSHA256Hex(testSkillPrimarySecret, []byte("moox-skill"))},
 		DataTypes: map[string]dataTypeConfig{"crypto": {DefaultExchange: "binance", Exchanges: map[string]exchangeConfig{"binance": {SpaceID: "crypto_market", SeriesTag: "venue:binance", KlineDatasets: map[string]string{"1m": "binance_spot_kline_1m"}}}}},
 	}
+}
+
+func testSkillRegistryRaw() []byte {
+	return []byte(`{"version":1,"credentials":[{"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"}]}`)
 }
 
 func setupSkillSnapshot(t *testing.T, space, target, node string) *setupconfig.Snapshot {

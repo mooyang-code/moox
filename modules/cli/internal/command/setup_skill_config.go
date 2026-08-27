@@ -2,10 +2,14 @@ package command
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
@@ -17,6 +21,17 @@ import (
 const skillConfigIdentity = "moox-skill"
 
 type skillSecretReader func(context.Context, setupconfig.Host, string) ([]byte, error)
+
+type skillGatewayCredentialRegistry struct {
+	Version     int                                   `json:"version"`
+	Credentials []skillGatewayCredentialRegistryEntry `json:"credentials"`
+}
+
+type skillGatewayCredentialRegistryEntry struct {
+	KeyID      string `json:"key_id"`
+	Caller     string `json:"caller"`
+	SecretFile string `json:"secret_file"`
+}
 
 func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 	var file, space, output string
@@ -146,6 +161,15 @@ func buildSkillDataAccessConfig(
 		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway identity does not match configured target")
 	}
 	gatewayEnvRaw = nil
+	registryPath := filepath.Join(gatewayRoot, "secrets/gateway-credentials.json")
+	registryRaw, err := read(ctx, gatewayHost, registryPath)
+	if err != nil {
+		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway credential registry unavailable")
+	}
+	if err := validateSkillGatewayCredentialRegistry(registryRaw, filepath.Join(gatewayRoot, "secrets/gateway-moox-skill.key")); err != nil {
+		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway credential registry invalid: %w", err)
+	}
+	registryRaw = nil
 
 	controlRoot := snapshot.Manifest.Paths.Resolved().ControlRoot
 	storageRaw, err := read(ctx, snapshot.Manifest.ControlHost, filepath.Join(controlRoot, "secrets/storage-internal-auth.env"))
@@ -179,6 +203,71 @@ func buildSkillDataAccessConfig(
 			},
 		},
 	}, nil
+}
+
+func validateSkillGatewayCredentialRegistry(raw []byte, expectedSecretPath string) error {
+	if len(raw) == 0 || len(raw) > 4096 {
+		return fmt.Errorf("invalid size")
+	}
+	var registry skillGatewayCredentialRegistry
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&registry); err != nil {
+		return fmt.Errorf("decode registry: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values are not allowed")
+		}
+		return fmt.Errorf("decode trailing registry content: %w", err)
+	}
+	if registry.Version != 1 {
+		return fmt.Errorf("version must be 1")
+	}
+	if len(registry.Credentials) == 0 {
+		return fmt.Errorf("credentials are required")
+	}
+	keyIDs := make(map[string]struct{}, len(registry.Credentials))
+	callers := make(map[string]struct{}, len(registry.Credentials))
+	skillEntries := 0
+	for _, entry := range registry.Credentials {
+		if !validSkillRegistryIdentifier(entry.KeyID) || !validSkillRegistryIdentifier(entry.Caller) || strings.TrimSpace(entry.SecretFile) == "" {
+			return fmt.Errorf("credential entry is invalid")
+		}
+		if _, exists := keyIDs[entry.KeyID]; exists {
+			return fmt.Errorf("duplicate key_id %q", entry.KeyID)
+		}
+		keyIDs[entry.KeyID] = struct{}{}
+		if _, exists := callers[entry.Caller]; exists {
+			return fmt.Errorf("duplicate caller %q", entry.Caller)
+		}
+		callers[entry.Caller] = struct{}{}
+
+		if entry.KeyID != skillConfigIdentity && entry.Caller != skillConfigIdentity {
+			continue
+		}
+		skillEntries++
+		if entry.KeyID != skillConfigIdentity || entry.Caller != skillConfigIdentity {
+			return fmt.Errorf("moox-skill key_id and caller must match")
+		}
+		if entry.SecretFile != filepath.Base(expectedSecretPath) {
+			return fmt.Errorf("moox-skill secret_file must be %q", filepath.Base(expectedSecretPath))
+		}
+		resolved := filepath.Join(filepath.Dir(expectedSecretPath), entry.SecretFile)
+		if filepath.Clean(resolved) != filepath.Clean(expectedSecretPath) {
+			return fmt.Errorf("moox-skill secret_file path does not match deployed key")
+		}
+	}
+	if skillEntries != 1 {
+		return fmt.Errorf("moox-skill must be registered exactly once")
+	}
+	return nil
+}
+
+func validSkillRegistryIdentifier(value string) bool {
+	return value != "" && value == strings.TrimSpace(value) && utf8.ValidString(value) &&
+		!strings.ContainsFunc(value, unicode.IsControl)
 }
 
 func resolveSkillGatewayPlacement(manifest setupconfig.Manifest, configuredNodeID string) (setupconfig.Host, string, string, error) {
