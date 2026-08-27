@@ -46,6 +46,7 @@ type setupDeps struct {
 	e2eStorage             func(context.Context, *setupconfig.Snapshot, string, string) (storageE2EResult, error)
 	browserE2EStorage      func(context.Context, *setupconfig.Snapshot, string, string) (storageBrowserResult, error)
 	e2eEventBus            func(context.Context, *setupconfig.Snapshot) (eventBusE2EResult, error)
+	exportSkillConfig      func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
 }
 
 func init() {
@@ -78,6 +79,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupE2EStorageCommand(deps),
 		newSetupBrowserE2EStorageCommand(deps),
 		newSetupE2EEventBusCommand(deps),
+		newSetupExportSkillConfigCommand(deps),
 	)
 	return cmd
 }
@@ -621,6 +623,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.e2eEventBus == nil {
 		deps.e2eEventBus = defaults.e2eEventBus
 	}
+	if deps.exportSkillConfig == nil {
+		deps.exportSkillConfig = defaults.exportSkillConfig
+	}
 	return deps
 }
 
@@ -652,6 +657,7 @@ func defaultSetupDeps() setupDeps {
 		e2eStorage:             defaultSetupE2EStorage,
 		browserE2EStorage:      defaultSetupBrowserE2EStorage,
 		e2eEventBus:            defaultSetupE2EEventBus,
+		exportSkillConfig:      defaultSetupExportSkillConfig,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address)
 			tlsMode := setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode)
