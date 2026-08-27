@@ -52,6 +52,7 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 		limit      uint32
 		startTime  string
 		endTime    string
+		timeout    time.Duration
 		output     string
 	)
 	cmd := &cobra.Command{
@@ -70,6 +71,9 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			}
 			if limit < 1 || limit > 1000 {
 				return fmt.Errorf("--limit 必须在 1..1000 范围内")
+			}
+			if timeout <= 0 {
+				return fmt.Errorf("--timeout 必须大于 0")
 			}
 			startTime = strings.TrimSpace(startTime)
 			endTime = strings.TrimSpace(endTime)
@@ -104,7 +108,9 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 				SpaceId:   selection.SpaceID,
 				DatasetId: selection.DatasetID,
 			}
-			rsp, err := deps.newReader(cfg).ReadTimeSeriesRows(cmd.Context(), req)
+			rpcCtx, cancel := context.WithTimeout(cmd.Context(), timeout)
+			defer cancel()
+			rsp, err := deps.newReader(cfg).ReadTimeSeriesRows(rpcCtx, req)
 			if err != nil {
 				return fmt.Errorf("PrimaryStore/ReadTimeSeriesRows RPC failed: %w", err)
 			}
@@ -125,6 +131,7 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 	cmd.Flags().Uint32Var(&limit, "limit", 100, "返回条数，范围 1..1000")
 	cmd.Flags().StringVar(&startTime, "start-time", "", "RFC3339 起始时间")
 	cmd.Flags().StringVar(&endTime, "end-time", "", "RFC3339 结束时间")
+	cmd.Flags().DurationVar(&timeout, "timeout", 15*time.Second, "RPC 超时时间，必须大于 0")
 	cmd.Flags().StringVar(&output, "output", "", "输出 JSON 文件；为空则输出到 stdout")
 	_ = cmd.MarkFlagRequired("data-type")
 	_ = cmd.MarkFlagRequired("symbol")

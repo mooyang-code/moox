@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/spf13/cobra"
@@ -17,12 +18,19 @@ import (
 
 type fakeTimeSeriesReader struct {
 	request *pb.ReadTimeSeriesRowsReq
+	ctx     context.Context
 	rsp     *pb.ReadTimeSeriesRowsRsp
 	err     error
+	wait    bool
 }
 
-func (f *fakeTimeSeriesReader) ReadTimeSeriesRows(_ context.Context, req *pb.ReadTimeSeriesRowsReq, _ ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error) {
+func (f *fakeTimeSeriesReader) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq, _ ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error) {
+	f.ctx = ctx
 	f.request = req
+	if f.wait {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return f.rsp, f.err
 }
 
@@ -58,6 +66,9 @@ func TestDataKlineBuildsCatalogBackedRPCRequest(t *testing.T) {
 	assert.Equal(t, "1m", selector.GetFreq())
 	assert.Equal(t, "venue:binance", selector.GetSeriesTag())
 	assert.Contains(t, stdout.String(), "ret_info")
+	deadline, ok := reader.ctx.Deadline()
+	require.True(t, ok)
+	assert.WithinDuration(t, time.Now().Add(15*time.Second), deadline, time.Second)
 }
 
 func TestDataKlineValidatesRequiredFlagsAndRange(t *testing.T) {
@@ -70,6 +81,8 @@ func TestDataKlineValidatesRequiredFlagsAndRange(t *testing.T) {
 		{name: "symbol", args: []string{"--data-type", "crypto"}, want: "symbol"},
 		{name: "zero limit", args: []string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--limit", "0"}, want: "1..1000"},
 		{name: "large limit", args: []string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--limit", "1001"}, want: "1..1000"},
+		{name: "zero timeout", args: []string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--timeout", "0s"}, want: "--timeout"},
+		{name: "negative timeout", args: []string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--timeout", "-1s"}, want: "--timeout"},
 		{name: "bad start", args: []string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--start-time", "today"}, want: "RFC3339"},
 		{name: "reverse range", args: []string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--start-time", "2026-08-28T02:00:00Z", "--end-time", "2026-08-28T01:00:00Z"}, want: "start-time"},
 	}
@@ -84,6 +97,16 @@ func TestDataKlineValidatesRequiredFlagsAndRange(t *testing.T) {
 			assert.Nil(t, reader.request)
 		})
 	}
+}
+
+func TestDataKlineRPCTimeout(t *testing.T) {
+	reader := &fakeTimeSeriesReader{wait: true}
+	_, _, cmd := newTestDataKlineCommand(t, reader)
+	cmd.SetArgs([]string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--timeout", "10ms"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), "deadline exceeded")
 }
 
 func TestDataKlineRejectsBusinessAndRPCFailures(t *testing.T) {
