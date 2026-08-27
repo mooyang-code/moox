@@ -97,7 +97,7 @@
           </template>
         </a-alert>
 
-        <div class="position-table-region">
+        <div v-if="!positionsError" class="position-table-region">
           <a-empty
             v-if="
               !loading &&
