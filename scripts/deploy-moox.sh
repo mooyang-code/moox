@@ -4521,8 +4521,24 @@ if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
     # the installed listener contract for the next restart.
     TAR_EXCLUDES+=(--exclude='./config/runtime.env')
   fi
+  mkdir -p "${DEPLOY_DIR}/secrets"
+  rm -f "${DEPLOY_DIR}/secrets/.gateway-moox-skill.key.next" \
+    "${DEPLOY_DIR}/secrets/.gateway-credentials.json.next"
+  umask 077
+  tar -xOzf "${ARCHIVE}" ./secrets/gateway-moox-skill.key \
+    >"${DEPLOY_DIR}/secrets/.gateway-moox-skill.key.next"
+  tar -xOzf "${ARCHIVE}" ./secrets/gateway-credentials.json \
+    >"${DEPLOY_DIR}/secrets/.gateway-credentials.json.next"
+  chmod 0600 "${DEPLOY_DIR}/secrets/.gateway-moox-skill.key.next" \
+    "${DEPLOY_DIR}/secrets/.gateway-credentials.json.next"
 fi
 tar "${TAR_EXCLUDES[@]}" -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
+if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
+  mv -f "${DEPLOY_DIR}/secrets/.gateway-moox-skill.key.next" \
+    "${DEPLOY_DIR}/secrets/gateway-moox-skill.key"
+  mv -f "${DEPLOY_DIR}/secrets/.gateway-credentials.json.next" \
+    "${DEPLOY_DIR}/secrets/gateway-credentials.json"
+fi
 rm -f "${ARCHIVE}"
 if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
   persist_selected_components "${DEPLOY_DIR}/config/components.env" \
