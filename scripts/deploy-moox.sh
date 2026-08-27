@@ -352,6 +352,22 @@ generate_secret() {
   printf '%s' "${secret}"
 }
 
+gateway_key_file_is_retainable() {
+  local file="$1"
+  [[ -f "${file}" && ! -L "${file}" ]] || return 1
+  awk '
+    {
+      if (index($0, "\r") != 0) exit 1
+      lines++
+      value = $0
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      if (value != "") nonblank = 1
+    }
+    END { if (lines != 1 || !nonblank) exit 1 }
+  ' "${file}"
+}
+
 validate_cloud_account_id_arg() {
   [[ $# -ge 2 ]] || fail "--cloud-account-id requires a value"
   local value="$2"
@@ -3926,6 +3942,19 @@ sync_local_stage() {
     fail "existing control plane detected; use --component-overlay for a partial update"
   fi
 
+  if [[ "${component_overlay}" -eq 0 ]]; then
+    if [[ ( -e "${deploy_dir}/secrets" || -L "${deploy_dir}/secrets" ) && ( ! -d "${deploy_dir}/secrets" || -L "${deploy_dir}/secrets" ) ]]; then
+      fail "existing secrets target must be a regular directory"
+    fi
+    for staged_gateway_secret in "${STAGE_DIR}"/secrets/gateway-*; do
+      [[ -f "${staged_gateway_secret}" && ! -L "${staged_gateway_secret}" ]] || continue
+      gateway_secret_target="${deploy_dir}/secrets/$(basename "${staged_gateway_secret}")"
+      if [[ ( -e "${gateway_secret_target}" || -L "${gateway_secret_target}" ) && ( ! -f "${gateway_secret_target}" || -L "${gateway_secret_target}" ) ]]; then
+        fail "existing Gateway secret target is unsafe: $(basename "${gateway_secret_target}")"
+      fi
+    done
+  fi
+
   if [[ "${component_overlay}" -eq 0 && ( -e "${deploy_dir}/config/caddy/edge.env" || -e "${deploy_dir}/config/caddy/Caddyfile" || -e "${deploy_dir}/run/caddy.pid" ) ]]; then
     [[ "${NO_START}" -eq 0 ]] || fail "--no-start refuses to replace an existing managed Caddy deployment"
     [[ -n "${PUBLIC_HOST}" ]] || fail "existing managed Caddy deployment requires --public-host"
@@ -4139,14 +4168,25 @@ sync_local_stage() {
     fi
     for shared_gateway_file in gateway-control.key gateway-service.key gateway-control.env gateway-service.env; do
       shared_gateway_path="${deploy_dir}/secrets/${shared_gateway_file}"
-      if [[ "${component_overlay}" -eq 1 && -f "${shared_gateway_path}" && ! -L "${shared_gateway_path}" ]] && grep -q '[^[:space:]]' "${shared_gateway_path}"; then
+      shared_gateway_retainable=0
+      if [[ "${shared_gateway_file}" == *.key ]]; then
+        gateway_key_file_is_retainable "${shared_gateway_path}" && shared_gateway_retainable=1
+      elif [[ -f "${shared_gateway_path}" && ! -L "${shared_gateway_path}" ]] && grep -q '[^[:space:]]' "${shared_gateway_path}"; then
+        shared_gateway_retainable=1
+      fi
+      if [[ "${component_overlay}" -eq 1 && "${shared_gateway_retainable}" -eq 1 ]]; then
         chmod 0600 "${shared_gateway_path}"
       else
         shared_gateway_source="${STAGE_DIR}/secrets/${shared_gateway_file}"
         shared_gateway_next="${deploy_dir}/secrets/.${shared_gateway_file}.next"
-        [[ -f "${shared_gateway_source}" && ! -L "${shared_gateway_source}" ]] && \
-          grep -q '[^[:space:]]' "${shared_gateway_source}" || \
-          fail "staged Gateway secret is empty or unsafe: ${shared_gateway_file}"
+        if [[ "${shared_gateway_file}" == *.key ]]; then
+          gateway_key_file_is_retainable "${shared_gateway_source}" || \
+            fail "staged Gateway secret is empty or unsafe: ${shared_gateway_file}"
+        else
+          [[ -f "${shared_gateway_source}" && ! -L "${shared_gateway_source}" ]] && \
+            grep -q '[^[:space:]]' "${shared_gateway_source}" || \
+            fail "staged Gateway secret is empty or unsafe: ${shared_gateway_file}"
+        fi
         rm -f "${shared_gateway_next}"
         install -m 0600 "${shared_gateway_source}" "${shared_gateway_next}"
         gateway_secret_next_files+=("${shared_gateway_next}")
@@ -4172,13 +4212,12 @@ sync_local_stage() {
   if [[ "${component_overlay}" -eq 0 || "${WITH_GATEWAY}" -eq 1 ]]; then
     for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-trade.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key "${STAGE_DIR}"/secrets/gateway-moox-skill.key; do
       credential_path="${deploy_dir}/secrets/$(basename "${credential_file}")"
-      if [[ "${component_overlay}" -eq 1 && -f "${credential_path}" && ! -L "${credential_path}" ]] && grep -q '[^[:space:]]' "${credential_path}"; then
+      if [[ "${component_overlay}" -eq 1 ]] && gateway_key_file_is_retainable "${credential_path}"; then
         chmod 0600 "${credential_path}"
       else
         credential_name="$(basename "${credential_file}")"
         credential_next="${deploy_dir}/secrets/.${credential_name}.next"
-        [[ -f "${credential_file}" && ! -L "${credential_file}" ]] && \
-          grep -q '[^[:space:]]' "${credential_file}" || \
+        gateway_key_file_is_retainable "${credential_file}" || \
           fail "staged Gateway key is empty or unsafe: ${credential_name}"
         rm -f "${credential_next}"
         install -m 0600 "${credential_file}" "${credential_next}"
@@ -4197,8 +4236,8 @@ sync_local_stage() {
     gateway_cli_env_target="${deploy_dir}/secrets/gateway-moox-cli.env"
     gateway_cli_env_next="${deploy_dir}/secrets/.gateway-moox-cli.env.next"
     rm -f "${gateway_cli_env_next}"
-    gateway_cli_secret="$(tr -d '\r\n' <"${gateway_cli_key_path}")"
-    gateway_collector_secret="$(tr -d '\r\n' <"${gateway_collector_key_path}")"
+    gateway_cli_secret="$(sed 's/^[[:space:]]*//; s/[[:space:]]*$//' "${gateway_cli_key_path}")"
+    gateway_collector_secret="$(sed 's/^[[:space:]]*//; s/[[:space:]]*$//' "${gateway_collector_key_path}")"
     while IFS= read -r gateway_cli_env_line || [[ -n "${gateway_cli_env_line}" ]]; do
       case "${gateway_cli_env_line}" in
         MOOX_GATEWAY_SERVICE_SECRET_KEY=*) printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_cli_secret}" ;;
@@ -4355,6 +4394,22 @@ generate_secret() {
   [[ -n "${secret}" ]] || secret=$(printf '%s' "${output}" | tr -d '\r\n')
   [[ "${secret}" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid ${purpose} secret" >&2; exit 1; }
   printf '%s' "${secret}"
+}
+
+gateway_key_file_is_retainable() {
+  local file="$1"
+  [[ -f "${file}" && ! -L "${file}" ]] || return 1
+  awk '
+    {
+      if (index($0, "\r") != 0) exit 1
+      lines++
+      value = $0
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      if (value != "") nonblank = 1
+    }
+    END { if (lines != 1 || !nonblank) exit 1 }
+  ' "${file}"
 }
 
 persist_selected_components() {
@@ -4539,6 +4594,23 @@ elif [[ "${WITH_ADMIN}" == "0" && "${WITH_STORAGE}" == "0" && "${HAS_SELECTED_WO
   echo "existing control plane detected; use --component-overlay for a partial update" >&2
   exit 1
 fi
+if [[ "${COMPONENT_OVERLAY}" == "0" ]]; then
+  if [[ ( -e "${DEPLOY_DIR}/secrets" || -L "${DEPLOY_DIR}/secrets" ) && ( ! -d "${DEPLOY_DIR}/secrets" || -L "${DEPLOY_DIR}/secrets" ) ]]; then
+    echo "existing secrets target must be a regular directory" >&2
+    exit 1
+  fi
+  while IFS= read -r gateway_secret_entry; do
+    case "${gateway_secret_entry}" in
+      ./secrets/gateway-*)
+        gateway_secret_target="${DEPLOY_DIR}/secrets/${gateway_secret_entry##*/}"
+        if [[ ( -e "${gateway_secret_target}" || -L "${gateway_secret_target}" ) && ( ! -f "${gateway_secret_target}" || -L "${gateway_secret_target}" ) ]]; then
+          echo "existing Gateway secret target is unsafe: ${gateway_secret_entry##*/}" >&2
+          exit 1
+        fi
+        ;;
+    esac
+  done < <(tar -tzf "${ARCHIVE}")
+fi
 KEY_FILE="${HOME}/.config/moox/credentials/admin-encryption-key"
 if [[ "${WITH_ADMIN}" == "1" && ! -f "${KEY_FILE}" ]]; then
   mkdir -p "${HOME}/.config/moox/credentials"
@@ -4693,14 +4765,25 @@ if [[ "${COMPONENT_OVERLAY}" == "1" && "${WITH_GATEWAY}" == "1" ]]; then
         gateway_secret_file="${gateway_key_entry##*/}"
         [[ "${gateway_secret_file}" =~ ^gateway-[a-z0-9-]+\.key$ || "${gateway_secret_file}" == gateway-control.env || "${gateway_secret_file}" == gateway-service.env ]] || continue
         gateway_secret_path="${DEPLOY_DIR}/secrets/${gateway_secret_file}"
-        if [[ -f "${gateway_secret_path}" && ! -L "${gateway_secret_path}" ]] && grep -q '[^[:space:]]' "${gateway_secret_path}"; then
+        gateway_secret_retainable=0
+        if [[ "${gateway_secret_file}" == *.key ]]; then
+          gateway_key_file_is_retainable "${gateway_secret_path}" && gateway_secret_retainable=1
+        elif [[ -f "${gateway_secret_path}" && ! -L "${gateway_secret_path}" ]] && grep -q '[^[:space:]]' "${gateway_secret_path}"; then
+          gateway_secret_retainable=1
+        fi
+        if [[ "${gateway_secret_retainable}" -eq 1 ]]; then
           chmod 0600 "${gateway_secret_path}"
         else
           gateway_secret_next="${DEPLOY_DIR}/secrets/.${gateway_secret_file}.next"
           rm -f "${gateway_secret_next}"
           tar -xOzf "${ARCHIVE}" "${gateway_key_entry}" \
             >"${gateway_secret_next}"
-          if [[ ! -f "${gateway_secret_next}" || -L "${gateway_secret_next}" ]] || ! grep -q '[^[:space:]]' "${gateway_secret_next}"; then
+          if [[ "${gateway_secret_file}" == *.key ]]; then
+            gateway_key_file_is_retainable "${gateway_secret_next}" || {
+              echo "archived Gateway secret is empty or unsafe: ${gateway_secret_file}" >&2
+              exit 1
+            }
+          elif [[ ! -f "${gateway_secret_next}" || -L "${gateway_secret_next}" ]] || ! grep -q '[^[:space:]]' "${gateway_secret_next}"; then
             echo "archived Gateway secret is empty or unsafe: ${gateway_secret_file}" >&2
             exit 1
           fi
@@ -4723,8 +4806,8 @@ if [[ "${COMPONENT_OVERLAY}" == "1" && "${WITH_GATEWAY}" == "1" ]]; then
   gateway_cli_env_next="${DEPLOY_DIR}/secrets/.gateway-moox-cli.env.next"
   rm -f "${gateway_cli_env_template}" "${gateway_cli_env_next}"
   tar -xOzf "${ARCHIVE}" ./secrets/gateway-moox-cli.env >"${gateway_cli_env_template}"
-  gateway_cli_secret="$(tr -d '\r\n' <"${gateway_cli_key_path}")"
-  gateway_collector_secret="$(tr -d '\r\n' <"${gateway_collector_key_path}")"
+  gateway_cli_secret="$(sed 's/^[[:space:]]*//; s/[[:space:]]*$//' "${gateway_cli_key_path}")"
+  gateway_collector_secret="$(sed 's/^[[:space:]]*//; s/[[:space:]]*$//' "${gateway_collector_key_path}")"
   while IFS= read -r gateway_cli_env_line || [[ -n "${gateway_cli_env_line}" ]]; do
     case "${gateway_cli_env_line}" in
       MOOX_GATEWAY_SERVICE_SECRET_KEY=*) printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_cli_secret}" ;;

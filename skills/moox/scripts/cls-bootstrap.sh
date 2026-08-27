@@ -574,9 +574,36 @@ cleanup() {
   fi
 }
 
+validate_gateway_cli_env() {
+  local file=$1 mode
+  [[ -f "${file}" && ! -L "${file}" && -O "${file}" ]] || fail "unsafe gateway-moox-cli.env"
+  if mode=$(stat -c '%a' "${file}" 2>/dev/null); then :; else mode=$(stat -f '%Lp' "${file}"); fi
+  [[ "${mode}" == 600 ]] || fail "unsafe gateway-moox-cli.env mode"
+  awk -F= '
+    BEGIN {
+      allowed["MOOX_GATEWAY_SERVICE_KEY_ID"]=1; allowed["MOOX_GATEWAY_CALLER"]=1
+      allowed["MOOX_GATEWAY_SERVICE_SECRET_KEY"]=1; allowed["MOOX_GATEWAY_TARGET_NODE"]=1
+      allowed["MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"]=1; allowed["MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"]=1
+      allowed["MOOX_SERVICE_GATEWAY_TARGET"]=1; allowed["MOOX_GATEWAY_CA_FILE"]=1
+    }
+    !/^[A-Z0-9_]+=/ || !($1 in allowed) { exit 1 }
+    {
+      value=substr($0, index($0, "=")+1)
+      if (value == "") exit 1
+      for (i=1; i<=length(value); i++) {
+        char=substr(value, i, 1)
+        if (char == "\\") { if (i == length(value)) exit 1; i++; continue }
+        if (char !~ /^[A-Za-z0-9_\.\/:@%+=,-]$/) exit 1
+      }
+      seen[$1]++
+    }
+    END { for (key in allowed) if (seen[key] != 1) exit 1 }
+  ' "${file}" || fail "unsafe gateway-moox-cli.env content"
+}
+
 run_local_prepare() {
   local deploy=$1
-  [[ -r "${deploy}/secrets/gateway-moox-cli.env" ]] || fail "missing gateway-moox-cli.env"
+  validate_gateway_cli_env "${deploy}/secrets/gateway-moox-cli.env"
   [[ -r "${deploy}/certs/gateway/peers.pem" ]] || fail "missing Gateway CA bundle"
   mkdir -p "${deploy}/secrets"
   rm -f "${NEXT_PATH}"
@@ -633,6 +660,30 @@ next="${deploy}/secrets/.cls.env.${token}.next"
 trap 'status=$?; if [[ ${status} -ne 0 ]]; then rm -f "${next}"; fi; exit ${status}' EXIT
 [[ -r "${deploy}/secrets/gateway-moox-cli.env" ]] || { echo "missing gateway-moox-cli.env" >&2; exit 1; }
 [[ -r "${deploy}/certs/gateway/peers.pem" ]] || { echo "missing Gateway CA bundle" >&2; exit 1; }
+gateway_env="${deploy}/secrets/gateway-moox-cli.env"
+[[ -f "${gateway_env}" && ! -L "${gateway_env}" && -O "${gateway_env}" ]] || { echo "unsafe gateway-moox-cli.env" >&2; exit 1; }
+if mode=$(stat -c '%a' "${gateway_env}" 2>/dev/null); then :; else mode=$(stat -f '%Lp' "${gateway_env}"); fi
+[[ "${mode}" == 600 ]] || { echo "unsafe gateway-moox-cli.env mode" >&2; exit 1; }
+awk -F= '
+  BEGIN {
+    allowed["MOOX_GATEWAY_SERVICE_KEY_ID"]=1; allowed["MOOX_GATEWAY_CALLER"]=1
+    allowed["MOOX_GATEWAY_SERVICE_SECRET_KEY"]=1; allowed["MOOX_GATEWAY_TARGET_NODE"]=1
+    allowed["MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"]=1; allowed["MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"]=1
+    allowed["MOOX_SERVICE_GATEWAY_TARGET"]=1; allowed["MOOX_GATEWAY_CA_FILE"]=1
+  }
+  !/^[A-Z0-9_]+=/ || !($1 in allowed) { exit 1 }
+  {
+    value=substr($0, index($0, "=")+1)
+    if (value == "") exit 1
+    for (i=1; i<=length(value); i++) {
+      char=substr(value, i, 1)
+      if (char == "\\") { if (i == length(value)) exit 1; i++; continue }
+      if (char !~ /^[A-Za-z0-9_\.\/:@%+=,-]$/) exit 1
+    }
+    seen[$1]++
+  }
+  END { for (key in allowed) if (seen[key] != 1) exit 1 }
+' "${gateway_env}" || { echo "unsafe gateway-moox-cli.env content" >&2; exit 1; }
 set -a
 source "${deploy}/secrets/gateway-moox-cli.env"
 MOOX_GATEWAY_CA_FILE="${deploy}/certs/gateway/peers.pem"

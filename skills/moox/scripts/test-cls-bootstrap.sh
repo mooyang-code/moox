@@ -76,7 +76,7 @@ CLI
 new_deploy() {
   local deploy=$1
   mkdir -p "${deploy}/secrets" "${deploy}/certs/gateway"
-  printf 'MOOX_GATEWAY_TARGET_NODE=gateway-test\nMOOX_GATEWAY_CALLER=moox-cli\nMOOX_GATEWAY_SERVICE_KEY_ID=svc-ak\nMOOX_GATEWAY_SERVICE_SECRET_KEY=svc-sk\n' \
+  printf 'MOOX_GATEWAY_TARGET_NODE=gateway-test\nMOOX_GATEWAY_CALLER=moox-cli\nMOOX_GATEWAY_SERVICE_KEY_ID=svc-ak\nMOOX_GATEWAY_SERVICE_SECRET_KEY=svc-sk\nMOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID=collector\nMOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=collector-sk\nMOOX_SERVICE_GATEWAY_TARGET=ip://127.0.0.1:11003\nMOOX_GATEWAY_CA_FILE=/data/moox/certs/gateway/peers.pem\n' \
     >"${deploy}/secrets/gateway-moox-cli.env"
   printf '%s\n' '-----BEGIN CERTIFICATE-----' 'Y2VydA==' '-----END CERTIFICATE-----' \
     >"${deploy}/certs/gateway/peers.pem"
@@ -137,6 +137,33 @@ STAGE="${TMP}/stage"
 DEPLOY="${TMP}/deploy"
 new_stage "${STAGE}"
 new_deploy "${DEPLOY}"
+
+UNSAFE_STAGE="${TMP}/unsafe-stage"
+UNSAFE_DEPLOY="${TMP}/unsafe-deploy"
+new_stage "${UNSAFE_STAGE}"
+new_deploy "${UNSAFE_DEPLOY}"
+printf 'touch %q\n' "${TMP}/unsafe-env-executed" >"${TMP}/unsafe-env-payload"
+rm -f "${UNSAFE_DEPLOY}/secrets/gateway-moox-cli.env"
+ln -s "${TMP}/unsafe-env-payload" "${UNSAFE_DEPLOY}/secrets/gateway-moox-cli.env"
+if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${UNSAFE_DEPLOY}" --stage-dir "${UNSAFE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/unsafe-env.out" 2>&1; then
+  echo 'symlink Gateway CLI env unexpectedly accepted' >&2
+  exit 1
+fi
+[[ ! -e "${TMP}/unsafe-env-executed" ]]
+
+rm -f "${UNSAFE_DEPLOY}/secrets/gateway-moox-cli.env"
+new_deploy "${UNSAFE_DEPLOY}"
+printf 'PWN=touch-marker\n' >>"${UNSAFE_DEPLOY}/secrets/gateway-moox-cli.env"
+if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${UNSAFE_DEPLOY}" --stage-dir "${UNSAFE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/malicious-env.out" 2>&1; then
+  echo 'Gateway CLI env with an extra variable unexpectedly accepted' >&2
+  exit 1
+fi
 
 output="${TMP}/local-output"
 MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
@@ -637,6 +664,33 @@ if PATH="${MAL_BIN}:${FAKE_BIN}:${PATH}" MOOX_TEST_MAL_MARKER="${MAL_MARKER}" \
   exit 1
 fi
 [[ ! -e "${MAL_MARKER}" ]]
+
+printf 'touch %q\n' "${TMP}/unsafe-remote-env-executed" >"${TMP}/unsafe-remote-env-payload"
+rm -f "${REMOTE_HOME}/moox/secrets/gateway-moox-cli.env"
+ln -s "${TMP}/unsafe-remote-env-payload" "${REMOTE_HOME}/moox/secrets/gateway-moox-cli.env"
+if PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
+  MOOX_TEST_REMOTE_HOME="${REMOTE_HOME}" MOOX_TEST_REMOTE_PATHS="${REMOTE_PATHS}" \
+  MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target deploy@example.test \
+  --deploy-dir '~/moox' --stage-dir "${REMOTE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/unsafe-remote-env.out" 2>&1; then
+  echo 'remote symlink Gateway CLI env unexpectedly accepted' >&2
+  exit 1
+fi
+[[ ! -e "${TMP}/unsafe-remote-env-executed" ]]
+rm -f "${REMOTE_HOME}/moox/secrets/gateway-moox-cli.env"
+new_deploy "${REMOTE_HOME}/moox"
+printf 'PWN=touch-marker\n' >>"${REMOTE_HOME}/moox/secrets/gateway-moox-cli.env"
+if PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
+  MOOX_TEST_REMOTE_HOME="${REMOTE_HOME}" MOOX_TEST_REMOTE_PATHS="${REMOTE_PATHS}" \
+  MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target deploy@example.test \
+  --deploy-dir '~/moox' --stage-dir "${REMOTE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/malicious-remote-env.out" 2>&1; then
+  echo 'remote Gateway CLI env with an extra variable unexpectedly accepted' >&2
+  exit 1
+fi
+new_deploy "${REMOTE_HOME}/moox"
 
 printf 'success\n' >"${mode_file}"
 remote_output="${TMP}/remote-output"
