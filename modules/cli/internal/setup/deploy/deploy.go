@@ -1027,12 +1027,20 @@ install_storage() {
   tar -C "$next" -xzf "$archive"
   printf '%s\n' "$activation_token" >"$next/.storage-activation-token"
   date +%s >"$next/.storage-staged-at"
+  packaged_gateway_registry=0
+  if [ -e "$next/secrets/gateway-credentials.json" ] || [ -L "$next/secrets/gateway-credentials.json" ]; then
+    [ -f "$next/secrets/gateway-credentials.json" ] && [ ! -L "$next/secrets/gateway-credentials.json" ] &&
+      [ -s "$next/secrets/gateway-credentials.json" ] || { echo storage_gateway_registry_invalid >&2; return 1; }
+    chmod 600 "$next/secrets/gateway-credentials.json"
+    packaged_gateway_registry=1
+  fi
   preserve_data=0
   if [ "$reset_storage_data" = "0" ] && [ -d "$deploy/data" ]; then preserve_data=1; fi
   if [ -d "$deploy/secrets" ]; then
     for secret in "$deploy/secrets/"*; do
       [ -e "$secret" ] || continue
       case "$(basename "$secret")" in
+        gateway-credentials.json) [ "$packaged_gateway_registry" = "1" ] && continue ;;
         storage-internal-auth.env) continue ;;
         health-auth.env) [ -s "$next/secrets/health-auth.env" ] && continue ;;
       esac
@@ -1318,7 +1326,18 @@ install_control() {
   if [ -s "$next/secrets/storage-internal-auth.env" ]; then
     mv "$next/secrets/storage-internal-auth.env" "$packaged_storage_auth"
   fi
+  packaged_gateway_registry=""
+  if [ -e "$next/secrets/gateway-credentials.json" ] || [ -L "$next/secrets/gateway-credentials.json" ]; then
+    [ -f "$next/secrets/gateway-credentials.json" ] && [ ! -L "$next/secrets/gateway-credentials.json" ] &&
+      [ -s "$next/secrets/gateway-credentials.json" ] || { echo control_gateway_registry_invalid >&2; return 1; }
+    packaged_gateway_registry="$next/.gateway-credentials.json.packaged"
+    mv "$next/secrets/gateway-credentials.json" "$packaged_gateway_registry"
+  fi
   if [ -d "$deploy/secrets" ]; then cp -R "$deploy/secrets/." "$next/secrets/"; fi
+  if [ -n "$packaged_gateway_registry" ]; then
+    mv -f "$packaged_gateway_registry" "$next/secrets/gateway-credentials.json"
+    chmod 600 "$next/secrets/gateway-credentials.json"
+  fi
   mkdir -p "$HOME/.config/moox/credentials" "$next/secrets"
   if [ -s "$packaged_storage_auth" ]; then
     if [ ! -s "$next/secrets/storage-internal-auth.env" ]; then

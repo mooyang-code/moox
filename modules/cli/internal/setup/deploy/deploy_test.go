@@ -17,6 +17,7 @@ import (
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/stretchr/testify/require"
 )
 
@@ -470,6 +471,101 @@ func TestStorageInstallerUsesControlGatewayCredentials(t *testing.T) {
 	} {
 		require.Equal(t, contents, string(requireFile(t, filepath.Join(home, "moox", "storage", "secrets", name))))
 	}
+}
+
+func TestStorageInstallerUpgradeKeepsKeysButActivatesPackagedGatewayRegistry(t *testing.T) {
+	home := t.TempDir()
+	deploy := filepath.Join(home, "moox", "storage")
+	prepareOldGatewayDeployment(t, deploy, "storage")
+	archive := buildGatewayUpgradeArchive(t)
+	const token = "storage-gateway-registry-upgrade"
+	remoteArchive := storageArchivePath(token)
+	defer os.Remove(remoteArchive)
+	require.NoError(t, copyFileForTest(archive, remoteArchive))
+
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "0", "0", token, remoteArchive)
+	cmd.Env = storageInstallerEnv(t, home)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	assertGatewayRegistryUpgrade(t, filepath.Join(deploy, "secrets"))
+}
+
+func TestControlInstallerUpgradeKeepsKeysButActivatesPackagedGatewayRegistry(t *testing.T) {
+	home := t.TempDir()
+	deploy := filepath.Join(home, "moox", "prod")
+	prepareOldGatewayDeployment(t, deploy, "control")
+	archive := buildGatewayUpgradeArchive(t)
+	const token = "control-gateway-registry-upgrade"
+	remoteArchive := controlArchivePath(token)
+	defer os.Remove(remoteArchive)
+	require.NoError(t, copyFileForTest(archive, remoteArchive))
+	crontabCommand := filepath.Join(t.TempDir(), "crontab")
+	require.NoError(t, os.WriteFile(crontabCommand, []byte("#!/bin/sh\n[ \"${1:-}\" = -l ] && exit 0\ncat >/dev/null\n"), 0o700))
+
+	cmd := exec.Command("bash", "-c", installControlScript, "moox-install-control", "control.example.test", "9527", "amd64", "0", "public", token, remoteArchive)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"MOOX_CRONTAB_COMMAND="+crontabCommand,
+		"MOOX_CRON_DAEMON_CHECK_COMMAND=/usr/bin/true",
+		"MOOX_FLOCK_COMMAND="+fakeFlockCommand(t),
+	)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	assertGatewayRegistryUpgrade(t, filepath.Join(deploy, "secrets"))
+}
+
+func prepareOldGatewayDeployment(t *testing.T, deploy, nodeID string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "secrets"), 0o700))
+	for _, name := range []string{"start.sh", "stop.sh"} {
+		require.NoError(t, os.WriteFile(filepath.Join(deploy, name), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "secrets", "gateway-collector.key"), []byte("old-collector-key\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "secrets", "gateway-service.env"), []byte("MOOX_GATEWAY_NODE_ID="+nodeID+"\nMOOX_GATEWAY_SERVICE_SECRET_KEY=old-root\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "secrets", "gateway-credentials.json"), []byte(`{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"}]}`), 0o600))
+}
+
+func buildGatewayUpgradeArchive(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, path := range []string{"secrets", "lib", "config/caddy"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, path), 0o700))
+	}
+	for _, name := range []string{"start.sh", "stop.sh"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "lib", "caddy-managed.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config", "caddy", "Caddyfile.next"), nil, 0o600))
+	for name, contents := range map[string]string{
+		"gateway-collector.key":    "new-collector-key\n",
+		"gateway-moox-skill.key":   "new-skill-key\n",
+		"gateway-service.env":      "MOOX_GATEWAY_NODE_ID=storage\nMOOX_GATEWAY_SERVICE_SECRET_KEY=new-root\n",
+		"health-auth.env":          "health\n",
+		"admin-jwt.env":            "admin\n",
+		"gateway-credentials.json": `{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"}]}`,
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "secrets", name), []byte(contents), 0o600))
+	}
+	archive := filepath.Join(t.TempDir(), "gateway-upgrade.tar.gz")
+	require.NoError(t, exec.Command("tar", "-C", dir, "-czf", archive, ".").Run())
+	return archive
+}
+
+func assertGatewayRegistryUpgrade(t *testing.T, secrets string) {
+	t.Helper()
+	require.Equal(t, "old-collector-key\n", string(requireFile(t, filepath.Join(secrets, "gateway-collector.key"))))
+	require.Equal(t, "new-skill-key\n", string(requireFile(t, filepath.Join(secrets, "gateway-moox-skill.key"))))
+	serviceEnv := string(requireFile(t, filepath.Join(secrets, "gateway-service.env")))
+	require.Contains(t, serviceEnv, "MOOX_GATEWAY_SERVICE_SECRET_KEY=old-root")
+	require.NotContains(t, serviceEnv, "new-root")
+	registry := string(requireFile(t, filepath.Join(secrets, "gateway-credentials.json")))
+	require.Contains(t, registry, `"key_id":"moox-skill"`)
+	require.NotEqual(t, `{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"}]}`, registry)
+	info, err := os.Stat(filepath.Join(secrets, "gateway-credentials.json"))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	_, err = gatewayauth.LoadCredentialRegistry(filepath.Join(secrets, "gateway-credentials.json"))
+	require.NoError(t, err, "the upgraded registry and preserved/new keys must be immediately consumable")
 }
 
 func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {
