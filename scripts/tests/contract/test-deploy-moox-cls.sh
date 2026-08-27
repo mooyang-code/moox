@@ -107,6 +107,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=cls-two \
   -keyout "${TMP_ROOT}/ca-two.key" -out "${TMP_ROOT}/ca-two.crt" -days 1 >/dev/null 2>&1
 cat "${TMP_ROOT}/ca-one.crt" "${TMP_ROOT}/ca-two.crt" >"${TMP_ROOT}/peers.pem"
 GATEWAY_ARGS=(
+  --no-hostagent
   --node-id cls-test
   --gateway-control-url http://127.0.0.1:11000
   --gateway-ca-bundle "${TMP_ROOT}/peers.pem"
