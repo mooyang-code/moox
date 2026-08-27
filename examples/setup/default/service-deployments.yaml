@@ -90,8 +90,12 @@ services:
           gateway_callers: [storage-view]
         - service_path: trpc.moox.storage.PrimaryStore
           port: 20102
-          gateway_methods: [UpsertFields, ReadFields, ReadTimeSeriesRows, ReadRecordRows, ReportDatasetPeriodCollected, AppendDatasetSyncPoint, WaitViewSyncPoint, ReportFactorPeriodComputed, GetFactorPeriodComputed]
+          gateway_methods: [UpsertFields, ReadFields, ReadRecordRows, ReportDatasetPeriodCollected, AppendDatasetSyncPoint, WaitViewSyncPoint, ReportFactorPeriodComputed, GetFactorPeriodComputed]
           gateway_callers: [admin-gateway, collector, factor, monitor, archive, storage-view]
+        - service_path: trpc.moox.storage.PrimaryStore
+          port: 20102
+          gateway_methods: [ReadTimeSeriesRows]
+          gateway_callers: [admin-gateway, collector, factor, monitor, archive, storage-view, moox-skill]
   - name: storage-view
     kind: storage
     deployment_mode: process

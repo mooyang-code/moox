@@ -209,12 +209,33 @@ grep -Fq 'base_url: "https://admin.example.com:9527/"' "${DEPLOYED}/gateway/conf
 [[ ! -e "${DEPLOYED}/secrets/service-auth.env" ]] || fail 'deployment generated obsolete service-auth credentials'
 [[ -f "${DEPLOYED}/secrets/gateway-credentials.json" ]] || fail 'Gateway credential registry was not staged'
 grep -Fq 'credentials_file: ../../secrets/gateway-credentials.json' "${DEPLOYED}/gateway/config/app.yaml" || fail 'Gateway credential registry was not configured'
+grep -Fq '"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"' \
+  "${DEPLOYED}/secrets/gateway-credentials.json" || fail 'moox-skill Gateway identity was not registered'
+[[ "$(grep -o '"key_id":"moox-skill"' "${DEPLOYED}/secrets/gateway-credentials.json" | wc -l | tr -d '[:space:]')" == 1 ]] || \
+  fail 'moox-skill Gateway identity was not registered exactly once'
+[[ -s "${DEPLOYED}/secrets/gateway-moox-skill.key" ]] || fail 'moox-skill Gateway key was not staged'
+[[ "$(file_mode "${DEPLOYED}/secrets/gateway-moox-skill.key")" == 600 ]] || fail 'moox-skill Gateway key mode is not 600'
+! cmp -s "${TMP}/service.key" "${DEPLOYED}/secrets/gateway-moox-skill.key" || fail 'moox-skill Gateway key reused the root service secret'
 cmp -s "${TMP}/peers.pem" "${DEPLOYED}/certs/gateway/peers.pem" || fail 'public peer CA was not installed'
 ! grep -Rqs -- 'PRIVATE KEY' "${DEPLOYED}/certs" || fail 'a private CA key was staged'
 for secret in gateway-control.env gateway-service.env gateway-control.key gateway-service.key; do
   mode=$(file_mode "${DEPLOYED}/secrets/${secret}")
   [[ "${mode}" == 600 ]] || fail "${secret} mode is ${mode}, want 600"
 done
+
+# Component upgrades must replace a stale registry that predates moox-skill.
+printf '%s\n' '{"version":1,"credentials":[{"key_id":"moox-gateway-service","caller":"admin-gateway","secret_file":"gateway-service.key"}]}' \
+  >"${DEPLOYED}/secrets/gateway-credentials.json"
+MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
+MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
+  "${DEPLOY}" --target localhost --dir "${DEPLOYED}" --stage "${TMP}/stage-registry-upgrade" \
+  --skip-build --no-start --component-overlay --no-admin --no-storage --no-archive --no-eventbus \
+  --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --no-monitor --local-ca skip --target-ca skip \
+  --node-id gateway-test --gateway-control-url 'https://admin.example.com:9527/' \
+  --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
+  --gateway-service-key-file "${TMP}/service.key" >/dev/null
+grep -Fq '"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"' \
+  "${DEPLOYED}/secrets/gateway-credentials.json" || fail 'component upgrade preserved a stale Gateway registry'
 grep -Fq 'MOOX_GATEWAY_NODE_ID=gateway-test' "${DEPLOYED}/secrets/gateway-service.env" || fail 'Gateway node ID was not scoped with service credentials'
 grep -Fq 'start_admin' "${DEPLOYED}/start.sh" || fail 'central lifecycle function was omitted'
 grep -Fq 'start_gateway' "${DEPLOYED}/start.sh" || fail 'Gateway lifecycle function was omitted'

@@ -129,6 +129,12 @@ grep -Fq 'log_path: ../logs/trade' "${TMP_ROOT}/unpacked/trade/config/trpc_go.ya
 grep -Fq '"caller":"trade","secret_file":"gateway-trade.key"' \
   "${TMP_ROOT}/unpacked/secrets/gateway-credentials.json"
 [[ -s "${TMP_ROOT}/unpacked/secrets/gateway-trade.key" ]]
+grep -Fq '"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"' \
+  "${TMP_ROOT}/unpacked/secrets/gateway-credentials.json"
+[[ -s "${TMP_ROOT}/unpacked/secrets/gateway-moox-skill.key" ]]
+[[ "$(file_mode "${TMP_ROOT}/unpacked/secrets/gateway-moox-skill.key")" == 600 ]]
+! cmp -s "${TMP_ROOT}/unpacked/secrets/gateway-service.key" \
+  "${TMP_ROOT}/unpacked/secrets/gateway-moox-skill.key"
 grep -Fq 'services=(trade "${services[@]}")' "${TMP_ROOT}/unpacked/status.sh"
 grep -Fq 'stop_service "trade"' "${TMP_ROOT}/unpacked/stop.sh"
 ! rg -n '__WITH_(STRATEGY|TRADE)__' "${TMP_ROOT}/unpacked/start.sh" \

@@ -159,7 +159,7 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			t.Fatalf("storage-primary gateway methods must not include %s: %v", method, storageExtra.GatewayMethods)
 		}
 	}
-	var metadataRoute, deleteSpaceRoute, primaryRoute *struct {
+	var metadataRoute, deleteSpaceRoute, primaryRoute, readTimeSeriesRoute *struct {
 		ServicePath    string   `json:"service_path"`
 		Port           int32    `json:"port"`
 		GatewayMethods []string `json:"gateway_methods"`
@@ -174,7 +174,12 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			containsString(storageExtra.GatewayRoutes[i].GatewayMethods, "ClaimViewIndexBuild") {
 			metadataRoute = &storageExtra.GatewayRoutes[i]
 		}
-		if storageExtra.GatewayRoutes[i].ServicePath == "trpc.moox.storage.PrimaryStore" {
+		if storageExtra.GatewayRoutes[i].ServicePath == "trpc.moox.storage.PrimaryStore" &&
+			reflect.DeepEqual(storageExtra.GatewayRoutes[i].GatewayMethods, []string{"ReadTimeSeriesRows"}) {
+			readTimeSeriesRoute = &storageExtra.GatewayRoutes[i]
+		}
+		if storageExtra.GatewayRoutes[i].ServicePath == "trpc.moox.storage.PrimaryStore" &&
+			containsString(storageExtra.GatewayRoutes[i].GatewayMethods, "UpsertFields") {
 			primaryRoute = &storageExtra.GatewayRoutes[i]
 		}
 	}
@@ -187,6 +192,15 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	}
 	if primaryRoute == nil || primaryRoute.Port != 20102 {
 		t.Fatalf("storage-primary gateway route = %+v", primaryRoute)
+	}
+	if containsString(primaryRoute.GatewayMethods, "ReadTimeSeriesRows") ||
+		containsString(primaryRoute.GatewayCallers, "moox-skill") {
+		t.Fatalf("storage-primary general route exposes skill read access: %+v", primaryRoute)
+	}
+	if readTimeSeriesRoute == nil || readTimeSeriesRoute.Port != 20102 ||
+		!reflect.DeepEqual(readTimeSeriesRoute.GatewayMethods, []string{"ReadTimeSeriesRows"}) ||
+		!reflect.DeepEqual(readTimeSeriesRoute.GatewayCallers, []string{"admin-gateway", "collector", "factor", "monitor", "archive", "storage-view", "moox-skill"}) {
+		t.Fatalf("storage-primary ReadTimeSeriesRows route = %+v", readTimeSeriesRoute)
 	}
 	for _, method := range []string{"ReportDatasetPeriodCollected", "AppendDatasetSyncPoint", "WaitViewSyncPoint", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"} {
 		if !containsString(primaryRoute.GatewayMethods, method) {

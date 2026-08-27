@@ -10,10 +10,11 @@ import (
 const defaultPublicHost = "106.53.107.122"
 
 const storageMetadataGatewayMethods = "[\"CreateSpace\",\"UpdateSpace\",\"GetSpace\",\"ListSpaces\",\"CreateView\",\"UpdateView\",\"RequestViewRebuild\",\"GetView\",\"ListViews\",\"UpsertViewColumn\",\"ListViewColumns\",\"ListViewRebuildLogs\",\"CreateDataSource\",\"UpdateDataSource\",\"GetDataSource\",\"ListDataSources\",\"UpsertSubject\",\"UpsertSubjectSymbol\",\"RegisterDataSubject\",\"GetSubject\",\"ListSubjects\",\"ListSubjectSymbols\",\"CreateDataset\",\"UpdateDataset\",\"GetDataset\",\"ListDatasets\",\"BindDatasetSubject\",\"ListDatasetSubjects\",\"CreateFieldGroup\",\"UpdateFieldGroup\",\"GetFieldGroup\",\"ListFieldGroups\",\"CreateField\",\"UpdateField\",\"GetField\",\"ListFields\",\"BatchUpdateFields\",\"DeleteFieldGroup\",\"CreateFactor\",\"UpdateFactor\",\"GetFactor\",\"ListFactors\",\"UpsertDatasetColumn\",\"ListDatasetColumns\",\"GetDataNode\",\"ListDataNodes\",\"UpdateDataNode\",\"DeleteDataNode\",\"CheckDatasetActivation\",\"ActivateDataset\",\"RebindDatasetDataNode\",\"RegisterArchiveFile\",\"ListArchiveFiles\"]"
-const storagePrimaryGatewayMethods = "[\"UpsertFields\",\"ReadFields\",\"ReadTimeSeriesRows\",\"ReadRecordRows\",\"ReportDatasetPeriodCollected\",\"AppendDatasetSyncPoint\",\"WaitViewSyncPoint\",\"ReportFactorPeriodComputed\",\"GetFactorPeriodComputed\"]"
+const storagePrimaryGatewayMethods = "[\"UpsertFields\",\"ReadFields\",\"ReadRecordRows\",\"ReportDatasetPeriodCollected\",\"AppendDatasetSyncPoint\",\"WaitViewSyncPoint\",\"ReportFactorPeriodComputed\",\"GetFactorPeriodComputed\"]"
 const storageViewGatewayMethods = "[\"QueryTimeSeriesRows\",\"SearchRecordRows\"]"
 const storageMetadataGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"moox-cli\",\"storage-view\"]"
 const storagePrimaryGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\"]"
+const storageTimeSeriesGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\",\"moox-skill\"]"
 const storageViewGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\"]"
 
 func DefaultDeployments(nodeID string) []Deployment {
@@ -85,7 +86,7 @@ func withExtra(item Deployment, extra string) Deployment {
 }
 
 func storagePrimaryExtraConfig() string {
-	return fmt.Sprintf(`{"health_url":"http://127.0.0.1:20210/readyz","health_kind":"readiness","monitor_enabled":true,"gateway_methods":%s,"gateway_callers":%s,"gateway_routes":[{"service_path":"trpc.moox.storage.Metadata","port":20100,"gateway_methods":["DeleteSpace"],"gateway_callers":["admin-gateway","moox-cli"]},{"service_path":"trpc.moox.storage.Metadata","port":20100,"gateway_methods":["ClaimViewIndexBuild","UpdateViewIndexBuild","ActivateViewIndex","FailViewIndexBuild","CreateViewRebuildLog","UpdateViewRebuildLog","UpsertSkippedViewRebuildLog"],"gateway_callers":["storage-view"]},{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":%s,"gateway_callers":%s}]}`, storageMetadataGatewayMethods, storageMetadataGatewayCallers, storagePrimaryGatewayMethods, storagePrimaryGatewayCallers)
+	return fmt.Sprintf(`{"health_url":"http://127.0.0.1:20210/readyz","health_kind":"readiness","monitor_enabled":true,"gateway_methods":%s,"gateway_callers":%s,"gateway_routes":[{"service_path":"trpc.moox.storage.Metadata","port":20100,"gateway_methods":["DeleteSpace"],"gateway_callers":["admin-gateway","moox-cli"]},{"service_path":"trpc.moox.storage.Metadata","port":20100,"gateway_methods":["ClaimViewIndexBuild","UpdateViewIndexBuild","ActivateViewIndex","FailViewIndexBuild","CreateViewRebuildLog","UpdateViewRebuildLog","UpsertSkippedViewRebuildLog"],"gateway_callers":["storage-view"]},{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":%s,"gateway_callers":%s},{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":%s}]}`, storageMetadataGatewayMethods, storageMetadataGatewayCallers, storagePrimaryGatewayMethods, storagePrimaryGatewayCallers, storageTimeSeriesGatewayCallers)
 }
 
 func storageViewExtraConfig() string {

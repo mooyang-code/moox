@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -281,6 +282,40 @@ func TestServiceDeploymentSeedExposesStorageSpaceCleanup(t *testing.T) {
 			}
 		}
 		t.Fatal("storage-primary DeleteSpace route is missing")
+	}
+	t.Fatal("storage-primary deployment is missing")
+}
+
+func TestServiceDeploymentSeedRestrictsSkillToTimeSeriesReads(t *testing.T) {
+	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml"))
+	require.NoError(t, err)
+	for _, item := range seed.Services {
+		if item.Name != "storage-primary" {
+			continue
+		}
+		routes, ok := item.ExtraConfig["gateway_routes"].([]any)
+		require.True(t, ok)
+		var general, readOnly map[string]any
+		for _, raw := range routes {
+			route, ok := raw.(map[string]any)
+			require.True(t, ok)
+			if route["service_path"] != "trpc.moox.storage.PrimaryStore" {
+				continue
+			}
+			methods, _ := route["gateway_methods"].([]any)
+			if len(methods) == 1 && methods[0] == "ReadTimeSeriesRows" {
+				readOnly = route
+			} else if slices.Contains(methods, any("UpsertFields")) {
+				general = route
+			}
+		}
+		require.NotNil(t, general)
+		require.NotContains(t, general["gateway_methods"], "ReadTimeSeriesRows")
+		require.NotContains(t, general["gateway_callers"], "moox-skill")
+		require.NotNil(t, readOnly)
+		require.Equal(t, []any{"ReadTimeSeriesRows"}, readOnly["gateway_methods"])
+		require.Equal(t, []any{"admin-gateway", "collector", "factor", "monitor", "archive", "storage-view", "moox-skill"}, readOnly["gateway_callers"])
+		return
 	}
 	t.Fatal("storage-primary deployment is missing")
 }
