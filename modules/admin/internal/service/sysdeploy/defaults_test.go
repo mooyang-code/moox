@@ -343,6 +343,28 @@ func TestMergeDefaultExtraConfigPreservesWildcardGatewayMethods(t *testing.T) {
 	}
 }
 
+func TestMergeDefaultExtraConfigPreservesUserGatewayRouteByIdentity(t *testing.T) {
+	merged, changed := mergeDefaultExtraConfig(
+		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadFields"],"gateway_callers":["operator"],"owner":"ops"}]}`,
+		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadFields"],"gateway_callers":["admin-gateway"]},{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["moox-skill"]}]}`,
+	)
+	if !changed {
+		t.Fatal("changed = false, want missing route to be appended")
+	}
+	var extra struct {
+		GatewayRoutes []map[string]any `json:"gateway_routes"`
+	}
+	if err := json.Unmarshal([]byte(merged), &extra); err != nil {
+		t.Fatal(err)
+	}
+	if len(extra.GatewayRoutes) != 2 {
+		t.Fatalf("gateway routes = %v, want preserved user route plus one default", extra.GatewayRoutes)
+	}
+	if extra.GatewayRoutes[0]["owner"] != "ops" || !reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_callers"], []any{"operator"}) {
+		t.Fatalf("user route was overwritten: %v", extra.GatewayRoutes[0])
+	}
+}
+
 func healthURL(raw string) string {
 	var extra struct {
 		HealthURL string `json:"health_url"`

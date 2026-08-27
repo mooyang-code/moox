@@ -236,6 +236,24 @@ MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
   --gateway-service-key-file "${TMP}/service.key" >/dev/null
 grep -Fq '"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"' \
   "${DEPLOYED}/secrets/gateway-credentials.json" || fail 'component upgrade preserved a stale Gateway registry'
+
+NO_GATEWAY_DEPLOY="${TMP}/deploy-no-gateway-overlay"
+cp -R "${DEPLOYED}" "${NO_GATEWAY_DEPLOY}"
+printf '%s\n' '{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"}]}' \
+  >"${NO_GATEWAY_DEPLOY}/secrets/gateway-credentials.json"
+printf 'preserve-no-gateway-skill\n' >"${NO_GATEWAY_DEPLOY}/secrets/gateway-moox-skill.key"
+MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
+MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
+  "${DEPLOY}" --target localhost --dir "${NO_GATEWAY_DEPLOY}" --stage "${TMP}/stage-no-gateway-overlay" \
+  --skip-build --no-start --component-overlay --no-gateway --no-admin --no-storage --no-archive --no-eventbus \
+  --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --local-ca skip --target-ca skip \
+  --node-id gateway-test --gateway-control-url 'https://admin.example.com:9527/' --monitor-instance-id monitor-local \
+  --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
+  --gateway-service-key-file "${TMP}/service.key" >/dev/null
+! grep -Fq '"key_id":"moox-skill"' "${NO_GATEWAY_DEPLOY}/secrets/gateway-credentials.json" || \
+  fail 'local --no-gateway overlay changed the active Gateway registry'
+grep -Fxq 'preserve-no-gateway-skill' "${NO_GATEWAY_DEPLOY}/secrets/gateway-moox-skill.key" || \
+  fail 'local --no-gateway overlay rotated the inactive skill key'
 grep -Fq 'MOOX_GATEWAY_NODE_ID=gateway-test' "${DEPLOYED}/secrets/gateway-service.env" || fail 'Gateway node ID was not scoped with service credentials'
 grep -Fq 'start_admin' "${DEPLOYED}/start.sh" || fail 'central lifecycle function was omitted'
 grep -Fq 'start_gateway' "${DEPLOYED}/start.sh" || fail 'Gateway lifecycle function was omitted'
@@ -379,12 +397,14 @@ expect_monitor_arg_rejected missing-instance
 expect_monitor_arg_rejected bad-instance --monitor-instance-id '../monitor'
 
 # Exercise the embedded remote extraction script directly. A component overlay
-# must preserve established caller keys while installing the new skill key and
+# must preserve established caller keys while filling missing registry keys and
 # replacing a registry that predates the skill identity.
 REMOTE_OVERLAY_ROOT="${TMP}/remote-overlay-root"
 REMOTE_OVERLAY_PAYLOAD="${TMP}/remote-overlay-payload"
 REMOTE_OVERLAY_ARCHIVE="${TMP}/remote-overlay.tar.gz"
+REMOTE_NO_GATEWAY_ARCHIVE="${TMP}/remote-no-gateway-overlay.tar.gz"
 REMOTE_OVERLAY_SCRIPT="${TMP}/remote-overlay.sh"
+REMOTE_NO_GATEWAY_ROOT="${TMP}/remote-no-gateway-root"
 mkdir -p "${REMOTE_OVERLAY_ROOT}/bin" "${REMOTE_OVERLAY_ROOT}/config" "${REMOTE_OVERLAY_ROOT}/secrets" \
   "${REMOTE_OVERLAY_PAYLOAD}/bin" "${REMOTE_OVERLAY_PAYLOAD}/monitor" "${REMOTE_OVERLAY_PAYLOAD}/secrets"
 printf '#!/usr/bin/env bash\n# MOOX_INSTALLED_WITH_ inventory marker\nexit 0\n' >"${REMOTE_OVERLAY_ROOT}/start.sh"
@@ -400,21 +420,50 @@ for secret in gateway-control.env gateway-service.env gateway-control.key gatewa
   printf 'shared-%s\n' "${secret}" >"${REMOTE_OVERLAY_ROOT}/secrets/${secret}"
 done
 printf 'preserve-collector-key\n' >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-collector.key"
+printf 'preserve-skill-key\n' >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-skill.key"
 printf '%s\n' '{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"}]}' \
   >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-credentials.json"
+cp -R "${REMOTE_OVERLAY_ROOT}" "${REMOTE_NO_GATEWAY_ROOT}"
 
 for script in start.sh stop.sh status.sh healthcheck.sh; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${REMOTE_OVERLAY_PAYLOAD}/${script}"
 done
 printf '#!/usr/bin/env bash\nexit 0\n' >"${REMOTE_OVERLAY_PAYLOAD}/bin/moox-monitor"
 printf 'monitor payload\n' >"${REMOTE_OVERLAY_PAYLOAD}/monitor/app.yaml"
-printf 'derived-skill-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-moox-skill.key"
-printf '%s\n' '{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"}]}' \
+printf 'rotated-collector-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-collector.key"
+printf 'derived-factor-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-factor.key"
+printf 'rotated-skill-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-moox-skill.key"
+printf '%s\n' '{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"factor","caller":"factor","secret_file":"gateway-factor.key"},{"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"}]}' \
   >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-credentials.json"
 tar -C "${REMOTE_OVERLAY_PAYLOAD}" -czf "${REMOTE_OVERLAY_ARCHIVE}" .
+cp "${REMOTE_OVERLAY_ARCHIVE}" "${REMOTE_NO_GATEWAY_ARCHIVE}"
 awk '/bash -s" <<'"'"'EOF'"'"'$/ { capture=1; next } capture && /^EOF$/ { exit } capture { print }' \
   "${DEPLOY}" >"${REMOTE_OVERLAY_SCRIPT}"
 DEPLOY_DIR="${REMOTE_OVERLAY_ROOT}" ARCHIVE="${REMOTE_OVERLAY_ARCHIVE}" NODE_ID=gateway-remote-overlay \
+  NO_START=1 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
+  WITH_CLOUDNODE=0 WITH_COLLECTOR=0 WITH_FACTOR=0 WITH_STRATEGY=0 WITH_TRADE=0 WITH_MONITOR=1 \
+  WITH_HOSTAGENT=0 WITH_WEB_HOST=0 WITH_ADMIN=0 WITH_GATEWAY=1 RESET_DATA=0 \
+  MOOX_METRICS_STORAGE_METADATA_URL='' MOOX_EVENTBUS_NATS_URL='' MOOX_EVENTBUS_HOST='' MOOX_EVENTBUS_PORT='' \
+  MOOX_METRICS_EVENTBUS_URL='' MOOX_EVENTBUS_ENABLE_TLS=0 MOOX_EVENTBUS_PUBLIC_IP='' \
+  MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET='' MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID='' \
+  MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT='' MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64='' \
+  MOOX_FACTOR_ENGINE_PYTHON_WORKERS='' MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS='' MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS='' \
+  MOOX_CONTROL_ROOT='' MOOX_STORAGE_ROOT='' PUBLIC_HOST='' TLS_MODE_RESOLVED='' BROWSER_HTTPS_PORT=9527 \
+  SERVICE_HTTPS_PORT=11001 TARGET_GOOS=linux TARGET_GOARCH=amd64 bash "${REMOTE_OVERLAY_SCRIPT}" >/dev/null
+grep -Fq '"key_id":"moox-skill"' "${REMOTE_OVERLAY_ROOT}/secrets/gateway-credentials.json" || \
+  fail 'remote component overlay preserved the stale Gateway registry'
+grep -Fxq 'preserve-skill-key' "${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-skill.key" || \
+  fail 'remote component overlay rotated an established skill key'
+[[ "$(file_mode "${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-skill.key")" == 600 ]] || \
+  fail 'remote component overlay installed the skill key with the wrong mode'
+grep -Fxq 'preserve-collector-key' "${REMOTE_OVERLAY_ROOT}/secrets/gateway-collector.key" || \
+  fail 'remote component overlay replaced an established caller key'
+grep -Fxq 'derived-factor-key' "${REMOTE_OVERLAY_ROOT}/secrets/gateway-factor.key" || \
+  fail 'remote component overlay did not install a missing registry key'
+[[ "$(file_mode "${REMOTE_OVERLAY_ROOT}/secrets/gateway-factor.key")" == 600 ]] || \
+  fail 'remote component overlay installed a missing registry key with the wrong mode'
+
+DEPLOY_DIR="${REMOTE_NO_GATEWAY_ROOT}" ARCHIVE="${REMOTE_NO_GATEWAY_ARCHIVE}" NODE_ID=gateway-remote-overlay \
   NO_START=1 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
   WITH_CLOUDNODE=0 WITH_COLLECTOR=0 WITH_FACTOR=0 WITH_STRATEGY=0 WITH_TRADE=0 WITH_MONITOR=1 \
   WITH_HOSTAGENT=0 WITH_WEB_HOST=0 WITH_ADMIN=0 WITH_GATEWAY=0 RESET_DATA=0 \
@@ -425,14 +474,12 @@ DEPLOY_DIR="${REMOTE_OVERLAY_ROOT}" ARCHIVE="${REMOTE_OVERLAY_ARCHIVE}" NODE_ID=
   MOOX_FACTOR_ENGINE_PYTHON_WORKERS='' MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS='' MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS='' \
   MOOX_CONTROL_ROOT='' MOOX_STORAGE_ROOT='' PUBLIC_HOST='' TLS_MODE_RESOLVED='' BROWSER_HTTPS_PORT=9527 \
   SERVICE_HTTPS_PORT=11001 TARGET_GOOS=linux TARGET_GOARCH=amd64 bash "${REMOTE_OVERLAY_SCRIPT}" >/dev/null
-grep -Fq '"key_id":"moox-skill"' "${REMOTE_OVERLAY_ROOT}/secrets/gateway-credentials.json" || \
-  fail 'remote component overlay preserved the stale Gateway registry'
-grep -Fxq 'derived-skill-key' "${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-skill.key" || \
-  fail 'remote component overlay did not install the skill key'
-[[ "$(file_mode "${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-skill.key")" == 600 ]] || \
-  fail 'remote component overlay installed the skill key with the wrong mode'
-grep -Fxq 'preserve-collector-key' "${REMOTE_OVERLAY_ROOT}/secrets/gateway-collector.key" || \
-  fail 'remote component overlay replaced an established caller key'
+! grep -Fq '"key_id":"factor"' "${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-credentials.json" || \
+  fail 'remote --no-gateway overlay changed the active Gateway registry'
+[[ ! -e "${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-factor.key" ]] || \
+  fail 'remote --no-gateway overlay installed an inactive Gateway key'
+grep -Fxq 'preserve-skill-key' "${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-moox-skill.key" || \
+  fail 'remote --no-gateway overlay rotated the inactive skill key'
 
 # Remote deployment archives use collision-free 0600 paths and the EXIT trap
 # removes both local and remote copies even when remote extraction fails.

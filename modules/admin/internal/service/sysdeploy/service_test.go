@@ -2,6 +2,7 @@ package sysdeploy
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -49,6 +50,63 @@ func TestServiceImpl_SeedDefaults_ShouldInsertRows(t *testing.T) {
 		assert.Equal(t, testAdminNodeID, row.NodeID)
 		assert.NotEqual(t, "service_gateway_internal", row.ServiceName)
 	}
+}
+
+func TestServiceImpl_SeedDefaults_BackfillsSkillReadRouteInLegacyStorageDeployment(t *testing.T) {
+	db := setupSysDeployTestDB(t)
+	svc := NewService(&database.Manager{}, testAdminNodeID)
+	svc.dao = NewDAO(db)
+	var legacy Deployment
+	for _, item := range DefaultDeployments(testAdminNodeID) {
+		if item.ServiceName == "storage-primary" {
+			legacy = item
+			break
+		}
+	}
+	require.NotEmpty(t, legacy.ServiceName)
+	legacy.ExtraConfig = `{"gateway_methods":["GetSpace"],"gateway_callers":["admin-gateway"],"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["UpsertFields","ReadFields","ReadTimeSeriesRows","ReadRecordRows","ReportDatasetPeriodCollected","AppendDatasetSyncPoint","WaitViewSyncPoint","ReportFactorPeriodComputed","GetFactorPeriodComputed"],"gateway_callers":["admin-gateway","collector","factor","monitor","archive","storage-view"]},{"service_path":"trpc.moox.custom.Operator","port":29999,"gateway_methods":["CustomRead"],"gateway_callers":["operator"],"owner":"ops"}]}`
+	require.NoError(t, svc.dao.Create(context.Background(), &legacy))
+
+	require.NoError(t, svc.SeedDefaults(context.Background()))
+	upgraded, err := svc.dao.Get(context.Background(), testAdminNodeID, "storage-primary")
+	require.NoError(t, err)
+	var extra struct {
+		GatewayRoutes []map[string]any `json:"gateway_routes"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(upgraded.ExtraConfig), &extra))
+	var general, readOnly, custom map[string]any
+	for _, route := range extra.GatewayRoutes {
+		methods, _ := route["gateway_methods"].([]any)
+		switch {
+		case route["service_path"] == "trpc.moox.storage.PrimaryStore" && containsAny(methods, "UpsertFields"):
+			general = route
+		case route["service_path"] == "trpc.moox.storage.PrimaryStore" && len(methods) == 1 && methods[0] == "ReadTimeSeriesRows":
+			readOnly = route
+		case route["service_path"] == "trpc.moox.custom.Operator":
+			custom = route
+		}
+	}
+	require.NotNil(t, general)
+	require.NotContains(t, general["gateway_methods"], "ReadTimeSeriesRows")
+	require.Equal(t, []any{"ReadTimeSeriesRows"}, readOnly["gateway_methods"])
+	require.Contains(t, readOnly["gateway_callers"], "moox-skill")
+	require.Equal(t, "ops", custom["owner"])
+	snapshot, err := svc.dao.CompileGatewaySnapshot(context.Background(), testAdminNodeID)
+	require.NoError(t, err)
+	for _, route := range snapshot.Routes {
+		if route.ServiceID == "storage-primary" && route.AllowsMethod("UpsertFields") {
+			require.False(t, route.AllowsCaller("moox-skill"))
+		}
+	}
+}
+
+func containsAny(items []any, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestServiceImpl_SeedDefaults_RemovesObsoleteTradeDeployments(t *testing.T) {

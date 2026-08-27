@@ -248,6 +248,13 @@ func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
 					changed = true
 				}
 			}
+			if key == "gateway_routes" {
+				merged, listChanged := mergeDefaultGatewayRoutes(existingValue, value)
+				if listChanged {
+					existing[key] = merged
+					changed = true
+				}
+			}
 			continue
 		}
 		existing[key] = value
@@ -261,6 +268,134 @@ func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
 		return existingRaw, false
 	}
 	return string(raw), true
+}
+
+func mergeDefaultGatewayRoutes(existingValue, defaultValue any) ([]map[string]any, bool) {
+	existing, ok := gatewayRouteObjects(existingValue)
+	if !ok {
+		return nil, false
+	}
+	defaults, ok := gatewayRouteObjects(defaultValue)
+	if !ok {
+		return nil, false
+	}
+	changed := false
+	for _, defaultRoute := range defaults {
+		defaultMethods, ok := gatewayRouteStrings(defaultRoute, "gateway_methods")
+		if !ok {
+			continue
+		}
+		matched := false
+		for _, existingRoute := range existing {
+			if !sameGatewayRouteEndpoint(existingRoute, defaultRoute) {
+				continue
+			}
+			existingMethods, methodsOK := gatewayRouteStrings(existingRoute, "gateway_methods")
+			if methodsOK && sameStringSet(existingMethods, defaultMethods) {
+				matched = true
+				break
+			}
+			existingCallers, callersOK := gatewayRouteStrings(existingRoute, "gateway_callers")
+			defaultCallers, defaultsOK := gatewayRouteStrings(defaultRoute, "gateway_callers")
+			if !methodsOK || !callersOK || !defaultsOK || !sameStringSet(existingCallers, defaultCallers) ||
+				!containsStringSet(existingMethods, defaultMethods) {
+				continue
+			}
+			// A previous default may have combined methods that newer defaults own
+			// as separate routes. Split only that recognized shape; otherwise keep
+			// operator-added methods and route metadata untouched.
+			extraMethods := subtractStringSet(existingMethods, defaultMethods)
+			if len(extraMethods) > 0 && defaultRouteMethodsExist(defaults, defaultRoute, extraMethods) {
+				existingRoute["gateway_methods"] = defaultMethods
+				changed = true
+			}
+			matched = true
+			break
+		}
+		if matched {
+			continue
+		}
+		cloned := make(map[string]any, len(defaultRoute))
+		for key, value := range defaultRoute {
+			cloned[key] = value
+		}
+		existing = append(existing, cloned)
+		changed = true
+	}
+	return existing, changed
+}
+
+func gatewayRouteObjects(value any) ([]map[string]any, bool) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var routes []map[string]any
+	if json.Unmarshal(raw, &routes) != nil {
+		return nil, false
+	}
+	return routes, true
+}
+
+func gatewayRouteStrings(route map[string]any, key string) ([]string, bool) {
+	raw, err := json.Marshal(route[key])
+	if err != nil {
+		return nil, false
+	}
+	var values []string
+	if json.Unmarshal(raw, &values) != nil || len(values) == 0 {
+		return nil, false
+	}
+	return values, true
+}
+
+func sameGatewayRouteEndpoint(left, right map[string]any) bool {
+	return fmt.Sprint(left["service_path"]) == fmt.Sprint(right["service_path"]) &&
+		fmt.Sprint(left["port"]) == fmt.Sprint(right["port"])
+}
+
+func defaultRouteMethodsExist(defaults []map[string]any, current map[string]any, methods []string) bool {
+	for _, candidate := range defaults {
+		if !sameGatewayRouteEndpoint(candidate, current) {
+			continue
+		}
+		candidateMethods, ok := gatewayRouteStrings(candidate, "gateway_methods")
+		if ok && sameStringSet(candidateMethods, methods) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameStringSet(left, right []string) bool {
+	return len(left) == len(right) && containsStringSet(left, right)
+}
+
+func containsStringSet(haystack, needles []string) bool {
+	seen := make(map[string]struct{}, len(haystack))
+	for _, value := range haystack {
+		seen[value] = struct{}{}
+	}
+	for _, value := range needles {
+		if _, ok := seen[value]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func subtractStringSet(values, removed []string) []string {
+	removedSet := make(map[string]struct{}, len(removed))
+	for _, value := range removed {
+		removedSet[value] = struct{}{}
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := removedSet[value]; !ok {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func mergeDefaultGatewayMethods(existingValue, defaultValue any) ([]string, bool) {

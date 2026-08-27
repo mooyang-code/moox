@@ -4060,11 +4060,13 @@ sync_local_stage() {
   fi
 
   mkdir -p "${deploy_dir}/secrets" "${deploy_dir}/certs/gateway"
-  for shared_gateway_file in gateway-control.key gateway-service.key gateway-control.env gateway-service.env; do
-    if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/${shared_gateway_file}" ]]; then
-      install -m 0600 "${STAGE_DIR}/secrets/${shared_gateway_file}" "${deploy_dir}/secrets/${shared_gateway_file}"
-    fi
-  done
+  if [[ "${component_overlay}" -eq 0 || "${WITH_GATEWAY}" -eq 1 ]]; then
+    for shared_gateway_file in gateway-control.key gateway-service.key gateway-control.env gateway-service.env; do
+      if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/${shared_gateway_file}" ]]; then
+        install -m 0600 "${STAGE_DIR}/secrets/${shared_gateway_file}" "${deploy_dir}/secrets/${shared_gateway_file}"
+      fi
+    done
+  fi
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/storage-node-auth.env" "${deploy_dir}/secrets/storage-node-auth.env"
   fi
@@ -4080,19 +4082,21 @@ sync_local_stage() {
       install -m 0600 "${STAGE_DIR}/secrets/health-auth.env" "${deploy_dir}/secrets/health-auth.env"
     fi
   fi
-  for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-trade.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key "${STAGE_DIR}"/secrets/gateway-moox-skill.key; do
-    if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/$(basename "${credential_file}")" ]]; then
-      install -m 0600 "${credential_file}" "${deploy_dir}/secrets/$(basename "${credential_file}")"
+  if [[ "${component_overlay}" -eq 0 || "${WITH_GATEWAY}" -eq 1 ]]; then
+    for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-trade.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key "${STAGE_DIR}"/secrets/gateway-moox-skill.key; do
+      if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/$(basename "${credential_file}")" ]]; then
+        install -m 0600 "${credential_file}" "${deploy_dir}/secrets/$(basename "${credential_file}")"
+      fi
+    done
+    if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/gateway-moox-cli.env" ]]; then
+      install -m 0600 "${STAGE_DIR}/secrets/gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env"
     fi
-  done
-  if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/gateway-moox-cli.env" ]]; then
-    install -m 0600 "${STAGE_DIR}/secrets/gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env"
+    install -m 0600 "${STAGE_DIR}/secrets/gateway-credentials.json" "${deploy_dir}/secrets/gateway-credentials.json"
   fi
-  install -m 0600 "${STAGE_DIR}/secrets/gateway-credentials.json" "${deploy_dir}/secrets/gateway-credentials.json"
   if [[ -f "${STAGE_DIR}/secrets/notification.env.next" ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/notification.env.next" "${deploy_dir}/secrets/notification.env"
   fi
-  if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/certs/gateway/peers.pem" ]]; then
+  if [[ ( "${component_overlay}" -eq 0 || "${WITH_GATEWAY}" -eq 1 ) && ( "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/certs/gateway/peers.pem" ) ]]; then
     install -m 0644 "${STAGE_DIR}/certs/gateway/peers.pem" "${deploy_dir}/certs/gateway/peers.pem"
   fi
   chmod +x "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh" "${deploy_dir}/bin/"*
@@ -4521,21 +4525,33 @@ if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
     # the installed listener contract for the next restart.
     TAR_EXCLUDES+=(--exclude='./config/runtime.env')
   fi
-  mkdir -p "${DEPLOY_DIR}/secrets"
-  rm -f "${DEPLOY_DIR}/secrets/.gateway-moox-skill.key.next" \
-    "${DEPLOY_DIR}/secrets/.gateway-credentials.json.next"
-  umask 077
-  tar -xOzf "${ARCHIVE}" ./secrets/gateway-moox-skill.key \
-    >"${DEPLOY_DIR}/secrets/.gateway-moox-skill.key.next"
-  tar -xOzf "${ARCHIVE}" ./secrets/gateway-credentials.json \
-    >"${DEPLOY_DIR}/secrets/.gateway-credentials.json.next"
-  chmod 0600 "${DEPLOY_DIR}/secrets/.gateway-moox-skill.key.next" \
-    "${DEPLOY_DIR}/secrets/.gateway-credentials.json.next"
+  if [[ "${WITH_GATEWAY}" == "1" ]]; then
+    mkdir -p "${DEPLOY_DIR}/secrets"
+    rm -f "${DEPLOY_DIR}/secrets/.gateway-credentials.json.next"
+    umask 077
+    tar -xOzf "${ARCHIVE}" ./secrets/gateway-credentials.json \
+      >"${DEPLOY_DIR}/secrets/.gateway-credentials.json.next"
+    chmod 0600 "${DEPLOY_DIR}/secrets/.gateway-credentials.json.next"
+  fi
 fi
 tar "${TAR_EXCLUDES[@]}" -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
-if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
-  mv -f "${DEPLOY_DIR}/secrets/.gateway-moox-skill.key.next" \
-    "${DEPLOY_DIR}/secrets/gateway-moox-skill.key"
+if [[ "${COMPONENT_OVERLAY}" == "1" && "${WITH_GATEWAY}" == "1" ]]; then
+  while IFS= read -r gateway_key_entry; do
+    case "${gateway_key_entry}" in
+      ./secrets/gateway-*.key)
+        gateway_key_file="${gateway_key_entry##*/}"
+        [[ "${gateway_key_file}" =~ ^gateway-[a-z0-9-]+\.key$ ]] || continue
+        if [[ ! -s "${DEPLOY_DIR}/secrets/${gateway_key_file}" ]]; then
+          tar -xOzf "${ARCHIVE}" "${gateway_key_entry}" \
+            >"${DEPLOY_DIR}/secrets/.${gateway_key_file}.next"
+          chmod 0600 "${DEPLOY_DIR}/secrets/.${gateway_key_file}.next"
+          mv -f "${DEPLOY_DIR}/secrets/.${gateway_key_file}.next" \
+            "${DEPLOY_DIR}/secrets/${gateway_key_file}"
+        fi
+        chmod 0600 "${DEPLOY_DIR}/secrets/${gateway_key_file}"
+        ;;
+    esac
+  done < <(tar -tzf "${ARCHIVE}")
   mv -f "${DEPLOY_DIR}/secrets/.gateway-credentials.json.next" \
     "${DEPLOY_DIR}/secrets/gateway-credentials.json"
 fi
