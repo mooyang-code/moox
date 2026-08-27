@@ -128,6 +128,8 @@ describe("page layout standards", () => {
     expect(tradeRecords).toContain('class="orders-workbench-content"');
     expect(tradeRecords).not.toContain("<a-tabs");
     expect(tradeRecords).not.toContain('class="orders-account-toolbar"');
+    expect(tradeRecords).not.toContain("刷新账户状态");
+    expect(tradeRecords).not.toContain("refreshAccounts");
     expect(tradeRecords.match(/<a-space class="filter-bar" wrap>/g)).toHaveLength(2);
     expect(tradeRecords.match(/placeholder="执行账户"/g)).toHaveLength(2);
     expectMargin(tradeRecords, ".orders-workbench-content", "margin-top", 12);

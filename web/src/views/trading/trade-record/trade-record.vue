@@ -14,10 +14,6 @@
             <a-tag v-if="selectedAccount" :color="selectedAccount.ready ? 'green' : 'orange'">
               {{ selectedAccount.ready ? "就绪" : "未就绪" }}
             </a-tag>
-            <a-button :loading="loading" title="刷新账户状态" aria-label="刷新账户状态" @click="refreshAccounts">
-              <template #icon><icon-refresh /></template>
-              刷新
-            </a-button>
             <a-input v-model="filterSymbol" placeholder="交易标的" allow-clear class="symbol-input" @press-enter="searchOrders" />
             <a-select v-model="orderState" allow-clear placeholder="订单状态" class="state-select">
               <a-option v-for="item in orderStateOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
@@ -89,10 +85,6 @@
             <a-tag v-if="selectedAccount" :color="selectedAccount.ready ? 'green' : 'orange'">
               {{ selectedAccount.ready ? "就绪" : "未就绪" }}
             </a-tag>
-            <a-button :loading="loading" title="刷新账户状态" aria-label="刷新账户状态" @click="refreshAccounts">
-              <template #icon><icon-refresh /></template>
-              刷新
-            </a-button>
             <a-input v-model="filterSymbol" placeholder="交易标的" allow-clear class="symbol-input" @press-enter="searchFills" />
             <a-range-picker v-model="fillTimeRange" value-format="timestamp" class="time-range" @change="searchFills" />
             <a-button type="primary" :disabled="!tradingAccountId" @click="searchFills">
@@ -293,11 +285,6 @@ function resetPagination() {
   tradeRecordViewState.fillPage = 1;
 }
 
-async function refreshAccounts() {
-  await loadAccounts();
-  await loadActiveTab();
-}
-
 async function loadOrders() {
   if (!tradingAccountId.value) {
     loading.value = false;
@@ -382,7 +369,7 @@ const canCancel = canCancelOrderState;
 
 async function cancel(order: Order) {
   if (order.trading_account_id !== tradingAccountId.value) {
-    Message.warning("账户已切换，请刷新后重试");
+    Message.warning("账户已切换，请重新查询后重试");
     return;
   }
   await cancelOrder(createClientId(), order.order_id, "控制台手动撤单");
