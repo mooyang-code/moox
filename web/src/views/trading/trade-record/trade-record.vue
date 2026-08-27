@@ -4,9 +4,9 @@
       <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="交易记录" @change="onTabChange" />
 
       <section class="orders-workbench-content">
-        <div class="orders-account-toolbar">
-          <a-space wrap>
-            <a-select v-model="tradingAccountId" placeholder="选择执行账户" class="account-select" @change="accountChanged">
+        <section v-if="activeTab === 'orders'" class="orders-tab-panel" aria-label="订单">
+          <a-space class="filter-bar" wrap>
+            <a-select v-model="tradingAccountId" placeholder="执行账户" class="account-select" @change="accountChanged">
               <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
                 {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
               </a-option>
@@ -18,11 +18,6 @@
               <template #icon><icon-refresh /></template>
               刷新
             </a-button>
-          </a-space>
-        </div>
-
-        <section v-if="activeTab === 'orders'" class="orders-tab-panel" aria-label="订单">
-          <a-space class="filter-bar" wrap>
             <a-input v-model="filterSymbol" placeholder="交易标的" allow-clear class="symbol-input" @press-enter="searchOrders" />
             <a-select v-model="orderState" allow-clear placeholder="订单状态" class="state-select">
               <a-option v-for="item in orderStateOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
@@ -86,6 +81,18 @@
 
         <section v-else class="orders-tab-panel" aria-label="成交">
           <a-space class="filter-bar" wrap>
+            <a-select v-model="tradingAccountId" placeholder="执行账户" class="account-select" @change="accountChanged">
+              <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
+                {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
+              </a-option>
+            </a-select>
+            <a-tag v-if="selectedAccount" :color="selectedAccount.ready ? 'green' : 'orange'">
+              {{ selectedAccount.ready ? "就绪" : "未就绪" }}
+            </a-tag>
+            <a-button :loading="loading" title="刷新账户状态" aria-label="刷新账户状态" @click="refreshAccounts">
+              <template #icon><icon-refresh /></template>
+              刷新
+            </a-button>
             <a-input v-model="filterSymbol" placeholder="交易标的" allow-clear class="symbol-input" @press-enter="searchFills" />
             <a-range-picker v-model="fillTimeRange" value-format="timestamp" class="time-range" @change="searchFills" />
             <a-button type="primary" :disabled="!tradingAccountId" @click="searchFills">
@@ -428,11 +435,6 @@ onMounted(async () => {
   margin-top: var(--moox-space-3);
   overflow: hidden;
 }
-.orders-account-toolbar {
-  display: flex;
-  min-width: 0;
-  flex: 0 0 auto;
-}
 .filter-bar {
   display: flex;
   width: 100%;
@@ -460,7 +462,7 @@ onMounted(async () => {
   justify-content: center;
 }
 .orders-page :deep(.account-select) {
-  width: 260px;
+  width: 200px;
 }
 .orders-page :deep(.symbol-input) {
   width: 160px;
@@ -478,10 +480,6 @@ onMounted(async () => {
   white-space: nowrap;
 }
 @media (max-width: 900px) {
-  .orders-account-toolbar :deep(.arco-space) {
-    width: 100%;
-    flex-wrap: wrap;
-  }
   .orders-page :deep(.account-select),
   .orders-page :deep(.symbol-input),
   .orders-page :deep(.state-select),

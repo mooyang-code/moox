@@ -127,6 +127,9 @@ describe("page layout standards", () => {
     expect(tradeRecords).toContain('import PageTitleTabs from "@/components/page-title-tabs/index.vue";');
     expect(tradeRecords).toContain('class="orders-workbench-content"');
     expect(tradeRecords).not.toContain("<a-tabs");
+    expect(tradeRecords).not.toContain('class="orders-account-toolbar"');
+    expect(tradeRecords.match(/<a-space class="filter-bar" wrap>/g)).toHaveLength(2);
+    expect(tradeRecords.match(/placeholder="执行账户"/g)).toHaveLength(2);
     expectMargin(tradeRecords, ".orders-workbench-content", "margin-top", 12);
     expect(tradeRecords).toMatch(/\.filter-bar\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-tight\);/);
     expect(tradeRecords).toMatch(/\.orders-page\s*:deep\(\.state-select\)\s*\{[\s\S]*?width:\s*140px;/);
