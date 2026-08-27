@@ -18,56 +18,34 @@
         </a-space>
       </div>
 
-      <div class="position-filter-panel">
-        <div class="filter-grid">
-          <div class="filter-item">
-            <label>执行账户：</label>
-            <div class="filter-control account-filter-control">
-              <a-select
-                v-model="tradingAccountId"
-                placeholder="选择执行账户"
-                class="account-select"
-                :loading="accountsLoading"
-                :disabled="accountsLoading || accounts.length === 0"
-                @change="onAccountChange"
-              >
-                <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
-                  {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
-                </a-option>
-              </a-select>
-              <div v-if="selectedAccount" class="account-context-meta">
-                <a-tag
-                  >{{ localExchangeLabels[selectedAccount.exchange] }} ·
-                  {{ localMarketTypeLabels[selectedAccount.market_type] }}</a-tag
-                >
-                <a-tag :color="selectedAccount.ready ? 'green' : 'orange'">
-                  {{ selectedAccount.ready ? "已就绪" : "未就绪" }}
-                </a-tag>
-                <span class="sync-time">最近同步 {{ formatTimestamp(selectedAccount.last_sync_at) }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="filter-item">
-            <label>交易标的：</label>
-            <div class="filter-control">
-              <a-input
-                v-model="instrumentId"
-                placeholder="检索值"
-                allow-clear
-                class="symbol-input"
-                @press-enter="loadPositions"
-              />
-            </div>
-          </div>
+      <a-space class="position-filter-bar" wrap>
+        <a-select
+          v-model="tradingAccountId"
+          placeholder="执行账户"
+          class="account-select"
+          :loading="accountsLoading"
+          :disabled="accountsLoading || accounts.length === 0"
+          @change="onAccountChange"
+        >
+          <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
+            {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
+          </a-option>
+        </a-select>
+        <a-input v-model="instrumentId" placeholder="交易标的" allow-clear class="symbol-input" @press-enter="loadPositions" />
+        <a-button type="primary" :loading="loading" :disabled="!tradingAccountId" @click="loadPositions">
+          <template #icon><icon-search /></template>
+          查询
+        </a-button>
+        <div v-if="selectedAccount" class="account-context-meta">
+          <a-tag
+            >{{ localExchangeLabels[selectedAccount.exchange] }} · {{ localMarketTypeLabels[selectedAccount.market_type] }}</a-tag
+          >
+          <a-tag :color="selectedAccount.ready ? 'green' : 'orange'">
+            {{ selectedAccount.ready ? "已就绪" : "未就绪" }}
+          </a-tag>
+          <span class="sync-time">最近同步 {{ formatTimestamp(selectedAccount.last_sync_at) }}</span>
         </div>
-        <div class="query-actions">
-          <a-button size="small" type="primary" :loading="loading" :disabled="!tradingAccountId" @click="loadPositions">
-            <template #icon><icon-search /></template>
-            查询
-          </a-button>
-        </div>
-      </div>
+      </a-space>
 
       <a-alert v-if="accountsError" type="error" show-icon class="account-load-error">
         {{ accountsError }}
@@ -408,56 +386,28 @@ onMounted(async () => {
   color: var(--color-text-3);
   font-size: 12px;
 }
-.position-filter-panel {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px 18px;
-  margin-bottom: var(--moox-space-3);
-  padding: 18px var(--moox-space-5);
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-  background: var(--color-bg-2);
-}
-.filter-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 14px 28px;
+.position-filter-bar {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
+  justify-content: flex-start;
+  margin-bottom: var(--moox-space-tight);
 }
-.filter-item {
-  display: grid;
-  grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
-  gap: var(--moox-space-2);
-  align-items: center;
-  min-width: 0;
-}
-.filter-item label {
-  overflow: hidden;
-  max-width: 84px;
-  color: var(--color-text-2);
-  font-weight: 500;
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.filter-control,
 .account-context-meta {
   display: flex;
   align-items: center;
   min-width: 0;
+  flex-wrap: wrap;
   gap: 10px;
-}
-.filter-control {
-  flex: 1;
-}
-.account-filter-control {
-  flex-wrap: wrap;
-}
-.account-context-meta {
-  flex-wrap: wrap;
   color: var(--color-text-3);
   font-size: 12px;
   line-height: 24px;
+}
+.position-filter-bar :deep(.arco-space-item) {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 .sync-time {
   white-space: nowrap;
@@ -468,11 +418,10 @@ onMounted(async () => {
   margin-bottom: var(--moox-space-2);
 }
 .account-select {
-  width: 320px;
+  width: 200px;
 }
-.account-filter-control :deep(.account-select) {
-  flex: 0 1 320px;
-  width: 320px;
+.position-filter-bar :deep(.account-select) {
+  width: 200px;
 }
 .symbol-input {
   width: 240px;
@@ -531,12 +480,6 @@ onMounted(async () => {
 .position-page :deep(.arco-empty) {
   padding: 42px 0;
 }
-.query-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-width: 72px;
-}
 .position-empty-state {
   display: flex;
   width: 100%;
@@ -570,14 +513,10 @@ onMounted(async () => {
   .page-head {
     flex-direction: column;
   }
-  .position-filter-panel {
-    grid-template-columns: 1fr;
+  .position-filter-bar {
+    align-items: stretch;
   }
-  .query-actions {
-    justify-content: flex-start;
-  }
-  .account-filter-control :deep(.account-select) {
-    flex-basis: auto;
+  .position-filter-bar :deep(.account-select) {
     width: 100%;
   }
   .account-context-meta {
@@ -589,15 +528,6 @@ onMounted(async () => {
   .account-select,
   .symbol-input {
     width: 100%;
-  }
-}
-@media (max-width: 560px) {
-  .filter-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .filter-item {
-    grid-template-columns: 92px minmax(0, 1fr);
   }
 }
 </style>

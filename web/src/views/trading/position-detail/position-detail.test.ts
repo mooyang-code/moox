@@ -99,11 +99,11 @@ describe("持仓页面", () => {
     mocks.routeQuery = { trading_account_id: "ta-demo-1" };
   });
 
-  it("renders a compact filter grid and keeps action/filter controls in the page structure", () => {
+  it("renders an inline filter bar and keeps action/filter controls in the page structure", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "position-detail.vue"), "utf8");
-    expect(source).toContain('class="position-filter-panel"');
-    expect(source).toContain('class="filter-grid"');
-    expect(source).toContain('class="filter-item"');
+    expect(source).toContain('class="position-filter-bar"');
+    expect(source).toContain('placeholder="执行账户"');
+    expect(source).toContain('placeholder="交易标的"');
     expect(source).toContain('class="position-table-region"');
     expect(source).toContain('class="position-empty-state"');
   });
@@ -118,7 +118,7 @@ describe("持仓页面", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("ETH-USDT-SPOT");
 
-    await wrapper.find('input[placeholder="检索值"]').setValue("btc");
+    await wrapper.find('input[placeholder="交易标的"]').setValue("btc");
     const queryButton = wrapper.findAll("button").find(button => button.text().includes("查询"));
     expect(queryButton).toBeDefined();
     await queryButton?.trigger("click");

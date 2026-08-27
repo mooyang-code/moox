@@ -258,14 +258,14 @@ test("持仓切换账户后自动刷新并支持现货标的筛选", async ({ pa
   await expect(page.getByText("ETH-USDT-SPOT", { exact: true })).toBeVisible();
   await expect.poll(() => holdingsRequests).toBe(1);
 
-  await page.locator(".position-filter-panel .arco-select-view").click();
+  await page.locator(".position-filter-bar .arco-select-view").click();
   await page.getByText("实盘主账户 · 现货", { exact: true }).click();
   await expect(page).toHaveURL(/trading\/positions\?trading_account_id=ta-demo-2/);
   await expect(page.getByText("SOL-USDT-SPOT", { exact: true })).toBeVisible();
   await expect(page.getByText("ETH-USDT-SPOT", { exact: true })).toHaveCount(0);
   await expect.poll(() => holdingsRequests).toBe(2);
 
-  await page.getByPlaceholder("检索值").fill("btc");
+  await page.getByPlaceholder("交易标的").fill("btc");
   await page.getByRole("button", { name: "查询" }).click();
   await expect(page.getByText("暂无持仓数据", { exact: true })).toBeVisible();
   await expect.poll(() => holdingsRequests).toBe(3);
