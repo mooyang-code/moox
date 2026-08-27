@@ -224,6 +224,10 @@ for secret in gateway-control.env gateway-service.env gateway-control.key gatewa
 done
 
 # Component upgrades must replace a stale registry that predates moox-skill.
+printf 'local-symlink-sentinel\n' >"${TMP}/local-key-sentinel"
+rm -f "${DEPLOYED}/secrets/gateway-factor.key"
+ln -s "${TMP}/local-key-sentinel" "${DEPLOYED}/secrets/gateway-factor.key"
+printf ' \n' >"${DEPLOYED}/secrets/gateway-monitor.key"
 printf '%s\n' '{"version":1,"credentials":[{"key_id":"moox-gateway-service","caller":"admin-gateway","secret_file":"gateway-service.key"}]}' \
   >"${DEPLOYED}/secrets/gateway-credentials.json"
 MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
@@ -236,6 +240,14 @@ MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
   --gateway-service-key-file "${TMP}/service.key" >/dev/null
 grep -Fq '"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"' \
   "${DEPLOYED}/secrets/gateway-credentials.json" || fail 'component upgrade preserved a stale Gateway registry'
+[[ ! -L "${DEPLOYED}/secrets/gateway-factor.key" && -s "${DEPLOYED}/secrets/gateway-factor.key" ]] || \
+  fail 'local component overlay preserved an unsafe Gateway key path'
+[[ "$(file_mode "${DEPLOYED}/secrets/gateway-factor.key")" == 600 ]] || \
+  fail 'local component overlay replaced an unsafe Gateway key with the wrong mode'
+grep -Fxq 'local-symlink-sentinel' "${TMP}/local-key-sentinel" || \
+  fail 'local component overlay followed an unsafe Gateway key symlink'
+grep -q '[^[:space:]]' "${DEPLOYED}/secrets/gateway-monitor.key" || \
+  fail 'local component overlay preserved a whitespace-only Gateway key'
 
 NO_GATEWAY_DEPLOY="${TMP}/deploy-no-gateway-overlay"
 cp -R "${DEPLOYED}" "${NO_GATEWAY_DEPLOY}"
@@ -420,7 +432,10 @@ for secret in gateway-control.env gateway-service.env gateway-control.key gatewa
   printf 'shared-%s\n' "${secret}" >"${REMOTE_OVERLAY_ROOT}/secrets/${secret}"
 done
 printf 'preserve-collector-key\n' >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-collector.key"
+printf ' \n' >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-factor.key"
 printf 'preserve-skill-key\n' >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-skill.key"
+printf 'remote-symlink-sentinel\n' >"${TMP}/remote-key-sentinel"
+ln -s "${TMP}/remote-key-sentinel" "${REMOTE_OVERLAY_ROOT}/secrets/gateway-storage-view.key"
 printf '%s\n' '{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"}]}' \
   >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-credentials.json"
 cp -R "${REMOTE_OVERLAY_ROOT}" "${REMOTE_NO_GATEWAY_ROOT}"
@@ -432,6 +447,7 @@ printf '#!/usr/bin/env bash\nexit 0\n' >"${REMOTE_OVERLAY_PAYLOAD}/bin/moox-moni
 printf 'monitor payload\n' >"${REMOTE_OVERLAY_PAYLOAD}/monitor/app.yaml"
 printf 'rotated-collector-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-collector.key"
 printf 'derived-factor-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-factor.key"
+printf 'derived-storage-view-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-storage-view.key"
 printf 'rotated-skill-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-moox-skill.key"
 printf '%s\n' '{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"factor","caller":"factor","secret_file":"gateway-factor.key"},{"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"}]}' \
   >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-credentials.json"
@@ -462,6 +478,14 @@ grep -Fxq 'derived-factor-key' "${REMOTE_OVERLAY_ROOT}/secrets/gateway-factor.ke
   fail 'remote component overlay did not install a missing registry key'
 [[ "$(file_mode "${REMOTE_OVERLAY_ROOT}/secrets/gateway-factor.key")" == 600 ]] || \
   fail 'remote component overlay installed a missing registry key with the wrong mode'
+[[ ! -L "${REMOTE_OVERLAY_ROOT}/secrets/gateway-storage-view.key" ]] || \
+  fail 'remote component overlay preserved an unsafe Gateway key symlink'
+grep -Fxq 'derived-storage-view-key' "${REMOTE_OVERLAY_ROOT}/secrets/gateway-storage-view.key" || \
+  fail 'remote component overlay did not safely replace an unsafe Gateway key path'
+[[ "$(file_mode "${REMOTE_OVERLAY_ROOT}/secrets/gateway-storage-view.key")" == 600 ]] || \
+  fail 'remote component overlay replaced an unsafe Gateway key with the wrong mode'
+grep -Fxq 'remote-symlink-sentinel' "${TMP}/remote-key-sentinel" || \
+  fail 'remote component overlay followed an unsafe Gateway key symlink'
 
 DEPLOY_DIR="${REMOTE_NO_GATEWAY_ROOT}" ARCHIVE="${REMOTE_NO_GATEWAY_ARCHIVE}" NODE_ID=gateway-remote-overlay \
   NO_START=1 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
@@ -476,8 +500,9 @@ DEPLOY_DIR="${REMOTE_NO_GATEWAY_ROOT}" ARCHIVE="${REMOTE_NO_GATEWAY_ARCHIVE}" NO
   SERVICE_HTTPS_PORT=11001 TARGET_GOOS=linux TARGET_GOARCH=amd64 bash "${REMOTE_OVERLAY_SCRIPT}" >/dev/null
 ! grep -Fq '"key_id":"factor"' "${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-credentials.json" || \
   fail 'remote --no-gateway overlay changed the active Gateway registry'
-[[ ! -e "${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-factor.key" ]] || \
-  fail 'remote --no-gateway overlay installed an inactive Gateway key'
+[[ -f "${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-factor.key" ]] && \
+  ! grep -q '[^[:space:]]' "${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-factor.key" || \
+  fail 'remote --no-gateway overlay changed an inactive Gateway key'
 grep -Fxq 'preserve-skill-key' "${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-moox-skill.key" || \
   fail 'remote --no-gateway overlay rotated the inactive skill key'
 

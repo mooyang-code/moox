@@ -64,7 +64,7 @@ func TestServiceImpl_SeedDefaults_BackfillsSkillReadRouteInLegacyStorageDeployme
 		}
 	}
 	require.NotEmpty(t, legacy.ServiceName)
-	legacy.ExtraConfig = `{"gateway_methods":["GetSpace"],"gateway_callers":["admin-gateway"],"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["UpsertFields","ReadFields","ReadTimeSeriesRows","ReadRecordRows","ReportDatasetPeriodCollected","AppendDatasetSyncPoint","WaitViewSyncPoint","ReportFactorPeriodComputed","GetFactorPeriodComputed"],"gateway_callers":["admin-gateway","collector","factor","monitor","archive","storage-view"]},{"service_path":"trpc.moox.custom.Operator","port":29999,"gateway_methods":["CustomRead"],"gateway_callers":["operator"],"owner":"ops"}]}`
+	legacy.ExtraConfig = `{"gateway_methods":["GetSpace"],"gateway_callers":["admin-gateway"],"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["UpsertFields","ReadFields","ReadTimeSeriesRows","ReadRecordRows","ReportDatasetPeriodCollected","AppendDatasetSyncPoint","WaitViewSyncPoint","ReportFactorPeriodComputed","GetFactorPeriodComputed","OperatorAudit"],"gateway_callers":["admin-gateway","collector","factor","monitor","archive","storage-view","moox-skill"],"owner":"ops"},{"service_path":"trpc.moox.custom.Operator","port":29999,"gateway_methods":["CustomRead"],"gateway_callers":["operator"],"owner":"ops"}]}`
 	require.NoError(t, svc.dao.Create(context.Background(), &legacy))
 
 	require.NoError(t, svc.SeedDefaults(context.Background()))
@@ -88,6 +88,9 @@ func TestServiceImpl_SeedDefaults_BackfillsSkillReadRouteInLegacyStorageDeployme
 	}
 	require.NotNil(t, general)
 	require.NotContains(t, general["gateway_methods"], "ReadTimeSeriesRows")
+	require.NotContains(t, general["gateway_callers"], "moox-skill")
+	require.Contains(t, general["gateway_methods"], "OperatorAudit")
+	require.Equal(t, "ops", general["owner"])
 	require.Equal(t, []any{"ReadTimeSeriesRows"}, readOnly["gateway_methods"])
 	require.Contains(t, readOnly["gateway_callers"], "moox-skill")
 	require.Equal(t, "ops", custom["owner"])

@@ -4062,8 +4062,15 @@ sync_local_stage() {
   mkdir -p "${deploy_dir}/secrets" "${deploy_dir}/certs/gateway"
   if [[ "${component_overlay}" -eq 0 || "${WITH_GATEWAY}" -eq 1 ]]; then
     for shared_gateway_file in gateway-control.key gateway-service.key gateway-control.env gateway-service.env; do
-      if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/${shared_gateway_file}" ]]; then
-        install -m 0600 "${STAGE_DIR}/secrets/${shared_gateway_file}" "${deploy_dir}/secrets/${shared_gateway_file}"
+      shared_gateway_path="${deploy_dir}/secrets/${shared_gateway_file}"
+      if [[ "${shared_gateway_file}" == *.key && "${component_overlay}" -eq 1 && -f "${shared_gateway_path}" && ! -L "${shared_gateway_path}" ]] && grep -q '[^[:space:]]' "${shared_gateway_path}"; then
+        chmod 0600 "${shared_gateway_path}"
+      elif [[ "${component_overlay}" -eq 0 || ! -s "${shared_gateway_path}" || "${shared_gateway_file}" == *.key ]]; then
+        if [[ "${shared_gateway_file}" == *.key ]] && ! grep -q '[^[:space:]]' "${STAGE_DIR}/secrets/${shared_gateway_file}"; then
+          fail "staged Gateway key is empty: ${shared_gateway_file}"
+        fi
+        rm -f "${shared_gateway_path}"
+        install -m 0600 "${STAGE_DIR}/secrets/${shared_gateway_file}" "${shared_gateway_path}"
       fi
     done
   fi
@@ -4084,14 +4091,23 @@ sync_local_stage() {
   fi
   if [[ "${component_overlay}" -eq 0 || "${WITH_GATEWAY}" -eq 1 ]]; then
     for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-trade.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key "${STAGE_DIR}"/secrets/gateway-moox-skill.key; do
-      if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/$(basename "${credential_file}")" ]]; then
-        install -m 0600 "${credential_file}" "${deploy_dir}/secrets/$(basename "${credential_file}")"
+      credential_path="${deploy_dir}/secrets/$(basename "${credential_file}")"
+      if [[ "${component_overlay}" -eq 1 && -f "${credential_path}" && ! -L "${credential_path}" ]] && grep -q '[^[:space:]]' "${credential_path}"; then
+        chmod 0600 "${credential_path}"
+      else
+        if ! grep -q '[^[:space:]]' "${credential_file}"; then
+          fail "staged Gateway key is empty: $(basename "${credential_file}")"
+        fi
+        rm -f "${credential_path}"
+        install -m 0600 "${credential_file}" "${credential_path}"
       fi
     done
     if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/gateway-moox-cli.env" ]]; then
       install -m 0600 "${STAGE_DIR}/secrets/gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env"
     fi
-    install -m 0600 "${STAGE_DIR}/secrets/gateway-credentials.json" "${deploy_dir}/secrets/gateway-credentials.json"
+    rm -f "${deploy_dir}/secrets/.gateway-credentials.json.next"
+    install -m 0600 "${STAGE_DIR}/secrets/gateway-credentials.json" "${deploy_dir}/secrets/.gateway-credentials.json.next"
+    mv -f "${deploy_dir}/secrets/.gateway-credentials.json.next" "${deploy_dir}/secrets/gateway-credentials.json"
   fi
   if [[ -f "${STAGE_DIR}/secrets/notification.env.next" ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/notification.env.next" "${deploy_dir}/secrets/notification.env"
@@ -4541,14 +4557,22 @@ if [[ "${COMPONENT_OVERLAY}" == "1" && "${WITH_GATEWAY}" == "1" ]]; then
       ./secrets/gateway-*.key)
         gateway_key_file="${gateway_key_entry##*/}"
         [[ "${gateway_key_file}" =~ ^gateway-[a-z0-9-]+\.key$ ]] || continue
-        if [[ ! -s "${DEPLOY_DIR}/secrets/${gateway_key_file}" ]]; then
+        gateway_key_path="${DEPLOY_DIR}/secrets/${gateway_key_file}"
+        if [[ -f "${gateway_key_path}" && ! -L "${gateway_key_path}" ]] && grep -q '[^[:space:]]' "${gateway_key_path}"; then
+          chmod 0600 "${gateway_key_path}"
+        else
+          rm -f "${DEPLOY_DIR}/secrets/.${gateway_key_file}.next"
           tar -xOzf "${ARCHIVE}" "${gateway_key_entry}" \
             >"${DEPLOY_DIR}/secrets/.${gateway_key_file}.next"
+          if ! grep -q '[^[:space:]]' "${DEPLOY_DIR}/secrets/.${gateway_key_file}.next"; then
+            echo "archived Gateway key is empty: ${gateway_key_file}" >&2
+            exit 1
+          fi
           chmod 0600 "${DEPLOY_DIR}/secrets/.${gateway_key_file}.next"
+          rm -f "${gateway_key_path}"
           mv -f "${DEPLOY_DIR}/secrets/.${gateway_key_file}.next" \
-            "${DEPLOY_DIR}/secrets/${gateway_key_file}"
+            "${gateway_key_path}"
         fi
-        chmod 0600 "${DEPLOY_DIR}/secrets/${gateway_key_file}"
         ;;
     esac
   done < <(tar -tzf "${ARCHIVE}")

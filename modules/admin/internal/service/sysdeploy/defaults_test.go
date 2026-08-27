@@ -365,6 +365,27 @@ func TestMergeDefaultExtraConfigPreservesUserGatewayRouteByIdentity(t *testing.T
 	}
 }
 
+func TestMergeDefaultExtraConfigUnionsReadRouteCallers(t *testing.T) {
+	merged, changed := mergeDefaultExtraConfig(
+		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["operator"],"owner":"ops"}]}`,
+		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["admin-gateway","moox-skill"]}]}`,
+	)
+	if !changed {
+		t.Fatal("changed = false, want default callers to be added")
+	}
+	var extra struct {
+		GatewayRoutes []map[string]any `json:"gateway_routes"`
+	}
+	if err := json.Unmarshal([]byte(merged), &extra); err != nil {
+		t.Fatal(err)
+	}
+	if len(extra.GatewayRoutes) != 1 ||
+		!reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_callers"], []any{"operator", "admin-gateway", "moox-skill"}) ||
+		extra.GatewayRoutes[0]["owner"] != "ops" {
+		t.Fatalf("read route was not unioned in place: %v", extra.GatewayRoutes)
+	}
+}
+
 func healthURL(raw string) string {
 	var extra struct {
 		HealthURL string `json:"health_url"`
