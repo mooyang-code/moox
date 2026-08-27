@@ -291,15 +291,19 @@ func mergeDefaultGatewayRoutes(existingValue, defaultValue any) ([]map[string]an
 				continue
 			}
 			existingMethods, methodsOK := gatewayRouteStrings(existingRoute, "gateway_methods")
-			if methodsOK && sameStringSet(existingMethods, defaultMethods) {
-				matched = true
-				break
-			}
 			existingCallers, callersOK := gatewayRouteStrings(existingRoute, "gateway_callers")
 			defaultCallers, defaultsOK := gatewayRouteStrings(defaultRoute, "gateway_callers")
-			if !methodsOK || !callersOK || !defaultsOK || !sameStringSet(existingCallers, defaultCallers) ||
-				!containsStringSet(existingMethods, defaultMethods) {
+			if !methodsOK || !callersOK || !defaultsOK || !containsStringSet(existingMethods, defaultMethods) {
 				continue
+			}
+			mergedCallers, callersChanged := appendMissingStrings(existingCallers, defaultCallers)
+			if !sameStringSet(defaultMethods, []string{"ReadTimeSeriesRows"}) {
+				mergedCallers = subtractStringSet(mergedCallers, []string{"moox-skill"})
+				callersChanged = callersChanged || len(mergedCallers) != len(existingCallers)
+			}
+			if callersChanged {
+				existingRoute["gateway_callers"] = mergedCallers
+				changed = true
 			}
 			// A previous default may have combined methods that newer defaults own
 			// as separate routes. Split only that recognized shape; otherwise keep
@@ -308,6 +312,22 @@ func mergeDefaultGatewayRoutes(existingValue, defaultValue any) ([]map[string]an
 			if len(extraMethods) > 0 && defaultRouteMethodsExist(defaults, defaultRoute, extraMethods) {
 				existingRoute["gateway_methods"] = defaultMethods
 				changed = true
+			} else if len(extraMethods) > 0 {
+				customCallers := subtractStringSet(existingCallers, []string{"moox-skill"})
+				if len(customCallers) > 0 {
+					customRoute := make(map[string]any, len(existingRoute))
+					for key, value := range existingRoute {
+						customRoute[key] = value
+					}
+					customRoute["gateway_methods"] = extraMethods
+					customRoute["gateway_callers"] = customCallers
+					existingRoute["gateway_methods"] = defaultMethods
+					existing = append(existing, customRoute)
+					changed = true
+				} else {
+					existingRoute["gateway_methods"] = defaultMethods
+					changed = true
+				}
 			}
 			matched = true
 			break

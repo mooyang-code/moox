@@ -64,7 +64,7 @@ func TestServiceImpl_SeedDefaults_BackfillsSkillReadRouteInLegacyStorageDeployme
 		}
 	}
 	require.NotEmpty(t, legacy.ServiceName)
-	legacy.ExtraConfig = `{"gateway_methods":["GetSpace"],"gateway_callers":["admin-gateway"],"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["UpsertFields","ReadFields","ReadTimeSeriesRows","ReadRecordRows","ReportDatasetPeriodCollected","AppendDatasetSyncPoint","WaitViewSyncPoint","ReportFactorPeriodComputed","GetFactorPeriodComputed","OperatorAudit"],"gateway_callers":["admin-gateway","collector","factor","monitor","archive","storage-view","moox-skill"],"owner":"ops"},{"service_path":"trpc.moox.custom.Operator","port":29999,"gateway_methods":["CustomRead"],"gateway_callers":["operator"],"owner":"ops"}]}`
+	legacy.ExtraConfig = `{"gateway_methods":["GetSpace"],"gateway_callers":["admin-gateway"],"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["UpsertFields","ReadFields","ReadTimeSeriesRows","ReadRecordRows","ReportDatasetPeriodCollected","AppendDatasetSyncPoint","WaitViewSyncPoint","ReportFactorPeriodComputed","GetFactorPeriodComputed","OperatorAudit"],"gateway_callers":["admin-gateway","collector","factor","monitor","archive","storage-view","operator","moox-skill"],"owner":"ops"},{"service_path":"trpc.moox.custom.Operator","port":29999,"gateway_methods":["CustomRead"],"gateway_callers":["operator"],"owner":"ops"}]}`
 	require.NoError(t, svc.dao.Create(context.Background(), &legacy))
 
 	require.NoError(t, svc.SeedDefaults(context.Background()))
@@ -74,7 +74,7 @@ func TestServiceImpl_SeedDefaults_BackfillsSkillReadRouteInLegacyStorageDeployme
 		GatewayRoutes []map[string]any `json:"gateway_routes"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(upgraded.ExtraConfig), &extra))
-	var general, readOnly, custom map[string]any
+	var general, readOnly, operatorRoute, custom map[string]any
 	for _, route := range extra.GatewayRoutes {
 		methods, _ := route["gateway_methods"].([]any)
 		switch {
@@ -82,15 +82,22 @@ func TestServiceImpl_SeedDefaults_BackfillsSkillReadRouteInLegacyStorageDeployme
 			general = route
 		case route["service_path"] == "trpc.moox.storage.PrimaryStore" && len(methods) == 1 && methods[0] == "ReadTimeSeriesRows":
 			readOnly = route
+		case route["service_path"] == "trpc.moox.storage.PrimaryStore" && containsAny(methods, "OperatorAudit"):
+			operatorRoute = route
 		case route["service_path"] == "trpc.moox.custom.Operator":
 			custom = route
 		}
 	}
 	require.NotNil(t, general)
+	require.NotNil(t, operatorRoute)
 	require.NotContains(t, general["gateway_methods"], "ReadTimeSeriesRows")
 	require.NotContains(t, general["gateway_callers"], "moox-skill")
-	require.Contains(t, general["gateway_methods"], "OperatorAudit")
+	require.Contains(t, general["gateway_callers"], "operator")
 	require.Equal(t, "ops", general["owner"])
+	require.Equal(t, []any{"OperatorAudit"}, operatorRoute["gateway_methods"])
+	require.Contains(t, operatorRoute["gateway_callers"], "operator")
+	require.NotContains(t, operatorRoute["gateway_callers"], "moox-skill")
+	require.Equal(t, "ops", operatorRoute["owner"])
 	require.Equal(t, []any{"ReadTimeSeriesRows"}, readOnly["gateway_methods"])
 	require.Contains(t, readOnly["gateway_callers"], "moox-skill")
 	require.Equal(t, "ops", custom["owner"])
@@ -98,6 +105,10 @@ func TestServiceImpl_SeedDefaults_BackfillsSkillReadRouteInLegacyStorageDeployme
 	require.NoError(t, err)
 	for _, route := range snapshot.Routes {
 		if route.ServiceID == "storage-primary" && route.AllowsMethod("UpsertFields") {
+			require.False(t, route.AllowsCaller("moox-skill"))
+		}
+		if route.ServiceID == "storage-primary" && route.AllowsMethod("OperatorAudit") {
+			require.True(t, route.AllowsCaller("operator"))
 			require.False(t, route.AllowsCaller("moox-skill"))
 		}
 	}

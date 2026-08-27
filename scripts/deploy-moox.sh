@@ -3853,6 +3853,14 @@ sync_local_stage() {
     grep -Fq 'MOOX_INSTALLED_WITH_' "${deploy_dir}/config/components.env" || fail "installed component inventory is too old for --component-overlay; run a full deployment first"
     grep -Fq 'MOOX_INSTALLED_WITH_' "${deploy_dir}/start.sh" || fail "installed lifecycle is too old for --component-overlay; run a full deployment first"
     [[ "${RESET_DATA}" -eq 0 ]] || fail "--reset-data cannot be used with --component-overlay"
+    if [[ "${WITH_GATEWAY}" -eq 0 ]]; then
+      for gateway_env in gateway-control.env gateway-service.env; do
+        gateway_env_path="${deploy_dir}/secrets/${gateway_env}"
+        [[ -f "${gateway_env_path}" && ! -L "${gateway_env_path}" ]] && \
+          grep -q '[^[:space:]]' "${gateway_env_path}" || \
+          fail "--no-gateway overlay requires a safe existing Gateway env: ${gateway_env}"
+      done
+    fi
     log "component overlay requested; preserve the installed control plane, shared credentials, and lifecycle scripts"
   elif [[ "${WITH_ADMIN}" -eq 0 && "${WITH_STORAGE}" -eq 0 && "${has_selected_workload}" -eq 1 && \
     ( -d "${deploy_dir}/admin" || -x "${deploy_dir}/bin/moox-admin" ) ]]; then
@@ -4059,18 +4067,23 @@ sync_local_stage() {
       "MOOX_INSTALLED_WITH_WEB_HOST:${WITH_WEB_HOST}" "MOOX_INSTALLED_WITH_GATEWAY:${WITH_GATEWAY}"
   fi
 
+  local -a gateway_secret_next_files=() gateway_secret_target_files=()
   mkdir -p "${deploy_dir}/secrets" "${deploy_dir}/certs/gateway"
   if [[ "${component_overlay}" -eq 0 || "${WITH_GATEWAY}" -eq 1 ]]; then
     for shared_gateway_file in gateway-control.key gateway-service.key gateway-control.env gateway-service.env; do
       shared_gateway_path="${deploy_dir}/secrets/${shared_gateway_file}"
-      if [[ "${shared_gateway_file}" == *.key && "${component_overlay}" -eq 1 && -f "${shared_gateway_path}" && ! -L "${shared_gateway_path}" ]] && grep -q '[^[:space:]]' "${shared_gateway_path}"; then
+      if [[ "${component_overlay}" -eq 1 && -f "${shared_gateway_path}" && ! -L "${shared_gateway_path}" ]] && grep -q '[^[:space:]]' "${shared_gateway_path}"; then
         chmod 0600 "${shared_gateway_path}"
-      elif [[ "${component_overlay}" -eq 0 || ! -s "${shared_gateway_path}" || "${shared_gateway_file}" == *.key ]]; then
-        if [[ "${shared_gateway_file}" == *.key ]] && ! grep -q '[^[:space:]]' "${STAGE_DIR}/secrets/${shared_gateway_file}"; then
-          fail "staged Gateway key is empty: ${shared_gateway_file}"
-        fi
-        rm -f "${shared_gateway_path}"
-        install -m 0600 "${STAGE_DIR}/secrets/${shared_gateway_file}" "${shared_gateway_path}"
+      else
+        shared_gateway_source="${STAGE_DIR}/secrets/${shared_gateway_file}"
+        shared_gateway_next="${deploy_dir}/secrets/.${shared_gateway_file}.next"
+        [[ -f "${shared_gateway_source}" && ! -L "${shared_gateway_source}" ]] && \
+          grep -q '[^[:space:]]' "${shared_gateway_source}" || \
+          fail "staged Gateway secret is empty or unsafe: ${shared_gateway_file}"
+        rm -f "${shared_gateway_next}"
+        install -m 0600 "${shared_gateway_source}" "${shared_gateway_next}"
+        gateway_secret_next_files+=("${shared_gateway_next}")
+        gateway_secret_target_files+=("${shared_gateway_path}")
       fi
     done
   fi
@@ -4095,12 +4108,24 @@ sync_local_stage() {
       if [[ "${component_overlay}" -eq 1 && -f "${credential_path}" && ! -L "${credential_path}" ]] && grep -q '[^[:space:]]' "${credential_path}"; then
         chmod 0600 "${credential_path}"
       else
-        if ! grep -q '[^[:space:]]' "${credential_file}"; then
-          fail "staged Gateway key is empty: $(basename "${credential_file}")"
-        fi
-        rm -f "${credential_path}"
-        install -m 0600 "${credential_file}" "${credential_path}"
+        credential_name="$(basename "${credential_file}")"
+        credential_next="${deploy_dir}/secrets/.${credential_name}.next"
+        [[ -f "${credential_file}" && ! -L "${credential_file}" ]] && \
+          grep -q '[^[:space:]]' "${credential_file}" || \
+          fail "staged Gateway key is empty or unsafe: ${credential_name}"
+        rm -f "${credential_next}"
+        install -m 0600 "${credential_file}" "${credential_next}"
+        gateway_secret_next_files+=("${credential_next}")
+        gateway_secret_target_files+=("${credential_path}")
       fi
+    done
+    for credential_path in "${gateway_secret_target_files[@]}"; do
+      if [[ ( -e "${credential_path}" && ! -f "${credential_path}" && ! -L "${credential_path}" ) || ( -L "${credential_path}" && -d "${credential_path}" ) ]]; then
+        fail "existing Gateway secret cannot be atomically replaced: $(basename "${credential_path}")"
+      fi
+    done
+    for credential_index in "${!gateway_secret_next_files[@]}"; do
+      mv -f "${gateway_secret_next_files[credential_index]}" "${gateway_secret_target_files[credential_index]}"
     done
     if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/gateway-moox-cli.env" ]]; then
       install -m 0600 "${STAGE_DIR}/secrets/gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env"
@@ -4411,6 +4436,15 @@ if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
   grep -Fq 'MOOX_INSTALLED_WITH_' "${DEPLOY_DIR}/config/components.env" || { echo "installed component inventory is too old for --component-overlay; run a full deployment first" >&2; exit 1; }
   grep -Fq 'MOOX_INSTALLED_WITH_' "${DEPLOY_DIR}/start.sh" || { echo "installed lifecycle is too old for --component-overlay; run a full deployment first" >&2; exit 1; }
   [[ "${RESET_DATA}" == "0" ]] || { echo "--reset-data cannot be used with --component-overlay" >&2; exit 1; }
+  if [[ "${WITH_GATEWAY}" == "0" ]]; then
+    for gateway_env in gateway-control.env gateway-service.env; do
+      gateway_env_path="${DEPLOY_DIR}/secrets/${gateway_env}"
+      if [[ ! -f "${gateway_env_path}" || -L "${gateway_env_path}" ]] || ! grep -q '[^[:space:]]' "${gateway_env_path}"; then
+        echo "--no-gateway overlay requires a safe existing Gateway env: ${gateway_env}" >&2
+        exit 1
+      fi
+    done
+  fi
   echo "component overlay requested; preserve the installed control plane, shared credentials, and lifecycle scripts"
 elif [[ "${WITH_ADMIN}" == "0" && "${WITH_STORAGE}" == "0" && "${HAS_SELECTED_WORKLOAD}" == "1" && \
   ( -d "${DEPLOY_DIR}/admin" || -x "${DEPLOY_DIR}/bin/moox-admin" ) ]]; then
@@ -4552,30 +4586,41 @@ if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
 fi
 tar "${TAR_EXCLUDES[@]}" -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
 if [[ "${COMPONENT_OVERLAY}" == "1" && "${WITH_GATEWAY}" == "1" ]]; then
+  GATEWAY_SECRET_NEXT_FILES=()
+  GATEWAY_SECRET_TARGET_FILES=()
   while IFS= read -r gateway_key_entry; do
     case "${gateway_key_entry}" in
-      ./secrets/gateway-*.key)
-        gateway_key_file="${gateway_key_entry##*/}"
-        [[ "${gateway_key_file}" =~ ^gateway-[a-z0-9-]+\.key$ ]] || continue
-        gateway_key_path="${DEPLOY_DIR}/secrets/${gateway_key_file}"
-        if [[ -f "${gateway_key_path}" && ! -L "${gateway_key_path}" ]] && grep -q '[^[:space:]]' "${gateway_key_path}"; then
-          chmod 0600 "${gateway_key_path}"
+      ./secrets/gateway-*.key|./secrets/gateway-control.env|./secrets/gateway-service.env)
+        gateway_secret_file="${gateway_key_entry##*/}"
+        [[ "${gateway_secret_file}" =~ ^gateway-[a-z0-9-]+\.key$ || "${gateway_secret_file}" == gateway-control.env || "${gateway_secret_file}" == gateway-service.env ]] || continue
+        gateway_secret_path="${DEPLOY_DIR}/secrets/${gateway_secret_file}"
+        if [[ -f "${gateway_secret_path}" && ! -L "${gateway_secret_path}" ]] && grep -q '[^[:space:]]' "${gateway_secret_path}"; then
+          chmod 0600 "${gateway_secret_path}"
         else
-          rm -f "${DEPLOY_DIR}/secrets/.${gateway_key_file}.next"
+          gateway_secret_next="${DEPLOY_DIR}/secrets/.${gateway_secret_file}.next"
+          rm -f "${gateway_secret_next}"
           tar -xOzf "${ARCHIVE}" "${gateway_key_entry}" \
-            >"${DEPLOY_DIR}/secrets/.${gateway_key_file}.next"
-          if ! grep -q '[^[:space:]]' "${DEPLOY_DIR}/secrets/.${gateway_key_file}.next"; then
-            echo "archived Gateway key is empty: ${gateway_key_file}" >&2
+            >"${gateway_secret_next}"
+          if [[ ! -f "${gateway_secret_next}" || -L "${gateway_secret_next}" ]] || ! grep -q '[^[:space:]]' "${gateway_secret_next}"; then
+            echo "archived Gateway secret is empty or unsafe: ${gateway_secret_file}" >&2
             exit 1
           fi
-          chmod 0600 "${DEPLOY_DIR}/secrets/.${gateway_key_file}.next"
-          rm -f "${gateway_key_path}"
-          mv -f "${DEPLOY_DIR}/secrets/.${gateway_key_file}.next" \
-            "${gateway_key_path}"
+          chmod 0600 "${gateway_secret_next}"
+          GATEWAY_SECRET_NEXT_FILES+=("${gateway_secret_next}")
+          GATEWAY_SECRET_TARGET_FILES+=("${gateway_secret_path}")
         fi
         ;;
     esac
   done < <(tar -tzf "${ARCHIVE}")
+  for gateway_secret_path in "${GATEWAY_SECRET_TARGET_FILES[@]}"; do
+    if [[ ( -e "${gateway_secret_path}" && ! -f "${gateway_secret_path}" && ! -L "${gateway_secret_path}" ) || ( -L "${gateway_secret_path}" && -d "${gateway_secret_path}" ) ]]; then
+      echo "existing Gateway secret cannot be atomically replaced: ${gateway_secret_path##*/}" >&2
+      exit 1
+    fi
+  done
+  for gateway_secret_index in "${!GATEWAY_SECRET_NEXT_FILES[@]}"; do
+    mv -f "${GATEWAY_SECRET_NEXT_FILES[gateway_secret_index]}" "${GATEWAY_SECRET_TARGET_FILES[gateway_secret_index]}"
+  done
   mv -f "${DEPLOY_DIR}/secrets/.gateway-credentials.json.next" \
     "${DEPLOY_DIR}/secrets/gateway-credentials.json"
 fi
@@ -4605,7 +4650,9 @@ if [[ "${WITH_ADMIN}" == "1" && ! -s "${DEPLOY_DIR}/secrets/admin-jwt.env" ]]; t
   umask 077
   printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "$(generate_secret admin-jwt)" >"${DEPLOY_DIR}/secrets/admin-jwt.env"
 fi
-chmod 0600 "${DEPLOY_DIR}/secrets/gateway-control.env" "${DEPLOY_DIR}/secrets/gateway-service.env" "${DEPLOY_DIR}/secrets/gateway-control.key" "${DEPLOY_DIR}/secrets/gateway-service.key"
+if [[ "${COMPONENT_OVERLAY}" == "0" || "${WITH_GATEWAY}" == "1" ]]; then
+  chmod 0600 "${DEPLOY_DIR}/secrets/gateway-control.env" "${DEPLOY_DIR}/secrets/gateway-service.env" "${DEPLOY_DIR}/secrets/gateway-control.key" "${DEPLOY_DIR}/secrets/gateway-service.key"
+fi
 [[ "${WITH_ADMIN}" == "0" ]] || chmod 0600 "${DEPLOY_DIR}/secrets/admin-jwt.env"
 
   if [[ "${NO_START}" -eq 0 ]]; then

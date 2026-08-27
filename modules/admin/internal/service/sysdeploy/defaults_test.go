@@ -360,7 +360,7 @@ func TestMergeDefaultExtraConfigPreservesUserGatewayRouteByIdentity(t *testing.T
 	if len(extra.GatewayRoutes) != 2 {
 		t.Fatalf("gateway routes = %v, want preserved user route plus one default", extra.GatewayRoutes)
 	}
-	if extra.GatewayRoutes[0]["owner"] != "ops" || !reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_callers"], []any{"operator"}) {
+	if extra.GatewayRoutes[0]["owner"] != "ops" || !reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_callers"], []any{"operator", "admin-gateway"}) {
 		t.Fatalf("user route was overwritten: %v", extra.GatewayRoutes[0])
 	}
 }
@@ -383,6 +383,30 @@ func TestMergeDefaultExtraConfigUnionsReadRouteCallers(t *testing.T) {
 		!reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_callers"], []any{"operator", "admin-gateway", "moox-skill"}) ||
 		extra.GatewayRoutes[0]["owner"] != "ops" {
 		t.Fatalf("read route was not unioned in place: %v", extra.GatewayRoutes)
+	}
+}
+
+func TestMergeDefaultExtraConfigDoesNotExpandCustomMethodCallers(t *testing.T) {
+	merged, changed := mergeDefaultExtraConfig(
+		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadFields","OperatorAudit"],"gateway_callers":["admin-gateway"],"owner":"ops"}]}`,
+		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadFields"],"gateway_callers":["admin-gateway","collector"]}]}`,
+	)
+	if !changed {
+		t.Fatal("changed = false, want default caller union and custom route split")
+	}
+	var extra struct {
+		GatewayRoutes []map[string]any `json:"gateway_routes"`
+	}
+	if err := json.Unmarshal([]byte(merged), &extra); err != nil {
+		t.Fatal(err)
+	}
+	if len(extra.GatewayRoutes) != 2 ||
+		!reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_methods"], []any{"ReadFields"}) ||
+		!reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_callers"], []any{"admin-gateway", "collector"}) ||
+		!reflect.DeepEqual(extra.GatewayRoutes[1]["gateway_methods"], []any{"OperatorAudit"}) ||
+		!reflect.DeepEqual(extra.GatewayRoutes[1]["gateway_callers"], []any{"admin-gateway"}) ||
+		extra.GatewayRoutes[1]["owner"] != "ops" {
+		t.Fatalf("custom method ACL was expanded: %v", extra.GatewayRoutes)
 	}
 }
 

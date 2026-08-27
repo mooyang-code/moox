@@ -68,6 +68,9 @@ assert_contains "${DEPLOY}" 'gateway_service_env_for monitor'
 assert_contains "${DEPLOY}" 'LOCAL_DEPLOY_ARCHIVE=$(mktemp'
 assert_contains "${DEPLOY}" 'REMOTE_DEPLOY_ARCHIVE'
 assert_contains "${DEPLOY}" 'cleanup_deploy_artifacts'
+assert_absent "${DEPLOY}" 'rm -f "${gateway_key_path}"'
+assert_absent "${DEPLOY}" 'rm -f "${credential_path}"'
+assert_absent "${DEPLOY}" 'rm -f "${shared_gateway_path}"'
 
 production_contract_paths=(
   "${DEPLOY}"
@@ -228,6 +231,11 @@ printf 'local-symlink-sentinel\n' >"${TMP}/local-key-sentinel"
 rm -f "${DEPLOYED}/secrets/gateway-factor.key"
 ln -s "${TMP}/local-key-sentinel" "${DEPLOYED}/secrets/gateway-factor.key"
 printf ' \n' >"${DEPLOYED}/secrets/gateway-monitor.key"
+printf 'touch %q\n' "${TMP}/local-env-executed" >"${TMP}/local-env-sentinel"
+chmod 0644 "${TMP}/local-env-sentinel"
+rm -f "${DEPLOYED}/secrets/gateway-control.env"
+ln -s "${TMP}/local-env-sentinel" "${DEPLOYED}/secrets/gateway-control.env"
+printf ' \n' >"${DEPLOYED}/secrets/gateway-service.env"
 printf '%s\n' '{"version":1,"credentials":[{"key_id":"moox-gateway-service","caller":"admin-gateway","secret_file":"gateway-service.key"}]}' \
   >"${DEPLOYED}/secrets/gateway-credentials.json"
 MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
@@ -248,6 +256,12 @@ grep -Fxq 'local-symlink-sentinel' "${TMP}/local-key-sentinel" || \
   fail 'local component overlay followed an unsafe Gateway key symlink'
 grep -q '[^[:space:]]' "${DEPLOYED}/secrets/gateway-monitor.key" || \
   fail 'local component overlay preserved a whitespace-only Gateway key'
+[[ ! -L "${DEPLOYED}/secrets/gateway-control.env" && -s "${DEPLOYED}/secrets/gateway-control.env" ]] || \
+  fail 'local component overlay preserved an unsafe Gateway env path'
+[[ "$(file_mode "${TMP}/local-env-sentinel")" == 644 && ! -e "${TMP}/local-env-executed" ]] || \
+  fail 'local component overlay followed, chmodded, or sourced an unsafe Gateway env symlink'
+grep -q '[^[:space:]]' "${DEPLOYED}/secrets/gateway-service.env" || \
+  fail 'local component overlay preserved a whitespace-only Gateway env'
 
 NO_GATEWAY_DEPLOY="${TMP}/deploy-no-gateway-overlay"
 cp -R "${DEPLOYED}" "${NO_GATEWAY_DEPLOY}"
@@ -415,8 +429,11 @@ REMOTE_OVERLAY_ROOT="${TMP}/remote-overlay-root"
 REMOTE_OVERLAY_PAYLOAD="${TMP}/remote-overlay-payload"
 REMOTE_OVERLAY_ARCHIVE="${TMP}/remote-overlay.tar.gz"
 REMOTE_NO_GATEWAY_ARCHIVE="${TMP}/remote-no-gateway-overlay.tar.gz"
+REMOTE_FAILURE_ARCHIVE="${TMP}/remote-failure-overlay.tar.gz"
 REMOTE_OVERLAY_SCRIPT="${TMP}/remote-overlay.sh"
 REMOTE_NO_GATEWAY_ROOT="${TMP}/remote-no-gateway-root"
+REMOTE_NO_GATEWAY_UNSAFE_ROOT="${TMP}/remote-no-gateway-unsafe-root"
+REMOTE_FAILURE_ROOT="${TMP}/remote-failure-root"
 mkdir -p "${REMOTE_OVERLAY_ROOT}/bin" "${REMOTE_OVERLAY_ROOT}/config" "${REMOTE_OVERLAY_ROOT}/secrets" \
   "${REMOTE_OVERLAY_PAYLOAD}/bin" "${REMOTE_OVERLAY_PAYLOAD}/monitor" "${REMOTE_OVERLAY_PAYLOAD}/secrets"
 printf '#!/usr/bin/env bash\n# MOOX_INSTALLED_WITH_ inventory marker\nexit 0\n' >"${REMOTE_OVERLAY_ROOT}/start.sh"
@@ -436,9 +453,19 @@ printf ' \n' >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-factor.key"
 printf 'preserve-skill-key\n' >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-skill.key"
 printf 'remote-symlink-sentinel\n' >"${TMP}/remote-key-sentinel"
 ln -s "${TMP}/remote-key-sentinel" "${REMOTE_OVERLAY_ROOT}/secrets/gateway-storage-view.key"
+printf 'touch %q\n' "${TMP}/remote-env-executed" >"${TMP}/remote-env-sentinel"
+chmod 0644 "${TMP}/remote-env-sentinel"
+rm -f "${REMOTE_OVERLAY_ROOT}/secrets/gateway-service.env"
+ln -s "${TMP}/remote-env-sentinel" "${REMOTE_OVERLAY_ROOT}/secrets/gateway-service.env"
+printf ' \n' >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-control.env"
 printf '%s\n' '{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"}]}' \
   >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-credentials.json"
 cp -R "${REMOTE_OVERLAY_ROOT}" "${REMOTE_NO_GATEWAY_ROOT}"
+cp -R "${REMOTE_OVERLAY_ROOT}" "${REMOTE_NO_GATEWAY_UNSAFE_ROOT}"
+cp -R "${REMOTE_OVERLAY_ROOT}" "${REMOTE_FAILURE_ROOT}"
+rm -f "${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-service.env"
+printf 'preserve-no-gateway-service-env\n' >"${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-service.env"
+printf 'preserve-no-gateway-control-env\n' >"${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-control.env"
 
 for script in start.sh stop.sh status.sh healthcheck.sh; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${REMOTE_OVERLAY_PAYLOAD}/${script}"
@@ -449,12 +476,44 @@ printf 'rotated-collector-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-col
 printf 'derived-factor-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-factor.key"
 printf 'derived-storage-view-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-storage-view.key"
 printf 'rotated-skill-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-moox-skill.key"
+printf 'derived-control-env\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-control.env"
+printf 'derived-service-env\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-service.env"
 printf '%s\n' '{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"factor","caller":"factor","secret_file":"gateway-factor.key"},{"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"}]}' \
   >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-credentials.json"
+printf ' \n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-monitor.key"
+tar -C "${REMOTE_OVERLAY_PAYLOAD}" -czf "${REMOTE_FAILURE_ARCHIVE}" .
+printf 'preserve-monitor-key\n' >"${TMP}/remote-failure-key-sentinel"
+rm -f "${REMOTE_FAILURE_ROOT}/secrets/gateway-monitor.key"
+ln -s "${TMP}/remote-failure-key-sentinel" "${REMOTE_FAILURE_ROOT}/secrets/gateway-monitor.key"
+printf 'derived-monitor-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-monitor.key"
 tar -C "${REMOTE_OVERLAY_PAYLOAD}" -czf "${REMOTE_OVERLAY_ARCHIVE}" .
 cp "${REMOTE_OVERLAY_ARCHIVE}" "${REMOTE_NO_GATEWAY_ARCHIVE}"
 awk '/bash -s" <<'"'"'EOF'"'"'$/ { capture=1; next } capture && /^EOF$/ { exit } capture { print }' \
   "${DEPLOY}" >"${REMOTE_OVERLAY_SCRIPT}"
+if DEPLOY_DIR="${REMOTE_FAILURE_ROOT}" ARCHIVE="${REMOTE_FAILURE_ARCHIVE}" NODE_ID=gateway-remote-overlay \
+  NO_START=1 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
+  WITH_CLOUDNODE=0 WITH_COLLECTOR=0 WITH_FACTOR=0 WITH_STRATEGY=0 WITH_TRADE=0 WITH_MONITOR=1 \
+  WITH_HOSTAGENT=0 WITH_WEB_HOST=0 WITH_ADMIN=0 WITH_GATEWAY=1 RESET_DATA=0 \
+  MOOX_METRICS_STORAGE_METADATA_URL='' MOOX_EVENTBUS_NATS_URL='' MOOX_EVENTBUS_HOST='' MOOX_EVENTBUS_PORT='' \
+  MOOX_METRICS_EVENTBUS_URL='' MOOX_EVENTBUS_ENABLE_TLS=0 MOOX_EVENTBUS_PUBLIC_IP='' \
+  MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET='' MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID='' \
+  MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT='' MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64='' \
+  MOOX_FACTOR_ENGINE_PYTHON_WORKERS='' MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS='' MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS='' \
+  MOOX_CONTROL_ROOT='' MOOX_STORAGE_ROOT='' PUBLIC_HOST='' TLS_MODE_RESOLVED='' BROWSER_HTTPS_PORT=9527 \
+  SERVICE_HTTPS_PORT=11001 TARGET_GOOS=linux TARGET_GOARCH=amd64 bash "${REMOTE_OVERLAY_SCRIPT}" >/dev/null 2>&1; then
+  fail 'remote component overlay accepted a whitespace-only replacement key'
+fi
+[[ -L "${REMOTE_FAILURE_ROOT}/secrets/gateway-monitor.key" ]] && \
+  grep -Fxq 'preserve-monitor-key' "${TMP}/remote-failure-key-sentinel" || \
+  fail 'failed remote component overlay removed the previous abnormal key target'
+[[ -L "${REMOTE_FAILURE_ROOT}/secrets/gateway-storage-view.key" ]] || \
+  fail 'failed remote component overlay partially replaced an earlier Gateway key'
+[[ -L "${REMOTE_FAILURE_ROOT}/secrets/gateway-service.env" ]] || \
+  fail 'failed remote component overlay partially replaced an earlier Gateway env'
+! grep -q '[^[:space:]]' "${REMOTE_FAILURE_ROOT}/secrets/gateway-factor.key" || \
+  fail 'failed remote component overlay partially replaced a whitespace-only Gateway key'
+! grep -Fq '"key_id":"factor"' "${REMOTE_FAILURE_ROOT}/secrets/gateway-credentials.json" || \
+  fail 'failed remote component overlay activated the staged Gateway registry'
 DEPLOY_DIR="${REMOTE_OVERLAY_ROOT}" ARCHIVE="${REMOTE_OVERLAY_ARCHIVE}" NODE_ID=gateway-remote-overlay \
   NO_START=1 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
   WITH_CLOUDNODE=0 WITH_COLLECTOR=0 WITH_FACTOR=0 WITH_STRATEGY=0 WITH_TRADE=0 WITH_MONITOR=1 \
@@ -486,6 +545,28 @@ grep -Fxq 'derived-storage-view-key' "${REMOTE_OVERLAY_ROOT}/secrets/gateway-sto
   fail 'remote component overlay replaced an unsafe Gateway key with the wrong mode'
 grep -Fxq 'remote-symlink-sentinel' "${TMP}/remote-key-sentinel" || \
   fail 'remote component overlay followed an unsafe Gateway key symlink'
+grep -Fxq 'derived-service-env' "${REMOTE_OVERLAY_ROOT}/secrets/gateway-service.env" || \
+  fail 'remote component overlay did not safely replace an unsafe Gateway env path'
+grep -Fxq 'derived-control-env' "${REMOTE_OVERLAY_ROOT}/secrets/gateway-control.env" || \
+  fail 'remote component overlay preserved a whitespace-only Gateway env'
+[[ "$(file_mode "${TMP}/remote-env-sentinel")" == 644 && ! -e "${TMP}/remote-env-executed" ]] || \
+  fail 'remote component overlay followed, chmodded, or sourced an unsafe Gateway env symlink'
+
+if DEPLOY_DIR="${REMOTE_NO_GATEWAY_UNSAFE_ROOT}" ARCHIVE="${REMOTE_NO_GATEWAY_ARCHIVE}" NODE_ID=gateway-remote-overlay \
+  NO_START=0 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
+  WITH_CLOUDNODE=0 WITH_COLLECTOR=0 WITH_FACTOR=0 WITH_STRATEGY=0 WITH_TRADE=0 WITH_MONITOR=1 \
+  WITH_HOSTAGENT=0 WITH_WEB_HOST=0 WITH_ADMIN=0 WITH_GATEWAY=0 RESET_DATA=0 \
+  MOOX_METRICS_STORAGE_METADATA_URL='' MOOX_EVENTBUS_NATS_URL='' MOOX_EVENTBUS_HOST='' MOOX_EVENTBUS_PORT='' \
+  MOOX_METRICS_EVENTBUS_URL='' MOOX_EVENTBUS_ENABLE_TLS=0 MOOX_EVENTBUS_PUBLIC_IP='' \
+  MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET='' MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID='' \
+  MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT='' MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64='' \
+  MOOX_FACTOR_ENGINE_PYTHON_WORKERS='' MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS='' MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS='' \
+  MOOX_CONTROL_ROOT='' MOOX_STORAGE_ROOT='' PUBLIC_HOST='' TLS_MODE_RESOLVED='' BROWSER_HTTPS_PORT=9527 \
+  SERVICE_HTTPS_PORT=11001 TARGET_GOOS=linux TARGET_GOARCH=amd64 bash "${REMOTE_OVERLAY_SCRIPT}" >/dev/null 2>&1; then
+  fail 'remote --no-gateway overlay accepted an unsafe Gateway env'
+fi
+[[ "$(file_mode "${TMP}/remote-env-sentinel")" == 644 && ! -e "${TMP}/remote-env-executed" ]] || \
+  fail 'remote --no-gateway overlay chmodded or sourced an unsafe Gateway env symlink'
 
 DEPLOY_DIR="${REMOTE_NO_GATEWAY_ROOT}" ARCHIVE="${REMOTE_NO_GATEWAY_ARCHIVE}" NODE_ID=gateway-remote-overlay \
   NO_START=1 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
