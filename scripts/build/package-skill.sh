@@ -27,6 +27,14 @@ file_mode() {
   echo "moox-cli is not executable: ${MOOX_CLI}" >&2
   exit 1
 }
+if [[ -L "${OUT}" ]]; then
+  echo "output archive must not be a symlink: ${OUT}" >&2
+  exit 1
+fi
+if [[ -e "${OUT}" && ! -f "${OUT}" ]]; then
+  echo "output archive must be a regular file: ${OUT}" >&2
+  exit 1
+fi
 
 mkdir -p "$(dirname "${OUT}")"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/moox-skill-stage.XXXXXX")"
@@ -55,5 +63,9 @@ tar -C "${STAGE}" -czf "${ARCHIVE_TMP}" moox
 chmod 0600 "${ARCHIVE_TMP}"
 mv -f "${ARCHIVE_TMP}" "${OUT}"
 ARCHIVE_TMP=""
+if [[ ! -f "${OUT}" || -L "${OUT}" || "$(file_mode "${OUT}")" != 600 ]]; then
+  echo "output archive must be a regular non-symlink file with permission 0600" >&2
+  exit 1
+fi
 
 echo "==> skill package: ${OUT}"

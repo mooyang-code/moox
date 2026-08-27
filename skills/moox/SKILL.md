@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo or operating moox-cli, including quant storage, collector cloud functions, Linux amd64/arm64 Host Agent server-resource monitoring, rootless deployment, EventBus credential provision/rotate, Tencent Cloud Lighthouse firewall changes, or control-plane maintenance.
+description: Use when working in the MooX monorepo, operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, Tencent Cloud Lighthouse firewall changes, and control-plane maintenance.
 ---
 
 # MooX Quant Data System
