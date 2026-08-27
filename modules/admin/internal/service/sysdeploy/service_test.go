@@ -100,6 +100,7 @@ func TestServiceImpl_SeedDefaults_BackfillsSkillReadRouteInLegacyStorageDeployme
 	require.Equal(t, "ops", operatorRoute["owner"])
 	require.Equal(t, []any{"ReadTimeSeriesRows"}, readOnly["gateway_methods"])
 	require.Contains(t, readOnly["gateway_callers"], "moox-skill")
+	require.Contains(t, readOnly["gateway_callers"], "operator")
 	require.Equal(t, "ops", custom["owner"])
 	snapshot, err := svc.dao.CompileGatewaySnapshot(context.Background(), testAdminNodeID)
 	require.NoError(t, err)

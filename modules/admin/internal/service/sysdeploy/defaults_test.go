@@ -360,7 +360,7 @@ func TestMergeDefaultExtraConfigPreservesUserGatewayRouteByIdentity(t *testing.T
 	if len(extra.GatewayRoutes) != 2 {
 		t.Fatalf("gateway routes = %v, want preserved user route plus one default", extra.GatewayRoutes)
 	}
-	if extra.GatewayRoutes[0]["owner"] != "ops" || !reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_callers"], []any{"operator", "admin-gateway"}) {
+	if extra.GatewayRoutes[0]["owner"] != "ops" || !reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_callers"], []any{"operator"}) {
 		t.Fatalf("user route was overwritten: %v", extra.GatewayRoutes[0])
 	}
 }
@@ -402,7 +402,7 @@ func TestMergeDefaultExtraConfigDoesNotExpandCustomMethodCallers(t *testing.T) {
 	}
 	if len(extra.GatewayRoutes) != 2 ||
 		!reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_methods"], []any{"ReadFields"}) ||
-		!reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_callers"], []any{"admin-gateway", "collector"}) ||
+		!reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_callers"], []any{"admin-gateway"}) ||
 		!reflect.DeepEqual(extra.GatewayRoutes[1]["gateway_methods"], []any{"OperatorAudit"}) ||
 		!reflect.DeepEqual(extra.GatewayRoutes[1]["gateway_callers"], []any{"admin-gateway"}) ||
 		extra.GatewayRoutes[1]["owner"] != "ops" {

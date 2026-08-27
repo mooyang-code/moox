@@ -279,7 +279,7 @@ func mergeDefaultGatewayRoutes(existingValue, defaultValue any) ([]map[string]an
 	if !ok {
 		return nil, false
 	}
-	changed := migrateReadTimeSeriesGatewayRoutes(existing, defaults)
+	existing, changed := migrateReadTimeSeriesGatewayRoutes(existing, defaults)
 	for _, defaultRoute := range defaults {
 		defaultMethods, ok := gatewayRouteStrings(defaultRoute, "gateway_methods")
 		if !ok {
@@ -296,11 +296,12 @@ func mergeDefaultGatewayRoutes(existingValue, defaultValue any) ([]map[string]an
 			if !methodsOK || !callersOK || !defaultsOK || !containsStringSet(existingMethods, defaultMethods) {
 				continue
 			}
-			mergedCallers, callersChanged := appendMissingStrings(existingCallers, defaultCallers)
-			if !sameStringSet(defaultMethods, []string{"ReadTimeSeriesRows"}) {
-				mergedCallers = subtractStringSet(mergedCallers, []string{"moox-skill"})
-				callersChanged = callersChanged || len(mergedCallers) != len(existingCallers)
+			isReadTimeSeriesRoute := sameStringSet(defaultMethods, []string{"ReadTimeSeriesRows"})
+			mergedCallers := subtractStringSet(existingCallers, []string{"moox-skill"})
+			if isReadTimeSeriesRoute {
+				mergedCallers, _ = appendMissingStrings(existingCallers, defaultCallers)
 			}
+			callersChanged := !sameStringSet(mergedCallers, existingCallers)
 			if callersChanged {
 				existingRoute["gateway_callers"] = mergedCallers
 				changed = true
@@ -345,7 +346,7 @@ func mergeDefaultGatewayRoutes(existingValue, defaultValue any) ([]map[string]an
 	return existing, changed
 }
 
-func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) bool {
+func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) ([]map[string]any, bool) {
 	changed := false
 	for _, defaultRoute := range defaults {
 		defaultMethods, ok := gatewayRouteStrings(defaultRoute, "gateway_methods")
@@ -356,25 +357,53 @@ func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) boo
 		if !ok {
 			continue
 		}
+		var readRoute map[string]any
 		for _, existingRoute := range existing {
 			if !sameGatewayRouteEndpoint(existingRoute, defaultRoute) {
 				continue
 			}
 			existingMethods, ok := gatewayRouteStrings(existingRoute, "gateway_methods")
-			if !ok || !containsStringSet(existingMethods, defaultMethods) {
+			if !ok || !sameStringSet(existingMethods, defaultMethods) {
 				continue
 			}
-			if sameStringSet(existingMethods, defaultMethods) {
-				existingCallers, ok := gatewayRouteStrings(existingRoute, "gateway_callers")
-				if !ok {
-					continue
-				}
-				mergedCallers, callersChanged := appendMissingStrings(existingCallers, defaultCallers)
-				if callersChanged {
-					existingRoute["gateway_callers"] = mergedCallers
-					changed = true
-				}
+			existingCallers, ok := gatewayRouteStrings(existingRoute, "gateway_callers")
+			if !ok {
 				continue
+			}
+			mergedCallers, callersChanged := appendMissingStrings(existingCallers, defaultCallers)
+			if callersChanged {
+				existingRoute["gateway_callers"] = mergedCallers
+				changed = true
+			}
+			readRoute = existingRoute
+			break
+		}
+		for _, existingRoute := range existing {
+			if !sameGatewayRouteEndpoint(existingRoute, defaultRoute) {
+				continue
+			}
+			existingMethods, ok := gatewayRouteStrings(existingRoute, "gateway_methods")
+			if !ok || sameStringSet(existingMethods, defaultMethods) || !containsStringSet(existingMethods, defaultMethods) {
+				continue
+			}
+			existingCallers, ok := gatewayRouteStrings(existingRoute, "gateway_callers")
+			if !ok {
+				continue
+			}
+			readCallers, _ := appendMissingStrings(existingCallers, defaultCallers)
+			if readRoute == nil {
+				readRoute = make(map[string]any, len(existingRoute))
+				for key, value := range existingRoute {
+					readRoute[key] = value
+				}
+				readRoute["gateway_methods"] = defaultMethods
+				readRoute["gateway_callers"] = readCallers
+				existing = append(existing, readRoute)
+			} else if currentCallers, ok := gatewayRouteStrings(readRoute, "gateway_callers"); ok {
+				mergedCallers, callersChanged := appendMissingStrings(currentCallers, readCallers)
+				if callersChanged {
+					readRoute["gateway_callers"] = mergedCallers
+				}
 			}
 			// The legacy default grouped this read with general PrimaryStore
 			// methods. Move only the read method; retain custom methods, callers,
@@ -390,7 +419,7 @@ func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) boo
 			changed = true
 		}
 	}
-	return changed
+	return existing, changed
 }
 
 func appendMissingStrings(existing, defaults []string) ([]string, bool) {

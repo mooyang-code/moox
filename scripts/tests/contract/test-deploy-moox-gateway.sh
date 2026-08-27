@@ -236,6 +236,10 @@ chmod 0644 "${TMP}/local-env-sentinel"
 rm -f "${DEPLOYED}/secrets/gateway-control.env"
 ln -s "${TMP}/local-env-sentinel" "${DEPLOYED}/secrets/gateway-control.env"
 printf ' \n' >"${DEPLOYED}/secrets/gateway-service.env"
+printf 'touch %q\n' "${TMP}/local-cli-env-executed" >"${TMP}/local-cli-env-sentinel"
+chmod 0644 "${TMP}/local-cli-env-sentinel"
+rm -f "${DEPLOYED}/secrets/gateway-moox-cli.env"
+ln -s "${TMP}/local-cli-env-sentinel" "${DEPLOYED}/secrets/gateway-moox-cli.env"
 printf '%s\n' '{"version":1,"credentials":[{"key_id":"moox-gateway-service","caller":"admin-gateway","secret_file":"gateway-service.key"}]}' \
   >"${DEPLOYED}/secrets/gateway-credentials.json"
 MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
@@ -262,6 +266,70 @@ grep -q '[^[:space:]]' "${DEPLOYED}/secrets/gateway-monitor.key" || \
   fail 'local component overlay followed, chmodded, or sourced an unsafe Gateway env symlink'
 grep -q '[^[:space:]]' "${DEPLOYED}/secrets/gateway-service.env" || \
   fail 'local component overlay preserved a whitespace-only Gateway env'
+[[ ! -L "${DEPLOYED}/secrets/gateway-moox-cli.env" ]] || \
+  fail 'local component overlay preserved an unsafe Gateway CLI env path'
+grep -Fxq "MOOX_GATEWAY_SERVICE_SECRET_KEY=$(tr -d '\r\n' <"${DEPLOYED}/secrets/gateway-moox-cli.key")" \
+  "${DEPLOYED}/secrets/gateway-moox-cli.env" || fail 'local Gateway CLI env does not match its key'
+grep -Fxq "MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=$(tr -d '\r\n' <"${DEPLOYED}/secrets/gateway-collector.key")" \
+  "${DEPLOYED}/secrets/gateway-moox-cli.env" || fail 'local Gateway CLI env does not match the collector key'
+[[ "$(file_mode "${TMP}/local-cli-env-sentinel")" == 644 && ! -e "${TMP}/local-cli-env-executed" ]] || \
+  fail 'local component overlay followed, chmodded, or sourced an unsafe Gateway CLI env symlink'
+
+LOCAL_REGISTRY_FAILURE="${TMP}/local-registry-failure"
+cp -R "${DEPLOYED}" "${LOCAL_REGISTRY_FAILURE}"
+printf 'local-registry-failure-key\n' >"${TMP}/local-registry-failure-key"
+rm -f "${LOCAL_REGISTRY_FAILURE}/secrets/gateway-factor.key"
+ln -s "${TMP}/local-registry-failure-key" "${LOCAL_REGISTRY_FAILURE}/secrets/gateway-factor.key"
+rm -f "${LOCAL_REGISTRY_FAILURE}/secrets/gateway-credentials.json"
+mkdir "${LOCAL_REGISTRY_FAILURE}/secrets/gateway-credentials.json"
+if MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
+  MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
+  "${DEPLOY}" --target localhost --dir "${LOCAL_REGISTRY_FAILURE}" --stage "${TMP}/stage-registry-failure" \
+  --skip-build --no-start --component-overlay --no-admin --no-storage --no-archive --no-eventbus \
+  --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --no-monitor --local-ca skip --target-ca skip \
+  --node-id gateway-test --gateway-control-url 'https://admin.example.com:9527/' \
+  --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
+  --gateway-service-key-file "${TMP}/service.key" >/dev/null 2>&1; then
+  fail 'local component overlay accepted an unsafe Gateway registry target'
+fi
+[[ -L "${LOCAL_REGISTRY_FAILURE}/secrets/gateway-factor.key" ]] && \
+  grep -Fxq 'local-registry-failure-key' "${TMP}/local-registry-failure-key" || \
+  fail 'local registry failure partially replaced Gateway secrets'
+
+LOCAL_CLS_UNSAFE="${TMP}/local-cls-unsafe"
+cp -R "${DEPLOYED}" "${LOCAL_CLS_UNSAFE}"
+printf 'touch %q\n' "${TMP}/local-cls-env-executed" >"${TMP}/local-cls-env-sentinel"
+rm -f "${LOCAL_CLS_UNSAFE}/secrets/gateway-moox-cli.env"
+ln -s "${TMP}/local-cls-env-sentinel" "${LOCAL_CLS_UNSAFE}/secrets/gateway-moox-cli.env"
+if MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
+  MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
+  "${DEPLOY}" --target localhost --dir "${LOCAL_CLS_UNSAFE}" --stage "${TMP}/stage-cls-unsafe" \
+  --skip-build --no-start --enable-cls --component-overlay --no-gateway --no-admin --no-storage --no-archive --no-eventbus \
+  --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --no-monitor --local-ca skip --target-ca skip \
+  --node-id gateway-test --gateway-control-url 'https://admin.example.com:9527/' \
+  --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
+  --gateway-service-key-file "${TMP}/service.key" >/dev/null 2>&1; then
+  fail 'CLS preflight accepted an unsafe Gateway CLI env'
+fi
+[[ ! -e "${TMP}/local-cls-env-executed" ]] || \
+  fail 'CLS preflight sourced an unsafe Gateway CLI env before validation'
+
+LOCAL_CLS_WRITABLE="${TMP}/local-cls-writable"
+cp -R "${DEPLOYED}" "${LOCAL_CLS_WRITABLE}"
+printf 'LD_PRELOAD=/tmp/unsafe.so\n' >>"${LOCAL_CLS_WRITABLE}/secrets/gateway-moox-cli.env"
+chmod 0666 "${LOCAL_CLS_WRITABLE}/secrets/gateway-moox-cli.env"
+if cls_output=$(MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
+  MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
+  "${DEPLOY}" --target localhost --dir "${LOCAL_CLS_WRITABLE}" --stage "${TMP}/stage-cls-writable" \
+  --skip-build --no-start --enable-cls --component-overlay --no-gateway --no-admin --no-storage --no-archive --no-eventbus \
+  --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --no-monitor --local-ca skip --target-ca skip \
+  --node-id gateway-test --gateway-control-url 'https://admin.example.com:9527/' \
+  --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
+  --gateway-service-key-file "${TMP}/service.key" 2>&1); then
+  fail 'CLS preflight accepted a writable Gateway CLI env with an extra variable'
+fi
+grep -Fq 'CLS preflight refuses unsafe gateway-moox-cli.env' <<<"${cls_output}" || \
+  fail 'writable Gateway CLI env was not rejected by the early safety guard'
 
 NO_GATEWAY_DEPLOY="${TMP}/deploy-no-gateway-overlay"
 cp -R "${DEPLOYED}" "${NO_GATEWAY_DEPLOY}"
@@ -451,6 +519,8 @@ done
 printf 'preserve-collector-key\n' >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-collector.key"
 printf ' \n' >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-factor.key"
 printf 'preserve-skill-key\n' >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-skill.key"
+REMOTE_CLI_SECRET="abc\\nPWN=\$(touch ${TMP}/remote-cli-key-executed)"
+printf '%s\n' "${REMOTE_CLI_SECRET}" >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-cli.key"
 printf 'remote-symlink-sentinel\n' >"${TMP}/remote-key-sentinel"
 ln -s "${TMP}/remote-key-sentinel" "${REMOTE_OVERLAY_ROOT}/secrets/gateway-storage-view.key"
 printf 'touch %q\n' "${TMP}/remote-env-executed" >"${TMP}/remote-env-sentinel"
@@ -458,6 +528,9 @@ chmod 0644 "${TMP}/remote-env-sentinel"
 rm -f "${REMOTE_OVERLAY_ROOT}/secrets/gateway-service.env"
 ln -s "${TMP}/remote-env-sentinel" "${REMOTE_OVERLAY_ROOT}/secrets/gateway-service.env"
 printf ' \n' >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-control.env"
+printf 'touch %q\n' "${TMP}/remote-cli-env-executed" >"${TMP}/remote-cli-env-sentinel"
+chmod 0644 "${TMP}/remote-cli-env-sentinel"
+ln -s "${TMP}/remote-cli-env-sentinel" "${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-cli.env"
 printf '%s\n' '{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"}]}' \
   >"${REMOTE_OVERLAY_ROOT}/secrets/gateway-credentials.json"
 cp -R "${REMOTE_OVERLAY_ROOT}" "${REMOTE_NO_GATEWAY_ROOT}"
@@ -466,6 +539,10 @@ cp -R "${REMOTE_OVERLAY_ROOT}" "${REMOTE_FAILURE_ROOT}"
 rm -f "${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-service.env"
 printf 'preserve-no-gateway-service-env\n' >"${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-service.env"
 printf 'preserve-no-gateway-control-env\n' >"${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-control.env"
+rm -f "${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-moox-cli.env"
+printf 'preserve-no-gateway-cli-env\n' >"${REMOTE_NO_GATEWAY_ROOT}/secrets/gateway-moox-cli.env"
+rm -f "${REMOTE_FAILURE_ROOT}/secrets/gateway-credentials.json"
+mkdir "${REMOTE_FAILURE_ROOT}/secrets/gateway-credentials.json"
 
 for script in start.sh stop.sh status.sh healthcheck.sh; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${REMOTE_OVERLAY_PAYLOAD}/${script}"
@@ -476,8 +553,11 @@ printf 'rotated-collector-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-col
 printf 'derived-factor-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-factor.key"
 printf 'derived-storage-view-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-storage-view.key"
 printf 'rotated-skill-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-moox-skill.key"
+printf 'derived-cli-key\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-moox-cli.key"
 printf 'derived-control-env\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-control.env"
 printf 'derived-service-env\n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-service.env"
+printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=rotated-cli\nMOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=rotated-collector\n' \
+  >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-moox-cli.env"
 printf '%s\n' '{"version":1,"credentials":[{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"factor","caller":"factor","secret_file":"gateway-factor.key"},{"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"}]}' \
   >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-credentials.json"
 printf ' \n' >"${REMOTE_OVERLAY_PAYLOAD}/secrets/gateway-monitor.key"
@@ -512,8 +592,8 @@ fi
   fail 'failed remote component overlay partially replaced an earlier Gateway env'
 ! grep -q '[^[:space:]]' "${REMOTE_FAILURE_ROOT}/secrets/gateway-factor.key" || \
   fail 'failed remote component overlay partially replaced a whitespace-only Gateway key'
-! grep -Fq '"key_id":"factor"' "${REMOTE_FAILURE_ROOT}/secrets/gateway-credentials.json" || \
-  fail 'failed remote component overlay activated the staged Gateway registry'
+[[ -d "${REMOTE_FAILURE_ROOT}/secrets/gateway-credentials.json" ]] || \
+  fail 'failed remote component overlay changed the unsafe Gateway registry target'
 DEPLOY_DIR="${REMOTE_OVERLAY_ROOT}" ARCHIVE="${REMOTE_OVERLAY_ARCHIVE}" NODE_ID=gateway-remote-overlay \
   NO_START=1 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
   WITH_CLOUDNODE=0 WITH_COLLECTOR=0 WITH_FACTOR=0 WITH_STRATEGY=0 WITH_TRADE=0 WITH_MONITOR=1 \
@@ -551,6 +631,16 @@ grep -Fxq 'derived-control-env' "${REMOTE_OVERLAY_ROOT}/secrets/gateway-control.
   fail 'remote component overlay preserved a whitespace-only Gateway env'
 [[ "$(file_mode "${TMP}/remote-env-sentinel")" == 644 && ! -e "${TMP}/remote-env-executed" ]] || \
   fail 'remote component overlay followed, chmodded, or sourced an unsafe Gateway env symlink'
+[[ ! -L "${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-cli.env" ]] || \
+  fail 'remote component overlay preserved an unsafe Gateway CLI env path'
+grep -Fxq 'MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=preserve-collector-key' \
+  "${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-cli.env" || fail 'remote Gateway CLI env does not match the preserved collector key'
+unset MOOX_GATEWAY_SERVICE_SECRET_KEY
+source "${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-cli.env"
+[[ "${MOOX_GATEWAY_SERVICE_SECRET_KEY}" == "${REMOTE_CLI_SECRET}" && ! -e "${TMP}/remote-cli-key-executed" ]] || \
+  fail 'remote Gateway CLI env did not shell-quote the preserved key safely'
+[[ "$(file_mode "${TMP}/remote-cli-env-sentinel")" == 644 && ! -e "${TMP}/remote-cli-env-executed" ]] || \
+  fail 'remote component overlay followed, chmodded, or sourced an unsafe Gateway CLI env symlink'
 
 if DEPLOY_DIR="${REMOTE_NO_GATEWAY_UNSAFE_ROOT}" ARCHIVE="${REMOTE_NO_GATEWAY_ARCHIVE}" NODE_ID=gateway-remote-overlay \
   NO_START=0 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \

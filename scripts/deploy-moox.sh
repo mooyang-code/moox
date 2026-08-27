@@ -3455,6 +3455,23 @@ prepare_stage() {
   cat >"${STAGE_DIR}/secrets/gateway-credentials.json" <<'EOF'
 {"version":1,"credentials":[{"key_id":"moox-gateway-service","caller":"admin-gateway","secret_file":"gateway-service.key"},{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"factor","caller":"factor","secret_file":"gateway-factor.key"},{"key_id":"monitor","caller":"monitor","secret_file":"gateway-monitor.key"},{"key_id":"archive","caller":"archive","secret_file":"gateway-archive.key"},{"key_id":"storage-view","caller":"storage-view","secret_file":"gateway-storage-view.key"},{"key_id":"storage-primary","caller":"storage-primary","secret_file":"gateway-storage-primary.key"},{"key_id":"strategy","caller":"strategy","secret_file":"gateway-strategy.key"},{"key_id":"trade","caller":"trade","secret_file":"gateway-trade.key"},{"key_id":"cloudnode","caller":"cloudnode","secret_file":"gateway-cloudnode.key"},{"key_id":"moox-cli","caller":"moox-cli","secret_file":"gateway-moox-cli.key"},{"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"}]}
 EOF
+  python3 - "${STAGE_DIR}/secrets/gateway-credentials.json" "${STAGE_DIR}/secrets" <<'PY'
+import json, os, re, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+credentials = value.get("credentials") if isinstance(value, dict) and value.get("version") == 1 else None
+if not isinstance(credentials, list) or not credentials:
+    raise SystemExit("invalid Gateway credential registry")
+key_ids, callers = set(), set()
+for item in credentials:
+    if not isinstance(item, dict) or any(not isinstance(item.get(key), str) or not item[key].strip() for key in ("key_id", "caller", "secret_file")):
+        raise SystemExit("invalid Gateway credential entry")
+    if item["key_id"] in key_ids or item["caller"] in callers or not re.fullmatch(r"gateway-[a-z0-9-]+\.key", item["secret_file"]):
+        raise SystemExit("duplicate or unsafe Gateway credential entry")
+    if not os.path.isfile(os.path.join(sys.argv[2], item["secret_file"])):
+        raise SystemExit("Gateway credential key is missing")
+    key_ids.add(item["key_id"]); callers.add(item["caller"])
+PY
   {
     printf 'MOOX_GATEWAY_SERVICE_KEY_ID=moox-cli\n'
     printf 'MOOX_GATEWAY_CALLER=moox-cli\n'
@@ -3758,6 +3775,48 @@ prepare_cls_preflight() {
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" "${args[@]}"
 }
 
+validate_cls_gateway_cli_env_preflight() {
+  [[ "${ENABLE_CLS}" -eq 1 ]] || return 0
+  local validate_script='set -euo pipefail
+deploy=$1
+case "${deploy}" in
+  "~") deploy="${HOME}" ;;
+  "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
+esac
+file="${deploy%/}/secrets/gateway-moox-cli.env"
+[[ -f "${file}" && ! -L "${file}" && -O "${file}" ]] || { echo "unsafe gateway-moox-cli.env" >&2; exit 1; }
+if mode=$(stat -c "%a" "${file}" 2>/dev/null); then :; else mode=$(stat -f "%Lp" "${file}"); fi
+[[ "${mode}" == 600 ]] || { echo "unsafe gateway-moox-cli.env mode" >&2; exit 1; }
+awk -F= '\''
+  BEGIN {
+    allowed["MOOX_GATEWAY_SERVICE_KEY_ID"]=1; allowed["MOOX_GATEWAY_CALLER"]=1
+    allowed["MOOX_GATEWAY_SERVICE_SECRET_KEY"]=1; allowed["MOOX_GATEWAY_TARGET_NODE"]=1
+    allowed["MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"]=1; allowed["MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"]=1
+    allowed["MOOX_SERVICE_GATEWAY_TARGET"]=1; allowed["MOOX_GATEWAY_CA_FILE"]=1
+  }
+  !/^[A-Z0-9_]+=/ { exit 1 }
+  !($1 in allowed) { exit 1 }
+  {
+    value=substr($0, index($0, "=")+1)
+    if (value == "") exit 1
+    for (i=1; i<=length(value); i++) {
+      char=substr(value, i, 1)
+      if (char == "\\") { if (i == length(value)) exit 1; i++; continue }
+      if (char !~ /^[A-Za-z0-9_\.\/:@%+=,-]$/) exit 1
+    }
+    seen[$1]++
+  }
+  END { for (key in allowed) if (seen[key] != 1) exit 1 }
+'\'' "${file}"'
+  if is_local_target; then
+    bash -c "${validate_script}" _ "$(expand_local_path "${DEPLOY_DIR}")" || \
+      fail "CLS preflight refuses unsafe gateway-moox-cli.env"
+  else
+    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR}" <<<"${validate_script}" || \
+      fail "CLS preflight refuses unsafe remote gateway-moox-cli.env"
+  fi
+}
+
 persist_selected_components() {
   local file="$1" assignment key enabled
   shift
@@ -3854,7 +3913,7 @@ sync_local_stage() {
     grep -Fq 'MOOX_INSTALLED_WITH_' "${deploy_dir}/start.sh" || fail "installed lifecycle is too old for --component-overlay; run a full deployment first"
     [[ "${RESET_DATA}" -eq 0 ]] || fail "--reset-data cannot be used with --component-overlay"
     if [[ "${WITH_GATEWAY}" -eq 0 ]]; then
-      for gateway_env in gateway-control.env gateway-service.env; do
+      for gateway_env in gateway-control.env gateway-service.env gateway-moox-cli.env; do
         gateway_env_path="${deploy_dir}/secrets/${gateway_env}"
         [[ -f "${gateway_env_path}" && ! -L "${gateway_env_path}" ]] && \
           grep -q '[^[:space:]]' "${gateway_env_path}" || \
@@ -4070,6 +4129,14 @@ sync_local_stage() {
   local -a gateway_secret_next_files=() gateway_secret_target_files=()
   mkdir -p "${deploy_dir}/secrets" "${deploy_dir}/certs/gateway"
   if [[ "${component_overlay}" -eq 0 || "${WITH_GATEWAY}" -eq 1 ]]; then
+    gateway_registry_path="${deploy_dir}/secrets/gateway-credentials.json"
+    gateway_registry_next="${deploy_dir}/secrets/.gateway-credentials.json.next"
+    rm -f "${gateway_registry_next}"
+    install -m 0600 "${STAGE_DIR}/secrets/gateway-credentials.json" "${gateway_registry_next}"
+    python3 -m json.tool "${gateway_registry_next}" >/dev/null || fail "staged Gateway credential registry is invalid"
+    if [[ ( -e "${gateway_registry_path}" && ! -f "${gateway_registry_path}" && ! -L "${gateway_registry_path}" ) || ( -L "${gateway_registry_path}" && -d "${gateway_registry_path}" ) ]]; then
+      fail "existing Gateway credential registry cannot be atomically replaced"
+    fi
     for shared_gateway_file in gateway-control.key gateway-service.key gateway-control.env gateway-service.env; do
       shared_gateway_path="${deploy_dir}/secrets/${shared_gateway_file}"
       if [[ "${component_overlay}" -eq 1 && -f "${shared_gateway_path}" && ! -L "${shared_gateway_path}" ]] && grep -q '[^[:space:]]' "${shared_gateway_path}"; then
@@ -4119,6 +4186,32 @@ sync_local_stage() {
         gateway_secret_target_files+=("${credential_path}")
       fi
     done
+    gateway_cli_key_path="${deploy_dir}/secrets/gateway-moox-cli.key"
+    gateway_collector_key_path="${deploy_dir}/secrets/gateway-collector.key"
+    for credential_index in "${!gateway_secret_next_files[@]}"; do
+      [[ "${gateway_secret_target_files[credential_index]}" != "${gateway_cli_key_path}" ]] || \
+        gateway_cli_key_path="${gateway_secret_next_files[credential_index]}"
+      [[ "${gateway_secret_target_files[credential_index]}" != "${gateway_collector_key_path}" ]] || \
+        gateway_collector_key_path="${gateway_secret_next_files[credential_index]}"
+    done
+    gateway_cli_env_target="${deploy_dir}/secrets/gateway-moox-cli.env"
+    gateway_cli_env_next="${deploy_dir}/secrets/.gateway-moox-cli.env.next"
+    rm -f "${gateway_cli_env_next}"
+    gateway_cli_secret="$(tr -d '\r\n' <"${gateway_cli_key_path}")"
+    gateway_collector_secret="$(tr -d '\r\n' <"${gateway_collector_key_path}")"
+    while IFS= read -r gateway_cli_env_line || [[ -n "${gateway_cli_env_line}" ]]; do
+      case "${gateway_cli_env_line}" in
+        MOOX_GATEWAY_SERVICE_SECRET_KEY=*) printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_cli_secret}" ;;
+        MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=*) printf 'MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_collector_secret}" ;;
+        *) printf '%s\n' "${gateway_cli_env_line}" ;;
+      esac
+    done <"${STAGE_DIR}/secrets/gateway-moox-cli.env" >"${gateway_cli_env_next}"
+    chmod 0600 "${gateway_cli_env_next}"
+    grep -q '^MOOX_GATEWAY_SERVICE_SECRET_KEY=[^[:space:]]' "${gateway_cli_env_next}" && \
+      grep -q '^MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=[^[:space:]]' "${gateway_cli_env_next}" || \
+      fail "staged Gateway CLI env is invalid"
+    gateway_secret_next_files+=("${gateway_cli_env_next}")
+    gateway_secret_target_files+=("${gateway_cli_env_target}")
     for credential_path in "${gateway_secret_target_files[@]}"; do
       if [[ ( -e "${credential_path}" && ! -f "${credential_path}" && ! -L "${credential_path}" ) || ( -L "${credential_path}" && -d "${credential_path}" ) ]]; then
         fail "existing Gateway secret cannot be atomically replaced: $(basename "${credential_path}")"
@@ -4127,12 +4220,7 @@ sync_local_stage() {
     for credential_index in "${!gateway_secret_next_files[@]}"; do
       mv -f "${gateway_secret_next_files[credential_index]}" "${gateway_secret_target_files[credential_index]}"
     done
-    if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/gateway-moox-cli.env" ]]; then
-      install -m 0600 "${STAGE_DIR}/secrets/gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env"
-    fi
-    rm -f "${deploy_dir}/secrets/.gateway-credentials.json.next"
-    install -m 0600 "${STAGE_DIR}/secrets/gateway-credentials.json" "${deploy_dir}/secrets/.gateway-credentials.json.next"
-    mv -f "${deploy_dir}/secrets/.gateway-credentials.json.next" "${deploy_dir}/secrets/gateway-credentials.json"
+    mv -f "${gateway_registry_next}" "${gateway_registry_path}"
   fi
   if [[ -f "${STAGE_DIR}/secrets/notification.env.next" ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/notification.env.next" "${deploy_dir}/secrets/notification.env"
@@ -4437,7 +4525,7 @@ if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
   grep -Fq 'MOOX_INSTALLED_WITH_' "${DEPLOY_DIR}/start.sh" || { echo "installed lifecycle is too old for --component-overlay; run a full deployment first" >&2; exit 1; }
   [[ "${RESET_DATA}" == "0" ]] || { echo "--reset-data cannot be used with --component-overlay" >&2; exit 1; }
   if [[ "${WITH_GATEWAY}" == "0" ]]; then
-    for gateway_env in gateway-control.env gateway-service.env; do
+    for gateway_env in gateway-control.env gateway-service.env gateway-moox-cli.env; do
       gateway_env_path="${DEPLOY_DIR}/secrets/${gateway_env}"
       if [[ ! -f "${gateway_env_path}" || -L "${gateway_env_path}" ]] || ! grep -q '[^[:space:]]' "${gateway_env_path}"; then
         echo "--no-gateway overlay requires a safe existing Gateway env: ${gateway_env}" >&2
@@ -4582,6 +4670,17 @@ if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
     tar -xOzf "${ARCHIVE}" ./secrets/gateway-credentials.json \
       >"${DEPLOY_DIR}/secrets/.gateway-credentials.json.next"
     chmod 0600 "${DEPLOY_DIR}/secrets/.gateway-credentials.json.next"
+    grep -q '"version"[[:space:]]*:[[:space:]]*1' "${DEPLOY_DIR}/secrets/.gateway-credentials.json.next" && \
+      grep -q '"credentials"[[:space:]]*:[[:space:]]*\[' "${DEPLOY_DIR}/secrets/.gateway-credentials.json.next" && \
+      grep -q '"secret_file"[[:space:]]*:[[:space:]]*"gateway-' "${DEPLOY_DIR}/secrets/.gateway-credentials.json.next" || {
+        echo "archived Gateway credential registry is invalid" >&2
+        exit 1
+      }
+    gateway_registry_path="${DEPLOY_DIR}/secrets/gateway-credentials.json"
+    if [[ ( -e "${gateway_registry_path}" && ! -f "${gateway_registry_path}" && ! -L "${gateway_registry_path}" ) || ( -L "${gateway_registry_path}" && -d "${gateway_registry_path}" ) ]]; then
+      echo "existing Gateway credential registry cannot be atomically replaced" >&2
+      exit 1
+    fi
   fi
 fi
 tar "${TAR_EXCLUDES[@]}" -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
@@ -4612,6 +4711,36 @@ if [[ "${COMPONENT_OVERLAY}" == "1" && "${WITH_GATEWAY}" == "1" ]]; then
         ;;
     esac
   done < <(tar -tzf "${ARCHIVE}")
+  gateway_cli_key_path="${DEPLOY_DIR}/secrets/gateway-moox-cli.key"
+  gateway_collector_key_path="${DEPLOY_DIR}/secrets/gateway-collector.key"
+  for gateway_secret_index in "${!GATEWAY_SECRET_NEXT_FILES[@]}"; do
+    [[ "${GATEWAY_SECRET_TARGET_FILES[gateway_secret_index]}" != "${gateway_cli_key_path}" ]] || \
+      gateway_cli_key_path="${GATEWAY_SECRET_NEXT_FILES[gateway_secret_index]}"
+    [[ "${GATEWAY_SECRET_TARGET_FILES[gateway_secret_index]}" != "${gateway_collector_key_path}" ]] || \
+      gateway_collector_key_path="${GATEWAY_SECRET_NEXT_FILES[gateway_secret_index]}"
+  done
+  gateway_cli_env_template="${DEPLOY_DIR}/secrets/.gateway-moox-cli.env.template"
+  gateway_cli_env_next="${DEPLOY_DIR}/secrets/.gateway-moox-cli.env.next"
+  rm -f "${gateway_cli_env_template}" "${gateway_cli_env_next}"
+  tar -xOzf "${ARCHIVE}" ./secrets/gateway-moox-cli.env >"${gateway_cli_env_template}"
+  gateway_cli_secret="$(tr -d '\r\n' <"${gateway_cli_key_path}")"
+  gateway_collector_secret="$(tr -d '\r\n' <"${gateway_collector_key_path}")"
+  while IFS= read -r gateway_cli_env_line || [[ -n "${gateway_cli_env_line}" ]]; do
+    case "${gateway_cli_env_line}" in
+      MOOX_GATEWAY_SERVICE_SECRET_KEY=*) printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_cli_secret}" ;;
+      MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=*) printf 'MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_collector_secret}" ;;
+      *) printf '%s\n' "${gateway_cli_env_line}" ;;
+    esac
+  done <"${gateway_cli_env_template}" >"${gateway_cli_env_next}"
+  rm -f "${gateway_cli_env_template}"
+  chmod 0600 "${gateway_cli_env_next}"
+  grep -q '^MOOX_GATEWAY_SERVICE_SECRET_KEY=[^[:space:]]' "${gateway_cli_env_next}" && \
+    grep -q '^MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=[^[:space:]]' "${gateway_cli_env_next}" || {
+      echo "archived Gateway CLI env is invalid" >&2
+      exit 1
+    }
+  GATEWAY_SECRET_NEXT_FILES+=("${gateway_cli_env_next}")
+  GATEWAY_SECRET_TARGET_FILES+=("${DEPLOY_DIR}/secrets/gateway-moox-cli.env")
   for gateway_secret_path in "${GATEWAY_SECRET_TARGET_FILES[@]}"; do
     if [[ ( -e "${gateway_secret_path}" && ! -f "${gateway_secret_path}" && ! -L "${gateway_secret_path}" ) || ( -L "${gateway_secret_path}" && -d "${gateway_secret_path}" ) ]]; then
       echo "existing Gateway secret cannot be atomically replaced: ${gateway_secret_path##*/}" >&2
@@ -4700,6 +4829,7 @@ build_core_binaries
 build_web_host_binary
 acquire_stage_deploy_lock
 prepare_stage
+validate_cls_gateway_cli_env_preflight
 prepare_cls_preflight
 
 if [[ "${PACKAGE_ONLY}" -eq 1 ]]; then
