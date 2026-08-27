@@ -4,6 +4,7 @@ import { installE2ESession } from "./e2e-session";
 const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: "success" }, ...data });
 const tradingAccountListRequests: Record<string, unknown>[] = [];
 const logicalAccountListRequests: Record<string, unknown>[] = [];
+const orderListRequests: Record<string, unknown>[] = [];
 
 const account = {
   trading_account_id: "ta-demo-1",
@@ -147,6 +148,7 @@ async function mockTradeGateway(route: Route) {
     case "ListPositions":
       return route.fulfill({ json: ok({ positions: [] }) });
     case "ListOrders":
+      orderListRequests.push((route.request().postDataJSON?.() || {}) as Record<string, unknown>);
       return route.fulfill({
         json: ok({
           orders: [
@@ -201,6 +203,7 @@ async function mockTradeGateway(route: Route) {
 test.beforeEach(async ({ page }) => {
   tradingAccountListRequests.length = 0;
   logicalAccountListRequests.length = 0;
+  orderListRequests.length = 0;
   await installE2ESession(page, "space-1");
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, mockTradeGateway);
 });
@@ -271,27 +274,36 @@ test("持仓切换账户后自动刷新并支持现货标的筛选", async ({ pa
   await expect.poll(() => holdingsRequests).toBe(3);
 });
 
-test("订单页支持中文订单和成交视图", async ({ page }) => {
+test("订单页合并订单与成交明细并支持状态筛选", async ({ page }) => {
   await page.goto("/#/trading/orders?trading_account_id=ta-demo-1");
-  await expect(page.getByRole("tab", { name: "订单", exact: true })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "订单", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator(".orders-page .arco-tabs-tab")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "交易记录", exact: true })).toBeVisible();
+  await expect(page.locator(".orders-page .page-title-tabs")).toHaveCount(0);
+  await expect(page.getByPlaceholder("订单状态")).toBeVisible();
   await expect(page.getByRole("table").getByText("挂单中", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "成交", exact: true }).click();
-  await expect(page).toHaveURL(/trading\/orders\?trading_account_id=ta-demo-1&tab=fills/);
+  await page.locator(".orders-page .arco-select").nth(1).click();
+  await page.getByText("已成交", { exact: true }).click();
+  await page.getByRole("button", { name: "查询", exact: true }).click();
+  await expect.poll(() => orderListRequests.at(-1)?.state).toBe("FILLED");
+  await page.getByRole("button", { name: "详情", exact: true }).click();
+  await expect(page.getByText("成交明细", { exact: true })).toBeVisible();
   await expect(page.getByText("成交编号", { exact: true })).toBeVisible();
   await expect(page.getByText("已实现盈亏", { exact: true })).toBeVisible();
-  await expect(page.getByText("挂单方", { exact: true })).toBeVisible();
+  await expect(page.getByText("成交时间", { exact: true })).toBeVisible();
 });
 
-test("订单页支持成交页签深链并保留账户参数", async ({ page }) => {
+test("订单页成交深链归一到统一订单页面", async ({ page }) => {
   await page.goto("/#/trading/orders?trading_account_id=ta-demo-1&tab=fills");
-  await expect(page.getByRole("tab", { name: "成交", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText("成交编号", { exact: true })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "订单", exact: true })).toHaveAttribute("aria-selected", "false");
+  await expect(page).toHaveURL(/trading\/orders\?trading_account_id=ta-demo-1$/);
+  await expect(page.getByRole("heading", { name: "交易记录", exact: true })).toBeVisible();
+  await expect(page.getByRole("table").getByText("挂单中", { exact: true })).toBeVisible();
+
+  await page.evaluate(() => {
+    window.location.hash = "#/trading/orders?trading_account_id=ta-demo-1&tab=fills";
+  });
+  await expect(page).toHaveURL(/trading\/orders\?trading_account_id=ta-demo-1$/);
 });
 
-test("订单页切换页签只发起一次目标数据请求", async ({ page }) => {
+test("订单详情只按需加载成交明细", async ({ page }) => {
   let orderRequests = 0;
   let fillRequests = 0;
   page.on("request", request => {
@@ -301,9 +313,24 @@ test("订单页切换页签只发起一次目标数据请求", async ({ page }) 
   await page.goto("/#/trading/orders?trading_account_id=ta-demo-1");
   await expect(page.getByRole("table").getByText("挂单中", { exact: true })).toBeVisible();
   await expect.poll(() => orderRequests).toBe(1);
-  await page.getByRole("tab", { name: "成交", exact: true }).click();
+  expect(fillRequests).toBe(0);
+  await page.getByRole("button", { name: "详情", exact: true }).click();
   await expect(page.getByText("成交编号", { exact: true })).toBeVisible();
   await expect.poll(() => fillRequests).toBe(1);
+});
+
+test("账户深链失效时关闭订单详情", async ({ page }) => {
+  await page.goto("/#/trading/orders?trading_account_id=ta-demo-1");
+  await expect(page.getByRole("table").getByText("挂单中", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "详情", exact: true }).click();
+  await expect(page.getByText("订单编号", { exact: true })).toBeVisible();
+
+  await page.evaluate(() => {
+    window.location.hash = "#/trading/orders";
+  });
+  await expect(page).toHaveURL(/trading\/orders$/);
+  await expect(page.getByText("订单编号", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("成交明细", { exact: true })).toHaveCount(0);
 });
 
 test("交易工作台窄屏不产生页面横向溢出", async ({ page }) => {

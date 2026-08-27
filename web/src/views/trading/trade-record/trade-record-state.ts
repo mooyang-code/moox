@@ -5,7 +5,5 @@ export const tradeRecordViewState = reactive({
   filterSymbol: "",
   orderState: "",
   orderTimeRange: [] as number[],
-  fillTimeRange: [] as number[],
-  orderPage: 1,
-  fillPage: 1
+  orderPage: 1
 });
