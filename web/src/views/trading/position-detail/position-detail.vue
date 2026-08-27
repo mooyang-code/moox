@@ -18,30 +18,54 @@
         </a-space>
       </div>
 
-      <div class="account-context-row">
-        <div class="account-context-main">
-          <span class="toolbar-label">执行账户</span>
-          <a-select
-            v-model="tradingAccountId"
-            placeholder="选择执行账户"
-            class="account-select"
-            :loading="accountsLoading"
-            :disabled="accountsLoading || accounts.length === 0"
-            @change="onAccountChange"
-          >
-            <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
-              {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
-            </a-option>
-          </a-select>
+      <div class="position-filter-panel">
+        <div class="filter-grid">
+          <div class="filter-item">
+            <label>执行账户：</label>
+            <div class="filter-control account-filter-control">
+              <a-select
+                v-model="tradingAccountId"
+                placeholder="选择执行账户"
+                class="account-select"
+                :loading="accountsLoading"
+                :disabled="accountsLoading || accounts.length === 0"
+                @change="onAccountChange"
+              >
+                <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
+                  {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
+                </a-option>
+              </a-select>
+              <div v-if="selectedAccount" class="account-context-meta">
+                <a-tag
+                  >{{ localExchangeLabels[selectedAccount.exchange] }} ·
+                  {{ localMarketTypeLabels[selectedAccount.market_type] }}</a-tag
+                >
+                <a-tag :color="selectedAccount.ready ? 'green' : 'orange'">
+                  {{ selectedAccount.ready ? "已就绪" : "未就绪" }}
+                </a-tag>
+                <span class="sync-time">最近同步 {{ formatTimestamp(selectedAccount.last_sync_at) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="filter-item">
+            <label>交易标的：</label>
+            <div class="filter-control">
+              <a-input
+                v-model="instrumentId"
+                placeholder="检索值"
+                allow-clear
+                class="symbol-input"
+                @press-enter="loadPositions"
+              />
+            </div>
+          </div>
         </div>
-        <div v-if="selectedAccount" class="account-context-meta">
-          <a-tag
-            >{{ localExchangeLabels[selectedAccount.exchange] }} · {{ localMarketTypeLabels[selectedAccount.market_type] }}</a-tag
-          >
-          <a-tag :color="selectedAccount.ready ? 'green' : 'orange'">
-            {{ selectedAccount.ready ? "已就绪" : "未就绪" }}
-          </a-tag>
-          <span class="sync-time">最近同步 {{ formatTimestamp(selectedAccount.last_sync_at) }}</span>
+        <div class="query-actions">
+          <a-button size="small" type="primary" :loading="loading" :disabled="!tradingAccountId" @click="loadPositions">
+            <template #icon><icon-search /></template>
+            查询
+          </a-button>
         </div>
       </div>
 
@@ -59,15 +83,6 @@
       >
         {{ selectedAccount.last_error || "账户尚未完成同步，请先同步账户" }}
       </a-alert>
-
-      <div class="position-filter-bar">
-        <span class="toolbar-label">持仓筛选</span>
-        <a-input v-model="instrumentId" placeholder="交易标的" allow-clear class="symbol-input" @press-enter="loadPositions" />
-        <a-button :disabled="!tradingAccountId" @click="loadPositions">
-          <template #icon><icon-search /></template>
-          查询
-        </a-button>
-      </div>
 
       <template v-if="selectedAccount">
         <div class="summary-grid">
@@ -393,35 +408,56 @@ onMounted(async () => {
   color: var(--color-text-3);
   font-size: 12px;
 }
-.account-context-row {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: var(--moox-space-2);
-  padding: 0 0 12px;
-  border-bottom: 1px solid var(--color-border-2);
+.position-filter-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px 18px;
+  margin-bottom: var(--moox-space-3);
+  padding: 18px var(--moox-space-5);
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: var(--color-bg-2);
 }
-.account-context-main,
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px 28px;
+  min-width: 0;
+}
+.filter-item {
+  display: grid;
+  grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
+  gap: var(--moox-space-2);
+  align-items: center;
+  min-width: 0;
+}
+.filter-item label {
+  overflow: hidden;
+  max-width: 84px;
+  color: var(--color-text-2);
+  font-weight: 500;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter-control,
 .account-context-meta {
   display: flex;
   align-items: center;
   min-width: 0;
   gap: 10px;
 }
-.account-context-main {
+.filter-control {
   flex: 1;
 }
-.account-context-main .toolbar-label {
-  flex: 0 0 auto;
+.account-filter-control {
+  flex-wrap: wrap;
 }
 .account-context-meta {
-  justify-content: flex-end;
   flex-wrap: wrap;
   color: var(--color-text-3);
   font-size: 12px;
+  line-height: 24px;
 }
 .sync-time {
   white-space: nowrap;
@@ -431,25 +467,10 @@ onMounted(async () => {
   flex: 0 0 auto;
   margin-bottom: var(--moox-space-2);
 }
-.position-filter-bar {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: var(--moox-space-3);
-  padding: 0 0 12px;
-  border-bottom: 1px solid var(--color-border-2);
-}
-.toolbar-label {
-  color: var(--color-text-3);
-  font-size: 12px;
-  white-space: nowrap;
-}
 .account-select {
   width: 320px;
 }
-.account-context-main :deep(.account-select) {
+.account-filter-control :deep(.account-select) {
   flex: 0 1 320px;
   width: 320px;
 }
@@ -510,6 +531,12 @@ onMounted(async () => {
 .position-page :deep(.arco-empty) {
   padding: 42px 0;
 }
+.query-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 72px;
+}
 .position-empty-state {
   display: flex;
   width: 100%;
@@ -543,26 +570,18 @@ onMounted(async () => {
   .page-head {
     flex-direction: column;
   }
-  .account-context-row {
-    align-items: stretch;
+  .position-filter-panel {
+    grid-template-columns: 1fr;
   }
-  .account-context-main,
-  .account-context-meta {
-    width: 100%;
+  .query-actions {
+    justify-content: flex-start;
   }
-  .account-context-main {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .account-context-main :deep(.account-select) {
+  .account-filter-control :deep(.account-select) {
     flex-basis: auto;
     width: 100%;
   }
   .account-context-meta {
     justify-content: flex-start;
-  }
-  .position-filter-bar {
-    align-items: stretch;
   }
   .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -570,6 +589,15 @@ onMounted(async () => {
   .account-select,
   .symbol-input {
     width: 100%;
+  }
+}
+@media (max-width: 560px) {
+  .filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-item {
+    grid-template-columns: 92px minmax(0, 1fr);
   }
 }
 </style>

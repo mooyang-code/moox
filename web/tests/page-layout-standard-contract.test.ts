@@ -202,7 +202,7 @@ describe("page layout standards", () => {
 
     expect(positions).toContain("<h2>持仓</h2>");
     expect(positions).not.toContain('<a-button @click="loadPositions">');
-    expectMargin(positions, ".position-filter-bar", "margin-bottom", 12);
+    expectMargin(positions, ".position-filter-panel", "margin-bottom", 12);
 
     for (const source of [viewDefinitions, datasetDefinitions, datasetBrowse, viewBrowse]) {
       expectMargin(source, ".page-head", "margin-bottom", 8);
