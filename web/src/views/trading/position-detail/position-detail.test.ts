@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   listPositions: vi.fn(),
   syncTradingAccount: vi.fn(),
   routerReplace: vi.fn(),
+  routerPush: vi.fn(),
   routeQuery: { trading_account_id: "ta-demo-1" } as Record<string, unknown>
 }));
 
@@ -24,7 +25,7 @@ vi.mock("@/api/trade", async () => {
   };
 });
 vi.mock("vue-router", () => ({
-  useRouter: () => ({ replace: mocks.routerReplace }),
+  useRouter: () => ({ replace: mocks.routerReplace, push: mocks.routerPush }),
   useRoute: () => ({ query: mocks.routeQuery })
 }));
 
@@ -94,6 +95,7 @@ describe("持仓页面", () => {
     mocks.listPositions.mockReset().mockResolvedValue({ positions: [] });
     mocks.syncTradingAccount.mockReset().mockResolvedValue({ positions_updated: 2 });
     mocks.routerReplace.mockReset();
+    mocks.routerPush.mockReset();
     mocks.routeQuery = { trading_account_id: "ta-demo-1" };
   });
 
@@ -124,5 +126,20 @@ describe("持仓页面", () => {
     expect(wrapper.text()).toContain("BTC-USDT-SPOT");
     expect(wrapper.text()).not.toContain("ETH-USDT-SPOT");
     expect(mocks.listHoldings).toHaveBeenCalledTimes(2);
+  });
+
+  it("账户加载失败时展示中文恢复入口", async () => {
+    mocks.listTradingAccounts.mockReset().mockRejectedValueOnce(new Error("transport unavailable"));
+    const wrapper = mount(PositionDetail, {
+      global: {
+        plugins: [ArcoVue],
+        stubs: { "icon-refresh": true, "icon-sync": true, "icon-search": true }
+      }
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("执行账户加载失败，请检查交易服务后重试。");
+    const retryButton = wrapper.findAll("button").find(button => button.text().includes("重新加载"));
+    expect(retryButton).toBeDefined();
   });
 });

@@ -21,7 +21,14 @@
       <div class="account-context-row">
         <div class="account-context-main">
           <span class="toolbar-label">执行账户</span>
-          <a-select v-model="tradingAccountId" placeholder="选择执行账户" class="account-select" @change="onAccountChange">
+          <a-select
+            v-model="tradingAccountId"
+            placeholder="选择执行账户"
+            class="account-select"
+            :loading="accountsLoading"
+            :disabled="accountsLoading || accounts.length === 0"
+            @change="onAccountChange"
+          >
             <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
               {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
             </a-option>
@@ -37,6 +44,13 @@
           <span class="sync-time">最近同步 {{ formatTimestamp(selectedAccount.last_sync_at) }}</span>
         </div>
       </div>
+
+      <a-alert v-if="accountsError" type="error" show-icon class="account-load-error">
+        {{ accountsError }}
+        <template #action>
+          <a-button type="text" size="small" @click="refresh">重新加载</a-button>
+        </template>
+      </a-alert>
 
       <a-alert
         v-if="selectedAccount && (!selectedAccount.ready || selectedAccount.last_error)"
@@ -75,6 +89,13 @@
             ><small>当前账户</small>
           </div>
         </div>
+
+        <a-alert v-if="positionsError" type="error" show-icon class="position-load-error">
+          {{ positionsError }}
+          <template #action>
+            <a-button type="text" size="small" @click="loadPositions">重新加载</a-button>
+          </template>
+        </a-alert>
 
         <div class="position-table-region">
           <a-empty
@@ -144,7 +165,11 @@
           </a-table>
         </div>
       </template>
-      <a-empty v-else description="请选择一个执行账户" />
+      <div v-else class="position-empty-workbench">
+        <a-empty :description="accountsLoading ? '正在加载执行账户' : '暂无可用执行账户'" />
+        <p v-if="!accountsLoading && !accountsError">请先在账户总览中创建或启用执行账户。</p>
+        <a-button v-if="!accountsLoading && !accountsError" type="text" @click="goAccounts">去账户总览</a-button>
+      </div>
     </div>
   </div>
 </template>
@@ -168,6 +193,9 @@ const tradingAccountId = ref(typeof route.query.trading_account_id === "string" 
 const instrumentId = ref("");
 const loading = ref(false);
 const syncing = ref(false);
+const accountsLoading = ref(false);
+const accountsError = ref("");
+const positionsError = ref("");
 const accountsLoaded = ref(false);
 const accountRequests = createLatestRequestGuard();
 const positionRequests = createLatestRequestGuard();
@@ -194,16 +222,28 @@ function pnlTone(value?: string) {
 
 async function loadAccounts() {
   const request = accountRequests.begin();
-  const response = await listTradingAccounts({ page: { page: 1, size: 200 } });
-  if (!request.isLatest()) return;
-  accounts.value = response.accounts || [];
-  accountsLoaded.value = true;
-  const requested = typeof route.query.trading_account_id === "string" ? route.query.trading_account_id : "";
-  const hasRequested = accounts.value.some(account => account.trading_account_id === requested);
-  tradingAccountId.value = hasRequested ? requested : requested ? "" : accounts.value[0]?.trading_account_id || "";
-  if (requested && !hasRequested) {
-    await router.replace({ query: { ...route.query, trading_account_id: undefined } });
-    Message.warning("账户不存在或无权限");
+  accountsLoading.value = true;
+  accountsError.value = "";
+  try {
+    const response = await listTradingAccounts({ page: { page: 1, size: 200 } });
+    if (!request.isLatest()) return;
+    accounts.value = response.accounts || [];
+    accountsLoaded.value = true;
+    const requested = typeof route.query.trading_account_id === "string" ? route.query.trading_account_id : "";
+    const hasRequested = accounts.value.some(account => account.trading_account_id === requested);
+    tradingAccountId.value = hasRequested ? requested : requested ? "" : accounts.value[0]?.trading_account_id || "";
+    if (requested && !hasRequested) {
+      await router.replace({ query: { ...route.query, trading_account_id: undefined } });
+      Message.warning("账户不存在或无权限");
+    }
+  } catch {
+    if (!request.isLatest()) return;
+    accounts.value = [];
+    tradingAccountId.value = "";
+    accountsLoaded.value = true;
+    accountsError.value = "执行账户加载失败，请检查交易服务后重试。";
+  } finally {
+    if (request.isLatest()) accountsLoading.value = false;
   }
 }
 
@@ -250,6 +290,7 @@ async function loadPositions() {
   const accountId = tradingAccountId.value;
   const requestedSymbol = instrumentId.value.trim().toUpperCase();
   loading.value = true;
+  positionsError.value = "";
   try {
     if (selectedAccount.value?.market_type === 1) {
       const response = await listHoldings(accountId);
@@ -262,6 +303,11 @@ async function loadPositions() {
     if (!request.isLatest() || tradingAccountId.value !== accountId) return;
     positions.value = response.positions || [];
     holdings.value = [];
+  } catch {
+    if (!request.isLatest() || tradingAccountId.value !== accountId) return;
+    positions.value = [];
+    holdings.value = [];
+    positionsError.value = "持仓加载失败，请稍后重试。";
   } finally {
     if (request.isLatest()) loading.value = false;
   }
@@ -287,6 +333,10 @@ function onAccountChange(id: string) {
 async function refresh() {
   await loadAccounts();
   await loadPositions();
+}
+
+function goAccounts() {
+  void router.push({ path: "/trading/accounts" });
 }
 
 watch(
@@ -315,8 +365,22 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.position-page {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+.position-page > .moox-inner {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
 .page-head {
   display: flex;
+  flex: 0 0 auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
@@ -325,21 +389,20 @@ onMounted(async () => {
 .page-head h2 {
   margin: 0 0 4px;
 }
-.page-head span {
+.page-head > div > span {
   color: var(--color-text-3);
   font-size: 12px;
 }
 .account-context-row {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: var(--moox-space-2);
-  padding: 10px 12px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-  background: var(--color-bg-2);
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--color-border-2);
 }
 .account-context-main,
 .account-context-meta {
@@ -351,6 +414,9 @@ onMounted(async () => {
 .account-context-main {
   flex: 1;
 }
+.account-context-main .toolbar-label {
+  flex: 0 0 auto;
+}
 .account-context-meta {
   justify-content: flex-end;
   flex-wrap: wrap;
@@ -360,23 +426,28 @@ onMounted(async () => {
 .sync-time {
   white-space: nowrap;
 }
+.account-load-error,
+.position-load-error {
+  flex: 0 0 auto;
+  margin-bottom: var(--moox-space-2);
+}
 .position-filter-bar {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: var(--moox-space-3);
-  padding: 8px 10px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-  background: var(--color-bg-2);
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--color-border-2);
 }
 .toolbar-label {
   color: var(--color-text-3);
   font-size: 12px;
+  white-space: nowrap;
 }
 .account-select {
-  width: min(360px, 100%);
+  width: min(440px, 100%);
 }
 .symbol-input {
   width: 240px;
@@ -386,6 +457,7 @@ onMounted(async () => {
 }
 .summary-grid {
   display: grid;
+  flex: 0 0 auto;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: var(--moox-space-4);
@@ -416,12 +488,17 @@ onMounted(async () => {
   color: rgb(var(--green-6));
 }
 .position-table-region {
+  display: flex;
+  flex: 1 1 auto;
   min-width: 0;
-  min-height: 180px;
+  min-height: 200px;
   overflow: auto;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: var(--color-bg-2);
 }
 .position-page :deep(.arco-table-container) {
-  border-radius: 8px;
+  border-radius: 7px;
 }
 .position-page :deep(.arco-table-th) {
   white-space: nowrap;
@@ -431,9 +508,26 @@ onMounted(async () => {
 }
 .position-empty-state {
   display: flex;
+  width: 100%;
   min-height: 180px;
   align-items: center;
   justify-content: center;
+}
+.position-empty-workbench {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 240px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  border: 1px dashed var(--color-border-2);
+  border-radius: 8px;
+  background: var(--color-bg-2);
+}
+.position-empty-workbench p {
+  margin: 4px 0 8px;
+  color: var(--color-text-3);
+  font-size: 13px;
 }
 .positive {
   color: rgb(var(--red-6));
