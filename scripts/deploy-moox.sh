@@ -3045,23 +3045,27 @@ probe_service() {
 
 probe_liveness() {
   local name="$1" url body
-	case "${name}" in
-		factor|storage-node) return 1 ;;
-	esac
-  if [[ "${name}" != "storage-view" ]]; then
-    probe_service "${name}"
-    return
-  fi
-  url=http://127.0.0.1:20211/healthz
-  body=$(curl --fail --silent --max-time 2 \
-    -H "X-Moox-Health-Auth: $(sign_health_request GET /healthz)" "${url}") || return 1
-  # A large durable backlog makes readiness false but remains recoverable.
-  # /healthz is the liveness endpoint and intentionally does not expose every
-  # /readyz detail (notably restore_ready). Do not turn that omitted detail
-  # into a false liveness failure, or the supervisor will restart a draining
-  # View after the startup grace window and discard its progress.
-  grep -Eq '"process_alive"[[:space:]]*:[[:space:]]*true' <<<"${body}" &&
-    grep -Eq '"consumer_bound"[[:space:]]*:[[:space:]]*true' <<<"${body}"
+  case "${name}" in
+    factor) url=http://127.0.0.1:11414/healthz ;;
+    storage-node) url=http://127.0.0.1:20212/healthz ;;
+    storage-view)
+      url=http://127.0.0.1:20211/healthz
+      body=$(curl --fail --silent --max-time 2 \
+        -H "X-Moox-Health-Auth: $(sign_health_request GET /healthz)" "${url}") || return 1
+      # A large durable backlog makes readiness false but remains recoverable.
+      # /healthz is the liveness endpoint and intentionally does not expose every
+      # /readyz detail (notably restore_ready). Do not turn that omitted detail
+      # into a false liveness failure, or the supervisor will restart a draining
+      # View after the startup grace window and discard its progress.
+      grep -Eq '"process_alive"[[:space:]]*:[[:space:]]*true' <<<"${body}" &&
+        grep -Eq '"consumer_bound"[[:space:]]*:[[:space:]]*true' <<<"${body}"
+      return
+    *)
+      probe_service "${name}"
+      return
+  esac
+  curl --fail --silent --max-time 2 \
+    -H "X-Moox-Health-Auth: $(sign_health_request GET /healthz)" "${url}" >/dev/null
 }
 
 listener_open() {
