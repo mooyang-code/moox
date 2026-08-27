@@ -95,6 +95,9 @@ for binary in moox-admin moox-admin-cli moox-cli moox-gateway moox-gateway-cli; 
 done
 mkdir -p "${DEPLOY_DIR}/data" "${DEPLOY_DIR}/secrets" "${DEPLOY_DIR}/bin"
 : >"${DEPLOY_DIR}/data/admin.db"
+printf 'MOOX_GATEWAY_TARGET_NODE=gateway-test\nMOOX_GATEWAY_CALLER=moox-cli\nMOOX_GATEWAY_SERVICE_KEY_ID=svc-ak\nMOOX_GATEWAY_SERVICE_SECRET_KEY=svc-sk\nMOOX_SERVICE_GATEWAY_TARGET=ip://127.0.0.1:11003\nMOOX_GATEWAY_CA_FILE=/data/moox/certs/gateway/peers.pem\n' \
+  >"${DEPLOY_DIR}/secrets/gateway-moox-cli.env"
+chmod 0600 "${DEPLOY_DIR}/secrets/gateway-moox-cli.env"
 printf 'control-secret' >"${TMP_ROOT}/control.key"
 printf 'service-secret' >"${TMP_ROOT}/service.key"
 chmod 0600 "${TMP_ROOT}/control.key" "${TMP_ROOT}/service.key"
@@ -128,6 +131,11 @@ if MOOX_TEST_STOP_MARKER="${STOP_MARKER}" \
 fi
 [[ ! -e "${STOP_MARKER}" ]] || {
   echo 'existing service was stopped before CLS preflight completed' >&2
+  exit 1
+}
+grep -q 'fake CLS preflight failure' "${TMP_ROOT}/fixture.out" || {
+  echo 'historical six-variable Gateway CLI env did not reach CLS preflight' >&2
+  cat "${TMP_ROOT}/fixture.out" >&2
   exit 1
 }
 

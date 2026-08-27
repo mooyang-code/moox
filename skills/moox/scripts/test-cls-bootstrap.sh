@@ -165,6 +165,66 @@ if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACC
   exit 1
 fi
 
+LEGACY_STAGE="${TMP}/legacy-stage"
+LEGACY_DEPLOY="${TMP}/legacy-deploy"
+new_stage "${LEGACY_STAGE}"
+new_deploy "${LEGACY_DEPLOY}"
+sed -i.bak '/^MOOX_COLLECTOR_GATEWAY_SERVICE_/d' "${LEGACY_DEPLOY}/secrets/gateway-moox-cli.env"
+rm -f "${LEGACY_DEPLOY}/secrets/gateway-moox-cli.env.bak"
+if ! MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${LEGACY_DEPLOY}" --stage-dir "${LEGACY_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/legacy-env.out" 2>&1; then
+  echo 'historical six-variable Gateway CLI env was rejected' >&2
+  exit 1
+fi
+
+PAIR_STAGE="${TMP}/pair-stage"
+PAIR_DEPLOY="${TMP}/pair-deploy"
+new_stage "${PAIR_STAGE}"
+new_deploy "${PAIR_DEPLOY}"
+sed -i.bak '/^MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=/d' "${PAIR_DEPLOY}/secrets/gateway-moox-cli.env"
+rm -f "${PAIR_DEPLOY}/secrets/gateway-moox-cli.env.bak"
+if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${PAIR_DEPLOY}" --stage-dir "${PAIR_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/partial-collector-env.out" 2>&1; then
+  echo 'partial Collector Gateway CLI env unexpectedly accepted' >&2
+  exit 1
+fi
+
+DUPLICATE_STAGE="${TMP}/duplicate-env-stage"
+DUPLICATE_DEPLOY="${TMP}/duplicate-env-deploy"
+new_stage "${DUPLICATE_STAGE}"
+new_deploy "${DUPLICATE_DEPLOY}"
+printf 'MOOX_GATEWAY_CALLER=moox-cli\n' >>"${DUPLICATE_DEPLOY}/secrets/gateway-moox-cli.env"
+if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${DUPLICATE_DEPLOY}" --stage-dir "${DUPLICATE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/duplicate-gateway-env.out" 2>&1; then
+  echo 'duplicate Gateway CLI env variable unexpectedly accepted' >&2
+  exit 1
+fi
+
+DANGEROUS_STAGE="${TMP}/dangerous-env-stage"
+DANGEROUS_DEPLOY="${TMP}/dangerous-env-deploy"
+DANGEROUS_MARKER="${TMP}/dangerous-env-executed"
+new_stage "${DANGEROUS_STAGE}"
+new_deploy "${DANGEROUS_DEPLOY}"
+sed "s#^MOOX_GATEWAY_CALLER=.*#MOOX_GATEWAY_CALLER=\$(touch ${DANGEROUS_MARKER})#" \
+  "${DANGEROUS_DEPLOY}/secrets/gateway-moox-cli.env" >"${DANGEROUS_DEPLOY}/secrets/gateway-moox-cli.env.next"
+mv "${DANGEROUS_DEPLOY}/secrets/gateway-moox-cli.env.next" "${DANGEROUS_DEPLOY}/secrets/gateway-moox-cli.env"
+chmod 0600 "${DANGEROUS_DEPLOY}/secrets/gateway-moox-cli.env"
+if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${DANGEROUS_DEPLOY}" --stage-dir "${DANGEROUS_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/dangerous-gateway-env.out" 2>&1; then
+  echo 'dangerous Gateway CLI env value unexpectedly accepted' >&2
+  exit 1
+fi
+[[ ! -e "${DANGEROUS_MARKER}" ]]
+
+: >"${calls}"
 output="${TMP}/local-output"
 MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
   MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \

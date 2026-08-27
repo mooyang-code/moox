@@ -3809,6 +3809,9 @@ awk -F= '\''
     allowed["MOOX_GATEWAY_SERVICE_SECRET_KEY"]=1; allowed["MOOX_GATEWAY_TARGET_NODE"]=1
     allowed["MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"]=1; allowed["MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"]=1
     allowed["MOOX_SERVICE_GATEWAY_TARGET"]=1; allowed["MOOX_GATEWAY_CA_FILE"]=1
+    required["MOOX_GATEWAY_SERVICE_KEY_ID"]=1; required["MOOX_GATEWAY_CALLER"]=1
+    required["MOOX_GATEWAY_SERVICE_SECRET_KEY"]=1; required["MOOX_GATEWAY_TARGET_NODE"]=1
+    required["MOOX_SERVICE_GATEWAY_TARGET"]=1; required["MOOX_GATEWAY_CA_FILE"]=1
   }
   !/^[A-Z0-9_]+=/ { exit 1 }
   !($1 in allowed) { exit 1 }
@@ -3822,7 +3825,11 @@ awk -F= '\''
     }
     seen[$1]++
   }
-  END { for (key in allowed) if (seen[key] != 1) exit 1 }
+  END {
+    for (key in allowed) if (seen[key] > 1) exit 1
+    for (key in required) if (seen[key] != 1) exit 1
+    if (seen["MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"] != seen["MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"]) exit 1
+  }
 '\'' "${file}"'
   if is_local_target; then
     bash -c "${validate_script}" _ "$(expand_local_path "${DEPLOY_DIR}")" || \
