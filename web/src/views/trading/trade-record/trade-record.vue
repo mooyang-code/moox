@@ -18,7 +18,6 @@
             <a-select v-model="orderState" allow-clear placeholder="订单状态" class="state-select">
               <a-option v-for="item in orderStateOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
             </a-select>
-            <a-checkbox v-model="onlyOpen" @change="searchOrders">仅未完成</a-checkbox>
             <a-range-picker v-model="orderTimeRange" value-format="timestamp" class="time-range" @change="searchOrders" />
             <a-button type="primary" :disabled="!tradingAccountId" @click="searchOrders">
               <template #icon><icon-search /></template>
@@ -172,7 +171,6 @@ const tabs = [
 ] as const;
 const activeTab = ref<TradeRecordTab>(tabFromRoute());
 const filterSymbol = toRef(tradeRecordViewState, "filterSymbol");
-const onlyOpen = toRef(tradeRecordViewState, "onlyOpen");
 const orderState = toRef(tradeRecordViewState, "orderState");
 const orderTimeRange = toRef(tradeRecordViewState, "orderTimeRange");
 const fillTimeRange = toRef(tradeRecordViewState, "fillTimeRange");
@@ -297,7 +295,6 @@ async function loadOrders() {
     trading_account_id: accountId,
     instrument_id: filterSymbol.value.trim().toUpperCase(),
     state: orderState.value || undefined,
-    only_open: onlyOpen.value,
     ...rangeToTime(orderTimeRange.value),
     page: { page: orderPagination.current, size: orderPagination.pageSize }
   };
