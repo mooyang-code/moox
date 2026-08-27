@@ -141,7 +141,7 @@ test-strategy-deploy-e2e:
 	bash scripts/test-deploy-moox-strategy-e2e.sh
 
 package-skill:
-	./scripts/package-skill.sh
+	./scripts/build/package-skill.sh
 
 proto:
 	$(MAKE) -C packages/commonpb all

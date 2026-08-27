@@ -71,6 +71,11 @@ make proto
 
 Prefer bundled scripts in this skill when a workflow needs deterministic parsing or repeated `moox-cli` argument assembly.
 
+For requests to fetch collected market data, such as “获取 BTC-USDT 的 1m K 线”, read
+[`references/data-query.md`](references/data-query.md). It defines the natural-language mapping,
+catalog constraints, packaged credential handling, and result summary contract for
+`moox-cli data kline get`.
+
 For queue backlog and View recovery, read
 [`references/cli-operations.md`](references/cli-operations.md) before operating. It documents
 the safe dry-run-first workflow, the Factor `clear-queue` command, Storage `repair-view`,
