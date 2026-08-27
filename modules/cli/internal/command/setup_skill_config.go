@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -15,7 +16,7 @@ import (
 
 const skillConfigIdentity = "moox-skill"
 
-type skillSecretReader func(string) ([]byte, error)
+type skillSecretReader func(context.Context, setupconfig.Host, string) ([]byte, error)
 
 func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 	var file, space, output string
@@ -51,7 +52,7 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return fmt.Errorf("config_changed")
 			}
-			if err := writeAtomic0600(output, raw); err != nil {
+			if err := writeSkillConfigAtomic0600(output, raw, os.Rename); err != nil {
 				return fmt.Errorf("write skill config: %w", err)
 			}
 			return writeSetupJSON(cmd, map[string]string{"status": "exported", "output": output})
@@ -69,20 +70,30 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 	if snapshot == nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: setup snapshot is required")
 	}
-	transport, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
-	if err != nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: connect control host: %w", err)
-	}
-	defer transport.Close()
-
-	read := func(path string) ([]byte, error) {
+	transports := make(map[string]setupssh.Client)
+	defer func() {
+		for _, transport := range transports {
+			_ = transport.Close()
+		}
+	}()
+	read := func(ctx context.Context, host setupconfig.Host, path string) ([]byte, error) {
+		key := host.Name + "\x00" + host.Address
+		transport := transports[key]
+		if transport == nil {
+			var err error
+			transport, err = dialSetupHost(ctx, host)
+			if err != nil {
+				return nil, fmt.Errorf("connect deployment host: %w", err)
+			}
+			transports[key] = transport
+		}
 		return readRemoteSkillSecret(ctx, transport, path)
 	}
 	return buildSkillDataAccessConfig(ctx, snapshot, space, read)
 }
 
 func buildSkillDataAccessConfig(
-	_ context.Context,
+	ctx context.Context,
 	snapshot *setupconfig.Snapshot,
 	spaceID string,
 	read skillSecretReader,
@@ -113,12 +124,12 @@ func buildSkillDataAccessConfig(
 	if targetNode == "" {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: space %q storage_gateway_node_id is required", spaceID)
 	}
-	if _, err := findSetupHost(snapshot.Manifest, targetNode); err != nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: storage gateway node %q is not a configured host", targetNode)
+	gatewayHost, gatewayRoot, canonicalNodeID, err := resolveSkillGatewayPlacement(snapshot.Manifest, targetNode)
+	if err != nil {
+		return dataAccessConfig{}, err
 	}
 
-	controlRoot := snapshot.Manifest.Paths.Resolved().ControlRoot
-	gatewayRaw, err := read(filepath.Join(controlRoot, "secrets/gateway-moox-skill.key"))
+	gatewayRaw, err := read(ctx, gatewayHost, filepath.Join(gatewayRoot, "secrets/gateway-moox-skill.key"))
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway credential unavailable")
 	}
@@ -126,8 +137,18 @@ func buildSkillDataAccessConfig(
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway credential invalid")
 	}
+	gatewayEnvRaw, err := read(ctx, gatewayHost, filepath.Join(gatewayRoot, "secrets/gateway-service.env"))
+	if err != nil {
+		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway identity unavailable")
+	}
+	deployedNodeID := envValue(string(gatewayEnvRaw), "MOOX_GATEWAY_NODE_ID")
+	if deployedNodeID == "" || deployedNodeID != canonicalNodeID {
+		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway identity does not match configured target")
+	}
+	gatewayEnvRaw = nil
 
-	storageRaw, err := read(filepath.Join(controlRoot, "secrets/storage-internal-auth.env"))
+	controlRoot := snapshot.Manifest.Paths.Resolved().ControlRoot
+	storageRaw, err := read(ctx, snapshot.Manifest.ControlHost, filepath.Join(controlRoot, "secrets/storage-internal-auth.env"))
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: Storage auth unavailable")
 	}
@@ -142,7 +163,7 @@ func buildSkillDataAccessConfig(
 	return dataAccessConfig{
 		Version: 1,
 		Gateway: dataGatewayConfig{
-			Target: target, TargetNode: targetNode, KeyID: skillConfigIdentity,
+			Target: target, TargetNode: canonicalNodeID, KeyID: skillConfigIdentity,
 			Caller: skillConfigIdentity, Secret: gatewaySecret,
 		},
 		Storage: dataStorageAuthConfig{AppID: skillConfigIdentity, AppKey: storageAppKey},
@@ -158,6 +179,19 @@ func buildSkillDataAccessConfig(
 			},
 		},
 	}, nil
+}
+
+func resolveSkillGatewayPlacement(manifest setupconfig.Manifest, configuredNodeID string) (setupconfig.Host, string, string, error) {
+	configuredNodeID = strings.TrimSpace(configuredNodeID)
+	paths := manifest.Paths.Resolved()
+	if strings.EqualFold(configuredNodeID, "control") || strings.EqualFold(configuredNodeID, manifest.ControlHost.Name) {
+		return manifest.ControlHost, paths.ControlRoot, "control", nil
+	}
+	host, err := findSetupHost(manifest, configuredNodeID)
+	if err != nil {
+		return setupconfig.Host{}, "", "", fmt.Errorf("skill_config: storage gateway node %q is not a configured host", configuredNodeID)
+	}
+	return host, paths.StorageRoot, host.Name, nil
 }
 
 func normalizeSkillGatewaySecret(raw []byte) (string, error) {
@@ -181,7 +215,7 @@ func readRemoteSkillSecret(ctx context.Context, transport setupssh.Client, path 
 path="$1"
 [ -f "$path" ]
 [ ! -L "$path" ]
-mode=$(stat -c '%a' "$path")
+mode=$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path")
 [ "$mode" = 600 ]
 size=$(wc -c <"$path")
 [ "$size" -gt 0 ]
@@ -193,4 +227,47 @@ cat "$path"`,
 		return nil, fmt.Errorf("remote secret unavailable")
 	}
 	return []byte(result.Stdout), nil
+}
+
+func writeSkillConfigAtomic0600(path string, content []byte, rename func(string, string) error) (err error) {
+	if rename == nil {
+		return fmt.Errorf("rename dependency is required")
+	}
+	if info, statErr := os.Lstat(path); statErr == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("output %q must not be a symlink", path)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("output %q must be a regular file", path)
+		}
+	} else if !os.IsNotExist(statErr) {
+		return statErr
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer func() {
+		_ = temp.Close()
+		if err != nil {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err = temp.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err = temp.Write(content); err != nil {
+		return err
+	}
+	if err = temp.Sync(); err != nil {
+		return err
+	}
+	if err = temp.Close(); err != nil {
+		return err
+	}
+	if err = rename(tempPath, path); err != nil {
+		return err
+	}
+	return nil
 }
