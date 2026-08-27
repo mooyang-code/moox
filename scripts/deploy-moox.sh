@@ -3428,6 +3428,7 @@ prepare_stage() {
   } >"${STAGE_DIR}/secrets/gateway-control.env"
   {
     printf 'MOOX_GATEWAY_NODE_ID=%q\n' "${NODE_ID}"
+    printf 'MOOX_GATEWAY_TARGET_NODE=%q\n' "${NODE_ID}"
     printf 'MOOX_GATEWAY_SERVICE_KEY_ID=moox-gateway-service\n'
     printf 'MOOX_GATEWAY_CALLER=admin-gateway\n'
     printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_service_secret}"

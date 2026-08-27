@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -102,6 +105,10 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 			}
 			transports[key] = transport
 		}
+		if filepath.Base(path) == "gateway-service.env" {
+			nodeID, err := readRemoteGatewayTargetNode(ctx, transport, path)
+			return []byte(nodeID), err
+		}
 		return readRemoteSkillSecret(ctx, transport, path)
 	}
 	return buildSkillDataAccessConfig(ctx, snapshot, space, read)
@@ -143,6 +150,9 @@ func buildSkillDataAccessConfig(
 	if err != nil {
 		return dataAccessConfig{}, err
 	}
+	if err := validateSkillGatewayTarget(target, gatewayHost); err != nil {
+		return dataAccessConfig{}, err
+	}
 
 	gatewayRaw, err := read(ctx, gatewayHost, filepath.Join(gatewayRoot, "secrets/gateway-moox-skill.key"))
 	if err != nil {
@@ -156,7 +166,7 @@ func buildSkillDataAccessConfig(
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway identity unavailable")
 	}
-	deployedNodeID := envValue(string(gatewayEnvRaw), "MOOX_GATEWAY_NODE_ID")
+	deployedNodeID := strings.TrimSpace(string(gatewayEnvRaw))
 	if deployedNodeID == "" || deployedNodeID != canonicalNodeID {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway identity does not match configured target")
 	}
@@ -283,6 +293,37 @@ func resolveSkillGatewayPlacement(manifest setupconfig.Manifest, configuredNodeI
 	return host, paths.StorageRoot, host.Name, nil
 }
 
+func validateSkillGatewayTarget(target string, host setupconfig.Host) error {
+	parsed, err := url.Parse(strings.TrimSpace(target))
+	if err != nil || parsed.Scheme != "ip" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("skill_config: storage_rpc_gateway_target must be ip://host:port")
+	}
+	targetHost, portText, err := net.SplitHostPort(parsed.Host)
+	if err != nil || strings.TrimSpace(targetHost) == "" {
+		return fmt.Errorf("skill_config: storage_rpc_gateway_target must be ip://host:port")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("skill_config: storage_rpc_gateway_target port is invalid")
+	}
+	selectedHost := strings.TrimSpace(host.Address)
+	targetIP := net.ParseIP(targetHost)
+	selectedIP := net.ParseIP(selectedHost)
+	if targetIP != nil || selectedIP != nil {
+		if targetIP == nil || selectedIP == nil || !targetIP.Equal(selectedIP) {
+			return fmt.Errorf("skill_config: storage_rpc_gateway_target host does not match selected Gateway host")
+		}
+		return nil
+	}
+	normalizeHostname := func(value string) string {
+		return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(value), "."))
+	}
+	if normalizeHostname(targetHost) == "" || normalizeHostname(targetHost) != normalizeHostname(selectedHost) {
+		return fmt.Errorf("skill_config: storage_rpc_gateway_target host does not match selected Gateway host")
+	}
+	return nil
+}
+
 func normalizeSkillGatewaySecret(raw []byte) (string, error) {
 	if len(raw) == 0 || len(raw) > 4096 {
 		return "", fmt.Errorf("invalid credential")
@@ -316,6 +357,36 @@ cat "$path"`,
 		return nil, fmt.Errorf("remote secret unavailable")
 	}
 	return []byte(result.Stdout), nil
+}
+
+func readRemoteGatewayTargetNode(ctx context.Context, transport setupssh.Client, path string) (string, error) {
+	if transport == nil || !filepath.IsAbs(path) {
+		return "", fmt.Errorf("Gateway target node unavailable")
+	}
+	result, err := transport.Run(ctx, []string{
+		"sh", "-lc",
+		`set -eu
+path="$1"
+[ -f "$path" ]
+[ ! -L "$path" ]
+mode=$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path")
+[ "$mode" = 600 ]
+size=$(wc -c <"$path")
+[ "$size" -gt 0 ]
+[ "$size" -le 4096 ]
+count=$(awk -F= '$1 == "MOOX_GATEWAY_TARGET_NODE" { count++ } END { print count + 0 }' "$path")
+[ "$count" -eq 1 ]
+value=$(sed -n 's/^MOOX_GATEWAY_TARGET_NODE=//p' "$path")
+case "$value" in
+  ''|*[!A-Za-z0-9._-]*) exit 1 ;;
+esac
+printf '%s' "$value"`,
+		"moox-read-gateway-target-node", path,
+	}, nil)
+	if err != nil || result.Stdout == "" || len(result.Stdout) > 256 || strings.ContainsAny(result.Stdout, "\r\n") {
+		return "", fmt.Errorf("Gateway target node unavailable")
+	}
+	return result.Stdout, nil
 }
 
 func writeSkillConfigAtomic0600(path string, content []byte, rename func(string, string) error) (err error) {

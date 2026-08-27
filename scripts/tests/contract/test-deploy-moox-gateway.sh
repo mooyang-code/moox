@@ -375,6 +375,7 @@ MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
 grep -Fxq 'preserve-no-gateway-skill' "${NO_GATEWAY_DEPLOY}/secrets/gateway-moox-skill.key" || \
   fail 'local --no-gateway overlay rotated the inactive skill key'
 grep -Fq 'MOOX_GATEWAY_NODE_ID=gateway-test' "${DEPLOYED}/secrets/gateway-service.env" || fail 'Gateway node ID was not scoped with service credentials'
+grep -Fq 'MOOX_GATEWAY_TARGET_NODE=gateway-test' "${DEPLOYED}/secrets/gateway-service.env" || fail 'Gateway target node was not scoped with service credentials'
 grep -Fq 'start_admin' "${DEPLOYED}/start.sh" || fail 'central lifecycle function was omitted'
 grep -Fq 'start_gateway' "${DEPLOYED}/start.sh" || fail 'Gateway lifecycle function was omitted'
 grep -Fq 'start_monitor' "${DEPLOYED}/start.sh" || fail 'Monitor lifecycle function was omitted'
