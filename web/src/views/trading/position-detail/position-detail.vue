@@ -447,7 +447,11 @@ onMounted(async () => {
   white-space: nowrap;
 }
 .account-select {
-  width: min(440px, 100%);
+  width: 320px;
+}
+.account-context-main :deep(.account-select) {
+  flex: 0 1 320px;
+  width: 320px;
 }
 .symbol-input {
   width: 240px;
@@ -549,6 +553,10 @@ onMounted(async () => {
   .account-context-main {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .account-context-main :deep(.account-select) {
+    flex-basis: auto;
+    width: 100%;
   }
   .account-context-meta {
     justify-content: flex-start;
