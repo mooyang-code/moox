@@ -153,6 +153,16 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 			if resolverErr != nil {
 				return resolverErr
 			}
+			tradeConsoleHost := ""
+			tradeConsolePort := 0
+			if snapshot.Manifest.DNSResolver.Enabled {
+				tradeHost, tradeErr := findSetupHost(snapshot.Manifest, snapshot.Manifest.DNSResolver.TradeNode)
+				if tradeErr != nil {
+					return tradeErr
+				}
+				tradeConsoleHost = tradeHost.Address
+				tradeConsolePort = 11200
+			}
 			return writeSetupJSON(cmd, map[string]any{
 				"status":               "rendered",
 				"trade_output":         tradeOutput,
@@ -160,6 +170,8 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 				"dns_resolver_enabled": snapshot.Manifest.DNSResolver.Enabled,
 				"dns_resolver_node_id": resolverNodeID,
 				"dns_resolver_target":  resolverTarget,
+				"trade_console_host":   tradeConsoleHost,
+				"trade_console_port":   tradeConsolePort,
 			})
 		},
 	}
@@ -702,6 +714,7 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		StoragePrimarySecret:   primarySecret,
 		StorageViewSecret:      viewSecret,
 		StorageViewPolicy:      snapshot.Manifest.StorageView,
+		LocalLogs:              snapshot.Manifest.LocalLogs,
 		InstallStorageWatchdog: true,
 		HealthAuthVersion:      healthVersion,
 		HealthAuthAccessKey:    healthAccessKey,
@@ -1095,6 +1108,20 @@ func deploySetupControl(ctx context.Context, snapshot *setupconfig.Snapshot, res
 	if err := setupdeploy.Control(ctx, transport, opts, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
+	// The control profile deliberately does not run Trade. When Trade is
+	// placed on the dedicated node selected by custom.toml, update the
+	// browser-facing control route after Admin has seeded its defaults; doing
+	// this here makes a reset/redeploy deterministic instead of restoring the
+	// unusable loopback 127.0.0.1:11200 endpoint.
+	if snapshot.Manifest.DNSResolver.Enabled {
+		tradeHost, resolveErr := findSetupHost(snapshot.Manifest, snapshot.Manifest.DNSResolver.TradeNode)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		if err := setupclient.New(transport).ApplyTradeConsolePlacement(ctx, tradeHost.Address); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1226,6 +1253,7 @@ func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string)
 		EventBusTLSEnabled:      snapshot.Manifest.EventBus.TLSEnabled,
 		NotificationChannelType: snapshot.Manifest.Notification.ChannelType,
 		NotificationWebhookURL:  snapshot.Manifest.Notification.WebhookURL,
+		LocalLogs:               snapshot.Manifest.LocalLogs,
 		TLSMode:                 setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode),
 		InstallLocalCA:          true,
 	}
@@ -1246,9 +1274,16 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 			return setupdeploy.ServiceResult{}, err
 		}
 	}
+	tradeConsoleBindAddress := ""
+	if strings.EqualFold(strings.TrimSpace(service), "trade") && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+		// SSH/public addresses can be NAT front doors and are not necessarily
+		// assigned to a target interface. Bind all interfaces on the dedicated
+		// Trade host; the cloud firewall must restrict 11200 to control_host.
+		tradeConsoleBindAddress = "0.0.0.0"
+	}
 	result, err := setupdeploy.Service(ctx, transport, setupdeploy.ServiceOptions{
 		PackagePath: packagePath, ServiceName: service, DeployDir: deployDir,
-		EventBusURL: setupEventBusURL(snapshot.Manifest),
+		EventBusURL: setupEventBusURL(snapshot.Manifest), TradeConsoleBindAddress: tradeConsoleBindAddress,
 	})
 	if err != nil {
 		return setupdeploy.ServiceResult{}, err
@@ -1271,11 +1306,52 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 	if closeControl {
 		defer control.Close()
 	}
-	if err := setupclient.New(control).RegisterServiceDeployment(ctx, host.Name, service, host.Address); err != nil {
+	controlClient := setupclient.New(control)
+	if err := controlClient.RegisterServiceDeployment(ctx, host.Name, service, host.Address); err != nil {
+		// The service has already been activated by setupdeploy.Service. Do not
+		// leave a running Trade process without a matching control-plane route.
+		if tradeConsoleBindAddress != "" {
+			_, _ = transport.Run(ctx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-registry-failure", result.DeployDir}, nil)
+		}
 		return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", err)
+	}
+	if tradeConsoleBindAddress != "" {
+		if err := probeTradeConsole(ctx, control, host.Address); err != nil {
+			_, _ = transport.Run(ctx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-probe-failure", result.DeployDir}, nil)
+			_ = controlClient.DisableServiceDeployment(ctx, host.Name, service)
+			return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", err)
+		}
+		if err := controlClient.ApplyTradeConsolePlacement(ctx, host.Address); err != nil {
+			// Keep registry and process state aligned when the second control-plane
+			// write fails after activation.
+			_, _ = transport.Run(ctx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-route-failure", result.DeployDir}, nil)
+			_ = controlClient.DisableServiceDeployment(ctx, host.Name, service)
+			return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", err)
+		}
 	}
 	result.RegistrySynced = true
 	return result, nil
+}
+
+// probeTradeConsole checks the actual control-to-Trade network path before
+// publishing the browser route. Trade returns HTTP 200 with a business error
+// when no space header is supplied, which is sufficient for this liveness
+// probe and avoids requiring operator credentials.
+func probeTradeConsole(ctx context.Context, control setupssh.Client, host string) error {
+	host = strings.TrimSpace(host)
+	if control == nil || net.ParseIP(host) == nil {
+		return fmt.Errorf("trade_console_probe_invalid")
+	}
+	_, err := control.Run(ctx, []string{"bash", "-lc", `set -eu
+host="$1"
+curl --fail --silent --show-error --max-time 5 \
+  -X POST -H 'Content-Type: application/json' --data '{}' \
+  "http://${host}:11200/trpc.moox.trade.TradeConsoleService/ListTradingAccounts" >/dev/null
+`, "moox-probe-trade-console", host}, nil)
+	if err != nil {
+		return fmt.Errorf("trade_console_probe_failed")
+	}
+	return nil
 }
 
 func setupEventBusURL(manifest setupconfig.Manifest) string {

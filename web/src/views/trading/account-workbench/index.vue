@@ -1,7 +1,7 @@
 <template>
   <div class="moox-page trading-account-workbench">
     <div class="moox-inner">
-      <PageTitleTabs :model-value="activeView" :items="tabs" aria-label="交易账户工作台" @change="syncRoute" />
+      <PageTitleTabs :model-value="activeView" :items="tabs" aria-label="账户工作台" @change="syncRoute" />
       <section class="trading-account-content">
         <AccountOverview v-if="activeView === 'trading'" :embedded="true" />
         <LogicalAccounts v-else :embedded="true" />
@@ -22,8 +22,8 @@ defineOptions({ name: "trading-account-workbench" });
 type WorkbenchView = "trading" | "strategy";
 
 const tabs = [
-  { key: "trading", label: "交易账户" },
-  { key: "strategy", label: "策略账户" }
+  { key: "trading", label: "执行账户" },
+  { key: "strategy", label: "组合账户" }
 ] as const;
 
 const route = useRoute();

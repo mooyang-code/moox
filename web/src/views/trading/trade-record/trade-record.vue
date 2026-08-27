@@ -6,7 +6,7 @@
       <section class="orders-workbench-content">
         <div class="orders-account-toolbar">
           <a-space wrap>
-            <a-select v-model="tradingAccountId" placeholder="选择交易账户" class="account-select" @change="accountChanged">
+            <a-select v-model="tradingAccountId" placeholder="选择执行账户" class="account-select" @change="accountChanged">
               <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
                 {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
               </a-option>

@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,6 +190,50 @@ func TestBusinessFreshnessReporterStoresBalanceCheckInCryptoMarket(t *testing.T)
 		t.Fatal(err)
 	}
 	if len(results) != 1 || !results[0].Success {
+		t.Fatalf("results = %+v", results)
+	}
+}
+
+func TestBusinessFreshnessReporterCreatesStorageOutboxAlert(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		for _, metric := range []struct {
+			id, name string
+			value    float64
+		}{
+			{"outbox-pending", "moox_storage_outbox_pending_entries", 12},
+			{"outbox-age", "moox_storage_outbox_oldest_age_seconds", 240},
+		} {
+			if err := db.Create(&monmetrics.MetricSeries{ServiceName: "storage-node", InstanceID: "storage-node@storage", SeriesID: metric.id, MetricName: metric.name, MetricType: "gauge", LabelsJSON: `{}`, LastSeenAt: now}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&monmetrics.MetricLatest{SeriesID: metric.id, ServiceName: "storage-node", InstanceID: "storage-node@storage", MetricName: metric.name, MetricType: "gauge", LabelsJSON: `{}`, Value: metric.value, ObservedAt: now}).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositories := manager.Repositories()
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Checks: repositories.Checks, Results: repositories.Results, Now: func() time.Time { return now }}, repositories, nil)
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	results, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, "pipeline:storage_outbox", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Success || !strings.Contains(results[0].ErrorMessage, "积压 12 条") {
 		t.Fatalf("results = %+v", results)
 	}
 }

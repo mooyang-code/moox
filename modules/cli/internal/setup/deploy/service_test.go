@@ -61,6 +61,23 @@ func TestServiceRejectsUnsafeZipEntryBeforeSSH(t *testing.T) {
 	require.Empty(t, events)
 }
 
+func TestServiceRejectsNonRoutableTradeConsoleBindBeforeSSH(t *testing.T) {
+	archive := serviceArchive(t, map[string]string{
+		"start.sh":           "#!/bin/sh\n",
+		"stop.sh":            "#!/bin/sh\n",
+		"healthcheck.sh":     "#!/bin/sh\n",
+		"bin/moox-trade":     "trade",
+		"bin/moox-trade-cli": "trade-cli",
+		"config/app.yaml":    "eventbus:\n  enabled: false\n",
+	})
+	events := []string{}
+	_, err := Service(context.Background(), &fakeServiceTransport{events: &events}, ServiceOptions{
+		PackagePath: archive, ServiceName: "trade", DeployDir: "/home/ubuntu/moox/prod", TradeConsoleBindAddress: "127.0.0.1",
+	})
+	require.EqualError(t, err, "service_deploy_invalid")
+	require.Empty(t, events)
+}
+
 func TestServiceRollsBackWhenActivationFails(t *testing.T) {
 	archive := serviceArchive(t, map[string]string{
 		"start.sh":        "#!/bin/sh\n",
@@ -137,6 +154,26 @@ func TestPrepareTradeServiceUsesRemoteEventBusURLForPreflight(t *testing.T) {
 	got, readErr := os.ReadFile(marker)
 	require.NoError(t, readErr)
 	require.Equal(t, "tls://106.53.107.122:4222", string(got))
+}
+
+func TestPrepareTradeServiceBindsConsoleToDedicatedNode(t *testing.T) {
+	archive := serviceArchive(t, map[string]string{
+		"start.sh":            "#!/bin/sh\nexit 0\n",
+		"stop.sh":             "#!/bin/sh\nexit 0\n",
+		"healthcheck.sh":      "#!/bin/sh\nexit 0\n",
+		"bin/moox-trade":      "trade",
+		"bin/moox-trade-cli":  "#!/bin/sh\nexit 0\n",
+		"config/app.yaml":     "eventbus:\n  enabled: false\n",
+		"config/trpc_go.yaml": "server:\n  service:\n    - name: trpc.moox.trade.Health\n      ip: 127.0.0.1\n    - name: trpc.moox.trade.TradeConsoleService\n      ip: 127.0.0.1\n      port: 11200\n",
+	})
+	deploy := filepath.Join(t.TempDir(), "prod")
+	command := exec.Command("bash", "-c", prepareServiceScript, "prepare", deploy, "trade", archive, "tls://203.0.113.10:4222", "0.0.0.0")
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	raw, err := os.ReadFile(filepath.Join(deploy, "config", "trpc_go.yaml"))
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "      ip: 0.0.0.0")
+	require.Contains(t, string(raw), "      ip: 127.0.0.1")
 }
 
 func serviceArchive(t *testing.T, entries map[string]string) string {

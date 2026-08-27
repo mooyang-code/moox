@@ -13,12 +13,15 @@ import (
 
 func viewReadyConsumerConfig(cfg Config) events.ConsumerConfig {
 	return events.ConsumerConfig{
-		Name:                ViewSourceReadyConsumerName,
-		Event:               events.ViewSourcePeriodReady,
-		AckWait:             time.Minute,
-		MaxDeliver:          -1,
-		MaxAckPending:       1,
-		FetchMaxWait:        cfg.FetchMaxWait,
+		Name:       ViewSourceReadyConsumerName,
+		Event:      events.ViewSourcePeriodReady,
+		AckWait:    time.Minute,
+		MaxDeliver: -1,
+		// A delayed retry must not occupy the entire durable lane. The runner
+		// still fetches and executes one event at a time, while JetStream may
+		// keep a bounded set of quarantined timeouts pending for redelivery.
+		MaxAckPending: 16,
+		FetchMaxWait:  cfg.FetchMaxWait,
 		// Realtime factor results must follow the current source period. A new
 		// installation (or an intentional history reset) should not replay an
 		// unbounded historical View-ready backlog before it can calculate the
@@ -81,12 +84,16 @@ func (c *Consumer) open(ctx context.Context) (natsConsumerSession, error) {
 		_ = client.Close()
 		return nil, err
 	}
-	handler := storageEventHandler{executor: c.executor}
+	handler := storageEventHandler{
+		executor: c.executor, executionTimeout: c.cfg.ExecutionTimeout,
+		stallThreshold: c.cfg.StallThreshold, maxExecutionAttempts: c.cfg.MaxExecutionAttempts, progress: c.progress,
+	}
 	runnerCfg := jetstream.RunnerConfig{
 		BatchSize: 1, InProgressInterval: 30 * time.Second,
 		ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
 			log.ErrorContextf(ctx, "factor ViewSourcePeriodReady consumer error: %v", err)
 		}),
+		ActionReporter: c.progress,
 	}
 	return &jetStreamConsumerSession{
 		client:   client,

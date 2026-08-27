@@ -187,10 +187,39 @@ func TestLoadValidManifest(t *testing.T) {
 	assert.Equal(t, DefaultControlRoot, snapshot.Manifest.Paths.ControlRoot)
 	assert.Equal(t, DefaultStorageRoot, snapshot.Manifest.Paths.StorageRoot)
 	assert.Equal(t, uint64(1000), snapshot.Manifest.StorageView.RebuildLookbackPeriods)
+	assert.Equal(t, 50, snapshot.Manifest.LocalLogs.MaxSizeMB)
+	assert.Equal(t, 5, snapshot.Manifest.LocalLogs.BackupCount)
 	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
 	assert.Empty(t, snapshot.Manifest.Notification.WebhookURL)
 	assert.Empty(t, snapshot.Manifest.OtherHosts)
 	require.NoError(t, snapshot.VerifyUnchanged())
+}
+
+func TestLoadLocalLogRotationFromManifest(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[local_logs]
+max_size_mb = 128
+backup_count = 7
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, 128, snapshot.Manifest.LocalLogs.MaxSizeMB)
+	assert.Equal(t, 7, snapshot.Manifest.LocalLogs.BackupCount)
+}
+
+func TestLoadRejectsInvalidLocalLogRotation(t *testing.T) {
+	for name, body := range map[string]string{
+		"max size":     "[local_logs]\nmax_size_mb = 0\nbackup_count = 5\n",
+		"backup count": "[local_logs]\nmax_size_mb = 50\nbackup_count = 0\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := Load(writeManifest(t, root, validManifest+"\n"+body, 0o600), root)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "local_logs")
+		})
+	}
 }
 
 func TestLoadPathsFromManifest(t *testing.T) {

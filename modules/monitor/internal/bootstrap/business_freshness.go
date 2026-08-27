@@ -102,7 +102,7 @@ func buildBusinessFreshnessReporter(
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		for _, business := range overview.BusinessChecks {
-			if business.Kind != "balance" && business.Kind != "market_fetch" {
+			if business.Kind != "balance" && business.Kind != "market_fetch" && business.Kind != "data_delivery" {
 				continue
 			}
 			spaceID := business.SpaceID
@@ -112,6 +112,8 @@ func buildBusinessFreshnessReporter(
 			checkID, name := "balance:"+business.Module, "Balance freshness "+business.Module
 			if business.Kind == "market_fetch" {
 				checkID, name = "market_fetch:"+business.Module, "行情采集 "+business.Module+" 协调"
+			} else if business.Kind == "data_delivery" {
+				checkID, name = "pipeline:"+business.Module, "数据投递队列"
 			}
 			item := businessFreshnessItem{spaceID: spaceID, checkID: checkID, name: name, success: business.Status == "healthy", reason: business.Reason}
 			items[item.spaceID+"\x00"+item.checkID] = item

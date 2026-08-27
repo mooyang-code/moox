@@ -261,6 +261,72 @@ func TestActivateStoragePlacementEnablesLocalStorageRoutes(t *testing.T) {
 	}
 }
 
+func TestApplyTradeConsolePlacementUpdatesControlRoute(t *testing.T) {
+	var updated *pb.ServiceDeployment
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
+			response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{
+				RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
+				Deployment: &pb.ServiceDeployment{
+					NodeId: "control", ServiceName: "trade_console", ServiceKind: "trade",
+					Protocol: "http", Host: "127.0.0.1", Port: 11200,
+					GatewayPath: "trpc.moox.trade.TradeConsoleService", Scope: "internal",
+					Status: "active",
+				},
+			})
+			_, _ = w.Write(response)
+		case "/trpc.moox.ops.SysDeploy/UpdateServiceDeployment":
+			var input pb.UpdateServiceDeploymentReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			updated = input.GetDeployment()
+			response, _ := protojson.Marshal(&pb.UpdateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: updated})
+			_, _ = w.Write(response)
+		default:
+			http.NotFound(w, request)
+		}
+	})}
+
+	require.NoError(t, New(forwarder).ApplyTradeConsolePlacement(context.Background(), "43.132.204.177"))
+	require.NotNil(t, updated)
+	assert.Equal(t, "control", updated.GetNodeId())
+	assert.Equal(t, "trade_console", updated.GetServiceName())
+	assert.Equal(t, "43.132.204.177", updated.GetHost())
+	assert.Equal(t, int32(11200), updated.GetPort())
+	assert.Equal(t, "trpc.moox.trade.TradeConsoleService", updated.GetGatewayPath())
+	assert.Equal(t, "active", updated.GetStatus())
+}
+
+func TestApplyTradeConsolePlacementRejectsLoopback(t *testing.T) {
+	forwarder := &fakeForwarder{handler: http.NotFoundHandler()}
+	err := New(forwarder).ApplyTradeConsolePlacement(context.Background(), "127.0.0.1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trade_placement_invalid")
+}
+
+func TestDisableServiceDeploymentMarksExistingRowDisabled(t *testing.T) {
+	var updated *pb.ServiceDeployment
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":"SUCCESS"},"deployment":{"node_id":"compute","service_name":"moox_trade","service_kind":"trade","protocol":"http","host":"127.0.0.1","port":11210,"status":"active"}}`))
+		case "/trpc.moox.ops.SysDeploy/UpdateServiceDeployment":
+			var input pb.UpdateServiceDeploymentReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			updated = input.GetDeployment()
+			_, _ = w.Write([]byte(`{"ret_info":{"code":"SUCCESS"}}`))
+		default:
+			http.NotFound(w, request)
+		}
+	})}
+	require.NoError(t, New(forwarder).DisableServiceDeployment(context.Background(), "compute", "trade"))
+	require.NotNil(t, updated)
+	assert.Equal(t, "moox_trade", updated.GetServiceName())
+	assert.Equal(t, "disabled", updated.GetStatus())
+}
+
 func TestRegisterServiceDeploymentCreatesCanonicalMonitorRow(t *testing.T) {
 	var created *pb.ServiceDeployment
 	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {

@@ -113,8 +113,19 @@ func (w *storageWriter) ReportDatasetPeriodCollected(ctx context.Context, spaceI
 		if err != nil {
 			return fmt.Errorf("report dataset period collected: %w", err)
 		}
-		return ensureStorageOK("report dataset period collected", rsp.GetRetInfo())
+		return ensureDatasetPeriodMarkerAccepted(rsp.GetRetInfo())
 	})
+}
+
+func ensureDatasetPeriodMarkerAccepted(ret *storagepb.RetInfo) error {
+	// A dataset/frequency/period marker is immutable and uses a stable event ID.
+	// CONFLICT therefore means Storage already finalized that logical period.
+	// Treat it as accepted so a restarted Collector does not retry one old row
+	// forever while newer periods continue advancing.
+	if ret != nil && ret.GetCode() == storagepb.ErrorCode_CONFLICT {
+		return nil
+	}
+	return ensureStorageOK("report dataset period collected", ret)
 }
 
 func (w *storageWriter) AppendDatasetSyncPoint(ctx context.Context, spaceID, datasetID, requestID, source string) error {

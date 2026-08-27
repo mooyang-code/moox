@@ -38,6 +38,16 @@ func (e *recordingExecutor) Execute(context.Context, string, string, *storagepb.
 	return e.err
 }
 
+type blockingExecutor struct {
+	calls atomic.Int32
+}
+
+func (e *blockingExecutor) Execute(ctx context.Context, _ string, _ string, _ *storagepb.ViewSourcePeriodReady) error {
+	e.calls.Add(1)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func TestConsumerReopensFailedSessionAndRestoresReadiness(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -75,11 +85,13 @@ func TestConsumerReopensFailedSessionAndRestoresReadiness(t *testing.T) {
 }
 
 func TestViewReadyConsumerConfig(t *testing.T) {
-	ref := viewReadyConsumerConfig(Config{FetchMaxWait: 2 * time.Second})
+	ref := viewReadyConsumerConfig(Config{FetchMaxWait: 2 * time.Second, MaxExecutionAttempts: 5})
 	require.Equal(t, events.ViewSourcePeriodReady.Name(), ref.Event.Name())
 	require.Equal(t, ViewSourceReadyConsumerName, ref.Name)
 	require.Equal(t, 2*time.Second, ref.FetchMaxWait)
 	require.Equal(t, nats.DeliverNewPolicy, ref.DeliverPolicy)
+	require.Equal(t, -1, ref.MaxDeliver)
+	require.Equal(t, 16, ref.MaxAckPending)
 }
 
 func TestHandlerExecutesViewReadyEvent(t *testing.T) {
@@ -128,4 +140,156 @@ func TestHandlerAcknowledgesNoBindingAndRetriesPendingBinding(t *testing.T) {
 		Handle(context.Background(), delivery)
 	require.Equal(t, jetstream.RETRY, pending.Decision)
 	require.ErrorIs(t, pending.Err, trigger.ErrBindingNotReady)
+}
+
+func TestHandlerTerminatesMalformedEvent(t *testing.T) {
+	result := (storageEventHandler{executor: &recordingExecutor{}}).Handle(context.Background(), &jetstream.Delivery{
+		ContentType: "application/json",
+	})
+	require.Equal(t, jetstream.TERM, result.Decision)
+	require.ErrorContains(t, result.Err, "factor event rejected")
+}
+
+func TestHandlerTimesOutOneExecution(t *testing.T) {
+	executor := &blockingExecutor{}
+	delivery := encodedViewReadyDelivery(t, "ready-timeout")
+	started := time.Now()
+	result := (storageEventHandler{
+		executor:             executor,
+		executionTimeout:     20 * time.Millisecond,
+		maxExecutionAttempts: 5,
+	}).Handle(context.Background(), delivery)
+
+	require.Equal(t, jetstream.RETRY, result.Decision)
+	require.ErrorIs(t, result.Err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), time.Second)
+	require.Equal(t, int32(1), executor.calls.Load())
+}
+
+func TestHandlerQuarantinesTimedOutExecutionWithoutDroppingIt(t *testing.T) {
+	delivery := encodedViewReadyDelivery(t, "ready-poison")
+	delivery.DeliveryCount = 1
+	handler := storageEventHandler{
+		executor:             &recordingExecutor{err: context.DeadlineExceeded},
+		maxExecutionAttempts: 5,
+		progress:             newProgressState(),
+	}
+	for range 4 {
+		result := handler.Handle(context.Background(), delivery)
+		require.Equal(t, jetstream.RETRY, result.Decision)
+	}
+	result := handler.Handle(context.Background(), delivery)
+
+	require.Equal(t, jetstream.RETRY, result.Decision)
+	require.GreaterOrEqual(t, result.Delay, 30*time.Second)
+	require.ErrorContains(t, result.Err, "retry threshold reached")
+	require.True(t, handler.progress.status(time.Now(), 5*time.Minute).Stalled)
+}
+
+func TestHandlerTracksInterleavedTimeoutAttemptsPerEvent(t *testing.T) {
+	handler := storageEventHandler{
+		executor:             &recordingExecutor{err: context.DeadlineExceeded},
+		maxExecutionAttempts: 3,
+		progress:             newProgressState(),
+	}
+	eventA := encodedViewReadyDelivery(t, "ready-timeout-a")
+	eventB := encodedViewReadyDelivery(t, "ready-timeout-b")
+
+	for _, delivery := range []*jetstream.Delivery{eventA, eventB, eventA, eventB} {
+		result := handler.Handle(context.Background(), delivery)
+		require.Equal(t, jetstream.RETRY, result.Decision)
+		require.Less(t, result.Delay, 30*time.Second)
+	}
+
+	result := handler.Handle(context.Background(), eventA)
+	require.Equal(t, jetstream.RETRY, result.Decision)
+	require.GreaterOrEqual(t, result.Delay, 30*time.Second)
+	require.ErrorContains(t, result.Err, "retry threshold reached")
+}
+
+func TestHandlerKeepsRetryingRecoverableFailureWithoutDataLoss(t *testing.T) {
+	delivery := encodedViewReadyDelivery(t, "ready-storage-retry")
+	delivery.DeliveryCount = 50
+	result := (storageEventHandler{
+		executor:             &recordingExecutor{err: errors.New("storage unavailable")},
+		maxExecutionAttempts: 5,
+	}).Handle(context.Background(), delivery)
+
+	require.Equal(t, jetstream.RETRY, result.Decision)
+	require.ErrorContains(t, result.Err, "storage unavailable")
+}
+
+func TestProgressDetectsInFlightExecutionPastThreshold(t *testing.T) {
+	progress := newProgressState()
+	executor := &blockingExecutor{}
+	handler := storageEventHandler{
+		executor: executor, executionTimeout: 100 * time.Millisecond,
+		maxExecutionAttempts: 5, progress: progress,
+	}
+	delivery := encodedViewReadyDelivery(t, "ready-stalled")
+	done := make(chan jetstream.HandlerResult, 1)
+	go func() {
+		done <- handler.Handle(context.Background(), delivery)
+	}()
+	require.Eventually(t, func() bool {
+		return progress.status(time.Now(), 10*time.Millisecond).Stalled
+	}, time.Second, time.Millisecond)
+	status := progress.status(time.Now(), 10*time.Millisecond)
+	require.Equal(t, "ready-stalled", status.InFlightEventID)
+	require.False(t, status.LastReceivedAt.IsZero())
+
+	result := <-done
+	require.Equal(t, jetstream.RETRY, result.Decision)
+	require.True(t, progress.status(time.Now(), 10*time.Millisecond).Stalled)
+	progress.begin("ready-recovered", time.Now())
+	require.True(t, progress.status(time.Now(), 10*time.Millisecond).Stalled)
+	progress.finish("ready-recovered", true, nil, time.Now())
+	require.False(t, progress.status(time.Now(), 10*time.Millisecond).Stalled)
+}
+
+func TestProgressRecordsSuccessfulCompletionAndAck(t *testing.T) {
+	progress := newProgressState()
+	delivery := encodedViewReadyDelivery(t, "ready-ok")
+	result := (storageEventHandler{
+		executor: &recordingExecutor{}, maxExecutionAttempts: 5, progress: progress,
+	}).Handle(context.Background(), delivery)
+	require.Equal(t, jetstream.ACK, result.Decision)
+	progress.ReportAction(context.Background(), delivery, result, nil)
+
+	status := progress.status(time.Now(), time.Minute)
+	require.False(t, status.LastCompletedAt.IsZero())
+	require.False(t, status.LastAckAt.IsZero())
+	require.Empty(t, status.InFlightEventID)
+}
+
+func TestProgressRecordsRejectedMessageFailure(t *testing.T) {
+	progress := newProgressState()
+	result := jetstream.HandlerResult{Decision: jetstream.TERM, Err: errors.New("invalid payload")}
+	progress.ReportAction(context.Background(), &jetstream.Delivery{}, result, nil)
+
+	status := progress.status(time.Now(), time.Minute)
+	require.ErrorContains(t, errors.New(status.LastFailure), "invalid payload")
+	require.False(t, status.LastFailureAt.IsZero())
+}
+
+func encodedViewReadyDelivery(t *testing.T, eventID string) *jetstream.Delivery {
+	t.Helper()
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+	readyAt := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
+	payload := &storagepb.ViewSourcePeriodReady{
+		SourceViewId: "prices-view", Frequency: "1m", PeriodTime: readyAt.Unix(),
+		Status: "complete", ReadyAt: timestamppb.New(readyAt),
+		Datasets: []*storagepb.ViewPeriodDatasetState{{DatasetId: "prices", Status: "complete"}},
+	}
+	encoded, err := registry.Encode(events.ViewSourcePeriodReady, payload, events.PublishOptions{
+		EventID: eventID, OccurredAt: readyAt, SpaceID: "quant", SubjectID: "prices-view",
+	})
+	require.NoError(t, err)
+	raw, err := proto.Marshal(encoded.Message)
+	require.NoError(t, err)
+	return &jetstream.Delivery{
+		Subject: encoded.Subject, RawData: raw, RawMessageID: eventID,
+		ContentType: events.ContentType, DeliveryCount: 1,
+	}
 }

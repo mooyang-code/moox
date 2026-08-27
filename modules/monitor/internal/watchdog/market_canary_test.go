@@ -99,7 +99,7 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	}
 	result = (MarketCanary{Reader: reader, AuthInfo: auth, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.False(t, result.Success)
-	require.Equal(t, "threshold_exceeded", result.ErrorMessage)
+	require.Equal(t, "相邻K线收盘价从 100 变为 110，波动 10.00%，超过 5.00% 阈值", result.ErrorMessage)
 	var diagnostic marketCanaryThresholdDiagnostic
 	require.NoError(t, json.Unmarshal([]byte(result.BodyExcerpt), &diagnostic))
 	require.Equal(t, "market_canary_threshold", diagnostic.Type)

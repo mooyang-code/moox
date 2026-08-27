@@ -11,15 +11,22 @@ import (
 )
 
 type Config struct {
-	URLs           []string
-	FetchMaxWait   time.Duration
-	CredentialFile string
+	URLs                 []string
+	FetchMaxWait         time.Duration
+	CredentialFile       string
+	ExecutionTimeout     time.Duration
+	StallThreshold       time.Duration
+	MaxExecutionAttempts int
 }
 
 const ViewSourceReadyConsumerName = "factor_view_ready_v1"
 
 type ViewReadyExecutor interface {
 	Execute(context.Context, string, string, *publicstoragepb.ViewSourcePeriodReady) error
+}
+
+type executionBudgeter interface {
+	ExecutionBudget(context.Context, string, *publicstoragepb.ViewSourcePeriodReady) (time.Duration, error)
 }
 
 type Consumer struct {
@@ -33,10 +40,23 @@ type Consumer struct {
 	mu          sync.Mutex
 	runErr      error
 	ready       bool
+	progress    *progressState
 }
 
 func New(cfg Config, executor ViewReadyExecutor) *Consumer {
-	return &Consumer{cfg: cfg, executor: executor, retryDelay: time.Second, openSession: nil}
+	if cfg.ExecutionTimeout <= 0 {
+		cfg.ExecutionTimeout = 15 * time.Minute
+	}
+	if cfg.StallThreshold <= 0 {
+		cfg.StallThreshold = 5 * time.Minute
+	}
+	if cfg.MaxExecutionAttempts <= 0 {
+		cfg.MaxExecutionAttempts = 5
+	}
+	return &Consumer{
+		cfg: cfg, executor: executor, retryDelay: time.Second,
+		openSession: nil, progress: newProgressState(),
+	}
 }
 
 func (c *Consumer) Start(ctx context.Context) error {
@@ -89,6 +109,14 @@ func (c *Consumer) Ready() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ready
+}
+
+// Status returns a concurrency-safe snapshot of business processing progress.
+func (c *Consumer) Status() Status {
+	if c == nil {
+		return Status{}
+	}
+	return c.progress.status(time.Now(), c.cfg.StallThreshold)
 }
 
 func (c *Consumer) loop(ctx context.Context, session natsConsumerSession) {

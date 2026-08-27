@@ -67,6 +67,7 @@ ln -s "${ROOT}/scripts/lib/caddy-managed.sh" "${FIXTURE_ROOT}/scripts/lib/caddy-
 ln -s "${ROOT}/scripts/lib/loopback-listeners.sh" "${FIXTURE_ROOT}/scripts/lib/loopback-listeners.sh"
 ln -s "${ROOT}/scripts/moox-storage-auth-check.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-check.sh"
 ln -s "${ROOT}/scripts/moox-storage-auth-rotate.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-rotate.sh"
+ln -s "${ROOT}/scripts/moox-log-rotate.sh" "${FIXTURE_ROOT}/scripts/moox-log-rotate.sh"
 ln -s "${ROOT}/scripts/install-caddy-ca.sh" "${FIXTURE_ROOT}/scripts/install-caddy-ca.sh"
 ln -s "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${FIXTURE_ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt"
 ln -s "${ROOT}/deploy/caddy" "${FIXTURE_ROOT}/deploy/caddy"

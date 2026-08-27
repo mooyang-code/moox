@@ -114,7 +114,7 @@ test("Runner detail renders StrategyResult and quantity FULL targets", async ({ 
   await expect(page.getByRole("button", { name: "停用" })).toBeVisible();
 });
 
-test("paused Logical Account exposes pending FULL target and per-account flatten result", async ({ page }) => {
+test("组合账户暂停时展示待执行目标和逐账户清仓结果", async ({ page }) => {
   await installShell(page);
   const logicalAccount = {
     logical_account_id: "logical-paper",
@@ -181,7 +181,7 @@ test("paused Logical Account exposes pending FULL target and per-account flatten
     })
   );
   await page.goto("/#/trading/accounts?view=strategy&logical_account_id=logical-paper");
-  await expect(page.getByRole("tab", { name: "策略账户", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "组合账户", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("当前完整目标序号 8 已保存但不会执行；恢复后会继续收敛。")).toBeVisible();
   await page.getByRole("button", { name: "逐账户清仓" }).click();
   const modal = page.locator(".arco-modal:visible").filter({ hasText: "逐账户清仓" });

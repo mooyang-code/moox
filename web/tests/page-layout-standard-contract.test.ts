@@ -16,7 +16,13 @@ const readStyle = (relativePath: string) => fs.readFileSync(path.resolve(__dirna
 
 const expectMargin = (source: string, selector: string, property: "margin-top" | "margin-bottom", value: number) => {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const token = { 5: "--moox-space-toolbar-table", 8: "--moox-space-2", 12: "--moox-space-3", 20: "--moox-space-5" }[value];
+  const token = {
+    5: "--moox-space-toolbar-table",
+    8: "--moox-space-2",
+    12: "--moox-space-3",
+    16: "--moox-space-4",
+    20: "--moox-space-5"
+  }[value];
   const expected = token ? `(?:${value}px|var\\(${token}\\))` : `${value}px`;
   expect(source).toMatch(new RegExp(`${escaped}\\s*\\{[\\s\\S]*?${property}:\\s*${expected};`));
 };
@@ -49,7 +55,7 @@ describe("page layout standards", () => {
     expectMargin(subjects, ".page-head", "margin-bottom", 8);
     expectMargin(spaces, ".page-head", "margin-bottom", 8);
     expect(spaces).toMatch(/\.page-head h2\s*\{[\s\S]*?margin:\s*0;/);
-    expectMargin(accounts, ".page-head", "margin-bottom", 8);
+    expectMargin(accounts, ".page-head", "margin-bottom", 16);
     expect(accounts).toContain("创建账户");
     expect(accounts).toContain('title="操作"');
     expect(accounts).toContain('title="最近同步"');
@@ -58,10 +64,10 @@ describe("page layout standards", () => {
     expect(accounts).not.toContain("Readiness");
     expect(accounts).not.toContain("创建 Paper 模拟");
     expect(accounts).not.toContain("创建 Live 账户");
-    expect(accounts).not.toContain("<h2>交易账户</h2>");
+    expect(accounts).not.toContain("<h2>执行账户</h2>");
     expect(accounts).not.toContain("PageTitleTabs");
-    expect(accountWorkbench).toContain('label: "交易账户"');
-    expect(accountWorkbench).toContain('label: "策略账户"');
+    expect(accountWorkbench).toContain('label: "执行账户"');
+    expect(accountWorkbench).toContain('label: "组合账户"');
     expect(accountWorkbench).toContain('class="trading-account-content"');
     expect(accountWorkbench).toContain(':embedded="true"');
     expect(staticMenuSource.match(/\/trading\/accounts/g)?.length).toBe(2);
@@ -196,7 +202,7 @@ describe("page layout standards", () => {
 
     expect(positions).toContain("<h2>持仓</h2>");
     expect(positions).not.toContain('<a-button @click="loadPositions">');
-    expectMargin(positions, ".filter-bar", "margin-bottom", 12);
+    expectMargin(positions, ".position-filter-bar", "margin-bottom", 12);
 
     for (const source of [viewDefinitions, datasetDefinitions, datasetBrowse, viewBrowse]) {
       expectMargin(source, ".page-head", "margin-bottom", 8);

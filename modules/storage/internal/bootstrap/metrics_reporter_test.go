@@ -18,6 +18,9 @@ func TestMetricsReporterSpecUsesDistinctStorageRoleIdentity(t *testing.T) {
 	require.Equal(t, "trpc.moox.storage.view.metrics.timer", view.TimerService)
 	require.NotEqual(t, primary.ServiceName, view.ServiceName)
 
-	_, err = MetricsReporterSpecForRole("node")
-	require.Error(t, err)
+	node, err := MetricsReporterSpecForRole("node")
+	require.NoError(t, err)
+	require.Equal(t, "storage-node", node.ServiceName)
+	require.Equal(t, "trpc.moox.storage.node.metrics.timer", node.TimerService)
+	require.NotEqual(t, view.ServiceName, node.ServiceName)
 }

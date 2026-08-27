@@ -70,6 +70,49 @@ type StoragePlacementResult struct {
 	Deployments int `json:"deployments"`
 }
 
+// ApplyTradeConsolePlacement records the browser-facing TradeConsole endpoint
+// on the control node. Trade may run on a dedicated execution node, while the
+// Admin browser gateway still resolves the canonical trade_console row from
+// its own node. Keeping this placement explicit prevents a control deploy from
+// silently restoring the loopback seed (127.0.0.1:11200).
+func (c *Client) ApplyTradeConsolePlacement(ctx context.Context, host string) error {
+	host = strings.TrimSpace(host)
+	if c == nil || c.forwarder == nil || host == "" {
+		return fmt.Errorf("trade_placement_invalid")
+	}
+	if ip := net.ParseIP(host); ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return fmt.Errorf("trade_placement_invalid")
+	}
+	getResponse := &pb.GetServiceDeploymentRsp{}
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+		&pb.GetServiceDeploymentReq{NodeId: "control", ServiceName: "trade_console"}, getResponse); err != nil {
+		return fmt.Errorf("trade_placement_failed")
+	}
+	var deployment *pb.ServiceDeployment
+	if getResponse.GetRetInfo().GetCode() == pb.ErrorCode_NOT_FOUND {
+		deployment = &pb.ServiceDeployment{}
+	} else {
+		if err := checkRetInfo(getResponse.GetRetInfo()); err != nil || getResponse.GetDeployment() == nil {
+			return fmt.Errorf("trade_placement_failed")
+		}
+		deployment = proto.Clone(getResponse.GetDeployment()).(*pb.ServiceDeployment)
+	}
+	deployment.NodeId = "control"
+	deployment.ServiceName = "trade_console"
+	deployment.ServiceKind = "trade"
+	deployment.Protocol = "http"
+	deployment.Host = host
+	deployment.Port = 11200
+	deployment.GatewayPath = "trpc.moox.trade.TradeConsoleService"
+	deployment.Scope = "internal"
+	deployment.Status = "active"
+	deployment.GatewayEnabled = false
+	if err := c.upsertDeployment(ctx, deployment); err != nil {
+		return fmt.Errorf("trade_placement_failed")
+	}
+	return nil
+}
+
 func New(forwarder Forwarder) *Client {
 	return &Client{forwarder: forwarder, timeout: 30 * time.Second}
 }

@@ -34,6 +34,16 @@ const account = {
   updated_at: "1700000000000",
   paper: { initial_balance: "100000", maker_fee_rate: "0", taker_fee_rate: "0", slippage_bps: "0" }
 };
+const secondaryAccount = {
+  ...account,
+  trading_account_id: "ta-demo-2",
+  name: "实盘主账户",
+  execution_mode: 2,
+  ready: false,
+  last_error: "等待首次同步",
+  paper: undefined,
+  live: { environment: 2, credential_secret_id: "live-secret" }
+};
 
 const logicalAccount = {
   logical_account_id: "la-demo-1",
@@ -61,7 +71,9 @@ async function mockTradeGateway(route: Route) {
       });
     case "ListTradingAccounts":
       tradingAccountListRequests.push((route.request().postDataJSON?.() || {}) as Record<string, unknown>);
-      return route.fulfill({ json: ok({ accounts: [account], page_result: { page: 1, size: 200, total: 1 } }) });
+      return route.fulfill({
+        json: ok({ accounts: [account, secondaryAccount], page_result: { page: 1, size: 200, total: 2 } })
+      });
     case "ListLogicalAccounts":
       logicalAccountListRequests.push((route.request().postDataJSON?.() || {}) as Record<string, unknown>);
       return route.fulfill({ json: ok({ logical_accounts: [logicalAccount], page_result: { page: 1, size: 20, total: 1 } }) });
@@ -84,25 +96,54 @@ async function mockTradeGateway(route: Route) {
           }
         })
       });
-    case "ListHoldings":
-      return route.fulfill({
-        json: ok({
-          holdings: [
-            {
-              ...account,
-              asset: "BTC",
-              instrument_id: "BTC-USDT-SPOT",
-              exchange_symbol: "BTCUSDT",
-              quantity: "0.1",
-              average_cost: "65000",
-              mark_price: "66000",
-              market_value: "6600",
-              unrealized_pnl: "100",
-              source_time: "1700000000000"
-            }
-          ]
-        })
-      });
+    case "ListHoldings": {
+      const requestedAccountId = (route.request().postDataJSON?.() as { trading_account_id?: string } | undefined)
+        ?.trading_account_id;
+      const holdingsForAccount =
+        requestedAccountId === secondaryAccount.trading_account_id
+          ? [
+              {
+                ...account,
+                trading_account_id: secondaryAccount.trading_account_id,
+                asset: "SOL",
+                instrument_id: "SOL-USDT-SPOT",
+                exchange_symbol: "SOLUSDT",
+                quantity: "12",
+                average_cost: "140",
+                mark_price: "150",
+                market_value: "1800",
+                unrealized_pnl: "120",
+                source_time: "1700000000000"
+              }
+            ]
+          : [
+              {
+                ...account,
+                asset: "BTC",
+                instrument_id: "BTC-USDT-SPOT",
+                exchange_symbol: "BTCUSDT",
+                quantity: "0.1",
+                average_cost: "65000",
+                mark_price: "66000",
+                market_value: "6600",
+                unrealized_pnl: "100",
+                source_time: "1700000000000"
+              },
+              {
+                ...account,
+                asset: "ETH",
+                instrument_id: "ETH-USDT-SPOT",
+                exchange_symbol: "ETHUSDT",
+                quantity: "1.2",
+                average_cost: "2900",
+                mark_price: "3000",
+                market_value: "3600",
+                unrealized_pnl: "120",
+                source_time: "1700000000000"
+              }
+            ];
+      return route.fulfill({ json: ok({ holdings: holdingsForAccount }) });
+    }
     case "ListPositions":
       return route.fulfill({ json: ok({ positions: [] }) });
     case "ListOrders":
@@ -164,38 +205,37 @@ test.beforeEach(async ({ page }) => {
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, mockTradeGateway);
 });
 
-test("工作台页签只加载当前视图并保留策略账户深链", async ({ page }) => {
+test("工作台页签只加载当前视图并保留组合账户深链", async ({ page }) => {
   await page.goto("/#/trading/accounts");
-  await expect(page.getByRole("tab", { name: "交易账户", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "执行账户", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect.poll(() => tradingAccountListRequests.length).toBe(1);
   expect(logicalAccountListRequests).toHaveLength(0);
 
-  await page.getByRole("tab", { name: "策略账户", exact: true }).click();
+  await page.getByRole("tab", { name: "组合账户", exact: true }).click();
   await expect(page).toHaveURL(/trading\/accounts\?view=strategy/);
   await expect.poll(() => logicalAccountListRequests.length).toBe(1);
-  await expect(page.getByText("趋势组合", { exact: true })).toBeVisible();
+  await expect(page.getByRole("table").getByText("趋势组合", { exact: true })).toBeVisible();
   const logicalRequestCount = logicalAccountListRequests.length;
 
-  await page.getByRole("tab", { name: "交易账户", exact: true }).click();
+  await page.getByRole("tab", { name: "执行账户", exact: true }).click();
   await expect(page).toHaveURL(/trading\/accounts$/);
   await expect.poll(() => tradingAccountListRequests.length).toBe(2);
   expect(logicalAccountListRequests.length).toBe(logicalRequestCount);
 });
 
-test("策略账户工作台使用中文高密度表格", async ({ page }) => {
+test("组合账户工作台使用中文高密度表格", async ({ page }) => {
   await page.goto("/#/trading/accounts?view=strategy");
-  await expect(page.getByRole("tab", { name: "策略账户", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "组合账户", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("运行中", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("趋势组合", { exact: true })).toBeVisible();
   await expect(page.getByRole("table").getByText("模拟", { exact: true })).toBeVisible();
   await expect(page.getByRole("table").getByText("就绪", { exact: true })).toBeVisible();
 });
 
-test("旧策略账户地址重定向到统一工作台并打开详情", async ({ page }) => {
+test("旧组合账户地址重定向到统一工作台并打开详情", async ({ page }) => {
   await page.goto("/#/trading/logical-accounts?logical_account_id=la-demo-1");
   await expect(page).toHaveURL(/trading\/accounts\?(?=.*view=strategy)(?=.*logical_account_id=la-demo-1)/);
-  await expect(page.getByRole("tab", { name: "策略账户", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText("趋势组合", { exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "组合账户", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "趋势组合", exact: true })).toBeVisible();
 });
 
@@ -205,7 +245,30 @@ test("持仓显示账户摘要和中文现货字段", async ({ page }) => {
   await expect(page.getByText("权益", { exact: true })).toBeVisible();
   await expect(page.getByText("可用资金", { exact: true })).toBeVisible();
   await expect(page.getByText("BTC-USDT-SPOT", { exact: true })).toBeVisible();
+  await expect(page.getByText("ETH-USDT-SPOT", { exact: true })).toBeVisible();
   await expect(page.getByText("未实现盈亏", { exact: true }).first()).toBeVisible();
+});
+
+test("持仓切换账户后自动刷新并支持现货标的筛选", async ({ page }) => {
+  let holdingsRequests = 0;
+  page.on("request", request => {
+    if (request.url().includes("/ListHoldings")) holdingsRequests += 1;
+  });
+  await page.goto("/#/trading/positions?trading_account_id=ta-demo-1");
+  await expect(page.getByText("ETH-USDT-SPOT", { exact: true })).toBeVisible();
+  await expect.poll(() => holdingsRequests).toBe(1);
+
+  await page.locator(".account-context-row .arco-select-view").click();
+  await page.getByText("实盘主账户 · 现货", { exact: true }).click();
+  await expect(page).toHaveURL(/trading\/positions\?trading_account_id=ta-demo-2/);
+  await expect(page.getByText("SOL-USDT-SPOT", { exact: true })).toBeVisible();
+  await expect(page.getByText("ETH-USDT-SPOT", { exact: true })).toHaveCount(0);
+  await expect.poll(() => holdingsRequests).toBe(2);
+
+  await page.getByPlaceholder("交易标的").fill("btc");
+  await page.getByRole("button", { name: "查询" }).click();
+  await expect(page.getByText("暂无持仓数据", { exact: true })).toBeVisible();
+  await expect.poll(() => holdingsRequests).toBe(3);
 });
 
 test("订单页支持中文订单和成交视图", async ({ page }) => {

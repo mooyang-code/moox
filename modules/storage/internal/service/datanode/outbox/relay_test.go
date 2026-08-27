@@ -57,9 +57,10 @@ type retryDuplicatePublisher struct {
 }
 
 type reconnectPublisher struct {
-	values      [][]byte
-	unavailable bool
-	reconnects  int
+	values       [][]byte
+	unavailable  bool
+	reconnects   int
+	reconnectErr error
 }
 
 func (p *reconnectPublisher) PublishMessage(_ context.Context, data []byte) error {
@@ -72,9 +73,14 @@ func (p *reconnectPublisher) PublishMessage(_ context.Context, data []byte) erro
 
 func (p *reconnectPublisher) Reconnect(context.Context) error {
 	p.reconnects++
+	if p.reconnectErr != nil {
+		return p.reconnectErr
+	}
 	p.unavailable = false
 	return nil
 }
+
+func (p *reconnectPublisher) Ready() bool { return !p.unavailable }
 
 func (p *retryDuplicatePublisher) PublishMessageWithAck(ctx context.Context, data []byte) (*jetstream.PublishAck, error) {
 	if err := p.PublishMessage(ctx, data); err != nil {
@@ -116,6 +122,10 @@ func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 	}
 	if got := metrics.Snapshot().OutboxPublishErrorsTotal; got != 1 {
 		t.Fatalf("publish errors = %d, want 1", got)
+	}
+	failedSnapshot := metrics.Snapshot()
+	if !failedSnapshot.OutboxObserved || failedSnapshot.OutboxPendingEntries != 1 {
+		t.Fatalf("outbox state after publish failure = %+v, want one observable pending entry", failedSnapshot)
 	}
 	entries, err := store.ListOutbox(context.Background(), 0, 10)
 	if err != nil || len(entries) != 1 || entries[0].ID != 2 {
@@ -187,7 +197,11 @@ func TestRelayReconnectsPublisherAfterRepeatedFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	publisher := &reconnectPublisher{unavailable: true}
-	relay, err := NewRelay(store, publisher, RelayOptions{ReconnectAfterFailures: 3, ReconnectCooldown: time.Nanosecond})
+	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := NewRelay(store, publisher, RelayOptions{ReconnectAfterFailures: 3, ReconnectCooldown: time.Nanosecond, Metrics: metrics})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,12 +213,52 @@ func TestRelayReconnectsPublisherAfterRepeatedFailures(t *testing.T) {
 	if publisher.reconnects != 1 {
 		t.Fatalf("reconnects=%d, want 1", publisher.reconnects)
 	}
+	afterReconnect := metrics.Snapshot()
+	if !afterReconnect.OutboxPublisherReady || afterReconnect.OutboxReconnectSuccesses != 1 || afterReconnect.OutboxReconnectStatus != "success" {
+		t.Fatalf("publisher state after reconnect = %+v", afterReconnect)
+	}
 	if err := relay.flush(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if metrics.Snapshot().OutboxLastPublishSuccess.IsZero() {
+		t.Fatal("successful publish timestamp was not recorded")
 	}
 	entries, err := store.ListOutbox(context.Background(), 0, 10)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("outbox after reconnect=%v err=%v", entries, err)
+	}
+}
+
+func TestRelayKeepsPublisherUnreadyWhenReconnectVerificationFails(t *testing.T) {
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
+	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher := &reconnectPublisher{unavailable: true, reconnectErr: errors.New("replacement unavailable")}
+	relay, err := NewRelay(store, publisher, RelayOptions{ReconnectAfterFailures: 1, ReconnectCooldown: time.Nanosecond, Metrics: metrics})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := relay.flush(context.Background()); err == nil {
+		t.Fatal("expected publish failure")
+	}
+	snapshot := metrics.Snapshot()
+	if snapshot.OutboxPublisherReady || snapshot.OutboxReconnectFailures != 1 || snapshot.OutboxReconnectStatus != "failed" {
+		t.Fatalf("publisher state after failed reconnect = %+v", snapshot)
+	}
+	if !snapshot.OutboxObserved || snapshot.OutboxPendingEntries != 1 {
+		t.Fatalf("outbox state after first-entry failure = %+v, want one observable pending entry", snapshot)
 	}
 }
 

@@ -19,6 +19,12 @@ func TestOutputManifestDeleteBefore(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
+	missing, err := db.OutputManifests().Get(ctx, OutputManifestKey{
+		BindingID: "missing", SubjectID: "BTC-USDT", Frequency: "1m", PeriodTime: time.Now().UTC(),
+	})
+	if err != nil || missing != nil {
+		t.Fatalf("missing manifest = %v, err=%v", missing, err)
+	}
 	if err := db.db.Exec(`
 		INSERT INTO t_factor_defs (
 			c_factor_id, c_name, c_source_code, c_source_hash,

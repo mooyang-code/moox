@@ -156,6 +156,15 @@ Admin、Gateway、Web、EventBus、CloudNode 和 Collector。
 `e2e-eventbus` 从本机经公网 TLS 连接 EventBus，验证 CloudNode worker 只能绑定、
 拉取和确认既有作业消费者，不能创建消费者或发布作业事件。
 
+当 `[dns_resolver]` 启用且 `trade_node` 指向 `other_hosts` 中的交易节点时，
+`deploy-control` 会在 Admin 的控制节点记录该节点的
+`trpc.moox.trade.TradeConsoleService`（`11200`）地址。这样浏览器访问交易页面时
+不会使用单机默认的 `127.0.0.1:11200`。交易节点随后用 `setup deploy-service`
+发布 Trade；两次操作都可重复执行，重新部署控制面也会重新写入该路由。
+远端 Trade 的控制台监听会由 `setup deploy-service` 绑定到 `0.0.0.0:11200`，以兼容
+云主机公网地址与内网网卡不一致的情况；生产环境应在云防火墙中仅允许
+`control_host` 访问 TCP `11200`，不要对公网开放。
+
 `setup validate` performs the full Tencent Cloud STS identity check. The
 `deploy-control` and `deploy-storage` commands only repeat immutable-config
 and SSH host validation; copying and starting MooX binaries does not require a

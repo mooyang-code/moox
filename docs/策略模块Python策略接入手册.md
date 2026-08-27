@@ -158,8 +158,8 @@ def run(context, data, params):
 - `rebalance` 配合空 `targets` 表示全部目标归零。
 - SPOT 不允许负目标；SWAP 的正负号表示方向。
 
-Strategy 不选择物理账户或交易所原生 symbol。Trade 将一个逻辑总目标动态分配到
-LogicalAccount 的同质成员账户。
+Strategy 不选择执行账户或交易所原生 symbol。Trade 将一个组合总目标动态分配到
+LogicalAccount（组合账户）的同质执行账户。
 
 ### `debug_info`
 
@@ -187,11 +187,11 @@ Go 使用常驻 Python worker：
 - Runner 的 `last_result_id`、`last_success_at` 和当前理论目标。
 - 执行型 rebalance 对应的一条 outbox 消息。
 
-## FULL 与逻辑账户
+## FULL 与组合账户
 
 执行型 StrategyRunner 关联一个 `logical_account_id`。启用前，Strategy 与 Trade 会校验
 Runner ID 和 LogicalAccount owner 双向一致。一个 LogicalAccount 最多由一个 Runner
-控制，但它可以包含多个不同交易所的同质物理账户。
+控制，但它可以包含多个不同交易所的同质执行账户。
 
 Trade 接收：
 
@@ -204,7 +204,7 @@ LogicalAccountTargetRequested
   targets[] InstrumentTarget(instrument_id, quantity)
 ```
 
-LogicalAccount PAUSED 时，新结果仍保存为当前目标，但不会自动下单。人工 Resume 后会
+组合账户 PAUSED 时，新结果仍保存为当前目标，但不会自动下单。人工 Resume 后会
 向最新目标收敛；人工逐账户清仓不删除目标，因此 Resume 可能重新开仓。
 
 ## 本地校验

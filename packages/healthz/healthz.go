@@ -24,6 +24,7 @@ type Response struct {
 	Status                  string         `json:"status"`
 	Version                 string         `json:"version,omitempty"`
 	GitCommit               string         `json:"git_commit,omitempty"`
+	BinarySHA256            string         `json:"binary_sha256,omitempty"`
 	BootID                  string         `json:"boot_id,omitempty"`
 	BuildTime               string         `json:"build_time,omitempty"`
 	ConfigHash              string         `json:"config_hash,omitempty"`
@@ -42,6 +43,7 @@ type State struct {
 	InstanceID              string
 	Version                 string
 	GitCommit               string
+	BinarySHA256            string
 	BootID                  string
 	BuildTime               string
 	ConfigHash              string
@@ -54,8 +56,9 @@ type State struct {
 // NewState creates a shared health state.
 func NewState(module, instance, version, commit string) *State {
 	return &State{
-		Module: module, InstanceID: instance, Version: version, GitCommit: commit,
-		BootID: os.Getenv("MOOX_BOOT_ID"), BuildTime: os.Getenv("MOOX_BUILD_TIME"),
+		Module: module, InstanceID: instance, Version: runtimeValue(version, "MOOX_VERSION"), GitCommit: runtimeValue(commit, "MOOX_GIT_COMMIT"),
+		BinarySHA256: os.Getenv("MOOX_BINARY_SHA256"),
+		BootID:       os.Getenv("MOOX_BOOT_ID"), BuildTime: os.Getenv("MOOX_BUILD_TIME"),
 		ConfigHash: os.Getenv("MOOX_CONFIG_HASH"), DatasetHealthPolicyHash: os.Getenv("MOOX_DATASET_HEALTH_POLICY_HASH"),
 		StartedAt: time.Now().UTC(),
 	}
@@ -109,6 +112,15 @@ func (s *State) enrich(rsp *Response) {
 	}
 	if rsp.BuildTime == "" {
 		rsp.BuildTime = s.BuildTime
+	}
+	if rsp.Version == "" {
+		rsp.Version = s.Version
+	}
+	if rsp.GitCommit == "" {
+		rsp.GitCommit = s.GitCommit
+	}
+	if rsp.BinarySHA256 == "" {
+		rsp.BinarySHA256 = s.BinarySHA256
 	}
 	if rsp.ConfigHash == "" {
 		rsp.ConfigHash = s.ConfigHash
@@ -208,8 +220,9 @@ func Base(module, instanceID, version, gitCommit string, start time.Time, ready 
 		NodeID:                  strings.TrimSpace(os.Getenv("MOOX_NODE_ID")),
 		Ready:                   ready,
 		Status:                  status,
-		Version:                 version,
-		GitCommit:               gitCommit,
+		Version:                 runtimeValue(version, "MOOX_VERSION"),
+		GitCommit:               runtimeValue(gitCommit, "MOOX_GIT_COMMIT"),
+		BinarySHA256:            strings.TrimSpace(os.Getenv("MOOX_BINARY_SHA256")),
 		BootID:                  os.Getenv("MOOX_BOOT_ID"),
 		BuildTime:               os.Getenv("MOOX_BUILD_TIME"),
 		ConfigHash:              os.Getenv("MOOX_CONFIG_HASH"),
@@ -217,6 +230,13 @@ func Base(module, instanceID, version, gitCommit string, start time.Time, ready 
 		StartTime:               start,
 		Time:                    time.Now(),
 	}
+}
+
+func runtimeValue(value, envName string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return strings.TrimSpace(os.Getenv(envName))
 }
 
 // LivenessHandler returns HTTP 200 when the process can execute the handler.

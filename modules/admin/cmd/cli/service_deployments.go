@@ -81,6 +81,8 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 	disableStorageShard := false
 	disabledServices := ""
 	onlyServices := ""
+	tradeConsoleHost := ""
+	tradeConsolePort := 11200
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
 	fs.StringVar(&seedPath, "file", seedPath, "service deployment seed YAML")
 	fs.StringVar(&nodeID, "node-id", nodeID, "override the seed node ID")
@@ -90,6 +92,8 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 	fs.BoolVar(&disableStorageShard, "disable-storage-shard", false, "disable the independent DataShard route")
 	fs.StringVar(&disabledServices, "disabled-services", "", "comma-separated services omitted from this deployment")
 	fs.StringVar(&onlyServices, "only-services", "", "comma-separated services to import; all other seed services are ignored")
+	fs.StringVar(&tradeConsoleHost, "trade-console-host", "", "TradeConsole browser endpoint host for a dedicated Trade node")
+	fs.IntVar(&tradeConsolePort, "trade-console-port", 11200, "TradeConsole browser endpoint port")
 	if err := fs.Parse(args[2:]); err != nil {
 		return err
 	}
@@ -135,6 +139,9 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 		}
 	}
 	if err := setSeedPublicHost(&seed, publicHost); err != nil {
+		return err
+	}
+	if err := setSeedTradeConsoleEndpoint(&seed, tradeConsoleHost, tradeConsolePort); err != nil {
 		return err
 	}
 	if strings.TrimSpace(onlyServices) != "" {
@@ -305,6 +312,47 @@ func setSeedPublicHost(seed *serviceDeploymentSeed, raw string) error {
 		if seed.Services[i].Scope == "public" && !seed.Services[i].GatewayEnabled {
 			seed.Services[i].Host = parsed.Hostname()
 		}
+	}
+	return nil
+}
+
+// setSeedTradeConsoleEndpoint overrides only the browser-facing TradeConsole
+// route. The Trade process may run on another node, while Admin still resolves
+// the canonical trade_console record from the control node.
+func setSeedTradeConsoleEndpoint(seed *serviceDeploymentSeed, rawHost string, port int) error {
+	if seed == nil {
+		return errors.New("service deployment seed is required")
+	}
+	host := strings.TrimSpace(rawHost)
+	if host == "" {
+		if port != 11200 {
+			return errors.New("--trade-console-port requires --trade-console-host")
+		}
+		return nil
+	}
+	if rawHost != host {
+		return errors.New("--trade-console-host must not contain surrounding whitespace")
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return errors.New("--trade-console-host must be a routable IP address")
+	}
+	if port < 1 || port > 65535 {
+		return errors.New("--trade-console-port must be between 1 and 65535")
+	}
+	found := false
+	for i := range seed.Services {
+		if seed.Services[i].Name != "trade_console" {
+			continue
+		}
+		found = true
+		seed.Services[i].Host = host
+		seed.Services[i].Port = int32(port)
+		seed.Services[i].Protocol = "http"
+		seed.Services[i].Status = "active"
+	}
+	if !found {
+		return errors.New("service deployment seed is missing trade_console")
 	}
 	return nil
 }

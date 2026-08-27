@@ -57,6 +57,13 @@ type Paths struct {
 	StorageRoot string `toml:"storage_root"`
 }
 
+// LocalLogs bounds process stdout/stderr and framework log files under each
+// deployment root. The host health timer applies this policy once per minute.
+type LocalLogs struct {
+	MaxSizeMB   int `toml:"max_size_mb" json:"max_size_mb"`
+	BackupCount int `toml:"backup_count" json:"backup_count"`
+}
+
 func (p Paths) Resolved() Paths {
 	if strings.TrimSpace(p.DeployRoot) == "" {
 		p.DeployRoot = DefaultDeployRoot
@@ -282,6 +289,7 @@ type Manifest struct {
 	Paths        Paths        `toml:"paths"`
 	DNSResolver  DNSResolver  `toml:"dns_resolver"`
 	StorageView  StorageView  `toml:"storage_view"`
+	LocalLogs    LocalLogs    `toml:"local_logs"`
 	Notification Notification `toml:"notification"`
 	Factors      FactorSetup  `toml:"factors"`
 	SCFFetcher   SCFFetcher   `toml:"scf_fetcher"`
@@ -419,6 +427,12 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("storage_view", "max_view_file_bytes") {
 		out.StorageView.MaxViewFileBytes = 1 << 30
 	}
+	if !md.IsDefined("local_logs", "max_size_mb") {
+		out.LocalLogs.MaxSizeMB = 50
+	}
+	if !md.IsDefined("local_logs", "backup_count") {
+		out.LocalLogs.BackupCount = 5
+	}
 	if !md.IsDefined("factors", "source_dir") || strings.TrimSpace(out.Factors.SourceDir) == "" {
 		out.Factors.SourceDir = "./examples/factors"
 	}
@@ -489,6 +503,12 @@ func validate(manifest *Manifest) error {
 	}
 	if err := validateStorageView(&manifest.StorageView); err != nil {
 		return err
+	}
+	if manifest.LocalLogs.MaxSizeMB < 1 || manifest.LocalLogs.MaxSizeMB > 10240 {
+		return fmt.Errorf("config_invalid: local_logs.max_size_mb must be between 1 and 10240")
+	}
+	if manifest.LocalLogs.BackupCount < 1 || manifest.LocalLogs.BackupCount > 100 {
+		return fmt.Errorf("config_invalid: local_logs.backup_count must be between 1 and 100")
 	}
 
 	names := make(map[string]struct{}, 1+len(manifest.OtherHosts))

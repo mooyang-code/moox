@@ -934,6 +934,9 @@ func runDataNodeRole() error {
 	pb.RegisterDataNodeRuntimeService(listener, svc)
 	pb.RegisterDataNodeMarkerRuntimeService(listener, svc)
 	pb.RegisterDataNodeHistoryRuntimeService(listener, svc)
+	if err := storagebootstrap.RegisterMetricsReporter(s, "node"); err != nil {
+		return err
+	}
 	if err := registerRoleHealth(s, "storage-node"); err != nil {
 		return err
 	}

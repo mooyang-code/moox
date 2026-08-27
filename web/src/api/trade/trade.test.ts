@@ -15,7 +15,7 @@ describe("Trade public API", () => {
     expect(trade.tradeServiceMap).toEqual({ console: "trade_console" });
   });
 
-  it("constructs Logical Account lifecycle requests", async () => {
+  it("constructs 组合账户生命周期请求", async () => {
     await trade.createLogicalAccount({ name: "paper", execution_mode: 1, market_type: 1, settlement_asset: "USDT" });
     await trade.pauseLogicalAccount("logical-1", "manual intervention");
     await trade.resumeLogicalAccount("logical-1");

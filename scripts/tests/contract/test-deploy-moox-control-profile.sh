@@ -27,6 +27,7 @@ mkdir -p "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" \
 cp "${ROOT}/scripts/deploy-moox.sh" "${FIXTURE_ROOT}/scripts/deploy-moox.sh"
 cp "${ROOT}/scripts/moox-storage-auth-check.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-check.sh"
 cp "${ROOT}/scripts/moox-storage-auth-rotate.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-rotate.sh"
+cp "${ROOT}/scripts/moox-log-rotate.sh" "${FIXTURE_ROOT}/scripts/moox-log-rotate.sh"
 ln -s "${ROOT}/scripts/install-caddy-ca.sh" "${FIXTURE_ROOT}/scripts/install-caddy-ca.sh"
 ln -s "${ROOT}/scripts/lib/caddy-managed.sh" "${FIXTURE_ROOT}/scripts/lib/caddy-managed.sh"
 ln -s "${ROOT}/scripts/lib/loopback-listeners.sh" "${FIXTURE_ROOT}/scripts/lib/loopback-listeners.sh"
@@ -96,6 +97,10 @@ done
 for helper in moox-storage-auth-check moox-storage-auth-rotate; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${helper}" ]] || { echo "missing storage auth helper: ${helper}" >&2; exit 1; }
 done
+[[ -x "${TMP_ROOT}/unpacked/bin/moox-log-rotate" ]]
+grep -Fxq 'MOOX_LOCAL_LOG_MAX_SIZE_MB=50' "${TMP_ROOT}/unpacked/config/log-rotation.env"
+grep -Fxq 'MOOX_LOCAL_LOG_BACKUP_COUNT=5' "${TMP_ROOT}/unpacked/config/log-rotation.env"
+grep -Fq 'moox-log-rotate' "${TMP_ROOT}/unpacked/healthcheck.sh"
 for binary in moox-storage moox-archive moox-factor; do
   [[ ! -e "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "unexpected control binary: ${binary}" >&2; exit 1; }
 done

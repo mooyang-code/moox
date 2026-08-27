@@ -146,7 +146,7 @@ func TestSetupRenderRuntimeConfigUsesOneSnapshot(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"render-runtime-config", "--file", "custom.toml", "--trade-output", tradePath, "--collector-output", collectorPath})
 	require.NoError(t, cmd.Execute())
-	require.JSONEq(t, fmt.Sprintf(`{"status":"rendered","trade_output":%q,"collector_output":%q,"dns_resolver_enabled":false,"dns_resolver_node_id":"","dns_resolver_target":"ip://127.0.0.1:11003"}`, tradePath, collectorPath), output.String())
+	require.JSONEq(t, fmt.Sprintf(`{"status":"rendered","trade_output":%q,"collector_output":%q,"dns_resolver_enabled":false,"dns_resolver_node_id":"","dns_resolver_target":"ip://127.0.0.1:11003","trade_console_host":"","trade_console_port":0}`, tradePath, collectorPath), output.String())
 	tradeRaw, err := os.ReadFile(tradePath)
 	require.NoError(t, err)
 	require.Contains(t, string(tradeRaw), "dns_resolver:")

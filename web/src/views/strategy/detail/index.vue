@@ -18,7 +18,7 @@
         <a-descriptions-item label="状态"><StatusBadge :status="store.runner.status" /></a-descriptions-item>
         <a-descriptions-item label="数据视图">{{ store.runner.view_id }}</a-descriptions-item>
         <a-descriptions-item label="频率">{{ store.runner.frequency }}</a-descriptions-item>
-        <a-descriptions-item label="Logical Account">{{ store.runner.logical_account_id || "观察模式" }}</a-descriptions-item>
+        <a-descriptions-item label="组合账户">{{ store.runner.logical_account_id || "观察模式" }}</a-descriptions-item>
         <a-descriptions-item label="命令序号">{{ store.commandSequence }}</a-descriptions-item>
         <a-descriptions-item label="最近成功">{{ formatTime(store.runner.last_success_at) }}</a-descriptions-item>
       </a-descriptions>

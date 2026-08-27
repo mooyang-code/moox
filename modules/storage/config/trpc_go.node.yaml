@@ -26,6 +26,11 @@ server:
       port: 20107
       network: tcp
       protocol: trpc
+    - name: trpc.moox.storage.node.metrics.timer
+      port: 20309
+      network: "*/30 * * * * *"
+      protocol: timer
+      timeout: 10000
 
 plugins:
   metrics:

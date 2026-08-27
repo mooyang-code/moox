@@ -135,8 +135,13 @@ describe("trading account workbench", () => {
     expect(source).toContain('<a-table-column title="错误" :width="200" ellipsis>');
     expect(source).toContain('aria-label="账户类型"');
     expect(source).toContain('<a-radio-group :model-value="activeMode" type="button" @change="onModeChange">');
+    expect(source).toContain("justify-content: space-between;");
+    expect(source).toContain("gap: 16px;");
+    expect(source).toContain('size="mini" type="text"');
+    expect(source).not.toContain("justify-content: flex-end;");
     expect(source).not.toContain("PageTitleTabs");
-    expect(source).not.toContain("<h2>交易账户</h2>");
+    expect(source).not.toContain("<h2>执行账户</h2>");
+    expect(source).toContain('<a-table-column title="执行账户" :width="220">');
     expect(source).not.toContain('title="Exchange / 市场"');
     expect(source).not.toContain("创建 Paper 模拟");
   });

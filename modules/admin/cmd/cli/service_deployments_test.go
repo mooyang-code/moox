@@ -172,6 +172,37 @@ func TestSetSeedPublicHostUpdatesOnlyPublicEndpoints(t *testing.T) {
 	require.Error(t, setSeedPublicHost(&seed, "https://203.0.113.10"))
 }
 
+func TestSetSeedTradeConsoleEndpointUpdatesBrowserRoute(t *testing.T) {
+	seed := serviceDeploymentSeed{Services: []serviceDeploymentEntry{{
+		Name: "trade_console", Protocol: "http", Host: "127.0.0.1", Port: 11200, Status: "disabled",
+	}}}
+	require.NoError(t, setSeedTradeConsoleEndpoint(&seed, "203.0.113.10", 11200))
+	require.Equal(t, "203.0.113.10", seed.Services[0].Host)
+	require.Equal(t, int32(11200), seed.Services[0].Port)
+	require.Equal(t, "active", seed.Services[0].Status)
+	require.ErrorContains(t, setSeedTradeConsoleEndpoint(&seed, "127.0.0.1", 11200), "routable")
+	require.ErrorContains(t, setSeedTradeConsoleEndpoint(&seed, "203.0.113.10", 0), "between 1 and 65535")
+}
+
+func TestRunServiceDeploymentsCommandAppliesTradeConsoleEndpoint(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "admin.db")
+	seedPath := filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml")
+	var output bytes.Buffer
+	require.NoError(t, runServiceDeploymentsCommand([]string{
+		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
+		"--public-host", "106.53.107.122", "--eventbus-nats-url", "tls://106.53.107.122:4222",
+		"--trade-console-host", "43.132.204.177", "--trade-console-port", "11200",
+	}, &output, &bytes.Buffer{}))
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err)
+	var row sysdeploy.Deployment
+	require.NoError(t, db.Where("c_node_id = ? AND c_service_name = ?", "control", "trade_console").First(&row).Error)
+	require.Equal(t, "43.132.204.177", row.Host)
+	require.Equal(t, int32(11200), row.Port)
+	require.Equal(t, "active", row.Status)
+}
+
 func TestValidateEventBusNATSURLRejectsIncompleteOrNonTLS(t *testing.T) {
 	for _, raw := range []string{"", "nats://host:4222", "tls://host", "tls://:4222", "tls://host:4222/path"} {
 		_, err := validateEventBusNATSURL(raw)

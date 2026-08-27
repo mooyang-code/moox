@@ -44,13 +44,16 @@ type PeriodStorage interface {
 }
 
 type ViewReadyRunner struct {
-	bindings      PeriodBindingSource
-	factors       PeriodFactorSource
-	taskRunner    CombinationTaskRunner
-	storage       PeriodStorage
-	factorsDir    string
-	operationGate *taskrunner.OperationGate
-	periodMetrics *observability.PeriodMetrics
+	bindings             PeriodBindingSource
+	factors              PeriodFactorSource
+	taskRunner           CombinationTaskRunner
+	storage              PeriodStorage
+	factorsDir           string
+	operationGate        *taskrunner.OperationGate
+	periodMetrics        *observability.PeriodMetrics
+	executionUnitTimeout time.Duration
+	executionParallelism int
+	batchExecution       bool
 }
 
 type Option func(*ViewReadyRunner)
@@ -67,10 +70,30 @@ func WithPeriodMetrics(metrics *observability.PeriodMetrics) Option {
 	return func(r *ViewReadyRunner) { r.periodMetrics = metrics }
 }
 
+func WithExecutionUnitTimeout(timeout time.Duration) Option {
+	return func(r *ViewReadyRunner) {
+		if timeout > 0 {
+			r.executionUnitTimeout = timeout
+		}
+	}
+}
+
+func WithExecutionParallelism(workers int) Option {
+	return func(r *ViewReadyRunner) {
+		if workers > 0 {
+			r.executionParallelism = workers
+		}
+	}
+}
+
+func WithBatchExecution(enabled bool) Option {
+	return func(r *ViewReadyRunner) { r.batchExecution = enabled }
+}
+
 func NewViewReadyRunner(bindings PeriodBindingSource, factors PeriodFactorSource, runner CombinationTaskRunner, storage PeriodStorage, factorsDir string, opts ...Option) *ViewReadyRunner {
 	r := &ViewReadyRunner{
 		bindings: bindings, factors: factors, taskRunner: runner, storage: storage,
-		factorsDir: factorsDir, operationGate: taskrunner.NewOperationGate(),
+		factorsDir: factorsDir, operationGate: taskrunner.NewOperationGate(), executionUnitTimeout: 30 * time.Second, executionParallelism: 1,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -78,6 +101,42 @@ func NewViewReadyRunner(bindings PeriodBindingSource, factors PeriodFactorSource
 		}
 	}
 	return r
+}
+
+// ExecutionBudget returns a conservative upper bound for one source period.
+// Factor batches execute each selected factor sequentially per subject, so a
+// fixed outer deadline must scale with the number of executable bindings.
+func (r *ViewReadyRunner) ExecutionBudget(ctx context.Context, spaceID string, ready *publicstoragepb.ViewSourcePeriodReady) (time.Duration, error) {
+	if r == nil || r.bindings == nil || ready == nil {
+		return 0, fmt.Errorf("factor execution budget inputs are required")
+	}
+	bindings, err := r.bindings.ListExecutable(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("list executable factor bindings for budget: %w", err)
+	}
+	selected := selectPeriodBindings(bindings, spaceID, ready)
+	unit := r.executionUnitTimeout
+	if unit <= 0 {
+		unit = 30 * time.Second
+	}
+	// Every subject-factor pair can consume one full execution unit. Account for
+	// the worker pool so a large universe cannot be cancelled by a budget that
+	// only considered the number of factor definitions.
+	subjectCount := max(1, len(sortedUnique(ready.GetPrimarySubjects())))
+	executionUnits := len(selected) * subjectCount
+	if r.batchExecution {
+		// The task runner groups every selected factor for one subject into one
+		// Python batch. The worker's legal batch timeout is one unit per factor,
+		// while batches themselves run in subject waves across the worker pool.
+		waves := (subjectCount + max(1, r.executionParallelism) - 1) / max(1, r.executionParallelism)
+		executionUnits = waves * max(1, len(selected))
+		return time.Duration(executionUnits)*unit + 2*time.Minute, nil
+	}
+	executionUnits = max(1, executionUnits)
+	parallelism := max(1, r.executionParallelism)
+	waves := (executionUnits + parallelism - 1) / parallelism
+	// Storage reads, marker writes and scheduler overhead get a fixed margin.
+	return time.Duration(waves)*unit + 2*time.Minute, nil
 }
 
 func (r *ViewReadyRunner) Execute(ctx context.Context, spaceID, triggerEventID string, ready *publicstoragepb.ViewSourcePeriodReady) error {

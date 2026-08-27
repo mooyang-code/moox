@@ -41,9 +41,12 @@ type StorageConfig struct {
 
 // EventBusConfig describes the Storage event stream subscription.
 type EventBusConfig struct {
-	URLs           []string      `yaml:"urls"`
-	FetchMaxWait   time.Duration `yaml:"fetch_max_wait"`
-	CredentialFile string        `yaml:"credential_file"`
+	URLs                 []string      `yaml:"urls"`
+	FetchMaxWait         time.Duration `yaml:"fetch_max_wait"`
+	CredentialFile       string        `yaml:"credential_file"`
+	ExecutionTimeout     time.Duration `yaml:"execution_timeout"`
+	StallThreshold       time.Duration `yaml:"stall_threshold"`
+	MaxExecutionAttempts int           `yaml:"max_execution_attempts"`
 }
 
 // EngineConfig describes the local Python factor engine.
@@ -102,8 +105,11 @@ func Default() *Config {
 			GatewayTarget: "ip://127.0.0.1:11003",
 		},
 		EventBus: EventBusConfig{
-			URLs:         []string{"nats://127.0.0.1:4222"},
-			FetchMaxWait: time.Second,
+			URLs:                 []string{"nats://127.0.0.1:4222"},
+			FetchMaxWait:         time.Second,
+			ExecutionTimeout:     15 * time.Minute,
+			StallThreshold:       5 * time.Minute,
+			MaxExecutionAttempts: 5,
 		},
 		Engine: EngineConfig{
 			PythonBin: "python3", WorkerPath: "./pyworker/worker.py", FactorsDir: "./factors",
@@ -141,6 +147,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.EventBus.FetchMaxWait == 0 {
 		c.EventBus.FetchMaxWait = time.Second
+	}
+	if c.EventBus.ExecutionTimeout <= 0 {
+		c.EventBus.ExecutionTimeout = 15 * time.Minute
+	}
+	if c.EventBus.StallThreshold <= 0 {
+		c.EventBus.StallThreshold = 5 * time.Minute
+	}
+	if c.EventBus.MaxExecutionAttempts <= 0 {
+		c.EventBus.MaxExecutionAttempts = 5
 	}
 	if c.Engine.PythonBin == "" {
 		c.Engine.PythonBin = "python3"

@@ -23,79 +23,100 @@ type ViewMetrics struct {
 	deliveryTotal   *prometheus.CounterVec
 	redeliveryTotal prometheus.Counter
 
-	consumerLagMessages          prometheus.Gauge
-	consumerBound                prometheus.Gauge
-	consumerPartitionLag         *prometheus.GaugeVec
-	consumerPartitionBound       *prometheus.GaugeVec
-	oldestPendingEventAge        prometheus.GaugeFunc
-	deliveryDuration             prometheus.Histogram
-	ackErrorsTotal               prometheus.Counter
-	inProgressErrorsTotal        prometheus.Counter
-	retryExhaustedTotal          prometheus.Counter
-	laneActive                   prometheus.Gauge
-	outboxPendingEntries         prometheus.Gauge
-	outboxOldestAge              prometheus.Gauge
-	outboxPublishErrorsTotal     prometheus.Counter
-	outboxDuplicatePublish       prometheus.Counter
-	periodWaitingDatasets        *prometheus.GaugeVec
-	viewOutputWatermark          *prometheus.GaugeVec
-	readyPublishRetry            *prometheus.CounterVec
-	restoreDuration              prometheus.Gauge
-	restoreReady                 prometheus.Gauge
-	restoreFailures              prometheus.Counter
-	rebuildAuditPending          prometheus.Gauge
-	rebuildAuditFailures         prometheus.Counter
-	rebuildAuditDropped          prometheus.Counter
-	consumerLagSnapshot          atomic.Int64
-	consumerBoundSnapshot        atomic.Bool
-	partitionMu                  sync.RWMutex
-	partitionStates              map[string]ConsumerPartitionSnapshot
-	viewWatermarkMu              sync.Mutex
-	viewWatermarks               map[string]int64
-	outboxObservedSnapshot       atomic.Bool
-	outboxDynamicAge             atomic.Bool
-	outboxOldestEventAt          atomic.Int64
-	laneActiveSnapshot           atomic.Int64
-	outboxPendingSnapshot        atomic.Int64
-	outboxOldestAgeSnapshot      atomic.Int64
-	oldestPendingAgeSnapshot     atomic.Int64
-	ackErrorsSnapshot            atomic.Int64
-	inProgressErrorsSnapshot     atomic.Int64
-	retryExhaustedSnapshot       atomic.Int64
-	outboxPublishErrorsSnapshot  atomic.Int64
-	outboxDuplicateSnapshot      atomic.Int64
-	restoreDurationSnapshot      atomic.Int64
-	restoreReadySnapshot         atomic.Bool
-	restoreFailuresSnapshot      atomic.Int64
-	rebuildAuditPendingSnapshot  atomic.Int64
-	rebuildAuditFailuresSnapshot atomic.Int64
-	rebuildAuditDroppedSnapshot  atomic.Int64
-	pendingMu                    sync.Mutex
-	pendingDeliveries            map[*jetstream.Delivery]time.Time
+	consumerLagMessages              prometheus.Gauge
+	consumerBound                    prometheus.Gauge
+	consumerPartitionLag             *prometheus.GaugeVec
+	consumerPartitionBound           *prometheus.GaugeVec
+	oldestPendingEventAge            prometheus.GaugeFunc
+	deliveryDuration                 prometheus.Histogram
+	ackErrorsTotal                   prometheus.Counter
+	inProgressErrorsTotal            prometheus.Counter
+	retryExhaustedTotal              prometheus.Counter
+	laneActive                       prometheus.Gauge
+	outboxPendingEntries             prometheus.Gauge
+	outboxOldestAge                  prometheus.Gauge
+	outboxPublishErrorsTotal         prometheus.Counter
+	outboxDuplicatePublish           prometheus.Counter
+	outboxPublisherReady             prometheus.Gauge
+	outboxPublisherUnavailableAge    prometheus.GaugeFunc
+	outboxLastPublishSuccess         prometheus.Gauge
+	outboxLastReconnect              prometheus.Gauge
+	outboxReconnectAttempts          *prometheus.CounterVec
+	periodWaitingDatasets            *prometheus.GaugeVec
+	viewOutputWatermark              *prometheus.GaugeVec
+	readyPublishRetry                *prometheus.CounterVec
+	restoreDuration                  prometheus.Gauge
+	restoreReady                     prometheus.Gauge
+	restoreFailures                  prometheus.Counter
+	rebuildAuditPending              prometheus.Gauge
+	rebuildAuditFailures             prometheus.Counter
+	rebuildAuditDropped              prometheus.Counter
+	consumerLagSnapshot              atomic.Int64
+	consumerBoundSnapshot            atomic.Bool
+	partitionMu                      sync.RWMutex
+	partitionStates                  map[string]ConsumerPartitionSnapshot
+	viewWatermarkMu                  sync.Mutex
+	viewWatermarks                   map[string]int64
+	outboxObservedSnapshot           atomic.Bool
+	outboxDynamicAge                 atomic.Bool
+	outboxOldestEventAt              atomic.Int64
+	laneActiveSnapshot               atomic.Int64
+	outboxPendingSnapshot            atomic.Int64
+	outboxOldestAgeSnapshot          atomic.Int64
+	oldestPendingAgeSnapshot         atomic.Int64
+	ackErrorsSnapshot                atomic.Int64
+	inProgressErrorsSnapshot         atomic.Int64
+	retryExhaustedSnapshot           atomic.Int64
+	outboxPublishErrorsSnapshot      atomic.Int64
+	outboxDuplicateSnapshot          atomic.Int64
+	outboxPublisherObservedSnapshot  atomic.Bool
+	outboxPublisherReadySnapshot     atomic.Bool
+	outboxPublisherUnavailableSince  atomic.Int64
+	outboxLastPublishSuccessSnapshot atomic.Int64
+	outboxLastReconnectSnapshot      atomic.Int64
+	outboxReconnectSuccessSnapshot   atomic.Int64
+	outboxReconnectFailureSnapshot   atomic.Int64
+	outboxReconnectStatusSnapshot    atomic.Int64
+	restoreDurationSnapshot          atomic.Int64
+	restoreReadySnapshot             atomic.Bool
+	restoreFailuresSnapshot          atomic.Int64
+	rebuildAuditPendingSnapshot      atomic.Int64
+	rebuildAuditFailuresSnapshot     atomic.Int64
+	rebuildAuditDroppedSnapshot      atomic.Int64
+	pendingMu                        sync.Mutex
+	pendingDeliveries                map[*jetstream.Delivery]time.Time
 }
 
 // ViewMetricsSnapshot is the aggregate runtime state exported by the view and
 // outbox instrumentation. It intentionally has no subject, symbol, or message
 // identity fields.
 type ViewMetricsSnapshot struct {
-	ConsumerLagMessages         int64
-	ConsumerBound               bool
-	LaneActive                  int64
-	OutboxPendingEntries        int64
-	OutboxObserved              bool
-	OutboxOldestAge             time.Duration
-	OldestPendingAge            time.Duration
-	AckErrorsTotal              int64
-	InProgressErrorsTotal       int64
-	RetryExhaustedTotal         int64
-	OutboxPublishErrorsTotal    int64
-	OutboxDuplicatePublishTotal int64
-	RestoreDuration             time.Duration
-	RestoreReady                bool
-	RestoreFailures             int64
-	RebuildAuditPending         int64
-	RebuildAuditFailures        int64
-	RebuildAuditDropped         int64
+	ConsumerLagMessages           int64
+	ConsumerBound                 bool
+	LaneActive                    int64
+	OutboxPendingEntries          int64
+	OutboxObserved                bool
+	OutboxOldestAge               time.Duration
+	OldestPendingAge              time.Duration
+	AckErrorsTotal                int64
+	InProgressErrorsTotal         int64
+	RetryExhaustedTotal           int64
+	OutboxPublishErrorsTotal      int64
+	OutboxDuplicatePublishTotal   int64
+	OutboxPublisherObserved       bool
+	OutboxPublisherReady          bool
+	OutboxPublisherUnavailableAge time.Duration
+	OutboxLastPublishSuccess      time.Time
+	OutboxLastReconnectAt         time.Time
+	OutboxReconnectSuccesses      int64
+	OutboxReconnectFailures       int64
+	OutboxReconnectStatus         string
+	RestoreDuration               time.Duration
+	RestoreReady                  bool
+	RestoreFailures               int64
+	RebuildAuditPending           int64
+	RebuildAuditFailures          int64
+	RebuildAuditDropped           int64
 }
 
 // ConsumerPartitionSnapshot is a low-cardinality status projection for one
@@ -190,6 +211,22 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_outbox", Name: "duplicate_publish_total",
 			Help: "Storage outbox publishes acknowledged as duplicates.",
 		}),
+		outboxPublisherReady: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_outbox", Name: "publisher_ready",
+			Help: "Whether the Storage outbox EventBus publisher is connected.",
+		}),
+		outboxLastPublishSuccess: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_outbox", Name: "last_publish_success_timestamp_seconds",
+			Help: "Unix timestamp of the latest successful Storage outbox publish.",
+		}),
+		outboxLastReconnect: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_outbox", Name: "last_reconnect_timestamp_seconds",
+			Help: "Unix timestamp of the latest Storage outbox publisher reconnect attempt.",
+		}),
+		outboxReconnectAttempts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "moox", Subsystem: "storage_outbox", Name: "reconnect_attempts_total",
+			Help: "Storage outbox publisher reconnect attempts by result.",
+		}, []string{"result"}),
 		periodWaitingDatasets: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "period_waiting_datasets",
 			Help: "Number of datasets still missing before a View source period can be published.",
@@ -234,6 +271,10 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		Namespace: "moox", Subsystem: "storage_view", Name: "oldest_pending_event_age_seconds",
 		Help: "Age of the oldest pending Storage view delivery.",
 	}, func() float64 { return metrics.currentOldestPendingAge(time.Now().UTC()).Seconds() })
+	metrics.outboxPublisherUnavailableAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: "moox", Subsystem: "storage_outbox", Name: "publisher_unavailable_age_seconds",
+		Help: "Continuous time the Storage outbox EventBus publisher has been unavailable.",
+	}, func() float64 { return metrics.currentOutboxPublisherUnavailableAge(time.Now().UTC()).Seconds() })
 	var err error
 	if metrics.deriveTotal, err = registerOrReuse(registerer, metrics.deriveTotal); err != nil {
 		return nil, err
@@ -290,6 +331,21 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		return nil, err
 	}
 	if metrics.outboxDuplicatePublish, err = registerOrReuse(registerer, metrics.outboxDuplicatePublish); err != nil {
+		return nil, err
+	}
+	if metrics.outboxPublisherReady, err = registerOrReuse(registerer, metrics.outboxPublisherReady); err != nil {
+		return nil, err
+	}
+	if metrics.outboxPublisherUnavailableAge, err = registerOrReuse(registerer, metrics.outboxPublisherUnavailableAge); err != nil {
+		return nil, err
+	}
+	if metrics.outboxLastPublishSuccess, err = registerOrReuse(registerer, metrics.outboxLastPublishSuccess); err != nil {
+		return nil, err
+	}
+	if metrics.outboxLastReconnect, err = registerOrReuse(registerer, metrics.outboxLastReconnect); err != nil {
+		return nil, err
+	}
+	if metrics.outboxReconnectAttempts, err = registerOrReuse(registerer, metrics.outboxReconnectAttempts); err != nil {
 		return nil, err
 	}
 	if metrics.periodWaitingDatasets, err = registerOrReuse(registerer, metrics.periodWaitingDatasets); err != nil {
@@ -754,6 +810,87 @@ func (m *ViewMetrics) IncOutboxDuplicatePublish() {
 	}
 }
 
+// SetOutboxPublisherReady records the current transport state. Repeated
+// unavailable observations preserve the first failure time so health checks
+// can distinguish a short reconnect from a sustained outage.
+func (m *ViewMetrics) SetOutboxPublisherReady(ready bool) {
+	if m == nil {
+		return
+	}
+	m.outboxPublisherObservedSnapshot.Store(true)
+	m.outboxPublisherReadySnapshot.Store(ready)
+	if ready {
+		m.outboxPublisherUnavailableSince.Store(0)
+		m.outboxPublisherReady.Set(1)
+		return
+	}
+	m.outboxPublisherUnavailableSince.CompareAndSwap(0, time.Now().UTC().UnixNano())
+	m.outboxPublisherReady.Set(0)
+}
+
+func (m *ViewMetrics) currentOutboxPublisherUnavailableAge(now time.Time) time.Duration {
+	if m == nil || m.outboxPublisherReadySnapshot.Load() {
+		return 0
+	}
+	nanos := m.outboxPublisherUnavailableSince.Load()
+	if nanos <= 0 {
+		return 0
+	}
+	unavailableSince := time.Unix(0, nanos)
+	if !now.After(unavailableSince) {
+		return 0
+	}
+	return now.Sub(unavailableSince)
+}
+
+func (m *ViewMetrics) ObserveOutboxPublishSuccess() {
+	if m == nil {
+		return
+	}
+	now := time.Now().UTC()
+	m.outboxLastPublishSuccessSnapshot.Store(now.UnixNano())
+	m.outboxLastPublishSuccess.Set(float64(now.Unix()))
+	m.SetOutboxPublisherReady(true)
+}
+
+func (m *ViewMetrics) ObserveOutboxReconnect(success bool) {
+	if m == nil {
+		return
+	}
+	now := time.Now().UTC()
+	m.outboxLastReconnectSnapshot.Store(now.UnixNano())
+	m.outboxLastReconnect.Set(float64(now.Unix()))
+	if success {
+		m.outboxReconnectAttempts.WithLabelValues("success").Inc()
+		m.outboxReconnectSuccessSnapshot.Add(1)
+		m.outboxReconnectStatusSnapshot.Store(1)
+		m.SetOutboxPublisherReady(true)
+		return
+	}
+	m.outboxReconnectAttempts.WithLabelValues("failed").Inc()
+	m.outboxReconnectFailureSnapshot.Add(1)
+	m.outboxReconnectStatusSnapshot.Store(-1)
+	m.SetOutboxPublisherReady(false)
+}
+
+func atomicTime(value int64) time.Time {
+	if value <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, value).UTC()
+}
+
+func outboxReconnectStatus(value int64) string {
+	switch value {
+	case 1:
+		return "success"
+	case -1:
+		return "failed"
+	default:
+		return "not_attempted"
+	}
+}
+
 func (m *ViewMetrics) Snapshot() ViewMetricsSnapshot {
 	if m == nil {
 		return ViewMetricsSnapshot{}
@@ -764,24 +901,32 @@ func (m *ViewMetrics) Snapshot() ViewMetricsSnapshot {
 	m.outboxOldestAge.Set(oldestOutboxAge.Seconds())
 	m.outboxOldestAgeSnapshot.Store(oldestOutboxAge.Nanoseconds())
 	return ViewMetricsSnapshot{
-		ConsumerLagMessages:         m.consumerLagSnapshot.Load(),
-		ConsumerBound:               m.consumerBoundSnapshot.Load(),
-		LaneActive:                  m.laneActiveSnapshot.Load(),
-		OutboxPendingEntries:        m.outboxPendingSnapshot.Load(),
-		OutboxObserved:              m.outboxObservedSnapshot.Load(),
-		OutboxOldestAge:             oldestOutboxAge,
-		OldestPendingAge:            oldestPendingAge,
-		AckErrorsTotal:              m.ackErrorsSnapshot.Load(),
-		InProgressErrorsTotal:       m.inProgressErrorsSnapshot.Load(),
-		RetryExhaustedTotal:         m.retryExhaustedSnapshot.Load(),
-		OutboxPublishErrorsTotal:    m.outboxPublishErrorsSnapshot.Load(),
-		OutboxDuplicatePublishTotal: m.outboxDuplicateSnapshot.Load(),
-		RestoreDuration:             time.Duration(m.restoreDurationSnapshot.Load()),
-		RestoreReady:                m.restoreReadySnapshot.Load(),
-		RestoreFailures:             m.restoreFailuresSnapshot.Load(),
-		RebuildAuditPending:         m.rebuildAuditPendingSnapshot.Load(),
-		RebuildAuditFailures:        m.rebuildAuditFailuresSnapshot.Load(),
-		RebuildAuditDropped:         m.rebuildAuditDroppedSnapshot.Load(),
+		ConsumerLagMessages:           m.consumerLagSnapshot.Load(),
+		ConsumerBound:                 m.consumerBoundSnapshot.Load(),
+		LaneActive:                    m.laneActiveSnapshot.Load(),
+		OutboxPendingEntries:          m.outboxPendingSnapshot.Load(),
+		OutboxObserved:                m.outboxObservedSnapshot.Load(),
+		OutboxOldestAge:               oldestOutboxAge,
+		OldestPendingAge:              oldestPendingAge,
+		AckErrorsTotal:                m.ackErrorsSnapshot.Load(),
+		InProgressErrorsTotal:         m.inProgressErrorsSnapshot.Load(),
+		RetryExhaustedTotal:           m.retryExhaustedSnapshot.Load(),
+		OutboxPublishErrorsTotal:      m.outboxPublishErrorsSnapshot.Load(),
+		OutboxDuplicatePublishTotal:   m.outboxDuplicateSnapshot.Load(),
+		OutboxPublisherObserved:       m.outboxPublisherObservedSnapshot.Load(),
+		OutboxPublisherReady:          m.outboxPublisherReadySnapshot.Load(),
+		OutboxPublisherUnavailableAge: m.currentOutboxPublisherUnavailableAge(now),
+		OutboxLastPublishSuccess:      atomicTime(m.outboxLastPublishSuccessSnapshot.Load()),
+		OutboxLastReconnectAt:         atomicTime(m.outboxLastReconnectSnapshot.Load()),
+		OutboxReconnectSuccesses:      m.outboxReconnectSuccessSnapshot.Load(),
+		OutboxReconnectFailures:       m.outboxReconnectFailureSnapshot.Load(),
+		OutboxReconnectStatus:         outboxReconnectStatus(m.outboxReconnectStatusSnapshot.Load()),
+		RestoreDuration:               time.Duration(m.restoreDurationSnapshot.Load()),
+		RestoreReady:                  m.restoreReadySnapshot.Load(),
+		RestoreFailures:               m.restoreFailuresSnapshot.Load(),
+		RebuildAuditPending:           m.rebuildAuditPendingSnapshot.Load(),
+		RebuildAuditFailures:          m.rebuildAuditFailuresSnapshot.Load(),
+		RebuildAuditDropped:           m.rebuildAuditDroppedSnapshot.Load(),
 	}
 }
 

@@ -77,7 +77,7 @@ async function mockTradeGateway(route: Route) {
         logical_accounts: [
           {
             logical_account_id: "la-paper-1",
-            name: "动量策略账户",
+            name: "动量组合",
             execution_mode: 1,
             market_type: 1,
             settlement_asset: "USDT",
@@ -144,7 +144,7 @@ test.beforeEach(async ({ page }) => {
 
 test("renders Paper and Live accounts and keeps their fields isolated", async ({ page }) => {
   await page.goto("/#/trading/accounts");
-  await expect(page.getByRole("tab", { name: "交易账户", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "执行账户", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("Paper Demo", { exact: true })).toBeVisible();
   await expect(page.getByText("Live Testnet", { exact: true })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "账户类型" })).toBeVisible();
@@ -201,14 +201,14 @@ test("surfaces sync warnings and canonical navigation without real orders", asyn
   await expect(page).toHaveURL(/trading\/orders.*trading_account_id=ta-live-1/);
 });
 
-test("交易账户详情可进入策略账户工作台", async ({ page }) => {
+test("执行账户详情可进入组合账户工作台", async ({ page }) => {
   await page.goto("/#/trading/accounts");
   await page.getByRole("button", { name: "详情" }).first().click();
-  const strategyLink = page.getByRole("button", { name: /动量策略账户/ });
+  const strategyLink = page.getByRole("button", { name: /动量组合/ });
   await expect(strategyLink).toBeVisible();
   await strategyLink.click();
   await expect(page).toHaveURL(/trading\/accounts\?view=strategy&logical_account_id=la-paper-1/);
-  await expect(page.getByRole("tab", { name: "策略账户", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "组合账户", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
 test("requires production confirmation and exposes the simulated account close capability", async ({ page }) => {

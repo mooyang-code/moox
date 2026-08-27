@@ -3,7 +3,7 @@
     <div class="moox-inner">
       <div class="page-head">
         <a-space>
-          <a-button :loading="loading" aria-label="刷新交易账户" @click="loadAccounts">
+          <a-button :loading="loading" aria-label="刷新执行账户" @click="loadAccounts">
             <template #icon><icon-refresh /></template>
             刷新
           </a-button>
@@ -22,10 +22,10 @@
       </div>
 
       <a-alert v-if="createdAccountId" type="success" show-icon class="result-alert">
-        {{ createdLogicalAccountId ? "模拟账户已创建" : "真实账户已创建" }}：交易账户编号 {{ createdAccountId }}
+        {{ createdLogicalAccountId ? "模拟账户已创建" : "真实账户已创建" }}：执行账户编号 {{ createdAccountId }}
         <template v-if="createdLogicalAccountId">
-          ；策略账户编号 {{ createdLogicalAccountId }}
-          <a-button type="text" size="small" @click="goLogicalAccount">查看策略账户</a-button>
+          ；组合账户编号 {{ createdLogicalAccountId }}
+          <a-button type="text" size="small" @click="goLogicalAccount">查看组合账户</a-button>
         </template>
         <span v-else-if="syncResult && syncResultAccountId === createdAccountId">
           ；首次同步：{{ syncResult.ready ? "就绪" : "未就绪" }}
@@ -42,7 +42,7 @@
         @page-change="changePage"
       >
         <template #columns>
-          <a-table-column title="账户" :width="220">
+          <a-table-column title="执行账户" :width="220">
             <template #cell="{ record }">
               <strong>{{ record.name }}</strong>
               <div class="muted account-id">{{ record.trading_account_id }}</div>
@@ -86,14 +86,15 @@
           <a-table-column title="操作" fixed="right" :width="240">
             <template #cell="{ record }">
               <a-space>
-                <a-button size="mini" @click="openDetail(record)">详情</a-button>
-                <a-button size="mini" :loading="syncingId === record.trading_account_id" @click="sync(record)">
+                <a-button size="mini" type="text" @click="openDetail(record)">详情</a-button>
+                <a-button size="mini" type="text" :loading="syncingId === record.trading_account_id" @click="sync(record)">
                   <template #icon><icon-sync /></template>
                   同步
                 </a-button>
                 <a-button
                   v-if="record.execution_mode === 1"
                   size="mini"
+                  type="text"
                   status="danger"
                   :disabled="
                     closingId === record.trading_account_id ||
@@ -164,7 +165,7 @@
             <a-form-item field="maker_fee_rate" label="挂单费率" required><a-input v-model="form.maker_fee_rate" /></a-form-item>
             <a-form-item field="taker_fee_rate" label="吃单费率" required><a-input v-model="form.taker_fee_rate" /></a-form-item>
             <a-form-item field="slippage_bps" label="滑点（基点）" required><a-input v-model="form.slippage_bps" /></a-form-item>
-            <a-form-item field="logical_account_name" label="策略账户名称" required>
+            <a-form-item field="logical_account_name" label="组合账户名称" required>
               <a-input v-model="form.logical_account_name" name="logical_account_name" />
             </a-form-item>
           </template>
@@ -175,7 +176,7 @@
         </a-form>
       </a-modal>
 
-      <a-drawer v-model:visible="detailVisible" title="交易账户详情" :width="760" @cancel="closeDetail">
+      <a-drawer v-model:visible="detailVisible" title="执行账户详情" :width="760" @cancel="closeDetail">
         <template v-if="selectedAccount">
           <div class="detail-head">
             <div>
@@ -230,7 +231,7 @@
             <span>{{ selectedAccount.sync_symbols.length ? selectedAccount.sync_symbols.join(", ") : "-" }}</span>
           </div>
           <div class="section">
-            <h3>关联策略账户</h3>
+            <h3>关联组合账户</h3>
             <a-button v-if="linkedLogicalAccount" type="text" @click="goLinkedLogicalAccount">
               {{ linkedLogicalAccount.name }} · {{ linkedLogicalAccount.logical_account_id }}
             </a-button>
@@ -394,7 +395,7 @@ async function loadAccounts() {
     accounts.value = response.accounts || [];
     pagination.total = response.page_result?.total || 0;
   } catch (error) {
-    if (request.isLatest()) Message.error(error instanceof Error ? error.message : "加载交易账户失败，请稍后重试");
+    if (request.isLatest()) Message.error(error instanceof Error ? error.message : "加载执行账户失败，请稍后重试");
   } finally {
     if (request.isLatest()) loading.value = false;
   }
@@ -675,9 +676,10 @@ watch(
 <style scoped>
 .page-head {
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  margin-bottom: var(--moox-space-2);
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: var(--moox-space-4);
 }
 
 .account-mode-filter {
@@ -736,11 +738,8 @@ watch(
 
 @media (max-width: 760px) {
   .page-head {
-    align-items: stretch;
-  }
-
-  .page-head :deep(.arco-space) {
-    justify-content: flex-end;
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .account-mode-filter {

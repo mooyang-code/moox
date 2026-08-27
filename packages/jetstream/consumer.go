@@ -171,9 +171,17 @@ func (c *Client) BindConsumer(ctx context.Context, cfg ConsumerConfig) (*Consume
 	if info.Config.FilterSubject != cfg.FilterSubject || !slices.Equal(info.Config.FilterSubjects, cfg.FilterSubjects) || info.Config.AckPolicy != nats.AckExplicitPolicy {
 		return nil, fmt.Errorf("%w: consumer %s/%s filter or ack policy differs", ErrConsumerConfigConflict, cfg.Stream, cfg.Durable)
 	}
+	if err := contextErr(ctx, "before consumer binding"); err != nil {
+		return nil, err
+	}
 	cfg.MaxDeliver = info.Config.MaxDeliver
 	subject := cfg.FilterSubject
-	opts := []nats.SubOpt{nats.Bind(cfg.Stream, cfg.Durable), nats.ManualAck(), nats.Context(ctx)}
+	// The caller's context bounds setup and validation only. Subscription
+	// lifetime is owned by Consumer.Close; attaching ctx here would invalidate a
+	// successfully rebound pull subscription as soon as a short setup timeout is
+	// canceled. ConsumerInfo above already validated the durable, so skip the
+	// duplicate lookup performed by nats.go's binding path.
+	opts := []nats.SubOpt{nats.Bind(cfg.Stream, cfg.Durable), nats.ManualAck(), nats.SkipConsumerLookup()}
 	if len(cfg.FilterSubjects) > 0 {
 		subject = ""
 		opts = append(opts, nats.ConsumerFilterSubjects(cfg.FilterSubjects...))

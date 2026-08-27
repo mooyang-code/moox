@@ -127,6 +127,44 @@ func TestViewMetricsAgesOutboxFromOldestEventTimestamp(t *testing.T) {
 	assert.GreaterOrEqual(t, snapshot.OutboxOldestAge, 6*time.Minute)
 }
 
+func TestViewMetricsTracksOutboxPublisherLifecycle(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewViewMetrics(registry)
+	require.NoError(t, err)
+
+	metrics.SetOutboxPublisherReady(false)
+	first := metrics.Snapshot()
+	assert.True(t, first.OutboxPublisherObserved)
+	assert.False(t, first.OutboxPublisherReady)
+	assert.GreaterOrEqual(t, first.OutboxPublisherUnavailableAge, time.Duration(0))
+
+	metrics.ObserveOutboxReconnect(false)
+	assert.Equal(t, int64(1), metrics.Snapshot().OutboxReconnectFailures)
+
+	metrics.ObserveOutboxReconnect(true)
+	metrics.ObserveOutboxPublishSuccess()
+	ready := metrics.Snapshot()
+	assert.True(t, ready.OutboxPublisherReady)
+	assert.Equal(t, "success", ready.OutboxReconnectStatus)
+	assert.Equal(t, int64(1), ready.OutboxReconnectSuccesses)
+	assert.False(t, ready.OutboxLastPublishSuccess.IsZero())
+	assert.False(t, ready.OutboxLastReconnectAt.IsZero())
+
+	expectedNames := map[string]bool{
+		"moox_storage_outbox_publisher_ready":                        true,
+		"moox_storage_outbox_publisher_unavailable_age_seconds":      true,
+		"moox_storage_outbox_last_publish_success_timestamp_seconds": true,
+		"moox_storage_outbox_last_reconnect_timestamp_seconds":       true,
+		"moox_storage_outbox_reconnect_attempts_total":               true,
+	}
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		delete(expectedNames, family.GetName())
+	}
+	assert.Empty(t, expectedNames)
+}
+
 func TestOldestPendingEventAgeGrowsOnScrapeWithoutNewEvents(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewViewMetrics(registry)

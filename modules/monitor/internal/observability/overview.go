@@ -92,8 +92,71 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, coordination...)
+	delivery, err := b.buildStorageOutboxHealth(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, delivery...)
 	sortOverview(&out)
 	return out, nil
+}
+
+const storageOutboxBacklogGrace = 2 * time.Minute
+
+// buildStorageOutboxHealth detects an interrupted Primary-to-View delivery
+// path before a Dataset output watermark has had time to become stale.
+func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
+	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+		return nil, nil
+	}
+	if b.Metrics == nil || b.Metrics.Catalog() == nil {
+		return nil, nil
+	}
+	readMax := func(metricName string) (float64, bool, error) {
+		series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", metricName, "", 100, now)
+		if err != nil {
+			return 0, false, err
+		}
+		var maximum float64
+		found := false
+		for _, item := range series {
+			if item.IsStale {
+				continue
+			}
+			latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+			if err != nil {
+				return 0, false, err
+			}
+			if !found || latest.Value > maximum {
+				maximum = latest.Value
+			}
+			found = true
+		}
+		return maximum, found, nil
+	}
+	pending, hasPending, err := readMax("moox_storage_outbox_pending_entries")
+	if err != nil {
+		return nil, err
+	}
+	ageSeconds, hasAge, err := readMax("moox_storage_outbox_oldest_age_seconds")
+	if err != nil {
+		return nil, err
+	}
+	if !hasPending && !hasAge {
+		return nil, nil
+	}
+	status, reason := "healthy", "数据变更投递正常"
+	if pending > 0 && ageSeconds > storageOutboxBacklogGrace.Seconds() {
+		status = "down"
+		minutes := max(1, int(ageSeconds)/60)
+		reason = fmt.Sprintf("数据变更投递积压 %.0f 条，最早一条已等待约 %d 分钟", pending, minutes)
+	} else if pending > 0 {
+		reason = fmt.Sprintf("正在投递 %.0f 条数据变更", pending)
+	}
+	return []BusinessStatus{{
+		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "data_delivery", Module: "storage_outbox",
+		Status: status, Reason: reason, LastCheckedAt: now,
+	}}, nil
 }
 
 func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceStatus, error) {

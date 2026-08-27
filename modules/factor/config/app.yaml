@@ -19,6 +19,11 @@ eventbus:
     - nats://127.0.0.1:4222
   credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml
   fetch_max_wait: 1s
+  # The hard deadline stays above the engine's legal multi-factor budget.
+  # Readiness degrades earlier so the local watchdog can restart a real stall.
+  execution_timeout: 15m
+  stall_threshold: 5m
+  max_execution_attempts: 5
 
 engine:
   python_bin: python3

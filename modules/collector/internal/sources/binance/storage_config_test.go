@@ -109,6 +109,17 @@ func TestEnsureStorageOK(t *testing.T) {
 	assert.NoError(t, ensureStorageOK("act", &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}))
 }
 
+func TestEnsureDatasetPeriodMarkerAcceptedTreatsConflictAsAlreadyFinalized(t *testing.T) {
+	assert.NoError(t, ensureDatasetPeriodMarkerAccepted(&storagepb.RetInfo{
+		Code: storagepb.ErrorCode_CONFLICT,
+		Msg:  "dataset marker already exists",
+	}))
+	assert.Error(t, ensureDatasetPeriodMarkerAccepted(&storagepb.RetInfo{
+		Code: storagepb.ErrorCode_INNER_ERR,
+		Msg:  "write failed",
+	}))
+}
+
 func TestStorageFieldBuilders(t *testing.T) {
 	assert.Equal(t, "name", stringField("name", "v").GetFieldId())
 	assert.Equal(t, int64(3), intField("n", 3).GetValue().GetIntValue())

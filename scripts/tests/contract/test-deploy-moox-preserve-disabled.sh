@@ -76,6 +76,7 @@ seed_disabled_component collector moox-collector moox-collector-cli
 seed_disabled_component factor moox-factor moox-factor-cli
 seed_disabled_component strategy moox-strategy moox-strategy-cli
 seed_disabled_component trade moox-trade moox-trade-cli
+seed_disabled_component hostagent moox-host-agent moox-host-agent-cli
 seed_disabled_component storage moox-storage moox-storage-cli
 printf 'keep-storage-provenance\n' >"${DEPLOY_DIR}/build-provenance.json"
 printf '#!/usr/bin/env bash\necho keep-storage-reset\n' >"${DEPLOY_DIR}/reset-storage-view-indexes.sh"
@@ -102,7 +103,8 @@ cat "${TMP_ROOT}/ca-one.crt" "${TMP_ROOT}/ca-two.crt" >"${TMP_ROOT}/peers.pem"
   --no-web-host \
   --no-cloudnode \
   --no-collector \
-  --no-factor --no-strategy --no-trade \
+	  --no-factor --no-strategy --no-trade \
+	  --no-hostagent \
   --no-monitor \
   --node-id preserve-test \
   --gateway-control-url http://127.0.0.1:11000 \
@@ -115,7 +117,8 @@ for path in \
   collector/config/keep.txt \
   factor/config/keep.txt \
   strategy/config/keep.txt \
-  trade/config/keep.txt \
+	  trade/config/keep.txt \
+	  hostagent/config/keep.txt \
   python-runtime/moox_pyruntime/keep.txt \
   storage/config/keep.txt \
   build-provenance.json \
@@ -129,7 +132,9 @@ for path in \
   bin/moox-strategy \
   bin/moox-strategy-cli \
   bin/moox-trade \
-  bin/moox-trade-cli \
+	  bin/moox-trade-cli \
+	  bin/moox-host-agent \
+	  bin/moox-host-agent-cli \
   bin/moox-storage \
   bin/moox-storage-cli
 do
@@ -203,12 +208,6 @@ for path in admin gateway bin/moox-admin bin/moox-admin-cli bin/moox-gateway bin
 done
 grep -Fxq 'keep-admin-jwt' "${DEPLOY_DIR}/secrets/admin-jwt.env"
 grep -Fxq 'keep-edge-config' "${DEPLOY_DIR}/config/caddy/edge.env"
-for path in start.sh stop.sh status.sh healthcheck.sh; do
-  cmp "${TMP_ROOT}/${path}.before" "${DEPLOY_DIR}/${path}" || {
-    echo "component-only update replaced shared lifecycle script: ${path}" >&2
-    exit 1
-  }
-done
 grep -Fxq 'MOOX_INSTALLED_WITH_FACTOR=1' "${DEPLOY_DIR}/config/components.env"
 grep -Fxq 'MOOX_INSTALLED_WITH_ADMIN=1' "${DEPLOY_DIR}/config/components.env"
 grep -Fxq 'MOOX_INSTALLED_WITH_GATEWAY=1' "${DEPLOY_DIR}/config/components.env"
@@ -219,6 +218,8 @@ for path in start.sh stop.sh status.sh healthcheck.sh; do
     exit 1
   }
 done
+grep -Fq 'MOOX_BINARY_SHA256=sha256:${binary_hash}' "${DEPLOY_DIR}/start.sh"
+grep -Fq 'factor) url=http://127.0.0.1:11414/readyz; health_path=/readyz' "${DEPLOY_DIR}/healthcheck.sh"
 for path in \
   secrets/gateway-control.key \
   secrets/gateway-service.key \

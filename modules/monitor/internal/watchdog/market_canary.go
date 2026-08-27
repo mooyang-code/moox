@@ -183,7 +183,13 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	}
 	priceReturn := math.Abs(current.Close/previous.Close - 1)
 	if priceReturn >= config.ReturnThreshold {
-		result.ErrorMessage = "threshold_exceeded"
+		result.ErrorMessage = fmt.Sprintf(
+			"相邻K线收盘价从 %s 变为 %s，波动 %.2f%%，超过 %.2f%% 阈值",
+			strconv.FormatFloat(previous.Close, 'f', -1, 64),
+			strconv.FormatFloat(current.Close, 'f', -1, 64),
+			priceReturn*100,
+			config.ReturnThreshold*100,
+		)
 		result.BodyExcerpt = marketCanaryThresholdDetails(previous, current, priceReturn, config)
 		return result
 	}

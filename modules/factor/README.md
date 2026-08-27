@@ -73,6 +73,42 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
   状态。`SetFactorStatus` 是唯一启用/禁用入口，启用时会先完成 Storage metadata
   reconciliation，失败则保持 disabled。
 
+## 因子独立性与复合因子
+
+系统中注册的每个 Factor 都必须是独立、无外部因子依赖的计算单元：
+
+- Factor 只能读取当前 binding 的 Source View 中由 `input_columns` 声明的原始字段；
+- Factor 不能引用、动态加载或等待另一个已注册 Factor，也不能读取其他 Factor 的结果
+  Dataset；
+- Factor 服务不解析因子之间的依赖关系，不提供 Factor DAG、拓扑调度、中间结果复用或
+  跨因子版本协调；
+- 同一批次中的多个 Factor 只是共享一次 Source View 读取和 Python 调用，计算、校验与
+  写回仍彼此独立，不存在执行先后关系。
+
+需要 MA、RSI 等基础算法的复合因子，应由业务在自己的 `compute(df, params)` 中展开完整
+计算逻辑。即使相同基础算法已经作为另一个 Factor 注册，也不能直接引用其源码或结果。
+系统接受由此产生的少量重复计算，以换取确定的输入快照、简单的并发模型和清晰的故障
+边界。
+
+```python
+import pandas
+
+def compute(df, params):
+    close = df["close"]
+    ma20 = close.rolling(20).mean()
+    ma60 = close.rolling(60).mean()
+    return pandas.DataFrame({
+        "data_time": df["data_time"],
+        "series_tag": df["series_tag"],
+        "trend": (ma20 - ma60) / ma60,
+    })
+```
+
+该示例应声明 `input_columns=["close"]`、`outputs=["trend"]` 和
+`lookback_periods=60`。`lookback_periods` 必须覆盖复合逻辑实际需要的完整原始历史；
+例如先计算 MA20，再对 MA20 做 60 周期滚动，至少需要 `20 + 60 - 1 = 79` 个周期。
+Factor 服务不会从 Python 源码自动推断或补足这个值。
+
 ```python
 import pandas
 

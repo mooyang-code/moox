@@ -18,6 +18,12 @@ deploy_root = "/data/moox"
 control_root = "/data/moox/prod"
 storage_root = "/data/moox/storage"
 
+# 每个本地 .log 文件达到上限后保留尾部并原地截断，避免 stdout/stderr
+# 或框架日志无限占用磁盘。健康检查每分钟执行一次滚动维护。
+[local_logs]
+max_size_mb = 50
+backup_count = 5
+
 # View 维护策略。每个时序序列超过 max_periods_per_series 即触发 A/B 重建，
 # 新 View 尝试回溯 rebuild_lookback_periods 根已完成 K 线；历史不足时使用已有数据激活，
 # 后续由实时事件继续补齐。
@@ -188,7 +194,13 @@ username = "ubuntu"
 password = ""
 
 # moox-cli renders the non-sensitive resolver fields below into Trade's
-# config/app.yaml. Trade does not read this full custom.toml directly.
+# config/app.yaml. When enabled, trade_node is also the dedicated Trade
+# execution host; deploy-control records its TradeConsole endpoint in the
+# control-plane route so the browser does not fall back to 127.0.0.1:11200.
+# setup deploy-service binds the dedicated Trade listener on all interfaces
+# because the SSH/public address may be NAT'ed; restrict TCP 11200 in the
+# cloud firewall to control_host before enabling real order operations.
+# Trade does not read this full custom.toml directly.
 [dns_resolver]
 enabled = false
 trade_node = "compute-1"

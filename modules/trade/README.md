@@ -1,6 +1,6 @@
 # moox-trade
 
-Trade 是 MooX 的交易执行与交易事实源，负责 Exchange 账户、逻辑账户、订单、成交、
+Trade 是 MooX 的交易执行与交易事实源，负责执行账户、组合账户、订单、成交、
 持仓和目标收敛。V1 面向个人量化，采用单进程、SQLite 和 JetStream，不引入分布式
 事务编排、分布式锁、通用任务引擎或多策略账户拆分。
 
@@ -8,23 +8,23 @@ Trade 是 MooX 的交易执行与交易事实源，负责 Exchange 账户、逻�
 
 ## 核心对象
 
-- `TradingAccount`：一个通过 `LiveConfig` 或 `PaperConfig` 配置的物理账户。
-- `LogicalAccount`：由一个或多个同质 `TradingAccount` 组成的逻辑总账户。
-- `LogicalAccountTarget`：逻辑账户当前唯一、可替换的完整目标，不是执行历史。
+- `TradingAccount`（执行账户）：一个通过 `LiveConfig` 或 `PaperConfig` 配置的实际交易账户。
+- `LogicalAccount`（组合账户）：由一个或多个同质 `TradingAccount` 组成的策略聚合账户。
+- `LogicalAccountTarget`：组合账户当前唯一、可替换的完整目标，不是执行历史。
 - `InstrumentTarget`：一个规范化标的及其绝对目标持仓量 `quantity`。
 - `Order`、`Fill`、`Position`：订单意图、交易所成交事实和已确认持仓。
 - `OperatorAction`：人工下单、撤单或逐账户清仓的幂等操作记录。
 
-一个物理账户最多加入一个启用的逻辑账户。一个逻辑账户最多由一个
-`StrategyRunner` 控制；一个 Runner 可以控制一个逻辑账户，而一个逻辑账户可以包含
-多个物理账户。成员必须具有相同的 paper/live 模式、SPOT/SWAP 市场和
+一个执行账户最多加入一个启用的组合账户。一个组合账户最多由一个
+`StrategyRunner` 控制；一个 Runner 可以控制一个组合账户，而一个组合账户可以包含
+多个执行账户。成员必须具有相同的 paper/live 模式、SPOT/SWAP 市场和
 `settlement_asset`，但可以来自不同交易所。
 
 ## 服务
 
 | 服务 | 默认端口 | 职责 |
 | --- | --- | --- |
-| `TradeConsoleService` | `11200` | 账户、模拟盘、逻辑账户、人工订单、查询和执行能力 |
+| `TradeConsoleService` | `11200` | 执行账户、模拟盘、组合账户、人工订单、查询和执行能力 |
 | Health | `11210` | `/healthz`、`/readyz`、`/metrics` |
 
 ### DNS Resolver
@@ -56,11 +56,11 @@ targets[] InstrumentTarget
   quantity
 ```
 
-每条命令都是逻辑账户的 FULL 快照：
+每条命令都是组合账户的 FULL 快照：
 
 - `quantity` 是带符号的绝对目标持仓量，不是下单量或增量。
 - 遗漏的旧标的目标为 `0`。
-- 空 `targets` 表示逻辑账户全部目标归零。
+- 空 `targets` 表示组合账户全部目标归零。
 - `hold` 不发布命令，保留上一次目标。
 - 只接受更高的 `command_sequence`；低序号和重复命令不改变状态。
 - PAUSED 时仍保存最新目标，但不创建订单；只有人工 Resume 才恢复收敛。
@@ -78,20 +78,20 @@ TargetExecutor 每次只提交一个子订单，等待账户事实更新后再�
 4. 加仓按成员 `priority`、可用资金和交易所限制择优。
 5. 当前账户无法承接剩余数量时再选择下一个合格成员。
 
-不同物理账户上的相反方向持仓不会用净额抵消成“已完成”。无法达到交易所最小量的
+不同执行账户上的相反方向持仓不会用净额抵消成“已完成”。无法达到交易所最小量的
 剩余目标写入 `blocked_targets`，避免无限重试。
 
 ## 人工干预
 
 `PauseLogicalAccount` 停止新的自动下单；`ResumeLogicalAccount` 使用已保存的最新 FULL
-目标恢复执行。人工下单会先暂停整个逻辑账户并撤销活动 TARGET 订单，完成后仍保持
+目标恢复执行。人工下单会先暂停整个组合账户并撤销活动 TARGET 订单，完成后仍保持
 PAUSED。
 
 `FlattenLogicalAccount` 是逐账户清仓：
 
 - 同步所有成员账户。
 - 撤销同步发现的全部活动订单。
-- 在每个持仓所在的原账户提交平仓单，不按逻辑账户净额猜测。
+- 在每个持仓所在的原执行账户提交平仓单，不按组合账户净额猜测。
 - 独立记录每个账户的剩余持仓或错误。
 - 最终保持 PAUSED，且不删除最新 Strategy 目标；以后 Resume 可能重新开仓。
 

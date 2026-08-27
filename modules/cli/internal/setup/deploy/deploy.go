@@ -52,6 +52,7 @@ type Options struct {
 	StoragePrimarySecret    string
 	StorageViewSecret       string
 	StorageViewPolicy       setupconfig.StorageView
+	LocalLogs               setupconfig.LocalLogs
 	HealthAuthVersion       string
 	HealthAuthAccessKey     string
 	HealthAuthSecretKey     string
@@ -163,6 +164,12 @@ func normalizeDeployPaths(opts *Options) error {
 		return fmt.Errorf("paths_invalid")
 	}
 	opts.DeployRoot, opts.ControlRoot, opts.StorageRoot = paths.DeployRoot, paths.ControlRoot, paths.StorageRoot
+	if opts.LocalLogs.MaxSizeMB == 0 {
+		opts.LocalLogs.MaxSizeMB = 50
+	}
+	if opts.LocalLogs.BackupCount == 0 {
+		opts.LocalLogs.BackupCount = 5
+	}
 	return nil
 }
 
@@ -537,6 +544,7 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		return "", err
 	}
 	command.Env = notificationCommandEnv(command.Env, opts.NotificationChannelType, opts.NotificationWebhookURL)
+	command.Env = localLogCommandEnv(command.Env, opts.LocalLogs)
 	if err := command.Run(); err != nil {
 		_ = os.Remove(archive)
 		return "", err
@@ -587,6 +595,13 @@ func notificationCommandEnv(base []string, channelType, webhook string) []string
 		env = append(env, entry)
 	}
 	return append(env, typeKey+"="+channelType, urlKey+"="+webhook)
+}
+
+func localLogCommandEnv(base []string, policy setupconfig.LocalLogs) []string {
+	return setCommandEnv(
+		setCommandEnv(base, "MOOX_LOCAL_LOG_MAX_SIZE_MB", strconv.Itoa(policy.MaxSizeMB)),
+		"MOOX_LOCAL_LOG_BACKUP_COUNT", strconv.Itoa(policy.BackupCount),
+	)
 }
 
 type StoragePackager struct{}
@@ -689,6 +704,7 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		_ = os.Remove(archive)
 		return "", err
 	}
+	command.Env = localLogCommandEnv(command.Env, opts.LocalLogs)
 	if strings.TrimSpace(opts.StoragePrimarySecret) == "" || strings.TrimSpace(opts.StorageViewSecret) == "" {
 		_ = os.Remove(archive)
 		return "", fmt.Errorf("storage package requires control-owned internal auth secrets")

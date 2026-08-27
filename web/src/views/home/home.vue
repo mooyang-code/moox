@@ -155,7 +155,7 @@
         <section class="dash-card trade-card">
           <div class="dash-card-head compact">
             <div>
-              <h2>交易账户摘要</h2>
+              <h2>执行账户摘要</h2>
               <p>连接、订单与持仓状态</p>
             </div>
             <span class="dash-chip ok">{{ tradeSummary.online }}/{{ tradeSummary.total }} 可用</span>
@@ -346,7 +346,7 @@ const pipeline = [
   { key: "datasets", stage: "03", label: "数据集合", color: "#059669", path: "/collector/data-management?tab=datasets" },
   { key: "factors", stage: "04", label: "因子定义", color: "#c026d3", path: "/factor/definitions" },
   { key: "views", stage: "05", label: "数据视图", color: "#ea580c", path: "/collector/data-management?tab=views" },
-  { key: "accounts", stage: "06", label: "交易账户", color: "#b45309", path: "/trading/accounts" }
+  { key: "accounts", stage: "06", label: "执行账户", color: "#b45309", path: "/trading/accounts" }
 ];
 
 const workflowLinks = [
@@ -379,7 +379,7 @@ const workflowLinks = [
     tint: "rgba(5, 150, 105, 12%)"
   },
   { title: "因子结果", description: "查看因子计算写回结果", path: "/factor/results", icon: "F", tint: "rgba(192, 38, 211, 12%)" },
-  { title: "交易账户", description: "账户余额与下单通道", path: "/trading/accounts", icon: "A", tint: "rgba(180, 83, 9, 12%)" }
+  { title: "执行账户", description: "账户余额与下单通道", path: "/trading/accounts", icon: "A", tint: "rgba(180, 83, 9, 12%)" }
 ];
 
 const setupSteps = [
@@ -406,7 +406,7 @@ const healthBreakdown = computed(() => [
   { key: "nodes", label: "云节点登记", score: 15, max: 15, tone: "ok", note: "已登记云函数节点" },
   { key: "services", label: "服务部署健康", score: 14, max: 15, tone: "ok", note: "核心服务 active" },
   { key: "assets", label: "数据资产完整度", score: 8, max: 10, tone: "ok", note: "Dataset / View 已配置" },
-  { key: "trade", label: "交易账户状态", score: 8, max: 10, tone: "ok", note: "5 / 6 账户可用" }
+  { key: "trade", label: "执行账户状态", score: 8, max: 10, tone: "ok", note: "5 / 6 账户可用" }
 ]);
 
 const healthScore = computed(() => healthBreakdown.value.reduce((sum, item) => sum + item.score, 0));
@@ -504,7 +504,7 @@ const incidentItems = [
   },
   {
     level: "P3",
-    title: "1 个交易账户同步较慢",
+    title: "1 个执行账户同步较慢",
     meta: "Binance futures 14m 未更新",
     action: "账户摘要",
     path: "/trading/accounts",

@@ -66,6 +66,40 @@ func TestViewReadyRunnerExecuteSelectedRunsOnlyRequestedFactor(t *testing.T) {
 	require.Equal(t, "bias5", marker.GetBindings()[0].GetFactorId())
 }
 
+func TestViewReadyRunnerExecutionBudgetScalesWithBindingCount(t *testing.T) {
+	bindings := make([]domain.FactorBinding, 31)
+	for i := range bindings {
+		bindings[i] = domain.FactorBinding{
+			BindingID: fmt.Sprintf("binding-%d", i), FactorID: fmt.Sprintf("factor-%d", i),
+			SpaceID: "space", SourceViewID: "source_view", Freq: "1m", Status: domain.BindingStatusEnabled,
+		}
+	}
+	runner := NewViewReadyRunner(periodBindings{rows: bindings}, nil, nil, nil, "", WithExecutionUnitTimeout(30*time.Second))
+	budget, err := runner.ExecutionBudget(context.Background(), "space", &publicstoragepb.ViewSourcePeriodReady{SourceViewId: "source_view", Frequency: "1m"})
+	require.NoError(t, err)
+	require.Equal(t, 17*time.Minute+30*time.Second, budget)
+}
+
+func TestViewReadyRunnerExecutionBudgetScalesWithSubjectsAndWorkers(t *testing.T) {
+	bindings := make([]domain.FactorBinding, 4)
+	for i := range bindings {
+		bindings[i] = domain.FactorBinding{
+			BindingID: fmt.Sprintf("binding-%d", i), FactorID: fmt.Sprintf("factor-%d", i),
+			SpaceID: "space", SourceViewID: "source_view", Freq: "1m", Status: domain.BindingStatusEnabled,
+		}
+	}
+	runner := NewViewReadyRunner(periodBindings{rows: bindings}, nil, nil, nil, "",
+		WithExecutionUnitTimeout(30*time.Second), WithExecutionParallelism(4), WithBatchExecution(true))
+	budget, err := runner.ExecutionBudget(context.Background(), "space", &publicstoragepb.ViewSourcePeriodReady{
+		SourceViewId: "source_view", Frequency: "1m",
+		PrimarySubjects: []string{"s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10"},
+	})
+	require.NoError(t, err)
+	// Batch execution runs 3 subject waves. Each four-factor batch may legally
+	// consume 4 * 30 seconds, plus the fixed margin.
+	require.Equal(t, 8*time.Minute, budget)
+}
+
 func TestViewReadyRunnerIsolatesCombinationFailure(t *testing.T) {
 	runner := &recordingCombinationRunner{fail: map[string]error{"b-20-bias20\x00ETH": errors.New("python failed")}}
 	storage := new(periodStorageFake)

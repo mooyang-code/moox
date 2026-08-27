@@ -19,6 +19,7 @@ cp "${ROOT}/scripts/deploy-moox.sh" "${FIXTURE_ROOT}/scripts/deploy-moox.sh"
 cp "${ROOT}/scripts/moox-factor-run-once.sh" "${FIXTURE_ROOT}/scripts/moox-factor-run-once.sh"
 ln -s "${ROOT}/scripts/moox-storage-auth-check.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-check.sh"
 ln -s "${ROOT}/scripts/moox-storage-auth-rotate.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-rotate.sh"
+ln -s "${ROOT}/scripts/moox-log-rotate.sh" "${FIXTURE_ROOT}/scripts/moox-log-rotate.sh"
 ln -s "${ROOT}/scripts/install-caddy-ca.sh" "${FIXTURE_ROOT}/scripts/install-caddy-ca.sh"
 ln -s "${ROOT}/scripts/lib/caddy-managed.sh" "${FIXTURE_ROOT}/scripts/lib/caddy-managed.sh"
 ln -s "${ROOT}/scripts/lib/loopback-listeners.sh" "${FIXTURE_ROOT}/scripts/lib/loopback-listeners.sh"
@@ -49,7 +50,7 @@ deploy_args=(
   --goos linux --goarch amd64 --skip-build --node-id factor-contract \
   --gateway-control-url http://127.0.0.1:11000 \
   --no-admin --no-storage --no-archive --no-eventbus --no-cloudnode \
-  --no-collector --no-strategy --no-trade --no-monitor
+  --no-collector --no-strategy --no-trade --no-monitor --no-hostagent
 )
 if PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" "${deploy_args[@]}" \
   >/dev/null 2>&1; then
@@ -109,6 +110,8 @@ grep -Fq 'MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TAR
 grep -Fq 'MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}' "${UNPACKED}/start.sh"
 grep -Fq 'FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=' "${UNPACKED}/start.sh"
 grep -Fq 'FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=${HOME}/.config/moox/eventbus/factor-eventbus.yaml")' "${UNPACKED}/start.sh"
+grep -Fq 'FACTOR_EVENTBUS_URL_ENV="tls://127.0.0.1:${MOOX_EVENTBUS_PORT:-4222}"' "${UNPACKED}/start.sh"
+grep -Fq 'MOOX_EVENTBUS_NATS_URL=${MOOX_FACTOR_EVENTBUS_URL:-${FACTOR_EVENTBUS_URL_ENV}}' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${MOOX_FACTOR_ENGINE_PYTHON_WORKERS:-32}' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS:-64}' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS:-10000}' "${UNPACKED}/start.sh"

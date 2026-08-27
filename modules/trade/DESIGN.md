@@ -7,7 +7,7 @@
 
 Trade 负责：
 
-- ExchangeAccount、LogicalAccount 和成员关系。
+- TradingAccount（执行账户）、LogicalAccount（组合账户）和成员关系。
 - 账户同步、readiness、订单、成交和持仓事实。
 - 当前 `LogicalAccountTarget` 的持久化与收敛。
 - 人工暂停、恢复、下单、撤单和逐账户清仓。
@@ -16,7 +16,7 @@ Strategy 负责不可变 Strategy、StrategyRunner、StrategyResult 和最新理
 Admin 负责 Secret；EventBus 只传输事件。Trade 不负责策略计算、多策略资金聚合、固定
 账户分配权重、跨币种净值或机构级工作流。
 
-V1 保持单进程串行协调。SQLite 事务、账户锁、逻辑账户锁、幂等 ID、交易所查询恢复和
+V1 保持单进程串行协调。SQLite 事务、账户锁、组合账户锁、幂等 ID、交易所查询恢复和
 定期同步已经覆盖个人量化所需边界，不增加分布式事务编排、分布式锁、全局
 exactly-once 或通用调度框架。
 
@@ -33,22 +33,22 @@ SQLite: account, logical account, target, operator action,
         instrument, order, fill, position, account snapshot
 ```
 
-## 逻辑账户与归属
+## 组合账户与归属
 
-`LogicalAccount` 把多个物理账户视为一个总持仓：
+`LogicalAccount`（组合账户）把多个执行账户视为一个总持仓：
 
 ```text
 Strategy 1 -> N StrategyRunner
 StrategyRunner 1 -> 0..1 LogicalAccount
-LogicalAccount 1 -> N ExchangeAccount
-ExchangeAccount 1 -> 0..1 enabled LogicalAccount
+LogicalAccount 1 -> N TradingAccount
+TradingAccount 1 -> 0..1 enabled LogicalAccount
 ```
 
-观察型 Runner 可以不关联逻辑账户。执行型 Runner 的 `logical_account_id` 必须和 Trade
+观察型 Runner 可以不关联组合账户。执行型 Runner 的 `logical_account_id` 必须和 Trade
 保存的 `owner_runner_id` 相互匹配。启用期间不允许换 owner；先停用并释放旧归属，再
 建立新关系。
 
-启用成员必须同质：
+启用成员（执行账户）必须同质：
 
 - `ExecutionMode` 相同：PAPER 或 LIVE。
 - `MarketType` 相同：SPOT 或 SWAP。
@@ -59,7 +59,7 @@ ExchangeAccount 1 -> 0..1 enabled LogicalAccount
 新增或移除成员必须在 PAUSED 状态进行。存在活动订单或非零持仓时，移除会被拒绝；
 新增有敞口账户需要明确 adoption，且不会在 adoption 时立即交易。
 
-逻辑账户的自动化状态只有 `ACTIVE` 和 `PAUSED`。readiness 由当前事实计算：
+组合账户的自动化状态只有 `ACTIVE` 和 `PAUSED`。readiness 由当前事实计算：
 
 ```text
 ready =
@@ -97,7 +97,7 @@ t_operator_actions
   request_json + status + result_json + last_error
 ```
 
-每个逻辑账户只有一行当前目标。`target_id` 是全局幂等与订单归属 ID；Strategy 发布时
+每个组合账户只有一行当前目标。`target_id` 是全局幂等与订单归属 ID；Strategy 发布时
 令其等于 `result_id`，Trade 不复制 StrategyResult。执行进度通过当前目标、持仓、活动
 订单和账户快照重算，不再保存第二份进度快照。
 
@@ -135,7 +135,7 @@ symbol。Trade 为候选账户解析原生 symbol、数量步长、合约换算�
 
 ## 动态收敛
 
-每个逻辑账户由一个串行 TargetExecutor 处理。一次最多提交一个子订单，等待 Order、
+每个组合账户由一个串行 TargetExecutor 处理。一次最多提交一个子订单，等待 Order、
 Fill、Position、同步或计时器事实后重算：
 
 1. 读取所有成员的已确认持仓与活动 TARGET 订单。
@@ -150,7 +150,7 @@ Fill、Position、同步或计时器事实后重算：
 宣告完成。
 
 TargetExecutor 只撤销同一目标拥有的 TARGET 订单。发现活动 OPERATOR 或 EXTERNAL
-订单会暂停整个逻辑账户并报告冲突，不会静默接管或撤销。
+订单会暂停整个组合账户并报告冲突，不会静默接管或撤销。
 
 ## 订单内核
 
@@ -197,9 +197,9 @@ Resume 在不存在运行中人工操作或外部冲突且启用成员 Ready 后
 
 ### 人工下单
 
-`PlaceManualOrder` 在逻辑账户锁内：
+`PlaceManualOrder` 在组合账户锁内：
 
-1. 重新确认物理账户仍属于启用的逻辑账户。
+1. 重新确认执行账户仍属于启用的组合账户。
 2. 持久化 PAUSED 和暂停原因。
 3. 尽力撤销所有成员的活动 TARGET 订单。
 4. 强制刷新账户事实。
@@ -212,7 +212,7 @@ Resume 在不存在运行中人工操作或外部冲突且启用成员 Ready 后
 `FlattenLogicalAccount`：
 
 1. 原子保存 PAUSED 和 RUNNING action。
-2. 同步所有仍属于该逻辑账户的成员，包括 disabled 成员。
+2. 同步所有仍属于该组合账户的成员，包括 disabled 成员。
 3. 尽力撤销同步发现的 TARGET、OPERATOR 和 EXTERNAL 活动订单。
 4. 确认撤单终态后，在持仓所在的原账户平仓。
 5. 循环同步，直到全部已知持仓归零、到达有界截止时间或账户报错。
@@ -231,7 +231,7 @@ Live 交易总开关默认关闭。PRODUCTION 账户的创建、启用和下单�
 `live_trading_enabled=false` 时失败。TESTNET 与 PRODUCTION 使用固定 REST/WS 端点；
 同步和恢复不依赖开放下单开关。
 
-readiness 包含 SQLite、启用时的 EventBus、运行 worker、Exchange session、逻辑账户和
+readiness 包含 SQLite、启用时的 EventBus、运行 worker、Exchange session、组合账户和
 归属配置。首次账户枚举失败按固定间隔重试；意外退出的 worker 写入 readiness 错误，
 不叠加通用 supervisor。
 

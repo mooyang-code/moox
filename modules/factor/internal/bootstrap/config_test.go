@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -97,6 +98,21 @@ func TestFactorEventBusCredentialEnvOverride(t *testing.T) {
 	cfg := Default()
 	cfg.applyEnv()
 	require.Equal(t, "/tmp/factor.yaml", cfg.EventBus.CredentialFile)
+}
+
+func TestFactorEventConsumerSafetyDefaults(t *testing.T) {
+	cfg := Default()
+	require.Equal(t, 15*time.Minute, cfg.EventBus.ExecutionTimeout)
+	require.Equal(t, 5*time.Minute, cfg.EventBus.StallThreshold)
+	require.Equal(t, 5, cfg.EventBus.MaxExecutionAttempts)
+}
+
+func TestLoadFactorEventConsumerSafetySettings(t *testing.T) {
+	cfg, err := Load(writeConfig(t, "eventbus:\n  execution_timeout: 20m\n  stall_threshold: 7m\n  max_execution_attempts: 3\n"))
+	require.NoError(t, err)
+	require.Equal(t, 20*time.Minute, cfg.EventBus.ExecutionTimeout)
+	require.Equal(t, 7*time.Minute, cfg.EventBus.StallThreshold)
+	require.Equal(t, 3, cfg.EventBus.MaxExecutionAttempts)
 }
 
 func TestLegacyWorkersEnvIsIgnored(t *testing.T) {

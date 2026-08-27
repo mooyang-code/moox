@@ -4,7 +4,7 @@
       <div class="page-head">
         <div>
           <h2>Strategy Runner</h2>
-          <span>同一策略可创建多个 Runner，每个 Runner 最多关联一个 Logical Account。</span>
+          <span>同一策略可创建多个运行实例，每个运行实例最多关联一个组合账户。</span>
         </div>
         <a-space>
           <a-button :loading="store.loading" @click="refresh"
@@ -40,7 +40,7 @@
           </a-table-column>
           <a-table-column title="数据视图" data-index="view_id" />
           <a-table-column title="频率" data-index="frequency" :width="110" />
-          <a-table-column title="Logical Account">
+          <a-table-column title="组合账户">
             <template #cell="{ record }">{{ record.logical_account_id || "观察模式" }}</template>
           </a-table-column>
           <a-table-column title="状态" :width="110">
@@ -71,7 +71,7 @@
             </a-form-item>
             <a-form-item label="数据视图 ID" required><a-input v-model="form.view_id" /></a-form-item>
             <a-form-item label="频率" required><a-input v-model="form.frequency" placeholder="1m" /></a-form-item>
-            <a-form-item label="Logical Account ID">
+            <a-form-item label="组合账户编号">
               <a-input v-model="form.logical_account_id" placeholder="留空为观察模式" />
             </a-form-item>
           </a-grid>

@@ -6,11 +6,13 @@ const workbenchPath = path.resolve(__dirname, "index.vue");
 const routePath = path.resolve(__dirname, "../../../router/route.ts");
 const read = (filePath: string) => fs.readFileSync(filePath, "utf8");
 
-describe("交易账户工作台契约", () => {
-  it("只保留交易账户和策略账户两个一级页签并按视图懒加载子页面", () => {
+describe("账户工作台契约", () => {
+  it("只保留执行账户和组合账户两个一级页签并按视图懒加载子页面", () => {
     const source = read(workbenchPath);
-    expect(source).toContain('label: "交易账户"');
-    expect(source).toContain('label: "策略账户"');
+    expect(source).toContain('label: "执行账户"');
+    expect(source).toContain('label: "组合账户"');
+    expect(source).not.toContain('label: "交易账户"');
+    expect(source).not.toContain('label: "策略账户"');
     expect(source).toContain('type WorkbenchView = "trading" | "strategy"');
     expect(source).toContain("v-if=\"activeView === 'trading'\"");
     expect(source).toContain('<LogicalAccounts v-else :embedded="true" />');
@@ -26,7 +28,7 @@ describe("交易账户工作台契约", () => {
     expect(source).toContain('router.replace({ path: "/trading/accounts", query })');
   });
 
-  it("将旧策略账户入口重定向到统一工作台", () => {
+  it("将旧组合账户入口重定向到统一工作台", () => {
     const source = read(routePath);
     expect(source).toContain('path: "/trading/accounts"');
     expect(source).toContain('path: "/trading/logical-accounts"');

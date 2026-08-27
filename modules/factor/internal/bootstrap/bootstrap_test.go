@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
@@ -35,6 +36,14 @@ func (s *metricsReporterStub) Handle(context.Context) error {
 	s.calls++
 	return nil
 }
+
+type realtimeStatusStub struct {
+	ready  bool
+	status eventconsumer.Status
+}
+
+func (s realtimeStatusStub) Ready() bool                  { return s.ready }
+func (s realtimeStatusStub) Status() eventconsumer.Status { return s.status }
 
 type startupContractValidatorStub struct {
 	err   error
@@ -208,6 +217,15 @@ func TestRealtimeConsumerReadyWhenEventBusDisabled(t *testing.T) {
 	cfg := Default()
 	cfg.EventBus.URLs = nil
 	require.True(t, realtimeConsumerReady(cfg, nil))
+}
+
+func TestRealtimeConsumerNotReadyWhenExecutionIsStalled(t *testing.T) {
+	cfg := Default()
+	consumer := realtimeStatusStub{ready: true, status: eventconsumer.Status{
+		Stalled: true, InFlightEventID: "ready-stalled",
+		InFlightStartedAt: time.Now().Add(-3 * time.Minute),
+	}}
+	require.False(t, realtimeConsumerReady(cfg, consumer))
 }
 
 func TestMetricsTimerRefreshFailureDoesNotBlockReporter(t *testing.T) {

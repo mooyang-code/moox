@@ -173,14 +173,20 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	)
 
 	viewReadyRunner := trigger.NewViewReadyRunner(bindingRepo, factorRepo, runner, storage, cfg.Engine.FactorsDir,
-		trigger.WithOperationGate(operationGate), trigger.WithPeriodMetrics(periodMetrics))
+		trigger.WithOperationGate(operationGate), trigger.WithPeriodMetrics(periodMetrics),
+		trigger.WithExecutionUnitTimeout(time.Duration(cfg.Engine.TaskTimeoutMS)*time.Millisecond),
+		trigger.WithExecutionParallelism(cfg.Engine.PythonWorkers),
+		trigger.WithBatchExecution(cfg.Engine.BatchEnabled))
 	if len(cfg.EventBus.URLs) == 0 {
 		log.WarnContextf(ctx, "factor eventbus.urls is empty, realtime trigger startup skipped")
 	} else {
 		consumer = eventconsumer.New(eventconsumer.Config{
-			URLs:           cfg.EventBus.URLs,
-			FetchMaxWait:   cfg.EventBus.FetchMaxWait,
-			CredentialFile: cfg.EventBus.CredentialFile,
+			URLs:                 cfg.EventBus.URLs,
+			FetchMaxWait:         cfg.EventBus.FetchMaxWait,
+			CredentialFile:       cfg.EventBus.CredentialFile,
+			ExecutionTimeout:     cfg.EventBus.ExecutionTimeout,
+			StallThreshold:       cfg.EventBus.StallThreshold,
+			MaxExecutionAttempts: cfg.EventBus.MaxExecutionAttempts,
 		}, viewReadyRunner)
 		if err := consumer.Start(ctx); err != nil {
 			log.ErrorContextf(ctx, "启动 factor EventBus trigger 失败: %v", err)
@@ -397,6 +403,7 @@ func metricsTimerHandler(inventory realtimeInventoryReconciler, reporter metrics
 
 type realtimeStatus interface {
 	Ready() bool
+	Status() eventconsumer.Status
 }
 
 func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, runner *taskrunner.Service, pythonPool *engine.PythonWorkerPool, consumer realtimeStatus) error {
@@ -436,31 +443,51 @@ func factorHealthSnapshot(cfg *Config, dbm *store.Store, runner *taskrunner.Serv
 			cancel()
 		}
 		eventBusReady := realtimeConsumerReady(cfg, consumer)
+		consumerStatus := eventconsumer.Status{}
+		if consumer != nil {
+			consumerStatus = consumer.Status()
+		}
 		ready := databaseReady && workerReady && taskRunnerReady && eventBusReady
 		state.SetReady(ready)
 		rsp := healthz.Base("factor", "factor-01", "", "", factorStartedAt, ready)
 		rsp.Details = map[string]any{
-			"database":          databaseReady,
-			"worker_ready":      workerReady,
-			"worker_version":    workerStatus.WorkerVersion,
-			"python_version":    workerStatus.PythonVersion,
-			"task_runner_ready": taskRunnerReady,
-			"eventbus_ready":    eventBusReady,
-			"python_workers":    cfg.Engine.PythonWorkers,
-			"active_tasks":      runnerStatus.ActiveTasks,
-			"pending_tasks":     runnerStatus.PendingTasks,
-			"eventbus_enabled":  len(cfg.EventBus.URLs) > 0,
-			"storage_gateway":   cfg.Storage.GatewayTarget,
+			"database":                 databaseReady,
+			"worker_ready":             workerReady,
+			"worker_version":           workerStatus.WorkerVersion,
+			"python_version":           workerStatus.PythonVersion,
+			"task_runner_ready":        taskRunnerReady,
+			"eventbus_ready":           eventBusReady,
+			"python_workers":           cfg.Engine.PythonWorkers,
+			"active_tasks":             runnerStatus.ActiveTasks,
+			"pending_tasks":            runnerStatus.PendingTasks,
+			"eventbus_enabled":         len(cfg.EventBus.URLs) > 0,
+			"eventbus_stalled":         consumerStatus.Stalled,
+			"last_event_received_at":   healthTime(consumerStatus.LastReceivedAt),
+			"last_period_completed_at": healthTime(consumerStatus.LastCompletedAt),
+			"last_event_ack_at":        healthTime(consumerStatus.LastAckAt),
+			"event_in_flight_since":    healthTime(consumerStatus.InFlightStartedAt),
+			"event_in_flight_id":       consumerStatus.InFlightEventID,
+			"event_execution_timeouts": consumerStatus.ExecutionTimeouts,
+			"last_event_failure_at":    healthTime(consumerStatus.LastFailureAt),
+			"last_event_failure":       consumerStatus.LastFailure,
+			"storage_gateway":          cfg.Storage.GatewayTarget,
 		}
 		return rsp
 	}
+}
+
+func healthTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }
 
 func realtimeConsumerReady(cfg *Config, consumer realtimeStatus) bool {
 	if cfg == nil || len(cfg.EventBus.URLs) == 0 {
 		return true
 	}
-	return consumer != nil && consumer.Ready()
+	return consumer != nil && consumer.Ready() && !consumer.Status().Stalled
 }
 
 type metadataClientAdapter struct {

@@ -218,10 +218,28 @@ func TestBaseIncludesOptionalRuntimeIdentityFields(t *testing.T) {
 	t.Setenv("MOOX_BUILD_TIME", "2026-07-19T00:00:00Z")
 	t.Setenv("MOOX_CONFIG_HASH", "sha256:config")
 	t.Setenv("MOOX_DATASET_HEALTH_POLICY_HASH", "sha256:dataset-health")
+	t.Setenv("MOOX_BINARY_SHA256", "sha256:binary")
+	t.Setenv("MOOX_VERSION", "release-20260827")
+	t.Setenv("MOOX_GIT_COMMIT", "deadbeef")
 
-	rsp := Base("test", "test@node-a", "v1", "commit", time.Now(), true)
-	if rsp.Service != "moox_test" || rsp.InstanceID != "moox_test@node-a" || rsp.NodeID != "node-a" || rsp.BootID != "boot-a" || rsp.BuildTime == "" || rsp.ConfigHash != "sha256:config" || rsp.DatasetHealthPolicyHash != "sha256:dataset-health" {
+	rsp := Base("test", "test@node-a", "", "", time.Now(), true)
+	if rsp.Service != "moox_test" || rsp.InstanceID != "moox_test@node-a" || rsp.NodeID != "node-a" || rsp.BootID != "boot-a" || rsp.BuildTime == "" || rsp.ConfigHash != "sha256:config" || rsp.DatasetHealthPolicyHash != "sha256:dataset-health" || rsp.BinarySHA256 != "sha256:binary" || rsp.Version != "release-20260827" || rsp.GitCommit != "deadbeef" {
 		t.Fatalf("runtime identity fields = %+v", rsp)
+	}
+}
+
+func TestStateSnapshotUsesRuntimeBuildIdentityWhenModuleLeavesItEmpty(t *testing.T) {
+	t.Setenv("MOOX_VERSION", "release-20260827")
+	t.Setenv("MOOX_GIT_COMMIT", "cafebabe")
+	t.Setenv("MOOX_BINARY_SHA256", "sha256:running")
+	state := NewState("test", "test-1", "", "")
+	state.SetReady(true)
+	state.SnapshotFunc = func(context.Context) Response {
+		return Response{Module: "test", Ready: true, Status: "ok"}
+	}
+	rsp := state.Snapshot(context.Background())
+	if rsp.Version != "release-20260827" || rsp.GitCommit != "cafebabe" || rsp.BinarySHA256 != "sha256:running" {
+		t.Fatalf("snapshot build identity = %+v", rsp)
 	}
 }
 

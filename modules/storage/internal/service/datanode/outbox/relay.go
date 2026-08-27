@@ -17,6 +17,13 @@ type Publisher interface {
 	PublishMessage(context.Context, []byte) error
 }
 
+// PublisherHealth lets the relay expose and verify the live EventBus
+// connection without expanding the required Publisher contract used by
+// non-network tests.
+type PublisherHealth interface {
+	Ready() bool
+}
+
 // PublishAckPublisher is optional so existing publishers and tests can keep
 // the small Publisher contract. JetStream-backed publishers can expose its
 // duplicate acknowledgement without making duplicate state part of storage's
@@ -92,7 +99,9 @@ func NewRelay(store *pebble.Store, publisher Publisher, opts RelayOptions) (*Rel
 	if opts.DeleteOutbox == nil {
 		opts.DeleteOutbox = store.DeleteOutbox
 	}
-	return &Relay{store: store, publisher: publisher, options: opts, metrics: opts.Metrics, stop: make(chan struct{}), done: make(chan struct{}), started: make(chan struct{})}, nil
+	relay := &Relay{store: store, publisher: publisher, options: opts, metrics: opts.Metrics, stop: make(chan struct{}), done: make(chan struct{}), started: make(chan struct{})}
+	relay.observePublisherReady()
+	return relay, nil
 }
 
 func (r *Relay) Start(ctx context.Context) {
@@ -165,12 +174,11 @@ func (r *Relay) Close() {
 }
 
 func (r *Relay) flush(ctx context.Context) error {
-	// OutboxStats builds a Pebble iterator across every SSTable. On a large
-	// DataNode this is an expensive operation, so the relay relies on the
-	// atomic write/delete hint and only scans when it is unknown or non-empty.
-	// This keeps an idle relay from monopolising a CPU while retaining a single
-	// restart-time scan to discover legacy entries.
-	if pending, known, mayHaveMore, oldest := r.store.OutboxPendingHint(); known && pending == 0 && !mayHaveMore {
+	r.observePublisherReady()
+	// A bounded Pebble list initializes and refreshes the atomic hint. Avoid a
+	// restart-time full scan so a large backlog can begin draining immediately.
+	pending, known, mayHaveMore, oldest := r.store.OutboxPendingHint()
+	if known && pending == 0 && !mayHaveMore {
 		r.metrics.SetOutboxSnapshotAt(0, oldest)
 		return nil
 	}
@@ -179,9 +187,12 @@ func (r *Relay) flush(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// The first bounded list initializes a lower-bound count and oldest age
+	// without a restart-time full scan. This lets a large backlog begin draining
+	// immediately instead of repeatedly failing readiness while rescanning it.
+	pending, _, _, oldest = r.store.OutboxPendingHint()
+	r.metrics.SetOutboxSnapshotAt(pending, oldest)
 	if len(entries) == 0 {
-		pending, _, _, oldest := r.store.OutboxPendingHint()
-		r.metrics.SetOutboxSnapshotAt(pending, oldest)
 		return nil
 	}
 	confirmed := make([]uint64, 0, len(entries))
@@ -201,6 +212,7 @@ func (r *Relay) flush(ctx context.Context) error {
 		cancel()
 		if err != nil {
 			r.metrics.IncOutboxPublishError()
+			r.observePublisherReady()
 			r.publishFailures++
 			r.reconnectPublisher(ctx)
 			if len(confirmed) > 0 {
@@ -211,6 +223,7 @@ func (r *Relay) flush(ctx context.Context) error {
 		if ack != nil && ack.Duplicate {
 			r.metrics.IncOutboxDuplicatePublish()
 		}
+		r.metrics.ObserveOutboxPublishSuccess()
 		confirmed = append(confirmed, entry.ID)
 		r.publishFailures = 0
 	}
@@ -240,10 +253,27 @@ func (r *Relay) reconnectPublisher(ctx context.Context) {
 	reconnectCtx, cancel := context.WithTimeout(ctx, r.options.PublishTimeout)
 	defer cancel()
 	if err := reconnecter.Reconnect(reconnectCtx); err != nil {
+		r.metrics.ObserveOutboxReconnect(false)
 		r.report(fmt.Errorf("reconnect storage eventbus publisher: %w", err))
 		return
 	}
+	if health, ok := r.publisher.(PublisherHealth); ok && !health.Ready() {
+		r.metrics.ObserveOutboxReconnect(false)
+		r.report(errors.New("reconnect storage eventbus publisher: replacement connection is not ready"))
+		return
+	}
+	r.metrics.ObserveOutboxReconnect(true)
 	r.publishFailures = 0
+}
+
+func (r *Relay) observePublisherReady() {
+	if health, ok := r.publisher.(PublisherHealth); ok {
+		r.metrics.SetOutboxPublisherReady(health.Ready())
+		return
+	}
+	// Publishers without a transport health surface are treated as ready;
+	// production JetStream publishers always implement PublisherHealth.
+	r.metrics.SetOutboxPublisherReady(true)
 }
 
 func (r *Relay) cleanupConfirmed(ctx context.Context, ids []uint64) error {
@@ -257,15 +287,6 @@ func (r *Relay) cleanupConfirmed(ctx context.Context, ids []uint64) error {
 	pending, _, _, oldest := r.store.OutboxPendingHint()
 	r.metrics.SetOutboxSnapshotAt(pending, oldest)
 	return result
-}
-
-func (r *Relay) observeOutboxStats(ctx context.Context) error {
-	stats, err := r.store.OutboxStats(ctx)
-	if err != nil {
-		return err
-	}
-	r.metrics.SetOutboxSnapshotAt(stats.Pending, stats.OldestEventAt)
-	return nil
 }
 
 func (r *Relay) publish(ctx context.Context, data []byte) (*jetstream.PublishAck, error) {

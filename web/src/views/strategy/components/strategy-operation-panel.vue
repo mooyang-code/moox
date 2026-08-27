@@ -5,7 +5,7 @@
       <a-popconfirm v-if="status === 'ENABLED'" content="停用后不再计算新目标，确认继续？" @ok="change('DISABLED')">
         <a-button status="warning" :loading="loading">停用</a-button>
       </a-popconfirm>
-      <a-popconfirm v-else content="启用时会校验 Logical Account ownership，确认继续？" @ok="change('ENABLED')">
+      <a-popconfirm v-else content="启用时会校验组合账户归属，确认继续？" @ok="change('ENABLED')">
         <a-button type="primary" status="success" :loading="loading">启用</a-button>
       </a-popconfirm>
     </a-space>

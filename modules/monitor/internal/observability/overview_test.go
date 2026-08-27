@@ -707,6 +707,45 @@ func TestBuilderReturnsBoundedEmptyOverviewWhenSourcesAreDisabled(t *testing.T) 
 	}
 }
 
+func TestOverviewReportsStorageOutboxBacklogBeforeDatasetWatermarkStalls(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		seedOverviewMetricForInstance(t, db, "outbox-pending", "storage-node", "storage-node@storage", "moox_storage_outbox_pending_entries", `{}`, 42, now)
+		seedOverviewMetricForInstance(t, db, "outbox-age", "storage-node", "storage-node@storage", "moox_storage_outbox_oldest_age_seconds", `{}`, 181, now)
+	})
+	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *BusinessStatus
+	for i := range overview.BusinessChecks {
+		if overview.BusinessChecks[i].Kind == "data_delivery" && overview.BusinessChecks[i].Module == "storage_outbox" {
+			found = &overview.BusinessChecks[i]
+			break
+		}
+	}
+	if found == nil || found.Status != "down" || !strings.Contains(found.Reason, "42") || !strings.Contains(found.Reason, "3 分钟") {
+		t.Fatalf("storage outbox health = %+v, checks=%+v", found, overview.BusinessChecks)
+	}
+}
+
+func TestOverviewKeepsShortStorageOutboxBacklogHealthy(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		seedOverviewMetricForInstance(t, db, "outbox-pending", "storage-node", "storage-node@storage", "moox_storage_outbox_pending_entries", `{}`, 3, now)
+		seedOverviewMetricForInstance(t, db, "outbox-age", "storage-node", "storage-node@storage", "moox_storage_outbox_oldest_age_seconds", `{}`, 20, now)
+	})
+	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range overview.BusinessChecks {
+		if item.Kind == "data_delivery" && item.Module == "storage_outbox" && item.Status != "healthy" {
+			t.Fatalf("storage outbox health = %+v", item)
+		}
+	}
+}
+
 func openOverviewMetrics(t *testing.T, seed func(*gorm.DB)) *monmetrics.QueryService {
 	t.Helper()
 	query, _ := openOverviewState(t, seed)

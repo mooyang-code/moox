@@ -48,6 +48,10 @@ func (p *JetStreamPublisher) Reconnect(ctx context.Context) error {
 	return p.client.Reconnect(ctx)
 }
 
+func (p *JetStreamPublisher) Ready() bool {
+	return p != nil && p.client != nil && p.publisher != nil && p.client.Ready()
+}
+
 func validateDatasetEvent(data []byte) (string, string, error) {
 	message := &eventpb.EventMessage{}
 	if err := proto.Unmarshal(data, message); err != nil {

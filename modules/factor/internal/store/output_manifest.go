@@ -31,15 +31,15 @@ func NewOutputManifestRepository(db *gorm.DB) *OutputManifestRepository {
 
 func (r *OutputManifestRepository) Get(ctx context.Context, key OutputManifestKey) ([]string, error) {
 	var row domain.OutputManifest
-	err := r.db.WithContext(ctx).Where(
+	result := r.db.WithContext(ctx).Where(
 		"c_binding_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_period_time = ?",
 		strings.TrimSpace(key.BindingID), strings.TrimSpace(key.SubjectID), strings.TrimSpace(key.Frequency), key.PeriodTime.UTC().UnixNano(),
-	).First(&row).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, err
+	).Limit(1).Find(&row)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, nil
 	}
 	var keys []string
 	if err := json.Unmarshal([]byte(row.RowKeysJSON), &keys); err != nil {

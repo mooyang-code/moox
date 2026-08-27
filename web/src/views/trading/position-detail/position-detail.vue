@@ -18,13 +18,36 @@
         </a-space>
       </div>
 
-      <div class="filter-bar">
-        <span class="toolbar-label">账户</span>
-        <a-select v-model="tradingAccountId" placeholder="选择交易账户" class="account-select" @change="onAccountChange">
-          <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
-            {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
-          </a-option>
-        </a-select>
+      <div class="account-context-row">
+        <div class="account-context-main">
+          <span class="toolbar-label">执行账户</span>
+          <a-select v-model="tradingAccountId" placeholder="选择执行账户" class="account-select" @change="onAccountChange">
+            <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
+              {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
+            </a-option>
+          </a-select>
+        </div>
+        <div v-if="selectedAccount" class="account-context-meta">
+          <a-tag
+            >{{ localExchangeLabels[selectedAccount.exchange] }} · {{ localMarketTypeLabels[selectedAccount.market_type] }}</a-tag
+          >
+          <a-tag :color="selectedAccount.ready ? 'green' : 'orange'">
+            {{ selectedAccount.ready ? "已就绪" : "未就绪" }}
+          </a-tag>
+          <span class="sync-time">最近同步 {{ formatTimestamp(selectedAccount.last_sync_at) }}</span>
+        </div>
+      </div>
+
+      <a-alert
+        v-if="selectedAccount && (!selectedAccount.ready || selectedAccount.last_error)"
+        class="account-status"
+        :type="selectedAccount.ready ? 'info' : 'warning'"
+      >
+        {{ selectedAccount.last_error || "账户尚未完成同步，请先同步账户" }}
+      </a-alert>
+
+      <div class="position-filter-bar">
+        <span class="toolbar-label">持仓筛选</span>
         <a-input v-model="instrumentId" placeholder="交易标的" allow-clear class="symbol-input" @press-enter="loadPositions" />
         <a-button :disabled="!tradingAccountId" @click="loadPositions">
           <template #icon><icon-search /></template>
@@ -33,12 +56,6 @@
       </div>
 
       <template v-if="selectedAccount">
-        <a-alert class="account-status" :type="selectedAccount.ready ? 'success' : 'warning'">
-          {{ exchangeLabels[selectedAccount.exchange] }} · {{ localMarketTypeLabels[selectedAccount.market_type] }} ·
-          {{ selectedAccount.ready ? "就绪" : "未就绪" }} · 最近同步 {{ formatTimestamp(selectedAccount.last_sync_at) }}
-          <span v-if="selectedAccount.last_error"> · {{ selectedAccount.last_error }}</span>
-        </a-alert>
-
         <div class="summary-grid">
           <div class="summary-card">
             <span>权益</span><strong>{{ snapshotValue(selectedAccount.snapshot?.equity) }}</strong
@@ -54,76 +71,80 @@
           </div>
           <div class="summary-card">
             <span>{{ selectedAccount.market_type === 1 ? "资产数" : "持仓数" }}</span
-            ><strong>{{ selectedAccount.market_type === 1 ? holdings.length : positions.length }}</strong
+            ><strong>{{ selectedAccount.market_type === 1 ? visibleHoldings.length : positions.length }}</strong
             ><small>当前账户</small>
           </div>
         </div>
 
-        <a-table
-          v-if="selectedAccount.market_type === 1"
-          row-key="asset"
-          :data="holdings"
-          :loading="loading"
-          :pagination="false"
-          :scroll="{ x: 960 }"
-        >
-          <template #columns>
-            <a-table-column title="资产" data-index="asset" :width="100" />
-            <a-table-column title="数量" data-index="quantity" :width="110" />
-            <a-table-column title="平均成本" data-index="average_cost" :width="130" />
-            <a-table-column title="标记价" data-index="mark_price" :width="130" />
-            <a-table-column title="市值" data-index="market_value" :width="130" />
-            <a-table-column title="未实现盈亏" :width="140">
-              <template #cell="{ record }"
-                ><span :class="pnlClass(record.unrealized_pnl)">{{ record.unrealized_pnl || "-" }}</span></template
-              >
-            </a-table-column>
-            <a-table-column title="交易标的" data-index="instrument_id" :width="180" />
-          </template>
-        </a-table>
+        <div class="position-table-region">
+          <a-empty
+            v-if="
+              !loading &&
+              ((selectedAccount.market_type === 1 && !visibleHoldings.length) ||
+                (selectedAccount.market_type === 2 && !positions.length))
+            "
+            class="position-empty-state"
+            description="暂无持仓数据"
+          />
 
-        <a-table
-          v-else
-          row-key="instrument_id"
-          :data="positions"
-          :loading="loading"
-          :pagination="false"
-          :scroll="{ x: 'max-content' }"
-        >
-          <template #columns>
-            <a-table-column title="市场" :width="90">
-              <template #cell>{{ localMarketTypeLabels[selectedAccount.market_type] }}</template>
-            </a-table-column>
-            <a-table-column title="交易标的" data-index="instrument_id" />
-            <a-table-column title="方向" :width="90">
-              <template #cell="{ record }">{{ quantitySide(record.signed_quantity) }}</template>
-            </a-table-column>
-            <a-table-column title="持仓数量" data-index="signed_quantity" />
-            <a-table-column title="开仓价" data-index="entry_price" />
-            <a-table-column title="标记价" data-index="mark_price" />
-            <a-table-column title="强平价" data-index="liquidation_price" />
-            <a-table-column title="杠杆" data-index="leverage" />
-            <a-table-column title="保证金" data-index="used_margin" />
-            <a-table-column title="未实现盈亏">
-              <template #cell="{ record }">
-                <span :class="pnlClass(record.unrealized_pnl)">{{ record.unrealized_pnl }}</span>
-              </template>
-            </a-table-column>
-            <a-table-column title="更新时间">
-              <template #cell="{ record }">{{ formatTimestamp(record.exchange_updated_at) }}</template>
-            </a-table-column>
-          </template>
-        </a-table>
-        <a-empty
-          v-if="
-            selectedAccount &&
-            !loading &&
-            ((selectedAccount.market_type === 1 && !holdings.length) || (selectedAccount.market_type === 2 && !positions.length))
-          "
-          description="暂无持仓数据"
-        />
+          <a-table
+            v-else-if="selectedAccount.market_type === 1"
+            row-key="asset"
+            :data="visibleHoldings"
+            :loading="loading"
+            :pagination="false"
+            :scroll="{ x: 960 }"
+          >
+            <template #columns>
+              <a-table-column title="资产" data-index="asset" :width="100" />
+              <a-table-column title="数量" data-index="quantity" :width="110" />
+              <a-table-column title="平均成本" data-index="average_cost" :width="130" />
+              <a-table-column title="标记价" data-index="mark_price" :width="130" />
+              <a-table-column title="市值" data-index="market_value" :width="130" />
+              <a-table-column title="未实现盈亏" :width="140">
+                <template #cell="{ record }"
+                  ><span :class="pnlClass(record.unrealized_pnl)">{{ record.unrealized_pnl || "-" }}</span></template
+                >
+              </a-table-column>
+              <a-table-column title="交易标的" data-index="instrument_id" :width="180" />
+            </template>
+          </a-table>
+
+          <a-table
+            v-else
+            row-key="instrument_id"
+            :data="positions"
+            :loading="loading"
+            :pagination="false"
+            :scroll="{ x: 'max-content' }"
+          >
+            <template #columns>
+              <a-table-column title="市场" :width="90">
+                <template #cell>{{ localMarketTypeLabels[selectedAccount.market_type] }}</template>
+              </a-table-column>
+              <a-table-column title="交易标的" data-index="instrument_id" />
+              <a-table-column title="方向" :width="90">
+                <template #cell="{ record }">{{ quantitySide(record.signed_quantity) }}</template>
+              </a-table-column>
+              <a-table-column title="持仓数量" data-index="signed_quantity" />
+              <a-table-column title="开仓价" data-index="entry_price" />
+              <a-table-column title="标记价" data-index="mark_price" />
+              <a-table-column title="强平价" data-index="liquidation_price" />
+              <a-table-column title="杠杆" data-index="leverage" />
+              <a-table-column title="保证金" data-index="used_margin" />
+              <a-table-column title="未实现盈亏">
+                <template #cell="{ record }">
+                  <span :class="pnlClass(record.unrealized_pnl)">{{ record.unrealized_pnl }}</span>
+                </template>
+              </a-table-column>
+              <a-table-column title="更新时间">
+                <template #cell="{ record }">{{ formatTimestamp(record.exchange_updated_at) }}</template>
+              </a-table-column>
+            </template>
+          </a-table>
+        </div>
       </template>
-      <a-empty v-else description="请选择一个交易账户" />
+      <a-empty v-else description="请选择一个执行账户" />
     </div>
   </div>
 </template>
@@ -133,14 +154,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import {
-  exchangeLabels,
-  formatTimestamp,
-  listTradingAccounts,
-  listHoldings,
-  listPositions,
-  syncTradingAccount
-} from "@/api/trade";
+import { formatTimestamp, listTradingAccounts, listHoldings, listPositions, syncTradingAccount } from "@/api/trade";
 import type { TradingAccount, Holding, Position } from "@/api/trade/types";
 
 defineOptions({ name: "position-detail" });
@@ -160,6 +174,14 @@ const positionRequests = createLatestRequestGuard();
 const selectedAccount = computed(
   () => accounts.value.find(account => account.trading_account_id === tradingAccountId.value) || null
 );
+const visibleHoldings = computed(() => {
+  const filter = instrumentId.value.trim().toUpperCase();
+  if (!filter) return holdings.value;
+  return holdings.value.filter(item =>
+    [item.instrument_id, item.exchange_symbol, item.asset].some(value => value?.toUpperCase().includes(filter))
+  );
+});
+const localExchangeLabels: Record<number, string> = { 0: "-", 1: "币安", 2: "欧易" };
 const localMarketTypeLabels: Record<number, string> = { 0: "-", 1: "现货", 2: "合约" };
 
 function snapshotValue(value?: string) {
@@ -208,7 +230,10 @@ async function applyRouteAccount() {
     Message.warning("账户不存在或无权限");
     return;
   }
-  if (tradingAccountId.value === requested) return;
+  if (tradingAccountId.value === requested) {
+    await loadPositions();
+    return;
+  }
   tradingAccountId.value = requested;
   await loadPositions();
 }
@@ -257,7 +282,6 @@ async function sync() {
 function onAccountChange(id: string) {
   tradingAccountId.value = id;
   void router.replace({ query: { ...route.query, trading_account_id: id } });
-  void loadPositions();
 }
 
 async function refresh() {
@@ -305,13 +329,44 @@ onMounted(async () => {
   color: var(--color-text-3);
   font-size: 12px;
 }
-.filter-bar {
+.account-context-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: var(--moox-space-2);
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: var(--color-bg-2);
+}
+.account-context-main,
+.account-context-meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+}
+.account-context-main {
+  flex: 1;
+}
+.account-context-meta {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.sync-time {
+  white-space: nowrap;
+}
+.position-filter-bar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: var(--moox-space-3);
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: 1px solid var(--color-border-2);
   border-radius: 8px;
   background: var(--color-bg-2);
@@ -321,10 +376,10 @@ onMounted(async () => {
   font-size: 12px;
 }
 .account-select {
-  width: 260px;
+  width: min(360px, 100%);
 }
 .symbol-input {
-  width: 160px;
+  width: 240px;
 }
 .account-status {
   margin-bottom: var(--moox-space-3);
@@ -360,6 +415,11 @@ onMounted(async () => {
 .summary-card.negative strong {
   color: rgb(var(--green-6));
 }
+.position-table-region {
+  min-width: 0;
+  min-height: 180px;
+  overflow: auto;
+}
 .position-page :deep(.arco-table-container) {
   border-radius: 8px;
 }
@@ -368,6 +428,12 @@ onMounted(async () => {
 }
 .position-page :deep(.arco-empty) {
   padding: 42px 0;
+}
+.position-empty-state {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
 }
 .positive {
   color: rgb(var(--red-6));
@@ -378,6 +444,23 @@ onMounted(async () => {
 @media (max-width: 760px) {
   .page-head {
     flex-direction: column;
+  }
+  .account-context-row {
+    align-items: stretch;
+  }
+  .account-context-main,
+  .account-context-meta {
+    width: 100%;
+  }
+  .account-context-main {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .account-context-meta {
+    justify-content: flex-start;
+  }
+  .position-filter-bar {
+    align-items: stretch;
   }
   .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -753,13 +753,24 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, max int) ([]*Outbo
 	}
 	defer iter.Close()
 	result := make([]*OutboxEntry, 0, max)
+	var oldestEventAt time.Time
 	for valid := iter.First(); valid && len(result) < max; valid = iter.Next() {
 		name := strings.TrimPrefix(string(iter.Key()), outboxPrefix)
 		var id uint64
 		if _, err := fmt.Sscanf(name, "%d", &id); err != nil || id <= after {
 			continue
 		}
-		result = append(result, &OutboxEntry{ID: id, Data: append([]byte(nil), iter.Value()...)})
+		data := append([]byte(nil), iter.Value()...)
+		result = append(result, &OutboxEntry{ID: id, Data: data})
+		message := &eventpb.EventMessage{}
+		if unmarshalErr := proto.Unmarshal(data, message); unmarshalErr == nil {
+			if occurred := message.GetOccurredAt(); occurred != nil && occurred.CheckValid() == nil {
+				eventAt := occurred.AsTime()
+				if oldestEventAt.IsZero() || eventAt.Before(oldestEventAt) {
+					oldestEventAt = eventAt
+				}
+			}
+		}
 	}
 	if err := iter.Error(); err != nil {
 		return nil, err
@@ -768,7 +779,7 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, max int) ([]*Outbo
 	// used to discover legacy entries after restart, but it must not be repeated
 	// every poll when the outbox is empty. Do not overwrite a concurrent write.
 	if revision == s.outboxRevision.Load() {
-		s.setOutboxHintFromList(len(result), len(result) == max)
+		s.setOutboxHintFromList(len(result), len(result) == max, oldestEventAt)
 	}
 	return result, nil
 }
@@ -890,12 +901,18 @@ func (s *Store) noteOutboxDeleted(count int) {
 	s.outboxRevision.Add(1)
 }
 
-func (s *Store) setOutboxHintFromList(count int, mayHaveMore bool) {
-	s.outboxPending.Store(int64(count))
+func (s *Store) setOutboxHintFromList(count int, mayHaveMore bool, oldestEventAt time.Time) {
+	pendingLowerBound := count
+	if mayHaveMore {
+		pendingLowerBound++
+	}
+	s.outboxPending.Store(int64(pendingLowerBound))
 	s.outboxHintKnown.Store(true)
 	s.outboxHintMayHaveMore.Store(mayHaveMore)
 	if count == 0 {
 		s.outboxOldestEventNanos.Store(0)
+	} else if !oldestEventAt.IsZero() {
+		s.outboxOldestEventNanos.Store(oldestEventAt.UTC().UnixNano())
 	}
 }
 

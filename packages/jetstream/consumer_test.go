@@ -125,6 +125,33 @@ func TestNewConsumerBindsMatchingConsumer(t *testing.T) {
 	_ = second.Close()
 }
 
+func TestConsumerRemainsUsableAfterSetupContextIsCanceled(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+
+	setupCtx, cancelSetup := context.WithCancel(context.Background())
+	consumer, err := client.NewConsumer(setupCtx, testConsumerConfig("setup-context"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+	cancelSetup()
+
+	if _, err := client.PublishRaw(context.Background(), "moox.test.context", "context-1", []byte("payload"), "application/octet-stream"); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err := consumer.Fetch(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Fetch() after setup context cancellation: %v", err)
+	}
+	if len(deliveries) != 1 || string(deliveries[0].RawData) != "payload" {
+		t.Fatalf("deliveries after setup context cancellation = %+v", deliveries)
+	}
+}
+
 func TestNewConsumerSupportsMultipleFilterSubjects(t *testing.T) {
 	srv, url := startTestServer(t)
 	defer srv.Shutdown()

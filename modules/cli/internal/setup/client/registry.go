@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"google.golang.org/protobuf/proto"
 )
 
 // RegisterServiceDeployment records a service after setup deploy-service has
@@ -49,6 +50,35 @@ func (c *Client) RegisterServiceDeployment(ctx context.Context, nodeID, serviceN
 		deployment.GatewayPath = spec.gatewayPath
 	}
 	return c.upsertDeployment(ctx, deployment)
+}
+
+// DisableServiceDeployment marks a managed service unavailable after a
+// post-activation control-plane check fails. This prevents Monitor from
+// reporting a stopped process as healthy while the operator fixes the route.
+func (c *Client) DisableServiceDeployment(ctx context.Context, nodeID, serviceName string) error {
+	nodeID = strings.TrimSpace(nodeID)
+	serviceName = strings.TrimSpace(serviceName)
+	if c == nil || c.forwarder == nil || nodeID == "" || serviceName == "" {
+		return fmt.Errorf("service_registry_invalid")
+	}
+	canonical, _ := lookupServiceDeployment(serviceName)
+	get := &pb.GetServiceDeploymentRsp{}
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+		&pb.GetServiceDeploymentReq{NodeId: nodeID, ServiceName: canonical}, get); err != nil {
+		return fmt.Errorf("service_registry_lookup_failed: %w", err)
+	}
+	if get.GetRetInfo().GetCode() == pb.ErrorCode_NOT_FOUND {
+		return nil
+	}
+	if err := checkRetInfo(get.GetRetInfo()); err != nil || get.GetDeployment() == nil {
+		return fmt.Errorf("service_registry_lookup_failed")
+	}
+	deployment := proto.Clone(get.GetDeployment()).(*pb.ServiceDeployment)
+	deployment.Status = "disabled"
+	if err := c.upsertDeployment(ctx, deployment); err != nil {
+		return fmt.Errorf("service_registry_update_failed: %w", err)
+	}
+	return nil
 }
 
 type serviceDeploymentCatalogEntry struct {

@@ -11,6 +11,8 @@ func TestFilterHealthSamplesKeepsBusinessFactsOnly(t *testing.T) {
 		"moox_factor_dataset_output_watermark_timestamp_seconds",
 		"moox_trade_balance_sync_consecutive_failures",
 		"moox_storage_view_ack_errors_total",
+		"moox_storage_outbox_pending_entries",
+		"moox_storage_outbox_oldest_age_seconds",
 		"moox_doctor_runs_total",
 	}
 	drop := []string{

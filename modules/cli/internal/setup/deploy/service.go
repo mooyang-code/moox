@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"path"
 	"strings"
@@ -30,6 +31,11 @@ type ServiceOptions struct {
 	// service package otherwise only has the module's loopback default, while
 	// the deployed process receives the remote endpoint from start.sh.
 	EventBusURL string
+	// TradeConsoleBindAddress is applied only when Trade runs on a dedicated
+	// node. Dedicated cloud hosts may expose a public SSH address while the
+	// process only sees a private interface, so the deployment uses 0.0.0.0
+	// and relies on the cloud firewall to limit port 11200 to the control host.
+	TradeConsoleBindAddress string
 }
 
 type ServiceResult struct {
@@ -44,6 +50,12 @@ type ServiceResult struct {
 func Service(ctx context.Context, transport setupssh.Client, opts ServiceOptions) (result ServiceResult, returnErr error) {
 	if transport == nil || strings.TrimSpace(opts.PackagePath) == "" || !validReleaseToken(opts.ServiceName) {
 		return result, fmt.Errorf("service_deploy_invalid")
+	}
+	if strings.EqualFold(strings.TrimSpace(opts.ServiceName), "trade") && strings.TrimSpace(opts.TradeConsoleBindAddress) != "" {
+		ip := net.ParseIP(strings.TrimSpace(opts.TradeConsoleBindAddress))
+		if ip == nil || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || (ip.IsUnspecified() && strings.TrimSpace(opts.TradeConsoleBindAddress) != "0.0.0.0") {
+			return result, fmt.Errorf("service_deploy_invalid")
+		}
 	}
 	packageSize, digest, err := inspectServicePackage(opts.PackagePath)
 	if err != nil {
@@ -89,7 +101,7 @@ func Service(ctx context.Context, transport setupssh.Client, opts ServiceOptions
 		return result, fmt.Errorf("service_digest_mismatch")
 	}
 
-	if _, err := transport.Run(ctx, []string{"bash", "-lc", prepareServiceScript, "moox-prepare-service", deployDir, opts.ServiceName, result.RemoteArchive, opts.EventBusURL}, nil); err != nil {
+	if _, err := transport.Run(ctx, []string{"bash", "-lc", prepareServiceScript, "moox-prepare-service", deployDir, opts.ServiceName, result.RemoteArchive, opts.EventBusURL, strings.TrimSpace(opts.TradeConsoleBindAddress)}, nil); err != nil {
 		return result, fmt.Errorf("service_prepare_failed")
 	}
 	prepared := true
@@ -204,6 +216,7 @@ deploy=$1
 service=$2
 archive=$3
 eventbus_url=${4:-}
+trade_console_bind=${5:-}
 stage="$deploy/.moox-service.next"
 previous="$deploy/.moox-service.previous"
 manifest="$previous/manifest"
@@ -233,6 +246,33 @@ if [ "$service" = "trade" ]; then
     echo "trade_eventbus_preflight_config_missing" >&2
     exit 1
   }
+  if [ -n "$trade_console_bind" ]; then
+    trpc_config="$stage/config/trpc_go.yaml"
+    [ -f "$trpc_config" ] || trpc_config="$stage/trade/config/trpc_go.yaml"
+    [ -f "$trpc_config" ] || {
+      echo "trade_console_bind_config_missing" >&2
+      exit 1
+    }
+    TRADE_CONSOLE_BIND="$trade_console_bind" python3 - "$trpc_config" <<'PY'
+import ipaddress
+import os
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+bind = os.environ["TRADE_CONSOLE_BIND"]
+ip = ipaddress.ip_address(bind)
+if ip.is_loopback or ip.is_multicast or ip.is_link_local or (ip.is_unspecified and bind != "0.0.0.0"):
+    raise SystemExit("trade_console_bind must be 0.0.0.0 or a routable unicast IP")
+raw = path.read_text(encoding="utf-8")
+pattern = re.compile(r"(?ms)(^[ \t]*- name:[ \t]*trpc\.moox\.trade\.TradeConsoleService[ \t]*\n.*?^[ \t]+ip:[ \t]*)[^\r\n]+")
+updated, count = pattern.subn(lambda match: match.group(1) + bind, raw, count=1)
+if count != 1:
+    raise SystemExit("TradeConsoleService listener not found")
+path.write_text(updated, encoding="utf-8")
+PY
+  fi
   if [ -n "$eventbus_url" ]; then
     MOOX_EVENTBUS_NATS_URL="$eventbus_url" "$stage/bin/moox-trade-cli" eventbus-check --config "$trade_config"
   else
