@@ -23,11 +23,12 @@ done
 
 grep -Fq 'loaded `SKILL.md`' "${REFERENCE}" || fail "reference does not derive the wrapper path from the loaded skill"
 grep -Fq '/scripts/data-kline.sh' "${REFERENCE}" || fail "reference does not use the bundled wrapper"
-if grep -Eq '"\$(CLI|CONFIG)"|(^|[[:space:]])moox-cli data kline get' "${REFERENCE}"; then
+if grep -Eq '"\$(CLI|CONFIG)"|(^|[[:space:]])moox-cli data kline get|/opt/' "${REFERENCE}"; then
   fail "reference still relies on cross-block CLI/config shell variables"
 fi
-query_examples="$(grep -E '^[[:space:]]*/[^[:space:]]*/scripts/data-kline\.sh([[:space:]]|$)' "${REFERENCE}" || true)"
-[[ "$(wc -l <<<"${query_examples}" | tr -d ' ')" -ge 3 ]] || fail "reference lacks direct absolute wrapper examples"
+meta_assignment="SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'"
+[[ "$(grep -Fxc "${meta_assignment}" "${REFERENCE}")" -ge 4 ]] || fail "each query example must define the SKILL_ROOT metavalue"
+[[ "$(grep -Fxc '"$SKILL_ROOT/scripts/data-kline.sh" \' "${REFERENCE}")" -ge 4 ]] || fail "each query example must invoke the resolved wrapper"
 for summary_field in 'data type' 'exchange' 'symbol' 'interval' 'row count' 'returned time range'; do
   grep -Fq "${summary_field}" "${REFERENCE}" || fail "reference summary is missing ${summary_field}"
 done
@@ -41,6 +42,7 @@ CONFIG="${SKILL_ROOT}/config/data-access.yaml"
 SECRET_SENTINEL='WRAPPER_TEST_SECRET_DO_NOT_PRINT_9vQ3'
 printf 'gateway:\n  secret: %s\n' "${SECRET_SENTINEL}" >"${CONFIG}"
 chmod 0600 "${CONFIG}"
+EXPECTED_CONFIG="$(cd "${SKILL_ROOT}/config" && pwd -P)/data-access.yaml"
 
 cat >"${TEST_ROOT}/path-bin/moox-cli" <<'EOF'
 #!/usr/bin/env bash
@@ -50,10 +52,50 @@ printf '%s\n' "$@" >"${CLI_ARGS_LOG:?}"
 EOF
 chmod +x "${TEST_ROOT}/path-bin/moox-cli"
 
+EXAMPLES_DIR="${TEST_ROOT}/examples"
+mkdir "${EXAMPLES_DIR}"
+awk -v output_dir="${EXAMPLES_DIR}" '
+  /^```bash$/ { in_block = 1; block = ""; next }
+  /^```$/ && in_block {
+    if (block ~ /scripts\/data-kline\.sh/) {
+      count++
+      file = sprintf("%s/example-%d.sh", output_dir, count)
+      printf "%s", block > file
+      close(file)
+    }
+    in_block = 0
+    next
+  }
+  in_block { block = block $0 ORS }
+' "${REFERENCE}"
+example_files=("${EXAMPLES_DIR}"/example-*.sh)
+[[ "${#example_files[@]}" -eq 4 ]] || fail "expected four self-contained wrapper examples"
+for index in "${!example_files[@]}"; do
+  example="${example_files[${index}]}"
+  grep -Fxq "${meta_assignment}" "${example}" || fail "example $((index + 1)) lacks the SKILL_ROOT metavalue"
+  sed "s|${meta_assignment}|SKILL_ROOT='${SKILL_ROOT}'|" "${example}" >"${example}.resolved"
+  CLI_ARGS_LOG="${TEST_ROOT}/example-$((index + 1)).args" \
+    CLI_MARKER_LOG="${TEST_ROOT}/example-$((index + 1)).marker" CLI_MARKER=path \
+    PATH="${TEST_ROOT}/path-bin:${PATH}" bash "${example}.resolved"
+  expected_args="${TEST_ROOT}/example-$((index + 1)).expected"
+  case "${index}" in
+    0|1)
+      printf '%s\n' data kline get --config "${EXPECTED_CONFIG}" --data-type crypto --symbol BTC-USDT --interval 1m >"${expected_args}"
+      ;;
+    2)
+      printf '%s\n' data kline get --config "${EXPECTED_CONFIG}" --data-type crypto --exchange binance --symbol BTC-USDT --interval 1m --limit 20 >"${expected_args}"
+      ;;
+    3)
+      printf '%s\n' data kline get --config "${EXPECTED_CONFIG}" --data-type crypto --exchange binance --symbol BTC-USDT --interval 1m --start-time 2026-08-28T00:00:00Z --end-time 2026-08-28T01:00:00Z >"${expected_args}"
+      ;;
+  esac
+  cmp -s "${expected_args}" "${TEST_ROOT}/example-$((index + 1)).args" || fail "example $((index + 1)) mapped unexpected flags"
+done
+
 CLI_ARGS_LOG="${TEST_ROOT}/path.args" CLI_MARKER_LOG="${TEST_ROOT}/path.marker" CLI_MARKER=path \
   PATH="${TEST_ROOT}/path-bin:${PATH}" "${SKILL_ROOT}/scripts/data-kline.sh" \
   --data-type crypto --exchange binance --symbol BTC-USDT --interval 1m --limit 20
-expected_config="$(cd "${SKILL_ROOT}/config" && pwd -P)/data-access.yaml"
+expected_config="${EXPECTED_CONFIG}"
 [[ "$(sed -n '1p' "${TEST_ROOT}/path.args")" == data ]] || fail "wrapper did not invoke data command"
 [[ "$(sed -n '2p' "${TEST_ROOT}/path.args")" == kline ]] || fail "wrapper did not invoke kline command"
 [[ "$(sed -n '3p' "${TEST_ROOT}/path.args")" == get ]] || fail "wrapper did not invoke get command"

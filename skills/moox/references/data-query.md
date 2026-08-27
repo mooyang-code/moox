@@ -4,16 +4,17 @@ Use `moox-cli data kline get` when the user asks for collected candlestick data.
 
 ## Resolve the command and config
 
-From the currently loaded `SKILL.md`, obtain the absolute Skill directory and append `scripts/data-kline.sh`. Invoke that wrapper by its absolute path. Do not infer the Skill location from the shell working directory and do not call `moox-cli` directly.
+From the currently loaded `SKILL.md`, obtain its real absolute parent directory and use that as `SKILL_ROOT`. In every example below, the value `/absolute/path/resolved-from-the-loaded-SKILL.md` is a metavalue: the Agent must replace it with that real parent directory before executing the block and must never use the metavalue literally. Invoke the wrapper at `"$SKILL_ROOT/scripts/data-kline.sh"`; do not infer the Skill location from the shell working directory and do not call `moox-cli` directly.
 
 The wrapper locates its Skill root from `BASH_SOURCE`, injects the absolute packaged `config/data-access.yaml`, rejects caller-supplied `--config`, and resolves `moox-cli` from the repository's `../../bin/moox-cli` before checking `PATH`. It refuses a missing, symlinked, or non-`0600` config.
 
 The Skill archive deliberately does not contain a cross-platform `moox-cli` binary. It depends on that repository binary or an installed `moox-cli` on `PATH`; the wrapper fails clearly when neither exists.
 
-For example, if the loaded file is `/opt/moox-skill/moox/SKILL.md`, make one direct call:
+Make each query self-contained in one shell invocation:
 
 ```bash
-/opt/moox-skill/moox/scripts/data-kline.sh \
+SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
+"$SKILL_ROOT/scripts/data-kline.sh" \
   --data-type crypto \
   --symbol BTC-USDT \
   --interval 1m
@@ -31,20 +32,27 @@ Never pass `--config`, rely on the CLI's relative default config path, or use `M
 - Use RFC3339 `--start-time` and `--end-time` only when the user supplies a time range. The start must not be after the end.
 - Use `--timeout` only when the caller needs to override the default RPC timeout. Use `--output` only when a result file was requested.
 
-Examples:
+Examples follow the same replacement rule. Each block is independently executable after resolving its own `SKILL_ROOT`.
 
+“获取加密货币 BTC-USDT 的 1m K 线”:
 ```bash
-# “获取加密货币 BTC-USDT 的 1m K 线”
-/opt/moox-skill/moox/scripts/data-kline.sh \
+SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
+"$SKILL_ROOT/scripts/data-kline.sh" \
   --data-type crypto --symbol BTC-USDT --interval 1m
+```
 
-# “获取币安 BTC-USDT 最新 20 根 1m K 线”
-/opt/moox-skill/moox/scripts/data-kline.sh \
+“获取币安 BTC-USDT 最新 20 根 1m K 线”:
+```bash
+SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
+"$SKILL_ROOT/scripts/data-kline.sh" \
   --data-type crypto --exchange binance \
   --symbol BTC-USDT --interval 1m --limit 20
+```
 
-# “获取币安 BTC-USDT 在指定 UTC 时间范围内的 1m K 线”
-/opt/moox-skill/moox/scripts/data-kline.sh \
+“获取币安 BTC-USDT 在指定 UTC 时间范围内的 1m K 线”:
+```bash
+SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
+"$SKILL_ROOT/scripts/data-kline.sh" \
   --data-type crypto --exchange binance \
   --symbol BTC-USDT --interval 1m \
   --start-time 2026-08-28T00:00:00Z --end-time 2026-08-28T01:00:00Z
