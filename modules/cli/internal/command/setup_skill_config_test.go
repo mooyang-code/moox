@@ -289,19 +289,19 @@ func TestBuildSkillDataAccessConfigRejectsGatewayTargetHostMismatchBeforeReading
 	require.False(t, readCalled)
 }
 
-func TestReadRemoteGatewayTargetNodeDoesNotExposeServiceRootSecret(t *testing.T) {
+func TestReadRemoteGatewayNodeIDDoesNotExposeServiceRootSecret(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "gateway-service.env")
 	const rootSecret = "root-service-secret-must-stay-remote"
-	require.NoError(t, os.WriteFile(path, []byte("MOOX_GATEWAY_SERVICE_SECRET_KEY="+rootSecret+"\nMOOX_GATEWAY_TARGET_NODE=Storage-Node_1\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("MOOX_GATEWAY_NODE_ID=Storage-Node_1\nMOOX_GATEWAY_SERVICE_KEY_ID=moox-gateway-service\nMOOX_GATEWAY_CALLER=admin-gateway\nMOOX_GATEWAY_SERVICE_SECRET_KEY="+rootSecret+"\n"), 0o600))
 	transport := &recordingSkillSSH{}
-	nodeID, err := readRemoteGatewayTargetNode(context.Background(), transport, path)
+	nodeID, err := readRemoteGatewayNodeID(context.Background(), transport, path)
 	require.NoError(t, err)
 	require.Equal(t, "Storage-Node_1", nodeID)
 	require.NotContains(t, nodeID, rootSecret)
 	require.NotContains(t, transport.stdout, rootSecret)
 }
 
-func TestReadRemoteGatewayTargetNodeRejectsUnsafeOrAmbiguousFiles(t *testing.T) {
+func TestReadRemoteGatewayNodeIDRejectsUnsafeOrAmbiguousFiles(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		content string
@@ -309,11 +309,11 @@ func TestReadRemoteGatewayTargetNodeRejectsUnsafeOrAmbiguousFiles(t *testing.T) 
 		link    bool
 	}{
 		{name: "missing value", content: "MOOX_GATEWAY_SERVICE_SECRET_KEY=secret\n", mode: 0o600},
-		{name: "duplicate", content: "MOOX_GATEWAY_TARGET_NODE=one\nMOOX_GATEWAY_TARGET_NODE=two\n", mode: 0o600},
-		{name: "dangerous", content: "MOOX_GATEWAY_TARGET_NODE=$(id)\n", mode: 0o600},
-		{name: "carriage return", content: "MOOX_GATEWAY_TARGET_NODE=control\r\n", mode: 0o600},
-		{name: "mode", content: "MOOX_GATEWAY_TARGET_NODE=control\n", mode: 0o644},
-		{name: "symlink", content: "MOOX_GATEWAY_TARGET_NODE=control\n", mode: 0o600, link: true},
+		{name: "duplicate", content: "MOOX_GATEWAY_NODE_ID=one\nMOOX_GATEWAY_NODE_ID=two\n", mode: 0o600},
+		{name: "dangerous", content: "MOOX_GATEWAY_NODE_ID=$(id)\n", mode: 0o600},
+		{name: "carriage return", content: "MOOX_GATEWAY_NODE_ID=control\r\n", mode: 0o600},
+		{name: "mode", content: "MOOX_GATEWAY_NODE_ID=control\n", mode: 0o644},
+		{name: "symlink", content: "MOOX_GATEWAY_NODE_ID=control\n", mode: 0o600, link: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -324,10 +324,40 @@ func TestReadRemoteGatewayTargetNodeRejectsUnsafeOrAmbiguousFiles(t *testing.T) 
 				path = filepath.Join(dir, "gateway.env")
 				require.NoError(t, os.Symlink(target, path))
 			}
-			_, err := readRemoteGatewayTargetNode(context.Background(), localSkillSSH{}, path)
+			_, err := readRemoteGatewayNodeID(context.Background(), localSkillSSH{}, path)
 			require.ErrorContains(t, err, "unavailable")
 		})
 	}
+}
+
+func TestBuildSkillDataAccessConfigSupportsExistingGatewayServiceEnv(t *testing.T) {
+	root := t.TempDir()
+	controlRoot := filepath.Join(root, "control")
+	storageRoot := filepath.Join(root, "storage")
+	require.NoError(t, os.MkdirAll(filepath.Join(controlRoot, "secrets"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(storageRoot, "secrets"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(storageRoot, "secrets/gateway-moox-skill.key"), []byte(testSkillGatewaySecret), 0o600))
+	oldServiceEnv := "MOOX_GATEWAY_NODE_ID=storage\nMOOX_GATEWAY_SERVICE_KEY_ID=moox-gateway-service\nMOOX_GATEWAY_CALLER=admin-gateway\nMOOX_GATEWAY_SERVICE_SECRET_KEY=existing-root-secret\n"
+	require.NotContains(t, oldServiceEnv, "MOOX_GATEWAY_TARGET_NODE")
+	require.NoError(t, os.WriteFile(filepath.Join(storageRoot, "secrets/gateway-service.env"), []byte(oldServiceEnv), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(storageRoot, "secrets/gateway-credentials.json"), testSkillRegistryRaw(), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(controlRoot, "secrets/storage-internal-auth.env"), []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET="+testSkillPrimarySecret+"\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), 0o600))
+
+	snapshot := setupSkillSnapshot(t, "crypto_market", "ip://198.51.100.9:11003", "storage")
+	snapshot.Manifest.Paths.ControlRoot = controlRoot
+	snapshot.Manifest.Paths.StorageRoot = storageRoot
+	snapshot.Manifest.OtherHosts = []setupconfig.Host{{Name: "storage", Address: "198.51.100.9", Port: 22, Username: "ubuntu"}}
+	read := func(ctx context.Context, _ setupconfig.Host, path string) ([]byte, error) {
+		if filepath.Base(path) == "gateway-service.env" {
+			nodeID, err := readRemoteGatewayNodeID(ctx, localSkillSSH{}, path)
+			return []byte(nodeID), err
+		}
+		return readRemoteSkillSecret(ctx, localSkillSSH{}, path)
+	}
+	config, err := buildSkillDataAccessConfig(context.Background(), snapshot, "crypto_market", read)
+	require.NoError(t, err)
+	require.Equal(t, "storage", config.Gateway.TargetNode)
+	require.Equal(t, testSkillGatewaySecret, config.Gateway.Secret)
 }
 
 func TestReadRemoteSkillSecretRejectsUnsafeRemoteFiles(t *testing.T) {
@@ -441,7 +471,7 @@ func TestBuildSkillDataAccessConfigRequiresRegisteredSkillIdentity(t *testing.T)
 			require.NoError(t, os.MkdirAll(filepath.Join(controlRoot, "secrets"), 0o700))
 			require.NoError(t, os.MkdirAll(filepath.Join(storageRoot, "secrets"), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(storageRoot, "secrets/gateway-moox-skill.key"), []byte(testSkillGatewaySecret), 0o600))
-			require.NoError(t, os.WriteFile(filepath.Join(storageRoot, "secrets/gateway-service.env"), []byte("MOOX_GATEWAY_TARGET_NODE=storage\nMOOX_GATEWAY_SERVICE_SECRET_KEY=root-service-secret\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(storageRoot, "secrets/gateway-service.env"), []byte("MOOX_GATEWAY_NODE_ID=storage\nMOOX_GATEWAY_SERVICE_KEY_ID=moox-gateway-service\nMOOX_GATEWAY_CALLER=admin-gateway\nMOOX_GATEWAY_SERVICE_SECRET_KEY=root-service-secret\n"), 0o600))
 			require.NoError(t, os.WriteFile(filepath.Join(controlRoot, "secrets/storage-internal-auth.env"), []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET="+testSkillPrimarySecret+"\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), 0o600))
 			test.prepare(t, filepath.Join(storageRoot, "secrets/gateway-credentials.json"))
 
@@ -451,7 +481,7 @@ func TestBuildSkillDataAccessConfigRequiresRegisteredSkillIdentity(t *testing.T)
 			snapshot.Manifest.OtherHosts = []setupconfig.Host{{Name: "storage", Address: "198.51.100.9", Port: 22, Username: "ubuntu"}}
 			read := func(ctx context.Context, _ setupconfig.Host, path string) ([]byte, error) {
 				if filepath.Base(path) == "gateway-service.env" {
-					nodeID, err := readRemoteGatewayTargetNode(ctx, localSkillSSH{}, path)
+					nodeID, err := readRemoteGatewayNodeID(ctx, localSkillSSH{}, path)
 					return []byte(nodeID), err
 				}
 				return readRemoteSkillSecret(ctx, localSkillSSH{}, path)
