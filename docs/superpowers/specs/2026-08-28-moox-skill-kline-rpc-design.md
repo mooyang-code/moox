@@ -12,6 +12,8 @@ MooX Skill 需要把采集数据查询包装成自然语言能力。用户应能
 
    ```bash
    moox-cli data kline get \
+     --data-type crypto \
+     --exchange binance \
      --symbol BTC-USDT \
      --interval 1m \
      --limit 100
@@ -43,6 +45,8 @@ moox-cli data kline get [flags]
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
+| `--data-type` | 无 | 必填，例如 `crypto`；必须存在于配置目录中 |
+| `--exchange` | 数据类型配置的默认交易所 | 可选；`crypto` 首版默认 `binance` |
 | `--symbol` | 无 | 必填，例如 `BTC-USDT` |
 | `--interval` | `1m` | 首版仅接受 `1m` |
 | `--limit` | `100` | 返回条数，范围 `1..1000` |
@@ -51,10 +55,12 @@ moox-cli data kline get [flags]
 | `--config` | Skill 约定路径或 `MOOX_SKILL_CONFIG` | 独立数据访问配置 |
 | `--output` | 空 | 为空时输出 stdout，否则写入 `0600` JSON 文件 |
 
-固定映射：
+CLI 不根据字符串拼接猜测 Space、Dataset 或 series tag，而是使用独立配置中的数据目录解析 `data-type + exchange + interval`。首版目录包含以下映射：
 
 | CLI 概念 | Storage 请求值 |
 | --- | --- |
+| Data type | `crypto` |
+| Exchange | `binance` |
 | Space | `crypto_market` |
 | Dataset | `binance_spot_kline_1m` |
 | Subject | `--symbol` |
@@ -101,7 +107,7 @@ gateway_callers:
 
 ## 独立配置
 
-打包阶段生成 `config/data-access.yaml`：
+打包阶段生成 `config/data-access.yaml`。同一文件同时保存 RPC 连接、派生凭据和可查询的数据目录：
 
 ```yaml
 version: 1
@@ -114,7 +120,18 @@ gateway:
 storage:
   app_id: moox-skill
   app_key: <derived-storage-app-key>
+data_types:
+  crypto:
+    default_exchange: binance
+    exchanges:
+      binance:
+        space_id: crypto_market
+        series_tag: venue:binance
+        kline_datasets:
+          1m: binance_spot_kline_1m
 ```
+
+`data_types`、交易所名称和周期键统一使用小写 ASCII 标识。CLI 对 `--data-type`、`--exchange` 和 `--interval` 做 trim 与小写规范化，再执行精确目录查找。配置不支持的组合必须返回明确错误，不能退化为猜测 Dataset ID。首版只写入 `crypto/binance/1m`；后续增加交易所或周期时扩展目录，不改变 CLI 命令形状。
 
 生成流程：
 
@@ -135,16 +152,16 @@ storage:
 
 | 用户表达 | CLI 调用 |
 | --- | --- |
-| 获取 BTC-USDT 的 1m K 线 | `data kline get --symbol BTC-USDT --interval 1m` |
-| 获取 BTC-USDT 最新 20 根 1m K 线 | 增加 `--limit 20` |
+| 获取加密货币 BTC-USDT 的 1m K 线 | `data kline get --data-type crypto --symbol BTC-USDT --interval 1m`；交易所使用配置默认值 `binance` |
+| 获取币安 BTC-USDT 最新 20 根 1m K 线 | 增加 `--exchange binance --limit 20` |
 | 获取指定时间范围 | 增加 `--start-time` 和 `--end-time` |
 
-Skill 必须原样使用用户给出的 symbol，不猜测交易对；必须拒绝首版不支持的周期。成功时总结 symbol、interval、行数和时间范围，但不得输出配置中的 HMAC 凭据。
+Skill 必须从用户表达中提取数据类型；用户未指定交易所时使用该数据类型在配置中的默认交易所。Skill 必须原样使用用户给出的 symbol，不猜测交易对；必须拒绝配置中不存在的数据类型、交易所或周期。成功时总结 data type、exchange、symbol、interval、行数和时间范围，但不得输出配置中的 HMAC 凭据。
 
 ## 错误处理
 
 - 配置缺失、权限不是 `0600`、字段未知或版本不支持：启动前失败。
-- symbol 为空、周期不支持、limit 越界、时间格式错误或起止时间倒置：发出参数错误，不发送 RPC。
+- data type 或 symbol 为空、数据目录组合不存在、limit 越界、时间格式错误或起止时间倒置：发出参数错误，不发送 RPC。
 - Gateway 返回鉴权、ACL、路由或网络错误：保留稳定错误类别，不输出 secret、签名或完整请求体。
 - Storage `ret_info` 非成功：CLI 返回非零退出码并输出业务错误。
 - 查询结果为空：返回成功和空 rows，不把“没有数据”误报为调用失败。
@@ -153,7 +170,7 @@ Skill 必须原样使用用户给出的 symbol，不猜测交易对；必须拒�
 
 实现遵循测试先行：
 
-1. CLI 单元测试覆盖命令树、参数校验、固定映射、DESC、limit、时间范围、配置权限和错误输出。
+1. CLI 单元测试覆盖命令树、参数校验、数据类型目录、默认/显式交易所、DESC、limit、时间范围、配置权限和错误输出。
 2. 使用 fake tRPC Gateway 或可注入 PrimaryStore proxy 验证 Gateway options、target node、双层 HMAC和请求体。
 3. Gateway 路由测试证明 `moox-skill` 可调用 `ReadTimeSeriesRows`，不能调用 `UpsertFields` 或其他 Storage 方法。
 4. 打包契约测试证明配置生成于 staging、权限为 `0600`，归档不包含 `custom.toml`、根密钥、SSH 密码或腾讯云凭据。
