@@ -74,6 +74,44 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 	require.Equal(t, int32(0), storage.writeCalls.Load(), "write RPC must be rejected before reaching Storage")
 }
 
+func TestKlineRPCHelperEarlyExitRemainsObservableDuringCleanup(t *testing.T) {
+	helper := buildGatewayE2EHelper(t)
+	readyFile := filepath.Join(t.TempDir(), "never.ready")
+	process := startGatewayHelperProcess(t, helper,
+		"--mode", "kline-native",
+		"--node-id", klineGatewayNode,
+		"--upstream-addr", "not-an-address",
+		"--ready-file", readyFile,
+		"--nonce-dir", filepath.Join(t.TempDir(), "nonces"),
+		"--key-id", klineGatewayKeyID,
+	)
+
+	select {
+	case <-process.waitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("invalid helper did not exit")
+	}
+	firstErr := process.waitError()
+	require.Error(t, firstErr)
+	require.Contains(t, process.logs.String(), "upstream-addr must be a loopback host:port")
+	_, readyErr := process.waitForReady(readyFile, time.Second)
+	require.ErrorContains(t, readyErr, firstErr.Error())
+	require.ErrorContains(t, readyErr, "upstream-addr must be a loopback host:port")
+
+	cleanupDone := make(chan struct{})
+	go func() {
+		process.stop(time.Second)
+		process.stop(time.Second)
+		close(cleanupDone)
+	}()
+	select {
+	case <-cleanupDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup blocked after helper exit was already observed")
+	}
+	require.Equal(t, firstErr, process.waitError())
+}
+
 type klineStorageStub struct {
 	pb.UnimplementedPrimaryStore
 	requests   chan *pb.ReadTimeSeriesRowsReq
@@ -127,14 +165,9 @@ func startKlineStorage(t *testing.T, stub *klineStorageStub) string {
 func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 	t.Helper()
 	tempDir := t.TempDir()
-	helper := filepath.Join(tempDir, "gateway-e2e-helper")
-	build := exec.Command("go", "build", "-o", helper, "./cmd/e2e-helper")
-	build.Dir = filepath.Join("..", "..", "gateway")
-	output, err := build.CombinedOutput()
-	require.NoError(t, err, "build gateway helper: %s", output)
-
+	helper := buildGatewayE2EHelper(t)
 	readyFile := filepath.Join(tempDir, "gateway.ready")
-	command := exec.Command(helper,
+	process := startGatewayHelperProcess(t, helper,
 		"--mode", "kline-native",
 		"--node-id", klineGatewayNode,
 		"--upstream-addr", upstreamAddress,
@@ -142,47 +175,104 @@ func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 		"--nonce-dir", filepath.Join(tempDir, "nonces"),
 		"--key-id", klineGatewayKeyID,
 	)
-	command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_SERVICE_SECRET="+klineGatewaySecret)
-	var logs lockedBuffer
-	command.Stdout = &logs
-	command.Stderr = &logs
-	require.NoError(t, command.Start())
-	done := make(chan error, 1)
-	go func() { done <- command.Wait() }()
 	t.Cleanup(func() {
-		if command.Process == nil {
-			return
-		}
-		select {
-		case <-done:
-			return
-		default:
-		}
-		_ = command.Process.Signal(syscall.SIGTERM)
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			_ = command.Process.Kill()
-			<-done
-			t.Errorf("gateway helper required kill: %s", logs.String())
+		if process.stop(5 * time.Second) {
+			t.Errorf("gateway helper required kill: %s", process.logs.String())
 		}
 	})
+	target, err := process.waitForReady(readyFile, 10*time.Second)
+	require.NoError(t, err)
+	return target
+}
 
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		raw, readErr := os.ReadFile(readyFile)
-		if readErr == nil && strings.TrimSpace(string(raw)) != "" {
-			return strings.TrimSpace(string(raw))
-		}
-		select {
-		case waitErr := <-done:
-			t.Fatalf("gateway helper exited before ready (%v): %s", waitErr, logs.String())
-		default:
-		}
-		time.Sleep(20 * time.Millisecond)
+func buildGatewayE2EHelper(t *testing.T) string {
+	t.Helper()
+	helper := filepath.Join(t.TempDir(), "gateway-e2e-helper")
+	build := exec.Command("go", "build", "-o", helper, "./cmd/e2e-helper")
+	build.Dir = filepath.Join("..", "..", "gateway")
+	output, err := build.CombinedOutput()
+	require.NoError(t, err, "build gateway helper: %s", output)
+	return helper
+}
+
+type gatewayHelperProcess struct {
+	command  *exec.Cmd
+	logs     lockedBuffer
+	waitDone chan struct{}
+	waitMu   sync.Mutex
+	waitErr  error
+}
+
+func startGatewayHelperProcess(t *testing.T, helper string, args ...string) *gatewayHelperProcess {
+	t.Helper()
+	process := &gatewayHelperProcess{
+		command:  exec.Command(helper, args...),
+		waitDone: make(chan struct{}),
 	}
-	t.Fatalf("gateway helper not ready: %s", logs.String())
-	return ""
+	process.command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_SERVICE_SECRET="+klineGatewaySecret)
+	process.command.Stdout = &process.logs
+	process.command.Stderr = &process.logs
+	require.NoError(t, process.command.Start())
+	go func() {
+		err := process.command.Wait()
+		process.waitMu.Lock()
+		process.waitErr = err
+		process.waitMu.Unlock()
+		close(process.waitDone)
+	}()
+	return process
+}
+
+func (process *gatewayHelperProcess) waitError() error {
+	<-process.waitDone
+	process.waitMu.Lock()
+	defer process.waitMu.Unlock()
+	return process.waitErr
+}
+
+// stop is idempotent. Its closed waitDone channel remains observable after any
+// waiter sees the process exit, unlike consuming a single result from a channel.
+func (process *gatewayHelperProcess) stop(timeout time.Duration) (killed bool) {
+	select {
+	case <-process.waitDone:
+		return false
+	default:
+	}
+	_ = process.command.Process.Signal(syscall.SIGTERM)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-process.waitDone:
+		return false
+	case <-timer.C:
+		_ = process.command.Process.Kill()
+	}
+	timer.Reset(timeout)
+	select {
+	case <-process.waitDone:
+	case <-timer.C:
+	}
+	return true
+}
+
+func (process *gatewayHelperProcess) waitForReady(path string, timeout time.Duration) (string, error) {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-process.waitDone:
+			return "", fmt.Errorf("gateway helper exited before ready (%v): %s", process.waitError(), process.logs.String())
+		case <-ticker.C:
+			raw, err := os.ReadFile(path)
+			if err == nil && strings.TrimSpace(string(raw)) != "" {
+				return strings.TrimSpace(string(raw)), nil
+			}
+		case <-timer.C:
+			return "", fmt.Errorf("gateway helper not ready: %s", process.logs.String())
+		}
+	}
 }
 
 type lockedBuffer struct {
