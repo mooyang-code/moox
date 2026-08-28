@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/report"
 )
 
@@ -275,7 +276,7 @@ func TestReadTimeSeriesRowsUsesSelectorsAndCopiesViewCompleteness(t *testing.T) 
 		{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &okx},
 	}
 	rsp, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "moox-skill", AppKey: "key"},
+		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
 		SpaceId:  "space", DatasetId: "market", Selectors: selectors,
 		Order: pb.SortOrder_SORT_ORDER_DESC,
 	})
@@ -307,6 +308,53 @@ func TestReadTimeSeriesRowsUsesSelectorsAndCopiesViewCompleteness(t *testing.T) 
 	if len(rsp.GetRows()) != 1 || rsp.GetRows()[0].GetKey().GetSeriesTag() != "venue:okx" {
 		t.Fatalf("exact result tag lost: %v", rsp.GetRows())
 	}
+}
+
+func TestMooxSkillReadIsBoundToKlineScope(t *testing.T) {
+	resolved := 0
+	svc, err := New(Options{Resolver: func(context.Context, string, string) (DataNodeClient, error) {
+		resolved++
+		return &recordingNode{}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validSelector := &pb.TimeSeriesSelector{
+		SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m", SubjectId: "BTC-USDT",
+		Freq: "1m", SeriesTag: stringPtr("venue:binance"),
+	}
+	tests := []struct {
+		name string
+		req  *pb.ReadTimeSeriesRowsReq
+	}{
+		{name: "dataset", req: &pb.ReadTimeSeriesRowsReq{
+			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "other", DatasetId: "dataset",
+			Selectors: []*pb.TimeSeriesSelector{validSelector}, Order: pb.SortOrder_SORT_ORDER_DESC,
+		}},
+		{name: "exact keys", req: &pb.ReadTimeSeriesRowsReq{
+			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m",
+			Selectors: []*pb.TimeSeriesSelector{validSelector}, Keys: []*pb.TimeSeriesKey{{SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m"}}, Order: pb.SortOrder_SORT_ORDER_DESC,
+		}},
+		{name: "page size", req: &pb.ReadTimeSeriesRowsReq{
+			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m",
+			Selectors: []*pb.TimeSeriesSelector{validSelector}, Page: &commonpb.Page{Size: 1001}, Order: pb.SortOrder_SORT_ORDER_DESC,
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rsp, err := svc.ReadTimeSeriesRows(context.Background(), test.req)
+			if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
+				t.Fatalf("rsp=%v err=%v", rsp, err)
+			}
+		})
+	}
+	if resolved != 0 {
+		t.Fatalf("invalid moox-skill requests resolved a data node %d times", resolved)
+	}
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func TestPrimaryExactTimeSeriesReadOmitsMissingRows(t *testing.T) {

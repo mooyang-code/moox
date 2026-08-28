@@ -163,7 +163,7 @@ func validateKlineTimeRange(start, end string) error {
 }
 
 func writeKlineResponse(cmd *cobra.Command, rsp *pb.ReadTimeSeriesRowsRsp, output string) error {
-	raw, err := protojson.MarshalOptions{UseProtoNames: true, Multiline: true}.Marshal(rsp)
+	raw, err := protojson.MarshalOptions{UseProtoNames: true, Multiline: true, EmitUnpopulated: true}.Marshal(rsp)
 	if err != nil {
 		return fmt.Errorf("encode kline response: %w", err)
 	}

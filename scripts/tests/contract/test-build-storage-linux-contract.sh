@@ -58,15 +58,29 @@ cat >"${FAKE_BIN}/ssh" <<'EOF'
 printf '%s\n' "$@" >>"${SSH_LOG}"
 if [[ "$*" == *"stat -c %s"* ]]; then
   printf '7\n'
+elif [[ "$*" == *"sha256sum"* ]]; then
+  printf '%s\n' "${REMOTE_SHA256}"
 fi
 EOF
-chmod +x "${FAKE_BIN}/moox-cli" "${FAKE_BIN}/rsync" "${FAKE_BIN}/scp" "${FAKE_BIN}/ssh"
+cat >"${FAKE_BIN}/sshpass" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == -e ]] || exit 1
+shift
+exec "$@"
+EOF
+chmod +x "${FAKE_BIN}/moox-cli" "${FAKE_BIN}/rsync" "${FAKE_BIN}/scp" "${FAKE_BIN}/ssh" "${FAKE_BIN}/sshpass"
+
+REMOTE_SHA256="$(printf '%s\n' binary | shasum -a 256 | awk '{print $1}')"
+export REMOTE_SHA256
 
 RSYNC_LOG="${TMP_ROOT}/rsync.log" \
 SCP_LOG="${TMP_ROOT}/scp.log" \
 SSH_LOG="${TMP_ROOT}/ssh.log" \
 PATH="${FAKE_BIN}:${PATH}" \
 MOOX_CLI="${FAKE_BIN}/moox-cli" \
+MOOX_SSH_PASSWORD=fixture-password \
+MOOX_STORAGE_BUILD_GOARCH=amd64 \
 CONFIG="${ROOT}/custom.toml.contract-test" \
 KNOWN_HOSTS_PATH="${TMP_ROOT}/known_hosts" \
 BIN_DIR="${TMP_ROOT}/output" \
@@ -85,11 +99,16 @@ grep -Fq -- '--exclude=node_modules' "${TMP_ROOT}/rsync.log"
 grep -Fq -- '-p 2200' "${TMP_ROOT}/rsync.log"
 grep -Fq -- '192.0.2.88' "${TMP_ROOT}/rsync.log"
 grep -Fq -- 'StrictHostKeyChecking=yes' "${TMP_ROOT}/rsync.log"
+grep -Fq -- 'BatchMode=no' "${TMP_ROOT}/rsync.log"
 grep -Fq -- 'UserKnownHostsFile' "${TMP_ROOT}/rsync.log"
 grep -Fq -- 'UserKnownHostsFile' "${TMP_ROOT}/scp.log"
+grep -Fq -- 'BatchMode=no' "${TMP_ROOT}/scp.log"
 grep -Fq -- '-p' "${TMP_ROOT}/ssh.log"
 grep -Fq -- '2200' "${TMP_ROOT}/ssh.log"
+grep -Fq -- 'BatchMode=no' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'GIT_COMMIT=' "${TMP_ROOT}/ssh.log"
+grep -Fq -- 'TARGET_GOARCH=' "${TMP_ROOT}/ssh.log"
+! grep -Fq -- 'fixture-password' "${TMP_ROOT}/rsync.log" "${TMP_ROOT}/scp.log" "${TMP_ROOT}/ssh.log"
 for binary in moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli; do
   test -s "${TMP_ROOT}/output/${binary}"
 done

@@ -3,6 +3,7 @@ package primarystore
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -16,6 +17,11 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	}
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if strings.EqualFold(strings.TrimSpace(req.GetAuthInfo().GetAppId()), mooxSkillAppID) {
+		if err := validateMooxSkillReadRequest(req); err != nil {
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		}
 	}
 	if req.GetAuthInfo().GetAppId() != "storage-view" {
 		if _, _, err := timeSeriesDataset(req); err != nil {
@@ -54,6 +60,27 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 		rows = append(rows, &pb.TimeSeriesRow{Key: timeSeriesKeyFromRowKey(row.GetKey()), Fields: row.GetFields()})
 	}
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows}, nil
+}
+
+func validateMooxSkillReadRequest(req *pb.ReadTimeSeriesRowsReq) error {
+	if req.GetSpaceId() != "crypto_market" || req.GetDatasetId() != "binance_spot_kline_1m" {
+		return errors.New("moox-skill read scope is invalid")
+	}
+	if len(req.GetKeys()) > 0 || req.GetOrder() != pb.SortOrder_SORT_ORDER_DESC {
+		return errors.New("moox-skill read shape is invalid")
+	}
+	if page := req.GetPage(); page != nil && page.GetSize() > 1000 {
+		return errors.New("moox-skill page size is too large")
+	}
+	if len(req.GetSelectors()) == 0 {
+		return errors.New("moox-skill selectors are required")
+	}
+	for _, selector := range req.GetSelectors() {
+		if selector == nil || selector.GetSpaceId() != "crypto_market" || selector.GetDatasetId() != "binance_spot_kline_1m" || selector.GetFreq() != "1m" || selector.GetSeriesTag() != "venue:binance" {
+			return errors.New("moox-skill selector scope is invalid")
+		}
+	}
+	return nil
 }
 
 func (s *Service) readHistoricalTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {

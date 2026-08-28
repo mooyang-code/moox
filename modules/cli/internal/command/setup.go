@@ -710,6 +710,12 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return fmt.Errorf("storage_deploy_invalid")
 	}
+	buildHost := host
+	buildHostRole := ""
+	if snapshot.Manifest.HasCompileHost() {
+		buildHost = snapshot.Manifest.CompileHost
+		buildHostRole = "compile"
+	}
 	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
 		RepositoryRoot: root, PublicHost: host.Address, NodeID: host.Name, ResetStorageData: resetStorageData, ResetViewData: resetViewData,
 		DeployRoot: paths.DeployRoot, ControlRoot: paths.ControlRoot, StorageRoot: paths.StorageRoot,
@@ -719,6 +725,9 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		EventBusTLSEnabled:     snapshot.Manifest.EventBus.TLSEnabled,
 		StoragePrimarySecret:   primarySecret,
 		StorageViewSecret:      viewSecret,
+		StorageBuildPassword:   buildHost.Password,
+		StorageBuildHost:       buildHost.Name,
+		StorageBuildHostRole:   buildHostRole,
 		StorageViewPolicy:      snapshot.Manifest.StorageView,
 		LocalLogs:              snapshot.Manifest.LocalLogs,
 		InstallStorageWatchdog: true,
@@ -939,18 +948,28 @@ func restartStorageClients(ctx context.Context, control setupssh.Client, control
 	}
 	if _, err := control.Run(ctx, []string{
 		"sh", "-lc",
-		`set -eu
-for service in monitor cloudnode collector; do
-  if "$1/status.sh" "$service" >/dev/null 2>&1; then
-    "$1/restart.sh" "$service"
-  fi
-done`,
+		restartStorageClientsScript,
 		"moox-restart-storage-clients", controlRoot,
 	}, nil); err != nil {
 		return fmt.Errorf("storage_client_restart_failed")
 	}
 	return nil
 }
+
+const restartStorageClientsScript = `set -eu
+for service in monitor cloudnode collector; do
+  if "$1/status.sh" "$service" >/dev/null 2>&1; then
+    restarted=0
+    for attempt in 1 2 3; do
+      if "$1/restart.sh" "$service"; then
+        restarted=1
+        break
+      fi
+      sleep 2
+    done
+    test "$restarted" -eq 1
+  fi
+done`
 
 var storageSecretValuePattern = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]+$`)
 

@@ -51,17 +51,22 @@ type Options struct {
 	NotificationWebhookURL  string
 	StoragePrimarySecret    string
 	StorageViewSecret       string
-	StorageViewPolicy       setupconfig.StorageView
-	LocalLogs               setupconfig.LocalLogs
-	HealthAuthVersion       string
-	HealthAuthAccessKey     string
-	HealthAuthSecretKey     string
-	InstallStorageWatchdog  bool
-	GatewayControlURL       string
-	GatewayControlKey       string
-	GatewayServiceKey       string
-	GatewayCABundle         []byte
-	TLSMode                 TLSMode
+	// StorageBuildPassword is used only by the cross-platform Storage build
+	// helper when the configured build host accepts password SSH auth.
+	StorageBuildPassword   string
+	StorageBuildHost       string
+	StorageBuildHostRole   string
+	StorageViewPolicy      setupconfig.StorageView
+	LocalLogs              setupconfig.LocalLogs
+	HealthAuthVersion      string
+	HealthAuthAccessKey    string
+	HealthAuthSecretKey    string
+	InstallStorageWatchdog bool
+	GatewayControlURL      string
+	GatewayControlKey      string
+	GatewayServiceKey      string
+	GatewayCABundle        []byte
+	TLSMode                TLSMode
 	// InstallLocalCA makes an internal-TLS control deployment verify that the
 	// browser machine trusts the Caddy root certificate. This is intentionally
 	// opt-in at the deployment package boundary so tests and non-browser
@@ -622,12 +627,13 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		}
 		command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "build-storage-linux.sh"))
 		command.Dir = root
-		command.Env = append(os.Environ(),
+		command.Env = setCommandEnv(os.Environ(), "MOOX_SSH_PASSWORD", opts.StorageBuildPassword)
+		command.Env = append(command.Env,
 			"MOOX_CLI="+executable,
 			"CONFIG="+filepath.Join(root, "custom.toml"),
-			// Storage uses CGO. Build on the selected deployment host so the
-			// resulting binary cannot require a newer libc than that host has.
-			"MOOX_STORAGE_BUILD_HOST="+storageNodeID(opts.NodeID),
+			"MOOX_STORAGE_BUILD_HOST="+opts.StorageBuildHost,
+			"MOOX_STORAGE_BUILD_HOST_ROLE="+opts.StorageBuildHostRole,
+			"MOOX_STORAGE_BUILD_GOARCH="+opts.TargetGOARCH,
 		)
 		if err := command.Run(); err != nil {
 			return "", err

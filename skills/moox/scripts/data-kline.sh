@@ -29,7 +29,11 @@ if [[ ! -f "${CONFIG}" || -L "${CONFIG}" ]]; then
   echo "packaged data-access config is missing or unsafe" >&2
   exit 1
 fi
-config_mode="$(stat -f '%Lp' "${CONFIG}" 2>/dev/null || stat -c '%a' "${CONFIG}")"
+if config_mode=$(stat -c '%a' "${CONFIG}" 2>/dev/null); then
+  :
+else
+  config_mode=$(stat -f '%Lp' "${CONFIG}")
+fi
 if [[ "${config_mode}" != 600 ]]; then
   echo "packaged data-access config must have permission 0600" >&2
   exit 1

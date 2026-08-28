@@ -140,6 +140,14 @@ func TestDataKlineWritesAtomic0600Output(t *testing.T) {
 	assert.Contains(t, string(raw), "ret_info")
 }
 
+func TestDataKlineEmitsIncompleteViewState(t *testing.T) {
+	reader := &fakeTimeSeriesReader{rsp: &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}}
+	stdout, _, cmd := newTestDataKlineCommand(t, reader)
+	cmd.SetArgs([]string{"--data-type", "crypto", "--symbol", "BTC-USDT"})
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, stdout.String(), `"complete": false`)
+}
+
 func TestDataKlineRejectsConfigAsOutput(t *testing.T) {
 	reader := &fakeTimeSeriesReader{rsp: &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}}
 	configPath := writeDataAccessConfig(t, validDataAccessYAML, 0o600)

@@ -652,3 +652,9 @@ password = "other-ssh-password"
 	require.NoError(t, err)
 	return snapshot
 }
+
+func TestRestartStorageClientsUsesBoundedRetries(t *testing.T) {
+	t.Parallel()
+	require.Contains(t, restartStorageClientsScript, "for attempt in 1 2 3")
+	require.Contains(t, restartStorageClientsScript, "sleep 2")
+}
