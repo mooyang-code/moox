@@ -293,10 +293,25 @@ func mergeDefaultGatewayRoutes(existingValue, defaultValue any) ([]map[string]an
 			existingMethods, methodsOK := gatewayRouteStrings(existingRoute, "gateway_methods")
 			existingCallers, callersOK := gatewayRouteStrings(existingRoute, "gateway_callers")
 			defaultCallers, defaultsOK := gatewayRouteStrings(defaultRoute, "gateway_callers")
-			if !methodsOK || !callersOK || !defaultsOK || !containsStringSet(existingMethods, defaultMethods) {
+			if !methodsOK || !callersOK || !defaultsOK || !intersectsStringSet(existingMethods, defaultMethods) {
 				continue
 			}
 			isReadTimeSeriesRoute := sameStringSet(defaultMethods, []string{"ReadTimeSeriesRows"})
+			if !containsStringSet(existingMethods, defaultMethods) {
+				// A same-endpoint route containing only part of the default method set
+				// is an operator restriction, not an obsolete default. Treat it as
+				// owning those methods so a full default route cannot overlap it and
+				// silently restore the removed write permissions.
+				if !isReadTimeSeriesRoute {
+					filteredCallers := subtractStringSet(existingCallers, []string{"moox-skill"})
+					if !sameStringSet(filteredCallers, existingCallers) {
+						existingRoute["gateway_callers"] = filteredCallers
+						changed = true
+					}
+				}
+				matched = true
+				break
+			}
 			mergedCallers := subtractStringSet(existingCallers, []string{"moox-skill"})
 			if isReadTimeSeriesRoute {
 				mergedCallers, _ = appendMissingStrings(existingCallers, defaultCallers)
@@ -438,6 +453,19 @@ func appendMissingStrings(existing, defaults []string) ([]string, bool) {
 		changed = true
 	}
 	return merged, changed
+}
+
+func intersectsStringSet(left, right []string) bool {
+	values := make(map[string]struct{}, len(left))
+	for _, value := range left {
+		values[value] = struct{}{}
+	}
+	for _, value := range right {
+		if _, ok := values[value]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func gatewayRouteObjects(value any) ([]map[string]any, bool) {

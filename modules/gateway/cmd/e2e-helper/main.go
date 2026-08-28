@@ -114,7 +114,7 @@ func runKlineNative(nodeID, upstreamAddress, readyFile, nonceDirectory, keyID, s
 	}
 	snapshot, err := gatewayproxy.NormalizeAndHash(nodeID, []gatewayproxy.Route{{
 		ServiceID: "storage-primary", Address: upstreamAddress, ServicePath: "trpc.moox.storage.PrimaryStore",
-		AllowedMethods: []string{"ReadTimeSeriesRows"}, AllowedCallers: []string{"moox-skill"},
+		AllowedMethods: []string{"ReadTimeSeriesRows", "UpsertFields"}, AllowedCallers: []string{"moox-skill"},
 	}})
 	if err != nil {
 		return err
@@ -135,7 +135,7 @@ func runKlineNative(nodeID, upstreamAddress, readyFile, nonceDirectory, keyID, s
 		},
 		Table: &table, Nonces: nonces, Disabled: func() bool { return false },
 	})
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", "127.0.0.1:11003")
 	if err != nil {
 		return err
 	}

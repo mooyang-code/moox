@@ -121,6 +121,11 @@ func (handler *Handler) HandleService(response http.ResponseWriter, request *htt
 		return
 	}
 	serviceID = route.ServiceID
+	if !serviceCallerPolicyAllows(claims.Caller) {
+		status = http.StatusForbidden
+		writeError(response, http.StatusForbidden)
+		return
+	}
 	if len(route.AllowedCallers) > 0 && !route.AllowsCaller(claims.Caller) {
 		status = http.StatusForbidden
 		writeError(response, http.StatusForbidden)

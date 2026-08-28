@@ -9,9 +9,11 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/gateway/internal/health"
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -68,6 +70,30 @@ func TestNativeReadOnlyMethodAllowlist(t *testing.T) {
 			t.Fatalf("nativeReadOnlyMethod(%q) = %v, want %v", test.method, got, test.read)
 		}
 	}
+}
+
+func TestNativeCallerPolicyRestrictsMooxSkillToTimeSeriesRead(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		caller      string
+		servicePath string
+		method      string
+		allowed     bool
+	}{
+		{name: "skill read", caller: "moox-skill", servicePath: "trpc.moox.storage.PrimaryStore", method: "ReadTimeSeriesRows", allowed: true},
+		{name: "skill storage write", caller: "moox-skill", servicePath: "trpc.moox.storage.PrimaryStore", method: "UpsertFields"},
+		{name: "skill wildcard collector write", caller: "moox-skill", servicePath: "trpc.moox.collector.CollectMgr", method: "CreateTaskRule"},
+		{name: "ordinary caller unchanged", caller: "admin-gateway", servicePath: "trpc.moox.collector.CollectMgr", method: "CreateTaskRule", allowed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.allowed, nativeCallerPolicyAllows(test.caller, test.servicePath, test.method))
+		})
+	}
+}
+
+func TestServiceCallerPolicyRejectsMooxSkill(t *testing.T) {
+	require.False(t, serviceCallerPolicyAllows("moox-skill"))
+	require.True(t, serviceCallerPolicyAllows("admin-gateway"))
 }
 
 func TestNativeGatewayRoundTripsJSONThroughGeneratedStorageHandler(t *testing.T) {
@@ -135,8 +161,63 @@ func TestNativeGatewayRoundTripsJSONThroughGeneratedStorageHandler(t *testing.T)
 	require.Equal(t, int32(0), int32(decoded.GetRetInfo().GetCode()))
 }
 
+func TestNativeGatewayRejectsMooxSkillOnWildcardWriteBeforeUpstream(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	upstreamStub := &nativeCollectorStub{}
+	upstream := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.collector.CollectMgr"), server.WithListener(listener))
+	collectorpb.RegisterCollectMgrService(upstream, upstreamStub)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- upstream.Serve() }()
+	t.Cleanup(func() {
+		upstream.Close(nil)
+		select {
+		case <-serveErr:
+		case <-time.After(time.Second):
+		}
+	})
+
+	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{
+		ServiceID: "collectmgr", Address: listener.Addr().String(), ServicePath: "trpc.moox.collector.CollectMgr",
+		AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}, MaxBodyBytes: 1 << 20,
+	}})
+	require.NoError(t, err)
+	var table gatewayproxy.Table
+	require.NoError(t, table.Replace(snapshot))
+	credentials := gatewayauth.Credentials{KeyID: "moox-skill", Caller: "moox-skill", Secret: testSecret}
+	desc, implementation := NativeServiceDesc(NativeOptions{NodeID: testNode, Credentials: credentials, Table: &table})
+	gatewayListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.gateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	require.NoError(t, gatewayServer.Register(desc, implementation))
+	gatewayServeErr := make(chan error, 1)
+	go func() { gatewayServeErr <- gatewayServer.Serve() }()
+	t.Cleanup(func() {
+		gatewayServer.Close(nil)
+		select {
+		case <-gatewayServeErr:
+		case <-time.After(time.Second):
+		}
+	})
+
+	proxy := collectorpb.NewCollectMgrClientProxy(gatewayauth.NewTRPCClientOptions("ip://"+gatewayListener.Addr().String(), testNode, credentials)...)
+	_, err = proxy.CreateTaskRule(context.Background(), &collectorpb.CreateTaskRuleReq{})
+	require.ErrorContains(t, err, "caller is not allowed")
+	require.Zero(t, upstreamStub.createTaskRuleCalls.Load(), "wildcard write reached Collector upstream")
+}
+
 type nativeMetadataStub struct {
 	storagepb.UnimplementedMetadata
+}
+
+type nativeCollectorStub struct {
+	collectorpb.UnimplementedCollectMgr
+	createTaskRuleCalls atomic.Int32
+}
+
+func (stub *nativeCollectorStub) CreateTaskRule(context.Context, *collectorpb.CreateTaskRuleReq) (*collectorpb.CreateTaskRuleRsp, error) {
+	stub.createTaskRuleCalls.Add(1)
+	return &collectorpb.CreateTaskRuleRsp{}, nil
 }
 
 func (*nativeMetadataStub) GetSpace(context.Context, *storagepb.GetSpaceReq) (*storagepb.GetSpaceRsp, error) {
@@ -225,6 +306,37 @@ func TestServiceRouterAllowsAuthenticatedGetSecretValue(t *testing.T) {
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "plain") {
 		t.Fatalf("response=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+}
+
+func TestServiceRouterRejectsMooxSkillOnWildcardWriteBeforeUpstream(t *testing.T) {
+	var upstreamCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		upstreamCalls.Add(1)
+	}))
+	defer upstream.Close()
+	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{
+		ServiceID: "collectmgr", Address: upstream.Listener.Addr().String(), ServicePath: "trpc.moox.collector.CollectMgr",
+		MaxBodyBytes: 1024, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"},
+	}})
+	require.NoError(t, err)
+	var table gatewayproxy.Table
+	require.NoError(t, table.Replace(snapshot))
+	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
+	require.NoError(t, err)
+	defer nonces.Close()
+	credentials := gatewayauth.Credentials{KeyID: "moox-skill", Caller: "moox-skill", Secret: testSecret}
+	handler := New(Options{NodeID: testNode, Credentials: credentials, MaxBodyBytes: 1024, Table: &table, Nonces: nonces})
+	path := "/api/service/collectmgr/CreateTaskRule"
+	request := httptest.NewRequest(http.MethodPost, path, nil)
+	headers, err := gatewayauth.Sign(credentials, gatewayauth.Request{Method: http.MethodPost, Path: path, TargetNode: testNode}, time.Now())
+	require.NoError(t, err)
+	request.Header = headers
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusForbidden, response.Code)
+	require.Zero(t, upstreamCalls.Load(), "wildcard write reached HTTP upstream")
 }
 
 func TestServiceRouterRejectsInvalidMethodAndPath(t *testing.T) {

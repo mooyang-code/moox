@@ -115,6 +115,51 @@ func TestServiceImpl_SeedDefaults_BackfillsSkillReadRouteInLegacyStorageDeployme
 	}
 }
 
+func TestServiceImpl_SeedDefaults_PreservesRestrictedPrimaryStoreMethodSubset(t *testing.T) {
+	db := setupSysDeployTestDB(t)
+	svc := NewService(&database.Manager{}, testAdminNodeID)
+	svc.dao = NewDAO(db)
+	var legacy Deployment
+	for _, item := range DefaultDeployments(testAdminNodeID) {
+		if item.ServiceName == "storage-primary" {
+			legacy = item
+			break
+		}
+	}
+	require.NotEmpty(t, legacy.ServiceName)
+	legacy.ExtraConfig = `{"gateway_methods":["GetSpace"],"gateway_callers":["admin-gateway"],"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadFields","ReadRecordRows","ReportDatasetPeriodCollected","AppendDatasetSyncPoint","WaitViewSyncPoint","ReportFactorPeriodComputed","GetFactorPeriodComputed"],"gateway_callers":["admin-gateway"],"owner":"restricted"}]}`
+	require.NoError(t, svc.dao.Create(context.Background(), &legacy))
+
+	require.NoError(t, svc.SeedDefaults(context.Background()))
+	upgraded, err := svc.dao.Get(context.Background(), testAdminNodeID, "storage-primary")
+	require.NoError(t, err)
+	var extra struct {
+		GatewayRoutes []map[string]any `json:"gateway_routes"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(upgraded.ExtraConfig), &extra))
+	var restricted map[string]any
+	var readOnly map[string]any
+	for _, route := range extra.GatewayRoutes {
+		methods, _ := route["gateway_methods"].([]any)
+		if route["service_path"] == "trpc.moox.storage.PrimaryStore" && containsAny(methods, "ReadFields") {
+			restricted = route
+		}
+		if route["service_path"] == "trpc.moox.storage.PrimaryStore" && len(methods) == 1 && containsAny(methods, "ReadTimeSeriesRows") {
+			readOnly = route
+		}
+		require.NotContains(t, methods, "UpsertFields", "default merge restored a restricted write method")
+	}
+	require.NotNil(t, restricted)
+	require.Equal(t, "restricted", restricted["owner"])
+	require.Equal(t, []any{"admin-gateway"}, restricted["gateway_callers"])
+	require.Len(t, restricted["gateway_methods"], 7)
+	require.NotNil(t, readOnly)
+	require.Contains(t, readOnly["gateway_callers"], "moox-skill")
+
+	_, err = svc.dao.CompileGatewaySnapshot(context.Background(), testAdminNodeID)
+	require.NoError(t, err)
+}
+
 func containsAny(items []any, want string) bool {
 	for _, item := range items {
 		if item == want {

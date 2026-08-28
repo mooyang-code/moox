@@ -70,7 +70,7 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 		AuthInfo: &pb.AuthInfo{AppId: klineStorageAppID, AppKey: klineStorageAppKey},
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "route not found")
+	require.Contains(t, err.Error(), "caller is not allowed")
 	require.Equal(t, int32(0), storage.writeCalls.Load(), "write RPC must be rejected before reaching Storage")
 }
 
@@ -164,6 +164,9 @@ func startKlineStorage(t *testing.T, stub *klineStorageStub) string {
 
 func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 	t.Helper()
+	probe, err := net.Listen("tcp", "127.0.0.1:11003")
+	require.NoError(t, err, "Native Gateway production port 11003 must be available for the E2E test")
+	require.NoError(t, probe.Close())
 	tempDir := t.TempDir()
 	helper := buildGatewayE2EHelper(t)
 	readyFile := filepath.Join(tempDir, "gateway.ready")
@@ -178,6 +181,14 @@ func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 	t.Cleanup(func() {
 		if process.stop(5 * time.Second) {
 			t.Errorf("gateway helper required kill: %s", process.logs.String())
+		}
+		listener, err := net.Listen("tcp", "127.0.0.1:11003")
+		if err != nil {
+			t.Errorf("gateway helper did not release production port 11003: %v", err)
+			return
+		}
+		if err := listener.Close(); err != nil {
+			t.Errorf("close production port cleanup probe: %v", err)
 		}
 	})
 	target, err := process.waitForReady(readyFile, 10*time.Second)

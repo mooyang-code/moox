@@ -82,6 +82,9 @@ func (proxy *nativeProxy) handle(_ interface{}, ctx context.Context, f server.Fi
 		if err != nil {
 			return nil, err
 		}
+		if !nativeCallerPolicyAllows(claims.Caller, route.ServicePath, method) {
+			return nil, errors.New("native gateway caller is not allowed for route")
+		}
 		if len(route.AllowedCallers) > 0 && !route.AllowsCaller(claims.Caller) {
 			return nil, errors.New("native gateway caller is not allowed for route")
 		}
