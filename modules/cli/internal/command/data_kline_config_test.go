@@ -3,6 +3,7 @@ package command
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -68,6 +69,20 @@ func TestDataAccessConfigRejectsUnknownFieldAndVersion(t *testing.T) {
 	_, err = loadDataAccessConfig(badVersion)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "version")
+}
+
+func TestDataAccessConfigRejectsNonNativeGatewayTarget(t *testing.T) {
+	for _, target := range []string{
+		"http://127.0.0.1:11003",
+		"ip://127.0.0.1:20102",
+		"ip://127.0.0.1:11004",
+	} {
+		t.Run(target, func(t *testing.T) {
+			content := strings.Replace(validDataAccessYAML, "ip://127.0.0.1:11003", target, 1)
+			_, err := loadDataAccessConfig(writeDataAccessConfig(t, content, 0o600))
+			require.ErrorContains(t, err, "gateway.target")
+		})
+	}
 }
 
 func TestDataAccessConfigRejectsUnsafeFiles(t *testing.T) {

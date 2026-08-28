@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,14 @@ import (
 const skillConfigIdentity = "moox-skill"
 
 type skillSecretReader func(context.Context, setupconfig.Host, string) ([]byte, error)
+
+type skillGatewaySnapshotReader func(context.Context, setupconfig.Host, string) (skillGatewaySnapshot, error)
+
+type skillGatewaySnapshot struct {
+	Secret   []byte
+	NodeID   string
+	Registry []byte
+}
 
 type skillGatewayCredentialRegistry struct {
 	Version     int                                   `json:"version"`
@@ -94,7 +103,7 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 			_ = transport.Close()
 		}
 	}()
-	read := func(ctx context.Context, host setupconfig.Host, path string) ([]byte, error) {
+	transportFor := func(ctx context.Context, host setupconfig.Host) (setupssh.Client, error) {
 		key := host.Name + "\x00" + host.Address
 		transport := transports[key]
 		if transport == nil {
@@ -105,22 +114,33 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 			}
 			transports[key] = transport
 		}
-		if filepath.Base(path) == "gateway-service.env" {
-			nodeID, err := readRemoteGatewayNodeID(ctx, transport, path)
-			return []byte(nodeID), err
+		return transport, nil
+	}
+	read := func(ctx context.Context, host setupconfig.Host, path string) ([]byte, error) {
+		transport, err := transportFor(ctx, host)
+		if err != nil {
+			return nil, err
 		}
 		return readRemoteSkillSecret(ctx, transport, path)
 	}
-	return buildSkillDataAccessConfig(ctx, snapshot, space, read)
+	readGateway := func(ctx context.Context, host setupconfig.Host, root string) (skillGatewaySnapshot, error) {
+		transport, err := transportFor(ctx, host)
+		if err != nil {
+			return skillGatewaySnapshot{}, err
+		}
+		return readRemoteSkillGatewaySnapshot(ctx, transport, root)
+	}
+	return buildSkillDataAccessConfig(ctx, snapshot, space, readGateway, read)
 }
 
 func buildSkillDataAccessConfig(
 	ctx context.Context,
 	snapshot *setupconfig.Snapshot,
 	spaceID string,
+	readGateway skillGatewaySnapshotReader,
 	read skillSecretReader,
 ) (dataAccessConfig, error) {
-	if snapshot == nil || read == nil {
+	if snapshot == nil || readGateway == nil || read == nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: dependencies are required")
 	}
 	spaceID = strings.TrimSpace(spaceID)
@@ -154,32 +174,22 @@ func buildSkillDataAccessConfig(
 		return dataAccessConfig{}, err
 	}
 
-	gatewayRaw, err := read(ctx, gatewayHost, filepath.Join(gatewayRoot, "secrets/gateway-moox-skill.key"))
+	gatewaySnapshot, err := readGateway(ctx, gatewayHost, gatewayRoot)
 	if err != nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway credential unavailable")
+		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway snapshot unavailable: %w", err)
 	}
-	gatewaySecret, err := normalizeSkillGatewaySecret(gatewayRaw)
+	gatewaySecret, err := normalizeSkillGatewaySecret(gatewaySnapshot.Secret)
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway credential invalid")
 	}
-	gatewayEnvRaw, err := read(ctx, gatewayHost, filepath.Join(gatewayRoot, "secrets/gateway-service.env"))
-	if err != nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway identity unavailable")
-	}
-	deployedNodeID := strings.TrimSpace(string(gatewayEnvRaw))
+	deployedNodeID := strings.TrimSpace(gatewaySnapshot.NodeID)
 	if deployedNodeID == "" || deployedNodeID != canonicalNodeID {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway identity does not match configured target")
 	}
-	gatewayEnvRaw = nil
-	registryPath := filepath.Join(gatewayRoot, "secrets/gateway-credentials.json")
-	registryRaw, err := read(ctx, gatewayHost, registryPath)
-	if err != nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway credential registry unavailable")
-	}
-	if err := validateSkillGatewayCredentialRegistry(registryRaw, filepath.Join(gatewayRoot, "secrets/gateway-moox-skill.key")); err != nil {
+	if err := validateSkillGatewayCredentialRegistry(gatewaySnapshot.Registry, filepath.Join(gatewayRoot, "secrets/gateway-moox-skill.key")); err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: Gateway credential registry invalid: %w", err)
 	}
-	registryRaw = nil
+	gatewaySnapshot = skillGatewaySnapshot{}
 
 	controlRoot := snapshot.Manifest.Paths.Resolved().ControlRoot
 	storageRaw, err := read(ctx, snapshot.Manifest.ControlHost, filepath.Join(controlRoot, "secrets/storage-internal-auth.env"))
@@ -294,17 +304,9 @@ func resolveSkillGatewayPlacement(manifest setupconfig.Manifest, configuredNodeI
 }
 
 func validateSkillGatewayTarget(target string, host setupconfig.Host) error {
-	parsed, err := url.Parse(strings.TrimSpace(target))
-	if err != nil || parsed.Scheme != "ip" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("skill_config: storage_rpc_gateway_target must be ip://host:port")
-	}
-	targetHost, portText, err := net.SplitHostPort(parsed.Host)
-	if err != nil || strings.TrimSpace(targetHost) == "" {
-		return fmt.Errorf("skill_config: storage_rpc_gateway_target must be ip://host:port")
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 1 || port > 65535 {
-		return fmt.Errorf("skill_config: storage_rpc_gateway_target port is invalid")
+	targetHost, err := validateNativeGatewayTarget(target)
+	if err != nil {
+		return fmt.Errorf("skill_config: storage_rpc_gateway_target %w", err)
 	}
 	selectedHost := strings.TrimSpace(host.Address)
 	targetIP := net.ParseIP(targetHost)
@@ -322,6 +324,22 @@ func validateSkillGatewayTarget(target string, host setupconfig.Host) error {
 		return fmt.Errorf("skill_config: storage_rpc_gateway_target host does not match selected Gateway host")
 	}
 	return nil
+}
+
+func validateNativeGatewayTarget(target string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(target))
+	if err != nil || parsed.Scheme != "ip" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("must be ip://host:11003")
+	}
+	targetHost, portText, err := net.SplitHostPort(parsed.Host)
+	if err != nil || strings.TrimSpace(targetHost) == "" {
+		return "", fmt.Errorf("must be ip://host:11003")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port != 11003 {
+		return "", fmt.Errorf("must use Native Gateway port 11003")
+	}
+	return targetHost, nil
 }
 
 func normalizeSkillGatewaySecret(raw []byte) (string, error) {
@@ -343,20 +361,100 @@ func readRemoteSkillSecret(ctx context.Context, transport setupssh.Client, path 
 		"sh", "-lc",
 		`set -eu
 path="$1"
-[ -f "$path" ]
-[ ! -L "$path" ]
-mode=$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path")
-[ "$mode" = 600 ]
-size=$(wc -c <"$path")
-[ "$size" -gt 0 ]
-[ "$size" -le 4096 ]
-cat "$path"`,
+file_id() { stat -c '%d:%i:%s:%Y' "$1" 2>/dev/null || stat -f '%d:%i:%z:%m' "$1"; }
+file_hash() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}';
+  else shasum -a 256 "$1" | awk '{print $1}'; fi
+}
+attempt=1
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+while [ "$attempt" -le 3 ]; do
+  [ -f "$path" ] && [ ! -L "$path" ] || exit 1
+  mode=$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path")
+  [ "$mode" = 600 ] || exit 1
+  size=$(wc -c <"$path")
+  [ "$size" -gt 0 ] && [ "$size" -le 4096 ] || exit 1
+  before="$(file_id "$path"):$(file_hash "$path")"
+  cp "$path" "$tmp"
+  after="$(file_id "$path"):$(file_hash "$path")"
+  if [ "$before" = "$after" ]; then cat "$tmp"; exit 0; fi
+  attempt=$((attempt + 1))
+done
+exit 1`,
 		"moox-read-skill-secret", path,
 	}, nil)
 	if err != nil || len(result.Stdout) == 0 || len(result.Stdout) > 4096 {
 		return nil, fmt.Errorf("remote secret unavailable")
 	}
 	return []byte(result.Stdout), nil
+}
+
+func readRemoteSkillGatewaySnapshot(ctx context.Context, transport setupssh.Client, root string) (skillGatewaySnapshot, error) {
+	if transport == nil || !filepath.IsAbs(root) {
+		return skillGatewaySnapshot{}, fmt.Errorf("Gateway snapshot unavailable")
+	}
+	result, err := transport.Run(ctx, []string{
+		"sh", "-lc",
+		`set -eu
+root="$1"
+secrets="$root/secrets"
+key="$secrets/gateway-moox-skill.key"
+env="$secrets/gateway-service.env"
+registry="$secrets/gateway-credentials.json"
+file_id() { stat -c '%d:%i:%s:%Y' "$1" 2>/dev/null || stat -f '%d:%i:%z:%m' "$1"; }
+file_hash() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}';
+  else shasum -a 256 "$1" | awk '{print $1}'; fi
+}
+validate_file() {
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  mode=$(stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1")
+  [ "$mode" = 600 ] || return 1
+  size=$(wc -c <"$1")
+  [ "$size" -gt 0 ] && [ "$size" -le 4096 ]
+}
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+attempt=1
+while [ "$attempt" -le 3 ]; do
+  validate_file "$key" && validate_file "$env" && validate_file "$registry" || exit 1
+  before="$(file_id "$key"):$(file_hash "$key")|$(file_id "$env"):$(file_hash "$env")|$(file_id "$registry"):$(file_hash "$registry")"
+  cp "$key" "$tmp/key"
+  cp "$env" "$tmp/env"
+  cp "$registry" "$tmp/registry"
+  after="$(file_id "$key"):$(file_hash "$key")|$(file_id "$env"):$(file_hash "$env")|$(file_id "$registry"):$(file_hash "$registry")"
+  if [ "$before" = "$after" ]; then
+    count=$(awk -F= '$1 == "MOOX_GATEWAY_NODE_ID" { count++ } END { print count + 0 }' "$tmp/env")
+    [ "$count" -eq 1 ] || exit 1
+    node=$(sed -n 's/^MOOX_GATEWAY_NODE_ID=//p' "$tmp/env")
+    case "$node" in ''|*[!A-Za-z0-9._-]*) exit 1 ;; esac
+    printf 'MOOX_SKILL_GATEWAY_SNAPSHOT_V1\n'
+    base64 <"$tmp/key" | tr -d '\n'; printf '\n%s\n' "$node"
+    base64 <"$tmp/registry" | tr -d '\n'; printf '\n'
+    exit 0
+  fi
+  attempt=$((attempt + 1))
+done
+exit 1`,
+		"moox-read-skill-gateway-snapshot", root,
+	}, nil)
+	if err != nil || len(result.Stdout) == 0 || len(result.Stdout) > 16384 {
+		return skillGatewaySnapshot{}, fmt.Errorf("Gateway snapshot unavailable")
+	}
+	lines := strings.Split(strings.TrimSuffix(result.Stdout, "\n"), "\n")
+	if len(lines) != 4 || lines[0] != "MOOX_SKILL_GATEWAY_SNAPSHOT_V1" || lines[2] == "" || len(lines[2]) > 256 || strings.ContainsAny(lines[2], "\r") {
+		return skillGatewaySnapshot{}, fmt.Errorf("Gateway snapshot unavailable")
+	}
+	secret, err := base64.StdEncoding.Strict().DecodeString(lines[1])
+	if err != nil || len(secret) == 0 || len(secret) > 4096 {
+		return skillGatewaySnapshot{}, fmt.Errorf("Gateway snapshot unavailable")
+	}
+	registry, err := base64.StdEncoding.Strict().DecodeString(lines[3])
+	if err != nil || len(registry) == 0 || len(registry) > 4096 {
+		return skillGatewaySnapshot{}, fmt.Errorf("Gateway snapshot unavailable")
+	}
+	return skillGatewaySnapshot{Secret: secret, NodeID: lines[2], Registry: registry}, nil
 }
 
 func readRemoteGatewayNodeID(ctx context.Context, transport setupssh.Client, path string) (string, error) {

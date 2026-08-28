@@ -126,6 +126,9 @@ func (cfg dataAccessConfig) validate() error {
 			return fmt.Errorf("%s is required", field.name)
 		}
 	}
+	if _, err := validateNativeGatewayTarget(cfg.Gateway.Target); err != nil {
+		return fmt.Errorf("gateway.target %w", err)
+	}
 	if len(cfg.DataTypes) == 0 {
 		return fmt.Errorf("data_types is required")
 	}
