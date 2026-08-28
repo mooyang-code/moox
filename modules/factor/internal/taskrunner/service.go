@@ -33,6 +33,13 @@ type DatasetRunObserver interface {
 	ObserveRun(report.DatasetObservation) error
 }
 
+// StorageWriteFailureObserver receives persistence failures from factor output
+// writes. Implementations may expose durable health signals without coupling
+// the task runner to a particular health or alerting implementation.
+type StorageWriteFailureObserver interface {
+	ObserveStorageWriteFailure(error)
+}
+
 type Option func(*Service)
 
 type TaskValidator func(context.Context, Task) error
@@ -52,6 +59,12 @@ func WithTaskValidator(validator TaskValidator) Option {
 func WithDatasetMetrics(metrics DatasetRunObserver) Option {
 	return func(service *Service) {
 		service.metrics = metrics
+	}
+}
+
+func WithStorageWriteFailureObserver(observer StorageWriteFailureObserver) Option {
+	return func(service *Service) {
+		service.storageWriteFailureObserver = observer
 	}
 }
 
@@ -85,18 +98,19 @@ type preparedFactorOutput struct {
 }
 
 type Service struct {
-	workers         int
-	storage         StorageIO
-	exec            engine.Executor
-	metrics         DatasetRunObserver
-	factorGate      *FactorGate
-	taskValidator   TaskValidator
-	viewReadWorkers int
-	viewReadTimeout time.Duration
-	batchEnabled    bool
-	statusMu        sync.Mutex
-	active          int
-	pending         int
+	workers                     int
+	storage                     StorageIO
+	exec                        engine.Executor
+	metrics                     DatasetRunObserver
+	storageWriteFailureObserver StorageWriteFailureObserver
+	factorGate                  *FactorGate
+	taskValidator               TaskValidator
+	viewReadWorkers             int
+	viewReadTimeout             time.Duration
+	batchEnabled                bool
+	statusMu                    sync.Mutex
+	active                      int
+	pending                     int
 }
 
 func NewService(workers int, storage StorageIO, exec engine.Executor, opts ...Option) *Service {
@@ -262,6 +276,9 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 			var err error
 			if member.task.TriggerType == "view_ready" {
 				_, err = s.storage.WriteFactorPatch(ctx, &task, &engine.FactorResult{})
+				if err != nil {
+					s.observeStorageWriteFailure(err)
+				}
 			}
 			if err != nil {
 				batchStatus = "degraded"
@@ -411,6 +428,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 				var err error
 				rowsWritten, err = batchWriter.WriteFactorPatches(ctx, patches)
 				if err != nil {
+					s.observeStorageWriteFailure(err)
 					return engine.RetryableError{Err: err}
 				}
 				if len(rowsWritten) != len(patches) {
@@ -436,6 +454,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 					var err error
 					rowsWritten[index], err = s.storage.WriteFactorPatch(ctx, &output.task, output.result)
 					if err != nil {
+						s.observeStorageWriteFailure(err)
 						return engine.RetryableError{Err: err}
 					}
 					return nil
@@ -579,6 +598,7 @@ func (s *Service) runValidated(ctx context.Context, task Task, prepared *storage
 			// manifest is cleared instead of leaving stale factor values visible.
 			if task.TriggerType == "view_ready" {
 				if _, clearErr := s.storage.WriteFactorPatch(ctx, &task.FactorTask, &engine.FactorResult{}); clearErr != nil {
+					s.observeStorageWriteFailure(clearErr)
 					runErr = clearErr
 					return clearErr
 				}
@@ -620,6 +640,7 @@ func (s *Service) runValidated(ctx context.Context, task Task, prepared *storage
 			}
 			rowsWritten, err := s.storage.WriteFactorPatch(ctx, &chunkTask, result)
 			if err != nil {
+				s.observeStorageWriteFailure(err)
 				return engine.RetryableError{Err: err}
 			}
 			observation := report.DatasetObservation{
@@ -758,6 +779,13 @@ func (s *Service) observeDatasetRun(ctx context.Context, observation report.Data
 			observation.Key.SpaceID, observation.Key.DatasetID, observation.Key.Freq, observation.Result, err,
 		)
 	}
+}
+
+func (s *Service) observeStorageWriteFailure(err error) {
+	if s == nil || err == nil || s.storageWriteFailureObserver == nil {
+		return
+	}
+	s.storageWriteFailureObserver.ObserveStorageWriteFailure(err)
 }
 
 func maxTime(items []time.Time) time.Time {

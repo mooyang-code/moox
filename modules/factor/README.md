@@ -158,6 +158,11 @@ console writer；Topic ID 由发布前的 CLS 预检解析，不写入源码。�
 - `factor_view_ready_done`：本周期全部任务与结果 Marker 已提交。
 - `factor_view_ready_report_failed`：结果 Marker 上报失败，事件会保持待处理并重试。
 
+当 Factor 输出持久化返回 SQLite 损坏错误（例如 `database disk image is malformed`）时，
+服务会锁存写入故障并让 `/readyz` 返回未就绪；Monitor 的默认服务告警会触发，并将具体
+数据库错误放入告警原因。修复方式是停止 Factor、删除并重新初始化 Factor 数据库，再按
+现有流程重建相关 View 和结果。
+
 日志不包含源码、凭证或请求体；可在 CLS 固定 Topic 中按 `service_name=factor` 和上述
 事件名筛选。
 

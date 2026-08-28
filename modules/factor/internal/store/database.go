@@ -14,6 +14,27 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+// IsDatabaseCorruption reports SQLite errors that indicate the local factor
+// database can no longer be trusted for writes. The pure-Go SQLite driver wraps
+// these errors, so matching the stable SQLite message is more reliable than
+// depending on a driver-specific error type.
+func IsDatabaseCorruption(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"database disk image is malformed",
+		"malformed database schema",
+		"database corruption",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // Store owns the Factor SQLite connection and repositories.
 type Store struct {
 	db        *gorm.DB

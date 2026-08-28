@@ -161,6 +161,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	factorGate := taskrunner.NewFactorGate()
 	operationGate := taskrunner.NewOperationGate()
+	storageHealth := &factorStorageHealth{}
 	runner = taskrunner.NewService(cfg.Engine.PythonWorkers, storage, pythonPool,
 		taskrunner.WithBatchExecution(cfg.Engine.BatchEnabled),
 		taskrunner.WithViewReadConfig(
@@ -168,6 +169,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			time.Duration(cfg.Engine.ViewReadTimeoutMS)*time.Millisecond,
 		),
 		taskrunner.WithDatasetMetrics(runMetrics),
+		taskrunner.WithStorageWriteFailureObserver(storageHealth),
 		taskrunner.WithFactorGate(factorGate),
 		taskrunner.WithTaskValidator(newTaskValidator(factorRepo, bindingRepo)),
 	)
@@ -221,7 +223,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if !registered {
 		log.WarnContextf(ctx, "FactorMgr service is not configured, skip register")
 	}
-	if err := registerHealth(s, cfg, dbm, runner, pythonPool, consumer); err != nil {
+	if err := registerHealth(s, cfg, dbm, runner, pythonPool, consumer, storageHealth); err != nil {
 		return nil, err
 	}
 
@@ -406,12 +408,12 @@ type realtimeStatus interface {
 	Status() eventconsumer.Status
 }
 
-func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, runner *taskrunner.Service, pythonPool *engine.PythonWorkerPool, consumer realtimeStatus) error {
+func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, runner *taskrunner.Service, pythonPool *engine.PythonWorkerPool, consumer realtimeStatus, storageHealth *factorStorageHealth) error {
 	if cfg == nil {
 		return nil
 	}
 	state := health.New("factor", "factor-01", "", "")
-	state.SnapshotFunc = factorHealthSnapshot(cfg, dbm, runner, pythonPool, consumer, state)
+	state.SnapshotFunc = factorHealthSnapshot(cfg, dbm, runner, pythonPool, consumer, storageHealth, state)
 	if s == nil {
 		return fmt.Errorf("factor health service is unavailable")
 	}
@@ -421,7 +423,7 @@ func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, runner *tas
 	return nil
 }
 
-func factorHealthSnapshot(cfg *Config, dbm *store.Store, runner *taskrunner.Service, pythonPool *engine.PythonWorkerPool, consumer realtimeStatus, state *health.State) healthz.SnapshotFunc {
+func factorHealthSnapshot(cfg *Config, dbm *store.Store, runner *taskrunner.Service, pythonPool *engine.PythonWorkerPool, consumer realtimeStatus, storageHealth *factorStorageHealth, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		workerStatus := engine.ExecutorStatus{}
 		if pythonPool != nil {
@@ -443,15 +445,17 @@ func factorHealthSnapshot(cfg *Config, dbm *store.Store, runner *taskrunner.Serv
 			cancel()
 		}
 		eventBusReady := realtimeConsumerReady(cfg, consumer)
+		storageWriteReady := storageHealth == nil || storageHealth.Ready()
 		consumerStatus := eventconsumer.Status{}
 		if consumer != nil {
 			consumerStatus = consumer.Status()
 		}
-		ready := databaseReady && workerReady && taskRunnerReady && eventBusReady
+		ready := databaseReady && storageWriteReady && workerReady && taskRunnerReady && eventBusReady
 		state.SetReady(ready)
 		rsp := healthz.Base("factor", "factor-01", "", "", factorStartedAt, ready)
 		rsp.Details = map[string]any{
 			"database":                 databaseReady,
+			"storage_write_ready":      storageWriteReady,
 			"worker_ready":             workerReady,
 			"worker_version":           workerStatus.WorkerVersion,
 			"python_version":           workerStatus.PythonVersion,
@@ -471,6 +475,13 @@ func factorHealthSnapshot(cfg *Config, dbm *store.Store, runner *taskrunner.Serv
 			"last_event_failure_at":    healthTime(consumerStatus.LastFailureAt),
 			"last_event_failure":       consumerStatus.LastFailure,
 			"storage_gateway":          cfg.Storage.GatewayTarget,
+		}
+		if storageHealth != nil {
+			message, at := storageHealth.Error()
+			if message != "" {
+				rsp.Details["storage_write_error"] = message
+				rsp.Details["storage_write_error_at"] = healthTime(at)
+			}
 		}
 		return rsp
 	}

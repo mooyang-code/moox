@@ -166,9 +166,29 @@ func TestRunWriteFailureDoesNotAdvanceFactorWatermark(t *testing.T) {
 	require.True(t, observer.observations[0].OutputWatermark.IsZero())
 }
 
+func TestRunReportsStorageWriteFailure(t *testing.T) {
+	base := time.Unix(1, 0).UTC()
+	writeErr := errors.New("database disk image is malformed (11)")
+	observer := &recordingStorageWriteFailureObserver{}
+	runner := NewService(1, &fakeStorage{chunks: []*storageio.RangeChunk{frameChunk([]time.Time{base})}, writeErr: writeErr}, &fakeExecutor{}, WithStorageWriteFailureObserver(observer))
+
+	require.Error(t, runner.Run(context.Background(), oneBarTask("BTC", base)))
+	require.Len(t, observer.errors, 2, "the write is retried once")
+	require.ErrorIs(t, observer.errors[0], writeErr)
+	require.ErrorIs(t, observer.errors[1], writeErr)
+}
+
 type recordingDatasetObserver struct {
 	mu           sync.Mutex
 	observations []report.DatasetObservation
+}
+
+type recordingStorageWriteFailureObserver struct {
+	errors []error
+}
+
+func (o *recordingStorageWriteFailureObserver) ObserveStorageWriteFailure(err error) {
+	o.errors = append(o.errors, err)
 }
 
 func (o *recordingDatasetObserver) ObserveRun(observation report.DatasetObservation) error {

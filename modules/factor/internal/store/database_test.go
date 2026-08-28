@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,25 @@ import (
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIsDatabaseCorruption(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "wrapped malformed image", err: errors.New("persist factor output: database disk image is malformed (11)"), want: true},
+		{name: "malformed schema", err: errors.New("malformed database schema"), want: true},
+		{name: "other sqlite error", err: errors.New("database is locked"), want: false},
+		{name: "nil", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := IsDatabaseCorruption(test.err); got != test.want {
+				t.Fatalf("IsDatabaseCorruption(%v) = %v, want %v", test.err, got, test.want)
+			}
+		})
+	}
+}
 
 func TestOpenAndClose(t *testing.T) {
 	mgr, err := Open(&Options{Path: filepath.Join(t.TempDir(), "factor.db")})
