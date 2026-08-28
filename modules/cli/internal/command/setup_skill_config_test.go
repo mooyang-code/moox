@@ -114,7 +114,7 @@ func TestBuildSkillDataAccessConfigSelectsExactSpaceAndValidatesMaterial(t *test
 		case filepath.Join(paths.ControlRoot, "secrets/gateway-credentials.json"):
 			require.Equal(t, "control", host.Name)
 			return testSkillRegistryRaw(), nil
-		case filepath.Join(paths.ControlRoot, "secrets/storage-internal-auth.env"):
+		case filepath.Join(paths.StorageRoot, "secrets/storage-internal-auth.env"):
 			require.Equal(t, "control", host.Name)
 			return []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=" + testSkillPrimarySecret + "\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), nil
 		default:
@@ -177,6 +177,9 @@ func TestBuildSkillDataAccessConfigReadsGatewayIdentityFromTargetHost(t *testing
 	snapshot.Manifest.ControlHost.Name = "Primary-Control"
 	snapshot.Manifest.OtherHosts = []setupconfig.Host{{Name: "Storage-Node", Address: "198.51.100.9", Port: 22, Username: "ubuntu"}}
 	paths := snapshot.Manifest.Paths.Resolved()
+	const deployedStoragePrimarySecret = "storage-host-primary-secret"
+	const staleControlPrimarySecret = "stale-control-primary-secret"
+	controlAuthRead := false
 	read := func(_ context.Context, host setupconfig.Host, path string) ([]byte, error) {
 		switch filepath.Base(path) {
 		case "gateway-moox-skill.key":
@@ -192,9 +195,13 @@ func TestBuildSkillDataAccessConfigReadsGatewayIdentityFromTargetHost(t *testing
 			require.Equal(t, filepath.Join(paths.StorageRoot, "secrets/gateway-credentials.json"), path)
 			return testSkillRegistryRaw(), nil
 		case "storage-internal-auth.env":
-			require.Equal(t, "Primary-Control", host.Name)
-			require.Equal(t, filepath.Join(paths.ControlRoot, "secrets/storage-internal-auth.env"), path)
-			return []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=" + testSkillPrimarySecret + "\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), nil
+			if host.Name == "Primary-Control" {
+				controlAuthRead = true
+				return []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=" + staleControlPrimarySecret + "\n"), nil
+			}
+			require.Equal(t, "Storage-Node", host.Name)
+			require.Equal(t, filepath.Join(paths.StorageRoot, "secrets/storage-internal-auth.env"), path)
+			return []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=" + deployedStoragePrimarySecret + "\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), nil
 		default:
 			return nil, errors.New("unexpected path")
 		}
@@ -202,6 +209,26 @@ func TestBuildSkillDataAccessConfigReadsGatewayIdentityFromTargetHost(t *testing
 	got, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto_market", read)
 	require.NoError(t, err)
 	require.Equal(t, "Storage-Node", got.Gateway.TargetNode)
+	require.Equal(t, security.HMACSHA256Hex(deployedStoragePrimarySecret, []byte("moox-skill")), got.Storage.AppKey)
+	require.NotEqual(t, security.HMACSHA256Hex(staleControlPrimarySecret, []byte("moox-skill")), got.Storage.AppKey)
+	require.False(t, controlAuthRead)
+}
+
+func TestBuildSkillDataAccessConfigRejectsUnknownStorageRootBeforeReadingSecrets(t *testing.T) {
+	snapshot := setupSkillSnapshot(t, "crypto_market", "ip://203.0.113.8:11003", "control")
+	snapshot.Manifest.Paths.StorageRoot = "relative/storage"
+	readCalled := false
+	_, err := buildSkillDataAccessConfig(context.Background(), snapshot, "crypto_market",
+		func(context.Context, setupconfig.Host, string) (skillGatewaySnapshot, error) {
+			readCalled = true
+			return skillGatewaySnapshot{}, errors.New("must not read")
+		},
+		func(context.Context, setupconfig.Host, string) ([]byte, error) {
+			readCalled = true
+			return nil, errors.New("must not read")
+		})
+	require.ErrorContains(t, err, "Storage deployment placement")
+	require.False(t, readCalled)
 }
 
 func TestBuildSkillDataAccessConfigCanonicalizesControlGatewayNode(t *testing.T) {
@@ -210,15 +237,18 @@ func TestBuildSkillDataAccessConfigCanonicalizesControlGatewayNode(t *testing.T)
 	paths := snapshot.Manifest.Paths.Resolved()
 	read := func(_ context.Context, host setupconfig.Host, path string) ([]byte, error) {
 		require.Equal(t, "Primary-Control", host.Name)
-		require.Contains(t, path, paths.ControlRoot)
 		switch filepath.Base(path) {
 		case "gateway-moox-skill.key":
+			require.Contains(t, path, paths.ControlRoot)
 			return []byte(testSkillGatewaySecret), nil
 		case "gateway-service.env":
+			require.Contains(t, path, paths.ControlRoot)
 			return []byte("control"), nil
 		case "gateway-credentials.json":
+			require.Contains(t, path, paths.ControlRoot)
 			return testSkillRegistryRaw(), nil
 		case "storage-internal-auth.env":
+			require.Equal(t, filepath.Join(paths.StorageRoot, "secrets/storage-internal-auth.env"), path)
 			return []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=" + testSkillPrimarySecret + "\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), nil
 		default:
 			return nil, errors.New("unexpected path")
@@ -390,7 +420,7 @@ func TestBuildSkillDataAccessConfigSupportsExistingGatewayServiceEnv(t *testing.
 	require.NotContains(t, oldServiceEnv, "MOOX_GATEWAY_TARGET_NODE")
 	require.NoError(t, os.WriteFile(filepath.Join(storageRoot, "secrets/gateway-service.env"), []byte(oldServiceEnv), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(storageRoot, "secrets/gateway-credentials.json"), testSkillRegistryRaw(), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(controlRoot, "secrets/storage-internal-auth.env"), []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET="+testSkillPrimarySecret+"\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(storageRoot, "secrets/storage-internal-auth.env"), []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET="+testSkillPrimarySecret+"\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), 0o600))
 
 	snapshot := setupSkillSnapshot(t, "crypto_market", "ip://198.51.100.9:11003", "storage")
 	snapshot.Manifest.Paths.ControlRoot = controlRoot

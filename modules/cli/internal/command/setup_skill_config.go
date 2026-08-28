@@ -173,6 +173,10 @@ func buildSkillDataAccessConfig(
 	if err := validateSkillGatewayTarget(target, gatewayHost); err != nil {
 		return dataAccessConfig{}, err
 	}
+	storageRoot := strings.TrimSpace(snapshot.Manifest.Paths.Resolved().StorageRoot)
+	if storageRoot == "" || !filepath.IsAbs(storageRoot) {
+		return dataAccessConfig{}, fmt.Errorf("skill_config: Storage deployment placement unavailable")
+	}
 
 	gatewaySnapshot, err := readGateway(ctx, gatewayHost, gatewayRoot)
 	if err != nil {
@@ -191,8 +195,7 @@ func buildSkillDataAccessConfig(
 	}
 	gatewaySnapshot = skillGatewaySnapshot{}
 
-	controlRoot := snapshot.Manifest.Paths.Resolved().ControlRoot
-	storageRaw, err := read(ctx, snapshot.Manifest.ControlHost, filepath.Join(controlRoot, "secrets/storage-internal-auth.env"))
+	storageRaw, err := read(ctx, gatewayHost, filepath.Join(storageRoot, "secrets/storage-internal-auth.env"))
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: Storage auth unavailable")
 	}
