@@ -293,83 +293,98 @@ func mergeDefaultGatewayRoutes(existingValue, defaultValue any) ([]map[string]an
 }
 
 func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) ([]map[string]any, bool) {
-	changed := false
-	removedRoutes := make(map[int]struct{})
-	for _, defaultRoute := range defaults {
-		defaultMethods, ok := gatewayRouteStrings(defaultRoute, "gateway_methods")
-		if !ok || !sameStringSet(defaultMethods, []string{"ReadTimeSeriesRows"}) {
-			continue
-		}
-		var readRoute map[string]any
-		for _, existingRoute := range existing {
-			if !sameGatewayRouteEndpoint(existingRoute, defaultRoute) {
-				continue
-			}
-			existingMethods, ok := gatewayRouteStrings(existingRoute, "gateway_methods")
-			if !ok {
-				continue
-			}
-			if containsStringSet(existingMethods, []string{"*"}) {
-				readRoute = existingRoute
-				break
-			}
-			if !sameStringValueSet(existingMethods, defaultMethods) {
-				continue
-			}
-			if _, ok := gatewayRouteStrings(existingRoute, "gateway_callers"); !ok {
-				continue
-			}
-			readRoute = existingRoute
+	var defaultRoute map[string]any
+	var defaultMethods []string
+	for _, candidate := range defaults {
+		methods, ok := gatewayRouteStrings(candidate, "gateway_methods")
+		if ok && sameStringSet(methods, []string{"ReadTimeSeriesRows"}) {
+			defaultRoute = candidate
+			defaultMethods = methods
 			break
 		}
-		for existingIndex, existingRoute := range existing {
-			if !sameGatewayRouteEndpoint(existingRoute, defaultRoute) {
-				continue
-			}
-			existingMethods, ok := gatewayRouteStrings(existingRoute, "gateway_methods")
-			if !ok || sameStringValueSet(existingMethods, defaultMethods) || !containsStringSet(existingMethods, defaultMethods) {
-				continue
-			}
-			existingCallers, ok := gatewayRouteStrings(existingRoute, "gateway_callers")
-			if !ok {
-				continue
-			}
-			readCallers, _ := appendMissingStrings(existingCallers, []string{"moox-skill"})
-			if readRoute == nil {
-				readRoute = cloneGatewayRoute(existingRoute)
-				readRoute["gateway_methods"] = defaultMethods
-				readRoute["gateway_callers"] = readCallers
-				existing = append(existing, readRoute)
-			}
-			// The legacy default grouped this read with general PrimaryStore
-			// methods. Move only the read method; retain custom methods, callers,
-			// and all operator metadata on the original route. The dedicated
-			// skill identity must not remain authorized on the general route.
-			remainingMethods := subtractStringSet(existingMethods, defaultMethods)
-			if existingCallers, ok := gatewayRouteStrings(existingRoute, "gateway_callers"); ok {
-				filteredCallers := subtractStringSet(existingCallers, []string{"moox-skill"})
-				if len(filteredCallers) != len(existingCallers) {
-					existingRoute["gateway_callers"] = filteredCallers
-				}
-				if len(filteredCallers) == 0 {
-					removedRoutes[existingIndex] = struct{}{}
-				} else if generalMethods := defaultGatewayMethodSubset(defaults, defaultRoute, remainingMethods); len(generalMethods) > 0 && !sameStringValueSet(generalMethods, remainingMethods) {
-					customRoute := cloneGatewayRoute(existingRoute)
-					customRoute["gateway_methods"] = subtractStringSet(remainingMethods, generalMethods)
-					customRoute["gateway_callers"] = filteredCallers
-					existing = append(existing, customRoute)
-					remainingMethods = generalMethods
-				}
-			}
-			existingRoute["gateway_methods"] = remainingMethods
-			changed = true
+	}
+	if defaultRoute == nil {
+		return existing, false
+	}
+	for _, route := range existing {
+		methods, ok := gatewayRouteStrings(route, "gateway_methods")
+		if ok && containsStringSet(methods, []string{"*"}) {
+			return existing, false
+		}
+	}
+
+	changed := false
+	removedRoutes := make(map[int]struct{})
+	var readRoute map[string]any
+	readRouteFromMixed := false
+	for index, route := range existing {
+		methods, methodsOK := gatewayRouteStrings(route, "gateway_methods")
+		callers, callersOK := gatewayRouteStrings(route, "gateway_callers")
+		if !methodsOK || !callersOK || !sameStringValueSet(methods, defaultMethods) {
+			continue
 		}
 		if readRoute == nil {
-			readRoute = cloneGatewayRoute(defaultRoute)
-			readRoute["gateway_callers"] = []string{"moox-skill"}
-			existing = append(existing, readRoute)
+			readRoute = route
+			continue
+		}
+		mergedCallers, callersChanged := appendMissingStrings(mustGatewayRouteStrings(readRoute, "gateway_callers"), callers)
+		if callersChanged {
+			readRoute["gateway_callers"] = mergedCallers
 			changed = true
 		}
+		if mergeMissingGatewayRouteMetadata(readRoute, route) {
+			changed = true
+		}
+		removedRoutes[index] = struct{}{}
+		changed = true
+	}
+
+	for index, route := range existing {
+		if _, removed := removedRoutes[index]; removed {
+			continue
+		}
+		methods, methodsOK := gatewayRouteStrings(route, "gateway_methods")
+		callers, callersOK := gatewayRouteStrings(route, "gateway_callers")
+		if !methodsOK || !callersOK || sameStringValueSet(methods, defaultMethods) || !containsStringSet(methods, defaultMethods) {
+			continue
+		}
+		readCallers, _ := appendMissingStrings(callers, []string{"moox-skill"})
+		if readRoute == nil {
+			readRoute = cloneGatewayRoute(route)
+			readRoute["gateway_methods"] = defaultMethods
+			readRoute["gateway_callers"] = readCallers
+			existing = append(existing, readRoute)
+			readRouteFromMixed = true
+		} else if readRouteFromMixed {
+			mergedCallers, callersChanged := appendMissingStrings(mustGatewayRouteStrings(readRoute, "gateway_callers"), readCallers)
+			if callersChanged {
+				readRoute["gateway_callers"] = mergedCallers
+			}
+			mergeMissingGatewayRouteMetadata(readRoute, route)
+		}
+
+		remainingMethods := subtractStringSet(methods, defaultMethods)
+		filteredCallers := subtractStringSet(callers, []string{"moox-skill"})
+		if len(filteredCallers) != len(callers) {
+			route["gateway_callers"] = filteredCallers
+		}
+		if len(filteredCallers) == 0 {
+			removedRoutes[index] = struct{}{}
+		} else if generalMethods := defaultGatewayMethodSubset(defaults, defaultRoute, remainingMethods); len(generalMethods) > 0 && !sameStringValueSet(generalMethods, remainingMethods) {
+			customRoute := cloneGatewayRoute(route)
+			customRoute["gateway_methods"] = subtractStringSet(remainingMethods, generalMethods)
+			customRoute["gateway_callers"] = filteredCallers
+			existing = append(existing, customRoute)
+			remainingMethods = generalMethods
+		}
+		route["gateway_methods"] = remainingMethods
+		changed = true
+	}
+	if readRoute == nil {
+		readRoute = cloneGatewayRoute(defaultRoute)
+		readRoute["gateway_callers"] = []string{"moox-skill"}
+		existing = append(existing, readRoute)
+		changed = true
 	}
 	if len(removedRoutes) > 0 {
 		retained := make([]map[string]any, 0, len(existing)-len(removedRoutes))
@@ -381,6 +396,26 @@ func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) ([]
 		existing = retained
 	}
 	return existing, changed
+}
+
+func mustGatewayRouteStrings(route map[string]any, key string) []string {
+	values, _ := gatewayRouteStrings(route, key)
+	return values
+}
+
+func mergeMissingGatewayRouteMetadata(target, source map[string]any) bool {
+	changed := false
+	for key, value := range source {
+		switch key {
+		case "service_path", "port", "gateway_methods", "gateway_callers":
+			continue
+		}
+		if _, exists := target[key]; !exists {
+			target[key] = value
+			changed = true
+		}
+	}
+	return changed
 }
 
 func cloneGatewayRoute(route map[string]any) map[string]any {

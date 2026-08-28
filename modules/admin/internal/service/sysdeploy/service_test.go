@@ -316,6 +316,44 @@ func TestServiceImpl_SeedDefaults_MigratesDuplicateLegacyDefaultMethodsWithoutEm
 	require.NoError(t, err)
 }
 
+func TestServiceImpl_SeedDefaults_MigratesHistoricalPrimaryStoreEndpointWithoutDuplicateRead(t *testing.T) {
+	db := setupSysDeployTestDB(t)
+	svc := NewService(&database.Manager{}, testAdminNodeID)
+	svc.dao = NewDAO(db)
+	var existing Deployment
+	for _, item := range DefaultDeployments(testAdminNodeID) {
+		if item.ServiceName == "storage-primary" {
+			existing = item
+			break
+		}
+	}
+	require.NotEmpty(t, existing.ServiceName)
+	existing.ExtraConfig = `{"gateway_methods":["GetSpace"],"gateway_callers":["admin-gateway"],"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20201,"gateway_methods":["MergeTimeSeriesRows","ReadTimeSeriesRows","MergeRecordRows","ReadRecordRows"],"gateway_callers":["admin-gateway","collector"],"owner":"historical"}]}`
+	require.NoError(t, svc.dao.Create(context.Background(), &existing))
+
+	require.NoError(t, svc.SeedDefaults(context.Background()))
+	upgraded, err := svc.dao.Get(context.Background(), testAdminNodeID, "storage-primary")
+	require.NoError(t, err)
+	var extra struct {
+		GatewayRoutes []map[string]any `json:"gateway_routes"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(upgraded.ExtraConfig), &extra))
+	readRoutes := 0
+	for _, route := range extra.GatewayRoutes {
+		methods, _ := route["gateway_methods"].([]any)
+		if !containsAny(methods, "ReadTimeSeriesRows") {
+			continue
+		}
+		readRoutes++
+		require.Equal(t, float64(20201), route["port"])
+		require.Equal(t, "historical", route["owner"])
+		require.Equal(t, []any{"admin-gateway", "collector", "moox-skill"}, route["gateway_callers"])
+	}
+	require.Equal(t, 1, readRoutes)
+	_, err = svc.dao.CompileGatewaySnapshot(context.Background(), testAdminNodeID)
+	require.NoError(t, err)
+}
+
 func containsAny(items []any, want string) bool {
 	for _, item := range items {
 		if item == want {
