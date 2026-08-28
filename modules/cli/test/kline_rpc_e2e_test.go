@@ -17,6 +17,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -46,8 +47,12 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 	require.NoError(t, err, "kline CLI output: %s", output)
 	require.NotContains(t, string(output), klineGatewaySecret)
 	require.NotContains(t, string(output), klineStorageAppKey)
-	require.Contains(t, string(output), `"subject_id":  "BTC-USDT"`)
-	require.Contains(t, string(output), `"data_time":  "2026-08-28T12:34:00Z"`)
+	var response pb.ReadTimeSeriesRowsRsp
+	require.NoError(t, protojson.Unmarshal(output, &response))
+	require.Len(t, response.GetRows(), 1)
+	require.Equal(t, "BTC-USDT", response.GetRows()[0].GetKey().GetSubjectId())
+	require.Equal(t, "2026-08-28T12:34:00Z", response.GetRows()[0].GetKey().GetDataTime())
+	require.True(t, response.GetComplete())
 
 	select {
 	case req := <-storage.requests:
