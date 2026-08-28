@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,11 @@ import (
 type recordingNode struct {
 	write func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error)
 	read  func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error)
+}
+
+type recordingMarkerNode struct {
+	*recordingNode
+	markerCalls []string
 }
 
 type recordingView struct {
@@ -38,6 +44,25 @@ func (n *recordingNode) UpsertFields(ctx context.Context, req *pb.UpsertFieldsRe
 
 func (n *recordingNode) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 	return n.read(ctx, req)
+}
+
+func (n *recordingMarkerNode) AppendDatasetPeriodCollected(context.Context, *pb.AppendDatasetPeriodCollectedReq) (*pb.AppendDatasetPeriodCollectedRsp, error) {
+	n.markerCalls = append(n.markerCalls, "dataset")
+	return &pb.AppendDatasetPeriodCollectedRsp{RetInfo: successRetInfo()}, nil
+}
+
+func (n *recordingMarkerNode) AppendFactorPeriodComputed(context.Context, *pb.AppendFactorPeriodComputedReq) (*pb.AppendFactorPeriodComputedRsp, error) {
+	n.markerCalls = append(n.markerCalls, "factor")
+	return &pb.AppendFactorPeriodComputedRsp{RetInfo: successRetInfo()}, nil
+}
+
+func (n *recordingMarkerNode) AppendDatasetSyncPointMarker(context.Context, *pb.AppendDatasetSyncPointMarkerReq) (*pb.AppendDatasetSyncPointMarkerRsp, error) {
+	n.markerCalls = append(n.markerCalls, "sync-point")
+	return &pb.AppendDatasetSyncPointMarkerRsp{RetInfo: successRetInfo()}, nil
+}
+
+func (*recordingMarkerNode) GetFactorPeriodComputedMarker(context.Context, *pb.GetFactorPeriodComputedMarkerReq) (*pb.GetFactorPeriodComputedMarkerRsp, error) {
+	return &pb.GetFactorPeriodComputedMarkerRsp{RetInfo: successRetInfo()}, nil
 }
 
 func (n *recordingNode) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
@@ -68,6 +93,112 @@ func TestPrimaryRoutesAndValidatesBeforeDataNode(t *testing.T) {
 	bad, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{{Key: key}}})
 	if err != nil || bad.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("bad rsp=%v err=%v", bad, err)
+	}
+}
+
+func TestMooxSkillWriteMethodsAreDeniedBeforeDataNodeResolution(t *testing.T) {
+	resolved := 0
+	svc, err := New(Options{Resolver: func(context.Context, string, string) (DataNodeClient, error) {
+		resolved++
+		return &recordingNode{
+			write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+				return &pb.UpsertFieldsRsp{RetInfo: successRetInfo()}, nil
+			},
+			read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+				return &pb.ReadFieldsRsp{RetInfo: successRetInfo()}, nil
+			},
+		}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := &pb.AuthInfo{AppId: "moox-skill", AppKey: "valid"}
+	row := &pb.RowFieldUpsert{
+		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}},
+		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "blocked"}}}},
+	}
+	tests := map[string]func() (*pb.RetInfo, error){
+		"UpsertFields": func() (*pb.RetInfo, error) {
+			rsp, callErr := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row}})
+			return rsp.GetRetInfo(), callErr
+		},
+		"ReportDatasetPeriodCollected": func() (*pb.RetInfo, error) {
+			rsp, callErr := svc.ReportDatasetPeriodCollected(context.Background(), &pb.ReportDatasetPeriodCollectedReq{
+				AuthInfo: auth, SpaceId: "space", Marker: &pb.DatasetPeriodCollectedMarker{DatasetId: "dataset"},
+			})
+			return rsp.GetRetInfo(), callErr
+		},
+		"ReportFactorPeriodComputed": func() (*pb.RetInfo, error) {
+			rsp, callErr := svc.ReportFactorPeriodComputed(context.Background(), &pb.ReportFactorPeriodComputedReq{
+				AuthInfo: auth, SpaceId: "space", Marker: &pb.FactorPeriodComputedMarker{ResultDatasetId: "dataset"},
+			})
+			return rsp.GetRetInfo(), callErr
+		},
+		"AppendDatasetSyncPoint": func() (*pb.RetInfo, error) {
+			rsp, callErr := svc.AppendDatasetSyncPoint(context.Background(), &pb.AppendDatasetSyncPointReq{
+				AuthInfo: auth, SpaceId: "space", SyncPoint: &pb.DatasetSyncPointMarker{DatasetId: "dataset", RequestId: "request", Source: "import"},
+			})
+			return rsp.GetRetInfo(), callErr
+		},
+	}
+	for name, call := range tests {
+		t.Run(name, func(t *testing.T) {
+			before := resolved
+			info, callErr := call()
+			if callErr != nil || info.GetCode() != pb.ErrorCode_NO_PERMISSION || !strings.Contains(info.GetMsg(), "read-only primary credential") {
+				t.Fatalf("ret_info=%v err=%v", info, callErr)
+			}
+			if resolved != before {
+				t.Fatalf("DataNode resolver called: before=%d after=%d", before, resolved)
+			}
+		})
+	}
+}
+
+func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
+	node := &recordingMarkerNode{recordingNode: &recordingNode{
+		write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
+		},
+		read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+			return &pb.ReadFieldsRsp{RetInfo: successRetInfo()}, nil
+		},
+	}}
+	svc, err := New(Options{Node: node})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := &pb.RowFieldUpsert{
+		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}},
+		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "allowed"}}}},
+	}
+	upsert, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "collector"}, Rows: []*pb.RowFieldUpsert{row},
+	})
+	if err != nil || upsert.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("upsert rsp=%v err=%v", upsert, err)
+	}
+	collected, err := svc.ReportDatasetPeriodCollected(context.Background(), &pb.ReportDatasetPeriodCollectedReq{
+		AuthInfo: &pb.AuthInfo{AppId: "collector"}, SpaceId: "space", Marker: &pb.DatasetPeriodCollectedMarker{DatasetId: "dataset"},
+	})
+	if err != nil || collected.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("collected rsp=%v err=%v", collected, err)
+	}
+	computed, err := svc.ReportFactorPeriodComputed(context.Background(), &pb.ReportFactorPeriodComputedReq{
+		AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "space", Marker: &pb.FactorPeriodComputedMarker{ResultDatasetId: "dataset"},
+	})
+	if err != nil || computed.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("computed rsp=%v err=%v", computed, err)
+	}
+	syncPoint, err := svc.AppendDatasetSyncPoint(context.Background(), &pb.AppendDatasetSyncPointReq{
+		AuthInfo: &pb.AuthInfo{AppId: "storage-view"}, SpaceId: "space",
+		SyncPoint: &pb.DatasetSyncPointMarker{DatasetId: "dataset", RequestId: "request", Source: "import"},
+	})
+	if err != nil || syncPoint.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("sync point rsp=%v err=%v", syncPoint, err)
+	}
+	if !reflect.DeepEqual(node.markerCalls, []string{"dataset", "factor", "sync-point"}) {
+		t.Fatalf("marker calls=%v", node.markerCalls)
 	}
 }
 
@@ -144,7 +275,7 @@ func TestReadTimeSeriesRowsUsesSelectorsAndCopiesViewCompleteness(t *testing.T) 
 		{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &okx},
 	}
 	rsp, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
+		AuthInfo: &pb.AuthInfo{AppId: "moox-skill", AppKey: "key"},
 		SpaceId:  "space", DatasetId: "market", Selectors: selectors,
 		Order: pb.SortOrder_SORT_ORDER_DESC,
 	})

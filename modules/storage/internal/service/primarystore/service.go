@@ -46,6 +46,8 @@ type DatasetRunObserver interface {
 	ObserveRun(report.DatasetObservation) error
 }
 
+const mooxSkillAppID = "moox-skill"
+
 type Service struct {
 	resolve   dataNodeResolver
 	validate  Validator
@@ -129,6 +131,9 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 	if req == nil || len(req.GetRows()) == 0 {
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("rows are required"))}, nil
 	}
+	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
@@ -190,6 +195,13 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 		s.observeTimeSeriesRows(ctx, rows, "success", true)
 	}
 	return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
+}
+
+func rejectMooxSkillWrite(auth *pb.AuthInfo) error {
+	if strings.EqualFold(strings.TrimSpace(auth.GetAppId()), mooxSkillAppID) {
+		return errors.New("read-only primary credential")
+	}
+	return nil
 }
 
 func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*pb.RowFieldUpsert) error {
