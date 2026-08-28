@@ -131,6 +131,7 @@ function_prefix = "moox-fetcher-crypto-market"
 # region.function_count = 0 时按总数在启用地域间自动均分（每地域最多 50）。
 timer_function_count = 60
 # SCF Timer 每次直接访问该 Storage tRPC 地址，不再请求 Collector 配置接口。
+storage_gateway_node_id = "control"
 storage_rpc_gateway_target = "ip://106.53.107.122:11003"
 memory_size = 64
 timeout_seconds = 15

@@ -345,13 +345,22 @@ func TestServiceImpl_SeedDefaults_MigratesHistoricalPrimaryStoreEndpointWithoutD
 			continue
 		}
 		readRoutes++
-		require.Equal(t, float64(20201), route["port"])
+		require.Equal(t, float64(20102), route["port"])
+		require.Equal(t, "trpc.moox.storage.PrimaryStore", route["service_path"])
 		require.Equal(t, "historical", route["owner"])
 		require.Equal(t, []any{"admin-gateway", "collector", "moox-skill"}, route["gateway_callers"])
 	}
 	require.Equal(t, 1, readRoutes)
-	_, err = svc.dao.CompileGatewaySnapshot(context.Background(), testAdminNodeID)
+	snapshot, err := svc.dao.CompileGatewaySnapshot(context.Background(), testAdminNodeID)
 	require.NoError(t, err)
+	readSnapshotRoutes := 0
+	for _, route := range snapshot.Routes {
+		if route.ServicePath == "trpc.moox.storage.PrimaryStore" && containsString(route.AllowedMethods, "ReadTimeSeriesRows") {
+			readSnapshotRoutes++
+			require.Equal(t, "127.0.0.1:20102", route.Address)
+		}
+	}
+	require.Equal(t, 1, readSnapshotRoutes)
 }
 
 func containsAny(items []any, want string) bool {

@@ -1,4 +1,4 @@
-.PHONY: build build-gateway build-storage-linux check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-factor-view-ready-batch-e2e test-script-contracts test-script-e2e test-scripts proto-check release release-binaries release-matrix deploy publish-release-binaries test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
+.PHONY: build build-gateway build-storage-linux check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-factor-view-ready-batch-e2e test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check release release-binaries release-matrix deploy publish-release-binaries test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
 
 build:
 	./scripts/build.sh
@@ -99,7 +99,7 @@ proto-check:
 
 verify-pr: proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-factor-view-ready-batch-e2e test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
 
-verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy
+verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy test-skill-contracts
 	CI=true pnpm install --frozen-lockfile
 	pnpm docs:build
 
@@ -125,6 +125,10 @@ test-collector-scf-package-contract:
 
 test-script-contracts:
 	@set -e; for script in scripts/tests/contract/*.sh; do bash "scripts/$$(basename "$$script")"; done
+
+test-skill-contracts:
+	bash scripts/build/package-skill_test.sh
+	bash skills/moox/scripts/test-data-query-contract.sh
 
 test-script-e2e:
 	@set -e; for script in scripts/tests/e2e/*.sh; do bash "scripts/$$(basename "$$script")"; done

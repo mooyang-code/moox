@@ -28,6 +28,7 @@ type NativeOptions struct {
 	Nonces             nonceConsumer
 	Disabled           func() bool
 	Now                func() time.Time
+	upstreamOptions    []client.Option
 }
 
 // NativeServiceDesc is a wildcard tRPC service descriptor. Route snapshots
@@ -117,6 +118,7 @@ func (proxy *nativeProxy) handle(_ interface{}, ctx context.Context, f server.Fi
 			}
 			invokeOptions = append(invokeOptions, client.WithMetaData(key, value))
 		}
+		invokeOptions = append(invokeOptions, proxy.options.upstreamOptions...)
 		if err := client.New().Invoke(upstreamCtx, req, response,
 			invokeOptions...,
 		); err != nil {

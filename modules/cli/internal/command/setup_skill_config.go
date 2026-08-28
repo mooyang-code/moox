@@ -64,6 +64,9 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
+			if err := rejectInputOutputCollision(file, output); err != nil {
+				return fmt.Errorf("write skill config: %w", err)
+			}
 
 			config, err := deps.exportSkillConfig(cmd.Context(), snapshot, space)
 			if err != nil {
@@ -330,19 +333,38 @@ func validateSkillGatewayTarget(target string, host setupconfig.Host) error {
 }
 
 func validateNativeGatewayTarget(target string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(target))
-	if err != nil || parsed.Scheme != "ip" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+	targetHost, port, err := parseGatewayTarget(target)
+	if err != nil {
 		return "", fmt.Errorf("must be ip://host:11003")
 	}
-	targetHost, portText, err := net.SplitHostPort(parsed.Host)
-	if err != nil || strings.TrimSpace(targetHost) == "" {
-		return "", fmt.Errorf("must be ip://host:11003")
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port != 11003 {
+	if port != 11003 {
 		return "", fmt.Errorf("must use Native Gateway port 11003")
 	}
 	return targetHost, nil
+}
+
+func validateDataGatewayTarget(target string) (string, error) {
+	targetHost, _, err := parseGatewayTarget(target)
+	if err != nil {
+		return "", fmt.Errorf("must be ip://host:port")
+	}
+	return targetHost, nil
+}
+
+func parseGatewayTarget(target string) (string, int, error) {
+	parsed, err := url.Parse(strings.TrimSpace(target))
+	if err != nil || parsed.Scheme != "ip" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", 0, fmt.Errorf("invalid gateway target")
+	}
+	targetHost, portText, err := net.SplitHostPort(parsed.Host)
+	if err != nil || strings.TrimSpace(targetHost) == "" {
+		return "", 0, fmt.Errorf("invalid gateway target")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return "", 0, fmt.Errorf("invalid gateway port")
+	}
+	return targetHost, port, nil
 }
 
 func normalizeSkillGatewaySecret(raw []byte) (string, error) {

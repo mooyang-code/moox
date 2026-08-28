@@ -161,6 +161,59 @@ func TestNativeGatewayRoundTripsJSONThroughGeneratedStorageHandler(t *testing.T)
 	require.Equal(t, int32(0), int32(decoded.GetRetInfo().GetCode()))
 }
 
+func TestNativeGatewayRoutesSkillReadToCanonicalPrimaryStoreEndpoint(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err, "canonical PrimaryStore tRPC endpoint must be available")
+	upstreamStub := &nativePrimaryStoreStub{token: fmt.Sprintf("upstream-%d", time.Now().UnixNano())}
+	upstream := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.storage.PrimaryStore"), server.WithListener(listener))
+	storagepb.RegisterPrimaryStoreService(upstream, upstreamStub)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- upstream.Serve() }()
+	t.Cleanup(func() {
+		upstream.Close(nil)
+		select {
+		case <-serveErr:
+		case <-time.After(time.Second):
+		}
+	})
+
+	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{
+		ServiceID: "storage-primary", Address: listener.Addr().String(), ServicePath: "trpc.moox.storage.PrimaryStore",
+		AllowedMethods: []string{"ReadTimeSeriesRows"}, AllowedCallers: []string{"moox-skill"}, MaxBodyBytes: 1 << 20,
+	}})
+	require.NoError(t, err)
+	var table gatewayproxy.Table
+	require.NoError(t, table.Replace(snapshot))
+	credentials := gatewayauth.Credentials{KeyID: "moox-skill", Caller: "moox-skill", Secret: testSecret}
+	desc, implementation := NativeServiceDesc(NativeOptions{
+		NodeID: testNode, Credentials: credentials, Table: &table,
+		upstreamOptions: []client.Option{client.WithDisableConnectionPool()},
+	})
+	gatewayListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.gateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	require.NoError(t, gatewayServer.Register(desc, implementation))
+	gatewayServeErr := make(chan error, 1)
+	go func() { gatewayServeErr <- gatewayServer.Serve() }()
+	t.Cleanup(func() {
+		gatewayServer.Close(nil)
+		select {
+		case <-gatewayServeErr:
+		case <-time.After(time.Second):
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	clientOptions := gatewayauth.NewTRPCClientOptions("ip://"+gatewayListener.Addr().String(), testNode, credentials)
+	clientOptions = append(clientOptions, client.WithDisableConnectionPool())
+	proxy := storagepb.NewPrimaryStoreClientProxy(clientOptions...)
+	rsp, err := proxy.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{SpaceId: "market", DatasetId: "binance_spot_kline"})
+	require.NoError(t, err)
+	require.True(t, rsp.GetComplete())
+	require.Equal(t, upstreamStub.token, rsp.GetServedIndexedFrom())
+}
+
 func TestNativeGatewayRejectsMooxSkillOnWildcardWriteBeforeUpstream(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -213,6 +266,17 @@ type nativeMetadataStub struct {
 type nativeCollectorStub struct {
 	collectorpb.UnimplementedCollectMgr
 	createTaskRuleCalls atomic.Int32
+}
+
+type nativePrimaryStoreStub struct {
+	storagepb.UnimplementedPrimaryStore
+	token string
+}
+
+func (stub *nativePrimaryStoreStub) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+	return &storagepb.ReadTimeSeriesRowsRsp{
+		RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Complete: true, ServedIndexedFrom: stub.token,
+	}, nil
 }
 
 func (stub *nativeCollectorStub) CreateTaskRule(context.Context, *collectorpb.CreateTaskRuleReq) (*collectorpb.CreateTaskRuleRsp, error) {

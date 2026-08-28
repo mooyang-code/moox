@@ -97,6 +97,21 @@ func TestSetupExportSkillConfigVerifiesSnapshotBeforeWriting(t *testing.T) {
 	require.True(t, os.IsNotExist(err))
 }
 
+func TestSetupExportSkillConfigRejectsSetupFileAsOutput(t *testing.T) {
+	snapshot, path := setupSkillSnapshotWithPath(t, "crypto_market", "ip://203.0.113.8:11003", "control")
+	called := false
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		exportSkillConfig: func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error) {
+			called = true
+			return testSkillDataAccessConfig(), nil
+		},
+	})
+	cmd.SetArgs([]string{"export-skill-config", "--file", path, "--space", "crypto_market", "--output", path})
+	require.ErrorContains(t, cmd.Execute(), "must be different files")
+	require.False(t, called)
+}
+
 func TestBuildSkillDataAccessConfigSelectsExactSpaceAndValidatesMaterial(t *testing.T) {
 	snapshot := setupSkillSnapshot(t, "crypto_market_archive", "ip://wrong:11003", "control")
 	snapshot.Manifest.SCFFetcher.Spaces = append(snapshot.Manifest.SCFFetcher.Spaces, setupconfig.SCFFetcherSpace{

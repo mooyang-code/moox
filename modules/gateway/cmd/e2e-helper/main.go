@@ -31,19 +31,20 @@ func main() {
 	nodeID := flag.String("node-id", "", "target Gateway node ID")
 	upstreamURL := flag.String("upstream-url", "", "loopback Monitor upstream URL")
 	upstreamAddress := flag.String("upstream-addr", "", "loopback native tRPC upstream address")
+	listenAddress := flag.String("listen-addr", "127.0.0.1:0", "native gateway listen address")
 	readyFile := flag.String("ready-file", "", "file receiving the service URL")
 	nonceDirectory := flag.String("nonce-dir", "", "persistent nonce directory")
 	keyID := flag.String("key-id", "", "service HMAC key ID")
 	flag.Parse()
-	if err := run(*mode, *nodeID, *upstreamURL, *upstreamAddress, *readyFile, *nonceDirectory, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET")); err != nil {
+	if err := run(*mode, *nodeID, *upstreamURL, *upstreamAddress, *listenAddress, *readyFile, *nonceDirectory, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET")); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(mode, nodeID, upstreamURL, upstreamAddress, readyFile, nonceDirectory, keyID, secret string) error {
+func run(mode, nodeID, upstreamURL, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
 	if mode == "kline-native" {
-		return runKlineNative(nodeID, upstreamAddress, readyFile, nonceDirectory, keyID, secret)
+		return runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret)
 	}
 	if mode != "monitor-http" {
 		return fmt.Errorf("unsupported mode %q", mode)
@@ -107,7 +108,7 @@ func runMonitorHTTP(nodeID, upstreamURL, readyFile, nonceDirectory, keyID, secre
 	}
 }
 
-func runKlineNative(nodeID, upstreamAddress, readyFile, nonceDirectory, keyID, secret string) error {
+func runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
 	host, _, err := net.SplitHostPort(strings.TrimSpace(upstreamAddress))
 	if err != nil || (host != "127.0.0.1" && host != "::1") {
 		return fmt.Errorf("upstream-addr must be a loopback host:port")
@@ -135,7 +136,7 @@ func runKlineNative(nodeID, upstreamAddress, readyFile, nonceDirectory, keyID, s
 		},
 		Table: &table, Nonces: nonces, Disabled: func() bool { return false },
 	})
-	listener, err := net.Listen("tcp", "127.0.0.1:11003")
+	listener, err := net.Listen("tcp", strings.TrimSpace(listenAddress))
 	if err != nil {
 		return err
 	}

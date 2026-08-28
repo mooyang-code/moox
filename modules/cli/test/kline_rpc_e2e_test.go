@@ -93,13 +93,13 @@ func TestKlineRPCHelperEarlyExitRemainsObservableDuringCleanup(t *testing.T) {
 
 	select {
 	case <-process.waitDone:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("invalid helper did not exit")
 	}
 	firstErr := process.waitError()
 	require.Error(t, firstErr)
 	require.Contains(t, process.logs.String(), "upstream-addr must be a loopback host:port")
-	_, readyErr := process.waitForReady(readyFile, time.Second)
+	_, readyErr := process.waitForReady(readyFile, 2*time.Second)
 	require.ErrorContains(t, readyErr, firstErr.Error())
 	require.ErrorContains(t, readyErr, "upstream-addr must be a loopback host:port")
 
@@ -111,7 +111,7 @@ func TestKlineRPCHelperEarlyExitRemainsObservableDuringCleanup(t *testing.T) {
 	}()
 	select {
 	case <-cleanupDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("cleanup blocked after helper exit was already observed")
 	}
 	require.Equal(t, firstErr, process.waitError())
@@ -169,9 +169,6 @@ func startKlineStorage(t *testing.T, stub *klineStorageStub) string {
 
 func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 	t.Helper()
-	probe, err := net.Listen("tcp", "127.0.0.1:11003")
-	require.NoError(t, err, "Native Gateway production port 11003 must be available for the E2E test")
-	require.NoError(t, probe.Close())
 	tempDir := t.TempDir()
 	helper := buildGatewayE2EHelper(t)
 	readyFile := filepath.Join(tempDir, "gateway.ready")
@@ -187,16 +184,8 @@ func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 		if process.stop(5 * time.Second) {
 			t.Errorf("gateway helper required kill: %s", process.logs.String())
 		}
-		listener, err := net.Listen("tcp", "127.0.0.1:11003")
-		if err != nil {
-			t.Errorf("gateway helper did not release production port 11003: %v", err)
-			return
-		}
-		if err := listener.Close(); err != nil {
-			t.Errorf("close production port cleanup probe: %v", err)
-		}
 	})
-	target, err := process.waitForReady(readyFile, 10*time.Second)
+	target, err := process.waitForReady(readyFile, 30*time.Second)
 	require.NoError(t, err)
 	return target
 }

@@ -306,21 +306,30 @@ func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) ([]
 	if defaultRoute == nil {
 		return existing, false
 	}
+	defaultServicePath := fmt.Sprint(defaultRoute["service_path"])
+	changed := false
 	for _, route := range existing {
+		if fmt.Sprint(route["service_path"]) != defaultServicePath {
+			continue
+		}
 		methods, ok := gatewayRouteStrings(route, "gateway_methods")
-		if ok && containsStringSet(methods, []string{"*"}) {
-			return existing, false
+		if !ok || !containsStringSet(methods, []string{"*"}) {
+			continue
+		}
+		readRoute, migrated := migrateStorageWildcardRoute(route, defaults, defaultRoute, defaultMethods)
+		if migrated {
+			existing = append(existing, readRoute)
+			changed = true
 		}
 	}
 
-	changed := false
 	removedRoutes := make(map[int]struct{})
 	var readRoute map[string]any
 	readRouteFromMixed := false
 	for index, route := range existing {
 		methods, methodsOK := gatewayRouteStrings(route, "gateway_methods")
 		callers, callersOK := gatewayRouteStrings(route, "gateway_callers")
-		if !methodsOK || !callersOK || !sameStringValueSet(methods, defaultMethods) {
+		if fmt.Sprint(route["service_path"]) != defaultServicePath || !methodsOK || !callersOK || !sameStringValueSet(methods, defaultMethods) {
 			continue
 		}
 		if readRoute == nil {
@@ -345,7 +354,7 @@ func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) ([]
 		}
 		methods, methodsOK := gatewayRouteStrings(route, "gateway_methods")
 		callers, callersOK := gatewayRouteStrings(route, "gateway_callers")
-		if !methodsOK || !callersOK || sameStringValueSet(methods, defaultMethods) || !containsStringSet(methods, defaultMethods) {
+		if fmt.Sprint(route["service_path"]) != defaultServicePath || !methodsOK || !callersOK || sameStringValueSet(methods, defaultMethods) || !containsStringSet(methods, defaultMethods) {
 			continue
 		}
 		readCallers, _ := appendMissingStrings(callers, []string{"moox-skill"})
@@ -386,6 +395,9 @@ func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) ([]
 		existing = append(existing, readRoute)
 		changed = true
 	}
+	if normalizeGatewayRouteEndpoint(readRoute, defaultRoute) {
+		changed = true
+	}
 	if len(removedRoutes) > 0 {
 		retained := make([]map[string]any, 0, len(existing)-len(removedRoutes))
 		for index, route := range existing {
@@ -396,6 +408,69 @@ func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) ([]
 		existing = retained
 	}
 	return existing, changed
+}
+
+func migrateStorageWildcardRoute(route map[string]any, defaults []map[string]any, defaultReadRoute map[string]any, defaultReadMethods []string) (map[string]any, bool) {
+	defaultGeneralRoute := findDefaultStorageGeneralRoute(defaults, defaultReadRoute)
+	generalMethods := defaultReadMethods
+	generalCallers := mustGatewayRouteStrings(defaultReadRoute, "gateway_callers")
+	if defaultGeneralRoute != nil {
+		if methods, ok := gatewayRouteStrings(defaultGeneralRoute, "gateway_methods"); ok {
+			generalMethods = methods
+		}
+		if callers, ok := gatewayRouteStrings(defaultGeneralRoute, "gateway_callers"); ok {
+			generalCallers = callers
+		}
+	}
+
+	callers, _ := gatewayRouteStrings(route, "gateway_callers")
+	wildcardCallers := containsStringSet(callers, []string{"*"})
+	if wildcardCallers {
+		callers = append([]string(nil), generalCallers...)
+	} else {
+		callers = append([]string(nil), callers...)
+	}
+	route["gateway_methods"] = append([]string(nil), generalMethods...)
+	route["gateway_callers"] = callers
+	normalizeGatewayRouteEndpoint(route, defaultReadRoute)
+
+	readRoute := cloneGatewayRoute(route)
+	readRoute["gateway_methods"] = append([]string(nil), defaultReadMethods...)
+	readCallers := append([]string(nil), callers...)
+	if wildcardCallers {
+		readCallers = mustGatewayRouteStrings(defaultReadRoute, "gateway_callers")
+	} else {
+		readCallers, _ = appendMissingStrings(readCallers, []string{"moox-skill"})
+	}
+	readRoute["gateway_callers"] = readCallers
+	normalizeGatewayRouteEndpoint(readRoute, defaultReadRoute)
+	return readRoute, true
+}
+
+func findDefaultStorageGeneralRoute(defaults []map[string]any, readRoute map[string]any) map[string]any {
+	for _, candidate := range defaults {
+		if !sameGatewayRouteEndpoint(candidate, readRoute) {
+			continue
+		}
+		methods, ok := gatewayRouteStrings(candidate, "gateway_methods")
+		if !ok || sameStringSet(methods, []string{"ReadTimeSeriesRows"}) || containsStringSet(methods, []string{"*"}) {
+			continue
+		}
+		return candidate
+	}
+	return nil
+}
+
+func normalizeGatewayRouteEndpoint(route, defaultRoute map[string]any) bool {
+	changed := false
+	for _, key := range []string{"service_path", "port"} {
+		if fmt.Sprint(route[key]) == fmt.Sprint(defaultRoute[key]) {
+			continue
+		}
+		route[key] = defaultRoute[key]
+		changed = true
+	}
+	return changed
 }
 
 func mustGatewayRouteStrings(route map[string]any, key string) []string {

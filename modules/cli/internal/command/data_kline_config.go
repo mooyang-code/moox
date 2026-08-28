@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -62,6 +63,44 @@ func resolveDataAccessConfigPath(explicit string) string {
 		return path
 	}
 	return defaultDataAccessConfigPath
+}
+
+func rejectInputOutputCollision(input, output string) error {
+	input = strings.TrimSpace(input)
+	output = strings.TrimSpace(output)
+	if input == "" || output == "" {
+		return nil
+	}
+	inputAbs, err := filepath.Abs(input)
+	if err != nil {
+		return err
+	}
+	outputAbs, err := filepath.Abs(output)
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(inputAbs) == filepath.Clean(outputAbs) {
+		return fmt.Errorf("input %q and output %q must be different files", input, output)
+	}
+
+	inputInfo, err := os.Lstat(input)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	outputInfo, err := os.Lstat(output)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if os.SameFile(inputInfo, outputInfo) {
+		return fmt.Errorf("input %q and output %q must be different files", input, output)
+	}
+	return nil
 }
 
 func loadDataAccessConfig(explicitPath string) (dataAccessConfig, error) {
@@ -126,7 +165,7 @@ func (cfg dataAccessConfig) validate() error {
 			return fmt.Errorf("%s is required", field.name)
 		}
 	}
-	if _, err := validateNativeGatewayTarget(cfg.Gateway.Target); err != nil {
+	if _, err := validateDataGatewayTarget(cfg.Gateway.Target); err != nil {
 		return fmt.Errorf("gateway.target %w", err)
 	}
 	if len(cfg.DataTypes) == 0 {

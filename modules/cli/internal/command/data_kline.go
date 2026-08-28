@@ -85,6 +85,9 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := rejectInputOutputCollision(resolveDataAccessConfigPath(configPath), output); err != nil {
+				return fmt.Errorf("write kline response: %w", err)
+			}
 			selection, err := cfg.resolveKline(dataType, exchange, interval)
 			if err != nil {
 				return err

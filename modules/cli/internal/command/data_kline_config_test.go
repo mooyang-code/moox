@@ -74,8 +74,8 @@ func TestDataAccessConfigRejectsUnknownFieldAndVersion(t *testing.T) {
 func TestDataAccessConfigRejectsNonNativeGatewayTarget(t *testing.T) {
 	for _, target := range []string{
 		"http://127.0.0.1:11003",
-		"ip://127.0.0.1:20102",
-		"ip://127.0.0.1:11004",
+		"ip://127.0.0.1:0",
+		"ip://127.0.0.1:not-a-port",
 	} {
 		t.Run(target, func(t *testing.T) {
 			content := strings.Replace(validDataAccessYAML, "ip://127.0.0.1:11003", target, 1)
@@ -83,6 +83,12 @@ func TestDataAccessConfigRejectsNonNativeGatewayTarget(t *testing.T) {
 			require.ErrorContains(t, err, "gateway.target")
 		})
 	}
+}
+
+func TestDataAccessConfigAllowsConfiguredNativeGatewayPort(t *testing.T) {
+	content := strings.Replace(validDataAccessYAML, "ip://127.0.0.1:11003", "ip://127.0.0.1:39123", 1)
+	_, err := loadDataAccessConfig(writeDataAccessConfig(t, content, 0o600))
+	require.NoError(t, err)
 }
 
 func TestDataAccessConfigRejectsUnsafeFiles(t *testing.T) {

@@ -368,6 +368,65 @@ func TestMergeDefaultExtraConfigPreservesUserGatewayRouteByIdentity(t *testing.T
 	}
 }
 
+func TestMergeDefaultExtraConfigDoesNotRewriteUnrelatedServiceWithSameMethod(t *testing.T) {
+	existing := `{"gateway_routes":[{"service_path":"trpc.example.Analytics","port":29999,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["operator"],"owner":"ops"}]}`
+	merged, changed := mergeDefaultExtraConfig(
+		existing,
+		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["moox-skill"]}]}`,
+	)
+	if !changed {
+		t.Fatal("changed = false, want the independent PrimaryStore route to be added")
+	}
+	var extra struct {
+		GatewayRoutes []map[string]any `json:"gateway_routes"`
+	}
+	if err := json.Unmarshal([]byte(merged), &extra); err != nil {
+		t.Fatal(err)
+	}
+	if len(extra.GatewayRoutes) != 2 ||
+		extra.GatewayRoutes[0]["service_path"] != "trpc.example.Analytics" ||
+		extra.GatewayRoutes[0]["port"] != float64(29999) ||
+		!reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_callers"], []any{"operator"}) {
+		t.Fatalf("unrelated route was rewritten: %v", extra.GatewayRoutes)
+	}
+	if extra.GatewayRoutes[1]["service_path"] != "trpc.moox.storage.PrimaryStore" {
+		t.Fatalf("PrimaryStore route missing: %v", extra.GatewayRoutes)
+	}
+}
+
+func TestMergeDefaultExtraConfigIgnoresUnrelatedWildcardRoute(t *testing.T) {
+	existing := `{"gateway_routes":[{"service_path":"trpc.example.Analytics","port":29999,"gateway_methods":["*"],"gateway_callers":["operator"]},{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["UpsertFields","ReadTimeSeriesRows"],"gateway_callers":["admin-gateway"]}]}`
+	merged, changed := mergeDefaultExtraConfig(
+		existing,
+		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["moox-skill"]}]}`,
+	)
+	if !changed {
+		t.Fatal("changed = false, want the PrimaryStore mixed route to be split")
+	}
+	var extra struct {
+		GatewayRoutes []map[string]any `json:"gateway_routes"`
+	}
+	if err := json.Unmarshal([]byte(merged), &extra); err != nil {
+		t.Fatal(err)
+	}
+	if len(extra.GatewayRoutes) != 3 || extra.GatewayRoutes[0]["service_path"] != "trpc.example.Analytics" {
+		t.Fatalf("unrelated wildcard route was changed: %v", extra.GatewayRoutes)
+	}
+	var foundRead, foundGeneral bool
+	for _, route := range extra.GatewayRoutes[1:] {
+		methods, _ := route["gateway_methods"].([]any)
+		if reflect.DeepEqual(methods, []any{"ReadTimeSeriesRows"}) {
+			foundRead = reflect.DeepEqual(route["gateway_callers"], []any{"admin-gateway", "moox-skill"})
+		}
+		if reflect.DeepEqual(methods, []any{"UpsertFields"}) {
+			foundGeneral = reflect.DeepEqual(route["gateway_callers"], []any{"admin-gateway"})
+		}
+	}
+	if !foundRead || !foundGeneral {
+		t.Fatalf("PrimaryStore routes were not split safely: %v", extra.GatewayRoutes)
+	}
+}
+
 func TestMergeDefaultExtraConfigSeedsAllGatewayRoutesWhenExplicitlyEmpty(t *testing.T) {
 	merged, changed := mergeDefaultExtraConfig(
 		`{"gateway_routes":[]}`,
@@ -408,14 +467,27 @@ func TestMergeDefaultExtraConfigPreservesTightenedReadRouteCallers(t *testing.T)
 	}
 }
 
-func TestMergeDefaultExtraConfigDoesNotAppendReadRouteBesideOperatorWildcard(t *testing.T) {
+func TestMergeDefaultExtraConfigMigratesPrimaryWildcardToExplicitRoutes(t *testing.T) {
 	existing := `{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["*"],"gateway_callers":["admin-gateway"],"owner":"ops"}]}`
 	merged, changed := mergeDefaultExtraConfig(
 		existing,
-		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["moox-skill"]}]}`,
+		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["UpsertFields"],"gateway_callers":["admin-gateway"]},{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["moox-skill"]}]}`,
 	)
-	if changed || merged != existing {
-		t.Fatalf("operator wildcard route was rewritten: changed=%v merged=%s", changed, merged)
+	if !changed {
+		t.Fatal("changed = false, want storage wildcard migration")
+	}
+	var extra struct {
+		GatewayRoutes []map[string]any `json:"gateway_routes"`
+	}
+	if err := json.Unmarshal([]byte(merged), &extra); err != nil {
+		t.Fatal(err)
+	}
+	if len(extra.GatewayRoutes) != 2 ||
+		!reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_methods"], []any{"UpsertFields"}) ||
+		!reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_callers"], []any{"admin-gateway"}) ||
+		!reflect.DeepEqual(extra.GatewayRoutes[1]["gateway_methods"], []any{"ReadTimeSeriesRows"}) ||
+		!reflect.DeepEqual(extra.GatewayRoutes[1]["gateway_callers"], []any{"admin-gateway", "moox-skill"}) {
+		t.Fatalf("storage wildcard route was not migrated to explicit ACLs: %v", extra.GatewayRoutes)
 	}
 }
 
@@ -438,7 +510,7 @@ func TestMergeDefaultExtraConfigPreservesExplicitSkillRemovalFromReadCallers(t *
 	}
 }
 
-func TestMergeDefaultExtraConfigMergesDuplicateReadRoutesWithoutChangingEndpoint(t *testing.T) {
+func TestMergeDefaultExtraConfigMergesDuplicateReadRoutesAtNativeEndpoint(t *testing.T) {
 	merged, changed := mergeDefaultExtraConfig(
 		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20201,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["admin-gateway"],"owner":"historical"},{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["collector"],"timeout_ms":9000}]}`,
 		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["moox-skill"]}]}`,
@@ -453,7 +525,8 @@ func TestMergeDefaultExtraConfigMergesDuplicateReadRoutesWithoutChangingEndpoint
 		t.Fatal(err)
 	}
 	if len(extra.GatewayRoutes) != 1 ||
-		extra.GatewayRoutes[0]["port"] != float64(20201) ||
+		extra.GatewayRoutes[0]["port"] != float64(20102) ||
+		extra.GatewayRoutes[0]["service_path"] != "trpc.moox.storage.PrimaryStore" ||
 		extra.GatewayRoutes[0]["owner"] != "historical" ||
 		extra.GatewayRoutes[0]["timeout_ms"] != float64(9000) ||
 		!reflect.DeepEqual(extra.GatewayRoutes[0]["gateway_callers"], []any{"admin-gateway", "collector"}) {

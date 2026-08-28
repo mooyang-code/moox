@@ -139,3 +139,19 @@ func TestDataKlineWritesAtomic0600Output(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), "ret_info")
 }
+
+func TestDataKlineRejectsConfigAsOutput(t *testing.T) {
+	reader := &fakeTimeSeriesReader{rsp: &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}}
+	configPath := writeDataAccessConfig(t, validDataAccessYAML, 0o600)
+	cmd := newDataKlineGetCmd(dataKlineDeps{
+		loadConfig: func(string) (dataAccessConfig, error) { return loadDataAccessConfig(configPath) },
+		newReader:  func(dataAccessConfig) timeSeriesReader { return reader },
+	})
+	cmd.SetArgs([]string{"--config", configPath, "--data-type", "crypto", "--symbol", "BTC-USDT", "--output", configPath})
+	err := cmd.Execute()
+	require.ErrorContains(t, err, "must be different files")
+	assert.Nil(t, reader.request)
+	raw, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, validDataAccessYAML, string(raw))
+}
