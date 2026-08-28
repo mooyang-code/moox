@@ -1799,7 +1799,7 @@ gross/net observability without Strategy risk limits
 
 示例使用通用权重，不出现 2000U，也不复制下载目录的策略名称和注释。
 
-另增加只用于兼容性验收的 reference fixture，不作为默认生产配置：它必须能声明式编译参考配置的 9 个 components，解析其实际需要的 24 个 FactorInstance，包含 `cross_section_rank_diff`、`cross_section_rank_bias`，并证明最大 history periods 为 1609。该 fixture 只验证框架表达能力，不保留参考资金、名称或注释。
+另增加只用于兼容性验收的 reference fixture，不作为默认生产配置：它必须能声明式编译参考配置的 9 个 components，解析其实际需要的 24 个 FactorInstance，并包含 `cross_section_rank_diff`、`cross_section_rank_bias`。测试分别锁定 `RankDiff(1608)` 的 1609-period 需求，以及整套配置因 `VolumeMeanQ(936)` 的嵌套 rolling 而达到的最大 1871 periods。该 fixture 只验证框架表达能力，不保留参考资金、名称或注释。
 
 - [ ] **Step 6: 运行 CLI 测试并提交**
 
