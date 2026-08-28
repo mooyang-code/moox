@@ -160,6 +160,162 @@ func TestServiceImpl_SeedDefaults_PreservesRestrictedPrimaryStoreMethodSubset(t 
 	require.NoError(t, err)
 }
 
+func TestServiceImpl_SeedDefaults_PreservesExplicitPrimaryStoreRouteRestrictions(t *testing.T) {
+	tests := []struct {
+		name        string
+		routes      string
+		readCallers []any
+	}{
+		{
+			name: "read and custom routes do not restore default writes",
+			routes: `[{
+				"service_path":"trpc.moox.storage.PrimaryStore","port":20102,
+				"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["moox-skill"]
+			},{
+				"service_path":"trpc.moox.custom.Operator","port":29999,
+				"gateway_methods":["CustomRead"],"gateway_callers":["operator"],"owner":"ops"
+			}]`,
+			readCallers: []any{"moox-skill"},
+		},
+		{
+			name: "tightened read callers remain tightened",
+			routes: `[{
+				"service_path":"trpc.moox.storage.PrimaryStore","port":20102,
+				"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["admin-gateway"],"owner":"restricted"
+			}]`,
+			readCallers: []any{"admin-gateway"},
+		},
+		{
+			name: "duplicate read methods remain a valid dedicated route",
+			routes: `[{
+				"service_path":"trpc.moox.storage.PrimaryStore","port":20102,
+				"gateway_methods":["ReadTimeSeriesRows","ReadTimeSeriesRows"],"gateway_callers":["admin-gateway"]
+			}]`,
+			readCallers: []any{"admin-gateway"},
+		},
+		{
+			name: "skill only mixed route drops its now unauthorized write methods",
+			routes: `[{
+				"service_path":"trpc.moox.storage.PrimaryStore","port":20102,
+				"gateway_methods":["ReadTimeSeriesRows","UpsertFields"],"gateway_callers":["moox-skill"]
+			}]`,
+			readCallers: []any{"moox-skill"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db := setupSysDeployTestDB(t)
+			svc := NewService(&database.Manager{}, testAdminNodeID)
+			svc.dao = NewDAO(db)
+			var existing Deployment
+			for _, item := range DefaultDeployments(testAdminNodeID) {
+				if item.ServiceName == "storage-primary" {
+					existing = item
+					break
+				}
+			}
+			require.NotEmpty(t, existing.ServiceName)
+			existing.ExtraConfig = `{"gateway_methods":["GetSpace"],"gateway_callers":["admin-gateway"],"gateway_routes":` + test.routes + `}`
+			require.NoError(t, svc.dao.Create(context.Background(), &existing))
+
+			require.NoError(t, svc.SeedDefaults(context.Background()))
+			upgraded, err := svc.dao.Get(context.Background(), testAdminNodeID, "storage-primary")
+			require.NoError(t, err)
+			var extra struct {
+				GatewayRoutes []map[string]any `json:"gateway_routes"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(upgraded.ExtraConfig), &extra))
+			var readRoute map[string]any
+			for _, route := range extra.GatewayRoutes {
+				methods, _ := route["gateway_methods"].([]any)
+				if route["service_path"] == "trpc.moox.storage.PrimaryStore" && containsAny(methods, "ReadTimeSeriesRows") {
+					readRoute = route
+				}
+				for _, writeMethod := range []string{"UpsertFields", "ReportDatasetPeriodCollected", "ReportFactorPeriodComputed", "AppendDatasetSyncPoint"} {
+					require.NotContains(t, methods, writeMethod, "operator-deleted write route was restored")
+				}
+			}
+			require.NotNil(t, readRoute)
+			require.Equal(t, test.readCallers, readRoute["gateway_callers"])
+			_, err = svc.dao.CompileGatewaySnapshot(context.Background(), testAdminNodeID)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestServiceImpl_SeedDefaults_PreservesDedicatedReadCallersWhenMixedRouteAlsoExists(t *testing.T) {
+	db := setupSysDeployTestDB(t)
+	svc := NewService(&database.Manager{}, testAdminNodeID)
+	svc.dao = NewDAO(db)
+	var existing Deployment
+	for _, item := range DefaultDeployments(testAdminNodeID) {
+		if item.ServiceName == "storage-primary" {
+			existing = item
+			break
+		}
+	}
+	require.NotEmpty(t, existing.ServiceName)
+	existing.ExtraConfig = `{"gateway_methods":["GetSpace"],"gateway_callers":["admin-gateway"],"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["admin-gateway"],"owner":"restricted"},{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["UpsertFields","ReadTimeSeriesRows"],"gateway_callers":["collector"],"owner":"legacy"}]}`
+	require.NoError(t, svc.dao.Create(context.Background(), &existing))
+
+	require.NoError(t, svc.SeedDefaults(context.Background()))
+	upgraded, err := svc.dao.Get(context.Background(), testAdminNodeID, "storage-primary")
+	require.NoError(t, err)
+	var extra struct {
+		GatewayRoutes []map[string]any `json:"gateway_routes"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(upgraded.ExtraConfig), &extra))
+	var readRoute, writeRoute map[string]any
+	for _, route := range extra.GatewayRoutes {
+		methods, _ := route["gateway_methods"].([]any)
+		if containsAny(methods, "ReadTimeSeriesRows") {
+			readRoute = route
+		}
+		if containsAny(methods, "UpsertFields") {
+			writeRoute = route
+		}
+	}
+	require.NotNil(t, readRoute)
+	require.Equal(t, []any{"admin-gateway"}, readRoute["gateway_callers"])
+	require.Equal(t, "restricted", readRoute["owner"])
+	require.NotNil(t, writeRoute)
+	require.Equal(t, []any{"collector"}, writeRoute["gateway_callers"])
+	require.Equal(t, []any{"UpsertFields"}, writeRoute["gateway_methods"])
+	require.Equal(t, "legacy", writeRoute["owner"])
+	_, err = svc.dao.CompileGatewaySnapshot(context.Background(), testAdminNodeID)
+	require.NoError(t, err)
+}
+
+func TestServiceImpl_SeedDefaults_MigratesDuplicateLegacyDefaultMethodsWithoutEmptyRoute(t *testing.T) {
+	db := setupSysDeployTestDB(t)
+	svc := NewService(&database.Manager{}, testAdminNodeID)
+	svc.dao = NewDAO(db)
+	var existing Deployment
+	for _, item := range DefaultDeployments(testAdminNodeID) {
+		if item.ServiceName == "storage-primary" {
+			existing = item
+			break
+		}
+	}
+	require.NotEmpty(t, existing.ServiceName)
+	existing.ExtraConfig = `{"gateway_methods":["GetSpace"],"gateway_callers":["admin-gateway"],"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows","UpsertFields","UpsertFields","ReadFields","ReadRecordRows","ReportDatasetPeriodCollected","AppendDatasetSyncPoint","WaitViewSyncPoint","ReportFactorPeriodComputed","GetFactorPeriodComputed"],"gateway_callers":["admin-gateway"],"owner":"legacy"}]}`
+	require.NoError(t, svc.dao.Create(context.Background(), &existing))
+
+	require.NoError(t, svc.SeedDefaults(context.Background()))
+	upgraded, err := svc.dao.Get(context.Background(), testAdminNodeID, "storage-primary")
+	require.NoError(t, err)
+	var extra struct {
+		GatewayRoutes []map[string]any `json:"gateway_routes"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(upgraded.ExtraConfig), &extra))
+	for _, route := range extra.GatewayRoutes {
+		require.NotEmpty(t, route["gateway_methods"], "migration created an empty custom route")
+	}
+	require.Len(t, extra.GatewayRoutes, 2)
+	_, err = svc.dao.CompileGatewaySnapshot(context.Background(), testAdminNodeID)
+	require.NoError(t, err)
+}
+
 func containsAny(items []any, want string) bool {
 	for _, item := range items {
 		if item == want {

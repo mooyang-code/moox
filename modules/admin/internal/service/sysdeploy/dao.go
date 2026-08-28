@@ -279,97 +279,25 @@ func mergeDefaultGatewayRoutes(existingValue, defaultValue any) ([]map[string]an
 	if !ok {
 		return nil, false
 	}
-	existing, changed := migrateReadTimeSeriesGatewayRoutes(existing, defaults)
-	for _, defaultRoute := range defaults {
-		defaultMethods, ok := gatewayRouteStrings(defaultRoute, "gateway_methods")
-		if !ok {
-			continue
+	if len(existing) == 0 {
+		seeded := make([]map[string]any, 0, len(defaults))
+		for _, defaultRoute := range defaults {
+			seeded = append(seeded, cloneGatewayRoute(defaultRoute))
 		}
-		matched := false
-		for _, existingRoute := range existing {
-			if !sameGatewayRouteEndpoint(existingRoute, defaultRoute) {
-				continue
-			}
-			existingMethods, methodsOK := gatewayRouteStrings(existingRoute, "gateway_methods")
-			existingCallers, callersOK := gatewayRouteStrings(existingRoute, "gateway_callers")
-			defaultCallers, defaultsOK := gatewayRouteStrings(defaultRoute, "gateway_callers")
-			if !methodsOK || !callersOK || !defaultsOK || !intersectsStringSet(existingMethods, defaultMethods) {
-				continue
-			}
-			isReadTimeSeriesRoute := sameStringSet(defaultMethods, []string{"ReadTimeSeriesRows"})
-			if !containsStringSet(existingMethods, defaultMethods) {
-				// A same-endpoint route containing only part of the default method set
-				// is an operator restriction, not an obsolete default. Treat it as
-				// owning those methods so a full default route cannot overlap it and
-				// silently restore the removed write permissions.
-				if !isReadTimeSeriesRoute {
-					filteredCallers := subtractStringSet(existingCallers, []string{"moox-skill"})
-					if !sameStringSet(filteredCallers, existingCallers) {
-						existingRoute["gateway_callers"] = filteredCallers
-						changed = true
-					}
-				}
-				matched = true
-				break
-			}
-			mergedCallers := subtractStringSet(existingCallers, []string{"moox-skill"})
-			if isReadTimeSeriesRoute {
-				mergedCallers, _ = appendMissingStrings(existingCallers, defaultCallers)
-			}
-			callersChanged := !sameStringSet(mergedCallers, existingCallers)
-			if callersChanged {
-				existingRoute["gateway_callers"] = mergedCallers
-				changed = true
-			}
-			// A previous default may have combined methods that newer defaults own
-			// as separate routes. Split only that recognized shape; otherwise keep
-			// operator-added methods and route metadata untouched.
-			extraMethods := subtractStringSet(existingMethods, defaultMethods)
-			if len(extraMethods) > 0 && defaultRouteMethodsExist(defaults, defaultRoute, extraMethods) {
-				existingRoute["gateway_methods"] = defaultMethods
-				changed = true
-			} else if len(extraMethods) > 0 {
-				customCallers := subtractStringSet(existingCallers, []string{"moox-skill"})
-				if len(customCallers) > 0 {
-					customRoute := make(map[string]any, len(existingRoute))
-					for key, value := range existingRoute {
-						customRoute[key] = value
-					}
-					customRoute["gateway_methods"] = extraMethods
-					customRoute["gateway_callers"] = customCallers
-					existingRoute["gateway_methods"] = defaultMethods
-					existing = append(existing, customRoute)
-					changed = true
-				} else {
-					existingRoute["gateway_methods"] = defaultMethods
-					changed = true
-				}
-			}
-			matched = true
-			break
-		}
-		if matched {
-			continue
-		}
-		cloned := make(map[string]any, len(defaultRoute))
-		for key, value := range defaultRoute {
-			cloned[key] = value
-		}
-		existing = append(existing, cloned)
-		changed = true
+		return seeded, len(seeded) > 0
 	}
-	return existing, changed
+	// A non-empty route list is operator-owned. Never restore deleted default
+	// routes or broaden their callers; only migrate the legacy mixed time-series
+	// route and ensure the new skill read endpoint exists.
+	return migrateReadTimeSeriesGatewayRoutes(existing, defaults)
 }
 
 func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) ([]map[string]any, bool) {
 	changed := false
+	removedRoutes := make(map[int]struct{})
 	for _, defaultRoute := range defaults {
 		defaultMethods, ok := gatewayRouteStrings(defaultRoute, "gateway_methods")
 		if !ok || !sameStringSet(defaultMethods, []string{"ReadTimeSeriesRows"}) {
-			continue
-		}
-		defaultCallers, ok := gatewayRouteStrings(defaultRoute, "gateway_callers")
-		if !ok {
 			continue
 		}
 		var readRoute map[string]any
@@ -378,63 +306,102 @@ func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) ([]
 				continue
 			}
 			existingMethods, ok := gatewayRouteStrings(existingRoute, "gateway_methods")
-			if !ok || !sameStringSet(existingMethods, defaultMethods) {
-				continue
-			}
-			existingCallers, ok := gatewayRouteStrings(existingRoute, "gateway_callers")
 			if !ok {
 				continue
 			}
-			mergedCallers, callersChanged := appendMissingStrings(existingCallers, defaultCallers)
-			if callersChanged {
-				existingRoute["gateway_callers"] = mergedCallers
-				changed = true
+			if containsStringSet(existingMethods, []string{"*"}) {
+				readRoute = existingRoute
+				break
+			}
+			if !sameStringValueSet(existingMethods, defaultMethods) {
+				continue
+			}
+			if _, ok := gatewayRouteStrings(existingRoute, "gateway_callers"); !ok {
+				continue
 			}
 			readRoute = existingRoute
 			break
 		}
-		for _, existingRoute := range existing {
+		for existingIndex, existingRoute := range existing {
 			if !sameGatewayRouteEndpoint(existingRoute, defaultRoute) {
 				continue
 			}
 			existingMethods, ok := gatewayRouteStrings(existingRoute, "gateway_methods")
-			if !ok || sameStringSet(existingMethods, defaultMethods) || !containsStringSet(existingMethods, defaultMethods) {
+			if !ok || sameStringValueSet(existingMethods, defaultMethods) || !containsStringSet(existingMethods, defaultMethods) {
 				continue
 			}
 			existingCallers, ok := gatewayRouteStrings(existingRoute, "gateway_callers")
 			if !ok {
 				continue
 			}
-			readCallers, _ := appendMissingStrings(existingCallers, defaultCallers)
+			readCallers, _ := appendMissingStrings(existingCallers, []string{"moox-skill"})
 			if readRoute == nil {
-				readRoute = make(map[string]any, len(existingRoute))
-				for key, value := range existingRoute {
-					readRoute[key] = value
-				}
+				readRoute = cloneGatewayRoute(existingRoute)
 				readRoute["gateway_methods"] = defaultMethods
 				readRoute["gateway_callers"] = readCallers
 				existing = append(existing, readRoute)
-			} else if currentCallers, ok := gatewayRouteStrings(readRoute, "gateway_callers"); ok {
-				mergedCallers, callersChanged := appendMissingStrings(currentCallers, readCallers)
-				if callersChanged {
-					readRoute["gateway_callers"] = mergedCallers
-				}
 			}
 			// The legacy default grouped this read with general PrimaryStore
 			// methods. Move only the read method; retain custom methods, callers,
 			// and all operator metadata on the original route. The dedicated
 			// skill identity must not remain authorized on the general route.
-			existingRoute["gateway_methods"] = subtractStringSet(existingMethods, defaultMethods)
+			remainingMethods := subtractStringSet(existingMethods, defaultMethods)
 			if existingCallers, ok := gatewayRouteStrings(existingRoute, "gateway_callers"); ok {
 				filteredCallers := subtractStringSet(existingCallers, []string{"moox-skill"})
 				if len(filteredCallers) != len(existingCallers) {
 					existingRoute["gateway_callers"] = filteredCallers
 				}
+				if len(filteredCallers) == 0 {
+					removedRoutes[existingIndex] = struct{}{}
+				} else if generalMethods := defaultGatewayMethodSubset(defaults, defaultRoute, remainingMethods); len(generalMethods) > 0 && !sameStringValueSet(generalMethods, remainingMethods) {
+					customRoute := cloneGatewayRoute(existingRoute)
+					customRoute["gateway_methods"] = subtractStringSet(remainingMethods, generalMethods)
+					customRoute["gateway_callers"] = filteredCallers
+					existing = append(existing, customRoute)
+					remainingMethods = generalMethods
+				}
 			}
+			existingRoute["gateway_methods"] = remainingMethods
+			changed = true
+		}
+		if readRoute == nil {
+			readRoute = cloneGatewayRoute(defaultRoute)
+			readRoute["gateway_callers"] = []string{"moox-skill"}
+			existing = append(existing, readRoute)
 			changed = true
 		}
 	}
+	if len(removedRoutes) > 0 {
+		retained := make([]map[string]any, 0, len(existing)-len(removedRoutes))
+		for index, route := range existing {
+			if _, remove := removedRoutes[index]; !remove {
+				retained = append(retained, route)
+			}
+		}
+		existing = retained
+	}
 	return existing, changed
+}
+
+func cloneGatewayRoute(route map[string]any) map[string]any {
+	cloned := make(map[string]any, len(route))
+	for key, value := range route {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func defaultGatewayMethodSubset(defaults []map[string]any, readRoute map[string]any, methods []string) []string {
+	for _, candidate := range defaults {
+		if !sameGatewayRouteEndpoint(candidate, readRoute) {
+			continue
+		}
+		candidateMethods, ok := gatewayRouteStrings(candidate, "gateway_methods")
+		if ok && !sameStringSet(candidateMethods, []string{"ReadTimeSeriesRows"}) && containsStringSet(methods, candidateMethods) {
+			return candidateMethods
+		}
+	}
+	return nil
 }
 
 func appendMissingStrings(existing, defaults []string) ([]string, bool) {
@@ -453,19 +420,6 @@ func appendMissingStrings(existing, defaults []string) ([]string, bool) {
 		changed = true
 	}
 	return merged, changed
-}
-
-func intersectsStringSet(left, right []string) bool {
-	values := make(map[string]struct{}, len(left))
-	for _, value := range left {
-		values[value] = struct{}{}
-	}
-	for _, value := range right {
-		if _, ok := values[value]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 func gatewayRouteObjects(value any) ([]map[string]any, bool) {
@@ -497,21 +451,12 @@ func sameGatewayRouteEndpoint(left, right map[string]any) bool {
 		fmt.Sprint(left["port"]) == fmt.Sprint(right["port"])
 }
 
-func defaultRouteMethodsExist(defaults []map[string]any, current map[string]any, methods []string) bool {
-	for _, candidate := range defaults {
-		if !sameGatewayRouteEndpoint(candidate, current) {
-			continue
-		}
-		candidateMethods, ok := gatewayRouteStrings(candidate, "gateway_methods")
-		if ok && sameStringSet(candidateMethods, methods) {
-			return true
-		}
-	}
-	return false
-}
-
 func sameStringSet(left, right []string) bool {
 	return len(left) == len(right) && containsStringSet(left, right)
+}
+
+func sameStringValueSet(left, right []string) bool {
+	return containsStringSet(left, right) && containsStringSet(right, left)
 }
 
 func containsStringSet(haystack, needles []string) bool {
