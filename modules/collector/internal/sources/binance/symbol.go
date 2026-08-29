@@ -56,7 +56,7 @@ func (c *SymbolCollector) FetchSymbolSnapshot(ctx context.Context, params *sourc
 	if len(filtered) == 0 {
 		return nil, nil, "", fmt.Errorf("Binance active symbol snapshot is empty")
 	}
-	rows, err := buildSymbolRecordRows(filtered, params.SpaceID, params.DatasetID)
+	rows, err := buildSymbolRecordRows(filtered, params.SpaceID, params.DatasetID, params.InstType)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -232,7 +232,7 @@ func (c *SymbolCollector) reportSymbols(
 	}
 
 	// 构建所有对象行
-	allRows, err := buildSymbolRecordRows(symbols, spaceID, datasetID)
+	allRows, err := buildSymbolRecordRows(symbols, spaceID, datasetID, instType)
 	if err != nil {
 		return "", err
 	}
@@ -312,7 +312,7 @@ func (c *SymbolCollector) reportSymbols(
 		return "", fmt.Errorf("部分批次上报失败: %w", firstErr)
 	}
 
-	if err := reconcileInactiveSymbolMemberships(ctx, writer, spaceID, datasetID, symbols, memberships); err != nil {
+	if err := reconcileInactiveSymbolMemberships(ctx, writer, spaceID, datasetID, instType, symbols, memberships); err != nil {
 		return "", err
 	}
 
@@ -325,14 +325,16 @@ func reconcileInactiveSymbolMemberships(
 	writer symbolStorage,
 	spaceID string,
 	datasetID string,
+	instType string,
 	activeSymbols []*exchange.SymbolInfo,
 	memberships []*storagepb.DatasetSubject,
 ) error {
 	activeSubjectIDs := make(map[string]struct{}, len(activeSymbols))
 	for _, symbol := range activeSymbols {
-		subjectID := strings.TrimSpace(normalizedSubjectID(symbol))
+		subjectID := strings.TrimSpace(normalizedSubjectID(symbol, instType))
 		if subjectID != "" {
 			activeSubjectIDs[subjectID] = struct{}{}
+			activeSubjectIDs[legacySubjectID(subjectID)] = struct{}{}
 		}
 	}
 	inactiveMemberships := make([]*storagepb.DatasetSubject, 0)
@@ -350,9 +352,9 @@ func reconcileInactiveSymbolMemberships(
 		inactive := proto.Clone(membership).(*storagepb.DatasetSubject)
 		inactive.Status = "disabled"
 		inactiveMemberships = append(inactiveMemberships, inactive)
-		inactiveSymbols = append(inactiveSymbols, inactiveSymbolInfo(inactive.GetSubjectId()))
+		inactiveSymbols = append(inactiveSymbols, inactiveSymbolInfo(inactive.GetSubjectId(), instType))
 	}
-	inactiveRows, err := buildSymbolRecordRows(inactiveSymbols, spaceID, datasetID)
+	inactiveRows, err := buildSymbolRecordRows(inactiveSymbols, spaceID, datasetID, instType)
 	if err != nil {
 		return fmt.Errorf("build inactive symbol rows for dataset %s: %w", datasetID, err)
 	}
@@ -381,9 +383,16 @@ func reconcileInactiveSymbolMemberships(
 	return nil
 }
 
-func inactiveSymbolInfo(subjectID string) *exchange.SymbolInfo {
+func inactiveSymbolInfo(subjectID string, market ...string) *exchange.SymbolInfo {
 	subjectID = strings.TrimSpace(subjectID)
-	baseAsset, quoteAsset, _ := strings.Cut(subjectID, "-")
+	parts := strings.Split(subjectID, "-")
+	baseAsset, quoteAsset := "", ""
+	if len(parts) >= 2 {
+		baseAsset, quoteAsset = parts[0], parts[1]
+	}
+	if len(parts) >= 3 {
+		subjectID = strings.Join(parts[:2], "-")
+	}
 	return &exchange.SymbolInfo{
 		Symbol:     subjectID,
 		BaseAsset:  baseAsset,
@@ -406,7 +415,11 @@ func (c *SymbolCollector) sendSymbolBatch(
 		return err
 	}
 	for _, symbol := range symbols {
-		if _, exists := existingActive[normalizedSubjectID(symbol)]; exists {
+		subjectID := normalizedSubjectID(symbol, binding.SubjectMarket)
+		if _, exists := existingActive[subjectID]; exists {
+			continue
+		}
+		if _, exists := existingActive[legacySubjectID(subjectID)]; exists {
 			continue
 		}
 		if err := writer.RegisterDataSubject(ctx, buildSymbolRegisterRequest(symbol, spaceID, datasetID, binding)); err != nil {
@@ -422,8 +435,8 @@ func buildSymbolRegisterRequest(
 	targetDatasetID string,
 	binding StorageBinding,
 ) *storagepb.RegisterDataSubjectReq {
-	subjectID := normalizedSubjectID(symbol)
-	externalSymbol := binanceapi.FormatSymbol(subjectID)
+	subjectID := normalizedSubjectID(symbol, binding.SubjectMarket)
+	externalSymbol := externalSymbol(symbol)
 	return &storagepb.RegisterDataSubjectReq{
 		SpaceId:        spaceID,
 		DataSourceId:   binding.DataSourceID,
@@ -437,6 +450,9 @@ func buildSymbolRegisterRequest(
 			Currency:    symbol.QuoteAsset,
 			Status:      symbol.Status,
 			Attributes: map[string]string{
+				"instrument_id":   subjectID,
+				"exchange":        "binance",
+				"market_type":     strings.ToUpper(binding.SubjectMarket),
 				"base_asset":      symbol.BaseAsset,
 				"quote_asset":     symbol.QuoteAsset,
 				"external_symbol": externalSymbol,
@@ -469,14 +485,20 @@ func BuildSymbolRegisterRequests(spaceID, datasetID, instType string, symbols []
 }
 
 // buildSymbolRecordRows 构建标的结构化记录行列表。
-func buildSymbolRecordRows(symbols []*exchange.SymbolInfo, spaceID string, datasetID string) ([]*storagepb.RowFieldUpsert, error) {
+func buildSymbolRecordRows(symbols []*exchange.SymbolInfo, spaceID string, datasetID string, market ...string) ([]*storagepb.RowFieldUpsert, error) {
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(symbols))
 	version := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, s := range symbols {
-		subjectID := normalizedSubjectID(s)
+		subjectID := normalizedSubjectID(s, market...)
+		if s != nil && strings.EqualFold(s.Status, "inactive") {
+			parts := strings.Split(strings.ToUpper(strings.TrimSpace(s.Symbol)), "-")
+			if len(parts) == 2 {
+				subjectID = parts[0] + "-" + parts[1]
+			}
+		}
 		fields := []*storagepb.FieldValue{
 			stringField("symbol", subjectID),
-			stringField("external_symbol", binanceapi.FormatSymbol(subjectID)),
+			stringField("external_symbol", externalSymbol(s)),
 			stringField("base_asset", s.BaseAsset),
 			stringField("quote_asset", s.QuoteAsset),
 			stringField("status", s.Status),
@@ -511,14 +533,67 @@ func buildSymbolRecordRows(symbols []*exchange.SymbolInfo, spaceID string, datas
 	return rows, nil
 }
 
-func normalizedSubjectID(symbol *exchange.SymbolInfo) string {
-	if symbol.Symbol != "" && containsHyphen(symbol.Symbol) {
-		return symbol.Symbol
+func normalizedSubjectID(symbol *exchange.SymbolInfo, market ...string) string {
+	if symbol == nil {
+		return ""
 	}
-	if symbol.BaseAsset != "" && symbol.QuoteAsset != "" {
-		return fmt.Sprintf("%s-%s", symbol.BaseAsset, symbol.QuoteAsset)
+	base, quote := strings.ToUpper(strings.TrimSpace(symbol.BaseAsset)), strings.ToUpper(strings.TrimSpace(symbol.QuoteAsset))
+	if base == "" || quote == "" {
+		value := strings.ToUpper(strings.TrimSpace(symbol.Symbol))
+		parts := strings.Split(value, "-")
+		if len(parts) >= 2 {
+			base, quote = parts[0], parts[1]
+		}
+		if base == "" || quote == "" {
+			parsed := binanceapi.ParseSymbol(value, quote)
+			parts = strings.Split(parsed, "-")
+			if len(parts) >= 2 {
+				base, quote = parts[0], parts[1]
+			}
+		}
 	}
-	return binanceapi.ParseSymbol(symbol.Symbol, symbol.QuoteAsset)
+	suffix := ""
+	if len(market) > 0 {
+		switch strings.ToLower(strings.TrimSpace(market[0])) {
+		case "spot":
+			suffix = "SPOT"
+		case "swap", "perpetual", "future", "futures":
+			suffix = "SWAP"
+		}
+	}
+	if suffix == "" {
+		parts := strings.Split(strings.ToUpper(strings.TrimSpace(symbol.Symbol)), "-")
+		if len(parts) >= 3 && (parts[2] == "SPOT" || parts[2] == "SWAP") {
+			suffix = parts[2]
+		}
+	}
+	if base == "" || quote == "" {
+		return strings.ToUpper(strings.TrimSpace(symbol.Symbol))
+	}
+	if suffix == "" {
+		return base + "-" + quote
+	}
+	return base + "-" + quote + "-" + suffix
+}
+
+func externalSymbol(symbol *exchange.SymbolInfo) string {
+	if symbol == nil {
+		return ""
+	}
+	value := strings.ToUpper(strings.TrimSpace(symbol.Symbol))
+	parts := strings.Split(value, "-")
+	if len(parts) >= 2 {
+		return strings.Join(parts[:2], "")
+	}
+	return strings.ReplaceAll(value, "-", "")
+}
+
+func legacySubjectID(subjectID string) string {
+	parts := strings.Split(strings.ToUpper(strings.TrimSpace(subjectID)), "-")
+	if len(parts) >= 2 {
+		return parts[0] + "-" + parts[1]
+	}
+	return strings.ToUpper(strings.TrimSpace(subjectID))
 }
 
 func containsHyphen(value string) bool {
