@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"strings"
+	"time"
 )
 
 // CollectParams describes how a rule generates concrete task instances.
@@ -31,7 +33,29 @@ type CollectParams struct {
 	TargetFrequency string          `json:"target_frequency,omitempty"`
 	Alignment       string          `json:"alignment,omitempty"`
 	SettleDelayMS   *int64          `json:"settle_delay_ms,omitempty"`
+	HistoryPolicy   *HistoryPolicy  `json:"history_policy,omitempty"`
 }
+
+type HistoryPolicy struct {
+	Mode              string  `json:"mode"`
+	Lookback          int     `json:"lookback,omitempty"`
+	Since             string  `json:"since,omitempty"`
+	BatchBarLimit     int     `json:"batch_bar_limit,omitempty"`
+	MaxConcurrency    int     `json:"max_concurrency,omitempty"`
+	GapRepairLookback string  `json:"gap_repair_lookback,omitempty"`
+	RateBudgetRatio   float64 `json:"rate_budget_ratio,omitempty"`
+}
+
+const (
+	HistoryModeLiveOnly = "live_only"
+	HistoryModeLookback = "lookback"
+	HistoryModeSince    = "since"
+
+	DefaultHistoryBatchBarLimit     = 1000
+	DefaultHistoryMaxConcurrency    = 1
+	DefaultHistoryGapRepairLookback = "0m"
+	DefaultHistoryRateBudgetRatio   = 1.0
+)
 
 // CollectSource describes where target objects come from.
 type CollectSource struct {
@@ -104,6 +128,9 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 		// frequency is supplied.
 		p.Frequency = "1h"
 	}
+	if dataType == "kline" {
+		p.HistoryPolicy = normalizeHistoryPolicy(p.HistoryPolicy)
+	}
 
 	sourceKind := ""
 	switch p.SymbolSource {
@@ -144,7 +171,7 @@ func validateCollectParamsShape(raw string, fallbackDataType string) error {
 		return nil // the strict struct decoder reports the useful JSON error first
 	}
 	resample := strings.EqualFold(strings.TrimSpace(fallbackDataType), "kline_resample")
-	standardOnly := []string{"symbol_source", "symbol_dataset_id", "frequency"}
+	standardOnly := []string{"symbol_source", "symbol_dataset_id", "frequency", "history_policy"}
 	resampleOnly := []string{"source_dataset_id", "source_frequency", "source_series_tag", "target_frequency", "alignment", "settle_delay_ms"}
 	for _, key := range standardOnly {
 		if _, exists := values[key]; exists && resample {
@@ -155,6 +182,9 @@ func validateCollectParamsShape(raw string, fallbackDataType string) error {
 		if _, exists := values[key]; exists && !resample {
 			return fmt.Errorf("parse collect params: field %q is only valid for kline_resample", key)
 		}
+	}
+	if _, exists := values["history_policy"]; exists && !strings.EqualFold(strings.TrimSpace(fallbackDataType), "kline") {
+		return fmt.Errorf("parse collect params: field %q is only valid for kline", "history_policy")
 	}
 	return nil
 }
@@ -195,6 +225,9 @@ func (p *CollectParams) Validate() error {
 				return fmt.Errorf("collector.intervals must not contain empty values")
 			}
 		}
+		if err := p.ValidateHistoryPolicy(); err != nil {
+			return err
+		}
 	case "symbol":
 		if p.Source.Kind != "none" {
 			return fmt.Errorf("symbol source.kind must be none")
@@ -208,4 +241,113 @@ func (p *CollectParams) Validate() error {
 		return fmt.Errorf("unsupported collector data_type: %s", p.Collector.DataType)
 	}
 	return nil
+}
+
+func normalizeHistoryPolicy(policy *HistoryPolicy) *HistoryPolicy {
+	if policy == nil {
+		policy = &HistoryPolicy{}
+	}
+	policy.Mode = strings.ToLower(strings.TrimSpace(policy.Mode))
+	if policy.Mode == "" {
+		policy.Mode = HistoryModeLiveOnly
+	}
+	policy.Since = canonicalRFC3339(policy.Since)
+	if policy.BatchBarLimit == 0 {
+		policy.BatchBarLimit = DefaultHistoryBatchBarLimit
+	}
+	if policy.MaxConcurrency == 0 {
+		policy.MaxConcurrency = DefaultHistoryMaxConcurrency
+	}
+	if strings.TrimSpace(policy.GapRepairLookback) == "" {
+		policy.GapRepairLookback = DefaultHistoryGapRepairLookback
+	}
+	policy.GapRepairLookback = canonicalNonNegativeDuration(policy.GapRepairLookback)
+	if policy.RateBudgetRatio == 0 {
+		policy.RateBudgetRatio = DefaultHistoryRateBudgetRatio
+	}
+	return policy
+}
+
+func (p *CollectParams) ValidateHistoryPolicy() error {
+	if p == nil {
+		return fmt.Errorf("history_policy is required")
+	}
+	p.HistoryPolicy = normalizeHistoryPolicy(p.HistoryPolicy)
+	policy := p.HistoryPolicy
+	switch policy.Mode {
+	case HistoryModeLiveOnly:
+	case HistoryModeLookback:
+		if policy.Lookback <= 0 {
+			return fmt.Errorf("history_policy.lookback must be greater than 0")
+		}
+	case HistoryModeSince:
+		if strings.TrimSpace(policy.Since) == "" {
+			return fmt.Errorf("history_policy.since is required")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, policy.Since); err != nil {
+			return fmt.Errorf("history_policy.since must be RFC3339: %w", err)
+		}
+	default:
+		return fmt.Errorf("history_policy.mode %q is invalid", policy.Mode)
+	}
+	if policy.BatchBarLimit < 1 || policy.BatchBarLimit > 1000 {
+		return fmt.Errorf("history_policy.batch_bar_limit must be between 1 and 1000")
+	}
+	if policy.MaxConcurrency < 1 || policy.MaxConcurrency > 64 {
+		return fmt.Errorf("history_policy.max_concurrency must be between 1 and 64")
+	}
+	if _, err := parseNonNegativeDuration(policy.GapRepairLookback); err != nil {
+		return fmt.Errorf("history_policy.gap_repair_lookback: %w", err)
+	}
+	if policy.RateBudgetRatio <= 0 || policy.RateBudgetRatio > 1 || math.IsNaN(policy.RateBudgetRatio) || math.IsInf(policy.RateBudgetRatio, 0) {
+		return fmt.Errorf("history_policy.rate_budget_ratio must be within (0,1]")
+	}
+	return nil
+}
+
+func canonicalRFC3339(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return raw
+	}
+	return at.UTC().Format(time.RFC3339Nano)
+}
+
+func canonicalNonNegativeDuration(raw string) string {
+	value, err := parseNonNegativeDuration(raw)
+	if err != nil {
+		return strings.TrimSpace(raw)
+	}
+	return formatDurationCanonical(value)
+}
+
+func parseNonNegativeDuration(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, fmt.Errorf("duration is required")
+	}
+	if raw == "0" || raw == "0m" || raw == "0h" || raw == "0d" || raw == "0w" {
+		return 0, nil
+	}
+	return ParseScheduleInterval(raw)
+}
+
+func formatDurationCanonical(value time.Duration) string {
+	if value == 0 {
+		return "0m"
+	}
+	if value%(7*24*time.Hour) == 0 {
+		return fmt.Sprintf("%dw", int(value/(7*24*time.Hour)))
+	}
+	if value%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%dd", int(value/(24*time.Hour)))
+	}
+	if value%time.Hour == 0 {
+		return fmt.Sprintf("%dh", int(value/time.Hour))
+	}
+	return fmt.Sprintf("%dm", int(value/time.Minute))
 }

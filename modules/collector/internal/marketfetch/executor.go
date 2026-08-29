@@ -81,7 +81,7 @@ func (r *Request) validate() error {
 	maxItems := MaxRealtimeItems
 	switch r.BatchKind {
 	case domain.BatchKindRealtime:
-	case domain.BatchKindCatchup, domain.BatchKindSymbolSnapshot:
+	case domain.BatchKindCatchup, domain.BatchKindBackfill, domain.BatchKindGapRepair, domain.BatchKindSymbolSnapshot:
 		maxItems = 1
 	default:
 		return fmt.Errorf("unsupported batch_kind %q", r.BatchKind)
@@ -103,9 +103,9 @@ func (r *Request) validate() error {
 			}
 			seenTaskIDs[item.TaskID] = struct{}{}
 		}
-		if r.BatchKind == domain.BatchKindCatchup {
+		if isHistoricalBatchKind(r.BatchKind) {
 			if strings.TrimSpace(item.StartTime) == "" || item.BarLimit <= 0 || item.BarLimit > 1000 {
-				return fmt.Errorf("catchup item requires start_time and bar_limit 1..1000")
+				return fmt.Errorf("historical item requires start_time and bar_limit 1..1000")
 			}
 		} else if r.BatchKind == domain.BatchKindRealtime && item.BarLimit > MaxRealtimeRows {
 			return fmt.Errorf("realtime bar_limit must be between 1 and %d", MaxRealtimeRows)
@@ -297,7 +297,7 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 		}
 	}
 	if writeErr == nil {
-		if req.BatchKind == domain.BatchKindCatchup {
+		if isHistoricalBatchKind(req.BatchKind) {
 			// A catchup fence is meaningful only after at least one row from
 			// every item was committed. Empty or failed upstream results must
 			// remain retryable and cannot make View report imported data ready.
@@ -311,14 +311,14 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 			if committed {
 				syncStorage, ok := e.Storage.(syncPointStorage)
 				if !ok {
-					return nil, fmt.Errorf("catchup storage does not support dataset sync points")
+					return nil, fmt.Errorf("historical storage does not support dataset sync points")
 				}
 				syncPointID := strings.TrimSpace(req.SyncPointID)
 				if syncPointID == "" {
 					syncPointID = req.BatchID
 				}
-				if err := syncStorage.AppendDatasetSyncPoint(commitCtx, req.SpaceID, req.DatasetID, syncPointID, "catchup"); err != nil {
-					return nil, fmt.Errorf("append catchup dataset sync point: %w", err)
+				if err := syncStorage.AppendDatasetSyncPoint(commitCtx, req.SpaceID, req.DatasetID, syncPointID, string(req.BatchKind)); err != nil {
+					return nil, fmt.Errorf("append historical dataset sync point: %w", err)
 				}
 			}
 		}
@@ -474,29 +474,29 @@ func (e *Executor) executeItem(ctx context.Context, req Request, item domain.Col
 		return failureResult(item, domain.ItemOutcomeInvalid, "market_type", err), nil, nil, nil
 	}
 	params := &sources.CollectParams{SpaceID: req.SpaceID, DatasetID: item.DatasetID, InstType: instType, Symbol: item.Symbol, SubjectID: item.SubjectID, Interval: item.Frequency, Live: req.BatchKind == domain.BatchKindRealtime, DNSRoutes: req.DNSRoutes}
-	if req.BatchKind == domain.BatchKindCatchup {
+	if isHistoricalBatchKind(req.BatchKind) {
 		if e.Catchup == nil {
-			return failureResult(item, domain.ItemOutcomeInvalid, "catchup", fmt.Errorf("catchup collector is not initialized")), nil, nil, nil
+			return failureResult(item, domain.ItemOutcomeInvalid, "history", fmt.Errorf("historical collector is not initialized")), nil, nil, nil
 		}
 		start, parseErr := time.Parse(time.RFC3339Nano, item.StartTime)
 		if parseErr != nil {
 			return failureResult(item, domain.ItemOutcomeInvalid, "start_time", parseErr), nil, nil, nil
 		}
-		log.InfoContextf(ctx, "market_fetch_kline_start batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=catchup", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency)
+		log.InfoContextf(ctx, "market_fetch_kline_start batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=%s", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, req.BatchKind)
 		fetchStarted := time.Now()
 		rows, latest, fetchErr := e.Catchup.FetchCatchupRows(ctx, params, start, item.BarLimit)
 		elapsedMS := time.Since(fetchStarted).Milliseconds()
 		if fetchErr != nil {
-			log.WarnContextf(ctx, "market_fetch_kline_failed batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=catchup elapsed_ms=%d success=false error=%v", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, fetchErr)
+			log.WarnContextf(ctx, "market_fetch_kline_failed batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=%s elapsed_ms=%d success=false error=%v", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, req.BatchKind, elapsedMS, fetchErr)
 			return failureResult(item, classifyError(fetchErr), errorType(fetchErr), fetchErr), nil, nil, nil
 		}
 		if len(rows) == 0 || latest.IsZero() {
 			emptyErr := fmt.Errorf("Binance returned no closed bars")
-			log.WarnContextf(ctx, "market_fetch_kline_failed batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=catchup elapsed_ms=%d success=false error=%v", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, emptyErr)
+			log.WarnContextf(ctx, "market_fetch_kline_failed batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=%s elapsed_ms=%d success=false error=%v", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, req.BatchKind, elapsedMS, emptyErr)
 			return failureResult(item, domain.ItemOutcomeStorageError, "empty_data", emptyErr), nil, nil, nil
 		}
 		item.TargetDataTime = latest.UTC().Format(time.RFC3339Nano)
-		log.InfoContextf(ctx, "market_fetch_kline_success batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=catchup elapsed_ms=%d success=true rows=%d latest=%s", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, len(rows), latest.UTC().Format(time.RFC3339Nano))
+		log.InfoContextf(ctx, "market_fetch_kline_success batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=%s elapsed_ms=%d success=true rows=%d latest=%s", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, req.BatchKind, elapsedMS, len(rows), latest.UTC().Format(time.RFC3339Nano))
 		return successResult(item), rows, nil, nil
 	}
 	switch strings.ToLower(strings.TrimSpace(item.DataType)) {
@@ -547,6 +547,15 @@ func (e *Executor) executeItem(ctx context.Context, req Request, item domain.Col
 		return successResult(item), shardRows, register, symbols
 	default:
 		return failureResult(item, domain.ItemOutcomeInvalid, "data_type", fmt.Errorf("unsupported data_type %q", item.DataType)), nil, nil, nil
+	}
+}
+
+func isHistoricalBatchKind(kind domain.BatchKind) bool {
+	switch kind {
+	case domain.BatchKindCatchup, domain.BatchKindBackfill, domain.BatchKindGapRepair:
+		return true
+	default:
+		return false
 	}
 }
 

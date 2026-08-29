@@ -8,6 +8,8 @@ const (
 	BatchKindRealtime       BatchKind = "realtime"
 	BatchKindSymbolSnapshot BatchKind = "symbol_snapshot"
 	BatchKindCatchup        BatchKind = "catchup"
+	BatchKindBackfill       BatchKind = "backfill"
+	BatchKindGapRepair      BatchKind = "gap_repair"
 )
 
 type BatchStatus string

@@ -40,6 +40,13 @@ type scheduleState struct {
 	fingerprint string
 }
 
+type gapAuditPlan struct {
+	Kind           domain.BatchKind
+	Start          time.Time
+	BarLimit       int
+	MaxConcurrency int
+}
+
 // Scheduler scans enabled rules and creates stable SCF batches. Realtime work
 // fans out across the available SCF fleet before the per-function item limit
 // applies. It is intentionally a single process timer handler; SQLite unique
@@ -406,7 +413,7 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 		instance domain.TaskInstance
 		rule     domain.TaskRule
 		symbol   string
-		start    time.Time
+		plan     gapAuditPlan
 		stale    bool
 		err      error
 	}
@@ -426,7 +433,7 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 				if !ok || !strings.EqualFold(instance.DataType, "kline") || instance.SubjectID == "" {
 					continue
 				}
-				result := auditResult{instance: instance, rule: rule, start: now.Add(-time.Hour)}
+				result := auditResult{instance: instance, rule: rule}
 				result.symbol = externalSymbols[rule.RuleID+"\x00"+strings.ToUpper(strings.TrimSpace(instance.SubjectID))]
 				if result.symbol == "" {
 					result.err = fmt.Errorf("external symbol is missing for subject %s", instance.SubjectID)
@@ -435,10 +442,12 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 				}
 				threshold := gapAuditThreshold(instance.Frequency)
 				if s.Storage == nil {
+					watermark, found := time.Time{}, false
 					if instance.LastExecTime != nil && !instance.LastExecTime.IsZero() {
-						result.start = instance.LastExecTime.UTC()
+						watermark = instance.LastExecTime.UTC()
+						found = true
 					}
-					result.stale = instance.LastExecTime == nil || instance.LastExecTime.IsZero() || now.Sub(result.start) >= threshold
+					result.plan, result.stale = buildGapAuditPlan(now, rule, instance, watermark, found)
 					if result.stale {
 						results <- result
 					}
@@ -457,18 +466,21 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 					})
 					storageErr = watermarkErr
 					if storageErr == nil && found && !watermark.IsZero() {
-						result.start = watermark.UTC()
-						result.stale = now.Sub(result.start) >= threshold
+						result.plan, result.stale = buildGapAuditPlan(now, rule, instance, watermark.UTC(), true)
 					} else if storageErr == nil {
+						watermark, found := time.Time{}, false
 						if instance.LastExecTime != nil && !instance.LastExecTime.IsZero() {
-							result.start = instance.LastExecTime.UTC()
+							watermark = instance.LastExecTime.UTC()
+							found = true
 						}
-						result.stale = instance.LastExecTime == nil || instance.LastExecTime.IsZero() || now.Sub(result.start) >= threshold
+						result.plan, result.stale = buildGapAuditPlan(now, rule, instance, watermark, found)
 					}
 				}
 				cancel()
 				if storageErr != nil {
 					result.err = storageErr
+				} else if result.stale && (result.plan.Start.IsZero() || now.Sub(result.plan.Start) < threshold) {
+					result.stale = false
 				} else if result.stale {
 					results <- result
 				}
@@ -492,23 +504,60 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 		stale = append(stale, result)
 	}
 	sort.Slice(stale, func(i, j int) bool { return stale[i].instance.ID < stale[j].instance.ID })
+	perRulePlanned := make(map[string]int)
 	for index, candidate := range stale {
 		if index >= 5 {
 			break
 		}
+		if candidate.plan.MaxConcurrency > 0 && perRulePlanned[candidate.rule.RuleID] >= candidate.plan.MaxConcurrency {
+			continue
+		}
 		node := nodes[index%len(nodes)]
-		item := domain.CollectionItem{TaskID: candidate.instance.TaskID, SubjectID: candidate.instance.SubjectID, Symbol: candidate.symbol, Provider: candidate.instance.Provider, MarketType: candidate.instance.MarketType, DataType: "kline", DatasetID: candidate.instance.DatasetID, Frequency: candidate.instance.Frequency, StartTime: candidate.start.Format(time.RFC3339Nano), BarLimit: 1000}
+		item := domain.CollectionItem{TaskID: candidate.instance.TaskID, SubjectID: candidate.instance.SubjectID, Symbol: candidate.symbol, Provider: candidate.instance.Provider, MarketType: candidate.instance.MarketType, DataType: "kline", DatasetID: candidate.instance.DatasetID, Frequency: candidate.instance.Frequency, StartTime: candidate.plan.Start.Format(time.RFC3339Nano), BarLimit: candidate.plan.BarLimit}
 		// A bounded 1,000-bar catchup must be allowed to advance on every audit
 		// minute. A ten-minute identity keeps the first page deduplicated but
 		// stalls large gaps for nine unnecessary minutes.
-		scheduleID := fmt.Sprintf("catchup:%s:%s", candidate.instance.TaskID, now.Truncate(time.Minute).Format(time.RFC3339Nano))
-		batchID := stableID(spaceID, scheduleID, string(domain.BatchKindCatchup), "0", "1")
-		req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: domain.BatchKindCatchup, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
+		scheduleID := fmt.Sprintf("%s:%s:%s", candidate.plan.Kind, candidate.instance.TaskID, now.Truncate(time.Minute).Format(time.RFC3339Nano))
+		batchID := stableID(spaceID, scheduleID, string(candidate.plan.Kind), "0", "1")
+		req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: candidate.plan.Kind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
 		if _, err := s.planOne(ctx, candidate.rule, req, node, nodes); err != nil {
 			return err
 		}
+		perRulePlanned[candidate.rule.RuleID]++
 	}
 	return nil
+}
+
+func buildGapAuditPlan(now time.Time, rule domain.TaskRule, instance domain.TaskInstance, watermark time.Time, found bool) (gapAuditPlan, bool) {
+	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	if err != nil || params == nil || params.HistoryPolicy == nil {
+		params = &domain.CollectParams{HistoryPolicy: &domain.HistoryPolicy{
+			Mode:              domain.HistoryModeLiveOnly,
+			BatchBarLimit:     domain.DefaultHistoryBatchBarLimit,
+			MaxConcurrency:    domain.DefaultHistoryMaxConcurrency,
+			GapRepairLookback: domain.DefaultHistoryGapRepairLookback,
+			RateBudgetRatio:   domain.DefaultHistoryRateBudgetRatio,
+		}}
+	}
+	plan := gapAuditPlan{BarLimit: params.HistoryPolicy.BatchBarLimit, MaxConcurrency: params.HistoryPolicy.MaxConcurrency}
+	if plan.BarLimit <= 0 {
+		plan.BarLimit = domain.DefaultHistoryBatchBarLimit
+	}
+	if plan.MaxConcurrency <= 0 {
+		plan.MaxConcurrency = domain.DefaultHistoryMaxConcurrency
+	}
+	threshold := gapAuditThreshold(instance.Frequency)
+	if found && !watermark.IsZero() {
+		plan.Kind = domain.BatchKindGapRepair
+		plan.Start = watermark.UTC()
+		return plan, now.Sub(plan.Start) >= threshold
+	}
+	if rule.CoverageStartTime == nil || rule.CoverageStartTime.IsZero() {
+		return gapAuditPlan{}, false
+	}
+	plan.Kind = domain.BatchKindBackfill
+	plan.Start = rule.CoverageStartTime.UTC()
+	return plan, !plan.Start.IsZero() && now.After(plan.Start)
 }
 
 func gapAuditThreshold(frequency string) time.Duration {

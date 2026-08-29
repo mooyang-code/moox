@@ -360,7 +360,7 @@ func validateMarketFetchBatchCompleted(message *eventpb.EventMessage, value prot
 		return fmt.Errorf("market fetch batch_id does not match event_id")
 	}
 	switch payload.GetBatchKind() {
-	case "realtime", "symbol_snapshot", "catchup":
+	case "realtime", "symbol_snapshot", "catchup", "backfill", "gap_repair":
 	default:
 		return fmt.Errorf("market fetch batch_kind %q is invalid", payload.GetBatchKind())
 	}

@@ -104,6 +104,7 @@ func (r *TaskRuleRepository) Create(ctx context.Context, rule domain.TaskRule) e
 	if rule.PrepareState == "" {
 		rule.PrepareState = domain.PrepareStateReady
 	}
+	applyTaskRuleCoverageStart(&rule, now, true)
 	rule.CreateTime = now
 	rule.ModifyTime = now
 	return r.db.WithContext(ctx).Create(&rule).Error
@@ -157,15 +158,18 @@ func (r *TaskRuleRepository) SetPrepareState(ctx context.Context, spaceID, ruleI
 
 // UpdateByRuleID updates an existing collector rule.
 func (r *TaskRuleRepository) UpdateByRuleID(ctx context.Context, spaceID string, ruleID string, rule domain.TaskRule) (*domain.TaskRule, error) {
+	now := time.Now().UTC()
+	applyTaskRuleCoverageStart(&rule, now, rule.Enabled)
 	updates := map[string]any{
-		"c_space_id":       rule.SpaceID,
-		"c_data_type":      rule.DataType,
-		"c_provider":       rule.Provider,
-		"c_market_type":    rule.MarketType,
-		"c_collect_params": rule.CollectParams,
-		"c_enabled":        rule.Enabled,
-		"c_creator":        rule.Creator,
-		"c_mtime":          time.Now().UTC(),
+		"c_space_id":            rule.SpaceID,
+		"c_data_type":           rule.DataType,
+		"c_provider":            rule.Provider,
+		"c_market_type":         rule.MarketType,
+		"c_collect_params":      rule.CollectParams,
+		"c_enabled":             rule.Enabled,
+		"c_creator":             rule.Creator,
+		"c_coverage_start_time": rule.CoverageStartTime,
+		"c_mtime":               now,
 	}
 	q := r.db.WithContext(ctx).Model(&domain.TaskRule{}).Where("c_rule_id = ?", ruleID)
 	if strings.TrimSpace(spaceID) != "" {
@@ -179,11 +183,22 @@ func (r *TaskRuleRepository) UpdateByRuleID(ctx context.Context, spaceID string,
 
 // SetEnabled changes a rule enabled flag.
 func (r *TaskRuleRepository) SetEnabled(ctx context.Context, spaceID string, ruleID string, enabled bool) error {
+	updates := map[string]any{"c_enabled": enabled, "c_mtime": time.Now().UTC()}
+	if enabled {
+		rule, err := r.GetByRuleID(ctx, spaceID, ruleID)
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		applyTaskRuleCoverageStart(rule, now, true)
+		updates["c_coverage_start_time"] = rule.CoverageStartTime
+		updates["c_mtime"] = now
+	}
 	q := r.db.WithContext(ctx).Model(&domain.TaskRule{}).Where("c_rule_id = ?", ruleID)
 	if strings.TrimSpace(spaceID) != "" {
 		q = q.Where("c_space_id = ?", strings.TrimSpace(spaceID))
 	}
-	return q.Updates(map[string]any{"c_enabled": enabled, "c_mtime": time.Now().UTC()}).Error
+	return q.Updates(updates).Error
 }
 
 func (r *TaskRuleRepository) applyFilter(q *gorm.DB, filter TaskRuleFilter) *gorm.DB {
@@ -206,4 +221,45 @@ func (r *TaskRuleRepository) applyFilter(q *gorm.DB, filter TaskRuleFilter) *gor
 		q = q.Where("c_rule_id = ?", v)
 	}
 	return q
+}
+
+func applyTaskRuleCoverageStart(rule *domain.TaskRule, now time.Time, enabled bool) {
+	if rule == nil || !enabled {
+		return
+	}
+	start := resolveTaskRuleCoverageStart(rule, now)
+	if start == nil {
+		return
+	}
+	rule.CoverageStartTime = start
+}
+
+func resolveTaskRuleCoverageStart(rule *domain.TaskRule, now time.Time) *time.Time {
+	if rule == nil {
+		return nil
+	}
+	if rule.CoverageStartTime != nil && !rule.CoverageStartTime.IsZero() {
+		at := rule.CoverageStartTime.UTC()
+		return &at
+	}
+	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	if err != nil || params == nil || params.HistoryPolicy == nil {
+		at := now.UTC().Truncate(time.Minute)
+		return &at
+	}
+	policy := params.HistoryPolicy
+	var start time.Time
+	switch policy.Mode {
+	case domain.HistoryModeSince:
+		at, parseErr := time.Parse(time.RFC3339Nano, policy.Since)
+		if parseErr != nil {
+			at = now
+		}
+		start = at.UTC()
+	case domain.HistoryModeLookback:
+		start = now.UTC().Add(-time.Duration(policy.Lookback) * 24 * time.Hour).Truncate(time.Minute)
+	default:
+		start = now.UTC().Truncate(time.Minute)
+	}
+	return &start
 }

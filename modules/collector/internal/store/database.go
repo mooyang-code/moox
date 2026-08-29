@@ -112,6 +112,9 @@ func (s *Store) ApplySchema(sql string) error {
 	if err := s.ensureTaskRulePreparationColumns(); err != nil {
 		return err
 	}
+	if err := s.ensureTaskRuleCoverageStartColumn(); err != nil {
+		return err
+	}
 	if err := s.ensurePeriodReadinessWorkTypeColumn(); err != nil {
 		return err
 	}
@@ -173,6 +176,31 @@ func (s *Store) ensureTaskRulePreparationColumns() error {
 		if err := s.db.Exec(`ALTER TABLE t_collector_task_rules ADD COLUMN c_last_error TEXT NOT NULL DEFAULT ''`).Error; err != nil {
 			return fmt.Errorf("add task rule last error column: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *Store) ensureTaskRuleCoverageStartColumn() error {
+	var tableCount int64
+	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, "t_collector_task_rules").Scan(&tableCount).Error; err != nil {
+		return fmt.Errorf("check task rule table for coverage_start_time: %w", err)
+	}
+	if tableCount == 0 {
+		return nil
+	}
+	var count int64
+	if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info('t_collector_task_rules') WHERE name = ?`, "c_coverage_start_time").Scan(&count).Error; err != nil {
+		return fmt.Errorf("inspect task rule coverage_start_time column: %w", err)
+	}
+	if count == 0 {
+		if err := s.db.Exec(`ALTER TABLE t_collector_task_rules ADD COLUMN c_coverage_start_time DATETIME`).Error; err != nil {
+			return fmt.Errorf("add task rule coverage_start_time column: %w", err)
+		}
+	}
+	if err := s.db.Exec(`UPDATE t_collector_task_rules
+SET c_coverage_start_time = COALESCE(c_coverage_start_time, c_ctime, c_mtime, CURRENT_TIMESTAMP)
+WHERE c_coverage_start_time IS NULL`).Error; err != nil {
+		return fmt.Errorf("backfill task rule coverage_start_time: %w", err)
 	}
 	return nil
 }

@@ -40,7 +40,7 @@ func TestLoadRuleSeed(t *testing.T) {
 		DataType:      "kline",
 		Provider:      "binance",
 		MarketType:    "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"binance_spot_symbols","target_dataset_id":"binance_spot_kline_1m","frequency":"1m"}`,
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"binance_spot_symbols","target_dataset_id":"binance_spot_kline_1m","frequency":"1m","history_policy":{"mode":"live_only","batch_bar_limit":1000,"max_concurrency":1,"gap_repair_lookback":"0m","rate_budget_ratio":1}}`,
 		Enabled:       true,
 		Creator:       "moox-setup",
 	}, rules[0])

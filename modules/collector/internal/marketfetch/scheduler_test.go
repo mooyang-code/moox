@@ -78,6 +78,40 @@ func TestGapAuditThresholdUsesWeekAndMonthIntervals(t *testing.T) {
 	assert.Equal(t, 90*24*time.Hour, gapAuditThreshold("1M"))
 }
 
+func TestBuildGapAuditPlanUsesCoverageStartForMissingWatermark(t *testing.T) {
+	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
+	coverageStart := time.Date(2026, time.August, 27, 8, 30, 0, 0, time.UTC)
+
+	plan, ok := buildGapAuditPlan(
+		now,
+		domain.TaskRule{CoverageStartTime: &coverageStart},
+		domain.TaskInstance{Frequency: "1m"},
+		time.Time{},
+		false,
+	)
+	require.True(t, ok)
+	assert.Equal(t, domain.BatchKindBackfill, plan.Kind)
+	assert.Equal(t, coverageStart, plan.Start)
+	assert.Equal(t, 1000, plan.BarLimit)
+}
+
+func TestBuildGapAuditPlanUsesGapRepairForStaleWatermark(t *testing.T) {
+	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
+	coverageStart := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
+	watermark := now.Add(-2 * time.Hour)
+
+	plan, ok := buildGapAuditPlan(
+		now,
+		domain.TaskRule{CoverageStartTime: &coverageStart},
+		domain.TaskInstance{Frequency: "1m"},
+		watermark,
+		true,
+	)
+	require.True(t, ok)
+	assert.Equal(t, domain.BatchKindGapRepair, plan.Kind)
+	assert.Equal(t, watermark, plan.Start)
+}
+
 func TestRealtimeBatchSizeFansOutAcrossCurrentFleet(t *testing.T) {
 	nodes := make([]scfinvoker.Node, 10)
 	for index := range nodes {

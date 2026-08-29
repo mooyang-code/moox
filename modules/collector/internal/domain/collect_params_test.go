@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -79,6 +80,57 @@ func TestParseCollectParamsDefaultsSymbolFrequencyToHourly(t *testing.T) {
 	assert.Equal(t, "1h", params.Schedule.Interval)
 }
 
+func TestParseCollectParamsAddsExplicitDefaultKlineHistoryPolicy(t *testing.T) {
+	params, err := ParseCollectParams(`{
+		"provider":"binance",
+		"market_type":"spot",
+		"symbol_source":"dataset",
+		"symbol_dataset_id":"binance_spot_symbols",
+		"target_dataset_id":"binance_spot_kline_1m",
+		"frequency":"1m"
+	}`, "", "", "kline")
+	require.NoError(t, err)
+	require.NoError(t, params.Validate())
+	require.NotNil(t, params.HistoryPolicy)
+	assert.Equal(t, "live_only", params.HistoryPolicy.Mode)
+	assert.Equal(t, 1000, params.HistoryPolicy.BatchBarLimit)
+	assert.Equal(t, 1, params.HistoryPolicy.MaxConcurrency)
+	assert.Equal(t, "0m", params.HistoryPolicy.GapRepairLookback)
+	assert.InDelta(t, 1.0, params.HistoryPolicy.RateBudgetRatio, 1e-9)
+
+	raw, err := json.Marshal(params)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"history_policy":{"mode":"live_only"`)
+}
+
+func TestParseCollectParamsAcceptsExplicitKlineHistoryPolicy(t *testing.T) {
+	params, err := ParseCollectParams(`{
+		"provider":"binance",
+		"market_type":"spot",
+		"symbol_source":"dataset",
+		"symbol_dataset_id":"binance_spot_symbols",
+		"target_dataset_id":"binance_spot_kline_1m",
+		"frequency":"1m",
+		"history_policy":{
+			"mode":"since",
+			"since":"2026-08-01T00:00:00Z",
+			"batch_bar_limit":500,
+			"max_concurrency":2,
+			"gap_repair_lookback":"4d",
+			"rate_budget_ratio":0.2
+		}
+	}`, "", "", "kline")
+	require.NoError(t, err)
+	require.NoError(t, params.Validate())
+	require.NotNil(t, params.HistoryPolicy)
+	assert.Equal(t, "since", params.HistoryPolicy.Mode)
+	assert.Equal(t, "2026-08-01T00:00:00Z", params.HistoryPolicy.Since)
+	assert.Equal(t, 500, params.HistoryPolicy.BatchBarLimit)
+	assert.Equal(t, 2, params.HistoryPolicy.MaxConcurrency)
+	assert.Equal(t, "4d", params.HistoryPolicy.GapRepairLookback)
+	assert.InDelta(t, 0.2, params.HistoryPolicy.RateBudgetRatio, 1e-9)
+}
+
 func TestParseCollectParamsRejectsRemovedFields(t *testing.T) {
 	for _, raw := range []string{
 		`{"exchange":"binance"}`,
@@ -106,6 +158,61 @@ func TestCollectParamsValidateRequiresExplicitDatasetsAndIntervals(t *testing.T)
 	}`, "", "", "kline")
 	require.NoError(t, err)
 	require.Error(t, params.Validate())
+}
+
+func TestCollectParamsValidateRejectsInvalidKlineHistoryPolicy(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "lookback requires positive days",
+			raw: `{
+				"provider":"binance",
+				"market_type":"spot",
+				"symbol_source":"dataset",
+				"symbol_dataset_id":"binance_spot_symbols",
+				"target_dataset_id":"binance_spot_kline_1m",
+				"frequency":"1m",
+				"history_policy":{"mode":"lookback","lookback":0}
+			}`,
+			want: "lookback",
+		},
+		{
+			name: "since requires rfc3339 time",
+			raw: `{
+				"provider":"binance",
+				"market_type":"spot",
+				"symbol_source":"dataset",
+				"symbol_dataset_id":"binance_spot_symbols",
+				"target_dataset_id":"binance_spot_kline_1m",
+				"frequency":"1m",
+				"history_policy":{"mode":"since","since":"yesterday"}
+			}`,
+			want: "since",
+		},
+		{
+			name: "rate budget ratio must be bounded",
+			raw: `{
+				"provider":"binance",
+				"market_type":"spot",
+				"symbol_source":"dataset",
+				"symbol_dataset_id":"binance_spot_symbols",
+				"target_dataset_id":"binance_spot_kline_1m",
+				"frequency":"1m",
+				"history_policy":{"mode":"live_only","rate_budget_ratio":1.5}
+			}`,
+			want: "rate_budget_ratio",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params, err := ParseCollectParams(tt.raw, "", "", "kline")
+			require.NoError(t, err)
+			require.ErrorContains(t, params.Validate(), tt.want)
+		})
+	}
 }
 
 func TestParseCollectParamsInvalidJSONReturnsError(t *testing.T) {

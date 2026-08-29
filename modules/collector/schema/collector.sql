@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS t_collector_task_rules (
     c_creator TEXT NOT NULL DEFAULT '',
     c_prepare_state TEXT NOT NULL DEFAULT 'ready',
     c_last_error TEXT NOT NULL DEFAULT '',
+    c_coverage_start_time DATETIME,
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
