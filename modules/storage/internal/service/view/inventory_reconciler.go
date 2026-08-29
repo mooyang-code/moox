@@ -441,17 +441,12 @@ func datasetRouteSet(routes []DatasetRoute) map[datasetRef]struct{} {
 func dynamicDatasetConsumerIdentity(miscDurable string, ref datasetRef) (string, string) {
 	hash := sha256.Sum256([]byte(strings.TrimSpace(ref.spaceID) + "\x00" + strings.TrimSpace(ref.datasetID)))
 	token := hex.EncodeToString(hash[:])[:16]
-	// Keep the partition label descriptive while making the server-side durable
-	// valid and stable across restarts. NATS durable names do not allow a dot,
-	// and they are limited to 32 characters; the configured storage_view_misc
-	// prefix is 17 characters, so a 14-character suffix leaves room for '-'.
-	// Keep the full token in the local partition identity while using a
-	// 14-character suffix for the default storage_view_misc durable prefix.
-	durableToken := token
-	if len(durableToken) > 14 {
-		durableToken = durableToken[:14]
-	}
-	return "misc:" + token, strings.TrimSpace(miscDurable) + "-" + durableToken
+	// Keep both identities within the conservative JetStream name grammar used
+	// by older servers. Underscores and alphanumeric characters are accepted by
+	// every supported server, and the shortened suffix leaves room below the
+	// historical 32-character durable limit.
+	durableToken := token[:12]
+	return "misc_" + token, strings.TrimSpace(miscDurable) + "_" + durableToken
 }
 
 func viewDatasetIDs(view *pb.View) []string {
