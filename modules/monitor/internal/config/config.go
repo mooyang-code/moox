@@ -85,18 +85,24 @@ type ObservabilityConfig struct {
 }
 
 type MarketCanaryConfig struct {
-	Enabled         bool                  `yaml:"enabled"`
-	Freshness       time.Duration         `yaml:"freshness"`
-	ReturnThreshold float64               `yaml:"return_threshold"`
-	Subjects        []MarketCanarySubject `yaml:"subjects"`
+	Enabled             bool                  `yaml:"enabled"`
+	Freshness           time.Duration         `yaml:"freshness"`
+	ReturnThreshold     float64               `yaml:"return_threshold"`
+	SettleDelay         time.Duration         `yaml:"settle_delay"`
+	CalendarWarningLead time.Duration         `yaml:"calendar_warning_lead"`
+	ClosedBarCount      int                   `yaml:"closed_bar_count"`
+	Subjects            []MarketCanarySubject `yaml:"subjects"`
 }
 
 type MarketCanarySubject struct {
-	SpaceID   string  `yaml:"space_id"`
-	DatasetID string  `yaml:"dataset_id"`
-	Symbol    string  `yaml:"symbol"`
-	Frequency string  `yaml:"frequency"`
-	SeriesTag *string `yaml:"series_tag"`
+	SpaceID                string   `yaml:"space_id"`
+	DatasetID              string   `yaml:"dataset_id"`
+	Symbol                 string   `yaml:"symbol"`
+	Frequency              string   `yaml:"frequency"`
+	SeriesTag              *string  `yaml:"series_tag"`
+	MarketID               string   `yaml:"market_id"`
+	CalendarPath           string   `yaml:"calendar_path"`
+	EligibleKlineProviders []string `yaml:"eligible_kline_providers"`
 }
 
 type MetricsStorageConfig struct {
@@ -179,7 +185,7 @@ func Default() *Config {
 			SendTimeoutSeconds: 10,
 		},
 		Observability: ObservabilityConfig{Enabled: true, EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
-		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, Subjects: []MarketCanarySubject{{SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance")}}},
+		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, Subjects: []MarketCanarySubject{{SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance")}}},
 		Metrics:       MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../examples/setup/default/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
 	}
 }
@@ -386,7 +392,7 @@ func (c *Config) Validate() error {
 		}
 	}
 	if c.MarketCanary.Enabled {
-		if c.MarketCanary.Freshness <= 0 || c.MarketCanary.ReturnThreshold <= 0 {
+		if c.MarketCanary.Freshness <= 0 || c.MarketCanary.ReturnThreshold <= 0 || c.MarketCanary.SettleDelay < 0 || c.MarketCanary.CalendarWarningLead <= 0 || c.MarketCanary.ClosedBarCount <= 0 {
 			return fmt.Errorf("market_canary price threshold and freshness must be positive")
 		}
 		if len(c.MarketCanary.Subjects) == 0 || len(c.MarketCanary.Subjects) > 8 {
@@ -399,6 +405,9 @@ func (c *Config) Validate() error {
 			}
 			if subject.SeriesTag == nil {
 				return fmt.Errorf("market_canary subject requires series_tag (use an explicit empty value for the default series)")
+			}
+			if strings.EqualFold(subject.MarketID, "stock_cn") && (strings.TrimSpace(subject.CalendarPath) == "" || len(subject.EligibleKlineProviders) == 0) {
+				return fmt.Errorf("stock_cn market_canary subject requires calendar_path and eligible_kline_providers")
 			}
 		}
 	}

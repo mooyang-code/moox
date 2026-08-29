@@ -44,6 +44,9 @@ market_canary:
   enabled: true
   freshness: 3m
   return_threshold: 0.05
+  settle_delay: 5s
+  calendar_warning_lead: 336h
+  closed_bar_count: 3
   subjects:
     - space_id: crypto_market
       dataset_id: binance_spot_kline_1m
@@ -53,6 +56,14 @@ market_canary:
       symbol: OPG-USDT
       frequency: 1m
       series_tag: venue:binance
+    - space_id: stock_cn
+      dataset_id: stock_cn_kline
+      symbol: 600000.XSHG
+      frequency: 1m
+      series_tag: ""
+      market_id: stock_cn
+      calendar_path: ../collector/config/markets/stock_cn/calendar.yaml
+      eligible_kline_providers: [sina, tencent, eastmoney]
 
 metrics:
   enabled: true
