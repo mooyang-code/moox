@@ -44,6 +44,8 @@ type Service struct {
 	inventory    RealtimeInventory
 }
 
+const defaultResampleSettleDelay = 10 * time.Second
+
 type datasetSource interface {
 	GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error)
 	ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error)
@@ -373,7 +375,7 @@ func (s *Service) StartKlineResampleBackfill(ctx context.Context, req *pb.StartK
 		}
 		sourceKeepDuration = source.KeepDuration
 	}
-	if err := validateResampleBackfillWindow(backfill, target.Duration, params.SettleDelay(), sourceKeepDuration, time.Now().UTC()); err != nil {
+	if err := validateResampleBackfillWindow(backfill, target.Duration, params.SettleDelayOr(defaultResampleSettleDelay), sourceKeepDuration, time.Now().UTC()); err != nil {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if _, err := s.instanceRepo.StartResampleBackfill(ctx, req.GetSpaceId(), req.GetRuleId(), backfill); err != nil {
@@ -446,7 +448,11 @@ func (s *Service) GetKlineResampleBackfill(ctx context.Context, req *pb.GetKline
 		return &pb.GetKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "backfill request not found")}, nil
 	}
 	response := &pb.GetKlineResampleBackfillRsp{RetInfo: retOK(), RequestId: requestID}
-	stateRank := map[domain.ResampleBackfillState]int{domain.ResampleBackfillRunning: 1, domain.ResampleBackfillWaitingSource: 2, domain.ResampleBackfillSyncing: 3, domain.ResampleBackfillComplete: 1, domain.ResampleBackfillCanceled: 2, domain.ResampleBackfillFailed: 3}
+	stateRank := map[domain.ResampleBackfillState]int{
+		domain.ResampleBackfillComplete: 1, domain.ResampleBackfillCanceled: 2,
+		domain.ResampleBackfillRunning: 3, domain.ResampleBackfillWaitingSource: 4,
+		domain.ResampleBackfillSyncing: 5, domain.ResampleBackfillFailed: 6,
+	}
 	selectedState := domain.ResampleBackfillState("")
 	for _, instance := range instances {
 		result, err := domain.ParseResampleTaskResult(instance.Result)

@@ -97,6 +97,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, fmt.Errorf("initialize collector run metrics: %w", err)
 	}
 	realtimeInventory := collectorobservability.NewRealtimeInventory(dbm.TaskRules(), datasetMetrics)
+	realtimeInventory.SetResampleEnabled(cfg.KlineResample.Enabled)
 	if err := realtimeInventory.Refresh(ctx); err != nil {
 		return nil, fmt.Errorf("initialize collector realtime dataset inventory: %w", err)
 	}

@@ -2,10 +2,12 @@ package resample
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/avast/retry-go"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -56,6 +58,11 @@ func TestRunnerTickPlansAndProcessesRealtimeBucket(t *testing.T) {
 	instances, _, err := db.TaskInstances().List(context.Background(), store.TaskInstanceFilter{SpaceID: "crypto", RuleID: "rule-5m", Page: 1, PageSize: 10})
 	require.NoError(t, err)
 	require.Len(t, instances, 1)
+}
+
+func TestIsResampleSourceIncompleteUnwrapsRetryError(t *testing.T) {
+	retryErr := retry.Error{errors.New("transient"), ErrResampleSourceIncomplete}
+	require.True(t, isResampleSourceIncomplete(retryErr))
 }
 
 func TestEnsureReadinessForClaimsUsesClaimedCursor(t *testing.T) {

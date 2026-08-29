@@ -22,18 +22,25 @@ export async function cancelKlineResampleBackfill(request: Pick<KlineResampleBac
 }
 
 export async function getKlineResampleBackfillStatus(spaceId: string, ruleId: string, requestId = ""): Promise<ResampleBackfillSummary | null> {
-  const response = await callControl<
-    { space_id: string; rule_id: string; request_id?: string },
-    {
-      request_id?: string;
-      start?: string;
-      end?: string;
-      next_bucket?: string;
-      state?: ResampleBackfillSummary["state"];
-      participants?: number;
-    }
-  >("collectmgr", "GetKlineResampleBackfill", { space_id: spaceId, rule_id: ruleId, request_id: requestId });
+  let response: {
+    request_id?: string;
+    start?: string;
+    end?: string;
+    next_bucket?: string;
+    state?: ResampleBackfillSummary["state"];
+    participants?: number;
+  };
+  try {
+    response = await callControl<
+      { space_id: string; rule_id: string; request_id?: string },
+      typeof response
+    >("collectmgr", "GetKlineResampleBackfill", { space_id: spaceId, rule_id: ruleId, request_id: requestId });
+  } catch (error) {
+    if (error instanceof Error && /backfill request not found/i.test(error.message)) return null;
+    throw error;
+  }
   if (!response.request_id) return null;
+  if (["complete", "canceled", "failed"].includes(String(response.state || ""))) return null;
   return {
     requestId: String(response.request_id),
     start: String(response.start || ""),

@@ -32,13 +32,26 @@ type RealtimeInventory struct {
 	source   taskRuleSource
 	registry datasetRegistry
 
-	mu          sync.Mutex
-	dirty       bool
-	lastRefresh time.Time
+	mu              sync.Mutex
+	dirty           bool
+	lastRefresh     time.Time
+	resampleEnabled bool
 }
 
 func NewRealtimeInventory(source taskRuleSource, registry datasetRegistry) *RealtimeInventory {
-	return &RealtimeInventory{source: source, registry: registry, dirty: true}
+	return &RealtimeInventory{source: source, registry: registry, dirty: true, resampleEnabled: true}
+}
+
+// SetResampleEnabled keeps the published expectation aligned with the runtime
+// feature gate. Existing callers default to enabled for backwards compatibility.
+func (i *RealtimeInventory) SetResampleEnabled(enabled bool) {
+	if i == nil {
+		return
+	}
+	i.mu.Lock()
+	i.resampleEnabled = enabled
+	i.dirty = true
+	i.mu.Unlock()
 }
 
 // MarkDirty requests reconciliation on the next metrics tick.
@@ -90,6 +103,9 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 			return fmt.Errorf("validate collector rule %q: %w", rule.RuleID, err)
 		}
 		if params.Collector.DataType == "kline_resample" {
+			if !i.resampleEnabled {
+				continue
+			}
 			if rule.PrepareState != domain.PrepareStateReady {
 				continue
 			}

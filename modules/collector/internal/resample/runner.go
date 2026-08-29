@@ -490,7 +490,7 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 		return runErr
 	}, retry.Attempts(4), retry.Delay(pollInterval), retry.DelayType(retry.BackOffDelay), retry.Context(ctx))
 	if err != nil {
-		if errors.Is(err, ErrResampleSourceIncomplete) {
+		if isResampleSourceIncomplete(err) {
 			if expired, reason := sourceRetentionExpired(parent, source, claim.Instance.SpaceID, params.SourceDatasetID, bucket); expired {
 				if claim.Result.ActiveOrigin == domain.ResampleOriginRepair {
 					if _, skipErr := instances.SkipResampleRepairTask(parent, claim.Instance.SpaceID, claim.Instance.TaskID, claim.Result.StateVersion, bucket, bucket.Add(targetFreq.Duration), reason); skipErr != nil {
@@ -549,6 +549,22 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 		metrics.Writes.Inc()
 	}
 	_ = wrote
+}
+
+func isResampleSourceIncomplete(err error) bool {
+	if errors.Is(err, ErrResampleSourceIncomplete) {
+		return true
+	}
+	var retryErr retry.Error
+	if !errors.As(err, &retryErr) {
+		return false
+	}
+	for _, wrapped := range retryErr {
+		if errors.Is(wrapped, ErrResampleSourceIncomplete) {
+			return true
+		}
+	}
+	return false
 }
 
 func sourceRetentionExpired(ctx context.Context, source subjectSource, spaceID, datasetID string, bucket time.Time) (bool, string) {
