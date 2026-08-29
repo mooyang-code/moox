@@ -82,6 +82,21 @@ func TestRenderCollectorDNSResolverConfigDerivesTradeTarget(t *testing.T) {
 	require.NotContains(t, string(rendered), "secret")
 }
 
+func TestRenderCollectorDNSResolverConfigIncludesStockCapacity(t *testing.T) {
+	snapshot := &Snapshot{Manifest: Manifest{
+		SCFFetcher: SCFFetcher{Spaces: []SCFFetcherSpace{{
+			SpaceID: "stock_cn", TimerFunctionCount: 200, MeasuredSafeGroupSize: 30,
+		}}},
+	}}
+	rendered, err := RenderCollectorDNSResolverConfig(snapshot, []byte("database:\n  path: ./collector.db\n"))
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, yaml.Unmarshal(rendered, &got))
+	stock := got["stock_cn"].(map[string]any)
+	require.Equal(t, 200, stock["expected_timer_function_count"])
+	require.Equal(t, 30, stock["measured_safe_group_size"])
+}
+
 func TestRenderDisabledResolverReplacesStaleSettings(t *testing.T) {
 	snapshot := &Snapshot{Manifest: Manifest{DNSResolver: DNSResolver{Enabled: false}}}
 	rendered, err := RenderTradeDNSResolverConfig(snapshot, []byte("dns_resolver:\n  enabled: true\n  domains: [fapi.binance.com]\n"))

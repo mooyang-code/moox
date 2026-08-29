@@ -127,14 +127,15 @@ func (p *InstrumentPipeline) validateSnapshot(snapshot marketdata.InstrumentSnap
 }
 
 func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marketdata.InstrumentSnapshot) error {
+	spaceID := firstNonEmptyString(p.MarketID, StockCNSpaceID)
 	datasetID := firstNonEmptyString(p.DatasetID, StockCNInstrumentDatasetID)
 	targetDatasetID := firstNonEmptyString(p.TargetDatasetID, StockCNDatasetID)
 	dataSourceID := firstNonEmptyString(p.DataSourceID, StockCNDataSourceID)
-	existing, err := p.Storage.ListDatasetSubjects(ctx, StockCNSpaceID, datasetID)
+	existing, err := p.Storage.ListDatasetSubjects(ctx, spaceID, datasetID)
 	if err != nil {
 		return fmt.Errorf("list active instrument set: %w", err)
 	}
-	targetExisting, err := p.Storage.ListDatasetSubjects(ctx, StockCNSpaceID, targetDatasetID)
+	targetExisting, err := p.Storage.ListDatasetSubjects(ctx, spaceID, targetDatasetID)
 	if err != nil {
 		return fmt.Errorf("list target instrument set: %w", err)
 	}
@@ -143,7 +144,7 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 	sort.Slice(snapshot.Instruments, func(i, j int) bool { return snapshot.Instruments[i].SubjectID < snapshot.Instruments[j].SubjectID })
 	for _, instrument := range snapshot.Instruments {
 		present[instrument.SubjectID] = instrument
-		rows = append(rows, instrumentRecordRow(datasetID, snapshot, instrument))
+		rows = append(rows, instrumentRecordRow(spaceID, datasetID, snapshot, instrument))
 	}
 	for start := 0; start < len(rows); start += 25 {
 		end := start + 25
@@ -164,7 +165,7 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 		go func() {
 			defer workers.Done()
 			for instrument := range jobs {
-				if err := p.Storage.RegisterDataSubject(registerCtx, instrumentRegistration(dataSourceID, snapshot, instrument)); err != nil {
+				if err := p.Storage.RegisterDataSubject(registerCtx, instrumentRegistration(spaceID, dataSourceID, snapshot, instrument)); err != nil {
 					select {
 					case errCh <- fmt.Errorf("register instrument %s: %w", instrument.SubjectID, err):
 						cancel()
@@ -192,11 +193,11 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 		return err
 	default:
 	}
-	bindings := stagedInstrumentBindings(existing, targetExisting, present, datasetID, targetDatasetID, snapshot)
-	if err := p.Storage.StageDatasetSubjectSet(ctx, StockCNSpaceID, snapshot.SnapshotID, bindings); err != nil {
+	bindings := stagedInstrumentBindings(spaceID, existing, targetExisting, present, datasetID, targetDatasetID, snapshot)
+	if err := p.Storage.StageDatasetSubjectSet(ctx, spaceID, snapshot.SnapshotID, bindings); err != nil {
 		return fmt.Errorf("stage active instrument set %s: %w", snapshot.SnapshotID, err)
 	}
-	if err := p.Storage.ActivateDatasetSubjectSet(ctx, StockCNSpaceID, snapshot.SnapshotID); err != nil {
+	if err := p.Storage.ActivateDatasetSubjectSet(ctx, spaceID, snapshot.SnapshotID); err != nil {
 		return fmt.Errorf("activate active instrument set %s: %w", snapshot.SnapshotID, err)
 	}
 	return nil
@@ -206,7 +207,7 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 // Every row is sent as one inactive staging set; the storage activation RPC
 // swaps both datasets in one transaction, so an interrupted snapshot cannot
 // expose a prefix of the new universe.
-func stagedInstrumentBindings(existing, targetExisting []*storagepb.DatasetSubject, present map[string]marketdata.Instrument, datasetID, targetDatasetID string, snapshot marketdata.InstrumentSnapshot) []*storagepb.DatasetSubject {
+func stagedInstrumentBindings(spaceID string, existing, targetExisting []*storagepb.DatasetSubject, present map[string]marketdata.Instrument, datasetID, targetDatasetID string, snapshot marketdata.InstrumentSnapshot) []*storagepb.DatasetSubject {
 	desired := make(map[string]*storagepb.DatasetSubject, len(existing)+len(targetExisting)+len(present)*2)
 	for _, membership := range append(append([]*storagepb.DatasetSubject(nil), existing...), targetExisting...) {
 		if membership == nil {
@@ -219,7 +220,7 @@ func stagedInstrumentBindings(existing, targetExisting []*storagepb.DatasetSubje
 		key := dataset + "\x00" + subjectID
 		item := desired[key]
 		if item == nil {
-			item = &storagepb.DatasetSubject{SpaceId: StockCNSpaceID, DatasetId: dataset, SubjectId: subjectID, SubjectRole: role}
+			item = &storagepb.DatasetSubject{SpaceId: spaceID, DatasetId: dataset, SubjectId: subjectID, SubjectRole: role}
 			desired[key] = item
 		}
 		item.Status = "active"
@@ -409,13 +410,13 @@ func (p *InstrumentPipeline) rollbackInstrumentBindings(ctx context.Context, app
 	return rollbackErr
 }
 
-func instrumentRegistration(dataSourceID string, snapshot marketdata.InstrumentSnapshot, instrument marketdata.Instrument) *storagepb.RegisterDataSubjectReq {
+func instrumentRegistration(spaceID, dataSourceID string, snapshot marketdata.InstrumentSnapshot, instrument marketdata.Instrument) *storagepb.RegisterDataSubjectReq {
 	attributes := map[string]string{"exchange": instrument.Exchange, "instrument_type": "equity", "provider_symbol": instrument.ProviderSymbol, "snapshot_id": snapshot.SnapshotID, "source_provider": snapshot.SourceProvider}
-	return &storagepb.RegisterDataSubjectReq{SpaceId: StockCNSpaceID, DataSourceId: dataSourceID, ExternalSymbol: instrument.ProviderSymbol, Subject: &storagepb.Subject{SpaceId: StockCNSpaceID, SubjectId: instrument.SubjectID, SubjectType: "stock", Name: firstNonEmptyString(instrument.Name, instrument.SubjectID), Market: "CN", Currency: "CNY", Timezone: "Asia/Shanghai", Status: "active", Attributes: attributes}}
+	return &storagepb.RegisterDataSubjectReq{SpaceId: spaceID, DataSourceId: dataSourceID, ExternalSymbol: instrument.ProviderSymbol, Subject: &storagepb.Subject{SpaceId: spaceID, SubjectId: instrument.SubjectID, SubjectType: "stock", Name: firstNonEmptyString(instrument.Name, instrument.SubjectID), Market: "CN", Currency: "CNY", Timezone: "Asia/Shanghai", Status: "active", Attributes: attributes}}
 }
 
-func instrumentRecordRow(datasetID string, snapshot marketdata.InstrumentSnapshot, instrument marketdata.Instrument) *storagepb.RowFieldUpsert {
-	return &storagepb.RowFieldUpsert{Key: &storagepb.RowKey{SpaceId: StockCNSpaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: instrument.SubjectID, Version: snapshot.SnapshotID}}}, Fields: []*storagepb.FieldValue{stringValue("security_code", instrument.SubjectID), stringValue("provider_symbol", instrument.ProviderSymbol), stringValue("exchange", instrument.Exchange), stringValue("instrument_name", instrument.Name), stringValue("instrument_status", instrument.Status), stringValue("snapshot_id", snapshot.SnapshotID), stringValue("source_provider", snapshot.SourceProvider), timeValue("fetched_at", snapshot.FetchedAt)}}
+func instrumentRecordRow(spaceID, datasetID string, snapshot marketdata.InstrumentSnapshot, instrument marketdata.Instrument) *storagepb.RowFieldUpsert {
+	return &storagepb.RowFieldUpsert{Key: &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: instrument.SubjectID, Version: snapshot.SnapshotID}}}, Fields: []*storagepb.FieldValue{stringValue("security_code", instrument.SubjectID), stringValue("provider_symbol", instrument.ProviderSymbol), stringValue("exchange", instrument.Exchange), stringValue("instrument_name", instrument.Name), stringValue("instrument_status", instrument.Status), stringValue("snapshot_id", snapshot.SnapshotID), stringValue("source_provider", snapshot.SourceProvider), timeValue("fetched_at", snapshot.FetchedAt)}}
 }
 
 func uniqueProviders(values []string) []string {

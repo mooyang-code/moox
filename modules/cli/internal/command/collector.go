@@ -673,7 +673,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if fetcherConfig != nil {
 		opts.FetcherConfig = fetcherConfig
 		var jobs []string
-		var timerRestorePatches []collectorRuntimeConfigPatch
 		var publishedTimerFleets []collectorPublishedTimerFleet
 		var instrumentSchedulePatches []collectorRuntimeConfigPatch
 		instrumentScheduled := false
@@ -786,7 +785,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				return summary, inspectErr
 			}
 			if strings.EqualFold(fetcherConfig.SpaceID, "stock_cn") {
-				timerRestorePatches = append(timerRestorePatches, collectorTimerRestorePatches(fleetNodes)...)
 				disableJobs, disableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(fleetNodes))
 				if disableErr != nil {
 					return summary, fmt.Errorf("disable existing Timer fleet before deploy: %w", disableErr)
@@ -855,6 +853,11 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				}
 				allTimerNodes = append(allTimerNodes, disabledNodes...)
 			}
+			// Freshly created nodes have no prior timer metadata, and the
+			// preceding disable pass intentionally changes timer_enabled to false.
+			// Build the restore set from the deployed fleet after the gate instead
+			// of trying to recover a pre-publish state that may not exist.
+			timerRestorePatches := collectorStockCNTimerRestorePatches(allTimerNodes)
 			eligible := selectCollectorProbeNodes(allTimerNodes, true)
 			if _, gateErr := probeCollectorEgressNodes(ctx, client, eligible, true, fetcherConfig.TimerFunctionCount); gateErr != nil {
 				return summary, fmt.Errorf("SCF Timer all-node egress gate: %w", gateErr)
@@ -1261,6 +1264,35 @@ func collectorTimerRestorePatches(nodes []adminclient.CloudNode) []collectorRunt
 		if cron == "" {
 			continue
 		}
+		patches = append(patches, collectorRuntimeConfigPatch{NodeID: node.NodeID, TimerEnabled: true, TimerCron: cron})
+	}
+	return patches
+}
+
+// collectorStockCNTimerRestorePatches returns an enable patch for every
+// published stock Timer. New SCF nodes do not have timer metadata yet, so use
+// the same stable region/slot ordering as the Collector reconciler to give
+// them a deterministic cron until the first reconciliation writes the exact
+// assignment.
+func collectorStockCNTimerRestorePatches(nodes []adminclient.CloudNode) []collectorRuntimeConfigPatch {
+	ordered := append([]adminclient.CloudNode(nil), nodes...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].Region != ordered[j].Region {
+			return ordered[i].Region < ordered[j].Region
+		}
+		left, leftOK := metadataIntValue(ordered[i].Metadata, "index")
+		right, rightOK := metadataIntValue(ordered[j].Metadata, "index")
+		if leftOK && rightOK && left != right {
+			return left < right
+		}
+		return ordered[i].FunctionName < ordered[j].FunctionName
+	})
+	patches := make([]collectorRuntimeConfigPatch, 0, len(ordered))
+	for index, node := range ordered {
+		if strings.TrimSpace(node.NodeID) == "" {
+			continue
+		}
+		cron := fmt.Sprintf("%d * * * * * *", index%45)
 		patches = append(patches, collectorRuntimeConfigPatch{NodeID: node.NodeID, TimerEnabled: true, TimerCron: cron})
 	}
 	return patches

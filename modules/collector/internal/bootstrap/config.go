@@ -20,12 +20,21 @@ type Config struct {
 	Database        DatabaseConfig        `yaml:"database"`
 	CloudNode       CloudNodeConfig       `yaml:"cloudnode"`
 	Storage         StorageConfig         `yaml:"storage"`
+	StockCN         StockCNConfig         `yaml:"stock_cn"`
 	PeriodReadiness PeriodReadinessConfig `yaml:"period_readiness"`
 	KlineResample   KlineResampleConfig   `yaml:"kline_resample"`
 	SysDeploy       SysDeployConfig       `yaml:"sysdeploy"`
 	Health          HealthConfig          `yaml:"health"`
 	DNS             DNSConfig             `yaml:"dns"`
 	DNSResolver     DNSResolverConfig     `yaml:"dns_resolver"`
+}
+
+// StockCNConfig carries the release-time capacity contract to the Collector
+// reconciler. It is rendered from custom.toml; zero values fail closed when a
+// stock_cn rule is selected rather than silently choosing a default fleet.
+type StockCNConfig struct {
+	ExpectedTimerFunctionCount int `yaml:"expected_timer_function_count"`
+	MeasuredSafeGroupSize      int `yaml:"measured_safe_group_size"`
 }
 
 // DatabaseConfig describes SQLite settings.

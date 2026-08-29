@@ -82,16 +82,24 @@ func (s *Store) ActivateDatasetSubjectSet(ctx context.Context, spaceID, setID st
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT c_dataset_id FROM t_dataset_subject_set_staging WHERE c_space_id = ? AND c_set_id = ?`, spaceID, setID)
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT c_dataset_id, c_status FROM t_dataset_subject_set_staging WHERE c_space_id = ? AND c_set_id = ?`, spaceID, setID)
 	if err != nil {
 		return 0, err
 	}
 	var datasetIDs []string
+	status := ""
 	for rows.Next() {
 		var datasetID string
-		if err := rows.Scan(&datasetID); err != nil {
+		var rowStatus string
+		if err := rows.Scan(&datasetID, &rowStatus); err != nil {
 			_ = rows.Close()
 			return 0, err
+		}
+		if status == "" {
+			status = rowStatus
+		} else if status != rowStatus {
+			_ = rows.Close()
+			return 0, fmt.Errorf("staged dataset subject set %s/%s has mixed statuses", spaceID, setID)
 		}
 		datasetIDs = append(datasetIDs, datasetID)
 	}
@@ -104,6 +112,16 @@ func (s *Store) ActivateDatasetSubjectSet(ctx context.Context, spaceID, setID st
 	}
 	if len(datasetIDs) == 0 {
 		return 0, fmt.Errorf("staged dataset subject set %s/%s was not found", spaceID, setID)
+	}
+	if status == "activated" {
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_dataset_subject_set_staging WHERE c_space_id = ? AND c_set_id = ?`, spaceID, setID).Scan(&count); err != nil {
+			return 0, err
+		}
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+		return count, nil
 	}
 	for _, datasetID := range datasetIDs {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM t_dataset_subjects WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID); err != nil {
@@ -123,7 +141,7 @@ func (s *Store) ActivateDatasetSubjectSet(ctx context.Context, spaceID, setID st
 	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM t_dataset_subject_set_staging WHERE c_space_id = ? AND c_set_id = ?`, spaceID, setID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE t_dataset_subject_set_staging SET c_status = 'activated' WHERE c_space_id = ? AND c_set_id = ?`, spaceID, setID); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

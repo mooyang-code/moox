@@ -127,7 +127,7 @@ package_name = "moox-collector-crypto-market"
 namespace = "default"
 runtime = "Go1"
 function_prefix = "moox-fetcher-crypto-market"
-# Timer SCF 总数。crypto_market 默认 60，stock_cn 初始默认 200。
+# Timer SCF 总数。crypto_market 默认 60；stock_cn 必须显式配置。
 # region.function_count = 0 时按总数在启用地域间自动均分（每地域最多 50）。
 timer_function_count = 60
 # SCF Timer 每次直接访问该 Storage tRPC 地址，不再请求 Collector 配置接口。
@@ -183,6 +183,8 @@ namespace = "default"
 runtime = "Go1"
 function_prefix = "moox-fetcher-stock-cn"
 timer_function_count = 200
+# 单个 stock_cn Timer 的实测安全 subject 上限，超限时 Collector 拒绝发布。
+measured_safe_group_size = 30
 storage_gateway_node_id = "control"
 storage_rpc_gateway_target = "ip://106.53.107.122:11003"
 memory_size = 64

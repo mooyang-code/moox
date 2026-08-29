@@ -87,7 +87,7 @@ func (r *Request) validate() error {
 	default:
 		return fmt.Errorf("unsupported batch_kind %q", r.BatchKind)
 	}
-	if len(r.Items) > maxItems {
+	if len(r.Items) > maxItems && !(r.BatchKind == domain.BatchKindRealtime && strings.EqualFold(r.SpaceID, StockCNSpaceID)) {
 		return fmt.Errorf("items exceed maximum batch size %d for %s", maxItems, r.BatchKind)
 	}
 	seenTaskIDs := make(map[string]struct{}, len(r.Items))

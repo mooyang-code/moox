@@ -63,7 +63,21 @@ func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]by
 		mappingField{"request_timeout", durationMilliseconds(resolver.RequestTimeoutMS)},
 		mappingField{"cache_ttl", durationSeconds(resolver.CacheTTLSeconds)},
 	)
-	return replaceYAMLMapping(existing, "dns_resolver", fields)
+	rendered, err := replaceYAMLMapping(existing, "dns_resolver", fields)
+	if err != nil {
+		return nil, err
+	}
+	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
+		if !strings.EqualFold(strings.TrimSpace(space.SpaceID), "stock_cn") {
+			continue
+		}
+		stockFields := orderedMapping(
+			mappingField{"expected_timer_function_count", space.TimerFunctionCount},
+			mappingField{"measured_safe_group_size", space.MeasuredSafeGroupSize},
+		)
+		return replaceYAMLMapping(rendered, "stock_cn", stockFields)
+	}
+	return rendered, nil
 }
 
 // DNSResolverRuntimeTarget returns the non-secret node identity and native

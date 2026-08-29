@@ -265,6 +265,8 @@ cloud_account_id = "tencent-scf-singapore"
 
 [[scf_fetcher.spaces]]
 space_id = "stock_cn"
+timer_function_count = 1
+measured_safe_group_size = 1
 storage_rpc_gateway_target = "ip://106.53.107.122:11003"
 package_config_dir = "scf/stock_cn"
 package_name = "moox-collector-stock_cn"
@@ -1071,6 +1073,21 @@ func TestCollectorTimerRestorePatchesOnlyPreviouslyEnabledNodes(t *testing.T) {
 	assert.Equal(t, "enabled", patches[0].NodeID)
 	assert.True(t, patches[0].TimerEnabled)
 	assert.Equal(t, "0 1 * * * * *", patches[0].TimerCron)
+}
+
+func TestCollectorStockCNTimerRestorePatchesIncludeFreshNodes(t *testing.T) {
+	nodes := []adminclient.CloudNode{
+		{NodeID: "sh-1", Region: "ap-shanghai", FunctionName: "stock-1", Metadata: map[string]any{"index": 1}},
+		{NodeID: "gz-0", Region: "ap-guangzhou", FunctionName: "stock-0", Metadata: map[string]any{"index": 0}},
+	}
+
+	patches := collectorStockCNTimerRestorePatches(nodes)
+
+	require.Len(t, patches, 2)
+	assert.Equal(t, "gz-0", patches[0].NodeID)
+	assert.Equal(t, "0 * * * * * *", patches[0].TimerCron)
+	assert.Equal(t, "sh-1", patches[1].NodeID)
+	assert.Equal(t, "1 * * * * * *", patches[1].TimerCron)
 }
 
 func TestCollectorTimerDisablePatchesCoverEveryPublishedNode(t *testing.T) {

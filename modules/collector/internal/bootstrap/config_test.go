@@ -54,6 +54,16 @@ func TestLoadKlineResampleConfig(t *testing.T) {
 	assert.Equal(t, 20, cfg.KlineResample.WorkerSubjectBatchSize)
 }
 
+func TestLoadStockCNRuntimeCapacityConfig(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, `stock_cn:
+  expected_timer_function_count: 200
+  measured_safe_group_size: 30
+`))
+	require.NoError(t, err)
+	assert.Equal(t, 200, cfg.StockCN.ExpectedTimerFunctionCount)
+	assert.Equal(t, 30, cfg.StockCN.MeasuredSafeGroupSize)
+}
+
 func TestLoadRejectsInvalidKlineResampleRepairLookback(t *testing.T) {
 	_, err := Load(writeCollectorConfig(t, `kline_resample:
   repair_lookback_buckets: 11

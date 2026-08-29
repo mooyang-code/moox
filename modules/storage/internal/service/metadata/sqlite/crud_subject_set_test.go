@@ -41,4 +41,9 @@ func TestDatasetSubjectSetStagingKeepsOldActiveSetUntilAtomicActivation(t *testi
 	if len(active) != 1 || active[0].GetSubjectId() != "new" || active[0].GetStatus() != "active" {
 		t.Fatalf("active set after activation = %v", active)
 	}
+	if count, err := store.ActivateDatasetSubjectSet(ctx, "space", "set-1"); err != nil {
+		t.Fatalf("repeat activation: %v", err)
+	} else if count != 1 {
+		t.Fatalf("repeat activation count = %d, want 1", count)
+	}
 }

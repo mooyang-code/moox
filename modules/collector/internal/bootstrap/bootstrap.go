@@ -346,7 +346,12 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			prepareCancel()
 		}
 	}
-	reconciler := &marketfetch.Reconciler{Rules: dbm.TaskRules(), Symbols: metadataSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache, Metrics: metrics, MaxSubjects: 30}
+	reconciler := &marketfetch.Reconciler{
+		Rules: dbm.TaskRules(), Symbols: metadataSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
+		Metrics: metrics, MaxSubjects: 30,
+		ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
+		MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
+	}
 	readiness := marketfetch.NewPeriodReadinessService(dbm.TaskInstances(), dbm.PeriodReadiness(), cfg.PeriodReadiness.Grace)
 	invokeScheduler := &marketfetch.Scheduler{
 		Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),

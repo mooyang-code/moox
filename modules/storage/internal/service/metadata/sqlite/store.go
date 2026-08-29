@@ -211,7 +211,7 @@ func (s *Store) migrateV9ToV10(ctx context.Context) error {
 			c_effective_start_time DATETIME NOT NULL DEFAULT '', c_effective_end_time DATETIME NOT NULL DEFAULT '',
 			c_status TEXT NOT NULL DEFAULT 'building', c_active_status TEXT NOT NULL DEFAULT 'active',
 			c_attrs_json TEXT NOT NULL DEFAULT '{}', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			CHECK (c_status = 'building'),
+			CHECK (c_status IN ('building', 'activated')),
 			CHECK (c_active_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
 			CHECK (c_subject_role IN ('normal', 'benchmark', 'index', 'universe_member', 'record')),
 			FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE,
