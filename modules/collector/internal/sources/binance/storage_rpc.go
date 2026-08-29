@@ -86,7 +86,7 @@ func (w *storageWriter) ReconcileSymbolSnapshot(ctx context.Context, spaceID, da
 	if err != nil {
 		return err
 	}
-	return reconcileInactiveSymbolMemberships(ctx, w, spaceID, datasetID, active, memberships)
+	return reconcileInactiveSymbolMemberships(ctx, w, spaceID, datasetID, "", active, memberships)
 }
 
 // NewBatchStorage creates the shared Storage Primary/Metadata adapter used by
@@ -141,6 +141,7 @@ func (w *storageWriter) ReadFields(ctx context.Context, keys []*storagepb.RowKey
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("read fields: keys are required")
 	}
+	fieldIDs = qualifyResampleFieldIDs(keys, fieldIDs)
 	var rsp *storagepb.PrimaryReadFieldsRsp
 	err := retryStorageWithAttemptTimeout(ctx, func(attemptCtx context.Context) error {
 		var callErr error
@@ -156,6 +157,29 @@ func (w *storageWriter) ReadFields(ctx context.Context, keys []*storagepb.RowKey
 		return nil, err
 	}
 	return rsp.GetRows(), nil
+}
+
+// Primary stores Dataset columns under their qualified IDs (dataset.column).
+// Keep the local resample contract short and canonical while translating exact
+// reads at this adapter boundary.
+func qualifyResampleFieldIDs(keys []*storagepb.RowKey, fieldIDs []string) []string {
+	if len(fieldIDs) == 0 || len(keys) == 0 || keys[0] == nil {
+		return fieldIDs
+	}
+	datasetID := strings.TrimSpace(keys[0].GetDatasetId())
+	if datasetID == "" {
+		return fieldIDs
+	}
+	qualified := make([]string, 0, len(fieldIDs))
+	for _, fieldID := range fieldIDs {
+		fieldID = strings.TrimSpace(fieldID)
+		if fieldID == "" || strings.Contains(fieldID, ".") {
+			qualified = append(qualified, fieldID)
+			continue
+		}
+		qualified = append(qualified, datasetID+"."+fieldID)
+	}
+	return qualified
 }
 
 func (w *storageWriter) WaitViewSyncPoint(ctx context.Context, req *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error) {

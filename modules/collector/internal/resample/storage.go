@@ -208,7 +208,11 @@ func requiredInt(row *storagepb.RowFieldValues, name string) (int64, error) {
 
 func fieldValue(row *storagepb.RowFieldValues, name string) (*storagepb.TypedValue, bool) {
 	for _, field := range row.GetFields() {
-		if field != nil && field.GetFieldId() == name {
+		if field == nil {
+			continue
+		}
+		fieldID := strings.TrimSpace(field.GetFieldId())
+		if fieldID == name || strings.HasSuffix(fieldID, "."+name) {
 			return field.GetValue(), true
 		}
 	}
