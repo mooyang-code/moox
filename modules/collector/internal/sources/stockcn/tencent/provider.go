@@ -29,7 +29,7 @@ type Provider struct {
 
 func New(cfg Config) *Provider {
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = "https://web.ifzq.gtimg.cn"
+		cfg.BaseURL = "https://ifzq.gtimg.cn"
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 5 * time.Second}
@@ -50,7 +50,7 @@ func (*Provider) KlineSpec() marketdata.KlineSpec {
 		Exchanges:         []string{"XSHG", "XSHE", "XBSE"},
 		Frequencies:       []string{"1m"},
 		CompleteOHLCV:     true,
-		HasAmount:         true,
+		HasAmount:         false,
 		MaxBarsPerRequest: 320,
 		TimestampMode:     marketdata.TimestampModeClose,
 		RateLimit: marketdata.RateLimitPolicy{
@@ -64,7 +64,7 @@ func (*Provider) KlineSpec() marketdata.KlineSpec {
 }
 
 type payload struct {
-	Data map[string]map[string][][]string `json:"data"`
+	Data map[string]map[string][][]json.RawMessage `json:"data"`
 }
 
 func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
@@ -114,34 +114,33 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		if len(record) < 6 {
 			return nil, fmt.Errorf("%w: tencent record columns", marketdata.ErrProtocol)
 		}
-		openValue, err := commonsrc.ParseFloat(record[1])
-		if err != nil {
-			return nil, err
-		}
-		closeValue, err := commonsrc.ParseFloat(record[2])
-		if err != nil {
-			return nil, err
-		}
-		highValue, err := commonsrc.ParseFloat(record[3])
-		if err != nil {
-			return nil, err
-		}
-		lowValue, err := commonsrc.ParseFloat(record[4])
-		if err != nil {
-			return nil, err
-		}
-		volumeValue, err := commonsrc.ParseFloat(record[5])
-		if err != nil {
-			return nil, err
-		}
-		amountValue := 0.0
-		if len(record) > 6 && strings.TrimSpace(record[6]) != "" {
-			amountValue, err = commonsrc.ParseFloat(record[6])
-			if err != nil {
-				return nil, err
+		values := make([]string, 6)
+		for index := range values {
+			if err := json.Unmarshal(record[index], &values[index]); err != nil {
+				return nil, fmt.Errorf("%w: tencent column %d is not a string", marketdata.ErrProtocol, index)
 			}
 		}
-		row, err := commonsrc.NormalizeMinuteKline(req.SubjectID, "tencent", req.ProviderSymbol, marketdata.TimestampModeClose, record[0], openValue, highValue, lowValue, closeValue, volumeValue, amountValue, 100, now, req.RequestID)
+		openValue, err := commonsrc.ParseFloat(values[1])
+		if err != nil {
+			return nil, err
+		}
+		closeValue, err := commonsrc.ParseFloat(values[2])
+		if err != nil {
+			return nil, err
+		}
+		highValue, err := commonsrc.ParseFloat(values[3])
+		if err != nil {
+			return nil, err
+		}
+		lowValue, err := commonsrc.ParseFloat(values[4])
+		if err != nil {
+			return nil, err
+		}
+		volumeValue, err := commonsrc.ParseFloat(values[5])
+		if err != nil {
+			return nil, err
+		}
+		row, err := commonsrc.NormalizeMinuteKline(req.SubjectID, "tencent", req.ProviderSymbol, marketdata.TimestampModeClose, values[0], openValue, highValue, lowValue, closeValue, volumeValue, 0, 100, now, req.RequestID)
 		if err != nil {
 			return nil, err
 		}

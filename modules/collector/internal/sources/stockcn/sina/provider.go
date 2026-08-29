@@ -85,7 +85,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		"ma":      {"no"},
 		"datalen": {fmt.Sprintf("%d", req.Limit)},
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/CN_MarketDataService.getKLineData?"+query.Encode(), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/cn/api/jsonp_v2.php/var%20moox_kline=/CN_MarketDataService.getKLineData?"+query.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -105,8 +105,15 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if err != nil {
 		return nil, err
 	}
+	raw := strings.TrimSpace(string(body))
+	if index := strings.Index(raw, "var moox_kline="); index >= 0 {
+		raw = raw[index+len("var moox_kline="):]
+	}
+	raw = strings.TrimSuffix(strings.TrimSpace(raw), ";")
+	raw = strings.TrimPrefix(raw, "(")
+	raw = strings.TrimSuffix(raw, ")")
 	var payload []sinaBar
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		return nil, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 	}
 	rows := make([]marketdata.NormalizedKline, 0, len(payload))

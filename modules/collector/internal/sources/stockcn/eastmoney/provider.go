@@ -80,16 +80,20 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		return nil, err
 	}
 	query := url.Values{
-		"secid": {secid},
-		"klt":   {"1"},
-		"fqt":   {"0"},
-		"lmt":   {fmt.Sprintf("%d", req.Limit)},
+		"secid":   {secid},
+		"klt":     {"1"},
+		"fqt":     {"0"},
+		"lmt":     {fmt.Sprintf("%d", req.Limit)},
+		"end":     {"20500101"},
+		"fields1": {"f1,f2,f3,f4,f5,f6"},
+		"fields2": {"f51,f52,f53,f54,f55,f56,f57"},
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/qt/stock/kline/get?"+query.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("User-Agent", "moox-collector/1.0")
+	httpReq.Header.Set("Referer", "https://quote.eastmoney.com/")
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
