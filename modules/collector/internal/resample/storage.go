@@ -14,6 +14,7 @@ import (
 )
 
 var ErrResampleSourceIncomplete = errors.New("resample source window incomplete")
+var ErrResampleSourceWindowTooLarge = errors.New("resample source window too large")
 
 const (
 	writeSource      = "collector:kline_resample"
@@ -60,7 +61,7 @@ func (s BucketStorage) ProcessBucket(ctx context.Context, spec RuleSpec, subject
 		return Result{}, false, err
 	}
 	if s.MaxSourceKeys > 0 && len(times) > s.MaxSourceKeys {
-		return Result{}, false, fmt.Errorf("resample source window has %d keys, exceeds max_source_keys=%d", len(times), s.MaxSourceKeys)
+		return Result{}, false, fmt.Errorf("%w: %d keys exceeds max_source_keys=%d", ErrResampleSourceWindowTooLarge, len(times), s.MaxSourceKeys)
 	}
 	keys := make([]*storagepb.RowKey, 0, len(times))
 	for _, at := range times {

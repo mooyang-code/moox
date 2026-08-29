@@ -27,6 +27,7 @@ type Dependencies struct {
 	// It overrides the runtime Storage target when both are available.
 	PlannerStorageRPCGatewayTarget string
 	RealtimeInventory              RealtimeInventory
+	DefaultResampleSettleDelay     time.Duration
 }
 
 // RealtimeInventory reconciles the derived expected Dataset registry.
@@ -38,10 +39,11 @@ type RealtimeInventory interface {
 // Service implements the independent CollectMgr RPC service.
 type Service struct {
 	pb.UnimplementedCollectMgr
-	ruleRepo     *store.TaskRuleRepository
-	instanceRepo *store.TaskInstanceRepository
-	datasetSrc   datasetSource
-	inventory    RealtimeInventory
+	ruleRepo                   *store.TaskRuleRepository
+	instanceRepo               *store.TaskInstanceRepository
+	datasetSrc                 datasetSource
+	inventory                  RealtimeInventory
+	defaultResampleSettleDelay time.Duration
 }
 
 const defaultResampleSettleDelay = 10 * time.Second
@@ -57,11 +59,16 @@ func New(persistence *store.Store, deps Dependencies) *Service {
 	if strings.TrimSpace(plannerMetadataTarget) == "" {
 		plannerMetadataTarget = deps.StorageRPCGatewayTarget
 	}
+	settleDelay := deps.DefaultResampleSettleDelay
+	if settleDelay < 0 {
+		settleDelay = defaultResampleSettleDelay
+	}
 	return &Service{
-		ruleRepo:     persistence.TaskRules(),
-		instanceRepo: persistence.TaskInstances(),
-		datasetSrc:   storagesource.NewDatasetSource(plannerMetadataTarget),
-		inventory:    deps.RealtimeInventory,
+		ruleRepo:                   persistence.TaskRules(),
+		instanceRepo:               persistence.TaskInstances(),
+		datasetSrc:                 storagesource.NewDatasetSource(plannerMetadataTarget),
+		inventory:                  deps.RealtimeInventory,
+		defaultResampleSettleDelay: settleDelay,
 	}
 }
 
@@ -375,7 +382,11 @@ func (s *Service) StartKlineResampleBackfill(ctx context.Context, req *pb.StartK
 		}
 		sourceKeepDuration = source.KeepDuration
 	}
-	if err := validateResampleBackfillWindow(backfill, target.Duration, params.SettleDelayOr(defaultResampleSettleDelay), sourceKeepDuration, time.Now().UTC()); err != nil {
+	settleDelay := s.defaultResampleSettleDelay
+	if settleDelay < 0 {
+		settleDelay = defaultResampleSettleDelay
+	}
+	if err := validateResampleBackfillWindow(backfill, target.Duration, params.SettleDelayOr(settleDelay), sourceKeepDuration, time.Now().UTC()); err != nil {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if _, err := s.instanceRepo.StartResampleBackfill(ctx, req.GetSpaceId(), req.GetRuleId(), backfill); err != nil {
@@ -448,12 +459,6 @@ func (s *Service) GetKlineResampleBackfill(ctx context.Context, req *pb.GetKline
 		return &pb.GetKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "backfill request not found")}, nil
 	}
 	response := &pb.GetKlineResampleBackfillRsp{RetInfo: retOK(), RequestId: requestID}
-	stateRank := map[domain.ResampleBackfillState]int{
-		domain.ResampleBackfillComplete: 1, domain.ResampleBackfillCanceled: 2,
-		domain.ResampleBackfillRunning: 3, domain.ResampleBackfillWaitingSource: 4,
-		domain.ResampleBackfillSyncing: 5, domain.ResampleBackfillFailed: 6,
-	}
-	selectedState := domain.ResampleBackfillState("")
 	for _, instance := range instances {
 		result, err := domain.ParseResampleTaskResult(instance.Result)
 		if err != nil || result.Backfill == nil || result.Backfill.RequestID != requestID {
@@ -483,9 +488,6 @@ func (s *Service) GetKlineResampleBackfill(ctx context.Context, req *pb.GetKline
 		case domain.ResampleBackfillCanceled:
 			response.Canceled++
 		}
-		if rank := stateRank[backfill.State]; rank > stateRank[selectedState] {
-			selectedState = backfill.State
-		}
 		if len(response.Errors) < 20 && strings.TrimSpace(result.LastError) != "" {
 			response.Errors = append(response.Errors, result.LastError)
 		}
@@ -493,7 +495,29 @@ func (s *Service) GetKlineResampleBackfill(ctx context.Context, req *pb.GetKline
 	if response.Participants == 0 {
 		return &pb.GetKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "backfill request not found")}, nil
 	}
-	response.State = string(selectedState)
+	// An active participant must remain visible even when another participant
+	// has already failed. This lets the operator cancel the remaining work and
+	// retry the request instead of seeing a terminal state that is not actually
+	// terminal for the whole request.
+	if response.Syncing > 0 {
+		response.State = string(domain.ResampleBackfillSyncing)
+	} else if response.WaitingSource > 0 {
+		response.State = string(domain.ResampleBackfillWaitingSource)
+	} else if response.Running > 0 {
+		response.State = string(domain.ResampleBackfillRunning)
+	} else if response.Failed == response.Participants {
+		response.State = string(domain.ResampleBackfillFailed)
+	} else if response.Canceled == response.Participants {
+		response.State = string(domain.ResampleBackfillCanceled)
+	} else if response.Complete == response.Participants {
+		response.State = string(domain.ResampleBackfillComplete)
+	} else if response.Failed > 0 {
+		response.State = string(domain.ResampleBackfillFailed)
+	} else if response.Canceled > 0 {
+		response.State = string(domain.ResampleBackfillCanceled)
+	} else {
+		response.State = string(domain.ResampleBackfillRunning)
+	}
 	return response, nil
 }
 

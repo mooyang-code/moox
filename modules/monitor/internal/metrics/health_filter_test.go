@@ -14,6 +14,10 @@ func TestFilterHealthSamplesKeepsBusinessFactsOnly(t *testing.T) {
 		"moox_storage_outbox_pending_entries",
 		"moox_storage_outbox_oldest_age_seconds",
 		"moox_doctor_runs_total",
+		"moox_collector_kline_resample_claims_total",
+		"moox_collector_kline_resample_writes_total",
+		"moox_collector_kline_resample_retries_total",
+		"moox_collector_kline_resample_errors_total",
 	}
 	drop := []string{
 		"go_gc_duration_seconds",

@@ -3,11 +3,15 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
@@ -102,4 +106,29 @@ func TestValidateTaskRuleDatasetsAcceptsExchangeSourceForMooxResample(t *testing
 		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc"}`,
 	}
 	require.NoError(t, service.validateTaskRuleDatasets(context.Background(), rule))
+}
+
+func TestGetKlineResampleBackfillKeepsMixedActiveRequestCancelable(t *testing.T) {
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
+	start := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
+	makeInstance := func(taskID string, state domain.ResampleBackfillState) domain.TaskInstance {
+		result := domain.NewResampleTaskResult(start)
+		result.LastError = "source retention expired"
+		result.Backfill = &domain.ResampleBackfill{RequestID: "request-1", Start: start, End: start.Add(time.Hour), NextBucket: start, State: state}
+		encoded, marshalErr := result.Marshal()
+		require.NoError(t, marshalErr)
+		return domain.TaskInstance{SpaceID: "crypto", TaskID: taskID, RuleID: "rule-5m", DataType: "kline_resample", Result: encoded}
+	}
+	instances := []domain.TaskInstance{makeInstance("failed", domain.ResampleBackfillFailed), makeInstance("syncing", domain.ResampleBackfillSyncing)}
+	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), instances))
+	service := &Service{instanceRepo: db.TaskInstances()}
+	rsp, err := service.GetKlineResampleBackfill(context.Background(), &pb.GetKlineResampleBackfillReq{SpaceId: "crypto", RuleId: "rule-5m", RequestId: "request-1"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, "syncing", rsp.GetState())
+	require.EqualValues(t, 1, rsp.GetFailed())
+	require.EqualValues(t, 1, rsp.GetSyncing())
 }

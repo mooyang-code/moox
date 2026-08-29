@@ -496,6 +496,15 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 		return runErr
 	}, retry.Attempts(4), retry.Delay(pollInterval), retry.MaxDelay(maxRetryDelay), retry.DelayType(retry.BackOffDelay), retry.Context(ctx))
 	if err != nil {
+		if errors.Is(lastRunErr, ErrResampleSourceWindowTooLarge) || errors.Is(err, ErrResampleSourceWindowTooLarge) {
+			markError()
+			failureErr := lastRunErr
+			if failureErr == nil {
+				failureErr = err
+			}
+			failResampleClaim(parent, instances, claim, failureErr.Error())
+			return
+		}
 		if isResampleSourceIncomplete(lastRunErr) || isResampleSourceIncomplete(err) {
 			if expired, reason := sourceRetentionExpired(parent, source, claim.Instance.SpaceID, params.SourceDatasetID, bucket); expired {
 				if claim.Result.ActiveOrigin == domain.ResampleOriginRepair {

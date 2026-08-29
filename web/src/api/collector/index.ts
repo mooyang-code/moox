@@ -29,6 +29,12 @@ export async function getKlineResampleBackfillStatus(spaceId: string, ruleId: st
     next_bucket?: string;
     state?: ResampleBackfillSummary["state"];
     participants?: number;
+    running?: number;
+    waiting_source?: number;
+    syncing?: number;
+    complete?: number;
+    canceled?: number;
+    failed?: number;
   };
   try {
     response = await callControl<
@@ -40,7 +46,10 @@ export async function getKlineResampleBackfillStatus(spaceId: string, ruleId: st
     throw error;
   }
   if (!response.request_id) return null;
-  if (["complete", "canceled", "failed"].includes(String(response.state || ""))) return null;
+  const participants = Number(response.participants || 0);
+  const active = Number(response.running || 0) + Number(response.waiting_source || 0) + Number(response.syncing || 0);
+  const terminal = Number(response.complete || 0) + Number(response.canceled || 0) + Number(response.failed || 0);
+  if (participants > 0 && active === 0 && terminal >= participants) return null;
   return {
     requestId: String(response.request_id),
     start: String(response.start || ""),

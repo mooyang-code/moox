@@ -105,6 +105,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		StorageRPCGatewayTarget:        deps.StorageRPCGatewayTarget,
 		PlannerStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
 		RealtimeInventory:              realtimeInventory,
+		DefaultResampleSettleDelay:     cfg.KlineResample.DefaultSettleDelay,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
