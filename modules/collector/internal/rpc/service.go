@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -349,6 +350,12 @@ func (s *Service) StartKlineResampleBackfill(ctx context.Context, req *pb.StartK
 	if !strings.EqualFold(rule.DataType, "kline_resample") {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "rule is not kline_resample")}, nil
 	}
+	if !rule.Enabled {
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "rule is disabled")}, nil
+	}
+	if rule.PrepareState != domain.PrepareStateReady {
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("rule is not ready (prepare_state=%s)", rule.PrepareState))}, nil
+	}
 	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
 	if err != nil {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
@@ -576,6 +583,20 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, rule domain
 	}
 	for _, frequency := range info.Freqs {
 		if strings.EqualFold(strings.TrimSpace(frequency), params.SourceFrequency) {
+			if len(info.Columns) > 0 {
+				required := map[string]struct{}{"open": {}, "high": {}, "low": {}, "close": {}, "volume": {}, "quote_volume": {}, "trade_num": {}}
+				for _, column := range info.Columns {
+					delete(required, strings.TrimSpace(column))
+				}
+				if len(required) != 0 {
+					missing := make([]string, 0, len(required))
+					for column := range required {
+						missing = append(missing, column)
+					}
+					sort.Strings(missing)
+					return fmt.Errorf("source Dataset %s missing active K-line columns: %s", params.SourceDatasetID, strings.Join(missing, ","))
+				}
+			}
 			return nil
 		}
 	}

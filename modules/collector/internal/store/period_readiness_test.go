@@ -65,6 +65,90 @@ func TestPeriodReadinessDeadlineMarksPendingDegraded(t *testing.T) {
 	require.True(t, timedOut)
 }
 
+func TestResampleReadinessSuppressesDeadlineUntilAllSubjectsSucceed(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.PeriodReadiness()
+	ctx := context.Background()
+	period := time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC)
+	_, err := repo.EnsurePeriod(ctx, domain.PeriodSeed{
+		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "spot_kline_resample_5m", Frequency: "5m", PeriodTime: period},
+		DeadlineAt: period.Add(time.Minute), WorkType: "resample",
+		Tasks: []domain.PeriodTaskSeed{
+			{TaskID: "btc", SubjectID: "BTC", FunctionName: "collector_local_resample", WriteSource: "collector:kline_resample"},
+			{TaskID: "eth", SubjectID: "ETH", FunctionName: "collector_local_resample", WriteSource: "collector:kline_resample"},
+		},
+	})
+	require.NoError(t, err)
+	reports, err := repo.FinalizeDue(ctx, period.Add(2*time.Minute), 10)
+	require.NoError(t, err)
+	require.Empty(t, reports)
+	var readiness domain.PeriodReadiness
+	require.NoError(t, s.db.Where("c_dataset_id = ?", "spot_kline_resample_5m").First(&readiness).Error)
+	require.Equal(t, domain.PeriodReportWaiting, readiness.ReportState)
+	require.Equal(t, domain.PeriodStatusWaiting, readiness.Status)
+
+	key := domain.PeriodKey{SpaceID: "crypto", DatasetID: "spot_kline_resample_5m", Frequency: "5m", PeriodTime: period}
+	require.NoError(t, repo.MarkSubjectSuccess(ctx, key, "BTC", "collector_local_resample", "collector:kline_resample", period.Add(3*time.Minute)))
+	reports, err = repo.FinalizeDue(ctx, period.Add(3*time.Minute), 10)
+	require.NoError(t, err)
+	require.Empty(t, reports)
+	require.NoError(t, repo.MarkSubjectSuccess(ctx, key, "ETH", "collector_local_resample", "collector:kline_resample", period.Add(3*time.Minute)))
+	reports, err = repo.FinalizeDue(ctx, period.Add(4*time.Minute), 10)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.Equal(t, domain.PeriodStatusComplete, reports[0].Readiness.Status)
+}
+
+func TestResampleReadinessSuppressesTerminalFailedSource(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.PeriodReadiness()
+	ctx := context.Background()
+	period := time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC)
+	_, err := repo.EnsurePeriod(ctx, domain.PeriodSeed{
+		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "spot_kline_resample_5m", Frequency: "5m", PeriodTime: period},
+		DeadlineAt: period.Add(time.Minute), WorkType: "resample",
+		Tasks: []domain.PeriodTaskSeed{{TaskID: "task-btc", SubjectID: "BTC", FunctionName: "collector_local_resample", WriteSource: "collector:kline_resample"}},
+	})
+	require.NoError(t, err)
+	failed := domain.NewResampleTaskResult(period)
+	failed.State = domain.ResampleTaskStateFailed
+	failed.LastError = "source Dataset retention expired"
+	encoded, err := failed.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", TaskID: "task-btc", RuleID: "rule-5m", DataType: "kline_resample", DatasetID: "spot_kline_resample_5m", SubjectID: "BTC", Frequency: "5m", Result: encoded}}))
+	reports, err := repo.FinalizeDue(ctx, period.Add(2*time.Minute), 10)
+	require.NoError(t, err)
+	require.Empty(t, reports)
+	var readiness domain.PeriodReadiness
+	require.NoError(t, s.db.Where("c_period_time = ?", period).First(&readiness).Error)
+	require.Equal(t, domain.PeriodReportReported, readiness.ReportState)
+	require.Equal(t, domain.PeriodStatusDegraded, readiness.Status)
+}
+
+func TestResampleReadinessSuppressesDeletedSourceTask(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.PeriodReadiness()
+	ctx := context.Background()
+	period := time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC)
+	_, err := repo.EnsurePeriod(ctx, domain.PeriodSeed{
+		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "spot_kline_resample_5m", Frequency: "5m", PeriodTime: period},
+		DeadlineAt: period.Add(time.Minute), WorkType: "resample",
+		Tasks: []domain.PeriodTaskSeed{{TaskID: "task-eth", SubjectID: "ETH", FunctionName: "collector_local_resample", WriteSource: "collector:kline_resample"}},
+	})
+	require.NoError(t, err)
+	result := domain.NewResampleTaskResult(period)
+	raw, err := result.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", TaskID: "task-eth", RuleID: "rule-5m", DataType: "kline_resample", DatasetID: "spot_kline_resample_5m", SubjectID: "ETH", Frequency: "5m", Result: raw}}))
+	require.NoError(t, s.db.Model(&domain.TaskInstance{}).Where("c_space_id = ? AND c_task_id = ?", "crypto", "task-eth").Update("c_is_deleted", true).Error)
+	reports, err := repo.FinalizeDue(ctx, period.Add(2*time.Minute), 10)
+	require.NoError(t, err)
+	require.Empty(t, reports)
+	var readiness domain.PeriodReadiness
+	require.NoError(t, s.db.Where("c_period_time = ?", period).First(&readiness).Error)
+	require.Equal(t, domain.PeriodReportReported, readiness.ReportState)
+}
+
 func TestPeriodReadinessRejectsDuplicateSubject(t *testing.T) {
 	s := newCollectorStore(t)
 	_, err := s.PeriodReadiness().EnsurePeriod(context.Background(), domain.PeriodSeed{

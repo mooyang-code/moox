@@ -364,6 +364,40 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	if err != nil {
 		log.WarnContextf(trpc.BackgroundContext(), "collector storage write consumer disabled: %v", err)
 	}
+	// Resampling owns a dedicated minute timer. Its callback only schedules a
+	// bounded background scan, so slow source/target Storage I/O cannot delay the
+	// existing SCF coordination timer.
+	if resampleRunner != nil || resamplePreparer != nil {
+		resampleService := s.Service("trpc.moox.collector.kline_resample.timer")
+		if resampleService == nil {
+			log.Warn("collector kline resample timer service is not configured, skip register")
+		} else {
+			var resampleTickRunning atomic.Bool
+			timer.RegisterHandlerService(resampleService, func(ctx context.Context) error {
+				if !resampleTickRunning.CompareAndSwap(false, true) {
+					log.WarnContextf(ctx, "collector kline resample timer tick skipped because the previous tick is still running")
+					return nil
+				}
+				go func() {
+					defer resampleTickRunning.Store(false)
+					tickCtx := trpc.BackgroundContext()
+					if resamplePreparer != nil {
+						prepareCtx, prepareCancel := context.WithTimeout(tickCtx, cfg.KlineResample.ScanTimeout)
+						if err := resamplePreparer.RunOnce(prepareCtx); err != nil {
+							log.WarnContextf(tickCtx, "collector kline resample preparation failed space=%s: %v", completionSpaceID, err)
+						}
+						prepareCancel()
+					}
+					if resampleRunner != nil {
+						if err := resampleRunner.Tick(tickCtx, time.Now().UTC()); err != nil {
+							log.WarnContextf(tickCtx, "collector kline resample tick failed space=%s: %v", completionSpaceID, err)
+						}
+					}
+				}()
+				return nil
+			})
+		}
+	}
 	periodStorage, storageErr := binance.NewBatchStorageWithWriteSource(deps.StorageRPCGatewayTarget, "spot", "collector")
 	if storageErr != nil {
 		log.WarnContextf(trpc.BackgroundContext(), "collector period readiness reporter disabled: %v", storageErr)
@@ -397,18 +431,6 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		go func() {
 			defer marketFetchTickRunning.Store(false)
 			tickCtx := trpc.BackgroundContext()
-			if resamplePreparer != nil {
-				prepareCtx, prepareCancel := context.WithTimeout(tickCtx, cfg.KlineResample.ScanTimeout)
-				if err := resamplePreparer.RunOnce(prepareCtx); err != nil {
-					log.WarnContextf(tickCtx, "collector kline resample preparation failed space=%s: %v", spaceID, err)
-				}
-				prepareCancel()
-			}
-			if resampleRunner != nil {
-				if err := resampleRunner.Tick(tickCtx, time.Now().UTC()); err != nil {
-					log.WarnContextf(tickCtx, "collector kline resample tick failed space=%s: %v", spaceID, err)
-				}
-			}
 			if err := invokeScheduler.Tick(tickCtx, spaceID); err != nil {
 				log.WarnContextf(tickCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
 			}

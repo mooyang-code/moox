@@ -150,8 +150,18 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	}
 
 	stateReader := func(stateCtx context.Context) (jetstream.ConsumerState, error) {
+		// Dynamic View inventory reconciliation can register and unregister
+		// partitions while maintenance is reading the aggregate state. Snapshot
+		// the map under the service lock before iterating so the closure never
+		// races with those updates.
+		s.mu.RLock()
+		readers := make(map[string]func(context.Context) (jetstream.ConsumerState, error), len(s.consumerStates))
+		for partitionID, reader := range s.consumerStates {
+			readers[partitionID] = reader
+		}
+		s.mu.RUnlock()
 		var total jetstream.ConsumerState
-		for partitionID, reader := range states {
+		for partitionID, reader := range readers {
 			state, err := reader(stateCtx)
 			if err != nil {
 				return jetstream.ConsumerState{}, fmt.Errorf("consumer partition %q: %w", partitionID, err)
@@ -170,6 +180,24 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 			bound := state.bound
 			state.mu.RUnlock()
 			if !bound {
+				return false
+			}
+		}
+		// Dynamic inventory partitions register after the static consumers have
+		// started. Include their bound state in the aggregate readiness signal so
+		// a newly discovered View cannot make the service look ready before its
+		// dedicated durable is attached.
+		s.mu.RLock()
+		dynamicBounds := make(map[string]func() bool, len(s.consumerBounds))
+		for partitionID, reader := range s.consumerBounds {
+			if _, static := bounds[partitionID]; static {
+				continue
+			}
+			dynamicBounds[partitionID] = reader
+		}
+		s.mu.RUnlock()
+		for _, reader := range dynamicBounds {
+			if reader == nil || !reader() {
 				return false
 			}
 		}

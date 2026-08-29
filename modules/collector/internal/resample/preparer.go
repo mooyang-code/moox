@@ -49,7 +49,13 @@ func (p *Preparer) RunOnce(ctx context.Context) error {
 		source, sourceErr := p.Source.GetDataset(ctx, rule.SpaceID, params.SourceDatasetID)
 		if sourceErr == nil {
 			var subjects []domain.DatasetSubject
-			subjects, sourceErr = p.Source.ListSubjects(ctx, rule.SpaceID, params.SourceDatasetID, source.DataSourceID)
+			if sourceWithRuleUniverse, ok := p.Source.(resampleRuleSubjectSource); ok {
+				subjects, sourceErr = sourceWithRuleUniverse.ListResampleSubjectsForRule(ctx, rule.SpaceID, params.SourceDatasetID, rule.Provider, params.SourceSeriesTag)
+			} else if sourceWithNativeUniverse, ok := p.Source.(resampleSubjectSource); ok {
+				subjects, sourceErr = sourceWithNativeUniverse.ListResampleSubjects(ctx, rule.SpaceID, params.SourceDatasetID)
+			} else {
+				subjects, sourceErr = p.Source.ListSubjects(ctx, rule.SpaceID, params.SourceDatasetID, source.DataSourceID)
+			}
 			if sourceErr == nil {
 				sourceErr = p.Catalog.PrepareTarget(ctx, rule, params, source, subjects, p.KeepDuration)
 			}

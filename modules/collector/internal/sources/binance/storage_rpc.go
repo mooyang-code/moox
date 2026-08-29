@@ -162,7 +162,14 @@ func (w *storageWriter) WaitViewSyncPoint(ctx context.Context, req *storagepb.Wa
 	if req == nil {
 		return nil, fmt.Errorf("wait View sync point: request is required")
 	}
-	return w.access.WaitViewSyncPoint(ctx, req)
+	// Callers may not carry the Primary auth object (for example the local
+	// resample backfill fence). Inject the writer's authenticated snapshot while
+	// preserving an explicit auth value used by metadata preparation tests.
+	copyReq := *req
+	if copyReq.AuthInfo == nil {
+		copyReq.AuthInfo = w.authInfo
+	}
+	return w.access.WaitViewSyncPoint(ctx, &copyReq)
 }
 
 // ReportDatasetPeriodCollected appends the completion marker after the

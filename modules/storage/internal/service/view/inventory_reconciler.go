@@ -76,6 +76,7 @@ type InventoryReconciler struct {
 	primary       DatasetSyncPointAppender
 	auth          *pb.AuthInfo
 	exact         map[datasetRef]struct{}
+	dynamicExact  map[datasetRef]struct{}
 	allowedSpaces map[string]struct{}
 	misc          EventConsumerOptions
 	interval      time.Duration
@@ -100,7 +101,7 @@ func (s *Service) NewInventoryReconciler(opts InventoryReconcilerOptions) (*Inve
 	if opts.EventClient == nil {
 		return nil, errors.New("storage view inventory EventBus client is required")
 	}
-	misc, exact, allowedSpaces, err := dynamicConsumerTemplate(opts.Consumer)
+	misc, exact, dynamicExact, allowedSpaces, err := dynamicConsumerTemplate(opts.Consumer)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +115,7 @@ func (s *Service) NewInventoryReconciler(opts InventoryReconcilerOptions) (*Inve
 	}
 	r := &InventoryReconciler{
 		service: s, metadata: opts.Metadata, primary: opts.Primary, auth: auth,
-		exact: exact, allowedSpaces: allowedSpaces, misc: misc, interval: interval,
+		exact: exact, dynamicExact: dynamicExact, allowedSpaces: allowedSpaces, misc: misc, interval: interval,
 		bindings: make(map[datasetRef]*dynamicDatasetConsumerBinding),
 	}
 	r.bind = func(ctx context.Context, spec dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
@@ -274,7 +275,9 @@ func (r *InventoryReconciler) loadDesired(ctx context.Context) (map[datasetRef]d
 					continue
 				}
 				if _, exact := r.exact[ref]; !exact {
-					if _, allowed := r.allowedSpaces[ref.spaceID]; !allowed {
+					_, allowedSpace := r.allowedSpaces[ref.spaceID]
+					_, allowedExact := r.dynamicExact[ref]
+					if !allowedSpace && !allowedExact {
 						continue
 					}
 				}
@@ -313,6 +316,11 @@ func (r *InventoryReconciler) consumerSpec(ref datasetRef) (dynamicDatasetConsum
 	config.PartitionConfigs = nil
 	config.PartitionID = partitionID
 	config.Consumer = durable
+	// A per-Dataset durable is created after the View may already have emitted
+	// historical rows. Replay the complete stream slice so replacing the legacy
+	// catch-all durable cannot strand its pending sequence. The durable keeps
+	// this policy on subsequent restarts, making the migration idempotent.
+	config.DeliverPolicy = "all"
 	config.FilterSubjects = append([]string(nil), filters...)
 	config.DatasetRoutes = []DatasetRoute{{SpaceID: ref.spaceID, DatasetID: ref.datasetID}}
 	return dynamicDatasetConsumerSpec{ref: ref, partitionID: partitionID, durable: durable, filters: filters, config: config}, nil
@@ -374,11 +382,12 @@ func (r *InventoryReconciler) bindingRefs() []datasetRef {
 	return refs
 }
 
-func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions, map[datasetRef]struct{}, map[string]struct{}, error) {
+func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions, map[datasetRef]struct{}, map[datasetRef]struct{}, map[string]struct{}, error) {
 	if len(options.PartitionConfigs) == 0 {
-		return EventConsumerOptions{}, nil, nil, errors.New("storage view dynamic consumers require partition configuration")
+		return EventConsumerOptions{}, nil, nil, nil, errors.New("storage view dynamic consumers require partition configuration")
 	}
 	exact := make(map[datasetRef]struct{})
+	dynamicExact := make(map[datasetRef]struct{})
 	allowedSpaces := make(map[string]struct{}, len(options.AllowedDatasetSpaces))
 	for _, spaceID := range options.AllowedDatasetSpaces {
 		if spaceID = strings.TrimSpace(spaceID); spaceID != "" {
@@ -389,6 +398,19 @@ func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions
 	for _, partition := range options.PartitionConfigs {
 		if strings.TrimSpace(partition.Consumer) == events.StorageViewMiscConsumer {
 			misc = partition
+			for _, route := range partition.DatasetRoutes {
+				spaceID := strings.TrimSpace(route.SpaceID)
+				if spaceID != "" && strings.TrimSpace(route.DatasetID) == "*" {
+					allowedSpaces[spaceID] = struct{}{}
+				}
+				if spaceID != "" && strings.TrimSpace(route.DatasetID) != "" && strings.TrimSpace(route.DatasetID) != "*" {
+					dynamicExact[datasetRef{spaceID: spaceID, datasetID: strings.TrimSpace(route.DatasetID)}] = struct{}{}
+				}
+			}
+			// Every route in the misc partition is reconciled dynamically, including
+			// its non-wildcard legacy routes. Only partitions that remain static
+			// are excluded from dynamic bindings.
+			continue
 		}
 		for _, route := range partition.DatasetRoutes {
 			spaceID := strings.TrimSpace(route.SpaceID)
@@ -399,9 +421,9 @@ func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions
 		}
 	}
 	if strings.TrimSpace(misc.Consumer) == "" {
-		return EventConsumerOptions{}, nil, nil, errors.New("storage view misc consumer partition is required")
+		return EventConsumerOptions{}, nil, nil, nil, errors.New("storage view misc consumer partition is required")
 	}
-	return misc, exact, allowedSpaces, nil
+	return misc, exact, dynamicExact, allowedSpaces, nil
 }
 
 func datasetRouteSet(routes []DatasetRoute) map[datasetRef]struct{} {

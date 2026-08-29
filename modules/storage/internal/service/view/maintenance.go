@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -997,9 +998,18 @@ func (s *Service) consumerBacklogForView(ctx context.Context, ref viewRef) (uint
 	s.mu.RLock()
 	stateReader := s.consumerState
 	boundReader := s.consumerBound
-	partitionStates := s.consumerStates
-	partitionBounds := s.consumerBounds
-	partitionByDataset := s.consumerPartitionByDataset
+	partitionStates := make(map[string]func(context.Context) (jetstream.ConsumerState, error), len(s.consumerStates))
+	for partitionID, reader := range s.consumerStates {
+		partitionStates[partitionID] = reader
+	}
+	partitionBounds := make(map[string]func() bool, len(s.consumerBounds))
+	for partitionID, reader := range s.consumerBounds {
+		partitionBounds[partitionID] = reader
+	}
+	partitionByDataset := make(map[datasetRef]string, len(s.consumerPartitionByDataset))
+	for dataset, partitionID := range s.consumerPartitionByDataset {
+		partitionByDataset[dataset] = partitionID
+	}
 	view := s.catalogViews[ref]
 	s.mu.RUnlock()
 	partitionIDs := make(map[string]struct{})

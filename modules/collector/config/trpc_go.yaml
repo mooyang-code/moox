@@ -36,6 +36,11 @@ server:
       network: "0 * * * * *"
       protocol: timer
       timeout: 10000
+    - name: trpc.moox.collector.kline_resample.timer
+      port: 11415
+      network: "0 * * * * *"
+      protocol: timer
+      timeout: 10000
     - name: trpc.moox.collector.dns.timer
       port: 11414
       network: "*/30 * * * * *"

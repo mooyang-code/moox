@@ -244,11 +244,12 @@ func (s ResampleBackfillState) Valid() bool {
 }
 
 type ResampleBackfill struct {
-	RequestID  string                `json:"request_id"`
-	Start      time.Time             `json:"start"`
-	End        time.Time             `json:"end"`
-	NextBucket time.Time             `json:"next_bucket"`
-	State      ResampleBackfillState `json:"state"`
+	RequestID   string                `json:"request_id"`
+	Start       time.Time             `json:"start"`
+	End         time.Time             `json:"end"`
+	NextBucket  time.Time             `json:"next_bucket"`
+	State       ResampleBackfillState `json:"state"`
+	NextRetryAt *time.Time            `json:"next_retry_at,omitempty"`
 }
 
 type ResampleBackfillRequest struct {
@@ -408,5 +409,6 @@ func (r *ResampleTaskResult) normalizeTimes() {
 		r.Backfill.Start = r.Backfill.Start.UTC()
 		r.Backfill.End = r.Backfill.End.UTC()
 		r.Backfill.NextBucket = r.Backfill.NextBucket.UTC()
+		normalizePtr(&r.Backfill.NextRetryAt)
 	}
 }

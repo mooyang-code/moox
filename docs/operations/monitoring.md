@@ -64,6 +64,35 @@ Monitor treats each View/frequency tuple as a separate `storage_view` freshness
 row, so a lagging Factor View raises its own watermark-lag check without
 masking or being masked by the K-line View or Primary dataset.
 
+## K-line Resample Monitoring
+
+For a `kline_resample` rule, inspect the rule's target Dataset and the matching
+`TaskInstance` result JSON. The durable task state should move between
+`idle`, `running`, and (only while source data is temporarily unavailable)
+`waiting_source`; `last_success_bucket`, `realtime_next_bucket`, and
+`last_input_hash` show progress and idempotency. A backfill additionally reports
+its request ID, cursor, and `syncing` state before completion.
+
+A healthy historical completion has all of the following evidence: target rows
+exist in Primary, a `source=catchup` sync point was appended, the target View
+wait fence is ready, and the backfill state is `complete`. Missing source bars
+must not produce partial target rows. Pending resample readiness is retried
+without publishing a degraded period marker; a degraded marker therefore
+indicates a different collection path or an explicit failure, not a normal
+source-settle delay.
+
+Useful checks are:
+
+```bash
+moox-cli data rows export --dataset <target_dataset_id> --space <space_id> \
+  --subject <subject_id> --freq <target_frequency> --start-time <start> --end-time <end>
+```
+
+Compare the returned OHLCV with the source bars in the same epoch-UTC window,
+then verify the response `complete` flag and indexed watermark. The global
+one-minute timer only claims work; slow Storage reads or retries must not block
+the ordinary market-fetch schedule.
+
 ## Failure Boundaries
 
 | Failure | Detection and recovery |

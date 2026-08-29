@@ -190,6 +190,128 @@ func TestResampleTaskWaitAndRecoverExpiredLease(t *testing.T) {
 	assert.Nil(t, result.LeaseUntil)
 }
 
+func TestResampleBackfillSourceWaitReleasesRealtimeTask(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	bucket := time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC)
+	result := domain.NewResampleTaskResult(bucket)
+	result.Backfill = &domain.ResampleBackfill{RequestID: "bf-1", Start: bucket, End: bucket.Add(time.Hour), NextBucket: bucket, State: domain.ResampleBackfillRunning}
+	raw, err := result.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+		SpaceID: "crypto", TaskID: "resample-btc", RuleID: "rule-1", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "5m", Result: raw,
+	}}))
+	claims, err := s.TaskInstances().ClaimDueResampleTasks(ctx, bucket, domain.ResampleOriginBackfill, 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, claims, 1)
+	retryAt := bucket.Add(time.Minute)
+	updated, err := s.TaskInstances().WaitResampleSource(ctx, "crypto", "resample-btc", claims[0].Result.StateVersion, 1, retryAt, "source bar missing")
+	require.NoError(t, err)
+	require.True(t, updated)
+	stored, err := s.TaskInstances().Get(ctx, "crypto", "resample-btc")
+	require.NoError(t, err)
+	updatedResult, err := domain.ParseResampleTaskResult(stored.Result)
+	require.NoError(t, err)
+	assert.Equal(t, domain.ResampleTaskStateIdle, updatedResult.State)
+	assert.Empty(t, updatedResult.ActiveOrigin)
+	assert.Equal(t, domain.ResampleBackfillWaitingSource, updatedResult.Backfill.State)
+	assert.Equal(t, retryAt, *updatedResult.Backfill.NextRetryAt)
+	realtimeClaims, err := s.TaskInstances().ClaimDueResampleTasks(ctx, bucket.Add(5*time.Minute+time.Second), domain.ResampleOriginRealtime, 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, realtimeClaims, 1)
+}
+
+func TestResampleBackfillFailureDoesNotFailRealtimeTask(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	bucket := time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC)
+	result := domain.NewResampleTaskResult(bucket)
+	result.Backfill = &domain.ResampleBackfill{RequestID: "bf-1", Start: bucket, End: bucket.Add(time.Hour), NextBucket: bucket, State: domain.ResampleBackfillRunning}
+	raw, err := result.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+		SpaceID: "crypto", TaskID: "resample-btc", RuleID: "rule-1", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "5m", Result: raw,
+	}}))
+	claims, err := s.TaskInstances().ClaimDueResampleTasks(ctx, bucket, domain.ResampleOriginBackfill, 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, claims, 1)
+	updated, err := s.TaskInstances().FailResampleBackfillTask(ctx, "crypto", "resample-btc", claims[0].Result.StateVersion, "source retention expired")
+	require.NoError(t, err)
+	require.True(t, updated)
+	stored, err := s.TaskInstances().Get(ctx, "crypto", "resample-btc")
+	require.NoError(t, err)
+	updatedResult, err := domain.ParseResampleTaskResult(stored.Result)
+	require.NoError(t, err)
+	assert.Equal(t, domain.ResampleTaskStateIdle, updatedResult.State)
+	assert.Equal(t, domain.ResampleBackfillFailed, updatedResult.Backfill.State)
+	realtimeClaims, err := s.TaskInstances().ClaimDueResampleTasks(ctx, bucket.Add(5*time.Minute+time.Second), domain.ResampleOriginRealtime, 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, realtimeClaims, 1)
+}
+
+func TestResampleBackfillLeaseRecoveryReleasesRealtimeTask(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	bucket := time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC)
+	result := domain.NewResampleTaskResult(bucket)
+	result.Backfill = &domain.ResampleBackfill{RequestID: "bf-1", Start: bucket, End: bucket.Add(time.Hour), NextBucket: bucket, State: domain.ResampleBackfillRunning}
+	raw, err := result.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+		SpaceID: "crypto", TaskID: "resample-btc", RuleID: "rule-1", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "5m", Result: raw,
+	}}))
+	claims, err := s.TaskInstances().ClaimDueResampleTasks(ctx, bucket, domain.ResampleOriginBackfill, 1, time.Second)
+	require.NoError(t, err)
+	require.Len(t, claims, 1)
+	recovered, err := s.TaskInstances().RecoverExpiredResampleLeases(ctx, bucket.Add(2*time.Second), 1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), recovered)
+	stored, err := s.TaskInstances().Get(ctx, "crypto", "resample-btc")
+	require.NoError(t, err)
+	updatedResult, err := domain.ParseResampleTaskResult(stored.Result)
+	require.NoError(t, err)
+	assert.Equal(t, domain.ResampleTaskStateIdle, updatedResult.State)
+	assert.Equal(t, domain.ResampleBackfillWaitingSource, updatedResult.Backfill.State)
+	realtimeClaims, err := s.TaskInstances().ClaimDueResampleTasks(ctx, bucket.Add(5*time.Minute+time.Second), domain.ResampleOriginRealtime, 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, realtimeClaims, 1)
+}
+
+func TestResampleBackfillStartResetsRetentionExpiredRealtimeCursor(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	result := domain.NewResampleTaskResult(old)
+	result.State = domain.ResampleTaskStateFailed
+	result.LastError = "source Dataset retention expired for bucket 2020-01-01T00:00:00Z"
+	result.Backfill = &domain.ResampleBackfill{RequestID: "old", Start: old, End: old.Add(time.Hour), NextBucket: old.Add(time.Hour), State: domain.ResampleBackfillFailed}
+	raw, err := result.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+		SpaceID: "crypto", TaskID: "resample-btc", RuleID: "rule-1", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "5m", Result: raw,
+	}}))
+	now := time.Now().UTC().Truncate(5 * time.Minute)
+	request := domain.ResampleBackfillRequest{RequestID: "new", Start: now.Add(-10 * time.Minute), End: now}
+	updated, err := s.TaskInstances().StartResampleBackfill(ctx, "crypto", "rule-1", request)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), updated)
+	stored, err := s.TaskInstances().Get(ctx, "crypto", "resample-btc")
+	require.NoError(t, err)
+	updatedResult, err := domain.ParseResampleTaskResult(stored.Result)
+	require.NoError(t, err)
+	assert.NotEqual(t, old, *updatedResult.RealtimeNextBucket)
+	assert.Equal(t, domain.ResampleBackfillRunning, updatedResult.Backfill.State)
+}
+
+func TestLatestClosedRealtimeBucketUsesEpochGrid(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 34, 0, 0, time.UTC)
+	got := latestClosedRealtimeBucket(now, 5*time.Hour)
+	assert.Equal(t, time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC), got)
+	assert.True(t, domain.IsEpochTimeAligned(got, 5*time.Hour))
+	boundary := latestClosedRealtimeBucket(time.Date(2026, 8, 29, 15, 0, 0, 0, time.UTC), 5*time.Hour)
+	assert.Equal(t, time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC), boundary)
+}
+
 func TestResampleRepairLeaseRecoveryReturnsToIdle(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()

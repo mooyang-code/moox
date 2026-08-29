@@ -18,6 +18,14 @@ type subjectSource interface {
 	ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error)
 }
 
+type resampleSubjectSource interface {
+	ListResampleSubjects(context.Context, string, string) ([]domain.DatasetSubject, error)
+}
+
+type resampleRuleSubjectSource interface {
+	ListResampleSubjectsForRule(context.Context, string, string, string, string) ([]domain.DatasetSubject, error)
+}
+
 // PlanRule expands a ready rule into one durable TaskInstance per active source
 // subject. It is idempotent and never deletes target data for removed subjects.
 func PlanRule(ctx context.Context, source subjectSource, instances *store.TaskInstanceRepository, rule domain.TaskRule, now time.Time) error {
@@ -35,7 +43,14 @@ func PlanRule(ctx context.Context, source subjectSource, instances *store.TaskIn
 	if err != nil {
 		return fmt.Errorf("get resample source Dataset: %w", err)
 	}
-	subjects, err := source.ListSubjects(ctx, rule.SpaceID, params.SourceDatasetID, info.DataSourceID)
+	var subjects []domain.DatasetSubject
+	if sourceWithRuleUniverse, ok := source.(resampleRuleSubjectSource); ok {
+		subjects, err = sourceWithRuleUniverse.ListResampleSubjectsForRule(ctx, rule.SpaceID, params.SourceDatasetID, rule.Provider, params.SourceSeriesTag)
+	} else if sourceWithNativeUniverse, ok := source.(resampleSubjectSource); ok {
+		subjects, err = sourceWithNativeUniverse.ListResampleSubjects(ctx, rule.SpaceID, params.SourceDatasetID)
+	} else {
+		subjects, err = source.ListSubjects(ctx, rule.SpaceID, params.SourceDatasetID, info.DataSourceID)
+	}
 	if err != nil {
 		return fmt.Errorf("list resample source subjects: %w", err)
 	}

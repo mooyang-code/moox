@@ -74,6 +74,9 @@ func TestInventoryReconcilerBindsDynamicDatasetAndPublishesRouteReadyOnce(t *tes
 	if len(specs[0].filters) != 4 {
 		t.Fatalf("filters = %#v, want four event families", specs[0].filters)
 	}
+	if specs[0].config.DeliverPolicy != "all" {
+		t.Fatalf("dynamic deliver policy = %q, want all for migration replay", specs[0].config.DeliverPolicy)
+	}
 	if len(primary.calls) != 1 {
 		t.Fatalf("route-ready calls = %d, want 1", len(primary.calls))
 	}
@@ -205,6 +208,85 @@ func TestInventoryReconcilerKeepsExactRouteOutsideWildcardSpace(t *testing.T) {
 	}
 	if binds != 0 || len(primary.calls) != 1 {
 		t.Fatalf("exact route outside wildcard space: binds=%d route-ready calls=%d", binds, len(primary.calls))
+	}
+}
+
+func TestDynamicConsumerTemplateTreatsMiscExactRoutesAsDynamic(t *testing.T) {
+	opts := EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{
+		{PartitionID: "kline", Consumer: "storage_view_kline", DatasetRoutes: []DatasetRoute{{SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m"}}},
+		{PartitionID: "misc", Consumer: "storage_view_misc", DatasetRoutes: []DatasetRoute{{SpaceID: "stock_cn", DatasetID: "stock_kline"}, {SpaceID: "crypto_market", DatasetID: "*"}}},
+	}}
+	_, exact, dynamicExact, allowed, err := dynamicConsumerTemplate(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := exact[datasetRef{spaceID: "crypto_market", datasetID: "binance_spot_kline_1m"}]; !ok {
+		t.Fatalf("static kline route missing from exact set: %#v", exact)
+	}
+	if _, ok := exact[datasetRef{spaceID: "stock_cn", datasetID: "stock_kline"}]; ok {
+		t.Fatalf("misc exact route incorrectly excluded from dynamic set: %#v", exact)
+	}
+	if _, ok := allowed["crypto_market"]; !ok {
+		t.Fatalf("wildcard space missing from allow list: %#v", allowed)
+	}
+	if _, ok := dynamicExact[datasetRef{spaceID: "stock_cn", datasetID: "stock_kline"}]; !ok {
+		t.Fatalf("misc exact route missing from dynamic exact set: %#v", dynamicExact)
+	}
+}
+
+func TestInventoryReconcilerBindsMiscExactRouteOutsideWildcardSpace(t *testing.T) {
+	metadata := &inventoryMetadataFake{views: []*pb.View{{
+		SpaceId: "stock_cn", ViewId: "stock_view", Status: "active", PrimaryDatasetId: "stock_kline", DatasetIds: []string{"stock_kline"},
+	}}}
+	template := EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{{
+		Consumer: "storage_view_misc", DatasetRoutes: []DatasetRoute{{SpaceID: "stock_cn", DatasetID: "stock_kline"}, {SpaceID: "crypto_market", DatasetID: "*"}},
+	}}}
+	_, _, dynamicExact, allowed, err := dynamicConsumerTemplate(template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bound []datasetRef
+	reconciler := &InventoryReconciler{
+		metadata: metadata, primary: &syncPointAppenderFake{}, dynamicExact: dynamicExact, allowedSpaces: allowed,
+		misc: EventConsumerOptions{Consumer: "storage_view_misc", DeliverPolicy: "new"}, bindings: make(map[datasetRef]*dynamicDatasetConsumerBinding),
+		bind: func(_ context.Context, spec dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
+			bound = append(bound, spec.ref)
+			return &dynamicDatasetConsumerBinding{}, nil
+		},
+	}
+	if err := reconciler.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(bound) != 1 || bound[0] != (datasetRef{spaceID: "stock_cn", datasetID: "stock_kline"}) {
+		t.Fatalf("dynamic bindings = %#v, want stock_cn/stock_kline", bound)
+	}
+}
+
+func TestInventoryReconcilerRejectsUnconfiguredMiscExactDataset(t *testing.T) {
+	metadata := &inventoryMetadataFake{views: []*pb.View{{
+		SpaceId: "stock_cn", ViewId: "unconfigured_view", Status: "active", PrimaryDatasetId: "unconfigured", DatasetIds: []string{"unconfigured"},
+	}}}
+	template := EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{{
+		Consumer: "storage_view_misc", DatasetRoutes: []DatasetRoute{{SpaceID: "stock_cn", DatasetID: "stock_kline"}},
+	}}}
+	_, _, dynamicExact, allowed, err := dynamicConsumerTemplate(template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := 0
+	reconciler := &InventoryReconciler{
+		metadata: metadata, primary: &syncPointAppenderFake{}, dynamicExact: dynamicExact, allowedSpaces: allowed,
+		misc: EventConsumerOptions{Consumer: "storage_view_misc"}, bindings: make(map[datasetRef]*dynamicDatasetConsumerBinding),
+		bind: func(context.Context, dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
+			bound++
+			return &dynamicDatasetConsumerBinding{}, nil
+		},
+	}
+	if err := reconciler.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if bound != 0 {
+		t.Fatalf("unconfigured misc Dataset was dynamically bound: %d", bound)
 	}
 }
 

@@ -24,6 +24,10 @@ type metadataClient interface {
 	ListSubjectSymbols(ctx context.Context, req *storagepb.ListSubjectSymbolsReq, opts ...client.Option) (*storagepb.ListSubjectSymbolsRsp, error)
 }
 
+type datasetColumnClient interface {
+	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
+}
+
 // DatasetInfo is the minimal Dataset contract required by Collector rules.
 type DatasetInfo struct {
 	DataSourceID string
@@ -31,6 +35,7 @@ type DatasetInfo struct {
 	DataKind     storagepb.DataKind
 	Status       string
 	Freqs        []string
+	Columns      []string
 	Attributes   map[string]string
 	KeepDuration string
 	Revision     uint64
@@ -51,7 +56,7 @@ func (s *DatasetSource) GetDataset(ctx context.Context, spaceID, datasetID strin
 	if dataset == nil {
 		return DatasetInfo{}, fmt.Errorf("get dataset: empty dataset")
 	}
-	return DatasetInfo{
+	info := DatasetInfo{
 		DataSourceID: strings.TrimSpace(dataset.GetDataSourceId()),
 		DataNodeID:   strings.TrimSpace(dataset.GetDataNodeId()),
 		DataKind:     dataset.GetDataKind(),
@@ -60,7 +65,31 @@ func (s *DatasetSource) GetDataset(ctx context.Context, spaceID, datasetID strin
 		Attributes:   cloneAttributes(dataset.GetAttributes()),
 		KeepDuration: strings.TrimSpace(dataset.GetKeepDuration()),
 		Revision:     dataset.GetRevision(),
-	}, nil
+	}
+	// The generated Metadata client supports column discovery, while small
+	// in-memory test adapters and older control-plane fakes may not. Keep this
+	// optional at the adapter boundary; callers that need a K-line schema can
+	// reject an empty result or use their explicit compatibility contract.
+	if columns, ok := s.metadata.(datasetColumnClient); ok {
+		for page := 1; page <= 100; page++ {
+			rsp, err := columns.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{SpaceId: strings.TrimSpace(spaceID), DatasetId: strings.TrimSpace(datasetID), Page: &storagepb.Page{Page: uint32(page), Size: 500}})
+			if err != nil {
+				return DatasetInfo{}, fmt.Errorf("list dataset columns: %w", err)
+			}
+			if err := ensureStorageOK("list dataset columns", rsp.GetRetInfo()); err != nil {
+				return DatasetInfo{}, err
+			}
+			for _, column := range rsp.GetColumns() {
+				if column != nil && strings.EqualFold(strings.TrimSpace(column.GetStatus()), "active") && strings.TrimSpace(column.GetColumnName()) != "" {
+					info.Columns = append(info.Columns, strings.TrimSpace(column.GetColumnName()))
+				}
+			}
+			if !rsp.GetPageResult().GetHasMore() || len(rsp.GetColumns()) == 0 {
+				break
+			}
+		}
+	}
+	return info, nil
 }
 
 func cloneAttributes(values map[string]string) map[string]string {
@@ -114,6 +143,176 @@ func (s *DatasetSource) ListSubjects(ctx context.Context, spaceID string, datase
 		symbols = filtered
 	}
 	return mergeDatasetSubjects(bindings, symbols)
+}
+
+// ListResampleSubjects returns the source Dataset's active subject universe
+// without requiring an external-symbol catalog owned by the source DataSource.
+// Shared/normalized K-line result Datasets commonly use data_source_id=crypto_market
+// while their exchange symbols remain registered under binance or another venue.
+func (s *DatasetSource) ListResampleSubjects(ctx context.Context, spaceID, datasetID string) ([]domain.DatasetSubject, error) {
+	return s.ListResampleSubjectsForRule(ctx, spaceID, datasetID, "", "")
+}
+
+// ListResampleSubjectsForRule resolves a subject universe with the rule's
+// provider/series tag when a shared result Dataset contains multiple venues.
+// This keeps an OKX-only Subject out of a Binance resample task even though
+// both venues share the same market-level Dataset metadata.
+func (s *DatasetSource) ListResampleSubjectsForRule(ctx context.Context, spaceID, datasetID, provider, seriesTag string) ([]domain.DatasetSubject, error) {
+	if strings.TrimSpace(datasetID) == "" {
+		return nil, fmt.Errorf("dataset_id is required")
+	}
+	bindings, err := s.listDatasetBindings(ctx, spaceID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	if len(bindings) > 0 {
+		dataset, datasetErr := s.GetDataset(ctx, spaceID, datasetID)
+		if datasetErr != nil {
+			return nil, datasetErr
+		}
+		if dataSourceID := strings.TrimSpace(dataset.DataSourceID); dataSourceID != "" && !strings.EqualFold(dataSourceID, "crypto_market") {
+			// A provider-owned Dataset may have an explicit subject binding and
+			// still require a provider-specific symbol (BTC-USDT -> BTCUSDT).
+			symbols, symbolErr := s.listSubjectSymbols(ctx, spaceID, dataSourceID)
+			if symbolErr != nil {
+				return nil, symbolErr
+			}
+			return mergeDatasetSubjects(bindings, symbols)
+		}
+		if strings.EqualFold(strings.TrimSpace(dataset.DataSourceID), "crypto_market") {
+			if symbolSource := inferResampleSymbolSource(provider, seriesTag); symbolSource != "" {
+				symbols, symbolErr := s.listSubjectSymbols(ctx, spaceID, symbolSource)
+				if symbolErr != nil {
+					return nil, symbolErr
+				}
+				if market := strings.TrimSpace(dataset.Attributes["market_type"]); market != "" {
+					symbols, symbolErr = s.filterSymbolsByMarket(ctx, spaceID, symbols, market)
+					if symbolErr != nil {
+						return nil, symbolErr
+					}
+				}
+				if len(symbols) == 0 {
+					return nil, fmt.Errorf("no active subject symbols for resample source %q", symbolSource)
+				}
+				return mergeDatasetSubjectsBySymbol(bindings, symbols)
+			}
+		}
+		return subjectsFromBindings(bindings), nil
+	}
+	dataset, err := s.GetDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	// Provider-owned source Datasets still use the provider's external-symbol
+	// catalog. Falling back to every Subject in the market would create tasks
+	// for symbols that the source DataSource cannot supply (for example, an
+	// OKX-only symbol on a Binance Dataset).
+	if dataSourceID := strings.TrimSpace(dataset.DataSourceID); dataSourceID != "" && !strings.EqualFold(dataSourceID, "crypto_market") {
+		symbols, symbolErr := s.listSubjectSymbols(ctx, spaceID, dataSourceID)
+		if symbolErr != nil {
+			return nil, symbolErr
+		}
+		if market := strings.TrimSpace(dataset.Attributes["market_type"]); market != "" {
+			symbols, symbolErr = s.filterSymbolsByMarket(ctx, spaceID, symbols, market)
+			if symbolErr != nil {
+				return nil, symbolErr
+			}
+		}
+		return mergeDatasetSubjects(nil, symbols)
+	}
+	dataSourceID := strings.TrimSpace(dataset.DataSourceID)
+	if strings.EqualFold(dataSourceID, "crypto_market") {
+		if symbolSource := inferResampleSymbolSource(provider, seriesTag); symbolSource != "" {
+			symbols, symbolErr := s.listSubjectSymbols(ctx, spaceID, symbolSource)
+			if symbolErr != nil {
+				return nil, symbolErr
+			}
+			if market := strings.TrimSpace(dataset.Attributes["market_type"]); market != "" {
+				symbols, symbolErr = s.filterSymbolsByMarket(ctx, spaceID, symbols, market)
+				if symbolErr != nil {
+					return nil, symbolErr
+				}
+			}
+			if len(symbols) == 0 {
+				return nil, fmt.Errorf("no active subject symbols for resample source %q", symbolSource)
+			}
+			return mergeDatasetSubjects(nil, symbols)
+		}
+	}
+	market := strings.TrimSpace(dataset.Attributes["market_type"])
+	if market == "" {
+		return nil, fmt.Errorf("source Dataset %s/%s has no market_type", spaceID, datasetID)
+	}
+	var subjects []domain.DatasetSubject
+	for page := uint32(1); ; page++ {
+		rsp, callErr := s.metadata.ListSubjects(ctx, &storagepb.ListSubjectsReq{SpaceId: spaceID, Market: market, Page: &storagepb.Page{Page: page, Size: storagePageSize}})
+		if callErr != nil {
+			return nil, fmt.Errorf("list resample subjects: %w", callErr)
+		}
+		if err := ensureStorageOK("list resample subjects", rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		for _, subject := range rsp.GetSubjects() {
+			if subject == nil || !isActive(subject.GetStatus()) || strings.TrimSpace(subject.GetSubjectId()) == "" {
+				continue
+			}
+			subjects = append(subjects, domain.DatasetSubject{SubjectID: subject.GetSubjectId(), SubjectName: subject.GetName(), ExternalSymbol: subject.GetSubjectId(), Status: "active"})
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+			break
+		}
+	}
+	return subjects, nil
+}
+
+func inferResampleSymbolSource(provider, seriesTag string) string {
+	provider = strings.TrimSpace(provider)
+	if provider != "" && !strings.EqualFold(provider, "moox") {
+		return provider
+	}
+	parts := strings.SplitN(strings.TrimSpace(seriesTag), ":", 2)
+	if len(parts) == 2 && strings.EqualFold(strings.TrimSpace(parts[0]), "venue") {
+		return strings.TrimSpace(parts[1])
+	}
+	return ""
+}
+
+func subjectsFromBindings(bindings []*storagepb.DatasetSubject) []domain.DatasetSubject {
+	subjects := make([]domain.DatasetSubject, 0, len(bindings))
+	for _, binding := range bindings {
+		if binding == nil || !isActive(binding.GetStatus()) || strings.TrimSpace(binding.GetSubjectId()) == "" {
+			continue
+		}
+		external := strings.TrimSpace(binding.GetAttributes()["external_symbol"])
+		if external == "" {
+			external = binding.GetSubjectId()
+		}
+		subjects = append(subjects, domain.DatasetSubject{SubjectID: binding.GetSubjectId(), SubjectName: binding.GetSubjectId(), ExternalSymbol: external, Status: "active"})
+	}
+	return subjects
+}
+
+func mergeDatasetSubjectsBySymbol(bindings []*storagepb.DatasetSubject, symbols map[string]string) ([]domain.DatasetSubject, error) {
+	selected := make([]*storagepb.DatasetSubject, 0, len(bindings))
+	for _, binding := range bindings {
+		if binding == nil || !isActive(binding.GetStatus()) {
+			continue
+		}
+		if _, ok := symbols[binding.GetSubjectId()]; ok {
+			selected = append(selected, binding)
+		}
+	}
+	// An explicit DatasetSubject set is an allow-list. Do not let an empty
+	// intersection fall through to mergeDatasetSubjects' empty-binding
+	// universe fallback, which would silently select every provider symbol.
+	if len(bindings) > 0 && len(selected) == 0 {
+		return []domain.DatasetSubject{}, nil
+	}
+	result, err := mergeDatasetSubjects(selected, symbols)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *DatasetSource) filterSymbolsByMarket(ctx context.Context, spaceID string, symbols map[string]string, market string) (map[string]string, error) {

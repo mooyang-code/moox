@@ -172,6 +172,48 @@ func (r *PeriodReadinessRepository) FinalizeDue(ctx context.Context, now time.Ti
 	result := make([]domain.PeriodReport, 0, len(parents))
 	for i := range parents {
 		parent := &parents[i]
+		// Resample source windows may legitimately arrive after the normal
+		// collection deadline. Keep the parent waiting and retry its deadline
+		// later instead of timing out items and publishing an irreversible
+		// degraded marker.
+		if parent.WorkType == "resample" && !parent.DeadlineAt.After(now.UTC()) {
+			var pending int64
+			if err := r.db.WithContext(ctx).Model(&domain.PeriodReadinessItem{}).
+				Where("c_readiness_id = ? AND c_state = ?", parent.ID, domain.PeriodItemPending).
+				Count(&pending).Error; err != nil {
+				return nil, err
+			}
+			if pending > 0 {
+				terminal, err := r.resamplePendingTasksTerminal(ctx, parent.ID, parent.SpaceID, pending)
+				if err != nil {
+					return nil, err
+				}
+				if terminal {
+					// A retention-expired/malformed source is a terminal source
+					// failure, not a degraded realtime marker. Close the internal
+					// readiness row as suppressed (report_state=reported keeps it
+					// out of the marker reporter) and let retention cleanup remove it.
+					if err := r.db.WithContext(ctx).Model(&domain.PeriodReadinessItem{}).
+						Where("c_readiness_id = ? AND c_state = ?", parent.ID, domain.PeriodItemPending).
+						Updates(map[string]any{"c_state": domain.PeriodItemTimedOut, "c_updated_at": now.UTC()}).Error; err != nil {
+						return nil, err
+					}
+					if err := r.db.WithContext(ctx).Model(parent).Where("c_report_state = ?", domain.PeriodReportWaiting).Updates(map[string]any{
+						"c_status": domain.PeriodStatusDegraded, "c_report_state": domain.PeriodReportReported,
+						"c_collected_at": now.UTC(), "c_mtime": now.UTC(),
+					}).Error; err != nil {
+						return nil, err
+					}
+					continue
+				}
+				if err := r.db.WithContext(ctx).Model(parent).Where("c_report_state = ?", domain.PeriodReportWaiting).Updates(map[string]any{
+					"c_deadline_at": now.UTC().Add(time.Minute), "c_mtime": now.UTC(),
+				}).Error; err != nil {
+					return nil, err
+				}
+				continue
+			}
+		}
 		if !parent.DeadlineAt.After(now.UTC()) {
 			if err := r.db.WithContext(ctx).Model(&domain.PeriodReadinessItem{}).
 				Where("c_readiness_id = ? AND c_state = ?", parent.ID, domain.PeriodItemPending).
@@ -204,6 +246,18 @@ func (r *PeriodReadinessRepository) FinalizeDue(ctx context.Context, now time.Ti
 		result[len(result)-1].Readiness.EventID = periodEventID(parent.SpaceID, parent.DatasetID, parent.Frequency, parent.PeriodTime)
 	}
 	return result, nil
+}
+
+func (r *PeriodReadinessRepository) resamplePendingTasksTerminal(ctx context.Context, readinessID int64, spaceID string, pending int64) (bool, error) {
+	var failed int64
+	err := r.db.WithContext(ctx).Table("t_period_readiness_items AS items").
+		Joins("LEFT JOIN t_collector_task_instances AS tasks ON tasks.c_space_id = ? AND tasks.c_task_id = items.c_task_id", spaceID).
+		Where("items.c_readiness_id = ? AND items.c_state = ? AND (tasks.c_is_deleted = 1 OR (json_valid(tasks.c_result) AND json_extract(tasks.c_result, '$.state') = ?))", readinessID, domain.PeriodItemPending, domain.ResampleTaskStateFailed).
+		Count(&failed).Error
+	if err != nil {
+		return false, err
+	}
+	return pending > 0 && failed == pending, nil
 }
 
 func (r *PeriodReadinessRepository) PersistPayload(ctx context.Context, readinessID int64, payloadJSON string) error {

@@ -46,7 +46,12 @@
                 <a-link @click="onViewDetails(record)">{{ record.rule_id }}</a-link>
               </template>
             </a-table-column>
-            <a-table-column title="数据类型" data-index="data_type" :width="120"></a-table-column>
+            <a-table-column title="数据类型" data-index="data_type" :width="260">
+              <template #cell="{ record }">
+                <div>{{ record.data_type }}</div>
+                <small v-if="record.data_type === 'kline_resample'" class="resample-summary">{{ resampleSummary(record) }}</small>
+              </template>
+            </a-table-column>
             <a-table-column title="数据源" data-index="data_source" :width="120"></a-table-column>
             <a-table-column title="创建时间" :width="160">
               <template #cell="{ record }">
@@ -72,6 +77,10 @@
                       <icon-check-circle v-else />
                     </template>
                     <span>{{ record.enabled === "true" ? "禁用" : "启用" }}</span>
+                  </a-button>
+                  <a-button v-if="record.data_type === 'kline_resample'" type="text" size="mini" @click="openBackfill(record)">
+                    <template #icon><icon-refresh /></template>
+                    回填
                   </a-button>
                   <a-button type="primary" size="mini" @click="onUpdate(record)">
                     <template #icon><icon-edit /></template>
@@ -169,7 +178,7 @@
           title="从交易所读取全量活跃标的快照"
         />
 
-        <a-form-item label="采集频率" required>
+        <a-form-item :label="addForm.data_type === 'kline_resample' ? '目标周期' : '采集频率'" required>
           <a-input v-model="scheduleIntervalValue" placeholder="例如 5m、1h、24h" allow-clear />
         </a-form-item>
 
@@ -211,6 +220,18 @@
         </a-descriptions-item>
       </a-descriptions>
     </a-modal>
+
+    <ResampleBackfillDialog
+      v-if="backfillTarget"
+      v-model:visible="backfillVisible"
+      :space-id="selectedSpaceId || ''"
+      :rule-id="backfillTarget.ruleId"
+      :target-frequency="backfillTarget.targetFrequency"
+      :source-keep-duration="backfillTarget.sourceKeepDuration"
+      :active-backfill="activeBackfill"
+      @started="onBackfillChanged"
+      @cancelled="onBackfillChanged"
+    />
   </div>
 </template>
 
@@ -230,6 +251,9 @@ import {
   normalizeCollectorRule,
   type CollectorRuleInput
 } from "./collector-rule-params";
+import ResampleBackfillDialog from "./resample-backfill.vue";
+import { getKlineResampleBackfillStatus } from "@/api/collector";
+import type { ResampleBackfillSummary } from "./resample-backfill";
 
 interface TaskConfig {
   id?: number;
@@ -265,6 +289,9 @@ const title = ref("新建任务");
 const formRef = ref();
 const detailVisible = ref(false);
 const detailData = ref<Partial<TaskConfig>>({});
+const backfillVisible = ref(false);
+const activeBackfill = ref<ResampleBackfillSummary | null>(null);
+const backfillTarget = ref<{ ruleId: string; targetFrequency: string; sourceKeepDuration: string } | null>(null);
 
 const dataTypeConfigs = ref<DataTypeConfig[]>([]);
 const marketValue = ref<CollectorRuleInput["market"]>("spot");
@@ -434,6 +461,12 @@ const getSearchDataSourceOptions = () => {
 };
 
 const formatJSON = (value: any) => JSON.stringify(normalizeObject(value), null, 2);
+
+const resampleSummary = (record: TaskConfig) => {
+  if (record.data_type !== "kline_resample") return "";
+  const params = normalizeObject(record.collect_params);
+  return `${String(params.source_dataset_id || "-")} ${String(params.source_frequency || "-")} -> ${String(params.target_dataset_id || "-")} ${String(params.target_frequency || "-")}`;
+};
 
 // 格式化时间为本地时间格式
 const formatDateTime = (dateTime: string) => {
@@ -798,6 +831,31 @@ const onViewDetails = (record: TaskConfig) => {
   detailVisible.value = true;
 };
 
+const openBackfill = async (record: TaskConfig) => {
+  try {
+    const input = parseStrictRuleParams(record.collect_params);
+    if (input.dataType !== "kline_resample") throw new Error("当前规则不是 K 线重采样规则");
+    const source = activeDatasets.value.find(dataset => dataset.dataset_id === input.sourceDatasetId);
+    backfillTarget.value = {
+      ruleId: record.rule_id,
+      targetFrequency: input.targetFrequency || input.scheduleInterval,
+      sourceKeepDuration: source?.keep_duration || ""
+    };
+    activeBackfill.value = null;
+    backfillVisible.value = true;
+    activeBackfill.value = await getKlineResampleBackfillStatus(selectedSpaceId.value || record.space_id || "", record.rule_id);
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "读取回填状态失败");
+  }
+};
+
+const onBackfillChanged = async () => {
+  await getTaskList();
+  if (backfillTarget.value) {
+    activeBackfill.value = await getKlineResampleBackfillStatus(selectedSpaceId.value || "", backfillTarget.value.ruleId);
+  }
+};
+
 watch(selectedSpaceId, () => {
   datasetIdValue.value = "";
   getTaskList();
@@ -815,7 +873,7 @@ watch(
 );
 
 watch(
-  [() => addForm.value.data_source, () => addForm.value.data_type, () => marketValue.value, () => scheduleIntervalValue.value],
+  [() => addForm.value.data_source, () => addForm.value.data_type, () => marketValue.value, () => scheduleIntervalValue.value, () => sourceFrequencyValue.value],
   () => {
     if (datasetIdValue.value && !availableDatasets.value.some(dataset => dataset.dataset_id === datasetIdValue.value)) {
       datasetIdValue.value = "";
@@ -847,6 +905,12 @@ onMounted(() => {
 
 .moox-inner :deep(.arco-table) {
   margin-top: 0;
+}
+
+.resample-summary {
+  color: var(--color-text-3);
+  display: block;
+  line-height: 18px;
 }
 
 pre {

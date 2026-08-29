@@ -186,6 +186,20 @@ func parseTaskFrequency(raw string) (time.Duration, error) {
 	return time.Duration(count) * multiplier, nil
 }
 
+func latestClosedRealtimeBucket(now time.Time, target time.Duration) time.Time {
+	if target <= 0 {
+		return time.Time{}
+	}
+	epoch := time.Unix(0, 0).UTC()
+	elapsed := now.UTC().Sub(epoch)
+	index := elapsed / target
+	start := epoch.Add(index * target)
+	if !start.Add(target).Before(now.UTC()) {
+		start = start.Add(-target)
+	}
+	return start.UTC()
+}
+
 // ClaimResampleTask claims one scanner-selected bucket with a state-version CAS.
 func (r *TaskInstanceRepository) ClaimResampleTask(
 	ctx context.Context,
@@ -228,6 +242,9 @@ func dueResampleBucket(result domain.ResampleTaskResult, origin domain.ResampleT
 		backfill := result.Backfill
 		return func() (time.Time, bool) {
 			if backfill == nil || (backfill.State != domain.ResampleBackfillRunning && backfill.State != domain.ResampleBackfillWaitingSource) {
+				return time.Time{}, false
+			}
+			if backfill.NextRetryAt != nil && backfill.NextRetryAt.After(now) {
 				return time.Time{}, false
 			}
 			return backfill.NextBucket, backfill.NextBucket.Before(backfill.End)
@@ -288,6 +305,7 @@ func (r *TaskInstanceRepository) CompleteResampleTask(ctx context.Context, space
 			if result.Backfill == nil {
 				return fmt.Errorf("active backfill state is missing")
 			}
+			result.Backfill.NextRetryAt = nil
 			result.Backfill.NextBucket = nextBucket.UTC()
 			if !result.Backfill.NextBucket.Before(result.Backfill.End) {
 				result.Backfill.State = domain.ResampleBackfillSyncing
@@ -316,15 +334,24 @@ func (r *TaskInstanceRepository) WaitResampleSource(ctx context.Context, spaceID
 			result.LastError = strings.TrimSpace(lastError)
 			return nil
 		}
-		result.State = domain.ResampleTaskStateWaitingSource
 		result.LeaseUntil = nil
 		result.Attempt = attempt
 		retry := nextRetryAt.UTC()
-		result.NextRetryAt = &retry
 		result.LastError = strings.TrimSpace(lastError)
 		if result.ActiveOrigin == domain.ResampleOriginBackfill && result.Backfill != nil {
+			// Backfill source gaps must not block realtime progress on the same
+			// subject. Keep retry state inside the backfill cursor and return the
+			// task to idle so realtime can claim its own due bucket.
+			result.State = domain.ResampleTaskStateIdle
+			result.ActiveOrigin = ""
+			result.ActiveBucket = nil
+			result.NextRetryAt = nil
 			result.Backfill.State = domain.ResampleBackfillWaitingSource
+			result.Backfill.NextRetryAt = &retry
+			return nil
 		}
+		result.State = domain.ResampleTaskStateWaitingSource
+		result.NextRetryAt = &retry
 		return nil
 	}, domain.InstanceStatusPending)
 }
@@ -340,6 +367,27 @@ func (r *TaskInstanceRepository) FailResampleTask(ctx context.Context, spaceID, 
 		}
 		return nil
 	}, domain.InstanceStatusFailed)
+}
+
+// FailResampleBackfillTask terminates only the historical backfill cursor.
+// Realtime state remains idle and claimable because the two workflows share a
+// task row but not a failure state.
+func (r *TaskInstanceRepository) FailResampleBackfillTask(ctx context.Context, spaceID, taskID string, expectedStateVersion int64, lastError string) (bool, error) {
+	return r.updateResampleTask(ctx, spaceID, taskID, expectedStateVersion, func(result *domain.ResampleTaskResult) error {
+		if result.State != domain.ResampleTaskStateRunning || result.ActiveOrigin != domain.ResampleOriginBackfill || result.Backfill == nil {
+			return errResampleCASMismatch
+		}
+		result.State = domain.ResampleTaskStateIdle
+		result.ActiveOrigin = ""
+		result.ActiveBucket = nil
+		result.LeaseUntil = nil
+		result.Attempt = 0
+		result.NextRetryAt = nil
+		result.LastError = strings.TrimSpace(lastError)
+		result.Backfill.State = domain.ResampleBackfillFailed
+		result.Backfill.NextRetryAt = nil
+		return nil
+	}, domain.InstanceStatusPending)
 }
 
 // SkipResampleRepairTask records a repair bucket that cannot be reconstructed
@@ -402,6 +450,16 @@ func (r *TaskInstanceRepository) RecoverExpiredResampleLeasesInSpace(ctx context
 				result.ActiveOrigin = ""
 				result.ActiveBucket = nil
 				result.NextRetryAt = nil
+			} else if result.ActiveOrigin == domain.ResampleOriginBackfill && result.Backfill != nil {
+				// A crashed backfill worker must release the shared task row so
+				// realtime work can continue while the historical cursor retries.
+				result.State = domain.ResampleTaskStateIdle
+				result.ActiveOrigin = ""
+				result.ActiveBucket = nil
+				retry := now
+				result.NextRetryAt = nil
+				result.Backfill.State = domain.ResampleBackfillWaitingSource
+				result.Backfill.NextRetryAt = &retry
 			} else {
 				result.State = domain.ResampleTaskStateWaitingSource
 				retry := now
@@ -479,6 +537,28 @@ func (r *TaskInstanceRepository) StartResampleBackfill(ctx context.Context, spac
 			if activeBackfill(result.Backfill) {
 				continue
 			}
+			// A new explicit backfill is also the recovery path for a terminal
+			// realtime/source failure. Return the participant to an idle state so
+			// it can claim the requested historical cursor again.
+			if result.State == domain.ResampleTaskStateFailed {
+				retentionExpired := strings.Contains(strings.ToLower(result.LastError), "retention expired")
+				result.State = domain.ResampleTaskStateIdle
+				result.ActiveOrigin = ""
+				result.ActiveBucket = nil
+				result.LeaseUntil = nil
+				result.NextRetryAt = nil
+				result.Attempt = 0
+				result.LastError = ""
+				if retentionExpired {
+					if target, parseErr := parseTaskFrequency(instance.Frequency); parseErr == nil {
+						// A retention-expired realtime cursor points at data that can no
+						// longer be reconstructed. Start a new backfill from a fresh
+						// realtime boundary instead of immediately failing the old bucket.
+						// Other failure causes retain their cursor for normal retry.
+						result.RealtimeNextBucket = timePtr(latestClosedRealtimeBucket(time.Now().UTC(), target))
+					}
+				}
+			}
 			version := result.StateVersion
 			result.StateVersion++
 			result.Backfill = &domain.ResampleBackfill{RequestID: request.RequestID, Start: request.Start, End: request.End, NextBucket: request.Start, State: domain.ResampleBackfillRunning}
@@ -538,6 +618,7 @@ func (r *TaskInstanceRepository) finishResampleBackfill(ctx context.Context, spa
 			version := result.StateVersion
 			result.StateVersion++
 			result.Backfill.State = state
+			result.Backfill.NextRetryAt = nil
 			if result.ActiveOrigin == domain.ResampleOriginBackfill {
 				result.State = domain.ResampleTaskStateIdle
 				result.ActiveOrigin = ""

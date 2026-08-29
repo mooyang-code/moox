@@ -439,13 +439,24 @@ func runViewRole() error {
 	if err != nil {
 		return err
 	}
-	if err := validateStorageViewConsumerPartitions(trpc.BackgroundContext(), metadataProxy, &pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")}, &consumerOptions); err != nil {
+	// Validate against a temporary expanded topology. Never mutate the static
+	// startup options: the configured wildcard belongs to the dynamic
+	// reconciler, while the durable static misc consumer must keep its stable
+	// exact filter set across restarts.
+	validationOptions := cloneViewConsumerOptions(consumerOptions)
+	if err := validateStorageViewConsumerPartitions(trpc.BackgroundContext(), metadataProxy, &pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")}, &validationOptions); err != nil {
 		return err
 	}
-	// Clone after wildcard expansion so the dynamic exact-route set includes
-	// every Dataset already assigned to the static misc partition on restart.
+	staticConsumerOptions := cloneViewConsumerOptions(consumerOptions)
+	stripWildcardConsumerRoutes(&staticConsumerOptions)
+	// The legacy misc durable previously held an inventory-expanded wildcard
+	// filter. Reusing that durable with a newly discovered View would violate
+	// JetStream's immutable filter contract. Static consumers therefore keep
+	// only the exact, latency-sensitive partitions; the reconciler owns every
+	// misc Dataset with a stable per-Dataset durable instead.
+	stripMiscConsumerPartition(&staticConsumerOptions)
 	dynamicConsumerOptions := cloneViewConsumerOptions(consumerOptions)
-	stopConsumer, err := svc.StartEventConsumer(trpc.BackgroundContext(), eventClient, consumerOptions)
+	stopConsumer, err := svc.StartEventConsumer(trpc.BackgroundContext(), eventClient, staticConsumerOptions)
 	if err != nil {
 		return err
 	}
@@ -455,6 +466,13 @@ func runViewRole() error {
 	})
 	if err != nil {
 		return fmt.Errorf("create storage view dynamic inventory reconciler: %w", err)
+	}
+	// Bind the current inventory before starting the periodic reconciler. The
+	// legacy catch-all durable is intentionally retained during this rollout;
+	// its pending sequence is a rollback/replay safety net and must not be
+	// deleted until operators have verified the per-Dataset consumers.
+	if err := dynamicReconciler.Reconcile(trpc.BackgroundContext()); err != nil {
+		return fmt.Errorf("initial storage view dynamic inventory reconcile: %w", err)
 	}
 	stopDynamicConsumer, err := dynamicReconciler.Start(trpc.BackgroundContext())
 	if err != nil {
@@ -467,6 +485,37 @@ func runViewRole() error {
 	}
 	defer stopViewMaintainer()
 	return <-serveErr
+}
+
+func stripWildcardConsumerRoutes(options *viewservice.EventConsumerOptions) {
+	if options == nil {
+		return
+	}
+	for i := range options.PartitionConfigs {
+		partition := &options.PartitionConfigs[i]
+		routes := partition.DatasetRoutes[:0]
+		for _, route := range partition.DatasetRoutes {
+			if strings.TrimSpace(route.DatasetID) == "*" {
+				continue
+			}
+			routes = append(routes, route)
+		}
+		partition.DatasetRoutes = routes
+	}
+}
+
+func stripMiscConsumerPartition(options *viewservice.EventConsumerOptions) {
+	if options == nil {
+		return
+	}
+	partitions := options.PartitionConfigs[:0]
+	for _, partition := range options.PartitionConfigs {
+		if strings.TrimSpace(partition.Consumer) == events.StorageViewMiscConsumer {
+			continue
+		}
+		partitions = append(partitions, partition)
+	}
+	options.PartitionConfigs = partitions
 }
 
 func cloneViewConsumerOptions(options viewservice.EventConsumerOptions) viewservice.EventConsumerOptions {

@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
 var ErrTargetViewNotReady = errors.New("target View route is not ready")
@@ -234,6 +236,20 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 			return err
 		}
 	}
+	// Upserting a View column advances desired_view_revision. Re-read the
+	// authoritative revision after the complete desired schema is written; the
+	// earlier GetView response may describe a stale definition.
+	finalViewResp, finalViewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: rule.SpaceID, ViewId: viewID})
+	if finalViewErr != nil {
+		return fmt.Errorf("get target View after columns: %w", finalViewErr)
+	}
+	if err := ensureMetadataSuccess("get target View after columns", finalViewResp.GetRetInfo()); err != nil {
+		return err
+	}
+	finalView := finalViewResp.GetView()
+	if finalView == nil {
+		return errors.New("target View after columns is empty")
+	}
 	if c.ViewSync == nil {
 		return errors.New("resample catalog View sync waiter is required")
 	}
@@ -253,7 +269,74 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 	if !syncResp.GetReady() {
 		return ErrTargetViewNotReady
 	}
+	if err := waitTargetViewRevision(ctx, c.Metadata, c.Auth, rule.SpaceID, viewID, finalView.GetDesiredViewRevision(), 5*time.Second); err != nil {
+		return err
+	}
 	return nil
+}
+
+type viewGetter interface {
+	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
+}
+
+// waitTargetViewRevision fences Collector activation on the physical View
+// index, not merely on the route-ready marker. A marker can be visible before
+// the asynchronous View Maintainer has activated the desired schema revision.
+func waitTargetViewRevision(ctx context.Context, getter viewGetter, auth *storagepb.AuthInfo, spaceID, viewID string, desired uint64, timeout time.Duration) error {
+	if desired == 0 {
+		return nil
+	}
+	if getter == nil {
+		return errors.New("metadata View getter is required")
+	}
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		response, err := getter.GetView(waitCtx, &storagepb.GetViewReq{AuthInfo: auth, SpaceId: spaceID, ViewId: viewID})
+		if err != nil {
+			if waitCtx.Err() != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return ErrTargetViewNotReady
+			}
+			return fmt.Errorf("get target View revision: %w", err)
+		}
+		if response == nil {
+			return errors.New("get target View revision: empty response")
+		}
+		if err := ensureMetadataSuccess("get target View revision", response.GetRetInfo()); err != nil {
+			return err
+		}
+		view := response.GetView()
+		if view == nil {
+			return errors.New("get target View revision: empty View")
+		}
+		if targetViewRevisionReady(view, desired) {
+			return nil
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return ErrTargetViewNotReady
+		case <-timer.C:
+		}
+	}
+}
+
+func targetViewRevisionReady(view *storagepb.View, desired uint64) bool {
+	if view == nil || view.GetDesiredViewRevision() > desired || view.GetActiveViewRevision() < desired || strings.TrimSpace(view.GetActiveIndexId()) == "" {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(view.GetStatus()))
+	return status == "" || status == "active"
 }
 
 func validateTargetView(view *storagepb.View, rule domain.TaskRule, params *domain.CollectParams, frequency string) error {

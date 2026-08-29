@@ -82,6 +82,72 @@ func TestDatasetSource_ListSubjects_ValidBindings_ShouldMergeSymbols(t *testing.
 	assert.Equal(t, "active", subjects[0].Status)
 }
 
+func TestDatasetSource_ListResampleSubjectsUsesSharedMarketUniverse(t *testing.T) {
+	src := &DatasetSource{metadata: &fakeMetadataClient{
+		dataset:     &storagepb.Dataset{DataSourceId: "crypto_market", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Attributes: map[string]string{"market_type": "spot"}},
+		allSubjects: []*storagepb.Subject{{SubjectId: "BTC-USDT", Name: "BTC/USDT", Status: "active"}, {SubjectId: "ETH-USDT", Status: "inactive"}},
+	}}
+	subjects, err := src.ListResampleSubjects(context.Background(), "crypto_market", "spot_kline_1h")
+	require.NoError(t, err)
+	require.Len(t, subjects, 1)
+	assert.Equal(t, "BTC-USDT", subjects[0].SubjectID)
+	assert.Equal(t, "BTC-USDT", subjects[0].ExternalSymbol)
+}
+
+func TestDatasetSource_ListResampleSubjectsForRuleFiltersSharedUniverseByVenue(t *testing.T) {
+	src := &DatasetSource{metadata: &fakeMetadataClient{
+		dataset:     &storagepb.Dataset{DataSourceId: "crypto_market", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Attributes: map[string]string{"market_type": "spot"}},
+		allSubjects: []*storagepb.Subject{{SubjectId: "BTC-USDT", Status: "active"}, {SubjectId: "OKX-ONLY", Status: "active"}},
+		symbols:     []*storagepb.SubjectSymbol{{SubjectId: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}},
+	}}
+	subjects, err := src.ListResampleSubjectsForRule(context.Background(), "crypto_market", "spot_kline_1h", "moox", "venue:binance")
+	require.NoError(t, err)
+	require.Len(t, subjects, 1)
+	assert.Equal(t, "BTC-USDT", subjects[0].SubjectID)
+	assert.Equal(t, "BTCUSDT", subjects[0].ExternalSymbol)
+}
+
+func TestDatasetSource_ListResampleSubjectsProviderUsesOwnSymbols(t *testing.T) {
+	src := &DatasetSource{metadata: &fakeMetadataClient{
+		dataset:     &storagepb.Dataset{DataSourceId: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Attributes: map[string]string{"market_type": "spot"}},
+		allSubjects: []*storagepb.Subject{{SubjectId: "BTC-USDT", Status: "active"}, {SubjectId: "OKX-ONLY", Status: "active"}},
+		symbols:     []*storagepb.SubjectSymbol{{SubjectId: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}},
+	}}
+	subjects, err := src.ListResampleSubjects(context.Background(), "crypto_market", "binance_spot_kline_1m")
+	require.NoError(t, err)
+	require.Len(t, subjects, 1)
+	assert.Equal(t, "BTC-USDT", subjects[0].SubjectID)
+	assert.Equal(t, "BTCUSDT", subjects[0].ExternalSymbol)
+}
+
+func TestDatasetSource_ListResampleSubjectsProviderBindingsKeepExternalSymbols(t *testing.T) {
+	src := &DatasetSource{metadata: &fakeMetadataClient{
+		dataset:  &storagepb.Dataset{DataSourceId: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Attributes: map[string]string{"market_type": "spot"}},
+		subjects: []*storagepb.DatasetSubject{{SubjectId: "BTC-USDT", Status: "active"}},
+		symbols:  []*storagepb.SubjectSymbol{{SubjectId: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}},
+	}}
+	subjects, err := src.ListResampleSubjects(context.Background(), "crypto_market", "binance_spot_kline_1m")
+	require.NoError(t, err)
+	require.Len(t, subjects, 1)
+	assert.Equal(t, "BTCUSDT", subjects[0].ExternalSymbol)
+}
+
+func TestMergeDatasetSubjectsBySymbolKeepsExplicitDisjointBindingsEmpty(t *testing.T) {
+	subjects, err := mergeDatasetSubjectsBySymbol([]*storagepb.DatasetSubject{
+		{SubjectId: "OKX-ONLY", Status: "active"},
+	}, map[string]string{"BTC-USDT": "BTCUSDT"})
+	require.NoError(t, err)
+	assert.Empty(t, subjects)
+}
+
+func TestMergeDatasetSubjectsBySymbolKeepsAllDisabledBindingsEmpty(t *testing.T) {
+	subjects, err := mergeDatasetSubjectsBySymbol([]*storagepb.DatasetSubject{
+		{SubjectId: "BTC-USDT", Status: "disabled"},
+	}, map[string]string{"BTC-USDT": "BTCUSDT"})
+	require.NoError(t, err)
+	assert.Empty(t, subjects)
+}
+
 func TestMergeDatasetSubjectsRequiresActiveSubjectSymbol(t *testing.T) {
 	_, err := mergeDatasetSubjects([]*storagepb.DatasetSubject{
 		{SubjectId: "BTC-USDT", Status: "active", Attributes: map[string]string{"external_symbol": "BTCUSDT_ATTR"}},

@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
+	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -197,6 +198,30 @@ func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 	}
 	if opts.PartitionConfigs[1].PartitionID != "factor" || opts.PartitionConfigs[1].Consumer != "storage_view_factor" || len(opts.PartitionConfigs[1].FilterSubjects) != 4 || opts.PartitionConfigs[1].FetchBatch != 16 || opts.PartitionConfigs[1].MaxWorkers != 8 || opts.PartitionConfigs[1].MaxAckPending != 128 {
 		t.Fatalf("factor consumer options = %+v", opts.PartitionConfigs[1])
+	}
+}
+
+func TestStripWildcardConsumerRoutesKeepsStaticMiscDurableStable(t *testing.T) {
+	opts := viewservice.EventConsumerOptions{PartitionConfigs: []viewservice.EventConsumerOptions{
+		{PartitionID: "misc", Consumer: "storage_view_misc", DatasetRoutes: []viewservice.DatasetRoute{
+			{SpaceID: "crypto_market", DatasetID: "*"},
+			{SpaceID: "stock_cn", DatasetID: "stock_kline"},
+		}},
+	}}
+	stripWildcardConsumerRoutes(&opts)
+	if got := opts.PartitionConfigs[0].DatasetRoutes; len(got) != 1 || got[0].SpaceID != "stock_cn" || got[0].DatasetID != "stock_kline" {
+		t.Fatalf("static routes = %+v, want only exact route", got)
+	}
+}
+
+func TestStripMiscConsumerPartitionLeavesExactConsumers(t *testing.T) {
+	opts := viewservice.EventConsumerOptions{PartitionConfigs: []viewservice.EventConsumerOptions{
+		{PartitionID: "kline", Consumer: "storage_view_kline"},
+		{PartitionID: "misc", Consumer: "storage_view_misc"},
+	}}
+	stripMiscConsumerPartition(&opts)
+	if len(opts.PartitionConfigs) != 1 || opts.PartitionConfigs[0].Consumer != "storage_view_kline" {
+		t.Fatalf("static partitions = %+v, want misc removed", opts.PartitionConfigs)
 	}
 }
 

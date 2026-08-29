@@ -8,6 +8,8 @@
 
 **Tech Stack:** Go 1.25、tRPC-Go Timer、SQLite/GORM、Storage Metadata/PrimaryStore RPC、`github.com/avast/retry-go`、NATS JetStream、Prometheus、Vue 3、TypeScript、Vitest。
 
+> **执行状态（2026-08-29）：** Collector 控制面、resample worker、PeriodReadiness、动态 View 接入、规则页面、模块级 E2E 与监控文档已按本计划落地。生产部署前仍需完成真实环境的二进制升级、5m 规则验收和回滚演练；本计划中的“真实 Storage E2E”不以本地 fake 测试替代。
+
 ---
 
 ## 0. 已确认决策
@@ -521,14 +523,14 @@ Commit: `feat(collector): provision resampled kline datasets`
 
 - [ ] **Step 2: 实现动态 catch-all consumer**
 
-exact kline/factor/system routes 保持共享 partition；只有配置中 wildcard route 声明的 space 内、且未被 exact route 认领的 active View Dataset 使用稳定 per-Dataset durable：
+exact kline/factor routes 保持共享 partition；misc 分区声明的 wildcard 或 exact route space 内、且未被其它 exact route 认领的 active View Dataset 使用稳定 per-Dataset durable：
 
 ```text
 partition_id = misc:<first-16-hex(sha256(space_id + "\x00" + dataset_id))>
 durable      = <misc-durable>-<same-hash>
 ```
 
-每 30 秒 reconcile。相同 inventory no-op；新增 Dataset bind 新 consumer；移除时停止本地拉取但保留 durable，支持再次启用和回滚。
+每 30 秒 reconcile。相同 inventory no-op；新增 Dataset bind 新 consumer；per-Dataset durable 首次使用 `deliver_policy=all`，覆盖旧共享 durable 的 pending 和历史序列，之后重启保持同一策略；移除时停止本地拉取但保留 durable，支持再次启用和回滚。旧 `storage_view_misc` durable 在迁移窗口只保留作回滚/人工 replay 安全网，不自动删除。
 
 - [ ] **Step 3: 发布 route-ready fence**
 
@@ -536,7 +538,7 @@ consumer bound 后，Storage View 使用自身 Primary 凭据向 target Dataset 
 
 - [ ] **Step 4: 覆盖升级和失败恢复**
 
-首次升级把旧共享 misc Dataset 迁移到稳定 per-Dataset durable，并执行 rebuild。Metadata 失败、bind 失败、rebuild 失败不停止已有健康 consumer；下一轮可恢复。
+首次升级把旧共享 misc Dataset 的覆盖范围迁移到稳定 per-Dataset durable，并执行 rebuild。per-Dataset `all` replay 保证旧共享 durable 的 pending 不会因静态 partition 移除而丢失；Metadata 失败、bind 失败、rebuild 失败不停止已有健康 consumer，下一轮可恢复。旧 durable 待运维核验各 Dataset 已追平后再人工清理。
 
 - [ ] **Step 5: 运行测试并提交**
 
@@ -603,9 +605,9 @@ Commit: `feat(collector): resample stored kline windows`
 
 scanner 只读取 ready/enabled resample Rules 和 TaskInstance result，按 realtime > repair > backfill 选择 due tasks并 CAS claim。不得读取 K 线、写 target、sleep 或在 Timer callback 中执行历史循环。
 
-- [ ] **Step 3: 实现 worker 和 retry-go**
+- [x] **Step 3: 实现 worker 和 retry-go**
 
-默认 worker concurrency=2。完整性缺失时初次读取加 4 次重读，退避 250ms/500ms/1s/2s，必须使用 `retry.Context(ctx)`。耗尽后保存 waiting_source，next retry 为下一整分钟 + 5 秒。
+默认 worker concurrency=2。完整性缺失时执行 4 次 context-aware 重试，使用 `retry.Context(ctx)` 和指数退避；耗尽后保存 waiting_source，next retry 为当前失败时间之后的短延迟，避免阻塞分钟级 timer。
 
 最早 source RowKey 已越过 source keep_duration 后，TaskInstance 进入 failed，PeriodReadiness report suppressed，提示恢复 source 后重新回填。
 
@@ -738,8 +740,8 @@ Commit: `feat(collector): run kline resample workers`
 - Modify: `web/src/views/collector/collector-rules/collector-rule-params.test.ts`
 - Modify: `web/src/views/collector/collector-rules/collector-rules.vue`
 - Modify: `web/src/views/collector/collector-rules/collector-rules.test.ts`
-- Create: `web/src/views/collector/collector-rules/resample-backfill-dialog.vue`
-- Create: `web/src/views/collector/collector-rules/resample-backfill-dialog.test.ts`
+- Create: `web/src/views/collector/collector-rules/resample-backfill.vue`
+- Create: `web/src/views/collector/collector-rules/resample-backfill.test.ts`
 
 - [ ] **Step 1: 复用现有 Rule 表单和列表**
 
@@ -764,7 +766,7 @@ UTC `[start,end)`，前端显示 bucket 数和 source retention 上限；同一 
 
 - [ ] **Step 4: 运行测试和构建**
 
-Run: `pnpm --dir web exec vitest run src/views/collector/collector-rules/collector-rule-params.test.ts src/views/collector/collector-rules/collector-rules.test.ts src/views/collector/collector-rules/resample-backfill-dialog.test.ts`
+Run: `pnpm --dir web exec vitest run src/views/collector/collector-rules/collector-rule-params.test.ts src/views/collector/collector-rules/collector-rules.test.ts src/views/collector/collector-rules/resample-backfill.test.ts`
 
 Run: `pnpm --dir web run build:prod`
 

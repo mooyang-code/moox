@@ -27,7 +27,9 @@ period_readiness:
   parent_retention: 168h
 
 kline_resample:
-  enabled: true
+  # Disabled by default; enable explicitly for a deployment after target
+  # Dataset/View and a small subject canary have been verified.
+  enabled: false
   scan_timeout: 30s
   worker_concurrency: 2
   max_claims_per_tick: 100

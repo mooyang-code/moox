@@ -34,6 +34,15 @@ type PrimaryStorage interface {
 	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
 }
 
+// SyncPointStorage is the optional catch-up fence used after a historical
+// resample. Primary rows are written first, then a stable catch-up marker is
+// appended and the target View is waited on before the backfill is reported
+// complete.
+type SyncPointStorage interface {
+	AppendDatasetSyncPoint(context.Context, string, string, string, string) error
+	WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error)
+}
+
 // BucketStorage reads one source bucket and writes its target row only when the
 // source hash changed. It is safe to retry after a crash between write and CAS.
 type BucketStorage struct {
@@ -61,7 +70,10 @@ func (s BucketStorage) ProcessBucket(ctx context.Context, spec RuleSpec, subject
 	for _, row := range rows {
 		bar, decodeErr := decodeSourceBar(row)
 		if decodeErr != nil {
-			return Result{}, false, decodeErr
+			// A malformed or incomplete source row is equivalent to a missing
+			// source bar for retry/retention policy. Keep Storage transport and
+			// target write errors outside this class so they remain transient.
+			return Result{}, false, fmt.Errorf("%w: %v", ErrResampleSourceIncomplete, decodeErr)
 		}
 		sourceBars = append(sourceBars, bar)
 	}
