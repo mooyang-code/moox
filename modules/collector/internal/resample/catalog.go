@@ -2,6 +2,8 @@ package resample
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -76,10 +78,10 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 	if target.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || target.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := c.Metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: c.Auth, Dataset: &storagepb.Dataset{
 			SpaceId: rule.SpaceID, DatasetId: params.TargetDatasetID, DataSourceId: "crypto_market", DataNodeId: source.DataNodeID,
-			// Dataset names are unique within a space. Use the stable target ID
-			// rather than a shared label so multiple resample rules can provision
-			// independent targets without colliding on metadata creation.
-			Name: params.TargetDatasetID, Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			// Dataset names are unique within a space and must contain Chinese
+			// display text. Derive a short stable suffix from the target ID so
+			// independent resample targets do not collide on metadata creation.
+			Name: uniqueResampleDisplayName(params.TargetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
 			Freqs: []string{targetFreq.Storage}, Status: "draft", Attributes: attrs, KeepDuration: keepDuration,
 		}})
 		if createErr != nil {
@@ -197,7 +199,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 	}
 	if viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_VIEW_NOT_FOUND || viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, View: &storagepb.View{
-			SpaceId: rule.SpaceID, ViewId: viewID, Name: "K线重采样", Description: "Collector生成的K线重采样查询视图", PrimaryDatasetId: params.TargetDatasetID,
+			SpaceId: rule.SpaceID, ViewId: viewID, Name: uniqueResampleDisplayName(params.TargetDatasetID), Description: "Collector生成的K线重采样查询视图", PrimaryDatasetId: params.TargetDatasetID,
 			DatasetIds: []string{params.TargetDatasetID}, GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, FilterJson: fmt.Sprintf(`{"freq":%q}`, targetFreq.Storage),
 			Engine: "duckdb", KeepDuration: keepDuration, Status: "active", Attributes: map[string]string{"route_ready_request_id": "kline-resample-route:" + rule.RuleID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
 		}})
@@ -276,6 +278,11 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 		return err
 	}
 	return nil
+}
+
+func uniqueResampleDisplayName(targetDatasetID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(targetDatasetID)))
+	return "重采样-" + hex.EncodeToString(sum[:])[:6]
 }
 
 type viewGetter interface {
