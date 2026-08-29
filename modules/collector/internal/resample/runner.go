@@ -471,6 +471,19 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 		return
 	}
 	spec := RuleSpec{RuleID: claim.Instance.RuleID, SpaceID: claim.Instance.SpaceID, SourceDatasetID: params.SourceDatasetID, SourceFrequency: sourceFreq, SourceSeriesTag: params.SourceSeriesTag, TargetDatasetID: params.TargetDatasetID, TargetFrequency: targetFreq, Alignment: params.Alignment}
+	if cfg.WorkerMaxSourceKeys > 0 {
+		sourceTimes, countErr := ExpectedSourceTimes(bucket, bucket.Add(targetFreq.Duration), sourceFreq)
+		if countErr != nil {
+			markError()
+			failResampleClaim(parent, instances, claim, countErr.Error())
+			return
+		}
+		if len(sourceTimes) > cfg.WorkerMaxSourceKeys {
+			markError()
+			failResampleClaim(parent, instances, claim, fmt.Sprintf("resample source window has %d keys, exceeds max_source_keys=%d", len(sourceTimes), cfg.WorkerMaxSourceKeys))
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(parent, cfg.WorkerJobTimeout)
 	defer cancel()
 	pollInterval := cfg.WorkerPollInterval
