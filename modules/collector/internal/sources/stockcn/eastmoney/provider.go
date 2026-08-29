@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +53,22 @@ func (*Provider) KlineSpec() marketdata.KlineSpec {
 		HasAmount:         true,
 		MaxBarsPerRequest: 1000,
 		TimestampMode:     marketdata.TimestampModeOpen,
+		RateLimit: marketdata.RateLimitPolicy{
+			RequestsPerSecond: 5,
+			Burst:             2,
+			MaxConcurrent:     1,
+			Cooldown:          time.Second,
+			RequestTimeout:    5 * time.Second,
+		},
+	}
+}
+
+func (*Provider) InstrumentSpec() marketdata.InstrumentSpec {
+	return marketdata.InstrumentSpec{
+		Markets:      []string{"stock_cn"},
+		Exchanges:    []string{"XSHG", "XSHE", "XBSE"},
+		FullSnapshot: true,
+		PageSize:     500,
 		RateLimit: marketdata.RateLimitPolicy{
 			RequestsPerSecond: 5,
 			Burst:             2,
@@ -152,4 +169,95 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		return nil, marketdata.ErrNoClosedBar
 	}
 	return rows, nil
+}
+
+func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.InstrumentRequest) (marketdata.InstrumentSnapshot, error) {
+	marketID := strings.TrimSpace(string(req.MarketID))
+	if marketID == "" {
+		marketID = "stock_cn"
+	}
+	if marketID != "stock_cn" {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: market_id %q is unsupported", marketdata.ErrInvalidRequest, req.MarketID)
+	}
+	spec := p.InstrumentSpec()
+	fetchedAt := req.SnapshotAt.UTC()
+	if req.SnapshotAt.IsZero() {
+		fetchedAt = p.now().UTC()
+	}
+	builder := commonsrc.NewInstrumentSnapshotBuilder(p.Descriptor().ID, marketID, fetchedAt)
+	for page := 1; ; page++ {
+		query := url.Values{
+			"pn":     {strconv.Itoa(page)},
+			"pz":     {strconv.Itoa(spec.PageSize)},
+			"fs":     {"m:0 t:6 m:1 t:2,m:0 t:80"},
+			"fid":    {"f12"},
+			"fields": {"f12,f13,f14,f115,f152,f103,f128,f129"},
+		}
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/qt/clist/get?"+query.Encode(), nil)
+		if err != nil {
+			return marketdata.InstrumentSnapshot{}, err
+		}
+		httpReq.Header.Set("User-Agent", "moox-collector/1.0")
+		resp, err := p.client.Do(httpReq)
+		if err != nil {
+			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
+		}
+		body, readErr := func() ([]byte, error) {
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusTooManyRequests {
+				return nil, marketdata.ErrRateLimited
+			}
+			if resp.StatusCode >= 400 {
+				return nil, fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)
+			}
+			return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		}()
+		if readErr != nil {
+			return marketdata.InstrumentSnapshot{}, readErr
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
+		}
+		data := commonsrc.ObjectAt(payload, "data")
+		if data == nil {
+			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument payload missing data", marketdata.ErrProtocol)
+		}
+		items := commonsrc.ItemSlice(data, "diff", "clist", "list")
+		if len(items) == 0 {
+			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument page %d is empty", marketdata.ErrProtocol, page)
+		}
+		for _, item := range items {
+			instrument, err := commonsrc.InstrumentFromFields(
+				commonsrc.StringField(item, "f12", "code", "symbol"),
+				commonsrc.StringField(item, "symbol", "provider_symbol"),
+				commonsrc.StringField(item, "f13", "market", "exchange"),
+				commonsrc.StringField(item, "f14", "name", "f14_name"),
+				commonsrc.StringField(item, "f107", "status", "state"),
+			)
+			if err != nil {
+				return marketdata.InstrumentSnapshot{}, err
+			}
+			if err := builder.Add(instrument); err != nil {
+				return marketdata.InstrumentSnapshot{}, err
+			}
+		}
+		builder.NextPage()
+		if totalPages := commonsrc.PageLimit(data, spec.PageSize); totalPages > 0 {
+			if page >= totalPages {
+				break
+			}
+			continue
+		}
+		if hasMore, ok := commonsrc.BoolField(data, "hasnext", "has_next", "hasMore", "has_more"); ok {
+			if !hasMore {
+				break
+			}
+			continue
+		}
+		if len(items) < spec.PageSize {
+			break
+		}
+	}
+	return builder.Snapshot()
 }

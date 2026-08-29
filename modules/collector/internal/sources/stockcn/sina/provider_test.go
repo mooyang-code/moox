@@ -36,6 +36,83 @@ func TestFetchKlinesParsesFixture(t *testing.T) {
 	require.Equal(t, 300.0, rows[0].VolumeShares)
 }
 
+func TestFetchInstrumentSnapshotPaginatesSuccessfullyAndCountsExchanges(t *testing.T) {
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/Market_Center.getHQNodeData", r.URL.Path)
+		switch r.URL.Query().Get("page") {
+		case "1":
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"pagecount": 2,
+					"list": [
+						{"symbol": "sh600000", "name": "Pudong Bank"},
+						{"symbol": "sz000001", "name": "Ping An Bank"}
+					]
+				}
+			}`))
+		case "2":
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"pagecount": 2,
+					"list": [
+						{"symbol": "bj920000", "name": "Beijing Stock"}
+					]
+				}
+			}`))
+		default:
+			t.Fatalf("unexpected page %q", r.URL.Query().Get("page"))
+		}
+	}))
+
+	now := time.Date(2026, 8, 29, 1, 32, 0, 0, time.UTC)
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, Now: func() time.Time { return now }})
+	snapshot, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{
+		MarketID:   "stock_cn",
+		SnapshotAt: now,
+		RequestID:  "req-sina-instrument",
+	})
+	require.NoError(t, err)
+	require.True(t, snapshot.Complete)
+	require.Equal(t, 2, snapshot.PageCount)
+	require.Equal(t, map[string]int{"XBSE": 1, "XSHG": 1, "XSHE": 1}, snapshot.ExchangeCounts)
+	require.Len(t, snapshot.Instruments, 3)
+	require.Equal(t, "sh600000", snapshot.Instruments[0].ProviderSymbol)
+	require.Equal(t, "sz000001", snapshot.Instruments[1].ProviderSymbol)
+	require.Equal(t, "bj920000", snapshot.Instruments[2].ProviderSymbol)
+}
+
+func TestFetchInstrumentSnapshotFailsWhenLaterPageReturnsHTTPError(t *testing.T) {
+	requests := make([]string, 0, 2)
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.Query().Get("page"))
+		switch r.URL.Query().Get("page") {
+		case "1":
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"pagecount": 2,
+					"list": [
+						{"symbol": "sh600000", "name": "Pudong Bank"}
+					]
+				}
+			}`))
+		case "2":
+			http.Error(w, "boom", http.StatusBadGateway)
+		default:
+			t.Fatalf("unexpected page %q", r.URL.Query().Get("page"))
+		}
+	}))
+
+	now := time.Date(2026, 8, 29, 1, 32, 0, 0, time.UTC)
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, Now: func() time.Time { return now }})
+	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{
+		MarketID:   "stock_cn",
+		SnapshotAt: now,
+		RequestID:  "req-sina-instrument",
+	})
+	require.ErrorIs(t, err, marketdata.ErrHTTPStatus)
+	require.Equal(t, []string{"1", "2"}, requests)
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
