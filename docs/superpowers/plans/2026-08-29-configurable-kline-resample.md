@@ -8,13 +8,13 @@
 
 **Tech Stack:** Go 1.25、tRPC-Go Timer、SQLite/GORM、Storage Metadata/PrimaryStore RPC、`github.com/avast/retry-go`、NATS JetStream、Prometheus、Vue 3、TypeScript、Vitest。
 
-> **执行状态（2026-08-29）：** Collector 控制面、resample worker、PeriodReadiness、动态 View 接入、规则页面、模块级 E2E、生产二进制升级及真实 5m 目标 View 查询已完成。生产验证已覆盖历史桶与源数据持续到达后的新实时桶：`spot_kline_derived_5m` 的 BTC-USDT 任务从 13:25 推进到 13:30，Primary 与 View 的最新 bucket 一致；源数据缺失的其他历史桶仍按合同保持 `waiting_source` 并自动重试。旧的卡住规则已禁用，隔离验证规则 `builtin-binance-spot-kline-resample-e2e-5m` 保持 `enabled/ready`。
+> **执行状态（2026-08-29）：** Collector 控制面、resample worker、PeriodReadiness、动态 View 接入、规则页面、模块级 E2E、生产二进制升级及真实 5m 目标 View 查询已完成。生产验证已覆盖历史桶与源数据持续到达后的新实时桶：`spot_kline_derived_5m` 的 BTC-USDT 任务从 13:25 推进到 13:40，Primary 与 View 的最新 bucket 一致；源数据缺失的其他历史桶仍按合同保持 `waiting_source` 并自动重试。旧的卡住规则已禁用，隔离验证规则 `builtin-binance-spot-kline-resample-e2e-5m` 保持 `enabled/ready`。
 
 **最终验证记录（2026-08-29）：**
 
-- 本地发布包 `release/moox-20260829-resample-final-linux-amd64.tar.gz` 已生成，包含 Collector、Storage、EventBus 等运行时二进制；`git diff --check`、Collector/Storage 模块测试及独立 `codeCR` 均通过。
-- 生产 Collector 使用当前构建运行；Storage View 使用 CGO-enabled 构建运行，避免 DuckDB 运行时能力缺失。生产健康检查显示 Collector、Storage Primary/View/Node、EventBus 等就绪（Factor 的既有 not-ready 状态与本变更无关）。
-- 真实 5m 校验：1m 源窗口 `[13:25,13:30)` 聚合出的 OHLCV 与 `spot_kline_derived_5m` Primary 行逐字段相等；任务结果为 `idle`，`last_success_bucket=13:30`。View smoke 同时读到 3 行，Primary/View 最新时间均为 `2026-08-29T13:30:00Z`，最新行字段完全一致。
+- 本地发布包 `release/moox-20260829-resample-final3-linux-amd64.tar.gz` 已生成，包含 Collector、Storage、EventBus 等运行时二进制。针对最新提交，另从干净 `git archive HEAD` 编译并发布了 Collector、EventBus、Storage Primary 三个正式 Linux/amd64 二进制；生产 Collector/EventBus 的 SHA-256 分别为 `699a6f99f307490799ec01c6a896365f315d8c23d899dac40be0a2ec68310858`、`98ece8e866699de5a82c94753ca5b44d88dd64f4d7efdfc55f221285c0a25474`。完整 release 脚本的 final4 重试被共享工作区中与本变更无关的 Factor/storage 生成文件 import cycle 阻断，因此没有把失败的全量包宣称为发布产物；已部署的三项二进制和现有 CGO-enabled Storage View 均完成远端 hash/health 校验。
+- 生产健康检查显示 Collector、Storage Primary/View/Node、EventBus 等就绪；Storage View 继续使用 CGO-enabled 构建，避免 DuckDB 运行时能力缺失。
+- 真实 5m 校验：最新闭合源窗口 `[13:40,13:45)` 恰有 5 根 1m K 线，聚合 OHLCV 为 `open=77662.01, high=77662.01, low=77662, close=77662, volume=4.01431, quote_volume=311759.36915519997`；`spot_kline_derived_5m` Primary 行逐字段相等，目标行 `trade_num=981`。任务结果为 `idle`，`last_success_bucket=2026-08-29T13:40:00Z`，下一实时桶为 `13:45`。View smoke 读到 5 行，Primary/View 最新时间均为 `2026-08-29T13:40:00Z`，最新行字段完全一致。
 
 ---
 
