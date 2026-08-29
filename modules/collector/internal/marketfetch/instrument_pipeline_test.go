@@ -17,6 +17,8 @@ type instrumentProviderStub struct {
 	snapshot marketdata.InstrumentSnapshot
 	err      error
 	calls    int
+	delay    time.Duration
+	timeout  time.Duration
 }
 
 func (p *instrumentProviderStub) Descriptor() marketdata.ProviderDescriptor {
@@ -24,21 +26,37 @@ func (p *instrumentProviderStub) Descriptor() marketdata.ProviderDescriptor {
 }
 
 func (p *instrumentProviderStub) InstrumentSpec() marketdata.InstrumentSpec {
-	return marketdata.InstrumentSpec{Markets: []string{StockCNSpaceID}, Exchanges: []string{"XSHG", "XSHE", "XBSE"}, FullSnapshot: true, PageSize: 100, RateLimit: marketdata.RateLimitPolicy{RequestsPerSecond: 100, Burst: 1, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: time.Second}}
+	timeout := p.timeout
+	if timeout == 0 {
+		timeout = time.Second
+	}
+	return marketdata.InstrumentSpec{Markets: []string{StockCNSpaceID}, Exchanges: []string{"XSHG", "XSHE", "XBSE"}, FullSnapshot: true, PageSize: 100, RateLimit: marketdata.RateLimitPolicy{RequestsPerSecond: 100, Burst: 1, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: timeout}}
 }
 
-func (p *instrumentProviderStub) FetchInstrumentSnapshot(context.Context, marketdata.InstrumentRequest) (marketdata.InstrumentSnapshot, error) {
+func (p *instrumentProviderStub) FetchInstrumentSnapshot(ctx context.Context, _ marketdata.InstrumentRequest) (marketdata.InstrumentSnapshot, error) {
 	p.calls++
+	if p.delay > 0 {
+		select {
+		case <-time.After(p.delay):
+		case <-ctx.Done():
+			return marketdata.InstrumentSnapshot{}, ctx.Err()
+		}
+	}
 	return p.snapshot, p.err
 }
 
 type instrumentStorageStub struct {
-	mu            sync.Mutex
-	rows          []*storagepb.RowFieldUpsert
-	registrations []*storagepb.RegisterDataSubjectReq
-	existing      []*storagepb.DatasetSubject
-	bindings      []*storagepb.DatasetSubject
-	writeErr      error
+	mu              sync.Mutex
+	rows            []*storagepb.RowFieldUpsert
+	registrations   []*storagepb.RegisterDataSubjectReq
+	existing        []*storagepb.DatasetSubject
+	bindings        []*storagepb.DatasetSubject
+	writeErr        error
+	registerErrAt   int
+	bindErrAt       int
+	bindCommitErrAt int
+	registerCalls   int
+	bindCalls       int
 }
 
 func (s *instrumentStorageStub) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
@@ -48,6 +66,10 @@ func (s *instrumentStorageStub) UpsertFields(_ context.Context, rows []*storagep
 func (s *instrumentStorageStub) RegisterDataSubject(_ context.Context, req *storagepb.RegisterDataSubjectReq) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.registerCalls++
+	if s.registerErrAt > 0 && s.registerCalls == s.registerErrAt {
+		return errors.New("register failed")
+	}
 	s.registrations = append(s.registrations, req)
 	return nil
 }
@@ -55,9 +77,28 @@ func (s *instrumentStorageStub) ListDatasetSubjects(context.Context, string, str
 	return s.existing, nil
 }
 func (s *instrumentStorageStub) BindDatasetSubject(_ context.Context, item *storagepb.DatasetSubject) error {
-	copy := *item
-	s.bindings = append(s.bindings, &copy)
+	s.bindCalls++
+	if s.bindErrAt > 0 && s.bindCalls == s.bindErrAt {
+		return errors.New("bind failed")
+	}
+	s.bindings = append(s.bindings, item)
+	if s.bindCommitErrAt > 0 && s.bindCalls == s.bindCommitErrAt {
+		return errors.New("bind response failed after commit")
+	}
 	return nil
+}
+
+func TestInstrumentPipelineDoesNotApplyOneTimeoutToWholeSnapshot(t *testing.T) {
+	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
+	registry := marketdata.NewRegistry()
+	provider := &instrumentProviderStub{id: "sina", delay: 30 * time.Millisecond, timeout: 10 * time.Millisecond, snapshot: testInstrumentSnapshot("sina", now)}
+	require.NoError(t, registry.Register(provider))
+	storage := &instrumentStorageStub{}
+	pipeline := &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: []string{"sina"}, MarketID: StockCNSpaceID, RequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}}
+
+	_, err := pipeline.Execute(context.Background(), InstrumentPipelineRequest{RequestID: "snapshot-request", SnapshotAt: now})
+
+	require.NoError(t, err)
 }
 
 func TestInstrumentPipelineFallsBackAsWholeSnapshotAndPersistsActiveSet(t *testing.T) {
@@ -79,8 +120,11 @@ func TestInstrumentPipelineFallsBackAsWholeSnapshotAndPersistsActiveSet(t *testi
 	require.Len(t, storage.registrations, 3)
 	for _, registration := range storage.registrations {
 		require.Equal(t, StockCNDataSourceID, registration.GetDataSourceId())
-		require.Len(t, registration.GetDatasetBindings(), 2)
-		require.Equal(t, result.ActiveSetVersion, registration.GetDatasetBindings()[0].GetAttributes()["active_instrument_set_version"])
+		require.Empty(t, registration.GetDatasetBindings(), "registration must stage subjects without switching active bindings")
+	}
+	require.Len(t, storage.bindings, 6)
+	for _, binding := range storage.bindings {
+		require.Equal(t, result.ActiveSetVersion, binding.GetAttributes()["active_instrument_set_version"])
 	}
 }
 
@@ -95,6 +139,50 @@ func TestInstrumentPipelineDoesNotPublishPartialSnapshotWhenRecordWriteFails(t *
 	require.Empty(t, storage.registrations)
 }
 
+func TestInstrumentPipelineDoesNotSwitchBindingsWhenStagingFails(t *testing.T) {
+	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(&instrumentProviderStub{id: "sina", snapshot: testInstrumentSnapshot("sina", now)}))
+	storage := &instrumentStorageStub{registerErrAt: 2}
+	pipeline := &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: []string{"sina"}, MarketID: StockCNSpaceID, RequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}}
+
+	_, err := pipeline.Execute(context.Background(), InstrumentPipelineRequest{RequestID: "snapshot-request", SnapshotAt: now})
+
+	require.ErrorContains(t, err, "register instrument")
+	require.Empty(t, storage.bindings)
+}
+
+func TestInstrumentPipelineRollsBackActiveBindingsWhenCommitFails(t *testing.T) {
+	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(&instrumentProviderStub{id: "sina", snapshot: testInstrumentSnapshot("sina", now)}))
+	existing := []*storagepb.DatasetSubject{{SpaceId: StockCNSpaceID, DatasetId: StockCNInstrumentDatasetID, SubjectId: "000001.XSHE", SubjectRole: "record", Status: "active", Attributes: map[string]string{"active_instrument_set_version": "old"}}}
+	storage := &instrumentStorageStub{existing: existing, bindErrAt: 2}
+	pipeline := &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: []string{"sina"}, MarketID: StockCNSpaceID, RequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}}
+
+	_, err := pipeline.Execute(context.Background(), InstrumentPipelineRequest{RequestID: "snapshot-request", SnapshotAt: now})
+
+	require.ErrorContains(t, err, "commit active instrument set")
+	require.GreaterOrEqual(t, len(storage.bindings), 2)
+	rolledBack := storage.bindings[len(storage.bindings)-1]
+	require.Equal(t, "old", rolledBack.GetAttributes()["active_instrument_set_version"])
+}
+
+func TestInstrumentPipelineRollsBackAmbiguousFailedBinding(t *testing.T) {
+	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(&instrumentProviderStub{id: "sina", snapshot: testInstrumentSnapshot("sina", now)}))
+	existing := []*storagepb.DatasetSubject{{SpaceId: StockCNSpaceID, DatasetId: StockCNInstrumentDatasetID, SubjectId: "000001.XSHE", SubjectRole: "record", Status: "active", Attributes: map[string]string{"active_instrument_set_version": "old"}}}
+	storage := &instrumentStorageStub{existing: existing, bindCommitErrAt: 1}
+	pipeline := &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: []string{"sina"}, MarketID: StockCNSpaceID, RequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}}
+
+	_, err := pipeline.Execute(context.Background(), InstrumentPipelineRequest{RequestID: "snapshot-request", SnapshotAt: now})
+
+	require.ErrorContains(t, err, "commit active instrument set")
+	require.Len(t, storage.bindings, 2)
+	require.Equal(t, "old", storage.bindings[1].GetAttributes()["active_instrument_set_version"])
+}
+
 func TestInstrumentPipelineDisablesOnlyAfterTwoCompleteMisses(t *testing.T) {
 	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
 	missing := &storagepb.DatasetSubject{SpaceId: StockCNSpaceID, DatasetId: StockCNInstrumentDatasetID, SubjectId: "601999.XSHG", Status: "active", Attributes: map[string]string{"missing_complete_snapshot_count": "1"}}
@@ -104,11 +192,12 @@ func TestInstrumentPipelineDisablesOnlyAfterTwoCompleteMisses(t *testing.T) {
 	pipeline := &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: []string{"sina"}, MarketID: StockCNSpaceID, DatasetID: StockCNInstrumentDatasetID, TargetDatasetID: StockCNDatasetID, RequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}}
 	_, err := pipeline.Execute(context.Background(), InstrumentPipelineRequest{RequestID: "snapshot-request", SnapshotAt: now})
 	require.NoError(t, err)
-	require.Len(t, storage.bindings, 2)
-	require.Equal(t, "disabled", storage.bindings[0].GetStatus())
-	require.Equal(t, StockCNInstrumentDatasetID, storage.bindings[0].GetDatasetId())
-	require.Equal(t, "disabled", storage.bindings[1].GetStatus())
-	require.Equal(t, StockCNDatasetID, storage.bindings[1].GetDatasetId())
+	require.GreaterOrEqual(t, len(storage.bindings), 2)
+	missingBindings := storage.bindings[len(storage.bindings)-2:]
+	require.Equal(t, "disabled", missingBindings[0].GetStatus())
+	require.Equal(t, StockCNInstrumentDatasetID, missingBindings[0].GetDatasetId())
+	require.Equal(t, "disabled", missingBindings[1].GetStatus())
+	require.Equal(t, StockCNDatasetID, missingBindings[1].GetDatasetId())
 }
 
 func TestInstrumentPipelineDoesNotCountTwoMissingSnapshotsOnTheSameDay(t *testing.T) {
@@ -120,9 +209,10 @@ func TestInstrumentPipelineDoesNotCountTwoMissingSnapshotsOnTheSameDay(t *testin
 	pipeline := &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: []string{"sina"}, MarketID: StockCNSpaceID, DatasetID: StockCNInstrumentDatasetID, TargetDatasetID: StockCNDatasetID, RequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}}
 	_, err := pipeline.Execute(context.Background(), InstrumentPipelineRequest{RequestID: "snapshot-request", SnapshotAt: now})
 	require.NoError(t, err)
-	require.Len(t, storage.bindings, 1)
-	require.Equal(t, "active", storage.bindings[0].GetStatus())
-	require.Equal(t, "1", storage.bindings[0].GetAttributes()["missing_complete_snapshot_count"])
+	require.NotEmpty(t, storage.bindings)
+	missingBinding := storage.bindings[len(storage.bindings)-1]
+	require.Equal(t, "active", missingBinding.GetStatus())
+	require.Equal(t, "1", missingBinding.GetAttributes()["missing_complete_snapshot_count"])
 }
 
 func testInstrumentSnapshot(provider string, now time.Time) marketdata.InstrumentSnapshot {

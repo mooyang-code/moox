@@ -11,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -80,15 +81,10 @@ func (p *InstrumentPipeline) Execute(ctx context.Context, req InstrumentPipeline
 			lastErr = err
 			continue
 		}
-		guard, err := marketdata.NewFeedGuard(fetcher.InstrumentSpec().RateLimit, nil, nil)
-		if err != nil {
-			return InstrumentPipelineResult{}, err
-		}
-		err = guard.Do(ctx, func(callCtx context.Context) error {
-			var fetchErr error
-			snapshot, fetchErr = fetcher.FetchInstrumentSnapshot(callCtx, marketdata.InstrumentRequest{MarketID: marketdata.MarketID(marketID), SnapshotAt: req.SnapshotAt.UTC(), RequestID: req.RequestID})
-			return fetchErr
-		})
+		// Instrument providers own pagination and apply their feed guard to each
+		// physical page request. Wrapping the whole snapshot here would turn the
+		// per-request timeout into a deadline for thousands of instruments.
+		snapshot, err = fetcher.FetchInstrumentSnapshot(ctx, marketdata.InstrumentRequest{MarketID: marketdata.MarketID(marketID), SnapshotAt: req.SnapshotAt.UTC(), RequestID: req.RequestID})
 		if err == nil {
 			err = p.validateSnapshot(snapshot, marketID)
 		}
@@ -136,6 +132,10 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 	if err != nil {
 		return fmt.Errorf("list active instrument set: %w", err)
 	}
+	targetExisting, err := p.Storage.ListDatasetSubjects(ctx, StockCNSpaceID, targetDatasetID)
+	if err != nil {
+		return fmt.Errorf("list target instrument set: %w", err)
+	}
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(snapshot.Instruments))
 	present := make(map[string]marketdata.Instrument, len(snapshot.Instruments))
 	sort.Slice(snapshot.Instruments, func(i, j int) bool { return snapshot.Instruments[i].SubjectID < snapshot.Instruments[j].SubjectID })
@@ -162,7 +162,7 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 		go func() {
 			defer workers.Done()
 			for instrument := range jobs {
-				if err := p.Storage.RegisterDataSubject(registerCtx, instrumentRegistration(dataSourceID, datasetID, targetDatasetID, snapshot, instrument)); err != nil {
+				if err := p.Storage.RegisterDataSubject(registerCtx, instrumentRegistration(dataSourceID, snapshot, instrument)); err != nil {
 					select {
 					case errCh <- fmt.Errorf("register instrument %s: %w", instrument.SubjectID, err):
 						cancel()
@@ -190,15 +190,68 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 		return err
 	default:
 	}
-	return p.reconcileMissing(ctx, existing, present, datasetID, targetDatasetID, snapshot)
+	changes := activeInstrumentBindings(existing, targetExisting, present, datasetID, targetDatasetID, snapshot)
+	changes = append(changes, p.missingInstrumentBindings(existing, targetExisting, present, datasetID, targetDatasetID, snapshot)...)
+	if err := p.commitInstrumentBindings(ctx, changes); err != nil {
+		return fmt.Errorf("commit active instrument set %s: %w", snapshot.SnapshotID, err)
+	}
+	return nil
 }
 
-func (p *InstrumentPipeline) reconcileMissing(ctx context.Context, existing []*storagepb.DatasetSubject, present map[string]marketdata.Instrument, datasetID, targetDatasetID string, snapshot marketdata.InstrumentSnapshot) error {
+type instrumentBindingChange struct {
+	next     *storagepb.DatasetSubject
+	previous *storagepb.DatasetSubject
+}
+
+func activeInstrumentBindings(existing, targetExisting []*storagepb.DatasetSubject, present map[string]marketdata.Instrument, datasetID, targetDatasetID string, snapshot marketdata.InstrumentSnapshot) []instrumentBindingChange {
+	previous := make(map[string]*storagepb.DatasetSubject, len(existing)+len(targetExisting))
+	for _, membership := range append(append([]*storagepb.DatasetSubject(nil), existing...), targetExisting...) {
+		if membership != nil {
+			previous[membership.GetDatasetId()+"\x00"+membership.GetSubjectId()] = membership
+		}
+	}
+	changes := make([]instrumentBindingChange, 0, len(present)*2)
+	subjectIDs := make([]string, 0, len(present))
+	for subjectID := range present {
+		subjectIDs = append(subjectIDs, subjectID)
+	}
+	sort.Strings(subjectIDs)
+	for _, subjectID := range subjectIDs {
+		for _, item := range []struct{ datasetID, role string }{{datasetID, "record"}, {targetDatasetID, "normal"}} {
+			key := item.datasetID + "\x00" + subjectID
+			var next *storagepb.DatasetSubject
+			if old := previous[key]; old != nil {
+				next = proto.Clone(old).(*storagepb.DatasetSubject)
+			} else {
+				next = &storagepb.DatasetSubject{SpaceId: StockCNSpaceID, DatasetId: item.datasetID, SubjectId: subjectID, SubjectRole: item.role}
+			}
+			next.Status = "active"
+			next.Attributes = cloneAttributes(next.GetAttributes())
+			next.Attributes["active_instrument_set_version"] = snapshot.SnapshotID
+			if item.datasetID == datasetID {
+				next.Attributes["missing_complete_snapshot_count"] = "0"
+				delete(next.Attributes, "last_missing_snapshot_id")
+				delete(next.Attributes, "last_missing_snapshot_date")
+			}
+			changes = append(changes, instrumentBindingChange{next: next, previous: previous[key]})
+		}
+	}
+	return changes
+}
+
+func (p *InstrumentPipeline) missingInstrumentBindings(existing, targetExisting []*storagepb.DatasetSubject, present map[string]marketdata.Instrument, datasetID, targetDatasetID string, snapshot marketdata.InstrumentSnapshot) []instrumentBindingChange {
 	location, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
 		location = time.FixedZone("CST", 8*60*60)
 	}
 	missingDate := snapshot.FetchedAt.In(location).Format("2006-01-02")
+	targetPrevious := make(map[string]*storagepb.DatasetSubject, len(targetExisting))
+	for _, membership := range targetExisting {
+		if membership != nil {
+			targetPrevious[membership.GetSubjectId()] = membership
+		}
+	}
+	changes := make([]instrumentBindingChange, 0)
 	for _, membership := range existing {
 		if membership == nil || !strings.EqualFold(membership.GetStatus(), "active") {
 			continue
@@ -206,35 +259,70 @@ func (p *InstrumentPipeline) reconcileMissing(ctx context.Context, existing []*s
 		if _, ok := present[membership.GetSubjectId()]; ok {
 			continue
 		}
-		copy := *membership
-		copy.Attributes = cloneAttributes(membership.GetAttributes())
-		missingCount, _ := strconv.Atoi(copy.Attributes["missing_complete_snapshot_count"])
-		if copy.Attributes["last_missing_snapshot_date"] != missingDate {
+		updated := proto.Clone(membership).(*storagepb.DatasetSubject)
+		updated.Attributes = cloneAttributes(membership.GetAttributes())
+		missingCount, _ := strconv.Atoi(updated.Attributes["missing_complete_snapshot_count"])
+		if updated.Attributes["last_missing_snapshot_date"] != missingDate {
 			missingCount++
 		}
-		copy.Attributes["missing_complete_snapshot_count"] = strconv.Itoa(missingCount)
-		copy.Attributes["last_missing_snapshot_id"] = snapshot.SnapshotID
-		copy.Attributes["last_missing_snapshot_date"] = missingDate
+		updated.Attributes["missing_complete_snapshot_count"] = strconv.Itoa(missingCount)
+		updated.Attributes["last_missing_snapshot_id"] = snapshot.SnapshotID
+		updated.Attributes["last_missing_snapshot_date"] = missingDate
 		if missingCount >= 2 {
-			copy.Status = "disabled"
+			updated.Status = "disabled"
 		}
-		if err := p.Storage.BindDatasetSubject(ctx, &copy); err != nil {
-			return fmt.Errorf("update missing instrument %s: %w", copy.SubjectId, err)
-		}
+		changes = append(changes, instrumentBindingChange{next: updated, previous: membership})
 		if missingCount >= 2 {
-			target := copy
+			target := proto.Clone(updated).(*storagepb.DatasetSubject)
 			target.DatasetId = targetDatasetID
-			if err := p.Storage.BindDatasetSubject(ctx, &target); err != nil {
-				return fmt.Errorf("disable target instrument %s: %w", target.SubjectId, err)
-			}
+			target.SubjectRole = "normal"
+			changes = append(changes, instrumentBindingChange{next: target, previous: targetPrevious[target.GetSubjectId()]})
 		}
+	}
+	return changes
+}
+
+func (p *InstrumentPipeline) commitInstrumentBindings(ctx context.Context, changes []instrumentBindingChange) error {
+	applied := make([]instrumentBindingChange, 0, len(changes))
+	for _, change := range changes {
+		if err := p.Storage.BindDatasetSubject(ctx, change.next); err != nil {
+			rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			// A transport/cache-refresh error can be returned after Storage has
+			// committed the current binding. Compensate it as well as the calls
+			// that returned success.
+			rollbackErr := p.rollbackInstrumentBindings(rollbackCtx, append(applied, change))
+			cancel()
+			if rollbackErr != nil {
+				return fmt.Errorf("bind %s/%s: %v; rollback: %w", change.next.GetDatasetId(), change.next.GetSubjectId(), err, rollbackErr)
+			}
+			return fmt.Errorf("bind %s/%s: %w", change.next.GetDatasetId(), change.next.GetSubjectId(), err)
+		}
+		applied = append(applied, change)
 	}
 	return nil
 }
 
-func instrumentRegistration(dataSourceID, datasetID, targetDatasetID string, snapshot marketdata.InstrumentSnapshot, instrument marketdata.Instrument) *storagepb.RegisterDataSubjectReq {
+func (p *InstrumentPipeline) rollbackInstrumentBindings(ctx context.Context, applied []instrumentBindingChange) error {
+	var rollbackErr error
+	for index := len(applied) - 1; index >= 0; index-- {
+		change := applied[index]
+		previous := change.previous
+		if previous == nil {
+			previous = proto.Clone(change.next).(*storagepb.DatasetSubject)
+			previous.Status = "disabled"
+			previous.Attributes = cloneAttributes(previous.GetAttributes())
+			delete(previous.Attributes, "active_instrument_set_version")
+		}
+		if err := p.Storage.BindDatasetSubject(ctx, previous); err != nil && rollbackErr == nil {
+			rollbackErr = err
+		}
+	}
+	return rollbackErr
+}
+
+func instrumentRegistration(dataSourceID string, snapshot marketdata.InstrumentSnapshot, instrument marketdata.Instrument) *storagepb.RegisterDataSubjectReq {
 	attributes := map[string]string{"exchange": instrument.Exchange, "instrument_type": "equity", "provider_symbol": instrument.ProviderSymbol, "snapshot_id": snapshot.SnapshotID, "source_provider": snapshot.SourceProvider}
-	return &storagepb.RegisterDataSubjectReq{SpaceId: StockCNSpaceID, DataSourceId: dataSourceID, ExternalSymbol: instrument.ProviderSymbol, Subject: &storagepb.Subject{SpaceId: StockCNSpaceID, SubjectId: instrument.SubjectID, SubjectType: "stock", Name: firstNonEmptyString(instrument.Name, instrument.SubjectID), Market: "CN", Currency: "CNY", Timezone: "Asia/Shanghai", Status: "active", Attributes: attributes}, DatasetBindings: []*storagepb.DatasetSubject{{SpaceId: StockCNSpaceID, DatasetId: datasetID, SubjectId: instrument.SubjectID, SubjectRole: "record", Status: "active", Attributes: map[string]string{"active_instrument_set_version": snapshot.SnapshotID, "missing_complete_snapshot_count": "0"}}, {SpaceId: StockCNSpaceID, DatasetId: targetDatasetID, SubjectId: instrument.SubjectID, SubjectRole: "normal", Status: "active", Attributes: map[string]string{"active_instrument_set_version": snapshot.SnapshotID}}}}
+	return &storagepb.RegisterDataSubjectReq{SpaceId: StockCNSpaceID, DataSourceId: dataSourceID, ExternalSymbol: instrument.ProviderSymbol, Subject: &storagepb.Subject{SpaceId: StockCNSpaceID, SubjectId: instrument.SubjectID, SubjectType: "stock", Name: firstNonEmptyString(instrument.Name, instrument.SubjectID), Market: "CN", Currency: "CNY", Timezone: "Asia/Shanghai", Status: "active", Attributes: attributes}}
 }
 
 func instrumentRecordRow(datasetID string, snapshot marketdata.InstrumentSnapshot, instrument marketdata.Instrument) *storagepb.RowFieldUpsert {

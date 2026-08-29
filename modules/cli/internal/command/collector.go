@@ -33,9 +33,24 @@ import (
 )
 
 const (
-	defaultCollectorSCFTimeout   = "15"
-	maxCollectorPublishNodeCount = 100
+	defaultCollectorSCFTimeout        = "15"
+	maxCollectorPublishNodeCount      = 100
+	collectorInstrumentFetcherBizType = "instrument_fetcher"
+	collectorInstrumentDailyCron      = "0 0 0 * * * *"
+	collectorRuntimeConfigBatchSize   = 100
 )
+
+type collectorRuntimeConfigPatch struct {
+	NodeID             string            `json:"node_id"`
+	ManagedEnvironment map[string]string `json:"managed_environment,omitempty"`
+	TimerEnabled       bool              `json:"timer_enabled"`
+	TimerCron          string            `json:"timer_cron"`
+}
+
+type collectorPublishedTimerFleet struct {
+	opts  collectorPublishOptions
+	nodes []adminclient.CloudNode
+}
 
 type collectorPackageOptions struct {
 	CollectorRoot            string
@@ -658,6 +673,10 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if fetcherConfig != nil {
 		opts.FetcherConfig = fetcherConfig
 		var jobs []string
+		var timerRestorePatches []collectorRuntimeConfigPatch
+		var publishedTimerFleets []collectorPublishedTimerFleet
+		var instrumentSchedulePatches []collectorRuntimeConfigPatch
+		instrumentScheduled := false
 		for _, region := range fetcherConfig.Regions {
 			if !region.Enabled {
 				continue
@@ -676,6 +695,54 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			packageID, uploadErr := upload(regionOpts)
 			if uploadErr != nil {
 				return summary, uploadErr
+			}
+			if strings.EqualFold(fetcherConfig.SpaceID, "stock_cn") && !instrumentScheduled {
+				instrumentOpts := regionOpts
+				instrumentOpts.TriggerType = "timer"
+				instrumentOpts.BizType = collectorInstrumentFetcherBizType
+				instrumentOpts.NodeCount = 1
+				instrumentOpts.FunctionNamePrefix = strings.TrimSuffix(regionOpts.FunctionNamePrefix, "-") + "-instrument"
+				instrumentNodes, inspectInstrumentErr := inspectCollectorFleet(ctx, client, instrumentOpts)
+				if inspectInstrumentErr != nil {
+					return summary, inspectInstrumentErr
+				}
+				instrumentDisableJobs, instrumentDisableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(instrumentNodes))
+				if instrumentDisableErr != nil {
+					return summary, fmt.Errorf("disable instrument Timer before deploy: %w", instrumentDisableErr)
+				}
+				if err := waitCollectorBatches(ctx, client, instrumentDisableJobs); err != nil {
+					return summary, fmt.Errorf("disable instrument Timer before deploy: %w", err)
+				}
+				jobs = append(jobs, instrumentDisableJobs...)
+				instrumentItems, buildInstrumentErr := buildCollectorFleetCreateItems(instrumentOpts, packageID)
+				if buildInstrumentErr != nil {
+					return summary, buildInstrumentErr
+				}
+				instrumentSummary, submitInstrumentErr := submitCollectorFleet(ctx, client, instrumentOpts, packageID, instrumentItems, instrumentNodes)
+				if submitInstrumentErr != nil {
+					return summary, submitInstrumentErr
+				}
+				if err := waitCollectorBatch(ctx, client, instrumentSummary.JobID); err != nil {
+					return summary, fmt.Errorf("SCF instrument canary fleet for region %s: %w", regionOpts.Region, err)
+				}
+				instrumentNodes, inspectInstrumentErr = inspectCollectorFleet(ctx, client, instrumentOpts)
+				if inspectInstrumentErr != nil || len(instrumentNodes) != 1 || strings.TrimSpace(instrumentNodes[0].NodeID) == "" {
+					if inspectInstrumentErr != nil {
+						return summary, inspectInstrumentErr
+					}
+					return summary, fmt.Errorf("SCF instrument canary fleet for region %s has no ready node", regionOpts.Region)
+				}
+				if err := runCollectorInstrumentCanary(ctx, client, instrumentOpts, instrumentNodes[0].NodeID); err != nil {
+					return summary, fmt.Errorf("SCF instrument canary for region %s: %w", regionOpts.Region, err)
+				}
+				instrumentSchedulePatches = []collectorRuntimeConfigPatch{{NodeID: instrumentNodes[0].NodeID, TimerEnabled: true, TimerCron: collectorInstrumentDailyCron}}
+				summary.TotalCount += instrumentSummary.TotalCount
+				for _, jobID := range []string{instrumentSummary.JobID} {
+					if jobID != "" {
+						jobs = append(jobs, jobID)
+					}
+				}
+				instrumentScheduled = true
 			}
 			// The auxiliary Invoke node is deployed and exercised first. A
 			// successful market_fetch canary proves the full SCF -> EventBus ->
@@ -718,6 +785,17 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if inspectErr != nil {
 				return summary, inspectErr
 			}
+			if strings.EqualFold(fetcherConfig.SpaceID, "stock_cn") {
+				timerRestorePatches = append(timerRestorePatches, collectorTimerRestorePatches(fleetNodes)...)
+				disableJobs, disableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(fleetNodes))
+				if disableErr != nil {
+					return summary, fmt.Errorf("disable existing Timer fleet before deploy: %w", disableErr)
+				}
+				if err := waitCollectorBatches(ctx, client, disableJobs); err != nil {
+					return summary, fmt.Errorf("disable existing Timer fleet before deploy: %w", err)
+				}
+				jobs = append(jobs, disableJobs...)
+			}
 			createItems, buildErr := buildCollectorFleetCreateItems(regionOpts, packageID)
 			if buildErr != nil {
 				return summary, buildErr
@@ -731,6 +809,13 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if err := waitCollectorBatch(ctx, client, fleetSummary.JobID); err != nil {
 				return summary, fmt.Errorf("SCF Timer fleet for region %s: %w", regionOpts.Region, err)
 			}
+			if strings.EqualFold(fetcherConfig.SpaceID, "stock_cn") {
+				deployedNodes, inspectDeployedErr := inspectCollectorFleet(ctx, client, regionOpts)
+				if inspectDeployedErr != nil {
+					return summary, inspectDeployedErr
+				}
+				publishedTimerFleets = append(publishedTimerFleets, collectorPublishedTimerFleet{opts: regionOpts, nodes: deployedNodes})
+			}
 			summary.FleetMode = fleetSummary.FleetMode
 			summary.Operation = fleetSummary.Operation
 			summary.TotalCount += fleetSummary.TotalCount
@@ -740,6 +825,59 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if fleetSummary.JobID != "" {
 				jobs = append(jobs, fleetSummary.JobID)
 			}
+			summary.JobIDs = append([]string(nil), jobs...)
+			summary.JobID = strings.Join(summary.JobIDs, ",")
+		}
+		if strings.EqualFold(fetcherConfig.SpaceID, "stock_cn") {
+			allTimerNodes := make([]adminclient.CloudNode, 0, fetcherConfig.TimerFunctionCount)
+			for _, fleet := range publishedTimerFleets {
+				allTimerNodes = append(allTimerNodes, fleet.nodes...)
+			}
+			disableJobs, disableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(allTimerNodes))
+			if disableErr != nil {
+				return summary, fmt.Errorf("disable Timer fleet before egress gate: %w", disableErr)
+			}
+			if err := waitCollectorBatches(ctx, client, disableJobs); err != nil {
+				return summary, fmt.Errorf("disable Timer fleet before egress gate: %w", err)
+			}
+			jobs = append(jobs, disableJobs...)
+			allTimerNodes = allTimerNodes[:0]
+			for _, fleet := range publishedTimerFleets {
+				disabledNodes, inspectDisabledErr := inspectCollectorFleet(ctx, client, fleet.opts)
+				if inspectDisabledErr != nil {
+					return summary, inspectDisabledErr
+				}
+				for _, node := range disabledNodes {
+					actualEnabled, ok := collectorMetadataBool(node.Metadata, "timer_actual_enabled")
+					if !ok || actualEnabled {
+						return summary, fmt.Errorf("Timer node %s is not confirmed disabled before egress gate", node.NodeID)
+					}
+				}
+				allTimerNodes = append(allTimerNodes, disabledNodes...)
+			}
+			eligible := selectCollectorProbeNodes(allTimerNodes, true)
+			if _, gateErr := probeCollectorEgressNodes(ctx, client, eligible, true, fetcherConfig.TimerFunctionCount); gateErr != nil {
+				return summary, fmt.Errorf("SCF Timer all-node egress gate: %w", gateErr)
+			}
+			restoreJobs, restoreErr := submitCollectorTimerRuntimeConfigs(ctx, client, timerRestorePatches)
+			if restoreErr != nil {
+				return summary, fmt.Errorf("restore Timer fleet after egress gate: %w", restoreErr)
+			}
+			if err := waitCollectorBatches(ctx, client, restoreJobs); err != nil {
+				return summary, fmt.Errorf("restore Timer fleet after egress gate: %w", err)
+			}
+			jobs = append(jobs, restoreJobs...)
+			if err := waitCollectorTimerFleetsEnabled(ctx, client, publishedTimerFleets); err != nil {
+				return summary, fmt.Errorf("wait for reconciler to enable gated Timer fleet: %w", err)
+			}
+			instrumentJobs, scheduleErr := submitCollectorTimerRuntimeConfigs(ctx, client, instrumentSchedulePatches)
+			if scheduleErr != nil {
+				return summary, fmt.Errorf("schedule daily instrument snapshot after egress gate: %w", scheduleErr)
+			}
+			if err := waitCollectorBatches(ctx, client, instrumentJobs); err != nil {
+				return summary, fmt.Errorf("schedule daily instrument snapshot after egress gate: %w", err)
+			}
+			jobs = append(jobs, instrumentJobs...)
 			summary.JobIDs = append([]string(nil), jobs...)
 			summary.JobID = strings.Join(summary.JobIDs, ",")
 		}
@@ -1018,15 +1156,7 @@ func submitCollectorFleet(
 		return summary, fmt.Errorf("collector fleet has empty node slots")
 	}
 	if len(missing) > 0 {
-		summary.FleetMode = "expanded"
-		resp, err := api.SubmitCreateNodes(ctx, missing)
-		if err != nil {
-			return summary, err
-		}
-		summary.JobID = resp.JobID
-		summary.Operation = "create_nodes"
-		summary.TotalCount = resp.TotalCount
-		return summary, nil
+		return summary, fmt.Errorf("collector fleet is partially populated (%d existing, %d missing); refusing a mixed-version deployment", existing, len(missing))
 	}
 
 	summary.FleetMode = "updated"
@@ -1096,6 +1226,149 @@ func runCollectorSCFCanary(ctx context.Context, client *adminclient.Client, opts
 	if success, ok := response["success"].(bool); !ok || !success {
 		raw, _ := json.Marshal(response)
 		return fmt.Errorf("market_fetch canary returned unsuccessful response: %s", raw)
+	}
+	return nil
+}
+
+func runCollectorInstrumentCanary(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, nodeID string) error {
+	response, err := client.InvokeFunction(ctx, nodeID, collectorInstrumentCanaryEvent(opts))
+	if err != nil {
+		return err
+	}
+	if success, ok := response["success"].(bool); !ok || !success {
+		raw, _ := json.Marshal(response)
+		return fmt.Errorf("instrument_snapshot canary returned unsuccessful response: %s", raw)
+	}
+	return nil
+}
+
+func collectorInstrumentCanaryEvent(opts collectorPublishOptions) map[string]any {
+	return map[string]any{
+		"action":                     "instrument_snapshot",
+		"request_id":                 fmt.Sprintf("instrument-deploy-canary-%d", time.Now().UnixNano()),
+		"storage_rpc_gateway_target": opts.StorageRPCGatewayTarget,
+	}
+}
+
+func collectorTimerRestorePatches(nodes []adminclient.CloudNode) []collectorRuntimeConfigPatch {
+	patches := make([]collectorRuntimeConfigPatch, 0, len(nodes))
+	for _, node := range nodes {
+		enabled, ok := collectorMetadataBool(node.Metadata, "timer_enabled")
+		if !ok || !enabled {
+			continue
+		}
+		cron := firstNonEmpty(metadataStringValue(node.Metadata, "timer_cron"), metadataStringValue(node.Metadata, "timer_actual_cron"))
+		if cron == "" {
+			continue
+		}
+		patches = append(patches, collectorRuntimeConfigPatch{NodeID: node.NodeID, TimerEnabled: true, TimerCron: cron})
+	}
+	return patches
+}
+
+func collectorTimerDisablePatches(nodes []adminclient.CloudNode) []collectorRuntimeConfigPatch {
+	patches := make([]collectorRuntimeConfigPatch, 0, len(nodes))
+	for _, node := range nodes {
+		if strings.TrimSpace(node.NodeID) == "" {
+			continue
+		}
+		cron := firstNonEmpty(metadataStringValue(node.Metadata, "timer_cron"), metadataStringValue(node.Metadata, "timer_actual_cron"), "0 * * * * * *")
+		patches = append(patches, collectorRuntimeConfigPatch{NodeID: node.NodeID, TimerEnabled: false, TimerCron: cron})
+	}
+	return patches
+}
+
+func waitCollectorTimerFleetsEnabled(ctx context.Context, client *adminclient.Client, fleets []collectorPublishedTimerFleet) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		ready := true
+		for _, fleet := range fleets {
+			nodes, err := inspectCollectorFleet(waitCtx, client, fleet.opts)
+			if err != nil {
+				return err
+			}
+			if len(selectCollectorProbeNodes(nodes, true)) != fleet.opts.NodeCount {
+				ready = false
+				break
+			}
+			for _, node := range nodes {
+				enabled, hasEnabled := collectorMetadataBool(node.Metadata, "timer_actual_enabled")
+				assignmentCount, hasAssignment := metadataIntValue(node.Metadata, "assignment_count")
+				if !hasEnabled || !enabled || !hasAssignment || assignmentCount <= 0 {
+					ready = false
+					break
+				}
+			}
+			if !ready {
+				break
+			}
+		}
+		if ready {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			return waitCtx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func collectorMetadataBool(metadata map[string]any, key string) (bool, bool) {
+	value, ok := metadata[key]
+	if !ok {
+		return false, false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+		return parsed, err == nil
+	default:
+		return false, false
+	}
+}
+
+func submitCollectorTimerRuntimeConfigs(ctx context.Context, client *adminclient.Client, patches []collectorRuntimeConfigPatch) ([]string, error) {
+	if len(patches) == 0 {
+		return nil, nil
+	}
+	jobs := make([]string, 0, (len(patches)+collectorRuntimeConfigBatchSize-1)/collectorRuntimeConfigBatchSize)
+	for start := 0; start < len(patches); start += collectorRuntimeConfigBatchSize {
+		end := min(start+collectorRuntimeConfigBatchSize, len(patches))
+		var response struct {
+			RetInfo *struct {
+				Code int    `json:"code"`
+				Msg  string `json:"msg"`
+			} `json:"ret_info"`
+			JobID string `json:"job_id"`
+		}
+		if err := client.CallJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs", map[string]any{"nodes": patches[start:end]}, &response); err != nil {
+			return nil, err
+		}
+		if response.RetInfo == nil || response.RetInfo.Code != 0 && response.RetInfo.Code != 200 {
+			if response.RetInfo == nil {
+				return nil, fmt.Errorf("SubmitUpdateNodeRuntimeConfigs returned no ret_info")
+			}
+			return nil, fmt.Errorf("SubmitUpdateNodeRuntimeConfigs: code %d: %s", response.RetInfo.Code, response.RetInfo.Msg)
+		}
+		if strings.TrimSpace(response.JobID) == "" {
+			return nil, fmt.Errorf("SubmitUpdateNodeRuntimeConfigs returned no job_id")
+		}
+		jobs = append(jobs, response.JobID)
+	}
+	return jobs, nil
+}
+
+func waitCollectorBatches(ctx context.Context, client *adminclient.Client, jobIDs []string) error {
+	for _, jobID := range jobIDs {
+		if err := waitCollectorBatch(ctx, client, jobID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1358,6 +1631,10 @@ func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*col
 	if len(eligible) == 0 {
 		return nil, fmt.Errorf("no active market_fetcher SCF nodes are available for egress probe")
 	}
+	return probeCollectorEgressNodes(ctx, client, eligible, strictStockGate, expectedCount)
+}
+
+func probeCollectorEgressNodes(ctx context.Context, client *adminclient.Client, eligible []adminclient.CloudNode, strictStockGate bool, expectedCount int) (*collectorProbeReport, error) {
 	report := &collectorProbeReport{Results: make([]collectorProbeResult, len(eligible))}
 	if strictStockGate {
 		report.ExpectedCount = expectedCount
@@ -1590,8 +1867,12 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	triggerType := defaultFlag(opts.TriggerType, "timer")
 	effectiveTimeoutSeconds := defaultInt(fetcher.TimeoutSeconds, 15)
 	spaceID := firstNonEmpty(opts.SpaceID, fetcher.SpaceID, opts.collectorPackageOptions.SpaceID)
-	if strings.EqualFold(triggerType, "invoke") && strings.EqualFold(spaceID, "stock_cn") {
+	if strings.EqualFold(spaceID, "stock_cn") && (strings.EqualFold(triggerType, "invoke") || strings.EqualFold(bizType, collectorInstrumentFetcherBizType)) {
 		effectiveTimeoutSeconds = defaultInt(fetcher.InstrumentInvokeTimeoutSeconds, setupconfig.DefaultStockCNInstrumentInvokeTimeoutSeconds)
+	}
+	if strings.EqualFold(bizType, collectorInstrumentFetcherBizType) {
+		environment["MOOX_INSTRUMENT_SNAPSHOT_TIMER"] = "true"
+		delete(environment, "MOOX_MARKET_FETCH_SUBJECTS")
 	}
 	if strings.TrimSpace(config["timeout"]) == "" {
 		config["timeout"] = strconv.Itoa(effectiveTimeoutSeconds)
@@ -1918,6 +2199,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_FETCH_CATCHUP_BAR_LIMIT":      {},
 		"MOOX_FETCH_STORAGE_TIMEOUT_MS":     {},
 		"MOOX_FETCH_MAX_RETRY_ATTEMPTS":     {},
+		"MOOX_INSTRUMENT_SNAPSHOT_TIMER":    {},
 		"MOOX_CLS_SECRET_ID":                {},
 		"MOOX_CLS_SECRET_KEY":               {},
 		"MOOX_CLS_ENABLED":                  {},

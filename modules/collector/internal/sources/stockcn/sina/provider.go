@@ -1,6 +1,7 @@
 package sina
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
@@ -16,17 +18,22 @@ import (
 )
 
 type Config struct {
-	BaseURL           string
-	InstrumentBaseURL string
-	HTTPClient        *http.Client
-	Now               func() time.Time
+	BaseURL                  string
+	InstrumentBaseURL        string
+	HTTPClient               *http.Client
+	Now                      func() time.Time
+	InstrumentRequestTimeout time.Duration
 }
 
 type Provider struct {
-	baseURL           string
-	instrumentBaseURL string
-	client            *http.Client
-	now               func() time.Time
+	baseURL             string
+	instrumentBaseURL   string
+	client              *http.Client
+	now                 func() time.Time
+	instrumentTimeout   time.Duration
+	instrumentGuardOnce sync.Once
+	instrumentGuard     *marketdata.FeedGuard
+	instrumentGuardErr  error
 }
 
 func New(cfg Config) *Provider {
@@ -45,7 +52,10 @@ func New(cfg Config) *Provider {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), instrumentBaseURL: strings.TrimRight(cfg.InstrumentBaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now}
+	if cfg.InstrumentRequestTimeout <= 0 {
+		cfg.InstrumentRequestTimeout = 5 * time.Second
+	}
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), instrumentBaseURL: strings.TrimRight(cfg.InstrumentBaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now, instrumentTimeout: cfg.InstrumentRequestTimeout}
 }
 
 func (*Provider) Descriptor() marketdata.ProviderDescriptor {
@@ -60,7 +70,7 @@ func (*Provider) KlineSpec() marketdata.KlineSpec {
 		CompleteOHLCV:     true,
 		HasAmount:         true,
 		MaxBarsPerRequest: 1023,
-		TimestampMode:     marketdata.TimestampModeOpen,
+		TimestampMode:     marketdata.TimestampModeClose,
 		RateLimit: marketdata.RateLimitPolicy{
 			RequestsPerSecond: 5,
 			Burst:             2,
@@ -71,7 +81,7 @@ func (*Provider) KlineSpec() marketdata.KlineSpec {
 	}
 }
 
-func (*Provider) InstrumentSpec() marketdata.InstrumentSpec {
+func (p *Provider) InstrumentSpec() marketdata.InstrumentSpec {
 	return marketdata.InstrumentSpec{
 		Markets:      []string{"stock_cn"},
 		Exchanges:    []string{"XSHG", "XSHE", "XBSE"},
@@ -82,7 +92,7 @@ func (*Provider) InstrumentSpec() marketdata.InstrumentSpec {
 			Burst:             2,
 			MaxConcurrent:     1,
 			Cooldown:          time.Second,
-			RequestTimeout:    5 * time.Second,
+			RequestTimeout:    p.instrumentTimeout,
 		},
 	}
 }
@@ -168,7 +178,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		if err != nil {
 			return nil, err
 		}
-		row, err := commonsrc.NormalizeMinuteKline(req.SubjectID, "sina", req.ProviderSymbol, marketdata.TimestampModeOpen, record.Day, openValue, highValue, lowValue, closeValue, volumeValue, amountValue, 1, now, req.RequestID)
+		row, err := commonsrc.NormalizeMinuteKline(req.SubjectID, "sina", req.ProviderSymbol, marketdata.TimestampModeClose, record.Day, openValue, highValue, lowValue, closeValue, volumeValue, amountValue, 1, now, req.RequestID)
 		if err != nil {
 			return nil, err
 		}
@@ -196,6 +206,14 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		fetchedAt = p.now().UTC()
 	}
 	builder := commonsrc.NewInstrumentSnapshotBuilder(p.Descriptor().ID, marketID, fetchedAt)
+	p.instrumentGuardOnce.Do(func() {
+		p.instrumentGuard, p.instrumentGuardErr = marketdata.NewFeedGuard(spec.RateLimit, nil, nil)
+	})
+	if p.instrumentGuardErr != nil {
+		return marketdata.InstrumentSnapshot{}, p.instrumentGuardErr
+	}
+	declaredPages := 0
+	previousPageSize := 0
 	for page := 1; ; page++ {
 		query := url.Values{
 			"page":   {strconv.Itoa(page)},
@@ -205,47 +223,72 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 			"node":   {"hs_a"},
 			"_s_r_a": {"page"},
 		}
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.instrumentBaseURL+"/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?"+query.Encode(), nil)
-		if err != nil {
-			return marketdata.InstrumentSnapshot{}, err
-		}
-		httpReq.Header.Set("User-Agent", "moox-collector/1.0")
-		resp, err := p.client.Do(httpReq)
-		if err != nil {
-			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
-		}
-		body, readErr := func() ([]byte, error) {
+		var body []byte
+		if err := p.instrumentGuard.Do(ctx, func(pageCtx context.Context) error {
+			httpReq, requestErr := http.NewRequestWithContext(pageCtx, http.MethodGet, p.instrumentBaseURL+"/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?"+query.Encode(), nil)
+			if requestErr != nil {
+				return requestErr
+			}
+			httpReq.Header.Set("User-Agent", "moox-collector/1.0")
+			resp, requestErr := p.client.Do(httpReq)
+			if requestErr != nil {
+				return fmt.Errorf("%w: %v", marketdata.ErrTimeout, requestErr)
+			}
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusTooManyRequests {
-				return nil, marketdata.ErrRateLimited
+				return marketdata.ErrRateLimited
 			}
 			if resp.StatusCode >= 400 {
-				return nil, fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)
+				return fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)
 			}
-			return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-		}()
-		if readErr != nil {
-			return marketdata.InstrumentSnapshot{}, readErr
+			body, requestErr = io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+			return requestErr
+		}); err != nil {
+			return marketdata.InstrumentSnapshot{}, err
+		}
+		trimmedBody := bytes.TrimSpace(body)
+		if len(trimmedBody) == 0 {
+			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument page %d returned an empty body", marketdata.ErrProtocol, page)
 		}
 		var direct []map[string]any
-		items := direct
+		var items []map[string]any
 		totalPages := 0
-		if err := json.Unmarshal(body, &direct); err == nil {
+		switch trimmedBody[0] {
+		case '[':
+			if err := json.Unmarshal(trimmedBody, &direct); err != nil {
+				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
+			}
 			items = direct
-		} else {
+		case '{':
 			var payload map[string]any
-			if err := json.Unmarshal(body, &payload); err != nil {
+			if err := json.Unmarshal(trimmedBody, &payload); err != nil {
 				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 			}
 			data := commonsrc.ObjectAt(payload, "data")
 			if data == nil {
 				data = payload
 			}
+			if _, ok := firstPresent(data, "list", "items", "diff"); !ok {
+				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument page %d has no recognized item list", marketdata.ErrProtocol, page)
+			}
 			items = commonsrc.ItemSlice(data, "list", "items", "diff")
 			totalPages = commonsrc.PageLimit(data, spec.PageSize)
+		default:
+			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument page %d has unsupported response shape", marketdata.ErrProtocol, page)
+		}
+		if totalPages > 0 {
+			if declaredPages == 0 {
+				declaredPages = totalPages
+			} else if totalPages != declaredPages {
+				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument page count changed from %d to %d on page %d", marketdata.ErrProtocol, declaredPages, totalPages, page)
+			}
 		}
 		if len(items) == 0 {
-			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument page %d is empty", marketdata.ErrProtocol, page)
+			if declaredPages > 0 || page == 1 || previousPageSize != spec.PageSize {
+				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument page %d is empty without terminal evidence", marketdata.ErrProtocol, page)
+			}
+			builder.NextPage()
+			break
 		}
 		for _, item := range items {
 			instrument, err := commonsrc.InstrumentFromFields(
@@ -263,8 +306,9 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 			}
 		}
 		builder.NextPage()
-		if totalPages > 0 {
-			if page >= totalPages {
+		previousPageSize = len(items)
+		if declaredPages > 0 {
+			if page >= declaredPages {
 				break
 			}
 			continue
@@ -274,4 +318,13 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		}
 	}
 	return builder.Snapshot()
+}
+
+func firstPresent(values map[string]any, keys ...string) (any, bool) {
+	for _, key := range keys {
+		if value, ok := values[key]; ok {
+			return value, true
+		}
+	}
+	return nil, false
 }

@@ -834,7 +834,7 @@ func TestPublishSubmitDeployFleetUsesOneJob(t *testing.T) {
 	}
 }
 
-func TestPublishSubmitExpandsPartialFleet(t *testing.T) {
+func TestPublishSubmitRejectsPartialFleetToAvoidMixedVersions(t *testing.T) {
 	nodes := make([]adminclient.CloudNode, 4)
 	nodes[0] = adminclient.CloudNode{NodeID: "fleet-0", PackageID: "pkg-old", BizType: "data_collector", Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(0)}}
 	items := make([]adminclient.NodeCreateItem, 4)
@@ -842,17 +842,10 @@ func TestPublishSubmitExpandsPartialFleet(t *testing.T) {
 		items[index] = adminclient.NodeCreateItem{PackageID: "pkg-new", Metadata: map[string]any{"function_name_prefix": "fleet", "index": index}}
 	}
 	api := &fakeCollectorFleetAPI{}
-	summary, err := submitCollectorFleet(context.Background(), api, collectorPublishOptions{NodeCount: 4}, "pkg-new", items, nodes)
-	require.NoError(t, err)
-	assert.Equal(t, "expanded", summary.FleetMode)
-	assert.Equal(t, "create_nodes", summary.Operation)
-	assert.Equal(t, 3, summary.TotalCount)
-	require.Len(t, api.createCalls, 1)
+	_, err := submitCollectorFleet(context.Background(), api, collectorPublishOptions{NodeCount: 4}, "pkg-new", items, nodes)
+	require.ErrorContains(t, err, "refusing a mixed-version deployment")
+	assert.Empty(t, api.createCalls)
 	assert.Empty(t, api.deployCalls)
-	require.Len(t, api.createCalls[0], 3)
-	assert.Equal(t, 1, api.createCalls[0][0].Metadata["index"])
-	assert.Equal(t, 2, api.createCalls[0][1].Metadata["index"])
-	assert.Equal(t, 3, api.createCalls[0][2].Metadata["index"])
 }
 
 func TestPublishSubmitRejectsOversizedFleetBeforeUpload(t *testing.T) {
@@ -1040,6 +1033,82 @@ func TestBuildCollectorCreateNodeItemUsesLongStockCNInstrumentInvokeTimeoutOnlyF
 		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "invoke", FetcherConfig: fetcher,
 	}, "moox-collector-stock-cn_dev")
 	assert.Equal(t, "90", configured.Config["timeout"])
+}
+
+func TestBuildCollectorInstrumentTimerItemIsDisabledScheduleReady(t *testing.T) {
+	fetcher := defaultCollectorSCFFetcherSpace()
+	fetcher.SpaceID = "stock_cn"
+	fetcher.InstrumentInvokeTimeoutSeconds = 90
+	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou",
+		TriggerType: "timer", BizType: collectorInstrumentFetcherBizType,
+		StorageRPCGatewayTarget: "ip://storage:11003", FetcherConfig: fetcher,
+	}, "pkg")
+
+	assert.Equal(t, "timer", item.TriggerType)
+	assert.Equal(t, "90", item.Config["timeout"])
+	assert.Equal(t, "true", item.Environment["MOOX_INSTRUMENT_SNAPSHOT_TIMER"])
+	assert.Empty(t, item.Environment["MOOX_MARKET_FETCH_SUBJECTS"])
+}
+
+func TestCollectorInstrumentCanaryEventUsesRealSnapshotAction(t *testing.T) {
+	event := collectorInstrumentCanaryEvent(collectorPublishOptions{StorageRPCGatewayTarget: "ip://storage:11003"})
+
+	assert.Equal(t, "instrument_snapshot", event["action"])
+	assert.Equal(t, "ip://storage:11003", event["storage_rpc_gateway_target"])
+}
+
+func TestCollectorTimerRestorePatchesOnlyPreviouslyEnabledNodes(t *testing.T) {
+	nodes := []adminclient.CloudNode{
+		{NodeID: "enabled", Metadata: map[string]any{"timer_enabled": true, "timer_cron": "0 1 * * * * *"}},
+		{NodeID: "disabled", Metadata: map[string]any{"timer_enabled": false, "timer_cron": "0 2 * * * * *"}},
+		{NodeID: "new", Metadata: map[string]any{}},
+	}
+
+	patches := collectorTimerRestorePatches(nodes)
+
+	require.Len(t, patches, 1)
+	assert.Equal(t, "enabled", patches[0].NodeID)
+	assert.True(t, patches[0].TimerEnabled)
+	assert.Equal(t, "0 1 * * * * *", patches[0].TimerCron)
+}
+
+func TestCollectorTimerDisablePatchesCoverEveryPublishedNode(t *testing.T) {
+	nodes := []adminclient.CloudNode{
+		{NodeID: "node-a", Metadata: map[string]any{"timer_cron": "0 1 * * * * *"}},
+		{NodeID: "node-b", Metadata: map[string]any{}},
+	}
+
+	patches := collectorTimerDisablePatches(nodes)
+
+	require.Len(t, patches, 2)
+	assert.False(t, patches[0].TimerEnabled)
+	assert.Equal(t, "0 1 * * * * *", patches[0].TimerCron)
+	assert.False(t, patches[1].TimerEnabled)
+	assert.Equal(t, "0 * * * * * *", patches[1].TimerCron)
+}
+
+func TestSubmitCollectorTimerRuntimeConfigsBatchesAtCloudNodeLimit(t *testing.T) {
+	batchSizes := make([]int, 0, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Nodes []collectorRuntimeConfigPatch `json:"nodes"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		batchSizes = append(batchSizes, len(request.Nodes))
+		_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job_id":"job-%d"}`, len(batchSizes))
+	}))
+	defer server.Close()
+	patches := make([]collectorRuntimeConfigPatch, 201)
+	for index := range patches {
+		patches[index] = collectorRuntimeConfigPatch{NodeID: fmt.Sprintf("node-%03d", index)}
+	}
+
+	jobs, err := submitCollectorTimerRuntimeConfigs(context.Background(), adminclient.New(server.URL), patches)
+
+	require.NoError(t, err)
+	assert.Equal(t, []int{100, 100, 1}, batchSizes)
+	assert.Equal(t, []string{"job-1", "job-2", "job-3"}, jobs)
 }
 
 func TestBuildCollectorCreateNodeItemRejectsInvalidInflightOverride(t *testing.T) {

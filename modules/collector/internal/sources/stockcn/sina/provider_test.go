@@ -2,10 +2,12 @@ package sina
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +36,80 @@ func TestFetchKlinesParsesFixture(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, 300.0, rows[0].VolumeShares)
+	require.Equal(t, time.Date(2026, 8, 29, 1, 29, 0, 0, time.UTC), rows[0].BarStart)
+	require.Equal(t, time.Date(2026, 8, 29, 1, 30, 0, 0, time.UTC), rows[0].BarEnd)
+	require.Equal(t, marketdata.TimestampModeClose, provider.KlineSpec().TimestampMode)
+}
+
+func TestFetchInstrumentSnapshotAcceptsEmptyTerminalPageAfterExactMultiple(t *testing.T) {
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		if page == "2" {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		items := make([]string, 100)
+		for index := range items {
+			items[index] = fmt.Sprintf(`{"symbol":"sh%06d","name":"stock"}`, 600000+index)
+		}
+		_, _ = fmt.Fprintf(w, "[%s]", strings.Join(items, ","))
+	}))
+
+	now := time.Date(2026, 8, 29, 1, 32, 0, 0, time.UTC)
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, Now: func() time.Time { return now }})
+	snapshot, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", SnapshotAt: now, RequestID: "req"})
+
+	require.NoError(t, err)
+	require.True(t, snapshot.Complete)
+	require.Equal(t, 2, snapshot.PageCount)
+	require.Len(t, snapshot.Instruments, 100)
+}
+
+func TestFetchInstrumentSnapshotRejectsHTTP200ErrorObjectAsTerminalPage(t *testing.T) {
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "2" {
+			_, _ = w.Write([]byte(`{"error":"temporary"}`))
+			return
+		}
+		items := make([]string, 100)
+		for index := range items {
+			items[index] = fmt.Sprintf(`{"symbol":"sh%06d","name":"stock"}`, 600000+index)
+		}
+		_, _ = fmt.Fprintf(w, "[%s]", strings.Join(items, ","))
+	}))
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client})
+
+	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", RequestID: "req"})
+
+	require.ErrorContains(t, err, "no recognized item list")
+}
+
+func TestFetchInstrumentSnapshotRejectsChangingDeclaredPageCount(t *testing.T) {
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pageCount := 3
+		if r.URL.Query().Get("page") == "2" {
+			pageCount = 2
+		}
+		_, _ = fmt.Fprintf(w, `{"data":{"pagecount":%d,"list":[{"symbol":"sh60000%s","name":"stock"}]}}`, pageCount, r.URL.Query().Get("page"))
+	}))
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client})
+
+	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", RequestID: "req"})
+
+	require.ErrorContains(t, err, "page count changed")
+}
+
+func TestFetchInstrumentSnapshotResetsGuardTimeoutForEveryPage(t *testing.T) {
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(15 * time.Millisecond)
+		_, _ = fmt.Fprintf(w, `{"data":{"pagecount":2,"list":[{"symbol":"sh60000%s","name":"stock"}]}}`, r.URL.Query().Get("page"))
+	}))
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, InstrumentRequestTimeout: 20 * time.Millisecond})
+
+	snapshot, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", RequestID: "req"})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, snapshot.PageCount)
 }
 
 func TestFetchInstrumentSnapshotPaginatesSuccessfullyAndCountsExchanges(t *testing.T) {

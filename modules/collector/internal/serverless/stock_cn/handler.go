@@ -62,10 +62,9 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		return failure("invalid_event", fmt.Sprintf("decode event: %v", err)), nil
 	}
 	timerConfigured := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SUBJECTS")) != ""
-	if timerConfigured && (event.Action == "" || event.Action == model.EventActionMarketFetch) {
-		if err := validateTimerEvent(event); err != nil {
-			return failure("invalid_timer_event", err.Error()), nil
-		}
+	instrumentTimerConfigured := strings.EqualFold(strings.TrimSpace(os.Getenv("MOOX_INSTRUMENT_SNAPSHOT_TIMER")), "true")
+	if err := routeTimerEvent(&event, timerConfigured, instrumentTimerConfigured); err != nil {
+		return failure("invalid_timer_event", err.Error()), nil
 	}
 	function, _ := functioncontext.FromContext(ctx)
 	functionName := strings.TrimSpace(os.Getenv("MOOX_SCF_FUNCTION_NAME"))
@@ -89,9 +88,10 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		defer cancel()
 		_ = reporter.Flush(flushCtx)
 	}()
-	if timerConfigured && event.Action == "" {
-		event.Action = model.EventActionMarketFetch
-		event.Source = "tencent_timer"
+	if timerConfigured && event.Action == model.EventActionMarketFetch {
+		event.StorageRPCGatewayTarget = os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")
+	}
+	if instrumentTimerConfigured && event.Action == model.EventActionInstrumentSnapshot {
 		event.StorageRPCGatewayTarget = os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")
 	}
 	switch event.Action {
@@ -122,7 +122,11 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		if pipelineErr != nil {
 			return nil, pipelineErr
 		}
-		result, pipelineErr := pipeline.Execute(ctx, marketfetch.InstrumentPipelineRequest{RequestID: event.RequestID, SnapshotAt: time.Now().UTC()})
+		snapshotAt := time.Now().UTC()
+		if parsed, parseErr := time.Parse(time.RFC3339, event.Time); parseErr == nil {
+			snapshotAt = parsed.UTC()
+		}
+		result, pipelineErr := pipeline.Execute(ctx, marketfetch.InstrumentPipelineRequest{RequestID: event.RequestID, SnapshotAt: snapshotAt})
 		if pipelineErr != nil {
 			return nil, pipelineErr
 		}
@@ -130,6 +134,34 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	default:
 		return failure("unknown_event_type", "unsupported stock_cn SCF action"), nil
 	}
+}
+
+func routeTimerEvent(event *model.CloudFunctionEvent, marketConfigured, instrumentConfigured bool) error {
+	if event == nil {
+		return nil
+	}
+	if event.Action != "" {
+		if marketConfigured && event.Action == model.EventActionMarketFetch {
+			return validateTimerEvent(*event)
+		}
+		return nil
+	}
+	if marketConfigured && instrumentConfigured {
+		return fmt.Errorf("both market and instrument timers are configured")
+	}
+	if !marketConfigured && !instrumentConfigured {
+		return nil
+	}
+	if err := validateTimerEvent(*event); err != nil {
+		return err
+	}
+	event.Source = "tencent_timer"
+	if instrumentConfigured {
+		event.Action = model.EventActionInstrumentSnapshot
+	} else {
+		event.Action = model.EventActionMarketFetch
+	}
+	return nil
 }
 
 func validateTimerEvent(event model.CloudFunctionEvent) error {
