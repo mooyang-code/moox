@@ -76,7 +76,10 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 	if target.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || target.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := c.Metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: c.Auth, Dataset: &storagepb.Dataset{
 			SpaceId: rule.SpaceID, DatasetId: params.TargetDatasetID, DataSourceId: "crypto_market", DataNodeId: source.DataNodeID,
-			Name: "K线重采样", Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			// Dataset names are unique within a space. Use the stable target ID
+			// rather than a shared label so multiple resample rules can provision
+			// independent targets without colliding on metadata creation.
+			Name: params.TargetDatasetID, Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
 			Freqs: []string{targetFreq.Storage}, Status: "draft", Attributes: attrs, KeepDuration: keepDuration,
 		}})
 		if createErr != nil {
