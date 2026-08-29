@@ -45,6 +45,17 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 		"spot_kline_1h",
 		"perpetual_kline_1h",
 	}, datasetIDs)
+	var stockKline seedDataset
+	foundStockKline := false
+	for _, item := range seed.Datasets {
+		if item.SpaceID == "stock_cn" && item.DatasetID == "stock_cn_kline" {
+			stockKline = item
+			foundStockKline = true
+			break
+		}
+	}
+	require.True(t, foundStockKline)
+	require.Equal(t, []string{"1m"}, stockKline.Freqs)
 	require.ElementsMatch(t, []string{
 		"binance_spot_kline_1m_view",
 		"spot_kline_1h_view",
@@ -82,8 +93,6 @@ func TestQuantSampleCSVUsesSharedDatasetAndSeriesTag(t *testing.T) {
 		{"crypto_market/binance_spot_kline_1h.csv", "spot_kline_1h", "venue:binance", "1H"},
 		{"crypto_market/binance_perpetual_kline_1h.csv", "perpetual_kline_1h", "venue:binance", "1H"},
 		{"crypto_market/okx_spot_kline_1h.csv", "spot_kline_1h", "venue:okx", "1H"},
-		{"stock_cn/stock_kline_1d.csv", "stock_kline", "", "1d"},
-		{"stock_cn/stock_kline_1h.csv", "stock_kline", "", "1H"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -104,4 +113,36 @@ func TestQuantSampleCSVUsesSharedDatasetAndSeriesTag(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDefaultMetadataDefinesStrictStockCNKlineColumns(t *testing.T) {
+	seed, err := loadMetadataSeed(defaultSetupBundlePath("metadata.yaml"))
+	require.NoError(t, err)
+
+	var columns []string
+	for _, item := range seed.DatasetColumns {
+		if item.SpaceID == "stock_cn" && item.DatasetID == "stock_cn_kline" {
+			columns = append(columns, item.ColumnName)
+		}
+	}
+	require.Equal(t, []string{
+		"open",
+		"high",
+		"low",
+		"close",
+		"volume",
+		"amount",
+		"trade_date",
+		"close_time",
+		"volume_unit",
+		"amount_unit",
+		"provider_symbol",
+		"provider_timestamp",
+		"fetched_at",
+		"request_id",
+		"route_id",
+		"route_rank",
+		"source_provider",
+		"quality_status",
+	}, columns)
 }

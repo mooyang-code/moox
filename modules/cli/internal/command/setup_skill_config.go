@@ -227,6 +227,15 @@ func buildSkillDataAccessConfig(
 					},
 				},
 			},
+			"stock_cn": {
+				DefaultExchange: "stock_cn",
+				Exchanges: map[string]exchangeConfig{
+					"stock_cn": {
+						SpaceID: "stock_cn", SeriesTag: "",
+						KlineDatasets: map[string]string{"1m": "stock_cn_kline"},
+					},
+				},
+			},
 		},
 	}, nil
 }

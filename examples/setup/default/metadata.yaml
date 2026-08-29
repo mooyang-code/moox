@@ -74,20 +74,17 @@ data_sources:
 
 datasets:
 - space_id: stock_cn
-  dataset_id: stock_kline
+  dataset_id: stock_cn_kline
   data_source_id: quantclass_stock
-  name: 股票行情
+  name: A股分钟行情
   data_kind: time_series
   data_node_id: storage-node-0
   keep_duration: 8760h
   freqs:
-  - 5m
-  - 15m
-  - 1H
-  - 1d
+  - 1m
   status: disabled
   attributes:
-    source_directories: 股票历史日线数据|股票历史全息日线数据|股票1小时K线数据|股票1小时k线数据Pro|股票5分钟收盘价|股票15分钟收盘价
+    source_directories: plan-3.6-stock-cn-kline
 - space_id: stock_cn
   dataset_id: index_kline
   data_source_id: quantclass_stock
@@ -312,6 +309,55 @@ fields:
   sort_order: 90
   status: active
 - space_id: stock_cn
+  group_id: identity
+  field_id: trade_date
+  name: 交易日
+  value_type: time
+  sort_order: 30
+  status: active
+- space_id: stock_cn
+  group_id: identity
+  field_id: close_time
+  name: 收盘时间
+  value_type: time
+  sort_order: 40
+  status: active
+- space_id: stock_cn
+  group_id: identity
+  field_id: provider_symbol
+  name: 源证券代码
+  value_type: string
+  sort_order: 50
+  status: active
+- space_id: stock_cn
+  group_id: identity
+  field_id: provider_timestamp
+  name: 源时间戳
+  value_type: time
+  sort_order: 60
+  status: active
+- space_id: stock_cn
+  group_id: identity
+  field_id: fetched_at
+  name: 抓取时间
+  value_type: time
+  sort_order: 70
+  status: active
+- space_id: stock_cn
+  group_id: identity
+  field_id: request_id
+  name: 请求ID
+  value_type: string
+  sort_order: 80
+  status: active
+- space_id: stock_cn
+  group_id: identity
+  field_id: route_id
+  name: 路由ID
+  value_type: string
+  sort_order: 85
+  status: active
+- space_id: stock_cn
   group_id: quote
   field_id: open
   name: 开盘价
@@ -357,6 +403,41 @@ fields:
   value_type: double
   unit: CNY
   sort_order: 20
+  status: active
+- space_id: stock_cn
+  group_id: trading
+  field_id: volume_unit
+  name: 成交量单位
+  value_type: string
+  sort_order: 30
+  status: active
+- space_id: stock_cn
+  group_id: trading
+  field_id: amount_unit
+  name: 成交额单位
+  value_type: string
+  sort_order: 40
+  status: active
+- space_id: stock_cn
+  group_id: trading
+  field_id: route_rank
+  name: 路由优先级
+  value_type: int
+  sort_order: 50
+  status: active
+- space_id: stock_cn
+  group_id: trading
+  field_id: source_provider
+  name: 数据提供方
+  value_type: string
+  sort_order: 60
+  status: active
+- space_id: stock_cn
+  group_id: trading
+  field_id: quality_status
+  name: 质量状态
+  value_type: string
+  sort_order: 70
   status: active
 - space_id: stock_cn
   group_id: finance
@@ -996,28 +1077,28 @@ dataset_columns:
   status: active
 
 - space_id: stock_cn
-  dataset_id: stock_kline
+  dataset_id: stock_cn_kline
   column_name: open
   origin_type: field
   origin_id: open
   value_type: double
   status: active
 - space_id: stock_cn
-  dataset_id: stock_kline
+  dataset_id: stock_cn_kline
   column_name: high
   origin_type: field
   origin_id: high
   value_type: double
   status: active
 - space_id: stock_cn
-  dataset_id: stock_kline
+  dataset_id: stock_cn_kline
   column_name: low
   origin_type: field
   origin_id: low
   value_type: double
   status: active
 - space_id: stock_cn
-  dataset_id: stock_kline
+  dataset_id: stock_cn_kline
   column_name: close
   origin_type: field
   origin_id: close
@@ -1025,25 +1106,111 @@ dataset_columns:
   required: true
   status: active
 - space_id: stock_cn
-  dataset_id: stock_kline
+  dataset_id: stock_cn_kline
   column_name: volume
   origin_type: field
   origin_id: volume
   value_type: double
   status: active
 - space_id: stock_cn
-  dataset_id: stock_kline
+  dataset_id: stock_cn_kline
   column_name: amount
   origin_type: field
   origin_id: amount
   value_type: double
   status: active
 - space_id: stock_cn
-  dataset_id: stock_kline
-  column_name: raw_payload
+  dataset_id: stock_cn_kline
+  column_name: trade_date
   origin_type: field
-  origin_id: raw_payload
-  value_type: json
+  origin_id: trade_date
+  value_type: time
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_kline
+  column_name: close_time
+  origin_type: field
+  origin_id: close_time
+  value_type: time
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_kline
+  column_name: volume_unit
+  origin_type: field
+  origin_id: volume_unit
+  value_type: string
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_kline
+  column_name: amount_unit
+  origin_type: field
+  origin_id: amount_unit
+  value_type: string
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_kline
+  column_name: provider_symbol
+  origin_type: field
+  origin_id: provider_symbol
+  value_type: string
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_kline
+  column_name: provider_timestamp
+  origin_type: field
+  origin_id: provider_timestamp
+  value_type: time
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_kline
+  column_name: fetched_at
+  origin_type: field
+  origin_id: fetched_at
+  value_type: time
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_kline
+  column_name: request_id
+  origin_type: field
+  origin_id: request_id
+  value_type: string
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_kline
+  column_name: route_id
+  origin_type: field
+  origin_id: route_id
+  value_type: string
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_kline
+  column_name: route_rank
+  origin_type: field
+  origin_id: route_rank
+  value_type: int
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_kline
+  column_name: source_provider
+  origin_type: field
+  origin_id: source_provider
+  value_type: string
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_kline
+  column_name: quality_status
+  origin_type: field
+  origin_id: quality_status
+  value_type: string
   status: active
 - space_id: stock_cn
   dataset_id: index_kline

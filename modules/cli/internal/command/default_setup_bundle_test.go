@@ -57,6 +57,9 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	for _, dataset := range seed.Datasets {
 		datasetsBySpace[dataset.SpaceID] = append(datasetsBySpace[dataset.SpaceID], dataset.DatasetID)
 		require.LessOrEqual(t, utf8.RuneCountInString(dataset.Name), 10, dataset.SpaceID+"/"+dataset.DatasetID)
+		if dataset.SpaceID == "stock_cn" && dataset.DatasetID == "stock_cn_kline" {
+			require.Equal(t, []string{"1m"}, dataset.Freqs)
+		}
 		if dataset.SpaceID == "crypto_market" && dataset.DatasetID != "binance_spot_symbols" && dataset.DatasetID != "binance_swap_symbols" && dataset.DatasetID != "binance_spot_kline_1m" {
 			require.Equal(t, []string{"1H"}, dataset.Freqs, dataset.DatasetID)
 		}
@@ -102,7 +105,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		"financial_statement_metric",
 		"financial_summary",
 		"index_kline",
-		"stock_kline",
+		"stock_cn_kline",
 	}, datasetsBySpace["stock_cn"])
 	require.Equal(t, []string{"binance_spot_kline_1m", "binance_spot_symbols", "binance_swap_symbols", "perpetual_kline_1h", "spot_kline_1h"}, datasetsBySpace["crypto_market"])
 }
