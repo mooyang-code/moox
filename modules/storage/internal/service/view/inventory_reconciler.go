@@ -445,7 +445,14 @@ func dynamicDatasetConsumerIdentity(miscDurable string, ref datasetRef) (string,
 	// the dot separator used by the human-readable identity in early drafts.
 	// Keep the partition label descriptive while making the server-side durable
 	// valid and stable across restarts.
-	return "misc:" + token, strings.TrimSpace(miscDurable) + "-" + token
+	// JetStream limits durable names to 32 characters. Keep the full token in
+	// the local partition identity while using a 14-character suffix for the
+	// default 17-character storage_view_misc durable prefix.
+	durableToken := token
+	if len(durableToken) > 14 {
+		durableToken = durableToken[:14]
+	}
+	return "misc:" + token, strings.TrimSpace(miscDurable) + "-" + durableToken
 }
 
 func viewDatasetIDs(view *pb.View) []string {
