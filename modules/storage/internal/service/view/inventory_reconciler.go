@@ -442,16 +442,16 @@ func dynamicDatasetConsumerIdentity(miscDurable string, ref datasetRef) (string,
 	hash := sha256.Sum256([]byte(strings.TrimSpace(ref.spaceID) + "\x00" + strings.TrimSpace(ref.datasetID)))
 	token := hex.EncodeToString(hash[:])[:16]
 	// Keep the partition label descriptive while making the server-side durable
-	// valid and stable across restarts. NATS limits durable names to 32
-	// characters; the configured storage_view_misc prefix is 17 characters, so
-	// a 14-character suffix leaves room for the separator.
+	// valid and stable across restarts. NATS durable names do not allow a dot,
+	// and they are limited to 32 characters; the configured storage_view_misc
+	// prefix is 17 characters, so a 14-character suffix leaves room for '-'.
 	// Keep the full token in the local partition identity while using a
 	// 14-character suffix for the default storage_view_misc durable prefix.
 	durableToken := token
 	if len(durableToken) > 14 {
 		durableToken = durableToken[:14]
 	}
-	return "misc:" + token, strings.TrimSpace(miscDurable) + "." + durableToken
+	return "misc:" + token, strings.TrimSpace(miscDurable) + "-" + durableToken
 }
 
 func viewDatasetIDs(view *pb.View) []string {

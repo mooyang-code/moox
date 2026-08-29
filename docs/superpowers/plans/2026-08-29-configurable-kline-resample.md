@@ -527,10 +527,10 @@ exact kline/factor routes 保持共享 partition；misc 分区声明的 wildcard
 
 ```text
 partition_id = misc:<first-16-hex(sha256(space_id + "\x00" + dataset_id))>
-durable      = <misc-durable>.<first-14-hex(same-hash)> (JetStream 32-character limit)
+durable      = <misc-durable>-<first-14-hex(same-hash)> (JetStream 32-character limit)
 ```
 
-每 30 秒 reconcile。相同 inventory no-op；新增 Dataset bind 新 consumer；per-Dataset durable 首次使用 `deliver_policy=all`，覆盖旧共享 durable 的 pending 和历史序列，之后重启保持同一策略；移除时停止本地拉取但保留 durable，支持再次启用和回滚。旧 `storage_view_misc` durable 在迁移窗口只保留作回滚/人工 replay 安全网，不自动删除。
+每 30 秒 reconcile。相同 inventory no-op；新增 Dataset bind 新 consumer；per-Dataset durable 首次使用 `deliver_policy=all`，覆盖旧共享 durable 的 pending 和历史序列，之后重启保持同一策略；移除时停止本地拉取但保留 durable，支持再次启用和回滚。动态 durable 使用 JetStream 合法的短后缀命名，`storage-eventbus` ACL 必须允许 `MOOX_STORAGE` 下动态 consumer 的 INFO/CREATE/DURABLE.CREATE/MSG.NEXT/ACK。旧 `storage_view_misc` durable 在迁移窗口只保留作回滚/人工 replay 安全网，不自动删除。
 
 - [ ] **Step 3: 发布 route-ready fence**
 
