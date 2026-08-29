@@ -2,6 +2,7 @@ package resample
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -11,6 +12,16 @@ func TestDefaultTargetNamesKeepDerivedFrequencyIdentity(t *testing.T) {
 	assert.Equal(t, "spot_kline_derived_4h", DefaultTargetDatasetID("spot", "4h"))
 	assert.Equal(t, "swap_kline_derived_90m", DefaultTargetDatasetID("swap", "90m"))
 	assert.Equal(t, "spot_kline_derived_4h_view", DefaultTargetViewID("spot_kline_derived_4h"))
+}
+
+func TestUniqueResampleDisplayNameIsValidAndStable(t *testing.T) {
+	name := uniqueResampleDisplayName("spot_kline_derived_5m")
+	if utf8.RuneCountInString(name) > 10 || name == "" {
+		t.Fatalf("invalid display name %q", name)
+	}
+	if name != uniqueResampleDisplayName("spot_kline_derived_5m") {
+		t.Fatal("display name is not stable")
+	}
 }
 
 func TestValidateTargetDatasetIDRequiresLowerSnakeFrequencySuffix(t *testing.T) {

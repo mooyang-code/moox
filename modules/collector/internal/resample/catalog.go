@@ -282,7 +282,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 
 func uniqueResampleDisplayName(targetDatasetID string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(targetDatasetID)))
-	return "重采样-" + hex.EncodeToString(sum[:])[:6]
+	return "重采样-" + hex.EncodeToString(sum[:])[:5]
 }
 
 type viewGetter interface {
