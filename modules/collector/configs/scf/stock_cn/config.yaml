@@ -1,0 +1,23 @@
+system:
+  name: "moox-collector-stock-cn"
+  version: "v0.0.1"
+  environment: "Production"
+  timezone: "UTC"
+  storage_rpc:
+    gateway_target: "ip://127.0.0.1:11003"
+    gateway_node_id: ""
+    key_id: "collector"
+    hmac_key_file: ""
+  service_auth:
+    target_node: ""
+    ca_file: ""
+    access_key: "moox-service"
+    secret_key: ""
+    expire_seconds: 60
+sources:
+  market:
+    # Temporary shared Storage auth binding. Kline HTTP adapters are composed
+    # directly by the stock_cn serverless runtime.
+    - name: "binance"
+      enabled: true
+      config: "sources/market/binance.yaml"

@@ -44,7 +44,7 @@ const (
 	// DefaultStockCNMarketTimerFunctionCount is the baseline Timer fleet size
 	// for the mainland China A-share Space. Each region is capped at 50
 	// functions, so this default needs at least six enabled regions.
-	DefaultStockCNMarketTimerFunctionCount = 300
+	DefaultStockCNMarketTimerFunctionCount = 200
 )
 
 // Paths controls where setup-cli installs the control and Storage packages on

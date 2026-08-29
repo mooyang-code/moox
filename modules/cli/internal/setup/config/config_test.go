@@ -123,9 +123,13 @@ func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 	}
 	require.NoError(t, resolveSCFTimerFunctionCounts(&stock, "scf_fetcher.spaces[1]"))
 	assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, stock.TimerFunctionCount)
+	total := 0
 	for _, region := range stock.Regions {
-		assert.Equal(t, 50, region.FunctionCount)
+		assert.GreaterOrEqual(t, region.FunctionCount, 1)
+		assert.LessOrEqual(t, region.FunctionCount, 50)
+		total += region.FunctionCount
 	}
+	assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, total)
 }
 
 func TestResolveSCFTimerFunctionCountsRejectsMismatch(t *testing.T) {

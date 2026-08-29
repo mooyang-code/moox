@@ -44,6 +44,9 @@ const (
 
 func NewHandler() *Handler {
 	return &Handler{NewStorage: func(target, market, writeSource string) (Storage, error) {
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")), StockCNSpaceID) {
+			return NewMarketStorage(target, writeSource)
+		}
 		return binance.NewBatchStorageWithWriteSource(target, market, writeSource)
 	}, Publish: publishCompletion}
 }
@@ -184,6 +187,13 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 	var payload *marketfetchpb.MarketFetchBatchCompleted
 	if h.Execute != nil {
 		payload, err = h.Execute(budgetCtx, req, storage)
+	} else if req.SpaceID == StockCNSpaceID {
+		pipeline, pipelineErr := NewStockKlinePipeline(storage)
+		if pipelineErr != nil {
+			return nil, pipelineErr
+		}
+		pipeline.Now = h.Now
+		payload, err = pipeline.Execute(budgetCtx, req)
 	} else {
 		executor := &Executor{Klines: binance.NewKlineCollector(), Catchup: binance.NewKlineCollector(), Symbols: binance.NewSymbolCollector(), Storage: storage, Now: h.Now, CommitReserve: commitReserve, StorageReserve: storageTimeout, Reporter: h.Reporter}
 		payload, err = executor.Execute(budgetCtx, req)
