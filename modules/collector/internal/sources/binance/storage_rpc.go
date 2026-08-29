@@ -141,7 +141,7 @@ func (w *storageWriter) ReadFields(ctx context.Context, keys []*storagepb.RowKey
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("read fields: keys are required")
 	}
-	fieldIDs = qualifyResampleFieldIDs(keys, fieldIDs)
+	fieldIDs = expandResampleFieldIDs(keys, fieldIDs)
 	var rsp *storagepb.PrimaryReadFieldsRsp
 	err := retryStorageWithAttemptTimeout(ctx, func(attemptCtx context.Context) error {
 		var callErr error
@@ -162,7 +162,7 @@ func (w *storageWriter) ReadFields(ctx context.Context, keys []*storagepb.RowKey
 // Primary stores Dataset columns under their qualified IDs (dataset.column).
 // Keep the local resample contract short and canonical while translating exact
 // reads at this adapter boundary.
-func qualifyResampleFieldIDs(keys []*storagepb.RowKey, fieldIDs []string) []string {
+func expandResampleFieldIDs(keys []*storagepb.RowKey, fieldIDs []string) []string {
 	if len(fieldIDs) == 0 || len(keys) == 0 || keys[0] == nil {
 		return fieldIDs
 	}
@@ -170,14 +170,28 @@ func qualifyResampleFieldIDs(keys []*storagepb.RowKey, fieldIDs []string) []stri
 	if datasetID == "" {
 		return fieldIDs
 	}
-	qualified := make([]string, 0, len(fieldIDs))
+	qualified := make([]string, 0, len(fieldIDs)*2)
+	seen := make(map[string]struct{}, len(fieldIDs)*2)
 	for _, fieldID := range fieldIDs {
 		fieldID = strings.TrimSpace(fieldID)
-		if fieldID == "" || strings.Contains(fieldID, ".") {
-			qualified = append(qualified, fieldID)
+		if fieldID == "" {
+			if _, ok := seen[fieldID]; !ok {
+				qualified = append(qualified, fieldID)
+				seen[fieldID] = struct{}{}
+			}
 			continue
 		}
-		qualified = append(qualified, datasetID+"."+fieldID)
+		candidates := []string{fieldID}
+		if !strings.Contains(fieldID, ".") {
+			candidates = append(candidates, datasetID+"."+fieldID)
+		}
+		for _, candidate := range candidates {
+			if _, ok := seen[candidate]; ok {
+				continue
+			}
+			qualified = append(qualified, candidate)
+			seen[candidate] = struct{}{}
+		}
 	}
 	return qualified
 }

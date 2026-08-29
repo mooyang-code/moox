@@ -8,8 +8,8 @@ import (
 
 func TestQualifyResampleFieldIDs(t *testing.T) {
 	keys := []*storagepb.RowKey{{SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m"}}
-	got := qualifyResampleFieldIDs(keys, []string{"open", "binance_spot_kline_1m.close", ""})
-	want := []string{"binance_spot_kline_1m.open", "binance_spot_kline_1m.close", ""}
+	got := expandResampleFieldIDs(keys, []string{"open", "binance_spot_kline_1m.close", ""})
+	want := []string{"open", "binance_spot_kline_1m.open", "binance_spot_kline_1m.close", ""}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
