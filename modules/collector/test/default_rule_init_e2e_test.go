@@ -41,7 +41,7 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	require.NoError(t, err)
 	summary, err := ruleseed.SeedMissing(ctx, dbm.TaskRules(), rules)
 	require.NoError(t, err)
-	require.Equal(t, 5, summary.Created)
+	require.Equal(t, 6, summary.Created)
 
 	var invocationCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
