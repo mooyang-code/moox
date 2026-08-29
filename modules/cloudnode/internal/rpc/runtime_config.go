@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +34,9 @@ var managedEnvironmentKeys = map[string]struct{}{
 	"MOOX_MARKET_FETCH_DNS_ROUTES_JSON": {},
 	"MOOX_MARKET_FETCH_DNS_HASH":        {},
 	"MOOX_MARKET_FETCH_DNS_UPDATED_AT":  {},
+	"MOOX_MARKET_FETCH_PROVIDER_CHAIN":  {},
+	"MOOX_MARKET_FETCH_ROUTE_VERSION":   {},
+	"MOOX_MARKET_FETCH_GROUP_ID":        {},
 }
 
 func (s *Service) SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *pb.BatchUpdateNodeRuntimeConfigsReq) (*pb.SubmitNodeBatchRsp, error) {
@@ -100,7 +104,16 @@ func (s *Service) preflightRuntimeConfig(ctx context.Context, spaceID string, it
 }
 
 func isSupportedTimerCron(cron string) bool {
-	switch strings.TrimSpace(cron) {
+	fields := strings.Fields(cron)
+	if len(fields) != 7 {
+		return false
+	}
+	second, err := strconv.Atoi(fields[0])
+	if err != nil || second < 0 || second > 59 {
+		return false
+	}
+	fields[0] = "0"
+	switch strings.Join(fields, " ") {
 	case "0 * * * * * *", "0 */5 * * * * *", "0 */15 * * * * *", "0 */30 * * * * *", "0 0 * * * * *", "0 0 */4 * * * *", "0 0 0 * * * *":
 		return true
 	default:

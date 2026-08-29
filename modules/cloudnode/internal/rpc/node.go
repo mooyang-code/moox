@@ -396,9 +396,15 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	config := item.GetConfig()
 	memorySize := configInt64(config, "memory_size", 256)
 	timeoutSeconds := configInt64(config, "timeout", defaultSCFTimeoutSeconds)
-	if isMarketFetchNode(node) {
+	effectiveConfig := config
+	if isMarketFetchNode(node) && node.TriggerType == "timer" {
 		memorySize = 64
 		timeoutSeconds = 15
+		effectiveConfig = copyStringMap(config)
+		if effectiveConfig == nil {
+			effectiveConfig = make(map[string]string)
+		}
+		effectiveConfig["timeout"] = "15"
 	}
 	metadata["runtime"] = firstString(item.GetRuntime(), pkg.Runtime, metadataString(metadata, "runtime"))
 	metadata["handler"] = firstString(item.GetHandler(), metadataString(metadata, "handler"), "main")
@@ -430,7 +436,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err != nil {
 			return err
 		}
-		if err := verifySCFFunctionConfiguration(info, item.GetConfig(), item.GetEnvironment(), ref.FunctionName); err != nil {
+		if err := verifySCFFunctionConfiguration(info, effectiveConfig, item.GetEnvironment(), ref.FunctionName); err != nil {
 			return err
 		}
 		if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(node)); err != nil {
@@ -452,6 +458,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		environment = make(map[string]string)
 	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
+	if size := scfEnvironmentBytes(environment); size > maxSCFEnvironmentBytes {
+		return fmt.Errorf("scf function %s environment is %d bytes; limit is %d", ref.FunctionName, size, maxSCFEnvironmentBytes)
+	}
 	createCtx, createCancel := context.WithTimeout(ctx, scfCreateAttemptTimeout)
 	_, err = client.CreateFunction(createCtx, tencentscf.CreateFunctionRequest{
 		FunctionRef: ref,
@@ -499,7 +508,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err != nil {
 			return err
 		}
-		if err := verifySCFFunctionConfiguration(info, item.GetConfig(), item.GetEnvironment(), ref.FunctionName); err != nil {
+		if err := verifySCFFunctionConfiguration(info, effectiveConfig, item.GetEnvironment(), ref.FunctionName); err != nil {
 			return err
 		}
 		if err := ensureSCFAsyncRetryConfig(reconcileCtx, client, ref, isMarketFetchNode(node)); err != nil {
@@ -514,7 +523,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	if err != nil {
 		return err
 	}
-	if err := verifySCFFunctionConfiguration(info, item.GetConfig(), item.GetEnvironment(), ref.FunctionName); err != nil {
+	if err := verifySCFFunctionConfiguration(info, effectiveConfig, item.GetEnvironment(), ref.FunctionName); err != nil {
 		return err
 	}
 	if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(node)); err != nil {

@@ -17,6 +17,36 @@ func TestManagedEnvironmentRejectsUnknownKey(t *testing.T) {
 	}
 }
 
+func TestManagedEnvironmentAllowsStockCNRouteKeys(t *testing.T) {
+	for _, key := range []string{
+		"MOOX_MARKET_FETCH_PROVIDER_CHAIN",
+		"MOOX_MARKET_FETCH_ROUTE_VERSION",
+		"MOOX_MARKET_FETCH_GROUP_ID",
+	} {
+		_, ok := managedEnvironmentKeys[key]
+		require.True(t, ok, "missing managed environment key %s", key)
+	}
+}
+
+func TestSupportedTimerCronAllowsSecondOffsets(t *testing.T) {
+	for _, cron := range []string{
+		"0 * * * * * *",
+		"17 * * * * * *",
+		"59 */5 * * * * *",
+		"23 0 0 * * * *",
+	} {
+		require.True(t, isSupportedTimerCron(cron), "cron=%q", cron)
+	}
+	for _, cron := range []string{
+		"60 * * * * * *",
+		"-1 * * * * * *",
+		"*/5 * * * * * *",
+		"17 */2 * * * * *",
+	} {
+		require.False(t, isSupportedTimerCron(cron), "cron=%q", cron)
+	}
+}
+
 func TestManagedEnvironmentMatchesOnlyCollectorOwnedValues(t *testing.T) {
 	current := map[string]string{"MOOX_MARKET_FETCH_SUBJECTS": "BTC-USDT", "SECRET": "keep"}
 	require.True(t, managedEnvironmentMatches(current, map[string]string{"MOOX_MARKET_FETCH_SUBJECTS": "BTC-USDT"}))
