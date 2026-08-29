@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -97,7 +98,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 	if target.GetDataset() == nil {
 		return errors.New("target Dataset is empty")
 	}
-	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage); err != nil {
+	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage, "crypto_market", source.DataNodeID); err != nil {
 		return err
 	}
 	// Mirror the source subject snapshot before activation so the target has the
@@ -385,16 +386,29 @@ func cloneStringMap(input map[string]string) map[string]string {
 	return output
 }
 
-func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, frequency string) error {
+func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, frequency, dataSourceID, dataNodeID string) error {
 	if dataset.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES {
 		return errors.New("target Dataset must be time_series")
 	}
-	if dataset.GetAttributes()["dataset_role"] != want["dataset_role"] || dataset.GetAttributes()["resample_rule_id"] != want["resample_rule_id"] {
-		return errors.New("target Dataset immutable lineage does not match rule")
+	if strings.TrimSpace(dataset.GetDataSourceId()) != strings.TrimSpace(dataSourceID) {
+		return fmt.Errorf("target Dataset data source does not match rule: got %q want %q", dataset.GetDataSourceId(), dataSourceID)
+	}
+	if strings.TrimSpace(dataNodeID) != "" && strings.TrimSpace(dataset.GetDataNodeId()) != strings.TrimSpace(dataNodeID) {
+		return fmt.Errorf("target Dataset data node does not match source: got %q want %q", dataset.GetDataNodeId(), dataNodeID)
+	}
+	for key, expected := range want {
+		if dataset.GetAttributes()[key] != expected {
+			return fmt.Errorf("target Dataset immutable lineage attribute %s does not match rule", key)
+		}
+	}
+	wantedFrequency, err := report.NormalizeDatasetFrequency(strings.TrimSpace(frequency))
+	if err != nil {
+		return fmt.Errorf("target Dataset frequency %q is invalid: %w", frequency, err)
 	}
 	found := false
 	for _, freq := range dataset.GetFreqs() {
-		if strings.EqualFold(freq, frequency) {
+		actualFrequency, normalizeErr := report.NormalizeDatasetFrequency(strings.TrimSpace(freq))
+		if normalizeErr == nil && actualFrequency == wantedFrequency {
 			found = true
 			break
 		}

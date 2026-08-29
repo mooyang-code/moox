@@ -10,6 +10,13 @@ describe("buildCollectorRuleParams", () => {
 	it("builds a kline resample contract from a source Dataset", () => {
 		expect(buildCollectorRuleParams({ dataType: "kline_resample", exchange: "moox", market: "spot", datasetId: "spot_kline_derived_5m", scheduleInterval: "5m", sourceDatasetId: "binance_spot_kline_1m", sourceFrequency: "1m", sourceSeriesTag: "venue:binance" })).toMatchObject({ source_dataset_id: "binance_spot_kline_1m", target_dataset_id: "spot_kline_derived_5m", target_frequency: "5m", alignment: "epoch_utc" });
 	});
+
+	it("preserves an explicit resample settle delay, including zero", () => {
+		const base = { dataType: "kline_resample" as const, exchange: "moox", market: "spot" as const, datasetId: "spot_kline_derived_5m", scheduleInterval: "5m", sourceDatasetId: "binance_spot_kline_1m", sourceFrequency: "1m", sourceSeriesTag: "venue:binance" };
+		expect(buildCollectorRuleParams({ ...base, settleDelayMS: 2500 })).toMatchObject({ settle_delay_ms: 2500 });
+		expect(buildCollectorRuleParams({ ...base, settleDelayMS: 0 })).toMatchObject({ settle_delay_ms: 0 });
+		expect(buildCollectorRuleParams(base)).not.toHaveProperty("settle_delay_ms");
+	});
   it("builds the dataset-driven Kline contract", () => {
     expect(
       buildCollectorRuleParams({
@@ -138,5 +145,11 @@ describe("datasetMatchesCollector", () => {
     const source = { data_source_id: "crypto_market", data_kind: "DATA_KIND_TIME_SERIES", attributes: { market_type: "spot" }, freqs: ["1H"] };
     expect(datasetMatchesCollector(source, "moox", "kline_resample", "spot", "1h")).toBe(true);
     expect(datasetMatchesCollector({ ...source, data_kind: "DATA_KIND_RECORD" }, "moox", "kline_resample", "spot", "1h")).toBe(false);
+  });
+
+  it("does not treat month M as minute m", () => {
+    const monthly = { data_source_id: "crypto_market", data_kind: "DATA_KIND_TIME_SERIES", attributes: { market_type: "spot" }, freqs: ["1M"] };
+    expect(datasetMatchesCollector(monthly, "moox", "kline_resample", "spot", "1m")).toBe(false);
+    expect(datasetMatchesCollector(monthly, "moox", "kline", "spot", "1M")).toBe(true);
   });
 });

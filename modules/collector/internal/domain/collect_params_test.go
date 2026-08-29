@@ -236,3 +236,14 @@ func TestKlineResampleCanonicalJSONOmitsRuntimeRepairPolicy(t *testing.T) {
 	assert.Contains(t, raw, `"target_frequency":"4H"`)
 	assert.NotContains(t, raw, "repair")
 }
+
+func TestKlineResampleRejectsDurationAndSettleDelayOverflow(t *testing.T) {
+	tooLargeFrequency, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"9007199254740993m","source_series_tag":"venue:binance","target_dataset_id":"target_kline_derived_2m","target_frequency":"2m","alignment":"epoch_utc"}`, "", "", "kline_resample")
+	require.NoError(t, err)
+	require.ErrorContains(t, tooLargeFrequency.Validate(), "frequency must not exceed 30 days")
+
+	tooLargeDelay, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"target_kline_derived_2m","target_frequency":"2m","alignment":"epoch_utc","settle_delay_ms":288230376151711744}`, "", "", "kline_resample")
+	require.NoError(t, err)
+	require.ErrorContains(t, tooLargeDelay.Validate(), "settle_delay_ms must not exceed")
+	assert.Equal(t, MaxResampleSettleDelay, tooLargeDelay.SettleDelayOr(0))
+}

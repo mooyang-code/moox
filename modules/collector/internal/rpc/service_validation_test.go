@@ -97,6 +97,17 @@ func TestValidateResampleRuleUpdateLocksIdentityAtEveryPrepareState(t *testing.T
 	}
 }
 
+func TestValidateResampleSourceDoesNotFoldMonthIntoMinute(t *testing.T) {
+	service := &Service{datasetSrc: validationDatasetSource{
+		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1M"}, Attributes: map[string]string{"market_type": "spot"}},
+	}}
+	rule := domain.TaskRule{
+		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
+		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`,
+	}
+	require.ErrorContains(t, service.validateTaskRuleDatasets(context.Background(), rule), `does not enable frequency "1m"`)
+}
+
 func TestValidateTaskRuleDatasetsAcceptsExchangeSourceForMooxResample(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
 		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1H"}, Attributes: map[string]string{"market_type": "spot"}},

@@ -49,3 +49,46 @@ func TestWaitTargetViewRevisionReturnsNotReadyWhenTimeoutExpires(t *testing.T) {
 	err := waitTargetViewRevision(context.Background(), getter, nil, "crypto", "view", 2, 20*time.Millisecond)
 	assert.ErrorIs(t, err, ErrTargetViewNotReady)
 }
+
+func TestValidateTargetDatasetChecksImmutableLineageAndPlacement(t *testing.T) {
+	want := map[string]string{
+		"owner_module":          "collector",
+		"managed_by":            "collector",
+		"market_type":           "spot",
+		"storage_model":         "wide_common_metrics",
+		"dataset_role":          "kline_resample_result",
+		"resample_rule_id":      "rule-5m",
+		"source_dataset_id":     "binance_spot_kline_1m",
+		"source_data_source_id": "binance",
+		"source_freq":           "1m",
+		"source_series_tag":     "venue:binance",
+		"target_freq":           "5m",
+		"alignment":             "epoch_utc",
+	}
+	dataset := &storagepb.Dataset{
+		DataSourceId: "crypto_market",
+		DataNodeId:   "storage-node-0",
+		DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
+		Freqs:        []string{"5m"},
+		Attributes:   cloneStringMap(want),
+	}
+	require.NoError(t, validateTargetDataset(dataset, want, "5m", "crypto_market", "storage-node-0"))
+
+	for key, value := range want {
+		t.Run("attribute/"+key, func(t *testing.T) {
+			copy := *dataset
+			copy.Attributes = cloneStringMap(dataset.Attributes)
+			copy.Attributes[key] = value + "-drift"
+			require.ErrorContains(t, validateTargetDataset(&copy, want, "5m", "crypto_market", "storage-node-0"), "immutable lineage attribute")
+		})
+	}
+	wrongSource := *dataset
+	wrongSource.DataSourceId = "binance"
+	require.ErrorContains(t, validateTargetDataset(&wrongSource, want, "5m", "crypto_market", "storage-node-0"), "data source")
+	wrongNode := *dataset
+	wrongNode.DataNodeId = "storage-node-1"
+	require.ErrorContains(t, validateTargetDataset(&wrongNode, want, "5m", "crypto_market", "storage-node-0"), "data node")
+	monthly := *dataset
+	monthly.Freqs = []string{"5M"}
+	require.ErrorContains(t, validateTargetDataset(&monthly, want, "5m", "crypto_market", "storage-node-0"), "does not enable frequency")
+}

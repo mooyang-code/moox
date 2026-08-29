@@ -155,6 +155,9 @@
           <a-form-item label="目标 Dataset" required>
             <a-input v-model="targetDatasetIdValue" placeholder="例如 spot_kline_derived_5m" allow-clear />
           </a-form-item>
+          <a-form-item label="结算延迟（毫秒）">
+            <a-input-number v-model="settleDelayMSValue" :min="0" :max="86400000" :precision="0" placeholder="留空使用全局默认" allow-clear style="width: 100%" />
+          </a-form-item>
         </template>
 
         <a-form-item v-if="addForm.data_type === 'kline'" label="标的 Dataset" required>
@@ -301,6 +304,7 @@ const scheduleIntervalValue = ref("");
 const sourceFrequencyValue = ref("");
 const sourceSeriesTagValue = ref("");
 const targetDatasetIdValue = ref("");
+const settleDelayMSValue = ref<number | undefined>(10000);
 
 const dataSourceOptions = ref<{ label: string; value: string }[]>([]);
 const loadingDataSources = ref(false);
@@ -614,6 +618,7 @@ const resetRuleFields = () => {
   sourceFrequencyValue.value = "";
   sourceSeriesTagValue.value = "venue:binance";
   targetDatasetIdValue.value = "";
+  settleDelayMSValue.value = 10000;
 };
 
 const isRecord = (value: unknown): value is Record<string, any> =>
@@ -631,7 +636,8 @@ const parseStrictRuleParams = (raw: string): CollectorRuleInput => {
   const symbolDatasetId = String(params.symbol_dataset_id || "").trim();
   const scheduleInterval = String(params.frequency || params.target_frequency || "").trim();
   if (dataType === "kline_resample") {
-    return { dataType, exchange: String(params.provider || "moox"), market: market as "spot" | "swap", datasetId, scheduleInterval, sourceDatasetId: String(params.source_dataset_id || ""), sourceFrequency: String(params.source_frequency || ""), sourceSeriesTag: String(params.source_series_tag || ""), targetFrequency: String(params.target_frequency || scheduleInterval) };
+    const settleDelayMS = typeof params.settle_delay_ms === "number" && Number.isFinite(params.settle_delay_ms) && params.settle_delay_ms >= 0 ? Math.trunc(params.settle_delay_ms) : undefined;
+    return { dataType, exchange: String(params.provider || "moox"), market: market as "spot" | "swap", datasetId, scheduleInterval, sourceDatasetId: String(params.source_dataset_id || ""), sourceFrequency: String(params.source_frequency || ""), sourceSeriesTag: String(params.source_series_tag || ""), targetFrequency: String(params.target_frequency || scheduleInterval), settleDelayMS };
   }
   if (dataType !== "kline" && dataType !== "symbol") {
     throw new Error("规则数据类型无效");
@@ -689,6 +695,8 @@ const onUpdate = (record: TaskConfig) => {
   sourceFrequencyValue.value = input.sourceFrequency || "";
   sourceSeriesTagValue.value = input.sourceSeriesTag || "venue:binance";
   targetDatasetIdValue.value = input.dataType === "kline_resample" ? input.datasetId : "";
+  // Preserve an omitted value so the server can apply its process-wide default.
+  settleDelayMSValue.value = input.settleDelayMS;
   if (input.dataType === "kline_resample") datasetIdValue.value = input.sourceDatasetId || "";
   loadDataSourceOptionsForType(input.dataType);
   open.value = true;
@@ -739,7 +747,8 @@ const handleOk = async (): Promise<boolean> => {
       sourceDatasetId: addForm.value.data_type === "kline_resample" ? datasetIdValue.value : undefined,
       sourceFrequency: sourceFrequencyValue.value,
       sourceSeriesTag: sourceSeriesTagValue.value,
-      targetFrequency: scheduleIntervalValue.value
+      targetFrequency: scheduleIntervalValue.value,
+      settleDelayMS: settleDelayMSValue.value
     });
     addForm.value.collect_params = JSON.stringify(collectParams);
 
@@ -754,7 +763,8 @@ const handleOk = async (): Promise<boolean> => {
         sourceDatasetId: addForm.value.data_type === "kline_resample" ? datasetIdValue.value : undefined,
         sourceFrequency: sourceFrequencyValue.value,
         sourceSeriesTag: sourceSeriesTagValue.value,
-        targetFrequency: scheduleIntervalValue.value
+        targetFrequency: scheduleIntervalValue.value,
+        settleDelayMS: settleDelayMSValue.value
       },
       spaceId,
       addForm.value.creator || account.value.user?.userName || "",

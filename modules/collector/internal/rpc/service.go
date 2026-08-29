@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/report"
 	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -687,8 +688,13 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, rule domain
 	if actualMarket == "" || actualMarket != strings.ToLower(strings.TrimSpace(rule.MarketType)) {
 		return fmt.Errorf("source Dataset %s market_type=%s does not match rule market_type=%s", params.SourceDatasetID, actualMarket, rule.MarketType)
 	}
+	wantedFrequency, normalizeErr := report.NormalizeDatasetFrequency(strings.TrimSpace(params.SourceFrequency))
+	if normalizeErr != nil {
+		return fmt.Errorf("source Dataset %s frequency %q is invalid: %w", params.SourceDatasetID, params.SourceFrequency, normalizeErr)
+	}
 	for _, frequency := range info.Freqs {
-		if strings.EqualFold(strings.TrimSpace(frequency), params.SourceFrequency) {
+		actualFrequency, frequencyErr := report.NormalizeDatasetFrequency(strings.TrimSpace(frequency))
+		if frequencyErr == nil && actualFrequency == wantedFrequency {
 			// Dataset metadata adapters that expose column discovery return a
 			// non-nil ColumnTypes map. Validate both presence and logical type so
 			// an empty or malformed schema cannot enter ready and spin forever.

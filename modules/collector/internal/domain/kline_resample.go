@@ -14,6 +14,10 @@ const (
 	ResampleAlignmentEpochUTC  = "epoch_utc"
 	ResampleTaskSchemaVersion  = 1
 	MaxResampleBackfillBuckets = 10080
+	// MaxResampleSettleDelay bounds the rule-specific delay before a closed
+	// target bucket is considered ready. Keeping the bound below the duration
+	// overflow limit also makes SettleDelayOr safe for malformed persisted data.
+	MaxResampleSettleDelay = 24 * time.Hour
 )
 
 // SettleDelay returns the rule-specific delay after a target bucket closes.
@@ -29,6 +33,10 @@ func (p *CollectParams) SettleDelayOr(defaultDelay time.Duration) time.Duration 
 	}
 	if p == nil || p.SettleDelayMS <= 0 {
 		return defaultDelay
+	}
+	maxDelayMS := int64(MaxResampleSettleDelay / time.Millisecond)
+	if p.SettleDelayMS > maxDelayMS {
+		return MaxResampleSettleDelay
 	}
 	return time.Duration(p.SettleDelayMS) * time.Millisecond
 }
@@ -97,6 +105,9 @@ func (p *CollectParams) ValidateKlineResample() error {
 	}
 	if p.SettleDelayMS < 0 {
 		return fmt.Errorf("settle_delay_ms must be non-negative")
+	}
+	if p.SettleDelayMS > int64(MaxResampleSettleDelay/time.Millisecond) {
+		return fmt.Errorf("settle_delay_ms must not exceed %d", int64(MaxResampleSettleDelay/time.Millisecond))
 	}
 	source, err := parseFixedFrequencyDuration(p.SourceFrequency)
 	if err != nil {
@@ -195,8 +206,9 @@ func parseFixedFrequencyDuration(raw string) (time.Duration, error) {
 	default:
 		return 0, fmt.Errorf("frequency must use m, h, or d")
 	}
-	if count > int64((30*24*time.Hour)/multiplier) {
-		return time.Duration(count) * multiplier, nil
+	maxCount := int64((30 * 24 * time.Hour) / multiplier)
+	if count > maxCount {
+		return 0, fmt.Errorf("frequency must not exceed 30 days")
 	}
 	return time.Duration(count) * multiplier, nil
 }
