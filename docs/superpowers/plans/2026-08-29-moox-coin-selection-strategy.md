@@ -1,5 +1,8 @@
 # MooX 选币策略执行框架详细实施计划
 
+> **已作废。** 本文对应旧设计（Factor 三层、UniverseSnapshot、多 Slot、Trade 冻结换算）。
+> 现行设计见 [选币策略执行框架设计](../../选币策略执行框架设计.md)。新实施计划待该文档确认后另写。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 将当前手工 `run-once + quantity` Strategy V1 重构为由 View Ready 事件驱动、支持多标的横截面选币、多组件和多调仓轮次，并最终向 Trade 输出目标权重的 Strategy V2。
