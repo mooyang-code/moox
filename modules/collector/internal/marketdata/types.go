@@ -73,6 +73,59 @@ type KlineSpec struct {
 	SupportsBatch     bool
 	TimestampMode     TimestampMode
 	RateLimit         RateLimitPolicy
+	History           KlineHistoryCapability
+}
+
+// KlineHistoryCapability describes how a provider handles a non-zero
+// StartTime. A provider without arbitrary-range support may only be used when
+// the requested start is inside MaxLookback and its response proves coverage.
+type KlineHistoryCapability struct {
+	SupportsArbitraryRange bool
+	MaxLookback            time.Duration
+}
+
+func (c KlineHistoryCapability) ValidateStart(now, start time.Time) error {
+	if start.IsZero() {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if start.After(now) {
+		return fmt.Errorf("%w: history start %s is after reference time %s", ErrHistoryOutOfRange, start.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano))
+	}
+	if c.SupportsArbitraryRange {
+		return nil
+	}
+	if c.MaxLookback <= 0 {
+		return fmt.Errorf("%w: provider does not declare a bounded history window", ErrHistoryOutOfRange)
+	}
+	if start.Before(now.Add(-c.MaxLookback)) {
+		return fmt.Errorf("%w: history start %s exceeds provider bounded lookback %s", ErrHistoryOutOfRange, start.UTC().Format(time.RFC3339Nano), c.MaxLookback)
+	}
+	return nil
+}
+
+func (c KlineHistoryCapability) ValidateCoverage(rows []NormalizedKline, start time.Time) error {
+	if start.IsZero() || c.SupportsArbitraryRange {
+		return nil
+	}
+	if len(rows) == 0 {
+		return fmt.Errorf("%w: provider returned no rows to prove bounded history coverage", ErrHistoryCoverage)
+	}
+	oldest, newest := rows[0].BarStart, rows[0].BarStart
+	for _, row := range rows[1:] {
+		if row.BarStart.Before(oldest) {
+			oldest = row.BarStart
+		}
+		if row.BarStart.After(newest) {
+			newest = row.BarStart
+		}
+	}
+	if oldest.After(start) || newest.Before(start) {
+		return fmt.Errorf("%w: provider response does not prove coverage at %s (range %s..%s)", ErrHistoryCoverage, start.UTC().Format(time.RFC3339Nano), oldest.UTC().Format(time.RFC3339Nano), newest.UTC().Format(time.RFC3339Nano))
+	}
+	return nil
 }
 
 func (s KlineSpec) Validate() error {

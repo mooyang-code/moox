@@ -17,6 +17,8 @@ var (
 	ErrNoClosedBar               = errors.New("no closed bar")
 	ErrUnsupportedSymbol         = errors.New("unsupported symbol")
 	ErrUnsupportedFrequency      = errors.New("unsupported frequency")
+	ErrHistoryOutOfRange         = errors.New("history request out of provider range")
+	ErrHistoryCoverage           = errors.New("history response coverage is unverified")
 	ErrInvalidRequest            = errors.New("invalid request")
 )
 
@@ -32,6 +34,8 @@ const (
 	ErrorKindUnsupportedSymbol    ErrorKind = "unsupported_symbol"
 	ErrorKindUnsupportedFrequency ErrorKind = "unsupported_frequency"
 	ErrorKindInvalidRequest       ErrorKind = "invalid_request"
+	ErrorKindHistoryOutOfRange    ErrorKind = "history_out_of_range"
+	ErrorKindHistoryCoverage      ErrorKind = "history_coverage"
 	ErrorKindContextCanceled      ErrorKind = "context_canceled"
 	ErrorKindDeadlineExceeded     ErrorKind = "deadline_exceeded"
 )
@@ -60,6 +64,10 @@ func ClassifyError(err error) ErrorKind {
 		return ErrorKindUnsupportedFrequency
 	case errors.Is(err, ErrInvalidRequest):
 		return ErrorKindInvalidRequest
+	case errors.Is(err, ErrHistoryOutOfRange):
+		return ErrorKindHistoryOutOfRange
+	case errors.Is(err, ErrHistoryCoverage):
+		return ErrorKindHistoryCoverage
 	default:
 		return ErrorKindUnknown
 	}
@@ -78,7 +86,7 @@ func CanFallback(ctx context.Context, err error) bool {
 		}
 	}
 	switch ClassifyError(err) {
-	case ErrorKindTimeout, ErrorKindRateLimited, ErrorKindHTTPStatus, ErrorKindProtocol, ErrorKindNoClosedBar:
+	case ErrorKindTimeout, ErrorKindRateLimited, ErrorKindHTTPStatus, ErrorKindProtocol, ErrorKindNoClosedBar, ErrorKindHistoryCoverage:
 		return true
 	default:
 		return false

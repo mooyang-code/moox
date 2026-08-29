@@ -139,7 +139,7 @@ func TestBuildGapAuditPlanNeverCrossesCoverageOrRepairFloor(t *testing.T) {
 	assert.Equal(t, now.Add(-20*time.Minute), plan.Start)
 }
 
-func TestBuildGapAuditPlanFailsClosedForStockHistory(t *testing.T) {
+func TestBuildGapAuditPlanAllowsVerifiedRecentStockHistory(t *testing.T) {
 	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
 	coverageStart := now.Add(-24 * time.Hour)
 	rule := domain.TaskRule{
@@ -148,8 +148,17 @@ func TestBuildGapAuditPlanFailsClosedForStockHistory(t *testing.T) {
 	}
 
 	plan, ok := buildGapAuditPlan(now, rule, domain.TaskInstance{SpaceID: StockCNSpaceID, Provider: "stock_cn_multi", Frequency: "1m"}, time.Time{}, false)
+	assert.True(t, ok)
+	assert.Equal(t, domain.BatchKindBackfill, plan.Kind)
+	assert.Equal(t, coverageStart, plan.Start)
+}
+
+func TestBuildGapAuditPlanFailsClosedWhenStockHistoryExceedsCapability(t *testing.T) {
+	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
+	rule := domain.TaskRule{Provider: "stock_cn_multi", MarketType: "equity", DataType: "kline", CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m","history_policy":{"mode":"lookback","lookback":6}}`}
+	_, ok, err := buildGapAuditPlanChecked(now, rule, domain.TaskInstance{SpaceID: StockCNSpaceID, Provider: "stock_cn_multi", Frequency: "1m"}, time.Time{}, false)
 	assert.False(t, ok)
-	assert.Zero(t, plan.Start)
+	assert.ErrorContains(t, err, "outside provider capability")
 }
 
 func TestGapAuditSeriesTagMatchesStockRowKey(t *testing.T) {

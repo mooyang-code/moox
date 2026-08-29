@@ -159,6 +159,14 @@ type Writer interface {
 	RegisterArchiveFile(ctx context.Context, item *pb.ArchiveFile) (*pb.ArchiveFile, error)
 }
 
+// DatasetSubjectSetWriter is the atomic publication contract for complete
+// instrument snapshots. Implementations must keep staged rows out of the
+// active DatasetSubject reader until activation commits.
+type DatasetSubjectSetWriter interface {
+	StageDatasetSubjectSet(ctx context.Context, spaceID, setID string, bindings []*pb.DatasetSubject) (int, error)
+	ActivateDatasetSubjectSet(ctx context.Context, spaceID, setID string) (int, error)
+}
+
 type ViewPeriodStateStore interface {
 	ListViewPeriodDatasetStates(ctx context.Context, spaceID, viewID, frequency string, periodTime int64) ([]*pb.ViewPeriodDatasetState, error)
 	MissingViewSyncPointDatasets(ctx context.Context, spaceID, viewID, requestID string, datasetIDs []string) ([]string, error)

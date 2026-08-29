@@ -23,6 +23,8 @@ type InstrumentStorage interface {
 	Storage
 	ListDatasetSubjects(context.Context, string, string) ([]*storagepb.DatasetSubject, error)
 	BindDatasetSubject(context.Context, *storagepb.DatasetSubject) error
+	StageDatasetSubjectSet(context.Context, string, string, []*storagepb.DatasetSubject) error
+	ActivateDatasetSubjectSet(context.Context, string, string) error
 }
 
 type InstrumentPipeline struct {
@@ -190,12 +192,99 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 		return err
 	default:
 	}
-	changes := activeInstrumentBindings(existing, targetExisting, present, datasetID, targetDatasetID, snapshot)
-	changes = append(changes, p.missingInstrumentBindings(existing, targetExisting, present, datasetID, targetDatasetID, snapshot)...)
-	if err := p.commitInstrumentBindings(ctx, changes); err != nil {
-		return fmt.Errorf("commit active instrument set %s: %w", snapshot.SnapshotID, err)
+	bindings := stagedInstrumentBindings(existing, targetExisting, present, datasetID, targetDatasetID, snapshot)
+	if err := p.Storage.StageDatasetSubjectSet(ctx, StockCNSpaceID, snapshot.SnapshotID, bindings); err != nil {
+		return fmt.Errorf("stage active instrument set %s: %w", snapshot.SnapshotID, err)
+	}
+	if err := p.Storage.ActivateDatasetSubjectSet(ctx, StockCNSpaceID, snapshot.SnapshotID); err != nil {
+		return fmt.Errorf("activate active instrument set %s: %w", snapshot.SnapshotID, err)
 	}
 	return nil
+}
+
+// stagedInstrumentBindings builds the full desired state for both datasets.
+// Every row is sent as one inactive staging set; the storage activation RPC
+// swaps both datasets in one transaction, so an interrupted snapshot cannot
+// expose a prefix of the new universe.
+func stagedInstrumentBindings(existing, targetExisting []*storagepb.DatasetSubject, present map[string]marketdata.Instrument, datasetID, targetDatasetID string, snapshot marketdata.InstrumentSnapshot) []*storagepb.DatasetSubject {
+	desired := make(map[string]*storagepb.DatasetSubject, len(existing)+len(targetExisting)+len(present)*2)
+	for _, membership := range append(append([]*storagepb.DatasetSubject(nil), existing...), targetExisting...) {
+		if membership == nil {
+			continue
+		}
+		key := membership.GetDatasetId() + "\x00" + membership.GetSubjectId()
+		desired[key] = proto.Clone(membership).(*storagepb.DatasetSubject)
+	}
+	setPresent := func(dataset, role, subjectID string) *storagepb.DatasetSubject {
+		key := dataset + "\x00" + subjectID
+		item := desired[key]
+		if item == nil {
+			item = &storagepb.DatasetSubject{SpaceId: StockCNSpaceID, DatasetId: dataset, SubjectId: subjectID, SubjectRole: role}
+			desired[key] = item
+		}
+		item.Status = "active"
+		item.Attributes = cloneAttributes(item.GetAttributes())
+		item.Attributes["active_instrument_set_version"] = snapshot.SnapshotID
+		if dataset == datasetID {
+			item.Attributes["missing_complete_snapshot_count"] = "0"
+			delete(item.Attributes, "last_missing_snapshot_id")
+			delete(item.Attributes, "last_missing_snapshot_date")
+		}
+		return item
+	}
+	subjectIDs := make([]string, 0, len(present))
+	for subjectID := range present {
+		subjectIDs = append(subjectIDs, subjectID)
+	}
+	sort.Strings(subjectIDs)
+	for _, subjectID := range subjectIDs {
+		setPresent(datasetID, "record", subjectID)
+		setPresent(targetDatasetID, "normal", subjectID)
+	}
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		location = time.FixedZone("CST", 8*60*60)
+	}
+	missingDate := snapshot.FetchedAt.In(location).Format("2006-01-02")
+	for _, membership := range existing {
+		if membership == nil || !strings.EqualFold(membership.GetStatus(), "active") {
+			continue
+		}
+		if _, ok := present[membership.GetSubjectId()]; ok {
+			continue
+		}
+		key := membership.GetDatasetId() + "\x00" + membership.GetSubjectId()
+		updated := desired[key]
+		updated.Attributes = cloneAttributes(updated.GetAttributes())
+		missingCount, _ := strconv.Atoi(updated.Attributes["missing_complete_snapshot_count"])
+		if updated.Attributes["last_missing_snapshot_date"] != missingDate {
+			missingCount++
+		}
+		updated.Attributes["missing_complete_snapshot_count"] = strconv.Itoa(missingCount)
+		updated.Attributes["last_missing_snapshot_id"] = snapshot.SnapshotID
+		updated.Attributes["last_missing_snapshot_date"] = missingDate
+		if missingCount >= 2 {
+			updated.Status = "disabled"
+			targetKey := targetDatasetID + "\x00" + membership.GetSubjectId()
+			target := desired[targetKey]
+			if target == nil {
+				target = proto.Clone(updated).(*storagepb.DatasetSubject)
+			}
+			target.DatasetId = targetDatasetID
+			target.SubjectRole = "normal"
+			desired[targetKey] = target
+		}
+	}
+	keys := make([]string, 0, len(desired))
+	for key := range desired {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	bindings := make([]*storagepb.DatasetSubject, 0, len(keys))
+	for _, key := range keys {
+		bindings = append(bindings, desired[key])
+	}
+	return bindings
 }
 
 type instrumentBindingChange struct {

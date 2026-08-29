@@ -554,22 +554,24 @@ func validateTaskRule(rule domain.TaskRule) error {
 	if err := params.Validate(); err != nil {
 		return fmt.Errorf("invalid collect_params: %w", err)
 	}
-	if strings.EqualFold(strings.TrimSpace(params.Provider), "stock_cn_multi") && params.HistoryPolicy.Mode != domain.HistoryModeLiveOnly {
-		return fmt.Errorf("stock_cn kline collector only supports live_only history mode")
+	if strings.EqualFold(params.Provider, "stock_cn_multi") && !strings.EqualFold(params.Collector.DataType, "kline") {
+		return fmt.Errorf("stock_cn_multi only supports kline collectors")
 	}
-	definition, ok := jobs.JobDefinitionByDataType(params.Collector.DataType)
-	if !ok || !definition.ExecutionMode.Valid() || !definition.Matches(params) {
-		return fmt.Errorf(
-			"unsupported collector: exchange=%s market=%s data_type=%s source_kind=%s",
-			params.Collector.Exchange,
-			params.Collector.Market,
-			params.Collector.DataType,
-			params.Source.Kind,
-		)
-	}
-	if definition.ExecutionMode == jobs.ExecutionModeCloudInvoke {
-		if _, routeOK := jobs.JobRouteFor(params.Collector.Exchange, params.Collector.DataType); !routeOK {
-			return fmt.Errorf("cloud collector route not found: exchange=%s data_type=%s", params.Collector.Exchange, params.Collector.DataType)
+	if !strings.EqualFold(params.Provider, "stock_cn_multi") {
+		definition, ok := jobs.JobDefinitionByDataType(params.Collector.DataType)
+		if !ok || !definition.ExecutionMode.Valid() || !definition.Matches(params) {
+			return fmt.Errorf(
+				"unsupported collector: exchange=%s market=%s data_type=%s source_kind=%s",
+				params.Collector.Exchange,
+				params.Collector.Market,
+				params.Collector.DataType,
+				params.Source.Kind,
+			)
+		}
+		if definition.ExecutionMode == jobs.ExecutionModeCloudInvoke {
+			if _, routeOK := jobs.JobRouteFor(params.Collector.Exchange, params.Collector.DataType); !routeOK {
+				return fmt.Errorf("cloud collector route not found: exchange=%s data_type=%s", params.Collector.Exchange, params.Collector.DataType)
+			}
 		}
 	}
 	if !strings.EqualFold(rule.Provider, params.Provider) ||

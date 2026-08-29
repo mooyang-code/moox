@@ -53,6 +53,7 @@ func (*Provider) KlineSpec() marketdata.KlineSpec {
 		HasAmount:         false,
 		MaxBarsPerRequest: 320,
 		TimestampMode:     marketdata.TimestampModeClose,
+		History:           marketdata.KlineHistoryCapability{MaxLookback: 2 * 24 * time.Hour},
 		RateLimit: marketdata.RateLimitPolicy{
 			RequestsPerSecond: 5,
 			Burst:             2,

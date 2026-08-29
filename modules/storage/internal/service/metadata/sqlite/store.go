@@ -142,7 +142,7 @@ func (s *Store) ValidateSchemaVersion(ctx context.Context) error {
 	return nil
 }
 
-const metadataSchemaVersion = "9"
+const metadataSchemaVersion = "10"
 
 func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	var schemaTableCount int
@@ -188,6 +188,12 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 		}
 		return nil
 	}
+	if err == nil && version == "9" {
+		if migrateErr := s.migrateV9ToV10(ctx); migrateErr != nil {
+			return migrateErr
+		}
+		return nil
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return errors.New("incompatible storage metadata schema; reset metadata database")
 	}
@@ -195,6 +201,32 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 		return fmt.Errorf("incompatible storage metadata schema v%s; remove the metadata database and run init/import-seed", version)
 	}
 	return err
+}
+
+func (s *Store) migrateV9ToV10(ctx context.Context) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS t_dataset_subject_set_staging (
+			c_space_id TEXT NOT NULL, c_set_id TEXT NOT NULL, c_dataset_id TEXT NOT NULL,
+			c_subject_id TEXT NOT NULL, c_subject_role TEXT NOT NULL DEFAULT 'normal',
+			c_effective_start_time DATETIME NOT NULL DEFAULT '', c_effective_end_time DATETIME NOT NULL DEFAULT '',
+			c_status TEXT NOT NULL DEFAULT 'building', c_active_status TEXT NOT NULL DEFAULT 'active',
+			c_attrs_json TEXT NOT NULL DEFAULT '{}', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			CHECK (c_status = 'building'),
+			CHECK (c_active_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
+			CHECK (c_subject_role IN ('normal', 'benchmark', 'index', 'universe_member', 'record')),
+			FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE,
+			FOREIGN KEY (c_space_id, c_subject_id) REFERENCES t_subjects (c_space_id, c_subject_id) ON DELETE CASCADE ON UPDATE CASCADE,
+			PRIMARY KEY (c_space_id, c_set_id, c_dataset_id, c_subject_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_t_dataset_subject_set_staging_set ON t_dataset_subject_set_staging (c_space_id, c_set_id)`,
+		`UPDATE t_schema_meta SET c_value = '10' WHERE c_key = 'schema_version'`,
+	}
+	for _, statement := range statements {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("migrate metadata schema v9 to v10: %w", err)
+		}
+	}
+	return nil
 }
 
 // migrateV6ToV7 is the only additive metadata migration in this release. It

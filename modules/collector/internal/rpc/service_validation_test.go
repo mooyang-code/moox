@@ -77,12 +77,12 @@ func TestValidateTaskRuleAcceptsCollectorLocalResampleWithoutCloudRoute(t *testi
 	require.NoError(t, validateTaskRule(rule))
 }
 
-func TestValidateTaskRuleRejectsUnsupportedStockHistoryMode(t *testing.T) {
+func TestValidateTaskRuleAcceptsBoundedStockHistoryMode(t *testing.T) {
 	rule := domain.TaskRule{
 		SpaceID: "stock_cn", RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity",
 		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m","history_policy":{"mode":"lookback","lookback":5}}`,
 	}
-	require.ErrorContains(t, validateTaskRule(rule), "only supports live_only")
+	require.NoError(t, validateTaskRule(rule))
 }
 
 func TestPreserveTaskRuleCoverageStartOnOrdinaryUpdate(t *testing.T) {

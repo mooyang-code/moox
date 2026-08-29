@@ -14,6 +14,7 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
@@ -447,8 +448,8 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 						watermark = instance.LastExecTime.UTC()
 						found = true
 					}
-					result.plan, result.stale = buildGapAuditPlan(now, rule, instance, watermark, found)
-					if result.stale {
+					result.plan, result.stale, result.err = buildGapAuditPlanChecked(now, rule, instance, watermark, found)
+					if result.err != nil || result.stale {
 						results <- result
 					}
 					continue
@@ -466,19 +467,22 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 					})
 					storageErr = watermarkErr
 					if storageErr == nil && found && !watermark.IsZero() {
-						result.plan, result.stale = buildGapAuditPlan(now, rule, instance, watermark.UTC(), true)
+						result.plan, result.stale, result.err = buildGapAuditPlanChecked(now, rule, instance, watermark.UTC(), true)
 					} else if storageErr == nil {
 						watermark, found := time.Time{}, false
 						if instance.LastExecTime != nil && !instance.LastExecTime.IsZero() {
 							watermark = instance.LastExecTime.UTC()
 							found = true
 						}
-						result.plan, result.stale = buildGapAuditPlan(now, rule, instance, watermark, found)
+						result.plan, result.stale, result.err = buildGapAuditPlanChecked(now, rule, instance, watermark, found)
 					}
 				}
 				cancel()
 				if storageErr != nil {
 					result.err = storageErr
+				}
+				if result.err != nil {
+					results <- result
 				} else if result.stale && (result.plan.Start.IsZero() || now.Sub(result.plan.Start) < threshold) {
 					result.stale = false
 				} else if result.stale {
@@ -528,9 +532,16 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 	return nil
 }
 
+const stockCNHistoryMaxLookback = 5 * 24 * time.Hour
+
 func buildGapAuditPlan(now time.Time, rule domain.TaskRule, instance domain.TaskInstance, watermark time.Time, found bool) (gapAuditPlan, bool) {
+	plan, stale, _ := buildGapAuditPlanChecked(now, rule, instance, watermark, found)
+	return plan, stale
+}
+
+func buildGapAuditPlanChecked(now time.Time, rule domain.TaskRule, instance domain.TaskInstance, watermark time.Time, found bool) (gapAuditPlan, bool, error) {
 	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
-	if err != nil || params == nil || params.HistoryPolicy == nil {
+	if strings.TrimSpace(rule.CollectParams) == "" {
 		params = &domain.CollectParams{HistoryPolicy: &domain.HistoryPolicy{
 			Mode:              domain.HistoryModeLiveOnly,
 			BatchBarLimit:     domain.DefaultHistoryBatchBarLimit,
@@ -538,6 +549,16 @@ func buildGapAuditPlan(now time.Time, rule domain.TaskRule, instance domain.Task
 			GapRepairLookback: domain.DefaultHistoryGapRepairLookback,
 			RateBudgetRatio:   domain.DefaultHistoryRateBudgetRatio,
 		}}
+		err = nil
+	}
+	if err != nil {
+		return gapAuditPlan{}, false, fmt.Errorf("parse history policy: %w", err)
+	}
+	if params == nil || params.HistoryPolicy == nil {
+		return gapAuditPlan{}, false, fmt.Errorf("history policy is not configured")
+	}
+	if err := params.ValidateHistoryPolicy(); err != nil {
+		return gapAuditPlan{}, false, fmt.Errorf("validate history policy: %w", err)
 	}
 	plan := gapAuditPlan{BarLimit: params.HistoryPolicy.BatchBarLimit, MaxConcurrency: params.HistoryPolicy.MaxConcurrency}
 	if plan.BarLimit <= 0 {
@@ -551,14 +572,25 @@ func buildGapAuditPlan(now time.Time, rule domain.TaskRule, instance domain.Task
 	if rule.CoverageStartTime != nil && !rule.CoverageStartTime.IsZero() {
 		start = rule.CoverageStartTime.UTC()
 	}
-	if start.IsZero() {
-		return gapAuditPlan{}, false
+	policyStart, err := historyPolicyStart(now.UTC(), params.HistoryPolicy)
+	if err != nil {
+		return gapAuditPlan{}, false, err
 	}
-	// Stock providers currently expose a rolling latest-N window and do not
-	// honor StartTime. Do not schedule historical work until the executor has a
-	// provider-backed trading-bar boundary it can actually enforce.
-	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) {
-		return gapAuditPlan{}, false
+	capability := marketdata.KlineHistoryCapability{SupportsArbitraryRange: true}
+	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stock_cn_multi") {
+		capability = marketdata.KlineHistoryCapability{MaxLookback: stockCNHistoryMaxLookback}
+	}
+	for name, requested := range map[string]time.Time{"history": policyStart, "coverage": start, "repair": gapRepairFloor(now, params)} {
+		if requested.IsZero() {
+			continue
+		}
+		if err := capability.ValidateStart(now.UTC(), requested); err != nil {
+			return gapAuditPlan{}, false, fmt.Errorf("%s boundary is outside provider capability: %w", name, err)
+		}
+	}
+	start = laterTime(start, policyStart)
+	if start.IsZero() {
+		return gapAuditPlan{}, false, nil
 	}
 	if found && !watermark.IsZero() {
 		plan.Kind = domain.BatchKindGapRepair
@@ -569,12 +601,35 @@ func buildGapAuditPlan(now time.Time, rule domain.TaskRule, instance domain.Task
 	start = laterTime(start, gapRepairFloor(now, params))
 	plan.Start = start
 	if plan.Start.IsZero() {
-		return gapAuditPlan{}, false
+		return gapAuditPlan{}, false, nil
 	}
 	if plan.Kind == domain.BatchKindGapRepair {
-		return plan, now.Sub(plan.Start) >= threshold
+		return plan, now.Sub(plan.Start) >= threshold, nil
 	}
-	return plan, now.After(plan.Start)
+	return plan, now.After(plan.Start), nil
+}
+
+func historyPolicyStart(now time.Time, policy *domain.HistoryPolicy) (time.Time, error) {
+	if policy == nil {
+		return time.Time{}, fmt.Errorf("history policy is required")
+	}
+	switch policy.Mode {
+	case domain.HistoryModeLiveOnly:
+		return time.Time{}, nil
+	case domain.HistoryModeLookback:
+		if policy.Lookback <= 0 {
+			return time.Time{}, fmt.Errorf("history lookback must be positive")
+		}
+		return now.Add(-time.Duration(policy.Lookback) * 24 * time.Hour), nil
+	case domain.HistoryModeSince:
+		start, err := time.Parse(time.RFC3339, policy.Since)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("parse history since %q: %w", policy.Since, err)
+		}
+		return start.UTC(), nil
+	default:
+		return time.Time{}, fmt.Errorf("unsupported history mode %q", policy.Mode)
+	}
 }
 
 func gapAuditSeriesTag(instance domain.TaskInstance) string {

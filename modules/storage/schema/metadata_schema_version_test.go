@@ -18,7 +18,7 @@ func TestMetadataSchemaV9Contract(t *testing.T) {
 	}
 	text := string(sql)
 	for _, want := range []string{
-		"VALUES ('schema_version', '9')",
+		"VALUES ('schema_version', '10')",
 		"CREATE TABLE IF NOT EXISTS t_data_nodes",
 		"c_node_id TEXT NOT NULL",
 		"c_name TEXT NOT NULL",

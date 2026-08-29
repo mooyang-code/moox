@@ -31,6 +31,8 @@ type BatchStorage interface {
 	RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error
 	ListDatasetSubjects(context.Context, string, string) ([]*storagepb.DatasetSubject, error)
 	BindDatasetSubject(context.Context, *storagepb.DatasetSubject) error
+	StageDatasetSubjectSet(context.Context, string, string, []*storagepb.DatasetSubject) error
+	ActivateDatasetSubjectSet(context.Context, string, string) error
 }
 
 // ResampleStorage is the PrimaryStore subset used by Collector-local K-line
@@ -370,6 +372,30 @@ func (w *storageWriter) BindDatasetSubject(ctx context.Context, item *storagepb.
 			return fmt.Errorf("bind dataset subject: %w", err)
 		}
 		return ensureStorageOK("bind dataset subject", rsp.GetRetInfo())
+	})
+}
+
+func (w *storageWriter) StageDatasetSubjectSet(ctx context.Context, spaceID, setID string, bindings []*storagepb.DatasetSubject) error {
+	return retryMetadataStorage(ctx, func() error {
+		rsp, err := w.metadata.StageDatasetSubjectSet(ctx, &storagepb.StageDatasetSubjectSetReq{
+			AuthInfo: w.authInfo, SpaceId: spaceID, SetId: setID, DatasetSubjects: bindings,
+		})
+		if err != nil {
+			return fmt.Errorf("stage dataset subject set: %w", err)
+		}
+		return ensureStorageOK("stage dataset subject set", rsp.GetRetInfo())
+	})
+}
+
+func (w *storageWriter) ActivateDatasetSubjectSet(ctx context.Context, spaceID, setID string) error {
+	return retryMetadataStorage(ctx, func() error {
+		rsp, err := w.metadata.ActivateDatasetSubjectSet(ctx, &storagepb.ActivateDatasetSubjectSetReq{
+			AuthInfo: w.authInfo, SpaceId: spaceID, SetId: setID,
+		})
+		if err != nil {
+			return fmt.Errorf("activate dataset subject set: %w", err)
+		}
+		return ensureStorageOK("activate dataset subject set", rsp.GetRetInfo())
 	})
 }
 

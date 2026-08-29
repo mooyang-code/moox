@@ -55,7 +55,7 @@ func (p pipelineProvider) KlineSpec() marketdata.KlineSpec {
 	if p.rateLimit != nil {
 		rateLimit = *p.rateLimit
 	}
-	return marketdata.KlineSpec{Markets: []string{"stock_cn"}, Exchanges: []string{"XSHG"}, Frequencies: []string{"1m"}, CompleteOHLCV: true, HasAmount: true, MaxBarsPerRequest: 3, TimestampMode: marketdata.TimestampModeOpen, RateLimit: rateLimit}
+	return marketdata.KlineSpec{Markets: []string{"stock_cn"}, Exchanges: []string{"XSHG"}, Frequencies: []string{"1m"}, CompleteOHLCV: true, HasAmount: true, MaxBarsPerRequest: 3, TimestampMode: marketdata.TimestampModeOpen, RateLimit: rateLimit, History: marketdata.KlineHistoryCapability{MaxLookback: 7 * 24 * time.Hour}}
 }
 
 func (p pipelineProvider) FetchKlines(ctx context.Context, req marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
@@ -107,6 +107,22 @@ func TestKlinePipelineSharesInvocationBreakerAcrossThirtySubjectsAndKeepsFallbac
 	require.Len(t, pipeline.Storage.(*pipelineStorage).rows, 30)
 	require.Equal(t, int32(2), atomic.LoadInt32(&firstCalls))
 	require.Equal(t, int32(30), atomic.LoadInt32(&fallbackCalls))
+}
+
+func TestKlinePipelineRejectsRollingHistoryWithoutProvenCoverage(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	recent := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: now.Add(-time.Minute), BarEnd: now, Open: 1, High: 1, Low: 1, Close: 1, VolumeShares: 1, AmountCNY: 1, ProviderTimestamp: now, FetchedAt: now, RequestID: "history"}
+	registry := marketdata.NewRegistry()
+	for _, id := range []string{"sina", "tencent"} {
+		require.NoError(t, registry.Register(pipelineProvider{id: id, rows: []marketdata.NormalizedKline{recent}}))
+	}
+	router, err := marketdata.NewRouter(registry, 3, pipelineClock{now}, nil)
+	require.NoError(t, err)
+	pipeline := &KlinePipeline{Router: router, Storage: &pipelineStorage{}, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
+	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "history", BatchKind: domain.BatchKindGapRepair, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "history", Items: []domain.CollectionItem{{SubjectID: recent.SubjectID, Symbol: recent.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: now.Add(-2 * time.Hour).Format(time.RFC3339Nano), BarLimit: 3}}})
+	require.NoError(t, err)
+	require.Equal(t, "failed", payload.GetStatus())
+	require.Contains(t, payload.GetErrorSummary(), "coverage")
 }
 
 type pipelineStorage struct {

@@ -1007,6 +1007,36 @@ message BindDatasetSubjectRsp {
   DatasetSubject dataset_subject = 2;
 }
 
+// StageDatasetSubjectSetReq stages a complete, inactive subject set. The
+// storage service keeps it out of t_dataset_subjects until activation.
+message StageDatasetSubjectSetReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string set_id = 3;
+  repeated DatasetSubject dataset_subjects = 4;
+}
+
+message StageDatasetSubjectSetRsp {
+  common.RetInfo ret_info = 1;
+  string set_id = 2;
+  uint32 count = 3;
+}
+
+// ActivateDatasetSubjectSet atomically replaces every Dataset covered by the
+// staged set and then removes the staging rows. Repeating the same set_id is
+// safe after a transport ambiguity because activation is idempotent.
+message ActivateDatasetSubjectSetReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string set_id = 3;
+}
+
+message ActivateDatasetSubjectSetRsp {
+  common.RetInfo ret_info = 1;
+  string set_id = 2;
+  uint32 count = 3;
+}
+
 // ListDatasetSubjectsReq 表示列出 Dataset 覆盖对象的请求。
 message ListDatasetSubjectsReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -1803,6 +1833,10 @@ service Metadata {
   rpc ActivateDataset(ActivateDatasetReq) returns (ActivateDatasetRsp);
   // 为 Dataset 绑定 Subject。
   rpc BindDatasetSubject(BindDatasetSubjectReq) returns (BindDatasetSubjectRsp);
+  // 原子 staging 完整 Dataset Subject 集合。
+  rpc StageDatasetSubjectSet(StageDatasetSubjectSetReq) returns (StageDatasetSubjectSetRsp);
+  // 原子激活已完整 staging 的 Dataset Subject 集合。
+  rpc ActivateDatasetSubjectSet(ActivateDatasetSubjectSetReq) returns (ActivateDatasetSubjectSetRsp);
   // 列出 Dataset 覆盖的 Subject。
   rpc ListDatasetSubjects(ListDatasetSubjectsReq) returns (ListDatasetSubjectsRsp);
 

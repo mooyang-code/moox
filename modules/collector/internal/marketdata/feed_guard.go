@@ -354,6 +354,11 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 			s.breaker.Observe(providerID, err)
 			return nil, err
 		}
+		if err := fetcher.KlineSpec().History.ValidateStart(req.Now, req.StartTime); err != nil {
+			s.breaker.Observe(providerID, err)
+			lastErr = err
+			continue
+		}
 
 		guard, err := s.router.feedGuard(providerID, fetcher.KlineSpec().RateLimit)
 		if err != nil {
@@ -383,6 +388,19 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 		lastErr = ErrProviderNotFound
 	}
 	return nil, lastErr
+}
+
+// KlineSpec returns the immutable capability declaration for one provider in
+// this session. Callers use it to validate response coverage after fetching.
+func (s *RouterSession) KlineSpec(providerID string) (KlineSpec, error) {
+	if s == nil || s.router == nil || s.router.registry == nil {
+		return KlineSpec{}, fmt.Errorf("%w: router session is nil", ErrInvalidRequest)
+	}
+	fetcher, err := s.router.registry.KlineFetcher(strings.TrimSpace(providerID))
+	if err != nil {
+		return KlineSpec{}, err
+	}
+	return fetcher.KlineSpec(), nil
 }
 
 func (r *Router) feedGuard(providerID string, policy RateLimitPolicy) (*FeedGuard, error) {

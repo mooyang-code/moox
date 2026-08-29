@@ -78,6 +78,7 @@ func (*MarketDataAdapter) KlineSpec() marketdata.KlineSpec {
 		MaxBarsPerRequest: 1000,
 		SupportsBatch:     false,
 		TimestampMode:     marketdata.TimestampModeOpen,
+		History:           marketdata.KlineHistoryCapability{SupportsArbitraryRange: true},
 		RateLimit: marketdata.RateLimitPolicy{
 			RequestsPerSecond: 5,
 			Burst:             5,

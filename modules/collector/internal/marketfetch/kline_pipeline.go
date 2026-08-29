@@ -174,6 +174,14 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 		rows, err := session.FetchKlines(attemptCtx, req, []string{provider})
 		cancel()
 		if err == nil {
+			spec, specErr := session.KlineSpec(provider)
+			if specErr != nil {
+				return nil, specErr
+			}
+			if coverageErr := spec.History.ValidateCoverage(rows, req.StartTime); coverageErr != nil {
+				lastErr = coverageErr
+				continue
+			}
 			return rows, nil
 		}
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
@@ -183,6 +191,10 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 			// A shared invocation breaker reports a provider skipped after its
 			// failure streak as ErrProviderNotFound. Keep the remaining budget
 			// for the next candidate instead of treating that skip as terminal.
+			lastErr = err
+			continue
+		}
+		if errors.Is(err, marketdata.ErrHistoryOutOfRange) || errors.Is(err, marketdata.ErrHistoryCoverage) {
 			lastErr = err
 			continue
 		}
