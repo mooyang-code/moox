@@ -8,7 +8,13 @@
 
 **Tech Stack:** Go 1.25、tRPC-Go Timer、SQLite/GORM、Storage Metadata/PrimaryStore RPC、`github.com/avast/retry-go`、NATS JetStream、Prometheus、Vue 3、TypeScript、Vitest。
 
-> **执行状态（2026-08-29）：** Collector 控制面、resample worker、PeriodReadiness、动态 View 接入、规则页面、模块级 E2E、生产二进制升级及 5m 目标 View 查询已完成。生产环境当前在源数据缺失的历史桶按合同保持 `waiting_source` 并自动重试；因此“源数据补齐后新实时桶继续推进”的最终闭环仍待源数据修复后复核，本计划中的“真实 Storage E2E”不以本地 fake 测试替代。
+> **执行状态（2026-08-29）：** Collector 控制面、resample worker、PeriodReadiness、动态 View 接入、规则页面、模块级 E2E、生产二进制升级及真实 5m 目标 View 查询已完成。生产验证已覆盖历史桶与源数据持续到达后的新实时桶：`spot_kline_derived_5m` 的 BTC-USDT 任务从 13:25 推进到 13:30，Primary 与 View 的最新 bucket 一致；源数据缺失的其他历史桶仍按合同保持 `waiting_source` 并自动重试。旧的卡住规则已禁用，隔离验证规则 `builtin-binance-spot-kline-resample-e2e-5m` 保持 `enabled/ready`。
+
+**最终验证记录（2026-08-29）：**
+
+- 本地发布包 `release/moox-20260829-resample-final-linux-amd64.tar.gz` 已生成，包含 Collector、Storage、EventBus 等运行时二进制；`git diff --check`、Collector/Storage 模块测试及独立 `codeCR` 均通过。
+- 生产 Collector 使用当前构建运行；Storage View 使用 CGO-enabled 构建运行，避免 DuckDB 运行时能力缺失。生产健康检查显示 Collector、Storage Primary/View/Node、EventBus 等就绪（Factor 的既有 not-ready 状态与本变更无关）。
+- 真实 5m 校验：1m 源窗口 `[13:25,13:30)` 聚合出的 OHLCV 与 `spot_kline_derived_5m` Primary 行逐字段相等；任务结果为 `idle`，`last_success_bucket=13:30`。View smoke 同时读到 3 行，Primary/View 最新时间均为 `2026-08-29T13:30:00Z`，最新行字段完全一致。
 
 ---
 
