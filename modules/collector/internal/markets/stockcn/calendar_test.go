@@ -1,6 +1,7 @@
 package stockcn
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -22,22 +23,74 @@ func TestCalendarHonorsHolidayMiddayAndHorizon(t *testing.T) {
 	require.False(t, calendar.IsOpen(midday))
 }
 
+func TestCalendarContainsEveryOfficial2026WeekdayClosure(t *testing.T) {
+	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
+	require.NoError(t, err)
+	location := calendar.Location()
+	for _, date := range []string{
+		"2026-01-01", "2026-01-02",
+		"2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20", "2026-02-23",
+		"2026-04-06",
+		"2026-05-01", "2026-05-04", "2026-05-05",
+		"2026-06-19",
+		"2026-09-25",
+		"2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07",
+	} {
+		day, parseErr := time.ParseInLocation("2006-01-02 15:04", date+" 10:00", location)
+		require.NoError(t, parseErr)
+		require.Falsef(t, calendar.IsOpen(day), "%s must be closed", date)
+	}
+}
+
+func TestCalendarHorizonDistinguishesWarningFromExpired(t *testing.T) {
+	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
+	require.NoError(t, err)
+	location := calendar.Location()
+
+	err = calendar.CheckHorizon(time.Date(2026, 12, 20, 10, 0, 0, 0, location), 14)
+	require.ErrorIs(t, err, ErrCalendarExpiringSoon)
+	require.False(t, errors.Is(err, ErrCalendarExpired))
+	require.NoError(t, calendar.ValidateHorizon(time.Date(2026, 12, 20, 10, 0, 0, 0, location), 14))
+
+	err = calendar.CheckHorizon(time.Date(2026, 12, 31, 14, 59, 0, 0, location), 14)
+	require.ErrorIs(t, err, ErrCalendarExpiringSoon)
+
+	err = calendar.CheckHorizon(time.Date(2027, 1, 1, 0, 0, 0, 0, location), 14)
+	require.ErrorIs(t, err, ErrCalendarExpired)
+	require.ErrorIs(t, calendar.ValidateHorizon(time.Date(2027, 1, 1, 0, 0, 0, 0, location), 14), ErrCalendarExpired)
+}
+
+func TestCalendarHorizonWarningIsLimitedToOncePerLocalDay(t *testing.T) {
+	coverage := t.Name()
+	require.True(t, shouldLogHorizonWarning(coverage, "2026-12-20"))
+	require.False(t, shouldLogHorizonWarning(coverage, "2026-12-20"))
+	require.True(t, shouldLogHorizonWarning(coverage, "2026-12-21"))
+}
+
+func TestCalendarFailsClosedOutsideConfiguredCoverage(t *testing.T) {
+	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
+	require.NoError(t, err)
+	location := calendar.Location()
+	require.False(t, calendar.IsOpen(time.Date(2025, 1, 1, 10, 0, 0, 0, location)))
+	require.False(t, calendar.IsOpen(time.Date(2027, 1, 4, 10, 0, 0, 0, location)))
+}
+
 func TestCalendarTradingDaysAndExpectedBars(t *testing.T) {
 	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
 	require.NoError(t, err)
 
 	location, err := time.LoadLocation("Asia/Shanghai")
 	require.NoError(t, err)
-	start := time.Date(2026, 1, 1, 0, 0, 0, 0, location)
-	end := start.AddDate(0, 0, 3)
+	start := time.Date(2026, 1, 5, 0, 0, 0, 0, location)
+	end := start.AddDate(0, 0, 1)
 
 	days, err := calendar.TradingDays(start, end)
 	require.NoError(t, err)
 	require.Len(t, days, 1)
-	require.Equal(t, "2026-01-02", days[0].TradeDate)
+	require.Equal(t, "2026-01-05", days[0].TradeDate)
 	require.Len(t, days[0].Sessions, 2)
 
-	bars, err := calendar.ExpectedMinuteBars("2026-01-02")
+	bars, err := calendar.ExpectedMinuteBars("2026-01-05")
 	require.NoError(t, err)
 	require.Len(t, bars, 240)
 

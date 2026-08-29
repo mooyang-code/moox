@@ -45,9 +45,6 @@ func NewFeedGuard(policy RateLimitPolicy, clock Clock, sleep SleepFunc) (*FeedGu
 	if clock == nil {
 		clock = realClock{}
 	}
-	if sleep == nil {
-		sleep = time.Sleep
-	}
 	return &FeedGuard{
 		policy: policy,
 		clock:  clock,
@@ -57,10 +54,6 @@ func NewFeedGuard(policy RateLimitPolicy, clock Clock, sleep SleepFunc) (*FeedGu
 }
 
 func (g *FeedGuard) Do(ctx context.Context, fn func(context.Context) error) error {
-	if err := g.wait(ctx); err != nil {
-		return err
-	}
-
 	select {
 	case g.sem <- struct{}{}:
 	case <-ctx.Done():
@@ -69,6 +62,9 @@ func (g *FeedGuard) Do(ctx context.Context, fn func(context.Context) error) erro
 	defer func() {
 		<-g.sem
 	}()
+	if err := g.wait(ctx); err != nil {
+		return err
+	}
 
 	requestCtx, cancel := context.WithTimeout(ctx, g.policy.RequestTimeout)
 	defer cancel()
@@ -84,6 +80,9 @@ func (g *FeedGuard) Do(ctx context.Context, fn func(context.Context) error) erro
 
 func (g *FeedGuard) wait(ctx context.Context) error {
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		now := g.clock.Now()
 
 		g.mu.Lock()
@@ -104,6 +103,10 @@ func (g *FeedGuard) wait(ctx context.Context) error {
 				}
 			}
 			if g.tokens >= 1 {
+				if err := ctx.Err(); err != nil {
+					g.mu.Unlock()
+					return err
+				}
 				g.tokens--
 				g.mu.Unlock()
 				return nil
@@ -118,10 +121,24 @@ func (g *FeedGuard) wait(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		g.sleep(wait)
-		if err := ctx.Err(); err != nil {
+		if err := g.waitDuration(ctx, wait); err != nil {
 			return err
 		}
+	}
+}
+
+func (g *FeedGuard) waitDuration(ctx context.Context, wait time.Duration) error {
+	if g.sleep != nil {
+		g.sleep(wait)
+		return ctx.Err()
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -162,6 +179,8 @@ func (b *InvocationBreaker) NewSession() *InvocationBreakerSession {
 	return &InvocationBreakerSession{
 		threshold: b.threshold,
 		streaks:   make(map[string]int),
+		inFlight:  make(map[string]int),
+		notify:    make(chan struct{}),
 	}
 }
 
@@ -169,6 +188,30 @@ type InvocationBreakerSession struct {
 	mu        sync.Mutex
 	threshold int
 	streaks   map[string]int
+	inFlight  map[string]int
+	notify    chan struct{}
+}
+
+func (s *InvocationBreakerSession) Admit(ctx context.Context, providerID string) bool {
+	for {
+		s.mu.Lock()
+		if s.streaks[providerID] >= s.threshold {
+			s.mu.Unlock()
+			return false
+		}
+		if s.streaks[providerID]+s.inFlight[providerID] < s.threshold {
+			s.inFlight[providerID]++
+			s.mu.Unlock()
+			return true
+		}
+		notify := s.notify
+		s.mu.Unlock()
+		select {
+		case <-notify:
+		case <-ctx.Done():
+			return false
+		}
+	}
 }
 
 func (s *InvocationBreakerSession) ShouldSkip(providerID string) bool {
@@ -180,6 +223,13 @@ func (s *InvocationBreakerSession) ShouldSkip(providerID string) bool {
 func (s *InvocationBreakerSession) Observe(providerID string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		close(s.notify)
+		s.notify = make(chan struct{})
+	}()
+	if s.inFlight[providerID] > 0 {
+		s.inFlight[providerID]--
+	}
 	if err == nil {
 		s.streaks[providerID] = 0
 		return
@@ -196,6 +246,10 @@ func isBreakerFailure(err error) bool {
 		return false
 	}
 	switch {
+	case errors.Is(err, ErrTimeout):
+		return true
+	case errors.Is(err, context.DeadlineExceeded):
+		return true
 	case errors.Is(err, ErrRateLimited):
 		return true
 	case errors.Is(err, ErrProtocol):
@@ -240,9 +294,6 @@ func NewRouter(registry *Registry, breakerThreshold int, clock Clock, sleep Slee
 	}
 	if clock == nil {
 		clock = realClock{}
-	}
-	if sleep == nil {
-		sleep = time.Sleep
 	}
 	return &Router{
 		registry:       registry,
@@ -291,17 +342,22 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 			lastErr = fmt.Errorf("%w: empty provider id in candidate chain", ErrInvalidRequest)
 			continue
 		}
-		if s.breaker.ShouldSkip(providerID) {
+		if !s.breaker.Admit(ctx, providerID) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			continue
 		}
 
 		fetcher, err := s.router.registry.KlineFetcher(providerID)
 		if err != nil {
+			s.breaker.Observe(providerID, err)
 			return nil, err
 		}
 
 		guard, err := s.router.feedGuard(providerID, fetcher.KlineSpec().RateLimit)
 		if err != nil {
+			s.breaker.Observe(providerID, err)
 			return nil, err
 		}
 

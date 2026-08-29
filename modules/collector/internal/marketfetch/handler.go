@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
@@ -188,12 +189,15 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 	if h.Execute != nil {
 		payload, err = h.Execute(budgetCtx, req, storage)
 	} else if req.SpaceID == StockCNSpaceID {
-		pipeline, pipelineErr := NewStockKlinePipeline(storage)
+		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)
+		defer workCancel()
+		stockStorage := &reservedDeadlineStorage{Storage: storage, parent: budgetCtx, timeout: storageTimeout}
+		pipeline, pipelineErr := NewStockKlinePipeline(stockStorage)
 		if pipelineErr != nil {
 			return nil, pipelineErr
 		}
 		pipeline.Now = h.Now
-		payload, err = pipeline.Execute(budgetCtx, req)
+		payload, err = pipeline.Execute(workCtx, req)
 	} else {
 		executor := &Executor{Klines: binance.NewKlineCollector(), Catchup: binance.NewKlineCollector(), Symbols: binance.NewSymbolCollector(), Storage: storage, Now: h.Now, CommitReserve: commitReserve, StorageReserve: storageTimeout, Reporter: h.Reporter}
 		payload, err = executor.Execute(budgetCtx, req)
@@ -209,6 +213,58 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		}
 	}
 	return &model.Response{Success: payload.GetStatus() == "succeeded" || payload.GetStatus() == "partial_failed", Message: payload.GetStatus(), Data: payload, RequestID: req.RequestID, Timestamp: time.Now().UTC()}, nil
+}
+
+func contextWithReserve(parent context.Context, reserve time.Duration) (context.Context, context.CancelFunc) {
+	if reserve <= 0 {
+		return context.WithCancel(parent)
+	}
+	if deadline, ok := parent.Deadline(); ok {
+		workDeadline := deadline.Add(-reserve)
+		if workDeadline.Before(time.Now()) {
+			workDeadline = time.Now().Add(time.Millisecond)
+		}
+		return context.WithDeadline(parent, workDeadline)
+	}
+	return context.WithTimeout(parent, 8*time.Second)
+}
+
+type reservedDeadlineStorage struct {
+	Storage
+	parent  context.Context
+	timeout time.Duration
+}
+
+func (s *reservedDeadlineStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
+	ctx, cancel := s.storageContext()
+	defer cancel()
+	return s.Storage.UpsertFields(ctx, rows)
+}
+
+func (s *reservedDeadlineStorage) RegisterDataSubject(_ context.Context, req *storagepb.RegisterDataSubjectReq) error {
+	ctx, cancel := s.storageContext()
+	defer cancel()
+	return s.Storage.RegisterDataSubject(ctx, req)
+}
+
+func (s *reservedDeadlineStorage) UpsertFieldsWithSource(_ context.Context, rows []*storagepb.RowFieldUpsert, source string) error {
+	ctx, cancel := s.storageContext()
+	defer cancel()
+	if storage, ok := s.Storage.(sourceStorage); ok {
+		return storage.UpsertFieldsWithSource(ctx, rows, source)
+	}
+	return s.Storage.UpsertFields(ctx, rows)
+}
+
+func (s *reservedDeadlineStorage) storageContext() (context.Context, context.CancelFunc) {
+	parent := s.parent
+	if parent == nil {
+		parent = context.Background()
+	}
+	if s.timeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, s.timeout)
 }
 
 // storageAndPublishReserves keeps the Storage RPC's full configured timeout,

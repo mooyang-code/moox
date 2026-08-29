@@ -2,12 +2,24 @@ package stockcn
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
+	"trpc.group/trpc-go/trpc-go/log"
+)
+
+var (
+	ErrCalendarExpiringSoon = errors.New("calendar coverage is expiring soon")
+	ErrCalendarExpired      = errors.New("calendar coverage has expired")
+	horizonWarningState     = struct {
+		sync.Mutex
+		lastDateByCoverage map[string]string
+	}{lastDateByCoverage: make(map[string]string)}
 )
 
 type calendarFile struct {
@@ -109,11 +121,39 @@ func (c *Calendar) IsOpen(at time.Time) bool {
 }
 
 func (c *Calendar) ValidateHorizon(now time.Time, minDays int) error {
+	err := c.CheckHorizon(now, minDays)
+	if errors.Is(err, ErrCalendarExpiringSoon) {
+		localDate := now.In(c.location).Format("2006-01-02")
+		coverageEnd := c.end.Format("2006-01-02")
+		if shouldLogHorizonWarning(coverageEnd, localDate) {
+			log.Warnf("stock_cn calendar horizon warning: %v", err)
+		}
+		return nil
+	}
+	return err
+}
+
+func shouldLogHorizonWarning(coverageEnd, localDate string) bool {
+	horizonWarningState.Lock()
+	defer horizonWarningState.Unlock()
+	if horizonWarningState.lastDateByCoverage[coverageEnd] == localDate {
+		return false
+	}
+	horizonWarningState.lastDateByCoverage[coverageEnd] = localDate
+	return true
+}
+
+func (c *Calendar) CheckHorizon(now time.Time, minDays int) error {
 	if c == nil || c.location == nil {
 		return fmt.Errorf("calendar is not initialized")
 	}
-	if c.end.Before(now.In(c.location).AddDate(0, 0, minDays)) {
-		return fmt.Errorf("calendar coverage ends before required horizon")
+	local := now.In(c.location)
+	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, c.location)
+	if today.After(c.end) {
+		return fmt.Errorf("%w: coverage ended on %s", ErrCalendarExpired, c.end.Format("2006-01-02"))
+	}
+	if c.end.Before(today.AddDate(0, 0, minDays)) {
+		return fmt.Errorf("%w: coverage ends on %s", ErrCalendarExpiringSoon, c.end.Format("2006-01-02"))
 	}
 	return nil
 }

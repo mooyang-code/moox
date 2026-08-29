@@ -151,6 +151,86 @@ func TestFeedGuardMaxConcurrentBlocksSecondCall(t *testing.T) {
 	}
 }
 
+func TestFeedGuardAcquiresSemaphoreBeforeWaitingForRateLimit(t *testing.T) {
+	clock := newFakeClock(time.Date(2026, 8, 29, 12, 15, 0, 0, time.UTC))
+	sleeper := &fakeSleeper{clock: clock}
+	guard, err := NewFeedGuard(RateLimitPolicy{
+		RequestsPerSecond: 1,
+		Burst:             1,
+		MaxConcurrent:     1,
+		Cooldown:          time.Second,
+		RequestTimeout:    time.Second,
+	}, clock, sleeper.Sleep)
+	require.NoError(t, err)
+
+	releaseFirst := make(chan struct{})
+	firstEntered := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- guard.Do(context.Background(), func(context.Context) error {
+			close(firstEntered)
+			<-releaseFirst
+			return nil
+		})
+	}()
+	<-firstEntered
+
+	secondCtx, secondCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer secondCancel()
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- guard.Do(secondCtx, func(context.Context) error {
+			t.Fatal("second call entered while the semaphore was held")
+			return nil
+		})
+	}()
+	require.ErrorIs(t, <-secondDone, context.DeadlineExceeded)
+	require.Empty(t, sleeper.Durations())
+	close(releaseFirst)
+	require.NoError(t, <-firstDone)
+}
+
+func TestFeedGuardCanceledWaitDoesNotConsumeToken(t *testing.T) {
+	clock := newFakeClock(time.Date(2026, 8, 29, 12, 20, 0, 0, time.UTC))
+	sleeper := &fakeSleeper{clock: clock}
+	guard, err := NewFeedGuard(RateLimitPolicy{RequestsPerSecond: 1, Burst: 1, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: time.Second}, clock, sleeper.Sleep)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, guard.wait(ctx), context.Canceled)
+	require.NoError(t, guard.Do(context.Background(), func(context.Context) error { return nil }))
+	require.Empty(t, sleeper.Durations())
+}
+
+func TestFeedGuardRateLimitWaitIsCancelable(t *testing.T) {
+	guard, err := NewFeedGuard(RateLimitPolicy{
+		RequestsPerSecond: 1,
+		Burst:             1,
+		MaxConcurrent:     1,
+		Cooldown:          time.Second,
+		RequestTimeout:    time.Second,
+	}, nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, guard.Do(context.Background(), func(context.Context) error { return nil }))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- guard.Do(ctx, func(context.Context) error {
+			t.Fatal("canceled limiter wait entered provider call")
+			return nil
+		})
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("rate limiter wait ignored cancellation")
+	}
+}
+
 func TestInvocationBreakerSkipsAfterRetryableStreak(t *testing.T) {
 	breaker := NewInvocationBreaker(2)
 	session := breaker.NewSession()
@@ -167,6 +247,64 @@ func TestInvocationBreakerSkipsAfterRetryableStreak(t *testing.T) {
 	assert.False(t, session.ShouldSkip("beta"))
 	session.Observe("beta", ErrRateLimited)
 	assert.False(t, session.ShouldSkip("beta"))
+}
+
+func TestInvocationBreakerAdmissionIsAtomic(t *testing.T) {
+	session := NewInvocationBreaker(2).NewSession()
+	start := make(chan struct{})
+	results := make(chan bool, 16)
+	var wg sync.WaitGroup
+	for index := 0; index < cap(results); index++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			admitted := session.Admit(context.Background(), "alpha")
+			results <- admitted
+			if admitted {
+				session.Observe("alpha", ErrTimeout)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	admitted := 0
+	for result := range results {
+		if result {
+			admitted++
+		}
+	}
+	require.Equal(t, 2, admitted)
+}
+
+func TestInvocationBreakerCountsTimeoutFailures(t *testing.T) {
+	session := NewInvocationBreaker(2).NewSession()
+	require.True(t, session.Admit(context.Background(), "alpha"))
+	session.Observe("alpha", ErrTimeout)
+	require.True(t, session.Admit(context.Background(), "alpha"))
+	session.Observe("alpha", context.DeadlineExceeded)
+	require.False(t, session.Admit(context.Background(), "alpha"))
+}
+
+func TestInvocationBreakerSuccessWakesWaitingAdmission(t *testing.T) {
+	session := NewInvocationBreaker(1).NewSession()
+	require.True(t, session.Admit(context.Background(), "alpha"))
+	admitted := make(chan bool, 1)
+	go func() { admitted <- session.Admit(context.Background(), "alpha") }()
+	session.Observe("alpha", nil)
+	require.True(t, <-admitted)
+	session.Observe("alpha", nil)
+}
+
+func TestInvocationBreakerAdmissionWaitIsCancelable(t *testing.T) {
+	session := NewInvocationBreaker(1).NewSession()
+	require.True(t, session.Admit(context.Background(), "alpha"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.False(t, session.Admit(ctx, "alpha"))
+	session.Observe("alpha", nil)
 }
 
 func TestRouterSessionSharesInvocationBreakerAcrossSubjects(t *testing.T) {
