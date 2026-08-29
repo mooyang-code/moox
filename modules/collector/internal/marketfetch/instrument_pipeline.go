@@ -194,6 +194,11 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 }
 
 func (p *InstrumentPipeline) reconcileMissing(ctx context.Context, existing []*storagepb.DatasetSubject, present map[string]marketdata.Instrument, datasetID, targetDatasetID string, snapshot marketdata.InstrumentSnapshot) error {
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		location = time.FixedZone("CST", 8*60*60)
+	}
+	missingDate := snapshot.FetchedAt.In(location).Format("2006-01-02")
 	for _, membership := range existing {
 		if membership == nil || !strings.EqualFold(membership.GetStatus(), "active") {
 			continue
@@ -204,9 +209,12 @@ func (p *InstrumentPipeline) reconcileMissing(ctx context.Context, existing []*s
 		copy := *membership
 		copy.Attributes = cloneAttributes(membership.GetAttributes())
 		missingCount, _ := strconv.Atoi(copy.Attributes["missing_complete_snapshot_count"])
-		missingCount++
+		if copy.Attributes["last_missing_snapshot_date"] != missingDate {
+			missingCount++
+		}
 		copy.Attributes["missing_complete_snapshot_count"] = strconv.Itoa(missingCount)
 		copy.Attributes["last_missing_snapshot_id"] = snapshot.SnapshotID
+		copy.Attributes["last_missing_snapshot_date"] = missingDate
 		if missingCount >= 2 {
 			copy.Status = "disabled"
 		}

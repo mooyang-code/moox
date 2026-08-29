@@ -111,6 +111,20 @@ func TestInstrumentPipelineDisablesOnlyAfterTwoCompleteMisses(t *testing.T) {
 	require.Equal(t, StockCNDatasetID, storage.bindings[1].GetDatasetId())
 }
 
+func TestInstrumentPipelineDoesNotCountTwoMissingSnapshotsOnTheSameDay(t *testing.T) {
+	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
+	missing := &storagepb.DatasetSubject{SpaceId: StockCNSpaceID, DatasetId: StockCNInstrumentDatasetID, SubjectId: "601999.XSHG", Status: "active", Attributes: map[string]string{"missing_complete_snapshot_count": "1", "last_missing_snapshot_date": "2026-08-29"}}
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(&instrumentProviderStub{id: "sina", snapshot: testInstrumentSnapshot("sina", now)}))
+	storage := &instrumentStorageStub{existing: []*storagepb.DatasetSubject{missing}}
+	pipeline := &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: []string{"sina"}, MarketID: StockCNSpaceID, DatasetID: StockCNInstrumentDatasetID, TargetDatasetID: StockCNDatasetID, RequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}}
+	_, err := pipeline.Execute(context.Background(), InstrumentPipelineRequest{RequestID: "snapshot-request", SnapshotAt: now})
+	require.NoError(t, err)
+	require.Len(t, storage.bindings, 1)
+	require.Equal(t, "active", storage.bindings[0].GetStatus())
+	require.Equal(t, "1", storage.bindings[0].GetAttributes()["missing_complete_snapshot_count"])
+}
+
 func testInstrumentSnapshot(provider string, now time.Time) marketdata.InstrumentSnapshot {
 	return marketdata.InstrumentSnapshot{SnapshotID: marketdata.SnapshotID(provider, StockCNSpaceID, now), SourceProvider: provider, MarketID: StockCNSpaceID, FetchedAt: now, Complete: true, PageCount: 3, ExchangeCounts: map[string]int{"XSHG": 1, "XSHE": 1, "XBSE": 1}, Instruments: []marketdata.Instrument{{SubjectID: "600000.XSHG", ProviderSymbol: "sh600000", Exchange: "XSHG", Name: "浦发银行", Status: "active"}, {SubjectID: "000001.XSHE", ProviderSymbol: "sz000001", Exchange: "XSHE", Name: "平安银行", Status: "active"}, {SubjectID: "920000.XBSE", ProviderSymbol: "bj920000", Exchange: "XBSE", Name: "北交所样本", Status: "active"}}}
 }
