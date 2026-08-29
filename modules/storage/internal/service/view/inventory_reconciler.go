@@ -441,7 +441,11 @@ func datasetRouteSet(routes []DatasetRoute) map[datasetRef]struct{} {
 func dynamicDatasetConsumerIdentity(miscDurable string, ref datasetRef) (string, string) {
 	hash := sha256.Sum256([]byte(strings.TrimSpace(ref.spaceID) + "\x00" + strings.TrimSpace(ref.datasetID)))
 	token := hex.EncodeToString(hash[:])[:16]
-	return "misc:" + token, strings.TrimSpace(miscDurable) + "." + token
+	// NATS durable names accept alphanumeric, '-' and '_' characters but not
+	// the dot separator used by the human-readable identity in early drafts.
+	// Keep the partition label descriptive while making the server-side durable
+	// valid and stable across restarts.
+	return "misc:" + token, strings.TrimSpace(miscDurable) + "-" + token
 }
 
 func viewDatasetIDs(view *pb.View) []string {

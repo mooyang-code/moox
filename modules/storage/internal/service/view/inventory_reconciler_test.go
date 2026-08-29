@@ -37,7 +37,7 @@ func (f *syncPointAppenderFake) AppendDatasetSyncPoint(_ context.Context, req *p
 
 func TestDynamicDatasetConsumerIdentityIsStable(t *testing.T) {
 	partitionID, durable := dynamicDatasetConsumerIdentity("storage_view_misc", datasetRef{spaceID: "crypto_market", datasetID: "spot_kline_derived_4h"})
-	if partitionID != "misc:c0a554901772da3b" || durable != "storage_view_misc.c0a554901772da3b" {
+	if partitionID != "misc:c0a554901772da3b" || durable != "storage_view_misc-c0a554901772da3b" {
 		t.Fatalf("identity = %q/%q", partitionID, durable)
 	}
 	otherPartitionID, _ := dynamicDatasetConsumerIdentity("storage_view_misc", datasetRef{spaceID: "crypto_market", datasetID: "spot_kline_derived_6h"})
