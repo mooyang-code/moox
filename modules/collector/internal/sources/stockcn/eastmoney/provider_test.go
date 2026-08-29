@@ -16,7 +16,7 @@ import (
 func TestFetchKlinesParsesFixture(t *testing.T) {
 	fixture := filepath.Join("testdata", "kline.json")
 	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/qt/stock/kline/get", r.URL.Path)
+		require.Equal(t, "/api/qt/stock/trends2/get", r.URL.Path)
 		body, err := os.ReadFile(fixture)
 		require.NoError(t, err)
 		_, _ = w.Write(body)

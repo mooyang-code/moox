@@ -28,7 +28,7 @@ type Provider struct {
 
 func New(cfg Config) *Provider {
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = "https://push2his.eastmoney.com"
+		cfg.BaseURL = "https://push2.eastmoney.com"
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 5 * time.Second}
@@ -40,7 +40,7 @@ func New(cfg Config) *Provider {
 }
 
 func (*Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "eastmoney", DisplayName: "EastMoney", Hosts: []string{"push2his.eastmoney.com"}}
+	return marketdata.ProviderDescriptor{ID: "eastmoney", DisplayName: "EastMoney", Hosts: []string{"push2.eastmoney.com"}}
 }
 
 func (*Provider) KlineSpec() marketdata.KlineSpec {
@@ -50,7 +50,7 @@ func (*Provider) KlineSpec() marketdata.KlineSpec {
 		Frequencies:       []string{"1m"},
 		CompleteOHLCV:     true,
 		HasAmount:         true,
-		MaxBarsPerRequest: 1000,
+		MaxBarsPerRequest: 1205,
 		TimestampMode:     marketdata.TimestampModeOpen,
 		RateLimit: marketdata.RateLimitPolicy{
 			RequestsPerSecond: 5,
@@ -65,6 +65,7 @@ func (*Provider) KlineSpec() marketdata.KlineSpec {
 type eastMoneyResponse struct {
 	Data struct {
 		Klines []string `json:"klines"`
+		Trends []string `json:"trends"`
 	} `json:"data"`
 }
 
@@ -81,14 +82,12 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	}
 	query := url.Values{
 		"secid":   {secid},
-		"klt":     {"1"},
-		"fqt":     {"0"},
-		"lmt":     {fmt.Sprintf("%d", req.Limit)},
-		"end":     {"20500101"},
-		"fields1": {"f1,f2,f3,f4,f5,f6"},
-		"fields2": {"f51,f52,f53,f54,f55,f56,f57"},
+		"ndays":   {"5"},
+		"iscr":    {"0"},
+		"fields1": {"f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13"},
+		"fields2": {"f51,f52,f53,f54,f55,f56,f57,f58"},
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/qt/stock/kline/get?"+query.Encode(), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/qt/stock/trends2/get?"+query.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -113,9 +112,16 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 	}
-	rows := make([]marketdata.NormalizedKline, 0, len(payload.Data.Klines))
+	lines := payload.Data.Trends
+	if len(lines) == 0 {
+		lines = payload.Data.Klines
+	}
+	if len(lines) > req.Limit {
+		lines = lines[len(lines)-req.Limit:]
+	}
+	rows := make([]marketdata.NormalizedKline, 0, len(lines))
 	now := p.now().UTC()
-	for _, line := range payload.Data.Klines {
+	for _, line := range lines {
 		fields := strings.Split(line, ",")
 		if len(fields) < 7 {
 			return nil, fmt.Errorf("%w: eastmoney kline columns", marketdata.ErrProtocol)
