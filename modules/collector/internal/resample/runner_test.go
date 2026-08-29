@@ -11,13 +11,17 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type runnerSource struct{ subjects []domain.DatasetSubject }
+type runnerSource struct {
+	subjects     []domain.DatasetSubject
+	keepDuration string
+}
 
 func (s runnerSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
-	return storagesource.DatasetInfo{DataSourceID: "crypto_market", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "spot"}}, nil
+	return storagesource.DatasetInfo{DataSourceID: "crypto_market", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "spot"}, KeepDuration: s.keepDuration}, nil
 }
 func (s runnerSource) ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error) {
 	return s.subjects, nil
@@ -52,4 +56,53 @@ func TestRunnerTickPlansAndProcessesRealtimeBucket(t *testing.T) {
 	instances, _, err := db.TaskInstances().List(context.Background(), store.TaskInstanceFilter{SpaceID: "crypto", RuleID: "rule-5m", Page: 1, PageSize: 10})
 	require.NoError(t, err)
 	require.Len(t, instances, 1)
+}
+
+func TestResampleBackfillSyncIgnoresSubjectAddedAfterRequestStart(t *testing.T) {
+	started := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
+	result := domain.NewResampleTaskResult(started)
+	result.Backfill = &domain.ResampleBackfill{RequestID: "request-1", Start: started, End: started.Add(time.Hour), NextBucket: started.Add(time.Hour), State: domain.ResampleBackfillSyncing}
+	encoded, err := result.Marshal()
+	require.NoError(t, err)
+	requestID, ready := resampleBackfillSyncRequest([]domain.TaskInstance{
+		{Result: encoded},
+		{Result: `{"schema_version":1,"state":"idle","state_version":0}`},
+	})
+	require.True(t, ready)
+	require.Equal(t, "request-1", requestID)
+}
+
+func TestSourceRetentionExpiredIsTerminal(t *testing.T) {
+	source := runnerSource{keepDuration: "1h"}
+	expired, reason := sourceRetentionExpired(context.Background(), source, "crypto", "source", time.Now().UTC().Add(-2*time.Hour))
+	require.True(t, expired)
+	require.Contains(t, reason, "retention expired")
+}
+
+func TestChooseRepairBucketUsesDurableWindowCursor(t *testing.T) {
+	target := 90 * time.Minute
+	oldest := time.Unix(0, 0).UTC()
+	latest := oldest.Add(3 * target)
+
+	assert.Equal(t, oldest, chooseRepairBucket(domain.ResampleTaskResult{}, oldest, latest, target))
+	middle := latest.Add(-target)
+	result := domain.ResampleTaskResult{RepairNextBucket: &middle}
+	assert.Equal(t, middle, chooseRepairBucket(result, oldest, latest, target))
+	stale := oldest.Add(-target)
+	result.RepairNextBucket = &stale
+	assert.Equal(t, oldest, chooseRepairBucket(result, oldest, latest, target))
+	unaligned := oldest.Add(time.Minute)
+	result.RepairNextBucket = &unaligned
+	assert.Equal(t, oldest, chooseRepairBucket(result, oldest, latest, target))
+}
+
+func TestRepairScanCursorAdvancesAcrossSkippedTimerTicks(t *testing.T) {
+	cursor := 0
+	starts := make([]int, 0, 4)
+	for i := 0; i < 4; i++ {
+		start := repairScanStart(cursor, 4)
+		starts = append(starts, start)
+		cursor = repairScanAdvance(start, 1, 4)
+	}
+	assert.Equal(t, []int{0, 1, 2, 3}, starts)
 }

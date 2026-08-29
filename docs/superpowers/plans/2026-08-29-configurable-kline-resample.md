@@ -159,11 +159,12 @@ series_tag    = rule.source_series_tag
   -> Rule prepare_state=ready
   -> Planner 按 source active subjects 生成/更新 TaskInstances
 
-每分钟第 10 秒
-  -> scanner 计算已闭合 target bucket
+每分钟第 10 秒（上一次 tick 未结束时跳过，不排队）
+  -> scanner 在 scan_timeout 内计算已闭合 target bucket
   -> 优先 claim realtime due TaskInstance
-  -> 其次检查 recent repair
+  -> 其次检查 recent repair（每 subject 每 tick 至多一个桶）
   -> 最后 claim backfill TaskInstance
+  -> 单次 tick 的总 claim 不超过 max_claims_per_tick
   -> timer callback 返回
 
 本地 worker
@@ -178,7 +179,9 @@ series_tag    = rule.source_series_tag
 
 历史回填
   -> StartKlineResampleBackfill 为本 Rule 的 TaskInstances 设置同一 request/range
+  -> 接口拒绝尚未闭合（含 settle delay）或超出 source Dataset keep_duration 的范围；keep_duration=0 表示永久保留
   -> realtime 始终优先，空闲时每个 subject 顺序推进 backfill cursor
+  -> 请求开始后的新增 subject 不加入当前 request 快照，不阻塞当前回填完成
   -> 所有 subject 到达 end 后追加 catchup sync point
   -> WaitViewSyncPoint ready 后批量完成 backfill 状态
 ```
@@ -518,7 +521,7 @@ Commit: `feat(collector): provision resampled kline datasets`
 
 - [ ] **Step 2: 实现动态 catch-all consumer**
 
-exact kline/factor/system routes 保持共享 partition；未被 exact route 认领的 active View Dataset 使用稳定 per-Dataset durable：
+exact kline/factor/system routes 保持共享 partition；只有配置中 wildcard route 声明的 space 内、且未被 exact route 认领的 active View Dataset 使用稳定 per-Dataset durable：
 
 ```text
 partition_id = misc:<first-16-hex(sha256(space_id + "\x00" + dataset_id))>
@@ -679,6 +682,7 @@ kline_resample:
   enabled: true
   scan_timeout: 8s
   worker_concurrency: 2
+  max_claims_per_tick: 100
   worker_subject_batch_size: 50
   worker_job_timeout: 30s
   worker_poll_interval: 5s
@@ -689,7 +693,7 @@ kline_resample:
   target_keep_duration: 4320h
 ```
 
-所有 duration/数量为正，subject batch <=200；`repair_lookback_buckets` 允许 0..10，`0` 表示关闭自动近期修订；未知 YAML 字段继续失败。
+所有 duration/数量为正，`worker_concurrency` 为 1..250，`max_claims_per_tick` 为 3..1000，用于限制单次 timer 扫描的总 claim 数，subject batch <=200；repair 每 tick 最多执行一个 worker batch；`repair_lookback_buckets` 允许 0..10，`0` 表示关闭自动近期修订；未知 YAML 字段继续失败。
 
 - [ ] **Step 2: 注册独立 timer**
 

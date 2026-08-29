@@ -171,15 +171,55 @@ func TestInventoryReconcilerLeavesExactRoutesOnSharedConsumers(t *testing.T) {
 	}
 }
 
+func TestInventoryReconcilerHonorsWildcardSpaceAllowList(t *testing.T) {
+	metadata := &inventoryMetadataFake{views: []*pb.View{
+		{SpaceId: "crypto_market", ViewId: "allowed_view", Status: "active", PrimaryDatasetId: "allowed", DatasetIds: []string{"allowed"}},
+		{SpaceId: "private_space", ViewId: "blocked_view", Status: "active", PrimaryDatasetId: "blocked", DatasetIds: []string{"blocked"}},
+	}}
+	var bound []datasetRef
+	reconciler := newInventoryReconcilerForTest(metadata, &syncPointAppenderFake{}, nil, func(_ context.Context, spec dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
+		bound = append(bound, spec.ref)
+		return &dynamicDatasetConsumerBinding{}, nil
+	})
+	if err := reconciler.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(bound) != 1 || bound[0] != (datasetRef{spaceID: "crypto_market", datasetID: "allowed"}) {
+		t.Fatalf("dynamic bindings = %#v, want only crypto_market/allowed", bound)
+	}
+}
+
+func TestInventoryReconcilerKeepsExactRouteOutsideWildcardSpace(t *testing.T) {
+	metadata := &inventoryMetadataFake{views: []*pb.View{{
+		SpaceId: "moox_system", ViewId: "metrics_view", Status: "active", PrimaryDatasetId: "moox_service_metrics", DatasetIds: []string{"moox_service_metrics"},
+		Attributes: map[string]string{routeReadyRequestIDAttribute: "route-exact"},
+	}}}
+	primary := &syncPointAppenderFake{}
+	binds := 0
+	reconciler := newInventoryReconcilerForTest(metadata, primary, []DatasetRoute{{SpaceID: "moox_system", DatasetID: "moox_service_metrics"}}, func(context.Context, dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
+		binds++
+		return nil, nil
+	})
+	if err := reconciler.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if binds != 0 || len(primary.calls) != 1 {
+		t.Fatalf("exact route outside wildcard space: binds=%d route-ready calls=%d", binds, len(primary.calls))
+	}
+}
+
 func newInventoryReconcilerForTest(metadata ViewInventoryClient, primary DatasetSyncPointAppender, exact []DatasetRoute, bind dynamicDatasetConsumerBinder) *InventoryReconciler {
+	allowedSpaces := map[string]struct{}{"crypto_market": {}}
 	return &InventoryReconciler{
-		metadata: metadata,
-		primary:  primary,
-		auth:     &pb.AuthInfo{AppId: "storage-view", AppKey: "primary-key"},
-		exact:    datasetRouteSet(exact),
+		metadata:      metadata,
+		primary:       primary,
+		auth:          &pb.AuthInfo{AppId: "storage-view", AppKey: "primary-key"},
+		exact:         datasetRouteSet(exact),
+		allowedSpaces: allowedSpaces,
 		misc: EventConsumerOptions{
 			PartitionID: "misc", Consumer: "storage_view_misc", AckWaitMS: 120000, FetchBatch: 4,
 			MaxWorkers: 2, MaxAckPending: 16, Ordering: "dataset", DeliverPolicy: "new", MaxRetryAttempts: -1,
+			AllowedDatasetSpaces: []string{"crypto_market"},
 		},
 		bindings: make(map[datasetRef]*dynamicDatasetConsumerBinding),
 		bind:     bind,

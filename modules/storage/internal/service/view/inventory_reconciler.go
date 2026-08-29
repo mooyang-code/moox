@@ -71,15 +71,16 @@ type desiredDynamicDataset struct {
 // claimed by an exact configured route. Reconcile failures are isolated: a
 // failed addition or route-ready fence never stops an existing healthy binding.
 type InventoryReconciler struct {
-	service  *Service
-	metadata ViewInventoryClient
-	primary  DatasetSyncPointAppender
-	auth     *pb.AuthInfo
-	exact    map[datasetRef]struct{}
-	misc     EventConsumerOptions
-	interval time.Duration
-	bindings map[datasetRef]*dynamicDatasetConsumerBinding
-	bind     dynamicDatasetConsumerBinder
+	service       *Service
+	metadata      ViewInventoryClient
+	primary       DatasetSyncPointAppender
+	auth          *pb.AuthInfo
+	exact         map[datasetRef]struct{}
+	allowedSpaces map[string]struct{}
+	misc          EventConsumerOptions
+	interval      time.Duration
+	bindings      map[datasetRef]*dynamicDatasetConsumerBinding
+	bind          dynamicDatasetConsumerBinder
 
 	reconcileMu sync.Mutex
 }
@@ -99,7 +100,7 @@ func (s *Service) NewInventoryReconciler(opts InventoryReconcilerOptions) (*Inve
 	if opts.EventClient == nil {
 		return nil, errors.New("storage view inventory EventBus client is required")
 	}
-	misc, exact, err := dynamicConsumerTemplate(opts.Consumer)
+	misc, exact, allowedSpaces, err := dynamicConsumerTemplate(opts.Consumer)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +114,7 @@ func (s *Service) NewInventoryReconciler(opts InventoryReconcilerOptions) (*Inve
 	}
 	r := &InventoryReconciler{
 		service: s, metadata: opts.Metadata, primary: opts.Primary, auth: auth,
-		exact: exact, misc: misc, interval: interval,
+		exact: exact, allowedSpaces: allowedSpaces, misc: misc, interval: interval,
 		bindings: make(map[datasetRef]*dynamicDatasetConsumerBinding),
 	}
 	r.bind = func(ctx context.Context, spec dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
@@ -272,6 +273,11 @@ func (r *InventoryReconciler) loadDesired(ctx context.Context) (map[datasetRef]d
 				if ref.spaceID == "" || ref.datasetID == "" {
 					continue
 				}
+				if _, exact := r.exact[ref]; !exact {
+					if _, allowed := r.allowedSpaces[ref.spaceID]; !allowed {
+						continue
+					}
+				}
 				item := desired[ref]
 				item.ref = ref
 				if item.routeReadyRequestIDs == nil {
@@ -368,11 +374,17 @@ func (r *InventoryReconciler) bindingRefs() []datasetRef {
 	return refs
 }
 
-func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions, map[datasetRef]struct{}, error) {
+func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions, map[datasetRef]struct{}, map[string]struct{}, error) {
 	if len(options.PartitionConfigs) == 0 {
-		return EventConsumerOptions{}, nil, errors.New("storage view dynamic consumers require partition configuration")
+		return EventConsumerOptions{}, nil, nil, errors.New("storage view dynamic consumers require partition configuration")
 	}
 	exact := make(map[datasetRef]struct{})
+	allowedSpaces := make(map[string]struct{}, len(options.AllowedDatasetSpaces))
+	for _, spaceID := range options.AllowedDatasetSpaces {
+		if spaceID = strings.TrimSpace(spaceID); spaceID != "" {
+			allowedSpaces[spaceID] = struct{}{}
+		}
+	}
 	var misc EventConsumerOptions
 	for _, partition := range options.PartitionConfigs {
 		if strings.TrimSpace(partition.Consumer) == events.StorageViewMiscConsumer {
@@ -387,9 +399,9 @@ func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions
 		}
 	}
 	if strings.TrimSpace(misc.Consumer) == "" {
-		return EventConsumerOptions{}, nil, errors.New("storage view misc consumer partition is required")
+		return EventConsumerOptions{}, nil, nil, errors.New("storage view misc consumer partition is required")
 	}
-	return misc, exact, nil
+	return misc, exact, allowedSpaces, nil
 }
 
 func datasetRouteSet(routes []DatasetRoute) map[datasetRef]struct{} {

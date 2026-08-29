@@ -4,12 +4,29 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
+
+func TestValidateResampleBackfillWindowRejectsOpenOrExpiredSourceWindow(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	request := domain.ResampleBackfillRequest{RequestID: "r1", Start: now.Add(-2 * time.Hour), End: now.Add(-time.Hour)}
+	require.ErrorContains(t, validateResampleBackfillWindow(request, time.Hour, 10*time.Second, "1h", now), "older than source Dataset retention")
+
+	request.Start = now.Add(-2 * time.Hour)
+	request.End = now.Add(time.Hour)
+	require.ErrorContains(t, validateResampleBackfillWindow(request, time.Hour, 0, "", now), "closed bucket")
+}
+
+func TestValidateResampleBackfillWindowAcceptsClosedRetainedWindow(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	request := domain.ResampleBackfillRequest{RequestID: "r1", Start: now.Add(-3 * time.Hour), End: now.Add(-time.Hour)}
+	require.NoError(t, validateResampleBackfillWindow(request, time.Hour, 10*time.Second, "24h", now))
+}
 
 type validationDatasetSource map[string]storagesource.DatasetInfo
 

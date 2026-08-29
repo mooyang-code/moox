@@ -281,6 +281,9 @@ func (r *TaskInstanceRepository) CompleteResampleTask(ctx context.Context, space
 		case domain.ResampleOriginRealtime:
 			next := nextBucket.UTC()
 			result.RealtimeNextBucket = &next
+		case domain.ResampleOriginRepair:
+			next := nextBucket.UTC()
+			result.RepairNextBucket = &next
 		case domain.ResampleOriginBackfill:
 			if result.Backfill == nil {
 				return fmt.Errorf("active backfill state is missing")
@@ -339,6 +342,26 @@ func (r *TaskInstanceRepository) FailResampleTask(ctx context.Context, spaceID, 
 	}, domain.InstanceStatusFailed)
 }
 
+// SkipResampleRepairTask records a repair bucket that cannot be reconstructed
+// because its source history has expired, without failing realtime processing.
+func (r *TaskInstanceRepository) SkipResampleRepairTask(ctx context.Context, spaceID, taskID string, expectedStateVersion int64, bucket, nextBucket time.Time, lastError string) (bool, error) {
+	return r.updateResampleTask(ctx, spaceID, taskID, expectedStateVersion, func(result *domain.ResampleTaskResult) error {
+		if result.State != domain.ResampleTaskStateRunning || result.ActiveOrigin != domain.ResampleOriginRepair || result.ActiveBucket == nil || !result.ActiveBucket.Equal(bucket) {
+			return errResampleCASMismatch
+		}
+		result.State = domain.ResampleTaskStateIdle
+		result.ActiveOrigin = ""
+		result.ActiveBucket = nil
+		result.LeaseUntil = nil
+		result.Attempt = 0
+		result.NextRetryAt = nil
+		result.LastError = strings.TrimSpace(lastError)
+		next := nextBucket.UTC()
+		result.RepairNextBucket = &next
+		return nil
+	}, domain.InstanceStatusPending)
+}
+
 func (r *TaskInstanceRepository) RecoverExpiredResampleLeases(ctx context.Context, now time.Time, limit int) (int64, error) {
 	return r.RecoverExpiredResampleLeasesInSpace(ctx, "", now, limit)
 }
@@ -369,11 +392,21 @@ func (r *TaskInstanceRepository) RecoverExpiredResampleLeasesInSpace(ctx context
 				continue
 			}
 			version := result.StateVersion
-			result.State = domain.ResampleTaskStateWaitingSource
 			result.StateVersion++
 			result.LeaseUntil = nil
-			retry := now
-			result.NextRetryAt = &retry
+			if result.ActiveOrigin == domain.ResampleOriginRepair {
+				// Repair is best-effort and has no source-wait claim path. A
+				// crashed repair must return to idle so the durable repair cursor
+				// can be selected again on the next scan.
+				result.State = domain.ResampleTaskStateIdle
+				result.ActiveOrigin = ""
+				result.ActiveBucket = nil
+				result.NextRetryAt = nil
+			} else {
+				result.State = domain.ResampleTaskStateWaitingSource
+				retry := now
+				result.NextRetryAt = &retry
+			}
 			result.LastError = "resample worker lease expired"
 			encoded, err := result.Marshal()
 			if err != nil {
@@ -409,10 +442,24 @@ func (r *TaskInstanceRepository) StartResampleBackfill(ctx context.Context, spac
 			return gorm.ErrRecordNotFound
 		}
 		parsed := make([]domain.ResampleTaskResult, len(instances))
+		requestSeen := false
 		for index, instance := range instances {
 			result, err := domain.ParseResampleTaskResult(instance.Result)
 			if err != nil {
 				return fmt.Errorf("task %s: %w", instance.TaskID, err)
+			}
+			if result.Backfill != nil && result.Backfill.RequestID == request.RequestID && !activeBackfill(result.Backfill) {
+				if !result.Backfill.Start.Equal(request.Start) || !result.Backfill.End.Equal(request.End) {
+					return ErrResampleBackfillConflict
+				}
+				// Replaying a request after it reached a terminal state is an
+				// idempotent no-op for this participant.
+				parsed[index] = result
+				requestSeen = true
+				continue
+			}
+			if result.Backfill != nil && result.Backfill.RequestID == request.RequestID {
+				requestSeen = true
 			}
 			if activeBackfill(result.Backfill) {
 				if result.Backfill.RequestID != request.RequestID || !result.Backfill.Start.Equal(request.Start) || !result.Backfill.End.Equal(request.End) {
@@ -423,6 +470,12 @@ func (r *TaskInstanceRepository) StartResampleBackfill(ctx context.Context, spac
 		}
 		for index, instance := range instances {
 			result := parsed[index]
+			if requestSeen && (result.Backfill == nil || result.Backfill.RequestID == request.RequestID) {
+				continue
+			}
+			if result.Backfill != nil && result.Backfill.RequestID == request.RequestID && !activeBackfill(result.Backfill) {
+				continue
+			}
 			if activeBackfill(result.Backfill) {
 				continue
 			}
@@ -466,12 +519,20 @@ func (r *TaskInstanceRepository) finishResampleBackfill(ctx context.Context, spa
 		if err := tx.Where("c_space_id = ? AND c_rule_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(ruleID), "kline_resample", false).Find(&instances).Error; err != nil {
 			return err
 		}
+		matched := false
 		for _, instance := range instances {
 			result, err := domain.ParseResampleTaskResult(instance.Result)
 			if err != nil {
 				return err
 			}
-			if result.Backfill == nil || result.Backfill.RequestID != requestID || result.Backfill.State == state {
+			if result.Backfill == nil || result.Backfill.RequestID != requestID {
+				continue
+			}
+			matched = true
+			if result.Backfill.State == state {
+				continue
+			}
+			if !activeBackfill(result.Backfill) {
 				continue
 			}
 			version := result.StateVersion
@@ -495,6 +556,9 @@ func (r *TaskInstanceRepository) finishResampleBackfill(ctx context.Context, spa
 			if changed {
 				updated++
 			}
+		}
+		if !matched {
+			return gorm.ErrRecordNotFound
 		}
 		return nil
 	})

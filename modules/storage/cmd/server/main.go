@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -472,6 +473,7 @@ func cloneViewConsumerOptions(options viewservice.EventConsumerOptions) viewserv
 	clone := options
 	clone.FilterSubjects = append([]string(nil), options.FilterSubjects...)
 	clone.DatasetRoutes = append([]viewservice.DatasetRoute(nil), options.DatasetRoutes...)
+	clone.AllowedDatasetSpaces = append([]string(nil), options.AllowedDatasetSpaces...)
 	clone.PartitionConfigs = make([]viewservice.EventConsumerOptions, len(options.PartitionConfigs))
 	for i, partition := range options.PartitionConfigs {
 		clone.PartitionConfigs[i] = partition
@@ -679,9 +681,13 @@ func buildStorageViewConsumerOptions(runtimeConfig storageconfig.RuntimeConfig) 
 		events.DatasetSyncPoint,
 	}
 	partitions := make([]viewservice.EventConsumerOptions, 0, len(runtimeConfig.Storage.View.ConsumerPartitions))
+	allowedSpaces := make(map[string]struct{})
 	for _, partition := range runtimeConfig.Storage.View.ConsumerPartitions {
 		filters := make([]string, 0, len(partition.Datasets())*len(eventFamilies))
 		for _, dataset := range partition.Datasets() {
+			if dataset.DatasetID == "*" && dataset.SpaceID != "" {
+				allowedSpaces[dataset.SpaceID] = struct{}{}
+			}
 			if dataset.DatasetID == "*" {
 				continue
 			}
@@ -713,7 +719,12 @@ func buildStorageViewConsumerOptions(runtimeConfig storageconfig.RuntimeConfig) 
 			MaxRetryAttempts: partition.MaxRetryAttempts,
 		})
 	}
-	return viewservice.EventConsumerOptions{PartitionConfigs: partitions}, nil
+	allowed := make([]string, 0, len(allowedSpaces))
+	for spaceID := range allowedSpaces {
+		allowed = append(allowed, spaceID)
+	}
+	sort.Strings(allowed)
+	return viewservice.EventConsumerOptions{PartitionConfigs: partitions, AllowedDatasetSpaces: allowed}, nil
 }
 
 func storageViewDeliverPolicy(configured string) string {

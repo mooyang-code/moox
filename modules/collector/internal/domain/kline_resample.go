@@ -277,7 +277,7 @@ func (r ResampleBackfillRequest) ValidateForFrequency(target time.Duration) erro
 		return fmt.Errorf("backfill target frequency must be a positive whole-minute duration")
 	}
 	start, end := r.Start.UTC(), r.End.UTC()
-	if !start.Equal(start.Truncate(target)) || !end.Equal(end.Truncate(target)) {
+	if !IsEpochTimeAligned(start, target) || !IsEpochTimeAligned(end, target) {
 		return fmt.Errorf("backfill start and end must align to target frequency")
 	}
 	if end.Sub(start)%target != 0 {
@@ -287,6 +287,17 @@ func (r ResampleBackfillRequest) ValidateForFrequency(target time.Duration) erro
 		return fmt.Errorf("backfill window must not exceed %d target buckets", MaxResampleBackfillBuckets)
 	}
 	return nil
+}
+
+// IsEpochTimeAligned is the shared epoch-UTC grid check used by both domain
+// validation and the resample runtime. Periods are whole minutes, so an exact
+// duration remainder is sufficient and works consistently before/after epoch.
+func IsEpochTimeAligned(at time.Time, period time.Duration) bool {
+	if at.IsZero() || period <= 0 || period%time.Minute != 0 || at.Nanosecond() != 0 || at.Second() != 0 {
+		return false
+	}
+	elapsed := at.UTC().Sub(time.Unix(0, 0).UTC())
+	return elapsed%period == 0
 }
 
 type ResampleTaskResult struct {
@@ -299,6 +310,7 @@ type ResampleTaskResult struct {
 	Attempt            int                `json:"attempt,omitempty"`
 	NextRetryAt        *time.Time         `json:"next_retry_at,omitempty"`
 	RealtimeNextBucket *time.Time         `json:"realtime_next_bucket,omitempty"`
+	RepairNextBucket   *time.Time         `json:"repair_next_bucket,omitempty"`
 	LastSuccessBucket  *time.Time         `json:"last_success_bucket,omitempty"`
 	LastInputHash      string             `json:"last_input_hash,omitempty"`
 	LastError          string             `json:"last_error,omitempty"`
@@ -390,6 +402,7 @@ func (r *ResampleTaskResult) normalizeTimes() {
 	normalizePtr(&r.LeaseUntil)
 	normalizePtr(&r.NextRetryAt)
 	normalizePtr(&r.RealtimeNextBucket)
+	normalizePtr(&r.RepairNextBucket)
 	normalizePtr(&r.LastSuccessBucket)
 	if r.Backfill != nil {
 		r.Backfill.Start = r.Backfill.Start.UTC()

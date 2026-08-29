@@ -50,6 +50,7 @@ func TestLoadKlineResampleConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, cfg.KlineResample.Enabled)
 	assert.Equal(t, 5, cfg.KlineResample.RepairLookbackBuckets)
+	assert.Equal(t, 100, cfg.KlineResample.MaxClaimsPerTick)
 	assert.Equal(t, 20, cfg.KlineResample.WorkerSubjectBatchSize)
 }
 
@@ -59,6 +60,22 @@ func TestLoadRejectsInvalidKlineResampleRepairLookback(t *testing.T) {
 `))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "repair_lookback_buckets")
+}
+
+func TestLoadRejectsExcessiveKlineResampleConcurrency(t *testing.T) {
+	_, err := Load(writeCollectorConfig(t, `kline_resample:
+  worker_concurrency: 251
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "worker quantities")
+}
+
+func TestLoadRejectsExcessiveKlineResampleClaims(t *testing.T) {
+	_, err := Load(writeCollectorConfig(t, `kline_resample:
+  max_claims_per_tick: 1001
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "worker quantities")
 }
 
 func TestLoadRejectsLegacyStorageTargets(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
@@ -330,13 +331,15 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 				log.Warn("collector kline resample disabled: Storage adapter has no View sync waiter")
 			}
 			resampleRunner = &collectorresample.Runner{Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Readiness: dbm.PeriodReadiness(), Source: metadataSource, Primary: localStorage, Config: collectorresample.RunnerConfig{
-				SpaceID: completionSpaceID, WorkerConcurrency: cfg.KlineResample.WorkerConcurrency, WorkerJobTimeout: cfg.KlineResample.WorkerJobTimeout,
+				SpaceID: completionSpaceID, ScanTimeout: cfg.KlineResample.ScanTimeout, WorkerConcurrency: cfg.KlineResample.WorkerConcurrency, MaxClaimsPerTick: cfg.KlineResample.MaxClaimsPerTick, WorkerJobTimeout: cfg.KlineResample.WorkerJobTimeout,
 				WorkerPollInterval: cfg.KlineResample.WorkerPollInterval, WorkerMaxSourceKeys: cfg.KlineResample.WorkerMaxSourceKeysPerClaim,
 				StaleRunningAfter: cfg.KlineResample.StaleRunningAfter, DefaultSettleDelay: cfg.KlineResample.DefaultSettleDelay, RepairLookbackBuckets: cfg.KlineResample.RepairLookbackBuckets,
 			}}
-			if err := resamplePreparer.RunOnce(trpc.BackgroundContext()); err != nil {
+			prepareCtx, prepareCancel := context.WithTimeout(trpc.BackgroundContext(), cfg.KlineResample.ScanTimeout)
+			if err := resamplePreparer.RunOnce(prepareCtx); err != nil {
 				log.WarnContextf(trpc.BackgroundContext(), "collector kline resample initial preparation failed: %v", err)
 			}
+			prepareCancel()
 		}
 	}
 	reconciler := &marketfetch.Reconciler{Rules: dbm.TaskRules(), Symbols: metadataSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache, Metrics: metrics, MaxSubjects: 30}
@@ -384,14 +387,22 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		log.Warn("collector Storage adapter does not support period readiness reports")
 	}
 	timer.RegisterScheduler("collectorMarketFetch", &timer.DefaultScheduler{})
+	var marketFetchTickRunning atomic.Bool
 	timer.RegisterHandlerService(service, func(ctx context.Context) error {
 		spaceID := completionSpaceID
+		if !marketFetchTickRunning.CompareAndSwap(false, true) {
+			log.WarnContextf(ctx, "collector market fetch timer tick skipped because the previous tick is still running")
+			return nil
+		}
 		go func() {
+			defer marketFetchTickRunning.Store(false)
 			tickCtx := trpc.BackgroundContext()
 			if resamplePreparer != nil {
-				if err := resamplePreparer.RunOnce(tickCtx); err != nil {
+				prepareCtx, prepareCancel := context.WithTimeout(tickCtx, cfg.KlineResample.ScanTimeout)
+				if err := resamplePreparer.RunOnce(prepareCtx); err != nil {
 					log.WarnContextf(tickCtx, "collector kline resample preparation failed space=%s: %v", spaceID, err)
 				}
+				prepareCancel()
 			}
 			if resampleRunner != nil {
 				if err := resampleRunner.Tick(tickCtx, time.Now().UTC()); err != nil {

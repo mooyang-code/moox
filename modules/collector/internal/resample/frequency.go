@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 )
 
 const (
@@ -106,6 +108,32 @@ func BucketAt(effectiveNow, origin time.Time, target FixedFrequency) (start, end
 	}
 	end = origin.Add(periods * target.Duration).UTC()
 	return end.Add(-target.Duration), end
+}
+
+// EpochBucketStart returns the start of the epoch-UTC bucket containing at.
+// Keeping this operation next to BucketAt prevents validation and runtime from
+// silently adopting different alignment rules for non-standard periods.
+func EpochBucketStart(at time.Time, target FixedFrequency) (time.Time, error) {
+	if err := validateFixedFrequency(target); err != nil {
+		return time.Time{}, err
+	}
+	at = at.UTC()
+	if at.IsZero() {
+		return time.Time{}, fmt.Errorf("bucket time is required")
+	}
+	start, end := BucketAt(at.Add(time.Nanosecond), time.Unix(0, 0).UTC(), target)
+	if start.IsZero() || end.IsZero() {
+		return time.Time{}, fmt.Errorf("bucket time cannot be aligned")
+	}
+	return start, nil
+}
+
+// IsEpochBucketAligned reports whether at is exactly on the epoch-UTC grid.
+func IsEpochBucketAligned(at time.Time, target FixedFrequency) bool {
+	if at.IsZero() || validateFixedFrequency(target) != nil {
+		return false
+	}
+	return domain.IsEpochTimeAligned(at, target.Duration)
 }
 
 func validateFixedFrequency(frequency FixedFrequency) error {

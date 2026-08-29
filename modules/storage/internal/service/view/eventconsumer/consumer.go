@@ -25,19 +25,23 @@ type Config struct {
 	FilterSubjects   []string
 	PartitionConfigs []Config
 	DatasetRoutes    []DatasetRoute
-	Consumer         string
-	AckWaitMS        int
-	FetchBatch       int
-	MaxWorkers       int
-	MaxAckPending    int
-	Ordering         string
-	DeliverPolicy    string
-	MaxRetryAttempts int
-	ErrorReporter    jetstream.ErrorReporter
-	Metrics          *observability.ViewMetrics
-	BeforeProcess    func(context.Context, *jetstream.Delivery) error
-	Lease            DeliveryLease
-	BoundReporter    func(bool)
+	// AllowedDatasetSpaces preserves wildcard-route policy after startup
+	// inventory expansion. Dynamic View consumers may only discover Datasets in
+	// these spaces; an empty list means no dynamic discovery is permitted.
+	AllowedDatasetSpaces []string
+	Consumer             string
+	AckWaitMS            int
+	FetchBatch           int
+	MaxWorkers           int
+	MaxAckPending        int
+	Ordering             string
+	DeliverPolicy        string
+	MaxRetryAttempts     int
+	ErrorReporter        jetstream.ErrorReporter
+	Metrics              *observability.ViewMetrics
+	BeforeProcess        func(context.Context, *jetstream.Delivery) error
+	Lease                DeliveryLease
+	BoundReporter        func(bool)
 }
 
 type DatasetRoute struct {

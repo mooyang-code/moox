@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -11,6 +12,8 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
+
+var ErrResampleSourceIncomplete = errors.New("resample source window incomplete")
 
 const (
 	writeSource      = "collector:kline_resample"
@@ -64,7 +67,7 @@ func (s BucketStorage) ProcessBucket(ctx context.Context, spec RuleSpec, subject
 	}
 	result, err := Bars(spec, subjectID, start, end, sourceBars)
 	if err != nil {
-		return Result{}, false, err
+		return Result{}, false, fmt.Errorf("%w: %v", ErrResampleSourceIncomplete, err)
 	}
 	targetKey := rowKey(spec.SpaceID, spec.TargetDatasetID, subjectID, spec.TargetFrequency.Storage, result.DataTime, spec.SourceSeriesTag)
 	// PrimaryStore requires at least one field ID even when only an attribute

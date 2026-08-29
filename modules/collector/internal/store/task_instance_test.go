@@ -136,6 +136,20 @@ func TestResampleTaskClaimCompleteUsesStateVersionCAS(t *testing.T) {
 	assert.Equal(t, int64(2), result.StateVersion)
 	assert.Equal(t, next.Add(4*time.Hour), *result.RealtimeNextBucket)
 	assert.Equal(t, "hash-1", result.LastInputHash)
+
+	repairBucket := next.Add(4 * time.Hour)
+	repairClaim, claimed, err := s.TaskInstances().ClaimResampleTask(ctx, "crypto", "resample-btc", result.StateVersion, domain.ResampleOriginRepair, repairBucket, next.Add(8*time.Hour), time.Minute)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	completed, err = s.TaskInstances().CompleteResampleTask(ctx, "crypto", "resample-btc", repairClaim.Result.StateVersion, repairBucket, repairBucket.Add(4*time.Hour), "hash-2")
+	require.NoError(t, err)
+	assert.True(t, completed)
+	stored, err = s.TaskInstances().Get(ctx, "crypto", "resample-btc")
+	require.NoError(t, err)
+	result, err = domain.ParseResampleTaskResult(stored.Result)
+	require.NoError(t, err)
+	assert.Equal(t, repairBucket.Add(4*time.Hour), *result.RepairNextBucket)
+	assert.Equal(t, next.Add(4*time.Hour), *result.RealtimeNextBucket)
 }
 
 func TestResampleTaskWaitAndRecoverExpiredLease(t *testing.T) {
@@ -176,6 +190,55 @@ func TestResampleTaskWaitAndRecoverExpiredLease(t *testing.T) {
 	assert.Nil(t, result.LeaseUntil)
 }
 
+func TestResampleRepairLeaseRecoveryReturnsToIdle(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.TaskRules().Create(ctx, domain.TaskRule{SpaceID: "crypto", RuleID: "rule-1", DataType: "kline_resample", Enabled: true, PrepareState: domain.PrepareStateReady}))
+	bucket := time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC)
+	initial := domain.NewResampleTaskResult(bucket)
+	raw, err := initial.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", TaskID: "repair-btc", RuleID: "rule-1", Provider: "moox", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC-USDT", Frequency: "4H", Result: raw}}))
+	_, claimed, err := s.TaskInstances().ClaimResampleTask(ctx, "crypto", "repair-btc", 0, domain.ResampleOriginRepair, bucket, bucket, time.Second)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	recovered, err := s.TaskInstances().RecoverExpiredResampleLeases(ctx, bucket.Add(2*time.Second), 10)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), recovered)
+	stored, err := s.TaskInstances().Get(ctx, "crypto", "repair-btc")
+	require.NoError(t, err)
+	result, err := domain.ParseResampleTaskResult(stored.Result)
+	require.NoError(t, err)
+	assert.Equal(t, domain.ResampleTaskStateIdle, result.State)
+	assert.Empty(t, result.ActiveOrigin)
+	assert.Nil(t, result.ActiveBucket)
+}
+
+func TestResampleRepairSkipAdvancesCursorWithoutFailure(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.TaskRules().Create(ctx, domain.TaskRule{SpaceID: "crypto", RuleID: "rule-1", DataType: "kline_resample", Enabled: true, PrepareState: domain.PrepareStateReady}))
+	bucket := time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC)
+	initial := domain.NewResampleTaskResult(bucket)
+	raw, err := initial.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", TaskID: "repair-btc", RuleID: "rule-1", Provider: "moox", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC-USDT", Frequency: "4H", Result: raw}}))
+	claim, claimed, err := s.TaskInstances().ClaimResampleTask(ctx, "crypto", "repair-btc", 0, domain.ResampleOriginRepair, bucket, bucket, time.Minute)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	next := bucket.Add(4 * time.Hour)
+	updated, err := s.TaskInstances().SkipResampleRepairTask(ctx, "crypto", "repair-btc", claim.Result.StateVersion, bucket, next, "source retention expired")
+	require.NoError(t, err)
+	require.True(t, updated)
+	stored, err := s.TaskInstances().Get(ctx, "crypto", "repair-btc")
+	require.NoError(t, err)
+	result, err := domain.ParseResampleTaskResult(stored.Result)
+	require.NoError(t, err)
+	assert.Equal(t, domain.ResampleTaskStateIdle, result.State)
+	assert.Equal(t, next, *result.RepairNextBucket)
+	assert.NotEqual(t, domain.ResampleTaskStateFailed, result.State)
+}
+
 func TestResampleBackfillStartIsIdempotentAndConflicts(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
@@ -199,4 +262,25 @@ func TestResampleBackfillStartIsIdempotentAndConflicts(t *testing.T) {
 	request.RequestID = "bf-2"
 	_, err = s.TaskInstances().StartResampleBackfill(ctx, "crypto", "rule-1", request)
 	require.ErrorIs(t, err, ErrResampleBackfillConflict)
+}
+
+func TestResampleUpsertResetsCursorWhenSubjectIsReactivated(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	oldResultValue := domain.NewResampleTaskResult(time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+	oldResult, err := oldResultValue.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+		SpaceID: "crypto", TaskID: "btc", RuleID: "rule-1", Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "4H", Result: oldResult,
+	}}))
+	require.NoError(t, s.TaskInstances().db.Exec("UPDATE t_collector_task_instances SET c_is_deleted = 1 WHERE c_space_id = ? AND c_task_id = ?", "crypto", "btc").Error)
+	newResultValue := domain.NewResampleTaskResult(time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC))
+	newResult, err := newResultValue.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+		SpaceID: "crypto", TaskID: "btc", RuleID: "rule-1", Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "4H", Result: newResult,
+	}}))
+	current, err := s.TaskInstances().Get(ctx, "crypto", "btc")
+	require.NoError(t, err)
+	require.Equal(t, newResult, current.Result)
 }

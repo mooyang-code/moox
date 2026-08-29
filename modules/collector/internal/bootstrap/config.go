@@ -68,6 +68,7 @@ type KlineResampleConfig struct {
 	Enabled                     bool          `yaml:"enabled"`
 	ScanTimeout                 time.Duration `yaml:"scan_timeout"`
 	WorkerConcurrency           int           `yaml:"worker_concurrency"`
+	MaxClaimsPerTick            int           `yaml:"max_claims_per_tick"`
 	WorkerSubjectBatchSize      int           `yaml:"worker_subject_batch_size"`
 	WorkerJobTimeout            time.Duration `yaml:"worker_job_timeout"`
 	WorkerPollInterval          time.Duration `yaml:"worker_poll_interval"`
@@ -276,7 +277,7 @@ func (c *Config) validateKlineResample() error {
 	if c.KlineResample.ScanTimeout <= 0 || c.KlineResample.WorkerJobTimeout <= 0 || c.KlineResample.WorkerPollInterval <= 0 || c.KlineResample.StaleRunningAfter <= 0 || c.KlineResample.DefaultSettleDelay < 0 || c.KlineResample.TargetKeepDuration <= 0 {
 		return fmt.Errorf("kline_resample durations must be positive, except default_settle_delay")
 	}
-	if c.KlineResample.WorkerConcurrency <= 0 || c.KlineResample.WorkerSubjectBatchSize <= 0 || c.KlineResample.WorkerSubjectBatchSize > 200 || c.KlineResample.WorkerMaxSourceKeysPerClaim <= 0 {
+	if c.KlineResample.WorkerConcurrency <= 0 || c.KlineResample.WorkerConcurrency > 250 || c.KlineResample.MaxClaimsPerTick < 3 || c.KlineResample.MaxClaimsPerTick > 1000 || c.KlineResample.WorkerSubjectBatchSize <= 0 || c.KlineResample.WorkerSubjectBatchSize > 200 || c.KlineResample.WorkerMaxSourceKeysPerClaim <= 0 {
 		return fmt.Errorf("kline_resample worker quantities are invalid")
 	}
 	if c.KlineResample.RepairLookbackBuckets < 0 || c.KlineResample.RepairLookbackBuckets > 10 {
@@ -358,7 +359,7 @@ func Default() *Config {
 			ItemRetention: 60, ParentRetention: 7 * 24 * time.Hour,
 		},
 		KlineResample: KlineResampleConfig{
-			Enabled: true, ScanTimeout: 8 * time.Second, WorkerConcurrency: 2,
+			Enabled: true, ScanTimeout: 8 * time.Second, WorkerConcurrency: 2, MaxClaimsPerTick: 100,
 			WorkerSubjectBatchSize: 50, WorkerJobTimeout: 30 * time.Second,
 			WorkerPollInterval: 5 * time.Second, WorkerMaxSourceKeysPerClaim: 20000,
 			StaleRunningAfter: 2 * time.Minute, DefaultSettleDelay: 10 * time.Second,

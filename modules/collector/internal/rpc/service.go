@@ -358,13 +358,44 @@ func (s *Service) StartKlineResampleBackfill(ctx context.Context, req *pb.StartK
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	backfill := domain.ResampleBackfillRequest{RequestID: req.GetRequestId(), Start: start.UTC(), End: end.UTC()}
-	if err := backfill.ValidateForFrequency(target.Duration); err != nil {
+	sourceKeepDuration := ""
+	if s.datasetSrc != nil {
+		source, sourceErr := s.datasetSrc.GetDataset(ctx, req.GetSpaceId(), params.SourceDatasetID)
+		if sourceErr != nil {
+			return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, sourceErr.Error())}, nil
+		}
+		sourceKeepDuration = source.KeepDuration
+	}
+	if err := validateResampleBackfillWindow(backfill, target.Duration, params.SettleDelay(), sourceKeepDuration, time.Now().UTC()); err != nil {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if _, err := s.instanceRepo.StartResampleBackfill(ctx, req.GetSpaceId(), req.GetRuleId(), backfill); err != nil {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	return &pb.StartKlineResampleBackfillRsp{RetInfo: retOK()}, nil
+}
+
+func validateResampleBackfillWindow(request domain.ResampleBackfillRequest, target time.Duration, settleDelay time.Duration, sourceKeepDuration string, now time.Time) error {
+	if err := request.ValidateForFrequency(target); err != nil {
+		return err
+	}
+	now = now.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if request.End.Add(settleDelay).After(now) {
+		return fmt.Errorf("backfill end must be a closed bucket after settle delay")
+	}
+	if raw := strings.TrimSpace(sourceKeepDuration); raw != "" && raw != "0" {
+		keep, err := time.ParseDuration(raw)
+		if err != nil || keep <= 0 {
+			return fmt.Errorf("source Dataset keep_duration %q is invalid", sourceKeepDuration)
+		}
+		if request.Start.Before(now.Add(-keep)) {
+			return fmt.Errorf("backfill start is older than source Dataset retention %s", raw)
+		}
+	}
+	return nil
 }
 
 func (s *Service) CancelKlineResampleBackfill(ctx context.Context, req *pb.CancelKlineResampleBackfillReq) (*pb.CancelKlineResampleBackfillRsp, error) {

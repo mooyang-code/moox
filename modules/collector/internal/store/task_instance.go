@@ -154,7 +154,12 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 			"c_frequency":   clause.Expr{SQL: "excluded.c_frequency"},
 			"c_task_params": clause.Expr{SQL: "excluded.c_task_params"},
 			"c_is_deleted":  clause.Expr{SQL: "excluded.c_is_deleted"},
-			"c_mtime":       clause.Expr{SQL: "excluded.c_mtime"},
+			// A resample subject that was deactivated and later reactivated is
+			// a new participant for future backfills. Reset its persisted cursor
+			// from the planner seed, while preserving progress for stable active
+			// subjects on ordinary upserts.
+			"c_result": clause.Expr{SQL: "CASE WHEN c_is_deleted = 1 AND excluded.c_data_type = 'kline_resample' THEN excluded.c_result ELSE c_result END"},
+			"c_mtime":  clause.Expr{SQL: "excluded.c_mtime"},
 		}),
 	}).Create(&changed).Error
 }

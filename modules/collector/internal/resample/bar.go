@@ -9,6 +9,8 @@ import (
 	"math"
 	"sort"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 )
 
 const AlignmentEpochUTC = "epoch_utc"
@@ -102,6 +104,9 @@ func Bars(spec RuleSpec, subjectID string, start, end time.Time, rows []SourceBa
 	end = end.UTC()
 	if end.Sub(start) != spec.TargetFrequency.Duration {
 		return Result{}, fmt.Errorf("source window must equal one target bucket")
+	}
+	if !domain.IsEpochTimeAligned(start, spec.TargetFrequency.Duration) || !domain.IsEpochTimeAligned(end, spec.TargetFrequency.Duration) {
+		return Result{}, fmt.Errorf("source window must be epoch UTC aligned")
 	}
 	bucketStart, bucketEnd := BucketAt(end, time.Unix(0, 0).UTC(), spec.TargetFrequency)
 	if !bucketStart.Equal(start) || !bucketEnd.Equal(end) {

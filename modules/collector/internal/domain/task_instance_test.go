@@ -8,6 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIsEpochTimeAlignedSupportsArbitraryWholeMinutePeriods(t *testing.T) {
+	period := 7 * time.Hour
+	aligned := time.Unix(0, 0).UTC().Add(7 * time.Hour)
+	require.True(t, IsEpochTimeAligned(aligned, period))
+	require.False(t, IsEpochTimeAligned(aligned.Add(time.Hour), period))
+	require.True(t, IsEpochTimeAligned(time.Unix(0, 0).UTC().Add(90*time.Minute), 90*time.Minute))
+}
 func TestTaskInstance_TableName_ShouldReturnCollectorTaskInstancesTable(t *testing.T) {
 	assert.Equal(t, "t_collector_task_instances", (&TaskInstance{}).TableName())
 }
