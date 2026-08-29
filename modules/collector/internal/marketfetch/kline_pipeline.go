@@ -3,7 +3,9 @@ package marketfetch
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -65,53 +67,74 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	results := make([]domain.ItemResult, len(req.Items))
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(req.Items)*MaxRealtimeRows)
 	routerSession := p.Router.NewSession()
-	for index, item := range req.Items {
-		providerSymbol, err := stocksource.ProviderSymbol(item.SubjectID)
-		if err != nil {
-			results[index] = failureResult(item, domain.ItemOutcomeInvalid, "symbol", err)
-			continue
-		}
-		limit := item.BarLimit
-		if limit <= 0 {
-			limit = MaxRealtimeRows
-		}
-		fetched, err := routerSession.FetchKlines(ctx, marketdata.KlineRequest{
-			MarketID:       StockCNSpaceID,
-			ProductType:    marketdata.ProductEquity,
-			InstrumentType: marketdata.InstrumentEquity,
-			SubjectID:      item.SubjectID,
-			ProviderSymbol: providerSymbol,
-			Frequency:      "1m",
-			Limit:          limit,
-			StartTime:      parseOptionalTime(item.StartTime),
-			Now:            started.UTC(),
-			RequestID:      firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID),
-		}, chain)
-		if err != nil {
-			results[index] = failureResult(item, classifyError(err), errorType(err), err)
-			continue
-		}
-		accepted := 0
-		coverageStart := parseOptionalTime(item.StartTime)
-		for _, bar := range fetched {
-			if !coverageStart.IsZero() && bar.BarStart.Before(coverageStart) {
-				continue
-			}
-			rank := providerRank(chain, bar.ProviderID)
-			row, err := stockKlineRow(bar, firstNonEmptyString(p.RouteID, StockCNRouteID), rank)
-			if err != nil {
-				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "normalize", err)
-				break
-			}
-			rows = append(rows, row)
-			accepted++
-		}
-		if results[index].Outcome == "" && accepted == 0 {
-			results[index] = failureResult(item, domain.ItemOutcomeInvalid, "coverage", fmt.Errorf("provider returned no bars inside the requested coverage"))
-		} else if results[index].Outcome == "" {
-			results[index] = successResult(item)
-		}
+	concurrency := req.Concurrency
+	if concurrency <= 0 {
+		concurrency = DefaultConcurrency
 	}
+	if concurrency > len(req.Items) {
+		concurrency = len(req.Items)
+	}
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var rowsMu sync.Mutex
+	for index, item := range req.Items {
+		index, item := index, item
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				results[index] = failureResult(item, domain.ItemOutcomeNetworkError, "deadline_exhausted", ctx.Err())
+				return
+			}
+			providerSymbol, err := stocksource.ProviderSymbol(item.SubjectID)
+			if err != nil {
+				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "symbol", err)
+				return
+			}
+			limit := item.BarLimit
+			if limit <= 0 {
+				limit = MaxRealtimeRows
+			}
+			fetched, err := routerSession.FetchKlines(ctx, marketdata.KlineRequest{MarketID: StockCNSpaceID, ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, Frequency: "1m", Limit: limit, StartTime: parseOptionalTime(item.StartTime), Now: started.UTC(), RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID)}, chain)
+			if err != nil {
+				results[index] = failureResult(item, classifyError(err), errorType(err), err)
+				return
+			}
+			itemRows := make([]*storagepb.RowFieldUpsert, 0, len(fetched))
+			coverageStart := parseOptionalTime(item.StartTime)
+			for _, bar := range fetched {
+				if !coverageStart.IsZero() && bar.BarStart.Before(coverageStart) {
+					continue
+				}
+				rank := providerRank(chain, bar.ProviderID)
+				row, rowErr := stockKlineRow(bar, firstNonEmptyString(p.RouteID, StockCNRouteID), rank)
+				if rowErr != nil {
+					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "normalize", rowErr)
+					return
+				}
+				itemRows = append(itemRows, row)
+			}
+			if len(itemRows) == 0 {
+				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "coverage", fmt.Errorf("provider returned no bars inside the requested coverage"))
+				return
+			}
+			rowsMu.Lock()
+			rows = append(rows, itemRows...)
+			rowsMu.Unlock()
+			results[index] = successResult(item)
+		}()
+	}
+	wg.Wait()
+	sort.Slice(rows, func(i, j int) bool {
+		left, right := rows[i].GetKey().GetTimeSeries(), rows[j].GetKey().GetTimeSeries()
+		if left.GetSubjectId() == right.GetSubjectId() {
+			return left.GetDataTime() < right.GetDataTime()
+		}
+		return left.GetSubjectId() < right.GetSubjectId()
+	})
 	if len(rows) > 0 {
 		var err error
 		if storage, ok := p.Storage.(sourceStorage); ok {
