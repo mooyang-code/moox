@@ -28,6 +28,14 @@ spaces:
 
 data_sources:
 - space_id: stock_cn
+  data_source_id: stock_cn
+  name: A股聚合行情
+  kind: internal
+  market: CN
+  timezone: Asia/Shanghai
+  config_json: '{}'
+  status: active
+- space_id: stock_cn
   data_source_id: quantclass_stock
   name: QuantClass股票数据
   kind: file_import
@@ -74,8 +82,19 @@ data_sources:
 
 datasets:
 - space_id: stock_cn
+  dataset_id: stock_cn_instruments
+  data_source_id: stock_cn
+  name: A股全市场标的
+  data_kind: record
+  data_node_id: storage-node-0
+  keep_duration: '0'
+  status: disabled
+  attributes:
+    instrument_type: equity
+    storage_model: wide_common_metrics
+- space_id: stock_cn
   dataset_id: stock_cn_kline
-  data_source_id: quantclass_stock
+  data_source_id: stock_cn
   name: A股分钟行情
   data_kind: time_series
   data_node_id: storage-node-0
@@ -328,6 +347,34 @@ fields:
   name: 源证券代码
   value_type: string
   sort_order: 50
+  status: active
+- space_id: stock_cn
+  group_id: identity
+  field_id: exchange
+  name: 交易所
+  value_type: string
+  sort_order: 51
+  status: active
+- space_id: stock_cn
+  group_id: identity
+  field_id: instrument_name
+  name: 证券名称
+  value_type: string
+  sort_order: 52
+  status: active
+- space_id: stock_cn
+  group_id: identity
+  field_id: instrument_status
+  name: 证券状态
+  value_type: string
+  sort_order: 53
+  status: active
+- space_id: stock_cn
+  group_id: identity
+  field_id: snapshot_id
+  name: 标的快照ID
+  value_type: string
+  sort_order: 54
   status: active
 - space_id: stock_cn
   group_id: identity
@@ -885,6 +932,69 @@ fields:
   status: active
 
 dataset_columns:
+- space_id: stock_cn
+  dataset_id: stock_cn_instruments
+  column_name: security_code
+  origin_type: field
+  origin_id: security_code
+  value_type: string
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_instruments
+  column_name: provider_symbol
+  origin_type: field
+  origin_id: provider_symbol
+  value_type: string
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_instruments
+  column_name: exchange
+  origin_type: field
+  origin_id: exchange
+  value_type: string
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_instruments
+  column_name: instrument_name
+  origin_type: field
+  origin_id: instrument_name
+  value_type: string
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_instruments
+  column_name: instrument_status
+  origin_type: field
+  origin_id: instrument_status
+  value_type: string
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_instruments
+  column_name: snapshot_id
+  origin_type: field
+  origin_id: snapshot_id
+  value_type: string
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_instruments
+  column_name: source_provider
+  origin_type: field
+  origin_id: source_provider
+  value_type: string
+  required: true
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_instruments
+  column_name: fetched_at
+  origin_type: field
+  origin_id: fetched_at
+  value_type: time
+  required: true
+  status: active
+
 - space_id: crypto_market
   dataset_id: binance_spot_symbols
   column_name: symbol

@@ -201,15 +201,42 @@ func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 	}
 }
 
+func TestStorageViewConfigFilesRouteStockCNDatasets(t *testing.T) {
+	for _, path := range []string{
+		filepath.Join("..", "..", "config", "storage.yaml"),
+		filepath.Join("..", "..", "config", "storage_view", "trpc_go.yaml"),
+	} {
+		t.Run(path, func(t *testing.T) {
+			t.Setenv("MOOX_STORAGE_CONFIG", path)
+			opts, err := storageViewConsumerOptions()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			stockRoutes := make(map[string]bool)
+			for _, partition := range opts.PartitionConfigs {
+				for _, route := range partition.DatasetRoutes {
+					if route.SpaceID == "stock_cn" {
+						stockRoutes[route.DatasetID] = true
+					}
+				}
+			}
+			if stockRoutes["stock_kline"] || !stockRoutes["stock_cn_kline"] || !stockRoutes["stock_cn_instruments"] {
+				t.Fatalf("stock_cn routes = %+v", stockRoutes)
+			}
+		})
+	}
+}
+
 func TestStripWildcardConsumerRoutesKeepsStaticMiscDurableStable(t *testing.T) {
 	opts := viewservice.EventConsumerOptions{PartitionConfigs: []viewservice.EventConsumerOptions{
 		{PartitionID: "misc", Consumer: "storage_view_misc", DatasetRoutes: []viewservice.DatasetRoute{
 			{SpaceID: "crypto_market", DatasetID: "*"},
-			{SpaceID: "stock_cn", DatasetID: "stock_kline"},
+			{SpaceID: "stock_cn", DatasetID: "stock_cn_kline"},
 		}},
 	}}
 	stripWildcardConsumerRoutes(&opts)
-	if got := opts.PartitionConfigs[0].DatasetRoutes; len(got) != 1 || got[0].SpaceID != "stock_cn" || got[0].DatasetID != "stock_kline" {
+	if got := opts.PartitionConfigs[0].DatasetRoutes; len(got) != 1 || got[0].SpaceID != "stock_cn" || got[0].DatasetID != "stock_cn_kline" {
 		t.Fatalf("static routes = %+v, want only exact route", got)
 	}
 }

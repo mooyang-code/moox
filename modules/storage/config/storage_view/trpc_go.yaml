@@ -177,7 +177,7 @@ storage:
           - space_id: moox_system
             dataset_ids: [host_disk_v1, host_fs_v1, host_net_v1, host_resource_v1]
           - space_id: stock_cn
-            dataset_ids: [financial_statement_metric, financial_summary, index_kline, stock_kline]
+            dataset_ids: [financial_statement_metric, financial_summary, index_kline, stock_cn_instruments, stock_cn_kline]
         fetch_batch: 4
         max_workers: 2
         max_ack_pending: 16
