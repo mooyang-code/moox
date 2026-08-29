@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将当前 Python `run-once + quantity` Strategy V1 直接替换为由 `ViewFactorPeriodReady` 驱动、按全市场当期截面求值并向 Trade 输出 FULL 目标权重的声明式选币策略框架。
+**Goal:** 将当前 Python `run-once + quantity` Strategy V1 直接替换为由 `ViewFactorPeriodReady` 驱动、按完整标的池当期求值并向 Trade 输出 FULL 目标权重的声明式选币策略框架。
 
 **Architecture:** 发布阶段将 `moox.strategy/v2` `Manifest` 严格编译为不可变 `StrategyDef.compiled_json`，冻结 Source View、Factor Binding、Factor Result View 和列依赖；运行阶段动态解析 InstrumentPool、加载当期 `EvaluationInput`、使用纯 Go evaluator 生成规范权重。Strategy 通过 inbox/outbox 和单 SQLite 事务保证事件幂等，Trade 在消费 `LogicalAccountTargetRequested` 时同步冻结权益、参考价格和 raw quantity，保存不可变 `TargetReceipt`，再复用现有 TargetExecutor 做账户选择、步长量化和下单。
 
@@ -22,7 +22,16 @@
 - Strategy 到 Trade 的跨模块目标只包含 `target_weight`；quantity 只在 Trade 内部同步换算后出现。
 - 项目未上线，不保留 V1 schema、RPC、Proto 字段、Python SDK 或兼容适配层。
 - 12 个 XBX 因子重写与导入属于独立交付，不进入本 Strategy 计划；本计划只依赖已启用的 `factor_id + Binding`。
-- 命名固定为：用户 YAML 类型 `Manifest`、当期求值数据 `EvaluationInput`、启用复核 `Compiler.VerifyDependencies`、Trade 不可变处理回执 `TargetReceipt`。
+- 命名固定为：用户 YAML 类型 `config.Manifest`、当期求值数据 `EvaluationInput`、启用复核
+  `Compiler.VerifyDependencies`、标的池评分步骤 `PoolScoring`、方向权重分配步骤
+  `WeightAllocator`、Trade 不可变处理回执 `TargetReceipt`。
+- 不使用 `config.Config`、`CrossSection`、`Panel`、`InputBarrier`、`PortfolioComposer` 等
+  泛化或容易产生歧义的名称。输入完整性检查使用无状态 `ReadinessChecker`；没有持久化
+  barrier 状态。
+- Trade 回执表固定为 `t_logical_account_target_receipts`，不创建
+  `t_logical_account_target_conversions` 或 `t_logical_account_target_resolutions`。
+- `circulating_supply` 不属于 Strategy 框架字段；需要时由独立 Factor 提供并以
+  `factor_id` 引用。
 - ready 处理器只依赖 `InboxStore` 与 `EvaluationStore` 两个调用方接口，不建设覆盖 Strategy 全模块的大 Repository。
 
 ## 实施口径补充
@@ -41,6 +50,27 @@
 10. Trade 增加不可变回执表 `t_logical_account_target_receipts`，永久复用已接受 `target_id` 的首次权益、价格和 quantity；它不是异步 Resolver，不增加 PENDING/CAS/SUPERSEDED 状态机。
 11. Trade 报价按 LogicalAccount member 的 `(priority,trading_account_id)` 选择第一个 ready member；TargetExecutor 仍负责最终账户选择、contract value、step、minimum 和容量。
 12. 一期每个 Result 逻辑键只保留 latest-wins 当前行，不增加 revision/history 表；ready event ID 只放 `debug_info.source_event_ids`，不参与 input hash。
+
+## 周期事件与全市场完整性
+
+全市场选币不由 Strategy 维护一个跨标的计数器，也不等待一个不具备明确数据归属的
+“全市场完成”事件。周期完成信号按数据层级发布：
+
+| 事件 | 发布者 | 合同 |
+| --- | --- | --- |
+| `DatasetPeriodCollected` | Collector | Source View 的某个 `period_time` 已提交并可查询；用于触发 Factor |
+| `ViewFactorPeriodReady` | Factor outbox | Factor Result View 的该周期结果已提交并可查询；用于触发 Strategy |
+
+Factor 可以在内部日志中记录“factor period collected”，但不再额外维护一个与
+`ViewFactorPeriodReady` 语义重复的 Strategy 触发事件。Strategy 收到任意相关 ready 后，
+由 `ReadinessChecker` 加载 Manifest 解析出的完整 `InstrumentPool`；缺少任一标的、必需
+列或未完成 View 时，`strict` 策略整期跳过，等待重复/后续 ready 事件重试。这样排名
+始终基于全池样本，且事件重复由 inbox 去重、输入 hash 负责同周期 latest-wins。
+
+本计划只实现 Strategy 对 `ViewFactorPeriodReady` 的消费。`DatasetPeriodCollected` 的
+发布和 Factor 的结果 View 发布属于 Collector/Factor 的上游职责；发布前必须满足“数据
+已提交且可查询”的约束，缺少该上游能力时将阻塞 Strategy 的正式 E2E 验收，而不是在
+Strategy 内补一个临时全市场计数器。
 
 ## 目标文件图
 
@@ -129,7 +159,7 @@ func TestParseRejectsUnknownAndUnsupportedFields(t *testing.T) {
 func TestValidateRejectsPureSpotShort(t *testing.T) {
     manifest := validManifest()
     manifest.InstrumentPool.Markets = []string{"spot"}
-    manifest.Short = &config.SideConfig{SideWeight: "1", Scores: validScores(), Selection: count(1)}
+    manifest.Short = &config.Side{SideWeight: "1", Scores: validScores(), Selection: count(1)}
     require.ErrorContains(t, config.Validate(manifest), "spot-only instrument_pool cannot enable short")
 }
 ```
@@ -149,15 +179,15 @@ Expected: FAIL，`Parse/Validate` 和 quant 包尚不存在。
 type Manifest struct {
     APIVersion     string             `yaml:"api_version"`
     Kind           string             `yaml:"kind"`
-    Input          InputConfig        `yaml:"input"`
+    Input          ManifestInput      `yaml:"input"`
     InstrumentPool InstrumentPoolRule `yaml:"instrument_pool"`
-    Schedule       ScheduleConfig     `yaml:"schedule"`
-    Readiness      ReadinessConfig    `yaml:"readiness"`
-    Long           *SideConfig        `yaml:"long,omitempty"`
-    Short          *SideConfig        `yaml:"short,omitempty"`
+    Schedule       Schedule           `yaml:"schedule"`
+    Readiness      Readiness          `yaml:"readiness"`
+    Long           *Side              `yaml:"long,omitempty"`
+    Short          *Side              `yaml:"short,omitempty"`
 }
 
-type InputConfig struct {
+type ManifestInput struct {
     SourceViewID  string      `yaml:"source_view_id"`
     DataFrequency string      `yaml:"data_frequency"`
     Factors       []FactorRef `yaml:"factors"`
@@ -195,15 +225,15 @@ type SelectionRule struct {
     Value string `yaml:"value"`
 }
 
-type ScheduleConfig struct {
+type Schedule struct {
     Every string `yaml:"every"`
 }
 
-type ReadinessConfig struct {
+type Readiness struct {
     Policy string `yaml:"policy"`
 }
 
-type SideConfig struct {
+type Side struct {
     SideWeight string        `yaml:"side_weight"`
     Scores     []ScoreRule   `yaml:"scores"`
     Filters    []FilterRule  `yaml:"filters"`
@@ -491,7 +521,7 @@ git commit -m "feat(strategy): build strategy evaluation input"
 
 Expected: PASS 后提交。
 
-### Task 5: 实现纯 Go 横截面选币 evaluator
+### Task 5: 实现纯 Go 标的池选币 evaluator
 
 **Files:**
 - Create: `modules/strategy/internal/selection/rank.go`
@@ -562,7 +592,7 @@ cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
 go test ./internal/selection -count=1
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 git add modules/strategy/internal/selection
-git commit -m "feat(strategy): evaluate cross sectional coin selection"
+git commit -m "feat(strategy): evaluate instrument pool coin selection"
 ```
 
 Expected: PASS 后提交。
