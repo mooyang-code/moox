@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 )
 
@@ -33,9 +35,144 @@ type NodeAssignment struct {
 	Frequency       string
 	Subjects        []string
 	ExternalSymbols map[string]string
+	ProviderChain   []string
+	RouteVersion    string
+	GroupID         int
 	Cron            string
 	Enabled         bool
 	AssignmentHash  string
+}
+
+var stockCNProviderWeights = map[string]int{
+	"eastmoney": 1,
+	"sina":      1,
+	"tencent":   1,
+}
+
+// BuildStockCNAssignments maps the published Timer fleet one-to-one to stable
+// rendezvous groups. The fleet size is a release decision; universe refreshes
+// only change the per-node environment and never create or remove functions.
+func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, maxSubjects int, tradingDate string) ([]NodeAssignment, error) {
+	if maxSubjects <= 0 {
+		return nil, fmt.Errorf("max subjects must be positive")
+	}
+	group.Provider = strings.ToLower(strings.TrimSpace(group.Provider))
+	group.MarketType = strings.ToLower(strings.TrimSpace(group.MarketType))
+	group.DatasetID = strings.TrimSpace(group.DatasetID)
+	group.Frequency = strings.ToLower(strings.TrimSpace(group.Frequency))
+	group.Subjects = normalizeSubjects(group.Subjects)
+	if group.MarketType != "equity" || group.DatasetID != StockCNDatasetID || group.Frequency != "1m" || len(group.Subjects) == 0 {
+		return nil, fmt.Errorf("stock_cn assignment requires equity/%s/1m and at least one subject", StockCNDatasetID)
+	}
+	if group.ExternalSymbols == nil {
+		return nil, fmt.Errorf("task group external symbol mapping is required")
+	}
+	for _, subject := range group.Subjects {
+		if strings.TrimSpace(group.ExternalSymbols[subject]) == "" {
+			return nil, fmt.Errorf("subject %s has no external symbol", subject)
+		}
+	}
+	timerNodes := eligibleTimerNodes(nodes)
+	if len(timerNodes) == 0 {
+		return nil, fmt.Errorf("timer assignment capacity insufficient: stock_cn requires a published Timer SCF fleet")
+	}
+	sort.Slice(timerNodes, func(i, j int) bool {
+		left, right := strings.TrimSpace(timerNodes[i].FunctionName), strings.TrimSpace(timerNodes[j].FunctionName)
+		if left == right {
+			return timerNodes[i].NodeID < timerNodes[j].NodeID
+		}
+		return left < right
+	})
+	groups, err := marketdata.RendezvousAssign(group.Subjects, len(timerNodes), StockCNRouteID)
+	if err != nil {
+		return nil, fmt.Errorf("assign stock_cn rendezvous groups: %w", err)
+	}
+	groups, err = rebalanceRendezvousGroups(groups, maxSubjects, StockCNRouteID)
+	if err != nil {
+		return nil, err
+	}
+	chains, err := marketdata.AssignProviderChains(len(timerNodes), stockCNProviderWeights, StockCNRouteID, strings.TrimSpace(tradingDate))
+	if err != nil {
+		return nil, fmt.Errorf("assign stock_cn provider chains: %w", err)
+	}
+	cron, err := CronForFrequency(group.Frequency)
+	if err != nil {
+		return nil, err
+	}
+	assignments := make([]NodeAssignment, 0, len(timerNodes))
+	for groupID, subjects := range groups {
+		if len(subjects) > maxSubjects {
+			return nil, fmt.Errorf("stock_cn rendezvous group %d contains %d subjects; maximum is %d", groupID, len(subjects), maxSubjects)
+		}
+		externals := make(map[string]string, len(subjects))
+		hashParts := make([]string, 0, len(subjects))
+		for _, subject := range subjects {
+			external := strings.TrimSpace(group.ExternalSymbols[subject])
+			externals[subject] = external
+			hashParts = append(hashParts, subject+"="+external)
+		}
+		node := timerNodes[groupID]
+		chain := append([]string(nil), chains[groupID]...)
+		assignments = append(assignments, NodeAssignment{
+			NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region,
+			Provider: chain[0], MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency,
+			Subjects: append([]string(nil), subjects...), ExternalSymbols: externals, ProviderChain: chain,
+			RouteVersion: StockCNRouteID, GroupID: groupID, Cron: cron, Enabled: len(subjects) > 0,
+			AssignmentHash: AssignmentHash(chain[0], strings.Join(chain, "|"), StockCNRouteID, strconv.Itoa(groupID), group.MarketType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|")),
+		})
+	}
+	return assignments, nil
+}
+
+func rebalanceRendezvousGroups(groups [][]string, maxSubjects int, routeVersion string) ([][]string, error) {
+	if len(groups) == 0 || maxSubjects <= 0 {
+		return nil, fmt.Errorf("stock_cn rendezvous capacity must be positive")
+	}
+	total := 0
+	for _, group := range groups {
+		total += len(group)
+	}
+	if total > len(groups)*maxSubjects {
+		return nil, fmt.Errorf("stock_cn timer assignment capacity insufficient: %d subjects exceed %d groups x %d subjects", total, len(groups), maxSubjects)
+	}
+	result := make([][]string, len(groups))
+	overflow := make([]string, 0)
+	for groupID, subjects := range groups {
+		keep := len(subjects)
+		if keep > maxSubjects {
+			keep = maxSubjects
+			overflow = append(overflow, subjects[keep:]...)
+		}
+		result[groupID] = append([]string(nil), subjects[:keep]...)
+	}
+	sort.Strings(overflow)
+	for _, subject := range overflow {
+		candidates := make([]int, 0, len(result))
+		for groupID := range result {
+			if len(result[groupID]) < maxSubjects {
+				candidates = append(candidates, groupID)
+			}
+		}
+		choice, err := marketdata.RendezvousAssign([]string{subject}, len(candidates), routeVersion+"\x00overflow")
+		if err != nil {
+			return nil, fmt.Errorf("rebalance stock_cn rendezvous overflow: %w", err)
+		}
+		selected := -1
+		for candidateIndex, assigned := range choice {
+			if len(assigned) > 0 {
+				selected = candidates[candidateIndex]
+				break
+			}
+		}
+		if selected < 0 {
+			return nil, fmt.Errorf("rebalance stock_cn rendezvous overflow subject %s: no candidate group", subject)
+		}
+		result[selected] = append(result[selected], subject)
+	}
+	for groupID := range result {
+		sort.Strings(result[groupID])
+	}
+	return result, nil
 }
 
 // BuildAssignments sorts both inputs before assigning shards, so a refresh
@@ -44,12 +181,7 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 	if maxSubjects <= 0 {
 		return nil, fmt.Errorf("max subjects must be positive")
 	}
-	timerNodes := make([]scfinvoker.Node, 0, len(nodes))
-	for _, node := range nodes {
-		if strings.EqualFold(strings.TrimSpace(node.NodeType), "scf-event") && strings.EqualFold(strings.TrimSpace(node.TriggerType), "timer") {
-			timerNodes = append(timerNodes, node)
-		}
-	}
+	timerNodes := eligibleTimerNodes(nodes)
 	timerNodes = roundRobinRegions(timerNodes)
 	normalized := make([]TaskGroup, 0, len(groups))
 	for _, group := range groups {
@@ -112,6 +244,16 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 	}
 	sort.Slice(assignments, func(i, j int) bool { return assignments[i].NodeID < assignments[j].NodeID })
 	return assignments, nil
+}
+
+func eligibleTimerNodes(nodes []scfinvoker.Node) []scfinvoker.Node {
+	timerNodes := make([]scfinvoker.Node, 0, len(nodes))
+	for _, node := range nodes {
+		if strings.EqualFold(strings.TrimSpace(node.NodeType), "scf-event") && strings.EqualFold(strings.TrimSpace(node.TriggerType), "timer") {
+			timerNodes = append(timerNodes, node)
+		}
+	}
+	return timerNodes
 }
 
 func roundRobinRegions(nodes []scfinvoker.Node) []scfinvoker.Node {

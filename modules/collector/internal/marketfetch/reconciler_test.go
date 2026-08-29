@@ -166,6 +166,39 @@ func TestReconcilerCopiesOneDNSSnapshotToPerNodeAssignmentsAndAvoidsNoop(t *test
 	require.Equal(t, 1, nodes.submits, "unchanged assignment and DNS must not call CloudNode again")
 }
 
+func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity", Enabled: true,
+		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m"}`,
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{
+		{NodeID: "timer-2", FunctionName: "moox-stock-cn-001", Region: "ap-shanghai", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "timer-1", FunctionName: "moox-stock-cn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+	}}
+	reconciler := &Reconciler{
+		Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{
+			{SubjectID: "600000.XSHG", ExternalSymbol: "sh600000", Status: "active"},
+			{SubjectID: "000001.XSHE", ExternalSymbol: "sz000001", Status: "active"},
+		}},
+		Nodes: nodes,
+		Now:   func() time.Time { return time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC) },
+	}
+
+	require.NoError(t, reconciler.Reconcile(context.Background(), StockCNSpaceID))
+	require.Len(t, nodes.patches, 2)
+	groups := make(map[string]struct{}, 2)
+	for _, patch := range nodes.patches {
+		require.True(t, patch.GetTimerEnabled())
+		env := patch.GetManagedEnvironment()
+		require.Equal(t, StockCNRouteID, env["MOOX_MARKET_FETCH_ROUTE_VERSION"])
+		require.NotEmpty(t, env["MOOX_MARKET_FETCH_PROVIDER_CHAIN"])
+		require.NotEmpty(t, env["MOOX_MARKET_FETCH_GROUP_ID"])
+		groups[env["MOOX_MARKET_FETCH_GROUP_ID"]] = struct{}{}
+	}
+	require.Len(t, groups, 2)
+}
+
 func TestReconcilerFailsWithoutTimerCapacityBeforeSubmitting(t *testing.T) {
 	rule := domain.TaskRule{
 		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,

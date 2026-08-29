@@ -19,6 +19,12 @@ const (
 	// Tencent's 4KB function-environment limit. Collector owns only this
 	// managed portion and cannot see every provider-owned key before submit.
 	maxManagedEnvironmentSize = 1800
+	// Stock groups are slightly larger than crypto shards because a fixed fleet
+	// uses rendezvous hashing instead of creating another function on overflow.
+	// CloudNode still reports the real per-function remaining budget, which can
+	// lower this ceiling before a patch is submitted.
+	stockCNMaxManagedEnvironmentSize = 2200
+	stockCNMaxSubjects               = 30
 )
 
 // BuildManagedEnvironment creates only the Collector-owned keys. CloudNode
@@ -47,8 +53,12 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 		}
 	}
 	subjects := normalizeSubjects(assignment.Subjects)
-	if len(subjects) > 30 {
-		return nil, fmt.Errorf("assignment contains %d subjects; maximum is 30", len(subjects))
+	maxSubjects := 30
+	if assignment.RouteVersion == StockCNRouteID {
+		maxSubjects = stockCNMaxSubjects
+	}
+	if len(subjects) > maxSubjects {
+		return nil, fmt.Errorf("assignment contains %d subjects; maximum is %d", len(subjects), maxSubjects)
 	}
 	routes, dnsHash, updatedAt := normalizeDNSRoutes(snapshot)
 	rawRoutes, err := json.Marshal(routes)
@@ -82,6 +92,11 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 		"MOOX_MARKET_FETCH_DNS_ROUTES_JSON": string(rawRoutes),
 		"MOOX_MARKET_FETCH_DNS_HASH":        dnsHash,
 		"MOOX_MARKET_FETCH_DNS_UPDATED_AT":  updatedAt,
+	}
+	if assignment.RouteVersion != "" {
+		environment["MOOX_MARKET_FETCH_PROVIDER_CHAIN"] = strings.Join(assignment.ProviderChain, "|")
+		environment["MOOX_MARKET_FETCH_ROUTE_VERSION"] = assignment.RouteVersion
+		environment["MOOX_MARKET_FETCH_GROUP_ID"] = fmt.Sprint(assignment.GroupID)
 	}
 	if environmentBytes(environment) > maxSize {
 		return nil, fmt.Errorf("timer assignment environment is %d bytes before provider variables; reduce symbols or split the assignment (managed budget %d)", environmentBytes(environment), maxSize)

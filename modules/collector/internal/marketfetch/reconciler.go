@@ -55,6 +55,7 @@ type Reconciler struct {
 	DNS          dnsSnapshotter
 	Metrics      *Metrics
 	MaxSubjects  int
+	Now          func() time.Time
 	mu           sync.Mutex
 	reconcileMu  sync.Mutex
 	pending      map[string]string
@@ -118,7 +119,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	// validation. A malformed budget or an individual symbol that cannot fit
 	// must still become a visible Monitor coordination failure.
 	r.observeAssignmentRequirements(spaceID, groups)
-	managedBudget, budgetErr := managedEnvironmentBudget(nodes)
+	stockCN := strings.EqualFold(spaceID, StockCNSpaceID)
+	managedBudget, budgetErr := managedEnvironmentBudget(nodes, managedEnvironmentLimit(stockCN))
 	if budgetErr != nil {
 		return r.fail(spaceID, "environment", budgetErr)
 	}
@@ -126,9 +128,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	// legal symbol fits in Tencent's 4KB Environment. Long symbols and DNS
 	// routes can consume the remaining bytes, so split a group further before
 	// checking node capacity instead of retrying the same oversized patch.
-	groups, err = splitGroupsForEnvironment(groups, dns, r.maxSubjects(), managedBudget)
-	if err != nil {
-		return r.fail(spaceID, "environment", err)
+	if !stockCN {
+		groups, err = splitGroupsForEnvironment(groups, dns, r.maxSubjects(), managedBudget)
+		if err != nil {
+			return r.fail(spaceID, "environment", err)
+		}
 	}
 	r.observeAssignmentRequirements(spaceID, groups)
 	// Publish the fleet-level demand before building assignments. If the
@@ -136,7 +140,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	// will fail below, but Monitor can still report the exact shortfall instead
 	// of waiting for a generic coordination error.
 	r.observeTimerCapacity(spaceID, nodes, groups, nil)
-	assignments, err := BuildAssignments(groups, nodes, r.maxSubjects())
+	var assignments []NodeAssignment
+	if stockCN {
+		if len(groups) != 1 {
+			return r.fail(spaceID, "rules", fmt.Errorf("stock_cn requires exactly one merged kline assignment group, got %d", len(groups)))
+		}
+		assignments, err = BuildStockCNAssignments(groups[0], nodes, stockCNMaxSubjects, r.stockCNTradingDate())
+	} else {
+		assignments, err = BuildAssignments(groups, nodes, r.maxSubjects())
+	}
 	if err != nil {
 		return r.fail(spaceID, "capacity", err)
 	}
@@ -149,7 +161,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	patches := make([]*cloudnodepb.NodeRuntimeConfigPatch, 0, len(assignments))
 	pendingFingerprints := make(map[string]string, len(assignments))
 	for _, assignment := range assignments {
-		environment, envErr := BuildManagedEnvironment(assignment, dns)
+		environment, envErr := buildManagedEnvironment(assignment, dns, managedBudget)
 		if envErr != nil {
 			return r.fail(spaceID, "environment", envErr)
 		}
@@ -306,8 +318,11 @@ func splitGroupsForEnvironment(groups []TaskGroup, snapshot map[string]sources.D
 	return result, nil
 }
 
-func managedEnvironmentBudget(nodes []scfinvoker.Node) (int, error) {
+func managedEnvironmentBudget(nodes []scfinvoker.Node, limits ...int) (int, error) {
 	budget := maxManagedEnvironmentSize
+	if len(limits) > 0 && limits[0] > 0 {
+		budget = limits[0]
+	}
 	for _, node := range nodes {
 		_, exists := node.Metadata["managed_environment_budget_bytes"]
 		if !exists {
@@ -322,6 +337,25 @@ func managedEnvironmentBudget(nodes []scfinvoker.Node) (int, error) {
 		}
 	}
 	return budget, nil
+}
+
+func managedEnvironmentLimit(stockCN bool) int {
+	if stockCN {
+		return stockCNMaxManagedEnvironmentSize
+	}
+	return maxManagedEnvironmentSize
+}
+
+func (r *Reconciler) stockCNTradingDate() string {
+	now := time.Now()
+	if r != nil && r.Now != nil {
+		now = r.Now()
+	}
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		location = time.FixedZone("CST", 8*60*60)
+	}
+	return now.In(location).Format("2006-01-02")
 }
 
 func metadataInt(metadata map[string]any, key string) int {
