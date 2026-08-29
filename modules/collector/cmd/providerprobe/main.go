@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,12 @@ type shadowKlineProvider interface {
 	Descriptor() marketdata.ProviderDescriptor
 	ShadowSpec() marketdata.KlineSpec
 	FetchShadowKlines(context.Context, marketdata.KlineRequest) ([]commonsrc.ShadowPoint, error)
+}
+
+type instrumentProvider interface {
+	Descriptor() marketdata.ProviderDescriptor
+	InstrumentSpec() marketdata.InstrumentSpec
+	FetchInstrumentSnapshot(context.Context, marketdata.InstrumentRequest) (marketdata.InstrumentSnapshot, error)
 }
 
 type probeArgs struct {
@@ -108,9 +115,16 @@ func run(ctx context.Context, args probeArgs) error {
 		})...)
 	}
 	if feed == "all" || feed == "instrument" {
-		for _, providerID := range []string{"sina", "tencent", "eastmoney", "baidu"} {
-			report.Entries = append(report.Entries, commonsrc.NewInstrumentNotSupportedEntry(providerID))
-		}
+		report.Entries = append(report.Entries, probeInstrumentProvider(ctx, clockNow, args.RequestTimout, "sina", func(client *http.Client) instrumentProvider {
+			return sina.New(sina.Config{HTTPClient: client, Now: clockNow})
+		}))
+		report.Entries = append(report.Entries, probeInstrumentProvider(ctx, clockNow, args.RequestTimout, "eastmoney", func(client *http.Client) instrumentProvider {
+			return eastmoney.New(eastmoney.Config{HTTPClient: client, Now: clockNow})
+		}))
+		report.Entries = append(report.Entries, probeInstrumentProvider(ctx, clockNow, args.RequestTimout, "baidu", func(client *http.Client) instrumentProvider {
+			return baidu.New(baidu.Config{HTTPClient: client, Now: clockNow})
+		}))
+		report.Entries = append(report.Entries, commonsrc.NewInstrumentNotSupportedEntry("tencent"))
 	}
 	commonsrc.SortEntries(report.Entries)
 	if _, err := report.MarshalJSONStrict(); err != nil {
@@ -130,9 +144,48 @@ func run(ctx context.Context, args probeArgs) error {
 	return writeAtomic(args.Output, content)
 }
 
+func probeInstrumentProvider(ctx context.Context, now func() time.Time, timeout time.Duration, providerID string, build func(*http.Client) instrumentProvider) commonsrc.ProbeEntry {
+	client, observation := newObservedClient(timeout)
+	provider := build(client)
+	started := time.Now()
+	snapshot, fetchErr := provider.FetchInstrumentSnapshot(ctx, marketdata.InstrumentRequest{
+		MarketID: "stock_cn", SnapshotAt: now(), RequestID: fmt.Sprintf("providerprobe-instrument-%s-%d", providerID, started.UnixNano()),
+	})
+	entry := commonsrc.ProbeEntry{
+		ProviderID: providerID, FeedKind: commonsrc.ProbeFeedInstrument, Exchange: "ALL",
+		HTTPStatus: observation.StatusCode(), LatencyMS: time.Since(started).Milliseconds(),
+		Result: commonsrc.ProbeResultFail, ErrorKind: classifyError(fetchErr), Error: sanitizeError(fetchErr),
+		PageCount: snapshot.PageCount, InstrumentCount: len(snapshot.Instruments), Complete: snapshot.Complete,
+		ExchangeCoverage: make([]string, 0, len(snapshot.ExchangeCounts)),
+	}
+	for exchange, count := range snapshot.ExchangeCounts {
+		if count > 0 {
+			entry.ExchangeCoverage = append(entry.ExchangeCoverage, exchange)
+		}
+	}
+	sort.Strings(entry.ExchangeCoverage)
+	if fetchErr == nil && snapshot.Complete && len(snapshot.Instruments) > 0 {
+		missing := make([]string, 0)
+		for _, exchange := range provider.InstrumentSpec().Exchanges {
+			if snapshot.ExchangeCounts[exchange] == 0 {
+				missing = append(missing, exchange)
+			}
+		}
+		if len(missing) == 0 {
+			entry.Result = commonsrc.ProbeResultPass
+			entry.ErrorKind = "none"
+		} else {
+			entry.Complete = false
+			entry.ErrorKind = "protocol"
+			entry.Error = "snapshot missing exchanges: " + strings.Join(missing, ",")
+		}
+	}
+	return entry
+}
+
 func normalizeSubjects(raw, feed string) ([]string, error) {
 	if strings.EqualFold(strings.TrimSpace(feed), "instrument") {
-		return []string{}, nil
+		return []string{"600000.XSHG", "000001.XSHE", "920000.XBSE"}, nil
 	}
 	if strings.TrimSpace(raw) == "" {
 		return nil, fmt.Errorf("--subjects is required for kline probes")

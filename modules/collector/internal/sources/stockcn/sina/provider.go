@@ -16,20 +16,28 @@ import (
 )
 
 type Config struct {
-	BaseURL    string
-	HTTPClient *http.Client
-	Now        func() time.Time
+	BaseURL           string
+	InstrumentBaseURL string
+	HTTPClient        *http.Client
+	Now               func() time.Time
 }
 
 type Provider struct {
-	baseURL string
-	client  *http.Client
-	now     func() time.Time
+	baseURL           string
+	instrumentBaseURL string
+	client            *http.Client
+	now               func() time.Time
 }
 
 func New(cfg Config) *Provider {
+	if cfg.InstrumentBaseURL == "" && cfg.BaseURL != "" {
+		cfg.InstrumentBaseURL = cfg.BaseURL
+	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://quotes.sina.cn"
+	}
+	if cfg.InstrumentBaseURL == "" {
+		cfg.InstrumentBaseURL = "https://vip.stock.finance.sina.com.cn"
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 5 * time.Second}
@@ -37,11 +45,11 @@ func New(cfg Config) *Provider {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now}
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), instrumentBaseURL: strings.TrimRight(cfg.InstrumentBaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now}
 }
 
 func (*Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "sina", DisplayName: "Sina", Hosts: []string{"quotes.sina.cn"}}
+	return marketdata.ProviderDescriptor{ID: "sina", DisplayName: "Sina", Hosts: []string{"quotes.sina.cn", "vip.stock.finance.sina.com.cn"}}
 }
 
 func (*Provider) KlineSpec() marketdata.KlineSpec {
@@ -68,7 +76,7 @@ func (*Provider) InstrumentSpec() marketdata.InstrumentSpec {
 		Markets:      []string{"stock_cn"},
 		Exchanges:    []string{"XSHG", "XSHE", "XBSE"},
 		FullSnapshot: true,
-		PageSize:     500,
+		PageSize:     100,
 		RateLimit: marketdata.RateLimitPolicy{
 			RequestsPerSecond: 5,
 			Burst:             2,
@@ -190,10 +198,14 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 	builder := commonsrc.NewInstrumentSnapshotBuilder(p.Descriptor().ID, marketID, fetchedAt)
 	for page := 1; ; page++ {
 		query := url.Values{
-			"page": {strconv.Itoa(page)},
-			"num":  {strconv.Itoa(spec.PageSize)},
+			"page":   {strconv.Itoa(page)},
+			"num":    {strconv.Itoa(spec.PageSize)},
+			"sort":   {"symbol"},
+			"asc":    {"1"},
+			"node":   {"hs_a"},
+			"_s_r_a": {"page"},
 		}
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/Market_Center.getHQNodeData?"+query.Encode(), nil)
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.instrumentBaseURL+"/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?"+query.Encode(), nil)
 		if err != nil {
 			return marketdata.InstrumentSnapshot{}, err
 		}
@@ -215,15 +227,23 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		if readErr != nil {
 			return marketdata.InstrumentSnapshot{}, readErr
 		}
-		var payload map[string]any
-		if err := json.Unmarshal(body, &payload); err != nil {
-			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
+		var direct []map[string]any
+		items := direct
+		totalPages := 0
+		if err := json.Unmarshal(body, &direct); err == nil {
+			items = direct
+		} else {
+			var payload map[string]any
+			if err := json.Unmarshal(body, &payload); err != nil {
+				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
+			}
+			data := commonsrc.ObjectAt(payload, "data")
+			if data == nil {
+				data = payload
+			}
+			items = commonsrc.ItemSlice(data, "list", "items", "diff")
+			totalPages = commonsrc.PageLimit(data, spec.PageSize)
 		}
-		data := commonsrc.ObjectAt(payload, "data")
-		if data == nil {
-			data = payload
-		}
-		items := commonsrc.ItemSlice(data, "list", "items", "diff")
 		if len(items) == 0 {
 			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument page %d is empty", marketdata.ErrProtocol, page)
 		}
@@ -243,14 +263,8 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 			}
 		}
 		builder.NextPage()
-		if totalPages := commonsrc.PageLimit(data, spec.PageSize); totalPages > 0 {
+		if totalPages > 0 {
 			if page >= totalPages {
-				break
-			}
-			continue
-		}
-		if hasMore, ok := commonsrc.BoolField(data, "hasnext", "has_next", "hasMore", "has_more"); ok {
-			if !hasMore {
 				break
 			}
 			continue

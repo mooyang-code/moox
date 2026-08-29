@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -197,7 +198,7 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		query := url.Values{
 			"pn":     {strconv.Itoa(page)},
 			"pz":     {strconv.Itoa(spec.PageSize)},
-			"fs":     {"m:0 t:6 m:1 t:2,m:0 t:80"},
+			"fs":     {"m:0 t:6,m:0 t:80,m:1 t:2"},
 			"fid":    {"f12"},
 			"fields": {"f12,f13,f14,f115,f152,f103,f128,f129"},
 		}
@@ -232,6 +233,20 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument payload missing data", marketdata.ErrProtocol)
 		}
 		items := commonsrc.ItemSlice(data, "diff", "clist", "list")
+		if len(items) == 0 {
+			if diff := commonsrc.ObjectAt(data, "diff"); len(diff) > 0 {
+				keys := make([]string, 0, len(diff))
+				for key := range diff {
+					keys = append(keys, key)
+				}
+				sort.Strings(keys)
+				for _, key := range keys {
+					if item, ok := diff[key].(map[string]any); ok {
+						items = append(items, item)
+					}
+				}
+			}
+		}
 		if len(items) == 0 {
 			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument page %d is empty", marketdata.ErrProtocol, page)
 		}

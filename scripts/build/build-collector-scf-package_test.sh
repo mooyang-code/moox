@@ -27,3 +27,16 @@ unzip -l "${package_path}" >"${listing_path}"
 grep -q ' main$' "${listing_path}"
 grep -q ' sources/market/binance.yaml$' "${listing_path}"
 ! grep -q 'trpc_go.yaml' "${listing_path}"
+
+stock_package_path="${TMP_ROOT}/collector-stock-cn-scf.zip"
+(
+  cd "${TMP_ROOT}"
+  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="stock_cn" SCF_ENTRYPOINT="stock_cn" MOOX_STORAGE_PRIMARY_AUTH_SECRET="test-storage-secret" VERSION="contract-test" OUT_PATH="collector-stock-cn-scf.zip" \
+    bash "${ROOT}/scripts/build-collector-scf-package.sh"
+)
+stock_listing_path="${TMP_ROOT}/stock-listing.txt"
+unzip -l "${stock_package_path}" >"${stock_listing_path}"
+grep -q ' main$' "${stock_listing_path}"
+grep -q ' sources/market/binance.yaml$' "${stock_listing_path}"
+grep -q ' markets/stock_cn/calendar.yaml$' "${stock_listing_path}"
+! grep -q 'trpc_go.yaml' "${stock_listing_path}"

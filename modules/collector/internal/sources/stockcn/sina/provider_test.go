@@ -38,7 +38,7 @@ func TestFetchKlinesParsesFixture(t *testing.T) {
 
 func TestFetchInstrumentSnapshotPaginatesSuccessfullyAndCountsExchanges(t *testing.T) {
 	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/Market_Center.getHQNodeData", r.URL.Path)
+		require.Equal(t, "/quotes_service/api/json_v2.php/Market_Center.getHQNodeData", r.URL.Path)
 		switch r.URL.Query().Get("page") {
 		case "1":
 			_, _ = w.Write([]byte(`{
