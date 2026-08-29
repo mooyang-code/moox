@@ -11,24 +11,13 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	commonsrc "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
 )
 
 type Config struct {
 	BaseURL    string
 	HTTPClient *http.Client
 	Now        func() time.Time
-}
-
-type ShadowPoint struct {
-	SubjectID      string
-	ProviderID     string
-	ProviderSymbol string
-	BarStart       time.Time
-	Price          float64
-	VolumeShares   float64
-	AmountCNY      float64
-	FetchedAt      time.Time
-	RequestID      string
 }
 
 type Provider struct {
@@ -82,7 +71,7 @@ type shadowResponse struct {
 	} `json:"Result"`
 }
 
-func (p *Provider) FetchShadowKlines(ctx context.Context, req marketdata.KlineRequest) ([]ShadowPoint, error) {
+func (p *Provider) FetchShadowKlines(ctx context.Context, req marketdata.KlineRequest) ([]commonsrc.ShadowPoint, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -114,13 +103,13 @@ func (p *Provider) FetchShadowKlines(ctx context.Context, req marketdata.KlineRe
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 	}
-	points := make([]ShadowPoint, 0, len(payload.Result))
+	points := make([]commonsrc.ShadowPoint, 0, len(payload.Result))
 	for _, result := range payload.Result {
 		barStart, err := time.Parse(time.RFC3339, result.Time)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 		}
-		points = append(points, ShadowPoint{
+		points = append(points, commonsrc.ShadowPoint{
 			SubjectID:      req.SubjectID,
 			ProviderID:     "baidu",
 			ProviderSymbol: req.ProviderSymbol,
