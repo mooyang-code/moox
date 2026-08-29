@@ -16,8 +16,8 @@
 
 - 中文功能名统一为“**K线重采样**”。
 - Collector data type 使用 `kline_resample`，本地 provider 使用 `moox`。
-- Go package 使用 `klineresample`，核心函数使用 `ResampleBars`，结果类型使用 `ResampledBar`。
-- 配置、RPC、指标、日志和测试统一使用 `resample`，不再引入其他同义词。
+- Collector 内部 Go package 使用 `resample`，核心函数使用 `Bars`，结果类型使用 `Result`。
+- 持久化 data type、RPC、YAML、Timer、指标、日志和事件标识使用 `kline_resample`，保留 K 线业务边界；内部包名不重复业务类型。
 - Dataset 名称保留已经确认的派生语义：`spot_kline_derived_4h`、`swap_kline_derived_90m`。`derived` 表示数据来源性质，`resample` 表示生成方式，两者不冲突。
 
 ### 0.2 Source Dataset 与 DataSource ID
@@ -25,7 +25,7 @@
 - 创建重采样规则时，用户选择的是 `source_dataset_id`，不是 Storage 的 `data_source_id`。
 - Source 下拉列表来自当前 Space 的 Dataset，仅显示 `status=active && data_kind=time_series` 且具备标准 K 线字段的结果 Dataset。
 - Source Dataset 可以是交易所直接采集结果，例如 `binance_spot_kline_1m`，也可以是已经存在的统一行情结果，例如 `spot_kline_1h`。
-- V1 不允许把 `attributes.derivation=resample` 的目标 Dataset 再作为另一个重采样规则的 source，避免链式依赖、循环和级联修订。
+- V1 不允许把 `attributes.dataset_role=kline_resample_result` 的目标 Dataset 再作为另一个重采样规则的 source，避免链式依赖、循环和级联修订。
 - Source Dataset 本身不写入任何下游重采样配置；一个 source 可以被多个 4H、6H、90m 规则独立引用。
 - Target Dataset 的直接生产者是 MooX 内部计算，因此 `data_source_id` 不机械继承 source。`crypto_market` Space 使用当前 active、`kind=internal` 的 `data_source_id=crypto_market`。
 - 原始交易场所继续由 `series_tag` 表达，例如 `venue:binance`；source DataSource ID 作为 target lineage attribute 保存。
@@ -46,8 +46,7 @@
     "target_dataset_id": "spot_kline_derived_4h",
     "target_frequency": "4H",
     "alignment": "epoch_utc",
-    "settle_delay_ms": 10000,
-    "repair_lookback_buckets": 3
+    "settle_delay_ms": 10000
   }
 }
 ```
@@ -56,18 +55,19 @@ Target Dataset attributes 只保存不可变血缘镜像，不作为 scheduler �
 
 ```yaml
 attributes:
-  derivation: resample
+  owner_module: collector
+  managed_by: collector
+  dataset_role: kline_resample_result
   resample_rule_id: <rule_id>
-  resample_rule_version: '<config_hash>'
   source_dataset_id: binance_spot_kline_1m
   source_data_source_id: binance
-  source_frequency: 1m
+  source_freq: 1m
   source_series_tag: venue:binance
-  target_frequency: 4H
+  target_freq: 4H
   alignment: epoch_utc
 ```
 
-enabled、settle delay、repair lookback、retry、lease 和 backfill 状态不得写入 Dataset attributes。Metadata revision 是数据定义版本，不承担每分钟执行 checkpoint。
+enabled、settle delay、全局 repair lookback、retry、lease 和 backfill 状态不得写入 Dataset attributes。Metadata revision 是数据定义版本，不承担每分钟执行 checkpoint。`dataset_role` 在 V1 只用于分类、血缘和禁止链式重采样，不代表 Storage 写权限。
 
 同一个 target Dataset 只允许一个 enabled resample Rule，避免两个执行配置覆盖相同 RowKey，并避免相同 Dataset/frequency/period 的 marker 所有权冲突。
 
@@ -84,7 +84,7 @@ V1 **不新增数据库表**：
 
 只扩展现有字段和状态：
 
-- TaskRule 增加 `prepare_state`、`config_hash` 和 `last_error`，不新建 resample rule 表；
+- TaskRule 只增加 `prepare_state` 和 `last_error`，不新建 resample rule 表或配置 hash 列；
 - TaskInstance 继续使用 `c_result` 保存小型、版本化运行状态，不新建 progress/job/item 表；
 - PeriodReadiness 增加 `work_type`，区分现有 collection 与 resample 的失败和 marker 语义；
 - 历史回填状态保存在各 TaskInstance 的 `c_result.backfill`，不新建 backfill run 表。
@@ -137,12 +137,12 @@ data_time     = bucket_start UTC
 series_tag    = rule.source_series_tag
 ```
 
-`raw_payload` 不进入目标 Dataset。目标 row attributes 写入 `resample_rule_id`、`resample_rule_version`、`source_dataset_id`、`source_frequency`、`source_window_end` 和 `source_hash`。任意预期源行不存在、字段不全、时间不连续或 series tag 不匹配时，不写该 subject 的部分目标 K 线。
+`raw_payload` 不进入目标 Dataset。目标 row attributes 写入 `resample_rule_id`、`source_dataset_id`、`source_freq`、`source_window_end` 和 `source_hash`。任意预期源行不存在、字段不全、时间不连续或 series tag 不匹配时，不写该 subject 的部分目标 K 线。
 
 ### 0.8 实时、修订和历史语义
 
-- 新规则默认从最近 3 个已闭合目标桶开始。
-- 每分钟重新检查最近 `repair_lookback_buckets` 个闭合桶；target `source_hash` 相同则不写，变化时覆盖同一 RowKey。
+- 新规则首次扫描从全局 `repair_lookback_buckets` 指定的最近 N 个已闭合目标桶开始。
+- 每分钟按照 Collector 全局 `kline_resample.repair_lookback_buckets` 重新检查最近 N 个闭合桶；值为 `0` 时关闭自动近期修订。target `source_hash` 相同则不写，变化时覆盖同一 RowKey。
 - 实时周期只有全部预期 subject 成功后才发布一次 complete marker；缺行和永久失败不发布 degraded marker。
 - 历史回填不发布逐周期 marker；全部 TaskInstance 完成后追加 `source=catchup` 的 sync point 并等待 View 追平。
 - 已发布 marker 后发生近期修订只更新 Primary/View，不重写 marker；历史 Factor 由显式 Recalc 处理。
@@ -170,7 +170,7 @@ series_tag    = rule.source_series_tag
   -> 从 TaskInstance.c_result 恢复 active bucket/lease/attempt
   -> PrimaryStore.ReadFields 精确读取源 RowKeys
   -> 缺行时 250ms/500ms/1s/2s context-aware 退避
-  -> ResampleBars
+  -> resample.Bars
   -> 比较目标 row source_hash
   -> hash 变化才 Upsert target
   -> CAS 推进 TaskInstance 游标
@@ -191,11 +191,12 @@ series_tag    = rule.source_series_tag
 
 ```text
 c_prepare_state    # pending/waiting_view/ready/error；普通采集规则固定 ready
-c_config_hash      # 规范化不可变配置的 SHA-256
 c_last_error
 ```
 
-一条 resample Rule 只对应一个 target Dataset/target frequency。source Dataset、source frequency、source series tag、target Dataset、target frequency 和 alignment 一旦生成过 TaskInstance 就不可原地修改；变更这些语义需创建新 Rule 和新 target Dataset。允许修改 enabled、settle delay 和 repair lookback。
+一条 resample Rule 只对应一个 target Dataset/target frequency。source Dataset、source frequency、source series tag、target Dataset、target frequency 和 alignment 从 Rule 创建成功起就不可原地修改；变更这些语义需创建新 Rule 和新 target Dataset。Update RPC 必须读取旧 Rule，对规范化后的不可变字段逐项比较；只允许修改 enabled 和 settle delay。repair lookback 是 Collector 全局运行策略，不属于 Rule 身份。
+
+`rule_id` 是 Rule 唯一的语义身份，禁用后的 ID 不得复用于另一套不可变配置，因此 V1 不保存第二个配置版本或配置 hash。目标 row 的 `source_hash` 仍保留，它描述源窗口内容而不是 Rule 配置，用于发现源 K 线修订并保证覆盖写幂等。
 
 ### 2.2 TaskInstance 身份与 Result
 
@@ -216,7 +217,6 @@ Resample StableTaskID 额外包含 `source_series_tag`。现有 kline/symbol Tas
 ```json
 {
   "schema_version": 1,
-  "config_hash": "...",
   "state": "idle|running|waiting_source|failed|disabled",
   "state_version": 12,
   "active_origin": "realtime|repair|backfill",
@@ -272,16 +272,17 @@ data_node_id: <same as source Dataset>
 keep_duration: 4320h
 freqs: [4H]
 attributes:
+  owner_module: collector
+  managed_by: collector
   market_type: spot
   storage_model: wide_common_metrics
-  derivation: resample
+  dataset_role: kline_resample_result
   resample_rule_id: <rule_id>
-  resample_rule_version: <config_hash>
   source_dataset_id: binance_spot_kline_1m
   source_data_source_id: binance
-  source_frequency: 1m
+  source_freq: 1m
   source_series_tag: venue:binance
-  target_frequency: 4H
+  target_freq: 4H
   alignment: epoch_utc
 ```
 
@@ -291,18 +292,18 @@ View ID 为 `spot_kline_derived_4h_view`，filter 必须为 `{"freq":"4H"}`。Da
 
 | 路径 | 责任 |
 | --- | --- |
-| `modules/collector/internal/klineresample/frequency.go` | 周期解析、Storage 值/ID slug 和 UTC bucket |
-| `modules/collector/internal/klineresample/naming.go` | target Dataset/View ID |
-| `modules/collector/internal/klineresample/bar.go` | 纯 OHLCV 重采样和 source hash |
-| `modules/collector/internal/klineresample/catalog.go` | source 校验、target 元数据和 subject 协调 |
-| `modules/collector/internal/klineresample/preparer.go` | pending/waiting_view Rule 的异步幂等准备和状态推进 |
-| `modules/collector/internal/klineresample/storage.go` | Primary 精确读取、target hash 比对和 Upsert |
-| `modules/collector/internal/klineresample/planner.go` | Rule 到 TaskInstance 的稳定展开 |
-| `modules/collector/internal/klineresample/scanner.go` | realtime/repair/backfill 优先级选择 |
-| `modules/collector/internal/klineresample/worker.go` | TaskInstance claim、retry、lease 和游标推进 |
-| `modules/collector/internal/klineresample/backfill.go` | TaskInstance 内嵌 backfill 状态协调 |
+| `modules/collector/internal/resample/frequency.go` | 周期解析、Storage 值/ID slug 和 UTC bucket |
+| `modules/collector/internal/resample/naming.go` | target Dataset/View ID |
+| `modules/collector/internal/resample/bar.go` | 纯 OHLCV 重采样和 source hash |
+| `modules/collector/internal/resample/catalog.go` | source 校验、target 元数据和 subject 协调 |
+| `modules/collector/internal/resample/preparer.go` | pending/waiting_view Rule 的异步幂等准备和状态推进 |
+| `modules/collector/internal/resample/storage.go` | Primary 精确读取、target hash 比对和 Upsert |
+| `modules/collector/internal/resample/planner.go` | Rule 到 TaskInstance 的稳定展开 |
+| `modules/collector/internal/resample/scanner.go` | realtime/repair/backfill 优先级选择 |
+| `modules/collector/internal/resample/worker.go` | TaskInstance claim、retry、lease 和游标推进 |
+| `modules/collector/internal/resample/backfill.go` | TaskInstance 内嵌 backfill 状态协调 |
 | `modules/collector/internal/domain/kline_resample.go` | collect params 与 result JSON 类型 |
-| `modules/collector/internal/store/task_rule.go` | prepare state/config hash 更新 |
+| `modules/collector/internal/store/task_rule.go` | prepare state、错误状态和不可变配置更新校验 |
 | `modules/collector/internal/store/task_instance.go` | resample result CAS、claim 和 backfill 批量更新 |
 | `modules/collector/internal/store/period_readiness.go` | resample complete/suppressed marker 语义 |
 | `modules/collector/internal/rpc/kline_resample.go` | backfill/status RPC；Rule CRUD 继续复用现有 RPC |
@@ -314,10 +315,10 @@ View ID 为 `spot_kline_derived_4h_view`，filter 必须为 `{"freq":"4H"}`。Da
 ### Task 1: 固定 resample 术语、周期和命名合同
 
 **Files:**
-- Create: `modules/collector/internal/klineresample/frequency.go`
-- Create: `modules/collector/internal/klineresample/frequency_test.go`
-- Create: `modules/collector/internal/klineresample/naming.go`
-- Create: `modules/collector/internal/klineresample/naming_test.go`
+- Create: `modules/collector/internal/resample/frequency.go`
+- Create: `modules/collector/internal/resample/frequency_test.go`
+- Create: `modules/collector/internal/resample/naming.go`
+- Create: `modules/collector/internal/resample/naming_test.go`
 
 - [ ] **Step 1: 写周期解析红灯测试**
 
@@ -358,7 +359,7 @@ require.Equal(t, "spot_kline_derived_4h_view", DefaultTargetViewID("spot_kline_d
 
 - [ ] **Step 4: 运行测试并提交**
 
-Run: `cd modules/collector && go test -count=1 ./internal/klineresample`
+Run: `cd modules/collector && go test -count=1 ./internal/resample`
 
 Commit: `feat(collector): define kline resample periods`
 
@@ -376,8 +377,8 @@ Commit: `feat(collector): define kline resample periods`
 - Modify: `modules/collector/internal/store/database.go`
 - Modify: `modules/collector/proto/collector.proto`
 - Modify: generated files under `modules/collector/proto/collectorgen/`
-- Create: `modules/collector/internal/jobs/klineresample/definition.go`
-- Create: `modules/collector/internal/jobs/klineresample/definition_test.go`
+- Create: `modules/collector/internal/jobs/resample/definition.go`
+- Create: `modules/collector/internal/jobs/resample/definition_test.go`
 - Modify: `modules/collector/internal/jobs/jobdef/definition.go`
 - Modify: `modules/collector/internal/jobs/registry.go`
 - Modify: `modules/collector/internal/rpc/service.go`
@@ -385,7 +386,7 @@ Commit: `feat(collector): define kline resample periods`
 
 - [ ] **Step 1: 写 schema 和参数红灯测试**
 
-断言 TaskRule 新字段存在，`CollectParams` 对 `kline_resample` 接受本计划第 0.3 节字段，继续 `DisallowUnknownFields`。普通 kline/symbol 的 JSON 合同不得被放宽。
+断言 TaskRule 只新增 `prepare_state` 和 `last_error`，`CollectParams` 对 `kline_resample` 接受本计划第 0.3 节字段，继续 `DisallowUnknownFields`。普通 kline/symbol 的 JSON 合同不得被放宽。
 
 - [ ] **Step 2: 增加本地执行模式**
 
@@ -396,7 +397,7 @@ Commit: `feat(collector): define kline resample periods`
 继续使用 `CreateTaskRule/UpdateTaskRule/DisableTaskRule`，不新增独立 Resample Rule CRUD。Create 顺序：
 
 1. 校验 resample 参数和 source Dataset；
-2. 规范化频率并计算 config hash；
+2. 规范化 source/target frequency、series tag 和 alignment；
 3. 以 `prepare_state=pending` 创建现有 TaskRule 并立即返回 rule ID；
 4. 唤醒本地 preparer，异步幂等准备 target Dataset/View；
 5. View 未 ready 时进入 waiting_view，preparer 定时复查，成功后进入 ready；
@@ -404,7 +405,7 @@ Commit: `feat(collector): define kline resample periods`
 
 - [ ] **Step 4: 限制更新语义**
 
-已有 TaskInstance 后，Update 只允许 enabled、settle delay、repair lookback。source/target/series tag/alignment 改动返回明确错误，要求创建新 Rule/target。
+Rule 创建成功后，Update 立即锁定 source/target frequency、series tag、alignment 和 target Dataset。RPC 先读取旧 Rule，再比较规范化字段；任何不可变字段改动都返回明确错误，要求创建新 Rule/target。只允许修改 enabled 和 settle delay。测试必须覆盖 pending、waiting_view、ready 三种 prepare state，不能留下准备阶段的配置变更窗口。
 
 - [ ] **Step 5: 隔离 marketfetch**
 
@@ -423,12 +424,12 @@ Commit: `feat(collector): register kline resample rules`
 - Modify: `modules/collector/internal/domain/task_instance_test.go`
 - Modify: `modules/collector/internal/store/task_instance.go`
 - Modify: `modules/collector/internal/store/task_instance_test.go`
-- Create: `modules/collector/internal/klineresample/planner.go`
-- Create: `modules/collector/internal/klineresample/planner_test.go`
+- Create: `modules/collector/internal/resample/planner.go`
+- Create: `modules/collector/internal/resample/planner_test.go`
 
 - [ ] **Step 1: 写 Result JSON 红灯测试**
 
-覆盖严格解析、schema version、未知字段拒绝、UTC 时间、config hash 不匹配、空 backfill 和损坏 JSON。损坏 Result 不得静默重置并跳过历史，应把 TaskInstance 标记 failed 并报警。
+覆盖严格解析、schema version、未知字段拒绝、UTC 时间、非法 state/state version、空 backfill 和损坏 JSON。损坏 Result 不得静默重置并跳过历史，应把 TaskInstance 标记 failed 并报警。
 
 - [ ] **Step 2: 实现稳定 TaskInstance 展开**
 
@@ -457,7 +458,7 @@ CompleteResampleBackfillSync(ctx, ruleID, requestID)
 
 - [ ] **Step 5: 运行测试并提交**
 
-Run: `cd modules/collector && go test -count=1 ./internal/domain ./internal/store ./internal/klineresample -run 'ResampleTask|Lease|Planner|CAS'`
+Run: `cd modules/collector && go test -count=1 ./internal/domain ./internal/store ./internal/resample -run 'ResampleTask|Lease|Planner|CAS'`
 
 Commit: `feat(collector): persist resample state in task instances`
 
@@ -466,10 +467,10 @@ Commit: `feat(collector): persist resample state in task instances`
 **Files:**
 - Modify: `modules/collector/internal/planner/storagesource/source.go`
 - Modify: `modules/collector/internal/planner/storagesource/source_test.go`
-- Create: `modules/collector/internal/klineresample/catalog.go`
-- Create: `modules/collector/internal/klineresample/catalog_test.go`
-- Create: `modules/collector/internal/klineresample/preparer.go`
-- Create: `modules/collector/internal/klineresample/preparer_test.go`
+- Create: `modules/collector/internal/resample/catalog.go`
+- Create: `modules/collector/internal/resample/catalog_test.go`
+- Create: `modules/collector/internal/resample/preparer.go`
+- Create: `modules/collector/internal/resample/preparer_test.go`
 
 - [ ] **Step 1: 扩展窄 Metadata adapter**
 
@@ -489,13 +490,13 @@ Commit: `feat(collector): persist resample state in task instances`
 
 - [ ] **Step 5: 动态 View readiness fence**
 
-Rule 进入 waiting_view。route-ready request ID 为 `kline-resample-route:<rule_id>:<config_hash>:<desired_view_revision>`；`WaitViewSyncPoint` ready 且 View active revision 追平后，Rule 才进入 ready。
+Rule 进入 waiting_view。route-ready request ID 为 `kline-resample-route:<rule_id>:<target_dataset_revision>`；`WaitViewSyncPoint` ready 且 View active revision 追平 desired revision 后，Rule 才进入 ready。
 
 preparer 使用 buffered notify channel 加 30 秒轮询兜底。每次只处理 bounded 数量的 pending/waiting_view Rule；error Rule 只有收到显式重试才重新执行。任何 Metadata/View RPC 都不得在 SQLite transaction 内调用。
 
 - [ ] **Step 6: 运行测试并提交**
 
-Run: `cd modules/collector && go test -count=1 ./internal/planner/storagesource ./internal/klineresample -run 'ResampleCatalog|SourceDataset|TargetDataset'`
+Run: `cd modules/collector && go test -count=1 ./internal/planner/storagesource ./internal/resample -run 'ResampleCatalog|SourceDataset|TargetDataset'`
 
 Commit: `feat(collector): provision resampled kline datasets`
 
@@ -540,13 +541,13 @@ Run: `cd modules/storage && go test -count=1 ./cmd/server ./internal/config ./in
 
 Commit: `feat(storage): reconcile dynamic view consumers`
 
-### Task 6: 实现 ResampleBars、Primary 精确读和幂等写
+### Task 6: 实现 resample.Bars、Primary 精确读和幂等写
 
 **Files:**
-- Create: `modules/collector/internal/klineresample/bar.go`
-- Create: `modules/collector/internal/klineresample/bar_test.go`
-- Create: `modules/collector/internal/klineresample/storage.go`
-- Create: `modules/collector/internal/klineresample/storage_test.go`
+- Create: `modules/collector/internal/resample/bar.go`
+- Create: `modules/collector/internal/resample/bar_test.go`
+- Create: `modules/collector/internal/resample/storage.go`
+- Create: `modules/collector/internal/resample/storage_test.go`
 
 - [ ] **Step 1: 写表驱动红灯测试**
 
@@ -556,10 +557,10 @@ Commit: `feat(storage): reconcile dynamic view consumers`
 
 ```go
 type SourceBar struct { /* key + 7 fields */ }
-type ResampledBar struct { /* target key + 7 fields + SourceHash */ }
+type Result struct { /* target key + 7 fields + SourceHash */ }
 
 func ExpectedSourceTimes(start, end time.Time, source FixedFrequency) ([]time.Time, error)
-func ResampleBars(spec RuleSpec, subjectID string, start, end time.Time, rows []SourceBar) (ResampledBar, error)
+func Bars(spec RuleSpec, subjectID string, start, end time.Time, rows []SourceBar) (Result, error)
 ```
 
 Source hash 对排序后的 RowKey 和 7 个 typed value 确定性编码，不依赖 JSON map 顺序。
@@ -570,21 +571,21 @@ Source hash 对排序后的 RowKey 和 7 个 typed value 确定性编码，不�
 
 - [ ] **Step 4: 目标 hash 幂等**
 
-写前读取目标 row attribute `source_hash`。hash 相同直接成功；不同才完整 Upsert 7 fields 和 provenance attributes。`source_event_id` 包含 config hash、target RowKey 和 source hash；`write_source=collector:kline_resample`。
+写前读取目标 row attribute `source_hash`。hash 相同直接成功；不同才完整 Upsert 7 fields 和 provenance attributes。`source_event_id = hash(rule_id + target RowKey + source_hash)`；`write_source=collector:kline_resample`。
 
 - [ ] **Step 5: 运行测试并提交**
 
-Run: `cd modules/collector && go test -count=1 ./internal/klineresample -run 'ResampleBars|PrimaryRead|IdempotentWrite'`
+Run: `cd modules/collector && go test -count=1 ./internal/resample -run 'Bars|PrimaryRead|IdempotentWrite'`
 
 Commit: `feat(collector): resample stored kline windows`
 
 ### Task 7: 实现一分钟 scanner、worker 和 PeriodReadiness
 
 **Files:**
-- Create: `modules/collector/internal/klineresample/scanner.go`
-- Create: `modules/collector/internal/klineresample/scanner_test.go`
-- Create: `modules/collector/internal/klineresample/worker.go`
-- Create: `modules/collector/internal/klineresample/worker_test.go`
+- Create: `modules/collector/internal/resample/scanner.go`
+- Create: `modules/collector/internal/resample/scanner_test.go`
+- Create: `modules/collector/internal/resample/worker.go`
+- Create: `modules/collector/internal/resample/worker_test.go`
 - Modify: `modules/collector/internal/domain/period_readiness.go`
 - Modify: `modules/collector/internal/store/period_readiness.go`
 - Modify: `modules/collector/internal/store/period_readiness_test.go`
@@ -593,7 +594,7 @@ Commit: `feat(collector): resample stored kline windows`
 
 - [ ] **Step 1: 写时间边界红灯测试**
 
-以 `target=4H, settle=10s` 验证：03:59:59/04:00:09 不到期，04:00:10 到期一次，停机到 12:00:10 后从 TaskInstance cursor 顺序追赶 04:00、08:00 两桶。
+以 `target=4H, settle=10s` 验证：03:59:59/04:00:09 不到期，04:00:10 到期一次，停机到 12:00:10 后从 TaskInstance cursor 顺序追赶 04:00、08:00 两桶。全局 repair lookback 为 `3` 时枚举最近三个已闭合目标桶，为 `0` 时不生成 repair 工作且新 Rule 从 ready 后的下一闭合桶进入实时执行。
 
 - [ ] **Step 2: 实现 scanner**
 
@@ -615,15 +616,15 @@ scanner 只读取 ready/enabled resample Rules 和 TaskInstance result，按 rea
 
 - [ ] **Step 6: 运行测试并提交**
 
-Run: `cd modules/collector && go test -count=1 ./internal/klineresample ./internal/store ./internal/marketfetch -run 'Scanner|Worker|Retry|Readiness|Marker'`
+Run: `cd modules/collector && go test -count=1 ./internal/resample ./internal/store ./internal/marketfetch -run 'Scanner|Worker|Retry|Readiness|Marker'`
 
 Commit: `feat(collector): execute kline resample tasks`
 
 ### Task 8: 在 TaskInstance Result 中实现可恢复历史回填
 
 **Files:**
-- Create: `modules/collector/internal/klineresample/backfill.go`
-- Create: `modules/collector/internal/klineresample/backfill_test.go`
+- Create: `modules/collector/internal/resample/backfill.go`
+- Create: `modules/collector/internal/resample/backfill_test.go`
 - Create: `modules/collector/internal/rpc/kline_resample.go`
 - Create: `modules/collector/internal/rpc/kline_resample_test.go`
 - Modify: `modules/collector/proto/collector.proto`
@@ -653,7 +654,7 @@ Get 按 rule/request 聚合 TaskInstance results，返回 total/running/waiting/
 
 - [ ] **Step 5: 运行测试并提交**
 
-Run: `cd modules/collector && go test -count=1 ./internal/klineresample ./internal/rpc ./internal/store -run 'ResampleBackfill|BackfillSync'`
+Run: `cd modules/collector && go test -count=1 ./internal/resample ./internal/rpc ./internal/store -run 'ResampleBackfill|BackfillSync'`
 
 Commit: `feat(collector): backfill resampled kline tasks`
 
@@ -668,8 +669,8 @@ Commit: `feat(collector): backfill resampled kline tasks`
 - Modify: `modules/collector/internal/bootstrap/bootstrap_test.go`
 - Modify: `modules/collector/internal/observability/realtime_inventory.go`
 - Modify: `modules/collector/internal/observability/realtime_inventory_test.go`
-- Create: `modules/collector/internal/klineresample/metrics.go`
-- Create: `modules/collector/internal/klineresample/metrics_test.go`
+- Create: `modules/collector/internal/resample/metrics.go`
+- Create: `modules/collector/internal/resample/metrics_test.go`
 
 - [ ] **Step 1: 增加严格配置**
 
@@ -684,11 +685,11 @@ kline_resample:
   worker_max_source_keys_per_claim: 20000
   stale_running_after: 2m
   default_settle_delay: 10s
-  default_repair_lookback_buckets: 3
+  repair_lookback_buckets: 3
   target_keep_duration: 4320h
 ```
 
-所有 duration/数量为正，subject batch <=200，repair lookback 1..10，未知 YAML 字段继续失败。
+所有 duration/数量为正，subject batch <=200；`repair_lookback_buckets` 允许 0..10，`0` 表示关闭自动近期修订；未知 YAML 字段继续失败。
 
 - [ ] **Step 2: 注册独立 timer**
 
@@ -721,7 +722,7 @@ moox_collector_kline_resample_duration_seconds{stage}
 
 - [ ] **Step 5: 运行测试并提交**
 
-Run: `cd modules/collector && go test -count=1 ./internal/bootstrap ./internal/observability ./internal/klineresample`
+Run: `cd modules/collector && go test -count=1 ./internal/bootstrap ./internal/observability ./internal/resample`
 
 Commit: `feat(collector): run kline resample workers`
 
@@ -749,7 +750,7 @@ Data type 新增“K线重采样”，不增加独立规则表或第三套 CRUD 
 - source series tag：必填 select/input；
 - target period：正整数 + 分钟/小时/天；
 - target Dataset/View：实时预览，可在创建前修改 Dataset ID；
-- settle delay、repair lookback、enabled。
+- settle delay、enabled；repair lookback 是 Collector 全局配置，不在单条 Rule 表单暴露。
 
 不展示 target DataSource 选择；界面只读显示“内部行情 `crypto_market`”，避免用户误选 Binance。
 
@@ -842,12 +843,12 @@ Commit: `test(collector): verify kline resample pipeline`
 
 1. 用户能在现有采集规则页面选择 active Kline Dataset，创建 `1m->7m`、`30m->90m`、`1H->4H` Rule。
 2. target 名称包含周期 suffix，例如 `spot_kline_derived_4h`，其 DataSource 为内部 `crypto_market`，不是 source Dataset ID 或 Binance。
-3. 完整配置只保存在现有 TaskRule；target attributes 只保存血缘；V1 没有新增数据库表。
+3. 完整 Rule 配置只保存在现有 TaskRule，全局 repair lookback 只保存在 Collector YAML；target attributes 只保存分类和血缘；V1 没有配置 hash，也没有新增数据库表。
 4. 每个 subject 使用现有 TaskInstance result 保存游标、lease、retry 和 backfill，重启后可恢复。
 5. 全局一分钟 timer 只 claim 工作，不读取 K 线或等待源闭合。
 6. 缺任意源行不写该 subject 的部分 target；短退避和跨 tick retry 最终收敛。
 7. 重复 tick、RPC 超时、Storage ACK 丢失和进程重启不产生不同结果。
-8. recent repair 和历史 backfill 共用 `ResampleBars` 和 Storage writer。
+8. recent repair 和历史 backfill 共用 `resample.Bars` 和 Storage writer。
 9. 实时 complete marker 只在 PeriodReadiness 全部 subject success 后发布一次。
 10. runtime target View 无需重启 Storage View 即可接入；route-ready 和 rebuild 完成前 Rule 不执行。
 11. 模块测试、真实 Storage E2E、workspace tests、verify-pr、Web tests/build 和独立 codeCR 全部通过。
