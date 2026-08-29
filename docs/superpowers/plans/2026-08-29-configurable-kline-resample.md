@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 1.25、tRPC-Go Timer、SQLite/GORM、Storage Metadata/PrimaryStore RPC、`github.com/avast/retry-go`、NATS JetStream、Prometheus、Vue 3、TypeScript、Vitest。
 
-> **执行状态（2026-08-29）：** Collector 控制面、resample worker、PeriodReadiness、动态 View 接入、规则页面、模块级 E2E 与监控文档已按本计划落地。生产部署前仍需完成真实环境的二进制升级、5m 规则验收和回滚演练；本计划中的“真实 Storage E2E”不以本地 fake 测试替代。
+> **执行状态（2026-08-29）：** Collector 控制面、resample worker、PeriodReadiness、动态 View 接入、规则页面、模块级 E2E、生产二进制升级及 5m 目标 View 查询已完成。生产环境当前在源数据缺失的历史桶按合同保持 `waiting_source` 并自动重试；因此“源数据补齐后新实时桶继续推进”的最终闭环仍待源数据修复后复核，本计划中的“真实 Storage E2E”不以本地 fake 测试替代。
 
 ---
 
