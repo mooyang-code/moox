@@ -183,6 +183,7 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 		}},
 		Nodes:                         nodes,
 		ExpectedStockCNTimerFunctions: 2,
+		MeasuredSafeGroupSize:         30,
 		Now:                           func() time.Time { return time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC) },
 	}
 
@@ -198,6 +199,51 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 		groups[env["MOOX_MARKET_FETCH_GROUP_ID"]] = struct{}{}
 	}
 	require.Len(t, groups, 2)
+}
+
+func TestReconcilerFailsClosedWhenStockRequiredGroupSizeExceedsMeasuredSafeSize(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity", Enabled: true,
+		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m"}`,
+	}
+	subjects := make([]domain.DatasetSubject, 0, 4)
+	for index := 0; index < 4; index++ {
+		subjects = append(subjects, domain.DatasetSubject{SubjectID: fmt.Sprintf("%06d.XSHG", index), ExternalSymbol: fmt.Sprintf("sh%06d", index), Status: "active"})
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{
+		{NodeID: "timer-0", FunctionName: "moox-stock-cn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "timer-1", FunctionName: "moox-stock-cn-001", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "timer-2", FunctionName: "moox-stock-cn-002", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+	}}
+	reconciler := &Reconciler{
+		Rules:   reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: subjects},
+		Nodes:   nodes, ExpectedStockCNTimerFunctions: 3, MeasuredSafeGroupSize: 1,
+	}
+
+	require.ErrorContains(t, reconciler.Reconcile(context.Background(), StockCNSpaceID), "required_group_size 2 exceeds measured_safe_group_size 1")
+	require.Zero(t, nodes.submits)
+}
+
+func TestReconcilerAllowsStockGroupAboveThirtyWhenMeasuredSafeSizeAllowsIt(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity", Enabled: true,
+		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m"}`,
+	}
+	subjects := make([]domain.DatasetSubject, 0, 40)
+	for index := 0; index < 40; index++ {
+		subjects = append(subjects, domain.DatasetSubject{SubjectID: fmt.Sprintf("%06d.XSHG", index), ExternalSymbol: fmt.Sprintf("sh%06d", index), Status: "active"})
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-stock-cn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
+	reconciler := &Reconciler{
+		Rules:   reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: subjects},
+		Nodes:   nodes, ExpectedStockCNTimerFunctions: 1, MeasuredSafeGroupSize: 40,
+	}
+
+	require.NoError(t, reconciler.Reconcile(context.Background(), StockCNSpaceID))
+	require.Len(t, nodes.patches, 1)
+	require.Len(t, nodes.patches[0].GetManagedEnvironment()["MOOX_MARKET_FETCH_SUBJECTS"], 40*11+39)
 }
 
 func TestReconcilerFailsWithoutTimerCapacityBeforeSubmitting(t *testing.T) {

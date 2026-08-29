@@ -51,11 +51,14 @@ var stockCNProviderWeights = map[string]int{
 }
 
 // BuildStockCNAssignments maps the published Timer fleet one-to-one to stable
-// rendezvous groups. The fleet size is a release decision; universe refreshes
-// only change the per-node environment and never create or remove functions.
-func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, maxSubjects int, tradingDate string, expectedCounts ...int) ([]NodeAssignment, error) {
-	if maxSubjects <= 0 {
-		return nil, fmt.Errorf("max subjects must be positive")
+// rendezvous groups. The fleet size and measured group-size safety limit are
+// release configuration; neither is inferred from the nodes visible today.
+func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, measuredSafeGroupSize int, tradingDate string, expectedCounts ...int) ([]NodeAssignment, error) {
+	if measuredSafeGroupSize <= 0 {
+		return nil, fmt.Errorf("stock_cn measured safe group size must be positive")
+	}
+	if len(expectedCounts) != 1 || expectedCounts[0] <= 0 {
+		return nil, fmt.Errorf("stock_cn requires an explicit positive timer function count")
 	}
 	group.Provider = strings.ToLower(strings.TrimSpace(group.Provider))
 	group.MarketType = strings.ToLower(strings.TrimSpace(group.MarketType))
@@ -74,10 +77,7 @@ func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, maxSubjec
 		}
 	}
 	eligible := eligibleTimerNodes(nodes)
-	expectedCount := len(eligible)
-	if len(expectedCounts) > 0 {
-		expectedCount = expectedCounts[0]
-	}
+	expectedCount := expectedCounts[0]
 	timerNodes, err := orderedStockCNTimerNodes(eligible, expectedCount)
 	if err != nil {
 		return nil, err
@@ -89,7 +89,7 @@ func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, maxSubjec
 	if err != nil {
 		return nil, fmt.Errorf("assign stock_cn rendezvous groups: %w", err)
 	}
-	groups, err = rebalanceRendezvousGroups(groups, maxSubjects, StockCNRouteID)
+	groups, err = rebalanceRendezvousGroups(groups, measuredSafeGroupSize, StockCNRouteID)
 	if err != nil {
 		return nil, err
 	}
@@ -99,8 +99,8 @@ func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, maxSubjec
 	}
 	assignments := make([]NodeAssignment, 0, len(timerNodes))
 	for groupID, subjects := range groups {
-		if len(subjects) > maxSubjects {
-			return nil, fmt.Errorf("stock_cn rendezvous group %d contains %d subjects; maximum is %d", groupID, len(subjects), maxSubjects)
+		if len(subjects) > measuredSafeGroupSize {
+			return nil, fmt.Errorf("stock_cn rendezvous group %d contains %d subjects; measured safe group size is %d", groupID, len(subjects), measuredSafeGroupSize)
 		}
 		externals := make(map[string]string, len(subjects))
 		hashParts := make([]string, 0, len(subjects))
@@ -120,6 +120,23 @@ func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, maxSubjec
 		})
 	}
 	return assignments, nil
+}
+
+func requiredStockCNGroupSize(activeSubjects, timerFunctionCount int) (int, error) {
+	if activeSubjects < 0 {
+		return 0, fmt.Errorf("stock_cn active subject count must not be negative")
+	}
+	if timerFunctionCount <= 0 {
+		return 0, fmt.Errorf("stock_cn timer function count must be positive")
+	}
+	if activeSubjects == 0 {
+		return 0, nil
+	}
+	required := activeSubjects / timerFunctionCount
+	if activeSubjects%timerFunctionCount != 0 {
+		required++
+	}
+	return required, nil
 }
 
 func orderedStockCNTimerNodes(nodes []scfinvoker.Node, expectedCount int) ([]scfinvoker.Node, error) {

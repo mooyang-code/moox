@@ -112,7 +112,7 @@ func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 	assert.Equal(t, 30, crypto.Regions[1].FunctionCount)
 
 	stock := SCFFetcherSpace{
-		SpaceID: "stock_cn",
+		SpaceID: "stock_cn", TimerFunctionCount: 200, MeasuredSafeGroupSize: 30,
 		Regions: []SCFFetcherRegion{
 			{Region: "ap-guangzhou", Enabled: true, CloudAccountID: "gz"},
 			{Region: "ap-shanghai", Enabled: true, CloudAccountID: "sh"},
@@ -128,6 +128,35 @@ func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 		total += region.FunctionCount
 	}
 	assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, total)
+}
+
+func TestResolveSCFTimerFunctionCountsRequiresExplicitStockN(t *testing.T) {
+	stock := SCFFetcherSpace{
+		SpaceID: "stock_cn",
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 7, CloudAccountID: "gz"}},
+	}
+	err := resolveSCFTimerFunctionCounts(&stock, "scf_fetcher.spaces[0]")
+	require.ErrorContains(t, err, "timer_function_count must be an explicit positive value")
+
+	stock.TimerFunctionCount = 7
+	require.NoError(t, resolveSCFTimerFunctionCounts(&stock, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, 7, stock.TimerFunctionCount)
+}
+
+func TestValidateSCFFetcherRequiresMeasuredSafeGroupSizeForStock(t *testing.T) {
+	base := SCFFetcherSpace{
+		SpaceID: "stock_cn", TimerFunctionCount: 200, MemorySize: 64, TimeoutSeconds: 15,
+		MeasuredSafeGroupSize: 30, StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		RealtimeBatchSize: 10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50, CloudAccountID: "gz"}, {Region: "ap-shanghai", Enabled: true, FunctionCount: 50, CloudAccountID: "sh"}, {Region: "ap-beijing", Enabled: true, FunctionCount: 50, CloudAccountID: "bj"}, {Region: "ap-chengdu", Enabled: true, FunctionCount: 50, CloudAccountID: "cd"}},
+	}
+	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
+
+	base.MeasuredSafeGroupSize = 0
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be a positive value")
+	base.MeasuredSafeGroupSize = -1
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be a positive value")
 }
 
 func TestResolveSCFTimerFunctionCountsRejectsMismatch(t *testing.T) {
@@ -167,6 +196,8 @@ func TestCustomExampleDefinesValidStockCN200FunctionFleet(t *testing.T) {
 func TestValidateSCFFetcherDefaultsAndBoundsStockCNInstrumentInvokeTimeout(t *testing.T) {
 	base := SCFFetcherSpace{
 		SpaceID: "stock_cn", MemorySize: 64, TimeoutSeconds: 15,
+		TimerFunctionCount:      200,
+		MeasuredSafeGroupSize:   30,
 		StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
 		RealtimeBatchSize:       10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
 		HTTPMaxAttempts: 4, StorageMaxAttempts: 1,

@@ -62,6 +62,21 @@ func TestBuildManagedEnvironmentFitsTypicalThirtySymbols(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestBuildManagedEnvironmentAllowsStockGroupAboveThirty(t *testing.T) {
+	subjects := make([]string, 0, 40)
+	externals := make(map[string]string, 40)
+	for index := 0; index < 40; index++ {
+		subject := fmt.Sprintf("%06d.XSHG", index)
+		subjects = append(subjects, subject)
+		externals[subject] = fmt.Sprintf("sh%06d", index)
+	}
+	_, err := buildManagedEnvironment(NodeAssignment{
+		Provider: "sina", RouteProvider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID,
+		Frequency: "1m", Subjects: subjects, ExternalSymbols: externals, RouteVersion: StockCNRouteID, Enabled: true,
+	}, nil, stockCNMaxManagedEnvironmentSize)
+	require.NoError(t, err)
+}
+
 func TestBuildManagedEnvironmentRejectsOversizedManagedAssignment(t *testing.T) {
 	subjects := make([]string, 30)
 	externals := make(map[string]string, len(subjects))

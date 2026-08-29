@@ -55,6 +55,7 @@ type Reconciler struct {
 	DNS                           dnsSnapshotter
 	Metrics                       *Metrics
 	MaxSubjects                   int
+	MeasuredSafeGroupSize         int
 	ExpectedStockCNTimerFunctions int
 	Now                           func() time.Time
 	mu                            sync.Mutex
@@ -146,7 +147,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		if len(groups) != 1 {
 			return r.fail(spaceID, "rules", fmt.Errorf("stock_cn requires exactly one merged kline assignment group, got %d", len(groups)))
 		}
-		assignments, err = BuildStockCNAssignments(groups[0], nodes, stockCNMaxSubjects, r.stockCNTradingDate(), r.ExpectedStockCNTimerFunctions)
+		if r.ExpectedStockCNTimerFunctions <= 0 {
+			return r.fail(spaceID, "capacity", fmt.Errorf("stock_cn timer function count must be an explicit positive value"))
+		}
+		if r.MeasuredSafeGroupSize <= 0 {
+			return r.fail(spaceID, "capacity", fmt.Errorf("stock_cn measured_safe_group_size must be a positive value"))
+		}
+		requiredGroupSize, sizeErr := requiredStockCNGroupSize(len(groups[0].Subjects), r.ExpectedStockCNTimerFunctions)
+		if sizeErr != nil {
+			return r.fail(spaceID, "capacity", sizeErr)
+		}
+		if requiredGroupSize > r.MeasuredSafeGroupSize {
+			return r.fail(spaceID, "capacity", fmt.Errorf("stock_cn required_group_size %d exceeds measured_safe_group_size %d", requiredGroupSize, r.MeasuredSafeGroupSize))
+		}
+		assignments, err = BuildStockCNAssignments(groups[0], nodes, r.MeasuredSafeGroupSize, r.stockCNTradingDate(), r.ExpectedStockCNTimerFunctions)
 	} else {
 		assignments, err = BuildAssignments(groups, nodes, r.maxSubjects())
 	}

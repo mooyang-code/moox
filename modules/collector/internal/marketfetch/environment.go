@@ -24,13 +24,16 @@ const (
 	// CloudNode still reports the real per-function remaining budget, which can
 	// lower this ceiling before a patch is submitted.
 	stockCNMaxManagedEnvironmentSize = 2200
-	stockCNMaxSubjects               = 30
 )
 
 // BuildManagedEnvironment creates only the Collector-owned keys. CloudNode
 // merges them with provider-owned keys such as MOOX_CODE_PACKAGE_ID.
 func BuildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sources.DNSResolution) (map[string]string, error) {
-	return buildManagedEnvironment(assignment, snapshot, maxManagedEnvironmentSize)
+	maxSize := maxManagedEnvironmentSize
+	if assignment.RouteVersion == StockCNRouteID {
+		maxSize = stockCNMaxManagedEnvironmentSize
+	}
+	return buildManagedEnvironment(assignment, snapshot, maxSize)
 }
 
 // ManagedDNSHash returns the short hash embedded in the CloudNode-managed
@@ -53,12 +56,8 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 		}
 	}
 	subjects := normalizeSubjects(assignment.Subjects)
-	maxSubjects := 30
-	if assignment.RouteVersion == StockCNRouteID {
-		maxSubjects = stockCNMaxSubjects
-	}
-	if len(subjects) > maxSubjects {
-		return nil, fmt.Errorf("assignment contains %d subjects; maximum is %d", len(subjects), maxSubjects)
+	if assignment.RouteVersion != StockCNRouteID && len(subjects) > MaxRealtimeItems {
+		return nil, fmt.Errorf("assignment contains %d subjects; maximum is %d", len(subjects), MaxRealtimeItems)
 	}
 	routes, dnsHash, updatedAt := normalizeDNSRoutes(snapshot)
 	rawRoutes, err := json.Marshal(routes)

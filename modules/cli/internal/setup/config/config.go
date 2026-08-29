@@ -41,9 +41,9 @@ const (
 	// DefaultCryptoMarketTimerFunctionCount is the baseline Timer fleet size
 	// for the built-in crypto market Space.
 	DefaultCryptoMarketTimerFunctionCount = 60
-	// DefaultStockCNMarketTimerFunctionCount is the baseline Timer fleet size
-	// for the mainland China A-share Space. Each region is capped at 50
-	// functions, so this default needs at least four enabled regions.
+	// DefaultStockCNMarketTimerFunctionCount is retained for callers that need
+	// the historical recommendation, but stock_cn config validation requires an
+	// explicit timer_function_count instead of applying this value implicitly.
 	DefaultStockCNMarketTimerFunctionCount = 200
 	// DefaultStockCNInstrumentInvokeTimeoutSeconds leaves enough room for the
 	// measured full-market Sina instrument snapshot while Timer functions keep
@@ -249,10 +249,11 @@ type SCFFetcherSpace struct {
 	Namespace         string `toml:"namespace"`
 	Runtime           string `toml:"runtime"`
 	FunctionPrefix    string `toml:"function_prefix"`
-	// TimerFunctionCount is the total Timer fleet size for this Space. When it
-	// is zero and all enabled regional function_count values are zero, the
-	// built-in Space default is used and counts are distributed deterministically.
+	// TimerFunctionCount is the total Timer fleet size for this Space. stock_cn
+	// must set it explicitly to a positive value; other Spaces may use the
+	// built-in default when all enabled regional function_count values are zero.
 	TimerFunctionCount             int                `toml:"timer_function_count"`
+	MeasuredSafeGroupSize          int                `toml:"measured_safe_group_size"`
 	StorageGatewayNodeID           string             `toml:"storage_gateway_node_id"`
 	StorageRPCGatewayTarget        string             `toml:"storage_rpc_gateway_target"`
 	MemorySize                     int                `toml:"memory_size"`
@@ -281,7 +282,7 @@ func DefaultTimerFunctionCount(spaceID string) int {
 	case "crypto_market":
 		return DefaultCryptoMarketTimerFunctionCount
 	case "stock_cn":
-		return DefaultStockCNMarketTimerFunctionCount
+		return 0
 	default:
 		return 0
 	}
@@ -825,13 +826,22 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	if cfg.TimeoutSeconds != 15 {
 		return fmt.Errorf("config_invalid: %s.timeout_seconds must be 15", path)
 	}
-	if strings.EqualFold(cfg.SpaceID, "stock_cn") {
+	stockCN := strings.EqualFold(cfg.SpaceID, "stock_cn")
+	if stockCN {
+		if cfg.TimerFunctionCount <= 0 {
+			return fmt.Errorf("config_invalid: %s.timer_function_count must be an explicit positive value for stock_cn", path)
+		}
+		if cfg.MeasuredSafeGroupSize <= 0 {
+			return fmt.Errorf("config_invalid: %s.measured_safe_group_size must be a positive value for stock_cn", path)
+		}
 		if cfg.InstrumentInvokeTimeoutSeconds == 0 {
 			cfg.InstrumentInvokeTimeoutSeconds = DefaultStockCNInstrumentInvokeTimeoutSeconds
 		}
 		if cfg.InstrumentInvokeTimeoutSeconds < DefaultStockCNInstrumentInvokeTimeoutSeconds || cfg.InstrumentInvokeTimeoutSeconds > 900 {
 			return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds must be between %d and 900", path, DefaultStockCNInstrumentInvokeTimeoutSeconds)
 		}
+	} else if cfg.MeasuredSafeGroupSize != 0 {
+		return fmt.Errorf("config_invalid: %s.measured_safe_group_size is only valid for stock_cn", path)
 	} else if cfg.InstrumentInvokeTimeoutSeconds != 0 {
 		return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds is only valid for stock_cn", path)
 	}
@@ -973,6 +983,9 @@ func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 	}
 	desired := cfg.TimerFunctionCount
 	if desired <= 0 {
+		if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stock_cn") {
+			return fmt.Errorf("config_invalid: %s.timer_function_count must be an explicit positive value for stock_cn", path)
+		}
 		if explicitTotal > 0 {
 			// Preserve older manifests whose regional counts were already the
 			// source of truth.

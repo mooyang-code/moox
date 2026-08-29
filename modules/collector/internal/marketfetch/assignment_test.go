@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const stockCNTestMeasuredSafeGroupSize = 30
+
 func TestBuildStockCNAssignmentsUsesEveryTimerNodeAndKeepsExistingSubjectsStable(t *testing.T) {
 	subjects := []string{"600000.XSHG", "000001.XSHE", "601318.XSHG", "300750.XSHE", "000858.XSHE"}
 	externals := stockCNExternalSymbols(subjects)
@@ -20,7 +22,7 @@ func TestBuildStockCNAssignmentsUsesEveryTimerNodeAndKeepsExistingSubjectsStable
 	}
 	group := TaskGroup{Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: subjects, ExternalSymbols: externals}
 
-	assignments, err := BuildStockCNAssignments(group, nodes, stockCNMaxSubjects, "2026-08-29")
+	assignments, err := BuildStockCNAssignments(group, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 3)
 	require.NoError(t, err)
 	require.Len(t, assignments, 3)
 	seen := make(map[string]int, len(subjects))
@@ -43,7 +45,7 @@ func TestBuildStockCNAssignmentsUsesEveryTimerNodeAndKeepsExistingSubjectsStable
 
 	group.Subjects = append(group.Subjects, "688981.XSHG")
 	group.ExternalSymbols["688981.XSHG"] = "sh688981"
-	after, err := BuildStockCNAssignments(group, append([]scfinvoker.Node(nil), nodes...), stockCNMaxSubjects, "2026-08-29")
+	after, err := BuildStockCNAssignments(group, append([]scfinvoker.Node(nil), nodes...), stockCNTestMeasuredSafeGroupSize, "2026-08-29", 3)
 	require.NoError(t, err)
 	for _, assignment := range after {
 		for _, subject := range assignment.Subjects {
@@ -63,8 +65,17 @@ func TestBuildStockCNAssignmentsRequiresConfiguredNodeCount(t *testing.T) {
 	_, err := BuildStockCNAssignments(TaskGroup{
 		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
 		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
-	}, nodes, stockCNMaxSubjects, "2026-08-29", 3)
+	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 3)
 	require.ErrorContains(t, err, "has 2 nodes; expected 3")
+}
+
+func TestBuildStockCNAssignmentsRequiresExplicitPositiveN(t *testing.T) {
+	nodes := []scfinvoker.Node{{NodeID: "node-0", FunctionName: "moox-stock-cn-000", NodeType: "scf-event", TriggerType: "timer"}}
+	_, err := BuildStockCNAssignments(TaskGroup{
+		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Subjects: []string{"600000.XSHG"}, ExternalSymbols: stockCNExternalSymbols([]string{"600000.XSHG"}),
+	}, nodes, 50, "2026-08-29")
+	require.ErrorContains(t, err, "explicit positive timer function count")
 }
 
 func TestBuildStockCNAssignmentsRejectsMissingPublishedSlot(t *testing.T) {
@@ -76,7 +87,7 @@ func TestBuildStockCNAssignmentsRejectsMissingPublishedSlot(t *testing.T) {
 	_, err := BuildStockCNAssignments(TaskGroup{
 		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
 		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
-	}, nodes, stockCNMaxSubjects, "2026-08-29")
+	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 2)
 	require.ErrorContains(t, err, "slot")
 }
 
@@ -89,7 +100,7 @@ func TestBuildStockCNAssignmentsRejectsSlotMetadataMismatch(t *testing.T) {
 	_, err := BuildStockCNAssignments(TaskGroup{
 		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
 		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
-	}, nodes, stockCNMaxSubjects, "2026-08-29")
+	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 1)
 	require.ErrorContains(t, err, "metadata index")
 }
 
@@ -104,13 +115,13 @@ func TestBuildStockCNAssignmentsFitsApproximateFullMarketIntoTwoHundredGroups(t 
 	}
 	group := TaskGroup{Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects)}
 
-	assignments, err := BuildStockCNAssignments(group, nodes, stockCNMaxSubjects, "2026-08-29")
+	assignments, err := BuildStockCNAssignments(group, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 200)
 	require.NoError(t, err)
 	require.Len(t, assignments, 200)
 	assigned := 0
 	before := make(map[string]int, len(subjects))
 	for _, assignment := range assignments {
-		require.LessOrEqual(t, len(assignment.Subjects), stockCNMaxSubjects)
+		require.LessOrEqual(t, len(assignment.Subjects), stockCNTestMeasuredSafeGroupSize)
 		_, err := buildManagedEnvironment(assignment, nil, stockCNMaxManagedEnvironmentSize)
 		require.NoError(t, err)
 		for _, subject := range assignment.Subjects {
@@ -122,7 +133,7 @@ func TestBuildStockCNAssignmentsFitsApproximateFullMarketIntoTwoHundredGroups(t 
 
 	group.Subjects = append(group.Subjects, "999999.XSHE")
 	group.ExternalSymbols["999999.XSHE"] = "sz999999"
-	after, err := BuildStockCNAssignments(group, nodes, stockCNMaxSubjects, "2026-08-29")
+	after, err := BuildStockCNAssignments(group, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 200)
 	require.NoError(t, err)
 	moved := 0
 	for _, assignment := range after {
@@ -144,7 +155,7 @@ func TestBuildStockCNAssignmentsKeepsPublishedFleetWhenUniverseIsSmall(t *testin
 	assignments, err := BuildStockCNAssignments(TaskGroup{
 		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
 		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
-	}, nodes, stockCNMaxSubjects, "2026-08-29")
+	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 5)
 	require.NoError(t, err)
 	require.Len(t, assignments, len(nodes))
 	assigned := 0
@@ -169,6 +180,29 @@ func TestBuildAssignmentsKeepsCryptoSpareTimersDisabled(t *testing.T) {
 	require.True(t, assignments[0].Enabled)
 	require.False(t, assignments[1].Enabled)
 	require.False(t, assignments[2].Enabled)
+}
+
+func TestRequiredStockCNGroupSizeUsesCeilingForConfiguredN(t *testing.T) {
+	tests := []struct {
+		name   string
+		active int
+		n      int
+		want   int
+	}{
+		{name: "N200 exact", active: 200, n: 200, want: 1},
+		{name: "N200 remainder", active: 201, n: 200, want: 2},
+		{name: "other N", active: 15, n: 7, want: 3},
+		{name: "empty", active: 0, n: 200, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := requiredStockCNGroupSize(tt.active, tt.n)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+	_, err := requiredStockCNGroupSize(1, 0)
+	require.ErrorContains(t, err, "positive")
 }
 
 func stockCNExternalSymbols(subjects []string) map[string]string {

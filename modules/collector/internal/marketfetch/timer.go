@@ -32,8 +32,11 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request
 		return Request{}, "", err
 	}
 	subjects := normalizeSubjects(strings.Split(os.Getenv("MOOX_MARKET_FETCH_SUBJECTS"), "|"))
-	if len(subjects) == 0 || len(subjects) > 30 {
-		return Request{}, "", fmt.Errorf("timer market fetch subjects must contain 1..30 values")
+	if len(subjects) == 0 {
+		return Request{}, "", fmt.Errorf("timer market fetch subjects must contain at least one value")
+	}
+	if !strings.EqualFold(spaceID, StockCNSpaceID) && len(subjects) > MaxRealtimeItems {
+		return Request{}, "", fmt.Errorf("timer market fetch subjects must contain 1..%d values", MaxRealtimeItems)
 	}
 	dnsRoutes, err := parseDNSRoutes(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON"))
 	if err != nil {
