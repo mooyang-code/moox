@@ -31,14 +31,17 @@ func (p *CollectParams) SettleDelayOr(defaultDelay time.Duration) time.Duration 
 	if defaultDelay < 0 {
 		defaultDelay = 0
 	}
-	if p == nil || p.SettleDelayMS <= 0 {
+	if p == nil || p.SettleDelayMS == nil {
+		return defaultDelay
+	}
+	if *p.SettleDelayMS < 0 {
 		return defaultDelay
 	}
 	maxDelayMS := int64(MaxResampleSettleDelay / time.Millisecond)
-	if p.SettleDelayMS > maxDelayMS {
+	if *p.SettleDelayMS > maxDelayMS {
 		return MaxResampleSettleDelay
 	}
-	return time.Duration(p.SettleDelayMS) * time.Millisecond
+	return time.Duration(*p.SettleDelayMS) * time.Millisecond
 }
 
 // CanonicalJSON persists the normalized public collect-params contract.
@@ -103,10 +106,10 @@ func (p *CollectParams) ValidateKlineResample() error {
 	if p.Alignment != ResampleAlignmentEpochUTC {
 		return fmt.Errorf("alignment must be epoch_utc")
 	}
-	if p.SettleDelayMS < 0 {
+	if p.SettleDelayMS != nil && *p.SettleDelayMS < 0 {
 		return fmt.Errorf("settle_delay_ms must be non-negative")
 	}
-	if p.SettleDelayMS > int64(MaxResampleSettleDelay/time.Millisecond) {
+	if p.SettleDelayMS != nil && *p.SettleDelayMS > int64(MaxResampleSettleDelay/time.Millisecond) {
 		return fmt.Errorf("settle_delay_ms must not exceed %d", int64(MaxResampleSettleDelay/time.Millisecond))
 	}
 	source, err := parseFixedFrequencyDuration(p.SourceFrequency)

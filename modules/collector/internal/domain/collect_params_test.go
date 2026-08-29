@@ -237,6 +237,19 @@ func TestKlineResampleCanonicalJSONOmitsRuntimeRepairPolicy(t *testing.T) {
 	assert.NotContains(t, raw, "repair")
 }
 
+func TestKlineResampleSettleDelayPreservesExplicitZero(t *testing.T) {
+	params, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"target_kline_derived_2m","target_frequency":"2m","alignment":"epoch_utc","settle_delay_ms":0}`, "", "", "kline_resample")
+	require.NoError(t, err)
+	require.NoError(t, params.Validate())
+	assert.NotNil(t, params.SettleDelayMS)
+	assert.EqualValues(t, 0, *params.SettleDelayMS)
+	assert.Equal(t, time.Duration(0), params.SettleDelay())
+	assert.Equal(t, time.Duration(0), params.SettleDelayOr(10*time.Second))
+	raw, err := params.CanonicalJSON()
+	require.NoError(t, err)
+	assert.Contains(t, raw, `"settle_delay_ms":0`)
+}
+
 func TestKlineResampleRejectsDurationAndSettleDelayOverflow(t *testing.T) {
 	tooLargeFrequency, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"9007199254740993m","source_series_tag":"venue:binance","target_dataset_id":"target_kline_derived_2m","target_frequency":"2m","alignment":"epoch_utc"}`, "", "", "kline_resample")
 	require.NoError(t, err)

@@ -30,7 +30,7 @@ type CollectParams struct {
 	SourceSeriesTag string          `json:"source_series_tag,omitempty"`
 	TargetFrequency string          `json:"target_frequency,omitempty"`
 	Alignment       string          `json:"alignment,omitempty"`
-	SettleDelayMS   int64           `json:"settle_delay_ms,omitempty"`
+	SettleDelayMS   *int64          `json:"settle_delay_ms,omitempty"`
 }
 
 // CollectSource describes where target objects come from.
