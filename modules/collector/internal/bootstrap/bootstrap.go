@@ -317,7 +317,9 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	}
 	var resampleRunner *collectorresample.Runner
 	var resamplePreparer *collectorresample.Preparer
+	var resampleMetrics *collectorresample.Metrics
 	if cfg.KlineResample.Enabled {
+		resampleMetrics = collectorresample.NewMetrics(prometheus.DefaultRegisterer)
 		metadataClient, metadataErr := binance.NewResampleMetadataClient(cfg.Storage.GatewayTarget, "spot")
 		localStorage, storageErr := binance.NewResampleStorage(deps.StorageRPCGatewayTarget, "spot", "collector:kline_resample")
 		if metadataErr != nil || storageErr != nil {
@@ -334,7 +336,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 				SpaceID: completionSpaceID, ScanTimeout: cfg.KlineResample.ScanTimeout, WorkerConcurrency: cfg.KlineResample.WorkerConcurrency, MaxClaimsPerTick: cfg.KlineResample.MaxClaimsPerTick, WorkerJobTimeout: cfg.KlineResample.WorkerJobTimeout,
 				WorkerPollInterval: cfg.KlineResample.WorkerPollInterval, WorkerMaxSourceKeys: cfg.KlineResample.WorkerMaxSourceKeysPerClaim,
 				StaleRunningAfter: cfg.KlineResample.StaleRunningAfter, DefaultSettleDelay: cfg.KlineResample.DefaultSettleDelay, RepairLookbackBuckets: cfg.KlineResample.RepairLookbackBuckets,
-			}}
+			}, Metrics: resampleMetrics}
 			prepareCtx, prepareCancel := context.WithTimeout(trpc.BackgroundContext(), cfg.KlineResample.ScanTimeout)
 			if err := resamplePreparer.RunOnce(prepareCtx); err != nil {
 				log.WarnContextf(trpc.BackgroundContext(), "collector kline resample initial preparation failed: %v", err)

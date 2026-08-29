@@ -1,4 +1,4 @@
-export type ResampleBackfillState = "running" | "waiting_source" | "syncing";
+export type ResampleBackfillState = "running" | "waiting_source" | "syncing" | "complete" | "canceled" | "failed";
 
 export interface ResampleBackfillSummary {
   requestId: string;
@@ -51,6 +51,9 @@ export function countBackfillBuckets(startRaw: string, endRaw: string, frequency
   const span = end.getTime() - start.getTime();
   const size = minutes * 60 * 1000;
   if (span % size !== 0) return 0;
+  const alignedStart = floorToEpochBucket(start, frequency);
+  const alignedEnd = floorToEpochBucket(end, frequency);
+  if (!alignedStart || !alignedEnd || alignedStart.getTime() !== start.getTime() || alignedEnd.getTime() !== end.getTime()) return 0;
   const count = span / size;
   return Number.isSafeInteger(count) && count > 0 ? count : 0;
 }

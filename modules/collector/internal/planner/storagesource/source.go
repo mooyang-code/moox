@@ -36,6 +36,7 @@ type DatasetInfo struct {
 	Status       string
 	Freqs        []string
 	Columns      []string
+	ColumnTypes  map[string]storagepb.FieldValueType
 	Attributes   map[string]string
 	KeepDuration string
 	Revision     uint64
@@ -65,6 +66,7 @@ func (s *DatasetSource) GetDataset(ctx context.Context, spaceID, datasetID strin
 		Attributes:   cloneAttributes(dataset.GetAttributes()),
 		KeepDuration: strings.TrimSpace(dataset.GetKeepDuration()),
 		Revision:     dataset.GetRevision(),
+		ColumnTypes:  make(map[string]storagepb.FieldValueType),
 	}
 	// The generated Metadata client supports column discovery, while small
 	// in-memory test adapters and older control-plane fakes may not. Keep this
@@ -81,7 +83,9 @@ func (s *DatasetSource) GetDataset(ctx context.Context, spaceID, datasetID strin
 			}
 			for _, column := range rsp.GetColumns() {
 				if column != nil && strings.EqualFold(strings.TrimSpace(column.GetStatus()), "active") && strings.TrimSpace(column.GetColumnName()) != "" {
-					info.Columns = append(info.Columns, strings.TrimSpace(column.GetColumnName()))
+					name := strings.TrimSpace(column.GetColumnName())
+					info.Columns = append(info.Columns, name)
+					info.ColumnTypes[name] = column.GetValueType()
 				}
 			}
 			if !rsp.GetPageResult().GetHasMore() || len(rsp.GetColumns()) == 0 {

@@ -1,5 +1,5 @@
 import { callControl } from "@/api/admin/http";
-import { summarizeBackfillResults, type ResampleBackfillSummary } from "@/views/collector/collector-rules/resample-backfill";
+import type { ResampleBackfillSummary } from "@/views/collector/collector-rules/resample-backfill";
 
 export interface KlineResampleBackfillRequest {
   space_id: string;
@@ -21,18 +21,25 @@ export async function cancelKlineResampleBackfill(request: Pick<KlineResampleBac
   return callControl<typeof request, Record<string, unknown>>("collectmgr", "CancelKlineResampleBackfill", request);
 }
 
-export async function getKlineResampleBackfillStatus(spaceId: string, ruleId: string): Promise<ResampleBackfillSummary | null> {
-  const instances: Array<Record<string, any>> = [];
-  for (let page = 1; page <= 100; page += 1) {
-    const response = await callControl<
-      { filter: Record<string, unknown> },
-      { instances?: Array<Record<string, any>>; page?: { has_more?: boolean } }
-    >("collectmgr", "GetTaskInstanceList", {
-      filter: { space_id: spaceId, rule_id: ruleId, data_type: "kline_resample", page: { page, size: 500 } }
-    });
-    const rows = response.instances || [];
-    instances.push(...rows);
-    if (!response.page?.has_more || rows.length === 0) break;
-  }
-  return summarizeBackfillResults(instances);
+export async function getKlineResampleBackfillStatus(spaceId: string, ruleId: string, requestId = ""): Promise<ResampleBackfillSummary | null> {
+  const response = await callControl<
+    { space_id: string; rule_id: string; request_id?: string },
+    {
+      request_id?: string;
+      start?: string;
+      end?: string;
+      next_bucket?: string;
+      state?: ResampleBackfillSummary["state"];
+      participants?: number;
+    }
+  >("collectmgr", "GetKlineResampleBackfill", { space_id: spaceId, rule_id: ruleId, request_id: requestId });
+  if (!response.request_id) return null;
+  return {
+    requestId: String(response.request_id),
+    start: String(response.start || ""),
+    end: String(response.end || ""),
+    nextBucket: String(response.next_bucket || ""),
+    state: response.state || "running",
+    participants: Number(response.participants || 0)
+  };
 }

@@ -64,7 +64,13 @@ func (r *TaskInstanceRepository) ClaimDueResampleTasks(
 	limit int,
 	leaseDuration time.Duration,
 ) ([]ResampleTaskClaim, error) {
-	return r.claimDueResampleTasks(ctx, "", now, origin, limit, leaseDuration, false)
+	return r.ClaimDueResampleTasksWithSettleDelay(ctx, now, origin, limit, leaseDuration, 0)
+}
+
+// ClaimDueResampleTasksWithSettleDelay applies the configured process default
+// when a rule leaves settle_delay_ms unset.
+func (r *TaskInstanceRepository) ClaimDueResampleTasksWithSettleDelay(ctx context.Context, now time.Time, origin domain.ResampleTaskOrigin, limit int, leaseDuration, defaultSettleDelay time.Duration) ([]ResampleTaskClaim, error) {
+	return r.claimDueResampleTasks(ctx, "", now, origin, limit, leaseDuration, false, defaultSettleDelay)
 }
 
 // ClaimDueResampleTasksInSpace limits claims to one Collector space. The
@@ -78,7 +84,13 @@ func (r *TaskInstanceRepository) ClaimDueResampleTasksInSpace(
 	limit int,
 	leaseDuration time.Duration,
 ) ([]ResampleTaskClaim, error) {
-	return r.claimDueResampleTasks(ctx, strings.TrimSpace(spaceID), now, origin, limit, leaseDuration, true)
+	return r.ClaimDueResampleTasksInSpaceWithSettleDelay(ctx, spaceID, now, origin, limit, leaseDuration, 0)
+}
+
+// ClaimDueResampleTasksInSpaceWithSettleDelay is the space-scoped variant used
+// by the runtime worker.
+func (r *TaskInstanceRepository) ClaimDueResampleTasksInSpaceWithSettleDelay(ctx context.Context, spaceID string, now time.Time, origin domain.ResampleTaskOrigin, limit int, leaseDuration, defaultSettleDelay time.Duration) ([]ResampleTaskClaim, error) {
+	return r.claimDueResampleTasks(ctx, strings.TrimSpace(spaceID), now, origin, limit, leaseDuration, true, defaultSettleDelay)
 }
 
 func (r *TaskInstanceRepository) claimDueResampleTasks(
@@ -89,6 +101,7 @@ func (r *TaskInstanceRepository) claimDueResampleTasks(
 	limit int,
 	leaseDuration time.Duration,
 	requireReadyRule bool,
+	defaultSettleDelay time.Duration,
 ) ([]ResampleTaskClaim, error) {
 	if !origin.Valid() {
 		return nil, fmt.Errorf("invalid resample origin: %s", origin)
@@ -141,7 +154,7 @@ func (r *TaskInstanceRepository) claimDueResampleTasks(
 				}
 				settleDelay := time.Duration(0)
 				if params, paramsErr := domain.ParseCollectParams(instance.TaskParams, instance.Provider, instance.MarketType, "kline_resample"); paramsErr == nil {
-					settleDelay = params.SettleDelay()
+					settleDelay = params.SettleDelayOr(defaultSettleDelay)
 				}
 				if bucket.Add(target).Add(settleDelay).After(now) {
 					continue
@@ -411,16 +424,31 @@ func (r *TaskInstanceRepository) SkipResampleRepairTask(ctx context.Context, spa
 }
 
 func (r *TaskInstanceRepository) RecoverExpiredResampleLeases(ctx context.Context, now time.Time, limit int) (int64, error) {
-	return r.RecoverExpiredResampleLeasesInSpace(ctx, "", now, limit)
+	return r.RecoverExpiredResampleLeasesWithStaleAfter(ctx, now, limit, 0)
+}
+
+func (r *TaskInstanceRepository) RecoverExpiredResampleLeasesWithStaleAfter(ctx context.Context, now time.Time, limit int, staleAfter time.Duration) (int64, error) {
+	return r.recoverExpiredResampleLeasesInSpace(ctx, "", now, limit, staleAfter)
 }
 
 // RecoverExpiredResampleLeasesInSpace only recovers leases owned by one
 // Collector space.
 func (r *TaskInstanceRepository) RecoverExpiredResampleLeasesInSpace(ctx context.Context, spaceID string, now time.Time, limit int) (int64, error) {
+	return r.RecoverExpiredResampleLeasesInSpaceWithStaleAfter(ctx, spaceID, now, limit, 0)
+}
+
+func (r *TaskInstanceRepository) RecoverExpiredResampleLeasesInSpaceWithStaleAfter(ctx context.Context, spaceID string, now time.Time, limit int, staleAfter time.Duration) (int64, error) {
+	return r.recoverExpiredResampleLeasesInSpace(ctx, spaceID, now, limit, staleAfter)
+}
+
+func (r *TaskInstanceRepository) recoverExpiredResampleLeasesInSpace(ctx context.Context, spaceID string, now time.Time, limit int, staleAfter time.Duration) (int64, error) {
 	if limit <= 0 || limit > maxPageSize {
 		return 0, fmt.Errorf("recover limit must be between 1 and %d", maxPageSize)
 	}
 	now = now.UTC()
+	if staleAfter < 0 {
+		staleAfter = 0
+	}
 	var recovered int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var instances []domain.TaskInstance
@@ -436,7 +464,7 @@ func (r *TaskInstanceRepository) RecoverExpiredResampleLeasesInSpace(ctx context
 				break
 			}
 			result, err := domain.ParseResampleTaskResult(instance.Result)
-			if err != nil || result.State != domain.ResampleTaskStateRunning || result.LeaseUntil == nil || result.LeaseUntil.After(now) {
+			if err != nil || result.State != domain.ResampleTaskStateRunning || result.LeaseUntil == nil || result.LeaseUntil.After(now) || (staleAfter > 0 && result.LeaseUntil.After(now.Add(-staleAfter))) {
 				continue
 			}
 			version := result.StateVersion

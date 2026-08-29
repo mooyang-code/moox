@@ -89,6 +89,26 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 			i.registry.ObserveInventoryRefreshError()
 			return fmt.Errorf("validate collector rule %q: %w", rule.RuleID, err)
 		}
+		if params.Collector.DataType == "kline_resample" {
+			if rule.PrepareState != domain.PrepareStateReady {
+				continue
+			}
+			frequency, err := report.NormalizeDatasetFrequency(params.TargetFrequency)
+			if err != nil {
+				i.registry.ObserveInventoryRefreshError()
+				return fmt.Errorf("normalize resample rule %q frequency %q: %w", rule.RuleID, params.TargetFrequency, err)
+			}
+			interval, err := report.ParseDatasetFrequency(frequency)
+			if err != nil {
+				i.registry.ObserveInventoryRefreshError()
+				return fmt.Errorf("parse resample rule %q frequency %q: %w", rule.RuleID, frequency, err)
+			}
+			key := report.DatasetKey{SpaceID: rule.SpaceID, DatasetID: params.TargetDatasetID, Freq: frequency}
+			if previous, ok := expected[key]; !ok || interval < previous {
+				expected[key] = interval
+			}
+			continue
+		}
 		if params.Collector.DataType != "kline" {
 			continue
 		}

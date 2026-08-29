@@ -218,6 +218,28 @@ message CancelKlineResampleBackfillRsp {
   common.RetInfo ret_info = 1;
 }
 
+message GetKlineResampleBackfillReq {
+  string space_id = 1;
+  string rule_id = 2;
+  string request_id = 3;
+}
+
+message GetKlineResampleBackfillRsp {
+  common.RetInfo ret_info = 1;
+  string request_id = 2;
+  string start = 3;
+  string end = 4;
+  string next_bucket = 5;
+  string state = 6;
+  uint64 participants = 7;
+  uint64 running = 8;
+  uint64 waiting_source = 9;
+  uint64 syncing = 10;
+  uint64 complete = 11;
+  uint64 failed = 12;
+  repeated string errors = 13;
+}
+
 service CollectMgr {
   // ----- 任务规则 -----
   rpc GetTaskRuleList(GetTaskRuleListReq) returns (GetTaskRuleListRsp);
@@ -234,4 +256,5 @@ service CollectMgr {
   rpc GetDataTypeConfigWithFields(GetDataTypeConfigWithFieldsReq) returns (GetDataTypeConfigWithFieldsRsp);
   rpc StartKlineResampleBackfill(StartKlineResampleBackfillReq) returns (StartKlineResampleBackfillRsp);
   rpc CancelKlineResampleBackfill(CancelKlineResampleBackfillReq) returns (CancelKlineResampleBackfillRsp);
+  rpc GetKlineResampleBackfill(GetKlineResampleBackfillReq) returns (GetKlineResampleBackfillRsp);
 }

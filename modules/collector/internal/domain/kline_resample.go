@@ -18,8 +18,17 @@ const (
 
 // SettleDelay returns the rule-specific delay after a target bucket closes.
 func (p *CollectParams) SettleDelay() time.Duration {
+	return p.SettleDelayOr(0)
+}
+
+// SettleDelayOr applies the process-wide default when a rule leaves the
+// optional delay unset. A caller may supply its configured default explicitly.
+func (p *CollectParams) SettleDelayOr(defaultDelay time.Duration) time.Duration {
+	if defaultDelay < 0 {
+		defaultDelay = 0
+	}
 	if p == nil || p.SettleDelayMS <= 0 {
-		return 0
+		return defaultDelay
 	}
 	return time.Duration(p.SettleDelayMS) * time.Millisecond
 }

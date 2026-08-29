@@ -39,6 +39,8 @@ type CollectMgrService interface {
 	StartKlineResampleBackfill(ctx context.Context, req *StartKlineResampleBackfillReq) (*StartKlineResampleBackfillRsp, error)
 
 	CancelKlineResampleBackfill(ctx context.Context, req *CancelKlineResampleBackfillReq) (*CancelKlineResampleBackfillRsp, error)
+
+	GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq) (*GetKlineResampleBackfillRsp, error)
 }
 
 func CollectMgrService_GetTaskRuleList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -221,6 +223,24 @@ func CollectMgrService_CancelKlineResampleBackfill_Handler(svr interface{}, ctx 
 	return rsp, nil
 }
 
+func CollectMgrService_GetKlineResampleBackfill_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetKlineResampleBackfillReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).GetKlineResampleBackfill(ctx, reqbody.(*GetKlineResampleBackfillReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CollectMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.collector.CollectMgr",
@@ -265,6 +285,10 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.collector.CollectMgr/CancelKlineResampleBackfill",
 			Func: CollectMgrService_CancelKlineResampleBackfill_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/GetKlineResampleBackfill",
+			Func: CollectMgrService_GetKlineResampleBackfill_Handler,
 		},
 	},
 }
@@ -315,6 +339,9 @@ func (s *UnimplementedCollectMgr) StartKlineResampleBackfill(ctx context.Context
 func (s *UnimplementedCollectMgr) CancelKlineResampleBackfill(ctx context.Context, req *CancelKlineResampleBackfillReq) (*CancelKlineResampleBackfillRsp, error) {
 	return nil, errors.New("rpc CancelKlineResampleBackfill of service CollectMgr is not implemented")
 }
+func (s *UnimplementedCollectMgr) GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq) (*GetKlineResampleBackfillRsp, error) {
+	return nil, errors.New("rpc GetKlineResampleBackfill of service CollectMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -344,6 +371,8 @@ type CollectMgrClientProxy interface {
 	StartKlineResampleBackfill(ctx context.Context, req *StartKlineResampleBackfillReq, opts ...client.Option) (rsp *StartKlineResampleBackfillRsp, err error)
 
 	CancelKlineResampleBackfill(ctx context.Context, req *CancelKlineResampleBackfillReq, opts ...client.Option) (rsp *CancelKlineResampleBackfillRsp, err error)
+
+	GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq, opts ...client.Option) (rsp *GetKlineResampleBackfillRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -549,6 +578,26 @@ func (c *CollectMgrClientProxyImpl) CancelKlineResampleBackfill(ctx context.Cont
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CancelKlineResampleBackfillRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq, opts ...client.Option) (*GetKlineResampleBackfillRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetKlineResampleBackfill")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("GetKlineResampleBackfill")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetKlineResampleBackfillRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

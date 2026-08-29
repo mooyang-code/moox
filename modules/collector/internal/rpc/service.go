@@ -415,6 +415,80 @@ func (s *Service) CancelKlineResampleBackfill(ctx context.Context, req *pb.Cance
 	return &pb.CancelKlineResampleBackfillRsp{RetInfo: retOK()}, nil
 }
 
+// GetKlineResampleBackfill returns one durable, server-side aggregate instead
+// of forcing callers to scan an unbounded TaskInstance history.
+func (s *Service) GetKlineResampleBackfill(ctx context.Context, req *pb.GetKlineResampleBackfillReq) (*pb.GetKlineResampleBackfillRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetRuleId()) == "" {
+		return &pb.GetKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id and rule_id are required")}, nil
+	}
+	instances := make([]domain.TaskInstance, 0)
+	for page := 1; ; page++ {
+		rows, total, err := s.instanceRepo.List(ctx, store.TaskInstanceFilter{SpaceID: req.GetSpaceId(), RuleID: req.GetRuleId(), DataType: "kline_resample", Page: page, PageSize: 1000})
+		if err != nil {
+			return &pb.GetKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
+		instances = append(instances, rows...)
+		if len(rows) == 0 || int64(len(instances)) >= total {
+			break
+		}
+	}
+	requestID := strings.TrimSpace(req.GetRequestId())
+	if requestID == "" {
+		for _, instance := range instances {
+			result, err := domain.ParseResampleTaskResult(instance.Result)
+			if err == nil && result.Backfill != nil && result.Backfill.RequestID != "" {
+				requestID = result.Backfill.RequestID
+				break
+			}
+		}
+	}
+	if requestID == "" {
+		return &pb.GetKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "backfill request not found")}, nil
+	}
+	response := &pb.GetKlineResampleBackfillRsp{RetInfo: retOK(), RequestId: requestID}
+	stateRank := map[domain.ResampleBackfillState]int{domain.ResampleBackfillRunning: 1, domain.ResampleBackfillWaitingSource: 2, domain.ResampleBackfillSyncing: 3, domain.ResampleBackfillComplete: 1, domain.ResampleBackfillCanceled: 2, domain.ResampleBackfillFailed: 3}
+	selectedState := domain.ResampleBackfillState("")
+	for _, instance := range instances {
+		result, err := domain.ParseResampleTaskResult(instance.Result)
+		if err != nil || result.Backfill == nil || result.Backfill.RequestID != requestID {
+			continue
+		}
+		backfill := result.Backfill
+		response.Participants++
+		if response.Start == "" {
+			response.Start = backfill.Start.UTC().Format(time.RFC3339Nano)
+			response.End = backfill.End.UTC().Format(time.RFC3339Nano)
+		}
+		next := backfill.NextBucket.UTC().Format(time.RFC3339Nano)
+		if response.NextBucket == "" || next < response.NextBucket {
+			response.NextBucket = next
+		}
+		switch backfill.State {
+		case domain.ResampleBackfillRunning:
+			response.Running++
+		case domain.ResampleBackfillWaitingSource:
+			response.WaitingSource++
+		case domain.ResampleBackfillSyncing:
+			response.Syncing++
+		case domain.ResampleBackfillComplete:
+			response.Complete++
+		case domain.ResampleBackfillFailed:
+			response.Failed++
+		}
+		if rank := stateRank[backfill.State]; rank > stateRank[selectedState] {
+			selectedState = backfill.State
+		}
+		if len(response.Errors) < 20 && strings.TrimSpace(result.LastError) != "" {
+			response.Errors = append(response.Errors, result.LastError)
+		}
+	}
+	if response.Participants == 0 {
+		return &pb.GetKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "backfill request not found")}, nil
+	}
+	response.State = string(selectedState)
+	return response, nil
+}
+
 func normalizeTaskRule(rule domain.TaskRule) domain.TaskRule {
 	rule.RuleID = strings.TrimSpace(rule.RuleID)
 	if rule.RuleID == "" {
@@ -583,16 +657,28 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, rule domain
 	}
 	for _, frequency := range info.Freqs {
 		if strings.EqualFold(strings.TrimSpace(frequency), params.SourceFrequency) {
-			if len(info.Columns) > 0 {
-				required := map[string]struct{}{"open": {}, "high": {}, "low": {}, "close": {}, "volume": {}, "quote_volume": {}, "trade_num": {}}
-				for _, column := range info.Columns {
-					delete(required, strings.TrimSpace(column))
+			// Dataset metadata adapters that expose column discovery return a
+			// non-nil ColumnTypes map. Validate both presence and logical type so
+			// an empty or malformed schema cannot enter ready and spin forever.
+			if info.ColumnTypes != nil {
+				expected := map[string]storagepb.FieldValueType{
+					"open": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "high": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+					"low": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "close": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+					"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "quote_volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+					"trade_num": storagepb.FieldValueType_FIELD_VALUE_TYPE_INT,
 				}
-				if len(required) != 0 {
-					missing := make([]string, 0, len(required))
-					for column := range required {
+				missing := make([]string, 0)
+				for column, expectedType := range expected {
+					actualType, ok := info.ColumnTypes[column]
+					if !ok {
 						missing = append(missing, column)
+						continue
 					}
+					if actualType != expectedType {
+						return fmt.Errorf("source Dataset %s column %s has value_type=%s, want %s", params.SourceDatasetID, column, actualType.String(), expectedType.String())
+					}
+				}
+				if len(missing) != 0 {
 					sort.Strings(missing)
 					return fmt.Errorf("source Dataset %s missing active K-line columns: %s", params.SourceDatasetID, strings.Join(missing, ","))
 				}
