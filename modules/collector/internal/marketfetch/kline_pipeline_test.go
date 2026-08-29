@@ -2,6 +2,8 @@ package marketfetch
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,10 +19,13 @@ type pipelineClock struct{ now time.Time }
 func (c pipelineClock) Now() time.Time { return c.now }
 
 type pipelineProvider struct {
-	id    string
-	rows  []marketdata.NormalizedKline
-	err   error
-	delay time.Duration
+	id        string
+	rows      []marketdata.NormalizedKline
+	err       error
+	delay     time.Duration
+	rateLimit *marketdata.RateLimitPolicy
+	calls     *int32
+	rowsFor   func(marketdata.KlineRequest) []marketdata.NormalizedKline
 }
 
 func TestStockCNShouldCollectMinuteHonorsSessionsAndClosedDays(t *testing.T) {
@@ -46,10 +51,17 @@ func (p pipelineProvider) Descriptor() marketdata.ProviderDescriptor {
 }
 
 func (p pipelineProvider) KlineSpec() marketdata.KlineSpec {
-	return marketdata.KlineSpec{Markets: []string{"stock_cn"}, Exchanges: []string{"XSHG"}, Frequencies: []string{"1m"}, CompleteOHLCV: true, HasAmount: true, MaxBarsPerRequest: 3, TimestampMode: marketdata.TimestampModeOpen, RateLimit: marketdata.RateLimitPolicy{RequestsPerSecond: 100, Burst: 3, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: time.Second}}
+	rateLimit := marketdata.RateLimitPolicy{RequestsPerSecond: 100, Burst: 3, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: time.Second}
+	if p.rateLimit != nil {
+		rateLimit = *p.rateLimit
+	}
+	return marketdata.KlineSpec{Markets: []string{"stock_cn"}, Exchanges: []string{"XSHG"}, Frequencies: []string{"1m"}, CompleteOHLCV: true, HasAmount: true, MaxBarsPerRequest: 3, TimestampMode: marketdata.TimestampModeOpen, RateLimit: rateLimit}
 }
 
-func (p pipelineProvider) FetchKlines(ctx context.Context, _ marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
+func (p pipelineProvider) FetchKlines(ctx context.Context, req marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
+	if p.calls != nil {
+		atomic.AddInt32(p.calls, 1)
+	}
 	if p.delay > 0 {
 		select {
 		case <-time.After(p.delay):
@@ -57,7 +69,44 @@ func (p pipelineProvider) FetchKlines(ctx context.Context, _ marketdata.KlineReq
 			return nil, ctx.Err()
 		}
 	}
+	if p.rowsFor != nil {
+		return p.rowsFor(req), p.err
+	}
 	return p.rows, p.err
+}
+
+func TestKlinePipelineSharesInvocationBreakerAcrossThirtySubjectsAndKeepsFallbackWithinDeadline(t *testing.T) {
+	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
+	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-30"}
+	rateLimit := &marketdata.RateLimitPolicy{RequestsPerSecond: 1000, Burst: 30, MaxConcurrent: 30, Cooldown: time.Second, RequestTimeout: 5 * time.Second}
+	var firstCalls, fallbackCalls int32
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", err: marketdata.ErrProtocol, delay: 2 * time.Second, rateLimit: rateLimit, calls: &firstCalls}))
+	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", rateLimit: rateLimit, calls: &fallbackCalls, rowsFor: func(req marketdata.KlineRequest) []marketdata.NormalizedKline {
+		row := bar
+		row.SubjectID = req.SubjectID
+		row.ProviderSymbol = req.ProviderSymbol
+		row.RequestID = req.RequestID
+		return []marketdata.NormalizedKline{row}
+	}}))
+	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, nil)
+	require.NoError(t, err)
+
+	items := make([]domain.CollectionItem, 0, 30)
+	for index := 0; index < 30; index++ {
+		subjectID := fmt.Sprintf("%06d.XSHG", 600000+index)
+		items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: "sh" + subjectID[:6], Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: 3})
+	}
+	pipeline := &KlinePipeline{Router: router, Storage: &pipelineStorage{}, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	payload, err := pipeline.Execute(ctx, Request{BatchID: "batch-30", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-30", Concurrency: 30, Items: items})
+	require.NoError(t, err)
+	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Len(t, pipeline.Storage.(*pipelineStorage).rows, 30)
+	require.Equal(t, int32(2), atomic.LoadInt32(&firstCalls))
+	require.Equal(t, int32(30), atomic.LoadInt32(&fallbackCalls))
 }
 
 type pipelineStorage struct {

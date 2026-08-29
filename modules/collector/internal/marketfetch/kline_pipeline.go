@@ -67,6 +67,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	}
 	results := make([]domain.ItemResult, len(req.Items))
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(req.Items)*MaxRealtimeRows)
+	routerSession := p.Router.NewSession()
 	concurrency := req.Concurrency
 	if concurrency <= 0 {
 		concurrency = DefaultConcurrency
@@ -82,7 +83,6 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			routerSession := p.Router.NewSession()
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
@@ -178,6 +178,13 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 		}
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			err = fmt.Errorf("%w: provider %s attempt budget exhausted", marketdata.ErrTimeout, provider)
+		}
+		if errors.Is(err, marketdata.ErrProviderNotFound) {
+			// A shared invocation breaker reports a provider skipped after its
+			// failure streak as ErrProviderNotFound. Keep the remaining budget
+			// for the next candidate instead of treating that skip as terminal.
+			lastErr = err
+			continue
 		}
 		if !marketdata.CanFallback(ctx, err) {
 			return nil, err
