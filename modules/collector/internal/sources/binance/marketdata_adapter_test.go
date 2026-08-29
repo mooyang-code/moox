@@ -2,62 +2,146 @@ package binance
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/model/common"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestMarketDataAdapterFetchesClosedMinuteKline(t *testing.T) {
-	fixturePath := filepath.Join("testdata", "marketdata_spot.json")
-	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v3/klines", r.URL.Path)
-		body, err := os.ReadFile(fixturePath)
-		require.NoError(t, err)
-		_, _ = w.Write(body)
-	}))
+func TestMarketDataAdapterFetchesClosedMinuteKlinesThroughCollector(t *testing.T) {
+	now := time.Date(2026, 8, 29, 1, 31, 30, 0, time.UTC)
+	start := time.Date(2026, 8, 29, 1, 30, 0, 0, time.UTC)
+	end := time.Date(2026, 8, 29, 1, 32, 0, 0, time.UTC)
+	collector := NewKlineCollector()
+	collector.fetchKlinePage = func(_ context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+		assert.Equal(t, InstTypeSPOT, params.InstType)
+		assert.Equal(t, "BTCUSDT", params.Symbol)
+		assert.Equal(t, "BTC-USDT-SPOT", params.SubjectID)
+		assert.Equal(t, "1m", params.Interval)
+		assert.Equal(t, start, req.StartTime)
+		assert.Equal(t, end, req.EndTime)
+		assert.Equal(t, 2, req.Limit)
+		return []*exchange.Kline{
+			testExchangeKline(start, start.Add(time.Minute-time.Millisecond), "100", "110", "90", "105", "12", "1234.56"),
+			testExchangeKline(start.Add(time.Minute), start.Add(2*time.Minute-time.Millisecond), "105", "112", "101", "108", "8", "850"),
+		}, nil
+	}
 
-	now := time.Date(2026, 8, 29, 1, 32, 30, 0, time.UTC)
 	adapter := NewMarketDataAdapter(AdapterConfig{
-		ProductType: marketdata.ProductSpot,
-		SpotBaseURL: "http://fixture.test",
-		HTTPClient:  client,
-		Now:         func() time.Time { return now },
+		ProductType:    marketdata.ProductSpot,
+		KlineCollector: collector,
+		Now:            func() time.Time { return now },
 	})
-
 	rows, err := adapter.FetchKlines(context.Background(), marketdata.KlineRequest{
-		SubjectID:      "BTC-USDT",
-		ProviderSymbol: "BTC-USDT",
+		MarketID:       "crypto",
+		ExchangeID:     "binance",
+		ProductType:    marketdata.ProductSpot,
+		InstrumentType: marketdata.InstrumentSpot,
+		SubjectID:      "BTC-USDT-SPOT",
+		ProviderSymbol: "BTCUSDT",
 		Frequency:      "1m",
 		Limit:          2,
+		StartTime:      start,
+		EndTime:        end,
 		RequestID:      "req-binance",
 	})
+
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	require.Equal(t, "binance", rows[0].ProviderID)
-	require.Equal(t, 1234.56, rows[0].AmountCNY)
-	require.Equal(t, time.Date(2026, 8, 29, 1, 30, 0, 0, time.UTC), rows[0].BarStart)
-	require.Equal(t, "BTC-USDT", rows[0].ProviderSymbol)
+	assert.Equal(t, "binance", rows[0].ProviderID)
+	assert.Equal(t, "BTCUSDT", rows[0].ProviderSymbol)
+	assert.Equal(t, start, rows[0].BarStart)
+	assert.Equal(t, start.Add(time.Minute), rows[0].BarEnd)
+	assert.Equal(t, start.Add(time.Minute-time.Millisecond), rows[0].ProviderTimestamp)
+	assert.Equal(t, 1234.56, rows[0].AmountCNY)
 }
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
+func TestMarketDataAdapterRoutesSwapKlinesThroughCollector(t *testing.T) {
+	now := time.Date(2026, 8, 29, 1, 31, 30, 0, time.UTC)
+	collector := NewKlineCollector()
+	collector.fetchKlinePage = func(_ context.Context, params *sources.CollectParams, _ *exchange.KlineRequest) ([]*exchange.Kline, error) {
+		assert.Equal(t, InstTypeSWAP, params.InstType)
+		return []*exchange.Kline{
+			testExchangeKline(now.Add(-time.Minute), now.Add(-time.Millisecond), "100", "110", "90", "105", "12", "1234.56"),
+		}, nil
+	}
+	adapter := NewMarketDataAdapter(AdapterConfig{KlineCollector: collector, Now: func() time.Time { return now }})
 
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
+	rows, err := adapter.FetchKlines(context.Background(), marketdata.KlineRequest{
+		MarketID:       "crypto",
+		ExchangeID:     "binance",
+		ProductType:    marketdata.ProductSwap,
+		InstrumentType: marketdata.InstrumentSwap,
+		SubjectID:      "BTC-USDT-SWAP",
+		ProviderSymbol: "BTCUSDT",
+		Frequency:      "1m",
+		Limit:          1,
+		RequestID:      "req-binance-swap",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "BTC-USDT-SWAP", rows[0].SubjectID)
 }
 
-func newFixtureClient(t *testing.T, handler http.Handler) *http.Client {
-	t.Helper()
-	return &http.Client{
-		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			recorder := httptest.NewRecorder()
-			handler.ServeHTTP(recorder, req)
-			return recorder.Result(), nil
-		}),
+func TestMarketDataAdapterFetchesCompleteActiveUSDTInstrumentSnapshotThroughCollector(t *testing.T) {
+	snapshotAt := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
+	collector := NewSymbolCollector()
+	collector.fetchSymbolPage = func(_ context.Context, params *sources.CollectParams) ([]*exchange.SymbolInfo, error) {
+		assert.Equal(t, InstTypeSPOT, params.InstType)
+		return []*exchange.SymbolInfo{
+			{Symbol: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active"},
+			{Symbol: "ETH-USDT", BaseAsset: "ETH", QuoteAsset: "USDT", Status: "inactive"},
+			{Symbol: "BTC-USDC", BaseAsset: "BTC", QuoteAsset: "USDC", Status: "active"},
+		}, nil
+	}
+
+	adapter := NewMarketDataAdapter(AdapterConfig{
+		ProductType:     marketdata.ProductSpot,
+		SymbolCollector: collector,
+		Now:             func() time.Time { return snapshotAt.Add(time.Minute) },
+	})
+	snapshot, err := adapter.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{
+		MarketID:   "crypto",
+		ExchangeID: "binance",
+		SnapshotAt: snapshotAt,
+		RequestID:  "req-symbols",
+	})
+
+	require.NoError(t, err)
+	assert.NotEmpty(t, snapshot.SnapshotID)
+	_, versionErr := time.Parse(time.RFC3339Nano, snapshot.SnapshotID)
+	assert.NoError(t, versionErr)
+	assert.Equal(t, "binance", snapshot.SourceProvider)
+	assert.Equal(t, "crypto", snapshot.MarketID)
+	assert.Equal(t, snapshotAt, snapshot.FetchedAt)
+	assert.True(t, snapshot.Complete)
+	assert.Equal(t, 1, snapshot.PageCount)
+	assert.Equal(t, map[string]int{"binance": 1}, snapshot.ExchangeCounts)
+	require.Equal(t, []marketdata.Instrument{{
+		SubjectID:      "BTC-USDT-SPOT",
+		ProviderSymbol: "BTCUSDT",
+		Exchange:       "binance",
+		Name:           "BTC/USDT",
+		Status:         "active",
+	}}, snapshot.Instruments)
+	require.NoError(t, marketdata.ValidateInstrumentSnapshot(snapshot))
+}
+
+func testExchangeKline(openTime, closeTime time.Time, open, high, low, close, volume, quoteVolume string) *exchange.Kline {
+	return &exchange.Kline{
+		OpenTime:    openTime,
+		CloseTime:   closeTime,
+		Open:        common.NewDecimal(open),
+		High:        common.NewDecimal(high),
+		Low:         common.NewDecimal(low),
+		Close:       common.NewDecimal(close),
+		Volume:      common.NewDecimal(volume),
+		QuoteVolume: common.NewDecimal(quoteVolume),
 	}
 }
