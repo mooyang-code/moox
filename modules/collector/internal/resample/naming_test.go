@@ -22,6 +22,12 @@ func TestUniqueResampleDisplayNameIsValidAndStable(t *testing.T) {
 	if name != uniqueResampleDisplayName("spot_kline_derived_5m") {
 		t.Fatal("display name is not stable")
 	}
+	if name == uniqueResampleDisplayName("spot_kline_derived_842m") {
+		t.Fatal("distinct target dataset IDs must not share the default display name")
+	}
+	if name == uniqueResampleDisplayName("spot_kline_derived_872m") {
+		t.Fatal("distinct target dataset IDs must not share the default display name")
+	}
 }
 
 func TestValidateTargetDatasetIDRequiresLowerSnakeFrequencySuffix(t *testing.T) {

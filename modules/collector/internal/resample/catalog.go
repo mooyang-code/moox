@@ -3,7 +3,7 @@ package resample
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
+	"encoding/base32"
 	"errors"
 	"fmt"
 	"strings"
@@ -282,7 +282,12 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 
 func uniqueResampleDisplayName(targetDatasetID string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(targetDatasetID)))
-	return "重采样-" + hex.EncodeToString(sum[:])[:5]
+	// Storage display names must contain Chinese and be at most ten runes.
+	// Keep one Chinese marker plus nine base32 characters (45 bits) so the
+	// deterministic names remain readable while making collisions extremely
+	// unlikely across arbitrary target dataset IDs.
+	suffix := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
+	return "重" + strings.ToLower(suffix[:9])
 }
 
 type viewGetter interface {
