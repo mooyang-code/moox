@@ -1,0 +1,207 @@
+package marketfetch
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	stocksource "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/marketfetchpb"
+)
+
+const (
+	StockCNSpaceID   = "stock_cn"
+	StockCNDatasetID = "stock_cn_kline"
+	StockCNRouteID   = "stock_cn_kline_1m_v1"
+)
+
+// KlinePipeline is the provider-independent stock write boundary. Fetchers
+// return complete bars; the pipeline writes each bar as one complete row.
+type KlinePipeline struct {
+	Router         *marketdata.Router
+	Storage        Storage
+	CandidateChain []string
+	RouteID        string
+	Now            func() time.Time
+}
+
+func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchpb.MarketFetchBatchCompleted, error) {
+	if p == nil || p.Router == nil || p.Storage == nil {
+		return nil, fmt.Errorf("stock kline pipeline is not initialized")
+	}
+	if err := req.validate(); err != nil {
+		return nil, err
+	}
+	if req.SpaceID != StockCNSpaceID || req.DatasetID != StockCNDatasetID || req.Frequency != "1m" {
+		return nil, fmt.Errorf("stock kline pipeline requires stock_cn/stock_cn_kline/1m")
+	}
+	chain := normalizeCandidateChain(p.CandidateChain, req.Provider)
+	if len(chain) < 2 {
+		return nil, fmt.Errorf("stock kline pipeline requires at least two candidate providers")
+	}
+	started := time.Now()
+	if p.Now != nil {
+		started = p.Now()
+	}
+	results := make([]domain.ItemResult, len(req.Items))
+	rows := make([]*storagepb.RowFieldUpsert, 0, len(req.Items)*MaxRealtimeRows)
+	for index, item := range req.Items {
+		providerSymbol, err := stocksource.ProviderSymbol(item.SubjectID)
+		if err != nil {
+			results[index] = failureResult(item, domain.ItemOutcomeInvalid, "symbol", err)
+			continue
+		}
+		limit := item.BarLimit
+		if limit <= 0 {
+			limit = MaxRealtimeRows
+		}
+		fetched, err := p.Router.FetchKlines(ctx, marketdata.KlineRequest{
+			MarketID:       StockCNSpaceID,
+			ProductType:    marketdata.ProductEquity,
+			InstrumentType: marketdata.InstrumentEquity,
+			SubjectID:      item.SubjectID,
+			ProviderSymbol: providerSymbol,
+			Frequency:      "1m",
+			Limit:          limit,
+			StartTime:      parseOptionalTime(item.StartTime),
+			Now:            started.UTC(),
+			RequestID:      firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID),
+		}, chain)
+		if err != nil {
+			results[index] = failureResult(item, classifyError(err), errorType(err), err)
+			continue
+		}
+		for _, bar := range fetched {
+			rank := providerRank(chain, bar.ProviderID)
+			row, err := stockKlineRow(bar, firstNonEmptyString(p.RouteID, StockCNRouteID), rank)
+			if err != nil {
+				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "normalize", err)
+				break
+			}
+			rows = append(rows, row)
+		}
+		if results[index].Outcome == "" {
+			results[index] = successResult(item)
+		}
+	}
+	if len(rows) > 0 {
+		var err error
+		if storage, ok := p.Storage.(sourceStorage); ok {
+			err = storage.UpsertFieldsWithSource(ctx, rows, req.BatchID)
+		} else {
+			err = p.Storage.UpsertFields(ctx, rows)
+		}
+		if err != nil {
+			for index := range results {
+				if results[index].Outcome == domain.ItemOutcomeSuccess {
+					results[index] = failureResult(results[index].CollectionItem, domain.ItemOutcomeStorageError, "storage", err)
+				}
+			}
+		}
+	}
+	completed := time.Now()
+	if p.Now != nil {
+		completed = p.Now()
+	}
+	return buildCompletion(req, results, completed, completed.Sub(started)), nil
+}
+
+func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int) (*storagepb.RowFieldUpsert, error) {
+	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
+		return nil, err
+	}
+	return &storagepb.RowFieldUpsert{
+		Key: &storagepb.RowKey{
+			SpaceId: StockCNSpaceID, DatasetId: StockCNDatasetID,
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+				SubjectId: bar.SubjectID, Freq: "1m", DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: "",
+			}},
+		},
+		Fields: []*storagepb.FieldValue{
+			doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
+			doubleValue("volume", bar.VolumeShares), doubleValue("amount", bar.AmountCNY),
+			timeValue("trade_date", tradeDateUTC(bar.BarStart)), timeValue("close_time", bar.BarEnd),
+			stringValue("volume_unit", "shares"), stringValue("amount_unit", amountUnit(bar)),
+			stringValue("provider_symbol", bar.ProviderSymbol), timeValue("provider_timestamp", bar.ProviderTimestamp),
+			timeValue("fetched_at", bar.FetchedAt), stringValue("request_id", bar.RequestID),
+			stringValue("route_id", routeID), intValue("route_rank", int64(routeRank)),
+			stringValue("source_provider", bar.ProviderID), stringValue("quality_status", "accepted"),
+		},
+	}, nil
+}
+
+func normalizeCandidateChain(configured []string, primary string) []string {
+	seen := make(map[string]struct{})
+	result := make([]string, 0, 2)
+	for _, provider := range append([]string{primary}, configured...) {
+		provider = strings.ToLower(strings.TrimSpace(provider))
+		if provider == "" || provider == "stock_cn_multi" {
+			continue
+		}
+		if _, ok := seen[provider]; ok {
+			continue
+		}
+		seen[provider] = struct{}{}
+		result = append(result, provider)
+		if len(result) == 2 {
+			break
+		}
+	}
+	return result
+}
+
+func providerRank(chain []string, provider string) int {
+	for index, candidate := range chain {
+		if candidate == provider {
+			return index + 1
+		}
+	}
+	return len(chain) + 1
+}
+
+func parseOptionalTime(raw string) time.Time {
+	parsed, _ := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	return parsed.UTC()
+}
+
+func tradeDateUTC(value time.Time) time.Time {
+	location, _ := time.LoadLocation("Asia/Shanghai")
+	local := value.In(location)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location).UTC()
+}
+
+func amountUnit(bar marketdata.NormalizedKline) string {
+	if bar.AmountCNY == 0 && bar.ProviderID == "tencent" {
+		return "not_available"
+	}
+	return "cny"
+}
+
+func doubleValue(field string, value float64) *storagepb.FieldValue {
+	return &storagepb.FieldValue{FieldId: field, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: value}}}
+}
+
+func intValue(field string, value int64) *storagepb.FieldValue {
+	return &storagepb.FieldValue{FieldId: field, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: value}}}
+}
+
+func stringValue(field, value string) *storagepb.FieldValue {
+	return &storagepb.FieldValue{FieldId: field, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: value}}}
+}
+
+func timeValue(field string, value time.Time) *storagepb.FieldValue {
+	return &storagepb.FieldValue{FieldId: field, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_TimeValue{TimeValue: value.UTC().Format(time.RFC3339Nano)}}}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
