@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -23,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func mustBuildCollectorCreateNodeItem(t *testing.T, opts collectorPublishOptions, packageID string) adminclient.NodeCreateItem {
@@ -331,6 +333,116 @@ func TestEgressProbeResponseDataAcceptsStructuredAndRawResponses(t *testing.T) {
 
 	_, ok = egressProbeResponseData(map[string]any{"raw": "not-json"})
 	assert.False(t, ok)
+}
+
+func TestResolveCollectorProbeExpectedCountUsesStockCNFleetConfig(t *testing.T) {
+	configured := &setupconfig.SCFFetcherSpace{
+		SpaceID:            "stock_cn",
+		TimerFunctionCount: 200,
+		Regions: []setupconfig.SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50},
+			{Region: "ap-shanghai", Enabled: true, FunctionCount: 50},
+			{Region: "ap-beijing", Enabled: true, FunctionCount: 50},
+			{Region: "ap-chengdu", Enabled: true, FunctionCount: 50},
+		},
+	}
+
+	count, err := resolveCollectorProbeExpectedCount("stock_cn", "", configured)
+	require.NoError(t, err)
+	assert.Equal(t, 200, count)
+
+	count, err = resolveCollectorProbeExpectedCount("stock_cn", "ap-shanghai", configured)
+	require.NoError(t, err)
+	assert.Equal(t, 50, count)
+
+	count, err = resolveCollectorProbeExpectedCount("stock_cn", "", nil)
+	require.NoError(t, err)
+	assert.Equal(t, setupconfig.DefaultStockCNMarketTimerFunctionCount, count)
+
+	count, err = resolveCollectorProbeExpectedCount("crypto_market", "", nil)
+	require.NoError(t, err)
+	assert.Zero(t, count)
+}
+
+func TestSelectCollectorProbeNodesKeepsCryptoSemanticsAndStockTimersOnly(t *testing.T) {
+	nodes := []adminclient.CloudNode{
+		{NodeID: "timer-a", PackageID: "pkg", TriggerType: "timer", Metadata: map[string]any{"deployment_ready": true}},
+		{NodeID: "invoke-a", PackageID: "pkg", TriggerType: "invoke", Metadata: map[string]any{"deployment_ready": true}},
+	}
+
+	assert.Len(t, selectCollectorProbeNodes(nodes, false), 2)
+	stockNodes := selectCollectorProbeNodes(nodes, true)
+	require.Len(t, stockNodes, 1)
+	assert.Equal(t, "timer-a", stockNodes[0].NodeID)
+}
+
+func TestValidateStockCNEgressProbeReportRequiresExactUniquePublicIPs(t *testing.T) {
+	valid := &collectorProbeReport{Results: []collectorProbeResult{
+		{NodeID: "node-a", OutboundIP: "198.51.100.1"},
+		{NodeID: "node-b", OutboundIP: "198.51.100.2"},
+	}}
+	require.NoError(t, validateStockCNEgressProbeReport(valid, 2))
+	assert.True(t, valid.GatePassed)
+	assert.Equal(t, 2, valid.EligibleCount)
+	assert.Equal(t, 2, valid.DistinctCount)
+
+	for name, report := range map[string]*collectorProbeReport{
+		"eligible mismatch":   {Results: []collectorProbeResult{{NodeID: "node-a", OutboundIP: "198.51.100.1"}}},
+		"empty public ip":     {Results: []collectorProbeResult{{NodeID: "node-a", OutboundIP: "198.51.100.1"}, {NodeID: "node-b"}}},
+		"duplicate public ip": {Results: []collectorProbeResult{{NodeID: "node-a", OutboundIP: "198.51.100.1"}, {NodeID: "node-b", OutboundIP: "198.51.100.1"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := validateStockCNEgressProbeReport(report, 2)
+			require.Error(t, err)
+			assert.False(t, report.GatePassed)
+		})
+	}
+}
+
+func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
+	before := time.Now().UTC().AddDate(0, 0, -7).Add(-time.Minute)
+	stock := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "stock_cn"}, Region: "ap-shanghai", StorageRPCGatewayTarget: "ip://storage:11003"}, "stock-node", "batch-stock")
+	stockData := stock["data"].(map[string]any)
+	assert.Equal(t, "stock_cn_kline", stockData["dataset_id"])
+	assert.Equal(t, "stock_cn_multi", stockData["provider"])
+	assert.Equal(t, "equity", stockData["market_type"])
+	assert.Equal(t, "backfill", stockData["batch_kind"])
+	stockItem := stockData["items"].([]map[string]any)[0]
+	assert.Equal(t, "600000.XSHG", stockItem["subject_id"])
+	assert.Equal(t, "sh600000", stockItem["symbol"])
+	assert.Equal(t, 100, stockItem["bar_limit"])
+	startTime, err := time.Parse(time.RFC3339Nano, stockItem["start_time"].(string))
+	require.NoError(t, err)
+	assert.False(t, startTime.Before(before))
+	assert.False(t, startTime.After(time.Now().UTC().AddDate(0, 0, -7).Add(time.Minute)))
+
+	crypto := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "crypto_market"}}, "crypto-node", "batch-crypto")
+	cryptoData := crypto["data"].(map[string]any)
+	assert.Equal(t, "binance_spot_kline_1m", cryptoData["dataset_id"])
+	assert.Equal(t, "binance", cryptoData["provider"])
+	assert.Equal(t, "spot", cryptoData["market_type"])
+	assert.Equal(t, "realtime", cryptoData["batch_kind"])
+}
+
+func TestDefaultStockCNCollectorRuleStaysDisabledUntilEgressGatePasses(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "collector-rules.yaml"))
+	require.NoError(t, err)
+	var bundle struct {
+		Rules []struct {
+			SpaceID string `yaml:"space_id"`
+			RuleID  string `yaml:"rule_id"`
+			Enabled bool   `yaml:"enabled"`
+		} `yaml:"rules"`
+	}
+	require.NoError(t, yaml.Unmarshal(content, &bundle))
+	for _, rule := range bundle.Rules {
+		if rule.SpaceID == "stock_cn" {
+			assert.Equal(t, "builtin-stock-cn-kline-1m", rule.RuleID)
+			assert.False(t, rule.Enabled)
+			return
+		}
+	}
+	t.Fatal("stock_cn collector rule is missing")
 }
 
 func TestCollectorFunctionEnvironmentRejectsInvalidOrConflictingCA(t *testing.T) {
@@ -903,6 +1015,31 @@ func TestBuildCollectorCreateNodeItemStandardManifestFitsTimerAndInvokeBudgets(t
 		}, "moox-collector_dev")
 		require.NoError(t, err, "trigger_type=%s", triggerType)
 	}
+}
+
+func TestBuildCollectorCreateNodeItemUsesLongStockCNInstrumentInvokeTimeoutOnlyForInvoke(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	fetcher := &setupconfig.SCFFetcherSpace{
+		SpaceID: "stock_cn", MemorySize: 64, TimeoutSeconds: 15,
+		InstrumentInvokeTimeoutSeconds: 60,
+		RealtimeBatchSize:              10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
+	}
+	timer := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "timer", FetcherConfig: fetcher,
+	}, "moox-collector-stock-cn_dev")
+	assert.Equal(t, "15", timer.Config["timeout"])
+
+	invoke := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "invoke", FetcherConfig: fetcher,
+	}, "moox-collector-stock-cn_dev")
+	assert.Equal(t, "60", invoke.Config["timeout"])
+
+	fetcher.InstrumentInvokeTimeoutSeconds = 90
+	configured := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "invoke", FetcherConfig: fetcher,
+	}, "moox-collector-stock-cn_dev")
+	assert.Equal(t, "90", configured.Config["timeout"])
 }
 
 func TestBuildCollectorCreateNodeItemRejectsInvalidInflightOverride(t *testing.T) {

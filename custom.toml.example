@@ -170,6 +170,82 @@ credential_secret_id = "tencent-default"
 app_id = "<tencent-app-id>"
 cos_bucket = "moox-scf-tokyo-<tencent-app-id>"
 
+# A 股 1m 多源采集默认发布 200 个 Timer。四个启用地域各自动分配 50 个；
+# 发布后必须跨全部 Timer 执行 probe-egress，确认 200 个非空且互不重复的公网 IP，
+# 才能手工启用 examples/setup/default/collector-rules.yaml 中的 stock_cn 规则。
+[[scf_fetcher.spaces]]
+space_id = "stock_cn"
+entrypoint = "stock_cn"
+package_config_dir = "scf/stock_cn"
+package_name = "moox-collector-stock-cn"
+cls_cloud_account_id = "tencent-scf-guangzhou"
+namespace = "default"
+runtime = "Go1"
+function_prefix = "moox-fetcher-stock-cn"
+timer_function_count = 200
+storage_gateway_node_id = "control"
+storage_rpc_gateway_target = "ip://106.53.107.122:11003"
+memory_size = 64
+timeout_seconds = 15
+# 全市场 Instrument 快照实测约 25 秒；仅 Invoke 辅助函数使用该独立超时。
+instrument_invoke_timeout_seconds = 60
+realtime_batch_size = 10
+realtime_bar_limit = 3
+catchup_batch_size = 1
+catchup_bar_limit = 1000
+max_inflight_requests = 10
+request_timeout_ms = 2000
+http_max_attempts = 4
+storage_max_attempts = 1
+storage_timeout_ms = 5000
+max_retry_attempts = 3
+retry_delays = ["5s", "30s", "2m"]
+stagger_enabled = false
+
+[[scf_fetcher.spaces.regions]]
+region = "ap-guangzhou"
+display_name = "华南（广州）"
+enabled = true
+function_count = 0
+cloud_account_id = "tencent-scf-guangzhou"
+cloud_account_name = "Tencent SCF Guangzhou"
+credential_secret_id = "tencent-default"
+app_id = "<tencent-app-id>"
+cos_bucket = "moox-scf-guangzhou-<tencent-app-id>"
+
+[[scf_fetcher.spaces.regions]]
+region = "ap-shanghai"
+display_name = "华东（上海）"
+enabled = true
+function_count = 0
+cloud_account_id = "tencent-scf-shanghai"
+cloud_account_name = "Tencent SCF Shanghai"
+credential_secret_id = "tencent-default"
+app_id = "<tencent-app-id>"
+cos_bucket = "moox-scf-shanghai-<tencent-app-id>"
+
+[[scf_fetcher.spaces.regions]]
+region = "ap-beijing"
+display_name = "华北（北京）"
+enabled = true
+function_count = 0
+cloud_account_id = "tencent-scf-beijing"
+cloud_account_name = "Tencent SCF Beijing"
+credential_secret_id = "tencent-default"
+app_id = "<tencent-app-id>"
+cos_bucket = "moox-scf-beijing-<tencent-app-id>"
+
+[[scf_fetcher.spaces.regions]]
+region = "ap-chengdu"
+display_name = "西南（成都）"
+enabled = true
+function_count = 0
+cloud_account_id = "tencent-scf-chengdu"
+cloud_account_name = "Tencent SCF Chengdu"
+credential_secret_id = "tencent-default"
+app_id = "<tencent-app-id>"
+cos_bucket = "moox-scf-chengdu-<tencent-app-id>"
+
 [control_host]
 name = "control"
 address = ""

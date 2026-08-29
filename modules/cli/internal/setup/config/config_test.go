@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -116,8 +117,6 @@ func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 			{Region: "ap-guangzhou", Enabled: true, CloudAccountID: "gz"},
 			{Region: "ap-shanghai", Enabled: true, CloudAccountID: "sh"},
 			{Region: "ap-beijing", Enabled: true, CloudAccountID: "bj"},
-			{Region: "ap-singapore", Enabled: true, CloudAccountID: "sg"},
-			{Region: "ap-tokyo", Enabled: true, CloudAccountID: "tokyo"},
 			{Region: "ap-chengdu", Enabled: true, CloudAccountID: "cd"},
 		},
 	}
@@ -125,8 +124,7 @@ func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 	assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, stock.TimerFunctionCount)
 	total := 0
 	for _, region := range stock.Regions {
-		assert.GreaterOrEqual(t, region.FunctionCount, 1)
-		assert.LessOrEqual(t, region.FunctionCount, 50)
+		assert.Equal(t, 50, region.FunctionCount)
 		total += region.FunctionCount
 	}
 	assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, total)
@@ -141,6 +139,51 @@ func TestResolveSCFTimerFunctionCountsRejectsMismatch(t *testing.T) {
 	err := resolveSCFTimerFunctionCounts(&cfg, "scf_fetcher.spaces[0]")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "regional function_count total")
+}
+
+func TestCustomExampleDefinesValidStockCN200FunctionFleet(t *testing.T) {
+	var manifest Manifest
+	_, err := toml.DecodeFile(filepath.Join("..", "..", "..", "..", "..", "custom.toml.example"), &manifest)
+	require.NoError(t, err)
+	manifest.SCFFetcher.Enabled = true
+	require.NoError(t, validateSCFFetcher(&manifest.SCFFetcher))
+
+	for _, space := range manifest.SCFFetcher.Spaces {
+		if space.SpaceID != "stock_cn" {
+			continue
+		}
+		assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, space.TimerFunctionCount)
+		assert.Equal(t, DefaultStockCNInstrumentInvokeTimeoutSeconds, space.InstrumentInvokeTimeoutSeconds)
+		require.Len(t, space.Regions, 4)
+		for _, region := range space.Regions {
+			assert.True(t, region.Enabled)
+			assert.Equal(t, 50, region.FunctionCount)
+		}
+		return
+	}
+	t.Fatal("stock_cn scf_fetcher config is missing")
+}
+
+func TestValidateSCFFetcherDefaultsAndBoundsStockCNInstrumentInvokeTimeout(t *testing.T) {
+	base := SCFFetcherSpace{
+		SpaceID: "stock_cn", MemorySize: 64, TimeoutSeconds: 15,
+		StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		RealtimeBatchSize:       10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50, CloudAccountID: "gz"},
+			{Region: "ap-shanghai", Enabled: true, FunctionCount: 50, CloudAccountID: "sh"},
+			{Region: "ap-beijing", Enabled: true, FunctionCount: 50, CloudAccountID: "bj"},
+			{Region: "ap-chengdu", Enabled: true, FunctionCount: 50, CloudAccountID: "cd"},
+		},
+	}
+	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, 15, base.TimeoutSeconds)
+	assert.Equal(t, DefaultStockCNInstrumentInvokeTimeoutSeconds, base.InstrumentInvokeTimeoutSeconds)
+
+	base.InstrumentInvokeTimeoutSeconds = 59
+	err := validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]")
+	require.ErrorContains(t, err, "instrument_invoke_timeout_seconds")
 }
 
 const validManifest = `[admin]

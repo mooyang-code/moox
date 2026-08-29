@@ -43,8 +43,12 @@ const (
 	DefaultCryptoMarketTimerFunctionCount = 60
 	// DefaultStockCNMarketTimerFunctionCount is the baseline Timer fleet size
 	// for the mainland China A-share Space. Each region is capped at 50
-	// functions, so this default needs at least six enabled regions.
+	// functions, so this default needs at least four enabled regions.
 	DefaultStockCNMarketTimerFunctionCount = 200
+	// DefaultStockCNInstrumentInvokeTimeoutSeconds leaves enough room for the
+	// measured full-market Sina instrument snapshot while Timer functions keep
+	// their fixed 15-second execution budget.
+	DefaultStockCNInstrumentInvokeTimeoutSeconds = 60
 )
 
 // Paths controls where setup-cli installs the control and Storage packages on
@@ -248,24 +252,25 @@ type SCFFetcherSpace struct {
 	// TimerFunctionCount is the total Timer fleet size for this Space. When it
 	// is zero and all enabled regional function_count values are zero, the
 	// built-in Space default is used and counts are distributed deterministically.
-	TimerFunctionCount      int                `toml:"timer_function_count"`
-	StorageGatewayNodeID    string             `toml:"storage_gateway_node_id"`
-	StorageRPCGatewayTarget string             `toml:"storage_rpc_gateway_target"`
-	MemorySize              int                `toml:"memory_size"`
-	TimeoutSeconds          int                `toml:"timeout_seconds"`
-	RealtimeBatchSize       int                `toml:"realtime_batch_size"`
-	RealtimeBarLimit        int                `toml:"realtime_bar_limit"`
-	CatchupBatchSize        int                `toml:"catchup_batch_size"`
-	CatchupBarLimit         int                `toml:"catchup_bar_limit"`
-	MaxInflightRequests     int                `toml:"max_inflight_requests"`
-	RequestTimeoutMS        int                `toml:"request_timeout_ms"`
-	HTTPMaxAttempts         int                `toml:"http_max_attempts"`
-	StorageMaxAttempts      int                `toml:"storage_max_attempts"`
-	StorageTimeoutMS        int                `toml:"storage_timeout_ms"`
-	MaxRetryAttempts        int                `toml:"max_retry_attempts"`
-	RetryDelays             []string           `toml:"retry_delays"`
-	StaggerEnabled          bool               `toml:"stagger_enabled"`
-	Regions                 []SCFFetcherRegion `toml:"regions"`
+	TimerFunctionCount             int                `toml:"timer_function_count"`
+	StorageGatewayNodeID           string             `toml:"storage_gateway_node_id"`
+	StorageRPCGatewayTarget        string             `toml:"storage_rpc_gateway_target"`
+	MemorySize                     int                `toml:"memory_size"`
+	TimeoutSeconds                 int                `toml:"timeout_seconds"`
+	InstrumentInvokeTimeoutSeconds int                `toml:"instrument_invoke_timeout_seconds"`
+	RealtimeBatchSize              int                `toml:"realtime_batch_size"`
+	RealtimeBarLimit               int                `toml:"realtime_bar_limit"`
+	CatchupBatchSize               int                `toml:"catchup_batch_size"`
+	CatchupBarLimit                int                `toml:"catchup_bar_limit"`
+	MaxInflightRequests            int                `toml:"max_inflight_requests"`
+	RequestTimeoutMS               int                `toml:"request_timeout_ms"`
+	HTTPMaxAttempts                int                `toml:"http_max_attempts"`
+	StorageMaxAttempts             int                `toml:"storage_max_attempts"`
+	StorageTimeoutMS               int                `toml:"storage_timeout_ms"`
+	MaxRetryAttempts               int                `toml:"max_retry_attempts"`
+	RetryDelays                    []string           `toml:"retry_delays"`
+	StaggerEnabled                 bool               `toml:"stagger_enabled"`
+	Regions                        []SCFFetcherRegion `toml:"regions"`
 }
 
 // DefaultTimerFunctionCount returns the built-in Timer capacity for a known
@@ -819,6 +824,16 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	}
 	if cfg.TimeoutSeconds != 15 {
 		return fmt.Errorf("config_invalid: %s.timeout_seconds must be 15", path)
+	}
+	if strings.EqualFold(cfg.SpaceID, "stock_cn") {
+		if cfg.InstrumentInvokeTimeoutSeconds == 0 {
+			cfg.InstrumentInvokeTimeoutSeconds = DefaultStockCNInstrumentInvokeTimeoutSeconds
+		}
+		if cfg.InstrumentInvokeTimeoutSeconds < DefaultStockCNInstrumentInvokeTimeoutSeconds || cfg.InstrumentInvokeTimeoutSeconds > 900 {
+			return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds must be between %d and 900", path, DefaultStockCNInstrumentInvokeTimeoutSeconds)
+		}
+	} else if cfg.InstrumentInvokeTimeoutSeconds != 0 {
+		return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds is only valid for stock_cn", path)
 	}
 	if cfg.RealtimeBatchSize == 0 {
 		cfg.RealtimeBatchSize = 30

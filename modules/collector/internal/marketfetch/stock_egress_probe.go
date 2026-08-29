@@ -15,13 +15,20 @@ import (
 // The deployment gate compares one result from every Timer function.
 func StockEgressProbe(ctx context.Context) (*model.Response, error) {
 	client := &http.Client{Timeout: 3 * time.Second}
+	return stockEgressProbeWithClient(ctx, client,
+		"https://api.ipify.org?format=text",
+		"https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20moox_probe=/CN_MarketDataService.getKLineData?symbol=sh600000&scale=1&ma=no&datalen=1",
+	)
+}
+
+func stockEgressProbeWithClient(ctx context.Context, client *http.Client, publicIPURL, sinaKlineURL string) (*model.Response, error) {
 	details := make(map[string]string, 4)
 	checks := []struct {
 		name string
 		url  string
 	}{
-		{name: "public_ip", url: "https://api.ipify.org?format=text"},
-		{name: "sina_kline", url: "https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20moox_probe=/CN_MarketDataService.getKLineData?symbol=sh600000&scale=1&ma=no&datalen=1"},
+		{name: "public_ip", url: publicIPURL},
+		{name: "sina_kline", url: sinaKlineURL},
 	}
 	for _, check := range checks {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, check.url, nil)
@@ -48,7 +55,11 @@ func StockEgressProbe(ctx context.Context) (*model.Response, error) {
 		if check.name == "sina_kline" && !strings.Contains(value, "\"open\"") {
 			return nil, fmt.Errorf("sina_kline response has no OHLC payload")
 		}
-		details[check.name] = value
+		if check.name == "sina_kline" {
+			details[check.name] = "ok"
+		} else {
+			details[check.name] = value
+		}
 	}
 	return &model.Response{Success: true, Message: "stock_cn egress probe ok", Data: map[string]interface{}{"provider": "sina", "market": "stock_cn", "details": details}, Timestamp: time.Now().UTC()}, nil
 }

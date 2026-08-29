@@ -142,6 +142,7 @@ type collectorProbeOptions struct {
 	ServiceSecretKey string
 	SpaceID          string
 	Region           string
+	File             string
 }
 
 var collectorDeployFlags collectorDeployOptions
@@ -361,6 +362,7 @@ func init() {
 	probeFlags.StringVar(&collectorProbeFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名 secret key")
 	probeFlags.StringVar(&collectorProbeFlags.SpaceID, "space-id", "", "space id")
 	probeFlags.StringVar(&collectorProbeFlags.Region, "region", "", "只探测指定地域")
+	probeFlags.StringVar(&collectorProbeFlags.File, "file", "", "custom.toml; stock_cn uses its configured Timer count as the egress gate")
 
 	submitFlags := collectorFunctionPublishSubmitCmd.Flags()
 	submitFlags.StringVar(&collectorPublishFlags.ControlURL, "control-url", "", "Control service base URL")
@@ -1082,12 +1084,35 @@ func waitCollectorBatch(ctx context.Context, client *adminclient.Client, jobID s
 }
 
 // runCollectorSCFCanary exercises the same bounded market_fetch path used by
-// the scheduler. It writes one current BTC/USDT bar to Storage and publishes
-// the completion event, so a successful response proves credentials, CA,
-// public EventBus reachability, EventBus ACL/ACK and Storage auth together.
+// the scheduler. Crypto uses a realtime request; stock_cn uses a seven-day
+// backfill so holidays still validate a real historical write. A successful
+// response proves credentials, CA, EventBus ACL/ACK and Storage auth together.
 func runCollectorSCFCanary(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, nodeID string) error {
 	batchID := fmt.Sprintf("deploy-canary-%d", time.Now().UnixNano())
-	response, err := client.InvokeFunction(ctx, nodeID, map[string]any{
+	response, err := client.InvokeFunction(ctx, nodeID, collectorSCFCanaryEvent(opts, nodeID, batchID))
+	if err != nil {
+		return err
+	}
+	if success, ok := response["success"].(bool); !ok || !success {
+		raw, _ := json.Marshal(response)
+		return fmt.Errorf("market_fetch canary returned unsuccessful response: %s", raw)
+	}
+	return nil
+}
+
+func collectorSCFCanaryEvent(opts collectorPublishOptions, nodeID, batchID string) map[string]any {
+	spaceID := firstNonEmpty(opts.SpaceID, opts.collectorPackageOptions.SpaceID)
+	datasetID, provider, marketType := "binance_spot_kline_1m", "binance", "spot"
+	subjectID, symbol, barLimit := "BTC-USDT", "BTCUSDT", 2
+	batchKind := "realtime"
+	startTime := ""
+	if strings.EqualFold(spaceID, "stock_cn") {
+		datasetID, provider, marketType = "stock_cn_kline", "stock_cn_multi", "equity"
+		subjectID, symbol, barLimit = "600000.XSHG", "sh600000", 100
+		batchKind = "backfill"
+		startTime = time.Now().UTC().AddDate(0, 0, -7).Truncate(time.Minute).Format(time.RFC3339Nano)
+	}
+	return map[string]any{
 		"action":                     "market_fetch",
 		"storage_rpc_gateway_target": opts.StorageRPCGatewayTarget,
 		"data": map[string]any{
@@ -1097,32 +1122,23 @@ func runCollectorSCFCanary(ctx context.Context, client *adminclient.Client, opts
 			// omitting it makes the canary fail after Storage has already
 			// succeeded, defeating the deployment gate.
 			"schedule_id": "deploy-canary-schedule",
-			"batch_kind":  "realtime",
-			"space_id":    opts.SpaceID,
-			"dataset_id":  "binance_spot_kline_1m",
+			"batch_kind":  batchKind,
+			"space_id":    spaceID,
+			"dataset_id":  datasetID,
 			"frequency":   "1m",
-			"provider":    "binance",
-			"market_type": "spot",
+			"provider":    provider,
+			"market_type": marketType,
 			"region":      opts.Region,
 			"node_id":     nodeID,
 			"items": []map[string]any{{
-				"subject_id": "BTC-USDT", "symbol": "BTCUSDT", "provider": "binance", "market_type": "spot",
+				"subject_id": subjectID, "symbol": symbol, "provider": provider, "market_type": marketType,
 				// The exchange response includes the currently-open candle. A
-				// one-bar request therefore has no closed bar to persist; ask for
-				// two so the canary validates an actual write rather than a false
-				// empty-data failure at the minute boundary.
-				"data_type": "kline", "dataset_id": "binance_spot_kline_1m", "frequency": "1m", "bar_limit": 2,
+				// one-bar request therefore has no closed bar to persist; request
+				// enough bars for the selected market to validate an actual write.
+				"data_type": "kline", "dataset_id": datasetID, "frequency": "1m", "bar_limit": barLimit, "start_time": startTime,
 			}},
 		},
-	})
-	if err != nil {
-		return err
 	}
-	if success, ok := response["success"].(bool); !ok || !success {
-		raw, _ := json.Marshal(response)
-		return fmt.Errorf("market_fetch canary returned unsuccessful response: %s", raw)
-	}
-	return nil
 }
 
 func publishCollectorFunctionStatus(ctx context.Context, opts collectorPublishStatusOptions) (*adminclient.NodeBatchChangeResponse, error) {
@@ -1306,6 +1322,10 @@ type collectorProbeResult struct {
 type collectorProbeReport struct {
 	Results             []collectorProbeResult `json:"results"`
 	DistinctOutboundIPs []string               `json:"distinct_outbound_ips"`
+	ExpectedCount       int                    `json:"expected_count,omitempty"`
+	EligibleCount       int                    `json:"eligible_count,omitempty"`
+	DistinctCount       int                    `json:"distinct_count,omitempty"`
+	GatePassed          bool                   `json:"gate_passed,omitempty"`
 }
 
 func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*collectorProbeReport, error) {
@@ -1322,17 +1342,30 @@ func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*col
 	if err != nil {
 		return nil, err
 	}
-	eligible := make([]adminclient.CloudNode, 0, len(nodes))
-	for _, node := range nodes {
-		if !collectorProbeNodeEligible(node) {
-			continue
+	strictStockGate := strings.EqualFold(spaceID, "stock_cn")
+	var fetcherConfig *setupconfig.SCFFetcherSpace
+	if strictStockGate && strings.TrimSpace(opts.File) != "" {
+		fetcherConfig, err = loadCollectorSCFFetcherConfig(opts.File, spaceID)
+		if err != nil {
+			return nil, err
 		}
-		eligible = append(eligible, node)
 	}
+	expectedCount, err := resolveCollectorProbeExpectedCount(spaceID, opts.Region, fetcherConfig)
+	if err != nil {
+		return nil, err
+	}
+	eligible := selectCollectorProbeNodes(nodes, strictStockGate)
 	if len(eligible) == 0 {
 		return nil, fmt.Errorf("no active market_fetcher SCF nodes are available for egress probe")
 	}
 	report := &collectorProbeReport{Results: make([]collectorProbeResult, len(eligible))}
+	if strictStockGate {
+		report.ExpectedCount = expectedCount
+		report.EligibleCount = len(eligible)
+		if len(eligible) != expectedCount {
+			return report, fmt.Errorf("stock_cn egress gate requires exactly %d eligible Timer nodes; got %d", expectedCount, len(eligible))
+		}
+	}
 	sem := make(chan struct{}, 5)
 	var wg sync.WaitGroup
 	var failed atomic.Int32
@@ -1351,7 +1384,11 @@ func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*col
 			defer func() { <-sem }()
 			started := time.Now()
 			result := collectorProbeResult{NodeID: node.NodeID, Region: node.Region, FunctionName: node.FunctionName, CheckedAt: started.UTC().Format(time.RFC3339Nano)}
-			response, invokeErr := client.InvokeFunction(ctx, node.NodeID, map[string]any{"action": "egress_probe", "data": map[string]any{"provider": "binance", "market_type": "spot", "node_id": node.NodeID}})
+			provider, marketType := "binance", "spot"
+			if strictStockGate {
+				provider, marketType = "sina", "stock_cn"
+			}
+			response, invokeErr := client.InvokeFunction(ctx, node.NodeID, map[string]any{"action": "egress_probe", "data": map[string]any{"provider": provider, "market_type": marketType, "node_id": node.NodeID}})
 			result.LatencyMS = time.Since(started).Milliseconds()
 			if invokeErr != nil {
 				result.Error = invokeErr.Error()
@@ -1381,10 +1418,98 @@ func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*col
 		report.DistinctOutboundIPs = append(report.DistinctOutboundIPs, ip)
 	}
 	sort.Strings(report.DistinctOutboundIPs)
+	if strictStockGate {
+		gateErr := validateStockCNEgressProbeReport(report, expectedCount)
+		if failed.Load() > 0 {
+			if gateErr != nil {
+				return report, fmt.Errorf("%d SCF egress probe(s) failed: %w", failed.Load(), gateErr)
+			}
+			return report, fmt.Errorf("%d SCF egress probe(s) failed", failed.Load())
+		}
+		if gateErr != nil {
+			return report, gateErr
+		}
+		return report, nil
+	}
 	if failed.Load() > 0 {
 		return report, fmt.Errorf("%d SCF egress probe(s) failed", failed.Load())
 	}
 	return report, nil
+}
+
+func resolveCollectorProbeExpectedCount(spaceID, region string, cfg *setupconfig.SCFFetcherSpace) (int, error) {
+	if !strings.EqualFold(strings.TrimSpace(spaceID), "stock_cn") {
+		return 0, nil
+	}
+	region = strings.TrimSpace(region)
+	if cfg == nil {
+		if region != "" {
+			return 0, fmt.Errorf("--file is required for a region-scoped stock_cn egress probe")
+		}
+		return setupconfig.DefaultStockCNMarketTimerFunctionCount, nil
+	}
+	if region == "" {
+		return cfg.TimerFunctionCount, nil
+	}
+	for _, item := range cfg.Regions {
+		if item.Enabled && item.Region == region {
+			return item.FunctionCount, nil
+		}
+	}
+	return 0, fmt.Errorf("stock_cn SCF config has no enabled region %q", region)
+}
+
+func selectCollectorProbeNodes(nodes []adminclient.CloudNode, timerOnly bool) []adminclient.CloudNode {
+	eligible := make([]adminclient.CloudNode, 0, len(nodes))
+	for _, node := range nodes {
+		if !collectorProbeNodeEligible(node) {
+			continue
+		}
+		if timerOnly && !strings.EqualFold(strings.TrimSpace(node.TriggerType), "timer") {
+			continue
+		}
+		eligible = append(eligible, node)
+	}
+	return eligible
+}
+
+func validateStockCNEgressProbeReport(report *collectorProbeReport, expected int) error {
+	if report == nil {
+		return fmt.Errorf("stock_cn egress gate returned no report")
+	}
+	report.ExpectedCount = expected
+	report.EligibleCount = len(report.Results)
+	report.GatePassed = false
+	ipSet := make(map[string]struct{}, len(report.Results))
+	missing := 0
+	for index := range report.Results {
+		ip := strings.TrimSpace(report.Results[index].OutboundIP)
+		if ip == "" {
+			missing++
+			if report.Results[index].Error == "" {
+				report.Results[index].Error = "public_ip is empty"
+			}
+			continue
+		}
+		ipSet[ip] = struct{}{}
+	}
+	report.DistinctOutboundIPs = report.DistinctOutboundIPs[:0]
+	for ip := range ipSet {
+		report.DistinctOutboundIPs = append(report.DistinctOutboundIPs, ip)
+	}
+	sort.Strings(report.DistinctOutboundIPs)
+	report.DistinctCount = len(report.DistinctOutboundIPs)
+	if report.EligibleCount != expected {
+		return fmt.Errorf("stock_cn egress gate requires eligible_count=%d; got %d", expected, report.EligibleCount)
+	}
+	if missing > 0 {
+		return fmt.Errorf("stock_cn egress gate requires a non-empty public_ip for every node; %d missing", missing)
+	}
+	if report.DistinctCount != expected {
+		return fmt.Errorf("stock_cn egress gate requires distinct public_ip count=%d; got %d", expected, report.DistinctCount)
+	}
+	report.GatePassed = true
+	return nil
 }
 
 func collectorProbeNodeEligible(node adminclient.CloudNode) bool {
@@ -1462,8 +1587,14 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if fetcher == nil {
 		fetcher = defaultCollectorSCFFetcherSpace()
 	}
+	triggerType := defaultFlag(opts.TriggerType, "timer")
+	effectiveTimeoutSeconds := defaultInt(fetcher.TimeoutSeconds, 15)
+	spaceID := firstNonEmpty(opts.SpaceID, fetcher.SpaceID, opts.collectorPackageOptions.SpaceID)
+	if strings.EqualFold(triggerType, "invoke") && strings.EqualFold(spaceID, "stock_cn") {
+		effectiveTimeoutSeconds = defaultInt(fetcher.InstrumentInvokeTimeoutSeconds, setupconfig.DefaultStockCNInstrumentInvokeTimeoutSeconds)
+	}
 	if strings.TrimSpace(config["timeout"]) == "" {
-		config["timeout"] = strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 15))
+		config["timeout"] = strconv.Itoa(effectiveTimeoutSeconds)
 	}
 	if strings.TrimSpace(config["memory_size"]) == "" {
 		config["memory_size"] = strconv.Itoa(defaultInt(fetcher.MemorySize, 64))
@@ -1474,10 +1605,10 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if collectorConfigInt(config, "memory_size", 64) != 64 {
 		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher memory_size is fixed at 64MB")
 	}
-	if collectorConfigInt(config, "timeout", 15) != 15 {
-		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher timeout is fixed at 15 seconds")
+	if collectorConfigInt(config, "timeout", effectiveTimeoutSeconds) != effectiveTimeoutSeconds {
+		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher timeout is fixed at %d seconds for %s %s", effectiveTimeoutSeconds, spaceID, triggerType)
 	}
-	if err := validateCollectorRuntimeConfig(config, fetcher, strings.EqualFold(defaultFlag(opts.TriggerType, "timer"), "timer")); err != nil {
+	if err := validateCollectorRuntimeConfig(config, fetcher, strings.EqualFold(triggerType, "timer"), effectiveTimeoutSeconds); err != nil {
 		return adminclient.NodeCreateItem{}, err
 	}
 	for configKey, environmentKey := range map[string]string{
@@ -2091,7 +2222,7 @@ func collectorConfigInt(values map[string]string, key string, fallback int) int 
 // validateCollectorRuntimeConfig keeps command-line function-config overrides
 // inside the same short-lived execution budget as custom.toml. This is needed
 // because those overrides are copied into SCF environment variables directly.
-func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconfig.SCFFetcherSpace, timer bool) error {
+func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconfig.SCFFetcherSpace, timer bool, timeoutSeconds int) error {
 	if fetcher == nil {
 		return fmt.Errorf("scf fetcher configuration is required")
 	}
@@ -2125,8 +2256,8 @@ func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconf
 	if !timer {
 		reserve += setupconfig.SCFCompletionReserveMilliseconds
 	}
-	if requestWaves*requestTimeoutMS+storageTimeoutMS+reserve >= 15_000 {
-		return fmt.Errorf("market_fetcher realtime request waves + storage_timeout_ms + configured reserves must be less than the 15-second timeout")
+	if requestWaves*requestTimeoutMS+storageTimeoutMS+reserve >= timeoutSeconds*1000 {
+		return fmt.Errorf("market_fetcher realtime request waves + storage_timeout_ms + configured reserves must be less than the %d-second timeout", timeoutSeconds)
 	}
 	return nil
 }

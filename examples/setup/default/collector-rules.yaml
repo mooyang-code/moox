@@ -68,3 +68,17 @@ rules:
     symbol_dataset_id: binance_swap_symbols
     target_dataset_id: perpetual_kline_1h
     frequency: 1h
+- space_id: stock_cn
+  rule_id: builtin-stock-cn-kline-1m
+  data_type: kline
+  provider: stock_cn_multi
+  market_type: equity
+  enabled: false
+  creator: moox-setup
+  collect_params:
+    provider: stock_cn_multi
+    market_type: equity
+    symbol_source: dataset
+    symbol_dataset_id: stock_cn_instruments
+    target_dataset_id: stock_cn_kline
+    frequency: 1m
