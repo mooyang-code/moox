@@ -12,14 +12,14 @@ api:
 storage:
   bindings:
     spot:
-      data_source_id: "quantclass_stock"
+      data_source_id: "stock_cn"
       subject_type: "stock"
       subject_market: "stock_cn"
       auth_info:
         app_id: "moox-collector"
         app_key: ""
     swap:
-      data_source_id: "quantclass_stock"
+      data_source_id: "stock_cn"
       subject_type: "stock"
       subject_market: "stock_cn"
       auth_info:

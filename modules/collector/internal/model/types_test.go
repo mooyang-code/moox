@@ -12,6 +12,7 @@ import (
 func TestEventAction_Constants_ShouldMatchExpectedValues(t *testing.T) {
 	assert.Equal(t, EventAction("market_fetch"), EventActionMarketFetch)
 	assert.Equal(t, EventAction("egress_probe"), EventActionEgressProbe)
+	assert.Equal(t, EventAction("instrument_snapshot"), EventActionInstrumentSnapshot)
 }
 
 func TestCollectParams_ShouldMarshal(t *testing.T) {

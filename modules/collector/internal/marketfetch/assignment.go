@@ -95,10 +95,6 @@ func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, maxSubjec
 	if err != nil {
 		return nil, fmt.Errorf("assign stock_cn provider chains: %w", err)
 	}
-	cron, err := CronForFrequency(group.Frequency)
-	if err != nil {
-		return nil, err
-	}
 	assignments := make([]NodeAssignment, 0, len(timerNodes))
 	for groupID, subjects := range groups {
 		if len(subjects) > maxSubjects {
@@ -117,11 +113,19 @@ func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, maxSubjec
 			NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region,
 			Provider: chain[0], MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency,
 			Subjects: append([]string(nil), subjects...), ExternalSymbols: externals, ProviderChain: chain,
-			RouteVersion: StockCNRouteID, GroupID: groupID, Cron: cron, Enabled: len(subjects) > 0,
+			RouteVersion: StockCNRouteID, GroupID: groupID, Cron: stockCNStaggeredCron(groupID), Enabled: len(subjects) > 0,
 			AssignmentHash: AssignmentHash(chain[0], strings.Join(chain, "|"), StockCNRouteID, strconv.Itoa(groupID), group.MarketType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|")),
 		})
 	}
 	return assignments, nil
+}
+
+func stockCNStaggeredCron(groupID int) string {
+	second := groupID % 45
+	if second < 0 {
+		second += 45
+	}
+	return fmt.Sprintf("%d * * * * * *", second)
 }
 
 func rebalanceRendezvousGroups(groups [][]string, maxSubjects int, routeVersion string) ([][]string, error) {

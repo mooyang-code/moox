@@ -24,13 +24,15 @@ const (
 )
 
 type Handler struct {
-	NewMarketFetch func() *marketfetch.Handler
-	NewReporter    func() (clsreporter.Reporter, time.Duration, error)
+	NewMarketFetch       func() *marketfetch.Handler
+	NewInstrumentStorage func(string, string) (marketfetch.InstrumentStorage, error)
+	NewReporter          func() (clsreporter.Reporter, time.Duration, error)
 }
 
 func NewHandler() *Handler {
 	return &Handler{
-		NewMarketFetch: marketfetch.NewHandler,
+		NewMarketFetch:       marketfetch.NewHandler,
+		NewInstrumentStorage: marketfetch.NewStockInstrumentStorage,
 		NewReporter: func() (clsreporter.Reporter, time.Duration, error) {
 			cfg, enabled, err := clsreporter.ConfigFromEnv(os.Getenv)
 			if err != nil || !enabled {
@@ -107,6 +109,24 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		return handler.HandleWithFunctionName(ctx, event, functionName)
 	case model.EventActionEgressProbe:
 		return marketfetch.StockEgressProbe(ctx)
+	case model.EventActionInstrumentSnapshot:
+		storageTarget := strings.TrimSpace(event.StorageRPCGatewayTarget)
+		if storageTarget == "" {
+			return failure("invalid_instrument_snapshot", "storage_rpc_gateway_target is required"), nil
+		}
+		storage, storageErr := h.NewInstrumentStorage(storageTarget, "stock_cn_instrument_snapshot")
+		if storageErr != nil {
+			return nil, storageErr
+		}
+		pipeline, pipelineErr := marketfetch.NewStockInstrumentPipeline(storage)
+		if pipelineErr != nil {
+			return nil, pipelineErr
+		}
+		result, pipelineErr := pipeline.Execute(ctx, marketfetch.InstrumentPipelineRequest{RequestID: event.RequestID, SnapshotAt: time.Now().UTC()})
+		if pipelineErr != nil {
+			return nil, pipelineErr
+		}
+		return &model.Response{Success: true, Message: "succeeded", Data: result, RequestID: event.RequestID, Timestamp: time.Now().UTC()}, nil
 	default:
 		return failure("unknown_event_type", "unsupported stock_cn SCF action"), nil
 	}

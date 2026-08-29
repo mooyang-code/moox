@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	stocksource "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
@@ -27,6 +28,7 @@ type KlinePipeline struct {
 	CandidateChain []string
 	RouteID        string
 	Now            func() time.Time
+	Calendar       *stockmarket.Calendar
 }
 
 func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchpb.MarketFetchBatchCompleted, error) {
@@ -47,8 +49,22 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	if p.Now != nil {
 		started = p.Now()
 	}
+	if req.BatchKind == domain.BatchKindRealtime && p.Calendar != nil {
+		shouldCollect, err := stockCNShouldCollectMinute(p.Calendar, started)
+		if err != nil {
+			return nil, err
+		}
+		if !shouldCollect {
+			results := make([]domain.ItemResult, len(req.Items))
+			for index, item := range req.Items {
+				results[index] = successResult(item)
+			}
+			return buildCompletion(req, results, started, 0), nil
+		}
+	}
 	results := make([]domain.ItemResult, len(req.Items))
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(req.Items)*MaxRealtimeRows)
+	routerSession := p.Router.NewSession()
 	for index, item := range req.Items {
 		providerSymbol, err := stocksource.ProviderSymbol(item.SubjectID)
 		if err != nil {
@@ -59,7 +75,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 		if limit <= 0 {
 			limit = MaxRealtimeRows
 		}
-		fetched, err := p.Router.FetchKlines(ctx, marketdata.KlineRequest{
+		fetched, err := routerSession.FetchKlines(ctx, marketdata.KlineRequest{
 			MarketID:       StockCNSpaceID,
 			ProductType:    marketdata.ProductEquity,
 			InstrumentType: marketdata.InstrumentEquity,
@@ -75,7 +91,12 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			results[index] = failureResult(item, classifyError(err), errorType(err), err)
 			continue
 		}
+		accepted := 0
+		coverageStart := parseOptionalTime(item.StartTime)
 		for _, bar := range fetched {
+			if !coverageStart.IsZero() && bar.BarStart.Before(coverageStart) {
+				continue
+			}
 			rank := providerRank(chain, bar.ProviderID)
 			row, err := stockKlineRow(bar, firstNonEmptyString(p.RouteID, StockCNRouteID), rank)
 			if err != nil {
@@ -83,8 +104,11 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				break
 			}
 			rows = append(rows, row)
+			accepted++
 		}
-		if results[index].Outcome == "" {
+		if results[index].Outcome == "" && accepted == 0 {
+			results[index] = failureResult(item, domain.ItemOutcomeInvalid, "coverage", fmt.Errorf("provider returned no bars inside the requested coverage"))
+		} else if results[index].Outcome == "" {
 			results[index] = successResult(item)
 		}
 	}
@@ -110,9 +134,38 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	return buildCompletion(req, results, completed, completed.Sub(started)), nil
 }
 
+func stockCNShouldCollectMinute(calendar *stockmarket.Calendar, now time.Time) (bool, error) {
+	if calendar == nil {
+		return false, fmt.Errorf("stock_cn calendar is required")
+	}
+	if err := calendar.ValidateHorizon(now, 14); err != nil {
+		return false, fmt.Errorf("stock_cn calendar horizon: %w", err)
+	}
+	location := calendar.Location()
+	if location == nil {
+		return false, fmt.Errorf("stock_cn calendar timezone is unavailable")
+	}
+	local := now.In(location)
+	expected, err := calendar.ExpectedMinuteBars(local.Format("2006-01-02"))
+	if err != nil {
+		return false, err
+	}
+	target := now.UTC().Truncate(time.Minute).Add(-time.Minute)
+	for _, barStart := range expected {
+		if barStart.Equal(target) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int) (*storagepb.RowFieldUpsert, error) {
 	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
 		return nil, err
+	}
+	qualityStatus := "accepted"
+	if routeRank > 1 {
+		qualityStatus = "fallback"
 	}
 	return &storagepb.RowFieldUpsert{
 		Key: &storagepb.RowKey{
@@ -129,7 +182,7 @@ func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int
 			stringValue("provider_symbol", bar.ProviderSymbol), timeValue("provider_timestamp", bar.ProviderTimestamp),
 			timeValue("fetched_at", bar.FetchedAt), stringValue("request_id", bar.RequestID),
 			stringValue("route_id", routeID), intValue("route_rank", int64(routeRank)),
-			stringValue("source_provider", bar.ProviderID), stringValue("quality_status", "accepted"),
+			stringValue("source_provider", bar.ProviderID), stringValue("quality_status", qualityStatus),
 		},
 	}, nil
 }

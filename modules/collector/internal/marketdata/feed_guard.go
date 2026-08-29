@@ -46,7 +46,7 @@ func NewFeedGuard(policy RateLimitPolicy, clock Clock, sleep SleepFunc) (*FeedGu
 		clock = realClock{}
 	}
 	if sleep == nil {
-		sleep = func(time.Duration) {}
+		sleep = time.Sleep
 	}
 	return &FeedGuard{
 		policy: policy,
@@ -70,7 +70,12 @@ func (g *FeedGuard) Do(ctx context.Context, fn func(context.Context) error) erro
 		<-g.sem
 	}()
 
-	err := fn(ctx)
+	requestCtx, cancel := context.WithTimeout(ctx, g.policy.RequestTimeout)
+	defer cancel()
+	err := fn(requestCtx)
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		err = fmt.Errorf("%w: request timeout after %s", ErrTimeout, g.policy.RequestTimeout)
+	}
 	if errors.Is(err, ErrRateLimited) {
 		g.setCooldown()
 	}
@@ -161,15 +166,20 @@ func (b *InvocationBreaker) NewSession() *InvocationBreakerSession {
 }
 
 type InvocationBreakerSession struct {
+	mu        sync.Mutex
 	threshold int
 	streaks   map[string]int
 }
 
 func (s *InvocationBreakerSession) ShouldSkip(providerID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.streaks[providerID] >= s.threshold
 }
 
 func (s *InvocationBreakerSession) Observe(providerID string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err == nil {
 		s.streaks[providerID] = 0
 		return
@@ -232,7 +242,7 @@ func NewRouter(registry *Registry, breakerThreshold int, clock Clock, sleep Slee
 		clock = realClock{}
 	}
 	if sleep == nil {
-		sleep = func(time.Duration) {}
+		sleep = time.Sleep
 	}
 	return &Router{
 		registry:       registry,
@@ -244,6 +254,24 @@ func NewRouter(registry *Registry, breakerThreshold int, clock Clock, sleep Slee
 }
 
 func (r *Router) FetchKlines(ctx context.Context, req KlineRequest, candidateChain []string) ([]NormalizedKline, error) {
+	return r.NewSession().FetchKlines(ctx, req, candidateChain)
+}
+
+// RouterSession scopes breaker observations to one function invocation while
+// reusing the router's per-feed guards across requests in that invocation.
+type RouterSession struct {
+	router  *Router
+	breaker *InvocationBreakerSession
+}
+
+func (r *Router) NewSession() *RouterSession {
+	return &RouterSession{router: r, breaker: r.breaker.NewSession()}
+}
+
+func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candidateChain []string) ([]NormalizedKline, error) {
+	if s == nil || s.router == nil || s.breaker == nil {
+		return nil, fmt.Errorf("%w: router session is nil", ErrInvalidRequest)
+	}
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -251,7 +279,6 @@ func (r *Router) FetchKlines(ctx context.Context, req KlineRequest, candidateCha
 		return nil, fmt.Errorf("%w: candidate chain is empty", ErrInvalidRequest)
 	}
 
-	session := r.breaker.NewSession()
 	var lastErr error
 	attempts := 0
 
@@ -264,16 +291,16 @@ func (r *Router) FetchKlines(ctx context.Context, req KlineRequest, candidateCha
 			lastErr = fmt.Errorf("%w: empty provider id in candidate chain", ErrInvalidRequest)
 			continue
 		}
-		if session.ShouldSkip(providerID) {
+		if s.breaker.ShouldSkip(providerID) {
 			continue
 		}
 
-		fetcher, err := r.registry.KlineFetcher(providerID)
+		fetcher, err := s.router.registry.KlineFetcher(providerID)
 		if err != nil {
 			return nil, err
 		}
 
-		guard, err := r.feedGuard(providerID, fetcher.KlineSpec().RateLimit)
+		guard, err := s.router.feedGuard(providerID, fetcher.KlineSpec().RateLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -284,7 +311,7 @@ func (r *Router) FetchKlines(ctx context.Context, req KlineRequest, candidateCha
 			rows, fetchErr = fetcher.FetchKlines(ctx, req)
 			return fetchErr
 		})
-		session.Observe(providerID, err)
+		s.breaker.Observe(providerID, err)
 		attempts++
 
 		if err == nil {

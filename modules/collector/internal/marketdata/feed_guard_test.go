@@ -169,6 +169,26 @@ func TestInvocationBreakerSkipsAfterRetryableStreak(t *testing.T) {
 	assert.False(t, session.ShouldSkip("beta"))
 }
 
+func TestRouterSessionSharesInvocationBreakerAcrossSubjects(t *testing.T) {
+	registry := NewRegistry()
+	clock := newFakeClock(time.Date(2026, 8, 29, 12, 30, 0, 0, time.UTC))
+	sleeper := &fakeSleeper{clock: clock}
+	spec := KlineSpec{Markets: []string{"stock_cn"}, Exchanges: []string{"XSHG"}, Frequencies: []string{"1m"}, CompleteOHLCV: true, HasAmount: true, MaxBarsPerRequest: 1, TimestampMode: TimestampModeOpen, RateLimit: RateLimitPolicy{RequestsPerSecond: 100, Burst: 10, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: time.Second}}
+	failing := &stubKlineProvider{testProvider: testProvider{descriptor: ProviderDescriptor{ID: "alpha", DisplayName: "Alpha", Hosts: []string{"alpha.test"}}}, spec: spec, err: ErrProtocol}
+	succeeding := &stubKlineProvider{testProvider: testProvider{descriptor: ProviderDescriptor{ID: "beta", DisplayName: "Beta", Hosts: []string{"beta.test"}}}, spec: spec, rows: []NormalizedKline{{SubjectID: "600000.XSHG"}}}
+	require.NoError(t, registry.Register(failing))
+	require.NoError(t, registry.Register(succeeding))
+	router, err := NewRouter(registry, 2, clock, sleeper.Sleep)
+	require.NoError(t, err)
+	session := router.NewSession()
+	for index := 0; index < 3; index++ {
+		_, err := session.FetchKlines(context.Background(), KlineRequest{SubjectID: "600000.XSHG", ProviderSymbol: "sh600000", Frequency: "1m", Limit: 1, RequestID: fmt.Sprintf("req-%d", index)}, []string{"alpha", "beta"})
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 2, failing.Calls())
+	assert.Equal(t, 3, succeeding.Calls())
+}
+
 type stubKlineProvider struct {
 	testProvider
 	spec      KlineSpec
