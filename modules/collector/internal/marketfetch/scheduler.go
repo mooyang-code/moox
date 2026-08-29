@@ -462,7 +462,7 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 				if storageErr == nil {
 					watermark, found, watermarkErr := storage.LatestTimeSeriesTime(checkCtx, &storagepb.TimeSeriesSelector{
 						SpaceId: spaceID, DatasetId: instance.DatasetID, SubjectId: instance.SubjectID,
-						Freq: freq, SeriesTag: stringPtr("venue:" + strings.ToLower(instance.Provider)),
+						Freq: freq, SeriesTag: stringPtr(gapAuditSeriesTag(instance)),
 					})
 					storageErr = watermarkErr
 					if storageErr == nil && found && !watermark.IsZero() {
@@ -547,17 +547,58 @@ func buildGapAuditPlan(now time.Time, rule domain.TaskRule, instance domain.Task
 		plan.MaxConcurrency = domain.DefaultHistoryMaxConcurrency
 	}
 	threshold := gapAuditThreshold(instance.Frequency)
-	if found && !watermark.IsZero() {
-		plan.Kind = domain.BatchKindGapRepair
-		plan.Start = watermark.UTC()
-		return plan, now.Sub(plan.Start) >= threshold
+	start := time.Time{}
+	if rule.CoverageStartTime != nil && !rule.CoverageStartTime.IsZero() {
+		start = rule.CoverageStartTime.UTC()
 	}
-	if rule.CoverageStartTime == nil || rule.CoverageStartTime.IsZero() {
+	if start.IsZero() {
 		return gapAuditPlan{}, false
 	}
-	plan.Kind = domain.BatchKindBackfill
-	plan.Start = rule.CoverageStartTime.UTC()
-	return plan, !plan.Start.IsZero() && now.After(plan.Start)
+	// Stock providers currently expose a rolling latest-N window and do not
+	// honor StartTime. Do not schedule historical work until the executor has a
+	// provider-backed trading-bar boundary it can actually enforce.
+	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) {
+		return gapAuditPlan{}, false
+	}
+	if found && !watermark.IsZero() {
+		plan.Kind = domain.BatchKindGapRepair
+		start = laterTime(start, watermark.UTC())
+	} else {
+		plan.Kind = domain.BatchKindBackfill
+	}
+	start = laterTime(start, gapRepairFloor(now, params))
+	plan.Start = start
+	if plan.Start.IsZero() {
+		return gapAuditPlan{}, false
+	}
+	if plan.Kind == domain.BatchKindGapRepair {
+		return plan, now.Sub(plan.Start) >= threshold
+	}
+	return plan, now.After(plan.Start)
+}
+
+func gapAuditSeriesTag(instance domain.TaskInstance) string {
+	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) {
+		return ""
+	}
+	return "venue:" + strings.ToLower(strings.TrimSpace(instance.Provider))
+}
+
+func gapRepairFloor(now time.Time, params *domain.CollectParams) time.Time {
+	var floor time.Time
+	if params != nil && params.HistoryPolicy != nil {
+		if lookback, err := domain.ParseScheduleInterval(params.HistoryPolicy.GapRepairLookback); err == nil && lookback > 0 {
+			floor = now.UTC().Add(-lookback)
+		}
+	}
+	return floor
+}
+
+func laterTime(left, right time.Time) time.Time {
+	if left.IsZero() || right.After(left) {
+		return right
+	}
+	return left
 }
 
 func gapAuditThreshold(frequency string) time.Duration {

@@ -30,6 +30,7 @@ type NodeAssignment struct {
 	FunctionName    string
 	Region          string
 	Provider        string
+	RouteProvider   string
 	MarketType      string
 	DatasetID       string
 	Frequency       string
@@ -52,7 +53,7 @@ var stockCNProviderWeights = map[string]int{
 // BuildStockCNAssignments maps the published Timer fleet one-to-one to stable
 // rendezvous groups. The fleet size is a release decision; universe refreshes
 // only change the per-node environment and never create or remove functions.
-func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, maxSubjects int, tradingDate string) ([]NodeAssignment, error) {
+func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, maxSubjects int, tradingDate string, expectedCounts ...int) ([]NodeAssignment, error) {
 	if maxSubjects <= 0 {
 		return nil, fmt.Errorf("max subjects must be positive")
 	}
@@ -72,17 +73,18 @@ func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, maxSubjec
 			return nil, fmt.Errorf("subject %s has no external symbol", subject)
 		}
 	}
-	timerNodes := eligibleTimerNodes(nodes)
+	eligible := eligibleTimerNodes(nodes)
+	expectedCount := len(eligible)
+	if len(expectedCounts) > 0 {
+		expectedCount = expectedCounts[0]
+	}
+	timerNodes, err := orderedStockCNTimerNodes(eligible, expectedCount)
+	if err != nil {
+		return nil, err
+	}
 	if len(timerNodes) == 0 {
 		return nil, fmt.Errorf("timer assignment capacity insufficient: stock_cn requires a published Timer SCF fleet")
 	}
-	sort.Slice(timerNodes, func(i, j int) bool {
-		left, right := strings.TrimSpace(timerNodes[i].FunctionName), strings.TrimSpace(timerNodes[j].FunctionName)
-		if left == right {
-			return timerNodes[i].NodeID < timerNodes[j].NodeID
-		}
-		return left < right
-	})
 	groups, err := marketdata.RendezvousAssign(group.Subjects, len(timerNodes), StockCNRouteID)
 	if err != nil {
 		return nil, fmt.Errorf("assign stock_cn rendezvous groups: %w", err)
@@ -111,13 +113,84 @@ func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, maxSubjec
 		chain := append([]string(nil), chains[groupID]...)
 		assignments = append(assignments, NodeAssignment{
 			NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region,
-			Provider: chain[0], MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency,
+			Provider: chain[0], RouteProvider: group.Provider, MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency,
 			Subjects: append([]string(nil), subjects...), ExternalSymbols: externals, ProviderChain: chain,
 			RouteVersion: StockCNRouteID, GroupID: groupID, Cron: stockCNStaggeredCron(groupID), Enabled: len(subjects) > 0,
 			AssignmentHash: AssignmentHash(chain[0], strings.Join(chain, "|"), StockCNRouteID, strconv.Itoa(groupID), group.MarketType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|")),
 		})
 	}
 	return assignments, nil
+}
+
+func orderedStockCNTimerNodes(nodes []scfinvoker.Node, expectedCount int) ([]scfinvoker.Node, error) {
+	if expectedCount <= 0 {
+		return nil, fmt.Errorf("stock_cn expected timer function count must be positive")
+	}
+	if len(nodes) != expectedCount {
+		return nil, fmt.Errorf("stock_cn timer fleet has %d nodes; expected %d", len(nodes), expectedCount)
+	}
+	type regionalNode struct {
+		node scfinvoker.Node
+		slot int
+	}
+	byRegion := make(map[string][]regionalNode)
+	for _, node := range nodes {
+		region := strings.TrimSpace(node.Region)
+		name := strings.TrimSpace(node.FunctionName)
+		separator := strings.LastIndexByte(name, '-')
+		if separator < 0 || separator == len(name)-1 {
+			return nil, fmt.Errorf("stock_cn timer node %s function_name %q has no numeric slot", node.NodeID, name)
+		}
+		slot, err := strconv.Atoi(name[separator+1:])
+		if err != nil || slot < 0 {
+			return nil, fmt.Errorf("stock_cn timer node %s function_name %q has invalid slot", node.NodeID, name)
+		}
+		if rawIndex, ok := node.Metadata["index"]; ok {
+			metadataSlot, parseErr := strictInteger(rawIndex)
+			if parseErr != nil || metadataSlot != slot {
+				return nil, fmt.Errorf("stock_cn timer node %s slot %d does not match metadata index %v", node.NodeID, slot, rawIndex)
+			}
+		}
+		byRegion[region] = append(byRegion[region], regionalNode{node: node, slot: slot})
+	}
+	regions := make([]string, 0, len(byRegion))
+	for region := range byRegion {
+		regions = append(regions, region)
+	}
+	sort.Strings(regions)
+	ordered := make([]scfinvoker.Node, 0, len(nodes))
+	for _, region := range regions {
+		regional := byRegion[region]
+		sort.Slice(regional, func(i, j int) bool { return regional[i].slot < regional[j].slot })
+		for expectedSlot, item := range regional {
+			if item.slot != expectedSlot {
+				return nil, fmt.Errorf("stock_cn timer fleet region %s is missing expected slot %d", region, expectedSlot)
+			}
+			ordered = append(ordered, item.node)
+		}
+	}
+	return ordered, nil
+}
+
+func strictInteger(value any) (int, error) {
+	switch typed := value.(type) {
+	case int:
+		return typed, nil
+	case int32:
+		return int(typed), nil
+	case int64:
+		return int(typed), nil
+	case float64:
+		converted := int(typed)
+		if float64(converted) != typed {
+			return 0, fmt.Errorf("not an integer")
+		}
+		return converted, nil
+	case string:
+		return strconv.Atoi(strings.TrimSpace(typed))
+	default:
+		return 0, fmt.Errorf("unsupported integer type %T", value)
+	}
 }
 
 func stockCNStaggeredCron(groupID int) string {
@@ -239,7 +312,7 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 			}
 			node := timerNodes[nodeIndex]
 			nodeIndex++
-			assignments = append(assignments, NodeAssignment{NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region, Provider: group.Provider, MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: subjects, ExternalSymbols: externals, Cron: cron, Enabled: true, AssignmentHash: AssignmentHash(group.Provider, group.MarketType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|"))})
+			assignments = append(assignments, NodeAssignment{NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region, Provider: group.Provider, RouteProvider: group.Provider, MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: subjects, ExternalSymbols: externals, Cron: cron, Enabled: true, AssignmentHash: AssignmentHash(group.Provider, group.MarketType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|"))})
 		}
 	}
 	for ; nodeIndex < len(timerNodes); nodeIndex++ {

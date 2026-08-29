@@ -48,20 +48,21 @@ type dnsSnapshotter interface {
 // Reconciler is the Collector control-plane loop for static Timer-triggered
 // functions. It never invokes a function; it only submits desired config.
 type Reconciler struct {
-	Rules        ruleSource
-	Symbols      datasetSource
-	Nodes        runtimeConfigClient
-	Instances    *store.TaskInstanceRepository
-	DNS          dnsSnapshotter
-	Metrics      *Metrics
-	MaxSubjects  int
-	Now          func() time.Time
-	mu           sync.Mutex
-	reconcileMu  sync.Mutex
-	pending      map[string]string
-	pendingAt    map[string]time.Time
-	pendingJob   string
-	pendingSince time.Time
+	Rules                         ruleSource
+	Symbols                       datasetSource
+	Nodes                         runtimeConfigClient
+	Instances                     *store.TaskInstanceRepository
+	DNS                           dnsSnapshotter
+	Metrics                       *Metrics
+	MaxSubjects                   int
+	ExpectedStockCNTimerFunctions int
+	Now                           func() time.Time
+	mu                            sync.Mutex
+	reconcileMu                   sync.Mutex
+	pending                       map[string]string
+	pendingAt                     map[string]time.Time
+	pendingJob                    string
+	pendingSince                  time.Time
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
@@ -145,7 +146,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		if len(groups) != 1 {
 			return r.fail(spaceID, "rules", fmt.Errorf("stock_cn requires exactly one merged kline assignment group, got %d", len(groups)))
 		}
-		assignments, err = BuildStockCNAssignments(groups[0], nodes, stockCNMaxSubjects, r.stockCNTradingDate())
+		assignments, err = BuildStockCNAssignments(groups[0], nodes, stockCNMaxSubjects, r.stockCNTradingDate(), r.ExpectedStockCNTimerFunctions)
 	} else {
 		assignments, err = BuildAssignments(groups, nodes, r.maxSubjects())
 	}
@@ -268,7 +269,8 @@ func (r *Reconciler) persistAssignments(ctx context.Context, spaceID string, nod
 		if strings.TrimSpace(assignment.FunctionName) == "" {
 			return fmt.Errorf("enabled assignment %s has no function_name", assignment.NodeID)
 		}
-		replacements = append(replacements, store.MarketFetchAssignment{Provider: assignment.Provider, MarketType: assignment.MarketType, DatasetID: assignment.DatasetID, Frequency: assignment.Frequency, FunctionName: assignment.FunctionName, Subjects: assignment.Subjects})
+		provider := firstNonEmpty(assignment.RouteProvider, assignment.Provider)
+		replacements = append(replacements, store.MarketFetchAssignment{Provider: provider, MarketType: assignment.MarketType, DatasetID: assignment.DatasetID, Frequency: assignment.Frequency, FunctionName: assignment.FunctionName, Subjects: assignment.Subjects})
 	}
 	if err := r.Instances.ReplaceMarketFetchAssignments(ctx, spaceID, functionNames, replacements); err != nil {
 		return fmt.Errorf("replace SCF task assignments: %w", err)

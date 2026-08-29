@@ -172,8 +172,8 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{
-		{NodeID: "timer-2", FunctionName: "moox-stock-cn-001", Region: "ap-shanghai", NodeType: "scf-event", TriggerType: "timer"},
-		{NodeID: "timer-1", FunctionName: "moox-stock-cn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "timer-2", FunctionName: "moox-stock-cn-ap-shanghai-000", Region: "ap-shanghai", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "timer-1", FunctionName: "moox-stock-cn-ap-guangzhou-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
 	}}
 	reconciler := &Reconciler{
 		Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}},
@@ -181,8 +181,9 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 			{SubjectID: "600000.XSHG", ExternalSymbol: "sh600000", Status: "active"},
 			{SubjectID: "000001.XSHE", ExternalSymbol: "sz000001", Status: "active"},
 		}},
-		Nodes: nodes,
-		Now:   func() time.Time { return time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC) },
+		Nodes:                         nodes,
+		ExpectedStockCNTimerFunctions: 2,
+		Now:                           func() time.Time { return time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC) },
 	}
 
 	require.NoError(t, reconciler.Reconcile(context.Background(), StockCNSpaceID))

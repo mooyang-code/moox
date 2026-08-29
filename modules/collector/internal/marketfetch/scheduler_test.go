@@ -112,6 +112,51 @@ func TestBuildGapAuditPlanUsesGapRepairForStaleWatermark(t *testing.T) {
 	assert.Equal(t, watermark, plan.Start)
 }
 
+func TestBuildGapAuditPlanFailsClosedWithoutCoverageStart(t *testing.T) {
+	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
+	plan, ok := buildGapAuditPlan(
+		now,
+		domain.TaskRule{CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m","history_policy":{"mode":"live_only","gap_repair_lookback":"30m"}}`},
+		domain.TaskInstance{Frequency: "1m"},
+		now.Add(-2*time.Hour),
+		true,
+	)
+	assert.False(t, ok)
+	assert.Zero(t, plan.Start)
+}
+
+func TestBuildGapAuditPlanNeverCrossesCoverageOrRepairFloor(t *testing.T) {
+	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
+	coverageStart := now.Add(-90 * time.Minute)
+	watermark := now.Add(-3 * time.Hour)
+	rule := domain.TaskRule{
+		Provider: "binance", MarketType: "spot", DataType: "kline", CoverageStartTime: &coverageStart,
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m","history_policy":{"mode":"live_only","batch_bar_limit":30,"max_concurrency":1,"gap_repair_lookback":"20m","rate_budget_ratio":1}}`,
+	}
+
+	plan, ok := buildGapAuditPlan(now, rule, domain.TaskInstance{SpaceID: "crypto_market", Provider: "binance", Frequency: "1m"}, watermark, true)
+	require.True(t, ok)
+	assert.Equal(t, now.Add(-20*time.Minute), plan.Start)
+}
+
+func TestBuildGapAuditPlanFailsClosedForStockHistory(t *testing.T) {
+	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
+	coverageStart := now.Add(-24 * time.Hour)
+	rule := domain.TaskRule{
+		Provider: "stock_cn_multi", MarketType: "equity", DataType: "kline", CoverageStartTime: &coverageStart,
+		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m","history_policy":{"mode":"live_only","batch_bar_limit":1000,"max_concurrency":1,"gap_repair_lookback":"0m","rate_budget_ratio":1}}`,
+	}
+
+	plan, ok := buildGapAuditPlan(now, rule, domain.TaskInstance{SpaceID: StockCNSpaceID, Provider: "stock_cn_multi", Frequency: "1m"}, time.Time{}, false)
+	assert.False(t, ok)
+	assert.Zero(t, plan.Start)
+}
+
+func TestGapAuditSeriesTagMatchesStockRowKey(t *testing.T) {
+	assert.Equal(t, "", gapAuditSeriesTag(domain.TaskInstance{SpaceID: StockCNSpaceID, Provider: "stock_cn_multi"}))
+	assert.Equal(t, "venue:binance", gapAuditSeriesTag(domain.TaskInstance{SpaceID: "crypto_market", Provider: "binance"}))
+}
+
 func TestRealtimeBatchSizeFansOutAcrossCurrentFleet(t *testing.T) {
 	nodes := make([]scfinvoker.Node, 10)
 	for index := range nodes {

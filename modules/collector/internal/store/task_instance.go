@@ -204,15 +204,54 @@ func (r *TaskInstanceRepository) ReplaceMarketFetchAssignments(ctx context.Conte
 			if len(assignment.Subjects) == 0 {
 				continue
 			}
-			if err := tx.Model(&domain.TaskInstance{}).
-				Where("c_space_id = ? AND c_provider = ? AND c_market_type = ? AND c_data_type = ? AND c_dataset_id = ? AND c_frequency IN ? AND c_subject_id IN ? AND c_is_deleted = ?", spaceID, strings.TrimSpace(assignment.Provider), strings.TrimSpace(assignment.MarketType), "kline", strings.TrimSpace(assignment.DatasetID), frequencyVariants(assignment.Frequency), assignment.Subjects, false).
-				Where("c_function_name <> ?", functionName).
-				Updates(map[string]any{"c_function_name": functionName, "c_mtime": time.Now().UTC()}).Error; err != nil {
+			subjects := uniqueNonEmptyStrings(assignment.Subjects)
+			if len(subjects) == 0 {
+				return fmt.Errorf("market fetch assignment %s has no valid subjects", functionName)
+			}
+			matching := func(db *gorm.DB) *gorm.DB {
+				return db.Model(&domain.TaskInstance{}).
+					Where("c_space_id = ? AND c_provider = ? AND c_market_type = ? AND c_data_type = ? AND c_dataset_id = ? AND c_frequency IN ? AND c_subject_id IN ? AND c_is_deleted = ?", spaceID, strings.TrimSpace(assignment.Provider), strings.TrimSpace(assignment.MarketType), "kline", strings.TrimSpace(assignment.DatasetID), frequencyVariants(assignment.Frequency), subjects, false).
+					Where("c_function_name <> ?", functionName)
+			}
+			var matchedSubjects []string
+			if err := matching(tx).Distinct().Pluck("c_subject_id", &matchedSubjects).Error; err != nil {
 				return err
+			}
+			if len(matchedSubjects) != len(subjects) {
+				return fmt.Errorf("market fetch assignment %s covered %d of %d subjects", functionName, len(matchedSubjects), len(subjects))
+			}
+			var expectedRows int64
+			if err := matching(tx).Count(&expectedRows).Error; err != nil {
+				return err
+			}
+			result := matching(tx).
+				Updates(map[string]any{"c_function_name": functionName, "c_mtime": time.Now().UTC()})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != expectedRows {
+				return fmt.Errorf("market fetch assignment %s updated %d of %d matched task instances", functionName, result.RowsAffected, expectedRows)
 			}
 		}
 		return nil
 	})
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 // AssignMarketFetchFunction binds all subjects in one timer assignment to the

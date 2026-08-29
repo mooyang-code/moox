@@ -217,6 +217,7 @@ func (s *Service) UpdateTaskRule(ctx context.Context, req *pb.UpdateTaskRuleReq)
 	if err := validateTaskRuleUpdate(*existing, rule); err != nil {
 		return &pb.UpdateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	preserveTaskRuleCoverageStart(*existing, &rule)
 	rule, err = canonicalizeTaskRule(rule)
 	if err != nil {
 		return &pb.UpdateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
@@ -553,6 +554,9 @@ func validateTaskRule(rule domain.TaskRule) error {
 	if err := params.Validate(); err != nil {
 		return fmt.Errorf("invalid collect_params: %w", err)
 	}
+	if strings.EqualFold(strings.TrimSpace(params.Provider), "stock_cn_multi") && params.HistoryPolicy.Mode != domain.HistoryModeLiveOnly {
+		return fmt.Errorf("stock_cn kline collector only supports live_only history mode")
+	}
 	definition, ok := jobs.JobDefinitionByDataType(params.Collector.DataType)
 	if !ok || !definition.ExecutionMode.Valid() || !definition.Matches(params) {
 		return fmt.Errorf(
@@ -574,6 +578,18 @@ func validateTaskRule(rule domain.TaskRule) error {
 		return fmt.Errorf("rule identity does not match collect_params")
 	}
 	return nil
+}
+
+func preserveTaskRuleCoverageStart(existing domain.TaskRule, desired *domain.TaskRule) {
+	if desired == nil {
+		return
+	}
+	if existing.CoverageStartTime == nil || existing.CoverageStartTime.IsZero() {
+		desired.CoverageStartTime = nil
+		return
+	}
+	at := existing.CoverageStartTime.UTC()
+	desired.CoverageStartTime = &at
 }
 
 func canonicalizeTaskRule(rule domain.TaskRule) (domain.TaskRule, error) {

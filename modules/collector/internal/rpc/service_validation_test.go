@@ -77,6 +77,23 @@ func TestValidateTaskRuleAcceptsCollectorLocalResampleWithoutCloudRoute(t *testi
 	require.NoError(t, validateTaskRule(rule))
 }
 
+func TestValidateTaskRuleRejectsUnsupportedStockHistoryMode(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: "stock_cn", RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity",
+		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m","history_policy":{"mode":"lookback","lookback":5}}`,
+	}
+	require.ErrorContains(t, validateTaskRule(rule), "only supports live_only")
+}
+
+func TestPreserveTaskRuleCoverageStartOnOrdinaryUpdate(t *testing.T) {
+	original := time.Date(2026, 8, 29, 1, 2, 0, 0, time.UTC)
+	replacement := original.Add(24 * time.Hour)
+	desired := domain.TaskRule{CoverageStartTime: &replacement}
+	preserveTaskRuleCoverageStart(domain.TaskRule{CoverageStartTime: &original}, &desired)
+	require.NotNil(t, desired.CoverageStartTime)
+	require.Equal(t, original, desired.CoverageStartTime.UTC())
+}
+
 func TestValidateResampleRuleUpdateLocksIdentityAtEveryPrepareState(t *testing.T) {
 	base := domain.TaskRule{
 		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot", Enabled: true,

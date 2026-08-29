@@ -82,6 +82,45 @@ func TestTaskInstanceRepositoryMatchesCanonicalStorageFrequency(t *testing.T) {
 	assert.Equal(t, int64(1), updated)
 }
 
+func TestReplaceMarketFetchAssignmentsUsesRouteProviderAndChecksCoverage(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+		SpaceID: "stock_cn", TaskID: "task-1", RuleID: "rule-1", Provider: "stock_cn_multi", MarketType: "equity",
+		DataType: "kline", DatasetID: "stock_cn_kline", SubjectID: "600000.XSHG", Frequency: "1m", TaskParams: `{}`,
+	}}))
+
+	err := s.TaskInstances().ReplaceMarketFetchAssignments(ctx, "stock_cn", []string{"stock-fetch-000"}, []MarketFetchAssignment{{
+		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: "stock_cn_kline", Frequency: "1m",
+		FunctionName: "stock-fetch-000", Subjects: []string{"600000.XSHG", "000001.XSHE"},
+	}})
+	require.ErrorContains(t, err, "covered 1 of 2 subjects")
+	stored, getErr := s.TaskInstances().Get(ctx, "stock_cn", "task-1")
+	require.NoError(t, getErr)
+	assert.Empty(t, stored.FunctionName, "partial assignment must roll back")
+}
+
+func TestReplaceMarketFetchAssignmentsUpdatesDuplicateSubjectRules(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	instances := []domain.TaskInstance{
+		{SpaceID: "stock_cn", TaskID: "task-1", RuleID: "rule-1", Provider: "stock_cn_multi", MarketType: "equity", DataType: "kline", DatasetID: "stock_cn_kline", SubjectID: "600000.XSHG", Frequency: "1m", TaskParams: `{}`},
+		{SpaceID: "stock_cn", TaskID: "task-2", RuleID: "rule-2", Provider: "stock_cn_multi", MarketType: "equity", DataType: "kline", DatasetID: "stock_cn_kline", SubjectID: "600000.XSHG", Frequency: "1m", TaskParams: `{}`},
+	}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
+
+	err := s.TaskInstances().ReplaceMarketFetchAssignments(ctx, "stock_cn", []string{"stock-fetch-000"}, []MarketFetchAssignment{{
+		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: "stock_cn_kline", Frequency: "1m",
+		FunctionName: "stock-fetch-000", Subjects: []string{"600000.XSHG"},
+	}})
+	require.NoError(t, err)
+	for _, taskID := range []string{"task-1", "task-2"} {
+		stored, getErr := s.TaskInstances().Get(ctx, "stock_cn", taskID)
+		require.NoError(t, getErr)
+		assert.Equal(t, "stock-fetch-000", stored.FunctionName)
+	}
+}
+
 func TestTaskInstanceRepositoryDeactivatesMissingRuleInstances(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
