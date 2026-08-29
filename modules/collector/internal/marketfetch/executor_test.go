@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/clsreporter"
@@ -110,6 +112,24 @@ func TestExecutorAggregatesRowsIntoOneStorageCommit(t *testing.T) {
 	}
 }
 
+func TestExecutorWiresProductionBinanceCollectorsThroughCommonRuntimePipeline(t *testing.T) {
+	executor := &Executor{
+		Klines:  binance.NewKlineCollector(),
+		Catchup: binance.NewKlineCollector(),
+		Symbols: binance.NewSymbolCollector(),
+		Storage: &fakeStorage{},
+	}
+
+	wired, err := executor.withCryptoRuntime(Request{SpaceID: "crypto_market", MarketType: "spot"})
+	require.NoError(t, err)
+	_, realtimeOK := wired.Klines.(*binance.RuntimePipeline)
+	_, catchupOK := wired.Catchup.(*binance.RuntimePipeline)
+	_, instrumentOK := wired.Symbols.(*binance.RuntimePipeline)
+	assert.True(t, realtimeOK)
+	assert.True(t, catchupOK)
+	assert.True(t, instrumentOK)
+}
+
 func TestExecutorTurnsSuccessfulItemsIntoStorageErrors(t *testing.T) {
 	klines := &fakeKlines{rows: []*storagepb.RowFieldUpsert{{}}}
 	storage := &fakeStorage{err: errors.New("storage unavailable")}
@@ -151,6 +171,11 @@ func TestResultErrorSummaryUsesFirstActionableItemError(t *testing.T) {
 	}
 	assert.Equal(t, "write time-series rows: timeout", resultErrorSummary(results))
 	assert.Empty(t, resultErrorSummary([]domain.ItemResult{{Outcome: domain.ItemOutcomeSuccess}}))
+}
+
+func TestClassifyErrorRecognizesTypedMarketDataFailures(t *testing.T) {
+	assert.Equal(t, domain.ItemOutcomeHTTP429, classifyError(marketdata.ErrRateLimited))
+	assert.Equal(t, domain.ItemOutcomeNetworkError, classifyError(marketdata.ErrTimeout))
 }
 
 func TestStorageAndPublishReservesKeepsFullStorageTimeout(t *testing.T) {

@@ -20,6 +20,7 @@ type NormalizedKline struct {
 	Close             float64
 	VolumeShares      float64
 	AmountCNY         float64
+	TradeCount        int64
 	ProviderTimestamp time.Time
 	FetchedAt         time.Time
 	RequestID         string
@@ -66,6 +67,9 @@ func ValidateNormalizedKline(kline NormalizedKline) error {
 		if field.value < field.min || (field.min > 0 && field.value == 0) {
 			return fmt.Errorf("%s must be positive", field.name)
 		}
+	}
+	if kline.TradeCount < 0 {
+		return fmt.Errorf("trade_count must be non-negative")
 	}
 	if kline.High < maxFloat(kline.Open, kline.Close, kline.Low) {
 		return fmt.Errorf("high must be >= open/close/low")

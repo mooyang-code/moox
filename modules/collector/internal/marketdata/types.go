@@ -160,6 +160,7 @@ type KlineRequest struct {
 	EndTime        time.Time
 	Now            time.Time
 	RequestID      string
+	DNSRoutes      map[string][]string
 }
 
 func (r KlineRequest) FrequencyValue() (Frequency, error) {
@@ -196,6 +197,7 @@ type InstrumentRequest struct {
 	ExchangeID ExchangeID
 	SnapshotAt time.Time
 	RequestID  string
+	DNSRoutes  map[string][]string
 }
 
 type InstrumentFetcher interface {
@@ -205,11 +207,18 @@ type InstrumentFetcher interface {
 }
 
 type Instrument struct {
-	SubjectID      string
-	ProviderSymbol string
-	Exchange       string
-	Name           string
-	Status         string
+	SubjectID       string
+	CanonicalSymbol string
+	ProviderSymbol  string
+	Exchange        string
+	Name            string
+	Status          string
+	BaseAsset       string
+	QuoteAsset      string
+	MinQty          string
+	MaxQty          string
+	TickSize        string
+	LotSize         string
 }
 
 type InstrumentSnapshot struct {

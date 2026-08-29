@@ -2,6 +2,7 @@ package marketfetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -66,7 +67,6 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	}
 	results := make([]domain.ItemResult, len(req.Items))
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(req.Items)*MaxRealtimeRows)
-	routerSession := p.Router.NewSession()
 	concurrency := req.Concurrency
 	if concurrency <= 0 {
 		concurrency = DefaultConcurrency
@@ -82,6 +82,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			routerSession := p.Router.NewSession()
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
@@ -98,7 +99,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			if limit <= 0 {
 				limit = MaxRealtimeRows
 			}
-			fetched, err := routerSession.FetchKlines(ctx, marketdata.KlineRequest{MarketID: StockCNSpaceID, ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, Frequency: "1m", Limit: limit, StartTime: parseOptionalTime(item.StartTime), Now: started.UTC(), RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID)}, chain)
+			fetched, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: StockCNSpaceID, ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, Frequency: "1m", Limit: limit, StartTime: parseOptionalTime(item.StartTime), Now: started.UTC(), RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID)}, chain)
 			if err != nil {
 				results[index] = failureResult(item, classifyError(err), errorType(err), err)
 				return
@@ -157,6 +158,35 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	return buildCompletion(req, results, completed, completed.Sub(started)), nil
 }
 
+func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession, req marketdata.KlineRequest, chain []string) ([]marketdata.NormalizedKline, error) {
+	var lastErr error
+	for index, provider := range chain {
+		attemptCtx := ctx
+		cancel := func() {}
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			attemptsLeft := len(chain) - index
+			if remaining <= 0 {
+				return nil, ctx.Err()
+			}
+			attemptCtx, cancel = context.WithTimeout(ctx, remaining/time.Duration(attemptsLeft))
+		}
+		rows, err := session.FetchKlines(attemptCtx, req, []string{provider})
+		cancel()
+		if err == nil {
+			return rows, nil
+		}
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			err = fmt.Errorf("%w: provider %s attempt budget exhausted", marketdata.ErrTimeout, provider)
+		}
+		if !marketdata.CanFallback(ctx, err) {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
 func stockCNShouldCollectMinute(calendar *stockmarket.Calendar, now time.Time) (bool, error) {
 	if calendar == nil {
 		return false, fmt.Errorf("stock_cn calendar is required")
@@ -212,7 +242,7 @@ func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int
 
 func normalizeCandidateChain(configured []string, primary string) []string {
 	seen := make(map[string]struct{})
-	result := make([]string, 0, 2)
+	result := make([]string, 0, 3)
 	for _, provider := range append([]string{primary}, configured...) {
 		provider = strings.ToLower(strings.TrimSpace(provider))
 		if provider == "" || provider == "stock_cn_multi" {
@@ -223,7 +253,7 @@ func normalizeCandidateChain(configured []string, primary string) []string {
 		}
 		seen[provider] = struct{}{}
 		result = append(result, provider)
-		if len(result) == 2 {
+		if len(result) == 3 {
 			break
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestMarketDataAdapterFetchesClosedMinuteKlinesThroughCollector(t *testing.T) {
@@ -124,11 +125,14 @@ func TestMarketDataAdapterFetchesCompleteActiveUSDTInstrumentSnapshotThroughColl
 	assert.Equal(t, 1, snapshot.PageCount)
 	assert.Equal(t, map[string]int{"binance": 1}, snapshot.ExchangeCounts)
 	require.Equal(t, []marketdata.Instrument{{
-		SubjectID:      "BTC-USDT-SPOT",
-		ProviderSymbol: "BTCUSDT",
-		Exchange:       "binance",
-		Name:           "BTC/USDT",
-		Status:         "active",
+		SubjectID:       "BTC-USDT-SPOT",
+		CanonicalSymbol: "BTC-USDT",
+		ProviderSymbol:  "BTCUSDT",
+		Exchange:        "binance",
+		Name:            "BTC/USDT",
+		Status:          "active",
+		BaseAsset:       "BTC",
+		QuoteAsset:      "USDT",
 	}}, snapshot.Instruments)
 	require.NoError(t, marketdata.ValidateInstrumentSnapshot(snapshot))
 }
@@ -143,5 +147,75 @@ func testExchangeKline(openTime, closeTime time.Time, open, high, low, close, vo
 		Close:       common.NewDecimal(close),
 		Volume:      common.NewDecimal(volume),
 		QuoteVolume: common.NewDecimal(quoteVolume),
+	}
+}
+
+func TestNewRuntimePipelineUsesRegisteredTypedProvider(t *testing.T) {
+	pipeline, err := NewRuntimePipeline(marketdata.ProductSpot, NewKlineCollector(), NewSymbolCollector())
+	require.NoError(t, err)
+	require.NotNil(t, pipeline)
+
+	assert.Equal(t, "binance", pipeline.Provider().Descriptor().ID)
+	assert.Same(t, pipeline.Provider(), pipeline.KlineFetcher())
+	assert.Same(t, pipeline.Provider(), pipeline.InstrumentFetcher())
+}
+
+func TestRuntimePipelinePreservesLegacyRealtimeRows(t *testing.T) {
+	now := time.Date(2026, 8, 29, 1, 31, 30, 0, time.UTC)
+	page := []*exchange.Kline{testExchangeKline(time.Date(2026, 8, 29, 1, 30, 0, 0, time.UTC), time.Date(2026, 8, 29, 1, 30, 59, 999000000, time.UTC), "1", "2", "0.5", "1.5", "10", "15")}
+	newCollector := func() *KlineCollector {
+		collector := NewKlineCollector()
+		collector.now = func() time.Time { return now }
+		collector.fetchKlinePage = func(context.Context, *sources.CollectParams, *exchange.KlineRequest) ([]*exchange.Kline, error) {
+			return page, nil
+		}
+		return collector
+	}
+	params := &sources.CollectParams{SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m", InstType: InstTypeSPOT, Symbol: "BTCUSDT", SubjectID: "BTC-USDT-SPOT", Interval: "1m"}
+	legacyRows, legacyWatermark, err := newCollector().FetchRealtimeRows(context.Background(), params, 3)
+	require.NoError(t, err)
+	pipeline, err := NewRuntimePipeline(marketdata.ProductSpot, newCollector(), NewSymbolCollector())
+	require.NoError(t, err)
+	pipelineRows, pipelineWatermark, err := pipeline.FetchRealtimeRows(context.Background(), params, 3)
+	require.NoError(t, err)
+	require.Equal(t, legacyWatermark, pipelineWatermark)
+	require.Len(t, pipelineRows, len(legacyRows))
+	for index := range legacyRows {
+		require.True(t, proto.Equal(legacyRows[index], pipelineRows[index]))
+	}
+	legacyRows, legacyWatermark, err = newCollector().FetchCatchupRows(context.Background(), params, page[0].OpenTime, 3)
+	require.NoError(t, err)
+	pipeline, err = NewRuntimePipeline(marketdata.ProductSpot, newCollector(), NewSymbolCollector())
+	require.NoError(t, err)
+	pipelineRows, pipelineWatermark, err = pipeline.FetchCatchupRows(context.Background(), params, page[0].OpenTime, 3)
+	require.NoError(t, err)
+	require.Equal(t, legacyWatermark, pipelineWatermark)
+	require.Len(t, pipelineRows, len(legacyRows))
+	for index := range legacyRows {
+		require.True(t, proto.Equal(legacyRows[index], pipelineRows[index]))
+	}
+}
+
+func TestRuntimePipelinePreservesLegacyInstrumentRows(t *testing.T) {
+	newCollector := func() *SymbolCollector {
+		collector := NewSymbolCollector()
+		collector.fetchSymbolPage = func(_ context.Context, collectParams *sources.CollectParams) ([]*exchange.SymbolInfo, error) {
+			require.Equal(t, []string{"203.0.113.1"}, collectParams.DNSIPs("api.binance.com"))
+			return []*exchange.SymbolInfo{{Symbol: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active", MinQty: "0.001", MaxQty: "100", TickSize: "0.1", LotSize: "0.001"}}, nil
+		}
+		return collector
+	}
+	params := &sources.CollectParams{SpaceID: "crypto_market", DatasetID: "binance_spot_symbols", InstType: InstTypeSPOT, DNSRoutes: map[string]sources.DNSResolution{"api.binance.com": {IPs: []string{"203.0.113.1"}}}}
+	legacyRows, legacySymbols, _, err := newCollector().FetchSymbolSnapshot(context.Background(), params)
+	require.NoError(t, err)
+	pipeline, err := NewRuntimePipeline(marketdata.ProductSpot, NewKlineCollector(), newCollector())
+	require.NoError(t, err)
+	pipelineRows, pipelineSymbols, version, err := pipeline.FetchSymbolSnapshot(context.Background(), params)
+	require.NoError(t, err)
+	require.Equal(t, legacySymbols, pipelineSymbols)
+	require.Len(t, pipelineRows, len(legacyRows))
+	for index := range legacyRows {
+		legacyRows[index].GetKey().GetRecord().Version = version
+		require.True(t, proto.Equal(legacyRows[index], pipelineRows[index]))
 	}
 }

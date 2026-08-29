@@ -132,6 +132,7 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 		Symbol:    strings.TrimSpace(req.ProviderSymbol),
 		SubjectID: strings.TrimSpace(req.SubjectID),
 		Interval:  req.Frequency,
+		DNSRoutes: marketDataDNSRoutes(req.DNSRoutes),
 	}
 	exchangeKlines, err := a.klineCollector.fetchKlinesWithRetry(ctx, params, &exchange.KlineRequest{
 		Symbol:    params.Symbol,
@@ -180,6 +181,7 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 		SpaceID:   marketID,
 		DatasetID: "instruments",
 		InstType:  instType,
+		DNSRoutes: marketDataDNSRoutes(req.DNSRoutes),
 	})
 	if err != nil {
 		return marketdata.InstrumentSnapshot{}, classifyProviderError(err)
@@ -191,11 +193,18 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 			continue
 		}
 		instruments = append(instruments, marketdata.Instrument{
-			SubjectID:      normalizedSubjectID(symbol, instType),
-			ProviderSymbol: externalSymbol(symbol),
-			Exchange:       "binance",
-			Name:           strings.TrimSpace(symbol.BaseAsset) + "/" + strings.TrimSpace(symbol.QuoteAsset),
-			Status:         symbol.Status,
+			SubjectID:       normalizedSubjectID(symbol, instType),
+			CanonicalSymbol: symbol.Symbol,
+			ProviderSymbol:  externalSymbol(symbol),
+			Exchange:        "binance",
+			Name:            strings.TrimSpace(symbol.BaseAsset) + "/" + strings.TrimSpace(symbol.QuoteAsset),
+			Status:          symbol.Status,
+			BaseAsset:       symbol.BaseAsset,
+			QuoteAsset:      symbol.QuoteAsset,
+			MinQty:          symbol.MinQty,
+			MaxQty:          symbol.MaxQty,
+			TickSize:        symbol.TickSize,
+			LotSize:         symbol.LotSize,
 		})
 	}
 	snapshot := marketdata.InstrumentSnapshot{
@@ -280,6 +289,7 @@ func normalizeMarketDataKline(req marketdata.KlineRequest, kline *market.Kline, 
 		Close:             closeValue,
 		VolumeShares:      volumeValue,
 		AmountCNY:         amountValue,
+		TradeCount:        kline.TradeCount,
 		ProviderTimestamp: kline.CloseTime.UTC(),
 		FetchedAt:         fetchedAt,
 		RequestID:         req.RequestID,
@@ -288,6 +298,17 @@ func normalizeMarketDataKline(req marketdata.KlineRequest, kline *market.Kline, 
 		return marketdata.NormalizedKline{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 	}
 	return row, nil
+}
+
+func marketDataDNSRoutes(routes map[string][]string) map[string]sources.DNSResolution {
+	if len(routes) == 0 {
+		return nil
+	}
+	result := make(map[string]sources.DNSResolution, len(routes))
+	for host, ips := range routes {
+		result[host] = sources.DNSResolution{IPs: append([]string(nil), ips...)}
+	}
+	return result
 }
 
 func decimalToFloat64(value interface{ Float64() (float64, error) }) (float64, error) {

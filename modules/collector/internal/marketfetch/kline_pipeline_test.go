@@ -17,9 +17,10 @@ type pipelineClock struct{ now time.Time }
 func (c pipelineClock) Now() time.Time { return c.now }
 
 type pipelineProvider struct {
-	id   string
-	rows []marketdata.NormalizedKline
-	err  error
+	id    string
+	rows  []marketdata.NormalizedKline
+	err   error
+	delay time.Duration
 }
 
 func TestStockCNShouldCollectMinuteHonorsSessionsAndClosedDays(t *testing.T) {
@@ -48,7 +49,14 @@ func (p pipelineProvider) KlineSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{Markets: []string{"stock_cn"}, Exchanges: []string{"XSHG"}, Frequencies: []string{"1m"}, CompleteOHLCV: true, HasAmount: true, MaxBarsPerRequest: 3, TimestampMode: marketdata.TimestampModeOpen, RateLimit: marketdata.RateLimitPolicy{RequestsPerSecond: 100, Burst: 3, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: time.Second}}
 }
 
-func (p pipelineProvider) FetchKlines(context.Context, marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
+func (p pipelineProvider) FetchKlines(ctx context.Context, _ marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
+	if p.delay > 0 {
+		select {
+		case <-time.After(p.delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	return p.rows, p.err
 }
 
@@ -125,4 +133,33 @@ func TestKlinePipelineFiltersBarsBeforeConfiguredCoverageStart(t *testing.T) {
 	}
 	require.Equal(t, "fallback", fields["quality_status"].GetStringValue())
 	require.Equal(t, int64(2), fields["route_rank"].GetIntValue())
+}
+
+func TestNormalizeCandidateChainKeepsConfiguredThreeProviderRoute(t *testing.T) {
+	require.Equal(t, []string{"sina", "tencent", "eastmoney"}, normalizeCandidateChain([]string{"sina", "tencent", "eastmoney"}, "sina"))
+	require.Equal(t, []string{"eastmoney", "sina", "tencent"}, normalizeCandidateChain([]string{"sina", "tencent"}, "eastmoney"))
+}
+
+func TestKlinePipelineReachesThirdProviderWithinWorkBudget(t *testing.T) {
+	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
+	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "eastmoney", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-third"}
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", err: marketdata.ErrTimeout, delay: time.Second}))
+	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", err: marketdata.ErrProtocol, delay: time.Second}))
+	require.NoError(t, registry.Register(pipelineProvider{id: "eastmoney", rows: []marketdata.NormalizedKline{bar}}))
+	router, err := marketdata.NewRouter(registry, 3, pipelineClock{now}, func(time.Duration) {})
+	require.NoError(t, err)
+	storage := &pipelineStorage{}
+	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent", "eastmoney"}, Now: func() time.Time { return now }}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	payload, err := pipeline.Execute(ctx, Request{BatchID: "batch-third", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-third", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 3}}})
+	require.NoError(t, err)
+	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Len(t, storage.rows, 1)
+	fields := make(map[string]*storagepb.TypedValue)
+	for _, field := range storage.rows[0].GetFields() {
+		fields[field.GetFieldId()] = field.GetValue()
+	}
+	require.Equal(t, int64(3), fields["route_rank"].GetIntValue())
 }

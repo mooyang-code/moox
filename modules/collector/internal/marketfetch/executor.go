@@ -16,6 +16,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
@@ -190,6 +191,11 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 	if e == nil || e.Klines == nil || e.Symbols == nil || e.Storage == nil {
 		return nil, fmt.Errorf("market fetch executor is not initialized")
 	}
+	runtimeExecutor, err := e.withCryptoRuntime(req)
+	if err != nil {
+		return nil, err
+	}
+	e = runtimeExecutor
 	now := time.Now
 	if e.Now != nil {
 		now = e.Now
@@ -357,6 +363,39 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 	}
 	e.reportResults(req, results, executions, rowCountByItem)
 	return payload, nil
+}
+
+// withCryptoRuntime upgrades the concrete dependencies created by the legacy
+// Handler factory into the common provider composition. Tests and non-Binance
+// callers keep their explicitly injected fetchers unchanged.
+func (e *Executor) withCryptoRuntime(req Request) (*Executor, error) {
+	if e == nil || !strings.EqualFold(strings.TrimSpace(req.SpaceID), "crypto_market") {
+		return e, nil
+	}
+	klines, ok := e.Klines.(*binance.KlineCollector)
+	if !ok {
+		return e, nil
+	}
+	symbols, ok := e.Symbols.(*binance.SymbolCollector)
+	if !ok {
+		return e, nil
+	}
+	productType := marketdata.ProductType(strings.ToLower(strings.TrimSpace(req.MarketType)))
+	pipeline, err := binance.NewRuntimePipeline(productType, klines, symbols)
+	if err != nil {
+		return nil, err
+	}
+	clone := *e
+	clone.Klines = pipeline
+	clone.Symbols = pipeline
+	if catchup, ok := e.Catchup.(*binance.KlineCollector); ok {
+		catchupPipeline, pipelineErr := binance.NewRuntimePipeline(productType, catchup, symbols)
+		if pipelineErr != nil {
+			return nil, pipelineErr
+		}
+		clone.Catchup = catchupPipeline
+	}
+	return &clone, nil
 }
 
 func (e *Executor) reportResults(req Request, results []domain.ItemResult, executions []itemExecution, rowCountByItem []int) {
@@ -655,6 +694,12 @@ func buildCompletion(req Request, results []domain.ItemResult, completed time.Ti
 func classifyError(err error) domain.ItemOutcome {
 	if err == nil {
 		return domain.ItemOutcomeSuccess
+	}
+	if errors.Is(err, marketdata.ErrRateLimited) {
+		return domain.ItemOutcomeHTTP429
+	}
+	if errors.Is(err, marketdata.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return domain.ItemOutcomeNetworkError
 	}
 	var statusErr *httpclient.StatusError
 	if errors.As(err, &statusErr) {
