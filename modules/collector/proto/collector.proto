@@ -35,6 +35,8 @@ message TaskRule {
   string create_time = 8;     // RFC3339
   string modify_time = 9;     // RFC3339
   string market_type = 10;
+  string prepare_state = 11;  // pending/waiting_view/ready/error
+  string last_error = 12;
 }
 
 message GetTaskRuleListReq {
@@ -194,6 +196,28 @@ message GetDataTypeConfigWithFieldsRsp {
   DataTypeConfigDetail detail = 2;
 }
 
+message StartKlineResampleBackfillReq {
+  string space_id = 1;
+  string rule_id = 2;
+  string request_id = 3;
+  string start = 4;
+  string end = 5;
+}
+
+message StartKlineResampleBackfillRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message CancelKlineResampleBackfillReq {
+  string space_id = 1;
+  string rule_id = 2;
+  string request_id = 3;
+}
+
+message CancelKlineResampleBackfillRsp {
+  common.RetInfo ret_info = 1;
+}
+
 service CollectMgr {
   // ----- 任务规则 -----
   rpc GetTaskRuleList(GetTaskRuleListReq) returns (GetTaskRuleListRsp);
@@ -208,4 +232,6 @@ service CollectMgr {
   // ----- 数据类型配置 -----
   rpc GetDataTypeConfigs(GetDataTypeConfigsReq) returns (GetDataTypeConfigsRsp);
   rpc GetDataTypeConfigWithFields(GetDataTypeConfigWithFieldsReq) returns (GetDataTypeConfigWithFieldsRsp);
+  rpc StartKlineResampleBackfill(StartKlineResampleBackfillReq) returns (StartKlineResampleBackfillRsp);
+  rpc CancelKlineResampleBackfill(CancelKlineResampleBackfillReq) returns (CancelKlineResampleBackfillRsp);
 }

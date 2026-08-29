@@ -26,6 +26,19 @@ period_readiness:
   item_retention: 60
   parent_retention: 168h
 
+kline_resample:
+  enabled: true
+  scan_timeout: 8s
+  worker_concurrency: 2
+  worker_subject_batch_size: 50
+  worker_job_timeout: 30s
+  worker_poll_interval: 5s
+  worker_max_source_keys_per_claim: 20000
+  stale_running_after: 2m
+  default_settle_delay: 10s
+  repair_lookback_buckets: 3
+  target_keep_duration: 4320h
+
 sysdeploy:
   # Collector 控制面通过 admin 网关 /api/service/cloudnode/* 提交 JobItem。
   # 同机后台调用默认直连 service gateway；远程环境应使用 HTTPS 11001。

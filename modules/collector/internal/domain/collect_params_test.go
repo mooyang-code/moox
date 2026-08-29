@@ -2,6 +2,7 @@ package domain
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -149,4 +150,89 @@ func TestCollectParamsValidateUsesWholeMinuteScheduleIntervals(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
+}
+
+func TestParseCollectParamsAcceptsKlineResampleContract(t *testing.T) {
+	params, err := ParseCollectParams(`{
+		"provider":" MOOX ",
+		"market_type":" SPOT ",
+		"source_dataset_id":" binance_spot_kline_1m ",
+		"source_frequency":"60m",
+		"source_series_tag":" venue:binance ",
+		"target_dataset_id":" spot_kline_derived_4h ",
+		"target_frequency":"240m",
+		"alignment":" EPOCH_UTC ",
+		"settle_delay_ms":10000
+	}`, "", "", "kline_resample")
+	require.NoError(t, err)
+	require.NoError(t, params.Validate())
+
+	assert.Equal(t, "moox", params.Provider)
+	assert.Equal(t, "spot", params.MarketType)
+	assert.Equal(t, "binance_spot_kline_1m", params.Source.DatasetID)
+	assert.Equal(t, "1H", params.SourceFrequency)
+	assert.Equal(t, "venue:binance", params.SourceSeriesTag)
+	assert.Equal(t, "spot_kline_derived_4h", params.Target.DatasetID)
+	assert.Equal(t, "4H", params.TargetFrequency)
+	assert.Equal(t, "epoch_utc", params.Alignment)
+	assert.Equal(t, time.Second*10, params.SettleDelay())
+}
+
+func TestParseCollectParamsRejectsResampleRepairOverride(t *testing.T) {
+	_, err := ParseCollectParams(`{
+		"provider":"moox",
+		"market_type":"spot",
+		"source_dataset_id":"binance_spot_kline_1m",
+		"source_frequency":"1m",
+		"source_series_tag":"venue:binance",
+		"target_dataset_id":"spot_kline_derived_4h",
+		"target_frequency":"4H",
+		"alignment":"epoch_utc",
+		"repair_lookback_buckets":3
+	}`, "", "", "kline_resample")
+	require.ErrorContains(t, err, "unknown field")
+}
+
+func TestKlineResampleParamsRejectInvalidPairAndIdentity(t *testing.T) {
+	tests := []struct {
+		name      string
+		overrides string
+		want      string
+	}{
+		{name: "same dataset", overrides: `"source_dataset_id":"same","target_dataset_id":"same"`, want: "must differ"},
+		{name: "missing series", overrides: `"source_series_tag":""`, want: "source_series_tag"},
+		{name: "wrong alignment", overrides: `"alignment":"session"`, want: "epoch_utc"},
+		{name: "target not multiple", overrides: `"source_frequency":"1H","target_frequency":"90m"`, want: "multiple"},
+		{name: "target not larger", overrides: `"source_frequency":"1H","target_frequency":"1H"`, want: "greater"},
+		{name: "negative settle", overrides: `"settle_delay_ms":-1`, want: "non-negative"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc",` + tt.overrides + `}`
+			params, err := ParseCollectParams(raw, "", "", "kline_resample")
+			require.NoError(t, err)
+			require.ErrorContains(t, params.Validate(), tt.want)
+		})
+	}
+}
+
+func TestKlineResampleImmutableIdentityIgnoresSettleDelay(t *testing.T) {
+	left, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"60m","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"240m","alignment":"epoch_utc","settle_delay_ms":10000}`, "", "", "kline_resample")
+	require.NoError(t, err)
+	right, err := ParseCollectParams(`{"provider":"MOOX","market_type":"SPOT","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"EPOCH_UTC","settle_delay_ms":20000}`, "", "", "kline_resample")
+	require.NoError(t, err)
+	assert.NoError(t, ValidateSameResampleIdentity(left, right))
+
+	right.SourceSeriesTag = "venue:okx"
+	require.ErrorContains(t, ValidateSameResampleIdentity(left, right), "source_series_tag")
+}
+
+func TestKlineResampleCanonicalJSONOmitsRuntimeRepairPolicy(t *testing.T) {
+	params, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"60m","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"240m","alignment":"epoch_utc"}`, "", "", "kline_resample")
+	require.NoError(t, err)
+	raw, err := params.CanonicalJSON()
+	require.NoError(t, err)
+	assert.Contains(t, raw, `"source_frequency":"1H"`)
+	assert.Contains(t, raw, `"target_frequency":"4H"`)
+	assert.NotContains(t, raw, "repair")
 }

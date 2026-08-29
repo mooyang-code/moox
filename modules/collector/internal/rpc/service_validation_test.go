@@ -47,3 +47,42 @@ func TestValidateTaskRuleDatasetsRejectsSymbolMarketMismatch(t *testing.T) {
 	}
 	require.ErrorContains(t, service.validateTaskRuleDatasets(context.Background(), rule), "market_type=spot does not match rule market_type=swap")
 }
+
+func TestValidateTaskRuleAcceptsCollectorLocalResampleWithoutCloudRoute(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
+		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"spot_kline_derived_4h","target_frequency":"4H","alignment":"epoch_utc"}`,
+	}
+	require.NoError(t, validateTaskRule(rule))
+}
+
+func TestValidateResampleRuleUpdateLocksIdentityAtEveryPrepareState(t *testing.T) {
+	base := domain.TaskRule{
+		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot", Enabled: true,
+		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc","settle_delay_ms":10000}`,
+	}
+	for _, state := range []domain.TaskRulePrepareState{domain.PrepareStatePending, domain.PrepareStateWaitingView, domain.PrepareStateReady} {
+		t.Run(string(state), func(t *testing.T) {
+			existing := base
+			existing.PrepareState = state
+			mutable := base
+			mutable.CollectParams = `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc","settle_delay_ms":20000}`
+			require.NoError(t, validateTaskRuleUpdate(existing, mutable))
+
+			changed := mutable
+			changed.CollectParams = `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:okx","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc","settle_delay_ms":20000}`
+			require.ErrorContains(t, validateTaskRuleUpdate(existing, changed), "create a new rule")
+		})
+	}
+}
+
+func TestValidateTaskRuleDatasetsAcceptsExchangeSourceForMooxResample(t *testing.T) {
+	service := &Service{datasetSrc: validationDatasetSource{
+		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1H"}, Attributes: map[string]string{"market_type": "spot"}},
+	}}
+	rule := domain.TaskRule{
+		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
+		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc"}`,
+	}
+	require.NoError(t, service.validateTaskRuleDatasets(context.Background(), rule))
+}

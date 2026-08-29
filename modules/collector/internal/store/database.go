@@ -109,7 +109,72 @@ func (s *Store) ApplySchema(sql string) error {
 	if err := s.ensureTaskInstanceFunctionColumn(); err != nil {
 		return err
 	}
+	if err := s.ensureTaskRulePreparationColumns(); err != nil {
+		return err
+	}
+	if err := s.ensurePeriodReadinessWorkTypeColumn(); err != nil {
+		return err
+	}
 	return s.db.Exec(sql).Error
+}
+
+func (s *Store) ensurePeriodReadinessWorkTypeColumn() error {
+	var tableCount int64
+	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, "t_period_readiness").Scan(&tableCount).Error; err != nil {
+		return fmt.Errorf("check period readiness table: %w", err)
+	}
+	if tableCount == 0 {
+		return nil
+	}
+	var count int64
+	if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info('t_period_readiness') WHERE name = ?`, "c_work_type").Scan(&count).Error; err != nil {
+		return fmt.Errorf("inspect period readiness columns: %w", err)
+	}
+	if count == 0 {
+		if err := s.db.Exec(`ALTER TABLE t_period_readiness ADD COLUMN c_work_type TEXT NOT NULL DEFAULT 'collection'`).Error; err != nil {
+			return fmt.Errorf("add period readiness work type column: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureTaskRulePreparationColumns() error {
+	var tableCount int64
+	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, "t_collector_task_rules").Scan(&tableCount).Error; err != nil {
+		return fmt.Errorf("check task rule table: %w", err)
+	}
+	if tableCount == 0 {
+		return nil
+	}
+	rows, err := s.db.Raw("PRAGMA table_info(t_collector_task_rules)").Rows()
+	if err != nil {
+		return fmt.Errorf("inspect task rule columns: %w", err)
+	}
+	columns := make(map[string]struct{})
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan task rule column: %w", err)
+		}
+		columns[name] = struct{}{}
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("inspect task rule columns: %w", err)
+	}
+	if _, exists := columns["c_prepare_state"]; !exists {
+		if err := s.db.Exec(`ALTER TABLE t_collector_task_rules ADD COLUMN c_prepare_state TEXT NOT NULL DEFAULT 'ready'`).Error; err != nil {
+			return fmt.Errorf("add task rule prepare state column: %w", err)
+		}
+	}
+	if _, exists := columns["c_last_error"]; !exists {
+		if err := s.db.Exec(`ALTER TABLE t_collector_task_rules ADD COLUMN c_last_error TEXT NOT NULL DEFAULT ''`).Error; err != nil {
+			return fmt.Errorf("add task rule last error column: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) ensureTaskInstanceFunctionColumn() error {

@@ -78,3 +78,39 @@ func TestApplySchemaAddsTaskInstanceFunctionColumnBeforeIndexes(t *testing.T) {
 		t.Fatalf("query migrated task instances: %v", err)
 	}
 }
+
+func TestApplySchemaAddsTaskRulePreparationColumns(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "collector.db")
+	mgr, err := Open(&Options{Path: dbPath})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	if err := mgr.db.Exec(`CREATE TABLE t_collector_task_rules (
+		c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+		c_space_id TEXT NOT NULL DEFAULT '',
+		c_rule_id TEXT NOT NULL,
+		c_data_type TEXT NOT NULL DEFAULT '',
+		c_provider TEXT NOT NULL DEFAULT '',
+		c_market_type TEXT NOT NULL DEFAULT '',
+		c_collect_params TEXT NOT NULL DEFAULT '{}',
+		c_enabled INTEGER NOT NULL DEFAULT 1,
+		c_creator TEXT NOT NULL DEFAULT '',
+		c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+		c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`).Error; err != nil {
+		t.Fatalf("create legacy rule table: %v", err)
+	}
+	if err := mgr.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatalf("ApplySchema() error = %v", err)
+	}
+	for _, column := range []string{"c_prepare_state", "c_last_error"} {
+		var count int64
+		if err := mgr.db.Raw("SELECT count(*) FROM pragma_table_info(?) WHERE name = ?", "t_collector_task_rules", column).Scan(&count).Error; err != nil {
+			t.Fatalf("query migrated column %s: %v", column, err)
+		}
+		if count != 1 {
+			t.Fatalf("%s count = %d, want 1", column, count)
+		}
+	}
+}

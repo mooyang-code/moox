@@ -41,6 +41,26 @@ storage:
 	assert.Equal(t, "ip://127.0.0.1:30100", cfg.Storage.GatewayTarget)
 }
 
+func TestLoadKlineResampleConfig(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, `kline_resample:
+  enabled: true
+  repair_lookback_buckets: 5
+  worker_subject_batch_size: 20
+`))
+	require.NoError(t, err)
+	assert.True(t, cfg.KlineResample.Enabled)
+	assert.Equal(t, 5, cfg.KlineResample.RepairLookbackBuckets)
+	assert.Equal(t, 20, cfg.KlineResample.WorkerSubjectBatchSize)
+}
+
+func TestLoadRejectsInvalidKlineResampleRepairLookback(t *testing.T) {
+	_, err := Load(writeCollectorConfig(t, `kline_resample:
+  repair_lookback_buckets: 11
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repair_lookback_buckets")
+}
+
 func TestLoadRejectsLegacyStorageTargets(t *testing.T) {
 	_, err := Load(writeCollectorConfig(t, `
 storage:

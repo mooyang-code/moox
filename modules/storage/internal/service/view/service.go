@@ -629,6 +629,18 @@ func (s *Service) SetPrimaryAuth(auth *pb.AuthInfo) {
 	s.primaryAuth = proto.Clone(auth).(*pb.AuthInfo)
 }
 
+func (s *Service) primaryAuthSnapshot() *pb.AuthInfo {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.primaryAuth == nil {
+		return nil
+	}
+	return proto.Clone(s.primaryAuth).(*pb.AuthInfo)
+}
+
 func (s *Service) SetPrimaryReader(reader FieldReader) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

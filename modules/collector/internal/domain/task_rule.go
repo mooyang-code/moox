@@ -2,19 +2,39 @@ package domain
 
 import "time"
 
+type TaskRulePrepareState string
+
+const (
+	PrepareStatePending     TaskRulePrepareState = "pending"
+	PrepareStateWaitingView TaskRulePrepareState = "waiting_view"
+	PrepareStateReady       TaskRulePrepareState = "ready"
+	PrepareStateError       TaskRulePrepareState = "error"
+)
+
+func (s TaskRulePrepareState) Valid() bool {
+	switch s {
+	case PrepareStatePending, PrepareStateWaitingView, PrepareStateReady, PrepareStateError:
+		return true
+	default:
+		return false
+	}
+}
+
 // TaskRule is the Collector-owned采集规则.
 type TaskRule struct {
-	ID            int       `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID       string    `gorm:"column:c_space_id"`
-	RuleID        string    `gorm:"column:c_rule_id"`
-	DataType      string    `gorm:"column:c_data_type"`
-	Provider      string    `gorm:"column:c_provider"`
-	MarketType    string    `gorm:"column:c_market_type"`
-	CollectParams string    `gorm:"column:c_collect_params"`
-	Enabled       bool      `gorm:"column:c_enabled"`
-	Creator       string    `gorm:"column:c_creator"`
-	CreateTime    time.Time `gorm:"column:c_ctime"`
-	ModifyTime    time.Time `gorm:"column:c_mtime"`
+	ID            int                  `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID       string               `gorm:"column:c_space_id"`
+	RuleID        string               `gorm:"column:c_rule_id"`
+	DataType      string               `gorm:"column:c_data_type"`
+	Provider      string               `gorm:"column:c_provider"`
+	MarketType    string               `gorm:"column:c_market_type"`
+	CollectParams string               `gorm:"column:c_collect_params"`
+	Enabled       bool                 `gorm:"column:c_enabled"`
+	Creator       string               `gorm:"column:c_creator"`
+	PrepareState  TaskRulePrepareState `gorm:"column:c_prepare_state"`
+	LastError     string               `gorm:"column:c_last_error"`
+	CreateTime    time.Time            `gorm:"column:c_ctime"`
+	ModifyTime    time.Time            `gorm:"column:c_mtime"`
 }
 
 // TableName returns the Collector task rule table.

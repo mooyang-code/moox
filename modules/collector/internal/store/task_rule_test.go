@@ -79,6 +79,49 @@ func TestCollectorRuleSchemaOmitsNodeAssignmentColumns(t *testing.T) {
 	}
 }
 
+func TestCollectorRuleSchemaAddsPreparationStateWithoutConfigHash(t *testing.T) {
+	s := newCollectorStore(t)
+	rows, err := s.db.Raw("PRAGMA table_info(t_collector_task_rules)").Rows()
+	require.NoError(t, err)
+	defer rows.Close()
+
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		require.NoError(t, rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey))
+		columns[name] = true
+	}
+	assert.True(t, columns["c_prepare_state"])
+	assert.True(t, columns["c_last_error"])
+	assert.False(t, columns["c_config_hash"])
+}
+
+func TestTaskRuleRepositoryUpdatesPrepareStateWithoutChangingDefinition(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.TaskRules()
+	ctx := context.Background()
+	rule := domain.TaskRule{
+		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
+		CollectParams: `{"target_dataset_id":"derived"}`, Enabled: true, PrepareState: domain.PrepareStatePending,
+	}
+	require.NoError(t, repo.Create(ctx, rule))
+	require.NoError(t, repo.SetPrepareState(ctx, "crypto", "resample-1", domain.PrepareStateWaitingView, "view pending"))
+
+	got, err := repo.GetByRuleID(ctx, "crypto", "resample-1")
+	require.NoError(t, err)
+	assert.Equal(t, domain.PrepareStateWaitingView, got.PrepareState)
+	assert.Equal(t, "view pending", got.LastError)
+	assert.Equal(t, rule.CollectParams, got.CollectParams)
+
+	rows, err := repo.ListResampleByPrepareStates(ctx, []domain.TaskRulePrepareState{domain.PrepareStateWaitingView}, 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "resample-1", rows[0].RuleID)
+}
+
 func TestTaskRuleRepository_ListEnabledAllRejectsPartialSnapshot(t *testing.T) {
 	s := newCollectorStore(t)
 	repo := s.TaskRules()

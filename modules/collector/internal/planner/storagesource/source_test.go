@@ -11,9 +11,14 @@ import (
 )
 
 type fakeMetadataClient struct {
-	dataset  *storagepb.Dataset
-	subjects []*storagepb.DatasetSubject
-	symbols  []*storagepb.SubjectSymbol
+	dataset     *storagepb.Dataset
+	allSubjects []*storagepb.Subject
+	subjects    []*storagepb.DatasetSubject
+	symbols     []*storagepb.SubjectSymbol
+}
+
+func (f *fakeMetadataClient) ListSubjects(_ context.Context, _ *storagepb.ListSubjectsReq, _ ...client.Option) (*storagepb.ListSubjectsRsp, error) {
+	return &storagepb.ListSubjectsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Subjects: f.allSubjects, PageResult: &storagepb.PageResult{HasMore: false}}, nil
 }
 
 func (f *fakeMetadataClient) GetDataset(_ context.Context, _ *storagepb.GetDatasetReq, _ ...client.Option) (*storagepb.GetDatasetRsp, error) {

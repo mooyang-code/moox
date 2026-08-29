@@ -25,6 +25,12 @@ type CollectParams struct {
 	SymbolDatasetID string          `json:"symbol_dataset_id,omitempty"`
 	TargetDatasetID string          `json:"target_dataset_id,omitempty"`
 	Frequency       string          `json:"frequency,omitempty"`
+	SourceDatasetID string          `json:"source_dataset_id,omitempty"`
+	SourceFrequency string          `json:"source_frequency,omitempty"`
+	SourceSeriesTag string          `json:"source_series_tag,omitempty"`
+	TargetFrequency string          `json:"target_frequency,omitempty"`
+	Alignment       string          `json:"alignment,omitempty"`
+	SettleDelayMS   int64           `json:"settle_delay_ms,omitempty"`
 }
 
 // CollectSource describes where target objects come from.
@@ -67,6 +73,9 @@ func ParseCollectParams(raw string, fallbackProvider string, fallbackMarketType 
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return nil, fmt.Errorf("parse collect params: trailing JSON value")
 	}
+	if err := validateCollectParamsShape(raw, fallbackDataType); err != nil {
+		return nil, err
+	}
 	params.Normalize(fallbackProvider, fallbackMarketType, fallbackDataType)
 	return &params, nil
 }
@@ -79,6 +88,17 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 	p.SymbolDatasetID = strings.TrimSpace(p.SymbolDatasetID)
 	p.TargetDatasetID = strings.TrimSpace(p.TargetDatasetID)
 	p.Frequency = strings.TrimSpace(p.Frequency)
+	p.SourceDatasetID = strings.TrimSpace(p.SourceDatasetID)
+	p.SourceSeriesTag = strings.TrimSpace(p.SourceSeriesTag)
+	p.Alignment = strings.ToLower(strings.TrimSpace(p.Alignment))
+	dataType := strings.ToLower(strings.TrimSpace(fallbackDataType))
+	if dataType == "kline_resample" {
+		p.SourceFrequency = normalizeFixedFrequency(p.SourceFrequency)
+		p.TargetFrequency = normalizeFixedFrequency(p.TargetFrequency)
+		if p.Alignment == "" {
+			p.Alignment = ResampleAlignmentEpochUTC
+		}
+	}
 	if p.Frequency == "" && strings.EqualFold(strings.TrimSpace(fallbackDataType), "symbol") {
 		// Full Symbol snapshots use an hourly cadence unless a valid explicit
 		// frequency is supplied.
@@ -92,19 +112,51 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 	case "exchange", "manual":
 		sourceKind = "none"
 	}
-	p.Source = CollectSource{Kind: sourceKind, DatasetID: p.SymbolDatasetID}
+	if dataType == "kline_resample" {
+		sourceKind = "dataset_subjects"
+		p.Source = CollectSource{Kind: sourceKind, DatasetID: p.SourceDatasetID}
+	} else {
+		p.Source = CollectSource{Kind: sourceKind, DatasetID: p.SymbolDatasetID}
+	}
 	intervals := []string(nil)
-	if p.Frequency != "" {
+	if dataType == "kline_resample" && p.TargetFrequency != "" {
+		intervals = []string{p.TargetFrequency}
+	} else if p.Frequency != "" {
 		intervals = []string{p.Frequency}
 	}
 	p.Collector = CollectorSpec{
 		Exchange:  p.Provider,
 		Market:    p.MarketType,
-		DataType:  strings.ToLower(strings.TrimSpace(fallbackDataType)),
+		DataType:  dataType,
 		Intervals: intervals,
 	}
 	p.Target = CollectTarget{DatasetID: p.TargetDatasetID}
-	p.Schedule = CollectSchedule{Interval: p.Frequency}
+	if dataType == "kline_resample" {
+		p.Schedule = CollectSchedule{Interval: "1m"}
+	} else {
+		p.Schedule = CollectSchedule{Interval: p.Frequency}
+	}
+}
+
+func validateCollectParamsShape(raw string, fallbackDataType string) error {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil // the strict struct decoder reports the useful JSON error first
+	}
+	resample := strings.EqualFold(strings.TrimSpace(fallbackDataType), "kline_resample")
+	standardOnly := []string{"symbol_source", "symbol_dataset_id", "frequency"}
+	resampleOnly := []string{"source_dataset_id", "source_frequency", "source_series_tag", "target_frequency", "alignment", "settle_delay_ms"}
+	for _, key := range standardOnly {
+		if _, exists := values[key]; exists && resample {
+			return fmt.Errorf("parse collect params: field %q is not valid for kline_resample", key)
+		}
+	}
+	for _, key := range resampleOnly {
+		if _, exists := values[key]; exists && !resample {
+			return fmt.Errorf("parse collect params: field %q is only valid for kline_resample", key)
+		}
+	}
+	return nil
 }
 
 func firstNonEmpty(values ...string) string {
@@ -150,6 +202,8 @@ func (p *CollectParams) Validate() error {
 		if p.SymbolSource != "exchange" {
 			return fmt.Errorf("symbol_source must be exchange for symbol task")
 		}
+	case "kline_resample":
+		return p.ValidateKlineResample()
 	default:
 		return fmt.Errorf("unsupported collector data_type: %s", p.Collector.DataType)
 	}

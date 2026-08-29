@@ -22,6 +22,7 @@ func NewJobDefinition() jobdef.JobDefinition {
 		DataSourceOptions: dataSources,
 		SortOrder:         2,
 		Version:           1,
+		ExecutionMode:     jobdef.ExecutionModeCloudInvoke,
 		Fields: []jobdef.FieldDefinition{
 			{
 				ID:                4,

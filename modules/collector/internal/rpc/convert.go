@@ -23,6 +23,8 @@ func toPBRule(rule domain.TaskRule) *pb.TaskRule {
 		Creator:       rule.Creator,
 		CreateTime:    formatTime(rule.CreateTime),
 		ModifyTime:    formatTime(rule.ModifyTime),
+		PrepareState:  string(rule.PrepareState),
+		LastError:     rule.LastError,
 	}
 }
 
@@ -39,6 +41,8 @@ func fromPBRule(rule *pb.TaskRule) domain.TaskRule {
 		CollectParams: jsonStringFromStruct(rule.GetCollectParams()),
 		Enabled:       taskRuleEnabled(rule),
 		Creator:       rule.GetCreator(),
+		PrepareState:  domain.TaskRulePrepareState(rule.GetPrepareState()),
+		LastError:     rule.GetLastError(),
 	}
 }
 

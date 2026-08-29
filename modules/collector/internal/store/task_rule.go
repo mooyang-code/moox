@@ -101,9 +101,58 @@ func (r *TaskRuleRepository) GetByRuleID(ctx context.Context, spaceID string, ru
 // Create inserts a new collector rule.
 func (r *TaskRuleRepository) Create(ctx context.Context, rule domain.TaskRule) error {
 	now := time.Now().UTC()
+	if rule.PrepareState == "" {
+		rule.PrepareState = domain.PrepareStateReady
+	}
 	rule.CreateTime = now
 	rule.ModifyTime = now
 	return r.db.WithContext(ctx).Create(&rule).Error
+}
+
+// ListResampleByPrepareStates returns bounded preparation work in stable order.
+func (r *TaskRuleRepository) ListResampleByPrepareStates(ctx context.Context, states []domain.TaskRulePrepareState, limit int) ([]domain.TaskRule, error) {
+	if limit <= 0 || limit > MaxEnabledTaskRules {
+		return nil, fmt.Errorf("resample prepare rule limit must be between 1 and %d", MaxEnabledTaskRules)
+	}
+	values := make([]string, 0, len(states))
+	for _, state := range states {
+		if !state.Valid() {
+			return nil, fmt.Errorf("invalid task rule prepare state: %s", state)
+		}
+		values = append(values, string(state))
+	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("at least one task rule prepare state is required")
+	}
+	var rules []domain.TaskRule
+	err := r.db.WithContext(ctx).
+		Where("c_data_type = ? AND c_enabled = ? AND c_prepare_state IN ?", "kline_resample", true, values).
+		// Always service rules that are not ready before refreshing already-ready
+		// catalogs. Otherwise a stable prefix of ready rules can starve new or
+		// failed rules once the inventory exceeds the per-tick bound.
+		Order("CASE WHEN c_prepare_state = 'ready' THEN 1 ELSE 0 END ASC, c_mtime ASC, c_id ASC").Limit(limit).Find(&rules).Error
+	return rules, err
+}
+
+// SetPrepareState advances asynchronous target preparation without changing
+// the immutable rule definition.
+func (r *TaskRuleRepository) SetPrepareState(ctx context.Context, spaceID, ruleID string, state domain.TaskRulePrepareState, lastError string) error {
+	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(ruleID) == "" {
+		return fmt.Errorf("space_id and rule_id are required")
+	}
+	if !state.Valid() {
+		return fmt.Errorf("invalid task rule prepare state: %s", state)
+	}
+	result := r.db.WithContext(ctx).Model(&domain.TaskRule{}).
+		Where("c_space_id = ? AND c_rule_id = ? AND c_data_type = ?", strings.TrimSpace(spaceID), strings.TrimSpace(ruleID), "kline_resample").
+		Updates(map[string]any{"c_prepare_state": state, "c_last_error": strings.TrimSpace(lastError), "c_mtime": time.Now().UTC()})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // UpdateByRuleID updates an existing collector rule.

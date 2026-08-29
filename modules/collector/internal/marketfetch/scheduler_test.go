@@ -38,6 +38,14 @@ func TestFilterInvokeRulesDropsRealtimeKlineRules(t *testing.T) {
 	assert.Equal(t, []string{"symbols"}, ruleIDs(rules))
 }
 
+func TestFilterMarketFetchRulesDropsLocalResampleRules(t *testing.T) {
+	rules := filterMarketFetchRules([]domain.TaskRule{
+		{RuleID: "symbols", DataType: "symbol"},
+		{RuleID: "resample", DataType: "kline_resample"},
+	})
+	assert.Equal(t, []string{"symbols"}, ruleIDs(rules))
+}
+
 func TestTargetDataTimeUsesCalendarBoundariesForWeekAndMonth(t *testing.T) {
 	now := time.Date(2026, time.July, 29, 15, 47, 12, 0, time.UTC)
 	tests := []struct {

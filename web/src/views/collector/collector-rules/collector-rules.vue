@@ -128,13 +128,25 @@
           </a-radio-group>
         </a-form-item>
 
-        <a-form-item label="Dataset" required>
+        <a-form-item :label="addForm.data_type === 'kline_resample' ? '源 K 线 Dataset' : 'Dataset'" required>
           <a-select v-model="datasetIdValue" placeholder="请选择已激活的 Dataset" :loading="loadingDatasets" allow-search>
             <a-option v-for="dataset in availableDatasets" :key="dataset.dataset_id" :value="dataset.dataset_id">
               {{ dataset.name || dataset.dataset_id }} ({{ dataset.dataset_id }})
             </a-option>
           </a-select>
         </a-form-item>
+
+        <template v-if="addForm.data_type === 'kline_resample'">
+          <a-form-item label="源周期" required>
+            <a-input v-model="sourceFrequencyValue" placeholder="例如 1m、5m、1h" allow-clear />
+          </a-form-item>
+          <a-form-item label="序列标签" required>
+            <a-input v-model="sourceSeriesTagValue" placeholder="例如 venue:binance" allow-clear />
+          </a-form-item>
+          <a-form-item label="目标 Dataset" required>
+            <a-input v-model="targetDatasetIdValue" placeholder="例如 spot_kline_derived_5m" allow-clear />
+          </a-form-item>
+        </template>
 
         <a-form-item v-if="addForm.data_type === 'kline'" label="标的 Dataset" required>
           <a-select
@@ -259,6 +271,9 @@ const marketValue = ref<CollectorRuleInput["market"]>("spot");
 const datasetIdValue = ref("");
 const symbolDatasetIdValue = ref("");
 const scheduleIntervalValue = ref("");
+const sourceFrequencyValue = ref("");
+const sourceSeriesTagValue = ref("");
+const targetDatasetIdValue = ref("");
 
 const dataSourceOptions = ref<{ label: string; value: string }[]>([]);
 const loadingDataSources = ref(false);
@@ -319,7 +334,7 @@ const availableDatasets = computed(() => {
       addForm.value.data_source,
       addForm.value.data_type,
       marketValue.value,
-      addForm.value.data_type === "kline" ? scheduleIntervalValue.value : undefined
+      addForm.value.data_type === "kline" ? scheduleIntervalValue.value : addForm.value.data_type === "kline_resample" ? sourceFrequencyValue.value : undefined
     )
   );
 });
@@ -563,6 +578,9 @@ const resetRuleFields = () => {
   datasetIdValue.value = "";
   symbolDatasetIdValue.value = "";
   scheduleIntervalValue.value = "";
+  sourceFrequencyValue.value = "";
+  sourceSeriesTagValue.value = "venue:binance";
+  targetDatasetIdValue.value = "";
 };
 
 const isRecord = (value: unknown): value is Record<string, any> =>
@@ -573,12 +591,15 @@ const parseStrictRuleParams = (raw: string): CollectorRuleInput => {
   if (!isRecord(params)) {
     throw new Error("规则参数不是当前支持的结构");
   }
-  const dataType = String(params.symbol_source) === "exchange" ? "symbol" : "kline";
+  const dataType = params.source_dataset_id ? "kline_resample" : (String(params.symbol_source) === "exchange" ? "symbol" : "kline");
   const exchange = String(params.provider || "").trim();
   const market = params.market_type;
   const datasetId = String(params.target_dataset_id || "").trim();
   const symbolDatasetId = String(params.symbol_dataset_id || "").trim();
-  const scheduleInterval = String(params.frequency || "").trim();
+  const scheduleInterval = String(params.frequency || params.target_frequency || "").trim();
+  if (dataType === "kline_resample") {
+    return { dataType, exchange: String(params.provider || "moox"), market: market as "spot" | "swap", datasetId, scheduleInterval, sourceDatasetId: String(params.source_dataset_id || ""), sourceFrequency: String(params.source_frequency || ""), sourceSeriesTag: String(params.source_series_tag || ""), targetFrequency: String(params.target_frequency || scheduleInterval) };
+  }
   if (dataType !== "kline" && dataType !== "symbol") {
     throw new Error("规则数据类型无效");
   }
@@ -632,6 +653,10 @@ const onUpdate = (record: TaskConfig) => {
   datasetIdValue.value = input.datasetId;
   symbolDatasetIdValue.value = input.symbolDatasetId || "";
   scheduleIntervalValue.value = input.scheduleInterval;
+  sourceFrequencyValue.value = input.sourceFrequency || "";
+  sourceSeriesTagValue.value = input.sourceSeriesTag || "venue:binance";
+  targetDatasetIdValue.value = input.dataType === "kline_resample" ? input.datasetId : "";
+  if (input.dataType === "kline_resample") datasetIdValue.value = input.sourceDatasetId || "";
   loadDataSourceOptionsForType(input.dataType);
   open.value = true;
 };
@@ -666,7 +691,7 @@ const handleOk = async (): Promise<boolean> => {
       return false;
     }
 
-    if (addForm.value.data_type !== "kline" && addForm.value.data_type !== "symbol") {
+    if (addForm.value.data_type !== "kline" && addForm.value.data_type !== "symbol" && addForm.value.data_type !== "kline_resample") {
       Message.error("不支持的数据类型");
       return false;
     }
@@ -675,9 +700,13 @@ const handleOk = async (): Promise<boolean> => {
       dataType: addForm.value.data_type,
       exchange: addForm.value.data_source,
       market: marketValue.value,
-      datasetId: datasetIdValue.value,
+      datasetId: addForm.value.data_type === "kline_resample" ? targetDatasetIdValue.value : datasetIdValue.value,
       symbolDatasetId: symbolDatasetIdValue.value,
-      scheduleInterval: scheduleIntervalValue.value
+      scheduleInterval: scheduleIntervalValue.value,
+      sourceDatasetId: addForm.value.data_type === "kline_resample" ? datasetIdValue.value : undefined,
+      sourceFrequency: sourceFrequencyValue.value,
+      sourceSeriesTag: sourceSeriesTagValue.value,
+      targetFrequency: scheduleIntervalValue.value
     });
     addForm.value.collect_params = JSON.stringify(collectParams);
 
@@ -686,9 +715,13 @@ const handleOk = async (): Promise<boolean> => {
         dataType: addForm.value.data_type as CollectorRuleInput["dataType"],
         exchange: addForm.value.data_source,
         market: marketValue.value,
-        datasetId: datasetIdValue.value,
+        datasetId: addForm.value.data_type === "kline_resample" ? targetDatasetIdValue.value : datasetIdValue.value,
         symbolDatasetId: symbolDatasetIdValue.value,
-        scheduleInterval: scheduleIntervalValue.value
+        scheduleInterval: scheduleIntervalValue.value,
+        sourceDatasetId: addForm.value.data_type === "kline_resample" ? datasetIdValue.value : undefined,
+        sourceFrequency: sourceFrequencyValue.value,
+        sourceSeriesTag: sourceSeriesTagValue.value,
+        targetFrequency: scheduleIntervalValue.value
       },
       spaceId,
       addForm.value.creator || account.value.user?.userName || "",

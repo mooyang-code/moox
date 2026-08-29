@@ -61,3 +61,9 @@ func TestJobDefinition_Matches_NonMatchingSourceKind_ShouldReturnFalse(t *testin
 	}
 	assert.False(t, def.Matches(params))
 }
+
+func TestExecutionModeValidation(t *testing.T) {
+	assert.True(t, ExecutionModeCloudInvoke.Valid())
+	assert.True(t, ExecutionModeCollectorLocal.Valid())
+	assert.False(t, ExecutionMode("unknown").Valid())
+}

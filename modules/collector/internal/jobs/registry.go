@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/jobdef"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/kline"
+	resamplejob "github.com/mooyang-code/moox/modules/collector/internal/jobs/resample"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/symbol"
 )
 
@@ -18,9 +19,17 @@ type JobDefinition = jobdef.JobDefinition
 // FieldDefinition describes one rule form field for a collector data type.
 type FieldDefinition = jobdef.FieldDefinition
 
+type ExecutionMode = jobdef.ExecutionMode
+
+const (
+	ExecutionModeCloudInvoke    = jobdef.ExecutionModeCloudInvoke
+	ExecutionModeCollectorLocal = jobdef.ExecutionModeCollectorLocal
+)
+
 var jobDefinitions = []JobDefinition{
 	kline.NewJobDefinition(),
 	symbol.NewJobDefinition(),
+	resamplejob.NewJobDefinition(),
 }
 
 // ListJobDefinitions returns collector job definitions in UI sort order.

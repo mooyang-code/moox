@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS t_collector_task_rules (
     c_collect_params TEXT NOT NULL DEFAULT '{}',
     c_enabled INTEGER NOT NULL DEFAULT 1,
     c_creator TEXT NOT NULL DEFAULT '',
+    c_prepare_state TEXT NOT NULL DEFAULT 'ready',
+    c_last_error TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -20,6 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_collector_rules_provider ON t_collector_task_rule
 CREATE INDEX IF NOT EXISTS idx_collector_rules_market_type ON t_collector_task_rules (c_market_type);
 CREATE INDEX IF NOT EXISTS idx_collector_rules_type ON t_collector_task_rules (c_data_type);
 CREATE INDEX IF NOT EXISTS idx_collector_rules_enabled ON t_collector_task_rules (c_enabled);
+CREATE INDEX IF NOT EXISTS idx_collector_rules_prepare ON t_collector_task_rules (c_data_type, c_prepare_state, c_enabled);
 
 CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -144,6 +147,7 @@ CREATE TABLE IF NOT EXISTS t_period_readiness (
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
+    c_work_type TEXT NOT NULL DEFAULT 'collection',
     c_period_time DATETIME NOT NULL,
     c_deadline_at DATETIME NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'waiting',

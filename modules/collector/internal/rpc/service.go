@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
+	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -158,6 +159,11 @@ func (s *Service) CreateTaskRule(ctx context.Context, req *pb.CreateTaskRuleReq)
 	if err := validateTaskRule(rule); err != nil {
 		return &pb.CreateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	var err error
+	rule, err = canonicalizeTaskRule(rule)
+	if err != nil {
+		return &pb.CreateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
 	if err := s.validateTaskRuleDatasets(ctx, rule); err != nil {
 		return &pb.CreateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
@@ -192,6 +198,29 @@ func (s *Service) UpdateTaskRule(ctx context.Context, req *pb.UpdateTaskRuleReq)
 	rule.SpaceID = spaceID
 	if err := validateTaskRule(rule); err != nil {
 		return &pb.UpdateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	existing, err := s.ruleRepo.GetByRuleID(ctx, spaceID, ruleID)
+	if err != nil {
+		return &pb.UpdateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, err.Error())}, nil
+	}
+	if err := validateTaskRuleUpdate(*existing, rule); err != nil {
+		return &pb.UpdateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	rule, err = canonicalizeTaskRule(rule)
+	if err != nil {
+		return &pb.UpdateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	if strings.EqualFold(existing.DataType, "kline_resample") {
+		rule.Creator = existing.Creator
+		// Re-running preparation on an enabled update also recovers a transient
+		// Metadata/Storage error without requiring a second operator-only API.
+		if rule.Enabled {
+			rule.PrepareState = domain.PrepareStatePending
+			rule.LastError = ""
+		} else {
+			rule.PrepareState = existing.PrepareState
+			rule.LastError = existing.LastError
+		}
 	}
 	if err := s.validateTaskRuleDatasets(ctx, rule); err != nil {
 		return &pb.UpdateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
@@ -301,6 +330,53 @@ func (s *Service) GetDataTypeConfigWithFields(ctx context.Context, req *pb.GetDa
 	}, nil
 }
 
+func (s *Service) StartKlineResampleBackfill(ctx context.Context, req *pb.StartKlineResampleBackfillReq) (*pb.StartKlineResampleBackfillRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetRuleId()) == "" || strings.TrimSpace(req.GetRequestId()) == "" {
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id, rule_id and request_id are required")}, nil
+	}
+	start, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(req.GetStart()))
+	if err != nil {
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "start must be RFC3339")}, nil
+	}
+	end, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(req.GetEnd()))
+	if err != nil {
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "end must be RFC3339")}, nil
+	}
+	rule, err := s.ruleRepo.GetByRuleID(ctx, req.GetSpaceId(), req.GetRuleId())
+	if err != nil {
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, err.Error())}, nil
+	}
+	if !strings.EqualFold(rule.DataType, "kline_resample") {
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "rule is not kline_resample")}, nil
+	}
+	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	if err != nil {
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	target, err := collectorresample.ParseFixedFrequency(params.TargetFrequency)
+	if err != nil {
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	backfill := domain.ResampleBackfillRequest{RequestID: req.GetRequestId(), Start: start.UTC(), End: end.UTC()}
+	if err := backfill.ValidateForFrequency(target.Duration); err != nil {
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	if _, err := s.instanceRepo.StartResampleBackfill(ctx, req.GetSpaceId(), req.GetRuleId(), backfill); err != nil {
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	return &pb.StartKlineResampleBackfillRsp{RetInfo: retOK()}, nil
+}
+
+func (s *Service) CancelKlineResampleBackfill(ctx context.Context, req *pb.CancelKlineResampleBackfillReq) (*pb.CancelKlineResampleBackfillRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetRuleId()) == "" || strings.TrimSpace(req.GetRequestId()) == "" {
+		return &pb.CancelKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id, rule_id and request_id are required")}, nil
+	}
+	if _, err := s.instanceRepo.CancelResampleBackfill(ctx, req.GetSpaceId(), req.GetRuleId(), req.GetRequestId()); err != nil {
+		return &pb.CancelKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	return &pb.CancelKlineResampleBackfillRsp{RetInfo: retOK()}, nil
+}
+
 func normalizeTaskRule(rule domain.TaskRule) domain.TaskRule {
 	rule.RuleID = strings.TrimSpace(rule.RuleID)
 	if rule.RuleID == "" {
@@ -333,8 +409,7 @@ func validateTaskRule(rule domain.TaskRule) error {
 		return fmt.Errorf("invalid collect_params: %w", err)
 	}
 	definition, ok := jobs.JobDefinitionByDataType(params.Collector.DataType)
-	_, routeOK := jobs.JobRouteFor(params.Collector.Exchange, params.Collector.DataType)
-	if !ok || !routeOK || !definition.Matches(params) {
+	if !ok || !definition.ExecutionMode.Valid() || !definition.Matches(params) {
 		return fmt.Errorf(
 			"unsupported collector: exchange=%s market=%s data_type=%s source_kind=%s",
 			params.Collector.Exchange,
@@ -343,10 +418,59 @@ func validateTaskRule(rule domain.TaskRule) error {
 			params.Source.Kind,
 		)
 	}
+	if definition.ExecutionMode == jobs.ExecutionModeCloudInvoke {
+		if _, routeOK := jobs.JobRouteFor(params.Collector.Exchange, params.Collector.DataType); !routeOK {
+			return fmt.Errorf("cloud collector route not found: exchange=%s data_type=%s", params.Collector.Exchange, params.Collector.DataType)
+		}
+	}
 	if !strings.EqualFold(rule.Provider, params.Provider) ||
 		!strings.EqualFold(rule.MarketType, params.MarketType) ||
 		!strings.EqualFold(rule.DataType, params.Collector.DataType) {
 		return fmt.Errorf("rule identity does not match collect_params")
+	}
+	return nil
+}
+
+func canonicalizeTaskRule(rule domain.TaskRule) (domain.TaskRule, error) {
+	if !strings.EqualFold(strings.TrimSpace(rule.DataType), "kline_resample") {
+		if rule.PrepareState == "" {
+			rule.PrepareState = domain.PrepareStateReady
+		}
+		return rule, nil
+	}
+	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	if err != nil {
+		return rule, err
+	}
+	canonical, err := params.CanonicalJSON()
+	if err != nil {
+		return rule, err
+	}
+	rule.CollectParams = canonical
+	if rule.PrepareState == "" || rule.PrepareState == domain.PrepareStateReady {
+		rule.PrepareState = domain.PrepareStatePending
+	}
+	rule.LastError = ""
+	return rule, nil
+}
+
+func validateTaskRuleUpdate(existing, desired domain.TaskRule) error {
+	if !strings.EqualFold(strings.TrimSpace(existing.DataType), "kline_resample") && !strings.EqualFold(strings.TrimSpace(desired.DataType), "kline_resample") {
+		return nil
+	}
+	if existing.SpaceID != desired.SpaceID || existing.RuleID != desired.RuleID || !strings.EqualFold(existing.DataType, desired.DataType) {
+		return fmt.Errorf("resample rule identity cannot change; create a new rule and target Dataset")
+	}
+	existingParams, err := domain.ParseCollectParams(existing.CollectParams, existing.Provider, existing.MarketType, existing.DataType)
+	if err != nil {
+		return fmt.Errorf("parse existing resample rule: %w", err)
+	}
+	desiredParams, err := domain.ParseCollectParams(desired.CollectParams, desired.Provider, desired.MarketType, desired.DataType)
+	if err != nil {
+		return fmt.Errorf("parse desired resample rule: %w", err)
+	}
+	if err := domain.ValidateSameResampleIdentity(existingParams, desiredParams); err != nil {
+		return fmt.Errorf("%w; create a new rule and target Dataset", err)
 	}
 	return nil
 }
@@ -394,9 +518,37 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 			params.Collector.Market,
 			params.Collector.Intervals,
 		)
+	case "kline_resample":
+		return s.validateResampleSourceDataset(ctx, rule, params)
 	default:
 		return fmt.Errorf("unsupported collector data_type: %s", params.Collector.DataType)
 	}
+}
+
+func (s *Service) validateResampleSourceDataset(ctx context.Context, rule domain.TaskRule, params *domain.CollectParams) error {
+	info, err := s.datasetSrc.GetDataset(ctx, rule.SpaceID, params.SourceDatasetID)
+	if err != nil {
+		return fmt.Errorf("source Dataset %s is unavailable: %w", params.SourceDatasetID, err)
+	}
+	if info.Status != "active" {
+		return fmt.Errorf("source Dataset %s must be active", params.SourceDatasetID)
+	}
+	if info.DataKind != storagepb.DataKind_DATA_KIND_TIME_SERIES {
+		return fmt.Errorf("source Dataset %s must be time_series", params.SourceDatasetID)
+	}
+	if strings.EqualFold(strings.TrimSpace(info.Attributes["dataset_role"]), "kline_resample_result") {
+		return fmt.Errorf("source Dataset %s cannot be another resample result", params.SourceDatasetID)
+	}
+	actualMarket := strings.ToLower(strings.TrimSpace(info.Attributes["market_type"]))
+	if actualMarket == "" || actualMarket != strings.ToLower(strings.TrimSpace(rule.MarketType)) {
+		return fmt.Errorf("source Dataset %s market_type=%s does not match rule market_type=%s", params.SourceDatasetID, actualMarket, rule.MarketType)
+	}
+	for _, frequency := range info.Freqs {
+		if strings.EqualFold(strings.TrimSpace(frequency), params.SourceFrequency) {
+			return nil
+		}
+	}
+	return fmt.Errorf("source Dataset %s does not enable frequency %q", params.SourceDatasetID, params.SourceFrequency)
 }
 
 func (s *Service) validateDataset(

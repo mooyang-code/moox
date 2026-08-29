@@ -41,7 +41,6 @@ server:
       network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
-
 plugins:
   metrics:
     prometheus:

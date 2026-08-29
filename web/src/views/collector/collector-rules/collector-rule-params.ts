@@ -1,10 +1,14 @@
 export type CollectorRuleInput = {
-  dataType: "kline" | "symbol";
+  dataType: "kline" | "symbol" | "kline_resample";
   exchange: string;
   market: "spot" | "swap";
   datasetId: string;
   symbolDatasetId?: string;
   scheduleInterval: string;
+  sourceDatasetId?: string;
+  sourceFrequency?: string;
+  sourceSeriesTag?: string;
+  targetFrequency?: string;
 };
 
 export type CollectorDatasetOption = {
@@ -36,12 +40,13 @@ export function datasetMatchesCollector(
 ): boolean {
   // K-line targets may be aggregate datasets (for example crypto_market)
   // fed by more than one provider; symbols remain provider-owned.
-  if (dataType !== "kline" && dataset.data_source_id !== exchange) {
+  if (dataType !== "kline" && dataType !== "kline_resample" && dataset.data_source_id !== exchange) {
     return false;
   }
-  const expected = dataType === "kline" ? ["DATA_KIND_TIME_SERIES", "time_series", 2] : ["DATA_KIND_RECORD", "record", 1];
+  const expected = dataType === "kline" || dataType === "kline_resample" ? ["DATA_KIND_TIME_SERIES", "time_series", 2] : ["DATA_KIND_RECORD", "record", 1];
   if (!expected.includes(dataset.data_kind)) return false;
   if (marketType && dataset.attributes?.market_type?.toLowerCase() !== marketType.toLowerCase()) return false;
+  if (dataType === "kline_resample" && dataset.attributes?.dataset_role === "kline_resample_result") return false;
   if (frequency) {
     const supportedFrequencies = (dataset.freqs || []).map(value => value.toLowerCase());
     if (!supportedFrequencies.includes(frequency.toLowerCase())) return false;
@@ -50,6 +55,15 @@ export function datasetMatchesCollector(
 }
 
 export function buildCollectorRuleParams(input: CollectorRuleInput): Record<string, unknown> {
+	if (input.dataType === "kline_resample") {
+		const sourceDatasetId = input.sourceDatasetId?.trim();
+		const sourceFrequency = input.sourceFrequency?.trim();
+		const sourceSeriesTag = input.sourceSeriesTag?.trim();
+		const targetFrequency = input.targetFrequency?.trim() || input.scheduleInterval.trim();
+		const targetDatasetId = input.datasetId.trim();
+		if (!sourceDatasetId || !sourceFrequency || !sourceSeriesTag || !targetDatasetId || !targetFrequency) throw new Error("请填写重采样源、周期、序列和目标 Dataset");
+		return { provider: input.exchange.trim().toLowerCase(), market_type: input.market, source_dataset_id: sourceDatasetId, source_frequency: sourceFrequency, source_series_tag: sourceSeriesTag, target_dataset_id: targetDatasetId, target_frequency: targetFrequency, alignment: "epoch_utc", settle_delay_ms: 10000 };
+	}
   const datasetId = input.datasetId.trim();
   if (!datasetId) {
     throw new Error("请选择 Dataset");

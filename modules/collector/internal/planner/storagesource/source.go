@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -18,6 +19,7 @@ const storagePageSize = 500
 
 type metadataClient interface {
 	GetDataset(ctx context.Context, req *storagepb.GetDatasetReq, opts ...client.Option) (*storagepb.GetDatasetRsp, error)
+	ListSubjects(ctx context.Context, req *storagepb.ListSubjectsReq, opts ...client.Option) (*storagepb.ListSubjectsRsp, error)
 	ListDatasetSubjects(ctx context.Context, req *storagepb.ListDatasetSubjectsReq, opts ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error)
 	ListSubjectSymbols(ctx context.Context, req *storagepb.ListSubjectSymbolsReq, opts ...client.Option) (*storagepb.ListSubjectSymbolsRsp, error)
 }
@@ -25,10 +27,13 @@ type metadataClient interface {
 // DatasetInfo is the minimal Dataset contract required by Collector rules.
 type DatasetInfo struct {
 	DataSourceID string
+	DataNodeID   string
 	DataKind     storagepb.DataKind
 	Status       string
 	Freqs        []string
 	Attributes   map[string]string
+	KeepDuration string
+	Revision     uint64
 }
 
 // GetDataset returns the Dataset identity and write shape used for rule validation.
@@ -48,10 +53,13 @@ func (s *DatasetSource) GetDataset(ctx context.Context, spaceID, datasetID strin
 	}
 	return DatasetInfo{
 		DataSourceID: strings.TrimSpace(dataset.GetDataSourceId()),
+		DataNodeID:   strings.TrimSpace(dataset.GetDataNodeId()),
 		DataKind:     dataset.GetDataKind(),
 		Status:       strings.ToLower(strings.TrimSpace(dataset.GetStatus())),
 		Freqs:        append([]string(nil), dataset.GetFreqs()...),
 		Attributes:   cloneAttributes(dataset.GetAttributes()),
+		KeepDuration: strings.TrimSpace(dataset.GetKeepDuration()),
+		Revision:     dataset.GetRevision(),
 	}, nil
 }
 
@@ -94,7 +102,46 @@ func (s *DatasetSource) ListSubjects(ctx context.Context, spaceID string, datase
 	if err != nil {
 		return nil, err
 	}
+	market := ""
+	if dataset, datasetErr := s.GetDataset(ctx, spaceID, datasetID); datasetErr == nil {
+		market = strings.TrimSpace(dataset.Attributes["market_type"])
+	}
+	if len(bindings) == 0 && market != "" {
+		filtered, filterErr := s.filterSymbolsByMarket(ctx, spaceID, symbols, market)
+		if filterErr != nil {
+			return nil, filterErr
+		}
+		symbols = filtered
+	}
 	return mergeDatasetSubjects(bindings, symbols)
+}
+
+func (s *DatasetSource) filterSymbolsByMarket(ctx context.Context, spaceID string, symbols map[string]string, market string) (map[string]string, error) {
+	allowed := make(map[string]struct{})
+	for page := uint32(1); ; page++ {
+		rsp, err := s.metadata.ListSubjects(ctx, &storagepb.ListSubjectsReq{SpaceId: spaceID, Market: market, Page: &storagepb.Page{Page: page, Size: storagePageSize}})
+		if err != nil {
+			return nil, fmt.Errorf("list subjects by market: %w", err)
+		}
+		if err := ensureStorageOK("list subjects by market", rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		for _, subject := range rsp.GetSubjects() {
+			if subject != nil && isActive(subject.GetStatus()) {
+				allowed[subject.GetSubjectId()] = struct{}{}
+			}
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+			break
+		}
+	}
+	filtered := make(map[string]string, len(symbols))
+	for subjectID, external := range symbols {
+		if _, ok := allowed[subjectID]; ok {
+			filtered[subjectID] = external
+		}
+	}
+	return filtered, nil
 }
 
 func (s *DatasetSource) listDatasetBindings(ctx context.Context, spaceID string, datasetID string) ([]*storagepb.DatasetSubject, error) {
@@ -155,6 +202,22 @@ func mergeDatasetSubjects(
 	bindings []*storagepb.DatasetSubject,
 	symbols map[string]string,
 ) ([]domain.DatasetSubject, error) {
+	// Runtime K-line Datasets are often written for the full exchange symbol
+	// universe without maintaining a duplicate DatasetSubject row for every
+	// symbol. In that case the active data-source symbol catalog is the explicit
+	// universe and keeps local resample planning useful for existing result data.
+	if len(bindings) == 0 && len(symbols) > 0 {
+		ids := make([]string, 0, len(symbols))
+		for subjectID := range symbols {
+			ids = append(ids, subjectID)
+		}
+		sort.Strings(ids)
+		result := make([]domain.DatasetSubject, 0, len(ids))
+		for _, subjectID := range ids {
+			result = append(result, domain.DatasetSubject{SubjectID: subjectID, SubjectName: subjectID, ExternalSymbol: symbols[subjectID], Status: "active"})
+		}
+		return result, nil
+	}
 	subjects := make([]domain.DatasetSubject, 0, len(bindings))
 	for _, binding := range bindings {
 		if binding.GetSubjectId() == "" || !isActive(binding.GetStatus()) {

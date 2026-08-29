@@ -30,6 +30,18 @@ type Support struct {
 	SourceKind string
 }
 
+// ExecutionMode separates queue-backed exchange jobs from Collector-local jobs.
+type ExecutionMode string
+
+const (
+	ExecutionModeCloudInvoke    ExecutionMode = "cloud_invoke"
+	ExecutionModeCollectorLocal ExecutionMode = "collector_local"
+)
+
+func (m ExecutionMode) Valid() bool {
+	return m == ExecutionModeCloudInvoke || m == ExecutionModeCollectorLocal
+}
+
 // FieldDefinition describes one rule form field for a collector data type.
 type FieldDefinition struct {
 	ID                int32
@@ -56,6 +68,7 @@ type JobDefinition struct {
 	Fields            []FieldDefinition
 	Supports          []Support
 	Planner           Planner
+	ExecutionMode     ExecutionMode
 }
 
 // Matches returns whether params can be planned by this job definition.

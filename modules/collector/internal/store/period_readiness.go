@@ -45,8 +45,12 @@ func (r *PeriodReadinessRepository) EnsurePeriod(ctx context.Context, seed domai
 	}
 
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		workType := strings.TrimSpace(seed.WorkType)
+		if workType == "" {
+			workType = "collection"
+		}
 		parent := &domain.PeriodReadiness{
-			SpaceID: seed.SpaceID, DatasetID: seed.DatasetID, Frequency: seed.Frequency,
+			SpaceID: seed.SpaceID, DatasetID: seed.DatasetID, Frequency: seed.Frequency, WorkType: workType,
 			PeriodTime: seed.PeriodTime.UTC(), DeadlineAt: seed.DeadlineAt.UTC(),
 			Status: domain.PeriodStatusWaiting, ReportState: domain.PeriodReportWaiting,
 		}

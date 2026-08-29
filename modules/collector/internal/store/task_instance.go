@@ -132,6 +132,14 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 		if changed[i].LastExecStatus == 0 {
 			changed[i].LastExecStatus = domain.InstanceStatusPending
 		}
+		if strings.EqualFold(changed[i].DataType, "kline_resample") && (strings.TrimSpace(changed[i].Result) == "" || strings.TrimSpace(changed[i].Result) == "{}") {
+			initial := domain.NewResampleTaskResult(time.Time{})
+			encoded, err := initial.Marshal()
+			if err != nil {
+				return err
+			}
+			changed[i].Result = encoded
+		}
 		changed[i].ModifyTime = now
 	}
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
@@ -312,6 +320,17 @@ func (r *TaskInstanceRepository) DeactivateMissingMarketFetchRuleInstances(ctx c
 	// Do not call Count on this statement before Updates. GORM's SQLite
 	// dialect retains the count source table and emits UPDATE ... FROM the
 	// same table, making unqualified c_* predicates ambiguous.
+	return query.Updates(map[string]any{"c_is_deleted": true, "c_mtime": time.Now().UTC()}).Error
+}
+
+// DeactivateMissingResampleRuleInstances keeps resample reconciliation from
+// touching market-fetch instances that happen to share a rule identifier.
+func (r *TaskInstanceRepository) DeactivateMissingResampleRuleInstances(ctx context.Context, spaceID, ruleID string, activeTaskIDs []string) error {
+	query := r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
+		Where("c_space_id = ? AND c_rule_id = ? AND c_data_type = ? AND c_is_deleted = ?", spaceID, ruleID, "kline_resample", false)
+	if len(activeTaskIDs) > 0 {
+		query = query.Where("c_task_id NOT IN ?", activeTaskIDs)
+	}
 	return query.Updates(map[string]any{"c_is_deleted": true, "c_mtime": time.Now().UTC()}).Error
 }
 

@@ -21,6 +21,7 @@ type Config struct {
 	CloudNode       CloudNodeConfig       `yaml:"cloudnode"`
 	Storage         StorageConfig         `yaml:"storage"`
 	PeriodReadiness PeriodReadinessConfig `yaml:"period_readiness"`
+	KlineResample   KlineResampleConfig   `yaml:"kline_resample"`
 	SysDeploy       SysDeployConfig       `yaml:"sysdeploy"`
 	Health          HealthConfig          `yaml:"health"`
 	DNS             DNSConfig             `yaml:"dns"`
@@ -58,6 +59,23 @@ type PeriodReadinessConfig struct {
 	ReportInterval  time.Duration `yaml:"report_interval"`
 	ItemRetention   int           `yaml:"item_retention"`
 	ParentRetention time.Duration `yaml:"parent_retention"`
+}
+
+// KlineResampleConfig controls the local derived-kline scheduler. Rule
+// identity and source/target semantics remain in TaskRule; these values are
+// process-wide execution policy.
+type KlineResampleConfig struct {
+	Enabled                     bool          `yaml:"enabled"`
+	ScanTimeout                 time.Duration `yaml:"scan_timeout"`
+	WorkerConcurrency           int           `yaml:"worker_concurrency"`
+	WorkerSubjectBatchSize      int           `yaml:"worker_subject_batch_size"`
+	WorkerJobTimeout            time.Duration `yaml:"worker_job_timeout"`
+	WorkerPollInterval          time.Duration `yaml:"worker_poll_interval"`
+	WorkerMaxSourceKeysPerClaim int           `yaml:"worker_max_source_keys_per_claim"`
+	StaleRunningAfter           time.Duration `yaml:"stale_running_after"`
+	DefaultSettleDelay          time.Duration `yaml:"default_settle_delay"`
+	RepairLookbackBuckets       int           `yaml:"repair_lookback_buckets"`
+	TargetKeepDuration          time.Duration `yaml:"target_keep_duration"`
 }
 
 // SysDeployConfig describes optional dependency discovery through admin SysDeploy.
@@ -119,6 +137,9 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	if err := cfg.validateDNSResolver(); err != nil {
+		return nil, err
+	}
+	if err := cfg.validateKlineResample(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -251,6 +272,19 @@ func (c *Config) validateDNSResolver() error {
 	return nil
 }
 
+func (c *Config) validateKlineResample() error {
+	if c.KlineResample.ScanTimeout <= 0 || c.KlineResample.WorkerJobTimeout <= 0 || c.KlineResample.WorkerPollInterval <= 0 || c.KlineResample.StaleRunningAfter <= 0 || c.KlineResample.DefaultSettleDelay < 0 || c.KlineResample.TargetKeepDuration <= 0 {
+		return fmt.Errorf("kline_resample durations must be positive, except default_settle_delay")
+	}
+	if c.KlineResample.WorkerConcurrency <= 0 || c.KlineResample.WorkerSubjectBatchSize <= 0 || c.KlineResample.WorkerSubjectBatchSize > 200 || c.KlineResample.WorkerMaxSourceKeysPerClaim <= 0 {
+		return fmt.Errorf("kline_resample worker quantities are invalid")
+	}
+	if c.KlineResample.RepairLookbackBuckets < 0 || c.KlineResample.RepairLookbackBuckets > 10 {
+		return fmt.Errorf("kline_resample.repair_lookback_buckets must be between 0 and 10")
+	}
+	return nil
+}
+
 func isPublicDNSResolverTarget(raw string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Scheme != "ip" || parsed.User != nil || parsed.Hostname() == "" || parsed.Port() == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -322,6 +356,13 @@ func Default() *Config {
 		PeriodReadiness: PeriodReadinessConfig{
 			Grace: 2 * time.Minute, ReportInterval: 5 * time.Second,
 			ItemRetention: 60, ParentRetention: 7 * 24 * time.Hour,
+		},
+		KlineResample: KlineResampleConfig{
+			Enabled: true, ScanTimeout: 8 * time.Second, WorkerConcurrency: 2,
+			WorkerSubjectBatchSize: 50, WorkerJobTimeout: 30 * time.Second,
+			WorkerPollInterval: 5 * time.Second, WorkerMaxSourceKeysPerClaim: 20000,
+			StaleRunningAfter: 2 * time.Minute, DefaultSettleDelay: 10 * time.Second,
+			RepairLookbackBuckets: 3, TargetKeepDuration: 4320 * time.Hour,
 		},
 		SysDeploy: SysDeployConfig{
 			ServiceAuth: ServiceAuthConfig{ExpireSeconds: 60},

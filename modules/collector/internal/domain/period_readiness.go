@@ -24,6 +24,7 @@ type PeriodReadiness struct {
 	SpaceID     string    `gorm:"column:c_space_id"`
 	DatasetID   string    `gorm:"column:c_dataset_id"`
 	Frequency   string    `gorm:"column:c_frequency"`
+	WorkType    string    `gorm:"column:c_work_type"`
 	PeriodTime  time.Time `gorm:"column:c_period_time"`
 	DeadlineAt  time.Time `gorm:"column:c_deadline_at"`
 	Status      string    `gorm:"column:c_status"`
@@ -68,6 +69,7 @@ type PeriodTaskSeed struct {
 type PeriodSeed struct {
 	PeriodKey
 	DeadlineAt time.Time
+	WorkType   string
 	Tasks      []PeriodTaskSeed
 }
 

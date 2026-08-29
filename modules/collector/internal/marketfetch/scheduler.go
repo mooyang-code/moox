@@ -117,8 +117,11 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	if err != nil {
 		return fmt.Errorf("list enabled collection rules: %w", err)
 	}
-	rules := allRules
-	invokeRules := filterInvokeRules(allRules)
+	// Local collector jobs (for example kline_resample) are driven by their
+	// own timer workers. Keep them out of the SCF planner and gap audit: the
+	// market-fetch scheduler only owns cloud-invoked collection rules.
+	rules := filterMarketFetchRules(allRules)
+	invokeRules := filterInvokeRules(rules)
 	rules = rotateRulesAfter(rules, s.lastRuleID)
 	nodes, err := s.Invoker.ListMarketFetchers(ctx, spaceID)
 	if err != nil {
@@ -258,7 +261,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		s.lastRuleID = rule.RuleID
 	}
 	if s.Instances != nil && (s.lastGapAudit.IsZero() || now.Sub(s.lastGapAudit) >= gapAuditInterval) {
-		if err := s.auditGaps(ctx, spaceID, allRules, nodes, now); err != nil {
+		if err := s.auditGaps(ctx, spaceID, rules, nodes, now); err != nil {
 			log.WarnContextf(ctx, "market fetch gap audit failed: %v", err)
 		} else {
 			s.lastGapAudit = now
@@ -273,6 +276,24 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		}
 	}
 	return nil
+}
+
+func filterMarketFetchRules(rules []domain.TaskRule) []domain.TaskRule {
+	filtered := make([]domain.TaskRule, 0, len(rules))
+	for _, rule := range rules {
+		dataType := strings.ToLower(strings.TrimSpace(rule.DataType))
+		if dataType == "" {
+			params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+			if err == nil {
+				dataType = strings.ToLower(strings.TrimSpace(params.Collector.DataType))
+			}
+		}
+		if dataType == "kline_resample" {
+			continue
+		}
+		filtered = append(filtered, rule)
+	}
+	return filtered
 }
 
 func filterInvokeRules(rules []domain.TaskRule) []domain.TaskRule {

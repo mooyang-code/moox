@@ -82,3 +82,21 @@ func StableTaskID(spaceID string, ruleID string, spec TaskSpec) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])[:32]
 }
+
+// StableResampleTaskID includes the selected source series because a target
+// subject can otherwise be backed by multiple venue streams.
+func StableResampleTaskID(spaceID string, ruleID string, spec TaskSpec, sourceSeriesTag string) string {
+	parts := []string{
+		spaceID,
+		ruleID,
+		spec.Provider,
+		spec.MarketType,
+		spec.DataType,
+		spec.DatasetID,
+		spec.SubjectID,
+		spec.Frequency,
+		strings.TrimSpace(sourceSeriesTag),
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return hex.EncodeToString(sum[:])[:32]
+}

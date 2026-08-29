@@ -33,6 +33,52 @@ type BatchStorage interface {
 	BindDatasetSubject(context.Context, *storagepb.DatasetSubject) error
 }
 
+// ResampleStorage is the PrimaryStore subset used by Collector-local K-line
+// resampling. It remains separate from BatchStorage so existing market-fetch
+// fakes do not need to implement exact reads.
+type ResampleStorage interface {
+	ReadFields(context.Context, []*storagepb.RowKey, []string, []string) ([]*storagepb.RowFieldValues, error)
+	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
+}
+
+type ResampleViewSyncWaiter interface {
+	WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error)
+}
+
+// ResampleMetadataClient exposes the Metadata proxy and service identity used
+// by the Collector-local catalog preparer.
+type ResampleMetadataClient struct {
+	Client storagepb.MetadataClientProxy
+	Auth   *storagepb.AuthInfo
+}
+
+// NewResampleMetadataClient creates an authenticated Metadata proxy for local
+// target Dataset/View preparation.
+func NewResampleMetadataClient(accessTarget, instType string) (*ResampleMetadataClient, error) {
+	if normalized, normalizeErr := InstTypeForMarket(instType); normalizeErr == nil {
+		instType = normalized
+	}
+	binding, err := ResolveStorageBinding(instType)
+	if err != nil {
+		return nil, err
+	}
+	target := storageGatewayTarget(accessTarget, accessTarget)
+	serviceOptions := gatewayauth.NewTRPCClientOptions(normalizeStorageTarget(target, "11003"), strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE")), gatewayauth.CredentialsFromEnv())
+	return &ResampleMetadataClient{Client: storagepb.NewMetadataClientProxy(serviceOptions...), Auth: storageAuthInfo(binding)}, nil
+}
+
+// NewResampleStorage creates a Storage adapter for local Collector workers.
+func NewResampleStorage(accessTarget, instType, writeSource string) (ResampleStorage, error) {
+	if normalized, normalizeErr := InstTypeForMarket(instType); normalizeErr == nil {
+		instType = normalized
+	}
+	binding, err := ResolveStorageBinding(instType)
+	if err != nil {
+		return nil, err
+	}
+	return newStorageWriter(accessTarget, accessTarget, storageAuthInfo(binding), writeSource), nil
+}
+
 // ReconcileSymbolSnapshot disables memberships that disappeared from the
 // latest exchange snapshot.
 func (w *storageWriter) ReconcileSymbolSnapshot(ctx context.Context, spaceID, datasetID string, active []*exchange.SymbolInfo) error {
@@ -89,6 +135,34 @@ func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowF
 
 func (w *storageWriter) UpsertFieldsWithSource(ctx context.Context, rows []*storagepb.RowFieldUpsert, sourceEventID string) error {
 	return w.upsertFields(ctx, rows, sourceEventID)
+}
+
+func (w *storageWriter) ReadFields(ctx context.Context, keys []*storagepb.RowKey, fieldIDs, attributeKeys []string) ([]*storagepb.RowFieldValues, error) {
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("read fields: keys are required")
+	}
+	var rsp *storagepb.PrimaryReadFieldsRsp
+	err := retryStorageWithAttemptTimeout(ctx, func(attemptCtx context.Context) error {
+		var callErr error
+		rsp, callErr = w.access.ReadFields(attemptCtx, &storagepb.PrimaryReadFieldsReq{
+			AuthInfo: w.authInfo, Keys: keys, FieldIds: fieldIDs, AttributeKeys: attributeKeys,
+		})
+		if callErr != nil {
+			return fmt.Errorf("read fields: %w", callErr)
+		}
+		return ensureStorageOK("read fields", rsp.GetRetInfo())
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rsp.GetRows(), nil
+}
+
+func (w *storageWriter) WaitViewSyncPoint(ctx context.Context, req *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error) {
+	if req == nil {
+		return nil, fmt.Errorf("wait View sync point: request is required")
+	}
+	return w.access.WaitViewSyncPoint(ctx, req)
 }
 
 // ReportDatasetPeriodCollected appends the completion marker after the

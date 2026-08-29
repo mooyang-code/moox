@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
+	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
@@ -309,6 +310,35 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	// authenticated service route.
 	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 5 * time.Second})
 	metadataSource := storagesource.NewDatasetSource(cfg.Storage.GatewayTarget)
+	completionSpaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
+	if completionSpaceID == "" {
+		completionSpaceID = "crypto_market"
+	}
+	var resampleRunner *collectorresample.Runner
+	var resamplePreparer *collectorresample.Preparer
+	if cfg.KlineResample.Enabled {
+		metadataClient, metadataErr := binance.NewResampleMetadataClient(cfg.Storage.GatewayTarget, "spot")
+		localStorage, storageErr := binance.NewResampleStorage(deps.StorageRPCGatewayTarget, "spot", "collector:kline_resample")
+		if metadataErr != nil || storageErr != nil {
+			log.WarnContextf(trpc.BackgroundContext(), "collector kline resample disabled: metadata=%v storage=%v", metadataErr, storageErr)
+		} else {
+			catalog := &collectorresample.Catalog{Metadata: metadataClient.Client, Auth: metadataClient.Auth}
+			resamplePreparer = &collectorresample.Preparer{Rules: dbm.TaskRules(), Source: metadataSource, Catalog: catalog, KeepDuration: cfg.KlineResample.TargetKeepDuration.String(), Limit: cfg.KlineResample.WorkerSubjectBatchSize}
+			if waiter, ok := localStorage.(binance.ResampleViewSyncWaiter); ok {
+				catalog.ViewSync = waiter
+			} else {
+				log.Warn("collector kline resample disabled: Storage adapter has no View sync waiter")
+			}
+			resampleRunner = &collectorresample.Runner{Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Readiness: dbm.PeriodReadiness(), Source: metadataSource, Primary: localStorage, Config: collectorresample.RunnerConfig{
+				SpaceID: completionSpaceID, WorkerConcurrency: cfg.KlineResample.WorkerConcurrency, WorkerJobTimeout: cfg.KlineResample.WorkerJobTimeout,
+				WorkerPollInterval: cfg.KlineResample.WorkerPollInterval, WorkerMaxSourceKeys: cfg.KlineResample.WorkerMaxSourceKeysPerClaim,
+				StaleRunningAfter: cfg.KlineResample.StaleRunningAfter, DefaultSettleDelay: cfg.KlineResample.DefaultSettleDelay, RepairLookbackBuckets: cfg.KlineResample.RepairLookbackBuckets,
+			}}
+			if err := resamplePreparer.RunOnce(trpc.BackgroundContext()); err != nil {
+				log.WarnContextf(trpc.BackgroundContext(), "collector kline resample initial preparation failed: %v", err)
+			}
+		}
+	}
 	reconciler := &marketfetch.Reconciler{Rules: dbm.TaskRules(), Symbols: metadataSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache, Metrics: metrics, MaxSubjects: 30}
 	readiness := marketfetch.NewPeriodReadinessService(dbm.TaskInstances(), dbm.PeriodReadiness(), cfg.PeriodReadiness.Grace)
 	invokeScheduler := &marketfetch.Scheduler{
@@ -320,10 +350,6 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: "crypto_market", DNSCache: dnsCache,
 		Symbols:               metadataSource,
 		InvokeNonRealtimeOnly: true,
-	}
-	completionSpaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
-	if completionSpaceID == "" {
-		completionSpaceID = "crypto_market"
 	}
 	if err := readiness.EnsureCurrentAndNext(trpc.BackgroundContext(), completionSpaceID, time.Now().UTC()); err != nil {
 		log.WarnContextf(trpc.BackgroundContext(), "collector period readiness prebuild failed space=%s: %v", completionSpaceID, err)
@@ -362,6 +388,16 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		spaceID := completionSpaceID
 		go func() {
 			tickCtx := trpc.BackgroundContext()
+			if resamplePreparer != nil {
+				if err := resamplePreparer.RunOnce(tickCtx); err != nil {
+					log.WarnContextf(tickCtx, "collector kline resample preparation failed space=%s: %v", spaceID, err)
+				}
+			}
+			if resampleRunner != nil {
+				if err := resampleRunner.Tick(tickCtx, time.Now().UTC()); err != nil {
+					log.WarnContextf(tickCtx, "collector kline resample tick failed space=%s: %v", spaceID, err)
+				}
+			}
 			if err := invokeScheduler.Tick(tickCtx, spaceID); err != nil {
 				log.WarnContextf(tickCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
 			}

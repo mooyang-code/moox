@@ -441,17 +441,45 @@ func runViewRole() error {
 	if err := validateStorageViewConsumerPartitions(trpc.BackgroundContext(), metadataProxy, &pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")}, &consumerOptions); err != nil {
 		return err
 	}
+	// Clone after wildcard expansion so the dynamic exact-route set includes
+	// every Dataset already assigned to the static misc partition on restart.
+	dynamicConsumerOptions := cloneViewConsumerOptions(consumerOptions)
 	stopConsumer, err := svc.StartEventConsumer(trpc.BackgroundContext(), eventClient, consumerOptions)
 	if err != nil {
 		return err
 	}
 	defer stopConsumer()
+	dynamicReconciler, err := svc.NewInventoryReconciler(viewservice.InventoryReconcilerOptions{
+		Metadata: metadataProxy, Primary: primaryProxy, EventClient: eventClient, Consumer: dynamicConsumerOptions, Interval: 30 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("create storage view dynamic inventory reconciler: %w", err)
+	}
+	stopDynamicConsumer, err := dynamicReconciler.Start(trpc.BackgroundContext())
+	if err != nil {
+		return fmt.Errorf("start storage view dynamic inventory reconciler: %w", err)
+	}
+	defer stopDynamicConsumer()
 	stopViewMaintainer, err := svc.StartViewMaintainerAsync(trpc.BackgroundContext(), maintenanceOptions)
 	if err != nil {
 		return err
 	}
 	defer stopViewMaintainer()
 	return <-serveErr
+}
+
+func cloneViewConsumerOptions(options viewservice.EventConsumerOptions) viewservice.EventConsumerOptions {
+	clone := options
+	clone.FilterSubjects = append([]string(nil), options.FilterSubjects...)
+	clone.DatasetRoutes = append([]viewservice.DatasetRoute(nil), options.DatasetRoutes...)
+	clone.PartitionConfigs = make([]viewservice.EventConsumerOptions, len(options.PartitionConfigs))
+	for i, partition := range options.PartitionConfigs {
+		clone.PartitionConfigs[i] = partition
+		clone.PartitionConfigs[i].FilterSubjects = append([]string(nil), partition.FilterSubjects...)
+		clone.PartitionConfigs[i].DatasetRoutes = append([]viewservice.DatasetRoute(nil), partition.DatasetRoutes...)
+		clone.PartitionConfigs[i].PartitionConfigs = nil
+	}
+	return clone
 }
 
 func storageViewMaintenancePolicy() (storageconfig.ViewMaintenancePolicy, error) {
