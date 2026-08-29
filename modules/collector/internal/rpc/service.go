@@ -480,6 +480,8 @@ func (s *Service) GetKlineResampleBackfill(ctx context.Context, req *pb.GetKline
 			response.Complete++
 		case domain.ResampleBackfillFailed:
 			response.Failed++
+		case domain.ResampleBackfillCanceled:
+			response.Canceled++
 		}
 		if rank := stateRank[backfill.State]; rank > stateRank[selectedState] {
 			selectedState = backfill.State

@@ -480,17 +480,23 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 	var result Result
 	var wrote bool
 	attempts := 0
+	var lastRunErr error
+	maxRetryDelay := cfg.WorkerJobTimeout / 3
+	if maxRetryDelay <= 0 {
+		maxRetryDelay = pollInterval
+	}
 	err = retry.Do(func() error {
 		attempts++
 		if attempts > 1 && metrics != nil {
 			metrics.Retries.Inc()
 		}
 		var runErr error
-		result, wrote, runErr = (BucketStorage{Primary: primary}).ProcessBucket(ctx, spec, claim.Instance.SubjectID, bucket, bucket.Add(targetFreq.Duration))
+		result, wrote, runErr = (BucketStorage{Primary: primary, MaxSourceKeys: cfg.WorkerMaxSourceKeys}).ProcessBucket(ctx, spec, claim.Instance.SubjectID, bucket, bucket.Add(targetFreq.Duration))
+		lastRunErr = runErr
 		return runErr
-	}, retry.Attempts(4), retry.Delay(pollInterval), retry.DelayType(retry.BackOffDelay), retry.Context(ctx))
+	}, retry.Attempts(4), retry.Delay(pollInterval), retry.MaxDelay(maxRetryDelay), retry.DelayType(retry.BackOffDelay), retry.Context(ctx))
 	if err != nil {
-		if isResampleSourceIncomplete(err) {
+		if isResampleSourceIncomplete(lastRunErr) || isResampleSourceIncomplete(err) {
 			if expired, reason := sourceRetentionExpired(parent, source, claim.Instance.SpaceID, params.SourceDatasetID, bucket); expired {
 				if claim.Result.ActiveOrigin == domain.ResampleOriginRepair {
 					if _, skipErr := instances.SkipResampleRepairTask(parent, claim.Instance.SpaceID, claim.Instance.TaskID, claim.Result.StateVersion, bucket, bucket.Add(targetFreq.Duration), reason); skipErr != nil {

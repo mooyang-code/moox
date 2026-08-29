@@ -237,7 +237,8 @@ message GetKlineResampleBackfillRsp {
   uint64 syncing = 10;
   uint64 complete = 11;
   uint64 failed = 12;
-  repeated string errors = 13;
+  uint64 canceled = 13;
+  repeated string errors = 14;
 }
 
 service CollectMgr {

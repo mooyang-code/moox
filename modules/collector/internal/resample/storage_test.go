@@ -2,6 +2,7 @@ package resample
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,5 +65,16 @@ func TestBucketStorageProcessBucketIsIdempotentBySourceHash(t *testing.T) {
 	_, wrote, err = (&BucketStorage{Primary: fake}).ProcessBucket(context.Background(), spec, "BTC", start, end)
 	if err != nil || wrote {
 		t.Fatalf("second process wrote=%v err=%v", wrote, err)
+	}
+}
+
+func TestBucketStorageRejectsOversizedSourceWindow(t *testing.T) {
+	freq1, _ := ParseFixedFrequency("1m")
+	freq5, _ := ParseFixedFrequency("5m")
+	start := time.Unix(300, 0).UTC()
+	spec := RuleSpec{SpaceID: "s", SourceDatasetID: "src", SourceFrequency: freq1, TargetDatasetID: "target", TargetFrequency: freq5}
+	_, _, err := (&BucketStorage{Primary: &fakePrimary{}, MaxSourceKeys: 4}).ProcessBucket(context.Background(), spec, "BTC", start, start.Add(freq5.Duration))
+	if err == nil || !strings.Contains(err.Error(), "max_source_keys=4") {
+		t.Fatalf("expected max_source_keys error, got %v", err)
 	}
 }

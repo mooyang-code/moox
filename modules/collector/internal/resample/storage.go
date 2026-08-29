@@ -46,7 +46,8 @@ type SyncPointStorage interface {
 // BucketStorage reads one source bucket and writes its target row only when the
 // source hash changed. It is safe to retry after a crash between write and CAS.
 type BucketStorage struct {
-	Primary PrimaryStorage
+	Primary       PrimaryStorage
+	MaxSourceKeys int
 }
 
 // ProcessBucket performs one complete target bucket operation.
@@ -57,6 +58,9 @@ func (s BucketStorage) ProcessBucket(ctx context.Context, spec RuleSpec, subject
 	times, err := ExpectedSourceTimes(start, end, spec.SourceFrequency)
 	if err != nil {
 		return Result{}, false, err
+	}
+	if s.MaxSourceKeys > 0 && len(times) > s.MaxSourceKeys {
+		return Result{}, false, fmt.Errorf("resample source window has %d keys, exceeds max_source_keys=%d", len(times), s.MaxSourceKeys)
 	}
 	keys := make([]*storagepb.RowKey, 0, len(times))
 	for _, at := range times {
