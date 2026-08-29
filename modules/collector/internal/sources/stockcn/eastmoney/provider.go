@@ -28,7 +28,7 @@ type Provider struct {
 
 func New(cfg Config) *Provider {
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = "https://push2.eastmoney.com"
+		cfg.BaseURL = "http://push2.eastmoney.com"
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 5 * time.Second}
@@ -80,18 +80,16 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if err != nil {
 		return nil, err
 	}
-	query := url.Values{
-		"secid":   {secid},
-		"ndays":   {"5"},
-		"iscr":    {"0"},
-		"fields1": {"f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13"},
-		"fields2": {"f51,f52,f53,f54,f55,f56,f57,f58"},
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/qt/stock/trends2/get?"+query.Encode(), nil)
+	query := "secid=" + url.QueryEscape(secid) +
+		"&ndays=5&iscr=0" +
+		"&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13" +
+		"&fields2=f51,f52,f53,f54,f55,f56,f57,f58"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/qt/stock/trends2/get?"+query, nil)
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("User-Agent", "moox-collector/1.0")
+	httpReq.Header.Set("User-Agent", "Mozilla/5.0")
+	httpReq.Header.Set("Accept", "*/*")
 	httpReq.Header.Set("Referer", "https://quote.eastmoney.com/")
 	resp, err := p.client.Do(httpReq)
 	if err != nil {

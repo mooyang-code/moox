@@ -64,7 +64,9 @@ func (*Provider) KlineSpec() marketdata.KlineSpec {
 }
 
 type payload struct {
-	Data map[string]map[string][][]json.RawMessage `json:"data"`
+	Data map[string]struct {
+		M1 [][]json.RawMessage `json:"m1"`
+	} `json:"data"`
 }
 
 func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
@@ -107,7 +109,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
 		return nil, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 	}
-	data := decoded.Data[req.ProviderSymbol]["m1"]
+	data := decoded.Data[req.ProviderSymbol].M1
 	rows := make([]marketdata.NormalizedKline, 0, len(data))
 	now := p.now().UTC()
 	for _, record := range data {
