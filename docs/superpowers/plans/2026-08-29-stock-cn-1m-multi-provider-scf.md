@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在不导入任何历史 K 线的前提下，从 `stock_cn` 规则启用时刻开始，使用新浪、腾讯、百度、东方财富多数据源和独立腾讯云 SCF Timer 函数稳定采集中国 A 股未复权 `1m` K 线；首选源不可用时在同次调用内有界切换，并将来源行与统一行幂等写入 Storage。
+**Goal:** 在不导入任何历史 K 线的前提下，从 `stock_cn` 规则启用时刻开始，使用新浪、腾讯、百度、东方财富多数据源和 100 个独立腾讯云 SCF Timer 函数稳定采集全市场中国 A 股未复权 `1m` K 线；首选源不可用时在同次调用内有界切换，并将来源行与统一行幂等写入 Storage。
 
-**Architecture:** 抽取 `crypto_market` 与 `stock_cn` 共用的强类型行情采集内核，保留两个独立 SCF 二进制和函数集群。Collector 控制面按 Provider 无关的 `route_id` 与股票 Universe 生成稳定分片；SCF 根据 `subject_id + frequency + trading_date + route_version` 做加权 Rendezvous 排序，每个标的最多尝试两个合格 Provider。Provider 只负责请求和标准化完整闭合 K 线，Pipeline 先写带 `provider:<id>` tag 的来源 Dataset，再写空 tag 的统一 Dataset。持久化 `collect_from` 作为上线时间围栏，实时重试和缺口修复均不得越过该时间。
+**Architecture:** 建立 `crypto_market` 与 `stock_cn` 共用的强类型市场采集框架：`MarketProvider` 表示外部数据源身份，同一个 Provider 可同时实现 `KlineFetcher`、`InstrumentFetcher` 等能力；每类 Fetcher 通过 `KlineSpec`、`InstrumentSpec` 描述静态接口规格，通过独立 Pipeline 完成取数、校验和 Storage 写入。Collector 将全市场 Universe 稳定映射到 100 个 Group/SCF 函数，再按交易日和 route version 给各 Group 均衡分配主 Provider 与候选链；函数内按 Feed 级 `RateLimitPolicy` 限速，每个标的最多尝试两个合格 Provider。两个市场共用 Registry、Fetcher 契约、限频、路由、Storage 和 SCF Runtime，但保留独立二进制、配置和函数集群。
 
 **Tech Stack:** Go 1.25、tRPC-Go Timer、Tencent Cloud SCF Go SDK v1.1.0、SQLite/GORM、Storage tRPC、Pebble、CLS、YAML、`httptest`、`testify`。
 
@@ -17,12 +17,16 @@
 - `stock_cn` 普通股票未复权 `1m` K 线，规范频率固定为小写 `1m`。
 - 上交所、深交所、北交所统一 SubjectID：`600000.XSHG`、`000001.XSHE`、`920000.XBSE`。
 - 新浪、腾讯、东方财富进入可用 Provider 候选池；百度完成接入与实测，但只有返回完整 OHLCV 的接口才能进入 K 线路由。
-- Provider 选择对标的做稳定分散，不使用每次请求重新 `rand()` 的无状态随机。
+- `MarketProvider + KlineFetcher + InstrumentFetcher + Spec + Pipeline` 是整个市场采集模块的统一框架，现有 Binance K 线和 Symbol 快照必须一并迁入，不允许只为 A 股新增旁路框架。
+- 建立通用全市场 `InstrumentPipeline`：加密货币和 A 股都通过完整快照维护 Subject、SubjectSymbol 和 DatasetSubject，不再把 `symbol` 当成 Binance 私有数据类型。
+- 全市场 active equity 稳定映射到恰好 100 个 Group，每个 Group 对应一个 `stock_cn` Timer SCF 函数；不得静默丢弃超出容量的标的。
+- Provider 选择按 Group 做稳定、均衡分散，不使用每次请求重新 `rand()` 的无状态随机；Group 内标的只在 fallback 时切换 Provider。
 - 主 Provider 发生超时、限流、协议错误、空响应或无有效闭合 K 线时，同次 SCF 调用切换至候选链中的下一个 Provider。
+- 每个 Kline/Instrument Feed 独立声明和执行限频策略；100 个函数按触发秒错峰，不能把多函数、多地域等同于 100 个独立出口 IP。
 - 一根统一 K 线的 OHLCV/amount 必须全部来自同一个 Provider，不做字段拼接、均值或投票。
 - `provider_equity_kline` 保存来源事实，`equity_kline` 保存当前统一结果。
 - 复用现有 Timer 分片、CloudNode 环境变量协调、Storage RowKey 幂等和 CLS 日志能力。
-- 单独增加 `stock_cn` SCF 入口、配置和函数集群；不得把 A 股流量混入 `crypto_market` 函数。
+- 单独增加总数为 100 的 `stock_cn` Timer SCF 集群；不得把 A 股流量混入 `crypto_market` 函数。全市场 Instrument 快照复用同一 stock/crypto SCF 二进制，通过有界 Invoke action 执行，不额外复制采集框架。
 - 首次启用和重新启用都记录新的 `collect_from`；任何写入都满足 `bar.close_time > collect_from`。
 - 允许修复上线后的短期漏采，但禁止把上线前数据当作 gap 追补。
 
@@ -34,11 +38,14 @@
 - 不实现跨地域分布式锁、持久化熔断器、全局 exactly-once、Provider 共识或人工优先级页面。
 - 不合成 Provider 没有返回的零成交 K 线；Provider 明确返回的零成交 K 线可保留。
 - 不把百度分钟价格点伪造成 OHLC。若实测仍只有 `price/avgPrice/volume/amount` 或返回 403，百度保持 `shadow/disabled`，不进入生产候选池。
+- 不抽象一个接收和返回 `any` 的万能 Collector；Kline 与 Instrument 共用运行底座，但保留强类型 Request、Result、Spec 和 Pipeline。
 
 ### 1.3 当前代码结论
 
-- Timer 控制面已能按 Dataset Subject 稳定分片，每个函数最多 30 个标的；`TimerRequestFromEnv` 当前会请求最近 3 根 K 线。
+- Timer 控制面已能按 Dataset Subject 分片，但当前按排序切片而不是固定 Group Hash；每个函数、Environment、Timer Request 和 Executor 都硬限制最多 30 个标的。
+- 当前 `stock_cn` 默认函数数是 300，而本计划目标是 100。现有 A 股全市场实现把少于 5000 条视为不完整，因此 `100 * 30 = 3000` 明确不足；必须用真实 Universe 数和 SCF 压测共同计算每 Group 安全容量。
 - `marketfetch.Executor`、Handler、DNS 日志、Job route、SCF 入口和 Storage 构造仍直接依赖 Binance，不能只加一条 stock 规则上线。
+- 当前弱类型 `sources.Collector`/`CollectorRegistry` 虽按 source/market/data_type 注册，但 Timer Handler 绕过 Registry 直接构造 Binance Kline/Symbol Collector；统一框架必须替换这两个扩展面，不能并存。
 - `Scheduler.auditGaps` 在新任务无水位时会从 `now-1h` 生成 catchup，违反“不导历史”的要求。
 - Storage RowKey 已包含 `subject_id + freq + data_time + series_tag`，可以承载来源 tag 与空 tag 两条独立幂等序列。
 - PrimaryStore 跨 Dataset 是顺序写而不是事务；来源与统一 Dataset 必须分两次写，并正确处理“来源成功、统一失败”的重试。
@@ -50,21 +57,27 @@
 
 ```mermaid
 flowchart LR
-  Rule["stock_cn equity_1m Rule\nroute_id=stock_cn_equity_1m_v1"] --> Reconciler["Collector Reconciler"]
-  Universe["active equity Subjects\nProvider Symbol 映射"] --> Reconciler
-  Reconciler --> Assignment["稳定分片 + collect_from + route config"]
-  Assignment --> CloudNode["CloudNode 合并 Environment\n校验 4KB + 协调 Timer"]
-  CloudNode --> SCF["stock_cn Timer SCF"]
-  SCF --> Clock["交易日历/交易时段/闭合桶"]
-  Clock --> Router["Weighted Rendezvous 候选链"]
-  Router --> P1["EastMoney / Tencent / Sina / Baidu"]
-  P1 --> Validate["完整 K 线校验 + 单位标准化"]
-  Validate --> Source["provider_equity_kline\nseries_tag=provider:<id>"]
+  Providers["ProviderRegistry\nBinance / EastMoney / Tencent / Sina / Baidu"] --> KF["KlineFetcher + KlineSpec"]
+  Providers --> IF["InstrumentFetcher + InstrumentSpec"]
+  IF --> IP["InstrumentPipeline\n完整快照 + Universe 切换"]
+  IP --> Universe["Subject + SubjectSymbol + DatasetSubject"]
+  Rule["Provider 无关 Rule\nmarket_id + route_id"] --> Reconciler["Collector Reconciler"]
+  Universe --> Reconciler
+  Reconciler --> Assignment["稳定映射到 100 Groups\n容量校验 + collect_from"]
+  Assignment --> CloudNode["CloudNode Environment\n4KB 校验 + 错峰 Timer"]
+  CloudNode --> SCF["stock_cn 100-function Timer Fleet"]
+  SCF --> Market["stock_cn Market Module\nCalendar + Session + Symbol"]
+  Market --> Router["Group 主 Provider + 候选链\nFeed RateLimitPolicy"]
+  KF --> Router
+  Router --> KP["KlinePipeline\n闭合校验 + 两阶段写入"]
+  KP --> Source["provider_equity_kline\nseries_tag=provider:<id>"]
   Source --> Unified["equity_kline\nseries_tag='' "]
   Unified --> Monitor["Storage 水位 + CLS + Market Canary"]
 ```
 
 实时请求只读取最近 3 根是网络抖动缓冲，不代表允许历史导入。SCF 在标准化后必须按 `close_time > collect_from` 和当前闭合桶过滤，因此首次调用最多写入启用后已经闭合的分钟。
+
+`crypto_market` 使用同一个 `ProviderRegistry`、`InstrumentPipeline`、`KlinePipeline` 和 Handler factory：Binance 同时实现 Kline 与 Instrument Fetcher；市场差异只由 crypto 的 24x7 Market Module 和独立 SCF composition root 注入。`stock_cn` 同理注入交易日历和四路 Provider，但不得复制 Executor、Storage writer 或 Registry。
 
 ## 3. 核心契约
 
@@ -102,20 +115,54 @@ type CanonicalBar struct {
 - 新浪原始成交量按股处理；腾讯、东方财富按手转换为股，乘以 100；百度单位必须由实测 fixture 固化后才允许启用。
 - Provider 标注为结束时间的 `09:31` K 线规范化为 `BarStart=09:30`、`BarEnd=09:31`。
 
-### 3.2 Provider 接口
+### 3.2 Provider、Fetcher 与 Spec
 
-新增 `modules/collector/internal/marketdata/provider.go`：
+新增 `modules/collector/internal/marketdata/provider.go`、`spec.go` 和 `instrument.go`。术语固定如下：
+
+- `MarketProvider`：外部数据源身份，例如 Binance、EastMoney；只提供描述信息。
+- `KlineFetcher` / `InstrumentFetcher`：该 Provider 实现的强类型采集能力。
+- `KlineSpec` / `InstrumentSpec`：对应 Feed 的静态接口规格，取代旧的泛化能力描述。
+- `RateLimitPolicy`：Feed 级安全请求量、限制作用域、并发、burst、429 冷却和单请求 timeout；同一 Provider 的 Kline 与 Instrument 接口可以不同。作用域未知时按“所有 stock 函数共享一个出口”做最保守预算。
+- `ProviderHealth`：当前 invocation 观察到的运行状态，不持久化进 Spec。
 
 ```go
-type KlineProvider interface {
-    ID() string
-    Hosts() []string
-    Capabilities() Capabilities
-    FetchClosedBars(ctx context.Context, request FetchRequest) ([]CanonicalBar, error)
+type MarketProvider interface {
+    Descriptor() ProviderDescriptor
+}
+
+type ProviderDescriptor struct {
+    ID          string
+    DisplayName string
+    Hosts       []string
+}
+
+type RateLimitPolicy struct {
+    LimitScope            string
+    SafeRequestsPerMinute int
+    Burst                 int
+    MaxConcurrent         int
+    Cooldown              time.Duration
+    RequestTimeout        time.Duration
+}
+
+type KlineFetcher interface {
+    MarketProvider
+    KlineSpec() KlineSpec
+    FetchKlines(ctx context.Context, request KlineRequest) ([]CanonicalBar, error)
+}
+
+type InstrumentFetcher interface {
+    MarketProvider
+    InstrumentSpec() InstrumentSpec
+    FetchInstrumentSnapshot(ctx context.Context, request InstrumentRequest) (InstrumentSnapshot, error)
 }
 ```
 
-`FetchRequest` 必须包含 `SubjectID`、明确的 `ProviderSymbol`、`Frequency`、`Limit`、`Now` 和 `RequestID`。Provider 不读取 Rule、不选择其他 Provider、不写 Storage，也不根据 SubjectID 猜外部代码。
+`KlineSpec` 至少包含 `Markets`、`Exchanges`、`Frequencies`、`CompleteOHLCV`、`HasAmount`、`MaxBarsPerRequest`、`SupportsBatch`、`TimestampMode` 和 `RateLimit`。`InstrumentSpec` 至少包含 `Markets`、`Exchanges`、`FullSnapshot`、`PageSize`、`SupportsDelistedStatus` 和 `RateLimit`。
+
+`KlineRequest` 必须包含 `SubjectID`、明确的 `ProviderSymbol`、`Frequency`、`Limit`、`Now` 和 `RequestID`。Fetcher 不读取 Rule、不选择其他 Provider、不写 Storage。普通股票 symbol 可以由经过 fixture 和真实探测验证的 `exchange + code` 严格转换；无法确定的例外必须来自 SubjectSymbol override，禁止启发式猜测。
+
+一个 Provider 可以实现一个或多个 Fetcher。第一期的预期组合是：Binance 实现 Kline + Instrument；EastMoney、Sina 实现 Kline + Instrument；Tencent 先实现 Kline，Instrument 需真实完整分页证据；Baidu 实现 Instrument，Kline 只有完整 OHLCV 实测通过后才启用。
 
 错误统一为：
 
@@ -129,31 +176,67 @@ type KlineProvider interface {
 
 只有前五种错误允许路由尝试下一个 Provider；取消、deadline 已耗尽和非法本地请求立即结束。
 
-### 3.3 Provider 能力矩阵
+### 3.3 Provider Feed 规格矩阵
 
-| Provider | 接口 | 首期状态 | 已知窗口 | 关键限制 |
+| Provider | KlineFetcher | InstrumentFetcher | 首期状态 | 关键限制 |
 | --- | --- | --- | --- | --- |
-| EastMoney | `push2.eastmoney.com/api/qt/stock/kline/get?klt=1&fqt=0` | active，实测通过后启用 | 最新交易日约 240 根 | 成交量按手转股 |
-| Tencent | `ifzq.gtimg.cn/appstock/app/kline/mkline?param=<symbol>,m1,,<N>` | active，实测通过后启用 | 约 320 根 | 非公开数组协议，成交量按手转股 |
-| Sina | `quotes.sina.cn/cn/api/jsonp_v2.php/var%20_C=/CN_MarketDataService.getKLineData?scale=1&datalen=<N>` | active，实测通过后启用 | 最多约 1023 根 | 可能省略无成交分钟，成交量按股 |
-| Baidu | `finance.pae.baidu.com/selfselect/getstockquotation?group=quotation_minute_ab&newFormat=1&finClientType=pc&code=<symbol>` | shadow，完整 OHLCV 实测通过才 active | 当日分钟点 | 已观察到 403 风险，现有返回可能只有价格点 |
+| Binance | 现货/永续 K 线 | 完整交易对快照 | crypto active，迁入公共框架 | 保留现有闭合 K 线语义，删除直写 Storage |
+| EastMoney | `stock/kline/get?klt=1&fqt=0` | `clist/get` 完整分页 | stock active，实测通过后启用 | 最新交易日约 240 根，成交量按手转股 |
+| Tencent | `kline/mkline?...m1` | 待完整分页证据 | stock Kline active | 非公开数组协议，约 320 根，成交量按手转股 |
+| Sina | `getKLineData?scale=1` | `Market_Center.getHQNodeData` | stock active，实测通过后启用 | 最多约 1023 根，可能省略无成交分钟，成交量按股 |
+| Baidu | `quotation_minute_ab` shadow | `getmarketrank` 完整分页 | Instrument active；Kline shadow | 1m 可能只有价格点且有 403 风险，不得伪造 OHLC |
 
 生产启动条件是至少三个 `active` 1m Provider，且每个交易所至少有一个可用 Provider。百度不满足完整 K 线契约时不能阻塞前三个来源上线，也不能被静默当作 K 线源。
 
-### 3.4 稳定随机与故障切换
+### 3.4 固定 100 Group、Feed 限频与故障切换
 
-路由固定为 `stock_cn_equity_1m_v1`：
+路由固定为 `stock_cn_equity_1m_v1`，分片和 Provider 选择分两层完成：
 
-1. 按 Provider `enabled`、市场、频率、交易所能力过滤候选集。
-2. 对每个候选计算 weighted Rendezvous 分数，输入固定为 `route_id|route_version|subject_id|frequency|trading_date|provider_id`。
-3. 分数降序形成完整 `candidate_chain`。相同输入在所有地域和重试中得到相同顺序，不依赖进程内随机种子。
-4. 实时 Timer 对单个标的最多尝试前两个 Provider，每次尝试都必须留出 Storage 写入预算。
-5. 当前调用中某 Provider 连续出现系统性 `429/5xx/schema` 错误时，打开 invocation-local breaker，后续标的跳过该 Provider；函数结束后状态丢弃。
-6. 不把失败 Provider 的部分字段与成功 Provider 拼接。
+1. Universe 中每个 Subject 通过 Rendezvous Hash 稳定映射到 `group_id=0..99`；增加或删除少量标的只影响对应 Group，不再按排序连续切片导致全量漂移。
+2. 一个 Group 固定对应一个 `stock_cn` Timer SCF 函数。`required_group_size=ceil(active_subject_count/100)`，Reconciler 必须验证它不超过通过真实 SCF 压测得到的 `measured_safe_group_size`。
+3. 对 active Provider 生成按权重重复的 provider ring；以 `route_version + trading_date` 旋转 ring 后给 100 个 Group 分配主 Provider。三源等权时分布为 34/33/33，四源等权时为 25/25/25/25。
+4. 每个 Group 的第二候选在剩余 Provider 间均衡分散，避免一个主源故障后全部流量涌向同一备用源。交易日内 `candidate_chain` 稳定，不依赖进程内随机种子。
+5. `RateBudgetPlanner` 以实际 Group 大小计算每个 Provider 每分钟的主请求量和“任一其他 Provider 整体故障”时落到它的备用请求量。两者之和不得超过 probe 固化的 `safe_requests_per_minute`；默认预留至少 50% fallback headroom。额度不足时发布 NO-GO，不能靠 100 个本地 limiter 假装扩大上游配额。
+6. 在没有共享分布式限流器的前提下，Planner 把 Provider 总额度确定性切给其主/备 Group；每个函数只执行自身配额，并按 Feed 的 token bucket 和 semaphore 平滑请求。所有 Group 配额之和不得超过该 Feed 的安全总额，Fetcher 内不得隐藏 HTTP 重试。
+7. 100 个函数的 Timer 秒位稳定分散在第 5 到 39 秒，约每秒启动 3 个；Provider 主 Group 在各秒位也要均匀分布。最晚启动的函数仍必须在下一分钟前结束。不同地域或函数不视为独立出口 IP，也不增加总请求预算。
+8. 实时 Timer 对单个标的最多尝试两个 Provider。当前调用中某 Provider 连续出现系统性 `429/5xx/schema` 错误时打开 invocation-local breaker，后续标的跳过该 Provider；函数结束后状态丢弃。
+9. fallback 仍受备用 Feed 的预留额度、RateLimitPolicy 和总 deadline 约束；全源故障使预留额度耗尽时，将未完成的上线后分钟交给下一轮最近 3 根缓冲修复，不绕过限频，也不放宽 `collect_from`。
+10. 不把失败 Provider 的部分字段与成功 Provider 拼接。
 
-初始权重全部为 `1`。只有连续生产证据证明限频或稳定性差异后才通过路由配置调权，不在代码里写“新浪优先”之类隐式顺序。
+初始权重全部为 `1`。只有连续生产证据证明限频或稳定性差异后才通过 route 配置调整 Provider ring 权重。100 个函数是本期固定部署目标，不是容量充分性的假设；若 `required_group_size > measured_safe_group_size`，发布必须 NO-GO，而不是只采前 3000 个标的。
 
-### 3.5 双 Dataset 写入
+### 3.5 通用 Instrument 快照
+
+`InstrumentPipeline` 同时服务 crypto 和 stock，输入 `market_id + route_id`，输出完整的 `InstrumentSnapshot`：
+
+```text
+snapshot_id
+source_provider
+market_id
+fetched_at
+complete
+page_count
+exchange_counts
+instruments[]
+  subject_id
+  provider_symbol
+  exchange
+  name
+  status
+  list_date
+```
+
+规则：
+
+1. 一次快照的所有分页必须来自同一个 InstrumentFetcher；不得把 EastMoney 半份结果与 Sina 半份结果拼成“完整快照”。
+2. Fetcher 负责完成单一来源的协议分页并返回快照及分页证据；Pipeline 负责完整性检查、快照版本、Storage 注册和 Universe 切换。Fetcher 不直接构造 Storage 行，Pipeline 不理解各来源的 cursor/page 协议。
+3. 首次快照必须非空且覆盖 Market Module 要求的市场/交易所；后续快照出现分页中断、交易所全空或数量异常时保持上一版 active Universe。
+4. 只有完整快照才允许执行缺失标的 reconciliation。连续两个完整日快照均缺失的标的才转 inactive，防止来源短暂抖动导致批量下线。
+5. Binance 现有 `FetchSymbolSnapshot` 迁为 InstrumentFetcher；`symbol` 统一改名为 `instrument`，不保留第二套兼容数据类型。
+6. A 股完整快照决定 Universe 成员；各 Kline Provider 的标准外部 symbol 由经过 fixture/实测固定的 Provider codec 从 `exchange + code` 生成并写入 SubjectSymbol，少量无法确定的格式必须来自该 Provider 快照的显式 override。启用某 Feed 前必须证明其候选 Subject 都能解析，不能在请求时猜测。
+7. A 股每日开盘前执行一次完整 Instrument Invoke；加密货币保持自身配置的快照周期。两者复用同一 Pipeline、Storage writer 和结果契约。
+
+### 3.6 双 Dataset 写入
 
 来源 Dataset：
 
@@ -186,10 +269,10 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 3. 若第二步失败，返回可重试错误；下一次重试允许重复第一步，依靠同 RowKey Upsert 和确定事件 ID 幂等补齐。
 4. 不在一次 `PrimaryStore.UpsertRows` 中混合两个 Dataset，也不宣称跨 Dataset 原子。
 
-### 3.6 上线时间围栏
+### 3.7 上线时间围栏
 
 - `history_policy` 固定为 `live_only`。
-- Rule 第一次从 disabled 变为 enabled 时持久化 `collect_from=enabled_at`；重新启用生成新的值。
+- Rule 第一次从 disabled 变为 enabled 时持久化 `coverage_start_time=enabled_at`；重新启用生成新的值。SCF Environment 中的 `collect_from` 是该字段的原样副本，两者不得独立计算或漂移。
 - K 线入库条件为 `bar.close_time > collect_from`，因此不会写入启用前已经闭合的分钟。
 - Gap Audit 起点为 `max(last_watermark, collect_from)`，终点只到最近应闭合桶。
 - 上线后的缺口最多回看 4 个交易日；超过窗口的缺口只报警，不继续排队，也不把边界向上线前移动。
@@ -200,16 +283,18 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
 | 路径 | 责任 |
 | --- | --- |
-| `modules/collector/internal/marketdata/` | CanonicalBar、Provider 接口、错误、能力、路由纯函数 |
-| `modules/collector/internal/sources/binance/runtime.go` | Binance 适配到公共 Provider 契约，保持 crypto 行为 |
+| `modules/collector/internal/marketdata/` | MarketProvider、Kline/Instrument Fetcher、Spec、RateLimitPolicy、CanonicalBar/Snapshot、Registry 与路由纯函数 |
+| `modules/collector/internal/sources/binance/runtime.go` | Binance 同时适配公共 KlineFetcher 与 InstrumentFetcher，保持 crypto 行为 |
 | `modules/collector/internal/sources/stockcn/common.go` | A 股 Subject、symbol 与响应公共校验 |
-| `modules/collector/internal/sources/stockcn/eastmoney/` | 东方财富 1m 与 Universe 适配 |
+| `modules/collector/internal/sources/stockcn/eastmoney/` | 东方财富 KlineFetcher 与 InstrumentFetcher |
 | `modules/collector/internal/sources/stockcn/tencent/` | 腾讯 1m 适配 |
-| `modules/collector/internal/sources/stockcn/sina/` | 新浪 1m 与 Universe fallback 适配 |
-| `modules/collector/internal/sources/stockcn/baidu/` | 百度探测、fixture 与 shadow 适配 |
+| `modules/collector/internal/sources/stockcn/sina/` | 新浪 KlineFetcher 与 InstrumentFetcher |
+| `modules/collector/internal/sources/stockcn/baidu/` | 百度 InstrumentFetcher、探测 fixture 与 Kline shadow 适配 |
 | `modules/collector/internal/markets/stockcn/` | 交易日历、Session、Universe 和路由配置 |
-| `modules/collector/internal/marketfetch/pipeline.go` | Provider 路由、两阶段 Storage 写入和结果日志 |
+| `modules/collector/internal/marketfetch/kline_pipeline.go` | KlineFetcher 路由、限频、两阶段 Storage 写入和结果日志 |
+| `modules/collector/internal/marketfetch/instrument_pipeline.go` | 通用完整标的快照、完整性保护、Subject 注册和 Universe 切换 |
 | `modules/collector/internal/marketfetch/storage.go` | 从 Binance 包迁出的通用 Storage 适配 |
+| `modules/collector/internal/serverless/runtime.go` | crypto/stock 共用 Handler factory 和 execution budget |
 | `modules/collector/internal/serverless/stock_cn/` | stock_cn Timer/Invoke Handler |
 | `modules/collector/cmd/scf/stock_cn/main.go` | stock_cn SCF 入口 |
 | `modules/collector/configs/scf/stock_cn/` | stock_cn SCF 运行配置和 Provider 开关 |
@@ -226,11 +311,11 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 - Create: `modules/collector/internal/sources/stockcn/probe.go`
 - Create: `modules/collector/internal/sources/stockcn/probe_test.go`
 - Create: `modules/collector/internal/sources/stockcn/testdata/probe_contract.json`
-- Create: `docs/validation/stock-cn-provider-1m.md`
+- Create: `docs/validation/stock-cn-provider-validation.md`
 
 - [ ] **Step 1: 写失败测试，固定 probe 输出契约**
 
-  测试输出必须包含 `provider_id`、`exchange`、`symbol`、`http_status`、`latency_ms`、`bar_count`、`latest_bar_start`、`latest_bar_end`、`has_ohlcv`、`volume_unit`、`amount_unit`、`result` 和非敏感 `error_kind`。禁止保存 Cookie、完整 Header 或响应中的身份凭据。
+  每条记录必须包含 `provider_id`、`feed_kind`、`exchange`、`symbol`、`http_status`、`latency_ms`、`result` 和非敏感 `error_kind`。Kline probe 另含 `bar_count`、`latest_bar_start/end`、`has_ohlcv`、`volume_unit`、`amount_unit`；Instrument probe 另含 `page_count`、`instrument_count`、`complete` 和交易所覆盖。Rate probe 记录并发档位、观察到的 429、p50/p95 和建议 `RateLimitPolicy`。禁止保存 Cookie、完整 Header 或响应中的身份凭据。
 
 - [ ] **Step 2: 运行红灯测试**
 
@@ -243,18 +328,20 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
 - [ ] **Step 3: 实现独立 probe，不接入生产路由**
 
-  对 `XSHG/XSHE/XBSE` 各选一个高流动性样本，在交易时段对四个 Provider 执行只读请求。每次请求设置 2 秒超时，只取最多 3 根，响应体上限 1MB。判断标准不是 HTTP 200，而是最新闭合分钟具备完整 OHLCV、时间语义可解释、单位已确认。
+  对 `XSHG/XSHE/XBSE` 各选一个高流动性样本，在交易时段对四个 Provider 执行只读 Kline 请求；再独立执行完整 Instrument 分页探测。每次 Kline 请求设置 2 秒超时、只取最多 3 根、响应体上限 1MB。判断标准不是 HTTP 200，而是最新闭合分钟具备完整 OHLCV、时间语义可解释、单位已确认。Instrument 只有页终止条件、交易所覆盖和完整数量检查全部通过才可标记 `FullSnapshot=true`。
+
+  在测试账号和非生产窗口逐级执行并发 1/2/4/8 的短时 Rate probe，遇到 429 或明显错误上升立即停止；结果只用于生成保守的 Feed 级 `RateLimitPolicy`，不得把探测峰值直接当生产配置。
 
 - [ ] **Step 4: 保存去敏后的真实验证记录**
 
   ```bash
   cd modules/collector
-  go run ./cmd/providerprobe --market stock_cn --frequency 1m \
+  go run ./cmd/providerprobe --market stock_cn --feed all --frequency 1m \
     --subjects 600000.XSHG,000001.XSHE,920000.XBSE \
-    --output ../../docs/validation/stock-cn-provider-1m.md
+    --output ../../docs/validation/stock-cn-provider-validation.md
   ```
 
-  Expected: 东方财富、腾讯、新浪分别给出 PASS/FAIL 证据；百度若只有价格点或 403，明确记录 `result=shadow_only`，不得写成 PASS。
+  Expected: 每个 Provider 分别给出 KlineSpec、InstrumentSpec 和 RateLimitPolicy 证据；东方财富、腾讯、新浪 Kline 各自 PASS/FAIL，完整 Instrument 接口单独 PASS/FAIL。百度若只有价格点或 403，明确记录 Kline `result=shadow_only`，但不影响其 Instrument 结果。
 
 - [ ] **Step 5: 运行测试并提交**
 
@@ -266,15 +353,19 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
     modules/collector/internal/sources/stockcn/probe.go \
     modules/collector/internal/sources/stockcn/probe_test.go \
     modules/collector/internal/sources/stockcn/testdata/probe_contract.json \
-    docs/validation/stock-cn-provider-1m.md
+    docs/validation/stock-cn-provider-validation.md
   git commit -m 'test(collector): 固化A股1m数据源探测契约'
   ```
 
-### Task 2: 建立公共行情 Provider 契约并迁移 Binance
+### Task 2: 建立公共 Provider/Fetcher/Spec 框架并迁移 Binance
 
 **Files:**
 - Create: `modules/collector/internal/marketdata/bar.go`
+- Create: `modules/collector/internal/marketdata/instrument.go`
 - Create: `modules/collector/internal/marketdata/provider.go`
+- Create: `modules/collector/internal/marketdata/spec.go`
+- Create: `modules/collector/internal/marketdata/rate_limit.go`
+- Create: `modules/collector/internal/marketdata/rate_limit_test.go`
 - Create: `modules/collector/internal/marketdata/errors.go`
 - Create: `modules/collector/internal/marketdata/validation.go`
 - Create: `modules/collector/internal/marketdata/validation_test.go`
@@ -284,32 +375,36 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 - Modify: `modules/collector/internal/marketfetch/handler.go:45-190`
 - Modify: `modules/collector/internal/marketfetch/executor.go:40-540`
 - Modify: `modules/collector/internal/sources/binance/kline.go:51-157`
-- Modify: `modules/collector/internal/sources/registry.go:21-76`
+- Modify: `modules/collector/internal/sources/binance/symbol.go:39-108`
+- Modify: `modules/collector/internal/sources/interface.go:13-70`
+- Modify: `modules/collector/internal/sources/interface_test.go`
+- Delete: `modules/collector/internal/sources/registry.go`
+- Delete: `modules/collector/internal/sources/registry_test.go`
 
-- [ ] **Step 1: 写 CanonicalBar、错误分类和 Registry 红灯测试**
+- [ ] **Step 1: 写 Spec、CanonicalBar、InstrumentSnapshot、错误分类和 Registry 红灯测试**
 
-  覆盖 NaN/Inf、OHLC 关系、负 volume、非 `1m`、重复 Provider ID、未知 Provider、context cancel 不可 fallback。
+  覆盖 NaN/Inf、OHLC 关系、负 volume、非 `1m`、不完整 Instrument Snapshot、重复 Provider ID、未知 Provider、Fetcher 类型查询、非法 Feed RateLimitPolicy 和 context cancel 不可 fallback。代码和测试中不得保留旧的泛化能力类型或方法。
 
 - [ ] **Step 2: 运行红灯测试**
 
   ```bash
   cd modules/collector
-  go test -run 'TestValidateCanonicalBar|TestProviderRegistry' ./internal/marketdata
+  go test -run 'Test.*Spec|TestValidateCanonicalBar|TestInstrumentSnapshot|TestProviderRegistry|TestRateLimitPolicy' ./internal/marketdata
   ```
 
   Expected: FAIL，公共包尚不存在。
 
-- [ ] **Step 3: 实现最小公共接口和 Registry**
+- [ ] **Step 3: 实现 MarketProvider、强类型 Fetcher 和唯一 Registry**
 
-  Registry 只负责按 ID 查找 Provider，不把路由、Storage 或 Rule 放进接口。删除 Kline 路径上重复的旧 `CollectorRegistry` 扩展面；Symbol 采集在 Task 9 迁移完后也只保留一个注册入口。
+  Registry 只负责按 ID 注册 `MarketProvider`，并通过强类型断言提供 `KlineFetcher(id)`、`InstrumentFetcher(id)`；不把路由、Storage 或 Rule 放进接口。删除弱类型 `sources.Collector`/`CollectorRegistry` 的注册和 builder，不保留第二套兼容扩展面。后续新增 Quote/Calendar Fetcher 时沿用同一 Provider 身份，不复制 Registry。
 
-- [ ] **Step 4: 用适配器让 Binance 走同一接口**
+- [ ] **Step 4: 让 Binance 同时实现 KlineFetcher 与 InstrumentFetcher**
 
-  把 Binance 响应转换为 `CanonicalBar`，保留“只接受闭合 K 线”的现有语义。`Executor` 不再检查 `provider == binance`，也不再调用 `binance.InstTypeForMarket`；Handler 从 Registry 注入运行时。
+  把 Binance K 线响应转换为 `CanonicalBar`，把现有完整 Symbol 快照转换为 `InstrumentSnapshot`，保留闭合 K 线、active USDT instrument 和 snapshot version 语义。`Executor` 不再检查 `provider == binance`，也不再调用 `binance.InstTypeForMarket`；Handler 从唯一 Registry 注入运行时。此步骤只迁移 Fetcher，不让 Binance Fetcher 直接写 Storage；通用 InstrumentPipeline 在 Task 9 接管写入。
 
 - [ ] **Step 5: 泛化错误和 DNS 日志**
 
-  `dnsReportFields` 从 `Provider.Hosts()` 取域名；所有 `binance_*` 通用错误名改为 `provider_*`。Provider 自有协议错误保留 `provider_id` 字段，不把 Provider 名写死在错误常量中。
+  `dnsReportFields` 从 `ProviderDescriptor`/Feed Spec 取域名；所有 `binance_*` 通用错误名改为 `provider_*`。Provider 自有协议错误保留 `provider_id` 和 `feed_kind` 字段，不把 Provider 名写死在错误常量中。Rate limiter key 使用 `provider_id + feed_kind + endpoint_group`，避免 Instrument 分页挤占 Kline 配额。
 
 - [ ] **Step 6: 验证 crypto 行为未回归并提交**
 
@@ -322,8 +417,12 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
     modules/collector/internal/marketfetch/executor.go \
     modules/collector/internal/sources/binance/runtime.go \
     modules/collector/internal/sources/binance/kline.go \
-    modules/collector/internal/sources/registry.go
-  git commit -m 'refactor(collector): 统一行情Provider运行契约'
+    modules/collector/internal/sources/binance/symbol.go \
+    modules/collector/internal/sources/interface.go \
+    modules/collector/internal/sources/interface_test.go \
+    modules/collector/internal/sources/registry.go \
+    modules/collector/internal/sources/registry_test.go
+  git commit -m 'refactor(collector): 统一市场Provider和Fetcher契约'
   ```
 
 ### Task 3: 固定 `1m` Metadata 与 Storage 频率约束
@@ -448,9 +547,9 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 - Create: `modules/collector/internal/sources/stockcn/baidu/provider_test.go`
 - Create: `modules/collector/internal/sources/stockcn/baidu/testdata/*.json`
 
-- [ ] **Step 1: 为每个 Provider 写 fixture 红灯测试**
+- [ ] **Step 1: 为每个 Provider 写 Spec 与 fixture 红灯测试**
 
-  每组至少覆盖正常响应、空响应、字段缺失、非 2xx、429、响应超限、未闭合末根、时间标签转换和 SH/SZ/BSE symbol。测试只读本地 fixture，不让 `go test` 访问公网。
+  断言 `Descriptor()` 的稳定 Provider ID，以及 Kline Feed 的 `KlineSpec`、`RateLimitPolicy` 和支持交易所。每组至少覆盖正常响应、空响应、字段缺失、非 2xx、429、响应超限、未闭合末根、时间标签转换和 SH/SZ/BSE symbol。测试只读本地 fixture，不让 `go test` 访问公网。
 
 - [ ] **Step 2: 运行红灯测试**
 
@@ -461,17 +560,17 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
   Expected: FAIL，四个 Adapter 尚不存在。
 
-- [ ] **Step 3: 实现严格 symbol 转换**
+- [ ] **Step 3: 实现可验证的严格 symbol 转换**
 
-  外部 symbol 来自 Instrument Feed 固化的 SubjectSymbol 映射。Adapter 校验映射与交易所一致；缺失时返回 `ErrUnsupportedSymbol`，禁止尝试删除后缀、只看首位数字等猜测逻辑。
+  普通股票使用经 fixture 和真实探测固定的 `exchange + code` 确定性转换；特殊格式由 Instrument 快照写入紧凑的 SubjectSymbol override。Adapter 必须校验转换结果与交易所一致，无法确定时返回 `ErrUnsupportedSymbol`，禁止删除后缀、只看首位数字等猜测逻辑。SCF Environment 不携带全市场四源 symbol JSON。
 
-- [ ] **Step 4: 实现三组完整 K 线 Adapter**
+- [ ] **Step 4: 实现三个完整 KlineFetcher**
 
-  每个 HTTP client 设置整体超时、连接复用、响应大小上限和明确 User-Agent；解析后立即标准化时间、成交量和成交额，再调用公共 `ValidateCanonicalBar`。只返回目标闭合桶及最多两个相邻重试桶。
+  EastMoney、Tencent、Sina 分别实现 `MarketProvider + KlineFetcher`。每个 HTTP client 设置整体超时、连接复用、响应大小上限和明确 User-Agent；解析后立即标准化时间、成交量和成交额，再调用公共 `ValidateCanonicalBar`。只返回目标闭合桶及最多两个相邻重试桶；Fetcher 内不做隐藏重试。
 
-- [ ] **Step 5: 实现百度 shadow Adapter**
+- [ ] **Step 5: 实现百度 Kline shadow Adapter**
 
-  百度响应若没有完整 open/high/low/close，返回 `ErrUnsupportedFrequency` 或 `Capabilities.Kline1m=false`，同时允许 probe 记录价格点能力。只有 Task 1 的真实证据确认完整 OHLCV 后，才增加对应 parser fixture 并将 Kline capability 改为 true。
+  百度响应若没有完整 open/high/low/close，则不向 Registry 暴露 `KlineFetcher`，其 `KlineSpec.CompleteOHLCV=false` 只供 probe 和配置校验读取。只有 Task 1 的真实证据确认完整 OHLCV 后，才增加对应 parser fixture、将该值改为 true 并注册 Kline Feed。百度 InstrumentFetcher 在 Task 9 实现，不与 Kline shadow 状态绑定。
 
 - [ ] **Step 6: 交叉验证单位**
 
@@ -492,40 +591,46 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
   git commit -m 'feat(collector): 接入A股四路行情Adapter'
   ```
 
-### Task 6: 实现确定性多源路由与有界 fallback
+### Task 6: 实现固定 100 Group、Feed 限频与有界 fallback
 
 **Files:**
 - Create: `modules/collector/internal/marketdata/router.go`
 - Create: `modules/collector/internal/marketdata/router_test.go`
+- Create: `modules/collector/internal/marketdata/sharding.go`
+- Create: `modules/collector/internal/marketdata/sharding_test.go`
+- Create: `modules/collector/internal/marketdata/rate_limiter.go`
+- Create: `modules/collector/internal/marketdata/rate_limiter_test.go`
+- Create: `modules/collector/internal/marketdata/rate_budget.go`
+- Create: `modules/collector/internal/marketdata/rate_budget_test.go`
 - Create: `modules/collector/internal/marketdata/breaker.go`
 - Create: `modules/collector/internal/marketdata/breaker_test.go`
 - Create: `modules/collector/config/markets/stock_cn/route.yaml`
 - Create: `modules/collector/config/markets/stock_cn/route_test.go`
 
-- [ ] **Step 1: 写稳定排序和分布红灯测试**
+- [ ] **Step 1: 写固定 Group 与 Provider 分布红灯测试**
 
-  断言同一交易日、标的和 route version 的候选链稳定；修改交易日或 version 可重排；1000 个 Subject 在三个等权 Provider 间无单源明显偏斜；disabled/shadow/不支持交易所的 Provider 不进入候选链。
+  断言每个 Subject 通过 Rendezvous Hash 恰好落入 `group_id=0..99` 中一个 Group；输入顺序变化不改变结果；增删少量 Subject 不造成全量漂移。三个等权 active Kline Feed 的主 Group 分布必须是 34/33/33，四个等权 Feed 必须是 25/25/25/25；第二候选也在其余 Provider 间均衡分散。disabled、shadow、不支持目标交易所或 Feed Spec 不满足 `1m + CompleteOHLCV` 的 Provider 不进入候选链。
 
-- [ ] **Step 2: 写 fallback 红灯测试**
+- [ ] **Step 2: 写限频与 fallback 红灯测试**
 
-  覆盖首选超时后次选成功、首选返回未闭合后次选成功、context cancel 不 fallback、最多两个尝试、系统性 429 打开调用内 breaker、某 Provider breaker 后其他标的直接跳过。
+  覆盖 `RateBudgetPlanner` 在三源 34/33/33、四源 25/25/25/25 下按实际 Group 大小计算主请求与单源故障备用请求；总量超过 `safe_requests_per_minute` 时拒绝发布。再覆盖 Feed token bucket 的 RPS/burst、并发 semaphore、等待超过剩余 deadline 时立即失败，以及首选超时后次选成功、context cancel 不 fallback、最多两个尝试、系统性 429 打开调用内 breaker。备用 Provider 必须先取得预留配额。
 
 - [ ] **Step 3: 运行红灯测试**
 
   ```bash
   cd modules/collector
-  go test -run 'TestRendezvous|TestFallback|TestInvocationBreaker' ./internal/marketdata
+  go test -run 'TestStableGroup|TestProviderRing|TestRateBudgetPlanner|TestFeedRateLimiter|TestFallback|TestInvocationBreaker' ./internal/marketdata
   ```
 
-  Expected: FAIL，Router 和 breaker 尚不存在。
+  Expected: FAIL，固定 Group、Router、Feed rate limiter 和 breaker 尚不存在。
 
-- [ ] **Step 4: 实现 weighted Rendezvous**
+- [ ] **Step 4: 实现两层确定性分配**
 
-  使用稳定哈希和显式权重计算分数，禁止 `math/rand`。路由输出 `candidate_chain`、每次尝试的 `route_rank` 和最终 `source_provider`，供 Pipeline 与 CLS 使用。
+  第一层使用 Rendezvous Hash 将 Subject 稳定映射到固定 100 Group；第二层以 `route_version + trading_date` 旋转显式权重 provider ring，为 Group 生成主 Provider 和候选链。禁止 `math/rand`。路由输出 `group_id`、`candidate_chain`、每次尝试的 `route_rank` 和最终 `source_provider`，供 Pipeline 与 CLS 使用。
 
-- [ ] **Step 5: 实现调用内 breaker**
+- [ ] **Step 5: 实现 Feed 限频与调用内 breaker**
 
-  breaker 只统计当前 SCF invocation；触发阈值和错误类型从 `route.yaml` 读取。业务空数据、停牌和 symbol 不支持不得污染全局 Provider 状态。
+  Planner 先按最保守共享出口模型把每个 Provider Feed 的分钟总额切分到主/备 Group；每个 invocation 再按 `provider_id + feed_kind + endpoint_group` 创建 token bucket、并发 semaphore 和 breaker。策略来自 Feed Spec，route 配置只允许更保守的覆盖。breaker 只统计当前调用；业务空数据、停牌和 symbol 不支持不得污染 Provider 状态。若 fallback 流量会突破备用 Feed 配额，返回可重试结果而不是绕过限频。
 
 - [ ] **Step 6: 验证并提交**
 
@@ -535,11 +640,17 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
   cd ../..
   git add modules/collector/internal/marketdata/router.go \
     modules/collector/internal/marketdata/router_test.go \
+    modules/collector/internal/marketdata/sharding.go \
+    modules/collector/internal/marketdata/sharding_test.go \
+    modules/collector/internal/marketdata/rate_limiter.go \
+    modules/collector/internal/marketdata/rate_limiter_test.go \
+    modules/collector/internal/marketdata/rate_budget.go \
+    modules/collector/internal/marketdata/rate_budget_test.go \
     modules/collector/internal/marketdata/breaker.go \
     modules/collector/internal/marketdata/breaker_test.go \
     modules/collector/config/markets/stock_cn/route.yaml \
     modules/collector/config/markets/stock_cn/route_test.go
-  git commit -m 'feat(collector): 增加确定性多源路由和故障切换'
+  git commit -m 'feat(collector): 增加固定分组和多源限频路由'
   ```
 
 ### Task 7: 实现来源与统一 K 线两阶段写入
@@ -547,15 +658,15 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 **Files:**
 - Create: `modules/collector/internal/marketfetch/storage.go`
 - Create: `modules/collector/internal/marketfetch/storage_test.go`
-- Create: `modules/collector/internal/marketfetch/pipeline.go`
-- Create: `modules/collector/internal/marketfetch/pipeline_test.go`
+- Create: `modules/collector/internal/marketfetch/kline_pipeline.go`
+- Create: `modules/collector/internal/marketfetch/kline_pipeline_test.go`
 - Modify: `modules/collector/internal/sources/binance/storage_rpc.go:27-260`
 - Modify: `modules/collector/internal/marketfetch/executor.go:120-407`
 - Modify: `modules/collector/internal/marketfetch/handler.go:171-190`
 
 - [ ] **Step 1: 写两阶段写入红灯测试**
 
-  覆盖：来源和统一 RowKey/tag 正确；一次批量调用包含多个 Provider 来源行；来源写失败时不写统一；统一写失败后整体返回可重试；重复执行不产生新 RowKey；统一行全部字段来自同一来源行。
+  覆盖：Pipeline 只接受强类型 `KlineFetcher`；来源和统一 RowKey/tag 正确；一次 Group 调用可以包含多个最终来源；来源写失败时不写统一；统一写失败后整体返回可重试；重复执行不产生新 RowKey；统一行全部字段来自同一来源行。
 
 - [ ] **Step 2: 运行红灯测试**
 
@@ -586,8 +697,8 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
   cd ../..
   git add modules/collector/internal/marketfetch/storage.go \
     modules/collector/internal/marketfetch/storage_test.go \
-    modules/collector/internal/marketfetch/pipeline.go \
-    modules/collector/internal/marketfetch/pipeline_test.go \
+    modules/collector/internal/marketfetch/kline_pipeline.go \
+    modules/collector/internal/marketfetch/kline_pipeline_test.go \
     modules/collector/internal/marketfetch/executor.go \
     modules/collector/internal/marketfetch/handler.go \
     modules/collector/internal/sources/binance/storage_rpc.go
@@ -614,7 +725,7 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
 - [ ] **Step 1: 写 greenfield schema 红灯测试**
 
-  Rule 用 `market_id + route_id` 表达来源策略；TaskInstance 持久化 `route_id + coverage_start_time`，稳定 TaskID 不包含具体 Provider。删除仅为旧 Provider 固定任务保留的字段和分支，不写 migration 兼容层。
+  Rule 用 `market_id + data_kind + route_id` 表达来源策略，其中 `data_kind` 只允许 `kline|instrument`；TaskInstance 持久化 `route_id + coverage_start_time`，稳定 TaskID 不包含具体 Provider。删除仅为旧 Provider 固定任务保留的字段和分支，不写 migration 兼容层。crypto 与 stock 使用相同字段，不再以 Binance `symbol` 作为单独任务类型。
 
 - [ ] **Step 2: 写启停围栏红灯测试**
 
@@ -666,67 +777,81 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
   git commit -m 'feat(collector): 增加实时采集上线时间围栏'
   ```
 
-### Task 9: 建立 A 股 Universe 与 Provider Symbol 映射
+### Task 9: 建立通用 InstrumentPipeline 并迁移 crypto/stock 标的快照
 
 **Files:**
+- Create: `modules/collector/internal/marketfetch/instrument_pipeline.go`
+- Create: `modules/collector/internal/marketfetch/instrument_pipeline_test.go`
 - Create: `modules/collector/internal/markets/stockcn/universe.go`
 - Create: `modules/collector/internal/markets/stockcn/universe_test.go`
-- Create: `modules/collector/internal/sources/stockcn/eastmoney/universe.go`
-- Create: `modules/collector/internal/sources/stockcn/eastmoney/universe_test.go`
-- Create: `modules/collector/internal/sources/stockcn/sina/universe.go`
-- Create: `modules/collector/internal/sources/stockcn/sina/universe_test.go`
+- Create: `modules/collector/internal/sources/stockcn/eastmoney/instrument.go`
+- Create: `modules/collector/internal/sources/stockcn/eastmoney/instrument_test.go`
+- Create: `modules/collector/internal/sources/stockcn/sina/instrument.go`
+- Create: `modules/collector/internal/sources/stockcn/sina/instrument_test.go`
+- Create: `modules/collector/internal/sources/stockcn/baidu/instrument.go`
+- Create: `modules/collector/internal/sources/stockcn/baidu/instrument_test.go`
+- Modify: `modules/collector/internal/sources/binance/symbol.go:39-108`
 - Modify: `modules/collector/internal/marketfetch/executor.go:529-547`
 - Modify: `modules/collector/internal/planner/storagesource/source.go:121-224`
 - Modify: `modules/collector/internal/planner/storagesource/source_test.go:67-150`
 - Modify: `examples/setup/default/collector-rules.yaml`
 - Modify: `modules/collector/internal/ruleseed/seed_test.go`
 
-- [ ] **Step 1: 写 Universe 快照红灯测试**
+- [ ] **Step 1: 写通用 InstrumentPipeline 红灯测试**
 
-  断言 EastMoney 主源和 Sina fallback 都输出稳定 SubjectID、名称、exchange、status 和四个 Provider 的外部 symbol 映射；重复代码、交易所冲突和非法代码使整次快照失败。
+  对 Binance 和 stock fixture 使用同一组契约测试，断言 Pipeline 只接收 `InstrumentFetcher`，输出稳定 `snapshot_id/source_provider/market_id`，注册 Subject、SubjectSymbol、DatasetSubject，并仅在完整写入成功后切换 Universe。公开任务和结果统一使用 `instrument`；不得保留并行的 Binance `symbol` 数据类型。
 
-- [ ] **Step 2: 写完整性保护测试**
+- [ ] **Step 2: 写单来源分页与完整性保护测试**
 
-  首次快照必须非空且覆盖配置的交易所；后续快照 active 数骤降、某交易所全空或分页不完整时不得批量下线旧 Subject。只有完整快照才允许执行缺失标的 reconciliation。
+  EastMoney、Sina、Baidu 各自必须在一个 Fetcher 调用内完成所有分页并附带 `page_count`、终止原因和交易所计数；任一页失败则整份快照失败。禁止把多个 Provider 的页面混合。首次快照必须非空且覆盖配置交易所；后续快照 active 数骤降、某交易所全空、重复代码、交易所冲突或分页不完整时保持上一版 Universe。
 
 - [ ] **Step 3: 运行红灯测试**
 
   ```bash
   cd modules/collector
-  go test -run 'TestUniverse|TestStorageSource.*ProviderSymbols' ./internal/markets/stockcn ./internal/planner/storagesource
+  go test -run 'TestInstrumentPipeline|TestUniverse|TestStorageSource.*ProviderSymbols' ./internal/marketfetch ./internal/markets/stockcn ./internal/planner/storagesource
   ```
 
-  Expected: FAIL，Symbol path 仍调用 `binance.BuildSymbolRegisterRequests`。
+  Expected: FAIL，通用 InstrumentPipeline 尚不存在，现有路径仍调用 `binance.BuildSymbolRegisterRequests`。
 
-- [ ] **Step 4: 实现 Instrument Feed**
+- [ ] **Step 4: 迁移 Binance 并实现 A 股 InstrumentFetcher**
 
-  使用 Storage `RegisterDataSubject` 动态注册 Subject、每个 Provider 的 SubjectSymbol 和两个 K 线 DatasetSubject binding。Seed 只保留静态 DataSource/Dataset/Rule，不写运行态证券列表。
+  将 Binance 现有完整 Symbol 快照迁入 InstrumentFetcher，使用回归测试固定 active USDT instrument 数、SubjectID、snapshot version 和绑定行为。EastMoney 为 stock 首选 InstrumentFetcher，Sina 和 Baidu 是整份快照级 fallback；一次失败只能改用另一个 Provider 重新获取完整快照，不能续接失败来源的下一页。Tencent 只有 Task 1 证明存在完整全市场分页接口后才可注册 InstrumentFetcher，否则只保留 KlineFetcher。
 
-- [ ] **Step 5: 设置 Universe 调度**
+- [ ] **Step 5: 实现原子 Universe 切换和缺失确认**
 
-  每个交易日上午开盘前通过 invoke 节点刷新完整快照，失败保持上一版 active universe。实时 Timer 只消费最后一次完整成功版本和对应 hash。
+  使用 Storage `RegisterDataSubject` 动态注册 Subject、快照来源 symbol、经验证的 Provider codec 结果、特殊 SubjectSymbol override 和 K 线 DatasetSubject binding。只有完整快照及全部 Storage 写入成功后才更新 active Universe/version；缺失标的必须连续两个完整日快照均未出现才转 inactive。Seed 只保留静态 DataSource/Dataset/Rule，不写运行态证券列表。
 
-- [ ] **Step 6: 验证并提交**
+- [ ] **Step 6: 设置两个市场各自的 Instrument 调度**
+
+  `stock_cn` 每个交易日开盘前通过有界 Invoke action 刷新一次完整快照，`crypto_market` 保持自身配置周期；两者复用当前市场 SCF 二进制、Handler factory、InstrumentPipeline 和 Storage writer，不新增第三套函数集群。失败时保留上一版 active Universe；Kline Timer 只消费最后一次完整成功版本和对应 hash。
+
+- [ ] **Step 7: 验证并提交**
 
   ```bash
   cd modules/collector
-  go test -race -count=1 ./internal/markets/stockcn ./internal/sources/stockcn/... ./internal/planner/storagesource ./internal/ruleseed
+  go test -race -count=1 ./internal/marketfetch ./internal/markets/stockcn ./internal/sources/binance ./internal/sources/stockcn/... ./internal/planner/storagesource ./internal/ruleseed
   cd ../..
-  git add modules/collector/internal/markets/stockcn/universe.go \
+  git add modules/collector/internal/marketfetch/instrument_pipeline.go \
+    modules/collector/internal/marketfetch/instrument_pipeline_test.go \
+    modules/collector/internal/markets/stockcn/universe.go \
     modules/collector/internal/markets/stockcn/universe_test.go \
-    modules/collector/internal/sources/stockcn/eastmoney/universe.go \
-    modules/collector/internal/sources/stockcn/eastmoney/universe_test.go \
-    modules/collector/internal/sources/stockcn/sina/universe.go \
-    modules/collector/internal/sources/stockcn/sina/universe_test.go \
+    modules/collector/internal/sources/stockcn/eastmoney/instrument.go \
+    modules/collector/internal/sources/stockcn/eastmoney/instrument_test.go \
+    modules/collector/internal/sources/stockcn/sina/instrument.go \
+    modules/collector/internal/sources/stockcn/sina/instrument_test.go \
+    modules/collector/internal/sources/stockcn/baidu/instrument.go \
+    modules/collector/internal/sources/stockcn/baidu/instrument_test.go \
+    modules/collector/internal/sources/binance/symbol.go \
     modules/collector/internal/marketfetch/executor.go \
     modules/collector/internal/planner/storagesource/source.go \
     modules/collector/internal/planner/storagesource/source_test.go \
     modules/collector/internal/ruleseed/seed_test.go \
     examples/setup/default/collector-rules.yaml
-  git commit -m 'feat(collector): 增加A股标的快照和代码映射'
+  git commit -m 'feat(collector): 统一市场标的快照管线'
   ```
 
-### Task 10: 泛化 Timer Assignment/Environment 并增加 stock_cn SCF
+### Task 10: 将全市场映射到固定 100 Group 并增加 stock_cn SCF Runtime
 
 **Files:**
 - Modify: `modules/collector/internal/marketfetch/assignment.go:13-189`
@@ -737,17 +862,21 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 - Modify: `modules/collector/internal/marketfetch/timer_test.go`
 - Modify: `modules/collector/internal/marketfetch/reconciler.go:267-680`
 - Modify: `modules/collector/internal/marketfetch/reconciler_test.go`
+- Create: `modules/collector/internal/serverless/runtime.go`
+- Create: `modules/collector/internal/serverless/runtime_test.go`
+- Modify: `modules/collector/internal/serverless/crypto_market/handler.go:1-220`
+- Modify: `modules/collector/internal/serverless/crypto_market/handler_test.go`
 - Create: `modules/collector/internal/serverless/stock_cn/handler.go`
 - Create: `modules/collector/internal/serverless/stock_cn/handler_test.go`
 - Create: `modules/collector/cmd/scf/stock_cn/main.go`
 
-- [ ] **Step 1: 写 Provider 无关分片红灯测试**
+- [ ] **Step 1: 写恰好 100 Group 的分片红灯测试**
 
-  Group key 和 assignment hash 包含 `market_id + route_id + dataset_id + frequency + universe_version + coverage_start_time`，不包含最终 Provider。相同输入稳定分片，route version 变更触发环境更新。
+  对 active Universe 创建恰好 100 个逻辑 Group 和 100 份 stock assignment；每个 Subject 恰好出现一次，Group ID 覆盖 `0..99`，输入顺序变化不改变归属。Group key 和 assignment hash 包含 `market_id + route_id + dataset_id + frequency + universe_version + coverage_start_time`，不包含最终 Provider；route version 变更触发环境更新。函数节点少于或多于 100 都返回配置错误，不静默缩放目标数。
 
-- [ ] **Step 2: 写环境预算红灯测试**
+- [ ] **Step 2: 写容量和环境预算红灯测试**
 
-  新环境包含 route config、每个 Subject 的显式 Provider symbol 映射、calendar version 和 `collect_from`。真实 UTF-8 字节总量超过受管预算时，Reconciler 在 30 以内继续拆分；CloudNode 最终仍校验完整 4KB Environment。
+  Reconciler 计算 `required_group_size=ceil(active_subject_count/100)`，并与配置中来自真实压测的 `measured_safe_group_size` 比较；同时按实际主/备 Group 负载执行 RateBudgetPlanner admission。任一超限直接 NO-GO，不截断 Subject，也不新增第 101 个函数。新环境只包含 `group_id`、该 Group 的 SubjectID、分配到本 Group 的主/备 Feed 配额、route/config version、calendar version、`collect_from` 和少量特殊 SubjectSymbol override；普通股票 symbol 在 Adapter 中严格转换，不携带全市场四源映射。移除 stock 路径中每函数/Timer/Executor 固定 30 个标的的限制，改为 stock profile 安全容量；CloudNode 仍按真实 UTF-8 字节校验完整 4KB Environment。
 
 - [ ] **Step 3: 写 stock Handler 红灯测试**
 
@@ -757,18 +886,18 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
   ```bash
   cd modules/collector
-  go test -run 'TestBuildAssignments.*Route|TestBuildManagedEnvironment.*Stock|TestStockCNHandler' ./internal/marketfetch ./internal/serverless/stock_cn
+  go test -run 'TestBuildAssignments.*HundredGroups|TestBuildManagedEnvironment.*Stock|TestSCFRuntime|TestStockCNHandler' ./internal/marketfetch ./internal/serverless/...
   ```
 
-  Expected: FAIL，现有环境只有单 Provider，stock_cn 入口不存在。
+  Expected: FAIL，现有默认值为 300、标的硬上限为 30，公共 SCF Runtime 和 stock_cn 入口尚不存在。
 
-- [ ] **Step 5: 实现 stock_cn 独立 Handler**
+- [ ] **Step 5: 提取公共 Handler factory 并建立两个 composition root**
 
-  复用公共 `marketfetch` 执行内核，只在 composition root 注入 stock Calendar、Router 和四个 Adapter。`cmd/scf/stock_cn` 强校验 `MOOX_SPACE_ID=stock_cn`，不能 fallback 到 crypto。
+  `serverless/runtime.go` 统一解析 Timer/Invoke 事件、执行预算、panic recovery、Registry、KlinePipeline 和 InstrumentPipeline 调度。crypto composition root 注入 Binance 与 24x7 Market Module；stock composition root 注入交易日历、Router 和四个 Provider。`cmd/scf/stock_cn` 强校验 `MOOX_SPACE_ID=stock_cn`，不能 fallback 到 crypto；两个市场保持独立二进制和函数集群。
 
-- [ ] **Step 6: 设置交易时段 Timer**
+- [ ] **Step 6: 设置按 Group 错峰的交易时段 Timer**
 
-  `1m` stock profile 使用腾讯 7-field cron `5 * 9-11,13-15 * * MON-FRI *`，在分钟后 5 秒触发；Handler 的 Calendar/Session 判断仍是最终权威。CloudNode 创建后必须回读 cron、enabled 和函数版本，不能只信提交成功。
+  每个 Group 的秒位为 `5 + group_id % 35`，因此 100 个函数稳定分散在第 5 到 39 秒；cron 使用对应秒值和 stock 交易时段，Handler 的 Calendar/Session 判断仍是最终权威。测试断言每秒最多 3 个 Group、配置重建后秒位不漂移，最晚 Group 仍有足够时间在下一分钟与 15 秒硬 deadline 前完成。CloudNode 创建后必须回读每个函数的 cron、enabled、Message、版本和 `group_id`，不能只信提交成功。
 
 - [ ] **Step 7: 验证并提交**
 
@@ -785,9 +914,13 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
     modules/collector/internal/marketfetch/timer_test.go \
     modules/collector/internal/marketfetch/reconciler.go \
     modules/collector/internal/marketfetch/reconciler_test.go \
+    modules/collector/internal/serverless/runtime.go \
+    modules/collector/internal/serverless/runtime_test.go \
+    modules/collector/internal/serverless/crypto_market/handler.go \
+    modules/collector/internal/serverless/crypto_market/handler_test.go \
     modules/collector/internal/serverless/stock_cn \
     modules/collector/cmd/scf/stock_cn/main.go
-  git commit -m 'feat(collector): 增加A股Timer云函数入口'
+  git commit -m 'feat(collector): 增加A股百组云函数运行时'
   ```
 
 ### Task 11: 扩展发布包、CLI 配置和 CloudNode 校验
@@ -814,9 +947,9 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
   断言构建产物分别包含 `crypto_market` 和 `stock_cn` Linux amd64 入口及各自配置；一个空间的 zip 不得混入另一空间的私有配置。
 
-- [ ] **Step 2: 写 CLI 配置红灯测试**
+- [ ] **Step 2: 写 CLI 百函数与 Feed 配置红灯测试**
 
-  `stock_cn` 允许 route-based Timer，不再强制单 `provider` 或 `catchup_bar_limit=1000`；必须配置 Storage target、Timer 节点、`history_policy=live_only` 和 stock package。百度默认 `enabled=false` 或 `mode=shadow`。
+  将 `DefaultStockCNMarketTimerFunctionCount` 固定为 100；六个默认地域按 `17/17/17/17/16/16` 分配，总和必须恰好 100。`stock_cn` 允许 route-based Timer，不再强制单 `provider`、`catchup_bar_limit=1000` 或禁用 stagger；必须配置 Storage target、100 个 Timer 节点、`history_policy=live_only`、stock package、`measured_safe_group_size`，以及每个 Kline/Instrument Feed 的 `RateLimitPolicy`。百度 Kline 默认 `mode=shadow`，Instrument 可按 Task 1 证据独立启用。crypto 的函数数和调度策略保持原配置，不被 stock 默认值覆盖。
 
 - [ ] **Step 3: 运行红灯测试**
 
@@ -826,15 +959,15 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
   go test -run 'Test.*SCFFetcher.*Stock|Test.*Publish.*Stock' ./internal/setup/config ./internal/command
   ```
 
-  Expected: FAIL，构建脚本和 CLI 只认识 crypto_market 入口。
+  Expected: FAIL，构建脚本和 CLI 只认识 crypto_market 入口，stock 当前默认 300 且禁止 stagger。
 
-- [ ] **Step 4: 实现按 space 构建与发布**
+- [ ] **Step 4: 实现按 space 构建与恰好 100 个函数发布**
 
-  `buildCollectorLinuxBinary` 根据目标 space 选择明确入口，不使用字符串拼路径后静默 fallback。发布前验证 zip、配置、函数 handler、64MB/15s、Storage target 和非敏感环境变量。
+  `buildCollectorLinuxBinary` 根据目标 space 选择明确入口，不使用字符串拼路径后静默 fallback。stock 发布计划必须生成恰好 100 个 Timer 函数，并逐一绑定唯一 `group_id`；少一个、多一个、重复或空缺都在产生云上副作用前失败。发布前验证 zip、配置、函数 handler、64MB/15s、Storage target、地域总数和非敏感环境变量。
 
-- [ ] **Step 5: 保持 CloudNode 凭据边界**
+- [ ] **Step 5: 保持 CloudNode 凭据边界并严格回读**
 
-  Collector 仍不持有腾讯云密钥。CloudNode 合并整份 Environment、检查 4096 bytes、更新并回读；Trigger 以目标 cron、Message、enabled 和 `$LATEST` 做严格等值校验。
+  Collector 仍不持有腾讯云密钥。CloudNode 合并整份 Environment、检查 4096 bytes、更新并回读；Trigger 以每 Group 的目标 cron、Message、enabled、`$LATEST` 和函数版本做严格等值校验。发布结果汇总 expected/actual function count 与 `group_id` 覆盖，禁止只按批次成功数推断百函数完整。
 
 - [ ] **Step 6: 验证并提交**
 
@@ -871,11 +1004,11 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
 - [ ] **Step 1: 写 Canary 红灯测试**
 
-  交易时段内检查 `equity_kline` 最新应闭合桶；休市和午休显示 idle/healthy；日历过期、无 eligible Provider、最新桶超时和 source/unified 不一致分别产生明确原因。
+  交易时段内检查 `equity_kline` 最新应闭合桶；休市和午休显示 idle/healthy；日历过期、无 eligible Kline Feed、最新桶超时和 source/unified 不一致分别产生明确原因。另检查 Instrument 完整快照的 `snapshot_id/source_provider/complete/fetched_at`、active 数和交易所覆盖；旧快照仍可供 Kline 使用，但超过配置时限必须告警。
 
-- [ ] **Step 2: 写指标与日志红灯测试**
+- [ ] **Step 2: 写 Group、Feed 与百函数指标红灯测试**
 
-  增加 `market_id`、`route_id`、`provider_id`、`result` 低基数标签；Subject 和 candidate chain 只进结构化日志，不进 Prometheus 标签。日志必须包含预期桶、实际桶、fallback 次数和两阶段写入结果。
+  增加 `market_id`、`route_id`、`provider_id`、`feed_kind`、`group_id`、`result` 低基数标签；Subject 和 candidate chain 只进结构化日志，不进 Prometheus 标签。日志必须包含预期桶、实际桶、fallback 次数、限频等待/拒绝、两阶段写入结果、Universe version，以及 expected/actual stock function count。测试断言 `group_id` 只允许 0..99，不能用函数名制造高基数标签。
 
 - [ ] **Step 3: 运行红灯测试**
 
@@ -883,16 +1016,18 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
   cd modules/monitor
   go test -run 'TestMarketCanary.*StockCN' ./internal/watchdog
   cd ../collector
-  go test -run 'TestMetrics.*Provider|TestReportResults.*Fallback' ./internal/marketfetch
+  go test -run 'TestMetrics.*Feed|TestReportResults.*Fallback|TestReportResults.*HundredGroups' ./internal/marketfetch
   ```
 
   Expected: FAIL，Monitor 当前只配置 crypto canary。
 
-- [ ] **Step 4: 实现三类告警**
+- [ ] **Step 4: 实现五类告警**
 
   - 连续 3 个闭合分钟统一 Dataset 覆盖率低于 99%。
-  - 某 Provider 在 5 分钟窗口内系统失败率超过 20%，或候选池为空。
+  - 某 Provider Feed 在 5 分钟窗口内系统失败率超过 20%、持续 429、限频等待耗尽 deadline，或候选池为空。
   - 日历距 `valid_through` 少于 14 天或已经过期。
+  - 最新完整 Instrument 快照过期、active 数异常或任一要求交易所为空。
+  - stock 函数数不是 100、Group ID 不完整/重复，或 `required_group_size` 超过安全容量。
 
   阈值放配置，不写死在告警代码。停牌标的从分母中剔除必须有明确 instrument/status 证据，不能仅因空响应自动判停牌。
 
@@ -920,11 +1055,10 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 - Modify: `docs/内置市场行情采集架构.md`
 - Modify: `docs/architecture/scf-short-lived-market-fetch.md`
 - Modify: `docs/采集任务管理.md`
-- Modify: 仅限前述任务涉及文件中的死代码、旧 Binance 专用兼容分支和过期注释
 
 - [ ] **Step 1: 删除被新框架替代的旧入口**
 
-  使用 `rg` 确认 Kline 执行不再存在 `provider != binance` 拒绝、`crypto_market` fallback、Binance 专用 Storage writer 和两套 Provider registry。删除无调用方代码，不保留 deprecated wrapper。
+  使用 `rg` 确认 Kline 执行不再存在 `provider != binance` 拒绝、`crypto_market` fallback、Binance 专用 Storage writer、旧弱类型 `CollectorRegistry`、第二套 Provider registry 和公开 `symbol` 数据类型。确认不存在旧泛化能力命名，以及 Handler 直接构造 Binance 的分支。删除无调用方代码，不保留 deprecated wrapper。
 
 - [ ] **Step 2: 分模块运行完整测试**
 
@@ -956,11 +1090,11 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
 - [ ] **Step 3: 执行独立 codeCR**
 
-  使用 `codeCR` subAgent，重点审查：上线围栏是否可绕过、Provider fallback 是否会超出 15 秒、来源/统一 partial success、交易日历过期行为、单位 100 倍错误、4KB 环境预算、日志泄密和 crypto 回归。所有 P0/P1/P2 必须修复并重跑相关测试；审查结论必须附文件和行号。
+  使用 `codeCR` subAgent，重点审查：上线围栏是否可绕过、恰好 100 个 Group 是否覆盖每个 Subject 一次、Provider 主备分布是否符合 34/33/33 或 25/25/25/25、Feed 限频/fallback 是否会超出 15 秒、Instrument 快照是否可能跨源拼页、来源/统一 partial success、交易日历过期行为、单位 100 倍错误、4KB 环境预算、日志泄密和 crypto 回归。所有 P0/P1/P2 必须修复并重跑相关测试；审查结论必须附文件和行号。
 
 - [ ] **Step 4: 更新架构文档状态**
 
-  把目标文档中的“一次 JobItem 一个 Provider”细化为：Realtime Timer 同一标的最多两个 Provider；Gap repair 每个 RetryItem 一个 Provider。明确 stock 与 crypto 共用内核但独立部署，百度的实际状态以 validation 文档为准。
+  把目标文档中的“一次 JobItem 一个 Provider”细化为：Realtime Timer 每个 Group 有稳定主 Provider，同一标的最多两个 Provider；Gap repair 每个 RetryItem 一个 Provider。明确 stock 与 crypto 共用 MarketProvider/Fetcher/Spec、InstrumentPipeline、KlinePipeline 和 SCF Runtime，但独立部署；百度的 Kline/Instrument 状态分别以 validation 文档为准。
 
 - [ ] **Step 5: 提交验证收口**
 
@@ -976,7 +1110,7 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 **Files:**
 - Create: `config/data-access-stock-cn.yaml`
 - Create: `docs/validation/stock-cn-1m-canary.md`
-- Modify: 部署配置中的 `scf_fetcher.spaces[stock_cn]`
+- Modify: `custom.toml:135-240` 中的 `scf_fetcher.spaces[stock_cn]`
 
 - [ ] **Step 1: 发布但保持 stock 规则 disabled**
 
@@ -990,11 +1124,15 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
     --job-id "$JOB_IDS"
   ```
 
-  验收 CloudNode 所有 batch 成功，函数为 64MB/15s，完整 Environment 小于 4096 bytes，Timer cron、enabled、Message 和版本回读一致。
+  验收 CloudNode 所有 batch 成功，实际恰好存在 100 个 stock Timer 函数，`group_id=0..99` 无缺失或重复，六地域分布为 `17/17/17/17/16/16`。每个函数为 64MB/15s，完整 Environment 小于 4096 bytes，错峰秒位、Timer cron、enabled、Message 和版本回读一致。
 
-- [ ] **Step 2: 三标的单地域 Canary**
+- [ ] **Step 2: 先验收完整 Instrument 快照**
 
-  启用 `600000.XSHG`、`000001.XSHE`、一个已通过 probe 的北交所标的，记录精确 `T0=coverage_start_time`。连续观察一个完整交易日。
+  手动执行一次受控 stock Instrument Invoke，记录 `snapshot_id/source_provider/page_count/instrument_count/exchange_counts/complete`。验证 SH/SZ/BSE 均有覆盖、active 数超过 Task 1 固定的下限、抽样 Subject 可被其所有 eligible Kline Feed 严格解析；再受控使首选 InstrumentFetcher 中途分页失败，证明 Pipeline 丢弃整份结果并由下一 Provider 从第一页重新生成完整快照，旧 Universe 在切换前保持 active。
+
+- [ ] **Step 3: 三标的三 Group Canary**
+
+  启用 `600000.XSHG`、`000001.XSHE`、一个已通过 probe 的北交所标的，并从候选样本中选择哈希结果自然落入三个不同 Group 的组合，记录精确 `T0=coverage_start_time`。只启用对应函数的规则执行，连续观察一个完整交易日；不得为 Canary 修改生产分片算法。
 
   ```bash
   ./bin/moox-cli data kline get \
@@ -1005,29 +1143,29 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
   必须证明：不存在 `close_time <= T0` 的新写入；来源和统一行同分钟一致；同一分钟重试不增加 RowKey；午休无错误风暴；14:59 开始、15:00 闭合的最后一根可读取。
 
-- [ ] **Step 3: 故障切换演练**
+- [ ] **Step 4: 故障切换与限频演练**
 
-  在 Canary route 配置中临时禁用当前首选 Provider，或把该 Provider 指向受控失败代理。验证同一分钟由候选链第二个 Provider 成功写入，`quality_status=fallback`、`fallback_count=1`，总执行时间小于 15 秒。恢复配置后再次回读环境 hash。
+  在 Canary route 配置中临时禁用当前首选 Provider，或把该 Provider 指向受控失败代理。验证同一分钟由候选链第二个 Provider 成功写入，`quality_status=fallback`、`fallback_count=1`，总执行时间小于 15 秒。再用受控 429 响应验证 token bucket、invocation breaker 和备用 Feed 配额都生效，没有绕过限频的请求风暴。恢复配置后再次回读环境 hash。
 
-- [ ] **Step 4: 分级扩容**
+- [ ] **Step 5: 按 Group 分级扩容**
 
-  - 10 个标的、1 个地域、1 个完整交易日。
-  - 100 个标的、2 个地域、2 个完整交易日。
-  - 全量 active equity、多地域、5 个完整交易日。
+  - 10 个 Group、至少 100 个标的、1 个完整交易日。
+  - 50 个 Group、按真实 Universe 分片、2 个完整交易日。
+  - 全量 active equity、100 个 Group/函数、5 个完整交易日。
 
-  每级必须满足统一 Dataset 预期桶覆盖率不低于 99%、无上线前数据、无无限 RetryItem、Provider 单位抽查通过、SCF p99 小于 12 秒、Storage 写入无持续失败，才进入下一级。
+  每级必须记录 active 数、`required_group_size`、每 Group 实际最大标的数、`measured_safe_group_size`、Provider 主/备请求预算、单源故障 headroom、实际 Feed 请求率/429 和 Environment 最大字节数。确认所有 active Subject 恰好分配一次、所有 Group 配额之和不超过 Feed 安全总额，且统一 Dataset 预期桶覆盖率不低于 99%、无上线前数据、无无限 RetryItem、Provider 单位抽查通过、SCF p99 小于 12 秒、Storage 写入无持续失败，才进入下一级。
 
-- [ ] **Step 5: 验证上线后 gap repair**
+- [ ] **Step 6: 验证上线后 gap repair**
 
   对一个 Canary 标的人为跳过一个上线后的分钟，确认 Gap Audit 只补该分钟，不请求 `T0` 前数据；制造超过 4 个交易日的缺口，确认只告警不排队。
 
-- [ ] **Step 6: 回滚演练**
+- [ ] **Step 7: 回滚演练**
 
   先禁用 stock 规则并确认所有 stock Timer disabled；必要时运行 function delete dry-run，再确认删除。回滚不得清空 Storage，也不得影响 `crypto_market` 函数、Timer 或 K 线。
 
-- [ ] **Step 7: 固化真实证据并提交**
+- [ ] **Step 8: 固化真实证据并提交**
 
-  `docs/validation/stock-cn-1m-canary.md` 记录非敏感 job ID、函数数、地域、Timer 回读、T0、三阶段覆盖率、fallback 演练、Storage 查询和回滚结果。失败项如实标记，不把本地测试写成生产验收。
+  `docs/validation/stock-cn-1m-canary.md` 记录非敏感 job ID、expected/actual 函数数、Group 覆盖、地域分布、Timer 秒位回读、Instrument 完整快照、容量计算、Provider 分布、Feed 限频、T0、三阶段覆盖率、fallback 演练、Storage 查询和回滚结果。失败项如实标记，不把本地测试写成生产验收。
 
   ```bash
   git add config/data-access-stock-cn.yaml docs/validation/stock-cn-1m-canary.md
@@ -1037,29 +1175,38 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
 ## 6. 验收清单
 
-- [ ] `stock_cn` 与 `crypto_market` 使用同一 `marketdata` 契约和 `marketfetch` Pipeline，但分别构建、配置、发布和扩缩容。
+- [ ] `stock_cn` 与 `crypto_market` 使用唯一 Provider Registry、强类型 Kline/Instrument Fetcher、对应 Spec、Feed RateLimiter、KlinePipeline、InstrumentPipeline 和 SCF Runtime，但分别构建、配置、发布和扩缩容。
+- [ ] Binance 同时通过公共 KlineFetcher 和 InstrumentFetcher 运行；旧弱类型 Collector Registry、Handler 直接构造 Binance 和并行 `symbol` 数据类型均已删除。
 - [ ] 生产候选池至少包含新浪、腾讯、东方财富三个完整 1m Provider；百度状态有真实证据且不会被误用。
-- [ ] 同一标的同一交易日路由顺序稳定，不同标的在多个 Provider 间分散。
+- [ ] 所有 active A 股恰好映射到 100 个 Group，每个 Subject 只出现一次，`required_group_size <= measured_safe_group_size`，没有截断或隐式扩成第 101 个函数。
+- [ ] stock 云上实际恰好存在 100 个 Timer 函数，`group_id=0..99` 无缺失或重复，六地域分布、错峰秒位和每个 Trigger 均经 CloudNode 回读验证。
+- [ ] 三个等权 active Kline Provider 的主 Group 分布为 34/33/33；四源都 active 时为 25/25/25/25，第二候选不会集中到单一 Provider。
+- [ ] 每个 Kline/Instrument Feed 的安全请求量、限制作用域、burst、并发、429 冷却和 timeout 来自验证后的 RateLimitPolicy；按最保守共享出口预算时，主请求量加单源故障备用请求量仍不超总额，fallback 不绕过预留配额。
 - [ ] 首选源失败时最多一次 fallback，SCF p99 仍小于 12 秒，硬 deadline 小于 15 秒。
 - [ ] 每根统一 K 线只来自一个 Provider，volume 单位为 shares，amount 单位为 CNY。
 - [ ] 来源 Dataset 使用 `provider:<id>` tag，统一 Dataset 使用空 tag；两次写入可独立幂等重试。
 - [ ] 所有新增行都满足 `close_time > coverage_start_time`，不存在上线前历史导入。
 - [ ] Gap Audit 只修复上线后的短期缺口，休市/午休/停牌不制造错误和无限重试。
 - [ ] 交易日历过期 fail closed，并在到期前 14 天告警。
-- [ ] SH/SZ/BSE symbol 映射来自完整 Universe 快照，不在 SCF 内启发式猜测。
+- [ ] stock 与 crypto 都通过 InstrumentPipeline 维护完整快照；一次快照不跨 Provider 拼页，失败不替换旧 Universe，连续两个完整日快照缺失后才下线标的。
+- [ ] SH/SZ/BSE 普通 symbol 使用实测固定的严格转换，特殊 symbol 来自完整 Universe 的紧凑 override，不在 SCF 内启发式猜测。
 - [ ] CloudNode 回读 Timer 与 Environment，完整环境小于 4096 bytes。
-- [ ] `crypto_market` 实时 K 线、Symbol、补采和发布测试全部通过。
+- [ ] `crypto_market` 实时 K 线、Instrument 快照、补采和发布测试全部通过。
 - [ ] 独立 codeCR 无未处理 P0/P1/P2。
-- [ ] 灰度、fallback、gap repair 和回滚均有真实运行证据。
+- [ ] Instrument 快照、容量、百函数、限频、fallback、gap repair 和回滚均有真实运行证据。
 
 ## 7. 实施顺序与停止条件
 
-严格按 Task 1 到 Task 14 执行。Task 1 是外部接口事实门槛；Task 2 到 Task 8 建立公共内核和数据边界；Task 9 到 Task 12 才接通 stock 控制面、云函数和监控；Task 13 通过后才允许 Task 14 产生云上副作用。
+严格按 Task 1 到 Task 14 执行。Task 1 是外部接口和 Feed 限频事实门槛；Task 2 到 Task 8 建立公共内核、KlinePipeline 和数据边界；Task 9 完成通用 InstrumentPipeline 与 crypto 迁移后，Task 10 到 Task 12 才接通 stock 百函数控制面和监控；Task 13 通过后才允许 Task 14 产生云上副作用。
 
 出现下列任一情况立即停止发布并保留规则 disabled：
 
 - 少于三个 Provider 能稳定返回完整闭合 1m OHLCV。
 - SH/SZ/BSE 任一交易所没有可用 Provider 或 symbol 映射无法验证。
+- Instrument 快照分页不完整、任一要求交易所为空、跨 Provider 混页，或无法证明失败快照不会替换旧 Universe。
+- stock 发布计划或云上实际函数数不是 100，`group_id=0..99` 有缺失/重复，或任一 active Subject 未分配/重复分配。
+- `required_group_size > measured_safe_group_size`，或完整 Environment 超过 4096 bytes。
+- Feed RateLimitPolicy 没有真实 probe 依据，持续 429，或 fallback 会突破备用 Provider 配额。
 - 无法证明 `coverage_start_time` 前数据不会写入。
 - fallback 后函数 p99 接近 15 秒，无法给 Storage 写入留出预算。
 - 来源和统一 Dataset 出现不可幂等的分叉。
