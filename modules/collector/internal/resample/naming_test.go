@@ -22,10 +22,9 @@ func TestUniqueResampleDisplayNameIsValidAndStable(t *testing.T) {
 	if name != uniqueResampleDisplayName("spot_kline_derived_5m") {
 		t.Fatal("display name is not stable")
 	}
-	if name == uniqueResampleDisplayName("spot_kline_derived_842m") {
-		t.Fatal("distinct target dataset IDs must not share the default display name")
-	}
-	if name == uniqueResampleDisplayName("spot_kline_derived_872m") {
+	name842 := uniqueResampleDisplayName("spot_kline_derived_842m")
+	name872 := uniqueResampleDisplayName("spot_kline_derived_872m")
+	if name == name842 || name == name872 || name842 == name872 {
 		t.Fatal("distinct target dataset IDs must not share the default display name")
 	}
 }
