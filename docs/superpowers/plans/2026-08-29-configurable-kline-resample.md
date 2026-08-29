@@ -680,7 +680,7 @@ Commit: `feat(collector): backfill resampled kline tasks`
 ```yaml
 kline_resample:
   enabled: true
-  scan_timeout: 8s
+  scan_timeout: 30s
   worker_concurrency: 2
   max_claims_per_tick: 100
   worker_subject_batch_size: 50

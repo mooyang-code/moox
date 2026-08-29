@@ -359,7 +359,7 @@ func Default() *Config {
 			ItemRetention: 60, ParentRetention: 7 * 24 * time.Hour,
 		},
 		KlineResample: KlineResampleConfig{
-			Enabled: true, ScanTimeout: 8 * time.Second, WorkerConcurrency: 2, MaxClaimsPerTick: 100,
+			Enabled: true, ScanTimeout: 30 * time.Second, WorkerConcurrency: 2, MaxClaimsPerTick: 100,
 			WorkerSubjectBatchSize: 50, WorkerJobTimeout: 30 * time.Second,
 			WorkerPollInterval: 5 * time.Second, WorkerMaxSourceKeysPerClaim: 20000,
 			StaleRunningAfter: 2 * time.Minute, DefaultSettleDelay: 10 * time.Second,
