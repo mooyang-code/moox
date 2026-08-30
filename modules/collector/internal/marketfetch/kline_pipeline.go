@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
-	stocksource "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 )
@@ -21,6 +20,9 @@ const (
 	StockCNSpaceID   = "stock_cn"
 	StockCNDatasetID = "stock_cn_kline"
 	StockCNRouteID   = "stock_cn_kline_1m_v1"
+	// A single invocation may try the configured provider and one fallback.
+	// Retry generations resume after that same bounded window.
+	klineProviderAttemptBudget = 2
 )
 
 // KlinePipeline is the provider-independent stock write boundary. Fetchers
@@ -30,8 +32,16 @@ type KlinePipeline struct {
 	Storage        Storage
 	CandidateChain []string
 	RouteID        string
+	SpaceID        string
+	MarketID       string
+	ProductType    marketdata.ProductType
+	InstrumentType marketdata.InstrumentType
+	DatasetID      string
+	SeriesTag      string
+	SettleDelay    time.Duration
 	Now            func() time.Time
 	Calendar       *stockmarket.Calendar
+	Metrics        *Metrics
 }
 
 func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchpb.MarketFetchBatchCompleted, error) {
@@ -41,11 +51,21 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	if err := req.validate(); err != nil {
 		return nil, err
 	}
-	if req.SpaceID != StockCNSpaceID || req.DatasetID != StockCNDatasetID || req.Frequency != "1m" {
-		return nil, fmt.Errorf("stock kline pipeline requires stock_cn/stock_cn_kline/1m")
+	spaceID := firstNonEmptyString(p.SpaceID, req.SpaceID)
+	datasetID := firstNonEmptyString(p.DatasetID, req.DatasetID)
+	frequency, frequencyErr := marketdata.ParseFrequency(req.Frequency)
+	if frequencyErr != nil {
+		return nil, frequencyErr
+	}
+	isStock := p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID
+	if req.SpaceID != spaceID || req.DatasetID != datasetID || (isStock && frequency != marketdata.FrequencyMinute) {
+		return nil, fmt.Errorf("kline pipeline requires %s/%s/1m for stock_cn", spaceID, datasetID)
 	}
 	chain := normalizeCandidateChain(p.CandidateChain, req.Provider)
-	if len(chain) < 2 {
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("kline pipeline requires at least one candidate provider")
+	}
+	if isStock && len(chain) < 2 {
 		return nil, fmt.Errorf("stock kline pipeline requires at least two candidate providers")
 	}
 	started := time.Now()
@@ -53,7 +73,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 		started = p.Now()
 	}
 	if req.BatchKind == domain.BatchKindRealtime && p.Calendar != nil {
-		shouldCollect, err := stockCNShouldCollectMinute(p.Calendar, started)
+		shouldCollect, err := stockCNShouldCollectMinute(p.Calendar, started, p.SettleDelay)
 		if err != nil {
 			return nil, err
 		}
@@ -90,28 +110,74 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				results[index] = failureResult(item, domain.ItemOutcomeNetworkError, "deadline_exhausted", ctx.Err())
 				return
 			}
-			providerSymbol, err := stocksource.ProviderSymbol(item.SubjectID)
-			if err != nil {
-				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "symbol", err)
+			providerSymbol := strings.TrimSpace(item.Symbol)
+			if p.MarketID == StockCNSpaceID || p.MarketID == "" && req.SpaceID == StockCNSpaceID {
+				converted, symbolErr := stockProviderSymbol(item.SubjectID, providerSymbol)
+				if symbolErr != nil {
+					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "symbol", symbolErr)
+					return
+				}
+				providerSymbol = converted
+			}
+			if providerSymbol == "" {
+				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "symbol", fmt.Errorf("provider symbol is required"))
 				return
 			}
 			limit := item.BarLimit
 			if limit <= 0 {
 				limit = MaxRealtimeRows
 			}
-			fetched, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: StockCNSpaceID, ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, Frequency: "1m", Limit: limit, StartTime: parseOptionalTime(item.StartTime), Now: started.UTC(), RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID)}, chain)
+			marketID := marketdata.MarketID(firstNonEmptyString(p.MarketID, req.SpaceID))
+			productType := p.ProductType
+			if productType == "" {
+				productType = marketdata.ProductEquity
+			}
+			instrumentType := p.InstrumentType
+			if instrumentType == "" {
+				instrumentType = marketdata.InstrumentEquity
+			}
+			exchangeID := marketdata.ExchangeID("")
+			if p.MarketID == StockCNSpaceID || p.MarketID == "" && req.SpaceID == StockCNSpaceID {
+				exchangeID = stockProviderExchange(item.SubjectID)
+			}
+			coverageStart := parseOptionalTime(item.StartTime)
+			coverageEnd := parseOptionalTime(item.EndTime)
+			historyAsOf := started.UTC()
+			if item.Canary && isStock && p.Calendar != nil {
+				canaryStart, canaryEnd, calendarErr := p.Calendar.LatestClosedMinute(started.UTC(), p.SettleDelay)
+				if calendarErr != nil {
+					results[index] = failureResult(item, domain.ItemOutcomeProviderError, "calendar", calendarErr)
+					return
+				}
+				coverageStart, coverageEnd, historyAsOf = canaryStart, canaryEnd, canaryEnd
+			}
+			fetched, selectedProvider, nextCandidateIndex, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, ProductType: productType, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio}, chain, item.CandidateIndex)
 			if err != nil {
+				item.CandidateIndex = nextCandidateIndex
+				p.observeFeed(req, selectedProvider, "kline", metricKlineResult(err))
 				results[index] = failureResult(item, classifyError(err), errorType(err), err)
 				return
 			}
 			itemRows := make([]*storagepb.RowFieldUpsert, 0, len(fetched))
-			coverageStart := parseOptionalTime(item.StartTime)
 			for _, bar := range fetched {
+				// The scheduler normally selects a settled target bar, but the
+				// provider response is still an untrusted boundary. Realtime rows
+				// must remain outside the settle window even when a feed returns a
+				// newer, just-closed bar or ignores the requested range.
+				if req.BatchKind == domain.BatchKindRealtime && p.SettleDelay > 0 && bar.BarEnd.Add(p.SettleDelay).After(started.UTC()) {
+					continue
+				}
 				if !coverageStart.IsZero() && bar.BarStart.Before(coverageStart) {
 					continue
 				}
+				// Some public feeds ignore range parameters and return their
+				// latest page. Enforce the half-open requested interval at the
+				// common write boundary so GapRepair cannot write the wrong bar.
+				if !coverageEnd.IsZero() && !bar.BarStart.Before(coverageEnd) {
+					continue
+				}
 				rank := providerRank(chain, bar.ProviderID)
-				row, rowErr := stockKlineRow(bar, firstNonEmptyString(p.RouteID, StockCNRouteID), rank)
+				row, rowErr := p.rowFor(bar, req, requestKlineRouteID(p, req.Frequency), rank)
 				if rowErr != nil {
 					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "normalize", rowErr)
 					return
@@ -119,9 +185,15 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				itemRows = append(itemRows, row)
 			}
 			if len(itemRows) == 0 {
+				p.observeFeed(req, selectedProvider, "kline", "invalid")
 				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "coverage", fmt.Errorf("provider returned no bars inside the requested coverage"))
 				return
 			}
+			result := "success"
+			if providerRank(chain, selectedProvider) > 1 {
+				result = "fallback"
+			}
+			p.observeFeed(req, selectedProvider, "kline", result)
 			rowsMu.Lock()
 			rows = append(rows, itemRows...)
 			rowsMu.Unlock()
@@ -139,7 +211,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	if len(rows) > 0 {
 		var err error
 		if storage, ok := p.Storage.(sourceStorage); ok {
-			err = storage.UpsertFieldsWithSource(ctx, rows, req.BatchID)
+			err = storage.UpsertFieldsWithSource(ctx, rows, sourceEventID(req))
 		} else {
 			err = p.Storage.UpsertFields(ctx, rows)
 		}
@@ -158,16 +230,32 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	return buildCompletion(req, results, completed, completed.Sub(started)), nil
 }
 
-func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession, req marketdata.KlineRequest, chain []string) ([]marketdata.NormalizedKline, error) {
+func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession, req marketdata.KlineRequest, chain []string, startIndex int) ([]marketdata.NormalizedKline, string, int, error) {
 	var lastErr error
-	for index, provider := range chain {
+	lastProvider := "none"
+	if len(chain) == 0 {
+		return nil, lastProvider, 0, fmt.Errorf("kline candidate chain is empty")
+	}
+	startIndex %= len(chain)
+	if startIndex < 0 {
+		startIndex += len(chain)
+	}
+	maxAttempts := len(chain)
+	if maxAttempts > klineProviderAttemptBudget {
+		maxAttempts = klineProviderAttemptBudget
+	}
+	attempts := 0
+	for index := 0; index < maxAttempts; index++ {
+		chainIndex := (startIndex + index) % len(chain)
+		provider := chain[chainIndex]
+		lastProvider = provider
 		attemptCtx := ctx
 		cancel := func() {}
 		if deadline, ok := ctx.Deadline(); ok {
 			remaining := time.Until(deadline)
-			attemptsLeft := len(chain) - index
+			attemptsLeft := maxAttempts - index
 			if remaining <= 0 {
-				return nil, ctx.Err()
+				return nil, provider, (startIndex + attempts) % len(chain), ctx.Err()
 			}
 			attemptCtx, cancel = context.WithTimeout(ctx, remaining/time.Duration(attemptsLeft))
 		}
@@ -176,14 +264,23 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 		if err == nil {
 			spec, specErr := session.KlineSpec(provider)
 			if specErr != nil {
-				return nil, specErr
+				lastErr = specErr
+				attempts++
+				continue
 			}
 			if coverageErr := spec.History.ValidateCoverage(rows, req.StartTime); coverageErr != nil {
 				lastErr = coverageErr
+				attempts++
 				continue
 			}
-			return rows, nil
+			if !hasRowsWithinCoverage(rows, req.StartTime, req.EndTime) {
+				lastErr = fmt.Errorf("%w: provider %s returned no bars inside requested interval", marketdata.ErrHistoryCoverage, provider)
+				attempts++
+				continue
+			}
+			return rows, provider, startIndex, nil
 		}
+		attempts++
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			err = fmt.Errorf("%w: provider %s attempt budget exhausted", marketdata.ErrTimeout, provider)
 		}
@@ -199,14 +296,122 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 			continue
 		}
 		if !marketdata.CanFallback(ctx, err) {
-			return nil, err
+			return nil, provider, (startIndex + attempts) % len(chain), err
 		}
 		lastErr = err
 	}
-	return nil, lastErr
+	if lastErr == nil {
+		lastErr = fmt.Errorf("kline provider chain exhausted")
+	}
+	return nil, lastProvider, (startIndex + attempts) % len(chain), lastErr
 }
 
-func stockCNShouldCollectMinute(calendar *stockmarket.Calendar, now time.Time) (bool, error) {
+func hasRowsWithinCoverage(rows []marketdata.NormalizedKline, start, end time.Time) bool {
+	if start.IsZero() && end.IsZero() {
+		return len(rows) > 0
+	}
+	for _, row := range rows {
+		if !start.IsZero() && row.BarStart.Before(start) {
+			continue
+		}
+		if !end.IsZero() && !row.BarStart.Before(end) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (p *KlinePipeline) observeFeed(req Request, providerID, feedKind, result string) {
+	if p == nil || p.Metrics == nil {
+		return
+	}
+	p.Metrics.ObserveFeedResult(FeedMetric{MarketID: firstNonEmptyString(p.MarketID, req.SpaceID), RouteID: requestKlineRouteID(p, req.Frequency), ProviderID: providerID, FeedKind: feedKind, GroupID: req.GroupID, GroupCount: req.GroupCount, BatchKind: string(req.BatchKind), Result: result})
+}
+
+func requestKlineRouteID(p *KlinePipeline, frequency string) string {
+	if p == nil {
+		return StockCNRouteID
+	}
+	if strings.EqualFold(strings.TrimSpace(firstNonEmptyString(p.MarketID, p.SpaceID)), "crypto") || strings.EqualFold(strings.TrimSpace(p.SpaceID), "crypto_market") {
+		product := "spot"
+		if p.ProductType == marketdata.ProductSwap || p.InstrumentType == marketdata.InstrumentSwap {
+			product = "swap"
+		}
+		if parsed, err := marketdata.ParseFrequency(frequency); err == nil {
+			frequency = string(parsed)
+		} else {
+			frequency = strings.ToLower(strings.TrimSpace(frequency))
+		}
+		return "binance_" + product + "_kline_" + frequency
+	}
+	return firstNonEmptyString(p.RouteID, StockCNRouteID)
+}
+
+func metricKlineResult(err error) string {
+	if err == nil {
+		return "success"
+	}
+	switch classifyError(err) {
+	case domain.ItemOutcomeHTTP429:
+		return "http_429"
+	case domain.ItemOutcomeHTTP5xx:
+		return "http_5xx"
+	case domain.ItemOutcomeNetworkError:
+		return "timeout"
+	case domain.ItemOutcomeInvalid:
+		return "invalid"
+	default:
+		return "no_candidate"
+	}
+}
+
+func sourceEventID(req Request) string {
+	if strings.TrimSpace(req.SyncPointID) != "" {
+		return strings.TrimSpace(req.SyncPointID)
+	}
+	if len(req.Items) == 1 && strings.TrimSpace(req.Items[0].SourceEventID) != "" {
+		return strings.TrimSpace(req.Items[0].SourceEventID)
+	}
+	return req.BatchID
+}
+
+func stockProviderExchange(subjectID string) marketdata.ExchangeID {
+	parts := strings.SplitN(strings.ToUpper(strings.TrimSpace(subjectID)), ".", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	switch parts[1] {
+	case "XSHG", "XSHE", "XBSE":
+		return marketdata.ExchangeID(parts[1])
+	default:
+		return ""
+	}
+}
+
+func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int) (*storagepb.RowFieldUpsert, error) {
+	if p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID {
+		return stockKlineRow(bar, routeID, routeRank)
+	}
+	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
+		return nil, err
+	}
+	seriesTag := strings.TrimSpace(p.SeriesTag)
+	if seriesTag == "" {
+		seriesTag = "venue:" + strings.ToLower(strings.TrimSpace(bar.ProviderID))
+	}
+	return &storagepb.RowFieldUpsert{
+		Key: &storagepb.RowKey{SpaceId: req.SpaceID, DatasetId: req.DatasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+			SubjectId: bar.SubjectID, Freq: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
+		}}},
+		Fields: []*storagepb.FieldValue{
+			doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
+			doubleValue("volume", bar.VolumeShares), doubleValue("quote_volume", bar.AmountCNY), intValue("trade_num", bar.TradeCount),
+		},
+	}, nil
+}
+
+func stockCNShouldCollectMinute(calendar *stockmarket.Calendar, now time.Time, settleDelay time.Duration) (bool, error) {
 	if calendar == nil {
 		return false, fmt.Errorf("stock_cn calendar is required")
 	}
@@ -222,7 +427,10 @@ func stockCNShouldCollectMinute(calendar *stockmarket.Calendar, now time.Time) (
 	if err != nil {
 		return false, err
 	}
-	target := now.UTC().Truncate(time.Minute).Add(-time.Minute)
+	if settleDelay < 0 {
+		settleDelay = 0
+	}
+	target := now.UTC().Add(-settleDelay).Truncate(time.Minute).Add(-time.Minute)
 	for _, barStart := range expected {
 		if barStart.Equal(target) {
 			return true, nil
@@ -239,6 +447,20 @@ func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int
 	if routeRank > 1 {
 		qualityStatus = "fallback"
 	}
+	amountQuality := "reported"
+	if bar.AmountEstimated {
+		amountQuality = "estimated_close_x_volume"
+	}
+	fields := []*storagepb.FieldValue{
+		doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
+		doubleValue("volume", bar.VolumeShares), doubleValue("amount", bar.AmountCNY),
+		timeValue("trade_date", tradeDateUTC(bar.BarStart)), timeValue("close_time", bar.BarEnd),
+		stringValue("volume_unit", "shares"), stringValue("amount_unit", amountUnit(bar)),
+		stringValue("provider_symbol", bar.ProviderSymbol), timeValue("provider_timestamp", bar.ProviderTimestamp),
+		timeValue("fetched_at", bar.FetchedAt), stringValue("request_id", bar.RequestID),
+		stringValue("route_id", routeID), intValue("route_rank", int64(routeRank)),
+		stringValue("source_provider", bar.ProviderID), stringValue("quality_status", qualityStatus), stringValue("amount_quality", amountQuality),
+	}
 	return &storagepb.RowFieldUpsert{
 		Key: &storagepb.RowKey{
 			SpaceId: StockCNSpaceID, DatasetId: StockCNDatasetID,
@@ -246,16 +468,7 @@ func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int
 				SubjectId: bar.SubjectID, Freq: "1m", DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: "",
 			}},
 		},
-		Fields: []*storagepb.FieldValue{
-			doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
-			doubleValue("volume", bar.VolumeShares), doubleValue("amount", bar.AmountCNY),
-			timeValue("trade_date", tradeDateUTC(bar.BarStart)), timeValue("close_time", bar.BarEnd),
-			stringValue("volume_unit", "shares"), stringValue("amount_unit", amountUnit(bar)),
-			stringValue("provider_symbol", bar.ProviderSymbol), timeValue("provider_timestamp", bar.ProviderTimestamp),
-			timeValue("fetched_at", bar.FetchedAt), stringValue("request_id", bar.RequestID),
-			stringValue("route_id", routeID), intValue("route_rank", int64(routeRank)),
-			stringValue("source_provider", bar.ProviderID), stringValue("quality_status", qualityStatus),
-		},
+		Fields: fields,
 	}, nil
 }
 
@@ -300,9 +513,6 @@ func tradeDateUTC(value time.Time) time.Time {
 }
 
 func amountUnit(bar marketdata.NormalizedKline) string {
-	if bar.AmountCNY == 0 && bar.ProviderID == "tencent" {
-		return "not_available"
-	}
 	return "cny"
 }
 

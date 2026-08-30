@@ -74,6 +74,9 @@ func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]by
 		stockFields := orderedMapping(
 			mappingField{"expected_timer_function_count", space.TimerFunctionCount},
 			mappingField{"measured_safe_group_size", space.MeasuredSafeGroupSize},
+			mappingField{"stagger_start_second", space.StaggerStartSecond},
+			mappingField{"stagger_window_seconds", space.StaggerWindowSeconds},
+			mappingField{"stagger_max_starts_per_second", space.StaggerMaxStartsPerSecond},
 		)
 		return replaceYAMLMapping(rendered, "stock_cn", stockFields)
 	}

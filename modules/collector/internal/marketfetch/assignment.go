@@ -39,21 +39,69 @@ type NodeAssignment struct {
 	ProviderChain   []string
 	RouteVersion    string
 	GroupID         int
+	GroupCount      int
 	Cron            string
 	Enabled         bool
 	AssignmentHash  string
 }
 
-var stockCNProviderWeights = map[string]int{
-	"eastmoney": 1,
-	"sina":      1,
-	"tencent":   1,
+// StockCNStaggerConfig is the release-time Timer fan-out contract. A fixed
+// second window keeps the number of simultaneous provider requests bounded
+// without creating or deleting functions when the active instrument set
+// changes.
+type StockCNStaggerConfig struct {
+	StartSecond        int
+	WindowSeconds      int
+	MaxStartsPerSecond int
+}
+
+func DefaultStockCNStaggerConfig() StockCNStaggerConfig {
+	return StockCNStaggerConfig{StartSecond: 5, WindowSeconds: 35, MaxStartsPerSecond: 6}
+}
+
+func (c StockCNStaggerConfig) Validate(timerFunctionCount int) error {
+	if timerFunctionCount <= 0 {
+		return fmt.Errorf("stock_cn timer function count must be positive")
+	}
+	if c.StartSecond < 0 || c.StartSecond > 59 {
+		return fmt.Errorf("stock_cn stagger start second must be between 0 and 59")
+	}
+	if c.WindowSeconds <= 0 || c.WindowSeconds > 60 || c.StartSecond+c.WindowSeconds > 60 {
+		return fmt.Errorf("stock_cn stagger window must fit between second %d and 59", c.StartSecond)
+	}
+	if c.MaxStartsPerSecond <= 0 {
+		return fmt.Errorf("stock_cn max starts per second must be positive")
+	}
+	startsPerSecond := (timerFunctionCount + c.WindowSeconds - 1) / c.WindowSeconds
+	if startsPerSecond > c.MaxStartsPerSecond {
+		return fmt.Errorf("stock_cn stagger requires up to %d starts per second, above configured maximum %d", startsPerSecond, c.MaxStartsPerSecond)
+	}
+	return nil
+}
+
+func stockCNAssignmentRoute() (string, map[string]int, error) {
+	route, err := loadStockCNRoute()
+	if err != nil {
+		return "", nil, fmt.Errorf("load stock_cn assignment route: %w", err)
+	}
+	weights := route.KlineWeights()
+	if len(weights) < 2 {
+		return "", nil, fmt.Errorf("stock_cn assignment route must have at least two active kline providers")
+	}
+	return route.RouteID, weights, nil
 }
 
 // BuildStockCNAssignments maps the published Timer fleet one-to-one to stable
 // rendezvous groups. The fleet size and measured group-size safety limit are
 // release configuration; neither is inferred from the nodes visible today.
 func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, measuredSafeGroupSize int, tradingDate string, expectedCounts ...int) ([]NodeAssignment, error) {
+	return BuildStockCNAssignmentsWithStagger(group, nodes, measuredSafeGroupSize, tradingDate, DefaultStockCNStaggerConfig(), expectedCounts...)
+}
+
+// BuildStockCNAssignmentsWithStagger is the configurable form used by the
+// Collector reconciler. The legacy wrapper above keeps direct callers on the
+// conservative default while production receives the rendered release value.
+func BuildStockCNAssignmentsWithStagger(group TaskGroup, nodes []scfinvoker.Node, measuredSafeGroupSize int, tradingDate string, stagger StockCNStaggerConfig, expectedCounts ...int) ([]NodeAssignment, error) {
 	if measuredSafeGroupSize <= 0 {
 		return nil, fmt.Errorf("stock_cn measured safe group size must be positive")
 	}
@@ -68,16 +116,14 @@ func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, measuredS
 	if group.MarketType != "equity" || group.DatasetID != StockCNDatasetID || group.Frequency != "1m" || len(group.Subjects) == 0 {
 		return nil, fmt.Errorf("stock_cn assignment requires equity/%s/1m and at least one subject", StockCNDatasetID)
 	}
-	if group.ExternalSymbols == nil {
-		return nil, fmt.Errorf("task group external symbol mapping is required")
-	}
-	for _, subject := range group.Subjects {
-		if strings.TrimSpace(group.ExternalSymbols[subject]) == "" {
-			return nil, fmt.Errorf("subject %s has no external symbol", subject)
-		}
-	}
 	eligible := eligibleTimerNodes(nodes)
 	expectedCount := expectedCounts[0]
+	if stagger == (StockCNStaggerConfig{}) {
+		stagger = DefaultStockCNStaggerConfig()
+	}
+	if err := stagger.Validate(expectedCount); err != nil {
+		return nil, err
+	}
 	timerNodes, err := orderedStockCNTimerNodes(eligible, expectedCount)
 	if err != nil {
 		return nil, err
@@ -85,15 +131,19 @@ func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, measuredS
 	if len(timerNodes) == 0 {
 		return nil, fmt.Errorf("timer assignment capacity insufficient: stock_cn requires a published Timer SCF fleet")
 	}
-	groups, err := marketdata.RendezvousAssign(group.Subjects, len(timerNodes), StockCNRouteID)
-	if err != nil {
-		return nil, fmt.Errorf("assign stock_cn rendezvous groups: %w", err)
-	}
-	groups, err = rebalanceRendezvousGroups(groups, measuredSafeGroupSize, StockCNRouteID)
+	routeVersion, providerWeights, err := stockCNAssignmentRoute()
 	if err != nil {
 		return nil, err
 	}
-	chains, err := marketdata.AssignProviderChains(len(timerNodes), stockCNProviderWeights, StockCNRouteID, strings.TrimSpace(tradingDate))
+	groups, err := marketdata.RendezvousAssign(group.Subjects, len(timerNodes), routeVersion)
+	if err != nil {
+		return nil, fmt.Errorf("assign stock_cn rendezvous groups: %w", err)
+	}
+	groups, err = rebalanceRendezvousGroups(groups, measuredSafeGroupSize, routeVersion)
+	if err != nil {
+		return nil, err
+	}
+	chains, err := marketdata.AssignProviderChains(len(timerNodes), providerWeights, routeVersion, strings.TrimSpace(tradingDate))
 	if err != nil {
 		return nil, fmt.Errorf("assign stock_cn provider chains: %w", err)
 	}
@@ -106,8 +156,14 @@ func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, measuredS
 		hashParts := make([]string, 0, len(subjects))
 		for _, subject := range subjects {
 			external := strings.TrimSpace(group.ExternalSymbols[subject])
-			externals[subject] = external
-			hashParts = append(hashParts, subject+"="+external)
+			resolved, symbolErr := stockProviderSymbol(subject, external)
+			if symbolErr != nil {
+				return nil, symbolErr
+			}
+			if external != "" && !strings.EqualFold(external, resolved) {
+				externals[subject] = external
+			}
+			hashParts = append(hashParts, subject+"="+resolved)
 		}
 		node := timerNodes[groupID]
 		chain := append([]string(nil), chains[groupID]...)
@@ -115,8 +171,8 @@ func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, measuredS
 			NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region,
 			Provider: chain[0], RouteProvider: group.Provider, MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency,
 			Subjects: append([]string(nil), subjects...), ExternalSymbols: externals, ProviderChain: chain,
-			RouteVersion: StockCNRouteID, GroupID: groupID, Cron: stockCNStaggeredCron(groupID), Enabled: len(subjects) > 0,
-			AssignmentHash: AssignmentHash(chain[0], strings.Join(chain, "|"), StockCNRouteID, strconv.Itoa(groupID), group.MarketType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|")),
+			RouteVersion: routeVersion, GroupID: groupID, GroupCount: expectedCount, Cron: stockCNStaggeredCron(groupID, stagger), Enabled: len(subjects) > 0,
+			AssignmentHash: AssignmentHash(chain[0], strings.Join(chain, "|"), routeVersion, strconv.Itoa(groupID), group.MarketType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|")),
 		})
 	}
 	return assignments, nil
@@ -210,11 +266,15 @@ func strictInteger(value any) (int, error) {
 	}
 }
 
-func stockCNStaggeredCron(groupID int) string {
-	second := groupID % 45
-	if second < 0 {
-		second += 45
+func stockCNStaggeredCron(groupID int, configs ...StockCNStaggerConfig) string {
+	stagger := DefaultStockCNStaggerConfig()
+	if len(configs) > 0 {
+		stagger = configs[0]
 	}
+	if stagger.WindowSeconds <= 0 {
+		stagger.WindowSeconds = DefaultStockCNStaggerConfig().WindowSeconds
+	}
+	second := stagger.StartSecond + groupID%stagger.WindowSeconds
 	return fmt.Sprintf("%d * * * * * *", second)
 }
 
@@ -292,12 +352,15 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 		if group.Provider == "" || group.MarketType == "" || group.DatasetID == "" || len(group.Subjects) == 0 {
 			return nil, fmt.Errorf("task group has incomplete identity or no subjects")
 		}
-		if group.ExternalSymbols == nil {
+		stockGroup := strings.EqualFold(group.MarketType, "equity") && group.DatasetID == StockCNDatasetID
+		if !stockGroup && group.ExternalSymbols == nil {
 			return nil, fmt.Errorf("task group external symbol mapping is required")
 		}
-		for _, subject := range group.Subjects {
-			if strings.TrimSpace(group.ExternalSymbols[subject]) == "" {
-				return nil, fmt.Errorf("subject %s has no external symbol", subject)
+		if !stockGroup {
+			for _, subject := range group.Subjects {
+				if strings.TrimSpace(group.ExternalSymbols[subject]) == "" {
+					return nil, fmt.Errorf("subject %s has no external symbol", subject)
+				}
 			}
 		}
 		normalized = append(normalized, group)
@@ -314,6 +377,7 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 	nodeIndex := 0
 	for _, group := range normalized {
 		cron, _ := CronForFrequency(group.Frequency)
+		stockGroup := strings.EqualFold(group.MarketType, "equity") && group.DatasetID == StockCNDatasetID
 		for start := 0; start < len(group.Subjects); start += maxSubjects {
 			end := start + maxSubjects
 			if end > len(group.Subjects) {
@@ -324,12 +388,24 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 			externals := make(map[string]string, len(subjects))
 			for _, subject := range subjects {
 				external := strings.TrimSpace(group.ExternalSymbols[subject])
+				if stockGroup {
+					resolved, symbolErr := stockProviderSymbol(subject, external)
+					if symbolErr != nil {
+						return nil, symbolErr
+					}
+					if external != "" && external != resolved {
+						externals[subject] = external
+					}
+					hashParts = append(hashParts, subject+"="+resolved)
+					continue
+				}
 				externals[subject] = external
 				hashParts = append(hashParts, subject+"="+external)
 			}
 			node := timerNodes[nodeIndex]
+			groupID := nodeIndex
 			nodeIndex++
-			assignments = append(assignments, NodeAssignment{NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region, Provider: group.Provider, RouteProvider: group.Provider, MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: subjects, ExternalSymbols: externals, Cron: cron, Enabled: true, AssignmentHash: AssignmentHash(group.Provider, group.MarketType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|"))})
+			assignments = append(assignments, NodeAssignment{NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region, Provider: group.Provider, RouteProvider: group.Provider, MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: subjects, ExternalSymbols: externals, GroupID: groupID, GroupCount: needed, Cron: cron, Enabled: true, AssignmentHash: AssignmentHash(group.Provider, group.MarketType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|"))})
 		}
 	}
 	for ; nodeIndex < len(timerNodes); nodeIndex++ {

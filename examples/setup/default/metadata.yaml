@@ -467,6 +467,13 @@ fields:
   status: active
 - space_id: stock_cn
   group_id: trading
+  field_id: amount_quality
+  name: 成交额质量
+  value_type: string
+  sort_order: 41
+  status: active
+- space_id: stock_cn
+  group_id: trading
   field_id: route_rank
   name: 路由优先级
   value_type: int
@@ -1257,6 +1264,13 @@ dataset_columns:
   column_name: amount_unit
   origin_type: field
   origin_id: amount_unit
+  value_type: string
+  status: active
+- space_id: stock_cn
+  dataset_id: stock_cn_kline
+  column_name: amount_quality
+  origin_type: field
+  origin_id: amount_quality
   value_type: string
   status: active
 - space_id: stock_cn

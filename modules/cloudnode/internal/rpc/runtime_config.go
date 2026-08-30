@@ -24,19 +24,22 @@ const (
 )
 
 var managedEnvironmentKeys = map[string]struct{}{
-	"MOOX_MARKET_FETCH_PROVIDER":        {},
-	"MOOX_MARKET_FETCH_MARKET_TYPE":     {},
-	"MOOX_MARKET_FETCH_DATASET_ID":      {},
-	"MOOX_MARKET_FETCH_FREQUENCY":       {},
-	"MOOX_MARKET_FETCH_SUBJECTS":        {},
-	"MOOX_MARKET_FETCH_SYMBOLS_JSON":    {},
-	"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": {},
-	"MOOX_MARKET_FETCH_DNS_ROUTES_JSON": {},
-	"MOOX_MARKET_FETCH_DNS_HASH":        {},
-	"MOOX_MARKET_FETCH_DNS_UPDATED_AT":  {},
-	"MOOX_MARKET_FETCH_PROVIDER_CHAIN":  {},
-	"MOOX_MARKET_FETCH_ROUTE_VERSION":   {},
-	"MOOX_MARKET_FETCH_GROUP_ID":        {},
+	"MOOX_MARKET_FETCH_PROVIDER":            {},
+	"MOOX_MARKET_FETCH_MARKET_TYPE":         {},
+	"MOOX_MARKET_FETCH_DATASET_ID":          {},
+	"MOOX_MARKET_FETCH_FREQUENCY":           {},
+	"MOOX_MARKET_FETCH_SUBJECTS":            {},
+	"MOOX_MARKET_FETCH_SYMBOLS_JSON":        {},
+	"MOOX_MARKET_FETCH_ASSIGNMENT_HASH":     {},
+	"MOOX_MARKET_FETCH_DNS_ROUTES_JSON":     {},
+	"MOOX_MARKET_FETCH_DNS_HASH":            {},
+	"MOOX_MARKET_FETCH_DNS_UPDATED_AT":      {},
+	"MOOX_MARKET_FETCH_PROVIDER_CHAIN":      {},
+	"MOOX_MARKET_FETCH_ROUTE_VERSION":       {},
+	"MOOX_MARKET_FETCH_GROUP_ID":            {},
+	"MOOX_MARKET_FETCH_GROUP_COUNT":         {},
+	"MOOX_METRICS_EVENTBUS_URL":             {},
+	"MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE": {},
 }
 
 func (s *Service) SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *pb.BatchUpdateNodeRuntimeConfigsReq) (*pb.SubmitNodeBatchRsp, error) {

@@ -45,8 +45,9 @@ func buildMonitorMarketCanary(
 			SeriesTag: subject.SeriesTag,
 			Freshness: cfg.MarketCanary.Freshness, ReturnThreshold: cfg.MarketCanary.ReturnThreshold,
 			MarketID: subject.MarketID, CalendarPath: subject.CalendarPath,
-			SettleDelay: cfg.MarketCanary.SettleDelay, CalendarWarningLead: cfg.MarketCanary.CalendarWarningLead,
-			ClosedBarCount: cfg.MarketCanary.ClosedBarCount, EligibleKlineProviders: append([]string(nil), subject.EligibleKlineProviders...),
+			SettleDelay: cfg.MarketCanary.SettleDelay, PostCloseDelay: cfg.MarketCanary.PostCloseDelay, CalendarWarningLead: cfg.MarketCanary.CalendarWarningLead,
+			ClosedBarCount: cfg.MarketCanary.ClosedBarCount, ClosedBarMinCoverage: cfg.MarketCanary.ClosedBarMinCoverage,
+			EligibleKlineProviders: append([]string(nil), subject.EligibleKlineProviders...),
 		}
 		check := domain.Check{
 			SpaceID: canaryConfig.SpaceID, CheckID: watchdog.MarketCanaryCheckID(canaryConfig),

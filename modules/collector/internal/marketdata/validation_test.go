@@ -30,7 +30,7 @@ func TestValidateNormalizedKline(t *testing.T) {
 		{name: "high below close", mutate: func(k *NormalizedKline) { k.High = 10.5 }},
 		{name: "low above open", mutate: func(k *NormalizedKline) { k.Low = 10.5 }},
 		{name: "negative volume", mutate: func(k *NormalizedKline) { k.VolumeShares = -1 }},
-		{name: "unsupported frequency", mutate: func(k *NormalizedKline) { k.Frequency = "5m" }},
+		{name: "misaligned frequency", mutate: func(k *NormalizedKline) { k.Frequency = "5m" }},
 		{name: "wrong bar end", mutate: func(k *NormalizedKline) { k.BarEnd = k.BarStart.Add(59 * time.Second) }},
 		{name: "non UTC start", mutate: func(k *NormalizedKline) {
 			k.BarStart = k.BarStart.In(time.FixedZone("CST", 8*60*60))
@@ -44,6 +44,17 @@ func TestValidateNormalizedKline(t *testing.T) {
 			assert.Error(t, ValidateNormalizedKline(got))
 		})
 	}
+}
+
+func TestValidateNormalizedKlineAcceptsCryptoHourBar(t *testing.T) {
+	start := time.Date(2026, 8, 29, 1, 0, 0, 0, time.UTC)
+	kline := NormalizedKline{
+		SubjectID: "BTC-USDT-SPOT", ProviderID: "binance", ProviderSymbol: "BTCUSDT",
+		Frequency: "1h", BarStart: start, BarEnd: start.Add(time.Hour),
+		Open: 100, High: 110, Low: 90, Close: 105, VolumeShares: 12, AmountCNY: 1234,
+		ProviderTimestamp: start.Add(time.Hour), FetchedAt: start.Add(2 * time.Hour), RequestID: "req-hour",
+	}
+	require.NoError(t, ValidateNormalizedKline(kline))
 }
 
 func TestInstrumentSnapshotValidationRequiresCompleteSnapshot(t *testing.T) {

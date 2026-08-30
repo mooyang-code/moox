@@ -13,6 +13,7 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
@@ -57,6 +58,7 @@ type Reconciler struct {
 	MaxSubjects                   int
 	MeasuredSafeGroupSize         int
 	ExpectedStockCNTimerFunctions int
+	StockCNStagger                StockCNStaggerConfig
 	Now                           func() time.Time
 	mu                            sync.Mutex
 	reconcileMu                   sync.Mutex
@@ -160,7 +162,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		if requiredGroupSize > r.MeasuredSafeGroupSize {
 			return r.fail(spaceID, "capacity", fmt.Errorf("stock_cn required_group_size %d exceeds measured_safe_group_size %d", requiredGroupSize, r.MeasuredSafeGroupSize))
 		}
-		assignments, err = BuildStockCNAssignments(groups[0], nodes, r.MeasuredSafeGroupSize, r.stockCNTradingDate(), r.ExpectedStockCNTimerFunctions)
+		assignments, err = BuildStockCNAssignmentsWithStagger(groups[0], nodes, r.MeasuredSafeGroupSize, r.stockCNTradingDate(), r.StockCNStagger, r.ExpectedStockCNTimerFunctions)
 	} else {
 		assignments, err = BuildAssignments(groups, nodes, r.maxSubjects())
 	}
@@ -411,6 +413,16 @@ func (r *Reconciler) observeAssignmentDesiredMetrics(spaceID string, groups []Ta
 	r.Metrics.ResetAssignmentScope(spaceID)
 	for _, scope := range assignmentMetricScopes(groups, assignments) {
 		r.Metrics.ObserveAssignmentDesired(spaceID, scope.DatasetID, scope.Frequency, scope.Required, scope.Active)
+		expected, actual := scope.Required, scope.Active
+		if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
+			expected, actual = r.ExpectedStockCNTimerFunctions, len(assignments)
+			routeID := marketRouteID(spaceID, scope.Provider, scope.MarketType, scope.Frequency)
+			r.Metrics.ResetConfiguredGroupIDs(marketMetricID(spaceID), routeID)
+			for _, assignment := range assignments {
+				r.Metrics.ObserveConfiguredGroupID(marketMetricID(spaceID), routeID, assignment.GroupID)
+			}
+		}
+		r.Metrics.ObserveConfiguredGroups(marketMetricID(spaceID), marketRouteID(spaceID, scope.Provider, scope.MarketType, scope.Frequency), expected, actual)
 	}
 }
 
@@ -580,11 +592,47 @@ func (r *Reconciler) observeAssignmentMetrics(spaceID string, groups []TaskGroup
 	r.Metrics.ResetAssignmentScope(spaceID)
 	for _, scope := range assignmentMetricScopes(groups, assignments) {
 		r.Metrics.ObserveAssignment(spaceID, scope.DatasetID, scope.Frequency, scope.Required, scope.Active, reconciledAt)
+		expected, actual := scope.Required, scope.Active
+		if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
+			expected, actual = r.ExpectedStockCNTimerFunctions, len(assignments)
+			routeID := marketRouteID(spaceID, scope.Provider, scope.MarketType, scope.Frequency)
+			r.Metrics.ResetConfiguredGroupIDs(marketMetricID(spaceID), routeID)
+			for _, assignment := range assignments {
+				r.Metrics.ObserveConfiguredGroupID(marketMetricID(spaceID), routeID, assignment.GroupID)
+			}
+		}
+		r.Metrics.ObserveConfiguredGroups(marketMetricID(spaceID), marketRouteID(spaceID, scope.Provider, scope.MarketType, scope.Frequency), expected, actual)
 	}
 	// A valid reconciliation with zero enabled groups is still a success. Set
 	// the space-level health outside the scope loop so a previous failure can
 	// recover after rules are disabled or removed.
 	r.Metrics.ObserveAssignmentSuccess(spaceID, reconciledAt)
+}
+
+func marketMetricID(spaceID string) string {
+	if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
+		return StockCNSpaceID
+	}
+	return "crypto_market"
+}
+
+func marketRouteID(spaceID, provider, marketType, frequency string) string {
+	if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
+		return StockCNRouteID
+	}
+	if strings.EqualFold(strings.TrimSpace(provider), "binance") {
+		product := "spot"
+		if strings.EqualFold(strings.TrimSpace(marketType), "swap") {
+			product = "swap"
+		}
+		if parsed, err := marketdata.ParseFrequency(frequency); err == nil {
+			frequency = string(parsed)
+		} else {
+			frequency = strings.ToLower(strings.TrimSpace(frequency))
+		}
+		return "binance_" + product + "_kline_" + frequency
+	}
+	return "unknown"
 }
 
 type assignmentMetricScope struct {
@@ -658,14 +706,12 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 				continue
 			}
 			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-			if strings.TrimSpace(subject.ExternalSymbol) == "" {
-				// A symbol without an external exchange code cannot be executed;
-				// omit it while keeping the remaining assignments healthy.
-				log.WarnContextf(ctx, "skip market symbol without external symbol subject=%q", subject.SubjectID)
-				continue
+			external, symbolErr := marketProviderSymbol(params.MarketType, subjectID, subject.ExternalSymbol)
+			if symbolErr != nil {
+				return nil, fmt.Errorf("invalid stock symbol subject %s: %w", subjectID, symbolErr)
 			}
 			symbolIDs = append(symbolIDs, subjectID)
-			externalSymbols[subjectID] = strings.TrimSpace(subject.ExternalSymbol)
+			externalSymbols[subjectID] = external
 		}
 		for _, frequency := range params.Collector.Intervals {
 			groups = append(groups, TaskGroup{Provider: params.Provider, MarketType: params.MarketType, DatasetID: params.Target.DatasetID, Frequency: frequency, Subjects: symbolIDs, ExternalSymbols: externalSymbols})

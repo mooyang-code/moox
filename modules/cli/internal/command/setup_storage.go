@@ -32,9 +32,6 @@ const (
 	storagePrimaryRemoteAddress  = "127.0.0.1:20101"
 	adminSpaceRemoteAddress      = "127.0.0.1:11107"
 	storageBrowserRemoteAddress  = "127.0.0.1:9527"
-	storageAuthFile              = "/data/moox/storage/secrets/storage-node-auth.env"
-	storagePrimaryAuthFile       = "/data/moox/storage/secrets/storage-internal-auth.env"
-	storageRemoteProvenanceFile  = "/data/moox/storage/build-provenance.json"
 	storageLocalProvenanceFile   = "release/deploy-stage/moox/build-provenance.json"
 	storageReleaseManifestFile   = "artifacts/storage-datanode-release-sha256.txt"
 	storageE2ESpec               = "tests/storage-datanode-management.remote.e2e.spec.ts"
@@ -428,7 +425,7 @@ func defaultSetupVerifyStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	}
 	defer transport.Close()
 	defer session.Close()
-	return verifyRemoteStorage(ctx, transport, session, root)
+	return verifyRemoteStorage(ctx, transport, session, root, snapshot.Manifest.Paths.Resolved().StorageRoot)
 }
 
 func defaultSetupE2EStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name, namespace string) (storageE2EResult, error) {
@@ -453,12 +450,13 @@ func openRemoteStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name
 	if err != nil {
 		return setupconfig.Host{}, nil, nil, "", err
 	}
-	secret, err := readRemoteStorageSecret(ctx, transport)
+	storageRoot := snapshot.Manifest.Paths.Resolved().StorageRoot
+	secret, err := readRemoteStorageSecret(ctx, transport, storageRoot)
 	if err != nil {
 		_ = transport.Close()
 		return setupconfig.Host{}, nil, nil, "", err
 	}
-	primarySecret, err := readRemoteStoragePrimarySecret(ctx, transport)
+	primarySecret, err := readRemoteStoragePrimarySecret(ctx, transport, storageRoot)
 	if err != nil {
 		_ = transport.Close()
 		return setupconfig.Host{}, nil, nil, "", err
@@ -477,32 +475,34 @@ func openRemoteStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name
 	return host, transport, session, root, nil
 }
 
-func readRemoteStorageSecret(ctx context.Context, transport setupssh.Client) (string, error) {
+func readRemoteStorageSecret(ctx context.Context, transport setupssh.Client, storageRoot string) (string, error) {
 	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
-value=$(sed -n 's/^MOOX_STORAGE_NODE_AUTH_SECRET=//p' "` + storageAuthFile + `" | head -n 1)
+secret_file="$1/secrets/storage-node-auth.env"
+value=$(sed -n 's/^MOOX_STORAGE_NODE_AUTH_SECRET=//p' "$secret_file" | head -n 1)
 test -n "$value"
 case "$value" in *[!A-Za-z0-9._-]*) exit 1 ;; esac
-printf '%s' "$value"`}, nil)
+printf '%s' "$value"`, "moox-storage-node-auth", storageRoot}, nil)
 	if err != nil || strings.TrimSpace(result.Stdout) == "" || strings.ContainsAny(result.Stdout, "\r\n") {
 		return "", errors.New("storage_verification_auth_unavailable")
 	}
 	return strings.TrimSpace(result.Stdout), nil
 }
 
-func readRemoteStoragePrimarySecret(ctx context.Context, transport setupssh.Client) (string, error) {
+func readRemoteStoragePrimarySecret(ctx context.Context, transport setupssh.Client, storageRoot string) (string, error) {
 	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
-value=$(sed -n 's/^MOOX_STORAGE_PRIMARY_AUTH_SECRET=//p' "` + storagePrimaryAuthFile + `" | head -n 1)
+secret_file="$1/secrets/storage-internal-auth.env"
+value=$(sed -n 's/^MOOX_STORAGE_PRIMARY_AUTH_SECRET=//p' "$secret_file" | head -n 1)
 test -n "$value"
 case "$value" in *[!A-Za-z0-9._-]*) exit 1 ;; esac
-printf '%s' "$value"`}, nil)
+printf '%s' "$value"`, "moox-storage-primary-auth", storageRoot}, nil)
 	if err != nil || strings.TrimSpace(result.Stdout) == "" || strings.ContainsAny(result.Stdout, "\r\n") {
 		return "", errors.New("storage_primary_auth_unavailable")
 	}
 	return strings.TrimSpace(result.Stdout), nil
 }
 
-func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session *remoteStorageSession, root string) (storageVerifyResult, error) {
-	components, err := readStorageComponents(ctx, transport)
+func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session *remoteStorageSession, root, storageRoot string) (storageVerifyResult, error) {
+	components, err := readStorageComponents(ctx, transport, storageRoot)
 	if err != nil {
 		return storageVerifyResult{}, err
 	}
@@ -518,7 +518,7 @@ func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session
 	if err != nil {
 		return storageVerifyResult{}, err
 	}
-	remoteProvenance, err := readRemoteStorageBuildProvenance(ctx, transport)
+	remoteProvenance, err := readRemoteStorageBuildProvenance(ctx, transport, storageRoot)
 	if err != nil {
 		return storageVerifyResult{}, err
 	}
@@ -681,10 +681,11 @@ func selectDeploymentDataNode(items []*storagepb.DataNodeListItem) (*storagepb.D
 	return nil, errors.New("storage_deployment_node_missing")
 }
 
-func readRemoteStorageBuildProvenance(ctx context.Context, transport setupssh.Client) (storageBuildProvenance, error) {
+func readRemoteStorageBuildProvenance(ctx context.Context, transport setupssh.Client, storageRoot string) (storageBuildProvenance, error) {
 	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
-test -f "` + storageRemoteProvenanceFile + `"
-cat "` + storageRemoteProvenanceFile + `"`}, nil)
+provenance_file="$1/build-provenance.json"
+test -f "$provenance_file"
+cat "$provenance_file"`, "moox-storage-provenance", storageRoot}, nil)
 	if err != nil {
 		return storageBuildProvenance{}, errors.New("storage_provenance_unavailable")
 	}
@@ -773,11 +774,11 @@ esac`}, nil)
 	}
 }
 
-func readStorageComponents(ctx context.Context, transport setupssh.Client) (map[string]storageComponent, error) {
+func readStorageComponents(ctx context.Context, transport setupssh.Client, storageRoot string) (map[string]storageComponent, error) {
 	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
 for name in storage-primary storage-node storage-view; do
-  if "/data/moox/storage/status.sh" "$name" >/dev/null 2>&1; then printf '%s ready\n' "$name"; else printf '%s unhealthy\n' "$name"; fi
-done`}, nil)
+  if "$1/status.sh" "$name" >/dev/null 2>&1; then printf '%s ready\n' "$name"; else printf '%s unhealthy\n' "$name"; fi
+done`, "moox-storage-status", storageRoot}, nil)
 	if err != nil {
 		return nil, errors.New("storage_component_unavailable")
 	}

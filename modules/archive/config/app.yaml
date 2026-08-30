@@ -3,7 +3,7 @@ archive:
   state_dir: ../data/archive-state
   device_id: parquet-local
   sources:
-    stock_cn: {datasets: [equity_kline, etf_kline, index_kline]}
+    stock_cn: {datasets: [stock_cn_kline, etf_kline, index_kline]}
     stock_us: {datasets: [equity_kline, etf_kline, index_kline]}
     crypto_market: {datasets: [spot_kline_1h, perpetual_kline_1h]}
   eventbus:

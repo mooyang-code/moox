@@ -49,10 +49,17 @@ const (
 	// measured full-market Sina instrument snapshot while Timer functions keep
 	// their fixed 15-second execution budget.
 	DefaultStockCNInstrumentInvokeTimeoutSeconds = 60
+	// Stock Timer groups are spread across this fixed second window. These are
+	// release defaults; changing them requires a new rendered configuration and
+	// the same egress gate as changing the fleet size.
+	DefaultStockCNStaggerStartSecond        = 5
+	DefaultStockCNStaggerWindowSeconds      = 35
+	DefaultStockCNStaggerMaxStartsPerSecond = 6
 )
 
-// Paths controls where setup-cli installs the control and Storage packages on
-// the target host. All paths are absolute and must remain below DeployRoot.
+// Paths controls where setup-cli installs the control and Storage packages.
+// Storage may be deployed to a separate host with a different mount layout,
+// so StorageRoot is independently validated as an absolute safe path.
 // The section is optional: omitted values resolve to the cloud-disk defaults
 // above, which keeps older custom.toml files deterministic.
 type Paths struct {
@@ -254,6 +261,9 @@ type SCFFetcherSpace struct {
 	// built-in default when all enabled regional function_count values are zero.
 	TimerFunctionCount             int                `toml:"timer_function_count"`
 	MeasuredSafeGroupSize          int                `toml:"measured_safe_group_size"`
+	StaggerStartSecond             int                `toml:"stagger_start_second"`
+	StaggerWindowSeconds           int                `toml:"stagger_window_seconds"`
+	StaggerMaxStartsPerSecond      int                `toml:"stagger_max_starts_per_second"`
 	StorageGatewayNodeID           string             `toml:"storage_gateway_node_id"`
 	StorageRPCGatewayTarget        string             `toml:"storage_rpc_gateway_target"`
 	MemorySize                     int                `toml:"memory_size"`
@@ -561,10 +571,8 @@ func validatePaths(paths *Paths) error {
 		}
 	}
 	base := paths.DeployRoot + string(filepath.Separator)
-	for name, value := range map[string]string{"control_root": paths.ControlRoot, "storage_root": paths.StorageRoot} {
-		if value != paths.DeployRoot && !strings.HasPrefix(value, base) {
-			return fmt.Errorf("config_invalid: paths.%s must stay under paths.deploy_root", name)
-		}
+	if paths.ControlRoot != paths.DeployRoot && !strings.HasPrefix(paths.ControlRoot, base) {
+		return fmt.Errorf("config_invalid: paths.control_root must stay under paths.deploy_root")
 	}
 	return nil
 }
@@ -834,6 +842,24 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		if cfg.MeasuredSafeGroupSize <= 0 {
 			return fmt.Errorf("config_invalid: %s.measured_safe_group_size must be a positive value for stock_cn", path)
 		}
+		if cfg.StaggerStartSecond == 0 && cfg.StaggerWindowSeconds == 0 && cfg.StaggerMaxStartsPerSecond == 0 {
+			cfg.StaggerStartSecond = DefaultStockCNStaggerStartSecond
+			cfg.StaggerWindowSeconds = DefaultStockCNStaggerWindowSeconds
+			cfg.StaggerMaxStartsPerSecond = DefaultStockCNStaggerMaxStartsPerSecond
+		}
+		if cfg.StaggerStartSecond < 0 || cfg.StaggerStartSecond > 59 {
+			return fmt.Errorf("config_invalid: %s.stagger_start_second must be between 0 and 59", path)
+		}
+		if cfg.StaggerWindowSeconds <= 0 || cfg.StaggerWindowSeconds > 60 || cfg.StaggerStartSecond+cfg.StaggerWindowSeconds > 60 {
+			return fmt.Errorf("config_invalid: %s.stagger_window_seconds must fit between second %d and 59", path, cfg.StaggerStartSecond)
+		}
+		if cfg.StaggerMaxStartsPerSecond <= 0 {
+			return fmt.Errorf("config_invalid: %s.stagger_max_starts_per_second must be positive", path)
+		}
+		startsPerSecond := (cfg.TimerFunctionCount + cfg.StaggerWindowSeconds - 1) / cfg.StaggerWindowSeconds
+		if startsPerSecond > cfg.StaggerMaxStartsPerSecond {
+			return fmt.Errorf("config_invalid: %s timer_function_count %d requires up to %d starts per second, above stagger_max_starts_per_second %d", path, cfg.TimerFunctionCount, startsPerSecond, cfg.StaggerMaxStartsPerSecond)
+		}
 		if cfg.InstrumentInvokeTimeoutSeconds == 0 {
 			cfg.InstrumentInvokeTimeoutSeconds = DefaultStockCNInstrumentInvokeTimeoutSeconds
 		}
@@ -844,6 +870,8 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		return fmt.Errorf("config_invalid: %s.measured_safe_group_size is only valid for stock_cn", path)
 	} else if cfg.InstrumentInvokeTimeoutSeconds != 0 {
 		return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds is only valid for stock_cn", path)
+	} else if cfg.StaggerStartSecond != 0 || cfg.StaggerWindowSeconds != 0 || cfg.StaggerMaxStartsPerSecond != 0 {
+		return fmt.Errorf("config_invalid: %s stagger settings are only valid for stock_cn", path)
 	}
 	if cfg.RealtimeBatchSize == 0 {
 		cfg.RealtimeBatchSize = 30
@@ -966,6 +994,11 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 	if cfg == nil {
 		return fmt.Errorf("config_invalid: %s is required", path)
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stock_cn") && cfg.StaggerStartSecond == 0 && cfg.StaggerWindowSeconds == 0 && cfg.StaggerMaxStartsPerSecond == 0 {
+		cfg.StaggerStartSecond = DefaultStockCNStaggerStartSecond
+		cfg.StaggerWindowSeconds = DefaultStockCNStaggerWindowSeconds
+		cfg.StaggerMaxStartsPerSecond = DefaultStockCNStaggerMaxStartsPerSecond
 	}
 	explicitTotal := 0
 	autoRegions := make([]int, 0)

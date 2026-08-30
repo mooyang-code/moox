@@ -29,9 +29,9 @@ import (
 
 type Options struct {
 	RepositoryRoot string
-	// DeployRoot is the shared parent on the target cloud disk. ControlRoot
-	// and StorageRoot are the independently managed package directories below
-	// it; empty values resolve to the canonical /data/moox layout.
+	// DeployRoot is the control deployment root. StorageRoot may be on a
+	// different mount because setup can deploy Storage to a separate host.
+	// Empty values resolve to the canonical /data/moox layout.
 	DeployRoot              string
 	ControlRoot             string
 	StorageRoot             string
@@ -165,9 +165,6 @@ func normalizeDeployPaths(opts *Options) error {
 	if paths.ControlRoot != paths.DeployRoot && !strings.HasPrefix(paths.ControlRoot, base) {
 		return fmt.Errorf("paths_invalid")
 	}
-	if paths.StorageRoot != paths.DeployRoot && !strings.HasPrefix(paths.StorageRoot, base) {
-		return fmt.Errorf("paths_invalid")
-	}
 	opts.DeployRoot, opts.ControlRoot, opts.StorageRoot = paths.DeployRoot, paths.ControlRoot, paths.StorageRoot
 	if opts.LocalLogs.MaxSizeMB == 0 {
 		opts.LocalLogs.MaxSizeMB = 50
@@ -238,8 +235,15 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	if opts.ResetViewData {
 		viewReset = "1"
 	}
+	installScript := installStorageScript
+	if storageEventBusURL, ok := storageEventBusURLForInstall(opts); ok {
+		// Storage is installed by this SSH-side script rather than by the
+		// package shell. Pass the remote EventBus endpoint into start.sh so a
+		// separately hosted Storage process cannot fall back to loopback.
+		installScript = "export MOOX_STORAGE_EVENTBUS_URL=" + shellQuote(storageEventBusURL) + "\n" + installScript
+	}
 	if _, err := transport.Run(ctx, []string{
-		"sh", "-lc", installStorageScript, "moox-install-storage", opts.StorageRoot, opts.ControlRoot, reset, viewReset, controlGateway, activationToken, remoteArchive,
+		"sh", "-lc", installScript, "moox-install-storage", opts.StorageRoot, opts.ControlRoot, reset, viewReset, controlGateway, activationToken, remoteArchive,
 	}, nil); err != nil {
 		return fmt.Errorf("storage_install_failed")
 	}
@@ -266,6 +270,26 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	installed = false
 	_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeStorageScript, "moox-finalize-storage", activationToken, opts.StorageRoot, opts.DeployRoot}, nil)
 	return nil
+}
+
+func storageEventBusURLForInstall(opts Options) (string, bool) {
+	if strings.TrimSpace(opts.EventBusPublicAddress) == "" && opts.EventBusPort == 0 && !opts.EventBusTLSEnabled {
+		return "", false
+	}
+	env, err := eventBusCommandEnv(nil, opts)
+	if err != nil {
+		return "", false
+	}
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "MOOX_STORAGE_EVENTBUS_URL=") {
+			return strings.TrimPrefix(entry, "MOOX_STORAGE_EVENTBUS_URL="), true
+		}
+	}
+	return "", false
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func storageArchivePath(activationToken string) string {
@@ -585,6 +609,7 @@ func eventBusCommandEnv(base []string, opts Options) ([]string, error) {
 		tlsKey+"=1",
 		addressKey+"="+address,
 		portKey+"="+strconv.Itoa(opts.EventBusPort),
+		"MOOX_STORAGE_EVENTBUS_URL=tls://"+net.JoinHostPort(strings.Trim(address, "[]"), strconv.Itoa(opts.EventBusPort)),
 	), nil
 }
 

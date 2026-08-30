@@ -106,8 +106,8 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if err := json.Unmarshal([]byte(byName["moox_cloudnode"].ExtraConfig), &cloudNodeExtra); err != nil {
 		t.Fatalf("unmarshal cloudnode extra_config: %v", err)
 	}
-	if cloudNodeExtra.TimeoutMS != 120000 {
-		t.Fatalf("cloudnode gateway timeout = %d, want 120000", cloudNodeExtra.TimeoutMS)
+	if cloudNodeExtra.TimeoutMS != 330000 {
+		t.Fatalf("cloudnode gateway timeout = %d, want 330000", cloudNodeExtra.TimeoutMS)
 	}
 	for name, want := range map[string]string{
 		"moox_strategy":  "http://127.0.0.1:11431/readyz",

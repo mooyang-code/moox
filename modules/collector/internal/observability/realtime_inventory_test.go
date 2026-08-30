@@ -45,7 +45,7 @@ func TestRealtimeInventorySelectsEnabledScheduledKlineAndDeduplicates(t *testing
 		collectorRule("live-5m", true, "kline", "bars", "5m"),
 		collectorRule("duplicate", true, "kline", "bars", "1m"),
 		collectorRule("batch", true, "kline", "batch-bars", "1m"),
-		collectorRule("symbol", true, "symbol", "symbols", "1m"),
+		collectorRule("instrument", true, "instrument", "symbols", "1m"),
 		collectorRule("disabled", false, "kline", "disabled-bars", "1m"),
 	}}
 	registry := &registryStub{}

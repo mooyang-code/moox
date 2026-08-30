@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
@@ -19,12 +20,17 @@ type Config struct {
 	BaseURL    string
 	HTTPClient *http.Client
 	Now        func() time.Time
+	RateLimit  marketdata.RateLimitPolicy
 }
 
 type Provider struct {
-	baseURL string
-	client  *http.Client
-	now     func() time.Time
+	baseURL             string
+	client              *http.Client
+	now                 func() time.Time
+	rateLimit           marketdata.RateLimitPolicy
+	instrumentGuardOnce sync.Once
+	instrumentGuard     *marketdata.FeedGuard
+	instrumentGuardErr  error
 }
 
 func New(cfg Config) *Provider {
@@ -37,14 +43,17 @@ func New(cfg Config) *Provider {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now}
+	if cfg.RateLimit.RequestsPerSecond <= 0 {
+		cfg.RateLimit = marketdata.RateLimitPolicy{RequestsPerSecond: 2, Burst: 1, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: 5 * time.Second}
+	}
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit}
 }
 
 func (*Provider) Descriptor() marketdata.ProviderDescriptor {
 	return marketdata.ProviderDescriptor{ID: "baidu", DisplayName: "Baidu", Hosts: []string{"finance.pae.baidu.com"}}
 }
 
-func (*Provider) ShadowSpec() marketdata.KlineSpec {
+func (p *Provider) ShadowSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
 		Markets:           []string{"stock_cn"},
 		Exchanges:         []string{"XSHG", "XSHE", "XBSE"},
@@ -53,29 +62,17 @@ func (*Provider) ShadowSpec() marketdata.KlineSpec {
 		HasAmount:         true,
 		MaxBarsPerRequest: 240,
 		TimestampMode:     marketdata.TimestampModeOpen,
-		RateLimit: marketdata.RateLimitPolicy{
-			RequestsPerSecond: 2,
-			Burst:             1,
-			MaxConcurrent:     1,
-			Cooldown:          time.Second,
-			RequestTimeout:    5 * time.Second,
-		},
+		RateLimit:         p.rateLimit,
 	}
 }
 
-func (*Provider) InstrumentSpec() marketdata.InstrumentSpec {
+func (p *Provider) InstrumentSpec() marketdata.InstrumentSpec {
 	return marketdata.InstrumentSpec{
 		Markets:      []string{"stock_cn"},
 		Exchanges:    []string{"XSHG", "XSHE", "XBSE"},
 		FullSnapshot: true,
 		PageSize:     200,
-		RateLimit: marketdata.RateLimitPolicy{
-			RequestsPerSecond: 2,
-			Burst:             1,
-			MaxConcurrent:     1,
-			Cooldown:          time.Second,
-			RequestTimeout:    5 * time.Second,
-		},
+		RateLimit:    p.rateLimit,
 	}
 }
 
@@ -114,7 +111,7 @@ func (p *Provider) FetchShadowKlines(ctx context.Context, req marketdata.KlineRe
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, err)
 	}
 	var payload shadowResponse
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -155,32 +152,42 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		fetchedAt = p.now().UTC()
 	}
 	builder := commonsrc.NewInstrumentSnapshotBuilder(p.Descriptor().ID, marketID, fetchedAt)
+	p.instrumentGuardOnce.Do(func() {
+		p.instrumentGuard, p.instrumentGuardErr = marketdata.NewFeedGuard(spec.RateLimit, nil, nil)
+	})
+	if p.instrumentGuardErr != nil {
+		return marketdata.InstrumentSnapshot{}, p.instrumentGuardErr
+	}
 	for page := 1; ; page++ {
 		query := url.Values{
 			"pn": {strconv.Itoa(page)},
 			"rn": {strconv.Itoa(spec.PageSize)},
 		}
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/getmarketrank?"+query.Encode(), nil)
-		if err != nil {
-			return marketdata.InstrumentSnapshot{}, err
-		}
-		httpReq.Header.Set("User-Agent", "moox-collector/1.0")
-		resp, err := p.client.Do(httpReq)
-		if err != nil {
-			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
-		}
-		body, readErr := func() ([]byte, error) {
+		var body []byte
+		if err := p.instrumentGuard.Do(ctx, func(pageCtx context.Context) error {
+			httpReq, requestErr := http.NewRequestWithContext(pageCtx, http.MethodGet, p.baseURL+"/api/getmarketrank?"+query.Encode(), nil)
+			if requestErr != nil {
+				return requestErr
+			}
+			httpReq.Header.Set("User-Agent", "moox-collector/1.0")
+			resp, requestErr := p.client.Do(httpReq)
+			if requestErr != nil {
+				return fmt.Errorf("%w: %v", marketdata.ErrTimeout, requestErr)
+			}
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusTooManyRequests {
-				return nil, marketdata.ErrRateLimited
+				return marketdata.ErrRateLimited
 			}
 			if resp.StatusCode >= 400 {
-				return nil, fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)
+				return fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)
 			}
-			return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-		}()
-		if readErr != nil {
-			return marketdata.InstrumentSnapshot{}, readErr
+			body, requestErr = io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+			if requestErr != nil {
+				return fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, requestErr)
+			}
+			return nil
+		}); err != nil {
+			return marketdata.InstrumentSnapshot{}, err
 		}
 		var payload map[string]any
 		if err := json.Unmarshal(body, &payload); err != nil {

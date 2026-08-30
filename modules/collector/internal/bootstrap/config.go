@@ -35,6 +35,9 @@ type Config struct {
 type StockCNConfig struct {
 	ExpectedTimerFunctionCount int `yaml:"expected_timer_function_count"`
 	MeasuredSafeGroupSize      int `yaml:"measured_safe_group_size"`
+	StaggerStartSecond         int `yaml:"stagger_start_second"`
+	StaggerWindowSeconds       int `yaml:"stagger_window_seconds"`
+	StaggerMaxStartsPerSecond  int `yaml:"stagger_max_starts_per_second"`
 }
 
 // DatabaseConfig describes SQLite settings.

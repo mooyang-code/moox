@@ -268,6 +268,35 @@ func TestMarketCanaryStockCNChecksLatestClosedBucketsAndOHLCV(t *testing.T) {
 	require.Equal(t, "", reader.request.GetKeys()[0].GetSeriesTag())
 }
 
+func TestMarketCanaryStockCNChecksFinalBarDuringPostCloseGrace(t *testing.T) {
+	config := stockCanaryConfig(t, stockCalendarPath(t, "2026-12-31"))
+	early := time.Date(2026, 8, 28, 7, 0, 5, 0, time.UTC) // 15:00:05 Asia/Shanghai.
+	earlyReader := &canaryReader{}
+	earlyResult := (MarketCanary{Reader: earlyReader, Config: config, Now: func() time.Time { return early }}).Run(t.Context())
+	require.True(t, earlyResult.Success)
+	require.JSONEq(t, `{"state":"idle"}`, earlyResult.BodyExcerpt)
+	require.Nil(t, earlyReader.request)
+
+	now := time.Date(2026, 8, 28, 7, 1, 5, 0, time.UTC) // 15:01:05 Asia/Shanghai.
+	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+		stockCanaryRow(time.Date(2026, 8, 28, 6, 57, 0, 0, time.UTC), "sina"),
+		stockCanaryRow(time.Date(2026, 8, 28, 6, 58, 0, 0, time.UTC), "sina"),
+		stockCanaryRow(time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), "sina"),
+	}}
+	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
+
+	require.True(t, result.Success)
+	require.NotNil(t, reader.request)
+	foundFinalBar := false
+	for _, key := range reader.request.GetKeys() {
+		if key.GetDataTime() == "2026-08-28T06:59:00Z" && key.GetSeriesTag() == "" {
+			foundFinalBar = true
+			break
+		}
+	}
+	require.True(t, foundFinalBar)
+}
+
 func TestMarketCanaryStockCNMiddayAndClosedDayAreIdleHealthy(t *testing.T) {
 	config := stockCanaryConfig(t, stockCalendarPath(t, "2026-12-31"))
 	for _, now := range []time.Time{
@@ -299,7 +328,32 @@ func TestMarketCanaryStockCNReportsCalendarAndDataReasons(t *testing.T) {
 
 	reader.rows = reader.rows[1:]
 	result = (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
-	require.Equal(t, "stale_expected_bucket", result.ErrorMessage)
+	require.Equal(t, "closed_bar_coverage_below_threshold", result.ErrorMessage)
+}
+
+func TestMarketCanaryStockCNEnforcesConfiguredClosedBarCoverage(t *testing.T) {
+	now := time.Date(2026, 8, 28, 1, 33, 5, 0, time.UTC)
+	config := stockCanaryConfig(t, stockCalendarPath(t, "2026-12-31"))
+	config.ClosedBarMinCoverage = 0.99
+	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+		stockCanaryRow(time.Date(2026, 8, 28, 1, 31, 0, 0, time.UTC), "sina"),
+		stockCanaryRow(time.Date(2026, 8, 28, 1, 32, 0, 0, time.UTC), "tencent"),
+	}}
+
+	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
+
+	require.Equal(t, "closed_bar_coverage_below_threshold", result.ErrorMessage)
+	require.JSONEq(t, `{"type":"stock_cn_closed_bar_coverage","expected":3,"actual":2,"coverage":0.6666666666666666,"minimum":0.99}`, result.BodyExcerpt)
+}
+
+func TestMarketCanaryStockCNReportsNoClosedBarData(t *testing.T) {
+	now := time.Date(2026, 8, 28, 1, 33, 5, 0, time.UTC)
+	config := stockCanaryConfig(t, stockCalendarPath(t, "2026-12-31"))
+	config.ClosedBarMinCoverage = 0.99
+
+	result := (MarketCanary{Reader: &canaryReader{}, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
+
+	require.Equal(t, "no_closed_bar_data", result.ErrorMessage)
 }
 
 func TestMarketCanaryStockCNReportsNoEligibleKlineFeed(t *testing.T) {
@@ -316,7 +370,7 @@ func stockCanaryConfig(t *testing.T, calendarPath string) MarketCanaryConfig {
 	return MarketCanaryConfig{
 		SpaceID: "stock_cn", DatasetID: "stock_cn_kline", SubjectID: "600000.XSHG", Frequency: "1m", SeriesTag: stringPtr(""),
 		Freshness: 3 * time.Minute, ReturnThreshold: 0.2, MarketID: "stock_cn", CalendarPath: calendarPath,
-		SettleDelay: 5 * time.Second, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3,
+		SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99,
 		EligibleKlineProviders: []string{"sina", "tencent", "eastmoney"},
 	}
 }

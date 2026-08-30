@@ -17,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
@@ -31,9 +30,11 @@ const (
 	DefaultMaxPlan   = 1000
 	// 80 items / 16 workers yields at most five 1.5-second storage-read waves,
 	// leaving room inside the fixed 10-second tRPC timer deadline.
-	gapAuditPageSize = 40
-	gapAuditWorkers  = 4
-	gapAuditInterval = 5 * time.Minute
+	gapAuditPageSize      = 40
+	gapAuditWorkers       = 4
+	gapAuditInterval      = 5 * time.Minute
+	gapAuditRangePageSize = 1000
+	gapAuditMaxRangePages = 3
 )
 
 type scheduleState struct {
@@ -42,10 +43,16 @@ type scheduleState struct {
 }
 
 type gapAuditPlan struct {
-	Kind           domain.BatchKind
-	Start          time.Time
-	BarLimit       int
-	MaxConcurrency int
+	Kind            domain.BatchKind
+	Start           time.Time
+	End             time.Time
+	BarLimit        int
+	MaxConcurrency  int
+	RateBudgetRatio float64
+}
+
+type timeSeriesRangeReader interface {
+	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq) (*storagepb.ReadTimeSeriesRowsRsp, error)
 }
 
 // Scheduler scans enabled rules and creates stable SCF batches. Realtime work
@@ -58,7 +65,7 @@ type Scheduler struct {
 	Batches           *store.FetchBatchRepository
 	Retries           *store.FetchRetryRepository
 	Invoker           *scfinvoker.Client
-	Storage           func(string, string, string) (binance.BatchStorage, error)
+	Storage           func(string, string, string) (StorageReader, error)
 	StorageTarget     string
 	BatchSize         int
 	InvokeConcurrency int
@@ -66,7 +73,7 @@ type Scheduler struct {
 	Metrics           *Metrics
 	SpaceID           string
 	Symbols           datasetSource
-	// InvokeNonRealtimeOnly keeps the old Invoke path for symbol snapshots and
+	// InvokeNonRealtimeOnly keeps the Invoke path for instrument snapshots and
 	// bounded catch-up while realtime K-lines run from Timer-triggered nodes.
 	InvokeNonRealtimeOnly bool
 	DNSCache              interface {
@@ -83,11 +90,11 @@ type Scheduler struct {
 	invokeSem        chan struct{}
 }
 
-// fullSymbolSnapshotShards keeps each SCF's SQLite metadata registration
+// fullInstrumentSnapshotShards keeps each SCF's SQLite metadata registration
 // small while still sourcing the complete exchange snapshot. Binance's active
 // USDT catalogue is currently well below 640 symbols, so each shard carries
 // at most about 20 subjects.
-const fullSymbolSnapshotShards = 32
+const fullInstrumentSnapshotShards = 32
 
 func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	if s == nil || s.Rules == nil || s.Batches == nil || s.Invoker == nil {
@@ -141,13 +148,15 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		}
 		return nodes[i].FunctionName < nodes[j].FunctionName
 	})
-	if len(nodes) == 0 && len(invokeRules) > 0 {
-		return fmt.Errorf("no active market fetcher nodes")
+	invokeNodes := filterNodesByTrigger(nodes, "invoke")
+	timerNodes := filterNodesByTrigger(nodes, "timer")
+	if len(invokeNodes) == 0 && len(invokeRules) > 0 {
+		return fmt.Errorf("no active Invoke market fetcher nodes")
 	}
-	if err := s.recoverDue(ctx, spaceID, nodes, now); err != nil {
+	if err := s.recoverDue(ctx, spaceID, invokeNodes, now); err != nil {
 		log.WarnContextf(ctx, "recover market fetch batches failed: %v", err)
 	}
-	if err := s.dispatchDueRetries(ctx, spaceID, nodes, now); err != nil {
+	if err := s.dispatchDueRetries(ctx, spaceID, invokeNodes, now); err != nil {
 		log.WarnContextf(ctx, "dispatch market fetch retries failed: %v", err)
 	}
 	planned := 0
@@ -160,14 +169,21 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			log.WarnContextf(ctx, "skip invalid collection rule=%s: %v", rule.RuleID, err)
 			continue
 		}
+		ruleNodes := timerNodes
+		if !isKlineRule(rule) {
+			ruleNodes = invokeNodes
+		}
+		if len(ruleNodes) == 0 {
+			log.WarnContextf(ctx, "skip collection rule=%s: no nodes for trigger type", rule.RuleID)
+			continue
+		}
 		activeTaskIDs := make([]string, 0, len(items)*len(frequencies))
 		ruleFingerprintParts := make([]string, 0, len(items)*len(frequencies))
 		instancesChanged := false
 		for _, frequency := range frequencies {
 			frequencyTaskIDs := make([]string, 0, len(items))
 			for index := range items {
-				spec := domain.TaskSpec{Provider: items[index].Provider, MarketType: items[index].MarketType, DataType: items[index].DataType, DatasetID: items[index].DatasetID, SubjectID: items[index].SubjectID, Frequency: frequency}
-				items[index].TaskID = domain.StableTaskID(spaceID, rule.RuleID, spec)
+				items[index].TaskID = collectionItemTaskID(spaceID, rule.RuleID, items[index], frequency)
 			}
 			for _, item := range items {
 				frequencyTaskIDs = append(frequencyTaskIDs, item.TaskID)
@@ -176,8 +192,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			if s.Instances != nil {
 				instances := make([]domain.TaskInstance, 0, len(items))
 				for _, item := range items {
-					spec := domain.TaskSpec{Provider: item.Provider, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency}
-					taskID := domain.StableTaskID(spaceID, rule.RuleID, spec)
+					taskID := collectionItemTaskID(spaceID, rule.RuleID, item, frequency)
 					activeTaskIDs = append(activeTaskIDs, taskID)
 					instances = append(instances, domain.TaskInstance{SpaceID: spaceID, TaskID: taskID, RuleID: rule.RuleID, Provider: item.Provider, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency, TaskParams: rule.CollectParams})
 				}
@@ -210,8 +225,8 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				continue
 			}
 			batchItems := append([]domain.CollectionItem(nil), items...)
-			batchSize := s.realtimeBatchSize(len(batchItems), nodes)
-			if strings.EqualFold(rule.DataType, "symbol") {
+			batchSize := s.realtimeBatchSize(len(batchItems), ruleNodes)
+			if strings.EqualFold(rule.DataType, domain.InstrumentDataType) {
 				batchSize = 1
 			}
 			for start, shard := 0, 0; start < len(batchItems); start, shard = start+batchSize, shard+1 {
@@ -222,22 +237,29 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				// planned is the global batch cursor. Do not add shard again: the
 				// loop already increments planned after every shard, and adding it
 				// would skip every other node when the fleet size is even.
-				node := nodes[planned%len(nodes)]
+				node := ruleNodes[planned%len(ruleNodes)]
 				for index := start; index < end; index++ {
 					batchItems[index].TargetDataTime = target.Format(time.RFC3339Nano)
 					batchItems[index].Frequency = frequency
 					batchItems[index].BarLimit = 3
+					if strings.EqualFold(batchItems[index].DataType, domain.InstrumentDataType) {
+						// Every snapshot shard must use one generation timestamp. The
+						// provider response is fetched independently, so this field is
+						// the generation fence used by staged shard activation.
+						batchItems[index].SnapshotAt = now.Format(time.RFC3339Nano)
+					}
 				}
 				scheduleID := fmt.Sprintf("%s:%s:%s", rule.RuleID, frequency, target.Format(time.RFC3339Nano))
 				batchKind := batchKindForRule(rule)
 				batchID := stableID(spaceID, scheduleID, string(batchKind), fmt.Sprintf("%d", shard), "1")
+				syncPointID := stableID(spaceID, scheduleID, string(batchKind), fmt.Sprintf("%d", shard), "write")
 				// The item is the normalized source of truth. Older rules may have an
 				// empty top-level market_type while collect_params already contains
 				// the canonical value; forwarding rule.MarketType would make SCF
 				// reject the whole batch before it can inspect the item.
 				batchProvider, batchMarketType := normalizedBatchIdentity(batchItems[start], rule)
-				req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
-				created, err := s.planOne(ctx, rule, req, node, nodes)
+				req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
+				created, err := s.planOne(ctx, rule, req, node, ruleNodes)
 				if err != nil {
 					return err
 				}
@@ -269,7 +291,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		s.lastRuleID = rule.RuleID
 	}
 	if s.Instances != nil && (s.lastGapAudit.IsZero() || now.Sub(s.lastGapAudit) >= gapAuditInterval) {
-		if err := s.auditGaps(ctx, spaceID, rules, nodes, now); err != nil {
+		if err := s.auditGaps(ctx, spaceID, rules, invokeNodes, now); err != nil {
 			log.WarnContextf(ctx, "market fetch gap audit failed: %v", err)
 		} else {
 			s.lastGapAudit = now
@@ -316,6 +338,16 @@ func filterInvokeRules(rules []domain.TaskRule) []domain.TaskRule {
 		}
 		if dataType != "kline" {
 			filtered = append(filtered, rule)
+		}
+	}
+	return filtered
+}
+
+func filterNodesByTrigger(nodes []scfinvoker.Node, trigger string) []scfinvoker.Node {
+	filtered := make([]scfinvoker.Node, 0, len(nodes))
+	for _, node := range nodes {
+		if strings.EqualFold(strings.TrimSpace(node.TriggerType), trigger) {
+			filtered = append(filtered, node)
 		}
 	}
 	return filtered
@@ -391,10 +423,14 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 			continue
 		}
 		for _, item := range items {
-			if item.SubjectID == "" || item.Symbol == "" {
+			if item.SubjectID == "" {
 				continue
 			}
-			externalSymbols[rule.RuleID+"\x00"+strings.ToUpper(strings.TrimSpace(item.SubjectID))] = item.Symbol
+			symbol, symbolErr := marketProviderSymbol(rule.MarketType, item.SubjectID, item.Symbol)
+			if symbolErr != nil {
+				continue
+			}
+			externalSymbols[rule.RuleID+"\x00"+strings.ToUpper(strings.TrimSpace(item.SubjectID))] = symbol
 		}
 	}
 	// Do not filter by last_exec_time here. A recent invocation can still leave
@@ -468,6 +504,28 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 					storageErr = watermarkErr
 					if storageErr == nil && found && !watermark.IsZero() {
 						result.plan, result.stale, result.err = buildGapAuditPlanChecked(now, rule, instance, watermark.UTC(), true)
+						if result.err == nil {
+							if rangeReader, ok := storage.(timeSeriesRangeReader); ok {
+								rangeStart, rangeErr := gapAuditCoverageStart(now, rule, instance)
+								if rangeErr != nil {
+									result.err = rangeErr
+								} else if !rangeStart.IsZero() && watermark.After(rangeStart) {
+									missing, hasGap, gapErr := findEarliestMissingBucket(checkCtx, rangeReader, &storagepb.TimeSeriesSelector{
+										SpaceId: spaceID, DatasetId: instance.DatasetID, SubjectId: instance.SubjectID,
+										Freq: freq, SeriesTag: stringPtr(gapAuditSeriesTag(instance)),
+									}, rangeStart, watermark.Add(gapAuditFrequencyDuration(instance.Frequency)), instance.Frequency, strings.EqualFold(spaceID, StockCNSpaceID))
+									if gapErr != nil {
+										result.err = gapErr
+									} else if hasGap {
+										result.plan.Kind = domain.BatchKindGapRepair
+										result.plan.Start = missing
+										result.plan.End = missing.Add(gapAuditFrequencyDuration(instance.Frequency))
+										result.plan.BarLimit = 1
+										result.stale = now.Sub(missing) >= threshold
+									}
+								}
+							}
+						}
 					} else if storageErr == nil {
 						watermark, found := time.Time{}, false
 						if instance.LastExecTime != nil && !instance.LastExecTime.IsZero() {
@@ -516,14 +574,28 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 		if candidate.plan.MaxConcurrency > 0 && perRulePlanned[candidate.rule.RuleID] >= candidate.plan.MaxConcurrency {
 			continue
 		}
+		active, err := s.Batches.HasActiveTask(ctx, spaceID, candidate.instance.TaskID,
+			domain.BatchKindRealtime, domain.BatchKindBackfill, domain.BatchKindGapRepair)
+		if err != nil {
+			return err
+		}
+		if active {
+			// Realtime is planned before this audit. Never put historical repair
+			// work behind the same task while a newer batch is still in flight.
+			continue
+		}
 		node := nodes[index%len(nodes)]
-		item := domain.CollectionItem{TaskID: candidate.instance.TaskID, SubjectID: candidate.instance.SubjectID, Symbol: candidate.symbol, Provider: candidate.instance.Provider, MarketType: candidate.instance.MarketType, DataType: "kline", DatasetID: candidate.instance.DatasetID, Frequency: candidate.instance.Frequency, StartTime: candidate.plan.Start.Format(time.RFC3339Nano), BarLimit: candidate.plan.BarLimit}
+		item := domain.CollectionItem{TaskID: candidate.instance.TaskID, SubjectID: candidate.instance.SubjectID, Symbol: candidate.symbol, Provider: candidate.instance.Provider, MarketType: candidate.instance.MarketType, DataType: "kline", DatasetID: candidate.instance.DatasetID, Frequency: candidate.instance.Frequency, StartTime: candidate.plan.Start.Format(time.RFC3339Nano), BarLimit: candidate.plan.BarLimit, RateBudgetRatio: candidate.plan.RateBudgetRatio}
+		if !candidate.plan.End.IsZero() {
+			item.EndTime = candidate.plan.End.Format(time.RFC3339Nano)
+		}
 		// A bounded 1,000-bar catchup must be allowed to advance on every audit
 		// minute. A ten-minute identity keeps the first page deduplicated but
 		// stalls large gaps for nine unnecessary minutes.
 		scheduleID := fmt.Sprintf("%s:%s:%s", candidate.plan.Kind, candidate.instance.TaskID, now.Truncate(time.Minute).Format(time.RFC3339Nano))
 		batchID := stableID(spaceID, scheduleID, string(candidate.plan.Kind), "0", "1")
-		req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: candidate.plan.Kind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
+		syncPointID := stableID(spaceID, scheduleID, string(candidate.plan.Kind), "write")
+		req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: candidate.plan.Kind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
 		if _, err := s.planOne(ctx, candidate.rule, req, node, nodes); err != nil {
 			return err
 		}
@@ -532,7 +604,165 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 	return nil
 }
 
-const stockCNHistoryMaxLookback = 5 * 24 * time.Hour
+// The public stock endpoints currently expose only a bounded latest page and
+// have no safe cursor shared by all active providers. Reject older history at
+// planning time instead of repeatedly requesting a page that cannot cover the
+// requested start. A future cursor-paginated feed can raise this deliberately.
+const stockCNHistoryMaxLookback = 24 * time.Hour
+
+func gapAuditFrequencyDuration(frequency string) time.Duration {
+	parsed, err := marketdata.ParseFrequency(frequency)
+	if err != nil {
+		return time.Minute
+	}
+	if duration := parsed.Duration(); duration > 0 {
+		return duration
+	}
+	return time.Minute
+}
+
+// gapAuditCoverageStart returns the earliest configured bucket that may be
+// repaired. It intentionally applies the same HistoryPolicy and provider
+// history boundary as the batch planner, so an internal-hole scan cannot widen
+// the configured retention window by accident.
+func gapAuditCoverageStart(now time.Time, rule domain.TaskRule, instance domain.TaskInstance) (time.Time, error) {
+	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	if strings.TrimSpace(rule.CollectParams) == "" {
+		params = &domain.CollectParams{HistoryPolicy: &domain.HistoryPolicy{
+			Mode:              domain.HistoryModeLiveOnly,
+			BatchBarLimit:     domain.DefaultHistoryBatchBarLimit,
+			MaxConcurrency:    domain.DefaultHistoryMaxConcurrency,
+			GapRepairLookback: domain.DefaultHistoryGapRepairLookback,
+			RateBudgetRatio:   domain.DefaultHistoryRateBudgetRatio,
+		}}
+		err = nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse history policy: %w", err)
+	}
+	if params == nil || params.HistoryPolicy == nil {
+		return time.Time{}, fmt.Errorf("history policy is not configured")
+	}
+	if err := params.ValidateHistoryPolicy(); err != nil {
+		return time.Time{}, fmt.Errorf("validate history policy: %w", err)
+	}
+	stock := strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stock_cn_multi")
+	policyStart, err := historyPolicyStart(now.UTC(), params.HistoryPolicy, stock)
+	if err != nil {
+		return time.Time{}, err
+	}
+	start := time.Time{}
+	if rule.CoverageStartTime != nil && !rule.CoverageStartTime.IsZero() {
+		start = rule.CoverageStartTime.UTC()
+	}
+	start = laterTime(start, policyStart)
+	start = laterTime(start, gapRepairFloor(now, params))
+	if start.IsZero() {
+		return time.Time{}, nil
+	}
+	capability := marketdata.KlineHistoryCapability{SupportsArbitraryRange: true}
+	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stock_cn_multi") {
+		capability = marketdata.KlineHistoryCapability{MaxLookback: stockCNHistoryMaxLookback}
+	}
+	if err := capability.ValidateStart(now.UTC(), start); err != nil {
+		return time.Time{}, fmt.Errorf("coverage boundary is outside provider capability: %w", err)
+	}
+	return start, nil
+}
+
+// findEarliestMissingBucket reads a bounded range and compares only expected
+// market buckets. For stock_cn, the exchange calendar removes weekends,
+// holidays and the lunch break from the expected set; for crypto, buckets are
+// continuous at the requested frequency. The range is intentionally capped so
+// an unhealthy Storage index cannot turn the five-minute audit into an
+// unbounded scan.
+func findEarliestMissingBucket(ctx context.Context, reader timeSeriesRangeReader, selector *storagepb.TimeSeriesSelector, start, end time.Time, frequency string, stock bool) (time.Time, bool, error) {
+	if reader == nil || selector == nil || start.IsZero() || !end.After(start) {
+		return time.Time{}, false, nil
+	}
+	duration := gapAuditFrequencyDuration(frequency)
+	if duration <= 0 {
+		return time.Time{}, false, fmt.Errorf("unsupported gap audit frequency %q", frequency)
+	}
+	seen := make(map[int64]struct{})
+	for page := uint32(1); page <= gapAuditMaxRangePages; page++ {
+		response, err := reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
+			SpaceId: selector.GetSpaceId(), DatasetId: selector.GetDatasetId(),
+			Selectors: []*storagepb.TimeSeriesSelector{selector},
+			TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)},
+			Order:     storagepb.SortOrder_SORT_ORDER_ASC,
+			Page:      &storagepb.Page{Page: page, Size: gapAuditRangePageSize},
+		})
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("read gap audit range: %w", err)
+		}
+		if response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != 0 {
+			return time.Time{}, false, fmt.Errorf("read gap audit range: storage rejected request")
+		}
+		for _, row := range response.GetRows() {
+			if row == nil || row.GetKey() == nil {
+				continue
+			}
+			at, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
+			if err != nil {
+				return time.Time{}, false, fmt.Errorf("read gap audit range: parse data_time %q: %w", row.GetKey().GetDataTime(), err)
+			}
+			seen[at.UTC().UnixNano()] = struct{}{}
+		}
+		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
+			break
+		}
+		if page == gapAuditMaxRangePages {
+			return time.Time{}, false, fmt.Errorf("read gap audit range exceeds %d pages", gapAuditMaxRangePages)
+		}
+	}
+
+	expected, err := gapAuditExpectedBuckets(start, end, duration, stock)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	for _, at := range expected {
+		if _, ok := seen[at.UTC().UnixNano()]; !ok {
+			return at.UTC(), true, nil
+		}
+	}
+	return time.Time{}, false, nil
+}
+
+func gapAuditExpectedBuckets(start, end time.Time, duration time.Duration, stock bool) ([]time.Time, error) {
+	if !stock {
+		first := start.UTC().Truncate(duration)
+		if first.Before(start.UTC()) {
+			first = first.Add(duration)
+		}
+		buckets := make([]time.Time, 0)
+		for at := first; at.Before(end.UTC()); at = at.Add(duration) {
+			buckets = append(buckets, at)
+		}
+		return buckets, nil
+	}
+	calendar, err := loadStockCNCalendar()
+	if err != nil {
+		return nil, fmt.Errorf("load stock_cn calendar for gap audit: %w", err)
+	}
+	days, err := calendar.TradingDays(start, end)
+	if err != nil {
+		return nil, err
+	}
+	buckets := make([]time.Time, 0)
+	for _, day := range days {
+		dayBuckets, dayErr := calendar.ExpectedMinuteBars(day.TradeDate)
+		if dayErr != nil {
+			return nil, dayErr
+		}
+		for _, at := range dayBuckets {
+			if !at.Before(start.UTC()) && at.Before(end.UTC()) {
+				buckets = append(buckets, at)
+			}
+		}
+	}
+	return buckets, nil
+}
 
 func buildGapAuditPlan(now time.Time, rule domain.TaskRule, instance domain.TaskInstance, watermark time.Time, found bool) (gapAuditPlan, bool) {
 	plan, stale, _ := buildGapAuditPlanChecked(now, rule, instance, watermark, found)
@@ -560,10 +790,16 @@ func buildGapAuditPlanChecked(now time.Time, rule domain.TaskRule, instance doma
 	if err := params.ValidateHistoryPolicy(); err != nil {
 		return gapAuditPlan{}, false, fmt.Errorf("validate history policy: %w", err)
 	}
-	plan := gapAuditPlan{BarLimit: params.HistoryPolicy.BatchBarLimit, MaxConcurrency: params.HistoryPolicy.MaxConcurrency}
+	plan := gapAuditPlan{BarLimit: params.HistoryPolicy.BatchBarLimit, MaxConcurrency: params.HistoryPolicy.MaxConcurrency, RateBudgetRatio: params.HistoryPolicy.RateBudgetRatio}
 	if plan.BarLimit <= 0 {
 		plan.BarLimit = domain.DefaultHistoryBatchBarLimit
 	}
+	if plan.RateBudgetRatio <= 0 {
+		plan.RateBudgetRatio = domain.DefaultHistoryRateBudgetRatio
+	}
+	// rate_budget_ratio is applied by the per-feed limiter. Keep the requested
+	// batch size intact; scaling both rows and request rate compounds the
+	// throttle and needlessly increases historical completion time.
 	if plan.MaxConcurrency <= 0 {
 		plan.MaxConcurrency = domain.DefaultHistoryMaxConcurrency
 	}
@@ -572,7 +808,8 @@ func buildGapAuditPlanChecked(now time.Time, rule domain.TaskRule, instance doma
 	if rule.CoverageStartTime != nil && !rule.CoverageStartTime.IsZero() {
 		start = rule.CoverageStartTime.UTC()
 	}
-	policyStart, err := historyPolicyStart(now.UTC(), params.HistoryPolicy)
+	stock := strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stock_cn_multi")
+	policyStart, err := historyPolicyStart(now.UTC(), params.HistoryPolicy, stock)
 	if err != nil {
 		return gapAuditPlan{}, false, err
 	}
@@ -580,7 +817,7 @@ func buildGapAuditPlanChecked(now time.Time, rule domain.TaskRule, instance doma
 	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stock_cn_multi") {
 		capability = marketdata.KlineHistoryCapability{MaxLookback: stockCNHistoryMaxLookback}
 	}
-	for name, requested := range map[string]time.Time{"history": policyStart, "coverage": start, "repair": gapRepairFloor(now, params)} {
+	for name, requested := range map[string]time.Time{"history": policyStart, "coverage": start} {
 		if requested.IsZero() {
 			continue
 		}
@@ -595,10 +832,10 @@ func buildGapAuditPlanChecked(now time.Time, rule domain.TaskRule, instance doma
 	if found && !watermark.IsZero() {
 		plan.Kind = domain.BatchKindGapRepair
 		start = laterTime(start, watermark.UTC())
+		start = laterTime(start, gapRepairFloor(now, params))
 	} else {
 		plan.Kind = domain.BatchKindBackfill
 	}
-	start = laterTime(start, gapRepairFloor(now, params))
 	plan.Start = start
 	if plan.Start.IsZero() {
 		return gapAuditPlan{}, false, nil
@@ -609,7 +846,15 @@ func buildGapAuditPlanChecked(now time.Time, rule domain.TaskRule, instance doma
 	return plan, now.After(plan.Start), nil
 }
 
-func historyPolicyStart(now time.Time, policy *domain.HistoryPolicy) (time.Time, error) {
+func collectionItemTaskID(spaceID, ruleID string, item domain.CollectionItem, frequency string) string {
+	if strings.EqualFold(strings.TrimSpace(item.DataType), domain.InstrumentDataType) && item.SnapshotShardCount > 0 {
+		return stableID(spaceID, ruleID, string(domain.BatchKindInstrumentSnapshot), item.DatasetID, strconv.Itoa(item.SnapshotShardIndex))
+	}
+	spec := domain.TaskSpec{RouteID: stableRouteID(item.MarketType, item.DatasetID, frequency), Provider: item.Provider, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency}
+	return domain.StableTaskID(spaceID, ruleID, spec)
+}
+
+func historyPolicyStart(now time.Time, policy *domain.HistoryPolicy, stock bool) (time.Time, error) {
 	if policy == nil {
 		return time.Time{}, fmt.Errorf("history policy is required")
 	}
@@ -619,6 +864,13 @@ func historyPolicyStart(now time.Time, policy *domain.HistoryPolicy) (time.Time,
 	case domain.HistoryModeLookback:
 		if policy.Lookback <= 0 {
 			return time.Time{}, fmt.Errorf("history lookback must be positive")
+		}
+		if stock {
+			calendar, err := loadStockCNCalendar()
+			if err != nil {
+				return time.Time{}, fmt.Errorf("load stock_cn calendar for history lookback: %w", err)
+			}
+			return calendar.LookbackStart(now, policy.Lookback)
 		}
 		return now.Add(-time.Duration(policy.Lookback) * 24 * time.Hour), nil
 	case domain.HistoryModeSince:
@@ -1005,16 +1257,16 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 	if len(frequencies) == 0 && params.Schedule.Interval != "" {
 		frequencies = []string{params.Schedule.Interval}
 	}
-	if dataType == "symbol" {
+	if dataType == domain.InstrumentDataType {
 		if len(frequencies) == 0 {
 			frequencies = []string{"1h"}
 		}
 		if params.SymbolSource != "exchange" {
 			return nil, nil, fmt.Errorf("symbol task requires exchange snapshot source")
 		}
-		items := make([]domain.CollectionItem, fullSymbolSnapshotShards)
+		items := make([]domain.CollectionItem, fullInstrumentSnapshotShards)
 		for shard := range items {
-			items[shard] = domain.CollectionItem{SubjectID: targetDataset, Provider: provider, MarketType: marketType, DataType: "symbol", DatasetID: targetDataset, SnapshotShardIndex: shard, SnapshotShardCount: fullSymbolSnapshotShards}
+			items[shard] = domain.CollectionItem{SubjectID: targetDataset, Provider: provider, MarketType: marketType, DataType: domain.InstrumentDataType, DatasetID: targetDataset, SnapshotShardIndex: shard, SnapshotShardCount: fullInstrumentSnapshotShards}
 		}
 		return items, frequencies[:1], nil
 	}
@@ -1043,13 +1295,12 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 				continue
 			}
 			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-			if strings.TrimSpace(subject.ExternalSymbol) == "" {
-				// Keep one incomplete snapshot row from poisoning all timer
-				// assignments; reconciliation deactivates the stale instance.
-				log.WarnContextf(ctx, "skip market symbol without external symbol subject=%q", subject.SubjectID)
+			symbol, symbolErr := marketProviderSymbol(marketType, subjectID, subject.ExternalSymbol)
+			if symbolErr != nil {
+				log.WarnContextf(ctx, "skip market symbol without valid external symbol subject=%q error=%v", subject.SubjectID, symbolErr)
 				continue
 			}
-			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: strings.TrimSpace(subject.ExternalSymbol), Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
+			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
 		}
 	} else {
 		if s.Storage == nil {
@@ -1071,7 +1322,11 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 			if subjectID == "" {
 				continue
 			}
-			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: strings.ReplaceAll(subjectID, "-", ""), Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
+			symbol, symbolErr := marketProviderSymbol(marketType, subjectID, "")
+			if symbolErr != nil {
+				continue
+			}
+			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].SubjectID < items[j].SubjectID })
@@ -1079,8 +1334,8 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 }
 
 func batchKindForRule(rule domain.TaskRule) domain.BatchKind {
-	if strings.EqualFold(strings.TrimSpace(rule.DataType), "symbol") {
-		return domain.BatchKindSymbolSnapshot
+	if strings.EqualFold(strings.TrimSpace(rule.DataType), domain.InstrumentDataType) {
+		return domain.BatchKindInstrumentSnapshot
 	}
 	return domain.BatchKindRealtime
 }
@@ -1102,6 +1357,10 @@ func stringPtr(value string) *string { return &value }
 func stableID(parts ...string) string {
 	hash := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(hash[:])[:32]
+}
+
+func stableRouteID(marketType, datasetID, frequency string) string {
+	return strings.Join([]string{strings.ToLower(strings.TrimSpace(marketType)), strings.TrimSpace(datasetID), strings.ToLower(strings.TrimSpace(frequency))}, ":")
 }
 
 func timePtr(value time.Time) *time.Time { return &value }

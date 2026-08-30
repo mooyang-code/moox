@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
+	stocksource "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
 	"github.com/stretchr/testify/require"
 )
 
@@ -78,6 +79,23 @@ func TestBuildStockCNAssignmentsRequiresExplicitPositiveN(t *testing.T) {
 	require.ErrorContains(t, err, "explicit positive timer function count")
 }
 
+func TestBuildStockCNAssignmentsAllowsStrictlyConvertibleSubjectsWithoutOverrides(t *testing.T) {
+	nodes := []scfinvoker.Node{{NodeID: "node-0", FunctionName: "moox-stock-cn-000", NodeType: "scf-event", TriggerType: "timer"}}
+	assignments, err := BuildStockCNAssignments(TaskGroup{
+		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Subjects: []string{"600000.XSHG"},
+	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 1)
+	require.NoError(t, err)
+	require.Len(t, assignments, 1)
+	require.Empty(t, assignments[0].ExternalSymbols)
+}
+
+func TestStockCNStaggeredCronUsesConfiguredFiveToThirtyNineSecondWindow(t *testing.T) {
+	require.Equal(t, "5 * * * * * *", stockCNStaggeredCron(0))
+	require.Equal(t, "39 * * * * * *", stockCNStaggeredCron(34))
+	require.Equal(t, "5 * * * * * *", stockCNStaggeredCron(35))
+}
+
 func TestBuildStockCNAssignmentsRejectsMissingPublishedSlot(t *testing.T) {
 	subjects := []string{"600000.XSHG"}
 	nodes := []scfinvoker.Node{
@@ -107,7 +125,7 @@ func TestBuildStockCNAssignmentsRejectsSlotMetadataMismatch(t *testing.T) {
 func TestBuildStockCNAssignmentsFitsApproximateFullMarketIntoTwoHundredGroups(t *testing.T) {
 	subjects := make([]string, 0, 5550)
 	for index := 0; index < 5550; index++ {
-		subjects = append(subjects, fmt.Sprintf("%06d.XSHG", index))
+		subjects = append(subjects, fmt.Sprintf("%06d.XSHG", 600000+index))
 	}
 	nodes := make([]scfinvoker.Node, 0, 200)
 	for index := 0; index < 200; index++ {
@@ -131,8 +149,8 @@ func TestBuildStockCNAssignmentsFitsApproximateFullMarketIntoTwoHundredGroups(t 
 	}
 	require.Equal(t, len(subjects), assigned)
 
-	group.Subjects = append(group.Subjects, "999999.XSHE")
-	group.ExternalSymbols["999999.XSHE"] = "sz999999"
+	group.Subjects = append(group.Subjects, "605550.XSHG")
+	group.ExternalSymbols["605550.XSHG"] = "sh605550"
 	after, err := BuildStockCNAssignments(group, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 200)
 	require.NoError(t, err)
 	moved := 0
@@ -143,10 +161,10 @@ func TestBuildStockCNAssignmentsFitsApproximateFullMarketIntoTwoHundredGroups(t 
 			}
 		}
 	}
-	require.LessOrEqual(t, moved, 1, "one-symbol universe growth should move at most one existing subject")
+	require.LessOrEqual(t, moved, 1, "one-symbol active subject set growth should move at most one existing subject")
 }
 
-func TestBuildStockCNAssignmentsKeepsPublishedFleetWhenUniverseIsSmall(t *testing.T) {
+func TestBuildStockCNAssignmentsKeepsPublishedFleetWhenActiveInstrumentSetIsSmall(t *testing.T) {
 	subjects := []string{"600000.XSHG", "000001.XSHE"}
 	nodes := make([]scfinvoker.Node, 0, 5)
 	for index := 0; index < 5; index++ {
@@ -208,7 +226,7 @@ func TestRequiredStockCNGroupSizeUsesCeilingForConfiguredN(t *testing.T) {
 func stockCNExternalSymbols(subjects []string) map[string]string {
 	result := make(map[string]string, len(subjects))
 	for _, subject := range subjects {
-		result[subject] = "sh" + subject[:6]
+		result[subject], _ = stocksource.ProviderSymbol(subject)
 	}
 	return result
 }

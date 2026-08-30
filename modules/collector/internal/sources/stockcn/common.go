@@ -155,7 +155,29 @@ func splitSubjectID(subjectID string) (string, string, error) {
 	if len(parts[0]) != 6 {
 		return "", "", fmt.Errorf("%w: invalid subject code %q", marketdata.ErrUnsupportedSymbol, parts[0])
 	}
-	return parts[0], parts[1], nil
+	for _, r := range parts[0] {
+		if r < '0' || r > '9' {
+			return "", "", fmt.Errorf("%w: invalid subject code %q", marketdata.ErrUnsupportedSymbol, parts[0])
+		}
+	}
+	code, exchange := parts[0], strings.ToUpper(parts[1])
+	switch exchange {
+	case "XSHG":
+		if code[0] != '6' {
+			return "", "", fmt.Errorf("%w: code %q does not belong to XSHG", marketdata.ErrUnsupportedSymbol, code)
+		}
+	case "XSHE":
+		if code[0] != '0' && code[0] != '2' && code[0] != '3' {
+			return "", "", fmt.Errorf("%w: code %q does not belong to XSHE", marketdata.ErrUnsupportedSymbol, code)
+		}
+	case "XBSE":
+		if code[0] != '4' && code[0] != '8' && code[0] != '9' {
+			return "", "", fmt.Errorf("%w: code %q does not belong to XBSE", marketdata.ErrUnsupportedSymbol, code)
+		}
+	default:
+		return "", "", fmt.Errorf("%w: unsupported exchange %q", marketdata.ErrUnsupportedSymbol, parts[1])
+	}
+	return code, exchange, nil
 }
 
 func mustLoadLocation(name string) *time.Location {

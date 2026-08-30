@@ -7,19 +7,23 @@ server:
     - recovery
     - validation
     - prometheus
-  timeout: 60000
+  # SCF request-response invocations may run for several minutes (the
+  # instrument snapshot node is configured for a 300s provider timeout).
+  # Keep the CloudNode RPC envelope longer than the Tencent SDK request
+  # timeout so a slow but bounded invocation is not cut off at 60s.
+  timeout: 360000
   admin:
     ip: 127.0.0.1
     port: 11941
     read_timeout: 3000
-    write_timeout: 60000
+    write_timeout: 360000
   service:
     - name: trpc.moox.cloudnode.CloudNodeMgr
       ip: 127.0.0.1
       port: 11401
       network: tcp
       protocol: http
-      timeout: 60000
+      timeout: 360000
     - name: trpc.moox.cloudnode.Health
       ip: 127.0.0.1
       port: 11411

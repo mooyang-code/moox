@@ -1191,9 +1191,30 @@ func ensureSetupEventBusFirewall(ctx context.Context, snapshot *setupconfig.Snap
 }
 
 func ensureSetupStorageGatewayFirewall(ctx context.Context, snapshot *setupconfig.Snapshot, address string) error {
-	return ensureSetupFirewallRules(ctx, snapshot, address, []cloudtencent.CreateFirewallRulesOptions{{
+	rule := cloudtencent.CreateFirewallRulesOptions{
 		Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway",
-	}}, "storage_gateway_firewall_failed")
+	}
+	if err := ensureSetupFirewallRules(ctx, snapshot, address, []cloudtencent.CreateFirewallRulesOptions{rule}, "storage_gateway_firewall_failed"); err == nil {
+		return nil
+	}
+	// A remote Storage host may be a CVM rather than a Lighthouse instance.
+	// Lighthouse's public-IP lookup then reports a false deployment failure;
+	// fall back to the CVM/VPC security-group API for that topology.
+	publicIP, err := eventBusFirewallIP(ctx, address, net.DefaultResolver.LookupIP)
+	if err != nil {
+		return fmt.Errorf("storage_gateway_firewall_failed")
+	}
+	client, err := cloudtencent.NewCVMClient(cloudtencent.ClientOptions{
+		SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
+		Region: snapshot.Manifest.TencentCloud.Region,
+	})
+	if err != nil {
+		return fmt.Errorf("storage_gateway_firewall_failed")
+	}
+	if err := client.EnsureSecurityGroupRule(ctx, publicIP, rule); err != nil {
+		return fmt.Errorf("storage_gateway_firewall_failed")
+	}
+	return nil
 }
 
 func setupControlFirewallRules() []cloudtencent.CreateFirewallRulesOptions {

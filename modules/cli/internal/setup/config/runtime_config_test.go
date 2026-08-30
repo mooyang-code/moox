@@ -86,6 +86,7 @@ func TestRenderCollectorDNSResolverConfigIncludesStockCapacity(t *testing.T) {
 	snapshot := &Snapshot{Manifest: Manifest{
 		SCFFetcher: SCFFetcher{Spaces: []SCFFetcherSpace{{
 			SpaceID: "stock_cn", TimerFunctionCount: 200, MeasuredSafeGroupSize: 30,
+			StaggerStartSecond: DefaultStockCNStaggerStartSecond, StaggerWindowSeconds: DefaultStockCNStaggerWindowSeconds, StaggerMaxStartsPerSecond: DefaultStockCNStaggerMaxStartsPerSecond,
 		}}},
 	}}
 	rendered, err := RenderCollectorDNSResolverConfig(snapshot, []byte("database:\n  path: ./collector.db\n"))
@@ -95,6 +96,9 @@ func TestRenderCollectorDNSResolverConfigIncludesStockCapacity(t *testing.T) {
 	stock := got["stock_cn"].(map[string]any)
 	require.Equal(t, 200, stock["expected_timer_function_count"])
 	require.Equal(t, 30, stock["measured_safe_group_size"])
+	require.Equal(t, 5, stock["stagger_start_second"])
+	require.Equal(t, 35, stock["stagger_window_seconds"])
+	require.Equal(t, 6, stock["stagger_max_starts_per_second"])
 }
 
 func TestRenderDisabledResolverReplacesStaleSettings(t *testing.T) {

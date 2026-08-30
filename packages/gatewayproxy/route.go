@@ -15,7 +15,10 @@ import (
 
 const (
 	defaultTimeoutMS    int64 = 5000
-	maxTimeoutMS        int64 = 120000
+	// CloudNode SCF request-response calls may consume the full 300s function
+	// timeout. Keep a bounded proxy ceiling while leaving room for transport
+	// overhead and the public Gateway write timeout.
+	maxTimeoutMS        int64 = 360000
 	defaultMaxBodyBytes int64 = 4 << 20
 	maxMaxBodyBytes     int64 = 64 << 20
 )

@@ -463,17 +463,18 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	}
 	createCtx, createCancel := context.WithTimeout(ctx, scfCreateAttemptTimeout)
 	_, err = client.CreateFunction(createCtx, tencentscf.CreateFunctionRequest{
-		FunctionRef: ref,
-		Runtime:     firstString(item.GetRuntime(), pkg.Runtime, "CustomRuntime"),
-		Handler:     firstString(item.GetHandler(), "main"),
-		Description: fmt.Sprintf("MooX cloud function node %s", node.NodeID),
-		MemorySize:  memorySize,
-		Timeout:     timeoutSeconds,
-		Environment: environment,
-		COSBucket:   pkg.COSBucket,
-		COSRegion:   firstString(pkg.COSRegion, account.COSRegion),
-		COSObject:   strings.TrimPrefix(pkg.COSPath, "/"),
-		Type:        firstString(config["function_type"], "Event"),
+		FunctionRef:            ref,
+		Runtime:                firstString(item.GetRuntime(), pkg.Runtime, "CustomRuntime"),
+		Handler:                firstString(item.GetHandler(), "main"),
+		Description:            fmt.Sprintf("MooX cloud function node %s", node.NodeID),
+		MemorySize:             memorySize,
+		Timeout:                timeoutSeconds,
+		MaxInstanceConcurrency: configInt64(effectiveConfig, "max_instance_concurrency", 0),
+		Environment:            environment,
+		COSBucket:              pkg.COSBucket,
+		COSRegion:              firstString(pkg.COSRegion, account.COSRegion),
+		COSObject:              strings.TrimPrefix(pkg.COSPath, "/"),
+		Type:                   firstString(config["function_type"], "Event"),
 	})
 	createCancel()
 	if err != nil {
@@ -675,11 +676,12 @@ func (s *Service) updateSCFFunctionCode(
 		}
 	}
 	if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
-		FunctionRef:    ref,
-		Environment:    environment,
-		MemorySize:     configInt64(desiredConfig, "memory_size", 0),
-		Timeout:        configInt64(desiredConfig, "timeout", 0),
-		ClearNativeCLS: true,
+		FunctionRef:            ref,
+		Environment:            environment,
+		MemorySize:             configInt64(desiredConfig, "memory_size", 0),
+		Timeout:                configInt64(desiredConfig, "timeout", 0),
+		MaxInstanceConcurrency: configInt64(desiredConfig, "max_instance_concurrency", 0),
+		ClearNativeCLS:         true,
 	}); err != nil {
 		return fmt.Errorf("update scf function %s configuration: %w", ref.FunctionName, err)
 	}
@@ -711,6 +713,11 @@ func verifySCFFunctionConfiguration(info *tencentscf.FunctionInfo, desiredConfig
 	if expected := configInt64(desiredConfig, "timeout", 0); expected > 0 {
 		if info.Timeout <= 0 || info.Timeout != expected {
 			return fmt.Errorf("scf function %s timeout=%d; expected %d", functionName, info.Timeout, expected)
+		}
+	}
+	if expected := configInt64(desiredConfig, "max_instance_concurrency", 0); expected > 0 {
+		if info.MaxInstanceConcurrency <= 0 || info.MaxInstanceConcurrency != expected {
+			return fmt.Errorf("scf function %s max_instance_concurrency=%d; expected %d (SCF readback unavailable or mismatched)", functionName, info.MaxInstanceConcurrency, expected)
 		}
 	}
 	for key, expected := range desiredEnvironment {

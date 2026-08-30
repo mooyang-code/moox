@@ -9,9 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -26,30 +27,49 @@ type Handler struct {
 	NewStorage func(string, string, string) (Storage, error)
 	Publish    func(context.Context, Request, proto.Message) error
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
-	// and uses the bounded Executor below; tests can prove the Timer contract
-	// without making an external exchange request.
-	Execute    func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error)
-	Now        func() time.Time
-	Reporter   ItemReporter
-	CLSReserve time.Duration
+	// and uses the market-specific common pipeline; tests can prove the Timer
+	// contract without making an external exchange request.
+	Execute func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error)
+	// NewInstrumentPipeline is the market-agnostic InstrumentPipeline factory.
+	// The composition root selects the provider registry and metadata for the
+	// requested market; the Handler owns neither provider protocol nor Storage
+	// mutation details.
+	NewInstrumentPipeline func(InstrumentStorage, string, marketdata.ProductType) (*InstrumentPipeline, error)
+	// NewCryptoInstrumentPipeline is kept as a narrow test seam for callers that
+	// construct a crypto-only Handler. NewHandler uses NewInstrumentPipeline.
+	NewCryptoInstrumentPipeline func(InstrumentStorage, marketdata.ProductType) (*InstrumentPipeline, error)
+	NewStockKlinePipeline       func(Storage) (*KlinePipeline, error)
+	NewCryptoKlinePipeline      func(Storage, marketdata.ProductType) (*KlinePipeline, error)
+	Now                         func() time.Time
+	Reporter                    ItemReporter
+	CLSReserve                  time.Duration
+	Metrics                     *Metrics
+	MetricsReporter             MetricsReporter
+}
+
+// MetricsReporter is the common one-shot observability sink used by long-lived
+// Collector and short-lived SCF runtimes. It is intentionally optional: market
+// writes must not fail just because the monitoring bus is unavailable.
+type MetricsReporter interface {
+	Handle(context.Context) error
 }
 
 const (
 	// A fresh SCF invocation establishes a TLS connection to EventBus before
-	// publishing the only completion fact. Half a second is not enough for
-	// that cold path. Three seconds leaves a 3.5-second market window after the
-	// Storage and CLS reserves in a 15-second call.
-	completionPublishReserve = 3 * time.Second
+	// publishing the only completion fact. The first connection can take
+	// several seconds on a cold path, so leave a ten-second reserve. Invoke
+	// functions use the longer instrument timeout; Timer invocations do not
+	// publish completion events.
+	completionPublishReserve = 10 * time.Second
 	defaultStorageTimeout    = 5 * time.Second
+	metricsResponseReserve   = 500 * time.Millisecond
 )
 
 func NewHandler() *Handler {
 	return &Handler{NewStorage: func(target, market, writeSource string) (Storage, error) {
-		if strings.EqualFold(strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")), StockCNSpaceID) {
-			return NewMarketStorage(target, writeSource)
-		}
-		return binance.NewBatchStorageWithWriteSource(target, market, writeSource)
-	}, Publish: publishCompletion}
+		return NewMarketStorageForMarket(target, market, writeSource)
+	}, Publish: publishCompletion, NewInstrumentPipeline: NewMarketInstrumentPipeline, NewCryptoInstrumentPipeline: NewCryptoInstrumentPipeline,
+		NewStockKlinePipeline: NewStockKlinePipeline, NewCryptoKlinePipeline: NewCryptoKlinePipeline}
 }
 
 func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
@@ -74,6 +94,10 @@ func (h *Handler) HandleTimer(ctx context.Context, requestID, nodeID string) (*m
 }
 
 func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, now time.Time) (*model.Response, error) {
+	if h == nil {
+		return nil, fmt.Errorf("market fetch handler is nil")
+	}
+	defer h.reportMetrics(ctx)
 	req, storageTarget, err := TimerRequestFromEnv(requestID, nodeID, now)
 	if err != nil {
 		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
@@ -125,6 +149,7 @@ func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudF
 	if storageTarget == "" {
 		return nil, fmt.Errorf("storage_rpc_gateway_target is required")
 	}
+	defer h.reportMetrics(ctx)
 	return h.handleRequest(ctx, req, storageTarget, publish)
 }
 
@@ -188,19 +213,78 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 	var payload *marketfetchpb.MarketFetchBatchCompleted
 	if h.Execute != nil {
 		payload, err = h.Execute(budgetCtx, req, storage)
+	} else if req.BatchKind == domain.BatchKindInstrumentSnapshot && (h.NewInstrumentPipeline != nil || h.NewCryptoInstrumentPipeline != nil) {
+		if len(req.Items) != 1 {
+			return nil, fmt.Errorf("instrument snapshot requires exactly one item")
+		}
+		instrumentStorage, ok := storage.(InstrumentStorage)
+		if !ok {
+			return nil, fmt.Errorf("instrument snapshot storage does not support active-set operations")
+		}
+		productType := marketdata.ProductType(strings.ToLower(strings.TrimSpace(req.MarketType)))
+		var pipeline *InstrumentPipeline
+		var pipelineErr error
+		if h.NewInstrumentPipeline != nil {
+			pipeline, pipelineErr = h.NewInstrumentPipeline(instrumentStorage, req.SpaceID, productType)
+		} else {
+			pipeline, pipelineErr = h.NewCryptoInstrumentPipeline(instrumentStorage, productType)
+		}
+		if pipelineErr != nil {
+			return nil, pipelineErr
+		}
+		pipeline.Metrics = h.Metrics
+		snapshotAt := time.Now().UTC()
+		if h.Now != nil {
+			snapshotAt = h.Now().UTC()
+		}
+		if rawSnapshotAt := strings.TrimSpace(req.Items[0].SnapshotAt); rawSnapshotAt != "" {
+			parsed, parseErr := time.Parse(time.RFC3339Nano, rawSnapshotAt)
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse instrument snapshot_at: %w", parseErr)
+			}
+			snapshotAt = parsed.UTC()
+		}
+		startedAt := time.Now()
+		_, pipelineErr = pipeline.Execute(budgetCtx, InstrumentPipelineRequest{
+			RequestID: req.RequestID, SnapshotAt: snapshotAt,
+			SnapshotShardIndex: req.Items[0].SnapshotShardIndex,
+			SnapshotShardCount: req.Items[0].SnapshotShardCount,
+		})
+		if pipelineErr != nil {
+			result := failureResult(req.Items[0], domain.ItemOutcomeStorageError, "instrument_snapshot", pipelineErr)
+			payload = buildCompletion(req, []domain.ItemResult{result}, snapshotAt, time.Since(startedAt))
+		} else {
+			payload = buildCompletion(req, []domain.ItemResult{successResult(req.Items[0])}, snapshotAt, time.Since(startedAt))
+		}
 	} else if req.SpaceID == StockCNSpaceID {
 		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)
 		defer workCancel()
 		stockStorage := &reservedDeadlineStorage{Storage: storage, parent: budgetCtx, timeout: storageTimeout}
-		pipeline, pipelineErr := NewStockKlinePipeline(stockStorage)
+		newPipeline := h.NewStockKlinePipeline
+		if newPipeline == nil {
+			newPipeline = NewStockKlinePipeline
+		}
+		pipeline, pipelineErr := newPipeline(stockStorage)
 		if pipelineErr != nil {
 			return nil, pipelineErr
 		}
 		pipeline.Now = h.Now
+		pipeline.Metrics = h.Metrics
 		payload, err = pipeline.Execute(workCtx, req)
 	} else {
-		executor := &Executor{Klines: binance.NewKlineCollector(), Catchup: binance.NewKlineCollector(), Symbols: binance.NewSymbolCollector(), Storage: storage, Now: h.Now, CommitReserve: commitReserve, StorageReserve: storageTimeout, Reporter: h.Reporter}
-		payload, err = executor.Execute(budgetCtx, req)
+		newPipeline := h.NewCryptoKlinePipeline
+		if newPipeline == nil {
+			newPipeline = NewCryptoKlinePipeline
+		}
+		pipeline, pipelineErr := newPipeline(storage, marketdata.ProductType(strings.ToLower(strings.TrimSpace(req.MarketType))))
+		if pipelineErr != nil {
+			return nil, pipelineErr
+		}
+		pipeline.Now = h.Now
+		pipeline.Metrics = h.Metrics
+		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)
+		defer workCancel()
+		payload, err = pipeline.Execute(workCtx, req)
 	}
 	if err != nil {
 		return nil, err
@@ -213,6 +297,27 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		}
 	}
 	return &model.Response{Success: payload.GetStatus() == "succeeded" || payload.GetStatus() == "partial_failed", Message: payload.GetStatus(), Data: payload, RequestID: req.RequestID, Timestamp: time.Now().UTC()}, nil
+}
+
+func (h *Handler) reportMetrics(parent context.Context) {
+	if h == nil || h.MetricsReporter == nil {
+		return
+	}
+	timeout := time.Duration(envInt("MOOX_METRICS_REPORT_TIMEOUT_MS", 750)) * time.Millisecond
+	if deadline, ok := parent.Deadline(); ok {
+		remaining := time.Until(deadline) - metricsResponseReserve
+		if remaining <= 0 {
+			return
+		}
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	if err := h.MetricsReporter.Handle(ctx); err != nil {
+		log.WarnContextf(parent, "market_fetch_metrics_report_failed: %v", err)
+	}
 }
 
 func contextWithReserve(parent context.Context, reserve time.Duration) (context.Context, context.CancelFunc) {
@@ -310,6 +415,18 @@ func envInt(name string, fallback int) int {
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func envIntAllowZero(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
 		return fallback
 	}
 	return parsed

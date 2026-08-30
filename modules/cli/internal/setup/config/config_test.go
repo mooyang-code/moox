@@ -122,6 +122,9 @@ func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 	}
 	require.NoError(t, resolveSCFTimerFunctionCounts(&stock, "scf_fetcher.spaces[1]"))
 	assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, stock.TimerFunctionCount)
+	assert.Equal(t, DefaultStockCNStaggerStartSecond, stock.StaggerStartSecond)
+	assert.Equal(t, DefaultStockCNStaggerWindowSeconds, stock.StaggerWindowSeconds)
+	assert.Equal(t, DefaultStockCNStaggerMaxStartsPerSecond, stock.StaggerMaxStartsPerSecond)
 	total := 0
 	for _, region := range stock.Regions {
 		assert.Equal(t, 50, region.FunctionCount)
@@ -157,6 +160,17 @@ func TestValidateSCFFetcherRequiresMeasuredSafeGroupSizeForStock(t *testing.T) {
 	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be a positive value")
 	base.MeasuredSafeGroupSize = -1
 	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be a positive value")
+}
+
+func TestValidateSCFFetcherRejectsUnsafeStockStaggerRate(t *testing.T) {
+	base := SCFFetcherSpace{SpaceID: "stock_cn", TimerFunctionCount: 200, MemorySize: 64, TimeoutSeconds: 15,
+		MeasuredSafeGroupSize: 30, StaggerStartSecond: 5, StaggerWindowSeconds: 35, StaggerMaxStartsPerSecond: 5,
+		StorageRPCGatewayTarget: "ip://106.53.107.122:11003", RealtimeBatchSize: 10, RealtimeBarLimit: 3,
+		CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000, MaxRetryAttempts: 3,
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 200}}}
+	err := validateSCFFetcherSpace(&base, "stock_cn")
+	require.ErrorContains(t, err, "requires up to 6 starts per second")
 }
 
 func TestResolveSCFTimerFunctionCountsRejectsMismatch(t *testing.T) {
@@ -311,6 +325,19 @@ storage_root = "/data/custom/storage"
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	assert.Equal(t, Paths{DeployRoot: "/data/custom", ControlRoot: "/data/custom/control", StorageRoot: "/data/custom/storage"}, snapshot.Manifest.Paths)
+}
+
+func TestLoadAllowsStorageRootOnSeparateHostMount(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[paths]
+deploy_root = "/data/moox"
+control_root = "/data/moox/prod"
+storage_root = "/home/ubuntu/moox/storage"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "/home/ubuntu/moox/storage", snapshot.Manifest.Paths.StorageRoot)
 }
 
 func TestLoadRejectsPathsOutsideDeployRoot(t *testing.T) {

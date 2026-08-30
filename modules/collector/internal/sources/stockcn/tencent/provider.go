@@ -16,20 +16,29 @@ import (
 )
 
 type Config struct {
-	BaseURL    string
-	HTTPClient *http.Client
-	Now        func() time.Time
+	BaseURL           string
+	KlineEndpoint     string
+	HTTPClient        *http.Client
+	Now               func() time.Time
+	RateLimit         marketdata.RateLimitPolicy
+	MaxBarsPerRequest int
 }
 
 type Provider struct {
-	baseURL string
-	client  *http.Client
-	now     func() time.Time
+	baseURL       string
+	klineEndpoint string
+	client        *http.Client
+	now           func() time.Time
+	rateLimit     marketdata.RateLimitPolicy
+	maxBars       int
 }
 
 func New(cfg Config) *Provider {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://ifzq.gtimg.cn"
+	}
+	if cfg.KlineEndpoint == "" {
+		cfg.KlineEndpoint = "/appstock/app/kline/mkline"
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 5 * time.Second}
@@ -37,30 +46,38 @@ func New(cfg Config) *Provider {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now}
+	if cfg.RateLimit.RequestsPerSecond <= 0 {
+		cfg.RateLimit = marketdata.RateLimitPolicy{RequestsPerSecond: 5, Burst: 2, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: 5 * time.Second}
+	}
+	if cfg.MaxBarsPerRequest <= 0 {
+		cfg.MaxBarsPerRequest = 320
+	}
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, maxBars: cfg.MaxBarsPerRequest}
 }
 
 func (*Provider) Descriptor() marketdata.ProviderDescriptor {
 	return marketdata.ProviderDescriptor{ID: "tencent", DisplayName: "Tencent", Hosts: []string{"web.ifzq.gtimg.cn"}}
 }
 
-func (*Provider) KlineSpec() marketdata.KlineSpec {
+func (p *Provider) KlineSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
-		Markets:           []string{"stock_cn"},
-		Exchanges:         []string{"XSHG", "XSHE", "XBSE"},
-		Frequencies:       []string{"1m"},
-		CompleteOHLCV:     true,
-		HasAmount:         false,
-		MaxBarsPerRequest: 320,
+		Markets: []string{"stock_cn"},
+		// The public Tencent m1 endpoint is verified for Shanghai and
+		// Shenzhen symbols only. Do not advertise XBSE and let the router
+		// choose Sina/EastMoney for Beijing symbols instead.
+		Exchanges:     []string{"XSHG", "XSHE"},
+		Frequencies:   []string{"1m"},
+		CompleteOHLCV: true,
+		// Tencent's public m1 payload omits turnover. We derive a conservative
+		// CNY estimate from close * shares and mark every normalized row as
+		// estimated so consumers do not mistake it for an upstream amount.
+		HasAmount:         true,
+		MaxBarsPerRequest: p.maxBars,
 		TimestampMode:     marketdata.TimestampModeClose,
-		History:           marketdata.KlineHistoryCapability{MaxLookback: 2 * 24 * time.Hour},
-		RateLimit: marketdata.RateLimitPolicy{
-			RequestsPerSecond: 5,
-			Burst:             2,
-			MaxConcurrent:     1,
-			Cooldown:          time.Second,
-			RequestTimeout:    5 * time.Second,
-		},
+		// The public m1 endpoint exposes only its latest bounded page; do not
+		// accept a longer backfill window that cannot be paged safely.
+		History:   marketdata.KlineHistoryCapability{MaxLookback: 24 * time.Hour},
+		RateLimit: p.rateLimit,
 	}
 }
 
@@ -77,11 +94,18 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if req.Frequency != "1m" {
 		return nil, fmt.Errorf("%w: tencent only supports 1m", marketdata.ErrUnsupportedFrequency)
 	}
+	requestLimit := req.Limit
+	if !req.StartTime.IsZero() || !req.EndTime.IsZero() {
+		// Tencent exposes a latest-page endpoint rather than a start cursor.
+		// Fetch its full verified page for historical/gap requests and rely on
+		// the common pipeline to discard rows outside the requested interval.
+		requestLimit = p.maxBars
+	}
 	query := url.Values{
 		"_var":  {"m1_today"},
-		"param": {strings.Join([]string{req.ProviderSymbol, "m1", "", strconv.Itoa(req.Limit)}, ",")},
+		"param": {strings.Join([]string{req.ProviderSymbol, "m1", "", strconv.Itoa(requestLimit)}, ",")},
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/appstock/app/kline/mkline?"+query.Encode(), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+p.klineEndpoint+"?"+query.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +123,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, err)
 	}
 	raw := strings.TrimSpace(string(body))
 	if index := strings.Index(raw, "="); index >= 0 {
@@ -147,6 +171,8 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		if err != nil {
 			return nil, err
 		}
+		row.AmountCNY = row.Close * row.VolumeShares
+		row.AmountEstimated = true
 		if !now.Before(row.BarEnd) {
 			rows = append(rows, row)
 		}

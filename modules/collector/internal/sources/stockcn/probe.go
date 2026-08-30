@@ -25,6 +25,37 @@ const (
 	ProbeResultNotSupported ProbeResult = "not_supported"
 )
 
+// HistoryProbe records whether a real request with an explicit start time
+// returned bars that cover that start. A failed probe is evidence too: it is
+// not converted into a provider capability claim.
+type HistoryProbe struct {
+	// RequestedStart is the wall-clock lookback requested by the probe. Start
+	// may be narrowed to an observed closed-bar boundary for providers whose
+	// public endpoint only exposes a bounded recent window (for example, a
+	// weekend request cannot be anchored to a Saturday minute).
+	RequestedStart string      `json:"requested_start,omitempty"`
+	Start          string      `json:"start,omitempty"`
+	Result         ProbeResult `json:"result,omitempty"`
+	BarCount       int         `json:"bar_count,omitempty"`
+	Earliest       string      `json:"earliest,omitempty"`
+	Latest         string      `json:"latest,omitempty"`
+	ErrorKind      string      `json:"error_kind,omitempty"`
+	Error          string      `json:"error,omitempty"`
+}
+
+// RateProbe is deliberately per provider/subject. Providers are limited by
+// the SCF egress IP, so this evidence must not be aggregated as an account-wide
+// quota or used as a cross-function planner.
+type RateProbe struct {
+	Concurrency            []int   `json:"concurrency,omitempty"`
+	Requests               int     `json:"requests,omitempty"`
+	Failed                 int     `json:"failed,omitempty"`
+	RateLimited            int     `json:"rate_limited,omitempty"`
+	P95LatencyMS           int64   `json:"p95_latency_ms,omitempty"`
+	ObservedRequestsPerSec float64 `json:"observed_requests_per_second,omitempty"`
+	Error                  string  `json:"error,omitempty"`
+}
+
 type ShadowPoint struct {
 	SubjectID      string
 	ProviderID     string
@@ -60,6 +91,8 @@ type ProbeEntry struct {
 	InstrumentCount  int           `json:"instrument_count"`
 	Complete         bool          `json:"complete"`
 	ExchangeCoverage []string      `json:"exchange_coverage"`
+	History          HistoryProbe  `json:"history,omitempty"`
+	Rate             RateProbe     `json:"rate,omitempty"`
 }
 
 type ProbeReport struct {
@@ -155,6 +188,32 @@ func (e ProbeEntry) Validate() error {
 		if strings.TrimSpace(e.AmountUnit) == "" {
 			return fmt.Errorf("amount_unit is required for kline")
 		}
+		if e.History.Result != "" && !validProbeResult(e.History.Result) {
+			return fmt.Errorf("history.result %q is unsupported", e.History.Result)
+		}
+		if e.History.BarCount < 0 {
+			return fmt.Errorf("history.bar_count must be >= 0")
+		}
+		if containsSensitiveToken(e.History.Error) {
+			return fmt.Errorf("history.error must not contain header/cookie data")
+		}
+		if e.Rate.Requests < 0 || e.Rate.Failed < 0 || e.Rate.RateLimited < 0 || e.Rate.P95LatencyMS < 0 {
+			return fmt.Errorf("rate counters must be >= 0")
+		}
+		if e.Rate.Failed+e.Rate.RateLimited > e.Rate.Requests {
+			return fmt.Errorf("rate failures must not exceed requests")
+		}
+		if e.Rate.ObservedRequestsPerSec < 0 {
+			return fmt.Errorf("observed_requests_per_second must be >= 0")
+		}
+		if containsSensitiveToken(e.Rate.Error) {
+			return fmt.Errorf("rate.error must not contain header/cookie data")
+		}
+		for _, concurrency := range e.Rate.Concurrency {
+			if concurrency <= 0 {
+				return fmt.Errorf("rate.concurrency must contain positive values")
+			}
+		}
 	case ProbeFeedInstrument:
 		if e.PageCount < 0 || e.InstrumentCount < 0 {
 			return fmt.Errorf("instrument counters must be >= 0")
@@ -164,6 +223,10 @@ func (e ProbeEntry) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validProbeResult(result ProbeResult) bool {
+	return result == ProbeResultPass || result == ProbeResultFail || result == ProbeResultShadowOnly || result == ProbeResultNotSupported
 }
 
 func (r ProbeReport) MarshalJSONStrict() ([]byte, error) {
@@ -205,6 +268,12 @@ func (r ProbeReport) RenderMarkdown() string {
 				entry.VolumeUnit,
 				entry.AmountUnit,
 			)
+			if entry.History.Result != "" {
+				fmt.Fprintf(&b, " history=%s history_bars=%d requested_start=`%s` effective_start=`%s`", strings.ToUpper(string(entry.History.Result)), entry.History.BarCount, displayValue(entry.History.RequestedStart, "-"), displayValue(entry.History.Start, "-"))
+			}
+			if entry.Rate.Requests > 0 {
+				fmt.Fprintf(&b, " rate_requests=%d rate_failed=%d rate_429=%d rate_p95_ms=%d observed_rps=%.2f", entry.Rate.Requests, entry.Rate.Failed, entry.Rate.RateLimited, entry.Rate.P95LatencyMS, entry.Rate.ObservedRequestsPerSec)
+			}
 		case ProbeFeedInstrument:
 			fmt.Fprintf(&b, "\n  - pages=%d instruments=%d complete=%t exchanges=`%s`",
 				entry.PageCount,

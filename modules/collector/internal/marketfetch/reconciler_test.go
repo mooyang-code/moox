@@ -201,6 +201,27 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 	require.Len(t, groups, 2)
 }
 
+func TestReconcilerFailsClosedForMalformedActiveStockSubject(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity", Enabled: true,
+		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m"}`,
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-stock-cn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
+	reconciler := &Reconciler{
+		Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{
+			{SubjectID: "600000.XSHG", ExternalSymbol: "sh600000", Status: "active"},
+			{SubjectID: "BAD", ExternalSymbol: "", Status: "active"},
+		}},
+		Nodes: nodes, ExpectedStockCNTimerFunctions: 1, MeasuredSafeGroupSize: 30,
+	}
+
+	err := reconciler.Reconcile(context.Background(), StockCNSpaceID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid stock symbol")
+	require.Zero(t, nodes.submits, "a malformed active subject must not be silently dropped")
+}
+
 func TestReconcilerFailsClosedWhenStockRequiredGroupSizeExceedsMeasuredSafeSize(t *testing.T) {
 	rule := domain.TaskRule{
 		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity", Enabled: true,
@@ -208,7 +229,7 @@ func TestReconcilerFailsClosedWhenStockRequiredGroupSizeExceedsMeasuredSafeSize(
 	}
 	subjects := make([]domain.DatasetSubject, 0, 4)
 	for index := 0; index < 4; index++ {
-		subjects = append(subjects, domain.DatasetSubject{SubjectID: fmt.Sprintf("%06d.XSHG", index), ExternalSymbol: fmt.Sprintf("sh%06d", index), Status: "active"})
+		subjects = append(subjects, domain.DatasetSubject{SubjectID: fmt.Sprintf("%06d.XSHG", 600000+index), ExternalSymbol: fmt.Sprintf("sh%06d", 600000+index), Status: "active"})
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{
 		{NodeID: "timer-0", FunctionName: "moox-stock-cn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
@@ -232,7 +253,7 @@ func TestReconcilerAllowsStockGroupAboveThirtyWhenMeasuredSafeSizeAllowsIt(t *te
 	}
 	subjects := make([]domain.DatasetSubject, 0, 40)
 	for index := 0; index < 40; index++ {
-		subjects = append(subjects, domain.DatasetSubject{SubjectID: fmt.Sprintf("%06d.XSHG", index), ExternalSymbol: fmt.Sprintf("sh%06d", index), Status: "active"})
+		subjects = append(subjects, domain.DatasetSubject{SubjectID: fmt.Sprintf("%06d.XSHG", 600000+index), ExternalSymbol: fmt.Sprintf("sh%06d", 600000+index), Status: "active"})
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-stock-cn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
 	reconciler := &Reconciler{

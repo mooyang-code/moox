@@ -5,11 +5,11 @@ import "time"
 type BatchKind string
 
 const (
-	BatchKindRealtime       BatchKind = "realtime"
-	BatchKindSymbolSnapshot BatchKind = "symbol_snapshot"
-	BatchKindCatchup        BatchKind = "catchup"
-	BatchKindBackfill       BatchKind = "backfill"
-	BatchKindGapRepair      BatchKind = "gap_repair"
+	BatchKindRealtime           BatchKind = "realtime"
+	BatchKindInstrumentSnapshot BatchKind = "instrument_snapshot"
+	BatchKindCatchup            BatchKind = "catchup"
+	BatchKindBackfill           BatchKind = "backfill"
+	BatchKindGapRepair          BatchKind = "gap_repair"
 )
 
 type BatchStatus string
@@ -35,24 +35,39 @@ const (
 	ItemOutcomeHTTP5xx      ItemOutcome = "http_5xx"
 	ItemOutcomeNetworkError ItemOutcome = "network_error"
 	ItemOutcomeStorageError ItemOutcome = "storage_error"
-	ItemOutcomeInvalid      ItemOutcome = "invalid_request"
+	// ItemOutcomeProviderError means the selected upstream returned a malformed,
+	// incomplete, or otherwise unusable response. It is retryable so a later
+	// retry window can advance to the next configured provider candidate.
+	ItemOutcomeProviderError ItemOutcome = "provider_error"
+	ItemOutcomeInvalid       ItemOutcome = "invalid_request"
 )
 
 type CollectionItem struct {
-	TaskID             string `json:"task_id,omitempty"`
-	SubjectID          string `json:"subject_id"`
-	Symbol             string `json:"symbol"`
-	TargetDataTime     string `json:"target_data_time,omitempty"`
-	StartTime          string `json:"start_time,omitempty"`
-	BarLimit           int    `json:"bar_limit,omitempty"`
-	SourceEventID      string `json:"source_event_id,omitempty"`
-	Provider           string `json:"provider"`
-	MarketType         string `json:"market_type"`
-	DataType           string `json:"data_type"`
-	DatasetID          string `json:"dataset_id"`
-	Frequency          string `json:"frequency,omitempty"`
-	SnapshotShardIndex int    `json:"snapshot_shard_index,omitempty"`
-	SnapshotShardCount int    `json:"snapshot_shard_count,omitempty"`
+	TaskID         string `json:"task_id,omitempty"`
+	SubjectID      string `json:"subject_id"`
+	Symbol         string `json:"symbol"`
+	TargetDataTime string `json:"target_data_time,omitempty"`
+	StartTime      string `json:"start_time,omitempty"`
+	EndTime        string `json:"end_time,omitempty"`
+	SnapshotAt     string `json:"snapshot_at,omitempty"`
+	BarLimit       int    `json:"bar_limit,omitempty"`
+	// Canary marks an operator/deployment probe. Stock canaries use the
+	// bundled trading calendar to resolve the latest closed session rather
+	// than treating a weekend or holiday as a missing-data failure.
+	Canary bool `json:"canary,omitempty"`
+	// CandidateIndex is advanced when a retry has already exhausted the
+	// current provider window. Keeping it on the item makes retries resume at
+	// the next candidate instead of repeatedly starting at the same bad feed.
+	CandidateIndex     int     `json:"candidate_index,omitempty"`
+	RateBudgetRatio    float64 `json:"rate_budget_ratio,omitempty"`
+	SourceEventID      string  `json:"source_event_id,omitempty"`
+	Provider           string  `json:"provider"`
+	MarketType         string  `json:"market_type"`
+	DataType           string  `json:"data_type"`
+	DatasetID          string  `json:"dataset_id"`
+	Frequency          string  `json:"frequency,omitempty"`
+	SnapshotShardIndex int     `json:"snapshot_shard_index,omitempty"`
+	SnapshotShardCount int     `json:"snapshot_shard_count,omitempty"`
 }
 
 type ItemResult struct {

@@ -1,0 +1,38 @@
+market_id: stock_cn
+route_id: stock_cn_kline_1m_v1
+frequency: 1m
+# Release-time value. Change only with a new SCF publish and egress gate.
+timer_function_count: 200
+measured_safe_group_size: 30
+stagger:
+  start_second: 5
+  window_seconds: 35
+  max_starts_per_second: 6
+providers:
+  # Sina is the currently verified complete instrument source. EastMoney's
+  # live snapshot endpoint is retained in the provider catalogue but stays
+  # disabled for instrument activation until a complete stable probe exists;
+  # pages are never mixed across sources. Baidu stays outside the candidate
+  # chain because its live response is not a complete instrument protocol.
+  - id: sina
+    weight: 1
+    kline: active
+    instrument: active
+  - id: eastmoney
+    weight: 1
+    kline: active
+    instrument: disabled
+  - id: tencent
+    weight: 1
+    kline: active
+    instrument: disabled
+  - id: baidu
+    weight: 1
+    kline: shadow
+    instrument: disabled
+history:
+  mode: live_only
+  backfill_enabled: false
+  # Current public feeds expose only a bounded latest page. Longer history
+  # requires a cursor-paginated provider before this value is increased.
+  max_lookback: 1d

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,7 +63,20 @@ type Builder struct {
 	Results                    *store.ResultRepository
 	Policy                     report.RealtimeTimeSeriesPolicy
 	BalanceDifferenceThreshold float64
+	MarketFetchThresholds      MarketFetchThresholds
 	Now                        func() time.Time
+}
+
+type MarketFetchThresholds struct {
+	CoordinationStaleAfter      time.Duration
+	PendingGrace                time.Duration
+	LowCapacityHeadroom         int
+	FeedFailureRateWindow       time.Duration
+	FeedFailureRateThreshold    float64
+	InstrumentSnapshotMaxAge    time.Duration
+	InstrumentMinimumCount      int
+	InstrumentRequiredExchanges []string
+	EgressStaleAfter            time.Duration
 }
 
 func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
@@ -92,6 +106,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, coordination...)
+	signals, err := b.buildMarketFetchSignalHealth(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, signals...)
 	delivery, err := b.buildStorageOutboxHealth(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err
@@ -931,6 +950,360 @@ type timerCoordinationState struct {
 	staleSeries                                                                   bool
 	badNodes                                                                      []string
 	failureReasons                                                                map[string]bool
+	configuredGroupsExpected, configuredGroupsActual                              float64
+	hasConfiguredGroupsExpected, hasConfiguredGroupsActual                        bool
+	configuredGroupIDs                                                            map[int]float64
+	configuredGroupIDObserved                                                     map[int]time.Time
+}
+
+type marketFeedHealthState struct {
+	requests, failures, rateLimited, noCandidate float64
+	lastObserved                                 time.Time
+}
+
+type marketInstrumentHealthState struct {
+	provider, route, result string
+	active                  float64
+	lastObserved, fetchedAt time.Time
+	exchanges               map[string]float64
+}
+
+type marketEgressHealthState struct {
+	route                                            string
+	expected, result, nonEmpty, distinct             float64
+	lastObserved                                     time.Time
+	hasExpected, hasResult, hasNonEmpty, hasDistinct bool
+	kindObserved                                     map[string]time.Time
+}
+
+const maxMarketSignalSeries = 5000
+
+// buildMarketFetchSignalHealth consumes the bounded facts emitted by short-lived
+// Collector invocations and by the CLI release gate. It intentionally does not
+// infer health from missing rows unless a stock signal family has already been
+// observed; an uninstalled market must not page forever.
+func (b Builder) buildMarketFetchSignalHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
+	if b.Metrics == nil || b.Metrics.Catalog() == nil {
+		return nil, nil
+	}
+	if spaceID != "" && spaceID != "stock_cn" && spaceID != monmetrics.InternalMetricSpaceID {
+		return nil, nil
+	}
+	feed, err := b.buildStockCNFeedHealth(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	instrument, err := b.buildStockCNInstrumentHealth(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	egress, err := b.buildStockCNEgressHealth(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(feed, instrument...), egress...), nil
+}
+
+func (b Builder) marketMetricSeries(ctx context.Context, metricName string) ([]monmetrics.MetricSeries, error) {
+	const pageSize = 500
+	all := make([]monmetrics.MetricSeries, 0, pageSize)
+	for offset := 0; ; offset += pageSize {
+		rows, total, err := b.Metrics.Catalog().ListSeries(ctx, "", metricName, "", offset, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		if total > maxMarketSignalSeries {
+			return nil, fmt.Errorf("market metric series exceed limit %d for %s", maxMarketSignalSeries, metricName)
+		}
+		all = append(all, rows...)
+		if len(all) >= int(total) || len(rows) == 0 {
+			return all, nil
+		}
+	}
+}
+
+func isFreshMetric(now, observed time.Time, window time.Duration) bool {
+	if observed.IsZero() || observed.After(now) {
+		return false
+	}
+	return now.Sub(observed) <= window
+}
+
+func (b Builder) buildStockCNFeedHealth(ctx context.Context, now time.Time) ([]BusinessStatus, error) {
+	window := b.marketFetchThresholds().FeedFailureRateWindow
+	if window <= 0 {
+		window = 5 * time.Minute
+	}
+	series, err := b.marketMetricSeries(ctx, "moox_collector_market_feed_results_total")
+	if err != nil {
+		return nil, err
+	}
+	states := map[string]*marketFeedHealthState{}
+	sawStock := false
+	for _, item := range series {
+		labels, err := datasetLabels(item.LabelsJSON)
+		if err != nil {
+			return nil, fmt.Errorf("market feed labels for %s: %w", item.SeriesID, err)
+		}
+		if strings.TrimSpace(labels["market_id"]) != "stock_cn" || strings.TrimSpace(labels["feed_kind"]) != "kline" {
+			continue
+		}
+		sawStock = true
+		provider := strings.TrimSpace(labels["provider_id"])
+		if provider == "" {
+			provider = "unknown"
+		}
+		state := states[provider]
+		if state == nil {
+			state = &marketFeedHealthState{}
+			states[provider] = state
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		if latest == nil || item.IsStale || !isFreshMetric(now, latest.ObservedAt.UTC(), window) {
+			continue
+		}
+		value := maxFloat(latest.Value, 0)
+		state.requests += value
+		state.lastObserved = maxTime(state.lastObserved, latest.ObservedAt.UTC())
+		switch strings.TrimSpace(labels["result"]) {
+		case "http_429", "rate_limited":
+			state.failures += value
+			state.rateLimited += value
+		case "http_5xx", "timeout", "invalid", "storage_error", "no_candidate":
+			state.failures += value
+			if strings.TrimSpace(labels["result"]) == "no_candidate" {
+				state.noCandidate += value
+			}
+		}
+	}
+	if !sawStock {
+		return nil, nil
+	}
+	threshold := b.marketFetchThresholds().FeedFailureRateThreshold
+	if threshold <= 0 {
+		threshold = 0.2
+	}
+	providers := make([]string, 0, len(states))
+	for provider := range states {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+	out := make([]BusinessStatus, 0, len(providers))
+	for _, provider := range providers {
+		state := states[provider]
+		status, reason := "healthy", fmt.Sprintf("%s Provider Feed 正常", provider)
+		if state.requests <= 0 {
+			status, reason = "down", fmt.Sprintf("%s Provider Feed 在最近 %s 无有效结果", provider, window)
+		} else if state.noCandidate > 0 {
+			status, reason = "down", fmt.Sprintf("%s Provider Feed 候选池为空", provider)
+		} else if state.rateLimited > 0 {
+			status, reason = "down", fmt.Sprintf("%s Provider Feed 最近 %s 持续触发 429/限频", provider, window)
+		} else if rate := state.failures / state.requests; rate > threshold {
+			status, reason = "down", fmt.Sprintf("%s Provider Feed 最近 %s 失败率 %.1f%%，超过 %.1f%%", provider, window, rate*100, threshold*100)
+		}
+		out = append(out, BusinessStatus{SpaceID: "stock_cn", Kind: "market_fetch", Module: "provider_feed:" + provider, Status: status, Reason: reason, LastCheckedAt: now})
+	}
+	if len(out) == 0 {
+		out = append(out, BusinessStatus{SpaceID: "stock_cn", Kind: "market_fetch", Module: "provider_feed", Status: "down", Reason: fmt.Sprintf("stock_cn Provider Feed 最近 %s 没有新指标", window), LastCheckedAt: now})
+	}
+	return out, nil
+}
+
+func (b Builder) buildStockCNInstrumentHealth(ctx context.Context, now time.Time) ([]BusinessStatus, error) {
+	thresholds := b.marketFetchThresholds()
+	maxAge := thresholds.InstrumentSnapshotMaxAge
+	if maxAge <= 0 {
+		maxAge = 36 * time.Hour
+	}
+	series, err := b.marketMetricSeries(ctx, "moox_collector_market_instrument_last_snapshot_timestamp_seconds")
+	if err != nil {
+		return nil, err
+	}
+	states := map[string]*marketInstrumentHealthState{}
+	for _, item := range series {
+		labels, err := datasetLabels(item.LabelsJSON)
+		if err != nil {
+			return nil, fmt.Errorf("instrument snapshot labels for %s: %w", item.SeriesID, err)
+		}
+		if labels["market_id"] != "stock_cn" || item.IsStale {
+			continue
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		if latest == nil {
+			continue
+		}
+		provider := nonEmptyString(labels["provider_id"], "unknown")
+		key := strings.Join([]string{labels["route_id"], provider}, "\x00")
+		state := states[key]
+		if state == nil || latest.ObservedAt.After(state.lastObserved) {
+			active := float64(0)
+			exchanges := map[string]float64{}
+			if state != nil {
+				active = state.active
+				exchanges = state.exchanges
+			}
+			states[key] = &marketInstrumentHealthState{provider: provider, route: labels["route_id"], result: labels["result"], active: active, exchanges: exchanges, fetchedAt: unixTime(latest.Value), lastObserved: latest.ObservedAt.UTC()}
+		}
+	}
+	loadInstrumentFacts := func(metricName string, apply func(*marketInstrumentHealthState, map[string]string, float64)) error {
+		facts, err := b.marketMetricSeries(ctx, metricName)
+		if err != nil {
+			return err
+		}
+		for _, item := range facts {
+			labels, err := datasetLabels(item.LabelsJSON)
+			if err != nil {
+				return fmt.Errorf("instrument metric labels for %s: %w", item.SeriesID, err)
+			}
+			if labels["market_id"] != "stock_cn" || item.IsStale {
+				continue
+			}
+			latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+			if err != nil {
+				return err
+			}
+			if latest == nil {
+				continue
+			}
+			provider := nonEmptyString(labels["provider_id"], "unknown")
+			key := strings.Join([]string{labels["route_id"], provider}, "\x00")
+			state := states[key]
+			if state == nil {
+				state = &marketInstrumentHealthState{provider: provider, route: labels["route_id"], exchanges: map[string]float64{}}
+				states[key] = state
+			}
+			if !latest.ObservedAt.Before(state.lastObserved) || state.lastObserved.IsZero() {
+				apply(state, labels, latest.Value)
+				state.lastObserved = latest.ObservedAt.UTC()
+			}
+		}
+		return nil
+	}
+	if err := loadInstrumentFacts("moox_collector_market_instrument_active", func(state *marketInstrumentHealthState, _ map[string]string, value float64) {
+		state.active = maxFloat(value, 0)
+	}); err != nil {
+		return nil, err
+	}
+	if err := loadInstrumentFacts("moox_collector_market_instrument_exchange", func(state *marketInstrumentHealthState, labels map[string]string, value float64) {
+		if state.exchanges == nil {
+			state.exchanges = map[string]float64{}
+		}
+		state.exchanges[labels["exchange"]] = maxFloat(value, 0)
+	}); err != nil {
+		return nil, err
+	}
+	if len(states) == 0 {
+		return nil, nil
+	}
+	out := make([]BusinessStatus, 0, len(states))
+	for _, state := range states {
+		status, reason := "healthy", fmt.Sprintf("%s Instrument 快照正常", state.provider)
+		if state.result != "success" {
+			status, reason = "down", fmt.Sprintf("%s Instrument 快照结果为 %s", state.provider, nonEmptyString(state.result, "unknown"))
+		} else if state.fetchedAt.IsZero() || now.Sub(state.fetchedAt) > maxAge {
+			status, reason = "down", fmt.Sprintf("%s Instrument 快照已超过 %s 未更新", state.provider, maxAge)
+		} else if state.active < float64(max(1, thresholds.InstrumentMinimumCount)) {
+			status, reason = "down", fmt.Sprintf("%s Instrument active 数 %.0f 低于下限 %d", state.provider, state.active, thresholds.InstrumentMinimumCount)
+		} else {
+			for _, exchange := range thresholds.InstrumentRequiredExchanges {
+				if state.exchanges[strings.TrimSpace(exchange)] <= 0 {
+					status, reason = "down", fmt.Sprintf("%s Instrument 快照缺少交易所 %s", state.provider, strings.TrimSpace(exchange))
+					break
+				}
+			}
+		}
+		out = append(out, BusinessStatus{SpaceID: "stock_cn", Kind: "market_fetch", Module: "instrument_snapshot:" + state.provider, Status: status, Reason: reason, LastCheckedAt: now})
+	}
+	return out, nil
+}
+
+func nonEmptyString(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(value)
+}
+
+func (b Builder) buildStockCNEgressHealth(ctx context.Context, now time.Time) ([]BusinessStatus, error) {
+	staleAfter := b.marketFetchThresholds().EgressStaleAfter
+	if staleAfter <= 0 {
+		staleAfter = 15 * time.Minute
+	}
+	series, err := b.marketMetricSeries(ctx, "moox_collector_market_egress_functions")
+	if err != nil {
+		return nil, err
+	}
+	states := map[string]*marketEgressHealthState{}
+	for _, item := range series {
+		labels, err := datasetLabels(item.LabelsJSON)
+		if err != nil {
+			return nil, fmt.Errorf("egress gate labels for %s: %w", item.SeriesID, err)
+		}
+		if labels["market_id"] != "stock_cn" || item.IsStale {
+			continue
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		if latest == nil {
+			continue
+		}
+		route := nonEmptyString(labels["route_id"], "unknown")
+		state := states[route]
+		if state == nil {
+			state = &marketEgressHealthState{route: route, kindObserved: make(map[string]time.Time)}
+			states[route] = state
+		}
+		observedAt := latest.ObservedAt.UTC()
+		switch labels["kind"] {
+		case "expected":
+			if state.kindObserved["expected"].Before(observedAt) {
+				state.expected, state.hasExpected = latest.Value, true
+				state.kindObserved["expected"] = observedAt
+			}
+		case "result":
+			if state.kindObserved["result"].Before(observedAt) {
+				state.result, state.hasResult = latest.Value, true
+				state.kindObserved["result"] = observedAt
+			}
+		case "non_empty_ip":
+			if state.kindObserved["non_empty_ip"].Before(observedAt) {
+				state.nonEmpty, state.hasNonEmpty = latest.Value, true
+				state.kindObserved["non_empty_ip"] = observedAt
+			}
+		case "distinct_ip":
+			if state.kindObserved["distinct_ip"].Before(observedAt) {
+				state.distinct, state.hasDistinct = latest.Value, true
+				state.kindObserved["distinct_ip"] = observedAt
+			}
+		}
+		state.lastObserved = maxTime(state.lastObserved, observedAt)
+	}
+	out := make([]BusinessStatus, 0, len(states))
+	for _, state := range states {
+		status, reason := "healthy", fmt.Sprintf("stock_cn 出口 IP 门禁正常，函数数 %.0f", state.expected)
+		switch {
+		case !isFreshMetric(now, state.lastObserved, staleAfter):
+			status, reason = "down", fmt.Sprintf("stock_cn 出口 IP 门禁超过 %s 未更新", staleAfter)
+		case !state.hasExpected || !isFreshMetric(now, state.kindObserved["expected"], staleAfter) || state.expected <= 0:
+			status, reason = "down", "stock_cn 出口 IP 门禁没有有效 expected_function_count"
+		case !state.hasResult || !isFreshMetric(now, state.kindObserved["result"], staleAfter) || state.result != state.expected:
+			status, reason = "down", fmt.Sprintf("stock_cn 出口探针结果数 %.0f 不等于期望 %.0f", state.result, state.expected)
+		case !state.hasNonEmpty || !isFreshMetric(now, state.kindObserved["non_empty_ip"], staleAfter) || state.nonEmpty != state.expected:
+			status, reason = "down", fmt.Sprintf("stock_cn 非空出口 IP 数 %.0f 不等于期望 %.0f", state.nonEmpty, state.expected)
+		case !state.hasDistinct || !isFreshMetric(now, state.kindObserved["distinct_ip"], staleAfter) || state.distinct != state.expected:
+			status, reason = "down", fmt.Sprintf("stock_cn 去重出口 IP 数 %.0f 不等于期望 %.0f", state.distinct, state.expected)
+		}
+		out = append(out, BusinessStatus{SpaceID: "stock_cn", Kind: "market_fetch", Module: "egress_gate:" + state.route, Status: status, Reason: reason, LastCheckedAt: now})
+	}
+	return out, nil
 }
 
 // A full Tencent runtime-config batch may touch dozens of functions. The
@@ -947,6 +1320,38 @@ const timerCoordinationPendingGrace = 5 * time.Minute
 // exposes the exact headroom for operators who need a different threshold.
 const timerCoordinationLowCapacityHeadroom = 2
 
+func (b Builder) marketFetchThresholds() MarketFetchThresholds {
+	thresholds := b.MarketFetchThresholds
+	if thresholds.CoordinationStaleAfter <= 0 {
+		thresholds.CoordinationStaleAfter = timerCoordinationStaleAfter
+	}
+	if thresholds.PendingGrace <= 0 {
+		thresholds.PendingGrace = timerCoordinationPendingGrace
+	}
+	if thresholds.LowCapacityHeadroom <= 0 {
+		thresholds.LowCapacityHeadroom = timerCoordinationLowCapacityHeadroom
+	}
+	if thresholds.FeedFailureRateWindow <= 0 {
+		thresholds.FeedFailureRateWindow = 5 * time.Minute
+	}
+	if thresholds.FeedFailureRateThreshold <= 0 {
+		thresholds.FeedFailureRateThreshold = 0.2
+	}
+	if thresholds.InstrumentSnapshotMaxAge <= 0 {
+		thresholds.InstrumentSnapshotMaxAge = 36 * time.Hour
+	}
+	if thresholds.InstrumentMinimumCount <= 0 {
+		thresholds.InstrumentMinimumCount = 4000
+	}
+	if len(thresholds.InstrumentRequiredExchanges) == 0 {
+		thresholds.InstrumentRequiredExchanges = []string{"XSHG", "XSHE", "XBSE"}
+	}
+	if thresholds.EgressStaleAfter <= 0 {
+		thresholds.EgressStaleAfter = 15 * time.Minute
+	}
+	return thresholds
+}
+
 // buildMarketFetchCoordination consumes the small Collector coordination
 // metric set. It deliberately does not call Tencent or CloudNode: Collector
 // already reads the trigger readback and publishes it through the shared
@@ -956,6 +1361,7 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		return nil, nil
 	}
 	states := map[string]*timerCoordinationState{}
+	thresholds := b.marketFetchThresholds()
 	collectorReporterFresh := false
 	if services, _, err := b.Metrics.Catalog().ListServices(ctx, "", 0, 500); err != nil {
 		return nil, err
@@ -1115,10 +1521,86 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 	}); err != nil {
 		return nil, err
 	}
+	configuredGroups, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_collector_market_configured_groups", "", 500, now)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range configuredGroups {
+		if item.IsStale {
+			continue
+		}
+		labels, err := datasetLabels(item.LabelsJSON)
+		if err != nil {
+			return nil, fmt.Errorf("configured group labels for %s: %w", item.SeriesID, err)
+		}
+		currentSpace := strings.TrimSpace(labels["market_id"])
+		if currentSpace != "stock_cn" || (spaceID != "" && currentSpace != spaceID) {
+			continue
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		state := states[currentSpace]
+		if state == nil {
+			state = &timerCoordinationState{}
+			states[currentSpace] = state
+		}
+		switch strings.TrimSpace(labels["kind"]) {
+		case "expected":
+			if !state.hasConfiguredGroupsExpected || latest.Value > state.configuredGroupsExpected {
+				state.configuredGroupsExpected = maxFloat(latest.Value, 0)
+			}
+			state.hasConfiguredGroupsExpected = true
+		case "actual":
+			if !state.hasConfiguredGroupsActual || latest.Value < state.configuredGroupsActual {
+				state.configuredGroupsActual = maxFloat(latest.Value, 0)
+			}
+			state.hasConfiguredGroupsActual = true
+		}
+	}
+	groupIdentitySeries, err := b.marketMetricSeries(ctx, "moox_collector_market_configured_group_id")
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range groupIdentitySeries {
+		if item.IsStale {
+			continue
+		}
+		labels, err := datasetLabels(item.LabelsJSON)
+		if err != nil {
+			return nil, fmt.Errorf("configured group identity labels for %s: %w", item.SeriesID, err)
+		}
+		currentSpace := strings.TrimSpace(labels["market_id"])
+		if currentSpace != "stock_cn" || (spaceID != "" && currentSpace != spaceID) {
+			continue
+		}
+		groupID, parseErr := strconv.Atoi(strings.TrimSpace(labels["group_id"]))
+		if parseErr != nil || groupID < 0 {
+			continue
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		state := states[currentSpace]
+		if state == nil {
+			state = &timerCoordinationState{}
+			states[currentSpace] = state
+		}
+		if state.configuredGroupIDs == nil {
+			state.configuredGroupIDs = make(map[int]float64)
+			state.configuredGroupIDObserved = make(map[int]time.Time)
+		}
+		if state.configuredGroupIDObserved[groupID].Before(latest.ObservedAt.UTC()) {
+			state.configuredGroupIDs[groupID] = maxFloat(latest.Value, 0)
+			state.configuredGroupIDObserved[groupID] = latest.ObservedAt.UTC()
+		}
+	}
 	out := make([]BusinessStatus, 0, len(states))
 	for currentSpace, state := range states {
 		pendingGrace := state.hasRequired && state.hasPending && state.pending > 0 && state.hasPendingSince && state.pendingSince > 0 &&
-			now.Sub(unixTime(state.pendingSince)) >= 0 && now.Sub(unixTime(state.pendingSince)) <= timerCoordinationPendingGrace &&
+			now.Sub(unixTime(state.pendingSince)) >= 0 && now.Sub(unixTime(state.pendingSince)) <= thresholds.PendingGrace &&
 			state.active >= state.required && len(state.badNodes) == 0
 		if pendingGrace {
 			reason := "Timer 配置协调进行中"
@@ -1131,6 +1613,12 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		if state.hasCapacityTotal && state.hasCapacityRequired && state.capacityRequired > state.capacityTotal {
 			shortfall := state.capacityRequired - state.capacityTotal
 			reason := fmt.Sprintf("Timer SCF 容量不足：需要 %.0f 个节点，当前仅有 %.0f 个，缺口 %.0f 个", state.capacityRequired, state.capacityTotal, shortfall)
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
+			continue
+		}
+		if state.hasConfiguredGroupsExpected && state.hasConfiguredGroupsActual &&
+			state.configuredGroupsExpected != state.configuredGroupsActual {
+			reason := fmt.Sprintf("stock_cn Group 数量不一致：期望 %.0f，实际 %.0f", state.configuredGroupsExpected, state.configuredGroupsActual)
 			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
 			continue
 		}
@@ -1161,21 +1649,52 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		}
 		status, reason := "healthy", "Timer 分配和触发器正常"
 		switch {
-		case state.hasCapacityHeadroom && state.capacityHeadroom >= 0 && state.capacityHeadroom <= timerCoordinationLowCapacityHeadroom:
+		case state.hasCapacityHeadroom && state.capacityHeadroom >= 0 && state.capacityHeadroom <= float64(thresholds.LowCapacityHeadroom):
 			status, reason = "degraded", fmt.Sprintf("Timer SCF 容量余量仅 %.0f 个节点，当前需要 %.0f/%.0f 个", state.capacityHeadroom, state.capacityRequired, state.capacityTotal)
 		case state.active < state.required:
 			status, reason = "down", fmt.Sprintf("Timer 节点分配不足：已分配 %.0f 个，需要 %.0f 个", state.active, state.required)
 		case !state.hasLastSuccess || state.lastSuccess <= 0:
 			status, reason = "down", "尚未完成 Timer 配置协调"
-		case now.Sub(unixTime(state.lastSuccess)) > timerCoordinationStaleAfter:
+		case now.Sub(unixTime(state.lastSuccess)) > thresholds.CoordinationStaleAfter:
 			status, reason = "down", fmt.Sprintf("最近一次 Timer 配置协调已超过允许时间，最后成功时间 %s", unixTime(state.lastSuccess).Format(time.RFC3339))
 		case len(state.badNodes) > 0:
 			sort.Strings(state.badNodes)
 			status, reason = "down", "Timer 触发器不可用：节点 "+strings.Join(state.badNodes, ", ")
+		case currentSpace == "stock_cn" && state.hasConfiguredGroupsExpected:
+			status, reason = validateConfiguredGroupIDs(now, state, thresholds.CoordinationStaleAfter)
 		}
 		out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: status, Reason: reason, LastCheckedAt: now})
 	}
 	return out, nil
+}
+
+func validateConfiguredGroupIDs(now time.Time, state *timerCoordinationState, staleAfter time.Duration) (string, string) {
+	expected := int(state.configuredGroupsExpected)
+	if expected <= 0 {
+		return "healthy", "Timer 分配和触发器正常"
+	}
+	if len(state.configuredGroupIDs) != expected {
+		return "down", fmt.Sprintf("stock_cn Group ID 数量不一致：期望 %d，实际 %d", expected, len(state.configuredGroupIDs))
+	}
+	for groupID := 0; groupID < expected; groupID++ {
+		count, ok := state.configuredGroupIDs[groupID]
+		observed := state.configuredGroupIDObserved[groupID]
+		if !ok {
+			return "down", fmt.Sprintf("stock_cn 缺少 Group ID %d", groupID)
+		}
+		if count != 1 {
+			return "down", fmt.Sprintf("stock_cn Group ID %d 出现 %.0f 次，期望 1 次", groupID, count)
+		}
+		if !isFreshMetric(now, observed, staleAfter) {
+			return "down", fmt.Sprintf("stock_cn Group ID %d 的配置指标已过期", groupID)
+		}
+	}
+	for groupID := range state.configuredGroupIDs {
+		if groupID < 0 || groupID >= expected {
+			return "down", fmt.Sprintf("stock_cn 出现越界 Group ID %d，期望范围 0..%d", groupID, expected-1)
+		}
+	}
+	return "healthy", "Timer 分配和触发器正常"
 }
 
 func maxFloat(value, floor float64) float64 {

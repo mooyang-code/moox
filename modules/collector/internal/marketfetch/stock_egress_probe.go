@@ -17,15 +17,64 @@ import (
 
 type stockEgressValidator func([]byte) error
 
-// StockEgressProbe requires both a public outbound IP and a parseable stock
-// quote from every active feed.
+// StockEgressIdentityProbe is the release-time identity check. Provider
+// reachability is exercised by the market canary; the N-function egress gate
+// must not turn a transient provider outage or a blocked IP reflector into a
+// false statement about function identity.
+func StockEgressIdentityProbe(ctx context.Context) (*model.Response, error) {
+	client := &http.Client{Timeout: 3 * time.Second}
+	return stockEgressIdentityProbeWithClient(ctx, client, []string{
+		"https://api.ipify.org?format=text",
+		"https://ifconfig.me/ip",
+		"https://checkip.amazonaws.com/",
+		"https://icanhazip.com/",
+	}...)
+}
+
+func stockEgressIdentityProbeWithClient(ctx context.Context, client *http.Client, reflectors ...string) (*model.Response, error) {
+	var failures []string
+	for _, endpoint := range reflectors {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", endpoint, err))
+			continue
+		}
+		request.Header.Set("User-Agent", "moox-collector/1.0")
+		response, err := client.Do(request)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", endpoint, err))
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 128<<10))
+		response.Body.Close()
+		if readErr != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", endpoint, readErr))
+			continue
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			failures = append(failures, fmt.Sprintf("%s: HTTP %d", endpoint, response.StatusCode))
+			continue
+		}
+		if err := validatePublicIPAddress(body); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", endpoint, err))
+			continue
+		}
+		return &model.Response{Success: true, Message: "stock_cn egress identity probe ok", Data: map[string]interface{}{
+			"provider": "multi", "market": "stock_cn", "details": map[string]string{"public_ip": strings.TrimSpace(string(body))},
+		}, Timestamp: time.Now().UTC()}, nil
+	}
+	return nil, fmt.Errorf("public_ip reflectors unavailable: %s", strings.Join(failures, "; "))
+}
+
+// StockEgressProbe retains the provider-feed diagnostic used by focused
+// validation. It is intentionally stricter than the release identity gate.
 func StockEgressProbe(ctx context.Context) (*model.Response, error) {
 	client := &http.Client{Timeout: 3 * time.Second}
 	return runStockEgressChecks(ctx, client, []stockEgressCheck{
 		{name: "public_ip", url: "https://api.ipify.org?format=text", validate: validatePublicIPAddress},
 		{name: "sina_kline", url: "https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20moox_probe=/CN_MarketDataService.getKLineData?symbol=sh600000&scale=1&ma=no&datalen=1", validate: validateSinaKline},
 		{name: "tencent_kline", url: "https://ifzq.gtimg.cn/appstock/app/kline/mkline?_var=m1_today&param=sh600000,m1,,1", validate: validateTencentKline},
-		{name: "eastmoney_kline", url: "http://push2.eastmoney.com/api/qt/stock/trends2/get?secid=1.600000&ndays=1&iscr=0&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f58", validate: validateEastMoneyKline},
+		{name: "eastmoney_kline", url: "https://push2.eastmoney.com/api/qt/stock/kline/get?secid=1.600000&klt=1&fqt=0&beg=0&end=20500101&lmt=1&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57", validate: validateEastMoneyKline},
 	})
 }
 

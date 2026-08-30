@@ -55,9 +55,9 @@ func TestTimerRequestFromEnvAllowsConfiguredStockGroupAboveThirty(t *testing.T) 
 	subjects := make([]string, 0, 40)
 	symbols := make(map[string]string, 40)
 	for index := 0; index < 40; index++ {
-		subject := fmt.Sprintf("%06d.XSHG", index)
+		subject := fmt.Sprintf("%06d.XSHG", 600000+index)
 		subjects = append(subjects, subject)
-		symbols[subject] = fmt.Sprintf("sh%06d", index)
+		symbols[subject] = fmt.Sprintf("sh%06d", 600000+index)
 	}
 	rawSymbols, err := json.Marshal(symbols)
 	require.NoError(t, err)
@@ -68,11 +68,62 @@ func TestTimerRequestFromEnvAllowsConfiguredStockGroupAboveThirty(t *testing.T) 
 	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
 	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", joinSubjects(subjects))
 	t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", string(rawSymbols))
+	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "3")
+	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "200")
 	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://10.0.0.1:11003")
 
 	req, _, err := TimerRequestFromEnv("req", "stock-node", time.Date(2026, 8, 4, 1, 2, 3, 0, time.UTC))
 	require.NoError(t, err)
 	require.Len(t, req.Items, 40)
+}
+
+func TestTimerRequestFromEnvDerivesStrictStockSymbolsAndAppliesOverrides(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", StockCNSpaceID)
+	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "sina")
+	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
+	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", StockCNDatasetID)
+	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
+	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "600000.XSHG|000001.XSHE")
+	t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", `{"600000.XSHG":"sh600000"}`)
+	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "3")
+	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "200")
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://10.0.0.1:11003")
+
+	req, _, err := TimerRequestFromEnv("req", "stock-node", time.Date(2026, 8, 4, 1, 2, 3, 0, time.UTC))
+	require.NoError(t, err)
+	require.Len(t, req.Items, 2)
+	require.Equal(t, "sz000001", req.Items[0].Symbol)
+	require.Equal(t, "sh600000", req.Items[1].Symbol)
+}
+
+func TestTimerRequestFromEnvRejectsStrictStockSymbolMismatch(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", StockCNSpaceID)
+	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "sina")
+	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
+	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", StockCNDatasetID)
+	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
+	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "600000.XSHG")
+	t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", `{"600000.XSHG":"sh600001"}`)
+	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "3")
+	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "200")
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://10.0.0.1:11003")
+
+	_, _, err := TimerRequestFromEnv("req", "stock-node", time.Date(2026, 8, 4, 1, 2, 3, 0, time.UTC))
+	require.ErrorContains(t, err, "conflicts with strict symbol")
+}
+
+func TestTimerRequestFromEnvRejectsInvalidStockGroupIdentity(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", StockCNSpaceID)
+	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "sina")
+	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
+	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", StockCNDatasetID)
+	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
+	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "600000.XSHG")
+	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "200")
+	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "200")
+
+	_, _, err := TimerRequestFromEnv("req", "stock-node", time.Date(2026, 8, 4, 1, 2, 3, 0, time.UTC))
+	require.ErrorContains(t, err, "outside [0,200)")
 }
 
 func joinSubjects(subjects []string) string {

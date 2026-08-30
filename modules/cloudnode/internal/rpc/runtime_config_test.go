@@ -22,6 +22,9 @@ func TestManagedEnvironmentAllowsStockCNRouteKeys(t *testing.T) {
 		"MOOX_MARKET_FETCH_PROVIDER_CHAIN",
 		"MOOX_MARKET_FETCH_ROUTE_VERSION",
 		"MOOX_MARKET_FETCH_GROUP_ID",
+		"MOOX_MARKET_FETCH_GROUP_COUNT",
+		"MOOX_METRICS_EVENTBUS_URL",
+		"MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE",
 	} {
 		_, ok := managedEnvironmentKeys[key]
 		require.True(t, ok, "missing managed environment key %s", key)

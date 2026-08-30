@@ -16,8 +16,21 @@ system:
     expire_seconds: 60
 sources:
   market:
-    # Temporary shared Storage auth binding. Kline HTTP adapters are composed
-    # directly by the stock_cn serverless runtime.
+    # The Binance file is retained as the authenticated Storage binding used by
+    # the shared market writer. Stock HTTP adapters are composed by the common
+    # runtime and have independent per-egress-IP Feed policies below.
     - name: "binance"
       enabled: true
       config: "sources/market/binance.yaml"
+    - name: "sina"
+      enabled: true
+      config: "sources/market/sina.yaml"
+    - name: "tencent"
+      enabled: true
+      config: "sources/market/tencent.yaml"
+    - name: "eastmoney"
+      enabled: true
+      config: "sources/market/eastmoney.yaml"
+    - name: "baidu"
+      enabled: true
+      config: "sources/market/baidu.yaml"

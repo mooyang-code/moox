@@ -16,7 +16,13 @@ import (
 func TestFetchKlinesParsesFixture(t *testing.T) {
 	fixture := filepath.Join("testdata", "kline.json")
 	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/qt/stock/trends2/get", r.URL.Path)
+		require.Equal(t, "/api/qt/stock/kline/get", r.URL.Path)
+		require.Equal(t, "1.600000", r.URL.Query().Get("secid"))
+		require.Equal(t, "1", r.URL.Query().Get("klt"))
+		require.Equal(t, "0", r.URL.Query().Get("fqt"))
+		require.Equal(t, "20260827", r.URL.Query().Get("beg"))
+		require.Equal(t, "20260829", r.URL.Query().Get("end"))
+		require.Equal(t, "1205", r.URL.Query().Get("lmt"), "historical requests must fetch the provider page before common coverage filtering")
 		body, err := os.ReadFile(fixture)
 		require.NoError(t, err)
 		_, _ = w.Write(body)
@@ -29,6 +35,8 @@ func TestFetchKlinesParsesFixture(t *testing.T) {
 		ProviderSymbol: "sh600000",
 		Frequency:      "1m",
 		Limit:          2,
+		StartTime:      time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC),
+		EndTime:        time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC),
 		RequestID:      "req-eastmoney",
 	})
 	require.NoError(t, err)

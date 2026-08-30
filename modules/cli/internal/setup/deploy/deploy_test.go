@@ -225,6 +225,7 @@ func TestEventBusCommandEnvPreservesBaseAndAddsEndpoint(t *testing.T) {
 	require.Contains(t, env, "MOOX_EVENTBUS_ENABLE_TLS=1")
 	require.Contains(t, env, "MOOX_EVENTBUS_PUBLIC_IP=eventbus.example.test")
 	require.Contains(t, env, "MOOX_EVENTBUS_PORT=4333")
+	require.Contains(t, env, "MOOX_STORAGE_EVENTBUS_URL=tls://eventbus.example.test:4333")
 }
 
 func TestMonitoringCommandEnvOverridesAmbientWebhook(t *testing.T) {
@@ -375,6 +376,27 @@ func TestStoragePassesResetStorageDataAsBoundedPositionalFlag(t *testing.T) {
 	require.Equal(t, "0", install[len(install)-3])
 	require.Regexp(t, `^[A-Za-z0-9._-]+$`, install[len(install)-2])
 	require.Equal(t, storageArchivePath(install[len(install)-2]), install[len(install)-1])
+}
+
+func TestStoragePassesRemoteEventBusURLToInstaller(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
+	require.NoError(t, os.WriteFile(archive, []byte("storage-package"), 0o600))
+	events := []string{}
+	transport := &fakeTransport{events: &events}
+	err := Storage(context.Background(), transport, Options{
+		RepositoryRoot: t.TempDir(), PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64",
+		EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4333, EventBusTLSEnabled: true,
+	}, Dependencies{Packager: &fakePackager{path: archive, events: &events}, Probe: &fakeProbe{events: &events}})
+	require.NoError(t, err)
+	var install []string
+	for _, command := range transport.commands {
+		if len(command) >= 3 && strings.Contains(command[2], "install_storage") {
+			install = command
+			break
+		}
+	}
+	require.NotEmpty(t, install)
+	require.Contains(t, install[2], "export MOOX_STORAGE_EVENTBUS_URL='tls://eventbus.example.test:4333'")
 }
 
 func TestStorageInstallerResetPreservesSecretsButDropsData(t *testing.T) {

@@ -28,7 +28,7 @@ func TestParseCollectParamsUsesSingleDatasetDrivenContract(t *testing.T) {
 	assert.Equal(t, "target-kline", params.Target.DatasetID)
 }
 
-func TestParseCollectParamsRequiresExchangeSymbolSnapshot(t *testing.T) {
+func TestParseCollectParamsRequiresExchangeInstrumentSnapshot(t *testing.T) {
 	raw := `{
 		"provider":"binance",
 		"market_type":"swap",
@@ -36,44 +36,44 @@ func TestParseCollectParamsRequiresExchangeSymbolSnapshot(t *testing.T) {
 		"target_dataset_id":"symbols",
 		"frequency":"30m"
 	}`
-	params, err := ParseCollectParams(raw, "", "", "symbol")
+	params, err := ParseCollectParams(raw, "", "", "instrument")
 	require.NoError(t, err)
 	require.NoError(t, params.Validate())
 	assert.Equal(t, "none", params.Source.Kind)
 	assert.Equal(t, []string{"30m"}, params.Collector.Intervals)
 }
 
-func TestParseCollectParamsAcceptsExchangeSymbolSnapshot(t *testing.T) {
+func TestParseCollectParamsAcceptsExchangeInstrumentSnapshot(t *testing.T) {
 	params, err := ParseCollectParams(`{
 		"provider":"binance",
 		"market_type":"spot",
 		"symbol_source":"exchange",
 		"target_dataset_id":"symbols"
-	}`, "", "", "symbol")
+	}`, "", "", "instrument")
 	require.NoError(t, err)
 	require.NoError(t, params.Validate())
 	assert.Equal(t, "none", params.Source.Kind)
 	assert.Equal(t, "1h", params.Frequency)
 }
 
-func TestCollectParamsRejectsManualSymbolSnapshot(t *testing.T) {
+func TestCollectParamsRejectsManualInstrumentSnapshot(t *testing.T) {
 	params, err := ParseCollectParams(`{
 		"provider":"binance",
 		"market_type":"spot",
 		"symbol_source":"manual",
 		"target_dataset_id":"symbols"
-	}`, "", "", "symbol")
+	}`, "", "", "instrument")
 	require.NoError(t, err)
 	require.ErrorContains(t, params.Validate(), "symbol_source must be exchange")
 }
 
-func TestParseCollectParamsDefaultsSymbolFrequencyToHourly(t *testing.T) {
+func TestParseCollectParamsDefaultsInstrumentFrequencyToHourly(t *testing.T) {
 	params, err := ParseCollectParams(`{
 		"provider":"binance",
 		"market_type":"spot",
 		"symbol_source":"exchange",
 		"target_dataset_id":"symbols"
-	}`, "", "", "symbol")
+	}`, "", "", "instrument")
 	require.NoError(t, err)
 	require.NoError(t, params.Validate())
 	assert.Equal(t, "1h", params.Frequency)
@@ -245,7 +245,7 @@ func TestCollectParamsValidateUsesWholeMinuteScheduleIntervals(t *testing.T) {
 				"symbol_source":"exchange",
 				"target_dataset_id":"symbols",
 				"frequency":"`+tt.interval+`"
-			}`, "", "", "symbol")
+			}`, "", "", "instrument")
 			require.NoError(t, err)
 
 			err = params.Validate()

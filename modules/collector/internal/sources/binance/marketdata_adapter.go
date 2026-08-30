@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
@@ -33,10 +34,13 @@ type AdapterConfig struct {
 // typed marketdata contracts. Protocol parsing, retry behavior, symbol
 // filtering, and subject normalization stay owned by the existing collectors.
 type MarketDataAdapter struct {
-	defaultProductType marketdata.ProductType
-	klineCollector     *KlineCollector
-	symbolCollector    *SymbolCollector
-	now                func() time.Time
+	defaultProductType  marketdata.ProductType
+	klineCollector      *KlineCollector
+	symbolCollector     *SymbolCollector
+	now                 func() time.Time
+	instrumentGuardOnce sync.Once
+	instrumentGuard     *marketdata.FeedGuard
+	instrumentGuardErr  error
 }
 
 func NewMarketDataAdapter(cfg AdapterConfig) *MarketDataAdapter {
@@ -70,9 +74,14 @@ func (*MarketDataAdapter) Descriptor() marketdata.ProviderDescriptor {
 
 func (*MarketDataAdapter) KlineSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
-		Markets:           []string{"crypto"},
-		Exchanges:         []string{"binance"},
-		Frequencies:       []string{string(marketdata.FrequencyMinute)},
+		Markets:   []string{"crypto"},
+		Exchanges: []string{"binance"},
+		Frequencies: []string{
+			string(marketdata.FrequencyMinute), string(marketdata.Frequency5Min),
+			string(marketdata.Frequency15Min), string(marketdata.Frequency30Min),
+			string(marketdata.FrequencyHour), string(marketdata.FrequencyDay),
+			string(marketdata.FrequencyWeek),
+		},
 		CompleteOHLCV:     true,
 		HasAmount:         true,
 		MaxBarsPerRequest: 1000,
@@ -112,10 +121,6 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 	if err := validateBinanceRoute(req.MarketID, req.ExchangeID); err != nil {
 		return nil, err
 	}
-	frequency, _ := req.FrequencyValue()
-	if frequency != marketdata.FrequencyMinute {
-		return nil, fmt.Errorf("%w: binance marketdata adapter only supports 1m", marketdata.ErrUnsupportedFrequency)
-	}
 	productType := req.ProductType
 	if productType == "" {
 		productType = a.defaultProductType
@@ -135,7 +140,7 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 		Interval:  req.Frequency,
 		DNSRoutes: marketDataDNSRoutes(req.DNSRoutes),
 	}
-	exchangeKlines, err := a.klineCollector.fetchKlinesWithRetry(ctx, params, &exchange.KlineRequest{
+	exchangeKlines, err := a.klineCollector.fetchKlinesOnce(ctx, params, &exchange.KlineRequest{
 		Symbol:    params.Symbol,
 		Interval:  req.Frequency,
 		Limit:     req.Limit,
@@ -178,11 +183,26 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 	if req.SnapshotAt.IsZero() {
 		fetchedAt = a.now().UTC()
 	}
-	_, symbols, version, err := a.symbolCollector.FetchSymbolSnapshot(ctx, &sources.CollectParams{
-		SpaceID:   marketID,
-		DatasetID: "instruments",
-		InstType:  instType,
-		DNSRoutes: marketDataDNSRoutes(req.DNSRoutes),
+	guardSpec := a.InstrumentSpec()
+	a.instrumentGuardOnce.Do(func() {
+		a.instrumentGuard, a.instrumentGuardErr = marketdata.NewFeedGuard(guardSpec.RateLimit, nil, nil)
+	})
+	if a.instrumentGuardErr != nil {
+		return marketdata.InstrumentSnapshot{}, a.instrumentGuardErr
+	}
+	var symbols []*exchange.SymbolInfo
+	err = a.instrumentGuard.Do(ctx, func(requestCtx context.Context) error {
+		fetched, fetchErr := a.symbolCollector.fetchSymbols(requestCtx, &sources.CollectParams{
+			SpaceID:   marketID,
+			DatasetID: "instruments",
+			InstType:  instType,
+			DNSRoutes: marketDataDNSRoutes(req.DNSRoutes),
+		})
+		symbols = a.symbolCollector.filterSymbols(fetched)
+		if len(symbols) == 0 && fetchErr == nil {
+			return fmt.Errorf("Binance active USDT symbol snapshot is empty")
+		}
+		return fetchErr
 	})
 	if err != nil {
 		return marketdata.InstrumentSnapshot{}, classifyProviderError(err)
@@ -209,7 +229,7 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 		})
 	}
 	snapshot := marketdata.InstrumentSnapshot{
-		SnapshotID:     version,
+		SnapshotID:     fetchedAt.Format(time.RFC3339Nano),
 		SourceProvider: "binance",
 		MarketID:       marketID,
 		FetchedAt:      fetchedAt,
@@ -276,14 +296,19 @@ func normalizeMarketDataKline(req marketdata.KlineRequest, kline *market.Kline, 
 	if err != nil {
 		return marketdata.NormalizedKline{}, err
 	}
-	barStart := kline.OpenTime.UTC().Truncate(time.Minute)
+	frequency, err := req.FrequencyValue()
+	if err != nil {
+		return marketdata.NormalizedKline{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
+	}
+	barDuration := frequency.Duration()
+	barStart := normalizeBarStart(kline.OpenTime.UTC(), frequency)
 	row := marketdata.NormalizedKline{
 		SubjectID:         req.SubjectID,
 		ProviderID:        "binance",
 		ProviderSymbol:    req.ProviderSymbol,
 		Frequency:         req.Frequency,
 		BarStart:          barStart,
-		BarEnd:            barStart.Add(time.Minute),
+		BarEnd:            barStart.Add(barDuration),
 		Open:              openValue,
 		High:              highValue,
 		Low:               lowValue,
@@ -299,6 +324,19 @@ func normalizeMarketDataKline(req marketdata.KlineRequest, kline *market.Kline, 
 		return marketdata.NormalizedKline{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 	}
 	return row, nil
+}
+
+func normalizeBarStart(openTime time.Time, frequency marketdata.Frequency) time.Time {
+	openTime = openTime.UTC()
+	if frequency != marketdata.FrequencyWeek {
+		return openTime.Truncate(frequency.Duration())
+	}
+	// Unix-duration truncation anchors weeks on Thursday. Binance's 1w
+	// interval is conventionally a Monday 00:00 UTC bucket, so align it by
+	// calendar date rather than by elapsed seconds.
+	day := time.Date(openTime.Year(), openTime.Month(), openTime.Day(), 0, 0, 0, 0, time.UTC)
+	daysSinceMonday := (int(day.Weekday()) + 6) % 7
+	return day.AddDate(0, 0, -daysSinceMonday)
 }
 
 func marketDataDNSRoutes(routes map[string][]string) map[string]sources.DNSResolution {

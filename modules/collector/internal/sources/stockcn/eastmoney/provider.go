@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
@@ -17,20 +18,32 @@ import (
 )
 
 type Config struct {
-	BaseURL    string
-	HTTPClient *http.Client
-	Now        func() time.Time
+	BaseURL           string
+	KlineEndpoint     string
+	HTTPClient        *http.Client
+	Now               func() time.Time
+	RateLimit         marketdata.RateLimitPolicy
+	MaxBarsPerRequest int
 }
 
 type Provider struct {
-	baseURL string
-	client  *http.Client
-	now     func() time.Time
+	baseURL             string
+	klineEndpoint       string
+	client              *http.Client
+	now                 func() time.Time
+	rateLimit           marketdata.RateLimitPolicy
+	maxBars             int
+	instrumentGuardOnce sync.Once
+	instrumentGuard     *marketdata.FeedGuard
+	instrumentGuardErr  error
 }
 
 func New(cfg Config) *Provider {
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = "http://push2.eastmoney.com"
+		cfg.BaseURL = "https://push2.eastmoney.com"
+	}
+	if cfg.KlineEndpoint == "" {
+		cfg.KlineEndpoint = "/api/qt/stock/kline/get"
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 5 * time.Second}
@@ -38,53 +51,48 @@ func New(cfg Config) *Provider {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now}
+	if cfg.RateLimit.RequestsPerSecond <= 0 {
+		cfg.RateLimit = marketdata.RateLimitPolicy{RequestsPerSecond: 5, Burst: 2, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: 5 * time.Second}
+	}
+	if cfg.MaxBarsPerRequest <= 0 {
+		cfg.MaxBarsPerRequest = 1205
+	}
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, maxBars: cfg.MaxBarsPerRequest}
 }
 
 func (*Provider) Descriptor() marketdata.ProviderDescriptor {
 	return marketdata.ProviderDescriptor{ID: "eastmoney", DisplayName: "EastMoney", Hosts: []string{"push2.eastmoney.com"}}
 }
 
-func (*Provider) KlineSpec() marketdata.KlineSpec {
+func (p *Provider) KlineSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
 		Markets:           []string{"stock_cn"},
 		Exchanges:         []string{"XSHG", "XSHE", "XBSE"},
 		Frequencies:       []string{"1m"},
 		CompleteOHLCV:     true,
 		HasAmount:         true,
-		MaxBarsPerRequest: 1205,
+		MaxBarsPerRequest: p.maxBars,
 		TimestampMode:     marketdata.TimestampModeOpen,
-		History:           marketdata.KlineHistoryCapability{MaxLookback: 5 * 24 * time.Hour},
-		RateLimit: marketdata.RateLimitPolicy{
-			RequestsPerSecond: 5,
-			Burst:             2,
-			MaxConcurrent:     1,
-			Cooldown:          time.Second,
-			RequestTimeout:    5 * time.Second,
-		},
+		// The public endpoint returns one bounded latest page. Keep the common
+		// history contract conservative until a cursor-paginated feed is added.
+		History:   marketdata.KlineHistoryCapability{MaxLookback: 24 * time.Hour},
+		RateLimit: p.rateLimit,
 	}
 }
 
-func (*Provider) InstrumentSpec() marketdata.InstrumentSpec {
+func (p *Provider) InstrumentSpec() marketdata.InstrumentSpec {
 	return marketdata.InstrumentSpec{
 		Markets:      []string{"stock_cn"},
 		Exchanges:    []string{"XSHG", "XSHE", "XBSE"},
 		FullSnapshot: true,
 		PageSize:     500,
-		RateLimit: marketdata.RateLimitPolicy{
-			RequestsPerSecond: 5,
-			Burst:             2,
-			MaxConcurrent:     1,
-			Cooldown:          time.Second,
-			RequestTimeout:    5 * time.Second,
-		},
+		RateLimit:    p.rateLimit,
 	}
 }
 
 type eastMoneyResponse struct {
 	Data struct {
 		Klines []string `json:"klines"`
-		Trends []string `json:"trends"`
 	} `json:"data"`
 }
 
@@ -99,11 +107,27 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if err != nil {
 		return nil, err
 	}
+	beginDate := "0"
+	endDate := "20500101"
+	if !req.StartTime.IsZero() {
+		beginDate = req.StartTime.UTC().Format("20060102")
+	}
+	if !req.EndTime.IsZero() {
+		endDate = req.EndTime.UTC().Format("20060102")
+	} else if !req.Now.IsZero() {
+		endDate = req.Now.UTC().Format("20060102")
+	}
+	requestLimit := req.Limit
+	historicalRequest := !req.StartTime.IsZero() || !req.EndTime.IsZero()
+	if historicalRequest {
+		requestLimit = p.maxBars
+	}
 	query := "secid=" + url.QueryEscape(secid) +
-		"&ndays=5&iscr=0" +
+		"&klt=1&fqt=0&beg=" + url.QueryEscape(beginDate) +
+		"&end=" + url.QueryEscape(endDate) + "&lmt=" + strconv.Itoa(requestLimit) +
 		"&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13" +
-		"&fields2=f51,f52,f53,f54,f55,f56,f57,f58"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/qt/stock/trends2/get?"+query, nil)
+		"&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+p.klineEndpoint+"?"+query, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -123,17 +147,14 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, err)
 	}
 	var payload eastMoneyResponse
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 	}
-	lines := payload.Data.Trends
-	if len(lines) == 0 {
-		lines = payload.Data.Klines
-	}
-	if len(lines) > req.Limit {
+	lines := payload.Data.Klines
+	if !historicalRequest && len(lines) > req.Limit {
 		lines = lines[len(lines)-req.Limit:]
 	}
 	rows := make([]marketdata.NormalizedKline, 0, len(lines))
@@ -195,6 +216,12 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		fetchedAt = p.now().UTC()
 	}
 	builder := commonsrc.NewInstrumentSnapshotBuilder(p.Descriptor().ID, marketID, fetchedAt)
+	p.instrumentGuardOnce.Do(func() {
+		p.instrumentGuard, p.instrumentGuardErr = marketdata.NewFeedGuard(spec.RateLimit, nil, nil)
+	})
+	if p.instrumentGuardErr != nil {
+		return marketdata.InstrumentSnapshot{}, p.instrumentGuardErr
+	}
 	for page := 1; ; page++ {
 		query := url.Values{
 			"pn":     {strconv.Itoa(page)},
@@ -203,27 +230,31 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 			"fid":    {"f12"},
 			"fields": {"f12,f13,f14,f115,f152,f103,f128,f129"},
 		}
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/qt/clist/get?"+query.Encode(), nil)
-		if err != nil {
-			return marketdata.InstrumentSnapshot{}, err
-		}
-		httpReq.Header.Set("User-Agent", "moox-collector/1.0")
-		resp, err := p.client.Do(httpReq)
-		if err != nil {
-			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
-		}
-		body, readErr := func() ([]byte, error) {
+		var body []byte
+		if err := p.instrumentGuard.Do(ctx, func(pageCtx context.Context) error {
+			httpReq, requestErr := http.NewRequestWithContext(pageCtx, http.MethodGet, p.baseURL+"/api/qt/clist/get?"+query.Encode(), nil)
+			if requestErr != nil {
+				return requestErr
+			}
+			httpReq.Header.Set("User-Agent", "moox-collector/1.0")
+			resp, requestErr := p.client.Do(httpReq)
+			if requestErr != nil {
+				return fmt.Errorf("%w: %v", marketdata.ErrTimeout, requestErr)
+			}
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusTooManyRequests {
-				return nil, marketdata.ErrRateLimited
+				return marketdata.ErrRateLimited
 			}
 			if resp.StatusCode >= 400 {
-				return nil, fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)
+				return fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)
 			}
-			return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-		}()
-		if readErr != nil {
-			return marketdata.InstrumentSnapshot{}, readErr
+			body, requestErr = io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+			if requestErr != nil {
+				return fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, requestErr)
+			}
+			return nil
+		}); err != nil {
+			return marketdata.InstrumentSnapshot{}, err
 		}
 		var payload map[string]any
 		if err := json.Unmarshal(body, &payload); err != nil {

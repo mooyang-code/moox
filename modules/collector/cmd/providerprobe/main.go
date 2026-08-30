@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,13 +45,15 @@ type instrumentProvider interface {
 }
 
 type probeArgs struct {
-	Market        string
-	Feed          string
-	Frequency     string
-	Subjects      string
-	Output        string
-	Format        string
-	RequestTimout time.Duration
+	Market             string
+	Feed               string
+	Frequency          string
+	Subjects           string
+	Output             string
+	Format             string
+	RequestTimout      time.Duration
+	HistoryLookback    time.Duration
+	RateConcurrencyRaw string
 }
 
 func main() {
@@ -69,6 +73,8 @@ func parseArgs() probeArgs {
 	flag.StringVar(&args.Output, "output", "", "optional output path")
 	flag.StringVar(&args.Format, "format", "auto", "output format: auto, json, markdown")
 	flag.DurationVar(&args.RequestTimout, "request-timeout", 2*time.Second, "per-request timeout")
+	flag.DurationVar(&args.HistoryLookback, "history-lookback", 72*time.Hour, "maximum lookback window used to select an explicit history start")
+	flag.StringVar(&args.RateConcurrencyRaw, "rate-concurrency", "1,2,4,8", "comma-separated concurrency levels for the bounded per-provider rate probe (maximum 8)")
 	flag.Parse()
 	return args
 }
@@ -91,6 +97,13 @@ func run(ctx context.Context, args probeArgs) error {
 	if args.RequestTimout <= 0 {
 		return fmt.Errorf("--request-timeout 必须大于 0")
 	}
+	if args.HistoryLookback <= 0 {
+		return fmt.Errorf("--history-lookback 必须大于 0")
+	}
+	rateConcurrency, err := parseRateConcurrency(args.RateConcurrencyRaw)
+	if err != nil {
+		return err
+	}
 
 	report := commonsrc.ProbeReport{
 		MarketID:    "stock_cn",
@@ -101,13 +114,13 @@ func run(ctx context.Context, args probeArgs) error {
 	}
 	clockNow := func() time.Time { return time.Now().UTC() }
 	if feed == "all" || feed == "kline" {
-		report.Entries = append(report.Entries, probeActiveProvider(ctx, subjects, clockNow, args.RequestTimout, "sina", func(client *http.Client) activeKlineProvider {
+		report.Entries = append(report.Entries, probeActiveProvider(ctx, subjects, clockNow, args.RequestTimout, args.HistoryLookback, rateConcurrency, "sina", func(client *http.Client) activeKlineProvider {
 			return sina.New(sina.Config{HTTPClient: client, Now: clockNow})
 		})...)
-		report.Entries = append(report.Entries, probeActiveProvider(ctx, subjects, clockNow, args.RequestTimout, "tencent", func(client *http.Client) activeKlineProvider {
+		report.Entries = append(report.Entries, probeActiveProvider(ctx, subjects, clockNow, args.RequestTimout, args.HistoryLookback, rateConcurrency, "tencent", func(client *http.Client) activeKlineProvider {
 			return tencent.New(tencent.Config{HTTPClient: client, Now: clockNow})
 		})...)
-		report.Entries = append(report.Entries, probeActiveProvider(ctx, subjects, clockNow, args.RequestTimout, "eastmoney", func(client *http.Client) activeKlineProvider {
+		report.Entries = append(report.Entries, probeActiveProvider(ctx, subjects, clockNow, args.RequestTimout, args.HistoryLookback, rateConcurrency, "eastmoney", func(client *http.Client) activeKlineProvider {
 			return eastmoney.New(eastmoney.Config{HTTPClient: client, Now: clockNow})
 		})...)
 		report.Entries = append(report.Entries, probeShadowProvider(ctx, subjects, clockNow, args.RequestTimout, "baidu", func(client *http.Client) shadowKlineProvider {
@@ -228,10 +241,13 @@ func probeActiveProvider(
 	subjects []string,
 	now func() time.Time,
 	timeout time.Duration,
+	historyLookback time.Duration,
+	rateConcurrency []int,
 	providerID string,
 	build func(client *http.Client) activeKlineProvider,
 ) []commonsrc.ProbeEntry {
 	entries := make([]commonsrc.ProbeEntry, 0, len(subjects))
+	rateProbed := false
 	for _, subjectID := range subjects {
 		symbol, err := commonsrc.ProviderSymbol(subjectID)
 		if err != nil {
@@ -240,6 +256,10 @@ func probeActiveProvider(
 		}
 		client, observation := newObservedClient(timeout)
 		provider := build(client)
+		if !providerSupportsExchange(provider.KlineSpec(), subjectExchange(subjectID)) {
+			entries = append(entries, unsupportedExchangeEntry(providerID, subjectID, symbol))
+			continue
+		}
 		started := time.Now()
 		rows, fetchErr := provider.FetchKlines(ctx, marketdata.KlineRequest{
 			SubjectID:      subjectID,
@@ -281,10 +301,217 @@ func probeActiveProvider(
 				entry.ErrorKind = "protocol"
 				entry.Error = "latest closed bar is missing complete OHLCV"
 			}
+			if entry.Result == commonsrc.ProbeResultPass && !rateProbed {
+				entry.History = probeHistory(ctx, provider, subjectID, symbol, now, timeout, historyLookback, rows)
+				entry.SupportsRange = entry.History.Result == commonsrc.ProbeResultPass
+				entry.Rate = probeRate(ctx, provider, subjectID, symbol, now, timeout, providerID, rateConcurrency)
+				rateProbed = true
+			}
 		}
 		entries = append(entries, entry)
 	}
 	return entries
+}
+
+func probeHistory(
+	ctx context.Context,
+	provider activeKlineProvider,
+	subjectID, symbol string,
+	now func() time.Time,
+	timeout, lookback time.Duration,
+	baseRows []marketdata.NormalizedKline,
+) commonsrc.HistoryProbe {
+	probe := commonsrc.HistoryProbe{Result: commonsrc.ProbeResultFail}
+	if len(baseRows) == 0 {
+		probe.ErrorKind = "no_closed_bar"
+		probe.Error = "latest probe returned no rows"
+		return probe
+	}
+	reference := now().UTC()
+	spec := provider.KlineSpec()
+	window := lookback
+	if !spec.History.SupportsArbitraryRange && spec.History.MaxLookback > 0 && window > spec.History.MaxLookback {
+		window = spec.History.MaxLookback
+	}
+	requestedStart := reference.Add(-window)
+	probe.RequestedStart = requestedStart.UTC().Format(time.RFC3339)
+	start := requestedStart
+	if !spec.History.SupportsArbitraryRange {
+		// These public feeds expose a bounded recent window and do not all
+		// accept an arbitrary date parameter. Clamp the explicit request to an
+		// observed closed-bar boundary so weekends and holidays do not turn a
+		// valid historical fetch into a false coverage failure. The report keeps
+		// both timestamps, making the bounded nature visible to the release gate.
+		oldest, newest := rowBounds(baseRows)
+		if start.Before(oldest) {
+			start = oldest
+		}
+		if start.After(newest) {
+			start = newest
+		}
+	}
+	if err := spec.History.ValidateStart(reference, start); err != nil {
+		probe.Start = start.UTC().Format(time.RFC3339)
+		probe.ErrorKind = classifyError(err)
+		probe.Error = sanitizeError(err)
+		return probe
+	}
+	probe.Start = start.UTC().Format(time.RFC3339)
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	started := time.Now()
+	rows, err := provider.FetchKlines(requestCtx, marketdata.KlineRequest{
+		MarketID: "stock_cn", SubjectID: subjectID, ProviderSymbol: symbol, Frequency: "1m",
+		Limit: minProbeLimit(spec.MaxBarsPerRequest, 240), StartTime: start, Now: reference,
+		RequestID: fmt.Sprintf("providerprobe-history-%s-%d", provider.Descriptor().ID, started.UnixNano()),
+	})
+	if err != nil {
+		probe.ErrorKind = classifyError(err)
+		probe.Error = sanitizeError(err)
+		return probe
+	}
+	probe.BarCount = len(rows)
+	if len(rows) == 0 {
+		probe.ErrorKind = "no_closed_bar"
+		probe.Error = "history probe returned no rows"
+		return probe
+	}
+	earliest, latest := rowBounds(rows)
+	probe.Earliest = earliest.UTC().Format(time.RFC3339)
+	probe.Latest = latest.UTC().Format(time.RFC3339)
+	if earliest.After(start) || latest.Before(start) {
+		probe.ErrorKind = "history_coverage"
+		probe.Error = fmt.Sprintf("response does not cover explicit start %s", probe.Start)
+		return probe
+	}
+	probe.Result = commonsrc.ProbeResultPass
+	probe.ErrorKind = "none"
+	return probe
+}
+
+type rateSample struct {
+	latency time.Duration
+	err     error
+}
+
+func probeRate(
+	ctx context.Context,
+	provider activeKlineProvider,
+	subjectID, symbol string,
+	now func() time.Time,
+	timeout time.Duration,
+	providerID string,
+	concurrency []int,
+) commonsrc.RateProbe {
+	probe := commonsrc.RateProbe{Concurrency: append([]int(nil), concurrency...)}
+	if len(concurrency) == 0 {
+		return probe
+	}
+	started := time.Now()
+	var samples []rateSample
+	for _, level := range concurrency {
+		results := make(chan rateSample, level)
+		var group sync.WaitGroup
+		for index := 0; index < level; index++ {
+			group.Add(1)
+			go func(index int) {
+				defer group.Done()
+				requestCtx, cancel := context.WithTimeout(ctx, timeout)
+				defer cancel()
+				requestStarted := time.Now()
+				_, err := provider.FetchKlines(requestCtx, marketdata.KlineRequest{
+					MarketID: "stock_cn", SubjectID: subjectID, ProviderSymbol: symbol, Frequency: "1m", Limit: 1,
+					Now: now().UTC(), RequestID: fmt.Sprintf("providerprobe-rate-%s-%d-%d", providerID, started.UnixNano(), index),
+				})
+				results <- rateSample{latency: time.Since(requestStarted), err: err}
+			}(index)
+		}
+		group.Wait()
+		close(results)
+		for sample := range results {
+			samples = append(samples, sample)
+		}
+	}
+	probe.Requests = len(samples)
+	latencies := make([]time.Duration, 0, len(samples))
+	for _, sample := range samples {
+		if sample.err != nil {
+			if errors.Is(sample.err, marketdata.ErrRateLimited) {
+				probe.RateLimited++
+			} else {
+				probe.Failed++
+			}
+			probe.Error = sanitizeError(sample.err)
+		}
+		latencies = append(latencies, sample.latency)
+	}
+	if len(latencies) > 0 {
+		probe.P95LatencyMS = p95LatencyMilliseconds(latencies)
+		elapsed := time.Since(started).Seconds()
+		if elapsed > 0 {
+			probe.ObservedRequestsPerSec = float64(len(samples)) / elapsed
+		}
+	}
+	return probe
+}
+
+func parseRateConcurrency(raw string) ([]int, error) {
+	parts := strings.Split(raw, ",")
+	levels := make([]int, 0, len(parts))
+	seen := make(map[int]struct{}, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		level, err := strconv.Atoi(value)
+		if err != nil || level <= 0 || level > 8 {
+			return nil, fmt.Errorf("--rate-concurrency 包含无效值 %q（必须是 1..8）", value)
+		}
+		if _, ok := seen[level]; ok {
+			continue
+		}
+		seen[level] = struct{}{}
+		levels = append(levels, level)
+	}
+	if len(levels) == 0 {
+		return nil, fmt.Errorf("--rate-concurrency 至少需要一个正整数")
+	}
+	sort.Ints(levels)
+	return levels, nil
+}
+
+func minProbeLimit(maxBars, preferred int) int {
+	if maxBars <= 0 || maxBars > preferred {
+		return preferred
+	}
+	return maxBars
+}
+
+func rowBounds(rows []marketdata.NormalizedKline) (time.Time, time.Time) {
+	earliest, latest := rows[0].BarStart, rows[0].BarStart
+	for _, row := range rows[1:] {
+		if row.BarStart.Before(earliest) {
+			earliest = row.BarStart
+		}
+		if row.BarStart.After(latest) {
+			latest = row.BarStart
+		}
+	}
+	return earliest, latest
+}
+
+func p95LatencyMilliseconds(latencies []time.Duration) int64 {
+	values := append([]time.Duration(nil), latencies...)
+	slices.Sort(values)
+	index := (95*len(values)+99)/100 - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(values) {
+		index = len(values) - 1
+	}
+	return values[index].Milliseconds()
 }
 
 func probeShadowProvider(
@@ -475,6 +702,30 @@ func unsupportedSymbolEntry(providerID, subjectID string, err error) commonsrc.P
 		HasOHLCV:      false,
 		VolumeUnit:    "unknown",
 		AmountUnit:    "unknown",
+	}
+}
+
+func providerSupportsExchange(spec marketdata.KlineSpec, exchange string) bool {
+	for _, candidate := range spec.Exchanges {
+		if strings.EqualFold(strings.TrimSpace(candidate), strings.TrimSpace(exchange)) {
+			return true
+		}
+	}
+	return false
+}
+
+func unsupportedExchangeEntry(providerID, subjectID, symbol string) commonsrc.ProbeEntry {
+	return commonsrc.ProbeEntry{
+		ProviderID: providerID,
+		FeedKind:   commonsrc.ProbeFeedKline,
+		Exchange:   subjectExchange(subjectID),
+		SubjectID:  subjectID,
+		Symbol:     symbol,
+		Result:     commonsrc.ProbeResultNotSupported,
+		ErrorKind:  "unsupported_exchange",
+		Error:      "provider spec does not include this exchange",
+		VolumeUnit: "unknown",
+		AmountUnit: "unknown",
 	}
 }
 

@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -h "${SOURCE}" ]]; do
+  SOURCE_DIR="$(cd -P "$(dirname "${SOURCE}")" >/dev/null 2>&1 && pwd)"
+  SOURCE="$(readlink "${SOURCE}")"
+  [[ "${SOURCE}" != /* ]] && SOURCE="${SOURCE_DIR}/${SOURCE}"
+done
+ROOT="$(cd -P "$(dirname "${SOURCE}")/../.." && pwd)"
 SCF_SPACE_ID="${SCF_SPACE_ID:?SCF_SPACE_ID is required (for example: crypto_market)}"
 SCF_ENTRYPOINT="${SCF_ENTRYPOINT:?SCF_ENTRYPOINT is required (crypto_market or stock_cn)}"
 [[ "${SCF_ENTRYPOINT}" == "crypto_market" || "${SCF_ENTRYPOINT}" == "stock_cn" ]] || { echo "unsupported SCF entrypoint: ${SCF_ENTRYPOINT}" >&2; exit 1; }
@@ -39,6 +45,7 @@ cp -R "${CONFIG_DIR}/." "${BUILD_DIR}/package/"
 if [[ "${SCF_SPACE_ID}" == "stock_cn" ]]; then
   mkdir -p "${BUILD_DIR}/package/markets/stock_cn"
   cp "${ROOT}/modules/collector/config/markets/stock_cn/calendar.yaml" "${BUILD_DIR}/package/markets/stock_cn/calendar.yaml"
+  cp "${ROOT}/modules/collector/config/markets/stock_cn/route.yaml" "${BUILD_DIR}/package/markets/stock_cn/route.yaml"
 fi
 rm -f "${BUILD_DIR}/package/trpc_go.yaml" "${BUILD_DIR}/package/example_trpc_go.yaml"
 

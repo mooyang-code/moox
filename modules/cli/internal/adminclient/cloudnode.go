@@ -126,6 +126,45 @@ type CloudNodeListFilter struct {
 	BizType        string
 }
 
+type TaskRuleSummary struct {
+	SpaceID    string `json:"space_id"`
+	RuleID     string `json:"rule_id"`
+	DataType   string `json:"data_type"`
+	Provider   string `json:"provider"`
+	MarketType string `json:"market_type"`
+	Enabled    bool   `json:"enabled"`
+}
+
+// ListEnabledTaskRules is a narrow control-plane read used by fail-closed
+// publication gates. It pages explicitly so a stale enabled rule cannot be
+// hidden behind the default page size.
+func (c *Client) ListEnabledTaskRules(ctx context.Context, spaceID, marketType string) ([]TaskRuleSummary, error) {
+	var result []TaskRuleSummary
+	for page := 1; page <= 100; page++ {
+		var response struct {
+			RetInfo retInfo           `json:"ret_info"`
+			Rules   []TaskRuleSummary `json:"rules"`
+			Page    struct {
+				HasMore bool `json:"has_more"`
+			} `json:"page"`
+		}
+		if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskRuleList", map[string]any{
+			"space_id": spaceID, "market_type": marketType, "enabled": true,
+			"page": map[string]any{"page": page, "size": 1000},
+		}, &response); err != nil {
+			return nil, fmt.Errorf("GetTaskRuleList: %w", err)
+		}
+		if !isRetInfoSuccess(response.RetInfo.Code) {
+			return nil, fmt.Errorf("GetTaskRuleList rejected: %s", response.RetInfo.Msg)
+		}
+		result = append(result, response.Rules...)
+		if !response.Page.HasMore {
+			return result, nil
+		}
+	}
+	return nil, fmt.Errorf("GetTaskRuleList exceeded 100 pages")
+}
+
 type SubmitNodeBatchResponse struct {
 	JobID      string `json:"job_id"`
 	Operation  string `json:"operation"`
@@ -167,6 +206,7 @@ var (
 		1: "NODE_BATCH_OPERATION_CREATE_NODES",
 		2: "NODE_BATCH_OPERATION_DEPLOY_NODES",
 		3: "NODE_BATCH_OPERATION_DELETE_NODES",
+		4: "NODE_BATCH_OPERATION_UPDATE_RUNTIME_CONFIGS",
 	}
 	nodeBatchStatusNames = map[int]string{
 		0: "NODE_BATCH_STATUS_UNSPECIFIED",

@@ -9,7 +9,7 @@ import (
 
 func TestListJobDefinitionsReturnsStableDataTypes(t *testing.T) {
 	defs := ListJobDefinitions()
-	if len(defs) != 3 || defs[0].DataType != "kline" || defs[1].DataType != "symbol" || defs[2].DataType != "kline_resample" {
+	if len(defs) != 3 || defs[0].DataType != "kline" || defs[1].DataType != "instrument" || defs[2].DataType != "kline_resample" {
 		t.Fatalf("data types = %#v; want kline, symbol, kline_resample", defs)
 	}
 	if defs[0].DataSourceOptions.Options[0].Value != "binance" {
@@ -31,7 +31,7 @@ func TestResampleJobDefinitionRunsInsideCollector(t *testing.T) {
 }
 
 func TestExistingJobDefinitionsRemainCloudInvoked(t *testing.T) {
-	for _, dataType := range []string{"kline", "symbol"} {
+	for _, dataType := range []string{"kline", "instrument"} {
 		def, ok := JobDefinitionByDataType(dataType)
 		if !ok || def.ExecutionMode != ExecutionModeCloudInvoke {
 			t.Fatalf("%s definition = %#v", dataType, def)

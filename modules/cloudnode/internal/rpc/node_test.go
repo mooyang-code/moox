@@ -327,9 +327,14 @@ func (f *fakeSCFClient) GetFunction(ctx context.Context, _ tencentscf.FunctionRe
 	if len(f.getResults) > 0 {
 		result := f.getResults[0]
 		f.getResults = f.getResults[1:]
+		if result.info != nil && result.info.MaxInstanceConcurrency == 0 {
+			// Timer fixtures model the SCF readback required by the production
+			// fail-closed verifier.
+			result.info.MaxInstanceConcurrency = 1
+		}
 		return result.info, result.err
 	}
-	return &tencentscf.FunctionInfo{Status: "Active", Environment: f.currentEnvironment, MemorySize: 64, Timeout: 15}, nil
+	return &tencentscf.FunctionInfo{Status: "Active", Environment: f.currentEnvironment, MemorySize: 64, Timeout: 15, MaxInstanceConcurrency: 1}, nil
 }
 func (f *fakeSCFClient) CreateFunction(ctx context.Context, req tencentscf.CreateFunctionRequest) (*tencentscf.CreateFunctionResponse, error) {
 	f.created = append(f.created, req)

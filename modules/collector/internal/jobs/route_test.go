@@ -14,8 +14,8 @@ func TestJobRouteForNormalizesExchangeAndDataType(t *testing.T) {
 }
 
 func TestJobRouteByJobTypeTrimsButRequiresExactCase(t *testing.T) {
-	route, ok := JobRouteByJobType(" collect.binance.symbol ")
-	if !ok || route.JobType != JobTypeCollectBinanceSymbol {
+	route, ok := JobRouteByJobType(" collect.binance.instrument ")
+	if !ok || route.JobType != JobTypeCollectBinanceInstrument {
 		t.Fatalf("route = %#v, ok = %v", route, ok)
 	}
 	if _, ok := JobRouteByJobType("COLLECT.BINANCE.SYMBOL"); ok {
@@ -30,7 +30,7 @@ func TestSupportedJobTypesReturnsProviderSpecificStableCopy(t *testing.T) {
 	got := SupportedJobTypes()
 	if len(got) != 2 ||
 		got[0] != JobTypeCollectBinanceKline ||
-		got[1] != JobTypeCollectBinanceSymbol {
+		got[1] != JobTypeCollectBinanceInstrument {
 		t.Fatalf("SupportedJobTypes() = %#v", got)
 	}
 	got[0] = "modified"

@@ -2,9 +2,12 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -82,26 +85,48 @@ func (s *Store) ActivateDatasetSubjectSet(ctx context.Context, spaceID, setID st
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT c_dataset_id, c_status FROM t_dataset_subject_set_staging WHERE c_space_id = ? AND c_set_id = ?`, spaceID, setID)
+	shardPrefix := setID + "::shard:"
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT c_set_id, c_dataset_id, c_status FROM t_dataset_subject_set_staging WHERE c_space_id = ? AND (c_set_id = ? OR c_set_id LIKE ?)`, spaceID, setID, shardPrefix+"%")
 	if err != nil {
 		return 0, err
 	}
 	var datasetIDs []string
 	status := ""
+	shardCount := 0
+	shardIndexes := make(map[int]struct{})
+	sharded := false
 	for rows.Next() {
 		var datasetID string
+		var stagedSetID string
 		var rowStatus string
-		if err := rows.Scan(&datasetID, &rowStatus); err != nil {
+		if err := rows.Scan(&stagedSetID, &datasetID, &rowStatus); err != nil {
 			_ = rows.Close()
 			return 0, err
 		}
+		if stagedSetID != setID {
+			sharded = true
+			base, index, count, ok := parseDatasetSubjectShardSetID(stagedSetID)
+			if !ok || base != setID || index < 0 || count <= 0 || index >= count {
+				_ = rows.Close()
+				return 0, fmt.Errorf("invalid staged dataset subject shard id %q", stagedSetID)
+			}
+			if shardCount == 0 {
+				shardCount = count
+			} else if shardCount != count {
+				_ = rows.Close()
+				return 0, fmt.Errorf("staged dataset subject shards %s have mixed counts", setID)
+			}
+			shardIndexes[index] = struct{}{}
+		}
 		if status == "" {
 			status = rowStatus
-		} else if status != rowStatus {
+		} else if status != rowStatus && !sharded {
 			_ = rows.Close()
 			return 0, fmt.Errorf("staged dataset subject set %s/%s has mixed statuses", spaceID, setID)
 		}
-		datasetIDs = append(datasetIDs, datasetID)
+		if !containsString(datasetIDs, datasetID) {
+			datasetIDs = append(datasetIDs, datasetID)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
@@ -113,9 +138,29 @@ func (s *Store) ActivateDatasetSubjectSet(ctx context.Context, spaceID, setID st
 	if len(datasetIDs) == 0 {
 		return 0, fmt.Errorf("staged dataset subject set %s/%s was not found", spaceID, setID)
 	}
+	if sharded {
+		if len(shardIndexes) != shardCount {
+			// A shard is allowed to arrive before its peers. Returning a zero
+			// count keeps this normal asynchronous state out of the failure
+			// path and leaves the old active set untouched.
+			return 0, nil
+		}
+		for index := 0; index < shardCount; index++ {
+			if _, ok := shardIndexes[index]; !ok {
+				return 0, nil
+			}
+		}
+	}
+	setWhere := `c_set_id = ?`
+	setArgs := []any{setID}
+	if sharded {
+		setWhere = `(c_set_id = ? OR c_set_id LIKE ?)`
+		setArgs = []any{setID, shardPrefix + "%"}
+	}
 	if status == "activated" {
 		var count int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_dataset_subject_set_staging WHERE c_space_id = ? AND c_set_id = ?`, spaceID, setID).Scan(&count); err != nil {
+		queryArgs := append([]any{spaceID}, setArgs...)
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_dataset_subject_set_staging WHERE c_space_id = ? AND `+setWhere, queryArgs...).Scan(&count); err != nil {
 			return 0, err
 		}
 		if err := tx.Commit(); err != nil {
@@ -123,17 +168,39 @@ func (s *Store) ActivateDatasetSubjectSet(ctx context.Context, spaceID, setID st
 		}
 		return count, nil
 	}
+	stagedArgs := append([]any{spaceID}, setArgs...)
+	stagedFetchedAt, err := maxInstrumentFetchedAt(ctx, tx, `
+		SELECT c_attrs_json FROM t_dataset_subject_set_staging
+		WHERE c_space_id = ? AND `+setWhere, stagedArgs...)
+	if err != nil {
+		return 0, err
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(datasetIDs)), ",")
+	activeArgs := make([]any, 0, len(datasetIDs)+1)
+	activeArgs = append(activeArgs, spaceID)
+	for _, datasetID := range datasetIDs {
+		activeArgs = append(activeArgs, datasetID)
+	}
+	activeFetchedAt, err := maxInstrumentFetchedAt(ctx, tx, fmt.Sprintf(`
+		SELECT c_attrs_json FROM t_dataset_subjects WHERE c_space_id = ? AND c_dataset_id IN (%s)`, placeholders), activeArgs...)
+	if err != nil {
+		return 0, err
+	}
+	if !stagedFetchedAt.IsZero() && stagedFetchedAt.Before(activeFetchedAt) {
+		return 0, ErrRevisionConflict
+	}
 	for _, datasetID := range datasetIDs {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM t_dataset_subjects WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID); err != nil {
 			return 0, err
 		}
 	}
+	insertArgs := append([]any{spaceID}, setArgs...)
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO t_dataset_subjects
 			(c_space_id, c_dataset_id, c_subject_id, c_subject_role, c_effective_start_time, c_effective_end_time, c_status, c_attrs_json)
 		SELECT c_space_id, c_dataset_id, c_subject_id, c_subject_role, c_effective_start_time, c_effective_end_time, c_active_status, c_attrs_json
-		FROM t_dataset_subject_set_staging WHERE c_space_id = ? AND c_set_id = ?
-	`, spaceID, setID)
+		FROM t_dataset_subject_set_staging WHERE c_space_id = ? AND `+setWhere,
+		insertArgs...)
 	if err != nil {
 		return 0, err
 	}
@@ -141,13 +208,74 @@ func (s *Store) ActivateDatasetSubjectSet(ctx context.Context, spaceID, setID st
 	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE t_dataset_subject_set_staging SET c_status = 'activated' WHERE c_space_id = ? AND c_set_id = ?`, spaceID, setID); err != nil {
+	updateArgs := append([]any{spaceID}, setArgs...)
+	if _, err := tx.ExecContext(ctx, `UPDATE t_dataset_subject_set_staging SET c_status = 'activated' WHERE c_space_id = ? AND `+setWhere, updateArgs...); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return int(count), nil
+}
+
+func parseDatasetSubjectShardSetID(setID string) (string, int, int, bool) {
+	const marker = "::shard:"
+	position := strings.LastIndex(setID, marker)
+	if position <= 0 {
+		return "", 0, 0, false
+	}
+	parts := strings.Split(setID[position+len(marker):], "/")
+	if len(parts) != 2 {
+		return "", 0, 0, false
+	}
+	index, indexErr := strconv.Atoi(parts[0])
+	count, countErr := strconv.Atoi(parts[1])
+	if indexErr != nil || countErr != nil {
+		return "", 0, 0, false
+	}
+	return setID[:position], index, count, true
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+// maxInstrumentFetchedAt is evaluated inside the activation transaction. This
+// turns the pipeline's monotonic snapshot check into a storage-side CAS rather
+// than a read-then-write race between two collector invocations.
+func maxInstrumentFetchedAt(ctx context.Context, tx *sql.Tx, query string, args ...any) (time.Time, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer rows.Close()
+	var latest time.Time
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return time.Time{}, err
+		}
+		var binding pb.DatasetSubject
+		if unmarshalOptions.Unmarshal([]byte(raw), &binding) != nil {
+			continue
+		}
+		fetchedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(binding.GetAttributes()["active_instrument_set_fetched_at"]))
+		if err != nil {
+			continue
+		}
+		if latest.IsZero() || fetchedAt.After(latest) {
+			latest = fetchedAt
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return time.Time{}, err
+	}
+	return latest, nil
 }
 
 func validDatasetSubjectStatus(status string) bool {

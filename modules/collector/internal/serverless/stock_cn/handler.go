@@ -62,8 +62,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		return failure("invalid_event", fmt.Sprintf("decode event: %v", err)), nil
 	}
 	timerConfigured := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SUBJECTS")) != ""
-	instrumentTimerConfigured := strings.EqualFold(strings.TrimSpace(os.Getenv("MOOX_INSTRUMENT_SNAPSHOT_TIMER")), "true")
-	if err := routeTimerEvent(&event, timerConfigured, instrumentTimerConfigured); err != nil {
+	if err := routeTimerEvent(&event, timerConfigured); err != nil {
 		return failure("invalid_timer_event", err.Error()), nil
 	}
 	function, _ := functioncontext.FromContext(ctx)
@@ -75,6 +74,13 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		if strings.TrimSpace(function.FunctionName) != "" {
 			functionName = function.FunctionName
 		}
+	}
+	invocationMetrics, metricsErr := marketfetch.NewInvocationMetrics(functionName, spaceID)
+	if metricsErr != nil {
+		log.WarnContextf(ctx, "stock_cn_metrics_init_failed error=%q", metricsErr)
+	}
+	if invocationMetrics != nil && event.Action == model.EventActionInstrumentSnapshot {
+		defer marketfetch.ReportInvocationMetrics(ctx, invocationMetrics)
 	}
 	reporter, timeout, reportErr := h.NewReporter()
 	if reportErr != nil {
@@ -91,12 +97,13 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	if timerConfigured && event.Action == model.EventActionMarketFetch {
 		event.StorageRPCGatewayTarget = os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")
 	}
-	if instrumentTimerConfigured && event.Action == model.EventActionInstrumentSnapshot {
-		event.StorageRPCGatewayTarget = os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")
-	}
 	switch event.Action {
 	case model.EventActionMarketFetch:
 		handler := h.NewMarketFetch()
+		if invocationMetrics != nil {
+			handler.Metrics = invocationMetrics.Metrics
+			handler.MetricsReporter = invocationMetrics.Reporter
+		}
 		handler.Reporter = reporter
 		handler.CLSReserve = timeout
 		if timerConfigured {
@@ -108,7 +115,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		}
 		return handler.HandleWithFunctionName(ctx, event, functionName)
 	case model.EventActionEgressProbe:
-		return marketfetch.StockEgressProbe(ctx)
+		return marketfetch.StockEgressIdentityProbe(ctx)
 	case model.EventActionInstrumentSnapshot:
 		storageTarget := strings.TrimSpace(event.StorageRPCGatewayTarget)
 		if storageTarget == "" {
@@ -121,6 +128,9 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		pipeline, pipelineErr := marketfetch.NewStockInstrumentPipeline(storage)
 		if pipelineErr != nil {
 			return nil, pipelineErr
+		}
+		if invocationMetrics != nil {
+			pipeline.Metrics = invocationMetrics.Metrics
 		}
 		snapshotAt := time.Now().UTC()
 		if parsed, parseErr := time.Parse(time.RFC3339, event.Time); parseErr == nil {
@@ -136,7 +146,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	}
 }
 
-func routeTimerEvent(event *model.CloudFunctionEvent, marketConfigured, instrumentConfigured bool) error {
+func routeTimerEvent(event *model.CloudFunctionEvent, marketConfigured bool) error {
 	if event == nil {
 		return nil
 	}
@@ -146,21 +156,14 @@ func routeTimerEvent(event *model.CloudFunctionEvent, marketConfigured, instrume
 		}
 		return nil
 	}
-	if marketConfigured && instrumentConfigured {
-		return fmt.Errorf("both market and instrument timers are configured")
-	}
-	if !marketConfigured && !instrumentConfigured {
+	if !marketConfigured {
 		return nil
 	}
 	if err := validateTimerEvent(*event); err != nil {
 		return err
 	}
 	event.Source = "tencent_timer"
-	if instrumentConfigured {
-		event.Action = model.EventActionInstrumentSnapshot
-	} else {
-		event.Action = model.EventActionMarketFetch
-	}
+	event.Action = model.EventActionMarketFetch
 	return nil
 }
 

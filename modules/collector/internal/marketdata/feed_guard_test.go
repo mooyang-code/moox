@@ -72,6 +72,29 @@ func TestFeedGuardTokenBucketUsesBurstThenSleepsDeterministically(t *testing.T) 
 	require.Equal(t, []time.Duration{time.Second}, sleeper.Durations())
 }
 
+func TestRateBudgetRatioScalesProviderRequestPolicy(t *testing.T) {
+	policy := scaleRateLimitPolicy(RateLimitPolicy{
+		RequestsPerSecond: 10,
+		Burst:             4,
+		MaxConcurrent:     6,
+		Cooldown:          time.Second,
+		RequestTimeout:    time.Second,
+	}, 0.25)
+
+	require.Equal(t, 2.5, policy.RequestsPerSecond)
+	require.Equal(t, 1, policy.Burst)
+	require.Equal(t, 1, policy.MaxConcurrent)
+	require.Equal(t, time.Second, policy.Cooldown)
+
+	require.Equal(t, RateLimitPolicy{RequestsPerSecond: 10, Burst: 4, MaxConcurrent: 6, Cooldown: time.Second, RequestTimeout: time.Second}, scaleRateLimitPolicy(RateLimitPolicy{
+		RequestsPerSecond: 10,
+		Burst:             4,
+		MaxConcurrent:     6,
+		Cooldown:          time.Second,
+		RequestTimeout:    time.Second,
+	}, 0))
+}
+
 func TestFeedGuardCooldownAfter429(t *testing.T) {
 	clock := newFakeClock(time.Date(2026, 8, 29, 11, 0, 0, 0, time.UTC))
 	sleeper := &fakeSleeper{clock: clock}
@@ -325,6 +348,37 @@ func TestRouterSessionSharesInvocationBreakerAcrossSubjects(t *testing.T) {
 	}
 	assert.Equal(t, 2, failing.Calls())
 	assert.Equal(t, 3, succeeding.Calls())
+}
+
+func TestRouterSkipsProviderThatDoesNotAdvertiseExchange(t *testing.T) {
+	registry := NewRegistry()
+	clock := newFakeClock(time.Date(2026, 8, 29, 12, 30, 0, 0, time.UTC))
+	sleeper := &fakeSleeper{clock: clock}
+	spec := KlineSpec{Markets: []string{"stock_cn"}, Frequencies: []string{"1m"}, CompleteOHLCV: true, HasAmount: true, MaxBarsPerRequest: 1, TimestampMode: TimestampModeOpen, RateLimit: RateLimitPolicy{RequestsPerSecond: 100, Burst: 1, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: time.Second}}
+	shanghai := &stubKlineProvider{
+		testProvider: testProvider{descriptor: ProviderDescriptor{ID: "shanghai", DisplayName: "Shanghai", Hosts: []string{"shanghai.test"}}},
+		spec:         spec,
+		err:          ErrProtocol,
+	}
+	shanghai.spec.Exchanges = []string{"XSHG"}
+	beijing := &stubKlineProvider{
+		testProvider: testProvider{descriptor: ProviderDescriptor{ID: "beijing", DisplayName: "Beijing", Hosts: []string{"beijing.test"}}},
+		spec:         spec,
+		rows:         []NormalizedKline{{SubjectID: "920000.XBSE", Frequency: "1m", BarStart: clock.Now().Add(-time.Minute), BarEnd: clock.Now()}},
+	}
+	beijing.spec.Exchanges = []string{"XBSE"}
+	require.NoError(t, registry.Register(shanghai))
+	require.NoError(t, registry.Register(beijing))
+	router, err := NewRouter(registry, 2, clock, sleeper.Sleep)
+	require.NoError(t, err)
+
+	rows, err := router.FetchKlines(context.Background(), KlineRequest{
+		MarketID: "stock_cn", ExchangeID: "XBSE", SubjectID: "920000.XBSE", ProviderSymbol: "bj920000", Frequency: "1m", Limit: 1, RequestID: "req-xbse",
+	}, []string{"shanghai", "beijing"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, 0, shanghai.Calls(), "unsupported exchange must not consume a provider request")
+	assert.Equal(t, 1, beijing.Calls())
 }
 
 type stubKlineProvider struct {

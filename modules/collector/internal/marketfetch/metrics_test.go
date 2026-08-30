@@ -188,6 +188,16 @@ func TestMetricsExposeLowCardinalityFeedDimensions(t *testing.T) {
 	}
 }
 
+func TestMetricsAllowConfiguredCryptoKlineFrequencies(t *testing.T) {
+	for _, route := range []string{"binance_spot_kline_1h", "binance_swap_kline_1w"} {
+		marketID, bounded := boundedMarketRoute("crypto_market", route)
+		require.Equal(t, "crypto_market", marketID)
+		require.Equal(t, route, bounded)
+	}
+	_, bounded := boundedMarketRoute("crypto_market", "binance_spot_kline_2m")
+	require.Equal(t, "unknown", bounded)
+}
+
 func TestMetricsRejectFeedGroupOutsideConfiguredRange(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)

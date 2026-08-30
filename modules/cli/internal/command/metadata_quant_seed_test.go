@@ -136,6 +136,7 @@ func TestDefaultMetadataDefinesStrictStockCNKlineColumns(t *testing.T) {
 		"close_time",
 		"volume_unit",
 		"amount_unit",
+		"amount_quality",
 		"provider_symbol",
 		"provider_timestamp",
 		"fetched_at",

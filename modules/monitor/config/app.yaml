@@ -45,8 +45,10 @@ market_canary:
   freshness: 3m
   return_threshold: 0.05
   settle_delay: 5s
+  post_close_delay: 1m
   calendar_warning_lead: 336h
   closed_bar_count: 3
+  closed_bar_min_coverage: 0.99
   subjects:
     - space_id: crypto_market
       dataset_id: binance_spot_kline_1m
@@ -64,6 +66,17 @@ market_canary:
       market_id: stock_cn
       calendar_path: ../collector/config/markets/stock_cn/calendar.yaml
       eligible_kline_providers: [sina, tencent, eastmoney]
+
+market_health:
+  timer_coordination_stale_after: 15m
+  timer_coordination_pending_grace: 5m
+  low_capacity_headroom: 2
+  feed_failure_rate_window: 5m
+  feed_failure_rate_threshold: 0.2
+  instrument_snapshot_max_age: 36h
+  instrument_minimum_count: 4000
+  instrument_required_exchanges: [XSHG, XSHE, XBSE]
+  egress_stale_after: 15m
 
 metrics:
   enabled: true

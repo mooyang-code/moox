@@ -402,7 +402,6 @@ func TestValidateStockCNEgressProbeReportRequiresExactUniquePublicIPs(t *testing
 }
 
 func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
-	before := time.Now().UTC().AddDate(0, 0, -7).Add(-time.Minute)
 	stock := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "stock_cn"}, Region: "ap-shanghai", StorageRPCGatewayTarget: "ip://storage:11003"}, "stock-node", "batch-stock")
 	stockData := stock["data"].(map[string]any)
 	assert.Equal(t, "stock_cn_kline", stockData["dataset_id"])
@@ -412,11 +411,12 @@ func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
 	stockItem := stockData["items"].([]map[string]any)[0]
 	assert.Equal(t, "600000.XSHG", stockItem["subject_id"])
 	assert.Equal(t, "sh600000", stockItem["symbol"])
-	assert.Equal(t, 100, stockItem["bar_limit"])
-	startTime, err := time.Parse(time.RFC3339Nano, stockItem["start_time"].(string))
+	assert.Equal(t, 1000, stockItem["bar_limit"])
+	assert.Equal(t, true, stockItem["canary"])
+	assert.NotEmpty(t, stockItem["start_time"], "the stock canary must exercise a bounded historical request")
+	start, err := time.Parse(time.RFC3339Nano, stockItem["start_time"].(string))
 	require.NoError(t, err)
-	assert.False(t, startTime.Before(before))
-	assert.False(t, startTime.After(time.Now().UTC().AddDate(0, 0, -7).Add(time.Minute)))
+	assert.InDelta(t, float64(23*time.Hour/time.Second), time.Since(start).Seconds(), 90)
 
 	crypto := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "crypto_market"}}, "crypto-node", "batch-crypto")
 	cryptoData := crypto["data"].(map[string]any)
@@ -437,14 +437,17 @@ func TestDefaultStockCNCollectorRuleStaysDisabledUntilEgressGatePasses(t *testin
 		} `yaml:"rules"`
 	}
 	require.NoError(t, yaml.Unmarshal(content, &bundle))
+	seen := map[string]bool{}
 	for _, rule := range bundle.Rules {
-		if rule.SpaceID == "stock_cn" {
-			assert.Equal(t, "builtin-stock-cn-kline-1m", rule.RuleID)
-			assert.False(t, rule.Enabled)
-			return
+		if rule.SpaceID != "stock_cn" {
+			continue
 		}
+		seen[rule.RuleID] = rule.Enabled
 	}
-	t.Fatal("stock_cn collector rule is missing")
+	assert.Contains(t, seen, "builtin-stock-cn-instrument-1d")
+	assert.Contains(t, seen, "builtin-stock-cn-kline-1m")
+	assert.False(t, seen["builtin-stock-cn-instrument-1d"])
+	assert.False(t, seen["builtin-stock-cn-kline-1m"])
 }
 
 func TestCollectorFunctionEnvironmentRejectsInvalidOrConflictingCA(t *testing.T) {
@@ -1024,40 +1027,36 @@ func TestBuildCollectorCreateNodeItemUsesLongStockCNInstrumentInvokeTimeoutOnlyF
 		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "timer", FetcherConfig: fetcher,
 	}, "moox-collector-stock-cn_dev")
 	assert.Equal(t, "15", timer.Config["timeout"])
+	assert.Equal(t, "15", timer.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
 
 	invoke := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
 		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "invoke", FetcherConfig: fetcher,
 	}, "moox-collector-stock-cn_dev")
 	assert.Equal(t, "60", invoke.Config["timeout"])
+	assert.Equal(t, "60", invoke.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
 
 	fetcher.InstrumentInvokeTimeoutSeconds = 90
 	configured := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
 		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "invoke", FetcherConfig: fetcher,
 	}, "moox-collector-stock-cn_dev")
 	assert.Equal(t, "90", configured.Config["timeout"])
+	assert.Equal(t, "90", configured.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
 }
 
-func TestBuildCollectorInstrumentTimerItemIsDisabledScheduleReady(t *testing.T) {
-	fetcher := defaultCollectorSCFFetcherSpace()
-	fetcher.SpaceID = "stock_cn"
-	fetcher.InstrumentInvokeTimeoutSeconds = 90
-	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
-		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou",
-		TriggerType: "timer", BizType: collectorInstrumentFetcherBizType,
-		StorageRPCGatewayTarget: "ip://storage:11003", FetcherConfig: fetcher,
-	}, "pkg")
+func TestCollectorInstrumentCanaryEventUsesShardedMarketFetchAction(t *testing.T) {
+	event := collectorInstrumentCanaryEvent(collectorPublishOptions{StorageRPCGatewayTarget: "ip://storage:11003", SpaceID: "stock_cn", Region: "ap-singapore"}, "node-1", "batch-1", 0, stockInstrumentCanaryShardCount, "2026-08-30T00:00:00Z")
 
-	assert.Equal(t, "timer", item.TriggerType)
-	assert.Equal(t, "90", item.Config["timeout"])
-	assert.Equal(t, "true", item.Environment["MOOX_INSTRUMENT_SNAPSHOT_TIMER"])
-	assert.Empty(t, item.Environment["MOOX_MARKET_FETCH_SUBJECTS"])
-}
-
-func TestCollectorInstrumentCanaryEventUsesRealSnapshotAction(t *testing.T) {
-	event := collectorInstrumentCanaryEvent(collectorPublishOptions{StorageRPCGatewayTarget: "ip://storage:11003"})
-
-	assert.Equal(t, "instrument_snapshot", event["action"])
+	assert.Equal(t, "market_fetch", event["action"])
 	assert.Equal(t, "ip://storage:11003", event["storage_rpc_gateway_target"])
+	data, ok := event["data"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "instrument_snapshot", data["batch_kind"])
+	assert.Equal(t, "stock_cn_instruments", data["dataset_id"])
+	assert.Equal(t, "node-1", data["node_id"])
+	items, ok := data["items"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, items, 1)
+	assert.Equal(t, stockInstrumentCanaryShardCount, items[0]["snapshot_shard_count"])
 }
 
 func TestCollectorTimerRestorePatchesOnlyPreviouslyEnabledNodes(t *testing.T) {
@@ -1085,9 +1084,9 @@ func TestCollectorStockCNTimerRestorePatchesIncludeFreshNodes(t *testing.T) {
 
 	require.Len(t, patches, 2)
 	assert.Equal(t, "gz-0", patches[0].NodeID)
-	assert.Equal(t, "0 * * * * * *", patches[0].TimerCron)
+	assert.Equal(t, "5 * * * * * *", patches[0].TimerCron)
 	assert.Equal(t, "sh-1", patches[1].NodeID)
-	assert.Equal(t, "1 * * * * * *", patches[1].TimerCron)
+	assert.Equal(t, "6 * * * * * *", patches[1].TimerCron)
 }
 
 func TestCollectorTimerDisablePatchesCoverEveryPublishedNode(t *testing.T) {

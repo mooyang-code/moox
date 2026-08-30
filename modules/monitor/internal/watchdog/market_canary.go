@@ -30,8 +30,10 @@ type MarketCanaryConfig struct {
 	MarketID                                 string
 	CalendarPath                             string
 	SettleDelay                              time.Duration
+	PostCloseDelay                           time.Duration
 	CalendarWarningLead                      time.Duration
 	ClosedBarCount                           int
+	ClosedBarMinCoverage                     float64
 	EligibleKlineProviders                   []string
 }
 
@@ -94,6 +96,14 @@ type marketCanaryThresholdDiagnostic struct {
 	CurrentClose    float64 `json:"current_close"`
 	PriceReturn     float64 `json:"price_return"`
 	ReturnThreshold float64 `json:"return_threshold"`
+}
+
+type stockCNClosedBarCoverageDiagnostic struct {
+	Type     string  `json:"type"`
+	Expected int     `json:"expected"`
+	Actual   int     `json:"actual"`
+	Coverage float64 `json:"coverage"`
+	Minimum  float64 `json:"minimum"`
 }
 
 var (
@@ -237,7 +247,8 @@ type stockCalendar struct {
 
 func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult, now time.Time) domain.CheckResult {
 	config := c.Config
-	if strings.TrimSpace(config.CalendarPath) == "" || config.SettleDelay < 0 || config.CalendarWarningLead <= 0 || config.ClosedBarCount <= 0 {
+	if strings.TrimSpace(config.CalendarPath) == "" || config.SettleDelay < 0 || config.PostCloseDelay < 0 || config.CalendarWarningLead <= 0 || config.ClosedBarCount <= 0 ||
+		config.ClosedBarMinCoverage <= 0 || config.ClosedBarMinCoverage > 1 {
 		result.ErrorMessage = "invalid_config"
 		return result
 	}
@@ -259,7 +270,10 @@ func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult,
 		result.ErrorMessage = "calendar_expiring"
 		return result
 	}
-	if !calendar.isTradingDay(localNow) || !calendar.inSession(localNow) {
+	if !calendar.isTradingDay(localNow) {
+		return healthyIdleResult(result)
+	}
+	if !calendar.inSession(localNow) && !calendar.inPostCloseCheckWindow(localNow, config.PostCloseDelay, config.Freshness) {
 		return healthyIdleResult(result)
 	}
 	expected := calendar.closedBarStarts(localNow, config.SettleDelay, config.ClosedBarCount)
@@ -298,11 +312,25 @@ func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult,
 		}
 		byTime[bar.DataTime.Unix()] = bar
 	}
+	present := 0
 	for _, want := range expected {
-		if _, ok := byTime[want.UTC().Unix()]; !ok {
-			result.ErrorMessage = "stale_expected_bucket"
-			return result
+		if _, ok := byTime[want.UTC().Unix()]; ok {
+			present++
 		}
+	}
+	if present == 0 {
+		result.ErrorMessage = "no_closed_bar_data"
+		return result
+	}
+	coverage := float64(present) / float64(len(expected))
+	if coverage < config.ClosedBarMinCoverage {
+		result.ErrorMessage = "closed_bar_coverage_below_threshold"
+		diagnostic, _ := json.Marshal(stockCNClosedBarCoverageDiagnostic{
+			Type: "stock_cn_closed_bar_coverage", Expected: len(expected), Actual: present,
+			Coverage: coverage, Minimum: config.ClosedBarMinCoverage,
+		})
+		result.BodyExcerpt = string(diagnostic)
+		return result
 	}
 	result.Success, result.Connected, result.Status = true, true, domain.CheckStatusOK
 	return result
@@ -370,6 +398,22 @@ func (c *stockCalendar) inSession(at time.Time) bool {
 		}
 	}
 	return false
+}
+
+func (c *stockCalendar) inPostCloseCheckWindow(at time.Time, delay, window time.Duration) bool {
+	if c == nil || delay < 0 || window <= 0 {
+		return false
+	}
+	date := at.Format("2006-01-02")
+	if len(c.sessions) == 0 {
+		return false
+	}
+	end, err := time.ParseInLocation("2006-01-02 15:04", date+" "+c.sessions[len(c.sessions)-1].End, c.location)
+	if err != nil {
+		return false
+	}
+	afterClose := at.Sub(end)
+	return afterClose >= delay && afterClose <= delay+window
 }
 
 func (c *stockCalendar) closedBarStarts(now time.Time, settleDelay time.Duration, count int) []time.Time {

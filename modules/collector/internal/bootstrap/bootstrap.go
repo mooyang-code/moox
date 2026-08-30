@@ -15,13 +15,13 @@ import (
 	collectordns "github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
@@ -313,23 +313,20 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	// authenticated service route.
 	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 5 * time.Second})
 	metadataSource := storagesource.NewDatasetSource(cfg.Storage.GatewayTarget)
-	completionSpaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
-	if completionSpaceID == "" {
-		completionSpaceID = "crypto_market"
-	}
+	completionSpaceID := marketFetchSpaceID()
 	var resampleRunner *collectorresample.Runner
 	var resamplePreparer *collectorresample.Preparer
 	var resampleMetrics *collectorresample.Metrics
 	if cfg.KlineResample.Enabled {
 		resampleMetrics = collectorresample.NewMetrics(prometheus.DefaultRegisterer)
-		metadataClient, metadataErr := binance.NewResampleMetadataClient(cfg.Storage.GatewayTarget, "spot")
-		localStorage, storageErr := binance.NewResampleStorage(deps.StorageRPCGatewayTarget, "spot", "collector:kline_resample")
+		metadataClient, metadataErr := marketstorage.NewResampleMetadataClient(cfg.Storage.GatewayTarget, marketstorage.InstTypeSPOT)
+		localStorage, storageErr := marketstorage.NewResampleStorage(deps.StorageRPCGatewayTarget, marketstorage.InstTypeSPOT, "collector:kline_resample")
 		if metadataErr != nil || storageErr != nil {
 			log.WarnContextf(trpc.BackgroundContext(), "collector kline resample disabled: metadata=%v storage=%v", metadataErr, storageErr)
 		} else {
 			catalog := &collectorresample.Catalog{Metadata: metadataClient.Client, Auth: metadataClient.Auth}
 			resamplePreparer = &collectorresample.Preparer{Rules: dbm.TaskRules(), Source: metadataSource, Catalog: catalog, KeepDuration: cfg.KlineResample.TargetKeepDuration.String(), Limit: cfg.KlineResample.WorkerSubjectBatchSize}
-			if waiter, ok := localStorage.(binance.ResampleViewSyncWaiter); ok {
+			if waiter, ok := localStorage.(marketstorage.ResampleViewSyncWaiter); ok {
 				catalog.ViewSync = waiter
 			} else {
 				log.Warn("collector kline resample disabled: Storage adapter has no View sync waiter")
@@ -351,6 +348,11 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		Metrics: metrics, MaxSubjects: 30,
 		ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
 		MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
+		StockCNStagger: marketfetch.StockCNStaggerConfig{
+			StartSecond:        cfg.StockCN.StaggerStartSecond,
+			WindowSeconds:      cfg.StockCN.StaggerWindowSeconds,
+			MaxStartsPerSecond: cfg.StockCN.StaggerMaxStartsPerSecond,
+		},
 	}
 	readiness := marketfetch.NewPeriodReadinessService(dbm.TaskInstances(), dbm.PeriodReadiness(), cfg.PeriodReadiness.Grace)
 	invokeScheduler := &marketfetch.Scheduler{
@@ -358,8 +360,8 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		// Use the target resolved by discovery rather than the static local
 		// config.  Invoke SCFs may run outside the Collector host, so a
 		// 127.0.0.1 gateway target would point back at the function itself.
-		Invoker: invoker, Storage: binance.NewBatchStorageWithWriteSource, StorageTarget: deps.StorageRPCGatewayTarget,
-		InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: "crypto_market", DNSCache: dnsCache,
+		Invoker: invoker, Storage: marketfetch.NewMarketStorageForMarket, StorageTarget: deps.StorageRPCGatewayTarget,
+		InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: completionSpaceID, DNSCache: dnsCache,
 		Symbols:               metadataSource,
 		InvokeNonRealtimeOnly: true,
 	}
@@ -407,7 +409,11 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			})
 		}
 	}
-	periodStorage, storageErr := binance.NewBatchStorageWithWriteSource(deps.StorageRPCGatewayTarget, "spot", "collector")
+	periodMarketType := "spot"
+	if strings.EqualFold(completionSpaceID, marketfetch.StockCNSpaceID) {
+		periodMarketType = "equity"
+	}
+	periodStorage, storageErr := marketfetch.NewMarketStorageForMarket(deps.StorageRPCGatewayTarget, periodMarketType, "collector")
 	if storageErr != nil {
 		log.WarnContextf(trpc.BackgroundContext(), "collector period readiness reporter disabled: %v", storageErr)
 	} else if reporter, ok := periodStorage.(marketfetch.DatasetPeriodReporter); ok {
@@ -452,6 +458,13 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		}()
 		return nil
 	})
+}
+
+func marketFetchSpaceID() string {
+	if spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")); spaceID != "" {
+		return spaceID
+	}
+	return "crypto_market"
 }
 
 func runtimeAuth(cfg ServiceAuthConfig) runtimeapp.AuthConfig {

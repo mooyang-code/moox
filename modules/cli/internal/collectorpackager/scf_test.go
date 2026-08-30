@@ -47,11 +47,14 @@ func TestBuildSCFPackageIncludesStockCNCalendar(t *testing.T) {
 	calendar := filepath.Join(tmp, "modules", "collector", "config", "markets", "stock_cn", "calendar.yaml")
 	require.NoError(t, os.MkdirAll(filepath.Dir(calendar), 0o755))
 	require.NoError(t, os.WriteFile(calendar, []byte("timezone: Asia/Shanghai\n"), 0o644))
+	route := filepath.Join(tmp, "modules", "collector", "config", "markets", "stock_cn", "route.yaml")
+	require.NoError(t, os.WriteFile(route, []byte("market_id: stock_cn\nroute_id: test\nfrequency: 1m\n"), 0o644))
 
 	out := filepath.Join(tmp, "package.zip")
 	result, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: out})
 	require.NoError(t, err)
 	assert.Contains(t, result.Entries, "markets/stock_cn/calendar.yaml")
+	assert.Contains(t, result.Entries, "markets/stock_cn/route.yaml")
 
 	reader, err := zip.OpenReader(out)
 	require.NoError(t, err)
@@ -63,6 +66,13 @@ func TestBuildSCFPackageIncludesStockCNCalendar(t *testing.T) {
 		}
 	}
 	assert.True(t, found)
+	var routeFound bool
+	for _, file := range reader.File {
+		if file.Name == "markets/stock_cn/route.yaml" {
+			routeFound = true
+		}
+	}
+	assert.True(t, routeFound)
 }
 
 func TestBuildSCFPackageRequiresStockCNCalendar(t *testing.T) {

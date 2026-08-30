@@ -76,6 +76,33 @@ type KlineSpec struct {
 	History           KlineHistoryCapability
 }
 
+// SupportsRequest reports whether the static feed contract can serve the
+// request without making an HTTP call. An empty request dimension is treated
+// as unspecified so crypto callers that do not carry an exchange remain
+// compatible with the common router.
+func (s KlineSpec) SupportsRequest(req KlineRequest) bool {
+	if market := strings.TrimSpace(string(req.MarketID)); market != "" && !containsFold(s.Markets, market) {
+		return false
+	}
+	if frequency := strings.TrimSpace(req.Frequency); frequency != "" && !containsFold(s.Frequencies, frequency) {
+		return false
+	}
+	if strings.TrimSpace(string(req.ExchangeID)) != "" && !containsFold(s.Exchanges, string(req.ExchangeID)) {
+		return false
+	}
+	return true
+}
+
+func containsFold(values []string, want string) bool {
+	want = strings.TrimSpace(want)
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), want) {
+			return true
+		}
+	}
+	return false
+}
+
 // KlineHistoryCapability describes how a provider handles a non-zero
 // StartTime. A provider without arbitrary-range support may only be used when
 // the requested start is inside MaxLookback and its response proves coverage.
@@ -212,8 +239,16 @@ type KlineRequest struct {
 	StartTime      time.Time
 	EndTime        time.Time
 	Now            time.Time
-	RequestID      string
-	DNSRoutes      map[string][]string
+	// HistoryAsOf is an explicit reference point for bounded historical
+	// probes. It is normally zero and falls back to Now; deployment canaries
+	// set it to the selected closed session so a weekend does not make a
+	// known latest-page response look out of range.
+	HistoryAsOf time.Time
+	RequestID   string
+	DNSRoutes   map[string][]string
+	// RateBudgetRatio applies the HistoryPolicy budget to this invocation's
+	// provider limiter. Zero means the normal provider budget (1.0).
+	RateBudgetRatio float64
 }
 
 func (r KlineRequest) FrequencyValue() (Frequency, error) {
@@ -235,6 +270,9 @@ func (r KlineRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.RequestID) == "" {
 		return fmt.Errorf("%w: request_id is required", ErrInvalidRequest)
+	}
+	if math.IsNaN(r.RateBudgetRatio) || math.IsInf(r.RateBudgetRatio, 0) || r.RateBudgetRatio < 0 || r.RateBudgetRatio > 1 {
+		return fmt.Errorf("%w: rate_budget_ratio must be between 0 and 1", ErrInvalidRequest)
 	}
 	return nil
 }

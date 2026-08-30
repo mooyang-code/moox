@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -h "${SOURCE}" ]]; do
+  SOURCE_DIR="$(cd -P "$(dirname "${SOURCE}")" >/dev/null 2>&1 && pwd)"
+  SOURCE="$(readlink "${SOURCE}")"
+  [[ "${SOURCE}" != /* ]] && SOURCE="${SOURCE_DIR}/${SOURCE}"
+done
+ROOT="$(cd -P "$(dirname "${SOURCE}")/../.." && pwd)"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-collector-scf-package-test.XXXXXX")"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 FAKE_BIN="${TMP_ROOT}/bin"
@@ -38,5 +44,10 @@ stock_listing_path="${TMP_ROOT}/stock-listing.txt"
 unzip -l "${stock_package_path}" >"${stock_listing_path}"
 grep -q ' main$' "${stock_listing_path}"
 grep -q ' sources/market/binance.yaml$' "${stock_listing_path}"
+grep -q ' sources/market/sina.yaml$' "${stock_listing_path}"
+grep -q ' sources/market/tencent.yaml$' "${stock_listing_path}"
+grep -q ' sources/market/eastmoney.yaml$' "${stock_listing_path}"
+grep -q ' sources/market/baidu.yaml$' "${stock_listing_path}"
 grep -q ' markets/stock_cn/calendar.yaml$' "${stock_listing_path}"
+grep -q ' markets/stock_cn/route.yaml$' "${stock_listing_path}"
 ! grep -q 'trpc_go.yaml' "${stock_listing_path}"

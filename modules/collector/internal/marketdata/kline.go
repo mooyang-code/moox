@@ -8,18 +8,22 @@ import (
 )
 
 type NormalizedKline struct {
-	SubjectID         string
-	ProviderID        string
-	ProviderSymbol    string
-	Frequency         string
-	BarStart          time.Time
-	BarEnd            time.Time
-	Open              float64
-	High              float64
-	Low               float64
-	Close             float64
-	VolumeShares      float64
-	AmountCNY         float64
+	SubjectID      string
+	ProviderID     string
+	ProviderSymbol string
+	Frequency      string
+	BarStart       time.Time
+	BarEnd         time.Time
+	Open           float64
+	High           float64
+	Low            float64
+	Close          float64
+	VolumeShares   float64
+	AmountCNY      float64
+	// AmountEstimated marks feeds such as Tencent whose public minute payload
+	// omits turnover. The common pipeline still exposes a CNY amount, but keeps
+	// the quality distinction explicit instead of presenting it as native data.
+	AmountEstimated   bool
 	TradeCount        int64
 	ProviderTimestamp time.Time
 	FetchedAt         time.Time
@@ -40,14 +44,15 @@ func ValidateNormalizedKline(kline NormalizedKline) error {
 	if err != nil {
 		return err
 	}
-	if frequency != FrequencyMinute {
-		return fmt.Errorf("%w: normalized kline only supports 1m", ErrUnsupportedFrequency)
+	duration := frequency.Duration()
+	if duration <= 0 {
+		return fmt.Errorf("%w: frequency %q has no duration", ErrUnsupportedFrequency, frequency)
 	}
-	if !isUTCMinute(kline.BarStart) {
-		return fmt.Errorf("bar_start must be a UTC minute bucket")
+	if !isUTCBucket(kline.BarStart, duration) {
+		return fmt.Errorf("bar_start must be a UTC %s bucket", frequency)
 	}
-	if !kline.BarEnd.Equal(kline.BarStart.Add(time.Minute)) {
-		return fmt.Errorf("bar_end must equal bar_start + 1m")
+	if !kline.BarEnd.Equal(kline.BarStart.Add(duration)) {
+		return fmt.Errorf("bar_end must equal bar_start + %s", frequency)
 	}
 	for _, field := range []struct {
 		name  string
@@ -90,8 +95,8 @@ func isFinite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
-func isUTCMinute(value time.Time) bool {
-	return isUTCTime(value) && value.Second() == 0 && value.Nanosecond() == 0
+func isUTCBucket(value time.Time, duration time.Duration) bool {
+	return isUTCTime(value) && value.Truncate(duration).Equal(value)
 }
 
 func isUTCTime(value time.Time) bool {

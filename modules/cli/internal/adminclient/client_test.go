@@ -163,6 +163,18 @@ func TestGetNodeBatchChangeRequiresJob(t *testing.T) {
 	require.ErrorContains(t, err, "empty job")
 }
 
+func TestGetNodeBatchChangeAcceptsRuntimeConfigOperation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"runtime-batch-1","operation":4,"status":3,"total_count":1},"items":[]}`))
+	}))
+	defer server.Close()
+
+	status, err := New(server.URL).GetNodeBatchChange(context.Background(), "runtime-batch-1")
+	require.NoError(t, err)
+	require.NotNil(t, status.Job)
+	assert.Equal(t, "NODE_BATCH_OPERATION_UPDATE_RUNTIME_CONFIGS", status.Job.Operation)
+}
+
 func TestBuildAuthHeader(t *testing.T) {
 	cfg := ServiceAuthConfig{AccessKey: "app", SecretKey: "key", TargetNode: "gateway-gz-122"}
 	now := time.Unix(1700000000, 0)

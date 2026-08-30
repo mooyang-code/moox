@@ -225,6 +225,65 @@ func TestBuilderReportsTimerCapacityShortfall(t *testing.T) {
 	require.Contains(t, got.BusinessChecks[0].Reason, "缺口 7 个")
 }
 
+func TestBuilderReportsStockCNConfiguredGroupMismatch(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		seedOverviewMetricForInstance(t, db, "groups-expected", "moox_collector", "collector@control", "moox_collector_market_configured_groups", `{"market_id":"stock_cn","route_id":"stock_cn_kline_1m_multi_provider_v1","kind":"expected"}`, 200, now)
+		seedOverviewMetricForInstance(t, db, "groups-actual", "moox_collector", "collector@control", "moox_collector_market_configured_groups", `{"market_id":"stock_cn","route_id":"stock_cn_kline_1m_multi_provider_v1","kind":"actual"}`, 199, now)
+	})
+
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "stock_cn")
+
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "down", got.BusinessChecks[0].Status)
+	require.Contains(t, got.BusinessChecks[0].Reason, "Group 数量不一致")
+	require.Contains(t, got.BusinessChecks[0].Reason, "期望 200")
+	require.Contains(t, got.BusinessChecks[0].Reason, "实际 199")
+}
+
+func TestBuilderAlertsOnStockCNConfiguredGroupIdentityMismatch(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		route := "stock_cn_kline_1m_multi_provider_v1"
+		labels := `{"space_id":"stock_cn","dataset_id":"stock_cn_kline","frequency":"1m"}`
+		seedOverviewMetricForInstance(t, db, "identity-required", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 1, now)
+		seedOverviewMetricForInstance(t, db, "identity-active", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 1, now)
+		seedOverviewMetricForInstance(t, db, "identity-success", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"stock_cn"}`, float64(now.Unix()), now)
+		seedOverviewMetricForInstance(t, db, "identity-expected", "moox_collector", "collector@control", "moox_collector_market_configured_groups", `{"market_id":"stock_cn","route_id":"`+route+`","kind":"expected"}`, 2, now)
+		seedOverviewMetricForInstance(t, db, "identity-actual", "moox_collector", "collector@control", "moox_collector_market_configured_groups", `{"market_id":"stock_cn","route_id":"`+route+`","kind":"actual"}`, 2, now)
+		seedOverviewMetricForInstance(t, db, "identity-0", "moox_collector", "collector@control", "moox_collector_market_configured_group_id", `{"market_id":"stock_cn","route_id":"`+route+`","group_id":"0"}`, 2, now)
+		seedOverviewMetricForInstance(t, db, "identity-1", "moox_collector", "collector@control", "moox_collector_market_configured_group_id", `{"market_id":"stock_cn","route_id":"`+route+`","group_id":"1"}`, 0, now)
+	})
+
+	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "stock_cn")
+	require.NoError(t, err)
+	require.Len(t, overview.BusinessChecks, 1)
+	require.Equal(t, "down", overview.BusinessChecks[0].Status)
+	require.Contains(t, overview.BusinessChecks[0].Reason, "Group ID 0")
+}
+
+func TestBuilderUsesConfiguredTimerCoordinationThreshold(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	lastSuccess := now.Add(-2 * time.Minute)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		labels := `{"space_id":"stock_cn","dataset_id":"stock_cn_kline","frequency":"1m"}`
+		seedOverviewMetricForInstance(t, db, "timer-required-stock", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 1, now)
+		seedOverviewMetricForInstance(t, db, "timer-active-stock", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 1, now)
+		seedOverviewMetricForInstance(t, db, "timer-success-stock", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"stock_cn"}`, float64(lastSuccess.Unix()), now)
+	})
+
+	got, err := (Builder{
+		Metrics: query, Now: func() time.Time { return now },
+		MarketFetchThresholds: MarketFetchThresholds{CoordinationStaleAfter: time.Minute, PendingGrace: 30 * time.Second, LowCapacityHeadroom: 0},
+	}).Build(t.Context(), "stock_cn")
+
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "down", got.BusinessChecks[0].Status)
+	require.Contains(t, got.BusinessChecks[0].Reason, "超过允许时间")
+}
+
 func TestBuilderWarnsWhenTimerCapacityHeadroomIsLow(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
@@ -744,6 +803,82 @@ func TestOverviewKeepsShortStorageOutboxBacklogHealthy(t *testing.T) {
 			t.Fatalf("storage outbox health = %+v", item)
 		}
 	}
+}
+
+func TestBuilderAlertsOnStockCNProviderFeedFailureRate(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		labels := `{"market_id":"stock_cn","route_id":"stock_cn_kline_1m_v1","provider_id":"sina","feed_kind":"kline","group_id":"0","batch_kind":"realtime","result":"success"}`
+		seedOverviewMetricForInstance(t, db, "feed-success", "moox_collector_scf", "stock-fetch-0", "moox_collector_market_feed_results_total", labels, 8, now)
+		labels = `{"market_id":"stock_cn","route_id":"stock_cn_kline_1m_v1","provider_id":"sina","feed_kind":"kline","group_id":"0","batch_kind":"realtime","result":"http_5xx"}`
+		seedOverviewMetricForInstance(t, db, "feed-failure", "moox_collector_scf", "stock-fetch-0", "moox_collector_market_feed_results_total", labels, 3, now)
+	})
+	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "stock_cn")
+	require.NoError(t, err)
+	var found *BusinessStatus
+	for index := range overview.BusinessChecks {
+		if overview.BusinessChecks[index].Module == "provider_feed:sina" {
+			found = &overview.BusinessChecks[index]
+			break
+		}
+	}
+	require.NotNil(t, found)
+	require.Equal(t, "down", found.Status)
+	require.Contains(t, found.Reason, "失败率")
+}
+
+func TestBuilderAlertsOnStockCNEgressMismatch(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		for _, item := range []struct {
+			id, kind string
+			value    float64
+		}{
+			{"egress-expected", "expected", 200},
+			{"egress-result", "result", 200},
+			{"egress-nonempty", "non_empty_ip", 199},
+			{"egress-distinct", "distinct_ip", 198},
+		} {
+			labels := `{"market_id":"stock_cn","route_id":"stock_cn_kline_1m_v1","kind":"` + item.kind + `"}`
+			seedOverviewMetricForInstance(t, db, item.id, "moox_cli", "probe", "moox_collector_market_egress_functions", labels, item.value, now)
+		}
+	})
+	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "stock_cn")
+	require.NoError(t, err)
+	var found *BusinessStatus
+	for index := range overview.BusinessChecks {
+		if overview.BusinessChecks[index].Module == "egress_gate:stock_cn_kline_1m_v1" {
+			found = &overview.BusinessChecks[index]
+			break
+		}
+	}
+	require.NotNil(t, found)
+	require.Equal(t, "down", found.Status)
+	require.Contains(t, found.Reason, "非空出口 IP 数")
+}
+
+func TestBuilderAcceptsCompleteStockCNInstrumentSnapshot(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		base := `{"market_id":"stock_cn","route_id":"stock_cn_instrument_v1","provider_id":"sina","result":"success"}`
+		seedOverviewMetricForInstance(t, db, "instrument-snapshot", "moox_collector_scf", "stock-instrument", "moox_collector_market_instrument_last_snapshot_timestamp_seconds", base, float64(now.Unix()), now)
+		seedOverviewMetricForInstance(t, db, "instrument-active", "moox_collector_scf", "stock-instrument", "moox_collector_market_instrument_active", base, 5180, now)
+		for _, exchange := range []string{"XSHG", "XSHE", "XBSE"} {
+			labels := `{"market_id":"stock_cn","route_id":"stock_cn_instrument_v1","provider_id":"sina","exchange":"` + exchange + `"}`
+			seedOverviewMetricForInstance(t, db, "instrument-"+exchange, "moox_collector_scf", "stock-instrument", "moox_collector_market_instrument_exchange", labels, 1, now)
+		}
+	})
+	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "stock_cn")
+	require.NoError(t, err)
+	var found *BusinessStatus
+	for index := range overview.BusinessChecks {
+		if overview.BusinessChecks[index].Module == "instrument_snapshot:sina" {
+			found = &overview.BusinessChecks[index]
+			break
+		}
+	}
+	require.NotNil(t, found)
+	require.Equal(t, "healthy", found.Status)
 }
 
 func openOverviewMetrics(t *testing.T, seed func(*gorm.DB)) *monmetrics.QueryService {

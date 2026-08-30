@@ -97,3 +97,27 @@ func TestCalendarTradingDaysAndExpectedBars(t *testing.T) {
 	require.Equal(t, "09:30", bars[0].In(location).Format("15:04"))
 	require.Equal(t, "14:59", bars[len(bars)-1].In(location).Format("15:04"))
 }
+
+func TestCalendarLookbackCountsTradingDays(t *testing.T) {
+	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
+	require.NoError(t, err)
+
+	start, err := calendar.LookbackStart(time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), 2)
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, 9, 30, 1, 30, 0, 0, time.UTC), start)
+}
+
+func TestCalendarLatestClosedMinuteWalksBackAcrossClosedDays(t *testing.T) {
+	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
+	require.NoError(t, err)
+
+	start, end, err := calendar.LatestClosedMinute(time.Date(2026, 8, 30, 4, 0, 0, 0, time.UTC), 5*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), start)
+	require.Equal(t, time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), end)
+
+	start, end, err = calendar.LatestClosedMinute(time.Date(2026, 10, 3, 4, 0, 0, 0, time.UTC), 5*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, 9, 30, 6, 59, 0, 0, time.UTC), start)
+	require.Equal(t, time.Date(2026, 9, 30, 7, 0, 0, 0, time.UTC), end)
+}

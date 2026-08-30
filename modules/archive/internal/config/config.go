@@ -89,7 +89,7 @@ func Default() *Config {
 			StateDir: "../data/archive-state",
 			DeviceID: "parquet-local",
 			Sources: map[string]SourceConfig{
-				"stock_cn":      {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
+				"stock_cn":      {Datasets: []string{"stock_cn_kline", "etf_kline", "index_kline"}},
 				"stock_us":      {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
 				"crypto_market": {Datasets: []string{"spot_kline_1h", "perpetual_kline_1h"}},
 			},

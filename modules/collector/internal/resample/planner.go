@@ -44,10 +44,10 @@ func PlanRule(ctx context.Context, source subjectSource, instances *store.TaskIn
 		return fmt.Errorf("get resample source Dataset: %w", err)
 	}
 	var subjects []domain.DatasetSubject
-	if sourceWithRuleUniverse, ok := source.(resampleRuleSubjectSource); ok {
-		subjects, err = sourceWithRuleUniverse.ListResampleSubjectsForRule(ctx, rule.SpaceID, params.SourceDatasetID, rule.Provider, params.SourceSeriesTag)
-	} else if sourceWithNativeUniverse, ok := source.(resampleSubjectSource); ok {
-		subjects, err = sourceWithNativeUniverse.ListResampleSubjects(ctx, rule.SpaceID, params.SourceDatasetID)
+	if sourceWithRuleSet, ok := source.(resampleRuleSubjectSource); ok {
+		subjects, err = sourceWithRuleSet.ListResampleSubjectsForRule(ctx, rule.SpaceID, params.SourceDatasetID, rule.Provider, params.SourceSeriesTag)
+	} else if sourceWithNativeSet, ok := source.(resampleSubjectSource); ok {
+		subjects, err = sourceWithNativeSet.ListResampleSubjects(ctx, rule.SpaceID, params.SourceDatasetID)
 	} else {
 		subjects, err = source.ListSubjects(ctx, rule.SpaceID, params.SourceDatasetID, info.DataSourceID)
 	}

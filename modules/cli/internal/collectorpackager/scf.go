@@ -113,6 +113,16 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 		}
 	}
 
+	routePath, err := stockCNRoutePath(opts.ConfigDir)
+	if err != nil {
+		return nil, err
+	}
+	if routePath != "" {
+		if err := addFile(routePath, "markets/stock_cn/route.yaml"); err != nil {
+			return nil, err
+		}
+	}
+
 	sort.Strings(entries)
 	return &BuildSCFPackageResult{Path: opts.OutPath, Entries: entries}, nil
 }
@@ -128,6 +138,21 @@ func stockCNCalendarPath(configDir string) (string, error) {
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("stock_cn calendar is required at %s: path is a directory", candidate)
+	}
+	return candidate, nil
+}
+
+func stockCNRoutePath(configDir string) (string, error) {
+	if filepath.Base(filepath.Clean(configDir)) != "stock_cn" {
+		return "", nil
+	}
+	candidate := filepath.Clean(filepath.Join(configDir, "..", "..", "..", "config", "markets", "stock_cn", "route.yaml"))
+	info, err := os.Stat(candidate)
+	if err != nil {
+		return "", fmt.Errorf("stock_cn route is required at %s: %w", candidate, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("stock_cn route is required at %s: path is a directory", candidate)
 	}
 	return candidate, nil
 }

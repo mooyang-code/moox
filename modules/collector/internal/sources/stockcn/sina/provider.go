@@ -19,18 +19,24 @@ import (
 
 type Config struct {
 	BaseURL                  string
+	KlineEndpoint            string
 	InstrumentBaseURL        string
 	HTTPClient               *http.Client
 	Now                      func() time.Time
 	InstrumentRequestTimeout time.Duration
+	RateLimit                marketdata.RateLimitPolicy
+	MaxBarsPerRequest        int
 }
 
 type Provider struct {
 	baseURL             string
+	klineEndpoint       string
 	instrumentBaseURL   string
 	client              *http.Client
 	now                 func() time.Time
 	instrumentTimeout   time.Duration
+	rateLimit           marketdata.RateLimitPolicy
+	maxBars             int
 	instrumentGuardOnce sync.Once
 	instrumentGuard     *marketdata.FeedGuard
 	instrumentGuardErr  error
@@ -42,6 +48,9 @@ func New(cfg Config) *Provider {
 	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://quotes.sina.cn"
+	}
+	if cfg.KlineEndpoint == "" {
+		cfg.KlineEndpoint = "/cn/api/jsonp_v2.php/var%20moox_kline=/CN_MarketDataService.getKLineData"
 	}
 	if cfg.InstrumentBaseURL == "" {
 		cfg.InstrumentBaseURL = "https://vip.stock.finance.sina.com.cn"
@@ -55,30 +64,35 @@ func New(cfg Config) *Provider {
 	if cfg.InstrumentRequestTimeout <= 0 {
 		cfg.InstrumentRequestTimeout = 5 * time.Second
 	}
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), instrumentBaseURL: strings.TrimRight(cfg.InstrumentBaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now, instrumentTimeout: cfg.InstrumentRequestTimeout}
+	if cfg.RateLimit.RequestsPerSecond <= 0 {
+		cfg.RateLimit = marketdata.RateLimitPolicy{RequestsPerSecond: 5, Burst: 2, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: 5 * time.Second}
+	}
+	if cfg.RateLimit.RequestTimeout <= 0 {
+		cfg.RateLimit.RequestTimeout = cfg.InstrumentRequestTimeout
+	}
+	if cfg.MaxBarsPerRequest <= 0 {
+		cfg.MaxBarsPerRequest = 1023
+	}
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, instrumentBaseURL: strings.TrimRight(cfg.InstrumentBaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now, instrumentTimeout: cfg.InstrumentRequestTimeout, rateLimit: cfg.RateLimit, maxBars: cfg.MaxBarsPerRequest}
 }
 
 func (*Provider) Descriptor() marketdata.ProviderDescriptor {
 	return marketdata.ProviderDescriptor{ID: "sina", DisplayName: "Sina", Hosts: []string{"quotes.sina.cn", "vip.stock.finance.sina.com.cn"}}
 }
 
-func (*Provider) KlineSpec() marketdata.KlineSpec {
+func (p *Provider) KlineSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
 		Markets:           []string{"stock_cn"},
 		Exchanges:         []string{"XSHG", "XSHE", "XBSE"},
 		Frequencies:       []string{"1m"},
 		CompleteOHLCV:     true,
 		HasAmount:         true,
-		MaxBarsPerRequest: 1023,
+		MaxBarsPerRequest: p.maxBars,
 		TimestampMode:     marketdata.TimestampModeClose,
-		History:           marketdata.KlineHistoryCapability{MaxLookback: 5 * 24 * time.Hour},
-		RateLimit: marketdata.RateLimitPolicy{
-			RequestsPerSecond: 5,
-			Burst:             2,
-			MaxConcurrent:     1,
-			Cooldown:          time.Second,
-			RequestTimeout:    5 * time.Second,
-		},
+		// Sina's public endpoint exposes only its latest bounded page; keep
+		// history requests within the window that every active source can serve.
+		History:   marketdata.KlineHistoryCapability{MaxLookback: 24 * time.Hour},
+		RateLimit: p.rateLimit,
 	}
 }
 
@@ -88,13 +102,7 @@ func (p *Provider) InstrumentSpec() marketdata.InstrumentSpec {
 		Exchanges:    []string{"XSHG", "XSHE", "XBSE"},
 		FullSnapshot: true,
 		PageSize:     100,
-		RateLimit: marketdata.RateLimitPolicy{
-			RequestsPerSecond: 5,
-			Burst:             2,
-			MaxConcurrent:     1,
-			Cooldown:          time.Second,
-			RequestTimeout:    p.instrumentTimeout,
-		},
+		RateLimit:    p.rateLimit,
 	}
 }
 
@@ -115,13 +123,20 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if req.Frequency != "1m" {
 		return nil, fmt.Errorf("%w: sina only supports 1m", marketdata.ErrUnsupportedFrequency)
 	}
+	requestLimit := req.Limit
+	if !req.StartTime.IsZero() || !req.EndTime.IsZero() {
+		// Sina returns the latest page and has no start cursor. Ask for the
+		// largest verified page for historical/gap requests, then let the
+		// common pipeline enforce the exact half-open coverage interval.
+		requestLimit = p.maxBars
+	}
 	query := url.Values{
 		"symbol":  {req.ProviderSymbol},
 		"scale":   {"1"},
 		"ma":      {"no"},
-		"datalen": {fmt.Sprintf("%d", req.Limit)},
+		"datalen": {fmt.Sprintf("%d", requestLimit)},
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/cn/api/jsonp_v2.php/var%20moox_kline=/CN_MarketDataService.getKLineData?"+query.Encode(), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+p.klineEndpoint+"?"+query.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +154,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, err)
 	}
 	raw := strings.TrimSpace(string(body))
 	if index := strings.Index(raw, "var moox_kline="); index >= 0 {
@@ -243,7 +258,10 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 				return fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)
 			}
 			body, requestErr = io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-			return requestErr
+			if requestErr != nil {
+				return fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, requestErr)
+			}
+			return nil
 		}); err != nil {
 			return marketdata.InstrumentSnapshot{}, err
 		}

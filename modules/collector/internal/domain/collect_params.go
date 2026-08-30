@@ -82,6 +82,8 @@ type CollectSchedule struct {
 	Interval string `json:"interval"`
 }
 
+const InstrumentDataType = "instrument"
+
 // ParseCollectParams parses rule JSON and normalizes the standard shape.
 func ParseCollectParams(raw string, fallbackProvider string, fallbackMarketType string, fallbackDataType string) (*CollectParams, error) {
 	raw = strings.TrimSpace(raw)
@@ -123,8 +125,8 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 			p.Alignment = ResampleAlignmentEpochUTC
 		}
 	}
-	if p.Frequency == "" && strings.EqualFold(strings.TrimSpace(fallbackDataType), "symbol") {
-		// Full Symbol snapshots use an hourly cadence unless a valid explicit
+	if p.Frequency == "" && strings.EqualFold(strings.TrimSpace(fallbackDataType), InstrumentDataType) {
+		// Full Instrument snapshots use an hourly cadence unless a valid explicit
 		// frequency is supplied.
 		p.Frequency = "1h"
 	}
@@ -228,12 +230,12 @@ func (p *CollectParams) Validate() error {
 		if err := p.ValidateHistoryPolicy(); err != nil {
 			return err
 		}
-	case "symbol":
+	case InstrumentDataType:
 		if p.Source.Kind != "none" {
-			return fmt.Errorf("symbol source.kind must be none")
+			return fmt.Errorf("instrument source.kind must be none")
 		}
 		if p.SymbolSource != "exchange" {
-			return fmt.Errorf("symbol_source must be exchange for symbol task")
+			return fmt.Errorf("symbol_source must be exchange for instrument task")
 		}
 	case "kline_resample":
 		return p.ValidateKlineResample()

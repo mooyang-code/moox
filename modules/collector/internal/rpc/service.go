@@ -554,8 +554,10 @@ func validateTaskRule(rule domain.TaskRule) error {
 	if err := params.Validate(); err != nil {
 		return fmt.Errorf("invalid collect_params: %w", err)
 	}
-	if strings.EqualFold(params.Provider, "stock_cn_multi") && !strings.EqualFold(params.Collector.DataType, "kline") {
-		return fmt.Errorf("stock_cn_multi only supports kline collectors")
+	if strings.EqualFold(params.Provider, "stock_cn_multi") &&
+		!strings.EqualFold(params.Collector.DataType, "kline") &&
+		!strings.EqualFold(params.Collector.DataType, domain.InstrumentDataType) {
+		return fmt.Errorf("stock_cn_multi only supports kline and instrument collectors")
 	}
 	if !strings.EqualFold(params.Provider, "stock_cn_multi") {
 		definition, ok := jobs.JobDefinitionByDataType(params.Collector.DataType)
@@ -644,7 +646,7 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 		return err
 	}
 	switch params.Collector.DataType {
-	case "symbol":
+	case domain.InstrumentDataType:
 		return s.validateDataset(
 			ctx,
 			rule.SpaceID,

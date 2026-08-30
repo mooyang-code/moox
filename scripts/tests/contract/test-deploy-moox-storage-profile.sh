@@ -127,6 +127,7 @@ if grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED' "${FIXTURE_ROOT}/scripts/de
   echo 'legacy storage route seed environment remains in deployment script' >&2
   exit 1
 fi
+grep -q 'MOOX_STORAGE_EVENTBUS_URL=${quoted_storage_eventbus_url}' "${FIXTURE_ROOT}/scripts/deploy-moox.sh"
 assert_order() {
   local path="$1"
   shift

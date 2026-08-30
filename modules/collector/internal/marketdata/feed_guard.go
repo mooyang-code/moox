@@ -354,13 +354,26 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 			s.breaker.Observe(providerID, err)
 			return nil, err
 		}
-		if err := fetcher.KlineSpec().History.ValidateStart(req.Now, req.StartTime); err != nil {
+		spec := fetcher.KlineSpec()
+		if !spec.SupportsRequest(req) {
+			// A provider may cover only part of a market, such as Tencent's
+			// SH/SZ endpoint. This is a routing decision, not a provider fault,
+			// and must not consume an invocation breaker or an HTTP attempt.
+			s.breaker.Observe(providerID, nil)
+			lastErr = fmt.Errorf("%w: provider %s does not support market=%s exchange=%s frequency=%s", ErrProviderNotFound, providerID, req.MarketID, req.ExchangeID, req.Frequency)
+			continue
+		}
+		historyReference := req.Now
+		if !req.HistoryAsOf.IsZero() {
+			historyReference = req.HistoryAsOf
+		}
+		if err := spec.History.ValidateStart(historyReference, req.StartTime); err != nil {
 			s.breaker.Observe(providerID, err)
 			lastErr = err
 			continue
 		}
 
-		guard, err := s.router.feedGuard(providerID, fetcher.KlineSpec().RateLimit)
+		guard, err := s.router.feedGuard(providerID, fetcher.KlineSpec().RateLimit, req.RateBudgetRatio)
 		if err != nil {
 			s.breaker.Observe(providerID, err)
 			return nil, err
@@ -403,18 +416,48 @@ func (s *RouterSession) KlineSpec(providerID string) (KlineSpec, error) {
 	return fetcher.KlineSpec(), nil
 }
 
-func (r *Router) feedGuard(providerID string, policy RateLimitPolicy) (*FeedGuard, error) {
+func (r *Router) feedGuard(providerID string, policy RateLimitPolicy, rateBudgetRatio float64) (*FeedGuard, error) {
 	r.guardsMu.Lock()
 	defer r.guardsMu.Unlock()
 
-	guard, ok := r.feedGuardsByID[providerID]
+	rateBudgetRatio = normalizedRateBudgetRatio(rateBudgetRatio)
+	guardKey := providerID + "\x00" + strconv.FormatFloat(rateBudgetRatio, 'g', -1, 64)
+	guard, ok := r.feedGuardsByID[guardKey]
 	if ok {
 		return guard, nil
 	}
-	created, err := NewFeedGuard(policy, r.clock, r.sleep)
+	created, err := NewFeedGuard(scaleRateLimitPolicy(policy, rateBudgetRatio), r.clock, r.sleep)
 	if err != nil {
 		return nil, err
 	}
-	r.feedGuardsByID[providerID] = created
+	r.feedGuardsByID[guardKey] = created
 	return created, nil
+}
+
+func normalizedRateBudgetRatio(value float64) float64 {
+	if value <= 0 {
+		return 1
+	}
+	return value
+}
+
+func scaleRateLimitPolicy(policy RateLimitPolicy, ratio float64) RateLimitPolicy {
+	ratio = normalizedRateBudgetRatio(ratio)
+	if ratio >= 1 {
+		return policy
+	}
+	policy.RequestsPerSecond *= ratio
+	if policy.RequestsPerSecond <= 0 {
+		policy.RequestsPerSecond = 0.001
+	}
+	policy.Burst = maxInt(1, int(math.Floor(float64(policy.Burst)*ratio)))
+	policy.MaxConcurrent = maxInt(1, int(math.Floor(float64(policy.MaxConcurrent)*ratio)))
+	return policy
+}
+
+func maxInt(left, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }

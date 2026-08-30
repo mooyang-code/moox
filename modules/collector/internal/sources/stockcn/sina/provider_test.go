@@ -3,6 +3,7 @@ package sina
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -39,6 +40,37 @@ func TestFetchKlinesParsesFixture(t *testing.T) {
 	require.Equal(t, time.Date(2026, 8, 29, 1, 29, 0, 0, time.UTC), rows[0].BarStart)
 	require.Equal(t, time.Date(2026, 8, 29, 1, 30, 0, 0, time.UTC), rows[0].BarEnd)
 	require.Equal(t, marketdata.TimestampModeClose, provider.KlineSpec().TimestampMode)
+}
+
+func TestFetchKlinesRequestsFullPageForHistoricalCoverage(t *testing.T) {
+	fixture := filepath.Join("testdata", "kline.json")
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "1023", r.URL.Query().Get("datalen"))
+		body, err := os.ReadFile(fixture)
+		require.NoError(t, err)
+		_, _ = w.Write(body)
+	}))
+	now := time.Date(2026, 8, 29, 1, 32, 0, 0, time.UTC)
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, Now: func() time.Time { return now }})
+
+	rows, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{
+		SubjectID: "000001.XSHE", ProviderSymbol: "sz000001", Frequency: "1m", Limit: 1,
+		StartTime: now.Add(-time.Hour), EndTime: now, RequestID: "req-sina-history",
+	})
+
+	require.NoError(t, err)
+	require.NotEmpty(t, rows)
+}
+
+func TestFetchKlinesClassifiesBodyReadErrorForFallback(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: readErrorBody{}, Header: make(http.Header), Request: req}, nil
+	})}
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client})
+
+	_, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{SubjectID: "600000.XSHG", ProviderSymbol: "sh600000", Frequency: "1m", Limit: 2, RequestID: "body-error"})
+	require.ErrorIs(t, err, marketdata.ErrProtocol)
+	require.True(t, marketdata.CanFallback(context.Background(), err), "truncated upstream bodies are retryable provider failures")
 }
 
 func TestFetchInstrumentSnapshotAcceptsEmptyTerminalPageAfterExactMultiple(t *testing.T) {
@@ -190,6 +222,11 @@ func TestFetchInstrumentSnapshotFailsWhenLaterPageReturnsHTTPError(t *testing.T)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
+
+type readErrorBody struct{}
+
+func (readErrorBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (readErrorBody) Close() error             { return nil }
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
