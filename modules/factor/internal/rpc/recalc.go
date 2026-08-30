@@ -98,17 +98,29 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 				defer releaseOperation()
 			}
 		}
+		if s.meta == nil {
+			return &factorpb.RecalcFactorRsp{RetInfo: inner(fmt.Errorf("View metadata is required for recalc provenance"))}, nil
+		}
 		for period := start; period.Before(end); {
 			triggerEventID := recalcTriggerEventID(requestID, req, period)
 			ready := &publicstoragepb.ViewSourcePeriodReady{SourceViewId: sourceViewID, Frequency: req.GetFreq(), PeriodTime: period.Unix(), Status: "complete", PrimarySubjects: []string{req.GetSubjectId()}, ReadyAt: timestamppb.New(period.UTC())}
+			activeIndexID, indexErr := s.meta.SourceViewActiveIndexID(ctx, req.GetSpaceId(), sourceViewID)
+			if indexErr != nil {
+				return &factorpb.RecalcFactorRsp{RetInfo: inner(fmt.Errorf("resolve source View active index: %w", indexErr))}, nil
+			}
+			ready.ActiveIndexId = activeIndexID
 			// A Result View is the complete output of its Source View. The
 			// executor validates the requested factor under the operation gate,
 			// then recalculates the whole group for a coherent result snapshot.
 			var executeErr error
 			if gatedExecutor != nil {
-				executeErr = gatedExecutor.ExecuteSelectedWithGate(ctx, req.GetSpaceId(), triggerEventID, req.GetFactorId(), ready)
+				// A Result View is an atomic factor group. A factor-specific
+				// request selects and validates the requested binding above, but
+				// execution must still refresh every sibling binding so the output
+				// snapshot cannot mix generations.
+				executeErr = gatedExecutor.ExecuteSelectedWithGate(ctx, req.GetSpaceId(), triggerEventID, "", ready)
 			} else {
-				executeErr = s.viewReadyExecutor.ExecuteSelected(ctx, req.GetSpaceId(), triggerEventID, req.GetFactorId(), ready)
+				executeErr = s.viewReadyExecutor.ExecuteSelected(ctx, req.GetSpaceId(), triggerEventID, "", ready)
 			}
 			if executeErr != nil {
 				return &factorpb.RecalcFactorRsp{RetInfo: inner(executeErr)}, nil

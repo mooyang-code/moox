@@ -79,7 +79,9 @@ streams:
     duplicates: 10m
     max_bytes: 134217728
   - name: MOOX_TRADE
-    subjects: ["moox.trade.target.requested.v1.>"]
+    # Keep the legacy quantity family during migration; Trade consumes only
+    # the versioned weight family and therefore cannot reinterpret old bytes.
+    subjects: ["moox.trade.target.requested.v1.>", "moox.trade.target.weight_requested.v1.>"]
     retention: work_queue
     discard: old
     storage: file

@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	defaultRepairStream   = "MOOX_STORAGE"
+	defaultRepairJSName   = events.StorageViewConsumerStream
 	defaultRepairConsumer = events.StorageViewKlineConsumer
 	defaultRepairTimeout  = 2 * time.Minute
 )
@@ -128,7 +128,7 @@ type forceRebuildViewOptions struct {
 func runForceRebuildView(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs := flag.NewFlagSet("force-rebuild-view", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	opts := forceRebuildViewOptions{stream: defaultRepairStream, consumer: defaultRepairConsumer, timeout: defaultRepairTimeout, restart: true}
+	opts := forceRebuildViewOptions{stream: defaultRepairJSName, consumer: defaultRepairConsumer, timeout: defaultRepairTimeout, restart: true}
 	fs.StringVar(&opts.spaceID, "space-id", "", "View space ID")
 	fs.StringVar(&opts.viewID, "view-id", "", "View ID")
 	fs.StringVar(&opts.storageConf, "storage-conf", defaultRepairStorageConfigPath(), "storage.yaml path")
@@ -332,7 +332,7 @@ func bindRepairViewFlags(fs *flag.FlagSet, opts *repairViewOptions) {
 	fs.StringVar(&opts.viewID, "view-id", "", "View ID")
 	fs.StringVar(&opts.storageConf, "storage-conf", defaultRepairStorageConfigPath(), "storage.yaml path")
 	fs.StringVar(&opts.packageRoot, "package-root", "", "storage package root containing start.sh/stop.sh")
-	fs.StringVar(&opts.stream, "stream", defaultRepairStream, "JetStream stream")
+	fs.StringVar(&opts.stream, "stream", defaultRepairJSName, "JetStream stream")
 	fs.StringVar(&opts.consumer, "consumer", defaultRepairConsumer, "durable storage View consumer")
 	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential file")
 	fs.StringVar(&opts.eventBusURL, "eventbus-url", "", "NATS URL override")

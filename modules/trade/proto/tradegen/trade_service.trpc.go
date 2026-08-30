@@ -89,6 +89,8 @@ type TradeConsoleServiceService interface {
 
 	ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq) (*ReleaseLogicalAccountOwnerRsp, error)
 
+	RebindLogicalAccountOwner(ctx context.Context, req *RebindLogicalAccountOwnerReq) (*RebindLogicalAccountOwnerRsp, error)
+
 	PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq) (*PauseLogicalAccountRsp, error)
 
 	ResumeLogicalAccount(ctx context.Context, req *ResumeLogicalAccountReq) (*ResumeLogicalAccountRsp, error)
@@ -364,6 +366,24 @@ func TradeConsoleServiceService_ReleaseLogicalAccountOwner_Handler(svr interface
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(TradeConsoleServiceService).ReleaseLogicalAccountOwner(ctx, reqbody.(*ReleaseLogicalAccountOwnerReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_RebindLogicalAccountOwner_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RebindLogicalAccountOwnerReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).RebindLogicalAccountOwner(ctx, reqbody.(*RebindLogicalAccountOwnerReq))
 	}
 
 	var rsp interface{}
@@ -724,6 +744,10 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_ReleaseLogicalAccountOwner_Handler,
 		},
 		{
+			Name: "/trpc.moox.trade.TradeConsoleService/RebindLogicalAccountOwner",
+			Func: TradeConsoleServiceService_RebindLogicalAccountOwner_Handler,
+		},
+		{
 			Name: "/trpc.moox.trade.TradeConsoleService/PauseLogicalAccount",
 			Func: TradeConsoleServiceService_PauseLogicalAccount_Handler,
 		},
@@ -849,6 +873,9 @@ func (s *UnimplementedTradeConsoleService) ClaimLogicalAccountOwner(ctx context.
 func (s *UnimplementedTradeConsoleService) ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq) (*ReleaseLogicalAccountOwnerRsp, error) {
 	return nil, errors.New("rpc ReleaseLogicalAccountOwner of service TradeConsoleService is not implemented")
 }
+func (s *UnimplementedTradeConsoleService) RebindLogicalAccountOwner(ctx context.Context, req *RebindLogicalAccountOwnerReq) (*RebindLogicalAccountOwnerRsp, error) {
+	return nil, errors.New("rpc RebindLogicalAccountOwner of service TradeConsoleService is not implemented")
+}
 func (s *UnimplementedTradeConsoleService) PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq) (*PauseLogicalAccountRsp, error) {
 	return nil, errors.New("rpc PauseLogicalAccount of service TradeConsoleService is not implemented")
 }
@@ -967,6 +994,8 @@ type TradeConsoleServiceClientProxy interface {
 	ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq, opts ...client.Option) (rsp *ClaimLogicalAccountOwnerRsp, err error)
 
 	ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq, opts ...client.Option) (rsp *ReleaseLogicalAccountOwnerRsp, err error)
+
+	RebindLogicalAccountOwner(ctx context.Context, req *RebindLogicalAccountOwnerReq, opts ...client.Option) (rsp *RebindLogicalAccountOwnerRsp, err error)
 
 	PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq, opts ...client.Option) (rsp *PauseLogicalAccountRsp, err error)
 
@@ -1284,6 +1313,26 @@ func (c *TradeConsoleServiceClientProxyImpl) ReleaseLogicalAccountOwner(ctx cont
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReleaseLogicalAccountOwnerRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) RebindLogicalAccountOwner(ctx context.Context, req *RebindLogicalAccountOwnerReq, opts ...client.Option) (*RebindLogicalAccountOwnerRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/RebindLogicalAccountOwner")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("RebindLogicalAccountOwner")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RebindLogicalAccountOwnerRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

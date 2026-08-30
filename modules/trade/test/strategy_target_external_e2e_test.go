@@ -10,9 +10,12 @@ import (
 	"testing"
 	"time"
 
+	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,7 +67,8 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 		defer close(done)
 		runErr = eventconsumer.RunTarget(ctx, eventconsumer.TargetOptions{
 			Client: client, ConsumerName: "strategy-trade-external-e2e",
-			Store: tradeStore,
+			Store:          tradeStore,
+			WeightResolver: externalWeightResolver{},
 		})
 	}()
 	var cleanupOnce sync.Once
@@ -94,4 +98,17 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	<-done
 	require.ErrorIs(t, runErr, context.Canceled)
 	cleanup()
+}
+
+type externalWeightResolver struct{}
+
+func (externalWeightResolver) Resolve(_ context.Context, signalTime int64, request *tradeeventpb.LogicalAccountTargetWeightRequested, _ string) (targetapp.WeightConversion, error) {
+	targets := make([]store.InstrumentTarget, 0, len(request.GetTargets()))
+	for _, target := range request.GetTargets() {
+		targets = append(targets, store.InstrumentTarget{InstrumentID: target.GetInstrumentId(), Quantity: target.GetTargetWeight()})
+	}
+	if signalTime <= 0 {
+		signalTime = time.Now().UTC().UnixMilli()
+	}
+	return targetapp.WeightConversion{SignalTime: signalTime, WeightsJSON: "[]", Equity: shared.MustDecimal("1"), EquitySourceTime: signalTime, ReferencePrices: map[string]string{}, QuantityTargets: targets}, nil
 }

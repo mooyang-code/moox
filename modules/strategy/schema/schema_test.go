@@ -29,6 +29,7 @@ func TestAllSQLCreatesExactlyStrategyTables(t *testing.T) {
 	}
 	want := []string{
 		"t_strategies",
+		"t_strategy_inbox",
 		"t_strategy_outbox",
 		"t_strategy_results",
 		"t_strategy_runners",
@@ -47,10 +48,10 @@ func TestStrategySchemaUsesRunnerAndResultColumns(t *testing.T) {
 		"command_sequence",
 		"last_result_id",
 		"result_id",
-		"trigger_bar_time",
-		"namespace",
+		"period_time",
 		"input_hash",
-		"output_json",
+		"targets_json",
+		"debug_info_json",
 	} {
 		if !strings.Contains(sql, column) {
 			t.Errorf("strategy schema does not contain column %q", column)
@@ -60,7 +61,8 @@ func TestStrategySchemaUsesRunnerAndResultColumns(t *testing.T) {
 		"CREATE UNIQUE INDEX IF NOT EXISTS ux_strategy_runners_enabled_logical_account",
 		"ON t_strategy_runners (space_id, logical_account_id)",
 		"WHERE logical_account_id IS NOT NULL AND status = 'ENABLED'",
-		"UNIQUE (runner_id, strategy_id, namespace, trigger_bar_time)",
+		"CREATE INDEX IF NOT EXISTS ix_strategy_results_logical_period",
+		"ON t_strategy_results (runner_id, strategy_id, period_time, created_at)",
 	} {
 		if !strings.Contains(sql, indexPart) {
 			t.Errorf("strategy schema does not contain %q", indexPart)

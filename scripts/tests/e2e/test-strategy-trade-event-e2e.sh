@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 PORT=${MOOX_E2E_NATS_PORT:-44222}
 WORK_DIR=$(mktemp -d)
 NATS_URL="nats://127.0.0.1:${PORT}"

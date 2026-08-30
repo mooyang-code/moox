@@ -314,7 +314,7 @@ func TestServiceDeploymentSeedRestrictsSkillToTimeSeriesReads(t *testing.T) {
 		require.NotContains(t, general["gateway_callers"], "moox-skill")
 		require.NotNil(t, readOnly)
 		require.Equal(t, []any{"ReadTimeSeriesRows"}, readOnly["gateway_methods"])
-		require.Equal(t, []any{"admin-gateway", "collector", "factor", "monitor", "archive", "storage-view", "moox-skill"}, readOnly["gateway_callers"])
+		require.Equal(t, []any{"admin-gateway", "collector", "factor", "monitor", "archive", "storage-view", "strategy", "moox-skill"}, readOnly["gateway_callers"])
 		return
 	}
 	t.Fatal("storage-primary deployment is missing")
@@ -328,10 +328,16 @@ func TestServiceDeploymentSeedRestrictsFactorGatewayCallers(t *testing.T) {
 			continue
 		}
 		require.Equal(t, []any{
-			"CreateFactor", "UpdateFactor", "GetFactor", "ListFactors", "SetFactorStatus", "DeleteFactor",
-			"UpsertBinding", "ListBindings", "DeleteBinding", "RecalcFactor", "GetEngineStatus",
+			"CreateFactor", "UpdateFactor", "SetFactorStatus", "DeleteFactor",
+			"UpsertBinding", "DeleteBinding", "RecalcFactor", "GetEngineStatus",
 		}, item.ExtraConfig["gateway_methods"])
 		require.Equal(t, []any{"admin-gateway", "moox-cli"}, item.ExtraConfig["gateway_callers"])
+		routes, ok := item.ExtraConfig["gateway_routes"].([]any)
+		require.True(t, ok)
+		require.Len(t, routes, 1)
+		readRoute := routes[0].(map[string]any)
+		require.Equal(t, []any{"GetFactor", "ListFactors", "ListBindings"}, readRoute["gateway_methods"])
+		require.Equal(t, []any{"admin-gateway", "moox-cli", "strategy"}, readRoute["gateway_callers"])
 		return
 	}
 	t.Fatal("moox_factor deployment is missing")

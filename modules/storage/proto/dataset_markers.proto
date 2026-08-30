@@ -24,6 +24,7 @@ message FactorBindingPeriodState {
   string status = 3;
   repeated string skipped_subjects = 4;
   repeated string failed_subjects = 5;
+  string source_hash = 6;
 }
 
 // FactorPeriodComputedMarker is appended after all result row writes commit.
@@ -36,6 +37,8 @@ message FactorPeriodComputedMarker {
   repeated FactorBindingPeriodState bindings = 6;
   google.protobuf.Timestamp computed_at = 7;
   string trigger_event_id = 8;
+  string source_index_id = 9;
+  uint64 source_index_revision = 10;
 }
 
 // DatasetSyncPointMarker orders an import/catchup request after its row writes.

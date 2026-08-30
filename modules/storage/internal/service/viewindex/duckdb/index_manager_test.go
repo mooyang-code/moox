@@ -293,6 +293,47 @@ func TestDuckDBSeriesTagSchemaIdentitySelectorsAndUpsert(t *testing.T) {
 	}
 }
 
+func TestBackfillPreservesLiveFieldsAndProvenance(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{
+		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1,
+		Engine: "duckdb", SchemaHash: "hash",
+		Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+	}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	key := duckRowKey("s", "prices", "BTC", "1m", "2026-07-29T00:00:00Z", "")
+	write := func(close float64, sourceHash string) viewindex.RowWrite {
+		return viewindex.RowWrite{
+			Key:        viewindex.RowKey{Key: key},
+			Fields:     []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: close}}}},
+			Attributes: map[string]*pb.TypedValue{"factor.source_hash.bias": {Value: &pb.TypedValue_StringValue{StringValue: sourceHash}}},
+		}
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{RowWrites: []viewindex.RowWrite{write(2, "hash-b")}, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{RowWrites: []viewindex.RowWrite{write(1, "hash-a")}, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.Backfill}); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || fieldDouble(rows[0], "close") != 2 {
+		t.Fatalf("backfill replaced live field: rows=%v", rows)
+	}
+	got := rows[0].GetAttributes()["factor.source_hash.bias"].GetStringValue()
+	if got != "hash-b" {
+		t.Fatalf("backfill replaced live provenance: got %q", got)
+	}
+}
+
 func TestDuckDBStableTotalOrderAndPagination(t *testing.T) {
 	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
 	if err != nil {

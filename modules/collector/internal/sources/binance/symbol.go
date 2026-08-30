@@ -334,7 +334,6 @@ func reconcileInactiveSymbolMemberships(
 		subjectID := strings.TrimSpace(normalizedSubjectID(symbol, instType))
 		if subjectID != "" {
 			activeSubjectIDs[subjectID] = struct{}{}
-			activeSubjectIDs[legacySubjectID(subjectID)] = struct{}{}
 		}
 	}
 	inactiveMemberships := make([]*storagepb.DatasetSubject, 0)
@@ -390,9 +389,6 @@ func inactiveSymbolInfo(subjectID string, market ...string) *exchange.SymbolInfo
 	if len(parts) >= 2 {
 		baseAsset, quoteAsset = parts[0], parts[1]
 	}
-	if len(parts) >= 3 {
-		subjectID = strings.Join(parts[:2], "-")
-	}
 	return &exchange.SymbolInfo{
 		Symbol:     subjectID,
 		BaseAsset:  baseAsset,
@@ -419,9 +415,10 @@ func (c *SymbolCollector) sendSymbolBatch(
 		if _, exists := existingActive[subjectID]; exists {
 			continue
 		}
-		if _, exists := existingActive[legacySubjectID(subjectID)]; exists {
-			continue
-		}
+		// Do not skip a legacy BASE-QUOTE subject. Registering the canonical
+		// market-suffixed ID updates the external-symbol mapping and binds the
+		// active dataset to the new identity; the stale legacy membership is
+		// deactivated by the snapshot reconciliation pass.
 		if err := writer.RegisterDataSubject(ctx, buildSymbolRegisterRequest(symbol, spaceID, datasetID, binding)); err != nil {
 			return err
 		}
@@ -452,6 +449,7 @@ func buildSymbolRegisterRequest(
 			Attributes: map[string]string{
 				"instrument_id":   subjectID,
 				"exchange":        "binance",
+				"series_tag":      binanceSeriesTag,
 				"market_type":     strings.ToUpper(binding.SubjectMarket),
 				"base_asset":      symbol.BaseAsset,
 				"quote_asset":     symbol.QuoteAsset,
@@ -586,14 +584,6 @@ func externalSymbol(symbol *exchange.SymbolInfo) string {
 		return strings.Join(parts[:2], "")
 	}
 	return strings.ReplaceAll(value, "-", "")
-}
-
-func legacySubjectID(subjectID string) string {
-	parts := strings.Split(strings.ToUpper(strings.TrimSpace(subjectID)), "-")
-	if len(parts) >= 2 {
-		return parts[0] + "-" + parts[1]
-	}
-	return strings.ToUpper(strings.TrimSpace(subjectID))
 }
 
 func containsHyphen(value string) bool {

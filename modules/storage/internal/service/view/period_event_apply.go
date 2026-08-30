@@ -88,7 +88,11 @@ func (s *Service) HandleDatasetPeriodCollected(ctx context.Context, message *eve
 			}
 		}
 		s.metrics.ObservePeriodWaiting(view.GetViewId(), payload.GetFrequency(), waiting)
-		ready, ok := sourceReadyPayload(view, payload.GetFrequency(), payload.GetPeriodTime(), statesRsp.GetStates(), message.GetOccurredAt())
+		activeRevision, revisionErr := s.readIndexRevision(ctx, view.GetActiveIndexId(), nil)
+		if revisionErr != nil {
+			return revisionErr
+		}
+		ready, ok := sourceReadyPayload(view, payload.GetFrequency(), payload.GetPeriodTime(), statesRsp.GetStates(), message.GetOccurredAt(), activeRevision)
 		if !ok {
 			continue
 		}
@@ -133,9 +137,26 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 				bindings = append(bindings, proto.Clone(state).(*storageeventpb.FactorBindingPeriodState))
 			}
 		}
+		resultIndexID := ""
+		// Legacy Factor markers have no source generation. Do not add a
+		// half-provenance result index, otherwise compatibility payloads would
+		// fail the new source-hash validation and wedge the ready publisher.
+		if payload.GetSourceIndexId() != "" && payload.GetSourceIndexRevision() != 0 {
+			resultIndexID = view.GetActiveIndexId()
+		}
+		resultRevision := uint64(0)
+		if payload.GetSourceIndexId() != "" && payload.GetSourceIndexRevision() != 0 {
+			var revisionErr error
+			resultRevision, revisionErr = s.readIndexRevision(ctx, view.GetActiveIndexId(), nil)
+			if revisionErr != nil {
+				return revisionErr
+			}
+		}
 		ready := &storageeventpb.ViewFactorPeriodReady{
 			SourceViewId: payload.GetSourceViewId(), ResultViewId: view.GetViewId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
 			Status: payload.GetStatus(), Bindings: bindings, ReadyAt: cloneTimestamp(message.GetOccurredAt()),
+			SourceIndexId: payload.GetSourceIndexId(), ResultIndexId: resultIndexID,
+			SourceIndexRevision: payload.GetSourceIndexRevision(), ResultIndexRevision: resultRevision,
 		}
 		eventID := stableViewEventID("factor-ready", message.GetEventId(), view.GetViewId())
 		if _, err := publisher.Publish(ctx, events.ViewFactorPeriodReady, ready, events.PublishOptions{
@@ -277,6 +298,7 @@ func (s *Service) viewsForDataset(spaceID, datasetID string, includeBuilding boo
 	for _, candidate := range candidates {
 		runtime := candidate.runtime
 		runtime.mu.Lock()
+		activeID := runtime.active
 		active := runtime.active != "" || (includeBuilding && runtime.next != "")
 		datasetIDs := append([]string(nil), runtime.activeDatasetIDs...)
 		primaryDatasetID := runtime.activePrimaryDatasetID
@@ -302,6 +324,9 @@ func (s *Service) viewsForDataset(spaceID, datasetID string, includeBuilding boo
 			// rebuild and must not change source-ready aggregation early.
 			view.DatasetIds = datasetIDs
 			view.PrimaryDatasetId = primaryDatasetID
+			if activeID != "" {
+				view.ActiveIndexId = activeID
+			}
 			result = append(result, view)
 		}
 	}
@@ -309,7 +334,7 @@ func (s *Service) viewsForDataset(spaceID, datasetID string, includeBuilding boo
 	return result
 }
 
-func sourceReadyPayload(view *pb.View, frequency string, periodTime int64, states []*pb.ViewPeriodDatasetState, occurredAt *timestamppb.Timestamp) (*storageeventpb.ViewSourcePeriodReady, bool) {
+func sourceReadyPayload(view *pb.View, frequency string, periodTime int64, states []*pb.ViewPeriodDatasetState, occurredAt *timestamppb.Timestamp, activeRevision uint64) (*storageeventpb.ViewSourcePeriodReady, bool) {
 	byDataset := make(map[string]*pb.ViewPeriodDatasetState, len(states))
 	for _, state := range states {
 		if state != nil {
@@ -341,6 +366,7 @@ func sourceReadyPayload(view *pb.View, frequency string, periodTime int64, state
 	return &storageeventpb.ViewSourcePeriodReady{
 		SourceViewId: view.GetViewId(), Frequency: frequency, PeriodTime: periodTime, Status: status,
 		Datasets: datasets, PrimarySubjects: uniqueSortedStrings(primarySubjects), ReadyAt: readyAt,
+		ActiveIndexId: view.GetActiveIndexId(), ActiveIndexRevision: activeRevision,
 	}, true
 }
 

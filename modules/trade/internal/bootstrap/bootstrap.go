@@ -110,7 +110,8 @@ func initialize(
 		return nil, fmt.Errorf("register trade balance metrics: %w", err)
 	}
 	manager.OnSessionRemoved = balanceMetrics.Remove
-	equitySampler := traderuntime.NewEquitySampler(&equityapp.Service{Store: tradeStore, Adapters: manager})
+	equityService := &equityapp.Service{Store: tradeStore, Adapters: manager}
+	equitySampler := traderuntime.NewEquitySampler(equityService)
 	registerEquitySamplerTimer(serverInstance, equitySampler)
 	fillReducer := &consumer.Reducer{Store: tradeStore, Enqueue: equitySampler.Enqueue}
 	syncService := &accountsync.Service{
@@ -314,6 +315,11 @@ func initialize(
 		Prices:           targetapp.ExchangePriceSource{Adapters: manager},
 		MaxChildNotional: shared.MustDecimal("100000"),
 	}
+	weightResolver := &targetapp.WeightResolver{
+		Store:  tradeStore,
+		Prices: targetapp.ExchangePriceSource{Adapters: manager},
+		Equity: equityService,
+	}
 	targetGate := &sync.Mutex{}
 	targetWorker := &traderuntime.TargetWorker{
 		Store: tradeStore, Executor: targetExecutor, Interval: time.Second,
@@ -461,6 +467,7 @@ func initialize(
 				Client: client, ConsumerName: cfg.EventBus.TargetConsumer,
 				Store: tradeStore, Wake: targetWorker.Wake,
 				SetReady: targetConsumerReady.Store, Gate: targetGate,
+				WeightResolver: weightResolver,
 			})
 		})
 	}

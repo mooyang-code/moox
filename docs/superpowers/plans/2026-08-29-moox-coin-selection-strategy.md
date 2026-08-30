@@ -1,10 +1,54 @@
 # MooX 选币策略执行框架实施计划
 
+> **文档状态（2026-08-30）：** 本文是 Strategy v2 的执行基线。实现、测试、独立
+> `codeCR`、发布和正式环境验收结果已回填；后续变更仍必须重新执行对应门禁，不能
+> 仅凭工作树状态、单元测试或本地制品宣称完成正式验收。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+## 当前实施状态
+
+截至 2026-08-30，以下工作已在当前工作树完成并经过验证：
+
+- [x] Strategy v2 声明式 Manifest、编译依赖冻结、InstrumentPool、EvaluationInput、PoolScoring、WeightAllocator、ready 消费、Result/outbox。
+- [x] Trade `target_weight` 消费、权益/报价换算、不可变 `TargetReceipt` 和现有 TargetExecutor 衔接。
+- [x] 12 个 XBX 因子 MooX 化、Bias/Cci 覆盖、catalog 导入入口及 Factor source hash 校验。
+- [x] Storage marker/outbox、View provenance attributes、跨 View active-index 快照屏障和当期单 RPC 读取约束。
+- [x] Factor ready 事件强制携带 `source_hash`；Trade 对共享 LIVE credential 去重权益，并保留 release-time owner fence。
+- [x] Strategy 对 DISABLED Runner 的 Trade release 具备启动及周期性重试；reset 部署可用既有 role 文件重建最新 EventBus ACL。
+- [x] 管理台、运行文档、模块测试、Web 测试/构建、事件/部署 E2E、发布包和二进制构建。
+- [x] 独立 `codeCR` 复审提出的 active-index 同代修订、recalc provenance fail-open、
+  终态 degraded 无限重试、Trade 跨服务 wall-clock owner fence、冻结 venue 误切换问题
+  已修复并补测试；最终独立 v15 复审确认 P0/P1 已清零。
+- [x] 已补齐 Trade owner-generation additive migration、Strategy V1 表归档迁移，以及
+  `VerifyDependencies` 临时 RPC 错误的 NAK/重试语义和回归测试；归档 V1 owner 的启动
+  协调释放、runner 并发锁和已启用 Runner 重复 Enable 的 Claim 修复已补齐。
+- [x] 正式环境部署及跨进程就绪链路验收：使用 `custom.toml` 中的受保护凭据登录
+  `ubuntu@106.53.107.122`，以组件 overlay 方式发布到
+  `/data/moox/prod`，保留既有 Control/Gateway/Storage 数据和密钥；EventBus、Trade、
+  Strategy 按顺序启动并通过认证 `/readyz`。
+
+验证记录：独立 `codeCR` v10 发现并已修复同 ID 接管绕过 Trade 生命周期重置的 P1；随后复审提出的
+owner 冲突、启动顺序、owner-generation TOCTOU、失效失败重投和同状态 Claim 快照问题也已修复：
+Generation 查询强制校验当前 Runner，失效重投比较 generation 并强制新 rebalance，Claim 返回的
+generation 会触发本地生命周期清理。Factor catalog 已改为批量事务并补回滚测试，当前保留的低风险 P2 包括纯 V1 schema
+属性/约束完整校验及 catalog 源文件提交后的整体原子性。归档 owner 已增加持久化完成标记，避免重复 Trade RPC。相关 Go 模块全量测试、定向 race、XBX
+Python 7 项测试、Strategy→EventBus→Trade E2E、发布/部署/架构合同测试均通过。最新独立
+`codeCR` v15、v16 复审确认 P0/P1 已清零；控制面响应刷新已落地，当前仅保留故障注入覆盖、V1
+schema 完整约束校验和 Factor source 文件整体原子性等低风险 P2。最新本地 Linux/amd64 发布包 `release/moox-dev-linux-amd64.tar.gz`
+的 SHA-256 为
+`57772255e433635496f785dfe16742ffbc76f04afc3bf305768776a75424197d`；该包已上传并部署到
+正式主机的 `/data/moox/prod`。正式验收记录为：EventBus、Trade、Strategy 三个进程运行中，
+三者 `/readyz` 均返回 HTTP 200 且 `ready=true`；Strategy `outbox_pending_count=0`，Trade
+`target_worker_ready=true`，远端 Strategy/Trade 二进制 SHA-256 与本地发布包一致。部署前对既有
+EventBus 的 `MOOX_TRADE` stream 和 Trade role ACL 做了兼容迁移，当前同时保留旧 quantity subject
+并启用新的 `moox.trade.target.weight_requested.v1.>` subject；Trade 只消费新的权重 durable。
+
+这里的 `[x]` 表示该项已有对应的代码、测试或正式运行证据；未打勾项仍不得视为完成。
 
 **Goal:** 将当前 Python `run-once + quantity` Strategy V1 直接替换为由 `ViewFactorPeriodReady` 驱动、按完整标的池当期求值并向 Trade 输出 FULL 目标权重的声明式选币策略框架。
 
-**Architecture:** 发布阶段将 `moox.strategy/v2` `Manifest` 严格编译为不可变 `StrategyDef.compiled_json`，冻结 Source View、Factor Binding、Factor Result View 和列依赖；运行阶段动态解析 InstrumentPool、加载当期 `EvaluationInput`、使用纯 Go evaluator 生成规范权重。Strategy 通过 inbox/outbox 和单 SQLite 事务保证事件幂等，Trade 在消费 `LogicalAccountTargetRequested` 时同步冻结权益、参考价格和 raw quantity，保存不可变 `TargetReceipt`，再复用现有 TargetExecutor 做账户选择、步长量化和下单。
+**Architecture:** 发布阶段将 `moox.strategy/v2` `Manifest` 严格编译为不可变 `StrategyDef.compiled_json`，冻结 Source View、Factor Binding、Factor Result View 和列依赖；运行阶段动态解析 InstrumentPool、加载当期 `EvaluationInput`、使用纯 Go evaluator 生成规范权重。Strategy 通过 inbox/outbox 和单 SQLite 事务保证事件幂等，Trade 在消费 `LogicalAccountTargetWeightRequested` 时同步冻结权益、参考价格和 raw quantity，保存不可变 `TargetReceipt`，再复用现有 TargetExecutor 做账户选择、步长量化和下单。Proto 采用增量字段和独立事件 subject，旧数量消息即使保留注册也不得进入新 consumer。
 
 **Tech Stack:** Go 1.25、tRPC-Go、Protobuf、SQLite/GORM、NATS JetStream、Storage Metadata/DataView、FactorMgr、Trade LogicalAccount、Vue 3/Pinia/Arco Design、Vitest/Playwright。
 
@@ -14,14 +58,20 @@
 
 本计划只以 [选币策略执行框架设计](../../选币策略执行框架设计.md) 为目标基线，原计划内容不再继承。
 
-- Factor 保持现有 `FactorDef + FactorBinding` 两层模型；不增加 `FactorInstance`，不修改 Factor 计算和完成事件协议。
+- Factor 保持现有 `FactorDef + FactorBinding` 两层模型；不增加 `FactorInstance`，不修改 Factor 计算和完成事件协议。12 个 XBX 因子作为独立因子文件交付，`circulating_supply` 不进入框架模型，需要时由独立 Factor 提供。
 - 一个 Runner 只有一个 Strategy、一个 UTC 日程、一份 InstrumentPoolRule 和最多一个 LogicalAccount。
 - 不建设 UniverseSnapshot、MarketFrame 制品、readiness 进度表、Slot、WeightMerger、Python 策略入口或 Backtest。
 - Strategy 只读取当期一行；历史窗口和 rolling 计算由 Factor 负责。
 - 一期 readiness 只有 `strict`；缺依赖、缺行或缺列时不写 Result、不改 sequence、不写 outbox。
 - Strategy 到 Trade 的跨模块目标只包含 `target_weight`；quantity 只在 Trade 内部同步换算后出现。
-- 项目未上线，不保留 V1 schema、RPC、Proto 字段、Python SDK 或兼容适配层。
-- 12 个 XBX 因子重写与导入属于独立交付，不进入本 Strategy 计划；本计划只依赖已启用的 `factor_id + Binding`。
+- 运行语义不保留 V1 schema、RPC、Python SDK 或兼容适配层；旧 Strategy V1 表仅在启动时
+  归档为 `legacy_strategy_v1_*`，不做字段语义映射。为避免 protobuf tag 重用，历史字段
+  可以保留在 wire descriptor 中，但 V2 服务必须拒绝并且不生成这些
+  字段。数量事件与权重事件使用不同 subject、payload 和 durable，切换前完成旧 durable
+  的排空或隔离。
+- 12 个 XBX 因子重写属于 Factor 独立交付；仓库提供 `modules/factor/factors/catalog.json` 与
+  `moox-factor-cli import-catalog` 作为可重复导入入口。本计划只依赖已启用的 `factor_id + Binding`，
+  不替环境决定 source View、space 或 Binding scope。
 - 命名固定为：用户 YAML 类型 `config.Manifest`、当期求值数据 `EvaluationInput`、启用复核
   `Compiler.VerifyDependencies`、标的池评分步骤 `PoolScoring`、方向权重分配步骤
   `WeightAllocator`、Trade 不可变处理回执 `TargetReceipt`。
@@ -34,11 +84,24 @@
   `factor_id` 引用。
 - ready 处理器只依赖 `InboxStore` 与 `EvaluationStore` 两个调用方接口，不建设覆盖 Strategy 全模块的大 Repository。
 
+### 命名落地检查表
+
+| 旧名称或易混淆概念 | 本计划中的名称 | 约束 |
+| --- | --- | --- |
+| `config.Config`、`Spec` | `config.Manifest` | 只表示用户 YAML，不承载进程环境配置 |
+| `ValidateFrozenDependencies` | `Compiler.VerifyDependencies` | 只验证编译后冻结的依赖 ID、状态、schema 和频率 |
+| `Panel` | `EvaluationInput` | 单周期、逐标的一行输入；不提供 DataFrame/持久化面板 API |
+| `CrossSection` | `PoolScoring` | 排名和加权评分的步骤名，输入是已解析的 `InstrumentPool` |
+| `InputBarrier` | `ReadinessChecker` | 无状态检查 View、行、列是否可读，不保存 barrier 进度 |
+| `PortfolioComposer` | `WeightAllocator` | 只在 long/short 方向内分配权重，不做跨策略合成 |
+| `t_logical_account_target_conversions`、`..._resolutions` | `t_logical_account_target_receipts` | 保存首次接受目标的不可变换算回执 |
+
 ## 实施口径补充
 
 设计文档未完全展开、但编码前必须固定的口径如下：
 
-1. 一期 DSL 只写 `factor_id`，因此被引用 Factor 必须只有一个 output；多 output Factor 在发布时拒绝。
+1. `input.factors[]` 至少写 `factor_id`，可选写 `output`。省略 `output` 时，被引用 Factor
+   必须恰好只有一个 output；多 output Factor 必须显式选择 output，编译产物冻结对应列。
 2. 配置和目标权重最多 18 位小数。归一化和等权使用固定 18 位整数单位及稳定余数分配，余数按配置顺序或 `instrument_id` 升序分配。
 3. 同一 instrument 同时入选 long/short 时求和净额；净额为零则省略，最终目标中 instrument 唯一。
 4. 混合市场时 rank 仍在完整 Pool 上计算；short 候选只允许非 Spot。纯 Spot 池配置 short 在编译期失败。
@@ -47,19 +110,28 @@
 7. 每次成功求值都保存当期 Result。权重与 current targets 相同则为 `hold`：更新最近结果/成功时间，但不改 targets、不增 sequence、不写 outbox。
 8. Result 逻辑键为 `(runner_id,strategy_id,period_time)`。同 hash 返回现有行；不同 hash 重新求值并 UPSERT 最新行。只有 `rebalance` 增加 sequence 和重发目标。
 9. 早于 Runner 最近成功周期的事件只记 inbox 后 ACK，防止旧信号倒灌；同周期允许 Factor latest-wins 重算。
-10. Trade 增加不可变回执表 `t_logical_account_target_receipts`，永久复用已接受 `target_id` 的首次权益、价格和 quantity；它不是异步 Resolver，不增加 PENDING/CAS/SUPERSEDED 状态机。
-11. Trade 报价按 LogicalAccount member 的 `(priority,trading_account_id)` 选择第一个 ready member；TargetExecutor 仍负责最终账户选择、contract value、step、minimum 和容量。
+10. Trade 增加不可变回执表 `t_logical_account_target_receipts`，永久复用已接受 `target_id` 的首次权益、价格和 quantity；它不是异步 Resolver，不增加 PENDING/CAS/SUPERSEDED 状态机。回执自然唯一键必须包含 `runner_id`，允许不同 Runner 各自从 1 开始；同一 Runner 的 sequence 仍必须单调不回退。
+11. Trade 报价按 LogicalAccount member 的 `(priority,trading_account_id)` 选择第一个 ready member；同一 LIVE `credential_secret_id`（结合 exchange/environment）只计入一次权益。TargetExecutor 仍负责最终账户选择、contract value、step、minimum 和容量。
 12. 一期每个 Result 逻辑键只保留 latest-wins 当前行，不增加 revision/history 表；ready event ID 只放 `debug_info.source_event_ids`，不参与 input hash。
+13. 新发布的 `FactorPeriodComputed`/`ViewFactorPeriodReady` 每个 Binding 必须携带非空
+    `source_hash`，并传递 source/result active-index provenance；升级窗口兼容旧 v1 outbox
+   （无 provenance 的旧消息可发布但 Strategy 不据此执行），公共事件、Storage marker
+   和 Strategy 运行期对新代际 fail-closed。
+14. View provenance 同时包含 `active_index_revision`。该 revision 由 Storage 依据持久化
+    View index 的 `updated_at` 派生，查询前后及分页间必须保持一致；Factor recalc 若无法
+    获取 active index 或 revision 直接失败，不得生成无 fence 的结果 marker。Strategy 对
+    已终态 degraded 的 strict 缺行/缺列只记录失败并 ACK inbox，避免无限重试污染消费者。
 
 ## 周期事件与全市场完整性
 
 全市场选币不由 Strategy 维护一个跨标的计数器，也不等待一个不具备明确数据归属的
-“全市场完成”事件。周期完成信号按数据层级发布：
+“全市场完成”事件。周期完成信号按数据层级上报并发布。Collector/Factor 只负责判定并向 Storage 上报
+marker；Storage DataNode 将 marker 与结果行按同一持久化顺序写入 outbox，再实际发布 EventBus 消息：
 
-| 事件 | 发布者 | 合同 |
+| 事件 | 判定/上报者 | Storage 发布合同 |
 | --- | --- | --- |
-| `DatasetPeriodCollected` | Collector | Source View 的某个 `period_time` 已提交并可查询；用于触发 Factor |
-| `ViewFactorPeriodReady` | Factor outbox | Factor Result View 的该周期结果已提交并可查询；用于触发 Strategy |
+| `DatasetPeriodCollected` | Collector -> Storage marker | Source View 的某个 `period_time` 已提交并可查询；Storage outbox 发布后用于触发 Factor |
+| `ViewFactorPeriodReady` | Factor -> Storage marker | Factor Result View 的该周期结果已提交并可查询；Storage outbox 发布后用于触发 Strategy |
 
 Factor 可以在内部日志中记录“factor period collected”，但不再额外维护一个与
 `ViewFactorPeriodReady` 语义重复的 Strategy 触发事件。Strategy 收到任意相关 ready 后，
@@ -68,9 +140,9 @@ Factor 可以在内部日志中记录“factor period collected”，但不再�
 始终基于全池样本，且事件重复由 inbox 去重、输入 hash 负责同周期 latest-wins。
 
 本计划只实现 Strategy 对 `ViewFactorPeriodReady` 的消费。`DatasetPeriodCollected` 的
-发布和 Factor 的结果 View 发布属于 Collector/Factor 的上游职责；发布前必须满足“数据
-已提交且可查询”的约束，缺少该上游能力时将阻塞 Strategy 的正式 E2E 验收，而不是在
-Strategy 内补一个临时全市场计数器。
+marker 上报和 Factor 的结果 marker 上报属于 Collector/Factor 的上游职责，Storage 负责
+持久化及实际发布；发布前必须满足“数据已提交且可查询”的约束，缺少该上游能力时将
+阻塞 Strategy 的正式 E2E 验收，而不是在 Strategy 内补一个临时全市场计数器。
 
 ## 目标文件图
 
@@ -195,6 +267,7 @@ type ManifestInput struct {
 
 type FactorRef struct {
     FactorID string `yaml:"factor_id"`
+    Output   string `yaml:"output,omitempty"`
 }
 
 type InstrumentPoolRule struct {
@@ -297,7 +370,7 @@ Expected: PASS 后提交。
 
 - [ ] **Step 1: 写编译失败矩阵**
 
-覆盖 Factor 不存在/disabled、多 output、缺匹配 Binding、Binding 非 enabled 或 space/source/frequency 不匹配、Source/Result View 非 active、Factor output 列找不到、Source primary dataset 不支持 frequency。
+覆盖 Factor 不存在/disabled、多 output 未选择 output、显式 output 不存在、缺匹配 Binding、Binding 非 enabled 或 space/source/frequency 不匹配、Source/Result View 非 active、Factor output 列找不到、Source primary dataset 不支持 frequency。
 
 ```go
 func TestCompileFreezesSingleOutputFactorBinding(t *testing.T) {
@@ -353,7 +426,7 @@ Factor 客户端只封装 `GetFactor/ListBindings` 并读完分页；Storage 客
 
 ```text
 origin_factor_id == factor_id
-factor_output == FactorDef.outputs[0]
+factor_output == input.factors[].output（省略时才要求 FactorDef.outputs 恰好一个）
 ```
 
 运行期使用冻结的实际 `column_name`，不猜列名、不访问 Factor SQLite。
@@ -370,6 +443,9 @@ func (c *Compiler) VerifyDependencies(
 ```
 
 `Compiler` 持有 Factor 与 Storage Catalog。Enable 时只复核冻结 ID/status/schema，不重新选择其他 Binding。
+Factor 的 `source_hash`、outputs 和 Binding 参数一旦被已启用 Runner 引用，不允许原地
+修改；公式修订必须创建新的 `factor_id`，再重新编译/启用 Strategy。`VerifyDependencies`
+只验证这个不可变发布事实，不负责把同名 Factor 自动切换到新公式。
 
 - [ ] **Step 6: 运行测试并提交**
 
@@ -486,11 +562,23 @@ start := period.Add(-time.Duration(minHistory-1) * dataFrequency)
 end := period.Add(time.Nanosecond)
 ```
 
-每个 `(subject_id,series_tag)` 只计 distinct data_time。多 venue 都适格时按配置顺序选第一个；历史不足写 `Ineligible` 而非运行错误。
+每个 `(subject_id,series_tag)` 只计 distinct data_time。多 venue 都适格时按配置顺序选第一个；历史不足写 `Ineligible` 而非运行错误。查询必须使用完整
+`space_id/dataset_id/subject_id/frequency/series_tag` selector；不得仅凭 instrument
+或 symbol 猜测数据集。
 
-- [ ] **Step 4: 实现当期多 View EvaluationInput 合并**
+- [ ] **Step 4: 实现当期 Source/Result View EvaluationInput 合并**
 
-Source View 和每个 Factor Result View 分别查询，selector 必须包含 `space_id/dataset_id/subject_id/freq/series_tag`，时间窗统一为单周期。以 instrument_id 左连接，Factor 列按 compiled column_name 映射回 factor_id。
+Source View 和一个承载全部因子输出的 Factor Result View 分别查询，selector 必须包含 `space_id/dataset_id/subject_id/frequency/series_tag`，时间窗统一为已闭合的
+`[period_time, period_time+1ns)`。上游必须先把该周期写入并标记可读；若 View 尚未完成
+则返回 RETRY，而不是把结束点悄悄推迟到下一根 K 线。以 instrument_id 左连接，Factor
+列按 compiled column_name 映射回 factor_id。
+当期横截面查询使用单个 DataView RPC（page size 为 selector 基数加一）读取，第一次记录
+View 的 `active_index_id` 并携带 `expected_active_index_id`。Storage 为每次成功写入递增
+`active_index_revision`，在查询前后核对 revision，并由后续分页携带
+`expected_active_index_revision`；检测到 A/B 切换或同一索引原地修订时返回
+`VIEW_NOT_READY`。同一 Strategy 若引用多个 Factor Result View，编译阶段直接拒绝；不能用
+单个 ready 事件拼出缺少代际信息的多 View 输入。若返回行数超过 selector 基数则拒绝该周期，不能分页拼接或静默丢弃重复
+序列。历史窗口统计仍可分页，但不参与当期权重计算。
 
 ```go
 type InstrumentInput struct {
@@ -508,6 +596,13 @@ TypedValue 只接受 int/double/string decimal；double 先拒绝 NaN/Inf，再�
 - [ ] **Step 5: 实现规范 input hash**
 
 SHA-256 输入只含 source hash、compiled hash、period、排序后 pool 和排序后 EvaluationInput values；不含 ready event ID、ready_at、查询耗时或分页游标。
+
+一期不持久化原始 `EvaluationInput` 或内容寻址快照，也不声称支持跨版本的 point-in-time
+重放。重试/重算会重新读取当前可查询 View；相同逻辑周期以 input hash 做 latest-wins。
+`active_index_id` 与 `active_index_revision` 只用于检测切代/并发原地修订；检测到旧代际时将
+ready 标记为 superseded 并 ACK，避免无限重试，用户可通过新 ready 或显式 recalc 重新生成。
+审计依赖 Result 的 debug、hash 和上游 View 保留期；若以后需要严格重放，应另行引入内容寻址
+的 Storage snapshot，不在本计划中偷偷模拟快照。
 
 - [ ] **Step 6: 运行测试并提交**
 
@@ -579,7 +674,7 @@ type Evaluation struct {
 }
 ```
 
-使用 Task 1 的 `DivideStable` 分配方向内权重；short 取负；按 instrument 求和并删除零。DebugInfo 至少保存 pool、venue route、history ineligible、各阶段数量、long/short 入选、gross、net。
+使用 Task 1 的 `DivideStable` 分配方向内权重；short 取负；按 instrument 求和并删除零。DebugInfo 至少保存 pool、venue route、history ineligible、各阶段数量、long/short 入选、gross、net。Strategy 仅做语义校验和方向内分配，不因为 gross 未达到 1 而拒绝；单项和 gross 风险上限由 Trade 统一执行。
 
 - [ ] **Step 5: 加入稳定 golden fixture**
 
@@ -618,7 +713,10 @@ func TestAlignedUsesUnixEpochAsUTCAnchor(t *testing.T) {
 }
 ```
 
-再覆盖重复 message、非 complete、无匹配 Runner、未对齐、旧周期、依赖未齐、strict 缺数、same/changed hash、周期 N 不齐但 N+1 成功、同 Runner 串行、不同 Runner 并行。
+再覆盖重复 message、非 complete、无匹配 Runner、未对齐、旧周期、依赖未齐、strict
+缺行/缺列、same/changed hash、周期 N 不齐但 N+1 成功、同 Runner 串行、不同 Runner 并行。
+明确断言：View 未完成或 Storage 暂时失败为 RETRY；View 已完成但池内缺行/缺列为终态
+ACK 并记录 `last_error`，不能让同一 delivery 无限重投。
 
 - [ ] **Step 2: 运行测试并确认失败**
 
@@ -646,7 +744,9 @@ type EvaluationStore interface {
 
 `ReadyDependency` 封装 `space_id/result_view_id/frequency`，避免裸字符串参数。`RunnerContext` 通过 `last_result_id` JOIN Result 一次携带 `LastSuccessfulPeriod`，不再逐 Runner 查询。`CommitEvaluation` 在事务内再次检查 period，防止旧周期覆盖新目标。
 
-Processor 使用 `sync.Map[runner_id]*sync.Mutex` 串行单 Runner，不等待未齐依赖，不创建 run 状态。协议/格式错误 TERM；Storage/Factor/SQLite/JetStream 暂时错误 RETRY；业务 no-op 和 strict skip ACK。
+Processor 使用 `sync.Map[runner_id]*sync.Mutex` 串行单 Runner，不等待未齐依赖，不创建 run 状态。协议/格式错误 TERM；Storage/Factor/SQLite/JetStream 暂时错误 RETRY；业务 no-op、superseded ready 和 strict skip ACK。依赖事件匹配至少包含 `(result_view_id, frequency)`；每个 Strategy 只允许一个 Factor Result View，随后由 Loader 对 Source/Result 两个依赖 View 做严格行/列完整性检查。
+
+错误分类必须显式落地：`ErrNotReady`、SQLite/Storage 临时错误返回 RETRY；已停用 Runner、逻辑周期冲突、非法 Manifest/权重、无效 Spot 负权重等确定性错误记失败并 ACK/TERM，不能把毒性消息无限重投，也不能把瞬时数据库错误吞掉后直接标记 inbox 已处理。
 
 - [ ] **Step 4: 实现 message 级 inbox 时机**
 
@@ -654,7 +754,7 @@ Processor 使用 `sync.Map[runner_id]*sync.Mutex` 串行单 Runner，不等待�
 
 - [ ] **Step 5: 实现 JetStream consumer**
 
-复用 Factor pull/ACK 模式，durable 固定为 `strategy_factor_ready_v1`，使用现有 `events.DecodeViewFactorPeriodReadyWithContentType`，不新增 Factor/Storage 事件协议。
+复用 Factor pull/ACK 模式，durable 固定为 `strategy_view_factor_ready_v1`，使用现有 `events.DecodeViewFactorPeriodReadyWithContentType`，不新增 Factor/Storage 事件协议。
 
 - [ ] **Step 6: 运行测试并提交**
 
@@ -690,7 +790,7 @@ func (s *Service) ResolveLogicalAccountEquity(
     ctx context.Context,
     spaceID string,
     logicalAccountID string,
-) (store.EquityPointRecord, error)
+) (shared.Decimal, int64, error)
 ```
 
 覆盖 live/paper、Spot 估值、多 member 汇总、disabled/unready、过期 snapshot。WeightResolver 覆盖正/负权重、Spot 负权重拒绝、空 FULL 无需行情、确定报价 member、过期价格、无支持 instrument。
@@ -699,7 +799,7 @@ func (s *Service) ResolveLogicalAccountEquity(
 func TestResolveWeightsFreezesEquityPriceAndRawBaseQuantity(t *testing.T) {
     got, err := resolver.Resolve(ctx, request("10000", "BTC-USDT-SPOT", "0.25", "20000"))
     require.NoError(t, err)
-    require.Equal(t, "0.125", got.Targets[0].Quantity)
+    require.Equal(t, "0.125", got.QuantityTargets[0].Quantity)
 }
 ```
 
@@ -724,23 +824,35 @@ CREATE TABLE IF NOT EXISTS t_logical_account_target_receipts (
     c_runner_id TEXT NOT NULL,
     c_command_sequence INTEGER NOT NULL,
     c_request_hash TEXT NOT NULL,
-    c_receipt_json TEXT NOT NULL,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_signal_time INTEGER NOT NULL,
+    c_weights_json TEXT NOT NULL,
+    c_equity TEXT NOT NULL,
+    c_equity_source_time INTEGER NOT NULL,
+    c_reference_prices_json TEXT NOT NULL,
+    c_quantity_targets_json TEXT NOT NULL,
+    c_accepted_at INTEGER NOT NULL,
     PRIMARY KEY (c_space_id, c_target_id),
-    UNIQUE (c_space_id, c_logical_account_id, c_command_sequence),
+    UNIQUE (c_space_id, c_logical_account_id, c_runner_id, c_command_sequence),
     FOREIGN KEY (c_space_id, c_logical_account_id)
         REFERENCES t_logical_accounts (c_space_id, c_logical_account_id),
     CHECK (c_request_hash <> ''),
-    CHECK (json_valid(c_receipt_json)),
-    CHECK (json_type(c_receipt_json) = 'object')
+    CHECK (json_valid(c_weights_json)),
+    CHECK (json_type(c_weights_json) = 'array'),
+    CHECK (json_valid(c_reference_prices_json)),
+    CHECK (json_type(c_reference_prices_json) = 'object'),
+    CHECK (json_valid(c_quantity_targets_json)),
+    CHECK (json_type(c_quantity_targets_json) = 'array')
 );
 ```
 
-`request_hash` 覆盖 space、target、runner、logical account、sequence、signal time 和按 instrument_id 排序后的规范权重。`receipt_json` 保存原始规范权重、首次权益及来源时间、参考价格及来源账户、raw quantity 和 accepted time；weights、prices、targets 均按 instrument_id 排序并保存 canonical decimal。空 FULL 目标也写 receipt，但不读取权益和行情。
+`request_hash` 覆盖 space、target、runner、logical account、sequence、signal time 和按 instrument_id 排序后的规范权重。回执列保存原始规范权重、首次权益及来源时间、参考价格及来源账户、raw quantity 和 accepted time；weights、prices、targets 均按 instrument_id 排序并保存 canonical decimal。空 FULL 目标也写 receipt，但不读取权益和行情。
 
 - [ ] **Step 4: 实现实时权益、报价路由和 raw quantity**
 
-权益复用现有 snapshot freshness/Spot valuation，不读分钟曲线。报价候选只取 enabled/ready member 和 TRADING instrument，按 priority/id 排序。
+权益复用现有 snapshot freshness/Spot valuation，不读分钟曲线。报价候选只取 enabled/ready member 和 TRADING instrument，按 priority/id 排序。选中的
+`trading_account_id/exchange_symbol/price` 必须作为回执事实传给后续 TargetExecutor；Executor
+不得静默切换到另一 member 后继续使用原 raw quantity。选中 member 失效时应走明确的
+重试/失败路径，不能重新估值而破坏回执可重放性。
 
 公式：
 
@@ -785,7 +897,7 @@ Expected: PASS 后提交。
 
 ```go
 func TestLogicalAccountTargetUsesWeightOnly(t *testing.T) {
-    fields := (&tradeeventpb.InstrumentTarget{}).ProtoReflect().Descriptor().Fields()
+    fields := (&tradeeventpb.InstrumentWeightTarget{}).ProtoReflect().Descriptor().Fields()
     require.NotNil(t, fields.ByName("target_weight"))
     require.Nil(t, fields.ByName("quantity"))
 }
@@ -796,13 +908,17 @@ func TestLogicalAccountTargetUsesWeightOnly(t *testing.T) {
 - [ ] **Step 2: 修改 Proto 并生成**
 
 ```protobuf
-message InstrumentTarget {
+message InstrumentWeightTarget {
   string instrument_id = 1;
   string target_weight = 2;
 }
+message LogicalAccountTargetWeightRequested { ... }
 ```
 
-不保留 deprecated quantity 或 reserved 声明；事件名保持 `LogicalAccountTargetRequested` / `trade.target.requested`。
+权重消息使用独立的 `LogicalAccountTargetWeightRequested` /
+`trade.target.weight_requested` 事件和 durable；旧数量事件如继续注册，不得复用其字段号
+或被新的 Trade consumer 消费。切换前必须确认旧 quantity durable 已停用、排空或隔离；
+不得把同一个旧 subject 的未确认消息交给新的权重 consumer。
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/packages/tradeeventpb
@@ -884,38 +1000,50 @@ Expected: PASS 后提交。
 
 - [ ] **Step 1: 写 V2 Proto、schema 和 Commit 状态矩阵**
 
-Proto 目标：
+Proto 目标（保持已有字段号不变，V2 只追加字段）：
 
 ```protobuf
-message InstrumentTarget { string instrument_id = 1; string target_weight = 2; }
+message InstrumentTarget {
+  string instrument_id = 1;
+  string quantity = 2;       // legacy，仅保留 wire 兼容，V2 不生成
+  string target_weight = 3;  // V2
+}
 message Strategy {
   string strategy_id = 1;
   string name = 2;
-  string kind = 3;
-  string manifest_yaml = 4;
-  string compiled_json = 5;
-  string source_hash = 6;
-  string created_at = 7;
+  string manifest_yaml = 3;  // legacy tag
+  string source_code = 4;    // legacy tag，V2 不接受
+  string source_hash = 5;
+  string created_at = 6;
+  string kind = 7;
+  string compiled_json = 8;
 }
 message StrategyRunner {
   string runner_id = 1;
   string strategy_id = 2;
   string space_id = 3;
-  string source_view_id = 4;
+  string view_id = 4;        // legacy tag
   string frequency = 5;
-  string logical_account_id = 6;
-  string status = 7;
-  repeated InstrumentTarget current_targets = 8;
-  int64 command_sequence = 9;
-  string last_result_id = 10;
-  string last_success_at = 11;
-  string last_error = 12;
+  string params_json = 6;    // legacy tag
+  string logical_account_id = 7;
+  string status = 8;
+  repeated InstrumentTarget current_targets = 9;
+  int64 command_sequence = 10;
+  string last_result_id = 11;
+  string last_success_at = 12;
+  string last_error = 13;
+  string source_view_id = 16; // V2
 }
 ```
 
-Result 使用 `period_time/targets/debug_info_json/input_hash/action/optional command_sequence`；删除 namespace/trigger_bar_time/output_json。服务删除 RunOnce/GetEngineStatus。
+Result 使用追加的 `period_time/targets/debug_info_json` 字段；旧
+`trigger_bar_time/namespace/output_json` 字段保留 wire tag 但 V2 不读写。服务删除
+RunOnce/GetEngineStatus。删除 RPC 时不得复用旧 message/RPC 字段号；生成 descriptor
+后运行 breaking check。
 
-Schema 只允许 `t_strategies/t_strategy_runners/t_strategy_results/t_strategy_outbox/t_strategy_inbox`；禁止 source_code、params_json、namespace、quantity、snapshot、slot、lease。Result unique 为 `(runner_id,strategy_id,period_time)`。
+Schema 只允许 `t_strategies/t_strategy_runners/t_strategy_results/t_strategy_outbox/t_strategy_inbox`；
+数据库不再写 source_code、params_json、namespace、quantity、snapshot、slot、lease。Result
+unique 为 `(runner_id,strategy_id,period_time)`。
 
 Commit 测试覆盖首次空目标 rebalance、same hash、changed hash + same targets 的 hold、changed targets、观察 Runner、空 FULL 清仓和事务回滚。
 
@@ -932,9 +1060,19 @@ Expected: generated service 不含 RunOnce/GetEngineStatus。
 
 - [ ] **Step 3: 重写 domain、schema 和 store**
 
-删除 ExecutionRequest、Python Output、Quantity、Namespace。Strategy 保存 compiled JSON；Runner 保存权重 current targets；Result 保存 latest row。
+运行域删除 ExecutionRequest、Python Output、Quantity、Namespace 的业务语义。Proto 中的
+legacy 字段只作反序列化兼容，服务入口必须拒绝非空 `source_code/params_json/quantity`
+并只生成 `compiled_json/target_weight`；Strategy 保存 compiled JSON，Runner 保存权重
+current targets，Result 保存 latest row。删除字段时保留原 tag，或使用新 message/RPC，
+禁止把旧 tag 改作新语义。
 
 事务顺序：锁定 Runner -> 读取同逻辑 Result -> same hash 返回 -> canonical 比较 targets -> UPSERT Result -> 更新 last result/success/error -> rebalance 时更新 targets/sequence -> 执行 Runner 写 outbox。`target_id=result_id`；观察 Runner不发 outbox。
+
+`command_sequence` 是 Runner 的持久命名空间：停用后重新启用、切换 Strategy 或重新绑定
+LogicalAccount 时不得将它重置为一个可能已使用的值。若产品确实需要从 1 开始，必须引入
+持久化 `runner_generation` 并把 generation 同时写入 target、outbox 和 TargetReceipt；
+本期采用更简单的方案，沿用同一 Runner 的单调 sequence，并为 Strategy/account 切换补
+回归测试。
 
 `t_strategy_inbox.c_message_id` 为主键，并保存 event_id/result_view_id/space/frequency/period/processed_at 供排障。
 
@@ -957,22 +1095,24 @@ factor:
   target: ip://127.0.0.1:11201
   timeout: 3s
 storage:
-  gateway_target: ip://127.0.0.1:11003
-  gateway_node_id: storage-gateway
-  key_id: strategy
-  hmac_key_file: ~/.config/moox/storage/strategy.key
+  target: ip://127.0.0.1:11003
+  target_node: storage-gateway
+  app_id: strategy
+  app_key: ${MOOX_STORAGE_PRIMARY_AUTH_SECRET -> HMAC-SHA256(app_id)}
+  view_app_key: ${MOOX_STORAGE_VIEW_AUTH_SECRET -> HMAC-SHA256(app_id)}
   timeout: 5s
 eventbus:
-  consumer_name: strategy_factor_ready_v1
-  fetch_max_wait: 1s
-  execution_timeout: 30s
+  consumer_name: strategy_view_factor_ready_v1
+  reconnect_interval: 1s
+  connect_timeout: 3s
 ```
 
-Storage AuthInfo 复用 `requestauth` HMAC，不把 key 写入日志或 compiled JSON。
+Storage Metadata/Primary 请求使用 `app_key`，DataView 请求使用独立 `view_app_key`；两者均只在
+进程内存中派生/使用，不把 secret、AppKey 写入日志或 compiled JSON。
 
 - [ ] **Step 7: 实现旧周期保护、指标和 health**
 
-Runner 查询通过 `last_result_id` JOIN Result，一次返回 `LastSuccessfulPeriod`；同周期允许重算，较旧周期只记 inbox。`CommitEvaluation` 在事务内再次执行旧周期保护；strict input error 只调用 `RecordFailure`。
+Runner 查询通过 `last_result_id` JOIN Result，一次返回 `LastSuccessfulPeriod`；同周期允许重算，较旧周期只记 inbox。`CommitEvaluation` 在事务内再次执行旧周期保护；strict input error 只调用 `RecordFailure`。同周期 latest-wins 不删除旧 `StrategyResult`，逻辑期查询使用普通索引并以当前 Runner 的 `last_result_id` 区分幂等与新生命周期重算，确保审计链和 Trade `TargetReceipt` 可回溯。
 
 指标：`strategy_runs_total{status}`、run duration、pool size、selected by side、gross、outbox pending。日志含 space/runner/period/result/trace。Health 使用 database/eventbus/ready consumer/outbox 字段，删除 Python 字段。
 
@@ -990,7 +1130,9 @@ Expected: PASS。
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-rg -n 'RunOnce|GetEngineStatus|source_code|python_worker|target_quantity|"quantity"|FactorInstance|UniverseSnapshot|WeightMerger|RebalanceSlot' modules/strategy
+rg -n 'RunOnce|GetEngineStatus|python_worker|target_quantity|FactorInstance|UniverseSnapshot|WeightMerger|RebalanceSlot' \
+  modules/strategy --glob '!proto/strategy.proto' --glob '!proto/strategygen/**'
+rg -n 'source_code|params_json|\.quantity|quantity:' modules/strategy/internal modules/strategy/cmd modules/strategy/config
 git add modules/strategy
 git commit -m "refactor(strategy): replace python runner with weighted coin selection"
 ```
@@ -1011,21 +1153,24 @@ Expected: 业务代码无命中，提交成功。
 
 - [ ] **Step 1: 写 ACL 与 Storage caller contract**
 
-Strategy credential 必须允许发布 `moox.trade.target.requested.v1.>`，并只对 `strategy_factor_ready_v1` durable 拥有 create/info/fetch/ack；subscribe 允许 `_INBOX.>`。
+Strategy credential 必须允许发布 `moox.trade.target.weight_requested.v1.>`，并只对 `strategy_view_factor_ready_v1` durable 拥有 create/info/fetch/ack；subscribe 允许 `_INBOX.>`。Trade 使用独立的 `trade_target_weight_v1` durable，只消费新权重 subject，不复用旧 quantity durable。
 
 ACL 精确包含：
 
 ```text
 $JS.API.STREAM.NAMES
-$JS.API.CONSUMER.INFO.*.strategy_factor_ready_v1
-$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_factor_ready_v1
-$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_factor_ready_v1.>
-$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.strategy_factor_ready_v1
-$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.strategy_factor_ready_v1
-$JS.ACK.MOOX_STORAGE.strategy_factor_ready_v1.>
+$JS.API.CONSUMER.INFO.*.strategy_view_factor_ready_v1
+$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_factor_ready_v1
+$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_factor_ready_v1.>
+$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.strategy_view_factor_ready_v1
+$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.strategy_view_factor_ready_v1
+$JS.ACK.MOOX_STORAGE.strategy_view_factor_ready_v1.>
 ```
 
-默认 Storage gateway/DataView caller 列表包含独立 app_id/key_id `strategy`，Strategy deployment 挂载独立 HMAC key。
+默认 Storage gateway/DataView caller 列表包含独立 app_id/key_id `strategy`。Strategy 同时配置
+`storage.app_key`（Primary/Metadata）和 `storage.view_app_key`（DataView）；部署时分别由
+`MOOX_STORAGE_PRIMARY_AUTH_SECRET`、`MOOX_STORAGE_VIEW_AUTH_SECRET` 派生，禁止把两个
+secret 合并为一个 AppKey。
 
 - [ ] **Step 2: 更新部署脚本**
 
@@ -1113,7 +1258,9 @@ Expected: PASS 后提交。
 
 - [ ] **Step 1: 写 Strategy 完整链路测试**
 
-两个 ready event 乱序到达：第一个依赖不齐只记 inbox，第二个补齐后完成：
+在测试中用 fake Collector/Factor publisher 产生两个 ready event 乱序到达：第一个依赖
+不齐时返回 RETRY 且不标记 inbox，第二个补齐后完成；只有本周期所有 Runner 都得到
+终态 ACK 后才标记该 message：
 
 ```text
 ViewFactorPeriodReady
@@ -1157,14 +1304,39 @@ go test ./... -count=1
 
 Expected: PASS。
 
-- [ ] **Step 6: 运行外部 E2E**
+- [x] **Step 6: 运行外部 E2E 与正式链路验收**
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
 go test -tags=e2e_external ./test -run 'ViewFactorReady|StrategyTrade' -count=1 -v
 ```
 
-Expected: 环境具备 NATS/Storage/Factor/Trade 时 PASS；环境不具备时记录明确未运行原因，不能用本地单测代替外部验收。
+Expected: 本地 external 测试证明事件协议与 Trade 消费链；环境具备 Collector/Storage/Factor/Strategy/Trade
+时，再通过部署脚本证明真实 `DatasetPeriodCollected -> ViewFactorPeriodReady -> Strategy -> Trade`
+链路。环境不具备时记录明确未运行原因，不能用本地单测代替正式验收。
+
+本轮已完成正式运行验收，但由于该主机未配置启用的交易所账户，验收范围限定为服务启动、认证
+就绪、EventBus subject/ACL 和 Strategy -> Trade 消费基础设施，不执行真实下单。部署摘要：
+
+```text
+target: ubuntu@106.53.107.122:/data/moox/prod
+mode: component overlay; EventBus + Trade + Strategy enabled
+startup: EventBus -> Trade (schema/init/ready) -> Strategy
+health: EventBus/Trade/Strategy /readyz = HTTP 200, ready=true
+trade: target_worker_ready=true, enabled_exchange_accounts=0
+strategy: ready_consumer_connected=true, outbox_pending_count=0
+binary: remote SHA-256 matches release/moox-dev-linux-amd64.tar.gz contents
+```
+
+需要后续补充的不是服务就绪，而是配置交易所账户后的真实 `target_weight` 业务消息、权益/价格
+冻结、数量换算和订单执行验收；这些不应被本次零账户部署误报为已完成。
+
+补充的模拟盘验证记录：已通过 Trade Console RPC 创建临时 Binance SPOT Paper 账户，确认账户创建
+和生命周期关闭接口可用；该主机访问 Binance 公共行情接口时被网络策略拒绝（`exchangeInfo`
+连接失败），因此账户无法进入 `ready`，未继续提交订单。临时账户已调用
+`ClosePaperSimulation` 关闭。订单撮合本身已在本地生产 Paper Adapter/Matcher/SQLite E2E 中验证，
+覆盖 MARKET 买卖、撮合成交、Fill/Holding 投影、重启恢复和账户关闭清理；远端真实行情可用后，
+再重复一次 RPC 级别的创建→就绪→下单→成交验收。
 
 - [ ] **Step 7: 提交 E2E 和文档**
 
@@ -1200,12 +1372,12 @@ Expected: 各 Task commit 已推送；status 只允许显示实施前已存在�
 
 | 能力 | 必须证明的结果 |
 | --- | --- |
-| 配置发布 | 未知字段、非法 decimal/operator/frequency、disabled Factor/Binding、多 output Factor、Spot short 均拒绝；compiled JSON/hash 稳定 |
+| 配置发布 | 未知字段、非法 decimal/operator/frequency、disabled Factor/Binding、多 output 未选择 output、显式 output 不存在、Spot short 均拒绝；compiled JSON/hash 稳定 |
 | Runner 生命周期 | 观察 Runner 可无账户；执行 Runner 独占 owner；仅 DISABLED 可换 Strategy/account；Enable 调用 `Compiler.VerifyDependencies` |
 | InstrumentPool | metadata/include/exclude/market/quote/venue 生效；历史不足只排除；venue 选择稳定；完整 ID 与 Trade 一致 |
-| EvaluationInput | 每个 pool instrument 恰好一行；缺行/列/非数值严格跳过整期；不缩小求值样本 |
+| EvaluationInput | 每个 pool instrument 恰好一行；View 未完成/Storage 暂时失败 RETRY；View 已完成但缺行/列/非数值终态 ACK 并记录 `last_error`；不缩小求值样本 |
 | Evaluator | method=min、先排名后过滤、AND、percentile、count/fraction、post 不回补、稳定 tie break、多空等权和净额确定 |
-| Trigger | ready 乱序、重复、未对齐、依赖不齐、同周期重算、重启、旧周期晚到均符合口径 |
+| Trigger | ready 乱序、重复、未对齐、依赖不齐、同周期重算、重启、旧周期晚到均符合口径；终态 ACK 不会无限重投 |
 | Result/Outbox | same hash 零副作用；hold 写 Result 不发目标；rebalance 原子写 Result/Runner/outbox；空 FULL 清仓 |
 | Trade | target_weight 是唯一 wire 字段；首次权益/价格/quantity 永久冻结；重投不重估；Executor 继续负责量化和容量 |
 | Live/Paper | 相同 compiled config 和 EvaluationInput 生成逐字节相同权重；差异只来自账户和执行环境 |
@@ -1214,7 +1386,9 @@ Expected: 各 Task commit 已推送；status 只允许显示实施前已存在�
 ## 完成标准
 
 - `ViewFactorPeriodReady -> Strategy inbox -> InstrumentPool/EvaluationInput -> evaluator -> StrategyResult/outbox -> Trade TargetReceipt -> quantity TargetExecutor` 全链路通过。
-- Strategy 代码和协议中不再存在 Python entrypoint、RunOnce、EngineStatus、quantity output、namespace、FactorInstance、Snapshot、Slot 或 WeightMerger。
+- Strategy 运行代码和 V2 服务契约中不再使用 Python entrypoint、RunOnce、EngineStatus、
+  quantity output、namespace、FactorInstance、Snapshot、Slot 或 WeightMerger；为避免
+  protobuf tag 重用，旧 wire 字段可以保留但必须是只读兼容字段，不能重新赋予新语义。
 - Factor 协议和 FactorDef/Binding schema 未被 Strategy 改造。
 - strict 缺数周期无 Result、无 outbox、无 sequence 变化，且下一周期不受影响。
 - 同 message、同 input hash、同 target_id 重投均无重复副作用；同周期更新 latest-wins；相同规范权重只产生 hold。

@@ -65,6 +65,11 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("access trade database: %w", err)
 	}
 	sqlDB.SetMaxOpenConns(1)
+	_, err = migrateLegacyTradeSchema(db)
+	if err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
 	if err := validateExistingTradeSchema(db); err != nil {
 		_ = sqlDB.Close()
 		return nil, err
@@ -107,6 +112,120 @@ func (s *Store) LockLogicalAccountMembership() func() {
 	return s.logicalMembershipLock.Unlock
 }
 
+// migrateLegacyTradeSchema applies additive migrations that are safe for an
+// existing production database. SQLite's CREATE TABLE IF NOT EXISTS does not
+// add columns to an existing table, so the owner generation column needs an
+// explicit migration before schema validation runs.
+func migrateLegacyTradeSchema(db *gorm.DB) (bool, error) {
+	var exists int
+	if err := db.Raw(`
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type = 'table' AND name = 't_logical_accounts'
+	`).Scan(&exists).Error; err != nil {
+		return false, fmt.Errorf("inspect trade legacy schema: %w", err)
+	}
+	if exists == 0 {
+		return false, nil
+	}
+	var columns []tableColumn
+	if err := db.Raw(`PRAGMA table_info("t_logical_accounts")`).Scan(&columns).Error; err != nil {
+		return false, fmt.Errorf("inspect logical account legacy columns: %w", err)
+	}
+	for _, column := range columns {
+		if column.Name == "c_owner_claimed_at" {
+			if err := ensureOwnerRebindTable(db); err != nil {
+				return false, err
+			}
+			return false, nil
+		}
+	}
+	var tableSQL string
+	if err := db.Raw(`
+		SELECT sql FROM sqlite_master
+		WHERE type = 'table' AND name = 't_logical_accounts'
+	`).Scan(&tableSQL).Error; err != nil {
+		return false, fmt.Errorf("inspect logical account legacy SQL: %w", err)
+	}
+	if normalizeSchemaSQL(tableSQL) != normalizeSchemaSQL(legacyLogicalAccountTableSQL) {
+		// Unknown shapes remain fail-closed and are reported by the strict
+		// validator below rather than being partially mutated.
+		return false, nil
+	}
+	// Keep the DDL and owner-generation initialization atomic. If the process
+	// stops between these statements, the next startup must not mistake a
+	// half-migrated table for a completed migration.
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`
+			ALTER TABLE t_logical_accounts
+			ADD COLUMN c_owner_claimed_at INTEGER NOT NULL DEFAULT 0
+		`).Error; err != nil {
+			return fmt.Errorf("migrate logical account owner generation: %w", err)
+		}
+		// An existing owner already represents a live lifecycle. Seed it with
+		// the first positive generation so Strategy can publish new events
+		// immediately; unowned legacy rows remain at zero until their first claim.
+		if err := tx.Exec(`
+			UPDATE t_logical_accounts
+			SET c_owner_claimed_at = 1
+			WHERE c_owner_runner_id IS NOT NULL AND c_owner_claimed_at = 0
+		`).Error; err != nil {
+			return fmt.Errorf("initialize logical account owner generation: %w", err)
+		}
+		if err := ensureOwnerRebindTable(tx); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func ensureOwnerRebindTable(db *gorm.DB) error {
+	if err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS t_logical_account_owner_rebinds (
+			c_space_id TEXT NOT NULL,
+			c_logical_account_id TEXT NOT NULL,
+			c_rebind_key TEXT NOT NULL,
+			c_runner_id TEXT NOT NULL,
+			c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (c_space_id, c_logical_account_id, c_rebind_key),
+			FOREIGN KEY (c_space_id, c_logical_account_id)
+				REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
+				ON DELETE CASCADE,
+			CHECK (c_rebind_key <> ''),
+			CHECK (c_runner_id <> '')
+		)
+	`).Error; err != nil {
+		return fmt.Errorf("migrate logical account owner rebinds: %w", err)
+	}
+	return nil
+}
+
+const legacyLogicalAccountTableSQL = `CREATE TABLE t_logical_accounts (
+    c_space_id TEXT NOT NULL,
+    c_logical_account_id TEXT NOT NULL,
+    c_name TEXT NOT NULL,
+    c_owner_runner_id TEXT,
+    c_execution_mode TEXT NOT NULL,
+    c_market_type TEXT NOT NULL,
+    c_settlement_asset TEXT NOT NULL,
+    c_automation_state TEXT NOT NULL DEFAULT 'PAUSED',
+    c_pause_reason TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_logical_account_id),
+    UNIQUE (c_space_id, c_name),
+    CHECK (c_execution_mode IN ('PAPER', 'LIVE')),
+    CHECK (c_market_type IN ('SPOT', 'SWAP')),
+    CHECK (c_automation_state IN ('ACTIVE', 'PAUSED')),
+    CHECK (
+        (c_automation_state = 'ACTIVE' AND c_pause_reason = '')
+        OR
+        (c_automation_state = 'PAUSED' AND c_pause_reason <> '')
+    )
+)`
+
 func validateExistingTradeSchema(db *gorm.DB) error {
 	var tables []string
 	if err := db.Raw(`
@@ -119,9 +238,11 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		"t_trading_accounts": {}, "t_trade_instruments": {},
 		"t_trade_orders": {}, "t_order_fills": {}, "t_trading_positions": {},
 		"t_logical_accounts": {}, "t_logical_account_members": {},
-		"t_logical_account_targets": {}, "t_operator_actions": {},
+		"t_logical_account_owner_rebinds": {},
+		"t_logical_account_targets":       {}, "t_operator_actions": {},
 		"t_paper_account_configs": {}, "t_account_equity_points": {},
-		"t_logical_account_equity_points": {},
+		"t_logical_account_equity_points":   {},
+		"t_logical_account_target_receipts": {},
 	}
 	for _, table := range tables {
 		if _, found := approved[table]; !found {
@@ -145,7 +266,7 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		if err != nil {
 			return err
 		}
-		if !reflect.DeepEqual(got, want) {
+		if !reflect.DeepEqual(got, want) && !(table == "t_logical_accounts" && legacyLogicalAccountShapeMatches(got, want)) {
 			return fmt.Errorf(
 				"%w: %s does not match current columns and constraints",
 				ErrIncompatibleSchema,
@@ -154,6 +275,59 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func legacyLogicalAccountShapeMatches(got, want tableShape) bool {
+	if !sameColumnsIgnoringOwnerGenerationPosition(got.Columns, want.Columns) ||
+		!reflect.DeepEqual(got.UniqueKeys, want.UniqueKeys) ||
+		!reflect.DeepEqual(got.ForeignKeys, want.ForeignKeys) ||
+		len(got.SchemaSQL) != len(want.SchemaSQL) {
+		return false
+	}
+	for index := range got.SchemaSQL {
+		gotTable := strings.HasPrefix(got.SchemaSQL[index], "table\x00t_logical_accounts\x00")
+		wantTable := strings.HasPrefix(want.SchemaSQL[index], "table\x00t_logical_accounts\x00")
+		if gotTable || wantTable {
+			if !gotTable || !wantTable || !strings.Contains(want.SchemaSQL[index], "c_owner_claimed_at") || !strings.HasSuffix(got.SchemaSQL[index], normalizeSchemaSQL(legacyLogicalAccountMigratedTableSQL)) {
+				return false
+			}
+			continue
+		}
+		if got.SchemaSQL[index] != want.SchemaSQL[index] {
+			return false
+		}
+	}
+	return true
+}
+
+var legacyLogicalAccountMigratedTableSQL = strings.Replace(
+	legacyLogicalAccountTableSQL,
+	"    PRIMARY KEY (c_space_id, c_logical_account_id),",
+	"    c_owner_claimed_at INTEGER NOT NULL DEFAULT 0,\n    PRIMARY KEY (c_space_id, c_logical_account_id),",
+	1,
+)
+
+func sameColumnsIgnoringOwnerGenerationPosition(got, want []tableColumn) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	byName := make(map[string]tableColumn, len(got))
+	for _, column := range got {
+		byName[column.Name] = column
+	}
+	for _, column := range want {
+		actual, ok := byName[column.Name]
+		if !ok || actual.Type != column.Type || actual.NotNull != column.NotNull || actual.PrimaryKey != column.PrimaryKey {
+			return false
+		}
+		if (actual.DefaultSQL == nil) != (column.DefaultSQL == nil) {
+			return false
+		}
+		if actual.DefaultSQL != nil && *actual.DefaultSQL != *column.DefaultSQL {
+			return false
+		}
+	}
+	return true
 }
 
 type tableShape struct {

@@ -27,6 +27,12 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
   --params-json '{"windows":[20,96]}' \
   --lookback-periods 200
 
+# 导入仓库提供的 12 个 XBX MooX 因子定义（全部保持 disabled）
+./bin/moox-factor-cli import-catalog \
+  --db ./data/factor/factor.db \
+  --factors-dir ./factors \
+  --catalog ./factors/catalog.json
+
 ./bin/moox-factor-cli run-once \
   --config ./factor/config/app.yaml \
   --space quant \
@@ -42,6 +48,58 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
   --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
   --yes
 ```
+
+## XBX Factor Catalog
+
+The XBX migration is shipped as ordinary MooX `compute(df, params)` modules in
+`modules/factor/factors/`. There is no `xbx_` prefix and the source files are
+safe to import with the normal CLI. `catalog.json` is the reproducible import
+manifest for all 12 definitions; `import-catalog` creates or updates each
+definition in one operation. Every import creates or updates a disabled
+definition; enable it only after a binding has declared its source columns,
+outputs, lookback and result dataset.
+
+The catalog lookbacks are deliberately larger than the visible window for
+nested rolling/rank formulas (for example `BiasQ` and `Cci` use 39 rows for a
+20-period window). This preserves the same latest value as XBX when the task
+runner truncates the input history to `lookback_periods`.
+
+| File | Required input columns | Formula / default output |
+| --- | --- | --- |
+| `Bias.py` | `close` | `close / rolling_mean(close, n)` -> `bias_<n>` |
+| `BiasQ.py` | `close` | rolling percentile rank of Bias -> `bias_q_<n>` |
+| `Cci.py` | `high, low, close` | XBX CCI -> `cci` |
+| `CirculatingMcap.py` | `circulating_supply, close` | `circulating_supply * close` -> `circulating_mcap` |
+| `MinMax.py` | `high, low, close` | rolling typical-price min/max -> `minmax_<n>` |
+| `QuoteVolumeMean.py` | `quote_volume` | rolling mean -> `quote_volume_mean_<n>` |
+| `QuoteVolumeMeanQ.py` | `quote_volume` | rolling percentile rank of mean -> `quote_volume_mean_q_<n>` |
+| `VolumeMeanQ.py` | `volume` | rolling percentile rank of mean -> `volume_mean_q_<n>` |
+| `ZfAbsMean.py` | `open, high, low, close` | positive-return amplitude rank -> `zf_abs_mean_<n>` |
+| `ZfMeanQ.py` | `open, high, low` | amplitude rank -> `zf_mean_q_<n>` |
+| `ZfStd.py` | `open, high, low, close` | signed amplitude standard deviation -> `zf_std_<n>` |
+| `ZscoreAbsMeanQ.py` | `close` | absolute z-score mean rank -> `zscore_abs_mean_q_<n>` |
+
+For a single-window binding, import a module with explicit metadata. The
+following example registers the same source with two Bias outputs:
+
+```bash
+./bin/moox-factor-cli import \
+  --db ./data/factor/factor.db \
+  --factors-dir ./factors \
+  --file ./factors/Bias.py \
+  --factor-id bias \
+  --input-columns close \
+  --outputs bias_20,bias_96 \
+  --params-json '{"windows":[20,96]}' \
+  --lookback-periods 96
+```
+
+Use the same command shape for the remaining modules, changing
+`--input-columns`, `--outputs`, `--params-json` and `--lookback-periods` to the
+binding's actual window. `CirculatingMcap.py` deliberately treats
+`circulating_supply` as an ordinary source column; it is not a framework-level
+concept. The factor remains disabled until the selected source View exposes
+that column and metadata validation succeeds.
 
 ## Runtime Contract
 

@@ -331,6 +331,7 @@ func logicalAccountToPB(
 		SpaceId:          value.SpaceID,
 		Name:             value.Name,
 		OwnerRunnerId:    value.OwnerRunnerID,
+		OwnerGeneration:  value.OwnerGeneration,
 		ExecutionMode:    executionModeToPB(value.ExecutionMode),
 		MarketType:       marketToPB(value.MarketType),
 		SettlementAsset:  value.SettlementAsset,

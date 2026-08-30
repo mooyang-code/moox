@@ -8,7 +8,10 @@ option go_package = "github.com/mooyang-code/moox/modules/strategy/proto/strateg
 
 message InstrumentTarget {
   string instrument_id = 1;
+  // quantity is retained for legacy Strategy clients. New Strategy results
+  // use target_weight on a distinct field number.
   string quantity = 2;
+  string target_weight = 3;
 }
 
 message Strategy {
@@ -18,6 +21,8 @@ message Strategy {
   string source_code = 4;
   string source_hash = 5;
   string created_at = 6;
+  string kind = 7;
+  string compiled_json = 8;
 }
 
 message StrategyRunner {
@@ -36,6 +41,7 @@ message StrategyRunner {
   string last_error = 13;
   string created_at = 14;
   string updated_at = 15;
+  string source_view_id = 16;
 }
 
 message StrategyResult {
@@ -49,6 +55,9 @@ message StrategyResult {
   string output_json = 8;
   optional int64 command_sequence = 9;
   string created_at = 10;
+  string period_time = 11;
+  repeated InstrumentTarget targets = 12;
+  string debug_info_json = 13;
 }
 
 message PageRequest {
@@ -138,19 +147,6 @@ message SetRunnerStatusRsp {
   StrategyRunner runner = 2;
 }
 
-message RunOnceReq {
-  string runner_id = 1;
-  string trigger_bar_time = 2;
-  string namespace = 3;
-  string data_json = 4;
-}
-
-message RunOnceRsp {
-  common.RetInfo ret_info = 1;
-  StrategyResult result = 2;
-  bool accepted = 3;
-}
-
 message ListStrategyResultsReq {
   PageRequest page = 1;
   string runner_id = 2;
@@ -183,14 +179,6 @@ message ListStrategyTargetsRsp {
   int64 command_sequence = 3;
 }
 
-message GetEngineStatusReq {}
-
-message GetEngineStatusRsp {
-  common.RetInfo ret_info = 1;
-  int32 workers = 2;
-  int32 ready_workers = 3;
-}
-
 service StrategyMgr {
   rpc CreateStrategy(CreateStrategyReq) returns (CreateStrategyRsp);
   rpc GetStrategy(GetStrategyReq) returns (GetStrategyRsp);
@@ -200,9 +188,7 @@ service StrategyMgr {
   rpc ListRunners(ListRunnersReq) returns (ListRunnersRsp);
   rpc UpdateRunner(UpdateRunnerReq) returns (UpdateRunnerRsp);
   rpc SetRunnerStatus(SetRunnerStatusReq) returns (SetRunnerStatusRsp);
-  rpc RunOnce(RunOnceReq) returns (RunOnceRsp);
   rpc ListStrategyResults(ListStrategyResultsReq) returns (ListStrategyResultsRsp);
   rpc GetStrategyResult(GetStrategyResultReq) returns (GetStrategyResultRsp);
   rpc ListStrategyTargets(ListStrategyTargetsReq) returns (ListStrategyTargetsRsp);
-  rpc GetEngineStatus(GetEngineStatusReq) returns (GetEngineStatusRsp);
 }

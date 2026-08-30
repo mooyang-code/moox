@@ -131,6 +131,7 @@ message LogicalAccount {
   repeated string readiness_reasons = 12;
   int64 created_at = 13;
   int64 updated_at = 14;
+  int64 owner_generation = 15;
 }
 
 message Order {
@@ -395,6 +396,16 @@ message ReleaseLogicalAccountOwnerRsp {
   LogicalAccount logical_account = 2;
 }
 
+message RebindLogicalAccountOwnerReq {
+  string logical_account_id = 1;
+  string runner_id = 2;
+  string rebind_key = 3;
+}
+message RebindLogicalAccountOwnerRsp {
+  common.RetInfo ret_info = 1;
+  LogicalAccount logical_account = 2;
+}
+
 message PauseLogicalAccountReq {
   string logical_account_id = 1;
   string reason = 2;
@@ -646,6 +657,7 @@ service TradeConsoleService {
   rpc RemoveLogicalAccountMember(RemoveLogicalAccountMemberReq) returns (RemoveLogicalAccountMemberRsp);
   rpc ClaimLogicalAccountOwner(ClaimLogicalAccountOwnerReq) returns (ClaimLogicalAccountOwnerRsp);
   rpc ReleaseLogicalAccountOwner(ReleaseLogicalAccountOwnerReq) returns (ReleaseLogicalAccountOwnerRsp);
+  rpc RebindLogicalAccountOwner(RebindLogicalAccountOwnerReq) returns (RebindLogicalAccountOwnerRsp);
   rpc PauseLogicalAccount(PauseLogicalAccountReq) returns (PauseLogicalAccountRsp);
   rpc ResumeLogicalAccount(ResumeLogicalAccountReq) returns (ResumeLogicalAccountRsp);
   rpc FlattenLogicalAccount(FlattenLogicalAccountReq) returns (FlattenLogicalAccountRsp);

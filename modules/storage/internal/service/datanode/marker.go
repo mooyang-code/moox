@@ -79,6 +79,7 @@ func (s *Service) GetFactorPeriodComputedMarker(ctx context.Context, req *pb.Get
 		bindings = append(bindings, &pb.FactorBindingPeriodState{
 			BindingId: state.GetBindingId(), FactorId: state.GetFactorId(), Status: state.GetStatus(),
 			SkippedSubjects: append([]string(nil), state.GetSkippedSubjects()...), FailedSubjects: append([]string(nil), state.GetFailedSubjects()...),
+			SourceHash: state.GetSourceHash(),
 		})
 	}
 	return &pb.GetFactorPeriodComputedMarkerRsp{
@@ -86,7 +87,7 @@ func (s *Service) GetFactorPeriodComputedMarker(ctx context.Context, req *pb.Get
 		Marker: &pb.FactorPeriodComputedMarker{
 			SourceViewId: payload.GetSourceViewId(), ResultDatasetId: payload.GetResultDatasetId(), Frequency: payload.GetFrequency(),
 			PeriodTime: payload.GetPeriodTime(), Status: payload.GetStatus(), Bindings: bindings,
-			ComputedAt: payload.GetComputedAt(), TriggerEventId: payload.GetTriggerEventId(),
+			ComputedAt: payload.GetComputedAt(), TriggerEventId: payload.GetTriggerEventId(), SourceIndexId: payload.GetSourceIndexId(), SourceIndexRevision: payload.GetSourceIndexRevision(),
 		},
 	}, nil
 }

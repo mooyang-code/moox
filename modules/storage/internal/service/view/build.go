@@ -856,7 +856,7 @@ func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, ac
 				keys = append(keys, key)
 				positions[viewindex.RowKeyID(key)] = index
 			}
-			rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys, FieldIds: fieldIDs})
+			rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys, FieldIds: fieldIDs, AttributeKeys: factorAttributeKeys(nextSchema.Columns, datasetID)})
 			if err != nil {
 				return err
 			}
@@ -867,6 +867,16 @@ func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, ac
 				position, ok := positions[viewindex.RowKeyID(row.GetKey())]
 				if !ok {
 					continue
+				}
+				if len(row.GetAttributes()) > 0 {
+					if writes[position].Attributes == nil {
+						writes[position].Attributes = make(map[string]*pb.TypedValue, len(row.GetAttributes()))
+					}
+					for name, value := range row.GetAttributes() {
+						if value != nil {
+							writes[position].Attributes[name] = value
+						}
+					}
 				}
 				for _, field := range row.GetFields() {
 					if target := targets[field.GetFieldId()]; target != "" {

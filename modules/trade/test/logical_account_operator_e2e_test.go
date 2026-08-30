@@ -37,8 +37,9 @@ func TestManualFlattenThenResumeCanReopenLatestTarget(t *testing.T) {
 	seedSwapLogicalAccount(t, f.store)
 	delivery := targetDelivery(t, now, "target-reopen", 1, "0.002")
 	handled := eventconsumer.HandleTarget(ctx, delivery, eventconsumer.TargetOptions{
-		Store: f.store,
-		Now:   func() time.Time { return now },
+		Store:          f.store,
+		Now:            func() time.Time { return now },
+		WeightResolver: testTargetWeightResolver{},
 	})
 	require.Equal(t, jetstream.ACK, handled.Decision, handled.Err)
 

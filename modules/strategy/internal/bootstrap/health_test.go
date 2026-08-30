@@ -36,7 +36,7 @@ func TestStrategyHealthFailsClosedWhileEventBusUnavailable(t *testing.T) {
 	defer runtime.Close()
 	state := strategyhealth.New("strategy", "strategy", "", "")
 	state.SetReady(true)
-	response := strategyHealthSnapshot(repo, runtime, 2, state)(context.Background())
+	response := strategyHealthSnapshot(repo, runtime, state)(context.Background())
 	if response.Ready {
 		t.Fatal("health must fail closed without EventBus")
 	}

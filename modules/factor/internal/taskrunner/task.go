@@ -42,6 +42,8 @@ func DeterministicTaskID(task Task) string {
 		task.BindingID,
 		task.SpaceID,
 		task.SourceViewID,
+		task.ExpectedActiveIndexID,
+		strconv.FormatUint(task.ExpectedActiveIndexRevision, 10),
 		task.ResultDatasetID,
 		task.SubjectID,
 		task.Freq,

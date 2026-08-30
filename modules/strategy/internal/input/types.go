@@ -1,0 +1,91 @@
+package input
+
+import (
+	"errors"
+	"sort"
+	"strings"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
+)
+
+// ErrNotReady indicates that the immutable period snapshot is not complete
+// yet. Trigger consumers should retry the readiness event rather than marking
+// it processed, so a later factor-period event can make the same period
+// evaluable.
+var ErrNotReady = errors.New("evaluation input is not ready")
+
+// ErrLegacyProvenance identifies an old readiness marker that predates the
+// immutable View index provenance contract. It is terminal for that broker
+// delivery: retrying cannot manufacture the missing generation identifiers.
+var ErrLegacyProvenance = errors.New("evaluation input has legacy provenance")
+
+// ErrStaleViewSnapshot means the readiness event's View generation has been
+// superseded before the input could be read. Such a delivery is terminal for
+// this generation; a newer ready event (or an explicit recalc) owns the
+// replacement input and the broker message must not be retried forever.
+var ErrStaleViewSnapshot = errors.New("evaluation input View snapshot is stale")
+
+// ErrStrictIncomplete means the dependency Views are readable, but the
+// selected pool is missing a current source row or required factor column.
+// This is a terminal skip for the current ready message; a later ready event
+// may re-evaluate the same period without keeping the broker delivery alive
+// forever.
+var ErrStrictIncomplete = errors.New("evaluation input is strictly incomplete")
+
+// StrictIncompleteError carries the resolved pool that was checked before a
+// strict readiness failure. Trigger handling uses it to scope terminal
+// subject failures even when the pool was selected dynamically (without an
+// explicit include list).
+type StrictIncompleteError struct {
+	Pool    PoolResult
+	Missing []string
+}
+
+func (e *StrictIncompleteError) Error() string {
+	if e == nil || len(e.Missing) == 0 {
+		return ErrStrictIncomplete.Error()
+	}
+	return ErrStrictIncomplete.Error() + ": missing current rows or factor columns: " + strings.Join(e.Missing, ",")
+}
+
+func (e *StrictIncompleteError) Unwrap() error { return ErrStrictIncomplete }
+
+// PoolItem is one instrument admitted by the compiled instrument-pool rule.
+// Identity and metadata are kept separate from factor values so the evaluator
+// never needs to know how the values were collected.
+type PoolItem struct {
+	InstrumentID string
+	SubjectID    string
+	Exchange     string
+	Market       string
+	QuoteAsset   string
+	SeriesTag    string
+}
+
+// InstrumentInput combines an admitted instrument with the factor values for
+// a single completed period.
+type InstrumentInput struct {
+	PoolItem
+	Values map[string]quant.Decimal
+}
+
+// EvaluationInput is immutable input for one strategy period. The producer is
+// responsible for omitting instruments with missing required factor values.
+type EvaluationInput struct {
+	SpaceID       string
+	StrategyID    string
+	PeriodEnd     string
+	SourceViewID  string
+	DataFrequency string
+	Items         []InstrumentInput
+	Ineligible    map[string]string
+}
+
+// Ordered returns a deterministic copy sorted by instrument identity.
+func (in EvaluationInput) Ordered() []InstrumentInput {
+	items := append([]InstrumentInput(nil), in.Items...)
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].InstrumentID < items[j].InstrumentID
+	})
+	return items
+}

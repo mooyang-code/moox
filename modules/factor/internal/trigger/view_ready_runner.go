@@ -43,6 +43,14 @@ type PeriodStorage interface {
 	ClearFactorOutputs(context.Context, *engine.FactorTask) error
 }
 
+type PeriodStorageRevision interface {
+	ActiveViewRevision(context.Context, string, string, string, string) (uint64, error)
+}
+
+type PeriodStorageRevisionAt interface {
+	ActiveViewRevisionAt(context.Context, string, string, string, string, string) (uint64, error)
+}
+
 type ViewReadyRunner struct {
 	bindings             PeriodBindingSource
 	factors              PeriodFactorSource
@@ -200,6 +208,24 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 	if factorID != "" {
 		selected = selectFactorBindings(selected, factorID)
 	}
+	if strings.HasPrefix(triggerEventID, "recalc-") && ready.GetActiveIndexRevision() == 0 {
+		var revision uint64
+		var revisionErr error
+		if revisionReader, ok := r.storage.(PeriodStorageRevisionAt); ok {
+			revision, revisionErr = revisionReader.ActiveViewRevisionAt(ctx, spaceID, ready.GetSourceViewId(), firstSubject(ready.GetPrimarySubjects()), ready.GetFrequency(), ready.GetActiveIndexId())
+		} else if _, ok := r.storage.(PeriodStorageRevision); ok {
+			return fmt.Errorf("recalc requires fenced storage View revision reader")
+		} else {
+			return fmt.Errorf("recalc requires storage View revision reader")
+		}
+		if revisionErr != nil {
+			return fmt.Errorf("resolve source View revision for recalc: %w", revisionErr)
+		}
+		if revision == 0 {
+			return fmt.Errorf("source View %s has no active revision", ready.GetSourceViewId())
+		}
+		ready.ActiveIndexRevision = revision
+	}
 
 	found, err := r.storage.FactorPeriodComputed(ctx, spaceID, ready.GetSourceViewId(), triggerEventID, ready.GetPeriodTime())
 	if err != nil || found {
@@ -239,6 +265,7 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		}
 		states[binding.BindingID] = &storagepb.FactorBindingPeriodState{
 			BindingId: binding.BindingID, FactorId: binding.FactorID, Status: status,
+			SourceHash: factors[binding.BindingID].SourceHash,
 		}
 	}
 
@@ -250,6 +277,8 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 				SourceViewID: binding.SourceViewID, ResultDatasetID: binding.ResultDatasetID,
 				SubjectID: subjectID, Freq: binding.Freq, PeriodTime: ready.GetPeriodTime(),
 				TriggerEventID: triggerEventID, TriggeredAt: triggeredAt, StartTime: period, EndTime: periodEnd,
+				ExpectedActiveIndexID:       ready.GetActiveIndexId(),
+				ExpectedActiveIndexRevision: ready.GetActiveIndexRevision(),
 			}, factors[binding.BindingID], r.factorsDir)
 			if buildErr != nil {
 				return buildErr
@@ -322,6 +351,16 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		state.FailedSubjects = append(state.FailedSubjects, task.SubjectID)
 		state.Status = "degraded"
 	}
+	if strings.HasPrefix(triggerEventID, "recalc-") {
+		for _, task := range tasks {
+			if result, ok := terminal[combinationKey(task.BindingID, task.SubjectID)]; !ok || result.Err != nil {
+				if ok {
+					return fmt.Errorf("recalc factor task failed: %w", result.Err)
+				}
+				return fmt.Errorf("recalc factor task returned no terminal result")
+			}
+		}
+	}
 	markerStates := make([]*storagepb.FactorBindingPeriodState, 0, len(selected))
 	for _, binding := range selected {
 		state := states[binding.BindingID]
@@ -339,6 +378,8 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		SourceViewId: ready.GetSourceViewId(), ResultDatasetId: resultDatasetID,
 		Frequency: ready.GetFrequency(), PeriodTime: ready.GetPeriodTime(), Status: groupStatus,
 		Bindings: markerStates, ComputedAt: timestamppb.Now(), TriggerEventId: triggerEventID,
+		SourceIndexId:       ready.GetActiveIndexId(),
+		SourceIndexRevision: ready.GetActiveIndexRevision(),
 	}
 	if err := r.storage.ReportFactorPeriodComputed(ctx, spaceID, marker); err != nil {
 		log.ErrorContextf(ctx, "factor_view_ready_report_failed event_id=%s space_id=%s source_view_id=%s result_dataset_id=%s freq=%s period_time=%d binding_count=%d subject_count=%d error=%q",
@@ -424,4 +465,12 @@ func sortedUnique(values []string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func firstSubject(values []string) string {
+	values = sortedUnique(values)
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }

@@ -73,6 +73,7 @@ type laneAction struct {
 	instrument store.InstrumentRecord
 	delta      shared.Decimal
 	reducing   bool
+	pinned     bool
 }
 
 func (e *Executor) Converge(
@@ -257,7 +258,7 @@ func (e *Executor) Converge(
 		if reason != "" {
 			blocked = append(blocked, store.BlockedTarget{
 				InstrumentID: instrumentID,
-				Quantity:     desired[instrumentID].String(),
+				Quantity:     desired[instrumentID].Quantity.String(),
 				Reason:       reason,
 			})
 			continue
@@ -471,22 +472,32 @@ func (e *Executor) activeOrders(
 	return active, nil
 }
 
+type desiredTarget struct {
+	Quantity         shared.Decimal
+	TradingAccountID string
+	ExchangeSymbol   string
+}
+
 func desiredTargets(
 	target store.LogicalAccountTargetRecord,
-) (map[string]shared.Decimal, error) {
-	desired := make(map[string]shared.Decimal, len(target.Targets))
+) (map[string]desiredTarget, error) {
+	desired := make(map[string]desiredTarget, len(target.Targets))
 	for _, current := range target.Targets {
 		quantity, err := shared.ParseDecimal(current.Quantity)
 		if err != nil {
 			return nil, err
 		}
-		desired[current.InstrumentID] = quantity
+		desired[current.InstrumentID] = desiredTarget{
+			Quantity:         quantity,
+			TradingAccountID: current.TradingAccountID,
+			ExchangeSymbol:   current.ExchangeSymbol,
+		}
 	}
 	return desired, nil
 }
 
 func laneIDs(
-	desired map[string]shared.Decimal,
+	desired map[string]desiredTarget,
 	members []memberState,
 ) []string {
 	set := make(map[string]struct{}, len(desired))
@@ -510,9 +521,63 @@ func laneIDs(
 
 func nextLaneAction(
 	instrumentID string,
-	desired shared.Decimal,
+	desired desiredTarget,
 	members []memberState,
 ) (laneAction, bool, string, error) {
+	if desired.TradingAccountID != "" {
+		var pinnedMember *memberState
+		for i := range members {
+			if members[i].account.TradingAccountID == desired.TradingAccountID {
+				pinnedMember = &members[i]
+				break
+			}
+		}
+		if pinnedMember == nil {
+			return laneAction{}, false, "frozen target member is no longer available", nil
+		}
+		pinnedInstrument, ok := pinnedMember.instruments[instrumentID]
+		if !ok || (desired.ExchangeSymbol != "" && pinnedInstrument.ExchangeSymbol != desired.ExchangeSymbol) {
+			return laneAction{}, false, "frozen target member no longer supports instrument", nil
+		}
+		// A frozen conversion is an executable venue decision, not merely a
+		// preferred opening venue. Drain any existing exposure on other members
+		// first; otherwise aggregate convergence could silently leave the target
+		// on a different venue (or skip the frozen member entirely).
+		for _, member := range positionsByAbsoluteSize(members, instrumentID) {
+			if member.account.TradingAccountID == desired.TradingAccountID {
+				continue
+			}
+			position := member.positions[instrumentID]
+			if position.IsZero() {
+				continue
+			}
+			instrument, mapped := member.instruments[instrumentID]
+			if !mapped {
+				return laneAction{}, false, "position has no tradable instrument mapping", nil
+			}
+			return laneAction{member: member, instrument: instrument, delta: position.Neg(), reducing: true}, false, "", nil
+		}
+		pinnedPosition := pinnedMember.positions[instrumentID]
+		if desired.Quantity.IsZero() || !sameSign(pinnedPosition, desired.Quantity) {
+			if !pinnedPosition.IsZero() {
+				return laneAction{member: *pinnedMember, instrument: pinnedInstrument, delta: pinnedPosition.Neg(), reducing: true}, false, "", nil
+			}
+			if desired.Quantity.IsZero() {
+				return laneAction{}, true, "", nil
+			}
+		}
+		if sameSign(pinnedPosition, desired.Quantity) && pinnedPosition.Abs().Cmp(desired.Quantity.Abs()) > 0 {
+			excess := pinnedPosition.Abs().Sub(desired.Quantity.Abs())
+			if pinnedPosition.Cmp(shared.Zero()) > 0 {
+				excess = excess.Neg()
+			}
+			return laneAction{member: *pinnedMember, instrument: pinnedInstrument, delta: excess, reducing: true}, false, "", nil
+		}
+		if pinnedPosition.Cmp(desired.Quantity) == 0 {
+			return laneAction{}, true, "", nil
+		}
+		return laneAction{member: *pinnedMember, instrument: pinnedInstrument, delta: desired.Quantity.Sub(pinnedPosition), pinned: true}, false, "", nil
+	}
 	confirmed := shared.Zero()
 	for _, member := range members {
 		confirmed = confirmed.Add(member.positions[instrumentID])
@@ -522,7 +587,7 @@ func nextLaneAction(
 		if position.IsZero() {
 			continue
 		}
-		if desired.IsZero() || !sameSign(position, desired) {
+		if desired.Quantity.IsZero() || !sameSign(position, desired.Quantity) {
 			instrument, ok := member.instruments[instrumentID]
 			if !ok {
 				return laneAction{}, false,
@@ -534,15 +599,15 @@ func nextLaneAction(
 			}, false, "", nil
 		}
 	}
-	if confirmed.Cmp(desired) == 0 {
+	if confirmed.Cmp(desired.Quantity) == 0 {
 		return laneAction{}, true, "", nil
 	}
-	delta := desired.Sub(confirmed)
-	if sameSign(confirmed, desired) && confirmed.Abs().Cmp(desired.Abs()) > 0 {
-		excess := confirmed.Abs().Sub(desired.Abs())
+	delta := desired.Quantity.Sub(confirmed)
+	if sameSign(confirmed, desired.Quantity) && confirmed.Abs().Cmp(desired.Quantity.Abs()) > 0 {
+		excess := confirmed.Abs().Sub(desired.Quantity.Abs())
 		for _, member := range positionsByAbsoluteSize(members, instrumentID) {
 			position := member.positions[instrumentID]
-			if !sameSign(position, desired) {
+			if !sameSign(position, desired.Quantity) {
 				continue
 			}
 			quantity := excess
@@ -562,6 +627,19 @@ func nextLaneAction(
 				delta: quantity, reducing: true,
 			}, false, "", nil
 		}
+	}
+	if desired.TradingAccountID != "" {
+		for _, member := range members {
+			if member.account.TradingAccountID != desired.TradingAccountID {
+				continue
+			}
+			instrument, ok := member.instruments[instrumentID]
+			if !ok || (desired.ExchangeSymbol != "" && instrument.ExchangeSymbol != desired.ExchangeSymbol) {
+				return laneAction{}, false, "frozen target member no longer supports instrument", nil
+			}
+			return laneAction{member: member, instrument: instrument, delta: delta, pinned: true}, false, "", nil
+		}
+		return laneAction{}, false, "frozen target member is no longer available", nil
 	}
 	for _, member := range members {
 		if instrument, ok := member.instruments[instrumentID]; ok {
@@ -603,7 +681,7 @@ func (e *Executor) placeAction(
 	members []memberState,
 ) (bool, string, error) {
 	candidates := []laneAction{action}
-	if !action.reducing {
+	if !action.reducing && !action.pinned {
 		candidates = candidates[:0]
 		for _, member := range members {
 			instrument, ok := member.instruments[action.instrument.InstrumentID]
@@ -685,6 +763,9 @@ func (e *Executor) placeAction(
 					capacityErrors,
 					candidate.member.account.TradingAccountID+": "+err.Error(),
 				)
+				if action.pinned {
+					return false, "frozen target member capacity: " + strings.Join(capacityErrors, "; "), nil
+				}
 				continue
 			}
 			return false, "", err

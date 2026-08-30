@@ -28,8 +28,9 @@ func TestStrategyStoreRoundTrip(t *testing.T) {
 	want := domain.Strategy{
 		ID:           "strategy-1",
 		Name:         "trend",
-		ManifestYAML: "api_version: moox.strategy/v1",
-		SourceCode:   "def run(context, data, params): return {}",
+		Kind:         "coin_selection",
+		ManifestYAML: "api_version: moox.strategy/v2",
+		CompiledJSON: []byte(`{"api_version":"moox.strategy/v2","kind":"coin_selection"}`),
 		SourceHash:   "sha256",
 		CreatedAt:    time.UnixMilli(1000).UTC(),
 	}
@@ -40,7 +41,7 @@ func TestStrategyStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != want.ID || got.Name != want.Name || got.SourceHash != want.SourceHash || !got.CreatedAt.Equal(want.CreatedAt) {
+	if got.ID != want.ID || got.Name != want.Name || got.Kind != want.Kind || string(got.CompiledJSON) != string(want.CompiledJSON) || got.SourceHash != want.SourceHash || !got.CreatedAt.Equal(want.CreatedAt) {
 		t.Fatalf("GetStrategy() = %+v, want %+v", got, want)
 	}
 }

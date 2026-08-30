@@ -1,0 +1,14 @@
+[
+  {"file":"Bias.py","factor_id":"bias","input_columns":["close"],"outputs":["bias_20"],"params":{"window":20},"lookback_periods":20},
+  {"file":"BiasQ.py","factor_id":"bias_q","input_columns":["close"],"outputs":["bias_q_20"],"params":{"window":20},"lookback_periods":39},
+  {"file":"Cci.py","factor_id":"cci","input_columns":["high","low","close"],"outputs":["cci"],"params":{"window":20},"lookback_periods":39},
+  {"file":"CirculatingMcap.py","factor_id":"circulating_mcap","input_columns":["circulating_supply","close"],"outputs":["circulating_mcap"],"params":{},"lookback_periods":1},
+  {"file":"MinMax.py","factor_id":"minmax","input_columns":["high","low","close"],"outputs":["minmax_20"],"params":{"window":20},"lookback_periods":20},
+  {"file":"QuoteVolumeMean.py","factor_id":"quote_volume_mean","input_columns":["quote_volume"],"outputs":["quote_volume_mean_20"],"params":{"window":20},"lookback_periods":20},
+  {"file":"QuoteVolumeMeanQ.py","factor_id":"quote_volume_mean_q","input_columns":["quote_volume"],"outputs":["quote_volume_mean_q_20"],"params":{"window":20},"lookback_periods":39},
+  {"file":"VolumeMeanQ.py","factor_id":"volume_mean_q","input_columns":["volume"],"outputs":["volume_mean_q_20"],"params":{"window":20},"lookback_periods":39},
+  {"file":"ZfAbsMean.py","factor_id":"zf_abs_mean","input_columns":["open","high","low","close"],"outputs":["zf_abs_mean_20"],"params":{"window":20},"lookback_periods":40},
+  {"file":"ZfMeanQ.py","factor_id":"zf_mean_q","input_columns":["open","high","low"],"outputs":["zf_mean_q_20"],"params":{"window":20},"lookback_periods":39},
+  {"file":"ZfStd.py","factor_id":"zf_std","input_columns":["open","high","low","close"],"outputs":["zf_std_20"],"params":{"window":20},"lookback_periods":21},
+  {"file":"ZscoreAbsMeanQ.py","factor_id":"zscore_abs_mean_q","input_columns":["close"],"outputs":["zscore_abs_mean_q_20"],"params":{"window":20},"lookback_periods":58}
+]

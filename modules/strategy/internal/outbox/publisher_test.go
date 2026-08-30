@@ -42,11 +42,11 @@ func TestJetStreamPublisherBuildsEventMessage(t *testing.T) {
 	publisher := &JetStreamPublisher{Publisher: client, InstanceID: "strategy-1"}
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	data, err := registry.MarshalMessage(events.LogicalAccountTargetRequested, &tradeeventpb.LogicalAccountTargetRequested{
+	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "request-1", RunnerId: "runner-1", LogicalAccountId: "logical-1",
 		CommandSequence: 1,
-		Targets: []*tradeeventpb.InstrumentTarget{{
-			InstrumentId: "BTC-USDT-SPOT", Quantity: "1",
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{
+			InstrumentId: "BTC-USDT-SPOT", TargetWeight: "1",
 		}},
 	}, events.PublishOptions{EventID: "request-1", OccurredAt: time.Now().UTC(), SpaceID: "crypto", SubjectID: "logical-1"})
 	require.NoError(t, err)
@@ -55,7 +55,7 @@ func TestJetStreamPublisherBuildsEventMessage(t *testing.T) {
 	require.NoError(t, err)
 	_, payload, err := events.DecodeRaw(registry, client.body, client.subject, client.id, events.ContentType)
 	require.NoError(t, err)
-	if payload.ProtoReflect().Descriptor().FullName() != "trpc.moox.trade.event.LogicalAccountTargetRequested" {
+	if payload.ProtoReflect().Descriptor().FullName() != "trpc.moox.trade.event.LogicalAccountTargetWeightRequested" {
 		t.Fatalf("payload type = %s", payload.ProtoReflect().Descriptor().FullName())
 	}
 }
@@ -64,9 +64,9 @@ func TestJetStreamPublisherAcceptsEmptyFullTargetWithoutExpiry(t *testing.T) {
 	now := time.Now().UTC()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	data, err := registry.MarshalMessage(events.LogicalAccountTargetRequested, &tradeeventpb.LogicalAccountTargetRequested{
+	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "target-empty", RunnerId: "runner-1", LogicalAccountId: "logical-1",
-		CommandSequence: 1, Targets: []*tradeeventpb.InstrumentTarget{},
+		CommandSequence: 1, Targets: []*tradeeventpb.InstrumentWeightTarget{},
 	}, events.PublishOptions{
 		EventID: "target-empty", OccurredAt: now, SpaceID: "crypto", SubjectID: "logical-1",
 	})

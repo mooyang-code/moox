@@ -1143,7 +1143,7 @@ patch_configs() {
       "${STAGE_DIR}/factor/config/app.yaml"
   fi
   if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
-    perl -0pi -e 's#database:\s*\./data/strategy\.sqlite#database: ../data/strategy/strategy.sqlite#g; s#python_bin:\s*python3#python_bin: ../data/strategy/venv/bin/python#g' \
+    perl -0pi -e 's#database:\s*\./data/strategy\.sqlite#database: ../data/strategy/strategy.sqlite#g' \
       "${STAGE_DIR}/strategy/config/app.yaml"
   fi
   if [[ "${WITH_TRADE}" -eq 1 ]]; then
@@ -1719,21 +1719,6 @@ PY
   FACTOR_ENV+=("MOOX_FACTOR_ENGINE_PYTHON_BIN=${python_bin}")
 }
 
-ensure_strategy_python() {
-  local venv="${ROOT}/data/strategy/venv"
-  local python_bin="${venv}/bin/python"
-  if [[ ! -x "${python_bin}" ]]; then
-    python3 -m venv "${venv}"
-  fi
-  if ! "${python_bin}" - <<'PY' >/dev/null 2>&1; then
-import numpy  # noqa: F401
-import pandas  # noqa: F401
-PY
-    "${python_bin}" -m pip install --upgrade pip
-    "${python_bin}" -m pip install -r "${ROOT}/strategy/pyworker/runtime-requirements.txt"
-  fi
-}
-
 nats_endpoint() {
   local url="$1"
   url="${url#nats://}"
@@ -2259,6 +2244,18 @@ PY
       # the running EventBus and Storage peers, so keep them instead of
       # rotating credentials or failing the fresh bootstrap.
       echo "preserve EventBus identities after control data reset in ${eventbus_credentials_dir}"
+      # The role files remain authoritative after a reset, but users.yaml must
+      # still gain any subjects introduced by this release (notably Strategy's
+      # target-weight subject). Rebuild only the ACL file from the existing
+      # tokens; TLS keys and role credentials are never rotated here.
+      if [[ "${MOOX_RESET_CONTROL_DATA:-0}" == "1" ]]; then
+        "${ROOT}/bin/moox-admin-cli" eventbus-credentials reconcile \
+          --output-dir "${eventbus_credentials_dir}" \
+          >>"${ROOT}/logs/admin/stdout.log" 2>&1 || {
+            echo "EventBus ACL reconciliation failed" >&2
+            exit 1
+          }
+      fi
     elif [[ "${eventbus_credentials_complete}" -eq 1 ]]; then
       echo "reuse EventBus identities and refresh exported endpoints in ${eventbus_credentials_dir}"
     else
@@ -2390,13 +2387,22 @@ start_strategy() {
     echo "strategy is disabled in this deployment package" >&2
     exit 2
   fi
+  [[ -n "${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}" ]] || {
+    echo "Strategy requires MOOX_STORAGE_PRIMARY_AUTH_SECRET when Storage is configured" >&2
+    exit 1
+  }
+  [[ -n "${MOOX_STORAGE_VIEW_AUTH_SECRET:-}" ]] || {
+    echo "Strategy requires MOOX_STORAGE_VIEW_AUTH_SECRET when Storage is configured" >&2
+    exit 1
+  }
   wait_nats strategy "${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" "${MOOX_WAIT_STRATEGY_NATS_SECONDS:-60}"
-  ensure_strategy_python
+  if [[ "${WITH_TRADE}" == "1" ]]; then
+    wait_http "http://127.0.0.1:11210/readyz" "${MOOX_WAIT_TRADE_READY_SECONDS:-60}"
+  fi
   gateway_service_env_for strategy
   runtime_identity_env moox_strategy "${ROOT}/strategy/config/app.yaml"
   start_service "strategy" "${ROOT}/strategy" \
-    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
-      "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}" "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:-}" "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "${ROOT}/bin/moox-strategy" -conf=config/trpc_go.yaml
 }
 
@@ -2511,11 +2517,11 @@ case "${SERVICE}" in
     if [[ "${WITH_FACTOR}" == "1" ]]; then
       start_factor
     fi
-    if [[ "${WITH_STRATEGY}" == "1" ]]; then
-      start_strategy
-    fi
     if [[ "${WITH_TRADE}" == "1" ]]; then
       start_trade
+    fi
+    if [[ "${WITH_STRATEGY}" == "1" ]]; then
+      start_strategy
     fi
     if [[ "${WITH_WEB_HOST}" == "1" ]]; then
       start_web_host
@@ -3131,11 +3137,11 @@ fi
 if [[ "${WITH_FACTOR}" == "1" ]]; then
   default_services+=(factor)
 fi
-if [[ "${WITH_STRATEGY}" == "1" ]]; then
-  default_services+=(strategy)
-fi
 if [[ "${WITH_TRADE}" == "1" ]]; then
   default_services+=(trade)
+fi
+if [[ "${WITH_STRATEGY}" == "1" ]]; then
+  default_services+=(strategy)
 fi
 if [[ "${WITH_WEB_HOST}" == "1" ]]; then
   default_services+=(web-host)
@@ -3360,9 +3366,6 @@ prepare_stage() {
     "${STAGE_DIR}/factor/config" \
     "${STAGE_DIR}/factor/factors" \
     "${STAGE_DIR}/strategy/config" \
-    "${STAGE_DIR}/strategy/pyworker" \
-    "${STAGE_DIR}/strategy/pysdk" \
-    "${STAGE_DIR}/strategy/strategies/example" \
     "${STAGE_DIR}/trade/config" \
     "${STAGE_DIR}/python-runtime" \
     "${STAGE_DIR}/monitor/config" \
@@ -3432,13 +3435,13 @@ prepare_stage() {
     printf 'MOOX_GATEWAY_CALLER=admin-gateway\n'
     printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_service_secret}"
   } >"${STAGE_DIR}/secrets/gateway-service.env"
-  if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_FACTOR}" -eq 1 || "${WITH_MONITOR}" -eq 1 || "${DEPLOY_PROFILE}" == "control" ]]; then
+  if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_FACTOR}" -eq 1 || "${WITH_STRATEGY}" -eq 1 || "${WITH_MONITOR}" -eq 1 || "${DEPLOY_PROFILE}" == "control" ]]; then
     local storage_primary_auth_secret="${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
     if [[ -z "${storage_primary_auth_secret}" ]]; then
       if [[ "${WITH_STORAGE}" -eq 1 || "${DEPLOY_PROFILE}" == "control" ]]; then
         storage_primary_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-primary-auth)"
       else
-        fail "MOOX_STORAGE_PRIMARY_AUTH_SECRET is required when packaging Factor or Monitor without Storage"
+        fail "MOOX_STORAGE_PRIMARY_AUTH_SECRET is required when packaging Factor, Strategy, or Monitor without Storage"
       fi
     fi
     [[ "${storage_primary_auth_secret}" != *$'\n'* && "${storage_primary_auth_secret}" != *$'\r'* ]] || \
@@ -3460,7 +3463,7 @@ prepare_stage() {
       if [[ "${WITH_STORAGE}" -eq 1 || "${DEPLOY_PROFILE}" == "control" ]]; then
         storage_view_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-view-auth)"
       else
-        fail "MOOX_STORAGE_VIEW_AUTH_SECRET is required when packaging Factor or Monitor without Storage"
+        fail "MOOX_STORAGE_VIEW_AUTH_SECRET is required when packaging Factor, Strategy, or Monitor without Storage"
       fi
     fi
     [[ "${storage_view_auth_secret}" != *$'\n'* && "${storage_view_auth_secret}" != *$'\r'* ]] || \
@@ -3683,9 +3686,6 @@ EOF
   fi
   if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/strategy/config/." "${STAGE_DIR}/strategy/config/"
-    cp -R "${ROOT}/modules/strategy/pyworker/." "${STAGE_DIR}/strategy/pyworker/"
-    cp -R "${ROOT}/modules/strategy/pysdk/." "${STAGE_DIR}/strategy/pysdk/"
-    cp -R "${ROOT}/modules/strategy/strategies/example/." "${STAGE_DIR}/strategy/strategies/example/"
     find "${STAGE_DIR}/strategy" -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
     find "${STAGE_DIR}/strategy" -type f \( -name '*.pyc' -o -name '*.sqlite' -o -name '*.db' \) -delete
   fi
@@ -4316,8 +4316,8 @@ sync_local_stage() {
       [[ "${WITH_CLOUDNODE}" -eq 0 ]] || "${deploy_dir}/start.sh" cloudnode 8>&-
       [[ "${WITH_COLLECTOR}" -eq 0 ]] || "${deploy_dir}/start.sh" collector 8>&-
       [[ "${WITH_FACTOR}" -eq 0 ]] || MOOX_WITH_FACTOR=1 "${deploy_dir}/start.sh" factor 8>&-
-      [[ "${WITH_STRATEGY}" -eq 0 ]] || "${deploy_dir}/start.sh" strategy 8>&-
       [[ "${WITH_TRADE}" -eq 0 ]] || "${deploy_dir}/start.sh" trade 8>&-
+      [[ "${WITH_STRATEGY}" -eq 0 ]] || "${deploy_dir}/start.sh" strategy 8>&-
       [[ "${WITH_MONITOR}" -eq 0 ]] || "${deploy_dir}/start.sh" monitor 8>&-
       [[ "${WITH_WEB_HOST}" -eq 0 ]] || "${deploy_dir}/start.sh" web-host 8>&-
     else
@@ -4899,8 +4899,8 @@ fi
     [[ "${WITH_CLOUDNODE}" == "0" ]] || "${DEPLOY_DIR}/start.sh" cloudnode 8>&-
     [[ "${WITH_COLLECTOR}" == "0" ]] || "${DEPLOY_DIR}/start.sh" collector 8>&-
     [[ "${WITH_FACTOR}" == "0" ]] || MOOX_WITH_FACTOR=1 "${DEPLOY_DIR}/start.sh" factor 8>&-
-    [[ "${WITH_STRATEGY}" == "0" ]] || "${DEPLOY_DIR}/start.sh" strategy 8>&-
     [[ "${WITH_TRADE}" == "0" ]] || "${DEPLOY_DIR}/start.sh" trade 8>&-
+    [[ "${WITH_STRATEGY}" == "0" ]] || "${DEPLOY_DIR}/start.sh" strategy 8>&-
     [[ "${WITH_MONITOR}" == "0" ]] || "${DEPLOY_DIR}/start.sh" monitor 8>&-
     [[ "${WITH_WEB_HOST}" == "0" ]] || "${DEPLOY_DIR}/start.sh" web-host 8>&-
   else
@@ -5134,7 +5134,9 @@ set -a; . "$root/config/runtime.env"; set +a
 [[ "${MOOX_EVENTBUS_HOST:-}" == "$expected_host" ]]
 [[ "${MOOX_EVENTBUS_PORT:-}" == "$expected_port" ]]
 [[ "${MOOX_EVENTBUS_ENABLE_TLS:-}" == "$expected_tls" ]]
-pgrep -f -- "$root/bin/moox-eventbus" >/dev/null
+test -s "$root/run/eventbus.pid"
+eventbus_pid=$(cat "$root/run/eventbus.pid")
+kill -0 "$eventbus_pid"
 if [[ "$require_public" == 1 ]]; then
   command -v ss >/dev/null 2>&1
   ss -ltnH | grep -Eq "(0\\.0\\.0\\.0|\\*):${expected_port}([[:space:]]|$)"

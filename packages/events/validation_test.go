@@ -127,12 +127,12 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 		},
 		{
 			name: "factor computed trigger", event: FactorPeriodComputed, subjectID: "result-dataset",
-			payload: &storagepb.FactorPeriodComputed{SourceViewId: "source-view", ResultDatasetId: "result-dataset", Frequency: "1m", PeriodTime: 1, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete"}}, ComputedAt: now, TriggerEventId: "source-ready-1"},
+			payload: &storagepb.FactorPeriodComputed{SourceViewId: "source-view", ResultDatasetId: "result-dataset", Frequency: "1m", PeriodTime: 1, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}}, ComputedAt: now, TriggerEventId: "source-ready-1"},
 			mutate:  func(value proto.Message) { value.(*storagepb.FactorPeriodComputed).TriggerEventId = "" },
 		},
 		{
 			name: "factor view route", event: ViewFactorPeriodReady, subjectID: "result-view",
-			payload: &storagepb.ViewFactorPeriodReady{SourceViewId: "source-view", ResultViewId: "result-view", Frequency: "1m", PeriodTime: 1, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete"}}, ReadyAt: now},
+			payload: &storagepb.ViewFactorPeriodReady{SourceViewId: "source-view", ResultViewId: "result-view", Frequency: "1m", PeriodTime: 1, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}}, ReadyAt: now},
 			mutate:  func(value proto.Message) { value.(*storagepb.ViewFactorPeriodReady).ResultViewId = "other" },
 		},
 		{
@@ -153,6 +153,22 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestFactorCompletionRequiresSourceHash(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	_, err = registry.Encode(
+		FactorPeriodComputed,
+		&storagepb.FactorPeriodComputed{
+			SourceViewId: "source-view", ResultDatasetId: "result-dataset", Frequency: "1m", PeriodTime: 1,
+			Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete"}},
+			ComputedAt: timestamppb.Now(), TriggerEventId: "source-ready-1", SourceIndexId: "source-index-1", SourceIndexRevision: 1,
+		},
+		validationOptions("factor-event-1", "space", "result-dataset"),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "source_hash is required")
 }
 
 type semanticValidationPublisher struct {

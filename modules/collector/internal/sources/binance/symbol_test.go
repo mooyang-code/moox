@@ -181,35 +181,73 @@ func TestSymbolCollectorDeactivatesMissingDatasetSubjects(t *testing.T) {
 
 	require.NoError(t, collector.Collect(context.Background(), symbolCollectParams()))
 	assert.Equal(t, datasetIDs, writer.listCalls)
-	require.Len(t, writer.bound, len(datasetIDs))
-	require.Len(t, writer.rows, 2, "active and inactive symbol versions must both be persisted")
-	inactiveFields := symbolRowFields(writer.rows[1])
-	assert.Equal(t, "OLD-USDT", inactiveFields["symbol"])
+	require.Len(t, writer.bound, 2*len(datasetIDs), "legacy and missing memberships must be disabled")
+	require.Len(t, writer.rows, 3, "active and inactive symbol versions must both be persisted")
+	var inactiveFields map[string]string
+	for _, row := range writer.rows {
+		fields := symbolRowFields(row)
+		if fields["symbol"] == "OLD-USDT" {
+			inactiveFields = fields
+			break
+		}
+	}
+	require.NotNil(t, inactiveFields)
 	assert.Equal(t, "OLDUSDT", inactiveFields["external_symbol"])
 	assert.Equal(t, "OLD", inactiveFields["base_asset"])
 	assert.Equal(t, "USDT", inactiveFields["quote_asset"])
 	assert.Equal(t, "inactive", inactiveFields["status"])
 	for _, got := range writer.bound {
 		assert.Equal(t, "disabled", got.GetStatus())
-		assert.Equal(t, "benchmark", got.GetSubjectRole())
-		assert.Equal(t, "2026-01-01T00:00:00Z", got.GetEffectiveStartTime())
-		assert.Equal(t, "2026-12-31T00:00:00Z", got.GetEffectiveEndTime())
-		assert.Equal(t, "created", got.GetCreatedAt())
-		assert.Equal(t, "updated", got.GetUpdatedAt())
-		assert.Equal(t, map[string]string{"source": "binance", "dataset": got.GetDatasetId()}, got.GetAttributes())
+		if got.GetSubjectId() == "OLD-USDT" {
+			assert.Equal(t, "benchmark", got.GetSubjectRole())
+			assert.Equal(t, "2026-01-01T00:00:00Z", got.GetEffectiveStartTime())
+			assert.Equal(t, "2026-12-31T00:00:00Z", got.GetEffectiveEndTime())
+			assert.Equal(t, "created", got.GetCreatedAt())
+			assert.Equal(t, "updated", got.GetUpdatedAt())
+			assert.Equal(t, map[string]string{"source": "binance", "dataset": got.GetDatasetId()}, got.GetAttributes())
+		} else {
+			assert.Equal(t, "BTC-USDT", got.GetSubjectId())
+			assert.Equal(t, "normal", got.GetSubjectRole())
+		}
 	}
 	assert.Equal(t, "active", returnedOld.GetStatus(), "reconcile must clone storage bindings before mutation")
 
 	require.NoError(t, collector.Collect(context.Background(), symbolCollectParams()))
-	assert.Len(t, writer.bound, len(datasetIDs), "repeated reconciliation must not rewrite inactive memberships")
-	assert.Len(t, writer.rows, 3, "repeated collection writes only the current active snapshot")
+	assert.Len(t, writer.bound, 2*len(datasetIDs), "repeated reconciliation must not rewrite inactive memberships")
+	assert.Len(t, writer.rows, 4, "repeated collection writes only the current active snapshot")
+}
+
+func TestSymbolCollectorDeactivatesMissingCanonicalDatasetSubject(t *testing.T) {
+	writer := &fakeSymbolStorage{listByDataset: map[string][]*storagepb.DatasetSubject{
+		"symbols-custom": {{
+			SpaceId: "space-custom", DatasetId: "symbols-custom", SubjectId: "BTC-USDT-SPOT", Status: "active",
+		}},
+	}}
+	collector := symbolCollectorWithSymbols(writer, activeSymbol("ETH"))
+
+	require.NoError(t, collector.Collect(context.Background(), symbolCollectParams()))
+	var inactiveFields map[string]string
+	for _, row := range writer.rows {
+		fields := symbolRowFields(row)
+		if fields["status"] == "inactive" {
+			inactiveFields = fields
+			assert.Equal(t, "BTC-USDT-SPOT", row.GetKey().GetRecord().GetRecordId())
+			break
+		}
+	}
+	require.NotNil(t, inactiveFields)
+	assert.Equal(t, "BTCUSDT", inactiveFields["external_symbol"])
+	assert.Equal(t, "inactive", inactiveFields["status"])
+	require.Len(t, writer.bound, 1)
+	assert.Equal(t, "BTC-USDT-SPOT", writer.bound[0].GetSubjectId())
+	assert.Equal(t, "disabled", writer.bound[0].GetStatus())
 }
 
 func TestSymbolCollectorKeepsReturnedSubjectsActive(t *testing.T) {
 	writer := &fakeSymbolStorage{
 		listByDataset: map[string][]*storagepb.DatasetSubject{
 			"symbols-custom": {
-				{SpaceId: "space-custom", DatasetId: "symbols-custom", SubjectId: "BTC-USDT", Status: "active"},
+				{SpaceId: "space-custom", DatasetId: "symbols-custom", SubjectId: "BTC-USDT-SPOT", Status: "active"},
 				{SpaceId: "space-custom", DatasetId: "symbols-custom", SubjectId: "OLD-USDT", Status: "inactive"},
 			},
 		},

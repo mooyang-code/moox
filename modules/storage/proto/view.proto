@@ -49,6 +49,14 @@ message QueryTimeSeriesRowsReq {
   uint32 limit = 10;
   // total_mode 控制是否计算精确总数。
   common.TotalMode total_mode = 11;
+  // expected_active_index_id pins a multi-page read to the index observed by
+  // the caller. A mismatch means the A/B active index switched and the caller
+  // must restart the complete read instead of mixing pages from both indexes.
+  string expected_active_index_id = 12;
+  // expected_active_index_revision pins a read to the write revision observed
+  // by the caller. A mismatch means the same active index was updated in
+  // place, so the caller must restart instead of mixing generations.
+  uint64 expected_active_index_revision = 13;
 }
 
 // QueryTimeSeriesRowsRsp 表示时序 View 数据查询结果。
@@ -64,6 +72,8 @@ message QueryTimeSeriesRowsRsp {
   string served_indexed_from = 5;
   string served_indexed_to = 6;
   bool complete = 7;
+  // served_active_index_revision is the write revision used for this page.
+  uint64 served_active_index_revision = 8;
 }
 
 // SearchRecordRowsReq 表示搜索记录 View 数据。

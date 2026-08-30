@@ -11,14 +11,15 @@ export interface PageResponse {
 
 export interface InstrumentTarget {
   instrument_id: string;
-  quantity: string;
+  target_weight: string;
 }
 
 export interface Strategy {
   strategy_id: string;
   name: string;
+  kind: string;
   manifest_yaml: string;
-  source_code: string;
+  compiled_json: string;
   source_hash: string;
   created_at: string;
 }
@@ -29,9 +30,8 @@ export interface StrategyRunner {
   runner_id: string;
   strategy_id: string;
   space_id: string;
-  view_id: string;
+  source_view_id: string;
   frequency: string;
-  params_json: string;
   logical_account_id: string;
   status: StrategyRunnerStatus;
   current_targets: InstrumentTarget[];
@@ -47,16 +47,11 @@ export interface StrategyResult {
   result_id: string;
   runner_id: string;
   strategy_id: string;
-  trigger_bar_time: string;
-  namespace: string;
+  period_time: string;
+  targets: InstrumentTarget[];
   input_hash: string;
   action: string;
-  output_json: string;
+  debug_info_json: string;
   command_sequence?: string;
   created_at: string;
-}
-
-export interface EngineStatus {
-  workers: number;
-  ready_workers: number;
 }

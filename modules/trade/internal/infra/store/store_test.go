@@ -186,3 +186,50 @@ func TestOpenAcceptsCurrentSchemaOnReopen(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, second.Close())
 }
+
+func TestOpenMigratesLegacyLogicalAccountOwnerGeneration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-owner.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(legacyLogicalAccountTableSQL).Error)
+	require.NoError(t, db.Exec(`
+CREATE UNIQUE INDEX ux_logical_account_owner_runner
+ON t_logical_accounts (c_space_id, c_owner_runner_id)
+WHERE c_owner_runner_id IS NOT NULL
+`).Error)
+	require.NoError(t, db.Exec(`
+INSERT INTO t_logical_accounts
+ (c_space_id, c_logical_account_id, c_name, c_execution_mode, c_market_type, c_settlement_asset, c_automation_state, c_pause_reason)
+VALUES ('space', 'logical', 'legacy', 'PAPER', 'SPOT', 'USDT', 'PAUSED', 'legacy')
+;
+INSERT INTO t_logical_accounts
+ (c_space_id, c_logical_account_id, c_name, c_owner_runner_id, c_execution_mode, c_market_type, c_settlement_asset, c_automation_state, c_pause_reason)
+VALUES ('space', 'owned', 'owned', 'runner', 'PAPER', 'SPOT', 'USDT', 'PAUSED', 'legacy')
+`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	s, err := Open(path)
+	require.NoError(t, err)
+	var columns []string
+	require.NoError(t, s.db.Raw(`SELECT name FROM pragma_table_info('t_logical_accounts') ORDER BY cid`).Scan(&columns).Error)
+	require.Contains(t, columns, "c_owner_claimed_at")
+	// The migration is additive and defaults existing accounts to generation 0.
+	var generations map[string]int64
+	var rows []struct {
+		ID         string `gorm:"column:id"`
+		Generation int64  `gorm:"column:generation"`
+	}
+	require.NoError(t, s.db.Raw(`SELECT c_logical_account_id AS id, c_owner_claimed_at AS generation FROM t_logical_accounts`).Scan(&rows).Error)
+	generations = make(map[string]int64, len(rows))
+	for _, row := range rows {
+		generations[row.ID] = row.Generation
+	}
+	require.Equal(t, int64(0), generations["logical"])
+	require.Equal(t, int64(1), generations["owned"])
+	require.NoError(t, s.Close())
+	reopened, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, reopened.Close())
+}

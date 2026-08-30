@@ -1,9 +1,6 @@
-python_bin: python3
-worker_path: ./pyworker/worker.py
 database: ./data/strategy.sqlite
 logical_account_target: ip://127.0.0.1:11200
 logical_account_timeout: 3s
-workers: 4
 instance_id: strategy-1
 eventbus:
   urls:
@@ -13,3 +10,17 @@ eventbus:
   relay_batch_size: 100
   reconnect_interval: 1s
   connect_timeout: 3s
+  consumer_name: strategy_view_factor_ready_v1
+factor:
+  target: ip://127.0.0.1:11003
+  target_node: factor
+  app_id: strategy
+  timeout: 5s
+storage:
+  target: ip://127.0.0.1:11003
+  target_node: storage-gateway
+  app_id: strategy
+  # AppKey/ViewAppKey are derived from the deployment's Storage auth secrets.
+  app_key: ""
+  view_app_key: ""
+  timeout: 5s

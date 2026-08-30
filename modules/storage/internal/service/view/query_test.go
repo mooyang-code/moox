@@ -256,7 +256,7 @@ func TestQueryTimeSeriesRowsCompletenessRequiresRowsStatsCoverageAndActiveView(t
 		noRange  bool
 	}{
 		{name: "valid coverage", active: true, rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}, stats: validStats, complete: true},
-		{name: "empty rows", active: true, stats: validStats},
+		{name: "empty rows", active: true, stats: validStats, complete: true},
 		{name: "stat failure", active: true, rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}, stats: validStats, statErr: errors.New("stat failed")},
 		{name: "no valid coverage", active: true, rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}, noRange: true},
 		{name: "no active view", rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}, stats: validStats},
@@ -284,6 +284,39 @@ func TestQueryTimeSeriesRowsCompletenessRequiresRowsStatsCoverageAndActiveView(t
 				t.Fatalf("coverage fields not returned: %v", rsp)
 			}
 		})
+	}
+}
+
+func TestQueryTimeSeriesRowsRejectsActiveIndexMismatchBeforeQuery(t *testing.T) {
+	engine := &queryEngine{}
+	svc, auth := queryTestService(engine, true)
+	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
+		AuthInfo: auth, SpaceId: "space", ViewId: "prices", ExpectedActiveIndexId: "prices-old",
+		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_READY {
+		t.Fatalf("rsp=%v err=%v, want VIEW_NOT_READY", rsp, err)
+	}
+	if engine.calls != 0 {
+		t.Fatalf("engine query calls=%d, want 0 on active-index mismatch", engine.calls)
+	}
+}
+
+func TestQueryTimeSeriesRowsRejectsInPlaceRevisionMismatch(t *testing.T) {
+	engine := &queryEngine{}
+	svc, auth := queryTestService(engine, true)
+	svc.indexRevision = map[string]uint64{"prices-index": 7}
+	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
+		AuthInfo: auth, SpaceId: "space", ViewId: "prices", ExpectedActiveIndexId: "prices-index", ExpectedActiveIndexRevision: 6,
+		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_READY {
+		t.Fatalf("rsp=%v err=%v, want VIEW_NOT_READY", rsp, err)
+	}
+	if engine.calls != 0 {
+		t.Fatalf("engine query calls=%d, want 0 on in-place revision mismatch", engine.calls)
 	}
 }
 

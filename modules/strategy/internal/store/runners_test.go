@@ -18,9 +18,8 @@ func TestRunnerStoreRoundTripPreservesNullableFields(t *testing.T) {
 		ID:                 "runner-1",
 		StrategyID:         "strategy-1",
 		SpaceID:            "space-1",
-		ViewID:             "view-1",
+		SourceViewID:       "view-1",
 		Frequency:          "1m",
-		ParamsJSON:         json.RawMessage(`{"fast":12}`),
 		LogicalAccountID:   &logicalAccountID,
 		Status:             domain.RunnerStatusDisabled,
 		CurrentTargetsJSON: json.RawMessage(`[]`),
@@ -50,10 +49,10 @@ func TestCreateRunnerInitializesTargetSequenceAndHealth(t *testing.T) {
 	resultID, lastError := "caller-result", "caller-error"
 	lastSuccess := time.UnixMilli(3000).UTC()
 	runner := domain.StrategyRunner{
-		ID: "runner-1", StrategyID: "strategy-1", SpaceID: "space-1", ViewID: "view-1",
-		Frequency: "1m", ParamsJSON: json.RawMessage(`{}`), Status: domain.RunnerStatusDisabled,
+		ID: "runner-1", StrategyID: "strategy-1", SpaceID: "space-1", SourceViewID: "view-1",
+		Frequency: "1m", Status: domain.RunnerStatusDisabled,
 		CurrentTargetsJSON: json.RawMessage(
-			`[{"instrument_id":"BTC-USDT-SPOT","quantity":"2"}]`,
+			`[{"instrument_id":"BTC-USDT-SPOT","target_weight":"0.2"}]`,
 		),
 		CommandSequence: 9, LastResultID: &resultID, LastSuccessAt: &lastSuccess,
 		LastError: &lastError, CreatedAt: now, UpdatedAt: now,
@@ -84,12 +83,12 @@ func TestUpdateRunnerRequiresDisabledStatus(t *testing.T) {
 	}
 }
 
-func TestUpdateRunnerSwitchesStrategyWhilePreservingTargetAndSequence(t *testing.T) {
+func TestUpdateRunnerSwitchesStrategyClearsTargetsButKeepsSequence(t *testing.T) {
 	repo := openCurrentStore(t)
 	seedStrategy(t, repo, "strategy-1")
 	seedStrategy(t, repo, "strategy-2")
 	runner := newRunner("runner-1", "strategy-1", domain.RunnerStatusDisabled)
-	runner.CurrentTargetsJSON = json.RawMessage(`[{"instrument_id":"BTC-USDT-SPOT","quantity":"1"}]`)
+	runner.CurrentTargetsJSON = json.RawMessage(`[{"instrument_id":"BTC-USDT-SPOT","target_weight":"0.1"}]`)
 	runner.CommandSequence = 7
 	resultID, lastError := "result-1", "old error"
 	success := time.UnixMilli(8000).UTC()
@@ -107,7 +106,7 @@ func TestUpdateRunnerSwitchesStrategyWhilePreservingTargetAndSequence(t *testing
 		t.Fatal(err)
 	}
 	runner.StrategyID = "strategy-2"
-	runner.ViewID = "view-2"
+	runner.SourceViewID = "view-2"
 	runner.UpdatedAt = time.UnixMilli(9000)
 	if err := repo.UpdateRunner(context.Background(), runner); err != nil {
 		t.Fatal(err)
@@ -116,7 +115,7 @@ func TestUpdateRunnerSwitchesStrategyWhilePreservingTargetAndSequence(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.StrategyID != "strategy-2" || string(got.CurrentTargetsJSON) != string(runner.CurrentTargetsJSON) || got.CommandSequence != 7 {
+	if got.StrategyID != "strategy-2" || string(got.CurrentTargetsJSON) != "[]" || got.CommandSequence != 7 {
 		t.Fatalf("switched runner = %+v", got)
 	}
 	if got.LastResultID != nil || got.LastSuccessAt != nil || got.LastError != nil {
@@ -136,6 +135,32 @@ func TestUpdateRunnerStrategySwitchRequiresDisabledStatus(t *testing.T) {
 	runner.UpdatedAt = time.Now()
 	if err := repo.UpdateRunner(context.Background(), runner); !errors.Is(err, ErrRunnerEnabled) {
 		t.Fatalf("UpdateRunner() error = %v", err)
+	}
+}
+
+func TestEnableRunnerStartsFreshTargetLifecycle(t *testing.T) {
+	repo := openCurrentStore(t)
+	seedStrategy(t, repo, "strategy-1")
+	runner := newRunner("runner-1", "strategy-1", domain.RunnerStatusDisabled)
+	if err := repo.CreateRunner(context.Background(), runner); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.Exec(`
+		UPDATE t_strategy_runners
+		SET current_targets_json = ?, command_sequence = 4, last_result_id = ?, last_success_at = ?, last_error = ?
+		WHERE runner_id = ?
+	`, `[ {"instrument_id":"BTC","target_weight":"1"} ]`, "old-result", 3000, "old error", runner.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetRunnerStatus(context.Background(), runner.ID, domain.RunnerStatusEnabled, time.UnixMilli(4000)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.GetRunner(context.Background(), runner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got.CurrentTargetsJSON) != "[]" || got.LastResultID != nil || got.LastSuccessAt != nil || got.LastError != nil || got.CommandSequence != 4 {
+		t.Fatalf("enabled lifecycle was not reset: %+v", got)
 	}
 }
 
@@ -210,8 +235,8 @@ func TestObserveOnlyRunnerHasNoLogicalAccount(t *testing.T) {
 func newRunner(id, strategyID string, status domain.RunnerStatus) domain.StrategyRunner {
 	now := time.UnixMilli(5000).UTC()
 	return domain.StrategyRunner{
-		ID: id, StrategyID: strategyID, SpaceID: "space-1", ViewID: "view-1", Frequency: "1m",
-		ParamsJSON: json.RawMessage(`{}`), Status: status, CurrentTargetsJSON: json.RawMessage(`[]`),
+		ID: id, StrategyID: strategyID, SpaceID: "space-1", SourceViewID: "view-1", Frequency: "1m",
+		Status: status, CurrentTargetsJSON: json.RawMessage(`[]`),
 		CreatedAt: now, UpdatedAt: now,
 	}
 }
@@ -219,7 +244,7 @@ func newRunner(id, strategyID string, status domain.RunnerStatus) domain.Strateg
 func seedStrategy(t *testing.T, repo *Store, id string) {
 	t.Helper()
 	if err := repo.SaveStrategy(context.Background(), domain.Strategy{
-		ID: id, Name: id, ManifestYAML: "{}", SourceCode: "pass", SourceHash: id,
+		ID: id, Name: id, Kind: "coin_selection", ManifestYAML: "{}", CompiledJSON: []byte(`{"api_version":"moox.strategy/v2","kind":"coin_selection","space_id":"space-1"}`), SourceHash: id,
 		CreatedAt: time.UnixMilli(1000).UTC(),
 	}); err != nil {
 		t.Fatal(err)

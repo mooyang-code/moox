@@ -6,7 +6,7 @@ Trade 健康端口默认为 `11210`。启动时必须成功打开 Trade Store，
 
 ## 统一执行检查项
 
-1. 检查 `trade_target_v1` Consumer 的 pending、redelivery 和 ack pending。
+1. 检查 `trade_target_weight_v1` Consumer 的 pending、redelivery 和 ack pending。
 2. 检查 `SUBMIT_UNKNOWN`、`CANCEL_UNKNOWN`、重复成交和余额对账差异。
 3. 检查每个 `TradingAccount` 的 Ready、最近快照时间和 PaperMatcher 状态。
 4. 资金曲线只通过 `TradeConsoleService.QueryEquityCurve` 查询，不直接修改事实表。
@@ -25,14 +25,14 @@ Trade 健康端口默认为 `11210`。启动时必须成功打开 Trade Store，
 - Worker 在交易所调用后崩溃：重启后先按 `client_order_id` 查询交易所，禁止直接重试下单。
 - 私有成交流缺口：supervisor 自动重连，成交对账按交易所成交号补录，重复回报不会重复结算。
 - 本地余额与交易所不一致：执行余额对账；本地 `frozen` 和 `margin` 在途资金必须保留。
-- 目标中断：`trade_target_v1` consumer 从 Outbox/JetStream 重放，订单仍由同一个 OrderService 收敛。
+- 目标中断：`trade_target_weight_v1` consumer 从 Outbox/JetStream 重放，订单仍由同一个 OrderService 收敛。
 
 ## 破坏式 cutover
 
 1. 停止 Runner，暂停 LogicalAccount，取消 Production 活动订单并清理非零敞口。
 2. 等待 Strategy pending outbox 为空后停止 Strategy、Trade 和 relay。
 3. 成对备份 Trade/Strategy SQLite、旧二进制和旧 Web；删除并重建两套 SQLite。
-4. 删除 `MOOX_TRADE` Stream，启动 Trade 自动创建 `trade_target_v1` consumer。
+4. 删除 `MOOX_TRADE` Stream，启动 Trade 自动创建 `trade_target_weight_v1` consumer。
 5. 部署同版本 Strategy/Admin/Web，保持 `live_trading_enabled=false`。
 6. 手工重建 TradingAccount、PaperSimulation、Strategy、Runner 和 logical_account_id。
 7. 运行 Paper、mock Live、JetStream、Web 和 Testnet 验收；通过后再开启 Production。

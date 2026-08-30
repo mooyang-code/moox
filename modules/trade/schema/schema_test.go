@@ -36,6 +36,8 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 		"t_paper_account_configs",
 		"t_account_equity_points",
 		"t_logical_account_equity_points",
+		"t_logical_account_target_receipts",
+		"t_logical_account_owner_rebinds",
 	}
 	sort.Strings(want)
 	require.Equal(t, want, tables)

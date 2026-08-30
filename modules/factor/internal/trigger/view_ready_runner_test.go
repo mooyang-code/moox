@@ -53,7 +53,7 @@ func TestViewReadyRunnerExecuteSelectedRunsOnlyRequestedFactor(t *testing.T) {
 	period := time.Date(2026, 8, 10, 1, 1, 0, 0, time.UTC)
 	ready := &publicstoragepb.ViewSourcePeriodReady{
 		SourceViewId: "source_view", Frequency: "1m", PeriodTime: period.Unix(), Status: "complete",
-		PrimarySubjects: []string{"BTC", "ETH"}, ReadyAt: timestamppb.New(period),
+		PrimarySubjects: []string{"BTC", "ETH"}, ReadyAt: timestamppb.New(period), ActiveIndexRevision: 1,
 	}
 
 	require.NoError(t, executor.ExecuteSelected(context.Background(), "space", "recalc-event", "bias5", ready))

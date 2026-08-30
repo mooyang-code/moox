@@ -7,9 +7,7 @@
           <span>不可变策略代码与运行清单。</span>
         </div>
         <a-space>
-          <a-tag :color="store.engineReady ? 'green' : 'orange'">
-            Worker {{ store.engine.ready_workers }}/{{ store.engine.workers }}
-          </a-tag>
+          <a-tag color="blue">声明式权重策略</a-tag>
           <a-button :loading="store.loading" @click="refresh"
             ><template #icon><icon-refresh /></template>刷新</a-button
           >
@@ -34,7 +32,7 @@
               <div class="muted">{{ record.strategy_id }}</div>
             </template>
           </a-table-column>
-          <a-table-column title="源码 Hash" :ellipsis="true" :tooltip="true">
+          <a-table-column title="编译 Hash" :ellipsis="true" :tooltip="true">
             <template #cell="{ record }">{{ record.source_hash || "-" }}</template>
           </a-table-column>
           <a-table-column title="创建时间">
@@ -57,9 +55,6 @@
           <a-form-item label="Manifest YAML" required>
             <a-textarea v-model="form.manifest_yaml" class="code-input" :auto-size="{ minRows: 5, maxRows: 10 }" />
           </a-form-item>
-          <a-form-item label="Python 源码" required>
-            <a-textarea v-model="form.source_code" class="code-input" :auto-size="{ minRows: 12, maxRows: 24 }" />
-          </a-form-item>
         </a-form>
       </a-modal>
 
@@ -67,12 +62,13 @@
         <a-descriptions v-if="selected" :column="1" bordered>
           <a-descriptions-item label="策略 ID">{{ selected.strategy_id }}</a-descriptions-item>
           <a-descriptions-item label="名称">{{ selected.name }}</a-descriptions-item>
-          <a-descriptions-item label="源码 Hash">{{ selected.source_hash }}</a-descriptions-item>
+          <a-descriptions-item label="类型">{{ selected.kind }}</a-descriptions-item>
+          <a-descriptions-item label="编译 Hash">{{ selected.source_hash }}</a-descriptions-item>
         </a-descriptions>
         <h3>Manifest</h3>
         <pre>{{ selected?.manifest_yaml }}</pre>
-        <h3>Python</h3>
-        <pre>{{ selected?.source_code }}</pre>
+        <h3>编译依赖</h3>
+        <pre>{{ selected?.compiled_json }}</pre>
       </a-drawer>
     </div>
   </div>
@@ -83,21 +79,42 @@ import { onMounted, reactive, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createStrategy } from "@/api/strategy";
 import type { Strategy } from "@/api/strategy-types";
+import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 
 defineOptions({ name: "StrategyOverview" });
 const store = useStrategyStore();
+const spaceStore = useSpaceStore();
 const createVisible = ref(false);
 const artifactVisible = ref(false);
 const selected = ref<Strategy | null>(null);
 const pagination = reactive({ current: 1, pageSize: 20, total: 0 });
-const defaultManifest = "api_version: moox.strategy/v1\nentrypoint: strategy.py:run\ninput:\n  history_bars: 200\n";
-const defaultSource = 'def run(context, data, params):\n    return {"action": "hold"}\n';
+const defaultManifest = `api_version: moox.strategy/v2
+kind: coin_selection
+input:
+  source_view_id: market_prices
+  data_frequency: 1h
+  factors:
+    - factor_id: factor_bias
+instrument_pool:
+  markets: [spot]
+schedule:
+  every: 1h
+readiness:
+  policy: strict
+long:
+  side_weight: "1"
+  scores:
+    - factor_id: factor_bias
+      direction: ascending
+      weight: "1"
+  filters: []
+  selection: {mode: count, value: 10}
+`;
 const form = reactive({
   strategy_id: "",
   name: "",
-  manifest_yaml: defaultManifest,
-  source_code: defaultSource
+  manifest_yaml: defaultManifest
 });
 
 async function refresh() {
@@ -116,12 +133,14 @@ function showArtifact(strategy: Strategy) {
 }
 
 async function create() {
-  if (!form.strategy_id.trim() || !form.name.trim() || !form.manifest_yaml.trim() || !form.source_code.trim()) {
+  if (!form.strategy_id.trim() || !form.name.trim() || !form.manifest_yaml.trim() || !spaceStore.selectedSpaceId) {
     Message.warning("请填写完整策略定义");
     return false;
   }
   await createStrategy({
     ...form,
+    kind: "coin_selection",
+    compiled_json: "",
     strategy_id: form.strategy_id.trim(),
     name: form.name.trim(),
     source_hash: "",
@@ -131,8 +150,7 @@ async function create() {
   Object.assign(form, {
     strategy_id: "",
     name: "",
-    manifest_yaml: defaultManifest,
-    source_code: defaultSource
+    manifest_yaml: defaultManifest
   });
   await refresh();
   return true;

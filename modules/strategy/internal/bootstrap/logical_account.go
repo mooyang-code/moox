@@ -68,18 +68,61 @@ func (c *logicalAccountOwnerClient) Validate(
 	)
 }
 
+// Generation returns the Trade-owned monotonic logical-account lifecycle
+// token used to fence delayed Strategy target events.
+func (c *logicalAccountOwnerClient) Generation(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	expectedOwner string,
+) (int64, error) {
+	if err := validateLogicalAccountIdentity(spaceID, logicalAccountID, expectedOwner, expectedOwner != ""); err != nil {
+		return 0, err
+	}
+	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	if err != nil {
+		return 0, err
+	}
+	defer cancel()
+	response, err := c.client.GetLogicalAccount(callCtx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalAccountID}, opts...)
+	if err != nil {
+		return 0, c.transportError(callCtx, "generation", err)
+	}
+	if err := validateLogicalAccountResponse("generation", spaceID, logicalAccountID, expectedOwner, response.GetRetInfo(), response.GetLogicalAccount()); err != nil {
+		return 0, err
+	}
+	generation := response.GetLogicalAccount().GetOwnerGeneration()
+	if generation <= 0 {
+		return 0, fmt.Errorf("Trade LogicalAccount generation is not active")
+	}
+	return generation, nil
+}
+
 func (c *logicalAccountOwnerClient) Claim(
 	ctx context.Context,
 	spaceID string,
 	logicalAccountID string,
 	runnerID string,
 ) error {
+	_, err := c.ClaimWithGeneration(ctx, spaceID, logicalAccountID, runnerID)
+	return err
+}
+
+// ClaimWithGeneration returns the Trade-owned lifecycle generation after a
+// successful claim. The generation lets Strategy detect a repaired claim and
+// clear any local target snapshot that belongs to the previous lifecycle.
+func (c *logicalAccountOwnerClient) ClaimWithGeneration(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	runnerID string,
+) (int64, error) {
 	if err := validateLogicalAccountIdentity(spaceID, logicalAccountID, runnerID, true); err != nil {
-		return err
+		return 0, err
 	}
 	callCtx, cancel, opts, err := c.call(ctx, spaceID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer cancel()
 	response, err := c.client.ClaimLogicalAccountOwner(
@@ -91,16 +134,20 @@ func (c *logicalAccountOwnerClient) Claim(
 		opts...,
 	)
 	if err != nil {
-		return c.transportError(callCtx, "claim", err)
+		return 0, c.transportError(callCtx, "claim", err)
 	}
-	return validateLogicalAccountResponse(
+	if err := validateLogicalAccountResponse(
 		"claim",
 		spaceID,
 		logicalAccountID,
 		runnerID,
 		response.GetRetInfo(),
 		response.GetLogicalAccount(),
-	)
+	); err != nil {
+		return 0, err
+	}
+	generation := response.GetLogicalAccount().GetOwnerGeneration()
+	return generation, nil
 }
 
 func (c *logicalAccountOwnerClient) Release(
@@ -145,6 +192,56 @@ func (c *logicalAccountOwnerClient) Release(
 		)
 	}
 	return nil
+}
+
+// Rebind starts a fresh Trade owner lifecycle without releasing the current
+// owner. This fences delayed targets when an archived V1 runner is reused by
+// a V2 runner with the same identity.
+func (c *logicalAccountOwnerClient) Rebind(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	runnerID string,
+	rebindKey string,
+) (int64, error) {
+	if err := validateLogicalAccountIdentity(spaceID, logicalAccountID, runnerID, true); err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(rebindKey) == "" {
+		return 0, errors.New("rebind key is required")
+	}
+	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	if err != nil {
+		return 0, err
+	}
+	defer cancel()
+	response, err := c.client.RebindLogicalAccountOwner(
+		callCtx,
+		&tradepb.RebindLogicalAccountOwnerReq{
+			LogicalAccountId: logicalAccountID,
+			RunnerId:         runnerID,
+			RebindKey:        rebindKey,
+		},
+		opts...,
+	)
+	if err != nil {
+		return 0, c.transportError(callCtx, "rebind", err)
+	}
+	if err := validateLogicalAccountResponse(
+		"rebind",
+		spaceID,
+		logicalAccountID,
+		runnerID,
+		response.GetRetInfo(),
+		response.GetLogicalAccount(),
+	); err != nil {
+		return 0, err
+	}
+	generation := response.GetLogicalAccount().GetOwnerGeneration()
+	if generation <= 0 {
+		return 0, fmt.Errorf("Trade LogicalAccount rebind returned inactive owner generation")
+	}
+	return generation, nil
 }
 
 func (c *logicalAccountOwnerClient) call(

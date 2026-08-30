@@ -1,10 +1,7 @@
 package domain
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
-	"io"
 	"time"
 )
 
@@ -25,8 +22,9 @@ const (
 type Strategy struct {
 	ID           string
 	Name         string
+	Kind         string
 	ManifestYAML string
-	SourceCode   string
+	CompiledJSON []byte
 	SourceHash   string
 	CreatedAt    time.Time
 }
@@ -37,9 +35,8 @@ type StrategyRunner struct {
 	ID                 string
 	StrategyID         string
 	SpaceID            string
-	ViewID             string
+	SourceViewID       string
 	Frequency          string
-	ParamsJSON         json.RawMessage
 	LogicalAccountID   *string
 	Status             RunnerStatus
 	CurrentTargetsJSON json.RawMessage
@@ -57,11 +54,11 @@ type StrategyResult struct {
 	ID              string
 	RunnerID        string
 	StrategyID      string
-	TriggerBarTime  time.Time
-	Namespace       string
+	PeriodTime      time.Time
+	TargetsJSON     json.RawMessage
+	DebugInfoJSON   json.RawMessage
 	InputHash       string
 	Action          Action
-	OutputJSON      json.RawMessage
 	CommandSequence *int64
 	CreatedAt       time.Time
 }
@@ -70,57 +67,12 @@ func (StrategyResult) TableName() string { return "t_strategy_results" }
 
 type InstrumentTarget struct {
 	InstrumentID string `json:"instrument_id"`
-	Quantity     string `json:"quantity"`
+	TargetWeight string `json:"target_weight"`
 }
 
-func (target *InstrumentTarget) UnmarshalJSON(data []byte) error {
-	type instrumentTarget InstrumentTarget
-	var decoded instrumentTarget
-	if err := decodeStrictJSON(data, &decoded); err != nil {
-		return err
-	}
-	*target = InstrumentTarget(decoded)
-	return nil
-}
-
-type Output struct {
-	Action    Action             `json:"action"`
-	Targets   []InstrumentTarget `json:"targets,omitempty"`
-	DebugInfo map[string]any     `json:"debug_info,omitempty"`
-}
-
-func (output *Output) UnmarshalJSON(data []byte) error {
-	type strategyOutput Output
-	var decoded strategyOutput
-	if err := decodeStrictJSON(data, &decoded); err != nil {
-		return err
-	}
-	*output = Output(decoded)
-	return nil
-}
-
-type ExecutionRequest struct {
-	RequestID      string
-	StrategyID     string
-	RunnerID       string
-	TriggerBarTime string
-	Namespace      string
-	Params         any
-	Data           any
-}
-
-func decodeStrictJSON(data []byte, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err != nil {
-			return err
-		}
-		return errors.New("multiple JSON values")
-	}
-	return nil
+// Evaluation is the result of one pure evaluator invocation.
+type Evaluation struct {
+	Action    Action
+	Targets   []InstrumentTarget
+	DebugInfo map[string]any
 }

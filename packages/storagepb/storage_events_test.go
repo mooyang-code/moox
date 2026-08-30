@@ -60,7 +60,7 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 			payload: &FactorPeriodComputed{
 				SourceViewId: "source_view", ResultDatasetId: "factor_result", Frequency: "1m",
 				PeriodTime: 1786032000, Status: "degraded", Bindings: []*FactorBindingPeriodState{{
-					BindingId: "binding-1", FactorId: "factor-1", Status: "degraded",
+					BindingId: "binding-1", FactorId: "factor-1", Status: "degraded", SourceHash: "hash-1",
 					SkippedSubjects: []string{"ETH-USDT"}, FailedSubjects: []string{"BTC-USDT"},
 				}}, ComputedAt: now, TriggerEventId: "source-ready-1",
 			},
@@ -71,7 +71,7 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 			payload: &ViewFactorPeriodReady{
 				SourceViewId: "source_view", ResultViewId: "result_view", Frequency: "1m",
 				PeriodTime: 1786032000, Status: "complete", Bindings: []*FactorBindingPeriodState{{
-					BindingId: "binding-1", FactorId: "factor-1", Status: "complete",
+					BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1",
 				}}, ReadyAt: now,
 			},
 			new: func() proto.Message { return new(ViewFactorPeriodReady) },

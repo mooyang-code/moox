@@ -199,7 +199,7 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	}
 	if readTimeSeriesRoute == nil || readTimeSeriesRoute.Port != 20102 ||
 		!reflect.DeepEqual(readTimeSeriesRoute.GatewayMethods, []string{"ReadTimeSeriesRows"}) ||
-		!reflect.DeepEqual(readTimeSeriesRoute.GatewayCallers, []string{"admin-gateway", "collector", "factor", "monitor", "archive", "storage-view", "moox-skill"}) {
+		!reflect.DeepEqual(readTimeSeriesRoute.GatewayCallers, []string{"admin-gateway", "collector", "factor", "monitor", "archive", "storage-view", "strategy", "moox-skill"}) {
 		t.Fatalf("storage-primary ReadTimeSeriesRows route = %+v", readTimeSeriesRoute)
 	}
 	for _, method := range []string{"ReportDatasetPeriodCollected", "AppendDatasetSyncPoint", "WaitViewSyncPoint", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"} {
@@ -246,7 +246,7 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	}
 }
 
-func TestDefaultFactorGatewayCallersAreAdministrative(t *testing.T) {
+func TestDefaultFactorGatewayRoutesSeparateReadAccess(t *testing.T) {
 	for _, item := range DefaultDeployments(testAdminNodeID) {
 		if item.ServiceName != "moox_factor" {
 			continue
@@ -254,17 +254,25 @@ func TestDefaultFactorGatewayCallersAreAdministrative(t *testing.T) {
 		var extra struct {
 			GatewayMethods []string `json:"gateway_methods"`
 			GatewayCallers []string `json:"gateway_callers"`
+			GatewayRoutes  []struct {
+				GatewayMethods []string `json:"gateway_methods"`
+				GatewayCallers []string `json:"gateway_callers"`
+			} `json:"gateway_routes"`
 		}
 		if err := json.Unmarshal([]byte(item.ExtraConfig), &extra); err != nil {
 			t.Fatal(err)
 		}
 		wantMethods := []string{
-			"CreateFactor", "UpdateFactor", "GetFactor", "ListFactors", "SetFactorStatus", "DeleteFactor",
-			"UpsertBinding", "ListBindings", "DeleteBinding", "RecalcFactor", "GetEngineStatus",
+			"CreateFactor", "UpdateFactor", "SetFactorStatus", "DeleteFactor",
+			"UpsertBinding", "DeleteBinding", "RecalcFactor", "GetEngineStatus",
 		}
 		if !reflect.DeepEqual(extra.GatewayMethods, wantMethods) ||
 			!reflect.DeepEqual(extra.GatewayCallers, []string{"admin-gateway", "moox-cli"}) {
 			t.Fatalf("moox_factor gateway contract = methods %v callers %v", extra.GatewayMethods, extra.GatewayCallers)
+		}
+		if len(extra.GatewayRoutes) != 1 || !reflect.DeepEqual(extra.GatewayRoutes[0].GatewayMethods, []string{"GetFactor", "ListFactors", "ListBindings"}) ||
+			!reflect.DeepEqual(extra.GatewayRoutes[0].GatewayCallers, []string{"admin-gateway", "moox-cli", "strategy"}) {
+			t.Fatalf("moox_factor read gateway contract = %+v", extra.GatewayRoutes)
 		}
 		return
 	}

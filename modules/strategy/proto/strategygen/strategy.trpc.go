@@ -35,15 +35,11 @@ type StrategyMgrService interface {
 
 	SetRunnerStatus(ctx context.Context, req *SetRunnerStatusReq) (*SetRunnerStatusRsp, error)
 
-	RunOnce(ctx context.Context, req *RunOnceReq) (*RunOnceRsp, error)
-
 	ListStrategyResults(ctx context.Context, req *ListStrategyResultsReq) (*ListStrategyResultsRsp, error)
 
 	GetStrategyResult(ctx context.Context, req *GetStrategyResultReq) (*GetStrategyResultRsp, error)
 
 	ListStrategyTargets(ctx context.Context, req *ListStrategyTargetsReq) (*ListStrategyTargetsRsp, error)
-
-	GetEngineStatus(ctx context.Context, req *GetEngineStatusReq) (*GetEngineStatusRsp, error)
 }
 
 func StrategyMgrService_CreateStrategy_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -190,24 +186,6 @@ func StrategyMgrService_SetRunnerStatus_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
-func StrategyMgrService_RunOnce_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &RunOnceReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(StrategyMgrService).RunOnce(ctx, reqbody.(*RunOnceReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func StrategyMgrService_ListStrategyResults_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ListStrategyResultsReq{}
 	filters, err := f(req)
@@ -262,24 +240,6 @@ func StrategyMgrService_ListStrategyTargets_Handler(svr interface{}, ctx context
 	return rsp, nil
 }
 
-func StrategyMgrService_GetEngineStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetEngineStatusReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(StrategyMgrService).GetEngineStatus(ctx, reqbody.(*GetEngineStatusReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // StrategyMgrServer_ServiceDesc descriptor for server.RegisterService.
 var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.strategy.StrategyMgr",
@@ -318,10 +278,6 @@ var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: StrategyMgrService_SetRunnerStatus_Handler,
 		},
 		{
-			Name: "/trpc.moox.strategy.StrategyMgr/RunOnce",
-			Func: StrategyMgrService_RunOnce_Handler,
-		},
-		{
 			Name: "/trpc.moox.strategy.StrategyMgr/ListStrategyResults",
 			Func: StrategyMgrService_ListStrategyResults_Handler,
 		},
@@ -332,10 +288,6 @@ var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.strategy.StrategyMgr/ListStrategyTargets",
 			Func: StrategyMgrService_ListStrategyTargets_Handler,
-		},
-		{
-			Name: "/trpc.moox.strategy.StrategyMgr/GetEngineStatus",
-			Func: StrategyMgrService_GetEngineStatus_Handler,
 		},
 	},
 }
@@ -375,9 +327,6 @@ func (s *UnimplementedStrategyMgr) UpdateRunner(ctx context.Context, req *Update
 func (s *UnimplementedStrategyMgr) SetRunnerStatus(ctx context.Context, req *SetRunnerStatusReq) (*SetRunnerStatusRsp, error) {
 	return nil, errors.New("rpc SetRunnerStatus of service StrategyMgr is not implemented")
 }
-func (s *UnimplementedStrategyMgr) RunOnce(ctx context.Context, req *RunOnceReq) (*RunOnceRsp, error) {
-	return nil, errors.New("rpc RunOnce of service StrategyMgr is not implemented")
-}
 func (s *UnimplementedStrategyMgr) ListStrategyResults(ctx context.Context, req *ListStrategyResultsReq) (*ListStrategyResultsRsp, error) {
 	return nil, errors.New("rpc ListStrategyResults of service StrategyMgr is not implemented")
 }
@@ -386,9 +335,6 @@ func (s *UnimplementedStrategyMgr) GetStrategyResult(ctx context.Context, req *G
 }
 func (s *UnimplementedStrategyMgr) ListStrategyTargets(ctx context.Context, req *ListStrategyTargetsReq) (*ListStrategyTargetsRsp, error) {
 	return nil, errors.New("rpc ListStrategyTargets of service StrategyMgr is not implemented")
-}
-func (s *UnimplementedStrategyMgr) GetEngineStatus(ctx context.Context, req *GetEngineStatusReq) (*GetEngineStatusRsp, error) {
-	return nil, errors.New("rpc GetEngineStatus of service StrategyMgr is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -415,15 +361,11 @@ type StrategyMgrClientProxy interface {
 
 	SetRunnerStatus(ctx context.Context, req *SetRunnerStatusReq, opts ...client.Option) (rsp *SetRunnerStatusRsp, err error)
 
-	RunOnce(ctx context.Context, req *RunOnceReq, opts ...client.Option) (rsp *RunOnceRsp, err error)
-
 	ListStrategyResults(ctx context.Context, req *ListStrategyResultsReq, opts ...client.Option) (rsp *ListStrategyResultsRsp, err error)
 
 	GetStrategyResult(ctx context.Context, req *GetStrategyResultReq, opts ...client.Option) (rsp *GetStrategyResultRsp, err error)
 
 	ListStrategyTargets(ctx context.Context, req *ListStrategyTargetsReq, opts ...client.Option) (rsp *ListStrategyTargetsRsp, err error)
-
-	GetEngineStatus(ctx context.Context, req *GetEngineStatusReq, opts ...client.Option) (rsp *GetEngineStatusRsp, err error)
 }
 
 type StrategyMgrClientProxyImpl struct {
@@ -595,26 +537,6 @@ func (c *StrategyMgrClientProxyImpl) SetRunnerStatus(ctx context.Context, req *S
 	return rsp, nil
 }
 
-func (c *StrategyMgrClientProxyImpl) RunOnce(ctx context.Context, req *RunOnceReq, opts ...client.Option) (*RunOnceRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/RunOnce")
-	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("strategy")
-	msg.WithCalleeService("StrategyMgr")
-	msg.WithCalleeMethod("RunOnce")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &RunOnceRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *StrategyMgrClientProxyImpl) ListStrategyResults(ctx context.Context, req *ListStrategyResultsReq, opts ...client.Option) (*ListStrategyResultsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -669,26 +591,6 @@ func (c *StrategyMgrClientProxyImpl) ListStrategyTargets(ctx context.Context, re
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListStrategyTargetsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *StrategyMgrClientProxyImpl) GetEngineStatus(ctx context.Context, req *GetEngineStatusReq, opts ...client.Option) (*GetEngineStatusRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/GetEngineStatus")
-	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("strategy")
-	msg.WithCalleeService("StrategyMgr")
-	msg.WithCalleeMethod("GetEngineStatus")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetEngineStatusRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

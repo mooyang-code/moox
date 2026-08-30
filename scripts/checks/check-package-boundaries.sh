@@ -77,8 +77,8 @@ done < <(rg -n \
 	--glob '!**/*_test.go' --glob '!**/*.test.ts' || true)
 
 while IFS= read -r match; do
-	violations+=("${match}: Strategy-to-Trade contracts must carry final target quantities")
-done < <(rg -n 'target_weight|capital_amount|channel_id' \
+	violations+=("${match}: Strategy-to-Trade contracts must carry target_weight only; quantity conversion belongs to Trade")
+done < <(rg -n 'capital_amount|channel_id|target_quantity' \
 	modules/strategy packages/tradeeventpb modules/trade web/src/api/trade \
 	--glob '*.{go,proto,py,ts,vue,yaml}' \
 	--glob '!**/*_test.go' --glob '!**/test/**' --glob '!**/tests/**' \

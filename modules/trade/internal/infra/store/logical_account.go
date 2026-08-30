@@ -2,11 +2,13 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"gorm.io/gorm"
 )
 
 type LogicalAccountRecord struct {
@@ -14,13 +16,17 @@ type LogicalAccountRecord struct {
 	LogicalAccountID string
 	Name             string
 	OwnerRunnerID    string
-	ExecutionMode    string
-	MarketType       string
-	SettlementAsset  string
-	AutomationState  string
-	PauseReason      string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	OwnerGeneration  int64
+	// OwnerClaimedAt is retained as a source-compatibility alias for older
+	// callers. It now carries the monotonic lifecycle generation, not time.
+	OwnerClaimedAt  int64
+	ExecutionMode   string
+	MarketType      string
+	SettlementAsset string
+	AutomationState string
+	PauseReason     string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type LogicalAccountMemberRecord struct {
@@ -38,6 +44,7 @@ type logicalAccountRow struct {
 	LogicalAccountID string    `gorm:"column:c_logical_account_id"`
 	Name             string    `gorm:"column:c_name"`
 	OwnerRunnerID    *string   `gorm:"column:c_owner_runner_id"`
+	OwnerClaimedAt   int64     `gorm:"column:c_owner_claimed_at"`
 	ExecutionMode    string    `gorm:"column:c_execution_mode"`
 	MarketType       string    `gorm:"column:c_market_type"`
 	SettlementAsset  string    `gorm:"column:c_settlement_asset"`
@@ -75,14 +82,18 @@ func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
 		value := record.OwnerRunnerID
 		owner = &value
 	}
+	ownerGeneration := record.OwnerGeneration
+	if ownerGeneration == 0 {
+		ownerGeneration = record.OwnerClaimedAt
+	}
 	err := tx.db.Exec(`
 		INSERT INTO t_logical_accounts (
-			c_space_id, c_logical_account_id, c_name, c_owner_runner_id,
+			c_space_id, c_logical_account_id, c_name, c_owner_runner_id, c_owner_claimed_at,
 			c_execution_mode, c_market_type, c_settlement_asset,
 			c_automation_state, c_pause_reason
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		record.SpaceID, record.LogicalAccountID, record.Name, owner,
+		record.SpaceID, record.LogicalAccountID, record.Name, owner, ownerGeneration,
 		record.ExecutionMode, record.MarketType, record.SettlementAsset,
 		record.AutomationState, record.PauseReason,
 	).Error
@@ -102,6 +113,27 @@ func (s *Store) GetLogicalAccount(
 		return LogicalAccountRecord{}, err
 	}
 	return logicalAccountRecord(row), nil
+}
+
+// HasLogicalAccountOwnerRebind reports whether a durable rebind key has
+// already been applied. It lets retry callers return without touching a newer
+// target that may have been accepted after the first successful rebind.
+func (s *Store) HasLogicalAccountOwnerRebind(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	rebindKey string,
+) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, fmt.Errorf("trade database is not open")
+	}
+	var count int64
+	if err := s.db.WithContext(ctx).Table("t_logical_account_owner_rebinds").
+		Where("c_space_id = ? AND c_logical_account_id = ? AND c_rebind_key = ?", spaceID, logicalAccountID, rebindKey).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func (tx *Tx) GetLogicalAccount(
@@ -141,16 +173,151 @@ func (tx *Tx) SetLogicalAccountOwner(
 	logicalAccountID string,
 	runnerID string,
 ) error {
+	return tx.SetLogicalAccountOwnerGeneration(spaceID, logicalAccountID, runnerID)
+}
+
+// SetLogicalAccountOwnerAt is retained for source compatibility. Ownership
+// fencing uses a monotonic generation; wall-clock timestamps are deliberately
+// ignored so cross-process clock skew cannot reject valid targets.
+func (tx *Tx) SetLogicalAccountOwnerAt(
+	spaceID string,
+	logicalAccountID string,
+	runnerID string,
+	claimedAt time.Time,
+) error {
+	return tx.SetLogicalAccountOwnerGeneration(spaceID, logicalAccountID, runnerID)
+}
+
+// SetLogicalAccountOwnerGeneration advances the logical-account lifecycle and
+// associates the new generation with the current owner (or with no owner on
+// release). The update is serialized by the caller's logical-account lock.
+func (tx *Tx) SetLogicalAccountOwnerGeneration(
+	spaceID string,
+	logicalAccountID string,
+	runnerID string,
+) error {
 	var owner any
 	if !blank(runnerID) {
 		owner = runnerID
 	}
 	result := tx.db.Exec(`
 		UPDATE t_logical_accounts
-		SET c_owner_runner_id = ?, c_mtime = CURRENT_TIMESTAMP
+		SET c_owner_runner_id = ?, c_owner_claimed_at = c_owner_claimed_at + 1, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 	`, owner, spaceID, logicalAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account owner")
+}
+
+// TryClaimLogicalAccountOwner performs the ownership transition as a
+// database-level compare-and-set. The in-process mutex is only an optimization;
+// this predicate is the fence that remains correct when two Trade processes
+// share the same SQLite database or a replicated control plane.
+func (tx *Tx) TryClaimLogicalAccountOwner(spaceID, logicalAccountID, runnerID string) error {
+	if blank(runnerID) {
+		return fmt.Errorf("%w: owner runner is required", ErrInvalidRecord)
+	}
+	result := tx.db.Exec(`
+		UPDATE t_logical_accounts
+		SET c_owner_runner_id = ?, c_owner_claimed_at = c_owner_claimed_at + 1,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+		  AND (c_owner_runner_id IS NULL OR c_owner_runner_id = '')
+	`, runnerID, spaceID, logicalAccountID)
+	if result.Error != nil {
+		return writeError(result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: logical account owner claim lost compare-and-set", ErrConflict)
+	}
+	return nil
+}
+
+// RebindLogicalAccountOwner starts a fresh lifecycle for the current owner
+// without dropping ownership or changing the automation state. It is used
+// when a V1 archived runner is replaced by a V2 runner with the same identity:
+// delayed targets from the archived lifecycle must be fenced and the live
+// target must be cleared before the new runner emits its first result.
+func (tx *Tx) RebindLogicalAccountOwner(spaceID, logicalAccountID, runnerID, rebindKey string) (bool, error) {
+	if blank(runnerID) || blank(rebindKey) {
+		return false, fmt.Errorf("%w: owner runner and rebind key are required", ErrInvalidRecord)
+	}
+	var existing struct {
+		RunnerID string `gorm:"column:c_runner_id"`
+	}
+	lookup := tx.db.Table("t_logical_account_owner_rebinds").
+		Select("c_runner_id").
+		Where("c_space_id = ? AND c_logical_account_id = ? AND c_rebind_key = ?", spaceID, logicalAccountID, rebindKey).
+		Take(&existing)
+	if lookup.Error == nil {
+		if existing.RunnerID != runnerID {
+			return false, fmt.Errorf("%w: rebind key belongs to another runner", ErrConflict)
+		}
+		return false, nil
+	}
+	if !errors.Is(lookup.Error, gorm.ErrRecordNotFound) {
+		return false, writeError(lookup.Error)
+	}
+	insert := tx.db.Exec(`
+		INSERT INTO t_logical_account_owner_rebinds (
+			c_space_id, c_logical_account_id, c_rebind_key, c_runner_id
+		) VALUES (?, ?, ?, ?)
+		ON CONFLICT (c_space_id, c_logical_account_id, c_rebind_key) DO NOTHING
+	`, spaceID, logicalAccountID, rebindKey, runnerID)
+	if insert.Error != nil {
+		return false, writeError(insert.Error)
+	}
+	if insert.RowsAffected == 0 {
+		var conflicted struct {
+			RunnerID string `gorm:"column:c_runner_id"`
+		}
+		if err := tx.db.Table("t_logical_account_owner_rebinds").
+			Select("c_runner_id").
+			Where("c_space_id = ? AND c_logical_account_id = ? AND c_rebind_key = ?", spaceID, logicalAccountID, rebindKey).
+			Take(&conflicted).Error; err != nil {
+			return false, writeError(err)
+		}
+		if conflicted.RunnerID != runnerID {
+			return false, fmt.Errorf("%w: rebind key belongs to another runner", ErrConflict)
+		}
+		return false, nil
+	}
+	result := tx.db.Exec(`
+		UPDATE t_logical_accounts
+		SET c_owner_runner_id = ?, c_owner_claimed_at = c_owner_claimed_at + 1,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+		  AND (c_owner_runner_id IS NULL OR c_owner_runner_id = ?)
+	`, runnerID, spaceID, logicalAccountID, runnerID)
+	if result.Error != nil {
+		return false, writeError(result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return false, fmt.Errorf("%w: logical account owner rebind lost compare-and-set", ErrConflict)
+	}
+	return true, nil
+}
+
+// ReleaseLogicalAccountOwner clears ownership only when the expected runner
+// still owns the account, preventing a delayed release from clobbering a new
+// claimant in another process.
+func (tx *Tx) ReleaseLogicalAccountOwner(spaceID, logicalAccountID, runnerID string) error {
+	if blank(runnerID) {
+		return fmt.Errorf("%w: owner runner is required", ErrInvalidRecord)
+	}
+	result := tx.db.Exec(`
+		UPDATE t_logical_accounts
+		SET c_owner_runner_id = NULL, c_owner_claimed_at = c_owner_claimed_at + 1,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+		  AND c_owner_runner_id = ?
+	`, spaceID, logicalAccountID, runnerID)
+	if result.Error != nil {
+		return writeError(result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: logical account owner release lost compare-and-set", ErrConflict)
+	}
+	return nil
 }
 
 func (tx *Tx) SetLogicalAccountName(
@@ -336,6 +503,7 @@ func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {
 	return LogicalAccountRecord{
 		SpaceID: row.SpaceID, LogicalAccountID: row.LogicalAccountID,
 		Name: row.Name, OwnerRunnerID: owner,
+		OwnerGeneration: row.OwnerClaimedAt, OwnerClaimedAt: row.OwnerClaimedAt,
 		ExecutionMode: row.ExecutionMode, MarketType: row.MarketType,
 		SettlementAsset: row.SettlementAsset,
 		AutomationState: row.AutomationState, PauseReason: row.PauseReason,

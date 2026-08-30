@@ -10,7 +10,7 @@ func TestStrategyPersistenceTypesUseFinalTables(t *testing.T) {
 	logicalAccountID := "logical-account-1"
 	lastResultID := "result-1"
 	lastSuccessAt := time.UnixMilli(1000).UTC()
-	lastError := "worker unavailable"
+	lastError := "storage not ready"
 	sequence := int64(7)
 
 	strategy := Strategy{ID: "strategy-1", Name: "trend"}
@@ -29,8 +29,11 @@ func TestStrategyPersistenceTypesUseFinalTables(t *testing.T) {
 		ID:              lastResultID,
 		RunnerID:        runner.ID,
 		StrategyID:      strategy.ID,
+		PeriodTime:      time.UnixMilli(2000).UTC(),
+		TargetsJSON:     json.RawMessage(`[]`),
+		DebugInfoJSON:   json.RawMessage(`{}`),
+		InputHash:       "input-hash",
 		Action:          ActionRebalance,
-		OutputJSON:      json.RawMessage(`{"targets":[]}`),
 		CommandSequence: &sequence,
 	}
 

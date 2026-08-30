@@ -42,6 +42,12 @@ message ViewSourcePeriodReady {
   repeated ViewPeriodDatasetState datasets = 5;
   repeated string primary_subjects = 6;
   google.protobuf.Timestamp ready_at = 7;
+  // active_index_id identifies the source View generation that produced this
+  // readiness decision. Consumers may pin reads to this generation.
+  string active_index_id = 8;
+  // active_index_revision identifies the in-place write revision used for the
+  // readiness decision.
+  uint64 active_index_revision = 9;
 }
 
 message FactorBindingPeriodState {
@@ -50,6 +56,7 @@ message FactorBindingPeriodState {
   string status = 3;
   repeated string skipped_subjects = 4;
   repeated string failed_subjects = 5;
+  string source_hash = 6;
 }
 
 // FactorPeriodComputed marks all bindings for a result Dataset period as
@@ -63,6 +70,10 @@ message FactorPeriodComputed {
   repeated FactorBindingPeriodState bindings = 6;
   google.protobuf.Timestamp computed_at = 7;
   string trigger_event_id = 8;
+  // source_index_id is the source View generation used by Factor.
+  string source_index_id = 9;
+  // source_index_revision is the in-place source View revision used by Factor.
+  uint64 source_index_revision = 10;
 }
 
 // ViewFactorPeriodReady marks the factor result View period as readable.
@@ -74,6 +85,14 @@ message ViewFactorPeriodReady {
   string status = 5;
   repeated FactorBindingPeriodState bindings = 6;
   google.protobuf.Timestamp ready_at = 7;
+  // source_index_id is carried through Factor computation for causality.
+  string source_index_id = 8;
+  // result_index_id identifies the result View generation containing rows.
+  string result_index_id = 9;
+  // source_index_revision is carried through Factor computation for causality.
+  uint64 source_index_revision = 10;
+  // result_index_revision identifies the result View write revision containing rows.
+  uint64 result_index_revision = 11;
 }
 
 // DatasetSyncPoint is an ordered import/catchup fence in a Dataset outbox.

@@ -33,6 +33,12 @@ type ImportOptions struct {
 	LookbackPeriods int
 }
 
+// BatchImport describes one factor source in an atomic catalog import.
+type BatchImport struct {
+	Path    string
+	Options ImportOptions
+}
+
 // Service manages local factor definitions.
 type Service struct {
 	factors   *store.FactorRepository
@@ -253,13 +259,92 @@ func (s *Service) EnsureSourceArtifacts(ctx context.Context) error {
 
 // ImportFactorFile imports one trusted Python factor source file into SQLite.
 func (s *Service) ImportFactorFile(ctx context.Context, path string, options ImportOptions) (*domain.FactorDef, error) {
-	name, err := factorNameFromPath(path)
+	factor, raw, err := s.prepareFactorFile(path, options)
 	if err != nil {
 		return nil, err
 	}
+	if s.factors != nil {
+		_, err = s.validateDefinitionWrite(ctx, factor)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if s.publisher != nil {
+		version, err := s.publisher.Publish(ctx, moduleregistry.ModuleSource{Type: "factor", LogicalID: factor.Name, Source: raw})
+		if err != nil {
+			return nil, err
+		}
+		factor.SourcePath = version.Path
+	}
+	if s.factors != nil {
+		if err = s.SaveFactorDefinition(ctx, factor); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.writeSourceBack(factor.Name, raw); err != nil {
+		return nil, err
+	}
+	return &factor, nil
+}
+
+// ImportFactorFiles atomically persists a catalog of disabled factor
+// definitions. Source versions are staged before the database transaction;
+// an unused immutable version is harmless if the transaction later fails.
+// Runtime source files are written only after the transaction commits.
+func (s *Service) ImportFactorFiles(ctx context.Context, batch []BatchImport) ([]domain.FactorDef, error) {
+	if s == nil || s.factors == nil {
+		return nil, fmt.Errorf("factor repository is required")
+	}
+	if len(batch) == 0 {
+		return nil, fmt.Errorf("factor import batch is empty")
+	}
+	prepared := make([]domain.FactorDef, 0, len(batch))
+	rawSources := make([][]byte, 0, len(batch))
+	for _, item := range batch {
+		factor, raw, err := s.prepareFactorFile(item.Path, item.Options)
+		if err != nil {
+			return nil, err
+		}
+		if s.publisher != nil {
+			version, err := s.publisher.Publish(ctx, moduleregistry.ModuleSource{Type: "factor", LogicalID: factor.Name, Source: raw})
+			if err != nil {
+				return nil, err
+			}
+			factor.SourcePath = version.Path
+		}
+		prepared = append(prepared, factor)
+		rawSources = append(rawSources, raw)
+	}
+	if err := s.factors.Transaction(ctx, func(txFactors *store.FactorRepository) error {
+		txService := *s
+		txService.factors = txFactors
+		txService.publisher = nil
+		txService.opts.FactorsDir = ""
+		for _, factor := range prepared {
+			if err := txService.SaveFactorDefinition(ctx, factor); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	for index, factor := range prepared {
+		if err := s.writeSourceBack(factor.Name, rawSources[index]); err != nil {
+			return nil, err
+		}
+	}
+	return prepared, nil
+}
+
+func (s *Service) prepareFactorFile(path string, options ImportOptions) (domain.FactorDef, []byte, error) {
+	name, err := factorNameFromPath(path)
+	if err != nil {
+		return domain.FactorDef{}, nil, err
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read factor file %s: %w", path, err)
+		return domain.FactorDef{}, nil, fmt.Errorf("read factor file %s: %w", path, err)
 	}
 	factor := domain.FactorDef{
 		FactorID:        options.FactorID,
@@ -273,33 +358,12 @@ func (s *Service) ImportFactorFile(ctx context.Context, path string, options Imp
 	}
 	factor, err = domain.NormalizeFactorDefinition(factor)
 	if err != nil {
-		return nil, err
+		return domain.FactorDef{}, nil, err
 	}
 	raw = []byte(factor.SourceCode)
 	sum := sha256.Sum256(raw)
 	factor.SourceHash = hex.EncodeToString(sum[:])
-	if s.factors != nil {
-		_, err = s.validateDefinitionWrite(ctx, factor)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if s.publisher != nil {
-		version, err := s.publisher.Publish(ctx, moduleregistry.ModuleSource{Type: "factor", LogicalID: name, Source: raw})
-		if err != nil {
-			return nil, err
-		}
-		factor.SourcePath = version.Path
-	}
-	if s.factors != nil {
-		if err = s.SaveFactorDefinition(ctx, factor); err != nil {
-			return nil, err
-		}
-	}
-	if err := s.writeSourceBack(name, raw); err != nil {
-		return nil, err
-	}
-	return &factor, nil
+	return factor, raw, nil
 }
 
 func (s *Service) writeSourceBack(name string, raw []byte) error {

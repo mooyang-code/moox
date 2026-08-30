@@ -57,19 +57,6 @@ func (r *SetRunnerStatusReq) Validate() error {
 	return required(r.Status, "status")
 }
 
-func (r *RunOnceReq) Validate() error {
-	if r == nil {
-		return fmt.Errorf("request is required")
-	}
-	if err := required(r.RunnerId, "runner_id"); err != nil {
-		return err
-	}
-	if err := required(r.TriggerBarTime, "trigger_bar_time"); err != nil {
-		return err
-	}
-	return required(r.DataJson, "data_json")
-}
-
 func (r *GetStrategyResultReq) Validate() error {
 	if r == nil {
 		return fmt.Errorf("request is required")

@@ -261,6 +261,42 @@ func TestTargetExecutorIncreaseFallsThroughPriorityOnCapacity(t *testing.T) {
 	require.Equal(t, []string{"child-account-b"}, fixture.orders.submitted)
 }
 
+func TestTargetExecutorDoesNotRerouteFrozenConversionOnCapacity(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.placeErrors = map[string]error{"account-a": orderapp.ErrInsufficientFunds}
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
+		TradingAccountID: "account-a", ExchangeSymbol: "BTCUSDT",
+	}})
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "account-a", fixture.orders.specs[0].TradingAccountID)
+	require.Empty(t, fixture.orders.submitted)
+	target, err := fixture.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Contains(t, target.BlockedTargets[0].Reason, "frozen target member capacity")
+}
+
+func TestTargetExecutorDrainsOtherMembersBeforeFrozenVenue(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-b", "BTC-USDT-SWAP", "1")
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
+		TradingAccountID: "account-a", ExchangeSymbol: "BTCUSDT",
+	}})
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "account-b", fixture.orders.specs[0].TradingAccountID)
+	require.True(t, fixture.orders.specs[0].ReducePositionOnly)
+	require.Equal(t, 0, fixture.orders.specs[0].Quantity.Cmp(shared.MustDecimal("1")))
+}
+
 func TestTargetExecutorFullOmissionCancelsOldTargetBeforeClosing(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.position(t, "account-a", "BTCUSDT", "1")

@@ -20,7 +20,7 @@ func TestValidateRepairViewRequiresExplicitReplayForFullReset(t *testing.T) {
 	opts := &repairViewOptions{
 		spaceID:       "space",
 		viewID:        "view",
-		stream:        defaultRepairStream,
+		stream:        defaultRepairJSName,
 		consumer:      defaultRepairConsumer,
 		deliverPolicy: "new",
 		lookback:      time.Hour,

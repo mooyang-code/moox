@@ -19,6 +19,7 @@ type cliConfig struct {
 	DBPath            string
 	FactorsDir        string
 	File              string
+	CatalogPath       string
 	FactorID          string
 	InputColumns      []string
 	Outputs           []string
@@ -62,6 +63,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return runInit(ctx, cfg, out)
 	case "import":
 		return runImport(ctx, cfg, out)
+	case "import-catalog":
+		return runImportCatalog(ctx, cfg, out)
 	case "run-once":
 		return runOnce(ctx, cfg, out)
 	case "clear-queue":
@@ -107,6 +110,16 @@ func parseArgs(args []string) (cliConfig, error) {
 		}
 		cfg.Outputs, err = parseImportCSV("--outputs", outputs)
 		if err != nil {
+			return cliConfig{}, err
+		}
+	case "import-catalog":
+		cfg.DBPath = "./data/factor/factor.db"
+		cfg.FactorsDir = "./factors"
+		fs := newFlagSet("import-catalog")
+		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
+		fs.StringVar(&cfg.FactorsDir, "factors-dir", cfg.FactorsDir, "factor source directory")
+		fs.StringVar(&cfg.CatalogPath, "catalog", "", "JSON factor catalog")
+		if err := fs.Parse(args[1:]); err != nil {
 			return cliConfig{}, err
 		}
 	case "run-once":

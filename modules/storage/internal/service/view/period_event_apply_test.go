@@ -107,6 +107,7 @@ func newPeriodTestService(metadata PeriodMetadataClient, publisher ReadyEventPub
 		authSecret:     "period-test-secret",
 		views:          make(map[viewRef]*viewRuntime),
 		catalogViews:   make(map[viewRef]*pb.View),
+		indexRevision:  make(map[string]uint64),
 		periodMetadata: metadata,
 		readyPublisher: publisher,
 	}
@@ -114,6 +115,7 @@ func newPeriodTestService(metadata PeriodMetadataClient, publisher ReadyEventPub
 		key := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
 		service.catalogViews[key] = proto.Clone(view).(*pb.View)
 		service.views[key] = &viewRuntime{active: view.GetActiveIndexId()}
+		service.indexRevision[view.GetActiveIndexId()] = 1
 	}
 	return service
 }
@@ -163,6 +165,12 @@ func TestHandleDatasetPeriodCollectedAggregatesTwoDatasetsIdempotently(t *testin
 	}
 	if ready.GetSourceViewId() != "source-view" || ready.GetStatus() != "degraded" || len(ready.GetDatasets()) != 2 {
 		t.Fatalf("ready payload=%v", ready)
+	}
+	if ready.GetActiveIndexId() != "source-view-a" {
+		t.Fatalf("source ready index provenance=%q", ready.GetActiveIndexId())
+	}
+	if ready.GetActiveIndexRevision() != 1 {
+		t.Fatalf("source ready index revision provenance=%d", ready.GetActiveIndexRevision())
 	}
 	if got := ready.GetPrimarySubjects(); len(got) != 2 || got[0] != "BTC-USDT" || got[1] != "ETH-USDT" {
 		t.Fatalf("primary subjects=%v", got)
@@ -222,8 +230,8 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	message := periodMessage("factor-marker-1", occurredAt)
 	payload := &storageeventpb.FactorPeriodComputed{
 		SourceViewId: "source-view", ResultDatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
-		Bindings:   []*storageeventpb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "degraded", FailedSubjects: []string{"ETH-USDT"}}},
-		ComputedAt: timestamppb.New(occurredAt), TriggerEventId: "source-ready-1",
+		Bindings:   []*storageeventpb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "degraded", FailedSubjects: []string{"ETH-USDT"}, SourceHash: "hash-1"}},
+		ComputedAt: timestamppb.New(occurredAt), TriggerEventId: "source-ready-1", SourceIndexId: "source-view-a", SourceIndexRevision: 1,
 	}
 	if err := service.HandleFactorPeriodComputed(context.Background(), message, payload); err != nil {
 		t.Fatal(err)
@@ -240,6 +248,12 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	}
 	if ready.GetSourceViewId() != "source-view" || ready.GetResultViewId() != "result-view" || ready.GetStatus() != "degraded" || len(ready.GetBindings()) != 1 {
 		t.Fatalf("factor ready payload=%v", ready)
+	}
+	if ready.GetSourceIndexId() != "source-view-a" || ready.GetResultIndexId() != "result-view-a" {
+		t.Fatalf("factor ready index provenance=%v", ready)
+	}
+	if ready.GetSourceIndexRevision() != 1 || ready.GetResultIndexRevision() != 1 {
+		t.Fatalf("factor ready index revision provenance source=%d result=%d", ready.GetSourceIndexRevision(), ready.GetResultIndexRevision())
 	}
 }
 

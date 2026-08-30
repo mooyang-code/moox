@@ -214,7 +214,7 @@ func (c *Client) writeLegacyFactorPatch(ctx context.Context, task *engine.Factor
 		if resultRow.DataTime.IsZero() {
 			return 0, fmt.Errorf("factor result row %d data_time is required", i)
 		}
-		row := &storagepb.RowFieldUpsert{Key: toProtoRowKey(factorRowKey{SpaceID: task.SpaceID, DatasetID: datasetID, SubjectID: task.SubjectID, Frequency: task.Freq, DataTime: resultRow.DataTime.UTC().Format(time.RFC3339Nano), SeriesTag: resultRow.SeriesTag}), Attributes: map[string]*storagepb.TypedValue{"factor.id": stringValue(task.Factor.FactorID), "factor.source_hash": stringValue(task.Factor.SourceHash), "factor.parent_task_id": stringValue(task.TaskID), "factor.computed_at": stringValue(time.Now().UTC().Format(time.RFC3339Nano))}}
+		row := &storagepb.RowFieldUpsert{Key: toProtoRowKey(factorRowKey{SpaceID: task.SpaceID, DatasetID: datasetID, SubjectID: task.SubjectID, Frequency: task.Freq, DataTime: resultRow.DataTime.UTC().Format(time.RFC3339Nano), SeriesTag: resultRow.SeriesTag}), Attributes: factorRowAttributes(task)}
 		for _, name := range task.Factor.Outputs {
 			value, exists := resultRow.Values[name]
 			if !exists {
@@ -255,10 +255,7 @@ func buildFactorRows(task *engine.FactorTask, result *engine.FactorResult) ([]*s
 		identity := factorRowKey{SpaceID: task.SpaceID, DatasetID: task.ResultDatasetID, SubjectID: task.SubjectID, Frequency: task.Freq, DataTime: resultRow.DataTime.UTC().Format(time.RFC3339Nano), SeriesTag: resultRow.SeriesTag}
 		encoded, _ := json.Marshal(identity)
 		keys = append(keys, string(encoded))
-		row := &storagepb.RowFieldUpsert{Key: toProtoRowKey(identity), Attributes: map[string]*storagepb.TypedValue{
-			"factor.id": stringValue(task.Factor.FactorID), "factor.source_hash": stringValue(task.Factor.SourceHash),
-			"factor.parent_task_id": stringValue(task.TaskID), "factor.computed_at": stringValue(computedAt.Format(time.RFC3339Nano)),
-		}}
+		row := &storagepb.RowFieldUpsert{Key: toProtoRowKey(identity), Attributes: factorRowAttributesAt(task, computedAt)}
 		for _, name := range task.Factor.Outputs {
 			value, exists := resultRow.Values[name]
 			if !exists {
@@ -280,6 +277,18 @@ func buildFactorRows(task *engine.FactorTask, result *engine.FactorResult) ([]*s
 	sort.Strings(keys)
 	keys = compactStrings(keys)
 	return rows, keys, nil
+}
+
+func factorRowAttributes(task *engine.FactorTask) map[string]*storagepb.TypedValue {
+	return factorRowAttributesAt(task, time.Now().UTC())
+}
+
+func factorRowAttributesAt(task *engine.FactorTask, computedAt time.Time) map[string]*storagepb.TypedValue {
+	return map[string]*storagepb.TypedValue{
+		"factor.id": stringValue(task.Factor.FactorID), "factor.source_hash": stringValue(task.Factor.SourceHash),
+		"factor.source_hash." + task.Factor.FactorID: stringValue(task.Factor.SourceHash),
+		"factor.parent_task_id":                      stringValue(task.TaskID), "factor.computed_at": stringValue(computedAt.Format(time.RFC3339Nano)),
+	}
 }
 
 func clearRowsForKeys(keys []string, factorID string, outputs []string) ([]*storagepb.RowFieldUpsert, error) {

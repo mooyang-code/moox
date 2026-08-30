@@ -15,10 +15,11 @@ import (
 )
 
 type periodReadKey struct {
-	spaceID, sourceViewID, sourceDataset, subjectID, freq string
-	periodTime                                            int64
-	triggerType, triggerEventID                           string
-	startTime, endTime                                    time.Time
+	spaceID, sourceViewID, sourceDataset, subjectID, freq, expectedActiveIndexID string
+	expectedActiveIndexRevision                                                  uint64
+	periodTime                                                                   int64
+	triggerType, triggerEventID                                                  string
+	startTime, endTime                                                           time.Time
 }
 
 type indexedTask struct {
@@ -171,6 +172,8 @@ func (s *Service) readPeriodGroup(ctx context.Context, group *periodReadGroup) (
 	key := storageio.WindowKey{
 		SpaceID: representative.SpaceID, SourceViewID: taskSourceView(representative),
 		SourceDataset: representative.SourceDataset, SubjectID: representative.SubjectID, Freq: representative.Freq,
+		ExpectedActiveIndexID:       representative.ExpectedActiveIndexID,
+		ExpectedActiveIndexRevision: representative.ExpectedActiveIndexRevision,
 	}
 	if periodReader, ok := s.storage.(periodStorageIO); ok {
 		return periodReader.ReadPeriodChunk(
@@ -313,7 +316,9 @@ func buildPeriodReadGroups(tasks []Task) ([]*periodReadGroup, []indexedTask) {
 		key := periodReadKey{
 			spaceID: task.SpaceID, sourceViewID: taskSourceView(task), sourceDataset: task.SourceDataset,
 			subjectID: task.SubjectID, freq: task.Freq, periodTime: task.PeriodTime,
-			triggerType: task.TriggerType, triggerEventID: task.TriggerEventID,
+			expectedActiveIndexID:       task.ExpectedActiveIndexID,
+			expectedActiveIndexRevision: task.ExpectedActiveIndexRevision,
+			triggerType:                 task.TriggerType, triggerEventID: task.TriggerEventID,
 			startTime: task.StartTime, endTime: task.EndTime,
 		}
 		group := groupsByKey[key]

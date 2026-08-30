@@ -69,7 +69,7 @@ type EventBusConfig struct {
 	TargetConsumer string   `yaml:"-"`
 }
 
-const TargetConsumer = "trade_target_v1"
+const TargetConsumer = "trade_target_weight_v1"
 
 // DefaultConfig 返回默认配置。
 func DefaultConfig() *AppConfig {

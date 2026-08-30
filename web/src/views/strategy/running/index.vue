@@ -38,7 +38,7 @@
               <div class="muted">{{ record.strategy_id }}</div>
             </template>
           </a-table-column>
-          <a-table-column title="数据视图" data-index="view_id" />
+          <a-table-column title="数据视图" data-index="source_view_id" />
           <a-table-column title="频率" data-index="frequency" :width="110" />
           <a-table-column title="组合账户">
             <template #cell="{ record }">{{ record.logical_account_id || "观察模式" }}</template>
@@ -69,15 +69,11 @@
                 </a-option>
               </a-select>
             </a-form-item>
-            <a-form-item label="数据视图 ID" required><a-input v-model="form.view_id" /></a-form-item>
-            <a-form-item label="频率" required><a-input v-model="form.frequency" placeholder="1m" /></a-form-item>
             <a-form-item label="组合账户编号">
               <a-input v-model="form.logical_account_id" placeholder="留空为观察模式" />
             </a-form-item>
           </a-grid>
-          <a-form-item label="参数 JSON">
-            <a-textarea v-model="form.params_json" :auto-size="{ minRows: 5, maxRows: 12 }" />
-          </a-form-item>
+          <a-alert v-if="selectedMeta" type="info">数据视图：{{ selectedMeta.view }}，频率：{{ selectedMeta.frequency }}</a-alert>
         </a-form>
       </a-modal>
     </div>
@@ -85,11 +81,11 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { createRunner } from "@/api/strategy";
-import type { StrategyRunnerStatus } from "@/api/strategy-types";
+import type { Strategy, StrategyRunnerStatus } from "@/api/strategy-types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
@@ -104,11 +100,21 @@ const pagination = reactive({ current: 1, pageSize: 20, total: 0 });
 const form = reactive({
   runner_id: "",
   strategy_id: "",
-  view_id: "",
-  frequency: "1m",
-  params_json: "{}",
   logical_account_id: ""
 });
+
+function strategyMeta(strategyId: string) {
+  const strategy = store.strategies.find((item: Strategy) => item.strategy_id === strategyId);
+  if (!strategy?.compiled_json) return null;
+  try {
+    const compiled = JSON.parse(strategy.compiled_json);
+    return { view: compiled.source_view?.id ?? "-", frequency: compiled.source_view?.frequency ?? "-" };
+  } catch {
+    return null;
+  }
+}
+
+const selectedMeta = computed(() => strategyMeta(form.strategy_id));
 
 async function refresh() {
   await store.loadRunners({
@@ -126,32 +132,23 @@ async function openCreate() {
 }
 
 async function create() {
-  if (!form.runner_id.trim() || !form.strategy_id || !form.view_id.trim() || !form.frequency.trim()) {
+  if (!form.runner_id.trim() || !form.strategy_id) {
     Message.warning("请填写所有必填字段");
     return false;
   }
-  try {
-    JSON.parse(form.params_json || "{}");
-  } catch {
-    Message.warning("参数必须是合法 JSON");
+  const meta = strategyMeta(form.strategy_id);
+  if (!meta) {
+    Message.warning("策略尚未生成编译依赖");
     return false;
   }
   await createRunner({
-    ...form,
     runner_id: form.runner_id.trim(),
-    view_id: form.view_id.trim(),
-    frequency: form.frequency.trim(),
-    params_json: form.params_json || "{}",
+    strategy_id: form.strategy_id,
+    source_view_id: meta.view,
+    frequency: meta.frequency,
     logical_account_id: form.logical_account_id.trim(),
-    space_id: spaceStore.requireSpaceId(),
-    status: "DISABLED",
-    current_targets: [],
-    command_sequence: "0",
-    last_result_id: "",
-    last_success_at: "",
-    last_error: "",
-    created_at: "",
-    updated_at: ""
+    space_id: spaceStore.requireSpaceId(), status: "DISABLED", current_targets: [], command_sequence: "0",
+    last_result_id: "", last_success_at: "", last_error: "", created_at: "", updated_at: ""
   });
   createVisible.value = false;
   await refresh();

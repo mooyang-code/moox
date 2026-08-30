@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	publicstoragepb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 )
@@ -31,7 +32,22 @@ func TestRecalcWaitsForSyncPointAndUsesViewReadyExecutor(t *testing.T) {
 	require.Equal(t, []string{"wait", "execute", "execute"}, order)
 	require.Equal(t, []string{"bars", "funding"}, waiter.datasetIDs)
 	require.Len(t, executor.triggerIDs, 2)
+	require.Equal(t, []string{"", ""}, executor.factorIDs)
 	require.NotEqual(t, executor.triggerIDs[0], executor.triggerIDs[1])
+}
+
+func TestRecalcFailsClosedWhenSourceViewHasNoActiveIndex(t *testing.T) {
+	db := openRPCTestDB(t)
+	metadata := &recalcViewMetadataClientWithoutActiveIndex{recordingFactorMetadataClient: newRecordingFactorMetadataClient("space", "factor")}
+	executor := &recordingViewReadyExecutor{record: func(string) { t.Fatal("executor must not run without an active index") }}
+	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{FactorID: "factor", Name: "factor", SourceHash: "hash", InputColumns: []string{"close"}, Outputs: []string{"score"}, LookbackPeriods: 1, Status: domain.FactorStatusEnabled}))
+	require.NoError(t, db.Bindings().Upsert(context.Background(), domain.FactorBinding{BindingID: "binding", FactorID: "factor", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "factor_result", ResultViewID: "factor_result_view", Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled}))
+	svc := NewWithRuntime(db, nil, WithMetadataSync(registry.NewMetadataSync(metadata, nil)), WithViewReadyExecutor(executor, nil))
+	start := time.Date(2026, 8, 9, 1, 0, 0, 0, time.UTC)
+	rsp, err := svc.RecalcFactor(context.Background(), &factorpb.RecalcFactorReq{RequestId: "request-no-index", FactorId: "factor", SpaceId: "space", SourceViewId: "source_view", SubjectId: "BTC", Freq: "1m", StartTime: start.Format(time.RFC3339Nano), EndTime: start.Add(time.Minute).Format(time.RFC3339Nano)})
+	require.NoError(t, err)
+	require.NotEqual(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "active index")
 }
 
 func TestRecalcRejectsTimesOutsideStoragePeriodBoundaries(t *testing.T) {
@@ -50,12 +66,14 @@ func TestRecalcRejectsTimesOutsideStoragePeriodBoundaries(t *testing.T) {
 
 type recordingViewReadyExecutor struct {
 	triggerIDs []string
+	factorIDs  []string
 	record     func(string)
 }
 
-func (e *recordingViewReadyExecutor) ExecuteSelected(_ context.Context, _, triggerID, _ string, _ *publicstoragepb.ViewSourcePeriodReady) error {
+func (e *recordingViewReadyExecutor) ExecuteSelected(_ context.Context, _, triggerID, factorID string, _ *publicstoragepb.ViewSourcePeriodReady) error {
 	e.record("execute")
 	e.triggerIDs = append(e.triggerIDs, triggerID)
+	e.factorIDs = append(e.factorIDs, factorID)
 	return nil
 }
 
@@ -72,8 +90,14 @@ func (w *recordingViewWaiter) WaitViewSyncPoint(_ context.Context, _, _, _ strin
 
 type recalcViewMetadataClient struct{ *recordingFactorMetadataClient }
 
-func (c *recalcViewMetadataClient) GetView(context.Context, *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
+type recalcViewMetadataClientWithoutActiveIndex struct{ *recordingFactorMetadataClient }
+
+func (c *recalcViewMetadataClientWithoutActiveIndex) GetView(context.Context, *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
 	return &storagepb.GetViewRsp{RetInfo: success(), View: &storagepb.View{ViewId: "source_view", PrimaryDatasetId: "bars", DatasetIds: []string{"funding", "bars"}}}, nil
+}
+
+func (c *recalcViewMetadataClient) GetView(context.Context, *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
+	return &storagepb.GetViewRsp{RetInfo: success(), View: &storagepb.View{ViewId: "source_view", PrimaryDatasetId: "bars", DatasetIds: []string{"funding", "bars"}, ActiveIndexId: "source-view-index-1"}}, nil
 }
 func (c *recalcViewMetadataClient) CreateView(context.Context, *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error) {
 	return &storagepb.CreateViewRsp{RetInfo: success()}, nil

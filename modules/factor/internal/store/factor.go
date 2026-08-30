@@ -27,6 +27,21 @@ func NewFactorRepository(db *gorm.DB) *FactorRepository {
 	return &FactorRepository{db: db}
 }
 
+// Transaction executes a group of factor definition mutations as one SQLite
+// transaction. The callback receives a repository bound to the transaction;
+// callers must not retain it after the callback returns.
+func (r *FactorRepository) Transaction(ctx context.Context, fn func(*FactorRepository) error) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("factor repository is not open")
+	}
+	if fn == nil {
+		return fmt.Errorf("factor repository transaction callback is required")
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return fn(NewFactorRepository(tx))
+	})
+}
+
 // Create inserts a new factor definition without replacing existing rows.
 func (r *FactorRepository) Create(ctx context.Context, factor domain.FactorDef) error {
 	now := time.Now().UTC()

@@ -42,6 +42,7 @@ func BuildFactorPeriodComputedMessage(spaceID string, marker *pb.FactorPeriodCom
 		bindings = append(bindings, &storageeventpb.FactorBindingPeriodState{
 			BindingId: state.GetBindingId(), FactorId: state.GetFactorId(), Status: state.GetStatus(),
 			SkippedSubjects: normalizedIDs(state.GetSkippedSubjects()), FailedSubjects: normalizedIDs(state.GetFailedSubjects()),
+			SourceHash: state.GetSourceHash(),
 		})
 	}
 	sort.Slice(bindings, func(i, j int) bool {
@@ -53,7 +54,7 @@ func BuildFactorPeriodComputedMessage(spaceID string, marker *pb.FactorPeriodCom
 	payload := &storageeventpb.FactorPeriodComputed{
 		SourceViewId: marker.GetSourceViewId(), ResultDatasetId: marker.GetResultDatasetId(), Frequency: marker.GetFrequency(),
 		PeriodTime: marker.GetPeriodTime(), Status: marker.GetStatus(), Bindings: bindings,
-		ComputedAt: marker.GetComputedAt(), TriggerEventId: marker.GetTriggerEventId(),
+		ComputedAt: marker.GetComputedAt(), TriggerEventId: marker.GetTriggerEventId(), SourceIndexId: marker.GetSourceIndexId(), SourceIndexRevision: marker.GetSourceIndexRevision(),
 	}
 	eventID := stableMarkerID("factor-period", spaceID, payload.GetResultDatasetId(), payload.GetTriggerEventId(), strconv.FormatInt(payload.GetPeriodTime(), 10))
 	return buildMarkerMessage(events.FactorPeriodComputed, eventID, spaceID, payload.GetResultDatasetId(), markerTime(payload.GetComputedAt()), payload)

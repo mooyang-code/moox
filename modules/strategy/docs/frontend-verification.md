@@ -29,7 +29,7 @@
 ## 必测场景
 
 - Strategy、Runner、StrategyResult 与 targets 查询字段匹配 Proto。
-- `InstrumentTarget.quantity` 显示为绝对目标持仓量。
+- `InstrumentTarget.target_weight` 显示为策略输出的目标权重；数量换算在 Trade 消费事件时完成。
 - `hold` 保留当前目标；空 `rebalance` 显示为全部目标归零。
 - PAUSED 时新 LogicalAccountTarget 显示“已保存，尚未执行”。
 - 人工下单必须提供 `action_id` 和 reason，并提示暂停整个 LogicalAccount。

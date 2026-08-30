@@ -35,7 +35,7 @@ Collector 批量解析行情域名。Resolver 只读取部署时由 `moox-cli` �
 会在 Trade 节点执行有界 TCP 探测并返回延迟排序；单域失败通过响应级未解析列表表达，不阻断同批
 其他域名。Resolver 是辅助能力，暂时不可用不会让 Trade `/readyz` 失败。
 
-策略目标经 `moox.trade.target.requested.v1` 事件进入 Trade，不通过公开 RPC 伪造
+策略目标经 `moox.trade.target.weight_requested.v1` 事件进入 Trade，不通过公开 RPC 伪造
 订单 owner。订单归属由服务端写入：
 
 - `TARGET`：属于当前 `LogicalAccountTarget`。
@@ -44,25 +44,31 @@ Collector 批量解析行情域名。Resolver 只读取部署时由 `moox-cli` �
 
 ## FULL 目标
 
-Strategy 发布 `LogicalAccountTargetRequested`：
+Strategy 发布 `LogicalAccountTargetWeightRequested`（subject
+`moox.trade.target.weight_requested.v1`）：
 
 ```text
 target_id
 runner_id
 logical_account_id
 command_sequence
-targets[] InstrumentTarget
+signal_time
+targets[] InstrumentWeightTarget
   instrument_id
-  quantity
+  target_weight
 ```
 
 每条命令都是组合账户的 FULL 快照：
 
-- `quantity` 是带符号的绝对目标持仓量，不是下单量或增量。
+- `target_weight` 是相对 LogicalAccount 权益的带符号目标权重，不是下单量或增量。
 - 遗漏的旧标的目标为 `0`。
 - 空 `targets` 表示组合账户全部目标归零。
 - `hold` 不发布命令，保留上一次目标。
 - 只接受更高的 `command_sequence`；低序号和重复命令不改变状态。
+
+Trade 首次接受目标时按启用且 Ready 成员的合计权益和参考价格换算 raw quantity，
+并将权益、报价、实际成员和 quantity 保存到不可变 `TargetReceipt`。同一 target 重投
+只复用回执，不重新估值；步长、合约乘数、最小量和容量仍由 TargetExecutor 负责。
 - PAUSED 时仍保存最新目标，但不创建订单；只有人工 Resume 才恢复收敛。
 
 SPOT 目标不能为负数；SWAP 使用正负号表示方向。Strategy 只发送规范化

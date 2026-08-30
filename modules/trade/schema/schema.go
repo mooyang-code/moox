@@ -21,8 +21,11 @@ var paperAccountConfigSQL string
 //go:embed equity.sql
 var equitySQL string
 
+//go:embed target_receipt.sql
+var targetReceiptSQL string
+
 // AllSQL returns the complete greenfield schema in foreign-key dependency order.
 func AllSQL() string {
 	return accountSQL + "\n" + instrumentSQL + "\n" + logicalAccountSQL + "\n" +
-		paperAccountConfigSQL + "\n" + equitySQL + "\n" + executionSQL
+		paperAccountConfigSQL + "\n" + equitySQL + "\n" + targetReceiptSQL + "\n" + executionSQL
 }

@@ -156,15 +156,15 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, monitorACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_OBSERVABILITY.monitor_observability_ingest_v1")
 	assert.Contains(t, monitorACL, "$JS.ACK.MOOX_OBSERVABILITY.monitor_observability_ingest_v1.>")
 	assert.NotContains(t, monitorACL, "MOOX_METRICS")
-	assert.Contains(t, yaml, "moox.trade.target.requested.v1.>")
+	assert.Contains(t, yaml, "moox.trade.target.weight_requested.v1.>")
 	strategyACL := eventBusACLBlock(yaml, "strategy-eventbus")
 	assert.NotContains(t, strategyACL, "$JS.API.>")
-	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>"]}`)
+	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>", "moox.storage.view.factor_period.ready.v1.>"]}`)
 	tradeACL := eventBusACLBlock(yaml, "trade-eventbus")
-	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_v1")
-	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.INFO.*.trade_target_v1")
-	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_v1")
-	assert.Contains(t, tradeACL, "$JS.ACK.MOOX_TRADE.trade_target_v1.>")
+	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1")
+	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.INFO.*.trade_target_weight_v1")
+	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_weight_v1")
+	assert.Contains(t, tradeACL, "$JS.ACK.MOOX_TRADE.trade_target_weight_v1.>")
 	storageACL := eventBusACLBlock(yaml, "storage-eventbus")
 	for _, subject := range []string{
 		"moox.storage.dataset.rows.upserted.v2.>",
@@ -252,7 +252,11 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		acl := eventBusACLBlock(yaml, role)
 		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.API")
 		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.ACK")
-		assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>"]}`)
+		if role == "strategy-eventbus" {
+			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.storage.view.factor_period.ready.v1.>"]}`)
+		} else {
+			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>"]}`)
+		}
 	}
 
 	bundle, err := makeTLSBundle("203.0.113.10")
@@ -280,6 +284,36 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	var count int64
 	require.NoError(t, db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error)
 	assert.GreaterOrEqual(t, count, int64(13))
+}
+
+func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testing.T) {
+	dir := t.TempDir()
+	roleFiles := map[string]string{
+		"internal-admin.yaml":                  "token: admin-token\n",
+		"hostagent-publisher.yaml":             "eventbus_token: host-token\n",
+		"metrics-publisher.yaml":               "token: metrics-token\n",
+		"monitor-observability.yaml":           "monitor_eventbus_token: monitor-token\n",
+		"storage-eventbus.yaml":                "token: storage-token\n",
+		"archive-eventbus.yaml":                "token: archive-token\n",
+		"cloudnode-eventbus.yaml":              "token: cloud-token\n",
+		"cloudnode-worker.yaml":                "token: worker-token\n",
+		"market-fetch-publisher.yaml":          "token: market-token\n",
+		"collector-market-fetch-consumer.yaml": "token: collector-token\n",
+		"factor-eventbus.yaml":                 "token: factor-token\n",
+		"strategy-eventbus.yaml":               "token: strategy-token\n",
+		"trade-eventbus.yaml":                  "token: trade-token\n",
+	}
+	for name, content := range roleFiles {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))
+	}
+	var out bytes.Buffer
+	require.NoError(t, runEventBusCredentialsCommand([]string{"eventbus-credentials", "reconcile", "--output-dir", dir}, &out, &bytes.Buffer{}))
+	raw, err := os.ReadFile(filepath.Join(dir, "users.yaml"))
+	require.NoError(t, err)
+	text := string(raw)
+	assert.Contains(t, text, "moox.trade.target.weight_requested.v1.>")
+	assert.Contains(t, text, "strategy-token")
+	assert.Contains(t, text, "trade-token")
 }
 
 func seedEventBusDeployment(t *testing.T, dbPath string) {
@@ -389,7 +423,7 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	adminJS, err := admin.JetStream()
 	require.NoError(t, err)
 	_, err = adminJS.AddStream(&nats.StreamConfig{
-		Name: "MOOX_TRADE", Subjects: []string{"moox.trade.target.requested.v1.>"},
+		Name: "MOOX_TRADE", Subjects: []string{"moox.trade.target.weight_requested.v1.>"},
 	})
 	require.NoError(t, err)
 	_, err = adminJS.AddStream(&nats.StreamConfig{
@@ -414,7 +448,7 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	t.Cleanup(strategy.Close)
 	strategyJS, err := strategy.JetStream()
 	require.NoError(t, err)
-	_, err = strategyJS.Publish("moox.trade.target.requested.v1.space.binding", []byte("payload"))
+	_, err = strategyJS.Publish("moox.trade.target.weight_requested.v1.space.binding", []byte("payload"))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -426,8 +460,8 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	require.NoError(t, err)
 	defer trade.Close()
 	cfg := jetstream.ConsumerConfig{
-		Stream: "MOOX_TRADE", Durable: "trade_target_v1",
-		FilterSubject: "moox.trade.target.requested.v1.>",
+		Stream: "MOOX_TRADE", Durable: "trade_target_weight_v1",
+		FilterSubject: "moox.trade.target.weight_requested.v1.>",
 		AckWait:       time.Second, MaxDeliver: 3, MaxAckPending: 8,
 		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
 	}
@@ -550,23 +584,23 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 		"CloudNode worker 不得发布执行事件",
 	)
 
-	_, err = cloudJS.ConsumerInfo("MOOX_TRADE", "trade_target_v1")
+	_, err = cloudJS.ConsumerInfo("MOOX_TRADE", "trade_target_weight_v1")
 	require.NoError(t, err, "CloudNode 需要只读 Consumer 元数据完成跨 Stream 命名检查")
 	_, err = cloudJS.AddConsumer("MOOX_TRADE", &nats.ConsumerConfig{
 		Name: "cn_exec_escape", Durable: "cn_exec_escape",
-		FilterSubject: "moox.trade.target.requested.v1.>",
+		FilterSubject: "moox.trade.target.weight_requested.v1.>",
 		AckPolicy:     nats.AckExplicitPolicy,
 	})
 	require.Error(t, err, "CloudNode 不得在所属 Stream 之外创建 Consumer")
 
 	requirePublishPermissionViolation(
 		t, server.ClientURL(), "cloudnode-eventbus", tokens["cloudnode-eventbus"],
-		"$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_v1",
+		"$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_weight_v1",
 		"CloudNode 不得拉取其他 Stream 的 Consumer",
 	)
 	requirePublishPermissionViolation(
 		t, server.ClientURL(), "cloudnode-eventbus", tokens["cloudnode-eventbus"],
-		"$JS.ACK.MOOX_TRADE.trade_target_v1.1.1.1.1.1",
+		"$JS.ACK.MOOX_TRADE.trade_target_weight_v1.1.1.1.1.1",
 		"CloudNode 不得 ACK 其他 Stream 的 Consumer",
 	)
 }

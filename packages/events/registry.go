@@ -103,6 +103,9 @@ var (
 	LogicalAccountTargetRequested = declareEvent("trade.target.requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
 		return &tradeeventpb.LogicalAccountTargetRequested{}
 	}, validateLogicalAccountTargetRequested)
+	LogicalAccountTargetWeightRequested = declareEvent("trade.target.weight_requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
+		return &tradeeventpb.LogicalAccountTargetWeightRequested{}
+	}, validateLogicalAccountTargetWeightRequested)
 )
 
 type Registry struct {

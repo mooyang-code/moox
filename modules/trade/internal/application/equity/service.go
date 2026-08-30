@@ -61,6 +61,32 @@ func (s *Service) sourceFresh(sourceMillis int64) bool {
 }
 
 func MinuteBucket(at time.Time) int64 { return at.UTC().Truncate(time.Minute).UnixMilli() }
+
+// ResolveLogicalAccountEquity returns the most recent persisted logical
+// equity snapshot and its source timestamp. Target conversion uses this
+// method rather than live account balances so retries are auditable.
+func (s *Service) ResolveLogicalAccountEquity(ctx context.Context, spaceID, logicalAccountID string) (shared.Decimal, int64, error) {
+	if s == nil || s.Store == nil {
+		return shared.Zero(), 0, fmt.Errorf("equity: store is not configured")
+	}
+	points, err := s.Store.ListLogicalAccountEquityPoints(ctx, spaceID, logicalAccountID, 0, 0)
+	if err != nil {
+		return shared.Zero(), 0, err
+	}
+	if len(points) == 0 {
+		return shared.Zero(), 0, fmt.Errorf("equity: no logical account snapshot")
+	}
+	point := points[len(points)-1]
+	equity, err := shared.ParseDecimal(point.Equity)
+	if err != nil || equity.Cmp(shared.Zero()) <= 0 {
+		return shared.Zero(), point.SourceTime, fmt.Errorf("equity: latest logical snapshot is invalid")
+	}
+	if !s.sourceFresh(point.SourceTime) {
+		return shared.Zero(), point.SourceTime, fmt.Errorf("equity: latest logical snapshot is stale")
+	}
+	return equity, point.SourceTime, nil
+}
+
 func (s *Service) SampleAccount(ctx context.Context, accountID string) error {
 	if s == nil || s.Store == nil {
 		return fmt.Errorf("equity: store is not configured")
@@ -161,8 +187,12 @@ func (s *Service) valueSpotSnapshot(ctx context.Context, account store.TradingAc
 				return store.TradingAccountSnapshot{}, fmt.Errorf("equity: stale Spot quote for %s", symbol)
 			}
 			equity = equity.Add(quantity.Mul(quote.Price))
-			if quote.UpdatedAt.UnixMilli() > snapshot.ExchangeUpdatedAt {
-				snapshot.ExchangeUpdatedAt = quote.UpdatedAt.UnixMilli()
+			// Freshness is bounded by the oldest input (balance or quote), not
+			// the newest one. A recent quote must not make an old balance appear
+			// current.
+			quoteTime := quote.UpdatedAt.UnixMilli()
+			if snapshot.ExchangeUpdatedAt <= 0 || quoteTime < snapshot.ExchangeUpdatedAt {
+				snapshot.ExchangeUpdatedAt = quoteTime
 			}
 		}
 	}
@@ -177,7 +207,9 @@ func (s *Service) sampleLogicalAccounts(ctx context.Context, spaceID, accountID 
 		return err
 	}
 	for _, logical := range logicals {
-		members, memberErr := s.Store.ListLogicalAccountMembers(ctx, spaceID, logical.LogicalAccountID, true)
+		// Disabled memberships are not executable and must not contribute
+		// capital to a logical account target conversion.
+		members, memberErr := s.Store.ListLogicalAccountMembers(ctx, spaceID, logical.LogicalAccountID, false)
 		if memberErr != nil {
 			return memberErr
 		}
@@ -194,8 +226,22 @@ func (s *Service) sampleLogicalAccounts(ctx context.Context, spaceID, accountID 
 		equity, available, used, unrealized := shared.Zero(), shared.Zero(), shared.Zero(), shared.Zero()
 		allPnl := true
 		logicalValid := true
+		// A LIVE credential identifies one exchange capital source even when
+		// users model Spot and Perpetual accounts as separate members. Count its
+		// equity once; otherwise the same wallet can double the target notional.
+		seenCapitalSources := make(map[string]struct{}, len(members))
 		var sourceTime int64
-		for _, member := range members {
+		// Store ordering is priority/account ID, which is not the same as the
+		// account that produced this fresh sample. Prefer that member so a
+		// shared LIVE credential cannot skip the newest snapshot.
+		orderedMembers := append([]store.LogicalAccountMemberRecord(nil), members...)
+		for i := range orderedMembers {
+			if orderedMembers[i].TradingAccountID == accountID {
+				orderedMembers[0], orderedMembers[i] = orderedMembers[i], orderedMembers[0]
+				break
+			}
+		}
+		for _, member := range orderedMembers {
 			memberAccount, accountErr := s.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
 			if accountErr != nil {
 				return accountErr
@@ -204,6 +250,14 @@ func (s *Service) sampleLogicalAccounts(ctx context.Context, spaceID, accountID 
 				logicalValid = false
 				break
 			}
+			capitalKey := member.TradingAccountID
+			if memberAccount.ExecutionMode == "LIVE" && strings.TrimSpace(memberAccount.CredentialSecretID) != "" {
+				capitalKey = strings.Join([]string{memberAccount.Exchange, memberAccount.Environment, memberAccount.CredentialSecretID}, "\x00")
+			}
+			if _, alreadyCounted := seenCapitalSources[capitalKey]; alreadyCounted {
+				continue
+			}
+			seenCapitalSources[capitalKey] = struct{}{}
 			memberSnapshot := memberAccount.Snapshot
 			if member.TradingAccountID == accountID && sampled != nil {
 				memberSnapshot = *sampled
@@ -225,8 +279,9 @@ func (s *Service) sampleLogicalAccounts(ctx context.Context, spaceID, accountID 
 			if strings.TrimSpace(memberSnapshot.UnrealizedPnL) == "" {
 				allPnl = false
 			}
-			if memberSnapshot.ExchangeUpdatedAt > sourceTime {
-				sourceTime = memberSnapshot.ExchangeUpdatedAt
+			memberSourceTime := memberSnapshot.ExchangeUpdatedAt
+			if sourceTime == 0 || memberSourceTime < sourceTime {
+				sourceTime = memberSourceTime
 			}
 		}
 		if !logicalValid || !contains || sourceTime <= 0 {

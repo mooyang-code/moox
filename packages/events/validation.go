@@ -211,6 +211,9 @@ func validateViewSourcePeriodReady(message *eventpb.EventMessage, value proto.Me
 	if (payload.GetStatus() == "degraded") != hasDegraded {
 		return fmt.Errorf("view source period ready status does not match datasets")
 	}
+	if (payload.GetActiveIndexId() == "") != (payload.GetActiveIndexRevision() == 0) {
+		return fmt.Errorf("view source period ready active index provenance is incomplete")
+	}
 	_, err := validateUniqueTokens(payload.GetPrimarySubjects(), false, "view source period ready primary_subjects")
 	return err
 }
@@ -226,7 +229,13 @@ func validateFactorPeriodComputed(message *eventpb.EventMessage, value proto.Mes
 	if err := validateStoragePeriod(message, payload.GetResultDatasetId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetComputedAt(), "factor period computed"); err != nil {
 		return err
 	}
-	return validateFactorBindingStates(payload.GetBindings(), payload.GetStatus(), "factor period computed")
+	// v1 markers written before provenance was introduced may still be queued
+	// in the DataNode outbox. Keep those publishable; all new markers carry a
+	// source index and are held to the stronger source-hash contract.
+	if (payload.GetSourceIndexId() == "") != (payload.GetSourceIndexRevision() == 0) {
+		return fmt.Errorf("factor period computed source index provenance is incomplete")
+	}
+	return validateFactorBindingStates(payload.GetBindings(), payload.GetStatus(), "factor period computed", payload.GetSourceIndexId() != "")
 }
 
 func validateViewFactorPeriodReady(message *eventpb.EventMessage, value proto.Message) error {
@@ -240,7 +249,10 @@ func validateViewFactorPeriodReady(message *eventpb.EventMessage, value proto.Me
 	if err := validateStoragePeriod(message, payload.GetResultViewId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetReadyAt(), "view factor period ready"); err != nil {
 		return err
 	}
-	return validateFactorBindingStates(payload.GetBindings(), payload.GetStatus(), "view factor period ready")
+	if (payload.GetSourceIndexId() == "") != (payload.GetSourceIndexRevision() == 0) || (payload.GetResultIndexId() == "") != (payload.GetResultIndexRevision() == 0) {
+		return fmt.Errorf("view factor period ready index provenance is incomplete")
+	}
+	return validateFactorBindingStates(payload.GetBindings(), payload.GetStatus(), "view factor period ready", payload.GetSourceIndexId() != "" || payload.GetResultIndexId() != "")
 }
 
 func validateDatasetSyncPoint(message *eventpb.EventMessage, value proto.Message) error {
@@ -278,7 +290,7 @@ func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency str
 	return nil
 }
 
-func validateFactorBindingStates(states []*storagepb.FactorBindingPeriodState, status, label string) error {
+func validateFactorBindingStates(states []*storagepb.FactorBindingPeriodState, status, label string, requireSourceHash bool) error {
 	if len(states) == 0 {
 		return fmt.Errorf("%s bindings are required", label)
 	}
@@ -294,6 +306,9 @@ func validateFactorBindingStates(states []*storagepb.FactorBindingPeriodState, s
 		seen[state.GetBindingId()] = struct{}{}
 		if !validCompletionStatus(state.GetStatus()) {
 			return fmt.Errorf("%s binding %q status %q is invalid", label, state.GetBindingId(), state.GetStatus())
+		}
+		if requireSourceHash && !validRequiredToken(state.GetSourceHash()) {
+			return fmt.Errorf("%s binding %q source_hash is required", label, state.GetBindingId())
 		}
 		skipped, err := validateUniqueTokens(state.GetSkippedSubjects(), false, fmt.Sprintf("%s binding %q skipped_subjects", label, state.GetBindingId()))
 		if err != nil {
@@ -416,9 +431,11 @@ func validateMarketFetchBatchCompleted(message *eventpb.EventMessage, value prot
 	return nil
 }
 
-const maxTargetQuantityLength = 256
+const maxTargetWeightLength = 256
+const maxSingleTargetWeight = 10
+const maxGrossTargetWeight = 20
 
-var decimalQuantityPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
+var decimalTargetWeightPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
 func validateLogicalAccountTargetRequested(message *eventpb.EventMessage, value proto.Message) error {
 	payload, ok := value.(*tradeeventpb.LogicalAccountTargetRequested)
@@ -445,7 +462,7 @@ func validateLogicalAccountTargetRequested(message *eventpb.EventMessage, value 
 		}
 		seenInstruments[instrumentID] = struct{}{}
 		quantity := target.GetQuantity()
-		if len(quantity) > maxTargetQuantityLength || !decimalQuantityPattern.MatchString(quantity) {
+		if len(quantity) > maxTargetWeightLength || !decimalTargetWeightPattern.MatchString(quantity) {
 			return fmt.Errorf("trade target %d quantity is not decimal", i)
 		}
 		if _, ok := new(big.Rat).SetString(quantity); !ok {
@@ -457,6 +474,56 @@ func validateLogicalAccountTargetRequested(message *eventpb.EventMessage, value 
 	}
 	if payload.GetLogicalAccountId() != message.GetSubjectId() {
 		return fmt.Errorf("trade target logical_account_id does not match subject_id")
+	}
+	return nil
+}
+
+func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*tradeeventpb.LogicalAccountTargetWeightRequested)
+	if !ok {
+		return fmt.Errorf("trade target weight payload has type %T", value)
+	}
+	if strings.TrimSpace(payload.GetTargetId()) == "" ||
+		strings.TrimSpace(payload.GetRunnerId()) == "" ||
+		strings.TrimSpace(payload.GetLogicalAccountId()) == "" ||
+		payload.GetCommandSequence() <= 0 {
+		return fmt.Errorf("trade target weight identity or command_sequence is incomplete")
+	}
+	seenInstruments := make(map[string]struct{}, len(payload.GetTargets()))
+	gross := new(big.Rat)
+	for i, target := range payload.GetTargets() {
+		if target == nil {
+			return fmt.Errorf("trade target weight %d is nil", i)
+		}
+		instrumentID := target.GetInstrumentId()
+		if strings.TrimSpace(instrumentID) == "" || strings.TrimSpace(instrumentID) != instrumentID {
+			return fmt.Errorf("trade target weight %d instrument_id is empty", i)
+		}
+		if _, exists := seenInstruments[instrumentID]; exists {
+			return fmt.Errorf("trade target weight instrument_id %q is duplicated", instrumentID)
+		}
+		seenInstruments[instrumentID] = struct{}{}
+		targetWeight := target.GetTargetWeight()
+		if len(targetWeight) > maxTargetWeightLength || !decimalTargetWeightPattern.MatchString(targetWeight) {
+			return fmt.Errorf("trade target weight %d target_weight is not decimal", i)
+		}
+		if _, ok := new(big.Rat).SetString(targetWeight); !ok {
+			return fmt.Errorf("trade target weight %d target_weight is not decimal", i)
+		}
+		value, _ := new(big.Rat).SetString(targetWeight)
+		if new(big.Rat).Abs(value).Cmp(new(big.Rat).SetInt64(maxSingleTargetWeight)) > 0 {
+			return fmt.Errorf("trade target weight %d exceeds maximum single exposure", i)
+		}
+		gross.Add(gross, new(big.Rat).Abs(value))
+	}
+	if gross.Cmp(new(big.Rat).SetInt64(maxGrossTargetWeight)) > 0 {
+		return fmt.Errorf("trade target gross exposure exceeds maximum")
+	}
+	if payload.GetTargetId() != message.GetEventId() {
+		return fmt.Errorf("trade target weight target_id does not match event_id")
+	}
+	if payload.GetLogicalAccountId() != message.GetSubjectId() {
+		return fmt.Errorf("trade target weight logical_account_id does not match subject_id")
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -463,7 +464,7 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ 
 			key.DatasetId = sourceDataset
 			keys = append(keys, key)
 		}
-		rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys, FieldIds: fieldIDs})
+		rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys, FieldIds: fieldIDs, AttributeKeys: factorAttributeKeys(schema.Columns, sourceDataset)})
 		if err != nil {
 			return nil, err
 		}
@@ -497,10 +498,18 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ 
 			var fields []*pb.FieldValue
 			if row := rowsByDataset[source.dataset].values[viewindex.RowKeyID(withDataset(write.Key.Key, source.dataset))]; row != nil {
 				fields = append(fields, row.GetFields()...)
+				if complete.Attributes == nil && len(row.GetAttributes()) > 0 {
+					complete.Attributes = make(map[string]*pb.TypedValue, len(row.GetAttributes()))
+				}
+				mergeRowAttributes(complete.Attributes, row.GetAttributes())
 			}
 			if source.dataset == datasetID {
 				if event := eventRows[primaryID]; event != nil {
 					fields = append(fields, event.GetFields()...)
+					if complete.Attributes == nil && len(event.GetAttributes()) > 0 {
+						complete.Attributes = make(map[string]*pb.TypedValue, len(event.GetAttributes()))
+					}
+					mergeRowAttributes(complete.Attributes, event.GetAttributes())
 				}
 			}
 			complete.Fields = appendMatchingField(complete.Fields, fields, source.source, source.target)
@@ -508,6 +517,40 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ 
 		result = append(result, complete)
 	}
 	return result, nil
+}
+
+// factorAttributeKeys returns the fixed provenance attributes plus the
+// per-factor source-hash keys projected by a managed result View. Primary
+// attribute reads are exact-key reads, so these keys must be enumerated from
+// View column metadata rather than requested with a prefix wildcard.
+func factorAttributeKeys(columns []*pb.ViewColumn, datasetID string) []string {
+	seen := map[string]struct{}{
+		"factor.source_hash":    {},
+		"factor.id":             {},
+		"factor.parent_task_id": {},
+		"factor.computed_at":    {},
+	}
+	for _, column := range columns {
+		if column == nil || viewColumnDataset(column) != datasetID {
+			continue
+		}
+		factorID := strings.TrimSpace(column.GetAttributes()["origin_factor_id"])
+		if factorID == "" {
+			source := viewColumnSource(column, datasetID)
+			if index := strings.Index(source, "__"); index > 0 {
+				factorID = strings.TrimSpace(source[:index])
+			}
+		}
+		if factorID != "" {
+			seen["factor.source_hash."+factorID] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for key := range seen {
+		result = append(result, key)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func withDataset(key *pb.RowKey, datasetID string) *pb.RowKey {
@@ -535,6 +578,20 @@ func appendMatchingField(dst, fields []*pb.FieldValue, source, target string) []
 	return dst
 }
 
+func mergeRowAttributes(dst, src map[string]*pb.TypedValue) {
+	if len(src) == 0 {
+		return
+	}
+	if dst == nil {
+		return
+	}
+	for name, value := range src {
+		if value != nil {
+			dst[name] = value
+		}
+	}
+}
+
 func eventWrites(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.RowFieldUpsert) []viewindex.RowWrite {
 	columns := make(map[string]string)
 	for _, column := range schema.Columns {
@@ -560,12 +617,12 @@ func eventWrites(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.
 				fields = append(fields, &pb.FieldValue{FieldId: name, Value: field.GetValue()})
 			}
 		}
-		if len(fields) != 0 {
+		if len(fields) != 0 || len(row.GetAttributes()) != 0 {
 			key := proto.Clone(row.GetKey()).(*pb.RowKey)
 			if schema.PrimaryDatasetID != "" {
 				key.DatasetId = schema.PrimaryDatasetID
 			}
-			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: key}, Fields: fields})
+			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: key}, Fields: fields, Attributes: row.GetAttributes()})
 		}
 	}
 	return writes

@@ -16,7 +16,7 @@
       <a-alert v-if="store.error" type="error" show-icon class="top-alert">{{ store.error }}</a-alert>
       <a-descriptions v-if="store.runner" :column="3" bordered class="summary">
         <a-descriptions-item label="状态"><StatusBadge :status="store.runner.status" /></a-descriptions-item>
-        <a-descriptions-item label="数据视图">{{ store.runner.view_id }}</a-descriptions-item>
+        <a-descriptions-item label="数据视图">{{ store.runner.source_view_id }}</a-descriptions-item>
         <a-descriptions-item label="频率">{{ store.runner.frequency }}</a-descriptions-item>
         <a-descriptions-item label="组合账户">{{ store.runner.logical_account_id || "观察模式" }}</a-descriptions-item>
         <a-descriptions-item label="命令序号">{{ store.commandSequence }}</a-descriptions-item>
@@ -31,8 +31,8 @@
         <a-tab-pane key="results" title="策略结果">
           <ResultTimeline :results="store.results" />
         </a-tab-pane>
-        <a-tab-pane key="params" title="参数">
-          <pre>{{ prettyJSON(store.runner?.params_json) }}</pre>
+        <a-tab-pane key="definition" title="编译定义">
+          <pre>{{ prettyJSON(store.strategy?.compiled_json) }}</pre>
         </a-tab-pane>
       </a-tabs>
     </div>

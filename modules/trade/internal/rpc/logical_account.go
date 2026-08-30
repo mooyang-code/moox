@@ -249,6 +249,32 @@ func (h *LogicalAccountServer) ReleaseLogicalAccountOwner(
 	}, nil
 }
 
+func (h *LogicalAccountServer) RebindLogicalAccountOwner(
+	ctx context.Context,
+	req *tradepb.RebindLogicalAccountOwnerReq,
+) (*tradepb.RebindLogicalAccountOwnerRsp, error) {
+	spaceID, err := requiredSpace(ctx)
+	if err == nil {
+		err = validatePB(req)
+	}
+	if err != nil {
+		return &tradepb.RebindLogicalAccountOwnerRsp{
+			RetInfo: invalidOrErrorInfo(err),
+		}, nil
+	}
+	record, err := h.LogicalAccounts.RebindOwner(
+		ctx,
+		spaceID,
+		req.GetLogicalAccountId(),
+		req.GetRunnerId(),
+		req.GetRebindKey(),
+	)
+	return &tradepb.RebindLogicalAccountOwnerRsp{
+		RetInfo:        errorInfo(err),
+		LogicalAccount: h.logicalAccount(ctx, record),
+	}, nil
+}
+
 func (h *LogicalAccountServer) PauseLogicalAccount(
 	ctx context.Context,
 	req *tradepb.PauseLogicalAccountReq,

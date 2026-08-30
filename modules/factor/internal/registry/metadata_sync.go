@@ -94,6 +94,20 @@ func (s *MetadataSync) SourceViewDatasetIDs(ctx context.Context, spaceID, viewID
 	return ids, nil
 }
 
+// SourceViewActiveIndexID returns the physical generation currently serving a
+// View. Recalc uses it to produce the same provenance fence as periodic runs.
+func (s *MetadataSync) SourceViewActiveIndexID(ctx context.Context, spaceID, viewID string) (string, error) {
+	view, err := s.getView(ctx, spaceID, viewID)
+	if err != nil {
+		return "", err
+	}
+	indexID := strings.TrimSpace(view.GetActiveIndexId())
+	if indexID == "" {
+		return "", fmt.Errorf("source View %s/%s has no active index", spaceID, viewID)
+	}
+	return indexID, nil
+}
+
 // ResolveManagedResultIDs resolves the source View's primary Dataset before
 // deriving managed result object IDs. This keeps result names readable and
 // stable even when the source View ID has a suffix such as "_view".

@@ -1,4 +1,0 @@
-api_version: moox.strategy/v1
-entrypoint: strategy.py:run
-input:
-  history_bars: 200

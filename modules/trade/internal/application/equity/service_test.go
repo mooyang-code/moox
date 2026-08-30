@@ -95,3 +95,46 @@ func TestSampleAccountValuesLiveSpotBalancesWhenSnapshotHasNoEquity(t *testing.T
 		t.Fatalf("logical equity points = %+v", logicalPoints)
 	}
 }
+
+func TestSampleLogicalAccountCountsSharedLiveCredentialOnce(t *testing.T) {
+	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tradeStore.Close()
+	const sourceMillis = int64(1_700_000_000_000)
+	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		for _, id := range []string{"account-1", "account-2"} {
+			if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+				SpaceID: "space-1", TradingAccountID: id, Name: id,
+				Exchange: string(exchange.ExchangeBinance), MarketType: string(exchange.MarketTypeSwap),
+				ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet), CredentialSecretID: "shared-secret", SettlementAsset: "USDT",
+				Status: string(exchange.AccountStatusEnabled), Ready: true, Snapshot: store.TradingAccountSnapshot{Equity: "1000", AvailableFunds: "1000", ExchangeUpdatedAt: sourceMillis},
+			}); err != nil {
+				return err
+			}
+		}
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: string(exchange.ExecutionModeLive), MarketType: string(exchange.MarketTypeSwap), SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"}); err != nil {
+			return err
+		}
+		for _, id := range []string{"account-1", "account-2"} {
+			if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: id, Enabled: true}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: tradeStore, Now: func() time.Time { return time.UnixMilli(sourceMillis + 1) }}
+	if err := service.SampleAccount(context.Background(), "account-1"); err != nil {
+		t.Fatal(err)
+	}
+	points, err := tradeStore.ListLogicalAccountEquityPoints(context.Background(), "space-1", "logical-1", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(points) != 1 || points[0].Equity != "1000" {
+		t.Fatalf("logical equity points = %+v, want one shared-capital snapshot", points)
+	}
+}

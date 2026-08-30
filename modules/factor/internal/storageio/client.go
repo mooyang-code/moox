@@ -24,13 +24,64 @@ type ViewClient interface {
 	QueryTimeSeriesRows(ctx context.Context, req *storagepb.QueryTimeSeriesRowsReq, opts ...client.Option) (*storagepb.QueryTimeSeriesRowsRsp, error)
 }
 
+// ViewRevisionReader exposes the persisted write revision used to fence a
+// manual/recalc source snapshot before factor tasks are started.
+type ViewRevisionReader interface {
+	ActiveViewRevision(context.Context, string, string, string, string) (uint64, error)
+}
+
+// ViewRevisionAtReader is the fenced form used by recalc. The expected index
+// ID is checked by the same DataView request that returns the revision, so an
+// A/B cutover cannot be silently split across two probes.
+type ViewRevisionAtReader interface {
+	ActiveViewRevisionAt(context.Context, string, string, string, string, string) (uint64, error)
+}
+
 // WindowKey identifies one source time-series scope.
 type WindowKey struct {
-	SpaceID       string
-	SourceViewID  string
-	SourceDataset string
-	SubjectID     string
-	Freq          string
+	SpaceID                     string
+	SourceViewID                string
+	SourceDataset               string
+	SubjectID                   string
+	Freq                        string
+	ExpectedActiveIndexID       string
+	ExpectedActiveIndexRevision uint64
+}
+
+// ActiveViewRevision probes DataView once and returns the revision token of
+// the currently active physical index. It is intentionally a read-only
+// capability used by recalc, whose synthetic source-ready event has no
+// upstream revision field to carry.
+func (c *Client) ActiveViewRevision(ctx context.Context, spaceID, viewID, subjectID, frequency string) (uint64, error) {
+	return c.activeViewRevision(ctx, spaceID, viewID, subjectID, frequency, "")
+}
+
+func (c *Client) ActiveViewRevisionAt(ctx context.Context, spaceID, viewID, subjectID, frequency, expectedIndexID string) (uint64, error) {
+	return c.activeViewRevision(ctx, spaceID, viewID, subjectID, frequency, expectedIndexID)
+}
+
+func (c *Client) activeViewRevision(ctx context.Context, spaceID, viewID, subjectID, frequency, expectedIndexID string) (uint64, error) {
+	if c == nil || c.view == nil {
+		return 0, fmt.Errorf("storage View client is unavailable")
+	}
+	filter := &storagepb.FilterSpec{Groups: []*storagepb.FilterGroup{{Conds: []*storagepb.FilterCond{
+		{Column: "subject_id", Op: storagepb.FilterOp_FILTER_OP_EQ, Values: []*storagepb.TypedValue{stringValue(subjectID)}},
+		{Column: "freq", Op: storagepb.FilterOp_FILTER_OP_EQ, Values: []*storagepb.TypedValue{stringValue(frequency)}},
+	}}}}
+	rsp, err := c.view.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
+		AuthInfo: c.viewRequestAuth(), SpaceId: spaceID, ViewId: viewID, Filter: filter, Limit: 1, ExpectedActiveIndexId: expectedIndexID,
+		TotalMode: storagepb.TotalMode_NONE,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("read active View revision: %w", err)
+	}
+	if err := classifyViewReadRet("read active View revision", rsp.GetRetInfo()); err != nil {
+		return 0, err
+	}
+	if rsp.GetServedActiveIndexRevision() == 0 {
+		return 0, fmt.Errorf("active View %s has no revision", viewID)
+	}
+	return rsp.GetServedActiveIndexRevision(), nil
 }
 
 // Client wraps Storage Access RPCs.
@@ -210,12 +261,19 @@ func (c *Client) readPeriods(
 	seen := make(map[int64]struct{}, periodLimit+1)
 	complete := true
 	var indexedTo time.Time
+	pageKey := key
 	for page := uint32(1); ; page++ {
-		rsp, err := c.readRowsPage(ctx, key, timeRange, order, page, rangeReadPageSize, columns)
+		rsp, err := c.readRowsPage(ctx, pageKey, timeRange, order, page, rangeReadPageSize, columns)
 		if err != nil {
 			return nil, nil, false, time.Time{}, err
 		}
 		complete = complete && rsp.GetComplete()
+		if servedRevision := rsp.GetServedActiveIndexRevision(); servedRevision != 0 {
+			if pageKey.ExpectedActiveIndexRevision != 0 && pageKey.ExpectedActiveIndexRevision != servedRevision {
+				return nil, nil, false, time.Time{}, fmt.Errorf("active View revision changed: expected=%d actual=%d", pageKey.ExpectedActiveIndexRevision, servedRevision)
+			}
+			pageKey.ExpectedActiveIndexRevision = servedRevision
+		}
 		if raw := rsp.GetServedIndexedTo(); raw != "" {
 			parsed, parseErr := time.Parse(time.RFC3339Nano, raw)
 			if parseErr != nil {
@@ -279,9 +337,11 @@ func (c *Client) readRowsPage(
 		// DataView resolves an unqualified logical input to its unique projected
 		// column suffix and rejects ambiguity. This pushes the group's column
 		// union into DuckDB instead of fetching every View field.
-		ColumnNames: append([]string(nil), columns...),
-		Page:        &commonpb.Page{Page: page, Size: size},
-		TotalMode:   storagepb.TotalMode_NONE,
+		ColumnNames:                 append([]string(nil), columns...),
+		Page:                        &commonpb.Page{Page: page, Size: size},
+		TotalMode:                   storagepb.TotalMode_NONE,
+		ExpectedActiveIndexId:       key.ExpectedActiveIndexID,
+		ExpectedActiveIndexRevision: key.ExpectedActiveIndexRevision,
 	}
 	// TaskRunner owns the two-attempt tail retry policy. Do not add an RPC-level
 	// retry here or one slow subject will retain its read-worker slot.

@@ -12,22 +12,24 @@ type DataFrame struct {
 
 // FactorTask is the self-contained scheduler-to-engine task shape.
 type FactorTask struct {
-	TaskID          string
-	BindingID       string
-	SpaceID         string
-	SourceViewID    string
-	ResultDatasetID string
-	SourceDataset   string
-	TargetDataset   string
-	SubjectID       string
-	Freq            string
-	PeriodTime      int64
-	TriggerEventID  string
-	TriggeredAt     time.Time
-	StartTime       time.Time
-	EndTime         time.Time
-	LookbackPeriods int
-	Factor          FactorSpec
+	TaskID                      string
+	BindingID                   string
+	SpaceID                     string
+	SourceViewID                string
+	ExpectedActiveIndexID       string
+	ExpectedActiveIndexRevision uint64
+	ResultDatasetID             string
+	SourceDataset               string
+	TargetDataset               string
+	SubjectID                   string
+	Freq                        string
+	PeriodTime                  int64
+	TriggerEventID              string
+	TriggeredAt                 time.Time
+	StartTime                   time.Time
+	EndTime                     time.Time
+	LookbackPeriods             int
+	Factor                      FactorSpec
 }
 
 // FactorSpec describes one Python factor module invocation.

@@ -48,15 +48,19 @@ type Service struct {
 	indexGatesMu               sync.Mutex
 	indexGates                 map[string]*indexWriteGate
 	indexGeneration            map[string]uint64
-	retiringIndexes            map[string]uint64
-	preparingIndexes           map[string]uint64
-	cleanupMu                  sync.Mutex
-	cleanupCandidates          map[managedIndexRef]retiredIndexCandidate
-	rebuildMu                  sync.Mutex
-	rebuildRunning             bool
-	idleChecks                 map[viewRef]uint32
-	rebuildLogRetry            map[string]pendingRebuildLog
-	maintenanceReady           bool
+	// indexRevision advances after every successful write to an index. Unlike
+	// indexGeneration (which identifies a physical slot incarnation), this
+	// revision detects in-place live corrections while a reader is paginating.
+	indexRevision     map[string]uint64
+	retiringIndexes   map[string]uint64
+	preparingIndexes  map[string]uint64
+	cleanupMu         sync.Mutex
+	cleanupCandidates map[managedIndexRef]retiredIndexCandidate
+	rebuildMu         sync.Mutex
+	rebuildRunning    bool
+	idleChecks        map[viewRef]uint32
+	rebuildLogRetry   map[string]pendingRebuildLog
+	maintenanceReady  bool
 }
 
 type pendingRebuildLog struct {
@@ -153,6 +157,7 @@ func New(root, authSecret string) (*Service, error) {
 		byData:                     make(map[datasetRef]map[string]struct{}),
 		indexGates:                 make(map[string]*indexWriteGate),
 		indexGeneration:            make(map[string]uint64),
+		indexRevision:              make(map[string]uint64),
 		retiringIndexes:            make(map[string]uint64),
 		preparingIndexes:           make(map[string]uint64),
 		cleanupCandidates:          make(map[managedIndexRef]retiredIndexCandidate),
@@ -257,6 +262,29 @@ func (s *Service) indexGenerationOf(indexID string) uint64 {
 	return generation
 }
 
+func (s *Service) nextIndexRevision(indexID string) uint64 {
+	if s == nil || indexID == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.indexRevision == nil {
+		s.indexRevision = make(map[string]uint64)
+	}
+	s.indexRevision[indexID]++
+	return s.indexRevision[indexID]
+}
+
+func (s *Service) indexRevisionOf(indexID string) uint64 {
+	if s == nil || indexID == "" {
+		return 0
+	}
+	s.mu.RLock()
+	revision := s.indexRevision[indexID]
+	s.mu.RUnlock()
+	return revision
+}
+
 // SetMetrics replaces the aggregate view metrics sink. It is intended for
 // tests or a process that supplies a dedicated registerer, before consumption
 // starts.
@@ -293,7 +321,11 @@ func (s *Service) writeIndex(ctx context.Context, indexID string, engine viewind
 		return err
 	}
 	defer release()
-	return engine.Write(ctx, indexID, batch)
+	if err := engine.Write(ctx, indexID, batch); err != nil {
+		return err
+	}
+	s.nextIndexRevision(indexID)
+	return nil
 }
 
 func (s *Service) HasEngine(name string) bool {

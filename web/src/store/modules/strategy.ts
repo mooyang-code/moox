@@ -1,7 +1,6 @@
-import { computed, ref } from "vue";
+import { ref } from "vue";
 import { defineStore } from "pinia";
 import {
-  getEngineStatus,
   getRunner,
   getStrategy,
   listRunners,
@@ -9,7 +8,7 @@ import {
   listStrategyResults,
   listStrategyTargets
 } from "@/api/strategy";
-import type { EngineStatus, InstrumentTarget, Strategy, StrategyResult, StrategyRunner } from "@/api/strategy-types";
+import type { InstrumentTarget, Strategy, StrategyResult, StrategyRunner } from "@/api/strategy-types";
 
 export const useStrategyStore = defineStore("strategy", () => {
   const strategies = ref<Strategy[]>([]);
@@ -19,22 +18,19 @@ export const useStrategyStore = defineStore("strategy", () => {
   const results = ref<StrategyResult[]>([]);
   const targets = ref<InstrumentTarget[]>([]);
   const commandSequence = ref("0");
-  const engine = ref<EngineStatus>({ workers: 0, ready_workers: 0 });
   const totalStrategies = ref(0);
   const totalRunners = ref(0);
   const loading = ref(false);
   const error = ref("");
   const poller = ref<ReturnType<typeof setInterval> | null>(null);
-  const engineReady = computed(() => engine.value.workers > 0 && engine.value.ready_workers === engine.value.workers);
 
   async function loadStrategies(params: Parameters<typeof listStrategies>[0] = {}) {
     loading.value = true;
     error.value = "";
     try {
-      const [result, status] = await Promise.all([listStrategies(params), getEngineStatus()]);
+      const result = await listStrategies(params);
       strategies.value = result.items;
       totalStrategies.value = result.page.total;
-      engine.value = status;
     } catch (err) {
       error.value = err instanceof Error ? err.message : "策略列表加载失败";
     } finally {
@@ -95,12 +91,10 @@ export const useStrategyStore = defineStore("strategy", () => {
     results,
     targets,
     commandSequence,
-    engine,
     totalStrategies,
     totalRunners,
     loading,
     error,
-    engineReady,
     loadStrategies,
     loadRunners,
     loadRunnerDetail,

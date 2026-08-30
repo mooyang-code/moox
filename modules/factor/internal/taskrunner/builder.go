@@ -11,21 +11,23 @@ import (
 )
 
 type TaskScope struct {
-	TaskID          string
-	BindingID       string
-	TriggerType     string
-	SpaceID         string
-	SourceViewID    string
-	ResultDatasetID string
-	SourceDataset   string
-	TargetDataset   string
-	SubjectID       string
-	Freq            string
-	PeriodTime      int64
-	TriggerEventID  string
-	TriggeredAt     time.Time
-	StartTime       time.Time
-	EndTime         time.Time
+	TaskID                      string
+	BindingID                   string
+	TriggerType                 string
+	SpaceID                     string
+	SourceViewID                string
+	ExpectedActiveIndexID       string
+	ExpectedActiveIndexRevision uint64
+	ResultDatasetID             string
+	SourceDataset               string
+	TargetDataset               string
+	SubjectID                   string
+	Freq                        string
+	PeriodTime                  int64
+	TriggerEventID              string
+	TriggeredAt                 time.Time
+	StartTime                   time.Time
+	EndTime                     time.Time
 }
 
 func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Task, error) {
@@ -55,7 +57,9 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 		FactorTask: engine.FactorTask{
 			TaskID: scope.TaskID, BindingID: scope.BindingID, SpaceID: scope.SpaceID,
 			SourceViewID: scope.SourceViewID, ResultDatasetID: scope.ResultDatasetID,
-			SourceDataset: scope.SourceViewID, TargetDataset: scope.ResultDatasetID,
+			ExpectedActiveIndexID:       scope.ExpectedActiveIndexID,
+			ExpectedActiveIndexRevision: scope.ExpectedActiveIndexRevision,
+			SourceDataset:               scope.SourceViewID, TargetDataset: scope.ResultDatasetID,
 			SubjectID: scope.SubjectID, Freq: scope.Freq, PeriodTime: scope.PeriodTime,
 			TriggerEventID: scope.TriggerEventID, TriggeredAt: scope.TriggeredAt.UTC(),
 			StartTime: scope.StartTime.UTC(), EndTime: scope.EndTime.UTC(),

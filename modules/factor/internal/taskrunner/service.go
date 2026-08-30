@@ -690,7 +690,8 @@ func (s *Service) readChunkColumns(ctx context.Context, task Task, cursor time.T
 		var readErr error
 		key := storageio.WindowKey{
 			SpaceID: task.SpaceID, SourceViewID: taskSourceView(task), SourceDataset: task.SourceDataset,
-			SubjectID: task.SubjectID, Freq: task.Freq,
+			SubjectID: task.SubjectID, Freq: task.Freq, ExpectedActiveIndexID: task.ExpectedActiveIndexID,
+			ExpectedActiveIndexRevision: task.ExpectedActiveIndexRevision,
 		}
 		if periodReader, ok := s.storage.(periodStorageIO); ok && task.PeriodTime > 0 {
 			chunk, readErr = periodReader.ReadPeriodChunk(

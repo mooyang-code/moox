@@ -2,11 +2,13 @@ package eventconsumer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -15,13 +17,20 @@ import (
 )
 
 type TargetOptions struct {
-	Client       *jetstream.Client
-	ConsumerName string
-	Store        *store.Store
-	Wake         func()
-	Now          func() time.Time
-	SetReady     func(bool)
-	Gate         sync.Locker
+	Client         *jetstream.Client
+	ConsumerName   string
+	Store          *store.Store
+	Wake           func()
+	Now            func() time.Time
+	SetReady       func(bool)
+	Gate           sync.Locker
+	WeightResolver TargetWeightResolver
+}
+
+// TargetWeightResolver converts the strategy-owned target weights into the
+// immutable quantity snapshot consumed by Trade.
+type TargetWeightResolver interface {
+	Resolve(context.Context, int64, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error)
 }
 
 func HandleTarget(
@@ -52,10 +61,10 @@ func HandleTarget(
 	if err != nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
-	request, ok := payload.(*tradeeventpb.LogicalAccountTargetRequested)
+	request, ok := payload.(*tradeeventpb.LogicalAccountTargetWeightRequested)
 	if !ok ||
-		message.GetEventName() != events.LogicalAccountTargetRequested.Name() ||
-		message.GetEventVersion() != events.LogicalAccountTargetRequested.Version() {
+		message.GetEventName() != events.LogicalAccountTargetWeightRequested.Name() ||
+		message.GetEventVersion() != events.LogicalAccountTargetWeightRequested.Version() {
 		return jetstream.HandlerResult{
 			Decision: jetstream.TERM,
 			Err:      fmt.Errorf("trade target: unexpected event payload %T", payload),
@@ -66,6 +75,41 @@ func HandleTarget(
 		opts.Gate.Lock()
 		defer opts.Gate.Unlock()
 	}
+	if opts.WeightResolver == nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: errors.New("trade target weight resolver is required")}
+	}
+	requestHash, err := targetapp.RequestHash(request)
+	if err != nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+	}
+	if existing, lookupErr := opts.Store.GetTargetReceipt(ctx, message.GetSpaceId(), request.GetTargetId()); lookupErr == nil {
+		if existing.RequestHash != requestHash {
+			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("%w: target receipt request hash conflict", store.ErrConflict)}
+		}
+		return jetstream.HandlerResult{Decision: jetstream.ACK}
+	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+		return retryTarget(lookupErr)
+	}
+	// Avoid doing an expensive equity/quote lookup for a target that has
+	// already been superseded. The transactional accept path remains the
+	// authority, but this read-only fast path prevents stale redeliveries from
+	// blocking a durable consumer on unavailable market data.
+	if current, currentErr := opts.Store.GetLogicalAccountTarget(ctx, message.GetSpaceId(), request.GetLogicalAccountId()); currentErr == nil {
+		if current.CommandSequence > uint64(request.GetCommandSequence()) ||
+			(current.CommandSequence == uint64(request.GetCommandSequence()) && current.TargetID != request.GetTargetId()) {
+			// The command is permanently superseded. TERM preserves the
+			// consumer's poison-message semantics without doing market-data I/O.
+			return jetstream.HandlerResult{Decision: jetstream.TERM}
+		}
+	} else if !errors.Is(currentErr, gorm.ErrRecordNotFound) {
+		return retryTarget(currentErr)
+	}
+	// Membership and account snapshots must remain stable from the resolver's
+	// venue selection through receipt acceptance. Otherwise a concurrent member
+	// removal can leave an immutable receipt pointing at a venue that no longer
+	// belongs to the logical account.
+	unlockAccount := opts.Store.LockLogicalAccount(message.GetSpaceId(), request.GetLogicalAccountId())
+	defer unlockAccount()
 	unsupportedInstrument, membersReady, err := unsupportedLogicalTargetInstrument(
 		ctx, opts.Store, message.GetSpaceId(), request,
 	)
@@ -100,13 +144,35 @@ func HandleTarget(
 		Status:           "PENDING",
 		AcceptedAt:       now.UnixMilli(),
 	}
-	for _, target := range request.GetTargets() {
-		record.Targets = append(record.Targets, store.InstrumentTarget{
-			InstrumentID: target.GetInstrumentId(),
-			Quantity:     target.GetQuantity(),
-		})
+	conversion, conversionErr := opts.WeightResolver.Resolve(ctx, message.GetOccurredAt().AsTime().UnixMilli(), request, message.GetSpaceId())
+	if conversionErr != nil {
+		if errors.Is(conversionErr, targetapp.ErrPermanent) {
+			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: conversionErr}
+		}
+		return retryTarget(conversionErr)
 	}
-	_, accepted, err := opts.Store.AcceptLogicalAccountTarget(ctx, record)
+	record.Targets = append(record.Targets, conversion.QuantityTargets...)
+	// Keep the receipt column's JSON shape stable: an object keyed by
+	// instrument_id, with full quote evidence as the value when available.
+	referencePriceValue := make(map[string]targetapp.ReferencePriceEvidence, len(conversion.ReferencePriceEvidence))
+	for _, evidence := range conversion.ReferencePriceEvidence {
+		if evidence.InstrumentID != "" {
+			referencePriceValue[evidence.InstrumentID] = evidence
+		}
+	}
+	if len(referencePriceValue) == 0 {
+		for instrumentID, price := range conversion.ReferencePrices {
+			referencePriceValue[instrumentID] = targetapp.ReferencePriceEvidence{InstrumentID: instrumentID, Price: price}
+		}
+	}
+	referencePrices, marshalErr := json.Marshal(referencePriceValue)
+	if marshalErr != nil {
+		return retryTarget(marshalErr)
+	}
+	receipt := store.TargetReceiptRecord{
+		SpaceID: message.GetSpaceId(), TargetID: request.GetTargetId(), RunnerID: request.GetRunnerId(), LogicalAccountID: request.GetLogicalAccountId(), CommandSequence: uint64(request.GetCommandSequence()), RequestHash: requestHash, SignalTime: conversion.SignalTime, WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime, ReferencePricesJSON: string(referencePrices), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets), AcceptedAt: now.UnixMilli(),
+	}
+	_, accepted, err := opts.Store.AcceptLogicalAccountTargetWithReceiptLocked(ctx, record, receipt, request.GetOwnerGeneration())
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidRecord) ||
 			errors.Is(err, store.ErrConflict) ||
@@ -121,11 +187,16 @@ func HandleTarget(
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
 
+func mustMarshal(value any) string {
+	raw, _ := json.Marshal(value)
+	return string(raw)
+}
+
 func unsupportedLogicalTargetInstrument(
 	ctx context.Context,
 	tradeStore *store.Store,
 	spaceID string,
-	request *tradeeventpb.LogicalAccountTargetRequested,
+	request *tradeeventpb.LogicalAccountTargetWeightRequested,
 ) (instrumentID string, membersReady bool, err error) {
 	if len(request.GetTargets()) == 0 {
 		return "", true, nil
@@ -140,7 +211,8 @@ func unsupportedLogicalTargetInstrument(
 		return request.GetTargets()[0].GetInstrumentId(), false, nil
 	}
 	supportedIDs := make(map[string]struct{})
-	membersReady = true
+	enabledMemberCount := 0
+	readyMemberCount := 0
 	for _, member := range members {
 		account, accountErr := tradeStore.GetTradingAccountByID(
 			ctx, member.TradingAccountID,
@@ -148,9 +220,14 @@ func unsupportedLogicalTargetInstrument(
 		if accountErr != nil {
 			return "", false, accountErr
 		}
-		if !account.Ready {
-			membersReady = false
+		if account.Status != "ENABLED" {
+			continue
 		}
+		enabledMemberCount++
+		if !account.Ready {
+			continue
+		}
+		readyMemberCount++
 		instruments, instrumentErr := tradeStore.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 		if instrumentErr != nil {
 			return "", false, instrumentErr
@@ -166,6 +243,10 @@ func unsupportedLogicalTargetInstrument(
 			supportedIDs[instrument.InstrumentID] = struct{}{}
 		}
 	}
+	// A target is terminally unsupported only after every enabled membership
+	// has been inspected. If any enabled member is still warming up, retry so
+	// that it can become the eventual eligible execution venue.
+	membersReady = enabledMemberCount > 0 && readyMemberCount == enabledMemberCount
 	for _, target := range request.GetTargets() {
 		if _, ok := supportedIDs[target.GetInstrumentId()]; !ok {
 			return target.GetInstrumentId(), membersReady, nil

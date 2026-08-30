@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
     c_logical_account_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
     c_owner_runner_id TEXT,
+    c_owner_claimed_at INTEGER NOT NULL DEFAULT 0,
     c_execution_mode TEXT NOT NULL,
     c_market_type TEXT NOT NULL,
     c_settlement_asset TEXT NOT NULL,
@@ -50,6 +51,20 @@ WHERE c_enabled = 1;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_owner_runner
 ON t_logical_accounts (c_space_id, c_owner_runner_id)
 WHERE c_owner_runner_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS t_logical_account_owner_rebinds (
+    c_space_id TEXT NOT NULL,
+    c_logical_account_id TEXT NOT NULL,
+    c_rebind_key TEXT NOT NULL,
+    c_runner_id TEXT NOT NULL,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_logical_account_id, c_rebind_key),
+    FOREIGN KEY (c_space_id, c_logical_account_id)
+        REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
+        ON DELETE CASCADE,
+    CHECK (c_rebind_key <> ''),
+    CHECK (c_runner_id <> '')
+);
 
 CREATE INDEX IF NOT EXISTS idx_logical_account_members_account
 ON t_logical_account_members (c_space_id, c_trading_account_id);

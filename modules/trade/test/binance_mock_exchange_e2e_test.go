@@ -48,8 +48,9 @@ func TestBinanceHTTPMockTargetToFilledOrderConvergesEndToEnd(t *testing.T) {
 		context.Background(),
 		targetDelivery(t, now, "mock-binance-target", 1, "9.99"),
 		eventconsumer.TargetOptions{
-			Store: f.store,
-			Now:   func() time.Time { return now },
+			Store:          f.store,
+			Now:            func() time.Time { return now },
+			WeightResolver: testTargetWeightResolver{},
 		},
 	)
 	require.Equal(t, jetstream.ACK, handled.Decision, handled.Err)

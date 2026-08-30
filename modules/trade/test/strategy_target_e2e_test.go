@@ -33,7 +33,8 @@ func TestLogicalAccountTargetConsumerPersistsLatestAndWorkerConverges(t *testing
 	now := time.Now().UTC()
 	options := eventconsumer.TargetOptions{
 		Store: f.store, Wake: func() { wakes.Add(1) },
-		Now: func() time.Time { return now },
+		Now:            func() time.Time { return now },
+		WeightResolver: testTargetWeightResolver{},
 	}
 
 	for _, command := range []struct {
@@ -127,7 +128,7 @@ func testEmptyFullTargetClosesExistingPosition(t *testing.T) {
 	result := eventconsumer.HandleTarget(
 		context.Background(),
 		targetDeliveryWithTargets(t, now, "target-empty", 1, nil),
-		eventconsumer.TargetOptions{Store: f.store, Now: func() time.Time { return now }},
+		eventconsumer.TargetOptions{Store: f.store, Now: func() time.Time { return now }, WeightResolver: testTargetWeightResolver{}},
 	)
 	require.Equal(t, jetstream.ACK, result.Decision, result.Err)
 	f.fake.reference = exchange.ReferencePrice{
@@ -162,7 +163,7 @@ func TestLogicalAccountTargetRejectsStaleReferenceBeforePlacement(t *testing.T) 
 	result := eventconsumer.HandleTarget(
 		context.Background(),
 		targetDelivery(t, now, "stale-price-target", 1, "0.03"),
-		eventconsumer.TargetOptions{Store: f.store, Now: func() time.Time { return now }},
+		eventconsumer.TargetOptions{Store: f.store, Now: func() time.Time { return now }, WeightResolver: testTargetWeightResolver{}},
 	)
 	require.Equal(t, jetstream.ACK, result.Decision, result.Err)
 	f.fake.reference = exchange.ReferencePrice{
@@ -226,9 +227,9 @@ func targetDelivery(
 		now,
 		targetID,
 		sequence,
-		[]*tradeeventpb.InstrumentTarget{{
+		[]*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT",
-			Quantity:     quantity,
+			TargetWeight: quantity,
 		}},
 	)
 }
@@ -238,14 +239,14 @@ func targetDeliveryWithTargets(
 	now time.Time,
 	targetID string,
 	sequence int64,
-	targets []*tradeeventpb.InstrumentTarget,
+	targets []*tradeeventpb.InstrumentWeightTarget,
 ) *jetstream.Delivery {
 	t.Helper()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	encoded, err := registry.Encode(
-		events.LogicalAccountTargetRequested,
-		&tradeeventpb.LogicalAccountTargetRequested{
+		events.LogicalAccountTargetWeightRequested,
+		&tradeeventpb.LogicalAccountTargetWeightRequested{
 			TargetId: targetID, RunnerId: testRunner,
 			LogicalAccountId: testLogicalAccount,
 			CommandSequence:  sequence, Targets: targets,

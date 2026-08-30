@@ -27,11 +27,9 @@ func TestStrategyProtoUsesRunnerAndResultVocabulary(t *testing.T) {
 		"rpc ListRunners",
 		"rpc UpdateRunner",
 		"rpc SetRunnerStatus",
-		"rpc RunOnce",
 		"rpc ListStrategyResults",
 		"rpc GetStrategyResult",
 		"rpc ListStrategyTargets",
-		"rpc GetEngineStatus",
 	} {
 		if !strings.Contains(source, required) {
 			t.Errorf("strategy.proto does not contain %q", required)

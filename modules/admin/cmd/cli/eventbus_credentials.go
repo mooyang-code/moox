@@ -72,6 +72,16 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	if err := fs.Parse(args[2:]); err != nil {
 		return err
 	}
+	// A control-plane reset removes admin.db, while an externally managed
+	// EventBus keeps its role files. Reconcile only users.yaml from those
+	// existing tokens so newly introduced subjects are authorized without
+	// rotating the TLS bundle or role credentials.
+	if sub == "reconcile" {
+		if outputDir == "" {
+			return errors.New("--output-dir is required")
+		}
+		return reconcileEventBusFiles(outputDir, stdout)
+	}
 	if err := loadCLIKey(dbPath, keyFile); err != nil {
 		return err
 	}
@@ -102,6 +112,53 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	default:
 		return fmt.Errorf("unknown eventbus-credentials subcommand %q", sub)
 	}
+}
+
+func reconcileEventBusFiles(dir string, out io.Writer) error {
+	roleFiles := map[string]string{
+		"eventbus-internal-admin":         "internal-admin.yaml",
+		"hostagent-publisher":             "hostagent-publisher.yaml",
+		"metrics-publisher":               "metrics-publisher.yaml",
+		"monitor-observability-consumer":  "monitor-observability.yaml",
+		"storage-eventbus":                "storage-eventbus.yaml",
+		"archive-eventbus":                "archive-eventbus.yaml",
+		"cloudnode-eventbus":              "cloudnode-eventbus.yaml",
+		"cloudnode-worker":                "cloudnode-worker.yaml",
+		"market-fetch-publisher":          "market-fetch-publisher.yaml",
+		"collector-market-fetch-consumer": "collector-market-fetch-consumer.yaml",
+		"factor-eventbus":                 "factor-eventbus.yaml",
+		"strategy-eventbus":               "strategy-eventbus.yaml",
+		"trade-eventbus":                  "trade-eventbus.yaml",
+	}
+	tokens := make(map[string]string, len(roleFiles))
+	for role, filename := range roleFiles {
+		raw, err := os.ReadFile(filepath.Join(dir, filename))
+		if err != nil {
+			return fmt.Errorf("read EventBus role %s: %w", role, err)
+		}
+		value := parseCredentialToken(string(raw))
+		if value == "" {
+			return fmt.Errorf("EventBus role %s has no token", role)
+		}
+		tokens[role] = value
+	}
+	if err := atomicSecretFile(filepath.Join(dir, "users.yaml"), []byte(usersYAML(tokens))); err != nil {
+		return err
+	}
+	return writeJSON(out, map[string]any{"status": "ok", "output_dir": dir, "reconciled": true})
+}
+
+func parseCredentialToken(raw string) string {
+	for _, key := range []string{"token", "eventbus_token", "monitor_eventbus_token"} {
+		prefix := key + ":"
+		for _, line := range strings.Split(raw, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, prefix) {
+				return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			}
+		}
+	}
+	return ""
 }
 
 func eventBusNATSURL(db *gorm.DB, nodeID string) (string, error) {
@@ -341,8 +398,8 @@ func usersYAML(tokens map[string]string) string { // ACLs are deliberately subje
 		"  - username: market-fetch-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.market.fetch.batch.completed.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: collector-market-fetch-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.*\", \"$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.*\", \"$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.*.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_MARKET_FETCH.*\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_MARKET_FETCH.*\", \"$JS.ACK.MOOX_MARKET_FETCH.*.>\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.>\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.>\", \"$JS.ACK.MOOX_STORAGE.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: factor-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.factor_calc\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_calc\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_calc.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.factor_calc\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_calc\", \"$JS.ACK.MOOX_STORAGE.factor_calc.>\", \"$JS.API.CONSUMER.INFO.*.factor_view_ready_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_view_ready_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_view_ready_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.factor_view_ready_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_view_ready_v1\", \"$JS.ACK.MOOX_STORAGE.factor_view_ready_v1.>\", \"$JS.API.CONSUMER.INFO.*.factor_view_ready_e2e\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_view_ready_e2e\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_view_ready_e2e.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.factor_view_ready_e2e\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_view_ready_e2e\", \"$JS.ACK.MOOX_STORAGE.factor_view_ready_e2e.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: strategy-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.trade.target.requested.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: trade-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.trade_target_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_TRADE.trade_target_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_v1\", \"$JS.ACK.MOOX_TRADE.trade_target_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n",
+		"  - username: strategy-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.trade.target.weight_requested.v1.>\", \"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.strategy_view_factor_ready_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_factor_ready_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_factor_ready_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.strategy_view_factor_ready_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.strategy_view_factor_ready_v1\", \"$JS.ACK.MOOX_STORAGE.strategy_view_factor_ready_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"moox.storage.view.factor_period.ready.v1.>\"]}\n"+
+		"  - username: trade-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.trade_target_weight_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_TRADE.trade_target_weight_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_weight_v1\", \"$JS.ACK.MOOX_TRADE.trade_target_weight_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n",
 		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-observability-consumer"], tokens["storage-eventbus"], tokens["archive-eventbus"], tokens["cloudnode-eventbus"], tokens["cloudnode-worker"], tokens["market-fetch-publisher"], tokens["collector-market-fetch-consumer"], tokens["factor-eventbus"], tokens["strategy-eventbus"], tokens["trade-eventbus"])
 }
 func atomicSecretFile(path string, data []byte) error {

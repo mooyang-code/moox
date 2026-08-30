@@ -251,6 +251,26 @@ func (r *ReleaseLogicalAccountOwnerReq) Validate() error {
 	}))
 }
 
+func (r *RebindLogicalAccountOwnerReq) Validate() error {
+	if err := validateLogicalOwner(r != nil, value(func() string {
+		if r == nil {
+			return ""
+		}
+		return r.LogicalAccountId
+	}), value(func() string {
+		if r == nil {
+			return ""
+		}
+		return r.RunnerId
+	})); err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.RebindKey) == "" {
+		return fmt.Errorf("rebind_key is required")
+	}
+	return nil
+}
+
 func (r *PauseLogicalAccountReq) Validate() error {
 	if r == nil ||
 		strings.TrimSpace(r.LogicalAccountId) == "" ||

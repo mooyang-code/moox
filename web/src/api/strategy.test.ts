@@ -35,12 +35,12 @@ describe("strategy API", () => {
     });
   });
 
-  it("uses quantity for the current FULL target and controls only Runner status", async () => {
+  it("uses target weights for the current FULL target and controls only Runner status", async () => {
     callControl
-      .mockResolvedValueOnce({ targets: [{ instrument_id: "BTC-USDT-SPOT", quantity: "0.1" }], command_sequence: "7" })
+      .mockResolvedValueOnce({ targets: [{ instrument_id: "BTC-USDT-SPOT", target_weight: "0.1" }], command_sequence: "7" })
       .mockResolvedValueOnce({ runner: { runner_id: "runner-1", status: "ENABLED" } });
     await expect(listStrategyTargets("runner-1")).resolves.toEqual({
-      targets: [{ instrument_id: "BTC-USDT-SPOT", quantity: "0.1" }],
+      targets: [{ instrument_id: "BTC-USDT-SPOT", target_weight: "0.1" }],
       command_sequence: "7"
     });
     await setRunnerStatus("runner-1", "ENABLED");

@@ -72,11 +72,11 @@ func strategyEventData(id string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return registry.MarshalMessage(events.LogicalAccountTargetRequested, &tradeeventpb.LogicalAccountTargetRequested{
+	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: id, RunnerId: "runner-1", LogicalAccountId: "logical-1",
 		CommandSequence: 1,
-		Targets: []*tradeeventpb.InstrumentTarget{{
-			InstrumentId: "BTC-USDT-SPOT", Quantity: "1",
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{
+			InstrumentId: "BTC-USDT-SPOT", TargetWeight: "1",
 		}},
 	}, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "logical-1"})
 }

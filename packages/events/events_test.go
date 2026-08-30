@@ -29,6 +29,7 @@ func TestBuiltInEvents(t *testing.T) {
 		"storage.view.factor_period.ready@1",
 		"storage.view.source_period.ready@1",
 		"trade.target.requested@1",
+		"trade.target.weight_requested@1",
 	}
 	wantOwners := map[string]string{
 		"cloudnode.job.execution.requested@1":       "cloudnode",
@@ -43,6 +44,7 @@ func TestBuiltInEvents(t *testing.T) {
 		"storage.view.factor_period.ready@1":        "storage",
 		"storage.view.source_period.ready@1":        "storage",
 		"trade.target.requested@1":                  "strategy",
+		"trade.target.weight_requested@1":           "strategy",
 	}
 	events := registry.Events()
 	if len(events) != len(want) {
@@ -95,7 +97,7 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 		},
 		{
 			name: "factor period computed", event: FactorPeriodComputed,
-			payload:   &storagepb.FactorPeriodComputed{SourceViewId: "source-view", ResultDatasetId: "result-dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete"}}, ComputedAt: now, TriggerEventId: "source-ready-1"},
+			payload:   &storagepb.FactorPeriodComputed{SourceViewId: "source-view", ResultDatasetId: "result-dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}}, ComputedAt: now, TriggerEventId: "source-ready-1"},
 			subjectID: "result-dataset",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
 				_, payload, err := DecodeFactorPeriodComputed(registry, raw, subject, id)
@@ -104,7 +106,7 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 		},
 		{
 			name: "factor view ready", event: ViewFactorPeriodReady,
-			payload:   &storagepb.ViewFactorPeriodReady{SourceViewId: "source-view", ResultViewId: "result-view", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete"}}, ReadyAt: now},
+			payload:   &storagepb.ViewFactorPeriodReady{SourceViewId: "source-view", ResultViewId: "result-view", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}}, ReadyAt: now},
 			subjectID: "result-view",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
 				_, payload, err := DecodeViewFactorPeriodReady(registry, raw, subject, id)

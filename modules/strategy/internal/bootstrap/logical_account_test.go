@@ -261,6 +261,26 @@ func TestLogicalAccountOwnerClientRejectsMismatchedResponses(t *testing.T) {
 	}
 }
 
+func TestLogicalAccountOwnerClientGenerationRequiresExpectedOwner(t *testing.T) {
+	owner := &logicalAccountOwnerClient{
+		client: &logicalAccountClientProxyStub{
+			getResponse: &tradepb.GetLogicalAccountRsp{
+				RetInfo: &tradepb.RetInfo{},
+				LogicalAccount: &tradepb.LogicalAccount{
+					LogicalAccountId: "logical-1",
+					SpaceId:          "space-1",
+					OwnerRunnerId:    "runner-other",
+					OwnerGeneration:  7,
+				},
+			},
+		},
+		timeout: time.Second,
+	}
+	if _, err := owner.Generation(context.Background(), "space-1", "logical-1", "runner-1"); err == nil || !strings.Contains(err.Error(), "returned owner runner") {
+		t.Fatalf("generation error = %v", err)
+	}
+}
+
 func TestLogicalAccountOwnerClientEnforcesTimeout(t *testing.T) {
 	owner := &logicalAccountOwnerClient{
 		client:  &logicalAccountClientProxyStub{waitForContext: true},

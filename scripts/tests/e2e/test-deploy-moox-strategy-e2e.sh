@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The test lives under scripts/tests/e2e; resolve the repository root rather
+# than the intermediate scripts/tests directory.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-strategy-e2e.XXXXXX")"
 DEPLOY_DIR="${TMP_ROOT}/deploy"
 STAGE_DIR="${TMP_ROOT}/stage"
@@ -10,6 +12,11 @@ GO_BUILD_CACHE="$(go env GOCACHE)"
 export HOME="${TMP_ROOT}/home"
 export GOMODCACHE="${GO_MODULE_CACHE}"
 export GOCACHE="${GO_BUILD_CACHE}"
+# Strategy derives its two Storage caller keys at process start even in this
+# control-plane-only deployment. Keep distinct test values to exercise the
+# Primary/Metadata versus DataView auth split without persisting secrets.
+export MOOX_STORAGE_PRIMARY_AUTH_SECRET="strategy-e2e-primary"
+export MOOX_STORAGE_VIEW_AUTH_SECRET="strategy-e2e-view"
 CONTROL_PID=""
 
 cleanup() {
@@ -90,7 +97,7 @@ done
   --gateway-control-key-file "${TMP_ROOT}/control.key" \
   --gateway-service-key-file "${TMP_ROOT}/service.key" \
   --no-admin --no-storage --no-archive --no-web-host --no-cloudnode \
-  --no-collector --no-factor --no-monitor --reuse-web-assets
+  --no-collector --no-factor --no-trade --no-monitor --no-hostagent --reuse-web-assets
 
 sign_health_request() {
   local timestamp nonce body_hash canonical signature
@@ -133,29 +140,12 @@ eventbus = json.loads(pathlib.Path(sys.argv[2]).read_text())
 if strategy.get("ready") is not True:
     raise SystemExit(f"strategy is not ready: {strategy}")
 details = strategy.get("details") or {}
-if details.get("database_ready") is not True or details.get("python_worker_ready") is not True:
+if details.get("database_ready") is not True:
     raise SystemExit(f"strategy dependencies are not ready: {strategy}")
 if details.get("eventbus_connected") is not True or details.get("outbox_pending_count") != 0:
     raise SystemExit(f"strategy EventBus/outbox is not ready: {strategy}")
 if eventbus.get("ready") is not True:
     raise SystemExit(f"eventbus is not ready: {eventbus}")
-PY
-
-rpc_response="${TMP_ROOT}/engine-status.json"
-curl --fail --silent --show-error --max-time 5 \
-  -X POST -H 'Content-Type: application/json' --data '{}' \
-  http://127.0.0.1:11430/trpc.moox.strategy.StrategyMgr/GetEngineStatus >"${rpc_response}"
-python3 - "${rpc_response}" <<'PY'
-import json
-import pathlib
-import sys
-
-response = json.loads(pathlib.Path(sys.argv[1]).read_text())
-ret = response.get("ret_info") or response.get("retInfo") or {}
-if ret.get("code") != 0:
-    raise SystemExit(f"GetEngineStatus failed: {response}")
-if response.get("workers", 0) < 1:
-    raise SystemExit(f"Strategy worker pool is unavailable: {response}")
 PY
 
 [[ -s "${DEPLOY_DIR}/data/strategy/strategy.sqlite" ]]

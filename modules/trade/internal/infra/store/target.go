@@ -14,8 +14,10 @@ import (
 )
 
 type InstrumentTarget struct {
-	InstrumentID string `json:"instrument_id"`
-	Quantity     string `json:"quantity"`
+	InstrumentID     string `json:"instrument_id"`
+	Quantity         string `json:"quantity"`
+	TradingAccountID string `json:"trading_account_id,omitempty"`
+	ExchangeSymbol   string `json:"exchange_symbol,omitempty"`
 }
 
 type BlockedTarget struct {
@@ -202,6 +204,17 @@ func (tx *Tx) DeleteLogicalAccountTargetForOtherRunner(
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 			AND c_runner_id <> ?
 	`, spaceID, logicalAccountID, runnerID).Error
+}
+
+// DeleteLogicalAccountTarget removes the current target during an ownership
+// lifecycle transition. Historical TargetReceipt rows remain immutable; only
+// the live convergence target is cleared so a released runner cannot resume
+// an obsolete strategy after the account is claimed again.
+func (tx *Tx) DeleteLogicalAccountTarget(spaceID, logicalAccountID string) error {
+	return tx.db.Exec(`
+		DELETE FROM t_logical_account_targets
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+	`, spaceID, logicalAccountID).Error
 }
 
 func (s *Store) ListLogicalAccountTargets(

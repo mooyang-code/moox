@@ -32,8 +32,9 @@ test("strategy console lists immutable strategies and Runner records", async ({ 
           {
             strategy_id: "momentum",
             name: "动量策略",
-            manifest_yaml: "entrypoint: strategy",
-            source_code: "def strategy(data, params, context): pass",
+            kind: "coin_selection",
+            manifest_yaml: "api_version: moox.strategy/v2\nkind: coin_selection",
+            compiled_json: "{}",
             source_hash: "abc123",
             created_at: "2026-07-30T00:00:00Z"
           }
@@ -44,18 +45,15 @@ test("strategy console lists immutable strategies and Runner records", async ({ 
       }
     })
   );
-  await page.route("**/api/admin/strategy/GetEngineStatus", route =>
-    route.fulfill({ json: { ret_info: { code: 0 }, workers: 1, ready_workers: 1 } })
-  );
   await page.goto("/#/strategy/overview");
   await expect(page.getByRole("heading", { name: "策略", exact: true })).toBeVisible();
   await expect(page.getByText("动量策略")).toBeVisible();
-  await expect(page.getByText("Worker 1/1")).toBeVisible();
+  await expect(page.getByText("声明式权重策略")).toBeVisible();
   await expect(page.getByText("绩效")).toHaveCount(0);
   await expect(page.getByText("状态迁移")).toHaveCount(0);
 });
 
-test("Runner detail renders StrategyResult and quantity FULL targets", async ({ page }) => {
+test("Runner detail renders StrategyResult and target-weight FULL targets", async ({ page }) => {
   await installShell(page);
   await page.route("**/api/admin/strategy/GetRunner", route =>
     route.fulfill({
@@ -64,9 +62,9 @@ test("Runner detail renders StrategyResult and quantity FULL targets", async ({ 
         runner: {
           runner_id: "runner-paper",
           strategy_id: "momentum",
-          view_id: "ohlcv",
+          space_id: "space-1",
+          source_view_id: "ohlcv",
           frequency: "1m",
-          params_json: "{}",
           logical_account_id: "logical-paper",
           status: "ENABLED",
           last_success_at: "2026-07-30T00:00:00Z"
@@ -86,9 +84,10 @@ test("Runner detail renders StrategyResult and quantity FULL targets", async ({ 
             result_id: "result-7",
             runner_id: "runner-paper",
             action: "rebalance",
-            namespace: "prod",
+            strategy_id: "momentum",
+            period_time: "2026-07-30T00:00:00Z",
             input_hash: "hash7",
-            output_json: "{}",
+            debug_info_json: "{}",
             command_sequence: "7"
           }
         ],
@@ -100,7 +99,7 @@ test("Runner detail renders StrategyResult and quantity FULL targets", async ({ 
     route.fulfill({
       json: {
         ret_info: { code: 0 },
-        targets: [{ instrument_id: "BTC-USDT-SPOT", quantity: "0.25" }],
+        targets: [{ instrument_id: "BTC-USDT-SPOT", target_weight: "0.25" }],
         command_sequence: "7"
       }
     })

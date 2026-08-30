@@ -2,6 +2,8 @@ package view
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log"
@@ -54,6 +56,16 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("query predicate is required"))}, nil
 	}
 	indexID, runtime := s.activeIndex(req.GetSpaceId(), req.GetViewId())
+	if expected := strings.TrimSpace(req.GetExpectedActiveIndexId()); expected != "" && expected != indexID {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index changed: expected=%s actual=%s", expected, indexID))}, nil
+	}
+	startRevision, revisionErr := s.readIndexRevision(ctx, indexID, nil)
+	if revisionErr != nil {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(revisionErr), revisionErr)}, nil
+	}
+	if expected := req.GetExpectedActiveIndexRevision(); expected != 0 && expected != startRevision {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index revision changed: expected=%d actual=%d", expected, startRevision))}, nil
+	}
 	selectors, err := s.timeSeriesSelectors(indexID, req)
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -76,9 +88,16 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
 	}
+	currentRevision, revisionErr := s.readIndexRevision(ctx, indexID, nil)
+	if revisionErr != nil {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(revisionErr), revisionErr)}, nil
+	}
+	if currentRevision != startRevision {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index was updated during query: start=%d current=%d", startRevision, currentRevision))}, nil
+	}
 	out := make([]*pb.TimeSeriesRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, &pb.TimeSeriesRow{Key: rowToTimeSeriesKey(row.GetKey()), Fields: row.GetFields()})
+		out = append(out, &pb.TimeSeriesRow{Key: rowToTimeSeriesKey(row.GetKey()), Fields: row.GetFields(), Attributes: rowAttributesToStrings(row.GetAttributes())})
 	}
 	stats, hasStats := cachedActiveIndexStats(runtime, indexID)
 	if req.GetTotalMode() != pb.TotalMode_NONE {
@@ -93,12 +112,67 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 			markCoverageRefresh(runtime)
 		}
 	}
-	complete := hasStats && len(out) > 0 && runtimeCoverageComplete(runtime, req.GetTimeRange(), stats)
+	// Completeness is a coverage property, not a row-count property. A
+	// complete query may legitimately return an empty page (for example the
+	// trailing page after an exact page-size multiple); treating that page as
+	// incomplete makes clients reject an otherwise ready View.
+	complete := hasStats && runtimeCoverageComplete(runtime, req.GetTimeRange(), stats)
 	indexedFrom, indexedTo := "", ""
 	if hasStats {
 		indexedFrom, indexedTo = stats.IndexedFrom, stats.IndexedTo
 	}
-	return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: makePageResult(pageNo, pageSize, len(out), total), ServedIndexedFrom: indexedFrom, ServedIndexedTo: indexedTo, Complete: complete}, nil
+	return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: makePageResult(pageNo, pageSize, len(out), total), ServedIndexedFrom: indexedFrom, ServedIndexedTo: indexedTo, Complete: complete, ServedActiveIndexRevision: startRevision}, nil
+}
+
+func (s *Service) readIndexRevision(ctx context.Context, indexID string, engine viewindex.Engine) (uint64, error) {
+	if engine == nil {
+		var err error
+		engine, err = s.engineFor(indexID)
+		if err != nil {
+			// Lightweight protocol embedders may publish readiness without a
+			// physical engine. Production View instances always have one; keep
+			// those test-only paths on the in-memory revision fallback.
+			return s.indexRevisionOf(indexID), nil
+		}
+	}
+	if reader, ok := engine.(viewindex.MetadataStatReader); ok {
+		stats, err := reader.StatMetadata(ctx, indexID)
+		if err != nil {
+			return 0, err
+		}
+		if stats.UpdatedAt != "" {
+			sum := sha256.Sum256([]byte(stats.UpdatedAt))
+			return binary.BigEndian.Uint64(sum[:8]), nil
+		}
+	}
+	return s.indexRevisionOf(indexID), nil
+}
+
+func rowAttributesToStrings(attributes map[string]*pb.TypedValue) map[string]string {
+	if len(attributes) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(attributes))
+	for name, value := range attributes {
+		if value == nil {
+			continue
+		}
+		switch typed := value.GetValue().(type) {
+		case *pb.TypedValue_StringValue:
+			result[name] = typed.StringValue
+		case *pb.TypedValue_IntValue:
+			result[name] = fmt.Sprintf("%d", typed.IntValue)
+		case *pb.TypedValue_DoubleValue:
+			result[name] = fmt.Sprintf("%g", typed.DoubleValue)
+		case *pb.TypedValue_BoolValue:
+			result[name] = fmt.Sprintf("%t", typed.BoolValue)
+		case *pb.TypedValue_TimeValue:
+			result[name] = typed.TimeValue
+		case *pb.TypedValue_JsonValue:
+			result[name] = typed.JsonValue
+		}
+	}
+	return result
 }
 
 // SearchRecordRows pushes full-text, structured filters, sorting, and paging

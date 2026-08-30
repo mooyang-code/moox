@@ -7,7 +7,7 @@
   <a-table v-else size="small" :data="targets" :pagination="false" row-key="instrument_id">
     <template #columns>
       <a-table-column title="Instrument" data-index="instrument_id" />
-      <a-table-column title="绝对目标持仓量" data-index="quantity" />
+      <a-table-column title="目标权重" data-index="target_weight" />
     </template>
   </a-table>
 </template>

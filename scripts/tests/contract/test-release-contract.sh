@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
 (cd "${ROOT}/packages/doctor" && go test -count=1 ./...)
 grep -q 'moox_gateway' "${ROOT}/examples/setup/default/service-deployments.yaml"
@@ -56,12 +56,7 @@ for contract in \
   'copy_binary moox-strategy ' \
   'copy_binary moox-strategy-cli ' \
   'modules/strategy/config/.' \
-  'modules/strategy/pyworker/.' \
-  'packages/pyruntime/python/.' \
-  'RELEASE_ROOT}/factor/python-runtime/' \
-  'RELEASE_ROOT}/strategy/python-runtime/' \
-  'modules/strategy/pysdk/.' \
-  'modules/strategy/strategies/example/.'; do
+  'RELEASE_ROOT}/factor/python-runtime/'; do
   grep -q "${contract}" "${ROOT}/scripts/release.sh" || {
     echo "missing Strategy release contract: ${contract}" >&2
     exit 1
@@ -71,26 +66,9 @@ tmp_strategy="$(mktemp -d "${TMPDIR:-/tmp}/moox-strategy-release.XXXXXX")"
 trap 'rm -rf "${tmp_strategy}"' EXIT
 mkdir -p \
   "${tmp_strategy}/factor/python-runtime" \
-  "${tmp_strategy}/strategy/pyworker" \
-  "${tmp_strategy}/strategy/python-runtime" \
-  "${tmp_strategy}/strategy/pysdk"
+  "${tmp_strategy}/strategy"
 cp -R "${ROOT}/packages/pyruntime/python/." "${tmp_strategy}/factor/python-runtime/"
-cp "${ROOT}/modules/strategy/pyworker/worker.py" "${tmp_strategy}/strategy/pyworker/worker.py"
-cp -R "${ROOT}/packages/pyruntime/python/." "${tmp_strategy}/strategy/python-runtime/"
-cp -R "${ROOT}/modules/strategy/pysdk/." "${tmp_strategy}/strategy/pysdk/"
 PYTHONPATH="${tmp_strategy}/factor/python-runtime" python3 -c 'from moox_pyruntime import protocol; assert protocol.TYPE_RUN'
-PYTHONPATH="${tmp_strategy}/strategy/python-runtime:${tmp_strategy}/strategy/pysdk" \
-  python3 - "${tmp_strategy}/strategy/pyworker/worker.py" <<'PY'
-import importlib.util
-import pathlib
-import sys
-
-worker = pathlib.Path(sys.argv[1])
-spec = importlib.util.spec_from_file_location("moox_strategy_release_worker", worker)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-assert module.HELLO
-PY
 grep -q "name __pycache__ -o -name .pytest_cache" "${ROOT}/scripts/release.sh"
 grep -q "name '\*.pyc' -o -name '\*.sqlite' -o -name '\*.db'" "${ROOT}/scripts/release.sh"
 

@@ -15,4 +15,23 @@ message LogicalAccountTargetRequested {
   string logical_account_id = 3;
   int64 command_sequence = 4;
   repeated InstrumentTarget targets = 5;
+  string signal_time = 6;
+}
+
+// LogicalAccountTargetWeightRequested is the versioned Strategy -> Trade
+// contract. It deliberately uses a distinct payload type and event subject so
+// legacy quantity messages cannot be decoded as target weights.
+message InstrumentWeightTarget {
+  string instrument_id = 1;
+  string target_weight = 2;
+}
+
+message LogicalAccountTargetWeightRequested {
+  string target_id = 1;
+  string runner_id = 2;
+  string logical_account_id = 3;
+  int64 command_sequence = 4;
+  repeated InstrumentWeightTarget targets = 5;
+  string signal_time = 6;
+  int64 owner_generation = 7;
 }

@@ -3,16 +3,12 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
-	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
-	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
-	trpc "trpc.group/trpc-go/trpc-go"
+	strategyconfig "github.com/mooyang-code/moox/modules/strategy/internal/config"
 )
 
 func main() {
@@ -23,117 +19,31 @@ func main() {
 }
 
 func runCLI(args []string, out, errOut *os.File) error {
-	if len(args) == 0 {
-		return errors.New("usage: strategy validate <manifest.yaml> <source.py> | run-once <manifest.yaml> <source.py>")
+	if len(args) == 0 || args[0] != "validate" {
+		return errors.New("usage: strategy validate [--space-id <id>] <manifest.yaml>")
 	}
-	switch args[0] {
-	case "validate":
-		if len(args) != 3 {
-			return errors.New("usage: strategy validate <manifest.yaml> <source.py>")
-		}
-		manifest, source, err := readPackage(args[1], args[2])
-		if err != nil {
-			return err
-		}
-		parsed, err := registry.Parse(manifest)
-		if err != nil {
-			return err
-		}
-		sum := sha256.Sum256([]byte(source))
-		fmt.Fprintf(out, "valid strategy api=%s source_hash=%s\n", parsed.APIVersion, hex.EncodeToString(sum[:]))
+	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	spaceID := fs.String("space-id", "", "strategy space id")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: strategy validate [--space-id <id>] <manifest.yaml>")
+	}
+	raw, err := os.ReadFile(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	manifest, err := strategyconfig.Parse(raw)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(raw)
+	if *spaceID == "" {
+		_, _ = fmt.Fprintf(out, "valid strategy api=%s kind=%s manifest_hash=%s\n", manifest.APIVersion, manifest.Kind, hex.EncodeToString(sum[:]))
 		return nil
-	case "run-once":
-		fs := flag.NewFlagSet("run-once", flag.ContinueOnError)
-		fs.SetOutput(errOut)
-		python := fs.String("python", "python3", "Python executable")
-		worker := fs.String("worker", "pyworker/worker.py", "strategy worker path")
-		trigger := fs.String("trigger", "", "trigger bar time; defaults to the final history bar")
-		dataJSON := fs.String("data", "[]", "complete history JSON array")
-		paramsJSON := fs.String("params", "{}", "strategy parameters JSON object")
-		if len(args) < 3 {
-			return errors.New("usage: strategy run-once [flags] <manifest.yaml> <source.py>")
-		}
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		pos := fs.Args()
-		if len(pos) != 2 {
-			return errors.New("usage: strategy run-once [flags] <manifest.yaml> <source.py>")
-		}
-		manifest, source, err := readPackage(pos[0], pos[1])
-		if err != nil {
-			return err
-		}
-		if _, err := registry.Parse(manifest); err != nil {
-			return err
-		}
-		var data []map[string]any
-		if err := json.Unmarshal([]byte(*dataJSON), &data); err != nil {
-			return fmt.Errorf("data: %w", err)
-		}
-		triggerBarTime, err := resolveTrigger(*trigger, data)
-		if err != nil {
-			return err
-		}
-		var params map[string]any
-		if err := json.Unmarshal([]byte(*paramsJSON), &params); err != nil {
-			return fmt.Errorf("params: %w", err)
-		}
-		strategy, err := (&registry.Service{}).Prepare(
-			"cli-strategy", "cli", manifest, source,
-		)
-		if err != nil {
-			return err
-		}
-		e, err := engine.New(trpc.BackgroundContext(), *python, *worker)
-		if err != nil {
-			return err
-		}
-		defer e.Close()
-		if err := e.Load(trpc.BackgroundContext(), strategy); err != nil {
-			return err
-		}
-		outValue, _, err := e.Run(trpc.BackgroundContext(), domain.ExecutionRequest{
-			RequestID: "cli-run", StrategyID: strategy.ID, RunnerID: "cli",
-			TriggerBarTime: triggerBarTime, Namespace: "cli", Data: data, Params: params,
-		}, strategy)
-		if err != nil {
-			return err
-		}
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(outValue)
-	default:
-		return fmt.Errorf("unknown command %q", args[0])
 	}
-}
-
-func resolveTrigger(explicit string, data []map[string]any) (string, error) {
-	if explicit != "" {
-		return explicit, nil
-	}
-	if len(data) == 0 {
-		return "", errors.New("trigger: history must not be empty")
-	}
-	value, ok := data[len(data)-1]["time"]
-	if !ok {
-		return "", errors.New("trigger: final history bar is missing time")
-	}
-	trigger, ok := value.(string)
-	if !ok || trigger == "" {
-		return "", errors.New("trigger: final history bar time must be a non-empty string")
-	}
-	return trigger, nil
-}
-
-func readPackage(manifestPath, sourcePath string) (string, string, error) {
-	manifest, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return "", "", err
-	}
-	source, err := os.ReadFile(sourcePath)
-	if err != nil {
-		return "", "", err
-	}
-	return string(manifest), string(source), nil
+	_, _ = fmt.Fprintf(out, "valid strategy api=%s kind=%s space_id=%s manifest_hash=%s\n", manifest.APIVersion, manifest.Kind, *spaceID, hex.EncodeToString(sum[:]))
+	return nil
 }
