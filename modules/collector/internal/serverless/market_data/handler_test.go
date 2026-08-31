@@ -3,6 +3,7 @@ package marketdata
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/url"
 	"strings"
 	"sync"
@@ -44,6 +45,10 @@ type testGetter struct{}
 
 func (testGetter) Get(_ context.Context, _ string, _ string, _ url.Values, result interface{}) error {
 	return json.Unmarshal([]byte(`{"rc":0,"data":{"klines":["2026-08-31 09:30,10,10.5,11,9.5,100,1050"]}}`), result)
+}
+
+func (testGetter) GetStream(_ context.Context, _ string, _ string, _ url.Values, consume func(io.Reader) error) error {
+	return consume(strings.NewReader(`{"data":{}}`))
 }
 
 func TestHandlerRunsGenericHTTPPipeline(t *testing.T) {
@@ -123,7 +128,7 @@ func TestHandlerBuildsRequestFromStaticTimerAssignment(t *testing.T) {
 	if !got.Success || got.RowsWritten != 2 || writer.rows != 2 {
 		t.Fatalf("unexpected timer response=%+v rows=%d", got, writer.rows)
 	}
-	if len(writer.sources) != 2 || writer.sources[0] == writer.sources[1] || !strings.HasPrefix(writer.sources[0], "scf:timer-request") {
+	if len(writer.sources) != 2 || writer.sources[0] == writer.sources[1] || !strings.HasPrefix(writer.sources[0], "timer:assignment-1:") {
 		t.Fatalf("timer source event ids=%v", writer.sources)
 	}
 }

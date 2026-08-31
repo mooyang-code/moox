@@ -296,16 +296,16 @@ func parseDate(value string, location *time.Location) (time.Time, error) {
 // bare code is accepted only when its market can be determined unambiguously.
 func NormalizeSymbol(raw string) (string, error) {
 	symbol := strings.ToLower(strings.TrimSpace(raw))
+	if parts := strings.SplitN(symbol, ".", 2); len(parts) == 2 {
+		if len(parts[0]) == 2 && (parts[0] == "sh" || parts[0] == "sz" || parts[0] == "bj") {
+			return NormalizeSymbol(parts[0] + parts[1])
+		}
+	}
 	if len(symbol) > 2 && (strings.HasPrefix(symbol, "sh") || strings.HasPrefix(symbol, "sz") || strings.HasPrefix(symbol, "bj")) {
 		if err := validateCode(symbol[2:]); err != nil {
 			return "", fmt.Errorf("tencent: invalid symbol %q: %w", raw, err)
 		}
 		return symbol, nil
-	}
-	if parts := strings.SplitN(symbol, ".", 2); len(parts) == 2 {
-		if len(parts[0]) == 2 && (parts[0] == "sh" || parts[0] == "sz" || parts[0] == "bj") {
-			return NormalizeSymbol(parts[0] + parts[1])
-		}
 	}
 	if err := validateCode(symbol); err != nil {
 		return "", fmt.Errorf("tencent: symbol %q must use EXCHANGE.CODE or a market-determinable code: %w", raw, err)
@@ -340,7 +340,7 @@ func (c *Client) domain() string {
 }
 
 func normalizeVolume(symbol, raw string) (string, error) {
-	if !strings.HasPrefix(symbol, "sh688") && !strings.HasPrefix(symbol, "sz399") && !strings.HasPrefix(symbol, "sh000") && !strings.HasPrefix(symbol, "sz000") {
+	if !strings.HasPrefix(symbol, "sh688") && !strings.HasPrefix(symbol, "sz399") && !strings.HasPrefix(symbol, "sh000") {
 		return scaleDecimal(raw, 100)
 	}
 	return raw, nil
