@@ -4,7 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCF_SPACE_ID="${SCF_SPACE_ID:?SCF_SPACE_ID is required (for example: crypto_market)}"
 SCF_ENTRYPOINT="${SCF_ENTRYPOINT:?SCF_ENTRYPOINT is required (crypto_market)}"
-[[ "${SCF_ENTRYPOINT}" == "crypto_market" ]] || { echo "unsupported SCF entrypoint: ${SCF_ENTRYPOINT}" >&2; exit 1; }
+case "${SCF_ENTRYPOINT}" in
+  crypto_market|market_data) ;;
+  *) echo "unsupported SCF entrypoint: ${SCF_ENTRYPOINT}" >&2; exit 1 ;;
+esac
 CONFIG_DIR="${ROOT}/modules/collector/configs/scf/${SCF_SPACE_ID}"
 VERSION="${VERSION:-v$(date +%Y%m%d%H%M%S)}"
 OUT_DIR="${OUT_DIR:-${ROOT}/release/scf}"

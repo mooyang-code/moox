@@ -14,6 +14,10 @@ require (
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/marketcalendar v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/marketmanifest v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/routeprobe v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/tdx v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
 	github.com/tencentyun/scf-go-lib v0.0.0-20230904103145-13c9a7eeca80
@@ -74,6 +78,14 @@ replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metric
 replace github.com/mooyang-code/moox/packages/notification => ../../packages/notification
 
 replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
+
+replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
+
+replace github.com/mooyang-code/moox/packages/marketmanifest => ../../packages/marketmanifest
+
+replace github.com/mooyang-code/moox/packages/routeprobe => ../../packages/routeprobe
+
+replace github.com/mooyang-code/moox/packages/tdx => ../../packages/tdx
 
 replace github.com/mooyang-code/moox/packages/observabilitypb => ../../packages/observabilitypb
 

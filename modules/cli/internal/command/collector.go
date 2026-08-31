@@ -401,6 +401,7 @@ func addCollectorPackageFlags(cmd *cobra.Command, opts *collectorPackageOptions)
 	cmd.Flags().StringVar(&opts.Version, "version", "dev", "collector package version")
 	cmd.Flags().StringVar(&opts.Out, "out", "", "output zip path")
 	cmd.Flags().StringVar(&opts.ConfigDir, "config", "", "collector config directory")
+	cmd.Flags().StringVar(&opts.Entrypoint, "entrypoint", "", "collector SCF entrypoint (crypto_market or market_data)")
 	cmd.Flags().StringVar(&opts.CLSTopicID, "cls-topic-id", "", "central CLS topic id used by SCF warning/error logs")
 }
 
@@ -2218,7 +2219,7 @@ func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKe
 }
 
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version, entrypoint string) error {
-	if entrypoint != "crypto_market" {
+	if entrypoint != "crypto_market" && entrypoint != "market_data" {
 		return fmt.Errorf("unsupported collector SCF entrypoint %q", entrypoint)
 	}
 	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-s -w -X main.Version=%s", version), "-o", outPath, "./cmd/scf/"+entrypoint)
@@ -2242,8 +2243,10 @@ func resolveCollectorRoot(explicit string) (string, error) {
 		if candidate == "" {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(candidate, "cmd", "scf", "crypto_market", "main.go")); err == nil {
-			return filepath.Abs(candidate)
+		for _, entrypoint := range []string{"crypto_market", "market_data"} {
+			if _, err := os.Stat(filepath.Join(candidate, "cmd", "scf", entrypoint, "main.go")); err == nil {
+				return filepath.Abs(candidate)
+			}
 		}
 	}
 	return "", fmt.Errorf("collector root not found; pass --collector-root")

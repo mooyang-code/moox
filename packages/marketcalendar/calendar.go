@@ -26,6 +26,8 @@ var (
 	ErrInvalidCalendarData  = errors.New("invalid trading calendar data")
 	ErrInvalidManifest      = errors.New("invalid trading calendar manifest")
 	ErrCalendarChecksum     = errors.New("trading calendar checksum mismatch")
+	ErrCalendarExpiring     = errors.New("trading calendar is nearing valid_through")
+	ErrCalendarExpired      = errors.New("trading calendar coverage has expired")
 )
 
 // CivilDate is a calendar date without a clock or location.
@@ -273,6 +275,34 @@ func (c TradingCalendar) Status(date CivilDate) (CoverageStatus, error) {
 		return TradingDay, nil
 	}
 	return NonTradingDay, nil
+}
+
+// Readiness checks whether the embedded data is safe to use for the supplied
+// civil date. It fails closed after valid_through and reports an expiring
+// calendar inside warningWindow so the annual update job can run before the
+// first uncovered trading day.
+func (c TradingCalendar) Readiness(asOf CivilDate, warningWindow time.Duration) error {
+	if c.data == nil {
+		return fmt.Errorf("%w: calendar is not loaded", ErrCalendarExpired)
+	}
+	if err := asOf.Validate(); err != nil {
+		return err
+	}
+	if asOf.Before(c.FirstDate()) {
+		return fmt.Errorf("%w: %s is before %s", ErrOutOfCoverage, asOf, c.FirstDate())
+	}
+	if asOf.After(c.LastDate()) {
+		return fmt.Errorf("%w: %s is after %s", ErrCalendarExpired, asOf, c.LastDate())
+	}
+	if warningWindow <= 0 {
+		return nil
+	}
+	warningDays := int((warningWindow + 24*time.Hour - 1) / (24 * time.Hour))
+	threshold, ok := shiftCivilDate(c.LastDate(), -warningDays)
+	if ok && !asOf.Before(threshold) {
+		return fmt.Errorf("%w: valid_through=%s", ErrCalendarExpiring, c.LastDate())
+	}
+	return nil
 }
 
 // PrevTradingDay returns the closest trading day strictly before date.

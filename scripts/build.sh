@@ -114,6 +114,14 @@ build_collector_scf() {
   build_go modules/collector ./cmd/scf/crypto_market moox-collector-scf 0
 }
 
+build_collector_market_data_scf() {
+  [[ "${TARGET_GOOS}" == "linux" && "${TARGET_GOARCH}" == "amd64" ]] || {
+    echo "moox-collector-market-data-scf supports linux/amd64 only" >&2
+    exit 1
+  }
+  build_go modules/collector ./cmd/scf/market_data moox-collector-market-data-scf 0
+}
+
 case "${TARGET_MODULE}" in
   all)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
@@ -173,6 +181,9 @@ case "${TARGET_MODULE}" in
     ;;
   collector-scf)
     build_collector_scf
+    ;;
+  collector-market-data-scf)
+    build_collector_market_data_scf
     ;;
   factor)
     build_go modules/factor ./cmd/server moox-factor 0

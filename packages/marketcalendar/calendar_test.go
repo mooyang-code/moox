@@ -145,6 +145,21 @@ func TestStatusDistinguishesTradingNonTradingAndOutOfCoverage(t *testing.T) {
 	}
 }
 
+func TestReadinessFailsClosedAndWarnsBeforeCoverageExpires(t *testing.T) {
+	t.Parallel()
+
+	calendar := mustLoad(t)
+	if err := calendar.Readiness(mustDate(t, "2026-01-01"), 30*24*time.Hour); err != nil {
+		t.Fatalf("Readiness() before warning window = %v", err)
+	}
+	if err := calendar.Readiness(mustDate(t, "2026-12-01"), 30*24*time.Hour); !errors.Is(err, ErrCalendarExpiring) {
+		t.Fatalf("Readiness() expiring error = %v, want ErrCalendarExpiring", err)
+	}
+	if err := calendar.Readiness(mustDate(t, "2027-01-01"), 0); !errors.Is(err, ErrCalendarExpired) {
+		t.Fatalf("Readiness() expired error = %v, want ErrCalendarExpired", err)
+	}
+}
+
 func TestPreviousAndNextTradingDayAreStrictAndBounded(t *testing.T) {
 	t.Parallel()
 

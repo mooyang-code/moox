@@ -1,0 +1,9 @@
+market_id: stock_us
+timezone: America/New_York
+instrument_types:
+  - equity
+frequencies:
+  - 1m
+  - 1d
+  - 1w
+  - 1M

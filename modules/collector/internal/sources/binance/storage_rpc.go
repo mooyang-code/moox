@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
+	"google.golang.org/protobuf/proto"
 )
 
 const datasetSubjectPageSize = 1000
@@ -106,6 +107,26 @@ func NewBatchStorageWithWriteSource(accessTarget, instType, writeSource string) 
 		return nil, err
 	}
 	return newStorageWriter(accessTarget, accessTarget, storageAuthInfo(binding), writeSource), nil
+}
+
+// NewMarketDataStorage creates the same narrow PrimaryStore writer for the
+// generic stock/index/bond pipeline. It intentionally takes auth from the
+// process environment rather than from an event payload or a source config.
+func NewMarketDataStorage(accessTarget, writeSource string) (BatchStorage, error) {
+	accessTarget = strings.TrimSpace(accessTarget)
+	if accessTarget == "" {
+		return nil, fmt.Errorf("storage gateway target is required")
+	}
+	auth := StorageAuthInfo{
+		AppID:     strings.TrimSpace(os.Getenv("MOOX_STORAGE_APP_ID")),
+		AppKey:    strings.TrimSpace(os.Getenv("MOOX_STORAGE_APP_KEY")),
+		Operator:  strings.TrimSpace(os.Getenv("MOOX_STORAGE_OPERATOR")),
+		RequestID: strings.TrimSpace(os.Getenv("MOOX_STORAGE_REQUEST_ID")),
+	}
+	if auth.AppID == "" {
+		return nil, fmt.Errorf("MOOX_STORAGE_APP_ID is required")
+	}
+	return newStorageWriter(accessTarget, accessTarget, storageAuthInfo(StorageBinding{AuthInfo: auth}), writeSource), nil
 }
 
 func newStorageWriter(accessTarget string, metadataTarget string, authInfo *storagepb.AuthInfo, writeSource string) *storageWriter {
@@ -203,11 +224,14 @@ func (w *storageWriter) WaitViewSyncPoint(ctx context.Context, req *storagepb.Wa
 	// Callers may not carry the Primary auth object (for example the local
 	// resample backfill fence). Inject the writer's authenticated snapshot while
 	// preserving an explicit auth value used by metadata preparation tests.
-	copyReq := *req
+	copyReq, ok := proto.Clone(req).(*storagepb.WaitViewSyncPointReq)
+	if !ok {
+		return nil, fmt.Errorf("wait View sync point: clone request failed")
+	}
 	if copyReq.AuthInfo == nil {
 		copyReq.AuthInfo = w.authInfo
 	}
-	return w.access.WaitViewSyncPoint(ctx, &copyReq)
+	return w.access.WaitViewSyncPoint(ctx, copyReq)
 }
 
 // ReportDatasetPeriodCollected appends the completion marker after the

@@ -38,6 +38,10 @@ use (
 	./packages/hostmetricpb
 	./packages/jetstream
 	./packages/marketfetchpb
+	./packages/marketcalendar
+	./packages/marketmanifest
+	./packages/routeprobe
+	./packages/tdx
 	./packages/metricspb
 	./packages/notification
 	./packages/observabilitypb

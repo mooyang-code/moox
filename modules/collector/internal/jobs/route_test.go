@@ -59,7 +59,7 @@ func TestJobRoutesRejectDuplicateIdentity(t *testing.T) {
 
 	routes = []JobRoute{
 		{Exchange: "binance", DataType: "kline", JobType: "collect.binance.kline"},
-		{Exchange: "tushare", DataType: "kline", JobType: " collect.binance.kline "},
+		{Exchange: "eastmoney", DataType: "kline", JobType: " collect.binance.kline "},
 	}
 	if err := validateJobRoutes(routes); err == nil {
 		t.Fatal("validateJobRoutes() accepted duplicate job_type")

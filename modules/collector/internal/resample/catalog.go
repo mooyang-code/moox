@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/report"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -150,9 +151,12 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 		if _, keep := desiredSubjects[binding.GetSubjectId()]; keep {
 			continue
 		}
-		copy := *binding
+		copy, ok := proto.Clone(binding).(*storagepb.DatasetSubject)
+		if !ok {
+			return fmt.Errorf("clone stale target Dataset subject failed")
+		}
 		copy.Status = "disabled"
-		if resp, bindErr := c.Metadata.BindDatasetSubject(ctx, &storagepb.BindDatasetSubjectReq{AuthInfo: c.Auth, DatasetSubject: &copy}); bindErr != nil {
+		if resp, bindErr := c.Metadata.BindDatasetSubject(ctx, &storagepb.BindDatasetSubjectReq{AuthInfo: c.Auth, DatasetSubject: copy}); bindErr != nil {
 			return fmt.Errorf("disable stale target Dataset subject: %w", bindErr)
 		} else if err := ensureMetadataSuccess("disable stale target Dataset subject", resp.GetRetInfo()); err != nil {
 			return err
