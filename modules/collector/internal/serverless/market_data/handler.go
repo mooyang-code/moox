@@ -647,7 +647,7 @@ func containsString(values []string, target string) bool {
 
 func manifestHasSource(manifest marketmanifest.Manifest, key marketdata.SourceKey, frequency string) bool {
 	for _, source := range manifest.Sources {
-		if strings.EqualFold(strings.TrimSpace(source.ProviderID), key.ProviderID) && strings.EqualFold(strings.TrimSpace(source.SourceID), key.SourceID) && containsString(source.Frequencies, frequency) {
+		if source.IsEnabled() && strings.EqualFold(strings.TrimSpace(source.ProviderID), key.ProviderID) && strings.EqualFold(strings.TrimSpace(source.SourceID), key.SourceID) && containsString(source.Frequencies, frequency) {
 			return true
 		}
 	}

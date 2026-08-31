@@ -30,6 +30,20 @@ func TestManifestRejectsDuplicateFrequency(t *testing.T) {
 	}
 }
 
+func TestManifestRejectsUnknownSourceStatus(t *testing.T) {
+	manifest := Manifest{MarketID: "stock_cn", InstrumentType: "equity", DatasetID: "bars", Timezone: "Asia/Shanghai", Frequencies: []string{"1d"}, Sources: []SourceRef{{ProviderID: "sina", SourceID: "bars", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1d"}, Status: "experimental"}}}
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("expected invalid source status error")
+	}
+}
+
+func TestCatalogOnlySourceIsNotEnabled(t *testing.T) {
+	source := SourceRef{ProviderID: "sina", SourceID: "bars", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1d"}, Status: SourceCatalogOnly}
+	if source.IsEnabled() {
+		t.Fatal("catalog-only source must not be enabled")
+	}
+}
+
 func TestCatalogReturnsDeepCopiesOfNestedSourceFrequencies(t *testing.T) {
 	manifest := Manifest{MarketID: "stock_cn", InstrumentType: "equity", DatasetID: "bars", Timezone: "Asia/Shanghai", Frequencies: []string{"1d"}, Sources: []SourceRef{{ProviderID: "eastmoney", SourceID: "bars", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1d"}}}}
 	catalog, err := NewCatalog(manifest)

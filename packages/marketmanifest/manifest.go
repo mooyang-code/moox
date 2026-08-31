@@ -13,6 +13,18 @@ type SourceRef struct {
 	Transport       string   `json:"transport"`
 	Port            int      `json:"port"`
 	Frequencies     []string `json:"frequencies"`
+	Status          string   `json:"status"`
+}
+
+const (
+	SourceEnabled     = "enabled"
+	SourceShadow      = "shadow"
+	SourceCatalogOnly = "catalog_only"
+)
+
+func (source SourceRef) IsEnabled() bool {
+	status := strings.TrimSpace(source.Status)
+	return status == "" || status == SourceEnabled
 }
 
 type Manifest struct {
@@ -59,6 +71,11 @@ func (manifest Manifest) Validate() error {
 		}
 		if source.Port < 1 || source.Port > 65535 {
 			return fmt.Errorf("sources[%d] port must be between 1 and 65535", index)
+		}
+		switch strings.TrimSpace(source.Status) {
+		case "", SourceEnabled, SourceShadow, SourceCatalogOnly:
+		default:
+			return fmt.Errorf("sources[%d] has invalid status %q", index, source.Status)
 		}
 		if len(source.Frequencies) == 0 {
 			return fmt.Errorf("sources[%d] frequencies are required", index)
