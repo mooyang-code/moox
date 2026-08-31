@@ -1850,6 +1850,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		fetcher = defaultCollectorSCFFetcherSpace()
 	}
 	entrypoint := strings.ToLower(strings.TrimSpace(defaultFlag(opts.Entrypoint, fetcher.Entrypoint)))
+	setDefaultEnv(env, "MOOX_SCF_REGION", opts.Region)
 	if entrypoint == "market_data" {
 		setDefaultEnv(env, "MOOX_MARKET_DATA_ENTRYPOINT", "market_data")
 		setDefaultEnv(env, "MOOX_MARKET_FETCH_MARKET_ID", fetcher.MarketID)
@@ -1861,6 +1862,18 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		setDefaultEnv(env, "MOOX_STORAGE_APP_KEY", firstNonEmpty(fetcher.StorageAppKey, os.Getenv("MOOX_STORAGE_APP_KEY")))
 		setDefaultEnv(env, "MOOX_STORAGE_OPERATOR", firstNonEmpty(fetcher.StorageOperator, os.Getenv("MOOX_STORAGE_OPERATOR")))
 		setDefaultEnv(env, "MOOX_STORAGE_REQUEST_ID", firstNonEmpty(fetcher.StorageRequestID, os.Getenv("MOOX_STORAGE_REQUEST_ID")))
+		setDefaultEnv(env, "MOOX_TDX_HOST", fetcher.TDXHost)
+		if fetcher.TDXPort > 0 {
+			setDefaultEnv(env, "MOOX_TDX_PORT", strconv.Itoa(fetcher.TDXPort))
+		}
+		if len(fetcher.TDXRoutes) > 0 {
+			rawRoutes, marshalErr := json.Marshal(fetcher.TDXRoutes)
+			if marshalErr != nil {
+				return nil, fmt.Errorf("encode tdx routes: %w", marshalErr)
+			}
+			setDefaultEnv(env, "MOOX_TDX_ROUTES_JSON", string(rawRoutes))
+		}
+		setDefaultEnv(env, "MOOX_TDX_ROUTE_SNAPSHOT_JSON", fetcher.TDXRouteSnapshotJSON)
 	}
 	isMarketData := entrypoint == "market_data"
 	setDefaultEnv(env, "MOOX_FETCH_TIMEOUT_SECONDS", strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 15)))
@@ -1929,6 +1942,11 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_MARKET_FETCH_SOURCE_ID":       {},
 		"MOOX_MARKET_FETCH_SERIES_TAG":      {},
 		"MOOX_MARKET_DATA_ENTRYPOINT":       {},
+		"MOOX_SCF_REGION":                   {},
+		"MOOX_TDX_HOST":                     {},
+		"MOOX_TDX_PORT":                     {},
+		"MOOX_TDX_ROUTES_JSON":              {},
+		"MOOX_TDX_ROUTE_SNAPSHOT_JSON":      {},
 		"MOOX_STORAGE_APP_ID":               {},
 		"MOOX_STORAGE_APP_KEY":              {},
 		"MOOX_STORAGE_OPERATOR":             {},

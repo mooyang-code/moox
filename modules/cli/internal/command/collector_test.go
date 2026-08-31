@@ -224,6 +224,20 @@ func TestCollectorMarketDataTimerEnvironmentUsesCanonicalSourceIdentity(t *testi
 	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_URL")
 }
 
+func TestCollectorMarketDataEnvironmentCarriesTDXRouteCandidates(t *testing.T) {
+	fetcher := &setupconfig.SCFFetcherSpace{
+		SpaceID: "stock_cn", Entrypoint: "market_data", MarketID: "stock_cn", InstrumentType: "equity",
+		ProviderID: "tdx", SourceID: "normal_7709", TDXHost: "quotes.example", TDXPort: 7709,
+		TDXRoutes: []string{"192.0.2.10", "192.0.2.11"},
+	}
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{Region: "ap-shanghai", FetcherConfig: fetcher}, "pkg-tdx")
+	require.NoError(t, err)
+	assert.Equal(t, "ap-shanghai", env["MOOX_SCF_REGION"])
+	assert.Equal(t, "quotes.example", env["MOOX_TDX_HOST"])
+	assert.Equal(t, "7709", env["MOOX_TDX_PORT"])
+	assert.Equal(t, `["192.0.2.10","192.0.2.11"]`, env["MOOX_TDX_ROUTES_JSON"])
+}
+
 func TestValidateCollectorFleetRuntimeEnvironmentForMarketData(t *testing.T) {
 	environment := map[string]string{
 		"MOOX_MARKET_DATA_ENTRYPOINT":     "market_data",

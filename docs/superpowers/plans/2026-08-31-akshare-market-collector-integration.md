@@ -17,6 +17,8 @@
 - [x] 已建立 `packages/marketmanifest` 和 Collector `MarketData` 契约：`ProviderID`、`SourceID`、`ProtocolVariant`、`SourceKey`、Kline/Instrument Spec、统一标准化 K 线和字段级 null 语义。
 - [x] 已落地 Collector 的 Provider Registry、通用 Provider Router、KlinePipeline、A 股/港股/美股交易时段策略，以及东方财富 A 股、港股、美股、指数、可转债的 HTTP 基线适配器。
 - [x] 已落地 TDX 普通 `normal_7709` 的 Go wire/transport/命令/Provider 基线，以及扩展 classic/MAC 的独立帧、目录、登录和协议探针代码；这些扩展 Source 尚未因离线布局而自动标记生产 enabled。
+- [x] 已把协议感知的最优线路选择接入通用 SCF Handler：支持按 `SCFRegion + SourceKey + TCP + host:port` 隔离的 fresh route snapshot，未命中快照时对候选 IP 执行 TDX 协议探测并按响应延迟/成功率排序；CLI 可将 TDX host、候选 IP、地域和快照注入新项目函数环境。
+- [x] 已将相同的公共选择器接入现有 Binance 短时 HTTP K 线/标的采集：SCF DNS 候选先通过 Binance `/time` 协议探测，再按端点缓存本次调用的排序结果；没有 DNS 快照时仍走正常系统解析。
 - [x] 已修复批量写入的来源事件幂等边界：同一批次内每个标的使用稳定且独立的 `SourceEventID`，避免 Storage 按 `source_event_id + dataset` 去重时误丢后续标的。
 - [ ] 尚未完成完整 TDX Wire Spike：仍需在目标线路录制完整请求、16 字节响应头、压缩体、解压体、错误帧和人工对账结果，并分别确认 `normal_7709`、`ex_classic_7727`、`ex_mac_7727`。
 - [x] 已把通用 `market_data` Timer 的静态 assignment 接到 SCF 运行时契约：Reconciler 将 Market/Instrument/Source 身份写入 assignment，CLI 将 Storage 应用身份写入函数环境，Timer 事件可从静态环境构造有界请求；当前测试仍使用 fake Storage，不等于正式 Storage 契约验收。
@@ -127,6 +129,7 @@ Provider ID 代表真实上游，不代表 Python 包名；Source ID 代表 Prov
 - `packages/tdx/codec/price.go`、`volume.go`、`datetime.go`：TDX 价格、成交量和日期时间编解码。
 - `packages/tdx/commands/security_bars.go`、`index_bars.go`、`security_list.go`、`security_quotes.go`：普通 TDX 请求和响应解析。
 - `packages/tdx/ext/transport.go`、`markets.go`、`instrument_info.go`、`instrument_bars.go`、`history_bars_range.go`：`7727` 扩展行情和动态市场目录。
+- `packages/tdx/cmd/wire-spike/main.go`：单线路、单会话的完整 TDX 请求/响应字节流采集工具；不遍历节点，不把采集结果当作协议验收。
 - `packages/tdx/testdata/normal-security-bars.bin`、`normal-index-bars.bin`、`extended-instrument-bars.bin`：由 easy_tdx fixture 整理并带来源说明的二进制协议样本。
 - `packages/tdx/*_test.go`、`packages/tdx/codec/*_test.go`、`packages/tdx/ext/*_test.go`：帧、编解码、请求字节和响应解析测试。
 - `modules/collector/internal/marketdata/provider.go`：Provider、Source 描述和统一错误。
@@ -153,6 +156,8 @@ Provider ID 代表真实上游，不代表 Python 包名；Source ID 代表 Prov
 - `modules/collector/internal/marketfetch/provider_router.go`：Provider 候选链和能力路由。
 - `modules/collector/internal/sources/binance/storage_rpc.go`：当前复用的窄 Storage writer 和通用 SCF 鉴权构造；完成 Storage 抽离后再迁移文件边界。
 - `modules/collector/internal/marketfetch/route_policy.go`：把公共线路快照接入 Provider、Market、Source、SCF 地域和 Transport。
+- `modules/collector/internal/marketfetch/route_selection.go`、`route_selection_test.go`：供 Binance HTTP、TDX TCP 复用的协议感知候选线路选择入口；不实现主动限频、全局配额或冷却。
+- `modules/collector/internal/marketfetch/http_route_provider.go`、`http_route_provider_test.go`：Binance spot/swap HTTP health probe 和单次 SCF 调用内的端点选择缓存。
 - `modules/collector/internal/marketfetch/route_policy_test.go`：验证 Binance HTTP 和 TDX TCP 共用路由策略时的隔离键、快照更新和 fallback。
 - `modules/collector/internal/serverless/market_data/handler.go`、`handler_test.go`：通用短时 SCF HTTP/Provider Pipeline 入口和本地 fake Storage E2E。
 - `modules/collector/cmd/scf/market_data/main.go`：通用市场行情 SCF 构建入口；不接受 `crypto_market`。

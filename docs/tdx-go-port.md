@@ -26,3 +26,15 @@
 `tdx.RouteProber` 只接受 TCP 候选，并根据 SourceID 选择对应的握手/登录探针。线路评分使用实际目标 `host:port` 的协议响应，不移植 tdx-go 需要特权 ICMP 的实现。`routeprobe` 快照按 SCF 地域、Provider、Source 和 Transport 隔离。
 
 SCF 不做主动限频、全局配额或冷却。随机公网出口是部署事实，不是规避上游限制的功能承诺。
+
+## Wire Spike 命令
+
+`packages/tdx/cmd/wire-spike` 用于对一条指定线路执行一次完整会话并保存原始字节流，不会遍历节点或重复重试：
+
+```bash
+go run ./cmd/wire-spike \
+  -host 113.105.73.88 -port 7709 -variant normal \
+  -timeout 8s -out /tmp/tdx-wire-spike-normal
+```
+
+`-variant` 支持 `normal`、`ex_classic` 和 `ex_mac`。输出目录包含 `request-stream.bin`、`response-stream.bin` 和 `report.json`；报告只列出每个响应帧的 16 字节头部摘要，原始内容仅写入本地文件。命令是 Wire Spike 的采集工具，不代表线路已经通过协议验收；在正式启用扩展 Source 前仍必须完成目标 SCF 地域的完整抓包、解压和人工对账。

@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -26,6 +27,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	markethttp "github.com/mooyang-code/moox/modules/collector/internal/sources/markethttp/eastmoney"
 	"github.com/mooyang-code/moox/packages/marketmanifest"
+	"github.com/mooyang-code/moox/packages/routeprobe"
 	tdxwire "github.com/mooyang-code/moox/packages/tdx"
 	"github.com/tencentyun/scf-go-lib/cloudfunction"
 	"github.com/tencentyun/scf-go-lib/functioncontext"
@@ -195,6 +197,7 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 		return nil, err
 	}
 	providerID, sourceID := defaultSource(request)
+	key := marketdata.SourceKey{ProviderID: providerID, SourceID: sourceID}
 	var normalTDX *tdxwire.NormalClient
 	if providerID == "tdx" && sourceID == "normal_7709" {
 		host := strings.TrimSpace(os.Getenv("MOOX_TDX_HOST"))
@@ -205,13 +208,51 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 		if port != 7709 {
 			return Response{Success: false, Errors: []string{"MOOX_TDX_PORT must be 7709 for tdx/normal_7709"}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
 		}
-		var tdxErr error
-		normalTDX, tdxErr = tdxwire.NewNormalClient(host, port, time.Duration(envNumber("MOOX_TDX_TIMEOUT_SECONDS", 15))*time.Second)
-		if tdxErr != nil {
-			return nil, tdxErr
+		addresses, routeErr := parseTDXRouteAddresses(os.Getenv("MOOX_TDX_ROUTES_JSON"))
+		if routeErr != nil {
+			return Response{Success: false, Errors: []string{routeErr.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
 		}
-		if err := normalTDX.Connect(ctx); err != nil {
-			return Response{Success: false, Errors: []string{"connect tdx: " + err.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
+		snapshot, routeErr := loadTDXRouteSnapshot(os.Getenv("MOOX_TDX_ROUTE_SNAPSHOT_JSON"))
+		if routeErr != nil {
+			return Response{Success: false, Errors: []string{routeErr.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
+		}
+		timeout := time.Duration(envNumber("MOOX_TDX_TIMEOUT_SECONDS", 15)) * time.Second
+		selection, routeErr := marketfetch.SelectRoute(ctx, marketfetch.RouteSelectionOptions{
+			SCFRegion:   firstNonEmpty(os.Getenv("MOOX_SCF_REGION"), "unknown"),
+			SourceKey:   routeprobe.SourceKey{ProviderID: providerID, SourceID: sourceID},
+			Transport:   routeprobe.TransportTCP,
+			Host:        host,
+			Port:        port,
+			Addresses:   addresses,
+			Snapshot:    snapshot,
+			Prober:      tdxwire.RouteProber{Timeout: timeout},
+			Probe:       routeprobe.ProbeOptions{Concurrency: envPositiveInt("MOOX_TDX_ROUTE_PROBE_CONCURRENCY", 1), Attempts: envPositiveInt("MOOX_TDX_ROUTE_PROBE_ATTEMPTS", 1), AttemptTimeout: time.Duration(envNumber("MOOX_TDX_ROUTE_PROBE_TIMEOUT_SECONDS", 5)) * time.Second},
+			MaxFallback: envPositiveInt("MOOX_TDX_ROUTE_MAX_FALLBACK", 2),
+		})
+		if routeErr != nil {
+			return Response{Success: false, Errors: []string{"select tdx route: " + routeErr.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
+		}
+		if len(selection.Routes) == 0 {
+			return Response{Success: false, Errors: []string{"select tdx route: no route returned"}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
+		}
+		var tdxErr error
+		for _, route := range selection.Routes {
+			host = route.Address
+			normalTDX, tdxErr = tdxwire.NewNormalClient(host, port, timeout)
+			if tdxErr != nil {
+				continue
+			}
+			if tdxErr = normalTDX.Connect(ctx); tdxErr == nil {
+				break
+			}
+			_ = normalTDX.Close()
+			normalTDX = nil
+		}
+		if tdxErr != nil || normalTDX == nil {
+			if tdxErr == nil {
+				tdxErr = fmt.Errorf("no TDX route could be connected")
+			}
+			return Response{Success: false, Errors: []string{"connect tdx: " + tdxErr.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
 		}
 		defer normalTDX.Close()
 	}
@@ -219,7 +260,6 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 	if err != nil {
 		return nil, err
 	}
-	key := marketdata.SourceKey{ProviderID: providerID, SourceID: sourceID}
 	manifest, ok := composition.Catalog.Lookup(request.MarketID, request.InstrumentType)
 	if !ok || !manifest.Enabled {
 		return Response{Success: false, Errors: []string{"market/instrument is not enabled"}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
@@ -519,6 +559,50 @@ func loadDNSRoutes(raw string) map[string][]string {
 	return routes
 }
 
+func parseTDXRouteAddresses(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var addresses []string
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&addresses); err != nil {
+		return nil, fmt.Errorf("decode MOOX_TDX_ROUTES_JSON: %w", err)
+	}
+	if len(addresses) == 0 {
+		return nil, fmt.Errorf("MOOX_TDX_ROUTES_JSON must contain at least one route")
+	}
+	if len(addresses) > 64 {
+		return nil, fmt.Errorf("MOOX_TDX_ROUTES_JSON must contain at most 64 routes")
+	}
+	seen := make(map[string]struct{}, len(addresses))
+	result := make([]string, 0, len(addresses))
+	for index, address := range addresses {
+		ip := net.ParseIP(strings.TrimSpace(address))
+		if ip == nil {
+			return nil, fmt.Errorf("MOOX_TDX_ROUTES_JSON[%d] must be an IP address", index)
+		}
+		canonical := ip.String()
+		if _, exists := seen[canonical]; exists {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		result = append(result, canonical)
+	}
+	return result, nil
+}
+
+func loadTDXRouteSnapshot(raw string) (*routeprobe.Snapshot, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	snapshot, err := routeprobe.UnmarshalSnapshot([]byte(raw))
+	if err != nil {
+		return nil, fmt.Errorf("decode MOOX_TDX_ROUTE_SNAPSHOT_JSON: %w", err)
+	}
+	return &snapshot, nil
+}
+
 func envPort(name string, fallback int) int {
 	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
 	if err != nil || value < 1 || value > 65535 {
@@ -533,6 +617,15 @@ func envNumber(name string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func containsString(values []string, target string) bool {

@@ -10,10 +10,12 @@ import (
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobcontext"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/routeprobe"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -34,13 +36,20 @@ type SymbolCollector struct {
 	swapAPI         *binanceapi.SwapAPI
 	storage         symbolStorage
 	fetchSymbolPage func(context.Context, *sources.CollectParams) ([]*exchange.SymbolInfo, error)
+	routes          marketdata.RouteIPProvider
 }
 
 // NewSymbolCollector returns a configured Binance symbol collector without a
 // Storage writer. Short-lived SCF uses its row-producing methods below.
 func NewSymbolCollector() *SymbolCollector {
+	return NewSymbolCollectorWithRoutes(nil)
+}
+
+// NewSymbolCollectorWithRoutes attaches the same route selector used by Kline
+// requests so exchange-info snapshots do not silently use a different path.
+func NewSymbolCollectorWithRoutes(routes marketdata.RouteIPProvider) *SymbolCollector {
 	client := newConfiguredClient()
-	return &SymbolCollector{client: client, spotAPI: binanceapi.NewSpotAPI(client), swapAPI: binanceapi.NewSwapAPI(client)}
+	return &SymbolCollector{client: client, spotAPI: binanceapi.NewSpotAPI(client), swapAPI: binanceapi.NewSwapAPI(client), routes: routes}
 }
 
 // FetchSymbolSnapshot fetches the complete active USDT snapshot without writing it.
@@ -176,12 +185,35 @@ func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.Coll
 	}
 	switch params.InstType {
 	case InstTypeSPOT:
-		return c.spotAPI.GetExchangeInfoWithIPs(ctx, params.DNSIPs(c.client.SpotDomain()))
+		ips, err := c.routeIPs(ctx, params, c.client.SpotDomain(), "spot_http")
+		if err != nil {
+			return nil, err
+		}
+		return c.spotAPI.GetExchangeInfoWithIPs(ctx, ips)
 	case InstTypeSWAP:
-		return c.swapAPI.GetExchangeInfoWithIPs(ctx, params.DNSIPs(c.client.SwapDomain()))
+		ips, err := c.routeIPs(ctx, params, c.client.SwapDomain(), "swap_http")
+		if err != nil {
+			return nil, err
+		}
+		return c.swapAPI.GetExchangeInfoWithIPs(ctx, ips)
 	default:
 		return nil, fmt.Errorf("不支持的产品类型: %s", params.InstType)
 	}
+}
+
+func (c *SymbolCollector) routeIPs(ctx context.Context, params *sources.CollectParams, host, sourceID string) ([]string, error) {
+	ips := params.DNSIPs(host)
+	if c == nil || c.routes == nil {
+		return ips, nil
+	}
+	selected, err := c.routes.SelectRouteIPs(ctx, routeprobe.SourceKey{ProviderID: "binance", SourceID: sourceID}, routeprobe.TransportHTTPS, host, 443)
+	if err != nil {
+		return nil, err
+	}
+	if len(selected) > 0 {
+		return selected, nil
+	}
+	return ips, nil
 }
 
 // filterSymbols 过滤标的列表，仅保留 QuoteAsset 为 USDT 且 Status 为 active 的数据

@@ -112,6 +112,20 @@ func TestValidateSCFFetcherRequiresMarketDataSourceIdentity(t *testing.T) {
 	require.NoError(t, validateSCFFetcher(&cfg))
 }
 
+func TestValidateSCFFetcherRequiresTDXEndpointConfiguration(t *testing.T) {
+	cfg := SCFFetcher{Enabled: true, Spaces: []SCFFetcherSpace{{
+		SpaceID: "stock_cn", Entrypoint: "market_data", MarketID: "stock_cn", InstrumentType: "equity",
+		ProviderID: "tdx", SourceID: "normal_7709", StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		MemorySize: 64, TimeoutSeconds: 15,
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
+	}}}
+	err := validateSCFFetcher(&cfg)
+	require.ErrorContains(t, err, "tdx_host")
+	cfg.Spaces[0].TDXHost = "quotes.example"
+	require.NoError(t, validateSCFFetcher(&cfg))
+	assert.Equal(t, 7709, cfg.Spaces[0].TDXPort)
+}
+
 func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 	crypto := SCFFetcherSpace{
 		SpaceID: "crypto_market",

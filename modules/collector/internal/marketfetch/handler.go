@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
@@ -24,6 +25,9 @@ import (
 type Handler struct {
 	NewStorage func(string, string, string) (Storage, error)
 	Publish    func(context.Context, Request, proto.Message) error
+	// Routes is shared by Binance's spot/swap HTTP adapters. It is selected
+	// once when the short-lived handler is built and remains provider-neutral.
+	Routes marketdata.RouteIPProvider
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
 	// and uses the bounded Executor below; tests can prove the Timer contract
 	// without making an external exchange request.
@@ -45,7 +49,7 @@ const (
 func NewHandler() *Handler {
 	return &Handler{NewStorage: func(target, market, writeSource string) (Storage, error) {
 		return binance.NewBatchStorageWithWriteSource(target, market, writeSource)
-	}, Publish: publishCompletion}
+	}, Publish: publishCompletion, Routes: NewHTTPRouteProviderFromEnvironment()}
 }
 
 func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
@@ -185,7 +189,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 	if h.Execute != nil {
 		payload, err = h.Execute(budgetCtx, req, storage)
 	} else {
-		executor := &Executor{Klines: binance.NewKlineCollector(), Catchup: binance.NewKlineCollector(), Symbols: binance.NewSymbolCollector(), Storage: storage, Now: h.Now, CommitReserve: commitReserve, StorageReserve: storageTimeout, Reporter: h.Reporter}
+		executor := &Executor{Klines: binance.NewKlineCollectorWithRoutes(h.Routes), Catchup: binance.NewKlineCollectorWithRoutes(h.Routes), Symbols: binance.NewSymbolCollectorWithRoutes(h.Routes), Storage: storage, Now: h.Now, CommitReserve: commitReserve, StorageReserve: storageTimeout, Reporter: h.Reporter}
 		payload, err = executor.Execute(budgetCtx, req)
 	}
 	if err != nil {

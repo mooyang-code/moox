@@ -148,6 +148,22 @@ func TestRequestRejectsDuplicateSubjects(t *testing.T) {
 	}
 }
 
+func TestParseTDXRouteAddressesCanonicalizesAndDeduplicates(t *testing.T) {
+	addresses, err := parseTDXRouteAddresses(`["192.0.2.10", "2001:db8::1", "192.0.2.10"]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(addresses, ","), "192.0.2.10,2001:db8::1"; got != want {
+		t.Fatalf("addresses = %q, want %q", got, want)
+	}
+}
+
+func TestParseTDXRouteAddressesRejectsHostAndPort(t *testing.T) {
+	if _, err := parseTDXRouteAddresses(`["quotes.example:7709"]`); err == nil {
+		t.Fatal("TDX route list must contain bare IP addresses")
+	}
+}
+
 var _ marketfetch.KlineRowWriter = (*testWriter)(nil)
 var _ interface {
 	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error

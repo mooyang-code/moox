@@ -14,11 +14,13 @@ import (
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobcontext"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/routeprobe"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -39,13 +41,20 @@ type KlineCollector struct {
 	storage        klineStorage
 	fetchKlinePage func(context.Context, *sources.CollectParams, *exchange.KlineRequest) ([]*exchange.Kline, error)
 	now            func() time.Time
+	routes         marketdata.RouteIPProvider
 }
 
 // NewKlineCollector returns a configured Binance K-line collector for bounded
 // short-lived invocations. It intentionally does not attach a Storage writer.
 func NewKlineCollector() *KlineCollector {
+	return NewKlineCollectorWithRoutes(nil)
+}
+
+// NewKlineCollectorWithRoutes attaches the shared protocol-aware route
+// selector without changing the Binance storage or request contract.
+func NewKlineCollectorWithRoutes(routes marketdata.RouteIPProvider) *KlineCollector {
 	client := newConfiguredClient()
-	return &KlineCollector{client: client, spotAPI: binanceapi.NewSpotAPI(client), swapAPI: binanceapi.NewSwapAPI(client)}
+	return &KlineCollector{client: client, spotAPI: binanceapi.NewSpotAPI(client), swapAPI: binanceapi.NewSwapAPI(client), routes: routes}
 }
 
 // FetchRealtimeRows fetches only the latest closed K-lines and returns rows for
@@ -379,12 +388,35 @@ func isRetryableKlineError(parent context.Context, err error) bool {
 func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
 	switch params.InstType {
 	case InstTypeSPOT:
-		return c.spotAPI.GetKlineWithIPs(ctx, req, params.DNSIPs(c.client.SpotDomain()))
+		ips, err := c.routeIPs(ctx, params, c.client.SpotDomain(), "spot_http")
+		if err != nil {
+			return nil, err
+		}
+		return c.spotAPI.GetKlineWithIPs(ctx, req, ips)
 	case InstTypeSWAP:
-		return c.swapAPI.GetKlineWithIPs(ctx, req, params.DNSIPs(c.client.SwapDomain()))
+		ips, err := c.routeIPs(ctx, params, c.client.SwapDomain(), "swap_http")
+		if err != nil {
+			return nil, err
+		}
+		return c.swapAPI.GetKlineWithIPs(ctx, req, ips)
 	default:
 		return nil, fmt.Errorf("不支持的产品类型: %s", params.InstType)
 	}
+}
+
+func (c *KlineCollector) routeIPs(ctx context.Context, params *sources.CollectParams, host, sourceID string) ([]string, error) {
+	ips := params.DNSIPs(host)
+	if c == nil || c.routes == nil {
+		return ips, nil
+	}
+	selected, err := c.routes.SelectRouteIPs(ctx, routeprobe.SourceKey{ProviderID: "binance", SourceID: sourceID}, routeprobe.TransportHTTPS, host, 443)
+	if err != nil {
+		return nil, err
+	}
+	if len(selected) > 0 {
+		return selected, nil
+	}
+	return ips, nil
 }
 
 func convertExchangeKlines(exchangeKlines []*exchange.Kline, symbol string, interval string) []*market.Kline {
