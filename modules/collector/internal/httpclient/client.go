@@ -47,6 +47,16 @@ func NewHTTPClient(base ...*http.Client) *HTTPClient {
 	}}
 }
 
+// NewHTTPClientWithTimeout keeps the standard transport and route-probing
+// behavior while applying a caller-owned per-request timeout.
+func NewHTTPClientWithTimeout(timeout time.Duration) *HTTPClient {
+	client := NewHTTPClient()
+	if timeout > 0 {
+		client.httpClient.Timeout = timeout
+	}
+	return client
+}
+
 func (c *HTTPClient) Get(ctx context.Context, domain, path string, query url.Values, result interface{}) error {
 	return c.getWithClient(ctx, c.httpClient, domain, path, query, func(reader io.Reader) error {
 		if result == nil {

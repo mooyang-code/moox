@@ -288,11 +288,11 @@ func splitGroupsForEnvironment(groups []TaskGroup, snapshot map[string]sources.D
 					externals[subject] = group.ExternalSymbols[subject]
 				}
 				_, err := buildManagedEnvironment(NodeAssignment{
-					Provider: group.Provider, MarketType: group.MarketType, DatasetID: group.DatasetID,
+					Provider: group.Provider, MarketType: group.MarketType, MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag, DatasetID: group.DatasetID,
 					Frequency: group.Frequency, Subjects: chunk, ExternalSymbols: externals, Enabled: true,
 				}, snapshot, managedBudget)
 				if err == nil {
-					result = append(result, TaskGroup{Provider: group.Provider, MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: chunk, ExternalSymbols: externals})
+					result = append(result, TaskGroup{Provider: group.Provider, MarketType: group.MarketType, MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag, DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: chunk, ExternalSymbols: externals})
 					start += size
 					break
 				}
@@ -617,11 +617,35 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 			symbolIDs = append(symbolIDs, subjectID)
 			externalSymbols[subjectID] = strings.TrimSpace(subject.ExternalSymbol)
 		}
+		marketID, instrumentType := marketIdentity(params.MarketID, params.InstrumentType, params.Target.DatasetID)
 		for _, frequency := range params.Collector.Intervals {
-			groups = append(groups, TaskGroup{Provider: params.Provider, MarketType: params.MarketType, DatasetID: params.Target.DatasetID, Frequency: frequency, Subjects: symbolIDs, ExternalSymbols: externalSymbols})
+			groups = append(groups, TaskGroup{Provider: params.Provider, MarketType: params.MarketType, MarketID: marketID, InstrumentType: instrumentType, SourceID: params.SourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID, Frequency: frequency, Subjects: symbolIDs, ExternalSymbols: externalSymbols})
 		}
 	}
 	return mergeGroups(groups), nil
+}
+
+func marketIdentity(marketID, instrumentType, datasetID string) (string, string) {
+	marketID = strings.ToLower(strings.TrimSpace(marketID))
+	instrumentType = strings.ToLower(strings.TrimSpace(instrumentType))
+	if marketID != "" && instrumentType != "" {
+		return marketID, instrumentType
+	}
+	datasetID = strings.ToLower(strings.TrimSpace(datasetID))
+	switch {
+	case strings.HasPrefix(datasetID, "stock_cn_index"):
+		return "stock_cn", "index"
+	case strings.HasPrefix(datasetID, "stock_cn_convertible_bond"):
+		return "stock_cn", "convertible_bond"
+	case strings.HasPrefix(datasetID, "stock_hk"):
+		return "stock_hk", "equity"
+	case strings.HasPrefix(datasetID, "stock_us"):
+		return "stock_us", "equity"
+	case strings.HasPrefix(datasetID, "stock_cn"):
+		return "stock_cn", "equity"
+	default:
+		return marketID, instrumentType
+	}
 }
 
 func mergeGroups(groups []TaskGroup) []TaskGroup {
@@ -629,7 +653,10 @@ func mergeGroups(groups []TaskGroup) []TaskGroup {
 	for _, group := range groups {
 		key := groupKey(group)
 		current := byKey[key]
-		current.Provider, current.MarketType, current.DatasetID, current.Frequency = group.Provider, group.MarketType, group.DatasetID, group.Frequency
+		current.Provider, current.MarketType = group.Provider, group.MarketType
+		current.MarketID, current.InstrumentType = group.MarketID, group.InstrumentType
+		current.SourceID, current.SeriesTag = group.SourceID, group.SeriesTag
+		current.DatasetID, current.Frequency = group.DatasetID, group.Frequency
 		current.Subjects = append(current.Subjects, group.Subjects...)
 		if group.ExternalSymbols != nil {
 			if current.ExternalSymbols == nil {

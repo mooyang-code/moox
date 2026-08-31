@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
@@ -31,6 +32,14 @@ import (
 )
 
 const defaultAction = model.EventActionMarketFetch
+
+const (
+	// CloudNode owns the shared Timer trigger contract for every Collector
+	// fleet. Market identity is carried by the static environment, not by a
+	// second trigger name/message that CloudNode could not reconcile.
+	timerTriggerName    = "moox-market-fetch-timer"
+	timerTriggerMessage = "market_fetch_timer_v1"
+)
 
 type Item struct {
 	SubjectID      string `json:"subject_id"`
@@ -76,10 +85,16 @@ func (request Request) validate() error {
 	if request.Limit < 0 {
 		return fmt.Errorf("limit cannot be negative")
 	}
+	seenSubjects := make(map[string]struct{}, len(request.Items))
 	for index, item := range request.Items {
 		if strings.TrimSpace(item.SubjectID) == "" || strings.TrimSpace(item.ProviderSymbol) == "" {
 			return fmt.Errorf("items[%d] subject_id and provider_symbol are required", index)
 		}
+		subjectID := strings.ToUpper(strings.TrimSpace(item.SubjectID))
+		if _, exists := seenSubjects[subjectID]; exists {
+			return fmt.Errorf("items[%d] subject_id %q is duplicated", index, item.SubjectID)
+		}
+		seenSubjects[subjectID] = struct{}{}
 	}
 	return nil
 }
@@ -108,7 +123,8 @@ func NewHandler() *Handler {
 			return binance.NewMarketDataStorage(target, writeSource)
 		},
 		NewGetter: func() markethttp.Getter {
-			return newRouteGetter(httpclient.NewHTTPClient(), loadDNSRoutes(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON")))
+			timeoutMS := envPositiveInt("MOOX_FETCH_REQUEST_TIMEOUT_MS", 5000)
+			return newRouteGetter(httpclient.NewHTTPClientWithTimeout(time.Duration(timeoutMS)*time.Millisecond), loadDNSRoutes(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON")))
 		},
 		Now: time.Now,
 	}
@@ -117,6 +133,12 @@ func NewHandler() *Handler {
 func RegisterCloudFunction() { cloudfunction.Start(NewHandler().HandleRequest) }
 
 func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (interface{}, error) {
+	if handler == nil || handler.NewStorage == nil || handler.NewGetter == nil {
+		return nil, fmt.Errorf("market data handler is not initialized")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	requestID := ""
 	if function, _ := functioncontext.FromContext(ctx); function != nil {
 		requestID = function.RequestID
@@ -128,15 +150,32 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 	if event.Action != "" && event.Action != defaultAction {
 		return Response{Success: false, Errors: []string{"unsupported action"}, RequestID: event.RequestID, Timestamp: handler.timestamp()}, nil
 	}
-	request, err := decodeRequest(event.Data)
-	if err != nil {
-		return Response{Success: false, Errors: []string{err.Error()}, RequestID: event.RequestID, Timestamp: handler.timestamp()}, nil
-	}
 	if requestID == "" {
 		requestID = event.RequestID
 	}
-	if request.SourceEventID == "" {
-		request.SourceEventID = requestID
+	var request Request
+	var err error
+	if timerConfigured := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SUBJECTS")) != ""; timerConfigured && strings.EqualFold(strings.TrimSpace(event.Type), "timer") {
+		if err := validateTimerEvent(event); err != nil {
+			return Response{Success: false, Errors: []string{err.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
+		}
+		now := handler.now()
+		if event.Time != "" {
+			parsed, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(event.Time))
+			if parseErr != nil {
+				return Response{Success: false, Errors: []string{"timer event time is invalid: " + parseErr.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
+			}
+			now = parsed
+		}
+		request, err = requestFromTimerEnv(requestID, now)
+	} else {
+		request, err = decodeRequest(event.Data)
+		if err == nil && request.SourceEventID == "" {
+			request.SourceEventID = requestID
+		}
+	}
+	if err != nil {
+		return Response{Success: false, Errors: []string{err.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
 	}
 	if err := request.validate(); err != nil {
 		return Response{Success: false, Errors: []string{err.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
@@ -150,9 +189,6 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 	}
 	if target == "" {
 		return Response{Success: false, Errors: []string{"storage_rpc_gateway_target is required"}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
-	}
-	if handler == nil || handler.NewStorage == nil || handler.NewGetter == nil {
-		return nil, fmt.Errorf("market data handler is not initialized")
 	}
 	writer, err := handler.NewStorage(target, request.InstrumentType, "scf:"+requestID)
 	if err != nil {
@@ -210,23 +246,58 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 	}
 	router := &marketfetch.ProviderRouter{Registry: composition.Registry, Writer: writer}
 	response := Response{RequestID: requestID, Timestamp: handler.timestamp()}
-	for _, item := range request.Items {
-		// Each invocation of the pipeline below is one Storage payload. Keep a
-		// stable event id for retries of that item, but do not reuse one event id
-		// across multiple payloads: Storage deduplicates by source event and
-		// dataset before it sees the individual row keys.
-		itemEventID := itemSourceEventID(request.SourceEventID, item.SubjectID)
-		result, fetchErr := router.FetchAndWrite(ctx, marketfetch.PipelineRequest{
-			SpaceID: request.SpaceID, DatasetID: request.DatasetID, SeriesTag: request.SeriesTag,
-			SourceEventID: itemEventID, SourceKey: key,
-			Request: marketdata.KlineRequest{MarketID: request.MarketID, InstrumentType: request.InstrumentType, SubjectID: item.SubjectID, ProviderSymbol: item.ProviderSymbol, Frequency: request.Frequency, Limit: request.Limit, StartTime: start, EndTime: end},
-		})
-		if fetchErr != nil {
+	invocationTimeout := envPositiveInt("MOOX_FETCH_TIMEOUT_SECONDS", 15)
+	workCtx, cancel := context.WithTimeout(ctx, time.Duration(invocationTimeout)*time.Second)
+	defer cancel()
+	concurrency := envPositiveInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", 10)
+	if concurrency > len(request.Items) {
+		concurrency = len(request.Items)
+	}
+	if concurrency > 30 {
+		concurrency = 30
+	}
+	type itemResult struct {
+		rows int
+		err  error
+	}
+	results := make([]itemResult, len(request.Items))
+	sem := make(chan struct{}, concurrency)
+	var waitGroup sync.WaitGroup
+	for index, item := range request.Items {
+		index, item := index, item
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-workCtx.Done():
+				results[index].err = workCtx.Err()
+				return
+			}
+			defer func() { <-sem }()
+			// Each pipeline call is one Storage payload. Keep a stable event id
+			// for retries of that item, but do not reuse one event id across
+			// multiple payloads: Storage deduplicates by source event and dataset.
+			itemEventID := itemSourceEventID(request.SourceEventID, item.SubjectID)
+			result, fetchErr := router.FetchAndWrite(workCtx, marketfetch.PipelineRequest{
+				SpaceID: request.SpaceID, DatasetID: request.DatasetID, SeriesTag: request.SeriesTag,
+				SourceEventID: itemEventID, SourceKey: key,
+				Request: marketdata.KlineRequest{MarketID: request.MarketID, InstrumentType: request.InstrumentType, SubjectID: item.SubjectID, ProviderSymbol: item.ProviderSymbol, Frequency: request.Frequency, Limit: request.Limit, StartTime: start, EndTime: end},
+			})
+			results[index] = itemResult{err: fetchErr}
+			if fetchErr == nil {
+				results[index].rows = result.RowsWritten
+			}
+		}()
+	}
+	waitGroup.Wait()
+	for index, result := range results {
+		if result.err != nil {
 			response.Failed++
-			response.Errors = append(response.Errors, item.SubjectID+": "+fetchErr.Error())
+			response.Errors = append(response.Errors, request.Items[index].SubjectID+": "+result.err.Error())
 			continue
 		}
-		response.RowsWritten += result.RowsWritten
+		response.RowsWritten += result.rows
 	}
 	response.Success = response.Failed == 0
 	return response, nil
@@ -279,6 +350,117 @@ func defaultSource(request Request) (string, string) {
 	}
 }
 
+func requestFromTimerEnv(requestID string, now time.Time) (Request, error) {
+	spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
+	marketID := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_MARKET_ID"))
+	instrumentType := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_INSTRUMENT_TYPE"))
+	datasetID := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DATASET_ID"))
+	frequency := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_FREQUENCY"))
+	providerID := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_PROVIDER"))
+	sourceID := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SOURCE_ID"))
+	for name, value := range map[string]string{
+		"MOOX_SPACE_ID":                     spaceID,
+		"MOOX_MARKET_FETCH_MARKET_ID":       marketID,
+		"MOOX_MARKET_FETCH_INSTRUMENT_TYPE": instrumentType,
+		"MOOX_MARKET_FETCH_DATASET_ID":      datasetID,
+		"MOOX_MARKET_FETCH_FREQUENCY":       frequency,
+	} {
+		if value == "" {
+			return Request{}, fmt.Errorf("timer market data environment requires %s", name)
+		}
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if providerID == "" {
+		providerID = "eastmoney"
+	}
+	if sourceID == "" {
+		_, sourceID = defaultSource(Request{MarketID: marketID, InstrumentType: instrumentType, ProviderID: providerID})
+	}
+	if sourceID == "" {
+		return Request{}, fmt.Errorf("timer market data environment requires MOOX_MARKET_FETCH_SOURCE_ID for %s/%s", marketID, instrumentType)
+	}
+	assignmentHash := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_ASSIGNMENT_HASH"))
+	if assignmentHash == "" {
+		assignmentHash = "unassigned"
+	}
+	bucket := now.UTC().Truncate(time.Minute).Format(time.RFC3339)
+	sourceEventID := "timer:" + assignmentHash + ":" + bucket
+	barLimit := envPositiveInt("MOOX_FETCH_REALTIME_BAR_LIMIT", envPositiveInt("MOOX_MARKET_FETCH_BAR_LIMIT", 3))
+	if barLimit > 3 {
+		barLimit = 3
+	}
+	externalSymbols, err := parseTimerSymbols(os.Getenv("MOOX_MARKET_FETCH_SYMBOLS_JSON"))
+	if err != nil {
+		return Request{}, err
+	}
+	subjects := strings.Split(os.Getenv("MOOX_MARKET_FETCH_SUBJECTS"), "|")
+	items := make([]Item, 0, len(subjects))
+	seen := make(map[string]struct{}, len(subjects))
+	for _, rawSubject := range subjects {
+		subject := strings.TrimSpace(rawSubject)
+		if subject == "" {
+			continue
+		}
+		if _, exists := seen[subject]; exists {
+			continue
+		}
+		seen[subject] = struct{}{}
+		symbol := strings.TrimSpace(externalSymbols[subject])
+		if symbol == "" {
+			return Request{}, fmt.Errorf("timer subject %s has no external symbol", subject)
+		}
+		items = append(items, Item{SubjectID: subject, ProviderSymbol: symbol})
+	}
+	if len(items) == 0 || len(items) > 30 {
+		return Request{}, fmt.Errorf("timer market data subjects must contain 1..30 values")
+	}
+	return Request{
+		SpaceID: spaceID, DatasetID: datasetID, MarketID: marketID, InstrumentType: instrumentType,
+		ProviderID: providerID, SourceID: sourceID, SeriesTag: strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SERIES_TAG")),
+		SourceEventID: sourceEventID, Frequency: frequency, Limit: barLimit, Items: items,
+	}, nil
+}
+
+func parseTimerSymbols(raw string) (map[string]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("timer market data environment requires MOOX_MARKET_FETCH_SYMBOLS_JSON")
+	}
+	var symbols map[string]string
+	if err := json.Unmarshal([]byte(raw), &symbols); err != nil {
+		return nil, fmt.Errorf("decode timer market data symbols: %w", err)
+	}
+	return symbols, nil
+}
+
+func envPositiveInt(name string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func validateTimerEvent(event model.CloudFunctionEvent) error {
+	if !strings.EqualFold(strings.TrimSpace(event.Type), "timer") {
+		return fmt.Errorf("timer event type must be Timer")
+	}
+	if strings.TrimSpace(event.TriggerName) != timerTriggerName {
+		return fmt.Errorf("timer trigger name must be %q", timerTriggerName)
+	}
+	if strings.TrimSpace(event.Message) != timerTriggerMessage {
+		return fmt.Errorf("timer trigger message must be %q", timerTriggerMessage)
+	}
+	if strings.TrimSpace(event.Time) == "" {
+		return fmt.Errorf("timer event time is required")
+	}
+	if _, err := time.Parse(time.RFC3339, strings.TrimSpace(event.Time)); err != nil {
+		return fmt.Errorf("timer event time is invalid: %w", err)
+	}
+	return nil
+}
+
 func parseOptionalTime(value string) (time.Time, error) {
 	if strings.TrimSpace(value) == "" {
 		return time.Time{}, nil
@@ -296,6 +478,13 @@ func (handler *Handler) timestamp() string {
 		now = handler.Now
 	}
 	return now().UTC().Format(time.RFC3339Nano)
+}
+
+func (handler *Handler) now() time.Time {
+	if handler != nil && handler.Now != nil {
+		return handler.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 type routeGetter struct {

@@ -57,7 +57,7 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 	}
 	hash := assignment.AssignmentHash
 	if hash == "" {
-		hash = AssignmentHash(assignment.Provider, assignment.MarketType, assignment.DatasetID, assignment.Frequency, strings.Join(subjects, "|"))
+		hash = AssignmentHash(assignment.Provider, assignment.MarketType, assignment.MarketID, assignment.InstrumentType, assignment.SourceID, assignment.SeriesTag, assignment.DatasetID, assignment.Frequency, strings.Join(subjects, "|"))
 	}
 	symbols := make(map[string]string, len(subjects))
 	for _, subject := range subjects {
@@ -82,6 +82,18 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 		"MOOX_MARKET_FETCH_DNS_ROUTES_JSON": string(rawRoutes),
 		"MOOX_MARKET_FETCH_DNS_HASH":        dnsHash,
 		"MOOX_MARKET_FETCH_DNS_UPDATED_AT":  updatedAt,
+	}
+	if assignment.MarketID != "" {
+		environment["MOOX_MARKET_FETCH_MARKET_ID"] = assignment.MarketID
+	}
+	if assignment.InstrumentType != "" {
+		environment["MOOX_MARKET_FETCH_INSTRUMENT_TYPE"] = assignment.InstrumentType
+	}
+	if assignment.SourceID != "" {
+		environment["MOOX_MARKET_FETCH_SOURCE_ID"] = assignment.SourceID
+	}
+	if assignment.SeriesTag != "" {
+		environment["MOOX_MARKET_FETCH_SERIES_TAG"] = assignment.SeriesTag
 	}
 	if environmentBytes(environment) > maxSize {
 		return nil, fmt.Errorf("timer assignment environment is %d bytes before provider variables; reduce symbols or split the assignment (managed budget %d)", environmentBytes(environment), maxSize)

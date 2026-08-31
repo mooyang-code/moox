@@ -199,6 +199,80 @@ func TestCollectorTimerEnvironmentOmitsControlPlaneCredentials(t *testing.T) {
 	assert.NotContains(t, env, "MOOX_SERVICE_GATEWAY_CA_PEM_B64")
 }
 
+func TestCollectorMarketDataTimerEnvironmentUsesCanonicalSourceIdentity(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "storage-gateway")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "collector-key")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY", "collector-secret")
+	fetcher := &setupconfig.SCFFetcherSpace{
+		SpaceID: "stock_cn", Entrypoint: "market_data", MarketID: "stock_cn", InstrumentType: "equity",
+		ProviderID: "eastmoney", SourceID: "stock_cn_http", SeriesTag: "eastmoney-cn",
+		StorageAppID: "storage-app", StorageAppKey: "storage-key", StorageOperator: "collector", StorageRequestID: "request-seed",
+	}
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{
+		SpaceID: "stock_cn", TriggerType: "timer", BizType: "market_fetcher", FetcherConfig: fetcher,
+		StorageRPCGatewayTarget: "ip://storage:11003",
+	}, "pkg-market-data")
+	require.NoError(t, err)
+	assert.Equal(t, "market_data", env["MOOX_MARKET_DATA_ENTRYPOINT"])
+	assert.Equal(t, "stock_cn", env["MOOX_MARKET_FETCH_MARKET_ID"])
+	assert.Equal(t, "equity", env["MOOX_MARKET_FETCH_INSTRUMENT_TYPE"])
+	assert.Equal(t, "eastmoney", env["MOOX_MARKET_FETCH_PROVIDER"])
+	assert.Equal(t, "stock_cn_http", env["MOOX_MARKET_FETCH_SOURCE_ID"])
+	assert.Equal(t, "storage-app", env["MOOX_STORAGE_APP_ID"])
+	assert.Equal(t, "storage-key", env["MOOX_STORAGE_APP_KEY"])
+	assert.NotContains(t, env, "MOOX_CLS_ENABLED")
+	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_URL")
+}
+
+func TestValidateCollectorFleetRuntimeEnvironmentForMarketData(t *testing.T) {
+	environment := map[string]string{
+		"MOOX_MARKET_DATA_ENTRYPOINT":     "market_data",
+		"MOOX_SPACE_ID":                   "stock_cn",
+		"MOOX_CODE_PACKAGE_ID":            "pkg-market-data",
+		"MOOX_GATEWAY_TARGET_NODE":        "storage-gateway",
+		"MOOX_GATEWAY_SERVICE_KEY_ID":     "collector-key",
+		"MOOX_GATEWAY_SERVICE_SECRET_KEY": "collector-secret",
+		"MOOX_STORAGE_APP_ID":             "storage-app",
+		"MOOX_STORAGE_APP_KEY":            "storage-key",
+		"MOOX_STORAGE_OPERATOR":           "collector",
+		"MOOX_STORAGE_REQUEST_ID":         "request-seed",
+		"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://106.53.107.122:11003",
+	}
+	require.NoError(t, validateCollectorFleetRuntimeEnvironment(environment, true, true))
+	delete(environment, "MOOX_STORAGE_APP_KEY")
+	require.ErrorContains(t, validateCollectorFleetRuntimeEnvironment(environment, true, true), "MOOX_STORAGE_APP_KEY")
+}
+
+func TestMarketDataCanaryRequestUsesCanonicalManifest(t *testing.T) {
+	for _, test := range []struct {
+		name, marketID, instrumentType, providerID, sourceID, datasetID, subject string
+	}{
+		{name: "cn index", marketID: "stock_cn", instrumentType: "index", providerID: "eastmoney", sourceID: "index_http", datasetID: "stock_cn_index_kline", subject: "SH.000001"},
+		{name: "convertible bond", marketID: "stock_cn", instrumentType: "convertible_bond", providerID: "eastmoney", sourceID: "convertible_bond_http", datasetID: "stock_cn_convertible_bond_kline", subject: "SZ.123001"},
+		{name: "hk", marketID: "stock_hk", instrumentType: "equity", providerID: "eastmoney", sourceID: "stock_hk_http", datasetID: "stock_hk_kline", subject: "HK.00700"},
+		{name: "us", marketID: "stock_us", instrumentType: "equity", providerID: "eastmoney", sourceID: "stock_us_http", datasetID: "stock_us_kline", subject: "US.AAPL"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			canary, err := marketDataCanaryRequest(&setupconfig.SCFFetcherSpace{
+				MarketID: test.marketID, InstrumentType: test.instrumentType,
+				ProviderID: test.providerID, SourceID: test.sourceID,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, test.datasetID, canary.DatasetID)
+			assert.Equal(t, test.subject, canary.SubjectID)
+			assert.Equal(t, test.subject, canary.ProviderSymbol)
+			assert.Equal(t, 2, canary.Limit)
+		})
+	}
+}
+
+func TestMarketDataCanaryRequestRejectsUndeclaredSource(t *testing.T) {
+	_, err := marketDataCanaryRequest(&setupconfig.SCFFetcherSpace{
+		MarketID: "stock_hk", InstrumentType: "equity", ProviderID: "tdx", SourceID: "normal_7709",
+	})
+	require.ErrorContains(t, err, "does not declare")
+}
+
 func TestCollectorInvokeMarketFetcherKeepsEventBusButOmitsHTTPSCAs(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	env, err := collectorFunctionEnvironment(collectorPublishOptions{

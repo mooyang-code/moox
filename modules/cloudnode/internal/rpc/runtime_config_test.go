@@ -17,6 +17,19 @@ func TestManagedEnvironmentRejectsUnknownKey(t *testing.T) {
 	}
 }
 
+func TestManagedEnvironmentAcceptsMarketIdentityKeys(t *testing.T) {
+	for _, key := range []string{
+		"MOOX_MARKET_FETCH_MARKET_ID",
+		"MOOX_MARKET_FETCH_INSTRUMENT_TYPE",
+		"MOOX_MARKET_FETCH_SOURCE_ID",
+		"MOOX_MARKET_FETCH_SERIES_TAG",
+	} {
+		if _, ok := managedEnvironmentKeys[key]; !ok {
+			t.Fatalf("market identity key %q is not managed", key)
+		}
+	}
+}
+
 func TestManagedEnvironmentMatchesOnlyCollectorOwnedValues(t *testing.T) {
 	current := map[string]string{"MOOX_MARKET_FETCH_SUBJECTS": "BTC-USDT", "SECRET": "keep"}
 	require.True(t, managedEnvironmentMatches(current, map[string]string{"MOOX_MARKET_FETCH_SUBJECTS": "BTC-USDT"}))

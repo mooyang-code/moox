@@ -25,6 +25,10 @@ const (
 var managedEnvironmentKeys = map[string]struct{}{
 	"MOOX_MARKET_FETCH_PROVIDER":        {},
 	"MOOX_MARKET_FETCH_MARKET_TYPE":     {},
+	"MOOX_MARKET_FETCH_MARKET_ID":       {},
+	"MOOX_MARKET_FETCH_INSTRUMENT_TYPE": {},
+	"MOOX_MARKET_FETCH_SOURCE_ID":       {},
+	"MOOX_MARKET_FETCH_SERIES_TAG":      {},
 	"MOOX_MARKET_FETCH_DATASET_ID":      {},
 	"MOOX_MARKET_FETCH_FREQUENCY":       {},
 	"MOOX_MARKET_FETCH_SUBJECTS":        {},

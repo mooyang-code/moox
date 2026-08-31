@@ -11,7 +11,7 @@ import (
 )
 
 func TestBuildManagedEnvironmentCanonicalizesDNS(t *testing.T) {
-	assignment := NodeAssignment{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", Subjects: []string{"ETH-USDT", "BTC-USDT"}, ExternalSymbols: map[string]string{"ETH-USDT": "ETHUSDT", "BTC-USDT": "BTCUSDT"}, Enabled: true, AssignmentHash: "abc"}
+	assignment := NodeAssignment{Provider: "eastmoney", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "stock_cn_http", SeriesTag: "cn-equity", DatasetID: "bars", Frequency: "1m", Subjects: []string{"ETH-USDT", "BTC-USDT"}, ExternalSymbols: map[string]string{"ETH-USDT": "ETHUSDT", "BTC-USDT": "BTCUSDT"}, Enabled: true, AssignmentHash: "abc"}
 	env, err := BuildManagedEnvironment(assignment, map[string]sources.DNSResolution{
 		"API.BINANCE.COM.": {IPs: []string{"203.0.113.2", "203.0.113.1"}, ResolvedAt: time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)},
 	})
@@ -22,6 +22,10 @@ func TestBuildManagedEnvironmentCanonicalizesDNS(t *testing.T) {
 		"API.BINANCE.COM.": {IPs: []string{"203.0.113.2", "203.0.113.1"}, ResolvedAt: time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)},
 	}), env["MOOX_MARKET_FETCH_DNS_HASH"])
 	require.Equal(t, "2026-08-04T00:00:00Z", env["MOOX_MARKET_FETCH_DNS_UPDATED_AT"])
+	require.Equal(t, "stock_cn", env["MOOX_MARKET_FETCH_MARKET_ID"])
+	require.Equal(t, "equity", env["MOOX_MARKET_FETCH_INSTRUMENT_TYPE"])
+	require.Equal(t, "stock_cn_http", env["MOOX_MARKET_FETCH_SOURCE_ID"])
+	require.Equal(t, "cn-equity", env["MOOX_MARKET_FETCH_SERIES_TAG"])
 }
 
 func TestManagedDNSHashIgnoresLatencyOrderedIPChanges(t *testing.T) {

@@ -235,8 +235,21 @@ type FactorSetupItem struct {
 // SCFFetcherSpace describes one separately packaged and deployed source
 // collector fleet. PackageConfigDir is relative to modules/collector/configs.
 type SCFFetcherSpace struct {
-	SpaceID          string `toml:"space_id"`
-	Entrypoint       string `toml:"entrypoint"`
+	SpaceID    string `toml:"space_id"`
+	Entrypoint string `toml:"entrypoint"`
+	// Market data Timer fleets carry this canonical identity in their static
+	// environment. It is intentionally separate from the legacy crypto
+	// market_type label so a function cannot infer an asset class from a
+	// provider-specific spelling.
+	MarketID         string `toml:"market_id"`
+	InstrumentType   string `toml:"instrument_type"`
+	ProviderID       string `toml:"provider_id"`
+	SourceID         string `toml:"source_id"`
+	SeriesTag        string `toml:"series_tag"`
+	StorageAppID     string `toml:"storage_app_id"`
+	StorageAppKey    string `toml:"storage_app_key"`
+	StorageOperator  string `toml:"storage_operator"`
+	StorageRequestID string `toml:"storage_request_id"`
 	PackageConfigDir string `toml:"package_config_dir"`
 	PackageName      string `toml:"package_name"`
 	// CLSCloudAccountID owns the single regional CLS topic used by every
@@ -786,6 +799,18 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	}
 	if cfg.Entrypoint == "" {
 		cfg.Entrypoint = cfg.SpaceID
+	}
+	if strings.EqualFold(cfg.Entrypoint, "market_data") {
+		for field, value := range map[string]string{
+			"market_id":       cfg.MarketID,
+			"instrument_type": cfg.InstrumentType,
+			"provider_id":     cfg.ProviderID,
+			"source_id":       cfg.SourceID,
+		} {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("config_invalid: %s.%s is required for market_data entrypoint", path, field)
+			}
+		}
 	}
 	cfg.PackageConfigDir = filepath.ToSlash(filepath.Clean(cfg.PackageConfigDir))
 	if cfg.PackageConfigDir == "." || strings.HasPrefix(cfg.PackageConfigDir, "../") || filepath.IsAbs(cfg.PackageConfigDir) {

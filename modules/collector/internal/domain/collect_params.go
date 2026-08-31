@@ -21,6 +21,10 @@ type CollectParams struct {
 	Schedule        CollectSchedule `json:"-"`
 	Provider        string          `json:"provider,omitempty"`
 	MarketType      string          `json:"market_type,omitempty"`
+	MarketID        string          `json:"market_id,omitempty"`
+	InstrumentType  string          `json:"instrument_type,omitempty"`
+	SourceID        string          `json:"source_id,omitempty"`
+	SeriesTag       string          `json:"series_tag,omitempty"`
 	SymbolSource    string          `json:"symbol_source,omitempty"`
 	SymbolDatasetID string          `json:"symbol_dataset_id,omitempty"`
 	TargetDatasetID string          `json:"target_dataset_id,omitempty"`
@@ -84,6 +88,10 @@ func ParseCollectParams(raw string, fallbackProvider string, fallbackMarketType 
 func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType string, fallbackDataType string) {
 	p.Provider = strings.ToLower(firstNonEmpty(p.Provider, fallbackProvider))
 	p.MarketType = strings.ToLower(firstNonEmpty(p.MarketType, fallbackMarketType))
+	p.MarketID = strings.ToLower(strings.TrimSpace(p.MarketID))
+	p.InstrumentType = strings.ToLower(strings.TrimSpace(p.InstrumentType))
+	p.SourceID = strings.ToLower(strings.TrimSpace(p.SourceID))
+	p.SeriesTag = strings.TrimSpace(p.SeriesTag)
 	p.SymbolSource = strings.ToLower(strings.TrimSpace(p.SymbolSource))
 	p.SymbolDatasetID = strings.TrimSpace(p.SymbolDatasetID)
 	p.TargetDatasetID = strings.TrimSpace(p.TargetDatasetID)

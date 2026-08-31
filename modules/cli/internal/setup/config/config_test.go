@@ -97,6 +97,21 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 	})
 }
 
+func TestValidateSCFFetcherRequiresMarketDataSourceIdentity(t *testing.T) {
+	cfg := SCFFetcher{Enabled: true, Spaces: []SCFFetcherSpace{{
+		SpaceID: "stock_cn", Entrypoint: "market_data", StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		MemorySize: 64, TimeoutSeconds: 15,
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
+	}}}
+	err := validateSCFFetcher(&cfg)
+	require.ErrorContains(t, err, "market_id")
+	cfg.Spaces[0].MarketID = "stock_cn"
+	cfg.Spaces[0].InstrumentType = "equity"
+	cfg.Spaces[0].ProviderID = "eastmoney"
+	cfg.Spaces[0].SourceID = "stock_cn_http"
+	require.NoError(t, validateSCFFetcher(&cfg))
+}
+
 func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 	crypto := SCFFetcherSpace{
 		SpaceID: "crypto_market",

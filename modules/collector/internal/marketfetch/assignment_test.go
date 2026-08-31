@@ -42,6 +42,38 @@ func TestBuildAssignmentsRejectsMissingExternalSymbolMapping(t *testing.T) {
 	require.ErrorContains(t, err, "external symbol mapping")
 }
 
+func TestBuildAssignmentsKeepsDistinctMarketSourcesSeparate(t *testing.T) {
+	groups := []TaskGroup{
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "stock_cn_http", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"SH.600000"}, ExternalSymbols: map[string]string{"SH.600000": "SH.600000"}},
+		{Provider: "tdx", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "normal_7709", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"SH.600000"}, ExternalSymbols: map[string]string{"SH.600000": "SH.600000"}},
+	}
+	nodes := []scfinvoker.Node{
+		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "n2", NodeType: "scf-event", TriggerType: "timer"},
+	}
+	assignments, err := BuildAssignments(groups, nodes, 30)
+	require.NoError(t, err)
+	require.Len(t, assignments, 2)
+	require.NotEqual(t, assignments[0].AssignmentHash, assignments[1].AssignmentHash)
+	require.NotEqual(t, assignments[0].SourceID, assignments[1].SourceID)
+}
+
+func TestBuildAssignmentsKeepsSeriesTagsSeparate(t *testing.T) {
+	groups := []TaskGroup{
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "stock_cn_http", SeriesTag: "raw", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"SH.600000"}, ExternalSymbols: map[string]string{"SH.600000": "SH.600000"}},
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "stock_cn_http", SeriesTag: "adjusted", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"SH.600000"}, ExternalSymbols: map[string]string{"SH.600000": "SH.600000"}},
+	}
+	nodes := []scfinvoker.Node{
+		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "n2", NodeType: "scf-event", TriggerType: "timer"},
+	}
+	assignments, err := BuildAssignments(groups, nodes, 30)
+	require.NoError(t, err)
+	require.Len(t, assignments, 2)
+	require.NotEqual(t, assignments[0].AssignmentHash, assignments[1].AssignmentHash)
+	require.NotEqual(t, assignments[0].SeriesTag, assignments[1].SeriesTag)
+}
+
 func TestBuildAssignmentsAllowsUnicodeSubjectNames(t *testing.T) {
 	assignments, err := BuildAssignments([]TaskGroup{{
 		Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m",

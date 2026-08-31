@@ -11,6 +11,7 @@ require (
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/cloudprovider v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/marketmanifest v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.11.1
@@ -103,6 +104,8 @@ replace github.com/mooyang-code/moox/packages/doctor => ../../packages/doctor
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
 
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
+
+replace github.com/mooyang-code/moox/packages/marketmanifest => ../../packages/marketmanifest
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 

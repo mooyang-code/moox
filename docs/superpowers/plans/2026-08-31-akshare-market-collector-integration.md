@@ -19,15 +19,19 @@
 - [x] 已落地 TDX 普通 `normal_7709` 的 Go wire/transport/命令/Provider 基线，以及扩展 classic/MAC 的独立帧、目录、登录和协议探针代码；这些扩展 Source 尚未因离线布局而自动标记生产 enabled。
 - [x] 已修复批量写入的来源事件幂等边界：同一批次内每个标的使用稳定且独立的 `SourceEventID`，避免 Storage 按 `source_event_id + dataset` 去重时误丢后续标的。
 - [ ] 尚未完成完整 TDX Wire Spike：仍需在目标线路录制完整请求、16 字节响应头、压缩体、解压体、错误帧和人工对账结果，并分别确认 `normal_7709`、`ex_classic_7727`、`ex_mac_7727`。
-- [ ] 尚未完成旧 Collector runtime 的通用 Executor/Job/SCF composition root 迁移、Metadata 初始化和正式 Storage 契约接入；当前新增 Pipeline 已用 fake Storage 完成端到端测试，但不等于正式环境验收。
+- [x] 已把通用 `market_data` Timer 的静态 assignment 接到 SCF 运行时契约：Reconciler 将 Market/Instrument/Source 身份写入 assignment，CLI 将 Storage 应用身份写入函数环境，Timer 事件可从静态环境构造有界请求；当前测试仍使用 fake Storage，不等于正式 Storage 契约验收。
 - [ ] 尚未实现新浪、腾讯、中证、申万等 HTTP Provider；它们只保留在目录和配置中的 `catalog_only`，期货、期权、基金、REITs、外汇、黄金同样只登记不实现。
+- [ ] 尚未完成旧 Collector runtime 的通用 Executor/Job/SCF composition root 清理、Metadata 初始化和正式 Storage 契约验证；generic Timer 入口已具备发布路径，但必须先补齐正式配置和真实 Storage read-back。
 - [ ] 尚未完成正式 SCF 多地域出口、TDX/HTTP live probe、最优线路快照发布和 Storage read-back；本地通过不作为云端发布证明。
+- [ ] 当前正式发布前置条件仍不具备：现有 `custom.toml` 只有旧入口/旧 Space 配置，尚无 `market_data` 的 Market/Instrument/Provider/Source 身份和 Storage 应用凭据；SCF 凭据 CLI 预检还受本机全局日志文件权限阻塞。因此禁止直接复用旧配置发布或覆盖旧函数。
 
 当前已经可以编译的通用 SCF 入口是 `modules/collector/cmd/scf/market_data`，它接受一批明确的 `MarketID/InstrumentType/SourceKey` 请求并调用通用 Pipeline；它不是旧 `crypto_market` 入口的兼容模式。TDX 扩展 Source 仍必须等待 Wire Spike 结论后才能接入该入口。
 
-通用入口也已接入 `moox-cli collector function package --entrypoint market_data` 的本地打包路径；正式发布仍必须先补齐对应 `custom.toml` Space、Metadata/Timer 规则、Storage 凭据和 SCF 出口 read-back，不能把仅通过本地构建的 zip 视为正式上线。
+通用入口也已接入 `moox-cli collector function package --entrypoint market_data` 的本地打包路径，且 `collector function publish` 已能按 `market_data` 选择不携带 CLS/EventBus 控制面材料、生成 canonical Source 身份和 Storage 应用环境；正式发布仍必须先补齐对应 `custom.toml` Space、Metadata/Timer 规则、Storage 凭据和 SCF 出口 read-back，不能把仅通过本地构建的 zip 视为正式上线。
 
 命名约定：本计划不再使用 `Feed` 或 `CapabilityKey` 作为公共概念。需要区分同一 Provider 的不同访问通道时使用 `SourceID`，组合身份使用 `SourceKey{ProviderID, SourceID}`；`ProtocolVariant` 仅描述协议握手/帧/登录差异，能力范围由 Source 的 manifest 和 Spec 声明。
+
+正式发布前必须单独准备一份新项目环境配置：包含新 Market/Source manifest、Storage 应用身份、网关目标和 Timer/Rule 资源；配置就绪后先以 disabled 状态发布并回读函数、环境、Timer、Rule 和 assignment，再执行实际 SCF 地域的 live probe 与 Storage read-back。任何随机公网出口只记录为观测值，不构成独立 IP 或频控豁免。
 
 ---
 
@@ -177,7 +181,7 @@ Provider ID 代表真实上游，不代表 Python 包名；Source ID 代表 Prov
 - `modules/collector/internal/marketfetch/write_source.go:1`：保留必要的 Storage RPC 细节，改由通用 Pipeline 传入完整来源字段和稳定 `SourceEventID`；不受错误行号范围约束。
 - `modules/collector/internal/sources/binance/kline.go:34-509`、`symbol.go` 及相关测试：实现现有 Binance 到通用契约的适配，保持 crypto 的 `series_tag` 语义。
 - `modules/collector/internal/serverless`、`cmd/scf` 和 runtime 装配文件：按 Market manifest 选择 composition root，不复制一份 Binance Executor。
-- `modules/collector/config/app.yaml`、`modules/collector/configs/config.yaml` 和 `modules/collector/configs/sources/market/binance.yaml`：加入 Provider host、TDX Source 节点、Market manifest、静态日历、连接超时和批次边界配置；禁止把 API 密钥写入配置文件。
+- `modules/collector/configs/config.yaml` 和 `modules/collector/configs/sources/market/binance.yaml`：加入 Provider host、TDX Source 节点、Market manifest、静态日历、连接超时和批次边界配置；禁止把 API 密钥写入配置文件。
 - `examples/setup/default/metadata.yaml`、`examples/setup/default/collector-rules.yaml`：直接切换到新 Market/Dataset canonical 契约，删除不合理旧资源配置，不保留兼容示例。
 - `docs/内置市场行情采集架构.md`、`docs/架构总览.md`、`docs/大仓架构.md`、`docs/architecture/scf-short-lived-market-fetch.md`：同步公共日历包、公共线路探测、Binance/TDX 复用、stock_hk、指数/可转债 Dataset、SCF TCP 出口边界，并将“DNS 代理”准确表述为解析候选快照与应用层线路优选。
 
@@ -686,7 +690,6 @@ Job Definition 保留通用 `kline`、`instrument` 数据类型；Provider/Marke
 - Create: `modules/collector/config/markets/stock_cn/calendar.yaml`
 - Create: `modules/collector/config/markets/stock_hk/market.yaml`
 - Create: `modules/collector/config/markets/stock_us/market.yaml`
-- Modify: `modules/collector/config/app.yaml`
 - Modify: `modules/collector/configs/config.yaml`
 - Modify: `examples/setup/default/metadata.yaml`
 - Modify: `examples/setup/default/collector-rules.yaml`
@@ -715,12 +718,12 @@ Canonical K 线字段至少包含 `open`、`high`、`low`、`close`、`volume`�
 
 **Files:**
 
-- Modify: `modules/collector/internal/marketfetch/storage.go`
+- Modify: `modules/collector/internal/marketfetch/storage_write_consumer.go`
 - Modify: `modules/collector/internal/sources/binance/storage_rpc.go:132-318`
 - Modify: `modules/collector/schema/collector.sql`
 - Modify: `examples/setup/default/metadata.yaml`
 - Modify: `modules/collector/internal/marketfetch/executor_test.go`
-- Modify: `modules/collector/internal/marketfetch/write_source_test.go`
+- Modify: `modules/collector/internal/marketfetch/storage_write_consumer_test.go`
 - Modify: `modules/collector/internal/sources/binance/kline_test.go`
 
 - [ ] **Step 1: 固化逻辑 RowKey**
@@ -856,10 +859,10 @@ git diff --check
 3. A 股、港股、美股 Provider 使用统一强类型 Fetcher 和 KlinePipeline，现有 Binance 不再需要独立 Executor/Storage 写入旁路。
 4. 交易日、时区、分钟桶、成交量/成交额单位、复权和时间戳语义均有源码 fixture 或确定性单元测试证明。
 5. 逻辑 K 线满足整根来源一致、完整字段校验、固定 RowKey、SourceEventID 幂等和 fallback 证据要求。
-6. `packages/tdx` 已完成普通/扩展协议的离线 fixture 验证；未确认的扩展字段没有进入 canonical Dataset，Tushare 没有运行时或配置依赖。
+6. `packages/tdx` 已有普通/扩展协议的离线 framing、codec 和 parser fixture；完整 wire spike 及未确认扩展字段的生产启用仍是独立门禁，Tushare 没有运行时或配置依赖。
 7. 默认 Go 测试、race、build、metadata dry-run 全部通过后，才进入 Provider live probe 和真实 SCF/Storage 验收。
 8. 公共 `routeprobe` 已被 Binance HTTP 和 TDX TCP 共用，且通过协议特定探针、按地域/Provider/Source/Transport 的最优线路选择、有限 fallback 和快照隔离验证。
-9. TDX 真实 SCF 验收证明了 TCP 出口、Timer 执行、连接复用、Source 选择、有限重试和 Storage read-back；未把随机公网 IP 宣称为可保证的独立 IP 或频控豁免。
+9. 正式验收完成后必须证明 TDX TCP 出口、Timer 执行、连接复用、Source 选择、有限重试和 Storage read-back；在此之前不得把本地编译、离线 fixture 或随机公网 IP 宣称为正式 SCF 交付或频控豁免。
 
 ## 17. 实施分批与提交边界
 

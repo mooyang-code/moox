@@ -16,6 +16,10 @@ import (
 type TaskGroup struct {
 	Provider        string
 	MarketType      string
+	MarketID        string
+	InstrumentType  string
+	SourceID        string
+	SeriesTag       string
 	DatasetID       string
 	Frequency       string
 	Subjects        []string
@@ -29,6 +33,10 @@ type NodeAssignment struct {
 	Region          string
 	Provider        string
 	MarketType      string
+	MarketID        string
+	InstrumentType  string
+	SourceID        string
+	SeriesTag       string
 	DatasetID       string
 	Frequency       string
 	Subjects        []string
@@ -55,6 +63,10 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 	for _, group := range groups {
 		group.Provider = strings.ToLower(strings.TrimSpace(group.Provider))
 		group.MarketType = strings.ToLower(strings.TrimSpace(group.MarketType))
+		group.MarketID = strings.ToLower(strings.TrimSpace(group.MarketID))
+		group.InstrumentType = strings.ToLower(strings.TrimSpace(group.InstrumentType))
+		group.SourceID = strings.ToLower(strings.TrimSpace(group.SourceID))
+		group.SeriesTag = strings.TrimSpace(group.SeriesTag)
 		group.DatasetID = strings.TrimSpace(group.DatasetID)
 		group.Frequency = strings.TrimSpace(group.Frequency)
 		cron, err := CronForFrequency(group.Frequency)
@@ -103,7 +115,7 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 			}
 			node := timerNodes[nodeIndex]
 			nodeIndex++
-			assignments = append(assignments, NodeAssignment{NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region, Provider: group.Provider, MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: subjects, ExternalSymbols: externals, Cron: cron, Enabled: true, AssignmentHash: AssignmentHash(group.Provider, group.MarketType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|"))})
+			assignments = append(assignments, NodeAssignment{NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region, Provider: group.Provider, MarketType: group.MarketType, MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag, DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: subjects, ExternalSymbols: externals, Cron: cron, Enabled: true, AssignmentHash: AssignmentHash(group.Provider, group.MarketType, group.MarketID, group.InstrumentType, group.SourceID, group.SeriesTag, group.DatasetID, group.Frequency, strings.Join(hashParts, "|"))})
 		}
 	}
 	for ; nodeIndex < len(timerNodes); nodeIndex++ {
@@ -158,7 +170,7 @@ func normalizeSubjects(subjects []string) []string {
 }
 
 func groupKey(group TaskGroup) string {
-	return strings.Join([]string{group.Provider, group.MarketType, group.DatasetID, group.Frequency}, "\x00")
+	return strings.Join([]string{group.Provider, group.MarketType, group.MarketID, group.InstrumentType, group.SourceID, group.SeriesTag, group.DatasetID, group.Frequency}, "\x00")
 }
 
 // AssignmentHash intentionally excludes timestamps so unchanged assignments
