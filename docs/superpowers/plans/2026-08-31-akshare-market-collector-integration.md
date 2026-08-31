@@ -12,7 +12,7 @@
 
 本节是总计划的进度索引，不能替代后续任务中的真实验收证据。`[x]` 只表示代码和离线测试已落地；真实 SCF、上游线路和 Storage read-back 仍须按第 16 节独立验收。
 
-本轮使用 Colima 的 `moox-cross-builder` 容器取得了宿主机之外的可复现执行结果：Collector `./internal/...` 全量离线测试、`go vet`、`packages/tdx` 全量测试、受影响行情包的 `-race` 测试，以及 Collector 的 `server`、`cli`、`scf/...` 构建均通过；其中也覆盖 `stockcn/tencent`、`markets`、`serverless/market_data`、`marketmanifest`、`marketcalendar` 和 `routeprobe`。宿主机上遗留的不可中断测试进程不作为测试结果依据。
+本轮使用 Colima 的 `moox-cross-builder` 容器取得了宿主机之外的可复现执行结果：Collector `./internal/...` 全量离线测试、全量 `-race`、`go vet`、`packages/tdx` 全量测试，以及 Collector 的 `server`、`cli`、`scf/...` 构建均通过；其中也覆盖 `stockcn/tencent`、`markets`、`serverless/market_data`、`marketmanifest`、`marketcalendar` 和 `routeprobe`。宿主机上遗留的不可中断测试进程不作为测试结果依据。
 
 - [x] 已建立 `packages/marketcalendar`：内嵌中国静态交易日历、`CivilDate`、三态覆盖查询、`valid_through` readiness、manifest/hash 校验和仓库校验脚本。
 - [x] 已建立 `packages/routeprobe`：候选解析、协议无关探测协调、HTTP Host/SNI 探针、评分、快照 TTL、按 `scf_region + ProviderID + SourceID + Transport + host:port` 隔离以及有限 fallback；不包含主动限频或全局配额。
