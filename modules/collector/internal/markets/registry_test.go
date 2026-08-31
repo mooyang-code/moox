@@ -18,10 +18,14 @@ func (compositionGetter) Get(context.Context, string, string, url.Values, interf
 	return nil
 }
 
-type rawCompositionGetter struct{ compositionGetter }
-
-func (rawCompositionGetter) GetStream(_ context.Context, _ string, _ string, _ url.Values, consume func(io.Reader) error) error {
+func (compositionGetter) GetStream(_ context.Context, _ string, _ string, _ url.Values, consume func(io.Reader) error) error {
 	return consume(strings.NewReader(`{"data":{}}`))
+}
+
+type nonRawCompositionGetter struct{}
+
+func (nonRawCompositionGetter) Get(context.Context, string, string, url.Values, interface{}) error {
+	return nil
 }
 
 func TestNewCompositionRegistersCanonicalHTTPSources(t *testing.T) {
@@ -33,6 +37,7 @@ func TestNewCompositionRegistersCanonicalHTTPSources(t *testing.T) {
 		{ProviderID: "eastmoney", SourceID: "stock_us_http"},
 		{ProviderID: "eastmoney", SourceID: "index_http"},
 		{ProviderID: "eastmoney", SourceID: "convertible_bond_http"},
+		{ProviderID: "tencent", SourceID: "stock_cn_http"},
 	} {
 		if _, ok := composition.Registry.Lookup(key); !ok {
 			t.Fatalf("source %s was not registered", key)
@@ -43,12 +48,10 @@ func TestNewCompositionRegistersCanonicalHTTPSources(t *testing.T) {
 	}
 }
 
-func TestNewCompositionRegistersTencentWhenRawHTTPIsAvailable(t *testing.T) {
-	composition, err := NewComposition(rawCompositionGetter{}, nil, false)
-	require.NoError(t, err)
-	if _, ok := composition.Registry.Lookup(marketdata.SourceKey{ProviderID: "tencent", SourceID: "stock_cn_http"}); !ok {
-		t.Fatal("tencent source was not registered for a raw HTTP getter")
-	}
+func TestNewCompositionRequiresRawHTTPForJSONPSource(t *testing.T) {
+	_, err := NewComposition(nonRawCompositionGetter{}, nil, false)
+	require.ErrorContains(t, err, "raw response streaming")
 }
 
 var _ markethttp.Getter = compositionGetter{}
+var _ markethttp.RawGetter = compositionGetter{}

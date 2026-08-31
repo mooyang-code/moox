@@ -26,6 +26,10 @@ type Composition struct {
 }
 
 func NewComposition(httpGetter markethttp.Getter, normalTDX *tdxwire.NormalClient, includeBinance bool) (*Composition, error) {
+	rawGetter, ok := httpGetter.(markethttp.RawGetter)
+	if !ok {
+		return nil, fmt.Errorf("market composition requires an HTTP getter with raw response streaming")
+	}
 	catalog, err := marketmanifest.DefaultCatalog()
 	if err != nil {
 		return nil, fmt.Errorf("load market catalog: %w", err)
@@ -43,10 +47,8 @@ func NewComposition(httpGetter markethttp.Getter, normalTDX *tdxwire.NormalClien
 		{Descriptor: index.Descriptor(), Klines: index},
 		{Descriptor: convertibleBond.Descriptor(), Klines: convertibleBond},
 	}
-	if rawGetter, ok := httpGetter.(markethttp.RawGetter); ok {
-		tencent := stockcntencent.NewClient(rawGetter)
-		registrations = append(registrations, sources.ProviderRegistration{Descriptor: tencent.Descriptor(), Klines: tencent})
-	}
+	tencent := stockcntencent.NewClient(rawGetter)
+	registrations = append(registrations, sources.ProviderRegistration{Descriptor: tencent.Descriptor(), Klines: tencent})
 	if normalTDX != nil {
 		tdxClient := stockcntdx.NewMultiClient(normalTDX, []string{"stock_cn"}, []string{"equity", "index", "convertible_bond"})
 		registrations = append(registrations, sources.ProviderRegistration{Descriptor: tdxClient.Descriptor(), Klines: tdxClient, Instruments: tdxClient})
