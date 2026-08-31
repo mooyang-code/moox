@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -145,7 +146,9 @@ func TestDataKlineEmitsIncompleteViewState(t *testing.T) {
 	stdout, _, cmd := newTestDataKlineCommand(t, reader)
 	cmd.SetArgs([]string{"--data-type", "crypto", "--symbol", "BTC-USDT"})
 	require.NoError(t, cmd.Execute())
-	assert.Contains(t, stdout.String(), `"complete": false`)
+	var response pb.ReadTimeSeriesRowsRsp
+	require.NoError(t, protojson.Unmarshal(stdout.Bytes(), &response))
+	assert.False(t, response.GetComplete())
 }
 
 func TestDataKlineRejectsConfigAsOutput(t *testing.T) {
