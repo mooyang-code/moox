@@ -23,7 +23,8 @@ type testWriter struct {
 
 type sourceTestWriter struct {
 	testWriter
-	sources []string
+	sources     []string
+	payloadRows []*storagepb.RowFieldUpsert
 }
 
 func (writer *testWriter) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
@@ -38,6 +39,7 @@ func (writer *sourceTestWriter) UpsertFieldsWithSource(_ context.Context, rows [
 	defer writer.mu.Unlock()
 	writer.rows += len(rows)
 	writer.sources = append(writer.sources, source)
+	writer.payloadRows = append(writer.payloadRows, rows...)
 	return nil
 }
 
@@ -49,6 +51,16 @@ func (testGetter) Get(_ context.Context, _ string, _ string, _ url.Values, resul
 
 func (testGetter) GetStream(_ context.Context, _ string, _ string, _ url.Values, consume func(io.Reader) error) error {
 	return consume(strings.NewReader(`{"data":{}}`))
+}
+
+type tencentTestGetter struct{}
+
+func (tencentTestGetter) Get(context.Context, string, string, url.Values, interface{}) error {
+	return nil
+}
+
+func (tencentTestGetter) GetStream(_ context.Context, _ string, _ string, _ url.Values, consume func(io.Reader) error) error {
+	return consume(strings.NewReader(`v_kline_day2026={"code":0,"data":{"sz000001":{"day":[["2026-08-28","10","10.5","11","9.5","100","0","1.5","123.45"]]}}};`))
 }
 
 func TestHandlerRunsGenericHTTPPipeline(t *testing.T) {
@@ -75,6 +87,47 @@ func TestHandlerRunsGenericHTTPPipeline(t *testing.T) {
 	got := response.(Response)
 	if !got.Success || got.RowsWritten != 2 || writer.rows != 2 || len(writer.sources) != 2 || writer.sources[0] == writer.sources[1] {
 		t.Fatalf("unexpected response=%+v rows=%d", got, writer.rows)
+	}
+}
+
+func TestHandlerRunsTencentJSONPThroughGenericPipeline(t *testing.T) {
+	writer := &sourceTestWriter{}
+	handler := &Handler{
+		NewStorage: func(string, string, string) (marketfetch.KlineRowWriter, error) { return writer, nil },
+		NewGetter:  func() markethttp.Getter { return tencentTestGetter{} },
+		Now:        func() time.Time { return time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC) },
+	}
+	raw, err := json.Marshal(map[string]interface{}{
+		"action":                     "market_fetch",
+		"storage_rpc_gateway_target": "ip://127.0.0.1:11003",
+		"data": map[string]interface{}{
+			"space_id": "stock_cn", "dataset_id": "stock_cn_kline", "market_id": "stock_cn", "instrument_type": "equity",
+			"provider_id": "tencent", "source_id": "stock_cn_http", "frequency": "1d", "source_event_id": "tencent-e2e",
+			"start_time": "2026-08-01T00:00:00Z", "end_time": "2026-08-31T00:00:00Z", "items": []map[string]string{{"subject_id": "SZ.000001", "provider_symbol": "SZ.000001"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := handler.HandleRequest(context.Background(), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := response.(Response)
+	if !got.Success || got.RowsWritten != 1 || writer.rows != 1 || len(writer.sources) != 1 {
+		t.Fatalf("unexpected Tencent response=%+v rows=%d sources=%v", got, writer.rows, writer.sources)
+	}
+	writer.mu.Lock()
+	row := writer.payloadRows[0]
+	writer.mu.Unlock()
+	if row.GetKey().GetTimeSeries().GetDataTime() != "2026-08-27T16:00:00Z" {
+		t.Fatalf("unexpected Tencent data_time=%q", row.GetKey().GetTimeSeries().GetDataTime())
+	}
+	if got := row.GetFields()[4].GetValue().GetDoubleValue(); got != 10000 {
+		t.Fatalf("unexpected Tencent volume=%v", got)
+	}
+	if got := row.GetFields()[5].GetValue().GetDoubleValue(); got != 1234500 {
+		t.Fatalf("unexpected Tencent amount=%v", got)
 	}
 }
 
