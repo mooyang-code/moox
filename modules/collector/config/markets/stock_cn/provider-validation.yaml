@@ -23,7 +23,7 @@ sources:
     protocol_variant: http
     transport: https
     port: 443
-    status: catalog_only
+    status: enabled
   - provider_id: csindex
     source_id: index_http
     protocol_variant: http

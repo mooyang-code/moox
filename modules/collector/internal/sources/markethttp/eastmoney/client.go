@@ -3,6 +3,7 @@ package eastmoney
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"strconv"
 	"strings"
@@ -15,6 +16,13 @@ import (
 
 type Getter interface {
 	Get(context.Context, string, string, url.Values, interface{}) error
+}
+
+// RawGetter is implemented by HTTP clients that can expose the bounded
+// response stream. JSONP-based providers need the original response text and
+// cannot use Getter's JSON decoder directly.
+type RawGetter interface {
+	GetStream(context.Context, string, string, url.Values, func(io.Reader) error) error
 }
 
 type Config struct {

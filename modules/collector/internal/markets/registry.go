@@ -10,6 +10,7 @@ import (
 	markethttp "github.com/mooyang-code/moox/modules/collector/internal/sources/markethttp/eastmoney"
 	stockcneastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoney"
 	stockcntdx "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tdx"
+	stockcntencent "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tencent"
 	stockhkeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/eastmoney"
 	stockuseastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/eastmoney"
 	"github.com/mooyang-code/moox/packages/marketmanifest"
@@ -41,6 +42,10 @@ func NewComposition(httpGetter markethttp.Getter, normalTDX *tdxwire.NormalClien
 		{Descriptor: stockUS.Descriptor(), Klines: stockUS},
 		{Descriptor: index.Descriptor(), Klines: index},
 		{Descriptor: convertibleBond.Descriptor(), Klines: convertibleBond},
+	}
+	if rawGetter, ok := httpGetter.(markethttp.RawGetter); ok {
+		tencent := stockcntencent.NewClient(rawGetter)
+		registrations = append(registrations, sources.ProviderRegistration{Descriptor: tencent.Descriptor(), Klines: tencent})
 	}
 	if normalTDX != nil {
 		tdxClient := stockcntdx.NewMultiClient(normalTDX, []string{"stock_cn"}, []string{"equity", "index", "convertible_bond"})

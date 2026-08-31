@@ -6,7 +6,8 @@
 | --- | --- | --- | --- | --- | --- |
 | `stock_cn` | `equity` | `tdx/normal_7709` | `stock_zh_a_hist_min_em`、`QATdx`、`get_security_bars` | `enabled` | TCP 普通行情，单标的分页 |
 | `stock_cn` | `equity` | `eastmoney/stock_cn_http` | `stock_zh_a_hist`、`stock_zh_a_hist_min_em` | `enabled` | `klt` 映射和 EM 字段顺序已实现 |
-| `stock_cn` | `equity` | `sina`、`tencent` | `stock_zh_a_daily`、`stock_zh_a_hist_tx` | `catalog_only` | 待补充 JSONP/字段 fixture |
+| `stock_cn` | `equity` | `sina` | `stock_zh_a_daily` | `catalog_only` | 新浪历史响应需要 JS 解码且成交额是独立请求，暂不启用 |
+| `stock_cn` | `equity` | `tencent/stock_cn_http` | `stock_zh_a_hist_tx` | `enabled` | 已实现按年切片、JSONP 安全解析和成交量/成交额单位转换，仅支持不复权日线 |
 | `stock_cn` | `index` | `tdx/normal_7709`、`eastmoney/index_http` | `get_index_bars`、`index_zh_a_hist_min_em` | `enabled` | TDX 指数响应的额外字段需单独对账 |
 | `stock_cn` | `convertible_bond` | `eastmoney/convertible_bond_http` | `bond_zh_hs_cov_daily`、`bond_zh_hs_cov_min` | `enabled` | 与股票 Dataset 分离 |
 | `stock_hk` | `equity` | `eastmoney/stock_hk_http` | `stock_hk_hist`、`stock_hk_hist_min_em` | `enabled` | 使用港股 `SecID` 转换 |

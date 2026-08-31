@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -541,6 +542,13 @@ func (getter routeGetter) Get(ctx context.Context, domain, path string, query ur
 		return fmt.Errorf("HTTP client is not initialized")
 	}
 	return getter.client.GetWithIPs(ctx, domain, getter.routes[strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))], path, query, result)
+}
+
+func (getter routeGetter) GetStream(ctx context.Context, domain, path string, query url.Values, consume func(io.Reader) error) error {
+	if getter.client == nil {
+		return fmt.Errorf("HTTP client is not initialized")
+	}
+	return getter.client.GetStreamWithIPs(ctx, domain, getter.routes[strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))], path, query, consume)
 }
 
 func loadDNSRoutes(raw string) map[string][]string {

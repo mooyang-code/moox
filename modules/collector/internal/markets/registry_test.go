@@ -2,7 +2,9 @@ package markets
 
 import (
 	"context"
+	"io"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
@@ -14,6 +16,12 @@ type compositionGetter struct{}
 
 func (compositionGetter) Get(context.Context, string, string, url.Values, interface{}) error {
 	return nil
+}
+
+type rawCompositionGetter struct{ compositionGetter }
+
+func (rawCompositionGetter) GetStream(_ context.Context, _ string, _ string, _ url.Values, consume func(io.Reader) error) error {
+	return consume(strings.NewReader(`{"data":{}}`))
 }
 
 func TestNewCompositionRegistersCanonicalHTTPSources(t *testing.T) {
@@ -32,6 +40,14 @@ func TestNewCompositionRegistersCanonicalHTTPSources(t *testing.T) {
 	}
 	if _, ok := composition.Catalog.Lookup("stock_cn", "index"); !ok {
 		t.Fatal("stock_cn index manifest was not registered")
+	}
+}
+
+func TestNewCompositionRegistersTencentWhenRawHTTPIsAvailable(t *testing.T) {
+	composition, err := NewComposition(rawCompositionGetter{}, nil, false)
+	require.NoError(t, err)
+	if _, ok := composition.Registry.Lookup(marketdata.SourceKey{ProviderID: "tencent", SourceID: "stock_cn_http"}); !ok {
+		t.Fatal("tencent source was not registered for a raw HTTP getter")
 	}
 }
 

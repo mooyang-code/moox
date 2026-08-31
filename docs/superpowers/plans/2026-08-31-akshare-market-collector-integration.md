@@ -22,7 +22,7 @@
 - [x] 已修复批量写入的来源事件幂等边界：同一批次内每个标的使用稳定且独立的 `SourceEventID`，避免 Storage 按 `source_event_id + dataset` 去重时误丢后续标的。
 - [ ] 尚未完成完整 TDX Wire Spike：仍需在目标线路录制完整请求、16 字节响应头、压缩体、解压体、错误帧和人工对账结果，并分别确认 `normal_7709`、`ex_classic_7727`、`ex_mac_7727`。
 - [x] 已把通用 `market_data` Timer 的静态 assignment 接到 SCF 运行时契约：Reconciler 将 Market/Instrument/Source 身份写入 assignment，CLI 将 Storage 应用身份写入函数环境，Timer 事件可从静态环境构造有界请求；当前测试仍使用 fake Storage，不等于正式 Storage 契约验收。
-- [ ] 尚未实现新浪、腾讯、中证、申万等 HTTP Provider；它们只保留在目录和配置中的 `catalog_only`，期货、期权、基金、REITs、外汇、黄金同样只登记不实现。
+- [ ] 尚未实现新浪、中证、申万等 HTTP Provider；腾讯 A 股已实现并标记为 enabled，但仅覆盖不复权日线。期货、期权、基金、REITs、外汇、黄金同样只登记不实现。
 - [ ] 尚未完成旧 Collector runtime 的通用 Executor/Job/SCF composition root 清理、Metadata 初始化和正式 Storage 契约验证；generic Timer 入口已具备发布路径，但必须先补齐正式配置和真实 Storage read-back。
 - [ ] 尚未完成正式 SCF 多地域出口、TDX/HTTP live probe、最优线路快照发布和 Storage read-back；本地通过不作为云端发布证明。
 - [ ] 当前正式发布前置条件仍不具备：现有 `custom.toml` 只有旧入口/旧 Space 配置，尚无 `market_data` 的 Market/Instrument/Provider/Source 身份和 Storage 应用凭据；SCF 凭据 CLI 预检还受本机全局日志文件权限阻塞。因此禁止直接复用旧配置发布或覆盖旧函数。
@@ -139,9 +139,10 @@ Provider ID 代表真实上游，不代表 Python 包名；Source ID 代表 Prov
 - `modules/collector/internal/marketdata/calendar.go`：Market Calendar Policy 与公共日历包的适配边界。
 - `modules/collector/internal/marketdata/provider_test.go`、`kline_test.go`、`instrument_test.go`：契约测试。
 - `modules/collector/internal/sources/stockcn/eastmoney/kline.go`、`parser.go`、`symbol.go`：A 股 EM 日线/分钟线和 symbol 转换。
+- `modules/collector/internal/sources/markethttp/eastmoney/client.go`：共享 JSON 解码 Getter 与保留原始响应流的 `RawGetter` 边界。
 - `modules/collector/internal/sources/stockcn/tdx/kline.go`、`parser.go`、`symbol.go`：A 股 TDX 普通行情适配，复用 `packages/tdx`，不重复实现 TCP 协议。
 - `modules/collector/internal/sources/stockcn/sina/kline.go`、`parser.go`、`symbol.go`：A 股新浪日线/分钟线和 JSONP/JS 解码。
-- `modules/collector/internal/sources/stockcn/tencent/kline.go`、`parser.go`、`symbol.go`：A 股腾讯日线和字段单位转换。
+- `modules/collector/internal/sources/stockcn/tencent/kline.go`、`kline_test.go`：腾讯 A 股日线 JSONP 解码、按年请求、代码归一化和字段单位转换；当前实现集中在一个文件，不另建 parser/symbol 层。
 - `modules/collector/internal/sources/stockhk/eastmoney/kline.go`、`stockhk/eastmoney/parser.go`、`stockhk/sina/kline.go`、`stockhk/sina/parser.go`：港股适配器。
 - `modules/collector/internal/sources/stockhk/tdx/kline.go`、`parser.go`、`symbol.go`：港股 TDX 扩展行情适配，使用动态市场 ID。
 - `modules/collector/internal/sources/stockus/eastmoney/kline.go`、`stockus/eastmoney/parser.go`、`stockus/sina/kline.go`、`stockus/sina/parser.go`：美股适配器。
@@ -429,9 +430,9 @@ A 股、指数和可转债共用公共日历，但各自声明交易时段和午
 
 解析新浪 JSONP/JS 编码响应，覆盖 `stock_zh_a_daily` 和 `stock_zh_a_minute` 的字段映射。复权参数只作为显式请求选项存在；逻辑 Canonical Dataset 默认拒绝复权结果，复权数据不进入不复权 K 线。
 
-- [ ] **Step 3: 实现腾讯 A 股日线**
+- [x] **Step 3: 实现腾讯 A 股日线**
 
-解析 `newfqkline/get` 返回的 `day/qfqday/hfqday`，实现源码中成交量、换手率和成交额单位转换。若某响应没有完整 amount，则 Spec 标记 `has_amount=false`，该 Source 不能进入要求 amount 的候选链。
+解析 `newfqkline/get` 返回的 `day/qfqday/hfqday`，实现源码中成交量和成交额单位转换，并通过 `RawGetter` 保留 JSONP 原文。当前请求固定为不复权日线；缺少 amount 或字段不完整时直接失败，不进入要求 amount 的候选链。腾讯源在 manifest/config 中仅声明 `1d`，不能被误选为分钟线。
 
 - [ ] **Step 4: 用 HTTP fixture 测试正常和异常响应**
 
