@@ -27,6 +27,7 @@
 - [ ] 尚未实现新浪、中证、申万等 HTTP Provider；腾讯 A 股已实现并标记为 enabled，但仅覆盖不复权日线。期货、期权、基金、REITs、外汇、黄金同样只登记不实现。
 - [ ] 尚未完成旧 Collector runtime 的通用 Executor/Job/SCF composition root 清理、Metadata 初始化和正式 Storage 契约验证；generic Timer 入口已具备发布路径，但必须先补齐正式配置和真实 Storage read-back。
 - [ ] 尚未完成正式 SCF 多地域出口、TDX/HTTP live probe、最优线路快照发布和 Storage read-back；本地通过不作为云端发布证明。
+- [ ] 已按要求启动独立 `codeCR` 审查当前 HEAD，但审查 Agent 在等待窗口内未返回报告并已关闭；在正式发布前仍需取得一次有文件/行号依据的独立审查结论，不能把超时视为“无问题”。
 - [ ] 当前正式发布前置条件仍不具备：现有 `custom.toml` 只有旧入口/旧 Space 配置，尚无 `market_data` 的 Market/Instrument/Provider/Source 身份和 Storage 应用凭据；SCF 凭据 CLI 预检还受本机全局日志文件权限阻塞。因此禁止直接复用旧配置发布或覆盖旧函数。
 
 当前已经可以编译的通用 SCF 入口是 `modules/collector/cmd/scf/market_data`，它接受一批明确的 `MarketID/InstrumentType/SourceKey` 请求并调用通用 Pipeline；它不是旧 `crypto_market` 入口的兼容模式。TDX 扩展 Source 仍必须等待 Wire Spike 结论后才能接入该入口。
