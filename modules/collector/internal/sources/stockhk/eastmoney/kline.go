@@ -11,7 +11,7 @@ import (
 type Client struct{ *core.Client }
 
 func NewClient(getter core.Getter) *Client {
-	return &Client{Client: core.NewClient(core.Config{ProviderID: "eastmoney", SourceID: "stock_hk_http", MarketID: "stock_hk", InstrumentType: "equity", Frequencies: []string{"1m", "5m", "15m", "30m", "60m", "1d", "1w", "1M"}, HistoryStart: "2000-01-01", SecID: SecID}, getter)}
+	return &Client{Client: core.NewClient(core.Config{ProviderID: "eastmoney", SourceID: "stock_hk_http", MarketID: "stock_hk", InstrumentType: "equity", Timezone: "Asia/Hong_Kong", Frequencies: []string{"1m", "5m", "15m", "30m", "60m", "1d", "1w", "1M"}, HistoryStart: "2000-01-01", SecID: SecID}, getter)}
 }
 
 func SecID(symbol string) (string, error) {

@@ -31,6 +31,7 @@ type Config struct {
 	MarketID       string
 	InstrumentType string
 	Domain         string
+	Timezone       string
 	SecID          func(string) (string, error)
 	Frequencies    []string
 	VolumeUnit     string
@@ -50,6 +51,9 @@ func NewClient(config Config, getter Getter) *Client {
 	}
 	if config.Domain == "" {
 		config.Domain = "push2his.eastmoney.com"
+	}
+	if strings.TrimSpace(config.Timezone) == "" {
+		config.Timezone = "Asia/Shanghai"
 	}
 	if len(config.Frequencies) == 0 {
 		config.Frequencies = []string{"1d"}
@@ -120,9 +124,9 @@ func Parse(payload Response, config Config, request marketdata.KlineRequest, now
 	if payload.Data == nil {
 		return []marketdata.NormalizedKline{}, nil
 	}
-	location, err := time.LoadLocation("Asia/Shanghai")
+	location, err := time.LoadLocation(config.Timezone)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("eastmoney: load timezone %q: %w", config.Timezone, err)
 	}
 	result := make([]marketdata.NormalizedKline, 0, len(payload.Data.Klines))
 	seen := make(map[string]struct{}, len(payload.Data.Klines))
@@ -151,7 +155,7 @@ func Parse(payload Response, config Config, request marketdata.KlineRequest, now
 		if value := strings.TrimSpace(fields[6]); value != "" {
 			amount = marketdata.OptionalDecimal{Value: newDecimal(value), Valid: true}
 		}
-		result = append(result, marketdata.NormalizedKline{SubjectID: request.SubjectID, ProviderID: config.ProviderID, SourceID: config.SourceID, ProviderSymbol: request.ProviderSymbol, Frequency: request.Frequency, BarStart: start.UTC(), BarEnd: start.UTC().Add(frequencyDuration(request.Frequency)), Open: newDecimal(values[0]), High: newDecimal(values[1]), Low: newDecimal(values[2]), Close: newDecimal(values[3]), Volume: newDecimal(values[4]), Amount: amount, VolumeUnit: config.VolumeUnit, AmountUnit: config.AmountUnit, ProviderTime: start, FetchedAt: now.UTC()})
+		result = append(result, marketdata.NormalizedKline{SubjectID: request.SubjectID, ProviderID: config.ProviderID, SourceID: config.SourceID, ProviderSymbol: request.ProviderSymbol, Frequency: request.Frequency, BarStart: start.UTC(), BarEnd: barEnd(start, request.Frequency, location), Open: newDecimal(values[0]), High: newDecimal(values[1]), Low: newDecimal(values[2]), Close: newDecimal(values[3]), Volume: newDecimal(values[4]), Amount: amount, VolumeUnit: config.VolumeUnit, AmountUnit: config.AmountUnit, ProviderTime: start, FetchedAt: now.UTC()})
 	}
 	return result, nil
 }
@@ -191,21 +195,37 @@ func dateValue(value time.Time, fallback string) string {
 	return value.In(time.FixedZone("CST", 8*60*60)).Format("20060102")
 }
 
-func frequencyDuration(value string) time.Duration {
-	switch value {
-	case "1m":
-		return time.Minute
-	case "5m":
-		return 5 * time.Minute
-	case "15m":
-		return 15 * time.Minute
-	case "30m":
-		return 30 * time.Minute
-	case "60m":
-		return time.Hour
-	case "1w":
-		return 7 * 24 * time.Hour
-	default:
-		return 24 * time.Hour
+func barEnd(start time.Time, frequency string, location *time.Location) time.Time {
+	if location == nil {
+		location = time.UTC
 	}
+	local := start.In(location)
+	switch frequency {
+	case "1m":
+		return local.Add(time.Minute).UTC()
+	case "5m":
+		return local.Add(5 * time.Minute).UTC()
+	case "15m":
+		return local.Add(15 * time.Minute).UTC()
+	case "30m":
+		return local.Add(30 * time.Minute).UTC()
+	case "60m":
+		return local.Add(time.Hour).UTC()
+	case "1w":
+		return local.AddDate(0, 0, 7).UTC()
+	case "1M":
+		return addCalendarMonth(local).UTC()
+	default:
+		return local.AddDate(0, 0, 1).UTC()
+	}
+}
+
+func addCalendarMonth(value time.Time) time.Time {
+	year, month, day := value.Date()
+	firstOfNext := time.Date(year, month+1, 1, value.Hour(), value.Minute(), value.Second(), value.Nanosecond(), value.Location())
+	lastDay := firstOfNext.AddDate(0, 1, -1).Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return time.Date(firstOfNext.Year(), firstOfNext.Month(), day, value.Hour(), value.Minute(), value.Second(), value.Nanosecond(), value.Location())
 }

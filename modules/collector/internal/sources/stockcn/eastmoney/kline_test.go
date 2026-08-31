@@ -46,3 +46,23 @@ func TestFetchKlinesParsesEastMoneyFieldsAndStartLabels(t *testing.T) {
 		t.Fatalf("unexpected query: %v", getter.query)
 	}
 }
+
+func TestFetchKlinesUsesCalendarMonthForMonthlyBars(t *testing.T) {
+	getter := &fakeGetter{payload: response{RC: 0, Data: &struct {
+		Klines []string `json:"klines"`
+	}{Klines: []string{"2026-01-31,10,10.5,11,9.5,100,1050"}}}}
+	client := NewClient(getter)
+	bars, err := client.FetchKlines(context.Background(), marketdata.KlineRequest{
+		MarketID: "stock_cn", InstrumentType: "equity", SubjectID: "SH.600000", ProviderSymbol: "SH.600000", Frequency: "1M", Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bars) != 1 {
+		t.Fatalf("got %d bars, want 1", len(bars))
+	}
+	want := time.Date(2026, 2, 28, 0, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60)).UTC()
+	if !bars[0].BarEnd.Equal(want) {
+		t.Fatalf("monthly bar end = %s, want %s", bars[0].BarEnd, want)
+	}
+}

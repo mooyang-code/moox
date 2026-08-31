@@ -75,22 +75,32 @@ func parseTime(value string, location *time.Location) (time.Time, error) {
 }
 
 func barEnd(start time.Time, frequency string) time.Time {
-	switch strings.ToLower(strings.TrimSpace(frequency)) {
+	switch strings.TrimSpace(frequency) {
 	case "1m":
-		return start.Add(time.Minute)
+		return start.Add(time.Minute).UTC()
 	case "5m":
-		return start.Add(5 * time.Minute)
+		return start.Add(5 * time.Minute).UTC()
 	case "15m":
-		return start.Add(15 * time.Minute)
+		return start.Add(15 * time.Minute).UTC()
 	case "30m":
-		return start.Add(30 * time.Minute)
+		return start.Add(30 * time.Minute).UTC()
 	case "60m", "1h":
-		return start.Add(time.Hour)
+		return start.Add(time.Hour).UTC()
 	case "1w":
-		return start.Add(7 * 24 * time.Hour)
-	case "1mth", "1mo":
-		return start.AddDate(0, 1, 0)
+		return start.AddDate(0, 0, 7).UTC()
+	case "1M", "1mo", "1mth":
+		return addCalendarMonth(start).UTC()
 	default:
-		return start.Add(24 * time.Hour)
+		return start.AddDate(0, 0, 1).UTC()
 	}
+}
+
+func addCalendarMonth(value time.Time) time.Time {
+	year, month, day := value.Date()
+	firstOfNext := time.Date(year, month+1, 1, value.Hour(), value.Minute(), value.Second(), value.Nanosecond(), value.Location())
+	lastDay := firstOfNext.AddDate(0, 1, -1).Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return time.Date(firstOfNext.Year(), firstOfNext.Month(), day, value.Hour(), value.Minute(), value.Second(), value.Nanosecond(), value.Location())
 }

@@ -134,7 +134,7 @@ func (c *Client) FetchKlines(ctx context.Context, request marketdata.KlineReques
 		if !category.Intraday() {
 			start = time.Date(bar.Time.Year(), bar.Time.Month(), bar.Time.Day(), 0, 0, 0, 0, bar.Time.Location())
 		}
-		result = append(result, marketdata.NormalizedKline{SubjectID: request.SubjectID, ProviderID: "tdx", SourceID: "normal_7709", ProviderSymbol: request.ProviderSymbol, Frequency: request.Frequency, BarStart: start.UTC(), BarEnd: start.UTC().Add(frequencyDuration(request.Frequency)), Open: decimal(bar.Open), High: decimal(bar.High), Low: decimal(bar.Low), Close: decimal(bar.Close), Volume: decimal(bar.Volume), Amount: marketdata.OptionalDecimal{Value: decimal(bar.Amount), Valid: true}, VolumeUnit: "share", AmountUnit: "cny", ProviderTime: bar.Time, FetchedAt: now().UTC()})
+		result = append(result, marketdata.NormalizedKline{SubjectID: request.SubjectID, ProviderID: "tdx", SourceID: "normal_7709", ProviderSymbol: request.ProviderSymbol, Frequency: request.Frequency, BarStart: start.UTC(), BarEnd: barEnd(start, request.Frequency), Open: decimal(bar.Open), High: decimal(bar.High), Low: decimal(bar.Low), Close: decimal(bar.Close), Volume: decimal(bar.Volume), Amount: marketdata.OptionalDecimal{Value: decimal(bar.Amount), Valid: true}, VolumeUnit: "share", AmountUnit: "cny", ProviderTime: bar.Time, FetchedAt: now().UTC()})
 	}
 	return result, nil
 }
@@ -204,21 +204,33 @@ func decimal(value float64) common.Decimal {
 	return common.NewDecimal(strconv.FormatFloat(value, 'f', -1, 64))
 }
 
-func frequencyDuration(value string) time.Duration {
-	switch value {
+func barEnd(start time.Time, frequency string) time.Time {
+	switch strings.TrimSpace(frequency) {
 	case "1m":
-		return time.Minute
+		return start.Add(time.Minute).UTC()
 	case "5m":
-		return 5 * time.Minute
+		return start.Add(5 * time.Minute).UTC()
 	case "15m":
-		return 15 * time.Minute
+		return start.Add(15 * time.Minute).UTC()
 	case "30m":
-		return 30 * time.Minute
+		return start.Add(30 * time.Minute).UTC()
 	case "60m":
-		return time.Hour
+		return start.Add(time.Hour).UTC()
 	case "1w":
-		return 7 * 24 * time.Hour
+		return start.AddDate(0, 0, 7).UTC()
+	case "1M":
+		return addCalendarMonth(start).UTC()
 	default:
-		return 24 * time.Hour
+		return start.AddDate(0, 0, 1).UTC()
 	}
+}
+
+func addCalendarMonth(value time.Time) time.Time {
+	year, month, day := value.Date()
+	firstOfNext := time.Date(year, month+1, 1, value.Hour(), value.Minute(), value.Second(), value.Nanosecond(), value.Location())
+	lastDay := firstOfNext.AddDate(0, 1, -1).Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return time.Date(firstOfNext.Year(), firstOfNext.Month(), day, value.Hour(), value.Minute(), value.Second(), value.Nanosecond(), value.Location())
 }
