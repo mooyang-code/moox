@@ -18,30 +18,12 @@ sources:
     transport: https
     port: 443
     status: catalog_only
-  - provider_id: sina
-    source_id: stock_cn_minute_http
-    protocol_variant: http
-    transport: https
-    port: 443
-    status: catalog_only
   - provider_id: tencent
     source_id: stock_cn_http
     protocol_variant: http
     transport: https
     port: 443
     status: enabled
-  - provider_id: ths
-    source_id: daily_http
-    protocol_variant: http
-    transport: https
-    port: 443
-    status: catalog_only
-  - provider_id: cni
-    source_id: index_cni_http
-    protocol_variant: http
-    transport: https
-    port: 443
-    status: catalog_only
   - provider_id: csindex
     source_id: index_http
     protocol_variant: http
@@ -49,7 +31,7 @@ sources:
     port: 443
     status: catalog_only
   - provider_id: sw
-    source_id: index_sw_http
+    source_id: index_http
     protocol_variant: http
     transport: https
     port: 443

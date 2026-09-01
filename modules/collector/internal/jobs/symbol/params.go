@@ -1,7 +1,7 @@
 // Package symbol contains symbol collector JobItem planning and execution types.
 package symbol
 
-// Params is the JobItem params shape for symbol collection.
+// Params is the JobItem params shape for instrument collection.
 type Params struct {
 	SpaceID          string `json:"space_id"`
 	TaskID           string `json:"task_id"`

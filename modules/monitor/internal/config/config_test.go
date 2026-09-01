@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -41,6 +42,14 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	}
 	if cfg.Observability.BalanceDifferenceThreshold != 0.05 {
 		t.Fatalf("balance difference threshold = %v", cfg.Observability.BalanceDifferenceThreshold)
+	}
+	if cfg.MarketCanary.ClosedBarMinCoverage != 0.99 {
+		t.Fatalf("closed bar minimum coverage = %v", cfg.MarketCanary.ClosedBarMinCoverage)
+	}
+	if cfg.MarketHealth.TimerCoordinationStaleAfter != 15*time.Minute ||
+		cfg.MarketHealth.TimerCoordinationPendingGrace != 5*time.Minute ||
+		cfg.MarketHealth.LowCapacityHeadroom != 2 {
+		t.Fatalf("market health defaults = %+v", cfg.MarketHealth)
 	}
 }
 
@@ -241,6 +250,29 @@ func TestMonitorConfigRequiresPresenceAwareMarketCanarySeriesTag(t *testing.T) {
 	cfg.MarketCanary.Subjects[0].SeriesTag = &empty
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("explicit default series tag must be valid: %v", err)
+	}
+}
+
+func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
+	cfg := Default()
+	cfg.SysDeploy.Enabled = false
+	cfg.MarketCanary.ClosedBarMinCoverage = 1.01
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "closed_bar_min_coverage") {
+		t.Fatalf("Validate() error = %v, want closed_bar_min_coverage error", err)
+	}
+
+	cfg = Default()
+	cfg.SysDeploy.Enabled = false
+	cfg.MarketHealth.TimerCoordinationStaleAfter = -time.Second
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "timer_coordination_stale_after") {
+		t.Fatalf("Validate() error = %v, want timer coordination threshold error", err)
+	}
+
+	cfg = Default()
+	cfg.SysDeploy.Enabled = false
+	cfg.MarketHealth.LowCapacityHeadroom = -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "low_capacity_headroom") {
+		t.Fatalf("Validate() error = %v, want low capacity headroom error", err)
 	}
 }
 

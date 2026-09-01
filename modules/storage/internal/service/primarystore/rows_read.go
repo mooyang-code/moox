@@ -63,7 +63,7 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 }
 
 func validateMooxSkillReadRequest(req *pb.ReadTimeSeriesRowsReq) error {
-	if req.GetSpaceId() != "crypto" || req.GetDatasetId() != "binance_spot_kline_1m" {
+	if !isMooxSkillKlineDataset(req.GetSpaceId(), req.GetDatasetId()) {
 		return errors.New("moox-skill read scope is invalid")
 	}
 	if len(req.GetKeys()) > 0 || req.GetOrder() != pb.SortOrder_SORT_ORDER_DESC {
@@ -76,11 +76,24 @@ func validateMooxSkillReadRequest(req *pb.ReadTimeSeriesRowsReq) error {
 		return errors.New("moox-skill selectors are required")
 	}
 	for _, selector := range req.GetSelectors() {
-		if selector == nil || selector.GetSpaceId() != "crypto" || selector.GetDatasetId() != "binance_spot_kline_1m" || selector.GetFreq() != "1m" || selector.GetSeriesTag() != "venue:binance" {
+		if selector == nil || selector.GetSpaceId() != req.GetSpaceId() || selector.GetDatasetId() != req.GetDatasetId() || !isMooxSkillKlineSelector(selector) {
 			return errors.New("moox-skill selector scope is invalid")
 		}
 	}
 	return nil
+}
+
+func isMooxSkillKlineDataset(spaceID, datasetID string) bool {
+	return spaceID == "crypto_market" && datasetID == "binance_spot_kline_1m" ||
+		spaceID == "stock_cn" && datasetID == "stock_cn_kline"
+}
+
+func isMooxSkillKlineSelector(selector *pb.TimeSeriesSelector) bool {
+	if selector.SeriesTag == nil || selector.GetFreq() != "1m" {
+		return false
+	}
+	return selector.GetSpaceId() == "crypto_market" && selector.GetDatasetId() == "binance_spot_kline_1m" && selector.GetSeriesTag() == "venue:binance" ||
+		selector.GetSpaceId() == "stock_cn" && selector.GetDatasetId() == "stock_cn_kline" && selector.GetSeriesTag() == ""
 }
 
 func (s *Service) readHistoricalTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {

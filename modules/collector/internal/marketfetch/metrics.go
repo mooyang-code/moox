@@ -1,9 +1,11 @@
 package marketfetch
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -23,6 +25,18 @@ type Metrics struct {
 	assignmentErrors       *prometheus.CounterVec
 	periodPending          *prometheus.GaugeVec
 	periodReportRetry      *prometheus.CounterVec
+	feedResults            *prometheus.CounterVec
+	configuredGroups       *prometheus.GaugeVec
+	configuredGroupIDs     *prometheus.GaugeVec
+	egressFunctions        *prometheus.GaugeVec
+	instrumentActive       *prometheus.GaugeVec
+	instrumentExchange     *prometheus.GaugeVec
+	instrumentLastSnapshot *prometheus.GaugeVec
+}
+
+type FeedMetric struct {
+	MarketID, RouteID, ProviderID, FeedKind, BatchKind, Result string
+	GroupID, GroupCount                                        int
 }
 
 // SetDatasetRunObserver is retained as a no-op for the manual/catchup helper
@@ -47,6 +61,13 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		assignmentErrors:       prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_fetch_assignment_errors_total", Help: "Timer assignment reconciliation errors."}, []string{"space_id", "reason"}),
 		periodPending:          prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_period_pending_total", Help: "Collector periods waiting to be reported."}, []string{"dataset", "frequency"}),
 		periodReportRetry:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_period_report_retry_total", Help: "Collector period report attempts that need retry."}, []string{"dataset", "frequency"}),
+		feedResults:            prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_feed_results_total", Help: "Bounded market feed outcomes; subject, function, IP, and candidate chain are intentionally excluded."}, []string{"market_id", "route_id", "provider_id", "feed_kind", "group_id", "batch_kind", "result"}),
+		configuredGroups:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_configured_groups", Help: "Expected and actual Timer group counts."}, []string{"market_id", "route_id", "kind"}),
+		configuredGroupIDs:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_configured_group_id", Help: "Configured Timer Group identity counts; a value other than one means missing or duplicate identity."}, []string{"market_id", "route_id", "group_id"}),
+		egressFunctions:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_egress_functions", Help: "Expected, returned, non-empty-IP, and distinct-IP function counts."}, []string{"market_id", "route_id", "kind"}),
+		instrumentActive:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_active", Help: "Active instruments in the latest complete snapshot."}, []string{"market_id", "route_id", "provider_id", "result"}),
+		instrumentExchange:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_exchange", Help: "Instrument count by bounded exchange in the latest complete snapshot."}, []string{"market_id", "route_id", "provider_id", "exchange"}),
+		instrumentLastSnapshot: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_last_snapshot_timestamp_seconds", Help: "Fetch timestamp of the latest complete instrument snapshot."}, []string{"market_id", "route_id", "provider_id", "result"}),
 	}
 	metrics.assignmentRequired = registerGaugeVec(reg, metrics.assignmentRequired)
 	metrics.assignmentActive = registerGaugeVec(reg, metrics.assignmentActive)
@@ -63,6 +84,13 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	metrics.assignmentErrors = registerCounterVec(reg, metrics.assignmentErrors)
 	metrics.periodPending = registerGaugeVec(reg, metrics.periodPending)
 	metrics.periodReportRetry = registerCounterVec(reg, metrics.periodReportRetry)
+	metrics.feedResults = registerCounterVec(reg, metrics.feedResults)
+	metrics.configuredGroups = registerGaugeVec(reg, metrics.configuredGroups)
+	metrics.configuredGroupIDs = registerGaugeVec(reg, metrics.configuredGroupIDs)
+	metrics.egressFunctions = registerGaugeVec(reg, metrics.egressFunctions)
+	metrics.instrumentActive = registerGaugeVec(reg, metrics.instrumentActive)
+	metrics.instrumentExchange = registerGaugeVec(reg, metrics.instrumentExchange)
+	metrics.instrumentLastSnapshot = registerGaugeVec(reg, metrics.instrumentLastSnapshot)
 	return metrics
 }
 
@@ -279,6 +307,111 @@ func (m *Metrics) ObservePeriodReportRetry(dataset, frequency string) {
 		return
 	}
 	m.periodReportRetry.WithLabelValues(dataset, frequency).Inc()
+}
+
+// ObserveFeedResult exposes only dimensions with a bounded operational
+// vocabulary. Per-subject routing evidence belongs in structured logs.
+func (m *Metrics) ObserveFeedResult(value FeedMetric) {
+	if m == nil || value.GroupCount <= 0 || value.GroupID < 0 || value.GroupID >= value.GroupCount {
+		return
+	}
+	marketID, routeID := boundedMarketRoute(value.MarketID, value.RouteID)
+	providerID := boundedValue(value.ProviderID, []string{"sina", "tencent", "eastmoney", "baidu", "binance", "none"}, "unknown")
+	feedKind := boundedValue(value.FeedKind, []string{"kline", "instrument", "egress"}, "unknown")
+	batchKind := boundedValue(value.BatchKind, []string{"realtime", "backfill", "gap_repair", "catchup", "instrument_snapshot"}, "unknown")
+	result := boundedValue(value.Result, []string{"success", "fallback", "http_429", "http_5xx", "timeout", "rate_limited", "invalid", "storage_error", "no_candidate"}, "unknown")
+	m.feedResults.WithLabelValues(marketID, routeID, providerID, feedKind, strconv.Itoa(value.GroupID), batchKind, result).Inc()
+}
+
+func (m *Metrics) ObserveConfiguredGroups(marketID, routeID string, expected, actual int) {
+	if m == nil {
+		return
+	}
+	marketID, routeID = boundedMarketRoute(marketID, routeID)
+	m.configuredGroups.WithLabelValues(marketID, routeID, "expected").Set(float64(max(expected, 0)))
+	m.configuredGroups.WithLabelValues(marketID, routeID, "actual").Set(float64(max(actual, 0)))
+}
+
+// ResetConfiguredGroupIDs removes the previous release's identity set before
+// publishing the newly confirmed assignment. Keeping this separate from the
+// expected/actual count lets Monitor detect a hole or duplicate GroupID.
+func (m *Metrics) ResetConfiguredGroupIDs(marketID, routeID string) {
+	if m == nil {
+		return
+	}
+	marketID, routeID = boundedMarketRoute(marketID, routeID)
+	m.configuredGroupIDs.DeletePartialMatch(prometheus.Labels{"market_id": marketID, "route_id": routeID})
+}
+
+// ObserveConfiguredGroupID adds one assignment occurrence. Add, rather than
+// Set, is intentional: duplicate GroupIDs must remain visible as value 2.
+func (m *Metrics) ObserveConfiguredGroupID(marketID, routeID string, groupID int) {
+	if m == nil || groupID < 0 {
+		return
+	}
+	marketID, routeID = boundedMarketRoute(marketID, routeID)
+	m.configuredGroupIDs.WithLabelValues(marketID, routeID, strconv.Itoa(groupID)).Add(1)
+}
+
+// ObserveEgressDiagnostic records optional probe facts. These values are
+// informational and must never be interpreted as a release or activation gate.
+func (m *Metrics) ObserveEgressDiagnostic(marketID, routeID string, expected, results, nonEmpty, distinct int) {
+	if m == nil {
+		return
+	}
+	marketID, routeID = boundedMarketRoute(marketID, routeID)
+	for kind, value := range map[string]int{"expected": expected, "result": results, "non_empty_ip": nonEmpty, "distinct_ip": distinct} {
+		m.egressFunctions.WithLabelValues(marketID, routeID, kind).Set(float64(max(value, 0)))
+	}
+}
+
+func (m *Metrics) ObserveInstrumentSnapshot(marketID, routeID, providerID, result string, active int, exchanges map[string]int, fetchedAt time.Time) {
+	if m == nil {
+		return
+	}
+	marketID, routeID = boundedMarketRoute(marketID, routeID)
+	providerID = boundedValue(providerID, []string{"sina", "eastmoney", "baidu", "binance", "tencent", "none"}, "unknown")
+	result = boundedValue(result, []string{"success", "incomplete", "stale", "invalid"}, "unknown")
+	m.instrumentActive.WithLabelValues(marketID, routeID, providerID, result).Set(float64(max(active, 0)))
+	if !fetchedAt.IsZero() {
+		m.instrumentLastSnapshot.WithLabelValues(marketID, routeID, providerID, result).Set(float64(fetchedAt.UTC().Unix()))
+	}
+	for exchange, count := range exchanges {
+		exchange = boundedValue(exchange, []string{"XSHG", "XSHE", "XBSE", "SPOT", "SWAP"}, "unknown")
+		m.instrumentExchange.WithLabelValues(marketID, routeID, providerID, exchange).Set(float64(max(count, 0)))
+	}
+}
+
+func boundedMarketRoute(marketID, routeID string) (string, string) {
+	marketID = boundedValue(marketID, []string{"stock_cn", "crypto_market"}, "unknown")
+	routeID = strings.TrimSpace(routeID)
+	allowed := routeID == StockCNRouteID || routeID == "stock_cn_instrument_v1" || routeID == "binance_spot_instrument_v1" || routeID == "binance_swap_instrument_v1"
+	if !allowed {
+		for _, product := range []string{"spot", "swap"} {
+			prefix := "binance_" + product + "_kline_"
+			if strings.HasPrefix(routeID, prefix) {
+				frequency := strings.TrimPrefix(routeID, prefix)
+				if parsed, err := marketdata.ParseFrequency(frequency); err == nil && string(parsed) == frequency {
+					allowed = true
+				}
+				break
+			}
+		}
+	}
+	if !allowed {
+		routeID = "unknown"
+	}
+	return marketID, routeID
+}
+
+func boundedValue(value string, allowed []string, fallback string) string {
+	value = strings.TrimSpace(value)
+	for _, candidate := range allowed {
+		if value == candidate {
+			return value
+		}
+	}
+	return fallback
 }
 
 // Observe and SetRetryPending remain no-ops for the retired completion-based

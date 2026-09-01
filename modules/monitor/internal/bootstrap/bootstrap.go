@@ -231,11 +231,22 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore,
 		HealthChecks: report.BuiltInModuleHealthChecks(), DatasetHealthPolicy: datasetHealthPolicy,
 	}
+	marketFetchThresholds := monitorobservability.MarketFetchThresholds{
+		CoordinationStaleAfter:      cfg.MarketHealth.TimerCoordinationStaleAfter,
+		PendingGrace:                cfg.MarketHealth.TimerCoordinationPendingGrace,
+		LowCapacityHeadroom:         cfg.MarketHealth.LowCapacityHeadroom,
+		FeedFailureRateWindow:       cfg.MarketHealth.FeedFailureRateWindow,
+		FeedFailureRateThreshold:    cfg.MarketHealth.FeedFailureRateThreshold,
+		InstrumentSnapshotMaxAge:    cfg.MarketHealth.InstrumentSnapshotMaxAge,
+		InstrumentMinimumCount:      cfg.MarketHealth.InstrumentMinimumCount,
+		InstrumentRequiredExchanges: append([]string(nil), cfg.MarketHealth.InstrumentRequiredExchanges...),
+	}
 	businessFreshness := buildBusinessFreshnessReporter(&monitorobservability.Builder{
 		Metrics: metricsQuery, Hosts: hostStore,
 		Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
 		Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
 		BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
+		MarketFetchThresholds:      marketFetchThresholds,
 	}, runtime.Repositories, resultHook)
 	watchdogRun := func(watchdogCtx context.Context) error {
 		var marketErr, freshnessErr error
@@ -251,7 +262,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		// must not create a false "missing completion" alert.
 		return errors.Join(marketErr, freshnessErr)
 	}
-	health := &healthview.Builder{Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold}, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
+	health := &healthview.Builder{Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold, MarketFetchThresholds: marketFetchThresholds}, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
 	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, doctorContext, health)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {

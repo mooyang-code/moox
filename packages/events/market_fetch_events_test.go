@@ -29,3 +29,21 @@ func TestMarketFetchBatchCompletedValidationRequiresGovernedRoute(t *testing.T) 
 		t.Fatal("expected route mismatch to be rejected")
 	}
 }
+
+func TestMarketFetchBatchCompletedValidationAcceptsProviderError(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := &marketfetchpb.MarketFetchBatchCompleted{
+		BatchId: "batch-provider-error", ScheduleId: "schedule-1", BatchKind: "backfill", DatasetId: "bars", Frequency: "1m", NodeId: "node-1",
+		PlannedCount: 1, RetryCount: 1, Items: []*marketfetchpb.MarketFetchItemResult{{SubjectId: "600000.XSHG", Outcome: "provider_error"}}, CompletedAt: timestamppb.New(time.Now().UTC()), Status: "failed",
+	}
+	encoded, err := registry.Encode(MarketFetchBatchCompleted, payload, PublishOptions{EventID: payload.BatchId, OccurredAt: time.Now().UTC(), SpaceID: "stock_cn", SubjectID: "bars"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.ValidateMessage(encoded.Message); err != nil {
+		t.Fatalf("provider error completion rejected: %v", err)
+	}
+}

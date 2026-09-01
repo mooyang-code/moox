@@ -105,6 +105,10 @@ type MetadataService interface {
 	ActivateDataset(ctx context.Context, req *ActivateDatasetReq) (*ActivateDatasetRsp, error)
 	// BindDatasetSubject 为 Dataset 绑定 Subject。
 	BindDatasetSubject(ctx context.Context, req *BindDatasetSubjectReq) (*BindDatasetSubjectRsp, error)
+	// StageDatasetSubjectSet 原子 staging 完整 Dataset Subject 集合。
+	StageDatasetSubjectSet(ctx context.Context, req *StageDatasetSubjectSetReq) (*StageDatasetSubjectSetRsp, error)
+	// ActivateDatasetSubjectSet 原子激活已完整 staging 的 Dataset Subject 集合。
+	ActivateDatasetSubjectSet(ctx context.Context, req *ActivateDatasetSubjectSetReq) (*ActivateDatasetSubjectSetRsp, error)
 	// ListDatasetSubjects 列出 Dataset 覆盖的 Subject。
 	ListDatasetSubjects(ctx context.Context, req *ListDatasetSubjectsReq) (*ListDatasetSubjectsRsp, error)
 	// CreateFieldGroup 创建普通字段。
@@ -937,6 +941,42 @@ func MetadataService_BindDatasetSubject_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
+func MetadataService_StageDatasetSubjectSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &StageDatasetSubjectSetReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).StageDatasetSubjectSet(ctx, reqbody.(*StageDatasetSubjectSetReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_ActivateDatasetSubjectSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ActivateDatasetSubjectSetReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).ActivateDatasetSubjectSet(ctx, reqbody.(*ActivateDatasetSubjectSetReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func MetadataService_ListDatasetSubjects_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ListDatasetSubjectsReq{}
 	filters, err := f(req)
@@ -1619,6 +1659,14 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_BindDatasetSubject_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.Metadata/StageDatasetSubjectSet",
+			Func: MetadataService_StageDatasetSubjectSet_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/ActivateDatasetSubjectSet",
+			Func: MetadataService_ActivateDatasetSubjectSet_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.Metadata/ListDatasetSubjects",
 			Func: MetadataService_ListDatasetSubjects_Handler,
 		},
@@ -1949,6 +1997,16 @@ func (s *UnimplementedMetadata) BindDatasetSubject(ctx context.Context, req *Bin
 	return nil, errors.New("rpc BindDatasetSubject of service Metadata is not implemented")
 }
 
+// StageDatasetSubjectSet 原子 staging 完整 Dataset Subject 集合。
+func (s *UnimplementedMetadata) StageDatasetSubjectSet(ctx context.Context, req *StageDatasetSubjectSetReq) (*StageDatasetSubjectSetRsp, error) {
+	return nil, errors.New("rpc StageDatasetSubjectSet of service Metadata is not implemented")
+}
+
+// ActivateDatasetSubjectSet 原子激活已完整 staging 的 Dataset Subject 集合。
+func (s *UnimplementedMetadata) ActivateDatasetSubjectSet(ctx context.Context, req *ActivateDatasetSubjectSetReq) (*ActivateDatasetSubjectSetRsp, error) {
+	return nil, errors.New("rpc ActivateDatasetSubjectSet of service Metadata is not implemented")
+}
+
 // ListDatasetSubjects 列出 Dataset 覆盖的 Subject。
 func (s *UnimplementedMetadata) ListDatasetSubjects(ctx context.Context, req *ListDatasetSubjectsReq) (*ListDatasetSubjectsRsp, error) {
 	return nil, errors.New("rpc ListDatasetSubjects of service Metadata is not implemented")
@@ -2183,6 +2241,10 @@ type MetadataClientProxy interface {
 	ActivateDataset(ctx context.Context, req *ActivateDatasetReq, opts ...client.Option) (rsp *ActivateDatasetRsp, err error)
 	// BindDatasetSubject 为 Dataset 绑定 Subject。
 	BindDatasetSubject(ctx context.Context, req *BindDatasetSubjectReq, opts ...client.Option) (rsp *BindDatasetSubjectRsp, err error)
+	// StageDatasetSubjectSet 原子 staging 完整 Dataset Subject 集合。
+	StageDatasetSubjectSet(ctx context.Context, req *StageDatasetSubjectSetReq, opts ...client.Option) (rsp *StageDatasetSubjectSetRsp, err error)
+	// ActivateDatasetSubjectSet 原子激活已完整 staging 的 Dataset Subject 集合。
+	ActivateDatasetSubjectSet(ctx context.Context, req *ActivateDatasetSubjectSetReq, opts ...client.Option) (rsp *ActivateDatasetSubjectSetRsp, err error)
 	// ListDatasetSubjects 列出 Dataset 覆盖的 Subject。
 	ListDatasetSubjects(ctx context.Context, req *ListDatasetSubjectsReq, opts ...client.Option) (rsp *ListDatasetSubjectsRsp, err error)
 	// CreateFieldGroup 创建普通字段。
@@ -3104,6 +3166,46 @@ func (c *MetadataClientProxyImpl) BindDatasetSubject(ctx context.Context, req *B
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &BindDatasetSubjectRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) StageDatasetSubjectSet(ctx context.Context, req *StageDatasetSubjectSetReq, opts ...client.Option) (*StageDatasetSubjectSetRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/StageDatasetSubjectSet")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("StageDatasetSubjectSet")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &StageDatasetSubjectSetRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) ActivateDatasetSubjectSet(ctx context.Context, req *ActivateDatasetSubjectSetReq, opts ...client.Option) (*ActivateDatasetSubjectSetRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ActivateDatasetSubjectSet")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("ActivateDatasetSubjectSet")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ActivateDatasetSubjectSetRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

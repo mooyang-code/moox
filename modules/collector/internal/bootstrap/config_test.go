@@ -41,6 +41,13 @@ storage:
 	assert.Equal(t, "ip://127.0.0.1:30100", cfg.Storage.GatewayTarget)
 }
 
+func TestMarketFetchSpaceIDUsesConfiguredMarketForScheduler(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "stock_cn")
+	if got := marketFetchSpaceID(); got != "stock_cn" {
+		t.Fatalf("marketFetchSpaceID() = %q, want stock_cn", got)
+	}
+}
+
 func TestLoadKlineResampleConfig(t *testing.T) {
 	cfg, err := Load(writeCollectorConfig(t, `kline_resample:
   enabled: true
@@ -52,6 +59,22 @@ func TestLoadKlineResampleConfig(t *testing.T) {
 	assert.Equal(t, 5, cfg.KlineResample.RepairLookbackBuckets)
 	assert.Equal(t, 100, cfg.KlineResample.MaxClaimsPerTick)
 	assert.Equal(t, 20, cfg.KlineResample.WorkerSubjectBatchSize)
+}
+
+func TestLoadStockCNRuntimeCapacityConfig(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, `stock_cn:
+  expected_timer_function_count: 200
+  measured_safe_group_size: 30
+  stagger_start_second: 5
+  stagger_window_seconds: 35
+  stagger_max_starts_per_second: 6
+`))
+	require.NoError(t, err)
+	assert.Equal(t, 200, cfg.StockCN.ExpectedTimerFunctionCount)
+	assert.Equal(t, 30, cfg.StockCN.MeasuredSafeGroupSize)
+	assert.Equal(t, 5, cfg.StockCN.StaggerStartSecond)
+	assert.Equal(t, 35, cfg.StockCN.StaggerWindowSeconds)
+	assert.Equal(t, 6, cfg.StockCN.StaggerMaxStartsPerSecond)
 }
 
 func TestLoadRejectsInvalidKlineResampleRepairLookback(t *testing.T) {

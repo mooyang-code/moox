@@ -15,13 +15,13 @@ import (
 	collectordns "github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
@@ -49,6 +49,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "加载 collector 配置失败: %v", err)
 		return nil, err
 	}
+	log.InfoContextf(ctx, "collector stock_cn runtime config expected_timer_function_count=%d measured_safe_group_size=%d stagger_start_second=%d stagger_window_seconds=%d stagger_max_starts_per_second=%d", cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, cfg.StockCN.StaggerStartSecond, cfg.StockCN.StaggerWindowSeconds, cfg.StockCN.StaggerMaxStartsPerSecond)
 	dbm, err := store.Open(&store.Options{
 		Path:            cfg.Database.Path,
 		MaxIdleConns:    cfg.Database.MaxIdleConns,
@@ -311,25 +312,26 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	// is only used to discover active deployments; using it here makes every
 	// scheduled invocation hit the browser/admin auth surface instead of the
 	// authenticated service route.
-	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 5 * time.Second})
+	// A stock_cn reconciliation reads the complete 170-node Timer fleet from
+	// CloudNode. Keep the request bounded, but allow the control-plane query
+	// enough time to serialize the full fleet instead of treating a healthy
+	// large-fleet response as a coordination failure.
+	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 60 * time.Second})
 	metadataSource := storagesource.NewDatasetSource(cfg.Storage.GatewayTarget)
-	completionSpaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
-	if completionSpaceID == "" {
-		completionSpaceID = "crypto"
-	}
+	completionSpaceID := marketFetchSpaceID()
 	var resampleRunner *collectorresample.Runner
 	var resamplePreparer *collectorresample.Preparer
 	var resampleMetrics *collectorresample.Metrics
 	if cfg.KlineResample.Enabled {
 		resampleMetrics = collectorresample.NewMetrics(prometheus.DefaultRegisterer)
-		metadataClient, metadataErr := binance.NewResampleMetadataClient(cfg.Storage.GatewayTarget, "spot")
-		localStorage, storageErr := binance.NewResampleStorage(deps.StorageRPCGatewayTarget, "spot", "collector:kline_resample")
+		metadataClient, metadataErr := marketstorage.NewResampleMetadataClient(cfg.Storage.GatewayTarget, marketstorage.InstTypeSPOT)
+		localStorage, storageErr := marketstorage.NewResampleStorage(deps.StorageRPCGatewayTarget, marketstorage.InstTypeSPOT, "collector:kline_resample")
 		if metadataErr != nil || storageErr != nil {
 			log.WarnContextf(trpc.BackgroundContext(), "collector kline resample disabled: metadata=%v storage=%v", metadataErr, storageErr)
 		} else {
 			catalog := &collectorresample.Catalog{Metadata: metadataClient.Client, Auth: metadataClient.Auth}
 			resamplePreparer = &collectorresample.Preparer{Rules: dbm.TaskRules(), Source: metadataSource, Catalog: catalog, KeepDuration: cfg.KlineResample.TargetKeepDuration.String(), Limit: cfg.KlineResample.WorkerSubjectBatchSize}
-			if waiter, ok := localStorage.(binance.ResampleViewSyncWaiter); ok {
+			if waiter, ok := localStorage.(marketstorage.ResampleViewSyncWaiter); ok {
 				catalog.ViewSync = waiter
 			} else {
 				log.Warn("collector kline resample disabled: Storage adapter has no View sync waiter")
@@ -346,15 +348,25 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			prepareCancel()
 		}
 	}
-	reconciler := &marketfetch.Reconciler{Rules: dbm.TaskRules(), Symbols: metadataSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache, Metrics: metrics, MaxSubjects: 30}
+	reconciler := &marketfetch.Reconciler{
+		Rules: dbm.TaskRules(), Symbols: metadataSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
+		Metrics: metrics, MaxSubjects: 30,
+		ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
+		MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
+		StockCNStagger: marketfetch.StockCNStaggerConfig{
+			StartSecond:        cfg.StockCN.StaggerStartSecond,
+			WindowSeconds:      cfg.StockCN.StaggerWindowSeconds,
+			MaxStartsPerSecond: cfg.StockCN.StaggerMaxStartsPerSecond,
+		},
+	}
 	readiness := marketfetch.NewPeriodReadinessService(dbm.TaskInstances(), dbm.PeriodReadiness(), cfg.PeriodReadiness.Grace)
 	invokeScheduler := &marketfetch.Scheduler{
 		Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
 		// Use the target resolved by discovery rather than the static local
 		// config.  Invoke SCFs may run outside the Collector host, so a
 		// 127.0.0.1 gateway target would point back at the function itself.
-		Invoker: invoker, Storage: binance.NewBatchStorageWithWriteSource, StorageTarget: deps.StorageRPCGatewayTarget,
-		InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: "crypto", DNSCache: dnsCache,
+		Invoker: invoker, Storage: marketfetch.NewMarketStorageForMarket, StorageTarget: deps.StorageRPCGatewayTarget,
+		InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: completionSpaceID, DNSCache: dnsCache,
 		Symbols:               metadataSource,
 		InvokeNonRealtimeOnly: true,
 	}
@@ -402,7 +414,11 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			})
 		}
 	}
-	periodStorage, storageErr := binance.NewBatchStorageWithWriteSource(deps.StorageRPCGatewayTarget, "spot", "collector")
+	periodMarketType := "spot"
+	if strings.EqualFold(completionSpaceID, marketfetch.StockCNSpaceID) {
+		periodMarketType = "equity"
+	}
+	periodStorage, storageErr := marketfetch.NewMarketStorageForMarket(deps.StorageRPCGatewayTarget, periodMarketType, "collector")
 	if storageErr != nil {
 		log.WarnContextf(trpc.BackgroundContext(), "collector period readiness reporter disabled: %v", storageErr)
 	} else if reporter, ok := periodStorage.(marketfetch.DatasetPeriodReporter); ok {
@@ -439,7 +455,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 				log.WarnContextf(tickCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
 			}
 			if err := reconciler.Reconcile(tickCtx, spaceID); err != nil {
-				log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s: %v", spaceID, err)
+				log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s expected_timer_function_count=%d measured_safe_group_size=%d: %v", spaceID, cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, err)
 			}
 			if err := readiness.EnsureCurrentAndNext(tickCtx, spaceID, time.Now().UTC()); err != nil {
 				log.WarnContextf(tickCtx, "collector period readiness prebuild failed space=%s: %v", spaceID, err)
@@ -447,6 +463,13 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		}()
 		return nil
 	})
+}
+
+func marketFetchSpaceID() string {
+	if spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")); spaceID != "" {
+		return spaceID
+	}
+	return "crypto_market"
 }
 
 func runtimeAuth(cfg ServiceAuthConfig) runtimeapp.AuthConfig {

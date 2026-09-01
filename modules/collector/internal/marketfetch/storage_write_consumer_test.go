@@ -18,16 +18,16 @@ import (
 func TestHandleStorageWriteUpdatesAssignedTaskInstances(t *testing.T) {
 	db := newTestMarketFetchStore(t)
 	ctx := context.Background()
-	instance := domain.TaskInstance{SpaceID: "crypto", TaskID: "task-btc", RuleID: "rule", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
+	instance := domain.TaskInstance{SpaceID: "crypto_market", TaskID: "task-btc", RuleID: "rule", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
 	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
-	require.NoError(t, db.TaskInstances().AssignMarketFetchFunction(ctx, "crypto", "binance", "spot", "bars", "1m", "fetcher-1", []string{"BTC-USDT"}))
+	require.NoError(t, db.TaskInstances().AssignMarketFetchFunction(ctx, "crypto_market", "binance", "spot", "bars", "1m", "fetcher-1", []string{"BTC-USDT"}))
 	at := time.Date(2026, 8, 5, 2, 3, 4, 0, time.UTC)
 	delivery := &events.EventDelivery{
 		Message: &eventpb.EventMessage{OccurredAt: timestamppb.New(at)},
-		Payload: &storagepb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "bars", WriteSource: "scf:fetcher-1", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "bars", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: at.Format(time.RFC3339)}}}}}},
+		Payload: &storagepb.DatasetRowsUpserted{SpaceId: "crypto_market", DatasetId: "bars", WriteSource: "scf:fetcher-1", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto_market", DatasetId: "bars", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: at.Format(time.RFC3339)}}}}}},
 	}
 	require.NoError(t, handleStorageWrite(ctx, db.TaskInstances(), delivery))
-	stored, err := db.TaskInstances().Get(ctx, "crypto", "task-btc")
+	stored, err := db.TaskInstances().Get(ctx, "crypto_market", "task-btc")
 	require.NoError(t, err)
 	require.Equal(t, domain.InstanceStatusSuccess, stored.LastExecStatus)
 	require.NotNil(t, stored.LastExecTime)

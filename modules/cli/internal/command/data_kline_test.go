@@ -61,7 +61,7 @@ func TestDataKlineBuildsCatalogBackedRPCRequest(t *testing.T) {
 	assert.Equal(t, uint32(5), reader.request.GetPage().GetSize())
 	require.Len(t, reader.request.GetSelectors(), 1)
 	selector := reader.request.GetSelectors()[0]
-	assert.Equal(t, "crypto", selector.GetSpaceId())
+	assert.Equal(t, "crypto_market", selector.GetSpaceId())
 	assert.Equal(t, "binance_spot_kline_1m", selector.GetDatasetId())
 	assert.Equal(t, "BTC-USDT", selector.GetSubjectId())
 	assert.Equal(t, "1m", selector.GetFreq())
@@ -70,6 +70,24 @@ func TestDataKlineBuildsCatalogBackedRPCRequest(t *testing.T) {
 	deadline, ok := reader.ctx.Deadline()
 	require.True(t, ok)
 	assert.WithinDuration(t, time.Now().Add(15*time.Second), deadline, time.Second)
+}
+
+func TestDataKlineBuildsStockCNCatalogBackedRPCRequest(t *testing.T) {
+	reader := &fakeTimeSeriesReader{rsp: &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}}
+	_, _, cmd := newTestDataKlineCommand(t, reader)
+	cmd.SetArgs([]string{"--data-type", "stock_cn", "--symbol", "600519.SH", "--interval", "1m"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.NotNil(t, reader.request)
+	require.Len(t, reader.request.GetSelectors(), 1)
+	selector := reader.request.GetSelectors()[0]
+	assert.Equal(t, "stock_cn", selector.GetSpaceId())
+	assert.Equal(t, "stock_cn_kline", selector.GetDatasetId())
+	assert.Equal(t, "600519.SH", selector.GetSubjectId())
+	assert.Equal(t, "1m", selector.GetFreq())
+	assert.Empty(t, selector.GetSeriesTag())
+	assert.Equal(t, "stock_cn", reader.request.GetSpaceId())
+	assert.Equal(t, "stock_cn_kline", reader.request.GetDatasetId())
 }
 
 func TestDataKlineValidatesRequiredFlagsAndRange(t *testing.T) {
@@ -146,9 +164,9 @@ func TestDataKlineEmitsIncompleteViewState(t *testing.T) {
 	stdout, _, cmd := newTestDataKlineCommand(t, reader)
 	cmd.SetArgs([]string{"--data-type", "crypto", "--symbol", "BTC-USDT"})
 	require.NoError(t, cmd.Execute())
-	var response pb.ReadTimeSeriesRowsRsp
-	require.NoError(t, protojson.Unmarshal(stdout.Bytes(), &response))
-	assert.False(t, response.GetComplete())
+	var rsp pb.ReadTimeSeriesRowsRsp
+	require.NoError(t, protojson.Unmarshal(stdout.Bytes(), &rsp))
+	assert.False(t, rsp.GetComplete())
 }
 
 func TestDataKlineRejectsConfigAsOutput(t *testing.T) {

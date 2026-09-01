@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	JobTypeCollectBinanceKline  = kline.JobType
-	JobTypeCollectBinanceSymbol = symbol.JobType
+	JobTypeCollectBinanceKline      = kline.JobType
+	JobTypeCollectBinanceInstrument = symbol.JobType
 )
 
 // JobRoute maps one collector provider/data type to its queue identity.
@@ -22,7 +22,7 @@ type JobRoute struct {
 
 var jobRoutes = []JobRoute{
 	{Exchange: "binance", DataType: "kline", JobType: JobTypeCollectBinanceKline},
-	{Exchange: "binance", DataType: "symbol", JobType: JobTypeCollectBinanceSymbol},
+	{Exchange: "binance", DataType: "instrument", JobType: JobTypeCollectBinanceInstrument},
 }
 
 func init() {

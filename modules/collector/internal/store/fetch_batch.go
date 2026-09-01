@@ -252,6 +252,27 @@ func (r *FetchBatchRepository) ListDue(ctx context.Context, spaceID string, now 
 	return batches, err
 }
 
+// HasActiveTask prevents non-realtime recovery work from competing with a
+// realtime batch for the same logical task. Task IDs are stable and appear in
+// the persisted request JSON, while the batch table intentionally stays free
+// of per-item columns.
+func (r *FetchBatchRepository) HasActiveTask(ctx context.Context, spaceID, taskID string, kinds ...domain.BatchKind) (bool, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return false, nil
+	}
+	query := r.db.WithContext(ctx).Model(&domain.BatchInvocation{}).
+		Where("c_space_id = ? AND c_status IN ? AND c_request_json LIKE ?", spaceID, []domain.BatchStatus{domain.BatchStatusPlanned, domain.BatchStatusDispatched}, `%"task_id":"`+taskID+`"%`)
+	if len(kinds) > 0 {
+		query = query.Where("c_batch_kind IN ?", kinds)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (r *FetchBatchRepository) Cleanup(ctx context.Context, successBefore, failureBefore time.Time) error {
 	if err := r.db.WithContext(ctx).Where("c_status = ? AND c_completed_at IS NOT NULL AND c_completed_at < ?", domain.BatchStatusSucceeded, successBefore.UTC()).Delete(&domain.BatchInvocation{}).Error; err != nil {
 		return err

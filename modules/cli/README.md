@@ -53,7 +53,7 @@ frequency 的旧 View 兼容兜底。默认不删 Primary 事实数据；只有�
 moox-cli storage repair-view \
   --storage-conf /data/moox/storage/config/storage.yaml \
   --package-root /data/moox/storage \
-  --space-id crypto \
+  --space-id crypto_market \
   --view-id binance_spot_kline_1m_factor \
   --yes
 ```
@@ -223,14 +223,14 @@ moox-cli setup factors --file ./custom.toml
 如果 `custom.toml` 启用了 `[factors]`，同一个 `setup init` 还会从
 `factors.source_dir` 读取 Python 因子，调用 FactorMgr 导入定义、建立绑定并启用因子。
 仓库的 `custom.toml.example` 已给出 `bias`、`cci` 到
-`crypto/binance_spot_kline_1m_view` 的默认配置；修改
+`crypto_market/binance_spot_kline_1m_view` 的默认配置；修改
 `[[factors.items]]` 的 `space_id`、`source_view_id`、`freq` 和参数即可切换默认关联。
 重复执行时同源文件和同运行契约会报告 unchanged；如果源码或输入/输出/参数契约不同，命令会停止而不会静默覆盖已有因子。修改同一因子的默认 View 或频率后再次执行，会删除此前由 `setup factors` 创建的旧绑定。
 
 `deploy-storage` 同机部署 `storage-primary` 和统一的 `storage-view`，并更新控制面的 Storage 服务
 位置。在 macOS 上发布 Linux Storage 时，CLI 自动通过 `compile_host` 构建 CGO
 二进制后再打包。`setup init` 固定从配置目录读取 `metadata.yaml`，把
-`stock_cn`、`crypto` 写入 Admin，把它们和内部 `moox_system` 元数据写入
+`stock_cn`、`crypto_market` 写入 Admin，把它们和内部 `moox_system` 元数据写入
 Storage。已有资源逐字段一致时记为 unchanged，不一致时停止且不覆盖。
 
 如果 Storage 已经初始化过且当前 seed 与线上元数据不同，`setup init` 会按设计停止；此时使用
@@ -327,7 +327,7 @@ moox-cli metadata import \
   --file ../../examples/setup/default/metadata.yaml \
   --metadata-url http://127.0.0.1:20200 \
   --if-not-exists \
-  --spaces crypto
+  --spaces crypto_market
 
 moox-cli metadata import --file ../../examples/setup/default/metadata.yaml --dry-run
 
@@ -350,11 +350,11 @@ moox-cli storage import \
   --file ~/data/ARB-USDT.csv \
   --access-url http://127.0.0.1:20201 \
   --metadata-url http://127.0.0.1:20200 \
-  --space crypto \
+  --space crypto_market \
   --view ar_usdt_close_view \
   --dataset spot_kline_1h \
   --subject ARB-USDT \
-  --data-source crypto \
+  --data-source crypto_market \
   --series-tag venue:binance \
   --freq 1h \
   --time-column candle_begin_time

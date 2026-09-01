@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -h "${SOURCE}" ]]; do
+  SOURCE_DIR="$(cd -P "$(dirname "${SOURCE}")" >/dev/null 2>&1 && pwd)"
+  SOURCE="$(readlink "${SOURCE}")"
+  [[ "${SOURCE}" != /* ]] && SOURCE="${SOURCE_DIR}/${SOURCE}"
+done
+ROOT="$(cd -P "$(dirname "${SOURCE}")/../.." && pwd)"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-collector-scf-package-test.XXXXXX")"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 FAKE_BIN="${TMP_ROOT}/bin"
@@ -27,15 +33,20 @@ unzip -l "${package_path}" >"${listing_path}"
 grep -q ' main$' "${listing_path}"
 ! grep -q 'trpc_go.yaml' "${listing_path}"
 
-# The implementation file is also a supported direct invocation path. Keep
-# this check because the public symlink and the implementation have different
-# BASH_SOURCE paths.
-direct_package_path="${TMP_ROOT}/collector-scf-direct.zip"
+stock_package_path="${TMP_ROOT}/collector-stock-cn-scf.zip"
 (
   cd "${TMP_ROOT}"
-  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="market_data" SCF_ENTRYPOINT="market_data" VERSION="contract-test-direct" OUT_PATH="${direct_package_path}" \
-    bash "${ROOT}/scripts/build/build-collector-scf-package.sh"
+  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="stock_cn" SCF_ENTRYPOINT="stock_cn" MOOX_STORAGE_PRIMARY_AUTH_SECRET="test-storage-secret" VERSION="contract-test" OUT_PATH="collector-stock-cn-scf.zip" \
+    bash "${ROOT}/scripts/build-collector-scf-package.sh"
 )
-unzip -l "${direct_package_path}" >"${TMP_ROOT}/direct-listing.txt"
-grep -q ' main$' "${TMP_ROOT}/direct-listing.txt"
-! grep -q 'trpc_go.yaml' "${TMP_ROOT}/direct-listing.txt"
+stock_listing_path="${TMP_ROOT}/stock-listing.txt"
+unzip -l "${stock_package_path}" >"${stock_listing_path}"
+grep -q ' main$' "${stock_listing_path}"
+grep -q ' sources/market/binance.yaml$' "${stock_listing_path}"
+grep -q ' sources/market/sina.yaml$' "${stock_listing_path}"
+grep -q ' sources/market/tencent.yaml$' "${stock_listing_path}"
+grep -q ' sources/market/eastmoney.yaml$' "${stock_listing_path}"
+grep -q ' sources/market/baidu.yaml$' "${stock_listing_path}"
+grep -q ' markets/stock_cn/calendar.yaml$' "${stock_listing_path}"
+grep -q ' markets/stock_cn/route.yaml$' "${stock_listing_path}"
+! grep -q 'trpc_go.yaml' "${stock_listing_path}"

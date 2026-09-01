@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,20 +24,27 @@ const (
 )
 
 var managedEnvironmentKeys = map[string]struct{}{
-	"MOOX_MARKET_FETCH_PROVIDER":        {},
-	"MOOX_MARKET_FETCH_MARKET_TYPE":     {},
-	"MOOX_MARKET_FETCH_MARKET_ID":       {},
-	"MOOX_MARKET_FETCH_INSTRUMENT_TYPE": {},
-	"MOOX_MARKET_FETCH_SOURCE_ID":       {},
-	"MOOX_MARKET_FETCH_SERIES_TAG":      {},
-	"MOOX_MARKET_FETCH_DATASET_ID":      {},
-	"MOOX_MARKET_FETCH_FREQUENCY":       {},
-	"MOOX_MARKET_FETCH_SUBJECTS":        {},
-	"MOOX_MARKET_FETCH_SYMBOLS_JSON":    {},
-	"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": {},
-	"MOOX_MARKET_FETCH_DNS_ROUTES_JSON": {},
-	"MOOX_MARKET_FETCH_DNS_HASH":        {},
-	"MOOX_MARKET_FETCH_DNS_UPDATED_AT":  {},
+	"MOOX_MARKET_FETCH_PROVIDER":            {},
+	"MOOX_MARKET_FETCH_MARKET_TYPE":         {},
+	"MOOX_MARKET_FETCH_MARKET_ID":           {},
+	"MOOX_MARKET_FETCH_INSTRUMENT_TYPE":     {},
+	"MOOX_MARKET_FETCH_SOURCE_ID":           {},
+	"MOOX_MARKET_FETCH_SERIES_TAG":          {},
+	"MOOX_MARKET_FETCH_DATASET_ID":          {},
+	"MOOX_MARKET_FETCH_FREQUENCY":           {},
+	"MOOX_MARKET_FETCH_SUBJECTS":            {},
+	"MOOX_MARKET_FETCH_SYMBOLS_JSON":        {},
+	"MOOX_MARKET_FETCH_ASSIGNMENT_HASH":     {},
+	"MOOX_MARKET_FETCH_DNS_ROUTES_JSON":     {},
+	"MOOX_MARKET_FETCH_DNS_HASH":            {},
+	"MOOX_MARKET_FETCH_DNS_UPDATED_AT":      {},
+	"MOOX_MARKET_FETCH_PROVIDER_CHAIN":      {},
+	"MOOX_MARKET_FETCH_ROUTE_VERSION":       {},
+	"MOOX_MARKET_FETCH_GROUP_ID":            {},
+	"MOOX_MARKET_FETCH_GROUP_COUNT":         {},
+	"MOOX_MARKET_FETCH_MODE":                {},
+	"MOOX_METRICS_EVENTBUS_URL":             {},
+	"MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE": {},
 }
 
 func (s *Service) SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *pb.BatchUpdateNodeRuntimeConfigsReq) (*pb.SubmitNodeBatchRsp, error) {
@@ -104,8 +112,17 @@ func (s *Service) preflightRuntimeConfig(ctx context.Context, spaceID string, it
 }
 
 func isSupportedTimerCron(cron string) bool {
-	switch strings.TrimSpace(cron) {
-	case "0 * * * * * *", "0 */5 * * * * *", "0 */15 * * * * *", "0 */30 * * * * *", "0 0 * * * * *", "0 0 */4 * * * *", "0 0 0 * * * *", "0 0 0 * * 1 *", "0 0 0 1 * * *", "0 0 8 1 * * *":
+	fields := strings.Fields(cron)
+	if len(fields) != 7 {
+		return false
+	}
+	second, err := strconv.Atoi(fields[0])
+	if err != nil || second < 0 || second > 59 {
+		return false
+	}
+	fields[0] = "0"
+	switch strings.Join(fields, " ") {
+	case "0 * * * * * *", "0 */5 * * * * *", "0 */15 * * * * *", "0 */30 * * * * *", "0 0 * * * * *", "0 0 */4 * * * *", "0 0 0 * * * *":
 		return true
 	default:
 		return false

@@ -375,7 +375,7 @@ func validateMarketFetchBatchCompleted(message *eventpb.EventMessage, value prot
 		return fmt.Errorf("market fetch batch_id does not match event_id")
 	}
 	switch payload.GetBatchKind() {
-	case "realtime", "symbol_snapshot", "catchup":
+	case "realtime", "instrument_snapshot", "catchup", "backfill", "gap_repair":
 	default:
 		return fmt.Errorf("market fetch batch_kind %q is invalid", payload.GetBatchKind())
 	}
@@ -414,7 +414,7 @@ func validateMarketFetchBatchCompleted(message *eventpb.EventMessage, value prot
 		switch item.GetOutcome() {
 		case "success":
 			success++
-		case "http_429", "http_5xx", "network_error", "storage_error":
+		case "http_429", "http_5xx", "network_error", "storage_error", "provider_error":
 			retryable++
 		case "invalid_request":
 			permanent++

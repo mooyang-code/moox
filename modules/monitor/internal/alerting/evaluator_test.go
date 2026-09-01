@@ -23,7 +23,7 @@ func TestEvaluatorRecordsNotificationConstructionFailure(t *testing.T) {
 	}
 	repos := mgr.Repositories()
 	ctx := context.Background()
-	check := domain.Check{SpaceID: "crypto", CheckID: "collector:market", Name: "行情采集", Enabled: true}
+	check := domain.Check{SpaceID: "crypto_market", CheckID: "collector:market", Name: "行情采集", Enabled: true}
 	if err := repos.Checks.Create(ctx, &check); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestRecoveryNotificationFailureKeepsAlertFiringForRetry(t *testing.T) {
 	}
 	repos := mgr.Repositories()
 	ctx := context.Background()
-	check := domain.Check{SpaceID: "crypto", CheckID: "collector:recovery", Name: "行情采集", Enabled: true}
+	check := domain.Check{SpaceID: "crypto_market", CheckID: "collector:recovery", Name: "行情采集", Enabled: true}
 	if err := repos.Checks.Create(ctx, &check); err != nil {
 		t.Fatal(err)
 	}

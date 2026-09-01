@@ -185,7 +185,7 @@ func TestBusinessFreshnessReporterStoresBalanceCheckInCryptoMarket(t *testing.T)
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	results, err := repositories.Results.Recent(t.Context(), "crypto", "balance:moox_trade", 1)
+	results, err := repositories.Results.Recent(t.Context(), "crypto_market", "balance:moox_trade", 1)
 	if err != nil {
 		t.Fatal(err)
 	}

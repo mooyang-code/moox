@@ -7,9 +7,9 @@ import (
 
 func TestValidateRetainViewsRequiresExactConfirmedInventory(t *testing.T) {
 	keep := []string{
-		"crypto/binance_spot_kline_1m_view",
-		"crypto/perpetual_kline_1h_view",
-		"crypto/spot_kline_1h_view",
+		"crypto_market/binance_spot_kline_1m_view",
+		"crypto_market/perpetual_kline_1h_view",
+		"crypto_market/spot_kline_1h_view",
 		"moox_system/host_resource_view",
 		"moox_system/host_fs_view",
 		"moox_system/host_disk_view",

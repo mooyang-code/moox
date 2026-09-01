@@ -14,9 +14,9 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
@@ -30,14 +30,29 @@ const (
 	DefaultMaxPlan   = 1000
 	// 80 items / 16 workers yields at most five 1.5-second storage-read waves,
 	// leaving room inside the fixed 10-second tRPC timer deadline.
-	gapAuditPageSize = 40
-	gapAuditWorkers  = 4
-	gapAuditInterval = 5 * time.Minute
+	gapAuditPageSize      = 40
+	gapAuditWorkers       = 4
+	gapAuditInterval      = 5 * time.Minute
+	gapAuditRangePageSize = 1000
+	gapAuditMaxRangePages = 3
 )
 
 type scheduleState struct {
 	target      time.Time
 	fingerprint string
+}
+
+type gapAuditPlan struct {
+	Kind            domain.BatchKind
+	Start           time.Time
+	End             time.Time
+	BarLimit        int
+	MaxConcurrency  int
+	RateBudgetRatio float64
+}
+
+type timeSeriesRangeReader interface {
+	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq) (*storagepb.ReadTimeSeriesRowsRsp, error)
 }
 
 // Scheduler scans enabled rules and creates stable SCF batches. Realtime work
@@ -50,7 +65,7 @@ type Scheduler struct {
 	Batches           *store.FetchBatchRepository
 	Retries           *store.FetchRetryRepository
 	Invoker           *scfinvoker.Client
-	Storage           func(string, string, string) (binance.BatchStorage, error)
+	Storage           func(string, string, string) (StorageReader, error)
 	StorageTarget     string
 	BatchSize         int
 	InvokeConcurrency int
@@ -58,7 +73,7 @@ type Scheduler struct {
 	Metrics           *Metrics
 	SpaceID           string
 	Symbols           datasetSource
-	// InvokeNonRealtimeOnly keeps the old Invoke path for symbol snapshots and
+	// InvokeNonRealtimeOnly keeps the Invoke path for instrument snapshots and
 	// bounded catch-up while realtime K-lines run from Timer-triggered nodes.
 	InvokeNonRealtimeOnly bool
 	DNSCache              interface {
@@ -75,10 +90,23 @@ type Scheduler struct {
 	invokeSem        chan struct{}
 }
 
-// Symbol snapshots are one immutable fetch/write/activation transaction. The
-// Storage contract has no cross-invocation barrier, so splitting one provider
-// response across SCFs would allow a partial catalogue to become active.
-const fullSymbolSnapshotShards = 1
+// fullInstrumentSnapshotShards keeps each SCF's SQLite metadata registration
+// small while still sourcing the complete exchange snapshot. The same fixed
+// shard count is used for crypto and stock_cn so deployment identity remains
+// stable as the catalogue grows.
+const fullInstrumentSnapshotShards = 32
+
+const (
+	defaultBatchCompletionDeadline     = 70 * time.Second
+	instrumentSnapshotCompletionWindow = 6 * time.Minute
+)
+
+func batchCompletionDeadline(kind domain.BatchKind) time.Duration {
+	if kind == domain.BatchKindInstrumentSnapshot {
+		return instrumentSnapshotCompletionWindow
+	}
+	return defaultBatchCompletionDeadline
+}
 
 func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	if s == nil || s.Rules == nil || s.Batches == nil || s.Invoker == nil {
@@ -122,23 +150,34 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	rules := filterMarketFetchRules(allRules)
 	invokeRules := filterInvokeRules(rules)
 	rules = rotateRulesAfter(rules, s.lastRuleID)
-	nodes, err := s.Invoker.ListMarketFetchers(ctx, spaceID)
+	// The scheduler still owns the durable TaskInstance inventory for Timer
+	// K-lines even when InvokeNonRealtimeOnly keeps realtime execution out of
+	// this path. ListMarketFetchers intentionally returns Invoke nodes only, so
+	// fetch the Timer fleet separately before expanding the rule.
+	invokeNodes, err := s.Invoker.ListMarketFetchers(ctx, spaceID)
 	if err != nil {
 		return fmt.Errorf("list market fetcher nodes: %w", err)
 	}
+	timerNodes, err := s.Invoker.ListTimerMarketFetchers(ctx, spaceID)
+	if err != nil {
+		return fmt.Errorf("list timer market fetcher nodes: %w", err)
+	}
+	nodes := append(append([]scfinvoker.Node(nil), invokeNodes...), timerNodes...)
 	sort.Slice(nodes, func(i, j int) bool {
 		if nodes[i].Region != nodes[j].Region {
 			return nodes[i].Region < nodes[j].Region
 		}
 		return nodes[i].FunctionName < nodes[j].FunctionName
 	})
-	if len(nodes) == 0 && len(invokeRules) > 0 {
-		return fmt.Errorf("no active market fetcher nodes")
+	invokeNodes = filterNodesByTrigger(nodes, "invoke")
+	timerNodes = filterNodesByTrigger(nodes, "timer")
+	if len(invokeNodes) == 0 && len(invokeRules) > 0 {
+		return fmt.Errorf("no active Invoke market fetcher nodes")
 	}
-	if err := s.recoverDue(ctx, spaceID, nodes, now); err != nil {
+	if err := s.recoverDue(ctx, spaceID, invokeNodes, now); err != nil {
 		log.WarnContextf(ctx, "recover market fetch batches failed: %v", err)
 	}
-	if err := s.dispatchDueRetries(ctx, spaceID, nodes, now); err != nil {
+	if err := s.dispatchDueRetries(ctx, spaceID, invokeNodes, now); err != nil {
 		log.WarnContextf(ctx, "dispatch market fetch retries failed: %v", err)
 	}
 	planned := 0
@@ -151,14 +190,21 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			log.WarnContextf(ctx, "skip invalid collection rule=%s: %v", rule.RuleID, err)
 			continue
 		}
+		ruleNodes := timerNodes
+		if !isKlineRule(rule) {
+			ruleNodes = invokeNodes
+		}
+		if len(ruleNodes) == 0 {
+			log.WarnContextf(ctx, "skip collection rule=%s: no nodes for trigger type", rule.RuleID)
+			continue
+		}
 		activeTaskIDs := make([]string, 0, len(items)*len(frequencies))
 		ruleFingerprintParts := make([]string, 0, len(items)*len(frequencies))
 		instancesChanged := false
 		for _, frequency := range frequencies {
 			frequencyTaskIDs := make([]string, 0, len(items))
 			for index := range items {
-				spec := domain.TaskSpec{Provider: items[index].Provider, MarketType: items[index].MarketType, DataType: items[index].DataType, DatasetID: items[index].DatasetID, SubjectID: items[index].SubjectID, Frequency: frequency}
-				items[index].TaskID = domain.StableTaskID(spaceID, rule.RuleID, spec)
+				items[index].TaskID = collectionItemTaskID(spaceID, rule.RuleID, items[index], frequency)
 			}
 			for _, item := range items {
 				frequencyTaskIDs = append(frequencyTaskIDs, item.TaskID)
@@ -167,8 +213,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			if s.Instances != nil {
 				instances := make([]domain.TaskInstance, 0, len(items))
 				for _, item := range items {
-					spec := domain.TaskSpec{Provider: item.Provider, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency}
-					taskID := domain.StableTaskID(spaceID, rule.RuleID, spec)
+					taskID := collectionItemTaskID(spaceID, rule.RuleID, item, frequency)
 					activeTaskIDs = append(activeTaskIDs, taskID)
 					instances = append(instances, domain.TaskInstance{SpaceID: spaceID, TaskID: taskID, RuleID: rule.RuleID, Provider: item.Provider, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency, TaskParams: rule.CollectParams})
 				}
@@ -201,8 +246,8 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				continue
 			}
 			batchItems := append([]domain.CollectionItem(nil), items...)
-			batchSize := s.realtimeBatchSize(strings.TrimSpace(batchItems[0].Provider), len(batchItems), nodes)
-			if strings.EqualFold(rule.DataType, "symbol") {
+			batchSize := s.realtimeBatchSize(len(batchItems), ruleNodes)
+			if strings.EqualFold(rule.DataType, domain.InstrumentDataType) {
 				batchSize = 1
 			}
 			for start, shard := 0, 0; start < len(batchItems); start, shard = start+batchSize, shard+1 {
@@ -213,22 +258,29 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				// planned is the global batch cursor. Do not add shard again: the
 				// loop already increments planned after every shard, and adding it
 				// would skip every other node when the fleet size is even.
-				node := nodes[planned%len(nodes)]
+				node := ruleNodes[planned%len(ruleNodes)]
 				for index := start; index < end; index++ {
 					batchItems[index].TargetDataTime = target.Format(time.RFC3339Nano)
 					batchItems[index].Frequency = frequency
 					batchItems[index].BarLimit = 3
+					if strings.EqualFold(batchItems[index].DataType, domain.InstrumentDataType) {
+						// Every snapshot shard must use one generation timestamp. The
+						// provider response is fetched independently, so this field is
+						// the generation fence used by staged shard activation.
+						batchItems[index].SnapshotAt = now.Format(time.RFC3339Nano)
+					}
 				}
 				scheduleID := fmt.Sprintf("%s:%s:%s", rule.RuleID, frequency, target.Format(time.RFC3339Nano))
 				batchKind := batchKindForRule(rule)
 				batchID := stableID(spaceID, scheduleID, string(batchKind), fmt.Sprintf("%d", shard), "1")
+				syncPointID := stableID(spaceID, scheduleID, string(batchKind), fmt.Sprintf("%d", shard), "write")
 				// The item is the normalized source of truth. Older rules may have an
 				// empty top-level market_type while collect_params already contains
 				// the canonical value; forwarding rule.MarketType would make SCF
 				// reject the whole batch before it can inspect the item.
 				batchProvider, batchMarketType := normalizedBatchIdentity(batchItems[start], rule)
-				req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
-				created, err := s.planOne(ctx, rule, req, node, nodes)
+				req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
+				created, err := s.planOne(ctx, rule, req, node, ruleNodes)
 				if err != nil {
 					return err
 				}
@@ -260,7 +312,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		s.lastRuleID = rule.RuleID
 	}
 	if s.Instances != nil && (s.lastGapAudit.IsZero() || now.Sub(s.lastGapAudit) >= gapAuditInterval) {
-		if err := s.auditGaps(ctx, spaceID, rules, nodes, now); err != nil {
+		if err := s.auditGaps(ctx, spaceID, rules, invokeNodes, now); err != nil {
 			log.WarnContextf(ctx, "market fetch gap audit failed: %v", err)
 		} else {
 			s.lastGapAudit = now
@@ -307,6 +359,16 @@ func filterInvokeRules(rules []domain.TaskRule) []domain.TaskRule {
 		}
 		if dataType != "kline" {
 			filtered = append(filtered, rule)
+		}
+	}
+	return filtered
+}
+
+func filterNodesByTrigger(nodes []scfinvoker.Node, trigger string) []scfinvoker.Node {
+	filtered := make([]scfinvoker.Node, 0, len(nodes))
+	for _, node := range nodes {
+		if strings.EqualFold(strings.TrimSpace(node.TriggerType), trigger) {
+			filtered = append(filtered, node)
 		}
 	}
 	return filtered
@@ -382,10 +444,14 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 			continue
 		}
 		for _, item := range items {
-			if item.SubjectID == "" || item.Symbol == "" {
+			if item.SubjectID == "" {
 				continue
 			}
-			externalSymbols[rule.RuleID+"\x00"+strings.ToUpper(strings.TrimSpace(item.SubjectID))] = item.Symbol
+			symbol, symbolErr := marketProviderSymbol(rule.MarketType, item.SubjectID, item.Symbol)
+			if symbolErr != nil {
+				continue
+			}
+			externalSymbols[rule.RuleID+"\x00"+strings.ToUpper(strings.TrimSpace(item.SubjectID))] = symbol
 		}
 	}
 	// Do not filter by last_exec_time here. A recent invocation can still leave
@@ -405,7 +471,7 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 		instance domain.TaskInstance
 		rule     domain.TaskRule
 		symbol   string
-		start    time.Time
+		plan     gapAuditPlan
 		stale    bool
 		err      error
 	}
@@ -425,7 +491,7 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 				if !ok || !strings.EqualFold(instance.DataType, "kline") || instance.SubjectID == "" {
 					continue
 				}
-				result := auditResult{instance: instance, rule: rule, start: now.Add(-time.Hour)}
+				result := auditResult{instance: instance, rule: rule}
 				result.symbol = externalSymbols[rule.RuleID+"\x00"+strings.ToUpper(strings.TrimSpace(instance.SubjectID))]
 				if result.symbol == "" {
 					result.err = fmt.Errorf("external symbol is missing for subject %s", instance.SubjectID)
@@ -434,11 +500,13 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 				}
 				threshold := gapAuditThreshold(instance.Frequency)
 				if s.Storage == nil {
+					watermark, found := time.Time{}, false
 					if instance.LastExecTime != nil && !instance.LastExecTime.IsZero() {
-						result.start = instance.LastExecTime.UTC()
+						watermark = instance.LastExecTime.UTC()
+						found = true
 					}
-					result.stale = instance.LastExecTime == nil || instance.LastExecTime.IsZero() || now.Sub(result.start) >= threshold
-					if result.stale {
+					result.plan, result.stale, result.err = buildGapAuditPlanChecked(now, rule, instance, watermark, found)
+					if result.err != nil || result.stale {
 						results <- result
 					}
 					continue
@@ -452,22 +520,50 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 				if storageErr == nil {
 					watermark, found, watermarkErr := storage.LatestTimeSeriesTime(checkCtx, &storagepb.TimeSeriesSelector{
 						SpaceId: spaceID, DatasetId: instance.DatasetID, SubjectId: instance.SubjectID,
-						Freq: freq, SeriesTag: stringPtr("venue:" + strings.ToLower(instance.Provider)),
+						Freq: freq, SeriesTag: stringPtr(gapAuditSeriesTag(instance)),
 					})
 					storageErr = watermarkErr
 					if storageErr == nil && found && !watermark.IsZero() {
-						result.start = watermark.UTC()
-						result.stale = now.Sub(result.start) >= threshold
-					} else if storageErr == nil {
-						if instance.LastExecTime != nil && !instance.LastExecTime.IsZero() {
-							result.start = instance.LastExecTime.UTC()
+						result.plan, result.stale, result.err = buildGapAuditPlanChecked(now, rule, instance, watermark.UTC(), true)
+						if result.err == nil {
+							if rangeReader, ok := storage.(timeSeriesRangeReader); ok {
+								rangeStart, rangeErr := gapAuditCoverageStart(now, rule, instance)
+								if rangeErr != nil {
+									result.err = rangeErr
+								} else if !rangeStart.IsZero() && watermark.After(rangeStart) {
+									missing, hasGap, gapErr := findEarliestMissingBucket(checkCtx, rangeReader, &storagepb.TimeSeriesSelector{
+										SpaceId: spaceID, DatasetId: instance.DatasetID, SubjectId: instance.SubjectID,
+										Freq: freq, SeriesTag: stringPtr(gapAuditSeriesTag(instance)),
+									}, rangeStart, watermark.Add(gapAuditFrequencyDuration(instance.Frequency)), instance.Frequency, strings.EqualFold(spaceID, StockCNSpaceID))
+									if gapErr != nil {
+										result.err = gapErr
+									} else if hasGap {
+										result.plan.Kind = domain.BatchKindGapRepair
+										result.plan.Start = missing
+										result.plan.End = missing.Add(gapAuditFrequencyDuration(instance.Frequency))
+										result.plan.BarLimit = 1
+										result.stale = now.Sub(missing) >= threshold
+									}
+								}
+							}
 						}
-						result.stale = instance.LastExecTime == nil || instance.LastExecTime.IsZero() || now.Sub(result.start) >= threshold
+					} else if storageErr == nil {
+						watermark, found := time.Time{}, false
+						if instance.LastExecTime != nil && !instance.LastExecTime.IsZero() {
+							watermark = instance.LastExecTime.UTC()
+							found = true
+						}
+						result.plan, result.stale, result.err = buildGapAuditPlanChecked(now, rule, instance, watermark, found)
 					}
 				}
 				cancel()
 				if storageErr != nil {
 					result.err = storageErr
+				}
+				if result.err != nil {
+					results <- result
+				} else if result.stale && (result.plan.Start.IsZero() || now.Sub(result.plan.Start) < threshold) {
+					result.stale = false
 				} else if result.stale {
 					results <- result
 				}
@@ -491,23 +587,346 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 		stale = append(stale, result)
 	}
 	sort.Slice(stale, func(i, j int) bool { return stale[i].instance.ID < stale[j].instance.ID })
+	perRulePlanned := make(map[string]int)
 	for index, candidate := range stale {
 		if index >= 5 {
 			break
 		}
+		if candidate.plan.MaxConcurrency > 0 && perRulePlanned[candidate.rule.RuleID] >= candidate.plan.MaxConcurrency {
+			continue
+		}
+		active, err := s.Batches.HasActiveTask(ctx, spaceID, candidate.instance.TaskID,
+			domain.BatchKindRealtime, domain.BatchKindBackfill, domain.BatchKindGapRepair)
+		if err != nil {
+			return err
+		}
+		if active {
+			// Realtime is planned before this audit. Never put historical repair
+			// work behind the same task while a newer batch is still in flight.
+			continue
+		}
 		node := nodes[index%len(nodes)]
-		item := domain.CollectionItem{TaskID: candidate.instance.TaskID, SubjectID: candidate.instance.SubjectID, Symbol: candidate.symbol, Provider: candidate.instance.Provider, MarketType: candidate.instance.MarketType, DataType: "kline", DatasetID: candidate.instance.DatasetID, Frequency: candidate.instance.Frequency, StartTime: candidate.start.Format(time.RFC3339Nano), BarLimit: 1000}
+		item := domain.CollectionItem{TaskID: candidate.instance.TaskID, SubjectID: candidate.instance.SubjectID, Symbol: candidate.symbol, Provider: candidate.instance.Provider, MarketType: candidate.instance.MarketType, DataType: "kline", DatasetID: candidate.instance.DatasetID, Frequency: candidate.instance.Frequency, StartTime: candidate.plan.Start.Format(time.RFC3339Nano), BarLimit: candidate.plan.BarLimit, RateBudgetRatio: candidate.plan.RateBudgetRatio}
+		if !candidate.plan.End.IsZero() {
+			item.EndTime = candidate.plan.End.Format(time.RFC3339Nano)
+		}
 		// A bounded 1,000-bar catchup must be allowed to advance on every audit
 		// minute. A ten-minute identity keeps the first page deduplicated but
 		// stalls large gaps for nine unnecessary minutes.
-		scheduleID := fmt.Sprintf("catchup:%s:%s", candidate.instance.TaskID, now.Truncate(time.Minute).Format(time.RFC3339Nano))
-		batchID := stableID(spaceID, scheduleID, string(domain.BatchKindCatchup), "0", "1")
-		req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: domain.BatchKindCatchup, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
+		scheduleID := fmt.Sprintf("%s:%s:%s", candidate.plan.Kind, candidate.instance.TaskID, now.Truncate(time.Minute).Format(time.RFC3339Nano))
+		batchID := stableID(spaceID, scheduleID, string(candidate.plan.Kind), "0", "1")
+		syncPointID := stableID(spaceID, scheduleID, string(candidate.plan.Kind), "write")
+		req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: candidate.plan.Kind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
 		if _, err := s.planOne(ctx, candidate.rule, req, node, nodes); err != nil {
 			return err
 		}
+		perRulePlanned[candidate.rule.RuleID]++
 	}
 	return nil
+}
+
+// The public stock endpoints currently expose only a bounded latest page and
+// have no safe cursor shared by all active providers. Reject older history at
+// planning time instead of repeatedly requesting a page that cannot cover the
+// requested start. A future cursor-paginated feed can raise this deliberately.
+const stockCNHistoryMaxLookback = 24 * time.Hour
+
+func gapAuditFrequencyDuration(frequency string) time.Duration {
+	parsed, err := marketdata.ParseFrequency(frequency)
+	if err != nil {
+		return time.Minute
+	}
+	if duration := parsed.Duration(); duration > 0 {
+		return duration
+	}
+	return time.Minute
+}
+
+// gapAuditCoverageStart returns the earliest configured bucket that may be
+// repaired. It intentionally applies the same HistoryPolicy and provider
+// history boundary as the batch planner, so an internal-hole scan cannot widen
+// the configured retention window by accident.
+func gapAuditCoverageStart(now time.Time, rule domain.TaskRule, instance domain.TaskInstance) (time.Time, error) {
+	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	if strings.TrimSpace(rule.CollectParams) == "" {
+		params = &domain.CollectParams{HistoryPolicy: &domain.HistoryPolicy{
+			Mode:              domain.HistoryModeLiveOnly,
+			BatchBarLimit:     domain.DefaultHistoryBatchBarLimit,
+			MaxConcurrency:    domain.DefaultHistoryMaxConcurrency,
+			GapRepairLookback: domain.DefaultHistoryGapRepairLookback,
+			RateBudgetRatio:   domain.DefaultHistoryRateBudgetRatio,
+		}}
+		err = nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse history policy: %w", err)
+	}
+	if params == nil || params.HistoryPolicy == nil {
+		return time.Time{}, fmt.Errorf("history policy is not configured")
+	}
+	if err := params.ValidateHistoryPolicy(); err != nil {
+		return time.Time{}, fmt.Errorf("validate history policy: %w", err)
+	}
+	stock := strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stock_cn_multi")
+	policyStart, err := historyPolicyStart(now.UTC(), params.HistoryPolicy, stock)
+	if err != nil {
+		return time.Time{}, err
+	}
+	start := time.Time{}
+	if rule.CoverageStartTime != nil && !rule.CoverageStartTime.IsZero() {
+		start = rule.CoverageStartTime.UTC()
+	}
+	start = laterTime(start, policyStart)
+	start = laterTime(start, gapRepairFloor(now, params))
+	if start.IsZero() {
+		return time.Time{}, nil
+	}
+	capability := marketdata.KlineHistoryCapability{SupportsArbitraryRange: true}
+	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stock_cn_multi") {
+		capability = marketdata.KlineHistoryCapability{MaxLookback: stockCNHistoryMaxLookback}
+	}
+	if err := capability.ValidateStart(now.UTC(), start); err != nil {
+		return time.Time{}, fmt.Errorf("coverage boundary is outside provider capability: %w", err)
+	}
+	return start, nil
+}
+
+// findEarliestMissingBucket reads a bounded range and compares only expected
+// market buckets. For stock_cn, the exchange calendar removes weekends,
+// holidays and the lunch break from the expected set; for crypto, buckets are
+// continuous at the requested frequency. The range is intentionally capped so
+// an unhealthy Storage index cannot turn the five-minute audit into an
+// unbounded scan.
+func findEarliestMissingBucket(ctx context.Context, reader timeSeriesRangeReader, selector *storagepb.TimeSeriesSelector, start, end time.Time, frequency string, stock bool) (time.Time, bool, error) {
+	if reader == nil || selector == nil || start.IsZero() || !end.After(start) {
+		return time.Time{}, false, nil
+	}
+	duration := gapAuditFrequencyDuration(frequency)
+	if duration <= 0 {
+		return time.Time{}, false, fmt.Errorf("unsupported gap audit frequency %q", frequency)
+	}
+	seen := make(map[int64]struct{})
+	for page := uint32(1); page <= gapAuditMaxRangePages; page++ {
+		response, err := reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
+			SpaceId: selector.GetSpaceId(), DatasetId: selector.GetDatasetId(),
+			Selectors: []*storagepb.TimeSeriesSelector{selector},
+			TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)},
+			Order:     storagepb.SortOrder_SORT_ORDER_ASC,
+			Page:      &storagepb.Page{Page: page, Size: gapAuditRangePageSize},
+		})
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("read gap audit range: %w", err)
+		}
+		if response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != 0 {
+			return time.Time{}, false, fmt.Errorf("read gap audit range: storage rejected request")
+		}
+		for _, row := range response.GetRows() {
+			if row == nil || row.GetKey() == nil {
+				continue
+			}
+			at, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
+			if err != nil {
+				return time.Time{}, false, fmt.Errorf("read gap audit range: parse data_time %q: %w", row.GetKey().GetDataTime(), err)
+			}
+			seen[at.UTC().UnixNano()] = struct{}{}
+		}
+		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
+			break
+		}
+		if page == gapAuditMaxRangePages {
+			return time.Time{}, false, fmt.Errorf("read gap audit range exceeds %d pages", gapAuditMaxRangePages)
+		}
+	}
+
+	expected, err := gapAuditExpectedBuckets(start, end, duration, stock)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	for _, at := range expected {
+		if _, ok := seen[at.UTC().UnixNano()]; !ok {
+			return at.UTC(), true, nil
+		}
+	}
+	return time.Time{}, false, nil
+}
+
+func gapAuditExpectedBuckets(start, end time.Time, duration time.Duration, stock bool) ([]time.Time, error) {
+	if !stock {
+		first := start.UTC().Truncate(duration)
+		if first.Before(start.UTC()) {
+			first = first.Add(duration)
+		}
+		buckets := make([]time.Time, 0)
+		for at := first; at.Before(end.UTC()); at = at.Add(duration) {
+			buckets = append(buckets, at)
+		}
+		return buckets, nil
+	}
+	calendar, err := loadStockCNCalendar()
+	if err != nil {
+		return nil, fmt.Errorf("load stock_cn calendar for gap audit: %w", err)
+	}
+	days, err := calendar.TradingDays(start, end)
+	if err != nil {
+		return nil, err
+	}
+	buckets := make([]time.Time, 0)
+	for _, day := range days {
+		dayBuckets, dayErr := calendar.ExpectedMinuteBars(day.TradeDate)
+		if dayErr != nil {
+			return nil, dayErr
+		}
+		for _, at := range dayBuckets {
+			if !at.Before(start.UTC()) && at.Before(end.UTC()) {
+				buckets = append(buckets, at)
+			}
+		}
+	}
+	return buckets, nil
+}
+
+func buildGapAuditPlan(now time.Time, rule domain.TaskRule, instance domain.TaskInstance, watermark time.Time, found bool) (gapAuditPlan, bool) {
+	plan, stale, _ := buildGapAuditPlanChecked(now, rule, instance, watermark, found)
+	return plan, stale
+}
+
+func buildGapAuditPlanChecked(now time.Time, rule domain.TaskRule, instance domain.TaskInstance, watermark time.Time, found bool) (gapAuditPlan, bool, error) {
+	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	if strings.TrimSpace(rule.CollectParams) == "" {
+		params = &domain.CollectParams{HistoryPolicy: &domain.HistoryPolicy{
+			Mode:              domain.HistoryModeLiveOnly,
+			BatchBarLimit:     domain.DefaultHistoryBatchBarLimit,
+			MaxConcurrency:    domain.DefaultHistoryMaxConcurrency,
+			GapRepairLookback: domain.DefaultHistoryGapRepairLookback,
+			RateBudgetRatio:   domain.DefaultHistoryRateBudgetRatio,
+		}}
+		err = nil
+	}
+	if err != nil {
+		return gapAuditPlan{}, false, fmt.Errorf("parse history policy: %w", err)
+	}
+	if params == nil || params.HistoryPolicy == nil {
+		return gapAuditPlan{}, false, fmt.Errorf("history policy is not configured")
+	}
+	if err := params.ValidateHistoryPolicy(); err != nil {
+		return gapAuditPlan{}, false, fmt.Errorf("validate history policy: %w", err)
+	}
+	plan := gapAuditPlan{BarLimit: params.HistoryPolicy.BatchBarLimit, MaxConcurrency: params.HistoryPolicy.MaxConcurrency, RateBudgetRatio: params.HistoryPolicy.RateBudgetRatio}
+	if plan.BarLimit <= 0 {
+		plan.BarLimit = domain.DefaultHistoryBatchBarLimit
+	}
+	if plan.RateBudgetRatio <= 0 {
+		plan.RateBudgetRatio = domain.DefaultHistoryRateBudgetRatio
+	}
+	// rate_budget_ratio is applied by the per-feed limiter. Keep the requested
+	// batch size intact; scaling both rows and request rate compounds the
+	// throttle and needlessly increases historical completion time.
+	if plan.MaxConcurrency <= 0 {
+		plan.MaxConcurrency = domain.DefaultHistoryMaxConcurrency
+	}
+	threshold := gapAuditThreshold(instance.Frequency)
+	start := time.Time{}
+	if rule.CoverageStartTime != nil && !rule.CoverageStartTime.IsZero() {
+		start = rule.CoverageStartTime.UTC()
+	}
+	stock := strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stock_cn_multi")
+	policyStart, err := historyPolicyStart(now.UTC(), params.HistoryPolicy, stock)
+	if err != nil {
+		return gapAuditPlan{}, false, err
+	}
+	capability := marketdata.KlineHistoryCapability{SupportsArbitraryRange: true}
+	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stock_cn_multi") {
+		capability = marketdata.KlineHistoryCapability{MaxLookback: stockCNHistoryMaxLookback}
+	}
+	for name, requested := range map[string]time.Time{"history": policyStart, "coverage": start} {
+		if requested.IsZero() {
+			continue
+		}
+		if err := capability.ValidateStart(now.UTC(), requested); err != nil {
+			return gapAuditPlan{}, false, fmt.Errorf("%s boundary is outside provider capability: %w", name, err)
+		}
+	}
+	start = laterTime(start, policyStart)
+	if start.IsZero() {
+		return gapAuditPlan{}, false, nil
+	}
+	if found && !watermark.IsZero() {
+		plan.Kind = domain.BatchKindGapRepair
+		start = laterTime(start, watermark.UTC())
+		start = laterTime(start, gapRepairFloor(now, params))
+	} else {
+		plan.Kind = domain.BatchKindBackfill
+	}
+	plan.Start = start
+	if plan.Start.IsZero() {
+		return gapAuditPlan{}, false, nil
+	}
+	if plan.Kind == domain.BatchKindGapRepair {
+		return plan, now.Sub(plan.Start) >= threshold, nil
+	}
+	return plan, now.After(plan.Start), nil
+}
+
+func collectionItemTaskID(spaceID, ruleID string, item domain.CollectionItem, frequency string) string {
+	if strings.EqualFold(strings.TrimSpace(item.DataType), domain.InstrumentDataType) && item.SnapshotShardCount > 0 {
+		return stableID(spaceID, ruleID, string(domain.BatchKindInstrumentSnapshot), item.DatasetID, strconv.Itoa(item.SnapshotShardIndex))
+	}
+	spec := domain.TaskSpec{RouteID: stableRouteID(item.MarketType, item.DatasetID, frequency), Provider: item.Provider, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency}
+	return domain.StableTaskID(spaceID, ruleID, spec)
+}
+
+func historyPolicyStart(now time.Time, policy *domain.HistoryPolicy, stock bool) (time.Time, error) {
+	if policy == nil {
+		return time.Time{}, fmt.Errorf("history policy is required")
+	}
+	switch policy.Mode {
+	case domain.HistoryModeLiveOnly:
+		return time.Time{}, nil
+	case domain.HistoryModeLookback:
+		if policy.Lookback <= 0 {
+			return time.Time{}, fmt.Errorf("history lookback must be positive")
+		}
+		if stock {
+			calendar, err := loadStockCNCalendar()
+			if err != nil {
+				return time.Time{}, fmt.Errorf("load stock_cn calendar for history lookback: %w", err)
+			}
+			return calendar.LookbackStart(now, policy.Lookback)
+		}
+		return now.Add(-time.Duration(policy.Lookback) * 24 * time.Hour), nil
+	case domain.HistoryModeSince:
+		start, err := time.Parse(time.RFC3339, policy.Since)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("parse history since %q: %w", policy.Since, err)
+		}
+		return start.UTC(), nil
+	default:
+		return time.Time{}, fmt.Errorf("unsupported history mode %q", policy.Mode)
+	}
+}
+
+func gapAuditSeriesTag(instance domain.TaskInstance) string {
+	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) {
+		return ""
+	}
+	return "venue:" + strings.ToLower(strings.TrimSpace(instance.Provider))
+}
+
+func gapRepairFloor(now time.Time, params *domain.CollectParams) time.Time {
+	var floor time.Time
+	if params != nil && params.HistoryPolicy != nil {
+		if lookback, err := domain.ParseScheduleInterval(params.HistoryPolicy.GapRepairLookback); err == nil && lookback > 0 {
+			floor = now.UTC().Add(-lookback)
+		}
+	}
+	return floor
+}
+
+func laterTime(left, right time.Time) time.Time {
+	if left.IsZero() || right.After(left) {
+		return right
+	}
+	return left
 }
 
 func gapAuditThreshold(frequency string) time.Duration {
@@ -523,7 +942,6 @@ func gapAuditThreshold(frequency string) time.Duration {
 }
 
 func (s *Scheduler) planOne(ctx context.Context, rule domain.TaskRule, req Request, node scfinvoker.Node, nodes []scfinvoker.Node) (bool, error) {
-	prepareRequestSourceEvents(&req)
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return false, err
@@ -535,7 +953,7 @@ func (s *Scheduler) planOne(ctx context.Context, rule domain.TaskRule, req Reque
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
-	batch := &domain.BatchInvocation{SpaceID: req.SpaceID, BatchID: req.BatchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: req.ShardIndex, RuleID: rule.RuleID, DatasetID: req.DatasetID, Frequency: req.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: 1, RequestJSON: string(raw), PlannedCount: len(req.Items), PlannedAt: &now, DeadlineAt: timePtr(now.Add(70 * time.Second))}
+	batch := &domain.BatchInvocation{SpaceID: req.SpaceID, BatchID: req.BatchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: req.ShardIndex, RuleID: rule.RuleID, DatasetID: req.DatasetID, Frequency: req.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: 1, RequestJSON: string(raw), PlannedCount: len(req.Items), PlannedAt: &now, DeadlineAt: timePtr(now.Add(batchCompletionDeadline(req.BatchKind)))}
 	created, err := s.Batches.CreatePlanned(ctx, batch)
 	if err != nil {
 		return false, err
@@ -547,22 +965,6 @@ func (s *Scheduler) planOne(ctx context.Context, rule domain.TaskRule, req Reque
 	// a small semaphore so a slow control plane cannot block the next rule.
 	go s.dispatchPlanned(req, node, nodes)
 	return true, nil
-}
-
-// prepareRequestSourceEvents freezes the per-item Storage idempotency marker
-// before the first SCF invocation. Completion-loss recovery reuses the saved
-// request, so deriving this marker inside the handler would create a new
-// payload identity on retry.
-func prepareRequestSourceEvents(req *Request) {
-	if req == nil {
-		return
-	}
-	for index := range req.Items {
-		if strings.TrimSpace(req.Items[index].SourceEventID) != "" {
-			continue
-		}
-		req.Items[index].SourceEventID = retryKey(req.BatchID, req.Items[index].SubjectID, req.Items[index].TargetDataTime)
-	}
 }
 
 func rotateRulesAfter(rules []domain.TaskRule, lastRuleID string) []domain.TaskRule {
@@ -609,7 +1011,7 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []s
 			}
 			continue
 		}
-		if _, err := s.Batches.MarkDispatchedToNode(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(70*time.Second), candidate.Region, candidate.NodeID, candidate.FunctionName); err != nil {
+		if _, err := s.Batches.MarkDispatchedToNode(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(batchCompletionDeadline(req.BatchKind)), candidate.Region, candidate.NodeID, candidate.FunctionName); err != nil {
 			log.WarnContextf(ctx, "mark market fetch batch dispatched failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
 		}
 		if attempt > 0 {
@@ -625,13 +1027,8 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []s
 // This keeps each node at one invocation for the common case while preventing
 // a stale or deliberately smaller function configuration from receiving an
 // oversized event.
-func (s *Scheduler) realtimeBatchSize(provider string, itemCount int, nodes []scfinvoker.Node) int {
+func (s *Scheduler) realtimeBatchSize(itemCount int, nodes []scfinvoker.Node) int {
 	if itemCount <= 0 || len(nodes) == 0 {
-		return 1
-	}
-	if strings.EqualFold(strings.TrimSpace(provider), "tdx") {
-		// Normal TDX owns one ordered TCP stream and the SCF deadline cannot
-		// accommodate a serialized multi-symbol batch plus reconnect fallback.
 		return 1
 	}
 	limit := DefaultBatchSize
@@ -763,13 +1160,13 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		if batchKind == "" {
 			batchKind = domain.BatchKindRealtime
 		}
-		req := Request{BatchID: batchID, SourceEventID: retry.RetryKey, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
+		req := Request{BatchID: batchID, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
 		raw, _ := json.Marshal(req)
 		if _, err := marketFetchEvent(req, s.StorageTarget); err != nil {
 			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
 			continue
 		}
-		batch := &domain.BatchInvocation{SpaceID: spaceID, BatchID: batchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: index, RuleID: retry.RuleID, DatasetID: item.DatasetID, Frequency: item.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: retry.Attempt + 1, RequestJSON: string(raw), PlannedCount: 1, PlannedAt: &now, DeadlineAt: timePtr(now.Add(70 * time.Second))}
+		batch := &domain.BatchInvocation{SpaceID: spaceID, BatchID: batchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: index, RuleID: retry.RuleID, DatasetID: item.DatasetID, Frequency: item.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: retry.Attempt + 1, RequestJSON: string(raw), PlannedCount: 1, PlannedAt: &now, DeadlineAt: timePtr(now.Add(batchCompletionDeadline(req.BatchKind)))}
 		created, err := s.Batches.CreatePlanned(ctx, batch)
 		if err != nil {
 			return err
@@ -811,7 +1208,7 @@ func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scf
 			}
 			continue
 		}
-		updated, err := s.Batches.MarkDispatchedToNode(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(70*time.Second), candidate.Region, candidate.NodeID, candidate.FunctionName)
+		updated, err := s.Batches.MarkDispatchedToNode(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(batchCompletionDeadline(req.BatchKind)), candidate.Region, candidate.NodeID, candidate.FunctionName)
 		if err != nil {
 			log.WarnContextf(ctx, "mark market fetch retry dispatched failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
 			return
@@ -881,27 +1278,16 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 	if len(frequencies) == 0 && params.Schedule.Interval != "" {
 		frequencies = []string{params.Schedule.Interval}
 	}
-	for index, frequency := range frequencies {
-		canonical, frequencyErr := canonicalProviderFrequency(provider, frequency)
-		if frequencyErr != nil {
-			return nil, nil, frequencyErr
-		}
-		frequencies[index] = canonical
-	}
-	if dataType == "symbol" {
+	if dataType == domain.InstrumentDataType {
 		if len(frequencies) == 0 {
-			defaultFrequency, frequencyErr := canonicalProviderFrequency(provider, "1h")
-			if frequencyErr != nil {
-				return nil, nil, frequencyErr
-			}
-			frequencies = []string{defaultFrequency}
+			frequencies = []string{"1h"}
 		}
 		if params.SymbolSource != "exchange" {
 			return nil, nil, fmt.Errorf("symbol task requires exchange snapshot source")
 		}
-		items := make([]domain.CollectionItem, fullSymbolSnapshotShards)
+		items := make([]domain.CollectionItem, fullInstrumentSnapshotShards)
 		for shard := range items {
-			items[shard] = domain.CollectionItem{SubjectID: targetDataset, Provider: provider, MarketType: marketType, DataType: "symbol", DatasetID: targetDataset, SnapshotShardIndex: shard, SnapshotShardCount: fullSymbolSnapshotShards}
+			items[shard] = domain.CollectionItem{SubjectID: targetDataset, Provider: provider, MarketType: marketType, DataType: domain.InstrumentDataType, DatasetID: targetDataset, SnapshotShardIndex: shard, SnapshotShardCount: fullInstrumentSnapshotShards}
 		}
 		return items, frequencies[:1], nil
 	}
@@ -930,13 +1316,12 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 				continue
 			}
 			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-			if strings.TrimSpace(subject.ExternalSymbol) == "" {
-				// Keep one incomplete snapshot row from poisoning all timer
-				// assignments; reconciliation deactivates the stale instance.
-				log.WarnContextf(ctx, "skip market symbol without external symbol subject=%q", subject.SubjectID)
+			symbol, symbolErr := marketProviderSymbol(marketType, subjectID, subject.ExternalSymbol)
+			if symbolErr != nil {
+				log.WarnContextf(ctx, "skip market symbol without valid external symbol subject=%q error=%v", subject.SubjectID, symbolErr)
 				continue
 			}
-			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: strings.TrimSpace(subject.ExternalSymbol), Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
+			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
 		}
 	} else {
 		if s.Storage == nil {
@@ -958,7 +1343,11 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 			if subjectID == "" {
 				continue
 			}
-			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: strings.ReplaceAll(subjectID, "-", ""), Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
+			symbol, symbolErr := marketProviderSymbol(marketType, subjectID, "")
+			if symbolErr != nil {
+				continue
+			}
+			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].SubjectID < items[j].SubjectID })
@@ -966,8 +1355,8 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 }
 
 func batchKindForRule(rule domain.TaskRule) domain.BatchKind {
-	if strings.EqualFold(strings.TrimSpace(rule.DataType), "symbol") {
-		return domain.BatchKindSymbolSnapshot
+	if strings.EqualFold(strings.TrimSpace(rule.DataType), domain.InstrumentDataType) {
+		return domain.BatchKindInstrumentSnapshot
 	}
 	return domain.BatchKindRealtime
 }
@@ -984,23 +1373,15 @@ func normalizeStorageFrequency(frequency string) (string, error) {
 	return report.NormalizeDatasetFrequency(strings.TrimSpace(frequency))
 }
 
-func canonicalProviderFrequency(provider, frequency string) (string, error) {
-	frequency = strings.TrimSpace(frequency)
-	if strings.EqualFold(strings.TrimSpace(provider), "binance") {
-		canonical, err := report.NormalizeDatasetFrequency(frequency)
-		if err != nil {
-			return "", fmt.Errorf("normalize Binance frequency %q: %w", frequency, err)
-		}
-		return canonical, nil
-	}
-	return frequency, nil
-}
-
 func stringPtr(value string) *string { return &value }
 
 func stableID(parts ...string) string {
 	hash := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(hash[:])[:32]
+}
+
+func stableRouteID(marketType, datasetID, frequency string) string {
+	return strings.Join([]string{strings.ToLower(strings.TrimSpace(marketType)), strings.TrimSpace(datasetID), strings.ToLower(strings.TrimSpace(frequency))}, ":")
 }
 
 func timePtr(value time.Time) *time.Time { return &value }
@@ -1015,64 +1396,13 @@ func firstNonEmpty(values ...string) string {
 }
 
 func marketFetchEvent(req Request, storageTarget string) (map[string]any, error) {
-	marketID := strings.ToLower(strings.TrimSpace(req.MarketID))
-	instrumentType := strings.ToLower(strings.TrimSpace(req.InstrumentType))
-	if marketID == "" || instrumentType == "" {
-		marketID, instrumentType = marketIdentity(marketID, instrumentType, req.DatasetID)
-		if marketID == "" && strings.EqualFold(strings.TrimSpace(req.Provider), "binance") {
-			marketID = "crypto"
-			instrumentType = strings.ToLower(strings.TrimSpace(req.MarketType))
-		}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
 	}
-	providerID := strings.ToLower(strings.TrimSpace(req.Provider))
-	sourceID := strings.ToLower(strings.TrimSpace(req.SourceID))
-	if sourceID == "" {
-		sourceID = sourceIDFor(providerID, marketID, instrumentType, req.MarketType)
-	}
-	items := make([]map[string]any, 0, len(req.Items))
-	for _, item := range req.Items {
-		payload := map[string]any{
-			"subject_id":      item.SubjectID,
-			"provider_symbol": item.Symbol,
-			"task_id":         item.TaskID,
-		}
-		if strings.TrimSpace(item.SourceEventID) != "" {
-			payload["source_event_id"] = strings.TrimSpace(item.SourceEventID)
-		}
-		items = append(items, payload)
-	}
-	seriesTag := strings.TrimSpace(req.SeriesTag)
-	if seriesTag == "" && providerID == "binance" {
-		seriesTag = "venue:binance"
-	}
-	dataType := "kline"
-	if len(req.Items) > 0 && strings.TrimSpace(req.Items[0].DataType) != "" {
-		dataType = strings.ToLower(strings.TrimSpace(req.Items[0].DataType))
-	}
-	sourceEventID := firstNonEmpty(req.SourceEventID, req.BatchID)
-	data := map[string]any{
-		"space_id":        req.SpaceID,
-		"batch_id":        req.BatchID,
-		"dataset_id":      req.DatasetID,
-		"market_id":       marketID,
-		"instrument_type": instrumentType,
-		"provider_id":     providerID,
-		"source_id":       sourceID,
-		"series_tag":      seriesTag,
-		"data_type":       dataType,
-		"batch_kind":      string(req.BatchKind),
-		"schedule_id":     req.ScheduleID,
-		"source_event_id": sourceEventID,
-		"frequency":       req.Frequency,
-		"region":          req.Region,
-		"node_id":         req.NodeID,
-		"items":           items,
-	}
-	if len(req.Items) > 0 {
-		data["limit"] = req.Items[0].BarLimit
-		data["start_time"] = req.Items[0].StartTime
-		data["snapshot_shard_index"] = req.Items[0].SnapshotShardIndex
-		data["snapshot_shard_count"] = req.Items[0].SnapshotShardCount
+	data := map[string]any{}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return nil, err
 	}
 	event := map[string]any{
 		"action":                     "market_fetch",
@@ -1081,70 +1411,15 @@ func marketFetchEvent(req Request, storageTarget string) (map[string]any, error)
 		"storage_rpc_gateway_target": strings.TrimSpace(storageTarget),
 		"data":                       data,
 	}
+	// Validate the exact JSON object sent as Tencent ClientContext, not only
+	// the inner Request. Keep headroom below SCF's 128KB limit for provider
+	// serialization differences.
 	encoded, err := json.Marshal(event)
 	if err != nil {
 		return nil, err
 	}
-	// Validate the exact JSON object sent as Tencent ClientContext, not only
-	// the inner Request. Keep headroom below SCF's 128KB limit for provider
-	// serialization differences.
 	if len(encoded) > 120*1024 {
 		return nil, fmt.Errorf("market_fetch client context exceeds 120KB")
 	}
-	// structpb.NewStruct accepts JSON-shaped []any values, not Go's
-	// []map[string]any. Round-tripping the already validated payload also makes
-	// this helper exercise the exact shape sent through CloudNode.
-	var normalized map[string]any
-	if err := json.Unmarshal(encoded, &normalized); err != nil {
-		return nil, err
-	}
-	return normalized, nil
-}
-
-func sourceIDFor(providerID, marketID, instrumentType, marketType string) string {
-	providerID = strings.ToLower(strings.TrimSpace(providerID))
-	marketID = strings.ToLower(strings.TrimSpace(marketID))
-	instrumentType = strings.ToLower(strings.TrimSpace(instrumentType))
-	marketType = strings.ToLower(strings.TrimSpace(marketType))
-	switch providerID {
-	case "binance":
-		if marketType == "swap" || instrumentType == "swap" {
-			return "swap_http"
-		}
-		return "spot_http"
-	case "tdx":
-		return "normal_7709"
-	case "tencent":
-		return "stock_cn_http"
-	case "ths":
-		return "daily_http"
-	case "cni":
-		return "index_cni_http"
-	case "sw":
-		return "index_sw_http"
-	case "sina":
-		switch marketID {
-		case "stock_hk":
-			return "stock_hk_http"
-		case "stock_us":
-			return "stock_us_http"
-		default:
-			return "stock_cn_http"
-		}
-	case "eastmoney":
-		switch {
-		case marketID == "stock_hk":
-			return "stock_hk_http"
-		case marketID == "stock_us":
-			return "stock_us_http"
-		case instrumentType == "index":
-			return "index_http"
-		case instrumentType == "convertible_bond":
-			return "convertible_bond_http"
-		default:
-			return "stock_cn_http"
-		}
-	default:
-		return ""
-	}
+	return event, nil
 }

@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -23,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func mustBuildCollectorCreateNodeItem(t *testing.T, opts collectorPublishOptions, packageID string) adminclient.NodeCreateItem {
@@ -199,173 +201,6 @@ func TestCollectorTimerEnvironmentOmitsControlPlaneCredentials(t *testing.T) {
 	assert.NotContains(t, env, "MOOX_SERVICE_GATEWAY_CA_PEM_B64")
 }
 
-func TestCollectorMarketDataTimerEnvironmentUsesCanonicalSourceIdentity(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "storage-gateway")
-	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "collector-key")
-	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY", "collector-secret")
-	fetcher := &setupconfig.SCFFetcherSpace{
-		SpaceID: "stock_cn", Entrypoint: "market_data", MarketID: "stock_cn", InstrumentType: "equity",
-		ProviderID: "eastmoney", SourceID: "stock_cn_http", SeriesTag: "eastmoney-cn",
-		StorageAppID: "storage-app", StorageAppKey: "storage-key", StorageOperator: "collector", StorageRequestID: "request-seed",
-	}
-	env, err := collectorFunctionEnvironment(collectorPublishOptions{
-		SpaceID: "stock_cn", TriggerType: "timer", BizType: "market_fetcher", FetcherConfig: fetcher,
-		StorageRPCGatewayTarget: "ip://storage:11003",
-	}, "pkg-market-data")
-	require.NoError(t, err)
-	assert.Equal(t, "market_data", env["MOOX_MARKET_DATA_ENTRYPOINT"])
-	assert.Equal(t, "stock_cn", env["MOOX_MARKET_FETCH_MARKET_ID"])
-	assert.Equal(t, "equity", env["MOOX_MARKET_FETCH_INSTRUMENT_TYPE"])
-	assert.Equal(t, "eastmoney", env["MOOX_MARKET_FETCH_PROVIDER"])
-	assert.Equal(t, "stock_cn_http", env["MOOX_MARKET_FETCH_SOURCE_ID"])
-	assert.Equal(t, "storage-app", env["MOOX_STORAGE_APP_ID"])
-	assert.Equal(t, "storage-key", env["MOOX_STORAGE_APP_KEY"])
-	assert.NotContains(t, env, "MOOX_CLS_ENABLED")
-	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_URL")
-}
-
-func TestCollectorDirectMarketDataEnvironmentUsesExplicitProcessIdentity(t *testing.T) {
-	t.Setenv("MOOX_MARKET_FETCH_MARKET_ID", "crypto")
-	t.Setenv("MOOX_MARKET_FETCH_INSTRUMENT_TYPE", "spot")
-	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")
-	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "spot_http")
-	t.Setenv("MOOX_MARKET_FETCH_SERIES_TAG", "venue:binance")
-	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "binance_spot_kline_1m")
-	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
-	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "BTC-USDT")
-	t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", `{"BTC-USDT":"BTCUSDT"}`)
-
-	env, err := collectorFunctionEnvironment(collectorPublishOptions{
-		SpaceID: "crypto", TriggerType: "timer",
-		collectorPackageOptions: collectorPackageOptions{Entrypoint: "market_data"},
-		StorageRPCGatewayTarget: "ip://storage:11003",
-	}, "pkg-market-data")
-	require.NoError(t, err)
-	assert.Equal(t, "crypto", env["MOOX_MARKET_FETCH_MARKET_ID"])
-	assert.Equal(t, "spot", env["MOOX_MARKET_FETCH_INSTRUMENT_TYPE"])
-	assert.Equal(t, "binance", env["MOOX_MARKET_FETCH_PROVIDER"])
-	assert.Equal(t, "spot_http", env["MOOX_MARKET_FETCH_SOURCE_ID"])
-	assert.Equal(t, "venue:binance", env["MOOX_MARKET_FETCH_SERIES_TAG"])
-	assert.Equal(t, "binance_spot_kline_1m", env["MOOX_MARKET_FETCH_DATASET_ID"])
-	assert.Equal(t, "1m", env["MOOX_MARKET_FETCH_FREQUENCY"])
-	assert.Equal(t, "BTC-USDT", env["MOOX_MARKET_FETCH_SUBJECTS"])
-	assert.Equal(t, `{"BTC-USDT":"BTCUSDT"}`, env["MOOX_MARKET_FETCH_SYMBOLS_JSON"])
-}
-
-func TestInvokeCollectorFunctionRequiresExactlyOneEventSource(t *testing.T) {
-	base := collectorInvokeOptions{ControlURL: "http://control", NodeID: "node"}
-	if _, err := invokeCollectorFunction(context.Background(), base); err == nil {
-		t.Fatal("expected missing event source error")
-	}
-	base.EventJSON = `{"action":"market_fetch"}`
-	base.EventFile = "/tmp/event.json"
-	if _, err := invokeCollectorFunction(context.Background(), base); err == nil {
-		t.Fatal("expected mutually exclusive event source error")
-	}
-	base.EventFile = ""
-	base.EventJSON = "[]"
-	if _, err := invokeCollectorFunction(context.Background(), base); err == nil {
-		t.Fatal("expected object validation error")
-	}
-}
-
-func TestCollectorMarketDataEnvironmentCarriesTDXRouteCandidates(t *testing.T) {
-	fetcher := &setupconfig.SCFFetcherSpace{
-		SpaceID: "stock_cn", Entrypoint: "market_data", MarketID: "stock_cn", InstrumentType: "equity",
-		ProviderID: "tdx", SourceID: "normal_7709", TDXHost: "quotes.example", TDXPort: 7709,
-		TDXRoutes: []string{"192.0.2.10", "192.0.2.11"},
-	}
-	env, err := collectorFunctionEnvironment(collectorPublishOptions{Region: "ap-shanghai", FetcherConfig: fetcher}, "pkg-tdx")
-	require.NoError(t, err)
-	assert.Equal(t, "ap-shanghai", env["MOOX_SCF_REGION"])
-	assert.Equal(t, "quotes.example", env["MOOX_TDX_HOST"])
-	assert.Equal(t, "7709", env["MOOX_TDX_PORT"])
-	assert.Equal(t, `["192.0.2.10","192.0.2.11"]`, env["MOOX_TDX_ROUTES_JSON"])
-}
-
-func TestValidateCollectorFleetRuntimeEnvironmentForMarketData(t *testing.T) {
-	environment := map[string]string{
-		"MOOX_MARKET_DATA_ENTRYPOINT":       "market_data",
-		"MOOX_SPACE_ID":                     "stock_cn",
-		"MOOX_CODE_PACKAGE_ID":              "pkg-market-data",
-		"MOOX_GATEWAY_TARGET_NODE":          "storage-gateway",
-		"MOOX_GATEWAY_SERVICE_KEY_ID":       "collector-key",
-		"MOOX_GATEWAY_SERVICE_SECRET_KEY":   "collector-secret",
-		"MOOX_STORAGE_APP_ID":               "storage-app",
-		"MOOX_STORAGE_APP_KEY":              "storage-key",
-		"MOOX_STORAGE_OPERATOR":             "collector",
-		"MOOX_STORAGE_REQUEST_ID":           "request-seed",
-		"MOOX_STORAGE_PRIMARY_AUTH_SECRET":  "primary-secret",
-		"MOOX_STORAGE_RPC_GATEWAY_TARGET":   "ip://106.53.107.122:11003",
-		"MOOX_MARKET_FETCH_MARKET_ID":       "stock_cn",
-		"MOOX_MARKET_FETCH_INSTRUMENT_TYPE": "equity",
-		"MOOX_MARKET_FETCH_PROVIDER":        "eastmoney",
-		"MOOX_MARKET_FETCH_SOURCE_ID":       "eastmoney_http",
-		"MOOX_MARKET_FETCH_DATASET_ID":      "stock_cn_kline_1m",
-		"MOOX_MARKET_FETCH_FREQUENCY":       "1m",
-		"MOOX_MARKET_FETCH_SUBJECTS":        "000001.SZ",
-		"MOOX_MARKET_FETCH_SYMBOLS_JSON":    `{"000001.SZ":"000001"}`,
-		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment-test",
-	}
-	require.NoError(t, validateCollectorFleetRuntimeEnvironment(environment, true, true))
-	delete(environment, "MOOX_STORAGE_APP_KEY")
-	require.ErrorContains(t, validateCollectorFleetRuntimeEnvironment(environment, true, true), "MOOX_STORAGE_APP_KEY")
-}
-
-func TestCollectorInvokeMarketDataCarriesCompletionEventBus(t *testing.T) {
-	fetcher := &setupconfig.SCFFetcherSpace{
-		SpaceID: "crypto", Entrypoint: "market_data", MarketID: "crypto", InstrumentType: "spot",
-		ProviderID: "binance", SourceID: "spot_http", StorageGatewayNodeID: "storage-gateway",
-		StorageAppID: "storage-app", StorageAppKey: "storage-key", StorageOperator: "collector", StorageRequestID: "request-seed",
-	}
-	env, err := collectorFunctionEnvironment(collectorPublishOptions{
-		TriggerType: "invoke", BizType: "market_fetcher", FetcherConfig: fetcher,
-		StorageRPCGatewayTarget: "ip://storage:11003",
-		collectorPackageOptions: collectorPackageOptions{StoragePrimaryAuthSecret: "primary-secret"},
-		EventBusCredential:      &jetstream.CredentialFile{URLs: []string{"tls://eventbus.example:4222"}, Username: "publisher", Password: "secret"},
-		EventBusCAPEM:           []byte("eventbus-ca"),
-	}, "pkg-market-data")
-	require.NoError(t, err)
-	assert.Equal(t, "tls://eventbus.example:4222", env["MOOX_EVENTBUS_NATS_URL"])
-	assert.Equal(t, "primary-secret", env["MOOX_STORAGE_PRIMARY_AUTH_SECRET"])
-}
-
-func TestMarketDataCanaryRequestUsesCanonicalManifest(t *testing.T) {
-	for _, test := range []struct {
-		name, marketID, instrumentType, providerID, sourceID, datasetID, subject string
-	}{
-		{name: "cn index", marketID: "stock_cn", instrumentType: "index", providerID: "eastmoney", sourceID: "index_http", datasetID: "stock_cn_index_kline", subject: "SH.000001"},
-		{name: "convertible bond", marketID: "stock_cn", instrumentType: "convertible_bond", providerID: "eastmoney", sourceID: "convertible_bond_http", datasetID: "stock_cn_convertible_bond_kline", subject: "SZ.123001"},
-		{name: "hk", marketID: "stock_hk", instrumentType: "equity", providerID: "eastmoney", sourceID: "stock_hk_http", datasetID: "stock_hk_kline", subject: "HK.00700"},
-		{name: "us", marketID: "stock_us", instrumentType: "equity", providerID: "eastmoney", sourceID: "stock_us_http", datasetID: "stock_us_kline", subject: "US.AAPL"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			canary, err := marketDataCanaryRequest(&setupconfig.SCFFetcherSpace{
-				MarketID: test.marketID, InstrumentType: test.instrumentType,
-				ProviderID: test.providerID, SourceID: test.sourceID,
-			})
-			require.NoError(t, err)
-			assert.Equal(t, test.datasetID, canary.DatasetID)
-			assert.Equal(t, test.subject, canary.SubjectID)
-			assert.Equal(t, test.subject, canary.ProviderSymbol)
-			assert.Equal(t, 2, canary.Limit)
-		})
-	}
-	canary, err := marketDataCanaryRequest(&setupconfig.SCFFetcherSpace{MarketID: "crypto", InstrumentType: "spot", ProviderID: "binance", SourceID: "spot_http"})
-	require.NoError(t, err)
-	assert.Equal(t, "binance_spot_kline_1m", canary.DatasetID)
-	assert.Equal(t, "1m", canary.Frequency)
-	assert.Equal(t, "BTC-USDT", canary.SubjectID)
-	assert.Equal(t, "BTCUSDT", canary.ProviderSymbol)
-}
-
-func TestMarketDataCanaryRequestRejectsUndeclaredSource(t *testing.T) {
-	_, err := marketDataCanaryRequest(&setupconfig.SCFFetcherSpace{
-		MarketID: "stock_hk", InstrumentType: "equity", ProviderID: "tdx", SourceID: "normal_7709",
-	})
-	require.ErrorContains(t, err, "does not declare")
-}
-
 func TestCollectorInvokeMarketFetcherKeepsEventBusButOmitsHTTPSCAs(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	env, err := collectorFunctionEnvironment(collectorPublishOptions{
@@ -407,16 +242,12 @@ password = "password"
 enabled = true
 
 [[scf_fetcher.spaces]]
-space_id = "crypto"
+space_id = "crypto_market"
 storage_rpc_gateway_target = "ip://106.53.107.122:11003"
-entrypoint = "market_data"
-market_id = "crypto"
-instrument_type = "spot"
-provider_id = "binance"
-source_id = "spot_http"
-package_config_dir = "scf/market_data"
-package_name = "moox-collector-market-data-crypto"
-function_prefix = "moox-fetcher-market-data-crypto"
+entrypoint = "crypto_market"
+package_config_dir = "scf/crypto_market"
+package_name = "moox-collector-crypto-market"
+function_prefix = "moox-fetcher-crypto-market"
 memory_size = 64
 timeout_seconds = 15
 realtime_batch_size = 10
@@ -434,13 +265,10 @@ cloud_account_id = "tencent-scf-singapore"
 
 [[scf_fetcher.spaces]]
 space_id = "stock_cn"
-entrypoint = "market_data"
-market_id = "stock_cn"
-instrument_type = "equity"
-provider_id = "eastmoney"
-source_id = "stock_cn_http"
+timer_function_count = 1
+measured_safe_group_size = 1
 storage_rpc_gateway_target = "ip://106.53.107.122:11003"
-package_config_dir = "scf/market_data"
+package_config_dir = "scf/stock_cn"
 package_name = "moox-collector-stock_cn"
 function_prefix = "moox-fetcher-stock_cn"
 memory_size = 64
@@ -460,12 +288,12 @@ cloud_account_id = "tencent-scf-guangzhou"
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
-	cryptoMarket, err := loadCollectorSCFFetcherConfig(path, "crypto")
+	cryptoMarket, err := loadCollectorSCFFetcherConfig(path, "crypto_market")
 	require.NoError(t, err)
 	require.NotNil(t, cryptoMarket)
-	assert.Equal(t, "crypto", cryptoMarket.SpaceID)
-	assert.Equal(t, "market_data", cryptoMarket.Entrypoint)
-	assert.Equal(t, "scf/market_data", cryptoMarket.PackageConfigDir)
+	assert.Equal(t, "crypto_market", cryptoMarket.SpaceID)
+	assert.Equal(t, "crypto_market", cryptoMarket.Entrypoint)
+	assert.Equal(t, "scf/crypto_market", cryptoMarket.PackageConfigDir)
 	assert.Equal(t, "ap-singapore", cryptoMarket.Regions[0].Region)
 
 	_, err = loadCollectorSCFFetcherConfig(path, "stock_us")
@@ -507,6 +335,115 @@ func TestEgressProbeResponseDataAcceptsStructuredAndRawResponses(t *testing.T) {
 
 	_, ok = egressProbeResponseData(map[string]any{"raw": "not-json"})
 	assert.False(t, ok)
+}
+
+func TestResolveCollectorProbeExpectedCountUsesStockCNFleetConfig(t *testing.T) {
+	configured := &setupconfig.SCFFetcherSpace{
+		SpaceID:            "stock_cn",
+		TimerFunctionCount: 200,
+		Regions: []setupconfig.SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50},
+			{Region: "ap-shanghai", Enabled: true, FunctionCount: 50},
+			{Region: "ap-beijing", Enabled: true, FunctionCount: 50},
+			{Region: "ap-chengdu", Enabled: true, FunctionCount: 50},
+		},
+	}
+
+	count, err := resolveCollectorProbeExpectedCount("stock_cn", "", configured)
+	require.NoError(t, err)
+	assert.Equal(t, 200, count)
+
+	count, err = resolveCollectorProbeExpectedCount("stock_cn", "ap-shanghai", configured)
+	require.NoError(t, err)
+	assert.Equal(t, 50, count)
+
+	count, err = resolveCollectorProbeExpectedCount("stock_cn", "", nil)
+	require.NoError(t, err)
+	assert.Equal(t, setupconfig.DefaultStockCNMarketTimerFunctionCount, count)
+
+	count, err = resolveCollectorProbeExpectedCount("crypto_market", "", nil)
+	require.NoError(t, err)
+	assert.Zero(t, count)
+}
+
+func TestSelectCollectorProbeNodesKeepsCryptoSemanticsAndStockTimersOnly(t *testing.T) {
+	nodes := []adminclient.CloudNode{
+		{NodeID: "timer-a", PackageID: "pkg", TriggerType: "timer", Metadata: map[string]any{"deployment_ready": true}},
+		{NodeID: "instrument-a", PackageID: "pkg", TriggerType: "timer", Metadata: map[string]any{"deployment_ready": true, "function_mode": "instrument_snapshot"}},
+		{NodeID: "invoke-a", PackageID: "pkg", TriggerType: "invoke", Metadata: map[string]any{"deployment_ready": true}},
+	}
+
+	assert.Len(t, selectCollectorProbeNodes(nodes, false), 3)
+	stockNodes := selectCollectorProbeNodes(nodes, true)
+	require.Len(t, stockNodes, 1)
+	assert.Equal(t, "timer-a", stockNodes[0].NodeID)
+	instrumentNodes := selectCollectorInstrumentSnapshotProbeNodes(nodes)
+	require.Len(t, instrumentNodes, 1)
+	assert.Equal(t, "instrument-a", instrumentNodes[0].NodeID)
+}
+
+func TestCollectorEgressProbeReportKeepsOnlyDiagnosticCounts(t *testing.T) {
+	report := &collectorProbeReport{
+		Results: []collectorProbeResult{
+			{NodeID: "node-a", OutboundIP: "198.51.100.1"},
+			{NodeID: "node-b", OutboundIP: "198.51.100.1"},
+		},
+		ExpectedCount: 170,
+		EligibleCount: 2,
+		DistinctCount: 1,
+	}
+	assert.Equal(t, 170, report.ExpectedCount)
+	assert.Equal(t, 2, report.EligibleCount)
+	assert.Equal(t, 1, report.DistinctCount)
+}
+
+func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
+	stock := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "stock_cn"}, Region: "ap-shanghai", StorageRPCGatewayTarget: "ip://storage:11003"}, "stock-node", "batch-stock")
+	stockData := stock["data"].(map[string]any)
+	assert.Equal(t, "stock_cn_kline", stockData["dataset_id"])
+	assert.Equal(t, "stock_cn_multi", stockData["provider"])
+	assert.Equal(t, "equity", stockData["market_type"])
+	assert.Equal(t, "backfill", stockData["batch_kind"])
+	stockItem := stockData["items"].([]map[string]any)[0]
+	assert.Equal(t, "600000.XSHG", stockItem["subject_id"])
+	assert.Equal(t, "sh600000", stockItem["symbol"])
+	assert.Equal(t, 1000, stockItem["bar_limit"])
+	assert.Equal(t, true, stockItem["canary"])
+	assert.NotEmpty(t, stockItem["start_time"], "the stock canary must exercise a bounded historical request")
+	start, err := time.Parse(time.RFC3339Nano, stockItem["start_time"].(string))
+	require.NoError(t, err)
+	assert.InDelta(t, float64(23*time.Hour/time.Second), time.Since(start).Seconds(), 90)
+
+	crypto := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "crypto_market"}}, "crypto-node", "batch-crypto")
+	cryptoData := crypto["data"].(map[string]any)
+	assert.Equal(t, "binance_spot_kline_1m", cryptoData["dataset_id"])
+	assert.Equal(t, "binance", cryptoData["provider"])
+	assert.Equal(t, "spot", cryptoData["market_type"])
+	assert.Equal(t, "realtime", cryptoData["batch_kind"])
+}
+
+func TestDefaultStockCNCollectorRulesRequireExplicitActivation(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "collector-rules.yaml"))
+	require.NoError(t, err)
+	var bundle struct {
+		Rules []struct {
+			SpaceID string `yaml:"space_id"`
+			RuleID  string `yaml:"rule_id"`
+			Enabled bool   `yaml:"enabled"`
+		} `yaml:"rules"`
+	}
+	require.NoError(t, yaml.Unmarshal(content, &bundle))
+	seen := map[string]bool{}
+	for _, rule := range bundle.Rules {
+		if rule.SpaceID != "stock_cn" {
+			continue
+		}
+		seen[rule.RuleID] = rule.Enabled
+	}
+	assert.Contains(t, seen, "builtin-stock-cn-instrument-1d")
+	assert.Contains(t, seen, "builtin-stock-cn-kline-1m")
+	assert.False(t, seen["builtin-stock-cn-instrument-1d"])
+	assert.False(t, seen["builtin-stock-cn-kline-1m"])
 }
 
 func TestCollectorFunctionEnvironmentRejectsInvalidOrConflictingCA(t *testing.T) {
@@ -898,7 +835,7 @@ func TestPublishSubmitDeployFleetUsesOneJob(t *testing.T) {
 	}
 }
 
-func TestPublishSubmitExpandsPartialFleet(t *testing.T) {
+func TestPublishSubmitRejectsPartialFleetToAvoidMixedVersions(t *testing.T) {
 	nodes := make([]adminclient.CloudNode, 4)
 	nodes[0] = adminclient.CloudNode{NodeID: "fleet-0", PackageID: "pkg-old", BizType: "data_collector", Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(0)}}
 	items := make([]adminclient.NodeCreateItem, 4)
@@ -906,39 +843,14 @@ func TestPublishSubmitExpandsPartialFleet(t *testing.T) {
 		items[index] = adminclient.NodeCreateItem{PackageID: "pkg-new", Metadata: map[string]any{"function_name_prefix": "fleet", "index": index}}
 	}
 	api := &fakeCollectorFleetAPI{}
-	summary, err := submitCollectorFleet(context.Background(), api, collectorPublishOptions{NodeCount: 4}, "pkg-new", items, nodes)
-	require.NoError(t, err)
-	assert.Equal(t, "expanded", summary.FleetMode)
-	assert.Equal(t, "create_nodes", summary.Operation)
-	assert.Equal(t, 3, summary.TotalCount)
-	require.Len(t, api.createCalls, 1)
+	_, err := submitCollectorFleet(context.Background(), api, collectorPublishOptions{NodeCount: 4}, "pkg-new", items, nodes)
+	require.ErrorContains(t, err, "refusing a mixed-version deployment")
+	assert.Empty(t, api.createCalls)
 	assert.Empty(t, api.deployCalls)
-	require.Len(t, api.createCalls[0], 3)
-	assert.Equal(t, 1, api.createCalls[0][0].Metadata["index"])
-	assert.Equal(t, 2, api.createCalls[0][1].Metadata["index"])
-	assert.Equal(t, 3, api.createCalls[0][2].Metadata["index"])
 }
 
 func TestPublishSubmitRejectsOversizedFleetBeforeUpload(t *testing.T) {
 	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
-	for key, value := range map[string]string{
-		"MOOX_MARKET_FETCH_MARKET_ID":       "stock_cn",
-		"MOOX_MARKET_FETCH_INSTRUMENT_TYPE": "equity",
-		"MOOX_MARKET_FETCH_PROVIDER":        "eastmoney",
-		"MOOX_MARKET_FETCH_SOURCE_ID":       "eastmoney_http",
-		"MOOX_MARKET_FETCH_DATASET_ID":      "stock_cn_kline_1m",
-		"MOOX_MARKET_FETCH_FREQUENCY":       "1m",
-		"MOOX_MARKET_FETCH_SUBJECTS":        "000001.SZ",
-		"MOOX_MARKET_FETCH_SYMBOLS_JSON":    `{"000001.SZ":"000001"}`,
-		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment-test",
-		"MOOX_STORAGE_APP_ID":               "storage-app",
-		"MOOX_STORAGE_APP_KEY":              "storage-key",
-		"MOOX_STORAGE_OPERATOR":             "collector",
-		"MOOX_STORAGE_REQUEST_ID":           "request-seed",
-		"MOOX_STORAGE_PRIMARY_AUTH_SECRET":  "primary-secret",
-	} {
-		t.Setenv(key, value)
-	}
 	uploadCalled := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -960,7 +872,7 @@ func TestPublishSubmitRejectsOversizedFleetBeforeUpload(t *testing.T) {
 		SpaceID:                "crypto",
 		CloudAccountID:         "account-a",
 		Region:                 "ap-guangzhou",
-		NodeCount:              1,
+		NodeCount:              50,
 		FunctionNamePrefix:     "fleet",
 		EventBusCredentialFile: credentialFile,
 	})
@@ -1032,11 +944,13 @@ func TestResolveCollectorCLSSinkUsesSelectedCloudAccountSecret(t *testing.T) {
 		gotID, gotKey, gotRegion = secretID, secretKey, region
 		return collectorCLSAPI{}, nil
 	}
-	_, err := resolveCollectorCLSSink(context.Background(), client, adminclient.CloudAccount{AccountID: "tencent-scf-shanghai", CredentialSecretID: "secret-shanghai"}, "ap-shanghai")
+	sink, err := resolveCollectorCLSSink(context.Background(), client, adminclient.CloudAccount{AccountID: "tencent-scf-shanghai", CredentialSecretID: "secret-shanghai"}, "ap-shanghai")
 	require.NoError(t, err)
 	assert.Equal(t, "shanghai-id", gotID)
 	assert.Equal(t, "shanghai-key", gotKey)
 	assert.Equal(t, "ap-shanghai", gotRegion)
+	assert.Equal(t, "shanghai-id", sink.SecretID)
+	assert.Equal(t, "shanghai-key", sink.SecretKey)
 }
 
 func TestBuildCollectorCreateNodeItemRejectsLegacyJobItemWorkloads(t *testing.T) {
@@ -1097,6 +1011,162 @@ func TestBuildCollectorCreateNodeItemStandardManifestFitsTimerAndInvokeBudgets(t
 		}, "moox-collector_dev")
 		require.NoError(t, err, "trigger_type=%s", triggerType)
 	}
+}
+
+func TestBuildCollectorCreateNodeItemUsesLongStockCNInstrumentInvokeTimeoutOnlyForInvoke(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	fetcher := &setupconfig.SCFFetcherSpace{
+		SpaceID: "stock_cn", MemorySize: 64, TimeoutSeconds: 15,
+		InstrumentInvokeTimeoutSeconds: 60,
+		RealtimeBatchSize:              10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
+	}
+	timer := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "timer", FetcherConfig: fetcher,
+	}, "moox-collector-stock-cn_dev")
+	assert.Equal(t, "15", timer.Config["timeout"])
+	assert.Equal(t, "15", timer.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
+
+	invoke := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "invoke", FetcherConfig: fetcher,
+	}, "moox-collector-stock-cn_dev")
+	assert.Equal(t, "60", invoke.Config["timeout"])
+	assert.Equal(t, "60", invoke.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
+
+	fetcher.InstrumentInvokeTimeoutSeconds = 90
+	configured := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "invoke", FetcherConfig: fetcher,
+	}, "moox-collector-stock-cn_dev")
+	assert.Equal(t, "90", configured.Config["timeout"])
+	assert.Equal(t, "90", configured.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
+}
+
+func TestBuildCollectorCreateNodeItemUsesIndependentInstrumentTimerMode(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	fetcher := &setupconfig.SCFFetcherSpace{
+		SpaceID: "stock_cn", MemorySize: 64, TimeoutSeconds: 15,
+		InstrumentSnapshotTimeoutSeconds: 300,
+		RealtimeBatchSize:                10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
+	}
+
+	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-shanghai", TriggerType: "timer",
+		InstrumentSnapshotTimer: true, FetcherConfig: fetcher,
+	}, "moox-collector-stock-cn_dev")
+
+	assert.Equal(t, "300", item.Config["timeout"])
+	assert.Equal(t, "256", item.Config["memory_size"])
+	assert.Equal(t, "1", item.Config["max_instance_concurrency"])
+	assert.Equal(t, "300", item.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
+	assert.Equal(t, "instrument_snapshot", item.Environment["MOOX_MARKET_FETCH_MODE"])
+	assert.Equal(t, 300, item.Metadata["timeout_seconds"])
+	assert.Equal(t, 256, item.Metadata["memory_size"])
+	assert.Equal(t, "instrument_snapshot", item.Metadata["function_mode"])
+}
+
+func TestBuildCollectorCreateNodeItemRejectsConcurrentSCFInstances(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
+		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-shanghai", TriggerType: "timer",
+		Config: []string{"max_instance_concurrency=2"},
+	}, "moox-collector-stock-cn_dev")
+	require.ErrorContains(t, err, "max_instance_concurrency is fixed at 1")
+}
+
+func TestCollectorInstrumentCanaryEventUsesIndependentSnapshotAction(t *testing.T) {
+	event := collectorInstrumentCanaryEvent(collectorPublishOptions{StorageRPCGatewayTarget: "ip://storage:11003", SpaceID: "stock_cn", Region: "ap-singapore"}, "node-1", "batch-1", 0, stockInstrumentCanaryShardCount, "2026-08-30T00:00:00Z")
+
+	assert.Equal(t, "instrument_snapshot", event["action"])
+	assert.Equal(t, "ip://storage:11003", event["storage_rpc_gateway_target"])
+	data, ok := event["data"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "instrument_snapshot", data["batch_kind"])
+	assert.Equal(t, "stock_cn_instruments", data["dataset_id"])
+	assert.Equal(t, "node-1", data["node_id"])
+	items, ok := data["items"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, items, 1)
+	assert.Equal(t, stockInstrumentCanaryShardCount, items[0]["snapshot_shard_count"])
+}
+
+func TestCollectorTimerRestorePatchesOnlyPreviouslyEnabledNodes(t *testing.T) {
+	nodes := []adminclient.CloudNode{
+		{NodeID: "enabled", Metadata: map[string]any{"timer_enabled": true, "timer_cron": "0 1 * * * * *"}},
+		{NodeID: "disabled", Metadata: map[string]any{"timer_enabled": false, "timer_cron": "0 2 * * * * *"}},
+		{NodeID: "new", Metadata: map[string]any{}},
+	}
+
+	patches := collectorTimerRestorePatches(nodes)
+
+	require.Len(t, patches, 1)
+	assert.Equal(t, "enabled", patches[0].NodeID)
+	assert.True(t, patches[0].TimerEnabled)
+	assert.Equal(t, "0 1 * * * * *", patches[0].TimerCron)
+}
+
+func TestCollectorStockCNTimerRestorePatchesIncludeFreshNodes(t *testing.T) {
+	nodes := []adminclient.CloudNode{
+		{NodeID: "sh-1", Region: "ap-shanghai", FunctionName: "stock-1", Metadata: map[string]any{"index": 1}},
+		{NodeID: "gz-0", Region: "ap-guangzhou", FunctionName: "stock-0", Metadata: map[string]any{"index": 0}},
+	}
+
+	patches := collectorStockCNTimerRestorePatches(nodes)
+
+	require.Len(t, patches, 2)
+	assert.Equal(t, "gz-0", patches[0].NodeID)
+	assert.Equal(t, "5 * * * * * *", patches[0].TimerCron)
+	assert.Equal(t, "sh-1", patches[1].NodeID)
+	assert.Equal(t, "6 * * * * * *", patches[1].TimerCron)
+}
+
+func TestCollectorStockCNInstrumentTimerEnablePatchesUseDailyCron(t *testing.T) {
+	patches := collectorStockCNInstrumentTimerEnablePatches([]adminclient.CloudNode{
+		{NodeID: "instrument-0", Metadata: map[string]any{"function_mode": "instrument_snapshot"}},
+	}, "0 0 0 * * * *")
+
+	require.Len(t, patches, 1)
+	assert.Equal(t, "instrument-0", patches[0].NodeID)
+	assert.True(t, patches[0].TimerEnabled)
+	assert.Equal(t, "0 0 0 * * * *", patches[0].TimerCron)
+}
+
+func TestCollectorTimerDisablePatchesCoverEveryPublishedNode(t *testing.T) {
+	nodes := []adminclient.CloudNode{
+		{NodeID: "node-a", Metadata: map[string]any{"timer_cron": "0 1 * * * * *"}},
+		{NodeID: "node-b", Metadata: map[string]any{}},
+	}
+
+	patches := collectorTimerDisablePatches(nodes)
+
+	require.Len(t, patches, 2)
+	assert.False(t, patches[0].TimerEnabled)
+	assert.Equal(t, "0 1 * * * * *", patches[0].TimerCron)
+	assert.False(t, patches[1].TimerEnabled)
+	assert.Equal(t, "0 * * * * * *", patches[1].TimerCron)
+}
+
+func TestSubmitCollectorTimerRuntimeConfigsBatchesAtCloudNodeLimit(t *testing.T) {
+	batchSizes := make([]int, 0, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Nodes []collectorRuntimeConfigPatch `json:"nodes"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		batchSizes = append(batchSizes, len(request.Nodes))
+		_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job_id":"job-%d"}`, len(batchSizes))
+	}))
+	defer server.Close()
+	patches := make([]collectorRuntimeConfigPatch, 201)
+	for index := range patches {
+		patches[index] = collectorRuntimeConfigPatch{NodeID: fmt.Sprintf("node-%03d", index)}
+	}
+
+	jobs, err := submitCollectorTimerRuntimeConfigs(context.Background(), adminclient.New(server.URL), patches)
+
+	require.NoError(t, err)
+	assert.Equal(t, []int{100, 100, 1}, batchSizes)
+	assert.Equal(t, []string{"job-1", "job-2", "job-3"}, jobs)
 }
 
 func TestBuildCollectorCreateNodeItemRejectsInvalidInflightOverride(t *testing.T) {

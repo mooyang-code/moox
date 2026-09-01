@@ -217,6 +217,7 @@ func (s *Service) UpdateTaskRule(ctx context.Context, req *pb.UpdateTaskRuleReq)
 	if err := validateTaskRuleUpdate(*existing, rule); err != nil {
 		return &pb.UpdateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	preserveTaskRuleCoverageStart(*existing, &rule)
 	rule, err = canonicalizeTaskRule(rule)
 	if err != nil {
 		return &pb.UpdateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
@@ -553,19 +554,26 @@ func validateTaskRule(rule domain.TaskRule) error {
 	if err := params.Validate(); err != nil {
 		return fmt.Errorf("invalid collect_params: %w", err)
 	}
-	definition, ok := jobs.JobDefinitionByDataType(params.Collector.DataType)
-	if !ok || !definition.ExecutionMode.Valid() || !definition.Matches(params) {
-		return fmt.Errorf(
-			"unsupported collector: exchange=%s market=%s data_type=%s source_kind=%s",
-			params.Collector.Exchange,
-			params.Collector.Market,
-			params.Collector.DataType,
-			params.Source.Kind,
-		)
+	if strings.EqualFold(params.Provider, "stock_cn_multi") &&
+		!strings.EqualFold(params.Collector.DataType, "kline") &&
+		!strings.EqualFold(params.Collector.DataType, domain.InstrumentDataType) {
+		return fmt.Errorf("stock_cn_multi only supports kline and instrument collectors")
 	}
-	if definition.ExecutionMode == jobs.ExecutionModeCloudInvoke {
-		if _, routeOK := jobs.JobRouteFor(params.Collector.Exchange, params.Collector.DataType); !routeOK {
-			return fmt.Errorf("cloud collector route not found: exchange=%s data_type=%s", params.Collector.Exchange, params.Collector.DataType)
+	if !strings.EqualFold(params.Provider, "stock_cn_multi") {
+		definition, ok := jobs.JobDefinitionByDataType(params.Collector.DataType)
+		if !ok || !definition.ExecutionMode.Valid() || !definition.Matches(params) {
+			return fmt.Errorf(
+				"unsupported collector: exchange=%s market=%s data_type=%s source_kind=%s",
+				params.Collector.Exchange,
+				params.Collector.Market,
+				params.Collector.DataType,
+				params.Source.Kind,
+			)
+		}
+		if definition.ExecutionMode == jobs.ExecutionModeCloudInvoke {
+			if _, routeOK := jobs.JobRouteFor(params.Collector.Exchange, params.Collector.DataType); !routeOK {
+				return fmt.Errorf("cloud collector route not found: exchange=%s data_type=%s", params.Collector.Exchange, params.Collector.DataType)
+			}
 		}
 	}
 	if !strings.EqualFold(rule.Provider, params.Provider) ||
@@ -574,6 +582,18 @@ func validateTaskRule(rule domain.TaskRule) error {
 		return fmt.Errorf("rule identity does not match collect_params")
 	}
 	return nil
+}
+
+func preserveTaskRuleCoverageStart(existing domain.TaskRule, desired *domain.TaskRule) {
+	if desired == nil {
+		return
+	}
+	if existing.CoverageStartTime == nil || existing.CoverageStartTime.IsZero() {
+		desired.CoverageStartTime = nil
+		return
+	}
+	at := existing.CoverageStartTime.UTC()
+	desired.CoverageStartTime = &at
 }
 
 func canonicalizeTaskRule(rule domain.TaskRule) (domain.TaskRule, error) {
@@ -625,13 +645,16 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 	if err != nil {
 		return err
 	}
+	// stock_cn_multi is the public multi-provider collector identity, while
+	// the shared stock datasets belong to the stock_cn data source.
+	datasetSourceID := collectorDatasetSourceID(params.Collector.Exchange)
 	switch params.Collector.DataType {
-	case "symbol":
+	case domain.InstrumentDataType:
 		return s.validateDataset(
 			ctx,
 			rule.SpaceID,
 			params.Target.DatasetID,
-			params.Collector.Exchange,
+			datasetSourceID,
 			storagepb.DataKind_DATA_KIND_RECORD,
 			"target",
 			false,
@@ -643,7 +666,7 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 			ctx,
 			rule.SpaceID,
 			params.Source.DatasetID,
-			params.Collector.Exchange,
+			datasetSourceID,
 			storagepb.DataKind_DATA_KIND_RECORD,
 			"source",
 			false,
@@ -656,7 +679,7 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 			ctx,
 			rule.SpaceID,
 			params.Target.DatasetID,
-			params.Collector.Exchange,
+			datasetSourceID,
 			storagepb.DataKind_DATA_KIND_TIME_SERIES,
 			"target",
 			true,
@@ -668,6 +691,13 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 	default:
 		return fmt.Errorf("unsupported collector data_type: %s", params.Collector.DataType)
 	}
+}
+
+func collectorDatasetSourceID(exchange string) string {
+	if strings.EqualFold(strings.TrimSpace(exchange), "stock_cn_multi") {
+		return "stock_cn"
+	}
+	return exchange
 }
 
 func (s *Service) validateResampleSourceDataset(ctx context.Context, rule domain.TaskRule, params *domain.CollectParams) error {
@@ -746,7 +776,7 @@ func (s *Service) validateDataset(
 		return fmt.Errorf("%s Dataset %s must be active", role, datasetID)
 	}
 	sourceMatches := strings.EqualFold(info.DataSourceID, exchange) ||
-		(allowSharedMarket && isSharedMarketDataSource(info.DataSourceID))
+		(allowSharedMarket && strings.EqualFold(info.DataSourceID, "crypto_market"))
 	if !sourceMatches {
 		return fmt.Errorf(
 			"%s Dataset %s data_source_id=%s does not match collector exchange=%s",
@@ -785,11 +815,6 @@ func (s *Service) validateDataset(
 		}
 	}
 	return nil
-}
-
-func isSharedMarketDataSource(dataSourceID string) bool {
-	dataSourceID = strings.ToLower(strings.TrimSpace(dataSourceID))
-	return dataSourceID == "crypto" || dataSourceID == "market_data"
 }
 
 func dataTypeConfigFromDefinition(definition jobs.JobDefinition) *pb.DataTypeConfig {

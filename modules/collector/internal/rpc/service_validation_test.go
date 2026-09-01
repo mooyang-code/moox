@@ -63,10 +63,22 @@ func TestValidateTaskRuleDatasetsRejectsSymbolMarketMismatch(t *testing.T) {
 		"symbols": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "spot"}},
 	}}
 	rule := domain.TaskRule{
-		SpaceID: "crypto", DataType: "symbol", Provider: "binance", MarketType: "swap",
+		SpaceID: "crypto", DataType: "instrument", Provider: "binance", MarketType: "swap",
 		CollectParams: `{"provider":"binance","market_type":"swap","symbol_source":"exchange","target_dataset_id":"symbols"}`,
 	}
 	require.ErrorContains(t, service.validateTaskRuleDatasets(context.Background(), rule), "market_type=spot does not match rule market_type=swap")
+}
+
+func TestValidateTaskRuleDatasetsAcceptsStockSharedDataSource(t *testing.T) {
+	service := &Service{datasetSrc: validationDatasetSource{
+		"symbols":        {DataSourceID: "stock_cn", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "equity"}},
+		"stock_cn_kline": {DataSourceID: "stock_cn", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "equity"}},
+	}}
+	rule := domain.TaskRule{
+		SpaceID: "stock_cn", RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity",
+		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m"}`,
+	}
+	require.NoError(t, service.validateTaskRuleDatasets(context.Background(), rule))
 }
 
 func TestValidateTaskRuleAcceptsCollectorLocalResampleWithoutCloudRoute(t *testing.T) {
@@ -75,6 +87,23 @@ func TestValidateTaskRuleAcceptsCollectorLocalResampleWithoutCloudRoute(t *testi
 		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"spot_kline_derived_4h","target_frequency":"4H","alignment":"epoch_utc"}`,
 	}
 	require.NoError(t, validateTaskRule(rule))
+}
+
+func TestValidateTaskRuleAcceptsBoundedStockHistoryMode(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: "stock_cn", RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity",
+		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m","history_policy":{"mode":"lookback","lookback":5}}`,
+	}
+	require.NoError(t, validateTaskRule(rule))
+}
+
+func TestPreserveTaskRuleCoverageStartOnOrdinaryUpdate(t *testing.T) {
+	original := time.Date(2026, 8, 29, 1, 2, 0, 0, time.UTC)
+	replacement := original.Add(24 * time.Hour)
+	desired := domain.TaskRule{CoverageStartTime: &replacement}
+	preserveTaskRuleCoverageStart(domain.TaskRule{CoverageStartTime: &original}, &desired)
+	require.NotNil(t, desired.CoverageStartTime)
+	require.Equal(t, original, desired.CoverageStartTime.UTC())
 }
 
 func TestValidateResampleRuleUpdateLocksIdentityAtEveryPrepareState(t *testing.T) {
@@ -115,18 +144,6 @@ func TestValidateTaskRuleDatasetsAcceptsExchangeSourceForMooxResample(t *testing
 	rule := domain.TaskRule{
 		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
 		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc"}`,
-	}
-	require.NoError(t, service.validateTaskRuleDatasets(context.Background(), rule))
-}
-
-func TestValidateTaskRuleDatasetsAcceptsMarketDataTarget(t *testing.T) {
-	service := &Service{datasetSrc: validationDatasetSource{
-		"symbols": {DataSourceID: "eastmoney", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "equity"}},
-		"bars":    {DataSourceID: "market_data", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "equity"}},
-	}}
-	rule := domain.TaskRule{
-		SpaceID: "stock_cn", RuleID: "stock-cn-1m", DataType: "kline", Provider: "eastmoney", MarketType: "equity",
-		CollectParams: `{"provider":"eastmoney","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	}
 	require.NoError(t, service.validateTaskRuleDatasets(context.Background(), rule))
 }

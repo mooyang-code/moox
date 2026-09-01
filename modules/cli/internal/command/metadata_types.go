@@ -37,7 +37,7 @@ var metadataImportCmd = &cobra.Command{
 
 示例:
   moox-cli metadata import --file ../../examples/setup/default/metadata.yaml --metadata-url http://127.0.0.1:20200 --if-not-exists
-  moox-cli metadata import --file ../../examples/setup/default/metadata.yaml --spaces crypto --dry-run`,
+  moox-cli metadata import --file ../../examples/setup/default/metadata.yaml --spaces crypto_market --dry-run`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(metadataImportFile) == "" {
 			return fmt.Errorf("必须指定 --file")

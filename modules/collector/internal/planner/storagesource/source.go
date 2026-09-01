@@ -149,16 +149,15 @@ func (s *DatasetSource) ListSubjects(ctx context.Context, spaceID string, datase
 	return mergeDatasetSubjects(bindings, symbols)
 }
 
-// ListResampleSubjects returns the source Dataset's active subject universe
+// ListResampleSubjects returns the source Dataset's active subject set
 // without requiring an external-symbol catalog owned by the source DataSource.
-// Shared/normalized K-line result Datasets use a market-level internal source
-// such as data_source_id=crypto or data_source_id=market_data while their
-// exchange symbols remain registered under binance or another venue.
+// Shared/normalized K-line result Datasets commonly use data_source_id=crypto_market
+// while their exchange symbols remain registered under binance or another venue.
 func (s *DatasetSource) ListResampleSubjects(ctx context.Context, spaceID, datasetID string) ([]domain.DatasetSubject, error) {
 	return s.ListResampleSubjectsForRule(ctx, spaceID, datasetID, "", "")
 }
 
-// ListResampleSubjectsForRule resolves a subject universe with the rule's
+// ListResampleSubjectsForRule resolves the active subject set with the rule's
 // provider/series tag when a shared result Dataset contains multiple venues.
 // This keeps an OKX-only Subject out of a Binance resample task even though
 // both venues share the same market-level Dataset metadata.
@@ -175,7 +174,7 @@ func (s *DatasetSource) ListResampleSubjectsForRule(ctx context.Context, spaceID
 		if datasetErr != nil {
 			return nil, datasetErr
 		}
-		if dataSourceID := strings.TrimSpace(dataset.DataSourceID); dataSourceID != "" && !isSharedMarketDataSource(dataSourceID) {
+		if dataSourceID := strings.TrimSpace(dataset.DataSourceID); dataSourceID != "" && !strings.EqualFold(dataSourceID, "crypto_market") {
 			// A provider-owned Dataset may have an explicit subject binding and
 			// still require a provider-specific symbol (BTC-USDT -> BTCUSDT).
 			symbols, symbolErr := s.listSubjectSymbols(ctx, spaceID, dataSourceID)
@@ -184,7 +183,7 @@ func (s *DatasetSource) ListResampleSubjectsForRule(ctx context.Context, spaceID
 			}
 			return mergeDatasetSubjects(bindings, symbols)
 		}
-		if isSharedMarketDataSource(dataset.DataSourceID) {
+		if strings.EqualFold(strings.TrimSpace(dataset.DataSourceID), "crypto_market") {
 			if symbolSource := inferResampleSymbolSource(provider, seriesTag); symbolSource != "" {
 				symbols, symbolErr := s.listSubjectSymbols(ctx, spaceID, symbolSource)
 				if symbolErr != nil {
@@ -212,7 +211,7 @@ func (s *DatasetSource) ListResampleSubjectsForRule(ctx context.Context, spaceID
 	// catalog. Falling back to every Subject in the market would create tasks
 	// for symbols that the source DataSource cannot supply (for example, an
 	// OKX-only symbol on a Binance Dataset).
-	if dataSourceID := strings.TrimSpace(dataset.DataSourceID); dataSourceID != "" && !isSharedMarketDataSource(dataSourceID) {
+	if dataSourceID := strings.TrimSpace(dataset.DataSourceID); dataSourceID != "" && !strings.EqualFold(dataSourceID, "crypto_market") {
 		symbols, symbolErr := s.listSubjectSymbols(ctx, spaceID, dataSourceID)
 		if symbolErr != nil {
 			return nil, symbolErr
@@ -226,7 +225,7 @@ func (s *DatasetSource) ListResampleSubjectsForRule(ctx context.Context, spaceID
 		return mergeDatasetSubjects(nil, symbols)
 	}
 	dataSourceID := strings.TrimSpace(dataset.DataSourceID)
-	if isSharedMarketDataSource(dataSourceID) {
+	if strings.EqualFold(dataSourceID, "crypto_market") {
 		if symbolSource := inferResampleSymbolSource(provider, seriesTag); symbolSource != "" {
 			symbols, symbolErr := s.listSubjectSymbols(ctx, spaceID, symbolSource)
 			if symbolErr != nil {
@@ -270,11 +269,6 @@ func (s *DatasetSource) ListResampleSubjectsForRule(ctx context.Context, spaceID
 	return subjects, nil
 }
 
-func isSharedMarketDataSource(dataSourceID string) bool {
-	dataSourceID = strings.ToLower(strings.TrimSpace(dataSourceID))
-	return dataSourceID == "crypto" || dataSourceID == "market_data"
-}
-
 func inferResampleSymbolSource(provider, seriesTag string) string {
 	provider = strings.TrimSpace(provider)
 	if provider != "" && !strings.EqualFold(provider, "moox") {
@@ -314,7 +308,7 @@ func mergeDatasetSubjectsBySymbol(bindings []*storagepb.DatasetSubject, symbols 
 	}
 	// An explicit DatasetSubject set is an allow-list. Do not let an empty
 	// intersection fall through to mergeDatasetSubjects' empty-binding
-	// universe fallback, which would silently select every provider symbol.
+	// active-subject fallback, which would silently select every provider symbol.
 	if len(bindings) > 0 && len(selected) == 0 {
 		return []domain.DatasetSubject{}, nil
 	}
@@ -412,9 +406,9 @@ func mergeDatasetSubjects(
 	symbols map[string]string,
 ) ([]domain.DatasetSubject, error) {
 	// Runtime K-line Datasets are often written for the full exchange symbol
-	// universe without maintaining a duplicate DatasetSubject row for every
+	// active subject set without maintaining a duplicate DatasetSubject row for every
 	// symbol. In that case the active data-source symbol catalog is the explicit
-	// universe and keeps local resample planning useful for existing result data.
+	// active subject set and keeps local resample planning useful for existing result data.
 	if len(bindings) == 0 && len(symbols) > 0 {
 		ids := make([]string, 0, len(symbols))
 		for subjectID := range symbols {

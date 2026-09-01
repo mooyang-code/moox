@@ -8,15 +8,15 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/jobdef"
 )
 
-// JobType is the queue routing type for symbol collection.
-const JobType = "collect.binance.symbol"
+// JobType is the queue routing type for instrument collection.
+const JobType = "collect.binance.instrument"
 
-// NewJobDefinition returns the symbol collector job definition.
+// NewJobDefinition returns the instrument collector job definition.
 func NewJobDefinition() jobdef.JobDefinition {
 	dataSources := jobdef.OptionList{Options: []jobdef.Option{{Value: "binance", Label: "币安"}}}
 	return jobdef.JobDefinition{
 		ID:                2,
-		DataType:          "symbol",
+		DataType:          domain.InstrumentDataType,
 		TypeName:          "标的",
 		TypeDesc:          "交易所标的元数据同步",
 		DataSourceOptions: dataSources,
@@ -26,7 +26,7 @@ func NewJobDefinition() jobdef.JobDefinition {
 		Fields: []jobdef.FieldDefinition{
 			{
 				ID:                4,
-				DataType:          "symbol",
+				DataType:          domain.InstrumentDataType,
 				FieldKey:          "inst_type",
 				FieldName:         "产品类型",
 				FieldType:         "select",
@@ -38,15 +38,15 @@ func NewJobDefinition() jobdef.JobDefinition {
 			},
 		},
 		Supports: []jobdef.Support{
-			{Exchange: "binance", Market: "spot", DataType: "symbol", SourceKind: "none"},
-			{Exchange: "binance", Market: "swap", DataType: "symbol", SourceKind: "none"},
+			{Exchange: "binance", Market: "spot", DataType: domain.InstrumentDataType, SourceKind: "none"},
+			{Exchange: "binance", Market: "swap", DataType: domain.InstrumentDataType, SourceKind: "none"},
 		},
 		Planner: func(ctx context.Context, rule *domain.TaskRule, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
 			_ = ctx
 			_ = rule
 			_ = subjects
 			if params.Source.Kind != "" && params.Source.Kind != "none" {
-				return nil, fmt.Errorf("symbol planner requires none source, got %s", params.Source.Kind)
+				return nil, fmt.Errorf("instrument planner requires none source, got %s", params.Source.Kind)
 			}
 			return BuildTaskSpecs(params), nil
 		},

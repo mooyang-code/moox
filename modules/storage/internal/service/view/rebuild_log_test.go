@@ -68,7 +68,7 @@ func TestRebuildTriggerReasonRecognizesRevisionScopedManualRequest(t *testing.T)
 }
 
 func TestRebuildTriggerReasonPrioritizesSingleSeriesCapacity(t *testing.T) {
-	view := &pb.View{SpaceId: "crypto", ViewId: "binance_spot_kline_1m_view", ActiveIndexId: "index-a", DesiredViewRevision: 1, ActiveViewRevision: 1}
+	view := &pb.View{SpaceId: "crypto_market", ViewId: "binance_spot_kline_1m_view", ActiveIndexId: "index-a", DesiredViewRevision: 1, ActiveViewRevision: 1}
 	if got := rebuildTriggerReason(view, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1}, true, true); got != pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_SERIES_CAPACITY {
 		t.Fatalf("trigger reason=%v, want series capacity", got)
 	}

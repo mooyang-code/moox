@@ -115,9 +115,9 @@ func TestHealthViewExcludesHostMonitoringDatasetsAndAlerts(t *testing.T) {
 
 func TestCollectorDatasetUsesStorageAsAuthoritativeHealthFact(t *testing.T) {
 	items := []observability.DatasetFrequencyStatus{
-		{Producer: "collector", SpaceID: "crypto", DatasetID: "binance_spot_kline_1m", Freq: "1m"},
-		{Producer: "storage", SpaceID: "crypto", DatasetID: "binance_spot_kline_1m", Freq: "1m"},
-		{Producer: "collector", SpaceID: "crypto", DatasetID: "new_dataset", Freq: "1m"},
+		{Producer: "collector", SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m", Freq: "1m"},
+		{Producer: "storage", SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m", Freq: "1m"},
+		{Producer: "collector", SpaceID: "crypto_market", DatasetID: "new_dataset", Freq: "1m"},
 	}
 	scopes := storageDatasetScopes(items)
 	if !collectorCoveredByStorage(items[0], scopes) {
@@ -133,10 +133,10 @@ func TestCollectorDatasetUsesStorageAsAuthoritativeHealthFact(t *testing.T) {
 
 func TestCollectorDatasetCoverageNormalizesFrequency(t *testing.T) {
 	items := []observability.DatasetFrequencyStatus{
-		{Producer: "storage", SpaceID: "crypto", DatasetID: "bars", Freq: "1H"},
+		{Producer: "storage", SpaceID: "crypto_market", DatasetID: "bars", Freq: "1H"},
 	}
 	if !collectorCoveredByStorage(
-		observability.DatasetFrequencyStatus{Producer: "collector", SpaceID: "crypto", DatasetID: "bars", Freq: "1h"},
+		observability.DatasetFrequencyStatus{Producer: "collector", SpaceID: "crypto_market", DatasetID: "bars", Freq: "1h"},
 		storageDatasetScopes(items),
 	) {
 		t.Fatal("frequency matching must be case-insensitive")

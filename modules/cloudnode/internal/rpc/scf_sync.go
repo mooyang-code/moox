@@ -420,10 +420,8 @@ func (s *Service) importSCFFunction(ctx context.Context, spaceID string, account
 func isMarketFetcherFunction(name, spaceID string, environment map[string]string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
 	space := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(spaceID), "_", "-"))
-	if space != "" && strings.HasPrefix(name, "moox-fetcher-market-data-"+space) {
+	if space != "" && strings.HasPrefix(name, "moox-fetcher-"+space) {
 		return true
 	}
-	return strings.EqualFold(strings.TrimSpace(environment["MOOX_SPACE_ID"]), spaceID) &&
-		strings.TrimSpace(environment["MOOX_FETCH_TIMEOUT_SECONDS"]) != "" &&
-		strings.TrimSpace(environment["MOOX_STORAGE_RPC_GATEWAY_TARGET"]) != ""
+	return strings.TrimSpace(environment["MOOX_FETCH_TIMEOUT_SECONDS"]) != "" && strings.TrimSpace(environment["MOOX_STORAGE_RPC_GATEWAY_TARGET"]) != ""
 }

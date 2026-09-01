@@ -18,6 +18,22 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+func TestRetryCollectionItemUsesExactTaskIDBeforeSubjectFallback(t *testing.T) {
+	request := Request{DatasetID: "stock_cn_kline", Items: []domain.CollectionItem{
+		{TaskID: "snapshot-shard-0", SubjectID: "stock_cn", DatasetID: "stock_cn_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 0, SnapshotShardCount: 2},
+		{TaskID: "snapshot-shard-1", SubjectID: "stock_cn", DatasetID: "stock_cn_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 1, SnapshotShardCount: 2},
+	}}
+	result := &marketfetchpb.MarketFetchItemResult{TaskId: "snapshot-shard-1", SubjectId: "stock_cn", Outcome: string(domain.ItemOutcomeProviderError)}
+
+	item := retryCollectionItem(request, result, "retry-shard-1")
+
+	assert.Equal(t, "snapshot-shard-1", item.TaskID)
+	assert.Equal(t, 1, item.SnapshotShardIndex)
+	assert.Equal(t, 2, item.SnapshotShardCount)
+	assert.Equal(t, "2026-08-30T00:00:00Z", item.SnapshotAt)
+	assert.Equal(t, klineProviderAttemptBudget, item.CandidateIndex)
+}
+
 func TestHandleCompletionMarksPermanentFailureOnTaskInstance(t *testing.T) {
 	db := newCompletionTestStore(t)
 	ctx := context.Background()
@@ -227,6 +243,23 @@ func TestCompletionAcceptsFailoverNodeForSameBatch(t *testing.T) {
 	payload.PlannedCount = int32(batch.PlannedCount)
 
 	assert.Empty(t, completionIdentityMismatch(&batch, payload))
+}
+
+func TestRetryCollectionItemAdvancesProviderCandidateWindow(t *testing.T) {
+	request := Request{DatasetID: "bars", Frequency: "1m", Provider: "binance", MarketType: "spot", Items: []domain.CollectionItem{{
+		TaskID: "task-btc", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", DatasetID: "bars", CandidateIndex: 1,
+	}}}
+	item := retryCollectionItem(request, &marketfetchpb.MarketFetchItemResult{TaskId: "task-btc", SubjectId: "BTC-USDT"}, "retry-key")
+	require.Equal(t, 1+klineProviderAttemptBudget, item.CandidateIndex)
+	require.Equal(t, "retry-key", item.SourceEventID)
+}
+
+func TestRetryCollectionItemKeepsProviderCandidateOnStorageFailure(t *testing.T) {
+	request := Request{DatasetID: "bars", Frequency: "1m", Provider: "binance", MarketType: "spot", Items: []domain.CollectionItem{{
+		TaskID: "task-btc", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", DatasetID: "bars", CandidateIndex: 1,
+	}}}
+	item := retryCollectionItem(request, &marketfetchpb.MarketFetchItemResult{TaskId: "task-btc", SubjectId: "BTC-USDT", Outcome: string(domain.ItemOutcomeStorageError)}, "storage-retry-key")
+	require.Equal(t, 1, item.CandidateIndex)
 }
 
 func newCompletionTestStore(t *testing.T) *store.Store {

@@ -367,6 +367,39 @@ func (s *Service) BindDatasetSubject(ctx context.Context, req *pb.BindDatasetSub
 	return &pb.BindDatasetSubjectRsp{RetInfo: retinfo.Success("success"), DatasetSubject: created}, nil
 }
 
+func (s *Service) StageDatasetSubjectSet(ctx context.Context, req *pb.StageDatasetSubjectSetReq) (*pb.StageDatasetSubjectSetRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetSetId()) == "" || len(req.GetDatasetSubjects()) == 0 {
+		return &pb.StageDatasetSubjectSetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, set_id and dataset_subjects are required"))}, nil
+	}
+	writer, ok := s.metadata.(coremetadata.DatasetSubjectSetWriter)
+	if !ok {
+		return &pb.StageDatasetSubjectSetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("metadata store does not support dataset subject set staging"))}, nil
+	}
+	count, err := writer.StageDatasetSubjectSet(ctx, req.GetSpaceId(), req.GetSetId(), req.GetDatasetSubjects())
+	if err != nil {
+		return &pb.StageDatasetSubjectSetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.StageDatasetSubjectSetRsp{RetInfo: retinfo.Success("success"), SetId: req.GetSetId(), Count: uint32(count)}, nil
+}
+
+func (s *Service) ActivateDatasetSubjectSet(ctx context.Context, req *pb.ActivateDatasetSubjectSetReq) (*pb.ActivateDatasetSubjectSetRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetSetId()) == "" {
+		return &pb.ActivateDatasetSubjectSetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and set_id are required"))}, nil
+	}
+	writer, ok := s.metadata.(coremetadata.DatasetSubjectSetWriter)
+	if !ok {
+		return &pb.ActivateDatasetSubjectSetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("metadata store does not support dataset subject set activation"))}, nil
+	}
+	count, err := writer.ActivateDatasetSubjectSet(ctx, req.GetSpaceId(), req.GetSetId())
+	if err != nil {
+		return &pb.ActivateDatasetSubjectSetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDatasetSubjectSet"); err != nil {
+		return &pb.ActivateDatasetSubjectSetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.ActivateDatasetSubjectSetRsp{RetInfo: retinfo.Success("success"), SetId: req.GetSetId(), Count: uint32(count)}, nil
+}
+
 func (s *Service) ListDatasetSubjects(ctx context.Context, req *pb.ListDatasetSubjectsReq) (*pb.ListDatasetSubjectsRsp, error) {
 	items, page, err := s.metadata.ListDatasetSubjects(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetSubjectId(), req.GetPage())
 	if err != nil {

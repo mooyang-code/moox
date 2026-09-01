@@ -184,6 +184,10 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 	effects := store.FetchCompletionEffects{}
 	var original Request
 	_ = json.Unmarshal([]byte(batch.RequestJSON), &original)
+	logicalSyncPointID := strings.TrimSpace(original.SyncPointID)
+	if logicalSyncPointID == "" {
+		logicalSyncPointID = payload.GetBatchId()
+	}
 	lateCompletion := wasTimedOut || wasLateCompletion
 	for _, item := range payload.GetItems() {
 		if item == nil {
@@ -241,7 +245,6 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 			key = retryKey(payload.GetBatchId(), item.GetSubjectId(), item.GetTargetDataTime())
 		}
 		attempt := 1
-		logicalSyncPointID := payload.GetBatchId()
 		if previous, getErr := retries.Get(ctx, spaceID, key); getErr == nil && previous != nil {
 			if lateCompletion {
 				// The timeout recovery already owns this retry key. A late
@@ -379,7 +382,7 @@ func completionEventBusClient(ctx context.Context) (*jetstream.Client, error) {
 
 func isRetryOutcome(outcome string) bool {
 	switch domain.ItemOutcome(outcome) {
-	case domain.ItemOutcomeHTTP429, domain.ItemOutcomeHTTP5xx, domain.ItemOutcomeNetworkError, domain.ItemOutcomeStorageError:
+	case domain.ItemOutcomeHTTP429, domain.ItemOutcomeHTTP5xx, domain.ItemOutcomeNetworkError, domain.ItemOutcomeStorageError, domain.ItemOutcomeProviderError:
 		return true
 	default:
 		return false
@@ -402,11 +405,35 @@ func retryKey(batchID, subjectID, target string) string {
 }
 
 func retryCollectionItem(request Request, result *marketfetchpb.MarketFetchItemResult, key string) domain.CollectionItem {
-	for _, item := range request.Items {
-		if (result.GetTaskId() != "" && item.TaskID == result.GetTaskId()) || (item.SubjectID == result.GetSubjectId() && item.DatasetID == request.DatasetID) {
+	if result.GetTaskId() != "" {
+		for _, item := range request.Items {
+			if item.TaskID != result.GetTaskId() {
+				continue
+			}
 			item.SourceEventID = key
+			if result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
+				item.CandidateIndex += klineProviderAttemptBudget
+			}
 			return item
 		}
 	}
-	return domain.CollectionItem{TaskID: result.GetTaskId(), SubjectID: result.GetSubjectId(), Symbol: result.GetSymbol(), TargetDataTime: result.GetTargetDataTime(), SourceEventID: key, DatasetID: request.DatasetID, Frequency: request.Frequency, Provider: request.Provider, MarketType: request.MarketType, DataType: "kline"}
+	for _, item := range request.Items {
+		if item.SubjectID == result.GetSubjectId() && item.DatasetID == request.DatasetID {
+			item.SourceEventID = key
+			// A provider failure exhausted the current two-candidate window and
+			// should resume at the next window. A Storage failure happens after
+			// a valid source row was selected, so retry the same chain position
+			// instead of skipping a healthy provider merely because the write
+			// acknowledgment was lost.
+			if result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
+				item.CandidateIndex += klineProviderAttemptBudget
+			}
+			return item
+		}
+	}
+	candidateIndex := 0
+	if result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
+		candidateIndex = klineProviderAttemptBudget
+	}
+	return domain.CollectionItem{TaskID: result.GetTaskId(), SubjectID: result.GetSubjectId(), Symbol: result.GetSymbol(), TargetDataTime: result.GetTargetDataTime(), SourceEventID: key, DatasetID: request.DatasetID, Frequency: request.Frequency, Provider: request.Provider, MarketType: request.MarketType, DataType: "kline", CandidateIndex: candidateIndex}
 }

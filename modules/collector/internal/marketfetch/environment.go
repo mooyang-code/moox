@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
+	stocksource "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
 )
 
 const (
@@ -19,12 +21,21 @@ const (
 	// Tencent's 4KB function-environment limit. Collector owns only this
 	// managed portion and cannot see every provider-owned key before submit.
 	maxManagedEnvironmentSize = 1800
+	// Stock groups are slightly larger than crypto shards because a fixed fleet
+	// uses rendezvous hashing instead of creating another function on overflow.
+	// CloudNode still reports the real per-function remaining budget, which can
+	// lower this ceiling before a patch is submitted.
+	stockCNMaxManagedEnvironmentSize = 2200
 )
 
 // BuildManagedEnvironment creates only the Collector-owned keys. CloudNode
 // merges them with provider-owned keys such as MOOX_CODE_PACKAGE_ID.
 func BuildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sources.DNSResolution) (map[string]string, error) {
-	return buildManagedEnvironment(assignment, snapshot, maxManagedEnvironmentSize)
+	maxSize := maxManagedEnvironmentSize
+	if isStockCNAssignment(assignment) {
+		maxSize = stockCNMaxManagedEnvironmentSize
+	}
+	return buildManagedEnvironment(assignment, snapshot, maxSize)
 }
 
 // ManagedDNSHash returns the short hash embedded in the CloudNode-managed
@@ -47,8 +58,8 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 		}
 	}
 	subjects := normalizeSubjects(assignment.Subjects)
-	if len(subjects) > 30 {
-		return nil, fmt.Errorf("assignment contains %d subjects; maximum is 30", len(subjects))
+	if !isStockCNAssignment(assignment) && len(subjects) > MaxRealtimeItems {
+		return nil, fmt.Errorf("assignment contains %d subjects; maximum is %d", len(subjects), MaxRealtimeItems)
 	}
 	routes, dnsHash, updatedAt := normalizeDNSRoutes(snapshot)
 	rawRoutes, err := json.Marshal(routes)
@@ -62,6 +73,18 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 	symbols := make(map[string]string, len(subjects))
 	for _, subject := range subjects {
 		external := strings.TrimSpace(assignment.ExternalSymbols[subject])
+		if isStockCNAssignment(assignment) {
+			strict, err := stocksource.ProviderSymbol(subject)
+			if err != nil {
+				return nil, fmt.Errorf("assignment subject %s has no valid stock symbol: %w", subject, err)
+			}
+			// Ordinary A-share symbols are derived from the exchange suffix at
+			// invocation time. Only explicit exceptions consume environment bytes.
+			if external != "" && external != strict {
+				symbols[subject] = external
+			}
+			continue
+		}
 		if external == "" {
 			return nil, fmt.Errorf("assignment subject %s has no external symbol", subject)
 		}
@@ -83,6 +106,10 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 		"MOOX_MARKET_FETCH_DNS_HASH":        dnsHash,
 		"MOOX_MARKET_FETCH_DNS_UPDATED_AT":  updatedAt,
 	}
+	if assignment.RouteVersion != "" {
+		environment["MOOX_MARKET_FETCH_PROVIDER_CHAIN"] = strings.Join(assignment.ProviderChain, "|")
+		environment["MOOX_MARKET_FETCH_ROUTE_VERSION"] = assignment.RouteVersion
+	}
 	if assignment.MarketID != "" {
 		environment["MOOX_MARKET_FETCH_MARKET_ID"] = assignment.MarketID
 	}
@@ -95,10 +122,32 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 	if assignment.SeriesTag != "" {
 		environment["MOOX_MARKET_FETCH_SERIES_TAG"] = assignment.SeriesTag
 	}
+	if assignment.GroupCount > 0 {
+		environment["MOOX_MARKET_FETCH_GROUP_ID"] = fmt.Sprint(assignment.GroupID)
+		environment["MOOX_MARKET_FETCH_GROUP_COUNT"] = fmt.Sprint(assignment.GroupCount)
+	}
+	// The SCF metrics bridge is optional and deployment-owned. A host process
+	// commonly has MOOX_METRICS_EVENTBUS_URL pointing at its loopback broker
+	// and a host-only credential path; copying either into SCF would create a
+	// misleading, non-functional runtime configuration. Only the explicitly
+	// SCF-scoped variables cross this boundary.
+	for target, source := range map[string]string{
+		"MOOX_METRICS_EVENTBUS_URL":             "MOOX_SCF_METRICS_EVENTBUS_URL",
+		"MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE": "MOOX_SCF_METRICS_EVENTBUS_CREDENTIAL_FILE",
+	} {
+		if value := strings.TrimSpace(os.Getenv(source)); value != "" {
+			environment[target] = value
+		}
+	}
 	if environmentBytes(environment) > maxSize {
 		return nil, fmt.Errorf("timer assignment environment is %d bytes before provider variables; reduce symbols or split the assignment (managed budget %d)", environmentBytes(environment), maxSize)
 	}
 	return environment, nil
+}
+
+func isStockCNAssignment(assignment NodeAssignment) bool {
+	return assignment.RouteVersion == StockCNRouteID ||
+		(strings.EqualFold(strings.TrimSpace(assignment.MarketType), "equity") && strings.TrimSpace(assignment.DatasetID) == StockCNDatasetID)
 }
 
 func environmentBytes(values map[string]string) int {

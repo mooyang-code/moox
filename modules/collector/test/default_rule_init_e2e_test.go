@@ -27,7 +27,7 @@ import (
 
 // TestDefaultRuleInitAndSchedulerE2E proves the complete recovery boundary:
 // the packaged rules are seeded into a real Collector SQLite database and one
-// Scheduler tick expands both spot and swap symbol sources into task instances.
+// Scheduler tick expands both spot and swap instrument sources into task instances.
 func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -41,7 +41,7 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	require.NoError(t, err)
 	summary, err := ruleseed.SeedMissing(ctx, dbm.TaskRules(), rules)
 	require.NoError(t, err)
-	require.Equal(t, 10, summary.Created)
+	require.Equal(t, 7, summary.Created)
 
 	var invocationCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,15 +73,15 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	scheduler := &marketfetch.Scheduler{
 		Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
 		Invoker: scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: server.URL, Auth: runtime.AuthConfig{AccessKey: "test", SecretKey: "test", TargetNode: "test"}}),
-		Symbols: defaultRuleDatasetSource{}, SpaceID: "crypto", InvokeNonRealtimeOnly: true,
+		Symbols: defaultRuleDatasetSource{}, SpaceID: "crypto_market", InvokeNonRealtimeOnly: true,
 		InvokeConcurrency: 1, Now: func() time.Time { return time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC) },
 	}
-	require.NoError(t, scheduler.Tick(ctx, "crypto"))
+	require.NoError(t, scheduler.Tick(ctx, "crypto_market"))
 
-	instances, total, err := dbm.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: "crypto", Page: 1, PageSize: 200})
+	instances, total, err := dbm.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: "crypto_market", Page: 1, PageSize: 200})
 	require.NoError(t, err)
-	require.Equal(t, int64(5), total)
-	require.Len(t, instances, 5)
+	require.Equal(t, int64(64), total)
+	require.Len(t, instances, 64)
 	var spot, swap, kline int
 	for _, instance := range instances {
 		if instance.MarketType == "spot" {
@@ -94,9 +94,9 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 			kline++
 		}
 	}
-	require.Equal(t, 3, spot)
-	require.Equal(t, 2, swap)
-	require.Equal(t, 3, kline)
+	require.Equal(t, 32, spot)
+	require.Equal(t, 32, swap)
+	require.Zero(t, kline, "realtime kline rules use Timer nodes, while this test provides only an Invoke node")
 	require.Eventually(t, func() bool { return invocationCount.Load() >= 2 }, 2*time.Second, 10*time.Millisecond)
 }
 

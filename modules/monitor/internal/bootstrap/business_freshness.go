@@ -107,7 +107,7 @@ func buildBusinessFreshnessReporter(
 			}
 			spaceID := business.SpaceID
 			if spaceID == "" {
-				spaceID = "crypto"
+				spaceID = "crypto_market"
 			}
 			checkID, name := "balance:"+business.Module, "Balance freshness "+business.Module
 			if business.Kind == "market_fetch" {

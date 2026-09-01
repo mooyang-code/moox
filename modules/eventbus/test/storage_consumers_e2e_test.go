@@ -75,12 +75,12 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 	}
 
 	occurredAt := time.Now().UTC()
-	payload := &storagepb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "binance_spot_kline_1m", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "binance_spot_kline_1m", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}}}
-	first, err := publisher.Publish(context.Background(), events.DatasetRowsUpserted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto", SubjectID: "binance_spot_kline_1m"})
+	payload := &storagepb.DatasetRowsUpserted{SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}}}
+	first, err := publisher.Publish(context.Background(), events.DatasetRowsUpserted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto_market", SubjectID: "binance_spot_kline_1m"})
 	if err != nil || first == nil || first.Duplicate {
 		t.Fatalf("first publish ack=%+v err=%v", first, err)
 	}
-	second, err := publisher.Publish(context.Background(), events.DatasetRowsUpserted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto", SubjectID: "binance_spot_kline_1m"})
+	second, err := publisher.Publish(context.Background(), events.DatasetRowsUpserted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto_market", SubjectID: "binance_spot_kline_1m"})
 	if err != nil || second == nil || !second.Duplicate {
 		t.Fatalf("duplicate publish ack=%+v err=%v", second, err)
 	}
@@ -100,7 +100,7 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 		if err != nil {
 			t.Fatalf("decode %s: %v", durable, err)
 		}
-		if message.GetEventId() != "storage-e2e-1" || message.GetEventName() != events.DatasetRowsUpserted.Name() || message.GetSpaceId() != "crypto" || message.GetSubjectId() != "binance_spot_kline_1m" {
+		if message.GetEventId() != "storage-e2e-1" || message.GetEventName() != events.DatasetRowsUpserted.Name() || message.GetSpaceId() != "crypto_market" || message.GetSubjectId() != "binance_spot_kline_1m" {
 			t.Fatalf("decoded envelope %s=%+v", durable, message)
 		}
 		if err := delivery.Ack(ctx); err != nil {
