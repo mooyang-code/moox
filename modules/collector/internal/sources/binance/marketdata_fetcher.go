@@ -38,7 +38,7 @@ func (f *MarketDataFetcher) Descriptor() marketdata.ProviderDescriptor {
 	if f != nil && f.InstType == InstTypeSWAP {
 		sourceID = "swap_http"
 	}
-	return marketdata.ProviderDescriptor{ProviderID: "binance", SourceID: sourceID, ProtocolVariant: marketdata.ProtocolHTTP, Transport: "https", Port: 443, Markets: []string{"crypto"}, InstrumentTypes: []string{instType}, Frequencies: []string{"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "1w", "1M"}}
+	return marketdata.ProviderDescriptor{ProviderID: "binance", SourceID: sourceID, ProtocolVariant: marketdata.ProtocolHTTP, Transport: "https", Port: 443, Markets: []string{"crypto"}, InstrumentTypes: []string{instType}, Frequencies: []string{"1m", "3m", "5m", "15m", "30m", "1h", "1H", "2h", "4h", "6h", "12h", "1d", "1w", "1M"}}
 }
 
 func (f *MarketDataFetcher) KlineSpec() marketdata.KlineSpec {
@@ -63,7 +63,7 @@ func (f *MarketDataFetcher) FetchKlines(ctx context.Context, request marketdata.
 	}
 	var raw []*exchange.Kline
 	var err error
-	convertedRequest := &exchange.KlineRequest{Symbol: request.ProviderSymbol, Interval: request.Frequency, Limit: request.Limit, StartTime: request.StartTime, EndTime: request.EndTime}
+	convertedRequest := &exchange.KlineRequest{Symbol: request.ProviderSymbol, Interval: binanceInterval(request.Frequency), Limit: request.Limit, StartTime: request.StartTime, EndTime: request.EndTime}
 	if f.InstType == InstTypeSWAP {
 		if f.Swap == nil {
 			return nil, fmt.Errorf("binance: swap client is not initialized")
@@ -98,6 +98,19 @@ func (f *MarketDataFetcher) FetchKlines(ctx context.Context, request marketdata.
 		result = append(result, marketdata.NormalizedKline{SubjectID: request.SubjectID, ProviderID: "binance", SourceID: sourceID, ProviderSymbol: request.ProviderSymbol, Frequency: request.Frequency, BarStart: item.OpenTime.UTC(), BarEnd: item.CloseTime.UTC().Add(time.Millisecond), Open: item.Open, High: item.High, Low: item.Low, Close: item.Close, Volume: item.Volume, Amount: marketdata.OptionalDecimal{Value: item.QuoteVolume, Valid: true}, VolumeUnit: "base", AmountUnit: "quote", ProviderTime: item.OpenTime.UTC(), FetchedAt: now().UTC()})
 	}
 	return result, nil
+}
+
+func binanceInterval(frequency string) string {
+	switch strings.TrimSpace(frequency) {
+	case "1H":
+		return "1h"
+	case "1D":
+		return "1d"
+	case "1W":
+		return "1w"
+	default:
+		return strings.TrimSpace(frequency)
+	}
 }
 
 func (f *MarketDataFetcher) routeIPs(ctx context.Context, sourceID string) ([]string, error) {

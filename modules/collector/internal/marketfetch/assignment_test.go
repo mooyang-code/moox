@@ -44,8 +44,8 @@ func TestBuildAssignmentsRejectsMissingExternalSymbolMapping(t *testing.T) {
 
 func TestBuildAssignmentsKeepsDistinctMarketSourcesSeparate(t *testing.T) {
 	groups := []TaskGroup{
-		{Provider: "eastmoney", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "stock_cn_http", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"SH.600000"}, ExternalSymbols: map[string]string{"SH.600000": "SH.600000"}},
-		{Provider: "tdx", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "normal_7709", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"SH.600000"}, ExternalSymbols: map[string]string{"SH.600000": "SH.600000"}},
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "stock_cn_http", SeriesTag: "eastmoney", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"SH.600000"}, ExternalSymbols: map[string]string{"SH.600000": "SH.600000"}},
+		{Provider: "tdx", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "normal_7709", SeriesTag: "tdx", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"SH.600000"}, ExternalSymbols: map[string]string{"SH.600000": "SH.600000"}},
 	}
 	nodes := []scfinvoker.Node{
 		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},
@@ -56,6 +56,33 @@ func TestBuildAssignmentsKeepsDistinctMarketSourcesSeparate(t *testing.T) {
 	require.Len(t, assignments, 2)
 	require.NotEqual(t, assignments[0].AssignmentHash, assignments[1].AssignmentHash)
 	require.NotEqual(t, assignments[0].SourceID, assignments[1].SourceID)
+}
+
+func TestBuildAssignmentsLimitsTDXTimerToOneSubject(t *testing.T) {
+	assignments, err := BuildAssignments([]TaskGroup{{
+		Provider: "tdx", MarketType: "equity", DatasetID: "stock_cn_kline", Frequency: "1d",
+		Subjects: []string{"SH.600000", "SH.600001"}, ExternalSymbols: map[string]string{"SH.600000": "SH.600000", "SH.600001": "SH.600001"},
+	}}, []scfinvoker.Node{
+		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "n2", NodeType: "scf-event", TriggerType: "timer"},
+	}, 30)
+	require.NoError(t, err)
+	require.Len(t, assignments, 2)
+	for _, assignment := range assignments {
+		require.Len(t, assignment.Subjects, 1)
+	}
+}
+
+func TestBuildAssignmentsRejectsConflictingCanonicalWriters(t *testing.T) {
+	groups := []TaskGroup{
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "stock_cn_http", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"SH.600000"}, ExternalSymbols: map[string]string{"SH.600000": "SH.600000"}},
+		{Provider: "tdx", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "normal_7709", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"SH.600000"}, ExternalSymbols: map[string]string{"SH.600000": "SH.600000"}},
+	}
+	_, err := BuildAssignments(groups, []scfinvoker.Node{
+		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "n2", NodeType: "scf-event", TriggerType: "timer"},
+	}, 30)
+	require.ErrorContains(t, err, "conflicting sources")
 }
 
 func TestBuildAssignmentsKeepsSeriesTagsSeparate(t *testing.T) {
@@ -93,4 +120,37 @@ func TestCronForFrequency(t *testing.T) {
 	require.Equal(t, "0 * * * * * *", cron)
 	_, err = CronForFrequency("2m")
 	require.Error(t, err)
+	for _, test := range []struct {
+		frequency string
+		cron      string
+	}{
+		{frequency: "1w", cron: "0 0 0 * * 1 *"},
+		{frequency: "1M", cron: "0 0 0 1 * * *"},
+		{frequency: "1H", cron: "0 0 * * * * *"},
+	} {
+		cron, err := CronForFrequency(test.frequency)
+		require.NoError(t, err)
+		require.Equal(t, test.cron, cron)
+	}
+}
+
+func TestCronForMarketFrequencyUsesClosedUSMonthlyBar(t *testing.T) {
+	cron, err := CronForMarketFrequency("stock_us", "equity", "1M")
+	require.NoError(t, err)
+	require.Equal(t, "0 0 8 1 * * *", cron)
+
+	cron, err = CronForMarketFrequency("stock_cn", "equity", "1M")
+	require.NoError(t, err)
+	require.Equal(t, "0 0 0 1 * * *", cron)
+}
+
+func TestBuildAssignmentsUsesMarketAwareMonthlyCron(t *testing.T) {
+	assignments, err := BuildAssignments([]TaskGroup{{
+		Provider: "eastmoney", MarketType: "equity", MarketID: "stock_us", InstrumentType: "equity",
+		SourceID: "stock_us_http", DatasetID: "stock_us_kline", Frequency: "1M",
+		Subjects: []string{"AAPL"}, ExternalSymbols: map[string]string{"AAPL": "AAPL"},
+	}}, []scfinvoker.Node{{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"}}, 30)
+	require.NoError(t, err)
+	require.Len(t, assignments, 1)
+	require.Equal(t, "0 0 8 1 * * *", assignments[0].Cron)
 }

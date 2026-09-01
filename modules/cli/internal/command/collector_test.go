@@ -224,6 +224,51 @@ func TestCollectorMarketDataTimerEnvironmentUsesCanonicalSourceIdentity(t *testi
 	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_URL")
 }
 
+func TestCollectorDirectMarketDataEnvironmentUsesExplicitProcessIdentity(t *testing.T) {
+	t.Setenv("MOOX_MARKET_FETCH_MARKET_ID", "crypto")
+	t.Setenv("MOOX_MARKET_FETCH_INSTRUMENT_TYPE", "spot")
+	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "spot_http")
+	t.Setenv("MOOX_MARKET_FETCH_SERIES_TAG", "venue:binance")
+	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "binance_spot_kline_1m")
+	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
+	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "BTC-USDT")
+	t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", `{"BTC-USDT":"BTCUSDT"}`)
+
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{
+		SpaceID: "crypto", TriggerType: "timer",
+		collectorPackageOptions: collectorPackageOptions{Entrypoint: "market_data"},
+		StorageRPCGatewayTarget: "ip://storage:11003",
+	}, "pkg-market-data")
+	require.NoError(t, err)
+	assert.Equal(t, "crypto", env["MOOX_MARKET_FETCH_MARKET_ID"])
+	assert.Equal(t, "spot", env["MOOX_MARKET_FETCH_INSTRUMENT_TYPE"])
+	assert.Equal(t, "binance", env["MOOX_MARKET_FETCH_PROVIDER"])
+	assert.Equal(t, "spot_http", env["MOOX_MARKET_FETCH_SOURCE_ID"])
+	assert.Equal(t, "venue:binance", env["MOOX_MARKET_FETCH_SERIES_TAG"])
+	assert.Equal(t, "binance_spot_kline_1m", env["MOOX_MARKET_FETCH_DATASET_ID"])
+	assert.Equal(t, "1m", env["MOOX_MARKET_FETCH_FREQUENCY"])
+	assert.Equal(t, "BTC-USDT", env["MOOX_MARKET_FETCH_SUBJECTS"])
+	assert.Equal(t, `{"BTC-USDT":"BTCUSDT"}`, env["MOOX_MARKET_FETCH_SYMBOLS_JSON"])
+}
+
+func TestInvokeCollectorFunctionRequiresExactlyOneEventSource(t *testing.T) {
+	base := collectorInvokeOptions{ControlURL: "http://control", NodeID: "node"}
+	if _, err := invokeCollectorFunction(context.Background(), base); err == nil {
+		t.Fatal("expected missing event source error")
+	}
+	base.EventJSON = `{"action":"market_fetch"}`
+	base.EventFile = "/tmp/event.json"
+	if _, err := invokeCollectorFunction(context.Background(), base); err == nil {
+		t.Fatal("expected mutually exclusive event source error")
+	}
+	base.EventFile = ""
+	base.EventJSON = "[]"
+	if _, err := invokeCollectorFunction(context.Background(), base); err == nil {
+		t.Fatal("expected object validation error")
+	}
+}
+
 func TestCollectorMarketDataEnvironmentCarriesTDXRouteCandidates(t *testing.T) {
 	fetcher := &setupconfig.SCFFetcherSpace{
 		SpaceID: "stock_cn", Entrypoint: "market_data", MarketID: "stock_cn", InstrumentType: "equity",
@@ -240,21 +285,49 @@ func TestCollectorMarketDataEnvironmentCarriesTDXRouteCandidates(t *testing.T) {
 
 func TestValidateCollectorFleetRuntimeEnvironmentForMarketData(t *testing.T) {
 	environment := map[string]string{
-		"MOOX_MARKET_DATA_ENTRYPOINT":     "market_data",
-		"MOOX_SPACE_ID":                   "stock_cn",
-		"MOOX_CODE_PACKAGE_ID":            "pkg-market-data",
-		"MOOX_GATEWAY_TARGET_NODE":        "storage-gateway",
-		"MOOX_GATEWAY_SERVICE_KEY_ID":     "collector-key",
-		"MOOX_GATEWAY_SERVICE_SECRET_KEY": "collector-secret",
-		"MOOX_STORAGE_APP_ID":             "storage-app",
-		"MOOX_STORAGE_APP_KEY":            "storage-key",
-		"MOOX_STORAGE_OPERATOR":           "collector",
-		"MOOX_STORAGE_REQUEST_ID":         "request-seed",
-		"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://106.53.107.122:11003",
+		"MOOX_MARKET_DATA_ENTRYPOINT":       "market_data",
+		"MOOX_SPACE_ID":                     "stock_cn",
+		"MOOX_CODE_PACKAGE_ID":              "pkg-market-data",
+		"MOOX_GATEWAY_TARGET_NODE":          "storage-gateway",
+		"MOOX_GATEWAY_SERVICE_KEY_ID":       "collector-key",
+		"MOOX_GATEWAY_SERVICE_SECRET_KEY":   "collector-secret",
+		"MOOX_STORAGE_APP_ID":               "storage-app",
+		"MOOX_STORAGE_APP_KEY":              "storage-key",
+		"MOOX_STORAGE_OPERATOR":             "collector",
+		"MOOX_STORAGE_REQUEST_ID":           "request-seed",
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET":  "primary-secret",
+		"MOOX_STORAGE_RPC_GATEWAY_TARGET":   "ip://106.53.107.122:11003",
+		"MOOX_MARKET_FETCH_MARKET_ID":       "stock_cn",
+		"MOOX_MARKET_FETCH_INSTRUMENT_TYPE": "equity",
+		"MOOX_MARKET_FETCH_PROVIDER":        "eastmoney",
+		"MOOX_MARKET_FETCH_SOURCE_ID":       "eastmoney_http",
+		"MOOX_MARKET_FETCH_DATASET_ID":      "stock_cn_kline_1m",
+		"MOOX_MARKET_FETCH_FREQUENCY":       "1m",
+		"MOOX_MARKET_FETCH_SUBJECTS":        "000001.SZ",
+		"MOOX_MARKET_FETCH_SYMBOLS_JSON":    `{"000001.SZ":"000001"}`,
+		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment-test",
 	}
 	require.NoError(t, validateCollectorFleetRuntimeEnvironment(environment, true, true))
 	delete(environment, "MOOX_STORAGE_APP_KEY")
 	require.ErrorContains(t, validateCollectorFleetRuntimeEnvironment(environment, true, true), "MOOX_STORAGE_APP_KEY")
+}
+
+func TestCollectorInvokeMarketDataCarriesCompletionEventBus(t *testing.T) {
+	fetcher := &setupconfig.SCFFetcherSpace{
+		SpaceID: "crypto", Entrypoint: "market_data", MarketID: "crypto", InstrumentType: "spot",
+		ProviderID: "binance", SourceID: "spot_http", StorageGatewayNodeID: "storage-gateway",
+		StorageAppID: "storage-app", StorageAppKey: "storage-key", StorageOperator: "collector", StorageRequestID: "request-seed",
+	}
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{
+		TriggerType: "invoke", BizType: "market_fetcher", FetcherConfig: fetcher,
+		StorageRPCGatewayTarget: "ip://storage:11003",
+		collectorPackageOptions: collectorPackageOptions{StoragePrimaryAuthSecret: "primary-secret"},
+		EventBusCredential:      &jetstream.CredentialFile{URLs: []string{"tls://eventbus.example:4222"}, Username: "publisher", Password: "secret"},
+		EventBusCAPEM:           []byte("eventbus-ca"),
+	}, "pkg-market-data")
+	require.NoError(t, err)
+	assert.Equal(t, "tls://eventbus.example:4222", env["MOOX_EVENTBUS_NATS_URL"])
+	assert.Equal(t, "primary-secret", env["MOOX_STORAGE_PRIMARY_AUTH_SECRET"])
 }
 
 func TestMarketDataCanaryRequestUsesCanonicalManifest(t *testing.T) {
@@ -278,6 +351,12 @@ func TestMarketDataCanaryRequestUsesCanonicalManifest(t *testing.T) {
 			assert.Equal(t, 2, canary.Limit)
 		})
 	}
+	canary, err := marketDataCanaryRequest(&setupconfig.SCFFetcherSpace{MarketID: "crypto", InstrumentType: "spot", ProviderID: "binance", SourceID: "spot_http"})
+	require.NoError(t, err)
+	assert.Equal(t, "binance_spot_kline_1m", canary.DatasetID)
+	assert.Equal(t, "1m", canary.Frequency)
+	assert.Equal(t, "BTC-USDT", canary.SubjectID)
+	assert.Equal(t, "BTCUSDT", canary.ProviderSymbol)
 }
 
 func TestMarketDataCanaryRequestRejectsUndeclaredSource(t *testing.T) {
@@ -328,12 +407,16 @@ password = "password"
 enabled = true
 
 [[scf_fetcher.spaces]]
-space_id = "crypto_market"
+space_id = "crypto"
 storage_rpc_gateway_target = "ip://106.53.107.122:11003"
-entrypoint = "crypto_market"
-package_config_dir = "scf/crypto_market"
-package_name = "moox-collector-crypto-market"
-function_prefix = "moox-fetcher-crypto-market"
+entrypoint = "market_data"
+market_id = "crypto"
+instrument_type = "spot"
+provider_id = "binance"
+source_id = "spot_http"
+package_config_dir = "scf/market_data"
+package_name = "moox-collector-market-data-crypto"
+function_prefix = "moox-fetcher-market-data-crypto"
 memory_size = 64
 timeout_seconds = 15
 realtime_batch_size = 10
@@ -351,8 +434,13 @@ cloud_account_id = "tencent-scf-singapore"
 
 [[scf_fetcher.spaces]]
 space_id = "stock_cn"
+entrypoint = "market_data"
+market_id = "stock_cn"
+instrument_type = "equity"
+provider_id = "eastmoney"
+source_id = "stock_cn_http"
 storage_rpc_gateway_target = "ip://106.53.107.122:11003"
-package_config_dir = "scf/stock_cn"
+package_config_dir = "scf/market_data"
 package_name = "moox-collector-stock_cn"
 function_prefix = "moox-fetcher-stock_cn"
 memory_size = 64
@@ -372,12 +460,12 @@ cloud_account_id = "tencent-scf-guangzhou"
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
-	cryptoMarket, err := loadCollectorSCFFetcherConfig(path, "crypto_market")
+	cryptoMarket, err := loadCollectorSCFFetcherConfig(path, "crypto")
 	require.NoError(t, err)
 	require.NotNil(t, cryptoMarket)
-	assert.Equal(t, "crypto_market", cryptoMarket.SpaceID)
-	assert.Equal(t, "crypto_market", cryptoMarket.Entrypoint)
-	assert.Equal(t, "scf/crypto_market", cryptoMarket.PackageConfigDir)
+	assert.Equal(t, "crypto", cryptoMarket.SpaceID)
+	assert.Equal(t, "market_data", cryptoMarket.Entrypoint)
+	assert.Equal(t, "scf/market_data", cryptoMarket.PackageConfigDir)
 	assert.Equal(t, "ap-singapore", cryptoMarket.Regions[0].Region)
 
 	_, err = loadCollectorSCFFetcherConfig(path, "stock_us")
@@ -833,6 +921,24 @@ func TestPublishSubmitExpandsPartialFleet(t *testing.T) {
 
 func TestPublishSubmitRejectsOversizedFleetBeforeUpload(t *testing.T) {
 	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
+	for key, value := range map[string]string{
+		"MOOX_MARKET_FETCH_MARKET_ID":       "stock_cn",
+		"MOOX_MARKET_FETCH_INSTRUMENT_TYPE": "equity",
+		"MOOX_MARKET_FETCH_PROVIDER":        "eastmoney",
+		"MOOX_MARKET_FETCH_SOURCE_ID":       "eastmoney_http",
+		"MOOX_MARKET_FETCH_DATASET_ID":      "stock_cn_kline_1m",
+		"MOOX_MARKET_FETCH_FREQUENCY":       "1m",
+		"MOOX_MARKET_FETCH_SUBJECTS":        "000001.SZ",
+		"MOOX_MARKET_FETCH_SYMBOLS_JSON":    `{"000001.SZ":"000001"}`,
+		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment-test",
+		"MOOX_STORAGE_APP_ID":               "storage-app",
+		"MOOX_STORAGE_APP_KEY":              "storage-key",
+		"MOOX_STORAGE_OPERATOR":             "collector",
+		"MOOX_STORAGE_REQUEST_ID":           "request-seed",
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET":  "primary-secret",
+	} {
+		t.Setenv(key, value)
+	}
 	uploadCalled := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -854,7 +960,7 @@ func TestPublishSubmitRejectsOversizedFleetBeforeUpload(t *testing.T) {
 		SpaceID:                "crypto",
 		CloudAccountID:         "account-a",
 		Region:                 "ap-guangzhou",
-		NodeCount:              50,
+		NodeCount:              1,
 		FunctionNamePrefix:     "fleet",
 		EventBusCredentialFile: credentialFile,
 	})

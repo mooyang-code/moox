@@ -42,7 +42,7 @@ storage:
       - id: kline
         durable: storage_view_kline
         routes:
-          - space_id: crypto_market
+          - space_id: crypto
             dataset_ids: [binance_spot_kline_1m]
         fetch_batch: 4
         max_workers: 2
@@ -70,7 +70,7 @@ storage:
       - id: factor
         durable: storage_view_factor
         routes:
-          - space_id: crypto_market
+          - space_id: crypto
             dataset_ids: [binance_spot_kline_1m_factor]
         # Factor results are emitted once per factor/subject/period. Keep a
         # deeper fetch window and more worker capacity than Kline so a brief
@@ -87,12 +87,16 @@ storage:
       - id: misc
         durable: storage_view_misc
         routes:
-          - space_id: crypto_market
+          - space_id: crypto
             dataset_ids: ["*"]
           - space_id: moox_system
             dataset_ids: [host_disk_v1, host_fs_v1, host_net_v1, host_resource_v1]
           - space_id: stock_cn
-            dataset_ids: [financial_statement_metric, financial_summary, index_kline, stock_kline]
+            dataset_ids: [financial_statement_metric, financial_summary, stock_cn_convertible_bond_kline, stock_cn_index_kline, stock_cn_kline]
+          - space_id: stock_hk
+            dataset_ids: [stock_hk_kline]
+          - space_id: stock_us
+            dataset_ids: [stock_us_kline]
         fetch_batch: 4
         max_workers: 2
         max_ack_pending: 16

@@ -16,11 +16,11 @@ func TestPreviewAndImportSCFFunctionsAreSpaceScopedAndIdempotent(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	require.NoError(t, catalog.UpsertAccount(context.Background(), store.CloudAccount{AccountID: "account-a", Provider: "tencent", CredentialSecretID: "secret"}))
 	fake := &fakeSCFClient{
-		inventory:  []tencentscf.DiscoveryFunction{{FunctionRef: tencentscf.FunctionRef{Region: "ap-guangzhou", Namespace: "default", FunctionName: "moox-fetcher-crypto-market-0"}, Status: "Active", Runtime: "Go1", Type: "Event"}},
-		getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", Runtime: "Go1", Type: "Event", Environment: map[string]string{"MOOX_SPACE_ID": "crypto_market", "MOOX_CODE_PACKAGE_ID": "pkg-1"}}}},
+		inventory:  []tencentscf.DiscoveryFunction{{FunctionRef: tencentscf.FunctionRef{Region: "ap-guangzhou", Namespace: "default", FunctionName: "moox-fetcher-market-data-crypto-0"}, Status: "Active", Runtime: "Go1", Type: "Event"}},
+		getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", Runtime: "Go1", Type: "Event", Environment: map[string]string{"MOOX_SPACE_ID": "crypto", "MOOX_CODE_PACKAGE_ID": "pkg-1"}}}},
 	}
 	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
-	ctx := spacecontext.WithSpaceID(context.Background(), "crypto_market")
+	ctx := spacecontext.WithSpaceID(context.Background(), "crypto")
 	preview, err := svc.PreviewSCFFunctions(ctx, &pb.PreviewSCFFunctionsReq{AccountId: "account-a"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, preview.GetRetInfo().GetCode())
@@ -33,17 +33,17 @@ func TestPreviewAndImportSCFFunctionsAreSpaceScopedAndIdempotent(t *testing.T) {
 	}
 
 	fake.inventoryRegion = "ap-guangzhou"
-	fake.getResults = []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", Runtime: "Go1", Type: "Event", Environment: map[string]string{"MOOX_SPACE_ID": "crypto_market", "MOOX_CODE_PACKAGE_ID": "pkg-1"}}}}
+	fake.getResults = []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", Runtime: "Go1", Type: "Event", Environment: map[string]string{"MOOX_SPACE_ID": "crypto", "MOOX_CODE_PACKAGE_ID": "pkg-1"}}}}
 	preview, err = svc.PreviewSCFFunctions(ctx, &pb.PreviewSCFFunctionsReq{AccountId: "account-a"})
 	require.NoError(t, err)
 	require.Len(t, preview.GetFunctions(), 1)
 	require.True(t, preview.GetFunctions()[0].GetImportable())
-	fake.getResults = []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", Runtime: "Go1", Type: "Event", Environment: map[string]string{"MOOX_SPACE_ID": "crypto_market", "MOOX_CODE_PACKAGE_ID": "pkg-1"}}}}
+	fake.getResults = []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", Runtime: "Go1", Type: "Event", Environment: map[string]string{"MOOX_SPACE_ID": "crypto", "MOOX_CODE_PACKAGE_ID": "pkg-1"}}}}
 
-	importRsp, err := svc.ImportSCFFunctions(ctx, &pb.ImportSCFFunctionsReq{AccountId: "account-a", Functions: []*pb.SCFFunctionRef{{Region: "ap-guangzhou", Namespace: "default", FunctionName: "moox-fetcher-crypto-market-0"}}})
+	importRsp, err := svc.ImportSCFFunctions(ctx, &pb.ImportSCFFunctionsReq{AccountId: "account-a", Functions: []*pb.SCFFunctionRef{{Region: "ap-guangzhou", Namespace: "default", FunctionName: "moox-fetcher-market-data-crypto-0"}}})
 	require.NoError(t, err)
 	require.Equal(t, int32(1), importRsp.GetCreated())
-	node, err := catalog.GetNode(ctx, "crypto_market", "moox-fetcher-crypto-market-0")
+	node, err := catalog.GetNode(ctx, "crypto", "moox-fetcher-market-data-crypto-0")
 	require.NoError(t, err)
 	require.Equal(t, "pkg-1", node.PackageID)
 	require.NotContains(t, node.Metadata, "MOOX_SECRET")
@@ -53,13 +53,13 @@ func TestPreviewSCFFunctionsBlocksHTTPMarketFetcher(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	require.NoError(t, catalog.UpsertAccount(context.Background(), store.CloudAccount{AccountID: "account-http", Provider: "tencent", CredentialSecretID: "secret"}))
 	fake := &fakeSCFClient{
-		inventory:       []tencentscf.DiscoveryFunction{{FunctionRef: tencentscf.FunctionRef{Region: "ap-guangzhou", Namespace: "default", FunctionName: "moox-fetcher-crypto-market-http"}, Status: "Active", Runtime: "Go1", Type: "HTTP"}},
+		inventory:       []tencentscf.DiscoveryFunction{{FunctionRef: tencentscf.FunctionRef{Region: "ap-guangzhou", Namespace: "default", FunctionName: "moox-fetcher-market-data-crypto-http"}, Status: "Active", Runtime: "Go1", Type: "HTTP"}},
 		inventoryRegion: "ap-guangzhou",
-		getResults:      []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", Runtime: "Go1", Type: "HTTP", Environment: map[string]string{"MOOX_SPACE_ID": "crypto_market", "MOOX_CODE_PACKAGE_ID": "pkg-http"}}}},
+		getResults:      []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", Runtime: "Go1", Type: "HTTP", Environment: map[string]string{"MOOX_SPACE_ID": "crypto", "MOOX_CODE_PACKAGE_ID": "pkg-http"}}}},
 	}
 	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
 
-	preview, err := svc.PreviewSCFFunctions(spacecontext.WithSpaceID(context.Background(), "crypto_market"), &pb.PreviewSCFFunctionsReq{AccountId: "account-http"})
+	preview, err := svc.PreviewSCFFunctions(spacecontext.WithSpaceID(context.Background(), "crypto"), &pb.PreviewSCFFunctionsReq{AccountId: "account-http"})
 	require.NoError(t, err)
 	require.Len(t, preview.GetFunctions(), 1)
 	require.False(t, preview.GetFunctions()[0].GetImportable())

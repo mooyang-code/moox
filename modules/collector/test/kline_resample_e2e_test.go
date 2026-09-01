@@ -91,7 +91,7 @@ func TestKlineResamplePipelineE2E(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
-	rule := domain.TaskRule{SpaceID: "crypto_market", RuleID: "e2e-resample-5m", DataType: "kline_resample", Provider: "binance", MarketType: "spot", PrepareState: domain.PrepareStateReady, Enabled: true, CollectParams: `{"provider":"binance","market_type":"spot","source_dataset_id":"binance_spot_kline_1m","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"spot_kline_resample_5m","target_frequency":"5m","alignment":"epoch_utc"}`}
+	rule := domain.TaskRule{SpaceID: "crypto", RuleID: "e2e-resample-5m", DataType: "kline_resample", Provider: "binance", MarketType: "spot", PrepareState: domain.PrepareStateReady, Enabled: true, CollectParams: `{"provider":"binance","market_type":"spot","source_dataset_id":"binance_spot_kline_1m","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"spot_kline_resample_5m","target_frequency":"5m","alignment":"epoch_utc"}`}
 	require.NoError(t, db.TaskRules().Create(ctx, rule))
 	require.NoError(t, resample.PlanRule(ctx, resampleE2ESource{}, db.TaskInstances(), rule, time.Date(2026, 8, 29, 9, 10, 0, 0, time.UTC)))
 	instances, _, err := db.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: rule.SpaceID, RuleID: rule.RuleID, Page: 1, PageSize: 10})

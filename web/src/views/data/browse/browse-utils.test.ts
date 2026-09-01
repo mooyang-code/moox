@@ -45,9 +45,9 @@ describe("timeSeriesRowsToTableRows", () => {
       freq: "1H",
       series_tag: "venue:okx"
     });
-    expect(buildTimeSeriesBrowseSelector("stock_cn", "stock_kline", "sh600000", "1D", "", true)).toEqual({
+    expect(buildTimeSeriesBrowseSelector("stock_cn", "stock_cn_kline", "sh600000", "1D", "", true)).toEqual({
       space_id: "stock_cn",
-      dataset_id: "stock_kline",
+      dataset_id: "stock_cn_kline",
       subject_id: "sh600000",
       freq: "1D",
       series_tag: ""

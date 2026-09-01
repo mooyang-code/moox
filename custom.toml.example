@@ -39,7 +39,7 @@ max_periods_per_series = 2000
 
 # 单个 View 覆盖优先级最高；省略字段继承 system_monitor 或全局值。
 [[storage_view.views]]
-space_id = "crypto_market"
+space_id = "crypto"
 view_id = "binance_spot_kline_1m_view"
 rebuild_lookback_periods = 1000
 max_periods_per_series = 2000
@@ -64,7 +64,7 @@ input_columns = ["close"]
 outputs = ["bias_5", "bias_20"]
 params_json = '{"windows":[5,20]}'
 lookback_periods = 20
-space_id = "crypto_market"
+space_id = "crypto"
 source_view_id = "binance_spot_kline_1m_view"
 freq = "1m"
 subject_mode = "all"
@@ -78,7 +78,7 @@ input_columns = ["high", "low", "close"]
 outputs = ["cci"]
 params_json = '{"window":20}'
 lookback_periods = 20
-space_id = "crypto_market"
+space_id = "crypto"
 source_view_id = "binance_spot_kline_1m_view"
 freq = "1m"
 subject_mode = "all"
@@ -92,7 +92,7 @@ input_columns = ["close"]
 outputs = ["ma_5", "ma_20"]
 params_json = '{"windows":[5,20]}'
 lookback_periods = 20
-space_id = "crypto_market"
+space_id = "crypto"
 source_view_id = "binance_spot_kline_1m_view"
 freq = "1m"
 subject_mode = "all"
@@ -108,26 +108,30 @@ params_json = '{"windows":[5,20],"m":1}'
 # SMA is recursive. 600 periods provide a 30x warm-up for SMA20 so stateless
 # period tasks converge to the continuous-series value within double precision.
 lookback_periods = 600
-space_id = "crypto_market"
+space_id = "crypto"
 source_view_id = "binance_spot_kline_1m_view"
 freq = "1m"
 subject_mode = "all"
 status = "enabled"
 
-# 短时行情 SCF 按 Space 独立发布、独立消费任务。每个 Space 都必须有独立
-# package_config_dir、package_name 和 function_prefix，避免跨空间混用数据源配置。
+# 短时行情 SCF 按 Space 独立发布、独立消费任务。所有市场复用通用
+# market_data 包目录，但每个 Space 必须声明自己的 Market/Instrument/Source 身份。
 [scf_fetcher]
 enabled = false
 
 [[scf_fetcher.spaces]]
-space_id = "crypto_market"
-entrypoint = "crypto_market"
-package_config_dir = "scf/crypto_market"
-package_name = "moox-collector-crypto-market"
+space_id = "crypto"
+entrypoint = "market_data"
+market_id = "crypto"
+instrument_type = "spot"
+provider_id = "binance"
+source_id = "spot_http"
+package_config_dir = "scf/market_data"
+package_name = "moox-collector-market-data-crypto"
 namespace = "default"
 runtime = "Go1"
-function_prefix = "moox-fetcher-crypto-market"
-# Timer SCF 总数。crypto_market 默认 60，stock_cn 默认 300。
+function_prefix = "moox-fetcher-market-data-crypto"
+# Timer SCF 总数。crypto 默认 60，stock_cn 默认 300。
 # region.function_count = 0 时按总数在启用地域间自动均分（每地域最多 50）。
 timer_function_count = 60
 # SCF Timer 每次直接访问该 Storage tRPC 地址，不再请求 Collector 配置接口。

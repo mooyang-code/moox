@@ -6,16 +6,18 @@
 | --- | --- | --- | --- | --- | --- |
 | `stock_cn` | `equity` | `tdx/normal_7709` | `stock_zh_a_hist_min_em`、`QATdx`、`get_security_bars` | `enabled` | TCP 普通行情，单标的分页 |
 | `stock_cn` | `equity` | `eastmoney/stock_cn_http` | `stock_zh_a_hist`、`stock_zh_a_hist_min_em` | `enabled` | `klt` 映射和 EM 字段顺序已实现 |
-| `stock_cn` | `equity` | `sina` | `stock_zh_a_daily` | `catalog_only` | 新浪历史响应需要 JS 解码且成交额是独立请求，暂不启用 |
+| `stock_cn` | `equity` | `sina/stock_cn_http` | `stock_zh_a_daily` | `catalog_only` | Go K2 解码和 A 股实盘临时响应对账已完成；目标 SCF 出口、单位、闭合 bar 和覆盖门禁未完成，暂不启用 |
+| `stock_cn` | `equity` | `sina/stock_cn_minute_http` | `stock_zh_a_minute` | `catalog_only` | Go JSONP 分钟适配器已实现 1/5/15/30/60 分钟请求；上游固定返回近期窗口，不宣称任意历史范围，待实盘覆盖、单位和闭合语义核验 |
 | `stock_cn` | `equity` | `tencent/stock_cn_http` | `stock_zh_a_hist_tx` | `enabled` | 已实现按年切片、JSONP 安全解析和成交量/成交额单位转换，仅支持不复权日线 |
 | `stock_cn` | `index` | `tdx/normal_7709`、`eastmoney/index_http` | `get_index_bars`、`index_zh_a_hist_min_em` | `enabled` | TDX 指数响应的额外字段需单独对账 |
+| `stock_cn` | `index` | `cni/index_cni_http` | `index_hist_cni` | `catalog_only` | Go 日线适配器已实现；保留上游 `10k_share`/`100m_cny` 单位，覆盖范围待实盘核验 |
 | `stock_cn` | `convertible_bond` | `eastmoney/convertible_bond_http` | `bond_zh_hs_cov_daily`、`bond_zh_hs_cov_min` | `enabled` | 与股票 Dataset 分离 |
 | `stock_hk` | `equity` | `eastmoney/stock_hk_http` | `stock_hk_hist`、`stock_hk_hist_min_em` | `enabled` | 使用港股 `SecID` 转换 |
-| `stock_hk` | `equity` | `sina` | `stock_hk_daily` | `catalog_only` | 待补充字段和半日市验证 |
+| `stock_hk` | `equity` | `sina/stock_hk_http` | `stock_hk_daily` | `catalog_only` | Go K2 解码和临时实盘响应对账已完成；待补充字段、半日市和目标 SCF 出口验证 |
 | `stock_us` | `equity` | `eastmoney/stock_us_http` | `stock_us_hist`、`stock_us_hist_min_em` | `enabled` | 盘前盘后策略尚未作为默认采集范围 |
-| `stock_us` | `equity` | `sina` | `stock_us_daily` | `catalog_only` | 待补充 DST 和交易所差异验证 |
-| `stock_cn` | `index` | `csindex` | `index_hist_cni`、`stock_zh_index_hist_csindex` | `catalog_only` | 中证接口待接入 |
-| `stock_cn` | `index` | `sw` | `index_hist_sw`、`index_hist_fund_sw` | `catalog_only` | 申万指数与基金指数分开登记 |
+| `stock_us` | `equity` | `sina/stock_us_http` | `stock_us_daily` | `catalog_only` | Go K2 解码和临时实盘响应对账已完成；US amount 按 AkShare 语义不写入，待补充 DST、交易所和目标 SCF 出口验证 |
+| `stock_cn` | `index` | `csindex` | `stock_zh_index_hist_csindex` | `catalog_only` | 只有收盘价，不进入完整 OHLCV KlineFetcher |
+| `stock_cn` | `index` | `sw/index_sw_http` | `index_hist_sw`、`index_hist_fund_sw` | `catalog_only` | 申万指数与基金指数分开登记；周/月时间和量纲尚未实盘确认 |
 
 ## 统一字段门槛
 

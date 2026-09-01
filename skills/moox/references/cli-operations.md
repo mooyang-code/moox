@@ -66,7 +66,7 @@ moox-factor-cli clear-queue --package-root /home/<user>/moox/prod --yes
 moox-cli storage repair-view \
   --storage-conf /home/<user>/moox/prod/storage-view/config/trpc_go.yaml \
   --package-root /home/<user>/moox/prod \
-  --space-id crypto_market \
+  --space-id crypto \
   --view-id binance_spot_kline_1m_factor \
   --yes
 ```
@@ -87,7 +87,7 @@ moox-cli storage repair-view \
 moox-cli storage repair-view \
   --storage-conf /home/<user>/moox/prod/storage-view/config/trpc_go.yaml \
   --package-root /home/<user>/moox/prod \
-  --space-id crypto_market \
+  --space-id crypto \
   --view-id binance_spot_kline_1m_factor \
   --dry-run
 ```
@@ -151,7 +151,7 @@ rows、period、factor-computed 和 sync-point 事件；不会删除 durable con
 moox-cli storage force-rebuild-view \
   --storage-conf /home/<user>/moox/storage/config/storage.yaml \
   --package-root /home/<user>/moox/storage \
-  --space-id crypto_market \
+  --space-id crypto \
   --view-id binance_spot_kline_1m_factor \
   --lookback 72h \
   --dry-run
@@ -171,9 +171,9 @@ moox-cli storage force-rebuild-view \
 /home/<user>/moox/storage/bin/moox-storage-cli retain-views \
   --metadata-db /home/<user>/moox/storage/data/storage/metadata/storage_metadata.db \
   --package-root /home/<user>/moox/storage \
-  --keep-view crypto_market/binance_spot_kline_1m_view \
-  --keep-view crypto_market/perpetual_kline_1h_view \
-  --keep-view crypto_market/spot_kline_1h_view \
+  --keep-view crypto/binance_spot_kline_1m_view \
+  --keep-view crypto/perpetual_kline_1h_view \
+  --keep-view crypto/spot_kline_1h_view \
   --keep-view moox_system/host_resource_view \
   --keep-view moox_system/host_fs_view \
   --keep-view moox_system/host_disk_view \

@@ -29,7 +29,7 @@ func (nonRawCompositionGetter) Get(context.Context, string, string, url.Values, 
 }
 
 func TestNewCompositionRegistersCanonicalHTTPSources(t *testing.T) {
-	composition, err := NewComposition(compositionGetter{}, nil, false)
+	composition, err := NewComposition(compositionGetter{}, nil, false, nil)
 	require.NoError(t, err)
 	for _, key := range []marketdata.SourceKey{
 		{ProviderID: "eastmoney", SourceID: "stock_cn_http"},
@@ -38,6 +38,10 @@ func TestNewCompositionRegistersCanonicalHTTPSources(t *testing.T) {
 		{ProviderID: "eastmoney", SourceID: "index_http"},
 		{ProviderID: "eastmoney", SourceID: "convertible_bond_http"},
 		{ProviderID: "tencent", SourceID: "stock_cn_http"},
+		{ProviderID: "cni", SourceID: "index_cni_http"},
+		{ProviderID: "sw", SourceID: "index_sw_http"},
+		{ProviderID: "ths", SourceID: "daily_http"},
+		{ProviderID: "sina", SourceID: "stock_cn_minute_http"},
 	} {
 		if _, ok := composition.Registry.Lookup(key); !ok {
 			t.Fatalf("source %s was not registered", key)
@@ -49,8 +53,32 @@ func TestNewCompositionRegistersCanonicalHTTPSources(t *testing.T) {
 }
 
 func TestNewCompositionRequiresRawHTTPForJSONPSource(t *testing.T) {
-	_, err := NewComposition(nonRawCompositionGetter{}, nil, false)
+	_, err := NewComposition(nonRawCompositionGetter{}, nil, false, nil)
 	require.ErrorContains(t, err, "raw response streaming")
+}
+
+func TestNewCompositionRegistersCryptoSourcesWhenRequested(t *testing.T) {
+	composition, err := NewComposition(compositionGetter{}, nil, true, nil)
+	require.NoError(t, err)
+	for _, key := range []marketdata.SourceKey{
+		{ProviderID: "binance", SourceID: "spot_http"},
+		{ProviderID: "binance", SourceID: "swap_http"},
+	} {
+		if _, ok := composition.Registry.Lookup(key); !ok {
+			t.Fatalf("source %s was not registered", key)
+		}
+	}
+	for _, manifest := range []struct {
+		market, instrument, dataset string
+	}{
+		{market: "crypto", instrument: "spot", dataset: "binance_spot_kline_1m"},
+		{market: "crypto", instrument: "swap", dataset: "binance_swap_kline_1m"},
+	} {
+		got, ok := composition.Catalog.Lookup(manifest.market, manifest.instrument)
+		if !ok || got.DatasetID != manifest.dataset {
+			t.Fatalf("manifest %s/%s = %+v, found=%v", manifest.market, manifest.instrument, got, ok)
+		}
+	}
 }
 
 var _ markethttp.Getter = compositionGetter{}

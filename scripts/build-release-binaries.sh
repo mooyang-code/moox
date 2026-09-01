@@ -102,8 +102,8 @@ fi
 if ((SKIP_BUILD == 0)); then
   VERSION="${VERSION}" TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
     "${ROOT}/scripts/build.sh" all
-  # SCF is a separately packaged runtime entrypoint and is not part of the
-  # general release.sh archive. Keep it in the binary bundle when supported.
+  # The generic market_data SCF entrypoint is a separately packaged runtime
+  # and is not part of the general release.sh archive.
   if [[ "${TARGET_GOOS}/${TARGET_GOARCH}" == "linux/amd64" ]]; then
     VERSION="${VERSION}" TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
       "${ROOT}/scripts/build.sh" collector-scf

@@ -1,14 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCF_SPACE_ID="${SCF_SPACE_ID:?SCF_SPACE_ID is required (for example: crypto_market)}"
-SCF_ENTRYPOINT="${SCF_ENTRYPOINT:?SCF_ENTRYPOINT is required (crypto_market)}"
+# Resolve the repository root from both this implementation path and the
+# public scripts/build-collector-scf-package.sh symlink.
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "${SOURCE}" ]]; do
+  SOURCE_DIR="$(cd -P "$(dirname "${SOURCE}")" >/dev/null 2>&1 && pwd)"
+  SOURCE="$(readlink "${SOURCE}")"
+  [[ "${SOURCE}" != /* ]] && SOURCE="${SOURCE_DIR}/${SOURCE}"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "${SOURCE}")" >/dev/null 2>&1 && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+SCF_SPACE_ID="${SCF_SPACE_ID:?SCF_SPACE_ID is required (for example: stock_cn)}"
+SCF_ENTRYPOINT="${SCF_ENTRYPOINT:?SCF_ENTRYPOINT is required (market_data)}"
 case "${SCF_ENTRYPOINT}" in
-  crypto_market|market_data) ;;
+  market_data) ;;
   *) echo "unsupported SCF entrypoint: ${SCF_ENTRYPOINT}" >&2; exit 1 ;;
 esac
-CONFIG_DIR="${ROOT}/modules/collector/configs/scf/${SCF_SPACE_ID}"
+case "${SCF_SPACE_ID}" in
+  crypto|stock_cn|stock_hk|stock_us) CONFIG_SPACE_ID="market_data" ;;
+  *) CONFIG_SPACE_ID="${SCF_SPACE_ID}" ;;
+esac
+CONFIG_DIR="${ROOT}/modules/collector/configs/scf/${CONFIG_SPACE_ID}"
 VERSION="${VERSION:-v$(date +%Y%m%d%H%M%S)}"
 OUT_DIR="${OUT_DIR:-${ROOT}/release/scf}"
 OUT_PATH="${OUT_PATH:-${OUT_DIR}/collector-scf-${SCF_SPACE_ID}-${VERSION}.zip}"
@@ -40,53 +53,6 @@ echo "==> build moox-collector-scf for linux/amd64"
 echo "==> copy ${SCF_SPACE_ID} SCF runtime configs"
 cp -R "${CONFIG_DIR}/." "${BUILD_DIR}/package/"
 rm -f "${BUILD_DIR}/package/trpc_go.yaml" "${BUILD_DIR}/package/example_trpc_go.yaml"
-
-BINANCE_CONFIG="${BUILD_DIR}/package/sources/market/binance.yaml"
-if [[ -f "${BINANCE_CONFIG}" ]]; then
-[[ -n "${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}" ]] || {
-  echo "MOOX_STORAGE_PRIMARY_AUTH_SECRET is required to package Binance Storage credentials" >&2
-  exit 1
-}
-python3 - "${BINANCE_CONFIG}" <<'PY'
-import hashlib
-import hmac
-import os
-import sys
-import yaml
-
-path = sys.argv[1]
-with open(path, encoding="utf-8") as stream:
-    document = yaml.safe_load(stream) or {}
-
-rendered = 0
-
-def render(value):
-    global rendered
-    if isinstance(value, dict):
-        auth = value.get("auth_info")
-        if isinstance(auth, dict):
-            app_id = str(auth.get("app_id") or "").strip()
-            if not app_id or "app_key" not in auth:
-                raise ValueError("Binance Storage auth_info requires app_id and app_key")
-            auth["app_key"] = hmac.new(
-                os.environ["MOOX_STORAGE_PRIMARY_AUTH_SECRET"].encode(),
-                app_id.encode(),
-                hashlib.sha256,
-            ).hexdigest()
-            rendered += 1
-        for child in value.values():
-            render(child)
-    elif isinstance(value, list):
-        for child in value:
-            render(child)
-
-render(document)
-if rendered == 0:
-    raise ValueError("Binance source config contains no Storage auth_info")
-with open(path, "w", encoding="utf-8") as stream:
-    yaml.safe_dump(document, stream, sort_keys=False)
-PY
-fi
 
 echo "==> package ${OUT_PATH}"
 rm -f "${OUT_PATH}"

@@ -260,7 +260,7 @@ test("remote default setup exposes each business Space with Datasets and Fields"
   await login(page);
 
   for (const expected of [
-    { spaceID: "stock_cn", spaceName: "A股市场", datasetID: "stock_kline", fieldID: "amount" },
+    { spaceID: "stock_cn", spaceName: "A股市场", datasetID: "stock_cn_kline", fieldID: "amount" },
     { spaceID: "crypto", spaceName: "加密货币市场", datasetID: "spot_kline_1h", fieldID: "quote_volume" }
   ]) {
     const spacesResponse = waitForMethodExchange(page, "ListSpaces", "space");

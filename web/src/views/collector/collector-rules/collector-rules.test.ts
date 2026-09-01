@@ -9,7 +9,7 @@ describe("collector resample rule workbench", () => {
     expect(source).toContain("kline_resample");
     expect(source).toContain("ResampleBackfillDialog");
     expect(backfill).toContain("开始回填");
-    expect(backfill).toContain("内部行情 `crypto_market`");
+    expect(backfill).toContain("内部行情 `crypto`");
     expect(source).toContain("sourceKeepDuration");
   });
 });

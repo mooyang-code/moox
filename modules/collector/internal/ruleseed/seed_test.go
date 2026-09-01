@@ -14,7 +14,7 @@ import (
 )
 
 const validSeed = `rules:
-  - space_id: crypto_market
+  - space_id: crypto
     rule_id: builtin-binance-spot-kline-1m
     data_type: kline
     provider: binance
@@ -35,7 +35,7 @@ func TestLoadRuleSeed(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rules, 1)
 	assert.Equal(t, domain.TaskRule{
-		SpaceID:       "crypto_market",
+		SpaceID:       "crypto",
 		RuleID:        "builtin-binance-spot-kline-1m",
 		DataType:      "kline",
 		Provider:      "binance",
@@ -80,11 +80,11 @@ func TestSeedMissingIsIdempotentAndPreservesEdits(t *testing.T) {
 	second, err := SeedMissing(ctx, mgr.TaskRules(), rules)
 	require.NoError(t, err)
 	assert.Equal(t, SeedSummary{Unchanged: 1}, second)
-	require.NoError(t, mgr.TaskRules().SetEnabled(ctx, "crypto_market", rules[0].RuleID, false))
+	require.NoError(t, mgr.TaskRules().SetEnabled(ctx, "crypto", rules[0].RuleID, false))
 	third, err := SeedMissing(ctx, mgr.TaskRules(), rules)
 	require.NoError(t, err)
 	assert.Equal(t, SeedSummary{Unchanged: 1}, third)
-	got, err := mgr.TaskRules().GetByRuleID(ctx, "crypto_market", rules[0].RuleID)
+	got, err := mgr.TaskRules().GetByRuleID(ctx, "crypto", rules[0].RuleID)
 	require.NoError(t, err)
 	assert.False(t, got.Enabled)
 }

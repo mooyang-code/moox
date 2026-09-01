@@ -28,10 +28,17 @@ type MarketProvider interface {
 }
 
 var (
-	ErrTimeout      = errors.New("marketdata: request timed out")
-	ErrUnavailable  = errors.New("marketdata: source unavailable")
-	ErrMalformed    = errors.New("marketdata: malformed source response")
-	ErrRateLimited  = errors.New("marketdata: source rate limited")
-	ErrOutOfRange   = errors.New("marketdata: request is outside source coverage")
-	ErrNotSupported = errors.New("marketdata: operation is not supported")
+	ErrTimeout              = errors.New("marketdata: request timed out")
+	ErrUnavailable          = errors.New("marketdata: source unavailable")
+	ErrMalformed            = errors.New("marketdata: malformed source response")
+	ErrRateLimited          = errors.New("marketdata: source rate limited")
+	ErrRemoteBusy           = errors.New("marketdata: remote service is busy")
+	ErrTCP                  = errors.New("marketdata: tcp transport failed")
+	ErrHTTPStatus           = errors.New("marketdata: unexpected http status")
+	ErrProtocol             = errors.New("marketdata: protocol error")
+	ErrNoClosedBar          = errors.New("marketdata: no closed bar available")
+	ErrUnsupportedSymbol    = errors.New("marketdata: symbol is not supported")
+	ErrUnsupportedFrequency = errors.New("marketdata: frequency is not supported")
+	ErrOutOfRange           = errors.New("marketdata: request is outside source coverage")
+	ErrNotSupported         = errors.New("marketdata: operation is not supported")
 )

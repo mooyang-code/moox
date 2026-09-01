@@ -179,7 +179,7 @@ func Default() *Config {
 			SendTimeoutSeconds: 10,
 		},
 		Observability: ObservabilityConfig{Enabled: true, EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
-		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, Subjects: []MarketCanarySubject{{SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance")}}},
+		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "binance_spot_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance")}}},
 		Metrics:       MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../examples/setup/default/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
 	}
 }

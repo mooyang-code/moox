@@ -315,7 +315,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	metadataSource := storagesource.NewDatasetSource(cfg.Storage.GatewayTarget)
 	completionSpaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
 	if completionSpaceID == "" {
-		completionSpaceID = "crypto_market"
+		completionSpaceID = "crypto"
 	}
 	var resampleRunner *collectorresample.Runner
 	var resamplePreparer *collectorresample.Preparer
@@ -354,7 +354,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		// config.  Invoke SCFs may run outside the Collector host, so a
 		// 127.0.0.1 gateway target would point back at the function itself.
 		Invoker: invoker, Storage: binance.NewBatchStorageWithWriteSource, StorageTarget: deps.StorageRPCGatewayTarget,
-		InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: "crypto_market", DNSCache: dnsCache,
+		InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: "crypto", DNSCache: dnsCache,
 		Symbols:               metadataSource,
 		InvokeNonRealtimeOnly: true,
 	}

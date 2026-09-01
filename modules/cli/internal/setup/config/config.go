@@ -47,6 +47,18 @@ const (
 	DefaultStockCNMarketTimerFunctionCount = 300
 )
 
+// DefaultCollectorPackageConfigDir returns the single generic SCF package
+// directory used by all market-data spaces. Space IDs remain logical routing
+// identities; they do not imply separate binaries or package trees.
+func DefaultCollectorPackageConfigDir(spaceID string) string {
+	switch strings.ToLower(strings.TrimSpace(spaceID)) {
+	case "crypto", "stock_cn", "stock_hk", "stock_us":
+		return filepath.ToSlash(filepath.Join("scf", "market_data"))
+	default:
+		return filepath.ToSlash(filepath.Join("scf", strings.TrimSpace(spaceID)))
+	}
+}
+
 // Paths controls where setup-cli installs the control and Storage packages on
 // the target host. All paths are absolute and must remain below DeployRoot.
 // The section is optional: omitted values resolve to the cloud-disk defaults
@@ -294,7 +306,7 @@ type SCFFetcherSpace struct {
 // explicit timer_function_count.
 func DefaultTimerFunctionCount(spaceID string) int {
 	switch strings.ToLower(strings.TrimSpace(spaceID)) {
-	case "crypto_market":
+	case "crypto":
 		return DefaultCryptoMarketTimerFunctionCount
 	case "stock_cn":
 		return DefaultStockCNMarketTimerFunctionCount
@@ -803,58 +815,62 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		return fmt.Errorf("config_invalid: %s is required", path)
 	}
 	if cfg.PackageConfigDir == "" {
-		cfg.PackageConfigDir = filepath.ToSlash(filepath.Join("scf", cfg.SpaceID))
+		cfg.PackageConfigDir = DefaultCollectorPackageConfigDir(cfg.SpaceID)
 	}
 	if cfg.Entrypoint == "" {
-		cfg.Entrypoint = cfg.SpaceID
+		cfg.Entrypoint = "market_data"
 	}
-	if strings.EqualFold(cfg.Entrypoint, "market_data") {
-		for field, value := range map[string]string{
-			"market_id":       cfg.MarketID,
-			"instrument_type": cfg.InstrumentType,
-			"provider_id":     cfg.ProviderID,
-			"source_id":       cfg.SourceID,
-		} {
-			if strings.TrimSpace(value) == "" {
-				return fmt.Errorf("config_invalid: %s.%s is required for market_data entrypoint", path, field)
-			}
+	if !strings.EqualFold(cfg.Entrypoint, "market_data") {
+		return fmt.Errorf("config_invalid: %s.entrypoint must be market_data", path)
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "market_id", value: cfg.MarketID},
+		{name: "instrument_type", value: cfg.InstrumentType},
+		{name: "provider_id", value: cfg.ProviderID},
+		{name: "source_id", value: cfg.SourceID},
+	} {
+		if strings.TrimSpace(field.value) == "" {
+			return fmt.Errorf("config_invalid: %s.%s is required for market_data entrypoint", path, field.name)
 		}
-		if strings.EqualFold(strings.TrimSpace(cfg.ProviderID), "tdx") {
-			cfg.TDXHost = strings.TrimSpace(cfg.TDXHost)
-			if cfg.TDXHost == "" {
-				return fmt.Errorf("config_invalid: %s.tdx_host is required for tdx market_data", path)
-			}
-			if cfg.TDXPort == 0 {
-				cfg.TDXPort = 7709
-			}
-			if cfg.TDXPort < 1 || cfg.TDXPort > 65535 {
-				return fmt.Errorf("config_invalid: %s.tdx_port must be between 1 and 65535", path)
-			}
-			sourceID := strings.ToLower(strings.TrimSpace(cfg.SourceID))
-			if sourceID == "normal_7709" && cfg.TDXPort != 7709 {
-				return fmt.Errorf("config_invalid: %s.tdx_port must be 7709 for normal_7709", path)
-			}
-			if (sourceID == "ex_classic_7727" || sourceID == "ex_mac_7727") && cfg.TDXPort != 7727 {
-				return fmt.Errorf("config_invalid: %s.tdx_port must be 7727 for %s", path, sourceID)
-			}
-			seenRoutes := make(map[string]struct{}, len(cfg.TDXRoutes))
-			if len(cfg.TDXRoutes) > 64 {
-				return fmt.Errorf("config_invalid: %s.tdx_routes must contain at most 64 IPs", path)
-			}
-			for index, rawRoute := range cfg.TDXRoutes {
-				ip := net.ParseIP(strings.TrimSpace(rawRoute))
-				if ip == nil {
-					return fmt.Errorf("config_invalid: %s.tdx_routes[%d] must be an IP address", path, index)
-				}
-				canonical := ip.String()
-				if _, exists := seenRoutes[canonical]; exists {
-					return fmt.Errorf("config_invalid: %s.tdx_routes contains duplicate IP %s", path, canonical)
-				}
-				seenRoutes[canonical] = struct{}{}
-				cfg.TDXRoutes[index] = canonical
-			}
-			cfg.TDXRouteSnapshotJSON = strings.TrimSpace(cfg.TDXRouteSnapshotJSON)
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.ProviderID), "tdx") {
+		cfg.TDXHost = strings.TrimSpace(cfg.TDXHost)
+		if cfg.TDXHost == "" {
+			return fmt.Errorf("config_invalid: %s.tdx_host is required for tdx market_data", path)
 		}
+		if cfg.TDXPort == 0 {
+			cfg.TDXPort = 7709
+		}
+		if cfg.TDXPort < 1 || cfg.TDXPort > 65535 {
+			return fmt.Errorf("config_invalid: %s.tdx_port must be between 1 and 65535", path)
+		}
+		sourceID := strings.ToLower(strings.TrimSpace(cfg.SourceID))
+		if sourceID == "normal_7709" && cfg.TDXPort != 7709 {
+			return fmt.Errorf("config_invalid: %s.tdx_port must be 7709 for normal_7709", path)
+		}
+		if (sourceID == "ex_classic_7727" || sourceID == "ex_mac_7727") && cfg.TDXPort != 7727 {
+			return fmt.Errorf("config_invalid: %s.tdx_port must be 7727 for %s", path, sourceID)
+		}
+		seenRoutes := make(map[string]struct{}, len(cfg.TDXRoutes))
+		if len(cfg.TDXRoutes) > 64 {
+			return fmt.Errorf("config_invalid: %s.tdx_routes must contain at most 64 IPs", path)
+		}
+		for index, rawRoute := range cfg.TDXRoutes {
+			ip := net.ParseIP(strings.TrimSpace(rawRoute))
+			if ip == nil {
+				return fmt.Errorf("config_invalid: %s.tdx_routes[%d] must be an IP address", path, index)
+			}
+			canonical := ip.String()
+			if _, exists := seenRoutes[canonical]; exists {
+				return fmt.Errorf("config_invalid: %s.tdx_routes contains duplicate IP %s", path, canonical)
+			}
+			seenRoutes[canonical] = struct{}{}
+			cfg.TDXRoutes[index] = canonical
+		}
+		cfg.TDXRouteSnapshotJSON = strings.TrimSpace(cfg.TDXRouteSnapshotJSON)
 	}
 	cfg.PackageConfigDir = filepath.ToSlash(filepath.Clean(cfg.PackageConfigDir))
 	if cfg.PackageConfigDir == "." || strings.HasPrefix(cfg.PackageConfigDir, "../") || filepath.IsAbs(cfg.PackageConfigDir) {

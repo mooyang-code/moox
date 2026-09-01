@@ -147,7 +147,7 @@ func buildSkillDataAccessConfig(
 		return dataAccessConfig{}, fmt.Errorf("skill_config: dependencies are required")
 	}
 	spaceID = strings.TrimSpace(spaceID)
-	if spaceID != "crypto_market" {
+	if spaceID != "crypto" {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: unsupported space %q", spaceID)
 	}
 	var selected *setupconfig.SCFFetcherSpace
@@ -222,7 +222,7 @@ func buildSkillDataAccessConfig(
 				DefaultExchange: "binance",
 				Exchanges: map[string]exchangeConfig{
 					"binance": {
-						SpaceID: "crypto_market", SeriesTag: "venue:binance",
+						SpaceID: "crypto", SeriesTag: "venue:binance",
 						KlineDatasets: map[string]string{"1m": "binance_spot_kline_1m"},
 					},
 				},

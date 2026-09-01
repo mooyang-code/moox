@@ -633,6 +633,10 @@ func marketIdentity(marketID, instrumentType, datasetID string) (string, string)
 	}
 	datasetID = strings.ToLower(strings.TrimSpace(datasetID))
 	switch {
+	case strings.HasPrefix(datasetID, "binance_spot_kline") || strings.HasPrefix(datasetID, "spot_kline"):
+		return "crypto", "spot"
+	case strings.HasPrefix(datasetID, "binance_swap_kline") || strings.HasPrefix(datasetID, "perpetual_kline"):
+		return "crypto", "swap"
 	case strings.HasPrefix(datasetID, "stock_cn_index"):
 		return "stock_cn", "index"
 	case strings.HasPrefix(datasetID, "stock_cn_convertible_bond"):

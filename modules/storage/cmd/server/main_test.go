@@ -204,12 +204,12 @@ func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 func TestStripWildcardConsumerRoutesKeepsStaticMiscDurableStable(t *testing.T) {
 	opts := viewservice.EventConsumerOptions{PartitionConfigs: []viewservice.EventConsumerOptions{
 		{PartitionID: "misc", Consumer: "storage_view_misc", DatasetRoutes: []viewservice.DatasetRoute{
-			{SpaceID: "crypto_market", DatasetID: "*"},
-			{SpaceID: "stock_cn", DatasetID: "stock_kline"},
+			{SpaceID: "crypto", DatasetID: "*"},
+			{SpaceID: "stock_cn", DatasetID: "stock_cn_kline"},
 		}},
 	}}
 	stripWildcardConsumerRoutes(&opts)
-	if got := opts.PartitionConfigs[0].DatasetRoutes; len(got) != 1 || got[0].SpaceID != "stock_cn" || got[0].DatasetID != "stock_kline" {
+	if got := opts.PartitionConfigs[0].DatasetRoutes; len(got) != 1 || got[0].SpaceID != "stock_cn" || got[0].DatasetID != "stock_cn_kline" {
 		t.Fatalf("static routes = %+v, want only exact route", got)
 	}
 }

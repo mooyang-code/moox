@@ -38,3 +38,11 @@ func TestMarketDataFetcherUsesRouteProviderAtTheHTTPBoundary(t *testing.T) {
 		t.Fatalf("route IPs = %v", ips)
 	}
 }
+
+func TestBinanceIntervalMapsCanonicalStorageFrequencies(t *testing.T) {
+	for input, want := range map[string]string{"1H": "1h", "1D": "1d", "1W": "1w", "1m": "1m", "1M": "1M"} {
+		if got := binanceInterval(input); got != want {
+			t.Fatalf("binance interval %q = %q, want %q", input, got, want)
+		}
+	}
+}

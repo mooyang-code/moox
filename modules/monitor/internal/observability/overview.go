@@ -912,7 +912,7 @@ func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, er
 			status, reason = "down", "balance sync stale"
 		}
 		out = append(out, BusinessStatus{
-			SpaceID: "crypto_market", Kind: "balance", Module: successValue.serviceName, Status: status,
+			SpaceID: "crypto", Kind: "balance", Module: successValue.serviceName, Status: status,
 			Reason: reason, LastCheckedAt: lastCheckedAt,
 		})
 	}

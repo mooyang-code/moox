@@ -45,7 +45,7 @@ market_canary:
   freshness: 3m
   return_threshold: 0.05
   subjects:
-    - space_id: crypto_market
+    - space_id: crypto
       dataset_id: binance_spot_kline_1m
       # Keep the canary bound to a subject that is present in the active spot
       # symbol catalog. BTC-USDT is a perpetual-only subject in this setup;

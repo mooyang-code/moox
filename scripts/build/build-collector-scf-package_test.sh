@@ -19,11 +19,23 @@ chmod +x "${FAKE_BIN}/go"
 package_path="${TMP_ROOT}/collector-scf.zip"
 (
   cd "${TMP_ROOT}"
-  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="crypto_market" SCF_ENTRYPOINT="crypto_market" MOOX_STORAGE_PRIMARY_AUTH_SECRET="test-storage-secret" VERSION="contract-test" OUT_PATH="collector-scf.zip" \
+  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="market_data" SCF_ENTRYPOINT="market_data" VERSION="contract-test" OUT_PATH="collector-scf.zip" \
     bash "${ROOT}/scripts/build-collector-scf-package.sh"
 )
 listing_path="${TMP_ROOT}/listing.txt"
 unzip -l "${package_path}" >"${listing_path}"
 grep -q ' main$' "${listing_path}"
-grep -q ' sources/market/binance.yaml$' "${listing_path}"
 ! grep -q 'trpc_go.yaml' "${listing_path}"
+
+# The implementation file is also a supported direct invocation path. Keep
+# this check because the public symlink and the implementation have different
+# BASH_SOURCE paths.
+direct_package_path="${TMP_ROOT}/collector-scf-direct.zip"
+(
+  cd "${TMP_ROOT}"
+  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="market_data" SCF_ENTRYPOINT="market_data" VERSION="contract-test-direct" OUT_PATH="${direct_package_path}" \
+    bash "${ROOT}/scripts/build/build-collector-scf-package.sh"
+)
+unzip -l "${direct_package_path}" >"${TMP_ROOT}/direct-listing.txt"
+grep -q ' main$' "${TMP_ROOT}/direct-listing.txt"
+! grep -q 'trpc_go.yaml' "${TMP_ROOT}/direct-listing.txt"

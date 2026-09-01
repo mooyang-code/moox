@@ -41,7 +41,7 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	require.NoError(t, err)
 	summary, err := ruleseed.SeedMissing(ctx, dbm.TaskRules(), rules)
 	require.NoError(t, err)
-	require.Equal(t, 5, summary.Created)
+	require.Equal(t, 10, summary.Created)
 
 	var invocationCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,12 +73,12 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	scheduler := &marketfetch.Scheduler{
 		Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
 		Invoker: scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: server.URL, Auth: runtime.AuthConfig{AccessKey: "test", SecretKey: "test", TargetNode: "test"}}),
-		Symbols: defaultRuleDatasetSource{}, SpaceID: "crypto_market", InvokeNonRealtimeOnly: true,
+		Symbols: defaultRuleDatasetSource{}, SpaceID: "crypto", InvokeNonRealtimeOnly: true,
 		InvokeConcurrency: 1, Now: func() time.Time { return time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC) },
 	}
-	require.NoError(t, scheduler.Tick(ctx, "crypto_market"))
+	require.NoError(t, scheduler.Tick(ctx, "crypto"))
 
-	instances, total, err := dbm.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: "crypto_market", Page: 1, PageSize: 200})
+	instances, total, err := dbm.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: "crypto", Page: 1, PageSize: 200})
 	require.NoError(t, err)
 	require.Equal(t, int64(5), total)
 	require.Len(t, instances, 5)

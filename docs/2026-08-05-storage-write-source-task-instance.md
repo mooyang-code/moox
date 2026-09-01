@@ -4,7 +4,7 @@
 
 行情采集改为腾讯云 SCF Timer 触发后，SCF 不再向 Collector 请求任务，也不依赖常驻心跳或 EventBus 消费来完成采集。每个 SCF 的标的、周期、数据集和 DNS 快照写入自身环境变量；Collector 只负责刷新任务分配和环境变量。这样可以缩短函数运行时间并避免为常驻进程支付资源使用费。
 
-这里的字段统一使用英文 `write_source`，前端显示为“写入源”，不使用 `source_function_name` 或“请求源”：它描述的是**实际把数据写入 Storage 的上游执行者**，而不是一次 HTTP 请求的调用方。当前 SCF 值为 `scf:<function-name>`，例如 `scf:moox-fetcher-crypto-market-ap-shanghai-5`。
+这里的字段统一使用英文 `write_source`，前端显示为“写入源”，不使用 `source_function_name` 或“请求源”：它描述的是**实际把数据写入 Storage 的上游执行者**，而不是一次 HTTP 请求的调用方。当前 SCF 值为 `scf:<function-name>`，例如 `scf:moox-fetcher-market-data-ap-shanghai-5`。
 
 ## 写入链路
 

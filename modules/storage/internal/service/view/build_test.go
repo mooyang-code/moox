@@ -164,7 +164,7 @@ func TestFactorResultViewMayStartEmptyBeforeFirstFactorPeriod(t *testing.T) {
 
 func TestMarshalTimeSeriesHistoryCursorConvertsReadKeyToRowKey(t *testing.T) {
 	readKey := &pb.TimeSeriesKey{
-		SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m",
+		SpaceId: "crypto", DatasetId: "binance_spot_kline_1m",
 		SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-18T10:00:00Z", SeriesTag: "default",
 	}
 
@@ -319,11 +319,11 @@ func TestFormatPeriodSeriesKeyUsesReadableIdentity(t *testing.T) {
 }
 
 func TestBuildPeriodHistorySelectorsLeavesEmptyDatasetBindingsUnfiltered(t *testing.T) {
-	selectors, expected := buildPeriodHistorySelectors("crypto_market", "binance_spot_kline_1m", "1m", nil)
+	selectors, expected := buildPeriodHistorySelectors("crypto", "binance_spot_kline_1m", "1m", nil)
 	if len(selectors) != 0 || len(expected) != 0 {
 		t.Fatalf("empty bindings selectors=%v expected=%v, want unfiltered scan", selectors, expected)
 	}
-	selectors, expected = buildPeriodHistorySelectors("crypto_market", "binance_spot_kline_1m", "1m", []string{"BTC-USDT"})
+	selectors, expected = buildPeriodHistorySelectors("crypto", "binance_spot_kline_1m", "1m", []string{"BTC-USDT"})
 	if len(selectors) != 1 || len(expected) != 1 || selectors[0].GetSubjectId() != "BTC-USDT" {
 		t.Fatalf("bound selectors=%v expected=%v, want one selector", selectors, expected)
 	}

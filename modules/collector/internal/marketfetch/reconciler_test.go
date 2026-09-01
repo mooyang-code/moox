@@ -88,7 +88,7 @@ func (s *reconcilerNodesStub) SubmitRuntimeConfigs(_ context.Context, _ string, 
 
 func TestReconcilerTreatsRuntimeSubmitTimeoutAsRetryPending(t *testing.T) {
 	rule := domain.TaskRule{
-		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{
@@ -103,15 +103,15 @@ func TestReconcilerTreatsRuntimeSubmitTimeoutAsRetryPending(t *testing.T) {
 		Metrics: metrics,
 	}
 
-	require.ErrorIs(t, reconciler.Reconcile(context.Background(), "crypto_market"), context.DeadlineExceeded)
+	require.ErrorIs(t, reconciler.Reconcile(context.Background(), "crypto"), context.DeadlineExceeded)
 	_, firstPendingSince := reconciler.pendingRuntimeJobState()
 	require.False(t, firstPendingSince.IsZero())
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto_market", "bars", "1m")))
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto_market")))
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto_market", "submit_timeout")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto", "bars", "1m")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "submit_timeout")))
 
 	time.Sleep(time.Millisecond)
-	require.ErrorIs(t, reconciler.Reconcile(context.Background(), "crypto_market"), context.DeadlineExceeded)
+	require.ErrorIs(t, reconciler.Reconcile(context.Background(), "crypto"), context.DeadlineExceeded)
 	_, secondPendingSince := reconciler.pendingRuntimeJobState()
 	require.Equal(t, firstPendingSince, secondPendingSince, "retries must preserve the original pending time")
 }
@@ -128,7 +128,7 @@ func (s reconcilerDNSStub) Snapshot() map[string]sources.DNSResolution { return 
 
 func TestReconcilerCopiesOneDNSSnapshotToPerNodeAssignmentsAndAvoidsNoop(t *testing.T) {
 	rule := domain.TaskRule{
-		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{
@@ -151,7 +151,7 @@ func TestReconcilerCopiesOneDNSSnapshotToPerNodeAssignmentsAndAvoidsNoop(t *test
 		MaxSubjects: 30,
 	}
 
-	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto_market"))
+	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto"))
 	require.Equal(t, 1, nodes.submits)
 	require.Len(t, nodes.patches, 2)
 	firstDNS := nodes.patches[0].GetManagedEnvironment()["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"]
@@ -162,13 +162,51 @@ func TestReconcilerCopiesOneDNSSnapshotToPerNodeAssignmentsAndAvoidsNoop(t *test
 		require.NotEmpty(t, env["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
 	}
 
-	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto_market"))
+	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto"))
 	require.Equal(t, 1, nodes.submits, "unchanged assignment and DNS must not call CloudNode again")
+}
+
+func TestReconcilerUsesMarketAwareMonthlyCronForUSRule(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: "stock_us", RuleID: "us-monthly", DataType: "kline", Provider: "eastmoney", MarketType: "equity", Enabled: true,
+		CollectParams: `{"provider":"eastmoney","market_id":"stock_us","instrument_type":"equity","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_us_kline","frequency":"1M"}`,
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-us-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
+	reconciler := &Reconciler{
+		Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Symbols: reconcilerSymbolsStub{
+			dataset:  storagesource.DatasetInfo{DataSourceID: "us-symbol-source"},
+			subjects: []domain.DatasetSubject{{SubjectID: "AAPL", ExternalSymbol: "AAPL", Status: "active"}},
+		},
+		Nodes: nodes,
+	}
+
+	require.NoError(t, reconciler.Reconcile(context.Background(), "stock_us"))
+	require.Len(t, nodes.patches, 1)
+	require.Equal(t, "0 0 8 1 * * *", nodes.patches[0].GetTimerCron())
+	require.Equal(t, "stock_us", nodes.patches[0].GetManagedEnvironment()["MOOX_MARKET_FETCH_MARKET_ID"])
+	require.Equal(t, "equity", nodes.patches[0].GetManagedEnvironment()["MOOX_MARKET_FETCH_INSTRUMENT_TYPE"])
+}
+
+func TestMarketIdentityInfersCryptoTimerIdentityFromCanonicalDatasets(t *testing.T) {
+	for _, test := range []struct {
+		dataset, market, instrument string
+	}{
+		{dataset: "binance_spot_kline_1m", market: "crypto", instrument: "spot"},
+		{dataset: "spot_kline_1h", market: "crypto", instrument: "spot"},
+		{dataset: "binance_swap_kline_1m", market: "crypto", instrument: "swap"},
+		{dataset: "perpetual_kline_1h", market: "crypto", instrument: "swap"},
+	} {
+		market, instrument := marketIdentity("", "", test.dataset)
+		if market != test.market || instrument != test.instrument {
+			t.Fatalf("marketIdentity(%q) = %s/%s, want %s/%s", test.dataset, market, instrument, test.market, test.instrument)
+		}
+	}
 }
 
 func TestReconcilerFailsWithoutTimerCapacityBeforeSubmitting(t *testing.T) {
 	rule := domain.TaskRule{
-		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{}
@@ -179,19 +217,19 @@ func TestReconcilerFailsWithoutTimerCapacityBeforeSubmitting(t *testing.T) {
 		Nodes:   nodes,
 		Metrics: metrics,
 	}
-	require.ErrorContains(t, reconciler.Reconcile(context.Background(), "crypto_market"), "capacity")
+	require.ErrorContains(t, reconciler.Reconcile(context.Background(), "crypto"), "capacity")
 	require.Zero(t, nodes.submits)
 	// Capacity failure must publish required work before returning.
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto_market", "bars", "1m")))
-	require.Equal(t, float64(0), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto_market", "bars", "1m")))
-	require.Equal(t, float64(0), testutil.ToFloat64(metrics.timerCapacityTotal.WithLabelValues("crypto_market")))
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.timerCapacityRequired.WithLabelValues("crypto_market")))
-	require.Equal(t, float64(-1), testutil.ToFloat64(metrics.timerCapacityHeadroom.WithLabelValues("crypto_market")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto", "bars", "1m")))
+	require.Equal(t, float64(0), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto", "bars", "1m")))
+	require.Equal(t, float64(0), testutil.ToFloat64(metrics.timerCapacityTotal.WithLabelValues("crypto")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.timerCapacityRequired.WithLabelValues("crypto")))
+	require.Equal(t, float64(-1), testutil.ToFloat64(metrics.timerCapacityHeadroom.WithLabelValues("crypto")))
 }
 
 func TestReconcilerDoesNotEraseDNSWhenRefreshHasNoSnapshot(t *testing.T) {
 	rule := domain.TaskRule{
-		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"dns_hash": "old-dns"}}}}
@@ -201,7 +239,7 @@ func TestReconcilerDoesNotEraseDNSWhenRefreshHasNoSnapshot(t *testing.T) {
 		Nodes:   nodes,
 		DNS:     reconcilerDNSStub{routes: nil},
 	}
-	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto_market"))
+	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto"))
 	require.Len(t, nodes.patches, 1)
 	env := nodes.patches[0].GetManagedEnvironment()
 	_, hasRoutes := env["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"]
@@ -211,15 +249,15 @@ func TestReconcilerDoesNotEraseDNSWhenRefreshHasNoSnapshot(t *testing.T) {
 }
 
 func TestReconcilerSerializesOverlappingTicks(t *testing.T) {
-	rule := domain.TaskRule{SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+	rule := domain.TaskRule{SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}, listStarted: make(chan struct{}), listRelease: make(chan struct{})}
 	reconciler := &Reconciler{Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}}, Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}}, Nodes: nodes}
 	first := make(chan error, 1)
-	go func() { first <- reconciler.Reconcile(context.Background(), "crypto_market") }()
+	go func() { first <- reconciler.Reconcile(context.Background(), "crypto") }()
 	<-nodes.listStarted
 	second := make(chan error, 1)
-	go func() { second <- reconciler.Reconcile(context.Background(), "crypto_market") }()
+	go func() { second <- reconciler.Reconcile(context.Background(), "crypto") }()
 	close(nodes.listRelease)
 	require.NoError(t, <-first)
 	require.NoError(t, <-second)
@@ -228,28 +266,28 @@ func TestReconcilerSerializesOverlappingTicks(t *testing.T) {
 
 func TestReconcilerDetectsUnexpectedOpenDisabledTimer(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
-	(&Reconciler{Metrics: metrics}).observeTimerStates("crypto_market", []scfinvoker.Node{{
+	(&Reconciler{Metrics: metrics}).observeTimerStates("crypto", []scfinvoker.Node{{
 		NodeID: "timer-id", Metadata: map[string]any{
 			"timer_enabled": false, "timer_available_status": "Available", "timer_actual_type": "timer",
 			"timer_actual_enabled": true, "timer_actual_cron": "0 * * * * * *", "timer_cron": "0 * * * * * *",
 			"timer_actual_qualifier": "$LATEST", "timer_actual_message": "market_fetch_timer_v1",
 		},
 	}})
-	require.Equal(t, float64(0), testutil.ToFloat64(metrics.timerAvailable.WithLabelValues("crypto_market", "timer-id", "false")))
+	require.Equal(t, float64(0), testutil.ToFloat64(metrics.timerAvailable.WithLabelValues("crypto", "timer-id", "false")))
 }
 
 func TestReconcilerTreatsUnknownTimerReadbackAsUnknown(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
-	(&Reconciler{Metrics: metrics}).observeTimerStates("crypto_market", []scfinvoker.Node{{
+	(&Reconciler{Metrics: metrics}).observeTimerStates("crypto", []scfinvoker.Node{{
 		NodeID: "timer-id", Metadata: map[string]any{
 			"timer_enabled": true, "timer_available_status": "Unknown", "timer_status_error": "RequestLimitExceeded",
 		},
 	}})
-	require.Equal(t, float64(-1), testutil.ToFloat64(metrics.timerAvailable.WithLabelValues("crypto_market", "timer-id", "true")))
+	require.Equal(t, float64(-1), testutil.ToFloat64(metrics.timerAvailable.WithLabelValues("crypto", "timer-id", "true")))
 }
 
 func TestReconcilerRejectsExhaustedRemoteEnvironmentBudget(t *testing.T) {
-	rule := domain.TaskRule{SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+	rule := domain.TaskRule{SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`}
 	metrics := NewMetrics(prometheus.NewRegistry())
 	reconciler := &Reconciler{
@@ -258,8 +296,8 @@ func TestReconcilerRejectsExhaustedRemoteEnvironmentBudget(t *testing.T) {
 		Nodes:   &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"managed_environment_budget_bytes": 0}}}},
 		Metrics: metrics,
 	}
-	require.ErrorContains(t, reconciler.Reconcile(context.Background(), "crypto_market"), "no available timer environment budget")
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto_market", "bars", "1m")))
+	require.ErrorContains(t, reconciler.Reconcile(context.Background(), "crypto"), "no available timer environment budget")
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto", "bars", "1m")))
 }
 
 func TestReconcilerRepairsTriggerProtocolDrift(t *testing.T) {

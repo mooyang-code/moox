@@ -32,7 +32,7 @@ func TestBarsAggregatesCompleteSourceWindowAndSortsRows(t *testing.T) {
 	result, err := Bars(spec, "BTC-USDT", start, start.Add(4*time.Minute), rows)
 
 	require.NoError(t, err)
-	assert.Equal(t, "crypto_market", result.SpaceID)
+	assert.Equal(t, "crypto", result.SpaceID)
 	assert.Equal(t, "spot_kline_derived_4m", result.DatasetID)
 	assert.Equal(t, "BTC-USDT", result.SubjectID)
 	assert.Equal(t, "4m", result.Frequency)
@@ -175,7 +175,7 @@ func testRuleSpec(t *testing.T, sourceRaw, targetRaw string) RuleSpec {
 	target := mustFrequency(t, targetRaw)
 	return RuleSpec{
 		RuleID:          "rule-1",
-		SpaceID:         "crypto_market",
+		SpaceID:         "crypto",
 		SourceDatasetID: "binance_spot_kline_1m",
 		SourceFrequency: source,
 		SourceSeriesTag: "venue:binance",
@@ -187,7 +187,7 @@ func testRuleSpec(t *testing.T, sourceRaw, targetRaw string) RuleSpec {
 
 func testSourceBar(at time.Time, open, high, low, close, volume, quoteVolume float64, tradeNum int64) SourceBar {
 	return SourceBar{
-		SpaceID:     "crypto_market",
+		SpaceID:     "crypto",
 		DatasetID:   "binance_spot_kline_1m",
 		SubjectID:   "BTC-USDT",
 		Frequency:   "1m",

@@ -31,7 +31,7 @@ func TestValidateResetViewConsumersRequiresExplicitConfirmation(t *testing.T) {
 
 func TestStageResetViewIndexesRestoresBothSlots(t *testing.T) {
 	root := t.TempDir()
-	view := resetViewRecord{SpaceID: "crypto_market", ViewID: "kline", Engine: "duckdb"}
+	view := resetViewRecord{SpaceID: "crypto", ViewID: "kline", Engine: "duckdb"}
 	for _, slot := range []viewindex.Slot{viewindex.SlotA, viewindex.SlotB} {
 		id := viewindex.ViewIndexID(view.SpaceID, view.ViewID, slot)
 		path := filepath.Join(root, "duckdb", id+".duckdb")

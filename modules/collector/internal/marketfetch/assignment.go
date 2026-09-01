@@ -69,7 +69,7 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 		group.SeriesTag = strings.TrimSpace(group.SeriesTag)
 		group.DatasetID = strings.TrimSpace(group.DatasetID)
 		group.Frequency = strings.TrimSpace(group.Frequency)
-		cron, err := CronForFrequency(group.Frequency)
+		cron, err := CronForMarketFrequency(group.MarketID, group.InstrumentType, group.Frequency)
 		if err != nil {
 			return nil, err
 		}
@@ -89,9 +89,28 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 		normalized = append(normalized, group)
 	}
 	sort.Slice(normalized, func(i, j int) bool { return groupKey(normalized[i]) < groupKey(normalized[j]) })
+	// A canonical time-series RowKey intentionally does not include the
+	// provider. Reject two independent writers for the same logical stream;
+	// fallback sources must be invoked by ProviderRouter instead of being
+	// scheduled as concurrent assignments with last-write-wins semantics.
+	owners := make(map[string]string)
+	for _, group := range normalized {
+		source := group.Provider + "\x00" + group.SourceID
+		for _, subject := range group.Subjects {
+			logicalKey := strings.Join([]string{group.DatasetID, group.Frequency, group.SeriesTag, subject}, "\x00")
+			if previous, exists := owners[logicalKey]; exists {
+				if previous == source {
+					return nil, fmt.Errorf("subject %s is assigned more than once to %s", subject, source)
+				}
+				return nil, fmt.Errorf("subject %s has conflicting sources %q and %q for dataset %s frequency %s series %s", subject, previous, source, group.DatasetID, group.Frequency, group.SeriesTag)
+			}
+			owners[logicalKey] = source
+		}
+	}
 	needed := 0
 	for _, group := range normalized {
-		needed += (len(group.Subjects) + maxSubjects - 1) / maxSubjects
+		groupMaxSubjects := maxSubjectsForGroup(group, maxSubjects)
+		needed += (len(group.Subjects) + groupMaxSubjects - 1) / groupMaxSubjects
 	}
 	if needed > len(timerNodes) {
 		return nil, fmt.Errorf("timer assignment capacity insufficient: %d Timer nodes are required for the configured dataset/frequency shards, but only %d are available; increase the Timer SCF fleet", needed, len(timerNodes))
@@ -99,9 +118,10 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 	assignments := make([]NodeAssignment, 0, len(timerNodes))
 	nodeIndex := 0
 	for _, group := range normalized {
-		cron, _ := CronForFrequency(group.Frequency)
-		for start := 0; start < len(group.Subjects); start += maxSubjects {
-			end := start + maxSubjects
+		cron, _ := CronForMarketFrequency(group.MarketID, group.InstrumentType, group.Frequency)
+		groupMaxSubjects := maxSubjectsForGroup(group, maxSubjects)
+		for start := 0; start < len(group.Subjects); start += groupMaxSubjects {
+			end := start + groupMaxSubjects
 			if end > len(group.Subjects) {
 				end = len(group.Subjects)
 			}
@@ -124,6 +144,17 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 	}
 	sort.Slice(assignments, func(i, j int) bool { return assignments[i].NodeID < assignments[j].NodeID })
 	return assignments, nil
+}
+
+// NormalClient owns an ordered TDX stream and the SCF handler reserves a
+// bounded deadline for each item. Keep Timer assignments to one TDX symbol so
+// the generic function budget cannot accept an assignment that must fail before
+// its first request. Other providers retain the configured batch ceiling.
+func maxSubjectsForGroup(group TaskGroup, configured int) int {
+	if strings.EqualFold(strings.TrimSpace(group.Provider), "tdx") {
+		return 1
+	}
+	return configured
 }
 
 func roundRobinRegions(nodes []scfinvoker.Node) []scfinvoker.Node {
@@ -181,7 +212,7 @@ func AssignmentHash(parts ...string) string {
 }
 
 func CronForFrequency(frequency string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(frequency)) {
+	switch strings.TrimSpace(frequency) {
 	case "1m":
 		return "0 * * * * * *", nil
 	case "5m":
@@ -190,13 +221,29 @@ func CronForFrequency(frequency string) (string, error) {
 		return "0 */15 * * * * *", nil
 	case "30m":
 		return "0 */30 * * * * *", nil
-	case "1h":
+	case "1h", "1H":
 		return "0 0 * * * * *", nil
-	case "4h":
+	case "4h", "4H":
 		return "0 0 */4 * * * *", nil
-	case "1d":
+	case "1d", "1D":
 		return "0 0 0 * * * *", nil
+	case "1w", "1W":
+		return "0 0 0 * * 1 *", nil
+	case "1M":
+		return "0 0 0 1 * * *", nil
 	default:
 		return "", fmt.Errorf("unsupported timer frequency %q", frequency)
 	}
+}
+
+// CronForMarketFrequency keeps the monthly US equity trigger after the New
+// York market has closed. SCF cron is interpreted in Asia/Shanghai, so 08:00
+// Beijing is after the prior NY session close in both DST and standard time.
+func CronForMarketFrequency(marketID, instrumentType, frequency string) (string, error) {
+	if strings.EqualFold(strings.TrimSpace(marketID), "stock_us") &&
+		strings.EqualFold(strings.TrimSpace(instrumentType), "equity") &&
+		strings.TrimSpace(frequency) == "1M" {
+		return "0 0 8 1 * * *", nil
+	}
+	return CronForFrequency(frequency)
 }

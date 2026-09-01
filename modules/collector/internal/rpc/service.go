@@ -746,7 +746,7 @@ func (s *Service) validateDataset(
 		return fmt.Errorf("%s Dataset %s must be active", role, datasetID)
 	}
 	sourceMatches := strings.EqualFold(info.DataSourceID, exchange) ||
-		(allowSharedMarket && strings.EqualFold(info.DataSourceID, "crypto_market"))
+		(allowSharedMarket && isSharedMarketDataSource(info.DataSourceID))
 	if !sourceMatches {
 		return fmt.Errorf(
 			"%s Dataset %s data_source_id=%s does not match collector exchange=%s",
@@ -785,6 +785,11 @@ func (s *Service) validateDataset(
 		}
 	}
 	return nil
+}
+
+func isSharedMarketDataSource(dataSourceID string) bool {
+	dataSourceID = strings.ToLower(strings.TrimSpace(dataSourceID))
+	return dataSourceID == "crypto" || dataSourceID == "market_data"
 }
 
 func dataTypeConfigFromDefinition(definition jobs.JobDefinition) *pb.DataTypeConfig {

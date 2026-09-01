@@ -1,6 +1,6 @@
 # SCF 短时行情采集
 
-> 状态：目标架构已在当前实现分支落地；线上切换、绿色重建和腾讯云灰度仍需按 [SCF 定时触发行情采集执行计划](../superpowers/plans/2026-08-04-scf-timer-market-fetch.md) 验收。在切换完成前，线上仍可能运行 Collector 直接调用 SCF 的旧链路。
+> 状态：目标架构已在当前实现分支落地；正式环境发布、绿色重建和腾讯云灰度仍需按 [行情采集整合执行计划](../superpowers/plans/2026-08-31-akshare-market-collector-integration.md) 验收。本文不证明正式环境已经切换；历史旧链路仅用于理解演进，不得作为新项目发布目标。
 
 ## 背景
 
@@ -8,7 +8,7 @@ MooX 使用 SCF 不是为了常驻计算，而是为了利用不同地域、不�
 
 早期方案让 SCF 保持心跳、常驻等待并消费 EventBus。这个方案功能上可运行，但等待任务、轮询和保活也会累计函数运行时长，资源使用费用明显偏高。心跳只能说明容器还活着，也不能证明某个 Dataset 的最新 K 线已经写入。因此系统已经改为短时函数：收到一次工作后抓取、聚合、写 Storage，然后立即退出。
 
-短时函数的第一版仍由 Collector 每分钟逐批调用 `InvokeFunction`。该方案又引入了一段本地排队：Collector、Gateway、CloudNode 和腾讯 Invoke API 都在实时链路上。2026-08-04 的一次实际日志中，同一分钟有 44 个分片，而 Collector 的 Invoke 并发槽只有 20；`moox-fetcher-crypto-market-ap-shanghai-5` 在 16:31:00.080 生成计划，16:31:09.498 才真正下发，标的 `SPYB-USDT` 自身请求只耗时约 293ms。接近 10 秒的主要延迟来自控制面排队，而不是 Binance。
+短时函数的第一版仍由 Collector 每分钟逐批调用 `InvokeFunction`。该方案又引入了一段本地排队：Collector、Gateway、CloudNode 和腾讯 Invoke API 都在实时链路上。2026-08-04 的一次实际日志中，同一分钟有 44 个分片，而 Collector 的 Invoke 并发槽只有 20；`moox-fetcher-market-data-ap-shanghai-5` 在 16:31:00.080 生成计划，16:31:09.498 才真正下发，标的 `SPYB-USDT` 自身请求只耗时约 293ms。接近 10 秒的主要延迟来自控制面排队，而不是 Binance。
 
 因此实时 K 线改为腾讯云定时触发器直接触发每个函数。腾讯定时器是 Push 模型并使用异步调用；它仍然消耗函数并发额度，不是绕过 SCF 配额的手段。它解决的是 MooX 自己的逐节点 Invoke 排队和对 Collector/Gateway 可用性的依赖。[腾讯云定时触发器说明](https://cloud.tencent.com/document/product/583/9708)、[并发超限说明](https://cloud.tencent.com/document/product/583/51585)
 
@@ -22,7 +22,7 @@ flowchart LR
   Assign --> Reconcile
   Reconcile --> CloudNode["CloudNode 合并并更新函数配置"]
   CloudNode --> Timer["腾讯云 Timer Trigger"]
-  Timer --> SCF["crypto_market 短时 SCF"]
+  Timer --> SCF["统一 market_data 短时 SCF"]
   SCF --> Binance["Binance HTTPS"]
   SCF --> Storage["一次聚合写 Storage"]
   Storage --> Monitor["Dataset 与 K 线新鲜度监控"]
@@ -38,12 +38,12 @@ flowchart LR
 7. 配置驱动的标准发布会在每个启用地域额外保留 1 个 `trigger_type=invoke` 辅助函数，专门承载
    Symbol 全量快照、缺口补采、出口探针和人工 E2E；`function_count` 只表示用户配置的 Timer
    实时容量。Space 级 `timer_function_count` 表示 Timer 总容量；启用地域的 `function_count`
-   可以显式分配，或设为 0 由 CLI 自动均分。`crypto_market` 和 `stock_cn` 未提供地域数量时
+   可以显式分配，或设为 0 由 CLI 自动均分。`crypto` 和 `stock_cn` 未提供地域数量时
    默认分别为 60 和 300。这样不会把按需工作错误投递到静态 Timer 环境，也不需要 SCF 在每次调用时回调控制面。
 
 ## Invoke 辅助节点的作用
 
-线上形如 `moox-fetcher-crypto-market-invoke-ap-guangzhou-0` 的函数是按需执行节点，不是
+线上形如 `moox-fetcher-market-data-<space>-invoke-ap-guangzhou-0` 的函数是按需执行节点，不是
 实时 K 线节点。它们没有 Timer Trigger，不会每分钟自动运行；只有 Collector、`moox-cli`
 或人工操作通过 `InvokeFunction` 调用时才执行，因此不会产生 Timer 空跑的函数运行时长。
 
@@ -66,8 +66,8 @@ flowchart LR
 `function_count` 只统计 Timer 节点，Invoke 辅助节点是额外的每地域 1 个固定容量。
 
 当前 `custom.toml` 启用新加坡、广州、上海和北京四个地域，所以对应会看到四个辅助函数：
-`...-invoke-ap-singapore-0`、`...-invoke-ap-guangzhou-0`、`...-invoke-ap-shanghai-0` 和
-`...-invoke-ap-beijing-0`；东京、成都等未启用地域不会创建对应节点。
+`...-<space>-invoke-ap-singapore-0`、`...-<space>-invoke-ap-guangzhou-0`、
+`...-<space>-invoke-ap-shanghai-0` 和 `...-<space>-invoke-ap-beijing-0`；东京、成都等未启用地域不会创建对应节点。
 
 ## 任务环境变量
 
@@ -130,7 +130,7 @@ Timer 的 Message 只放固定协议标识，任务和 DNS 均从环境变量读
 
 - `modules/collector`：规则、Symbol 快照、DNS 解析、分片与配置协调。
 - `modules/cloudnode`：腾讯凭据、函数环境合并、Timer Trigger 生命周期和回读验证。
-- `modules/collector/internal/serverless/crypto_market`：解析 Timer event 和函数环境，执行一次实时采集。
+- `modules/collector/internal/serverless/market_data`：解析 Timer event 和函数环境，执行一次实时采集。
 - `modules/storage`：K 线真值和幂等写入。
 - `modules/monitor`：Trigger/协调状态及 Dataset、Storage 实际写入水位和 K 线新鲜度，不参与调度；不能无条件忽略 `producer=storage`。
 - `web`：展示节点类型、触发方式和协调结果，不直接操作腾讯云。

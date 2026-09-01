@@ -320,7 +320,7 @@ func TestMooxSkillReadIsBoundToKlineScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	validSelector := &pb.TimeSeriesSelector{
-		SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m", SubjectId: "BTC-USDT",
+		SpaceId: "crypto", DatasetId: "binance_spot_kline_1m", SubjectId: "BTC-USDT",
 		Freq: "1m", SeriesTag: stringPtr("venue:binance"),
 	}
 	tests := []struct {
@@ -332,11 +332,11 @@ func TestMooxSkillReadIsBoundToKlineScope(t *testing.T) {
 			Selectors: []*pb.TimeSeriesSelector{validSelector}, Order: pb.SortOrder_SORT_ORDER_DESC,
 		}},
 		{name: "exact keys", req: &pb.ReadTimeSeriesRowsReq{
-			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m",
-			Selectors: []*pb.TimeSeriesSelector{validSelector}, Keys: []*pb.TimeSeriesKey{{SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m"}}, Order: pb.SortOrder_SORT_ORDER_DESC,
+			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto", DatasetId: "binance_spot_kline_1m",
+			Selectors: []*pb.TimeSeriesSelector{validSelector}, Keys: []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "binance_spot_kline_1m"}}, Order: pb.SortOrder_SORT_ORDER_DESC,
 		}},
 		{name: "page size", req: &pb.ReadTimeSeriesRowsReq{
-			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m",
+			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto", DatasetId: "binance_spot_kline_1m",
 			Selectors: []*pb.TimeSeriesSelector{validSelector}, Page: &commonpb.Page{Size: 1001}, Order: pb.SortOrder_SORT_ORDER_DESC,
 		}},
 	}

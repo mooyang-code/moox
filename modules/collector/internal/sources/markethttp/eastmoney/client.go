@@ -95,7 +95,19 @@ func (c *Client) FetchKlines(ctx context.Context, request marketdata.KlineReques
 	if err != nil {
 		return nil, err
 	}
-	query := url.Values{"secid": {secid}, "klt": {klineType(request.Frequency)}, "fqt": {"0"}, "beg": {dateValue(request.StartTime, "0")}, "end": {dateValue(request.EndTime, "20500101")}, "lmt": {strconv.Itoa(request.Limit)}}
+	location, err := time.LoadLocation(c.Timezone)
+	if err != nil {
+		return nil, fmt.Errorf("eastmoney: load timezone %q: %w", c.Timezone, err)
+	}
+	startDate, err := dateValue(request.StartTime, "0", location)
+	if err != nil {
+		return nil, err
+	}
+	endDate, err := dateValue(request.EndTime, "20500101", location)
+	if err != nil {
+		return nil, err
+	}
+	query := url.Values{"secid": {secid}, "klt": {klineType(request.Frequency)}, "fqt": {"0"}, "beg": {startDate}, "end": {endDate}, "lmt": {strconv.Itoa(request.Limit)}}
 	if request.Limit <= 0 || request.Limit > 1000 {
 		query.Set("lmt", "1000")
 	}
@@ -188,11 +200,14 @@ func klineType(value string) string {
 	}
 }
 
-func dateValue(value time.Time, fallback string) string {
+func dateValue(value time.Time, fallback string, location *time.Location) (string, error) {
 	if value.IsZero() {
-		return fallback
+		return fallback, nil
 	}
-	return value.In(time.FixedZone("CST", 8*60*60)).Format("20060102")
+	if location == nil {
+		return "", fmt.Errorf("eastmoney: timezone is required for date conversion")
+	}
+	return value.In(location).Format("20060102"), nil
 }
 
 func barEnd(start time.Time, frequency string, location *time.Location) time.Time {

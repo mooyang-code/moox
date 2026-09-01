@@ -51,7 +51,7 @@ mkdir -p "${STAGE}/moox/config"
 PACKAGED_CONFIG="${STAGE}/moox/config/data-access.yaml"
 "${MOOX_CLI}" setup export-skill-config \
   --file "${CONFIG}" \
-  --space crypto_market \
+  --space crypto \
   --output "${PACKAGED_CONFIG}"
 
 if [[ ! -f "${PACKAGED_CONFIG}" || -L "${PACKAGED_CONFIG}" ]]; then

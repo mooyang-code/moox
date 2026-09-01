@@ -1,7 +1,7 @@
 // Package marketdata contains the generic, one-shot market-data SCF entrypoint.
-// It is deliberately separate from the legacy crypto entrypoint: a request
-// names a canonical Market/Instrument and a concrete SourceKey, then the
-// shared pipeline owns normalization and Storage writes.
+// A request names a canonical Market/Instrument and a concrete SourceKey, then
+// the shared pipeline owns normalization and Storage writes for stocks, crypto,
+// indices, and bonds.
 package marketdata
 
 import (
@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
@@ -27,11 +29,14 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	markethttp "github.com/mooyang-code/moox/modules/collector/internal/sources/markethttp/eastmoney"
+	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/mooyang-code/moox/packages/marketmanifest"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/routeprobe"
 	tdxwire "github.com/mooyang-code/moox/packages/tdx"
 	"github.com/tencentyun/scf-go-lib/cloudfunction"
 	"github.com/tencentyun/scf-go-lib/functioncontext"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const defaultAction = model.EventActionMarketFetch
@@ -47,6 +52,8 @@ const (
 type Item struct {
 	SubjectID      string `json:"subject_id"`
 	ProviderSymbol string `json:"provider_symbol"`
+	TaskID         string `json:"task_id,omitempty"`
+	SourceEventID  string `json:"source_event_id,omitempty"`
 }
 
 // Request is the public event data contract for stock/index/bond SCF calls.
@@ -54,22 +61,73 @@ type Item struct {
 // for the requested market is used; callers cannot substitute an arbitrary
 // provider after composition has been built.
 type Request struct {
-	SpaceID        string `json:"space_id"`
-	DatasetID      string `json:"dataset_id"`
-	MarketID       string `json:"market_id"`
-	InstrumentType string `json:"instrument_type"`
-	ProviderID     string `json:"provider_id,omitempty"`
-	SourceID       string `json:"source_id,omitempty"`
-	SeriesTag      string `json:"series_tag,omitempty"`
-	SourceEventID  string `json:"source_event_id"`
-	Frequency      string `json:"frequency"`
-	Limit          int    `json:"limit,omitempty"`
-	StartTime      string `json:"start_time,omitempty"`
-	EndTime        string `json:"end_time,omitempty"`
-	Items          []Item `json:"items"`
+	SpaceID            string `json:"space_id"`
+	BatchID            string `json:"batch_id,omitempty"`
+	DatasetID          string `json:"dataset_id"`
+	MarketID           string `json:"market_id"`
+	InstrumentType     string `json:"instrument_type"`
+	ProviderID         string `json:"provider_id,omitempty"`
+	SourceID           string `json:"source_id,omitempty"`
+	SeriesTag          string `json:"series_tag,omitempty"`
+	DataType           string `json:"data_type,omitempty"`
+	BatchKind          string `json:"batch_kind,omitempty"`
+	ScheduleID         string `json:"schedule_id,omitempty"`
+	SourceEventID      string `json:"source_event_id"`
+	Frequency          string `json:"frequency"`
+	Region             string `json:"region,omitempty"`
+	NodeID             string `json:"node_id,omitempty"`
+	Limit              int    `json:"limit,omitempty"`
+	StartTime          string `json:"start_time,omitempty"`
+	EndTime            string `json:"end_time,omitempty"`
+	SnapshotShardIndex int    `json:"snapshot_shard_index,omitempty"`
+	SnapshotShardCount int    `json:"snapshot_shard_count,omitempty"`
+	Items              []Item `json:"items"`
+}
+
+func (request *Request) normalize() {
+	if request == nil {
+		return
+	}
+	request.SpaceID = strings.TrimSpace(request.SpaceID)
+	request.BatchID = strings.TrimSpace(request.BatchID)
+	request.DatasetID = strings.TrimSpace(request.DatasetID)
+	request.MarketID = strings.ToLower(strings.TrimSpace(request.MarketID))
+	request.InstrumentType = strings.ToLower(strings.TrimSpace(request.InstrumentType))
+	request.ProviderID = strings.ToLower(strings.TrimSpace(request.ProviderID))
+	request.SourceID = strings.ToLower(strings.TrimSpace(request.SourceID))
+	request.SeriesTag = strings.TrimSpace(request.SeriesTag)
+	request.DataType = strings.ToLower(strings.TrimSpace(request.DataType))
+	if request.DataType == "" {
+		request.DataType = "kline"
+	}
+	request.BatchKind = strings.ToLower(strings.TrimSpace(request.BatchKind))
+	request.ScheduleID = strings.TrimSpace(request.ScheduleID)
+	request.SourceEventID = strings.TrimSpace(request.SourceEventID)
+	if request.BatchID == "" {
+		request.BatchID = request.SourceEventID
+	}
+	if request.SourceEventID == "" {
+		request.SourceEventID = request.BatchID
+	}
+	request.Frequency = strings.TrimSpace(request.Frequency)
+	if request.MarketID == "crypto" {
+		if canonical, err := report.NormalizeDatasetFrequency(request.Frequency); err == nil {
+			request.Frequency = canonical
+		}
+	}
+	for index := range request.Items {
+		request.Items[index].SubjectID = strings.TrimSpace(request.Items[index].SubjectID)
+		request.Items[index].ProviderSymbol = strings.TrimSpace(request.Items[index].ProviderSymbol)
+		request.Items[index].TaskID = strings.TrimSpace(request.Items[index].TaskID)
+		request.Items[index].SourceEventID = strings.TrimSpace(request.Items[index].SourceEventID)
+	}
 }
 
 func (request Request) validate() error {
+	dataType := strings.ToLower(strings.TrimSpace(request.DataType))
+	if dataType == "" {
+		dataType = "kline"
+	}
 	for name, value := range map[string]string{
 		"space_id": request.SpaceID, "dataset_id": request.DatasetID,
 		"market_id": request.MarketID, "instrument_type": request.InstrumentType,
@@ -85,19 +143,40 @@ func (request Request) validate() error {
 	if len(request.Items) > 1000 {
 		return fmt.Errorf("items exceed one invocation limit")
 	}
+	if dataType != "kline" && dataType != "symbol" {
+		return fmt.Errorf("unsupported data_type %q", request.DataType)
+	}
+	if dataType == "symbol" && len(request.Items) != 1 {
+		return fmt.Errorf("symbol requests require exactly one item")
+	}
+	if strings.TrimSpace(request.SourceID) != "" && strings.TrimSpace(request.ProviderID) == "" {
+		return fmt.Errorf("provider_id is required when source_id is specified")
+	}
 	if request.Limit < 0 {
 		return fmt.Errorf("limit cannot be negative")
 	}
 	seenSubjects := make(map[string]struct{}, len(request.Items))
+	seenSourceEvents := make(map[string]int, len(request.Items))
 	for index, item := range request.Items {
-		if strings.TrimSpace(item.SubjectID) == "" || strings.TrimSpace(item.ProviderSymbol) == "" {
-			return fmt.Errorf("items[%d] subject_id and provider_symbol are required", index)
+		if strings.TrimSpace(item.SubjectID) == "" {
+			return fmt.Errorf("items[%d] subject_id is required", index)
+		}
+		if dataType == "kline" && strings.TrimSpace(item.ProviderSymbol) == "" {
+			return fmt.Errorf("items[%d] provider_symbol is required for kline", index)
 		}
 		subjectID := strings.ToUpper(strings.TrimSpace(item.SubjectID))
 		if _, exists := seenSubjects[subjectID]; exists {
 			return fmt.Errorf("items[%d] subject_id %q is duplicated", index, item.SubjectID)
 		}
 		seenSubjects[subjectID] = struct{}{}
+		eventID := strings.TrimSpace(item.SourceEventID)
+		if eventID == "" {
+			eventID = itemSourceEventID(request.SourceEventID, item.SubjectID)
+		}
+		if previous, exists := seenSourceEvents[eventID]; exists {
+			return fmt.Errorf("items[%d] source_event_id duplicates items[%d]", index, previous)
+		}
+		seenSourceEvents[eventID] = index
 	}
 	return nil
 }
@@ -115,9 +194,18 @@ type Response struct {
 // seam for tests and lets deployments provide their Storage auth policy without
 // putting credentials in event payloads.
 type Handler struct {
-	NewStorage func(string, string, string) (marketfetch.KlineRowWriter, error)
-	NewGetter  func() markethttp.Getter
-	Now        func() time.Time
+	NewStorage        func(string, string, string) (marketfetch.KlineRowWriter, error)
+	NewGetter         func() markethttp.Getter
+	ProbeEgress       func(context.Context, string, string) (*model.Response, error)
+	Now               func() time.Time
+	RunSymbolSnapshot func(context.Context, Request, marketfetch.Storage, *markets.Composition, string) (*model.Response, error)
+	PublishCompletion func(context.Context, Request, string, []itemResult) error
+}
+
+type itemResult struct {
+	rows int
+	last time.Time
+	err  error
 }
 
 func NewHandler() *Handler {
@@ -129,7 +217,10 @@ func NewHandler() *Handler {
 			timeoutMS := envPositiveInt("MOOX_FETCH_REQUEST_TIMEOUT_MS", 5000)
 			return newRouteGetter(httpclient.NewHTTPClientWithTimeout(time.Duration(timeoutMS)*time.Millisecond), loadDNSRoutes(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON")))
 		},
-		Now: time.Now,
+		ProbeEgress:       marketfetch.EgressProbe,
+		Now:               time.Now,
+		RunSymbolSnapshot: runSymbolSnapshot,
+		PublishCompletion: publishGenericCompletion,
 	}
 }
 
@@ -149,6 +240,20 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 	var event model.CloudFunctionEvent
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return Response{Success: false, Errors: []string{fmt.Sprintf("decode event: %v", err)}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
+	}
+	if event.Action == model.EventActionEgressProbe {
+		probe := handler.ProbeEgress
+		if probe == nil {
+			probe = marketfetch.EgressProbe
+		}
+		probeResponse, probeErr := probe(ctx, eventDataString(event.Data, "provider"), eventDataString(event.Data, "market_type"))
+		if probeErr != nil {
+			return Response{Success: false, Errors: []string{probeErr.Error()}, RequestID: firstNonEmpty(event.RequestID, requestID), Timestamp: handler.timestamp()}, nil
+		}
+		if probeResponse == nil {
+			return Response{Success: false, Errors: []string{"egress probe returned no response"}, RequestID: firstNonEmpty(event.RequestID, requestID), Timestamp: handler.timestamp()}, nil
+		}
+		return probeResponse, nil
 	}
 	if event.Action != "" && event.Action != defaultAction {
 		return Response{Success: false, Errors: []string{"unsupported action"}, RequestID: event.RequestID, Timestamp: handler.timestamp()}, nil
@@ -180,12 +285,16 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 	if err != nil {
 		return Response{Success: false, Errors: []string{err.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
 	}
+	request.normalize()
 	if err := request.validate(); err != nil {
 		return Response{Success: false, Errors: []string{err.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
 	}
 	if expected := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")); expected != "" && request.SpaceID != expected {
 		return Response{Success: false, Errors: []string{"space_id does not match MOOX_SPACE_ID"}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
 	}
+	invocationTimeout := envPositiveInt("MOOX_FETCH_TIMEOUT_SECONDS", 15)
+	invocationCtx, invocationCancel := context.WithTimeout(ctx, time.Duration(invocationTimeout)*time.Second)
+	defer invocationCancel()
 	target := strings.TrimSpace(event.StorageRPCGatewayTarget)
 	if target == "" {
 		target = strings.TrimSpace(os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"))
@@ -198,8 +307,64 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 		return nil, err
 	}
 	providerID, sourceID := defaultSource(request)
+	request.ProviderID = providerID
+	request.SourceID = sourceID
 	key := marketdata.SourceKey{ProviderID: providerID, SourceID: sourceID}
+	if request.DataType == "symbol" {
+		storage, ok := writer.(marketfetch.Storage)
+		if !ok {
+			return Response{Success: false, Errors: []string{"symbol snapshot storage does not implement metadata writes"}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
+		}
+		run := handler.RunSymbolSnapshot
+		if run == nil {
+			run = runSymbolSnapshot
+		}
+		composition, compositionErr := markets.NewComposition(handler.NewGetter(), nil, true, marketfetch.NewHTTPRouteProviderFromEnvironment())
+		if compositionErr != nil {
+			return nil, compositionErr
+		}
+		// Keep the final three seconds of the fixed SCF invocation available for
+		// publishing the completion fact even when exchange-info or Storage is
+		// slow. Symbol snapshots are not allowed to consume the whole deadline.
+		symbolWorkTimeout := time.Duration(invocationTimeout)*time.Second - 3*time.Second
+		if symbolWorkTimeout <= 0 {
+			return Response{Success: false, Errors: []string{"symbol snapshot has no completion-event deadline budget"}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
+		}
+		symbolCtx, symbolCancel := context.WithTimeout(invocationCtx, symbolWorkTimeout)
+		defer symbolCancel()
+		legacyResponse, runErr := run(symbolCtx, request, storage, composition, requestID)
+		if runErr != nil {
+			return nil, runErr
+		}
+		if legacyResponse == nil {
+			return nil, fmt.Errorf("symbol snapshot returned no response")
+		}
+		completionResults := []itemResult{{rows: legacyResponse.RowsWritten}}
+		if !legacyResponse.Success {
+			message := strings.TrimSpace(legacyResponse.Message)
+			if message == "" {
+				message = "symbol snapshot failed"
+			}
+			completionResults[0].err = errors.New(message)
+		}
+		if shouldPublishCompletion(event, request) {
+			publish := handler.PublishCompletion
+			if publish == nil {
+				publish = publishGenericCompletion
+			}
+			publishCtx, publishCancel := context.WithTimeout(ctx, 3*time.Second)
+			defer publishCancel()
+			if err := publish(publishCtx, request, requestID, completionResults); err != nil {
+				return nil, fmt.Errorf("publish market fetch completion: %w", err)
+			}
+		}
+		return symbolResponse(legacyResponse, requestID, handler.timestamp()), nil
+	}
 	var normalTDX *tdxwire.NormalClient
+	var tdxRoutes []routeprobe.Candidate
+	tdxRouteIndex := 0
+	tdxPort := 0
+	tdxTimeout := 0 * time.Second
 	if providerID == "tdx" && sourceID == "normal_7709" {
 		host := strings.TrimSpace(os.Getenv("MOOX_TDX_HOST"))
 		if host == "" {
@@ -217,8 +382,9 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 		if routeErr != nil {
 			return Response{Success: false, Errors: []string{routeErr.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
 		}
-		timeout := time.Duration(envNumber("MOOX_TDX_TIMEOUT_SECONDS", 15)) * time.Second
-		selection, routeErr := marketfetch.SelectRoute(ctx, marketfetch.RouteSelectionOptions{
+		timeout := time.Duration(envNumber("MOOX_TDX_TIMEOUT_SECONDS", 1)) * time.Second
+		tdxTimeout = timeout
+		selection, routeErr := marketfetch.SelectRoute(invocationCtx, marketfetch.RouteSelectionOptions{
 			SCFRegion:   firstNonEmpty(os.Getenv("MOOX_SCF_REGION"), "unknown"),
 			SourceKey:   routeprobe.SourceKey{ProviderID: providerID, SourceID: sourceID},
 			Transport:   routeprobe.TransportTCP,
@@ -227,8 +393,8 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 			Addresses:   addresses,
 			Snapshot:    snapshot,
 			Prober:      tdxwire.RouteProber{Timeout: timeout},
-			Probe:       routeprobe.ProbeOptions{Concurrency: envPositiveInt("MOOX_TDX_ROUTE_PROBE_CONCURRENCY", 1), Attempts: envPositiveInt("MOOX_TDX_ROUTE_PROBE_ATTEMPTS", 1), AttemptTimeout: time.Duration(envNumber("MOOX_TDX_ROUTE_PROBE_TIMEOUT_SECONDS", 5)) * time.Second},
-			MaxFallback: envPositiveInt("MOOX_TDX_ROUTE_MAX_FALLBACK", 2),
+			Probe:       routeprobe.ProbeOptions{Concurrency: envPositiveInt("MOOX_TDX_ROUTE_PROBE_CONCURRENCY", 1), Attempts: envPositiveInt("MOOX_TDX_ROUTE_PROBE_ATTEMPTS", 1), AttemptTimeout: time.Duration(envNumber("MOOX_TDX_ROUTE_PROBE_TIMEOUT_SECONDS", 1)) * time.Second},
+			MaxFallback: envNonNegativeInt("MOOX_TDX_ROUTE_MAX_FALLBACK", 1),
 		})
 		if routeErr != nil {
 			return Response{Success: false, Errors: []string{"select tdx route: " + routeErr.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
@@ -236,14 +402,17 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 		if len(selection.Routes) == 0 {
 			return Response{Success: false, Errors: []string{"select tdx route: no route returned"}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
 		}
+		tdxRoutes = append([]routeprobe.Candidate(nil), selection.Routes...)
+		tdxPort = port
 		var tdxErr error
-		for _, route := range selection.Routes {
+		for index, route := range selection.Routes {
 			host = route.Address
 			normalTDX, tdxErr = tdxwire.NewNormalClient(host, port, timeout)
 			if tdxErr != nil {
 				continue
 			}
-			if tdxErr = normalTDX.Connect(ctx); tdxErr == nil {
+			if tdxErr = normalTDX.Connect(invocationCtx); tdxErr == nil {
+				tdxRouteIndex = index
 				break
 			}
 			_ = normalTDX.Close()
@@ -257,7 +426,7 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 		}
 		defer normalTDX.Close()
 	}
-	composition, err := markets.NewComposition(handler.NewGetter(), normalTDX, false)
+	composition, err := markets.NewComposition(handler.NewGetter(), normalTDX, true, marketfetch.NewHTTPRouteProviderFromEnvironment())
 	if err != nil {
 		return nil, err
 	}
@@ -265,11 +434,8 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 	if !ok || !manifest.Enabled {
 		return Response{Success: false, Errors: []string{"market/instrument is not enabled"}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
 	}
-	if request.DatasetID != manifest.DatasetID {
-		return Response{Success: false, Errors: []string{"dataset_id does not match the canonical market manifest"}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
-	}
-	if !containsString(manifest.Frequencies, request.Frequency) {
-		return Response{Success: false, Errors: []string{"frequency is not declared by the market manifest"}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
+	if !manifest.SupportsDatasetFrequency(request.DatasetID, request.Frequency) {
+		return Response{Success: false, Errors: []string{"dataset_id/frequency does not match the canonical market manifest"}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
 	}
 	if !manifestHasSource(manifest, key, request.Frequency) {
 		return Response{Success: false, Errors: []string{"source is not declared for the market/frequency"}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
@@ -285,21 +451,38 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 	if err != nil {
 		return Response{Success: false, Errors: []string{err.Error()}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
 	}
-	router := &marketfetch.ProviderRouter{Registry: composition.Registry, Writer: writer}
+	settleDelay := time.Duration(envNonNegativeInt("MOOX_MARKET_FETCH_SETTLE_DELAY_SECONDS", 10)) * time.Second
+	router := &marketfetch.ProviderRouter{Registry: composition.Registry, Writer: writer, Now: handler.Now, SettleDelay: settleDelay}
 	response := Response{RequestID: requestID, Timestamp: handler.timestamp()}
-	invocationTimeout := envPositiveInt("MOOX_FETCH_TIMEOUT_SECONDS", 15)
-	workCtx, cancel := context.WithTimeout(ctx, time.Duration(invocationTimeout)*time.Second)
+	workTimeout := time.Duration(invocationTimeout) * time.Second
+	if normalTDX != nil {
+		// A failed route attempt consumes one request timeout, and a reconnect may
+		// consume another timeout for dial plus normal-protocol setup. Reserve the
+		// worst-case budget for every item because the TDX stream is serialized.
+		minimum := tdxInvocationBudget(tdxTimeout, len(tdxRoutes), len(request.Items))
+		remaining := time.Duration(invocationTimeout) * time.Second
+		if deadline, ok := invocationCtx.Deadline(); ok {
+			remaining = time.Until(deadline)
+		}
+		available := remaining - 3*time.Second
+		if minimum > available {
+			return Response{Success: false, Errors: []string{fmt.Sprintf("tdx request budget %s exceeds the remaining SCF invocation budget %s; reduce items, fallback routes, or TDX timeout", minimum, available)}, RequestID: requestID, Timestamp: handler.timestamp()}, nil
+		}
+		workTimeout = available
+	}
+	workCtx, cancel := context.WithTimeout(invocationCtx, workTimeout)
 	defer cancel()
 	concurrency := envPositiveInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", 10)
+	if normalTDX != nil {
+		// One NormalClient owns one ordered TCP stream. Serializing its requests
+		// also makes route reconnect/retry deterministic after a broken frame.
+		concurrency = 1
+	}
 	if concurrency > len(request.Items) {
 		concurrency = len(request.Items)
 	}
 	if concurrency > 30 {
 		concurrency = 30
-	}
-	type itemResult struct {
-		rows int
-		err  error
 	}
 	results := make([]itemResult, len(request.Items))
 	sem := make(chan struct{}, concurrency)
@@ -319,13 +502,37 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 			// Each pipeline call is one Storage payload. Keep a stable event id
 			// for retries of that item, but do not reuse one event id across
 			// multiple payloads: Storage deduplicates by source event and dataset.
-			itemEventID := itemSourceEventID(request.SourceEventID, item.SubjectID)
+			itemEventID := sourceEventIDForItem(request.SourceEventID, item)
 			result, fetchErr := router.FetchAndWrite(workCtx, marketfetch.PipelineRequest{
 				SpaceID: request.SpaceID, DatasetID: request.DatasetID, SeriesTag: request.SeriesTag,
 				SourceEventID: itemEventID, SourceKey: key,
 				Request: marketdata.KlineRequest{MarketID: request.MarketID, InstrumentType: request.InstrumentType, SubjectID: item.SubjectID, ProviderSymbol: item.ProviderSymbol, Frequency: request.Frequency, Limit: request.Limit, StartTime: start, EndTime: end},
 			})
-			results[index] = itemResult{err: fetchErr}
+			if shouldReconnectTDX(fetchErr) && normalTDX != nil && len(tdxRoutes) > 0 {
+				// A failed frame poisons the stream. Reconnect through each selected
+				// route at most once for this item, then continue with the route that
+				// succeeded for the remaining serialized items.
+				currentRoute := tdxRouteIndex
+				for offset := 1; offset <= len(tdxRoutes); offset++ {
+					nextRoute := (currentRoute + offset) % len(tdxRoutes)
+					if reconnectErr := normalTDX.Reconnect(workCtx, tdxRoutes[nextRoute].Address, tdxPort); reconnectErr != nil {
+						continue
+					}
+					tdxRouteIndex = nextRoute
+					result, fetchErr = router.FetchAndWrite(workCtx, marketfetch.PipelineRequest{
+						SpaceID: request.SpaceID, DatasetID: request.DatasetID, SeriesTag: request.SeriesTag,
+						SourceEventID: itemEventID, SourceKey: key,
+						Request: marketdata.KlineRequest{MarketID: request.MarketID, InstrumentType: request.InstrumentType, SubjectID: item.SubjectID, ProviderSymbol: item.ProviderSymbol, Frequency: request.Frequency, Limit: request.Limit, StartTime: start, EndTime: end},
+					})
+					if fetchErr == nil {
+						break
+					}
+					if !shouldReconnectTDX(fetchErr) {
+						break
+					}
+				}
+			}
+			results[index] = itemResult{err: fetchErr, last: result.LastBar}
 			if fetchErr == nil {
 				results[index].rows = result.RowsWritten
 			}
@@ -341,12 +548,235 @@ func (handler *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) 
 		response.RowsWritten += result.rows
 	}
 	response.Success = response.Failed == 0
+	if shouldPublishCompletion(event, request) {
+		publish := handler.PublishCompletion
+		if publish == nil {
+			publish = publishGenericCompletion
+		}
+		publishCtx, publishCancel := context.WithTimeout(ctx, 3*time.Second)
+		defer publishCancel()
+		if err := publish(publishCtx, request, requestID, results); err != nil {
+			return nil, fmt.Errorf("publish market fetch completion: %w", err)
+		}
+	}
 	return response, nil
+}
+
+func eventDataString(data map[string]interface{}, key string) string {
+	value, _ := data[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func tdxInvocationBudget(perAttempt time.Duration, routeCount, itemCount int) time.Duration {
+	if perAttempt <= 0 || routeCount <= 0 || itemCount <= 0 {
+		return 0
+	}
+	const maxDuration = time.Duration(1<<63 - 1)
+	maxInt := int(^uint(0) >> 1)
+	if routeCount > (maxInt-2)/2 {
+		return maxDuration
+	}
+	// Include the initial connection setup and every selected-route reconnect.
+	// The handler rejects work whose worst-case wire budget cannot leave time for
+	// the completion event inside the fixed 15-second SCF invocation.
+	perItemAttempts := 2 + 2*routeCount
+	if itemCount > maxInt/perItemAttempts {
+		return maxDuration
+	}
+	attempts := time.Duration(perItemAttempts * itemCount)
+	if perAttempt > (maxDuration-time.Second)/attempts {
+		return maxDuration
+	}
+	return perAttempt*attempts + time.Second
+}
+
+func shouldReconnectTDX(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return errors.Is(err, tdxwire.ErrTransport) || errors.Is(err, tdxwire.ErrProtocol)
 }
 
 func itemSourceEventID(batchEventID, subjectID string) string {
 	digest := sha256.Sum256([]byte(batchEventID + "\x00" + subjectID))
 	return batchEventID + ":" + hex.EncodeToString(digest[:8])
+}
+
+func sourceEventIDForItem(batchEventID string, item Item) string {
+	if sourceEventID := strings.TrimSpace(item.SourceEventID); sourceEventID != "" {
+		return sourceEventID
+	}
+	return itemSourceEventID(batchEventID, item.SubjectID)
+}
+
+// runSymbolSnapshot routes Binance exchange-info through the generic
+// InstrumentPipeline. Unlike KlinePipeline, a symbol snapshot also mutates
+// Metadata memberships and must return the completion fact so the scheduler can
+// advance its durable batch state.
+func runSymbolSnapshot(ctx context.Context, request Request, storage marketfetch.Storage, composition *markets.Composition, requestID string) (*model.Response, error) {
+	if composition == nil || composition.Registry == nil {
+		return nil, fmt.Errorf("symbol snapshot market composition is not initialized")
+	}
+	if request.InstrumentType != binance.InstTypeSPOT && request.InstrumentType != binance.InstTypeSWAP {
+		return &model.Response{Success: false, Message: fmt.Sprintf("symbol snapshot instrument_type %q is not supported", request.InstrumentType), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
+	}
+	expectedSource, expectedDataset := "spot_http", "binance_spot_symbols"
+	if request.InstrumentType == binance.InstTypeSWAP {
+		expectedSource, expectedDataset = "swap_http", "binance_swap_symbols"
+	}
+	if request.SourceID != expectedSource || request.DatasetID != expectedDataset {
+		return &model.Response{Success: false, Message: fmt.Sprintf("symbol snapshot source/dataset %s/%s does not match %s/%s", request.SourceID, request.DatasetID, expectedSource, expectedDataset), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
+	}
+	registration, ok := composition.Registry.Lookup(marketdata.SourceKey{ProviderID: request.ProviderID, SourceID: request.SourceID})
+	if !ok || registration.Instruments == nil {
+		return &model.Response{Success: false, Message: fmt.Sprintf("symbol snapshot source %s/%s is not registered", request.ProviderID, request.SourceID), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
+	}
+	binding, err := binance.ResolveStorageBinding(request.InstrumentType)
+	if err != nil {
+		return nil, err
+	}
+	shardCount := request.SnapshotShardCount
+	if shardCount <= 0 {
+		shardCount = 1
+	}
+	pipeline := &marketfetch.InstrumentPipeline{Fetcher: registration.Instruments, Storage: storage}
+	result, err := pipeline.FetchAndWrite(ctx, marketfetch.InstrumentPipelineRequest{
+		SpaceID: request.SpaceID, DatasetID: request.DatasetID, SourceEventID: request.SourceEventID,
+		SourceKey:  marketdata.SourceKey{ProviderID: request.ProviderID, SourceID: request.SourceID},
+		Request:    marketdata.InstrumentRequest{MarketID: request.MarketID, InstrumentType: request.InstrumentType},
+		WriteSpec:  marketfetch.InstrumentWriteSpec{DataSourceID: binding.DataSourceID, SubjectType: binding.SubjectType, SubjectMarket: binding.SubjectMarket, SeriesTag: request.SeriesTag},
+		ShardIndex: request.SnapshotShardIndex, ShardCount: shardCount,
+	})
+	if err != nil {
+		return nil, err
+	}
+	payload := &marketfetchpb.MarketFetchBatchCompleted{
+		BatchId: firstNonEmpty(request.BatchID, request.SourceEventID), ScheduleId: request.ScheduleID, BatchKind: string(domain.BatchKindSymbolSnapshot), DatasetId: request.DatasetID,
+		Frequency: request.Frequency, Region: request.Region, NodeId: request.NodeID, RequestId: requestID, PlannedCount: 1, SuccessCount: 1,
+		Status: "succeeded", CompletedAt: timestamppb.New(time.Now().UTC()),
+		Items: []*marketfetchpb.MarketFetchItemResult{{TaskId: request.Items[0].TaskID, SubjectId: request.Items[0].SubjectID, Outcome: string(domain.ItemOutcomeSuccess), SourceEventId: sourceEventIDForItem(request.SourceEventID, request.Items[0])}},
+	}
+	if result.Instruments == 0 {
+		payload.Items[0].ErrorSummary = "symbol snapshot shard is empty"
+	}
+	return &model.Response{Success: true, RowsWritten: result.RowsWritten, Message: payload.Status, Data: payload, RequestID: requestID, Timestamp: time.Now().UTC()}, nil
+}
+
+func symbolResponse(response *model.Response, requestID, timestamp string) Response {
+	result := Response{RequestID: requestID, Timestamp: timestamp}
+	if response == nil {
+		result.Errors = []string{"symbol snapshot returned no response"}
+		return result
+	}
+	result.Success = response.Success
+	result.RowsWritten = response.RowsWritten
+	if payload, ok := response.Data.(*marketfetchpb.MarketFetchBatchCompleted); ok && payload != nil {
+		for _, item := range payload.Items {
+			if item == nil || item.Outcome == string(domain.ItemOutcomeSuccess) {
+				continue
+			}
+			result.Failed++
+			message := strings.TrimSpace(item.ErrorSummary)
+			if message == "" {
+				message = "symbol snapshot shard failed"
+			}
+			result.Errors = append(result.Errors, message)
+		}
+	}
+	if !result.Success && len(result.Errors) == 0 && strings.TrimSpace(response.Message) != "" {
+		result.Failed = 1
+		result.Errors = []string{response.Message}
+	}
+	return result
+}
+
+func shouldPublishCompletion(event model.CloudFunctionEvent, request Request) bool {
+	return !strings.EqualFold(strings.TrimSpace(event.Type), "timer") && strings.TrimSpace(request.BatchKind) != ""
+}
+
+func publishGenericCompletion(ctx context.Context, request Request, requestID string, results []itemResult) error {
+	completed := time.Now().UTC()
+	payload := &marketfetchpb.MarketFetchBatchCompleted{
+		BatchId:      firstNonEmpty(request.BatchID, request.SourceEventID),
+		BatchKind:    firstNonEmpty(request.BatchKind, string(domain.BatchKindRealtime)),
+		ScheduleId:   request.ScheduleID,
+		DatasetId:    request.DatasetID,
+		Frequency:    request.Frequency,
+		Region:       request.Region,
+		NodeId:       firstNonEmpty(request.NodeID, os.Getenv("MOOX_SCF_FUNCTION_NAME")),
+		RequestId:    requestID,
+		PlannedCount: int32(len(results)),
+		CompletedAt:  timestamppb.New(completed),
+	}
+	var firstError string
+	for index, result := range results {
+		item := request.Items[index]
+		outcome := domain.ItemOutcomeSuccess
+		errorType := ""
+		errorSummary := ""
+		if result.err != nil {
+			outcome, errorType = genericItemOutcome(result.err)
+			errorSummary = result.err.Error()
+			if firstError == "" {
+				firstError = errorSummary
+			}
+			if outcome == domain.ItemOutcomeInvalid {
+				payload.PermanentFailedCount++
+			} else {
+				payload.RetryCount++
+			}
+		} else {
+			payload.SuccessCount++
+		}
+		target := ""
+		if !result.last.IsZero() {
+			target = result.last.UTC().Format(time.RFC3339Nano)
+		}
+		payload.Items = append(payload.Items, &marketfetchpb.MarketFetchItemResult{
+			TaskId: item.TaskID, SubjectId: item.SubjectID, Symbol: item.ProviderSymbol, TargetDataTime: target,
+			Outcome: string(outcome), ErrorType: errorType, ErrorSummary: errorSummary,
+			SourceEventId: sourceEventIDForItem(request.SourceEventID, item),
+		})
+	}
+	switch {
+	case payload.SuccessCount == payload.PlannedCount:
+		payload.Status = "succeeded"
+	case payload.SuccessCount > 0:
+		payload.Status = "partial_failed"
+	default:
+		payload.Status = "failed"
+	}
+	payload.ErrorSummary = firstError
+	return marketfetch.PublishCompletion(ctx, marketfetch.Request{
+		BatchID: firstNonEmpty(request.BatchID, request.SourceEventID), ScheduleID: request.ScheduleID,
+		BatchKind: domain.BatchKind(request.BatchKind), SpaceID: request.SpaceID,
+		DatasetID: request.DatasetID, Frequency: request.Frequency, RequestID: requestID,
+	}, payload)
+}
+
+func genericItemOutcome(err error) (domain.ItemOutcome, string) {
+	if err == nil {
+		return domain.ItemOutcomeSuccess, ""
+	}
+	if errors.Is(err, marketdata.ErrRateLimited) {
+		return domain.ItemOutcomeHTTP429, "rate_limited"
+	}
+	if errors.Is(err, marketdata.ErrNotSupported) || errors.Is(err, marketdata.ErrOutOfRange) {
+		return domain.ItemOutcomeInvalid, "unsupported_request"
+	}
+	if errors.Is(err, tdxwire.ErrProtocol) {
+		return domain.ItemOutcomeNetworkError, "tdx_protocol"
+	}
+	if errors.Is(err, tdxwire.ErrTransport) {
+		return domain.ItemOutcomeNetworkError, "tdx_transport"
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{"required", "invalid", "unsupported", "does not support", "cannot be negative"} {
+		if strings.Contains(message, marker) {
+			return domain.ItemOutcomeInvalid, "invalid_request"
+		}
+	}
+	return domain.ItemOutcomeNetworkError, "fetch"
 }
 
 func decodeRequest(data map[string]interface{}) (Request, error) {
@@ -367,26 +797,98 @@ func decodeRequest(data map[string]interface{}) (Request, error) {
 }
 
 func defaultSource(request Request) (string, string) {
-	providerID := strings.TrimSpace(request.ProviderID)
-	sourceID := strings.TrimSpace(request.SourceID)
-	if providerID == "" {
-		providerID = "eastmoney"
-	}
+	providerID := strings.ToLower(strings.TrimSpace(request.ProviderID))
+	sourceID := strings.ToLower(strings.TrimSpace(request.SourceID))
+	explicitProvider := providerID != ""
 	if sourceID != "" {
+		if providerID == "" {
+			providerID = "eastmoney"
+		}
 		return providerID, sourceID
 	}
 	switch request.MarketID + "/" + request.InstrumentType {
+	case "crypto/spot":
+		if explicitProvider && !strings.EqualFold(providerID, "binance") {
+			return providerID, ""
+		}
+		return "binance", "spot_http"
+	case "crypto/swap":
+		if explicitProvider && !strings.EqualFold(providerID, "binance") {
+			return providerID, ""
+		}
+		return "binance", "swap_http"
 	case "stock_cn/equity":
-		return providerID, "stock_cn_http"
+		if providerID == "" {
+			providerID = "eastmoney"
+		}
+		switch providerID {
+		case "tdx":
+			return providerID, "normal_7709"
+		case "tencent":
+			return providerID, "stock_cn_http"
+		case "eastmoney":
+			return providerID, "stock_cn_http"
+		case "ths":
+			return providerID, "daily_http"
+		case "sina":
+			return providerID, "stock_cn_http"
+		default:
+			return providerID, ""
+		}
 	case "stock_hk/equity":
-		return providerID, "stock_hk_http"
+		if providerID == "" {
+			providerID = "eastmoney"
+		}
+		if providerID == "eastmoney" {
+			return providerID, "stock_hk_http"
+		}
+		if providerID == "sina" {
+			return providerID, "stock_hk_http"
+		}
+		return providerID, ""
 	case "stock_us/equity":
-		return providerID, "stock_us_http"
+		if providerID == "" {
+			providerID = "eastmoney"
+		}
+		if providerID == "eastmoney" {
+			return providerID, "stock_us_http"
+		}
+		if providerID == "sina" {
+			return providerID, "stock_us_http"
+		}
+		return providerID, ""
 	case "stock_cn/index":
-		return providerID, "index_http"
+		if providerID == "" {
+			providerID = "eastmoney"
+		}
+		if providerID == "tdx" {
+			return providerID, "normal_7709"
+		}
+		if providerID == "eastmoney" {
+			return providerID, "index_http"
+		}
+		if providerID == "cni" {
+			return providerID, "index_cni_http"
+		}
+		if providerID == "sw" {
+			return providerID, "index_sw_http"
+		}
+		return providerID, ""
 	case "stock_cn/convertible_bond":
-		return providerID, "convertible_bond_http"
+		if providerID == "" {
+			providerID = "eastmoney"
+		}
+		if providerID == "tdx" {
+			return providerID, "normal_7709"
+		}
+		if providerID == "eastmoney" {
+			return providerID, "convertible_bond_http"
+		}
+		return providerID, ""
 	default:
+		if providerID == "" {
+			providerID = "eastmoney"
+		}
 		return providerID, ""
 	}
 }
@@ -413,11 +915,11 @@ func requestFromTimerEnv(requestID string, now time.Time) (Request, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	if providerID == "" {
-		providerID = "eastmoney"
-	}
 	if sourceID == "" {
 		_, sourceID = defaultSource(Request{MarketID: marketID, InstrumentType: instrumentType, ProviderID: providerID})
+	}
+	if providerID == "" {
+		providerID, _ = defaultSource(Request{MarketID: marketID, InstrumentType: instrumentType})
 	}
 	if sourceID == "" {
 		return Request{}, fmt.Errorf("timer market data environment requires MOOX_MARKET_FETCH_SOURCE_ID for %s/%s", marketID, instrumentType)
@@ -460,7 +962,7 @@ func requestFromTimerEnv(requestID string, now time.Time) (Request, error) {
 	return Request{
 		SpaceID: spaceID, DatasetID: datasetID, MarketID: marketID, InstrumentType: instrumentType,
 		ProviderID: providerID, SourceID: sourceID, SeriesTag: strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SERIES_TAG")),
-		SourceEventID: sourceEventID, Frequency: frequency, Limit: barLimit, Items: items,
+		SourceEventID: sourceEventID, Frequency: frequency, Region: os.Getenv("MOOX_SCF_REGION"), NodeID: os.Getenv("MOOX_SCF_FUNCTION_NAME"), Limit: barLimit, Items: items,
 	}, nil
 }
 
@@ -478,6 +980,18 @@ func parseTimerSymbols(raw string) (map[string]string, error) {
 func envPositiveInt(name string, fallback int) int {
 	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
 	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func envNonNegativeInt(name string, fallback int) int {
+	raw, ok := os.LookupEnv(name)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || value < 0 {
 		return fallback
 	}
 	return value

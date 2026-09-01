@@ -67,29 +67,29 @@ func TestValidateTargetDatasetChecksImmutableLineageAndPlacement(t *testing.T) {
 		"alignment":             "epoch_utc",
 	}
 	dataset := &storagepb.Dataset{
-		DataSourceId: "crypto_market",
+		DataSourceId: "crypto",
 		DataNodeId:   "storage-node-0",
 		DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
 		Freqs:        []string{"5m"},
 		Attributes:   cloneStringMap(want),
 	}
-	require.NoError(t, validateTargetDataset(dataset, want, "5m", "crypto_market", "storage-node-0"))
+	require.NoError(t, validateTargetDataset(dataset, want, "5m", "crypto", "storage-node-0"))
 
 	for key, value := range want {
 		t.Run("attribute/"+key, func(t *testing.T) {
 			copy := proto.Clone(dataset).(*storagepb.Dataset)
 			copy.Attributes = cloneStringMap(dataset.Attributes)
 			copy.Attributes[key] = value + "-drift"
-			require.ErrorContains(t, validateTargetDataset(copy, want, "5m", "crypto_market", "storage-node-0"), "immutable lineage attribute")
+			require.ErrorContains(t, validateTargetDataset(copy, want, "5m", "crypto", "storage-node-0"), "immutable lineage attribute")
 		})
 	}
 	wrongSource := proto.Clone(dataset).(*storagepb.Dataset)
 	wrongSource.DataSourceId = "binance"
-	require.ErrorContains(t, validateTargetDataset(wrongSource, want, "5m", "crypto_market", "storage-node-0"), "data source")
+	require.ErrorContains(t, validateTargetDataset(wrongSource, want, "5m", "crypto", "storage-node-0"), "data source")
 	wrongNode := proto.Clone(dataset).(*storagepb.Dataset)
 	wrongNode.DataNodeId = "storage-node-1"
-	require.ErrorContains(t, validateTargetDataset(wrongNode, want, "5m", "crypto_market", "storage-node-0"), "data node")
+	require.ErrorContains(t, validateTargetDataset(wrongNode, want, "5m", "crypto", "storage-node-0"), "data node")
 	monthly := proto.Clone(dataset).(*storagepb.Dataset)
 	monthly.Freqs = []string{"5M"}
-	require.ErrorContains(t, validateTargetDataset(monthly, want, "5m", "crypto_market", "storage-node-0"), "does not enable frequency")
+	require.ErrorContains(t, validateTargetDataset(monthly, want, "5m", "crypto", "storage-node-0"), "does not enable frequency")
 }

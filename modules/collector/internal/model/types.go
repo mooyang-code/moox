@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// EventAction identifies the one-shot work accepted by the crypto_market SCF.
+// EventAction identifies the one-shot work accepted by the crypto SCF.
 type EventAction string
 
 const (
@@ -29,11 +29,12 @@ type CloudFunctionEvent struct {
 
 // Response is the function response returned to CloudNode.
 type Response struct {
-	Success   bool        `json:"success"`
-	Message   string      `json:"message,omitempty"`
-	Data      interface{} `json:"data,omitempty"`
-	RequestID string      `json:"request_id,omitempty"`
-	Timestamp time.Time   `json:"timestamp"`
+	Success     bool        `json:"success"`
+	RowsWritten int         `json:"rows_written,omitempty"`
+	Message     string      `json:"message,omitempty"`
+	Data        interface{} `json:"data,omitempty"`
+	RequestID   string      `json:"request_id,omitempty"`
+	Timestamp   time.Time   `json:"timestamp"`
 }
 
 // CollectParams describes one source collection request.

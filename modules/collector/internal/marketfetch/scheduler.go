@@ -75,11 +75,10 @@ type Scheduler struct {
 	invokeSem        chan struct{}
 }
 
-// fullSymbolSnapshotShards keeps each SCF's SQLite metadata registration
-// small while still sourcing the complete exchange snapshot. Binance's active
-// USDT catalogue is currently well below 640 symbols, so each shard carries
-// at most about 20 subjects.
-const fullSymbolSnapshotShards = 32
+// Symbol snapshots are one immutable fetch/write/activation transaction. The
+// Storage contract has no cross-invocation barrier, so splitting one provider
+// response across SCFs would allow a partial catalogue to become active.
+const fullSymbolSnapshotShards = 1
 
 func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	if s == nil || s.Rules == nil || s.Batches == nil || s.Invoker == nil {
@@ -202,7 +201,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				continue
 			}
 			batchItems := append([]domain.CollectionItem(nil), items...)
-			batchSize := s.realtimeBatchSize(len(batchItems), nodes)
+			batchSize := s.realtimeBatchSize(strings.TrimSpace(batchItems[0].Provider), len(batchItems), nodes)
 			if strings.EqualFold(rule.DataType, "symbol") {
 				batchSize = 1
 			}
@@ -524,6 +523,7 @@ func gapAuditThreshold(frequency string) time.Duration {
 }
 
 func (s *Scheduler) planOne(ctx context.Context, rule domain.TaskRule, req Request, node scfinvoker.Node, nodes []scfinvoker.Node) (bool, error) {
+	prepareRequestSourceEvents(&req)
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return false, err
@@ -547,6 +547,22 @@ func (s *Scheduler) planOne(ctx context.Context, rule domain.TaskRule, req Reque
 	// a small semaphore so a slow control plane cannot block the next rule.
 	go s.dispatchPlanned(req, node, nodes)
 	return true, nil
+}
+
+// prepareRequestSourceEvents freezes the per-item Storage idempotency marker
+// before the first SCF invocation. Completion-loss recovery reuses the saved
+// request, so deriving this marker inside the handler would create a new
+// payload identity on retry.
+func prepareRequestSourceEvents(req *Request) {
+	if req == nil {
+		return
+	}
+	for index := range req.Items {
+		if strings.TrimSpace(req.Items[index].SourceEventID) != "" {
+			continue
+		}
+		req.Items[index].SourceEventID = retryKey(req.BatchID, req.Items[index].SubjectID, req.Items[index].TargetDataTime)
+	}
 }
 
 func rotateRulesAfter(rules []domain.TaskRule, lastRuleID string) []domain.TaskRule {
@@ -609,8 +625,13 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []s
 // This keeps each node at one invocation for the common case while preventing
 // a stale or deliberately smaller function configuration from receiving an
 // oversized event.
-func (s *Scheduler) realtimeBatchSize(itemCount int, nodes []scfinvoker.Node) int {
+func (s *Scheduler) realtimeBatchSize(provider string, itemCount int, nodes []scfinvoker.Node) int {
 	if itemCount <= 0 || len(nodes) == 0 {
+		return 1
+	}
+	if strings.EqualFold(strings.TrimSpace(provider), "tdx") {
+		// Normal TDX owns one ordered TCP stream and the SCF deadline cannot
+		// accommodate a serialized multi-symbol batch plus reconnect fallback.
 		return 1
 	}
 	limit := DefaultBatchSize
@@ -742,7 +763,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		if batchKind == "" {
 			batchKind = domain.BatchKindRealtime
 		}
-		req := Request{BatchID: batchID, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
+		req := Request{BatchID: batchID, SourceEventID: retry.RetryKey, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
 		raw, _ := json.Marshal(req)
 		if _, err := marketFetchEvent(req, s.StorageTarget); err != nil {
 			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
@@ -860,9 +881,20 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 	if len(frequencies) == 0 && params.Schedule.Interval != "" {
 		frequencies = []string{params.Schedule.Interval}
 	}
+	for index, frequency := range frequencies {
+		canonical, frequencyErr := canonicalProviderFrequency(provider, frequency)
+		if frequencyErr != nil {
+			return nil, nil, frequencyErr
+		}
+		frequencies[index] = canonical
+	}
 	if dataType == "symbol" {
 		if len(frequencies) == 0 {
-			frequencies = []string{"1h"}
+			defaultFrequency, frequencyErr := canonicalProviderFrequency(provider, "1h")
+			if frequencyErr != nil {
+				return nil, nil, frequencyErr
+			}
+			frequencies = []string{defaultFrequency}
 		}
 		if params.SymbolSource != "exchange" {
 			return nil, nil, fmt.Errorf("symbol task requires exchange snapshot source")
@@ -952,6 +984,18 @@ func normalizeStorageFrequency(frequency string) (string, error) {
 	return report.NormalizeDatasetFrequency(strings.TrimSpace(frequency))
 }
 
+func canonicalProviderFrequency(provider, frequency string) (string, error) {
+	frequency = strings.TrimSpace(frequency)
+	if strings.EqualFold(strings.TrimSpace(provider), "binance") {
+		canonical, err := report.NormalizeDatasetFrequency(frequency)
+		if err != nil {
+			return "", fmt.Errorf("normalize Binance frequency %q: %w", frequency, err)
+		}
+		return canonical, nil
+	}
+	return frequency, nil
+}
+
 func stringPtr(value string) *string { return &value }
 
 func stableID(parts ...string) string {
@@ -971,13 +1015,64 @@ func firstNonEmpty(values ...string) string {
 }
 
 func marketFetchEvent(req Request, storageTarget string) (map[string]any, error) {
-	raw, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
+	marketID := strings.ToLower(strings.TrimSpace(req.MarketID))
+	instrumentType := strings.ToLower(strings.TrimSpace(req.InstrumentType))
+	if marketID == "" || instrumentType == "" {
+		marketID, instrumentType = marketIdentity(marketID, instrumentType, req.DatasetID)
+		if marketID == "" && strings.EqualFold(strings.TrimSpace(req.Provider), "binance") {
+			marketID = "crypto"
+			instrumentType = strings.ToLower(strings.TrimSpace(req.MarketType))
+		}
 	}
-	data := map[string]any{}
-	if err := json.Unmarshal(raw, &data); err != nil {
-		return nil, err
+	providerID := strings.ToLower(strings.TrimSpace(req.Provider))
+	sourceID := strings.ToLower(strings.TrimSpace(req.SourceID))
+	if sourceID == "" {
+		sourceID = sourceIDFor(providerID, marketID, instrumentType, req.MarketType)
+	}
+	items := make([]map[string]any, 0, len(req.Items))
+	for _, item := range req.Items {
+		payload := map[string]any{
+			"subject_id":      item.SubjectID,
+			"provider_symbol": item.Symbol,
+			"task_id":         item.TaskID,
+		}
+		if strings.TrimSpace(item.SourceEventID) != "" {
+			payload["source_event_id"] = strings.TrimSpace(item.SourceEventID)
+		}
+		items = append(items, payload)
+	}
+	seriesTag := strings.TrimSpace(req.SeriesTag)
+	if seriesTag == "" && providerID == "binance" {
+		seriesTag = "venue:binance"
+	}
+	dataType := "kline"
+	if len(req.Items) > 0 && strings.TrimSpace(req.Items[0].DataType) != "" {
+		dataType = strings.ToLower(strings.TrimSpace(req.Items[0].DataType))
+	}
+	sourceEventID := firstNonEmpty(req.SourceEventID, req.BatchID)
+	data := map[string]any{
+		"space_id":        req.SpaceID,
+		"batch_id":        req.BatchID,
+		"dataset_id":      req.DatasetID,
+		"market_id":       marketID,
+		"instrument_type": instrumentType,
+		"provider_id":     providerID,
+		"source_id":       sourceID,
+		"series_tag":      seriesTag,
+		"data_type":       dataType,
+		"batch_kind":      string(req.BatchKind),
+		"schedule_id":     req.ScheduleID,
+		"source_event_id": sourceEventID,
+		"frequency":       req.Frequency,
+		"region":          req.Region,
+		"node_id":         req.NodeID,
+		"items":           items,
+	}
+	if len(req.Items) > 0 {
+		data["limit"] = req.Items[0].BarLimit
+		data["start_time"] = req.Items[0].StartTime
+		data["snapshot_shard_index"] = req.Items[0].SnapshotShardIndex
+		data["snapshot_shard_count"] = req.Items[0].SnapshotShardCount
 	}
 	event := map[string]any{
 		"action":                     "market_fetch",
@@ -986,15 +1081,70 @@ func marketFetchEvent(req Request, storageTarget string) (map[string]any, error)
 		"storage_rpc_gateway_target": strings.TrimSpace(storageTarget),
 		"data":                       data,
 	}
-	// Validate the exact JSON object sent as Tencent ClientContext, not only
-	// the inner Request. Keep headroom below SCF's 128KB limit for provider
-	// serialization differences.
 	encoded, err := json.Marshal(event)
 	if err != nil {
 		return nil, err
 	}
+	// Validate the exact JSON object sent as Tencent ClientContext, not only
+	// the inner Request. Keep headroom below SCF's 128KB limit for provider
+	// serialization differences.
 	if len(encoded) > 120*1024 {
 		return nil, fmt.Errorf("market_fetch client context exceeds 120KB")
 	}
-	return event, nil
+	// structpb.NewStruct accepts JSON-shaped []any values, not Go's
+	// []map[string]any. Round-tripping the already validated payload also makes
+	// this helper exercise the exact shape sent through CloudNode.
+	var normalized map[string]any
+	if err := json.Unmarshal(encoded, &normalized); err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
+func sourceIDFor(providerID, marketID, instrumentType, marketType string) string {
+	providerID = strings.ToLower(strings.TrimSpace(providerID))
+	marketID = strings.ToLower(strings.TrimSpace(marketID))
+	instrumentType = strings.ToLower(strings.TrimSpace(instrumentType))
+	marketType = strings.ToLower(strings.TrimSpace(marketType))
+	switch providerID {
+	case "binance":
+		if marketType == "swap" || instrumentType == "swap" {
+			return "swap_http"
+		}
+		return "spot_http"
+	case "tdx":
+		return "normal_7709"
+	case "tencent":
+		return "stock_cn_http"
+	case "ths":
+		return "daily_http"
+	case "cni":
+		return "index_cni_http"
+	case "sw":
+		return "index_sw_http"
+	case "sina":
+		switch marketID {
+		case "stock_hk":
+			return "stock_hk_http"
+		case "stock_us":
+			return "stock_us_http"
+		default:
+			return "stock_cn_http"
+		}
+	case "eastmoney":
+		switch {
+		case marketID == "stock_hk":
+			return "stock_hk_http"
+		case marketID == "stock_us":
+			return "stock_us_http"
+		case instrumentType == "index":
+			return "index_http"
+		case instrumentType == "convertible_bond":
+			return "convertible_bond_http"
+		default:
+			return "stock_cn_http"
+		}
+	default:
+		return ""
+	}
 }

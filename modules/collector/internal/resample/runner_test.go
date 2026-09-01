@@ -23,7 +23,7 @@ type runnerSource struct {
 }
 
 func (s runnerSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
-	return storagesource.DatasetInfo{DataSourceID: "crypto_market", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "spot"}, KeepDuration: s.keepDuration}, nil
+	return storagesource.DatasetInfo{DataSourceID: "crypto", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "spot"}, KeepDuration: s.keepDuration}, nil
 }
 func (s runnerSource) ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error) {
 	return s.subjects, nil

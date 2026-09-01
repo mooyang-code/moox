@@ -1,6 +1,6 @@
 # Built-in Collector rules. This file contains no cloud credentials or node data.
 rules:
-- space_id: crypto_market
+- space_id: crypto
   rule_id: builtin-binance-spot-symbols-1h
   data_type: symbol
   provider: binance
@@ -12,8 +12,8 @@ rules:
     market_type: spot
     symbol_source: exchange
     target_dataset_id: binance_spot_symbols
-    frequency: 1h
-- space_id: crypto_market
+    frequency: 1H
+- space_id: crypto
   rule_id: builtin-binance-swap-symbols-1h
   data_type: symbol
   provider: binance
@@ -25,8 +25,8 @@ rules:
     market_type: swap
     symbol_source: exchange
     target_dataset_id: binance_swap_symbols
-    frequency: 1h
-- space_id: crypto_market
+    frequency: 1H
+- space_id: crypto
   rule_id: builtin-binance-spot-kline-1m
   data_type: kline
   provider: binance
@@ -40,7 +40,7 @@ rules:
     symbol_dataset_id: binance_spot_symbols
     target_dataset_id: binance_spot_kline_1m
     frequency: 1m
-- space_id: crypto_market
+- space_id: crypto
   rule_id: builtin-binance-spot-kline-1h
   data_type: kline
   provider: binance
@@ -53,8 +53,8 @@ rules:
     symbol_source: dataset
     symbol_dataset_id: binance_spot_symbols
     target_dataset_id: spot_kline_1h
-    frequency: 1h
-- space_id: crypto_market
+    frequency: 1H
+- space_id: crypto
   rule_id: builtin-binance-swap-kline-1h
   data_type: kline
   provider: binance
@@ -67,4 +67,88 @@ rules:
     symbol_source: dataset
     symbol_dataset_id: binance_swap_symbols
     target_dataset_id: perpetual_kline_1h
-    frequency: 1h
+    frequency: 1H
+# Stock rules are seeded disabled until the corresponding instrument universe
+# is imported into the named symbol Dataset. They document the canonical
+# Market/Instrument/Dataset matrix without causing a fresh project to invoke
+# a provider with an empty symbol catalogue.
+- space_id: stock_cn
+  rule_id: builtin-eastmoney-stock-cn-equity-kline-1m
+  data_type: kline
+  provider: eastmoney
+  market_type: equity
+  enabled: false
+  creator: moox-setup
+  collect_params:
+    provider: eastmoney
+    market_id: stock_cn
+    instrument_type: equity
+    market_type: equity
+    symbol_source: dataset
+    symbol_dataset_id: stock_cn_equity_symbols
+    target_dataset_id: stock_cn_kline
+    frequency: 1m
+- space_id: stock_hk
+  rule_id: builtin-eastmoney-stock-hk-equity-kline-1d
+  data_type: kline
+  provider: eastmoney
+  market_type: equity
+  enabled: false
+  creator: moox-setup
+  collect_params:
+    provider: eastmoney
+    market_id: stock_hk
+    instrument_type: equity
+    market_type: equity
+    symbol_source: dataset
+    symbol_dataset_id: stock_hk_equity_symbols
+    target_dataset_id: stock_hk_kline
+    frequency: 1d
+- space_id: stock_us
+  rule_id: builtin-eastmoney-stock-us-equity-kline-1d
+  data_type: kline
+  provider: eastmoney
+  market_type: equity
+  enabled: false
+  creator: moox-setup
+  collect_params:
+    provider: eastmoney
+    market_id: stock_us
+    instrument_type: equity
+    market_type: equity
+    symbol_source: dataset
+    symbol_dataset_id: stock_us_equity_symbols
+    target_dataset_id: stock_us_kline
+    frequency: 1d
+- space_id: stock_cn
+  rule_id: builtin-eastmoney-stock-cn-index-kline-1d
+  data_type: kline
+  provider: eastmoney
+  market_type: index
+  enabled: false
+  creator: moox-setup
+  collect_params:
+    provider: eastmoney
+    market_id: stock_cn
+    instrument_type: index
+    market_type: index
+    symbol_source: dataset
+    symbol_dataset_id: stock_cn_index_symbols
+    target_dataset_id: stock_cn_index_kline
+    frequency: 1d
+- space_id: stock_cn
+  rule_id: builtin-eastmoney-stock-cn-convertible-bond-kline-1d
+  data_type: kline
+  provider: eastmoney
+  market_type: convertible_bond
+  enabled: false
+  creator: moox-setup
+  collect_params:
+    provider: eastmoney
+    market_id: stock_cn
+    instrument_type: convertible_bond
+    market_type: convertible_bond
+    symbol_source: dataset
+    symbol_dataset_id: stock_cn_convertible_bond_symbols
+    target_dataset_id: stock_cn_convertible_bond_kline
+    frequency: 1d

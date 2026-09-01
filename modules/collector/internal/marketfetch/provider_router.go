@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
@@ -14,8 +15,10 @@ import (
 // normalization/storage semantics to KlinePipeline. It deliberately does not
 // silently combine fields from multiple sources.
 type ProviderRouter struct {
-	Registry *sources.ProviderRegistry
-	Writer   KlineRowWriter
+	Registry    *sources.ProviderRegistry
+	Writer      KlineRowWriter
+	Now         func() time.Time
+	SettleDelay time.Duration
 }
 
 func (router *ProviderRouter) FetchAndWrite(ctx context.Context, request PipelineRequest) (PipelineResult, error) {
@@ -32,7 +35,7 @@ func (router *ProviderRouter) FetchAndWrite(ctx context.Context, request Pipelin
 	if registration.Klines == nil {
 		return PipelineResult{}, fmt.Errorf("source %s does not implement kline", request.SourceKey)
 	}
-	return (&KlinePipeline{Fetcher: registration.Klines, Writer: router.Writer}).FetchAndWrite(ctx, request)
+	return (&KlinePipeline{Fetcher: registration.Klines, Writer: router.Writer, Now: router.Now, SettleDelay: router.SettleDelay}).FetchAndWrite(ctx, request)
 }
 
 // FetchWithFallback tries complete sources in manifest order. A source either

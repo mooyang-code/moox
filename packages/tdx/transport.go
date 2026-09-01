@@ -1,14 +1,26 @@
 package tdx
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
+)
+
+var (
+	// ErrTransport marks failures that poison the current TCP stream and may
+	// be recovered by reconnecting through another selected route.
+	ErrTransport = errors.New("tdx transport error")
+	// ErrProtocol marks malformed TDX frames or compressed bodies. The stream
+	// is discarded, but callers can distinguish it from data/storage errors.
+	ErrProtocol = errors.New("tdx protocol error")
 )
 
 type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
@@ -106,6 +118,10 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.connectLocked(ctx)
+}
+
+func (c *Client) connectLocked(ctx context.Context) error {
 	if c.conn != nil {
 		return nil
 	}
@@ -118,9 +134,9 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	dialCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
-	conn, err := c.dial(dialCtx, "tcp", fmt.Sprintf("%s:%d", c.host, c.port))
+	conn, err := c.dial(dialCtx, "tcp", endpoint(c.host, c.port))
 	if err != nil {
-		return fmt.Errorf("tdx: connect %s:%d: %w", c.host, c.port, err)
+		return fmt.Errorf("%w: connect %s: %w", ErrTransport, endpoint(c.host, c.port), err)
 	}
 	c.conn = conn
 	if c.variant == ProtocolNormal {
@@ -149,6 +165,30 @@ func (c *Client) Close() error {
 	return err
 }
 
+// Reconnect closes the current stream, changes the dial target, and performs
+// the normal protocol setup again. It is intended for a short-lived caller
+// that must move to another already-selected route after a broken frame.
+func (c *Client) Reconnect(ctx context.Context, host string, port int) error {
+	if c == nil {
+		return errors.New("tdx: nil client")
+	}
+	if host == "" {
+		return errors.New("tdx: reconnect host is required")
+	}
+	if port <= 0 || port > 65535 {
+		return fmt.Errorf("tdx: reconnect port %d is invalid", port)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn != nil {
+		_ = c.conn.Close()
+		c.conn = nil
+	}
+	c.host = host
+	c.port = port
+	return c.connectLocked(ctx)
+}
+
 func (c *Client) Execute(ctx context.Context, request []byte) ([]byte, Header, error) {
 	if len(request) == 0 {
 		return nil, Header{}, errors.New("tdx: empty request")
@@ -159,7 +199,7 @@ func (c *Client) Execute(ctx context.Context, request []byte) ([]byte, Header, e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.conn == nil {
-		return nil, Header{}, errors.New("tdx: client is not connected")
+		return nil, Header{}, fmt.Errorf("%w: client is not connected", ErrTransport)
 	}
 	body, header, err := c.roundTripLocked(ctx, request)
 	if err != nil {
@@ -178,36 +218,60 @@ func (c *Client) roundTripLocked(ctx context.Context, request []byte) ([]byte, H
 		}
 		return nil, Header{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return fail(fmt.Errorf("%w: %w", ErrTransport, err))
+	}
+	conn := c.conn
+	stopCancel := context.AfterFunc(ctx, func() {
+		// Closing the current stream interrupts a blocked ReadFull/Write call.
+		// roundTripLocked owns c.mu, so reconnect cannot replace this connection
+		// while the cancellation callback is running.
+		_ = conn.Close()
+	})
+	defer stopCancel()
 	deadline := time.Now().Add(c.timeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}
 	if err := c.conn.SetDeadline(deadline); err != nil {
-		return fail(fmt.Errorf("tdx: set deadline: %w", err))
+		return fail(contextTransportError(ctx, "tdx: set deadline", err))
 	}
 	if err := writeFull(c.conn, request); err != nil {
-		return fail(fmt.Errorf("tdx: write request: %w", err))
+		return fail(contextTransportError(ctx, "tdx: write request", err))
 	}
 	headerBytes := make([]byte, HeaderSize)
 	if _, err := io.ReadFull(c.conn, headerBytes); err != nil {
-		return fail(fmt.Errorf("tdx: read frame header: %w", err))
+		return fail(contextTransportError(ctx, "tdx: read frame header", err))
+	}
+	if bytes.HasPrefix(headerBytes, []byte("HTTP/")) {
+		// A proxy, WAF, or misconfigured endpoint can return an HTTP error on
+		// a raw TDX port. Treat it as a protocol failure and expose the prefix
+		// instead of reporting a misleading truncated TDX body.
+		return fail(fmt.Errorf("%w: upstream returned non-TDX HTTP response prefix %q", ErrProtocol, strings.TrimSpace(string(headerBytes))))
 	}
 	header, err := ParseHeader(headerBytes)
 	if err != nil {
-		return fail(err)
+		return fail(fmt.Errorf("%w: %w", ErrProtocol, err))
 	}
 	if header.ZipSize == 0 && header.UnzipSize != 0 {
-		return fail(fmt.Errorf("tdx: invalid frame body lengths zip=%d unzip=%d", header.ZipSize, header.UnzipSize))
+		return fail(fmt.Errorf("%w: invalid frame body lengths zip=%d unzip=%d", ErrProtocol, header.ZipSize, header.UnzipSize))
 	}
 	rawBody := make([]byte, int(header.ZipSize))
 	if _, err := io.ReadFull(c.conn, rawBody); err != nil {
-		return fail(fmt.Errorf("tdx: read frame body: %w", err))
+		return fail(contextTransportError(ctx, "tdx: read frame body", err))
 	}
 	body, err := DecodeBody(header, rawBody)
 	if err != nil {
-		return fail(err)
+		return fail(fmt.Errorf("%w: %w", ErrProtocol, err))
 	}
 	return body, header, nil
+}
+
+func contextTransportError(ctx context.Context, operation string, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("%w: %w", ErrTransport, ctxErr)
+	}
+	return fmt.Errorf("%w: %s: %w", ErrTransport, operation, err)
 }
 
 func writeFull(writer io.Writer, data []byte) error {
@@ -225,7 +289,23 @@ func writeFull(writer io.Writer, data []byte) error {
 }
 
 func (c *Client) Variant() ProtocolVariant { return c.variant }
-func (c *Client) Address() string          { return fmt.Sprintf("%s:%d", c.host, c.port) }
+
+func (c *Client) Address() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return endpoint(c.host, c.port)
+}
+
+func endpoint(host string, port int) string {
+	host = strings.TrimSpace(host)
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
 
 type NormalClient struct{ *Client }
 
@@ -246,7 +326,14 @@ func (c *NormalClient) SecurityBars(ctx context.Context, market Market, code str
 	if err != nil {
 		return nil, err
 	}
-	return ParseSecurityBars(body, category, index)
+	bars, err := ParseSecurityBars(body, category, index)
+	if err != nil {
+		// The transport delivered a complete frame, but the payload made the
+		// session untrustworthy. Do not reuse it for a later request.
+		_ = c.Client.Close()
+		return nil, fmt.Errorf("%w: %w", ErrProtocol, err)
+	}
+	return bars, nil
 }
 
 func (c *NormalClient) SecurityList(ctx context.Context, market Market, start int) ([]Security, error) {

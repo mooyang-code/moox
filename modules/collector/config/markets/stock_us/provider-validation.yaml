@@ -6,6 +6,12 @@ sources:
     transport: https
     port: 443
     status: enabled
+  - provider_id: sina
+    source_id: stock_us_http
+    protocol_variant: http
+    transport: https
+    port: 443
+    status: catalog_only
   - provider_id: tdx
     source_id: ex_classic_7727
     protocol_variant: tdx_ex_classic

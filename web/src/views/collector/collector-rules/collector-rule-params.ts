@@ -40,7 +40,7 @@ export function datasetMatchesCollector(
   marketType?: string,
   frequency?: string
 ): boolean {
-  // K-line targets may be aggregate datasets (for example crypto_market)
+  // K-line targets may be aggregate datasets (for example crypto)
   // fed by more than one provider; symbols remain provider-owned.
   if (dataType !== "kline" && dataType !== "kline_resample" && dataset.data_source_id !== exchange) {
     return false;

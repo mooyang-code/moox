@@ -530,7 +530,13 @@ func ensureInitialTimerTrigger(ctx context.Context, client scfProvisioner, node 
 	if node == nil || node.TriggerType != "timer" {
 		return nil
 	}
-	_, err := client.EnsureTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: ref, Name: timerTriggerName, Cron: "0 * * * * * *", Enabled: false, Qualifier: timerTriggerQualifier, Message: timerTriggerMessage})
+	metadata := parseJSONMap(node.Metadata)
+	// A newly published Timer fleet carries its desired state in node metadata.
+	// Keep the historical disabled default for unrelated timer nodes, but do not
+	// create a market-fetch Timer that can never run until a separate reconciler
+	// happens to visit it.
+	enabled := metadataBool(metadata, "timer_enabled") || isMarketFetchNode(node)
+	_, err := client.EnsureTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: ref, Name: timerTriggerName, Cron: "0 * * * * * *", Enabled: enabled, Qualifier: timerTriggerQualifier, Message: timerTriggerMessage})
 	if err != nil {
 		return fmt.Errorf("ensure initial timer trigger for %s: %w", ref.FunctionName, err)
 	}

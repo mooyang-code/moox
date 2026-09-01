@@ -49,7 +49,7 @@ printf '%s\n' "$@" >"${ARGS_LOG:?}"
 [[ "$#" -eq 8 ]]
 [[ "$1" == setup && "$2" == export-skill-config ]]
 [[ "$3" == --file && "$4" == "${CONFIG:?}" ]]
-[[ "$5" == --space && "$6" == crypto_market ]]
+[[ "$5" == --space && "$6" == crypto ]]
 [[ "$7" == --output ]]
 mkdir -p "$(dirname "$8")"
 printf '%s\n' 'version: 1' 'gateway:' '  secret: TEST_ONLY_EXPORTED_GATEWAY_SECRET' >"$8"
@@ -95,7 +95,7 @@ export-skill-config
 --file
 ${CONFIG}
 --space
-crypto_market
+crypto
 --output
 EOF
 )

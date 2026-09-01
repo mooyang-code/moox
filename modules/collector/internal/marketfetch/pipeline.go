@@ -39,8 +39,10 @@ type sourcedKlineRowWriter interface {
 }
 
 type KlinePipeline struct {
-	Fetcher marketdata.KlineFetcher
-	Writer  KlineRowWriter
+	Fetcher     marketdata.KlineFetcher
+	Writer      KlineRowWriter
+	Now         func() time.Time
+	SettleDelay time.Duration
 }
 
 func (p *KlinePipeline) FetchAndWrite(ctx context.Context, request PipelineRequest) (PipelineResult, error) {
@@ -58,6 +60,9 @@ func (p *KlinePipeline) FetchAndWrite(ctx context.Context, request PipelineReque
 	}
 	spec := p.Fetcher.KlineSpec()
 	descriptor := p.Fetcher.Descriptor()
+	if !descriptor.Status.IsEnabled() {
+		return PipelineResult{}, fmt.Errorf("%w: source %s has status %q", marketdata.ErrNotSupported, descriptor.Key(), descriptor.Status)
+	}
 	if request.SourceKey.ProviderID != "" || request.SourceKey.SourceID != "" {
 		if request.SourceKey != descriptor.Key() {
 			return PipelineResult{}, fmt.Errorf("source_key %s does not match fetcher %s", request.SourceKey, descriptor.Key())
@@ -72,19 +77,53 @@ func (p *KlinePipeline) FetchAndWrite(ctx context.Context, request PipelineReque
 	if !spec.SupportsFrequency(request.Request.Frequency) {
 		return PipelineResult{}, fmt.Errorf("frequency %q is not supported by %s", request.Request.Frequency, descriptor.Key())
 	}
+	if (!request.Request.StartTime.IsZero() || !request.Request.EndTime.IsZero()) && !spec.SupportsRange {
+		return PipelineResult{}, fmt.Errorf("%w: source %s does not support range requests", marketdata.ErrNotSupported, descriptor.Key())
+	}
 	bars, err := p.Fetcher.FetchKlines(ctx, request.Request)
 	if err != nil {
 		return PipelineResult{}, err
 	}
+	if len(bars) == 0 {
+		return PipelineResult{}, fmt.Errorf("%w: source %s returned no bars", marketdata.ErrUnavailable, descriptor.Key())
+	}
+	now := time.Now().UTC()
+	if p.Now != nil {
+		now = p.Now().UTC()
+	}
+	if p.SettleDelay < 0 {
+		return PipelineResult{}, fmt.Errorf("settle delay cannot be negative")
+	}
+	closedBefore := now.Add(-p.SettleDelay)
+	closedBars := make([]marketdata.NormalizedKline, 0, len(bars))
 	for index, bar := range bars {
 		if bar.ProviderID != descriptor.ProviderID || bar.SourceID != descriptor.SourceID {
 			return PipelineResult{}, fmt.Errorf("bar %d source %s/%s does not match fetcher %s", index, bar.ProviderID, bar.SourceID, descriptor.Key())
 		}
+		if bar.SubjectID != request.Request.SubjectID || bar.ProviderSymbol != request.Request.ProviderSymbol || bar.Frequency != request.Request.Frequency {
+			return PipelineResult{}, fmt.Errorf("bar %d identity subject_id=%q provider_symbol=%q frequency=%q does not match request", index, bar.SubjectID, bar.ProviderSymbol, bar.Frequency)
+		}
+		if err := bar.ValidateOHLCV(); err != nil {
+			return PipelineResult{}, fmt.Errorf("bar %d from %s: %w", index, descriptor.Key(), err)
+		}
+		// Filter the still-forming bar before validating optional fields. Some
+		// providers omit amount or return provisional values for the current bar;
+		// that must not discard older, otherwise valid bars in the same response.
+		if bar.BarEnd.After(closedBefore) {
+			continue
+		}
 		if spec.HasAmount && (!bar.Amount.Valid || bar.Amount.Null) {
 			return PipelineResult{}, fmt.Errorf("bar %d from %s is missing required amount", index, descriptor.Key())
 		}
+		if err := bar.Validate(); err != nil {
+			return PipelineResult{}, fmt.Errorf("bar %d from %s: %w", index, descriptor.Key(), err)
+		}
+		closedBars = append(closedBars, bar)
 	}
-	rows, result, err := NormalizeKlineRows(request.SpaceID, request.DatasetID, request.SeriesTag, request.SourceEventID, bars)
+	if len(closedBars) == 0 {
+		return PipelineResult{}, fmt.Errorf("%w: source %s returned no bars settled by %s", marketdata.ErrNoClosedBar, descriptor.Key(), closedBefore.Format(time.RFC3339Nano))
+	}
+	rows, result, err := NormalizeKlineRows(request.SpaceID, request.DatasetID, request.SeriesTag, request.SourceEventID, closedBars)
 	if err != nil {
 		return PipelineResult{}, err
 	}
@@ -135,6 +174,14 @@ func NormalizeKlineRows(spaceID, datasetID, seriesTag, sourceEventID string, bar
 			// field behind after Storage's field-level merge.
 			fields = append(fields, nullField("amount"))
 		}
+		// Source identity is part of the canonical dataset schema. Keep the
+		// attributes as well so operational queries can inspect it without a
+		// schema-specific projection.
+		fields = append(fields,
+			stringField("provider_id", bar.ProviderID),
+			stringField("source_id", bar.SourceID),
+			stringField("provider_symbol", bar.ProviderSymbol),
+		)
 		attributes := map[string]*storagepb.TypedValue{
 			"provider_id":     stringValue(bar.ProviderID),
 			"source_id":       stringValue(bar.SourceID),
@@ -176,6 +223,10 @@ func stringValue(value string) *storagepb.TypedValue {
 
 func doubleField(name string, value float64) *storagepb.FieldValue {
 	return &storagepb.FieldValue{FieldId: name, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: value}}}
+}
+
+func stringField(name, value string) *storagepb.FieldValue {
+	return &storagepb.FieldValue{FieldId: name, Value: stringValue(value)}
 }
 
 func nullField(name string) *storagepb.FieldValue {

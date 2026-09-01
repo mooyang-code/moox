@@ -61,7 +61,7 @@ func TestDataKlineBuildsCatalogBackedRPCRequest(t *testing.T) {
 	assert.Equal(t, uint32(5), reader.request.GetPage().GetSize())
 	require.Len(t, reader.request.GetSelectors(), 1)
 	selector := reader.request.GetSelectors()[0]
-	assert.Equal(t, "crypto_market", selector.GetSpaceId())
+	assert.Equal(t, "crypto", selector.GetSpaceId())
 	assert.Equal(t, "binance_spot_kline_1m", selector.GetDatasetId())
 	assert.Equal(t, "BTC-USDT", selector.GetSubjectId())
 	assert.Equal(t, "1m", selector.GetFreq())

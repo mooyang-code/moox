@@ -36,3 +36,11 @@ func TestManagedEnvironmentMatchesOnlyCollectorOwnedValues(t *testing.T) {
 	require.False(t, managedEnvironmentMatches(current, map[string]string{"MOOX_MARKET_FETCH_SUBJECTS": "ETH-USDT"}))
 	require.False(t, managedEnvironmentMatches(current, map[string]string{"MOOX_MARKET_FETCH_DNS_HASH": "missing"}))
 }
+
+func TestSupportedTimerCronIncludesWeeklyMonthlyAndCanonicalHourly(t *testing.T) {
+	for _, cron := range []string{"0 0 * * * * *", "0 0 0 * * 1 *", "0 0 0 1 * * *", "0 0 8 1 * * *"} {
+		if !isSupportedTimerCron(cron) {
+			t.Fatalf("timer cron %q should be supported", cron)
+		}
+	}
+}

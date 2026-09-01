@@ -11,12 +11,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDefaultCollectorPackageConfigDirUsesGenericMarketDataPackage(t *testing.T) {
+	for _, spaceID := range []string{"crypto", "stock_cn", "stock_hk", "stock_us"} {
+		assert.Equal(t, "scf/market_data", DefaultCollectorPackageConfigDir(spaceID))
+	}
+	assert.Equal(t, "scf/custom", DefaultCollectorPackageConfigDir("custom"))
+}
+
 func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T) {
 	base := func() SCFFetcher {
 		return SCFFetcher{
 			Enabled: true,
 			Spaces: []SCFFetcherSpace{{
-				SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 15,
+				SpaceID: "crypto", Entrypoint: "market_data", MarketID: "crypto", InstrumentType: "spot", ProviderID: "binance", SourceID: "spot_http", MemorySize: 64, TimeoutSeconds: 15,
 				StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
 				MaxInflightRequests:     32, RequestTimeoutMS: 1500,
 				HTTPMaxAttempts: 4, StorageMaxAttempts: 3,
@@ -100,7 +107,7 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 func TestValidateSCFFetcherRequiresMarketDataSourceIdentity(t *testing.T) {
 	cfg := SCFFetcher{Enabled: true, Spaces: []SCFFetcherSpace{{
 		SpaceID: "stock_cn", Entrypoint: "market_data", StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
-		MemorySize: 64, TimeoutSeconds: 15,
+		MemorySize: 64, TimeoutSeconds: 15, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 3,
 		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
 	}}}
 	err := validateSCFFetcher(&cfg)
@@ -116,7 +123,7 @@ func TestValidateSCFFetcherRequiresTDXEndpointConfiguration(t *testing.T) {
 	cfg := SCFFetcher{Enabled: true, Spaces: []SCFFetcherSpace{{
 		SpaceID: "stock_cn", Entrypoint: "market_data", MarketID: "stock_cn", InstrumentType: "equity",
 		ProviderID: "tdx", SourceID: "normal_7709", StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
-		MemorySize: 64, TimeoutSeconds: 15,
+		MemorySize: 64, TimeoutSeconds: 15, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 3,
 		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
 	}}}
 	err := validateSCFFetcher(&cfg)
@@ -128,7 +135,7 @@ func TestValidateSCFFetcherRequiresTDXEndpointConfiguration(t *testing.T) {
 
 func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 	crypto := SCFFetcherSpace{
-		SpaceID: "crypto_market",
+		SpaceID: "crypto",
 		Regions: []SCFFetcherRegion{
 			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 0, CloudAccountID: "gz"},
 			{Region: "ap-shanghai", Enabled: true, FunctionCount: 0, CloudAccountID: "sh"},
@@ -159,7 +166,7 @@ func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 
 func TestResolveSCFTimerFunctionCountsRejectsMismatch(t *testing.T) {
 	cfg := SCFFetcherSpace{
-		SpaceID:            "crypto_market",
+		SpaceID:            "crypto",
 		TimerFunctionCount: 60,
 		Regions:            []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 20, CloudAccountID: "gz"}},
 	}
@@ -327,7 +334,7 @@ input_columns = ["close"]
 outputs = ["bias_5"]
 params_json = '{"windows":[5]}'
 lookback_periods = 5
-space_id = "crypto_market"
+space_id = "crypto"
 source_view_id = "binance_spot_kline_1m_view"
 freq = "1m"
 `

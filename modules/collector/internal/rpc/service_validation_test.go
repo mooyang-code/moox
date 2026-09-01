@@ -119,6 +119,18 @@ func TestValidateTaskRuleDatasetsAcceptsExchangeSourceForMooxResample(t *testing
 	require.NoError(t, service.validateTaskRuleDatasets(context.Background(), rule))
 }
 
+func TestValidateTaskRuleDatasetsAcceptsMarketDataTarget(t *testing.T) {
+	service := &Service{datasetSrc: validationDatasetSource{
+		"symbols": {DataSourceID: "eastmoney", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "equity"}},
+		"bars":    {DataSourceID: "market_data", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "equity"}},
+	}}
+	rule := domain.TaskRule{
+		SpaceID: "stock_cn", RuleID: "stock-cn-1m", DataType: "kline", Provider: "eastmoney", MarketType: "equity",
+		CollectParams: `{"provider":"eastmoney","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
+	}
+	require.NoError(t, service.validateTaskRuleDatasets(context.Background(), rule))
+}
+
 func TestGetKlineResampleBackfillKeepsMixedActiveRequestCancelable(t *testing.T) {
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
 	require.NoError(t, err)

@@ -105,7 +105,7 @@ func (s *Service) preflightRuntimeConfig(ctx context.Context, spaceID string, it
 
 func isSupportedTimerCron(cron string) bool {
 	switch strings.TrimSpace(cron) {
-	case "0 * * * * * *", "0 */5 * * * * *", "0 */15 * * * * *", "0 */30 * * * * *", "0 0 * * * * *", "0 0 */4 * * * *", "0 0 0 * * * *":
+	case "0 * * * * * *", "0 */5 * * * * *", "0 */15 * * * * *", "0 */30 * * * * *", "0 0 * * * * *", "0 0 */4 * * * *", "0 0 0 * * * *", "0 0 0 * * 1 *", "0 0 0 1 * * *", "0 0 8 1 * * *":
 		return true
 	default:
 		return false

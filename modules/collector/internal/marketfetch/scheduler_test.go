@@ -84,10 +84,10 @@ func TestRealtimeBatchSizeFansOutAcrossCurrentFleet(t *testing.T) {
 		nodes[index].Metadata = map[string]any{"realtime_batch_size": float64(64)}
 	}
 	scheduler := &Scheduler{BatchSize: MaxRealtimeItems}
-	assert.Equal(t, 30, scheduler.realtimeBatchSize(479, nodes))
+	assert.Equal(t, 30, scheduler.realtimeBatchSize("binance", 479, nodes))
 
 	nodes[0].Metadata["realtime_batch_size"] = float64(10)
-	assert.Equal(t, 10, scheduler.realtimeBatchSize(479, nodes))
+	assert.Equal(t, 10, scheduler.realtimeBatchSize("binance", 479, nodes))
 }
 
 func TestInvocationCandidatesUsesOneDeterministicFailover(t *testing.T) {
@@ -99,14 +99,88 @@ func TestInvocationCandidatesUsesOneDeterministicFailover(t *testing.T) {
 	assert.Equal(t, []string{"node-a"}, []string{invocationCandidates(nodes[0], nodes[:1])[0].NodeID})
 }
 
-func TestExpandRuleUsesAllShardsForExchangeSymbolSnapshot(t *testing.T) {
+func TestMarketFetchEventUsesGenericMarketDataContract(t *testing.T) {
+	event, err := marketFetchEvent(Request{
+		BatchID: "batch-1", ScheduleID: "schedule-1", BatchKind: domain.BatchKindRealtime, SpaceID: "crypto", DatasetID: "binance_spot_kline_1m",
+		Frequency: "1m", Provider: "binance", MarketType: "spot",
+		Items: []domain.CollectionItem{{TaskID: "task-btc", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", DataType: "kline", BarLimit: 3}},
+	}, "ip://storage:11003")
+	require.NoError(t, err)
+	data, ok := event["data"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "crypto", data["market_id"])
+	assert.Equal(t, "spot", data["instrument_type"])
+	assert.Equal(t, "binance", data["provider_id"])
+	assert.Equal(t, "spot_http", data["source_id"])
+	assert.Equal(t, "venue:binance", data["series_tag"])
+	assert.Equal(t, "kline", data["data_type"])
+	assert.Equal(t, "realtime", data["batch_kind"])
+	assert.Equal(t, "schedule-1", data["schedule_id"])
+	assert.Equal(t, "batch-1", data["source_event_id"])
+	assert.Equal(t, "batch-1", data["batch_id"])
+	items, ok := data["items"].([]any)
+	require.True(t, ok)
+	require.Len(t, items, 1)
+	item, ok := items[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "BTCUSDT", item["provider_symbol"])
+	assert.Equal(t, "task-btc", item["task_id"])
+}
+
+func TestMarketFetchRetryEventPreservesBatchAndSourceEventIdentity(t *testing.T) {
+	event, err := marketFetchEvent(Request{
+		BatchID: "retry-batch-2", SourceEventID: "retry-key-1", ScheduleID: "retry:retry-key-1", BatchKind: domain.BatchKindRealtime,
+		SpaceID: "crypto", DatasetID: "binance_spot_kline_1m", Frequency: "1m", Provider: "binance", MarketType: "spot",
+		Items: []domain.CollectionItem{{TaskID: "task-btc", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", SourceEventID: "retry-key-1", DataType: "kline", BarLimit: 3}},
+	}, "ip://storage:11003")
+	require.NoError(t, err)
+	data, ok := event["data"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "retry-batch-2", data["batch_id"])
+	assert.Equal(t, "retry-key-1", data["source_event_id"])
+	items, ok := data["items"].([]any)
+	require.True(t, ok)
+	require.Len(t, items, 1)
+	item, ok := items[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "retry-key-1", item["source_event_id"])
+}
+
+func TestPrepareRequestSourceEventsFreezesInitialPayloadIdentity(t *testing.T) {
+	req := Request{BatchID: "batch-1", Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", TargetDataTime: "2026-09-01T10:00:00Z"}}}
+	prepareRequestSourceEvents(&req)
+	want := retryKey("batch-1", "BTC-USDT", "2026-09-01T10:00:00Z")
+	if req.Items[0].SourceEventID != want {
+		t.Fatalf("source event id=%q, want %q", req.Items[0].SourceEventID, want)
+	}
+	prepareRequestSourceEvents(&req)
+	if req.Items[0].SourceEventID != want {
+		t.Fatalf("source event id changed on replay: %q, want %q", req.Items[0].SourceEventID, want)
+	}
+}
+
+func TestSourceIDForIndexProviders(t *testing.T) {
+	for _, test := range []struct {
+		provider string
+		want     string
+	}{
+		{provider: "cni", want: "index_cni_http"},
+		{provider: "sw", want: "index_sw_http"},
+	} {
+		t.Run(test.provider, func(t *testing.T) {
+			assert.Equal(t, test.want, sourceIDFor(test.provider, "stock_cn", "index", ""))
+		})
+	}
+}
+
+func TestExpandRuleUsesOneCompleteExchangeSymbolSnapshot(t *testing.T) {
 	scheduler := &Scheduler{}
 	items, frequencies, err := scheduler.expandRule(t.Context(), domain.TaskRule{
-		SpaceID: "crypto_market", RuleID: "binance_spot_symbols", DataType: "symbol", Provider: "binance", MarketType: "spot",
+		SpaceID: "crypto", RuleID: "binance_spot_symbols", DataType: "symbol", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"exchange","target_dataset_id":"binance_spot_symbols","frequency":"1h"}`,
 	})
 	assert.NoError(t, err)
-	assert.Equal(t, []string{"1h"}, frequencies)
+	assert.Equal(t, []string{"1H"}, frequencies)
 	if assert.Len(t, items, fullSymbolSnapshotShards) {
 		assert.Equal(t, "binance_spot_symbols", items[0].DatasetID)
 		assert.Equal(t, 0, items[0].SnapshotShardIndex)
@@ -115,13 +189,30 @@ func TestExpandRuleUsesAllShardsForExchangeSymbolSnapshot(t *testing.T) {
 	}
 }
 
+func TestExpandRuleCanonicalizesDefaultBinanceSymbolFrequency(t *testing.T) {
+	scheduler := &Scheduler{}
+	items, frequencies, err := scheduler.expandRule(t.Context(), domain.TaskRule{
+		SpaceID: "crypto", RuleID: "binance_spot_symbols", DataType: "symbol", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"exchange","target_dataset_id":"binance_spot_symbols"}`,
+	})
+	assert.NoError(t, err)
+	assert.Len(t, items, fullSymbolSnapshotShards)
+	assert.Equal(t, []string{"1H"}, frequencies)
+}
+
+func TestRealtimeBatchSizeKeepsTDXInvocationSingleSymbol(t *testing.T) {
+	scheduler := &Scheduler{}
+	nodes := []scfinvoker.Node{{NodeID: "node-1"}, {NodeID: "node-2"}}
+	assert.Equal(t, 1, scheduler.realtimeBatchSize("tdx", 479, nodes))
+}
+
 func TestExpandRuleUsesExplicitExternalSymbolForKline(t *testing.T) {
 	scheduler := &Scheduler{
-		SpaceID: "crypto_market",
+		SpaceID: "crypto",
 		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}},
 	}
 	items, frequencies, err := scheduler.expandRule(t.Context(), domain.TaskRule{
-		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
+		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	})
 	assert.NoError(t, err)
@@ -133,11 +224,11 @@ func TestExpandRuleUsesExplicitExternalSymbolForKline(t *testing.T) {
 
 func TestExpandRuleAllowsUnicodeSubjectNames(t *testing.T) {
 	scheduler := &Scheduler{
-		SpaceID: "crypto_market",
+		SpaceID: "crypto",
 		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{{SubjectID: "币安人生-USDT", ExternalSymbol: "BINANCELIFEUSDT", Status: "active"}}},
 	}
 	items, frequencies, err := scheduler.expandRule(t.Context(), domain.TaskRule{
-		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
+		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	})
 	require.NoError(t, err)
@@ -151,14 +242,14 @@ func TestExpandRuleAllowsUnicodeSubjectNames(t *testing.T) {
 
 func TestExpandRuleSkipsMalformedSnapshotSubjects(t *testing.T) {
 	scheduler := &Scheduler{
-		SpaceID: "crypto_market",
+		SpaceID: "crypto",
 		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{
 			{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
 			{SubjectID: "币安人生-USDT", ExternalSymbol: "", Status: "active"},
 		}},
 	}
 	items, _, err := scheduler.expandRule(t.Context(), domain.TaskRule{
-		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
+		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	})
 	assert.NoError(t, err)

@@ -47,7 +47,7 @@ func TestRunInitCommandAppliesCollectorSchema(t *testing.T) {
 func TestRunInitCommandSeedsBuiltInRules(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
 	seedPath := filepath.Join(t.TempDir(), "rules.yaml")
-	if err := os.WriteFile(seedPath, []byte("rules:\n- space_id: crypto_market\n  rule_id: builtin-rule\n  data_type: symbol\n  provider: binance\n  market_type: spot\n  enabled: true\n  collect_params:\n    provider: binance\n    market_type: spot\n    symbol_source: exchange\n    target_dataset_id: binance_spot_symbols\n    frequency: 1h\n"), 0o600); err != nil {
+	if err := os.WriteFile(seedPath, []byte("rules:\n- space_id: crypto\n  rule_id: builtin-rule\n  data_type: symbol\n  provider: binance\n  market_type: spot\n  enabled: true\n  collect_params:\n    provider: binance\n    market_type: spot\n    symbol_source: exchange\n    target_dataset_id: binance_spot_symbols\n    frequency: 1h\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
@@ -69,7 +69,7 @@ func TestRunInitCommandSeedsBuiltInRules(t *testing.T) {
 	mgr, err := store.Open(&store.Options{Path: dbPath})
 	assert.NoError(t, err)
 	defer mgr.Close()
-	rule, err := mgr.TaskRules().GetByRuleID(context.Background(), "crypto_market", "builtin-rule")
+	rule, err := mgr.TaskRules().GetByRuleID(context.Background(), "crypto", "builtin-rule")
 	assert.NoError(t, err)
 	assert.True(t, rule.Enabled)
 }

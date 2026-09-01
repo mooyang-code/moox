@@ -67,7 +67,7 @@ func TestLoadSetupFactorsReadsConfiguredPythonSources(t *testing.T) {
 	items, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "./examples/factors", Items: []setupconfig.FactorSetupItem{{
 			FactorID: "bias", File: "timeseries/bias.py", InputColumns: []string{"close"}, Outputs: []string{"bias_5"},
-			ParamsJSON: `{"windows":[5]}`, SpaceID: "crypto_market", SourceViewID: "binance_spot_kline_1m_view", Freq: "1m",
+			ParamsJSON: `{"windows":[5]}`, SpaceID: "crypto", SourceViewID: "binance_spot_kline_1m_view", Freq: "1m",
 		}},
 	}}, root)
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestLoadSetupFactorsReadsConfiguredPythonSources(t *testing.T) {
 	require.Equal(t, "bias", items[0].FactorID)
 	require.Equal(t, "bias", items[0].Name)
 	require.NotEmpty(t, items[0].SourceHash)
-	require.Equal(t, "crypto_market", items[0].SpaceID)
+	require.Equal(t, "crypto", items[0].SpaceID)
 }
 
 func TestLoadSetupFactorsUsesRepositoryDefaultsWhenItemsAreOmitted(t *testing.T) {
@@ -118,7 +118,7 @@ func TestLoadSetupFactorsRejectsSourcePathEscape(t *testing.T) {
 	_, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "./examples/factors", Items: []setupconfig.FactorSetupItem{{
 			FactorID: "bias", File: "../bias.py", InputColumns: []string{"close"}, Outputs: []string{"bias"},
-			SpaceID: "crypto_market", SourceViewID: "view", Freq: "1m",
+			SpaceID: "crypto", SourceViewID: "view", Freq: "1m",
 		}},
 	}}, t.TempDir())
 	require.Error(t, err)
@@ -137,7 +137,7 @@ func TestLoadSetupFactorsRejectsSymlinkEscape(t *testing.T) {
 	_, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "./examples/factors", Items: []setupconfig.FactorSetupItem{{
 			FactorID: "outside", File: "outside.py", InputColumns: []string{"close"}, Outputs: []string{"value"},
-			SpaceID: "crypto_market", SourceViewID: "view", Freq: "1m",
+			SpaceID: "crypto", SourceViewID: "view", Freq: "1m",
 		}},
 	}}, root)
 	require.Error(t, err)
@@ -149,7 +149,7 @@ func TestRemoteSetupFactorApplyCreatesBindingAndEnablesFactor(t *testing.T) {
 	result, err := service.Apply(context.Background(), []setupFactorItem{{
 		FactorID: "bias", Name: "bias", SourceCode: "def compute(df, params):\n    return df\n", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"bias_5"}, ParamsJSON: "{}",
-		SpaceID: "crypto_market", SourceViewID: "binance_spot_kline_1m_view", Freq: "1m", SubjectMode: "all", Status: "enabled",
+		SpaceID: "crypto", SourceViewID: "binance_spot_kline_1m_view", Freq: "1m", SubjectMode: "all", Status: "enabled",
 	}})
 	require.NoError(t, err)
 	require.Equal(t, setupFactorSummary{Enabled: true, Planned: 1, Imported: 1, Bound: 1}, result)
@@ -173,7 +173,7 @@ func TestRemoteSetupFactorApplyRejectsDifferentExistingContract(t *testing.T) {
 	_, err := service.Apply(context.Background(), []setupFactorItem{{
 		FactorID: "bias", Name: "bias", SourceHash: "hash", InputColumns: []string{"close"},
 		Outputs: []string{"bias_5"}, ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-		SpaceID: "crypto_market", SourceViewID: "view", Freq: "1m", SubjectMode: "all", Status: "enabled",
+		SpaceID: "crypto", SourceViewID: "view", Freq: "1m", SubjectMode: "all", Status: "enabled",
 	}})
 	require.ErrorContains(t, err, "different definition")
 	require.Equal(t, []string{"/api/admin/factormgr/GetFactor"}, client.calls)
@@ -181,13 +181,13 @@ func TestRemoteSetupFactorApplyRejectsDifferentExistingContract(t *testing.T) {
 
 func TestRemoteSetupFactorApplyRemovesObsoleteSetupBinding(t *testing.T) {
 	client := &fakeFactorJSONClient{existingBindings: []factorAPIBinding{{
-		BindingID: "setup-bias-crypto_market-old_view-1m", FactorID: "bias", Status: "enabled",
+		BindingID: "setup-bias-crypto-old_view-1m", FactorID: "bias", Status: "enabled",
 	}}}
 	service := &remoteSetupFactor{client: client}
 	_, err := service.Apply(context.Background(), []setupFactorItem{{
 		FactorID: "bias", Name: "bias", SourceCode: "def compute(df, params):\n    return df", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"bias_5"}, ParamsJSON: "{}", LookbackPeriods: 1,
-		SpaceID: "crypto_market", SourceViewID: "new_view", Freq: "1m", SubjectMode: "all", Status: "disabled",
+		SpaceID: "crypto", SourceViewID: "new_view", Freq: "1m", SubjectMode: "all", Status: "disabled",
 	}})
 	require.NoError(t, err)
 	require.Contains(t, client.calls, "/api/admin/factormgr/DeleteBinding")

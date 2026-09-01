@@ -102,10 +102,10 @@ describe("collector rule RPC contract", () => {
         symbolDatasetId: "binance_spot_symbols",
         scheduleInterval: "1m"
       },
-      "crypto_market",
+      "crypto",
       "admin"
     );
-    expect(request).toMatchObject({ space_id: "crypto_market", data_type: "kline", provider: "binance", market_type: "spot" });
+    expect(request).toMatchObject({ space_id: "crypto", data_type: "kline", provider: "binance", market_type: "spot" });
     expect(request).not.toHaveProperty("exchange");
   });
 
@@ -120,7 +120,7 @@ describe("datasetMatchesCollector", () => {
       true
     );
     expect(
-      datasetMatchesCollector({ data_source_id: "crypto_market", data_kind: "DATA_KIND_TIME_SERIES" }, "binance", "kline")
+      datasetMatchesCollector({ data_source_id: "crypto", data_kind: "DATA_KIND_TIME_SERIES" }, "binance", "kline")
     ).toBe(true);
     expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: "DATA_KIND_RECORD" }, "binance", "kline")).toBe(false);
     expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: 1 }, "binance", "symbol")).toBe(true);
@@ -128,7 +128,7 @@ describe("datasetMatchesCollector", () => {
 
   it("filters datasets by market type and requested frequency", () => {
     const spotBars = {
-      data_source_id: "crypto_market",
+      data_source_id: "crypto",
       data_kind: "DATA_KIND_TIME_SERIES",
       attributes: { market_type: "spot" },
       freqs: ["1H"]
@@ -142,13 +142,13 @@ describe("datasetMatchesCollector", () => {
   });
 
   it("accepts an active time-series Dataset as a resample source", () => {
-    const source = { data_source_id: "crypto_market", data_kind: "DATA_KIND_TIME_SERIES", attributes: { market_type: "spot" }, freqs: ["1H"] };
+    const source = { data_source_id: "crypto", data_kind: "DATA_KIND_TIME_SERIES", attributes: { market_type: "spot" }, freqs: ["1H"] };
     expect(datasetMatchesCollector(source, "moox", "kline_resample", "spot", "1h")).toBe(true);
     expect(datasetMatchesCollector({ ...source, data_kind: "DATA_KIND_RECORD" }, "moox", "kline_resample", "spot", "1h")).toBe(false);
   });
 
   it("does not treat month M as minute m", () => {
-    const monthly = { data_source_id: "crypto_market", data_kind: "DATA_KIND_TIME_SERIES", attributes: { market_type: "spot" }, freqs: ["1M"] };
+    const monthly = { data_source_id: "crypto", data_kind: "DATA_KIND_TIME_SERIES", attributes: { market_type: "spot" }, freqs: ["1M"] };
     expect(datasetMatchesCollector(monthly, "moox", "kline_resample", "spot", "1m")).toBe(false);
     expect(datasetMatchesCollector(monthly, "moox", "kline", "spot", "1M")).toBe(true);
   });

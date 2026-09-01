@@ -75,6 +75,21 @@ type NormalizedKline struct {
 }
 
 func (k NormalizedKline) Validate() error {
+	if err := k.ValidateOHLCV(); err != nil {
+		return err
+	}
+	if k.Amount.Valid && !k.Amount.Null {
+		if err := validateDecimal("amount", k.Amount.Value, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidateOHLCV validates the fields that are expected to be present even on
+// an unsettled provider bar. Amount can be unavailable until the bar closes,
+// so callers may use this method before applying their settle-delay policy.
+func (k NormalizedKline) ValidateOHLCV() error {
 	if strings.TrimSpace(k.SubjectID) == "" {
 		return fmt.Errorf("subject_id is required")
 	}
@@ -111,11 +126,6 @@ func (k NormalizedKline) Validate() error {
 		return fmt.Errorf("low: %w", lowErr)
 	} else if high < low {
 		return fmt.Errorf("high cannot be below low")
-	}
-	if k.Amount.Valid && !k.Amount.Null {
-		if err := validateDecimal("amount", k.Amount.Value, true); err != nil {
-			return err
-		}
 	}
 	return nil
 }

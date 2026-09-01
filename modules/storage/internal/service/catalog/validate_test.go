@@ -19,18 +19,18 @@ func TestValidateViewIDRemainsThirtyCharacters(t *testing.T) {
 }
 
 func TestValidateColumnDisplayNameAllowsMatchingFactorOutput(t *testing.T) {
-	require.NoError(t, validateColumnDisplayName("display_name", "crypto_market", map[string]string{
+	require.NoError(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
 		"display_name":  "bias_20",
 		"factor_output": "bias_20",
 	}, true))
-	require.Error(t, validateColumnDisplayName("display_name", "crypto_market", map[string]string{
+	require.Error(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
 		"display_name":  "bias_20",
 		"factor_output": "bias_20",
 	}, false))
-	require.Error(t, validateColumnDisplayName("display_name", "crypto_market", map[string]string{
+	require.Error(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
 		"display_name": "bias_20",
 	}, true))
-	require.Error(t, validateColumnDisplayName("display_name", "crypto_market", map[string]string{
+	require.Error(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
 		"display_name":  "ma_20",
 		"factor_output": "bias_20",
 	}, true))
