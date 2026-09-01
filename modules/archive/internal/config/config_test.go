@@ -32,6 +32,7 @@ func TestLoadDefaultsAndMarketSources(t *testing.T) {
 		t.Fatalf("SourceSpaceIDs() = %v, want %v", got, want)
 	}
 	assert.Equal(t, []string{"spot_kline_1h", "perpetual_kline_1h"}, cfg.Archive.Sources["crypto_market"].Datasets)
+	assert.Equal(t, []string{"stock_cn_kline", "etf_kline", "index_kline"}, cfg.Archive.Sources["stock_cn"].Datasets)
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("SourceSpaceIDs() = %v, want %v", got, want)

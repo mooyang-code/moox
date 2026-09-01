@@ -66,6 +66,39 @@ func TestBuildManagedEnvironmentFitsTypicalThirtySymbols(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestBuildManagedEnvironmentAllowsStockGroupAboveThirty(t *testing.T) {
+	subjects := make([]string, 0, 40)
+	externals := make(map[string]string, 40)
+	for index := 0; index < 40; index++ {
+		subject := fmt.Sprintf("%06d.XSHG", 600000+index)
+		subjects = append(subjects, subject)
+		externals[subject] = fmt.Sprintf("sh%06d", index)
+	}
+	_, err := buildManagedEnvironment(NodeAssignment{
+		Provider: "sina", RouteProvider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID,
+		Frequency: "1m", Subjects: subjects, ExternalSymbols: externals, RouteVersion: StockCNRouteID, Enabled: true,
+	}, nil, stockCNMaxManagedEnvironmentSize)
+	require.NoError(t, err)
+}
+
+func TestBuildManagedEnvironmentUsesCompactStockSymbolOverrides(t *testing.T) {
+	env, err := buildManagedEnvironment(NodeAssignment{
+		Provider: "sina", RouteProvider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID,
+		Frequency: "1m", Subjects: []string{"000001.XSHE", "600000.XSHG"},
+		ExternalSymbols: map[string]string{"600000.XSHG": "custom-sh600000"}, RouteVersion: StockCNRouteID, Enabled: true,
+	}, nil, stockCNMaxManagedEnvironmentSize)
+	require.NoError(t, err)
+	require.Equal(t, `{"600000.XSHG":"custom-sh600000"}`, env["MOOX_MARKET_FETCH_SYMBOLS_JSON"])
+}
+
+func TestBuildManagedEnvironmentDoesNotRequireStockSymbolMapping(t *testing.T) {
+	_, err := buildManagedEnvironment(NodeAssignment{
+		Provider: "sina", RouteProvider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID,
+		Frequency: "1m", Subjects: []string{"000001.XSHE", "600000.XSHG"}, RouteVersion: StockCNRouteID, Enabled: true,
+	}, nil, stockCNMaxManagedEnvironmentSize)
+	require.NoError(t, err)
+}
+
 func TestBuildManagedEnvironmentRejectsOversizedManagedAssignment(t *testing.T) {
 	subjects := make([]string, 30)
 	externals := make(map[string]string, len(subjects))
@@ -78,4 +111,28 @@ func TestBuildManagedEnvironmentRejectsOversizedManagedAssignment(t *testing.T) 
 		AssignmentHash: "hash",
 	}, nil)
 	require.ErrorContains(t, err, "reduce symbols or split")
+}
+
+func TestBuildManagedEnvironmentDoesNotLeakHostMetricsSettings(t *testing.T) {
+	t.Setenv("MOOX_METRICS_EVENTBUS_URL", "tls://127.0.0.1:4222")
+	t.Setenv("MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE", "/Users/host/.config/moox/metrics.yaml")
+	t.Setenv("MOOX_SCF_METRICS_EVENTBUS_URL", "")
+	t.Setenv("MOOX_SCF_METRICS_EVENTBUS_CREDENTIAL_FILE", "")
+	env, err := BuildManagedEnvironment(NodeAssignment{Provider: "sina", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: []string{"600000.XSHG"}, RouteVersion: StockCNRouteID}, nil)
+	require.NoError(t, err)
+	_, hasURL := env["MOOX_METRICS_EVENTBUS_URL"]
+	_, hasCredentials := env["MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE"]
+	require.False(t, hasURL)
+	require.False(t, hasCredentials)
+}
+
+func TestBuildManagedEnvironmentUsesExplicitSCFMetricsSettings(t *testing.T) {
+	t.Setenv("MOOX_METRICS_EVENTBUS_URL", "tls://127.0.0.1:4222")
+	t.Setenv("MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE", "/Users/host/.config/moox/metrics.yaml")
+	t.Setenv("MOOX_SCF_METRICS_EVENTBUS_URL", "tls://metrics.example:4222")
+	t.Setenv("MOOX_SCF_METRICS_EVENTBUS_CREDENTIAL_FILE", "/var/task/metrics-publisher.yaml")
+	env, err := BuildManagedEnvironment(NodeAssignment{Provider: "sina", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: []string{"600000.XSHG"}, RouteVersion: StockCNRouteID}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "tls://metrics.example:4222", env["MOOX_METRICS_EVENTBUS_URL"])
+	require.Equal(t, "/var/task/metrics-publisher.yaml", env["MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE"])
 }

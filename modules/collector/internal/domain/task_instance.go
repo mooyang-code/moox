@@ -23,6 +23,7 @@ type DatasetSubject struct {
 
 // TaskSpec is an adapter output before persistence fields are added.
 type TaskSpec struct {
+	RouteID    string
 	Provider   string
 	MarketType string
 	DataType   string
@@ -69,10 +70,14 @@ func (i *TaskInstance) TableName() string {
 
 // StableTaskID creates an idempotent task ID for a rule/object/interval.
 func StableTaskID(spaceID string, ruleID string, spec TaskSpec) string {
+	routeID := strings.TrimSpace(spec.RouteID)
+	if routeID == "" {
+		routeID = strings.Join([]string{spec.MarketType, spec.DataType, spec.DatasetID, spec.Frequency}, ":")
+	}
 	parts := []string{
 		spaceID,
 		ruleID,
-		spec.Provider,
+		routeID,
 		spec.MarketType,
 		spec.DataType,
 		spec.DatasetID,

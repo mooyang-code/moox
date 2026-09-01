@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -h "${SOURCE}" ]]; do
+  SOURCE_DIR="$(cd -P "$(dirname "${SOURCE}")" >/dev/null 2>&1 && pwd)"
+  SOURCE="$(readlink "${SOURCE}")"
+  [[ "${SOURCE}" != /* ]] && SOURCE="${SOURCE_DIR}/${SOURCE}"
+done
+ROOT="$(cd -P "$(dirname "${SOURCE}")/../.." && pwd)"
 SCF_SPACE_ID="${SCF_SPACE_ID:?SCF_SPACE_ID is required (for example: crypto_market)}"
-SCF_ENTRYPOINT="${SCF_ENTRYPOINT:?SCF_ENTRYPOINT is required (crypto_market)}"
-case "${SCF_ENTRYPOINT}" in
-  crypto_market|market_data) ;;
-  *) echo "unsupported SCF entrypoint: ${SCF_ENTRYPOINT}" >&2; exit 1 ;;
-esac
+SCF_ENTRYPOINT="${SCF_ENTRYPOINT:?SCF_ENTRYPOINT is required (crypto_market or stock_cn)}"
+[[ "${SCF_ENTRYPOINT}" == "crypto_market" || "${SCF_ENTRYPOINT}" == "stock_cn" ]] || { echo "unsupported SCF entrypoint: ${SCF_ENTRYPOINT}" >&2; exit 1; }
 CONFIG_DIR="${ROOT}/modules/collector/configs/scf/${SCF_SPACE_ID}"
 VERSION="${VERSION:-v$(date +%Y%m%d%H%M%S)}"
 OUT_DIR="${OUT_DIR:-${ROOT}/release/scf}"
@@ -39,6 +42,11 @@ echo "==> build moox-collector-scf for linux/amd64"
 
 echo "==> copy ${SCF_SPACE_ID} SCF runtime configs"
 cp -R "${CONFIG_DIR}/." "${BUILD_DIR}/package/"
+if [[ "${SCF_SPACE_ID}" == "stock_cn" ]]; then
+  mkdir -p "${BUILD_DIR}/package/markets/stock_cn"
+  cp "${ROOT}/modules/collector/config/markets/stock_cn/calendar.yaml" "${BUILD_DIR}/package/markets/stock_cn/calendar.yaml"
+  cp "${ROOT}/modules/collector/config/markets/stock_cn/route.yaml" "${BUILD_DIR}/package/markets/stock_cn/route.yaml"
+fi
 rm -f "${BUILD_DIR}/package/trpc_go.yaml" "${BUILD_DIR}/package/example_trpc_go.yaml"
 
 BINANCE_CONFIG="${BUILD_DIR}/package/sources/market/binance.yaml"

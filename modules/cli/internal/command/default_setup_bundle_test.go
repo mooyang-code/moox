@@ -57,6 +57,10 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	for _, dataset := range seed.Datasets {
 		datasetsBySpace[dataset.SpaceID] = append(datasetsBySpace[dataset.SpaceID], dataset.DatasetID)
 		require.LessOrEqual(t, utf8.RuneCountInString(dataset.Name), 10, dataset.SpaceID+"/"+dataset.DatasetID)
+		if dataset.SpaceID == "stock_cn" && dataset.DatasetID == "stock_cn_kline" {
+			require.Equal(t, []string{"1m"}, dataset.Freqs)
+			require.Equal(t, "stock_cn", dataset.DataSourceID)
+		}
 		if dataset.SpaceID == "crypto_market" && dataset.DatasetID != "binance_spot_symbols" && dataset.DatasetID != "binance_swap_symbols" && dataset.DatasetID != "binance_spot_kline_1m" {
 			require.Equal(t, []string{"1H"}, dataset.Freqs, dataset.DatasetID)
 		}
@@ -102,9 +106,53 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		"financial_statement_metric",
 		"financial_summary",
 		"index_kline",
-		"stock_kline",
+		"stock_cn_instruments",
+		"stock_cn_kline",
 	}, datasetsBySpace["stock_cn"])
 	require.Equal(t, []string{"binance_spot_kline_1m", "binance_spot_symbols", "binance_swap_symbols", "perpetual_kline_1h", "spot_kline_1h"}, datasetsBySpace["crypto_market"])
+}
+
+func TestDefaultSetupBundleDefinesStockCNInstrumentsLikeSymbolDatasets(t *testing.T) {
+	seed, err := loadMetadataSeed(defaultSetupBundlePath("metadata.yaml"))
+	require.NoError(t, err)
+
+	var instrumentDataset *seedDataset
+	for i := range seed.Datasets {
+		dataset := &seed.Datasets[i]
+		if dataset.SpaceID == "stock_cn" && dataset.DatasetID == "stock_cn_instruments" {
+			instrumentDataset = dataset
+			break
+		}
+	}
+	require.NotNil(t, instrumentDataset)
+	require.Equal(t, "stock_cn", instrumentDataset.DataSourceID)
+	require.Equal(t, "record", instrumentDataset.DataKind)
+	require.Equal(t, "storage-node-0", instrumentDataset.DataNodeID)
+	require.Equal(t, "0", instrumentDataset.KeepDuration)
+	require.Equal(t, "disabled", instrumentDataset.Status)
+	require.Equal(t, "wide_common_metrics", instrumentDataset.Attributes["storage_model"])
+
+	type columnContract struct {
+		valueType string
+		required  bool
+	}
+	wantColumns := map[string]columnContract{
+		"security_code":     {valueType: "string", required: true},
+		"provider_symbol":   {valueType: "string", required: true},
+		"exchange":          {valueType: "string", required: true},
+		"instrument_name":   {valueType: "string"},
+		"instrument_status": {valueType: "string"},
+		"snapshot_id":       {valueType: "string", required: true},
+		"source_provider":   {valueType: "string", required: true},
+		"fetched_at":        {valueType: "time", required: true},
+	}
+	gotColumns := make(map[string]columnContract)
+	for _, column := range seed.DatasetColumns {
+		if column.SpaceID == "stock_cn" && column.DatasetID == "stock_cn_instruments" {
+			gotColumns[column.ColumnName] = columnContract{valueType: column.ValueType, required: column.Required}
+		}
+	}
+	require.Equal(t, wantColumns, gotColumns)
 }
 
 func TestDefaultSetupBundleUsesOnlyFixedFiles(t *testing.T) {

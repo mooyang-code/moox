@@ -103,7 +103,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 		return err
 	}
 	// Mirror the source subject snapshot before activation so the target has the
-	// same universe. Read existing memberships first so an unchanged target does
+	// same active subject set. Read existing memberships first so an unchanged target does
 	// not issue hundreds of redundant metadata writes on every timer tick.
 	existingSubjects := make(map[string]*storagepb.DatasetSubject)
 	for page := uint32(1); ; page++ {

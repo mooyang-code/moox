@@ -4,7 +4,7 @@ MooX 的行情采集控制面和短时 SCF 运行时。Collector 负责规则、
 Timer 分片、公共 DNS Environment 和数据新鲜度；SCF 只执行一批行情请求，不常驻等待任务。
 
 实时 K 线的正式架构是 `node_type=scf-event, trigger_type=timer`：Collector 每分钟协调
-每个函数独立的任务环境，最多 30 个标的；Tencent Timer 到点触发 SCF，函数并发请求 Binance
+每个函数独立的任务环境，最多 40 个 A 股标的；Tencent Timer 到点触发 SCF，函数并发请求市场 Provider
 并聚合写 Storage。SCF 不请求 Collector/Admin，也不发布实时 Completion。Symbol 快照、缺口
 补采、出口探针和人工 E2E 才使用有界 `InvokeFunction`。常驻心跳、EventBus 消费和逐节点实时
 Invoke 会增加函数运行时长或控制面排队，不能重新引入。维护背景见
@@ -37,7 +37,7 @@ Environment。SCF 仍使用原域名作为 Host/SNI，IP 只用于拨号，所�
 ```text
 TaskRule + Symbol Dataset -> Collector Reconciler
          -> CloudNode Environment Patch -> Tencent Timer Trigger
-         -> SCF 64MB/15s -> Binance -> Storage Primary batch upsert
+         -> SCF 64MB/15s (Kline) / dedicated daily Instrument Timer -> providers -> Storage
          -> Dataset/K线 freshness + CLS
 ```
 
@@ -50,7 +50,7 @@ Symbol Rule 将手动配置的 Binance 标的写入 RECORD Dataset。K 线 Rule 
 读取 active subjects，写入 TimeSeries Dataset。实时 K 线批次每项只请求最近 3 根并过滤未收盘
 数据；长缺口由独立 CatchupBatch 分页恢复。
 
-每个启用规则按当前 Timer 函数确定性分片；单个函数最多 30 个标的，完整 Environment 还必须不超过 4KB。函数固定为 64MB、15 秒，Storage 请求预算为 5 秒，函数内 HTTP 并发由 Environment 配置；短暂失败由下一次 Timer 及独立缺口补采覆盖。
+每个启用规则按当前 Kline Timer 函数确定性分片；stock_cn 单个函数最多 40 个标的，完整 Environment 还必须不超过 4KB。Kline 函数固定为 64MB、15 秒；独立 Instrument snapshot Timer 使用发布配置的全市场快照预算，Storage 请求预算为 5 秒，函数内 HTTP 并发由 Environment 配置；短暂失败由下一次 Timer 及独立缺口补采覆盖。
 
 Collector 同时上报 Space 级 Timer 容量指标：总节点数、当前分片需求、已分配节点数和容量余量。Monitor 会在需求超过节点数时立即告警，并在余量不超过 2 个节点时提前标记为降级，避免新增标的或频率后才发现容量不足。
 
@@ -78,7 +78,7 @@ SCF 包通过腾讯云 API 查询 `moox/moox-application` 资源并写入真实 
 - CollectMgr HTTP：`:11402`。
 - 管理台 Rule API：`/api/admin/collectmgr/{Method}`。
 - Collector 调 CloudNode：`GetNodeList(trigger_type=timer)`、受管 Runtime Config Batch；
-  `InvokeFunction` 只供 Symbol 快照、缺口补采、探针和人工 E2E。
+  `InvokeFunction` 只供缺口补采、探针和人工 E2E；stock_cn 全市场标的快照由独立的每日 Instrument Timer SCF 执行。
 - EventBus：`moox.market.fetch.batch.completed.v1.*` 仅供有界 Invoke Completion，实时 Timer 不依赖它。
 - Collector 数据库默认：`./data/moox_collector.db`。
 

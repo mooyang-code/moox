@@ -22,3 +22,15 @@ func TestIsDeployedRequiresPostDeployMarkerWhenDeploymentIDIsEmpty(t *testing.T)
 		t.Fatal("node with local deployment marker should be invokable")
 	}
 }
+
+func TestIsInstrumentSnapshotNodeUsesFunctionMode(t *testing.T) {
+	if !IsInstrumentSnapshotNode(Node{Metadata: map[string]any{"function_mode": "instrument_snapshot"}}) {
+		t.Fatal("instrument snapshot function mode must be recognized")
+	}
+	if IsInstrumentSnapshotNode(Node{Metadata: map[string]any{"function_mode": "kline"}}) {
+		t.Fatal("Kline function mode must remain eligible for Timer scheduling")
+	}
+	if !IsInstrumentSnapshotNode(Node{FunctionName: "moox-fetcher-stock-cn-instrument-ap-shanghai-0"}) {
+		t.Fatal("instrument snapshot function prefix must remain recognizable for legacy nodes")
+	}
+}

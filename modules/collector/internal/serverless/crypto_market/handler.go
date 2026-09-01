@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/packages/clsreporter"
@@ -28,13 +29,17 @@ const (
 
 // Handler accepts only bounded crypto market actions and has no resident work.
 type Handler struct {
-	NewMarketFetch func() *marketfetch.Handler
-	NewReporter    func() (clsreporter.Reporter, time.Duration, error)
+	NewMarketFetch       func() *marketfetch.Handler
+	NewInstrumentStorage func(string, string, string) (marketfetch.InstrumentStorage, error)
+	NewReporter          func() (clsreporter.Reporter, time.Duration, error)
 }
 
 func NewHandler() *Handler {
 	return &Handler{
 		NewMarketFetch: marketfetch.NewHandler,
+		NewInstrumentStorage: func(target, marketType, writeSource string) (marketfetch.InstrumentStorage, error) {
+			return marketfetch.NewCryptoInstrumentStorage(target, marketType, writeSource)
+		},
 		NewReporter: func() (clsreporter.Reporter, time.Duration, error) {
 			cfg, enabled, err := clsreporter.ConfigFromEnv(os.Getenv)
 			if err != nil || !enabled {
@@ -89,6 +94,13 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		functionName = firstNonEmpty(function.FunctionName, functionName)
 		region = function.TencentcloudRegion
 	}
+	invocationMetrics, metricsErr := marketfetch.NewInvocationMetrics(functionName, spaceID)
+	if metricsErr != nil {
+		log.WarnContextf(ctx, "crypto_market_metrics_init_failed error=%q", metricsErr)
+	}
+	if invocationMetrics != nil && event.Action == model.EventActionInstrumentSnapshot {
+		defer marketfetch.ReportInvocationMetrics(ctx, invocationMetrics)
+	}
 	if timerConfigured && event.Action == "" {
 		event.Action = model.EventActionMarketFetch
 		event.Source = "tencent_timer"
@@ -122,6 +134,10 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	switch event.Action {
 	case model.EventActionMarketFetch:
 		handler := h.NewMarketFetch()
+		if invocationMetrics != nil {
+			handler.Metrics = invocationMetrics.Metrics
+			handler.MetricsReporter = invocationMetrics.Reporter
+		}
 		handler.Reporter = reporter
 		handler.CLSReserve = timeout
 		if timerConfigured {
@@ -134,11 +150,55 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 			return handler.HandleTimerAt(ctx, event.RequestID, functionName, timerNow)
 		}
 		return handler.HandleWithFunctionName(ctx, event, functionName)
+	case model.EventActionInstrumentSnapshot:
+		if h.NewInstrumentStorage == nil {
+			return failure("instrument_snapshot_unavailable", "crypto instrument storage is not configured"), nil
+		}
+		storageTarget := strings.TrimSpace(event.StorageRPCGatewayTarget)
+		if storageTarget == "" {
+			storageTarget = strings.TrimSpace(os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"))
+		}
+		if storageTarget == "" {
+			return failure("invalid_instrument_snapshot", "storage_rpc_gateway_target is required"), nil
+		}
+		marketType := eventDataString(event.Data, "market_type")
+		storage, storageErr := h.NewInstrumentStorage(storageTarget, marketType, "crypto_market:instrument")
+		if storageErr != nil {
+			return nil, storageErr
+		}
+		productType := marketdata.ProductType(strings.ToLower(strings.TrimSpace(marketType)))
+		pipeline, pipelineErr := marketfetch.NewCryptoInstrumentPipeline(storage, productType)
+		if pipelineErr != nil {
+			return nil, pipelineErr
+		}
+		if invocationMetrics != nil {
+			pipeline.Metrics = invocationMetrics.Metrics
+		}
+		snapshotAt := time.Now().UTC()
+		if parsed, parseErr := time.Parse(time.RFC3339, event.Time); parseErr == nil {
+			snapshotAt = parsed.UTC()
+		}
+		result, pipelineErr := pipeline.Execute(ctx, marketfetch.InstrumentPipelineRequest{RequestID: event.RequestID, SnapshotAt: snapshotAt})
+		if pipelineErr != nil {
+			return nil, pipelineErr
+		}
+		return &model.Response{Success: true, Message: "succeeded", Data: result, RequestID: event.RequestID, Timestamp: time.Now().UTC()}, nil
 	case model.EventActionEgressProbe:
 		return marketfetch.EgressProbe(ctx, "binance", "spot")
 	default:
 		return failure("unknown_event_type", "unsupported crypto market SCF action"), nil
 	}
+}
+
+func eventDataString(data map[string]interface{}, key string) string {
+	if data == nil {
+		return ""
+	}
+	value, ok := data[key].(string)
+	if !ok {
+		return ""
+	}
+	return value
 }
 
 func validateTimerEvent(event model.CloudFunctionEvent) error {

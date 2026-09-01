@@ -82,7 +82,7 @@ func TestDatasetSource_ListSubjects_ValidBindings_ShouldMergeSymbols(t *testing.
 	assert.Equal(t, "active", subjects[0].Status)
 }
 
-func TestDatasetSource_ListResampleSubjectsUsesSharedMarketUniverse(t *testing.T) {
+func TestDatasetSource_ListResampleSubjectsUsesSharedActiveSubjectSet(t *testing.T) {
 	src := &DatasetSource{metadata: &fakeMetadataClient{
 		dataset:     &storagepb.Dataset{DataSourceId: "crypto_market", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Attributes: map[string]string{"market_type": "spot"}},
 		allSubjects: []*storagepb.Subject{{SubjectId: "BTC-USDT", Name: "BTC/USDT", Status: "active"}, {SubjectId: "ETH-USDT", Status: "inactive"}},
@@ -94,7 +94,7 @@ func TestDatasetSource_ListResampleSubjectsUsesSharedMarketUniverse(t *testing.T
 	assert.Equal(t, "BTC-USDT", subjects[0].ExternalSymbol)
 }
 
-func TestDatasetSource_ListResampleSubjectsForRuleFiltersSharedUniverseByVenue(t *testing.T) {
+func TestDatasetSource_ListResampleSubjectsForRuleFiltersSharedActiveSubjectSetByVenue(t *testing.T) {
 	src := &DatasetSource{metadata: &fakeMetadataClient{
 		dataset:     &storagepb.Dataset{DataSourceId: "crypto_market", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Attributes: map[string]string{"market_type": "spot"}},
 		allSubjects: []*storagepb.Subject{{SubjectId: "BTC-USDT", Status: "active"}, {SubjectId: "OKX-ONLY", Status: "active"}},

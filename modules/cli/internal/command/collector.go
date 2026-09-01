@@ -29,14 +29,31 @@ import (
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/marketmanifest"
+	metricsreport "github.com/mooyang-code/moox/packages/report"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
 )
 
 const (
-	defaultCollectorSCFTimeout   = "15"
-	maxCollectorPublishNodeCount = 100
+	defaultCollectorSCFTimeout = "15"
+	// Manifest deployments may spread a stock_cn fleet across multiple regions;
+	// keep the ad-hoc guard above one normal 200-function release while the
+	// per-region platform limit remains enforced by setup validation.
+	maxCollectorPublishNodeCount    = 1000
+	collectorRuntimeConfigBatchSize = 100
 )
+
+type collectorRuntimeConfigPatch struct {
+	NodeID             string            `json:"node_id"`
+	ManagedEnvironment map[string]string `json:"managed_environment,omitempty"`
+	TimerEnabled       bool              `json:"timer_enabled"`
+	TimerCron          string            `json:"timer_cron"`
+}
+
+type collectorPublishedTimerFleet struct {
+	opts  collectorPublishOptions
+	nodes []adminclient.CloudNode
+}
 
 type collectorPackageOptions struct {
 	CollectorRoot            string
@@ -70,6 +87,8 @@ type collectorPublishOptions struct {
 	BizType                 string
 	NodeType                string
 	TriggerType             string
+	InstrumentSnapshotTimer bool
+	EnableStockCN           bool
 	StorageRPCGatewayTarget string
 	JobTypes                []string
 	Env                     []string
@@ -109,6 +128,16 @@ type collectorPublishStatusOptions struct {
 	JobID            string
 }
 
+type collectorStockCNActivateOptions struct {
+	ControlURL       string
+	AccessToken      string
+	ServiceAccessKey string
+	ServiceSecretKey string
+	SpaceID          string
+	File             string
+	Version          string
+}
+
 type collectorDeployOptions struct {
 	collectorPackageOptions
 	ControlURL       string
@@ -143,11 +172,13 @@ type collectorProbeOptions struct {
 	ServiceSecretKey string
 	SpaceID          string
 	Region           string
+	File             string
 }
 
 var collectorDeployFlags collectorDeployOptions
 var collectorDeleteFlags collectorDeleteOptions
 var collectorProbeFlags collectorProbeOptions
+var collectorStockCNActivateFlags collectorStockCNActivateOptions
 
 var collectorFunctionDeployCmd = &cobra.Command{
 	Use:   "deploy",
@@ -185,9 +216,24 @@ var collectorFunctionDeleteCmd = &cobra.Command{
 	},
 }
 
+var collectorFunctionActivateStockCNCmd = &cobra.Command{
+	Use:   "activate-stock-cn",
+	Short: "通过正式门禁后启用 stock_cn Kline Timer 和规则",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		summary, err := activateStockCNCollection(cmd.Context(), collectorStockCNActivateFlags)
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		if encodeErr := enc.Encode(summary); encodeErr != nil && err == nil {
+			return encodeErr
+		}
+		return err
+	},
+}
+
 var collectorFunctionProbeCmd = &cobra.Command{
 	Use:   "probe-egress",
-	Short: "逐个调用短时 SCF 验证公网出口和 Binance 连通性",
+	Short: "逐个调用短时 SCF 诊断公网出口和 Provider 连通性",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		report, err := probeCollectorEgress(cmd.Context(), collectorProbeFlags)
@@ -272,18 +318,20 @@ var collectorFunctionPublishStatusCmd = &cobra.Command{
 }
 
 type collectorPublishSummary struct {
-	ZipPath    string                          `json:"zip_path"`
-	PackageID  string                          `json:"package_id"`
-	CLSTopicID string                          `json:"cls_topic_id"`
-	FleetMode  string                          `json:"fleet_mode"`
-	JobID      string                          `json:"job_id"`
-	JobIDs     []string                        `json:"job_ids,omitempty"`
-	Operation  string                          `json:"operation"`
-	TotalCount int                             `json:"total_count"`
-	Regions    []collectorPublishRegionSummary `json:"regions,omitempty"`
+	ZipPath        string                          `json:"zip_path"`
+	PackageID      string                          `json:"package_id"`
+	CLSTopicID     string                          `json:"cls_topic_id"`
+	FleetMode      string                          `json:"fleet_mode"`
+	JobID          string                          `json:"job_id"`
+	JobIDs         []string                        `json:"job_ids,omitempty"`
+	Operation      string                          `json:"operation"`
+	TotalCount     int                             `json:"total_count"`
+	StockCNEnabled bool                            `json:"stock_cn_enabled,omitempty"`
+	Regions        []collectorPublishRegionSummary `json:"regions,omitempty"`
 }
 
 type collectorPublishRegionSummary struct {
+	Purpose        string `json:"purpose,omitempty"`
 	Region         string `json:"region"`
 	CloudAccountID string `json:"cloud_account_id"`
 	PackageID      string `json:"package_id"`
@@ -325,7 +373,7 @@ type collectorFleetAPI interface {
 func init() {
 	rootCmd.AddCommand(collectorCmd)
 	collectorCmd.AddCommand(collectorFunctionCmd)
-	collectorFunctionCmd.AddCommand(collectorFunctionPackageCmd, collectorFunctionPublishCmd, collectorFunctionDeployCmd, collectorFunctionDeleteCmd, collectorFunctionProbeCmd)
+	collectorFunctionCmd.AddCommand(collectorFunctionPackageCmd, collectorFunctionPublishCmd, collectorFunctionActivateStockCNCmd, collectorFunctionDeployCmd, collectorFunctionDeleteCmd, collectorFunctionProbeCmd)
 	collectorFunctionPublishCmd.AddCommand(collectorFunctionPublishSubmitCmd, collectorFunctionPublishStatusCmd)
 
 	addCollectorPackageFlags(collectorFunctionPackageCmd, &collectorPackageFlags)
@@ -362,6 +410,15 @@ func init() {
 	probeFlags.StringVar(&collectorProbeFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名 secret key")
 	probeFlags.StringVar(&collectorProbeFlags.SpaceID, "space-id", "", "space id")
 	probeFlags.StringVar(&collectorProbeFlags.Region, "region", "", "只探测指定地域")
+	probeFlags.StringVar(&collectorProbeFlags.File, "file", "", "optional custom.toml; stock_cn uses it only to report the configured Timer count")
+	activateFlags := collectorFunctionActivateStockCNCmd.Flags()
+	activateFlags.StringVar(&collectorStockCNActivateFlags.ControlURL, "control-url", "", "Control service base URL")
+	activateFlags.StringVar(&collectorStockCNActivateFlags.AccessToken, "access-token", "", "Control access token")
+	activateFlags.StringVar(&collectorStockCNActivateFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名 access key")
+	activateFlags.StringVar(&collectorStockCNActivateFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名 secret key")
+	activateFlags.StringVar(&collectorStockCNActivateFlags.SpaceID, "space-id", "stock_cn", "space id")
+	activateFlags.StringVar(&collectorStockCNActivateFlags.File, "file", "", "custom.toml manifest")
+	activateFlags.StringVar(&collectorStockCNActivateFlags.Version, "version", "", "expected deployed package version")
 
 	submitFlags := collectorFunctionPublishSubmitCmd.Flags()
 	submitFlags.StringVar(&collectorPublishFlags.ControlURL, "control-url", "", "Control service base URL")
@@ -380,6 +437,7 @@ func init() {
 	submitFlags.StringVar(&collectorPublishFlags.BizType, "biz-type", "market_fetcher", "business type")
 	submitFlags.StringVar(&collectorPublishFlags.NodeType, "node-type", "scf-event", "cloud node type")
 	submitFlags.StringVar(&collectorPublishFlags.TriggerType, "trigger-type", "timer", "SCF trigger type: timer or invoke")
+	submitFlags.BoolVar(&collectorPublishFlags.EnableStockCN, "enable-stock-cn", false, "通过全部 stock_cn 发布门禁后启用正式 Kline Timer 和规则")
 	submitFlags.StringVar(&collectorPublishFlags.StorageRPCGatewayTarget, "storage-rpc-gateway-target", "", "SCF 固定访问的 Storage tRPC 地址")
 	submitFlags.StringArrayVar(&collectorPublishFlags.Env, "env", nil, "SCF environment variable as KEY=VALUE")
 	submitFlags.StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "cloudnode node runtime config as KEY=VALUE; not written into SCF package config.yaml")
@@ -402,7 +460,6 @@ func addCollectorPackageFlags(cmd *cobra.Command, opts *collectorPackageOptions)
 	cmd.Flags().StringVar(&opts.Version, "version", "dev", "collector package version")
 	cmd.Flags().StringVar(&opts.Out, "out", "", "output zip path")
 	cmd.Flags().StringVar(&opts.ConfigDir, "config", "", "collector config directory")
-	cmd.Flags().StringVar(&opts.Entrypoint, "entrypoint", "", "collector SCF entrypoint (crypto_market or market_data)")
 	cmd.Flags().StringVar(&opts.CLSTopicID, "cls-topic-id", "", "central CLS topic id used by SCF warning/error logs")
 }
 
@@ -459,6 +516,8 @@ var newCollectorCLSAPI = func(secretID, secretKey, region string) (tencent.CLSAP
 
 type collectorCLSSink struct {
 	Resources tencent.CLSBootstrapResult
+	SecretID  string
+	SecretKey string
 }
 
 func resolveCollectorCLSSink(ctx context.Context, control *adminclient.Client, account adminclient.CloudAccount, region string) (collectorCLSSink, error) {
@@ -486,7 +545,7 @@ func resolveCollectorCLSSink(ctx context.Context, control *adminclient.Client, a
 	if err != nil {
 		return collectorCLSSink{}, fmt.Errorf("resolve central CLS topic for collector function: %w", err)
 	}
-	return collectorCLSSink{Resources: resources}, nil
+	return collectorCLSSink{Resources: resources, SecretID: secret.KeyID, SecretKey: secret.SecretValue}, nil
 }
 
 func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions) (collectorPublishSummary, error) {
@@ -509,6 +568,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if opts.Region == "" && fetcherConfig == nil {
 		return collectorPublishSummary{}, fmt.Errorf("--region is required")
 	}
+	if opts.EnableStockCN && (fetcherConfig == nil || !strings.EqualFold(fetcherConfig.SpaceID, "stock_cn")) {
+		return collectorPublishSummary{}, fmt.Errorf("--enable-stock-cn requires a stock_cn manifest deployment")
+	}
 	if fetcherConfig == nil && (opts.NodeCount <= 0 || opts.NodeCount > maxCollectorPublishNodeCount) {
 		return collectorPublishSummary{}, fmt.Errorf(
 			"--node-count must be between 1 and %d",
@@ -524,11 +586,32 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if err := validateCollectorPublishAuth(opts); err != nil {
 		return collectorPublishSummary{}, err
 	}
-	marketDataEntrypoint := strings.EqualFold(strings.TrimSpace(defaultFlag(opts.Entrypoint, "")), "market_data")
 	if fetcherConfig != nil {
-		marketDataEntrypoint = strings.EqualFold(strings.TrimSpace(fetcherConfig.Entrypoint), "market_data")
-	}
-	if fetcherConfig != nil {
+		trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
+		if trustErr != nil {
+			return collectorPublishSummary{}, trustErr
+		}
+		// The credential file on the control host is intentionally an internal
+		// publisher credential and commonly contains a loopback NATS URL. SCF
+		// must never receive that URL: replace only the endpoint with the
+		// deployment-wide public endpoint from custom.toml while retaining the
+		// control-plane username/password and CA material.
+		trustMaterial.EventBusCredential, trustErr = preflightCollectorSCFEventBusCredential(
+			trustMaterial.EventBusCredential,
+			trustMaterial.EventBusCAPEM,
+			manifest.Manifest.EventBus,
+		)
+		if trustErr != nil {
+			return collectorPublishSummary{}, trustErr
+		}
+		// The SCF package signs Binance Storage requests. Always take the
+		// Primary secret from the control host's authoritative auth file rather
+		// than inheriting a possibly stale operator environment.
+		opts.StoragePrimaryAuthSecret = trustMaterial.StoragePrimaryAuthSecret
+		opts.EventBusCredential = &trustMaterial.EventBusCredential
+		opts.EventBusCAPEM = trustMaterial.EventBusCAPEM
+		opts.GatewayCAPEM = trustMaterial.GatewayCAPEM
+		opts.ServiceGatewayCAPEM = trustMaterial.ServiceGatewayCAPEM
 		opts.FetcherConfig = fetcherConfig
 		opts.collectorPackageOptions.SpaceID = fetcherConfig.SpaceID
 		opts.collectorPackageOptions.Entrypoint = fetcherConfig.Entrypoint
@@ -539,33 +622,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		opts.StorageRPCGatewayTarget = defaultFlag(fetcherConfig.StorageRPCGatewayTarget, opts.StorageRPCGatewayTarget)
 		if opts.PackageName == "moox-collector" {
 			opts.PackageName = fetcherConfig.PackageName
-		}
-		if !marketDataEntrypoint {
-			trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
-			if trustErr != nil {
-				return collectorPublishSummary{}, trustErr
-			}
-			// The credential file on the control host is intentionally an internal
-			// publisher credential and commonly contains a loopback NATS URL. SCF
-			// must never receive that URL: replace only the endpoint with the
-			// deployment-wide public endpoint from custom.toml while retaining the
-			// control-plane username/password and CA material.
-			trustMaterial.EventBusCredential, trustErr = preflightCollectorSCFEventBusCredential(
-				trustMaterial.EventBusCredential,
-				trustMaterial.EventBusCAPEM,
-				manifest.Manifest.EventBus,
-			)
-			if trustErr != nil {
-				return collectorPublishSummary{}, trustErr
-			}
-			// The SCF package signs Binance Storage requests. Always take the
-			// Primary secret from the control host's authoritative auth file rather
-			// than inheriting a possibly stale operator environment.
-			opts.StoragePrimaryAuthSecret = trustMaterial.StoragePrimaryAuthSecret
-			opts.EventBusCredential = &trustMaterial.EventBusCredential
-			opts.EventBusCAPEM = trustMaterial.EventBusCAPEM
-			opts.GatewayCAPEM = trustMaterial.GatewayCAPEM
-			opts.ServiceGatewayCAPEM = trustMaterial.ServiceGatewayCAPEM
 		}
 	}
 	prefixDefault := defaultFlag(opts.PackageName, "moox-collector")
@@ -579,6 +635,19 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		}
 	}
 	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, opts.SpaceID)
+	if fetcherConfig != nil && strings.EqualFold(fetcherConfig.SpaceID, "stock_cn") {
+		enabledRules, ruleErr := client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "equity")
+		if ruleErr != nil {
+			return collectorPublishSummary{}, fmt.Errorf("stock_cn publish requires a rule readback before side effects: %w", ruleErr)
+		}
+		if len(enabledRules) > 0 {
+			ids := make([]string, 0, len(enabledRules))
+			for _, rule := range enabledRules {
+				ids = append(ids, rule.RuleID)
+			}
+			return collectorPublishSummary{}, fmt.Errorf("stock_cn publish requires all equity collector rules disabled; enabled rules: %s", strings.Join(ids, ","))
+		}
+	}
 	accounts, err := client.ListCloudAccounts(ctx, "tencent")
 	if err != nil {
 		return collectorPublishSummary{}, err
@@ -602,34 +671,39 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, err
 		}
 	}
-	if !marketDataEntrypoint {
-		clsAccountID := opts.CloudAccountID
-		if fetcherConfig != nil {
-			clsAccountID = fetcherConfig.CLSCloudAccountID
-		}
-		clsAccount, ok := accountsByID[clsAccountID]
-		if !ok || clsAccount.IsDeleted {
-			return collectorPublishSummary{}, fmt.Errorf("central CLS cloud account %q not found", clsAccountID)
-		}
-		clsRegion := clsprepare.Region
-		if manifest != nil {
-			clsRegion = firstNonEmpty(manifest.Manifest.TencentCloud.Region, clsRegion)
-		}
-		clsSink, err := resolveCollectorCLSSink(ctx, client, clsAccount, clsRegion)
-		if err != nil {
-			return collectorPublishSummary{}, err
-		}
-		opts.CLSLogsetID = clsSink.Resources.LogsetID
-		opts.CLSTopicID = clsSink.Resources.TopicID
-		opts.CLSSecretID, opts.CLSSecretKey = collectorCLSCredentials()
-		if opts.CLSSecretID == "" || opts.CLSSecretKey == "" {
-			return collectorPublishSummary{}, fmt.Errorf("MOOX_CLS_SECRET_ID and MOOX_CLS_SECRET_KEY are required for SCF centralized logging")
-		}
-		// The shared Topic is in Guangzhou but the short-lived functions run in
-		// overseas regions. They must use CLS's public ingestion endpoint rather
-		// than the Guangzhou VPC-only tencentyun.com address.
-		opts.CLSHost = scfCLSIngestHost(clsRegion + ".cls.tencentyun.com")
+	clsAccountID := opts.CloudAccountID
+	if fetcherConfig != nil {
+		clsAccountID = fetcherConfig.CLSCloudAccountID
 	}
+	clsAccount, ok := accountsByID[clsAccountID]
+	if !ok || clsAccount.IsDeleted {
+		return collectorPublishSummary{}, fmt.Errorf("central CLS cloud account %q not found", clsAccountID)
+	}
+	clsRegion := clsprepare.Region
+	if manifest != nil {
+		clsRegion = firstNonEmpty(manifest.Manifest.TencentCloud.Region, clsRegion)
+	}
+	clsSink, err := resolveCollectorCLSSink(ctx, client, clsAccount, clsRegion)
+	if err != nil {
+		return collectorPublishSummary{}, err
+	}
+	opts.CLSLogsetID = clsSink.Resources.LogsetID
+	opts.CLSTopicID = clsSink.Resources.TopicID
+	opts.CLSSecretID, opts.CLSSecretKey = collectorCLSCredentials()
+	if opts.CLSSecretID == "" || opts.CLSSecretKey == "" {
+		// The selected CloudAccount credential is already required to resolve
+		// the central CLS resources. Reuse it for SCF CLS ingestion when no
+		// dedicated runtime identity was supplied, without reading secrets from
+		// the operator environment or committing them to the package.
+		opts.CLSSecretID, opts.CLSSecretKey = clsSink.SecretID, clsSink.SecretKey
+	}
+	if opts.CLSSecretID == "" || opts.CLSSecretKey == "" {
+		return collectorPublishSummary{}, fmt.Errorf("MOOX_CLS_SECRET_ID and MOOX_CLS_SECRET_KEY are required for SCF centralized logging")
+	}
+	// The shared Topic is in Guangzhou but the short-lived functions run in
+	// overseas regions. They must use CLS's public ingestion endpoint rather
+	// than the Guangzhou VPC-only tencentyun.com address.
+	opts.CLSHost = scfCLSIngestHost(clsRegion + ".cls.tencentyun.com")
 	zipPath := opts.ZipPath
 	if zipPath == "" {
 		result, err := packageCollectorFunction(ctx, opts.collectorPackageOptions)
@@ -666,6 +740,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if fetcherConfig != nil {
 		opts.FetcherConfig = fetcherConfig
 		var jobs []string
+		var publishedTimerFleets []collectorPublishedTimerFleet
+		var instrumentSnapshotFleet collectorPublishedTimerFleet
+		var hasInstrumentSnapshotFleet bool
 		for _, region := range fetcherConfig.Regions {
 			if !region.Enabled {
 				continue
@@ -686,8 +763,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				return summary, uploadErr
 			}
 			// The auxiliary Invoke node is deployed and exercised first. A
-			// successful canary proves the configured SCF provider path and
-			// persistence path before any regional Timer fleet is changed.
+			// successful market_fetch canary proves the Kline SCF -> Storage path
+			// before any regional Timer fleet is changed. The full-market Instrument
+			// snapshot is deployed as a separate daily Timer fleet below.
 			invokeOpts := regionOpts
 			invokeOpts.TriggerType = "invoke"
 			invokeOpts.NodeCount = 1
@@ -717,6 +795,8 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if err := runCollectorSCFCanary(ctx, client, invokeOpts, invokeNodes[0].NodeID); err != nil {
 				return summary, fmt.Errorf("SCF canary for region %s: %w", regionOpts.Region, err)
 			}
+			// The stock instrument snapshot is published as its own daily Timer
+			// below. The regional Invoke node is only the Kline canary path.
 			summary.TotalCount += invokeSummary.TotalCount
 			if invokeSummary.JobID != "" {
 				jobs = append(jobs, invokeSummary.JobID)
@@ -725,6 +805,16 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			fleetNodes, inspectErr := inspectCollectorFleet(ctx, client, regionOpts)
 			if inspectErr != nil {
 				return summary, inspectErr
+			}
+			if strings.EqualFold(fetcherConfig.SpaceID, "stock_cn") {
+				disableJobs, disableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(fleetNodes))
+				if disableErr != nil {
+					return summary, fmt.Errorf("disable existing Timer fleet before deploy: %w", disableErr)
+				}
+				if err := waitCollectorBatches(ctx, client, disableJobs); err != nil {
+					return summary, fmt.Errorf("disable existing Timer fleet before deploy: %w", err)
+				}
+				jobs = append(jobs, disableJobs...)
 			}
 			createItems, buildErr := buildCollectorFleetCreateItems(regionOpts, packageID)
 			if buildErr != nil {
@@ -739,6 +829,13 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if err := waitCollectorBatch(ctx, client, fleetSummary.JobID); err != nil {
 				return summary, fmt.Errorf("SCF Timer fleet for region %s: %w", regionOpts.Region, err)
 			}
+			if strings.EqualFold(fetcherConfig.SpaceID, "stock_cn") {
+				deployedNodes, inspectDeployedErr := inspectCollectorFleet(ctx, client, regionOpts)
+				if inspectDeployedErr != nil {
+					return summary, inspectDeployedErr
+				}
+				publishedTimerFleets = append(publishedTimerFleets, collectorPublishedTimerFleet{opts: regionOpts, nodes: deployedNodes})
+			}
 			summary.FleetMode = fleetSummary.FleetMode
 			summary.Operation = fleetSummary.Operation
 			summary.TotalCount += fleetSummary.TotalCount
@@ -748,6 +845,147 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if fleetSummary.JobID != "" {
 				jobs = append(jobs, fleetSummary.JobID)
 			}
+			summary.JobIDs = append([]string(nil), jobs...)
+			summary.JobID = strings.Join(summary.JobIDs, ",")
+		}
+		if strings.EqualFold(fetcherConfig.SpaceID, "stock_cn") {
+			instrumentOpts := opts
+			instrumentOpts.Region = fetcherConfig.InstrumentSnapshotRegion
+			instrumentOpts.NodeCount = 1
+			instrumentOpts.CloudAccountID = fetcherConfig.InstrumentSnapshotCloudAccountID
+			instrumentOpts.FunctionNamePrefix = fetcherConfig.InstrumentSnapshotFunctionPrefix
+			instrumentOpts.TriggerType = "timer"
+			instrumentOpts.InstrumentSnapshotTimer = true
+			instrumentPackageID, uploadErr := upload(instrumentOpts)
+			if uploadErr != nil {
+				return summary, fmt.Errorf("upload stock instrument snapshot package: %w", uploadErr)
+			}
+			instrumentNodes, inspectErr := inspectCollectorFleet(ctx, client, instrumentOpts)
+			if inspectErr != nil {
+				return summary, fmt.Errorf("inspect stock instrument snapshot fleet: %w", inspectErr)
+			}
+			if len(instrumentNodes) > 0 {
+				disableJobs, disableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(instrumentNodes))
+				if disableErr != nil {
+					return summary, fmt.Errorf("disable existing stock instrument snapshot Timer: %w", disableErr)
+				}
+				if err := waitCollectorBatches(ctx, client, disableJobs); err != nil {
+					return summary, fmt.Errorf("disable existing stock instrument snapshot Timer: %w", err)
+				}
+				jobs = append(jobs, disableJobs...)
+			}
+			instrumentItems, buildErr := buildCollectorFleetCreateItems(instrumentOpts, instrumentPackageID)
+			if buildErr != nil {
+				return summary, fmt.Errorf("build stock instrument snapshot fleet: %w", buildErr)
+			}
+			instrumentSummary, submitErr := submitCollectorFleet(ctx, client, instrumentOpts, instrumentPackageID, instrumentItems, instrumentNodes)
+			if submitErr != nil {
+				return summary, fmt.Errorf("submit stock instrument snapshot fleet: %w", submitErr)
+			}
+			if err := waitCollectorBatch(ctx, client, instrumentSummary.JobID); err != nil {
+				return summary, fmt.Errorf("stock instrument snapshot fleet: %w", err)
+			}
+			instrumentNodes, inspectErr = inspectCollectorFleet(ctx, client, instrumentOpts)
+			if inspectErr != nil || len(instrumentNodes) != 1 {
+				if inspectErr != nil {
+					return summary, fmt.Errorf("inspect stock instrument snapshot fleet after deploy: %w", inspectErr)
+				}
+				return summary, fmt.Errorf("stock instrument snapshot fleet has no ready node")
+			}
+			if err := runCollectorInstrumentCanaryWithExtendedControlTimeout(ctx, client, instrumentOpts, instrumentNodes[0].NodeID); err != nil {
+				return summary, fmt.Errorf("SCF instrument snapshot canary for region %s: %w", instrumentOpts.Region, err)
+			}
+			instrumentTimerJob, cronErr := submitCollectorTimerRuntimeConfigs(ctx, client, []collectorRuntimeConfigPatch{{
+				NodeID: instrumentNodes[0].NodeID, TimerCron: fetcherConfig.InstrumentSnapshotTimerCron, TimerEnabled: false,
+			}})
+			if cronErr != nil {
+				return summary, fmt.Errorf("configure daily stock instrument snapshot Timer: %w", cronErr)
+			}
+			if err := waitCollectorBatches(ctx, client, instrumentTimerJob); err != nil {
+				return summary, fmt.Errorf("configure daily stock instrument snapshot Timer: %w", err)
+			}
+			jobs = append(jobs, instrumentSummary.JobID)
+			jobs = append(jobs, instrumentTimerJob...)
+			summary.Regions = append(summary.Regions, collectorPublishRegionSummary{Purpose: "instrument_snapshot_daily", Region: instrumentOpts.Region, CloudAccountID: instrumentOpts.CloudAccountID, PackageID: instrumentPackageID, CLSLogsetID: instrumentOpts.CLSLogsetID, CLSTopicID: instrumentOpts.CLSTopicID, JobID: instrumentSummary.JobID, TotalCount: instrumentSummary.TotalCount})
+			summary.TotalCount += instrumentSummary.TotalCount
+			instrumentSnapshotFleet = collectorPublishedTimerFleet{opts: instrumentOpts, nodes: instrumentNodes}
+			hasInstrumentSnapshotFleet = true
+			// Keep both Timer classes disabled until the fleet is fully deployed and
+			// the independent Instrument canary has passed. Egress probing is an
+			// optional diagnostic, not a release blocker.
+			allTimerNodes := make([]adminclient.CloudNode, 0, fetcherConfig.TimerFunctionCount)
+			for _, fleet := range publishedTimerFleets {
+				allTimerNodes = append(allTimerNodes, fleet.nodes...)
+			}
+			if opts.EnableStockCN {
+				// Enable the rule before the Timer fleet. Collector assignment is
+				// reconciled from the active rule, so waiting for assignments while
+				// the rule is still disabled can never become ready.
+				if err := ensureStockCNKlineRule(ctx, client, fetcherConfig.SpaceID); err != nil {
+					disableJobs, disableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(allTimerNodes))
+					if disableErr == nil {
+						disableErr = waitCollectorBatches(ctx, client, disableJobs)
+					}
+					if disableErr != nil {
+						return summary, fmt.Errorf("enable stock Kline rule: %w; rollback Timer fleet failed: %v", err, disableErr)
+					}
+					return summary, fmt.Errorf("enable stock Kline rule: %w", err)
+				}
+				enabledRules, ruleErr := client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "equity")
+				if ruleErr != nil {
+					return summary, fmt.Errorf("verify stock Kline rule enabled: %w", ruleErr)
+				}
+				found := false
+				for _, rule := range enabledRules {
+					if rule.RuleID == "builtin-stock-cn-kline-1m" && rule.Enabled {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return summary, fmt.Errorf("stock Kline rule enable was not confirmed by control-plane readback")
+				}
+				if err := waitCollectorTimerFleetsAssigned(ctx, client, publishedTimerFleets); err != nil {
+					_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, "builtin-stock-cn-kline-1m")
+					return summary, fmt.Errorf("verify stock Kline assignments after rule enable: %w", err)
+				}
+				enablePatches := collectorStockCNTimerRestorePatches(allTimerNodes, *fetcherConfig)
+				enableJobs, enableErr := submitCollectorTimerRuntimeConfigs(ctx, client, enablePatches)
+				if enableErr != nil {
+					_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, "builtin-stock-cn-kline-1m")
+					return summary, fmt.Errorf("enable stock Kline Timer fleet: %w", enableErr)
+				}
+				if err := waitCollectorBatches(ctx, client, enableJobs); err != nil {
+					_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, "builtin-stock-cn-kline-1m")
+					return summary, fmt.Errorf("enable stock Kline Timer fleet: %w", err)
+				}
+				if err := waitCollectorTimerFleetsEnabled(ctx, client, publishedTimerFleets); err != nil {
+					_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, "builtin-stock-cn-kline-1m")
+					return summary, fmt.Errorf("verify stock Kline Timer fleet enabled: %w", err)
+				}
+				jobs = append(jobs, enableJobs...)
+			}
+			if hasInstrumentSnapshotFleet {
+				// The daily full-market snapshot is enabled only after the Kline
+				// activation decision is complete, avoiding a half-active release.
+				enableJobs, enableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorStockCNInstrumentTimerEnablePatches(instrumentSnapshotFleet.nodes, fetcherConfig.InstrumentSnapshotTimerCron))
+				if enableErr != nil {
+					return summary, fmt.Errorf("enable daily stock instrument snapshot Timer: %w", enableErr)
+				}
+				if err := waitCollectorBatches(ctx, client, enableJobs); err != nil {
+					return summary, fmt.Errorf("enable daily stock instrument snapshot Timer: %w", err)
+				}
+				if err := waitCollectorInstrumentTimerEnabled(ctx, client, instrumentSnapshotFleet.opts); err != nil {
+					return summary, fmt.Errorf("verify daily stock instrument snapshot Timer: %w", err)
+				}
+				jobs = append(jobs, enableJobs...)
+			}
+			if opts.EnableStockCN {
+				summary.StockCNEnabled = true
+			}
+			// Without --enable-stock-cn, Kline Timer nodes and the default rule
+			// remain disabled after publication. The independent Instrument Timer
+			// is enabled above because its daily snapshot workflow is self-contained.
 			summary.JobIDs = append([]string(nil), jobs...)
 			summary.JobID = strings.Join(summary.JobIDs, ",")
 		}
@@ -772,6 +1010,197 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	summary.TotalCount = fleetSummary.TotalCount
 	summary.Regions = append(summary.Regions, collectorPublishRegionSummary{Region: opts.Region, CloudAccountID: opts.CloudAccountID, PackageID: packageID, CLSLogsetID: opts.CLSLogsetID, CLSTopicID: opts.CLSTopicID, JobID: fleetSummary.JobID, TotalCount: fleetSummary.TotalCount})
 	return summary, nil
+}
+
+type collectorStockCNActivationSummary struct {
+	SpaceID            string   `json:"space_id"`
+	PackageVersion     string   `json:"package_version"`
+	ExpectedTimerCount int      `json:"expected_timer_count"`
+	TimerCount         int      `json:"timer_count"`
+	InstrumentNodeID   string   `json:"instrument_node_id"`
+	TimerJobIDs        []string `json:"timer_job_ids,omitempty"`
+	InstrumentJobIDs   []string `json:"instrument_job_ids,omitempty"`
+	RuleID             string   `json:"rule_id"`
+	Enabled            bool     `json:"enabled"`
+}
+
+// activateStockCNCollection resumes a fleet that was published but left
+// disabled by a failed or interrupted final canary. It rechecks package
+// identity and the independent Instrument canary before enabling the daily
+// snapshot, Kline Timers, and Kline rule. Egress probing is diagnostic only.
+func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivateOptions) (collectorStockCNActivationSummary, error) {
+	summary := collectorStockCNActivationSummary{SpaceID: opts.SpaceID, PackageVersion: opts.Version, RuleID: "builtin-stock-cn-kline-1m"}
+	if strings.TrimSpace(opts.ControlURL) == "" {
+		return summary, fmt.Errorf("--control-url is required")
+	}
+	if strings.TrimSpace(opts.File) == "" {
+		return summary, fmt.Errorf("--file is required")
+	}
+	if strings.TrimSpace(opts.Version) == "" {
+		return summary, fmt.Errorf("--version is required to prevent activating an older package")
+	}
+	fetcherConfig, err := loadCollectorSCFFetcherConfig(opts.File, opts.SpaceID)
+	if err != nil {
+		return summary, err
+	}
+	if fetcherConfig == nil || !strings.EqualFold(fetcherConfig.SpaceID, "stock_cn") {
+		return summary, fmt.Errorf("activation requires an enabled stock_cn manifest")
+	}
+	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, fetcherConfig.SpaceID)
+	enabledRules, err := client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "equity")
+	if err != nil {
+		return summary, fmt.Errorf("stock_cn activation requires a rule readback: %w", err)
+	}
+	// An interrupted activation can leave the target rule enabled after its
+	// Timer fleet rollback. Treat that state as resumable; unrelated equity
+	// rules still block activation to avoid changing another workflow.
+	for _, rule := range enabledRules {
+		if rule.RuleID != summary.RuleID {
+			return summary, fmt.Errorf("stock_cn activation requires no unrelated equity collector rules enabled; enabled rule: %s", rule.RuleID)
+		}
+	}
+
+	var fleets []collectorPublishedTimerFleet
+	var allTimerNodes []adminclient.CloudNode
+	for _, region := range fetcherConfig.Regions {
+		if !region.Enabled || region.FunctionCount <= 0 {
+			continue
+		}
+		regionOpts := collectorPublishOptions{
+			SpaceID:                 fetcherConfig.SpaceID,
+			CloudAccountID:          region.CloudAccountID,
+			Region:                  region.Region,
+			NodeType:                "scf-event",
+			BizType:                 "market_fetcher",
+			TriggerType:             "timer",
+			NodeCount:               region.FunctionCount,
+			FunctionNamePrefix:      fetcherConfig.FunctionPrefix,
+			StorageRPCGatewayTarget: fetcherConfig.StorageRPCGatewayTarget,
+			FetcherConfig:           fetcherConfig,
+		}
+		nodes, inspectErr := inspectCollectorFleet(ctx, client, regionOpts)
+		if inspectErr != nil {
+			return summary, fmt.Errorf("inspect stock Kline fleet in %s: %w", region.Region, inspectErr)
+		}
+		if len(nodes) != region.FunctionCount {
+			return summary, fmt.Errorf("stock Kline fleet in %s has %d nodes; expected %d", region.Region, len(nodes), region.FunctionCount)
+		}
+		for _, node := range nodes {
+			if !strings.Contains(node.PackageID, opts.Version) {
+				return summary, fmt.Errorf("stock Kline node %s is on package %q, expected version %q", node.NodeID, node.PackageID, opts.Version)
+			}
+		}
+		fleets = append(fleets, collectorPublishedTimerFleet{opts: regionOpts, nodes: nodes})
+		allTimerNodes = append(allTimerNodes, nodes...)
+	}
+	summary.ExpectedTimerCount = fetcherConfig.TimerFunctionCount
+	summary.TimerCount = len(allTimerNodes)
+	if len(allTimerNodes) != fetcherConfig.TimerFunctionCount {
+		return summary, fmt.Errorf("stock Kline fleet has %d nodes; expected %d", len(allTimerNodes), fetcherConfig.TimerFunctionCount)
+	}
+	instrumentOpts := collectorPublishOptions{
+		SpaceID:                 fetcherConfig.SpaceID,
+		CloudAccountID:          fetcherConfig.InstrumentSnapshotCloudAccountID,
+		Region:                  fetcherConfig.InstrumentSnapshotRegion,
+		NodeType:                "scf-event",
+		BizType:                 "market_fetcher",
+		TriggerType:             "timer",
+		InstrumentSnapshotTimer: true,
+		NodeCount:               1,
+		FunctionNamePrefix:      fetcherConfig.InstrumentSnapshotFunctionPrefix,
+		StorageRPCGatewayTarget: fetcherConfig.StorageRPCGatewayTarget,
+		FetcherConfig:           fetcherConfig,
+	}
+	instrumentNodes, err := inspectCollectorFleet(ctx, client, instrumentOpts)
+	if err != nil {
+		return summary, fmt.Errorf("inspect stock Instrument Timer: %w", err)
+	}
+	if len(instrumentNodes) != 1 {
+		return summary, fmt.Errorf("stock Instrument Timer has %d nodes; expected 1", len(instrumentNodes))
+	}
+	if !strings.Contains(instrumentNodes[0].PackageID, opts.Version) {
+		return summary, fmt.Errorf("stock Instrument Timer is on package %q, expected version %q", instrumentNodes[0].PackageID, opts.Version)
+	}
+	summary.InstrumentNodeID = instrumentNodes[0].NodeID
+	if err := runCollectorInstrumentCanaryWithExtendedControlTimeout(ctx, client, instrumentOpts, instrumentNodes[0].NodeID); err != nil {
+		return summary, fmt.Errorf("stock Instrument canary: %w", err)
+	}
+	if err := ensureStockCNKlineRule(ctx, client, fetcherConfig.SpaceID); err != nil {
+		disableJobs, disableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(append(allTimerNodes, instrumentNodes...)))
+		if disableErr == nil {
+			disableErr = waitCollectorBatches(ctx, client, disableJobs)
+		}
+		if disableErr != nil {
+			return summary, fmt.Errorf("enable stock Kline rule: %w; rollback Timer state failed: %v", err, disableErr)
+		}
+		return summary, fmt.Errorf("enable stock Kline rule: %w", err)
+	}
+	enabledRules, err = client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "equity")
+	if err != nil {
+		return summary, fmt.Errorf("verify stock Kline rule enabled: %w", err)
+	}
+	for _, rule := range enabledRules {
+		if rule.RuleID == summary.RuleID && rule.Enabled {
+			if err := waitCollectorTimerFleetsAssigned(ctx, client, fleets); err != nil {
+				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
+				return summary, fmt.Errorf("verify stock Kline assignments after rule enable: %w", err)
+			}
+			timerJobs, timerErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorStockCNTimerRestorePatches(allTimerNodes, *fetcherConfig))
+			if timerErr != nil {
+				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
+				return summary, fmt.Errorf("enable stock Kline Timer fleet: %w", timerErr)
+			}
+			if timerErr = waitCollectorBatches(ctx, client, timerJobs); timerErr != nil {
+				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
+				return summary, fmt.Errorf("enable stock Kline Timer fleet: %w", timerErr)
+			}
+			if timerErr = waitCollectorTimerFleetsEnabled(ctx, client, fleets); timerErr != nil {
+				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
+				return summary, fmt.Errorf("verify stock Kline Timer fleet: %w", timerErr)
+			}
+			summary.TimerJobIDs = append(summary.TimerJobIDs, timerJobs...)
+			instrumentJobs, instrumentErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorStockCNInstrumentTimerEnablePatches(instrumentNodes, fetcherConfig.InstrumentSnapshotTimerCron))
+			if instrumentErr != nil {
+				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
+				return summary, fmt.Errorf("enable daily stock Instrument Timer: %w", instrumentErr)
+			}
+			if instrumentErr = waitCollectorBatches(ctx, client, instrumentJobs); instrumentErr != nil {
+				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
+				return summary, fmt.Errorf("enable daily stock Instrument Timer: %w", instrumentErr)
+			}
+			if instrumentErr = waitCollectorInstrumentTimerEnabled(ctx, client, instrumentOpts); instrumentErr != nil {
+				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
+				return summary, fmt.Errorf("verify daily stock Instrument Timer: %w", instrumentErr)
+			}
+			summary.InstrumentJobIDs = append(summary.InstrumentJobIDs, instrumentJobs...)
+			summary.Enabled = true
+			return summary, nil
+		}
+	}
+	return summary, fmt.Errorf("stock Kline rule enable was not confirmed by control-plane readback")
+}
+
+func ensureStockCNKlineRule(ctx context.Context, client *adminclient.Client, spaceID string) error {
+	const ruleID = "builtin-stock-cn-kline-1m"
+	if err := client.EnableTaskRule(ctx, spaceID, ruleID); err == nil {
+		return nil
+	} else if !strings.Contains(err.Error(), "record not found") {
+		return err
+	}
+	if err := client.CreateTaskRule(ctx, spaceID, ruleID, "kline", "stock_cn_multi", "equity", "moox-cli", map[string]any{
+		"provider":          "stock_cn_multi",
+		"market_type":       "equity",
+		"symbol_source":     "dataset",
+		"symbol_dataset_id": "stock_cn_instruments",
+		"target_dataset_id": "stock_cn_kline",
+		"frequency":         "1m",
+	}); err != nil {
+		return fmt.Errorf("create missing stock Kline rule: %w", err)
+	}
+	if err := client.EnableTaskRule(ctx, spaceID, ruleID); err != nil {
+		return fmt.Errorf("enable newly created stock Kline rule: %w", err)
+	}
+	return nil
 }
 
 func ensureCollectorSpaceCloudAccounts(
@@ -1026,15 +1455,7 @@ func submitCollectorFleet(
 		return summary, fmt.Errorf("collector fleet has empty node slots")
 	}
 	if len(missing) > 0 {
-		summary.FleetMode = "expanded"
-		resp, err := api.SubmitCreateNodes(ctx, missing)
-		if err != nil {
-			return summary, err
-		}
-		summary.JobID = resp.JobID
-		summary.Operation = "create_nodes"
-		summary.TotalCount = resp.TotalCount
-		return summary, nil
+		return summary, fmt.Errorf("collector fleet is partially populated (%d existing, %d missing); refusing a mixed-version deployment", existing, len(missing))
 	}
 
 	summary.FleetMode = "updated"
@@ -1067,12 +1488,30 @@ func waitCollectorBatch(ctx context.Context, client *adminclient.Client, jobID s
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
+	const statusRequestTimeout = 30 * time.Second
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
-		change, err := client.GetNodeBatchChange(waitCtx, jobID)
-		if err != nil {
-			return err
+		var change *adminclient.NodeBatchChangeResponse
+		var lastErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			statusCtx, statusCancel := context.WithTimeout(waitCtx, statusRequestTimeout)
+			candidate, err := client.GetNodeBatchChange(statusCtx, jobID)
+			statusCancel()
+			if err == nil {
+				change = candidate
+				lastErr = nil
+				break
+			}
+			lastErr = err
+			select {
+			case <-waitCtx.Done():
+				return fmt.Errorf("wait batch %s: %w", jobID, waitCtx.Err())
+			case <-time.After(time.Second):
+			}
+		}
+		if lastErr != nil {
+			return fmt.Errorf("GetNodeBatchChange for batch %s: %w", jobID, lastErr)
 		}
 		if change == nil || change.Job == nil {
 			return fmt.Errorf("empty batch status")
@@ -1092,57 +1531,13 @@ func waitCollectorBatch(ctx context.Context, client *adminclient.Client, jobID s
 }
 
 // runCollectorSCFCanary exercises the same bounded market_fetch path used by
-// the scheduler. The market_data variant selects its canonical manifest and
-// sample symbol; the crypto variant retains its completion-event checks.
+// the scheduler. Crypto uses a realtime request; stock_cn uses a bounded
+// historical request that stays inside the active providers' verified page
+// capability. A successful response proves credentials, CA, EventBus ACL/ACK
+// and Storage auth together.
 func runCollectorSCFCanary(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, nodeID string) error {
 	batchID := fmt.Sprintf("deploy-canary-%d", time.Now().UnixNano())
-	envelope := map[string]any{
-		"action":                     "market_fetch",
-		"storage_rpc_gateway_target": opts.StorageRPCGatewayTarget,
-	}
-	if strings.EqualFold(strings.TrimSpace(opts.Entrypoint), "market_data") {
-		fetcher := opts.FetcherConfig
-		if fetcher == nil {
-			return fmt.Errorf("market_data canary requires fetcher configuration")
-		}
-		canary, err := marketDataCanaryRequest(fetcher)
-		if err != nil {
-			return err
-		}
-		envelope["data"] = map[string]any{
-			"space_id": fetcher.SpaceID, "dataset_id": canary.DatasetID,
-			"market_id": canary.MarketID, "instrument_type": canary.InstrumentType,
-			"provider_id": canary.ProviderID, "source_id": canary.SourceID, "source_event_id": batchID,
-			"frequency": canary.Frequency, "limit": canary.Limit,
-			"items": []map[string]any{{"subject_id": canary.SubjectID, "provider_symbol": canary.ProviderSymbol}},
-		}
-	} else {
-		envelope["data"] = map[string]any{
-			"batch_id": batchID,
-			// Completion events are validated against the scheduler's batch
-			// identity. Keep a stable schedule fence on the canary as well;
-			// omitting it makes the canary fail after Storage has already
-			// succeeded, defeating the deployment gate.
-			"schedule_id": "deploy-canary-schedule",
-			"batch_kind":  "realtime",
-			"space_id":    opts.SpaceID,
-			"dataset_id":  "binance_spot_kline_1m",
-			"frequency":   "1m",
-			"provider":    "binance",
-			"market_type": "spot",
-			"region":      opts.Region,
-			"node_id":     nodeID,
-			"items": []map[string]any{{
-				"subject_id": "BTC-USDT", "symbol": "BTCUSDT", "provider": "binance", "market_type": "spot",
-				// The exchange response includes the currently-open candle. A
-				// one-bar request therefore has no closed bar to persist; ask for
-				// two so the canary validates an actual write rather than a false
-				// empty-data failure at the minute boundary.
-				"data_type": "kline", "dataset_id": "binance_spot_kline_1m", "frequency": "1m", "bar_limit": 2,
-			}},
-		}
-	}
-	response, err := client.InvokeFunction(ctx, nodeID, envelope)
+	response, err := client.InvokeFunction(ctx, nodeID, collectorSCFCanaryEvent(opts, nodeID, batchID))
 	if err != nil {
 		return err
 	}
@@ -1150,83 +1545,441 @@ func runCollectorSCFCanary(ctx context.Context, client *adminclient.Client, opts
 		raw, _ := json.Marshal(response)
 		return fmt.Errorf("market_fetch canary returned unsuccessful response: %s", raw)
 	}
-	rowsWritten, ok := response["rows_written"].(float64)
-	if !ok || rowsWritten < 1 {
-		raw, _ := json.Marshal(response)
-		return fmt.Errorf("market_data canary returned no persisted rows: %s", raw)
+	return nil
+}
+
+func runCollectorInstrumentCanary(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, nodeID string) error {
+	snapshotAt := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339Nano)
+	// The deployment gate uses one full-snapshot shard so the public-feed and
+	// Storage work stays within one SCF invocation. Production scheduling still
+	// uses the fixed 32-shard fan-out, whose staging/activation fence is covered
+	// by the collector and Storage tests.
+	canaryCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	shards := make(chan int)
+	errCh := make(chan error, 1)
+	var workers sync.WaitGroup
+	for worker := 0; worker < stockInstrumentCanaryWorkerCount; worker++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for shardIndex := range shards {
+				if err := runCollectorInstrumentCanaryShard(canaryCtx, client, opts, nodeID, shardIndex, snapshotAt); err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					cancel()
+					return
+				}
+			}
+		}()
+	}
+	for shardIndex := 0; shardIndex < stockInstrumentCanaryShardCount; shardIndex++ {
+		select {
+		case shards <- shardIndex:
+		case <-canaryCtx.Done():
+			break
+		}
+		if canaryCtx.Err() != nil {
+			break
+		}
+	}
+	close(shards)
+	workers.Wait()
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}
+
+const (
+	collectorInstrumentCanaryControlTimeout = 7 * time.Minute
+	// CloudNode executes SCF trigger/environment updates in a bounded worker
+	// pool. A 170-node stock fleet can legitimately need more than ten minutes
+	// for assignment metadata to reach every node.
+	collectorStockCNFleetWaitTimeout = 30 * time.Minute
+)
+
+func runCollectorInstrumentCanaryWithExtendedControlTimeout(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, nodeID string) error {
+	if client == nil {
+		return fmt.Errorf("control client is required")
+	}
+	previous := client.HTTPClient
+	client.HTTPClient = &http.Client{Timeout: collectorInstrumentCanaryControlTimeout}
+	defer func() { client.HTTPClient = previous }()
+	return runCollectorInstrumentCanary(ctx, client, opts, nodeID)
+}
+
+func runCollectorInstrumentCanaryShard(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, nodeID string, shardIndex int, snapshotAt string) error {
+	var lastErr error
+	for attempt := 1; attempt <= stockInstrumentCanaryMaxAttempts; attempt++ {
+		batchID := fmt.Sprintf("instrument-deploy-canary-%d-%d", time.Now().UnixNano(), shardIndex)
+		response, err := client.InvokeFunction(ctx, nodeID, collectorInstrumentCanaryEvent(opts, nodeID, batchID, shardIndex, stockInstrumentCanaryShardCount, snapshotAt))
+		if err == nil {
+			if success, ok := response["success"].(bool); ok && success {
+				return nil
+			}
+			raw, _ := json.Marshal(response)
+			lastErr = fmt.Errorf("returned unsuccessful response: %s", raw)
+		} else {
+			lastErr = err
+		}
+		if attempt < stockInstrumentCanaryMaxAttempts {
+			timer := time.NewTimer(2 * time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	return fmt.Errorf("instrument_snapshot shard %d/%d failed after %d attempts: %w", shardIndex+1, stockInstrumentCanaryShardCount, stockInstrumentCanaryMaxAttempts, lastErr)
+}
+
+const (
+	// A full-snapshot canary keeps one SCF invocation within the public-feed
+	// budget. The stock production Instrument Timer is also one full-snapshot
+	// invocation; the shard protocol remains for the shared pipeline and legacy
+	// crypto scheduling, while this canary proves provider merge and activation.
+	stockInstrumentCanaryShardCount  = 1
+	stockInstrumentCanaryMaxAttempts = 5
+	// Each shard invocation fetches the same complete snapshot before taking
+	// its deterministic slice. Keep the gate bounded without exceeding the
+	// source's per-egress-IP request policy when SCF scales the invoke node.
+	stockInstrumentCanaryWorkerCount = 4
+)
+
+func collectorInstrumentCanaryEvent(opts collectorPublishOptions, nodeID, batchID string, shardIndex, shardCount int, snapshotAt string) map[string]any {
+	spaceID := firstNonEmpty(opts.SpaceID, opts.collectorPackageOptions.SpaceID)
+	return map[string]any{
+		"action":                     "instrument_snapshot",
+		"request_id":                 batchID,
+		"storage_rpc_gateway_target": opts.StorageRPCGatewayTarget,
+		"data": map[string]any{
+			"batch_id":    batchID,
+			"schedule_id": "deploy-canary-schedule",
+			"batch_kind":  "instrument_snapshot",
+			"space_id":    spaceID,
+			"dataset_id":  "stock_cn_instruments",
+			"frequency":   "1d",
+			"provider":    "stock_cn_multi",
+			"market_type": "equity",
+			"region":      opts.Region,
+			"node_id":     nodeID,
+			"request_id":  batchID,
+			"items": []map[string]any{{
+				"subject_id":           "stock_cn_instruments",
+				"provider":             "stock_cn_multi",
+				"market_type":          "equity",
+				"data_type":            "instrument",
+				"dataset_id":           "stock_cn_instruments",
+				"snapshot_at":          snapshotAt,
+				"snapshot_shard_index": shardIndex,
+				"snapshot_shard_count": shardCount,
+			}},
+		},
+	}
+}
+
+func collectorTimerRestorePatches(nodes []adminclient.CloudNode) []collectorRuntimeConfigPatch {
+	patches := make([]collectorRuntimeConfigPatch, 0, len(nodes))
+	for _, node := range nodes {
+		enabled, ok := collectorMetadataBool(node.Metadata, "timer_enabled")
+		if !ok || !enabled {
+			continue
+		}
+		cron := firstNonEmpty(metadataStringValue(node.Metadata, "timer_cron"), metadataStringValue(node.Metadata, "timer_actual_cron"))
+		if cron == "" {
+			continue
+		}
+		patches = append(patches, collectorRuntimeConfigPatch{NodeID: node.NodeID, TimerEnabled: true, TimerCron: cron})
+	}
+	return patches
+}
+
+// collectorStockCNTimerRestorePatches returns an enable patch for every
+// published stock Timer. New SCF nodes do not have timer metadata yet, so use
+// the same stable region/slot ordering as the Collector reconciler to give
+// them a deterministic cron until the first reconciliation writes the exact
+// assignment.
+func collectorStockCNTimerRestorePatches(nodes []adminclient.CloudNode, configs ...setupconfig.SCFFetcherSpace) []collectorRuntimeConfigPatch {
+	startSecond := setupconfig.DefaultStockCNStaggerStartSecond
+	windowSeconds := setupconfig.DefaultStockCNStaggerWindowSeconds
+	if len(configs) > 0 {
+		if configs[0].StaggerStartSecond != 0 || configs[0].StaggerWindowSeconds != 0 {
+			startSecond = configs[0].StaggerStartSecond
+			windowSeconds = configs[0].StaggerWindowSeconds
+		}
+	}
+	if windowSeconds <= 0 {
+		windowSeconds = setupconfig.DefaultStockCNStaggerWindowSeconds
+	}
+	ordered := append([]adminclient.CloudNode(nil), nodes...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].Region != ordered[j].Region {
+			return ordered[i].Region < ordered[j].Region
+		}
+		left, leftOK := metadataIntValue(ordered[i].Metadata, "index")
+		right, rightOK := metadataIntValue(ordered[j].Metadata, "index")
+		if leftOK && rightOK && left != right {
+			return left < right
+		}
+		return ordered[i].FunctionName < ordered[j].FunctionName
+	})
+	patches := make([]collectorRuntimeConfigPatch, 0, len(ordered))
+	for index, node := range ordered {
+		if strings.TrimSpace(node.NodeID) == "" {
+			continue
+		}
+		cron := fmt.Sprintf("%d * * * * * *", startSecond+index%windowSeconds)
+		patches = append(patches, collectorRuntimeConfigPatch{NodeID: node.NodeID, TimerEnabled: true, TimerCron: cron})
+	}
+	return patches
+}
+
+func collectorTimerDisablePatches(nodes []adminclient.CloudNode) []collectorRuntimeConfigPatch {
+	patches := make([]collectorRuntimeConfigPatch, 0, len(nodes))
+	for _, node := range nodes {
+		if strings.TrimSpace(node.NodeID) == "" {
+			continue
+		}
+		cron := firstNonEmpty(metadataStringValue(node.Metadata, "timer_cron"), metadataStringValue(node.Metadata, "timer_actual_cron"), "0 * * * * * *")
+		patches = append(patches, collectorRuntimeConfigPatch{NodeID: node.NodeID, TimerEnabled: false, TimerCron: cron})
+	}
+	return patches
+}
+
+func collectorStockCNInstrumentTimerEnablePatches(nodes []adminclient.CloudNode, cron string) []collectorRuntimeConfigPatch {
+	patches := make([]collectorRuntimeConfigPatch, 0, len(nodes))
+	for _, node := range nodes {
+		if strings.TrimSpace(node.NodeID) == "" || !isCollectorInstrumentSnapshotNode(node) {
+			continue
+		}
+		patches = append(patches, collectorRuntimeConfigPatch{NodeID: node.NodeID, TimerEnabled: true, TimerCron: cron})
+	}
+	return patches
+}
+
+func waitCollectorInstrumentTimerEnabled(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		nodes, err := inspectCollectorFleet(waitCtx, client, opts)
+		if err != nil {
+			return err
+		}
+		for _, node := range nodes {
+			if isCollectorInstrumentSnapshotNode(node) {
+				enabled, ok := collectorMetadataBool(node.Metadata, "timer_actual_enabled")
+				if ok && enabled {
+					return nil
+				}
+			}
+		}
+		select {
+		case <-waitCtx.Done():
+			return waitCtx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitCollectorTimerFleetsEnabled(ctx context.Context, client *adminclient.Client, fleets []collectorPublishedTimerFleet) error {
+	waitDuration := 10 * time.Minute
+	if collectorTimerFleetsAreStockCN(fleets) {
+		waitDuration = collectorStockCNFleetWaitTimeout
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, waitDuration)
+	defer cancel()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		ready := true
+		for _, fleet := range fleets {
+			nodes, err := inspectCollectorFleet(waitCtx, client, fleet.opts)
+			if err != nil {
+				return err
+			}
+			if len(nodes) != fleet.opts.NodeCount {
+				ready = false
+				break
+			}
+			for _, node := range nodes {
+				enabled, hasEnabled := collectorMetadataBool(node.Metadata, "timer_actual_enabled")
+				if !hasEnabled || !enabled {
+					ready = false
+					break
+				}
+			}
+			if !ready {
+				break
+			}
+		}
+		if ready {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			return waitCtx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitCollectorTimerFleetsAssigned(ctx context.Context, client *adminclient.Client, fleets []collectorPublishedTimerFleet) error {
+	waitDuration := 10 * time.Minute
+	if collectorTimerFleetsAreStockCN(fleets) {
+		waitDuration = collectorStockCNFleetWaitTimeout
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, waitDuration)
+	defer cancel()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		ready := true
+		for _, fleet := range fleets {
+			nodes, err := inspectCollectorFleet(waitCtx, client, fleet.opts)
+			if err != nil {
+				return err
+			}
+			if len(nodes) != fleet.opts.NodeCount {
+				ready = false
+				break
+			}
+			for _, node := range nodes {
+				assignmentCount, hasAssignment := metadataIntValue(node.Metadata, "assignment_count")
+				if !hasAssignment || assignmentCount <= 0 {
+					ready = false
+					break
+				}
+			}
+			if !ready {
+				break
+			}
+		}
+		if ready {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			return waitCtx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func collectorTimerFleetsAreStockCN(fleets []collectorPublishedTimerFleet) bool {
+	return len(fleets) > 0 && strings.EqualFold(strings.TrimSpace(fleets[0].opts.SpaceID), "stock_cn")
+}
+
+func collectorMetadataBool(metadata map[string]any, key string) (bool, bool) {
+	value, ok := metadata[key]
+	if !ok {
+		return false, false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+		return parsed, err == nil
+	default:
+		return false, false
+	}
+}
+
+func submitCollectorTimerRuntimeConfigs(ctx context.Context, client *adminclient.Client, patches []collectorRuntimeConfigPatch) ([]string, error) {
+	if len(patches) == 0 {
+		return nil, nil
+	}
+	jobs := make([]string, 0, (len(patches)+collectorRuntimeConfigBatchSize-1)/collectorRuntimeConfigBatchSize)
+	for start := 0; start < len(patches); start += collectorRuntimeConfigBatchSize {
+		end := min(start+collectorRuntimeConfigBatchSize, len(patches))
+		var response struct {
+			RetInfo *struct {
+				Code int    `json:"code"`
+				Msg  string `json:"msg"`
+			} `json:"ret_info"`
+			JobID string `json:"job_id"`
+		}
+		if err := client.CallJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs", map[string]any{"nodes": patches[start:end]}, &response); err != nil {
+			return nil, err
+		}
+		if response.RetInfo == nil || response.RetInfo.Code != 0 && response.RetInfo.Code != 200 {
+			if response.RetInfo == nil {
+				return nil, fmt.Errorf("SubmitUpdateNodeRuntimeConfigs returned no ret_info")
+			}
+			return nil, fmt.Errorf("SubmitUpdateNodeRuntimeConfigs: code %d: %s", response.RetInfo.Code, response.RetInfo.Msg)
+		}
+		if strings.TrimSpace(response.JobID) == "" {
+			return nil, fmt.Errorf("SubmitUpdateNodeRuntimeConfigs returned no job_id")
+		}
+		jobs = append(jobs, response.JobID)
+	}
+	return jobs, nil
+}
+
+func waitCollectorBatches(ctx context.Context, client *adminclient.Client, jobIDs []string) error {
+	for _, jobID := range jobIDs {
+		if err := waitCollectorBatch(ctx, client, jobID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-type marketDataCanary struct {
-	MarketID       string
-	InstrumentType string
-	DatasetID      string
-	ProviderID     string
-	SourceID       string
-	Frequency      string
-	SubjectID      string
-	ProviderSymbol string
-	Limit          int
-}
-
-func marketDataCanaryRequest(fetcher *setupconfig.SCFFetcherSpace) (marketDataCanary, error) {
-	if fetcher == nil {
-		return marketDataCanary{}, fmt.Errorf("market_data canary requires fetcher configuration")
+func collectorSCFCanaryEvent(opts collectorPublishOptions, nodeID, batchID string) map[string]any {
+	spaceID := firstNonEmpty(opts.SpaceID, opts.collectorPackageOptions.SpaceID)
+	datasetID, provider, marketType := "binance_spot_kline_1m", "binance", "spot"
+	subjectID, symbol, barLimit := "BTC-USDT", "BTCUSDT", 2
+	batchKind := "realtime"
+	startTime := ""
+	if strings.EqualFold(spaceID, "stock_cn") {
+		datasetID, provider, marketType = "stock_cn_kline", "stock_cn_multi", "equity"
+		subjectID, symbol, barLimit = "600000.XSHG", "sh600000", 1000
+		batchKind = "backfill"
+		// Historical requests must carry an explicit bounded start. Keep a
+		// small margin below the providers' 24-hour capability because the
+		// event is created before the SCF invocation reaches the feed guard.
+		// The stock runtime marks this item as a canary and replaces the
+		// placeholder with the latest closed calendar session, so a weekend or
+		// holiday can still replay a real historical page safely.
+		startTime = time.Now().UTC().Add(-23 * time.Hour).Truncate(time.Minute).Format(time.RFC3339Nano)
 	}
-	marketID := strings.ToLower(strings.TrimSpace(fetcher.MarketID))
-	instrumentType := strings.ToLower(strings.TrimSpace(fetcher.InstrumentType))
-	catalog, err := marketmanifest.DefaultCatalog()
-	if err != nil {
-		return marketDataCanary{}, fmt.Errorf("load market catalog for canary: %w", err)
-	}
-	manifest, ok := catalog.Lookup(marketID, instrumentType)
-	if !ok || !manifest.Enabled {
-		return marketDataCanary{}, fmt.Errorf("market_data canary has no enabled manifest for %s/%s", marketID, instrumentType)
-	}
-	providerID := strings.ToLower(strings.TrimSpace(fetcher.ProviderID))
-	sourceID := strings.ToLower(strings.TrimSpace(fetcher.SourceID))
-	if providerID == "" || sourceID == "" {
-		return marketDataCanary{}, fmt.Errorf("market_data canary provider_id and source_id are required")
-	}
-	frequency := "1d"
-	declared := false
-	for _, source := range manifest.Sources {
-		if !strings.EqualFold(strings.TrimSpace(source.ProviderID), providerID) || !strings.EqualFold(strings.TrimSpace(source.SourceID), sourceID) {
-			continue
-		}
-		for _, supported := range source.Frequencies {
-			if strings.EqualFold(strings.TrimSpace(supported), frequency) {
-				declared = true
-				break
-			}
-		}
-		break
-	}
-	if !declared {
-		return marketDataCanary{}, fmt.Errorf("market_data canary source %s/%s does not declare %s for %s/%s", providerID, sourceID, frequency, marketID, instrumentType)
-	}
-	subjectID, providerSymbol, err := marketDataCanarySymbol(marketID, instrumentType)
-	if err != nil {
-		return marketDataCanary{}, err
-	}
-	return marketDataCanary{MarketID: marketID, InstrumentType: instrumentType, DatasetID: manifest.DatasetID, ProviderID: providerID, SourceID: sourceID, Frequency: frequency, SubjectID: subjectID, ProviderSymbol: providerSymbol, Limit: 2}, nil
-}
-
-func marketDataCanarySymbol(marketID, instrumentType string) (string, string, error) {
-	switch marketID + "/" + instrumentType {
-	case "stock_cn/equity":
-		return "SH.600000", "SH.600000", nil
-	case "stock_cn/index":
-		return "SH.000001", "SH.000001", nil
-	case "stock_cn/convertible_bond":
-		return "SZ.123001", "SZ.123001", nil
-	case "stock_hk/equity":
-		return "HK.00700", "HK.00700", nil
-	case "stock_us/equity":
-		return "US.AAPL", "US.AAPL", nil
-	default:
-		return "", "", fmt.Errorf("market_data canary has no sample symbol for %s/%s", marketID, instrumentType)
+	return map[string]any{
+		"action":                     "market_fetch",
+		"storage_rpc_gateway_target": opts.StorageRPCGatewayTarget,
+		"data": map[string]any{
+			"batch_id": batchID,
+			// Completion events are validated against the scheduler's batch
+			// identity. Keep a stable schedule fence on the canary as well;
+			// omitting it makes the canary fail after Storage has already
+			// succeeded, defeating the deployment gate.
+			"schedule_id": "deploy-canary-schedule",
+			"batch_kind":  batchKind,
+			"space_id":    spaceID,
+			"dataset_id":  datasetID,
+			"frequency":   "1m",
+			"provider":    provider,
+			"market_type": marketType,
+			"region":      opts.Region,
+			"node_id":     nodeID,
+			"items": []map[string]any{{
+				"subject_id": subjectID, "symbol": symbol, "provider": provider, "market_type": marketType,
+				// The exchange response includes the currently-open candle. A
+				// one-bar request therefore has no closed bar to persist; request
+				// enough bars for the selected market to validate an actual write.
+				"data_type": "kline", "dataset_id": datasetID, "frequency": "1m", "bar_limit": barLimit, "start_time": startTime, "canary": strings.EqualFold(spaceID, "stock_cn"),
+			}},
+		},
 	}
 }
 
@@ -1400,6 +2153,8 @@ type collectorProbeResult struct {
 	NodeID          string `json:"node_id"`
 	Region          string `json:"region"`
 	FunctionName    string `json:"function_name"`
+	GroupID         int    `json:"group_id,omitempty"`
+	GroupCount      int    `json:"group_count,omitempty"`
 	OutboundIP      string `json:"outbound_ip,omitempty"`
 	OutboundIPError string `json:"outbound_ip_error,omitempty"`
 	ProviderStatus  int    `json:"provider_status,omitempty"`
@@ -1411,6 +2166,9 @@ type collectorProbeResult struct {
 type collectorProbeReport struct {
 	Results             []collectorProbeResult `json:"results"`
 	DistinctOutboundIPs []string               `json:"distinct_outbound_ips"`
+	ExpectedCount       int                    `json:"expected_count,omitempty"`
+	EligibleCount       int                    `json:"eligible_count,omitempty"`
+	DistinctCount       int                    `json:"distinct_count,omitempty"`
 }
 
 func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*collectorProbeReport, error) {
@@ -1427,17 +2185,27 @@ func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*col
 	if err != nil {
 		return nil, err
 	}
-	eligible := make([]adminclient.CloudNode, 0, len(nodes))
-	for _, node := range nodes {
-		if !collectorProbeNodeEligible(node) {
-			continue
+	stockCN := strings.EqualFold(spaceID, "stock_cn")
+	var fetcherConfig *setupconfig.SCFFetcherSpace
+	if stockCN && strings.TrimSpace(opts.File) != "" {
+		fetcherConfig, err = loadCollectorSCFFetcherConfig(opts.File, spaceID)
+		if err != nil {
+			return nil, err
 		}
-		eligible = append(eligible, node)
 	}
+	expectedCount, err := resolveCollectorProbeExpectedCount(spaceID, opts.Region, fetcherConfig)
+	if err != nil {
+		return nil, err
+	}
+	eligible := selectCollectorProbeNodes(nodes, stockCN)
 	if len(eligible) == 0 {
 		return nil, fmt.Errorf("no active market_fetcher SCF nodes are available for egress probe")
 	}
-	report := &collectorProbeReport{Results: make([]collectorProbeResult, len(eligible))}
+	return probeCollectorEgressNodes(ctx, client, eligible, stockCN, expectedCount)
+}
+
+func probeCollectorEgressNodes(ctx context.Context, client *adminclient.Client, eligible []adminclient.CloudNode, stockCN bool, expectedCount int) (*collectorProbeReport, error) {
+	report := &collectorProbeReport{Results: make([]collectorProbeResult, len(eligible)), ExpectedCount: expectedCount, EligibleCount: len(eligible)}
 	sem := make(chan struct{}, 5)
 	var wg sync.WaitGroup
 	var failed atomic.Int32
@@ -1455,8 +2223,14 @@ func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*col
 			}
 			defer func() { <-sem }()
 			started := time.Now()
-			result := collectorProbeResult{NodeID: node.NodeID, Region: node.Region, FunctionName: node.FunctionName, CheckedAt: started.UTC().Format(time.RFC3339Nano)}
-			response, invokeErr := client.InvokeFunction(ctx, node.NodeID, map[string]any{"action": "egress_probe", "data": map[string]any{"provider": "binance", "market_type": "spot", "node_id": node.NodeID}})
+			groupID, _ := metadataIntValue(node.Metadata, "group_id")
+			groupCount, _ := metadataIntValue(node.Metadata, "group_count")
+			result := collectorProbeResult{NodeID: node.NodeID, Region: node.Region, FunctionName: node.FunctionName, GroupID: groupID, GroupCount: groupCount, CheckedAt: started.UTC().Format(time.RFC3339Nano)}
+			provider, marketType := "binance", "spot"
+			if stockCN {
+				provider, marketType = "sina", "stock_cn"
+			}
+			response, invokeErr := client.InvokeFunction(ctx, node.NodeID, map[string]any{"action": "egress_probe", "data": map[string]any{"provider": provider, "market_type": marketType, "node_id": node.NodeID}})
 			result.LatencyMS = time.Since(started).Milliseconds()
 			if invokeErr != nil {
 				result.Error = invokeErr.Error()
@@ -1486,10 +2260,78 @@ func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*col
 		report.DistinctOutboundIPs = append(report.DistinctOutboundIPs, ip)
 	}
 	sort.Strings(report.DistinctOutboundIPs)
+	report.DistinctCount = len(report.DistinctOutboundIPs)
+	if stockCN {
+		publishCollectorEgressMetric(ctx, report)
+	}
+	if stockCN {
+		// Stock egress is observational only. Provider/Kline canaries and
+		// Storage readback are the release checks; IP distribution is reported
+		// for diagnosis but never blocks publication or activation.
+		return report, nil
+	}
 	if failed.Load() > 0 {
 		return report, fmt.Errorf("%d SCF egress probe(s) failed", failed.Load())
 	}
 	return report, nil
+}
+
+func resolveCollectorProbeExpectedCount(spaceID, region string, cfg *setupconfig.SCFFetcherSpace) (int, error) {
+	if !strings.EqualFold(strings.TrimSpace(spaceID), "stock_cn") {
+		return 0, nil
+	}
+	region = strings.TrimSpace(region)
+	if cfg == nil {
+		if region != "" {
+			return 0, nil
+		}
+		return setupconfig.DefaultStockCNMarketTimerFunctionCount, nil
+	}
+	if region == "" {
+		return cfg.TimerFunctionCount, nil
+	}
+	for _, item := range cfg.Regions {
+		if item.Enabled && item.Region == region {
+			return item.FunctionCount, nil
+		}
+	}
+	return 0, fmt.Errorf("stock_cn SCF config has no enabled region %q", region)
+}
+
+func selectCollectorProbeNodes(nodes []adminclient.CloudNode, timerOnly bool) []adminclient.CloudNode {
+	eligible := make([]adminclient.CloudNode, 0, len(nodes))
+	for _, node := range nodes {
+		if !collectorProbeNodeEligible(node) {
+			continue
+		}
+		if timerOnly && !strings.EqualFold(strings.TrimSpace(node.TriggerType), "timer") {
+			continue
+		}
+		if timerOnly && isCollectorInstrumentSnapshotNode(node) {
+			continue
+		}
+		eligible = append(eligible, node)
+	}
+	return eligible
+}
+
+func selectCollectorInstrumentSnapshotProbeNodes(nodes []adminclient.CloudNode) []adminclient.CloudNode {
+	eligible := make([]adminclient.CloudNode, 0, len(nodes))
+	for _, node := range nodes {
+		if !collectorProbeNodeEligible(node) || !strings.EqualFold(strings.TrimSpace(node.TriggerType), "timer") || !isCollectorInstrumentSnapshotNode(node) {
+			continue
+		}
+		eligible = append(eligible, node)
+	}
+	return eligible
+}
+
+func isCollectorInstrumentSnapshotNode(node adminclient.CloudNode) bool {
+	if strings.EqualFold(strings.TrimSpace(fmt.Sprint(node.Metadata["function_mode"])), "instrument_snapshot") {
+		return true
+	}
+	name := strings.ToLower(strings.TrimSpace(node.FunctionName))
+	return strings.Contains(name, "-instrument-") || strings.HasSuffix(name, "-instrument")
 }
 
 func collectorProbeNodeEligible(node adminclient.CloudNode) bool {
@@ -1505,6 +2347,51 @@ func collectorProbeNodeEligible(node adminclient.CloudNode) bool {
 	default:
 		return false
 	}
+}
+
+// publishCollectorEgressMetric makes the one-time diagnostic visible to the
+// same Monitor stream as recurring SCF feed metrics. It is best effort.
+func publishCollectorEgressMetric(parent context.Context, gate *collectorProbeReport) {
+	if gate == nil || !metricsEventBusConfigured() {
+		return
+	}
+	registry := prometheus.NewRegistry()
+	functions := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_egress_functions", Help: "Expected, returned, non-empty-IP, and distinct-IP function counts."}, []string{"market_id", "route_id", "kind"})
+	if err := registry.Register(functions); err != nil {
+		return
+	}
+	nonEmpty := 0
+	for _, item := range gate.Results {
+		if strings.TrimSpace(item.OutboundIP) != "" {
+			nonEmpty++
+		}
+	}
+	values := map[string]int{"expected": gate.ExpectedCount, "result": len(gate.Results), "non_empty_ip": nonEmpty, "distinct_ip": gate.DistinctCount}
+	for kind, value := range values {
+		functions.WithLabelValues("stock_cn", "stock_cn_kline_1m_v1", kind).Set(float64(max(value, 0)))
+	}
+	cfg := metricsreport.DefaultConfig("collector", "moox_collector_cli")
+	cfg.SpaceID = "stock_cn"
+	cfg.InstanceID = firstNonEmpty(os.Getenv("MOOX_INSTANCE_ID"), "moox-cli")
+	cfg.NodeID = firstNonEmpty(os.Getenv("MOOX_NODE_ID"), "moox-cli")
+	cfg.BootID = "cli-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 10)
+	reporter, err := metricsreport.NewHandlerWithRegistry(cfg, registry)
+	if err != nil {
+		return
+	}
+	timeout := 750 * time.Millisecond
+	if raw := strings.TrimSpace(os.Getenv("MOOX_METRICS_REPORT_TIMEOUT_MS")); raw != "" {
+		if value, parseErr := strconv.Atoi(raw); parseErr == nil && value > 0 {
+			timeout = time.Duration(value) * time.Millisecond
+		}
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	_ = reporter.Handle(ctx)
+}
+
+func metricsEventBusConfigured() bool {
+	return firstNonEmpty(os.Getenv("MOOX_METRICS_EVENTBUS_URL"), os.Getenv("MOOX_EVENTBUS_URL"), os.Getenv("NATS_URL")) != ""
 }
 
 // egressProbeResponseData accepts both the normal JSON Struct response and
@@ -1567,22 +2454,44 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if fetcher == nil {
 		fetcher = defaultCollectorSCFFetcherSpace()
 	}
+	triggerType := defaultFlag(opts.TriggerType, "timer")
+	effectiveTimeoutSeconds := defaultInt(fetcher.TimeoutSeconds, 15)
+	spaceID := firstNonEmpty(opts.SpaceID, fetcher.SpaceID, opts.collectorPackageOptions.SpaceID)
+	if strings.EqualFold(spaceID, "stock_cn") && opts.InstrumentSnapshotTimer {
+		effectiveTimeoutSeconds = defaultInt(fetcher.InstrumentSnapshotTimeoutSeconds, setupconfig.DefaultStockCNInstrumentSnapshotTimeoutSeconds)
+	} else if strings.EqualFold(spaceID, "stock_cn") && strings.EqualFold(triggerType, "invoke") {
+		effectiveTimeoutSeconds = defaultInt(fetcher.InstrumentInvokeTimeoutSeconds, setupconfig.DefaultStockCNInstrumentInvokeTimeoutSeconds)
+	}
+	effectiveMemorySize := defaultInt(fetcher.MemorySize, 64)
+	if strings.EqualFold(spaceID, "stock_cn") && opts.InstrumentSnapshotTimer {
+		effectiveMemorySize = defaultInt(fetcher.InstrumentSnapshotMemorySize, setupconfig.DefaultStockCNInstrumentSnapshotMemorySize)
+	}
 	if strings.TrimSpace(config["timeout"]) == "" {
-		config["timeout"] = strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 15))
+		config["timeout"] = strconv.Itoa(effectiveTimeoutSeconds)
 	}
 	if strings.TrimSpace(config["memory_size"]) == "" {
-		config["memory_size"] = strconv.Itoa(defaultInt(fetcher.MemorySize, 64))
+		config["memory_size"] = strconv.Itoa(effectiveMemorySize)
 	}
 	if strings.TrimSpace(config["storage_timeout_ms"]) == "" {
 		config["storage_timeout_ms"] = strconv.Itoa(defaultInt(fetcher.StorageTimeoutMS, 5000))
 	}
-	if collectorConfigInt(config, "memory_size", 64) != 64 {
-		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher memory_size is fixed at 64MB")
+	if strings.TrimSpace(config["max_instance_concurrency"]) == "" {
+		config["max_instance_concurrency"] = "1"
 	}
-	if collectorConfigInt(config, "timeout", 15) != 15 {
-		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher timeout is fixed at 15 seconds")
+	if collectorConfigInt(config, "memory_size", effectiveMemorySize) != effectiveMemorySize {
+		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher memory_size is fixed at %dMB for %s", effectiveMemorySize, firstNonEmpty(spaceID, "unknown"))
 	}
-	if err := validateCollectorRuntimeConfig(config, fetcher, strings.EqualFold(defaultFlag(opts.TriggerType, "timer"), "timer")); err != nil {
+	if collectorConfigInt(config, "timeout", effectiveTimeoutSeconds) != effectiveTimeoutSeconds {
+		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher timeout is fixed at %d seconds for %s %s", effectiveTimeoutSeconds, spaceID, triggerType)
+	}
+	maxInstanceConcurrency, concurrencyErr := collectorRuntimeConfigInt(config, "max_instance_concurrency", 1, 1)
+	if concurrencyErr != nil {
+		return adminclient.NodeCreateItem{}, concurrencyErr
+	}
+	if maxInstanceConcurrency != 1 {
+		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher max_instance_concurrency is fixed at 1")
+	}
+	if err := validateCollectorRuntimeConfig(config, fetcher, strings.EqualFold(triggerType, "timer"), effectiveTimeoutSeconds); err != nil {
 		return adminclient.NodeCreateItem{}, err
 	}
 	for configKey, environmentKey := range map[string]string{
@@ -1604,6 +2513,10 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	effectiveInt := func(key string, fallback int) int {
 		return collectorConfigInt(config, key, fallback)
 	}
+	functionMode := "kline"
+	if opts.InstrumentSnapshotTimer {
+		functionMode = "instrument_snapshot"
+	}
 	return adminclient.NodeCreateItem{
 		CloudAccountID: opts.CloudAccountID,
 		NodeType:       defaultFlag(opts.NodeType, "scf-event"),
@@ -1616,17 +2529,19 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 		Region:         opts.Region,
 		PackageID:      packageID,
 		Metadata: map[string]any{
-			"function_name_prefix":  packageName,
-			"biz_type":              bizType,
-			"memory_size":           effectiveInt("memory_size", defaultInt(fetcher.MemorySize, 64)),
-			"timeout_seconds":       effectiveInt("timeout", defaultInt(fetcher.TimeoutSeconds, 15)),
-			"max_inflight_requests": effectiveInt("max_inflight_requests", defaultInt(fetcher.MaxInflightRequests, 10)),
-			"realtime_batch_size":   effectiveInt("realtime_batch_size", defaultInt(fetcher.RealtimeBatchSize, 30)),
-			"realtime_bar_limit":    effectiveInt("realtime_bar_limit", defaultInt(fetcher.RealtimeBarLimit, 3)),
-			"request_timeout_ms":    effectiveInt("request_timeout_ms", defaultInt(fetcher.RequestTimeoutMS, 1000)),
-			"http_max_attempts":     effectiveInt("http_max_attempts", defaultInt(fetcher.HTTPMaxAttempts, 4)),
-			"storage_max_attempts":  effectiveInt("storage_max_attempts", defaultInt(fetcher.StorageMaxAttempts, 3)),
-			"storage_timeout_ms":    effectiveInt("storage_timeout_ms", defaultInt(fetcher.StorageTimeoutMS, 5000)),
+			"function_name_prefix":     packageName,
+			"function_mode":            functionMode,
+			"biz_type":                 bizType,
+			"memory_size":              effectiveInt("memory_size", effectiveMemorySize),
+			"timeout_seconds":          effectiveTimeoutSeconds,
+			"max_instance_concurrency": maxInstanceConcurrency,
+			"max_inflight_requests":    effectiveInt("max_inflight_requests", defaultInt(fetcher.MaxInflightRequests, 10)),
+			"realtime_batch_size":      effectiveInt("realtime_batch_size", defaultInt(fetcher.RealtimeBatchSize, 30)),
+			"realtime_bar_limit":       effectiveInt("realtime_bar_limit", defaultInt(fetcher.RealtimeBarLimit, 3)),
+			"request_timeout_ms":       effectiveInt("request_timeout_ms", defaultInt(fetcher.RequestTimeoutMS, 1000)),
+			"http_max_attempts":        effectiveInt("http_max_attempts", defaultInt(fetcher.HTTPMaxAttempts, 4)),
+			"storage_max_attempts":     effectiveInt("storage_max_attempts", defaultInt(fetcher.StorageMaxAttempts, 3)),
+			"storage_timeout_ms":       effectiveInt("storage_timeout_ms", defaultInt(fetcher.StorageTimeoutMS, 5000)),
 		},
 	}, nil
 }
@@ -1654,34 +2569,19 @@ func buildCollectorFleetCreateItems(opts collectorPublishOptions, packageID stri
 
 func validateCollectorFleetRuntimeEnvironment(environment map[string]string, timer bool, marketFetcher ...bool) error {
 	marketFetch := len(marketFetcher) > 0 && marketFetcher[0]
-	marketData := strings.EqualFold(strings.TrimSpace(environment["MOOX_MARKET_DATA_ENTRYPOINT"]), "market_data")
-	required := []string{"MOOX_SPACE_ID", "MOOX_CODE_PACKAGE_ID"}
-	if marketData {
-		// The generic market_data handler writes directly to Storage and does
-		// not publish CLS/EventBus completion facts. It still needs the gateway
-		// HMAC identity and the Storage application identity.
-		required = append(required,
-			"MOOX_GATEWAY_TARGET_NODE",
-			"MOOX_GATEWAY_SERVICE_KEY_ID",
-			"MOOX_GATEWAY_SERVICE_SECRET_KEY",
-			"MOOX_STORAGE_APP_ID",
-			"MOOX_STORAGE_APP_KEY",
-			"MOOX_STORAGE_OPERATOR",
-			"MOOX_STORAGE_REQUEST_ID",
-		)
-	} else {
-		required = append(required,
-			"MOOX_GATEWAY_NODE_ID",
-			"MOOX_GATEWAY_TARGET_NODE",
-			"MOOX_GATEWAY_SERVICE_KEY_ID",
-			"MOOX_GATEWAY_SERVICE_SECRET_KEY",
-			"MOOX_CLS_ENABLED",
-			"MOOX_CLS_ENDPOINT",
-			"MOOX_CLS_TOPIC_ID",
-			"MOOX_CLS_TIMEOUT_MS",
-			"MOOX_CLS_SECRET_ID",
-			"MOOX_CLS_SECRET_KEY",
-		)
+	required := []string{
+		"MOOX_SPACE_ID",
+		"MOOX_CODE_PACKAGE_ID",
+		"MOOX_GATEWAY_NODE_ID",
+		"MOOX_GATEWAY_TARGET_NODE",
+		"MOOX_GATEWAY_SERVICE_KEY_ID",
+		"MOOX_GATEWAY_SERVICE_SECRET_KEY",
+		"MOOX_CLS_ENABLED",
+		"MOOX_CLS_ENDPOINT",
+		"MOOX_CLS_TOPIC_ID",
+		"MOOX_CLS_TIMEOUT_MS",
+		"MOOX_CLS_SECRET_ID",
+		"MOOX_CLS_SECRET_KEY",
 	}
 	if !timer && !marketFetch {
 		required = append(required, "MOOX_GATEWAY_CA_PEM_B64")
@@ -1849,34 +2749,18 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	if fetcher == nil {
 		fetcher = defaultCollectorSCFFetcherSpace()
 	}
-	entrypoint := strings.ToLower(strings.TrimSpace(defaultFlag(opts.Entrypoint, fetcher.Entrypoint)))
-	setDefaultEnv(env, "MOOX_SCF_REGION", opts.Region)
-	if entrypoint == "market_data" {
-		setDefaultEnv(env, "MOOX_MARKET_DATA_ENTRYPOINT", "market_data")
-		setDefaultEnv(env, "MOOX_MARKET_FETCH_MARKET_ID", fetcher.MarketID)
-		setDefaultEnv(env, "MOOX_MARKET_FETCH_INSTRUMENT_TYPE", fetcher.InstrumentType)
-		setDefaultEnv(env, "MOOX_MARKET_FETCH_PROVIDER", fetcher.ProviderID)
-		setDefaultEnv(env, "MOOX_MARKET_FETCH_SOURCE_ID", fetcher.SourceID)
-		setDefaultEnv(env, "MOOX_MARKET_FETCH_SERIES_TAG", fetcher.SeriesTag)
-		setDefaultEnv(env, "MOOX_STORAGE_APP_ID", firstNonEmpty(fetcher.StorageAppID, os.Getenv("MOOX_STORAGE_APP_ID")))
-		setDefaultEnv(env, "MOOX_STORAGE_APP_KEY", firstNonEmpty(fetcher.StorageAppKey, os.Getenv("MOOX_STORAGE_APP_KEY")))
-		setDefaultEnv(env, "MOOX_STORAGE_OPERATOR", firstNonEmpty(fetcher.StorageOperator, os.Getenv("MOOX_STORAGE_OPERATOR")))
-		setDefaultEnv(env, "MOOX_STORAGE_REQUEST_ID", firstNonEmpty(fetcher.StorageRequestID, os.Getenv("MOOX_STORAGE_REQUEST_ID")))
-		setDefaultEnv(env, "MOOX_TDX_HOST", fetcher.TDXHost)
-		if fetcher.TDXPort > 0 {
-			setDefaultEnv(env, "MOOX_TDX_PORT", strconv.Itoa(fetcher.TDXPort))
-		}
-		if len(fetcher.TDXRoutes) > 0 {
-			rawRoutes, marshalErr := json.Marshal(fetcher.TDXRoutes)
-			if marshalErr != nil {
-				return nil, fmt.Errorf("encode tdx routes: %w", marshalErr)
-			}
-			setDefaultEnv(env, "MOOX_TDX_ROUTES_JSON", string(rawRoutes))
-		}
-		setDefaultEnv(env, "MOOX_TDX_ROUTE_SNAPSHOT_JSON", fetcher.TDXRouteSnapshotJSON)
+	executionTimeoutSeconds := defaultInt(fetcher.TimeoutSeconds, 15)
+	spaceID := firstNonEmpty(opts.SpaceID, fetcher.SpaceID)
+	if strings.EqualFold(spaceID, "stock_cn") && opts.InstrumentSnapshotTimer {
+		executionTimeoutSeconds = defaultInt(fetcher.InstrumentSnapshotTimeoutSeconds, setupconfig.DefaultStockCNInstrumentSnapshotTimeoutSeconds)
+	} else if strings.EqualFold(spaceID, "stock_cn") && strings.EqualFold(strings.TrimSpace(opts.TriggerType), "invoke") {
+		// Instrument and deployment canaries use the invoke fleet. Keep the
+		// runtime execution budget aligned with the longer SCF timeout selected
+		// by buildCollectorCreateNodeItem; otherwise a 15-second inner deadline
+		// leaves only a few seconds after Storage/CLS/completion reserves.
+		executionTimeoutSeconds = defaultInt(fetcher.InstrumentInvokeTimeoutSeconds, executionTimeoutSeconds)
 	}
-	isMarketData := entrypoint == "market_data"
-	setDefaultEnv(env, "MOOX_FETCH_TIMEOUT_SECONDS", strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 15)))
+	setDefaultEnv(env, "MOOX_FETCH_TIMEOUT_SECONDS", strconv.Itoa(executionTimeoutSeconds))
 	setDefaultEnv(env, "MOOX_FETCH_MAX_INFLIGHT_REQUESTS", strconv.Itoa(defaultInt(fetcher.MaxInflightRequests, 10)))
 	setDefaultEnv(env, "MOOX_FETCH_REQUEST_TIMEOUT_MS", strconv.Itoa(defaultInt(fetcher.RequestTimeoutMS, 1000)))
 	setDefaultEnv(env, "MOOX_FETCH_HTTP_MAX_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.HTTPMaxAttempts, 4)))
@@ -1887,25 +2771,26 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	setDefaultEnv(env, "MOOX_FETCH_CATCHUP_BAR_LIMIT", strconv.Itoa(defaultInt(fetcher.CatchupBarLimit, 1000)))
 	setDefaultEnv(env, "MOOX_FETCH_STORAGE_TIMEOUT_MS", strconv.Itoa(defaultInt(fetcher.StorageTimeoutMS, 5000)))
 	setDefaultEnv(env, "MOOX_FETCH_MAX_RETRY_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.MaxRetryAttempts, 3)))
+	if opts.InstrumentSnapshotTimer {
+		setDefaultEnv(env, "MOOX_MARKET_FETCH_MODE", "instrument_snapshot")
+	}
 	setDefaultEnv(env, "MOOX_STORAGE_RPC_GATEWAY_TARGET", firstNonEmpty(opts.StorageRPCGatewayTarget, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET")))
 	gatewayNodeID := firstNonEmpty(fetcher.StorageGatewayNodeID, os.Getenv("MOOX_SCF_STORAGE_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
 	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", gatewayNodeID)
 	setDefaultEnv(env, "MOOX_GATEWAY_TARGET_NODE", gatewayNodeID)
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"))
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"))
-	if !isMarketData {
-		defaultCLSSecretID, defaultCLSSecretKey := collectorCLSCredentials()
-		setDefaultEnv(env, "MOOX_CLS_ENABLED", "true")
-		setDefaultEnv(env, "MOOX_CLS_ENDPOINT", firstNonEmpty(opts.CLSHost, os.Getenv("MOOX_CLS_ENDPOINT"), clsprepare.Host))
-		// The logset is not needed by the CLS write API, but carrying the resolved
-		// initialization resource makes each deployed function diagnosable without
-		// baking infrastructure IDs into the SCF zip.
-		setDefaultEnv(env, "MOOX_CLS_LOGSET_ID", opts.CLSLogsetID)
-		setDefaultEnv(env, "MOOX_CLS_TOPIC_ID", firstNonEmpty(opts.CLSTopicID, os.Getenv("MOOX_CLS_TOPIC_ID")))
-		setDefaultEnv(env, "MOOX_CLS_TIMEOUT_MS", strconv.Itoa(setupconfig.SCFCLSReserveMilliseconds))
-		setDefaultEnv(env, "MOOX_CLS_SECRET_ID", firstNonEmpty(opts.CLSSecretID, defaultCLSSecretID))
-		setDefaultEnv(env, "MOOX_CLS_SECRET_KEY", firstNonEmpty(opts.CLSSecretKey, defaultCLSSecretKey))
-	}
+	defaultCLSSecretID, defaultCLSSecretKey := collectorCLSCredentials()
+	setDefaultEnv(env, "MOOX_CLS_ENABLED", "true")
+	setDefaultEnv(env, "MOOX_CLS_ENDPOINT", firstNonEmpty(opts.CLSHost, os.Getenv("MOOX_CLS_ENDPOINT"), clsprepare.Host))
+	// The logset is not needed by the CLS write API, but carrying the resolved
+	// initialization resource makes each deployed function diagnosable without
+	// baking infrastructure IDs into the SCF zip.
+	setDefaultEnv(env, "MOOX_CLS_LOGSET_ID", opts.CLSLogsetID)
+	setDefaultEnv(env, "MOOX_CLS_TOPIC_ID", firstNonEmpty(opts.CLSTopicID, os.Getenv("MOOX_CLS_TOPIC_ID")))
+	setDefaultEnv(env, "MOOX_CLS_TIMEOUT_MS", strconv.Itoa(setupconfig.SCFCLSReserveMilliseconds))
+	setDefaultEnv(env, "MOOX_CLS_SECRET_ID", firstNonEmpty(opts.CLSSecretID, defaultCLSSecretID))
+	setDefaultEnv(env, "MOOX_CLS_SECRET_KEY", firstNonEmpty(opts.CLSSecretKey, defaultCLSSecretKey))
 	// The native Storage gateway verifies the caller together with the key ID.
 	// The SCF uses the Collector service credential, so its caller must match
 	// that credential's ACL rather than the CLI process's caller identity.
@@ -1936,21 +2821,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_FETCH_CATCHUP_BAR_LIMIT":      {},
 		"MOOX_FETCH_STORAGE_TIMEOUT_MS":     {},
 		"MOOX_FETCH_MAX_RETRY_ATTEMPTS":     {},
-		"MOOX_MARKET_FETCH_MARKET_ID":       {},
-		"MOOX_MARKET_FETCH_INSTRUMENT_TYPE": {},
-		"MOOX_MARKET_FETCH_PROVIDER":        {},
-		"MOOX_MARKET_FETCH_SOURCE_ID":       {},
-		"MOOX_MARKET_FETCH_SERIES_TAG":      {},
-		"MOOX_MARKET_DATA_ENTRYPOINT":       {},
-		"MOOX_SCF_REGION":                   {},
-		"MOOX_TDX_HOST":                     {},
-		"MOOX_TDX_PORT":                     {},
-		"MOOX_TDX_ROUTES_JSON":              {},
-		"MOOX_TDX_ROUTE_SNAPSHOT_JSON":      {},
-		"MOOX_STORAGE_APP_ID":               {},
-		"MOOX_STORAGE_APP_KEY":              {},
-		"MOOX_STORAGE_OPERATOR":             {},
-		"MOOX_STORAGE_REQUEST_ID":           {},
+		"MOOX_MARKET_FETCH_MODE":            {},
 		"MOOX_CLS_SECRET_ID":                {},
 		"MOOX_CLS_SECRET_KEY":               {},
 		"MOOX_CLS_ENABLED":                  {},
@@ -1975,8 +2846,8 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	// otherwise exceeded by the two RSA CA bundles).
 	isTimer := strings.EqualFold(strings.TrimSpace(opts.TriggerType), "timer")
 	isMarketFetcher := strings.EqualFold(strings.TrimSpace(opts.BizType), "market_fetcher")
-	useEventBus := !isTimer && !isMarketData
-	useServiceGateway := !isTimer && !isMarketFetcher && !isMarketData
+	useEventBus := !isTimer
+	useServiceGateway := !isTimer && !isMarketFetcher
 	if packageID != "" {
 		env["MOOX_CODE_PACKAGE_ID"] = packageID
 	}
@@ -2255,7 +3126,7 @@ func collectorConfigInt(values map[string]string, key string, fallback int) int 
 // validateCollectorRuntimeConfig keeps command-line function-config overrides
 // inside the same short-lived execution budget as custom.toml. This is needed
 // because those overrides are copied into SCF environment variables directly.
-func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconfig.SCFFetcherSpace, timer bool) error {
+func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconfig.SCFFetcherSpace, timer bool, timeoutSeconds int) error {
 	if fetcher == nil {
 		return fmt.Errorf("scf fetcher configuration is required")
 	}
@@ -2289,8 +3160,8 @@ func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconf
 	if !timer {
 		reserve += setupconfig.SCFCompletionReserveMilliseconds
 	}
-	if requestWaves*requestTimeoutMS+storageTimeoutMS+reserve >= 15_000 {
-		return fmt.Errorf("market_fetcher realtime request waves + storage_timeout_ms + configured reserves must be less than the 15-second timeout")
+	if requestWaves*requestTimeoutMS+storageTimeoutMS+reserve >= timeoutSeconds*1000 {
+		return fmt.Errorf("market_fetcher realtime request waves + storage_timeout_ms + configured reserves must be less than the %d-second timeout", timeoutSeconds)
 	}
 	return nil
 }
@@ -2363,7 +3234,10 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 
 func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKey string, spaceID string) *adminclient.Client {
 	client := adminclient.New(controlURL)
-	client.HTTPClient = &http.Client{Timeout: 10 * time.Minute}
+	// A full stock Instrument snapshot can take longer than the ordinary
+	// control-plane request budget while the SCF invokes public providers.
+	// Keep the client bounded, but do not cancel a healthy invocation at 45s.
+	client.HTTPClient = &http.Client{Timeout: 2 * time.Minute}
 	client.AccessToken = defaultFlag(accessToken, os.Getenv("MOOX_ACCESS_TOKEN"))
 	client.SpaceID = defaultFlag(spaceID, os.Getenv("MOOX_SPACE_ID"))
 	accessKey := defaultFlag(serviceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
@@ -2382,7 +3256,7 @@ func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKe
 }
 
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version, entrypoint string) error {
-	if entrypoint != "crypto_market" && entrypoint != "market_data" {
+	if entrypoint != "crypto_market" && entrypoint != "stock_cn" {
 		return fmt.Errorf("unsupported collector SCF entrypoint %q", entrypoint)
 	}
 	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-s -w -X main.Version=%s", version), "-o", outPath, "./cmd/scf/"+entrypoint)
@@ -2406,10 +3280,8 @@ func resolveCollectorRoot(explicit string) (string, error) {
 		if candidate == "" {
 			continue
 		}
-		for _, entrypoint := range []string{"crypto_market", "market_data"} {
-			if _, err := os.Stat(filepath.Join(candidate, "cmd", "scf", entrypoint, "main.go")); err == nil {
-				return filepath.Abs(candidate)
-			}
+		if _, err := os.Stat(filepath.Join(candidate, "cmd", "scf", "crypto_market", "main.go")); err == nil {
+			return filepath.Abs(candidate)
 		}
 	}
 	return "", fmt.Errorf("collector root not found; pass --collector-root")

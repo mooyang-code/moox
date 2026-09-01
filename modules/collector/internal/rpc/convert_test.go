@@ -17,7 +17,7 @@ func TestToPBRuleAndFromPBRule_ShouldRoundTripCoreFields(t *testing.T) {
 	params, err := structpb.NewStruct(map[string]any{"source": map[string]any{"kind": "none"}})
 	require.NoError(t, err)
 	in := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "rule-1", DataType: "symbol", Provider: "binance", MarketType: "spot",
+		SpaceID: "crypto", RuleID: "rule-1", DataType: "instrument", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"source":{"kind":"none"}}`, Enabled: true,
 		Creator: "tester", CreateTime: time.Unix(1, 0).UTC(), ModifyTime: time.Unix(2, 0).UTC(),
 	}
@@ -66,7 +66,7 @@ func TestToPBInstance_ShouldMapStatus(t *testing.T) {
 	now := time.Now().UTC()
 	instance := toPBInstance(domain.TaskInstance{
 		SpaceID: "crypto", TaskID: "task-1", RuleID: "rule-1", Provider: "binance",
-		MarketType: "spot", DataType: "symbol", LastExecStatus: domain.InstanceStatusSuccess,
+		MarketType: "spot", DataType: "instrument", LastExecStatus: domain.InstanceStatusSuccess,
 		CreateTime: now, ModifyTime: now,
 	})
 	assert.Equal(t, "task-1", instance.GetTaskId())

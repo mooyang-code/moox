@@ -11,20 +11,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type StorageBinding struct {
-	DataSourceID  string          `yaml:"data_source_id"`
-	SubjectType   string          `yaml:"subject_type"`
-	SubjectMarket string          `yaml:"subject_market"`
-	AuthInfo      StorageAuthInfo `yaml:"auth_info"`
-}
-
-type StorageAuthInfo struct {
-	AppID     string `yaml:"app_id"`
-	AppKey    string `yaml:"app_key"`
-	Operator  string `yaml:"operator"`
-	RequestID string `yaml:"request_id"`
-}
-
 type APIConfig struct {
 	BaseURL     string `yaml:"base_url"`
 	SpotBaseURL string `yaml:"spot_base_url"`
@@ -52,9 +38,7 @@ type binanceSourceConfig struct {
 		Type        string `yaml:"type"`
 	} `yaml:"app"`
 	API     APIConfig `yaml:"api"`
-	Storage struct {
-		Bindings map[string]StorageBinding `yaml:"bindings"`
-	} `yaml:"storage"`
+	Storage map[string]any `yaml:"storage"`
 }
 
 func ResolveAPIConfig() (APIConfig, error) {
@@ -67,48 +51,6 @@ func ResolveAPIConfig() (APIConfig, error) {
 		cfg.SpotBaseURL = cfg.BaseURL
 	}
 	return cfg, nil
-}
-
-func ResolveStorageBinding(instType string) (StorageBinding, error) {
-	key, defaultMarket, err := storageBindingKey(instType)
-	if err != nil {
-		return StorageBinding{}, err
-	}
-
-	source, err := loadBinanceSourceConfig()
-	if err != nil {
-		return StorageBinding{}, err
-	}
-
-	binding, ok := source.Storage.Bindings[key]
-	if !ok {
-		return StorageBinding{}, fmt.Errorf("未配置 Binance 存储绑定: %s", key)
-	}
-	applyBindingDefaults(&binding, defaultMarket)
-	return binding, nil
-}
-
-func storageBindingKey(instType string) (string, string, error) {
-	switch instType {
-	case InstTypeSPOT:
-		return "spot", "spot", nil
-	case InstTypeSWAP:
-		return "swap", "swap", nil
-	default:
-		return "", "", fmt.Errorf("不支持的产品类型: %s", instType)
-	}
-}
-
-func applyBindingDefaults(binding *StorageBinding, subjectMarket string) {
-	if binding.DataSourceID == "" {
-		binding.DataSourceID = "binance"
-	}
-	if binding.SubjectType == "" {
-		binding.SubjectType = "crypto_pair"
-	}
-	if binding.SubjectMarket == "" {
-		binding.SubjectMarket = subjectMarket
-	}
 }
 
 func loadBinanceSourceConfig() (*binanceSourceConfig, error) {

@@ -54,6 +54,13 @@ func TestTaskInstance_StableTaskID_DifferentSpace_ShouldReturnDifferentID(t *tes
 	assert.NotEqual(t, left, right)
 }
 
+func TestStableTaskIDDoesNotChangeWhenProviderRouteChanges(t *testing.T) {
+	left := TaskSpec{RouteID: "stock_cn_kline_1m_v1", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: "stock_cn_kline", SubjectID: "600000.XSHG", Frequency: "1m"}
+	right := left
+	right.Provider = "tencent"
+	assert.Equal(t, StableTaskID("stock_cn", "rule-1", left), StableTaskID("stock_cn", "rule-1", right))
+}
+
 func TestResampleStableTaskIDIncludesSourceSeriesTag(t *testing.T) {
 	spec := TaskSpec{Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC-USDT", Frequency: "4H"}
 	left := StableResampleTaskID("crypto", "rule-1", spec, "venue:binance")

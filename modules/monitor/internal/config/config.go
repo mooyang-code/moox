@@ -22,6 +22,7 @@ type Config struct {
 	Observability ObservabilityConfig `yaml:"observability"`
 	Metrics       MetricsConfig       `yaml:"metrics"`
 	MarketCanary  MarketCanaryConfig  `yaml:"market_canary"`
+	MarketHealth  MarketHealthConfig  `yaml:"market_health"`
 }
 
 type DatabaseConfig struct {
@@ -85,18 +86,37 @@ type ObservabilityConfig struct {
 }
 
 type MarketCanaryConfig struct {
-	Enabled         bool                  `yaml:"enabled"`
-	Freshness       time.Duration         `yaml:"freshness"`
-	ReturnThreshold float64               `yaml:"return_threshold"`
-	Subjects        []MarketCanarySubject `yaml:"subjects"`
+	Enabled              bool                  `yaml:"enabled"`
+	Freshness            time.Duration         `yaml:"freshness"`
+	ReturnThreshold      float64               `yaml:"return_threshold"`
+	SettleDelay          time.Duration         `yaml:"settle_delay"`
+	PostCloseDelay       time.Duration         `yaml:"post_close_delay"`
+	CalendarWarningLead  time.Duration         `yaml:"calendar_warning_lead"`
+	ClosedBarCount       int                   `yaml:"closed_bar_count"`
+	ClosedBarMinCoverage float64               `yaml:"closed_bar_min_coverage"`
+	Subjects             []MarketCanarySubject `yaml:"subjects"`
+}
+
+type MarketHealthConfig struct {
+	TimerCoordinationStaleAfter   time.Duration `yaml:"timer_coordination_stale_after"`
+	TimerCoordinationPendingGrace time.Duration `yaml:"timer_coordination_pending_grace"`
+	LowCapacityHeadroom           int           `yaml:"low_capacity_headroom"`
+	FeedFailureRateWindow         time.Duration `yaml:"feed_failure_rate_window"`
+	FeedFailureRateThreshold      float64       `yaml:"feed_failure_rate_threshold"`
+	InstrumentSnapshotMaxAge      time.Duration `yaml:"instrument_snapshot_max_age"`
+	InstrumentMinimumCount        int           `yaml:"instrument_minimum_count"`
+	InstrumentRequiredExchanges   []string      `yaml:"instrument_required_exchanges"`
 }
 
 type MarketCanarySubject struct {
-	SpaceID   string  `yaml:"space_id"`
-	DatasetID string  `yaml:"dataset_id"`
-	Symbol    string  `yaml:"symbol"`
-	Frequency string  `yaml:"frequency"`
-	SeriesTag *string `yaml:"series_tag"`
+	SpaceID                string   `yaml:"space_id"`
+	DatasetID              string   `yaml:"dataset_id"`
+	Symbol                 string   `yaml:"symbol"`
+	Frequency              string   `yaml:"frequency"`
+	SeriesTag              *string  `yaml:"series_tag"`
+	MarketID               string   `yaml:"market_id"`
+	CalendarPath           string   `yaml:"calendar_path"`
+	EligibleKlineProviders []string `yaml:"eligible_kline_providers"`
 }
 
 type MetricsStorageConfig struct {
@@ -179,7 +199,8 @@ func Default() *Config {
 			SendTimeoutSeconds: 10,
 		},
 		Observability: ObservabilityConfig{Enabled: true, EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
-		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, Subjects: []MarketCanarySubject{{SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance")}}},
+		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99, Subjects: []MarketCanarySubject{{SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance")}}},
+		MarketHealth:  MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, LowCapacityHeadroom: 2, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
 		Metrics:       MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../examples/setup/default/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
 	}
 }
@@ -240,8 +261,39 @@ func (c *Config) applyDefaults() {
 	if c.MarketCanary.ReturnThreshold == 0 {
 		c.MarketCanary.ReturnThreshold = canaryDefaults.ReturnThreshold
 	}
+	if c.MarketCanary.PostCloseDelay == 0 {
+		c.MarketCanary.PostCloseDelay = canaryDefaults.PostCloseDelay
+	}
 	if len(c.MarketCanary.Subjects) == 0 {
 		c.MarketCanary.Subjects = canaryDefaults.Subjects
+	}
+	if c.MarketCanary.ClosedBarMinCoverage == 0 {
+		c.MarketCanary.ClosedBarMinCoverage = canaryDefaults.ClosedBarMinCoverage
+	}
+	marketHealthDefaults := Default().MarketHealth
+	if c.MarketHealth.TimerCoordinationStaleAfter == 0 {
+		c.MarketHealth.TimerCoordinationStaleAfter = marketHealthDefaults.TimerCoordinationStaleAfter
+	}
+	if c.MarketHealth.TimerCoordinationPendingGrace == 0 {
+		c.MarketHealth.TimerCoordinationPendingGrace = marketHealthDefaults.TimerCoordinationPendingGrace
+	}
+	if c.MarketHealth.LowCapacityHeadroom == 0 {
+		c.MarketHealth.LowCapacityHeadroom = marketHealthDefaults.LowCapacityHeadroom
+	}
+	if c.MarketHealth.FeedFailureRateWindow == 0 {
+		c.MarketHealth.FeedFailureRateWindow = marketHealthDefaults.FeedFailureRateWindow
+	}
+	if c.MarketHealth.FeedFailureRateThreshold == 0 {
+		c.MarketHealth.FeedFailureRateThreshold = marketHealthDefaults.FeedFailureRateThreshold
+	}
+	if c.MarketHealth.InstrumentSnapshotMaxAge == 0 {
+		c.MarketHealth.InstrumentSnapshotMaxAge = marketHealthDefaults.InstrumentSnapshotMaxAge
+	}
+	if c.MarketHealth.InstrumentMinimumCount == 0 {
+		c.MarketHealth.InstrumentMinimumCount = marketHealthDefaults.InstrumentMinimumCount
+	}
+	if len(c.MarketHealth.InstrumentRequiredExchanges) == 0 {
+		c.MarketHealth.InstrumentRequiredExchanges = append([]string(nil), marketHealthDefaults.InstrumentRequiredExchanges...)
 	}
 	if c.Metrics.DatasetHealthPolicyPath == "" {
 		c.Metrics.DatasetHealthPolicyPath = metricsDefaults.DatasetHealthPolicyPath
@@ -386,8 +438,11 @@ func (c *Config) Validate() error {
 		}
 	}
 	if c.MarketCanary.Enabled {
-		if c.MarketCanary.Freshness <= 0 || c.MarketCanary.ReturnThreshold <= 0 {
+		if c.MarketCanary.Freshness <= 0 || c.MarketCanary.ReturnThreshold <= 0 || c.MarketCanary.SettleDelay < 0 || c.MarketCanary.PostCloseDelay < 0 || c.MarketCanary.CalendarWarningLead <= 0 || c.MarketCanary.ClosedBarCount <= 0 {
 			return fmt.Errorf("market_canary price threshold and freshness must be positive")
+		}
+		if c.MarketCanary.ClosedBarMinCoverage <= 0 || c.MarketCanary.ClosedBarMinCoverage > 1 {
+			return fmt.Errorf("market_canary.closed_bar_min_coverage must be in (0, 1]")
 		}
 		if len(c.MarketCanary.Subjects) == 0 || len(c.MarketCanary.Subjects) > 8 {
 			return fmt.Errorf("market_canary subjects must contain between 1 and 8 entries")
@@ -400,7 +455,28 @@ func (c *Config) Validate() error {
 			if subject.SeriesTag == nil {
 				return fmt.Errorf("market_canary subject requires series_tag (use an explicit empty value for the default series)")
 			}
+			if strings.EqualFold(subject.MarketID, "stock_cn") && (strings.TrimSpace(subject.CalendarPath) == "" || len(subject.EligibleKlineProviders) == 0) {
+				return fmt.Errorf("stock_cn market_canary subject requires calendar_path and eligible_kline_providers")
+			}
 		}
+	}
+	if c.MarketHealth.TimerCoordinationStaleAfter <= 0 {
+		return fmt.Errorf("market_health.timer_coordination_stale_after must be positive")
+	}
+	if c.MarketHealth.TimerCoordinationPendingGrace <= 0 {
+		return fmt.Errorf("market_health.timer_coordination_pending_grace must be positive")
+	}
+	if c.MarketHealth.LowCapacityHeadroom < 0 {
+		return fmt.Errorf("market_health.low_capacity_headroom must not be negative")
+	}
+	if c.MarketHealth.FeedFailureRateWindow <= 0 || c.MarketHealth.FeedFailureRateThreshold <= 0 || c.MarketHealth.FeedFailureRateThreshold > 1 {
+		return fmt.Errorf("market_health feed failure window and threshold are invalid")
+	}
+	if c.MarketHealth.InstrumentSnapshotMaxAge <= 0 || c.MarketHealth.InstrumentMinimumCount <= 0 {
+		return fmt.Errorf("market_health instrument snapshot age and minimum count must be positive")
+	}
+	if len(c.MarketHealth.InstrumentRequiredExchanges) == 0 {
+		return fmt.Errorf("market_health.instrument_required_exchanges must not be empty")
 	}
 	if c.SysDeploy.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
 		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when sysdeploy monitoring is enabled")

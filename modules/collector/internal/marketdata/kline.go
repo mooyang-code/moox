@@ -5,131 +5,120 @@ import (
 	"math"
 	"strings"
 	"time"
-
-	"github.com/mooyang-code/moox/modules/collector/internal/model/common"
 )
 
-// KlineRequest is shared by HTTP and TCP source adapters.
-type KlineRequest struct {
-	MarketID       string
-	InstrumentType string
-	ExchangeID     string
-	SubjectID      string
-	ProviderSymbol string
-	Frequency      string
-	Limit          int
-	StartTime      time.Time
-	EndTime        time.Time
-}
-
-func (r KlineRequest) Validate() error {
-	if strings.TrimSpace(r.MarketID) == "" || strings.TrimSpace(r.InstrumentType) == "" {
-		return fmt.Errorf("market_id and instrument_type are required")
-	}
-	if strings.TrimSpace(r.SubjectID) == "" {
-		return fmt.Errorf("subject_id is required")
-	}
-	if strings.TrimSpace(r.ProviderSymbol) == "" {
-		return fmt.Errorf("provider_symbol is required")
-	}
-	if strings.TrimSpace(r.Frequency) == "" {
-		return fmt.Errorf("frequency is required")
-	}
-	if r.Limit < 0 {
-		return fmt.Errorf("limit cannot be negative")
-	}
-	if !r.StartTime.IsZero() && !r.EndTime.IsZero() && r.EndTime.Before(r.StartTime) {
-		return fmt.Errorf("end_time cannot be before start_time")
-	}
-	return nil
-}
-
-// OptionalDecimal preserves the difference between an omitted value and an
-// explicit null. This matters because Storage upserts fields independently.
-type OptionalDecimal struct {
-	Value common.Decimal
-	Valid bool
-	Null  bool
-}
-
-// NormalizedKline is the canonical, single-source bar shape.
 type NormalizedKline struct {
 	SubjectID      string
 	ProviderID     string
-	SourceID       string
 	ProviderSymbol string
 	Frequency      string
 	BarStart       time.Time
 	BarEnd         time.Time
-	Open           common.Decimal
-	High           common.Decimal
-	Low            common.Decimal
-	Close          common.Decimal
-	Volume         common.Decimal
-	Amount         OptionalDecimal
-	VolumeUnit     string
-	AmountUnit     string
-	ProviderTime   time.Time
-	FetchedAt      time.Time
-	SourceEventID  string
+	Open           float64
+	High           float64
+	Low            float64
+	Close          float64
+	VolumeShares   float64
+	AmountCNY      float64
+	// AmountEstimated marks feeds such as Tencent whose public minute payload
+	// omits turnover. The common pipeline still exposes a CNY amount, but keeps
+	// the quality distinction explicit instead of presenting it as native data.
+	AmountEstimated   bool
+	TradeCount        int64
+	ProviderTimestamp time.Time
+	FetchedAt         time.Time
+	RequestID         string
 }
 
-func (k NormalizedKline) Validate() error {
-	if strings.TrimSpace(k.SubjectID) == "" {
+func ValidateNormalizedKline(kline NormalizedKline) error {
+	if strings.TrimSpace(kline.SubjectID) == "" {
 		return fmt.Errorf("subject_id is required")
 	}
-	if strings.TrimSpace(k.ProviderID) == "" || strings.TrimSpace(k.SourceID) == "" {
-		return fmt.Errorf("provider_id and source_id are required")
+	if strings.TrimSpace(kline.ProviderID) == "" {
+		return fmt.Errorf("provider_id is required")
 	}
-	if strings.TrimSpace(k.ProviderSymbol) == "" {
+	if strings.TrimSpace(kline.ProviderSymbol) == "" {
 		return fmt.Errorf("provider_symbol is required")
 	}
-	if strings.TrimSpace(k.Frequency) == "" {
-		return fmt.Errorf("frequency is required")
+	frequency, err := ParseFrequency(kline.Frequency)
+	if err != nil {
+		return err
 	}
-	if k.BarStart.IsZero() || k.BarEnd.IsZero() || !k.BarEnd.After(k.BarStart) {
-		return fmt.Errorf("bar_start and bar_end must define a positive interval")
+	duration := frequency.Duration()
+	if duration <= 0 {
+		return fmt.Errorf("%w: frequency %q has no duration", ErrUnsupportedFrequency, frequency)
 	}
-	if k.VolumeUnit == "" {
-		return fmt.Errorf("volume_unit is required")
+	if !isUTCBucket(kline.BarStart, duration) {
+		return fmt.Errorf("bar_start must be a UTC %s bucket", frequency)
 	}
-	for field, value := range map[string]common.Decimal{
-		"open":   k.Open,
-		"high":   k.High,
-		"low":    k.Low,
-		"close":  k.Close,
-		"volume": k.Volume,
+	if !kline.BarEnd.Equal(kline.BarStart.Add(duration)) {
+		return fmt.Errorf("bar_end must equal bar_start + %s", frequency)
+	}
+	for _, field := range []struct {
+		name  string
+		value float64
+		min   float64
+	}{
+		{name: "open", value: kline.Open, min: math.SmallestNonzeroFloat64},
+		{name: "high", value: kline.High, min: math.SmallestNonzeroFloat64},
+		{name: "low", value: kline.Low, min: math.SmallestNonzeroFloat64},
+		{name: "close", value: kline.Close, min: math.SmallestNonzeroFloat64},
+		{name: "volume_shares", value: kline.VolumeShares, min: 0},
+		{name: "amount_cny", value: kline.AmountCNY, min: 0},
 	} {
-		nonNegative := field == "volume"
-		if err := validateDecimal(field, value, nonNegative); err != nil {
-			return err
+		if !isFinite(field.value) {
+			return fmt.Errorf("%s must be finite", field.name)
+		}
+		if field.value < field.min || (field.min > 0 && field.value == 0) {
+			return fmt.Errorf("%s must be positive", field.name)
 		}
 	}
-	if high, err := k.High.Float64(); err != nil {
-		return fmt.Errorf("high: %w", err)
-	} else if low, lowErr := k.Low.Float64(); lowErr != nil {
-		return fmt.Errorf("low: %w", lowErr)
-	} else if high < low {
-		return fmt.Errorf("high cannot be below low")
+	if kline.TradeCount < 0 {
+		return fmt.Errorf("trade_count must be non-negative")
 	}
-	if k.Amount.Valid && !k.Amount.Null {
-		if err := validateDecimal("amount", k.Amount.Value, true); err != nil {
-			return err
-		}
+	if kline.High < maxFloat(kline.Open, kline.Close, kline.Low) {
+		return fmt.Errorf("high must be >= open/close/low")
+	}
+	if kline.Low > minFloat(kline.Open, kline.Close, kline.High) {
+		return fmt.Errorf("low must be <= open/close/high")
+	}
+	if !isUTCTime(kline.ProviderTimestamp) || !isUTCTime(kline.FetchedAt) {
+		return fmt.Errorf("provider_timestamp and fetched_at must be UTC")
+	}
+	if strings.TrimSpace(kline.RequestID) == "" {
+		return fmt.Errorf("request_id is required")
 	}
 	return nil
 }
 
-func validateDecimal(name string, value common.Decimal, nonNegative bool) error {
-	number, err := value.Float64()
-	if err != nil {
-		return fmt.Errorf("%s: invalid decimal: %w", name, err)
+func isFinite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func isUTCBucket(value time.Time, duration time.Duration) bool {
+	return isUTCTime(value) && value.Truncate(duration).Equal(value)
+}
+
+func isUTCTime(value time.Time) bool {
+	return !value.IsZero() && value.Location() == time.UTC
+}
+
+func maxFloat(values ...float64) float64 {
+	maxValue := values[0]
+	for _, value := range values[1:] {
+		if value > maxValue {
+			maxValue = value
+		}
 	}
-	if math.IsNaN(number) || math.IsInf(number, 0) {
-		return fmt.Errorf("%s: NaN or Inf is not allowed", name)
+	return maxValue
+}
+
+func minFloat(values ...float64) float64 {
+	minValue := values[0]
+	for _, value := range values[1:] {
+		if value < minValue {
+			minValue = value
+		}
 	}
-	if nonNegative && number < 0 {
-		return fmt.Errorf("%s: negative value is not allowed", name)
-	}
-	return nil
+	return minValue
 }

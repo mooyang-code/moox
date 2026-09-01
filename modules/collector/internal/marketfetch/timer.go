@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
+	stocksource "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -32,8 +34,11 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request
 		return Request{}, "", err
 	}
 	subjects := normalizeSubjects(strings.Split(os.Getenv("MOOX_MARKET_FETCH_SUBJECTS"), "|"))
-	if len(subjects) == 0 || len(subjects) > 30 {
-		return Request{}, "", fmt.Errorf("timer market fetch subjects must contain 1..30 values")
+	if len(subjects) == 0 {
+		return Request{}, "", fmt.Errorf("timer market fetch subjects must contain at least one value")
+	}
+	if !strings.EqualFold(spaceID, StockCNSpaceID) && len(subjects) > MaxRealtimeItems {
+		return Request{}, "", fmt.Errorf("timer market fetch subjects must contain 1..%d values", MaxRealtimeItems)
 	}
 	dnsRoutes, err := parseDNSRoutes(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON"))
 	if err != nil {
@@ -46,7 +51,7 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request
 	if assignmentHash == "" {
 		assignmentHash = AssignmentHash(provider, marketType, datasetID, frequency, strings.Join(subjects, "|"))
 	}
-	externalSymbols, err := parseExternalSymbols(os.Getenv("MOOX_MARKET_FETCH_SYMBOLS_JSON"), subjects)
+	externalSymbols, err := parseExternalSymbols(os.Getenv("MOOX_MARKET_FETCH_SYMBOLS_JSON"), subjects, strings.EqualFold(spaceID, StockCNSpaceID))
 	if err != nil {
 		return Request{}, "", err
 	}
@@ -58,25 +63,103 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request
 		items = append(items, domain.CollectionItem{SubjectID: subject, Symbol: externalSymbols[subject], Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: datasetID, BarLimit: MaxRealtimeRows})
 	}
 	concurrency := envInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", envInt("MOOX_MARKET_FETCH_MAX_INFLIGHT", DefaultConcurrency))
-	return Request{BatchID: batchID, BatchKind: domain.BatchKindRealtime, SpaceID: spaceID, DatasetID: datasetID, Frequency: frequency, Provider: provider, MarketType: marketType, FunctionName: strings.TrimSpace(functionName), RequestID: requestID, DNSRoutes: dnsRoutes, Items: items, Concurrency: concurrency}, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), nil
+	groupID, groupCount, err := timerGroupIdentity(spaceID)
+	if err != nil {
+		return Request{}, "", err
+	}
+	return Request{BatchID: batchID, BatchKind: domain.BatchKindRealtime, SpaceID: spaceID, DatasetID: datasetID, Frequency: frequency, Provider: provider, MarketType: marketType, FunctionName: strings.TrimSpace(functionName), RequestID: requestID, GroupID: groupID, GroupCount: groupCount, DNSRoutes: dnsRoutes, Items: items, Concurrency: concurrency}, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), nil
 }
 
-func parseExternalSymbols(raw string, subjects []string) (map[string]string, error) {
+func timerGroupIdentity(spaceID string) (int, int, error) {
+	groupID := 0
+	groupCount := 0
+	for name, target := range map[string]*int{
+		"MOOX_MARKET_FETCH_GROUP_ID":    &groupID,
+		"MOOX_MARKET_FETCH_GROUP_COUNT": &groupCount,
+	} {
+		raw := strings.TrimSpace(os.Getenv(name))
+		if raw == "" {
+			continue
+		}
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			return 0, 0, fmt.Errorf("%s must be a non-negative integer", name)
+		}
+		*target = parsed
+	}
+	if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
+		if groupCount <= 0 {
+			return 0, 0, fmt.Errorf("stock_cn timer group count is required")
+		}
+		if groupID < 0 || groupID >= groupCount {
+			return 0, 0, fmt.Errorf("stock_cn timer group id %d is outside [0,%d)", groupID, groupCount)
+		}
+	}
+	if groupCount > 0 && groupID >= groupCount {
+		return 0, 0, fmt.Errorf("timer group id %d is outside [0,%d)", groupID, groupCount)
+	}
+	return groupID, groupCount, nil
+}
+
+func parseExternalSymbols(raw string, subjects []string, stockCN bool) (map[string]string, error) {
 	result := make(map[string]string, len(subjects))
-	if strings.TrimSpace(raw) == "" {
+	if strings.TrimSpace(raw) == "" && !stockCN {
 		return nil, fmt.Errorf("timer market fetch external symbol mapping is required")
 	}
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return nil, fmt.Errorf("decode timer external symbol mapping: %w", err)
+	if strings.TrimSpace(raw) != "" {
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			return nil, fmt.Errorf("decode timer external symbol mapping: %w", err)
+		}
 	}
 	for _, subject := range subjects {
 		external := strings.TrimSpace(result[subject])
+		if stockCN {
+			resolved, err := stockProviderSymbol(subject, external)
+			if err != nil {
+				return nil, err
+			}
+			result[subject] = resolved
+			continue
+		}
 		if external == "" {
 			return nil, fmt.Errorf("timer subject %s has no external symbol mapping", subject)
 		}
 		result[subject] = external
 	}
 	return result, nil
+}
+
+func stockProviderSymbol(subjectID, configured string) (string, error) {
+	configured = strings.TrimSpace(configured)
+	strict, err := stocksource.ProviderSymbol(subjectID)
+	if err != nil {
+		if configured != "" {
+			// An override is trusted only after the provider codec proves that it
+			// resolves back to this exact SubjectID. Never let an arbitrary string
+			// bypass the exchange/code contract.
+			decoded, decodeErr := stocksource.DecodeProviderSymbol(configured)
+			if decodeErr == nil && strings.EqualFold(decoded, subjectID) {
+				return strings.ToLower(configured), nil
+			}
+			return "", fmt.Errorf("stock subject %s has invalid provider symbol override %q", subjectID, configured)
+		}
+		return "", fmt.Errorf("stock subject %s has no strict provider symbol: %w", subjectID, err)
+	}
+	if configured != "" && !strings.EqualFold(configured, strict) {
+		return "", fmt.Errorf("stock subject %s provider symbol %q conflicts with strict symbol %q", subjectID, configured, strict)
+	}
+	return strict, nil
+}
+
+func marketProviderSymbol(marketType, subjectID, configured string) (string, error) {
+	if strings.EqualFold(strings.TrimSpace(marketType), "equity") {
+		return stockProviderSymbol(subjectID, configured)
+	}
+	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		return "", fmt.Errorf("subject %s has no external symbol mapping", subjectID)
+	}
+	return configured, nil
 }
 
 func parseDNSRoutes(raw string) (map[string]sources.DNSResolution, error) {

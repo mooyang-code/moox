@@ -29,6 +29,14 @@ data_types:
         series_tag: venue:binance
         kline_datasets:
           1m: binance_spot_kline_1m
+  stock_cn:
+    default_exchange: stock_cn
+    exchanges:
+      stock_cn:
+        space_id: stock_cn
+        series_tag: ""
+        kline_datasets:
+          1m: stock_cn_kline
 `
 
 func writeDataAccessConfig(t *testing.T, content string, mode os.FileMode) string {
@@ -57,6 +65,13 @@ func TestDataAccessConfigLoadsStrictCatalog(t *testing.T) {
 	assert.Equal(t, "crypto_market", selection.SpaceID)
 	assert.Equal(t, "binance_spot_kline_1m", selection.DatasetID)
 	assert.Equal(t, "venue:binance", selection.SeriesTag)
+
+	selection, err = cfg.resolveKline(" stock_cn ", "", " 1M ")
+	require.NoError(t, err)
+	assert.Equal(t, "stock_cn", selection.Exchange)
+	assert.Equal(t, "stock_cn", selection.SpaceID)
+	assert.Equal(t, "stock_cn_kline", selection.DatasetID)
+	assert.Empty(t, selection.SeriesTag)
 }
 
 func TestDataAccessConfigRejectsUnknownFieldAndVersion(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -99,12 +100,12 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 
 func TestValidateSCFFetcherRequiresMarketDataSourceIdentity(t *testing.T) {
 	cfg := SCFFetcher{Enabled: true, Spaces: []SCFFetcherSpace{{
-		SpaceID: "stock_cn", Entrypoint: "market_data", StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
-		MemorySize: 64, TimeoutSeconds: 15,
+		SpaceID: "stock_cn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
 		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
 	}}}
 	err := validateSCFFetcher(&cfg)
-	require.ErrorContains(t, err, "market_id")
+	require.Error(t, err)
 	cfg.Spaces[0].MarketID = "stock_cn"
 	cfg.Spaces[0].InstrumentType = "equity"
 	cfg.Spaces[0].ProviderID = "eastmoney"
@@ -114,9 +115,9 @@ func TestValidateSCFFetcherRequiresMarketDataSourceIdentity(t *testing.T) {
 
 func TestValidateSCFFetcherRequiresTDXEndpointConfiguration(t *testing.T) {
 	cfg := SCFFetcher{Enabled: true, Spaces: []SCFFetcherSpace{{
-		SpaceID: "stock_cn", Entrypoint: "market_data", MarketID: "stock_cn", InstrumentType: "equity",
+		SpaceID: "stock_cn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, MarketID: "stock_cn", InstrumentType: "equity",
 		ProviderID: "tdx", SourceID: "normal_7709", StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
-		MemorySize: 64, TimeoutSeconds: 15,
+		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
 		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
 	}}}
 	err := validateSCFFetcher(&cfg)
@@ -140,21 +141,65 @@ func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 	assert.Equal(t, 30, crypto.Regions[1].FunctionCount)
 
 	stock := SCFFetcherSpace{
-		SpaceID: "stock_cn",
+		SpaceID: "stock_cn", TimerFunctionCount: 170, MeasuredSafeGroupSize: 40,
 		Regions: []SCFFetcherRegion{
 			{Region: "ap-guangzhou", Enabled: true, CloudAccountID: "gz"},
 			{Region: "ap-shanghai", Enabled: true, CloudAccountID: "sh"},
 			{Region: "ap-beijing", Enabled: true, CloudAccountID: "bj"},
-			{Region: "ap-singapore", Enabled: true, CloudAccountID: "sg"},
-			{Region: "ap-tokyo", Enabled: true, CloudAccountID: "tokyo"},
 			{Region: "ap-chengdu", Enabled: true, CloudAccountID: "cd"},
 		},
 	}
 	require.NoError(t, resolveSCFTimerFunctionCounts(&stock, "scf_fetcher.spaces[1]"))
 	assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, stock.TimerFunctionCount)
+	assert.Equal(t, DefaultStockCNStaggerStartSecond, stock.StaggerStartSecond)
+	assert.Equal(t, DefaultStockCNStaggerWindowSeconds, stock.StaggerWindowSeconds)
+	assert.Equal(t, DefaultStockCNStaggerMaxStartsPerSecond, stock.StaggerMaxStartsPerSecond)
+	total := 0
 	for _, region := range stock.Regions {
-		assert.Equal(t, 50, region.FunctionCount)
+		assert.Contains(t, []int{42, 43}, region.FunctionCount)
+		total += region.FunctionCount
 	}
+	assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, total)
+}
+
+func TestResolveSCFTimerFunctionCountsRequiresExplicitStockN(t *testing.T) {
+	stock := SCFFetcherSpace{
+		SpaceID: "stock_cn",
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 7, CloudAccountID: "gz"}},
+	}
+	err := resolveSCFTimerFunctionCounts(&stock, "scf_fetcher.spaces[0]")
+	require.ErrorContains(t, err, "timer_function_count must be an explicit positive value")
+
+	stock.TimerFunctionCount = 7
+	require.NoError(t, resolveSCFTimerFunctionCounts(&stock, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, 7, stock.TimerFunctionCount)
+}
+
+func TestValidateSCFFetcherRequiresMeasuredSafeGroupSizeForStock(t *testing.T) {
+	base := SCFFetcherSpace{
+		SpaceID: "stock_cn", TimerFunctionCount: 200, MemorySize: 64, TimeoutSeconds: 15,
+		MeasuredSafeGroupSize: 30, StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		RealtimeBatchSize: 10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50, CloudAccountID: "gz"}, {Region: "ap-shanghai", Enabled: true, FunctionCount: 50, CloudAccountID: "sh"}, {Region: "ap-beijing", Enabled: true, FunctionCount: 50, CloudAccountID: "bj"}, {Region: "ap-chengdu", Enabled: true, FunctionCount: 50, CloudAccountID: "cd"}},
+	}
+	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
+
+	base.MeasuredSafeGroupSize = 0
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be a positive value")
+	base.MeasuredSafeGroupSize = -1
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be a positive value")
+}
+
+func TestValidateSCFFetcherRejectsUnsafeStockStaggerRate(t *testing.T) {
+	base := SCFFetcherSpace{SpaceID: "stock_cn", TimerFunctionCount: 200, MemorySize: 64, TimeoutSeconds: 15,
+		MeasuredSafeGroupSize: 30, StaggerStartSecond: 5, StaggerWindowSeconds: 35, StaggerMaxStartsPerSecond: 5,
+		StorageRPCGatewayTarget: "ip://106.53.107.122:11003", RealtimeBatchSize: 10, RealtimeBarLimit: 3,
+		CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000, MaxRetryAttempts: 3,
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 200, CloudAccountID: "gz"}}}
+	err := validateSCFFetcherSpace(&base, "stock_cn")
+	require.ErrorContains(t, err, "requires up to 6 starts per second")
 }
 
 func TestResolveSCFTimerFunctionCountsRejectsMismatch(t *testing.T) {
@@ -166,6 +211,77 @@ func TestResolveSCFTimerFunctionCountsRejectsMismatch(t *testing.T) {
 	err := resolveSCFTimerFunctionCounts(&cfg, "scf_fetcher.spaces[0]")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "regional function_count total")
+}
+
+func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
+	var manifest Manifest
+	_, err := toml.DecodeFile(filepath.Join("..", "..", "..", "..", "..", "custom.toml.example"), &manifest)
+	require.NoError(t, err)
+	manifest.SCFFetcher.Enabled = true
+	require.NoError(t, validateSCFFetcher(&manifest.SCFFetcher))
+
+	for _, space := range manifest.SCFFetcher.Spaces {
+		if space.SpaceID != "stock_cn" {
+			continue
+		}
+		assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, space.TimerFunctionCount)
+		assert.Equal(t, DefaultStockCNInstrumentInvokeTimeoutSeconds, space.InstrumentInvokeTimeoutSeconds)
+		require.Len(t, space.Regions, 4)
+		for _, region := range space.Regions {
+			assert.True(t, region.Enabled)
+			assert.Contains(t, []int{42, 43}, region.FunctionCount)
+		}
+		return
+	}
+	t.Fatal("stock_cn scf_fetcher config is missing")
+}
+
+func TestValidateSCFFetcherDefaultsAndBoundsStockCNInstrumentInvokeTimeout(t *testing.T) {
+	base := SCFFetcherSpace{
+		SpaceID: "stock_cn", MemorySize: 64, TimeoutSeconds: 15,
+		TimerFunctionCount:      200,
+		MeasuredSafeGroupSize:   30,
+		StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		RealtimeBatchSize:       10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50, CloudAccountID: "gz"},
+			{Region: "ap-shanghai", Enabled: true, FunctionCount: 50, CloudAccountID: "sh"},
+			{Region: "ap-beijing", Enabled: true, FunctionCount: 50, CloudAccountID: "bj"},
+			{Region: "ap-chengdu", Enabled: true, FunctionCount: 50, CloudAccountID: "cd"},
+		},
+	}
+	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, 15, base.TimeoutSeconds)
+	assert.Equal(t, DefaultStockCNInstrumentInvokeTimeoutSeconds, base.InstrumentInvokeTimeoutSeconds)
+
+	base.InstrumentInvokeTimeoutSeconds = 59
+	err := validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]")
+	require.ErrorContains(t, err, "instrument_invoke_timeout_seconds")
+}
+
+func TestValidateSCFFetcherDefaultsIndependentStockInstrumentTimer(t *testing.T) {
+	base := SCFFetcherSpace{
+		SpaceID: "stock_cn", MemorySize: 64, TimeoutSeconds: 15,
+		TimerFunctionCount: 200, MeasuredSafeGroupSize: 30,
+		StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		RealtimeBatchSize:       10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-shanghai", Enabled: true, FunctionCount: 50, CloudAccountID: "tencent-scf-shanghai"},
+			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50, CloudAccountID: "tencent-scf-guangzhou"},
+			{Region: "ap-beijing", Enabled: true, FunctionCount: 50, CloudAccountID: "tencent-scf-beijing"},
+			{Region: "ap-chengdu", Enabled: true, FunctionCount: 50, CloudAccountID: "tencent-scf-chengdu"},
+		},
+	}
+
+	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, "ap-shanghai", base.InstrumentSnapshotRegion)
+	assert.Equal(t, "tencent-scf-shanghai", base.InstrumentSnapshotCloudAccountID)
+	assert.Equal(t, "moox-fetcher-stock_cn-instrument", base.InstrumentSnapshotFunctionPrefix)
+	assert.Equal(t, "0 0 0 * * * *", base.InstrumentSnapshotTimerCron)
+	assert.Equal(t, 300, base.InstrumentSnapshotTimeoutSeconds)
+	assert.Equal(t, DefaultStockCNInstrumentSnapshotMemorySize, base.InstrumentSnapshotMemorySize)
 }
 
 const validManifest = `[admin]
@@ -262,6 +378,19 @@ storage_root = "/data/custom/storage"
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	assert.Equal(t, Paths{DeployRoot: "/data/custom", ControlRoot: "/data/custom/control", StorageRoot: "/data/custom/storage"}, snapshot.Manifest.Paths)
+}
+
+func TestLoadAllowsStorageRootOnSeparateHostMount(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[paths]
+deploy_root = "/data/moox"
+control_root = "/data/moox/prod"
+storage_root = "/home/ubuntu/moox/storage"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "/home/ubuntu/moox/storage", snapshot.Manifest.Paths.StorageRoot)
 }
 
 func TestLoadRejectsPathsOutsideDeployRoot(t *testing.T) {

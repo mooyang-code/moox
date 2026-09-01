@@ -41,14 +41,31 @@ const (
 	// DefaultCryptoMarketTimerFunctionCount is the baseline Timer fleet size
 	// for the built-in crypto market Space.
 	DefaultCryptoMarketTimerFunctionCount = 60
-	// DefaultStockCNMarketTimerFunctionCount is the baseline Timer fleet size
-	// for the mainland China A-share Space. Each region is capped at 50
-	// functions, so this default needs at least six enabled regions.
-	DefaultStockCNMarketTimerFunctionCount = 300
+	// DefaultStockCNMarketTimerFunctionCount is used by callers that need the
+	// release baseline. stock_cn config validation still requires an explicit
+	// timer_function_count instead of applying this value implicitly.
+	DefaultStockCNMarketTimerFunctionCount = 170
+	// DefaultStockCNInstrumentInvokeTimeoutSeconds leaves enough room for the
+	// measured full-market Sina instrument snapshot while Timer functions keep
+	// their fixed 15-second execution budget.
+	DefaultStockCNInstrumentInvokeTimeoutSeconds = 60
+	// DefaultStockCNInstrumentSnapshotTimeoutSeconds is the longer budget for
+	// the single daily full-market Instrument Timer, which is not a Kline Timer.
+	DefaultStockCNInstrumentSnapshotTimeoutSeconds = 300
+	// DefaultStockCNInstrumentSnapshotMemorySize leaves headroom for the full
+	// market Instrument snapshot. Kline Timer functions remain fixed at 64MB.
+	DefaultStockCNInstrumentSnapshotMemorySize = 256
+	DefaultStockCNInstrumentSnapshotTimerCron  = "0 0 0 * * * *"
+	// Stock Timer groups are spread across this fixed second window. These are
+	// release defaults; changing them requires a new rendered configuration.
+	DefaultStockCNStaggerStartSecond        = 5
+	DefaultStockCNStaggerWindowSeconds      = 35
+	DefaultStockCNStaggerMaxStartsPerSecond = 6
 )
 
-// Paths controls where setup-cli installs the control and Storage packages on
-// the target host. All paths are absolute and must remain below DeployRoot.
+// Paths controls where setup-cli installs the control and Storage packages.
+// Storage may be deployed to a separate host with a different mount layout,
+// so StorageRoot is independently validated as an absolute safe path.
 // The section is optional: omitted values resolve to the cloud-disk defaults
 // above, which keeps older custom.toml files deterministic.
 type Paths struct {
@@ -266,27 +283,38 @@ type SCFFetcherSpace struct {
 	Namespace         string `toml:"namespace"`
 	Runtime           string `toml:"runtime"`
 	FunctionPrefix    string `toml:"function_prefix"`
-	// TimerFunctionCount is the total Timer fleet size for this Space. When it
-	// is zero and all enabled regional function_count values are zero, the
-	// built-in Space default is used and counts are distributed deterministically.
-	TimerFunctionCount      int                `toml:"timer_function_count"`
-	StorageGatewayNodeID    string             `toml:"storage_gateway_node_id"`
-	StorageRPCGatewayTarget string             `toml:"storage_rpc_gateway_target"`
-	MemorySize              int                `toml:"memory_size"`
-	TimeoutSeconds          int                `toml:"timeout_seconds"`
-	RealtimeBatchSize       int                `toml:"realtime_batch_size"`
-	RealtimeBarLimit        int                `toml:"realtime_bar_limit"`
-	CatchupBatchSize        int                `toml:"catchup_batch_size"`
-	CatchupBarLimit         int                `toml:"catchup_bar_limit"`
-	MaxInflightRequests     int                `toml:"max_inflight_requests"`
-	RequestTimeoutMS        int                `toml:"request_timeout_ms"`
-	HTTPMaxAttempts         int                `toml:"http_max_attempts"`
-	StorageMaxAttempts      int                `toml:"storage_max_attempts"`
-	StorageTimeoutMS        int                `toml:"storage_timeout_ms"`
-	MaxRetryAttempts        int                `toml:"max_retry_attempts"`
-	RetryDelays             []string           `toml:"retry_delays"`
-	StaggerEnabled          bool               `toml:"stagger_enabled"`
-	Regions                 []SCFFetcherRegion `toml:"regions"`
+	// TimerFunctionCount is the total Timer fleet size for this Space. stock_cn
+	// must set it explicitly to a positive value; other Spaces may use the
+	// built-in default when all enabled regional function_count values are zero.
+	TimerFunctionCount               int                `toml:"timer_function_count"`
+	MeasuredSafeGroupSize            int                `toml:"measured_safe_group_size"`
+	InstrumentSnapshotRegion         string             `toml:"instrument_snapshot_region"`
+	InstrumentSnapshotCloudAccountID string             `toml:"instrument_snapshot_cloud_account_id"`
+	InstrumentSnapshotFunctionPrefix string             `toml:"instrument_snapshot_function_prefix"`
+	InstrumentSnapshotTimerCron      string             `toml:"instrument_snapshot_timer_cron"`
+	InstrumentSnapshotTimeoutSeconds int                `toml:"instrument_snapshot_timeout_seconds"`
+	InstrumentSnapshotMemorySize     int                `toml:"instrument_snapshot_memory_size"`
+	StaggerStartSecond               int                `toml:"stagger_start_second"`
+	StaggerWindowSeconds             int                `toml:"stagger_window_seconds"`
+	StaggerMaxStartsPerSecond        int                `toml:"stagger_max_starts_per_second"`
+	StorageGatewayNodeID             string             `toml:"storage_gateway_node_id"`
+	StorageRPCGatewayTarget          string             `toml:"storage_rpc_gateway_target"`
+	MemorySize                       int                `toml:"memory_size"`
+	TimeoutSeconds                   int                `toml:"timeout_seconds"`
+	InstrumentInvokeTimeoutSeconds   int                `toml:"instrument_invoke_timeout_seconds"`
+	RealtimeBatchSize                int                `toml:"realtime_batch_size"`
+	RealtimeBarLimit                 int                `toml:"realtime_bar_limit"`
+	CatchupBatchSize                 int                `toml:"catchup_batch_size"`
+	CatchupBarLimit                  int                `toml:"catchup_bar_limit"`
+	MaxInflightRequests              int                `toml:"max_inflight_requests"`
+	RequestTimeoutMS                 int                `toml:"request_timeout_ms"`
+	HTTPMaxAttempts                  int                `toml:"http_max_attempts"`
+	StorageMaxAttempts               int                `toml:"storage_max_attempts"`
+	StorageTimeoutMS                 int                `toml:"storage_timeout_ms"`
+	MaxRetryAttempts                 int                `toml:"max_retry_attempts"`
+	RetryDelays                      []string           `toml:"retry_delays"`
+	StaggerEnabled                   bool               `toml:"stagger_enabled"`
+	Regions                          []SCFFetcherRegion `toml:"regions"`
 }
 
 // DefaultTimerFunctionCount returns the built-in Timer capacity for a known
@@ -297,7 +325,7 @@ func DefaultTimerFunctionCount(spaceID string) int {
 	case "crypto_market":
 		return DefaultCryptoMarketTimerFunctionCount
 	case "stock_cn":
-		return DefaultStockCNMarketTimerFunctionCount
+		return 0
 	default:
 		return 0
 	}
@@ -576,10 +604,8 @@ func validatePaths(paths *Paths) error {
 		}
 	}
 	base := paths.DeployRoot + string(filepath.Separator)
-	for name, value := range map[string]string{"control_root": paths.ControlRoot, "storage_root": paths.StorageRoot} {
-		if value != paths.DeployRoot && !strings.HasPrefix(value, base) {
-			return fmt.Errorf("config_invalid: paths.%s must stay under paths.deploy_root", name)
-		}
+	if paths.ControlRoot != paths.DeployRoot && !strings.HasPrefix(paths.ControlRoot, base) {
+		return fmt.Errorf("config_invalid: paths.control_root must stay under paths.deploy_root")
 	}
 	return nil
 }
@@ -889,6 +915,50 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	if cfg.TimeoutSeconds != 15 {
 		return fmt.Errorf("config_invalid: %s.timeout_seconds must be 15", path)
 	}
+	stockCN := strings.EqualFold(cfg.SpaceID, "stock_cn")
+	if stockCN {
+		if cfg.TimerFunctionCount <= 0 {
+			return fmt.Errorf("config_invalid: %s.timer_function_count must be an explicit positive value for stock_cn", path)
+		}
+		if cfg.MeasuredSafeGroupSize <= 0 {
+			return fmt.Errorf("config_invalid: %s.measured_safe_group_size must be a positive value for stock_cn", path)
+		}
+		if err := normalizeStockCNInstrumentSnapshotConfig(cfg, path); err != nil {
+			return err
+		}
+		if cfg.StaggerStartSecond == 0 && cfg.StaggerWindowSeconds == 0 && cfg.StaggerMaxStartsPerSecond == 0 {
+			cfg.StaggerStartSecond = DefaultStockCNStaggerStartSecond
+			cfg.StaggerWindowSeconds = DefaultStockCNStaggerWindowSeconds
+			cfg.StaggerMaxStartsPerSecond = DefaultStockCNStaggerMaxStartsPerSecond
+		}
+		if cfg.StaggerStartSecond < 0 || cfg.StaggerStartSecond > 59 {
+			return fmt.Errorf("config_invalid: %s.stagger_start_second must be between 0 and 59", path)
+		}
+		if cfg.StaggerWindowSeconds <= 0 || cfg.StaggerWindowSeconds > 60 || cfg.StaggerStartSecond+cfg.StaggerWindowSeconds > 60 {
+			return fmt.Errorf("config_invalid: %s.stagger_window_seconds must fit between second %d and 59", path, cfg.StaggerStartSecond)
+		}
+		if cfg.StaggerMaxStartsPerSecond <= 0 {
+			return fmt.Errorf("config_invalid: %s.stagger_max_starts_per_second must be positive", path)
+		}
+		startsPerSecond := (cfg.TimerFunctionCount + cfg.StaggerWindowSeconds - 1) / cfg.StaggerWindowSeconds
+		if startsPerSecond > cfg.StaggerMaxStartsPerSecond {
+			return fmt.Errorf("config_invalid: %s timer_function_count %d requires up to %d starts per second, above stagger_max_starts_per_second %d", path, cfg.TimerFunctionCount, startsPerSecond, cfg.StaggerMaxStartsPerSecond)
+		}
+		if cfg.InstrumentInvokeTimeoutSeconds == 0 {
+			cfg.InstrumentInvokeTimeoutSeconds = DefaultStockCNInstrumentInvokeTimeoutSeconds
+		}
+		if cfg.InstrumentInvokeTimeoutSeconds < DefaultStockCNInstrumentInvokeTimeoutSeconds || cfg.InstrumentInvokeTimeoutSeconds > 900 {
+			return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds must be between %d and 900", path, DefaultStockCNInstrumentInvokeTimeoutSeconds)
+		}
+	} else if cfg.MeasuredSafeGroupSize != 0 {
+		return fmt.Errorf("config_invalid: %s.measured_safe_group_size is only valid for stock_cn", path)
+	} else if cfg.InstrumentInvokeTimeoutSeconds != 0 {
+		return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds is only valid for stock_cn", path)
+	} else if cfg.InstrumentSnapshotRegion != "" || cfg.InstrumentSnapshotCloudAccountID != "" || cfg.InstrumentSnapshotFunctionPrefix != "" || cfg.InstrumentSnapshotTimerCron != "" || cfg.InstrumentSnapshotTimeoutSeconds != 0 || cfg.InstrumentSnapshotMemorySize != 0 {
+		return fmt.Errorf("config_invalid: %s instrument snapshot settings are only valid for stock_cn", path)
+	} else if cfg.StaggerStartSecond != 0 || cfg.StaggerWindowSeconds != 0 || cfg.StaggerMaxStartsPerSecond != 0 {
+		return fmt.Errorf("config_invalid: %s stagger settings are only valid for stock_cn", path)
+	}
 	if cfg.RealtimeBatchSize == 0 {
 		cfg.RealtimeBatchSize = 30
 	}
@@ -1007,9 +1077,70 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	return nil
 }
 
+func normalizeStockCNInstrumentSnapshotConfig(cfg *SCFFetcherSpace, path string) error {
+	if strings.TrimSpace(cfg.InstrumentSnapshotRegion) == "" {
+		for _, region := range cfg.Regions {
+			if region.Enabled {
+				cfg.InstrumentSnapshotRegion = strings.TrimSpace(region.Region)
+				break
+			}
+		}
+	}
+	if cfg.InstrumentSnapshotRegion == "" {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_region must select an enabled region", path)
+	}
+	var selected *SCFFetcherRegion
+	for index := range cfg.Regions {
+		region := &cfg.Regions[index]
+		if strings.EqualFold(strings.TrimSpace(region.Region), cfg.InstrumentSnapshotRegion) {
+			selected = region
+			break
+		}
+	}
+	if selected == nil || !selected.Enabled {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_region %q must select an enabled region", path, cfg.InstrumentSnapshotRegion)
+	}
+	if strings.TrimSpace(cfg.InstrumentSnapshotCloudAccountID) == "" {
+		cfg.InstrumentSnapshotCloudAccountID = strings.TrimSpace(selected.CloudAccountID)
+	}
+	if cfg.InstrumentSnapshotCloudAccountID == "" || cfg.InstrumentSnapshotCloudAccountID != strings.TrimSpace(selected.CloudAccountID) {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_cloud_account_id must match the selected region cloud_account_id", path)
+	}
+	if strings.TrimSpace(cfg.InstrumentSnapshotFunctionPrefix) == "" {
+		cfg.InstrumentSnapshotFunctionPrefix = strings.TrimSuffix(cfg.FunctionPrefix, "-") + "-instrument"
+	}
+	if !includesSpaceIdentity(cfg.InstrumentSnapshotFunctionPrefix, cfg.SpaceID) || strings.EqualFold(cfg.InstrumentSnapshotFunctionPrefix, cfg.FunctionPrefix) {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_function_prefix must be distinct and include space_id", path)
+	}
+	if strings.TrimSpace(cfg.InstrumentSnapshotTimerCron) == "" {
+		cfg.InstrumentSnapshotTimerCron = DefaultStockCNInstrumentSnapshotTimerCron
+	}
+	if cfg.InstrumentSnapshotTimerCron != DefaultStockCNInstrumentSnapshotTimerCron {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_timer_cron must run once daily as %q", path, DefaultStockCNInstrumentSnapshotTimerCron)
+	}
+	if cfg.InstrumentSnapshotTimeoutSeconds == 0 {
+		cfg.InstrumentSnapshotTimeoutSeconds = DefaultStockCNInstrumentSnapshotTimeoutSeconds
+	}
+	if cfg.InstrumentSnapshotTimeoutSeconds < DefaultStockCNInstrumentSnapshotTimeoutSeconds || cfg.InstrumentSnapshotTimeoutSeconds > 900 {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_timeout_seconds must be between %d and 900", path, DefaultStockCNInstrumentSnapshotTimeoutSeconds)
+	}
+	if cfg.InstrumentSnapshotMemorySize == 0 {
+		cfg.InstrumentSnapshotMemorySize = DefaultStockCNInstrumentSnapshotMemorySize
+	}
+	if cfg.InstrumentSnapshotMemorySize < 128 || cfg.InstrumentSnapshotMemorySize > 1024 || cfg.InstrumentSnapshotMemorySize%64 != 0 {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_memory_size must be a multiple of 64 between 128 and 1024", path)
+	}
+	return nil
+}
+
 func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 	if cfg == nil {
 		return fmt.Errorf("config_invalid: %s is required", path)
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stock_cn") && cfg.StaggerStartSecond == 0 && cfg.StaggerWindowSeconds == 0 && cfg.StaggerMaxStartsPerSecond == 0 {
+		cfg.StaggerStartSecond = DefaultStockCNStaggerStartSecond
+		cfg.StaggerWindowSeconds = DefaultStockCNStaggerWindowSeconds
+		cfg.StaggerMaxStartsPerSecond = DefaultStockCNStaggerMaxStartsPerSecond
 	}
 	explicitTotal := 0
 	autoRegions := make([]int, 0)
@@ -1027,6 +1158,9 @@ func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 	}
 	desired := cfg.TimerFunctionCount
 	if desired <= 0 {
+		if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stock_cn") {
+			return fmt.Errorf("config_invalid: %s.timer_function_count must be an explicit positive value for stock_cn", path)
+		}
 		if explicitTotal > 0 {
 			// Preserve older manifests whose regional counts were already the
 			// source of truth.

@@ -189,8 +189,8 @@ func (cfg dataAccessConfig) validate() error {
 			if !isNormalizedCatalogKey(exchange) {
 				return fmt.Errorf("exchange key %q must be lowercase ASCII", exchange)
 			}
-			if strings.TrimSpace(exchangeCfg.SpaceID) == "" || strings.TrimSpace(exchangeCfg.SeriesTag) == "" {
-				return fmt.Errorf("exchange %q space_id and series_tag are required", exchange)
+			if strings.TrimSpace(exchangeCfg.SpaceID) == "" {
+				return fmt.Errorf("exchange %q space_id is required", exchange)
 			}
 			if len(exchangeCfg.KlineDatasets) == 0 {
 				return fmt.Errorf("exchange %q kline_datasets is required", exchange)

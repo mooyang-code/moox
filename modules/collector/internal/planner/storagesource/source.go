@@ -149,7 +149,7 @@ func (s *DatasetSource) ListSubjects(ctx context.Context, spaceID string, datase
 	return mergeDatasetSubjects(bindings, symbols)
 }
 
-// ListResampleSubjects returns the source Dataset's active subject universe
+// ListResampleSubjects returns the source Dataset's active subject set
 // without requiring an external-symbol catalog owned by the source DataSource.
 // Shared/normalized K-line result Datasets commonly use data_source_id=crypto_market
 // while their exchange symbols remain registered under binance or another venue.
@@ -157,7 +157,7 @@ func (s *DatasetSource) ListResampleSubjects(ctx context.Context, spaceID, datas
 	return s.ListResampleSubjectsForRule(ctx, spaceID, datasetID, "", "")
 }
 
-// ListResampleSubjectsForRule resolves a subject universe with the rule's
+// ListResampleSubjectsForRule resolves the active subject set with the rule's
 // provider/series tag when a shared result Dataset contains multiple venues.
 // This keeps an OKX-only Subject out of a Binance resample task even though
 // both venues share the same market-level Dataset metadata.
@@ -308,7 +308,7 @@ func mergeDatasetSubjectsBySymbol(bindings []*storagepb.DatasetSubject, symbols 
 	}
 	// An explicit DatasetSubject set is an allow-list. Do not let an empty
 	// intersection fall through to mergeDatasetSubjects' empty-binding
-	// universe fallback, which would silently select every provider symbol.
+	// active-subject fallback, which would silently select every provider symbol.
 	if len(bindings) > 0 && len(selected) == 0 {
 		return []domain.DatasetSubject{}, nil
 	}
@@ -406,9 +406,9 @@ func mergeDatasetSubjects(
 	symbols map[string]string,
 ) ([]domain.DatasetSubject, error) {
 	// Runtime K-line Datasets are often written for the full exchange symbol
-	// universe without maintaining a duplicate DatasetSubject row for every
+	// active subject set without maintaining a duplicate DatasetSubject row for every
 	// symbol. In that case the active data-source symbol catalog is the explicit
-	// universe and keeps local resample planning useful for existing result data.
+	// active subject set and keeps local resample planning useful for existing result data.
 	if len(bindings) == 0 && len(symbols) > 0 {
 		ids := make([]string, 0, len(symbols))
 		for subjectID := range symbols {

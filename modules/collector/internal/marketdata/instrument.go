@@ -3,59 +3,57 @@ package marketdata
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
-type InstrumentRequest struct {
-	MarketID       string
-	InstrumentType string
-	ExchangeID     string
-	ProviderSymbol string
-	Page           int
-	PageSize       int
-}
-
-func (r InstrumentRequest) Validate() error {
-	if strings.TrimSpace(r.MarketID) == "" || strings.TrimSpace(r.InstrumentType) == "" {
-		return fmt.Errorf("market_id and instrument_type are required")
+func ValidateInstrumentSnapshot(snapshot InstrumentSnapshot) error {
+	if strings.TrimSpace(snapshot.SnapshotID) == "" {
+		return fmt.Errorf("snapshot_id is required")
 	}
-	if r.Page < 0 || r.PageSize < 0 {
-		return fmt.Errorf("page and page_size cannot be negative")
+	if strings.TrimSpace(snapshot.SourceProvider) == "" {
+		return fmt.Errorf("source_provider is required")
 	}
-	return nil
-}
-
-type Instrument struct {
-	SubjectID      string
-	ProviderSymbol string
-	Name           string
-	ExchangeID     string
-	Status         string
-	InstrumentType string
-}
-
-type InstrumentSnapshot struct {
-	MarketID       string
-	InstrumentType string
-	Items          []Instrument
-	Version        string
-}
-
-func (s InstrumentSnapshot) Validate() error {
-	if strings.TrimSpace(s.MarketID) == "" || strings.TrimSpace(s.InstrumentType) == "" {
-		return fmt.Errorf("market_id and instrument_type are required")
+	if strings.TrimSpace(snapshot.MarketID) == "" {
+		return fmt.Errorf("market_id is required")
 	}
-	if strings.TrimSpace(s.Version) == "" {
-		return fmt.Errorf("snapshot version is required")
+	if !isUTCTime(snapshot.FetchedAt) {
+		return fmt.Errorf("fetched_at must be UTC")
 	}
-	seen := make(map[string]struct{}, len(s.Items))
-	for _, item := range s.Items {
-		if item.SubjectID == "" || item.ProviderSymbol == "" {
+	if !snapshot.Complete {
+		return fmt.Errorf("snapshot must be complete")
+	}
+	if snapshot.PageCount <= 0 {
+		return fmt.Errorf("page_count must be positive")
+	}
+	if len(snapshot.Instruments) == 0 || len(snapshot.ExchangeCounts) == 0 {
+		return fmt.Errorf("instruments and exchange_counts are required")
+	}
+	seen := make(map[string]struct{}, len(snapshot.Instruments))
+	actualCounts := make(map[string]int, len(snapshot.ExchangeCounts))
+	for _, instrument := range snapshot.Instruments {
+		if strings.TrimSpace(instrument.SubjectID) == "" || strings.TrimSpace(instrument.ProviderSymbol) == "" {
 			return fmt.Errorf("instrument subject_id and provider_symbol are required")
 		}
-		if _, exists := seen[item.SubjectID]; exists {
-			return fmt.Errorf("duplicate instrument subject_id %q", item.SubjectID)
+		if strings.TrimSpace(instrument.Exchange) == "" {
+			return fmt.Errorf("instrument exchange is required")
 		}
-		seen[item.SubjectID] = struct{}{}
+		if _, ok := seen[instrument.SubjectID]; ok {
+			return fmt.Errorf("duplicate instrument subject_id %q", instrument.SubjectID)
+		}
+		seen[instrument.SubjectID] = struct{}{}
+		actualCounts[instrument.Exchange]++
+	}
+	if len(actualCounts) != len(snapshot.ExchangeCounts) {
+		return fmt.Errorf("exchange counts mismatch")
+	}
+	for exchange, want := range snapshot.ExchangeCounts {
+		if actualCounts[exchange] != want {
+			return fmt.Errorf("exchange count mismatch for %s", exchange)
+		}
 	}
 	return nil
+}
+
+func SnapshotID(providerID, marketID string, fetchedAt time.Time) string {
+	return strings.TrimSpace(providerID) + ":" + strings.TrimSpace(marketID) + ":" + fetchedAt.UTC().Format(time.RFC3339Nano)
 }

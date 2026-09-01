@@ -353,6 +353,88 @@ func TestMooxSkillReadIsBoundToKlineScope(t *testing.T) {
 	}
 }
 
+func TestValidateMooxSkillReadRequestAllowsOnlyExportedKlineSelectors(t *testing.T) {
+	cryptoTag := "venue:binance"
+	emptyTag := ""
+	otherTag := "venue:okx"
+	request := func(spaceID, datasetID, freq string, seriesTag *string) *pb.ReadTimeSeriesRowsReq {
+		return &pb.ReadTimeSeriesRowsReq{
+			SpaceId: spaceID, DatasetId: datasetID, Order: pb.SortOrder_SORT_ORDER_DESC,
+			Selectors: []*pb.TimeSeriesSelector{{
+				SpaceId: spaceID, DatasetId: datasetID, SubjectId: "subject", Freq: freq, SeriesTag: seriesTag,
+			}},
+		}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		req     *pb.ReadTimeSeriesRowsReq
+		wantErr bool
+	}{
+		{name: "crypto binance 1m", req: request("crypto_market", "binance_spot_kline_1m", "1m", &cryptoTag)},
+		{name: "crypto wildcard series", req: request("crypto_market", "binance_spot_kline_1m", "1m", nil), wantErr: true},
+		{name: "crypto empty series", req: request("crypto_market", "binance_spot_kline_1m", "1m", &emptyTag), wantErr: true},
+		{name: "crypto other series", req: request("crypto_market", "binance_spot_kline_1m", "1m", &otherTag), wantErr: true},
+		{name: "stock cn default series 1m", req: request("stock_cn", "stock_cn_kline", "1m", &emptyTag)},
+		{name: "stock cn wildcard series", req: request("stock_cn", "stock_cn_kline", "1m", nil), wantErr: true},
+		{name: "stock cn provider series", req: request("stock_cn", "stock_cn_kline", "1m", &cryptoTag), wantErr: true},
+		{name: "stock cn other frequency", req: request("stock_cn", "stock_cn_kline", "1d", &emptyTag), wantErr: true},
+		{name: "stock cn other dataset", req: request("stock_cn", "stock_kline", "1m", &emptyTag), wantErr: true},
+		{name: "other space", req: request("stock_us", "stock_cn_kline", "1m", &emptyTag), wantErr: true},
+		{name: "mixed allowed datasets", req: func() *pb.ReadTimeSeriesRowsReq {
+			req := request("stock_cn", "stock_cn_kline", "1m", &emptyTag)
+			req.Selectors[0].SpaceId = "crypto_market"
+			req.Selectors[0].DatasetId = "binance_spot_kline_1m"
+			req.Selectors[0].SeriesTag = &cryptoTag
+			return req
+		}(), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateMooxSkillReadRequest(tc.req)
+			if tc.wantErr && err == nil {
+				t.Fatal("expected selector to be rejected")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected selector to be allowed: %v", err)
+			}
+		})
+	}
+}
+
+func TestMooxSkillStockReadForwardsExactEmptySeriesToView(t *testing.T) {
+	var captured *pb.QueryTimeSeriesRowsReq
+	view := &recordingView{query: func(_ context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
+		captured = req
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: successRetInfo()}, nil
+	}}
+	svc, err := New(Options{
+		Node: &recordingNode{},
+		View: func(_ context.Context, spaceID, datasetID string) (pb.DataViewService, string, error) {
+			if spaceID != "stock_cn" || datasetID != "stock_cn_kline" {
+				t.Fatalf("resolved scope=%s/%s", spaceID, datasetID)
+			}
+			return view, "stock_cn_kline_view", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyTag := ""
+	rsp, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "moox-skill"},
+		SpaceId:  "stock_cn", DatasetId: "stock_cn_kline", Order: pb.SortOrder_SORT_ORDER_DESC,
+		Selectors: []*pb.TimeSeriesSelector{{
+			SpaceId: "stock_cn", DatasetId: "stock_cn_kline", SubjectId: "600000.SH", Freq: "1m", SeriesTag: &emptyTag,
+		}},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("rsp=%v err=%v", rsp, err)
+	}
+	if captured == nil || len(captured.GetSelectors()) != 1 || captured.GetSelectors()[0].SeriesTag == nil || captured.GetSelectors()[0].GetSeriesTag() != "" {
+		t.Fatalf("exact empty series_tag was not forwarded: %v", captured)
+	}
+}
+
 func stringPtr(value string) *string {
 	return &value
 }

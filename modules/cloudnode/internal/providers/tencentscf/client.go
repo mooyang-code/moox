@@ -21,6 +21,8 @@ type Client struct {
 	secretKey string
 }
 
+const scfRequestTimeoutSeconds = 360
+
 // FunctionRef identifies a Tencent SCF function.
 type FunctionRef struct {
 	Region       string
@@ -30,30 +32,34 @@ type FunctionRef struct {
 
 // FunctionInfo describes the current Tencent SCF function state.
 type FunctionInfo struct {
-	RequestID   string
-	Status      string
-	Runtime     string
-	Type        string
-	ModTime     string
-	CodeSize    int64
-	MemorySize  int64
-	Timeout     int64
-	Environment map[string]string
+	RequestID  string
+	Status     string
+	Runtime    string
+	Type       string
+	ModTime    string
+	CodeSize   int64
+	MemorySize int64
+	Timeout    int64
+	// MaxInstanceConcurrency is the static per-instance concurrency guard used
+	// by short-lived market-fetch Timer functions. Zero means not requested.
+	MaxInstanceConcurrency int64
+	Environment            map[string]string
 }
 
 // CreateFunctionRequest creates a Tencent SCF function from a COS package.
 type CreateFunctionRequest struct {
 	FunctionRef
-	Runtime     string
-	Handler     string
-	Description string
-	MemorySize  int64
-	Timeout     int64
-	Environment map[string]string
-	COSBucket   string
-	COSRegion   string
-	COSObject   string
-	Type        string
+	Runtime                string
+	Handler                string
+	Description            string
+	MemorySize             int64
+	Timeout                int64
+	MaxInstanceConcurrency int64
+	Environment            map[string]string
+	COSBucket              string
+	COSRegion              string
+	COSObject              string
+	Type                   string
 }
 
 // CreateFunctionResponse describes a Tencent SCF function creation.
@@ -92,9 +98,10 @@ type UpdateFunctionCodeResponse struct {
 
 type UpdateFunctionConfigurationRequest struct {
 	FunctionRef
-	Environment map[string]string
-	MemorySize  int64
-	Timeout     int64
+	Environment            map[string]string
+	MemorySize             int64
+	Timeout                int64
+	MaxInstanceConcurrency int64
 	// ClearNativeCLS explicitly sends empty CLS ids during an update, removing
 	// any historical SCF-native log destination. MooX uses the shared tRPC CLS
 	// writer instead.
@@ -209,7 +216,18 @@ func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInf
 	if response.Response.Timeout != nil {
 		out.Timeout = int64(*response.Response.Timeout)
 	}
+	// Keep the CloudNode field flat, but do not discard this readback:
+	// market-fetch deployment verification requires the provider's accepted
+	// value rather than merely the requested value.
+	out.MaxInstanceConcurrency = functionMaxInstanceConcurrency(response.Response)
 	return out, nil
+}
+
+func functionMaxInstanceConcurrency(response *scf.GetFunctionResponseParams) int64 {
+	if response == nil || response.InstanceConcurrencyConfig == nil || response.InstanceConcurrencyConfig.MaxConcurrency == nil {
+		return 0
+	}
+	return int64(*response.InstanceConcurrencyConfig.MaxConcurrency)
 }
 
 func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunctionConfigurationRequest) (*UpdateFunctionConfigurationResponse, error) {
@@ -227,6 +245,9 @@ func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunc
 	}
 	if req.Timeout > 0 {
 		request.Timeout = common.Int64Ptr(req.Timeout)
+	}
+	if req.MaxInstanceConcurrency > 0 {
+		request.InstanceConcurrencyConfig = &scf.InstanceConcurrencyConfig{DynamicEnabled: common.StringPtr("FALSE"), MaxConcurrency: common.Uint64Ptr(uint64(req.MaxInstanceConcurrency))}
 	}
 	if req.ClearNativeCLS {
 		request.ClsLogsetId = common.StringPtr("")
@@ -313,6 +334,9 @@ func buildCreateFunctionRequest(req CreateFunctionRequest) *scf.CreateFunctionRe
 	}
 	if req.Timeout > 0 {
 		request.Timeout = common.Int64Ptr(req.Timeout)
+	}
+	if req.MaxInstanceConcurrency > 0 {
+		request.InstanceConcurrencyConfig = &scf.InstanceConcurrencyConfig{DynamicEnabled: common.StringPtr("FALSE"), MaxConcurrency: common.Uint64Ptr(uint64(req.MaxInstanceConcurrency))}
 	}
 	if len(req.Environment) > 0 {
 		request.Environment = &scf.Environment{Variables: environmentVariables(req.Environment)}
@@ -420,7 +444,10 @@ func (c *Client) InvokeFunction(ctx context.Context, req InvokeFunctionRequest) 
 func (c *Client) newClient(region string) (*scf.Client, error) {
 	clientProfile := profile.NewClientProfile()
 	clientProfile.HttpProfile.Endpoint = scfEndpoint(region)
-	clientProfile.HttpProfile.ReqTimeout = 240
+	// Instrument snapshots can legitimately use the configured 300-second
+	// Invoke function budget. Keep the provider HTTP deadline above that budget
+	// so CloudNode does not abort a healthy long-running SCF invocation first.
+	clientProfile.HttpProfile.ReqTimeout = scfRequestTimeoutSeconds
 	credential := common.NewCredential(c.secretID, c.secretKey)
 	return scf.NewClient(credential, region, clientProfile)
 }

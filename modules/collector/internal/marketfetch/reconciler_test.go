@@ -47,6 +47,16 @@ type reconcilerNodesStub struct {
 	submitErr   error
 }
 
+func TestRuntimeConfigPatchBatchesRespectCloudNodeLimit(t *testing.T) {
+	patches := make([]*cloudnodepb.NodeRuntimeConfigPatch, 201)
+	batches := runtimeConfigPatchBatches(patches, runtimeConfigBatchSize)
+
+	require.Len(t, batches, 3)
+	require.Len(t, batches[0], 100)
+	require.Len(t, batches[1], 100)
+	require.Len(t, batches[2], 1)
+}
+
 func (s *reconcilerNodesStub) ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
 	if s.listStarted != nil && s.listRelease != nil {
 		s.listOnce.Do(func() { close(s.listStarted) })
@@ -164,6 +174,114 @@ func TestReconcilerCopiesOneDNSSnapshotToPerNodeAssignmentsAndAvoidsNoop(t *test
 
 	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto_market"))
 	require.Equal(t, 1, nodes.submits, "unchanged assignment and DNS must not call CloudNode again")
+}
+
+func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity", Enabled: true,
+		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m"}`,
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{
+		{NodeID: "timer-2", FunctionName: "moox-stock-cn-ap-shanghai-000", Region: "ap-shanghai", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "timer-1", FunctionName: "moox-stock-cn-ap-guangzhou-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+	}}
+	reconciler := &Reconciler{
+		Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{
+			{SubjectID: "600000.XSHG", ExternalSymbol: "sh600000", Status: "active"},
+			{SubjectID: "000001.XSHE", ExternalSymbol: "sz000001", Status: "active"},
+		}},
+		Nodes: nodes,
+		DNS: reconcilerDNSStub{routes: map[string]sources.DNSResolution{
+			"api.binance.com": {IPs: []string{"203.0.113.2", "203.0.113.1"}, ResolvedAt: time.Date(2026, 8, 29, 1, 2, 0, 0, time.UTC)},
+		}},
+		ExpectedStockCNTimerFunctions: 2,
+		MeasuredSafeGroupSize:         30,
+		Now:                           func() time.Time { return time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC) },
+	}
+
+	require.NoError(t, reconciler.Reconcile(context.Background(), StockCNSpaceID))
+	require.Len(t, nodes.patches, 2)
+	groups := make(map[string]struct{}, 2)
+	for _, patch := range nodes.patches {
+		require.True(t, patch.GetTimerEnabled())
+		env := patch.GetManagedEnvironment()
+		require.Equal(t, StockCNRouteID, env["MOOX_MARKET_FETCH_ROUTE_VERSION"])
+		require.NotEmpty(t, env["MOOX_MARKET_FETCH_PROVIDER_CHAIN"])
+		require.NotEmpty(t, env["MOOX_MARKET_FETCH_GROUP_ID"])
+		_, hasDNSRoutes := env["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"]
+		_, hasDNSHash := env["MOOX_MARKET_FETCH_DNS_HASH"]
+		require.False(t, hasDNSRoutes, "stock assignments must not inherit unrelated Binance DNS snapshots")
+		require.False(t, hasDNSHash, "stock assignments must not inherit unrelated Binance DNS hashes")
+		groups[env["MOOX_MARKET_FETCH_GROUP_ID"]] = struct{}{}
+	}
+	require.Len(t, groups, 2)
+}
+
+func TestReconcilerFailsClosedForMalformedActiveStockSubject(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity", Enabled: true,
+		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m"}`,
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-stock-cn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
+	reconciler := &Reconciler{
+		Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{
+			{SubjectID: "600000.XSHG", ExternalSymbol: "sh600000", Status: "active"},
+			{SubjectID: "BAD", ExternalSymbol: "", Status: "active"},
+		}},
+		Nodes: nodes, ExpectedStockCNTimerFunctions: 1, MeasuredSafeGroupSize: 30,
+	}
+
+	err := reconciler.Reconcile(context.Background(), StockCNSpaceID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid stock symbol")
+	require.Zero(t, nodes.submits, "a malformed active subject must not be silently dropped")
+}
+
+func TestReconcilerFailsClosedWhenStockRequiredGroupSizeExceedsMeasuredSafeSize(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity", Enabled: true,
+		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m"}`,
+	}
+	subjects := make([]domain.DatasetSubject, 0, 4)
+	for index := 0; index < 4; index++ {
+		subjects = append(subjects, domain.DatasetSubject{SubjectID: fmt.Sprintf("%06d.XSHG", 600000+index), ExternalSymbol: fmt.Sprintf("sh%06d", 600000+index), Status: "active"})
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{
+		{NodeID: "timer-0", FunctionName: "moox-stock-cn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "timer-1", FunctionName: "moox-stock-cn-001", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "timer-2", FunctionName: "moox-stock-cn-002", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+	}}
+	reconciler := &Reconciler{
+		Rules:   reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: subjects},
+		Nodes:   nodes, ExpectedStockCNTimerFunctions: 3, MeasuredSafeGroupSize: 1,
+	}
+
+	require.ErrorContains(t, reconciler.Reconcile(context.Background(), StockCNSpaceID), "required_group_size 2 exceeds measured_safe_group_size 1")
+	require.Zero(t, nodes.submits)
+}
+
+func TestReconcilerAllowsStockGroupAboveThirtyWhenMeasuredSafeSizeAllowsIt(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity", Enabled: true,
+		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m"}`,
+	}
+	subjects := make([]domain.DatasetSubject, 0, 40)
+	for index := 0; index < 40; index++ {
+		subjects = append(subjects, domain.DatasetSubject{SubjectID: fmt.Sprintf("%06d.XSHG", 600000+index), ExternalSymbol: fmt.Sprintf("sh%06d", 600000+index), Status: "active"})
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-stock-cn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
+	reconciler := &Reconciler{
+		Rules:   reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: subjects},
+		Nodes:   nodes, ExpectedStockCNTimerFunctions: 1, MeasuredSafeGroupSize: 40,
+	}
+
+	require.NoError(t, reconciler.Reconcile(context.Background(), StockCNSpaceID))
+	require.Len(t, nodes.patches, 1)
+	require.Len(t, nodes.patches[0].GetManagedEnvironment()["MOOX_MARKET_FETCH_SUBJECTS"], 40*11+39)
 }
 
 func TestReconcilerFailsWithoutTimerCapacityBeforeSubmitting(t *testing.T) {

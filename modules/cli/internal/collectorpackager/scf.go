@@ -28,8 +28,9 @@ type BuildSCFPackageResult struct {
 }
 
 // BuildSCFPackage creates a zip containing only the short-lived runtime binary,
-// configuration, and source definitions. CLS credentials are injected as SCF
-// environment variables and never rendered into the package.
+// configuration, source definitions, and the stock trading calendar when the
+// stock_cn profile is packaged. CLS credentials are injected as SCF environment
+// variables and never rendered into the package.
 func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error) {
 	if opts.BinaryPath == "" {
 		return nil, fmt.Errorf("binary path is required")
@@ -43,11 +44,14 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	if err := os.MkdirAll(filepath.Dir(opts.OutPath), 0o755); err != nil {
 		return nil, err
 	}
-	out, err := os.Create(opts.OutPath)
+	out, err := os.OpenFile(opts.OutPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return nil, err
 	}
 	defer out.Close()
+	if err := out.Chmod(0o600); err != nil {
+		return nil, err
+	}
 
 	zw := zip.NewWriter(out)
 	defer zw.Close()
@@ -99,8 +103,58 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 		return nil, err
 	}
 
+	calendarPath, err := stockCNCalendarPath(opts.ConfigDir)
+	if err != nil {
+		return nil, err
+	}
+	if calendarPath != "" {
+		if err := addFile(calendarPath, "markets/stock_cn/calendar.yaml"); err != nil {
+			return nil, err
+		}
+	}
+
+	routePath, err := stockCNRoutePath(opts.ConfigDir)
+	if err != nil {
+		return nil, err
+	}
+	if routePath != "" {
+		if err := addFile(routePath, "markets/stock_cn/route.yaml"); err != nil {
+			return nil, err
+		}
+	}
+
 	sort.Strings(entries)
 	return &BuildSCFPackageResult{Path: opts.OutPath, Entries: entries}, nil
+}
+
+func stockCNCalendarPath(configDir string) (string, error) {
+	if filepath.Base(filepath.Clean(configDir)) != "stock_cn" {
+		return "", nil
+	}
+	candidate := filepath.Clean(filepath.Join(configDir, "..", "..", "..", "config", "markets", "stock_cn", "calendar.yaml"))
+	info, err := os.Stat(candidate)
+	if err != nil {
+		return "", fmt.Errorf("stock_cn calendar is required at %s: %w", candidate, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("stock_cn calendar is required at %s: path is a directory", candidate)
+	}
+	return candidate, nil
+}
+
+func stockCNRoutePath(configDir string) (string, error) {
+	if filepath.Base(filepath.Clean(configDir)) != "stock_cn" {
+		return "", nil
+	}
+	candidate := filepath.Clean(filepath.Join(configDir, "..", "..", "..", "config", "markets", "stock_cn", "route.yaml"))
+	info, err := os.Stat(candidate)
+	if err != nil {
+		return "", fmt.Errorf("stock_cn route is required at %s: %w", candidate, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("stock_cn route is required at %s: path is a directory", candidate)
+	}
+	return candidate, nil
 }
 
 func addRenderedStorageAuthConfig(zw *zip.Writer, src, dst, secret string) error {

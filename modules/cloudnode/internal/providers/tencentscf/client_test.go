@@ -1,6 +1,26 @@
 package tencentscf
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
+	scf "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf/v20180416"
+)
+
+func TestGetFunctionResponseMapsNestedInstanceConcurrency(t *testing.T) {
+	response := &scf.GetFunctionResponseParams{
+		InstanceConcurrencyConfig: &scf.InstanceConcurrencyConfig{
+			MaxConcurrency: common.Uint64Ptr(1),
+		},
+	}
+
+	if got := functionMaxInstanceConcurrency(response); got != 1 {
+		t.Fatalf("MaxConcurrency = %d, want 1", got)
+	}
+	if got := functionMaxInstanceConcurrency(&scf.GetFunctionResponseParams{}); got != 0 {
+		t.Fatalf("missing MaxConcurrency = %d, want 0", got)
+	}
+}
 
 func TestBuildCreateFunctionRequestUsesCOSPackage(t *testing.T) {
 	req := buildCreateFunctionRequest(CreateFunctionRequest{

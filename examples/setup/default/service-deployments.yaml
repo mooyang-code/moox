@@ -77,15 +77,18 @@ services:
       health_url: http://127.0.0.1:20210/readyz
       health_kind: readiness
       monitor_enabled: true
-      gateway_methods: [CreateSpace, UpdateSpace, GetSpace, ListSpaces, CreateView, UpdateView, RequestViewRebuild, UpsertViewColumn, ListViewRebuildLogs, CreateDataSource, UpdateDataSource, GetDataSource, ListDataSources, UpsertSubject, UpsertSubjectSymbol, RegisterDataSubject, ListSubjectSymbols, CreateDataset, UpdateDataset, BindDatasetSubject, CreateFieldGroup, UpdateFieldGroup, GetFieldGroup, ListFieldGroups, CreateField, UpdateField, GetField, ListFields, BatchUpdateFields, DeleteFieldGroup, CreateFactor, UpdateFactor, GetFactor, ListFactors, UpsertDatasetColumn, ListDatasetColumns, GetDataNode, ListDataNodes, UpdateDataNode, DeleteDataNode, CheckDatasetActivation, ActivateDataset, RebindDatasetDataNode, RegisterArchiveFile, ListArchiveFiles]
+      max_body_bytes: 33554432
+      gateway_methods: [CreateSpace, UpdateSpace, GetSpace, ListSpaces, CreateView, UpdateView, RequestViewRebuild, GetView, ListViews, UpsertViewColumn, ListViewColumns, ListViewRebuildLogs, CreateDataSource, UpdateDataSource, GetDataSource, ListDataSources, UpsertSubject, UpsertSubjectSymbol, RegisterDataSubject, GetSubject, ListSubjects, ListSubjectSymbols, CreateDataset, UpdateDataset, GetDataset, ListDatasets, BindDatasetSubject, StageDatasetSubjectSet, ActivateDatasetSubjectSet, ListDatasetSubjects, CreateFieldGroup, UpdateFieldGroup, GetFieldGroup, ListFieldGroups, CreateField, UpdateField, GetField, ListFields, BatchUpdateFields, DeleteFieldGroup, CreateFactor, UpdateFactor, GetFactor, ListFactors, UpsertDatasetColumn, ListDatasetColumns, GetDataNode, ListDataNodes, UpdateDataNode, DeleteDataNode, CheckDatasetActivation, ActivateDataset, RebindDatasetDataNode, RegisterArchiveFile, ListArchiveFiles]
       gateway_callers: [admin-gateway, collector, factor, monitor, archive, moox-cli, storage-view]
       gateway_routes:
         - service_path: trpc.moox.storage.Metadata
           port: 20100
+          max_body_bytes: 33554432
           gateway_methods: [DeleteSpace]
           gateway_callers: [admin-gateway, moox-cli]
         - service_path: trpc.moox.storage.Metadata
           port: 20100
+          max_body_bytes: 33554432
           gateway_methods: [ClaimViewIndexBuild, UpdateViewIndexBuild, ActivateViewIndex, FailViewIndexBuild, CreateViewRebuildLog, UpdateViewRebuildLog, UpsertSkippedViewRebuildLog]
           gateway_callers: [storage-view]
         - service_path: trpc.moox.storage.Metadata
@@ -99,7 +102,7 @@ services:
         - service_path: trpc.moox.storage.PrimaryStore
           port: 20102
           gateway_methods: [ReadTimeSeriesRows]
-          gateway_callers: [admin-gateway, collector, factor, monitor, archive, storage-view, strategy, moox-skill]
+          gateway_callers: [admin-gateway, collector, factor, monitor, archive, storage-view, moox-skill]
   - name: storage-view
     kind: storage
     deployment_mode: process
@@ -117,7 +120,7 @@ services:
       health_kind: readiness
       monitor_enabled: true
       gateway_methods: [QueryTimeSeriesRows, SearchRecordRows]
-      gateway_callers: [admin-gateway, collector, factor, monitor, strategy]
+      gateway_callers: [admin-gateway, collector, factor, monitor]
   - name: eventbus
     kind: eventbus
     deployment_mode: process
@@ -201,7 +204,7 @@ services:
       health_url: http://127.0.0.1:11411/readyz
       health_kind: readiness
       monitor_enabled: true
-      timeout_ms: 120000
+      timeout_ms: 330000
       max_body_bytes: 33554432
       gateway_methods: ["*"]
       gateway_callers: ["*"]
@@ -222,13 +225,8 @@ services:
       health_kind: readiness
       monitor_enabled: true
       timeout_ms: 120000
-      gateway_methods: [CreateFactor, UpdateFactor, SetFactorStatus, DeleteFactor, UpsertBinding, DeleteBinding, RecalcFactor, GetEngineStatus]
+      gateway_methods: [CreateFactor, UpdateFactor, GetFactor, ListFactors, SetFactorStatus, DeleteFactor, UpsertBinding, ListBindings, DeleteBinding, RecalcFactor, GetEngineStatus]
       gateway_callers: [admin-gateway, moox-cli]
-      gateway_routes:
-        - service_path: trpc.moox.factor.FactorMgr
-          port: 11403
-          gateway_methods: [GetFactor, ListFactors, ListBindings]
-          gateway_callers: [admin-gateway, moox-cli, strategy]
   - name: moox_strategy
     kind: strategy
     deployment_mode: process

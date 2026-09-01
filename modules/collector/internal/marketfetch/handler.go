@@ -9,10 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
@@ -25,31 +26,52 @@ import (
 type Handler struct {
 	NewStorage func(string, string, string) (Storage, error)
 	Publish    func(context.Context, Request, proto.Message) error
-	// Routes is shared by Binance's spot/swap HTTP adapters. It is selected
-	// once when the short-lived handler is built and remains provider-neutral.
-	Routes marketdata.RouteIPProvider
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
-	// and uses the bounded Executor below; tests can prove the Timer contract
-	// without making an external exchange request.
-	Execute    func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error)
-	Now        func() time.Time
-	Reporter   ItemReporter
-	CLSReserve time.Duration
+	// and uses the market-specific common pipeline; tests can prove the Timer
+	// contract without making an external exchange request.
+	Execute func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error)
+	// NewInstrumentPipeline is the market-agnostic InstrumentPipeline factory.
+	// The composition root selects the provider registry and metadata for the
+	// requested market; the Handler owns neither provider protocol nor Storage
+	// mutation details.
+	NewInstrumentPipeline func(InstrumentStorage, string, marketdata.ProductType) (*InstrumentPipeline, error)
+	// NewCryptoInstrumentPipeline is kept as a narrow test seam for callers that
+	// construct a crypto-only Handler. NewHandler uses NewInstrumentPipeline.
+	NewCryptoInstrumentPipeline func(InstrumentStorage, marketdata.ProductType) (*InstrumentPipeline, error)
+	NewStockKlinePipeline       func(Storage) (*KlinePipeline, error)
+	NewCryptoKlinePipeline      func(Storage, marketdata.ProductType) (*KlinePipeline, error)
+	Now                         func() time.Time
+	Reporter                    ItemReporter
+	CLSReserve                  time.Duration
+	Metrics                     *Metrics
+	MetricsReporter             MetricsReporter
+}
+
+// MetricsReporter is the common one-shot observability sink used by long-lived
+// Collector and short-lived SCF runtimes. It is intentionally optional: market
+// writes must not fail just because the monitoring bus is unavailable.
+type MetricsReporter interface {
+	Handle(context.Context) error
 }
 
 const (
 	// A fresh SCF invocation establishes a TLS connection to EventBus before
-	// publishing the only completion fact. Half a second is not enough for
-	// that cold path. Three seconds leaves a 3.5-second market window after the
-	// Storage and CLS reserves in a 15-second call.
-	completionPublishReserve = 3 * time.Second
-	defaultStorageTimeout    = 5 * time.Second
+	// publishing the only completion fact. The first connection can take
+	// several seconds on a cold path, so leave a ten-second reserve and allow
+	// one bounded reconnect attempt. Invoke functions use the longer instrument
+	// timeout; Timer invocations do not publish completion events.
+	completionPublishReserve  = 10 * time.Second
+	completionConnectTimeout  = 4 * time.Second
+	completionConnectAttempts = 2
+	defaultStorageTimeout     = 5 * time.Second
+	metricsResponseReserve    = 500 * time.Millisecond
 )
 
 func NewHandler() *Handler {
 	return &Handler{NewStorage: func(target, market, writeSource string) (Storage, error) {
-		return binance.NewBatchStorageWithWriteSource(target, market, writeSource)
-	}, Publish: publishCompletion, Routes: NewHTTPRouteProviderFromEnvironment()}
+		return NewMarketStorageForMarket(target, market, writeSource)
+	}, Publish: publishCompletion, NewInstrumentPipeline: NewMarketInstrumentPipeline, NewCryptoInstrumentPipeline: NewCryptoInstrumentPipeline,
+		NewStockKlinePipeline: NewStockKlinePipeline, NewCryptoKlinePipeline: NewCryptoKlinePipeline}
 }
 
 func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
@@ -74,6 +96,10 @@ func (h *Handler) HandleTimer(ctx context.Context, requestID, nodeID string) (*m
 }
 
 func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, now time.Time) (*model.Response, error) {
+	if h == nil {
+		return nil, fmt.Errorf("market fetch handler is nil")
+	}
+	defer h.reportMetrics(ctx)
 	req, storageTarget, err := TimerRequestFromEnv(requestID, nodeID, now)
 	if err != nil {
 		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
@@ -125,6 +151,7 @@ func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudF
 	if storageTarget == "" {
 		return nil, fmt.Errorf("storage_rpc_gateway_target is required")
 	}
+	defer h.reportMetrics(ctx)
 	return h.handleRequest(ctx, req, storageTarget, publish)
 }
 
@@ -188,9 +215,78 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 	var payload *marketfetchpb.MarketFetchBatchCompleted
 	if h.Execute != nil {
 		payload, err = h.Execute(budgetCtx, req, storage)
+	} else if req.BatchKind == domain.BatchKindInstrumentSnapshot && (h.NewInstrumentPipeline != nil || h.NewCryptoInstrumentPipeline != nil) {
+		if len(req.Items) != 1 {
+			return nil, fmt.Errorf("instrument snapshot requires exactly one item")
+		}
+		instrumentStorage, ok := storage.(InstrumentStorage)
+		if !ok {
+			return nil, fmt.Errorf("instrument snapshot storage does not support active-set operations")
+		}
+		productType := marketdata.ProductType(strings.ToLower(strings.TrimSpace(req.MarketType)))
+		var pipeline *InstrumentPipeline
+		var pipelineErr error
+		if h.NewInstrumentPipeline != nil {
+			pipeline, pipelineErr = h.NewInstrumentPipeline(instrumentStorage, req.SpaceID, productType)
+		} else {
+			pipeline, pipelineErr = h.NewCryptoInstrumentPipeline(instrumentStorage, productType)
+		}
+		if pipelineErr != nil {
+			return nil, pipelineErr
+		}
+		pipeline.Metrics = h.Metrics
+		snapshotAt := time.Now().UTC()
+		if h.Now != nil {
+			snapshotAt = h.Now().UTC()
+		}
+		if rawSnapshotAt := strings.TrimSpace(req.Items[0].SnapshotAt); rawSnapshotAt != "" {
+			parsed, parseErr := time.Parse(time.RFC3339Nano, rawSnapshotAt)
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse instrument snapshot_at: %w", parseErr)
+			}
+			snapshotAt = parsed.UTC()
+		}
+		startedAt := time.Now()
+		_, pipelineErr = pipeline.Execute(budgetCtx, InstrumentPipelineRequest{
+			RequestID: req.RequestID, SnapshotAt: snapshotAt,
+			SnapshotShardIndex: req.Items[0].SnapshotShardIndex,
+			SnapshotShardCount: req.Items[0].SnapshotShardCount,
+		})
+		if pipelineErr != nil {
+			result := failureResult(req.Items[0], domain.ItemOutcomeStorageError, "instrument_snapshot", pipelineErr)
+			payload = buildCompletion(req, []domain.ItemResult{result}, snapshotAt, time.Since(startedAt))
+		} else {
+			payload = buildCompletion(req, []domain.ItemResult{successResult(req.Items[0])}, snapshotAt, time.Since(startedAt))
+		}
+	} else if req.SpaceID == StockCNSpaceID {
+		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)
+		defer workCancel()
+		stockStorage := &reservedDeadlineStorage{Storage: storage, parent: budgetCtx, timeout: storageTimeout}
+		newPipeline := h.NewStockKlinePipeline
+		if newPipeline == nil {
+			newPipeline = NewStockKlinePipeline
+		}
+		pipeline, pipelineErr := newPipeline(stockStorage)
+		if pipelineErr != nil {
+			return nil, pipelineErr
+		}
+		pipeline.Now = h.Now
+		pipeline.Metrics = h.Metrics
+		payload, err = pipeline.Execute(workCtx, req)
 	} else {
-		executor := &Executor{Klines: binance.NewKlineCollectorWithRoutes(h.Routes), Catchup: binance.NewKlineCollectorWithRoutes(h.Routes), Symbols: binance.NewSymbolCollectorWithRoutes(h.Routes), Storage: storage, Now: h.Now, CommitReserve: commitReserve, StorageReserve: storageTimeout, Reporter: h.Reporter}
-		payload, err = executor.Execute(budgetCtx, req)
+		newPipeline := h.NewCryptoKlinePipeline
+		if newPipeline == nil {
+			newPipeline = NewCryptoKlinePipeline
+		}
+		pipeline, pipelineErr := newPipeline(storage, marketdata.ProductType(strings.ToLower(strings.TrimSpace(req.MarketType))))
+		if pipelineErr != nil {
+			return nil, pipelineErr
+		}
+		pipeline.Now = h.Now
+		pipeline.Metrics = h.Metrics
+		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)
+		defer workCancel()
+		payload, err = pipeline.Execute(workCtx, req)
 	}
 	if err != nil {
 		return nil, err
@@ -203,6 +299,79 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		}
 	}
 	return &model.Response{Success: payload.GetStatus() == "succeeded" || payload.GetStatus() == "partial_failed", Message: payload.GetStatus(), Data: payload, RequestID: req.RequestID, Timestamp: time.Now().UTC()}, nil
+}
+
+func (h *Handler) reportMetrics(parent context.Context) {
+	if h == nil || h.MetricsReporter == nil {
+		return
+	}
+	timeout := time.Duration(envInt("MOOX_METRICS_REPORT_TIMEOUT_MS", 750)) * time.Millisecond
+	if deadline, ok := parent.Deadline(); ok {
+		remaining := time.Until(deadline) - metricsResponseReserve
+		if remaining <= 0 {
+			return
+		}
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	if err := h.MetricsReporter.Handle(ctx); err != nil {
+		log.WarnContextf(parent, "market_fetch_metrics_report_failed: %v", err)
+	}
+}
+
+func contextWithReserve(parent context.Context, reserve time.Duration) (context.Context, context.CancelFunc) {
+	if reserve <= 0 {
+		return context.WithCancel(parent)
+	}
+	if deadline, ok := parent.Deadline(); ok {
+		workDeadline := deadline.Add(-reserve)
+		if workDeadline.Before(time.Now()) {
+			workDeadline = time.Now().Add(time.Millisecond)
+		}
+		return context.WithDeadline(parent, workDeadline)
+	}
+	return context.WithTimeout(parent, 8*time.Second)
+}
+
+type reservedDeadlineStorage struct {
+	Storage
+	parent  context.Context
+	timeout time.Duration
+}
+
+func (s *reservedDeadlineStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
+	ctx, cancel := s.storageContext()
+	defer cancel()
+	return s.Storage.UpsertFields(ctx, rows)
+}
+
+func (s *reservedDeadlineStorage) RegisterDataSubject(_ context.Context, req *storagepb.RegisterDataSubjectReq) error {
+	ctx, cancel := s.storageContext()
+	defer cancel()
+	return s.Storage.RegisterDataSubject(ctx, req)
+}
+
+func (s *reservedDeadlineStorage) UpsertFieldsWithSource(_ context.Context, rows []*storagepb.RowFieldUpsert, source string) error {
+	ctx, cancel := s.storageContext()
+	defer cancel()
+	if storage, ok := s.Storage.(sourceStorage); ok {
+		return storage.UpsertFieldsWithSource(ctx, rows, source)
+	}
+	return s.Storage.UpsertFields(ctx, rows)
+}
+
+func (s *reservedDeadlineStorage) storageContext() (context.Context, context.CancelFunc) {
+	parent := s.parent
+	if parent == nil {
+		parent = context.Background()
+	}
+	if s.timeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, s.timeout)
 }
 
 // storageAndPublishReserves keeps the Storage RPC's full configured timeout,
@@ -253,6 +422,18 @@ func envInt(name string, fallback int) int {
 	return parsed
 }
 
+func envIntAllowZero(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+	return parsed
+}
+
 func decodeRequest(data map[string]interface{}, request *Request) error {
 	if len(data) == 0 {
 		return fmt.Errorf("market_fetch data is required")
@@ -276,16 +457,7 @@ func publishCompletion(ctx context.Context, req Request, payload proto.Message) 
 	if strings.TrimSpace(req.SpaceID) == "" {
 		return fmt.Errorf("space_id is required")
 	}
-	client, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv(nil, "moox-collector-market-fetch"))
-	if err != nil {
-		return err
-	}
-	defer client.Close()
 	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return err
-	}
-	publisher, err := events.NewPublisher(client, registry)
 	if err != nil {
 		return err
 	}
@@ -293,9 +465,37 @@ func publishCompletion(ctx context.Context, req Request, payload proto.Message) 
 	if subjectID == "" {
 		subjectID = req.BatchID
 	}
-	_, err = publisher.Publish(ctx, events.MarketFetchBatchCompleted, payload, events.PublishOptions{EventID: req.BatchID, OccurredAt: time.Now().UTC(), SpaceID: req.SpaceID, SubjectID: subjectID})
-	if err != nil {
-		log.ErrorContextf(ctx, "publish market fetch completion failed: batch_id=%s err=%v", req.BatchID, err)
+	config := jetstream.ConfigFromEnv(nil, "moox-collector-market-fetch")
+	config.ConnectTimeout = completionConnectTimeout
+	var lastErr error
+	for attempt := 1; attempt <= completionConnectAttempts; attempt++ {
+		client, connectErr := jetstream.Connect(ctx, config)
+		if connectErr == nil {
+			publisher, publisherErr := events.NewPublisher(client, registry)
+			if publisherErr == nil {
+				_, lastErr = publisher.Publish(ctx, events.MarketFetchBatchCompleted, payload, events.PublishOptions{EventID: req.BatchID, OccurredAt: time.Now().UTC(), SpaceID: req.SpaceID, SubjectID: subjectID})
+			} else {
+				lastErr = publisherErr
+			}
+			_ = client.Close()
+			if lastErr == nil {
+				return nil
+			}
+		} else {
+			lastErr = connectErr
+		}
+		if attempt < completionConnectAttempts {
+			timer := time.NewTimer(300 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
 	}
-	return err
+	if lastErr != nil {
+		log.ErrorContextf(ctx, "publish market fetch completion failed: batch_id=%s err=%v", req.BatchID, lastErr)
+	}
+	return lastErr
 }

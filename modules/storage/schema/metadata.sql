@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '9')
+VALUES ('schema_version', '10')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -392,6 +392,30 @@ WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_dataset_subjects SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
+
+-- A complete instrument set is staged here as building rows and only copied
+-- into t_dataset_subjects by one activation transaction.
+CREATE TABLE IF NOT EXISTS t_dataset_subject_set_staging (
+    c_space_id TEXT NOT NULL,
+    c_set_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_subject_id TEXT NOT NULL,
+    c_subject_role TEXT NOT NULL DEFAULT 'normal',
+    c_effective_start_time DATETIME NOT NULL DEFAULT '',
+    c_effective_end_time DATETIME NOT NULL DEFAULT '',
+    c_status TEXT NOT NULL DEFAULT 'building',
+    c_active_status TEXT NOT NULL DEFAULT 'active',
+    c_attrs_json TEXT NOT NULL DEFAULT '{}',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('building', 'activated')),
+    CHECK (c_active_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
+    CHECK (c_subject_role IN ('normal', 'benchmark', 'index', 'universe_member', 'record')),
+    FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (c_space_id, c_subject_id) REFERENCES t_subjects (c_space_id, c_subject_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    PRIMARY KEY (c_space_id, c_set_id, c_dataset_id, c_subject_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_dataset_subject_set_staging_set ON t_dataset_subject_set_staging (c_space_id, c_set_id);
 
 CREATE TABLE IF NOT EXISTS t_field_groups (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,

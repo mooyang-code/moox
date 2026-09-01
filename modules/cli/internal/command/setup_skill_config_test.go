@@ -143,6 +143,8 @@ func TestBuildSkillDataAccessConfigSelectsExactSpaceAndValidatesMaterial(t *test
 	require.Equal(t, testSkillGatewaySecret, got.Gateway.Secret)
 	require.Equal(t, security.HMACSHA256Hex(testSkillPrimarySecret, []byte("moox-skill")), got.Storage.AppKey)
 	require.Equal(t, "binance_spot_kline_1m", got.DataTypes["crypto"].Exchanges["binance"].KlineDatasets["1m"])
+	require.Equal(t, "stock_cn_kline", got.DataTypes["stock_cn"].Exchanges["stock_cn"].KlineDatasets["1m"])
+	require.Empty(t, got.DataTypes["stock_cn"].Exchanges["stock_cn"].SeriesTag)
 
 	_, err = buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "CRYPTO_MARKET", read)
 	require.ErrorContains(t, err, "space")
@@ -653,10 +655,23 @@ func (s *recordingSkillSSH) Run(ctx context.Context, argv []string, stdin io.Rea
 
 func testSkillDataAccessConfig() dataAccessConfig {
 	return dataAccessConfig{
-		Version:   1,
-		Gateway:   dataGatewayConfig{Target: "ip://203.0.113.8:11003", TargetNode: "control", KeyID: "moox-skill", Caller: "moox-skill", Secret: testSkillGatewaySecret},
-		Storage:   dataStorageAuthConfig{AppID: "moox-skill", AppKey: security.HMACSHA256Hex(testSkillPrimarySecret, []byte("moox-skill"))},
-		DataTypes: map[string]dataTypeConfig{"crypto": {DefaultExchange: "binance", Exchanges: map[string]exchangeConfig{"binance": {SpaceID: "crypto_market", SeriesTag: "venue:binance", KlineDatasets: map[string]string{"1m": "binance_spot_kline_1m"}}}}},
+		Version: 1,
+		Gateway: dataGatewayConfig{Target: "ip://203.0.113.8:11003", TargetNode: "control", KeyID: "moox-skill", Caller: "moox-skill", Secret: testSkillGatewaySecret},
+		Storage: dataStorageAuthConfig{AppID: "moox-skill", AppKey: security.HMACSHA256Hex(testSkillPrimarySecret, []byte("moox-skill"))},
+		DataTypes: map[string]dataTypeConfig{
+			"crypto": {
+				DefaultExchange: "binance",
+				Exchanges: map[string]exchangeConfig{
+					"binance": {SpaceID: "crypto_market", SeriesTag: "venue:binance", KlineDatasets: map[string]string{"1m": "binance_spot_kline_1m"}},
+				},
+			},
+			"stock_cn": {
+				DefaultExchange: "stock_cn",
+				Exchanges: map[string]exchangeConfig{
+					"stock_cn": {SpaceID: "stock_cn", SeriesTag: "", KlineDatasets: map[string]string{"1m": "stock_cn_kline"}},
+				},
+			},
+		},
 	}
 }
 

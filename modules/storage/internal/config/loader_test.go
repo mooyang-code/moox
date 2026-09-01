@@ -124,6 +124,27 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 	if partitions[2].ID != "system_metrics" || partitions[2].Durable != "storage_view_metrics" || partitions[2].FetchBatch != 16 || partitions[2].MaxWorkers != 4 || partitions[2].MaxAckPending != 64 {
 		t.Fatalf("metrics partition = %+v", partitions[2])
 	}
+	miscDatasets := partitions[3].Datasets()
+	wantStockRoutes := map[string]bool{
+		"financial_statement_metric": false,
+		"financial_summary":          false,
+		"index_kline":                false,
+		"stock_cn_instruments":       false,
+		"stock_cn_kline":             false,
+	}
+	for _, dataset := range miscDatasets {
+		if dataset.SpaceID == "stock_cn" {
+			if _, ok := wantStockRoutes[dataset.DatasetID]; !ok {
+				t.Fatalf("unexpected stock_cn default route %q", dataset.DatasetID)
+			}
+			wantStockRoutes[dataset.DatasetID] = true
+		}
+	}
+	for datasetID, found := range wantStockRoutes {
+		if !found {
+			t.Fatalf("stock_cn default route %q is missing: %+v", datasetID, miscDatasets)
+		}
+	}
 }
 
 func TestStorageViewConsumerPartitionsRejectOverlapAndInvalidLimits(t *testing.T) {

@@ -2,7 +2,7 @@ package symbol
 
 import "github.com/mooyang-code/moox/modules/collector/internal/domain"
 
-// BuildTaskSpecs creates the single symbol-list atomic task for a rule.
+// BuildTaskSpecs creates the single instrument-list atomic task for a rule.
 func BuildTaskSpecs(params *domain.CollectParams) []domain.TaskSpec {
 	return []domain.TaskSpec{
 		{

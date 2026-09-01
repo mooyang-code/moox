@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/schema"
@@ -27,7 +28,7 @@ func TestTaskRuleRepository_CRUD(t *testing.T) {
 	repo := s.TaskRules()
 	ctx := context.Background()
 	rule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "rule-1", DataType: "symbol", Provider: "binance", MarketType: "spot",
+		SpaceID: "crypto", RuleID: "rule-1", DataType: "instrument", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"source":{"kind":"none"}}`, Enabled: true,
 	}
 	require.NoError(t, repo.Create(ctx, rule))
@@ -42,7 +43,7 @@ func TestTaskRuleRepository_CRUD(t *testing.T) {
 	assert.Len(t, rules, 1)
 
 	updated, err := repo.UpdateByRuleID(ctx, "crypto", "rule-1", domain.TaskRule{
-		SpaceID: "crypto", RuleID: "rule-1", DataType: "symbol", Provider: "binance", MarketType: "spot",
+		SpaceID: "crypto", RuleID: "rule-1", DataType: "instrument", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"source":{"kind":"none"}}`, Creator: "updated", Enabled: true,
 	})
 	require.NoError(t, err)
@@ -52,6 +53,54 @@ func TestTaskRuleRepository_CRUD(t *testing.T) {
 	enabled, err := repo.ListEnabled(ctx, "crypto")
 	require.NoError(t, err)
 	assert.Len(t, enabled, 0)
+}
+
+func TestTaskRuleCoverageStartHonorsEnabledAndStockCalendar(t *testing.T) {
+	t.Setenv("MOOX_STOCK_CN_CALENDAR_PATH", filepath.Join("..", "..", "config", "markets", "stock_cn", "calendar.yaml"))
+	now := time.Date(2026, 8, 30, 3, 0, 0, 0, time.UTC) // Sunday in Asia/Shanghai.
+	lookback := domain.TaskRule{
+		SpaceID:       "stock_cn",
+		DataType:      "kline",
+		Provider:      "stock_cn_multi",
+		MarketType:    "equity",
+		CollectParams: `{"history_policy":{"mode":"lookback","lookback":2}}`,
+	}
+	start, err := resolveTaskRuleCoverageStart(&lookback, now)
+	require.NoError(t, err)
+	require.NotNil(t, start)
+	assert.Equal(t, time.Date(2026, 8, 27, 1, 30, 0, 0, time.UTC), *start)
+
+	disabled := lookback
+	disabled.Enabled = false
+	require.NoError(t, applyTaskRuleCoverageStart(&disabled, now, disabled.Enabled))
+	assert.Nil(t, disabled.CoverageStartTime)
+
+	repo := newCollectorStore(t).TaskRules()
+	disabled.RuleID = "disabled-stock-rule"
+	require.NoError(t, repo.Create(context.Background(), disabled))
+	stored, err := repo.GetByRuleID(context.Background(), "stock_cn", disabled.RuleID)
+	require.NoError(t, err)
+	assert.Nil(t, stored.CoverageStartTime)
+}
+
+func TestTaskRuleReenableRecomputesCoverageStart(t *testing.T) {
+	repo := newCollectorStore(t).TaskRules()
+	ctx := context.Background()
+	rule := domain.TaskRule{
+		SpaceID: "crypto", RuleID: "re-enable", DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"history_policy":{"mode":"live_only"}}`, Enabled: true,
+	}
+	require.NoError(t, repo.Create(ctx, rule))
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	rule.CoverageStartTime = &old
+	_, err := repo.UpdateByRuleID(ctx, "crypto", rule.RuleID, rule)
+	require.NoError(t, err)
+	require.NoError(t, repo.SetEnabled(ctx, "crypto", rule.RuleID, false))
+	require.NoError(t, repo.SetEnabled(ctx, "crypto", rule.RuleID, true))
+	stored, err := repo.GetByRuleID(ctx, "crypto", rule.RuleID)
+	require.NoError(t, err)
+	require.NotNil(t, stored.CoverageStartTime)
+	assert.True(t, stored.CoverageStartTime.After(old))
 }
 
 func TestCollectorRuleSchemaOmitsNodeAssignmentColumns(t *testing.T) {
