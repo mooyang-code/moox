@@ -34,8 +34,8 @@ type Provider struct {
 	instrumentBaseURL   string
 	client              *http.Client
 	now                 func() time.Time
-	instrumentTimeout   time.Duration
 	rateLimit           marketdata.RateLimitPolicy
+	instrumentRateLimit marketdata.RateLimitPolicy
 	maxBars             int
 	instrumentGuardOnce sync.Once
 	instrumentGuard     *marketdata.FeedGuard
@@ -55,14 +55,16 @@ func New(cfg Config) *Provider {
 	if cfg.InstrumentBaseURL == "" {
 		cfg.InstrumentBaseURL = "https://vip.stock.finance.sina.com.cn"
 	}
-	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = &http.Client{Timeout: 5 * time.Second}
-	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
 	if cfg.InstrumentRequestTimeout <= 0 {
-		cfg.InstrumentRequestTimeout = 5 * time.Second
+		cfg.InstrumentRequestTimeout = 15 * time.Second
+	}
+	if cfg.HTTPClient == nil {
+		// Instrument pagination has its own per-page guard. The transport must
+		// not expire before that guard can classify a slow upstream response.
+		cfg.HTTPClient = &http.Client{Timeout: cfg.InstrumentRequestTimeout}
 	}
 	if cfg.RateLimit.RequestsPerSecond <= 0 {
 		cfg.RateLimit = marketdata.RateLimitPolicy{RequestsPerSecond: 5, Burst: 2, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: 5 * time.Second}
@@ -73,7 +75,9 @@ func New(cfg Config) *Provider {
 	if cfg.MaxBarsPerRequest <= 0 {
 		cfg.MaxBarsPerRequest = 1023
 	}
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, instrumentBaseURL: strings.TrimRight(cfg.InstrumentBaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now, instrumentTimeout: cfg.InstrumentRequestTimeout, rateLimit: cfg.RateLimit, maxBars: cfg.MaxBarsPerRequest}
+	instrumentRateLimit := cfg.RateLimit
+	instrumentRateLimit.RequestTimeout = cfg.InstrumentRequestTimeout
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, instrumentBaseURL: strings.TrimRight(cfg.InstrumentBaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, instrumentRateLimit: instrumentRateLimit, maxBars: cfg.MaxBarsPerRequest}
 }
 
 func (*Provider) Descriptor() marketdata.ProviderDescriptor {
@@ -102,7 +106,7 @@ func (p *Provider) InstrumentSpec() marketdata.InstrumentSpec {
 		Exchanges:    []string{"XSHG", "XSHE", "XBSE"},
 		FullSnapshot: true,
 		PageSize:     100,
-		RateLimit:    p.rateLimit,
+		RateLimit:    p.instrumentRateLimit,
 	}
 }
 
@@ -229,8 +233,12 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		return marketdata.InstrumentSnapshot{}, p.instrumentGuardErr
 	}
 	declaredPages := 0
-	previousPageSize := 0
+	declaredTotal := 0
+	itemsSeen := 0
 	for page := 1; ; page++ {
+		if page > maxInstrumentPages {
+			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument pagination exceeded %d pages", marketdata.ErrProtocol, maxInstrumentPages)
+		}
 		query := url.Values{
 			"page":   {strconv.Itoa(page)},
 			"num":    {strconv.Itoa(spec.PageSize)},
@@ -292,6 +300,13 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 			}
 			items = commonsrc.ItemSlice(data, "list", "items", "diff")
 			totalPages = commonsrc.PageLimit(data, spec.PageSize)
+			if total, ok := commonsrc.IntField(data, "total", "count", "total_count", "totalnum", "total_nums"); ok && total > 0 {
+				if declaredTotal == 0 {
+					declaredTotal = total
+				} else if declaredTotal != total {
+					return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument total changed from %d to %d on page %d", marketdata.ErrProtocol, declaredTotal, total, page)
+				}
+			}
 		default:
 			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument page %d has unsupported response shape", marketdata.ErrProtocol, page)
 		}
@@ -302,12 +317,27 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument page count changed from %d to %d on page %d", marketdata.ErrProtocol, declaredPages, totalPages, page)
 			}
 		}
+		if declaredTotal == 0 && len(items) > 0 && len(items) < spec.PageSize {
+			if totalPages > 0 && page < totalPages {
+				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument page %d is short (%d < %d) before a declared terminal page", marketdata.ErrProtocol, page, len(items), spec.PageSize)
+			}
+		}
 		if len(items) == 0 {
-			if declaredPages > 0 || page == 1 || previousPageSize != spec.PageSize {
+			if declaredTotal > 0 && itemsSeen != declaredTotal {
+				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument total %d does not match %d items on terminal page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
+			}
+			if declaredPages > 0 || page == 1 {
 				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument page %d is empty without terminal evidence", marketdata.ErrProtocol, page)
 			}
+			// When no page count is declared, an empty follow-up page is the
+			// provider's terminal signal; a short final page is valid. Body
+			// truncation is still rejected by io.ReadAll before this point.
 			builder.NextPage()
 			break
+		}
+		itemsSeen += len(items)
+		if declaredTotal > 0 && itemsSeen > declaredTotal {
+			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument items %d exceed declared total %d on page %d", marketdata.ErrProtocol, itemsSeen, declaredTotal, page)
 		}
 		for _, item := range items {
 			instrument, err := commonsrc.InstrumentFromFields(
@@ -325,18 +355,71 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 			}
 		}
 		builder.NextPage()
-		previousPageSize = len(items)
 		if declaredPages > 0 {
 			if page >= declaredPages {
+				if declaredTotal > 0 && itemsSeen != declaredTotal {
+					return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument total %d does not match %d items after page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
+				}
 				break
 			}
 			continue
 		}
-		if len(items) < spec.PageSize {
-			break
+		// A short page is not terminal evidence unless the response declares
+		// the total page count. Fetch the next page and require it to be empty.
+	}
+	snapshot, err := builder.Snapshot()
+	if err != nil {
+		return marketdata.InstrumentSnapshot{}, err
+	}
+	if declaredTotal == 0 {
+		declaredTotal, err = p.fetchInstrumentTotal(ctx, p.instrumentGuard)
+		if err != nil {
+			return marketdata.InstrumentSnapshot{}, err
+		}
+		if len(snapshot.Instruments) != declaredTotal {
+			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument total %d does not match %d fetched items", marketdata.ErrProtocol, declaredTotal, len(snapshot.Instruments))
 		}
 	}
-	return builder.Snapshot()
+	return snapshot, nil
+}
+
+const maxInstrumentPages = 128
+
+func (p *Provider) fetchInstrumentTotal(ctx context.Context, guard *marketdata.FeedGuard) (int, error) {
+	query := url.Values{"node": {"hs_a"}}
+	var body []byte
+	if err := guard.Do(ctx, func(pageCtx context.Context) error {
+		httpReq, err := http.NewRequestWithContext(pageCtx, http.MethodGet, p.instrumentBaseURL+"/quotes_service/api/json_v2.php/Market_Center.getHQNodeStockCount?"+query.Encode(), nil)
+		if err != nil {
+			return err
+		}
+		httpReq.Header.Set("User-Agent", "moox-collector/1.0")
+		resp, err := p.client.Do(httpReq)
+		if err != nil {
+			return fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return marketdata.ErrRateLimited
+		}
+		if resp.StatusCode >= 400 {
+			return fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)
+		}
+		var readErr error
+		body, readErr = io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if readErr != nil {
+			return fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, readErr)
+		}
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	value := strings.Trim(strings.TrimSpace(string(body)), "\"")
+	total, err := strconv.Atoi(value)
+	if err != nil || total <= 0 {
+		return 0, fmt.Errorf("%w: sina instrument count response %q", marketdata.ErrProtocol, value)
+	}
+	return total, nil
 }
 
 func firstPresent(values map[string]any, keys ...string) (any, bool) {

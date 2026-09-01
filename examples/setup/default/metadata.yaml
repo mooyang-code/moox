@@ -91,6 +91,7 @@ datasets:
   status: disabled
   attributes:
     instrument_type: equity
+    market_type: equity
     storage_model: wide_common_metrics
 - space_id: stock_cn
   dataset_id: stock_cn_kline
@@ -103,6 +104,7 @@ datasets:
   - 1m
   status: disabled
   attributes:
+    market_type: equity
     source_directories: plan-3.6-stock-cn-kline
 - space_id: stock_cn
   dataset_id: index_kline

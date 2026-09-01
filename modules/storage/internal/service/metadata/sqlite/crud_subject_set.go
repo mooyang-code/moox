@@ -157,6 +157,12 @@ func (s *Store) ActivateDatasetSubjectSet(ctx context.Context, spaceID, setID st
 		setWhere = `(c_set_id = ? OR c_set_id LIKE ?)`
 		setArgs = []any{setID, shardPrefix + "%"}
 	}
+	stagedFingerprint, err := validateInstrumentSnapshotGeneration(ctx, tx, `
+		SELECT c_active_status, c_attrs_json FROM t_dataset_subject_set_staging
+		WHERE c_space_id = ? AND `+setWhere, append([]any{spaceID}, setArgs...)...)
+	if err != nil {
+		return 0, err
+	}
 	if status == "activated" {
 		var count int
 		queryArgs := append([]any{spaceID}, setArgs...)
@@ -186,8 +192,16 @@ func (s *Store) ActivateDatasetSubjectSet(ctx context.Context, spaceID, setID st
 	if err != nil {
 		return 0, err
 	}
+	activeFingerprint, err := instrumentSnapshotFingerprint(ctx, tx, fmt.Sprintf(`
+		SELECT c_attrs_json FROM t_dataset_subjects WHERE c_space_id = ? AND c_status = 'active' AND c_dataset_id IN (%s)`, placeholders), activeArgs...)
+	if err != nil {
+		return 0, err
+	}
 	if !stagedFetchedAt.IsZero() && stagedFetchedAt.Before(activeFetchedAt) {
 		return 0, ErrRevisionConflict
+	}
+	if !stagedFetchedAt.IsZero() && stagedFetchedAt.Equal(activeFetchedAt) && stagedFingerprint != "" && activeFingerprint != "" && stagedFingerprint != activeFingerprint {
+		return 0, fmt.Errorf("%w: staged instrument snapshot fingerprint differs from active generation", ErrRevisionConflict)
 	}
 	for _, datasetID := range datasetIDs {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM t_dataset_subjects WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID); err != nil {
@@ -276,6 +290,88 @@ func maxInstrumentFetchedAt(ctx context.Context, tx *sql.Tx, query string, args 
 		return time.Time{}, err
 	}
 	return latest, nil
+}
+
+// validateInstrumentSnapshotGeneration prevents shards built from different
+// provider snapshots from activating under one generation fence. Generic
+// dataset subject sets do not carry the marker and retain their legacy path.
+func validateInstrumentSnapshotGeneration(ctx context.Context, tx *sql.Tx, query string, args ...any) (string, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var expected string
+	sawFingerprint := false
+	sawMissing := false
+	for rows.Next() {
+		var activeStatus, raw string
+		if err := rows.Scan(&activeStatus, &raw); err != nil {
+			return "", err
+		}
+		if activeStatus != "active" {
+			continue
+		}
+		var binding pb.DatasetSubject
+		if err := unmarshalOptions.Unmarshal([]byte(raw), &binding); err != nil {
+			return "", err
+		}
+		fingerprint := strings.TrimSpace(binding.GetAttributes()["instrument_snapshot_fingerprint"])
+		if fingerprint == "" {
+			sawMissing = true
+			continue
+		}
+		if expected == "" {
+			expected = fingerprint
+		} else if expected != fingerprint {
+			return "", fmt.Errorf("%w: staged instrument snapshot fingerprints differ", ErrRevisionConflict)
+		}
+		sawFingerprint = true
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if sawFingerprint && sawMissing {
+		return "", fmt.Errorf("%w: staged instrument snapshot fingerprint is missing", ErrRevisionConflict)
+	}
+	return expected, nil
+}
+
+// instrumentSnapshotFingerprint reads the active generation's content fence
+// inside the same activation transaction. Legacy rows without this marker are
+// tolerated so the first managed snapshot can migrate them forward.
+func instrumentSnapshotFingerprint(ctx context.Context, tx *sql.Tx, query string, args ...any) (string, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var expected string
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return "", err
+		}
+		var binding pb.DatasetSubject
+		if err := unmarshalOptions.Unmarshal([]byte(raw), &binding); err != nil {
+			return "", err
+		}
+		fingerprint := strings.TrimSpace(binding.GetAttributes()["instrument_snapshot_fingerprint"])
+		if fingerprint == "" {
+			continue
+		}
+		if expected == "" {
+			expected = fingerprint
+			continue
+		}
+		if expected != fingerprint {
+			return "", fmt.Errorf("%w: active instrument snapshot fingerprints differ", ErrRevisionConflict)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return expected, nil
 }
 
 func validDatasetSubjectStatus(status string) bool {

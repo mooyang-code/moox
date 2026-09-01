@@ -41,17 +41,23 @@ const (
 	// DefaultCryptoMarketTimerFunctionCount is the baseline Timer fleet size
 	// for the built-in crypto market Space.
 	DefaultCryptoMarketTimerFunctionCount = 60
-	// DefaultStockCNMarketTimerFunctionCount is retained for callers that need
-	// the historical recommendation, but stock_cn config validation requires an
-	// explicit timer_function_count instead of applying this value implicitly.
-	DefaultStockCNMarketTimerFunctionCount = 200
+	// DefaultStockCNMarketTimerFunctionCount is used by callers that need the
+	// release baseline. stock_cn config validation still requires an explicit
+	// timer_function_count instead of applying this value implicitly.
+	DefaultStockCNMarketTimerFunctionCount = 170
 	// DefaultStockCNInstrumentInvokeTimeoutSeconds leaves enough room for the
 	// measured full-market Sina instrument snapshot while Timer functions keep
 	// their fixed 15-second execution budget.
 	DefaultStockCNInstrumentInvokeTimeoutSeconds = 60
+	// DefaultStockCNInstrumentSnapshotTimeoutSeconds is the longer budget for
+	// the single daily full-market Instrument Timer, which is not a Kline Timer.
+	DefaultStockCNInstrumentSnapshotTimeoutSeconds = 300
+	// DefaultStockCNInstrumentSnapshotMemorySize leaves headroom for the full
+	// market Instrument snapshot. Kline Timer functions remain fixed at 64MB.
+	DefaultStockCNInstrumentSnapshotMemorySize = 256
+	DefaultStockCNInstrumentSnapshotTimerCron  = "0 0 0 * * * *"
 	// Stock Timer groups are spread across this fixed second window. These are
-	// release defaults; changing them requires a new rendered configuration and
-	// the same egress gate as changing the fleet size.
+	// release defaults; changing them requires a new rendered configuration.
 	DefaultStockCNStaggerStartSecond        = 5
 	DefaultStockCNStaggerWindowSeconds      = 35
 	DefaultStockCNStaggerMaxStartsPerSecond = 6
@@ -259,29 +265,35 @@ type SCFFetcherSpace struct {
 	// TimerFunctionCount is the total Timer fleet size for this Space. stock_cn
 	// must set it explicitly to a positive value; other Spaces may use the
 	// built-in default when all enabled regional function_count values are zero.
-	TimerFunctionCount             int                `toml:"timer_function_count"`
-	MeasuredSafeGroupSize          int                `toml:"measured_safe_group_size"`
-	StaggerStartSecond             int                `toml:"stagger_start_second"`
-	StaggerWindowSeconds           int                `toml:"stagger_window_seconds"`
-	StaggerMaxStartsPerSecond      int                `toml:"stagger_max_starts_per_second"`
-	StorageGatewayNodeID           string             `toml:"storage_gateway_node_id"`
-	StorageRPCGatewayTarget        string             `toml:"storage_rpc_gateway_target"`
-	MemorySize                     int                `toml:"memory_size"`
-	TimeoutSeconds                 int                `toml:"timeout_seconds"`
-	InstrumentInvokeTimeoutSeconds int                `toml:"instrument_invoke_timeout_seconds"`
-	RealtimeBatchSize              int                `toml:"realtime_batch_size"`
-	RealtimeBarLimit               int                `toml:"realtime_bar_limit"`
-	CatchupBatchSize               int                `toml:"catchup_batch_size"`
-	CatchupBarLimit                int                `toml:"catchup_bar_limit"`
-	MaxInflightRequests            int                `toml:"max_inflight_requests"`
-	RequestTimeoutMS               int                `toml:"request_timeout_ms"`
-	HTTPMaxAttempts                int                `toml:"http_max_attempts"`
-	StorageMaxAttempts             int                `toml:"storage_max_attempts"`
-	StorageTimeoutMS               int                `toml:"storage_timeout_ms"`
-	MaxRetryAttempts               int                `toml:"max_retry_attempts"`
-	RetryDelays                    []string           `toml:"retry_delays"`
-	StaggerEnabled                 bool               `toml:"stagger_enabled"`
-	Regions                        []SCFFetcherRegion `toml:"regions"`
+	TimerFunctionCount               int                `toml:"timer_function_count"`
+	MeasuredSafeGroupSize            int                `toml:"measured_safe_group_size"`
+	InstrumentSnapshotRegion         string             `toml:"instrument_snapshot_region"`
+	InstrumentSnapshotCloudAccountID string             `toml:"instrument_snapshot_cloud_account_id"`
+	InstrumentSnapshotFunctionPrefix string             `toml:"instrument_snapshot_function_prefix"`
+	InstrumentSnapshotTimerCron      string             `toml:"instrument_snapshot_timer_cron"`
+	InstrumentSnapshotTimeoutSeconds int                `toml:"instrument_snapshot_timeout_seconds"`
+	InstrumentSnapshotMemorySize     int                `toml:"instrument_snapshot_memory_size"`
+	StaggerStartSecond               int                `toml:"stagger_start_second"`
+	StaggerWindowSeconds             int                `toml:"stagger_window_seconds"`
+	StaggerMaxStartsPerSecond        int                `toml:"stagger_max_starts_per_second"`
+	StorageGatewayNodeID             string             `toml:"storage_gateway_node_id"`
+	StorageRPCGatewayTarget          string             `toml:"storage_rpc_gateway_target"`
+	MemorySize                       int                `toml:"memory_size"`
+	TimeoutSeconds                   int                `toml:"timeout_seconds"`
+	InstrumentInvokeTimeoutSeconds   int                `toml:"instrument_invoke_timeout_seconds"`
+	RealtimeBatchSize                int                `toml:"realtime_batch_size"`
+	RealtimeBarLimit                 int                `toml:"realtime_bar_limit"`
+	CatchupBatchSize                 int                `toml:"catchup_batch_size"`
+	CatchupBarLimit                  int                `toml:"catchup_bar_limit"`
+	MaxInflightRequests              int                `toml:"max_inflight_requests"`
+	RequestTimeoutMS                 int                `toml:"request_timeout_ms"`
+	HTTPMaxAttempts                  int                `toml:"http_max_attempts"`
+	StorageMaxAttempts               int                `toml:"storage_max_attempts"`
+	StorageTimeoutMS                 int                `toml:"storage_timeout_ms"`
+	MaxRetryAttempts                 int                `toml:"max_retry_attempts"`
+	RetryDelays                      []string           `toml:"retry_delays"`
+	StaggerEnabled                   bool               `toml:"stagger_enabled"`
+	Regions                          []SCFFetcherRegion `toml:"regions"`
 }
 
 // DefaultTimerFunctionCount returns the built-in Timer capacity for a known
@@ -842,6 +854,9 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		if cfg.MeasuredSafeGroupSize <= 0 {
 			return fmt.Errorf("config_invalid: %s.measured_safe_group_size must be a positive value for stock_cn", path)
 		}
+		if err := normalizeStockCNInstrumentSnapshotConfig(cfg, path); err != nil {
+			return err
+		}
 		if cfg.StaggerStartSecond == 0 && cfg.StaggerWindowSeconds == 0 && cfg.StaggerMaxStartsPerSecond == 0 {
 			cfg.StaggerStartSecond = DefaultStockCNStaggerStartSecond
 			cfg.StaggerWindowSeconds = DefaultStockCNStaggerWindowSeconds
@@ -870,6 +885,8 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		return fmt.Errorf("config_invalid: %s.measured_safe_group_size is only valid for stock_cn", path)
 	} else if cfg.InstrumentInvokeTimeoutSeconds != 0 {
 		return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds is only valid for stock_cn", path)
+	} else if cfg.InstrumentSnapshotRegion != "" || cfg.InstrumentSnapshotCloudAccountID != "" || cfg.InstrumentSnapshotFunctionPrefix != "" || cfg.InstrumentSnapshotTimerCron != "" || cfg.InstrumentSnapshotTimeoutSeconds != 0 || cfg.InstrumentSnapshotMemorySize != 0 {
+		return fmt.Errorf("config_invalid: %s instrument snapshot settings are only valid for stock_cn", path)
 	} else if cfg.StaggerStartSecond != 0 || cfg.StaggerWindowSeconds != 0 || cfg.StaggerMaxStartsPerSecond != 0 {
 		return fmt.Errorf("config_invalid: %s stagger settings are only valid for stock_cn", path)
 	}
@@ -987,6 +1004,62 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func normalizeStockCNInstrumentSnapshotConfig(cfg *SCFFetcherSpace, path string) error {
+	if strings.TrimSpace(cfg.InstrumentSnapshotRegion) == "" {
+		for _, region := range cfg.Regions {
+			if region.Enabled {
+				cfg.InstrumentSnapshotRegion = strings.TrimSpace(region.Region)
+				break
+			}
+		}
+	}
+	if cfg.InstrumentSnapshotRegion == "" {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_region must select an enabled region", path)
+	}
+	var selected *SCFFetcherRegion
+	for index := range cfg.Regions {
+		region := &cfg.Regions[index]
+		if strings.EqualFold(strings.TrimSpace(region.Region), cfg.InstrumentSnapshotRegion) {
+			selected = region
+			break
+		}
+	}
+	if selected == nil || !selected.Enabled {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_region %q must select an enabled region", path, cfg.InstrumentSnapshotRegion)
+	}
+	if strings.TrimSpace(cfg.InstrumentSnapshotCloudAccountID) == "" {
+		cfg.InstrumentSnapshotCloudAccountID = strings.TrimSpace(selected.CloudAccountID)
+	}
+	if cfg.InstrumentSnapshotCloudAccountID == "" || cfg.InstrumentSnapshotCloudAccountID != strings.TrimSpace(selected.CloudAccountID) {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_cloud_account_id must match the selected region cloud_account_id", path)
+	}
+	if strings.TrimSpace(cfg.InstrumentSnapshotFunctionPrefix) == "" {
+		cfg.InstrumentSnapshotFunctionPrefix = strings.TrimSuffix(cfg.FunctionPrefix, "-") + "-instrument"
+	}
+	if !includesSpaceIdentity(cfg.InstrumentSnapshotFunctionPrefix, cfg.SpaceID) || strings.EqualFold(cfg.InstrumentSnapshotFunctionPrefix, cfg.FunctionPrefix) {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_function_prefix must be distinct and include space_id", path)
+	}
+	if strings.TrimSpace(cfg.InstrumentSnapshotTimerCron) == "" {
+		cfg.InstrumentSnapshotTimerCron = DefaultStockCNInstrumentSnapshotTimerCron
+	}
+	if cfg.InstrumentSnapshotTimerCron != DefaultStockCNInstrumentSnapshotTimerCron {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_timer_cron must run once daily as %q", path, DefaultStockCNInstrumentSnapshotTimerCron)
+	}
+	if cfg.InstrumentSnapshotTimeoutSeconds == 0 {
+		cfg.InstrumentSnapshotTimeoutSeconds = DefaultStockCNInstrumentSnapshotTimeoutSeconds
+	}
+	if cfg.InstrumentSnapshotTimeoutSeconds < DefaultStockCNInstrumentSnapshotTimeoutSeconds || cfg.InstrumentSnapshotTimeoutSeconds > 900 {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_timeout_seconds must be between %d and 900", path, DefaultStockCNInstrumentSnapshotTimeoutSeconds)
+	}
+	if cfg.InstrumentSnapshotMemorySize == 0 {
+		cfg.InstrumentSnapshotMemorySize = DefaultStockCNInstrumentSnapshotMemorySize
+	}
+	if cfg.InstrumentSnapshotMemorySize < 128 || cfg.InstrumentSnapshotMemorySize > 1024 || cfg.InstrumentSnapshotMemorySize%64 != 0 {
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_memory_size must be a multiple of 64 between 128 and 1024", path)
 	}
 	return nil
 }

@@ -38,6 +38,7 @@ var managedEnvironmentKeys = map[string]struct{}{
 	"MOOX_MARKET_FETCH_ROUTE_VERSION":       {},
 	"MOOX_MARKET_FETCH_GROUP_ID":            {},
 	"MOOX_MARKET_FETCH_GROUP_COUNT":         {},
+	"MOOX_MARKET_FETCH_MODE":                {},
 	"MOOX_METRICS_EVENTBUS_URL":             {},
 	"MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE": {},
 }

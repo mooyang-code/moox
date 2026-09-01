@@ -107,6 +107,7 @@ func resolveConfigPath() (string, error) {
 		strings.TrimSpace(os.Getenv("MOOX_STORAGE_MARKET_CONFIG")),
 		"sources/market/binance.yaml",
 		"config/sources/market/binance.yaml",
+		"configs/sources/market/binance.yaml",
 		"modules/collector/configs/sources/market/binance.yaml",
 		"modules/collector/configs/scf/stock_cn/sources/market/binance.yaml",
 	}

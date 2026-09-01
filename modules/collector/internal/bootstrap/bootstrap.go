@@ -49,6 +49,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "加载 collector 配置失败: %v", err)
 		return nil, err
 	}
+	log.InfoContextf(ctx, "collector stock_cn runtime config expected_timer_function_count=%d measured_safe_group_size=%d stagger_start_second=%d stagger_window_seconds=%d stagger_max_starts_per_second=%d", cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, cfg.StockCN.StaggerStartSecond, cfg.StockCN.StaggerWindowSeconds, cfg.StockCN.StaggerMaxStartsPerSecond)
 	dbm, err := store.Open(&store.Options{
 		Path:            cfg.Database.Path,
 		MaxIdleConns:    cfg.Database.MaxIdleConns,
@@ -311,7 +312,11 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	// is only used to discover active deployments; using it here makes every
 	// scheduled invocation hit the browser/admin auth surface instead of the
 	// authenticated service route.
-	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 5 * time.Second})
+	// A stock_cn reconciliation reads the complete 170-node Timer fleet from
+	// CloudNode. Keep the request bounded, but allow the control-plane query
+	// enough time to serialize the full fleet instead of treating a healthy
+	// large-fleet response as a coordination failure.
+	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 60 * time.Second})
 	metadataSource := storagesource.NewDatasetSource(cfg.Storage.GatewayTarget)
 	completionSpaceID := marketFetchSpaceID()
 	var resampleRunner *collectorresample.Runner
@@ -450,7 +455,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 				log.WarnContextf(tickCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
 			}
 			if err := reconciler.Reconcile(tickCtx, spaceID); err != nil {
-				log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s: %v", spaceID, err)
+				log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s expected_timer_function_count=%d measured_safe_group_size=%d: %v", spaceID, cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, err)
 			}
 			if err := readiness.EnsureCurrentAndNext(tickCtx, spaceID, time.Now().UTC()); err != nil {
 				log.WarnContextf(tickCtx, "collector period readiness prebuild failed space=%s: %v", spaceID, err)

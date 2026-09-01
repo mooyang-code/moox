@@ -52,6 +52,7 @@ func TestFetchInstrumentSnapshotPaginatesSuccessfullyAndCountsExchanges(t *testi
 			_, _ = w.Write([]byte(`{
 				"data": {
 					"pagecount": 2,
+					"total": 3,
 					"diff": [
 						{"f12": "600000", "f13": 1, "f14": "Pudong Bank"},
 						{"f12": "000001", "f13": 0, "f14": "Ping An Bank"}
@@ -62,6 +63,7 @@ func TestFetchInstrumentSnapshotPaginatesSuccessfullyAndCountsExchanges(t *testi
 			_, _ = w.Write([]byte(`{
 				"data": {
 					"pagecount": 2,
+					"total": 3,
 					"diff": [
 						{"f12": "920000", "f13": 2, "f14": "Beijing Stock"}
 					]
@@ -89,6 +91,72 @@ func TestFetchInstrumentSnapshotPaginatesSuccessfullyAndCountsExchanges(t *testi
 	require.Equal(t, "bj920000", snapshot.Instruments[2].ProviderSymbol)
 }
 
+func TestFetchInstrumentSnapshotDoesNotTreatShortPageAsCompleteWithoutTerminalEvidence(t *testing.T) {
+	requests := make([]string, 0, 2)
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.Query().Get("pn"))
+		switch r.URL.Query().Get("pn") {
+		case "1":
+			_, _ = w.Write([]byte(`{"data":{"pagecount":2,"total":2,"diff":[{"f12":"600000","f13":1,"f14":"Pudong Bank"}]}}`))
+		case "2":
+			http.Error(w, "truncated", http.StatusBadGateway)
+		default:
+			t.Fatalf("unexpected page %q", r.URL.Query().Get("pn"))
+		}
+	}))
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, RateLimit: marketdata.RateLimitPolicy{RequestsPerSecond: 100, Burst: 1, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: time.Second}})
+
+	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", RequestID: "short-page"})
+
+	require.ErrorIs(t, err, marketdata.ErrHTTPStatus)
+	require.Equal(t, []string{"1", "2"}, requests)
+}
+
+func TestFetchInstrumentSnapshotRejectsDeclaredTotalMismatch(t *testing.T) {
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("pn") {
+		case "1":
+			_, _ = w.Write([]byte(`{"data":{"pagecount":2,"total":3,"diff":[{"f12":"600000","f13":1,"f14":"Pudong Bank"}]}}`))
+		case "2":
+			_, _ = w.Write([]byte(`{"data":{"pagecount":2,"total":3,"diff":[{"f12":"000001","f13":0,"f14":"Ping An Bank"}]}}`))
+		default:
+			t.Fatalf("unexpected page %q", r.URL.Query().Get("pn"))
+		}
+	}))
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client})
+
+	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", RequestID: "declared-total"})
+
+	require.ErrorContains(t, err, "does not match")
+}
+
+func TestFetchInstrumentSnapshotAcceptsObjectDiffWithDeclaredTotal(t *testing.T) {
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"total":1,"diff":{"0":{"f12":"600000","f13":1,"f14":"Pudong Bank"}}}}`))
+	}))
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client})
+
+	snapshot, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", RequestID: "object-diff"})
+
+	require.NoError(t, err)
+	require.Len(t, snapshot.Instruments, 1)
+}
+
+func TestFetchInstrumentSnapshotRejectsShortFinalPageWithoutCount(t *testing.T) {
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("pn") == "1" {
+			_, _ = w.Write([]byte(`{"data":{"diff":[{"f12":"600000","f13":1,"f14":"Pudong Bank"}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"diff":[]}}`))
+	}))
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client})
+
+	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", RequestID: "short-empty"})
+
+	require.ErrorContains(t, err, "unverified short page")
+}
+
 func TestFetchInstrumentSnapshotFailsWhenLaterPageReturnsHTTPError(t *testing.T) {
 	requests := make([]string, 0, 2)
 	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +166,7 @@ func TestFetchInstrumentSnapshotFailsWhenLaterPageReturnsHTTPError(t *testing.T)
 			_, _ = w.Write([]byte(`{
 				"data": {
 					"pagecount": 2,
+					"total": 2,
 					"diff": [
 						{"f12": "600000", "f13": 1, "f14": "Pudong Bank"}
 					]

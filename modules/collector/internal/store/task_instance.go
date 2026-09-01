@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	defaultPageSize = 50
-	maxPageSize     = 1000
+	defaultPageSize             = 50
+	maxPageSize                 = 1000
+	taskInstanceLookupBatchSize = 500
+	taskInstanceUpsertBatchSize = 50
 )
 
 // TaskInstanceFilter describes task instance list filters.
@@ -105,10 +107,21 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 		taskIDs = append(taskIDs, instance.TaskID)
 	}
 	var existingRows []domain.TaskInstance
-	if err := r.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_task_id IN ?", spaceID, taskIDs).
-		Find(&existingRows).Error; err != nil {
-		return err
+	// SQLite's variable limit is commonly 999. Keep both the lookup IN list
+	// and the multi-row INSERT below bounded because a full stock catalogue is
+	// several thousand task instances.
+	for start := 0; start < len(taskIDs); start += taskInstanceLookupBatchSize {
+		end := start + taskInstanceLookupBatchSize
+		if end > len(taskIDs) {
+			end = len(taskIDs)
+		}
+		var rows []domain.TaskInstance
+		if err := r.db.WithContext(ctx).
+			Where("c_space_id = ? AND c_task_id IN ?", spaceID, taskIDs[start:end]).
+			Find(&rows).Error; err != nil {
+			return err
+		}
+		existingRows = append(existingRows, rows...)
 	}
 	existing := make(map[string]domain.TaskInstance, len(existingRows))
 	for _, instance := range existingRows {
@@ -142,7 +155,7 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 		}
 		changed[i].ModifyTime = now
 	}
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+	upsert := r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_task_id"}},
 		DoUpdates: clause.Assignments(map[string]any{
 			"c_rule_id":     clause.Expr{SQL: "excluded.c_rule_id"},
@@ -161,7 +174,17 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 			"c_result": clause.Expr{SQL: "CASE WHEN c_is_deleted = 1 AND excluded.c_data_type = 'kline_resample' THEN excluded.c_result ELSE c_result END"},
 			"c_mtime":  clause.Expr{SQL: "excluded.c_mtime"},
 		}),
-	}).Create(&changed).Error
+	})
+	for start := 0; start < len(changed); start += taskInstanceUpsertBatchSize {
+		end := start + taskInstanceUpsertBatchSize
+		if end > len(changed) {
+			end = len(changed)
+		}
+		if err := upsert.Create(changed[start:end]).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ClearMarketFetchAssignments removes the current SCF assignment before a

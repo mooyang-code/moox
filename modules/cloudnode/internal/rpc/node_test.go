@@ -163,6 +163,35 @@ func TestExecuteCreateTimerMarketFetcherKeepsFifteenSecondTimeout(t *testing.T) 
 	assert.Equal(t, int64(15), fake.created[0].Timeout)
 }
 
+func TestExecuteCreateInstrumentSnapshotTimerPreservesLongTimeout(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, catalog.UpsertPackage(context.Background(), store.FunctionPackage{
+		SpaceID: "stock_cn", PackageID: "moox-collector_dev", PackageName: "collector", Version: "dev",
+		Runtime: "CustomRuntime", PackageType: "collector", WorkloadType: "market_fetcher", CloudAccountID: "account-a",
+		COSRegion: "ap-guangzhou", COSBucket: "bucket", COSPath: "packages/collector.zip", Status: "available", CreateTime: time.Now().UTC(),
+	}))
+	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{
+		{err: errors.New("ResourceNotFound.FunctionName")},
+		{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 300, Environment: map[string]string{"MOOX_CODE_PACKAGE_ID": "moox-collector_dev", "MOOX_SPACE_ID": "stock_cn"}}},
+	}}
+	svc := &Service{
+		catalog:            catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory:   func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+	}
+	metadata, err := structpb.NewStruct(map[string]any{"biz_type": "market_fetcher", "function_mode": "instrument_snapshot", "function_name_prefix": "moox-fetcher-stock-cn-instrument"})
+	require.NoError(t, err)
+	_, err = svc.executeCreateNodeItem(context.Background(), "stock_cn", &pb.NodeCreateItem{
+		CloudAccountId: "account-a", Region: "ap-chengdu", PackageId: "moox-collector_dev", Runtime: "CustomRuntime", Handler: "main",
+		TriggerType: "timer", Config: map[string]string{"memory_size": "64", "timeout": "300"},
+		Environment: map[string]string{"MOOX_SPACE_ID": "stock_cn"}, Metadata: metadata,
+	}, 0)
+	require.NoError(t, err)
+	require.Len(t, fake.created, 1)
+	assert.Equal(t, int64(300), fake.created[0].Timeout)
+}
+
 func TestExecuteCreateNodeItemRejectsEnvironmentOverLimitBeforeCreate(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)

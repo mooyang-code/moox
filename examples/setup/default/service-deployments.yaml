@@ -77,15 +77,18 @@ services:
       health_url: http://127.0.0.1:20210/readyz
       health_kind: readiness
       monitor_enabled: true
+      max_body_bytes: 33554432
       gateway_methods: [CreateSpace, UpdateSpace, GetSpace, ListSpaces, CreateView, UpdateView, RequestViewRebuild, GetView, ListViews, UpsertViewColumn, ListViewColumns, ListViewRebuildLogs, CreateDataSource, UpdateDataSource, GetDataSource, ListDataSources, UpsertSubject, UpsertSubjectSymbol, RegisterDataSubject, GetSubject, ListSubjects, ListSubjectSymbols, CreateDataset, UpdateDataset, GetDataset, ListDatasets, BindDatasetSubject, StageDatasetSubjectSet, ActivateDatasetSubjectSet, ListDatasetSubjects, CreateFieldGroup, UpdateFieldGroup, GetFieldGroup, ListFieldGroups, CreateField, UpdateField, GetField, ListFields, BatchUpdateFields, DeleteFieldGroup, CreateFactor, UpdateFactor, GetFactor, ListFactors, UpsertDatasetColumn, ListDatasetColumns, GetDataNode, ListDataNodes, UpdateDataNode, DeleteDataNode, CheckDatasetActivation, ActivateDataset, RebindDatasetDataNode, RegisterArchiveFile, ListArchiveFiles]
       gateway_callers: [admin-gateway, collector, factor, monitor, archive, moox-cli, storage-view]
       gateway_routes:
         - service_path: trpc.moox.storage.Metadata
           port: 20100
+          max_body_bytes: 33554432
           gateway_methods: [DeleteSpace]
           gateway_callers: [admin-gateway, moox-cli]
         - service_path: trpc.moox.storage.Metadata
           port: 20100
+          max_body_bytes: 33554432
           gateway_methods: [ClaimViewIndexBuild, UpdateViewIndexBuild, ActivateViewIndex, FailViewIndexBuild, CreateViewRebuildLog, UpdateViewRebuildLog, UpsertSkippedViewRebuildLog]
           gateway_callers: [storage-view]
         - service_path: trpc.moox.storage.PrimaryStore

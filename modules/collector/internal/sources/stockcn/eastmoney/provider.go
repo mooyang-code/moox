@@ -18,12 +18,13 @@ import (
 )
 
 type Config struct {
-	BaseURL           string
-	KlineEndpoint     string
-	HTTPClient        *http.Client
-	Now               func() time.Time
-	RateLimit         marketdata.RateLimitPolicy
-	MaxBarsPerRequest int
+	BaseURL                  string
+	KlineEndpoint            string
+	HTTPClient               *http.Client
+	Now                      func() time.Time
+	InstrumentRequestTimeout time.Duration
+	RateLimit                marketdata.RateLimitPolicy
+	MaxBarsPerRequest        int
 }
 
 type Provider struct {
@@ -32,6 +33,7 @@ type Provider struct {
 	client              *http.Client
 	now                 func() time.Time
 	rateLimit           marketdata.RateLimitPolicy
+	instrumentRateLimit marketdata.RateLimitPolicy
 	maxBars             int
 	instrumentGuardOnce sync.Once
 	instrumentGuard     *marketdata.FeedGuard
@@ -45,19 +47,26 @@ func New(cfg Config) *Provider {
 	if cfg.KlineEndpoint == "" {
 		cfg.KlineEndpoint = "/api/qt/stock/kline/get"
 	}
-	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = &http.Client{Timeout: 5 * time.Second}
-	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
 	if cfg.RateLimit.RequestsPerSecond <= 0 {
 		cfg.RateLimit = marketdata.RateLimitPolicy{RequestsPerSecond: 5, Burst: 2, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: 5 * time.Second}
 	}
+	if cfg.InstrumentRequestTimeout <= 0 {
+		cfg.InstrumentRequestTimeout = 15 * time.Second
+	}
+	if cfg.HTTPClient == nil {
+		// Keep the HTTP transport at least as patient as the instrument page
+		// guard; otherwise a configured 15-second guard is silently truncated.
+		cfg.HTTPClient = &http.Client{Timeout: cfg.InstrumentRequestTimeout}
+	}
 	if cfg.MaxBarsPerRequest <= 0 {
 		cfg.MaxBarsPerRequest = 1205
 	}
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, maxBars: cfg.MaxBarsPerRequest}
+	instrumentRateLimit := cfg.RateLimit
+	instrumentRateLimit.RequestTimeout = cfg.InstrumentRequestTimeout
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, instrumentRateLimit: instrumentRateLimit, maxBars: cfg.MaxBarsPerRequest}
 }
 
 func (*Provider) Descriptor() marketdata.ProviderDescriptor {
@@ -86,7 +95,7 @@ func (p *Provider) InstrumentSpec() marketdata.InstrumentSpec {
 		Exchanges:    []string{"XSHG", "XSHE", "XBSE"},
 		FullSnapshot: true,
 		PageSize:     500,
-		RateLimit:    p.rateLimit,
+		RateLimit:    p.instrumentRateLimit,
 	}
 }
 
@@ -222,7 +231,13 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 	if p.instrumentGuardErr != nil {
 		return marketdata.InstrumentSnapshot{}, p.instrumentGuardErr
 	}
+	declaredTotal := 0
+	itemsSeen := 0
+	sawUnverifiedShortPage := false
 	for page := 1; ; page++ {
+		if page > maxInstrumentPages {
+			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument pagination exceeded %d pages", marketdata.ErrProtocol, maxInstrumentPages)
+		}
 		query := url.Values{
 			"pn":     {strconv.Itoa(page)},
 			"pz":     {strconv.Itoa(spec.PageSize)},
@@ -264,6 +279,13 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		if data == nil {
 			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument payload missing data", marketdata.ErrProtocol)
 		}
+		if total, ok := commonsrc.IntField(data, "total", "count", "total_count", "totalnum", "total_nums"); ok && total > 0 {
+			if declaredTotal == 0 {
+				declaredTotal = total
+			} else if declaredTotal != total {
+				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument total changed from %d to %d on page %d", marketdata.ErrProtocol, declaredTotal, total, page)
+			}
+		}
 		items := commonsrc.ItemSlice(data, "diff", "clist", "list")
 		if len(items) == 0 {
 			if diff := commonsrc.ObjectAt(data, "diff"); len(diff) > 0 {
@@ -279,8 +301,33 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 				}
 			}
 		}
+		totalPages := commonsrc.PageLimit(data, spec.PageSize)
+		hasMore, hasMoreKnown := commonsrc.BoolField(data, "hasnext", "has_next", "hasMore", "has_more")
+		if declaredTotal == 0 && len(items) > 0 && len(items) < spec.PageSize {
+			sawUnverifiedShortPage = true
+			if (totalPages > 0 && page < totalPages) || (hasMoreKnown && hasMore) {
+				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument page %d is short (%d < %d) before a declared terminal page", marketdata.ErrProtocol, page, len(items), spec.PageSize)
+			}
+		}
+		itemsSeen += len(items)
+		if declaredTotal > 0 && itemsSeen > declaredTotal {
+			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument items %d exceed declared total %d on page %d", marketdata.ErrProtocol, itemsSeen, declaredTotal, page)
+		}
 		if len(items) == 0 {
-			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument page %d is empty", marketdata.ErrProtocol, page)
+			if declaredTotal > 0 && itemsSeen != declaredTotal {
+				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument total %d does not match %d items on terminal page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
+			}
+			if declaredTotal == 0 && sawUnverifiedShortPage {
+				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument ended after an unverified short page", marketdata.ErrProtocol)
+			}
+			if page == 1 || (totalPages > 0 && page < totalPages) || (hasMoreKnown && hasMore) {
+				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument page %d is empty before terminal evidence", marketdata.ErrProtocol, page)
+			}
+			// Without an explicit total or has-more marker, the extra empty page is
+			// the provider's terminal signal; a short final page is valid. Body
+			// truncation is still rejected by io.ReadAll before this point.
+			builder.NextPage()
+			break
 		}
 		for _, item := range items {
 			instrument, err := commonsrc.InstrumentFromFields(
@@ -300,19 +347,33 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		builder.NextPage()
 		if totalPages := commonsrc.PageLimit(data, spec.PageSize); totalPages > 0 {
 			if page >= totalPages {
+				if declaredTotal > 0 && itemsSeen != declaredTotal {
+					return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument total %d does not match %d items after page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
+				}
+				if declaredTotal == 0 && sawUnverifiedShortPage {
+					return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument ended after an unverified short page", marketdata.ErrProtocol)
+				}
 				break
 			}
 			continue
 		}
 		if hasMore, ok := commonsrc.BoolField(data, "hasnext", "has_next", "hasMore", "has_more"); ok {
 			if !hasMore {
+				if declaredTotal > 0 && itemsSeen != declaredTotal {
+					return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument total %d does not match %d items after page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
+				}
+				if declaredTotal == 0 && sawUnverifiedShortPage {
+					return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument ended after an unverified short page", marketdata.ErrProtocol)
+				}
 				break
 			}
 			continue
 		}
-		if len(items) < spec.PageSize {
-			break
-		}
+		// A short page is not terminal evidence unless the response also
+		// carries total/page or has-more metadata. Fetch the next page and
+		// require an empty terminal response instead.
 	}
 	return builder.Snapshot()
 }
+
+const maxInstrumentPages = 128

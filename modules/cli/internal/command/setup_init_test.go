@@ -98,7 +98,7 @@ func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 		KeepDuration: "0",
 		seedCommon: seedCommon{
 			Status:     "disabled",
-			Attributes: map[string]string{"instrument_type": "equity", "storage_model": "wide_common_metrics"},
+			Attributes: map[string]string{"instrument_type": "equity", "market_type": "equity", "storage_model": "wide_common_metrics"},
 		},
 	})
 	assert.Equal(t, "crypto_market", bundle.Spaces[0].SpaceID)

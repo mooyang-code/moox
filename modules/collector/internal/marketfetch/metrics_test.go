@@ -212,7 +212,7 @@ func TestMetricsRejectFeedGroupOutsideConfiguredRange(t *testing.T) {
 func TestMetricsExposeConfiguredGroupsEgressAndInstrumentSnapshot(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
 	metrics.ObserveConfiguredGroups("stock_cn", StockCNRouteID, 200, 199)
-	metrics.ObserveEgressGate("stock_cn", StockCNRouteID, 200, 200, 199, 198)
+	metrics.ObserveEgressDiagnostic("stock_cn", StockCNRouteID, 200, 200, 199, 198)
 	metrics.ObserveInstrumentSnapshot("stock_cn", StockCNRouteID, "sina", "success", 5180, map[string]int{"XSHG": 2200, "XSHE": 2800, "XBSE": 180}, time.Unix(1722772800, 0))
 
 	require.Equal(t, 200.0, testutil.ToFloat64(metrics.configuredGroups.WithLabelValues("stock_cn", StockCNRouteID, "expected")))

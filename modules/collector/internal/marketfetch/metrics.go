@@ -353,7 +353,9 @@ func (m *Metrics) ObserveConfiguredGroupID(marketID, routeID string, groupID int
 	m.configuredGroupIDs.WithLabelValues(marketID, routeID, strconv.Itoa(groupID)).Add(1)
 }
 
-func (m *Metrics) ObserveEgressGate(marketID, routeID string, expected, results, nonEmpty, distinct int) {
+// ObserveEgressDiagnostic records optional probe facts. These values are
+// informational and must never be interpreted as a release or activation gate.
+func (m *Metrics) ObserveEgressDiagnostic(marketID, routeID string, expected, results, nonEmpty, distinct int) {
 	if m == nil {
 		return
 	}

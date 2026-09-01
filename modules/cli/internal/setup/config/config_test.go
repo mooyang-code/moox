@@ -112,7 +112,7 @@ func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 	assert.Equal(t, 30, crypto.Regions[1].FunctionCount)
 
 	stock := SCFFetcherSpace{
-		SpaceID: "stock_cn", TimerFunctionCount: 200, MeasuredSafeGroupSize: 30,
+		SpaceID: "stock_cn", TimerFunctionCount: 170, MeasuredSafeGroupSize: 40,
 		Regions: []SCFFetcherRegion{
 			{Region: "ap-guangzhou", Enabled: true, CloudAccountID: "gz"},
 			{Region: "ap-shanghai", Enabled: true, CloudAccountID: "sh"},
@@ -127,7 +127,7 @@ func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 	assert.Equal(t, DefaultStockCNStaggerMaxStartsPerSecond, stock.StaggerMaxStartsPerSecond)
 	total := 0
 	for _, region := range stock.Regions {
-		assert.Equal(t, 50, region.FunctionCount)
+		assert.Contains(t, []int{42, 43}, region.FunctionCount)
 		total += region.FunctionCount
 	}
 	assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, total)
@@ -168,7 +168,7 @@ func TestValidateSCFFetcherRejectsUnsafeStockStaggerRate(t *testing.T) {
 		StorageRPCGatewayTarget: "ip://106.53.107.122:11003", RealtimeBatchSize: 10, RealtimeBarLimit: 3,
 		CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
 		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000, MaxRetryAttempts: 3,
-		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 200}}}
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 200, CloudAccountID: "gz"}}}
 	err := validateSCFFetcherSpace(&base, "stock_cn")
 	require.ErrorContains(t, err, "requires up to 6 starts per second")
 }
@@ -184,7 +184,7 @@ func TestResolveSCFTimerFunctionCountsRejectsMismatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "regional function_count total")
 }
 
-func TestCustomExampleDefinesValidStockCN200FunctionFleet(t *testing.T) {
+func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
 	var manifest Manifest
 	_, err := toml.DecodeFile(filepath.Join("..", "..", "..", "..", "..", "custom.toml.example"), &manifest)
 	require.NoError(t, err)
@@ -200,7 +200,7 @@ func TestCustomExampleDefinesValidStockCN200FunctionFleet(t *testing.T) {
 		require.Len(t, space.Regions, 4)
 		for _, region := range space.Regions {
 			assert.True(t, region.Enabled)
-			assert.Equal(t, 50, region.FunctionCount)
+			assert.Contains(t, []int{42, 43}, region.FunctionCount)
 		}
 		return
 	}
@@ -229,6 +229,30 @@ func TestValidateSCFFetcherDefaultsAndBoundsStockCNInstrumentInvokeTimeout(t *te
 	base.InstrumentInvokeTimeoutSeconds = 59
 	err := validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]")
 	require.ErrorContains(t, err, "instrument_invoke_timeout_seconds")
+}
+
+func TestValidateSCFFetcherDefaultsIndependentStockInstrumentTimer(t *testing.T) {
+	base := SCFFetcherSpace{
+		SpaceID: "stock_cn", MemorySize: 64, TimeoutSeconds: 15,
+		TimerFunctionCount: 200, MeasuredSafeGroupSize: 30,
+		StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		RealtimeBatchSize:       10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-shanghai", Enabled: true, FunctionCount: 50, CloudAccountID: "tencent-scf-shanghai"},
+			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50, CloudAccountID: "tencent-scf-guangzhou"},
+			{Region: "ap-beijing", Enabled: true, FunctionCount: 50, CloudAccountID: "tencent-scf-beijing"},
+			{Region: "ap-chengdu", Enabled: true, FunctionCount: 50, CloudAccountID: "tencent-scf-chengdu"},
+		},
+	}
+
+	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, "ap-shanghai", base.InstrumentSnapshotRegion)
+	assert.Equal(t, "tencent-scf-shanghai", base.InstrumentSnapshotCloudAccountID)
+	assert.Equal(t, "moox-fetcher-stock_cn-instrument", base.InstrumentSnapshotFunctionPrefix)
+	assert.Equal(t, "0 0 0 * * * *", base.InstrumentSnapshotTimerCron)
+	assert.Equal(t, 300, base.InstrumentSnapshotTimeoutSeconds)
+	assert.Equal(t, DefaultStockCNInstrumentSnapshotMemorySize, base.InstrumentSnapshotMemorySize)
 }
 
 const validManifest = `[admin]

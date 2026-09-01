@@ -138,7 +138,7 @@ func NewStockInstrumentPipeline(storage InstrumentStorage) (*InstrumentPipeline,
 	if err := validateStockCNProviderChain(chain, providerConfigs, false); err != nil {
 		return nil, err
 	}
-	return &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: chain, SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID, DatasetID: StockCNInstrumentDatasetID, TargetDatasetID: StockCNDatasetID, DataSourceID: StockCNDataSourceID, RequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}, MinimumCount: 4000, RouteID: "stock_cn_instrument_v1"}, nil
+	return &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: chain, InstrumentProviderTimeout: 2 * time.Minute, SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID, DatasetID: StockCNInstrumentDatasetID, TargetDatasetID: StockCNDatasetID, DataSourceID: StockCNDataSourceID, RequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}, MinimumCount: 4000, RouteID: "stock_cn_instrument_v1"}, nil
 }
 
 func validateStockCNProviderChain(chain []string, providers map[string]stockCNProviderRuntime, kline bool) error {
@@ -160,11 +160,11 @@ func validateStockCNProviderChain(chain []string, providers map[string]stockCNPr
 func newStockCNProvider(providerID string, config stockCNProviderRuntime) (marketdata.MarketProvider, error) {
 	switch strings.ToLower(strings.TrimSpace(providerID)) {
 	case "sina":
-		return sina.New(sina.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
+		return sina.New(sina.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, InstrumentRequestTimeout: 30 * time.Second, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
 	case "tencent":
 		return tencent.New(tencent.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
 	case "eastmoney":
-		return eastmoney.New(eastmoney.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
+		return eastmoney.New(eastmoney.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, InstrumentRequestTimeout: 30 * time.Second, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
 	case "baidu":
 		return baidu.New(baidu.Config{RateLimit: config.RateLimit}), nil
 	default:

@@ -47,6 +47,16 @@ type reconcilerNodesStub struct {
 	submitErr   error
 }
 
+func TestRuntimeConfigPatchBatchesRespectCloudNodeLimit(t *testing.T) {
+	patches := make([]*cloudnodepb.NodeRuntimeConfigPatch, 201)
+	batches := runtimeConfigPatchBatches(patches, runtimeConfigBatchSize)
+
+	require.Len(t, batches, 3)
+	require.Len(t, batches[0], 100)
+	require.Len(t, batches[1], 100)
+	require.Len(t, batches[2], 1)
+}
+
 func (s *reconcilerNodesStub) ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
 	if s.listStarted != nil && s.listRelease != nil {
 		s.listOnce.Do(func() { close(s.listStarted) })
@@ -181,7 +191,10 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 			{SubjectID: "600000.XSHG", ExternalSymbol: "sh600000", Status: "active"},
 			{SubjectID: "000001.XSHE", ExternalSymbol: "sz000001", Status: "active"},
 		}},
-		Nodes:                         nodes,
+		Nodes: nodes,
+		DNS: reconcilerDNSStub{routes: map[string]sources.DNSResolution{
+			"api.binance.com": {IPs: []string{"203.0.113.2", "203.0.113.1"}, ResolvedAt: time.Date(2026, 8, 29, 1, 2, 0, 0, time.UTC)},
+		}},
 		ExpectedStockCNTimerFunctions: 2,
 		MeasuredSafeGroupSize:         30,
 		Now:                           func() time.Time { return time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC) },
@@ -196,6 +209,10 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 		require.Equal(t, StockCNRouteID, env["MOOX_MARKET_FETCH_ROUTE_VERSION"])
 		require.NotEmpty(t, env["MOOX_MARKET_FETCH_PROVIDER_CHAIN"])
 		require.NotEmpty(t, env["MOOX_MARKET_FETCH_GROUP_ID"])
+		_, hasDNSRoutes := env["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"]
+		_, hasDNSHash := env["MOOX_MARKET_FETCH_DNS_HASH"]
+		require.False(t, hasDNSRoutes, "stock assignments must not inherit unrelated Binance DNS snapshots")
+		require.False(t, hasDNSHash, "stock assignments must not inherit unrelated Binance DNS hashes")
 		groups[env["MOOX_MARKET_FETCH_GROUP_ID"]] = struct{}{}
 	}
 	require.Len(t, groups, 2)

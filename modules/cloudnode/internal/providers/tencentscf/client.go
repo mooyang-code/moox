@@ -216,11 +216,18 @@ func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInf
 	if response.Response.Timeout != nil {
 		out.Timeout = int64(*response.Response.Timeout)
 	}
-	// The currently pinned SCF SDK does not expose this optional field in
-	// GetFunctionResponseParams. Keep the wrapper field so newer SDKs can map it
-	// without changing the CloudNode contract; verification fails closed when a
-	// requested readback is unavailable.
+	// Keep the CloudNode field flat, but do not discard this readback:
+	// market-fetch deployment verification requires the provider's accepted
+	// value rather than merely the requested value.
+	out.MaxInstanceConcurrency = functionMaxInstanceConcurrency(response.Response)
 	return out, nil
+}
+
+func functionMaxInstanceConcurrency(response *scf.GetFunctionResponseParams) int64 {
+	if response == nil || response.InstanceConcurrencyConfig == nil || response.InstanceConcurrencyConfig.MaxConcurrency == nil {
+		return 0
+	}
+	return int64(*response.InstanceConcurrencyConfig.MaxConcurrency)
 }
 
 func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunctionConfigurationRequest) (*UpdateFunctionConfigurationResponse, error) {

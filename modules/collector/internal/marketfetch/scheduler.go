@@ -91,10 +91,22 @@ type Scheduler struct {
 }
 
 // fullInstrumentSnapshotShards keeps each SCF's SQLite metadata registration
-// small while still sourcing the complete exchange snapshot. Binance's active
-// USDT catalogue is currently well below 640 symbols, so each shard carries
-// at most about 20 subjects.
+// small while still sourcing the complete exchange snapshot. The same fixed
+// shard count is used for crypto and stock_cn so deployment identity remains
+// stable as the catalogue grows.
 const fullInstrumentSnapshotShards = 32
+
+const (
+	defaultBatchCompletionDeadline     = 70 * time.Second
+	instrumentSnapshotCompletionWindow = 6 * time.Minute
+)
+
+func batchCompletionDeadline(kind domain.BatchKind) time.Duration {
+	if kind == domain.BatchKindInstrumentSnapshot {
+		return instrumentSnapshotCompletionWindow
+	}
+	return defaultBatchCompletionDeadline
+}
 
 func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	if s == nil || s.Rules == nil || s.Batches == nil || s.Invoker == nil {
@@ -138,18 +150,27 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	rules := filterMarketFetchRules(allRules)
 	invokeRules := filterInvokeRules(rules)
 	rules = rotateRulesAfter(rules, s.lastRuleID)
-	nodes, err := s.Invoker.ListMarketFetchers(ctx, spaceID)
+	// The scheduler still owns the durable TaskInstance inventory for Timer
+	// K-lines even when InvokeNonRealtimeOnly keeps realtime execution out of
+	// this path. ListMarketFetchers intentionally returns Invoke nodes only, so
+	// fetch the Timer fleet separately before expanding the rule.
+	invokeNodes, err := s.Invoker.ListMarketFetchers(ctx, spaceID)
 	if err != nil {
 		return fmt.Errorf("list market fetcher nodes: %w", err)
 	}
+	timerNodes, err := s.Invoker.ListTimerMarketFetchers(ctx, spaceID)
+	if err != nil {
+		return fmt.Errorf("list timer market fetcher nodes: %w", err)
+	}
+	nodes := append(append([]scfinvoker.Node(nil), invokeNodes...), timerNodes...)
 	sort.Slice(nodes, func(i, j int) bool {
 		if nodes[i].Region != nodes[j].Region {
 			return nodes[i].Region < nodes[j].Region
 		}
 		return nodes[i].FunctionName < nodes[j].FunctionName
 	})
-	invokeNodes := filterNodesByTrigger(nodes, "invoke")
-	timerNodes := filterNodesByTrigger(nodes, "timer")
+	invokeNodes = filterNodesByTrigger(nodes, "invoke")
+	timerNodes = filterNodesByTrigger(nodes, "timer")
 	if len(invokeNodes) == 0 && len(invokeRules) > 0 {
 		return fmt.Errorf("no active Invoke market fetcher nodes")
 	}
@@ -932,7 +953,7 @@ func (s *Scheduler) planOne(ctx context.Context, rule domain.TaskRule, req Reque
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
-	batch := &domain.BatchInvocation{SpaceID: req.SpaceID, BatchID: req.BatchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: req.ShardIndex, RuleID: rule.RuleID, DatasetID: req.DatasetID, Frequency: req.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: 1, RequestJSON: string(raw), PlannedCount: len(req.Items), PlannedAt: &now, DeadlineAt: timePtr(now.Add(70 * time.Second))}
+	batch := &domain.BatchInvocation{SpaceID: req.SpaceID, BatchID: req.BatchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: req.ShardIndex, RuleID: rule.RuleID, DatasetID: req.DatasetID, Frequency: req.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: 1, RequestJSON: string(raw), PlannedCount: len(req.Items), PlannedAt: &now, DeadlineAt: timePtr(now.Add(batchCompletionDeadline(req.BatchKind)))}
 	created, err := s.Batches.CreatePlanned(ctx, batch)
 	if err != nil {
 		return false, err
@@ -990,7 +1011,7 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []s
 			}
 			continue
 		}
-		if _, err := s.Batches.MarkDispatchedToNode(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(70*time.Second), candidate.Region, candidate.NodeID, candidate.FunctionName); err != nil {
+		if _, err := s.Batches.MarkDispatchedToNode(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(batchCompletionDeadline(req.BatchKind)), candidate.Region, candidate.NodeID, candidate.FunctionName); err != nil {
 			log.WarnContextf(ctx, "mark market fetch batch dispatched failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
 		}
 		if attempt > 0 {
@@ -1145,7 +1166,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
 			continue
 		}
-		batch := &domain.BatchInvocation{SpaceID: spaceID, BatchID: batchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: index, RuleID: retry.RuleID, DatasetID: item.DatasetID, Frequency: item.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: retry.Attempt + 1, RequestJSON: string(raw), PlannedCount: 1, PlannedAt: &now, DeadlineAt: timePtr(now.Add(70 * time.Second))}
+		batch := &domain.BatchInvocation{SpaceID: spaceID, BatchID: batchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: index, RuleID: retry.RuleID, DatasetID: item.DatasetID, Frequency: item.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: retry.Attempt + 1, RequestJSON: string(raw), PlannedCount: 1, PlannedAt: &now, DeadlineAt: timePtr(now.Add(batchCompletionDeadline(req.BatchKind)))}
 		created, err := s.Batches.CreatePlanned(ctx, batch)
 		if err != nil {
 			return err
@@ -1187,7 +1208,7 @@ func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scf
 			}
 			continue
 		}
-		updated, err := s.Batches.MarkDispatchedToNode(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(70*time.Second), candidate.Region, candidate.NodeID, candidate.FunctionName)
+		updated, err := s.Batches.MarkDispatchedToNode(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(batchCompletionDeadline(req.BatchKind)), candidate.Region, candidate.NodeID, candidate.FunctionName)
 		if err != nil {
 			log.WarnContextf(ctx, "mark market fetch retry dispatched failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
 			return

@@ -106,7 +106,6 @@ type MarketHealthConfig struct {
 	InstrumentSnapshotMaxAge      time.Duration `yaml:"instrument_snapshot_max_age"`
 	InstrumentMinimumCount        int           `yaml:"instrument_minimum_count"`
 	InstrumentRequiredExchanges   []string      `yaml:"instrument_required_exchanges"`
-	EgressStaleAfter              time.Duration `yaml:"egress_stale_after"`
 }
 
 type MarketCanarySubject struct {
@@ -201,7 +200,7 @@ func Default() *Config {
 		},
 		Observability: ObservabilityConfig{Enabled: true, EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
 		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99, Subjects: []MarketCanarySubject{{SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance")}}},
-		MarketHealth:  MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, LowCapacityHeadroom: 2, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}, EgressStaleAfter: 15 * time.Minute},
+		MarketHealth:  MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, LowCapacityHeadroom: 2, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
 		Metrics:       MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../examples/setup/default/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
 	}
 }
@@ -295,9 +294,6 @@ func (c *Config) applyDefaults() {
 	}
 	if len(c.MarketHealth.InstrumentRequiredExchanges) == 0 {
 		c.MarketHealth.InstrumentRequiredExchanges = append([]string(nil), marketHealthDefaults.InstrumentRequiredExchanges...)
-	}
-	if c.MarketHealth.EgressStaleAfter == 0 {
-		c.MarketHealth.EgressStaleAfter = marketHealthDefaults.EgressStaleAfter
 	}
 	if c.Metrics.DatasetHealthPolicyPath == "" {
 		c.Metrics.DatasetHealthPolicyPath = metricsDefaults.DatasetHealthPolicyPath
@@ -481,9 +477,6 @@ func (c *Config) Validate() error {
 	}
 	if len(c.MarketHealth.InstrumentRequiredExchanges) == 0 {
 		return fmt.Errorf("market_health.instrument_required_exchanges must not be empty")
-	}
-	if c.MarketHealth.EgressStaleAfter <= 0 {
-		return fmt.Errorf("market_health.egress_stale_after must be positive")
 	}
 	if c.SysDeploy.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
 		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when sysdeploy monitoring is enabled")

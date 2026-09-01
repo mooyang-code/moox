@@ -57,12 +57,14 @@ type MetricsReporter interface {
 const (
 	// A fresh SCF invocation establishes a TLS connection to EventBus before
 	// publishing the only completion fact. The first connection can take
-	// several seconds on a cold path, so leave a ten-second reserve. Invoke
-	// functions use the longer instrument timeout; Timer invocations do not
-	// publish completion events.
-	completionPublishReserve = 10 * time.Second
-	defaultStorageTimeout    = 5 * time.Second
-	metricsResponseReserve   = 500 * time.Millisecond
+	// several seconds on a cold path, so leave a ten-second reserve and allow
+	// one bounded reconnect attempt. Invoke functions use the longer instrument
+	// timeout; Timer invocations do not publish completion events.
+	completionPublishReserve  = 10 * time.Second
+	completionConnectTimeout  = 4 * time.Second
+	completionConnectAttempts = 2
+	defaultStorageTimeout     = 5 * time.Second
+	metricsResponseReserve    = 500 * time.Millisecond
 )
 
 func NewHandler() *Handler {
@@ -455,16 +457,7 @@ func publishCompletion(ctx context.Context, req Request, payload proto.Message) 
 	if strings.TrimSpace(req.SpaceID) == "" {
 		return fmt.Errorf("space_id is required")
 	}
-	client, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv(nil, "moox-collector-market-fetch"))
-	if err != nil {
-		return err
-	}
-	defer client.Close()
 	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return err
-	}
-	publisher, err := events.NewPublisher(client, registry)
 	if err != nil {
 		return err
 	}
@@ -472,9 +465,37 @@ func publishCompletion(ctx context.Context, req Request, payload proto.Message) 
 	if subjectID == "" {
 		subjectID = req.BatchID
 	}
-	_, err = publisher.Publish(ctx, events.MarketFetchBatchCompleted, payload, events.PublishOptions{EventID: req.BatchID, OccurredAt: time.Now().UTC(), SpaceID: req.SpaceID, SubjectID: subjectID})
-	if err != nil {
-		log.ErrorContextf(ctx, "publish market fetch completion failed: batch_id=%s err=%v", req.BatchID, err)
+	config := jetstream.ConfigFromEnv(nil, "moox-collector-market-fetch")
+	config.ConnectTimeout = completionConnectTimeout
+	var lastErr error
+	for attempt := 1; attempt <= completionConnectAttempts; attempt++ {
+		client, connectErr := jetstream.Connect(ctx, config)
+		if connectErr == nil {
+			publisher, publisherErr := events.NewPublisher(client, registry)
+			if publisherErr == nil {
+				_, lastErr = publisher.Publish(ctx, events.MarketFetchBatchCompleted, payload, events.PublishOptions{EventID: req.BatchID, OccurredAt: time.Now().UTC(), SpaceID: req.SpaceID, SubjectID: subjectID})
+			} else {
+				lastErr = publisherErr
+			}
+			_ = client.Close()
+			if lastErr == nil {
+				return nil
+			}
+		} else {
+			lastErr = connectErr
+		}
+		if attempt < completionConnectAttempts {
+			timer := time.NewTimer(300 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
 	}
-	return err
+	if lastErr != nil {
+		log.ErrorContextf(ctx, "publish market fetch completion failed: batch_id=%s err=%v", req.BatchID, lastErr)
+	}
+	return lastErr
 }

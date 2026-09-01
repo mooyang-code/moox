@@ -369,36 +369,32 @@ func TestResolveCollectorProbeExpectedCountUsesStockCNFleetConfig(t *testing.T) 
 func TestSelectCollectorProbeNodesKeepsCryptoSemanticsAndStockTimersOnly(t *testing.T) {
 	nodes := []adminclient.CloudNode{
 		{NodeID: "timer-a", PackageID: "pkg", TriggerType: "timer", Metadata: map[string]any{"deployment_ready": true}},
+		{NodeID: "instrument-a", PackageID: "pkg", TriggerType: "timer", Metadata: map[string]any{"deployment_ready": true, "function_mode": "instrument_snapshot"}},
 		{NodeID: "invoke-a", PackageID: "pkg", TriggerType: "invoke", Metadata: map[string]any{"deployment_ready": true}},
 	}
 
-	assert.Len(t, selectCollectorProbeNodes(nodes, false), 2)
+	assert.Len(t, selectCollectorProbeNodes(nodes, false), 3)
 	stockNodes := selectCollectorProbeNodes(nodes, true)
 	require.Len(t, stockNodes, 1)
 	assert.Equal(t, "timer-a", stockNodes[0].NodeID)
+	instrumentNodes := selectCollectorInstrumentSnapshotProbeNodes(nodes)
+	require.Len(t, instrumentNodes, 1)
+	assert.Equal(t, "instrument-a", instrumentNodes[0].NodeID)
 }
 
-func TestValidateStockCNEgressProbeReportRequiresExactUniquePublicIPs(t *testing.T) {
-	valid := &collectorProbeReport{Results: []collectorProbeResult{
-		{NodeID: "node-a", OutboundIP: "198.51.100.1"},
-		{NodeID: "node-b", OutboundIP: "198.51.100.2"},
-	}}
-	require.NoError(t, validateStockCNEgressProbeReport(valid, 2))
-	assert.True(t, valid.GatePassed)
-	assert.Equal(t, 2, valid.EligibleCount)
-	assert.Equal(t, 2, valid.DistinctCount)
-
-	for name, report := range map[string]*collectorProbeReport{
-		"eligible mismatch":   {Results: []collectorProbeResult{{NodeID: "node-a", OutboundIP: "198.51.100.1"}}},
-		"empty public ip":     {Results: []collectorProbeResult{{NodeID: "node-a", OutboundIP: "198.51.100.1"}, {NodeID: "node-b"}}},
-		"duplicate public ip": {Results: []collectorProbeResult{{NodeID: "node-a", OutboundIP: "198.51.100.1"}, {NodeID: "node-b", OutboundIP: "198.51.100.1"}}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			err := validateStockCNEgressProbeReport(report, 2)
-			require.Error(t, err)
-			assert.False(t, report.GatePassed)
-		})
+func TestCollectorEgressProbeReportKeepsOnlyDiagnosticCounts(t *testing.T) {
+	report := &collectorProbeReport{
+		Results: []collectorProbeResult{
+			{NodeID: "node-a", OutboundIP: "198.51.100.1"},
+			{NodeID: "node-b", OutboundIP: "198.51.100.1"},
+		},
+		ExpectedCount: 170,
+		EligibleCount: 2,
+		DistinctCount: 1,
 	}
+	assert.Equal(t, 170, report.ExpectedCount)
+	assert.Equal(t, 2, report.EligibleCount)
+	assert.Equal(t, 1, report.DistinctCount)
 }
 
 func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
@@ -426,7 +422,7 @@ func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
 	assert.Equal(t, "realtime", cryptoData["batch_kind"])
 }
 
-func TestDefaultStockCNCollectorRuleStaysDisabledUntilEgressGatePasses(t *testing.T) {
+func TestDefaultStockCNCollectorRulesRequireExplicitActivation(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "collector-rules.yaml"))
 	require.NoError(t, err)
 	var bundle struct {
@@ -948,11 +944,13 @@ func TestResolveCollectorCLSSinkUsesSelectedCloudAccountSecret(t *testing.T) {
 		gotID, gotKey, gotRegion = secretID, secretKey, region
 		return collectorCLSAPI{}, nil
 	}
-	_, err := resolveCollectorCLSSink(context.Background(), client, adminclient.CloudAccount{AccountID: "tencent-scf-shanghai", CredentialSecretID: "secret-shanghai"}, "ap-shanghai")
+	sink, err := resolveCollectorCLSSink(context.Background(), client, adminclient.CloudAccount{AccountID: "tencent-scf-shanghai", CredentialSecretID: "secret-shanghai"}, "ap-shanghai")
 	require.NoError(t, err)
 	assert.Equal(t, "shanghai-id", gotID)
 	assert.Equal(t, "shanghai-key", gotKey)
 	assert.Equal(t, "ap-shanghai", gotRegion)
+	assert.Equal(t, "shanghai-id", sink.SecretID)
+	assert.Equal(t, "shanghai-key", sink.SecretKey)
 }
 
 func TestBuildCollectorCreateNodeItemRejectsLegacyJobItemWorkloads(t *testing.T) {
@@ -1043,10 +1041,43 @@ func TestBuildCollectorCreateNodeItemUsesLongStockCNInstrumentInvokeTimeoutOnlyF
 	assert.Equal(t, "90", configured.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
 }
 
-func TestCollectorInstrumentCanaryEventUsesShardedMarketFetchAction(t *testing.T) {
+func TestBuildCollectorCreateNodeItemUsesIndependentInstrumentTimerMode(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	fetcher := &setupconfig.SCFFetcherSpace{
+		SpaceID: "stock_cn", MemorySize: 64, TimeoutSeconds: 15,
+		InstrumentSnapshotTimeoutSeconds: 300,
+		RealtimeBatchSize:                10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
+	}
+
+	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-shanghai", TriggerType: "timer",
+		InstrumentSnapshotTimer: true, FetcherConfig: fetcher,
+	}, "moox-collector-stock-cn_dev")
+
+	assert.Equal(t, "300", item.Config["timeout"])
+	assert.Equal(t, "256", item.Config["memory_size"])
+	assert.Equal(t, "1", item.Config["max_instance_concurrency"])
+	assert.Equal(t, "300", item.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
+	assert.Equal(t, "instrument_snapshot", item.Environment["MOOX_MARKET_FETCH_MODE"])
+	assert.Equal(t, 300, item.Metadata["timeout_seconds"])
+	assert.Equal(t, 256, item.Metadata["memory_size"])
+	assert.Equal(t, "instrument_snapshot", item.Metadata["function_mode"])
+}
+
+func TestBuildCollectorCreateNodeItemRejectsConcurrentSCFInstances(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
+		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-shanghai", TriggerType: "timer",
+		Config: []string{"max_instance_concurrency=2"},
+	}, "moox-collector-stock-cn_dev")
+	require.ErrorContains(t, err, "max_instance_concurrency is fixed at 1")
+}
+
+func TestCollectorInstrumentCanaryEventUsesIndependentSnapshotAction(t *testing.T) {
 	event := collectorInstrumentCanaryEvent(collectorPublishOptions{StorageRPCGatewayTarget: "ip://storage:11003", SpaceID: "stock_cn", Region: "ap-singapore"}, "node-1", "batch-1", 0, stockInstrumentCanaryShardCount, "2026-08-30T00:00:00Z")
 
-	assert.Equal(t, "market_fetch", event["action"])
+	assert.Equal(t, "instrument_snapshot", event["action"])
 	assert.Equal(t, "ip://storage:11003", event["storage_rpc_gateway_target"])
 	data, ok := event["data"].(map[string]any)
 	require.True(t, ok)
@@ -1087,6 +1118,17 @@ func TestCollectorStockCNTimerRestorePatchesIncludeFreshNodes(t *testing.T) {
 	assert.Equal(t, "5 * * * * * *", patches[0].TimerCron)
 	assert.Equal(t, "sh-1", patches[1].NodeID)
 	assert.Equal(t, "6 * * * * * *", patches[1].TimerCron)
+}
+
+func TestCollectorStockCNInstrumentTimerEnablePatchesUseDailyCron(t *testing.T) {
+	patches := collectorStockCNInstrumentTimerEnablePatches([]adminclient.CloudNode{
+		{NodeID: "instrument-0", Metadata: map[string]any{"function_mode": "instrument_snapshot"}},
+	}, "0 0 0 * * * *")
+
+	require.Len(t, patches, 1)
+	assert.Equal(t, "instrument-0", patches[0].NodeID)
+	assert.True(t, patches[0].TimerEnabled)
+	assert.Equal(t, "0 0 0 * * * *", patches[0].TimerCron)
 }
 
 func TestCollectorTimerDisablePatchesCoverEveryPublishedNode(t *testing.T) {

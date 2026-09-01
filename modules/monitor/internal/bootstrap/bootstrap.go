@@ -240,7 +240,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		InstrumentSnapshotMaxAge:    cfg.MarketHealth.InstrumentSnapshotMaxAge,
 		InstrumentMinimumCount:      cfg.MarketHealth.InstrumentMinimumCount,
 		InstrumentRequiredExchanges: append([]string(nil), cfg.MarketHealth.InstrumentRequiredExchanges...),
-		EgressStaleAfter:            cfg.MarketHealth.EgressStaleAfter,
 	}
 	businessFreshness := buildBusinessFreshnessReporter(&monitorobservability.Builder{
 		Metrics: metricsQuery, Hosts: hostStore,

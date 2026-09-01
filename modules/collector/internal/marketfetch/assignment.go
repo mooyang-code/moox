@@ -419,7 +419,7 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 func eligibleTimerNodes(nodes []scfinvoker.Node) []scfinvoker.Node {
 	timerNodes := make([]scfinvoker.Node, 0, len(nodes))
 	for _, node := range nodes {
-		if strings.EqualFold(strings.TrimSpace(node.NodeType), "scf-event") && strings.EqualFold(strings.TrimSpace(node.TriggerType), "timer") {
+		if strings.EqualFold(strings.TrimSpace(node.NodeType), "scf-event") && strings.EqualFold(strings.TrimSpace(node.TriggerType), "timer") && !scfinvoker.IsInstrumentSnapshotNode(node) {
 			timerNodes = append(timerNodes, node)
 		}
 	}

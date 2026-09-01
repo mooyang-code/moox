@@ -827,36 +827,6 @@ func TestBuilderAlertsOnStockCNProviderFeedFailureRate(t *testing.T) {
 	require.Contains(t, found.Reason, "失败率")
 }
 
-func TestBuilderAlertsOnStockCNEgressMismatch(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	query := openOverviewMetrics(t, func(db *gorm.DB) {
-		for _, item := range []struct {
-			id, kind string
-			value    float64
-		}{
-			{"egress-expected", "expected", 200},
-			{"egress-result", "result", 200},
-			{"egress-nonempty", "non_empty_ip", 199},
-			{"egress-distinct", "distinct_ip", 198},
-		} {
-			labels := `{"market_id":"stock_cn","route_id":"stock_cn_kline_1m_v1","kind":"` + item.kind + `"}`
-			seedOverviewMetricForInstance(t, db, item.id, "moox_cli", "probe", "moox_collector_market_egress_functions", labels, item.value, now)
-		}
-	})
-	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "stock_cn")
-	require.NoError(t, err)
-	var found *BusinessStatus
-	for index := range overview.BusinessChecks {
-		if overview.BusinessChecks[index].Module == "egress_gate:stock_cn_kline_1m_v1" {
-			found = &overview.BusinessChecks[index]
-			break
-		}
-	}
-	require.NotNil(t, found)
-	require.Equal(t, "down", found.Status)
-	require.Contains(t, found.Reason, "非空出口 IP 数")
-}
-
 func TestBuilderAcceptsCompleteStockCNInstrumentSnapshot(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query := openOverviewMetrics(t, func(db *gorm.DB) {

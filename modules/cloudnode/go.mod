@@ -20,7 +20,7 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.135
-	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf v1.1.0
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf v1.3.101
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.70
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1

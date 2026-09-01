@@ -52,10 +52,10 @@ func TestLoadStockCNProviderRuntimeUsesPackagedFeedPolicies(t *testing.T) {
 	require.Equal(t, 5.0, providers["sina"].RateLimit.RequestsPerSecond)
 	require.Equal(t, 1, providers["sina"].RateLimit.MaxConcurrent)
 	// The source file advertises Baidu's instrument protocol, while the
-	// release route intentionally keeps it disabled. Route state, not the
-	// provider feed capability, controls composition into the active chain.
+	// release route intentionally keeps it disabled. EastMoney and Sina are
+	// the active complete-snapshot sources in the release route.
 	require.True(t, providers["baidu"].InstrumentEnabled)
-	require.NotContains(t, route.InstrumentProviders(), "eastmoney")
+	require.Equal(t, []string{"sina", "eastmoney"}, route.InstrumentProviders())
 	require.NotContains(t, route.InstrumentProviders(), "baidu")
 	require.True(t, providers["baidu"].KlineShadow)
 }

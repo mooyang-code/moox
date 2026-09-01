@@ -313,6 +313,11 @@ func TestBatchKindForRuleUsesPublicInstrumentDataType(t *testing.T) {
 	assert.Equal(t, domain.BatchKindRealtime, batchKindForRule(domain.TaskRule{DataType: "kline"}))
 }
 
+func TestBatchCompletionDeadlineAllowsInstrumentSnapshotProvidersToFinish(t *testing.T) {
+	assert.Equal(t, 6*time.Minute, batchCompletionDeadline(domain.BatchKindInstrumentSnapshot))
+	assert.Equal(t, 70*time.Second, batchCompletionDeadline(domain.BatchKindRealtime))
+}
+
 func TestExpandRuleUsesExplicitExternalSymbolForKline(t *testing.T) {
 	scheduler := &Scheduler{
 		SpaceID: "crypto_market",

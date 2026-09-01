@@ -76,7 +76,6 @@ market_health:
   instrument_snapshot_max_age: 36h
   instrument_minimum_count: 4000
   instrument_required_exchanges: [XSHG, XSHE, XBSE]
-  egress_stale_after: 15m
 
 metrics:
   enabled: true

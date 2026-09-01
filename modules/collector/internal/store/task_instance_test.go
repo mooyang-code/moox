@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -47,6 +48,23 @@ func TestTaskInstanceRepositoryUpsertSkipsUnchangedDefinition(t *testing.T) {
 	second, err := s.TaskInstances().Get(ctx, "crypto", "task-1")
 	require.NoError(t, err)
 	assert.Equal(t, first.ModifyTime, second.ModifyTime)
+}
+
+func TestTaskInstanceRepositoryUpsertBatchesLargeCatalogue(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	instances := make([]domain.TaskInstance, 0, 1200)
+	for index := 0; index < 1200; index++ {
+		instances = append(instances, domain.TaskInstance{
+			SpaceID: "stock_cn", TaskID: fmt.Sprintf("task-%04d", index), RuleID: "rule-1",
+			Provider: "stock_cn_multi", MarketType: "equity", DataType: "kline",
+			DatasetID: "stock_cn_kline", SubjectID: fmt.Sprintf("600%03d.XSHG", index), Frequency: "1m", TaskParams: `{}`,
+		})
+	}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
+	_, total, err := s.TaskInstances().List(ctx, TaskInstanceFilter{SpaceID: "stock_cn", Page: 1, PageSize: 1})
+	require.NoError(t, err)
+	assert.Equal(t, int64(len(instances)), total)
 }
 
 func TestTaskInstanceRepositoryTracksSCFAssignmentAndStorageWrite(t *testing.T) {

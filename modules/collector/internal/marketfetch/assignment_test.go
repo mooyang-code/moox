@@ -57,6 +57,17 @@ func TestBuildStockCNAssignmentsUsesEveryTimerNodeAndKeepsExistingSubjectsStable
 	}
 }
 
+func TestEligibleTimerNodesExcludesIndependentInstrumentSnapshotTimer(t *testing.T) {
+	nodes := eligibleTimerNodes([]scfinvoker.Node{
+		{NodeID: "kline", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"function_mode": "kline"}},
+		{NodeID: "instrument", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"function_mode": "instrument_snapshot"}},
+		{NodeID: "invoke", NodeType: "scf-event", TriggerType: "invoke", Metadata: map[string]any{"function_mode": "kline"}},
+	})
+
+	require.Len(t, nodes, 1)
+	require.Equal(t, "kline", nodes[0].NodeID)
+}
+
 func TestBuildStockCNAssignmentsRequiresConfiguredNodeCount(t *testing.T) {
 	subjects := []string{"600000.XSHG"}
 	nodes := []scfinvoker.Node{
@@ -162,6 +173,102 @@ func TestBuildStockCNAssignmentsFitsApproximateFullMarketIntoTwoHundredGroups(t 
 		}
 	}
 	require.LessOrEqual(t, moved, 1, "one-symbol active subject set growth should move at most one existing subject")
+}
+
+func TestBuildStockCNAssignmentsFitsConfigured170GroupsAt40Subjects(t *testing.T) {
+	const (
+		shanghai = 2314
+		shenzhen = 2897
+		beijing  = 339
+		groups   = 170
+		maxSize  = 40
+	)
+	subjects := make([]string, 0, shanghai+shenzhen+beijing)
+	for index := 0; index < shanghai; index++ {
+		subjects = append(subjects, fmt.Sprintf("%06d.XSHG", 600000+index))
+	}
+	for index := 0; index < shenzhen; index++ {
+		subjects = append(subjects, fmt.Sprintf("%06d.XSHE", 1+index))
+	}
+	for index := 0; index < beijing; index++ {
+		subjects = append(subjects, fmt.Sprintf("%06d.XBSE", 920000+index))
+	}
+
+	regionCounts := map[string]int{
+		"ap-beijing":   32,
+		"ap-chengdu":   32,
+		"ap-guangzhou": 11,
+		"ap-shanghai":  32,
+		"ap-singapore": 31,
+		"ap-tokyo":     32,
+	}
+	nodes := make([]scfinvoker.Node, 0, groups)
+	for region, count := range regionCounts {
+		for index := 0; index < count; index++ {
+			nodes = append(nodes, scfinvoker.Node{
+				NodeID: fmt.Sprintf("%s-%03d", region, index), FunctionName: fmt.Sprintf("moox-stock-cn-%s-%03d", region, index),
+				Region: region, NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"index": index},
+			})
+		}
+	}
+
+	assignments, err := BuildStockCNAssignments(TaskGroup{
+		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: subjects,
+	}, nodes, maxSize, "2026-08-31", groups)
+	require.NoError(t, err)
+	require.Len(t, assignments, groups)
+
+	seen := make(map[string]int, len(subjects))
+	primaryGroups := make(map[string]int)
+	primarySubjects := make(map[string]int)
+	backupSubjects := make(map[string]int)
+	for _, assignment := range assignments {
+		require.LessOrEqual(t, len(assignment.Subjects), maxSize)
+		require.Len(t, assignment.ProviderChain, 3)
+		require.Equal(t, assignment.Provider, assignment.ProviderChain[0])
+		environment, envErr := buildManagedEnvironment(assignment, nil, stockCNMaxManagedEnvironmentSize)
+		require.NoError(t, envErr)
+		require.LessOrEqual(t, environmentBytes(environment), stockCNMaxManagedEnvironmentSize)
+		primaryGroups[assignment.Provider]++
+		primarySubjects[assignment.Provider] += len(assignment.Subjects)
+		for _, provider := range assignment.ProviderChain[1:] {
+			backupSubjects[provider] += len(assignment.Subjects)
+		}
+		for _, subject := range assignment.Subjects {
+			seen[subject]++
+		}
+	}
+	require.Len(t, seen, len(subjects))
+	for _, subject := range subjects {
+		require.Equal(t, 1, seen[subject])
+	}
+	require.Equal(t, map[string]int{"eastmoney": 57, "sina": 56, "tencent": 57}, primaryGroups)
+	// Subject counts follow the stable group assignment, so the group counts
+	// are exact while individual group sizes can differ by the hash result.
+	require.LessOrEqual(t, maxMapValue(primarySubjects)-minMapValue(primarySubjects), 3*maxSize)
+	require.Greater(t, backupSubjects["sina"], 0)
+	require.Greater(t, backupSubjects["eastmoney"], 0)
+	require.Greater(t, backupSubjects["tencent"], 0)
+}
+
+func maxMapValue(values map[string]int) int {
+	max := 0
+	for _, value := range values {
+		if value > max {
+			max = value
+		}
+	}
+	return max
+}
+
+func minMapValue(values map[string]int) int {
+	min := int(^uint(0) >> 1)
+	for _, value := range values {
+		if value < min {
+			min = value
+		}
+	}
+	return min
 }
 
 func TestBuildStockCNAssignmentsKeepsPublishedFleetWhenActiveInstrumentSetIsSmall(t *testing.T) {

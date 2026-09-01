@@ -170,9 +170,8 @@ credential_secret_id = "tencent-default"
 app_id = "<tencent-app-id>"
 cos_bucket = "moox-scf-tokyo-<tencent-app-id>"
 
-# A 股 1m 多源采集默认发布 200 个 Timer。四个启用地域各自动分配 50 个；
-# 发布后必须跨全部 Timer 执行 probe-egress，确认 200 个非空且互不重复的公网 IP，
-# 才能手工启用 examples/setup/default/collector-rules.yaml 中的 stock_cn 规则。
+# A 股 1m 多源采集默认发布 170 个 Timer。启用地域按配置自动分配；
+# probe-egress 仅用于诊断出口分布，不再作为发布或启用 Rule 的阻断门禁。
 [[scf_fetcher.spaces]]
 space_id = "stock_cn"
 entrypoint = "stock_cn"
@@ -182,9 +181,16 @@ cls_cloud_account_id = "tencent-scf-guangzhou"
 namespace = "default"
 runtime = "Go1"
 function_prefix = "moox-fetcher-stock-cn"
-timer_function_count = 200
+# Full stock Instrument snapshot: one independent daily Timer SCF.
+instrument_snapshot_region = "ap-shanghai"
+instrument_snapshot_cloud_account_id = "tencent-scf-shanghai"
+instrument_snapshot_function_prefix = "moox-fetcher-stock-cn-instrument"
+instrument_snapshot_timer_cron = "0 0 0 * * * *"
+instrument_snapshot_timeout_seconds = 300
+instrument_snapshot_memory_size = 256
+timer_function_count = 170
 # 单个 stock_cn Timer 的实测安全 subject 上限，超限时 Collector 拒绝发布。
-measured_safe_group_size = 30
+measured_safe_group_size = 40
 storage_gateway_node_id = "control"
 storage_rpc_gateway_target = "ip://106.53.107.122:11003"
 memory_size = 64

@@ -17,10 +17,9 @@ import (
 
 type stockEgressValidator func([]byte) error
 
-// StockEgressIdentityProbe is the release-time identity check. Provider
-// reachability is exercised by the market canary; the N-function egress gate
-// must not turn a transient provider outage or a blocked IP reflector into a
-// false statement about function identity.
+// StockEgressIdentityProbe is an optional diagnostic. Provider reachability is
+// exercised by the market canary; a blocked IP reflector must not block a
+// release or turn into a false statement about function identity.
 func StockEgressIdentityProbe(ctx context.Context) (*model.Response, error) {
 	client := &http.Client{Timeout: 3 * time.Second}
 	return stockEgressIdentityProbeWithClient(ctx, client, []string{
@@ -67,7 +66,7 @@ func stockEgressIdentityProbeWithClient(ctx context.Context, client *http.Client
 }
 
 // StockEgressProbe retains the provider-feed diagnostic used by focused
-// validation. It is intentionally stricter than the release identity gate.
+// validation. It does not participate in release or Timer activation.
 func StockEgressProbe(ctx context.Context) (*model.Response, error) {
 	client := &http.Client{Timeout: 3 * time.Second}
 	return runStockEgressChecks(ctx, client, []stockEgressCheck{

@@ -1,19 +1,20 @@
 market_id: stock_cn
 route_id: stock_cn_kline_1m_v1
 frequency: 1m
-# Release-time value. Change only with a new SCF publish and egress gate.
-timer_function_count: 200
-measured_safe_group_size: 30
+# Release-time value. Change only with a new SCF publish and runtime canary.
+timer_function_count: 170
+measured_safe_group_size: 40
 stagger:
   start_second: 5
   window_seconds: 35
   max_starts_per_second: 6
 providers:
-  # Sina is the currently verified complete instrument source. EastMoney's
-  # live snapshot endpoint is retained in the provider catalogue but stays
-  # disabled for instrument activation until a complete stable probe exists;
-  # pages are never mixed across sources. Baidu stays outside the candidate
-  # chain because its live response is not a complete instrument protocol.
+  # Complete instrument snapshots are fetched concurrently and merged by
+  # canonical SubjectID. A failed source does not block healthy sources;
+  # the merged set still must pass the complete snapshot gate. The current
+  # complete-list candidates are Sina and EastMoney; Tencent remains Kline-only
+  # until it has a verified full-market InstrumentFetcher, and Baidu stays
+  # outside the candidate chain because its live response is not stable.
   - id: sina
     weight: 1
     kline: active
@@ -21,7 +22,7 @@ providers:
   - id: eastmoney
     weight: 1
     kline: active
-    instrument: disabled
+    instrument: active
   - id: tencent
     weight: 1
     kline: active

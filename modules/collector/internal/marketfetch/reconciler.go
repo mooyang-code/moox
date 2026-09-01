@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	timerTriggerType      = "timer"
-	timerTriggerQualifier = "$LATEST"
-	timerTriggerMessage   = "market_fetch_timer_v1"
+	timerTriggerType       = "timer"
+	timerTriggerQualifier  = "$LATEST"
+	timerTriggerMessage    = "market_fetch_timer_v1"
+	runtimeConfigBatchSize = 100
 )
 
 type ruleSource interface {
@@ -65,6 +66,7 @@ type Reconciler struct {
 	pending                       map[string]string
 	pendingAt                     map[string]time.Time
 	pendingJob                    string
+	pendingJobs                   []string
 	pendingSince                  time.Time
 }
 
@@ -81,30 +83,34 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	// snapshots and overwrite pendingJob.
 	r.reconcileMu.Lock()
 	defer r.reconcileMu.Unlock()
-	if pendingJob, pendingSince := r.pendingRuntimeJobState(); pendingJob != "" {
-		status, statusErr := r.Nodes.GetRuntimeConfigBatchStatus(ctx, spaceID, pendingJob)
-		if statusErr != nil {
-			return r.fail(spaceID, "cloudnode", fmt.Errorf("get timer runtime config job %s: %w", pendingJob, statusErr))
+	if pendingJobs, pendingSince := r.pendingRuntimeJobsState(); len(pendingJobs) > 0 {
+		for _, pendingJob := range pendingJobs {
+			status, statusErr := r.Nodes.GetRuntimeConfigBatchStatus(ctx, spaceID, pendingJob)
+			if statusErr != nil {
+				return r.fail(spaceID, "cloudnode", fmt.Errorf("get timer runtime config job %s: %w", pendingJob, statusErr))
+			}
+			switch status.GetStatus() {
+			case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PENDING, cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING:
+				r.observeAssignmentPending(spaceID, true, pendingSince)
+				log.InfoContextf(ctx, "collector_scf_timer_reconciliation_pending space=%s job=%s jobs=%d status=%s", spaceID, pendingJob, len(pendingJobs), status.GetStatus().String())
+				return nil
+			case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_FAILED:
+				r.clearPendingRuntimeJobs()
+				r.observeAssignmentPending(spaceID, false, time.Time{})
+				return r.fail(spaceID, "cloudnode", fmt.Errorf("timer runtime config job %s failed", pendingJob))
+			case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PARTIAL:
+				r.clearPendingRuntimeJobs()
+				r.observeAssignmentPending(spaceID, false, time.Time{})
+				return r.fail(spaceID, "cloudnode", fmt.Errorf("timer runtime config job %s partially failed", pendingJob))
+			case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_SUCCESS:
+				continue
+			default:
+				r.clearPendingRuntimeJobs()
+				return r.fail(spaceID, "cloudnode", fmt.Errorf("timer runtime config job %s returned unknown status %s", pendingJob, status.GetStatus().String()))
+			}
 		}
-		switch status.GetStatus() {
-		case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PENDING, cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING:
-			r.observeAssignmentPending(spaceID, true, pendingSince)
-			log.InfoContextf(ctx, "collector_scf_timer_reconciliation_pending space=%s job=%s status=%s", spaceID, pendingJob, status.GetStatus().String())
-			return nil
-		case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_FAILED:
-			r.clearPendingRuntimeJob(pendingJob)
-			r.observeAssignmentPending(spaceID, false, time.Time{})
-			return r.fail(spaceID, "cloudnode", fmt.Errorf("timer runtime config job %s failed", pendingJob))
-		case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PARTIAL:
-			r.clearPendingRuntimeJob(pendingJob)
-			r.observeAssignmentPending(spaceID, false, time.Time{})
-			return r.fail(spaceID, "cloudnode", fmt.Errorf("timer runtime config job %s partially failed", pendingJob))
-		case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_SUCCESS:
-			r.clearPendingRuntimeJob(pendingJob)
-			r.observeAssignmentPending(spaceID, false, time.Time{})
-		default:
-			return r.fail(spaceID, "cloudnode", fmt.Errorf("timer runtime config job %s returned unknown status %s", pendingJob, status.GetStatus().String()))
-		}
+		r.clearPendingRuntimeJobs()
+		r.observeAssignmentPending(spaceID, false, time.Time{})
 	}
 	nodes, err := r.Nodes.ListTimerMarketFetchers(ctx, spaceID)
 	if err != nil {
@@ -115,15 +121,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	if err != nil {
 		return r.fail(spaceID, "rules", err)
 	}
+	stockCN := strings.EqualFold(spaceID, StockCNSpaceID)
 	dns := map[string]sources.DNSResolution(nil)
-	if r.DNS != nil {
+	if r.DNS != nil && !stockCN {
 		dns = r.DNS.Snapshot()
 	}
+	// The configured DNS snapshot currently contains Binance hosts only. Stock
+	// providers use their own hostname-based HTTP clients, so copying that
+	// unrelated snapshot into every stock assignment would make a Binance IP
+	// rotation rewrite all 170 Timer functions without changing stock runtime
+	// state.
 	// Publish the unsplit requirement before any local environment/capacity
 	// validation. A malformed budget or an individual symbol that cannot fit
 	// must still become a visible Monitor coordination failure.
 	r.observeAssignmentRequirements(spaceID, groups)
-	stockCN := strings.EqualFold(spaceID, StockCNSpaceID)
 	managedBudget, budgetErr := managedEnvironmentBudget(nodes, managedEnvironmentLimit(stockCN))
 	if budgetErr != nil {
 		return r.fail(spaceID, "environment", budgetErr)
@@ -224,40 +235,55 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		r.observeAssignmentMetrics(spaceID, groups, assignments, time.Now().UTC().Unix())
 		return nil
 	}
-	jobID, err := r.Nodes.SubmitRuntimeConfigs(ctx, spaceID, patches)
-	if err != nil {
-		if isTimeoutError(err) {
-			pendingSince := r.markSubmitRetryPending()
-			r.observeAssignmentPending(spaceID, true, pendingSince)
-			return r.fail(spaceID, "submit_timeout", fmt.Errorf("submit timer runtime configs: %w", err))
+	jobIDs := make([]string, 0, (len(patches)+runtimeConfigBatchSize-1)/runtimeConfigBatchSize)
+	acceptedFingerprints := make(map[string]string, len(pendingFingerprints))
+	for _, batch := range runtimeConfigPatchBatches(patches, runtimeConfigBatchSize) {
+		jobID, submitErr := r.Nodes.SubmitRuntimeConfigs(ctx, spaceID, batch)
+		if submitErr != nil {
+			// A timeout is ambiguous: CloudNode may have accepted earlier
+			// chunks. Track those jobs so the next tick observes them before
+			// retrying the remaining desired state.
+			if len(jobIDs) > 0 {
+				r.setPendingRuntimeJobs(jobIDs, acceptedFingerprints)
+			}
+			if isTimeoutError(submitErr) {
+				pendingSince := r.markSubmitRetryPending()
+				r.observeAssignmentPending(spaceID, true, pendingSince)
+				return r.fail(spaceID, "submit_timeout", fmt.Errorf("submit timer runtime configs: %w", submitErr))
+			}
+			if len(jobIDs) == 0 {
+				r.clearSubmitRetryPending()
+			}
+			r.observeAssignmentPending(spaceID, false, time.Time{})
+			return r.fail(spaceID, "cloudnode", fmt.Errorf("submit timer runtime configs: %w", submitErr))
 		}
-		r.clearSubmitRetryPending()
-		r.observeAssignmentPending(spaceID, false, time.Time{})
-		return r.fail(spaceID, "cloudnode", fmt.Errorf("submit timer runtime configs: %w", err))
+		jobIDs = append(jobIDs, jobID)
+		for _, patch := range batch {
+			if fingerprint, ok := pendingFingerprints[patch.GetNodeId()]; ok {
+				acceptedFingerprints[patch.GetNodeId()] = fingerprint
+			}
+		}
 	}
-	r.mu.Lock()
-	if r.pending == nil {
-		r.pending = make(map[string]string)
-	}
-	if r.pendingAt == nil {
-		r.pendingAt = make(map[string]time.Time)
-	}
-	for nodeID, fingerprint := range pendingFingerprints {
-		r.pending[nodeID] = fingerprint
-		r.pendingAt[nodeID] = time.Now().UTC()
-	}
-	r.pendingJob = jobID
-	if r.pendingSince.IsZero() {
-		r.pendingSince = time.Now().UTC()
-	}
-	pendingSince := r.pendingSince
-	r.mu.Unlock()
+	r.setPendingRuntimeJobs(jobIDs, acceptedFingerprints)
+	pendingSince := r.pendingRuntimeSince()
 	if r.Metrics != nil {
 		r.Metrics.ClearAssignmentFailure(spaceID)
 	}
-	log.InfoContextf(ctx, "collector_scf_timer_reconciled space=%s nodes=%d patches=%d job=%s", spaceID, len(nodes), len(patches), jobID)
+	log.InfoContextf(ctx, "collector_scf_timer_reconciled space=%s nodes=%d patches=%d jobs=%d", spaceID, len(nodes), len(patches), len(jobIDs))
 	r.observeAssignmentPending(spaceID, true, pendingSince)
 	return nil
+}
+
+func runtimeConfigPatchBatches(patches []*cloudnodepb.NodeRuntimeConfigPatch, batchSize int) [][]*cloudnodepb.NodeRuntimeConfigPatch {
+	if batchSize <= 0 {
+		return nil
+	}
+	batches := make([][]*cloudnodepb.NodeRuntimeConfigPatch, 0, (len(patches)+batchSize-1)/batchSize)
+	for start := 0; start < len(patches); start += batchSize {
+		end := minInt(start+batchSize, len(patches))
+		batches = append(batches, patches[start:end])
+	}
+	return batches
 }
 
 func (r *Reconciler) persistAssignments(ctx context.Context, spaceID string, nodes []scfinvoker.Node, assignments []NodeAssignment) error {
@@ -529,9 +555,27 @@ func currentDNSHash(nodeID string, nodes []scfinvoker.Node) string {
 }
 
 func (r *Reconciler) pendingRuntimeJobState() (string, time.Time) {
+	jobs, since := r.pendingRuntimeJobsState()
+	if len(jobs) == 0 {
+		return "", since
+	}
+	return jobs[0], since
+}
+
+func (r *Reconciler) pendingRuntimeJobsState() ([]string, time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.pendingJob, r.pendingSince
+	jobs := append([]string(nil), r.pendingJobs...)
+	if len(jobs) == 0 && r.pendingJob != "" {
+		jobs = []string{r.pendingJob}
+	}
+	return jobs, r.pendingSince
+}
+
+func (r *Reconciler) pendingRuntimeSince() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pendingSince
 }
 
 func (r *Reconciler) markSubmitRetryPending() time.Time {
@@ -546,7 +590,7 @@ func (r *Reconciler) markSubmitRetryPending() time.Time {
 func (r *Reconciler) clearSubmitRetryPending() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.pendingJob == "" {
+	if r.pendingJob == "" && len(r.pendingJobs) == 0 {
 		r.pendingSince = time.Time{}
 	}
 }
@@ -566,16 +610,66 @@ func (r *Reconciler) fail(spaceID, reason string, err error) error {
 	return err
 }
 
+func (r *Reconciler) setPendingRuntimeJobs(jobIDs []string, fingerprints map[string]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pendingJobs = append([]string(nil), jobIDs...)
+	r.pendingJob = ""
+	if len(r.pendingJobs) > 0 {
+		r.pendingJob = r.pendingJobs[0]
+	}
+	r.pending = make(map[string]string, len(fingerprints))
+	r.pendingAt = make(map[string]time.Time, len(fingerprints))
+	now := time.Now().UTC()
+	for nodeID, fingerprint := range fingerprints {
+		r.pending[nodeID] = fingerprint
+		r.pendingAt[nodeID] = now
+	}
+	if len(r.pendingJobs) > 0 && r.pendingSince.IsZero() {
+		r.pendingSince = now
+	}
+}
+
+func (r *Reconciler) clearPendingRuntimeJobs() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pendingJobs = nil
+	r.pendingJob = ""
+	r.pendingSince = time.Time{}
+	r.pending = make(map[string]string)
+	r.pendingAt = make(map[string]time.Time)
+}
+
 func (r *Reconciler) clearPendingRuntimeJob(jobID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.pendingJob != jobID {
+	if r.pendingJob != jobID && !containsString(r.pendingJobs, jobID) {
+		return
+	}
+	remaining := r.pendingJobs[:0]
+	for _, pendingJob := range r.pendingJobs {
+		if pendingJob != jobID {
+			remaining = append(remaining, pendingJob)
+		}
+	}
+	r.pendingJobs = remaining
+	if len(r.pendingJobs) > 0 {
+		r.pendingJob = r.pendingJobs[0]
 		return
 	}
 	r.pendingJob = ""
 	r.pendingSince = time.Time{}
 	r.pending = make(map[string]string)
 	r.pendingAt = make(map[string]time.Time)
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Reconciler) observeAssignmentPending(spaceID string, pending bool, since time.Time) {

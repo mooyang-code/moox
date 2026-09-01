@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	spaceID             = "stock_cn"
-	timerTriggerName    = "moox-market-fetch-timer"
-	timerTriggerMessage = "market_fetch_timer_v1"
+	spaceID                     = "stock_cn"
+	instrumentSnapshotTimerMode = "instrument_snapshot"
+	timerTriggerName            = "moox-market-fetch-timer"
+	timerTriggerMessage         = "market_fetch_timer_v1"
 )
 
 type Handler struct {
@@ -62,7 +63,8 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		return failure("invalid_event", fmt.Sprintf("decode event: %v", err)), nil
 	}
 	timerConfigured := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SUBJECTS")) != ""
-	if err := routeTimerEvent(&event, timerConfigured); err != nil {
+	instrumentTimerConfigured := strings.EqualFold(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_MODE")), instrumentSnapshotTimerMode)
+	if err := routeTimerEvent(&event, timerConfigured, instrumentTimerConfigured); err != nil {
 		return failure("invalid_timer_event", err.Error()), nil
 	}
 	function, _ := functioncontext.FromContext(ctx)
@@ -94,7 +96,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		defer cancel()
 		_ = reporter.Flush(flushCtx)
 	}()
-	if timerConfigured && event.Action == model.EventActionMarketFetch {
+	if (timerConfigured || instrumentTimerConfigured) && (event.Action == model.EventActionMarketFetch || event.Action == model.EventActionInstrumentSnapshot) {
 		event.StorageRPCGatewayTarget = os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")
 	}
 	switch event.Action {
@@ -146,7 +148,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	}
 }
 
-func routeTimerEvent(event *model.CloudFunctionEvent, marketConfigured bool) error {
+func routeTimerEvent(event *model.CloudFunctionEvent, marketConfigured, instrumentConfigured bool) error {
 	if event == nil {
 		return nil
 	}
@@ -154,16 +156,29 @@ func routeTimerEvent(event *model.CloudFunctionEvent, marketConfigured bool) err
 		if marketConfigured && event.Action == model.EventActionMarketFetch {
 			return validateTimerEvent(*event)
 		}
+		if instrumentConfigured && event.Action == model.EventActionMarketFetch {
+			return fmt.Errorf("instrument snapshot Timer cannot run market_fetch")
+		}
+		if marketConfigured && event.Action == model.EventActionInstrumentSnapshot {
+			return fmt.Errorf("market Kline Timer cannot run instrument_snapshot")
+		}
 		return nil
 	}
-	if !marketConfigured {
+	if marketConfigured && instrumentConfigured {
+		return fmt.Errorf("both market and instrument Timer modes are configured")
+	}
+	if !marketConfigured && !instrumentConfigured {
 		return nil
 	}
 	if err := validateTimerEvent(*event); err != nil {
 		return err
 	}
 	event.Source = "tencent_timer"
-	event.Action = model.EventActionMarketFetch
+	if instrumentConfigured {
+		event.Action = model.EventActionInstrumentSnapshot
+	} else {
+		event.Action = model.EventActionMarketFetch
+	}
 	return nil
 }
 

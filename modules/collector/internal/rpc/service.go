@@ -645,13 +645,16 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 	if err != nil {
 		return err
 	}
+	// stock_cn_multi is the public multi-provider collector identity, while
+	// the shared stock datasets belong to the stock_cn data source.
+	datasetSourceID := collectorDatasetSourceID(params.Collector.Exchange)
 	switch params.Collector.DataType {
 	case domain.InstrumentDataType:
 		return s.validateDataset(
 			ctx,
 			rule.SpaceID,
 			params.Target.DatasetID,
-			params.Collector.Exchange,
+			datasetSourceID,
 			storagepb.DataKind_DATA_KIND_RECORD,
 			"target",
 			false,
@@ -663,7 +666,7 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 			ctx,
 			rule.SpaceID,
 			params.Source.DatasetID,
-			params.Collector.Exchange,
+			datasetSourceID,
 			storagepb.DataKind_DATA_KIND_RECORD,
 			"source",
 			false,
@@ -676,7 +679,7 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 			ctx,
 			rule.SpaceID,
 			params.Target.DatasetID,
-			params.Collector.Exchange,
+			datasetSourceID,
 			storagepb.DataKind_DATA_KIND_TIME_SERIES,
 			"target",
 			true,
@@ -688,6 +691,13 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 	default:
 		return fmt.Errorf("unsupported collector data_type: %s", params.Collector.DataType)
 	}
+}
+
+func collectorDatasetSourceID(exchange string) string {
+	if strings.EqualFold(strings.TrimSpace(exchange), "stock_cn_multi") {
+		return "stock_cn"
+	}
+	return exchange
 }
 
 func (s *Service) validateResampleSourceDataset(ctx context.Context, rule domain.TaskRule, params *domain.CollectParams) error {

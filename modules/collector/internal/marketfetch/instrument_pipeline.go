@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -19,6 +20,9 @@ import (
 const (
 	StockCNInstrumentDatasetID = "stock_cn_instruments"
 	StockCNDataSourceID        = "stock_cn"
+	// Keep each PrimaryStore request bounded while avoiding hundreds of
+	// sequential RPCs for the full stock catalogue.
+	instrumentStorageRowsPerBatch = 500
 )
 
 type InstrumentStorage interface {
@@ -29,24 +33,28 @@ type InstrumentStorage interface {
 }
 
 type InstrumentPipeline struct {
-	Registry          *marketdata.Registry
-	Storage           InstrumentStorage
-	CandidateChain    []string
-	SpaceID           string
-	MarketID          string
-	DatasetID         string
-	TargetDatasetID   string
-	DataSourceID      string
-	SubjectType       string
-	SubjectMarket     string
-	Currency          string
-	Timezone          string
-	InstrumentType    string
-	RequiredExchanges []string
-	MinimumCount      int
-	RouteID           string
-	Metrics           *Metrics
-	Now               func() time.Time
+	Registry       *marketdata.Registry
+	Storage        InstrumentStorage
+	CandidateChain []string
+	// InstrumentProviderTimeout bounds the time spent waiting for one complete
+	// provider snapshot. A slow source must not consume the whole SCF budget
+	// after another source has already produced a usable snapshot.
+	InstrumentProviderTimeout time.Duration
+	SpaceID                   string
+	MarketID                  string
+	DatasetID                 string
+	TargetDatasetID           string
+	DataSourceID              string
+	SubjectType               string
+	SubjectMarket             string
+	Currency                  string
+	Timezone                  string
+	InstrumentType            string
+	RequiredExchanges         []string
+	MinimumCount              int
+	RouteID                   string
+	Metrics                   *Metrics
+	Now                       func() time.Time
 }
 
 type InstrumentPipelineRequest struct {
@@ -69,6 +77,13 @@ type InstrumentPipelineResult struct {
 	InstrumentCount  int            `json:"instrument_count"`
 	ExchangeCounts   map[string]int `json:"exchange_counts"`
 	ActiveSetVersion string         `json:"active_instrument_set_version"`
+}
+
+type instrumentFetchResult struct {
+	providerID string
+	snapshot   marketdata.InstrumentSnapshot
+	err        error
+	done       bool
 }
 
 func (p *InstrumentPipeline) Execute(ctx context.Context, req InstrumentPipelineRequest) (InstrumentPipelineResult, error) {
@@ -108,37 +123,60 @@ func (p *InstrumentPipeline) Execute(ctx context.Context, req InstrumentPipeline
 		routeID := firstNonEmptyString(p.RouteID, instrumentRouteID(marketID, p.InstrumentType))
 		p.Metrics.ObserveInstrumentSnapshot(marketID, routeID, selectedProvider, metricResult, active, exchanges, snapshot.FetchedAt)
 	}()
-	for _, providerID := range chain {
-		selectedProvider = providerID
-		fetcher, err := p.Registry.InstrumentFetcher(providerID)
-		if err != nil {
-			lastErr = err
+	// Fetch every configured complete snapshot concurrently. A provider failure
+	// is isolated so a healthy source can still supply the active set; only the
+	// merged result is allowed to pass the market-wide completeness checks.
+	providerTimeout := p.InstrumentProviderTimeout
+	if providerTimeout <= 0 {
+		providerTimeout = 30 * time.Second
+	}
+	fetches := fetchInstrumentSnapshots(ctx, p.Registry, chain, marketdata.InstrumentRequest{MarketID: marketdata.MarketID(marketID), SnapshotAt: req.SnapshotAt.UTC(), RequestID: req.RequestID}, providerTimeout)
+	validSnapshots := make([]marketdata.InstrumentSnapshot, 0, len(fetches))
+	validProviders := make([]string, 0, len(fetches))
+	fetchErrors := make([]error, 0, len(fetches))
+	for _, fetch := range fetches {
+		if fetch.err != nil {
+			fetchErrors = append(fetchErrors, fmt.Errorf("instrument provider %s: %w", fetch.providerID, fetch.err))
 			continue
 		}
-		// Instrument providers own pagination and apply their feed guard to each
-		// physical page request. Wrapping the whole snapshot here would turn the
-		// per-request timeout into a deadline for thousands of instruments.
-		snapshot, err = fetcher.FetchInstrumentSnapshot(ctx, marketdata.InstrumentRequest{MarketID: marketdata.MarketID(marketID), SnapshotAt: req.SnapshotAt.UTC(), RequestID: req.RequestID})
-		if err == nil {
-			err = p.validateSnapshot(snapshot, marketID)
+		if err := p.validateInstrumentSourceSnapshot(fetch.snapshot, marketID, fetch.providerID, req.SnapshotAt.UTC()); err != nil {
+			fetchErrors = append(fetchErrors, fmt.Errorf("instrument provider %s: %w", fetch.providerID, err))
+			continue
 		}
-		if err == nil {
-			// Every fixed shard fetches a complete upstream snapshot. Make the
-			// generation content-addressed so a mid-run upstream change cannot
-			// accidentally activate a union assembled from different snapshots.
-			snapshot.SnapshotID = snapshotGenerationID(snapshot)
-			lastErr = nil
-			break
-		}
-		lastErr = fmt.Errorf("instrument provider %s: %w", providerID, err)
-		if !marketdata.CanFallback(ctx, err) && !strings.Contains(err.Error(), "snapshot") {
-			return InstrumentPipelineResult{}, lastErr
-		}
+		validSnapshots = append(validSnapshots, fetch.snapshot)
+		validProviders = append(validProviders, fetch.providerID)
 	}
-	if lastErr != nil {
+	if len(validSnapshots) == 0 {
+		lastErr = fmt.Errorf("all instrument providers failed: %w", errors.Join(fetchErrors...))
 		metricResult = instrumentMetricResult(lastErr)
 		return InstrumentPipelineResult{}, lastErr
 	}
+	selectedProvider = strings.Join(validProviders, "+")
+	var mergeErr error
+	snapshot, mergeErr = mergeInstrumentSnapshots(validSnapshots, marketID)
+	if mergeErr != nil {
+		lastErr = fmt.Errorf("merge instrument snapshots: %w", mergeErr)
+		metricResult = instrumentMetricResult(lastErr)
+		return InstrumentPipelineResult{}, lastErr
+	}
+	if err := p.validateSnapshot(snapshot, marketID); err != nil {
+		lastErr = fmt.Errorf("merged instrument snapshot: %w", err)
+		metricResult = instrumentMetricResult(lastErr)
+		return InstrumentPipelineResult{}, lastErr
+	}
+	// A sharded invocation must use one generation fence for every shard. The
+	// content fingerprint is stored alongside that fence and Storage rejects a
+	// mixed-provider generation before activation.
+	contentFingerprint := snapshotContentFingerprint(snapshot)
+	if req.SnapshotShardCount > 0 {
+		// Keep the generation identity independent of the fetched contents. Every
+		// shard must stage under one ID; Storage compares the content fingerprint
+		// and rejects a mixed-provider generation atomically.
+		snapshot.SnapshotID = instrumentSnapshotGenerationID(marketID, chain, req.SnapshotAt, p.DatasetID, p.TargetDatasetID, p.InstrumentType)
+	} else {
+		snapshot.SnapshotID = snapshotGenerationID(snapshot)
+	}
+	lastErr = nil
 	if req.SnapshotShardCount > 0 {
 		shardSnapshot, shardIndex, shardCount, shardErr := instrumentSnapshotShard(snapshot, req.SnapshotShardIndex, req.SnapshotShardCount)
 		if shardErr != nil {
@@ -147,7 +185,7 @@ func (p *InstrumentPipeline) Execute(ctx context.Context, req InstrumentPipeline
 			return InstrumentPipelineResult{}, shardErr
 		}
 		if shardIndex < shardCount {
-			activated, persistErr := p.persistSnapshotShard(ctx, snapshot, shardSnapshot, shardIndex, shardCount)
+			activated, persistErr := p.persistSnapshotShard(ctx, snapshot, shardSnapshot, shardIndex, shardCount, contentFingerprint)
 			if persistErr != nil {
 				lastErr = persistErr
 				metricResult = "invalid"
@@ -170,6 +208,233 @@ func (p *InstrumentPipeline) Execute(ctx context.Context, req InstrumentPipeline
 		return InstrumentPipelineResult{}, err
 	}
 	return InstrumentPipelineResult{SnapshotID: snapshot.SnapshotID, SourceProvider: snapshot.SourceProvider, FetchedAt: snapshot.FetchedAt, Complete: snapshot.Complete, PageCount: snapshot.PageCount, InstrumentCount: len(snapshot.Instruments), ExchangeCounts: cloneCounts(snapshot.ExchangeCounts), ActiveSetVersion: snapshot.SnapshotID}, nil
+}
+
+func fetchInstrumentSnapshots(ctx context.Context, registry *marketdata.Registry, chain []string, req marketdata.InstrumentRequest, providerTimeout time.Duration) []instrumentFetchResult {
+	results := make([]instrumentFetchResult, len(chain))
+	resultCh := make(chan instrumentFetchResult, len(chain))
+	active := 0
+	for index, providerID := range chain {
+		results[index] = instrumentFetchResult{providerID: providerID}
+		fetcher, err := registry.InstrumentFetcher(providerID)
+		if err != nil {
+			results[index].err = err
+			results[index].done = true
+			continue
+		}
+		active++
+		go func(providerID string, fetcher marketdata.InstrumentFetcher) {
+			providerCtx, cancel := context.WithTimeout(ctx, providerTimeout)
+			defer cancel()
+			snapshot, err := fetcher.FetchInstrumentSnapshot(providerCtx, req)
+			resultCh <- instrumentFetchResult{providerID: providerID, snapshot: snapshot, err: err}
+		}(providerID, fetcher)
+	}
+	if active == 0 {
+		return results
+	}
+	completed := 0
+	timer := time.NewTimer(providerTimeout)
+	defer timer.Stop()
+	for completed < active {
+		select {
+		case result := <-resultCh:
+			for index := range results {
+				if results[index].providerID == result.providerID && !results[index].done {
+					results[index] = result
+					results[index].done = true
+					break
+				}
+			}
+			completed++
+		case <-ctx.Done():
+			for index := range results {
+				if !results[index].done {
+					results[index].err = ctx.Err()
+					results[index].done = true
+				}
+			}
+			return results
+		case <-timer.C:
+			for index := range results {
+				if !results[index].done {
+					results[index].err = fmt.Errorf("%w: provider snapshot deadline exceeded", marketdata.ErrTimeout)
+					results[index].done = true
+				}
+			}
+			return results
+		}
+	}
+	return results
+}
+
+func (p *InstrumentPipeline) validateInstrumentSourceSnapshot(snapshot marketdata.InstrumentSnapshot, marketID, providerID string, expectedFetchedAt time.Time) error {
+	if err := marketdata.ValidateInstrumentSnapshot(snapshot); err != nil {
+		return fmt.Errorf("invalid complete snapshot: %w", err)
+	}
+	if snapshot.MarketID != marketID {
+		return fmt.Errorf("snapshot market %q does not match %q", snapshot.MarketID, marketID)
+	}
+	if !strings.EqualFold(strings.TrimSpace(snapshot.SourceProvider), strings.TrimSpace(providerID)) {
+		return fmt.Errorf("snapshot source_provider %q does not match registered provider %q", snapshot.SourceProvider, providerID)
+	}
+	if !snapshot.FetchedAt.UTC().Equal(expectedFetchedAt.UTC()) {
+		return fmt.Errorf("snapshot fetched_at %s does not match request snapshot_at %s", snapshot.FetchedAt.UTC().Format(time.RFC3339Nano), expectedFetchedAt.UTC().Format(time.RFC3339Nano))
+	}
+	if p.MinimumCount > 0 && len(snapshot.Instruments) < p.MinimumCount {
+		return fmt.Errorf("source snapshot count %d is below minimum %d", len(snapshot.Instruments), p.MinimumCount)
+	}
+	for _, exchange := range p.RequiredExchanges {
+		if snapshot.ExchangeCounts[exchange] <= 0 {
+			return fmt.Errorf("source snapshot is missing exchange %s", exchange)
+		}
+	}
+	return nil
+}
+
+func mergeInstrumentSnapshots(snapshots []marketdata.InstrumentSnapshot, marketID string) (marketdata.InstrumentSnapshot, error) {
+	if len(snapshots) == 0 {
+		return marketdata.InstrumentSnapshot{}, nil
+	}
+	providers := make([]string, 0, len(snapshots))
+	fetchedAt := snapshots[0].FetchedAt.UTC()
+	pageCount := 0
+	bySubject := make(map[string]marketdata.Instrument)
+	for _, snapshot := range snapshots {
+		providers = append(providers, snapshot.SourceProvider)
+		if snapshot.FetchedAt.After(fetchedAt) {
+			fetchedAt = snapshot.FetchedAt.UTC()
+		}
+		pageCount += snapshot.PageCount
+		for _, instrument := range snapshot.Instruments {
+			current, exists := bySubject[instrument.SubjectID]
+			if !exists {
+				bySubject[instrument.SubjectID] = instrument
+				continue
+			}
+			merged, err := mergeInstrumentMetadata(current, instrument)
+			if err != nil {
+				return marketdata.InstrumentSnapshot{}, fmt.Errorf("subject %s: %w", instrument.SubjectID, err)
+			}
+			bySubject[instrument.SubjectID] = merged
+		}
+	}
+	instruments := make([]marketdata.Instrument, 0, len(bySubject))
+	for _, instrument := range bySubject {
+		instruments = append(instruments, instrument)
+	}
+	sort.Slice(instruments, func(i, j int) bool { return instruments[i].SubjectID < instruments[j].SubjectID })
+	exchangeCounts := make(map[string]int)
+	for _, instrument := range instruments {
+		exchangeCounts[instrument.Exchange]++
+	}
+	sourceProvider := strings.Join(providers, "+")
+	return marketdata.InstrumentSnapshot{
+		SnapshotID:     marketdata.SnapshotID(sourceProvider, marketID, fetchedAt),
+		SourceProvider: sourceProvider,
+		MarketID:       marketID,
+		FetchedAt:      fetchedAt,
+		Complete:       true,
+		PageCount:      pageCount,
+		ExchangeCounts: exchangeCounts,
+		Instruments:    instruments,
+	}, nil
+}
+
+func mergeInstrumentMetadata(primary, secondary marketdata.Instrument) (marketdata.Instrument, error) {
+	// ProviderSymbol is deliberately excluded from conflict detection: it is a
+	// provider-facing alias, while SubjectID is the cross-provider identity.
+	// For descriptive fields, the first configured provider wins and blanks are
+	// filled from the later provider; canonical identity and lifecycle status
+	// remain strict conflicts above.
+	for _, field := range []struct {
+		name      string
+		primary   string
+		secondary string
+	}{
+		{name: "canonical_symbol", primary: primary.CanonicalSymbol, secondary: secondary.CanonicalSymbol},
+		{name: "exchange", primary: primary.Exchange, secondary: secondary.Exchange},
+		{name: "status", primary: primary.Status, secondary: secondary.Status},
+	} {
+		if strings.TrimSpace(field.primary) != "" && strings.TrimSpace(field.secondary) != "" && field.primary != field.secondary {
+			return marketdata.Instrument{}, fmt.Errorf("conflicting %s values %q and %q", field.name, field.primary, field.secondary)
+		}
+	}
+	if primary.CanonicalSymbol == "" {
+		primary.CanonicalSymbol = secondary.CanonicalSymbol
+	}
+	if primary.Name == "" {
+		primary.Name = secondary.Name
+	}
+	if primary.Status == "" {
+		primary.Status = secondary.Status
+	}
+	if primary.BaseAsset == "" {
+		primary.BaseAsset = secondary.BaseAsset
+	}
+	if primary.QuoteAsset == "" {
+		primary.QuoteAsset = secondary.QuoteAsset
+	}
+	if primary.MinQty == "" {
+		primary.MinQty = secondary.MinQty
+	}
+	if primary.MaxQty == "" {
+		primary.MaxQty = secondary.MaxQty
+	}
+	if primary.TickSize == "" {
+		primary.TickSize = secondary.TickSize
+	}
+	if primary.LotSize == "" {
+		primary.LotSize = secondary.LotSize
+	}
+	return primary, nil
+}
+
+func instrumentSnapshotGenerationID(marketID string, chain []string, snapshotAt time.Time, scopeValues ...string) string {
+	var builder strings.Builder
+	builder.WriteString(strings.TrimSpace(marketID))
+	builder.WriteByte(0)
+	builder.WriteString(snapshotAt.UTC().Format(time.RFC3339Nano))
+	builder.WriteByte(0)
+	for _, scopeValue := range scopeValues {
+		builder.WriteString(strings.TrimSpace(scopeValue))
+		builder.WriteByte(0)
+	}
+	for _, providerID := range chain {
+		builder.WriteString(strings.ToLower(strings.TrimSpace(providerID)))
+		builder.WriteByte(0)
+	}
+	hash := sha256.Sum256([]byte(builder.String()))
+	return "instrument:" + strings.TrimSpace(marketID) + ":" + snapshotAt.UTC().Format("20060102T150405Z") + ":" + hex.EncodeToString(hash[:8])
+}
+
+func snapshotContentFingerprint(snapshot marketdata.InstrumentSnapshot) string {
+	ordered := append([]marketdata.Instrument(nil), snapshot.Instruments...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].SubjectID < ordered[j].SubjectID })
+	var builder strings.Builder
+	for _, value := range []string{snapshot.SourceProvider, snapshot.MarketID, snapshot.FetchedAt.UTC().Format(time.RFC3339Nano), strconv.Itoa(snapshot.PageCount)} {
+		builder.WriteString(value)
+		builder.WriteByte(0)
+	}
+	for _, instrument := range ordered {
+		for _, value := range []string{instrument.SubjectID, instrument.CanonicalSymbol, instrument.ProviderSymbol, instrument.Exchange, instrument.Name, instrument.Status, instrument.BaseAsset, instrument.QuoteAsset, instrument.MinQty, instrument.MaxQty, instrument.TickSize, instrument.LotSize} {
+			builder.WriteString(value)
+			builder.WriteByte(0)
+		}
+	}
+	exchanges := make([]string, 0, len(snapshot.ExchangeCounts))
+	for exchange := range snapshot.ExchangeCounts {
+		exchanges = append(exchanges, exchange)
+	}
+	sort.Strings(exchanges)
+	for _, exchange := range exchanges {
+		builder.WriteString(exchange)
+		builder.WriteByte(0)
+		builder.WriteString(strconv.Itoa(snapshot.ExchangeCounts[exchange]))
+		builder.WriteByte(0)
+	}
+	hash := sha256.Sum256([]byte(builder.String()))
+	return hex.EncodeToString(hash[:])
 }
 
 func snapshotGenerationID(snapshot marketdata.InstrumentSnapshot) string {
@@ -289,6 +554,7 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 	if publishedAt := newestInstrumentSnapshotAt(existing, targetExisting); !publishedAt.IsZero() && snapshot.FetchedAt.UTC().Before(publishedAt) {
 		return fmt.Errorf("instrument snapshot %s is older than active snapshot fetched at %s", snapshot.SnapshotID, publishedAt.UTC().Format(time.RFC3339Nano))
 	}
+	knownSubjects := instrumentSubjectIDs(existing, targetExisting)
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(snapshot.Instruments))
 	present := make(map[string]marketdata.Instrument, len(snapshot.Instruments))
 	sort.Slice(snapshot.Instruments, func(i, j int) bool { return snapshot.Instruments[i].SubjectID < snapshot.Instruments[j].SubjectID })
@@ -298,8 +564,8 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 		}
 		rows = append(rows, instrumentRecordRow(spaceID, datasetID, snapshot, instrument))
 	}
-	for start := 0; start < len(rows); start += 25 {
-		end := start + 25
+	for start := 0; start < len(rows); start += instrumentStorageRowsPerBatch {
+		end := start + instrumentStorageRowsPerBatch
 		if end > len(rows) {
 			end = len(rows)
 		}
@@ -317,6 +583,9 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 		go func() {
 			defer workers.Done()
 			for instrument := range jobs {
+				if _, known := knownSubjects[instrument.SubjectID]; known {
+					continue
+				}
 				if err := p.Storage.RegisterDataSubject(registerCtx, p.instrumentRegistration(spaceID, dataSourceID, snapshot, instrument)); err != nil {
 					select {
 					case errCh <- fmt.Errorf("register instrument %s: %w", instrument.SubjectID, err):
@@ -345,7 +614,7 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 		return err
 	default:
 	}
-	bindings := stagedInstrumentBindings(spaceID, existing, targetExisting, present, datasetID, targetDatasetID, snapshot)
+	bindings := stagedInstrumentBindings(spaceID, existing, targetExisting, present, datasetID, targetDatasetID, snapshot, snapshotContentFingerprint(snapshot))
 	if err := p.Storage.StageDatasetSubjectSet(ctx, spaceID, snapshot.SnapshotID, bindings); err != nil {
 		return fmt.Errorf("stage active instrument set %s: %w", snapshot.SnapshotID, err)
 	}
@@ -360,7 +629,7 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 // shard stages only its slice under one generation fence; Storage activates the
 // union only after every expected shard has arrived. A failed or late shard
 // therefore leaves the previous active set untouched.
-func (p *InstrumentPipeline) persistSnapshotShard(ctx context.Context, fullSnapshot, snapshot marketdata.InstrumentSnapshot, shardIndex, shardCount int) (bool, error) {
+func (p *InstrumentPipeline) persistSnapshotShard(ctx context.Context, fullSnapshot, snapshot marketdata.InstrumentSnapshot, shardIndex, shardCount int, contentFingerprint string) (bool, error) {
 	spaceID := firstNonEmptyString(p.SpaceID, p.MarketID, StockCNSpaceID)
 	datasetID := firstNonEmptyString(p.DatasetID, StockCNInstrumentDatasetID)
 	targetDatasetID := strings.TrimSpace(p.TargetDatasetID)
@@ -368,6 +637,22 @@ func (p *InstrumentPipeline) persistSnapshotShard(ctx context.Context, fullSnaps
 		targetDatasetID = StockCNDatasetID
 	}
 	dataSourceID := firstNonEmptyString(p.DataSourceID, StockCNDataSourceID)
+	existing, err := p.Storage.ListDatasetSubjects(ctx, spaceID, datasetID)
+	if err != nil {
+		return false, fmt.Errorf("list active instrument shard baseline: %w", err)
+	}
+	var targetExisting []*storagepb.DatasetSubject
+	if targetDatasetID != "" && targetDatasetID != datasetID {
+		targetExisting, err = p.Storage.ListDatasetSubjects(ctx, spaceID, targetDatasetID)
+		if err != nil {
+			return false, fmt.Errorf("list target instrument shard baseline: %w", err)
+		}
+	}
+	knownSubjects := instrumentSubjectIDs(existing, targetExisting)
+	// Provider fetching is intentionally full-snapshot per shard, but metadata
+	// writes must use only this shard's slice. Writing the full catalogue from
+	// every shard multiplies Storage work by the fixed fan-out and can outlive
+	// the SCF Invoke budget.
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(snapshot.Instruments))
 	present := make(map[string]marketdata.Instrument, len(snapshot.Instruments))
 	for _, instrument := range snapshot.Instruments {
@@ -376,8 +661,8 @@ func (p *InstrumentPipeline) persistSnapshotShard(ctx context.Context, fullSnaps
 		}
 		rows = append(rows, instrumentRecordRow(spaceID, datasetID, snapshot, instrument))
 	}
-	for start := 0; start < len(rows); start += 25 {
-		end := start + 25
+	for start := 0; start < len(rows); start += instrumentStorageRowsPerBatch {
+		end := start + instrumentStorageRowsPerBatch
 		if end > len(rows) {
 			end = len(rows)
 		}
@@ -395,6 +680,9 @@ func (p *InstrumentPipeline) persistSnapshotShard(ctx context.Context, fullSnaps
 		go func() {
 			defer workers.Done()
 			for instrument := range jobs {
+				if _, known := knownSubjects[instrument.SubjectID]; known {
+					continue
+				}
 				if err := p.Storage.RegisterDataSubject(registerCtx, p.instrumentRegistration(spaceID, dataSourceID, snapshot, instrument)); err != nil {
 					select {
 					case errCh <- fmt.Errorf("register instrument %s: %w", instrument.SubjectID, err):
@@ -423,30 +711,19 @@ func (p *InstrumentPipeline) persistSnapshotShard(ctx context.Context, fullSnaps
 		return false, err
 	default:
 	}
-	bindings := stagedInstrumentBindings(spaceID, nil, nil, present, datasetID, targetDatasetID, fullSnapshot)
+	bindings := stagedInstrumentBindings(spaceID, nil, nil, present, datasetID, targetDatasetID, fullSnapshot, contentFingerprint)
 	if shardIndex == 0 {
 		// The active slice is partitioned across shards, but subjects that
 		// disappeared from a complete snapshot still need their existing
 		// missing-count lifecycle. Put only those legacy bindings in shard zero;
 		// including all existing rows would duplicate active rows from peers.
-		existing, err := p.Storage.ListDatasetSubjects(ctx, spaceID, datasetID)
-		if err != nil {
-			return false, fmt.Errorf("list active instrument shard baseline: %w", err)
-		}
-		var targetExisting []*storagepb.DatasetSubject
-		if targetDatasetID != "" && targetDatasetID != datasetID {
-			targetExisting, err = p.Storage.ListDatasetSubjects(ctx, spaceID, targetDatasetID)
-			if err != nil {
-				return false, fmt.Errorf("list target instrument shard baseline: %w", err)
-			}
-		}
 		fullPresent := make(map[string]marketdata.Instrument, len(fullSnapshot.Instruments))
 		for _, instrument := range fullSnapshot.Instruments {
 			if strings.EqualFold(strings.TrimSpace(instrument.Status), "active") {
 				fullPresent[instrument.SubjectID] = instrument
 			}
 		}
-		bindings = append(bindings, stagedInstrumentBindings(spaceID, filterAbsentMemberships(existing, fullPresent), filterAbsentMemberships(targetExisting, fullPresent), nil, datasetID, targetDatasetID, fullSnapshot)...)
+		bindings = append(bindings, stagedInstrumentBindings(spaceID, filterAbsentMemberships(existing, fullPresent), filterAbsentMemberships(targetExisting, fullPresent), nil, datasetID, targetDatasetID, fullSnapshot, contentFingerprint)...)
 	}
 	stageID := fmt.Sprintf("%s::shard:%d/%d", snapshot.SnapshotID, shardIndex, shardCount)
 	if err := p.Storage.StageDatasetSubjectSet(ctx, spaceID, stageID, bindings); err != nil {
@@ -471,7 +748,7 @@ func (p *InstrumentPipeline) persistSnapshotShard(ctx context.Context, fullSnaps
 // Every row is sent as one inactive staging set; the storage activation RPC
 // swaps both datasets in one transaction, so an interrupted snapshot cannot
 // expose a prefix of the new ActiveInstrumentSet.
-func stagedInstrumentBindings(spaceID string, existing, targetExisting []*storagepb.DatasetSubject, present map[string]marketdata.Instrument, datasetID, targetDatasetID string, snapshot marketdata.InstrumentSnapshot) []*storagepb.DatasetSubject {
+func stagedInstrumentBindings(spaceID string, existing, targetExisting []*storagepb.DatasetSubject, present map[string]marketdata.Instrument, datasetID, targetDatasetID string, snapshot marketdata.InstrumentSnapshot, contentFingerprint string) []*storagepb.DatasetSubject {
 	desired := make(map[string]*storagepb.DatasetSubject, len(existing)+len(targetExisting)+len(present)*2)
 	for _, membership := range append(append([]*storagepb.DatasetSubject(nil), existing...), targetExisting...) {
 		if membership == nil {
@@ -491,6 +768,7 @@ func stagedInstrumentBindings(spaceID string, existing, targetExisting []*storag
 		item.Attributes = cloneAttributes(item.GetAttributes())
 		item.Attributes["active_instrument_set_version"] = snapshot.SnapshotID
 		item.Attributes["active_instrument_set_fetched_at"] = snapshot.FetchedAt.UTC().Format(time.RFC3339Nano)
+		item.Attributes["instrument_snapshot_fingerprint"] = contentFingerprint
 		if dataset == datasetID {
 			item.Attributes["missing_complete_snapshot_count"] = "0"
 			delete(item.Attributes, "last_missing_snapshot_id")
@@ -531,6 +809,19 @@ func stagedInstrumentBindings(spaceID string, existing, targetExisting []*storag
 		updated.Attributes["missing_complete_snapshot_count"] = strconv.Itoa(missingCount)
 		updated.Attributes["last_missing_snapshot_id"] = snapshot.SnapshotID
 		updated.Attributes["last_missing_snapshot_date"] = missingDate
+		updated.Attributes["active_instrument_set_version"] = snapshot.SnapshotID
+		updated.Attributes["active_instrument_set_fetched_at"] = snapshot.FetchedAt.UTC().Format(time.RFC3339Nano)
+		updated.Attributes["instrument_snapshot_fingerprint"] = contentFingerprint
+		if targetDatasetID != "" && targetDatasetID != datasetID {
+			targetKey := targetDatasetID + "\x00" + membership.GetSubjectId()
+			target := desired[targetKey]
+			if target != nil {
+				target.Attributes = cloneAttributes(target.GetAttributes())
+				target.Attributes["active_instrument_set_version"] = snapshot.SnapshotID
+				target.Attributes["active_instrument_set_fetched_at"] = snapshot.FetchedAt.UTC().Format(time.RFC3339Nano)
+				target.Attributes["instrument_snapshot_fingerprint"] = contentFingerprint
+			}
+		}
 		if missingCount >= 2 {
 			updated.Status = "disabled"
 			if targetDatasetID != "" && targetDatasetID != datasetID {
@@ -541,6 +832,7 @@ func stagedInstrumentBindings(spaceID string, existing, targetExisting []*storag
 				}
 				target.DatasetId = targetDatasetID
 				target.SubjectRole = "normal"
+				target.Status = "disabled"
 				desired[targetKey] = target
 			}
 		}
@@ -555,6 +847,18 @@ func stagedInstrumentBindings(spaceID string, existing, targetExisting []*storag
 		bindings = append(bindings, desired[key])
 	}
 	return bindings
+}
+
+func instrumentSubjectIDs(sets ...[]*storagepb.DatasetSubject) map[string]struct{} {
+	known := make(map[string]struct{})
+	for _, set := range sets {
+		for _, membership := range set {
+			if membership != nil && strings.TrimSpace(membership.GetSubjectId()) != "" {
+				known[membership.GetSubjectId()] = struct{}{}
+			}
+		}
+	}
+	return known
 }
 
 func newestInstrumentSnapshotAt(sets ...[]*storagepb.DatasetSubject) time.Time {

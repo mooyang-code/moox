@@ -76,7 +76,6 @@ type MarketFetchThresholds struct {
 	InstrumentSnapshotMaxAge    time.Duration
 	InstrumentMinimumCount      int
 	InstrumentRequiredExchanges []string
-	EgressStaleAfter            time.Duration
 }
 
 func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
@@ -968,18 +967,10 @@ type marketInstrumentHealthState struct {
 	exchanges               map[string]float64
 }
 
-type marketEgressHealthState struct {
-	route                                            string
-	expected, result, nonEmpty, distinct             float64
-	lastObserved                                     time.Time
-	hasExpected, hasResult, hasNonEmpty, hasDistinct bool
-	kindObserved                                     map[string]time.Time
-}
-
 const maxMarketSignalSeries = 5000
 
 // buildMarketFetchSignalHealth consumes the bounded facts emitted by short-lived
-// Collector invocations and by the CLI release gate. It intentionally does not
+// Collector invocations. It intentionally does not
 // infer health from missing rows unless a stock signal family has already been
 // observed; an uninstalled market must not page forever.
 func (b Builder) buildMarketFetchSignalHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
@@ -997,11 +988,7 @@ func (b Builder) buildMarketFetchSignalHealth(ctx context.Context, spaceID strin
 	if err != nil {
 		return nil, err
 	}
-	egress, err := b.buildStockCNEgressHealth(ctx, now)
-	if err != nil {
-		return nil, err
-	}
-	return append(append(feed, instrument...), egress...), nil
+	return append(feed, instrument...), nil
 }
 
 func (b Builder) marketMetricSeries(ctx context.Context, metricName string) ([]monmetrics.MetricSeries, error) {
@@ -1230,82 +1217,6 @@ func nonEmptyString(value, fallback string) string {
 	return strings.TrimSpace(value)
 }
 
-func (b Builder) buildStockCNEgressHealth(ctx context.Context, now time.Time) ([]BusinessStatus, error) {
-	staleAfter := b.marketFetchThresholds().EgressStaleAfter
-	if staleAfter <= 0 {
-		staleAfter = 15 * time.Minute
-	}
-	series, err := b.marketMetricSeries(ctx, "moox_collector_market_egress_functions")
-	if err != nil {
-		return nil, err
-	}
-	states := map[string]*marketEgressHealthState{}
-	for _, item := range series {
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return nil, fmt.Errorf("egress gate labels for %s: %w", item.SeriesID, err)
-		}
-		if labels["market_id"] != "stock_cn" || item.IsStale {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		if latest == nil {
-			continue
-		}
-		route := nonEmptyString(labels["route_id"], "unknown")
-		state := states[route]
-		if state == nil {
-			state = &marketEgressHealthState{route: route, kindObserved: make(map[string]time.Time)}
-			states[route] = state
-		}
-		observedAt := latest.ObservedAt.UTC()
-		switch labels["kind"] {
-		case "expected":
-			if state.kindObserved["expected"].Before(observedAt) {
-				state.expected, state.hasExpected = latest.Value, true
-				state.kindObserved["expected"] = observedAt
-			}
-		case "result":
-			if state.kindObserved["result"].Before(observedAt) {
-				state.result, state.hasResult = latest.Value, true
-				state.kindObserved["result"] = observedAt
-			}
-		case "non_empty_ip":
-			if state.kindObserved["non_empty_ip"].Before(observedAt) {
-				state.nonEmpty, state.hasNonEmpty = latest.Value, true
-				state.kindObserved["non_empty_ip"] = observedAt
-			}
-		case "distinct_ip":
-			if state.kindObserved["distinct_ip"].Before(observedAt) {
-				state.distinct, state.hasDistinct = latest.Value, true
-				state.kindObserved["distinct_ip"] = observedAt
-			}
-		}
-		state.lastObserved = maxTime(state.lastObserved, observedAt)
-	}
-	out := make([]BusinessStatus, 0, len(states))
-	for _, state := range states {
-		status, reason := "healthy", fmt.Sprintf("stock_cn 出口 IP 门禁正常，函数数 %.0f", state.expected)
-		switch {
-		case !isFreshMetric(now, state.lastObserved, staleAfter):
-			status, reason = "down", fmt.Sprintf("stock_cn 出口 IP 门禁超过 %s 未更新", staleAfter)
-		case !state.hasExpected || !isFreshMetric(now, state.kindObserved["expected"], staleAfter) || state.expected <= 0:
-			status, reason = "down", "stock_cn 出口 IP 门禁没有有效 expected_function_count"
-		case !state.hasResult || !isFreshMetric(now, state.kindObserved["result"], staleAfter) || state.result != state.expected:
-			status, reason = "down", fmt.Sprintf("stock_cn 出口探针结果数 %.0f 不等于期望 %.0f", state.result, state.expected)
-		case !state.hasNonEmpty || !isFreshMetric(now, state.kindObserved["non_empty_ip"], staleAfter) || state.nonEmpty != state.expected:
-			status, reason = "down", fmt.Sprintf("stock_cn 非空出口 IP 数 %.0f 不等于期望 %.0f", state.nonEmpty, state.expected)
-		case !state.hasDistinct || !isFreshMetric(now, state.kindObserved["distinct_ip"], staleAfter) || state.distinct != state.expected:
-			status, reason = "down", fmt.Sprintf("stock_cn 去重出口 IP 数 %.0f 不等于期望 %.0f", state.distinct, state.expected)
-		}
-		out = append(out, BusinessStatus{SpaceID: "stock_cn", Kind: "market_fetch", Module: "egress_gate:" + state.route, Status: status, Reason: reason, LastCheckedAt: now})
-	}
-	return out, nil
-}
-
 // A full Tencent runtime-config batch may touch dozens of functions. The
 // coordination timestamp measures completion of that asynchronous batch, not
 // the ten-second Collector timer callback. Keep this threshold above the
@@ -1345,9 +1256,6 @@ func (b Builder) marketFetchThresholds() MarketFetchThresholds {
 	}
 	if len(thresholds.InstrumentRequiredExchanges) == 0 {
 		thresholds.InstrumentRequiredExchanges = []string{"XSHG", "XSHE", "XBSE"}
-	}
-	if thresholds.EgressStaleAfter <= 0 {
-		thresholds.EgressStaleAfter = 15 * time.Minute
 	}
 	return thresholds
 }
