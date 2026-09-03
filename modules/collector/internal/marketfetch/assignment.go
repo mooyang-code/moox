@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strconv"
 	"strings"
@@ -87,16 +88,16 @@ func (c StockCNStaggerConfig) Validate(timerFunctionCount int) error {
 	return nil
 }
 
-func stockCNAssignmentRoute() (string, map[string]int, error) {
+func stockCNAssignmentRoute() (string, []stockCNSource, error) {
 	route, err := loadStockCNRoute()
 	if err != nil {
 		return "", nil, fmt.Errorf("load stock_cn assignment route: %w", err)
 	}
-	weights := route.KlineWeights()
-	if len(weights) < 2 {
+	sources := route.KlineSources()
+	if len(sources) < 2 {
 		return "", nil, fmt.Errorf("stock_cn assignment route must have at least two active kline providers")
 	}
-	return route.RouteID, weights, nil
+	return route.RouteID, sources, nil
 }
 
 // BuildStockCNAssignments maps the published Timer fleet one-to-one to stable
@@ -121,8 +122,8 @@ func BuildStockCNAssignmentsWithStagger(group TaskGroup, nodes []scfinvoker.Node
 	group.DatasetID = strings.TrimSpace(group.DatasetID)
 	group.Frequency = strings.ToLower(strings.TrimSpace(group.Frequency))
 	group.Subjects = normalizeSubjects(group.Subjects)
-	if group.MarketType != "equity" || group.DatasetID != StockCNDatasetID || group.Frequency != "1m" || len(group.Subjects) == 0 {
-		return nil, fmt.Errorf("stock_cn assignment requires equity/%s/1m and at least one subject", StockCNDatasetID)
+	if group.MarketType != "equity" || group.DatasetID != StockCNDatasetID || group.Frequency != "1m" {
+		return nil, fmt.Errorf("stock_cn assignment requires equity/%s/1m", StockCNDatasetID)
 	}
 	eligible := eligibleTimerNodes(nodes)
 	expectedCount := expectedCounts[0]
@@ -139,27 +140,20 @@ func BuildStockCNAssignmentsWithStagger(group TaskGroup, nodes []scfinvoker.Node
 	if len(timerNodes) == 0 {
 		return nil, fmt.Errorf("timer assignment capacity insufficient: stock_cn requires a published Timer SCF fleet")
 	}
-	routeVersion, providerWeights, err := stockCNAssignmentRoute()
+	routeVersion, sources, err := stockCNAssignmentRoute()
 	if err != nil {
 		return nil, err
 	}
-	groups, err := marketdata.RendezvousAssign(group.Subjects, len(timerNodes), routeVersion)
-	if err != nil {
-		return nil, fmt.Errorf("assign stock_cn rendezvous groups: %w", err)
+	if len(group.Subjects) == 0 {
+		return disabledStockCNAssignments(group, timerNodes, routeVersion, sources, stagger)
 	}
-	groups, err = rebalanceRendezvousGroups(groups, measuredSafeGroupSize, routeVersion)
+	sourceGroups, err := assignStockCNSourceGroups(group.Subjects, sources, len(timerNodes), measuredSafeGroupSize, routeVersion)
 	if err != nil {
 		return nil, err
-	}
-	chains, err := marketdata.AssignProviderChains(len(timerNodes), providerWeights, routeVersion, strings.TrimSpace(tradingDate))
-	if err != nil {
-		return nil, fmt.Errorf("assign stock_cn provider chains: %w", err)
 	}
 	assignments := make([]NodeAssignment, 0, len(timerNodes))
-	for groupID, subjects := range groups {
-		if len(subjects) > measuredSafeGroupSize {
-			return nil, fmt.Errorf("stock_cn rendezvous group %d contains %d subjects; measured safe group size is %d", groupID, len(subjects), measuredSafeGroupSize)
-		}
+	for groupID, sourceGroup := range sourceGroups {
+		subjects := sourceGroup.Subjects
 		externals := make(map[string]string, len(subjects))
 		hashParts := make([]string, 0, len(subjects))
 		for _, subject := range subjects {
@@ -174,16 +168,155 @@ func BuildStockCNAssignmentsWithStagger(group TaskGroup, nodes []scfinvoker.Node
 			hashParts = append(hashParts, subject+"="+resolved)
 		}
 		node := timerNodes[groupID]
-		chain := append([]string(nil), chains[groupID]...)
+		provider := sourceGroup.Source.Provider
+		sourceID := sourceGroup.Source.SourceID
 		assignments = append(assignments, NodeAssignment{
 			NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region,
-			Provider: chain[0], RouteProvider: group.Provider, MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency,
-			Subjects: append([]string(nil), subjects...), ExternalSymbols: externals, ProviderChain: chain,
+			Provider: provider, RouteProvider: group.Provider, MarketType: group.MarketType, MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: sourceID, DatasetID: group.DatasetID, Frequency: group.Frequency,
+			Subjects: append([]string(nil), subjects...), ExternalSymbols: externals, ProviderChain: []string{provider},
 			RouteVersion: routeVersion, GroupID: groupID, GroupCount: expectedCount, Cron: stockCNStaggeredCron(groupID, stagger), Enabled: len(subjects) > 0,
-			AssignmentHash: AssignmentHash(chain[0], strings.Join(chain, "|"), routeVersion, strconv.Itoa(groupID), group.MarketType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|")),
+			AssignmentHash: AssignmentHash(provider, sourceID, routeVersion, strconv.Itoa(groupID), group.MarketType, group.MarketID, group.InstrumentType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|")),
 		})
 	}
 	return assignments, nil
+}
+
+func disabledStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, routeVersion string, sources []stockCNSource, stagger StockCNStaggerConfig) ([]NodeAssignment, error) {
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("stock_cn disabled assignment requires a registered source")
+	}
+	source := sources[0]
+	assignments := make([]NodeAssignment, 0, len(nodes))
+	for groupID, node := range nodes {
+		assignments = append(assignments, NodeAssignment{
+			NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region,
+			Provider: source.Provider, RouteProvider: group.Provider, MarketType: group.MarketType,
+			MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: source.SourceID,
+			DatasetID: group.DatasetID, Frequency: group.Frequency, ProviderChain: []string{source.Provider},
+			RouteVersion: routeVersion, GroupID: groupID, GroupCount: len(nodes),
+			Cron: stockCNStaggeredCron(groupID, stagger), Enabled: false,
+			AssignmentHash: AssignmentHash(source.Provider, source.SourceID, routeVersion, strconv.Itoa(groupID), "disabled"),
+		})
+	}
+	return assignments, nil
+}
+
+type stockCNSourceGroup struct {
+	Source   stockCNSource
+	Subjects []string
+}
+
+func assignStockCNSourceGroups(subjects []string, sources []stockCNSource, nodeCount, maxSubjects int, routeVersion string) ([]stockCNSourceGroup, error) {
+	if nodeCount <= 0 || maxSubjects <= 0 {
+		return nil, fmt.Errorf("stock_cn source assignment requires positive node count and subject capacity")
+	}
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("stock_cn source assignment requires at least one source")
+	}
+	normalized := normalizeSubjects(subjects)
+	buckets := make(map[string][]string, len(sources))
+	sourceByKey := make(map[string]stockCNSource, len(sources))
+	totalWeight := 0
+	for _, source := range sources {
+		source.Provider = strings.ToLower(strings.TrimSpace(source.Provider))
+		source.SourceID = strings.ToLower(strings.TrimSpace(source.SourceID))
+		if source.Provider == "" || source.SourceID == "" || source.Weight <= 0 {
+			return nil, fmt.Errorf("invalid stock_cn source %q/%q", source.Provider, source.SourceID)
+		}
+		key := source.Provider + "/" + source.SourceID
+		if _, exists := sourceByKey[key]; exists {
+			return nil, fmt.Errorf("duplicate stock_cn source %q", key)
+		}
+		sourceByKey[key] = source
+		totalWeight += source.Weight
+	}
+	if totalWeight <= 0 {
+		return nil, fmt.Errorf("stock_cn source weights must be positive")
+	}
+	for _, subject := range normalized {
+		bucket := weightedSourceBucket(routeVersion, subject, sources, totalWeight)
+		key := bucket.Provider + "/" + bucket.SourceID
+		buckets[key] = append(buckets[key], subject)
+	}
+
+	activeSources := make([]stockCNSource, 0, len(sources))
+	for _, source := range sources {
+		key := source.Provider + "/" + source.SourceID
+		if len(buckets[key]) > 0 {
+			activeSources = append(activeSources, source)
+		}
+	}
+	if len(activeSources) == 0 {
+		return nil, fmt.Errorf("stock_cn source assignment produced no non-empty source bucket")
+	}
+	nodeCounts := make([]int, len(activeSources))
+	usedNodes := 0
+	for index, source := range activeSources {
+		required := (len(buckets[source.Provider+"/"+source.SourceID]) + maxSubjects - 1) / maxSubjects
+		if required < 1 {
+			required = 1
+		}
+		nodeCounts[index] = required
+		usedNodes += required
+	}
+	if usedNodes > nodeCount {
+		return nil, fmt.Errorf("stock_cn source assignment capacity insufficient: %d nodes required for %d available", usedNodes, nodeCount)
+	}
+	for usedNodes < nodeCount {
+		best := 0
+		for index := 1; index < len(activeSources); index++ {
+			if sourceNodeAllocationLess(activeSources[index], nodeCounts[index], activeSources[best], nodeCounts[best]) {
+				best = index
+			}
+		}
+		nodeCounts[best]++
+		usedNodes++
+	}
+
+	result := make([]stockCNSourceGroup, nodeCount)
+	nodeOffset := 0
+	for index, source := range activeSources {
+		key := source.Provider + "/" + source.SourceID
+		sourceSubjects := append([]string(nil), buckets[key]...)
+		sort.Strings(sourceSubjects)
+		groups, err := marketdata.RendezvousAssign(sourceSubjects, nodeCounts[index], routeVersion+"\x00"+key)
+		if err != nil {
+			return nil, fmt.Errorf("assign stock_cn source %s groups: %w", key, err)
+		}
+		groups, err = rebalanceRendezvousGroups(groups, maxSubjects, routeVersion+"\x00"+key)
+		if err != nil {
+			return nil, err
+		}
+		for groupIndex, group := range groups {
+			result[nodeOffset+groupIndex] = stockCNSourceGroup{Source: source, Subjects: append([]string(nil), group...)}
+		}
+		nodeOffset += nodeCounts[index]
+	}
+	return result, nil
+}
+
+func weightedSourceBucket(routeVersion, subject string, sources []stockCNSource, totalWeight int) stockCNSource {
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(routeVersion))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(subject))
+	bucket := int(hash.Sum64() % uint64(totalWeight))
+	for _, source := range sources {
+		if bucket < source.Weight {
+			return source
+		}
+		bucket -= source.Weight
+	}
+	return sources[len(sources)-1]
+}
+
+func sourceNodeAllocationLess(left stockCNSource, leftCount int, right stockCNSource, rightCount int) bool {
+	leftRatio := float64(leftCount) / float64(left.Weight)
+	rightRatio := float64(rightCount) / float64(right.Weight)
+	if leftRatio != rightRatio {
+		return leftRatio < rightRatio
+	}
+	return left.Provider+"/"+left.SourceID < right.Provider+"/"+right.SourceID
 }
 
 func requiredStockCNGroupSize(activeSubjects, timerFunctionCount int) (int, error) {
@@ -500,7 +633,11 @@ func AssignmentHash(parts ...string) string {
 }
 
 func CronForFrequency(frequency string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(frequency)) {
+	raw := strings.TrimSpace(frequency)
+	if raw == "1M" {
+		return "0 0 0 1 * * *", nil
+	}
+	switch strings.ToLower(raw) {
 	case "1m":
 		return "0 * * * * * *", nil
 	case "5m":

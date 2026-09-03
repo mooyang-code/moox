@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 
@@ -116,10 +117,17 @@ type DatasetSource struct {
 func NewDatasetSource(metadataTarget string) *DatasetSource {
 	return &DatasetSource{
 		metadata: storagepb.NewMetadataClientProxy(
-			append(gatewayauth.NewTRPCClientOptions(normalizeTRPCTarget(metadataTarget, "11003"), gatewayauth.ServiceGatewayNodeID(), gatewayauth.CredentialsFromEnv()),
+			append(gatewayauth.NewTRPCClientOptions(normalizeTRPCTarget(metadataTarget, "11003"), storageGatewayNodeID(), gatewayauth.CredentialsFromEnv()),
 				client.WithTransport(transport.DefaultClientTransport))...,
 		),
 	}
+}
+
+func storageGatewayNodeID() string {
+	if nodeID := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID")); nodeID != "" {
+		return nodeID
+	}
+	return gatewayauth.ServiceGatewayNodeID()
 }
 
 // ListSubjects returns active dataset subjects enriched with external symbols.
@@ -151,7 +159,7 @@ func (s *DatasetSource) ListSubjects(ctx context.Context, spaceID string, datase
 
 // ListResampleSubjects returns the source Dataset's active subject set
 // without requiring an external-symbol catalog owned by the source DataSource.
-// Shared/normalized K-line result Datasets commonly use data_source_id=crypto_market
+// Shared/normalized K-line result Datasets commonly use data_source_id=crypto
 // while their exchange symbols remain registered under binance or another venue.
 func (s *DatasetSource) ListResampleSubjects(ctx context.Context, spaceID, datasetID string) ([]domain.DatasetSubject, error) {
 	return s.ListResampleSubjectsForRule(ctx, spaceID, datasetID, "", "")
@@ -174,7 +182,7 @@ func (s *DatasetSource) ListResampleSubjectsForRule(ctx context.Context, spaceID
 		if datasetErr != nil {
 			return nil, datasetErr
 		}
-		if dataSourceID := strings.TrimSpace(dataset.DataSourceID); dataSourceID != "" && !strings.EqualFold(dataSourceID, "crypto_market") {
+		if dataSourceID := strings.TrimSpace(dataset.DataSourceID); dataSourceID != "" && !strings.EqualFold(dataSourceID, "crypto") {
 			// A provider-owned Dataset may have an explicit subject binding and
 			// still require a provider-specific symbol (BTC-USDT -> BTCUSDT).
 			symbols, symbolErr := s.listSubjectSymbols(ctx, spaceID, dataSourceID)
@@ -183,7 +191,7 @@ func (s *DatasetSource) ListResampleSubjectsForRule(ctx context.Context, spaceID
 			}
 			return mergeDatasetSubjects(bindings, symbols)
 		}
-		if strings.EqualFold(strings.TrimSpace(dataset.DataSourceID), "crypto_market") {
+		if strings.EqualFold(strings.TrimSpace(dataset.DataSourceID), "crypto") {
 			if symbolSource := inferResampleSymbolSource(provider, seriesTag); symbolSource != "" {
 				symbols, symbolErr := s.listSubjectSymbols(ctx, spaceID, symbolSource)
 				if symbolErr != nil {
@@ -211,7 +219,7 @@ func (s *DatasetSource) ListResampleSubjectsForRule(ctx context.Context, spaceID
 	// catalog. Falling back to every Subject in the market would create tasks
 	// for symbols that the source DataSource cannot supply (for example, an
 	// OKX-only symbol on a Binance Dataset).
-	if dataSourceID := strings.TrimSpace(dataset.DataSourceID); dataSourceID != "" && !strings.EqualFold(dataSourceID, "crypto_market") {
+	if dataSourceID := strings.TrimSpace(dataset.DataSourceID); dataSourceID != "" && !strings.EqualFold(dataSourceID, "crypto") {
 		symbols, symbolErr := s.listSubjectSymbols(ctx, spaceID, dataSourceID)
 		if symbolErr != nil {
 			return nil, symbolErr
@@ -225,7 +233,7 @@ func (s *DatasetSource) ListResampleSubjectsForRule(ctx context.Context, spaceID
 		return mergeDatasetSubjects(nil, symbols)
 	}
 	dataSourceID := strings.TrimSpace(dataset.DataSourceID)
-	if strings.EqualFold(dataSourceID, "crypto_market") {
+	if strings.EqualFold(dataSourceID, "crypto") {
 		if symbolSource := inferResampleSymbolSource(provider, seriesTag); symbolSource != "" {
 			symbols, symbolErr := s.listSubjectSymbols(ctx, spaceID, symbolSource)
 			if symbolErr != nil {

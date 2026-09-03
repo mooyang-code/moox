@@ -17,6 +17,8 @@ import (
 type instrumentProviderStub struct {
 	mu       sync.Mutex
 	id       string
+	sourceID string
+	status   marketdata.SourceStatus
 	snapshot marketdata.InstrumentSnapshot
 	err      error
 	calls    int
@@ -27,7 +29,7 @@ type instrumentProviderStub struct {
 }
 
 func (p *instrumentProviderStub) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: p.id, DisplayName: p.id, Hosts: []string{p.id + ".test"}}
+	return marketdata.ProviderDescriptor{ID: p.id, SourceID: p.sourceID, Status: p.status, DisplayName: p.id, Hosts: []string{p.id + ".test"}}
 }
 
 func (p *instrumentProviderStub) InstrumentSpec() marketdata.InstrumentSpec {
@@ -68,6 +70,20 @@ func (p *instrumentProviderStub) callCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.calls
+}
+
+func TestInstrumentPipelineSkipsCatalogOnlyProvider(t *testing.T) {
+	provider := &instrumentProviderStub{id: "sina", sourceID: "stock_cn_minute_http", status: marketdata.SourceCatalogOnly}
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(provider))
+	pipeline := &InstrumentPipeline{
+		Registry: registry, Storage: &instrumentStorageStub{}, CandidateChain: []string{"sina"},
+		SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID, DatasetID: StockCNInstrumentDatasetID,
+		InstrumentProviderTimeout: time.Second,
+	}
+	_, err := pipeline.Execute(context.Background(), InstrumentPipelineRequest{RequestID: "catalog-only"})
+	require.ErrorIs(t, err, marketdata.ErrSourceUnavailable)
+	require.Zero(t, provider.callCount())
 }
 
 type instrumentStorageStub struct {

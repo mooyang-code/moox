@@ -8,10 +8,13 @@ while [[ -h "${SOURCE}" ]]; do
   [[ "${SOURCE}" != /* ]] && SOURCE="${SOURCE_DIR}/${SOURCE}"
 done
 ROOT="$(cd -P "$(dirname "${SOURCE}")/../.." && pwd)"
-SCF_SPACE_ID="${SCF_SPACE_ID:?SCF_SPACE_ID is required (for example: crypto_market)}"
-SCF_ENTRYPOINT="${SCF_ENTRYPOINT:?SCF_ENTRYPOINT is required (crypto_market or stock_cn)}"
-[[ "${SCF_ENTRYPOINT}" == "crypto_market" || "${SCF_ENTRYPOINT}" == "stock_cn" ]] || { echo "unsupported SCF entrypoint: ${SCF_ENTRYPOINT}" >&2; exit 1; }
+SCF_SPACE_ID="${SCF_SPACE_ID:?SCF_SPACE_ID is required (for example: crypto)}"
+SCF_ENTRYPOINT="${SCF_ENTRYPOINT:-market_data}"
+[[ "${SCF_ENTRYPOINT}" == "market_data" ]] || { echo "unsupported SCF entrypoint: ${SCF_ENTRYPOINT}" >&2; exit 1; }
 CONFIG_DIR="${ROOT}/modules/collector/configs/scf/${SCF_SPACE_ID}"
+if [[ ! -d "${CONFIG_DIR}" ]]; then
+  CONFIG_DIR="${ROOT}/modules/collector/configs/scf/market_data"
+fi
 VERSION="${VERSION:-v$(date +%Y%m%d%H%M%S)}"
 OUT_DIR="${OUT_DIR:-${ROOT}/release/scf}"
 OUT_PATH="${OUT_PATH:-${OUT_DIR}/collector-scf-${SCF_SPACE_ID}-${VERSION}.zip}"

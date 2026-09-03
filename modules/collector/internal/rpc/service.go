@@ -287,6 +287,7 @@ func (s *Service) GetTaskInstanceList(ctx context.Context, req *pb.GetTaskInstan
 		repoFilter.TaskID = filter.GetTaskId()
 		repoFilter.RuleID = filter.GetRuleId()
 		repoFilter.Provider = filter.GetProvider()
+		repoFilter.SourceID = filter.GetSourceId()
 		repoFilter.MarketType = filter.GetMarketType()
 		repoFilter.DataType = filter.GetDataType()
 		repoFilter.DatasetID = filter.GetDatasetId()
@@ -776,7 +777,7 @@ func (s *Service) validateDataset(
 		return fmt.Errorf("%s Dataset %s must be active", role, datasetID)
 	}
 	sourceMatches := strings.EqualFold(info.DataSourceID, exchange) ||
-		(allowSharedMarket && strings.EqualFold(info.DataSourceID, "crypto_market"))
+		(allowSharedMarket && strings.EqualFold(info.DataSourceID, "crypto"))
 	if !sourceMatches {
 		return fmt.Errorf(
 			"%s Dataset %s data_source_id=%s does not match collector exchange=%s",

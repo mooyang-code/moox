@@ -109,6 +109,9 @@ func (s *Store) ApplySchema(sql string) error {
 	if err := s.ensureTaskInstanceFunctionColumn(); err != nil {
 		return err
 	}
+	if err := s.ensureTaskInstanceSourceColumn(); err != nil {
+		return err
+	}
 	if err := s.ensureTaskRulePreparationColumns(); err != nil {
 		return err
 	}
@@ -234,6 +237,26 @@ func (s *Store) ensureTaskInstanceFunctionColumn() error {
 	}
 	if err := s.db.Exec(`ALTER TABLE t_collector_task_instances ADD COLUMN c_function_name TEXT NOT NULL DEFAULT ''`).Error; err != nil {
 		return fmt.Errorf("add task instance function column: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureTaskInstanceSourceColumn() error {
+	var tableCount int64
+	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, "t_collector_task_instances").Scan(&tableCount).Error; err != nil {
+		return fmt.Errorf("check task instance table for source: %w", err)
+	}
+	if tableCount == 0 {
+		return nil
+	}
+	var count int64
+	if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info('t_collector_task_instances') WHERE name = ?`, "c_source_id").Scan(&count).Error; err != nil {
+		return fmt.Errorf("inspect task instance source column: %w", err)
+	}
+	if count == 0 {
+		if err := s.db.Exec(`ALTER TABLE t_collector_task_instances ADD COLUMN c_source_id TEXT NOT NULL DEFAULT ''`).Error; err != nil {
+			return fmt.Errorf("add task instance source column: %w", err)
+		}
 	}
 	return nil
 }

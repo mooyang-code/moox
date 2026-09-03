@@ -40,14 +40,20 @@ func TestDefaultViewInventory(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"crypto_market/binance_spot_kline_1m_view",
-		"crypto_market/perpetual_kline_1h_view",
-		"crypto_market/spot_kline_1h_view",
+		"crypto/binance_spot_kline_1m_view",
+		"crypto/binance_swap_kline_1m_view",
+		"crypto/perpetual_kline_1h_view",
+		"crypto/spot_kline_1h_view",
 		"moox_system/host_disk_view",
 		"moox_system/host_fs_view",
 		"moox_system/host_net_view",
 		"moox_system/host_resource_view",
 		"moox_system/moox_service_metrics_view",
+		"stock_cn/stock_cn_cb_kline_view",
+		"stock_cn/stock_cn_index_kline_view",
+		"stock_cn/stock_cn_kline_view",
+		"stock_hk/stock_hk_kline_view",
+		"stock_us/stock_us_kline_view",
 	}
 	sort.Strings(want)
 	require.Equal(t, want, got)

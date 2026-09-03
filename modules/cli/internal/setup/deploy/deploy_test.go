@@ -328,7 +328,7 @@ func TestStoragePackagerUsesCompileHostBuildForLinuxCrossBuild(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "custom.toml"), []byte("placeholder"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "bin", "moox-cli"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "build-storage-linux.sh"), []byte("#!/bin/sh\nset -eu\n: \"${MOOX_CLI:?}\"\n: \"${CONFIG:?}\"\ntest \"$MOOX_SSH_PASSWORD\" = build-password\ntest \"$MOOX_STORAGE_BUILD_HOST\" = compile\ntest \"$MOOX_STORAGE_BUILD_HOST_ROLE\" = compile\ntest \"$MOOX_STORAGE_BUILD_GOARCH\" = amd64\ntouch ./compiled\n"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy-moox.sh"), []byte("#!/bin/sh\nset -eu\ntest -f ./compiled\ntest \"$MOOX_EVENTBUS_ENABLE_TLS\" = 1\ntest \"$MOOX_EVENTBUS_PUBLIC_IP\" = eventbus.example.test\ntest \"$MOOX_EVENTBUS_PORT\" = 4222\ntest \"$MOOX_STORAGE_PRIMARY_AUTH_SECRET\" = primary-secret\ntest \"$MOOX_STORAGE_VIEW_AUTH_SECRET\" = view-secret\ntest -n \"$MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64\"\ntest \"$MOOX_LOCAL_LOG_MAX_SIZE_MB\" = 88\ntest \"$MOOX_LOCAL_LOG_BACKUP_COUNT\" = 9\ntest \"$MOOX_HEALTH_AUTH_VERSION\" = moox-health-v1\ntest \"$MOOX_HEALTH_AUTH_ACCESS_KEY\" = monitor\ntest \"$MOOX_HEALTH_AUTH_SECRET_KEY\" = health-secret\ncase \" $* \" in *' --skip-build '*) ;; *) exit 2 ;; esac\ncase \" $* \" in *' --no-gateway '*) ;; *) exit 4 ;; esac\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --archive ]; then printf package >\"$2\"; exit 0; fi\n  shift\ndone\nexit 3\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy-moox.sh"), []byte("#!/bin/sh\nset -eu\ntest -f ./compiled\ntest \"$MOOX_EVENTBUS_ENABLE_TLS\" = 1\ntest \"$MOOX_EVENTBUS_PUBLIC_IP\" = eventbus.example.test\ntest \"$MOOX_EVENTBUS_PORT\" = 4222\ntest \"$MOOX_STORAGE_PRIMARY_AUTH_SECRET\" = primary-secret\ntest \"$MOOX_STORAGE_VIEW_AUTH_SECRET\" = view-secret\ntest -n \"$MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64\"\ntest \"$MOOX_LOCAL_LOG_MAX_SIZE_MB\" = 88\ntest \"$MOOX_LOCAL_LOG_BACKUP_COUNT\" = 9\ntest \"$MOOX_HEALTH_AUTH_VERSION\" = moox-health-v1\ntest \"$MOOX_HEALTH_AUTH_ACCESS_KEY\" = monitor\ntest \"$MOOX_HEALTH_AUTH_SECRET_KEY\" = health-secret\ncase \" $* \" in *' --skip-build '*) ;; *) exit 2 ;; esac\ncase \" $* \" in *' --no-gateway '*) ;; *) exit 4 ;; esac\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --archive ]; then\n    dir=$(mktemp -d)\n    trap 'rm -rf \"$dir\"' EXIT\n    printf '%s' '{\"schema_version\":1,\"commit\":\"0123456789012345678901234567890123456789\",\"dirty\":false,\"binary_hashes\":{\"moox-storage-primary\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"moox-storage-node\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"moox-storage-view\":\"0000000000000000000000000000000000000000000000000000000000000000\"}}' >\"$dir/build-provenance.json\"\n    tar -czf \"$2\" -C \"$dir\" build-provenance.json\n    exit 0\n  fi\n  shift\ndone\nexit 3\n"), 0o700))
 
 	archive, err := (StoragePackager{}).Package(context.Background(), Options{
 		RepositoryRoot: root, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64", StorageBuildPassword: "build-password", StorageBuildHost: "compile", StorageBuildHostRole: "compile",
@@ -341,7 +341,9 @@ func TestStoragePackagerUsesCompileHostBuildForLinuxCrossBuild(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer os.Remove(archive)
-	require.Equal(t, "package", string(requireFile(t, archive)))
+	provenance, err := readArchiveMember(archive, "build-provenance.json")
+	require.NoError(t, err)
+	require.Contains(t, string(provenance), `"schema_version":1`)
 }
 
 func TestStorageNodeIDUsesSelectedHostName(t *testing.T) {
@@ -399,6 +401,30 @@ func TestStoragePassesRemoteEventBusURLToInstaller(t *testing.T) {
 	require.Contains(t, install[2], "export MOOX_STORAGE_EVENTBUS_URL='tls://eventbus.example.test:4333'")
 }
 
+func TestStorageUploadsRemoteEventBusMaterialForSeparateHost(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
+	require.NoError(t, os.WriteFile(archive, []byte("storage-package"), 0o600))
+	events := []string{}
+	transport := &fakeTransport{events: &events}
+	err := Storage(context.Background(), transport, Options{
+		RepositoryRoot: t.TempDir(), PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64",
+		StorageEventBusCredential: []byte("username: storage-eventbus\n token: token\n"),
+		StorageEventBusCA:         []byte("-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n"),
+	}, Dependencies{Packager: &fakePackager{path: archive, events: &events}, Probe: &fakeProbe{events: &events}})
+	require.NoError(t, err)
+	require.Equal(t, 3, countEvent(events, "upload"))
+	var install []string
+	for _, command := range transport.commands {
+		if len(command) >= 3 && strings.Contains(command[2], "install_storage") {
+			install = command
+			break
+		}
+	}
+	require.NotEmpty(t, install)
+	require.Regexp(t, `^/tmp/moox-storage-eventbus-[A-Za-z0-9._-]+\.yaml$`, install[len(install)-2])
+	require.Regexp(t, `^/tmp/moox-storage-eventbus-[A-Za-z0-9._-]+\.pem$`, install[len(install)-1])
+}
+
 func TestStorageInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	home := t.TempDir()
 	deploy := filepath.Join(home, "moox", "storage")
@@ -433,6 +459,32 @@ func TestStorageInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	require.Equal(t, "secret", string(requireFile(t, filepath.Join(deploy, "secrets", "auth.env"))))
 	require.Equal(t, "control-owned-secret", string(requireFile(t, filepath.Join(deploy, "secrets", "storage-internal-auth.env"))))
 	require.Equal(t, "control-health-secret", string(requireFile(t, filepath.Join(deploy, "secrets", "health-auth.env"))))
+}
+
+func TestStorageInstallerCopiesEventBusMaterialForRestarts(t *testing.T) {
+	home := t.TempDir()
+	archiveDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "secrets"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "start.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
+	require.NoError(t, exec.Command("tar", "-C", archiveDir, "-czf", archive, ".").Run())
+	const token = "eventbus-material-test"
+	remoteArchive := storageArchivePath(token)
+	defer os.Remove(remoteArchive)
+	require.NoError(t, copyFileForTest(archive, remoteArchive))
+	credential := filepath.Join(t.TempDir(), "storage-eventbus.yaml")
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	require.NoError(t, os.WriteFile(credential, []byte("version: 1\nusername: storage-eventbus\ntoken: token\nca_file: ca.pem\n"), 0o600))
+	require.NoError(t, os.WriteFile(ca, []byte("ca"), 0o600))
+
+	storageRoot := filepath.Join(home, "moox", "storage")
+	controlRoot := filepath.Join(home, "moox", "prod")
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", storageRoot, controlRoot, "0", "0", "0", token, remoteArchive, credential, ca)
+	cmd.Env = storageInstallerEnv(t, home)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.Equal(t, "version: 1\nusername: storage-eventbus\ntoken: token\nca_file: ca.pem\n", string(requireFile(t, filepath.Join(home, ".config", "moox", "eventbus", "storage-eventbus.yaml"))))
+	require.Equal(t, "ca", string(requireFile(t, filepath.Join(home, ".config", "moox", "eventbus", "ca.pem"))))
 }
 
 func TestStorageInstallerDefaultPreservesExistingData(t *testing.T) {
@@ -986,13 +1038,13 @@ func TestRemoteInstallerScriptsParse(t *testing.T) {
 	require.Contains(t, installControlScript, `"$deploy.maintenance.lock"`, "installer and healthcheck must share a lock outside the renamed deployment directory")
 	require.Contains(t, installControlScript, `"$deploy/start.sh" 8>&-`, "services must not inherit the deployment maintenance lock")
 	require.Contains(t, installControlScript, `--config "$deploy/config/caddy/Caddyfile.next" 8>&-`, "Caddy must not inherit the deployment maintenance lock")
-	require.Contains(t, installControlScript, `MOOX_RESET_CONTROL_DATA="$reset_data" MOOX_EVENTBUS_ROTATE_CREDENTIALS="$rotate_eventbus" "$deploy/start.sh" 8>&-`, "control reset must preserve or rotate external EventBus identities before startup")
+	require.Contains(t, installControlScript, `MOOX_RESET_CONTROL_DATA="$reset_data" MOOX_EVENTBUS_ROTATE_CREDENTIALS="$rotate_eventbus" nohup "$deploy/start.sh" 8>&-`, "control reset must preserve or rotate external EventBus identities before startup")
 	require.Contains(t, installControlScript, "MOOX_PRESERVE_EXTERNAL_EVENTBUS_CREDENTIALS=1", "control reset must persist external EventBus identity preservation for later restarts")
 	require.Contains(t, installControlScript, `grep -q '^MOOX_PRESERVE_EXTERNAL_EVENTBUS_CREDENTIALS=1$' "$old_components"`, "subsequent control upgrades must retain the reset EventBus identity policy")
 	require.Contains(t, installControlScript, `rotate_eventbus=1`, "reset with a changed EventBus endpoint must rotate the TLS bundle")
 	require.Contains(t, installControlScript, `restore_eventbus_backup`, "failed endpoint rotation must restore the previous EventBus credentials")
 	require.Contains(t, installControlScript, `eventbus.previous.$activation_token`, "EventBus rollback backup must be bound to the activation token")
-	require.Contains(t, installControlScript, "rm -rf \"$deploy\"\n    restore_eventbus_backup\n    if [ -d \"$previous\" ]; then\n      mv \"$previous\" \"$deploy\"\n      \"$deploy/start.sh\"", "rollback must restore old EventBus credentials before restarting the previous deployment")
+	require.Contains(t, installControlScript, "rm -rf \"$deploy\"\n    restore_eventbus_backup\n    if [ -d \"$previous\" ]; then\n      mv \"$previous\" \"$deploy\"\n      mkdir -p \"$deploy/logs\"\n      \"$deploy/start.sh\"", "rollback must restore old EventBus credentials before restarting the previous deployment")
 	require.Contains(t, rollbackControlScript, `mv "$eventbus_backup" "$HOME/.config/moox/eventbus"`, "outer rollback must restore EventBus credentials before starting the previous deployment")
 	require.Contains(t, finalizeControlScript, `rm -rf "$eventbus_backup"`, "finalize must remove the retained EventBus rollback backup")
 	require.Contains(t, rollbackControlScript, `"$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy"`, "control rollback must stop the active Caddy before restoring the previous path")

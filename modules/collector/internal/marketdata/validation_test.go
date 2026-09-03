@@ -46,6 +46,45 @@ func TestValidateNormalizedKline(t *testing.T) {
 	}
 }
 
+func TestSourceSpecValidationRequiresConcreteTransportAndStatus(t *testing.T) {
+	spec := SourceSpec{
+		Key:             SourceKey{ProviderID: "sina", SourceID: "stock_cn_minute_http"},
+		Status:          SourceEnabled,
+		ProtocolVariant: "http",
+		Transport:       "https",
+		Host:            "quotes.sina.cn",
+		Port:            443,
+		Markets:         []MarketID{"stock_cn"},
+		Instruments:     []InstrumentType{InstrumentEquity},
+		Frequencies:     []string{"1m"},
+		TimestampMode:   TimestampModeClose,
+		CompleteOHLCV:   true,
+		HasAmount:       true,
+	}
+	require.NoError(t, spec.Validate())
+
+	invalid := spec
+	invalid.Status = SourceStatus("unknown")
+	require.Error(t, invalid.Validate())
+	invalid = spec
+	invalid.Key.SourceID = ""
+	require.Error(t, invalid.Validate())
+	invalid = spec
+	invalid.Port = 0
+	require.Error(t, invalid.Validate())
+}
+
+func TestParseFrequencyDistinguishesMinuteAndCalendarMonth(t *testing.T) {
+	minute, err := ParseFrequency("1m")
+	require.NoError(t, err)
+	require.Equal(t, FrequencyMinute, minute)
+	month, err := ParseFrequency("1M")
+	require.NoError(t, err)
+	require.Equal(t, FrequencyMonth, month)
+	start := time.Date(2026, time.February, 1, 0, 0, 0, 0, time.UTC)
+	require.Equal(t, time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC), month.BarEnd(start))
+}
+
 func TestValidateNormalizedKlineAcceptsCryptoHourBar(t *testing.T) {
 	start := time.Date(2026, 8, 29, 1, 0, 0, 0, time.UTC)
 	kline := NormalizedKline{

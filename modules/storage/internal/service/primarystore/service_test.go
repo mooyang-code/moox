@@ -320,7 +320,7 @@ func TestMooxSkillReadIsBoundToKlineScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	validSelector := &pb.TimeSeriesSelector{
-		SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m", SubjectId: "BTC-USDT",
+		SpaceId: "crypto", DatasetId: "binance_spot_kline_1m", SubjectId: "BTC-USDT",
 		Freq: "1m", SeriesTag: stringPtr("venue:binance"),
 	}
 	tests := []struct {
@@ -332,11 +332,11 @@ func TestMooxSkillReadIsBoundToKlineScope(t *testing.T) {
 			Selectors: []*pb.TimeSeriesSelector{validSelector}, Order: pb.SortOrder_SORT_ORDER_DESC,
 		}},
 		{name: "exact keys", req: &pb.ReadTimeSeriesRowsReq{
-			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m",
-			Selectors: []*pb.TimeSeriesSelector{validSelector}, Keys: []*pb.TimeSeriesKey{{SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m"}}, Order: pb.SortOrder_SORT_ORDER_DESC,
+			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto", DatasetId: "binance_spot_kline_1m",
+			Selectors: []*pb.TimeSeriesSelector{validSelector}, Keys: []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "binance_spot_kline_1m"}}, Order: pb.SortOrder_SORT_ORDER_DESC,
 		}},
 		{name: "page size", req: &pb.ReadTimeSeriesRowsReq{
-			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m",
+			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto", DatasetId: "binance_spot_kline_1m",
 			Selectors: []*pb.TimeSeriesSelector{validSelector}, Page: &commonpb.Page{Size: 1001}, Order: pb.SortOrder_SORT_ORDER_DESC,
 		}},
 	}
@@ -371,10 +371,10 @@ func TestValidateMooxSkillReadRequestAllowsOnlyExportedKlineSelectors(t *testing
 		req     *pb.ReadTimeSeriesRowsReq
 		wantErr bool
 	}{
-		{name: "crypto binance 1m", req: request("crypto_market", "binance_spot_kline_1m", "1m", &cryptoTag)},
-		{name: "crypto wildcard series", req: request("crypto_market", "binance_spot_kline_1m", "1m", nil), wantErr: true},
-		{name: "crypto empty series", req: request("crypto_market", "binance_spot_kline_1m", "1m", &emptyTag), wantErr: true},
-		{name: "crypto other series", req: request("crypto_market", "binance_spot_kline_1m", "1m", &otherTag), wantErr: true},
+		{name: "crypto binance 1m", req: request("crypto", "binance_spot_kline_1m", "1m", &cryptoTag)},
+		{name: "crypto wildcard series", req: request("crypto", "binance_spot_kline_1m", "1m", nil), wantErr: true},
+		{name: "crypto empty series", req: request("crypto", "binance_spot_kline_1m", "1m", &emptyTag), wantErr: true},
+		{name: "crypto other series", req: request("crypto", "binance_spot_kline_1m", "1m", &otherTag), wantErr: true},
 		{name: "stock cn default series 1m", req: request("stock_cn", "stock_cn_kline", "1m", &emptyTag)},
 		{name: "stock cn wildcard series", req: request("stock_cn", "stock_cn_kline", "1m", nil), wantErr: true},
 		{name: "stock cn provider series", req: request("stock_cn", "stock_cn_kline", "1m", &cryptoTag), wantErr: true},
@@ -383,7 +383,7 @@ func TestValidateMooxSkillReadRequestAllowsOnlyExportedKlineSelectors(t *testing
 		{name: "other space", req: request("stock_us", "stock_cn_kline", "1m", &emptyTag), wantErr: true},
 		{name: "mixed allowed datasets", req: func() *pb.ReadTimeSeriesRowsReq {
 			req := request("stock_cn", "stock_cn_kline", "1m", &emptyTag)
-			req.Selectors[0].SpaceId = "crypto_market"
+			req.Selectors[0].SpaceId = "crypto"
 			req.Selectors[0].DatasetId = "binance_spot_kline_1m"
 			req.Selectors[0].SeriesTag = &cryptoTag
 			return req

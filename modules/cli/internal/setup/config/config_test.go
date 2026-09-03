@@ -129,7 +129,7 @@ func TestValidateSCFFetcherRequiresTDXEndpointConfiguration(t *testing.T) {
 
 func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 	crypto := SCFFetcherSpace{
-		SpaceID: "crypto_market",
+		SpaceID: "crypto",
 		Regions: []SCFFetcherRegion{
 			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 0, CloudAccountID: "gz"},
 			{Region: "ap-shanghai", Enabled: true, FunctionCount: 0, CloudAccountID: "sh"},
@@ -338,6 +338,44 @@ func TestLoadValidManifest(t *testing.T) {
 	assert.Empty(t, snapshot.Manifest.Notification.WebhookURL)
 	assert.Empty(t, snapshot.Manifest.OtherHosts)
 	require.NoError(t, snapshot.VerifyUnchanged())
+}
+
+func TestLoadRoleSpecificStorageAndViewHosts(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+
+[storage_host]
+name = "storage"
+address = "192.0.2.20"
+port = 22
+username = "ubuntu"
+password = "storage-password"
+
+[view_host]
+name = "view"
+address = "192.0.2.20"
+port = 22
+username = "ubuntu"
+password = "view-password"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	require.Equal(t, "storage", snapshot.Manifest.StorageHost.Name)
+	require.Equal(t, "view", snapshot.Manifest.ViewHost.Name)
+	require.Equal(t, snapshot.Manifest.StorageHost.Address, snapshot.Manifest.ViewHost.Address)
+}
+
+func TestValidateRejectsStorageRootOverlapWithControl(t *testing.T) {
+	paths := &Paths{
+		DeployRoot:  "/data/moox",
+		ControlRoot: "/data/moox/prod",
+		StorageRoot: "/data/moox/prod/storage",
+	}
+	require.ErrorContains(t, validatePaths(paths), "must not overlap")
+	paths.StorageRoot = "/data/moox"
+	require.ErrorContains(t, validatePaths(paths), "must not overlap")
+	paths.StorageRoot = "/data/moox/storage"
+	require.NoError(t, validatePaths(paths))
 }
 
 func TestLoadLocalLogRotationFromManifest(t *testing.T) {

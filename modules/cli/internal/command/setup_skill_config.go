@@ -147,13 +147,20 @@ func buildSkillDataAccessConfig(
 		return dataAccessConfig{}, fmt.Errorf("skill_config: dependencies are required")
 	}
 	spaceID = strings.TrimSpace(spaceID)
-	if spaceID != "crypto_market" {
+	if strings.EqualFold(spaceID, "crypto_market") {
+		spaceID = "crypto"
+	}
+	if spaceID != "crypto" {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: unsupported space %q", spaceID)
 	}
 	var selected *setupconfig.SCFFetcherSpace
 	for index := range snapshot.Manifest.SCFFetcher.Spaces {
 		candidate := &snapshot.Manifest.SCFFetcher.Spaces[index]
-		if strings.TrimSpace(candidate.SpaceID) == spaceID {
+		candidateSpaceID := strings.TrimSpace(candidate.SpaceID)
+		if strings.EqualFold(candidateSpaceID, "crypto_market") {
+			candidateSpaceID = "crypto"
+		}
+		if candidateSpaceID == spaceID {
 			selected = candidate
 			break
 		}
@@ -222,7 +229,7 @@ func buildSkillDataAccessConfig(
 				DefaultExchange: "binance",
 				Exchanges: map[string]exchangeConfig{
 					"binance": {
-						SpaceID: "crypto_market", SeriesTag: "venue:binance",
+						SpaceID: "crypto", SeriesTag: "venue:binance",
 						KlineDatasets: map[string]string{"1m": "binance_spot_kline_1m"},
 					},
 				},

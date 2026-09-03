@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,6 +60,51 @@ func TestLoadStockCNProviderRuntimeUsesPackagedFeedPolicies(t *testing.T) {
 	require.Equal(t, []string{"sina", "eastmoney"}, route.InstrumentProviders())
 	require.NotContains(t, route.InstrumentProviders(), "baidu")
 	require.True(t, providers["baidu"].KlineShadow)
+}
+
+func TestNewStockCNProviderForSourceCarriesSourceIdentity(t *testing.T) {
+	provider, err := newStockCNProviderForSource("sina", "stock_cn_minute_http", stockCNProviderRuntime{
+		KlineSpec: stockCNProviderKlineFile{Frequency: "1m", MaxBarsPerRequest: 1023},
+		RateLimit: marketdata.RateLimitPolicy{
+			RequestsPerSecond: 5, Burst: 2, MaxConcurrent: 1,
+			Cooldown: time.Second, RequestTimeout: time.Second,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "sina", provider.Descriptor().ID)
+	require.Equal(t, "stock_cn_minute_http", provider.Descriptor().SourceID)
+}
+
+func TestNewStockCNProviderForSourceSupportsNormalTDX(t *testing.T) {
+	provider, err := newStockCNProviderForSource("tdx", "normal_7709", stockCNProviderRuntime{
+		Hosts: []string{"quotes.example"},
+		Port:  7709,
+		KlineSpec: stockCNProviderKlineFile{
+			Frequency:         "1m",
+			MaxBarsPerRequest: 800,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "tdx", provider.Descriptor().ID)
+	require.Equal(t, "normal_7709", provider.Descriptor().SourceID)
+}
+
+func TestNewStockKlinePipelineUsesSourceBoundEnvironment(t *testing.T) {
+	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "tencent")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stock_cn_http")
+	pipeline, err := NewStockKlinePipeline(timerHandlerStorage{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"tencent"}, pipeline.CandidateChain)
+	require.Equal(t, "stock_cn_http", pipeline.SourceID)
+}
+
+func TestNewMarketKlinePipelineCreatesCatalogGatedHongKongSource(t *testing.T) {
+	pipeline, err := NewMarketKlinePipeline(timerHandlerStorage{}, "stock_hk", marketdata.InstrumentEquity, "eastmoney", "stock_hk_http")
+	require.NoError(t, err)
+	require.Equal(t, "stock_hk", pipeline.SpaceID)
+	require.Equal(t, "stock_hk", pipeline.MarketID)
+	require.Equal(t, "stock_hk_http", pipeline.SourceID)
+	require.Equal(t, []string{"eastmoney"}, pipeline.CandidateChain)
 }
 
 func TestStockCNRouteRequiresThreeActiveKlineProviders(t *testing.T) {

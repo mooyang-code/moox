@@ -11,24 +11,116 @@ import (
 
 type MarketID string
 type ProviderID string
+type SourceID string
 type ExchangeID string
 type ProductType string
 type InstrumentType string
 
+type SourceKey struct {
+	ProviderID string
+	SourceID   string
+}
+
+func (key SourceKey) String() string {
+	providerID := strings.TrimSpace(key.ProviderID)
+	sourceID := strings.TrimSpace(key.SourceID)
+	if sourceID == "" {
+		return providerID
+	}
+	return providerID + "/" + sourceID
+}
+
+func (key SourceKey) Validate() error {
+	if !providerIDPattern.MatchString(strings.ToLower(strings.TrimSpace(key.ProviderID))) {
+		return fmt.Errorf("invalid provider id %q", key.ProviderID)
+	}
+	if sourceID := strings.TrimSpace(key.SourceID); sourceID != "" && !providerIDPattern.MatchString(strings.ToLower(sourceID)) {
+		return fmt.Errorf("invalid source id %q", key.SourceID)
+	}
+	return nil
+}
+
+func NewSourceKey(providerID, sourceID string) (SourceKey, error) {
+	key := SourceKey{ProviderID: strings.ToLower(strings.TrimSpace(providerID)), SourceID: strings.ToLower(strings.TrimSpace(sourceID))}
+	if err := key.Validate(); err != nil {
+		return SourceKey{}, err
+	}
+	return key, nil
+}
+
+type SourceStatus string
+
 const (
-	ProductEquity ProductType = "equity"
-	ProductETF    ProductType = "etf"
-	ProductIndex  ProductType = "index"
-	ProductSpot   ProductType = "spot"
-	ProductSwap   ProductType = "swap"
+	SourceEnabled     SourceStatus = "enabled"
+	SourceShadow      SourceStatus = "shadow"
+	SourceCatalogOnly SourceStatus = "catalog_only"
+)
+
+type SourceSpec struct {
+	Key             SourceKey
+	Status          SourceStatus
+	ProtocolVariant string
+	Transport       string
+	Host            string
+	Port            int
+	Markets         []MarketID
+	Instruments     []InstrumentType
+	Frequencies     []string
+	TimestampMode   TimestampMode
+	CompleteOHLCV   bool
+	HasAmount       bool
+}
+
+func (spec SourceSpec) Validate() error {
+	if strings.TrimSpace(spec.Key.SourceID) == "" {
+		return fmt.Errorf("source_id is required")
+	}
+	if err := spec.Key.Validate(); err != nil {
+		return err
+	}
+	switch spec.Status {
+	case SourceEnabled, SourceShadow, SourceCatalogOnly:
+	default:
+		return fmt.Errorf("invalid source status %q", spec.Status)
+	}
+	if strings.TrimSpace(spec.ProtocolVariant) == "" || strings.TrimSpace(spec.Transport) == "" || strings.TrimSpace(spec.Host) == "" {
+		return fmt.Errorf("protocol_variant, transport and host are required")
+	}
+	if spec.Port < 1 || spec.Port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
+	if len(spec.Markets) == 0 || len(spec.Instruments) == 0 || len(spec.Frequencies) == 0 {
+		return fmt.Errorf("markets, instruments and frequencies are required")
+	}
+	for _, frequency := range spec.Frequencies {
+		if _, err := ParseFrequency(frequency); err != nil {
+			return err
+		}
+	}
+	switch spec.TimestampMode {
+	case TimestampModeOpen, TimestampModeClose:
+	default:
+		return fmt.Errorf("unsupported timestamp mode %q", spec.TimestampMode)
+	}
+	return nil
+}
+
+const (
+	ProductEquity          ProductType = "equity"
+	ProductETF             ProductType = "etf"
+	ProductIndex           ProductType = "index"
+	ProductConvertibleBond ProductType = "convertible_bond"
+	ProductSpot            ProductType = "spot"
+	ProductSwap            ProductType = "swap"
 )
 
 const (
-	InstrumentEquity InstrumentType = "equity"
-	InstrumentETF    InstrumentType = "etf"
-	InstrumentIndex  InstrumentType = "index"
-	InstrumentSpot   InstrumentType = "spot"
-	InstrumentSwap   InstrumentType = "swap"
+	InstrumentEquity          InstrumentType = "equity"
+	InstrumentETF             InstrumentType = "etf"
+	InstrumentIndex           InstrumentType = "index"
+	InstrumentConvertibleBond InstrumentType = "convertible_bond"
+	InstrumentSpot            InstrumentType = "spot"
+	InstrumentSwap            InstrumentType = "swap"
 )
 
 type TimestampMode string
@@ -198,9 +290,14 @@ func (s InstrumentSpec) Validate() error {
 }
 
 type ProviderDescriptor struct {
-	ID          string
-	DisplayName string
-	Hosts       []string
+	ID              string
+	SourceID        string
+	DisplayName     string
+	Hosts           []string
+	ProtocolVariant string
+	Transport       string
+	Port            int
+	Status          SourceStatus
 }
 
 var providerIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
@@ -209,11 +306,22 @@ func (d ProviderDescriptor) Validate() error {
 	if !providerIDPattern.MatchString(strings.TrimSpace(d.ID)) {
 		return fmt.Errorf("invalid provider id %q", d.ID)
 	}
+	if sourceID := strings.TrimSpace(d.SourceID); sourceID != "" && !providerIDPattern.MatchString(sourceID) {
+		return fmt.Errorf("invalid source id %q", d.SourceID)
+	}
 	if strings.TrimSpace(d.DisplayName) == "" {
 		return fmt.Errorf("display_name is required")
 	}
 	if len(d.Hosts) == 0 {
 		return fmt.Errorf("hosts are required")
+	}
+	switch d.Status {
+	case "", SourceEnabled, SourceShadow, SourceCatalogOnly:
+	default:
+		return fmt.Errorf("invalid source status %q", d.Status)
+	}
+	if d.Transport != "" && (d.Port < 1 || d.Port > 65535) {
+		return fmt.Errorf("invalid source port %d", d.Port)
 	}
 	for _, host := range d.Hosts {
 		if strings.TrimSpace(host) == "" || strings.Contains(host, " ") {
@@ -221,6 +329,10 @@ func (d ProviderDescriptor) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (d ProviderDescriptor) SourceKey() SourceKey {
+	return SourceKey{ProviderID: strings.TrimSpace(d.ID), SourceID: strings.TrimSpace(d.SourceID)}
 }
 
 type MarketProvider interface {
@@ -234,6 +346,7 @@ type KlineRequest struct {
 	InstrumentType InstrumentType
 	SubjectID      string
 	ProviderSymbol string
+	SourceID       string
 	Frequency      string
 	Limit          int
 	StartTime      time.Time

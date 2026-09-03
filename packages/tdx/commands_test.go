@@ -119,7 +119,7 @@ func TestParseExtendedBarsKeepsUnconfirmedFieldsSeparate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bars) != 1 || bars[0].Position != 7 || bars[0].Trade != 8 {
+	if len(bars) != 1 || bars[0].Position != 7 || bars[0].Trade != 8 || bars[0].Amount != 0 || bars[0].Settlement != 10.25 {
 		t.Fatalf("unexpected extended bar: %+v", bars)
 	}
 }

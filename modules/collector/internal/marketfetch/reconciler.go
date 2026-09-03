@@ -122,6 +122,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		return r.fail(spaceID, "rules", err)
 	}
 	stockCN := strings.EqualFold(spaceID, StockCNSpaceID)
+	if stockCN && len(groups) == 0 {
+		// Keep the published Timer fleet explicitly disabled when no active
+		// rule/subject remains. This also clears stale FunctionName bindings
+		// without inventing a fake market subject.
+		groups = []TaskGroup{{
+			Provider: "stock_cn_multi", MarketType: "equity", MarketID: StockCNSpaceID,
+			InstrumentType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		}}
+	}
 	dns := map[string]sources.DNSResolution(nil)
 	if r.DNS != nil && !stockCN {
 		dns = r.DNS.Snapshot()
@@ -312,7 +321,7 @@ func (r *Reconciler) persistAssignments(ctx context.Context, spaceID string, nod
 			return fmt.Errorf("enabled assignment %s has no function_name", assignment.NodeID)
 		}
 		provider := firstNonEmpty(assignment.RouteProvider, assignment.Provider)
-		replacements = append(replacements, store.MarketFetchAssignment{Provider: provider, MarketType: assignment.MarketType, DatasetID: assignment.DatasetID, Frequency: assignment.Frequency, FunctionName: assignment.FunctionName, Subjects: assignment.Subjects})
+		replacements = append(replacements, store.MarketFetchAssignment{Provider: provider, SourceID: assignment.SourceID, MarketType: assignment.MarketType, DatasetID: assignment.DatasetID, Frequency: assignment.Frequency, FunctionName: assignment.FunctionName, Subjects: assignment.Subjects})
 	}
 	if err := r.Instances.ReplaceMarketFetchAssignments(ctx, spaceID, functionNames, replacements); err != nil {
 		return fmt.Errorf("replace SCF task assignments: %w", err)
@@ -707,7 +716,7 @@ func marketMetricID(spaceID string) string {
 	if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
 		return StockCNSpaceID
 	}
-	return "crypto_market"
+	return "crypto"
 }
 
 func marketRouteID(spaceID, provider, marketType, frequency string) string {

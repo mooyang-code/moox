@@ -42,16 +42,17 @@ func (c KlineCategory) Intraday() bool {
 }
 
 type Bar struct {
-	Time     time.Time
-	Open     float64
-	High     float64
-	Low      float64
-	Close    float64
-	Volume   float64
-	Amount   float64
-	Position uint32
-	Trade    uint32
-	Raw      []byte
+	Time       time.Time
+	Open       float64
+	High       float64
+	Low        float64
+	Close      float64
+	Volume     float64
+	Amount     float64
+	Position   uint32
+	Trade      uint32
+	Settlement float64
+	Raw        []byte
 }
 
 type Security struct {

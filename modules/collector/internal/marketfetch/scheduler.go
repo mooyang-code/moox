@@ -215,7 +215,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				for _, item := range items {
 					taskID := collectionItemTaskID(spaceID, rule.RuleID, item, frequency)
 					activeTaskIDs = append(activeTaskIDs, taskID)
-					instances = append(instances, domain.TaskInstance{SpaceID: spaceID, TaskID: taskID, RuleID: rule.RuleID, Provider: item.Provider, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency, TaskParams: rule.CollectParams})
+					instances = append(instances, domain.TaskInstance{SpaceID: spaceID, TaskID: taskID, RuleID: rule.RuleID, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency, TaskParams: rule.CollectParams})
 				}
 				frequencyFingerprint := taskFingerprint(frequencyTaskIDs, rule.CollectParams)
 				stateKey := rule.RuleID + "\x00" + frequency
@@ -279,7 +279,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				// the canonical value; forwarding rule.MarketType would make SCF
 				// reject the whole batch before it can inspect the item.
 				batchProvider, batchMarketType := normalizedBatchIdentity(batchItems[start], rule)
-				req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
+				req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, MarketID: batchItems[start].MarketID, InstrumentType: batchItems[start].InstrumentType, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, SourceID: batchItems[start].SourceID, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
 				created, err := s.planOne(ctx, rule, req, node, ruleNodes)
 				if err != nil {
 					return err
@@ -606,7 +606,7 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 			continue
 		}
 		node := nodes[index%len(nodes)]
-		item := domain.CollectionItem{TaskID: candidate.instance.TaskID, SubjectID: candidate.instance.SubjectID, Symbol: candidate.symbol, Provider: candidate.instance.Provider, MarketType: candidate.instance.MarketType, DataType: "kline", DatasetID: candidate.instance.DatasetID, Frequency: candidate.instance.Frequency, StartTime: candidate.plan.Start.Format(time.RFC3339Nano), BarLimit: candidate.plan.BarLimit, RateBudgetRatio: candidate.plan.RateBudgetRatio}
+		item := domain.CollectionItem{TaskID: candidate.instance.TaskID, SubjectID: candidate.instance.SubjectID, Symbol: candidate.symbol, Provider: candidate.instance.Provider, SourceID: candidate.instance.SourceID, MarketType: candidate.instance.MarketType, DataType: "kline", DatasetID: candidate.instance.DatasetID, Frequency: candidate.instance.Frequency, StartTime: candidate.plan.Start.Format(time.RFC3339Nano), BarLimit: candidate.plan.BarLimit, RateBudgetRatio: candidate.plan.RateBudgetRatio}
 		if !candidate.plan.End.IsZero() {
 			item.EndTime = candidate.plan.End.Format(time.RFC3339Nano)
 		}
@@ -616,7 +616,7 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 		scheduleID := fmt.Sprintf("%s:%s:%s", candidate.plan.Kind, candidate.instance.TaskID, now.Truncate(time.Minute).Format(time.RFC3339Nano))
 		batchID := stableID(spaceID, scheduleID, string(candidate.plan.Kind), "0", "1")
 		syncPointID := stableID(spaceID, scheduleID, string(candidate.plan.Kind), "write")
-		req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: candidate.plan.Kind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
+		req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: candidate.plan.Kind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
 		if _, err := s.planOne(ctx, candidate.rule, req, node, nodes); err != nil {
 			return err
 		}
@@ -1160,7 +1160,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		if batchKind == "" {
 			batchKind = domain.BatchKindRealtime
 		}
-		req := Request{BatchID: batchID, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
+		req := Request{BatchID: batchID, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
 		raw, _ := json.Marshal(req)
 		if _, err := marketFetchEvent(req, s.StorageTarget); err != nil {
 			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
@@ -1269,6 +1269,9 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 	}
 	provider := strings.ToLower(firstNonEmpty(params.Provider, rule.Provider))
 	marketType := strings.ToLower(firstNonEmpty(params.MarketType, rule.MarketType))
+	marketID := strings.ToLower(firstNonEmpty(params.MarketID, rule.SpaceID, s.SpaceID))
+	instrumentType := strings.ToLower(firstNonEmpty(params.InstrumentType, defaultInstrumentTypeForMarket(marketID, marketType)))
+	sourceID := strings.ToLower(strings.TrimSpace(params.SourceID))
 	dataType := strings.ToLower(firstNonEmpty(params.Collector.DataType, rule.DataType))
 	targetDataset := firstNonEmpty(params.Target.DatasetID, params.Source.DatasetID)
 	if targetDataset == "" {
@@ -1287,7 +1290,7 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 		}
 		items := make([]domain.CollectionItem, fullInstrumentSnapshotShards)
 		for shard := range items {
-			items[shard] = domain.CollectionItem{SubjectID: targetDataset, Provider: provider, MarketType: marketType, DataType: domain.InstrumentDataType, DatasetID: targetDataset, SnapshotShardIndex: shard, SnapshotShardCount: fullInstrumentSnapshotShards}
+			items[shard] = domain.CollectionItem{SubjectID: targetDataset, Provider: provider, SourceID: sourceID, MarketID: marketID, InstrumentType: instrumentType, MarketType: marketType, DataType: domain.InstrumentDataType, DatasetID: targetDataset, SnapshotShardIndex: shard, SnapshotShardCount: fullInstrumentSnapshotShards}
 		}
 		return items, frequencies[:1], nil
 	}
@@ -1316,12 +1319,12 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 				continue
 			}
 			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-			symbol, symbolErr := marketProviderSymbol(marketType, subjectID, subject.ExternalSymbol)
+			symbol, symbolErr := marketProviderSymbolForMarket(marketID, marketType, subjectID, subject.ExternalSymbol)
 			if symbolErr != nil {
 				log.WarnContextf(ctx, "skip market symbol without valid external symbol subject=%q error=%v", subject.SubjectID, symbolErr)
 				continue
 			}
-			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
+			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: provider, SourceID: sourceID, MarketID: marketID, InstrumentType: instrumentType, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
 		}
 	} else {
 		if s.Storage == nil {
@@ -1343,11 +1346,11 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 			if subjectID == "" {
 				continue
 			}
-			symbol, symbolErr := marketProviderSymbol(marketType, subjectID, "")
+			symbol, symbolErr := marketProviderSymbolForMarket(marketID, marketType, subjectID, "")
 			if symbolErr != nil {
 				continue
 			}
-			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
+			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: provider, SourceID: sourceID, MarketID: marketID, InstrumentType: instrumentType, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].SubjectID < items[j].SubjectID })

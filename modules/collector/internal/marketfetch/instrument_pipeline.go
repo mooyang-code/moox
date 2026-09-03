@@ -222,6 +222,12 @@ func fetchInstrumentSnapshots(ctx context.Context, registry *marketdata.Registry
 			results[index].done = true
 			continue
 		}
+		status := fetcher.Descriptor().Status
+		if status == marketdata.SourceShadow || status == marketdata.SourceCatalogOnly {
+			results[index].err = fmt.Errorf("%w: %s", marketdata.ErrSourceUnavailable, fetcher.Descriptor().SourceKey().String())
+			results[index].done = true
+			continue
+		}
 		active++
 		go func(providerID string, fetcher marketdata.InstrumentFetcher) {
 			providerCtx, cancel := context.WithTimeout(ctx, providerTimeout)

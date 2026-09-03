@@ -22,6 +22,20 @@ const (
 // for the independently deployed Storage runtime. The files live in the
 // repository so the CLI can install the same checked-in version during setup.
 func InstallStorageViewWatchdog(ctx context.Context, transport setupssh.Client, repositoryRoot string, storageRoots ...string) error {
+	options := WatchdogOptions{}
+	if len(storageRoots) > 0 {
+		options.StorageRoot = storageRoots[0]
+	}
+	return InstallStorageViewWatchdogWithOptions(ctx, transport, repositoryRoot, options)
+}
+
+type WatchdogOptions struct {
+	StorageRoot   string
+	EventBusURL   string
+	GatewayNodeID string
+}
+
+func InstallStorageViewWatchdogWithOptions(ctx context.Context, transport setupssh.Client, repositoryRoot string, options WatchdogOptions) error {
 	if transport == nil || strings.TrimSpace(repositoryRoot) == "" {
 		return fmt.Errorf("storage_watchdog_install_invalid")
 	}
@@ -31,10 +45,18 @@ func InstallStorageViewWatchdog(ctx context.Context, transport setupssh.Client, 
 		return fmt.Errorf("storage_watchdog_remote_identity_failed")
 	}
 	serviceRoot := setupconfig.DefaultStorageRoot
-	if len(storageRoots) > 0 && strings.TrimSpace(storageRoots[0]) != "" {
-		serviceRoot = filepath.Clean(strings.TrimSpace(storageRoots[0]))
+	if strings.TrimSpace(options.StorageRoot) != "" {
+		serviceRoot = filepath.Clean(strings.TrimSpace(options.StorageRoot))
 	}
 	serviceRoot = filepath.ToSlash(serviceRoot)
+	eventBusURL := strings.TrimSpace(options.EventBusURL)
+	if eventBusURL == "" {
+		eventBusURL = "tls://127.0.0.1:4222"
+	}
+	gatewayNodeID := strings.TrimSpace(options.GatewayNodeID)
+	if gatewayNodeID == "" {
+		gatewayNodeID = "control"
+	}
 
 	script, err := readWatchdogAsset(repositoryRoot, filepath.Join("scripts", storageViewWatchdogScriptName+".sh"))
 	if err != nil {
@@ -53,6 +75,8 @@ func InstallStorageViewWatchdog(ctx context.Context, transport setupssh.Client, 
 		"__MOOX_STORAGE_ROOT__", serviceRoot,
 		"__MOOX_USER__", user,
 		"__MOOX_GROUP__", group,
+		"__MOOX_EVENTBUS_URL__", eventBusURL,
+		"__MOOX_GATEWAY_NODE_ID__", gatewayNodeID,
 	).Replace(service)
 	if strings.Contains(service, "__MOOX_") {
 		return fmt.Errorf("storage_watchdog_asset_invalid")
@@ -115,7 +139,15 @@ done
   exit 1
 }
 `
-	if _, err := transport.Run(ctx, []string{"sh", "-lc", install, "moox-install-storage-watchdog", tmpScript, tmpService, tmpTimer}, nil); err != nil {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", install, "moox-install-storage-watchdog", tmpScript, tmpService, tmpTimer}, nil)
+	if err != nil {
+		detail := strings.TrimSpace(strings.Join([]string{result.Stderr, result.Stdout}, "\n"))
+		if len(detail) > 240 {
+			detail = detail[len(detail)-240:]
+		}
+		if detail != "" {
+			return fmt.Errorf("storage_watchdog_enable_failed: %s", strings.Join(strings.Fields(detail), " "))
+		}
 		return fmt.Errorf("storage_watchdog_enable_failed")
 	}
 	return nil

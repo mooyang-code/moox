@@ -79,7 +79,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 	}
 	if target.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || target.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := c.Metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: c.Auth, Dataset: &storagepb.Dataset{
-			SpaceId: rule.SpaceID, DatasetId: params.TargetDatasetID, DataSourceId: "crypto_market", DataNodeId: source.DataNodeID,
+			SpaceId: rule.SpaceID, DatasetId: params.TargetDatasetID, DataSourceId: "crypto", DataNodeId: source.DataNodeID,
 			// Dataset names are unique within a space and must contain Chinese
 			// display text. Derive a short stable suffix from the target ID so
 			// independent resample targets do not collide on metadata creation.
@@ -99,7 +99,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 	if target.GetDataset() == nil {
 		return errors.New("target Dataset is empty")
 	}
-	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage, "crypto_market", source.DataNodeID); err != nil {
+	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage, "crypto", source.DataNodeID); err != nil {
 		return err
 	}
 	// Mirror the source subject snapshot before activation so the target has the

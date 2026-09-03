@@ -34,3 +34,6 @@ sources:
     - name: "baidu"
       enabled: true
       config: "sources/market/baidu.yaml"
+    - name: "tdx"
+      enabled: true
+      config: "sources/market/tdx.yaml"

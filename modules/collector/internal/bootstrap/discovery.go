@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,10 +83,35 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	}
 	if v := endpointTRPCTarget(active, nativeGateway); v != "" {
 		deps.StorageRPCGatewayTarget = v
+	} else if configured := strings.TrimSpace(cfg.Storage.GatewayTarget); configured != "" && isUsableConfiguredStorageTarget(configured) {
+		// A separate Storage host can be registered in SysDeploy before its
+		// native gateway route is fully materialized. Keep the explicit,
+		// validated deployment target as a fail-closed fallback instead of
+		// silently reverting to the local development default.
+		deps.StorageRPCGatewayTarget = configured
 	} else {
 		return deps, fmt.Errorf("active %s deployment has no native tRPC target", nativeGateway)
 	}
 	return deps, nil
+}
+
+func isUsableConfiguredStorageTarget(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "ip" || parsed.Hostname() == "" || parsed.Port() == "" {
+		return false
+	}
+	port, portErr := strconv.Atoi(parsed.Port())
+	if portErr != nil || port < 1 || port > 65535 {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "localhost" || host == "ip6-localhost" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return false
+	}
+	return true
 }
 
 func defaultAdminGatewayURL(raw string) string {

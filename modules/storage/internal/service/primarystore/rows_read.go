@@ -84,7 +84,7 @@ func validateMooxSkillReadRequest(req *pb.ReadTimeSeriesRowsReq) error {
 }
 
 func isMooxSkillKlineDataset(spaceID, datasetID string) bool {
-	return spaceID == "crypto_market" && datasetID == "binance_spot_kline_1m" ||
+	return spaceID == "crypto" && datasetID == "binance_spot_kline_1m" ||
 		spaceID == "stock_cn" && datasetID == "stock_cn_kline"
 }
 
@@ -92,7 +92,7 @@ func isMooxSkillKlineSelector(selector *pb.TimeSeriesSelector) bool {
 	if selector.SeriesTag == nil || selector.GetFreq() != "1m" {
 		return false
 	}
-	return selector.GetSpaceId() == "crypto_market" && selector.GetDatasetId() == "binance_spot_kline_1m" && selector.GetSeriesTag() == "venue:binance" ||
+	return selector.GetSpaceId() == "crypto" && selector.GetDatasetId() == "binance_spot_kline_1m" && selector.GetSeriesTag() == "venue:binance" ||
 		selector.GetSpaceId() == "stock_cn" && selector.GetDatasetId() == "stock_cn_kline" && selector.GetSeriesTag() == ""
 }
 

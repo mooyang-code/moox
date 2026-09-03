@@ -34,7 +34,8 @@ type Handler struct {
 	// The composition root selects the provider registry and metadata for the
 	// requested market; the Handler owns neither provider protocol nor Storage
 	// mutation details.
-	NewInstrumentPipeline func(InstrumentStorage, string, marketdata.ProductType) (*InstrumentPipeline, error)
+	NewInstrumentPipeline  func(InstrumentStorage, string, marketdata.ProductType) (*InstrumentPipeline, error)
+	NewMarketKlinePipeline func(Storage, string, marketdata.InstrumentType, string, string) (*KlinePipeline, error)
 	// NewCryptoInstrumentPipeline is kept as a narrow test seam for callers that
 	// construct a crypto-only Handler. NewHandler uses NewInstrumentPipeline.
 	NewCryptoInstrumentPipeline func(InstrumentStorage, marketdata.ProductType) (*InstrumentPipeline, error)
@@ -71,7 +72,7 @@ func NewHandler() *Handler {
 	return &Handler{NewStorage: func(target, market, writeSource string) (Storage, error) {
 		return NewMarketStorageForMarket(target, market, writeSource)
 	}, Publish: publishCompletion, NewInstrumentPipeline: NewMarketInstrumentPipeline, NewCryptoInstrumentPipeline: NewCryptoInstrumentPipeline,
-		NewStockKlinePipeline: NewStockKlinePipeline, NewCryptoKlinePipeline: NewCryptoKlinePipeline}
+		NewMarketKlinePipeline: NewMarketKlinePipeline, NewStockKlinePipeline: NewStockKlinePipeline, NewCryptoKlinePipeline: NewCryptoKlinePipeline}
 }
 
 func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
@@ -82,6 +83,14 @@ func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*
 // supplied by the Tencent runtime. Payload function_name is only a hint.
 func (h *Handler) HandleWithFunctionName(ctx context.Context, event model.CloudFunctionEvent, functionName string) (*model.Response, error) {
 	return h.handleWithFunctionName(ctx, event, true, functionName)
+}
+
+// HandleWithFunctionNameWithoutCompletion handles a direct validation or
+// diagnostic invocation without publishing a scheduler completion event.
+// Timer-backed canaries use this path because their runtime deliberately has
+// no EventBus material.
+func (h *Handler) HandleWithFunctionNameWithoutCompletion(ctx context.Context, event model.CloudFunctionEvent, functionName string) (*model.Response, error) {
+	return h.handleWithFunctionName(ctx, event, false, functionName)
 }
 
 // HandleTimer executes a Tencent Timer invocation. Timer work intentionally
@@ -258,7 +267,8 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		} else {
 			payload = buildCompletion(req, []domain.ItemResult{successResult(req.Items[0])}, snapshotAt, time.Since(startedAt))
 		}
-	} else if req.SpaceID == StockCNSpaceID {
+	} else if req.SpaceID == StockCNSpaceID &&
+		(req.InstrumentType == "" || strings.EqualFold(req.InstrumentType, string(marketdata.InstrumentEquity))) {
 		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)
 		defer workCancel()
 		stockStorage := &reservedDeadlineStorage{Storage: storage, parent: budgetCtx, timeout: storageTimeout}
@@ -273,12 +283,29 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		pipeline.Now = h.Now
 		pipeline.Metrics = h.Metrics
 		payload, err = pipeline.Execute(workCtx, req)
-	} else {
+	} else if strings.EqualFold(strings.TrimSpace(req.SpaceID), "crypto") ||
+		strings.EqualFold(strings.TrimSpace(req.MarketType), "spot") ||
+		strings.EqualFold(strings.TrimSpace(req.MarketType), "swap") {
 		newPipeline := h.NewCryptoKlinePipeline
 		if newPipeline == nil {
 			newPipeline = NewCryptoKlinePipeline
 		}
 		pipeline, pipelineErr := newPipeline(storage, marketdata.ProductType(strings.ToLower(strings.TrimSpace(req.MarketType))))
+		if pipelineErr != nil {
+			return nil, pipelineErr
+		}
+		pipeline.Now = h.Now
+		pipeline.Metrics = h.Metrics
+		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)
+		defer workCancel()
+		payload, err = pipeline.Execute(workCtx, req)
+	} else {
+		if h.NewMarketKlinePipeline == nil {
+			return nil, fmt.Errorf("market kline pipeline factory is not configured")
+		}
+		marketID := firstNonEmptyString(req.MarketID, req.SpaceID)
+		instrumentType := marketdata.InstrumentType(firstNonEmptyString(req.InstrumentType, req.MarketType))
+		pipeline, pipelineErr := h.NewMarketKlinePipeline(storage, marketID, instrumentType, req.Provider, req.SourceID)
 		if pipelineErr != nil {
 			return nil, pipelineErr
 		}

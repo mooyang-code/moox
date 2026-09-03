@@ -1,4 +1,4 @@
-# Binance source configuration used only by the crypto_market SCF fleet.
+# Binance source configuration used by the unified market_data runtime.
 app:
   id: "binance"
   name: "币安交易所"

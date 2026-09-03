@@ -222,8 +222,13 @@ func newSetupHostsCommand(deps setupDeps) *cobra.Command {
 		hosts := make([]setupHostChoice, 0, len(snapshot.Manifest.Hosts())+1)
 		for index, host := range snapshot.Manifest.Hosts() {
 			role := "other"
-			if index == 0 {
+			switch {
+			case index == 0:
 				role = "control"
+			case snapshot.Manifest.HasStorageHost() && strings.EqualFold(host.Name, snapshot.Manifest.StorageHost.Name):
+				role = "storage"
+			case snapshot.Manifest.HasViewHost() && strings.EqualFold(host.Name, snapshot.Manifest.ViewHost.Name):
+				role = "view"
 			}
 			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Role: role})
 		}
@@ -514,7 +519,7 @@ func newSetupInstallStorageWatchdogCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
-		if _, err := findSetupHost(snapshot.Manifest, host); err != nil {
+		if _, err := resolveStorageDeploymentHost(snapshot.Manifest, host); err != nil {
 			return err
 		}
 		if err := deps.installStorageWatchdog(cmd.Context(), snapshot, host); err != nil {
@@ -673,7 +678,7 @@ func defaultSetupDeps() setupDeps {
 }
 
 func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name string, resetStorageData, resetViewData bool) error {
-	host, err := findSetupHost(snapshot.Manifest, name)
+	host, err := resolveStorageDeploymentHost(snapshot.Manifest, name)
 	if err != nil {
 		return err
 	}
@@ -688,7 +693,7 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	}
 	defer control.Close()
 	paths := snapshot.Manifest.Paths.Resolved()
-	useControlGateway := host.Name == snapshot.Manifest.ControlHost.Name
+	useControlGateway := sameHostEndpoint(host, snapshot.Manifest.ControlHost)
 	primarySecret, viewSecret, err := controlStorageInternalAuth(ctx, control, paths.ControlRoot)
 	if err != nil {
 		return err
@@ -697,9 +702,21 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return err
 	}
-	controlURL, controlKey, serviceKey, gatewayCA, err := controlGatewayMaterial(ctx, control, snapshot.Manifest.ControlHost.Address, useControlGateway, paths.ControlRoot)
+	controlTLSMode := setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode)
+	controlURL, controlKey, serviceKey, gatewayCA, err := controlGatewayMaterial(ctx, control, snapshot.Manifest.ControlHost.Address, useControlGateway, paths.ControlRoot, controlTLSMode)
 	if err != nil {
 		return err
+	}
+	var storageEventBusCredential, storageEventBusCA []byte
+	if !useControlGateway {
+		storageEventBusCredential, err = readRemoteControlFile(ctx, control, ".config/moox/eventbus/storage-eventbus.yaml")
+		if err != nil {
+			return fmt.Errorf("read control Storage EventBus credential: %w", err)
+		}
+		storageEventBusCA, err = readRemoteControlFile(ctx, control, ".config/moox/eventbus/ca.pem")
+		if err != nil {
+			return fmt.Errorf("read control EventBus CA for Storage: %w", err)
+		}
 	}
 	if !useControlGateway {
 		if _, err = setupclient.New(control).PrepareStoragePlacement(ctx, host.Name, host.Address); err != nil {
@@ -719,25 +736,28 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
 		RepositoryRoot: root, PublicHost: host.Address, NodeID: host.Name, ResetStorageData: resetStorageData, ResetViewData: resetViewData,
 		DeployRoot: paths.DeployRoot, ControlRoot: paths.ControlRoot, StorageRoot: paths.StorageRoot,
-		UseControlGateway:      useControlGateway,
-		EventBusPublicAddress:  snapshot.Manifest.EventBus.PublicAddress,
-		EventBusPort:           snapshot.Manifest.EventBus.Port,
-		EventBusTLSEnabled:     snapshot.Manifest.EventBus.TLSEnabled,
-		StoragePrimarySecret:   primarySecret,
-		StorageViewSecret:      viewSecret,
-		StorageBuildPassword:   buildHost.Password,
-		StorageBuildHost:       buildHost.Name,
-		StorageBuildHostRole:   buildHostRole,
-		StorageViewPolicy:      snapshot.Manifest.StorageView,
-		LocalLogs:              snapshot.Manifest.LocalLogs,
-		InstallStorageWatchdog: true,
-		HealthAuthVersion:      healthVersion,
-		HealthAuthAccessKey:    healthAccessKey,
-		HealthAuthSecretKey:    healthSecret,
-		GatewayControlURL:      controlURL,
-		GatewayControlKey:      controlKey,
-		GatewayServiceKey:      serviceKey,
-		GatewayCABundle:        gatewayCA,
+		UseControlGateway:         useControlGateway,
+		EventBusPublicAddress:     snapshot.Manifest.EventBus.PublicAddress,
+		EventBusPort:              snapshot.Manifest.EventBus.Port,
+		EventBusTLSEnabled:        snapshot.Manifest.EventBus.TLSEnabled,
+		StoragePrimarySecret:      primarySecret,
+		StorageViewSecret:         viewSecret,
+		StorageEventBusCredential: storageEventBusCredential,
+		StorageEventBusCA:         storageEventBusCA,
+		StorageBuildPassword:      buildHost.Password,
+		StorageBuildHost:          buildHost.Name,
+		StorageBuildHostRole:      buildHostRole,
+		StorageViewPolicy:         snapshot.Manifest.StorageView,
+		LocalLogs:                 snapshot.Manifest.LocalLogs,
+		InstallStorageWatchdog:    true,
+		HealthAuthVersion:         healthVersion,
+		HealthAuthAccessKey:       healthAccessKey,
+		HealthAuthSecretKey:       healthSecret,
+		GatewayControlURL:         controlURL,
+		GatewayControlKey:         controlKey,
+		GatewayServiceKey:         serviceKey,
+		GatewayCABundle:           gatewayCA,
+		TLSMode:                   controlTLSMode,
 	}, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
@@ -803,7 +823,7 @@ lock="$1.maintenance.lock"
 }
 
 func defaultSetupInstallStorageWatchdog(ctx context.Context, snapshot *setupconfig.Snapshot, name string) error {
-	host, err := findSetupHost(snapshot.Manifest, name)
+	host, err := resolveStorageDeploymentHost(snapshot.Manifest, name)
 	if err != nil {
 		return err
 	}
@@ -816,7 +836,11 @@ func defaultSetupInstallStorageWatchdog(ctx context.Context, snapshot *setupconf
 	if err != nil {
 		return fmt.Errorf("storage_watchdog_install_invalid")
 	}
-	return setupdeploy.InstallStorageViewWatchdog(ctx, transport, root, snapshot.Manifest.Paths.Resolved().StorageRoot)
+	eventBusURL := "tls://" + net.JoinHostPort(snapshot.Manifest.EventBus.PublicAddress, strconv.Itoa(snapshot.Manifest.EventBus.Port))
+	return setupdeploy.InstallStorageViewWatchdogWithOptions(ctx, transport, root, setupdeploy.WatchdogOptions{
+		StorageRoot: snapshot.Manifest.Paths.Resolved().StorageRoot,
+		EventBusURL: eventBusURL, GatewayNodeID: host.Name,
+	})
 }
 
 // configureRemoteCollectorStorageTarget keeps the Collector planner on the
@@ -855,31 +879,38 @@ PY
 	return nil
 }
 
-func controlGatewayMaterial(ctx context.Context, control setupssh.Client, controlHost string, local bool, controlRoot string) (string, string, string, []byte, error) {
+func controlGatewayMaterial(ctx context.Context, control setupssh.Client, controlHost string, local bool, controlRoot string, tlsMode setupdeploy.TLSMode) (string, string, string, []byte, error) {
 	if local {
 		return "http://127.0.0.1:11000", "", "", nil, nil
 	}
 	result, err := control.Run(ctx, []string{"sh", "-lc", `set -eu
 control_root="$1"
+	tls_mode="$2"
 control_key="$control_root/secrets/gateway-control.key"
 service_key="$control_root/secrets/gateway-service.key"
 caddy_root="$control_root/data/caddy/caddy/pki/authorities/local/root.crt"
 gateway_peers="$control_root/certs/gateway/peers.pem"
-for file in "$control_key" "$service_key" "$caddy_root" "$gateway_peers"; do test -s "$file"; done
+for file in "$control_key" "$service_key" "$gateway_peers"; do test -s "$file"; done
 base64 -w 0 "$control_key"; printf '\n'
 base64 -w 0 "$service_key"; printf '\n'
-cat "$caddy_root" "$gateway_peers" | base64 -w 0; printf '\n'`, "moox-control-gateway-material", controlRoot}, nil)
+if [ "$tls_mode" = internal ]; then
+  test -s "$caddy_root"
+  cat "$caddy_root" "$gateway_peers" | base64 -w 0
+else
+  cat "$gateway_peers" | base64 -w 0
+fi
+printf '\n'`, "moox-control-gateway-material", controlRoot, string(tlsMode)}, nil)
 	if err != nil {
 		return "", "", "", nil, fmt.Errorf("gateway_material_prepare_failed")
 	}
-	parts := strings.Fields(result.Stdout)
+	parts := strings.Split(strings.TrimSpace(result.Stdout), "\n")
 	if len(parts) != 3 {
 		return "", "", "", nil, fmt.Errorf("gateway_material_prepare_failed")
 	}
 	decoded := make([][]byte, 3)
 	for index, value := range parts {
 		decoded[index], err = base64.StdEncoding.DecodeString(value)
-		if err != nil || len(decoded[index]) == 0 {
+		if err != nil || index < 2 && len(decoded[index]) == 0 {
 			return "", "", "", nil, fmt.Errorf("gateway_material_prepare_failed")
 		}
 	}
@@ -1097,9 +1128,6 @@ func defaultSetupTrustHost(ctx context.Context, snapshot *setupconfig.Snapshot, 
 func defaultSetupDeploy(ctx context.Context, snapshot *setupconfig.Snapshot, resetData bool) error {
 	return runSetupControlDeploySteps(
 		func() error {
-			if !setupdeploy.UsesPublicTLSMode(setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode), snapshot.Manifest.ControlHost.Address) {
-				return nil
-			}
 			return ensureSetupControlFirewall(ctx, snapshot)
 		},
 		func() error { return deploySetupControl(ctx, snapshot, resetData) },
@@ -1161,6 +1189,9 @@ func ensureSetupFirewallRules(
 	if err != nil {
 		return fmt.Errorf("%s", failure)
 	}
+	if !isPublicFirewallIP(publicIP) {
+		return nil
+	}
 	client, err := cloudtencent.NewClient(cloudtencent.ClientOptions{
 		SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
 		Region: snapshot.Manifest.TencentCloud.Region,
@@ -1176,8 +1207,19 @@ func ensureSetupFirewallRules(
 	return nil
 }
 
+func isPublicFirewallIP(address string) bool {
+	ip := net.ParseIP(strings.TrimSpace(address))
+	return ip != nil && ip.To4() != nil && ip.IsGlobalUnicast() &&
+		!ip.IsPrivate() && !ip.IsLoopback() && !ip.IsUnspecified() &&
+		!ip.IsLinkLocalUnicast() && !ip.IsMulticast()
+}
+
 func ensureSetupControlFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) error {
-	return ensureSetupFirewallRules(ctx, snapshot, snapshot.Manifest.ControlHost.Address, setupControlFirewallRules(), "control_firewall_failed")
+	rules := setupControlFirewallRulesForTLS(
+		setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode),
+		snapshot.Manifest.ControlHost.Address,
+	)
+	return ensureSetupFirewallRules(ctx, snapshot, snapshot.Manifest.ControlHost.Address, rules, "control_firewall_failed")
 }
 
 func ensureSetupEventBusFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) error {
@@ -1191,6 +1233,9 @@ func ensureSetupEventBusFirewall(ctx context.Context, snapshot *setupconfig.Snap
 }
 
 func ensureSetupStorageGatewayFirewall(ctx context.Context, snapshot *setupconfig.Snapshot, address string) error {
+	if storageGatewayPortReachable(ctx, address, 11003) {
+		return nil
+	}
 	rule := cloudtencent.CreateFirewallRulesOptions{
 		Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway",
 	}
@@ -1217,6 +1262,29 @@ func ensureSetupStorageGatewayFirewall(ctx context.Context, snapshot *setupconfi
 	return nil
 }
 
+func storageGatewayPortReachable(ctx context.Context, address string, port int) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timeout := 3 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false
+		}
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(strings.Trim(address, "[]"), strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
 func setupControlFirewallRules() []cloudtencent.CreateFirewallRulesOptions {
 	return []cloudtencent.CreateFirewallRulesOptions{
 		{
@@ -1232,6 +1300,14 @@ func setupControlFirewallRules() []cloudtencent.CreateFirewallRulesOptions {
 			Action: "ACCEPT", Description: "MooX service HTTPS",
 		},
 	}
+}
+
+func setupControlFirewallRulesForTLS(mode setupdeploy.TLSMode, address string) []cloudtencent.CreateFirewallRulesOptions {
+	rules := setupControlFirewallRules()
+	if setupdeploy.UsesPublicTLSMode(mode, address) {
+		return rules
+	}
+	return rules[1:]
 }
 
 func setupRuntimeFirewallRules(eventBusPort int) []cloudtencent.CreateFirewallRulesOptions {
@@ -1287,21 +1363,30 @@ func eventBusFirewallIP(
 
 func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string) setupdeploy.Options {
 	paths := snapshot.Manifest.Paths.Resolved()
+	localStorageTarget := ""
+	localStorageNodeID := ""
+	if snapshot.Manifest.HasStorageHost() {
+		storageHost := snapshot.Manifest.StorageHost
+		localStorageTarget = "ip://" + net.JoinHostPort(strings.Trim(storageHost.Address, "[]"), "11003")
+		localStorageNodeID = storageHost.Name
+	}
 	return setupdeploy.Options{
-		RepositoryRoot:          repositoryRoot,
-		DeployRoot:              paths.DeployRoot,
-		ControlRoot:             paths.ControlRoot,
-		StorageRoot:             paths.StorageRoot,
-		PublicHost:              snapshot.Manifest.ControlHost.Address,
-		BrowserPort:             9527,
-		EventBusPublicAddress:   snapshot.Manifest.EventBus.PublicAddress,
-		EventBusPort:            snapshot.Manifest.EventBus.Port,
-		EventBusTLSEnabled:      snapshot.Manifest.EventBus.TLSEnabled,
-		NotificationChannelType: snapshot.Manifest.Notification.ChannelType,
-		NotificationWebhookURL:  snapshot.Manifest.Notification.WebhookURL,
-		LocalLogs:               snapshot.Manifest.LocalLogs,
-		TLSMode:                 setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode),
-		InstallLocalCA:          true,
+		RepositoryRoot:               repositoryRoot,
+		DeployRoot:                   paths.DeployRoot,
+		ControlRoot:                  paths.ControlRoot,
+		StorageRoot:                  paths.StorageRoot,
+		PublicHost:                   snapshot.Manifest.ControlHost.Address,
+		BrowserPort:                  9527,
+		EventBusPublicAddress:        snapshot.Manifest.EventBus.PublicAddress,
+		EventBusPort:                 snapshot.Manifest.EventBus.Port,
+		EventBusTLSEnabled:           snapshot.Manifest.EventBus.TLSEnabled,
+		LocalStorageRPCGatewayTarget: localStorageTarget,
+		LocalStorageGatewayNodeID:    localStorageNodeID,
+		NotificationChannelType:      snapshot.Manifest.Notification.ChannelType,
+		NotificationWebhookURL:       snapshot.Manifest.Notification.WebhookURL,
+		LocalLogs:                    snapshot.Manifest.LocalLogs,
+		TLSMode:                      setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode),
+		InstallLocalCA:               true,
 	}
 }
 
@@ -1499,6 +1584,36 @@ func findSetupHost(manifest setupconfig.Manifest, name string) (setupconfig.Host
 	return setupconfig.Host{}, fmt.Errorf("setup_host_not_found")
 }
 
+func resolveStorageDeploymentHost(manifest setupconfig.Manifest, name string) (setupconfig.Host, error) {
+	name = strings.TrimSpace(name)
+	if name == "" && manifest.HasStorageHost() {
+		name = manifest.StorageHost.Name
+	}
+	host, err := findSetupHost(manifest, name)
+	if err != nil {
+		return setupconfig.Host{}, err
+	}
+	if manifest.HasStorageHost() && !strings.EqualFold(host.Name, manifest.StorageHost.Name) {
+		return setupconfig.Host{}, fmt.Errorf("storage_host_required")
+	}
+	if manifest.HasViewHost() && !sameHostEndpoint(host, manifest.ViewHost) {
+		return setupconfig.Host{}, fmt.Errorf("storage_view_hosts_must_share_endpoint")
+	}
+	return host, nil
+}
+
+func sameHostEndpoint(left, right setupconfig.Host) bool {
+	leftAddress := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(left.Address)), ".")
+	rightAddress := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(right.Address)), ".")
+	if parsed := net.ParseIP(leftAddress); parsed != nil {
+		leftAddress = parsed.String()
+	}
+	if parsed := net.ParseIP(rightAddress); parsed != nil {
+		rightAddress = parsed.String()
+	}
+	return leftAddress == rightAddress && left.Port == right.Port
+}
+
 func findSetupTrustHost(manifest setupconfig.Manifest, name string) (setupconfig.Host, error) {
 	if manifest.HasCompileHost() && strings.EqualFold(manifest.CompileHost.Name, strings.TrimSpace(name)) {
 		return manifest.CompileHost, nil
@@ -1516,6 +1631,8 @@ func clearSetupSecrets(snapshot *setupconfig.Snapshot) {
 	snapshot.Manifest.Notification.WebhookURL = ""
 	snapshot.Manifest.ControlHost.Password = ""
 	snapshot.Manifest.CompileHost.Password = ""
+	snapshot.Manifest.StorageHost.Password = ""
+	snapshot.Manifest.ViewHost.Password = ""
 	for index := range snapshot.Manifest.OtherHosts {
 		snapshot.Manifest.OtherHosts[index].Password = ""
 	}

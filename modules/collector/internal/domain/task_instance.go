@@ -25,6 +25,7 @@ type DatasetSubject struct {
 type TaskSpec struct {
 	RouteID    string
 	Provider   string
+	SourceID   string
 	MarketType string
 	DataType   string
 	DatasetID  string
@@ -51,6 +52,7 @@ type TaskInstance struct {
 	DatasetID      string     `gorm:"column:c_dataset_id"`
 	SubjectID      string     `gorm:"column:c_subject_id"`
 	Frequency      string     `gorm:"column:c_frequency"`
+	SourceID       string     `gorm:"column:c_source_id"`
 	FunctionName   string     `gorm:"column:c_function_name"`
 	LastExecNode   string     `gorm:"column:c_last_exec_node"`
 	LastExecStatus int        `gorm:"column:c_last_exec_status"`

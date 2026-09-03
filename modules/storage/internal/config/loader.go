@@ -253,12 +253,14 @@ func (p StorageViewConsumerPartition) Datasets() []StorageViewConsumerDataset {
 func (v *StorageView) applyConsumerPartitionDefaults() {
 	if len(v.ConsumerPartitions) == 0 {
 		v.ConsumerPartitions = []StorageViewConsumerPartition{
-			{ID: "kline", Durable: events.StorageViewKlineConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"}}}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
-			{ID: "factor", Durable: events.StorageViewFactorConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m_factor"}}}, FetchBatch: 16, MaxWorkers: 8, MaxAckPending: 128},
+			{ID: "kline", Durable: events.StorageViewKlineConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"binance_spot_kline_1m"}}}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
+			{ID: "factor", Durable: events.StorageViewFactorConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"binance_spot_kline_1m_factor"}}}, FetchBatch: 16, MaxWorkers: 8, MaxAckPending: 128},
 			{ID: "system_metrics", Durable: events.StorageViewMetricsConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "moox_system", DatasetIDs: []string{"moox_service_metrics"}}}, FetchBatch: 16, MaxWorkers: 4, MaxAckPending: 64},
 			{ID: "misc", Durable: events.StorageViewMiscConsumer, Routes: []StorageViewConsumerRoute{
 				{SpaceID: "moox_system", DatasetIDs: []string{"host_disk_v1", "host_fs_v1", "host_net_v1", "host_resource_v1"}},
-				{SpaceID: "stock_cn", DatasetIDs: []string{"financial_statement_metric", "financial_summary", "index_kline", "stock_cn_instruments", "stock_cn_kline"}},
+				{SpaceID: "stock_cn", DatasetIDs: []string{"financial_statement_metric", "financial_summary", "stock_cn_convertible_bond_kline", "stock_cn_index_kline", "stock_cn_instruments", "stock_cn_kline"}},
+				{SpaceID: "stock_hk", DatasetIDs: []string{"stock_hk_kline"}},
+				{SpaceID: "stock_us", DatasetIDs: []string{"stock_us_kline"}},
 			}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
 		}
 	}
@@ -383,8 +385,8 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 		space   string
 		dataset string
 	}{
-		"kline":   {durable: events.StorageViewKlineConsumer, space: "crypto_market", dataset: "binance_spot_kline_1m"},
-		"factor":  {durable: events.StorageViewFactorConsumer, space: "crypto_market", dataset: "binance_spot_kline_1m_factor"},
+		"kline":   {durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "binance_spot_kline_1m"},
+		"factor":  {durable: events.StorageViewFactorConsumer, space: "crypto", dataset: "binance_spot_kline_1m_factor"},
 		"metrics": {durable: events.StorageViewMetricsConsumer, space: "moox_system", dataset: "moox_service_metrics"},
 	}
 	for name, required := range requiredRoutes {

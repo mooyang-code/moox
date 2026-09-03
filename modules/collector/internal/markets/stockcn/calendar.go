@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/marketcalendar"
 	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -53,6 +54,7 @@ type Calendar struct {
 	sessions []session
 	closed   map[string]struct{}
 	open     map[string]struct{}
+	static   *marketcalendar.TradingCalendar
 }
 
 func LoadCalendar(path string) (*Calendar, error) {
@@ -86,6 +88,11 @@ func LoadCalendar(path string) (*Calendar, error) {
 		closed:   make(map[string]struct{}, len(file.ClosedDates)),
 		open:     make(map[string]struct{}, len(file.OpenDates)),
 	}
+	static, err := marketcalendar.Load("cn_stock")
+	if err != nil {
+		return nil, fmt.Errorf("load embedded cn_stock calendar: %w", err)
+	}
+	calendar.static = &static
 	for _, value := range file.ClosedDates {
 		calendar.closed[value] = struct{}{}
 	}
@@ -315,6 +322,15 @@ func (c *Calendar) isTradingDay(date string, weekday time.Weekday) bool {
 	}
 	if _, ok := c.open[date]; ok {
 		return true
+	}
+	if c.static != nil {
+		if civil, err := marketcalendar.ParseCivilDate(date); err == nil {
+			if status, statusErr := c.static.Status(civil); statusErr == nil {
+				return status == marketcalendar.TradingDay
+			}
+			return false
+		}
+		return false
 	}
 	return weekday != time.Saturday && weekday != time.Sunday
 }

@@ -121,6 +121,30 @@ func TestResolveSelectsStorageGatewayNode(t *testing.T) {
 	assert.Equal(t, "compute.example.com:11003", deps.StorageRPCGatewayTarget)
 }
 
+func TestResolveFallsBackToExplicitStorageTargetWhenRouteIsIncomplete(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info":       map[string]any{"code": 0, "msg": "ok"},
+			"deployment_map": map[string]any{"storage/service_gateway_native": map[string]any{"service_name": "service_gateway_native", "protocol": "http"}},
+		})
+	}))
+	defer server.Close()
+
+	cfg := Default()
+	cfg.SysDeploy.AdminGatewayURL = server.URL
+	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
+	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
+	cfg.SysDeploy.ServiceAuth.TargetNode = "control"
+	cfg.Storage.GatewayNodeID = "storage"
+	cfg.Storage.GatewayTarget = "ip://storage.example.com:11003"
+
+	deps, err := Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, "ip://storage.example.com:11003", deps.StorageRPCGatewayTarget)
+}
+
 func TestIsHTTPURL(t *testing.T) {
 	assert.True(t, isHTTPURL("http://example.com"))
 	assert.True(t, isHTTPURL("HTTPS://example.com"))

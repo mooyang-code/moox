@@ -18,6 +18,7 @@ import (
 type Config struct {
 	BaseURL           string
 	KlineEndpoint     string
+	SourceID          string
 	HTTPClient        *http.Client
 	Now               func() time.Time
 	RateLimit         marketdata.RateLimitPolicy
@@ -27,6 +28,7 @@ type Config struct {
 type Provider struct {
 	baseURL       string
 	klineEndpoint string
+	sourceID      string
 	client        *http.Client
 	now           func() time.Time
 	rateLimit     marketdata.RateLimitPolicy
@@ -40,6 +42,9 @@ func New(cfg Config) *Provider {
 	if cfg.KlineEndpoint == "" {
 		cfg.KlineEndpoint = "/appstock/app/kline/mkline"
 	}
+	if strings.TrimSpace(cfg.SourceID) == "" {
+		cfg.SourceID = "stock_cn_http"
+	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 5 * time.Second}
 	}
@@ -52,11 +57,11 @@ func New(cfg Config) *Provider {
 	if cfg.MaxBarsPerRequest <= 0 {
 		cfg.MaxBarsPerRequest = 320
 	}
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, maxBars: cfg.MaxBarsPerRequest}
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, sourceID: strings.ToLower(strings.TrimSpace(cfg.SourceID)), client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, maxBars: cfg.MaxBarsPerRequest}
 }
 
-func (*Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "tencent", DisplayName: "Tencent", Hosts: []string{"web.ifzq.gtimg.cn"}}
+func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
+	return marketdata.ProviderDescriptor{ID: "tencent", SourceID: p.sourceID, DisplayName: "Tencent", Hosts: []string{"web.ifzq.gtimg.cn"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
 }
 
 func (p *Provider) KlineSpec() marketdata.KlineSpec {
@@ -171,6 +176,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		if err != nil {
 			return nil, err
 		}
+		row.SourceID = p.sourceID
 		row.AmountCNY = row.Close * row.VolumeShares
 		row.AmountEstimated = true
 		if !now.Before(row.BarEnd) {

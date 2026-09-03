@@ -66,3 +66,20 @@ func TestProviderRegistryRejectsInvalidDescriptor(t *testing.T) {
 	err := registry.Register(&testProvider{descriptor: ProviderDescriptor{ID: "Bad ID", DisplayName: "Bad", Hosts: []string{"api.test"}}})
 	assert.Error(t, err)
 }
+
+func TestProviderRegistryResolvesDistinctSourceKeys(t *testing.T) {
+	registry := NewRegistry()
+	first := &testKlineProvider{testProvider{descriptor: ProviderDescriptor{ID: "feed", SourceID: "source-a", DisplayName: "Feed A", Hosts: []string{"a.test"}}}}
+	second := &testKlineProvider{testProvider{descriptor: ProviderDescriptor{ID: "feed", SourceID: "source-b", DisplayName: "Feed B", Hosts: []string{"b.test"}}}}
+	require.NoError(t, registry.Register(first))
+	require.NoError(t, registry.Register(second))
+
+	got, err := registry.Source(SourceKey{ProviderID: "feed", SourceID: "source-a"})
+	require.NoError(t, err)
+	assert.Same(t, first, got)
+	gotFetcher, err := registry.KlineFetcherBySource(SourceKey{ProviderID: "feed", SourceID: "source-b"})
+	require.NoError(t, err)
+	assert.Same(t, second, gotFetcher)
+	_, err = registry.Provider("feed")
+	assert.ErrorIs(t, err, ErrProviderAmbiguous)
+}

@@ -22,12 +22,65 @@ import (
 // made from SCF.
 func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request, string, error) {
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_PROVIDER")))
+	sourceID := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SOURCE_ID")))
 	marketType := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_MARKET_TYPE")))
+	marketID := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_MARKET_ID")))
+	instrumentType := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_INSTRUMENT_TYPE")))
 	datasetID := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DATASET_ID"))
 	frequency := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_FREQUENCY"))
 	spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_MODE")))
+	if mode == "instrument_snapshot" {
+		if spaceID == "" || datasetID == "" {
+			return Request{}, "", fmt.Errorf("timer instrument snapshot environment is incomplete")
+		}
+		if provider == "" {
+			provider = "stock_cn_multi"
+		}
+		if marketType == "" {
+			marketType = "equity"
+		}
+		if frequency == "" {
+			frequency = "1d"
+		}
+		if marketID == "" {
+			marketID = spaceID
+		}
+		if instrumentType == "" {
+			instrumentType = defaultInstrumentTypeForMarket(marketID, marketType)
+		}
+		if now.IsZero() {
+			now = time.Now().UTC()
+		}
+		batchID := "instrument-timer-" + sha256Hex(strings.Join([]string{spaceID, datasetID, now.UTC().Format("2006-01-02")}, "\x00"))[:24]
+		item := domain.CollectionItem{
+			SubjectID: datasetID, Provider: provider, SourceID: sourceID,
+			MarketID: marketID, InstrumentType: instrumentType, MarketType: marketType,
+			DataType: domain.InstrumentDataType, DatasetID: datasetID,
+			Frequency: frequency, SnapshotAt: now.UTC().Format(time.RFC3339Nano),
+		}
+		return Request{
+			BatchID: batchID, BatchKind: domain.BatchKindInstrumentSnapshot,
+			SpaceID: spaceID, MarketID: marketID, InstrumentType: instrumentType,
+			DatasetID: datasetID, Frequency: frequency, Provider: provider, SourceID: sourceID,
+			MarketType: marketType, FunctionName: strings.TrimSpace(functionName), RequestID: requestID,
+			Items: []domain.CollectionItem{item},
+		}, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), nil
+	}
 	if provider == "" || marketType == "" || datasetID == "" || frequency == "" || spaceID == "" {
 		return Request{}, "", fmt.Errorf("timer market fetch environment is incomplete")
+	}
+	if sourceID == "" {
+		sourceID = defaultSourceIDForProvider(provider)
+		if sourceID == "" {
+			return Request{}, "", fmt.Errorf("timer market fetch source_id is required")
+		}
+	}
+	if marketID == "" {
+		marketID = spaceID
+	}
+	if instrumentType == "" {
+		instrumentType = defaultInstrumentTypeForMarket(marketID, marketType)
 	}
 	_, err := CronForFrequency(frequency)
 	if err != nil {
@@ -60,14 +113,46 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request
 	batchID := "timer-" + hex.EncodeToString(hash[:])[:24]
 	items := make([]domain.CollectionItem, 0, len(subjects))
 	for _, subject := range subjects {
-		items = append(items, domain.CollectionItem{SubjectID: subject, Symbol: externalSymbols[subject], Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: datasetID, BarLimit: MaxRealtimeRows})
+		items = append(items, domain.CollectionItem{SubjectID: subject, Symbol: externalSymbols[subject], Provider: provider, SourceID: sourceID, MarketType: marketType, DataType: "kline", DatasetID: datasetID, Frequency: frequency, BarLimit: MaxRealtimeRows})
 	}
 	concurrency := envInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", envInt("MOOX_MARKET_FETCH_MAX_INFLIGHT", DefaultConcurrency))
 	groupID, groupCount, err := timerGroupIdentity(spaceID)
 	if err != nil {
 		return Request{}, "", err
 	}
-	return Request{BatchID: batchID, BatchKind: domain.BatchKindRealtime, SpaceID: spaceID, DatasetID: datasetID, Frequency: frequency, Provider: provider, MarketType: marketType, FunctionName: strings.TrimSpace(functionName), RequestID: requestID, GroupID: groupID, GroupCount: groupCount, DNSRoutes: dnsRoutes, Items: items, Concurrency: concurrency}, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), nil
+	return Request{BatchID: batchID, BatchKind: domain.BatchKindRealtime, SpaceID: spaceID, MarketID: marketID, InstrumentType: instrumentType, DatasetID: datasetID, Frequency: frequency, Provider: provider, SourceID: sourceID, MarketType: marketType, FunctionName: strings.TrimSpace(functionName), RequestID: requestID, GroupID: groupID, GroupCount: groupCount, DNSRoutes: dnsRoutes, Items: items, Concurrency: concurrency}, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), nil
+}
+
+func sha256Hex(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func defaultSourceIDForProvider(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "binance":
+		return "spot_http"
+	case "sina":
+		return "stock_cn_minute_http"
+	case "eastmoney", "tencent", "baidu":
+		return "stock_cn_http"
+	default:
+		return ""
+	}
+}
+
+func defaultInstrumentTypeForMarket(marketID, marketType string) string {
+	switch strings.ToLower(strings.TrimSpace(marketID)) {
+	case "stock_cn", "stock_hk", "stock_us":
+		return "equity"
+	case "crypto":
+		if strings.EqualFold(strings.TrimSpace(marketType), "swap") {
+			return "swap"
+		}
+		return "spot"
+	default:
+		return strings.ToLower(strings.TrimSpace(marketType))
+	}
 }
 
 func timerGroupIdentity(spaceID string) (int, int, error) {
@@ -152,6 +237,22 @@ func stockProviderSymbol(subjectID, configured string) (string, error) {
 }
 
 func marketProviderSymbol(marketType, subjectID, configured string) (string, error) {
+	return marketProviderSymbolForMarket("", marketType, subjectID, configured)
+}
+
+func marketProviderSymbolForMarket(marketID, marketType, subjectID, configured string) (string, error) {
+	marketID = strings.ToLower(strings.TrimSpace(marketID))
+	if marketID == "stock_hk" || marketID == "stock_us" {
+		configured = strings.TrimSpace(configured)
+		if configured != "" {
+			return configured, nil
+		}
+		parts := strings.Split(strings.TrimSpace(subjectID), ".")
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+			return "", fmt.Errorf("subject %s has no exchange-qualified symbol", subjectID)
+		}
+		return strings.TrimSpace(parts[0]), nil
+	}
 	if strings.EqualFold(strings.TrimSpace(marketType), "equity") {
 		return stockProviderSymbol(subjectID, configured)
 	}

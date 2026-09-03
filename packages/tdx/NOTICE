@@ -1,0 +1,17 @@
+MooX TDX protocol package
+
+This package contains a clean-room Go implementation of protocol semantics
+verified against the public easy_tdx and QUANTAXIS reference implementations.
+The reference projects are not included in this module.
+
+easy_tdx, pytdx and xmtdx are MIT-licensed reference projects. Their notices
+and copyright attribution remain with their respective authors:
+
+Copyright (c) the easy_tdx contributors
+Copyright (c) rainx and pytdx contributors
+Copyright (c) xmtdx contributors
+Copyright (c) 2016-2021 yutiansut/QUANTAXIS contributors
+
+The reference project licenses permit reuse with attribution. This notice is
+provided to make the provenance of protocol fixtures and field decisions
+explicit; it does not imply that any upstream project endorses MooX.

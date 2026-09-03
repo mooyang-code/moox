@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
@@ -34,13 +33,10 @@ type AdapterConfig struct {
 // typed marketdata contracts. Protocol parsing, retry behavior, symbol
 // filtering, and subject normalization stay owned by the existing collectors.
 type MarketDataAdapter struct {
-	defaultProductType  marketdata.ProductType
-	klineCollector      *KlineCollector
-	symbolCollector     *SymbolCollector
-	now                 func() time.Time
-	instrumentGuardOnce sync.Once
-	instrumentGuard     *marketdata.FeedGuard
-	instrumentGuardErr  error
+	defaultProductType marketdata.ProductType
+	klineCollector     *KlineCollector
+	symbolCollector    *SymbolCollector
+	now                func() time.Time
 }
 
 func NewMarketDataAdapter(cfg AdapterConfig) *MarketDataAdapter {
@@ -66,9 +62,14 @@ func NewMarketDataAdapter(cfg AdapterConfig) *MarketDataAdapter {
 
 func (*MarketDataAdapter) Descriptor() marketdata.ProviderDescriptor {
 	return marketdata.ProviderDescriptor{
-		ID:          "binance",
-		DisplayName: "Binance",
-		Hosts:       []string{"api.binance.com", "fapi.binance.com"},
+		ID:              "binance",
+		SourceID:        "spot_http",
+		DisplayName:     "Binance",
+		Hosts:           []string{"api.binance.com", "fapi.binance.com"},
+		ProtocolVariant: "http",
+		Transport:       "https",
+		Port:            443,
+		Status:          marketdata.SourceEnabled,
 	}
 }
 
@@ -183,27 +184,18 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 	if req.SnapshotAt.IsZero() {
 		fetchedAt = a.now().UTC()
 	}
-	guardSpec := a.InstrumentSpec()
-	a.instrumentGuardOnce.Do(func() {
-		a.instrumentGuard, a.instrumentGuardErr = marketdata.NewFeedGuard(guardSpec.RateLimit, nil, nil)
-	})
-	if a.instrumentGuardErr != nil {
-		return marketdata.InstrumentSnapshot{}, a.instrumentGuardErr
-	}
 	var symbols []*exchange.SymbolInfo
-	err = a.instrumentGuard.Do(ctx, func(requestCtx context.Context) error {
-		fetched, fetchErr := a.symbolCollector.fetchSymbols(requestCtx, &sources.CollectParams{
-			SpaceID:   marketID,
-			DatasetID: "instruments",
-			InstType:  instType,
-			DNSRoutes: marketDataDNSRoutes(req.DNSRoutes),
-		})
-		symbols = a.symbolCollector.filterSymbols(fetched)
-		if len(symbols) == 0 && fetchErr == nil {
-			return fmt.Errorf("Binance active USDT symbol snapshot is empty")
-		}
-		return fetchErr
+	fetched, fetchErr := a.symbolCollector.fetchSymbols(ctx, &sources.CollectParams{
+		SpaceID:   marketID,
+		DatasetID: "instruments",
+		InstType:  instType,
+		DNSRoutes: marketDataDNSRoutes(req.DNSRoutes),
 	})
+	symbols = a.symbolCollector.filterSymbols(fetched)
+	if len(symbols) == 0 && fetchErr == nil {
+		fetchErr = fmt.Errorf("Binance active USDT symbol snapshot is empty")
+	}
+	err = fetchErr
 	if err != nil {
 		return marketdata.InstrumentSnapshot{}, classifyProviderError(err)
 	}
@@ -302,13 +294,25 @@ func normalizeMarketDataKline(req marketdata.KlineRequest, kline *market.Kline, 
 	}
 	barDuration := frequency.Duration()
 	barStart := normalizeBarStart(kline.OpenTime.UTC(), frequency)
+	if barDuration <= 0 {
+		if frequency == marketdata.FrequencyMonth {
+			barDuration = 0
+		} else {
+			return marketdata.NormalizedKline{}, fmt.Errorf("%w: frequency %q has no duration", marketdata.ErrUnsupportedFrequency, frequency)
+		}
+	}
+	sourceID := strings.TrimSpace(req.SourceID)
+	if sourceID == "" {
+		sourceID = "spot_http"
+	}
 	row := marketdata.NormalizedKline{
 		SubjectID:         req.SubjectID,
 		ProviderID:        "binance",
+		SourceID:          sourceID,
 		ProviderSymbol:    req.ProviderSymbol,
 		Frequency:         req.Frequency,
 		BarStart:          barStart,
-		BarEnd:            barStart.Add(barDuration),
+		BarEnd:            frequency.BarEnd(barStart),
 		Open:              openValue,
 		High:              highValue,
 		Low:               lowValue,
@@ -328,6 +332,9 @@ func normalizeMarketDataKline(req marketdata.KlineRequest, kline *market.Kline, 
 
 func normalizeBarStart(openTime time.Time, frequency marketdata.Frequency) time.Time {
 	openTime = openTime.UTC()
+	if frequency == marketdata.FrequencyMonth {
+		return time.Date(openTime.Year(), openTime.Month(), 1, 0, 0, 0, 0, time.UTC)
+	}
 	if frequency != marketdata.FrequencyWeek {
 		return openTime.Truncate(frequency.Duration())
 	}

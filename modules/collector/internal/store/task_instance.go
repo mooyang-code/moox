@@ -25,6 +25,7 @@ type TaskInstanceFilter struct {
 	TaskID         string
 	RuleID         string
 	Provider       string
+	SourceID       string
 	MarketType     string
 	DataType       string
 	DatasetID      string
@@ -58,6 +59,7 @@ type StorageWriteObservation struct {
 // MarketFetchAssignment is one atomic SCF-to-subject binding update.
 type MarketFetchAssignment struct {
 	Provider     string
+	SourceID     string
 	MarketType   string
 	DatasetID    string
 	Frequency    string
@@ -130,6 +132,9 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 	changed := make([]domain.TaskInstance, 0, len(instances))
 	for _, instance := range instances {
 		current, found := existing[instance.TaskID]
+		if found && strings.TrimSpace(instance.SourceID) == "" {
+			instance.SourceID = current.SourceID
+		}
 		if !found || taskInstanceDefinitionChanged(current, instance) {
 			changed = append(changed, instance)
 		}
@@ -165,6 +170,7 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 			"c_dataset_id":  clause.Expr{SQL: "excluded.c_dataset_id"},
 			"c_subject_id":  clause.Expr{SQL: "excluded.c_subject_id"},
 			"c_frequency":   clause.Expr{SQL: "excluded.c_frequency"},
+			"c_source_id":   clause.Expr{SQL: "excluded.c_source_id"},
 			"c_task_params": clause.Expr{SQL: "excluded.c_task_params"},
 			"c_is_deleted":  clause.Expr{SQL: "excluded.c_is_deleted"},
 			// A resample subject that was deactivated and later reactivated is
@@ -199,7 +205,7 @@ func (r *TaskInstanceRepository) ClearMarketFetchAssignments(ctx context.Context
 	if len(functionNames) > 0 {
 		query = query.Where("c_function_name IN ?", functionNames)
 	}
-	return query.Updates(map[string]any{"c_function_name": "", "c_mtime": time.Now().UTC()}).Error
+	return query.Updates(map[string]any{"c_function_name": "", "c_source_id": "", "c_mtime": time.Now().UTC()}).Error
 }
 
 // ReplaceMarketFetchAssignments atomically replaces the bindings owned by the
@@ -216,7 +222,7 @@ func (r *TaskInstanceRepository) ReplaceMarketFetchAssignments(ctx context.Conte
 		if len(functionNames) > 0 {
 			query = query.Where("c_function_name IN ?", functionNames)
 		}
-		if err := query.Updates(map[string]any{"c_function_name": "", "c_mtime": time.Now().UTC()}).Error; err != nil {
+		if err := query.Updates(map[string]any{"c_function_name": "", "c_source_id": "", "c_mtime": time.Now().UTC()}).Error; err != nil {
 			return err
 		}
 		for _, assignment := range assignments {
@@ -248,7 +254,7 @@ func (r *TaskInstanceRepository) ReplaceMarketFetchAssignments(ctx context.Conte
 				return err
 			}
 			result := matching(tx).
-				Updates(map[string]any{"c_function_name": functionName, "c_mtime": time.Now().UTC()})
+				Updates(map[string]any{"c_function_name": functionName, "c_source_id": strings.TrimSpace(assignment.SourceID), "c_mtime": time.Now().UTC()})
 			if result.Error != nil {
 				return result.Error
 			}
@@ -293,7 +299,7 @@ func (r *TaskInstanceRepository) AssignMarketFetchFunction(ctx context.Context, 
 	return r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
 		Where("c_space_id = ? AND c_provider = ? AND c_market_type = ? AND c_data_type = ? AND c_dataset_id = ? AND c_frequency IN ? AND c_subject_id IN ? AND c_is_deleted = ?", spaceID, strings.TrimSpace(provider), strings.TrimSpace(marketType), "kline", strings.TrimSpace(datasetID), frequencyValues, subjects, false).
 		Where("c_function_name <> ?", functionName).
-		Updates(map[string]any{"c_function_name": functionName, "c_mtime": time.Now().UTC()}).Error
+		Updates(map[string]any{"c_function_name": functionName, "c_source_id": "", "c_mtime": time.Now().UTC()}).Error
 }
 
 // MarkStorageWrites updates task freshness after Storage has committed the
@@ -367,6 +373,7 @@ func frequencyVariants(value string) []string {
 func taskInstanceDefinitionChanged(current, desired domain.TaskInstance) bool {
 	return current.RuleID != desired.RuleID ||
 		current.Provider != desired.Provider ||
+		current.SourceID != desired.SourceID ||
 		current.MarketType != desired.MarketType ||
 		current.DataType != desired.DataType ||
 		current.DatasetID != desired.DatasetID ||
@@ -461,6 +468,9 @@ func (r *TaskInstanceRepository) applyFilter(q *gorm.DB, filter TaskInstanceFilt
 	}
 	if filter.Provider != "" {
 		q = q.Where("c_provider = ?", filter.Provider)
+	}
+	if filter.SourceID != "" {
+		q = q.Where("c_source_id = ?", filter.SourceID)
 	}
 	if filter.MarketType != "" {
 		q = q.Where("c_market_type = ?", filter.MarketType)

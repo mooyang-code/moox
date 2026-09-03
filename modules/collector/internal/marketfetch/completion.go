@@ -411,7 +411,7 @@ func retryCollectionItem(request Request, result *marketfetchpb.MarketFetchItemR
 				continue
 			}
 			item.SourceEventID = key
-			if result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
+			if item.SourceID == "" && request.SourceID == "" && result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
 				item.CandidateIndex += klineProviderAttemptBudget
 			}
 			return item
@@ -425,15 +425,15 @@ func retryCollectionItem(request Request, result *marketfetchpb.MarketFetchItemR
 			// a valid source row was selected, so retry the same chain position
 			// instead of skipping a healthy provider merely because the write
 			// acknowledgment was lost.
-			if result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
+			if item.SourceID == "" && request.SourceID == "" && result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
 				item.CandidateIndex += klineProviderAttemptBudget
 			}
 			return item
 		}
 	}
 	candidateIndex := 0
-	if result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
+	if request.SourceID == "" && result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
 		candidateIndex = klineProviderAttemptBudget
 	}
-	return domain.CollectionItem{TaskID: result.GetTaskId(), SubjectID: result.GetSubjectId(), Symbol: result.GetSymbol(), TargetDataTime: result.GetTargetDataTime(), SourceEventID: key, DatasetID: request.DatasetID, Frequency: request.Frequency, Provider: request.Provider, MarketType: request.MarketType, DataType: "kline", CandidateIndex: candidateIndex}
+	return domain.CollectionItem{TaskID: result.GetTaskId(), SubjectID: result.GetSubjectId(), Symbol: result.GetSymbol(), TargetDataTime: result.GetTargetDataTime(), SourceEventID: key, DatasetID: request.DatasetID, Frequency: request.Frequency, Provider: request.Provider, SourceID: request.SourceID, MarketType: request.MarketType, DataType: "kline", CandidateIndex: candidateIndex}
 }

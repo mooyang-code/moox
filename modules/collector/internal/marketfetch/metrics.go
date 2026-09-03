@@ -32,10 +32,15 @@ type Metrics struct {
 	instrumentActive       *prometheus.GaugeVec
 	instrumentExchange     *prometheus.GaugeVec
 	instrumentLastSnapshot *prometheus.GaugeVec
+	feedObservations       *prometheus.CounterVec
 }
 
 type FeedMetric struct {
 	MarketID, RouteID, ProviderID, FeedKind, BatchKind, Result string
+	InstrumentType, SourceID, Frequency                        string
+	SourceKind, Transport, RemoteHost, SCFRegion, EgressScope  string
+	EgressIP, Unit, ErrorKind, HistoryWindow, CalendarID       string
+	RemotePort, ConnectionAttempt, Rows, FallbackRank          int
 	GroupID, GroupCount                                        int
 }
 
@@ -68,6 +73,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		instrumentActive:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_active", Help: "Active instruments in the latest complete snapshot."}, []string{"market_id", "route_id", "provider_id", "result"}),
 		instrumentExchange:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_exchange", Help: "Instrument count by bounded exchange in the latest complete snapshot."}, []string{"market_id", "route_id", "provider_id", "exchange"}),
 		instrumentLastSnapshot: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_last_snapshot_timestamp_seconds", Help: "Fetch timestamp of the latest complete instrument snapshot."}, []string{"market_id", "route_id", "provider_id", "result"}),
+		feedObservations: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_feed_observations_total", Help: "Bounded market feed observations with source, route, and egress dimensions."}, []string{
+			"market_id", "instrument_type", "provider_id", "source_id", "frequency", "source_kind", "transport",
+			"remote_host", "remote_port", "scf_region", "egress_scope", "egress_ip", "connection_attempt",
+			"rows", "unit", "fallback_rank", "error_kind", "history_window", "calendar_id", "result",
+		}),
 	}
 	metrics.assignmentRequired = registerGaugeVec(reg, metrics.assignmentRequired)
 	metrics.assignmentActive = registerGaugeVec(reg, metrics.assignmentActive)
@@ -91,6 +101,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	metrics.instrumentActive = registerGaugeVec(reg, metrics.instrumentActive)
 	metrics.instrumentExchange = registerGaugeVec(reg, metrics.instrumentExchange)
 	metrics.instrumentLastSnapshot = registerGaugeVec(reg, metrics.instrumentLastSnapshot)
+	metrics.feedObservations = registerCounterVec(reg, metrics.feedObservations)
 	return metrics
 }
 
@@ -321,6 +332,36 @@ func (m *Metrics) ObserveFeedResult(value FeedMetric) {
 	batchKind := boundedValue(value.BatchKind, []string{"realtime", "backfill", "gap_repair", "catchup", "instrument_snapshot"}, "unknown")
 	result := boundedValue(value.Result, []string{"success", "fallback", "http_429", "http_5xx", "timeout", "rate_limited", "invalid", "storage_error", "no_candidate"}, "unknown")
 	m.feedResults.WithLabelValues(marketID, routeID, providerID, feedKind, strconv.Itoa(value.GroupID), batchKind, result).Inc()
+	m.feedObservations.WithLabelValues(
+		marketID,
+		boundedMetricField(value.InstrumentType, "unknown"),
+		providerID,
+		boundedMetricField(value.SourceID, "unknown"),
+		boundedMetricField(value.Frequency, "unknown"),
+		boundedMetricField(value.SourceKind, "provider"),
+		boundedMetricField(value.Transport, "unknown"),
+		boundedMetricField(value.RemoteHost, "unknown"),
+		strconv.Itoa(max(value.RemotePort, 0)),
+		boundedMetricField(value.SCFRegion, "unknown"),
+		boundedMetricField(value.EgressScope, "unknown"),
+		boundedMetricField(value.EgressIP, "unknown"),
+		strconv.Itoa(max(value.ConnectionAttempt, 0)),
+		strconv.Itoa(max(value.Rows, 0)),
+		boundedMetricField(value.Unit, "rows"),
+		strconv.Itoa(max(value.FallbackRank, 0)),
+		boundedMetricField(value.ErrorKind, "unknown"),
+		boundedMetricField(value.HistoryWindow, "live"),
+		boundedMetricField(value.CalendarID, "none"),
+		result,
+	).Inc()
+}
+
+func boundedMetricField(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 128 {
+		return fallback
+	}
+	return value
 }
 
 func (m *Metrics) ObserveConfiguredGroups(marketID, routeID string, expected, actual int) {
@@ -383,7 +424,7 @@ func (m *Metrics) ObserveInstrumentSnapshot(marketID, routeID, providerID, resul
 }
 
 func boundedMarketRoute(marketID, routeID string) (string, string) {
-	marketID = boundedValue(marketID, []string{"stock_cn", "crypto_market"}, "unknown")
+	marketID = boundedValue(marketID, []string{"stock_cn", "crypto"}, "unknown")
 	routeID = strings.TrimSpace(routeID)
 	allowed := routeID == StockCNRouteID || routeID == "stock_cn_instrument_v1" || routeID == "binance_spot_instrument_v1" || routeID == "binance_swap_instrument_v1"
 	if !allowed {

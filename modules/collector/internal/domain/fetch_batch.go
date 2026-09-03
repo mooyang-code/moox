@@ -62,6 +62,9 @@ type CollectionItem struct {
 	RateBudgetRatio    float64 `json:"rate_budget_ratio,omitempty"`
 	SourceEventID      string  `json:"source_event_id,omitempty"`
 	Provider           string  `json:"provider"`
+	SourceID           string  `json:"source_id,omitempty"`
+	MarketID           string  `json:"market_id,omitempty"`
+	InstrumentType     string  `json:"instrument_type,omitempty"`
 	MarketType         string  `json:"market_type"`
 	DataType           string  `json:"data_type"`
 	DatasetID          string  `json:"dataset_id"`

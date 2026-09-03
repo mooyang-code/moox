@@ -136,7 +136,7 @@ function_prefix = "moox-fetcher-crypto-market"
 timer_function_count = 60
 # SCF Timer 每次直接访问该 Storage tRPC 地址，不再请求 Collector 配置接口。
 storage_gateway_node_id = "control"
-storage_rpc_gateway_target = "ip://106.53.107.122:11003"
+storage_rpc_gateway_target = "ip://203.0.113.10:11003"
 memory_size = 64
 timeout_seconds = 15
 realtime_batch_size = 10
@@ -178,7 +178,10 @@ cos_bucket = "moox-scf-tokyo-<tencent-app-id>"
 # probe-egress 仅用于诊断出口分布，不再作为发布或启用 Rule 的阻断门禁。
 [[scf_fetcher.spaces]]
 space_id = "stock_cn"
-entrypoint = "stock_cn"
+entrypoint = "market_data"
+market_id = "stock_cn"
+instrument_type = "equity"
+source_binding_mode = "deterministic"
 package_config_dir = "scf/stock_cn"
 package_name = "moox-collector-stock-cn"
 cls_cloud_account_id = "tencent-scf-guangzhou"
@@ -196,7 +199,7 @@ timer_function_count = 170
 # 单个 stock_cn Timer 的实测安全 subject 上限，超限时 Collector 拒绝发布。
 measured_safe_group_size = 40
 storage_gateway_node_id = "control"
-storage_rpc_gateway_target = "ip://106.53.107.122:11003"
+storage_rpc_gateway_target = "ip://203.0.113.10:11003"
 memory_size = 64
 timeout_seconds = 15
 # 全市场 Instrument 快照实测约 25 秒；仅 Invoke 辅助函数使用该独立超时。
@@ -261,11 +264,27 @@ cos_bucket = "moox-scf-chengdu-<tencent-app-id>"
 [control_host]
 name = "control"
 address = ""
-port = 22
+port = 0
 username = "ubuntu"
 password = ""
 # Raw public IPs normally cannot obtain a public ACME certificate. Use the
 # bundled Caddy internal CA in that case; omit this field for host-based auto.
+tls_mode = "auto"
+
+[storage_host]
+name = ""
+address = ""
+port = 0
+username = ""
+password = ""
+tls_mode = "auto"
+
+[view_host]
+name = ""
+address = ""
+port = 22
+username = ""
+password = ""
 tls_mode = "auto"
 
 [compile_host]

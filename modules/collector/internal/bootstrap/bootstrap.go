@@ -317,7 +317,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	// enough time to serialize the full fleet instead of treating a healthy
 	// large-fleet response as a coordination failure.
 	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 60 * time.Second})
-	metadataSource := storagesource.NewDatasetSource(cfg.Storage.GatewayTarget)
+	metadataSource := storagesource.NewDatasetSource(deps.StorageRPCGatewayTarget)
 	completionSpaceID := marketFetchSpaceID()
 	var resampleRunner *collectorresample.Runner
 	var resamplePreparer *collectorresample.Preparer
@@ -469,7 +469,7 @@ func marketFetchSpaceID() string {
 	if spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")); spaceID != "" {
 		return spaceID
 	}
-	return "crypto_market"
+	return "crypto"
 }
 
 func runtimeAuth(cfg ServiceAuthConfig) runtimeapp.AuthConfig {

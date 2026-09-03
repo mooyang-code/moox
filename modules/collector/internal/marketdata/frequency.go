@@ -16,10 +16,15 @@ const (
 	FrequencyHour   Frequency = "1h"
 	FrequencyDay    Frequency = "1d"
 	FrequencyWeek   Frequency = "1w"
+	FrequencyMonth  Frequency = "1M"
 )
 
 func ParseFrequency(input string) (Frequency, error) {
-	value := strings.ToLower(strings.TrimSpace(input))
+	raw := strings.TrimSpace(input)
+	if raw == string(FrequencyMonth) {
+		return FrequencyMonth, nil
+	}
+	value := strings.ToLower(raw)
 	if value == "60m" {
 		value = string(FrequencyHour)
 	}
@@ -47,7 +52,18 @@ func (f Frequency) Duration() time.Duration {
 		return 24 * time.Hour
 	case FrequencyWeek:
 		return 7 * 24 * time.Hour
+	case FrequencyMonth:
+		// A month has no fixed duration. Callers that need a closed boundary
+		// must use BarEnd, which applies calendar arithmetic.
+		return 0
 	default:
 		return 0
 	}
+}
+
+func (f Frequency) BarEnd(start time.Time) time.Time {
+	if f == FrequencyMonth {
+		return start.AddDate(0, 1, 0)
+	}
+	return start.Add(f.Duration())
 }

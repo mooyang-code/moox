@@ -85,9 +85,9 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 	bundle, err := loadSetupInitBundle(defaultSetupBundlePath())
 	require.NoError(t, err)
-	require.Len(t, bundle.Spaces, 2)
+	require.Len(t, bundle.Spaces, 4)
 	require.NotEmpty(t, bundle.Calls)
-	require.Len(t, bundle.Datasets, 15)
+	require.Len(t, bundle.Datasets, 19)
 	assert.Contains(t, bundle.Datasets, seedDataset{
 		SpaceID:      "stock_cn",
 		DatasetID:    "stock_cn_instruments",
@@ -101,8 +101,10 @@ func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 			Attributes: map[string]string{"instrument_type": "equity", "market_type": "equity", "storage_model": "wide_common_metrics"},
 		},
 	})
-	assert.Equal(t, "crypto_market", bundle.Spaces[0].SpaceID)
+	assert.Equal(t, "crypto", bundle.Spaces[0].SpaceID)
 	assert.Equal(t, "stock_cn", bundle.Spaces[1].SpaceID)
+	assert.Equal(t, "stock_hk", bundle.Spaces[2].SpaceID)
+	assert.Equal(t, "stock_us", bundle.Spaces[3].SpaceID)
 }
 
 func TestSetupInitRunsStagesInOrder(t *testing.T) {

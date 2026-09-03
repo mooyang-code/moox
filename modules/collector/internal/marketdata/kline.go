@@ -10,6 +10,7 @@ import (
 type NormalizedKline struct {
 	SubjectID      string
 	ProviderID     string
+	SourceID       string
 	ProviderSymbol string
 	Frequency      string
 	BarStart       time.Time
@@ -45,13 +46,17 @@ func ValidateNormalizedKline(kline NormalizedKline) error {
 		return err
 	}
 	duration := frequency.Duration()
-	if duration <= 0 {
+	if frequency == FrequencyMonth {
+		if !isUTCTime(kline.BarStart) || kline.BarStart.Day() != 1 || kline.BarStart.Hour() != 0 || kline.BarStart.Minute() != 0 || kline.BarStart.Second() != 0 || kline.BarStart.Nanosecond() != 0 {
+			return fmt.Errorf("bar_start must be the first UTC day of a calendar month")
+		}
+	} else if duration <= 0 {
 		return fmt.Errorf("%w: frequency %q has no duration", ErrUnsupportedFrequency, frequency)
 	}
-	if !isUTCBucket(kline.BarStart, duration) {
+	if frequency != FrequencyMonth && !isUTCBucket(kline.BarStart, duration) {
 		return fmt.Errorf("bar_start must be a UTC %s bucket", frequency)
 	}
-	if !kline.BarEnd.Equal(kline.BarStart.Add(duration)) {
+	if !kline.BarEnd.Equal(frequency.BarEnd(kline.BarStart)) {
 		return fmt.Errorf("bar_end must equal bar_start + %s", frequency)
 	}
 	for _, field := range []struct {

@@ -61,6 +61,18 @@ func (manifest Manifest) Validate() error {
 	if len(manifest.Sources) == 0 {
 		return fmt.Errorf("at least one source is required")
 	}
+	if manifest.Enabled {
+		hasEnabledSource := false
+		for _, source := range manifest.Sources {
+			if source.IsEnabled() {
+				hasEnabledSource = true
+				break
+			}
+		}
+		if !hasEnabledSource {
+			return fmt.Errorf("enabled manifest must contain at least one enabled source")
+		}
+	}
 	seenSource := make(map[string]struct{}, len(manifest.Sources))
 	for index, source := range manifest.Sources {
 		if strings.TrimSpace(source.ProviderID) == "" || strings.TrimSpace(source.SourceID) == "" {
@@ -163,10 +175,12 @@ func (catalog *Catalog) List() []Manifest {
 
 func DefaultCatalog() (*Catalog, error) {
 	return NewCatalog(
-		Manifest{MarketID: "stock_cn", InstrumentType: "equity", DatasetID: "stock_cn_kline", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Frequencies: []string{"1m", "1d", "1w", "1M"}, Sources: []SourceRef{{ProviderID: "tdx", SourceID: "normal_7709", ProtocolVariant: "tdx_normal", Transport: "tcp", Port: 7709, Frequencies: []string{"1m", "1d", "1w", "1M"}}, {ProviderID: "eastmoney", SourceID: "stock_cn_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m", "1d", "1w", "1M"}}, {ProviderID: "tencent", SourceID: "stock_cn_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1d"}}}, Enabled: true},
-		Manifest{MarketID: "stock_cn", InstrumentType: "index", DatasetID: "stock_cn_index_kline", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Frequencies: []string{"1m", "1d", "1w", "1M"}, Sources: []SourceRef{{ProviderID: "tdx", SourceID: "normal_7709", ProtocolVariant: "tdx_normal", Transport: "tcp", Port: 7709, Frequencies: []string{"1m", "1d", "1w", "1M"}}, {ProviderID: "eastmoney", SourceID: "index_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m", "1d", "1w", "1M"}}}, Enabled: true},
-		Manifest{MarketID: "stock_cn", InstrumentType: "convertible_bond", DatasetID: "stock_cn_convertible_bond_kline", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Frequencies: []string{"1m", "1d"}, Sources: []SourceRef{{ProviderID: "tdx", SourceID: "normal_7709", ProtocolVariant: "tdx_normal", Transport: "tcp", Port: 7709, Frequencies: []string{"1m", "1d"}}, {ProviderID: "eastmoney", SourceID: "convertible_bond_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m", "1d"}}}, Enabled: true},
-		Manifest{MarketID: "stock_hk", InstrumentType: "equity", DatasetID: "stock_hk_kline", Timezone: "Asia/Hong_Kong", Frequencies: []string{"1m", "1d", "1w", "1M"}, Sources: []SourceRef{{ProviderID: "eastmoney", SourceID: "stock_hk_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m", "1d", "1w", "1M"}}}, Enabled: true},
-		Manifest{MarketID: "stock_us", InstrumentType: "equity", DatasetID: "stock_us_kline", Timezone: "America/New_York", Frequencies: []string{"1m", "1d", "1w", "1M"}, Sources: []SourceRef{{ProviderID: "eastmoney", SourceID: "stock_us_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m", "1d", "1w", "1M"}}}, Enabled: true},
+		Manifest{MarketID: "crypto", InstrumentType: "spot", DatasetID: "binance_spot_kline_1m", CalendarID: "utc_crypto", Timezone: "UTC", Frequencies: []string{"1m", "1h", "1d", "1w"}, Sources: []SourceRef{{ProviderID: "binance", SourceID: "spot_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m", "1h", "1d", "1w"}, Status: SourceEnabled}}, Enabled: true},
+		Manifest{MarketID: "crypto", InstrumentType: "swap", DatasetID: "binance_swap_kline_1m", CalendarID: "utc_crypto", Timezone: "UTC", Frequencies: []string{"1m", "1h", "1d", "1w"}, Sources: []SourceRef{{ProviderID: "binance", SourceID: "spot_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m", "1h", "1d", "1w"}, Status: SourceEnabled}}, Enabled: true},
+		Manifest{MarketID: "stock_cn", InstrumentType: "equity", DatasetID: "stock_cn_kline", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Frequencies: []string{"1m", "1d", "1w", "1M"}, Sources: []SourceRef{{ProviderID: "tdx", SourceID: "normal_7709", ProtocolVariant: "tdx_normal", Transport: "tcp", Port: 7709, Frequencies: []string{"1m", "1d", "1w", "1M"}, Status: SourceCatalogOnly}, {ProviderID: "eastmoney", SourceID: "stock_cn_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m"}, Status: SourceEnabled}, {ProviderID: "sina", SourceID: "stock_cn_minute_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m"}, Status: SourceCatalogOnly}, {ProviderID: "tencent", SourceID: "stock_cn_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m"}, Status: SourceEnabled}}, Enabled: true},
+		Manifest{MarketID: "stock_cn", InstrumentType: "index", DatasetID: "stock_cn_index_kline", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Frequencies: []string{"1m", "1d", "1w", "1M"}, Sources: []SourceRef{{ProviderID: "tdx", SourceID: "normal_7709", ProtocolVariant: "tdx_normal", Transport: "tcp", Port: 7709, Frequencies: []string{"1m", "1d", "1w", "1M"}, Status: SourceCatalogOnly}, {ProviderID: "eastmoney", SourceID: "index_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m", "1d", "1w", "1M"}, Status: SourceCatalogOnly}}, Enabled: false},
+		Manifest{MarketID: "stock_cn", InstrumentType: "convertible_bond", DatasetID: "stock_cn_convertible_bond_kline", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Frequencies: []string{"1m", "1d"}, Sources: []SourceRef{{ProviderID: "tdx", SourceID: "normal_7709", ProtocolVariant: "tdx_normal", Transport: "tcp", Port: 7709, Frequencies: []string{"1m", "1d"}, Status: SourceCatalogOnly}, {ProviderID: "eastmoney", SourceID: "convertible_bond_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m", "1d"}, Status: SourceCatalogOnly}}, Enabled: false},
+		Manifest{MarketID: "stock_hk", InstrumentType: "equity", DatasetID: "stock_hk_kline", Timezone: "Asia/Hong_Kong", Frequencies: []string{"1m", "1d", "1w", "1M"}, Sources: []SourceRef{{ProviderID: "eastmoney", SourceID: "stock_hk_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m", "1d", "1w", "1M"}, Status: SourceCatalogOnly}}, Enabled: false},
+		Manifest{MarketID: "stock_us", InstrumentType: "equity", DatasetID: "stock_us_kline", Timezone: "America/New_York", Frequencies: []string{"1m", "1d", "1w", "1M"}, Sources: []SourceRef{{ProviderID: "eastmoney", SourceID: "stock_us_http", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1m", "1d", "1w", "1M"}, Status: SourceCatalogOnly}}, Enabled: false},
 	)
 }

@@ -34,10 +34,11 @@ func main() {
 	viewID := envDefault("MOOX_SMOKE_VIEW_ID", "binance_spot_kline_1m_view")
 	subjectID := envDefault("MOOX_SMOKE_SUBJECT_ID", "BTC-USDT")
 	frequency := envDefault("MOOX_SMOKE_FREQUENCY", "1m")
-	selector := &pb.TimeSeriesSelector{SpaceId: "crypto_market", DatasetId: datasetID, SubjectId: subjectID, Freq: frequency}
+	spaceID := envDefault("MOOX_SMOKE_SPACE_ID", "crypto")
+	selector := &pb.TimeSeriesSelector{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subjectID, Freq: frequency}
 	primaryRsp, err := primary.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "storage-primary-smoke", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-primary-smoke")},
-		SpaceId:  "crypto_market", DatasetId: datasetID,
+		SpaceId:  spaceID, DatasetId: datasetID,
 		Selectors: []*pb.TimeSeriesSelector{selector}, TimeRange: &pb.TimeRange{StartTime: start, EndTime: end},
 		Order: pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: 2000},
 	})
@@ -50,7 +51,7 @@ func main() {
 	primaryLast := maxDataTime(primaryRsp.GetRows())
 	rsp, err := view.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "storage-view-smoke", AppKey: datanode.ServiceAuthKey(secret, "storage-view-smoke")},
-		SpaceId:  "crypto_market", ViewId: viewID,
+		SpaceId:  spaceID, ViewId: viewID,
 		Selectors: []*pb.TimeSeriesSelector{selector},
 		TimeRange: &pb.TimeRange{StartTime: start, EndTime: end},
 		Sorts:     []*pb.SortSpec{{FieldName: "data_time", Desc: true}}, Page: &pb.Page{Page: 1, Size: 2000}, TotalMode: pb.TotalMode_NONE,

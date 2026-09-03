@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
@@ -20,6 +19,7 @@ import (
 type Config struct {
 	BaseURL                  string
 	KlineEndpoint            string
+	SourceID                 string
 	HTTPClient               *http.Client
 	Now                      func() time.Time
 	InstrumentRequestTimeout time.Duration
@@ -30,14 +30,12 @@ type Config struct {
 type Provider struct {
 	baseURL             string
 	klineEndpoint       string
+	sourceID            string
 	client              *http.Client
 	now                 func() time.Time
 	rateLimit           marketdata.RateLimitPolicy
 	instrumentRateLimit marketdata.RateLimitPolicy
 	maxBars             int
-	instrumentGuardOnce sync.Once
-	instrumentGuard     *marketdata.FeedGuard
-	instrumentGuardErr  error
 }
 
 func New(cfg Config) *Provider {
@@ -46,6 +44,9 @@ func New(cfg Config) *Provider {
 	}
 	if cfg.KlineEndpoint == "" {
 		cfg.KlineEndpoint = "/api/qt/stock/kline/get"
+	}
+	if strings.TrimSpace(cfg.SourceID) == "" {
+		cfg.SourceID = "stock_cn_http"
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -66,11 +67,11 @@ func New(cfg Config) *Provider {
 	}
 	instrumentRateLimit := cfg.RateLimit
 	instrumentRateLimit.RequestTimeout = cfg.InstrumentRequestTimeout
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, instrumentRateLimit: instrumentRateLimit, maxBars: cfg.MaxBarsPerRequest}
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, sourceID: strings.ToLower(strings.TrimSpace(cfg.SourceID)), client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, instrumentRateLimit: instrumentRateLimit, maxBars: cfg.MaxBarsPerRequest}
 }
 
-func (*Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "eastmoney", DisplayName: "EastMoney", Hosts: []string{"push2.eastmoney.com"}}
+func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
+	return marketdata.ProviderDescriptor{ID: "eastmoney", SourceID: p.sourceID, DisplayName: "EastMoney", Hosts: []string{"push2.eastmoney.com"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
 }
 
 func (p *Provider) KlineSpec() marketdata.KlineSpec {
@@ -201,6 +202,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		if err != nil {
 			return nil, err
 		}
+		row.SourceID = p.sourceID
 		if !now.Before(row.BarEnd) {
 			rows = append(rows, row)
 		}
@@ -225,12 +227,6 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		fetchedAt = p.now().UTC()
 	}
 	builder := commonsrc.NewInstrumentSnapshotBuilder(p.Descriptor().ID, marketID, fetchedAt)
-	p.instrumentGuardOnce.Do(func() {
-		p.instrumentGuard, p.instrumentGuardErr = marketdata.NewFeedGuard(spec.RateLimit, nil, nil)
-	})
-	if p.instrumentGuardErr != nil {
-		return marketdata.InstrumentSnapshot{}, p.instrumentGuardErr
-	}
 	declaredTotal := 0
 	itemsSeen := 0
 	sawUnverifiedShortPage := false
@@ -246,7 +242,7 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 			"fields": {"f12,f13,f14,f115,f152,f103,f128,f129"},
 		}
 		var body []byte
-		if err := p.instrumentGuard.Do(ctx, func(pageCtx context.Context) error {
+		if err := func(pageCtx context.Context) error {
 			httpReq, requestErr := http.NewRequestWithContext(pageCtx, http.MethodGet, p.baseURL+"/api/qt/clist/get?"+query.Encode(), nil)
 			if requestErr != nil {
 				return requestErr
@@ -268,7 +264,7 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 				return fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, requestErr)
 			}
 			return nil
-		}); err != nil {
+		}(ctx); err != nil {
 			return marketdata.InstrumentSnapshot{}, err
 		}
 		var payload map[string]any

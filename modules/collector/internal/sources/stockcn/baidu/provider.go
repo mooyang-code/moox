@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
@@ -18,24 +17,26 @@ import (
 
 type Config struct {
 	BaseURL    string
+	SourceID   string
 	HTTPClient *http.Client
 	Now        func() time.Time
 	RateLimit  marketdata.RateLimitPolicy
 }
 
 type Provider struct {
-	baseURL             string
-	client              *http.Client
-	now                 func() time.Time
-	rateLimit           marketdata.RateLimitPolicy
-	instrumentGuardOnce sync.Once
-	instrumentGuard     *marketdata.FeedGuard
-	instrumentGuardErr  error
+	baseURL   string
+	sourceID  string
+	client    *http.Client
+	now       func() time.Time
+	rateLimit marketdata.RateLimitPolicy
 }
 
 func New(cfg Config) *Provider {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://finance.pae.baidu.com"
+	}
+	if strings.TrimSpace(cfg.SourceID) == "" {
+		cfg.SourceID = "stock_cn_http"
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 5 * time.Second}
@@ -46,11 +47,11 @@ func New(cfg Config) *Provider {
 	if cfg.RateLimit.RequestsPerSecond <= 0 {
 		cfg.RateLimit = marketdata.RateLimitPolicy{RequestsPerSecond: 2, Burst: 1, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: 5 * time.Second}
 	}
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit}
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), sourceID: strings.ToLower(strings.TrimSpace(cfg.SourceID)), client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit}
 }
 
-func (*Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "baidu", DisplayName: "Baidu", Hosts: []string{"finance.pae.baidu.com"}}
+func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
+	return marketdata.ProviderDescriptor{ID: "baidu", SourceID: p.sourceID, DisplayName: "Baidu", Hosts: []string{"finance.pae.baidu.com"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceShadow}
 }
 
 func (p *Provider) ShadowSpec() marketdata.KlineSpec {
@@ -152,19 +153,13 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		fetchedAt = p.now().UTC()
 	}
 	builder := commonsrc.NewInstrumentSnapshotBuilder(p.Descriptor().ID, marketID, fetchedAt)
-	p.instrumentGuardOnce.Do(func() {
-		p.instrumentGuard, p.instrumentGuardErr = marketdata.NewFeedGuard(spec.RateLimit, nil, nil)
-	})
-	if p.instrumentGuardErr != nil {
-		return marketdata.InstrumentSnapshot{}, p.instrumentGuardErr
-	}
 	for page := 1; ; page++ {
 		query := url.Values{
 			"pn": {strconv.Itoa(page)},
 			"rn": {strconv.Itoa(spec.PageSize)},
 		}
 		var body []byte
-		if err := p.instrumentGuard.Do(ctx, func(pageCtx context.Context) error {
+		if err := func(pageCtx context.Context) error {
 			httpReq, requestErr := http.NewRequestWithContext(pageCtx, http.MethodGet, p.baseURL+"/api/getmarketrank?"+query.Encode(), nil)
 			if requestErr != nil {
 				return requestErr
@@ -186,7 +181,7 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 				return fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, requestErr)
 			}
 			return nil
-		}); err != nil {
+		}(ctx); err != nil {
 			return marketdata.InstrumentSnapshot{}, err
 		}
 		var payload map[string]any

@@ -203,8 +203,7 @@ func TestFeedGuardAcquiresSemaphoreBeforeWaitingForRateLimit(t *testing.T) {
 	secondDone := make(chan error, 1)
 	go func() {
 		secondDone <- guard.Do(secondCtx, func(context.Context) error {
-			t.Fatal("second call entered while the semaphore was held")
-			return nil
+			return fmt.Errorf("second call entered while the semaphore was held")
 		})
 	}()
 	require.ErrorIs(t, <-secondDone, context.DeadlineExceeded)
@@ -240,8 +239,7 @@ func TestFeedGuardRateLimitWaitIsCancelable(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- guard.Do(ctx, func(context.Context) error {
-			t.Fatal("canceled limiter wait entered provider call")
-			return nil
+			return fmt.Errorf("canceled limiter wait entered provider call")
 		})
 	}()
 	time.Sleep(20 * time.Millisecond)

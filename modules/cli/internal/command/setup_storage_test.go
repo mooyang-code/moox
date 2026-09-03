@@ -74,6 +74,17 @@ func TestSetupStorageCommandsRequireExplicitHostAndSanitizeResults(t *testing.T)
 	require.Equal(t, 1, browserCalls)
 }
 
+func TestStorageVerificationUsesConfiguredRootAndCurrentSchema(t *testing.T) {
+	hashCommand := storageBinaryHashCommand()
+	require.Contains(t, hashCommand, `"$storage_root/bin/$name"`)
+	require.Contains(t, hashCommand, "storage_root=\"$1\"")
+	require.NotContains(t, hashCommand, "/data/moox")
+
+	schemaCommand := storageSchemaVersionCommand()
+	require.Contains(t, schemaCommand, `"$storage_root/data/storage/metadata/storage_metadata.db"`)
+	require.Equal(t, 10, currentStorageMetadataSchemaVersion)
+}
+
 func TestSetupStorageCommandsRejectMissingRequiredFlags(t *testing.T) {
 	t.Parallel()
 	snapshot := setupSnapshot(t)
@@ -330,16 +341,16 @@ func TestValidateStorageBuildProvenanceRequiresExactRemoteArtifacts(t *testing.T
 	require.NoError(t, validateStorageBuildProvenance(local, remote, hashes))
 
 	remote.Commit = "1123456789abcdef0123456789abcdef01234567"
-	require.EqualError(t, validateStorageBuildProvenance(local, remote, hashes), "storage_provenance_mismatch")
+	require.EqualError(t, validateStorageBuildProvenance(local, remote, hashes), "storage_provenance_mismatch: commit")
 	remote.Commit = commit
 	actual := map[string]string{}
 	for name, hash := range hashes {
 		actual[name] = hash
 	}
 	actual["moox-storage-node"] = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	require.EqualError(t, validateStorageBuildProvenance(local, remote, actual), "storage_provenance_mismatch")
+	require.EqualError(t, validateStorageBuildProvenance(local, remote, actual), "storage_provenance_mismatch: binary hash moox-storage-node")
 	local.Dirty = true
-	require.EqualError(t, validateStorageBuildProvenance(local, remote, hashes), "storage_provenance_mismatch")
+	require.EqualError(t, validateStorageBuildProvenance(local, remote, hashes), "storage_provenance_mismatch: dirty build")
 }
 
 func TestSelectDeploymentDataNodeDoesNotUseAnUnrelatedActiveNode(t *testing.T) {
@@ -538,6 +549,10 @@ func (f *fakeStorageMetadataAPI) UpsertDatasetColumn(_ context.Context, req *sto
 	f.remember(req.GetAuthInfo())
 	f.datasetColumnDisplayNames = append(f.datasetColumnDisplayNames, req.GetColumn().GetAttributes()["display_name"])
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: storageOK(), Column: req.GetColumn()}, nil
+}
+func (f *fakeStorageMetadataAPI) ListDatasetColumns(_ context.Context, req *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error) {
+	f.remember(req.GetAuthInfo())
+	return &storagepb.ListDatasetColumnsRsp{RetInfo: storageOK()}, nil
 }
 func (f *fakeStorageMetadataAPI) RebindDatasetDataNode(_ context.Context, req *storagepb.RebindDatasetDataNodeReq) (*storagepb.RebindDatasetDataNodeRsp, error) {
 	f.remember(req.GetAuthInfo())

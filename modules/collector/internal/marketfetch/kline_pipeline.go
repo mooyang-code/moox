@@ -37,6 +37,8 @@ type KlinePipeline struct {
 	ProductType    marketdata.ProductType
 	InstrumentType marketdata.InstrumentType
 	DatasetID      string
+	SourceID       string
+	AutoBindSource bool
 	SeriesTag      string
 	SettleDelay    time.Duration
 	Now            func() time.Time
@@ -58,21 +60,37 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 		return nil, frequencyErr
 	}
 	isStock := p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID
-	if req.SpaceID != spaceID || req.DatasetID != datasetID || (isStock && frequency != marketdata.FrequencyMinute) {
+	isStockEquity := isStock && (p.InstrumentType == "" || p.InstrumentType == marketdata.InstrumentEquity)
+	if req.SpaceID != spaceID || req.DatasetID != datasetID || (isStockEquity && frequency != marketdata.FrequencyMinute) {
 		return nil, fmt.Errorf("kline pipeline requires %s/%s/1m for stock_cn", spaceID, datasetID)
+	}
+	sourceID := firstNonEmptyString(p.SourceID, req.SourceID)
+	if p.SourceID != "" && req.SourceID != "" && !strings.EqualFold(strings.TrimSpace(p.SourceID), strings.TrimSpace(req.SourceID)) {
+		return nil, fmt.Errorf("kline pipeline source binding differs: pipeline=%s request=%s", p.SourceID, req.SourceID)
 	}
 	chain := normalizeCandidateChain(p.CandidateChain, req.Provider)
 	if len(chain) == 0 {
 		return nil, fmt.Errorf("kline pipeline requires at least one candidate provider")
 	}
-	if isStock && len(chain) < 2 {
-		return nil, fmt.Errorf("stock kline pipeline requires at least two candidate providers")
+	stockRouteVersion := ""
+	var stockSources []stockCNSource
+	if isStock && p.AutoBindSource && sourceID == "" {
+		stockRouteVersion, stockSources, frequencyErr = stockCNAssignmentRoute()
+		if frequencyErr != nil {
+			return nil, frequencyErr
+		}
+	}
+	if p.SourceID != "" {
+		if req.Provider != "" && !strings.EqualFold(strings.TrimSpace(req.Provider), strings.TrimSpace(chain[0])) {
+			return nil, fmt.Errorf("kline pipeline provider binding differs: pipeline=%s request=%s", chain[0], req.Provider)
+		}
+		chain = []string{chain[0]}
 	}
 	started := time.Now()
 	if p.Now != nil {
 		started = p.Now()
 	}
-	if req.BatchKind == domain.BatchKindRealtime && p.Calendar != nil {
+	if req.BatchKind == domain.BatchKindRealtime && p.Calendar != nil && frequency == marketdata.FrequencyMinute {
 		shouldCollect, err := stockCNShouldCollectMinute(p.Calendar, started, p.SettleDelay)
 		if err != nil {
 			return nil, err
@@ -123,6 +141,17 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "symbol", fmt.Errorf("provider symbol is required"))
 				return
 			}
+			itemSourceID := firstNonEmptyString(item.SourceID, sourceID)
+			itemChain := chain
+			if isStock && p.AutoBindSource && itemSourceID == "" {
+				selectedSource, ok := stockSourceForSubject(stockSources, stockRouteVersion, item.SubjectID)
+				if !ok {
+					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "source_binding", fmt.Errorf("stock_cn has no source assignment for %s", item.SubjectID))
+					return
+				}
+				itemSourceID = selectedSource.SourceID
+				itemChain = []string{selectedSource.Provider}
+			}
 			limit := item.BarLimit
 			if limit <= 0 {
 				limit = MaxRealtimeRows
@@ -151,11 +180,16 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				}
 				coverageStart, coverageEnd, historyAsOf = canaryStart, canaryEnd, canaryEnd
 			}
-			fetched, selectedProvider, nextCandidateIndex, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, ProductType: productType, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio}, chain, item.CandidateIndex)
+			fetched, selectedProvider, nextCandidateIndex, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, ProductType: productType, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio}, itemChain, item.CandidateIndex)
 			if err != nil {
 				item.CandidateIndex = nextCandidateIndex
 				p.observeFeed(req, selectedProvider, "kline", metricKlineResult(err))
 				results[index] = failureResult(item, classifyError(err), errorType(err), err)
+				return
+			}
+			if err := bindKlineSource(fetched, itemChain[0], itemSourceID); err != nil {
+				item.CandidateIndex = nextCandidateIndex
+				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "source_binding", err)
 				return
 			}
 			itemRows := make([]*storagepb.RowFieldUpsert, 0, len(fetched))
@@ -176,7 +210,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				if !coverageEnd.IsZero() && !bar.BarStart.Before(coverageEnd) {
 					continue
 				}
-				rank := providerRank(chain, bar.ProviderID)
+				rank := providerRank(itemChain, bar.ProviderID)
 				row, rowErr := p.rowFor(bar, req, requestKlineRouteID(p, req.Frequency), rank)
 				if rowErr != nil {
 					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "normalize", rowErr)
@@ -190,7 +224,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				return
 			}
 			result := "success"
-			if providerRank(chain, selectedProvider) > 1 {
+			if providerRank(itemChain, selectedProvider) > 1 {
 				result = "fallback"
 			}
 			p.observeFeed(req, selectedProvider, "kline", result)
@@ -235,6 +269,12 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 	lastProvider := "none"
 	if len(chain) == 0 {
 		return nil, lastProvider, 0, fmt.Errorf("kline candidate chain is empty")
+	}
+	if strings.TrimSpace(req.SourceID) != "" && len(chain) > 1 {
+		// A source-bound Timer must never cross to another Provider merely
+		// because the first bound source failed. Route fallback is only valid
+		// among endpoints belonging to that same SourceKey.
+		chain = chain[:1]
 	}
 	startIndex %= len(chain)
 	if startIndex < 0 {
@@ -306,6 +346,37 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 	return nil, lastProvider, (startIndex + attempts) % len(chain), lastErr
 }
 
+func stockSourceForSubject(sources []stockCNSource, routeVersion, subject string) (stockCNSource, bool) {
+	totalWeight := 0
+	for _, source := range sources {
+		totalWeight += source.Weight
+	}
+	if totalWeight <= 0 || len(sources) == 0 {
+		return stockCNSource{}, false
+	}
+	selected := weightedSourceBucket(routeVersion, subject, sources, totalWeight)
+	return selected, selected.Provider != "" && selected.SourceID != ""
+}
+
+func bindKlineSource(rows []marketdata.NormalizedKline, providerID, sourceID string) error {
+	if strings.TrimSpace(sourceID) == "" {
+		return nil
+	}
+	providerID = strings.ToLower(strings.TrimSpace(providerID))
+	sourceID = strings.ToLower(strings.TrimSpace(sourceID))
+	for index := range rows {
+		if providerID != "" && !strings.EqualFold(strings.TrimSpace(rows[index].ProviderID), providerID) {
+			return fmt.Errorf("bar[%d] provider_id %q differs from bound provider %q", index, rows[index].ProviderID, providerID)
+		}
+		if strings.TrimSpace(rows[index].SourceID) == "" {
+			rows[index].SourceID = sourceID
+		} else if sourceID != "" && !strings.EqualFold(strings.TrimSpace(rows[index].SourceID), sourceID) {
+			return fmt.Errorf("bar[%d] source_id %q differs from bound source %q", index, rows[index].SourceID, sourceID)
+		}
+	}
+	return nil
+}
+
 func hasRowsWithinCoverage(rows []marketdata.NormalizedKline, start, end time.Time) bool {
 	if start.IsZero() && end.IsZero() {
 		return len(rows) > 0
@@ -326,14 +397,22 @@ func (p *KlinePipeline) observeFeed(req Request, providerID, feedKind, result st
 	if p == nil || p.Metrics == nil {
 		return
 	}
-	p.Metrics.ObserveFeedResult(FeedMetric{MarketID: firstNonEmptyString(p.MarketID, req.SpaceID), RouteID: requestKlineRouteID(p, req.Frequency), ProviderID: providerID, FeedKind: feedKind, GroupID: req.GroupID, GroupCount: req.GroupCount, BatchKind: string(req.BatchKind), Result: result})
+	p.Metrics.ObserveFeedResult(FeedMetric{
+		MarketID: firstNonEmptyString(p.MarketID, req.SpaceID), RouteID: requestKlineRouteID(p, req.Frequency),
+		ProviderID: providerID, SourceID: firstNonEmptyString(p.SourceID, req.SourceID),
+		InstrumentType: string(p.InstrumentType), Frequency: req.Frequency, FeedKind: feedKind,
+		BatchKind: string(req.BatchKind), Result: result, SourceKind: "provider", Transport: "https",
+		SCFRegion: req.Region, EgressScope: "scf-public", Rows: 0, FallbackRank: providerRank([]string{providerID}, providerID),
+		ErrorKind: result, CalendarID: firstNonEmptyString(req.SpaceID, "none"),
+		GroupID: req.GroupID, GroupCount: req.GroupCount,
+	})
 }
 
 func requestKlineRouteID(p *KlinePipeline, frequency string) string {
 	if p == nil {
 		return StockCNRouteID
 	}
-	if strings.EqualFold(strings.TrimSpace(firstNonEmptyString(p.MarketID, p.SpaceID)), "crypto") || strings.EqualFold(strings.TrimSpace(p.SpaceID), "crypto_market") {
+	if strings.EqualFold(strings.TrimSpace(firstNonEmptyString(p.MarketID, p.SpaceID)), "crypto") {
 		product := "spot"
 		if p.ProductType == marketdata.ProductSwap || p.InstrumentType == marketdata.InstrumentSwap {
 			product = "swap"
@@ -390,7 +469,8 @@ func stockProviderExchange(subjectID string) marketdata.ExchangeID {
 }
 
 func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int) (*storagepb.RowFieldUpsert, error) {
-	if p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID {
+	if (p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID) &&
+		(p.InstrumentType == "" || p.InstrumentType == marketdata.InstrumentEquity) {
 		return stockKlineRow(bar, routeID, routeRank)
 	}
 	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
@@ -400,14 +480,27 @@ func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, rout
 	if seriesTag == "" {
 		seriesTag = "venue:" + strings.ToLower(strings.TrimSpace(bar.ProviderID))
 	}
+	fields := []*storagepb.FieldValue{
+		doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
+		doubleValue("volume", bar.VolumeShares),
+	}
+	if strings.EqualFold(firstNonEmptyString(p.MarketID, req.SpaceID), "crypto") {
+		fields = append(fields, doubleValue("quote_volume", bar.AmountCNY), intValue("trade_num", bar.TradeCount))
+	} else {
+		fields = append(fields, doubleValue("amount", bar.AmountCNY))
+		if p.InstrumentType == marketdata.InstrumentIndex {
+			fields = append(fields, stringValue("index_code", bar.ProviderSymbol))
+		}
+	}
+	fields = append(fields,
+		stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID),
+		stringValue("provider_symbol", bar.ProviderSymbol),
+	)
 	return &storagepb.RowFieldUpsert{
 		Key: &storagepb.RowKey{SpaceId: req.SpaceID, DatasetId: req.DatasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
 			SubjectId: bar.SubjectID, Freq: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
 		}}},
-		Fields: []*storagepb.FieldValue{
-			doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
-			doubleValue("volume", bar.VolumeShares), doubleValue("quote_volume", bar.AmountCNY), intValue("trade_num", bar.TradeCount),
-		},
+		Fields: fields,
 	}, nil
 }
 
@@ -459,7 +552,11 @@ func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int
 		stringValue("provider_symbol", bar.ProviderSymbol), timeValue("provider_timestamp", bar.ProviderTimestamp),
 		timeValue("fetched_at", bar.FetchedAt), stringValue("request_id", bar.RequestID),
 		stringValue("route_id", routeID), intValue("route_rank", int64(routeRank)),
-		stringValue("source_provider", bar.ProviderID), stringValue("quality_status", qualityStatus), stringValue("amount_quality", amountQuality),
+		stringValue("source_provider", bar.ProviderID),
+		stringValue("quality_status", qualityStatus), stringValue("amount_quality", amountQuality),
+	}
+	if strings.TrimSpace(bar.SourceID) != "" {
+		fields = append(fields, stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID))
 	}
 	return &storagepb.RowFieldUpsert{
 		Key: &storagepb.RowKey{

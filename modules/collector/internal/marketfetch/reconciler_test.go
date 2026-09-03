@@ -272,16 +272,24 @@ func TestReconcilerAllowsStockGroupAboveThirtyWhenMeasuredSafeSizeAllowsIt(t *te
 	for index := 0; index < 40; index++ {
 		subjects = append(subjects, domain.DatasetSubject{SubjectID: fmt.Sprintf("%06d.XSHG", 600000+index), ExternalSymbol: fmt.Sprintf("sh%06d", 600000+index), Status: "active"})
 	}
-	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-stock-cn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{
+		{NodeID: "timer-0", FunctionName: "moox-stock-cn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "timer-1", FunctionName: "moox-stock-cn-001", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "timer-2", FunctionName: "moox-stock-cn-002", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+	}}
 	reconciler := &Reconciler{
 		Rules:   reconcilerRulesStub{rules: []domain.TaskRule{rule}},
 		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: subjects},
-		Nodes:   nodes, ExpectedStockCNTimerFunctions: 1, MeasuredSafeGroupSize: 40,
+		Nodes:   nodes, ExpectedStockCNTimerFunctions: 3, MeasuredSafeGroupSize: 40,
 	}
 
 	require.NoError(t, reconciler.Reconcile(context.Background(), StockCNSpaceID))
-	require.Len(t, nodes.patches, 1)
-	require.Len(t, nodes.patches[0].GetManagedEnvironment()["MOOX_MARKET_FETCH_SUBJECTS"], 40*11+39)
+	require.Len(t, nodes.patches, 3)
+	seenSubjects := 0
+	for _, patch := range nodes.patches {
+		seenSubjects += strings.Count(patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_SUBJECTS"], "|") + 1
+	}
+	require.Equal(t, 40, seenSubjects)
 }
 
 func TestReconcilerFailsWithoutTimerCapacityBeforeSubmitting(t *testing.T) {

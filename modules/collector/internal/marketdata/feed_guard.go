@@ -349,10 +349,24 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 			continue
 		}
 
-		fetcher, err := s.router.registry.KlineFetcher(providerID)
+		var (
+			fetcher KlineFetcher
+			err     error
+		)
+		if sourceID := strings.TrimSpace(req.SourceID); sourceID != "" {
+			fetcher, err = s.router.registry.KlineFetcherBySource(SourceKey{ProviderID: providerID, SourceID: sourceID})
+		} else {
+			fetcher, err = s.router.registry.KlineFetcher(providerID)
+		}
 		if err != nil {
 			s.breaker.Observe(providerID, err)
 			return nil, err
+		}
+		if status := fetcher.Descriptor().Status; status == SourceShadow || status == SourceCatalogOnly {
+			err = fmt.Errorf("%w: %s", ErrSourceUnavailable, fetcher.Descriptor().SourceKey().String())
+			s.breaker.Observe(providerID, err)
+			lastErr = err
+			continue
 		}
 		spec := fetcher.KlineSpec()
 		if !spec.SupportsRequest(req) {
@@ -373,18 +387,12 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 			continue
 		}
 
-		guard, err := s.router.feedGuard(providerID, fetcher.KlineSpec().RateLimit, req.RateBudgetRatio)
-		if err != nil {
-			s.breaker.Observe(providerID, err)
-			return nil, err
-		}
-
 		var rows []NormalizedKline
-		err = guard.Do(ctx, func(ctx context.Context) error {
+		err = func() error {
 			var fetchErr error
 			rows, fetchErr = fetcher.FetchKlines(ctx, req)
 			return fetchErr
-		})
+		}()
 		s.breaker.Observe(providerID, err)
 		attempts++
 

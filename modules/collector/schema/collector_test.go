@@ -13,7 +13,7 @@ func TestTaskInstanceSchemaUsesShortLivedMarketDimensions(t *testing.T) {
 			t.Fatalf("legacy TaskInstance column %s remains in schema", forbidden)
 		}
 	}
-	for _, required := range []string{"c_provider", "c_market_type", "c_frequency", "c_function_name"} {
+	for _, required := range []string{"c_provider", "c_market_type", "c_frequency", "c_source_id", "c_function_name"} {
 		if !regexp.MustCompile(`(?m)^\s*` + required + `\s`).MatchString(definition) {
 			t.Fatalf("short-lived TaskInstance column %s is missing", required)
 		}

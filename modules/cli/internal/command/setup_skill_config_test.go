@@ -25,7 +25,7 @@ const (
 )
 
 func TestSetupExportSkillConfigWritesStrict0600ConfigWithoutLeakingSecrets(t *testing.T) {
-	snapshot := setupSkillSnapshot(t, "crypto_market", "ip://203.0.113.8:11003", "control")
+	snapshot := setupSkillSnapshot(t, "crypto", "ip://203.0.113.8:11003", "control")
 	output := filepath.Join(t.TempDir(), "data-access.yaml")
 	want := testSkillDataAccessConfig()
 	cmd := newSetupCommand(setupDeps{
@@ -37,7 +37,7 @@ func TestSetupExportSkillConfigWritesStrict0600ConfigWithoutLeakingSecrets(t *te
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"export-skill-config", "--file", "custom.toml", "--space", "crypto_market", "--output", output})
+	cmd.SetArgs([]string{"export-skill-config", "--file", "custom.toml", "--space", "crypto", "--output", output})
 	require.NoError(t, cmd.Execute())
 
 	info, err := os.Lstat(output)
@@ -59,7 +59,7 @@ func TestSetupExportSkillConfigWritesStrict0600ConfigWithoutLeakingSecrets(t *te
 }
 
 func TestSetupExportSkillConfigRejectsUnsafeOutput(t *testing.T) {
-	snapshot := setupSkillSnapshot(t, "crypto_market", "ip://203.0.113.8:11003", "control")
+	snapshot := setupSkillSnapshot(t, "crypto", "ip://203.0.113.8:11003", "control")
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.yaml")
 	require.NoError(t, os.WriteFile(target, []byte("preserve"), 0o600))
@@ -73,7 +73,7 @@ func TestSetupExportSkillConfigRejectsUnsafeOutput(t *testing.T) {
 			return testSkillDataAccessConfig(), nil
 		},
 	})
-	cmd.SetArgs([]string{"export-skill-config", "--space", "crypto_market", "--output", link})
+	cmd.SetArgs([]string{"export-skill-config", "--space", "crypto", "--output", link})
 	err := cmd.Execute()
 	require.ErrorContains(t, err, "symlink")
 	raw, readErr := os.ReadFile(target)
@@ -82,7 +82,7 @@ func TestSetupExportSkillConfigRejectsUnsafeOutput(t *testing.T) {
 }
 
 func TestSetupExportSkillConfigVerifiesSnapshotBeforeWriting(t *testing.T) {
-	snapshot, path := setupSkillSnapshotWithPath(t, "crypto_market", "ip://203.0.113.8:11003", "control")
+	snapshot, path := setupSkillSnapshotWithPath(t, "crypto", "ip://203.0.113.8:11003", "control")
 	output := filepath.Join(t.TempDir(), "data-access.yaml")
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
@@ -91,14 +91,14 @@ func TestSetupExportSkillConfigVerifiesSnapshotBeforeWriting(t *testing.T) {
 			return testSkillDataAccessConfig(), nil
 		},
 	})
-	cmd.SetArgs([]string{"export-skill-config", "--space", "crypto_market", "--output", output})
+	cmd.SetArgs([]string{"export-skill-config", "--space", "crypto", "--output", output})
 	require.ErrorContains(t, cmd.Execute(), "config_changed")
 	_, err := os.Lstat(output)
 	require.True(t, os.IsNotExist(err))
 }
 
 func TestSetupExportSkillConfigRejectsSetupFileAsOutput(t *testing.T) {
-	snapshot, path := setupSkillSnapshotWithPath(t, "crypto_market", "ip://203.0.113.8:11003", "control")
+	snapshot, path := setupSkillSnapshotWithPath(t, "crypto", "ip://203.0.113.8:11003", "control")
 	called := false
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
@@ -107,7 +107,7 @@ func TestSetupExportSkillConfigRejectsSetupFileAsOutput(t *testing.T) {
 			return testSkillDataAccessConfig(), nil
 		},
 	})
-	cmd.SetArgs([]string{"export-skill-config", "--file", path, "--space", "crypto_market", "--output", path})
+	cmd.SetArgs([]string{"export-skill-config", "--file", path, "--space", "crypto", "--output", path})
 	require.ErrorContains(t, cmd.Execute(), "must be different files")
 	require.False(t, called)
 }
@@ -146,7 +146,7 @@ func TestBuildSkillDataAccessConfigSelectsExactSpaceAndValidatesMaterial(t *test
 	require.Equal(t, "stock_cn_kline", got.DataTypes["stock_cn"].Exchanges["stock_cn"].KlineDatasets["1m"])
 	require.Empty(t, got.DataTypes["stock_cn"].Exchanges["stock_cn"].SeriesTag)
 
-	_, err = buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "CRYPTO_MARKET", read)
+	_, err = buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "stock_us", read)
 	require.ErrorContains(t, err, "space")
 }
 

@@ -48,3 +48,16 @@ func TestRequestValidateAcceptsRFC3339NanoCoverage(t *testing.T) {
 	}
 	require.NoError(t, req.validate())
 }
+
+func TestRequestValidateRejectsMixedSourceBinding(t *testing.T) {
+	req := Request{
+		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		Provider: "sina", SourceID: "stock_cn_minute_http",
+		BatchKind: domain.BatchKindRealtime,
+		Items: []domain.CollectionItem{
+			{SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: StockCNDatasetID, Provider: "sina", SourceID: "stock_cn_minute_http"},
+			{SubjectID: "000001.XSHE", Symbol: "sz000001", DatasetID: StockCNDatasetID, Provider: "tdx", SourceID: "normal_7709"},
+		},
+	}
+	require.ErrorContains(t, req.validate(), "source binding")
+}

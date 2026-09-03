@@ -401,7 +401,8 @@ func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
 	stock := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "stock_cn"}, Region: "ap-shanghai", StorageRPCGatewayTarget: "ip://storage:11003"}, "stock-node", "batch-stock")
 	stockData := stock["data"].(map[string]any)
 	assert.Equal(t, "stock_cn_kline", stockData["dataset_id"])
-	assert.Equal(t, "stock_cn_multi", stockData["provider"])
+	assert.Equal(t, "tencent", stockData["provider"])
+	assert.Equal(t, "stock_cn_http", stockData["source_id"])
 	assert.Equal(t, "equity", stockData["market_type"])
 	assert.Equal(t, "backfill", stockData["batch_kind"])
 	stockItem := stockData["items"].([]map[string]any)[0]

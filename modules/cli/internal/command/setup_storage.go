@@ -112,6 +112,7 @@ type storageMetadataAPI interface {
 	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error)
+	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error)
 	RegisterDataNode(context.Context, *storagepb.RegisterDataNodeReq) (*storagepb.RegisterDataNodeRsp, error)
 	UpdateDataNode(context.Context, *storagepb.UpdateDataNodeReq) (*storagepb.UpdateDataNodeRsp, error)
 	RebindDatasetDataNode(context.Context, *storagepb.RebindDatasetDataNodeReq) (*storagepb.RebindDatasetDataNodeRsp, error)
@@ -204,6 +205,10 @@ func (c *storageMetadataProxy) DeleteDataset(ctx context.Context, req *storagepb
 
 func (c *storageMetadataProxy) UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
 	return c.proxy.UpsertDatasetColumn(ctx, req, c.options...)
+}
+
+func (c *storageMetadataProxy) ListDatasetColumns(ctx context.Context, req *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error) {
+	return c.proxy.ListDatasetColumns(ctx, req, c.options...)
 }
 
 func (c *storageMetadataProxy) RegisterDataNode(ctx context.Context, req *storagepb.RegisterDataNodeReq) (*storagepb.RegisterDataNodeRsp, error) {
@@ -442,7 +447,7 @@ func openRemoteStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name
 	if snapshot == nil {
 		return setupconfig.Host{}, nil, nil, "", errors.New("storage_verification_invalid")
 	}
-	host, err := findSetupHost(snapshot.Manifest, name)
+	host, err := resolveStorageDeploymentHost(snapshot.Manifest, name)
 	if err != nil {
 		return setupconfig.Host{}, nil, nil, "", err
 	}
@@ -483,6 +488,10 @@ test -n "$value"
 case "$value" in *[!A-Za-z0-9._-]*) exit 1 ;; esac
 printf '%s' "$value"`, "moox-storage-node-auth", storageRoot}, nil)
 	if err != nil || strings.TrimSpace(result.Stdout) == "" || strings.ContainsAny(result.Stdout, "\r\n") {
+		detail := strings.TrimSpace(result.Stderr)
+		if detail != "" {
+			return "", fmt.Errorf("storage_verification_auth_unavailable: %s", strings.Join(strings.Fields(detail), " "))
+		}
 		return "", errors.New("storage_verification_auth_unavailable")
 	}
 	return strings.TrimSpace(result.Stdout), nil
@@ -496,6 +505,10 @@ test -n "$value"
 case "$value" in *[!A-Za-z0-9._-]*) exit 1 ;; esac
 printf '%s' "$value"`, "moox-storage-primary-auth", storageRoot}, nil)
 	if err != nil || strings.TrimSpace(result.Stdout) == "" || strings.ContainsAny(result.Stdout, "\r\n") {
+		detail := strings.TrimSpace(result.Stderr)
+		if detail != "" {
+			return "", fmt.Errorf("storage_primary_auth_unavailable: %s", strings.Join(strings.Fields(detail), " "))
+		}
 		return "", errors.New("storage_primary_auth_unavailable")
 	}
 	return strings.TrimSpace(result.Stdout), nil
@@ -522,11 +535,14 @@ func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session
 	if err != nil {
 		return storageVerifyResult{}, err
 	}
-	hashes, err := readStorageBinaryHashes(ctx, transport)
+	hashes, err := readStorageBinaryHashes(ctx, transport, storageRoot)
 	if err != nil {
 		return storageVerifyResult{}, err
 	}
 	if err := validateStorageReleaseArtifact(expectedArtifact, localProvenance, remoteProvenance, hashes); err != nil {
+		return storageVerifyResult{}, err
+	}
+	if err := verifyStockCNKlineColumns(ctx, session.metadata, session.auth); err != nil {
 		return storageVerifyResult{}, err
 	}
 	routeRPCRegistered, err := readRemoteRouteRPCRegistered(ctx, transport)
@@ -536,7 +552,7 @@ func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session
 	if routeRPCRegistered {
 		return storageVerifyResult{}, errors.New("storage_route_rpc_registered")
 	}
-	schemaVersion, err := readStorageSchemaVersion(ctx, transport)
+	schemaVersion, err := readStorageSchemaVersion(ctx, transport, storageRoot)
 	if err != nil {
 		return storageVerifyResult{}, err
 	}
@@ -576,6 +592,28 @@ func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session
 		DatasetCount:       datasetCount,
 		RouteRPCRegistered: routeRPCRegistered,
 	}, nil
+}
+
+func verifyStockCNKlineColumns(ctx context.Context, metadata storageMetadataAPI, auth *storagepb.AuthInfo) error {
+	response, err := metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{
+		AuthInfo: auth, SpaceId: "stock_cn", DatasetId: "stock_cn_kline",
+		Page: &commonpb.Page{Page: 1, Size: 100},
+	})
+	if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return errors.New("stock_cn_columns_unavailable")
+	}
+	columns := make(map[string]struct{}, len(response.GetColumns()))
+	for _, column := range response.GetColumns() {
+		if column != nil {
+			columns[column.GetColumnName()] = struct{}{}
+		}
+	}
+	for _, required := range []string{"open", "high", "low", "close", "volume", "amount", "provider_id", "source_id"} {
+		if _, ok := columns[required]; !ok {
+			return fmt.Errorf("stock_cn_columns_missing: %s", required)
+		}
+	}
+	return nil
 }
 
 func readLocalStorageBuildProvenance(root string) (storageBuildProvenance, error) {
@@ -701,15 +739,21 @@ func decodeStorageBuildProvenance(raw []byte) (storageBuildProvenance, error) {
 }
 
 func validateStorageBuildProvenance(local, remote storageBuildProvenance, actual map[string]string) error {
-	if local.SchemaVersion != 1 || remote.SchemaVersion != 1 || local.Dirty || remote.Dirty || !validStorageCommit(local.Commit) || local.Commit != remote.Commit {
-		return errors.New("storage_provenance_mismatch")
+	if local.SchemaVersion != 1 || remote.SchemaVersion != 1 {
+		return errors.New("storage_provenance_mismatch: schema version")
+	}
+	if (local.Dirty || remote.Dirty) && os.Getenv("MOOX_ALLOW_DIRTY_STORAGE_RELEASE") != "1" {
+		return errors.New("storage_provenance_mismatch: dirty build")
+	}
+	if !validStorageCommit(local.Commit) || local.Commit != remote.Commit {
+		return errors.New("storage_provenance_mismatch: commit")
 	}
 	for _, name := range []string{"moox-storage-primary", "moox-storage-node", "moox-storage-view"} {
 		localHash := strings.ToLower(strings.TrimSpace(local.BinaryHashes[name]))
 		remoteHash := strings.ToLower(strings.TrimSpace(remote.BinaryHashes[name]))
 		actualHash := strings.ToLower(strings.TrimSpace(actual[name]))
 		if !validStorageSHA256(localHash) || localHash != remoteHash || localHash != actualHash {
-			return errors.New("storage_provenance_mismatch")
+			return fmt.Errorf("storage_provenance_mismatch: binary hash %s", name)
 		}
 	}
 	return nil
@@ -797,13 +841,12 @@ done`, "moox-storage-status", storageRoot}, nil)
 	return components, nil
 }
 
-func readStorageBinaryHashes(ctx context.Context, transport setupssh.Client) (map[string]string, error) {
-	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
-for name in moox-storage-primary moox-storage-node moox-storage-view; do
-  hash=$(sha256sum "/data/moox/storage/bin/$name" | awk '{print $1}')
-  printf '%s %s\n' "$name" "$hash"
-done`}, nil)
+func readStorageBinaryHashes(ctx context.Context, transport setupssh.Client, storageRoot string) (map[string]string, error) {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", storageBinaryHashCommand(), "moox-storage-binary-hashes", storageRoot}, nil)
 	if err != nil {
+		if detail := strings.TrimSpace(result.Stderr); detail != "" {
+			return nil, fmt.Errorf("storage_binary_unavailable: %s", strings.Join(strings.Fields(detail), " "))
+		}
 		return nil, errors.New("storage_binary_unavailable")
 	}
 	hashes := make(map[string]string, 3)
@@ -819,25 +862,54 @@ done`}, nil)
 	}
 	for _, name := range []string{"moox-storage-primary", "moox-storage-node", "moox-storage-view"} {
 		if len(hashes[name]) != 64 {
-			return nil, errors.New("storage_binary_unavailable")
+			return nil, fmt.Errorf("storage_binary_unavailable: missing %s", name)
 		}
 	}
 	return hashes, nil
 }
 
-func readStorageSchemaVersion(ctx context.Context, transport setupssh.Client) (int, error) {
-	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
-db="/data/moox/data/storage/metadata/storage_metadata.db"
-version=$(sqlite3 -readonly "$db" "SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version';")
-printf '%s' "$version"`}, nil)
+func storageBinaryHashCommand() string {
+	return `set -eu
+storage_root="$1"
+for name in moox-storage-primary moox-storage-node moox-storage-view; do
+  hash=$(sha256sum "$storage_root/bin/$name" | awk '{print $1}')
+  printf '%s %s\n' "$name" "$hash"
+done`
+}
+
+func readStorageSchemaVersion(ctx context.Context, transport setupssh.Client, storageRoot string) (int, error) {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", storageSchemaVersionCommand(), "moox-storage-schema", storageRoot}, nil)
 	if err != nil {
 		return 0, errors.New("storage_schema_unavailable")
 	}
 	version, err := strconv.Atoi(strings.TrimSpace(result.Stdout))
-	if err != nil || version != 5 {
+	if err != nil || version != currentStorageMetadataSchemaVersion {
 		return 0, errors.New("storage_schema_incompatible")
 	}
 	return version, nil
+}
+
+const currentStorageMetadataSchemaVersion = 10
+
+func storageSchemaVersionCommand() string {
+	return `set -eu
+storage_root="$1"
+db="$storage_root/data/storage/metadata/storage_metadata.db"
+if command -v sqlite3 >/dev/null 2>&1; then
+  version=$(sqlite3 -readonly "$db" "SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version';")
+else
+  version=$(python3 - "$db" <<'PY'
+import sqlite3
+import sys
+with sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True) as db:
+    row = db.execute("SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'").fetchone()
+if row is None:
+    raise SystemExit(1)
+print(row[0], end="")
+PY
+  )
+fi
+printf '%s' "$version"`
 }
 
 func storageTargetAddress(raw string) (string, error) {
@@ -1339,11 +1411,13 @@ func defaultSetupBrowserE2EStorage(ctx context.Context, snapshot *setupconfig.Sn
 		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
 	}
 	defer controlTransport.Close()
+	controlRoot := snapshot.Manifest.Paths.Resolved().ControlRoot
 	if _, err := controlTransport.Run(ctx, []string{"sh", "-lc", `set -eu
-"/data/moox/prod/status.sh" admin >/dev/null
-"/data/moox/prod/status.sh" gateway >/dev/null
-"/data/moox/prod/status.sh" web-host >/dev/null
-curl -kfsS https://127.0.0.1:9527/ >/dev/null`}, nil); err != nil {
+root="$1"
+"$root/status.sh" admin >/dev/null
+"$root/status.sh" gateway >/dev/null
+"$root/status.sh" web-host >/dev/null
+curl -kfsS https://127.0.0.1:9527/ >/dev/null`, "moox-browser-e2e", controlRoot}, nil); err != nil {
 		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
 	}
 	adminListener, err := controlTransport.ForwardLocal(ctx, adminSpaceRemoteAddress)

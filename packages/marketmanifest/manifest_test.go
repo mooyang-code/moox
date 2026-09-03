@@ -44,6 +44,25 @@ func TestCatalogOnlySourceIsNotEnabled(t *testing.T) {
 	}
 }
 
+func TestDefaultCatalogDoesNotEnableUnverifiedOrIncompleteSources(t *testing.T) {
+	catalog, err := DefaultCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, ok := catalog.Lookup("stock_cn", "equity")
+	if !ok {
+		t.Fatal("stock_cn equity manifest was not found")
+	}
+	for _, source := range manifest.Sources {
+		switch source.ProviderID + "/" + source.SourceID {
+		case "tdx/normal_7709":
+			if source.IsEnabled() {
+				t.Fatal("TDX must remain catalog_only before Wire/Field acceptance")
+			}
+		}
+	}
+}
+
 func TestCatalogReturnsDeepCopiesOfNestedSourceFrequencies(t *testing.T) {
 	manifest := Manifest{MarketID: "stock_cn", InstrumentType: "equity", DatasetID: "bars", Timezone: "Asia/Shanghai", Frequencies: []string{"1d"}, Sources: []SourceRef{{ProviderID: "eastmoney", SourceID: "bars", ProtocolVariant: "http", Transport: "https", Port: 443, Frequencies: []string{"1d"}}}}
 	catalog, err := NewCatalog(manifest)

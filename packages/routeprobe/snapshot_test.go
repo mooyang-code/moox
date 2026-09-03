@@ -2,6 +2,7 @@ package routeprobe
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 )
@@ -130,5 +131,31 @@ func TestSnapshotStoreHonorsTTLAndReturnsDefensiveCopies(t *testing.T) {
 	otherKey.SCFRegion = "ap-beijing"
 	if _, ok := store.Get(otherKey); ok {
 		t.Fatal("SnapshotStore.Get() crossed SCF region isolation")
+	}
+}
+
+func TestFileSnapshotStoreRoundTripsAndExpiresByRouteKey(t *testing.T) {
+	now := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	key := RouteKey{SCFRegion: "ap-guangzhou", SourceKey: SourceKey{ProviderID: "tdx", SourceID: "normal_7709"}, Transport: TransportTCP, Host: "quotes.example", Port: 7709}
+	candidate := Candidate{SCFRegion: key.SCFRegion, SourceKey: key.SourceKey, Transport: key.Transport, Host: key.Host, Address: "192.0.2.10", Port: key.Port}
+	snapshot, err := NewSnapshot(key, []ScoredCandidate{{Candidate: candidate, Stats: RouteStats{Attempts: 1, Successes: 1}, Healthy: true, Score: 20}}, now, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewFileSnapshotStore(t.TempDir(), func() time.Time { return now })
+	if err := store.Put(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := store.Get(key)
+	if err != nil || !ok || got.Key != key || len(got.Routes) != 1 {
+		t.Fatalf("Get() = %+v, %v, %v", got, ok, err)
+	}
+	files, err := os.ReadDir(store.root)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("snapshot files = %v, %v", files, err)
+	}
+	store.clock = func() time.Time { return now.Add(time.Minute) }
+	if _, ok, err := store.Get(key); err != nil || ok {
+		t.Fatalf("expired Get() = %v, %v", ok, err)
 	}
 }

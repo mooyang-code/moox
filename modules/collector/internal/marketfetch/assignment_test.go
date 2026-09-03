@@ -33,7 +33,8 @@ func TestBuildStockCNAssignmentsUsesEveryTimerNodeAndKeepsExistingSubjectsStable
 		require.Equal(t, index, assignment.GroupID)
 		require.Equal(t, StockCNRouteID, assignment.RouteVersion)
 		require.Equal(t, "stock_cn_multi", assignment.RouteProvider)
-		require.Len(t, assignment.ProviderChain, 3)
+		require.NotEmpty(t, assignment.SourceID)
+		require.Len(t, assignment.ProviderChain, 1)
 		require.Equal(t, assignment.ProviderChain[0], assignment.Provider)
 		for _, subject := range assignment.Subjects {
 			seen[subject]++
@@ -219,21 +220,19 @@ func TestBuildStockCNAssignmentsFitsConfigured170GroupsAt40Subjects(t *testing.T
 	require.Len(t, assignments, groups)
 
 	seen := make(map[string]int, len(subjects))
-	primaryGroups := make(map[string]int)
-	primarySubjects := make(map[string]int)
-	backupSubjects := make(map[string]int)
+	sourceGroups := make(map[string]int)
+	sourceSubjects := make(map[string]int)
 	for _, assignment := range assignments {
 		require.LessOrEqual(t, len(assignment.Subjects), maxSize)
-		require.Len(t, assignment.ProviderChain, 3)
+		require.NotEmpty(t, assignment.SourceID)
+		require.Len(t, assignment.ProviderChain, 1)
 		require.Equal(t, assignment.Provider, assignment.ProviderChain[0])
 		environment, envErr := buildManagedEnvironment(assignment, nil, stockCNMaxManagedEnvironmentSize)
 		require.NoError(t, envErr)
 		require.LessOrEqual(t, environmentBytes(environment), stockCNMaxManagedEnvironmentSize)
-		primaryGroups[assignment.Provider]++
-		primarySubjects[assignment.Provider] += len(assignment.Subjects)
-		for _, provider := range assignment.ProviderChain[1:] {
-			backupSubjects[provider] += len(assignment.Subjects)
-		}
+		sourceKey := assignment.Provider + "/" + assignment.SourceID
+		sourceGroups[sourceKey]++
+		sourceSubjects[sourceKey] += len(assignment.Subjects)
 		for _, subject := range assignment.Subjects {
 			seen[subject]++
 		}
@@ -242,13 +241,9 @@ func TestBuildStockCNAssignmentsFitsConfigured170GroupsAt40Subjects(t *testing.T
 	for _, subject := range subjects {
 		require.Equal(t, 1, seen[subject])
 	}
-	require.Equal(t, map[string]int{"eastmoney": 57, "sina": 56, "tencent": 57}, primaryGroups)
-	// Subject counts follow the stable group assignment, so the group counts
-	// are exact while individual group sizes can differ by the hash result.
-	require.LessOrEqual(t, maxMapValue(primarySubjects)-minMapValue(primarySubjects), 3*maxSize)
-	require.Greater(t, backupSubjects["sina"], 0)
-	require.Greater(t, backupSubjects["eastmoney"], 0)
-	require.Greater(t, backupSubjects["tencent"], 0)
+	require.GreaterOrEqual(t, len(sourceGroups), 2)
+	require.Equal(t, len(sourceGroups), len(sourceSubjects))
+	require.LessOrEqual(t, maxMapValue(sourceSubjects)-minMapValue(sourceSubjects), 3*maxSize)
 }
 
 func maxMapValue(values map[string]int) int {
@@ -404,6 +399,60 @@ func TestBuildAssignmentsKeepsSeriesTagsSeparate(t *testing.T) {
 	require.NotEqual(t, assignments[0].SeriesTag, assignments[1].SeriesTag)
 }
 
+func TestBuildStockCNAssignmentsBindsSubjectsToStableSourceKeys(t *testing.T) {
+	subjects := []string{
+		"600000.XSHG", "600036.XSHG", "601318.XSHG",
+		"000001.XSHE", "000333.XSHE", "300750.XSHE",
+		"920000.XBSE", "920055.XBSE", "920116.XBSE",
+	}
+	nodes := make([]scfinvoker.Node, 0, 9)
+	for index := 0; index < 9; index++ {
+		nodes = append(nodes, scfinvoker.Node{
+			NodeID:       fmt.Sprintf("source-node-%d", index),
+			FunctionName: fmt.Sprintf("moox-stock-cn-source-%03d", index),
+			Region:       "ap-guangzhou",
+			NodeType:     "scf-event",
+			TriggerType:  "timer",
+			Metadata:     map[string]any{"index": index},
+		})
+	}
+	group := TaskGroup{
+		Provider: "stock_cn_multi", MarketType: "equity",
+		MarketID: "stock_cn", InstrumentType: "equity",
+		DatasetID: StockCNDatasetID, Frequency: "1m",
+		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
+	}
+
+	first, err := BuildStockCNAssignments(group, nodes, 4, "2026-09-01", 9)
+	require.NoError(t, err)
+	second, err := BuildStockCNAssignments(group, nodes, 4, "2026-09-01", 9)
+	require.NoError(t, err)
+
+	firstSourceBySubject := make(map[string]string, len(subjects))
+	secondSourceBySubject := make(map[string]string, len(subjects))
+	sources := make(map[string]struct{})
+	for _, assignment := range first {
+		require.NotEmpty(t, assignment.Provider)
+		require.NotEmpty(t, assignment.SourceID)
+		require.Len(t, assignment.ProviderChain, 1)
+		require.Equal(t, assignment.Provider, assignment.ProviderChain[0])
+		sourceKey := assignment.Provider + "/" + assignment.SourceID
+		sources[sourceKey] = struct{}{}
+		for _, subject := range assignment.Subjects {
+			firstSourceBySubject[subject] = sourceKey
+		}
+	}
+	for _, assignment := range second {
+		sourceKey := assignment.Provider + "/" + assignment.SourceID
+		for _, subject := range assignment.Subjects {
+			secondSourceBySubject[subject] = sourceKey
+		}
+	}
+	require.GreaterOrEqual(t, len(sources), 2)
+	require.Equal(t, firstSourceBySubject, secondSourceBySubject)
+	require.Len(t, firstSourceBySubject, len(subjects))
+}
+
 func TestBuildAssignmentsAllowsUnicodeSubjectNames(t *testing.T) {
 	assignments, err := BuildAssignments([]TaskGroup{{
 		Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m",
@@ -421,6 +470,9 @@ func TestCronForFrequency(t *testing.T) {
 	cron, err := CronForFrequency("1m")
 	require.NoError(t, err)
 	require.Equal(t, "0 * * * * * *", cron)
+	cron, err = CronForFrequency("1M")
+	require.NoError(t, err)
+	require.Equal(t, "0 0 0 1 * * *", cron)
 	_, err = CronForFrequency("2m")
 	require.Error(t, err)
 }

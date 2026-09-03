@@ -258,11 +258,12 @@ type SCFFetcherSpace struct {
 	// environment. It is intentionally separate from the legacy crypto
 	// market_type label so a function cannot infer an asset class from a
 	// provider-specific spelling.
-	MarketID       string `toml:"market_id"`
-	InstrumentType string `toml:"instrument_type"`
-	ProviderID     string `toml:"provider_id"`
-	SourceID       string `toml:"source_id"`
-	SeriesTag      string `toml:"series_tag"`
+	MarketID          string `toml:"market_id"`
+	InstrumentType    string `toml:"instrument_type"`
+	ProviderID        string `toml:"provider_id"`
+	SourceID          string `toml:"source_id"`
+	SourceBindingMode string `toml:"source_binding_mode"`
+	SeriesTag         string `toml:"series_tag"`
 	// TDX routing is static, non-secret source configuration. TDXRoutes are
 	// candidate IPs; the SCF probes them with the selected protocol before
 	// opening the data connection. TDXRouteSnapshotJSON may carry a fresh
@@ -322,7 +323,7 @@ type SCFFetcherSpace struct {
 // explicit timer_function_count.
 func DefaultTimerFunctionCount(spaceID string) int {
 	switch strings.ToLower(strings.TrimSpace(spaceID)) {
-	case "crypto_market":
+	case "crypto":
 		return DefaultCryptoMarketTimerFunctionCount
 	case "stock_cn":
 		return 0
@@ -344,18 +345,34 @@ type Manifest struct {
 	SCFFetcher   SCFFetcher   `toml:"scf_fetcher"`
 	ControlHost  Host         `toml:"control_host"`
 	CompileHost  Host         `toml:"compile_host"`
+	StorageHost  Host         `toml:"storage_host"`
+	ViewHost     Host         `toml:"view_host"`
 	OtherHosts   []Host       `toml:"other_hosts"`
 }
 
 func (m Manifest) Hosts() []Host {
-	hosts := make([]Host, 0, 1+len(m.OtherHosts))
+	hosts := make([]Host, 0, 3+len(m.OtherHosts))
 	hosts = append(hosts, m.ControlHost)
+	if hostConfigured(m.StorageHost) {
+		hosts = append(hosts, m.StorageHost)
+	}
+	if hostConfigured(m.ViewHost) {
+		hosts = append(hosts, m.ViewHost)
+	}
 	hosts = append(hosts, m.OtherHosts...)
 	return hosts
 }
 
 func (m Manifest) HasCompileHost() bool {
 	return hostConfigured(m.CompileHost)
+}
+
+func (m Manifest) HasStorageHost() bool {
+	return hostConfigured(m.StorageHost)
+}
+
+func (m Manifest) HasViewHost() bool {
+	return hostConfigured(m.ViewHost)
 }
 
 type Snapshot struct {
@@ -453,6 +470,12 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	}
 	if out.ControlHost.Port == 0 {
 		out.ControlHost.Port = 22
+	}
+	if out.HasStorageHost() && out.StorageHost.Port == 0 {
+		out.StorageHost.Port = 22
+	}
+	if out.HasViewHost() && out.ViewHost.Port == 0 {
+		out.ViewHost.Port = 22
 	}
 	if !md.IsDefined("eventbus", "port") {
 		out.EventBus.Port = 4222
@@ -572,6 +595,16 @@ func validate(manifest *Manifest) error {
 			return err
 		}
 	}
+	if manifest.HasStorageHost() {
+		if err := validateHost("storage_host", &manifest.StorageHost, names, nil, true); err != nil {
+			return err
+		}
+	}
+	if manifest.HasViewHost() {
+		if err := validateHost("view_host", &manifest.ViewHost, names, nil, true); err != nil {
+			return err
+		}
+	}
 	for i := range manifest.OtherHosts {
 		if err := validateHost(fmt.Sprintf("other_hosts[%d]", i), &manifest.OtherHosts[i], names, addresses, true); err != nil {
 			return err
@@ -607,7 +640,27 @@ func validatePaths(paths *Paths) error {
 	if paths.ControlRoot != paths.DeployRoot && !strings.HasPrefix(paths.ControlRoot, base) {
 		return fmt.Errorf("config_invalid: paths.control_root must stay under paths.deploy_root")
 	}
+	if paths.StorageRoot == paths.DeployRoot || pathsOverlap(paths.StorageRoot, paths.ControlRoot) {
+		return fmt.Errorf("config_invalid: paths.storage_root must not overlap deploy_root or control_root")
+	}
 	return nil
+}
+
+func pathsOverlap(left, right string) bool {
+	return pathContains(left, right) || pathContains(right, left)
+}
+
+func pathContains(parent, child string) bool {
+	parent = filepath.Clean(strings.TrimSpace(parent))
+	child = filepath.Clean(strings.TrimSpace(child))
+	if parent == "" || child == "" {
+		return false
+	}
+	relative, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func validateStorageView(cfg *StorageView) error {
@@ -835,15 +888,31 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		cfg.Entrypoint = cfg.SpaceID
 	}
 	if strings.EqualFold(cfg.Entrypoint, "market_data") {
-		for field, value := range map[string]string{
+		cfg.SourceBindingMode = strings.ToLower(strings.TrimSpace(cfg.SourceBindingMode))
+		if cfg.SourceBindingMode != "" && cfg.SourceBindingMode != "deterministic" {
+			return fmt.Errorf("config_invalid: %s.source_binding_mode must be deterministic", path)
+		}
+		deterministicStockSources := strings.EqualFold(cfg.SpaceID, "stock_cn") && cfg.SourceBindingMode == "deterministic"
+		requiredFields := map[string]string{
 			"market_id":       cfg.MarketID,
 			"instrument_type": cfg.InstrumentType,
-			"provider_id":     cfg.ProviderID,
-			"source_id":       cfg.SourceID,
-		} {
+		}
+		for field, value := range requiredFields {
 			if strings.TrimSpace(value) == "" {
 				return fmt.Errorf("config_invalid: %s.%s is required for market_data entrypoint", path, field)
 			}
+		}
+		if !deterministicStockSources {
+			for field, value := range map[string]string{
+				"provider_id": cfg.ProviderID,
+				"source_id":   cfg.SourceID,
+			} {
+				if strings.TrimSpace(value) == "" {
+					return fmt.Errorf("config_invalid: %s.%s is required for market_data entrypoint", path, field)
+				}
+			}
+		} else if strings.TrimSpace(cfg.ProviderID) != "" || strings.TrimSpace(cfg.SourceID) != "" {
+			return fmt.Errorf("config_invalid: %s.provider_id/source_id must be omitted for deterministic stock sources", path)
 		}
 		if strings.EqualFold(strings.TrimSpace(cfg.ProviderID), "tdx") {
 			cfg.TDXHost = strings.TrimSpace(cfg.TDXHost)

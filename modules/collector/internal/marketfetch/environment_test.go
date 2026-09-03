@@ -28,6 +28,28 @@ func TestBuildManagedEnvironmentCanonicalizesDNS(t *testing.T) {
 	require.Equal(t, "cn-equity", env["MOOX_MARKET_FETCH_SERIES_TAG"])
 }
 
+func TestTimerRequestFromEnvCarriesBoundSourceIDToEveryItem(t *testing.T) {
+	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "tencent")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stock_cn_http")
+	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
+	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", StockCNDatasetID)
+	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
+	t.Setenv("MOOX_SPACE_ID", StockCNSpaceID)
+	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "600000.XSHG|000001.XSHE")
+	t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", "")
+	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "1")
+	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "0")
+
+	request, _, err := TimerRequestFromEnv("request-1", "function-1", time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.Equal(t, "stock_cn_http", request.SourceID)
+	require.Len(t, request.Items, 2)
+	for _, item := range request.Items {
+		require.Equal(t, "tencent", item.Provider)
+		require.Equal(t, "stock_cn_http", item.SourceID)
+	}
+}
+
 func TestManagedDNSHashIgnoresLatencyOrderedIPChanges(t *testing.T) {
 	resolvedAt := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
 	first := map[string]sources.DNSResolution{

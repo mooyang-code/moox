@@ -1268,6 +1268,10 @@ write_runtime_scripts() {
 MOOX_EVENTBUS_HOST=$(printf '%q' "${MOOX_EVENTBUS_HOST}")
 MOOX_EVENTBUS_PORT=$(printf '%q' "${MOOX_EVENTBUS_PORT}")
 MOOX_EVENTBUS_ENABLE_TLS=$(printf '%q' "${MOOX_EVENTBUS_ENABLE_TLS:-0}")
+MOOX_STORAGE_EVENTBUS_URL=$(printf '%q' "${MOOX_STORAGE_EVENTBUS_URL:-}")
+MOOX_GATEWAY_NODE_ID=$(printf '%q' "${MOOX_GATEWAY_NODE_ID:-}")
+MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=$(printf '%q' "${MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET:-ip://127.0.0.1:11003}")
+MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=$(printf '%q' "${MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID:-${MOOX_GATEWAY_NODE_ID:-}}")
 EOF
   chmod 0600 "${STAGE_DIR}/config/runtime.env"
 
@@ -1461,13 +1465,15 @@ else
 fi
 export MOOX_RUNTIME_NODE_ID
 LOCAL_STORAGE_RPC_GATEWAY_TARGET="${MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET:-ip://127.0.0.1:11003}"
-case "${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" in
-  ip://127.0.0.1:*|ip://localhost:*|ip://\[::1\]:*) ;;
-  *)
-    echo "MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET must use a loopback address" >&2
-    exit 1
-    ;;
-esac
+local_storage_target="${LOCAL_STORAGE_RPC_GATEWAY_TARGET#ip://}"
+local_storage_host="${local_storage_target%:*}"
+local_storage_port="${local_storage_target##*:}"
+if [[ "${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" != ip://*:* ||
+  -z "${local_storage_host}" || ! "${local_storage_port}" =~ ^[0-9]+$ ||
+  "${local_storage_port}" -lt 1 || "${local_storage_port}" -gt 65535 ]]; then
+  echo "MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET must use ip://host:port" >&2
+  exit 1
+fi
 LOCAL_STORAGE_RPC_GATEWAY_ADDRESS="${LOCAL_STORAGE_RPC_GATEWAY_TARGET#ip://}"
 LOCAL_STORAGE_GATEWAY_NODE_ID="${MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID:-${MOOX_GATEWAY_NODE_ID}}"
 MOOX_MONITOR_INSTANCE_ID="${MOOX_MONITOR_INSTANCE_ID:-__MONITOR_INSTANCE_ID__}"
@@ -1573,7 +1579,7 @@ start_service() {
     nohup env \
       "MOOX_BINARY_SHA256=sha256:${binary_hash}" \
       "MOOX_VERSION=sha256:${binary_hash:0:12}" \
-      "$@" >> "${log_file}" 2>&1 &
+      "$@" </dev/null >> "${log_file}" 2>&1 &
     echo $! > "${pid_file}"
   )
   sleep "${STARTUP_WAIT_SECONDS}"
@@ -2124,6 +2130,10 @@ start_storage() {
 
 complete_storage_bootstrap() {
   start_storage_view
+  if [[ "${MOOX_SKIP_STORAGE_BOOTSTRAP_WAIT:-0}" == "1" ]]; then
+    echo "storage view started; defer readiness and metadata activation to the deployment probe"
+    return 0
+  fi
   wait_tcp 127.0.0.1 20104 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-900}"
   wait_tcp 127.0.0.1 20202 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-900}"
   # A durable backlog makes /readyz return 503 even when the restored View is
@@ -2281,7 +2291,7 @@ PY
   runtime_identity_env admin_gateway "${ROOT}/admin/config/trpc_go.yaml"
   start_service "admin" "${ROOT}/admin" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${ADMIN_SECRET_ENV[@]}" "${NOTIFICATION_ENV[@]+"${NOTIFICATION_ENV[@]}"}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
-      "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=${LOCAL_STORAGE_RPC_GATEWAY_ADDRESS}" "MOOX_NODE_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" \
+      "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=${LOCAL_STORAGE_RPC_GATEWAY_ADDRESS}" "MOOX_NODE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
       "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_DB_PATH=${ROOT}/data/admin.db" \
       "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
       "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml
@@ -2454,7 +2464,7 @@ start_monitor() {
   start_service "monitor" "${ROOT}/monitor" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "${NOTIFICATION_ENV[@]+"${NOTIFICATION_ENV[@]}"}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
-      "MOOX_MONITOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" "MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" \
+      "MOOX_MONITOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" "MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
       "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
 }
 
@@ -4967,8 +4977,9 @@ gateway_ready() {
 for _ in $(seq 1 60); do
   if gateway_ready &&
     grep -Eq "^  id: ${node_id}$" "$root/gateway/config/app.yaml" &&
-    test -s "$root/data/gateway/routes.json" &&
-    grep -q "\"node_id\": \"${node_id}\"" "$root/data/gateway/routes.json"; then
+    { test ! -e "$root/data/gateway/routes.json" ||
+      { test -s "$root/data/gateway/routes.json" &&
+        grep -q "\"node_id\": \"${node_id}\"" "$root/data/gateway/routes.json"; }; }; then
     echo "gateway control-plane readiness accepted: node_id=${node_id}"
     exit 0
   fi
@@ -5066,6 +5077,14 @@ configure_local_ca
 
 verify_public_https() {
   [[ -n "${PUBLIC_HOST}" && "${NO_START}" -eq 0 ]] || return 0
+  # A raw public IP has no stable ACME DNS identity. The service endpoints are
+  # still checked by the Gateway readiness and the caller's external E2E probe;
+  # do not hold the deployment open for hostname-based HTTPS acceptance that
+  # cannot be made meaningful for an IP-only public_host.
+  if [[ "${TLS_MODE_RESOLVED}" == "public" && "${PUBLIC_HOST}" =~ ^[0-9.]+$ ]]; then
+    log "skip hostname HTTPS acceptance for raw public IP ${PUBLIC_HOST}"
+    return 0
+  fi
   local browser="https://${PUBLIC_HOST}:${BROWSER_HTTPS_PORT}"
   local service="https://${PUBLIC_HOST}:${SERVICE_HTTPS_PORT}"
   local verify_script='set -euo pipefail

@@ -20,6 +20,7 @@ func (c pipelineClock) Now() time.Time { return c.now }
 
 type pipelineProvider struct {
 	id        string
+	sourceID  string
 	rows      []marketdata.NormalizedKline
 	err       error
 	delay     time.Duration
@@ -61,7 +62,7 @@ func TestStockCNShouldCollectMinuteHonorsSettleDelay(t *testing.T) {
 }
 
 func (p pipelineProvider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: p.id, DisplayName: p.id, Hosts: []string{p.id + ".test"}}
+	return marketdata.ProviderDescriptor{ID: p.id, SourceID: p.sourceID, DisplayName: p.id, Hosts: []string{p.id + ".test"}}
 }
 
 func (p pipelineProvider) KlineSpec() marketdata.KlineSpec {
@@ -170,6 +171,77 @@ func TestKlinePipelineRejectsRealtimeBarsInsideSettleWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "failed", payload.GetStatus())
 	require.Empty(t, storage.rows)
+}
+
+func TestKlinePipelineDoesNotFallbackAcrossBoundSources(t *testing.T) {
+	now := time.Date(2026, 8, 28, 7, 5, 0, 0, time.UTC)
+	bar := marketdata.NormalizedKline{
+		SubjectID: "600000.XSHG", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m",
+		BarStart: now.Add(-6 * time.Minute), BarEnd: now.Add(-5 * time.Minute),
+		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050,
+		ProviderTimestamp: now.Add(-5 * time.Minute), FetchedAt: now, RequestID: "bound-source",
+	}
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", sourceID: "sina_http", err: marketdata.ErrProtocol}))
+	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", sourceID: "tencent_http", rows: []marketdata.NormalizedKline{bar}}))
+	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, nil)
+	require.NoError(t, err)
+	storage := &pipelineStorage{}
+	pipeline := &KlinePipeline{
+		Router: router, Storage: storage, CandidateChain: []string{"sina"},
+		SourceID: "sina_http", MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID,
+		DatasetID: StockCNDatasetID, Now: func() time.Time { return now },
+	}
+	payload, err := pipeline.Execute(context.Background(), Request{
+		BatchID: "bound-source", BatchKind: domain.BatchKindRealtime,
+		SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m",
+		Provider: "sina", SourceID: "sina_http", MarketType: "equity", RequestID: "bound-source",
+		Items: []domain.CollectionItem{{
+			SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", SourceID: "sina_http",
+			MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: 1,
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "failed", payload.GetStatus())
+	require.Empty(t, storage.rows)
+}
+
+func TestKlinePipelinePersistsBoundProviderAndSourceIdentity(t *testing.T) {
+	now := time.Date(2026, 8, 28, 7, 5, 0, 0, time.UTC)
+	bar := marketdata.NormalizedKline{
+		SubjectID: "600000.XSHG", ProviderID: "sina", SourceID: "stock_cn_minute_http",
+		ProviderSymbol: "sh600000", Frequency: "1m",
+		BarStart: now.Add(-6 * time.Minute), BarEnd: now.Add(-5 * time.Minute),
+		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050,
+		ProviderTimestamp: now.Add(-5 * time.Minute), FetchedAt: now, RequestID: "source-row",
+	}
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", sourceID: "stock_cn_minute_http", rows: []marketdata.NormalizedKline{bar}}))
+	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, nil)
+	require.NoError(t, err)
+	storage := &pipelineStorage{}
+	pipeline := &KlinePipeline{
+		Router: router, Storage: storage, CandidateChain: []string{"sina"},
+		SourceID: "stock_cn_minute_http", MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID,
+		DatasetID: StockCNDatasetID, Now: func() time.Time { return now },
+	}
+	_, err = pipeline.Execute(context.Background(), Request{
+		BatchID: "source-row", BatchKind: domain.BatchKindRealtime,
+		SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m",
+		Provider: "sina", SourceID: "stock_cn_minute_http", MarketType: "equity", RequestID: "source-row",
+		Items: []domain.CollectionItem{{
+			SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", SourceID: "stock_cn_minute_http",
+			MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: 1,
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, storage.rows, 1)
+	fields := make(map[string]*storagepb.TypedValue)
+	for _, field := range storage.rows[0].GetFields() {
+		fields[field.GetFieldId()] = field.GetValue()
+	}
+	require.Equal(t, "sina", fields["provider_id"].GetStringValue())
+	require.Equal(t, "stock_cn_minute_http", fields["source_id"].GetStringValue())
 }
 
 func TestKlinePipelineRejectsRollingHistoryWithoutProvenCoverage(t *testing.T) {

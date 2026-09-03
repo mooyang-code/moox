@@ -388,7 +388,7 @@ start_caddy() {
     fi
     log 'reloaded managed Caddy'; publish_ca; return
   fi
-  nohup "${BIN}" run --config "${CONFIG}" --adapter caddyfile >>"${DEPLOY_DIR}/run/caddy.log" 2>&1 &
+  nohup "${BIN}" run --config "${CONFIG}" --adapter caddyfile </dev/null >>"${DEPLOY_DIR}/run/caddy.log" 2>&1 &
   local pid=$!; printf '%s\n' "${pid}" >"${PIDFILE}.new"; mv "${PIDFILE}.new" "${PIDFILE}"
   sleep 0.1; kill -0 "${pid}" 2>/dev/null || { rm -f "${PIDFILE}"; fail 'managed Caddy failed to start'; }
   log "started managed Caddy pid=${pid}"

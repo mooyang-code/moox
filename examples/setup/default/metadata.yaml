@@ -60,7 +60,7 @@ data_sources:
 - space_id: stock_cn
   data_source_id: eastmoney
   name: 东方财富
-  kind: http
+  kind: vendor_api
   market: CN
   timezone: Asia/Shanghai
   config_json: '{}'
@@ -68,7 +68,7 @@ data_sources:
 - space_id: stock_cn
   data_source_id: tdx
   name: 通达信
-  kind: tcp
+  kind: vendor_api
   market: CN
   timezone: Asia/Shanghai
   config_json: '{}'
@@ -76,7 +76,23 @@ data_sources:
 - space_id: stock_cn
   data_source_id: tencent
   name: 腾讯行情
-  kind: http
+  kind: vendor_api
+  market: CN
+  timezone: Asia/Shanghai
+  config_json: '{}'
+  status: active
+- space_id: stock_cn
+  data_source_id: sina
+  name: 新浪财经
+  kind: vendor_api
+  market: CN
+  timezone: Asia/Shanghai
+  config_json: '{}'
+  status: active
+- space_id: stock_cn
+  data_source_id: baidu
+  name: 百度行情
+  kind: vendor_api
   market: CN
   timezone: Asia/Shanghai
   config_json: '{}'
@@ -84,7 +100,7 @@ data_sources:
 - space_id: stock_cn
   data_source_id: ths
   name: 同花顺
-  kind: http
+  kind: vendor_api
   market: CN
   timezone: Asia/Shanghai
   config_json: '{}'
@@ -100,7 +116,7 @@ data_sources:
 - space_id: stock_hk
   data_source_id: eastmoney
   name: 东方财富
-  kind: http
+  kind: vendor_api
   market: HK
   timezone: Asia/Hong_Kong
   config_json: '{}'
@@ -116,7 +132,7 @@ data_sources:
 - space_id: stock_us
   data_source_id: eastmoney
   name: 东方财富
-  kind: http
+  kind: vendor_api
   market: US
   timezone: America/New_York
   config_json: '{}'
@@ -667,6 +683,20 @@ fields:
   name: 数据提供方
   value_type: string
   sort_order: 60
+  status: active
+- space_id: stock_cn
+  group_id: trading
+  field_id: provider_id
+  name: 提供方ID
+  value_type: string
+  sort_order: 61
+  status: active
+- space_id: stock_cn
+  group_id: trading
+  field_id: source_id
+  name: 来源ID
+  value_type: string
+  sort_order: 62
   status: active
 - space_id: stock_cn
   group_id: trading
@@ -1353,7 +1383,7 @@ dataset_columns:
   required: true
   status: active
 
-- space_id: crypto_market
+- space_id: crypto
   dataset_id: binance_spot_symbols
   column_name: symbol
   origin_type: field
@@ -1943,13 +1973,6 @@ dataset_columns:
   column_name: source_id
   origin_type: field
   origin_id: source_id
-  value_type: string
-  status: active
-- space_id: stock_cn
-  dataset_id: stock_cn_kline
-  column_name: provider_symbol
-  origin_type: field
-  origin_id: provider_symbol
   value_type: string
   status: active
 - space_id: stock_cn
@@ -2767,6 +2790,51 @@ views:
   engine: duckdb
   keep_duration: 24h
   status: active
+- space_id: stock_cn
+  view_id: stock_cn_kline_view
+  name: A股分钟行情
+  primary_dataset_id: stock_cn_kline
+  dataset_ids:
+  - stock_cn_kline
+  grain_keys:
+  - subject_id
+  - freq
+  - data_time
+  - series_tag
+  filter_json: '{"freq":"1m"}'
+  engine: duckdb
+  keep_duration: 24h
+  status: active
+- space_id: stock_cn
+  view_id: stock_cn_index_kline_view
+  name: 指数行情
+  primary_dataset_id: stock_cn_index_kline
+  dataset_ids:
+  - stock_cn_index_kline
+  grain_keys:
+  - subject_id
+  - freq
+  - data_time
+  - series_tag
+  filter_json: '{"freq":"1d"}'
+  engine: duckdb
+  keep_duration: 8760h
+  status: active
+- space_id: stock_cn
+  view_id: stock_cn_cb_kline_view
+  name: 可转债行情
+  primary_dataset_id: stock_cn_convertible_bond_kline
+  dataset_ids:
+  - stock_cn_convertible_bond_kline
+  grain_keys:
+  - subject_id
+  - freq
+  - data_time
+  - series_tag
+  filter_json: '{"freq":"1m"}'
+  engine: duckdb
+  keep_duration: 24h
+  status: active
 - space_id: stock_hk
   view_id: stock_hk_kline_view
   name: 港股行情视图
@@ -2956,7 +3024,7 @@ view_columns:
   value_type: double
   sort_order: 60
   attributes:
-    display_name: 报价成交量
+    display_name: 报价量
 - space_id: crypto
   view_id: binance_swap_kline_1m_view
   column_name: binance_swap_kline_1m.trade_num
@@ -2966,6 +3034,249 @@ view_columns:
   sort_order: 70
   attributes:
     display_name: 成交笔数
+- space_id: stock_cn
+  view_id: stock_cn_kline_view
+  column_name: stock_cn_kline.open
+  origin_type: dataset_column
+  origin_id: stock_cn_kline.open
+  value_type: double
+  sort_order: 10
+  attributes:
+    display_name: 开盘价
+- space_id: stock_cn
+  view_id: stock_cn_kline_view
+  column_name: stock_cn_kline.high
+  origin_type: dataset_column
+  origin_id: stock_cn_kline.high
+  value_type: double
+  sort_order: 20
+  attributes:
+    display_name: 最高价
+- space_id: stock_cn
+  view_id: stock_cn_kline_view
+  column_name: stock_cn_kline.low
+  origin_type: dataset_column
+  origin_id: stock_cn_kline.low
+  value_type: double
+  sort_order: 30
+  attributes:
+    display_name: 最低价
+- space_id: stock_cn
+  view_id: stock_cn_kline_view
+  column_name: stock_cn_kline.close
+  origin_type: dataset_column
+  origin_id: stock_cn_kline.close
+  value_type: double
+  sort_order: 40
+  attributes:
+    display_name: 收盘价
+- space_id: stock_cn
+  view_id: stock_cn_kline_view
+  column_name: stock_cn_kline.volume
+  origin_type: dataset_column
+  origin_id: stock_cn_kline.volume
+  value_type: double
+  sort_order: 50
+  attributes:
+    display_name: 成交量
+- space_id: stock_cn
+  view_id: stock_cn_kline_view
+  column_name: stock_cn_kline.amount
+  origin_type: dataset_column
+  origin_id: stock_cn_kline.amount
+  value_type: double
+  sort_order: 60
+  attributes:
+    display_name: 成交额
+- space_id: stock_cn
+  view_id: stock_cn_kline_view
+  column_name: stock_cn_kline.provider_id
+  origin_type: dataset_column
+  origin_id: stock_cn_kline.provider_id
+  value_type: string
+  sort_order: 70
+  attributes:
+    display_name: 提供方
+- space_id: stock_cn
+  view_id: stock_cn_kline_view
+  column_name: stock_cn_kline.source_id
+  origin_type: dataset_column
+  origin_id: stock_cn_kline.source_id
+  value_type: string
+  sort_order: 80
+  attributes:
+    display_name: 来源通道
+- space_id: stock_cn
+  view_id: stock_cn_kline_view
+  column_name: stock_cn_kline.provider_symbol
+  origin_type: dataset_column
+  origin_id: stock_cn_kline.provider_symbol
+  value_type: string
+  sort_order: 90
+  attributes:
+    display_name: 来源标的
+- space_id: stock_cn
+  view_id: stock_cn_index_kline_view
+  column_name: stock_cn_index_kline.open
+  origin_type: dataset_column
+  origin_id: stock_cn_index_kline.open
+  value_type: double
+  sort_order: 10
+  attributes:
+    display_name: 开盘价
+- space_id: stock_cn
+  view_id: stock_cn_index_kline_view
+  column_name: stock_cn_index_kline.high
+  origin_type: dataset_column
+  origin_id: stock_cn_index_kline.high
+  value_type: double
+  sort_order: 20
+  attributes:
+    display_name: 最高价
+- space_id: stock_cn
+  view_id: stock_cn_index_kline_view
+  column_name: stock_cn_index_kline.low
+  origin_type: dataset_column
+  origin_id: stock_cn_index_kline.low
+  value_type: double
+  sort_order: 30
+  attributes:
+    display_name: 最低价
+- space_id: stock_cn
+  view_id: stock_cn_index_kline_view
+  column_name: stock_cn_index_kline.close
+  origin_type: dataset_column
+  origin_id: stock_cn_index_kline.close
+  value_type: double
+  sort_order: 40
+  attributes:
+    display_name: 收盘价
+- space_id: stock_cn
+  view_id: stock_cn_index_kline_view
+  column_name: stock_cn_index_kline.volume
+  origin_type: dataset_column
+  origin_id: stock_cn_index_kline.volume
+  value_type: double
+  sort_order: 50
+  attributes:
+    display_name: 成交量
+- space_id: stock_cn
+  view_id: stock_cn_index_kline_view
+  column_name: stock_cn_index_kline.amount
+  origin_type: dataset_column
+  origin_id: stock_cn_index_kline.amount
+  value_type: double
+  sort_order: 60
+  attributes:
+    display_name: 成交额
+- space_id: stock_cn
+  view_id: stock_cn_index_kline_view
+  column_name: stock_cn_index_kline.provider_id
+  origin_type: dataset_column
+  origin_id: stock_cn_index_kline.provider_id
+  value_type: string
+  sort_order: 70
+  attributes:
+    display_name: 提供方
+- space_id: stock_cn
+  view_id: stock_cn_index_kline_view
+  column_name: stock_cn_index_kline.source_id
+  origin_type: dataset_column
+  origin_id: stock_cn_index_kline.source_id
+  value_type: string
+  sort_order: 80
+  attributes:
+    display_name: 来源通道
+- space_id: stock_cn
+  view_id: stock_cn_index_kline_view
+  column_name: stock_cn_index_kline.provider_symbol
+  origin_type: dataset_column
+  origin_id: stock_cn_index_kline.provider_symbol
+  value_type: string
+  sort_order: 90
+  attributes:
+    display_name: 来源标的
+- space_id: stock_cn
+  view_id: stock_cn_cb_kline_view
+  column_name: stock_cn_convertible_bond_kline.open
+  origin_type: dataset_column
+  origin_id: stock_cn_convertible_bond_kline.open
+  value_type: double
+  sort_order: 10
+  attributes:
+    display_name: 开盘价
+- space_id: stock_cn
+  view_id: stock_cn_cb_kline_view
+  column_name: stock_cn_convertible_bond_kline.high
+  origin_type: dataset_column
+  origin_id: stock_cn_convertible_bond_kline.high
+  value_type: double
+  sort_order: 20
+  attributes:
+    display_name: 最高价
+- space_id: stock_cn
+  view_id: stock_cn_cb_kline_view
+  column_name: stock_cn_convertible_bond_kline.low
+  origin_type: dataset_column
+  origin_id: stock_cn_convertible_bond_kline.low
+  value_type: double
+  sort_order: 30
+  attributes:
+    display_name: 最低价
+- space_id: stock_cn
+  view_id: stock_cn_cb_kline_view
+  column_name: stock_cn_convertible_bond_kline.close
+  origin_type: dataset_column
+  origin_id: stock_cn_convertible_bond_kline.close
+  value_type: double
+  sort_order: 40
+  attributes:
+    display_name: 收盘价
+- space_id: stock_cn
+  view_id: stock_cn_cb_kline_view
+  column_name: stock_cn_convertible_bond_kline.volume
+  origin_type: dataset_column
+  origin_id: stock_cn_convertible_bond_kline.volume
+  value_type: double
+  sort_order: 50
+  attributes:
+    display_name: 成交量
+- space_id: stock_cn
+  view_id: stock_cn_cb_kline_view
+  column_name: stock_cn_convertible_bond_kline.amount
+  origin_type: dataset_column
+  origin_id: stock_cn_convertible_bond_kline.amount
+  value_type: double
+  sort_order: 60
+  attributes:
+    display_name: 成交额
+- space_id: stock_cn
+  view_id: stock_cn_cb_kline_view
+  column_name: stock_cn_convertible_bond_kline.provider_id
+  origin_type: dataset_column
+  origin_id: stock_cn_convertible_bond_kline.provider_id
+  value_type: string
+  sort_order: 70
+  attributes:
+    display_name: 提供方
+- space_id: stock_cn
+  view_id: stock_cn_cb_kline_view
+  column_name: stock_cn_convertible_bond_kline.source_id
+  origin_type: dataset_column
+  origin_id: stock_cn_convertible_bond_kline.source_id
+  value_type: string
+  sort_order: 80
+  attributes:
+    display_name: 来源通道
+- space_id: stock_cn
+  view_id: stock_cn_cb_kline_view
+  column_name: stock_cn_convertible_bond_kline.provider_symbol
+  origin_type: dataset_column
+  origin_id: stock_cn_convertible_bond_kline.provider_symbol
+  value_type: string
+  sort_order: 90
+  attributes:
+    display_name: 来源标的
 - space_id: stock_hk
   view_id: stock_hk_kline_view
   column_name: stock_hk_kline.open
@@ -3127,7 +3438,7 @@ view_columns:
   value_type: double
   sort_order: 60
   attributes:
-    display_name: 报价成交量
+    display_name: 报价量
 - space_id: crypto
   view_id: spot_kline_1h_view
   column_name: spot_kline_1h.open
@@ -3181,7 +3492,7 @@ view_columns:
   value_type: double
   sort_order: 60
   attributes:
-    display_name: 报价成交量
+    display_name: 报价量
 - space_id: crypto
   view_id: perpetual_kline_1h_view
   column_name: perpetual_kline_1h.open
@@ -3235,7 +3546,7 @@ view_columns:
   value_type: double
   sort_order: 60
   attributes:
-    display_name: 报价成交量
+    display_name: 报价量
 - space_id: crypto
   view_id: perpetual_kline_1h_view
   column_name: perpetual_kline_1h.funding_rate

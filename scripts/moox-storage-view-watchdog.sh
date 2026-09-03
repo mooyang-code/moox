@@ -2,6 +2,11 @@
 set -euo pipefail
 
 ROOT="${MOOX_STORAGE_ROOT:-/data/moox/storage}"
+if [[ -r "${ROOT}/config/runtime.env" ]]; then
+  set -a
+  source "${ROOT}/config/runtime.env"
+  set +a
+fi
 PID_FILE="${ROOT}/run/storage-view.pid"
 BINARY="${ROOT}/bin/moox-storage-view"
 LOCK_FILE="${ROOT}/run/storage-view-watchdog.lock"

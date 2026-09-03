@@ -36,7 +36,7 @@ grep -q ' main$' "${listing_path}"
 stock_package_path="${TMP_ROOT}/collector-stock-cn-scf.zip"
 (
   cd "${TMP_ROOT}"
-  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="stock_cn" SCF_ENTRYPOINT="stock_cn" MOOX_STORAGE_PRIMARY_AUTH_SECRET="test-storage-secret" VERSION="contract-test" OUT_PATH="collector-stock-cn-scf.zip" \
+  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="stock_cn" SCF_ENTRYPOINT="market_data" MOOX_STORAGE_PRIMARY_AUTH_SECRET="test-storage-secret" VERSION="contract-test" OUT_PATH="collector-stock-cn-scf.zip" \
     bash "${ROOT}/scripts/build-collector-scf-package.sh"
 )
 stock_listing_path="${TMP_ROOT}/stock-listing.txt"

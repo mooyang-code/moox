@@ -71,7 +71,7 @@ require_text modules/storage/proto/metadata.proto 'rpc RegisterDataNode' 'deploy
 require_text modules/storage/proto/metadata.proto 'rpc CheckDatasetActivation' 'read-only activation check RPC'
 require_text modules/storage/proto/metadata.proto 'rpc ActivateDataset' 'explicit activation RPC'
 require_text modules/storage/proto/data_node.proto 'service DataNodeRuntime {' 'DataNode runtime service'
-require_text modules/storage/schema/metadata.sql "VALUES ('schema_version', '6')" 'Schema v6'
+require_text modules/storage/schema/metadata.sql "VALUES ('schema_version', '10')" 'Schema v10'
 require_text examples/setup/default/metadata.yaml 'data_source_id: crypto' 'shared crypto logical DataSource binding'
 require_text examples/setup/default/metadata.yaml 'dataset_id: spot_kline_1h' 'shared crypto spot Dataset'
 require_text examples/setup/default/metadata.yaml 'dataset_id: perpetual_kline_1h' 'shared crypto perpetual Dataset'

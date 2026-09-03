@@ -11,6 +11,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
+	"google.golang.org/protobuf/proto"
 )
 
 const datasetSubjectPageSize = 1000
@@ -55,7 +56,7 @@ func NewBatchStorageWithWriteSource(accessTarget, instType, writeSource string) 
 		return nil, err
 	}
 	target := normalizeStorageTarget(accessTarget, "11003")
-	options := gatewayauth.NewTRPCClientOptions(target, strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE")), gatewayauth.CredentialsFromEnv())
+	options := gatewayauth.NewTRPCClientOptions(target, collectorStorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
 	return &storageWriter{
 		access: storagepb.NewPrimaryStoreClientProxy(options...), metadata: storagepb.NewMetadataClientProxy(options...),
 		authInfo: storageAuthInfo(binding), writeSource: strings.TrimSpace(writeSource),
@@ -68,7 +69,7 @@ func NewResampleMetadataClient(accessTarget, instType string) (*ResampleMetadata
 		return nil, err
 	}
 	target := normalizeStorageTarget(accessTarget, "11003")
-	options := gatewayauth.NewTRPCClientOptions(target, strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE")), gatewayauth.CredentialsFromEnv())
+	options := gatewayauth.NewTRPCClientOptions(target, collectorStorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
 	return &ResampleMetadataClient{Client: storagepb.NewMetadataClientProxy(options...), Auth: storageAuthInfo(binding)}, nil
 }
 
@@ -78,11 +79,18 @@ func NewResampleStorage(accessTarget, instType, writeSource string) (ResampleSto
 		return nil, err
 	}
 	target := normalizeStorageTarget(accessTarget, "11003")
-	options := gatewayauth.NewTRPCClientOptions(target, strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE")), gatewayauth.CredentialsFromEnv())
+	options := gatewayauth.NewTRPCClientOptions(target, collectorStorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
 	return &storageWriter{
 		access: storagepb.NewPrimaryStoreClientProxy(options...), metadata: storagepb.NewMetadataClientProxy(options...),
 		authInfo: storageAuthInfo(binding), writeSource: strings.TrimSpace(writeSource),
 	}, nil
+}
+
+func collectorStorageGatewayNodeID() string {
+	if nodeID := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID")); nodeID != "" {
+		return nodeID
+	}
+	return strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
 }
 
 func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert) error {
@@ -130,12 +138,12 @@ func (w *storageWriter) ReadTimeSeriesRows(ctx context.Context, req *storagepb.R
 	if req == nil {
 		return nil, fmt.Errorf("read time-series rows: request is required")
 	}
-	copyReq := *req
+	copyReq := proto.Clone(req).(*storagepb.ReadTimeSeriesRowsReq)
 	copyReq.AuthInfo = w.authInfo
 	var response *storagepb.ReadTimeSeriesRowsRsp
 	err := retryStorage(ctx, func() error {
 		var err error
-		response, err = w.access.ReadTimeSeriesRows(ctx, &copyReq)
+		response, err = w.access.ReadTimeSeriesRows(ctx, copyReq)
 		if err != nil {
 			return fmt.Errorf("read time-series rows: %w", err)
 		}
@@ -198,21 +206,21 @@ func (w *storageWriter) WaitViewSyncPoint(ctx context.Context, req *storagepb.Wa
 	if req == nil {
 		return nil, fmt.Errorf("wait View sync point: request is required")
 	}
-	copyReq := *req
+	copyReq := proto.Clone(req).(*storagepb.WaitViewSyncPointReq)
 	if copyReq.AuthInfo == nil {
 		copyReq.AuthInfo = w.authInfo
 	}
-	return w.access.WaitViewSyncPoint(ctx, &copyReq)
+	return w.access.WaitViewSyncPoint(ctx, copyReq)
 }
 
 func (w *storageWriter) RegisterDataSubject(ctx context.Context, req *storagepb.RegisterDataSubjectReq) error {
 	if req == nil {
 		return fmt.Errorf("register data subject: request is required")
 	}
-	copyReq := *req
+	copyReq := proto.Clone(req).(*storagepb.RegisterDataSubjectReq)
 	copyReq.AuthInfo = w.authInfo
 	return retryStorage(ctx, func() error {
-		response, err := w.metadata.RegisterDataSubject(ctx, &copyReq)
+		response, err := w.metadata.RegisterDataSubject(ctx, copyReq)
 		if err != nil {
 			return fmt.Errorf("register data subject: %w", err)
 		}

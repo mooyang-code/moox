@@ -118,9 +118,9 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	dialCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
-	conn, err := c.dial(dialCtx, "tcp", fmt.Sprintf("%s:%d", c.host, c.port))
+	conn, err := c.dial(dialCtx, "tcp", net.JoinHostPort(c.host, fmt.Sprint(c.port)))
 	if err != nil {
-		return fmt.Errorf("tdx: connect %s:%d: %w", c.host, c.port, err)
+		return fmt.Errorf("tdx: connect %s: %w", net.JoinHostPort(c.host, fmt.Sprint(c.port)), err)
 	}
 	c.conn = conn
 	if c.variant == ProtocolNormal {
@@ -225,7 +225,7 @@ func writeFull(writer io.Writer, data []byte) error {
 }
 
 func (c *Client) Variant() ProtocolVariant { return c.variant }
-func (c *Client) Address() string          { return fmt.Sprintf("%s:%d", c.host, c.port) }
+func (c *Client) Address() string          { return net.JoinHostPort(c.host, fmt.Sprint(c.port)) }
 
 type NormalClient struct{ *Client }
 

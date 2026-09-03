@@ -64,6 +64,7 @@ func toPBInstance(instance domain.TaskInstance) *pb.TaskInstance {
 		DatasetId:      instance.DatasetID,
 		SubjectId:      instance.SubjectID,
 		Frequency:      instance.Frequency,
+		SourceId:       instance.SourceID,
 		FunctionName:   instance.FunctionName,
 		TaskParams:     structFromJSONString(instance.TaskParams),
 		LastExecNode:   instance.LastExecNode,

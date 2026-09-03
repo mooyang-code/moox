@@ -29,24 +29,27 @@ type Request struct {
 	BatchID string `json:"batch_id"`
 	// SyncPointID is the stable logical catchup fence identity. Retry batches
 	// get a new BatchID for outbox/write idempotency, but keep the same fence.
-	SyncPointID  string                           `json:"sync_point_id,omitempty"`
-	ScheduleID   string                           `json:"schedule_id,omitempty"`
-	BatchKind    domain.BatchKind                 `json:"batch_kind"`
-	SpaceID      string                           `json:"space_id"`
-	DatasetID    string                           `json:"dataset_id,omitempty"`
-	Frequency    string                           `json:"frequency,omitempty"`
-	Provider     string                           `json:"provider"`
-	MarketType   string                           `json:"market_type"`
-	Region       string                           `json:"region"`
-	NodeID       string                           `json:"node_id"`
-	FunctionName string                           `json:"function_name,omitempty"`
-	RequestID    string                           `json:"request_id,omitempty"`
-	ShardIndex   int                              `json:"shard_index,omitempty"`
-	GroupID      int                              `json:"group_id,omitempty"`
-	GroupCount   int                              `json:"group_count,omitempty"`
-	Concurrency  int                              `json:"concurrency,omitempty"`
-	DNSRoutes    map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
-	Items        []domain.CollectionItem          `json:"items"`
+	SyncPointID    string                           `json:"sync_point_id,omitempty"`
+	ScheduleID     string                           `json:"schedule_id,omitempty"`
+	BatchKind      domain.BatchKind                 `json:"batch_kind"`
+	SpaceID        string                           `json:"space_id"`
+	MarketID       string                           `json:"market_id,omitempty"`
+	InstrumentType string                           `json:"instrument_type,omitempty"`
+	DatasetID      string                           `json:"dataset_id,omitempty"`
+	Frequency      string                           `json:"frequency,omitempty"`
+	Provider       string                           `json:"provider"`
+	SourceID       string                           `json:"source_id,omitempty"`
+	MarketType     string                           `json:"market_type"`
+	Region         string                           `json:"region"`
+	NodeID         string                           `json:"node_id"`
+	FunctionName   string                           `json:"function_name,omitempty"`
+	RequestID      string                           `json:"request_id,omitempty"`
+	ShardIndex     int                              `json:"shard_index,omitempty"`
+	GroupID        int                              `json:"group_id,omitempty"`
+	GroupCount     int                              `json:"group_count,omitempty"`
+	Concurrency    int                              `json:"concurrency,omitempty"`
+	DNSRoutes      map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
+	Items          []domain.CollectionItem          `json:"items"`
 }
 
 func (r *Request) validate() error {
@@ -81,6 +84,12 @@ func (r *Request) validate() error {
 	for index, item := range r.Items {
 		if r.BatchKind != domain.BatchKindInstrumentSnapshot && (strings.TrimSpace(item.SubjectID) == "" || strings.TrimSpace(item.Symbol) == "") {
 			return fmt.Errorf("items[%d] subject_id and symbol are required", index)
+		}
+		if provider := strings.TrimSpace(r.Provider); provider != "" && strings.TrimSpace(item.Provider) != "" && !strings.EqualFold(provider, strings.TrimSpace(item.Provider)) {
+			return fmt.Errorf("items[%d] source binding provider %q differs from batch provider %q", index, item.Provider, provider)
+		}
+		if sourceID := strings.TrimSpace(r.SourceID); sourceID != "" && strings.TrimSpace(item.SourceID) != "" && !strings.EqualFold(sourceID, strings.TrimSpace(item.SourceID)) {
+			return fmt.Errorf("items[%d] source binding source_id %q differs from batch source_id %q", index, item.SourceID, sourceID)
 		}
 		if strings.TrimSpace(item.DatasetID) != r.DatasetID {
 			return fmt.Errorf("items[%d] dataset_id differs from batch dataset", index)

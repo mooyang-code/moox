@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
@@ -21,6 +20,7 @@ type Config struct {
 	BaseURL                  string
 	KlineEndpoint            string
 	InstrumentBaseURL        string
+	SourceID                 string
 	HTTPClient               *http.Client
 	Now                      func() time.Time
 	InstrumentRequestTimeout time.Duration
@@ -32,14 +32,12 @@ type Provider struct {
 	baseURL             string
 	klineEndpoint       string
 	instrumentBaseURL   string
+	sourceID            string
 	client              *http.Client
 	now                 func() time.Time
 	rateLimit           marketdata.RateLimitPolicy
 	instrumentRateLimit marketdata.RateLimitPolicy
 	maxBars             int
-	instrumentGuardOnce sync.Once
-	instrumentGuard     *marketdata.FeedGuard
-	instrumentGuardErr  error
 }
 
 func New(cfg Config) *Provider {
@@ -51,6 +49,9 @@ func New(cfg Config) *Provider {
 	}
 	if cfg.KlineEndpoint == "" {
 		cfg.KlineEndpoint = "/cn/api/jsonp_v2.php/var%20moox_kline=/CN_MarketDataService.getKLineData"
+	}
+	if strings.TrimSpace(cfg.SourceID) == "" {
+		cfg.SourceID = "stock_cn_minute_http"
 	}
 	if cfg.InstrumentBaseURL == "" {
 		cfg.InstrumentBaseURL = "https://vip.stock.finance.sina.com.cn"
@@ -77,11 +78,11 @@ func New(cfg Config) *Provider {
 	}
 	instrumentRateLimit := cfg.RateLimit
 	instrumentRateLimit.RequestTimeout = cfg.InstrumentRequestTimeout
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, instrumentBaseURL: strings.TrimRight(cfg.InstrumentBaseURL, "/"), client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, instrumentRateLimit: instrumentRateLimit, maxBars: cfg.MaxBarsPerRequest}
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, instrumentBaseURL: strings.TrimRight(cfg.InstrumentBaseURL, "/"), sourceID: strings.ToLower(strings.TrimSpace(cfg.SourceID)), client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, instrumentRateLimit: instrumentRateLimit, maxBars: cfg.MaxBarsPerRequest}
 }
 
-func (*Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "sina", DisplayName: "Sina", Hosts: []string{"quotes.sina.cn", "vip.stock.finance.sina.com.cn"}}
+func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
+	return marketdata.ProviderDescriptor{ID: "sina", SourceID: p.sourceID, DisplayName: "Sina", Hosts: []string{"quotes.sina.cn", "vip.stock.finance.sina.com.cn"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
 }
 
 func (p *Provider) KlineSpec() marketdata.KlineSpec {
@@ -202,6 +203,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		if err != nil {
 			return nil, err
 		}
+		row.SourceID = p.sourceID
 		if !now.Before(row.BarEnd) {
 			rows = append(rows, row)
 		}
@@ -226,12 +228,6 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		fetchedAt = p.now().UTC()
 	}
 	builder := commonsrc.NewInstrumentSnapshotBuilder(p.Descriptor().ID, marketID, fetchedAt)
-	p.instrumentGuardOnce.Do(func() {
-		p.instrumentGuard, p.instrumentGuardErr = marketdata.NewFeedGuard(spec.RateLimit, nil, nil)
-	})
-	if p.instrumentGuardErr != nil {
-		return marketdata.InstrumentSnapshot{}, p.instrumentGuardErr
-	}
 	declaredPages := 0
 	declaredTotal := 0
 	itemsSeen := 0
@@ -248,7 +244,7 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 			"_s_r_a": {"page"},
 		}
 		var body []byte
-		if err := p.instrumentGuard.Do(ctx, func(pageCtx context.Context) error {
+		if err := func(pageCtx context.Context) error {
 			httpReq, requestErr := http.NewRequestWithContext(pageCtx, http.MethodGet, p.instrumentBaseURL+"/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?"+query.Encode(), nil)
 			if requestErr != nil {
 				return requestErr
@@ -270,7 +266,7 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 				return fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, requestErr)
 			}
 			return nil
-		}); err != nil {
+		}(ctx); err != nil {
 			return marketdata.InstrumentSnapshot{}, err
 		}
 		trimmedBody := bytes.TrimSpace(body)
@@ -372,7 +368,7 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		return marketdata.InstrumentSnapshot{}, err
 	}
 	if declaredTotal == 0 {
-		declaredTotal, err = p.fetchInstrumentTotal(ctx, p.instrumentGuard)
+		declaredTotal, err = p.fetchInstrumentTotal(ctx)
 		if err != nil {
 			return marketdata.InstrumentSnapshot{}, err
 		}
@@ -385,10 +381,10 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 
 const maxInstrumentPages = 128
 
-func (p *Provider) fetchInstrumentTotal(ctx context.Context, guard *marketdata.FeedGuard) (int, error) {
+func (p *Provider) fetchInstrumentTotal(ctx context.Context) (int, error) {
 	query := url.Values{"node": {"hs_a"}}
 	var body []byte
-	if err := guard.Do(ctx, func(pageCtx context.Context) error {
+	if err := func(pageCtx context.Context) error {
 		httpReq, err := http.NewRequestWithContext(pageCtx, http.MethodGet, p.instrumentBaseURL+"/quotes_service/api/json_v2.php/Market_Center.getHQNodeStockCount?"+query.Encode(), nil)
 		if err != nil {
 			return err
@@ -411,7 +407,7 @@ func (p *Provider) fetchInstrumentTotal(ctx context.Context, guard *marketdata.F
 			return fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, readErr)
 		}
 		return nil
-	}); err != nil {
+	}(ctx); err != nil {
 		return 0, err
 	}
 	value := strings.Trim(strings.TrimSpace(string(body)), "\"")

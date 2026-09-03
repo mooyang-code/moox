@@ -190,11 +190,11 @@ func TestMetricsExposeLowCardinalityFeedDimensions(t *testing.T) {
 
 func TestMetricsAllowConfiguredCryptoKlineFrequencies(t *testing.T) {
 	for _, route := range []string{"binance_spot_kline_1h", "binance_swap_kline_1w"} {
-		marketID, bounded := boundedMarketRoute("crypto_market", route)
-		require.Equal(t, "crypto_market", marketID)
+		marketID, bounded := boundedMarketRoute("crypto", route)
+		require.Equal(t, "crypto", marketID)
 		require.Equal(t, route, bounded)
 	}
-	_, bounded := boundedMarketRoute("crypto_market", "binance_spot_kline_2m")
+	_, bounded := boundedMarketRoute("crypto", "binance_spot_kline_2m")
 	require.Equal(t, "unknown", bounded)
 }
 

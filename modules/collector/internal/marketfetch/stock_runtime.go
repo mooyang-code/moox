@@ -15,10 +15,19 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/baidu"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoney"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/sina"
+	tdxsource "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tdx"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tencent"
 )
 
 func NewStockKlinePipeline(storage Storage) (*KlinePipeline, error) {
+	providerID := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_PROVIDER")))
+	sourceID := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SOURCE_ID")))
+	if providerID != "" || sourceID != "" {
+		if providerID == "" || sourceID == "" {
+			return nil, fmt.Errorf("stock_cn source-bound runtime requires provider and source_id")
+		}
+		return NewStockKlinePipelineForSource(storage, providerID, sourceID)
+	}
 	route, err := loadStockCNRoute()
 	if err != nil {
 		return nil, err
@@ -56,7 +65,65 @@ func NewStockKlinePipeline(storage Storage) (*KlinePipeline, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &KlinePipeline{Router: router, Storage: storage, CandidateChain: chain, RouteID: route.RouteID, SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID, ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity, DatasetID: StockCNDatasetID, Calendar: calendar, SettleDelay: 5 * time.Second}, nil
+	return &KlinePipeline{Router: router, Storage: storage, CandidateChain: chain, AutoBindSource: true, RouteID: route.RouteID, SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID, ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity, DatasetID: StockCNDatasetID, Calendar: calendar, SettleDelay: 5 * time.Second}, nil
+}
+
+func NewStockKlinePipelineForSource(storage Storage, providerID, sourceID string) (*KlinePipeline, error) {
+	if storage == nil {
+		return nil, fmt.Errorf("stock_cn kline storage is required")
+	}
+	providerID = strings.ToLower(strings.TrimSpace(providerID))
+	sourceID = strings.ToLower(strings.TrimSpace(sourceID))
+	if providerID == "" || sourceID == "" {
+		return nil, fmt.Errorf("stock_cn source-bound runtime requires provider and source_id")
+	}
+	route, err := loadStockCNRoute()
+	if err != nil {
+		return nil, err
+	}
+	var source stockCNSource
+	found := false
+	for _, candidate := range route.KlineSources() {
+		if candidate.Provider == providerID && candidate.SourceID == sourceID {
+			source = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("stock_cn source %s/%s is not an active route source", providerID, sourceID)
+	}
+	providerConfigs, err := loadStockCNProviderRuntime(route)
+	if err != nil {
+		return nil, err
+	}
+	providerConfig, ok := providerConfigs[providerID]
+	if !ok || !providerConfig.KlineEnabled || providerConfig.KlineShadow {
+		return nil, fmt.Errorf("stock_cn source %s/%s is not active in source config", providerID, sourceID)
+	}
+	provider, err := newStockCNProviderForSource(providerID, sourceID, providerConfig)
+	if err != nil {
+		return nil, err
+	}
+	registry := marketdata.NewRegistry()
+	if err := registry.Register(provider); err != nil {
+		return nil, err
+	}
+	router, err := marketdata.NewRouter(registry, 2, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	calendar, err := loadStockCNCalendar()
+	if err != nil {
+		return nil, err
+	}
+	return &KlinePipeline{
+		Router: router, Storage: storage, CandidateChain: []string{source.Provider},
+		RouteID: route.RouteID, SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID,
+		ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity,
+		DatasetID: StockCNDatasetID, SourceID: source.SourceID, Calendar: calendar,
+		SettleDelay: 5 * time.Second,
+	}, nil
 }
 
 // NewCryptoKlinePipeline is the crypto composition root for the same common
@@ -85,7 +152,7 @@ func NewCryptoKlinePipeline(storage Storage, productType marketdata.ProductType)
 		instrumentType = marketdata.InstrumentSwap
 		routeID = "binance_swap_kline_1m"
 	}
-	return &KlinePipeline{Router: router, Storage: storage, CandidateChain: chain, RouteID: routeID, SpaceID: "crypto_market", MarketID: "crypto", ProductType: productType, InstrumentType: instrumentType}, nil
+	return &KlinePipeline{Router: router, Storage: storage, CandidateChain: chain, RouteID: routeID, SpaceID: "crypto", MarketID: "crypto", ProductType: productType, InstrumentType: instrumentType}, nil
 }
 
 func loadStockCNCalendar() (*stockmarket.Calendar, error) {
@@ -158,15 +225,36 @@ func validateStockCNProviderChain(chain []string, providers map[string]stockCNPr
 }
 
 func newStockCNProvider(providerID string, config stockCNProviderRuntime) (marketdata.MarketProvider, error) {
+	sourceID := "stock_cn_http"
+	if strings.EqualFold(strings.TrimSpace(providerID), "sina") {
+		sourceID = "stock_cn_minute_http"
+	}
+	return newStockCNProviderForSource(providerID, sourceID, config)
+}
+
+func newStockCNProviderForSource(providerID, sourceID string, config stockCNProviderRuntime) (marketdata.MarketProvider, error) {
 	switch strings.ToLower(strings.TrimSpace(providerID)) {
 	case "sina":
-		return sina.New(sina.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, InstrumentRequestTimeout: 30 * time.Second, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
+		return sina.New(sina.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, SourceID: sourceID, InstrumentRequestTimeout: 30 * time.Second, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
 	case "tencent":
-		return tencent.New(tencent.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
+		return tencent.New(tencent.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, SourceID: sourceID, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
 	case "eastmoney":
-		return eastmoney.New(eastmoney.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, InstrumentRequestTimeout: 30 * time.Second, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
+		return eastmoney.New(eastmoney.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, SourceID: sourceID, InstrumentRequestTimeout: 30 * time.Second, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
 	case "baidu":
-		return baidu.New(baidu.Config{RateLimit: config.RateLimit}), nil
+		return baidu.New(baidu.Config{SourceID: sourceID, RateLimit: config.RateLimit}), nil
+	case "tdx":
+		host := ""
+		if len(config.Hosts) > 0 {
+			host = config.Hosts[0]
+		}
+		port := config.Port
+		if port <= 0 {
+			port = 7709
+		}
+		return tdxsource.New(tdxsource.Config{
+			Host: host, Port: port, Timeout: config.RateLimit.RequestTimeout,
+			RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest,
+		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported stock_cn provider %q", providerID)
 	}
@@ -229,9 +317,9 @@ func NewCryptoInstrumentPipeline(storage InstrumentStorage, productType marketda
 	}
 	return &InstrumentPipeline{
 		Registry: registry, Storage: storage, CandidateChain: []string{"binance"},
-		SpaceID: "crypto_market", MarketID: "crypto", DatasetID: datasetID, DataSourceID: "binance",
+		SpaceID: "crypto", MarketID: "crypto", DatasetID: datasetID, DataSourceID: "binance",
 		SubjectType: "crypto_pair", SubjectMarket: "CRYPTO", Currency: "USDT", Timezone: "UTC",
-		InstrumentType: instrumentType, RequiredExchanges: []string{"binance"}, MinimumCount: 1, RouteID: instrumentRouteID("crypto_market", instrumentType),
+		InstrumentType: instrumentType, RequiredExchanges: []string{"binance"}, MinimumCount: 1, RouteID: instrumentRouteID("crypto", instrumentType),
 	}, nil
 }
 

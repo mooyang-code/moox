@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,6 +42,7 @@ type stockCNHistoryFile struct {
 
 type stockCNRouteProvider struct {
 	ID         string `yaml:"id"`
+	SourceID   string `yaml:"source_id"`
 	Weight     int    `yaml:"weight"`
 	Kline      string `yaml:"kline"`
 	Instrument string `yaml:"instrument"`
@@ -138,6 +140,36 @@ func (r stockCNRoute) KlineWeights() map[string]int {
 	return weights
 }
 
+type stockCNSource struct {
+	Provider string
+	SourceID string
+	Weight   int
+}
+
+func (r stockCNRoute) KlineSources() []stockCNSource {
+	sources := make([]stockCNSource, 0, len(r.Providers))
+	for _, provider := range r.Providers {
+		if !strings.EqualFold(strings.TrimSpace(provider.Kline), "active") {
+			continue
+		}
+		sourceID := strings.TrimSpace(provider.SourceID)
+		if sourceID == "" {
+			sourceID = strings.TrimSpace(provider.ID) + "_http"
+		}
+		sources = append(sources, stockCNSource{
+			Provider: strings.ToLower(strings.TrimSpace(provider.ID)),
+			SourceID: sourceID,
+			Weight:   provider.Weight,
+		})
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		left := sources[i].Provider + "/" + sources[i].SourceID
+		right := sources[j].Provider + "/" + sources[j].SourceID
+		return left < right
+	})
+	return sources
+}
+
 func (r stockCNRoute) providersFor(feed, wantedState string) []string {
 	providers := make([]string, 0, len(r.Providers))
 	for _, provider := range r.Providers {
@@ -219,6 +251,8 @@ type stockCNProviderRuntime struct {
 	KlineShadow       bool
 	KlineBaseURL      string
 	KlineEndpoint     string
+	Hosts             []string
+	Port              int
 	KlineSpec         stockCNProviderKlineFile
 	RateLimit         marketdata.RateLimitPolicy
 }
@@ -268,11 +302,20 @@ func loadStockCNProviderRuntime(route stockCNRoute) (map[string]stockCNProviderR
 			KlineShadow:       containsStringFold(file.Provider.ShadowFeeds, "kline") || strings.EqualFold(file.Provider.Kline.Mode, "shadow"),
 			KlineBaseURL:      baseURL,
 			KlineEndpoint:     endpoint,
+			Hosts:             append([]string(nil), file.Provider.Hosts...),
+			Port:              providerPort(id),
 			KlineSpec:         file.Provider.Kline,
 			RateLimit:         rateLimit,
 		}
 	}
 	return result, nil
+}
+
+func providerPort(providerID string) int {
+	if strings.EqualFold(strings.TrimSpace(providerID), "tdx") {
+		return 7709
+	}
+	return 443
 }
 
 func splitStockCNEndpoint(raw string) (string, string, error) {

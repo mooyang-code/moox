@@ -11,23 +11,31 @@ stagger:
 providers:
   # Complete instrument snapshots are fetched concurrently and merged by
   # canonical SubjectID. A failed source does not block healthy sources;
-  # the merged set still must pass the complete snapshot gate. The current
-  # complete-list candidates are Sina and EastMoney; Tencent remains Kline-only
-  # until it has a verified full-market InstrumentFetcher, and Baidu stays
-  # outside the candidate chain because its live response is not stable.
+  # the merged set still must pass the complete snapshot gate. EastMoney and
+  # Sina are the active instrument candidates; Tencent/Baidu stay outside
+  # until their live full-market snapshot evidence is accepted.
   - id: sina
+    source_id: stock_cn_minute_http
     weight: 1
     kline: active
     instrument: active
   - id: eastmoney
+    source_id: stock_cn_http
     weight: 1
     kline: active
     instrument: active
   - id: tencent
+    source_id: stock_cn_http
     weight: 1
     kline: active
     instrument: disabled
   - id: baidu
+    source_id: stock_cn_http
+    weight: 1
+    kline: shadow
+    instrument: disabled
+  - id: tdx
+    source_id: normal_7709
     weight: 1
     kline: shadow
     instrument: disabled

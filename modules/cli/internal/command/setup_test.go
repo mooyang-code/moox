@@ -436,6 +436,14 @@ func TestControlDeployOptionsUseManifestEventBusEndpoint(t *testing.T) {
 	require.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", opts.NotificationWebhookURL)
 }
 
+func TestControlDeployOptionsUsesConfiguredStorageGatewayHost(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	snapshot.Manifest.StorageHost = setupconfig.Host{Name: "storage", Address: "146.56.196.204", Port: 22}
+	opts := controlDeployOptions(snapshot, "/repo")
+	require.Equal(t, "ip://146.56.196.204:11003", opts.LocalStorageRPCGatewayTarget)
+	require.Equal(t, "storage", opts.LocalStorageGatewayNodeID)
+}
+
 func TestEventBusFirewallIPResolvesDNSWithoutChangingAdvertisedAddress(t *testing.T) {
 	lookup := func(_ context.Context, network, host string) ([]net.IP, error) {
 		require.Equal(t, "ip4", network)
@@ -469,6 +477,19 @@ func TestSetupControlFirewallRulesIncludePublicTLSAndServicePorts(t *testing.T) 
 		assert.Equal(t, "0.0.0.0/0", rule.CidrBlock)
 		assert.Equal(t, "ACCEPT", rule.Action)
 	}
+}
+
+func TestSetupControlFirewallRulesSkipACMEForInternalTLS(t *testing.T) {
+	rules := setupControlFirewallRulesForTLS(setupdeploy.TLSModeInternal, "203.0.113.8")
+	require.Len(t, rules, 2)
+	require.Equal(t, "9527", rules[0].Ports)
+	require.Equal(t, "11001", rules[1].Ports)
+}
+
+func TestIsPublicFirewallIPRejectsPrivateAndLoopbackAddresses(t *testing.T) {
+	require.True(t, isPublicFirewallIP("203.0.113.8"))
+	require.False(t, isPublicFirewallIP("10.0.0.8"))
+	require.False(t, isPublicFirewallIP("127.0.0.1"))
 }
 
 func TestSetupRuntimeFirewallRulesIncludeEventBusAndServicePorts(t *testing.T) {

@@ -105,10 +105,12 @@ type collectorPublishOptions struct {
 	// immediately before a fleet is published. They must not come from the
 	// operator machine, which may still hold an old CA after a control-plane
 	// certificate rotation.
-	EventBusCredential  *jetstream.CredentialFile
-	EventBusCAPEM       []byte
-	GatewayCAPEM        []byte
-	ServiceGatewayCAPEM []byte
+	EventBusCredential      *jetstream.CredentialFile
+	EventBusCAPEM           []byte
+	GatewayCAPEM            []byte
+	ServiceGatewayCAPEM     []byte
+	RuntimeServiceKeyID     string
+	RuntimeServiceSecretKey string
 }
 
 type collectorSCFTrustMaterial struct {
@@ -117,6 +119,8 @@ type collectorSCFTrustMaterial struct {
 	GatewayCAPEM             []byte
 	ServiceGatewayCAPEM      []byte
 	StoragePrimaryAuthSecret string
+	CLIServiceKey            string
+	CollectorServiceKey      string
 }
 
 type collectorPublishStatusOptions struct {
@@ -384,7 +388,7 @@ func init() {
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 access_key")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
-	collectorFunctionPackageCmd.Flags().StringVar(&collectorPackageFlags.SpaceID, "space-id", "", "space id; selects configs/scf/<space-id>")
+	collectorFunctionPackageCmd.Flags().StringVar(&collectorPackageFlags.SpaceID, "space-id", "", "space id; selects the matching SCF config directory")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.NodeID, "node-id", "", "existing cloud node id / function name")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ZipPath, "zip", "", "existing SCF zip path")
@@ -486,7 +490,7 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 		if spaceID == "" {
 			return nil, fmt.Errorf("--space-id is required when --config is omitted")
 		}
-		configDir = filepath.Join(collectorRoot, "configs", filepath.FromSlash(defaultFlag(opts.PackageConfigDir, filepath.ToSlash(filepath.Join("scf", spaceID)))))
+		configDir = filepath.Join(collectorRoot, "configs", filepath.FromSlash(defaultFlag(opts.PackageConfigDir, defaultCollectorPackageConfigDir(spaceID))))
 	}
 	binaryPath := filepath.Join(os.TempDir(), fmt.Sprintf("moox-collector-scf-%d", time.Now().UnixNano()), "main")
 	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o755); err != nil {
@@ -494,7 +498,7 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 	}
 	defer os.RemoveAll(filepath.Dir(binaryPath))
 
-	entrypoint := defaultFlag(opts.Entrypoint, "crypto_market")
+	entrypoint := defaultFlag(opts.Entrypoint, "market_data")
 	if err := buildCollectorLinuxBinary(ctx, collectorRoot, binaryPath, version, entrypoint); err != nil {
 		return nil, err
 	}
@@ -504,6 +508,14 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 		OutPath:                  outPath,
 		StoragePrimaryAuthSecret: firstNonEmpty(opts.StoragePrimaryAuthSecret, os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")),
 	})
+}
+
+func defaultCollectorPackageConfigDir(spaceID string) string {
+	spaceID = strings.ToLower(strings.TrimSpace(spaceID))
+	if spaceID == "crypto" || spaceID == "crypto_market" {
+		return filepath.ToSlash(filepath.Join("scf", "market_data"))
+	}
+	return filepath.ToSlash(filepath.Join("scf", spaceID))
 }
 
 var newCollectorCLSAPI = func(secretID, secretKey, region string) (tencent.CLSAPI, error) {
@@ -583,13 +595,44 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if fetcherConfig != nil && strings.TrimSpace(opts.ZipPath) != "" {
 		return collectorPublishSummary{}, fmt.Errorf("--zip is not allowed with --file manifest deployments; rebuild the package from control-plane trust material")
 	}
-	if err := validateCollectorPublishAuth(opts); err != nil {
-		return collectorPublishSummary{}, err
+	if fetcherConfig == nil {
+		if err := validateCollectorPublishAuth(opts); err != nil {
+			return collectorPublishSummary{}, err
+		}
 	}
+	serviceGatewayCAFile := ""
+	manifestServiceAuth := false
 	if fetcherConfig != nil {
 		trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
 		if trustErr != nil {
 			return collectorPublishSummary{}, trustErr
+		}
+		if strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
+			opts.ServiceAccessKey = "moox-cli"
+			opts.ServiceSecretKey = trustMaterial.CLIServiceKey
+			manifestServiceAuth = true
+		}
+		if err := validateCollectorPublishAuth(opts); err != nil {
+			return collectorPublishSummary{}, err
+		}
+		if len(trustMaterial.ServiceGatewayCAPEM) > 0 {
+			file, writeErr := os.CreateTemp("", "moox-collector-service-ca-")
+			if writeErr != nil {
+				return collectorPublishSummary{}, fmt.Errorf("create control service CA file: %w", writeErr)
+			}
+			serviceGatewayCAFile = file.Name()
+			if writeErr = file.Chmod(0o600); writeErr == nil {
+				_, writeErr = file.Write(trustMaterial.ServiceGatewayCAPEM)
+			}
+			closeErr := file.Close()
+			if writeErr == nil {
+				writeErr = closeErr
+			}
+			if writeErr != nil {
+				_ = os.Remove(serviceGatewayCAFile)
+				return collectorPublishSummary{}, fmt.Errorf("write control service CA file: %w", writeErr)
+			}
+			defer os.Remove(serviceGatewayCAFile)
 		}
 		// The credential file on the control host is intentionally an internal
 		// publisher credential and commonly contains a loopback NATS URL. SCF
@@ -620,6 +663,8 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		opts.Runtime = defaultFlag(fetcherConfig.Runtime, opts.Runtime)
 		opts.FunctionNamePrefix = defaultFlag(fetcherConfig.FunctionPrefix, opts.FunctionNamePrefix)
 		opts.StorageRPCGatewayTarget = defaultFlag(fetcherConfig.StorageRPCGatewayTarget, opts.StorageRPCGatewayTarget)
+		opts.RuntimeServiceKeyID = "collector"
+		opts.RuntimeServiceSecretKey = trustMaterial.CollectorServiceKey
 		if opts.PackageName == "moox-collector" {
 			opts.PackageName = fetcherConfig.PackageName
 		}
@@ -635,6 +680,13 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		}
 	}
 	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, opts.SpaceID)
+	if serviceGatewayCAFile != "" && client.ServiceAuth != nil {
+		client.ServiceAuth.CAFile = serviceGatewayCAFile
+	}
+	if manifestServiceAuth && client.ServiceAuth != nil {
+		client.ServiceAuth.Caller = "moox-cli"
+		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
+	}
 	if fetcherConfig != nil && strings.EqualFold(fetcherConfig.SpaceID, "stock_cn") {
 		enabledRules, ruleErr := client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "equity")
 		if ruleErr != nil {
@@ -1039,14 +1091,51 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if strings.TrimSpace(opts.Version) == "" {
 		return summary, fmt.Errorf("--version is required to prevent activating an older package")
 	}
-	fetcherConfig, err := loadCollectorSCFFetcherConfig(opts.File, opts.SpaceID)
+	fetcherConfig, manifest, err := loadCollectorSCFFetcherConfigSnapshot(opts.File, opts.SpaceID)
 	if err != nil {
 		return summary, err
 	}
 	if fetcherConfig == nil || !strings.EqualFold(fetcherConfig.SpaceID, "stock_cn") {
 		return summary, fmt.Errorf("activation requires an enabled stock_cn manifest")
 	}
+	serviceGatewayCAFile := ""
+	manifestServiceAuth := false
+	if strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
+		trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
+		if trustErr != nil {
+			return summary, trustErr
+		}
+		opts.ServiceAccessKey = "moox-cli"
+		opts.ServiceSecretKey = trustMaterial.CLIServiceKey
+		manifestServiceAuth = true
+		if len(trustMaterial.ServiceGatewayCAPEM) > 0 {
+			file, writeErr := os.CreateTemp("", "moox-collector-activate-service-ca-")
+			if writeErr != nil {
+				return summary, fmt.Errorf("create control service CA: %w", writeErr)
+			}
+			serviceGatewayCAFile = file.Name()
+			if writeErr = file.Chmod(0o600); writeErr == nil {
+				_, writeErr = file.Write(trustMaterial.ServiceGatewayCAPEM)
+			}
+			closeErr := file.Close()
+			if writeErr == nil {
+				writeErr = closeErr
+			}
+			if writeErr != nil {
+				_ = os.Remove(serviceGatewayCAFile)
+				return summary, fmt.Errorf("write control service CA: %w", writeErr)
+			}
+			defer os.Remove(serviceGatewayCAFile)
+		}
+	}
 	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, fetcherConfig.SpaceID)
+	if serviceGatewayCAFile != "" && client.ServiceAuth != nil {
+		client.ServiceAuth.CAFile = serviceGatewayCAFile
+	}
+	if manifestServiceAuth && client.ServiceAuth != nil {
+		client.ServiceAuth.Caller = "moox-cli"
+		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
+	}
 	enabledRules, err := client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "equity")
 	if err != nil {
 		return summary, fmt.Errorf("stock_cn activation requires a rule readback: %w", err)
@@ -1328,13 +1417,45 @@ func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconf
 	// fleet.  Keep the material when an internal CA is present for other
 	// trigger types, but treat it as optional here.
 	serviceGatewayCA, _ := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "certs/caddy/root.crt"))
+	collectorServiceKeyRaw, err := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "secrets/gateway-moox-cli.key"))
+	if err != nil {
+		return collectorSCFTrustMaterial{}, fmt.Errorf("read control CLI service credential: %w", err)
+	}
+	collectorServiceKey, err := normalizeCollectorServiceKey(collectorServiceKeyRaw)
+	if err != nil {
+		return collectorSCFTrustMaterial{}, fmt.Errorf("validate control CLI service credential: %w", err)
+	}
+	runtimeServiceKeyRaw, err := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "secrets/gateway-collector.key"))
+	if err != nil {
+		return collectorSCFTrustMaterial{}, fmt.Errorf("read control Collector runtime credential: %w", err)
+	}
+	runtimeServiceKey, err := normalizeCollectorServiceKey(runtimeServiceKeyRaw)
+	if err != nil {
+		return collectorSCFTrustMaterial{}, fmt.Errorf("validate control Collector runtime credential: %w", err)
+	}
 	return collectorSCFTrustMaterial{
 		EventBusCredential:       credential,
 		EventBusCAPEM:            eventBusCA,
 		GatewayCAPEM:             gatewayCA,
 		ServiceGatewayCAPEM:      serviceGatewayCA,
 		StoragePrimaryAuthSecret: storagePrimaryAuthSecret,
+		CLIServiceKey:            collectorServiceKey,
+		CollectorServiceKey:      runtimeServiceKey,
 	}, nil
+}
+
+func normalizeCollectorServiceKey(raw []byte) (string, error) {
+	value := strings.TrimSpace(string(raw))
+	if value == "" || strings.ContainsAny(value, "\r\n") {
+		return "", fmt.Errorf("Collector service credential is empty or multiline")
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F' || r >= '0' && r <= '9' || strings.ContainsRune("._~+/=-", r) {
+			continue
+		}
+		return "", fmt.Errorf("Collector service credential contains unsupported characters")
+	}
+	return value, nil
 }
 
 func readRemoteControlFile(ctx context.Context, transport setupssh.Client, relativePath string) ([]byte, error) {
@@ -1939,11 +2060,12 @@ func waitCollectorBatches(ctx context.Context, client *adminclient.Client, jobID
 func collectorSCFCanaryEvent(opts collectorPublishOptions, nodeID, batchID string) map[string]any {
 	spaceID := firstNonEmpty(opts.SpaceID, opts.collectorPackageOptions.SpaceID)
 	datasetID, provider, marketType := "binance_spot_kline_1m", "binance", "spot"
+	sourceID := "spot_http"
 	subjectID, symbol, barLimit := "BTC-USDT", "BTCUSDT", 2
 	batchKind := "realtime"
 	startTime := ""
 	if strings.EqualFold(spaceID, "stock_cn") {
-		datasetID, provider, marketType = "stock_cn_kline", "stock_cn_multi", "equity"
+		datasetID, provider, marketType, sourceID = "stock_cn_kline", "tencent", "equity", "stock_cn_http"
 		subjectID, symbol, barLimit = "600000.XSHG", "sh600000", 1000
 		batchKind = "backfill"
 		// Historical requests must carry an explicit bounded start. Keep a
@@ -1969,11 +2091,12 @@ func collectorSCFCanaryEvent(opts collectorPublishOptions, nodeID, batchID strin
 			"dataset_id":  datasetID,
 			"frequency":   "1m",
 			"provider":    provider,
+			"source_id":   sourceID,
 			"market_type": marketType,
 			"region":      opts.Region,
 			"node_id":     nodeID,
 			"items": []map[string]any{{
-				"subject_id": subjectID, "symbol": symbol, "provider": provider, "market_type": marketType,
+				"subject_id": subjectID, "symbol": symbol, "provider": provider, "source_id": sourceID, "market_type": marketType,
 				// The exchange response includes the currently-open candle. A
 				// one-bar request therefore has no closed bar to persist; request
 				// enough bars for the selected market to validate an actual write.
@@ -2749,6 +2872,10 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	if fetcher == nil {
 		fetcher = defaultCollectorSCFFetcherSpace()
 	}
+	setDefaultEnv(env, "MOOX_MARKET_FETCH_MARKET_ID", fetcher.MarketID)
+	setDefaultEnv(env, "MOOX_MARKET_FETCH_INSTRUMENT_TYPE", fetcher.InstrumentType)
+	setDefaultEnv(env, "MOOX_MARKET_FETCH_PROVIDER", fetcher.ProviderID)
+	setDefaultEnv(env, "MOOX_MARKET_FETCH_SOURCE_ID", fetcher.SourceID)
 	executionTimeoutSeconds := defaultInt(fetcher.TimeoutSeconds, 15)
 	spaceID := firstNonEmpty(opts.SpaceID, fetcher.SpaceID)
 	if strings.EqualFold(spaceID, "stock_cn") && opts.InstrumentSnapshotTimer {
@@ -2778,8 +2905,8 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	gatewayNodeID := firstNonEmpty(fetcher.StorageGatewayNodeID, os.Getenv("MOOX_SCF_STORAGE_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
 	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", gatewayNodeID)
 	setDefaultEnv(env, "MOOX_GATEWAY_TARGET_NODE", gatewayNodeID)
-	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"))
-	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"))
+	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", firstNonEmpty(opts.RuntimeServiceKeyID, os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID")))
+	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", firstNonEmpty(opts.RuntimeServiceSecretKey, os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY")))
 	defaultCLSSecretID, defaultCLSSecretKey := collectorCLSCredentials()
 	setDefaultEnv(env, "MOOX_CLS_ENABLED", "true")
 	setDefaultEnv(env, "MOOX_CLS_ENDPOINT", firstNonEmpty(opts.CLSHost, os.Getenv("MOOX_CLS_ENDPOINT"), clsprepare.Host))
@@ -2822,6 +2949,10 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_FETCH_STORAGE_TIMEOUT_MS":     {},
 		"MOOX_FETCH_MAX_RETRY_ATTEMPTS":     {},
 		"MOOX_MARKET_FETCH_MODE":            {},
+		"MOOX_MARKET_FETCH_MARKET_ID":       {},
+		"MOOX_MARKET_FETCH_INSTRUMENT_TYPE": {},
+		"MOOX_MARKET_FETCH_PROVIDER":        {},
+		"MOOX_MARKET_FETCH_SOURCE_ID":       {},
 		"MOOX_CLS_SECRET_ID":                {},
 		"MOOX_CLS_SECRET_KEY":               {},
 		"MOOX_CLS_ENABLED":                  {},
@@ -3256,7 +3387,7 @@ func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKe
 }
 
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version, entrypoint string) error {
-	if entrypoint != "crypto_market" && entrypoint != "stock_cn" {
+	if entrypoint != "market_data" {
 		return fmt.Errorf("unsupported collector SCF entrypoint %q", entrypoint)
 	}
 	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-s -w -X main.Version=%s", version), "-o", outPath, "./cmd/scf/"+entrypoint)
@@ -3280,7 +3411,7 @@ func resolveCollectorRoot(explicit string) (string, error) {
 		if candidate == "" {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(candidate, "cmd", "scf", "crypto_market", "main.go")); err == nil {
+		if _, err := os.Stat(filepath.Join(candidate, "cmd", "scf", "market_data", "main.go")); err == nil {
 			return filepath.Abs(candidate)
 		}
 	}

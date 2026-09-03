@@ -247,9 +247,9 @@ func parseExtendedBars(body []byte, category KlineCategory) ([]Bar, error) {
 		close := float64(math.Float32frombits(binary.LittleEndian.Uint32(body[pos+12 : pos+16])))
 		position := binary.LittleEndian.Uint32(body[pos+16 : pos+20])
 		trade := binary.LittleEndian.Uint32(body[pos+20 : pos+24])
-		amount := float64(math.Float32frombits(binary.LittleEndian.Uint32(body[pos+16 : pos+20])))
+		settlement := float64(math.Float32frombits(binary.LittleEndian.Uint32(body[pos+24 : pos+28])))
 		pos += 28
-		result = append(result, Bar{Time: when, Open: open, High: high, Low: low, Close: close, Amount: amount, Position: position, Trade: trade, Raw: append([]byte(nil), body[start:pos]...)})
+		result = append(result, Bar{Time: when, Open: open, High: high, Low: low, Close: close, Position: position, Trade: trade, Settlement: settlement, Raw: append([]byte(nil), body[start:pos]...)})
 	}
 	return result, nil
 }

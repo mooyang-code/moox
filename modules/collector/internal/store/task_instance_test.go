@@ -32,6 +32,24 @@ func TestTaskInstanceRepositoryUpsertKeepsFreshnessForStableTask(t *testing.T) {
 	assert.Equal(t, "binance", stored.Provider)
 }
 
+func TestTaskInstanceRepositoryPreservesAssignedSourceOnPlannerUpsert(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	initial := domain.TaskInstance{
+		SpaceID: "stock_cn", TaskID: "stock-task", RuleID: "rule-1",
+		Provider: "stock_cn_multi", SourceID: "stock_cn_http", MarketType: "equity",
+		DataType: "kline", DatasetID: "stock_cn_kline", SubjectID: "600000.XSHG",
+		Frequency: "1m", TaskParams: `{}`,
+	}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{initial}))
+	plannerDefinition := initial
+	plannerDefinition.SourceID = ""
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{plannerDefinition}))
+	stored, err := s.TaskInstances().Get(ctx, initial.SpaceID, initial.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, initial.SourceID, stored.SourceID)
+}
+
 func TestTaskInstanceRepositoryUpsertSkipsUnchangedDefinition(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
@@ -109,13 +127,14 @@ func TestReplaceMarketFetchAssignmentsUsesRouteProviderAndChecksCoverage(t *test
 	}}))
 
 	err := s.TaskInstances().ReplaceMarketFetchAssignments(ctx, "stock_cn", []string{"stock-fetch-000"}, []MarketFetchAssignment{{
-		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: "stock_cn_kline", Frequency: "1m",
+		Provider: "stock_cn_multi", SourceID: "stock_cn_http", MarketType: "equity", DatasetID: "stock_cn_kline", Frequency: "1m",
 		FunctionName: "stock-fetch-000", Subjects: []string{"600000.XSHG", "000001.XSHE"},
 	}})
 	require.ErrorContains(t, err, "covered 1 of 2 subjects")
 	stored, getErr := s.TaskInstances().Get(ctx, "stock_cn", "task-1")
 	require.NoError(t, getErr)
 	assert.Empty(t, stored.FunctionName, "partial assignment must roll back")
+	assert.Empty(t, stored.SourceID, "partial assignment must roll back source identity")
 }
 
 func TestReplaceMarketFetchAssignmentsUpdatesDuplicateSubjectRules(t *testing.T) {
@@ -128,7 +147,7 @@ func TestReplaceMarketFetchAssignmentsUpdatesDuplicateSubjectRules(t *testing.T)
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
 
 	err := s.TaskInstances().ReplaceMarketFetchAssignments(ctx, "stock_cn", []string{"stock-fetch-000"}, []MarketFetchAssignment{{
-		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: "stock_cn_kline", Frequency: "1m",
+		Provider: "stock_cn_multi", SourceID: "stock_cn_minute_http", MarketType: "equity", DatasetID: "stock_cn_kline", Frequency: "1m",
 		FunctionName: "stock-fetch-000", Subjects: []string{"600000.XSHG"},
 	}})
 	require.NoError(t, err)
@@ -136,6 +155,7 @@ func TestReplaceMarketFetchAssignmentsUpdatesDuplicateSubjectRules(t *testing.T)
 		stored, getErr := s.TaskInstances().Get(ctx, "stock_cn", taskID)
 		require.NoError(t, getErr)
 		assert.Equal(t, "stock-fetch-000", stored.FunctionName)
+		assert.Equal(t, "stock_cn_minute_http", stored.SourceID)
 	}
 }
 

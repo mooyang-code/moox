@@ -1,6 +1,9 @@
 package deploy
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -32,25 +35,29 @@ type Options struct {
 	// DeployRoot is the control deployment root. StorageRoot may be on a
 	// different mount because setup can deploy Storage to a separate host.
 	// Empty values resolve to the canonical /data/moox layout.
-	DeployRoot              string
-	ControlRoot             string
-	StorageRoot             string
-	PublicHost              string
-	NodeID                  string
-	BrowserPort             int
-	TargetGOOS              string
-	TargetGOARCH            string
-	ResetControlData        bool
-	ResetStorageData        bool
-	ResetViewData           bool
-	UseControlGateway       bool
-	EventBusPublicAddress   string
-	EventBusPort            int
-	EventBusTLSEnabled      bool
-	NotificationChannelType string
-	NotificationWebhookURL  string
-	StoragePrimarySecret    string
-	StorageViewSecret       string
+	DeployRoot                   string
+	ControlRoot                  string
+	StorageRoot                  string
+	PublicHost                   string
+	NodeID                       string
+	BrowserPort                  int
+	TargetGOOS                   string
+	TargetGOARCH                 string
+	ResetControlData             bool
+	ResetStorageData             bool
+	ResetViewData                bool
+	UseControlGateway            bool
+	EventBusPublicAddress        string
+	EventBusPort                 int
+	EventBusTLSEnabled           bool
+	LocalStorageRPCGatewayTarget string
+	LocalStorageGatewayNodeID    string
+	NotificationChannelType      string
+	NotificationWebhookURL       string
+	StoragePrimarySecret         string
+	StorageViewSecret            string
+	StorageEventBusCredential    []byte
+	StorageEventBusCA            []byte
 	// StorageBuildPassword is used only by the cross-platform Storage build
 	// helper when the configured build host accepts password SSH auth.
 	StorageBuildPassword   string
@@ -165,6 +172,9 @@ func normalizeDeployPaths(opts *Options) error {
 	if paths.ControlRoot != paths.DeployRoot && !strings.HasPrefix(paths.ControlRoot, base) {
 		return fmt.Errorf("paths_invalid")
 	}
+	if paths.StorageRoot == paths.DeployRoot || deploymentPathsOverlap(paths.StorageRoot, paths.ControlRoot) {
+		return fmt.Errorf("paths_invalid")
+	}
 	opts.DeployRoot, opts.ControlRoot, opts.StorageRoot = paths.DeployRoot, paths.ControlRoot, paths.StorageRoot
 	if opts.LocalLogs.MaxSizeMB == 0 {
 		opts.LocalLogs.MaxSizeMB = 50
@@ -173,6 +183,17 @@ func normalizeDeployPaths(opts *Options) error {
 		opts.LocalLogs.BackupCount = 5
 	}
 	return nil
+}
+
+func deploymentPathsOverlap(left, right string) bool {
+	contains := func(parent, child string) bool {
+		relative, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))
+		if err != nil {
+			return false
+		}
+		return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	}
+	return contains(left, right) || contains(right, left)
 }
 
 // Storage deploys Access and the unified View runtime as one independently managed unit.
@@ -196,7 +217,7 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	}
 	archive, err := deps.Packager.Package(ctx, opts)
 	if err != nil {
-		return fmt.Errorf("storage_package_failed")
+		return fmt.Errorf("storage_package_failed: %w", err)
 	}
 	defer os.Remove(archive)
 	activationToken, err := newActivationToken()
@@ -218,6 +239,11 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		return fmt.Errorf("storage_upload_failed")
 	}
 	_ = file.Close()
+	remoteCredential, remoteCA, cleanupEventBus, err := uploadStorageEventBusMaterial(ctx, transport, activationToken, opts)
+	if err != nil {
+		return fmt.Errorf("storage_eventbus_material_upload_failed")
+	}
+	defer cleanupEventBus()
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 10*time.Second)
 		defer cancel()
@@ -242,17 +268,23 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		// separately hosted Storage process cannot fall back to loopback.
 		installScript = "export MOOX_STORAGE_EVENTBUS_URL=" + shellQuote(storageEventBusURL) + "\n" + installScript
 	}
-	if _, err := transport.Run(ctx, []string{
-		"sh", "-lc", installScript, "moox-install-storage", opts.StorageRoot, opts.ControlRoot, reset, viewReset, controlGateway, activationToken, remoteArchive,
-	}, nil); err != nil {
-		return fmt.Errorf("storage_install_failed")
+	installArgs := []string{
+		"sh", "-lc", installScript, "moox-install-storage", opts.StorageRoot, opts.ControlRoot,
+		reset, viewReset, controlGateway, activationToken, remoteArchive,
+	}
+	if remoteCredential != "" {
+		installArgs = append(installArgs, remoteCredential, remoteCA)
+	}
+	installResult, err := transport.Run(ctx, installArgs, nil)
+	if err != nil {
+		return commandFailure("storage_install_failed", installResult)
 	}
 	installed := true
 	defer func() {
 		if returnErr != nil && installed {
 			rollbackCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), storageRollbackTimeout)
 			defer cancel()
-			if _, rollbackErr := transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackStorageScript, "moox-rollback-storage", activationToken, opts.StorageRoot, opts.DeployRoot}, nil); rollbackErr != nil {
+			if _, rollbackErr := transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackStorageScript, "moox-rollback-storage", activationToken, opts.StorageRoot, storageDeploymentParent(opts.StorageRoot)}, nil); rollbackErr != nil {
 				returnErr = fmt.Errorf("%v; storage_rollback_failed", returnErr)
 			}
 		}
@@ -263,13 +295,30 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		}
 	}
 	if opts.InstallStorageWatchdog {
-		if err := InstallStorageViewWatchdog(ctx, transport, opts.RepositoryRoot); err != nil {
+		watchdogOptions := WatchdogOptions{
+			StorageRoot:   opts.StorageRoot,
+			GatewayNodeID: opts.NodeID,
+		}
+		if eventBusURL, ok := storageEventBusURLForInstall(opts); ok {
+			watchdogOptions.EventBusURL = eventBusURL
+		}
+		if err := InstallStorageViewWatchdogWithOptions(ctx, transport, opts.RepositoryRoot, watchdogOptions); err != nil {
 			return fmt.Errorf("storage_watchdog_install_failed")
 		}
 	}
 	installed = false
-	_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeStorageScript, "moox-finalize-storage", activationToken, opts.StorageRoot, opts.DeployRoot}, nil)
+	if _, err := transport.Run(ctx, []string{"sh", "-lc", finalizeStorageScript, "moox-finalize-storage", activationToken, opts.StorageRoot, storageDeploymentParent(opts.StorageRoot)}, nil); err != nil {
+		return fmt.Errorf("storage_finalize_failed")
+	}
 	return nil
+}
+
+func storageDeploymentParent(storageRoot string) string {
+	storageRoot = filepath.Clean(strings.TrimSpace(storageRoot))
+	if storageRoot == "" || storageRoot == "." {
+		storageRoot = setupconfig.DefaultStorageRoot
+	}
+	return filepath.Dir(storageRoot)
 }
 
 func storageEventBusURLForInstall(opts Options) (string, bool) {
@@ -286,6 +335,37 @@ func storageEventBusURLForInstall(opts Options) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func uploadStorageEventBusMaterial(ctx context.Context, transport setupssh.Client, token string, opts Options) (string, string, func(), error) {
+	cleanup := func() {}
+	if len(opts.StorageEventBusCredential) == 0 && len(opts.StorageEventBusCA) == 0 {
+		return "", "", cleanup, nil
+	}
+	if len(opts.StorageEventBusCredential) == 0 || len(opts.StorageEventBusCA) == 0 {
+		return "", "", cleanup, fmt.Errorf("storage EventBus credential and CA must be provided together")
+	}
+	prefix := "/tmp/moox-storage-eventbus-" + token
+	credentialPath := prefix + ".yaml"
+	caPath := prefix + ".pem"
+	cleanup = func() {
+		cleanupCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 10*time.Second)
+		defer cancel()
+		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", credentialPath, caPath}, nil)
+	}
+	for _, item := range []struct {
+		path string
+		data []byte
+	}{
+		{path: credentialPath, data: opts.StorageEventBusCredential},
+		{path: caPath, data: opts.StorageEventBusCA},
+	} {
+		if err := transport.Upload(ctx, bytes.NewReader(item.data), int64(len(item.data)), item.path, fs.FileMode(0o600)); err != nil {
+			cleanup()
+			return "", "", func() {}, err
+		}
+	}
+	return credentialPath, caPath, cleanup, nil
 }
 
 func shellQuote(value string) string {
@@ -572,6 +652,12 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		_ = os.Remove(archive)
 		return "", err
 	}
+	if target := strings.TrimSpace(opts.LocalStorageRPCGatewayTarget); target != "" {
+		command.Env = setCommandEnv(command.Env, "MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET", target)
+	}
+	if nodeID := strings.TrimSpace(opts.LocalStorageGatewayNodeID); nodeID != "" {
+		command.Env = setCommandEnv(command.Env, "MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID", nodeID)
+	}
 	command.Env = notificationCommandEnv(command.Env, opts.NotificationChannelType, opts.NotificationWebhookURL)
 	command.Env = localLogCommandEnv(command.Env, opts.LocalLogs)
 	if err := command.Run(); err != nil {
@@ -579,6 +665,169 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		return "", err
 	}
 	return archive, nil
+}
+
+func persistStorageReleaseArtifacts(_ context.Context, repositoryRoot, archive string) error {
+	provenance, err := readArchiveMember(archive, "build-provenance.json")
+	if err != nil {
+		return fmt.Errorf("read storage build provenance: %w", err)
+	}
+	var build struct {
+		SchemaVersion int               `json:"schema_version"`
+		Commit        string            `json:"commit"`
+		Dirty         bool              `json:"dirty"`
+		BinaryHashes  map[string]string `json:"binary_hashes"`
+	}
+	if err := json.Unmarshal(provenance, &build); err != nil {
+		return fmt.Errorf("decode storage build provenance: %w", err)
+	}
+	if build.SchemaVersion != 1 || len(build.BinaryHashes) == 0 || !validReleaseToken(build.Commit) || len(build.Commit) != 40 {
+		return fmt.Errorf("storage build provenance is invalid")
+	}
+	for _, name := range []string{"moox-storage-primary", "moox-storage-node", "moox-storage-view"} {
+		if !validStorageBinaryHash(build.BinaryHashes[name]) {
+			return fmt.Errorf("storage build provenance is missing %s", name)
+		}
+	}
+	artifactDir := filepath.Join(repositoryRoot, "release", "deploy-stage", "moox")
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		return fmt.Errorf("create storage release artifact directory: %w", err)
+	}
+	persistentArchive := filepath.Join(artifactDir, "storage.tar.gz")
+	if err := copyFileAtomic(archive, persistentArchive, 0o600); err != nil {
+		return fmt.Errorf("persist storage release archive: %w", err)
+	}
+	persistentProvenance := filepath.Join(artifactDir, "build-provenance.json")
+	if err := writeFileAtomic(persistentProvenance, provenance, 0o600); err != nil {
+		return fmt.Errorf("persist storage build provenance: %w", err)
+	}
+	archiveFile, err := os.Open(persistentArchive)
+	if err != nil {
+		return fmt.Errorf("open storage release archive: %w", err)
+	}
+	archiveHash, err := sha256File(archiveFile)
+	closeErr := archiveFile.Close()
+	if err != nil {
+		return fmt.Errorf("hash storage release archive: %w", err)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close storage release archive: %w", closeErr)
+	}
+	manifest := fmt.Sprintf("schema_version=1\ncommit=%s\narchive=%s\narchive_sha256=%s\nmoox-storage-primary=%s\nmoox-storage-node=%s\nmoox-storage-view=%s\n",
+		strings.ToLower(build.Commit), filepath.ToSlash(filepath.Join("release", "deploy-stage", "moox", "storage.tar.gz")), archiveHash,
+		build.BinaryHashes["moox-storage-primary"], build.BinaryHashes["moox-storage-node"], build.BinaryHashes["moox-storage-view"])
+	artifactPath := filepath.Join(repositoryRoot, "artifacts", "storage-datanode-release-sha256.txt")
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o700); err != nil {
+		return fmt.Errorf("create storage artifact directory: %w", err)
+	}
+	if err := writeFileAtomic(artifactPath, []byte(manifest), 0o600); err != nil {
+		return fmt.Errorf("persist storage release manifest: %w", err)
+	}
+	return nil
+}
+
+func validStorageBinaryHash(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func readArchiveMember(archive, member string) ([]byte, error) {
+	file, err := os.Open(archive)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	tarReader := tar.NewReader(reader)
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		headerName := strings.TrimPrefix(filepath.Clean(header.Name), "."+string(filepath.Separator))
+		if headerName != member {
+			continue
+		}
+		if !header.FileInfo().Mode().IsRegular() || header.Size < 0 || header.Size > 1<<20 {
+			return nil, fmt.Errorf("archive member %s is invalid", member)
+		}
+		return io.ReadAll(io.LimitReader(tarReader, header.Size))
+	}
+	return nil, fmt.Errorf("archive member %s was not found", member)
+}
+
+func copyFileAtomic(source, destination string, mode os.FileMode) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	temp, err := os.CreateTemp(filepath.Dir(destination), ".storage-release-*")
+	if err != nil {
+		return err
+	}
+	tempName := temp.Name()
+	cleanup := func() {
+		_ = temp.Close()
+		_ = os.Remove(tempName)
+	}
+	if err := temp.Chmod(mode); err != nil {
+		cleanup()
+		return err
+	}
+	if _, err := io.Copy(temp, input); err != nil {
+		cleanup()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(tempName)
+		return err
+	}
+	return os.Rename(tempName, destination)
+}
+
+func writeFileAtomic(destination string, data []byte, mode os.FileMode) error {
+	temp, err := os.CreateTemp(filepath.Dir(destination), ".storage-release-*")
+	if err != nil {
+		return err
+	}
+	tempName := temp.Name()
+	cleanup := func() {
+		_ = temp.Close()
+		_ = os.Remove(tempName)
+	}
+	if err := temp.Chmod(mode); err != nil {
+		cleanup()
+		return err
+	}
+	if _, err := temp.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(tempName)
+		return err
+	}
+	return os.Rename(tempName, destination)
 }
 
 func eventBusCommandEnv(base []string, opts Options) ([]string, error) {
@@ -677,7 +926,8 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 	controlURL := "http://127.0.0.1:11000"
 	if !opts.UseControlGateway {
 		controlURL = strings.TrimSpace(opts.GatewayControlURL)
-		if controlURL == "" || strings.TrimSpace(opts.GatewayControlKey) == "" || strings.TrimSpace(opts.GatewayServiceKey) == "" || len(opts.GatewayCABundle) == 0 {
+		requiresGatewayCA := resolveTLSMode(opts.TLSMode, opts.PublicHost) == TLSModeInternal
+		if controlURL == "" || strings.TrimSpace(opts.GatewayControlKey) == "" || strings.TrimSpace(opts.GatewayServiceKey) == "" || requiresGatewayCA && len(opts.GatewayCABundle) == 0 {
 			return "", fmt.Errorf("remote storage package requires control gateway material")
 		}
 	}
@@ -696,6 +946,9 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 			{"moox-gateway-service-", []byte(strings.TrimSpace(opts.GatewayServiceKey))},
 			{"moox-gateway-ca-", opts.GatewayCABundle},
 		} {
+			if item.prefix == "moox-gateway-ca-" && len(item.value) == 0 {
+				continue
+			}
 			file, writeErr := os.CreateTemp("", item.prefix)
 			if writeErr != nil {
 				return "", writeErr
@@ -718,7 +971,10 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 				_ = os.Remove(file)
 			}
 		}()
-		args = append(args, "--gateway-control-key-file", gatewayFiles[0], "--gateway-service-key-file", gatewayFiles[1], "--gateway-ca-bundle", gatewayFiles[2])
+		args = append(args, "--gateway-control-key-file", gatewayFiles[0], "--gateway-service-key-file", gatewayFiles[1])
+		if len(gatewayFiles) > 2 {
+			args = append(args, "--gateway-ca-bundle", gatewayFiles[2])
+		}
 	}
 	if skipBuild {
 		args = append(args, "--skip-build")
@@ -764,6 +1020,10 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		"MOOX_HEALTH_AUTH_SECRET_KEY="+opts.HealthAuthSecretKey,
 	)
 	if err := command.Run(); err != nil {
+		_ = os.Remove(archive)
+		return "", err
+	}
+	if err := persistStorageReleaseArtifacts(ctx, root, archive); err != nil {
 		_ = os.Remove(archive)
 		return "", err
 	}
@@ -904,6 +1164,9 @@ func (p CommandProbe) Wait(ctx context.Context, transport setupssh.Client, stage
 	if stage == EventBusReady && attempts < 300 {
 		attempts = 300
 	}
+	if stage == BrowserHTTPSReady && attempts < 120 {
+		attempts = 120
+	}
 	if delay <= 0 {
 		delay = time.Second
 	}
@@ -946,7 +1209,13 @@ func probeCommandForOptions(stage ReadinessStage, opts Options) string {
 	case AdminReady:
 		return fmt.Sprintf(`%q/status.sh admin >/dev/null`, control)
 	case SetupReady:
-		return `curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:11110/trpc.moox.admin.Setup/GetSetupStatus >/dev/null`
+		return fmt.Sprintf(`set -eu
+root=%q
+if curl -fsS --connect-timeout 2 -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:11110/trpc.moox.admin.Setup/GetSetupStatus >/dev/null; then
+  exit 0
+fi
+tail -80 "$root/logs/admin/stdout.log" >&2 || true
+exit 1`, control)
 	case GatewayReady:
 		return fmt.Sprintf(`%q/status.sh gateway >/dev/null`, control)
 	case EventBusReady:
@@ -975,6 +1244,9 @@ test -n "${MOOX_EVENTBUS_PORT:-}"
 	case WebReady:
 		return fmt.Sprintf(`%q/status.sh web-host >/dev/null`, control)
 	case BrowserHTTPSReady:
+		if net.ParseIP(strings.TrimSpace(opts.PublicHost)) != nil && resolveTLSMode(opts.TLSMode, opts.PublicHost) == TLSModePublic {
+			return "true"
+		}
 		return fmt.Sprintf(`if [ "$3" = internal ]; then curl -fsS --resolve "$1:$2:127.0.0.1" --cacert %q/certs/caddy/root.crt "https://$1:$2/" >/dev/null; else curl -fsS --resolve "$1:$2:127.0.0.1" "https://$1:$2/" >/dev/null; fi`, control)
 	case StoragePrimaryReady:
 		return fmt.Sprintf(`%q/status.sh storage-primary >/dev/null`, storage)
@@ -994,6 +1266,8 @@ install_storage() {
   archive="$5"
   storage_root="${6:-${HOME}/moox/storage}"
   control_root="${7:-${HOME}/moox/prod}"
+  eventbus_credential="${8:-}"
+  eventbus_ca="${9:-}"
   case "$reset_storage_data" in 0|1) ;; *) echo storage_reset_invalid >&2; return 1 ;; esac
   case "$reset_view_data" in 0|1) ;; *) echo storage_view_reset_invalid >&2; return 1 ;; esac
   if [ "$reset_storage_data" = "1" ] && [ "$reset_view_data" = "1" ]; then echo storage_reset_flags_mutually_exclusive >&2; return 1; fi
@@ -1002,7 +1276,24 @@ install_storage() {
   [ "$archive" = "/tmp/moox-storage-$activation_token.tar.gz" ] || { echo storage_archive_invalid >&2; return 1; }
   deploy="$storage_root"
 	root=$(dirname "$deploy")
-	mkdir -p "$root"
+	if ! mkdir -p "$root" 2>/dev/null; then
+	  sudo -n install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" "$root" || {
+	    echo storage_root_permission_denied >&2
+	    return 1
+	  }
+	fi
+  if [ ! -w "$root" ]; then
+    sudo -n chown "$(id -un):$(id -gn)" "$root" || {
+      echo storage_root_permission_denied >&2
+      return 1
+    }
+  fi
+  if [ -d "$deploy" ] && [ ! -w "$deploy" ]; then
+    sudo -n chown "$(id -un):$(id -gn)" "$deploy" || {
+      echo storage_root_permission_denied >&2
+      return 1
+    }
+  fi
 	# Serialize package replacement with generated healthchecks. The lock lives
 	# beside the directory so it survives atomic renames of the deployment.
 	exec 8>"$deploy.maintenance.lock"
@@ -1092,13 +1383,22 @@ install_storage() {
       cp "$control_secrets/$name" "$next/secrets/$name"
     done
   fi
+  if [ -n "$eventbus_credential" ] || [ -n "$eventbus_ca" ]; then
+    [ -n "$eventbus_credential" ] && [ -n "$eventbus_ca" ] || { echo storage_eventbus_material_incomplete >&2; return 1; }
+    [ -s "$eventbus_credential" ] && [ -s "$eventbus_ca" ] || { echo storage_eventbus_material_missing >&2; return 1; }
+    eventbus_dir="$HOME/.config/moox/eventbus"
+    mkdir -p "$eventbus_dir"
+    cp "$eventbus_credential" "$eventbus_dir/storage-eventbus.yaml"
+    cp "$eventbus_ca" "$eventbus_dir/ca.pem"
+    chmod 600 "$eventbus_dir/storage-eventbus.yaml" "$eventbus_dir/ca.pem"
+  fi
   if [ ! -s "$next/secrets/health-auth.env" ]; then
     umask 077
     secret=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
     printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "$secret" >"$next/secrets/health-auth.env"
   fi
   chmod 600 "$next/secrets/health-auth.env"
-  if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then "$deploy/start.sh" 8>&- || true; return 1; fi
+  if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then "$deploy/start.sh" 8>&- </dev/null >>"$deploy/logs/deploy-start.log" 2>&1 || true; return 1; fi
   # Storage data is normally the largest part of the package. Move it only
   # after the old processes stop instead of copying it into staging; copying
   # temporarily doubles disk use and can make an otherwise healthy upgrade
@@ -1110,6 +1410,7 @@ install_storage() {
   if [ -d "$deploy" ]; then mv "$deploy" "$previous"; date +%s >"$previous/.storage-staged-at"; fi
   mv "$next" "$deploy"
   rollback_failed_install() {
+    if [ -s "$deploy/.deploy-start.pid" ]; then kill "$(cat "$deploy/.deploy-start.pid")" 2>/dev/null || true; rm -f "$deploy/.deploy-start.pid"; fi
     "$deploy/stop.sh" || true
     restore_data="$root/storage.data.restore"
     rm -rf "$restore_data"
@@ -1118,9 +1419,10 @@ install_storage() {
     date +%s >"$failed/.storage-staged-at"
     if [ -d "$previous" ]; then
       mv "$previous" "$deploy"
+      mkdir -p "$deploy/logs"
       rm -f "$deploy/.storage-staged-at"
       if [ -d "$restore_data" ]; then rm -rf "$deploy/data"; mv "$restore_data" "$deploy/data"; fi
-      "$deploy/start.sh" 8>&- || true
+      "$deploy/start.sh" 8>&- </dev/null >>"$deploy/logs/deploy-start.log" 2>&1 || true
     fi
     return 1
   }
@@ -1140,9 +1442,10 @@ install_storage() {
       return 1
     fi
   fi
-  if ! "$deploy/start.sh" 8>&-; then
-    rollback_failed_install
-  fi
+  start_log="$deploy/logs/deploy-start.log"
+  mkdir -p "$(dirname "$start_log")"
+  MOOX_SKIP_STORAGE_BOOTSTRAP_WAIT=1 nohup "$deploy/start.sh" 8>&- </dev/null >>"$start_log" 2>&1 &
+  printf '%s\n' "$!" >"$deploy/.deploy-start.pid"
 }
 if [ "${1:-}" = 0 ] || [ "${1:-}" = 1 ]; then
   install_storage "$1" "$2" "$3" "$4" "$5"
@@ -1150,7 +1453,7 @@ else
   storage_root="$1"
   control_root="$2"
   shift 2
-  install_storage "$1" "$2" "$3" "$4" "$5" "$storage_root" "$control_root"
+  install_storage "$1" "$2" "$3" "$4" "$5" "$storage_root" "$control_root" "$6" "$7"
 fi
 `
 
@@ -1169,6 +1472,7 @@ if [ ! -d "$previous" ]; then
   # A matching activation marker without a previous deployment is a failed
   # first installation. Stop and retain it for diagnosis instead of leaving a
   # deployment running after the CLI has reported failure.
+  if [ -s "$deploy/.deploy-start.pid" ]; then kill "$(cat "$deploy/.deploy-start.pid")" 2>/dev/null || true; rm -f "$deploy/.deploy-start.pid"; fi
   if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
   failed="$root/storage.failed.$activation_token"
   rm -rf "$failed"
@@ -1176,15 +1480,17 @@ if [ ! -d "$previous" ]; then
   date +%s >"$failed/.storage-staged-at"
   exit 0
 fi
+if [ -s "$deploy/.deploy-start.pid" ]; then kill "$(cat "$deploy/.deploy-start.pid")" 2>/dev/null || true; rm -f "$deploy/.deploy-start.pid"; fi
 if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
 restore_data="$root/storage.data.rollback.$activation_token"
 rm -rf "$restore_data"
 if [ -d "$deploy/data" ]; then mv "$deploy/data" "$restore_data"; fi
 rm -rf "$deploy"
 mv "$previous" "$deploy"
+mkdir -p "$deploy/logs"
 rm -f "$deploy/.storage-staged-at"
 if [ -d "$restore_data" ]; then rm -rf "$deploy/data"; mv "$restore_data" "$deploy/data"; fi
-"$deploy/start.sh" 8>&-
+"$deploy/start.sh" 8>&- </dev/null >>"$deploy/logs/deploy-start.log" 2>&1
 `
 
 const finalizeStorageScript = `set -eu
@@ -1198,6 +1504,7 @@ exec 8>"$deploy.maintenance.lock"
 flock -x 8
 [ -s "$deploy/.storage-activation-token" ] || exit 0
 [ "$(cat "$deploy/.storage-activation-token")" = "$activation_token" ] || exit 0
+rm -f "$deploy/.deploy-start.pid"
 deploy_base=$(basename "$deploy")
 rm -rf "$root"/"$deploy_base".previous."$activation_token"
 rm -f "$deploy/.storage-staged-at"
@@ -1416,7 +1723,8 @@ install_control() {
   fi
   chmod 600 "$next/secrets/"*
   if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then
-    "$deploy/start.sh" 8>&- || true
+    mkdir -p "$deploy/logs"
+    "$deploy/start.sh" 8>&- </dev/null >>"$deploy/logs/deploy-start.log" 2>&1 || true
     restart_stopped_caddy
     caddy_stopped=0
     return 1
@@ -1455,28 +1763,17 @@ install_control() {
     restore_eventbus_backup
     if [ -d "$previous" ]; then
       mv "$previous" "$deploy"
-      "$deploy/start.sh" 8>&- || true
+      mkdir -p "$deploy/logs"
+      "$deploy/start.sh" 8>&- </dev/null >>"$deploy/logs/deploy-start.log" 2>&1 || true
       [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy" --os linux --arch "$target_arch" 8>&- || true
     fi
     caddy_stopped=0
     return 1
   fi
-  if ! MOOX_RESET_CONTROL_DATA="$reset_data" MOOX_EVENTBUS_ROTATE_CREDENTIALS="$rotate_eventbus" "$deploy/start.sh" 8>&-; then
-    if [ -x "$deploy/lib/caddy-managed.sh" ] && ! "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch"; then
-      echo 'managed Caddy could not be stopped; leaving the failed deployment in place for safe retry' >&2
-      return 1
-    fi
-    "$deploy/stop.sh" || true
-    rm -rf "$deploy"
-    restore_eventbus_backup
-    if [ -d "$previous" ]; then
-      mv "$previous" "$deploy"
-      "$deploy/start.sh" 8>&- || true
-      [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy" --os linux --arch "$target_arch" 8>&- || true
-    fi
-    caddy_stopped=0
-    return 1
-  fi
+  start_log="$deploy/logs/deploy-start.log"
+  mkdir -p "$(dirname "$start_log")"
+  MOOX_RESET_CONTROL_DATA="$reset_data" MOOX_EVENTBUS_ROTATE_CREDENTIALS="$rotate_eventbus" nohup "$deploy/start.sh" 8>&- </dev/null >>"$start_log" 2>&1 &
+  printf '%s\n' "$!" >"$deploy/.deploy-start.pid"
   # Keep the old credentials until the outer readiness probe succeeds. The
   # finalize/rollback scripts own cleanup so a post-install probe failure can
   # restore the previous deployment atomically.
@@ -1508,6 +1805,7 @@ exec 8>"$deploy.maintenance.lock"
 "$flock_command" 8
 [ -s "$deploy/.control-activation-token" ] || exit 0
 [ "$(cat "$deploy/.control-activation-token")" = "$activation_token" ] || exit 0
+if [ -s "$deploy/.deploy-start.pid" ]; then kill "$(cat "$deploy/.deploy-start.pid")" 2>/dev/null || true; rm -f "$deploy/.deploy-start.pid"; fi
 if [ -x "$deploy/lib/caddy-managed.sh" ] && ! "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$(uname -m)"; then
   echo 'managed Caddy could not be stopped; refusing destructive rollback' >&2
   exit 1
@@ -1537,6 +1835,7 @@ exec 8>"$deploy.maintenance.lock"
 "$flock_command" 8
 [ -s "$deploy/.control-activation-token" ] || exit 0
 [ "$(cat "$deploy/.control-activation-token")" = "$activation_token" ] || exit 0
+rm -f "$deploy/.deploy-start.pid"
 deploy_base=$(basename "$deploy")
 rm -rf "$root"/"$deploy_base".previous.*
 rm -rf "$eventbus_backup"
