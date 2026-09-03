@@ -13,7 +13,7 @@ import (
 )
 
 // InvocationMetrics is the shared short-lived metrics composition used by
-// stock_cn and crypto_market SCF handlers. Each invocation owns a fresh
+// stockcn and crypto SCF handlers. Each invocation owns a fresh
 // registry, so a warm SCF cannot publish stale counters from an earlier task.
 type InvocationMetrics struct {
 	Metrics  *Metrics

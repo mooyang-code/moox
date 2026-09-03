@@ -23,7 +23,7 @@ storage:
   maintenance:
     host_metrics_cleanup:
       enabled: true
-      dataset_ids: [host_resource_v1, host_fs_v1, host_disk_v1, host_net_v1]
+      dataset_ids: [dataset_mooxsys_host_resource, dataset_mooxsys_host_filesystem, dataset_mooxsys_host_disk, dataset_mooxsys_host_network]
       max_age: 48h
       batch_size: 1000
       max_batches_per_run: 10

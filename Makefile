@@ -1,37 +1,37 @@
 .PHONY: build build-gateway build-storage-linux check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-factor-view-ready-batch-e2e test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check release release-binaries release-matrix deploy publish-release-binaries test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
 
 build:
-	./scripts/build.sh
+	./scripts/build/build.sh
 
 build-gateway:
-	./scripts/build.sh gateway
+	./scripts/build/build.sh gateway
 
 build-storage-linux:
-	./scripts/build.sh cli
-	bash scripts/build-storage-linux.sh
+	./scripts/build/build.sh cli
+	bash scripts/build/build-storage-linux.sh
 
 check-boundaries: check-module-boundaries check-package-boundaries
 
 check-module-boundaries:
-	./scripts/check-module-boundaries.sh
+	./scripts/check/check-module-boundaries.sh
 
 check-package-boundaries:
-	./scripts/check-package-boundaries.sh
+	./scripts/check/check-package-boundaries.sh
 
 test-storage-boundary:
-	bash scripts/test-storage-boundary-contract.sh
+	bash scripts/test/contract/test-storage-boundary-contract.sh
 
 test-storage-consistency:
-	bash scripts/test-storage-consistency-contract.sh
+	bash scripts/test/contract/test-storage-consistency-contract.sh
 
 test-storage-datanode-management-contract:
-	bash scripts/test-storage-datanode-management-contract.sh
+	bash scripts/test/contract/test-storage-datanode-management-contract.sh
 
 test-build-storage-linux-contract:
-	bash scripts/test-build-storage-linux-contract.sh
+	bash scripts/test/contract/test-build-storage-linux-contract.sh
 
 test-event-contracts:
-	bash scripts/verify-event-contracts.sh
+	bash scripts/check/verify-event-contracts.sh
 
 test-eventbus-topology:
 	cd modules/eventbus && go test ./...
@@ -41,52 +41,52 @@ test-storage-view-event-pipeline:
 	cd modules/storage && CGO_ENABLED=1 go test ./internal/service/e2e -run '^TestViewEventConsumerProcessesIndependentDatasetLanesE2E$$' -count=1
 
 test-storage-view-series-capacity:
-	bash scripts/tests/e2e/test-storage-view-series-capacity.sh
+	bash scripts/test/e2e/test-storage-view-series-capacity.sh
 
 test-factor-view-ready-batch-e2e:
-	bash scripts/tests/e2e/test-factor-view-ready-e2e.sh
+	bash scripts/test/e2e/test-factor-view-ready-e2e.sh
 
 test-kline-resample:
-	bash scripts/tests/e2e/test-kline-resample.sh
+	bash scripts/test/e2e/test-kline-resample.sh
 
 e2e-storage-datanode-management:
-	bash scripts/e2e/storage-datanode-management.sh
+	bash scripts/test/e2e/storage-datanode-management.sh
 
 check-format:
-	./scripts/check-gofmt.sh
+	./scripts/check/check-gofmt.sh
 	pnpm --dir web run lint:prettier:check
 
 check-lint:
 	pnpm --dir web run lint:eslint:check
 
 test-quality-gates:
-	bash scripts/test-quality-gates.sh
+	bash scripts/test/contract/test-quality-gates.sh
 
 test-docs-architecture:
-	bash scripts/test-docs-architecture.sh
+	bash scripts/test/contract/test-docs-architecture.sh
 
 test-greenfield-contract:
-	bash scripts/test-greenfield-contract.sh
+	bash scripts/test/contract/test-greenfield-contract.sh
 
 release:
-	./scripts/release.sh
+	./scripts/release/release.sh
 
 release-binaries:
-	./scripts/build-release-binaries.sh
+	./scripts/build/build-release-binaries.sh
 
 release-matrix:
-	./scripts/release-matrix.sh
+	./scripts/release/release-matrix.sh
 
 deploy:
-	./scripts/deploy-moox.sh $(ARGS)
+	./scripts/deploy/deploy-moox.sh $(ARGS)
 
 publish-release-binaries:
-	./scripts/publish-release-binaries.sh $(ARGS)
+	./scripts/release/publish-release-binaries.sh $(ARGS)
 
 test: test-go test-web
 
 test-go:
-	./scripts/test-go-workspace.sh
+	./scripts/test/contract/test-go-workspace.sh
 
 test-web:
 	CI=true pnpm --dir web install --frozen-lockfile
@@ -94,7 +94,7 @@ test-web:
 	pnpm --dir web build:prod
 
 test-release:
-	./scripts/test-release-contract.sh
+	./scripts/test/contract/test-release-contract.sh
 
 proto-check:
 	$(MAKE) proto
@@ -110,42 +110,42 @@ verify-custom-setup:
 	(cd packages/cloudprovider && go test -count=1 ./...)
 	(cd modules/admin && go test -count=1 ./internal/service/setup/... ./internal/bootstrap ./schema && go test -count=1 ./test -run Setup)
 	(cd modules/cli && go test -count=1 ./internal/setup/... ./internal/command && go test -count=1 ./test -run Setup)
-	bash scripts/test-deploy-moox-admin-bootstrap.sh
-	bash scripts/test-deploy-moox-control-profile.sh
-	bash scripts/test-deploy-moox-storage-profile.sh
-	bash scripts/test-deploy-moox-storage-view.sh
+	bash scripts/test/contract/test-deploy-moox-admin-bootstrap.sh
+	bash scripts/test/contract/test-deploy-moox-control-profile.sh
+	bash scripts/test/contract/test-deploy-moox-storage-profile.sh
+	bash scripts/test/contract/test-deploy-moox-storage-view.sh
 	bash skills/moox/scripts/test-custom-setup-contract.sh
 
 test-caddy:
-	bash scripts/test-caddy-config.sh
-	bash scripts/test-deploy-moox-https.sh
-	bash scripts/test-install-caddy-ca.sh
+	bash scripts/test/contract/test-caddy-config.sh
+	bash scripts/test/contract/test-deploy-moox-https.sh
+	bash scripts/test/contract/test-install-caddy-ca.sh
 	bash skills/moox/scripts/test-caddy-prerequisite.sh
 	bash skills/moox/scripts/test-caddy-ca.sh
 
 test-collector-scf-package-contract:
-	bash scripts/build-collector-scf-package_test.sh
+	bash scripts/build/build-collector-scf-package_test.sh
 
 test-script-contracts:
-	@set -e; for script in scripts/tests/contract/*.sh; do bash "scripts/$$(basename "$$script")"; done
+	@set -e; for script in scripts/test/contract/*.sh; do bash "$$script"; done
 
 test-skill-contracts:
 	bash scripts/build/package-skill_test.sh
 	bash skills/moox/scripts/test-data-query-contract.sh
 
 test-script-e2e:
-	@set -e; for script in scripts/tests/e2e/*.sh; do bash "scripts/$$(basename "$$script")"; done
+	@set -e; for script in scripts/test/e2e/*.sh; do bash "$$script"; done
 
 test-scripts: test-script-contracts test-script-e2e
 
 test-gateway-deploy:
-	bash scripts/test-deploy-moox-gateway.sh
+	bash scripts/test/contract/test-deploy-moox-gateway.sh
 
 test-strategy-deploy:
-	bash scripts/test-deploy-moox-strategy.sh
+	bash scripts/test/contract/test-deploy-moox-strategy.sh
 
 test-strategy-deploy-e2e:
-	bash scripts/test-deploy-moox-strategy-e2e.sh
+	bash scripts/test/e2e/test-deploy-moox-strategy-e2e.sh
 
 package-skill:
 	./scripts/build/package-skill.sh

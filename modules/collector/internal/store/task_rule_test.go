@@ -56,12 +56,12 @@ func TestTaskRuleRepository_CRUD(t *testing.T) {
 }
 
 func TestTaskRuleCoverageStartHonorsEnabledAndStockCalendar(t *testing.T) {
-	t.Setenv("MOOX_STOCK_CN_CALENDAR_PATH", filepath.Join("..", "..", "config", "markets", "stock_cn", "calendar.yaml"))
+	t.Setenv("MOOX_STOCK_CN_CALENDAR_PATH", filepath.Join("..", "..", "config", "markets", "stockcn", "calendar.yaml"))
 	now := time.Date(2026, 8, 30, 3, 0, 0, 0, time.UTC) // Sunday in Asia/Shanghai.
 	lookback := domain.TaskRule{
-		SpaceID:       "stock_cn",
+		SpaceID:       "stockcn",
 		DataType:      "kline",
-		Provider:      "stock_cn_multi",
+		Provider:      "stockcn_multi",
 		MarketType:    "equity",
 		CollectParams: `{"history_policy":{"mode":"lookback","lookback":2}}`,
 	}
@@ -78,7 +78,7 @@ func TestTaskRuleCoverageStartHonorsEnabledAndStockCalendar(t *testing.T) {
 	repo := newCollectorStore(t).TaskRules()
 	disabled.RuleID = "disabled-stock-rule"
 	require.NoError(t, repo.Create(context.Background(), disabled))
-	stored, err := repo.GetByRuleID(context.Background(), "stock_cn", disabled.RuleID)
+	stored, err := repo.GetByRuleID(context.Background(), "stockcn", disabled.RuleID)
 	require.NoError(t, err)
 	assert.Nil(t, stored.CoverageStartTime)
 }

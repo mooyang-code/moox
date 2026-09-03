@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将 Storage View 的周期性状态收敛统一命名为 View Maintainer，并通过可分层覆盖的容量策略，在任意一个时序序列超过上限时安全启动 A/B 重建，同时让 `custom.toml` 成为初始化和部署的唯一配置来源。
+**Goal:** 将 Storage View 的周期性状态收敛统一命名为 View Maintainer，并通过可分层覆盖的容量策略，在任意一个时序序列超过上限时安全启动 A/B 重建，同时让 `moox.toml` 成为初始化和部署的唯一配置来源。
 
 **Architecture:** View Maintainer 继续负责 View 恢复、必要修复、容量检查和 A/B 激活；垃圾文件删除仍由独立 Cleanup Timer 负责。容量策略按“单 View > 系统监控 > 全局默认”解析，DuckDB 在写事务内维护每个 `(subject_id, freq, series_tag)` 的准确行数，使定时检查无需扫描完整 View；任意一个序列超过上限或文件超过硬上限即可触发容量重建，新 B 只保留策略规定的最近根数。
 
@@ -16,11 +16,11 @@
 - 任意一个 `(subject_id, frequency, series_tag)` 的物理行数大于 `max_periods_per_series` 即满足容量触发条件，不等待其他序列达到上限。
 - 容量重建的新 B 对每个序列只保留最近 `rebuild_lookback_periods` 根完整数据。
 - `max_periods_per_series` 必须严格大于解析后的 `rebuild_lookback_periods`；所有数量必须在 `1..1000000` 范围内。
-- 配置优先级固定为：精确 `space_id + view_id` 覆盖 > `moox_system` 系统监控策略 > 全局默认。
+- 配置优先级固定为：精确 `space_id + view_id` 覆盖 > `mooxsys` 系统监控策略 > 全局默认。
 - Record/Bleve View 不应用“每序列根数”规则，只应用文件大小硬上限。
 - 容量维护继续服从对应 consumer partition 已绑定、积压水位、连续空闲检查、全局单构建许可和 Inactive Slot 可用性门禁。
 - View Maintainer 不直接删除旧文件；新 B 激活后只解除旧索引引用，Cleanup Timer 连续确认 60 秒无引用后再删除。
-- 默认 Metadata 只保留 3 个行情 View 和 5 个系统监控 View；不再初始化 4 个 `stock_cn` View，也不自动创建 Factor View。
+- 默认 Metadata 只保留 3 个行情 View 和 5 个系统监控 View；不再初始化 4 个 `stockcn` View，也不自动创建 Factor View。
 - 所有新增容量触发、跳过、成功和失败结果必须进入 `t_view_rebuild_logs`，不得只写进程日志。
 
 ---
@@ -129,10 +129,10 @@ git commit -m "refactor(storage): rename view reconciler to maintainer"
 
 ---
 
-### Task 2: 定义 custom.toml 容量策略和覆盖优先级
+### Task 2: 定义 moox.toml 容量策略和覆盖优先级
 
 **Files:**
-- Modify: `custom.toml.example`
+- Modify: `moox.toml.example`
 - Modify: `modules/cli/internal/setup/config/config.go`
 - Modify: `modules/cli/internal/setup/config/config_test.go`
 - Modify: `modules/cli/README.md`
@@ -141,7 +141,7 @@ git commit -m "refactor(storage): rename view reconciler to maintainer"
 - Produces: `StorageView`、`StorageViewPolicyOverride`、`ResolvedStorageViewPolicy` 和 `ResolvePolicy(spaceID, viewID string)`。
 - Consumes: Task 1 的 `maintenance_check_interval` 命名。
 
-- [ ] **Step 1: 在 custom.toml.example 写出完整可复制配置**
+- [ ] **Step 1: 在 moox.toml.example 写出完整可复制配置**
 
 ```toml
 [storage_view]
@@ -158,8 +158,8 @@ max_view_file_bytes = 1073741824
 
 # 单 View 覆盖优先级最高；不填写的数值继承系统监控或全局策略。
 [[storage_view.views]]
-space_id = "crypto_market"
-view_id = "binance_spot_kline_1m_view"
+space_id = "crypto"
+view_id = "view_crypto_spot_kline_1m"
 rebuild_lookback_periods = 1000
 max_periods_per_series = 2000
 max_view_file_bytes = 1073741824
@@ -175,10 +175,10 @@ assert.Equal(t, uint64(1000), snapshot.Manifest.StorageView.RebuildLookbackPerio
 assert.Equal(t, uint64(2000), snapshot.Manifest.StorageView.MaxPeriodsPerSeries)
 assert.Equal(t, int64(1073741824), snapshot.Manifest.StorageView.MaxViewFileBytes)
 
-resolved := snapshot.Manifest.StorageView.ResolvePolicy("moox_system", "host_disk_view")
+resolved := snapshot.Manifest.StorageView.ResolvePolicy("mooxsys", "view_mooxsys_host_disk")
 assert.Equal(t, uint64(2000), resolved.MaxPeriodsPerSeries)
 
-resolved = snapshot.Manifest.StorageView.ResolvePolicy("crypto_market", "binance_spot_kline_1m_view")
+resolved = snapshot.Manifest.StorageView.ResolvePolicy("crypto", "view_crypto_spot_kline_1m")
 assert.Equal(t, uint64(1000), resolved.RebuildLookbackPeriods)
 ```
 
@@ -232,7 +232,7 @@ Expected: PASS。
 - [ ] **Step 6: 提交 Manifest 变更**
 
 ```bash
-git add custom.toml.example modules/cli
+git add moox.toml.example modules/cli
 git commit -m "feat(cli): define view maintenance capacity policies"
 ```
 
@@ -247,9 +247,9 @@ git commit -m "feat(cli): define view maintenance capacity policies"
 - Modify: `modules/cli/internal/setup/deploy/deploy_test.go`
 - Modify: `modules/cli/internal/command/setup.go`
 - Modify: `modules/cli/internal/command/setup_test.go`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/tests/contract/test-deploy-moox-storage-view.sh`
-- Modify: `scripts/tests/contract/test-deploy-moox-storage-profile.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-storage-view.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-storage-profile.sh`
 
 **Interfaces:**
 - Produces deployed file: `<deploy-root>/storage-view/config/maintenance.json`。
@@ -293,7 +293,7 @@ encoded := base64.RawStdEncoding.EncodeToString(payload)
 command.Env = setCommandEnv(command.Env, "MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64", encoded)
 ```
 
-`scripts/deploy-moox.sh` 必须：
+`scripts/deploy/deploy-moox.sh` 必须：
 
 1. 要求 Storage profile 必须提供该变量；
 2. 使用 `base64 --decode` 和 `python3 -m json.tool` 验证；
@@ -311,7 +311,7 @@ storage:
     maintenance_policy_file: config/maintenance.json
 ```
 
-仓库内 `maintenance.json` 使用与 `custom.toml.example` 相同的默认值，使本地开发不依赖 setup CLI。
+仓库内 `maintenance.json` 使用与 `moox.toml.example` 相同的默认值，使本地开发不依赖 setup CLI。
 
 - [ ] **Step 5: 为无兼容物理格式切换增加显式 View-only reset**
 
@@ -331,9 +331,9 @@ storage:
 Run:
 
 ```bash
-bash scripts/tests/contract/test-deploy-moox-storage-view.sh
-bash scripts/tests/contract/test-deploy-moox-storage-profile.sh
-bash -n scripts/deploy-moox.sh
+bash scripts/test/contract/test-deploy-moox-storage-view.sh
+bash scripts/test/contract/test-deploy-moox-storage-profile.sh
+bash -n scripts/deploy/deploy-moox.sh
 ```
 
 Expected: 全部 PASS。
@@ -341,7 +341,7 @@ Expected: 全部 PASS。
 - [ ] **Step 7: 提交部署链路**
 
 ```bash
-git add modules/cli modules/storage/config scripts custom.toml.example
+git add modules/cli modules/storage/config scripts moox.toml.example
 git commit -m "feat(deploy): render view maintenance policy from custom toml"
 ```
 
@@ -484,10 +484,10 @@ git commit -m "feat(storage): track exact per-series view capacity"
 覆盖以下行为：
 
 ```go
-resolved := policy.Resolve("moox_system", "host_disk_view")
+resolved := policy.Resolve("mooxsys", "view_mooxsys_host_disk")
 require.Equal(t, systemPolicy, resolved)
 
-resolved = policy.Resolve("crypto_market", "binance_spot_kline_1m_view")
+resolved = policy.Resolve("crypto", "view_crypto_spot_kline_1m")
 require.Equal(t, exactOverride, resolved)
 ```
 
@@ -646,9 +646,9 @@ git commit -m "feat(web): show per-series view maintenance logs"
 ### Task 7: 将默认逻辑 View 收敛为 3 个行情加 5 个系统监控
 
 **Files:**
-- Modify: `examples/setup/default/metadata.yaml`
+- Modify: `config/setup/metadata.yaml`
 - Modify: `modules/storage/internal/bootstrap/metadata/seed_test.go`
-- Modify: `custom.toml.example`
+- Modify: `moox.toml.example`
 - Modify: `modules/cli/internal/setup/config/config_test.go`
 - Create: `modules/storage/cmd/cli/retain_views.go`
 - Create: `modules/storage/cmd/cli/retain_views_test.go`
@@ -657,14 +657,14 @@ git commit -m "feat(web): show per-series view maintenance logs"
 
 **Interfaces:**
 - Produces exact default View allowlist:
-  - `crypto_market/binance_spot_kline_1m_view`
-  - `crypto_market/perpetual_kline_1h_view`
-  - `crypto_market/spot_kline_1h_view`
-  - `moox_system/host_resource_view`
-  - `moox_system/host_fs_view`
-  - `moox_system/host_disk_view`
-  - `moox_system/host_net_view`
-  - `moox_system/moox_service_metrics_view`
+  - `crypto/view_crypto_spot_kline_1m`
+  - `crypto/view_crypto_swap_kline_1h`
+  - `crypto/view_crypto_spot_kline_1h`
+  - `mooxsys/view_mooxsys_host_resource`
+  - `mooxsys/view_mooxsys_host_fs`
+  - `mooxsys/view_mooxsys_host_disk`
+  - `mooxsys/view_mooxsys_host_net`
+  - `mooxsys/view_mooxsys_service_metrics`
 - Produces one-time command: `moox-storage-cli retain-views --metadata-db <path> --keep-view <space/view>... --yes`。
 
 - [ ] **Step 1: 写默认 View 集合合同测试**
@@ -680,24 +680,24 @@ cd modules/storage
 go test ./internal/bootstrap/metadata -run TestDefaultViewInventory -count=1
 ```
 
-Expected: FAIL，实际仍包含 4 个 `stock_cn` View。
+Expected: FAIL，实际仍包含 4 个 `stockcn` View。
 
-- [ ] **Step 3: 删除默认 stock_cn View 和对应 View columns**
+- [ ] **Step 3: 删除默认 stockcn View 和对应 View columns**
 
 从 seed 删除：
 
 ```text
-stock_cn/stock_kline_1d_view
-stock_cn/index_kline_1d_view
-stock_cn/financial_metric_view
-stock_cn/financial_summary_view
+stockcn/stock_kline_1d_view
+stockcn/index_kline_1d_view
+stockcn/financial_metric_view
+stockcn/financial_summary_view
 ```
 
 保留其 Dataset 元数据，不创建查询 View。删除所有引用这些 View ID 的 `view_columns` 条目。
 
 - [ ] **Step 4: 关闭默认 Factor 自动导入**
 
-`custom.toml.example` 将：
+`moox.toml.example` 将：
 
 ```toml
 [factors]
@@ -763,7 +763,7 @@ Expected: PASS。
 - [ ] **Step 9: 提交默认库存收敛**
 
 ```bash
-git add examples custom.toml.example modules/storage/internal/bootstrap/metadata modules/storage/cmd/cli modules/cli skills/moox
+git add examples moox.toml.example modules/storage/internal/bootstrap/metadata modules/storage/cmd/cli modules/cli skills/moox
 git commit -m "chore(setup): keep only active market and system views"
 ```
 
@@ -772,7 +772,7 @@ git commit -m "chore(setup): keep only active market and system views"
 ### Task 8: 全量验证、生产清理和真实容量重建验收
 
 **Files:**
-- Create: `scripts/tests/e2e/test-storage-view-series-capacity.sh`
+- Create: `scripts/test/e2e/test-storage-view-series-capacity.sh`
 - Modify: `Makefile`
 - Modify: `docs/superpowers/plans/2026-08-19-storage-view-capacity-maintainer.md`
 
@@ -795,8 +795,8 @@ pnpm exec vue-tsc --noEmit
 pnpm run build:prod
 
 cd ..
-bash scripts/tests/contract/test-deploy-moox-storage-view.sh
-bash scripts/tests/contract/test-deploy-moox-storage-profile.sh
+bash scripts/test/contract/test-deploy-moox-storage-view.sh
+bash scripts/test/contract/test-deploy-moox-storage-profile.sh
 git diff --check
 ```
 
@@ -816,7 +816,7 @@ E2E 创建两个序列：A 写入 `max+1` 根、B 写入 1 根；运行一次 Vi
 Run:
 
 ```bash
-bash scripts/tests/e2e/test-storage-view-series-capacity.sh
+bash scripts/test/e2e/test-storage-view-series-capacity.sh
 ```
 
 Expected: `storage view series capacity e2e passed`。
@@ -824,7 +824,7 @@ Expected: `storage view series capacity e2e passed`。
 - [ ] **Step 3: 构建 Linux Storage 二进制**
 
 ```bash
-MOOX_CLI=/tmp/moox-cli-darwin ./scripts/build-storage-linux.sh
+MOOX_CLI=/tmp/moox-cli-darwin ./scripts/build/build-storage-linux.sh
 shasum -a 256 bin/moox-storage-primary bin/moox-storage-node bin/moox-storage-view bin/moox-storage-cli
 ```
 
@@ -837,26 +837,26 @@ Expected: 四个 Linux/amd64 产物存在，三个 Storage server 的 hash 一�
 ```bash
 /home/ubuntu/moox/storage/bin/moox-storage-cli retain-views \
   --metadata-db /home/ubuntu/moox/storage/data/storage/metadata/storage_metadata.db \
-  --keep-view crypto_market/binance_spot_kline_1m_view \
-  --keep-view crypto_market/perpetual_kline_1h_view \
-  --keep-view crypto_market/spot_kline_1h_view \
-  --keep-view moox_system/host_resource_view \
-  --keep-view moox_system/host_fs_view \
-  --keep-view moox_system/host_disk_view \
-  --keep-view moox_system/host_net_view \
-  --keep-view moox_system/moox_service_metrics_view \
+  --keep-view crypto/view_crypto_spot_kline_1m \
+  --keep-view crypto/view_crypto_swap_kline_1h \
+  --keep-view crypto/view_crypto_spot_kline_1h \
+  --keep-view mooxsys/view_mooxsys_host_resource \
+  --keep-view mooxsys/view_mooxsys_host_fs \
+  --keep-view mooxsys/view_mooxsys_host_disk \
+  --keep-view mooxsys/view_mooxsys_host_net \
+  --keep-view mooxsys/view_mooxsys_service_metrics \
   --yes
 ```
 
 命令应删除以下 6 个逻辑 View 的 Metadata 行：
 
 ```text
-crypto_market/bin_988b08e19ae99e18
-crypto_market/binance_spot_kline_1m_factor_v
-stock_cn/stock_kline_1d_view
-stock_cn/index_kline_1d_view
-stock_cn/financial_metric_view
-stock_cn/financial_summary_view
+crypto/bin_988b08e19ae99e18
+crypto/binance_spot_kline_1m_factor_v
+stockcn/stock_kline_1d_view
+stockcn/index_kline_1d_view
+stockcn/financial_metric_view
+stockcn/financial_summary_view
 ```
 
 禁止直接 `rm` 物理文件。重新启动 `storage-view` 后等待 Cleanup Timer 删除其 DuckDB/Bleve 物理索引。
@@ -865,7 +865,7 @@ stock_cn/financial_summary_view
 
 ```bash
 MOOX_SKIP_STORAGE_BUILD=1 /tmp/moox-cli-darwin setup deploy-storage \
-  --file ./custom.toml \
+  --file ./moox.toml \
   --host control \
   --reset-view-data
 ```
@@ -878,9 +878,9 @@ Expected JSON:
 
 该步骤是本次无兼容 schema 切换的强制门禁，只执行一次。它必须保留 Primary K 线事实数据，并让 8 个逻辑 View 全部从 Primary 按 `rebuild_lookback_periods` 重建；不得使用 `--reset-storage-data`。
 
-- [ ] **Step 6: 验证配置确实来自 custom.toml**
+- [ ] **Step 6: 验证配置确实来自 moox.toml**
 
-在目标机比较 `custom.toml` 解析结果和：
+在目标机比较 `moox.toml` 解析结果和：
 
 ```text
 /home/ubuntu/moox/storage/storage-view/config/maintenance.json
@@ -918,7 +918,7 @@ unreferenced managed indexes after cleanup grace = 0
 将真实命令、时间、hash、8 个 View 清单、容量重建日志 ID 和 Cleanup Timer 删除日志写入本文末尾的“执行记录”，然后提交：
 
 ```bash
-git add scripts/tests/e2e/test-storage-view-series-capacity.sh Makefile docs/superpowers/plans/2026-08-19-storage-view-capacity-maintainer.md
+git add scripts/test/e2e/test-storage-view-series-capacity.sh Makefile docs/superpowers/plans/2026-08-19-storage-view-capacity-maintainer.md
 git commit -m "test(storage): verify view capacity maintenance end to end"
 ```
 
@@ -927,9 +927,9 @@ git commit -m "test(storage): verify view capacity maintenance end to end"
 2026-08-19 实际执行记录：
 
 - 本地验证：`modules/storage` CLI、Pebble、View、config 测试通过；`modules/cli` setup/deploy、setup/config、command 测试通过；CGO race（View/Pebble/DuckDB）通过；前端 `vue-tsc` 与生产构建通过；Storage View/Watchdog 部署合同与 `git diff --check` 通过。
-- 容量 E2E：新增 `scripts/tests/e2e/test-storage-view-series-capacity.sh` 和 `make test-storage-view-series-capacity`；测试使用真实 DuckDB，验证单个序列超过上限即可触发、另一个序列不超限、审计详情包含 offender、A/B replacement 激活后每序列保留 lookback 根数，命令已通过，并已接入 `verify-pr`。
-- Linux 发布：使用 `make build-storage-linux` 构建并通过 `moox-cli setup deploy-storage --file ./custom.toml --host control` 发布至 `106.53.107.122`；部署返回 `status=ready`。目标机 `maintenance.json` 已写入 1m/1000/2000/1GiB 策略，Storage Primary/View/Node 均运行，`moox-storage-view-watchdog.timer` 为 `active/waiting` 且已重新 arm。
+- 容量 E2E：新增 `scripts/test/e2e/test-storage-view-series-capacity.sh` 和 `make test-storage-view-series-capacity`；测试使用真实 DuckDB，验证单个序列超过上限即可触发、另一个序列不超限、审计详情包含 offender、A/B replacement 激活后每序列保留 lookback 根数，命令已通过，并已接入 `verify-pr`。
+- Linux 发布：使用 `make build-storage-linux` 构建并通过 `moox-cli setup deploy-storage --file ./moox.toml --host control` 发布至 `106.53.107.122`；部署返回 `status=ready`。目标机 `maintenance.json` 已写入 1m/1000/2000/1GiB 策略，Storage Primary/View/Node 均运行，`moox-storage-view-watchdog.timer` 为 `active/waiting` 且已重新 arm。
 - View-only 重置与库存收敛：使用具备 JetStream 管理权限的 `internal-admin.yaml` 执行 `reset-view-consumers --restart=false --yes`，保留 Primary 事实数据；`retain-views` 后 Metadata 保留 8 个逻辑 View（3 个行情、5 个系统监控），重复 View 已清理。
-- 真实 A/B 验证：`binance_spot_kline_1m_view` 构建日志 `1145` 以 `490000` 条回填成功并激活 A；Cleanup Timer 日志确认已删除 4 个废弃物理索引。后续日志 `1153` 的触发原因实际为 `COVERAGE_REPAIR`（不是 `SERIES_CAPACITY`），成功激活 B；构建期间 A 仍是 active。容量触发由真实 DuckDB E2E 覆盖，生产环境尚未观察到独立的 `SERIES_CAPACITY` 日志。
+- 真实 A/B 验证：`view_crypto_spot_kline_1m` 构建日志 `1145` 以 `490000` 条回填成功并激活 A；Cleanup Timer 日志确认已删除 4 个废弃物理索引。后续日志 `1153` 的触发原因实际为 `COVERAGE_REPAIR`（不是 `SERIES_CAPACITY`），成功激活 B；构建期间 A 仍是 active。容量触发由真实 DuckDB E2E 覆盖，生产环境尚未观察到独立的 `SERIES_CAPACITY` 日志。
 - 本轮发布：提交 `17df89c9` 已推送到 `feature/mooyang`；`make build-storage-linux` 成功，四个 Linux 二进制已发布到 `106.53.107.122`。远端 `moox-storage-primary/view/node` SHA-256 均为 `24db24bbcec89297c5da4c8b36172f4bdda8ce64fe10585d5388c730e8a5cc7f`，`moox-storage-cli` 为 `605ed0ed9694d1841658a65a2458237e6ed9cfce2ec8bd7bd9b831134186e14c`；三项 Storage 服务运行，Watchdog 为 `enabled/active` 且下一次触发时间有限。
 - 仍需后续补充：通配 selector 长保留期的性能压测，以及跨 tag 分页、TTL 后读取、重启 marker、cleanup/materialize 竞态的集成测试。

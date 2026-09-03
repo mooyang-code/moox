@@ -53,11 +53,11 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 		args []string
 		key  string
 	}{
-		{name: "validate", args: []string{"validate", "--file", "custom.toml"}, key: "checks"},
-		{name: "trust", args: []string{"trust-host", "--file", "custom.toml", "--host", "control", "--fingerprint", "SHA256:test"}, key: "status"},
-		{name: "deploy", args: []string{"deploy-control", "--file", "custom.toml"}, key: "status"},
-		{name: "apply", args: []string{"apply", "--file", "custom.toml"}, key: "login_api"},
-		{name: "status", args: []string{"status", "--file", "custom.toml"}, key: "state"},
+		{name: "validate", args: []string{"validate", "--file", "moox.toml"}, key: "checks"},
+		{name: "trust", args: []string{"trust-host", "--file", "moox.toml", "--host", "control", "--fingerprint", "SHA256:test"}, key: "status"},
+		{name: "deploy", args: []string{"deploy-control", "--file", "moox.toml"}, key: "status"},
+		{name: "apply", args: []string{"apply", "--file", "moox.toml"}, key: "login_api"},
+		{name: "status", args: []string{"status", "--file", "moox.toml"}, key: "state"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -100,14 +100,14 @@ func TestSetupTrustBrowserSkipsPublicTLS(t *testing.T) {
 	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"trust-browser", "--file", "custom.toml"})
+	cmd.SetArgs([]string{"trust-browser", "--file", "moox.toml"})
 	require.NoError(t, cmd.Execute())
 	require.JSONEq(t, `{"host":"control","status":"not_required"}`, output.String())
 }
 
 func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
 	root := t.TempDir()
-	script := filepath.Join(root, "scripts", "install-caddy-ca.sh")
+	script := filepath.Join(root, "scripts", "deploy", "install-caddy-ca.sh")
 	marker := filepath.Join(root, "installed")
 	require.NoError(t, os.MkdirAll(filepath.Dir(script), 0o755))
 	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --check '*) test -f \"$MARKER\";;\n  *) : >\"$MARKER\";;\nesac\n"), 0o700))
@@ -118,7 +118,7 @@ func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
 	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"trust-browser", "--file", "custom.toml"})
+	cmd.SetArgs([]string{"trust-browser", "--file", "moox.toml"})
 	require.NoError(t, cmd.Execute())
 	require.FileExists(t, marker)
 	require.Contains(t, output.String(), `"status":"trusted"`)
@@ -144,7 +144,7 @@ func TestSetupRenderRuntimeConfigUsesOneSnapshot(t *testing.T) {
 	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"render-runtime-config", "--file", "custom.toml", "--trade-output", tradePath, "--collector-output", collectorPath})
+	cmd.SetArgs([]string{"render-runtime-config", "--file", "moox.toml", "--trade-output", tradePath, "--collector-output", collectorPath})
 	require.NoError(t, cmd.Execute())
 	require.JSONEq(t, fmt.Sprintf(`{"status":"rendered","trade_output":%q,"collector_output":%q,"dns_resolver_enabled":false,"dns_resolver_node_id":"","dns_resolver_target":"ip://127.0.0.1:11003","trade_console_host":"","trade_console_port":0}`, tradePath, collectorPath), output.String())
 	tradeRaw, err := os.ReadFile(tradePath)
@@ -168,7 +168,7 @@ func TestSetupInstallStorageWatchdogCommand(t *testing.T) {
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"install-storage-watchdog", "--file", "custom.toml", "--host", "compute"})
+	cmd.SetArgs([]string{"install-storage-watchdog", "--file", "moox.toml", "--host", "compute"})
 	require.NoError(t, cmd.Execute())
 	require.Equal(t, "compute", selectedHost)
 	require.JSONEq(t, `{"host":"compute","status":"ready"}`, output.String())
@@ -187,7 +187,7 @@ func TestSetupE2EEventBusWritesOnlyBooleanProof(t *testing.T) {
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"e2e-eventbus", "--file", "custom.toml"})
+	cmd.SetArgs([]string{"e2e-eventbus", "--file", "moox.toml"})
 	require.NoError(t, cmd.Execute())
 	require.JSONEq(t, `{"public_tls":true,"worker_bind_fetch_ack":true,"worker_create_denied":true,"worker_publish_denied":true}`, output.String())
 	for _, secret := range []string{"admin-test-password", "control-ssh-password", "AKID-test-secret", "cloud-test-secret"} {
@@ -201,7 +201,7 @@ func TestEventBusE2ERequiresMatchingPermissionViolation(t *testing.T) {
 	assert.True(t, hasPermissionViolation(errorsCh, "$JS.API.CONSUMER.CREATE.MOOX"))
 
 	errorsCh <- errors.New("context deadline exceeded")
-	assert.False(t, hasPermissionViolation(errorsCh, "moox.cloudnode.job.execution.requested"))
+	assert.False(t, hasPermissionViolation(errorsCh, "moox.event.cloudnode.job.execution.requested"))
 }
 
 func TestSetupDeployServicePassesPackageAndService(t *testing.T) {
@@ -217,7 +217,7 @@ func TestSetupDeployServicePassesPackageAndService(t *testing.T) {
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"deploy-service", "--file", "custom.toml", "--host", "compute", "--service", "admin", "--package", "./release/moox-admin.zip", "--deploy-dir", "/home/ubuntu/moox/prod"})
+	cmd.SetArgs([]string{"deploy-service", "--file", "moox.toml", "--host", "compute", "--service", "admin", "--package", "./release/moox-admin.zip", "--deploy-dir", "/home/ubuntu/moox/prod"})
 	require.NoError(t, cmd.Execute())
 	require.Equal(t, "compute", selectedHost)
 	require.Equal(t, "./release/moox-admin.zip", selectedPackage)
@@ -242,7 +242,7 @@ func TestSetupHostsListsSanitizedManifestHosts(t *testing.T) {
 	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"hosts", "--file", "custom.toml"})
+	cmd.SetArgs([]string{"hosts", "--file", "moox.toml"})
 	require.NoError(t, cmd.Execute())
 	var result struct {
 		Hosts []setupHostChoice `json:"hosts"`
@@ -264,7 +264,7 @@ func TestSetupHostsListsCompileHostRole(t *testing.T) {
 	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"hosts", "--file", "custom.toml"})
+	cmd.SetArgs([]string{"hosts", "--file", "moox.toml"})
 	require.NoError(t, cmd.Execute())
 	var result struct {
 		Hosts []setupHostChoice `json:"hosts"`
@@ -311,7 +311,7 @@ func TestSetupDeployStorageRequiresAndPassesSelectedHost(t *testing.T) {
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"deploy-storage", "--file", "custom.toml", "--host", "compute"})
+	cmd.SetArgs([]string{"deploy-storage", "--file", "moox.toml", "--host", "compute"})
 	require.NoError(t, cmd.Execute())
 	require.Equal(t, "compute", selected)
 	require.Equal(t, []string{"control", "compute"}, validatedHosts)
@@ -363,7 +363,7 @@ func TestSetupDeployControlWritesSanitizedValidationResultOnFailure(t *testing.T
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"deploy-control", "--file", "custom.toml"})
+	cmd.SetArgs([]string{"deploy-control", "--file", "moox.toml"})
 	require.ErrorIs(t, cmd.Execute(), setupvalidate.ErrValidationFailed)
 	require.JSONEq(t, `{"checks":[{"name":"host:control","status":"invalid","code":"host_key_unknown","fingerprint":"SHA256:verified"}]}`, output.String())
 }
@@ -384,7 +384,7 @@ func TestSetupDeployControlAcceptsExplicitResetFlag(t *testing.T) {
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"deploy-control", "--file", "custom.toml", "--reset-data"})
+	cmd.SetArgs([]string{"deploy-control", "--file", "moox.toml", "--reset-data"})
 	require.NoError(t, cmd.Execute())
 	require.True(t, reset)
 	require.JSONEq(t, `{"host":"control","status":"ready","reset_data":true,"certificate":{"mode":"public","issuer":"letsencrypt","automatic_renewal":true,"renewal":"caddy_acme_ari"}}`, output.String())
@@ -407,7 +407,7 @@ func TestSetupDeployControlValidatesConfiguredResolverHost(t *testing.T) {
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"deploy-control", "--file", "custom.toml"})
+	cmd.SetArgs([]string{"deploy-control", "--file", "moox.toml"})
 	require.NoError(t, cmd.Execute())
 	require.Len(t, hosts, 2)
 	require.Equal(t, "control", hosts[0].Name)
@@ -548,7 +548,7 @@ func TestSetupDeployStoragePassesExplicitResetFlag(t *testing.T) {
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"deploy-storage", "--file", "custom.toml", "--host", "compute", "--reset-storage-data"})
+	cmd.SetArgs([]string{"deploy-storage", "--file", "moox.toml", "--host", "compute", "--reset-storage-data"})
 	require.NoError(t, cmd.Execute())
 	require.True(t, reset)
 	require.JSONEq(t, `{"host":"compute","status":"ready","reset_storage_data":true,"reset_view_data":false}`, output.String())
@@ -573,7 +573,7 @@ func TestSetupDeployStoragePassesViewResetFlagAndRejectsCombinedReset(t *testing
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"deploy-storage", "--file", "custom.toml", "--host", "compute", "--reset-view-data"})
+	cmd.SetArgs([]string{"deploy-storage", "--file", "moox.toml", "--host", "compute", "--reset-view-data"})
 	require.NoError(t, cmd.Execute())
 	require.True(t, resetView)
 	require.JSONEq(t, `{"host":"compute","status":"ready","reset_storage_data":false,"reset_view_data":true}`, output.String())
@@ -588,7 +588,7 @@ func TestSetupDeployStoragePassesViewResetFlagAndRejectsCombinedReset(t *testing
 		},
 		deployStorage: func(context.Context, *setupconfig.Snapshot, string, bool, bool) error { return nil },
 	})
-	cmd.SetArgs([]string{"deploy-storage", "--file", "custom.toml", "--host", "compute", "--reset-view-data", "--reset-storage-data"})
+	cmd.SetArgs([]string{"deploy-storage", "--file", "moox.toml", "--host", "compute", "--reset-view-data", "--reset-storage-data"})
 	require.EqualError(t, cmd.Execute(), "--reset-storage-data and --reset-view-data are mutually exclusive")
 }
 
@@ -609,7 +609,7 @@ func TestSetupDeployStorageRequiresCompletedControlSetup(t *testing.T) {
 			return nil
 		},
 	})
-	cmd.SetArgs([]string{"deploy-storage", "--file", "custom.toml", "--host", "compute"})
+	cmd.SetArgs([]string{"deploy-storage", "--file", "moox.toml", "--host", "compute"})
 	require.EqualError(t, cmd.Execute(), "setup_incomplete")
 	require.False(t, deployed)
 }
@@ -628,11 +628,11 @@ func TestSetupMetadataImportPassesExplicitHostAndSpaces(t *testing.T) {
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"metadata-import", "--file", "custom.toml", "--seed", "seed.yaml", "--storage-host", "compute", "--spaces", "stock_cn,crypto"})
+	cmd.SetArgs([]string{"metadata-import", "--file", "moox.toml", "--seed", "seed.yaml", "--storage-host", "compute", "--spaces", "stockcn,crypto"})
 	require.NoError(t, cmd.Execute())
 	require.Equal(t, "compute", host)
 	require.Equal(t, "seed.yaml", seed)
-	require.Equal(t, []string{"stock_cn", "crypto"}, spaces)
+	require.Equal(t, []string{"stockcn", "crypto"}, spaces)
 	var result metadataImportSummary
 	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
 	require.Equal(t, 12, result.Applied)
@@ -641,7 +641,7 @@ func TestSetupMetadataImportPassesExplicitHostAndSpaces(t *testing.T) {
 func setupSnapshot(t *testing.T) *setupconfig.Snapshot {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "custom.toml")
+	path := filepath.Join(dir, "moox.toml")
 	raw := []byte(`[admin]
 username = "admin"
 password = "admin-test-password"

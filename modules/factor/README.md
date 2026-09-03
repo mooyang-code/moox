@@ -11,7 +11,7 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
 ## Build And Run
 
 ```bash
-./scripts/build.sh factor
+./scripts/build/build.sh factor
 
 # 服务端启动方式保持不变
 ./bin/moox-factor

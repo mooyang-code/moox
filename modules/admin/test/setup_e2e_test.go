@@ -86,7 +86,7 @@ func TestSetupPrivateHTTPTransactionE2E(t *testing.T) {
 	require.Len(t, spaces, 2)
 	assert.Equal(t, "crypto", spaces[0].SpaceID)
 	assert.Equal(t, "crypto", spaces[0].Market)
-	assert.Equal(t, "stock_cn", spaces[1].SpaceID)
+	assert.Equal(t, "stockcn", spaces[1].SpaceID)
 	assert.Equal(t, "Asia/Shanghai", spaces[1].Timezone)
 
 	retry := &pb.ApplySetupRsp{}
@@ -135,7 +135,7 @@ func setupApplyRequest() *pb.ApplySetupReq {
 		ControlHost:  &pb.SetupHost{Name: "control", Address: "192.0.2.10", Port: 22, Username: "ubuntu", Password: "control-e2e-password"},
 		OtherHosts:   []*pb.SetupHost{{Name: "compute-1", Address: "192.0.2.11", Port: 22, Username: "ubuntu", Password: "compute-e2e-password"}},
 		Spaces: []*pb.SetupSpace{
-			{SpaceId: "stock_cn", Name: "A股市场", Owner: "quant", Market: "CN", Timezone: "Asia/Shanghai", Status: "active", AttributesJson: "{}"},
+			{SpaceId: "stockcn", Name: "A股市场", Owner: "quant", Market: "CN", Timezone: "Asia/Shanghai", Status: "active", AttributesJson: "{}"},
 			{SpaceId: "crypto", Name: "加密货币市场", Owner: "quant", Market: "crypto", Timezone: "UTC", Status: "active", AttributesJson: "{}"},
 		},
 	}

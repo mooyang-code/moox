@@ -24,7 +24,7 @@ func NewStockKlinePipeline(storage Storage) (*KlinePipeline, error) {
 	sourceID := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SOURCE_ID")))
 	if providerID != "" || sourceID != "" {
 		if providerID == "" || sourceID == "" {
-			return nil, fmt.Errorf("stock_cn source-bound runtime requires provider and source_id")
+			return nil, fmt.Errorf("stockcn source-bound runtime requires provider and source_id")
 		}
 		return NewStockKlinePipelineForSource(storage, providerID, sourceID)
 	}
@@ -40,7 +40,7 @@ func NewStockKlinePipeline(storage Storage) (*KlinePipeline, error) {
 	for _, providerID := range route.KlineProviders() {
 		providerConfig, ok := providerConfigs[providerID]
 		if !ok || !providerConfig.KlineEnabled || providerConfig.KlineShadow {
-			return nil, fmt.Errorf("stock_cn kline provider %q is not active in source config", providerID)
+			return nil, fmt.Errorf("stockcn kline provider %q is not active in source config", providerID)
 		}
 		provider, providerErr := newStockCNProvider(providerID, providerConfig)
 		if providerErr != nil {
@@ -56,7 +56,7 @@ func NewStockKlinePipeline(storage Storage) (*KlinePipeline, error) {
 	}
 	chain := configuredStockCNProviderChain("MOOX_MARKET_FETCH_PROVIDER_CHAIN", route.KlineProviders())
 	if len(chain) == 0 {
-		return nil, fmt.Errorf("stock_cn kline provider chain is empty")
+		return nil, fmt.Errorf("stockcn kline provider chain is empty")
 	}
 	if err := validateStockCNProviderChain(chain, providerConfigs, true); err != nil {
 		return nil, err
@@ -70,12 +70,12 @@ func NewStockKlinePipeline(storage Storage) (*KlinePipeline, error) {
 
 func NewStockKlinePipelineForSource(storage Storage, providerID, sourceID string) (*KlinePipeline, error) {
 	if storage == nil {
-		return nil, fmt.Errorf("stock_cn kline storage is required")
+		return nil, fmt.Errorf("stockcn kline storage is required")
 	}
 	providerID = strings.ToLower(strings.TrimSpace(providerID))
 	sourceID = strings.ToLower(strings.TrimSpace(sourceID))
 	if providerID == "" || sourceID == "" {
-		return nil, fmt.Errorf("stock_cn source-bound runtime requires provider and source_id")
+		return nil, fmt.Errorf("stockcn source-bound runtime requires provider and source_id")
 	}
 	route, err := loadStockCNRoute()
 	if err != nil {
@@ -89,7 +89,7 @@ func NewStockKlinePipelineForSource(storage Storage, providerID, sourceID string
 		}
 	}
 	if !found {
-		return nil, fmt.Errorf("stock_cn source %s/%s is not an active route source", providerID, sourceID)
+		return nil, fmt.Errorf("stockcn source %s/%s is not an active route source", providerID, sourceID)
 	}
 	providerConfigs, err := loadStockCNProviderRuntime(route)
 	if err != nil {
@@ -97,13 +97,13 @@ func NewStockKlinePipelineForSource(storage Storage, providerID, sourceID string
 	}
 	providerConfig, ok := providerConfigs[providerID]
 	if !ok || !providerConfig.KlineEnabled || providerConfig.KlineShadow {
-		return nil, fmt.Errorf("stock_cn source %s/%s is not active in source config", providerID, sourceID)
+		return nil, fmt.Errorf("stockcn source %s/%s is not active in source config", providerID, sourceID)
 	}
 	registry := marketdata.NewRegistry()
 	for _, candidateID := range route.KlineProviders() {
 		candidateConfig, candidateOK := providerConfigs[candidateID]
 		if !candidateOK || !candidateConfig.KlineEnabled || candidateConfig.KlineShadow {
-			return nil, fmt.Errorf("stock_cn kline provider %q is not active in source config", candidateID)
+			return nil, fmt.Errorf("stockcn kline provider %q is not active in source config", candidateID)
 		}
 		candidateSourceID := stockCNSourceID(route, candidateID)
 		candidate, providerErr := newStockCNProviderForSource(candidateID, candidateSourceID, candidateConfig)
@@ -141,7 +141,7 @@ func stockCNSourceID(route stockCNRoute, providerID string) string {
 }
 
 // NewCryptoKlinePipeline is the crypto composition root for the same common
-// KlinePipeline used by stock_cn. Binance remains responsible only for HTTP
+// KlinePipeline used by stockcn. Binance remains responsible only for HTTP
 // protocol parsing and normalization; Storage and routing stay market-agnostic.
 func NewCryptoKlinePipeline(storage Storage, productType marketdata.ProductType) (*KlinePipeline, error) {
 	if storage == nil {
@@ -171,8 +171,8 @@ func NewCryptoKlinePipeline(storage Storage, productType marketdata.ProductType)
 
 func loadStockCNCalendar() (*stockmarket.Calendar, error) {
 	_, sourceFile, _, _ := runtime.Caller(0)
-	sourceRelative := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", "..", "config", "markets", "stock_cn", "calendar.yaml"))
-	candidates := []string{strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_CALENDAR_PATH")), "markets/stock_cn/calendar.yaml", "config/markets/stock_cn/calendar.yaml", "modules/collector/config/markets/stock_cn/calendar.yaml", sourceRelative}
+	sourceRelative := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", "..", "config", "markets", "stockcn", "calendar.yaml"))
+	candidates := []string{strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_CALENDAR_PATH")), "markets/stockcn/calendar.yaml", "config/markets/stockcn/calendar.yaml", "modules/collector/config/markets/stockcn/calendar.yaml", sourceRelative}
 	for _, candidate := range candidates {
 		if candidate == "" {
 			continue
@@ -182,11 +182,11 @@ func loadStockCNCalendar() (*stockmarket.Calendar, error) {
 		}
 		calendar, err := stockmarket.LoadCalendar(candidate)
 		if err != nil {
-			return nil, fmt.Errorf("load stock_cn calendar %s: %w", candidate, err)
+			return nil, fmt.Errorf("load stockcn calendar %s: %w", candidate, err)
 		}
 		return calendar, nil
 	}
-	return nil, fmt.Errorf("stock_cn calendar config was not found")
+	return nil, fmt.Errorf("stockcn calendar config was not found")
 }
 
 func NewStockInstrumentPipeline(storage InstrumentStorage) (*InstrumentPipeline, error) {
@@ -202,7 +202,7 @@ func NewStockInstrumentPipeline(storage InstrumentStorage) (*InstrumentPipeline,
 	for _, providerID := range route.InstrumentProviders() {
 		providerConfig, ok := providerConfigs[providerID]
 		if !ok || !providerConfig.InstrumentEnabled {
-			return nil, fmt.Errorf("stock_cn instrument provider %q is not active in source config", providerID)
+			return nil, fmt.Errorf("stockcn instrument provider %q is not active in source config", providerID)
 		}
 		provider, providerErr := newStockCNProvider(providerID, providerConfig)
 		if providerErr != nil {
@@ -214,34 +214,34 @@ func NewStockInstrumentPipeline(storage InstrumentStorage) (*InstrumentPipeline,
 	}
 	chain := configuredStockCNProviderChain("MOOX_INSTRUMENT_PROVIDER_CHAIN", route.InstrumentProviders())
 	if len(chain) == 0 {
-		return nil, fmt.Errorf("stock_cn instrument provider chain is empty")
+		return nil, fmt.Errorf("stockcn instrument provider chain is empty")
 	}
 	if err := validateStockCNProviderChain(chain, providerConfigs, false); err != nil {
 		return nil, err
 	}
-	return &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: chain, InstrumentProviderTimeout: 2 * time.Minute, SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID, DatasetID: StockCNInstrumentDatasetID, TargetDatasetID: StockCNDatasetID, DataSourceID: StockCNDataSourceID, RequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}, MinimumCount: 4000, RouteID: "stock_cn_instrument_v1"}, nil
+	return &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: chain, InstrumentProviderTimeout: 2 * time.Minute, SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID, DatasetID: StockCNInstrumentDatasetID, TargetDatasetID: StockCNDatasetID, DataSourceID: StockCNDataSourceID, RequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}, MinimumCount: 4000, RouteID: "stockcn_instrument_v1"}, nil
 }
 
 func validateStockCNProviderChain(chain []string, providers map[string]stockCNProviderRuntime, kline bool) error {
 	for _, providerID := range chain {
 		config, ok := providers[strings.ToLower(strings.TrimSpace(providerID))]
 		if !ok {
-			return fmt.Errorf("stock_cn provider chain contains unconfigured provider %q", providerID)
+			return fmt.Errorf("stockcn provider chain contains unconfigured provider %q", providerID)
 		}
 		if kline && (!config.KlineEnabled || config.KlineShadow) {
-			return fmt.Errorf("stock_cn kline provider %q is not active", providerID)
+			return fmt.Errorf("stockcn kline provider %q is not active", providerID)
 		}
 		if !kline && !config.InstrumentEnabled {
-			return fmt.Errorf("stock_cn instrument provider %q is not active", providerID)
+			return fmt.Errorf("stockcn instrument provider %q is not active", providerID)
 		}
 	}
 	return nil
 }
 
 func newStockCNProvider(providerID string, config stockCNProviderRuntime) (marketdata.MarketProvider, error) {
-	sourceID := "stock_cn_http"
+	sourceID := "stockcn_http"
 	if strings.EqualFold(strings.TrimSpace(providerID), "sina") {
-		sourceID = "stock_cn_minute_http"
+		sourceID = "stockcn_minute_http"
 	}
 	return newStockCNProviderForSource(providerID, sourceID, config)
 }
@@ -270,7 +270,7 @@ func newStockCNProviderForSource(providerID, sourceID string, config stockCNProv
 			RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest,
 		}), nil
 	default:
-		return nil, fmt.Errorf("unsupported stock_cn provider %q", providerID)
+		return nil, fmt.Errorf("unsupported stockcn provider %q", providerID)
 	}
 }
 
@@ -308,7 +308,7 @@ func NewMarketInstrumentPipeline(storage InstrumentStorage, marketID string, pro
 }
 
 // NewCryptoInstrumentPipeline composes Binance's typed InstrumentFetcher with
-// the same snapshot/active-set pipeline used by stock_cn. The target dataset is
+// the same snapshot/active-set pipeline used by stockcn. The target dataset is
 // intentionally optional for symbol snapshots: callers can stage the complete
 // instrument membership without implicitly activating a K-line dataset.
 func NewCryptoInstrumentPipeline(storage InstrumentStorage, productType marketdata.ProductType) (*InstrumentPipeline, error) {
@@ -323,10 +323,10 @@ func NewCryptoInstrumentPipeline(storage InstrumentStorage, productType marketda
 	if err := registry.Register(adapter); err != nil {
 		return nil, fmt.Errorf("register Binance instrument provider: %w", err)
 	}
-	datasetID := "binance_spot_symbols"
+	datasetID := "dataset_binance_spot_symbols"
 	instrumentType := "spot"
 	if productType == marketdata.ProductSwap {
-		datasetID = "binance_swap_symbols"
+		datasetID = "dataset_binance_swap_symbols"
 		instrumentType = "swap"
 	}
 	return &InstrumentPipeline{
@@ -348,7 +348,7 @@ func NewMarketStorage(target, writeSource string) (Storage, error) {
 }
 
 // NewMarketStorageForMarket is the composition-root storage factory. Storage
-// authentication is shared by all market runtimes, while the stock_cn market
+// authentication is shared by all market runtimes, while the stockcn market
 // uses the stock binding instead of interpreting "equity" as a Binance
 // product type.
 func NewMarketStorageForMarket(target, marketType, writeSource string) (StorageReader, error) {

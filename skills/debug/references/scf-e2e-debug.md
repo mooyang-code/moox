@@ -30,7 +30,7 @@ Never paste SecretKey, service auth secret, SSH password, signed `Auth` headers,
 Prefer `moox-cli` because it uses the same package path as one-click publish:
 
 ```bash
-scripts/build.sh cli collector
+scripts/build/build.sh cli collector
 bin/moox-cli collector function package \
   --collector-root modules/collector \
   --version vYYYYMMDDHHMM \
@@ -63,7 +63,7 @@ Expected contents:
 Deploy control, storage, collector, CLI, web-host assets, scripts, docs, and skills through the root deploy script:
 
 ```bash
-scripts/deploy-moox.sh \
+scripts/deploy/deploy-moox.sh \
   --target ubuntu@<remote-ip> \
   --dir ~/moox \
   --goos linux \
@@ -74,7 +74,7 @@ scripts/deploy-moox.sh \
 For package-only rollout:
 
 ```bash
-scripts/deploy-moox.sh --target ubuntu@<remote-ip> --dir ~/moox --goos linux --goarch amd64 --no-start
+scripts/deploy/deploy-moox.sh --target ubuntu@<remote-ip> --dir ~/moox --goos linux --goarch amd64 --no-start
 ```
 
 Remote checks:

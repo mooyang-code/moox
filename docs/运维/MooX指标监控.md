@@ -17,7 +17,7 @@
 - `MOOX_METRICS` 消息最多保留 24 小时或占用 512 MiB，达到任一边界后由 JetStream 淘汰最旧消息。
 - Monitor SQLite 中的检查结果和告警事件默认保留 14 天，由 `data_cleanup.timer` 启动时清理一次，之后每 6 小时清理。
 - 指标消息去重记录默认保留 7 天，由同一 Timer 删除过期记录；最新值仅供内部健康聚合使用。
-- 服务指标历史写入 Storage 内部 Dataset `moox_service_metrics`，默认保留 24 小时；高基数指标应优先降低 label cardinality，不能仅依赖延长历史窗口。
+- 服务指标历史写入 Storage 内部 Dataset `dataset_mooxsys_service_metrics`，默认保留 24 小时；高基数指标应优先降低 label cardinality，不能仅依赖延长历史窗口。
 - Storage 对四个主机指标 Dataset 默认保留 48 小时，由每小时执行的 `host_metrics_cleanup.timer` 进行有界 10 批清理；Monitor 不删除 Storage 事实。
 - Archive Parquet 和通用行情/因子事实不受指标历史清理影响。
 
@@ -25,14 +25,14 @@
 
 ## 元数据初始化
 
-历史数据使用 Storage 的内部 Space `moox_system` 和 Dataset `moox_service_metrics`，Space 以 `moox_`
+历史数据使用 Storage 的内部 Space `mooxsys` 和 Dataset `dataset_mooxsys_service_metrics`，Space 以 `moox_`
 前缀标记 MooX 管理范围。Monitor 和部署脚本都不会创建或修改 Storage 元数据。完成 Control 与
 Storage 部署后，统一执行：
 
 ```bash
 moox-cli setup init \
-  --file ./custom.toml \
-  --config-dir ./examples/setup/default \
+  --file ./moox.toml \
+  --config-dir ./config/setup \
   --storage-host control
 ```
 
@@ -44,8 +44,8 @@ moox-cli setup init \
 export MOOX_METRICS_STORAGE_METADATA_URL=http://storage-metadata:20200
 ```
 
-外部 Storage 只需从默认 metadata 中导入 `moox_system`。每个指标 Dataset 在 seed 中声明
-`data_node_id` 和 `keep_duration`；服务指标 Dataset `moox_service_metrics` 默认使用 24 小时
+外部 Storage 只需从默认 metadata 中导入 `mooxsys`。每个指标 Dataset 在 seed 中声明
+`data_node_id` 和 `keep_duration`；服务指标 Dataset `dataset_mooxsys_service_metrics` 默认使用 24 小时
 保留窗口。`series_id` 直接作为 `subject_id`，不为每条动态时序创建独立元数据对象。
 
 ## Topic、payload 和生产者配置
@@ -123,7 +123,7 @@ SQLite dedupe 后 ACK，不重复写入 latest。
 
 ```bash
 go test -count=1 ./modules/monitor/... ./packages/metricspb
-./scripts/test-deploy-moox-eventbus.sh
+./scripts/test/contract/test-deploy-moox-eventbus.sh
 cd web && node scripts/check-health-monitor.mjs && pnpm build:prod
 ```
 

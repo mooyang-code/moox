@@ -4,7 +4,7 @@
 
 **Goal:** Add a rerunnable `moox-cli setup init --config-dir` workflow that initializes the default A-share and crypto spaces in Admin and Storage, and rename the existing Pipeline monitoring vocabulary to module health checks plus Dataset health policy.
 
-**Architecture:** A fixed `examples/setup/default` bundle contains three schema-owned YAML files. `metadata.yaml` is the single initialization source for Admin business spaces and Storage metadata; Monitor alone consumes `dataset-health-policy.yaml`; the code-owned module health-check registry has no YAML dependency. The CLI performs strict create-or-verify operations and activates ready Datasets without pretending that Admin and Storage share a transaction.
+**Architecture:** A fixed `config/setup` bundle contains three schema-owned YAML files. `metadata.yaml` is the single initialization source for Admin business spaces and Storage metadata; Monitor alone consumes `dataset-health-policy.yaml`; the code-owned module health-check registry has no YAML dependency. The CLI performs strict create-or-verify operations and activates ready Datasets without pretending that Admin and Storage share a transaction.
 
 **Tech Stack:** Go 1.24, Cobra, YAML v3, protobuf/tRPC-Go, GORM/SQLite, Prometheus, Vue 3, Playwright, Bash contract tests.
 
@@ -12,10 +12,10 @@
 
 ## File Structure
 
-- `examples/setup/default/README.md`: explains the three fixed files and the `setup init` command.
-- `examples/setup/default/metadata.yaml`: A-share, crypto, and internal Monitor Storage metadata.
-- `examples/setup/default/dataset-health-policy.yaml`: Monitor-only realtime Dataset health thresholds.
-- `examples/setup/default/service-deployments.yaml`: Admin service deployment seed.
+- `config/setup/README.md`: explains the three fixed files and the `setup init` command.
+- `config/setup/metadata.yaml`: A-share, crypto, and internal Monitor Storage metadata.
+- `config/setup/dataset-health-policy.yaml`: Monitor-only realtime Dataset health thresholds.
+- `config/setup/service-deployments.yaml`: Admin service deployment seed.
 - `packages/report/module_health_checks.go`: code-owned module health-check registry.
 - `packages/report/dataset_health_policy.go`: strict Dataset health policy loader and environment validation.
 - `packages/report/module_health.go`: shared health verdict truth table.
@@ -254,9 +254,9 @@ git commit -m "refactor: expose health checks in doctor"
 - Modify: `modules/monitor/internal/doctor/context.go`
 - Modify: `modules/monitor/internal/rpc/doctor_context.go`
 - Modify: module metric bootstraps in `modules/{archive,cloudnode,collector,factor,strategy,trade}/internal`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/release.sh`
-- Modify: `scripts/release-matrix.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/release/release-matrix.sh`
 - Modify: related contract tests in `scripts/test-*.sh`
 
 - [ ] **Step 1: Write failing environment ownership tests**
@@ -314,7 +314,7 @@ Monitor loads `DatasetHealthPolicy` once and passes `RealtimeTimeSeries` into it
 Update deploy and release scripts to copy:
 
 ```text
-examples/setup/default/dataset-health-policy.yaml
+config/setup/dataset-health-policy.yaml
 ```
 
 to:
@@ -340,8 +340,8 @@ Run:
 (cd modules/monitor && go test ./... -count=1)
 (cd modules/collector && go test ./internal/bootstrap -count=1)
 (cd modules/cloudnode && go test ./internal/bootstrap -count=1)
-bash scripts/test-release-contract.sh
-bash scripts/test-deploy-moox-monitor.sh
+bash scripts/test/contract/test-release-contract.sh
+bash scripts/test/contract/test-deploy-moox-monitor.sh
 ```
 
 Expected: all commands pass and `rg -n 'MOOX_PIPELINE_CONFIG|pipeline_config_hash' modules scripts` returns no matches.
@@ -356,10 +356,10 @@ git commit -m "refactor: make dataset health policy monitor owned"
 ### Task 4: Consolidate Default Setup Files
 
 **Files:**
-- Create: `examples/setup/default/README.md`
-- Create: `examples/setup/default/metadata.yaml`
-- Create: `examples/setup/default/dataset-health-policy.yaml`
-- Move: `examples/service-deployments.seed.yaml` to `examples/setup/default/service-deployments.yaml`
+- Create: `config/setup/README.md`
+- Create: `config/setup/metadata.yaml`
+- Create: `config/setup/dataset-health-policy.yaml`
+- Move: `examples/service-deployments.seed.yaml` to `config/setup/service-deployments.yaml`
 - Delete: `examples/metadata-quant-initial.seed.yaml`
 - Delete: `examples/metadata-monitor-host.seed.yaml`
 - Delete: `examples/metadata-monitor-metrics.seed.yaml`
@@ -370,18 +370,18 @@ git commit -m "refactor: make dataset health policy monitor owned"
 
 - [ ] **Step 1: Write a failing bundle contract test**
 
-The test must decode `examples/setup/default/metadata.yaml` strictly and assert:
+The test must decode `config/setup/metadata.yaml` strictly and assert:
 
 ```go
-businessSpaces := []string{"crypto", "stock_cn"}
-internalSpaces := []string{"moox_system"}
+businessSpaces := []string{"crypto", "stockcn"}
+internalSpaces := []string{"mooxsys"}
 stockDatasets := []string{
-	"financial_statement_metric",
-	"financial_summary",
+	"dataset_stockcn_financial_statement_metric",
+	"dataset_stockcn_financial_summary",
 	"index_kline",
 	"stock_kline",
 }
-cryptoDatasets := []string{"perpetual_kline_1h", "spot_kline_1h"}
+cryptoDatasets := []string{"dataset_perpetual_kline_1h", "dataset_spot_kline_1h"}
 ```
 
 It must also assert that crypto Dataset/View frequencies equal `1H`, all references resolve, every Dataset has columns and a View, every View has ViewColumns, and the old root seed filenames do not exist.
@@ -394,14 +394,14 @@ Run:
 (cd modules/cli && go test ./internal/command -run TestDefaultSetupBundle -count=1)
 ```
 
-Expected: failure because `examples/setup/default/metadata.yaml` does not exist.
+Expected: failure because `config/setup/metadata.yaml` does not exist.
 
 - [ ] **Step 3: Create the fixed three-file bundle**
 
-Merge current Metadata resources into one YAML, remove `stock_hk` and `stock_us`, mark:
+Merge current Metadata resources into one YAML, remove `stockhk` and `stockus`, mark:
 
 ```yaml
-- id: moox_system
+- id: mooxsys
   name: MooX 系统
   attributes:
     scope: internal
@@ -410,7 +410,7 @@ Merge current Metadata resources into one YAML, remove `stock_hk` and `stock_us`
 Add Admin-facing market facts:
 
 ```yaml
-- id: stock_cn
+- id: stockcn
   name: A股市场
   market: CN
   timezone: Asia/Shanghai
@@ -433,7 +433,7 @@ realtime_timeseries:
     minimum_watermark_lag: 10m
   overrides:
     - space_id: crypto
-      dataset_id: spot_kline_1h
+      dataset_id: dataset_spot_kline_1h
       freq: 1H
       watermark_lag: 5m
 ```
@@ -479,7 +479,7 @@ Add these concrete cases to `service_test.go`:
 func setupSpaceManifest() Manifest {
 	manifest := testManifest()
 	manifest.Spaces = []Space{{
-		SpaceID: "stock_cn", Name: "A股市场", Market: "CN",
+		SpaceID: "stockcn", Name: "A股市场", Market: "CN",
 		Timezone: "Asia/Shanghai", Status: "active", AttributesJSON: "{}",
 	}}
 	return manifest
@@ -728,8 +728,8 @@ setupCmd.AddCommand(newSetupInitCmd(deps))
 with:
 
 ```text
---file         ./custom.toml
---config-dir   ./examples/setup/default
+--file         ./moox.toml
+--config-dir   ./config/setup
 --storage-host required
 ```
 
@@ -783,9 +783,9 @@ git commit -m "feat: initialize default spaces with setup init"
 - Modify: `README.md`
 - Modify: `docs/setup.md`
 - Modify: `modules/monitor/README.md`
-- Modify: `scripts/test-release-contract.sh`
-- Modify: `scripts/test-secret-scan-contract.sh`
-- Modify: `scripts/verify-event-contracts.sh`
+- Modify: `scripts/test/contract/test-release-contract.sh`
+- Modify: `scripts/test/contract/test-secret-scan-contract.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
 - Modify: deployment scripts that refer to old example paths or Pipeline terms
 
 - [ ] **Step 1: Change contract assertions first**
@@ -793,9 +793,9 @@ git commit -m "feat: initialize default spaces with setup init"
 Make shell contracts require:
 
 ```bash
-test -f "${release}/examples/setup/default/metadata.yaml"
-test -f "${release}/examples/setup/default/dataset-health-policy.yaml"
-test -f "${release}/examples/setup/default/service-deployments.yaml"
+test -f "${release}/config/setup/metadata.yaml"
+test -f "${release}/config/setup/dataset-health-policy.yaml"
+test -f "${release}/config/setup/service-deployments.yaml"
 test ! -e "${release}/examples/monitor-pipelines.yaml"
 ```
 
@@ -813,8 +813,8 @@ fi
 Run:
 
 ```bash
-bash scripts/test-release-contract.sh
-bash scripts/test-secret-scan-contract.sh
+bash scripts/test/contract/test-release-contract.sh
+bash scripts/test/contract/test-secret-scan-contract.sh
 ```
 
 Expected: old packaging paths or health vocabulary make at least one contract fail.
@@ -825,8 +825,8 @@ Document:
 
 ```bash
 moox-cli setup init \
-  --file ./custom.toml \
-  --config-dir ./examples/setup/default \
+  --file ./moox.toml \
+  --config-dir ./config/setup \
   --storage-host control
 ```
 
@@ -837,10 +837,10 @@ Rename remaining variables, comments, logs, config keys, metric assertions, and 
 Run:
 
 ```bash
-bash scripts/test-release-contract.sh
-bash scripts/test-secret-scan-contract.sh
-bash scripts/test-monitor-coverage-contract.sh
-bash scripts/verify-event-contracts.sh
+bash scripts/test/contract/test-release-contract.sh
+bash scripts/test/contract/test-secret-scan-contract.sh
+bash scripts/test/contract/test-monitor-coverage-contract.sh
+bash scripts/check/verify-event-contracts.sh
 rg -n -i 'pipeline' packages/report modules/monitor modules/cli/internal/doctor scripts \
   --glob '!*.sum'
 ```
@@ -877,7 +877,7 @@ Run in order, never concurrently:
 
 ```bash
 make proto-check
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-go-workspace.sh
 make verify-pr
 ```
 
@@ -929,11 +929,11 @@ Run:
 make release
 ```
 
-Expected: release succeeds and includes `examples/setup/default`.
+Expected: release succeeds and includes `config/setup`.
 
 - [ ] **Step 2: Deploy the changed Admin, Monitor, web, and configuration**
 
-Use the repository deployment commands and the existing read-only `custom.toml`; do not print credentials. Confirm the Admin Setup Proto version and Monitor policy hash through their health endpoints before initialization.
+Use the repository deployment commands and the existing read-only `moox.toml`; do not print credentials. Confirm the Admin Setup Proto version and Monitor policy hash through their health endpoints before initialization.
 
 - [ ] **Step 3: Run real initialization twice**
 
@@ -941,8 +941,8 @@ Run:
 
 ```bash
 moox-cli setup init \
-  --file ./custom.toml \
-  --config-dir ./examples/setup/default \
+  --file ./moox.toml \
+  --config-dir ./config/setup \
   --storage-host control
 ```
 
@@ -957,8 +957,8 @@ Expected second run: Admin spaces, Storage metadata, and active Datasets are rep
 Against `https://106.53.107.122:9527/#/home`, verify:
 
 ```text
-A股市场 -> stock_cn -> stock_kline/index_kline/financial datasets and A-share fields
-加密货币市场 -> crypto -> spot_kline_1h/perpetual_kline_1h and crypto fields
+A股市场 -> stockcn -> stock_kline/index_kline/financial datasets and A-share fields
+加密货币市场 -> crypto -> dataset_spot_kline_1h/dataset_perpetual_kline_1h and crypto fields
 ```
 
 Capture network requests and assert `X-Space-Id` equals the selected space for home statistics, Dataset list, and Field list. Save screenshots of both selected spaces without exposing credentials.
@@ -970,7 +970,7 @@ Run:
 ```bash
 git diff --check
 make proto-check
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-go-workspace.sh
 make verify-pr
 git status --short
 ```

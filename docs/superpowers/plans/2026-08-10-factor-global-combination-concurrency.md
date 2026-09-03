@@ -50,7 +50,7 @@ Storage View
 - `modules/factor/internal/bootstrap/config.go`：只暴露 `EngineConfig.PythonWorkers`，删除 `SchedulerConfig`。
 - `modules/factor/config/app.yaml`：正式配置使用 `python_workers: 100`，删除 `scheduler` 节。
 - `modules/factor/internal/bootstrap/bootstrap.go`：用同一个 `PythonWorkers` 构建 `PythonWorkerPool` 和 `TaskRunner`，不再 Start/Stop scheduler。
-- `scripts/deploy-moox.sh`、`scripts/tests/contract/test-deploy-moox-factor.sh`：透传并验证新环境变量。
+- `scripts/deploy/deploy-moox.sh`、`scripts/test/contract/test-deploy-moox-factor.sh`：透传并验证新环境变量。
 
 ### Python worker 分发
 
@@ -113,7 +113,7 @@ Storage View
 - Modify: `modules/factor/README.md`
 - Modify: `modules/factor/test/view_driven_e2e_test.go`
 - Modify: `modules/factor/test/storage_e2e_test.go`
-- Modify: `scripts/tests/e2e/test-factor-view-ready-e2e.sh`
+- Modify: `scripts/test/e2e/test-factor-view-ready-e2e.sh`
 
 ## 2. 实施任务
 
@@ -916,9 +916,9 @@ git commit -m "refactor(factor): expose global worker pool status"
 ### Task 7: 更新部署配置和合同测试
 
 **Files:**
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/tests/contract/test-deploy-moox-factor.sh`
-- Modify: `scripts/moox-factor-run-once.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-factor.sh`
+- Modify: `scripts/runtime/moox-factor-run-once.sh`
 
 - [ ] **Step 1: 写部署环境变量失败断言**
 
@@ -933,7 +933,7 @@ grep -Fq "python_workers: 100" "${UNPACKED}/factor/config/app.yaml"
 
 - [ ] **Step 2: 运行合同测试确认新变量未透传**
 
-Run: `bash scripts/tests/contract/test-deploy-moox-factor.sh`
+Run: `bash scripts/test/contract/test-deploy-moox-factor.sh`
 
 Expected: FAIL，缺少 `MOOX_FACTOR_ENGINE_PYTHON_WORKERS=100`。
 
@@ -949,15 +949,15 @@ Expected: FAIL，缺少 `MOOX_FACTOR_ENGINE_PYTHON_WORKERS=100`。
 
 - [ ] **Step 4: 运行部署合同测试**
 
-Run: `bash scripts/tests/contract/test-deploy-moox-factor.sh`
+Run: `bash scripts/test/contract/test-deploy-moox-factor.sh`
 
 Expected: PASS，解包后的配置只有新字段，captured env 为 100。
 
 - [ ] **Step 5: 提交部署改动**
 
 ```bash
-git add scripts/deploy-moox.sh scripts/tests/contract/test-deploy-moox-factor.sh \
-  scripts/moox-factor-run-once.sh
+git add scripts/deploy/deploy-moox.sh scripts/test/contract/test-deploy-moox-factor.sh \
+  scripts/runtime/moox-factor-run-once.sh
 git commit -m "chore(factor): deploy global python worker limit"
 ```
 
@@ -1022,7 +1022,7 @@ git commit -m "docs(factor): document global combination concurrency"
 **Files:**
 - Modify: `modules/factor/test/view_driven_e2e_test.go`
 - Modify: `modules/factor/test/storage_e2e_test.go`
-- Modify: `scripts/tests/e2e/test-factor-view-ready-e2e.sh`
+- Modify: `scripts/test/e2e/test-factor-view-ready-e2e.sh`
 
 - [ ] **Step 1: 增加同 subject 双因子结果 E2E**
 
@@ -1074,7 +1074,7 @@ Expected: PASS，无 shared result/state 数据竞争。
 
 - [ ] **Step 6: 运行真实 EventBus/Storage E2E**
 
-Run: `MOOX_RUN_REAL_FACTOR_E2E=1 bash scripts/tests/e2e/test-factor-view-ready-e2e.sh`
+Run: `MOOX_RUN_REAL_FACTOR_E2E=1 bash scripts/test/e2e/test-factor-view-ready-e2e.sh`
 
 Expected: PASS，真实链路覆盖 `ViewSourcePeriodReady -> N*M 组合 -> Result Dataset/View -> FactorPeriodComputed -> ViewFactorPeriodReady`。
 
@@ -1093,7 +1093,7 @@ Expected: PASS，真实链路覆盖 `ViewSourcePeriodReady -> N*M 组合 -> Resu
 
 - [ ] **Step 8: 运行工作区和发布合同**
 
-Run: `./scripts/test-go-workspace.sh`
+Run: `./scripts/test/contract/test-go-workspace.sh`
 
 Expected: PASS。
 
@@ -1108,7 +1108,7 @@ Expected: 只包含本计划明确列出的改动；没有生成中间态或 Pyt
 - [ ] **Step 9: 提交验收测试**
 
 ```bash
-git add modules/factor/test scripts/tests/e2e/test-factor-view-ready-e2e.sh
+git add modules/factor/test scripts/test/e2e/test-factor-view-ready-e2e.sh
 git commit -m "test(factor): verify global combination worker pool"
 ```
 

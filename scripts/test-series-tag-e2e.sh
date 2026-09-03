@@ -1,1 +1,0 @@
-tests/e2e/test-series-tag-e2e.sh

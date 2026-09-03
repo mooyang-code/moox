@@ -170,10 +170,10 @@ MOOX_NOTIFICATION_WEBHOOK_URL
 - `modules/monitor/internal/observability/overview.go`：继续提供内部技术事实，不再直接暴露给页面。
 - `modules/monitor/config/trpc_go.yaml`：删除 `metric_rule.timer`。
 - `packages/report/config.go`：默认只发送 `moox_*`，删除用户 include/exclude 覆盖。
-- `custom.toml.example`及相关初始化说明：增加 `[notification]`。
+- `moox.toml.example`及相关初始化说明：增加 `[notification]`。
 - `modules/cli/internal/setup/config/config.go`：解析和校验通用通知配置。
 - `modules/cli/internal/setup/deploy/deploy.go`：生成新的通知环境变量。
-- `scripts/deploy-moox.sh`：读取新的通用通知变量。
+- `scripts/deploy/deploy-moox.sh`：读取新的通用通知变量。
 - `modules/admin/internal/bootstrap/certificate_watch.go`：通过通用通知工厂创建紧急发送器。
 - `web/src/views/ops/service-management/index.vue`：页签改为`health`。
 - `web/src/views/ops/service-management/gateway-nodes.test.ts`：断言三个页签。
@@ -635,8 +635,8 @@ git commit -m "refactor: route monitor alerts through global channel"
 func TestHealthViewAggregatesBusinessItemsWithWorstStatus(t *testing.T) {
 	facts := observability.Overview{
 		Datasets: []observability.DatasetFrequencyStatus{
-			{Producer: "collector", DatasetID: "binance_spot_kline_1m", Status: "healthy"},
-			{Producer: "collector", DatasetID: "spot_kline_1h", Status: "stale", Reason: "run stale"},
+			{Producer: "collector", DatasetID: "dataset_binance_spot_kline_1m", Status: "healthy"},
+			{Producer: "collector", DatasetID: "dataset_spot_kline_1h", Status: "stale", Reason: "run stale"},
 			{Producer: "factor", DatasetID: "binance_spot_kline_1m_factor", Status: "healthy"},
 		},
 		BusinessChecks: []observability.BusinessStatus{{Kind: "balance", Status: "healthy"}},
@@ -1165,13 +1165,13 @@ git commit -m "feat: consolidate health monitoring UI"
 
 **涉及文件：**
 
-- 修改：`custom.toml.example`
-- 修改：其他 custom.toml 模板和生成器
+- 修改：`moox.toml.example`
+- 修改：其他 moox.toml 模板和生成器
 - 修改：`modules/cli/internal/setup/config/config.go`
 - 修改：`modules/cli/internal/setup/config/config_test.go`
 - 修改：`modules/cli/internal/setup/deploy/deploy.go`
 - 修改：`modules/cli/internal/setup/deploy/deploy_test.go`
-- 修改：`scripts/deploy-moox.sh`
+- 修改：`scripts/deploy/deploy-moox.sh`
 - 修改：相关 Shell 契约测试
 - 修改：`modules/admin/internal/bootstrap/certificate_watch.go`
 - 修改：`modules/admin/internal/bootstrap/certificate_watch_test.go`
@@ -1188,7 +1188,7 @@ git commit -m "feat: consolidate health monitoring UI"
 - 类型与 URL 不匹配失败；
 - 空 URL 合法且不关闭监控。
 
-- [ ] **步骤 2：替换 custom.toml 配置**
+- [ ] **步骤 2：替换 moox.toml 配置**
 
 ```toml
 [notification]
@@ -1279,7 +1279,7 @@ git commit -m "refactor: configure generic notification channel"
 3. 只删除 Monitor SQLite，不删除 Storage、Collector、Factor、Trade 或 EventBus 数据；
 4. 启动 Monitor，由 SysDeploy、业务新鲜度、Market Canary 和 HostAgent 重新生成系统事实；
 5. 在健康页面配置全局通知通道；
-6. 使用现有有界维护命令清理旧 `moox_service_metrics` 目录和历史；
+6. 使用现有有界维护命令清理旧 `dataset_mooxsys_service_metrics` 目录和历史；
 7. 验证新写入只包含业务健康指标。
 
 脚本必须打印将要处理的目录，并拒绝操作配置的 Monitor 数据目录之外的路径。
@@ -1324,7 +1324,7 @@ go test -race ./... -count=1
 
 ```bash
 cd ../..
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-go-workspace.sh
 make test-web
 make verify-pr
 ```

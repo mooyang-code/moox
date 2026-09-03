@@ -127,7 +127,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		// rule/subject remains. This also clears stale FunctionName bindings
 		// without inventing a fake market subject.
 		groups = []TaskGroup{{
-			Provider: "stock_cn_multi", MarketType: "equity", MarketID: StockCNSpaceID,
+			Provider: "stockcn_multi", MarketType: "equity", MarketID: StockCNSpaceID,
 			InstrumentType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
 		}}
 	}
@@ -167,20 +167,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	var assignments []NodeAssignment
 	if stockCN {
 		if len(groups) != 1 {
-			return r.fail(spaceID, "rules", fmt.Errorf("stock_cn requires exactly one merged kline assignment group, got %d", len(groups)))
+			return r.fail(spaceID, "rules", fmt.Errorf("stockcn requires exactly one merged kline assignment group, got %d", len(groups)))
 		}
 		if r.ExpectedStockCNTimerFunctions <= 0 {
-			return r.fail(spaceID, "capacity", fmt.Errorf("stock_cn timer function count must be an explicit positive value"))
+			return r.fail(spaceID, "capacity", fmt.Errorf("stockcn timer function count must be an explicit positive value"))
 		}
 		if r.MeasuredSafeGroupSize <= 0 {
-			return r.fail(spaceID, "capacity", fmt.Errorf("stock_cn measured_safe_group_size must be a positive value"))
+			return r.fail(spaceID, "capacity", fmt.Errorf("stockcn measured_safe_group_size must be a positive value"))
 		}
 		requiredGroupSize, sizeErr := requiredStockCNGroupSize(len(groups[0].Subjects), r.ExpectedStockCNTimerFunctions)
 		if sizeErr != nil {
 			return r.fail(spaceID, "capacity", sizeErr)
 		}
 		if requiredGroupSize > r.MeasuredSafeGroupSize {
-			return r.fail(spaceID, "capacity", fmt.Errorf("stock_cn required_group_size %d exceeds measured_safe_group_size %d", requiredGroupSize, r.MeasuredSafeGroupSize))
+			return r.fail(spaceID, "capacity", fmt.Errorf("stockcn required_group_size %d exceeds measured_safe_group_size %d", requiredGroupSize, r.MeasuredSafeGroupSize))
 		}
 		assignments, err = BuildStockCNAssignmentsWithStagger(groups[0], nodes, r.MeasuredSafeGroupSize, r.stockCNTradingDate(), r.StockCNStagger, r.ExpectedStockCNTimerFunctions)
 	} else {
@@ -832,16 +832,16 @@ func marketIdentity(marketID, instrumentType, datasetID string) (string, string)
 	}
 	datasetID = strings.ToLower(strings.TrimSpace(datasetID))
 	switch {
-	case strings.HasPrefix(datasetID, "stock_cn_index"):
-		return "stock_cn", "index"
-	case strings.HasPrefix(datasetID, "stock_cn_convertible_bond"):
-		return "stock_cn", "convertible_bond"
-	case strings.HasPrefix(datasetID, "stock_hk"):
-		return "stock_hk", "equity"
-	case strings.HasPrefix(datasetID, "stock_us"):
-		return "stock_us", "equity"
-	case strings.HasPrefix(datasetID, "stock_cn"):
-		return "stock_cn", "equity"
+	case strings.HasPrefix(datasetID, "dataset_stockcn_index"):
+		return "stockcn", "index"
+	case strings.HasPrefix(datasetID, "dataset_stockcn_bond"):
+		return "stockcn", "convertible_bond"
+	case strings.HasPrefix(datasetID, "dataset_stockhk"):
+		return "stockhk", "equity"
+	case strings.HasPrefix(datasetID, "dataset_stockus"):
+		return "stockus", "equity"
+	case strings.HasPrefix(datasetID, "dataset_stockcn"):
+		return "stockcn", "equity"
 	default:
 		return marketID, instrumentType
 	}

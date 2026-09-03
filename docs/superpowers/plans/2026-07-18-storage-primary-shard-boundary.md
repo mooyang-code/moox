@@ -160,7 +160,7 @@ Storage 不再保留横向的 `internal/infra` 技术分层：有唯一生命周
 
 **Files:**
 - Create: `modules/storage/test/storage_consistency_contract_test.go`
-- Create: `scripts/test-storage-consistency-contract.sh`
+- Create: `scripts/test/contract/test-storage-consistency-contract.sh`
 
 该 Contract Test 使用 `//go:build storage_consistency_contract`，只由专用脚本显式运行。在 Stage A 完成前不得接入默认 `make verify`，避免把后续各任务的中间提交永久置于红色；每个具体修复仍必须在所属包增加默认执行的单元/集成测试。
 
@@ -193,7 +193,7 @@ Storage 不再保留横向的 `internal/infra` 技术分层：有唯一生命周
 Run:
 
 ```bash
-bash scripts/test-storage-consistency-contract.sh
+bash scripts/test/contract/test-storage-consistency-contract.sh
 ```
 
 Expected: 新增测试仅因当前事件、Outbox、分页、Delete 和范围语义不满足而失败；不得有编译错误或随机失败。
@@ -201,7 +201,7 @@ Expected: 新增测试仅因当前事件、Outbox、分页、Delete 和范围语
 - [ ] **Step 7: Commit**
 
 ```bash
-git add modules/storage/test/storage_consistency_contract_test.go scripts/test-storage-consistency-contract.sh
+git add modules/storage/test/storage_consistency_contract_test.go scripts/test/contract/test-storage-consistency-contract.sh
 git commit -m "test(storage): lock consistency remediation contract"
 ```
 
@@ -320,13 +320,13 @@ DELETE 的 Row 只携带完整 Key；UPSERT 携带 DataShard 合并后的完整�
 
 ```text
 TimeSeries:
-  message_type: moox.storage.time_series.rows_committed.v1
-  topic:        moox.storage.rows_committed.time_series.v1.<shard_token>
+  message_type: moox.event.storage.time_series.rows_committed.v1
+  topic:        moox.event.storage.rows_committed.time_series.v1.<shard_token>
   content_type: application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsCommitted
 
 Record:
-  message_type: moox.storage.record.rows_committed.v1
-  topic:        moox.storage.rows_committed.record.v1.<shard_token>
+  message_type: moox.event.storage.record.rows_committed.v1
+  topic:        moox.event.storage.rows_committed.record.v1.<shard_token>
   content_type: application/x-protobuf; message=trpc.moox.storage.RecordRowsCommitted
 
 Both:
@@ -946,12 +946,12 @@ Required 列在合并后的完整行上校验，不能被 Null 或 Remove。
 
 ```bash
 (cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/service/primarystore/schema ./internal/retinfo ./internal/service/primarystore ./internal/service/datashard ./internal/service/metadata/sqlite)
-bash scripts/test-storage-consistency-contract.sh
+bash scripts/test/contract/test-storage-consistency-contract.sh
 pnpm --dir web exec vitest run src/views/data/fields/field-workbench.test.ts src/views/data/metadata-catalog.test.ts
 pnpm --dir web exec eslint . --max-warnings=0
 pnpm --dir web exec prettier --check .
 git add modules/storage web/src
-git add Makefile scripts/test-storage-consistency-contract.sh
+git add Makefile scripts/test/contract/test-storage-consistency-contract.sh
 git commit -m "fix(storage): enforce fact schema and error contracts"
 ```
 
@@ -1108,8 +1108,8 @@ git commit -m "perf(storage): bound metadata queries and cache"
 - Modify: `web/src/api/storage/metadata.ts`
 - Modify: `web/src/api/storage/types.ts`
 - Modify: `web/src/api/storage/view.ts`
-- Modify: `scripts/storage-start.sh`
-- Modify: `scripts/storage-stop.sh`
+- Modify: `scripts/runtime/storage-start.sh`
+- Modify: `scripts/runtime/storage-stop.sh`
 - Modify: `examples/service-deployments.seed.yaml`
 - Delete: `modules/storage/proto/storagegen/access.pb.go`
 - Delete: `modules/storage/proto/storagegen/access.trpc.go`
@@ -1252,7 +1252,7 @@ make -C modules/storage/proto clean
 make -C modules/storage/proto all
 (cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./...)
 (cd modules/archive && env GOCACHE=/tmp/moox-gocache go test -count=1 ./...)
-bash scripts/check-package-boundaries.sh
+bash scripts/check/check-package-boundaries.sh
 git add --all
 git commit -m "refactor(storage): remove obsolete device abstractions"
 ```
@@ -1384,12 +1384,12 @@ git commit -m "fix(storage): fail closed on runtime health"
 - Modify: `web/src/views/ops/storage/nodes.vue`
 - Modify: `web/src/views/ops/storage/routes.vue`
 - Modify: `web/src/views/ops/storage/storage-management.test.ts`
-- Modify: `scripts/build.sh`
-- Modify: `scripts/release.sh`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-release-contract.sh`
-- Modify: `scripts/test-deploy-moox-storage-profile.sh`
-- Modify: `scripts/test-deploy-moox-storage-view.sh`
+- Modify: `scripts/build/build.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-release-contract.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-storage-profile.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-storage-view.sh`
 - Modify: `modules/cli/internal/setup/deploy/deploy.go`
 - Modify: `modules/cli/internal/setup/deploy/deploy_test.go`
 - Modify: `modules/cli/internal/setup/deploy/service.go`
@@ -1464,8 +1464,8 @@ Shard 管理页面和部署文档必须说明：无副本、无自动故障转�
 (cd modules/archive && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/config ./internal/backfill ./internal/registry)
 (cd modules/cli && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/setup/...)
 pnpm --dir web exec vitest run src/api/storage
-bash scripts/test-deploy-moox-storage-profile.sh
-bash scripts/test-deploy-moox-storage-view.sh
+bash scripts/test/contract/test-deploy-moox-storage-profile.sh
+bash scripts/test/contract/test-deploy-moox-storage-view.sh
 git add modules/admin modules/gateway modules/cli packages/gatewayauth packages/gatewayproxy web scripts examples
 git commit -m "feat(gateway): route storage through admin and service gateways"
 ```
@@ -1569,13 +1569,13 @@ git commit -m "refactor(web): split storage and cloud node workflows"
 - Modify: `modules/collector/README.md`
 - Modify: `modules/factor/README.md`
 - Modify: `modules/strategy/internal/rpc/frontend_service_test.go`
-- Modify: `scripts/test-deploy-moox-strategy.sh`
-- Modify: `scripts/test-deploy-moox-strategy-e2e.sh`
-- Modify: `scripts/test-docs-architecture.sh`
-- Modify: `scripts/test-quality-gates.sh`
-- Modify: `scripts/test-storage-boundary-contract.sh`
-- Modify: `scripts/test-storage-consistency-contract.sh`
-- Modify: `scripts/check-package-boundaries.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-strategy.sh`
+- Modify: `scripts/test/e2e/test-deploy-moox-strategy-e2e.sh`
+- Modify: `scripts/test/contract/test-docs-architecture.sh`
+- Modify: `scripts/test/contract/test-quality-gates.sh`
+- Modify: `scripts/test/contract/test-storage-boundary-contract.sh`
+- Modify: `scripts/test/contract/test-storage-consistency-contract.sh`
+- Modify: `scripts/check/check-package-boundaries.sh`
 - Modify: `Makefile`
 
 - [ ] **Step 1: 文档写清最终数据流**
@@ -1623,10 +1623,10 @@ test ! -d modules/storage/internal/rpcresult
 (cd modules/hostagent && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/app)
 (cd modules/factor && env GOCACHE=/tmp/moox-gocache go test -count=1 ./internal/trigger)
 (cd packages/security && env GOCACHE=/tmp/moox-gocache go test -count=1 ./...)
-bash scripts/test-deploy-moox-strategy.sh
-bash scripts/test-deploy-moox-strategy-e2e.sh
-bash scripts/test-docs-architecture.sh
-bash scripts/test-quality-gates.sh
+bash scripts/test/contract/test-deploy-moox-strategy.sh
+bash scripts/test/e2e/test-deploy-moox-strategy-e2e.sh
+bash scripts/test/contract/test-docs-architecture.sh
+bash scripts/test/contract/test-quality-gates.sh
 ```
 
 - [ ] **Step 6: 完整 Storage E2E**
@@ -1661,9 +1661,9 @@ Generated tRPC Client -> Node Gateway -> Storage 成功
 (cd packages/gatewayauth && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./...)
 (cd packages/gatewayproxy && env GOCACHE=/tmp/moox-gocache go test -race -count=1 ./...)
 (cd modules/storage && env GOCACHE=/tmp/moox-gocache go vet ./...)
-bash scripts/check-package-boundaries.sh
-bash scripts/test-storage-boundary-contract.sh
-bash scripts/test-storage-consistency-contract.sh
+bash scripts/check/check-package-boundaries.sh
+bash scripts/test/contract/test-storage-boundary-contract.sh
+bash scripts/test/contract/test-storage-consistency-contract.sh
 pnpm --dir web exec vitest run
 pnpm --dir web exec eslint . --max-warnings=0
 pnpm --dir web exec prettier --check .

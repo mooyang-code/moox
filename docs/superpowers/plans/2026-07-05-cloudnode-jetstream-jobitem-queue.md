@@ -19,27 +19,27 @@
 ## Non-Negotiable Decisions
 
 - SCF never connects to NATS or SQLite directly.
-- `storage` keeps using `moox.storage.*` subjects; CloudNode uses only `moox.cloudnode.*` subjects.
+- `storage` keeps using `moox.event.storage.*` subjects; CloudNode uses only `moox.event.cloudnode.*` subjects.
 - JetStream is the execution queue. SQLite is the control/query projection and management database.
 - Management-console cancel/pause/retry writes SQLite first. CloudNode checks SQLite before returning a JobItem to SCF and through heartbeat/progress directives.
 - New project, no compatibility requirement: old SQLite queue leasing behavior can be replaced in one controlled refactor.
 
 ## Stream And Subject Naming
 
-Use two CloudNode-specific streams. Do not reuse `MOOX_STORAGE` or any `moox.storage.*` subject.
+Use two CloudNode-specific streams. Do not reuse `MOOX_STORAGE` or any `moox.event.storage.*` subject.
 
 ```text
 Stream: MOOX_CLOUDNODE_EXEC
 Subjects:
-  moox.cloudnode.exec.v1.jobitem.s.<space_token>.pkg.<package_token>.type.<job_type_token>
+  moox.event.cloudnode.exec.v1.jobitem.s.<space_token>.pkg.<package_token>.type.<job_type_token>
 
 Stream: MOOX_CLOUDNODE_PROJECTION
 Subjects:
-  moox.cloudnode.projection.v1.jobitem.submitted
-  moox.cloudnode.projection.v1.jobitem.running
-  moox.cloudnode.projection.v1.jobitem.reported
-  moox.cloudnode.projection.v1.jobitem.canceled
-  moox.cloudnode.projection.v1.node.heartbeat
+  moox.event.cloudnode.projection.v1.jobitem.submitted
+  moox.event.cloudnode.projection.v1.jobitem.running
+  moox.event.cloudnode.projection.v1.jobitem.reported
+  moox.event.cloudnode.projection.v1.jobitem.canceled
+  moox.event.cloudnode.projection.v1.node.heartbeat
 ```
 
 Token rules:
@@ -54,7 +54,7 @@ Token rules:
 space_id: crypto
 code_package_id: moox-collector_dev
 job_type: collect.kline
-subject: moox.cloudnode.exec.v1.jobitem.s.crypto.pkg.moox-collector_dev.type.collect_kline
+subject: moox.event.cloudnode.exec.v1.jobitem.s.crypto.pkg.moox-collector_dev.type.collect_kline
 ```
 
 Recommended stream config for personal deployment:
@@ -164,11 +164,11 @@ Create `modules/cloudnode/internal/jobqueue/naming_test.go` with tests for strea
 func TestExecSubjectUsesCloudNodePrefix(t *testing.T) {
 	cfg := NamingConfig{SubjectPrefix: "moox.cloudnode"}
 	got := ExecSubject(cfg, "crypto", "moox-collector_dev", "collect.kline")
-	want := "moox.cloudnode.exec.v1.jobitem.s.crypto.pkg.moox-collector_dev.type.collect_kline"
+	want := "moox.event.cloudnode.exec.v1.jobitem.s.crypto.pkg.moox-collector_dev.type.collect_kline"
 	if got != want {
 		t.Fatalf("ExecSubject() = %q, want %q", got, want)
 	}
-	if strings.HasPrefix(got, "moox.storage.") {
+	if strings.HasPrefix(got, "moox.event.storage.") {
 		t.Fatalf("exec subject must not use storage prefix: %s", got)
 	}
 }
@@ -286,8 +286,8 @@ Create a test that starts an embedded JetStream server on a random free port, en
 Expected stream subjects:
 
 ```text
-MOOX_CLOUDNODE_EXEC -> moox.cloudnode.exec.v1.>
-MOOX_CLOUDNODE_PROJECTION -> moox.cloudnode.projection.v1.>
+MOOX_CLOUDNODE_EXEC -> moox.event.cloudnode.exec.v1.>
+MOOX_CLOUDNODE_PROJECTION -> moox.event.cloudnode.projection.v1.>
 ```
 
 - [ ] **Step 2: Run test and verify red**
@@ -515,7 +515,7 @@ Consumer naming:
 
 ```text
 durable = cn_exec_<space_token>_<package_token>_<job_type_token>
-filter  = moox.cloudnode.exec.v1.jobitem.s.<space_token>.pkg.<package_token>.type.<job_type_token>
+filter  = moox.event.cloudnode.exec.v1.jobitem.s.<space_token>.pkg.<package_token>.type.<job_type_token>
 ```
 
 Poll with multiple `supported_job_types` fetches from each type-specific durable consumer until `limit` is filled.
@@ -585,7 +585,7 @@ type NodeHeartbeatEvent struct { SpaceID, NodeID, NodeType, RunningVersion strin
 
 Projection worker:
 
-- pull consumes `moox.cloudnode.projection.v1.jobitem.reported`
+- pull consumes `moox.event.cloudnode.projection.v1.jobitem.reported`
 - batches by size or wait
 - calls `Repository.MarkReportedBatch`
 - ack only after SQLite write succeeds
@@ -925,7 +925,7 @@ Expected: pass.
 ### Task 11: Update Deployment And Reset Flow
 
 **Files:**
-- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
 - Modify: `modules/cloudnode/config/app.yaml`
 - Modify: `modules/cloudnode/README.md`
 - Create: `examples/e2e/cloudnode_jetstream_queue.md`
@@ -967,7 +967,7 @@ This is allowed only when the user explicitly accepts rebuilding CloudNode queue
 Run:
 
 ```bash
-./scripts/deploy-moox.sh --target localhost --dir /tmp/moox-jetstream-plan --no-storage --no-collector --no-start
+./scripts/deploy/deploy-moox.sh --target localhost --dir /tmp/moox-jetstream-plan --no-storage --no-collector --no-start
 ```
 
 Expected: package includes `bin/moox-cloudnode`, `cloudnode/config/app.yaml`, and an empty `data/cloudnode` directory can be created on start.

@@ -55,7 +55,7 @@ func TestTradeDNSCollectorEnvironmentProductionE2E(t *testing.T) {
 
 	subject := "BTC-USDT"
 	assignment := marketfetch.NodeAssignment{
-		Provider: "binance", MarketType: "spot", DatasetID: "binance_spot_kline_1m",
+		Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1m",
 		Frequency: "1m", Subjects: []string{subject},
 		ExternalSymbols: map[string]string{subject: "BTCUSDT"}, Enabled: true,
 	}

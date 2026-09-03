@@ -1,0 +1,39 @@
+system:
+  name: "moox-collector-stockcn"
+  version: "v0.0.1"
+  environment: "Production"
+  timezone: "UTC"
+  storage_rpc:
+    gateway_target: "ip://127.0.0.1:11003"
+    gateway_node_id: ""
+    key_id: "collector"
+    hmac_key_file: ""
+  service_auth:
+    target_node: ""
+    ca_file: ""
+    access_key: "moox-service"
+    secret_key: ""
+    expire_seconds: 60
+sources:
+  market:
+    # The Binance file is retained as the authenticated Storage binding used by
+    # the shared market writer. Stock HTTP adapters are composed by the common
+    # runtime and have independent per-egress-IP Feed policies below.
+    - name: "binance"
+      enabled: true
+      config: "sources/market/binance.yaml"
+    - name: "sina"
+      enabled: true
+      config: "sources/market/sina.yaml"
+    - name: "tencent"
+      enabled: true
+      config: "sources/market/tencent.yaml"
+    - name: "eastmoney"
+      enabled: true
+      config: "sources/market/eastmoney.yaml"
+    - name: "baidu"
+      enabled: true
+      config: "sources/market/baidu.yaml"
+    - name: "tdx"
+      enabled: true
+      config: "sources/market/tdx.yaml"

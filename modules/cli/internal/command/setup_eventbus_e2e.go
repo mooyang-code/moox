@@ -190,7 +190,7 @@ func defaultSetupE2EEventBus(ctx context.Context, snapshot *setupconfig.Snapshot
 	}, events.PublishOptions{
 		EventID: eventID + "-forbidden", OccurredAt: time.Now().UTC(), SpaceID: identity.SpaceID, SubjectID: subjectID,
 	})
-	publishDenied := publishErr != nil && hasPermissionViolation(workerAsyncErrors, "moox.cloudnode.job.execution.requested")
+	publishDenied := publishErr != nil && hasPermissionViolation(workerAsyncErrors, "moox.event.cloudnode.job.execution.requested")
 	result := eventBusE2EResult{
 		PublicTLS: true, WorkerBindFetchAck: true,
 		WorkerCreateDenied: createDenied, WorkerPublishDenied: publishDenied,

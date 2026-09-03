@@ -47,7 +47,7 @@ type Options struct {
 }
 
 const (
-	serviceReadTimeout  = 15 * time.Second
+	serviceReadTimeout = 15 * time.Second
 	// CloudNode synchronous SCF canaries may use the full 300s function
 	// timeout. Keep the public gateway envelope longer than the route timeout.
 	serviceWriteTimeout = 360 * time.Second

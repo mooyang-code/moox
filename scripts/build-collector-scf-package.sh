@@ -1,1 +1,0 @@
-build/build-collector-scf-package.sh

@@ -66,7 +66,7 @@ func main() {
 
 func parseArgs() probeArgs {
 	var args probeArgs
-	flag.StringVar(&args.Market, "market", "stock_cn", "market id")
+	flag.StringVar(&args.Market, "market", "stockcn", "market id")
 	flag.StringVar(&args.Feed, "feed", "all", "feed kind: all, kline, instrument")
 	flag.StringVar(&args.Frequency, "frequency", "1m", "kline frequency")
 	flag.StringVar(&args.Subjects, "subjects", "", "comma-separated subject ids")
@@ -84,8 +84,8 @@ func run(ctx context.Context, args probeArgs) error {
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(args.Market) != "stock_cn" {
-		return fmt.Errorf("--market 仅支持 stock_cn")
+	if strings.TrimSpace(args.Market) != "stockcn" {
+		return fmt.Errorf("--market 仅支持 stockcn")
 	}
 	if strings.TrimSpace(args.Frequency) != "1m" {
 		return fmt.Errorf("--frequency 仅支持 1m")
@@ -106,7 +106,7 @@ func run(ctx context.Context, args probeArgs) error {
 	}
 
 	report := commonsrc.ProbeReport{
-		MarketID:    "stock_cn",
+		MarketID:    "stockcn",
 		Frequency:   "1m",
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		Subjects:    subjects,
@@ -162,7 +162,7 @@ func probeInstrumentProvider(ctx context.Context, now func() time.Time, timeout 
 	provider := build(client)
 	started := time.Now()
 	snapshot, fetchErr := provider.FetchInstrumentSnapshot(ctx, marketdata.InstrumentRequest{
-		MarketID: "stock_cn", SnapshotAt: now(), RequestID: fmt.Sprintf("providerprobe-instrument-%s-%d", providerID, started.UnixNano()),
+		MarketID: "stockcn", SnapshotAt: now(), RequestID: fmt.Sprintf("providerprobe-instrument-%s-%d", providerID, started.UnixNano()),
 	})
 	entry := commonsrc.ProbeEntry{
 		ProviderID: providerID, FeedKind: commonsrc.ProbeFeedInstrument, Exchange: "ALL",
@@ -361,7 +361,7 @@ func probeHistory(
 	defer cancel()
 	started := time.Now()
 	rows, err := provider.FetchKlines(requestCtx, marketdata.KlineRequest{
-		MarketID: "stock_cn", SubjectID: subjectID, ProviderSymbol: symbol, Frequency: "1m",
+		MarketID: "stockcn", SubjectID: subjectID, ProviderSymbol: symbol, Frequency: "1m",
 		Limit: minProbeLimit(spec.MaxBarsPerRequest, 240), StartTime: start, Now: reference,
 		RequestID: fmt.Sprintf("providerprobe-history-%s-%d", provider.Descriptor().ID, started.UnixNano()),
 	})
@@ -420,7 +420,7 @@ func probeRate(
 				defer cancel()
 				requestStarted := time.Now()
 				_, err := provider.FetchKlines(requestCtx, marketdata.KlineRequest{
-					MarketID: "stock_cn", SubjectID: subjectID, ProviderSymbol: symbol, Frequency: "1m", Limit: 1,
+					MarketID: "stockcn", SubjectID: subjectID, ProviderSymbol: symbol, Frequency: "1m", Limit: 1,
 					Now: now().UTC(), RequestID: fmt.Sprintf("providerprobe-rate-%s-%d-%d", providerID, started.UnixNano(), index),
 				})
 				results <- rateSample{latency: time.Since(requestStarted), err: err}

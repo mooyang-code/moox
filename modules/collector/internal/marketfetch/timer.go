@@ -35,7 +35,7 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request
 			return Request{}, "", fmt.Errorf("timer instrument snapshot environment is incomplete")
 		}
 		if provider == "" {
-			provider = "stock_cn_multi"
+			provider = "stockcn_multi"
 		}
 		if marketType == "" {
 			marketType = "equity"
@@ -133,9 +133,9 @@ func defaultSourceIDForProvider(provider string) string {
 	case "binance":
 		return "spot_http"
 	case "sina":
-		return "stock_cn_minute_http"
+		return "stockcn_minute_http"
 	case "eastmoney", "tencent", "baidu":
-		return "stock_cn_http"
+		return "stockcn_http"
 	default:
 		return ""
 	}
@@ -143,7 +143,7 @@ func defaultSourceIDForProvider(provider string) string {
 
 func defaultInstrumentTypeForMarket(marketID, marketType string) string {
 	switch strings.ToLower(strings.TrimSpace(marketID)) {
-	case "stock_cn", "stock_hk", "stock_us":
+	case "stockcn", "stockhk", "stockus":
 		return "equity"
 	case "crypto":
 		if strings.EqualFold(strings.TrimSpace(marketType), "swap") {
@@ -174,10 +174,10 @@ func timerGroupIdentity(spaceID string) (int, int, error) {
 	}
 	if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
 		if groupCount <= 0 {
-			return 0, 0, fmt.Errorf("stock_cn timer group count is required")
+			return 0, 0, fmt.Errorf("stockcn timer group count is required")
 		}
 		if groupID < 0 || groupID >= groupCount {
-			return 0, 0, fmt.Errorf("stock_cn timer group id %d is outside [0,%d)", groupID, groupCount)
+			return 0, 0, fmt.Errorf("stockcn timer group id %d is outside [0,%d)", groupID, groupCount)
 		}
 	}
 	if groupCount > 0 && groupID >= groupCount {
@@ -242,7 +242,7 @@ func marketProviderSymbol(marketType, subjectID, configured string) (string, err
 
 func marketProviderSymbolForMarket(marketID, marketType, subjectID, configured string) (string, error) {
 	marketID = strings.ToLower(strings.TrimSpace(marketID))
-	if marketID == "stock_hk" || marketID == "stock_us" {
+	if marketID == "stockhk" || marketID == "stockus" {
 		configured = strings.TrimSpace(configured)
 		if configured != "" {
 			return configured, nil

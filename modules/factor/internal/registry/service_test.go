@@ -26,7 +26,7 @@ func TestImportFactorFileUsesExplicitGenericDefinition(t *testing.T) {
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
 	svc := NewService(store.NewFactorRepository(db), nil, Options{FactorsDir: dir})
 	factor, err := svc.ImportFactorFile(context.Background(), path, ImportOptions{
-		FactorID: "bias", InputColumns: []string{"close"}, Outputs: []string{"bias"},
+		FactorID: "Bias", InputColumns: []string{"close"}, Outputs: []string{"bias"},
 		ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
 	})
 	require.NoError(t, err)
@@ -47,7 +47,7 @@ func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *te
 	repo := store.NewFactorRepository(db)
 	svc := NewService(repo, nil, Options{FactorsDir: dir})
 	options := ImportOptions{
-		FactorID: "generic", InputColumns: []string{"value"}, Outputs: []string{"value"},
+		FactorID: "Generic", InputColumns: []string{"value"}, Outputs: []string{"value"},
 		ParamsJSON: `{}`, LookbackPeriods: 2,
 	}
 	_, err = svc.ImportFactorFile(context.Background(), path, options)
@@ -62,12 +62,12 @@ func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *te
 	renamedPath := filepath.Join(dir, "Renamed.py")
 	require.NoError(t, os.WriteFile(renamedPath, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
 	_, err = svc.ImportFactorFile(context.Background(), renamedPath, options)
-	require.ErrorContains(t, err, "name is immutable")
+	require.ErrorContains(t, err, "must match factor file name")
 
 	options.Outputs = []string{"changed"}
 	_, err = svc.ImportFactorFile(context.Background(), path, options)
 	require.ErrorContains(t, err, "immutable")
-	stored, err := repo.Get(context.Background(), "generic")
+	stored, err := repo.Get(context.Background(), "Generic")
 	require.NoError(t, err)
 	require.Equal(t, []string{"value"}, stored.Outputs)
 }
@@ -81,18 +81,18 @@ func TestImportFactorFileRejectsEnabledDefinitionUpdate(t *testing.T) {
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
 	repo := store.NewFactorRepository(db)
 	require.NoError(t, repo.Create(context.Background(), domain.FactorDef{
-		FactorID: "generic", Name: "Generic", SourceCode: "old", SourceHash: "old",
+		FactorID: "Generic", Name: "Generic", SourceCode: "old", SourceHash: "old",
 		InputColumns: []string{"value"}, Outputs: []string{"value"}, ParamsJSON: `{}`,
 		LookbackPeriods: 2, Status: domain.FactorStatusEnabled,
 	}))
 	svc := NewService(repo, nil, Options{FactorsDir: dir})
 
 	_, err = svc.ImportFactorFile(context.Background(), path, ImportOptions{
-		FactorID: "generic", InputColumns: []string{"value"}, Outputs: []string{"value"},
+		FactorID: "Generic", InputColumns: []string{"value"}, Outputs: []string{"value"},
 		ParamsJSON: `{"window":2}`, LookbackPeriods: 3,
 	})
 	require.ErrorContains(t, err, "disable")
-	stored, err := repo.Get(context.Background(), "generic")
+	stored, err := repo.Get(context.Background(), "Generic")
 	require.NoError(t, err)
 	require.Equal(t, domain.FactorStatusEnabled, stored.Status)
 	require.Equal(t, "old", stored.SourceCode)
@@ -107,7 +107,7 @@ func TestEnsureSourceArtifactsRestoresEnabledFactorAfterDeployReplacement(t *tes
 	repo := store.NewFactorRepository(db)
 	source := "def compute(df, params):\n    return df\n"
 	factor, err := domain.NormalizeFactorDefinition(domain.FactorDef{
-		FactorID: "bias", Name: "bias", SourceCode: source,
+		FactorID: "Bias", Name: "Bias", SourceCode: source,
 		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
 		LookbackPeriods: 5, Status: domain.FactorStatusEnabled,
 	})
@@ -115,27 +115,27 @@ func TestEnsureSourceArtifactsRestoresEnabledFactorAfterDeployReplacement(t *tes
 	sourceSum := sha256.Sum256([]byte(factor.SourceCode))
 	factor.SourceHash = hex.EncodeToString(sourceSum[:])
 	require.NoError(t, repo.Create(context.Background(), factor))
-	before, err := repo.Get(context.Background(), "bias")
+	before, err := repo.Get(context.Background(), "Bias")
 	require.NoError(t, err)
 
 	svc := NewService(repo, nil, Options{FactorsDir: dir})
 	require.NoError(t, svc.EnsureSourceArtifacts(context.Background()))
 
-	stored, err := repo.Get(context.Background(), "bias")
+	stored, err := repo.Get(context.Background(), "Bias")
 	require.NoError(t, err)
 	require.Equal(t, domain.FactorStatusEnabled, stored.Status)
 	require.Equal(t, factor.SourceHash, stored.SourceHash)
 	require.Equal(t, before.ModifyTime, stored.ModifyTime)
 	require.FileExists(t, stored.SourcePath)
-	require.Contains(t, stored.SourcePath, filepath.Join(".versions", "factor", "bias", factor.SourceHash))
+	require.Contains(t, stored.SourcePath, filepath.Join(".versions", "factor", "Bias", factor.SourceHash))
 }
 
 func TestResultDataset(t *testing.T) {
-	require.Equal(t, "foo_kline_factor", ResultDataset("foo_kline"))
-	require.Equal(t, "binance_spot_kline_1m_factor", ResultDataset("binance_spot_kline_1m"))
-	require.Equal(t, "binance_spot_kline_1m_factor_v", ResultView("binance_spot_kline_1m"))
-	require.Equal(t, "foo_view_factor", ResultDataset("foo_view"))
-	require.Equal(t, ResultDataset("bars"), ResultDatasetForView("bars", "bars_view"))
+	require.Equal(t, "dataset_foo_kline_factor", ResultDataset("foo_kline"))
+	require.Equal(t, "dataset_binance_spot_kline_1m_factor", ResultDataset("dataset_binance_spot_kline_1m"))
+	require.Equal(t, "view_binance_8fa975bd497ebe66", ResultView("binance_spot_kline_1m"))
+	require.Equal(t, "dataset_foo_view_factor", ResultDataset("foo_view"))
+	require.Equal(t, ResultDataset("bars"), ResultDatasetForView("bars", "view_bars"))
 	require.NotEqual(t, ResultDatasetForView("bars", "view_a"), ResultDatasetForView("bars", "view_b"))
 	require.LessOrEqual(t, len(ResultDatasetForView("bars", "view_a")), 50)
 	require.LessOrEqual(t, len(ResultViewForView("bars", "view_a")), 30)

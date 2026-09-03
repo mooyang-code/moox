@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	manifestName = "custom.toml"
+	manifestName = "moox.toml"
 	maxFileSize  = 1 << 20
 	// The cloud disk mounted at /data is the canonical runtime volume. Keep all
 	// generated packages, state, logs and credentials below this root so a
@@ -42,7 +42,7 @@ const (
 	// for the built-in crypto market Space.
 	DefaultCryptoMarketTimerFunctionCount = 60
 	// DefaultStockCNMarketTimerFunctionCount is used by callers that need the
-	// release baseline. stock_cn config validation still requires an explicit
+	// release baseline. stockcn config validation still requires an explicit
 	// timer_function_count instead of applying this value implicitly.
 	DefaultStockCNMarketTimerFunctionCount = 170
 	// DefaultStockCNInstrumentInvokeTimeoutSeconds leaves enough room for the
@@ -67,7 +67,7 @@ const (
 // Storage may be deployed to a separate host with a different mount layout,
 // so StorageRoot is independently validated as an absolute safe path.
 // The section is optional: omitted values resolve to the cloud-disk defaults
-// above, which keeps older custom.toml files deterministic.
+// above, which keeps older moox.toml files deterministic.
 type Paths struct {
 	DeployRoot  string `toml:"deploy_root"`
 	ControlRoot string `toml:"control_root"`
@@ -115,7 +115,7 @@ type EventBus struct {
 }
 
 // DNSResolver configures the single Trade node that resolves and probes
-// market API domains for Collector. custom.toml is the source of truth; the
+// market API domains for Collector. moox.toml is the source of truth; the
 // CLI renders the Trade-owned subset into Trade's app.yaml at deployment time.
 type DNSResolver struct {
 	Enabled                bool     `toml:"enabled"`
@@ -174,7 +174,7 @@ func (s StorageView) ResolvePolicy(spaceID, viewID string) ResolvedStorageViewPo
 			policy.MaxViewFileBytes = override.MaxViewFileBytes
 		}
 	}
-	if spaceID == "moox_system" {
+	if spaceID == "mooxsys" {
 		apply(s.SystemMonitor)
 	}
 	for _, override := range s.Views {
@@ -284,7 +284,7 @@ type SCFFetcherSpace struct {
 	Namespace         string `toml:"namespace"`
 	Runtime           string `toml:"runtime"`
 	FunctionPrefix    string `toml:"function_prefix"`
-	// TimerFunctionCount is the total Timer fleet size for this Space. stock_cn
+	// TimerFunctionCount is the total Timer fleet size for this Space. stockcn
 	// must set it explicitly to a positive value; other Spaces may use the
 	// built-in default when all enabled regional function_count values are zero.
 	TimerFunctionCount               int                `toml:"timer_function_count"`
@@ -325,7 +325,7 @@ func DefaultTimerFunctionCount(spaceID string) int {
 	switch strings.ToLower(strings.TrimSpace(spaceID)) {
 	case "crypto":
 		return DefaultCryptoMarketTimerFunctionCount
-	case "stock_cn":
+	case "stockcn":
 		return 0
 	default:
 		return 0
@@ -385,7 +385,7 @@ type Snapshot struct {
 func Load(path, repositoryRoot string) (*Snapshot, error) {
 	resolvedPath, err := filepath.Abs(path)
 	if err != nil {
-		return nil, fmt.Errorf("config_invalid: resolve custom.toml path")
+		return nil, fmt.Errorf("config_invalid: resolve moox.toml path")
 	}
 	resolvedRoot, err := filepath.Abs(repositoryRoot)
 	if err != nil {
@@ -394,9 +394,9 @@ func Load(path, repositoryRoot string) (*Snapshot, error) {
 	expectedPath := filepath.Join(filepath.Clean(resolvedRoot), manifestName)
 	if filepath.Clean(resolvedPath) != expectedPath {
 		if filepath.Base(resolvedPath) != manifestName {
-			return nil, fmt.Errorf("config_invalid: setup file must be named custom.toml")
+			return nil, fmt.Errorf("config_invalid: setup file must be named moox.toml")
 		}
-		return nil, fmt.Errorf("config_invalid: custom.toml must be in repository root")
+		return nil, fmt.Errorf("config_invalid: moox.toml must be in repository root")
 	}
 
 	info, raw, err := readSecureFile(resolvedPath)
@@ -418,10 +418,10 @@ func Load(path, repositoryRoot string) (*Snapshot, error) {
 func (s *Snapshot) VerifyUnchanged() error {
 	info, raw, err := readSecureFile(s.path)
 	if err != nil {
-		return fmt.Errorf("config_changed: custom.toml security or identity changed")
+		return fmt.Errorf("config_changed: moox.toml security or identity changed")
 	}
 	if !os.SameFile(s.info, info) || s.digest != sha256.Sum256(raw) {
-		return fmt.Errorf("config_changed: custom.toml changed during command")
+		return fmt.Errorf("config_changed: moox.toml changed during command")
 	}
 	return nil
 }
@@ -429,33 +429,33 @@ func (s *Snapshot) VerifyUnchanged() error {
 func readSecureFile(path string) (os.FileInfo, []byte, error) {
 	linkInfo, err := os.Lstat(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("config_invalid: custom.toml is not readable")
+		return nil, nil, fmt.Errorf("config_invalid: moox.toml is not readable")
 	}
 	if !linkInfo.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("config_insecure: custom.toml must be a regular file")
+		return nil, nil, fmt.Errorf("config_insecure: moox.toml must be a regular file")
 	}
 	if linkInfo.Mode().Perm() != 0o600 {
-		return nil, nil, fmt.Errorf("config_insecure: custom.toml must have mode 0600")
+		return nil, nil, fmt.Errorf("config_insecure: moox.toml must have mode 0600")
 	}
 	if !ownedByCurrentUser(linkInfo) {
-		return nil, nil, fmt.Errorf("config_insecure: custom.toml must be owned by the current user")
+		return nil, nil, fmt.Errorf("config_insecure: moox.toml must be owned by the current user")
 	}
 
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("config_invalid: custom.toml is not readable")
+		return nil, nil, fmt.Errorf("config_invalid: moox.toml is not readable")
 	}
 	defer f.Close()
 	openInfo, err := f.Stat()
 	if err != nil || !openInfo.Mode().IsRegular() || !os.SameFile(linkInfo, openInfo) {
-		return nil, nil, fmt.Errorf("config_insecure: custom.toml must be a stable regular file")
+		return nil, nil, fmt.Errorf("config_insecure: moox.toml must be a stable regular file")
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, maxFileSize+1))
 	if err != nil {
-		return nil, nil, fmt.Errorf("config_invalid: custom.toml is not readable")
+		return nil, nil, fmt.Errorf("config_invalid: moox.toml is not readable")
 	}
 	if len(raw) > maxFileSize {
-		return nil, nil, fmt.Errorf("config_invalid: custom.toml exceeds 1 MiB")
+		return nil, nil, fmt.Errorf("config_invalid: moox.toml exceeds 1 MiB")
 	}
 	return openInfo, raw, nil
 }
@@ -463,7 +463,7 @@ func readSecureFile(path string) (os.FileInfo, []byte, error) {
 func decodeStrict(raw []byte, out *Manifest) error {
 	md, err := toml.DecodeReader(bytes.NewReader(raw), out)
 	if err != nil {
-		return fmt.Errorf("config_invalid: decode custom.toml")
+		return fmt.Errorf("config_invalid: decode moox.toml")
 	}
 	if keys := md.Undecoded(); len(keys) != 0 {
 		return fmt.Errorf("config_invalid: unknown field %s", keys[0].String())
@@ -506,7 +506,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		out.LocalLogs.BackupCount = 5
 	}
 	if !md.IsDefined("factors", "source_dir") || strings.TrimSpace(out.Factors.SourceDir) == "" {
-		out.Factors.SourceDir = "./examples/factors"
+		out.Factors.SourceDir = "./modules/factor/factors"
 	}
 	if out.HasCompileHost() && out.CompileHost.Port == 0 {
 		out.CompileHost.Port = 22
@@ -702,7 +702,7 @@ func validateStorageView(cfg *StorageView) error {
 	if strings.TrimSpace(cfg.SystemMonitor.SpaceID) != "" || strings.TrimSpace(cfg.SystemMonitor.ViewID) != "" {
 		return fmt.Errorf("config_invalid: storage_view.system_monitor must not set space_id or view_id")
 	}
-	resolved := cfg.ResolvePolicy("moox_system", "__default__")
+	resolved := cfg.ResolvePolicy("mooxsys", "__default__")
 	if resolved.MaxPeriodsPerSeries <= resolved.RebuildLookbackPeriods {
 		return fmt.Errorf("config_invalid: resolved system monitor max_periods_per_series must be greater than rebuild_lookback_periods")
 	}
@@ -892,7 +892,7 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		if cfg.SourceBindingMode != "" && cfg.SourceBindingMode != "deterministic" {
 			return fmt.Errorf("config_invalid: %s.source_binding_mode must be deterministic", path)
 		}
-		deterministicStockSources := strings.EqualFold(cfg.SpaceID, "stock_cn") && cfg.SourceBindingMode == "deterministic"
+		deterministicStockSources := strings.EqualFold(cfg.SpaceID, "stockcn") && cfg.SourceBindingMode == "deterministic"
 		requiredFields := map[string]string{
 			"market_id":       cfg.MarketID,
 			"instrument_type": cfg.InstrumentType,
@@ -984,13 +984,13 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	if cfg.TimeoutSeconds != 15 {
 		return fmt.Errorf("config_invalid: %s.timeout_seconds must be 15", path)
 	}
-	stockCN := strings.EqualFold(cfg.SpaceID, "stock_cn")
+	stockCN := strings.EqualFold(cfg.SpaceID, "stockcn")
 	if stockCN {
 		if cfg.TimerFunctionCount <= 0 {
-			return fmt.Errorf("config_invalid: %s.timer_function_count must be an explicit positive value for stock_cn", path)
+			return fmt.Errorf("config_invalid: %s.timer_function_count must be an explicit positive value for stockcn", path)
 		}
 		if cfg.MeasuredSafeGroupSize <= 0 {
-			return fmt.Errorf("config_invalid: %s.measured_safe_group_size must be a positive value for stock_cn", path)
+			return fmt.Errorf("config_invalid: %s.measured_safe_group_size must be a positive value for stockcn", path)
 		}
 		if err := normalizeStockCNInstrumentSnapshotConfig(cfg, path); err != nil {
 			return err
@@ -1020,13 +1020,13 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 			return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds must be between %d and 900", path, DefaultStockCNInstrumentInvokeTimeoutSeconds)
 		}
 	} else if cfg.MeasuredSafeGroupSize != 0 {
-		return fmt.Errorf("config_invalid: %s.measured_safe_group_size is only valid for stock_cn", path)
+		return fmt.Errorf("config_invalid: %s.measured_safe_group_size is only valid for stockcn", path)
 	} else if cfg.InstrumentInvokeTimeoutSeconds != 0 {
-		return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds is only valid for stock_cn", path)
+		return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds is only valid for stockcn", path)
 	} else if cfg.InstrumentSnapshotRegion != "" || cfg.InstrumentSnapshotCloudAccountID != "" || cfg.InstrumentSnapshotFunctionPrefix != "" || cfg.InstrumentSnapshotTimerCron != "" || cfg.InstrumentSnapshotTimeoutSeconds != 0 || cfg.InstrumentSnapshotMemorySize != 0 {
-		return fmt.Errorf("config_invalid: %s instrument snapshot settings are only valid for stock_cn", path)
+		return fmt.Errorf("config_invalid: %s instrument snapshot settings are only valid for stockcn", path)
 	} else if cfg.StaggerStartSecond != 0 || cfg.StaggerWindowSeconds != 0 || cfg.StaggerMaxStartsPerSecond != 0 {
-		return fmt.Errorf("config_invalid: %s stagger settings are only valid for stock_cn", path)
+		return fmt.Errorf("config_invalid: %s stagger settings are only valid for stockcn", path)
 	}
 	if cfg.RealtimeBatchSize == 0 {
 		cfg.RealtimeBatchSize = 30
@@ -1035,10 +1035,10 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		return fmt.Errorf("config_invalid: %s.realtime_batch_size must be between 1 and 30", path)
 	}
 	if cfg.RealtimeBarLimit == 0 {
-		cfg.RealtimeBarLimit = 3
+		cfg.RealtimeBarLimit = 10
 	}
-	if cfg.RealtimeBarLimit != 3 {
-		return fmt.Errorf("config_invalid: %s.realtime_bar_limit must be 3", path)
+	if cfg.RealtimeBarLimit != 10 {
+		return fmt.Errorf("config_invalid: %s.realtime_bar_limit must be 10", path)
 	}
 	if cfg.CatchupBatchSize <= 0 {
 		cfg.CatchupBatchSize = 1
@@ -1206,7 +1206,7 @@ func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 	if cfg == nil {
 		return fmt.Errorf("config_invalid: %s is required", path)
 	}
-	if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stock_cn") && cfg.StaggerStartSecond == 0 && cfg.StaggerWindowSeconds == 0 && cfg.StaggerMaxStartsPerSecond == 0 {
+	if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stockcn") && cfg.StaggerStartSecond == 0 && cfg.StaggerWindowSeconds == 0 && cfg.StaggerMaxStartsPerSecond == 0 {
 		cfg.StaggerStartSecond = DefaultStockCNStaggerStartSecond
 		cfg.StaggerWindowSeconds = DefaultStockCNStaggerWindowSeconds
 		cfg.StaggerMaxStartsPerSecond = DefaultStockCNStaggerMaxStartsPerSecond
@@ -1227,8 +1227,8 @@ func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 	}
 	desired := cfg.TimerFunctionCount
 	if desired <= 0 {
-		if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stock_cn") {
-			return fmt.Errorf("config_invalid: %s.timer_function_count must be an explicit positive value for stock_cn", path)
+		if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stockcn") {
+			return fmt.Errorf("config_invalid: %s.timer_function_count must be an explicit positive value for stockcn", path)
 		}
 		if explicitTotal > 0 {
 			// Preserve older manifests whose regional counts were already the

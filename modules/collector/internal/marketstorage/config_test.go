@@ -15,9 +15,9 @@ api:
 storage:
   bindings:
     spot:
-      data_source_id: stock_cn
+      data_source_id: stockcn
       subject_type: stock
-      subject_market: stock_cn
+      subject_market: stockcn
       auth_info:
         app_id: moox-collector
         app_key: test-key
@@ -27,8 +27,8 @@ storage:
 	if err := decodeConfig(strings.NewReader(config), &decoded); err != nil {
 		t.Fatalf("decodeConfig() error = %v", err)
 	}
-	if got := decoded.Storage.Bindings["spot"].DataSourceID; got != "stock_cn" {
-		t.Fatalf("spot data source id = %q, want stock_cn", got)
+	if got := decoded.Storage.Bindings["spot"].DataSourceID; got != "stockcn" {
+		t.Fatalf("spot data source id = %q, want stockcn", got)
 	}
 }
 

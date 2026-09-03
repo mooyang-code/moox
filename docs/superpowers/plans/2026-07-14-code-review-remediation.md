@@ -353,7 +353,7 @@ git commit -m "fix(admin): bound gateway request bodies"
 
 **Files:**
 - Modify: `modules/monitor/internal/rpc/metrics_test.go`
-- Create: `scripts/test-go-workspace.sh`
+- Create: `scripts/test/contract/test-go-workspace.sh`
 - Modify: `Makefile`
 - Create: `.github/workflows/ci.yml`
 
@@ -420,15 +420,15 @@ Expected: 所有 workspace module、前端测试和生产构建通过。
 - [ ] **Step 6：提交**
 
 ```bash
-git add modules/monitor scripts/test-go-workspace.sh Makefile .github/workflows/ci.yml
+git add modules/monitor scripts/test/contract/test-go-workspace.sh Makefile .github/workflows/ci.yml
 git commit -m "ci: verify all modules and frontend builds"
 ```
 
 ## Task 8：让发布流程可复现并同步实际产品文档
 
 **Files:**
-- Modify: `scripts/release.sh`
-- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
 - Modify: `web-host/Makefile`
 - Modify: 发布配置清单文件
 - Modify: `README.md`
@@ -475,7 +475,7 @@ CI=true pnpm install --frozen-lockfile
 Run:
 
 ```bash
-bash -n scripts/release.sh scripts/deploy-moox.sh
+bash -n scripts/release/release.sh scripts/deploy/deploy-moox.sh
 make verify
 rg -n 'statik@latest|--no-frozen-lockfile|SUPER_ADMIN' scripts web-host README.md docs
 git diff --check
@@ -486,7 +486,7 @@ Expected: 发布脚本不含浮动依赖；文档仅在解释“不采用 RBAC�
 - [ ] **Step 6：提交**
 
 ```bash
-git add scripts/release.sh scripts/deploy-moox.sh web-host/Makefile README.md docs
+git add scripts/release/release.sh scripts/deploy/deploy-moox.sh web-host/Makefile README.md docs
 git commit -m "build: make releases reproducible and refresh docs"
 ```
 

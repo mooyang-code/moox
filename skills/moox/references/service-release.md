@@ -24,31 +24,31 @@ healthcheck.sh
 原子方式生成权限为 `0600` 的 ZIP 文件：
 
 ```bash
-./scripts/package-service.sh \
+./scripts/build/package-service.sh \
   --service-dir ./release/service-package \
   --output ./release/moox-admin-linux-amd64.zip
 ```
 
 ## 前置条件
 
-- 用户维护且权限为 `0600` 的 `custom.toml`。
-- 目标主机已在 `custom.toml` 中定义，例如 `control`。
+- 用户维护且权限为 `0600` 的 `moox.toml`。
+- 目标主机已在 `moox.toml` 中定义，例如 `control`。
 - SSH 主机指纹已通过独立可信渠道核验，并已写入 MooX known hosts：
 
 ```bash
 ./bin/moox-cli setup trust-host \
-  --file ./custom.toml \
+  --file ./moox.toml \
   --host control \
   --fingerprint 'SHA256:<已独立核验的指纹>'
 ```
 
-Agent 不得读取、解析、打印、复制或 `source` `custom.toml` 中的密码和密钥。
+Agent 不得读取、解析、打印、复制或 `source` `moox.toml` 中的密码和密钥。
 
 ## 发布命令
 
 ```bash
 ./bin/moox-cli setup deploy-service \
-  --file ./custom.toml \
+  --file ./moox.toml \
   --host control \
   --service admin \
   --package ./release/moox-admin-linux-amd64.zip
@@ -58,7 +58,7 @@ Agent 不得读取、解析、打印、复制或 `source` `custom.toml` 中的�
 
 ```bash
 ./bin/moox-cli setup deploy-service \
-  --file ./custom.toml \
+  --file ./moox.toml \
   --host compute \
   --service storage-primary \
   --package ./release/moox-storage-primary-linux-amd64.zip \
@@ -95,7 +95,7 @@ ssh -o StrictHostKeyChecking=no ...
 
 也不要将密码导出到环境变量、写入命令行、shell 历史、临时脚本、CI 日志或 ZIP 包。
 如果密码已经出现在命令行、聊天记录或日志中，应立即轮换远端密码，并更新用户维护的
-`custom.toml`。
+`moox.toml`。
 
 ## 常见失败
 

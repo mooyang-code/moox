@@ -506,7 +506,10 @@ type metadataClientAdapter struct {
 }
 
 func newMetadataClient(target, targetNode string, credentials gatewayauth.Credentials) *metadataClientAdapter {
-	target = gatewayauth.ServiceGatewayTarget(storageio.NormalizeStorageTarget(target, "11003"))
+	// Metadata follows the explicit Storage target used by PrimaryStore and
+	// DataView. The process-local service gateway is not a valid replacement
+	// when Storage is deployed on a separate host.
+	target = storageio.NormalizeStorageTarget(target, "11003")
 	return &metadataClientAdapter{
 		client: storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials)...),
 	}

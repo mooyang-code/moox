@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	StockCNSpaceID   = "stock_cn"
-	StockCNDatasetID = "stock_cn_kline"
-	StockCNRouteID   = "stock_cn_kline_1m_v1"
+	StockCNSpaceID   = "stockcn"
+	StockCNDatasetID = "dataset_stockcn_equity_kline"
+	StockCNRouteID   = "stockcn_equity_kline_1m_v4"
 	// Each provider gets three attempts before the next provider in the route.
 	klineProviderAttemptBudget = 3
 )
@@ -61,7 +61,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	isStock := p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID
 	isStockEquity := isStock && (p.InstrumentType == "" || p.InstrumentType == marketdata.InstrumentEquity)
 	if req.SpaceID != spaceID || req.DatasetID != datasetID || (isStockEquity && frequency != marketdata.FrequencyMinute) {
-		return nil, fmt.Errorf("kline pipeline requires %s/%s/1m for stock_cn", spaceID, datasetID)
+		return nil, fmt.Errorf("kline pipeline requires %s/%s/1m for stockcn", spaceID, datasetID)
 	}
 	sourceID := firstNonEmptyString(p.SourceID, req.SourceID)
 	if p.SourceID != "" && req.SourceID != "" && !strings.EqualFold(strings.TrimSpace(p.SourceID), strings.TrimSpace(req.SourceID)) {
@@ -101,6 +101,10 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 			return buildCompletion(req, results, started, 0), nil
 		}
+	}
+	instrumentNames := map[string]string(nil)
+	if isStockEquity {
+		instrumentNames = loadInstrumentNames(ctx, p.Storage, spaceID, req.Items)
 	}
 	results := make([]domain.ItemResult, len(req.Items))
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(req.Items)*MaxRealtimeRows)
@@ -145,7 +149,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			if isStock && p.AutoBindSource && itemSourceID == "" {
 				selectedSource, ok := stockSourceForSubject(stockSources, stockRouteVersion, item.SubjectID)
 				if !ok {
-					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "source_binding", fmt.Errorf("stock_cn has no source assignment for %s", item.SubjectID))
+					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "source_binding", fmt.Errorf("stockcn has no source assignment for %s", item.SubjectID))
 					return
 				}
 				itemSourceID = selectedSource.SourceID
@@ -210,7 +214,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 					continue
 				}
 				rank := providerRank(itemChain, bar.ProviderID)
-				row, rowErr := p.rowFor(bar, req, requestKlineRouteID(p, req.Frequency), rank)
+				row, rowErr := p.rowFor(bar, req, requestKlineRouteID(p, req.Frequency), rank, instrumentNames[bar.SubjectID])
 				if rowErr != nil {
 					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "normalize", rowErr)
 					return
@@ -449,10 +453,14 @@ func stockProviderExchange(subjectID string) marketdata.ExchangeID {
 	}
 }
 
-func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int) (*storagepb.RowFieldUpsert, error) {
+func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int, instrumentName ...string) (*storagepb.RowFieldUpsert, error) {
 	if (p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID) &&
 		(p.InstrumentType == "" || p.InstrumentType == marketdata.InstrumentEquity) {
-		return stockKlineRow(bar, routeID, routeRank)
+		name := ""
+		if len(instrumentName) > 0 {
+			name = instrumentName[0]
+		}
+		return stockKlineRow(bar, routeID, routeRank, name)
 	}
 	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
 		return nil, err
@@ -487,14 +495,14 @@ func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, rout
 
 func stockCNShouldCollectMinute(calendar *stockmarket.Calendar, now time.Time, settleDelay time.Duration) (bool, error) {
 	if calendar == nil {
-		return false, fmt.Errorf("stock_cn calendar is required")
+		return false, fmt.Errorf("stockcn calendar is required")
 	}
 	if err := calendar.ValidateHorizon(now, 14); err != nil {
-		return false, fmt.Errorf("stock_cn calendar horizon: %w", err)
+		return false, fmt.Errorf("stockcn calendar horizon: %w", err)
 	}
 	location := calendar.Location()
 	if location == nil {
-		return false, fmt.Errorf("stock_cn calendar timezone is unavailable")
+		return false, fmt.Errorf("stockcn calendar timezone is unavailable")
 	}
 	local := now.In(location)
 	expected, err := calendar.ExpectedMinuteBars(local.Format("2006-01-02"))
@@ -513,7 +521,7 @@ func stockCNShouldCollectMinute(calendar *stockmarket.Calendar, now time.Time, s
 	return false, nil
 }
 
-func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int) (*storagepb.RowFieldUpsert, error) {
+func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int, instrumentName string) (*storagepb.RowFieldUpsert, error) {
 	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
 		return nil, err
 	}
@@ -525,9 +533,14 @@ func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int
 	if bar.AmountEstimated {
 		amountQuality = "estimated_close_x_volume"
 	}
+	instrumentName = strings.TrimSpace(instrumentName)
+	if instrumentName == "" {
+		instrumentName = bar.SubjectID
+	}
 	fields := []*storagepb.FieldValue{
 		doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
 		doubleValue("volume", bar.VolumeShares), doubleValue("amount", bar.AmountCNY),
+		stringValue("instrument_name", instrumentName),
 		timeValue("trade_date", tradeDateUTC(bar.BarStart)), timeValue("close_time", bar.BarEnd),
 		stringValue("volume_unit", "shares"), stringValue("amount_unit", amountUnit(bar)),
 		stringValue("provider_symbol", bar.ProviderSymbol), timeValue("provider_timestamp", bar.ProviderTimestamp),
@@ -543,11 +556,46 @@ func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int
 		Key: &storagepb.RowKey{
 			SpaceId: StockCNSpaceID, DatasetId: StockCNDatasetID,
 			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-				SubjectId: bar.SubjectID, Freq: "1m", DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: "",
+				SubjectId: bar.SubjectID, Freq: "1m", DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: "default",
 			}},
 		},
 		Fields: fields,
 	}, nil
+}
+
+type instrumentNameReader interface {
+	ListInstrumentNames(context.Context, string, []string) (map[string]string, error)
+}
+
+func loadInstrumentNames(ctx context.Context, storage Storage, spaceID string, items []domain.CollectionItem) map[string]string {
+	reader, ok := storage.(instrumentNameReader)
+	if !ok {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	subjectIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		subjectID := strings.TrimSpace(item.SubjectID)
+		if subjectID == "" {
+			continue
+		}
+		if _, exists := seen[subjectID]; exists {
+			continue
+		}
+		seen[subjectID] = struct{}{}
+		subjectIDs = append(subjectIDs, subjectID)
+	}
+	if len(subjectIDs) == 0 {
+		return nil
+	}
+	names, err := reader.ListInstrumentNames(ctx, spaceID, subjectIDs)
+	if err != nil {
+		// Instrument names are presentation metadata. A metadata outage must not
+		// discard an otherwise valid market bar; stockKlineRow falls back to the
+		// canonical subject ID.
+		return nil
+	}
+	return names
 }
 
 func normalizeCandidateChain(configured []string, primary string) []string {
@@ -555,7 +603,7 @@ func normalizeCandidateChain(configured []string, primary string) []string {
 	result := make([]string, 0, len(configured)+1)
 	for _, provider := range append([]string{primary}, configured...) {
 		provider = strings.ToLower(strings.TrimSpace(provider))
-		if provider == "" || provider == "stock_cn_multi" {
+		if provider == "" || provider == "stockcn_multi" {
 			continue
 		}
 		if _, ok := seen[provider]; ok {

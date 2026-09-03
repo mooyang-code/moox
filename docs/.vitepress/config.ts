@@ -63,6 +63,7 @@ export default defineConfig({
           { text: '架构总览', link: '/架构总览' },
           { text: '大仓架构', link: '/大仓架构' },
           { text: '协议设计', link: '/协议设计' },
+          { text: '元数据命名规范', link: '/元数据命名规范' },
         ],
       },
       {

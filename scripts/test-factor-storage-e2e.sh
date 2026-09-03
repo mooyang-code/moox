@@ -1,1 +1,0 @@
-tests/e2e/test-factor-storage-e2e.sh

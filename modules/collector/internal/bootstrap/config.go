@@ -20,7 +20,7 @@ type Config struct {
 	Database        DatabaseConfig        `yaml:"database"`
 	CloudNode       CloudNodeConfig       `yaml:"cloudnode"`
 	Storage         StorageConfig         `yaml:"storage"`
-	StockCN         StockCNConfig         `yaml:"stock_cn"`
+	StockCN         StockCNConfig         `yaml:"stockcn"`
 	PeriodReadiness PeriodReadinessConfig `yaml:"period_readiness"`
 	KlineResample   KlineResampleConfig   `yaml:"kline_resample"`
 	SysDeploy       SysDeployConfig       `yaml:"sysdeploy"`
@@ -30,8 +30,8 @@ type Config struct {
 }
 
 // StockCNConfig carries the release-time capacity contract to the Collector
-// reconciler. It is rendered from custom.toml; zero values fail closed when a
-// stock_cn rule is selected rather than silently choosing a default fleet.
+// reconciler. It is rendered from moox.toml; zero values fail closed when a
+// stockcn rule is selected rather than silently choosing a default fleet.
 type StockCNConfig struct {
 	ExpectedTimerFunctionCount int `yaml:"expected_timer_function_count"`
 	MeasuredSafeGroupSize      int `yaml:"measured_safe_group_size"`
@@ -122,7 +122,7 @@ type DNSConfig struct {
 }
 
 // DNSResolverConfig selects the optional Trade-side resolver. The native
-// Gateway target and node are rendered from custom.toml by moox-cli.
+// Gateway target and node are rendered from moox.toml by moox-cli.
 type DNSResolverConfig struct {
 	Enabled         bool          `yaml:"enabled"`
 	Target          string        `yaml:"target"`

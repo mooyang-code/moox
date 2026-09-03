@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	cls "github.com/tencentcloud/tencentcloud-cls-sdk-go"
 	"github.com/stretchr/testify/require"
+	cls "github.com/tencentcloud/tencentcloud-cls-sdk-go"
 )
 
 type fakeSender struct{ logs []*cls.Log }

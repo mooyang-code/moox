@@ -43,7 +43,7 @@ storage:
         durable: storage_view_kline
         routes:
           - space_id: crypto
-            dataset_ids: [binance_spot_kline_1m]
+            dataset_ids: [dataset_binance_spot_kline_1m]
         fetch_batch: 4
         max_workers: 2
         max_ack_pending: 16
@@ -54,8 +54,8 @@ storage:
       - id: system_metrics
         durable: storage_view_metrics
         routes:
-          - space_id: moox_system
-            dataset_ids: [moox_service_metrics]
+          - space_id: mooxsys
+            dataset_ids: [dataset_mooxsys_service_metrics]
         # System metrics are emitted every 30 seconds and can accumulate a
         # sizeable durable backlog after a Storage View restart. Keep the
         # dataset/subject ordering guarantee while allowing independent
@@ -71,7 +71,7 @@ storage:
         durable: storage_view_factor
         routes:
           - space_id: crypto
-            dataset_ids: [binance_spot_kline_1m_factor]
+            dataset_ids: [dataset_binance_spot_kline_1m_factor]
         # Factor results are emitted once per factor/subject/period. Keep a
         # deeper fetch window and more worker capacity than Kline so a brief
         # Storage View restart can drain the durable backlog faster than the
@@ -89,14 +89,14 @@ storage:
         routes:
           - space_id: crypto
             dataset_ids: ["*"]
-          - space_id: moox_system
-            dataset_ids: [host_disk_v1, host_fs_v1, host_net_v1, host_resource_v1]
-          - space_id: stock_cn
-            dataset_ids: [financial_statement_metric, financial_summary, stock_cn_convertible_bond_kline, stock_cn_index_kline, stock_cn_instruments, stock_cn_kline]
-          - space_id: stock_hk
-            dataset_ids: [stock_hk_kline]
-          - space_id: stock_us
-            dataset_ids: [stock_us_kline]
+          - space_id: mooxsys
+            dataset_ids: [dataset_mooxsys_host_disk, dataset_mooxsys_host_filesystem, dataset_mooxsys_host_network, dataset_mooxsys_host_resource]
+          - space_id: stockcn
+            dataset_ids: [dataset_stockcn_financial_statement_metric, dataset_stockcn_financial_summary, dataset_stockcn_bond_kline, dataset_stockcn_index_kline, dataset_stockcn_instruments, dataset_stockcn_equity_kline]
+          - space_id: stockhk
+            dataset_ids: [dataset_stockhk_equity_kline]
+          - space_id: stockus
+            dataset_ids: [dataset_stockus_equity_kline]
         fetch_batch: 4
         max_workers: 2
         max_ack_pending: 16
@@ -119,7 +119,7 @@ storage:
   maintenance:
     host_metrics_cleanup:
       enabled: true
-      dataset_ids: [host_resource_v1, host_fs_v1, host_disk_v1, host_net_v1]
+      dataset_ids: [dataset_mooxsys_host_resource, dataset_mooxsys_host_filesystem, dataset_mooxsys_host_disk, dataset_mooxsys_host_network]
       max_age: 48h
       batch_size: 1000
       max_batches_per_run: 10

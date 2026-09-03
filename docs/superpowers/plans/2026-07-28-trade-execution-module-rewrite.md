@@ -154,10 +154,10 @@ execution-plan code after their behavior has moved into the final packages.
 
 **Files:**
 - Create: `scripts/check-trade-exchange-terminology.go`
-- Create: `scripts/test-trade-exchange-terminology.sh`
-- Modify: `scripts/check-package-boundaries.sh`
-- Modify: `scripts/verify-event-contracts.sh`
-- Test: `scripts/test-trade-exchange-terminology.sh`
+- Create: `scripts/test/contract/test-trade-exchange-terminology.sh`
+- Modify: `scripts/check/check-package-boundaries.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
+- Test: `scripts/test/contract/test-trade-exchange-terminology.sh`
 
 - [ ] **Step 1: Add a failing terminology fixture test**
 
@@ -175,7 +175,7 @@ Vue ConfigProvider                              -> ignored
 Run:
 
 ```bash
-bash scripts/test-trade-exchange-terminology.sh
+bash scripts/test/contract/test-trade-exchange-terminology.sh
 ```
 
 Expected: FAIL because `check-trade-exchange-terminology.go` does not exist.
@@ -212,15 +212,15 @@ Add:
 go run ./scripts/check-trade-exchange-terminology.go
 ```
 
-to `scripts/check-package-boundaries.sh`, and run the fixture script from
-`scripts/verify-event-contracts.sh`.
+to `scripts/check/check-package-boundaries.sh`, and run the fixture script from
+`scripts/check/verify-event-contracts.sh`.
 
 - [ ] **Step 4: Verify RED against the current Trade tree**
 
 Run:
 
 ```bash
-bash scripts/test-trade-exchange-terminology.sh
+bash scripts/test/contract/test-trade-exchange-terminology.sh
 go run ./scripts/check-trade-exchange-terminology.go
 ```
 
@@ -232,9 +232,9 @@ Expected: the fixture test passes; the repository scan fails on
 
 ```bash
 git add scripts/check-trade-exchange-terminology.go \
-  scripts/test-trade-exchange-terminology.sh \
-  scripts/check-package-boundaries.sh \
-  scripts/verify-event-contracts.sh
+  scripts/test/contract/test-trade-exchange-terminology.sh \
+  scripts/check/check-package-boundaries.sh \
+  scripts/check/verify-event-contracts.sh
 git commit -m "test(trade): enforce Exchange terminology"
 ```
 
@@ -247,7 +247,7 @@ git commit -m "test(trade): enforce Exchange terminology"
 - Modify: `packages/events/validation.go`
 - Modify: `packages/events/validation_test.go`
 - Modify: `packages/events/events_test.go`
-- Modify: `scripts/verify-event-contracts.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
 
 - [ ] **Step 1: Write failing Registry and validator tests**
 
@@ -314,7 +314,7 @@ with:
 
 ```go
 TradeTargetRequested = declareEvent(
-    "trade.target.requested",
+    "event.trade.target.requested",
     1,
     "MOOX_TRADE",
     "strategy",
@@ -336,7 +336,7 @@ cd ../tradeeventpb
 go test -count=1 ./...
 
 cd ../..
-bash scripts/verify-event-contracts.sh
+bash scripts/check/verify-event-contracts.sh
 ```
 
 Expected: package tests pass. The verifier may still fail in Strategy and
@@ -346,7 +346,7 @@ expected cross-module RED for later tasks.
 - [ ] **Step 5: Commit the new public event**
 
 ```bash
-git add packages/tradeeventpb packages/events scripts/verify-event-contracts.sh
+git add packages/tradeeventpb packages/events scripts/check/verify-event-contracts.sh
 git commit -m "refactor(trade): define target quantity event"
 ```
 
@@ -1857,7 +1857,7 @@ name `trade`; only the tRPC service IDs and ports collapse. Do not expose a
 local health URL for either entry.
 
 Update the production EventBus stream and generated NATS ACLs to
-`moox.trade.target.requested.v1.>` and durable `trade_target_v1`.
+`moox.event.trade.target.requested.v1.>` and durable `trade_target_v1`.
 
 Run:
 
@@ -1968,8 +1968,8 @@ git commit -m "refactor(trade): collapse public service surface"
 - Modify: `modules/trade/docs/exchange-apis.md`
 - Modify: `docs/架构总览.md`
 - Modify: `docs/策略模块架构设计.md`
-- Modify: `scripts/check-package-boundaries.sh`
-- Modify: `scripts/verify-event-contracts.sh`
+- Modify: `scripts/check/check-package-boundaries.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
 
 - [x] **Step 1: Write failing static-boundary assertions**
 
@@ -1993,9 +1993,9 @@ inside `modules/trade/internal/secretclient`.
 Run:
 
 ```bash
-bash scripts/test-trade-exchange-terminology.sh
-bash scripts/check-package-boundaries.sh
-bash scripts/verify-event-contracts.sh
+bash scripts/test/contract/test-trade-exchange-terminology.sh
+bash scripts/check/check-package-boundaries.sh
+bash scripts/check/verify-event-contracts.sh
 ```
 
 Expected: FAIL while legacy packages and declarations still exist.
@@ -2064,9 +2064,9 @@ rg -n \
   --glob '*.{go,proto,py,ts,vue,yaml}' \
   --glob '!**/*_test.go' --glob '!**/test/**' --glob '!**/*.test.ts'
 
-bash scripts/test-trade-exchange-terminology.sh
-bash scripts/check-package-boundaries.sh
-bash scripts/verify-event-contracts.sh
+bash scripts/test/contract/test-trade-exchange-terminology.sh
+bash scripts/check/check-package-boundaries.sh
+bash scripts/check/verify-event-contracts.sh
 ```
 
 Expected: both `rg` commands return no matches and exit 1; all three scripts
@@ -2090,8 +2090,8 @@ Expected: PASS without compatibility packages.
 
 ```bash
 git add modules/trade modules/strategy packages/tradeeventpb \
-  web/src/api/trade scripts/check-package-boundaries.sh \
-  scripts/verify-event-contracts.sh \
+  web/src/api/trade scripts/check/check-package-boundaries.sh \
+  scripts/check/verify-event-contracts.sh \
   docs/架构总览.md docs/策略模块架构设计.md
 git commit -m "refactor(trade): remove obsolete execution paths"
 ```
@@ -2110,7 +2110,7 @@ unrelated pre-existing document.
 - Delete: superseded `modules/trade/test/trade_e2e_test.go`
 - Delete: superseded `modules/trade/test/trade_e2e_more_test.go`
 - Modify: `modules/strategy/test/strategy_trade_external_e2e_test.go`
-- Modify: `scripts/test-strategy-trade-event-e2e.sh`
+- Modify: `scripts/test/e2e/test-strategy-trade-event-e2e.sh`
 - Create: `modules/trade/scripts/testnet-smoke.sh`
 
 - [x] **Step 1: Build a deterministic fake Exchange**
@@ -2267,7 +2267,7 @@ go test -count=1 ./test
 go test -race -count=1 ./...
 
 cd ../..
-bash scripts/test-strategy-trade-event-e2e.sh
+bash scripts/test/e2e/test-strategy-trade-event-e2e.sh
 ```
 
 Expected: PASS without real Exchange credentials. Run
@@ -2279,7 +2279,7 @@ credentials; never point it at production keys.
 ```bash
 git add modules/trade/test modules/trade/scripts \
   modules/strategy/test/strategy_trade_external_e2e_test.go \
-  scripts/test-strategy-trade-event-e2e.sh
+  scripts/test/e2e/test-strategy-trade-event-e2e.sh
 git commit -m "test(trade): cover generic execution workflows"
 ```
 
@@ -2336,12 +2336,12 @@ Expected: PASS.
 
 ```bash
 cd ..
-bash scripts/test-trade-exchange-terminology.sh
-bash scripts/verify-event-contracts.sh
-bash scripts/check-package-boundaries.sh
-bash scripts/test-strategy-trade-event-e2e.sh
-bash scripts/test-go-workspace.sh
-bash scripts/test-release-contract.sh
+bash scripts/test/contract/test-trade-exchange-terminology.sh
+bash scripts/check/verify-event-contracts.sh
+bash scripts/check/check-package-boundaries.sh
+bash scripts/test/e2e/test-strategy-trade-event-e2e.sh
+bash scripts/test/contract/test-go-workspace.sh
+bash scripts/test/contract/test-release-contract.sh
 make verify-pr
 git diff --check
 ```
@@ -2370,9 +2370,9 @@ testnet coverage performed.
 - [x] **Step 5: Build the Trade artifacts and release contract**
 
 ```bash
-bash scripts/build.sh trade
-bash scripts/test-release-contract.sh
-VERSION=trade-execution-verify SKIP_WEB_ASSETS=1 bash scripts/release.sh
+bash scripts/build/build.sh trade
+bash scripts/test/contract/test-release-contract.sh
+VERSION=trade-execution-verify SKIP_WEB_ASSETS=1 bash scripts/release/release.sh
 tar -tzf release/moox-trade-execution-verify-$(go env GOOS)-$(go env GOARCH).tar.gz \
   | rg 'trade/(bin|config)'
 ```
@@ -2391,7 +2391,7 @@ MOOX_TRADE_TESTNET=1 modules/trade/scripts/testnet-smoke.sh
 For a configured local integration deployment:
 
 ```bash
-scripts/deploy-moox.sh \
+scripts/deploy/deploy-moox.sh \
   --target localhost \
   --dir /tmp/moox-trade-execution-verify \
   --reset-data
@@ -2421,8 +2421,8 @@ git status --short
 git diff --check
 git add modules/trade modules/strategy modules/admin packages/tradeeventpb \
   web/src/api/trade web/src/views/trading \
-  scripts/check-package-boundaries.sh scripts/verify-event-contracts.sh \
-  scripts/test-strategy-trade-event-e2e.sh \
+  scripts/check/check-package-boundaries.sh scripts/check/verify-event-contracts.sh \
+  scripts/test/e2e/test-strategy-trade-event-e2e.sh \
   docs/架构总览.md docs/策略模块架构设计.md
 git diff --cached --name-status
 git commit -m "refactor(trade): complete generic execution kernel"

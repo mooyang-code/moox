@@ -2,19 +2,19 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在 Collector 中增加由已落盘 K 线 Dataset 生成任意整分钟周期 K 线的重采样能力。用户选择一个当前 active 的结果 K 线 Dataset 作为输入，并把结果写入带周期后缀的独立 Dataset，例如 `spot_kline_derived_4h`。
+**Goal:** 在 Collector 中增加由已落盘 K 线 Dataset 生成任意整分钟周期 K 线的重采样能力。用户选择一个当前 active 的结果 K 线 Dataset 作为输入，并把结果写入带周期后缀的独立 Dataset，例如 `dataset_spot_kline_derived_4h`。
 
 **Architecture:** 复用 Collector 现有 `TaskRule -> TaskInstance -> PeriodReadiness` 控制面，不新增规则、Job、Item 或 Backfill 配置表。`data_type=kline_resample` 的 TaskRule 保存声明式配置；每个 subject 对应一个 TaskInstance，其 `c_result` 保存可恢复游标、lease、重试和当前历史回填状态。独立一分钟 scanner 只选择到期 TaskInstance，本地 worker 从 Storage Primary 精确读取完整源窗口，执行 OHLCV 重采样并幂等写入目标 Dataset。
 
 **Tech Stack:** Go 1.25、tRPC-Go Timer、SQLite/GORM、Storage Metadata/PrimaryStore RPC、`github.com/avast/retry-go`、NATS JetStream、Prometheus、Vue 3、TypeScript、Vitest。
 
-> **执行状态（2026-08-29）：** Collector 控制面、resample worker、PeriodReadiness、动态 View 接入、规则页面、模块级 E2E、生产二进制升级及真实 5m 目标 View 查询已完成。生产验证已覆盖历史桶与源数据持续到达后的新实时桶：`spot_kline_derived_5m` 的 BTC-USDT 任务从 13:25 推进到 13:40，Primary 与 View 的最新 bucket 一致；源数据缺失的其他历史桶仍按合同保持 `waiting_source` 并自动重试。旧的卡住规则已禁用，隔离验证规则 `builtin-binance-spot-kline-resample-e2e-5m` 保持 `enabled/ready`。
+> **执行状态（2026-08-29）：** Collector 控制面、resample worker、PeriodReadiness、动态 View 接入、规则页面、模块级 E2E、生产二进制升级及真实 5m 目标 View 查询已完成。生产验证已覆盖历史桶与源数据持续到达后的新实时桶：`dataset_spot_kline_derived_5m` 的 BTC-USDT 任务从 13:25 推进到 13:40，Primary 与 View 的最新 bucket 一致；源数据缺失的其他历史桶仍按合同保持 `waiting_source` 并自动重试。旧的卡住规则已禁用，隔离验证规则 `builtin-binance-spot-kline-resample-e2e-5m` 保持 `enabled/ready`。
 
 **最终验证记录（2026-08-29）：**
 
 - 本地发布包 `release/moox-20260829-resample-final3-linux-amd64.tar.gz` 已生成，包含 Collector、Storage、EventBus 等运行时二进制。针对最新提交，另从干净 `git archive HEAD` 编译并发布了 Collector、EventBus、Storage Primary 三个正式 Linux/amd64 二进制；生产 Collector/EventBus 的 SHA-256 分别为 `699a6f99f307490799ec01c6a896365f315d8c23d899dac40be0a2ec68310858`、`98ece8e866699de5a82c94753ca5b44d88dd64f4d7efdfc55f221285c0a25474`。完整 release 脚本的 final4 重试被共享工作区中与本变更无关的 Factor/storage 生成文件 import cycle 阻断，因此没有把失败的全量包宣称为发布产物；已部署的三项二进制和现有 CGO-enabled Storage View 均完成远端 hash/health 校验。
 - 生产健康检查显示 Collector、Storage Primary/View/Node、EventBus 等就绪；Storage View 继续使用 CGO-enabled 构建，避免 DuckDB 运行时能力缺失。
-- 真实 5m 校验：最新闭合源窗口 `[13:40,13:45)` 恰有 5 根 1m K 线，聚合 OHLCV 为 `open=77662.01, high=77662.01, low=77662, close=77662, volume=4.01431, quote_volume=311759.36915519997`；`spot_kline_derived_5m` Primary 行逐字段相等，目标行 `trade_num=981`。任务结果为 `idle`，`last_success_bucket=2026-08-29T13:40:00Z`，下一实时桶为 `13:45`。View smoke 读到 5 行，Primary/View 最新时间均为 `2026-08-29T13:40:00Z`，最新行字段完全一致。
+- 真实 5m 校验：最新闭合源窗口 `[13:40,13:45)` 恰有 5 根 1m K 线，聚合 OHLCV 为 `open=77662.01, high=77662.01, low=77662, close=77662, volume=4.01431, quote_volume=311759.36915519997`；`dataset_spot_kline_derived_5m` Primary 行逐字段相等，目标行 `trade_num=981`。任务结果为 `idle`，`last_success_bucket=2026-08-29T13:40:00Z`，下一实时桶为 `13:45`。View smoke 读到 5 行，Primary/View 最新时间均为 `2026-08-29T13:40:00Z`，最新行字段完全一致。
 
 ---
 
@@ -26,16 +26,16 @@
 - Collector data type 使用 `kline_resample`，本地 provider 使用 `moox`。
 - Collector 内部 Go package 使用 `resample`，核心函数使用 `Bars`，结果类型使用 `Result`。
 - 持久化 data type、RPC、YAML、Timer、指标、日志和事件标识使用 `kline_resample`，保留 K 线业务边界；内部包名不重复业务类型。
-- Dataset 名称保留已经确认的派生语义：`spot_kline_derived_4h`、`swap_kline_derived_90m`。`derived` 表示数据来源性质，`resample` 表示生成方式，两者不冲突。
+- Dataset 名称保留已经确认的派生语义：`dataset_spot_kline_derived_4h`、`swap_kline_derived_90m`。`derived` 表示数据来源性质，`resample` 表示生成方式，两者不冲突。
 
 ### 0.2 Source Dataset 与 DataSource ID
 
 - 创建重采样规则时，用户选择的是 `source_dataset_id`，不是 Storage 的 `data_source_id`。
 - Source 下拉列表来自当前 Space 的 Dataset，仅显示 `status=active && data_kind=time_series` 且具备标准 K 线字段的结果 Dataset。
-- Source Dataset 可以是交易所直接采集结果，例如 `binance_spot_kline_1m`，也可以是已经存在的统一行情结果，例如 `spot_kline_1h`。
+- Source Dataset 可以是交易所直接采集结果，例如 `dataset_binance_spot_kline_1m`，也可以是已经存在的统一行情结果，例如 `dataset_spot_kline_1h`。
 - V1 不允许把 `attributes.dataset_role=kline_resample_result` 的目标 Dataset 再作为另一个重采样规则的 source，避免链式依赖、循环和级联修订。
 - Source Dataset 本身不写入任何下游重采样配置；一个 source 可以被多个 4H、6H、90m 规则独立引用。
-- Target Dataset 的直接生产者是 MooX 内部计算，因此 `data_source_id` 不机械继承 source。`crypto_market` Space 使用当前 active、`kind=internal` 的 `data_source_id=crypto_market`。
+- Target Dataset 的直接生产者是 MooX 内部计算，因此 `data_source_id` 不机械继承 source。`crypto` Space 使用当前 active、`kind=internal` 的 `data_source_id=crypto`。
 - 原始交易场所继续由 `series_tag` 表达，例如 `venue:binance`；source DataSource ID 作为 target lineage attribute 保存。
 
 ### 0.3 配置归属
@@ -48,10 +48,10 @@
   "provider": "moox",
   "market_type": "spot",
   "collect_params": {
-    "source_dataset_id": "binance_spot_kline_1m",
+    "source_dataset_id": "dataset_binance_spot_kline_1m",
     "source_frequency": "1m",
     "source_series_tag": "venue:binance",
-    "target_dataset_id": "spot_kline_derived_4h",
+    "target_dataset_id": "dataset_spot_kline_derived_4h",
     "target_frequency": "4H",
     "alignment": "epoch_utc",
     "settle_delay_ms": 10000
@@ -67,7 +67,7 @@ attributes:
   managed_by: collector
   dataset_role: kline_resample_result
   resample_rule_id: <rule_id>
-  source_dataset_id: binance_spot_kline_1m
+  source_dataset_id: dataset_binance_spot_kline_1m
   source_data_source_id: binance
   source_freq: 1m
   source_series_tag: venue:binance
@@ -162,7 +162,7 @@ series_tag    = rule.source_series_tag
 ```text
 用户在现有采集规则页面选择“K线重采样”
   -> 选择 active source Kline Dataset + source frequency + series tag
-  -> 填写 target period，预览 spot_kline_derived_4h
+  -> 填写 target period，预览 dataset_spot_kline_derived_4h
   -> CreateTaskRule(data_type=kline_resample, provider=moox)
   -> Collector 幂等创建 target Dataset/columns/View
   -> Storage View 动态接入 target，并消费 route-ready sync point
@@ -275,11 +275,11 @@ c_report_state waiting/pending/reported/suppressed
 
 ### 2.4 Target Dataset 模板
 
-以 `spot_kline_derived_4h` 为例：
+以 `dataset_spot_kline_derived_4h` 为例：
 
 ```yaml
-dataset_id: spot_kline_derived_4h
-data_source_id: crypto_market
+dataset_id: dataset_spot_kline_derived_4h
+data_source_id: crypto
 data_kind: time_series
 data_node_id: <same as source Dataset>
 keep_duration: 4320h
@@ -291,7 +291,7 @@ attributes:
   storage_model: wide_common_metrics
   dataset_role: kline_resample_result
   resample_rule_id: <rule_id>
-  source_dataset_id: binance_spot_kline_1m
+  source_dataset_id: dataset_binance_spot_kline_1m
   source_data_source_id: binance
   source_freq: 1m
   source_series_tag: venue:binance
@@ -299,7 +299,7 @@ attributes:
   alignment: epoch_utc
 ```
 
-View ID 为 `spot_kline_derived_4h_view`，filter 必须为 `{"freq":"4H"}`。Dataset ID 使用小写 `4h` suffix，但 Metadata frequency、View filter、RowKey 和事件 payload 使用 `4H`。
+View ID 为 `view_spot_kline_derived_4h`，filter 必须为 `{"freq":"4H"}`。Dataset ID 使用小写 `4h` suffix，但 Metadata frequency、View filter、RowKey 和事件 payload 使用 `4H`。
 
 ## 3. 文件结构
 
@@ -364,8 +364,8 @@ func BucketAt(effectiveNow, origin time.Time, target FixedFrequency) (start, end
 - [ ] **Step 3: 锁定命名**
 
 ```go
-require.Equal(t, "spot_kline_derived_4h", DefaultTargetDatasetID("spot", "4h"))
-require.Equal(t, "spot_kline_derived_4h_view", DefaultTargetViewID("spot_kline_derived_4h"))
+require.Equal(t, "dataset_spot_kline_derived_4h", DefaultTargetDatasetID("spot", "4h"))
+require.Equal(t, "view_spot_kline_derived_4h", DefaultTargetViewID("dataset_spot_kline_derived_4h"))
 ```
 
 自定义 Dataset ID 最长 25 字符、lower snake case、以 frequency slug 结尾；View 固定追加 `_view`。
@@ -495,7 +495,7 @@ Commit: `feat(collector): persist resample state in task instances`
 
 - [ ] **Step 3: 固定 target DataSource 语义**
 
-在 `crypto_market` 中校验 `data_source_id=crypto_market` 存在、active 且 kind=internal。即使 source 是 Binance Dataset，target 也不能伪装为 Binance 原生数据。source DataSource ID 写入 target attributes。
+在 `crypto` 中校验 `data_source_id=crypto` 存在、active 且 kind=internal。即使 source 是 Binance Dataset，target 也不能伪装为 Binance 原生数据。source DataSource ID 写入 target attributes。
 
 - [ ] **Step 4: 幂等创建 target**
 
@@ -766,7 +766,7 @@ Data type 新增“K线重采样”，不增加独立规则表或第三套 CRUD 
 - target Dataset/View：实时预览，可在创建前修改 Dataset ID；
 - settle delay、enabled；repair lookback 是 Collector 全局配置，不在单条 Rule 表单暴露。
 
-不展示 target DataSource 选择；界面只读显示“内部行情 `crypto_market`”，避免用户误选 Binance。
+不展示 target DataSource 选择；界面只读显示“内部行情 `crypto`”，避免用户误选 Binance。
 
 - [ ] **Step 3: 实现 backfill dialog**
 
@@ -784,7 +784,7 @@ Commit: `feat(web): configure kline resample rules`
 
 **Files:**
 - Create: `modules/collector/test/kline_resample_e2e_test.go`
-- Create: `scripts/tests/e2e/test-kline-resample.sh`
+- Create: `scripts/test/e2e/test-kline-resample.sh`
 - Modify: `Makefile`
 - Modify: `docs/内置市场行情采集架构.md`
 - Modify: `docs/采集任务管理.md`
@@ -796,7 +796,7 @@ Commit: `feat(web): configure kline resample rules`
 
 1. 创建 kline_resample TaskRule，不产生任何新业务表；
 2. Planner 生成 BTC/ETH TaskInstances；
-3. 四根 1H 生成两行 `spot_kline_derived_4h`，RowKey.freq=4H；
+3. 四根 1H 生成两行 `dataset_spot_kline_derived_4h`，RowKey.freq=4H；
 4. 重复 tick 不增加 target 写；
 5. 修改 source high 后 recent repair 覆盖同一 RowKey；
 6. ETH 缺末行时只完成 BTC，不发 marker，补齐后收敛；
@@ -815,7 +815,7 @@ Run: `cd modules/collector && go test -count=1 ./...`
 
 Run: `make test-kline-resample`
 
-Run: `./scripts/test-go-workspace.sh`
+Run: `./scripts/test/contract/test-go-workspace.sh`
 
 Run: `make verify-pr`
 
@@ -829,7 +829,7 @@ Run: `git diff --check`
 
 - [ ] **Step 5: 灰度**
 
-首次部署保持 `kline_resample.enabled=false`。选择 `binance_spot_kline_1m` 的少量测试 subject，创建 `spot_kline_derived_4h`，连续验收三个 4H bucket，再回填最近 7 天。
+首次部署保持 `kline_resample.enabled=false`。选择 `dataset_binance_spot_kline_1m` 的少量测试 subject，创建 `dataset_spot_kline_derived_4h`，连续验收三个 4H bucket，再回填最近 7 天。
 
 每个 bucket 核对 source 行数、target Primary/View 行数、随机 OHLCV、唯一 marker、TaskInstance lag 和 waiting_source。回填核对 request progress、sync point 和 View fence。
 
@@ -856,7 +856,7 @@ Commit: `test(collector): verify kline resample pipeline`
 ## 6. 完成标准
 
 1. 用户能在现有采集规则页面选择 active Kline Dataset，创建 `1m->7m`、`30m->90m`、`1H->4H` Rule。
-2. target 名称包含周期 suffix，例如 `spot_kline_derived_4h`，其 DataSource 为内部 `crypto_market`，不是 source Dataset ID 或 Binance。
+2. target 名称包含周期 suffix，例如 `dataset_spot_kline_derived_4h`，其 DataSource 为内部 `crypto`，不是 source Dataset ID 或 Binance。
 3. 完整 Rule 配置只保存在现有 TaskRule，全局 repair lookback 只保存在 Collector YAML；target attributes 只保存分类和血缘；V1 没有配置 hash，也没有新增数据库表。
 4. 每个 subject 使用现有 TaskInstance result 保存游标、lease、retry 和 backfill，重启后可恢复。
 5. 全局一分钟 timer 只 claim 工作，不读取 K 线或等待源闭合。

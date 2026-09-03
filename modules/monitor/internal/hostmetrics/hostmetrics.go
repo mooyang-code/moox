@@ -17,7 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const SpaceID = "moox_system"
+const SpaceID = "mooxsys"
 
 var ErrInvalidHostMetric = errors.New("invalid host metric")
 

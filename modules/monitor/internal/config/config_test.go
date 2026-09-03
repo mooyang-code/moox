@@ -34,7 +34,7 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Alert.SendTimeoutSeconds != 10 {
 		t.Fatalf("alert send timeout = %d", cfg.Alert.SendTimeoutSeconds)
 	}
-	if !cfg.Metrics.HostStorage.Enabled || cfg.Metrics.HostStorage.SpaceID != "moox_system" || cfg.Metrics.HostStorage.Frequency != "1m" {
+	if !cfg.Metrics.HostStorage.Enabled || cfg.Metrics.HostStorage.SpaceID != "mooxsys" || cfg.Metrics.HostStorage.Frequency != "1m" {
 		t.Fatalf("host storage defaults = %+v", cfg.Metrics.HostStorage)
 	}
 	if !cfg.Observability.Enabled || len(cfg.Observability.EventBusURLs) == 0 {
@@ -222,7 +222,7 @@ func TestMonitorConfigRejectsLegacyEventBusFields(t *testing.T) {
 		"metrics:\n  eventbus_url: nats://old:4222\n",
 		"observability:\n  stream: MOOX_OBSERVABILITY\n",
 		"observability:\n  consumer: another-consumer\n",
-		"observability:\n  filter_subject: moox.observability.>\n",
+		"observability:\n  filter_subject: moox.event.observability.>\n",
 	} {
 		if _, err := Load(writeConfig(t, content)); err == nil {
 			t.Fatalf("Load() accepted retired config: %s", content)

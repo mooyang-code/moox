@@ -127,13 +127,13 @@ moox-cli storage repair-view ... \
 
 ## 精确清理单个 Dataset 的历史事件
 
-当一个可丢弃的高频运维 Dataset（例如 `moox_service_metrics`）占满共享 Storage View durable，
+当一个可丢弃的高频运维 Dataset（例如 `dataset_mooxsys_service_metrics`）占满共享 Storage View durable，
 但业务 Dataset 的历史事件必须保留时，不要删除整个 consumer。先检查精确 subject：
 
 ```bash
 /home/<user>/moox/storage/bin/moox-storage-cli purge-dataset-events \
-  --space moox_system \
-  --dataset moox_service_metrics \
+  --space mooxsys \
+  --dataset dataset_mooxsys_service_metrics \
   --credential-file /home/<user>/.config/moox/eventbus/internal-admin.yaml \
   --dry-run
 ```
@@ -171,14 +171,14 @@ moox-cli storage force-rebuild-view \
 /home/<user>/moox/storage/bin/moox-storage-cli retain-views \
   --metadata-db /home/<user>/moox/storage/data/storage/metadata/storage_metadata.db \
   --package-root /home/<user>/moox/storage \
-  --keep-view crypto/binance_spot_kline_1m_view \
-  --keep-view crypto/perpetual_kline_1h_view \
-  --keep-view crypto/spot_kline_1h_view \
-  --keep-view moox_system/host_resource_view \
-  --keep-view moox_system/host_fs_view \
-  --keep-view moox_system/host_disk_view \
-  --keep-view moox_system/host_net_view \
-  --keep-view moox_system/moox_service_metrics_view \
+  --keep-view crypto/view_crypto_spot_kline_1m \
+  --keep-view crypto/view_crypto_swap_kline_1h \
+  --keep-view crypto/view_crypto_spot_kline_1h \
+  --keep-view mooxsys/view_mooxsys_host_resource \
+  --keep-view mooxsys/view_mooxsys_host_fs \
+  --keep-view mooxsys/view_mooxsys_host_disk \
+  --keep-view mooxsys/view_mooxsys_host_net \
+  --keep-view mooxsys/view_mooxsys_service_metrics \
   --yes
 ```
 
@@ -187,7 +187,7 @@ moox-cli storage force-rebuild-view \
 物理 A/B 文件。随后由 Storage View 的 Cleanup Timer 在确认无引用后清理文件。
 
 Storage 服务的时序 View 默认按所有频率回溯 `1000` 根；可在根目录
-`custom.toml` 的 `[storage_view] rebuild_lookback_periods` 统一调整，适用于自动 A/B、启动恢复和手动
+`moox.toml` 的 `[storage_view] rebuild_lookback_periods` 统一调整，适用于自动 A/B、启动恢复和手动
 重建。无 frequency 的旧 View 才使用 `storage.view.rebuild_lookback`（默认 `24h`）兜底；若 Source
 历史不足配置根数，构建会保持未完成状态，不会发布一个短历史 View。
 

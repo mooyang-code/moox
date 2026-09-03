@@ -71,12 +71,12 @@ func TestValidateTaskRuleDatasetsRejectsSymbolMarketMismatch(t *testing.T) {
 
 func TestValidateTaskRuleDatasetsAcceptsStockSharedDataSource(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
-		"symbols":        {DataSourceID: "stock_cn", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "equity"}},
-		"stock_cn_kline": {DataSourceID: "stock_cn", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "equity"}},
+		"symbols":              {DataSourceID: "stockcn", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "equity"}},
+		"dataset_stockcn_equity_kline": {DataSourceID: "stockcn", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "equity"}},
 	}}
 	rule := domain.TaskRule{
-		SpaceID: "stock_cn", RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity",
-		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m"}`,
+		SpaceID: "stockcn", RuleID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity",
+		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
 	}
 	require.NoError(t, service.validateTaskRuleDatasets(context.Background(), rule))
 }
@@ -84,15 +84,15 @@ func TestValidateTaskRuleDatasetsAcceptsStockSharedDataSource(t *testing.T) {
 func TestValidateTaskRuleAcceptsCollectorLocalResampleWithoutCloudRoute(t *testing.T) {
 	rule := domain.TaskRule{
 		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
-		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"spot_kline_derived_4h","target_frequency":"4H","alignment":"epoch_utc"}`,
+		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_4h","target_frequency":"4H","alignment":"epoch_utc"}`,
 	}
 	require.NoError(t, validateTaskRule(rule))
 }
 
 func TestValidateTaskRuleAcceptsBoundedStockHistoryMode(t *testing.T) {
 	rule := domain.TaskRule{
-		SpaceID: "stock_cn", RuleID: "stock-bars", DataType: "kline", Provider: "stock_cn_multi", MarketType: "equity",
-		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m","history_policy":{"mode":"lookback","lookback":5}}`,
+		SpaceID: "stockcn", RuleID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity",
+		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m","history_policy":{"mode":"lookback","lookback":5}}`,
 	}
 	require.NoError(t, validateTaskRule(rule))
 }
@@ -132,7 +132,7 @@ func TestValidateResampleSourceDoesNotFoldMonthIntoMinute(t *testing.T) {
 	}}
 	rule := domain.TaskRule{
 		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
-		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`,
+		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`,
 	}
 	require.ErrorContains(t, service.validateTaskRuleDatasets(context.Background(), rule), `does not enable frequency "1m"`)
 }

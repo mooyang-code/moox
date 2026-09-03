@@ -65,7 +65,7 @@ address = "192.0.2.11"
 username = "ubuntu"
 password = "recognizable-compute-password"
 `
-	path := filepath.Join(root, "custom.toml")
+	path := filepath.Join(root, "moox.toml")
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	snapshot, err := setupconfig.Load(path, root)
 	require.NoError(t, err)
@@ -107,7 +107,7 @@ func TestApplyWithSpacesMapsAdminSpaceContractAndCounts(t *testing.T) {
 		_, _ = w.Write(response)
 	})}
 	spaces := []Space{{
-		SpaceID: "stock_cn", Name: "A股市场", Description: "A股行情",
+		SpaceID: "stockcn", Name: "A股市场", Description: "A股行情",
 		Owner: "quant", Market: "CN", Timezone: "Asia/Shanghai",
 		Status: "active", AttributesJSON: `{"managed_by":"moox-cli"}`,
 	}}
@@ -115,7 +115,7 @@ func TestApplyWithSpacesMapsAdminSpaceContractAndCounts(t *testing.T) {
 	result, err := New(forwarder).ApplyWithSpaces(context.Background(), clientSnapshot(t), spaces)
 	require.NoError(t, err)
 	require.Len(t, capturedRequest.GetSpaces(), 1)
-	assert.Equal(t, "stock_cn", capturedRequest.GetSpaces()[0].GetSpaceId())
+	assert.Equal(t, "stockcn", capturedRequest.GetSpaces()[0].GetSpaceId())
 	assert.Equal(t, "CN", capturedRequest.GetSpaces()[0].GetMarket())
 	assert.Equal(t, "Asia/Shanghai", capturedRequest.GetSpaces()[0].GetTimezone())
 	assert.Equal(t, `{"managed_by":"moox-cli"}`, capturedRequest.GetSpaces()[0].GetAttributesJson())

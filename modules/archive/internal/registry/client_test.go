@@ -21,8 +21,8 @@ func (p *registryProxy) RegisterArchiveFile(_ context.Context, req *storagepb.Re
 }
 
 func TestArchiveFileUsesStableIdentity(t *testing.T) {
-	key := domain.PartitionKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202606"}
-	manifest := domain.Manifest{Path: "/data/archive/crypto/spot_kline_1h/1h/BTC-USDT/series_tag=venue%3Abinance/crypto__spot_kline_1h__BTC-USDT__1h__series_tag=venue%3Abinance__202606.parquet", Generation: 7, SHA256: "hash", Size: 10, RowCount: 1, Columns: []string{"close"}}
+	key := domain.PartitionKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202606"}
+	manifest := domain.Manifest{Path: "/data/archive/crypto/dataset_spot_kline_1h/1h/BTC-USDT/series_tag=venue%3Abinance/crypto__spot_kline_1h__BTC-USDT__1h__series_tag=venue%3Abinance__202606.parquet", Generation: 7, SHA256: "hash", Size: 10, RowCount: 1, Columns: []string{"close"}}
 	first := BuildArchiveFile("parquet-local", key, manifest, false, domain.COSState{})
 	manifest.Generation++
 	second := BuildArchiveFile("parquet-local", key, manifest, false, domain.COSState{})

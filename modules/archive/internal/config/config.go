@@ -89,9 +89,9 @@ func Default() *Config {
 			StateDir: "../data/archive-state",
 			DeviceID: "parquet-local",
 			Sources: map[string]SourceConfig{
-				"stock_cn": {Datasets: []string{"stock_cn_kline", "stock_cn_index_kline", "stock_cn_convertible_bond_kline"}},
-				"stock_us": {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
-				"crypto":   {Datasets: []string{"spot_kline_1h", "perpetual_kline_1h"}},
+				"stockcn": {Datasets: []string{"dataset_stockcn_equity_kline", "dataset_stockcn_index_kline", "dataset_stockcn_bond_kline"}},
+				"stockus": {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
+				"crypto":  {Datasets: []string{"dataset_spot_kline_1h", "dataset_perpetual_kline_1h"}},
 			},
 			EventBus: EventBusConfig{
 				URLs:     []string{"nats://127.0.0.1:4222"},
@@ -211,7 +211,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("archive directory %s must not be a symlink", p)
 		}
 	}
-	allowed := map[string]bool{"stock_cn": true, "stock_hk": true, "stock_us": true, "crypto": true}
+	allowed := map[string]bool{"stockcn": true, "stockhk": true, "stockus": true, "crypto": true}
 	if len(c.Archive.Sources) == 0 {
 		return fmt.Errorf("archive sources are required")
 	}

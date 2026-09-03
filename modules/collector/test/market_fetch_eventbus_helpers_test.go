@@ -40,7 +40,7 @@ func newBatchE2EQueue(t *testing.T, ctx context.Context, spaceID, subjectID stri
 	t.Helper()
 	server := testkit.Start(t)
 	server.AddStream(t, &nats.StreamConfig{
-		Name: events.MarketFetchBatchCompleted.Stream(), Subjects: []string{"moox.market.fetch.batch.completed.v1.>"},
+		Name: events.MarketFetchBatchCompleted.Stream(), Subjects: []string{"moox.event.market.fetch.batch.completed.v1.>"},
 		Storage: nats.MemoryStorage, Retention: nats.LimitsPolicy,
 	})
 	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{server.URL()}, Name: "market-fetch-batch-e2e"})
@@ -58,7 +58,7 @@ func newBatchE2EQueue(t *testing.T, ctx context.Context, spaceID, subjectID stri
 	}
 	cfg := events.SubjectConsumerConfig{
 		ConsumerConfig: events.ConsumerConfig{Name: "market-fetch-redelivery-e2e", Event: events.MarketFetchBatchCompleted, AckWait: 500 * time.Millisecond, MaxDeliver: 4, MaxAckPending: maxAckPending, FetchMaxWait: 100 * time.Millisecond, DeliverDecodeErrors: true},
-		SpaceID: spaceID, SubjectID: subjectID,
+		SpaceID:        spaceID, SubjectID: subjectID,
 	}
 	if _, err := events.EnsureSubjectConsumer(ctx, client, registry, cfg); err != nil {
 		t.Fatal(err)

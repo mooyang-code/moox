@@ -63,7 +63,7 @@ MooX JWT、request HMAC 和 service HMAC 网关过滤器保持权威。通用 JW
 ## 上线检查
 
 ```bash
-bash scripts/test-trpc-plugin-config.sh
+bash scripts/test/contract/test-trpc-plugin-config.sh
 go test -count=1 ./packages/trpcplugintest
 ```
 

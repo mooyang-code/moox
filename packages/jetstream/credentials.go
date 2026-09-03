@@ -72,7 +72,13 @@ func (c *Config) ApplyCredentialFile(path string) error {
 	if caFile != "" && !filepath.IsAbs(caFile) {
 		caFile = filepath.Join(filepath.Dir(path), caFile)
 	}
-	c.Username, c.Password, c.TLSCAFile = file.Username, file.Password, caFile
+	c.Username, c.Password = file.Username, file.Password
+	// Keep a deployment-wide CA supplied by the environment when a legacy or
+	// externally managed role file omits ca_file. A credential file with an
+	// explicit CA remains authoritative and is resolved relative to itself.
+	if caFile != "" {
+		c.TLSCAFile = caFile
+	}
 	// The deployment endpoint is supplied by the module config or the
 	// deployment-wide environment. Credential exports on the control host may
 	// deliberately contain its loopback URL, which must not override a remote

@@ -12,14 +12,14 @@ func TestParseRunOnceRange(t *testing.T) {
 		"run-once", "--config", "/opt/moox/factor/config/app.yaml",
 		"--space", "crypto", "--dataset", "bars", "--subject", "BTC",
 		"--freq", "1m", "--start-time", "2026-07-26T00:00:00Z",
-		"--end-time", "2026-07-26T01:00:00Z", "--factors", "bias,cci",
+		"--end-time", "2026-07-26T01:00:00Z", "--factors", "Bias,Cci",
 	})
 	require.NoError(t, err)
 	require.Equal(t, "/opt/moox/factor/config/app.yaml", cfg.ConfigPath)
 	require.Empty(t, cfg.DBPath)
 	require.Empty(t, cfg.FactorsDir)
 	require.Equal(t, time.Hour, cfg.EndTime.Sub(cfg.StartTime))
-	require.Equal(t, []string{"bias", "cci"}, cfg.FactorIDs)
+	require.Equal(t, []string{"Bias", "Cci"}, cfg.FactorIDs)
 }
 
 func TestRunOnceCLIPathDefaultsInheritAppConfig(t *testing.T) {
@@ -36,7 +36,7 @@ func TestRunOnceCLIPathDefaultsInheritAppConfig(t *testing.T) {
 
 func TestParseImportGenericDefinition(t *testing.T) {
 	cfg, err := parseArgs([]string{
-		"import", "--file", "./Bias.py", "--factor-id", "bias",
+		"import", "--file", "./Bias.py", "--factor-id", "Bias",
 		"--input-columns", "close, benchmark_return", "--outputs", "bias_20,bias_96",
 		"--params-json", `{"windows":[20,96]}`, "--lookback-periods", "200",
 	})
@@ -49,7 +49,7 @@ func TestParseImportGenericDefinition(t *testing.T) {
 
 func TestParseImportRejectsStatusFlag(t *testing.T) {
 	_, err := parseArgs([]string{
-		"import", "--file", "./Bias.py", "--factor-id", "bias",
+		"import", "--file", "./Bias.py", "--factor-id", "Bias",
 		"--input-columns", "close", "--outputs", "bias",
 		"--lookback-periods", "20", "--status", "enabled",
 	})
@@ -58,7 +58,7 @@ func TestParseImportRejectsStatusFlag(t *testing.T) {
 
 func TestParseImportRejectsRetiredLookbackRowsFlag(t *testing.T) {
 	_, err := parseArgs([]string{
-		"import", "--file", "./Bias.py", "--factor-id", "bias",
+		"import", "--file", "./Bias.py", "--factor-id", "Bias",
 		"--input-columns", "close", "--outputs", "bias",
 		"--lookback-rows", "20",
 	})

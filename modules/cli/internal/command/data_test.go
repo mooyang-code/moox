@@ -34,15 +34,15 @@ func TestTimeSeriesSelectorSeriesTagPresence(t *testing.T) {
 		dataSpaceID, dataSubjectID, dataFreq, dataSeriesTag = oldSpaceID, oldSubjectID, oldFreq, oldSeriesTag
 	})
 	dataSpaceID, dataSubjectID, dataFreq, dataSeriesTag = "crypto", "BTC-USDT", "1h", ""
-	all := timeSeriesSelectorForExport("spot_kline_1h", false)
+	all := timeSeriesSelectorForExport("dataset_spot_kline_1h", false)
 	require.Nil(t, all.SeriesTag)
 
-	defaultSeries := timeSeriesSelectorForExport("spot_kline_1h", true)
+	defaultSeries := timeSeriesSelectorForExport("dataset_spot_kline_1h", true)
 	require.NotNil(t, defaultSeries.SeriesTag)
 	assert.Equal(t, "", defaultSeries.GetSeriesTag())
 
 	dataSeriesTag = "venue:binance"
-	exact := timeSeriesSelectorForExport("spot_kline_1h", true)
+	exact := timeSeriesSelectorForExport("dataset_spot_kline_1h", true)
 	require.NotNil(t, exact.SeriesTag)
 	assert.Equal(t, "venue:binance", exact.GetSeriesTag())
 }

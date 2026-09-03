@@ -16,7 +16,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const defaultSetupConfigDir = "./examples/setup/default"
+const defaultSetupConfigDir = "./config/setup"
 
 type setupInitBundle struct {
 	Spaces   []setupclient.Space

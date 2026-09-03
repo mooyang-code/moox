@@ -175,6 +175,51 @@ func (w *storageWriter) ReadFields(ctx context.Context, keys []*storagepb.RowKey
 	return response.GetRows(), nil
 }
 
+// ListInstrumentNames resolves the canonical Subject names needed when a
+// market-data row is projected into a user-facing K-line View. It uses the
+// exact subject-id filter so a Timer invocation does not scan the catalogue.
+func (w *storageWriter) ListInstrumentNames(ctx context.Context, spaceID string, subjectIDs []string) (map[string]string, error) {
+	result := make(map[string]string, len(subjectIDs))
+	unique := make([]string, 0, len(subjectIDs))
+	seen := make(map[string]struct{}, len(subjectIDs))
+	for _, subjectID := range subjectIDs {
+		subjectID = strings.TrimSpace(subjectID)
+		if subjectID == "" {
+			continue
+		}
+		if _, exists := seen[subjectID]; exists {
+			continue
+		}
+		seen[subjectID] = struct{}{}
+		unique = append(unique, subjectID)
+	}
+	for start := 0; start < len(unique); start += datasetSubjectPageSize {
+		end := start + datasetSubjectPageSize
+		if end > len(unique) {
+			end = len(unique)
+		}
+		var response *storagepb.ListSubjectsRsp
+		err := retryStorage(ctx, func() error {
+			var err error
+			response, err = w.metadata.ListSubjects(ctx, &storagepb.ListSubjectsReq{AuthInfo: w.authInfo, SpaceId: strings.TrimSpace(spaceID), SubjectIds: unique[start:end], Page: &storagepb.Page{Page: 1, Size: uint32(end - start)}})
+			if err != nil {
+				return fmt.Errorf("list instrument names: %w", err)
+			}
+			return ensureStorageOK("list instrument names", response.GetRetInfo())
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, subject := range response.GetSubjects() {
+			if subject == nil || strings.TrimSpace(subject.GetSubjectId()) == "" {
+				continue
+			}
+			result[subject.GetSubjectId()] = strings.TrimSpace(subject.GetName())
+		}
+	}
+	return result, nil
+}
+
 func expandResampleFieldIDs(keys []*storagepb.RowKey, fieldIDs []string) []string {
 	if len(fieldIDs) == 0 || len(keys) == 0 || keys[0] == nil {
 		return fieldIDs

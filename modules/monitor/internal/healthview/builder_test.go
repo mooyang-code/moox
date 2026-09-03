@@ -88,36 +88,36 @@ func TestHealthViewKeepsHostMonitoringOutOfCoreServices(t *testing.T) {
 
 func TestHealthViewExcludesHostMonitoringDatasetsAndAlerts(t *testing.T) {
 	for _, item := range []observability.DatasetFrequencyStatus{
-		{DatasetID: "host_resource_v1"},
-		{DatasetID: "host_fs_view"},
-		{DatasetID: "HOST_NET_VIEW"},
+		{DatasetID: "dataset_mooxsys_host_resource"},
+		{DatasetID: "dataset_mooxsys_host_filesystem"},
+		{DatasetID: "dataset_mooxsys_host_network"},
 	} {
 		if !isHostMonitoringDataset(item) {
 			t.Fatalf("host dataset %q was not filtered", item.DatasetID)
 		}
 	}
-	if isHostMonitoringDataset(observability.DatasetFrequencyStatus{DatasetID: "moox_service_metrics_view"}) {
+	if isHostMonitoringDataset(observability.DatasetFrequencyStatus{DatasetID: "dataset_mooxsys_service_metrics"}) {
 		t.Fatal("service metrics view must not be classified as host monitoring")
 	}
 	for _, checkID := range []string{
 		"host:AB12:cpu",
-		"dataset:storage:host_resource_v1:1m",
-		"dataset:storage_view:host_fs_view:1m",
+		"dataset:storage:dataset_mooxsys_host_resource:1m",
+		"dataset:storage_view:dataset_mooxsys_host_filesystem:1m",
 	} {
 		if !isHostMonitoringCheck(checkID) {
 			t.Fatalf("host check %q was not filtered", checkID)
 		}
 	}
-	if isHostMonitoringCheck("dataset:storage:binance_spot_kline_1m:1m") {
+	if isHostMonitoringCheck("dataset:storage:dataset_binance_spot_kline_1m:1m") {
 		t.Fatal("market dataset check was incorrectly classified as host monitoring")
 	}
 }
 
 func TestCollectorDatasetUsesStorageAsAuthoritativeHealthFact(t *testing.T) {
 	items := []observability.DatasetFrequencyStatus{
-		{Producer: "collector", SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m", Freq: "1m"},
-		{Producer: "storage", SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m", Freq: "1m"},
-		{Producer: "collector", SpaceID: "crypto_market", DatasetID: "new_dataset", Freq: "1m"},
+		{Producer: "collector", SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m", Freq: "1m"},
+		{Producer: "storage", SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m", Freq: "1m"},
+		{Producer: "collector", SpaceID: "crypto", DatasetID: "new_dataset", Freq: "1m"},
 	}
 	scopes := storageDatasetScopes(items)
 	if !collectorCoveredByStorage(items[0], scopes) {
@@ -133,10 +133,10 @@ func TestCollectorDatasetUsesStorageAsAuthoritativeHealthFact(t *testing.T) {
 
 func TestCollectorDatasetCoverageNormalizesFrequency(t *testing.T) {
 	items := []observability.DatasetFrequencyStatus{
-		{Producer: "storage", SpaceID: "crypto_market", DatasetID: "bars", Freq: "1H"},
+		{Producer: "storage", SpaceID: "crypto", DatasetID: "bars", Freq: "1H"},
 	}
 	if !collectorCoveredByStorage(
-		observability.DatasetFrequencyStatus{Producer: "collector", SpaceID: "crypto_market", DatasetID: "bars", Freq: "1h"},
+		observability.DatasetFrequencyStatus{Producer: "collector", SpaceID: "crypto", DatasetID: "bars", Freq: "1h"},
 		storageDatasetScopes(items),
 	) {
 		t.Fatal("frequency matching must be case-insensitive")
@@ -184,7 +184,7 @@ func TestAlertTitleUsesHumanReadableHostAndServiceNames(t *testing.T) {
 	if got := alertTitle("dataset:storage:binance_spot_kline_1m_factor:1m"); got != "因子结果数据 · binance_spot_kline_1m_factor / 1m" {
 		t.Fatalf("storage alert title = %q", got)
 	}
-	if got := alertTitle("dataset:storage_view:binance_spot_kline_1m_view:1m"); got != "行情结果视图 · binance_spot_kline_1m_view / 1m" {
+	if got := alertTitle("dataset:storage_view:view_crypto_spot_kline_1m:1m"); got != "行情结果视图 · view_crypto_spot_kline_1m / 1m" {
 		t.Fatalf("market view alert title = %q", got)
 	}
 	if got := alertTitle("sysdeploy:control:moox_factor"); got != "因子计算服务" {

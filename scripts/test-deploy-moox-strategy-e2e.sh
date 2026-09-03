@@ -1,1 +1,0 @@
-tests/e2e/test-deploy-moox-strategy-e2e.sh

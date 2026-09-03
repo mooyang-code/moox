@@ -170,7 +170,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const storageSubject = "moox.storage.>"
+	const storageSubject = "moox.event.storage.>"
 	if _, err := js.AddStream(&nats.StreamConfig{
 		Name: "MOOX_STORAGE", Subjects: []string{storageSubject}, Storage: nats.MemoryStorage,
 	}); err != nil {
@@ -355,7 +355,7 @@ func assertSelectorStates(t *testing.T, ctx context.Context, view *viewservice.S
 	}
 	empty := ""
 	defaultRows := query(&pb.TimeSeriesSelector{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &empty})
-	if len(defaultRows) != 1 || defaultRows[0].GetKey().GetSeriesTag() != "" {
+	if len(defaultRows) != 1 || defaultRows[0].GetKey().GetSeriesTag() != "default" {
 		t.Fatalf("explicit empty selector rows=%v", defaultRows)
 	}
 	okx := "venue:okx"

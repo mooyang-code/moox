@@ -37,7 +37,7 @@ type binanceSourceConfig struct {
 		Description string `yaml:"description"`
 		Type        string `yaml:"type"`
 	} `yaml:"app"`
-	API     APIConfig `yaml:"api"`
+	API     APIConfig      `yaml:"api"`
 	Storage map[string]any `yaml:"storage"`
 }
 

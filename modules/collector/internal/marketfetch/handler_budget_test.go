@@ -59,6 +59,15 @@ func TestReservedDeadlineStorageUsesReservedParentBudget(t *testing.T) {
 	require.LessOrEqual(t, underlying.remaining, 130*time.Millisecond)
 }
 
+func TestReservedDeadlineStorageForwardsInstrumentNames(t *testing.T) {
+	underlying := &pipelineStorageWithInstrumentNames{names: map[string]string{"600000.XSHG": "浦发银行"}}
+	storage := &reservedDeadlineStorage{Storage: underlying, parent: context.Background(), timeout: time.Second}
+
+	names, err := storage.ListInstrumentNames(context.Background(), StockCNSpaceID, []string{"600000.XSHG"})
+	require.NoError(t, err)
+	require.Equal(t, "浦发银行", names["600000.XSHG"])
+}
+
 func TestHandlerUsesCommonInstrumentPipelineForCryptoSnapshot(t *testing.T) {
 	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
 	registry := marketdata.NewRegistry()
@@ -71,11 +80,11 @@ func TestHandlerUsesCommonInstrumentPipelineForCryptoSnapshot(t *testing.T) {
 	h := &Handler{
 		NewStorage: func(string, string, string) (Storage, error) { return storage, nil },
 		NewCryptoInstrumentPipeline: func(InstrumentStorage, marketdata.ProductType) (*InstrumentPipeline, error) {
-			return &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: []string{"binance"}, SpaceID: "crypto_market", MarketID: "crypto", DatasetID: "binance_spot_symbols", DataSourceID: "binance", TargetDatasetID: "", RequiredExchanges: []string{"binance"}, MinimumCount: 1}, nil
+			return &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: []string{"binance"}, SpaceID: "crypto", MarketID: "crypto", DatasetID: "dataset_binance_spot_symbols", DataSourceID: "binance", TargetDatasetID: "", RequiredExchanges: []string{"binance"}, MinimumCount: 1}, nil
 		},
 		Now: func() time.Time { return now },
 	}
-	req := Request{BatchID: "crypto-instrument-batch", BatchKind: domain.BatchKindInstrumentSnapshot, SpaceID: "crypto_market", DatasetID: "binance_spot_symbols", MarketType: "spot", RequestID: "crypto-instrument-request", Items: []domain.CollectionItem{{DataType: "instrument", DatasetID: "binance_spot_symbols"}}}
+	req := Request{BatchID: "crypto-instrument-batch", BatchKind: domain.BatchKindInstrumentSnapshot, SpaceID: "crypto", DatasetID: "dataset_binance_spot_symbols", MarketType: "spot", RequestID: "crypto-instrument-request", Items: []domain.CollectionItem{{DataType: "instrument", DatasetID: "dataset_binance_spot_symbols"}}}
 
 	response, err := h.handleRequest(context.Background(), req, "storage", false)
 	require.NoError(t, err)

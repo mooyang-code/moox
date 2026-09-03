@@ -8,7 +8,7 @@ that require a real deployment.
 
 EventBus subjects and Prometheus metric names are different namespaces:
 
-- Observability events use the single `moox.observability.>` prefix and the
+- Observability events use the single `moox.event.observability.>` prefix and the
   `MOOX_OBSERVABILITY` stream.
 - Monitor binds the single durable
   `monitor_observability_ingest_v1` to that prefix.
@@ -107,7 +107,7 @@ the ordinary market-fetch schedule.
 | A business check fails while the central path is healthy | The result goes through EventBus and Monitor; SCF does not bypass Monitor. |
 
 When a HostAgent is registered and the WeCom webhook is configured, Monitor
-creates a per-agent `filesystem_usage` alert in `moox_system`. It fires after
+creates a per-agent `filesystem_usage` alert in `mooxsys`. It fires after
 three consecutive 15-second samples at 85% filesystem usage and resolves at
 80%. This is intentionally earlier and faster than the CPU/memory defaults so
 Storage/View operators still have time to remove stale release artifacts
@@ -137,7 +137,7 @@ owned by Monitor so cooldown and recovery state have one owner.
 Run the full local suite:
 
 ```bash
-bash scripts/verify-observability-e2e.sh
+bash scripts/test/e2e/verify-observability-e2e.sh
 ```
 
 It runs race-enabled tests for the reporting, event, notification, HostAgent,
@@ -161,7 +161,7 @@ Storage adapters, and HTTP test servers. They prove:
 
 ### EventBus and SCF Governance
 
-For a remote deployment that enables Collector SCF, `scripts/deploy-moox.sh`
+For a remote deployment that enables Collector SCF, `scripts/deploy/deploy-moox.sh`
 requires `MOOX_EVENTBUS_PUBLIC_IP` and TLS. It rejects loopback-only topology
 before stopping the existing release. The generated `config/runtime.env`
 persists the EventBus listener host, port, and TLS mode so a restart cannot
@@ -170,9 +170,9 @@ check verifies that the file matches the process and that EventBus is listening
 on the public interface.
 
 The config-driven `moox-cli collector function publish` path rewrites the SCF
-EventBus endpoint from `custom.toml` while retaining the role credential and CA;
+EventBus endpoint from `moox.toml` while retaining the role credential and CA;
 it refuses a loopback address, missing CA, invalid port, or disabled TLS. Run
-`moox-cli setup e2e-eventbus --file custom.toml` after a production deployment
+`moox-cli setup e2e-eventbus --file moox.toml` after a production deployment
 to prove external TLS connectivity, JetStream publish/fetch/ACK, and worker
 ACLs. `MOOX_EVENTBUS_ALLOW_LOOPBACK_REMOTE=1` is an explicit private/VPN escape
 hatch and should not be used for Tencent SCF fleets.

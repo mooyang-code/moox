@@ -341,7 +341,7 @@ Bleve 使用对应的 `slot-a/` 和 `slot-b/` 目录。Metadata 的 `active_slot
 ```text
 Stream: MOOX_STORAGE
 Subjects:
-  - moox.storage.fields_changed.v1.>
+  - moox.event.storage.fields_changed.v1.>
 ```
 
 `MOOX_STORAGE` 使用 JetStream `InterestPolicy` 和 `DiscardNew`。
@@ -349,7 +349,7 @@ Subjects:
 每个 Dataset 使用独立 Subject：
 
 ```text
-moox.storage.fields_changed.v1.<space-token>.<dataset-token>
+moox.event.storage.fields_changed.v1.<space-token>.<dataset-token>
 ```
 
 `space-token` 和 `dataset-token` 使用统一的 `EncodeSubjectToken`：把非空 UTF-8 ID 编码为小写、无 Padding 的 Base32 单个 NATS Token。Consumer 使用 `DecodeSubjectToken` 解码，并校验 Subject 中的 Space/Dataset 与 Payload 一致。
@@ -362,7 +362,7 @@ View 只创建一个固定 Durable Consumer：
 
 ```text
 Durable: storage_view
-FilterSubject: moox.storage.fields_changed.v1.>
+FilterSubject: moox.event.storage.fields_changed.v1.>
 MaxAckPending: 1
 FetchBatch: 1
 ```
@@ -495,7 +495,7 @@ Apply 锁保证 Backfill 完成到切换之间没有只写 ActiveView 的事件�
 
 ## 两服务器 E2E
 
-E2E 从仓库根被忽略的 `custom.toml` 读取两个服务器节点，不打印或提交凭证。
+E2E 从仓库根被忽略的 `moox.toml` 读取两个服务器节点，不打印或提交凭证。
 
 推荐拓扑：
 
@@ -534,7 +534,7 @@ Server B: storage-node-factor
 - `UpsertFields` 对 Field/Attribute 直接 Upsert，允许补写历史新增字段和覆盖旧值。
 - DataNode `ReadFields` 必须指定 RowKey 和 Field；Record 空 Version 返回字符最大版本。
 - 字段和内部 Outbox 条目在一个 Pebble Batch 中提交。
-- 每个 Dataset 使用 `moox.storage.fields_changed.v1.<space-token>.<dataset-token>`。
+- 每个 Dataset 使用 `moox.event.storage.fields_changed.v1.<space-token>.<dataset-token>`。
 - 事件不携带 Node/Dataset Sequence，ViewIndex 不保存 Source Progress。
 - JetStream 只有一个 `storage_view` Durable Consumer，`MaxAckPending=1`、`FetchBatch=1`。
 - 每个 View 使用独立 A/B DB；ActiveView/NewView/OldView 生命周期明确。

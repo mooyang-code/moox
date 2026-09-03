@@ -45,10 +45,10 @@ echo "==> build moox-collector-scf for linux/amd64"
 
 echo "==> copy ${SCF_SPACE_ID} SCF runtime configs"
 cp -R "${CONFIG_DIR}/." "${BUILD_DIR}/package/"
-if [[ "${SCF_SPACE_ID}" == "stock_cn" ]]; then
-  mkdir -p "${BUILD_DIR}/package/markets/stock_cn"
-  cp "${ROOT}/modules/collector/config/markets/stock_cn/calendar.yaml" "${BUILD_DIR}/package/markets/stock_cn/calendar.yaml"
-  cp "${ROOT}/modules/collector/config/markets/stock_cn/route.yaml" "${BUILD_DIR}/package/markets/stock_cn/route.yaml"
+if [[ "${SCF_SPACE_ID}" == "stockcn" ]]; then
+  mkdir -p "${BUILD_DIR}/package/markets/stockcn"
+  cp "${ROOT}/modules/collector/config/markets/stockcn/calendar.yaml" "${BUILD_DIR}/package/markets/stockcn/calendar.yaml"
+  cp "${ROOT}/modules/collector/config/markets/stockcn/route.yaml" "${BUILD_DIR}/package/markets/stockcn/route.yaml"
 fi
 rm -f "${BUILD_DIR}/package/trpc_go.yaml" "${BUILD_DIR}/package/example_trpc_go.yaml"
 

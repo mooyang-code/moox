@@ -1,6 +1,6 @@
 # SCF 短时行情采集
 
-> 状态：短时 Timer/Invoke 控制面已落地；`stock_cn` 多 Provider 的生产发布以 Instrument/Kline canary 和真实 Storage E2E 为准，egress probe 仅作诊断，不再作为发布门禁。
+> 状态：短时 Timer/Invoke 控制面已落地；`stockcn` 多 Provider 的生产发布以 Instrument/Kline canary 和真实 Storage E2E 为准，egress probe 仅作诊断，不再作为发布门禁。
 
 ## 背景
 
@@ -22,7 +22,7 @@ flowchart LR
   Assign --> Reconcile
   Reconcile --> CloudNode["CloudNode 合并并更新函数配置"]
   CloudNode --> Timer["腾讯云 Timer Trigger"]
-  Timer --> SCF["crypto_market / stock_cn 短时 SCF"]
+  Timer --> SCF["crypto / stockcn 短时 SCF"]
   SCF --> Binance["Binance 或新浪/腾讯/东方财富 HTTPS"]
   SCF --> Storage["一次聚合写 Storage"]
   Storage --> Monitor["Dataset 与 K 线新鲜度监控"]
@@ -30,40 +30,40 @@ flowchart LR
 ```
 
 1. 实时 K 线由每个函数自己的 Timer Trigger 触发，不再由 Collector 在每分钟调用每个函数。
-2. Collector 仍是控制面：扫描启用规则、读取关联 Instrument Dataset、生成稳定分片，并在 Instrument、规则或 DNS 变化时协调函数环境变量。DNS 默认由 `custom.toml` 选择的 Trade `compute-1` 解析；Collector 通过 Gateway 批量请求 `ResolveDomains`，本地 DNS 只作为缺失域名或 Trade 不可用时的回退。
-3. 每个定时函数承载一个固定 Group 的 `market_type + dataset_id + frequency` 任务，并在运行时按该 Group 的主 Provider 和候选链请求。crypto 保留每函数最多 30 个标的的既有上限；stock_cn 使用发布配置 N、压测得到的安全容量和 4KB Environment 校验决定每 Group 的容量，不把 30 写成 A 股硬上限。函数每次触发后从环境变量读取任务，不调用 Collector 或 Admin 配置接口。
+2. Collector 仍是控制面：扫描启用规则、读取关联 Instrument Dataset、生成稳定分片，并在 Instrument、规则或 DNS 变化时协调函数环境变量。DNS 默认由 `moox.toml` 选择的 Trade `compute-1` 解析；Collector 通过 Gateway 批量请求 `ResolveDomains`，本地 DNS 只作为缺失域名或 Trade 不可用时的回退。
+3. 每个定时函数承载一个固定 Group 的 `market_type + dataset_id + frequency` 任务，并在运行时按该 Group 的主 Provider 和候选链请求。crypto 保留每函数最多 30 个标的的既有上限；stockcn 使用发布配置 N、压测得到的安全容量和 4KB Environment 校验决定每 Group 的容量，不把 30 写成 A 股硬上限。函数每次触发后从环境变量读取任务，不调用 Collector 或 Admin 配置接口。
 4. SCF 并发请求行情，聚合后只调用一次 Storage。定时函数不发布逐批 Completion 事件；下一周期天然重试最近 3 根已收盘 K 线，Storage RowKey Upsert 负责幂等。
-5. 长时间缺口、出口探针和人工 E2E 仍走有界的按需调用；stock_cn 的全市场 Instrument 快照使用独立的每日 Timer SCF，不与实时 Kline Timer 混在一起。
+5. 长时间缺口、出口探针和人工 E2E 仍走有界的按需调用；stockcn 的全市场 Instrument 快照使用独立的每日 Timer SCF，不与实时 Kline Timer 混在一起。
 6. 不实现双版本任务快照。函数配置更新期间允许旧、新分片短暂重叠，重复 K 线写入是安全的；`assignment_hash` 只用于判断是否需要更新和排障。
-7. 配置驱动的标准发布会为 `stock_cn` 额外保留 1 个独立的 `instrument_snapshot` Timer 函数，专门每日
+7. 配置驱动的标准发布会为 `stockcn` 额外保留 1 个独立的 `instrument_snapshot` Timer 函数，专门每日
    承载全市场 Instrument 快照；每个启用地域仍可保留 1 个 `trigger_type=invoke` 辅助函数，承载缺口补采、
    出口探针和人工 E2E。`function_count` 只表示用户配置的 Kline Timer 实时容量。Space 级 `timer_function_count` 表示 Kline Timer 总容量；启用地域的 `function_count`
-   可以显式分配，或设为 0 由 CLI 自动均分。`crypto_market` 使用既有默认容量；`stock_cn` 必须
+   可以显式分配，或设为 0 由 CLI 自动均分。`crypto` 使用既有默认容量；`stockcn` 必须
    在发布配置显式设置 `timer_function_count=N`，初始值建议 200，也可以按压测结果设置更大。
    N 在发布时固定，ActiveInstrumentSet 变化只更新分片，不在运行时创建或删除函数。这样不会把
    按需工作错误投递到静态 Timer 环境，也不需要 SCF 在每次调用时回调控制面。
 
 ## 两个市场的统一采集内核
 
-`crypto_market` 和 `stock_cn` 使用同一套 `MarketProvider`、强类型
+`crypto` 和 `stockcn` 使用同一套 `MarketProvider`、强类型
 `KlineFetcher`/`InstrumentFetcher`、`KlineSpec`/`InstrumentSpec`、Feed 限频、
 `InstrumentPipeline` 和 `KlinePipeline`。两者保留独立的 SCF entrypoint、配置、发布包和函数集群，
 但不再维护一套仅给加密货币使用的独立 Instrument Pipeline。Binance 通过公共 Instrument/Kline Fetcher
-接入；新浪、腾讯和东方财富提供 stock_cn 的完整 1m Kline，百度在验证完成前仅作为 shadow。
+接入；新浪、腾讯和东方财富提供 stockcn 的完整 1m Kline，百度在验证完成前仅作为 shadow。
 
-`stock_cn` 的新浪、腾讯和东方财富请求不是按 MooX 账户配额控制，而是按 SCF 出口 IP 控制。
+`stockcn` 的新浪、腾讯和东方财富请求不是按 MooX 账户配额控制，而是按 SCF 出口 IP 控制。
 因此每个函数只在本地按对应 Feed 的 `RateLimitPolicy` 执行 token bucket、并发限制、timeout 和
 429 cooldown，不设置跨所有函数的 Provider 总配额。所有 Provider 成功行写入同一个
-`stock_cn/stock_cn_kline`，Provider 不进入 RowKey，来源通过 `source_provider`、
+`stockcn/dataset_stockcn_equity_kline`，Provider 不进入 RowKey，来源通过 `source_provider`、
 `provider_symbol`、`provider_timestamp`、`route_id`、`route_rank` 等字段追溯。
 
-当前公开 A 股分钟接口只有有界最新页且没有可复用游标，stock_cn 历史策略先限制在最近 24 小时；超过该范围的
+当前公开 A 股分钟接口只有有界最新页且没有可复用游标，stockcn 历史策略先限制在最近 24 小时；超过该范围的
 Backfill/GapRepair 在计划阶段 fail closed，不能反复请求同一页伪装成历史分页。后续只有接入可靠游标分页并补齐覆盖推进
 验证后，才提高该上限。
 
 ## Instrument 与 Invoke 节点的作用
 
-`stock_cn` 的全市场标的目录和各标的 Kline 是两条不同的接口链路。目录刷新由单独的
+`stockcn` 的全市场标的目录和各标的 Kline 是两条不同的接口链路。目录刷新由单独的
 `...-instrument-<region>-0` / `trigger_type=timer` 函数每天执行一次，调用多个 InstrumentFetcher
 并行汇总后写入 `ActiveInstrumentSet`。它不携带 Kline Group 的 `MOOX_MARKET_FETCH_SUBJECTS`，也不参与每分钟
 Kline 采集。目录刷新失败时保留上一版完整快照，Kline Timer 继续使用上一版有效集合。
@@ -85,14 +85,14 @@ Kline 采集。目录刷新失败时保留上一版完整快照，Kline Timer �
 | 节点命名/类型 | 触发方式 | 主要用途 | 是否参与实时 K 线 |
 | --- | --- | --- | --- |
 | `...-timer-<region>-N` / `trigger_type=timer` | 腾讯 Timer Trigger | 从函数 Environment 读取分片，每分钟抓取 K 线 | 是 |
-| `...-instrument-<region>-0` / `trigger_type=timer` | 腾讯 Timer Trigger | stock_cn 每日汇总全市场 Instrument 快照 | 否 |
+| `...-instrument-<region>-0` / `trigger_type=timer` | 腾讯 Timer Trigger | stockcn 每日汇总全市场 Instrument 快照 | 否 |
 | `...-invoke-<region>-0` / `trigger_type=invoke` | MooX `InvokeFunction` | 补采、探针和人工任务 | 否 |
 
-因此，删除这些 Invoke 节点不会停止 Timer 实时采集或 stock_cn 的每日 Instrument Timer，但会使缺口补采、
-出口探针和人工 E2E 没有执行节点；只有在明确不需要这些按需能力时才应删除。`custom.toml` 的
+因此，删除这些 Invoke 节点不会停止 Timer 实时采集或 stockcn 的每日 Instrument Timer，但会使缺口补采、
+出口探针和人工 E2E 没有执行节点；只有在明确不需要这些按需能力时才应删除。`moox.toml` 的
 `function_count` 只统计 Kline Timer 节点，Instrument snapshot Timer 是额外的单节点，Invoke 辅助节点也是额外的每地域 1 个固定容量。
 
-当前 `custom.toml` 启用新加坡、广州、上海和北京四个地域，所以 Kline Timer 按 N 分配；Instrument snapshot
+当前 `moox.toml` 启用新加坡、广州、上海和北京四个地域，所以 Kline Timer 按 N 分配；Instrument snapshot
 使用配置选定的一个地域；每个启用地域仍可看到一个辅助函数：
 `...-invoke-ap-singapore-0`、`...-invoke-ap-guangzhou-0`、`...-invoke-ap-shanghai-0` 和
 `...-invoke-ap-beijing-0`；东京、成都等未启用地域不会创建对应节点。
@@ -103,11 +103,11 @@ Kline 采集。目录刷新失败时保留上一版完整快照，Kline Timer �
 
 | 变量 | 内容 |
 | --- | --- |
-| `MOOX_MARKET_FETCH_PROVIDER` | `binance` 或 `stock_cn_multi` 的当前主 Provider |
+| `MOOX_MARKET_FETCH_PROVIDER` | `binance` 或 `stockcn_multi` 的当前主 Provider |
 | `MOOX_MARKET_FETCH_MARKET_TYPE` | `spot`、`swap` 或 `equity` |
 | `MOOX_MARKET_FETCH_DATASET_ID` | 目标 K 线 Dataset |
 | `MOOX_MARKET_FETCH_FREQUENCY` | `1m`、`1h` 等规范频率 |
-| `MOOX_MARKET_FETCH_SUBJECTS` | 按字典序排列并用 `\|` 分隔；crypto 遵守既有每 Group 30 个上限，stock_cn 按发布时固定的 N、实测安全容量和 4KB 环境预算生成 |
+| `MOOX_MARKET_FETCH_SUBJECTS` | 按字典序排列并用 `\|` 分隔；crypto 遵守既有每 Group 30 个上限，stockcn 按发布时固定的 N、实测安全容量和 4KB 环境预算生成 |
 | `MOOX_MARKET_FETCH_SYMBOLS_JSON` | crypto 保存完整映射；stock 普通 SH/SZ/BSE 标的使用严格转换，特殊标的只保存显式 override |
 | `MOOX_MARKET_FETCH_ASSIGNMENT_HASH` | 不含更新时间的任务内容哈希 |
 | `MOOX_MARKET_FETCH_DNS_ROUTES_JSON` | Collector 生成的公共 `host -> IP[]` JSON |
@@ -118,9 +118,9 @@ Kline 采集。目录刷新失败时保留上一版完整快照，Kline Timer �
 
 DNS 仍采用“缓存 IP 优先、失败后域名直连”的简单策略。Trade Resolver 在 `compute-1` 的网络出口执行 DNS 查询，并对候选 IPv4 做 TCP/443 探测；Collector 每 5 分钟批量请求一次，按探测延迟保留最多 4 个地址。单域失败保留上次成功值；内容哈希未变化时不更新腾讯函数配置。延迟只用于 Collector 内部排序，不写入 SCF 路由 JSON。SCF 遇到环境变量缺失、JSON 非法或 IP 请求失败时，记录警告并回退系统 DNS，不能让整个批次因 DNS 缓存失效。
 
-Collector 是 DNS 信息的唯一更新者：它从 `custom.toml` 派生的配置中读取域名和 Trade 目标，通过已鉴权的 Gateway 调用 `ResolveDomains`，把成功结果保存在进程内缓存，并在下一次配置协调时复制到每个相关 SCF 的环境变量。SCF 不回调 Collector 获取任务或 DNS，因此采集链路不依赖 Collector 的在线请求接口。Storage 地址同样在发布时固定写入环境变量；Collector 不在每分钟协调中修改该地址。Timer 发布拒绝空值和 loopback Storage 地址。
+Collector 是 DNS 信息的唯一更新者：它从 `moox.toml` 派生的配置中读取域名和 Trade 目标，通过已鉴权的 Gateway 调用 `ResolveDomains`，把成功结果保存在进程内缓存，并在下一次配置协调时复制到每个相关 SCF 的环境变量。SCF 不回调 Collector 获取任务或 DNS，因此采集链路不依赖 Collector 的在线请求接口。Storage 地址同样在发布时固定写入环境变量；Collector 不在每分钟协调中修改该地址。Timer 发布拒绝空值和 loopback Storage 地址。
 
-腾讯云限制单函数环境变量总大小为 4KB，本方案不把任务 JSON、证书和无关控制面配置无限塞入函数。定时函数不携带 EventBus 与 Collector 调用凭据；发布和每次配置协调都按完整环境计算 UTF-8 字节数并预留空间，超过限制时在调用腾讯 API 前失败。crypto 的 30 个标的是既有容量上限，stock_cn 不依赖该常量，而是由 Group 安全容量和实际 Environment 字节数共同校验。[腾讯云配额限制说明](https://cloud.tencent.com/document/product/583/11637)
+腾讯云限制单函数环境变量总大小为 4KB，本方案不把任务 JSON、证书和无关控制面配置无限塞入函数。定时函数不携带 EventBus 与 Collector 调用凭据；发布和每次配置协调都按完整环境计算 UTF-8 字节数并预留空间，超过限制时在调用腾讯 API 前失败。crypto 的 30 个标的是既有容量上限，stockcn 不依赖该常量，而是由 Group 安全容量和实际 Environment 字节数共同校验。[腾讯云配额限制说明](https://cloud.tencent.com/document/product/583/11637)
 
 采集器进程不会把宿主机上的 Monitor EventBus 地址或凭据文件自动复制给 SCF。只有发布配置明确提供 `MOOX_SCF_METRICS_EVENTBUS_URL` 和可选的 `MOOX_SCF_METRICS_EVENTBUS_CREDENTIAL_FILE` 时，CloudNode 才将它们映射为函数内的 `MOOX_METRICS_EVENTBUS_URL` 与 `MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE`；这样可避免把本机 loopback 地址或宿主机路径泄露到云函数。
 
@@ -132,14 +132,14 @@ Timer Trigger 触发的仍是 SCF 事件函数，所以数据模型分开表达�
 - `trigger_type = timer`：实时行情节点由定时器触发。
 - `trigger_type = invoke`：出口探针、补采和人工 E2E 由 MooX 按需调用；全市场 Instrument 快照不使用该类型。
 
-标准 `custom.toml` 发布按配置创建一枚独立 Instrument snapshot Timer，并按地域自动创建 Invoke 辅助函数；
+标准 `moox.toml` 发布按配置创建一枚独立 Instrument snapshot Timer，并按地域自动创建 Invoke 辅助函数；
 如果手工只发布 Kline Timer 函数，Instrument 快照和缺口补采没有可用执行节点，Collector 会明确记录“无 active
 market fetcher nodes”，不能把这种配置当成全量采集已就绪。
 
 CloudNode 为 `trigger_type=timer` 的节点自动确保一个确定名称的 Timer Trigger 存在，维护 cron、开关和回读状态。没有任务的富余节点关闭 Trigger，避免空函数每分钟产生费用。管理台列表和详情同时展示节点类型、触发方式、cron 与触发器状态，避免把“事件函数”和“定时触发”混成一个字段。
 
 Timer 的 Message 只放固定协议标识，任务和 DNS 均从环境变量读取。crypto 沿用 `0 * * * * * *`；
-stock_cn 按发布配置的固定错峰窗口生成 cron，默认第 5 至 39 秒循环分布 200 个 Group，
+stockcn 按发布配置的固定错峰窗口生成 cron，默认第 5 至 39 秒循环分布 200 个 Group，
 每秒最多启动 6 个函数。发布校验先验证 `ceil(N/window_seconds) <= max_starts_per_second`，
 再回读每个 Trigger 的 cron、时区、状态和 Message。[定时触发器说明](https://cloud.tencent.com/document/product/583/9708)、[配额限制说明](https://cloud.tencent.com/document/product/583/11637)
 

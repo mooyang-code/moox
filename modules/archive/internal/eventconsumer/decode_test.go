@@ -13,7 +13,7 @@ import (
 )
 
 func TestDecoderBuildsMonthlyPatches(t *testing.T) {
-	decoder := NewDecoder(map[string][]string{"crypto": {"spot_kline_1h"}})
+	decoder := NewDecoder(map[string][]string{"crypto": {"dataset_spot_kline_1h"}})
 	event := validStorageEvent()
 	event.Rows[0].Key.GetTimeSeries().DataTime = "2026-06-30T23:59:00Z"
 	raw, subject, messageID := marshalEvent(t, event)
@@ -26,7 +26,7 @@ func TestDecoderBuildsMonthlyPatches(t *testing.T) {
 }
 
 func TestDecoderKeepsSameTimestampDifferentTagsInDistinctPartitions(t *testing.T) {
-	decoder := NewDecoder(map[string][]string{"crypto": {"spot_kline_1h"}})
+	decoder := NewDecoder(map[string][]string{"crypto": {"dataset_spot_kline_1h"}})
 	event := validStorageEvent()
 	okx := proto.Clone(event.Rows[0]).(*storagepb.RowUpsert)
 	okx.Key.GetTimeSeries().SeriesTag = "venue:okx"
@@ -40,7 +40,7 @@ func TestDecoderKeepsSameTimestampDifferentTagsInDistinctPartitions(t *testing.T
 }
 
 func TestDecoderPreservesExplicitNullPatch(t *testing.T) {
-	decoder := NewDecoder(map[string][]string{"crypto": {"spot_kline_1h"}})
+	decoder := NewDecoder(map[string][]string{"crypto": {"dataset_spot_kline_1h"}})
 	event := validStorageEvent()
 	event.Rows[0].Fields[0].Value = &storagepb.TypedValue{
 		Value: &storagepb.TypedValue_NullValue{NullValue: storagepb.NullValue_NULL_VALUE_NULL},
@@ -54,7 +54,7 @@ func TestDecoderPreservesExplicitNullPatch(t *testing.T) {
 }
 
 func TestDecoderRejectsInvalidRow(t *testing.T) {
-	decoder := NewDecoder(map[string][]string{"crypto": {"spot_kline_1h"}})
+	decoder := NewDecoder(map[string][]string{"crypto": {"dataset_spot_kline_1h"}})
 	event := validStorageEvent()
 	event.Rows[0].Key.GetTimeSeries().DataTime = "not-time"
 	raw, subject, messageID := marshalUncheckedEvent(t, event)
@@ -65,9 +65,9 @@ func TestDecoderRejectsInvalidRow(t *testing.T) {
 }
 
 func TestDecoderIgnoresUnknownSource(t *testing.T) {
-	decoder := NewDecoder(map[string][]string{"crypto": {"spot_kline_1h"}})
+	decoder := NewDecoder(map[string][]string{"crypto": {"dataset_spot_kline_1h"}})
 	event := validStorageEvent()
-	event.SpaceId = "stock_us"
+	event.SpaceId = "stockus"
 	event.DatasetId = "equity_kline"
 	for _, row := range event.Rows {
 		row.Key.SpaceId = event.SpaceId
@@ -95,7 +95,7 @@ func TestParseTimeAndMergePatch(t *testing.T) {
 }
 
 func validStorageEvent() *storagepb.DatasetRowsUpserted {
-	return &storagepb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "spot_kline_1h", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "spot_kline_1h", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1h", DataTime: "2026-06-30T23:59:00Z", SeriesTag: "venue:binance"}}}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 100.25}}}}}}}
+	return &storagepb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1h", DataTime: "2026-06-30T23:59:00Z", SeriesTag: "venue:binance"}}}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 100.25}}}}}}}
 }
 
 func marshalEvent(t *testing.T, payload *storagepb.DatasetRowsUpserted) ([]byte, string, string) {

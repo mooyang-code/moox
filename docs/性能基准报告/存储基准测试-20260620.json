@@ -61,13 +61,13 @@
     {
       "market": "spot",
       "dataset_id": "bench_binance_spot_kline_1h",
-      "view_id": "bench_spot_kline_view",
+      "view_id": "view_bench_spot_kline",
       "rows": 35040
     },
     {
       "market": "swap",
       "dataset_id": "bench_binance_swap_kline_1h",
-      "view_id": "bench_swap_kline_view",
+      "view_id": "view_bench_swap_kline",
       "rows": 35040
     }
   ],

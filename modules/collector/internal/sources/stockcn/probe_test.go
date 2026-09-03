@@ -10,14 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const probeFixture = "../../../testdata/stockcn/probe_contract.json"
+
 func TestProbeReportStrictJSONContract(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("testdata", "probe_contract.json"))
+	raw, err := os.ReadFile(filepath.Clean(probeFixture))
 	require.NoError(t, err)
 
 	report, err := DecodeProbeReport(bytes.NewReader(raw))
 	require.NoError(t, err)
 
-	require.Equal(t, "stock_cn", report.MarketID)
+	require.Equal(t, "stockcn", report.MarketID)
 	require.Equal(t, "1m", report.Frequency)
 	require.Len(t, report.Entries, 8)
 
@@ -40,14 +42,14 @@ func TestProbeReportStrictJSONContract(t *testing.T) {
 }
 
 func TestProbeReportMarkdownRender(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("testdata", "probe_contract.json"))
+	raw, err := os.ReadFile(filepath.Clean(probeFixture))
 	require.NoError(t, err)
 
 	report, err := DecodeProbeReport(bytes.NewReader(raw))
 	require.NoError(t, err)
 
 	markdown := report.RenderMarkdown()
-	assert.Contains(t, markdown, "# stock_cn Provider Probe")
+	assert.Contains(t, markdown, "# stockcn Provider Probe")
 	assert.Contains(t, markdown, "| sina | kline | PASS |")
 	assert.Contains(t, markdown, "| baidu | kline | SHADOW_ONLY |")
 	assert.Contains(t, markdown, "| sina | instrument | NOT_SUPPORTED |")
@@ -57,7 +59,7 @@ func TestProbeReportMarkdownRender(t *testing.T) {
 
 func TestProbeReportRetainsHistoryAndRateEvidence(t *testing.T) {
 	report := ProbeReport{
-		MarketID: "stock_cn", Frequency: "1m", GeneratedAt: "2026-08-30T00:00:00Z", Subjects: []string{"600000.XSHG"},
+		MarketID: "stockcn", Frequency: "1m", GeneratedAt: "2026-08-30T00:00:00Z", Subjects: []string{"600000.XSHG"},
 		Entries: []ProbeEntry{{
 			ProviderID: "sina", FeedKind: ProbeFeedKline, Exchange: "XSHG", SubjectID: "600000.XSHG", Symbol: "sh600000",
 			Result: ProbeResultPass, ErrorKind: "none", VolumeUnit: "shares", AmountUnit: "cny", BarCount: 3,

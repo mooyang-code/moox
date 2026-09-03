@@ -36,8 +36,8 @@ func TestNormalizedBatchIdentityUsesNormalizedItemMarketType(t *testing.T) {
 func TestCollectionItemTaskIDSeparatesInstrumentSnapshotShards(t *testing.T) {
 	seen := make(map[string]struct{}, 32)
 	for shard := 0; shard < 32; shard++ {
-		id := collectionItemTaskID("stock_cn", "stock-cn-symbols", domain.CollectionItem{
-			SubjectID: "stock_cn", DataType: "instrument", DatasetID: "stock_cn_instruments",
+		id := collectionItemTaskID("stockcn", "stockcn-symbols", domain.CollectionItem{
+			SubjectID: "stockcn", DataType: "instrument", DatasetID: "dataset_stockcn_instruments",
 			SnapshotShardIndex: shard, SnapshotShardCount: 32,
 		}, "")
 		require.NotEmpty(t, id)
@@ -47,7 +47,7 @@ func TestCollectionItemTaskIDSeparatesInstrumentSnapshotShards(t *testing.T) {
 	}
 
 	item := domain.CollectionItem{SubjectID: "BTC-USDT", DataType: "kline", DatasetID: "bars", Provider: "binance", MarketType: "spot"}
-	assert.Equal(t, collectionItemTaskID("crypto_market", "kline", item, "1m"), collectionItemTaskID("crypto_market", "kline", item, "1m"))
+	assert.Equal(t, collectionItemTaskID("crypto", "kline", item, "1m"), collectionItemTaskID("crypto", "kline", item, "1m"))
 }
 
 func TestFilterInvokeRulesDropsRealtimeKlineRules(t *testing.T) {
@@ -172,7 +172,7 @@ func TestBuildGapAuditPlanNeverCrossesCoverageOrRepairFloor(t *testing.T) {
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m","history_policy":{"mode":"live_only","batch_bar_limit":30,"max_concurrency":1,"gap_repair_lookback":"20m","rate_budget_ratio":1}}`,
 	}
 
-	plan, ok := buildGapAuditPlan(now, rule, domain.TaskInstance{SpaceID: "crypto_market", Provider: "binance", Frequency: "1m"}, watermark, true)
+	plan, ok := buildGapAuditPlan(now, rule, domain.TaskInstance{SpaceID: "crypto", Provider: "binance", Frequency: "1m"}, watermark, true)
 	require.True(t, ok)
 	assert.Equal(t, now.Add(-20*time.Minute), plan.Start)
 }
@@ -181,11 +181,11 @@ func TestBuildGapAuditPlanAllowsVerifiedRecentStockHistory(t *testing.T) {
 	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
 	coverageStart := now.Add(-24 * time.Hour)
 	rule := domain.TaskRule{
-		Provider: "stock_cn_multi", MarketType: "equity", DataType: "kline", CoverageStartTime: &coverageStart,
-		CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m","history_policy":{"mode":"live_only","batch_bar_limit":1000,"max_concurrency":1,"gap_repair_lookback":"0m","rate_budget_ratio":1}}`,
+		Provider: "stockcn_multi", MarketType: "equity", DataType: "kline", CoverageStartTime: &coverageStart,
+		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m","history_policy":{"mode":"live_only","batch_bar_limit":1000,"max_concurrency":1,"gap_repair_lookback":"0m","rate_budget_ratio":1}}`,
 	}
 
-	plan, ok := buildGapAuditPlan(now, rule, domain.TaskInstance{SpaceID: StockCNSpaceID, Provider: "stock_cn_multi", Frequency: "1m"}, time.Time{}, false)
+	plan, ok := buildGapAuditPlan(now, rule, domain.TaskInstance{SpaceID: StockCNSpaceID, Provider: "stockcn_multi", Frequency: "1m"}, time.Time{}, false)
 	assert.True(t, ok)
 	assert.Equal(t, domain.BatchKindBackfill, plan.Kind)
 	assert.Equal(t, coverageStart, plan.Start)
@@ -193,8 +193,8 @@ func TestBuildGapAuditPlanAllowsVerifiedRecentStockHistory(t *testing.T) {
 
 func TestBuildGapAuditPlanFailsClosedWhenStockHistoryExceedsCapability(t *testing.T) {
 	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
-	rule := domain.TaskRule{Provider: "stock_cn_multi", MarketType: "equity", DataType: "kline", CollectParams: `{"provider":"stock_cn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"stock_cn_kline","frequency":"1m","history_policy":{"mode":"lookback","lookback":20}}`}
-	_, ok, err := buildGapAuditPlanChecked(now, rule, domain.TaskInstance{SpaceID: StockCNSpaceID, Provider: "stock_cn_multi", Frequency: "1m"}, time.Time{}, false)
+	rule := domain.TaskRule{Provider: "stockcn_multi", MarketType: "equity", DataType: "kline", CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m","history_policy":{"mode":"lookback","lookback":20}}`}
+	_, ok, err := buildGapAuditPlanChecked(now, rule, domain.TaskInstance{SpaceID: StockCNSpaceID, Provider: "stockcn_multi", Frequency: "1m"}, time.Time{}, false)
 	assert.False(t, ok)
 	assert.ErrorContains(t, err, "outside provider capability")
 }
@@ -217,8 +217,8 @@ func TestStockHistoryLookbackBeforeOpenUsesPreviousTradingSession(t *testing.T) 
 }
 
 func TestGapAuditSeriesTagMatchesStockRowKey(t *testing.T) {
-	assert.Equal(t, "", gapAuditSeriesTag(domain.TaskInstance{SpaceID: StockCNSpaceID, Provider: "stock_cn_multi"}))
-	assert.Equal(t, "venue:binance", gapAuditSeriesTag(domain.TaskInstance{SpaceID: "crypto_market", Provider: "binance"}))
+	assert.Equal(t, "default", gapAuditSeriesTag(domain.TaskInstance{SpaceID: StockCNSpaceID, Provider: "stockcn_multi"}))
+	assert.Equal(t, "venue:binance", gapAuditSeriesTag(domain.TaskInstance{SpaceID: "crypto", Provider: "binance"}))
 }
 
 func TestFindEarliestMissingBucketDoesNotTreatCryptoGapAsWatermarkOnly(t *testing.T) {
@@ -228,7 +228,7 @@ func TestFindEarliestMissingBucketDoesNotTreatCryptoGapAsWatermarkOnly(t *testin
 		{Key: &storagepb.TimeSeriesKey{DataTime: start.Format(time.RFC3339Nano)}},
 		{Key: &storagepb.TimeSeriesKey{DataTime: start.Add(2 * time.Minute).Format(time.RFC3339Nano)}},
 	}}
-	selector := &storagepb.TimeSeriesSelector{SpaceId: "crypto_market", DatasetId: "bars", SubjectId: "BTC-USDT", Freq: "1m"}
+	selector := &storagepb.TimeSeriesSelector{SpaceId: "crypto", DatasetId: "bars", SubjectId: "BTC-USDT", Freq: "1m"}
 
 	missing, found, err := findEarliestMissingBucket(context.Background(), &reader, selector, start, end, "1m", false)
 	require.NoError(t, err)
@@ -295,13 +295,13 @@ func TestInvocationCandidatesUsesOneDeterministicFailover(t *testing.T) {
 func TestExpandRuleUsesAllShardsForExchangeInstrumentSnapshot(t *testing.T) {
 	scheduler := &Scheduler{}
 	items, frequencies, err := scheduler.expandRule(t.Context(), domain.TaskRule{
-		SpaceID: "crypto_market", RuleID: "binance_spot_instruments", DataType: "instrument", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"exchange","target_dataset_id":"binance_spot_symbols","frequency":"1h"}`,
+		SpaceID: "crypto", RuleID: "binance_spot_instruments", DataType: "instrument", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"exchange","target_dataset_id":"dataset_binance_spot_symbols","frequency":"1h"}`,
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"1h"}, frequencies)
 	if assert.Len(t, items, fullInstrumentSnapshotShards) {
-		assert.Equal(t, "binance_spot_symbols", items[0].DatasetID)
+		assert.Equal(t, "dataset_binance_spot_symbols", items[0].DatasetID)
 		assert.Equal(t, 0, items[0].SnapshotShardIndex)
 		assert.Equal(t, fullInstrumentSnapshotShards, items[0].SnapshotShardCount)
 		assert.Equal(t, fullInstrumentSnapshotShards-1, items[len(items)-1].SnapshotShardIndex)
@@ -320,11 +320,11 @@ func TestBatchCompletionDeadlineAllowsInstrumentSnapshotProvidersToFinish(t *tes
 
 func TestExpandRuleUsesExplicitExternalSymbolForKline(t *testing.T) {
 	scheduler := &Scheduler{
-		SpaceID: "crypto_market",
+		SpaceID: "crypto",
 		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}},
 	}
 	items, frequencies, err := scheduler.expandRule(t.Context(), domain.TaskRule{
-		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
+		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	})
 	assert.NoError(t, err)
@@ -336,11 +336,11 @@ func TestExpandRuleUsesExplicitExternalSymbolForKline(t *testing.T) {
 
 func TestExpandRuleAllowsUnicodeSubjectNames(t *testing.T) {
 	scheduler := &Scheduler{
-		SpaceID: "crypto_market",
+		SpaceID: "crypto",
 		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{{SubjectID: "币安人生-USDT", ExternalSymbol: "BINANCELIFEUSDT", Status: "active"}}},
 	}
 	items, frequencies, err := scheduler.expandRule(t.Context(), domain.TaskRule{
-		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
+		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	})
 	require.NoError(t, err)
@@ -354,14 +354,14 @@ func TestExpandRuleAllowsUnicodeSubjectNames(t *testing.T) {
 
 func TestExpandRuleSkipsMalformedSnapshotSubjects(t *testing.T) {
 	scheduler := &Scheduler{
-		SpaceID: "crypto_market",
+		SpaceID: "crypto",
 		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{
 			{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
 			{SubjectID: "币安人生-USDT", ExternalSymbol: "", Status: "active"},
 		}},
 	}
 	items, _, err := scheduler.expandRule(t.Context(), domain.TaskRule{
-		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
+		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	})
 	assert.NoError(t, err)

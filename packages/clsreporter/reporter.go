@@ -103,5 +103,5 @@ type noopReporter struct{}
 // Noop returns a reporter used when direct CLS reporting is disabled.
 func Noop() Reporter { return noopReporter{} }
 
-func (noopReporter) Report(Entry)                 {}
+func (noopReporter) Report(Entry)                {}
 func (noopReporter) Flush(context.Context) error { return nil }

@@ -6,14 +6,14 @@ not a deployment artifact.
 
 ## User Preparation
 
-Show the user `custom.toml.example`. The user must fill it as repository-root
-`custom.toml` and protect it before the Agent continues:
+Show the user `moox.toml.example`. The user must fill it as repository-root
+`moox.toml` and protect it before the Agent continues:
 
 ```bash
-chmod 0600 ./custom.toml
+chmod 0600 ./moox.toml
 ```
 
-用户必须在部署前填写 `custom.toml`。该文件包含明文凭据，初始化完成后仍由用户保管；
+用户必须在部署前填写 `moox.toml`。该文件包含明文凭据，初始化完成后仍由用户保管；
 CLI 对文件保持不变，不删除、不改写。
 
 The checked-in template is:
@@ -76,14 +76,14 @@ TLS。用户不填写 EventBus 账号、token、CA 或私钥；MooX 在部署时
 HTTPS webhook 后，部署会以 mode `0600` 的运行时环境文件交给 Monitor；留空不会
 关闭监控采集、查询和规则计算，只是不发送站外告警。
 
-不在 `custom.toml` 中重复登记标准微服务、健康检查 URL、指标 subject 或实时
+不在 `moox.toml` 中重复登记标准微服务、健康检查 URL、指标 subject 或实时
 Dataset + Frequency。标准服务由 SysDeploy 默认清单维护；所有启用中的实时
 TimeSeries Dataset + Frequency 由 Monitor 从 Collector 规则和 Factor binding
 自动刷新。用户自行增加的非标准服务，应在控制面就绪后注册到 SysDeploy，而不是写进
 初始化清单。
 
 Only `control_host` determines the first control-plane deployment. `compile_host`
-is optional, is used only by `scripts/build-storage-linux.sh` for native Linux
+is optional, is used only by `scripts/build/build-storage-linux.sh` for native Linux
 CGO builds, and is not a service-placement target. The native builder uses the
 local SSH key/agent and the trusted host-key store; its `password` field is not
 used by the shell transport. `other_hosts` are imported as available hosts, but
@@ -93,16 +93,16 @@ every `other_hosts` entry are also the physical-server inventory for monitoring;
 `moox-cli setup deploy-control` 会在控制主机一并安装并启动 HostAgent；其他主机仍应按
 `references/host-agent.md` 安装并启动各自的 HostAgent。
 
-## Phase 1: custom.toml And Control Initialization
+## Phase 1: moox.toml And Control Initialization
 
 The Agent may inspect existence only, then invoke these commands in order:
 
 ```bash
-test -e ./custom.toml || exit 2
-./bin/moox-cli setup validate --file ./custom.toml
-./bin/moox-cli setup deploy-control --file ./custom.toml
-./bin/moox-cli setup apply --file ./custom.toml
-./bin/moox-cli setup status --file ./custom.toml
+test -e ./moox.toml || exit 2
+./bin/moox-cli setup validate --file ./moox.toml
+./bin/moox-cli setup deploy-control --file ./moox.toml
+./bin/moox-cli setup apply --file ./moox.toml
+./bin/moox-cli setup status --file ./moox.toml
 ```
 
 `setup deploy-control` 同时负责受管 Caddy 的安装、证书模式选择、HTTPS 验收和
@@ -111,7 +111,7 @@ test -e ./custom.toml || exit 2
 脱敏 JSON `certificate` 字段会报告 `mode`、`issuer` 和 `automatic_renewal`，Skill
 只根据这些字段确认结果，不读取证书私钥。internal CA 部署会自动检查并安装当前
 操作机的浏览器信任；需要提权时 CLI 会直接提示管理员授权。若中断后需要单独修复，
-执行 `./bin/moox-cli setup trust-browser --file ./custom.toml`。
+执行 `./bin/moox-cli setup trust-browser --file ./moox.toml`。
 
 If validation reports `host_key_unknown`, obtain each SHA256 host fingerprint
 through an independent trusted channel, run `setup trust-host`, and repeat
@@ -131,7 +131,7 @@ List the sanitized host choices through the CLI. This command may display host
 names, addresses, ports, usernames, and roles, but never passwords:
 
 ```bash
-./bin/moox-cli setup hosts --file ./custom.toml
+./bin/moox-cli setup hosts --file ./moox.toml
 ```
 
 Use 自然语言 to ask the user where Storage should run. Accept answers such
@@ -139,7 +139,7 @@ as "Storage 放到 compute-1" or "就放 control" and map only the selected host
 name into the deterministic command:
 
 ```bash
-./bin/moox-cli setup deploy-storage --file ./custom.toml --host <host-name>
+./bin/moox-cli setup deploy-storage --file ./moox.toml --host <host-name>
 ```
 
 The initial Storage unit contains `storage-primary` and the unified
@@ -156,8 +156,8 @@ their Dataset and Field contracts, and the internal monitoring metadata:
 
 ```bash
 ./bin/moox-cli setup init \
-  --file ./custom.toml \
-  --config-dir ./examples/setup/default \
+  --file ./moox.toml \
+  --config-dir ./config/setup \
   --storage-host <host-name>
 ```
 
@@ -169,8 +169,8 @@ construct a filtered YAML file in the Agent context. Use `metadata spaces` and
 
 ## Secret Boundary
 
-禁止 Agent 读取或解析 `custom.toml`. In particular, never use `cat custom.toml`,
-`sed custom.toml`, `rg custom.toml`, Python 读取 the file, or `source custom.toml`.
+禁止 Agent 读取或解析 `moox.toml`. In particular, never use `cat moox.toml`,
+`sed moox.toml`, `rg moox.toml`, Python 读取 the file, or `source moox.toml`.
 Do not copy it into an archive, pipe it through another process, print it, or
 derive shell variables from it. Only `moox-cli setup` may read the manifest.
 

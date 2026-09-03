@@ -27,7 +27,7 @@ assert_no_transient_files() {
   fi
 }
 
-CONFIG="${TEST_ROOT}/custom.toml"
+CONFIG="${TEST_ROOT}/moox.toml"
 ARGS_LOG="${TEST_ROOT}/cli.args"
 FAKE_CLI="${TEST_ROOT}/moox-cli"
 OUT="${TEST_ROOT}/dist/moox-skill.tar.gz"
@@ -68,7 +68,7 @@ if tar -tzf "${OUT}" >"${TEST_ROOT}/archive.list"; then
   grep -qx 'moox/config/data-access.yaml' "${TEST_ROOT}/archive.list" || fail "generated config missing from archive"
   grep -qx 'moox/scripts/data-kline.sh' "${TEST_ROOT}/archive.list" || fail "data-kline wrapper missing from archive"
   if grep -Eq '(^|/)custom\.toml$' "${TEST_ROOT}/archive.list"; then
-    fail "custom.toml leaked into archive"
+    fail "moox.toml leaked into archive"
   fi
   if grep -Eiq '(^|/)(\.ssh/|id_(rsa|ed25519)$|[^/]*credentials?\.json$|[^/]*secrets?\.env$)' "${TEST_ROOT}/archive.list"; then
     fail "credential-shaped file leaked into archive"

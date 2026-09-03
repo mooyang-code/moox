@@ -416,7 +416,7 @@ The migration must preserve:
 
 ## Executable Governance
 
-Extend `scripts/check-package-boundaries.sh` to reject:
+Extend `scripts/check/check-package-boundaries.sh` to reject:
 
 - `modules/*/internal/bus` for business event interaction.
 - Any `package eventcontract`.
@@ -427,7 +427,7 @@ Extend `scripts/check-package-boundaries.sh` to reject:
   `jetstream.HandlerResult` after their eventconsumer adapter has been split.
 - Active documentation that presents old paths as current architecture.
 
-Update `scripts/verify-event-contracts.sh` to run the renamed packages and
+Update `scripts/check/verify-event-contracts.sh` to run the renamed packages and
 retain its current semantic checks. Add checks that Registry-owned event names,
 subjects, and Streams are not duplicated in business adapters.
 
@@ -442,14 +442,14 @@ Verification scales with the cross-module blast radius:
 2. Run race tests for Strategy Outbox, Storage Outbox/View consumer, Factor
    consumer/Inbox, Archive consumer, Trade consumer/Inbox, and Monitor
    consumers.
-3. Run `scripts/check-package-boundaries.sh`.
-4. Run `scripts/verify-event-contracts.sh`.
+3. Run `scripts/check/check-package-boundaries.sh`.
+4. Run `scripts/check/verify-event-contracts.sh`.
 5. Run the Storage-to-View/Factor/Archive event contract tests.
 6. Run Strategy-to-Trade Outbox/Inbox E2E.
 7. Run HostAgent-to-Monitor and service-metrics-to-Monitor E2E.
 8. Run CloudNode exact-subject queue tests to prove the exception remains
    governed by the Registry.
-9. Run `./scripts/test-go-workspace.sh` and `make verify-pr`.
+9. Run `./scripts/test/contract/test-go-workspace.sh` and `make verify-pr`.
 10. Run `git diff --check` and verify the worktree and remote branch at the
     final commit.
 

@@ -14,7 +14,7 @@ describe("timeSeriesRowsToTableRows", () => {
       {
         key: {
           space_id: "crypto",
-          dataset_id: "spot_kline_1h",
+          dataset_id: "dataset_spot_kline_1h",
           subject_id: "BTC-USDT",
           freq: "1H",
           data_time: "2026-07-29T00:00:00Z",
@@ -24,7 +24,7 @@ describe("timeSeriesRowsToTableRows", () => {
       {
         key: {
           space_id: "crypto",
-          dataset_id: "spot_kline_1h",
+          dataset_id: "dataset_spot_kline_1h",
           subject_id: "BTC-USDT",
           freq: "1H",
           data_time: "2026-07-29T00:00:00Z",
@@ -38,21 +38,21 @@ describe("timeSeriesRowsToTableRows", () => {
     expect(rows[1].id).toContain("venue:okx");
     expect(rows.map(row => row.seriesTag)).toEqual(["venue:binance", "venue:okx"]);
     expect(sortBrowseTableRows(rows, "series_tag", "desc").map(row => row.seriesTag)).toEqual(["venue:okx", "venue:binance"]);
-    expect(buildTimeSeriesBrowseSelector("crypto", "spot_kline_1h", "BTC-USDT", "1H", " venue:okx ", true)).toEqual({
+    expect(buildTimeSeriesBrowseSelector("crypto", "dataset_spot_kline_1h", "BTC-USDT", "1H", " venue:okx ", true)).toEqual({
       space_id: "crypto",
-      dataset_id: "spot_kline_1h",
+      dataset_id: "dataset_spot_kline_1h",
       subject_id: "BTC-USDT",
       freq: "1H",
       series_tag: "venue:okx"
     });
-    expect(buildTimeSeriesBrowseSelector("stock_cn", "stock_cn_kline", "sh600000", "1D", "", true)).toEqual({
-      space_id: "stock_cn",
-      dataset_id: "stock_cn_kline",
+    expect(buildTimeSeriesBrowseSelector("stockcn", "dataset_stockcn_equity_kline", "sh600000", "1D", "", true)).toEqual({
+      space_id: "stockcn",
+      dataset_id: "dataset_stockcn_equity_kline",
       subject_id: "sh600000",
       freq: "1D",
-      series_tag: ""
+      series_tag: "default"
     });
-    expect(buildTimeSeriesBrowseSelector("crypto", "spot_kline_1h", "BTC-USDT", "1H", "", false)).not.toHaveProperty(
+    expect(buildTimeSeriesBrowseSelector("crypto", "dataset_spot_kline_1h", "BTC-USDT", "1H", "", false)).not.toHaveProperty(
       "series_tag"
     );
   });

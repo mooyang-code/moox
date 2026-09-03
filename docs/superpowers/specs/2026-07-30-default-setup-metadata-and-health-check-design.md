@@ -5,7 +5,7 @@
 MooX 的新系统初始化需要满足以下结果：
 
 1. `examples/` 下的初始化配置集中到一个固定目录，避免按市场、模块继续拆出大量 YAML。
-2. 默认业务空间只包含 A 股 `stock_cn` 和加密货币 `crypto`。
+2. 默认业务空间只包含 A 股 `stockcn` 和加密货币 `crypto`。
 3. 默认配置同时定义可用的 DataSource、FieldGroup、Field、Dataset、DatasetColumn、View 和 ViewColumn。
 4. `moox-cli setup init` 接受配置目录，一次完成 Admin Space 与 Storage Metadata 初始化。
 5. 初始化可安全重复执行；已有契约不一致时失败，不静默覆盖。
@@ -20,7 +20,7 @@ MooX 的新系统初始化需要满足以下结果：
 默认配置固定放在：
 
 ```text
-examples/setup/default/
+config/setup/
 ├── README.md
 ├── metadata.yaml
 ├── dataset-health-policy.yaml
@@ -29,7 +29,7 @@ examples/setup/default/
 
 三个 YAML 分别由不同边界消费，不增加总清单文件，也不扫描目录中任意 YAML：
 
-- `metadata.yaml`：由 `moox-cli setup init` 读取，包含业务元数据和 `moox_system` 监控元数据。
+- `metadata.yaml`：由 `moox-cli setup init` 读取，包含业务元数据和 `mooxsys` 监控元数据。
 - `dataset-health-policy.yaml`：由 Monitor 读取，定义实时 TimeSeries 健康判定阈值。
 - `service-deployments.yaml`：由 Admin 部署导入流程读取，定义服务部署清单。
 
@@ -46,10 +46,10 @@ examples/setup/default/
 
 | Space | 名称 | Market | Timezone |
 | --- | --- | --- | --- |
-| `stock_cn` | A股市场 | `CN` | `Asia/Shanghai` |
+| `stockcn` | A股市场 | `CN` | `Asia/Shanghai` |
 | `crypto` | 加密货币市场 | `crypto` | `UTC` |
 
-`moox_system` 继续作为 Storage 内部监控空间，但带有
+`mooxsys` 继续作为 Storage 内部监控空间，但带有
 `attributes.scope: internal`，不会同步为管理台业务空间。
 
 港股和美股不进入默认初始化包。后续需要时应作为独立业务扩展提交，而不是让初始系统携带未使用目录。
@@ -59,7 +59,7 @@ examples/setup/default/
 保留当前完整且已有导入闭环的契约：
 
 - DataSource：`quantclass_stock`
-- Dataset：`stock_kline`、`index_kline`、`financial_statement_metric`、`financial_summary`
+- Dataset：`stock_kline`、`index_kline`、`dataset_stockcn_financial_statement_metric`、`dataset_stockcn_financial_summary`
 - FieldGroup：标识、市场、行情、成交估值、财务
 - Field：证券/指数标识、OHLC、成交量/额、财务指标及 `raw_payload`
 - 每个 Dataset 对应显式 DatasetColumn、View 和 ViewColumn
@@ -68,8 +68,8 @@ examples/setup/default/
 
 保留共享 Dataset 模型：
 
-- DataSource：`crypto_market`、`binance`、`okx`
-- Dataset：`spot_kline_1h`、`perpetual_kline_1h`
+- DataSource：`crypto`、`binance`、`okx`
+- Dataset：`dataset_spot_kline_1h`、`dataset_perpetual_kline_1h`
 - FieldGroup：标识、行情、合约指标
 - Field：OHLC、成交量、成交额、成交笔数、资金费率及 `raw_payload`
 - Binance/OKX 使用同一 Dataset，通过 scalar `series_tag=venue:<exchange>` 区分
@@ -96,21 +96,21 @@ Seed 中 Dataset 保持 `disabled`，避免绕过 Storage 的 DataNode 和 Schem
 
 ```bash
 moox-cli setup init \
-  --file ./custom.toml \
-  --config-dir ./examples/setup/default \
+  --file ./moox.toml \
+  --config-dir ./config/setup \
   --storage-host control
 ```
 
 参数：
 
-- `--file`：现有只读 `custom.toml`，继续要求文件名固定、当前用户持有、权限 `0600`，命令期间内容和文件身份不变。
-- `--config-dir`：默认 `./examples/setup/default`，从固定文件名 `metadata.yaml` 读取默认元数据。
-- `--storage-host`：必填，必须是 `custom.toml` 中已登记且部署了 Storage 的主机。
+- `--file`：现有只读 `moox.toml`，继续要求文件名固定、当前用户持有、权限 `0600`，命令期间内容和文件身份不变。
+- `--config-dir`：默认 `./config/setup`，从固定文件名 `metadata.yaml` 读取默认元数据。
+- `--storage-host`：必填，必须是 `moox.toml` 中已登记且部署了 Storage 的主机。
 
 执行顺序：
 
 1. 严格解析 `metadata.yaml`，拒绝未知字段、重复 Space、缺失依赖、非法 FieldGroup 层级和保留内部空间滥用。
-2. 读取并校验 `custom.toml`。
+2. 读取并校验 `moox.toml`。
 3. 通过私有 Admin Setup RPC create-or-verify 管理员、腾讯云凭据、主机以及业务 Space。
 4. 验证 Admin Setup 状态为 completed。
 5. 登录验证管理台入口。
@@ -226,8 +226,8 @@ type DatasetHealthPolicy struct {
 
 ```bash
 moox-cli setup init \
-  --file ./custom.toml \
-  --config-dir ./examples/setup/default \
+  --file ./moox.toml \
+  --config-dir ./config/setup \
   --storage-host control
 ```
 
@@ -235,7 +235,7 @@ moox-cli setup init \
 
 1. 登录 `https://106.53.107.122:9527/`
 2. 顶部选择器同时出现 `A股市场` 和 `加密货币市场`
-3. 切换 `stock_cn`，首页显示其 Dataset 数量，数据集页显示 A 股 Dataset，字段页显示 A 股字段
+3. 切换 `stockcn`，首页显示其 Dataset 数量，数据集页显示 A 股 Dataset，字段页显示 A 股字段
 4. 切换 `crypto`，首页显示其 Dataset 数量，数据集页显示 Crypto Dataset，字段页显示 Crypto 字段
 5. 浏览器请求体和 `X-Space-Id` 与当前选择一致
 

@@ -78,6 +78,22 @@ export function validateLowerSnakeId(value: string | undefined, maxLength: numbe
   return "";
 }
 
+export function validateDatasetId(value: string | undefined, maxLength = 50) {
+  const id = (value || "").trim();
+  const error = validateLowerSnakeId(id, maxLength);
+  if (error) return error;
+  if (!id.startsWith("dataset_")) return "Dataset ID 必须以 dataset_ 开头";
+  return "";
+}
+
+export function validateViewId(value: string | undefined, maxLength = 30) {
+  const id = (value || "").trim();
+  const error = validateLowerSnakeId(id, maxLength);
+  if (error) return error;
+  if (!id.startsWith("view_")) return "View ID 必须以 view_ 开头";
+  return "";
+}
+
 export function validateChineseDisplayName(value: string | undefined, maxLength = 10) {
   const name = (value || "").trim();
   if (!name) return "中文名不能为空";

@@ -85,10 +85,10 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
   重建，不等待其他序列。超过 `max_view_file_bytes` 也会触发容量重建。新索引只
   backfill 保留窗口，切换完成后由独立 Cleanup Timer 删除旧 DuckDB 文件，不在 active
   索引上逐行删除。完整策略来自包内 `storage-view/config/maintenance.json`，由根目录
-  `custom.toml` 的 `[storage_view]` 生成；支持 `system_monitor` 和精确 View 覆盖。
+  `moox.toml` 的 `[storage_view]` 生成；支持 `system_monitor` 和精确 View 覆盖。
   时序 View 按每个 subject/frequency 回溯已完成的 K 线根数，不按自然时间计算，
   因此周末、节假日不会减少有效回溯量。默认所有频率均回溯 `1000` 根；根目录
-  `custom.toml` 的 `[storage_view] rebuild_lookback_periods` 可统一覆盖该值。某个 subject 历史不足目标根数
+  `moox.toml` 的 `[storage_view] rebuild_lookback_periods` 可统一覆盖该值。某个 subject 历史不足目标根数
   时使用当前已有历史激活 View，后续由实时事件继续补齐；`keep_duration` 仍只控制索引保留/容量整理，
   不再决定时序回填根数。
 - `moox-cli storage force-rebuild-view` 可在确认后删除 View 的 A/B 物理索引、清理
@@ -112,15 +112,15 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
 每个 Dataset 使用一个 Subject：
 
 ```text
-moox.storage.dataset.rows.upserted.v2.<space-token>.<dataset-token>
+moox.event.storage.dataset.rows.upserted.v2.<space-token>.<dataset-token>
 ```
 
 Token 是可逆的小写无 Padding Base32。View 使用四个相互独立的 durable：`storage_view_kline`、
 `storage_view_factor`、`storage_view_metrics`、`storage_view_misc`。每个 durable 的
 `FetchBatch`、`MaxAckPending`、worker 和精确 Dataset subject 都在
 `storage.view.consumer_partitions` 中配置；K 线分区默认只接收
-`crypto_market/binance_spot_kline_1m`，因子分区只接收
-`crypto_market/binance_spot_kline_1m_factor`。同一 Dataset 的 rows、Marker 和 SyncPoint
+`crypto/dataset_binance_spot_kline_1m`，因子分区只接收
+`crypto/dataset_binance_spot_kline_1m_factor`。同一 Dataset 的 rows、Marker 和 SyncPoint
 进入同一个 Dataset 队列（队列键为 `space_id + dataset_id`），不同分区和 Dataset 可并行；同一 Dataset
 仍按事件顺序消费，避免 rows 越过 Marker。连续 rows delivery 会在不跨越 Marker 的前提下合并为一次索引写入，
 因此单个因子 Dataset 也能通过批量事务提高吞吐。因子分区默认 `fetch_batch=16`、`max_workers=8`、
@@ -165,7 +165,7 @@ go run ./cmd/cli init \
 ```
 
 默认业务元数据不由 Storage 部署过程隐式导入。部署并注册 DataNode 后，在仓库根目录使用
-`moox-cli setup init --config-dir ./examples/setup/default --storage-host <custom.toml 中主机名>`
+`moox-cli setup init --config-dir ./config/setup --storage-host <moox.toml 中主机名>`
 同步 Admin 空间、Storage 元数据并显式激活 Dataset。
 
 启动角色时设置：
@@ -201,8 +201,8 @@ go test ./...
 CGO_ENABLED=1 go test ./...
 
 cd ../..
-bash scripts/test-storage-boundary-contract.sh
-bash scripts/test-storage-consistency-contract.sh
+bash scripts/test/contract/test-storage-boundary-contract.sh
+bash scripts/test/contract/test-storage-consistency-contract.sh
 ```
 
 DuckDB 运行和测试需要 CGO。no-CGO 构建可以编译 Node/Primary 和 Bleve，但启动

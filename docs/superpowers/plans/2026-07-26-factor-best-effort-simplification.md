@@ -1886,7 +1886,7 @@ git commit -m "refactor(web): align factor UI with simple timeseries runtime"
 **Files:**
 - Modify: `modules/factor/test/e2e_test.go`
 - Modify: `modules/factor/internal/trigger/eventconsumer/consumer_test.go`
-- Modify: `scripts/verify-event-contracts.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
 - Modify: `modules/factor/README.md`
 - Modify: `modules/factor/docs/realtime-verification.md`
 - Modify: `docs/因子计算模块设计.md`
@@ -1929,7 +1929,7 @@ no Arrow/cross-section/multi-instance
 README 包含：
 
 ```bash
-./scripts/build.sh factor
+./scripts/build/build.sh factor
 
 # 服务端启动方式保持不变
 ./bin/moox-factor
@@ -1982,7 +1982,7 @@ func TestRealtimeEventToPythonWritebackE2E(t *testing.T)
 
 - [ ] **Step 5: 更新事件契约脚本**
 
-`scripts/verify-event-contracts.sh`：
+`scripts/check/verify-event-contracts.sh`：
 
 - 删除 durable inbox 字符串和 store 测试假设。
 - 保留 Factor Consumer 重连和真实 JetStream delivery。
@@ -2003,8 +2003,8 @@ fi
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 (cd modules/factor && go test ./test -run TestRealtimeEventToPythonWritebackE2E -count=1 -v)
-./scripts/verify-event-contracts.sh
-bash scripts/test-docs-architecture.sh
+./scripts/check/verify-event-contracts.sh
+bash scripts/test/contract/test-docs-architecture.sh
 ```
 
 Expected: PASS。
@@ -2016,7 +2016,7 @@ git add modules/factor/test modules/factor/internal/trigger/eventconsumer \
   modules/factor/README.md modules/factor/docs \
   docs/因子计算模块设计.md \
   docs/superpowers/plans/2026-07-06-factor-calculation-module.md \
-  scripts/verify-event-contracts.sh
+  scripts/check/verify-event-contracts.sh
 git commit -m "test(factor): prove best-effort realtime pipeline"
 ```
 
@@ -2079,9 +2079,9 @@ Expected: 全部 PASS。
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-./scripts/build.sh factor
-./scripts/verify-event-contracts.sh
-./scripts/test-go-workspace.sh
+./scripts/build/build.sh factor
+./scripts/check/verify-event-contracts.sh
+./scripts/test/contract/test-go-workspace.sh
 test -x /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/bin/moox-factor
 test -x /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/bin/moox-factor-cli
 ```

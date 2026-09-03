@@ -1,0 +1,12 @@
+market_id: stockcn
+timezone: Asia/Shanghai
+calendar_id: cn_stock
+instrument_types:
+  - equity
+  - index
+  - convertible_bond
+frequencies:
+  - 1m
+  - 1d
+  - 1w
+  - 1M

@@ -760,9 +760,9 @@ Expected: PASS.
 **Files:**
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-deploy-moox-storage-split.sh`
-- Create: `scripts/reset-storage-view-indexes.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-storage-split.sh`
+- Create: `scripts/runtime/reset-storage-view-indexes.sh`
 - Modify: `modules/storage/config/trpc_go.yaml`
 - Modify: `modules/storage/config/trpc_go.view_builder.yaml`
 - Modify: `modules/storage/config/trpc_go.view_query.yaml`
@@ -785,7 +785,7 @@ Assert deploy start order is access -> view_index -> view_builder -> view_query 
 
 ```bash
 go test -count=1 ./modules/admin/internal/service/sysdeploy
-bash scripts/test-deploy-moox-storage-split.sh
+bash scripts/test/contract/test-deploy-moox-storage-split.sh
 ```
 
 Expected: FAIL because `storage_view_index` is absent.
@@ -802,8 +802,8 @@ The script requires `--yes` and removes only paths supplied under a resolved sto
 
 ```bash
 go test -count=1 ./modules/admin/internal/service/sysdeploy
-bash scripts/test-deploy-moox-storage-split.sh
-bash -n scripts/deploy-moox.sh scripts/reset-storage-view-indexes.sh
+bash scripts/test/contract/test-deploy-moox-storage-split.sh
+bash -n scripts/deploy/deploy-moox.sh scripts/runtime/reset-storage-view-indexes.sh
 ```
 
 Expected: PASS.
@@ -844,7 +844,7 @@ Expected: only the superseded-plan historical notice may match.
 
 **Files:**
 - Create: `modules/storage/tests/view_index_switch_test.go`
-- Modify: `scripts/test-deploy-moox-storage-split.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-storage-split.sh`
 
 - [x] **Step 1: Add an integration test harness**
 
@@ -892,7 +892,7 @@ Expected: PASS with zero failures.
 go test -count=1 ./...
 pnpm --dir web typecheck
 pnpm --dir web build
-bash scripts/check-module-boundaries.sh
+bash scripts/check/check-module-boundaries.sh
 ```
 
 Expected: all commands exit 0.
@@ -900,8 +900,8 @@ Expected: all commands exit 0.
 - [ ] **Step 4: Build deployment artifacts**
 
 ```bash
-./scripts/build.sh storage
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh storage
+./scripts/build/build.sh storage
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh storage
 ```
 
 Expected: local and Linux storage binaries build successfully.
@@ -948,6 +948,6 @@ The current branch contains pre-existing uncommitted backend and frontend change
 - Workspace module tests passed with `go test -count=1 ./...` run separately in every Go module; the repository root is a `go.work` workspace and is not itself a Go module.
 - Storage integration passed with `CGO_ENABLED=1 GOARCH=arm64 go test -count=1 -tags=integration ./modules/storage/tests -run TestViewIndexDualDatabaseSwitch -v`; it covered DuckDB/Bleve write, switch, query, restart, and physical deletion.
 - Real-data tRPC benchmark passed using the Binance K-line archive. The archive was truncated, but `8` usable CSV files were recovered; `1600` time-series rows and `50` record rows were written, `1600` DuckDB rows were materialized, and paged reads returned data successfully. Report: `/tmp/moox-storage-real-e2e-7/reports/storage-bench-20260710-150957.json`.
-- Frontend passed `pnpm exec vue-tsc --noEmit` and `pnpm run build:prod`; module-boundary and split-deployment checks passed; local `./scripts/build.sh storage` passed.
+- Frontend passed `pnpm exec vue-tsc --noEmit` and `pnpm run build:prod`; module-boundary and split-deployment checks passed; local `./scripts/build/build.sh storage` passed.
 - Native Linux/arm64 artifact build passed. Linux/amd64 cross-build was attempted but the local Colima/QEMU assembler crashed; it is intentionally left unchecked until an amd64 builder is available.
 - The independent review found and the implementation fixed active-pointer CAS fencing, owner-side schema/version fencing, primary-write/event-publish failure semantics, cross-engine orphan identity collisions, and frequency-aware catch-up overlap. Remaining review risks are recorded in the final review summary rather than hidden by this checklist.

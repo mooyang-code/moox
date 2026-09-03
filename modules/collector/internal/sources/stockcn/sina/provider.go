@@ -51,7 +51,7 @@ func New(cfg Config) *Provider {
 		cfg.KlineEndpoint = "/cn/api/jsonp_v2.php/var%20moox_kline=/CN_MarketDataService.getKLineData"
 	}
 	if strings.TrimSpace(cfg.SourceID) == "" {
-		cfg.SourceID = "stock_cn_minute_http"
+		cfg.SourceID = "stockcn_minute_http"
 	}
 	if cfg.InstrumentBaseURL == "" {
 		cfg.InstrumentBaseURL = "https://vip.stock.finance.sina.com.cn"
@@ -87,7 +87,7 @@ func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
 
 func (p *Provider) KlineSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
-		Markets:           []string{"stock_cn"},
+		Markets:           []string{"stockcn"},
 		Exchanges:         []string{"XSHG", "XSHE", "XBSE"},
 		Frequencies:       []string{"1m"},
 		CompleteOHLCV:     true,
@@ -103,7 +103,7 @@ func (p *Provider) KlineSpec() marketdata.KlineSpec {
 
 func (p *Provider) InstrumentSpec() marketdata.InstrumentSpec {
 	return marketdata.InstrumentSpec{
-		Markets:      []string{"stock_cn"},
+		Markets:      []string{"stockcn"},
 		Exchanges:    []string{"XSHG", "XSHE", "XBSE"},
 		FullSnapshot: true,
 		PageSize:     100,
@@ -217,9 +217,9 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.InstrumentRequest) (marketdata.InstrumentSnapshot, error) {
 	marketID := strings.TrimSpace(string(req.MarketID))
 	if marketID == "" {
-		marketID = "stock_cn"
+		marketID = "stockcn"
 	}
-	if marketID != "stock_cn" {
+	if marketID != "stockcn" {
 		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: market_id %q is unsupported", marketdata.ErrInvalidRequest, req.MarketID)
 	}
 	spec := p.InstrumentSpec()

@@ -18,7 +18,7 @@ CLI，不再是占位模块。
 - `make release`：生成二进制归档包，包含 Gateway、核心服务二进制与配置、Storage schema、docs 和 `examples/` 示例元数据；Linux amd64/arm64 归档额外包含 hostagent 制品；不包含源码开发脚本或 Agent skills。
 - `make release-binaries`：只编译并汇总所有可部署模块的二进制到 `release/moox-binaries-<version>-<goos>-<goarch>/bin`，同时刷新当前目标的 `release/bin`；产物包含 `manifest.txt` 校验清单和 `deploy/publish-release-binaries.sh` 发布脚本，适合后续只替换目标机器二进制。
 - `make release-matrix`：一次生成 Linux amd64/arm64、macOS amd64/arm64 和 Windows amd64 归档，并为每个归档生成 SHA-256 校验文件。
-- `make deploy`：通过 `scripts/deploy-moox.sh` 生成可运行部署目录并同步到本机或远端。Gateway 默认部署到每台机器；`--no-admin` 生成不含 Admin、浏览器资源、Admin schema 和 Admin 凭据的数据面节点。
+- `make deploy`：通过 `scripts/deploy/deploy-moox.sh` 生成可运行部署目录并同步到本机或远端。Gateway 默认部署到每台机器；`--no-admin` 生成不含 Admin、浏览器资源、Admin schema 和 Admin 凭据的数据面节点。
 - `make publish-release-binaries ARGS="--target user@host --dir /data/moox --restart"`：把 `release/bin` 中的二进制上传到已有部署目录；默认不覆盖配置、密钥、数据和日志，只有显式指定 `--restart` 才会重启服务。
 
 `make release` 会打包 `cli`、`admin/admin-cli`、`gateway/gateway-cli`、`web-host`、`eventbus`、`cloudnode/cloudnode-cli`、`collector/collector-cli`、`factor/factor-cli`、`strategy/strategy-cli`、`trade/trade-cli`、`monitor/monitor-cli`、`storage/storage-cli` 和 `archive/archive-cli`；Linux amd64/arm64 还包含 HostAgent。需要把 SCF 入口也纳入平铺二进制发布时使用 `make release-binaries`，它会在 Linux amd64 额外生成 `moox-collector-scf`。`make deploy` 默认编排 Admin、Gateway、web-host、EventBus、CloudNode、Collector、Factor、Strategy、Monitor、Storage 和 Archive，可用 `--no-strategy`、`--no-monitor`、`--no-eventbus` 等开关关闭独立模块；Trade 当前通过 release 制品或模块构建单独部署。
@@ -35,9 +35,9 @@ Storage 启用 DuckDB 的正式 Linux 制品仍需要 Linux 编译机和 `STORAG
 
 给版本打 Tag 并推送后，GitHub Actions 和 CNB 会分别创建 Release 并上传同一组跨平台归档；对应配置是 `.github/workflows/release.yml` 和 `.cnb.yml`。本地只构建不发布时可运行 `VERSION=v0.1.0 make release-matrix`，也可用 `RELEASE_PLATFORMS=linux/amd64,windows/amd64` 缩小矩阵。跨平台构建默认对 Storage 使用 no-CGO fallback；具备目标平台 C 工具链时可显式设置 `STORAGE_CGO_ENABLED=1`。
 
-macOS 不直接交叉编译启用 DuckDB CGO 的 Storage Linux 二进制。配置根目录 `custom.toml` 的 `[compile_host]` 后，运行 `make build-storage-linux`，脚本会通过 `moox-cli setup hosts` 获取脱敏主机信息，同步源码到该 Linux 主机并在那里使用原生 Go、GCC/G++ 编译；不会同步 `custom.toml`。
+macOS 不直接交叉编译启用 DuckDB CGO 的 Storage Linux 二进制。配置根目录 `moox.toml` 的 `[compile_host]` 后，运行 `make build-storage-linux`，脚本会通过 `moox-cli setup hosts` 获取脱敏主机信息，同步源码到该 Linux 主机并在那里使用原生 Go、GCC/G++ 编译；不会同步 `moox.toml`。
 
-新系统初始化时，根目录 `custom.toml` 的 `[eventbus]` 只填写 SCF 可访问的公网
+新系统初始化时，根目录 `moox.toml` 的 `[eventbus]` 只填写 SCF 可访问的公网
 IPv4/DNS、端口和 TLS 开关。`setup deploy-control` 在控制节点部署 Admin、Gateway、
 Web、EventBus、CloudNode、Collector 和 Monitor；EventBus token、私有 CA 与
 `cloudnode-worker.yaml` 均由系统生成，不属于用户配置。
@@ -46,8 +46,8 @@ Web、EventBus、CloudNode、Collector 和 Monitor；EventBus token、私有 CA 
 
 ```bash
 moox-cli setup init \
-  --file ./custom.toml \
-  --config-dir ./examples/setup/default \
+  --file ./moox.toml \
+  --config-dir ./config/setup \
   --storage-host control
 ```
 
@@ -99,7 +99,7 @@ Parquet 则不会被通用清理器静默删除。各类数据的默认保留时
 
 ## 服务监控
 
-`moox-monitor` 是单实例监控事实存储，通过 SysDeploy 同步内置 `moox-system` 检查，并提供有界 `GetDoctorContext`。初始部署后可手工运行 `moox-cli doctor bootstrap --format json`；日常定位运行 `moox-cli doctor diagnose --format json`。V1 没有 Monitor HA、Doctor 守护进程、自动修复、Trade 模拟盘或 Full Canary。Storage 正在独立重构，Doctor 只检查其 inventory 和现有 health/Reporter 事实，功能水位固定显示为延期。所有独立部署进程的 `/healthz`、`/readyz` 和 `/metrics` 都是内部诊断面，需要独立 health HMAC；公开 Caddy 端口对诊断路由返回 `404`。详见 [MooX Doctor 运维](docs/运维/MooX-Doctor运维.md)。
+`moox-monitor` 是单实例监控事实存储，通过 SysDeploy 同步内置 `mooxsys` 检查，并提供有界 `GetDoctorContext`。初始部署后可手工运行 `moox-cli doctor bootstrap --format json`；日常定位运行 `moox-cli doctor diagnose --format json`。V1 没有 Monitor HA、Doctor 守护进程、自动修复、Trade 模拟盘或 Full Canary。Storage 正在独立重构，Doctor 只检查其 inventory 和现有 health/Reporter 事实，功能水位固定显示为延期。所有独立部署进程的 `/healthz`、`/readyz` 和 `/metrics` 都是内部诊断面，需要独立 health HMAC；公开 Caddy 端口对诊断路由返回 `404`。详见 [MooX Doctor 运维](docs/运维/MooX-Doctor运维.md)。
 
 `moox-host-agent` 是独立的 Linux amd64/arm64 用户进程，只读取 CPU、内存、文件系统、磁盘 I/O 和网络 ABI，通过私有 CA TLS 的 EventBus best-effort 上报到 Monitor；Agent 不持久化样本。发布和 rootless 部署入口位于 `skills/moox/scripts/hostagent-release.sh` 与 `hostagent-deploy.sh`，EventBus 凭据由 Admin `t_secrets` CLI 统一生成和轮换。
 

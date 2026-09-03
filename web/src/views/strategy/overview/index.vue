@@ -92,10 +92,10 @@ const pagination = reactive({ current: 1, pageSize: 20, total: 0 });
 const defaultManifest = `api_version: moox.strategy/v2
 kind: coin_selection
 input:
-  source_view_id: market_prices
+  source_view_id: view_crypto_spot_kline_1h
   data_frequency: 1h
   factors:
-    - factor_id: factor_bias
+    - factor_id: Bias
 instrument_pool:
   markets: [spot]
 schedule:
@@ -105,7 +105,7 @@ readiness:
 long:
   side_weight: "1"
   scores:
-    - factor_id: factor_bias
+    - factor_id: Bias
       direction: ascending
       weight: "1"
   filters: []

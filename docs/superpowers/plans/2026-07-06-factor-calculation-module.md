@@ -20,7 +20,7 @@
 我已阅读 `docs/因子计算模块设计.md`，关键理解如下：
 
 - `factor` 是独立业务服务，不进入 `admin` 或 `storage` 内部；跨模块只依赖稳定 proto 包。
-- 触发源必须是 Storage 的 NATS JetStream 事件 `moox.storage.time_series.rows_changed.v1`，Storage 当前配置文件仍写着 `eventbus.type: memory`，上线前必须显式切到 `nats`。
+- 触发源必须是 Storage 的 NATS JetStream 事件 `moox.event.storage.time_series.rows_changed.v1`，Storage 当前配置文件仍写着 `eventbus.type: memory`，上线前必须显式切到 `nats`。
 - 因子结果必须写入独立结果 Dataset，避免 Storage 写回事件再次触发 factor 自身。
 - 任务粒度固定为 per-symbol 批量：同一 symbol 的 K 线窗口只回读一次，再计算该 symbol 绑定的所有启用因子。
 - Python 因子协议保持 `signal(df, n, factor_name)` / `signal_multi_params(df, param_list)`，worker 对存量因子文件零侵入。
@@ -55,7 +55,7 @@ V1 生产可用验收边界是 **M1 + M2 + M3 的核心链路**。M4 提升可�
 
 ## Decisions
 
-- Canonical server path 改为 `modules/factor/cmd/server`，并修改 `scripts/build.sh` 的 factor target；旧 `cmd/moox-factor` 在迁移提交中删除，不继续承载主入口。
+- Canonical server path 改为 `modules/factor/cmd/server`，并修改 `scripts/build/build.sh` 的 factor target；旧 `cmd/moox-factor` 在迁移提交中删除，不继续承载主入口。
 - **M1 run-once 不依赖 binding**：run-once 直接对"选定 source dataset/freq/subject + 全部 enabled 因子定义"计算，target dataset 由 `ResultDataset(source)` 推导，命令行可选 `--factors id1,id2` 覆盖。binding 表在 M2 起才成为实时链路的权威来源；M3 提供 binding 的 RPC/CLI 创建。这样 M1 端到端不被管理面阻塞。
 - 新建 `modules/factor/cmd/cli`，提供 `init`、`import`、`run-once` 三个子命令；CLI 只操作 factor 自己的 SQLite 和公开 Storage RPC。
 - 新建 `modules/factor/proto/factor.proto`，生成包放在 `modules/factor/proto/factorgen`，并加入 `go.work`。
@@ -71,7 +71,7 @@ V1 生产可用验收边界是 **M1 + M2 + M3 的核心链路**。M4 提升可�
   Add direct dependencies: `github.com/glebarez/sqlite`, `github.com/nats-io/nats.go`, `gopkg.in/yaml.v3`, `gorm.io/gorm`, `trpc.group/trpc-go/trpc-go`, `trpc.group/trpc-go/trpc-filter/validation`, `trpc.group/trpc-go/trpc-log-cls`, `github.com/mooyang-code/moox/modules/storage/proto/gen`, `github.com/mooyang-code/moox/packages/commonpb`.
 - Modify: `go.work`
   Add `./modules/factor/proto/factorgen` after proto generation.
-- Modify: `scripts/build.sh`
+- Modify: `scripts/build/build.sh`
   Build factor from `modules/factor ./cmd/server moox-factor`.
 - Modify: `Makefile`
   Add `$(MAKE) -C modules/factor/proto all` in `proto`.
@@ -167,7 +167,7 @@ V1 生产可用验收边界是 **M1 + M2 + M3 的核心链路**。M4 提升可�
 - Create: `modules/factor/internal/app/control/config_test.go`
 - Create: `modules/factor/internal/store/database.go`
 - Create: `modules/factor/cmd/server/main.go`
-- Modify: `scripts/build.sh`
+- Modify: `scripts/build/build.sh`
 
 - [ ] **Step 1: Add config tests**
 
@@ -203,7 +203,7 @@ Required defaults:
 | `nats.url` | `nats://127.0.0.1:4222` |
 | `nats.stream` | `MOOX_STORAGE` |
 | `nats.consumer` | `factor_calc` |
-| `nats.subject` | `moox.storage.time_series.rows_changed.v1` |
+| `nats.subject` | `moox.event.storage.time_series.rows_changed.v1` |
 | `engine.python_bin` | `python3` |
 | `engine.factors_dir` | `./factors` |
 | `engine.sections_dir` | `./sections` |
@@ -240,14 +240,14 @@ Create `cmd/server/main.go` with `trpc.NewServer()`, `control.Initialize(ctx, s)
 
 - [ ] **Step 6: Update build target**
 
-Change `scripts/build.sh` **两处**（`all` 分支约 84 行、`factor` 分支约 118 行）from `./cmd/moox-factor` to `./cmd/server`；输出二进制名保持 `moox-factor`（`scripts/release.sh:46` 按二进制名拷贝，无需改动）。同步更新 `modules/factor/README.md` 中的 `go run ./cmd/moox-factor` 与目录树描述。
+Change `scripts/build/build.sh` **两处**（`all` 分支约 84 行、`factor` 分支约 118 行）from `./cmd/moox-factor` to `./cmd/server`；输出二进制名保持 `moox-factor`（`scripts/release/release.sh:46` 按二进制名拷贝，无需改动）。同步更新 `modules/factor/README.md` 中的 `go run ./cmd/moox-factor` 与目录树描述。
 
 Run:
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 go test ./modules/factor/internal/app/control -count=1
-./scripts/build.sh factor
+./scripts/build/build.sh factor
 ```
 
 Expected: PASS; `bin/moox-factor` is produced.
@@ -620,7 +620,7 @@ Expected: PASS.
 - Create: `modules/factor/cmd/cli/import.go`
 - Create: `modules/factor/cmd/cli/run_once.go`
 - Create: `modules/factor/cmd/cli/*_test.go`
-- Modify: `scripts/build.sh`
+- Modify: `scripts/build/build.sh`
 
 - [ ] **Step 1: Add CLI command tests**
 
@@ -652,7 +652,7 @@ Run:
 
 ```bash
 go test ./modules/factor/cmd/cli -count=1
-./scripts/build.sh factor
+./scripts/build/build.sh factor
 ```
 
 Expected: PASS.
@@ -1145,7 +1145,7 @@ Expected: PASS.
 
 - [ ] Storage `modules/storage/config/storage.yaml` or deployment config sets `storage.eventbus.type: nats`.
 - [ ] NATS is reachable from Storage and Factor at `nats://127.0.0.1:4222` or configured URL.
-- [ ] `MOOX_STORAGE` stream exists with subject `moox.storage.>`.
+- [ ] `MOOX_STORAGE` stream exists with subject `moox.event.storage.>`.
 - [ ] SysDeploy has active `moox_factor` deployment pointing to `127.0.0.1:11404`, path `trpc.moox.factor.FactorMgr`（serviceID 别名 `factormgr`）。若开发库已有旧 `t_service_deployments` 数据，需重建库或手动补插该行（默认部署仅在初始化时种子写入）。
 - [ ] `moox-factor` process runs with working directory `modules/factor` or absolute paths for config, factors, sections and db.
 - [ ] Python environment has `pandas`, `numpy`; `pyarrow` is installed before enabling Arrow or cross-section tasks.
@@ -1165,6 +1165,6 @@ Expected: PASS.
 
 ## Open Questions
 
-1. ~~`cmd/server` rename 影响面~~ **已核实**：仓库内引用 `cmd/moox-factor` 的只有 `scripts/build.sh`（两处）和 `modules/factor/README.md`；`scripts/release.sh` 按二进制名 `moox-factor` 拷贝，不受影响。Task 1 Step 6 已覆盖。
+1. ~~`cmd/server` rename 影响面~~ **已核实**：仓库内引用 `cmd/moox-factor` 的只有 `scripts/build/build.sh`（两处）和 `modules/factor/README.md`；`scripts/release/release.sh` 按二进制名 `moox-factor` 拷贝，不受影响。Task 1 Step 6 已覆盖。
 2. Storage `CreateDataset` duplicate semantics should be checked during M1; if it is not idempotent, registry must perform read-before-create.
 3. M5 chooses independent section Dataset to avoid event ambiguity. If product strongly wants one result Dataset for both time-series and cross-section columns, watermark must get column-level change metadata from Storage first.

@@ -36,7 +36,7 @@ func New(cfg Config) *Provider {
 		cfg.BaseURL = "https://finance.pae.baidu.com"
 	}
 	if strings.TrimSpace(cfg.SourceID) == "" {
-		cfg.SourceID = "stock_cn_http"
+		cfg.SourceID = "stockcn_http"
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 5 * time.Second}
@@ -56,7 +56,7 @@ func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
 
 func (p *Provider) ShadowSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
-		Markets:           []string{"stock_cn"},
+		Markets:           []string{"stockcn"},
 		Exchanges:         []string{"XSHG", "XSHE", "XBSE"},
 		Frequencies:       []string{"1m"},
 		CompleteOHLCV:     false,
@@ -69,7 +69,7 @@ func (p *Provider) ShadowSpec() marketdata.KlineSpec {
 
 func (p *Provider) InstrumentSpec() marketdata.InstrumentSpec {
 	return marketdata.InstrumentSpec{
-		Markets:      []string{"stock_cn"},
+		Markets:      []string{"stockcn"},
 		Exchanges:    []string{"XSHG", "XSHE", "XBSE"},
 		FullSnapshot: true,
 		PageSize:     200,
@@ -142,9 +142,9 @@ func (p *Provider) FetchShadowKlines(ctx context.Context, req marketdata.KlineRe
 func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.InstrumentRequest) (marketdata.InstrumentSnapshot, error) {
 	marketID := strings.TrimSpace(string(req.MarketID))
 	if marketID == "" {
-		marketID = "stock_cn"
+		marketID = "stockcn"
 	}
-	if marketID != "stock_cn" {
+	if marketID != "stockcn" {
 		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: market_id %q is unsupported", marketdata.ErrInvalidRequest, req.MarketID)
 	}
 	spec := p.InstrumentSpec()

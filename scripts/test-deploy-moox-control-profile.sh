@@ -1,1 +1,0 @@
-tests/contract/test-deploy-moox-control-profile.sh

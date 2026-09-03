@@ -103,7 +103,7 @@ async function loadBindings() {
   }
 
   // The global space selector defaults to the first business space (usually
-  // stock_cn). Factor result views are scoped by space, so a default factor
+  // stockcn). Factor result views are scoped by space, so a default factor
   // binding in another space would otherwise look like "no result view".
   // Resolve that once on entry, while still allowing the user to switch back
   // manually after the page has loaded.

@@ -67,3 +67,18 @@ func TestApplyCredentialFilePreservesExplicitEndpoint(t *testing.T) {
 		t.Fatalf("explicit endpoint was overwritten: %+v", config.URLs)
 	}
 }
+
+func TestApplyCredentialFilePreservesConfiguredCAWhenCredentialOmitsCA(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "storage.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\nusername: storage-eventbus\ntoken: secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := Config{TLSCAFile: filepath.Join(dir, "ca.pem")}
+	if err := config.ApplyCredentialFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if config.TLSCAFile != filepath.Join(dir, "ca.pem") {
+		t.Fatalf("configured CA was cleared: %+v", config)
+	}
+}

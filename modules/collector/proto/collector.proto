@@ -106,7 +106,6 @@ message TaskInstance {
   string subject_id = 8;
   string frequency = 9;
   google.protobuf.Struct task_params = 11;
-  string last_exec_node = 12;
   TaskInstanceStatus last_exec_status = 13;
   string last_exec_time = 14;  // RFC3339，可为空
   google.protobuf.Struct result = 15;
@@ -129,7 +128,6 @@ message TaskInstanceFilter {
   string subject_id = 8;
   string frequency = 9;
   TaskInstanceStatus last_exec_status = 11;
-  string last_exec_node = 12;
   bool include_deleted = 13;
   common.Page page = 14;
   string function_name = 15; // 当前绑定的 SCF 函数名

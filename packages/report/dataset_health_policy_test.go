@@ -17,7 +17,7 @@ realtime_timeseries:
     minimum_watermark_lag: 10m
   overrides:
     - space_id: crypto
-      dataset_id: spot_kline_1h
+      dataset_id: dataset_spot_kline_1h
       freq: 1H
       watermark_lag: 5m
 `
@@ -65,7 +65,7 @@ func TestDefaultDatasetHealthPolicyDoesNotOverrideHourlyWatermarkBelowOnePeriod(
 	}
 	path := filepath.Join(
 		filepath.Dir(currentFile),
-		"..", "..", "examples", "setup", "default", "dataset-health-policy.yaml",
+		"..", "..", "config", "setup", "dataset-health-policy.yaml",
 	)
 	cfg, err := LoadDatasetHealthPolicy(path)
 	if err != nil {
@@ -73,7 +73,7 @@ func TestDefaultDatasetHealthPolicyDoesNotOverrideHourlyWatermarkBelowOnePeriod(
 	}
 	for _, override := range cfg.RealtimeTimeSeries.Overrides {
 		if override.SpaceID == "crypto" &&
-			override.DatasetID == "spot_kline_1h" &&
+			override.DatasetID == "dataset_spot_kline_1h" &&
 			strings.EqualFold(override.Freq, "1h") {
 			t.Fatalf("hourly Dataset must use the default multi-period watermark tolerance: %+v", override)
 		}

@@ -11,7 +11,7 @@ import (
 func NewHTTPProvider(providerID, sourceID, displayName, baseURL, host string, symbolFunc markethttp.SymbolFunc, client *http.Client, now func() time.Time, status marketdata.SourceStatus) *markethttp.Provider {
 	return markethttp.New(markethttp.Config{
 		ProviderID: providerID, SourceID: sourceID, DisplayName: displayName,
-		MarketID: "stock_cn", InstrumentType: marketdata.InstrumentIndex,
+		MarketID: "stockcn", InstrumentType: marketdata.InstrumentIndex,
 		Exchanges: []string{"XSHG", "XSHE", "XBSE"}, BaseURL: baseURL,
 		Endpoint: "/api/qt/stock/kline/get", Host: host, HTTPClient: client,
 		Location: mustLocation("Asia/Shanghai"), SymbolFunc: symbolFunc,

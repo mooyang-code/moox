@@ -42,9 +42,9 @@ storage:
 }
 
 func TestMarketFetchSpaceIDUsesConfiguredMarketForScheduler(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "stock_cn")
-	if got := marketFetchSpaceID(); got != "stock_cn" {
-		t.Fatalf("marketFetchSpaceID() = %q, want stock_cn", got)
+	t.Setenv("MOOX_SPACE_ID", "stockcn")
+	if got := marketFetchSpaceID(); got != "stockcn" {
+		t.Fatalf("marketFetchSpaceID() = %q, want stockcn", got)
 	}
 }
 
@@ -62,7 +62,7 @@ func TestLoadKlineResampleConfig(t *testing.T) {
 }
 
 func TestLoadStockCNRuntimeCapacityConfig(t *testing.T) {
-	cfg, err := Load(writeCollectorConfig(t, `stock_cn:
+	cfg, err := Load(writeCollectorConfig(t, `stockcn:
   expected_timer_function_count: 200
   measured_safe_group_size: 30
   stagger_start_second: 5

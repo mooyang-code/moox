@@ -23,7 +23,7 @@ type runnerSource struct {
 }
 
 func (s runnerSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
-	return storagesource.DatasetInfo{DataSourceID: "crypto_market", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "spot"}, KeepDuration: s.keepDuration}, nil
+	return storagesource.DatasetInfo{DataSourceID: "crypto", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "spot"}, KeepDuration: s.keepDuration}, nil
 }
 func (s runnerSource) ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error) {
 	return s.subjects, nil
@@ -35,7 +35,7 @@ func TestRunnerTickPlansAndProcessesRealtimeBucket(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
-	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc","settle_delay_ms":0}`
+	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc","settle_delay_ms":0}`
 	require.NoError(t, db.TaskRules().Create(context.Background(), domain.TaskRule{SpaceID: "crypto", RuleID: "rule-5m", DataType: "kline_resample", Provider: "moox", MarketType: "spot", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}))
 	start := time.Unix(300, 0).UTC()
 	now := start.Add(5 * time.Minute)
@@ -70,14 +70,14 @@ func TestEnsureReadinessForClaimsUsesClaimedCursor(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
-	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`
+	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`
 	rule := domain.TaskRule{SpaceID: "crypto", RuleID: "rule-5m", DataType: "kline_resample", Provider: "moox", MarketType: "spot", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}
 	require.NoError(t, db.TaskRules().Create(context.Background(), rule))
 	cursor := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
 	result := domain.NewResampleTaskResult(cursor)
 	encoded, err := result.Marshal()
 	require.NoError(t, err)
-	instance := domain.TaskInstance{SpaceID: "crypto", TaskID: "task-btc", RuleID: rule.RuleID, Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "spot_kline_derived_5m", SubjectID: "BTC", Frequency: "5m", TaskParams: params, Result: encoded}
+	instance := domain.TaskInstance{SpaceID: "crypto", TaskID: "task-btc", RuleID: rule.RuleID, Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "dataset_spot_kline_derived_5m", SubjectID: "BTC", Frequency: "5m", TaskParams: params, Result: encoded}
 	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{instance}))
 	stored, err := db.TaskInstances().Get(context.Background(), "crypto", "task-btc")
 	require.NoError(t, err)
@@ -87,7 +87,7 @@ func TestEnsureReadinessForClaimsUsesClaimedCursor(t *testing.T) {
 	claimResult.ActiveBucket = &cursor
 	runner := &Runner{Instances: db.TaskInstances(), Readiness: db.PeriodReadiness()}
 	require.NoError(t, runner.ensureReadinessForClaims(context.Background(), []store.ResampleTaskClaim{{Instance: stored, Result: claimResult}}, []domain.TaskRule{rule}))
-	require.NoError(t, db.PeriodReadiness().MarkSubjectSuccess(context.Background(), domain.PeriodKey{SpaceID: "crypto", DatasetID: "spot_kline_derived_5m", Frequency: "5m", PeriodTime: cursor}, "BTC", localResampleFunction, writeSource, time.Now().UTC()))
+	require.NoError(t, db.PeriodReadiness().MarkSubjectSuccess(context.Background(), domain.PeriodKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_derived_5m", Frequency: "5m", PeriodTime: cursor}, "BTC", localResampleFunction, writeSource, time.Now().UTC()))
 	reports, err := db.PeriodReadiness().FinalizeDue(context.Background(), time.Now().UTC(), 10)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
@@ -129,22 +129,22 @@ func TestCompleteBackfillWaitsForViewFenceBeforeSyncing(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
-	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`
+	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`
 	require.NoError(t, db.TaskRules().Create(context.Background(), domain.TaskRule{SpaceID: "crypto", RuleID: "rule-5m", DataType: "kline_resample", Provider: "moox", MarketType: "spot", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}))
 	started := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
 	result := domain.NewResampleTaskResult(started)
 	result.Backfill = &domain.ResampleBackfill{RequestID: "request-1", Start: started, End: started.Add(time.Hour), NextBucket: started.Add(time.Hour), State: domain.ResampleBackfillSyncing}
 	encoded, err := result.Marshal()
 	require.NoError(t, err)
-	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{SpaceID: "crypto", TaskID: "task-btc", RuleID: "rule-5m", Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "spot_kline_derived_5m", SubjectID: "BTC", Frequency: "5m", Result: encoded}}))
+	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{SpaceID: "crypto", TaskID: "task-btc", RuleID: "rule-5m", Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "dataset_spot_kline_derived_5m", SubjectID: "BTC", Frequency: "5m", Result: encoded}}))
 	primary := &syncPointPrimary{}
 	runner := &Runner{Instances: db.TaskInstances(), Primary: primary}
 	rule, err := db.TaskRules().GetByRuleID(context.Background(), "crypto", "rule-5m")
 	require.NoError(t, err)
 	require.NoError(t, runner.completeBackfills(context.Background(), []domain.TaskRule{*rule}))
-	require.Equal(t, []string{"crypto/spot_kline_derived_5m/request-1/catchup"}, primary.appendCalls)
+	require.Equal(t, []string{"crypto/dataset_spot_kline_derived_5m/request-1/catchup"}, primary.appendCalls)
 	require.NotNil(t, primary.waitReq)
-	require.Equal(t, "spot_kline_derived_5m_view", primary.waitReq.GetViewId())
+	require.Equal(t, "view_spot_kline_derived_5m", primary.waitReq.GetViewId())
 	require.Equal(t, "request-1", primary.waitReq.GetRequestId())
 	instance, err := db.TaskInstances().Get(context.Background(), "crypto", "task-btc")
 	require.NoError(t, err)

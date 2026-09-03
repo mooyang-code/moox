@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/convertiblebond/eastmoney"
-	bondsina "github.com/mooyang-code/moox/modules/collector/internal/sources/convertiblebond/sina"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/bond/eastmoney"
+	bondsina "github.com/mooyang-code/moox/modules/collector/internal/sources/bond/sina"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/index/cni"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/index/csindex"
 	indexeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/index/eastmoney"
@@ -99,24 +99,24 @@ func newMarketProvider(marketID string, instrumentType marketdata.InstrumentType
 			return nil, fmt.Errorf("unsupported index source %s/%s", providerID, sourceID)
 		}
 	}
-	if marketID == "stock_hk" {
+	if marketID == "stockhk" {
 		switch {
-		case providerID == "eastmoney" && sourceID == "stock_hk_http":
+		case providerID == "eastmoney" && sourceID == "stockhk_http":
 			return stockhkeastmoney.New(stockhkeastmoney.Config{}), nil
-		case providerID == "sina" && sourceID == "stock_hk_http":
+		case providerID == "sina" && sourceID == "stockhk_http":
 			return stockhksina.New(stockhksina.Config{}), nil
 		default:
-			return nil, fmt.Errorf("unsupported stock_hk source %s/%s", providerID, sourceID)
+			return nil, fmt.Errorf("unsupported stockhk source %s/%s", providerID, sourceID)
 		}
 	}
-	if marketID == "stock_us" {
+	if marketID == "stockus" {
 		switch {
-		case providerID == "eastmoney" && sourceID == "stock_us_http":
+		case providerID == "eastmoney" && sourceID == "stockus_http":
 			return stockuseastmoney.New(stockuseastmoney.Config{}), nil
-		case providerID == "sina" && sourceID == "stock_us_http":
+		case providerID == "sina" && sourceID == "stockus_http":
 			return stockussina.New(stockussina.Config{}), nil
 		default:
-			return nil, fmt.Errorf("unsupported stock_us source %s/%s", providerID, sourceID)
+			return nil, fmt.Errorf("unsupported stockus source %s/%s", providerID, sourceID)
 		}
 	}
 	return nil, fmt.Errorf("unsupported market %q", marketID)
@@ -124,14 +124,14 @@ func newMarketProvider(marketID string, instrumentType marketdata.InstrumentType
 
 func marketDatasetID(marketID string, instrumentType marketdata.InstrumentType) string {
 	switch {
-	case marketID == "stock_hk" && instrumentType == marketdata.InstrumentEquity:
-		return "stock_hk_kline"
-	case marketID == "stock_us" && instrumentType == marketdata.InstrumentEquity:
-		return "stock_us_kline"
+	case marketID == "stockhk" && instrumentType == marketdata.InstrumentEquity:
+		return "dataset_stockhk_equity_kline"
+	case marketID == "stockus" && instrumentType == marketdata.InstrumentEquity:
+		return "dataset_stockus_equity_kline"
 	case marketID == StockCNSpaceID && instrumentType == marketdata.InstrumentIndex:
-		return "stock_cn_index_kline"
+		return "dataset_stockcn_index_kline"
 	case marketID == StockCNSpaceID && instrumentType == marketdata.InstrumentConvertibleBond:
-		return "stock_cn_convertible_bond_kline"
+		return "dataset_stockcn_bond_kline"
 	default:
 		return marketID + "_" + string(instrumentType) + "_kline"
 	}

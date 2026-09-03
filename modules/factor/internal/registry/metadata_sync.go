@@ -110,7 +110,7 @@ func (s *MetadataSync) SourceViewActiveIndexID(ctx context.Context, spaceID, vie
 
 // ResolveManagedResultIDs resolves the source View's primary Dataset before
 // deriving managed result object IDs. This keeps result names readable and
-// stable even when the source View ID has a suffix such as "_view".
+// stable when the source View uses the canonical "view_" prefix.
 func (s *MetadataSync) ResolveManagedResultIDs(ctx context.Context, spaceID, viewID string) (string, string, error) {
 	view, err := s.getView(ctx, spaceID, viewID)
 	if err != nil {

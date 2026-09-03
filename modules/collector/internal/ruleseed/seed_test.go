@@ -14,7 +14,7 @@ import (
 )
 
 const validSeed = `rules:
-  - space_id: crypto_market
+  - space_id: crypto
     rule_id: builtin-binance-spot-kline-1m
     data_type: kline
     provider: binance
@@ -25,8 +25,8 @@ const validSeed = `rules:
       provider: binance
       market_type: spot
       symbol_source: dataset
-      symbol_dataset_id: binance_spot_symbols
-      target_dataset_id: binance_spot_kline_1m
+      symbol_dataset_id: dataset_binance_spot_symbols
+      target_dataset_id: dataset_binance_spot_kline_1m
       frequency: 1m
 `
 
@@ -35,12 +35,12 @@ func TestLoadRuleSeed(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rules, 1)
 	assert.Equal(t, domain.TaskRule{
-		SpaceID:       "crypto_market",
+		SpaceID:       "crypto",
 		RuleID:        "builtin-binance-spot-kline-1m",
 		DataType:      "kline",
 		Provider:      "binance",
 		MarketType:    "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"binance_spot_symbols","target_dataset_id":"binance_spot_kline_1m","frequency":"1m","history_policy":{"mode":"live_only","batch_bar_limit":1000,"max_concurrency":1,"gap_repair_lookback":"0m","rate_budget_ratio":1}}`,
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"dataset_binance_spot_symbols","target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m","history_policy":{"mode":"live_only","batch_bar_limit":1000,"max_concurrency":1,"gap_repair_lookback":"0m","rate_budget_ratio":1}}`,
 		Enabled:       true,
 		Creator:       "moox-setup",
 	}, rules[0])
@@ -80,11 +80,11 @@ func TestSeedMissingIsIdempotentAndPreservesEdits(t *testing.T) {
 	second, err := SeedMissing(ctx, mgr.TaskRules(), rules)
 	require.NoError(t, err)
 	assert.Equal(t, SeedSummary{Unchanged: 1}, second)
-	require.NoError(t, mgr.TaskRules().SetEnabled(ctx, "crypto_market", rules[0].RuleID, false))
+	require.NoError(t, mgr.TaskRules().SetEnabled(ctx, "crypto", rules[0].RuleID, false))
 	third, err := SeedMissing(ctx, mgr.TaskRules(), rules)
 	require.NoError(t, err)
 	assert.Equal(t, SeedSummary{Unchanged: 1}, third)
-	got, err := mgr.TaskRules().GetByRuleID(ctx, "crypto_market", rules[0].RuleID)
+	got, err := mgr.TaskRules().GetByRuleID(ctx, "crypto", rules[0].RuleID)
 	require.NoError(t, err)
 	assert.False(t, got.Enabled)
 }

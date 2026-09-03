@@ -1463,7 +1463,7 @@ Expected: 全部通过。
 - [x] **Step 4: 运行仓库验证**
 
 ```bash
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-go-workspace.sh
 make verify-pr
 git diff --check
 git status --short
@@ -1708,5 +1708,5 @@ Kline JobItem 最终全部 SUCCESS。
   ./internal/taskpublisher ./internal/serverless ./test -count=1  PASS
 node --test examples/e2e/collector-symbol-kline.test.mjs          34/34 PASS
 bash examples/e2e/test-run-real-symbol-kline-scf.sh               PASS
-./scripts/test-go-workspace.sh                                    PASS
+./scripts/test/contract/test-go-workspace.sh                                    PASS
 ```

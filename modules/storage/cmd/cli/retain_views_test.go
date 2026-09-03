@@ -7,14 +7,14 @@ import (
 
 func TestValidateRetainViewsRequiresExactConfirmedInventory(t *testing.T) {
 	keep := []string{
-		"crypto_market/binance_spot_kline_1m_view",
-		"crypto_market/perpetual_kline_1h_view",
-		"crypto_market/spot_kline_1h_view",
-		"moox_system/host_resource_view",
-		"moox_system/host_fs_view",
-		"moox_system/host_disk_view",
-		"moox_system/host_net_view",
-		"moox_system/moox_service_metrics_view",
+		"crypto/view_crypto_spot_kline_1m",
+		"crypto/view_crypto_swap_kline_1h",
+		"crypto/view_crypto_spot_kline_1h",
+		"mooxsys/view_mooxsys_host_resource",
+		"mooxsys/view_mooxsys_host_fs",
+		"mooxsys/view_mooxsys_host_disk",
+		"mooxsys/view_mooxsys_host_net",
+		"mooxsys/view_mooxsys_service_metrics",
 	}
 	if err := validateRetainViewsOptions(retainViewsOptions{metadataDB: "metadata.db", packageRoot: "/tmp/storage", keepViews: keep, yes: true}); err != nil {
 		t.Fatal(err)

@@ -1,1 +1,0 @@
-tests/contract/test-monitor-coverage-contract.sh

@@ -307,8 +307,8 @@ cd ../../web && npm run test -- --run view-browse
 cd modules/storage && go test -race ./internal/service/metadata/... ./internal/service/view/... ./internal/service/viewindex/duckdb/... -count=1
 go vet ./...
 cd ../.. && git diff --check
-bash scripts/tests/contract/test-deploy-moox-storage-view.sh
-bash scripts/tests/contract/test-storage-view-watchdog.sh
+bash scripts/test/contract/test-deploy-moox-storage-view.sh
+bash scripts/test/contract/test-storage-view-watchdog.sh
 ```
 
 - [x] **Step 3: Request a fresh codeCR review**

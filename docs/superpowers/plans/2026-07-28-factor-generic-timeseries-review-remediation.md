@@ -1554,9 +1554,9 @@ git commit -m "fix(factor): preserve realtime event ranges"
 - Modify: `modules/factor/cmd/cli/main_test.go`
 - Modify: `modules/factor/cmd/cli/run_once.go`
 - Modify: `modules/factor/cmd/cli/run_once_test.go`
-- Add: `scripts/moox-factor-run-once.sh`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-release-contract.sh`
+- Add: `scripts/runtime/moox-factor-run-once.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-release-contract.sh`
 
 - [x] **Step 1: 写 config precedence 失败测试**
 
@@ -1657,7 +1657,7 @@ if cli.FactorsDir != "" {
 
 - [x] **Step 4: 提供可从干净 shell 执行的部署 wrapper**
 
-服务进程仍通过 `FACTOR_ENV` 启动；同时新增 `scripts/moox-factor-run-once.sh` 并在发布包安装为 `${ROOT}/bin/moox-factor-run-once`。wrapper 自己解析 `${ROOT}`，不能依赖 `start_factor` 函数执行后留在父 shell 的数组或变量。
+服务进程仍通过 `FACTOR_ENV` 启动；同时新增 `scripts/runtime/moox-factor-run-once.sh` 并在发布包安装为 `${ROOT}/bin/moox-factor-run-once`。wrapper 自己解析 `${ROOT}`，不能依赖 `start_factor` 函数执行后留在父 shell 的数组或变量。
 
 wrapper 必须显式设置并导出：
 
@@ -1709,8 +1709,8 @@ Run:
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
-./scripts/build.sh factor
-bash scripts/test-release-contract.sh
+./scripts/build/build.sh factor
+bash scripts/test/contract/test-release-contract.sh
 ```
 
 `test-release-contract.sh` 不只检查文件存在。它使用临时发布根目录、假的 `moox-factor-cli` 和假的 venv Python，从 `env -i HOME="$HOME" PATH="$PATH"` 启动 wrapper，捕获 exec 时的 argv/env，并断言：
@@ -1743,8 +1743,8 @@ git commit -m "fix(factor): load runtime config for run-once"
 - Modify: `modules/factor/examples/run-once/README.md`
 - Modify: `modules/factor/docs/realtime-verification.md`
 - Modify: `docs/因子计算模块设计.md`
-- Add: `scripts/test-factor-storage-e2e.sh`
-- Modify: `scripts/verify-event-contracts.sh`
+- Add: `scripts/test/e2e/test-factor-storage-e2e.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
 
 - [x] **Step 1: 将现有组件集成测试改为非 K 线输入和多行事件**
 
@@ -1808,7 +1808,7 @@ Python 一次调用返回两个 output
 9. 删除临时 space/dataset/factor；清理失败不能掩盖主断言。
 ```
 
-`scripts/test-factor-storage-e2e.sh` 负责：
+`scripts/test/e2e/test-factor-storage-e2e.sh` 负责：
 
 ```text
 要求一个已启动且包含 Gateway + Metadata + Primary + View + DataNode + Factor 的本地部署根目录
@@ -1876,8 +1876,8 @@ Run:
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
-./scripts/verify-event-contracts.sh
-./scripts/build.sh factor
+./scripts/check/verify-event-contracts.sh
+./scripts/build/build.sh factor
 ```
 
 Expected: all PASS。
@@ -1889,7 +1889,7 @@ Run:
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
 MOOX_DEPLOY_ROOT=/absolute/path/to/running/moox \
-  ./scripts/test-factor-storage-e2e.sh
+  ./scripts/test/e2e/test-factor-storage-e2e.sh
 ```
 
 Expected: PASS；日志明确显示真实 Metadata/Primary/View/DataNode RPC 均被调用，且没有 fake Storage 实现。
@@ -1900,7 +1900,7 @@ Run:
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-go-workspace.sh
 make proto-check
 ```
 
@@ -1963,7 +1963,7 @@ codeCR 返回必须带文件和行号。主 Agent 逐条独立复核；确认的
 - [x] **Step 10: 提交最终文档和测试**
 
 ```bash
-git add modules/factor docs scripts/verify-event-contracts.sh web
+git add modules/factor docs scripts/check/verify-event-contracts.sh web
 git commit -m "test(factor): prove generic time-series execution"
 ```
 
@@ -1995,7 +1995,7 @@ factor pyworker: 13 passed
 packages/pyruntime: go test ./...; go test -race ./...; go vet ./...
 worker lifecycle: go test -race ./process -count=10
 web: 39 files / 127 tests; production build; ESLint; Prettier
-workspace: ./scripts/test-go-workspace.sh
+workspace: ./scripts/test/contract/test-go-workspace.sh
 contracts: make proto-check; verify-event-contracts; release/deploy factor contracts
 real E2E: /tmp/moox-factor-storage-e2e-run13, TestFactorRealStorageE2E passed
 ```
@@ -2032,7 +2032,7 @@ Python 子进程的 RUN/LOAD 阻塞写测试。
 
 1. Task 1-7 的 focused tests 全部通过。
 2. Factor Go test/race/vet、Python pytest、Web test/build/lint 全部通过。
-3. `./scripts/test-go-workspace.sh`、`make proto-check`、build 和 event contract 检查通过。
+3. `./scripts/test/contract/test-go-workspace.sh`、`make proto-check`、build 和 event contract 检查通过。
 4. 非 K 线真实 Storage E2E、null 覆盖、active target 扩列、多行事件和 worker 回收均有行为测试。
 5. codeCR 独立审查 finding 已逐条处置。
 6. worktree clean，最终 HEAD 和远端状态在交付时分别核对。

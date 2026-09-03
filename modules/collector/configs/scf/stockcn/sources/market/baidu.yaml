@@ -1,0 +1,17 @@
+provider:
+  id: baidu
+  market: stockcn
+  enabled_feeds: [instrument]
+  shadow_feeds: [kline]
+  hosts: [finance.pae.baidu.com]
+  kline:
+    frequency: 1m
+    mode: shadow
+    complete_ohlcv: false
+  rate_limit:
+    scope: egress_ip
+    requests_per_second: 2
+    burst: 1
+    max_concurrent: 1
+    cooldown: 1s
+    request_timeout: 5s

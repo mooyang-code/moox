@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CONFIG="${CONFIG:-${ROOT}/custom.toml}"
+CONFIG="${CONFIG:-${ROOT}/moox.toml}"
 MOOX_CLI="${MOOX_CLI:-${ROOT}/bin/moox-cli}"
 OUT="${OUT:-${ROOT}/dist/moox-skill.tar.gz}"
 SKILL_DIR="${ROOT}/skills/moox"

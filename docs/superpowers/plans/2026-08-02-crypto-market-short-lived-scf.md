@@ -4,9 +4,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
-**Goal:** 将行情采集 SCF 彻底改造成 crypto_market 空间专属、按批次短时运行的函数，并删除常驻 Worker、心跳、Keepalive、SCF Sentinel/Watchdog 及遗留数据、监控链路。
+**Goal:** 将行情采集 SCF 彻底改造成 crypto 空间专属、按批次短时运行的函数，并删除常驻 Worker、心跳、Keepalive、SCF Sentinel/Watchdog 及遗留数据、监控链路。
 
-**Architecture:** Collector 本地定时器扫描 crypto_market 规则，确定性分片后直接调用海外 SCF。函数只做一次 market_fetch 或出口探测、内存聚合、一次 Storage 写入、一个完成事件和一次 CLS 批量上报后返回。CLS 失败不影响行情结果。
+**Architecture:** Collector 本地定时器扫描 crypto 规则，确定性分片后直接调用海外 SCF。函数只做一次 market_fetch 或出口探测、内存聚合、一次 Storage 写入、一个完成事件和一次 CLS 批量上报后返回。CLS 失败不影响行情结果。
 
 **Tech Stack:** Go 1.25、Tencent SCF Go SDK、Tencent CLS Go SDK、tRPC-Go（仅保留 Storage/EventBus/timer 用途，不用于 CLS）、SQLite、JetStream、Vue 3、Vitest。
 
@@ -16,7 +16,7 @@
 
 ### 必须实现
 
-- 所有业务空间、数据集、规则、Collector 状态、CloudNode 节点/包、函数名、EventBus subject 和 Monitor 检查统一为 crypto_market；不再保留 crypto 别名。
+- 所有业务空间、数据集、规则、Collector 状态、CloudNode 节点/包、函数名、EventBus subject 和 Monitor 检查统一为 crypto；不再保留 crypto 别名。
 - SCF 只接受 market_fetch 和 egress_probe；保持 64 MB / 15s，Storage RPC 5s。
 - 本地 Collector 在每分钟同一时刻调度 1m K 线。Scheduler 按活跃函数数轮询分片；函数内以 max_inflight_requests 分波并发。
 - 每个标的无论成功或失败都生成一条结构化 CLS 记录；一轮函数调用只发一次 CLS 请求。
@@ -36,12 +36,12 @@
 2. 同一 1m 周期按函数数均匀轮询；单函数并发有上限，Storage UpsertFields 每批最多一次。
 3. CLS 可按 batch_id 查到每个标的的 market_fetch_item，CLS 不可用不使批次失败。
 4. 搜索 keepalive、ReportHeartbeat、scf_sentinel、scf_watchdog、trpc-log-cls 在运行时代码中无命中。
-5. 清空旧 crypto 数据后，crypto_market 完成真实 Symbol 和连续三轮 1m K 线采集。
+5. 清空旧 crypto 数据后，crypto 完成真实 Symbol 和连续三轮 1m K 线采集。
 
 ## 目标契约
 
-    Collector Timer -> Scheduler crypto_market -> CloudNode InvokeFunction
-       -> crypto_market SCF -> Binance HTTPS
+    Collector Timer -> Scheduler crypto -> CloudNode InvokeFunction
+       -> crypto SCF -> Binance HTTPS
        -> Storage RPC (one aggregate write)
        -> EventBus batch completed -> Collector completion/retry -> Monitor
        -> CLS (one structured upload)
@@ -56,7 +56,7 @@
         StorageRPCGatewayTarget string
     }
 
-data.space_id 必须与 MOOX_SPACE_ID=crypto_market 相等。Storage target 只在当前调用中使用；不得写入任何全局运行时配置。
+data.space_id 必须与 MOOX_SPACE_ID=crypto 相等。Storage target 只在当前调用中使用；不得写入任何全局运行时配置。
 
 ### CLS 环境变量
 
@@ -86,11 +86,11 @@ CLS 使用同步 SendLogList，一次调用只发送一次。单函数最多 64 
 | 路径 | 责任 |
 |---|---|
 | packages/clsreporter/ | 新独立 Go module；显式 Config、环境变量读取、同步 CLS 批量上报和 Noop。 |
-| modules/collector/cmd/scf/crypto_market/ | 唯一加密行情 SCF 入口。 |
-| modules/collector/internal/serverless/crypto_market/ | 仅处理两个短时 action。 |
+| modules/collector/cmd/scf/crypto/ | 唯一加密行情 SCF 入口。 |
+| modules/collector/internal/serverless/crypto/ | 仅处理两个短时 action。 |
 | modules/collector/internal/marketfetch/ | 有界并发、Storage 聚合、完成事件、CLS item 明细。 |
-| modules/collector/configs/scf/crypto_market/ | 空间专属配置；无 tRPC logger、timer、watchdog。 |
-| modules/cli/internal/ 和 scripts/build-collector-scf-package.sh | 入口选择、无密钥 zip、受管 SCF 环境变量。 |
+| modules/collector/configs/scf/crypto/ | 空间专属配置；无 tRPC logger、timer、watchdog。 |
+| modules/cli/internal/ 和 scripts/build/build-collector-scf-package.sh | 入口选择、无密钥 zip、受管 SCF 环境变量。 |
 | modules/cloudnode/ | 保留异步部署/调用；删除 resident-SCF 控制面。 |
 | modules/monitor/ 和 web/src/ | 删除心跳/Sentinel 展示，保留批次和数据新鲜度。 |
 | docs/architecture/scf-short-lived-market-fetch.md | 成本决策与维护边界。 |
@@ -193,13 +193,13 @@ Expected: PASS；Collector 不再直接 require trpc-log-cls。
     git add go.work packages/clsreporter modules/collector/go.mod modules/collector/go.sum
     git commit -m "feat: add framework-free CLS reporter"
 
-### Task 3: 收敛为 crypto_market 专属短时入口
+### Task 3: 收敛为 crypto 专属短时入口
 
 **Files:**
-- Create: modules/collector/cmd/scf/crypto_market/main.go
-- Create: modules/collector/cmd/scf/crypto_market/main_test.go
-- Create: modules/collector/internal/serverless/crypto_market/handler.go
-- Create: modules/collector/internal/serverless/crypto_market/handler_test.go
+- Create: modules/collector/cmd/scf/crypto/main.go
+- Create: modules/collector/cmd/scf/crypto/main_test.go
+- Create: modules/collector/internal/serverless/crypto/handler.go
+- Create: modules/collector/internal/serverless/crypto/handler_test.go
 - Modify: modules/collector/internal/model/types.go
 - Modify: modules/collector/internal/model/types_test.go
 - Modify: modules/collector/internal/marketfetch/handler.go
@@ -217,7 +217,7 @@ Expected: PASS；Collector 不再直接 require trpc-log-cls。
 
 - [ ] **Step 2: 实现入口和调用级 Reporter**
 
-cmd/scf/crypto_market/main.go 只加载业务配置并调用 cloudfunction.Start，要求 MOOX_SPACE_ID=crypto_market；移除 trpc.NewServer、CLS blank import、NodeInfo/readiness 初始化。
+cmd/scf/crypto/main.go 只加载业务配置并调用 cloudfunction.Start，要求 MOOX_SPACE_ID=crypto；移除 trpc.NewServer、CLS blank import、NodeInfo/readiness 初始化。
 
 Handler 从 function context 读取函数名、地域和 request id；用 clsreporter.ConfigFromEnv(os.Getenv) 创建 Reporter，注入公共字段。结束时创建不超过 CLS timeout 的 flush context；Flush 错误写 cls_report_flush_failed，但不得覆盖业务 response。
 
@@ -279,7 +279,7 @@ record 在 mutex 中写独立槽位，波次结束后主 goroutine 按 index 聚
 - [ ] **Step 3: 注入小型 ItemReporter**
 
     type ItemReporter interface { Report(clsreporter.Entry) }
-    type Executor struct { /* existing fields */ Reporter ItemReporter }
+    type Executor struct { existingFields ...; Reporter ItemReporter }
 
 成功记录 success=true、rows、latest time；失败记录 success=false、network_error/storage_error/source_error/deadline_exhausted 和截断错误。保留当前本地成功/失败日志。
 
@@ -296,27 +296,27 @@ Expected: PASS；无 race，单批最多一次 Storage 写。
     git add modules/collector/internal/marketfetch
     git commit -m "refactor(collector): bound SCF fetch waves with trpc wait"
 
-### Task 5: 按 crypto_market 入口打包和发布
+### Task 5: 按 crypto 入口打包和发布
 
 **Files:**
-- Create: modules/collector/configs/scf/crypto_market/config.yaml
-- Create: modules/collector/configs/scf/crypto_market/sources/market/binance.yaml
-- Create: modules/collector/configs/scf/crypto_market/observability.env.example
+- Create: modules/collector/configs/scf/crypto/config.yaml
+- Create: modules/collector/configs/scf/crypto/sources/market/binance.yaml
+- Create: modules/collector/configs/scf/crypto/observability.env.example
 - Modify: modules/cli/internal/setup/config/config.go and config_test.go
 - Modify: modules/cli/internal/collectorpackager/scf.go and scf_test.go
 - Modify: modules/cli/internal/command/collector.go and collector_test.go
-- Modify: scripts/build-collector-scf-package.sh and its test
-- Modify: scripts/build.sh
-- Modify: custom.toml.example
+- Modify: scripts/build/build-collector-scf-package.sh and its test
+- Modify: scripts/build/build.sh
+- Modify: moox.toml.example
 - Delete: modules/collector/configs/scf/crypto/
 
 - [ ] **Step 1: 写入口 manifest 测试**
 
 增加 Entrypoint。接受：
 
-    space_id = "crypto_market"
-    entrypoint = "crypto_market"
-    package_config_dir = "scf/crypto_market"
+    space_id = "crypto"
+    entrypoint = "crypto"
+    package_config_dir = "scf/crypto"
     package_name = "moox-collector-crypto-market"
     function_prefix = "moox-fetcher-crypto-market"
 
@@ -324,16 +324,16 @@ Expected: PASS；无 race，单批最多一次 Storage 写。
 
 - [ ] **Step 2: 清理 runtime config**
 
-configs/scf/crypto_market/config.yaml 仅保留 Binance source、Storage RPC、服务鉴权等实际配置。删除 dnsproxy、timer、SCF watchdog、market canary、tRPC logger。环境样例只保留 CLS、Storage、Gateway、EventBus、space/fetch 参数。
+configs/scf/crypto/config.yaml 仅保留 Binance source、Storage RPC、服务鉴权等实际配置。删除 dnsproxy、timer、SCF watchdog、market canary、tRPC logger。环境样例只保留 CLS、Storage、Gateway、EventBus、space/fetch 参数。
 
 - [ ] **Step 3: 入口化构建**
 
 packageCollectorFunction/buildCollectorLinuxBinary 和脚本接收 entrypoint，构建：
 
-    go build -ldflags "-s -w -X main.Version=<version>" \
-      -o <binary> ./cmd/scf/<entrypoint>
+    go build -ldflags "-s -w -X main.Version=VERSION" \
+      -o BINARY ./cmd/scf/ENTRYPOINT
 
-脚本要求 SCF_ENTRYPOINT=crypto_market，并校验安全目录名。scripts/build.sh 产物名改为 moox-collector-scf-crypto-market。
+脚本要求 SCF_ENTRYPOINT=crypto，并校验安全目录名。scripts/build/build.sh 产物名改为 moox-collector-scf-crypto-market。
 
 - [ ] **Step 4: 删除 trpc_go.yaml 渲染**
 
@@ -344,28 +344,28 @@ packageCollectorFunction/buildCollectorLinuxBinary 和脚本接收 entrypoint，
 collectorFunctionEnvironment 固定注入：
 
     MOOX_CLS_ENABLED=true
-    MOOX_CLS_ENDPOINT=<resolved public ingest endpoint>
-    MOOX_CLS_LOGSET_ID=<resolved logset>
-    MOOX_CLS_TOPIC_ID=<resolved topic>
+    MOOX_CLS_ENDPOINT=RESOLVED_PUBLIC_INGEST_ENDPOINT
+    MOOX_CLS_LOGSET_ID=RESOLVED_LOGSET_ID
+    MOOX_CLS_TOPIC_ID=RESOLVED_TOPIC_ID
     MOOX_CLS_TIMEOUT_MS=3000
-    MOOX_CLS_SECRET_ID=<resolved id>
-    MOOX_CLS_SECRET_KEY=<resolved key>
+    MOOX_CLS_SECRET_ID=RESOLVED_SECRET_ID
+    MOOX_CLS_SECRET_KEY=RESOLVED_SECRET_KEY
 
 将其加入 managed map，拒绝 --env 覆盖，删除 MOOX_CLS_HOST。发布只读解析初始化阶段已有的 CLS Logset/Topic；COS bucket 仍由 CloudNode 的已注册云账户提供给部署 API，SCF 运行时不使用 COS，因此不注入额外 bucket 或云凭据。
 
 - [ ] **Step 6: 写 package/publish 回归测试**
 
-断言 zip 来自专属入口且无 tRPC YAML；CreateItem 的 space/package/prefix/env 都是 crypto_market；新加坡、东京各上传一份并创建五个节点；CLS endpoint/topic/timeout/密钥均受管。
+断言 zip 来自专属入口且无 tRPC YAML；CreateItem 的 space/package/prefix/env 都是 crypto；新加坡、东京各上传一份并创建五个节点；CLS endpoint/topic/timeout/密钥均受管。
 
 - [ ] **Step 7: 验证并提交**
 
     cd modules/cli && go test ./internal/setup/config ./internal/collectorpackager ./internal/command
-    bash -n scripts/build-collector-scf-package.sh scripts/build-collector-scf-package_test.sh
-    bash scripts/build-collector-scf-package_test.sh
+    bash -n scripts/build/build-collector-scf-package.sh scripts/build/build-collector-scf-package_test.sh
+    bash scripts/build/build-collector-scf-package_test.sh
 
 Expected: PASS；不存在 configs/scf/crypto。
 
-    git add custom.toml.example modules/collector/configs modules/cli scripts go.work
+    git add moox.toml.example modules/collector/configs modules/cli scripts go.work
     git commit -m "feat(cli): package crypto market SCF without trpc CLS"
 
 ### Task 6: 删除 CloudNode 的常驻 SCF 控制面
@@ -454,11 +454,11 @@ Expected: PASS；页面不存在心跳字段。
     git add modules/monitor web
     git commit -m "refactor(monitor): remove SCF heartbeat and sentinel checks"
 
-### Task 8: 清空 crypto 并重建 crypto_market
+### Task 8: 清空 crypto 并重建 crypto
 
 **Files:**
-- Modify: ignored custom.toml（部署时，不提交）
-- Modify: custom.toml.example
+- Modify: ignored moox.toml（部署时，不提交）
+- Modify: moox.toml.example
 - Modify: 初始化 seed、部署文档中所有 crypto 空间值
 - Test: 真实 CLI、Storage、SCF、CLS、Monitor 验证
 
@@ -472,7 +472,7 @@ Expected: PASS；页面不存在心跳字段。
 
 - [ ] **Step 3: 初始化元数据和任务**
 
-创建 Admin Space crypto_market，注册 Binance spot Symbol Dataset 和引用它的 1m Kline Dataset/规则。手动 Symbol task 可带 allowlist；普通 Kline task 必须引用 Symbol Dataset。所有 subject、series tag、EventBus SubjectID、Monitor check 和 rule 都使用 crypto_market。
+创建 Admin Space crypto，注册 Binance spot Symbol Dataset 和引用它的 1m Kline Dataset/规则。手动 Symbol task 可带 allowlist；普通 Kline task 必须引用 Symbol Dataset。所有 subject、series tag、EventBus SubjectID、Monitor check 和 rule 都使用 crypto。
 
 - [ ] **Step 4: 配置十个海外函数**
 
@@ -480,9 +480,9 @@ Expected: PASS；页面不存在心跳字段。
     enabled = true
 
     [[scf_fetcher.spaces]]
-    space_id = "crypto_market"
-    entrypoint = "crypto_market"
-    package_config_dir = "scf/crypto_market"
+    space_id = "crypto"
+    entrypoint = "crypto"
+    package_config_dir = "scf/crypto"
     package_name = "moox-collector-crypto-market"
     function_prefix = "moox-fetcher-crypto-market"
     memory_size = 64
@@ -494,11 +494,11 @@ Expected: PASS；页面不存在心跳字段。
 
 - [ ] **Step 5: 发布和出口验证**
 
-    go run ./modules/cli/cmd/moox-cli setup validate --file ./custom.toml
+    go run ./modules/cli/cmd/moox-cli setup validate --file ./moox.toml
     go run ./modules/cli/cmd/moox-cli collector function publish submit \
-      --file ./custom.toml --space-id crypto_market
+      --file ./moox.toml --space-id crypto
     go run ./modules/cli/cmd/moox-cli collector function probe-egress \
-      --file ./custom.toml --space-id crypto_market
+      --file ./moox.toml --space-id crypto
 
 确认十个函数均为 64MB/15s，环境中有 MOOX_CLS_*，没有 MOOX_SCF_WATCHDOG_* 或 MOOX_SCF_CANARY_*。
 
@@ -508,10 +508,10 @@ Expected: PASS；页面不存在心跳字段。
 
 - [ ] **Step 7: Commit 样例和记录**
 
-    git add custom.toml.example docs/architecture/scf-short-lived-market-fetch.md
+    git add moox.toml.example docs/architecture/scf-short-lived-market-fetch.md
     git commit -m "docs: document crypto market SCF rebuild procedure"
 
-不得提交 custom.toml、CLS 密钥、EventBus 凭据或 Storage HMAC。
+不得提交 moox.toml、CLS 密钥、EventBus 凭据或 Storage HMAC。
 
 ### Task 9: 全量回归、遗留扫描和独立审查
 
@@ -522,7 +522,7 @@ Expected: PASS；页面不存在心跳字段。
 - [ ] **Step 1: 模块级回归**
 
     go work sync
-    ./scripts/test-go-workspace.sh
+    ./scripts/test/contract/test-go-workspace.sh
     cd modules/collector && go test ./...
     cd ../cloudnode && go test ./...
     cd ../monitor && go test ./...
@@ -548,7 +548,7 @@ Expected: 无运行时代码命中；历史文档保留时逐条说明。
 每个 finding 记录文件/行号、修复 commit 和回归命令；无 finding 时记录剩余风险：CLS 是 best-effort，短暂不可达会丢远端明细但不会丢 Storage 数据。
 
     git status --short
-    git add <only-files-owned-by-this-change>
+    git add ONLY_FILES_OWNED_BY_THIS_CHANGE
     git commit -m "refactor: rebuild crypto market short-lived SCF fleet"
     git push origin feature/mooyang
     git ls-remote --heads origin feature/mooyang

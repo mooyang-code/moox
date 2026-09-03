@@ -7,17 +7,18 @@ type FactorBindingLike = {
 
 export function factorResultDataset(sourceDataset: string) {
   const source = sourceDataset.trim().toLowerCase();
-  // Factor bindings expose the source View through the legacy
-  // source_dataset field. Use its primary Dataset-style ID for the managed
-  // result name while keeping real Dataset IDs unchanged.
-  const base = source.endsWith("_view") ? source.slice(0, -"_view".length) : source;
-  const candidate = `${base}_factor`;
+  // Factor bindings expose the source View through the source_dataset field.
+  // Use its primary Dataset-style ID for the managed result name while
+  // keeping real Dataset IDs unchanged.
+  const base = source.startsWith("view_") ? source.slice("view_".length) : source;
+  const datasetBase = base.startsWith("dataset_") ? base : `dataset_${base}`;
+  const candidate = `${datasetBase}_factor`;
   if (candidate.length <= 50) {
     return candidate;
   }
-  const suffix = `_${sha1Hex(`${base}\u0000_factor`).slice(0, 16)}`;
+  const suffix = `_${sha1Hex(`${datasetBase}\u0000_factor`).slice(0, 16)}`;
   const prefixLen = 50 - suffix.length;
-  let prefix = trimRight(base, "_");
+  let prefix = trimRight(datasetBase, "_");
   if (prefix.length > prefixLen) {
     prefix = trimRight(prefix.slice(0, prefixLen), "_");
   }

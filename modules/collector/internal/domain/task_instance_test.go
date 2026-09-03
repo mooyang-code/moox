@@ -30,7 +30,7 @@ func TestTaskInstance_StableTaskID_SameInput_ShouldReturnDeterministicID(t *test
 		Exchange:  "binance",
 		Market:    "spot",
 		DataType:  "kline",
-		DatasetID: "spot_kline_1h",
+		DatasetID: "dataset_spot_kline_1h",
 		SubjectID: "btc-usdt",
 		Interval:  "1m",
 	}
@@ -45,7 +45,7 @@ func TestTaskInstance_StableTaskID_DifferentSpace_ShouldReturnDifferentID(t *tes
 		Exchange:  "binance",
 		Market:    "spot",
 		DataType:  "kline",
-		DatasetID: "spot_kline_1h",
+		DatasetID: "dataset_spot_kline_1h",
 		SubjectID: "btc-usdt",
 		Interval:  "1m",
 	}
@@ -55,10 +55,10 @@ func TestTaskInstance_StableTaskID_DifferentSpace_ShouldReturnDifferentID(t *tes
 }
 
 func TestStableTaskIDDoesNotChangeWhenProviderRouteChanges(t *testing.T) {
-	left := TaskSpec{RouteID: "stock_cn_kline_1m_v1", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: "stock_cn_kline", SubjectID: "600000.XSHG", Frequency: "1m"}
+	left := TaskSpec{RouteID: "stockcn_equity_kline_1m_v4", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: "dataset_stockcn_equity_kline", SubjectID: "600000.XSHG", Frequency: "1m"}
 	right := left
 	right.Provider = "tencent"
-	assert.Equal(t, StableTaskID("stock_cn", "rule-1", left), StableTaskID("stock_cn", "rule-1", right))
+	assert.Equal(t, StableTaskID("stockcn", "rule-1", left), StableTaskID("stockcn", "rule-1", right))
 }
 
 func TestResampleStableTaskIDIncludesSourceSeriesTag(t *testing.T) {

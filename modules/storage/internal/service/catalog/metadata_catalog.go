@@ -198,6 +198,9 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	}
 	if item.DatasetId == "" {
 		item.DatasetId = defaultID(item.GetName(), "dataset")
+		if !strings.HasPrefix(item.DatasetId, "dataset_") {
+			item.DatasetId = "dataset_" + item.DatasetId
+		}
 	}
 	if err := validateChineseDisplayName("dataset name", item.GetName()); err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil

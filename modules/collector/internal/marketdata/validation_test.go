@@ -48,13 +48,13 @@ func TestValidateNormalizedKline(t *testing.T) {
 
 func TestSourceSpecValidationRequiresConcreteTransportAndStatus(t *testing.T) {
 	spec := SourceSpec{
-		Key:             SourceKey{ProviderID: "sina", SourceID: "stock_cn_minute_http"},
+		Key:             SourceKey{ProviderID: "sina", SourceID: "stockcn_minute_http"},
 		Status:          SourceEnabled,
 		ProtocolVariant: "http",
 		Transport:       "https",
 		Host:            "quotes.sina.cn",
 		Port:            443,
-		Markets:         []MarketID{"stock_cn"},
+		Markets:         []MarketID{"stockcn"},
 		Instruments:     []InstrumentType{InstrumentEquity},
 		Frequencies:     []string{"1m"},
 		TimestampMode:   TimestampModeClose,
@@ -99,7 +99,7 @@ func TestValidateNormalizedKlineAcceptsCryptoHourBar(t *testing.T) {
 func TestInstrumentSnapshotValidationRequiresCompleteSnapshot(t *testing.T) {
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
 	valid := InstrumentSnapshot{
-		SnapshotID: "snap-1", SourceProvider: "test", MarketID: "stock_cn", FetchedAt: now,
+		SnapshotID: "snap-1", SourceProvider: "test", MarketID: "stockcn", FetchedAt: now,
 		Complete: true, PageCount: 1, ExchangeCounts: map[string]int{"XSHG": 1},
 		Instruments: []Instrument{{
 			SubjectID: "600000.XSHG", ProviderSymbol: "sh600000", Exchange: "XSHG",

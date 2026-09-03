@@ -62,7 +62,7 @@ prepare 成功后生成两类产物：
 - stage/部署根目录生成 `config/resources.env`，记录云账户 ID、region、CLS host、Logset ID 和 Topic ID；该文件不包含凭证。
 - 目标机 `${deploy_dir}/secrets/cls.env` 保存 CLS writer 所需的 SecretId、SecretKey、region 和 host，权限固定为 `0600`。
 
-Topic/Logset ID 虽然不是凭证，也不写入 `custom.toml` 或模块源配置；它们只进入自动生成的 `config/resources.env`。SecretId 和 SecretKey 只能存在于进程内存、受保护的临时文件和目标机 `0600` 文件中。脚本退出时必须删除本地临时凭证文件。
+Topic/Logset ID 虽然不是凭证，也不写入 `moox.toml` 或模块源配置；它们只进入自动生成的 `config/resources.env`。SecretId 和 SecretKey 只能存在于进程内存、受保护的临时文件和目标机 `0600` 文件中。脚本退出时必须删除本地临时凭证文件。
 
 ## 发布数据流
 
@@ -99,7 +99,7 @@ sequenceDiagram
 带 service-auth 的 CloudNode 控制面选择账户并核对固定 CLS 资源，
 `skills/moox/scripts/cls-bootstrap.sh` 负责在目标机安全安装 `0600` 的
 `secrets/cls.env`，并生成 `config/resources.env` 供所有模块读取；远程场景的
-临时 helper 在预检后立即清理。`scripts/deploy-moox.sh` 的
+临时 helper 在预检后立即清理。`scripts/deploy/deploy-moox.sh` 的
 `prepare_cls_preflight` 在 release archive 同步或停止旧服务前执行。对应的部署、Skill、CLI
 和 tRPC 配置契约测试覆盖账户选择、Topic ID/credential placeholders、
 固定 region/logset/topic、幂等更新及失败时不停止现有服务；运行时安全边界

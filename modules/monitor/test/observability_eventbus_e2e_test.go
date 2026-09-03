@@ -78,7 +78,7 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 		AgentId: agentID, Hostname: "worker-a", Snapshot: &hostmetricpb.HostSnapshot{},
 	}, events.PublishOptions{
 		EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(),
-		SpaceID: "moox_system", SubjectID: agentID,
+		SpaceID: "mooxsys", SubjectID: agentID,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func publishObservabilityMetric(t *testing.T, ctx context.Context, publisher *ev
 		Snapshot: &metricspb.MetricSnapshot{SchemaVersion: 1},
 	}, events.PublishOptions{
 		EventID: eventID, OccurredAt: time.Now().UTC(),
-		SpaceID: "moox_system", SubjectID: "collector/collector-1",
+		SpaceID: "mooxsys", SubjectID: "collector/collector-1",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func publishObservabilityHealth(t *testing.T, ctx context.Context, publisher *ev
 		Success: true, CheckedAt: timestamppb.Now(),
 	}, events.PublishOptions{
 		EventID: eventID, OccurredAt: time.Now().UTC(),
-		SpaceID: "moox_system", SubjectID: "external-observer/monitor_ready",
+		SpaceID: "mooxsys", SubjectID: "external-observer/monitor_ready",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -182,14 +182,14 @@ func publishMalformedObservabilityHealth(t *testing.T, js nats.JetStreamContext)
 	message := &eventpb.EventMessage{
 		EventId: "health-malformed", EventName: events.ObservabilityHealthCheckReported.Name(),
 		EventVersion: events.ObservabilityHealthCheckReported.Version(),
-		SpaceId:      "moox_system", SubjectId: "bad", OccurredAt: timestamppb.Now(),
+		SpaceId:      "mooxsys", SubjectId: "bad", OccurredAt: timestamppb.Now(),
 		Payload: []byte("not-protobuf"),
 	}
 	raw, err := proto.Marshal(message)
 	if err != nil {
 		t.Fatal(err)
 	}
-	natsMessage := nats.NewMsg("moox.observability.health.check.reported.v1.moox_system.bad")
+	natsMessage := nats.NewMsg("moox.event.observability.health.check.reported.v1.mooxsys.bad")
 	natsMessage.Header.Set(nats.MsgIdHdr, message.GetEventId())
 	natsMessage.Header.Set("Content-Type", events.ContentType)
 	natsMessage.Data = raw

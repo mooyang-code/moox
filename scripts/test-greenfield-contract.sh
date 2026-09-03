@@ -1,1 +1,0 @@
-tests/contract/test-greenfield-contract.sh

@@ -30,7 +30,7 @@ type metadataSeedGrainContract struct {
 func TestActiveMetadataSeedsUseCanonicalTimeSeriesViewGrain(t *testing.T) {
 	wantGrain := []string{"subject_id", "freq", "data_time", "series_tag"}
 	root := filepath.Join("..", "..", "..")
-	seedPaths := []string{filepath.Join(root, "examples", "setup", "default", "metadata.yaml")}
+	seedPaths := []string{filepath.Join(root, "config", "setup", "metadata.yaml")}
 
 	for _, seedPath := range seedPaths {
 		t.Run(filepath.Base(filepath.Dir(seedPath))+"/"+filepath.Base(seedPath), func(t *testing.T) {
@@ -57,7 +57,7 @@ func TestActiveMetadataSeedsUseCanonicalTimeSeriesViewGrain(t *testing.T) {
 }
 
 func TestDefaultSetupSeedDeclaresArchiveDevice(t *testing.T) {
-	path := filepath.Join("..", "..", "..", "examples", "setup", "default", "metadata.yaml")
+	path := filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml")
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
 	var seed metadataSeedGrainContract

@@ -51,7 +51,6 @@ func TestApplySchemaAddsTaskInstanceFunctionColumnBeforeIndexes(t *testing.T) {
 		c_dataset_id TEXT NOT NULL DEFAULT '',
 		c_subject_id TEXT NOT NULL DEFAULT '',
 		c_frequency TEXT NOT NULL DEFAULT '',
-		c_last_exec_node TEXT NOT NULL DEFAULT '',
 		c_last_exec_status INTEGER NOT NULL DEFAULT 1,
 		c_task_params TEXT NOT NULL DEFAULT '{}',
 		c_last_exec_time DATETIME,
@@ -71,6 +70,13 @@ func TestApplySchemaAddsTaskInstanceFunctionColumnBeforeIndexes(t *testing.T) {
 	}
 	if columnCount != 1 {
 		t.Fatalf("c_function_name count = %d, want 1", columnCount)
+	}
+	var removedColumnCount int64
+	if err := mgr.db.Raw("SELECT count(*) FROM pragma_table_info(?) WHERE name = ?", "t_collector_task_instances", "c_last_exec_node").Scan(&removedColumnCount).Error; err != nil {
+		t.Fatalf("query removed task instance column: %v", err)
+	}
+	if removedColumnCount != 0 {
+		t.Fatalf("c_last_exec_node count = %d, want 0", removedColumnCount)
 	}
 	// Keep the test tied to a real repository query so the dependent index is
 	// exercised rather than only checking PRAGMA metadata.
@@ -140,12 +146,12 @@ func TestApplySchemaAddsCoverageStartTimeWithoutLosingLegacyRules(t *testing.T) 
 	if err := mgr.db.Exec(`INSERT INTO t_collector_task_rules (
 		c_space_id, c_rule_id, c_data_type, c_provider, c_market_type, c_collect_params, c_enabled, c_creator, c_ctime, c_mtime
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"crypto_market",
+		"crypto",
 		"legacy-rule",
 		"kline",
 		"binance",
 		"spot",
-		`{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"binance_spot_symbols","target_dataset_id":"binance_spot_kline_1m","frequency":"1m"}`,
+		`{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"dataset_binance_spot_symbols","target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m"}`,
 		1,
 		"test",
 		"2026-08-01T12:34:00Z",

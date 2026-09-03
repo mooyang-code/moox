@@ -2,10 +2,10 @@
 
 ## 前置条件
 
-1. 从 `custom.toml.example` 创建根目录 `custom.toml`，文件由当前用户持有且权限为
+1. 从 `moox.toml.example` 创建根目录 `moox.toml`，文件由当前用户持有且权限为
    `0600`。
 2. 完成控制面部署和 `setup apply`。
-3. 使用 `setup deploy-storage` 把 Storage 部署到 `custom.toml` 中的一台主机。
+3. 使用 `setup deploy-storage` 把 Storage 部署到 `moox.toml` 中的一台主机。
 
 `setup deploy-control` 会一起安装受管 Caddy、选择公网 ACME 或 internal CA、验收
 HTTPS，并配置健康检查以维持 Caddy 运行和自动续期。公网 IP/DNS 不需要用户安装根
@@ -13,24 +13,26 @@ HTTPS，并配置健康检查以维持 Caddy 运行和自动续期。公网 IP/D
 
 ## 默认配置
 
-默认配置集中在 [`examples/setup/default/`](../examples/setup/default/)：
+默认配置集中在 [`config/setup/`](../config/setup/)：
 
 | 文件 | 读取方 | 用途 |
 | --- | --- | --- |
 | `metadata.yaml` | `moox-cli setup init` | Admin 业务空间和 Storage 元数据 |
 | `dataset-health-policy.yaml` | Monitor | 实时 Dataset 健康策略 |
 | `service-deployments.yaml` | Admin CLI | 默认服务部署清单 |
+| `collector-rules.yaml` | Collector CLI | 默认行情采集规则 |
 
-`setup init` 只读取固定文件名 `metadata.yaml`，不会扫描或合并目录中的其他 YAML。
-业务空间为 `stock_cn` 和 `crypto`；`attributes.scope=internal` 的 `moox_system`
+`setup init` 只读取固定文件名 `metadata.yaml`，不会扫描或合并目录中的其他 YAML；
+其他模块各自读取对应的职责专属文件。
+业务空间为 `stockcn` 和 `crypto`；`attributes.scope=internal` 的 `mooxsys`
 只进入 Storage。
 
 ## 初始化命令
 
 ```bash
 moox-cli setup init \
-  --file ./custom.toml \
-  --config-dir ./examples/setup/default \
+  --file ./moox.toml \
+  --config-dir ./config/setup \
   --storage-host control
 ```
 

@@ -4,7 +4,7 @@
 
 **Goal:** 在不引入 Prometheus Server、Alertmanager、HA 或复杂规则平台的前提下，建立一条统一、可验证的 MooX 监控链路，覆盖所有独立微服务和 SCF 存活、全部服务器资源、所有启用中的实时 TimeSeries Dataset + Frequency，以及 K 线采集、因子计算、资产余额和最小市场异常检测。
 
-**Architecture:** 所有长驻 tRPC 服务通过 `packages/report` 在 tRPC timer 中采集进程内 Prometheus Registry，并把有界快照发布到统一 `moox.observability.>` subject；HostAgent 和 Watchdog 使用同一公共上报包发布强类型观测事件。单实例 Monitor 使用一个 JetStream durable 消费整个 observability 前缀，保存最新事实、执行简单阈值与静默检测并通过 `packages/msgbox` 告警。Monitor 是主 Watchdog；一个经现网验证可由持续心跳保持常驻的 SCF 节点启动轻量 tRPC Server，并用 30 秒 timer handler 充当外部 Sentinel。二者非对称互补，不做互相选主或完整双活。
+**Architecture:** 所有长驻 tRPC 服务通过 `packages/report` 在 tRPC timer 中采集进程内 Prometheus Registry，并把有界快照发布到统一 `moox.event.observability.>` subject；HostAgent 和 Watchdog 使用同一公共上报包发布强类型观测事件。单实例 Monitor 使用一个 JetStream durable 消费整个 observability 前缀，保存最新事实、执行简单阈值与静默检测并通过 `packages/msgbox` 告警。Monitor 是主 Watchdog；一个经现网验证可由持续心跳保持常驻的 SCF 节点启动轻量 tRPC Server，并用 30 秒 timer handler 充当外部 Sentinel。二者非对称互补，不做互相选主或完整双活。
 
 **Tech Stack:** Go 1.25、tRPC-Go、Protocol Buffers、Prometheus client、NATS JetStream、SQLite/GORM、Vue 3、TypeScript、腾讯云 SCF、企业微信 Webhook、Shell。
 
@@ -32,7 +32,7 @@ flowchart LR
   H["HostAgent"] -->|"HostSnapshot"| R
   MWD["Monitor Watchdog"] -->|"health result + metrics"| R
   SCF["Resident SCF tRPC Timer Sentinel"] -->|"HealthCheckReport"| R
-  R -->|"moox.observability.>"| EB["EventBus / MOOX_OBSERVABILITY"]
+  R -->|"moox.event.observability.>"| EB["EventBus / MOOX_OBSERVABILITY"]
   EB -->|"one durable"| MON["Single Monitor"]
   MON --> DB["SQLite latest state + bounded history"]
   MON --> MSG["packages/msgbox -> WeCom"]
@@ -55,7 +55,7 @@ flowchart LR
 ```text
 stream: MOOX_OBSERVABILITY
 subjects:
-  moox.observability.>
+  moox.event.observability.>
 monitor durable:
   monitor_observability_ingest_v1
 ```
@@ -64,11 +64,11 @@ monitor durable:
 
 | Event | Payload | Owner | Subject family |
 | --- | --- | --- | --- |
-| `observability.metrics.snapshot.reported` v1 | `metricspb.MetricReport` | 各 tRPC 服务 | `moox.observability.metrics.snapshot.reported.v1.*.*` |
-| `observability.host.snapshot.reported` v1 | `hostmetricpb.HostMetric` | HostAgent | `moox.observability.host.snapshot.reported.v1.*.*` |
-| `observability.health.check.reported` v1 | `observabilitypb.HealthCheckReport` | Monitor/SCF Watchdog | `moox.observability.health.check.reported.v1.*.*` |
+| `event.observability.metrics.snapshot.reported` v1 | `metricspb.MetricReport` | 各 tRPC 服务 | `moox.event.observability.metrics.snapshot.reported.v1.*.*` |
+| `event.observability.host.snapshot.reported` v1 | `hostmetricpb.HostMetric` | HostAgent | `moox.event.observability.host.snapshot.reported.v1.*.*` |
+| `event.observability.health.check.reported` v1 | `observabilitypb.HealthCheckReport` | Monitor/SCF Watchdog | `moox.event.observability.health.check.reported.v1.*.*` |
 
-`packages/events.Registry` 仍是事件名、版本、payload、validator、stream 和 subject 的唯一声明处。Monitor 只绑定 `moox.observability.>`，解码后按 Registry 中的 Event 路由，不按字符串前缀手写反序列化。
+`packages/events.Registry` 仍是事件名、版本、payload、validator、stream 和 subject 的唯一声明处。Monitor 只绑定 `moox.event.observability.>`，解码后按 Registry 中的 Event 路由，不按字符串前缀手写反序列化。
 
 ### 1.4 指标命名契约
 
@@ -213,19 +213,19 @@ moox_<module>_dataset_rows_total{space_id,dataset_id,freq,result}
 | 资产余额 | Trade balance sync 连续 3 次失败或超过 15 分钟 | 下一次成功 |
 | 市场异常 | 1m/5m 绝对涨跌幅或成交量比超过配置阈值 | 下一窗口回到阈值内 |
 
-### 1.7 `custom.toml` 的监控注册边界
+### 1.7 `moox.toml` 的监控注册边界
 
-用户启用监控时，不在 `custom.toml` 再维护一份服务、检查项、subject 或 Dataset 清单。
+用户启用监控时，不在 `moox.toml` 再维护一份服务、检查项、subject 或 Dataset 清单。
 初始化文件只登记用户才能提供、且部署前必须知道的事实：
 
 | 信息 | 注册位置 | 用途 |
 | --- | --- | --- |
 | 控制节点 | `[control_host]` | 控制面、Monitor 的初始部署位置，也是主机清单的一部分 |
 | 其他业务服务器 | `[[other_hosts]]` | 可部署服务的物理主机清单；需要资源监控的机器后续逐台安装 HostAgent |
-| EventBus 公网 TLS 入口 | `[eventbus]` | HostAgent、远端服务和 SCF 上报 `moox.observability.>` |
+| EventBus 公网 TLS 入口 | `[eventbus]` | HostAgent、远端服务和 SCF 上报 `moox.event.observability.>` |
 | 企业微信机器人 webhook | `[monitoring]` | Monitor 告警和 SCF Sentinel 的站外失联告警 |
 
-注册示例以仓库根目录 `custom.toml.example` 为唯一模板，监控相关部分为：
+注册示例以仓库根目录 `moox.toml.example` 为唯一模板，监控相关部分为：
 
 ```toml
 [eventbus]
@@ -253,10 +253,10 @@ password = "<ssh-password>"
 
 `monitoring.wecom_webhook` 留空时，采集、查询、状态计算和 Monitor 内部告警状态仍正常，
 但不会发送站外通知。`setup deploy-control` 把该值写入 mode `0600` 的独立运行时环境
-文件，不复制 `custom.toml`。SCF Sentinel 发布时复用同一 webhook，只向显式启用
+文件，不复制 `moox.toml`。SCF Sentinel 发布时复用同一 webhook，只向显式启用
 `MOOX_SCF_WATCHDOG_ENABLED=true` 的唯一节点注入。
 
-以下内容不得让用户在 `custom.toml` 重复登记：
+以下内容不得让用户在 `moox.toml` 重复登记：
 
 - 标准微服务及健康 URL：由 SysDeploy 默认服务清单维护。
 - 所有启用中的实时 TimeSeries Dataset + Frequency：由 Collector 规则和 Factor
@@ -306,7 +306,7 @@ password = "<ssh-password>"
 
 - [ ] **Step 1: 先写失败的 Registry 和 validator 测试**
 
-测试必须断言三个事件都属于 `MOOX_OBSERVABILITY`，FamilyPattern 均位于 `moox.observability.>`，旧 `MetricsHostReported`、`MetricsSnapshotReported` 和 `MOOX_METRICS` 声明不存在。
+测试必须断言三个事件都属于 `MOOX_OBSERVABILITY`，FamilyPattern 均位于 `moox.event.observability.>`，旧 `MetricsHostReported`、`MetricsSnapshotReported` 和 `MOOX_METRICS` 声明不存在。
 
 ```go
 func TestObservabilityEventsShareOneStream(t *testing.T) {
@@ -316,7 +316,7 @@ func TestObservabilityEventsShareOneStream(t *testing.T) {
 		events.ObservabilityHealthCheckReported,
 	} {
 		require.Equal(t, "MOOX_OBSERVABILITY", event.Stream())
-		require.Contains(t, events.FamilyPattern(event), "moox.observability.")
+		require.Contains(t, events.FamilyPattern(event), "moox.event.observability.")
 	}
 }
 ```
@@ -363,7 +363,7 @@ Validator 固定限制：`observer_id/check_id/kind` 必填；`target <= 512`；
 ```yaml
 - name: MOOX_OBSERVABILITY
   subjects:
-    - moox.observability.>
+    - moox.event.observability.>
   retention: limits
   storage: file
   replicas: 1
@@ -531,7 +531,7 @@ func (r *EventReporter) ReportHealth(
 ) error
 ```
 
-`ReportHealth` 使用 `observability.health.check.reported`，`subject_id` 固定为 `observer_id + "/" + check_id`，调用 Registry Encode/Validate，错误中不得泄露 credential。
+`ReportHealth` 使用 `event.observability.health.check.reported`，`subject_id` 固定为 `observer_id + "/" + check_id`，调用 Registry Encode/Validate，错误中不得泄露 credential。
 
 - [ ] **Step 6: 保留两种合法运行方式**
 
@@ -571,7 +571,7 @@ git commit -m "refactor(report): enforce module metrics and dataset contracts"
 覆盖以下行为：
 
 1. durable 恰好为 `monitor_observability_ingest_v1`。
-2. filter 恰好为 `moox.observability.>`。
+2. filter 恰好为 `moox.event.observability.>`。
 3. Metrics、Host、Health 三种 payload 都能由同一消费循环路由。
 4. 已注册但 payload 不合法的事件执行 TERM。
 5. Storage 暂时失败执行 NAK。
@@ -620,7 +620,7 @@ observability:
   credential_file: ${MOOX_OBSERVABILITY_CREDENTIAL_FILE}
   stream: MOOX_OBSERVABILITY
   consumer: monitor_observability_ingest_v1
-  filter_subject: moox.observability.>
+  filter_subject: moox.event.observability.>
 ```
 
 - [ ] **Step 5: Test and commit**
@@ -761,7 +761,7 @@ git commit -m "refactor(alerting): share message transports"
 - Modify: `modules/monitor/internal/hostmetrics/alerts.go`
 - Modify: `modules/monitor/internal/hostmetrics/alerts_test.go`
 - Modify: `skills/moox/scripts/hostagent-release.sh`
-- Modify: `skills/moox/scripts/test-hostagent-release.sh`
+- Modify: `skills/moox/scripts/test/contract/test-hostagent-release.sh`
 
 - [ ] **Step 1: 用当前失败构建做回归测试**
 
@@ -808,7 +808,7 @@ Host 资源进入 firing 后必须复用 `MinimumReminderIntervalSeconds`：首�
 ```bash
 VERSION=review TARGET_GOARCH=amd64 bash skills/moox/scripts/hostagent-release.sh
 VERSION=review TARGET_GOARCH=arm64 bash skills/moox/scripts/hostagent-release.sh
-bash skills/moox/scripts/test-hostagent-release.sh
+bash skills/moox/scripts/test/contract/test-hostagent-release.sh
 ```
 
 Expected: 两个 tarball 都包含可执行 ELF、默认配置和 checksum；测试不尝试在 macOS 执行 Linux binary。
@@ -1019,8 +1019,8 @@ git commit -m "fix(cloudnode): expire stale scf heartbeats"
 - Modify: `modules/collector/configs/trpc_go.yaml`
 - Modify: `modules/cloudnode/internal/rpc/node.go`
 - Modify: `modules/cloudnode/internal/rpc/node_item_test.go`
-- Modify: `scripts/build-collector-scf-package.sh`
-- Modify: `scripts/build-collector-scf-package_test.sh`
+- Modify: `scripts/build/build-collector-scf-package.sh`
+- Modify: `scripts/build/build-collector-scf-package_test.sh`
 
 - [ ] **Step 1: Monitor 继续复用现有 check scheduler**
 
@@ -1119,7 +1119,7 @@ SCF 包必须包含 timer service 配置，以及 Watchdog 所需的 Gateway URL
 cd modules/monitor && go test -race ./internal/scheduler/... ./internal/watchdog/...
 cd modules/collector && go test -race ./internal/serverless/... ./internal/app/runtime/... ./cmd/scf/...
 cd modules/cloudnode && go test -race ./internal/rpc/...
-bash scripts/build-collector-scf-package_test.sh
+bash scripts/build/build-collector-scf-package_test.sh
 git add modules/monitor modules/collector modules/cloudnode scripts
 git commit -m "feat(watchdog): add monitor checks and external scf sentinel"
 ```
@@ -1143,7 +1143,7 @@ git commit -m "feat(watchdog): add monitor checks and external scf sentinel"
 - Modify: `modules/factor/internal/rpc/service.go`
 - Modify: `modules/factor/internal/rpc/service_test.go`
 - Modify: `examples/monitor-pipelines.yaml`
-- Modify: `scripts/test-monitor-coverage-contract.sh`
+- Modify: `scripts/test/contract/test-monitor-coverage-contract.sh`
 
 - [ ] **Step 1: 写 expected set 对账失败测试**
 
@@ -1231,15 +1231,15 @@ Dataset 较多时会把 module facts 挤出结果；也不能混入服务迁移�
 
 - [ ] **Step 7: 覆盖契约脚本**
 
-`scripts/test-monitor-coverage-contract.sh` 增加静态断言：Collector、Factor 都注册 `DatasetMetrics`；不存在 `crosses_storage_deferred`；默认 policy 字段完整。
+`scripts/test/contract/test-monitor-coverage-contract.sh` 增加静态断言：Collector、Factor 都注册 `DatasetMetrics`；不存在 `crosses_storage_deferred`；默认 policy 字段完整。
 
 - [ ] **Step 8: Test and commit**
 
 ```bash
 cd modules/collector && go test -race ./internal/observability/... ./internal/store/... ./internal/bootstrap/...
 cd modules/factor && go test -race ./internal/observability/... ./internal/bootstrap/...
-bash scripts/test-monitor-coverage-contract.sh
-git add modules/collector modules/factor examples/monitor-pipelines.yaml scripts/test-monitor-coverage-contract.sh
+bash scripts/test/contract/test-monitor-coverage-contract.sh
+git add modules/collector modules/factor examples/monitor-pipelines.yaml scripts/test/contract/test-monitor-coverage-contract.sh
 git commit -m "feat(observability): discover enabled realtime datasets"
 ```
 
@@ -1545,8 +1545,8 @@ git commit -m "feat(monitor): add observability overview"
 - Modify: `modules/hostagent/config/app.yaml`
 - Modify: `modules/hostagent/README.md`
 - Modify: `skills/moox/scripts/hostagent-deploy.sh`
-- Modify: `skills/moox/scripts/test-hostagent-deploy.sh`
-- Modify: `scripts/test-monitor-coverage-contract.sh`
+- Modify: `skills/moox/scripts/test/contract/test-hostagent-deploy.sh`
+- Modify: `scripts/test/contract/test-monitor-coverage-contract.sh`
 
 - [ ] **Step 1: 健康地址 env 真正生效**
 
@@ -1576,9 +1576,9 @@ fake `scp`/`ssh` 必须证明生成目录、配置、权限、systemd service �
 
 ```bash
 cd modules/hostagent && go test -race ./internal/config/...
-bash skills/moox/scripts/test-hostagent-deploy.sh
-bash scripts/test-monitor-coverage-contract.sh
-git add modules/hostagent skills/moox/scripts scripts/test-monitor-coverage-contract.sh
+bash skills/moox/scripts/test/contract/test-hostagent-deploy.sh
+bash scripts/test/contract/test-monitor-coverage-contract.sh
+git add modules/hostagent skills/moox/scripts scripts/test/contract/test-monitor-coverage-contract.sh
 git commit -m "fix(hostagent): align secure deployment contract"
 ```
 
@@ -1590,7 +1590,7 @@ git commit -m "fix(hostagent): align secure deployment contract"
 - Create: `modules/monitor/test/host_silence_restart_e2e_test.go`
 - Create: `modules/monitor/test/watchdog_e2e_test.go`
 - Create: `modules/collector/test/observability_pipeline_e2e_test.go`
-- Create: `scripts/test-observability-e2e.sh`
+- Create: `scripts/test/e2e/test-observability-e2e.sh`
 - Modify: `docs/架构总览.md`
 - Modify: `docs/监控配置.md`
 - Modify: `modules/monitor/README.md`
@@ -1647,9 +1647,9 @@ set -euo pipefail
 (cd modules/storage && go test -race ./...)
 (cd modules/factor && go test -race ./...)
 (cd modules/trade && go test -race ./...)
-bash skills/moox/scripts/test-hostagent-release.sh
-bash skills/moox/scripts/test-hostagent-deploy.sh
-bash scripts/test-monitor-coverage-contract.sh
+bash skills/moox/scripts/test/contract/test-hostagent-release.sh
+bash skills/moox/scripts/test/contract/test-hostagent-deploy.sh
+bash scripts/test/contract/test-monitor-coverage-contract.sh
 ```
 
 - [ ] **Step 6: 更新架构文档**
@@ -1665,7 +1665,7 @@ bash scripts/test-monitor-coverage-contract.sh
 - [ ] **Step 7: Commit**
 
 ```bash
-git add modules/monitor/test modules/collector/test scripts/test-observability-e2e.sh docs modules/monitor/README.md modules/hostagent/README.md modules/cloudnode/README.md
+git add modules/monitor/test modules/collector/test scripts/test/e2e/test-observability-e2e.sh docs modules/monitor/README.md modules/hostagent/README.md modules/cloudnode/README.md
 git commit -m "test(observability): prove monitoring failure paths"
 ```
 
@@ -1681,8 +1681,8 @@ git commit -m "test(observability): prove monitoring failure paths"
 ```bash
 make proto
 make verify-pr
-./scripts/test-go-workspace.sh
-bash scripts/test-observability-e2e.sh
+./scripts/test/contract/test-go-workspace.sh
+bash scripts/test/e2e/test-observability-e2e.sh
 git diff --check
 git status --short
 ```
@@ -1758,7 +1758,7 @@ Expected: worktree clean，`git rev-parse HEAD` 与 `git ls-remote` 的远端 SH
 
 只有以下条件全部满足，才能认为计划完成：
 
-- `moox.observability.>` 是唯一观测 subject 前缀，Monitor 只有一个对应 durable。
+- `moox.event.observability.>` 是唯一观测 subject 前缀，Monitor 只有一个对应 durable。
 - 所有长驻 tRPC 服务的指标都由 `packages/report` timer 上报。
 - 所有自定义指标满足 `moox_<module>_...` 命名和低基数规则。
 - Monitor readiness 能真实反映 EventBus durable 是否已绑定并工作。

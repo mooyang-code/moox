@@ -91,7 +91,7 @@ func TestKlineResamplePipelineE2E(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
-	rule := domain.TaskRule{SpaceID: "crypto_market", RuleID: "e2e-resample-5m", DataType: "kline_resample", Provider: "binance", MarketType: "spot", PrepareState: domain.PrepareStateReady, Enabled: true, CollectParams: `{"provider":"binance","market_type":"spot","source_dataset_id":"binance_spot_kline_1m","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"spot_kline_resample_5m","target_frequency":"5m","alignment":"epoch_utc"}`}
+	rule := domain.TaskRule{SpaceID: "crypto", RuleID: "e2e-resample-5m", DataType: "kline_resample", Provider: "binance", MarketType: "spot", PrepareState: domain.PrepareStateReady, Enabled: true, CollectParams: `{"provider":"binance","market_type":"spot","source_dataset_id":"dataset_binance_spot_kline_1m","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_resample_5m","target_frequency":"5m","alignment":"epoch_utc"}`}
 	require.NoError(t, db.TaskRules().Create(ctx, rule))
 	require.NoError(t, resample.PlanRule(ctx, resampleE2ESource{}, db.TaskInstances(), rule, time.Date(2026, 8, 29, 9, 10, 0, 0, time.UTC)))
 	instances, _, err := db.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: rule.SpaceID, RuleID: rule.RuleID, Page: 1, PageSize: 10})
@@ -102,13 +102,13 @@ func TestKlineResamplePipelineE2E(t *testing.T) {
 	start := time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC)
 	for _, subject := range []string{"BTC", "ETH"} {
 		for i := 0; i < 5; i++ {
-			row := e2eSourceRow(rule.SpaceID, "binance_spot_kline_1m", subject, start.Add(time.Duration(i)*time.Minute), float64(i+10))
+			row := e2eSourceRow(rule.SpaceID, "dataset_binance_spot_kline_1m", subject, start.Add(time.Duration(i)*time.Minute), float64(i+10))
 			primary.rows[rowKeyText(row.Key)] = row
 		}
 	}
 	sourceFreq, _ := resample.ParseFixedFrequency("1m")
 	targetFreq, _ := resample.ParseFixedFrequency("5m")
-	spec := resample.RuleSpec{RuleID: rule.RuleID, SpaceID: rule.SpaceID, SourceDatasetID: "binance_spot_kline_1m", SourceFrequency: sourceFreq, SourceSeriesTag: "venue:binance", TargetDatasetID: "spot_kline_resample_5m", TargetFrequency: targetFreq, Alignment: resample.AlignmentEpochUTC}
+	spec := resample.RuleSpec{RuleID: rule.RuleID, SpaceID: rule.SpaceID, SourceDatasetID: "dataset_binance_spot_kline_1m", SourceFrequency: sourceFreq, SourceSeriesTag: "venue:binance", TargetDatasetID: "dataset_spot_kline_resample_5m", TargetFrequency: targetFreq, Alignment: resample.AlignmentEpochUTC}
 	result, wrote, err := (&resample.BucketStorage{Primary: primary}).ProcessBucket(ctx, spec, "BTC", start, start.Add(5*time.Minute))
 	require.NoError(t, err)
 	require.True(t, wrote)
@@ -118,13 +118,13 @@ func TestKlineResamplePipelineE2E(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, wrote)
 
-	corrected := e2eSourceRow(rule.SpaceID, "binance_spot_kline_1m", "BTC", start.Add(4*time.Minute), 99)
+	corrected := e2eSourceRow(rule.SpaceID, "dataset_binance_spot_kline_1m", "BTC", start.Add(4*time.Minute), 99)
 	primary.rows[rowKeyText(corrected.Key)] = corrected
 	_, wrote, err = (&resample.BucketStorage{Primary: primary}).ProcessBucket(ctx, spec, "BTC", start, start.Add(5*time.Minute))
 	require.NoError(t, err)
 	require.True(t, wrote)
 	require.Equal(t, 2, primary.writes)
-	delete(primary.rows, rowKeyText(e2eSourceRow(rule.SpaceID, "binance_spot_kline_1m", "ETH", start.Add(3*time.Minute), 13).Key))
+	delete(primary.rows, rowKeyText(e2eSourceRow(rule.SpaceID, "dataset_binance_spot_kline_1m", "ETH", start.Add(3*time.Minute), 13).Key))
 	_, _, err = (&resample.BucketStorage{Primary: primary}).ProcessBucket(ctx, spec, "ETH", start, start.Add(5*time.Minute))
 	require.ErrorIs(t, err, resample.ErrResampleSourceIncomplete)
 }

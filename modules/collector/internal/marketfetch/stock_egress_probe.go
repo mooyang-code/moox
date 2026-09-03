@@ -58,8 +58,8 @@ func stockEgressIdentityProbeWithClient(ctx context.Context, client *http.Client
 			failures = append(failures, fmt.Sprintf("%s: %v", endpoint, err))
 			continue
 		}
-		return &model.Response{Success: true, Message: "stock_cn egress identity probe ok", Data: map[string]interface{}{
-			"provider": "multi", "market": "stock_cn", "details": map[string]string{"public_ip": strings.TrimSpace(string(body))},
+		return &model.Response{Success: true, Message: "stockcn egress identity probe ok", Data: map[string]interface{}{
+			"provider": "multi", "market": "stockcn", "details": map[string]string{"public_ip": strings.TrimSpace(string(body))},
 		}, Timestamp: time.Now().UTC()}, nil
 	}
 	return nil, fmt.Errorf("public_ip reflectors unavailable: %s", strings.Join(failures, "; "))
@@ -122,7 +122,7 @@ func runStockEgressChecks(ctx context.Context, client *http.Client, checks []sto
 			details[check.name] = "ok"
 		}
 	}
-	return &model.Response{Success: true, Message: "stock_cn egress probe ok", Data: map[string]interface{}{"provider": "multi", "market": "stock_cn", "details": details}, Timestamp: time.Now().UTC()}, nil
+	return &model.Response{Success: true, Message: "stockcn egress probe ok", Data: map[string]interface{}{"provider": "multi", "market": "stockcn", "details": details}, Timestamp: time.Now().UTC()}, nil
 }
 
 var nonPublicPrefixes = []netip.Prefix{

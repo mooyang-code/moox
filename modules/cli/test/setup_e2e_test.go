@@ -28,7 +28,7 @@ import (
 
 func TestSetupWorkflowLeavesManifestAndArtifactsSecretFree(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "custom.toml")
+	path := filepath.Join(root, "moox.toml")
 	secrets := []string{"admin-e2e-password", "control-e2e-password", "compute-e2e-password", "AKID-e2e", "cloud-e2e-secret"}
 	raw := []byte(`[admin]
 username = "admin"

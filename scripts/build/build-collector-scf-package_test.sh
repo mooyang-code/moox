@@ -26,18 +26,18 @@ package_path="${TMP_ROOT}/collector-scf.zip"
 (
   cd "${TMP_ROOT}"
   PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="market_data" SCF_ENTRYPOINT="market_data" VERSION="contract-test" OUT_PATH="collector-scf.zip" \
-    bash "${ROOT}/scripts/build-collector-scf-package.sh"
+    bash "${ROOT}/scripts/build/build-collector-scf-package.sh"
 )
 listing_path="${TMP_ROOT}/listing.txt"
 unzip -l "${package_path}" >"${listing_path}"
 grep -q ' main$' "${listing_path}"
 ! grep -q 'trpc_go.yaml' "${listing_path}"
 
-stock_package_path="${TMP_ROOT}/collector-stock-cn-scf.zip"
+stock_package_path="${TMP_ROOT}/collector-stockcn-scf.zip"
 (
   cd "${TMP_ROOT}"
-  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="stock_cn" SCF_ENTRYPOINT="market_data" MOOX_STORAGE_PRIMARY_AUTH_SECRET="test-storage-secret" VERSION="contract-test" OUT_PATH="collector-stock-cn-scf.zip" \
-    bash "${ROOT}/scripts/build-collector-scf-package.sh"
+  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="stockcn" SCF_ENTRYPOINT="market_data" MOOX_STORAGE_PRIMARY_AUTH_SECRET="test-storage-secret" VERSION="contract-test" OUT_PATH="collector-stockcn-scf.zip" \
+    bash "${ROOT}/scripts/build/build-collector-scf-package.sh"
 )
 stock_listing_path="${TMP_ROOT}/stock-listing.txt"
 unzip -l "${stock_package_path}" >"${stock_listing_path}"
@@ -47,6 +47,6 @@ grep -q ' sources/market/sina.yaml$' "${stock_listing_path}"
 grep -q ' sources/market/tencent.yaml$' "${stock_listing_path}"
 grep -q ' sources/market/eastmoney.yaml$' "${stock_listing_path}"
 grep -q ' sources/market/baidu.yaml$' "${stock_listing_path}"
-grep -q ' markets/stock_cn/calendar.yaml$' "${stock_listing_path}"
-grep -q ' markets/stock_cn/route.yaml$' "${stock_listing_path}"
+grep -q ' markets/stockcn/calendar.yaml$' "${stock_listing_path}"
+grep -q ' markets/stockcn/route.yaml$' "${stock_listing_path}"
 ! grep -q 'trpc_go.yaml' "${stock_listing_path}"

@@ -4,11 +4,11 @@
 
 > **执行状态（2026-08-17）：** Task 1-7 已完成并通过本地单测/合同测试；真实部署/线上验收仍待执行。后续复核补充了 Primary 历史索引、游标分页、coverage repair、reset readiness 鉴权、拓扑前置校验和失败留停策略。项目明确不做旧数据兼容；旧 DataNode layout 需要 reset-all。Task 8 仅保留为正式环境操作手册，未在本次本地变更中执行。
 
-**目标：** 将 K 线 View 与系统指标及其他 Dataset 的 Storage View 消费队列彻底隔离，避免某一类 Dataset 的积压、坏消息、慢查询或重建争用占满同一个 JetStream durable 的 ACK/Fetch 配额，导致 `binance_spot_kline_1m` 停滞。
+**目标：** 将 K 线 View 与系统指标及其他 Dataset 的 Storage View 消费队列彻底隔离，避免某一类 Dataset 的积压、坏消息、慢查询或重建争用占满同一个 JetStream durable 的 ACK/Fetch 配额，导致 `dataset_binance_spot_kline_1m` 停滞。
 
 **约束：** 项目尚未上线，可以删除现有 View 数据、EventBus 历史消息和旧 durable consumer；不做旧 durable、旧配置或旧磁盘索引的兼容迁移。Primary 事实数据默认保留，以便新 View 按 `rebuild_lookback_periods` 回溯构建；若执行全量初始化，可显式一并清空 Primary。
 
-**架构：** 保留一个 `MOOX_STORAGE` Stream，但将 Storage View 从单一 `storage_view_period_v1` 改为显式的消费分区。每个分区拥有独立 durable、Fetch/ACK/worker 限额和状态；分区只接收其配置 Dataset 的四类 View 事件（rows、period、factor-period、sync-point）的精确 subject。K 线分区只包含 `crypto_market/binance_spot_kline_1m`，Factor 分区只包含 `crypto_market/binance_spot_kline_1m_factor`，系统指标分区只包含 `moox_system/moox_service_metrics`，其余当前 View 的 source Dataset 进入显式 `misc` 分区。任何 Dataset 必须且只能出现在一个分区；misc 的 wildcard 只能补齐未被显式路由的 Dataset。
+**架构：** 保留一个 `MOOX_STORAGE` Stream，但将 Storage View 从单一 `storage_view_period_v1` 改为显式的消费分区。每个分区拥有独立 durable、Fetch/ACK/worker 限额和状态；分区只接收其配置 Dataset 的四类 View 事件（rows、period、factor-period、sync-point）的精确 subject。K 线分区只包含 `crypto/dataset_binance_spot_kline_1m`，Factor 分区只包含 `crypto/binance_spot_kline_1m_factor`，系统指标分区只包含 `mooxsys/dataset_mooxsys_service_metrics`，其余当前 View 的 source Dataset 进入显式 `misc` 分区。任何 Dataset 必须且只能出现在一个分区；misc 的 wildcard 只能补齐未被显式路由的 Dataset。
 
 **关键不变量：**
 
@@ -16,7 +16,7 @@
 2. K 线分区的 pending/ack-pending、worker、重试和慢处理不能消耗系统指标或其他分区的配额；反向同理。
 3. View 重建门禁只读取该 View 所依赖分区的 backlog，不再用全局 `storage_view_period_v1` 状态阻塞无关 View。
 4. 分区启动、重连、停止、readyz、指标和审计日志都必须按 partition_id 可观察。
-5. 新建或重建时序 View 必须按 `rebuild_lookback_periods` 覆盖每个 subject/frequency 配置的最少已完成根数，未达到回溯水位不得激活；默认所有频率统一为 `1000` 根，可由根目录 `custom.toml` 的 `[storage_view] rebuild_lookback_periods` 覆盖。无 frequency 的旧 View 才使用 `rebuild_lookback` 兜底。
+5. 新建或重建时序 View 必须按 `rebuild_lookback_periods` 覆盖每个 subject/frequency 配置的最少已完成根数，未达到回溯水位不得激活；默认所有频率统一为 `1000` 根，可由根目录 `moox.toml` 的 `[storage_view] rebuild_lookback_periods` 覆盖。无 frequency 的旧 View 才使用 `rebuild_lookback` 兜底。
 
 **当前根因证据：** `modules/storage/internal/service/view/consume.go` 只启动一个 `storage_view_period_v1`；`eventconsumer/consumer.go` 使用 Dataset 全局事件族过滤，`MaxAckPending/FetchBatch` 属于同一个 durable；`subject_dispatcher.go` 的 Dataset lane 只能约束已拉取的消息，不能阻止 JetStream 全局 pending/Fetch 配额被其他 Dataset 占满。因此仅增加 worker 或 lane 数不能消除队头阻塞。
 
@@ -29,13 +29,13 @@
 - Modify: `modules/storage/internal/config/loader_test.go`
 - Modify: `modules/storage/config/storage.yaml`
 - Modify: `modules/storage/config/storage_view/trpc_go.yaml`
-- Modify: `examples/setup/default/metadata.yaml`（仅用于核对当前 source Dataset 清单，不改变业务定义）
+- Modify: `config/setup/metadata.yaml`（仅用于核对当前 source Dataset 清单，不改变业务定义）
 - Create/Modify: `packages/events/storage_consumers.go`（只放稳定 durable 名称和 topology 常量）
 
 - [x] 在 `StorageView` 下新增 `consumer_partitions` 配置。每项至少包含：`id`、`durable`、`space_id`、`dataset_ids`、`fetch_batch`、`max_workers`、`max_ack_pending`、`ack_wait_ms`、`deliver_policy`、`max_retry_attempts`。
 - [x] 为当前环境建立三类分区：
-  - `kline`：`crypto_market/binance_spot_kline_1m`，durable 使用 `storage_view_kline`。
-  - `system_metrics`：`moox_system/moox_service_metrics`，durable 使用 `storage_view_metrics`。
+  - `kline`：`crypto/dataset_binance_spot_kline_1m`，durable 使用 `storage_view_kline`。
+  - `system_metrics`：`mooxsys/dataset_mooxsys_service_metrics`，durable 使用 `storage_view_metrics`。
   - `misc`：其余 source Dataset，使用 `storage_view_misc`；可使用按 space 限定的 wildcard，
     但显式 Kline/Factor 路由优先，不能重复消费这两个 Dataset。
 - [x] 为 K 线和 Factor 设置保守的独立资源上限（初始建议 `max_ack_pending=16`、`fetch_batch=4`、`max_workers=2`）；系统指标和 misc 使用更小或独立可调的默认值，禁止再依赖单个全局 `eventbus.max_ack_pending`。
@@ -100,11 +100,11 @@
 - Modify: `modules/admin/cmd/cli/eventbus_credentials.go`
 - Modify: `modules/eventbus/config/app.yaml`
 - Modify: `modules/eventbus/internal/config/*`（如 topology 校验需要）
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/moox-storage-view-watchdog.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/runtime/moox-storage-view-watchdog.sh`
 - Modify: `deploy/systemd/system/moox-storage-view-watchdog.service`
-- Modify: `scripts/tests/contract/test-storage-consistency-contract.sh`
-- Modify: `scripts/tests/contract/test-deploy-moox-storage-view.sh`
+- Modify: `scripts/test/contract/test-storage-consistency-contract.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-storage-view.sh`
 - Modify: `modules/eventbus/test/storage_consumers_e2e_test.go`
 
 - [x] 用共享 topology 常量替换 `storage_view_period_v1` 的 ACL 字符串，storage-eventbus 只允许创建/绑定新的 partition durables及其精确 subject；删除旧 durable 的运行时权限和部署引用。
@@ -143,8 +143,8 @@
 **Files:**
 - Modify/Create: `modules/storage/internal/service/e2e/view_consumer_partition_e2e_test.go`
 - Modify: `modules/eventbus/test/storage_consumers_e2e_test.go`
-- Create: `scripts/tests/e2e/test-storage-view-consumer-partitions.sh`
-- Modify: `Makefile` / `scripts/test-go-workspace.sh`（按现有入口接入）
+- Create: `scripts/test/e2e/test-storage-view-consumer-partitions.sh`
+- Modify: `Makefile` / `scripts/test/contract/test-go-workspace.sh`（按现有入口接入）
 
 - [x] 使用嵌入 NATS JetStream 验证三个 durable 的 filter、pending 和 ACK 独立性。
 - [x] 注入一个永远失败或延迟很长的 metrics delivery，再发布 Kline rows + period marker + sync point；Kline View 必须继续推进、ACK 和查询到最新数据，metrics 只能在自己的 durable 中积压。

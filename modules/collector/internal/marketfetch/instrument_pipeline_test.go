@@ -73,7 +73,7 @@ func (p *instrumentProviderStub) callCount() int {
 }
 
 func TestInstrumentPipelineSkipsCatalogOnlyProvider(t *testing.T) {
-	provider := &instrumentProviderStub{id: "sina", sourceID: "stock_cn_minute_http", status: marketdata.SourceCatalogOnly}
+	provider := &instrumentProviderStub{id: "sina", sourceID: "stockcn_minute_http", status: marketdata.SourceCatalogOnly}
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(provider))
 	pipeline := &InstrumentPipeline{
@@ -542,7 +542,7 @@ func TestInstrumentPipelineUsesMarketMetadataAndCanPublishOnlyInstrumentSet(t *t
 	storage := &instrumentStorageStub{}
 	pipeline := &InstrumentPipeline{
 		Registry: registry, Storage: storage, CandidateChain: []string{"binance"},
-		SpaceID: "crypto_market", MarketID: "crypto", DatasetID: "binance_spot_symbols", DataSourceID: "binance",
+		SpaceID: "crypto", MarketID: "crypto", DatasetID: "dataset_binance_spot_symbols", DataSourceID: "binance",
 		SubjectType: "crypto_pair", SubjectMarket: "CRYPTO", Currency: "USDT", Timezone: "UTC",
 		RequiredExchanges: []string{"binance"}, MinimumCount: 1,
 	}
@@ -552,7 +552,7 @@ func TestInstrumentPipelineUsesMarketMetadataAndCanPublishOnlyInstrumentSet(t *t
 	require.Len(t, storage.stagedBindings, 1, "an empty target dataset must not create a second binding set")
 	require.Len(t, storage.registrations, 1)
 	registration := storage.registrations[0]
-	require.Equal(t, "crypto_market", registration.GetSpaceId())
+	require.Equal(t, "crypto", registration.GetSpaceId())
 	require.Equal(t, "crypto_pair", registration.GetSubject().GetSubjectType())
 	require.Equal(t, "CRYPTO", registration.GetSubject().GetMarket())
 	require.Equal(t, "USDT", registration.GetSubject().GetCurrency())
@@ -616,9 +616,9 @@ func TestStagedInstrumentBindingsDisablesExistingTargetAfterRepeatedMissingSnaps
 
 func TestInstrumentSnapshotGenerationIDSeparatesDatasetAndContent(t *testing.T) {
 	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
-	spot := instrumentSnapshotGenerationID("crypto", []string{"binance"}, now, "binance_spot_symbols", "", "spot")
-	swap := instrumentSnapshotGenerationID("crypto", []string{"binance"}, now, "binance_swap_symbols", "", "swap")
-	changed := instrumentSnapshotGenerationID("crypto", []string{"binance"}, now, "binance_spot_symbols", "", "spot")
+	spot := instrumentSnapshotGenerationID("crypto", []string{"binance"}, now, "dataset_binance_spot_symbols", "", "spot")
+	swap := instrumentSnapshotGenerationID("crypto", []string{"binance"}, now, "dataset_binance_swap_symbols", "", "swap")
+	changed := instrumentSnapshotGenerationID("crypto", []string{"binance"}, now, "dataset_binance_spot_symbols", "", "spot")
 
 	assert.NotEqual(t, spot, swap)
 	assert.Equal(t, spot, changed, "content differences must be fenced by Storage, not split the shard generation")

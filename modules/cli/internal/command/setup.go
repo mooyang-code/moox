@@ -22,7 +22,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const defaultSetupFile = "./custom.toml"
+const defaultSetupFile = "./moox.toml"
 
 type setupDeps struct {
 	load                   func(string) (*setupconfig.Snapshot, error)
@@ -88,7 +88,7 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 	var file, tradeOutput, collectorOutput, nodeID string
 	cmd := &cobra.Command{
 		Use:   "render-runtime-config",
-		Short: "从 custom.toml 渲染 Trade/Collector 运行配置",
+		Short: "从 moox.toml 渲染 Trade/Collector 运行配置",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			tradeOutput = strings.TrimSpace(tradeOutput)
 			collectorOutput = strings.TrimSpace(collectorOutput)
@@ -115,7 +115,7 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 			defer clearSetupSecrets(snapshot)
 
 			// Render both files before mutating either one. The deployment script
-			// can therefore fail before a service restart if custom.toml or YAML
+			// can therefore fail before a service restart if moox.toml or YAML
 			// validation is invalid.
 			var tradeRaw, collectorRaw []byte
 			if tradeOutput != "" {
@@ -555,7 +555,7 @@ func newSetupMetadataImportCommand(deps setupDeps) *cobra.Command {
 		return writeSetupJSON(cmd, result)
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&seed, "seed", "examples/setup/default/metadata.yaml", "metadata seed YAML")
+	cmd.Flags().StringVar(&seed, "seed", "config/setup/metadata.yaml", "metadata seed YAML")
 	cmd.Flags().StringVar(&storageHost, "storage-host", "", "已部署 Storage 的主机名称")
 	cmd.Flags().StringSliceVar(&spaces, "spaces", nil, "要导入的 Space ID 或中文名")
 	_ = cmd.MarkFlagRequired("storage-host")
@@ -707,7 +707,7 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return err
 	}
-	var storageEventBusCredential, storageEventBusCA []byte
+	var storageEventBusCredential, storageEventBusCA, storageMetricsEventBusCredential []byte
 	if !useControlGateway {
 		storageEventBusCredential, err = readRemoteControlFile(ctx, control, ".config/moox/eventbus/storage-eventbus.yaml")
 		if err != nil {
@@ -716,6 +716,10 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		storageEventBusCA, err = readRemoteControlFile(ctx, control, ".config/moox/eventbus/ca.pem")
 		if err != nil {
 			return fmt.Errorf("read control EventBus CA for Storage: %w", err)
+		}
+		storageMetricsEventBusCredential, err = readRemoteControlFile(ctx, control, ".config/moox/eventbus/metrics-publisher.yaml")
+		if err != nil {
+			return fmt.Errorf("read control metrics EventBus credential for Storage: %w", err)
 		}
 	}
 	if !useControlGateway {
@@ -736,28 +740,29 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
 		RepositoryRoot: root, PublicHost: host.Address, NodeID: host.Name, ResetStorageData: resetStorageData, ResetViewData: resetViewData,
 		DeployRoot: paths.DeployRoot, ControlRoot: paths.ControlRoot, StorageRoot: paths.StorageRoot,
-		UseControlGateway:         useControlGateway,
-		EventBusPublicAddress:     snapshot.Manifest.EventBus.PublicAddress,
-		EventBusPort:              snapshot.Manifest.EventBus.Port,
-		EventBusTLSEnabled:        snapshot.Manifest.EventBus.TLSEnabled,
-		StoragePrimarySecret:      primarySecret,
-		StorageViewSecret:         viewSecret,
-		StorageEventBusCredential: storageEventBusCredential,
-		StorageEventBusCA:         storageEventBusCA,
-		StorageBuildPassword:      buildHost.Password,
-		StorageBuildHost:          buildHost.Name,
-		StorageBuildHostRole:      buildHostRole,
-		StorageViewPolicy:         snapshot.Manifest.StorageView,
-		LocalLogs:                 snapshot.Manifest.LocalLogs,
-		InstallStorageWatchdog:    true,
-		HealthAuthVersion:         healthVersion,
-		HealthAuthAccessKey:       healthAccessKey,
-		HealthAuthSecretKey:       healthSecret,
-		GatewayControlURL:         controlURL,
-		GatewayControlKey:         controlKey,
-		GatewayServiceKey:         serviceKey,
-		GatewayCABundle:           gatewayCA,
-		TLSMode:                   controlTLSMode,
+		UseControlGateway:                useControlGateway,
+		EventBusPublicAddress:            snapshot.Manifest.EventBus.PublicAddress,
+		EventBusPort:                     snapshot.Manifest.EventBus.Port,
+		EventBusTLSEnabled:               snapshot.Manifest.EventBus.TLSEnabled,
+		StoragePrimarySecret:             primarySecret,
+		StorageViewSecret:                viewSecret,
+		StorageEventBusCredential:        storageEventBusCredential,
+		StorageEventBusCA:                storageEventBusCA,
+		StorageMetricsEventBusCredential: storageMetricsEventBusCredential,
+		StorageBuildPassword:             buildHost.Password,
+		StorageBuildHost:                 buildHost.Name,
+		StorageBuildHostRole:             buildHostRole,
+		StorageViewPolicy:                snapshot.Manifest.StorageView,
+		LocalLogs:                        snapshot.Manifest.LocalLogs,
+		InstallStorageWatchdog:           true,
+		HealthAuthVersion:                healthVersion,
+		HealthAuthAccessKey:              healthAccessKey,
+		HealthAuthSecretKey:              healthSecret,
+		GatewayControlURL:                controlURL,
+		GatewayControlKey:                controlKey,
+		GatewayServiceKey:                serviceKey,
+		GatewayCABundle:                  gatewayCA,
+		TLSMode:                          controlTLSMode,
 	}, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
@@ -1162,7 +1167,7 @@ func deploySetupControl(ctx context.Context, snapshot *setupconfig.Snapshot, res
 		return err
 	}
 	// The control profile deliberately does not run Trade. When Trade is
-	// placed on the dedicated node selected by custom.toml, update the
+	// placed on the dedicated node selected by moox.toml, update the
 	// browser-facing control route after Admin has seeded its defaults; doing
 	// this here makes a reset/redeploy deterministic instead of restoring the
 	// unusable loopback 127.0.0.1:11200 endpoint.

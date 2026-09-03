@@ -82,7 +82,7 @@ func TestAssignProviderChainsBalancesPrimariesAndSpreadsBackups(t *testing.T) {
 }
 
 func TestAssignProviderChainsUsesExactEqualWeightDistribution(t *testing.T) {
-	three, err := AssignProviderChains(200, map[string]int{"eastmoney": 1, "sina": 1, "tencent": 1}, "stock_cn_kline_1m_v1", "2026-08-29")
+	three, err := AssignProviderChains(200, map[string]int{"eastmoney": 1, "sina": 1, "tencent": 1}, "stockcn_equity_kline_1m_v4", "2026-08-29")
 	require.NoError(t, err)
 	threeCounts := map[string]int{}
 	for _, chain := range three {
@@ -90,7 +90,7 @@ func TestAssignProviderChainsUsesExactEqualWeightDistribution(t *testing.T) {
 	}
 	assert.Equal(t, []int{66, 67, 67}, sortedCounts(threeCounts))
 
-	four, err := AssignProviderChains(200, map[string]int{"baidu": 1, "eastmoney": 1, "sina": 1, "tencent": 1}, "stock_cn_kline_1m_v1", "2026-08-29")
+	four, err := AssignProviderChains(200, map[string]int{"baidu": 1, "eastmoney": 1, "sina": 1, "tencent": 1}, "stockcn_equity_kline_1m_v4", "2026-08-29")
 	require.NoError(t, err)
 	fourCounts := map[string]int{}
 	for _, chain := range four {

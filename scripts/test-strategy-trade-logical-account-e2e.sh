@@ -1,1 +1,0 @@
-tests/e2e/test-strategy-trade-logical-account-e2e.sh

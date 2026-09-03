@@ -133,7 +133,7 @@ func (c *Calendar) ValidateHorizon(now time.Time, minDays int) error {
 		localDate := now.In(c.location).Format("2006-01-02")
 		coverageEnd := c.end.Format("2006-01-02")
 		if shouldLogHorizonWarning(coverageEnd, localDate) {
-			log.Warnf("stock_cn calendar horizon warning: %v", err)
+			log.Warnf("stockcn calendar horizon warning: %v", err)
 		}
 		return nil
 	}

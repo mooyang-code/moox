@@ -639,7 +639,7 @@ Expected: 全部 PASS。已在本地执行 View、DuckDB、配置、SQLite metad
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 make test-script-contracts
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-go-workspace.sh
 ```
 
 当前 `make test-script-contracts` 已通过部署、Storage、Gateway、Factor、DNS 等
@@ -654,7 +654,7 @@ deprecated protocol declarations and markers are forbidden
 ```
 
 这不是本次 Storage View A/B 改动引入的失败，未在本计划中删除 Factor 兼容字段。
-`./scripts/test-go-workspace.sh` 已完整通过，包含所有模块的 go test/go vet；该命令
+`./scripts/test/contract/test-go-workspace.sh` 已完整通过，包含所有模块的 go test/go vet；该命令
 与工作区合同总入口是两个独立门禁，不能用 workspace 通过替代 greenfield 合同通过。
 
 本轮再次运行合同时，Storage/Linux、部署合同及前置模块均通过；执行到 Archive
@@ -662,7 +662,7 @@ deprecated protocol declarations and markers are forbidden
 偶发超过 400ms 门槛而失败。该测试单独 `-count=5` 通过，故未将这次环境抖动归因于
 Storage View A/B 改动；合同总命令仍不能标记为全绿。
 
-最新一次 `./scripts/test-go-workspace.sh` 已完整通过，包含 Storage、Factor、Gateway、
+最新一次 `./scripts/test/contract/test-go-workspace.sh` 已完整通过，包含 Storage、Factor、Gateway、
 Trade、Collector 及所有 packages 的 go test/go vet；工作区合同总入口仍保留上述
 既有 baseline/时间敏感失败记录。
 
@@ -693,7 +693,7 @@ view:
 本次正式环境发布前已记录以下基线：
 
 - Primary 最新 `data_time`。
-- `binance_spot_kline_1m` Active View 最新 `data_time`。
+- `dataset_binance_spot_kline_1m` Active View 最新 `data_time`。
 - `binance_spot_kline_1m_factor` 最新 `data_time`。
 - active/next index ID、build state、DuckDB 文件大小。
 - JetStream pending/ack-pending。
@@ -719,7 +719,7 @@ Storage Primary）。本轮最终发布 SHA-256 为
 `5ae0c7e7bdd738fee977fb8716b4a5adee2748a737cef129800e50c37d0adda3`，进程 PID
 `3471798`，`healthcheck.sh storage-view` 返回 `running ... ready`。发布前已对
 `storage_metadata.db` 做带时间戳备份并修复一次历史 desired/active revision 不一致。
-线上 `binance_spot_kline_1m_view` 当前 Metadata 为 active/desired revision `9/9`、
+线上 `view_crypto_spot_kline_1m` 当前 Metadata 为 active/desired revision `9/9`、
 active slot `B`，且该 View 当前没有未完成 `t_view_index_builds` 记录；发布后
 tRPC/HTTP 服务均监听成功，健康脚本通过。当前远端仍需
 继续核对采集器、Primary watermark 与 View 的逐分钟进度；不能只用进程 ready

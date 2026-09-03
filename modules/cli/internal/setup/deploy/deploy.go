@@ -35,29 +35,30 @@ type Options struct {
 	// DeployRoot is the control deployment root. StorageRoot may be on a
 	// different mount because setup can deploy Storage to a separate host.
 	// Empty values resolve to the canonical /data/moox layout.
-	DeployRoot                   string
-	ControlRoot                  string
-	StorageRoot                  string
-	PublicHost                   string
-	NodeID                       string
-	BrowserPort                  int
-	TargetGOOS                   string
-	TargetGOARCH                 string
-	ResetControlData             bool
-	ResetStorageData             bool
-	ResetViewData                bool
-	UseControlGateway            bool
-	EventBusPublicAddress        string
-	EventBusPort                 int
-	EventBusTLSEnabled           bool
-	LocalStorageRPCGatewayTarget string
-	LocalStorageGatewayNodeID    string
-	NotificationChannelType      string
-	NotificationWebhookURL       string
-	StoragePrimarySecret         string
-	StorageViewSecret            string
-	StorageEventBusCredential    []byte
-	StorageEventBusCA            []byte
+	DeployRoot                       string
+	ControlRoot                      string
+	StorageRoot                      string
+	PublicHost                       string
+	NodeID                           string
+	BrowserPort                      int
+	TargetGOOS                       string
+	TargetGOARCH                     string
+	ResetControlData                 bool
+	ResetStorageData                 bool
+	ResetViewData                    bool
+	UseControlGateway                bool
+	EventBusPublicAddress            string
+	EventBusPort                     int
+	EventBusTLSEnabled               bool
+	LocalStorageRPCGatewayTarget     string
+	LocalStorageGatewayNodeID        string
+	NotificationChannelType          string
+	NotificationWebhookURL           string
+	StoragePrimarySecret             string
+	StorageViewSecret                string
+	StorageEventBusCredential        []byte
+	StorageEventBusCA                []byte
+	StorageMetricsEventBusCredential []byte
 	// StorageBuildPassword is used only by the cross-platform Storage build
 	// helper when the configured build host accepts password SSH auth.
 	StorageBuildPassword   string
@@ -239,7 +240,7 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		return fmt.Errorf("storage_upload_failed")
 	}
 	_ = file.Close()
-	remoteCredential, remoteCA, cleanupEventBus, err := uploadStorageEventBusMaterial(ctx, transport, activationToken, opts)
+	remoteCredential, remoteCA, remoteMetricsCredential, cleanupEventBus, err := uploadStorageEventBusMaterial(ctx, transport, activationToken, opts)
 	if err != nil {
 		return fmt.Errorf("storage_eventbus_material_upload_failed")
 	}
@@ -274,6 +275,9 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	}
 	if remoteCredential != "" {
 		installArgs = append(installArgs, remoteCredential, remoteCA)
+		if remoteMetricsCredential != "" {
+			installArgs = append(installArgs, remoteMetricsCredential)
+		}
 	}
 	installResult, err := transport.Run(ctx, installArgs, nil)
 	if err != nil {
@@ -337,35 +341,46 @@ func storageEventBusURLForInstall(opts Options) (string, bool) {
 	return "", false
 }
 
-func uploadStorageEventBusMaterial(ctx context.Context, transport setupssh.Client, token string, opts Options) (string, string, func(), error) {
+func uploadStorageEventBusMaterial(ctx context.Context, transport setupssh.Client, token string, opts Options) (string, string, string, func(), error) {
 	cleanup := func() {}
-	if len(opts.StorageEventBusCredential) == 0 && len(opts.StorageEventBusCA) == 0 {
-		return "", "", cleanup, nil
+	if len(opts.StorageEventBusCredential) == 0 && len(opts.StorageEventBusCA) == 0 && len(opts.StorageMetricsEventBusCredential) == 0 {
+		return "", "", "", cleanup, nil
 	}
 	if len(opts.StorageEventBusCredential) == 0 || len(opts.StorageEventBusCA) == 0 {
-		return "", "", cleanup, fmt.Errorf("storage EventBus credential and CA must be provided together")
+		return "", "", "", cleanup, fmt.Errorf("storage EventBus credential and CA must be provided together")
 	}
 	prefix := "/tmp/moox-storage-eventbus-" + token
 	credentialPath := prefix + ".yaml"
 	caPath := prefix + ".pem"
+	metricsCredentialPath := prefix + "-metrics.yaml"
 	cleanup = func() {
 		cleanupCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 10*time.Second)
 		defer cancel()
-		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", credentialPath, caPath}, nil)
+		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", credentialPath, caPath, metricsCredentialPath}, nil)
 	}
-	for _, item := range []struct {
+	items := []struct {
 		path string
 		data []byte
 	}{
 		{path: credentialPath, data: opts.StorageEventBusCredential},
 		{path: caPath, data: opts.StorageEventBusCA},
-	} {
+	}
+	if len(opts.StorageMetricsEventBusCredential) > 0 {
+		items = append(items, struct {
+			path string
+			data []byte
+		}{path: metricsCredentialPath, data: opts.StorageMetricsEventBusCredential})
+	}
+	for _, item := range items {
 		if err := transport.Upload(ctx, bytes.NewReader(item.data), int64(len(item.data)), item.path, fs.FileMode(0o600)); err != nil {
 			cleanup()
-			return "", "", func() {}, err
+			return "", "", "", func() {}, err
 		}
 	}
-	return credentialPath, caPath, cleanup, nil
+	if len(opts.StorageMetricsEventBusCredential) == 0 {
+		return credentialPath, caPath, "", cleanup, nil
+	}
+	return credentialPath, caPath, metricsCredentialPath, cleanup, nil
 }
 
 func shellQuote(value string) string {
@@ -421,17 +436,20 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 
 	archive, err := deps.Packager.Package(ctx, opts)
 	if err != nil {
-		return fmt.Errorf("control_package_failed")
+		return fmt.Errorf("control_package_failed: %w", err)
 	}
 	defer os.Remove(archive)
 	file, err := os.Open(archive)
 	if err != nil {
-		return fmt.Errorf("control_package_failed")
+		return fmt.Errorf("control_package_failed: open archive: %w", err)
 	}
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		_ = file.Close()
-		return fmt.Errorf("control_package_failed")
+		if err != nil {
+			return fmt.Errorf("control_package_failed: stat archive: %w", err)
+		}
+		return fmt.Errorf("control_package_failed: archive is not a regular file")
 	}
 	if err := transport.Upload(ctx, file, info.Size(), remoteArchive, fs.FileMode(0o600)); err != nil {
 		_ = file.Close()
@@ -632,7 +650,7 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		return "", err
 	}
 	_ = os.Remove(archive)
-	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy-moox.sh"),
+	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy", "deploy-moox.sh"),
 		"--profile", "control", "--package-only", "--archive", archive,
 		"--target", "localhost", "--dir", opts.ControlRoot, "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
 		// The control deployment is the complete non-trading application stack.
@@ -645,8 +663,10 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		"--monitor-instance-id", "monitor-control",
 	)
 	command.Dir = root
-	command.Stdout = os.Stderr
-	command.Stderr = os.Stderr
+	var packageOutput bytes.Buffer
+	packageWriter := io.MultiWriter(os.Stderr, &packageOutput)
+	command.Stdout = packageWriter
+	command.Stderr = packageWriter
 	command.Env, err = eventBusCommandEnv(os.Environ(), opts)
 	if err != nil {
 		_ = os.Remove(archive)
@@ -662,7 +682,14 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 	command.Env = localLogCommandEnv(command.Env, opts.LocalLogs)
 	if err := command.Run(); err != nil {
 		_ = os.Remove(archive)
-		return "", err
+		detail := strings.TrimSpace(packageOutput.String())
+		if len(detail) > 4096 {
+			detail = detail[len(detail)-4096:]
+		}
+		if detail != "" {
+			return "", fmt.Errorf("control package command failed: %w: %s", err, detail)
+		}
+		return "", fmt.Errorf("control package command failed: %w", err)
 	}
 	return archive, nil
 }
@@ -899,12 +926,12 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		if err != nil {
 			return "", err
 		}
-		command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "build-storage-linux.sh"))
+		command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "build", "build-storage-linux.sh"))
 		command.Dir = root
 		command.Env = setCommandEnv(os.Environ(), "MOOX_SSH_PASSWORD", opts.StorageBuildPassword)
 		command.Env = append(command.Env,
 			"MOOX_CLI="+executable,
-			"CONFIG="+filepath.Join(root, "custom.toml"),
+			"CONFIG="+filepath.Join(root, "moox.toml"),
 			"MOOX_STORAGE_BUILD_HOST="+opts.StorageBuildHost,
 			"MOOX_STORAGE_BUILD_HOST_ROLE="+opts.StorageBuildHostRole,
 			"MOOX_STORAGE_BUILD_GOARCH="+opts.TargetGOARCH,
@@ -982,7 +1009,7 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 	if opts.UseControlGateway {
 		args = append(args, "--no-gateway")
 	}
-	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy-moox.sh"), args...)
+	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy", "deploy-moox.sh"), args...)
 	command.Dir = root
 	command.Stdout = os.Stderr
 	command.Stderr = os.Stderr
@@ -1106,7 +1133,7 @@ func EnsureLocalCATrust(ctx context.Context, repositoryRoot, caPath string) erro
 	if repositoryRoot == "" || caPath == "" {
 		return fmt.Errorf("browser_ca_trust_failed: installer or CA path is empty")
 	}
-	script := filepath.Join(repositoryRoot, "scripts", "install-caddy-ca.sh")
+	script := filepath.Join(repositoryRoot, "scripts", "deploy", "install-caddy-ca.sh")
 	info, err := os.Stat(script)
 	if err != nil || !info.Mode().IsRegular() {
 		return fmt.Errorf("browser_ca_trust_failed: installer not found at %s", script)
@@ -1268,6 +1295,7 @@ install_storage() {
   control_root="${7:-${HOME}/moox/prod}"
   eventbus_credential="${8:-}"
   eventbus_ca="${9:-}"
+  eventbus_metrics_credential="${10:-}"
   case "$reset_storage_data" in 0|1) ;; *) echo storage_reset_invalid >&2; return 1 ;; esac
   case "$reset_view_data" in 0|1) ;; *) echo storage_view_reset_invalid >&2; return 1 ;; esac
   if [ "$reset_storage_data" = "1" ] && [ "$reset_view_data" = "1" ]; then echo storage_reset_flags_mutually_exclusive >&2; return 1; fi
@@ -1392,6 +1420,13 @@ install_storage() {
     cp "$eventbus_ca" "$eventbus_dir/ca.pem"
     chmod 600 "$eventbus_dir/storage-eventbus.yaml" "$eventbus_dir/ca.pem"
   fi
+  if [ -n "$eventbus_metrics_credential" ]; then
+    [ -s "$eventbus_metrics_credential" ] || { echo storage_metrics_eventbus_material_missing >&2; return 1; }
+    eventbus_dir="$HOME/.config/moox/eventbus"
+    mkdir -p "$eventbus_dir"
+    cp "$eventbus_metrics_credential" "$eventbus_dir/metrics-publisher.yaml"
+    chmod 600 "$eventbus_dir/metrics-publisher.yaml"
+  fi
   if [ ! -s "$next/secrets/health-auth.env" ]; then
     umask 077
     secret=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
@@ -1453,7 +1488,7 @@ else
   storage_root="$1"
   control_root="$2"
   shift 2
-  install_storage "$1" "$2" "$3" "$4" "$5" "$storage_root" "$control_root" "$6" "$7"
+  install_storage "$1" "$2" "$3" "$4" "$5" "$storage_root" "$control_root" "$6" "$7" "$8"
 fi
 `
 

@@ -452,6 +452,17 @@ func (s *Service) upsertBinding(
 			return &factorpb.UpsertBindingRsp{RetInfo: invalid(err)}
 		}
 	}
+	// pending_view is the durable state for an enabled factor whose source or
+	// result View is not readable yet. Persist it without requiring an active
+	// source index; the reconciler will build the managed result metadata and
+	// promote the binding once the source View becomes ready.
+	if binding.Status == domain.BindingStatusPendingView {
+		if err := s.bindings.Upsert(ctx, binding); err != nil {
+			return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}
+		}
+		s.refreshRealtimeInventory(ctx)
+		return &factorpb.UpsertBindingRsp{RetInfo: success(), Binding: bindingToPB(binding)}
+	}
 	if binding.Status == domain.BindingStatusDisabled || binding.Status == domain.BindingStatusCleanupPending {
 		if (s.outputCleaner != nil || s.schemaCleaner != nil) && binding.Status == domain.BindingStatusDisabled {
 			cleanupBinding, cleanupFactor, cleanupErr := s.bindingCleanupInputs(ctx, binding, expected, *factor)
@@ -868,6 +879,12 @@ func (s *Service) syncFactorDefinitionBindings(ctx context.Context, factor domai
 		}
 		ready, err := s.syncEnabledBindingTarget(ctx, binding, factor)
 		if err != nil {
+			if binding.Status == domain.BindingStatusPendingView && isSourceViewUnavailable(err) {
+				// A fresh installation can enable the factor before the first
+				// source View index exists. Leave the binding pending and let the
+				// periodic reconciler retry after Storage indexes source data.
+				continue
+			}
 			return err
 		}
 		if ready && binding.Status == domain.BindingStatusPendingView {
@@ -878,6 +895,10 @@ func (s *Service) syncFactorDefinitionBindings(ctx context.Context, factor domai
 		}
 	}
 	return nil
+}
+
+func isSourceViewUnavailable(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "must have an active index")
 }
 
 // ReconcilePendingBindings promotes bindings only after the desired Result View is active.

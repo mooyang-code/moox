@@ -82,7 +82,7 @@ REMOTE_HOME="${TMP}/remote-home"
 REMOTE_DEPLOY="${REMOTE_HOME}/target path"
 mkdir -p "${REMOTE_DEPLOY}/certs/caddy" "${REMOTE_DEPLOY}/lib"
 cp "${CA_FILE}" "${REMOTE_DEPLOY}/certs/caddy/root.crt"
-cp "${ROOT}/scripts/install-caddy-ca.sh" "${REMOTE_DEPLOY}/lib/install-caddy-ca.sh"
+cp "${ROOT}/scripts/deploy/install-caddy-ca.sh" "${REMOTE_DEPLOY}/lib/install-caddy-ca.sh"
 chmod +x "${REMOTE_DEPLOY}/lib/install-caddy-ca.sh"
 : >"${TMP}/remote-install.log"
 HOME="${REMOTE_HOME}" PATH="${TMP}/bin:${PATH}" MOCK_TRUSTED=0 MOCK_FINGERPRINT_HEX="${FINGERPRINT_HEX}" MOCK_LOG="${TMP}/remote-install.log" \

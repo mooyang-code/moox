@@ -386,7 +386,7 @@ func TestCSVStorageFileImporterUsesScalarSeriesTag(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	ctx := storageImportContext{
 		Options: storageImportOptions{
-			SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h",
+			SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h",
 			TimeColumn: "data_time", SeriesTag: "venue:binance",
 		},
 		Columns: map[string]*pb.DatasetColumn{
@@ -402,7 +402,7 @@ func TestCSVStorageFileImporterUsesScalarSeriesTag(t *testing.T) {
 
 func TestCSVStorageFileImporterRejectsScopeMismatch(t *testing.T) {
 	options := storageImportOptions{
-		SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h",
+		SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h",
 		TimeColumn: "data_time", SeriesTag: "venue:binance",
 	}
 	columns := map[string]*pb.DatasetColumn{
@@ -415,7 +415,7 @@ func TestCSVStorageFileImporterRejectsScopeMismatch(t *testing.T) {
 		wantMessage string
 	}{
 		{name: "space", column: "space_id", value: "stocks", wantMessage: "does not match --space"},
-		{name: "dataset", column: "dataset_id", value: "perpetual_kline_1h", wantMessage: "does not match --dataset"},
+		{name: "dataset", column: "dataset_id", value: "dataset_perpetual_kline_1h", wantMessage: "does not match --dataset"},
 		{name: "subject", column: "subject_id", value: "ETH-USDT", wantMessage: "does not match --subject"},
 		{name: "frequency", column: "freq", value: "5m", wantMessage: "does not match --freq"},
 		{name: "series tag", column: "series_tag", value: "venue:okx", wantMessage: "does not match --series-tag"},

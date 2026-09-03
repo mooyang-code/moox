@@ -151,7 +151,7 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		result.ErrorMessage = "invalid_config"
 		return result
 	}
-	if strings.EqualFold(strings.TrimSpace(config.MarketID), "stock_cn") || strings.EqualFold(strings.TrimSpace(config.SpaceID), "stock_cn") {
+	if strings.EqualFold(strings.TrimSpace(config.MarketID), "stockcn") || strings.EqualFold(strings.TrimSpace(config.SpaceID), "stockcn") {
 		return c.runStockCN(ctx, result, now)
 	}
 	storageFrequency, err := canonicalStorageFrequency(config.Frequency)
@@ -326,7 +326,7 @@ func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult,
 	if coverage < config.ClosedBarMinCoverage {
 		result.ErrorMessage = "closed_bar_coverage_below_threshold"
 		diagnostic, _ := json.Marshal(stockCNClosedBarCoverageDiagnostic{
-			Type: "stock_cn_closed_bar_coverage", Expected: len(expected), Actual: present,
+			Type: "stockcn_closed_bar_coverage", Expected: len(expected), Actual: present,
 			Coverage: coverage, Minimum: config.ClosedBarMinCoverage,
 		})
 		result.BodyExcerpt = string(diagnostic)

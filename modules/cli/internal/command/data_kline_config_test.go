@@ -25,18 +25,18 @@ data_types:
     default_exchange: binance
     exchanges:
       binance:
-        space_id: crypto_market
+        space_id: crypto
         series_tag: venue:binance
         kline_datasets:
-          1m: binance_spot_kline_1m
-  stock_cn:
-    default_exchange: stock_cn
+          1m: dataset_binance_spot_kline_1m
+  stockcn:
+    default_exchange: stockcn
     exchanges:
-      stock_cn:
-        space_id: stock_cn
-        series_tag: ""
+      stockcn:
+        space_id: stockcn
+        series_tag: default
         kline_datasets:
-          1m: stock_cn_kline
+          1m: dataset_stockcn_equity_kline
 `
 
 func writeDataAccessConfig(t *testing.T, content string, mode os.FileMode) string {
@@ -62,16 +62,16 @@ func TestDataAccessConfigLoadsStrictCatalog(t *testing.T) {
 	selection, err := cfg.resolveKline(" CRYPTO ", "", " 1M ")
 	require.NoError(t, err)
 	assert.Equal(t, "binance", selection.Exchange)
-	assert.Equal(t, "crypto_market", selection.SpaceID)
-	assert.Equal(t, "binance_spot_kline_1m", selection.DatasetID)
+	assert.Equal(t, "crypto", selection.SpaceID)
+	assert.Equal(t, "dataset_binance_spot_kline_1m", selection.DatasetID)
 	assert.Equal(t, "venue:binance", selection.SeriesTag)
 
-	selection, err = cfg.resolveKline(" stock_cn ", "", " 1M ")
+	selection, err = cfg.resolveKline(" stockcn ", "", " 1M ")
 	require.NoError(t, err)
-	assert.Equal(t, "stock_cn", selection.Exchange)
-	assert.Equal(t, "stock_cn", selection.SpaceID)
-	assert.Equal(t, "stock_cn_kline", selection.DatasetID)
-	assert.Empty(t, selection.SeriesTag)
+	assert.Equal(t, "stockcn", selection.Exchange)
+	assert.Equal(t, "stockcn", selection.SpaceID)
+	assert.Equal(t, "dataset_stockcn_equity_kline", selection.DatasetID)
+	assert.Equal(t, "default", selection.SeriesTag)
 }
 
 func TestDataAccessConfigRejectsUnknownFieldAndVersion(t *testing.T) {

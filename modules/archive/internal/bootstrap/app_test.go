@@ -76,7 +76,7 @@ func TestArchiveConsumerRetriesTransientRunnerFailure(t *testing.T) {
 func TestSourceLists(t *testing.T) {
 	cfg := testConfig()
 	got := sourceLists(cfg)
-	if len(got["crypto"]) != 2 || got["crypto"][0] != "spot_kline_1h" {
+	if len(got["crypto"]) != 2 || got["crypto"][0] != "dataset_spot_kline_1h" {
 		t.Fatalf("source lists=%v", got)
 	}
 }
@@ -202,7 +202,7 @@ func TestAppRunConsumesStorageEventAndBecomesReadyE2E(t *testing.T) {
 	t.Cleanup(func() { nc.Close() })
 	js, err := nc.JetStream()
 	require.NoError(t, err)
-	const storageSubject = "moox.storage.dataset.rows.upserted.v2.>"
+	const storageSubject = "moox.event.storage.dataset.rows.upserted.v2.>"
 	_, err = js.AddStream(&nats.StreamConfig{Name: events.DatasetRowsUpserted.Stream(), Subjects: []string{storageSubject}, Storage: nats.FileStorage})
 	require.NoError(t, err)
 	_, err = js.AddConsumer(events.DatasetRowsUpserted.Stream(), &nats.ConsumerConfig{
@@ -267,10 +267,10 @@ func publishArchiveStorageEvent(t *testing.T, ctx context.Context, natsURL strin
 	publisher, err := events.NewPublisher(client, registry)
 	require.NoError(t, err)
 	payload := &storagepb.DatasetRowsUpserted{
-		SpaceId: "crypto", DatasetId: "spot_kline_1h",
+		SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h",
 		Rows: []*storagepb.RowUpsert{{
 			Key: &storagepb.RowKey{
-				SpaceId: "crypto", DatasetId: "spot_kline_1h",
+				SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h",
 				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
 					SubjectId: "BTC-USDT", Freq: "1h", DataTime: "2026-07-25T00:00:00Z", SeriesTag: "venue:binance",
 				}},
@@ -283,7 +283,7 @@ func publishArchiveStorageEvent(t *testing.T, ctx context.Context, natsURL strin
 	}
 	_, err = publisher.Publish(ctx, events.DatasetRowsUpserted, payload, events.PublishOptions{
 		EventID: "archive-app-e2e-1", OccurredAt: time.Now().UTC(),
-		SpaceID: "crypto", SubjectID: "spot_kline_1h",
+		SpaceID: "crypto", SubjectID: "dataset_spot_kline_1h",
 	})
 	require.NoError(t, err)
 }

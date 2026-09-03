@@ -16,10 +16,10 @@
 
 | Event | 语义 | 发布方 | 消费方 | 可靠性 |
 |---|---|---|---|---|
-| `storage.dataset.rows.upserted@1` | Storage 已提交行变更 | Storage | View / Factor / Archive | Storage Pebble batch + outbox |
+| `event.storage.dataset.rows.upserted@1` | Storage 已提交行变更 | Storage | View / Factor / Archive | Storage Pebble batch + outbox |
 | `metrics.host.reported@1` | 主机指标快照 | HostAgent | Monitor | best effort，最多投递 3 次 |
 | `metrics.snapshot.reported@1` | 服务指标快照 | Service | Monitor | best effort，最多投递 3 次 |
-| `cloudnode.job.execution.requested@1` | CloudNode 执行任务命令 | CloudNode | Worker | JetStream work queue |
+| `event.cloudnode.job.execution.requested@1` | CloudNode 执行任务命令 | CloudNode | Worker | JetStream work queue |
 | `trade.rebalance.requested@1` | 策略请求执行调仓 | Strategy | Trade | Strategy SQLite transaction + outbox |
 
 最终调用关系：
@@ -27,13 +27,13 @@
 ```mermaid
 flowchart LR
     Collector["Collector<br/>交易所闭合 K 线"] -->|Storage RPC| Storage
-    Storage -->|"storage.dataset.rows.upserted"| View
-    Storage -->|"storage.dataset.rows.upserted"| Factor
-    Storage -->|"storage.dataset.rows.upserted"| Archive
+    Storage -->|"event.storage.dataset.rows.upserted"| View
+    Storage -->|"event.storage.dataset.rows.upserted"| Factor
+    Storage -->|"event.storage.dataset.rows.upserted"| Archive
     Strategy -->|"trade.rebalance.requested"| Trade
     HostAgent -->|"metrics.host.reported"| Monitor
     Service -->|"metrics.snapshot.reported"| Monitor
-    CloudNode -->|"cloudnode.job.execution.requested"| Worker
+    CloudNode -->|"event.cloudnode.job.execution.requested"| Worker
 ```
 
 ### 1.2 已确认且不得在执行中反转的决策
@@ -126,10 +126,10 @@ Expected: exit code `0`。
 
 | Stream | Subjects | 消息保留方式 | 满容量处理 |
 |---|---|---|---|
-| `MOOX_STORAGE` | `moox.storage.dataset.rows.upserted.v1.>` | `limits` | `old` |
+| `MOOX_STORAGE` | `moox.event.storage.dataset.rows.upserted.v1.>` | `limits` | `old` |
 | `MOOX_METRICS` | `moox.metrics.>` | `limits` | `old` |
-| `MOOX_CLOUDNODE_EXEC` | `moox.cloudnode.job.execution.requested.v1.>` | `work_queue` | `old` |
-| `MOOX_TRADE` | `moox.trade.rebalance.requested.v1.>` | `work_queue` | `old` |
+| `MOOX_CLOUDNODE_EXEC` | `moox.event.cloudnode.job.execution.requested.v1.>` | `work_queue` | `old` |
+| `MOOX_TRADE` | `moox.event.trade.rebalance.requested.v1.>` | `work_queue` | `old` |
 
 这里使用“消息保留方式”描述业务含义；`retention`、`limits`、`work_queue` 和
 `discard` 仅在 EventBus 配置及 NATS JetStream 适配层中作为官方字段和值保留。
@@ -245,7 +245,7 @@ Stream/Durable/Filter/DeliverPolicy 冲突 -> ErrConsumerConfigConflict
 - `web/src/views/data/datasets/dataset-lifecycle.test.ts`
 - `go.work`
 - 根 `Makefile`
-- `scripts/verify-event-contracts.sh`
+- `scripts/check/verify-event-contracts.sh`
 - `docs/架构总览.md`
 - `docs/协议设计.md`
 - `docs/运维/MooX-EventBus运维.md`
@@ -405,7 +405,7 @@ func (*KlineCollector) CollectLive(...)
 go.work
 modules/admin/cmd/cli/eventbus_credentials.go
 modules/admin/cmd/cli/eventbus_credentials_test.go
-scripts/verify-event-contracts.sh
+scripts/check/verify-event-contracts.sh
 ```
 
 根 `Makefile` 若有 Streamcalc build/test target，也一起删除。
@@ -432,7 +432,7 @@ Expected: 测试 PASS；`rg` 无生产代码命中。
 - [x] **Step 9: 提交**
 
 ```bash
-git add -A modules/streamcalc modules/collector modules/storage modules/admin packages/events/marketpb go.work Makefile scripts/verify-event-contracts.sh
+git add -A modules/streamcalc modules/collector modules/storage modules/admin packages/events/marketpb go.work Makefile scripts/check/verify-event-contracts.sh
 git commit -m "refactor(market): write closed klines directly to storage"
 ```
 
@@ -797,10 +797,10 @@ git commit -m "refactor(events): remove shared eventbus dlq"
 
 ```go
 want := []string{
-	"cloudnode.job.execution.requested@1",
+	"event.cloudnode.job.execution.requested@1",
 	"metrics.host.reported@1",
 	"metrics.snapshot.reported@1",
-	"storage.dataset.rows.upserted@1",
+	"event.storage.dataset.rows.upserted@1",
 	"trade.rebalance.requested@1",
 }
 ```
@@ -867,7 +867,7 @@ func declareEvent(
 
 ```go
 var DatasetRowsUpserted = declareEvent(
-	"storage.dataset.rows.upserted",
+	"event.storage.dataset.rows.upserted",
 	1,
 	"MOOX_STORAGE",
 	"storage",
@@ -1147,7 +1147,7 @@ Stream 内名称唯一；个人量化 V1 采用单实例 owner 和固定 Consume
 `STREAM.NAMES`、跨 Stream 同名 `CONSUMER.INFO`、目标 Stream 的
 `CONSUMER.CREATE`、`CONSUMER.DURABLE.CREATE`、`MSG.NEXT` 和 `ACK`。权限仍按固定
 Consumer 名称收敛，不授予通用 `$JS.API.>`。新增 `trade-eventbus` 凭据；Strategy 只
-允许发布 `moox.trade.rebalance.requested.v1.>`。使用真实鉴权 NATS 测试验证创建、
+允许发布 `moox.event.trade.rebalance.requested.v1.>`。使用真实鉴权 NATS 测试验证创建、
 可变配置更新、拉取/ACK 和越权创建失败。
 
 CloudNode 的 Consumer 名称按执行路由动态生成，NATS ACL 又不能按 Consumer 名称 token
@@ -1605,7 +1605,7 @@ git commit -m "refactor(trade): consume only strategy rebalance commands"
 - Modify: `modules/factor/internal/trigger/nats.go`
 - Modify: `modules/monitor/internal/hostmetrics/hostmetrics.go`
 - Modify: `modules/trade/internal/config/app.go`
-- Modify: `scripts/verify-event-contracts.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
 
 - [x] **Step 1: 改写 Storage/outbox 注释**
 
@@ -1676,7 +1676,7 @@ Archive/Factor 等技术注释中的英文单词不作为门禁；门禁只匹�
 Run:
 
 ```bash
-./scripts/verify-event-contracts.sh
+./scripts/check/verify-event-contracts.sh
 make check-boundaries
 make test-storage-boundary
 git diff --check
@@ -1687,7 +1687,7 @@ Expected: 全部 PASS，不接受“既有失败”作为本计划完成条件�
 - [x] **Step 6: 提交**
 
 ```bash
-git add modules packages scripts/verify-event-contracts.sh
+git add modules packages scripts/check/verify-event-contracts.sh
 git commit -m "chore(events): align consumer terminology and contract gates"
 ```
 
@@ -1770,7 +1770,7 @@ git commit -m "docs(events): document simplified five-event architecture"
 Run:
 
 ```bash
-./scripts/verify-event-contracts.sh
+./scripts/check/verify-event-contracts.sh
 ```
 
 Expected: `event contract verification passed`。
@@ -1780,7 +1780,7 @@ Expected: `event contract verification passed`。
 Run:
 
 ```bash
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-go-workspace.sh
 ```
 
 Expected: 所有 workspace module 的 `go test` 和 `go vet` PASS。
@@ -1843,7 +1843,7 @@ Expected: PASS，输出中没有额外事件。
 使用仓库已有 Linux build 脚本构建 Storage、Strategy、Trade，并在同一 SHA 上运行：
 
 ```bash
-./scripts/build-storage-linux.sh
+./scripts/build/build-storage-linux.sh
 ```
 
 随后在目标机执行该 SHA 对应的：

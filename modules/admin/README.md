@@ -32,12 +32,12 @@ schema/admin.sql          admin 本地 SQLite 表
 
 ```bash
 # 模块目录
-make build          # → ../../scripts/build.sh admin
+make build          # → ../../scripts/build/build.sh admin
 make build-linux
 make release        # 仓库级发布包
 
 # 仓库根目录
-./scripts/build.sh admin
+./scripts/build/build.sh admin
 make deploy ARGS="--target localhost --dir /data/moox/dev"
 ```
 
@@ -121,7 +121,7 @@ go run ./cmd/server -conf=config/trpc_go.yaml
 初始化阶段也可以使用
 `moox-admin-cli service-deployments import --file <seed.yaml> --node-id <node> --public-host <host> --eventbus-nats-url tls://<host>:4222`
 导入
-`examples/setup/default/service-deployments.yaml`。该清单按节点和服务名幂等更新部署地址、网关
+`config/setup/service-deployments.yaml`。该清单按节点和服务名幂等更新部署地址、网关
 路由及健康检查元数据；Admin 启动时的默认 seed 与其保持一致。
 
 ## 相关文档

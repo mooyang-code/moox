@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	DefaultSpace  = "moox_system"
+	DefaultSpace  = "mooxsys"
 	DefaultBusURL = "nats://127.0.0.1:4222"
 )
 

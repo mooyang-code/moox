@@ -7,7 +7,7 @@ import factorResultsView from "@/views/factor/results/index.vue?raw";
 describe("factor management contract", () => {
   it("uses explicit generic time-series fields", () => {
     const factor: FactorDef = {
-      factor_id: "bias",
+      factor_id: "Bias",
       name: "Bias",
       source_code: "def compute(df, params): return {}",
       input_columns: ["nav", "benchmark_return"],

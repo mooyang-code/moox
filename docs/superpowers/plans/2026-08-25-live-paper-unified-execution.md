@@ -821,7 +821,7 @@ Cancel 使用原 client_order_id
 ```bash
 cd modules/trade
 go test -count=1 ./internal/execution ./internal/exchange/binance ./internal/exchange/okx
-go run ../../scripts/checks/check-trade-exchange-terminology.go
+go run ../../scripts/check/check-trade-exchange-terminology.go
 ```
 
 Expected: PASS，术语门禁输出 `trade Exchange terminology passed`。
@@ -1954,8 +1954,8 @@ git commit -m "feat(trade): sample unified equity curves"
 - Modify: `modules/strategy/internal/bootstrap/logical_account.go`
 - Modify: `modules/strategy/internal/bootstrap/logical_account_test.go`
 - Modify: `modules/strategy/internal/bootstrap/logical_account_external_e2e_test.go`
-- Modify: `examples/setup/default/service-deployments.yaml`
-- Modify: `scripts/tests/e2e/test-strategy-trade-logical-account-e2e.sh`
+- Modify: `config/setup/service-deployments.yaml`
+- Modify: `scripts/test/e2e/test-strategy-trade-logical-account-e2e.sh`
 
 - [ ] **Step 1: 写最终 Proto 契约失败测试**
 
@@ -2135,7 +2135,7 @@ go test -count=1 ./internal/service/sysdeploy/...
 cd ../strategy
 go test -count=1 ./internal/bootstrap/... ./internal/rpc/... ./internal/store/...
 cd ../..
-bash scripts/tests/e2e/test-strategy-trade-logical-account-e2e.sh
+bash scripts/test/e2e/test-strategy-trade-logical-account-e2e.sh
 ```
 
 Expected: PASS。
@@ -2146,8 +2146,8 @@ Expected: PASS。
 git add modules/trade/proto modules/trade/internal/rpc \
   modules/trade/internal/bootstrap modules/trade/config/trpc_go.yaml \
   modules/admin/internal/service/sysdeploy modules/strategy/config \
-  modules/strategy/internal/bootstrap examples/setup/default/service-deployments.yaml \
-  scripts/tests/e2e/test-strategy-trade-logical-account-e2e.sh
+  modules/strategy/internal/bootstrap config/setup/service-deployments.yaml \
+  scripts/test/e2e/test-strategy-trade-logical-account-e2e.sh
 git commit -m "refactor(trade): expose one console service"
 ```
 
@@ -2378,7 +2378,7 @@ git commit -m "feat(web): unify live and paper trading views"
 - Modify: `modules/trade/test/logical_account_operator_e2e_test.go`
 - Modify: `modules/trade/test/paper_swap_cursor_regression_test.go`
 - Modify: `modules/strategy/test/strategy_trade_external_e2e_test.go`
-- Modify: `scripts/tests/e2e/test-strategy-trade-event-e2e.sh`
+- Modify: `scripts/test/e2e/test-strategy-trade-event-e2e.sh`
 - Modify: `modules/trade/cmd/testnet-smoke/harness.go`
 - Modify: `modules/trade/cmd/testnet-smoke/runtime.go`
 - Modify: `modules/trade/cmd/testnet-smoke/private_probe.go`
@@ -2437,7 +2437,7 @@ Close:
 - [ ] **Step 3: 更新 JetStream 外部 E2E**
 
 使用新 TradeConsole 端口和 TradingAccount 字段。MOOX_TRADE 仍只有
-`moox.trade.target.requested.v1.>`，durable 仍为 `trade_target_v1`。测试 Strategy outbox publish、Trade consume、ack、target convergence。
+`moox.event.trade.target.requested.v1.>`，durable 仍为 `trade_target_v1`。测试 Strategy outbox publish、Trade consume、ack、target convergence。
 
 - [ ] **Step 4: 运行真实 Testnet smoke**
 
@@ -2502,7 +2502,7 @@ rg -n 'ExchangeAccount|exchange_account_id|t_exchange_accounts|t_exchange_positi
   --glob '*.ts' --glob '*.vue' --glob '*.sh' \
   modules/trade modules/strategy/internal/bootstrap web/src/api/trade \
   web/src/views/trading modules/admin/internal/service/sysdeploy \
-  examples/setup/default/service-deployments.yaml scripts/tests/e2e
+  config/setup/service-deployments.yaml scripts/test/e2e
 ```
 
 Expected: 无输出。历史 `docs/superpowers/` 不纳入扫描。
@@ -2540,9 +2540,9 @@ Expected: PASS。
 ```bash
 cd ..
 make proto-check
-go run ./scripts/checks/check-trade-exchange-terminology.go
+go run ./scripts/check/check-trade-exchange-terminology.go
 make check-boundaries
-bash scripts/verify-event-contracts.sh
+bash scripts/check/verify-event-contracts.sh
 git diff --check
 make verify
 ```
@@ -2562,7 +2562,7 @@ make verify PASS
 
 ```bash
 git add modules/trade/test modules/trade/cmd/testnet-smoke \
-  modules/strategy/test scripts/tests/e2e \
+  modules/strategy/test scripts/test/e2e \
   modules/trade/README.md docs/交易模块架构设计.md \
   docs/交易模块功能说明.md docs/架构总览.md \
   docs/运维/MooX-Trade运维.md docs/运维/MooX-EventBus运维.md

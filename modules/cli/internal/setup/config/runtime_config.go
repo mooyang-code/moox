@@ -19,7 +19,7 @@ func RenderTradeDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 }
 
 // RenderTradeDNSResolverConfigForNode disables the resolver on Trade nodes
-// other than the single node selected by custom.toml. This prevents a
+// other than the single node selected by moox.toml. This prevents a
 // control profile from advertising a second resolver endpoint.
 func RenderTradeDNSResolverConfigForNode(snapshot *Snapshot, nodeID string, existing []byte) ([]byte, error) {
 	if snapshot == nil {
@@ -44,7 +44,7 @@ func RenderTradeDNSResolverConfigForNode(snapshot *Snapshot, nodeID string, exis
 
 // RenderCollectorDNSResolverConfig replaces only the Collector-owned
 // dns_resolver mapping. The target is derived from the selected other_hosts
-// entry, so the address is never duplicated in custom.toml or source code.
+// entry, so the address is never duplicated in moox.toml or source code.
 func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
 	if snapshot == nil {
 		return nil, fmt.Errorf("runtime_config: snapshot is required")
@@ -68,7 +68,7 @@ func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]by
 		return nil, err
 	}
 	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
-		if !strings.EqualFold(strings.TrimSpace(space.SpaceID), "stock_cn") {
+		if !strings.EqualFold(strings.TrimSpace(space.SpaceID), "stockcn") {
 			continue
 		}
 		stockFields := orderedMapping(
@@ -78,7 +78,7 @@ func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]by
 			mappingField{"stagger_window_seconds", space.StaggerWindowSeconds},
 			mappingField{"stagger_max_starts_per_second", space.StaggerMaxStartsPerSecond},
 		)
-		return replaceYAMLMapping(rendered, "stock_cn", stockFields)
+		return replaceYAMLMapping(rendered, "stockcn", stockFields)
 	}
 	return rendered, nil
 }

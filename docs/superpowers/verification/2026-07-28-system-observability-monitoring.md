@@ -17,13 +17,13 @@ Result: PASS. Proto generation was clean; greenfield, event, DataNode,
 Linux-build, and Collector SCF packaging contracts passed.
 
 ```bash
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-go-workspace.sh
 ```
 
 Result: PASS. Every Go module and `web-host` passed `go test` and `go vet`.
 
 ```bash
-bash scripts/verify-observability-e2e.sh
+bash scripts/test/e2e/verify-observability-e2e.sh
 ```
 
 Result: PASS. The script ran race-enabled tests for Report, MsgBox, Events,

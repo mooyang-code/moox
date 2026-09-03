@@ -1,1 +1,0 @@
-checks/check-event-topology-declarations.go

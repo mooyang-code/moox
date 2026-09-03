@@ -17,14 +17,14 @@ case "${COMMAND}" in
     [[ -z "${EXPECTED}" || "${actual}" == "${EXPECTED}" ]] || { rm -f "${OUTPUT}"; echo 'CA fingerprint mismatch' >&2; exit 1; }
     printf '%s\n' "${actual}";;
   inspect) [[ -n "${CA_FILE}" ]] || exit 2; inspect "${CA_FILE}";;
-  install) [[ -n "${CA_FILE}" ]] || exit 2; inspect "${CA_FILE}"; exec "${ROOT}/scripts/install-caddy-ca.sh" --ca-file "${CA_FILE}";;
+  install) [[ -n "${CA_FILE}" ]] || exit 2; inspect "${CA_FILE}"; exec "${ROOT}/scripts/deploy/install-caddy-ca.sh" --ca-file "${CA_FILE}";;
   install-target)
     [[ -n "${TARGET}" && -n "${DEPLOY_DIR}" ]] || { echo 'install-target requires --target and --deploy-dir' >&2; exit 2; }
     if [[ "${TARGET}" == localhost || "${TARGET}" == 127.0.0.1 || "${TARGET}" == ::1 ]]; then
       local_deploy_dir="${DEPLOY_DIR}"
       case "${local_deploy_dir}" in '~') local_deploy_dir="${HOME}";; '~/'*) local_deploy_dir="${HOME}/${local_deploy_dir#\~/}";; esac
       if [[ "${NON_INTERACTIVE}" == 1 ]]; then export MOOX_CA_SUDO_NONINTERACTIVE=1; fi
-      exec "${ROOT}/scripts/install-caddy-ca.sh" --ca-file "${local_deploy_dir%/}/certs/caddy/root.crt"
+      exec "${ROOT}/scripts/deploy/install-caddy-ca.sh" --ca-file "${local_deploy_dir%/}/certs/caddy/root.crt"
     fi
     remote_script='deploy_dir=$1
 case "$deploy_dir" in "~") deploy_dir=$HOME;; "~/"*) deploy_dir="$HOME/${deploy_dir#\~/}";; esac
@@ -40,7 +40,7 @@ exec "$deploy_dir/lib/install-caddy-ca.sh" --ca-file "$deploy_dir/certs/caddy/ro
     [[ -n "${CA_FILE}" ]] || exit 2
     inspect "${CA_FILE}" >/dev/null
     trusted=false
-    if "${ROOT}/scripts/install-caddy-ca.sh" --ca-file "${CA_FILE}" --check; then trusted=true; fi
+    if "${ROOT}/scripts/deploy/install-caddy-ca.sh" --ca-file "${CA_FILE}" --check; then trusted=true; fi
     printf '{"fingerprint":"%s","valid_ca":true,"trusted":%s}\n' \
       "$(openssl x509 -in "${CA_FILE}" -noout -fingerprint -sha256 | cut -d= -f2)" "${trusted}"
     ;;

@@ -1,1 +1,0 @@
-checks/check-module-boundaries.sh

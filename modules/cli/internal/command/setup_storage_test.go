@@ -51,9 +51,9 @@ func TestSetupStorageCommandsRequireExplicitHostAndSanitizeResults(t *testing.T)
 		args []string
 		want string
 	}{
-		{name: "verify", args: []string{"verify-storage", "--file", "custom.toml", "--host", "compute"}, want: "schema_version"},
-		{name: "e2e", args: []string{"e2e-storage", "--file", "custom.toml", "--host", "compute", "--namespace", "task16"}, want: "cleanup"},
-		{name: "browser", args: []string{"browser-e2e-storage", "--file", "custom.toml", "--host", "compute", "--repo-root", "/repo"}, want: "desktop"},
+		{name: "verify", args: []string{"verify-storage", "--file", "moox.toml", "--host", "compute"}, want: "schema_version"},
+		{name: "e2e", args: []string{"e2e-storage", "--file", "moox.toml", "--host", "compute", "--namespace", "task16"}, want: "cleanup"},
+		{name: "browser", args: []string{"browser-e2e-storage", "--file", "moox.toml", "--host", "compute", "--repo-root", "/repo"}, want: "desktop"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -65,7 +65,7 @@ func TestSetupStorageCommandsRequireExplicitHostAndSanitizeResults(t *testing.T)
 			require.NoError(t, cmd.Execute())
 			require.Contains(t, output.String(), test.want)
 			require.NotContains(t, output.String(), secret)
-			require.NotContains(t, output.String(), "custom.toml")
+			require.NotContains(t, output.String(), "moox.toml")
 			require.NotContains(t, output.String(), "/repo")
 		})
 	}
@@ -90,9 +90,9 @@ func TestSetupStorageCommandsRejectMissingRequiredFlags(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	deps := setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }}
 	for _, args := range [][]string{
-		{"verify-storage", "--file", "custom.toml"},
-		{"e2e-storage", "--file", "custom.toml", "--host", "compute"},
-		{"browser-e2e-storage", "--file", "custom.toml", "--host", "compute"},
+		{"verify-storage", "--file", "moox.toml"},
+		{"e2e-storage", "--file", "moox.toml", "--host", "compute"},
+		{"browser-e2e-storage", "--file", "moox.toml", "--host", "compute"},
 	} {
 		cmd := newSetupCommand(deps)
 		cmd.SetArgs(args)
@@ -156,7 +156,7 @@ func TestStorageLifecycleCreatesActivatesAndDisablesIsolatedRows(t *testing.T) {
 		"disabled_write_rejected", "activation_checks_passed", "stale_revision_rejected", "dataset_activated_locked",
 		"row_written", "row_read_back", "locked_rebind_rejected", "active_node_delete_rejected",
 	}, result.Assertions)
-	require.Equal(t, []string{"task16_dataset"}, api.deletedDatasets)
+	require.Equal(t, []string{"dataset_task16"}, api.deletedDatasets)
 	require.Equal(t, []string{"task16_source"}, api.deletedSources)
 	require.Equal(t, []string{"task16_space"}, api.deletedSpaces)
 	require.Empty(t, api.deletedNodes)
@@ -188,7 +188,7 @@ func TestStorageBrowserFixtureCreatesAndCleansIsolatedAdminAndMetadataRows(t *te
 	require.NoError(t, err)
 	require.Equal(t, fixture.SpaceID, fixture.Namespace+"_space")
 	require.Equal(t, fixture.SpaceName, "浏览器隔离空间 "+fixture.Namespace)
-	require.Equal(t, fixture.DatasetID, fixture.Namespace+"_dataset")
+	require.Equal(t, fixture.DatasetID, "dataset_"+fixture.Namespace)
 	require.Equal(t, fixture.DatasetName, "浏览器验证集")
 	require.NoError(t, cleanup())
 	require.Equal(t, []string{fixture.DatasetID}, metadata.deletedDatasets)

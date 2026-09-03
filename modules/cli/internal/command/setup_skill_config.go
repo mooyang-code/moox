@@ -147,7 +147,7 @@ func buildSkillDataAccessConfig(
 		return dataAccessConfig{}, fmt.Errorf("skill_config: dependencies are required")
 	}
 	spaceID = strings.TrimSpace(spaceID)
-	if strings.EqualFold(spaceID, "crypto_market") {
+	if strings.EqualFold(spaceID, "crypto") {
 		spaceID = "crypto"
 	}
 	if spaceID != "crypto" {
@@ -157,7 +157,7 @@ func buildSkillDataAccessConfig(
 	for index := range snapshot.Manifest.SCFFetcher.Spaces {
 		candidate := &snapshot.Manifest.SCFFetcher.Spaces[index]
 		candidateSpaceID := strings.TrimSpace(candidate.SpaceID)
-		if strings.EqualFold(candidateSpaceID, "crypto_market") {
+		if strings.EqualFold(candidateSpaceID, "crypto") {
 			candidateSpaceID = "crypto"
 		}
 		if candidateSpaceID == spaceID {
@@ -230,16 +230,16 @@ func buildSkillDataAccessConfig(
 				Exchanges: map[string]exchangeConfig{
 					"binance": {
 						SpaceID: "crypto", SeriesTag: "venue:binance",
-						KlineDatasets: map[string]string{"1m": "binance_spot_kline_1m"},
+						KlineDatasets: map[string]string{"1m": "dataset_binance_spot_kline_1m"},
 					},
 				},
 			},
-			"stock_cn": {
-				DefaultExchange: "stock_cn",
+			"stockcn": {
+				DefaultExchange: "stockcn",
 				Exchanges: map[string]exchangeConfig{
-					"stock_cn": {
-						SpaceID: "stock_cn", SeriesTag: "",
-						KlineDatasets: map[string]string{"1m": "stock_cn_kline"},
+					"stockcn": {
+						SpaceID: "stockcn", SeriesTag: "default",
+						KlineDatasets: map[string]string{"1m": "dataset_stockcn_equity_kline"},
 					},
 				},
 			},

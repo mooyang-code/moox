@@ -46,7 +46,7 @@ func TestDatasetRowsUpsertedV1IsRejectedByV2Consumer(t *testing.T) {
 	if _, _, err := DecodeDatasetRowsUpserted(
 		registry,
 		raw,
-		"moox.storage.dataset.rows.upserted.v2.space.dataset",
+		"moox.event.storage.dataset.rows.upserted.v2.space.dataset",
 		"storage-event-1",
 	); err == nil {
 		t.Fatal("v1 storage event was accepted by v2 consumer")
@@ -203,13 +203,13 @@ func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 		{
 			name: "host agent", event: ObservabilityHostSnapshotReported,
 			payload: &hostmetricpb.HostMetric{AgentId: "aB3x", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}},
-			opts:    validationOptions("host-event-1", "moox_system", "aB3x"),
+			opts:    validationOptions("host-event-1", "mooxsys", "aB3x"),
 			mutate:  func(value proto.Message) { value.(*hostmetricpb.HostMetric).AgentId = "other" },
 		},
 		{
 			name: "metrics producer", event: ObservabilityMetricsSnapshotReported,
 			payload: &metricspb.MetricReport{ServiceName: "storage", InstanceId: "storage-1", Snapshot: &metricspb.MetricSnapshot{}},
-			opts:    validationOptions("metric-event-1", "moox_system", "storage/storage-1"),
+			opts:    validationOptions("metric-event-1", "mooxsys", "storage/storage-1"),
 			mutate:  func(value proto.Message) { value.(*metricspb.MetricReport).InstanceId = "other" },
 		},
 		{
@@ -290,7 +290,7 @@ func TestHealthCheckReportValidation(t *testing.T) {
 		LatencyMs:  12,
 		CheckedAt:  timestamppb.New(occurredAt),
 	}
-	opts := validationOptions("health-event-1", "moox_system", "storage-health")
+	opts := validationOptions("health-event-1", "mooxsys", "storage-health")
 	registry, err := DefaultRegistry()
 	if err != nil {
 		t.Fatal(err)

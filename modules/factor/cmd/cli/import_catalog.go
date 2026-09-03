@@ -58,6 +58,10 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		if strings.ToLower(filepath.Ext(path)) != ".py" {
 			return fmt.Errorf("factor %s must reference a .py source", entry.FactorID)
 		}
+		factorName := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		if entry.FactorID != factorName {
+			return fmt.Errorf("factor_id %q must match factor file name %q", entry.FactorID, factorName)
+		}
 		raw, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return fmt.Errorf("read factor %s: %w", entry.FactorID, readErr)
@@ -71,7 +75,7 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 			return fmt.Errorf("encode params for %s: %w", entry.FactorID, marshalErr)
 		}
 		factor, normalizeErr := domain.NormalizeFactorDefinition(domain.FactorDef{
-			FactorID: entry.FactorID, Name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+			FactorID: entry.FactorID, Name: factorName,
 			SourceCode: string(raw), InputColumns: entry.InputColumns, Outputs: entry.Outputs,
 			ParamsJSON: string(paramsJSON), LookbackPeriods: entry.LookbackPeriods,
 			Status: domain.FactorStatusDisabled,

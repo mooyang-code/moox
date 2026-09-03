@@ -12,7 +12,7 @@
 
 ## Reading Summary
 
-- `modules/storage` currently has a private transport abstraction, a JetStream producer/subscriber, optional embedded NATS startup, and row-change subjects under `moox.storage.>`.
+- `modules/storage` currently has a private transport abstraction, a JetStream producer/subscriber, optional embedded NATS startup, and row-change subjects under `moox.event.storage.>`.
 - `modules/cloudnode` owns a second JetStream runtime and optional embedded server on a different port; it uses a WorkQueue Stream plus a JetStream KV bucket.
 - `modules/factor` directly imports `nats.go` to subscribe to Storage messages.
 - There is no public NATS package under `packages/`, so connection, Stream reconciliation, ACK, retry, and shutdown behavior are duplicated.
@@ -122,20 +122,20 @@ moox.<domain>.<entity>.<action>.v<major>
 Initial Topic catalog:
 
 ```text
-moox.storage.time_series.rows_updated.v1
-moox.storage.record.rows_updated.v1
+moox.event.storage.time_series.rows_updated.v1
+moox.event.storage.record.rows_updated.v1
 moox.metrics.host.reported.v1
-moox.cloudnode.exec.v1.jobitem.s.<space>.pkg.<package>.type.<job_type>
+moox.event.cloudnode.exec.v1.jobitem.s.<space>.pkg.<package>.type.<job_type>
 moox.dlq.message.rejected.v1
 ```
 
 `moox.metrics.host.reported.v1` has kind `MESSAGE_KIND_SNAPSHOT` and payload content type `application/x-protobuf; message=trpc.moox.hostagent.HostMetric`. A different metrics payload uses a different versioned Topic; it must not reuse the Host Topic.
 
-`moox.storage.time_series.rows_updated.v1` and `moox.storage.record.rows_updated.v1` have kind `MESSAGE_KIND_EVENT` and payload types `trpc.moox.storage.TimeSeriesRowsUpdated` and `trpc.moox.storage.RecordRowsUpdated`. View Builder and Factor bind independent predeclared durables; they do not create consumers at startup. V1 标准部署不启动独立 Archive consumer；以后启用时必须先在 EventBus registry 增加两个 exact durables，不能复用 View Builder durable。
+`moox.event.storage.time_series.rows_updated.v1` and `moox.event.storage.record.rows_updated.v1` have kind `MESSAGE_KIND_EVENT` and payload types `trpc.moox.storage.TimeSeriesRowsUpdated` and `trpc.moox.storage.RecordRowsUpdated`. View Builder and Factor bind independent predeclared durables; they do not create consumers at startup. V1 标准部署不启动独立 Archive consumer；以后启用时必须先在 EventBus registry 增加两个 exact durables，不能复用 View Builder durable。
 
 `moox.dlq.message.rejected.v1` has kind `MESSAGE_KIND_EVENT` and payload content type `application/x-protobuf; message=trpc.moox.dlq.RejectedMessage`. Its bounded `reason` is sanitized, and it carries the original payload bytes for diagnosis and replay.
 
-The `moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*` Topic family has kind `MESSAGE_KIND_COMMAND` and one `JobItem` payload schema. Space/package/job-type tokens remain in the concrete Subject so WorkQueue consumers keep non-overlapping exact filters and durable names.
+The `moox.event.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*` Topic family has kind `MESSAGE_KIND_COMMAND` and one `JobItem` payload schema. Space/package/job-type tokens remain in the concrete Subject so WorkQueue consumers keep non-overlapping exact filters and durable names.
 
 Compatible protobuf field additions retain the Topic version. Field renumbering, meaning changes, or incompatible payload replacement require a new `.v2` Topic and a parallel migration period.
 
@@ -143,9 +143,9 @@ Compatible protobuf field additions retain the Topic version. Field renumbering,
 
 | Stream | Subjects | Retention | Default limits |
 |---|---|---|---|
-| `MOOX_STORAGE` | `moox.storage.>` | Limits/File/DiscardOld | 72h, 20 GiB |
+| `MOOX_STORAGE` | `moox.event.storage.>` | Limits/File/DiscardOld | 72h, 20 GiB |
 | `MOOX_METRICS` | `moox.metrics.>` | Limits/File/DiscardOld | 24h, 10 GiB |
-| `MOOX_CLOUDNODE_EXEC` | `moox.cloudnode.exec.v1.>` | WorkQueue/File/DiscardOld | 72h, 10 GiB |
+| `MOOX_CLOUDNODE_EXEC` | `moox.event.cloudnode.exec.v1.>` | WorkQueue/File/DiscardOld | 72h, 10 GiB |
 | `MOOX_DLQ` | `moox.dlq.>` | Limits/File/DiscardOld | 30d, 2 GiB |
 
 `MOOX_CLOUDNODE_JOB_ACTIVE` remains a JetStream KV bucket with one value per key and a configurable 48h TTL. These defaults are explicit YAML values, not hidden constants, and production sizing is changed through EventBus configuration only.
@@ -179,7 +179,7 @@ Compatible protobuf field additions retain the Topic version. Field renumbering,
 
 ### Product And Operations
 
-- Modify `modules/admin/proto/sysdeploy_service.proto`, `modules/admin/internal/service/sysdeploy/defaults.go`, `modules/admin/internal/service/sysdeploy/defaults_test.go`, `scripts/build.sh`, `scripts/release.sh`, `scripts/deploy-moox.sh`, root `Makefile`, `go.work`, `modules/README.md`, and root `README.md`.
+- Modify `modules/admin/proto/sysdeploy_service.proto`, `modules/admin/internal/service/sysdeploy/defaults.go`, `modules/admin/internal/service/sysdeploy/defaults_test.go`, `scripts/build/build.sh`, `scripts/release/release.sh`, `scripts/deploy/deploy-moox.sh`, root `Makefile`, `go.work`, `modules/README.md`, and root `README.md`.
 - Modify Admin EventBus credential provisioning from the companion Host Agent plan and add `skills/moox/scripts/eventbus-credentials.sh`; release artifacts remain credential-free.
 - Add deployment regression coverage for `moox-eventbus`, its data directory, and disabled-component preservation.
 
@@ -494,7 +494,7 @@ health:
 
 streams:
   - name: MOOX_STORAGE
-    subjects: ["moox.storage.>"]
+    subjects: ["moox.event.storage.>"]
     retention: limits
     replicas: 1
     max_age: 72h
@@ -506,7 +506,7 @@ streams:
     max_age: 24h
     max_bytes: 10737418240
   - name: MOOX_CLOUDNODE_EXEC
-    subjects: ["moox.cloudnode.exec.v1.>"]
+    subjects: ["moox.event.cloudnode.exec.v1.>"]
     retention: work_queue
     replicas: 1
     max_age: 72h
@@ -523,13 +523,13 @@ Add the Topic registry, declared durable consumers, and CloudNode KV bucket in t
 
 ```yaml
 topics:
-  - topic: moox.storage.time_series.rows_updated.v1
+  - topic: moox.event.storage.time_series.rows_updated.v1
     stream: MOOX_STORAGE
     kind: event
     payload_content_type: application/x-protobuf; message=trpc.moox.storage.TimeSeriesRowsUpdated
     payload_version: 1
     enabled: true
-  - topic: moox.storage.record.rows_updated.v1
+  - topic: moox.event.storage.record.rows_updated.v1
     stream: MOOX_STORAGE
     kind: event
     payload_content_type: application/x-protobuf; message=trpc.moox.storage.RecordRowsUpdated
@@ -549,7 +549,7 @@ topics:
     enabled: true
 
 topic_families:
-  - pattern: moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*
+  - pattern: moox.event.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*
     stream: MOOX_CLOUDNODE_EXEC
     kind: command
     payload_content_type: application/x-protobuf; message=trpc.moox.cloudnode.JobItem
@@ -559,7 +559,7 @@ topic_families:
 consumers:
   - stream: MOOX_STORAGE
     durable: storage_view_builder_time_series_rows_updated_v1
-    filter_subject: moox.storage.time_series.rows_updated.v1
+    filter_subject: moox.event.storage.time_series.rows_updated.v1
     ack_policy: explicit
     deliver_policy: all
     replay_policy: instant
@@ -568,7 +568,7 @@ consumers:
     max_deliver: -1
   - stream: MOOX_STORAGE
     durable: storage_view_builder_record_rows_updated_v1
-    filter_subject: moox.storage.record.rows_updated.v1
+    filter_subject: moox.event.storage.record.rows_updated.v1
     ack_policy: explicit
     deliver_policy: all
     replay_policy: instant
@@ -577,7 +577,7 @@ consumers:
     max_deliver: -1
   - stream: MOOX_STORAGE
     durable: factor_calc
-    filter_subject: moox.storage.time_series.rows_updated.v1
+    filter_subject: moox.event.storage.time_series.rows_updated.v1
     ack_policy: explicit
     deliver_policy: new
     replay_policy: instant
@@ -597,7 +597,7 @@ consumers:
 consumer_templates:
   - stream: MOOX_CLOUDNODE_EXEC
     durable_prefix: cn_exec_
-    filter_pattern: moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*
+    filter_pattern: moox.event.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*
     ack_policy: explicit
     deliver_policy: all
     replay_policy: instant
@@ -608,7 +608,7 @@ consumer_templates:
 
 `storage-eventbus` may publish only the two exact Storage Topics, receive PubAck replies, and pull/ACK only the two `storage_view_builder_*` durables above. `factor-eventbus` may pull/ACK only `factor_calc`. Both are bind-only and have no consumer create/update/delete, Stream, KV, Host, CloudNode, or DLQ permission. `eventbus-internal-admin` remains the only identity that reconciles concrete declared consumers.
 
-`cloudnode-eventbus` is the one deliberate wider business role: it may publish `moox.cloudnode.exec.v1.>`, receive PubAck, manage consumers only in `MOOX_CLOUDNODE_EXEC`, pull/ACK those consumers, and access only `MOOX_CLOUDNODE_JOB_ACTIVE` KV. Static NATS users-file ACL can isolate the Stream/bucket but cannot inspect a legacy consumer-create request body or reliably enforce the `cn_exec_` prefix/filter as a security boundary. Therefore `packages/jetstream.EnsurePullConsumer` still validates the declared template to prevent application bugs, while the documented security boundary is the entire CloudNode Stream/KV, not one route. Tests must prove it cannot access Storage, Metrics, DLQ, other Streams/KV, or global JetStream management.
+`cloudnode-eventbus` is the one deliberate wider business role: it may publish `moox.event.cloudnode.exec.v1.>`, receive PubAck, manage consumers only in `MOOX_CLOUDNODE_EXEC`, pull/ACK those consumers, and access only `MOOX_CLOUDNODE_JOB_ACTIVE` KV. Static NATS users-file ACL can isolate the Stream/bucket but cannot inspect a legacy consumer-create request body or reliably enforce the `cn_exec_` prefix/filter as a security boundary. Therefore `packages/jetstream.EnsurePullConsumer` still validates the declared template to prevent application bugs, while the documented security boundary is the entire CloudNode Stream/KV, not one route. Tests must prove it cannot access Storage, Metrics, DLQ, other Streams/KV, or global JetStream management.
 
 NATS ACL 生成器必须把“pull/ACK”展开为 exact consumer INFO/NEXT/ACK API subjects；不能发放 `$JS.API.CONSUMER.>` 或 `$JS.ACK.MOOX_STORAGE.>`。`storage-eventbus` 只获得两个 View Builder durable 的 INFO/NEXT/ACK subjects，`factor-eventbus` 只获得 `factor_calc` 的 INFO/NEXT/ACK subjects；两者都只 subscribe 自己请求使用的 `_INBOX.>` replies。
 
@@ -716,9 +716,9 @@ git commit -m "feat(eventbus): expose management and health surfaces"
 ### Task 7: Integrate Build, Release, Deploy, And SysDeploy
 
 **Files:**
-- Modify: `scripts/build.sh`
-- Modify: `scripts/release.sh`
-- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/build/build.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
 - Modify: `modules/admin/proto/sysdeploy_service.proto`
 - Regenerate: `modules/admin/proto/admingen`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
@@ -727,7 +727,7 @@ git commit -m "feat(eventbus): expose management and health surfaces"
 - Create: `skills/moox/scripts/eventbus-credentials.sh`
 - Modify: `modules/README.md`
 - Modify: `README.md`
-- Create: `scripts/test-deploy-moox-eventbus.sh`
+- Create: `scripts/test/contract/test-deploy-moox-eventbus.sh`
 
 - [ ] **Step 1: Add failing deploy-package assertions**
 
@@ -735,7 +735,7 @@ The script must assert the presence of `bin/moox-eventbus`, `eventbus/config/app
 
 - [ ] **Step 2: Wire build and release**
 
-Add `eventbus` to `scripts/build.sh`, release directories, binary copy, configuration copy, and the all-components build. Do not package JetStream runtime data, users files, Admin encryption keys, tokens, CA private keys, or server private keys.
+Add `eventbus` to `scripts/build/build.sh`, release directories, binary copy, configuration copy, and the all-components build. Do not package JetStream runtime data, users files, Admin encryption keys, tokens, CA private keys, or server private keys.
 
 - [ ] **Step 3: Provision EventBus security material before startup**
 
@@ -756,8 +756,8 @@ Add the deployment key `eventbus`, service name `trpc.moox.eventbus.EventBusMgr`
 - [ ] **Step 6: Verify and commit**
 
 ```bash
-./scripts/build.sh eventbus
-./scripts/test-deploy-moox-eventbus.sh
+./scripts/build/build.sh eventbus
+./scripts/test/contract/test-deploy-moox-eventbus.sh
 go test -count=1 ./modules/admin/...
 git add scripts skills/moox/scripts/eventbus-credentials.sh modules/admin modules/README.md README.md
 git commit -m "feat(eventbus): package and deploy eventbus service"
@@ -921,7 +921,7 @@ Create `MOOX_CLOUDNODE_EXEC` and the active KV bucket through the EventBus regis
 Preserve the current route naming contract:
 
 ```text
-moox.cloudnode.exec.v1.jobitem.s.<space>.pkg.<package>.type.<job_type>
+moox.event.cloudnode.exec.v1.jobitem.s.<space>.pkg.<package>.type.<job_type>
 ```
 
 Set `MooxMessage.topic` to the exact routed Subject, Kind to `COMMAND`, Job ID as the stable message ID, the existing `JobItem` protobuf as payload, and `space_id` from the job. Preserve current attempt/lease checks above the transport. Add a Topic-family registry entry that binds the full pattern to the one `JobItem` schema. Replace persisted raw `AckSubject` with the shared package's bounded opaque `PersistentToken`; `ExecutionQueue` exposes token-based ACK/NAK/InProgress/Term without importing `nats.go`.
@@ -958,7 +958,7 @@ git commit -m "refactor(cloudnode): use central moox eventbus"
 
 - [ ] **Step 1: Migrate Factor's Storage consumer**
 
-Load `$HOME/.config/moox/factor/eventbus.yaml` and use `BindPullConsumer` for the predeclared `MOOX_STORAGE/factor_calc` durable filtered to `moox.storage.time_series.rows_updated.v1`; decode `MooxMessage`, validate the `trpc.moox.storage.TimeSeriesRowsUpdated` content type, and retain the current idempotent factor-run trigger behavior. Preserve `deliver_policy=new`, `ack_wait=60s`, `max_ack_pending=1000`, and `max_deliver=5`. Against a real role-authenticated broker, prove `factor-eventbus` can bind/pull/ACK only `factor_calc` and cannot publish Storage data, create/update/delete consumers, or bind either View Builder durable.
+Load `$HOME/.config/moox/factor/eventbus.yaml` and use `BindPullConsumer` for the predeclared `MOOX_STORAGE/factor_calc` durable filtered to `moox.event.storage.time_series.rows_updated.v1`; decode `MooxMessage`, validate the `trpc.moox.storage.TimeSeriesRowsUpdated` content type, and retain the current idempotent factor-run trigger behavior. Preserve `deliver_policy=new`, `ack_wait=60s`, `max_ack_pending=1000`, and `max_deliver=5`. Against a real role-authenticated broker, prove `factor-eventbus` can bind/pull/ACK only `factor_calc` and cannot publish Storage data, create/update/delete consumers, or bind either View Builder durable.
 
 - [ ] **Step 2: Prove every production module uses the shared package**
 
@@ -1016,9 +1016,9 @@ Write while EventBus is unavailable, restart Storage, restore EventBus, and veri
 Run:
 
 ```bash
-./scripts/build.sh all
-./scripts/release.sh
-./scripts/test-deploy-moox-eventbus.sh
+./scripts/build/build.sh all
+./scripts/release/release.sh
+./scripts/test/contract/test-deploy-moox-eventbus.sh
 go test -count=1 ./modules/eventbus/... ./packages/messagepb ./packages/jetstream
 ```
 

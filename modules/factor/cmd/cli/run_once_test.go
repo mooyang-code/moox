@@ -104,7 +104,7 @@ func TestRunInitAndImport(t *testing.T) {
 	out.Reset()
 	require.NoError(t, run(context.Background(), []string{
 		"import", "--db", dbPath, "--factors-dir", factorsDir,
-		"--file", filepath.Join(factorsDir, "Bias.py"), "--factor-id", "bias",
+		"--file", filepath.Join(factorsDir, "Bias.py"), "--factor-id", "Bias",
 		"--input-columns", "close", "--outputs", "bias", "--params-json", "{}",
 		"--lookback-periods", "20",
 	}, &out))

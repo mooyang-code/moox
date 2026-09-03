@@ -1,0 +1,51 @@
+market_id: stockcn
+route_id: stockcn_equity_kline_1m_v4
+frequency: 1m
+# Release-time value. Change only with a new SCF publish and runtime canary.
+timer_function_count: 170
+measured_safe_group_size: 40
+stagger:
+  start_second: 5
+  window_seconds: 35
+  max_starts_per_second: 6
+providers:
+  # Complete instrument snapshots are fetched concurrently and merged by
+  # canonical SubjectID. A failed source does not block healthy sources;
+  # the merged set still must pass the complete snapshot gate. EastMoney and
+  # Sina are the active instrument candidates; Tencent/Baidu stay outside
+  # until their live full-market snapshot evidence is accepted.
+  - id: sina
+    source_id: stockcn_minute_http
+    weight: 1
+    kline: active
+    kline_role: primary
+    instrument: active
+  - id: tencent
+    source_id: stockcn_http
+    weight: 1
+    kline: active
+    kline_role: primary
+    instrument: disabled
+  - id: tdx
+    source_id: normal_7709
+    weight: 1
+    kline: active
+    kline_role: fallback
+    instrument: disabled
+  - id: eastmoney
+    source_id: stockcn_http
+    weight: 1
+    kline: active
+    kline_role: fallback
+    instrument: active
+  - id: baidu
+    source_id: stockcn_http
+    weight: 1
+    kline: shadow
+    instrument: disabled
+history:
+  mode: live_only
+  backfill_enabled: false
+  # Current public feeds expose only a bounded latest page. Longer history
+  # requires a cursor-paginated provider before this value is increased.
+  max_lookback: 1d

@@ -336,7 +336,7 @@ func taskInstanceUpdate(spaceID string, payload *marketfetchpb.MarketFetchBatchC
 	}
 	result, _ := json.Marshal(resultData)
 	return store.MarketFetchInstanceUpdate{
-		SpaceID: spaceID, TaskID: item.GetTaskId(), DatasetID: payload.GetDatasetId(), SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), LastExecNode: payload.GetNodeId(), TargetDataTime: targetDataTime,
+		SpaceID: spaceID, TaskID: item.GetTaskId(), DatasetID: payload.GetDatasetId(), SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: targetDataTime,
 		At: at, Status: status, Result: string(result),
 	}
 }

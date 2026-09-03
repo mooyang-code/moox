@@ -39,7 +39,7 @@ import (
 
 func TestFactorRealStorageE2E(t *testing.T) {
 	require.Equal(t, "1", os.Getenv("MOOX_FACTOR_STORAGE_E2E"),
-		"integration test must be started through scripts/test-factor-storage-e2e.sh")
+		"integration test must be started through scripts/test/e2e/test-factor-storage-e2e.sh")
 	deployRoot := requiredEnv(t, "MOOX_DEPLOY_ROOT")
 	dataNodeID := requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_DATA_NODE_ID")
 	dataNodeTarget := requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_DATA_NODE_TARGET")
@@ -80,7 +80,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		[]byte(dataNodeAuth.AppId),
 	)
 	options := gatewayauth.NewTRPCClientOptions(
-		gatewayauth.ServiceGatewayTarget(storageio.NormalizeStorageTarget(gatewayTarget, "11003")),
+		storageio.NormalizeStorageTarget(gatewayTarget, "11003"),
 		gatewayNodeID,
 		credentials,
 	)
@@ -88,12 +88,12 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	primary := storagepb.NewPrimaryStoreClientProxy(options...)
 	view := storagepb.NewDataViewClientProxy(options...)
 	factor := factorpb.NewFactorMgrClientProxy(gatewayauth.NewTRPCClientOptions(
-		gatewayauth.ServiceGatewayTarget(storageio.NormalizeStorageTarget(gatewayTarget, "11003")),
+		storageio.NormalizeStorageTarget(gatewayTarget, "11003"),
 		gatewayNodeID,
 		factorCredentials,
 	)...)
 	cleanupMetadata := storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(
-		gatewayauth.ServiceGatewayTarget(storageio.NormalizeStorageTarget(gatewayTarget, "11003")),
+		storageio.NormalizeStorageTarget(gatewayTarget, "11003"),
 		gatewayNodeID,
 		factorCredentials,
 	)...)

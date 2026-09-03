@@ -95,8 +95,8 @@ modules/cloudnode/config/app.yaml
 modules/cloudnode/internal/testfixture/runtime.go
 modules/cloudnode/internal/bootstrap/bootstrap.go
 
-scripts/deploy-moox.sh
-scripts/test-deploy-moox-eventbus.sh
+scripts/deploy/deploy-moox.sh
+scripts/test/contract/test-deploy-moox-eventbus.sh
 
 docs/2026-07-23-event-contract-refactor-plan.md
 docs/superpowers/plans/2026-07-24-eventmessage-single-envelope-refactor.md
@@ -165,10 +165,10 @@ Expected: `git status --short --branch` 显示新分支且工作树干净。
 Run:
 
 ```bash
-./scripts/verify-event-contracts.sh
+./scripts/check/verify-event-contracts.sh
 (cd modules/factor && go test ./internal/trigger ./internal/store)
 (cd modules/cloudnode && go test ./internal/jobqueue)
-bash scripts/test-deploy-moox-eventbus.sh
+bash scripts/test/contract/test-deploy-moox-eventbus.sh
 ```
 
 Expected: 四组命令全部 PASS。基线失败时停止实施，先把失败归因到基线或环境，不把修复混入本计划。
@@ -181,7 +181,7 @@ Expected: 四组命令全部 PASS。基线失败时停止实施，先把失败�
 - Modify: `docs/2026-07-23-event-contract-refactor-plan.md:1`
 - Modify: `docs/superpowers/plans/2026-07-24-eventmessage-single-envelope-refactor.md:1`
 - Modify: `docs/架构总览.md:90`
-- Modify: `scripts/test-docs-architecture.sh:13`
+- Modify: `scripts/test/contract/test-docs-architecture.sh:13`
 
 - [x] **Step 1: 写文档状态检查并确认当前失败**
 
@@ -227,7 +227,7 @@ Run:
 ```bash
 sed -n '1,14p' docs/2026-07-23-event-contract-refactor-plan.md
 sed -n '1,14p' docs/superpowers/plans/2026-07-24-eventmessage-single-envelope-refactor.md
-bash scripts/test-docs-architecture.sh
+bash scripts/test/contract/test-docs-architecture.sh
 ```
 
 Expected: 两份文档首屏都显示历史状态，文档架构测试 PASS。
@@ -425,7 +425,7 @@ git commit -m "feat(events): add registry-owned subject consumer"
 - Modify: `modules/cloudnode/internal/bootstrap/bootstrap.go`
 - Modify: `modules/cloudnode/internal/testfixture/runtime.go`
 - Modify: `modules/cloudnode/internal/rpc/job_item_test.go`
-- Modify: `scripts/verify-event-contracts.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
 
 - [x] **Step 1: 把 route config 测试改成事件层配置**
 
@@ -461,7 +461,7 @@ require.Equal(t, ConsumerName(
 
 - [x] **Step 2: 增加架构门禁并确认失败**
 
-在 `scripts/verify-event-contracts.sh` 增加：
+在 `scripts/check/verify-event-contracts.sh` 增加：
 
 ```bash
 reject '\.NewConsumer\(' \
@@ -472,7 +472,7 @@ reject '\.NewConsumer\(' \
 Run:
 
 ```bash
-./scripts/verify-event-contracts.sh
+./scripts/check/verify-event-contracts.sh
 ```
 
 Expected: FAIL，并定位到 `modules/cloudnode/internal/jobqueue/jetstream_queue.go` 的底层 `q.client.NewConsumer`。
@@ -632,7 +632,7 @@ Run:
 (cd modules/cloudnode && gofmt -w internal/jobqueue internal/config internal/bootstrap internal/testfixture internal/rpc)
 (cd modules/cloudnode && go test ./internal/jobqueue ./internal/rpc ./internal/bootstrap)
 (cd modules/cloudnode && go test -race ./internal/jobqueue)
-./scripts/verify-event-contracts.sh
+./scripts/check/verify-event-contracts.sh
 ```
 
 Expected: 全部 PASS；生产 CloudNode 不再直接调用底层 `NewConsumer`，route 隔离测试仍证明不同 jobType 使用不同精确 Subject。
@@ -647,7 +647,7 @@ git add packages/events \
   modules/cloudnode/internal/bootstrap/bootstrap.go \
   modules/cloudnode/internal/testfixture/runtime.go \
   modules/cloudnode/internal/rpc/job_item_test.go \
-  scripts/verify-event-contracts.sh
+  scripts/check/verify-event-contracts.sh
 git commit -m "refactor(cloudnode): use exact event subject consumer"
 ```
 
@@ -789,7 +789,7 @@ Run:
 (cd modules/storage && gofmt -w internal/service/view)
 (cd modules/storage && CGO_ENABLED=1 go test ./internal/service/view)
 (cd modules/storage && CGO_ENABLED=1 go test -race ./internal/service/view)
-./scripts/verify-event-contracts.sh
+./scripts/check/verify-event-contracts.sh
 ```
 
 Expected: 全部 PASS；五项冻结契约不变；`consume.go` 不再包含事件应用、Subject 调度、heartbeat 或 gate 的类型实现。
@@ -987,25 +987,25 @@ git commit -m "refactor(factor): simplify fixed-window event batching"
 ### Task 6: 单机默认部署跳过 EventBus TLS 凭据生成
 
 **Files:**
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-deploy-moox-eventbus.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-eventbus.sh`
 - Modify: `docs/运维/MooX-EventBus运维.md`
 
 - [x] **Step 1: 写静态部署契约检查并确认失败**
 
-在 `scripts/test-deploy-moox-eventbus.sh` 增加：
+在 `scripts/test/contract/test-deploy-moox-eventbus.sh` 增加：
 
 ```bash
 grep -Fq \
   '[[ "${WITH_EVENTBUS}" == "1" && "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" && -x "${ROOT}/bin/moox-admin-cli" ]]' \
-  "${ROOT}/scripts/deploy-moox.sh"
-grep -Fq 'missing EventBus TLS credential' "${ROOT}/scripts/deploy-moox.sh"
+  "${ROOT}/scripts/deploy/deploy-moox.sh"
+grep -Fq 'missing EventBus TLS credential' "${ROOT}/scripts/deploy/deploy-moox.sh"
 ```
 
 Run:
 
 ```bash
-bash scripts/test-deploy-moox-eventbus.sh
+bash scripts/test/contract/test-deploy-moox-eventbus.sh
 ```
 
 Expected: FAIL，因为当前 `start_admin` 仅按 `WITH_EVENTBUS` 判断。
@@ -1079,9 +1079,9 @@ TLS、CA 和认证；不得通过合并角色绕过 ACL。
 Run:
 
 ```bash
-bash -n scripts/deploy-moox.sh
-bash scripts/test-deploy-moox-eventbus.sh
-bash scripts/test-deploy-moox-storage-profile.sh
+bash -n scripts/deploy/deploy-moox.sh
+bash scripts/test/contract/test-deploy-moox-eventbus.sh
+bash scripts/test/contract/test-deploy-moox-storage-profile.sh
 (cd modules/admin && go test ./cmd/cli -run EventBus)
 ```
 
@@ -1090,8 +1090,8 @@ Expected: 全部 PASS；TLS storage profile 仍写入 credential file；Admin �
 - [x] **Step 6: 提交部署收敛**
 
 ```bash
-git add scripts/deploy-moox.sh \
-  scripts/test-deploy-moox-eventbus.sh \
+git add scripts/deploy/deploy-moox.sh \
+  scripts/test/contract/test-deploy-moox-eventbus.sh \
   docs/运维/MooX-EventBus运维.md
 git commit -m "refactor(deploy): provision eventbus credentials only for tls"
 ```
@@ -1155,7 +1155,7 @@ rg -n 'NewSubjectConsumer|NewConsumer|固定窗口|target_dataset|queued heartbe
   docs/协议设计.md docs/架构总览.md docs/存储层架构.md docs/因子计算模块设计.md
 rg -n 'bucket\\[\\(space, dataset, subject, freq\\)\\]|LateDataPolicy|closedBucket' \
   docs/协议设计.md docs/架构总览.md docs/存储层架构.md docs/因子计算模块设计.md
-bash scripts/test-docs-architecture.sh
+bash scripts/test/contract/test-docs-architecture.sh
 ```
 
 Expected: 第一条命令命中更新后的当前契约；第二条命令无输出；文档架构测试 PASS。
@@ -1184,7 +1184,7 @@ gofmt -w $(git diff --name-only \
   5775dd6fc9530b9b5e0fcf39de1e76cd6708bd10...HEAD \
   -- '*.go')
 git diff --check
-bash -n scripts/deploy-moox.sh scripts/verify-event-contracts.sh
+bash -n scripts/deploy/deploy-moox.sh scripts/check/verify-event-contracts.sh
 ```
 
 Expected: 无输出或 PASS。
@@ -1194,7 +1194,7 @@ Expected: 无输出或 PASS。
 Run:
 
 ```bash
-./scripts/verify-event-contracts.sh
+./scripts/check/verify-event-contracts.sh
 (cd packages/events && go test -race ./...)
 (cd packages/jetstream && go test -race ./...)
 (cd modules/eventbus && go test -race ./...)
@@ -1223,10 +1223,10 @@ Expected: 全部 PASS；race 无报告。
 Run:
 
 ```bash
-bash scripts/test-deploy-moox-eventbus.sh
-bash scripts/test-deploy-moox-storage-profile.sh
-bash scripts/test-deploy-moox-storage-view.sh
-bash scripts/test-docs-architecture.sh
+bash scripts/test/contract/test-deploy-moox-eventbus.sh
+bash scripts/test/contract/test-deploy-moox-storage-profile.sh
+bash scripts/test/contract/test-deploy-moox-storage-view.sh
+bash scripts/test/contract/test-docs-architecture.sh
 ```
 
 Expected: 全部 PASS。
@@ -1236,7 +1236,7 @@ Expected: 全部 PASS。
 Run:
 
 ```bash
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-go-workspace.sh
 make verify-pr
 ```
 

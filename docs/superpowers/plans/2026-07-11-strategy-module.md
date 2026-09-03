@@ -552,7 +552,7 @@ func TestReadinessEmitsOnceForLogicalBar(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 订阅 `moox.storage.time_series.rows_updated.v1`**
+- [ ] **Step 2: 订阅 `moox.event.storage.time_series.rows_updated.v1`**
 
 事件只作触发信号；gate 按 Binding 的 trigger dataset + required datasets 统计 `(bar_time,data_revision)`，达到到齐率或超时后生成 StrategyTask。
 
@@ -665,9 +665,9 @@ git commit -m "feat(strategy): expose strategy management RPC and CLI"
 - Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
 - Modify: `modules/admin/config/gateway.yaml`
 - Modify: `Makefile`
-- Modify: `scripts/build.sh`
-- Modify: `scripts/release.sh`
-- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/build/build.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
 - Create: `docs/运维/MooX-Strategy运维.md`
 - Modify: `docs/SUMMARY.md`
 

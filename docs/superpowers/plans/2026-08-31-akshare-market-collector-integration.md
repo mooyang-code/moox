@@ -4,7 +4,7 @@
 
 **Goal:** 将 AkShare、QUANTAXIS 和 easy_tdx 中确认过的交易日历、TDX 协议及行情接口，以 Go 原生公共库和 Provider 的方式整合进 MooX Collector，覆盖 A 股、港股、美股，并为指数、可转债等资产建立独立且可扩展的分类、标准化和采集链路。
 
-**Architecture:** 新增根级 `packages/marketcalendar`、`packages/routeprobe` 和 `packages/tdx` 公共库：`marketcalendar` 使用 `go:embed` 固化中国交易日历，`routeprobe` 抽象解析候选、实际执行环境探测、线路评分、快照和有限 fallback，`tdx` 按 P0 Wire Spike 逐步以 Go 原生方式实现 easy_tdx 中已确认的 TDX TCP 帧、握手、压缩、编解码、普通行情和扩展行情，并提供 TDX 专用探针。Collector 新增强类型 `MarketProvider`、`KlineFetcher`、`InstrumentFetcher`、`KlineSpec` 和统一 `NormalizedKline`，Provider 按真实上游（TDX、东方财富、新浪、腾讯、中证、申万）归类，而不是把 AkShare、QUANTAXIS 或 Python 包作为运行时依赖。Provider 下的具体行情通道使用 `SourceID` 标识，例如 `tdx/normal_7709`、`tdx/ex_classic_7727` 和 `tdx/ex_mac_7727`；`SourceKey` 由 `ProviderID + SourceID` 组成。通用 KlinePipeline 负责日历/交易时段、标准化、完整性校验、线路路由、幂等 Storage 写入和来源追踪；Market Descriptor 负责区分 `stock_cn`、`stock_hk`、`stock_us` 以及 `equity`、`index`、`convertible_bond` 等资产类型。现有加密货币 HTTP 链路与 TDX 共用 `routeprobe`，但使用各自的 HTTP/TCP 协议探针。TDX 实时任务采用 SCF Timer 短时执行：函数内复用连接，任务结束后退出；线路选择按 `scf_region + provider + source + transport + host:port` 维护。SCF 不实现主动限频或全局配额，随机公网出口只是运行环境事实，不能作为规避上游限制的功能承诺。
+**Architecture:** 新增根级 `packages/marketcalendar`、`packages/routeprobe` 和 `packages/tdx` 公共库：`marketcalendar` 使用 `go:embed` 固化中国交易日历，`routeprobe` 抽象解析候选、实际执行环境探测、线路评分、快照和有限 fallback，`tdx` 按 P0 Wire Spike 逐步以 Go 原生方式实现 easy_tdx 中已确认的 TDX TCP 帧、握手、压缩、编解码、普通行情和扩展行情，并提供 TDX 专用探针。Collector 新增强类型 `MarketProvider`、`KlineFetcher`、`InstrumentFetcher`、`KlineSpec` 和统一 `NormalizedKline`，Provider 按真实上游（TDX、东方财富、新浪、腾讯、中证、申万）归类，而不是把 AkShare、QUANTAXIS 或 Python 包作为运行时依赖。Provider 下的具体行情通道使用 `SourceID` 标识，例如 `tdx/normal_7709`、`tdx/ex_classic_7727` 和 `tdx/ex_mac_7727`；`SourceKey` 由 `ProviderID + SourceID` 组成。通用 KlinePipeline 负责日历/交易时段、标准化、完整性校验、线路路由、幂等 Storage 写入和来源追踪；Market Descriptor 负责区分 `stockcn`、`stockhk`、`stockus` 以及 `equity`、`index`、`convertible_bond` 等资产类型。现有加密货币 HTTP 链路与 TDX 共用 `routeprobe`，但使用各自的 HTTP/TCP 协议探针。TDX 实时任务采用 SCF Timer 短时执行：函数内复用连接，任务结束后退出；线路选择按 `scf_region + provider + source + transport + host:port` 维护。SCF 不实现主动限频或全局配额，随机公网出口只是运行环境事实，不能作为规避上游限制的功能承诺。
 
 **Tech Stack:** Go 1.25、多 module `go.work`、tRPC-Go、`net`、`encoding/binary`、`compress/zlib`、`httptest`、`testify`、现有 Collector `httpclient`、Storage PrimaryStore、SQLite/GORM、YAML、`go:embed`、TDX golden wire fixtures。
 
@@ -13,7 +13,7 @@
 - **不用 `Feed`。** 本项目的行情接口是主动拉取，不是消息推送流；`Source` 表示某个 Provider 下的一条可独立连接、探测和故障切换的访问通道，例如 `tdx/normal_7709`、`tdx/ex_classic_7727`、`tdx/ex_mac_7727` 或 `binance/spot_http`。`SourceKey{ProviderID, SourceID}` 是唯一注册身份。
 - **不用 `CapabilityKey`。** 原建议中的这个字段只是“该来源支持什么”的抽象，不是业务数据。计划改用 `SourceSpec`、`Market/Instrument/Frequency` 支持矩阵和 manifest 表达支持范围；`ProtocolVariant` 只表达握手、帧和登录差异，不能代替支持矩阵。
 - **SCF 不做主动限频。** 不创建 Provider budget、全局配额、主动错峰、频控冷却或基于随机出口 IP 的请求预算。连接超时、函数 deadline、单批次边界和有限故障 fallback 属于可靠性控制，不是限频；上游 429/远端忙只作为错误和观测结果处理。
-- **按新项目直接迁移。** 不保留类型别名、兼容适配层、旧 Dataset、旧入口、双写或旧资源保护。现有 Binance/crypto 业务能力迁移到统一 `market_data` composition root 后，删除旧 `crypto_market` Handler、SCF entrypoint 和 Binance-oriented 旁路；“crypto”保留为业务 Market/Source 语义，不保留旧入口名称。
+- **按新项目直接迁移。** 不保留类型别名、兼容适配层、旧 Dataset、旧入口、双写或旧资源保护。现有 Binance/crypto 业务能力迁移到统一 `market_data` composition root 后，删除旧 `crypto` Handler、SCF entrypoint 和 Binance-oriented 旁路；“crypto”保留为业务 Market/Source 语义，不保留旧入口名称。
 - **TDX 扩展先证据后启用。** `ex_classic_7727` 和 `ex_mac_7727` 即使已有离线解析代码，也必须分别完成完整 wire spike、动态市场/证券目录、字段和真实 SCF 出口验证；未完成前只能是 `catalog_only` 或 `shadow`，不得写入 canonical Dataset。
 
 ## 当前执行状态（2026-09-01）
@@ -36,22 +36,22 @@
 - [ ] 尚未完成 TDX Wire/Field Acceptance：本轮已在 `jstdx.gtjas.com:7709` 本机单线路成功录制普通三条 setup command、证券数量请求及四个完整响应帧，并成功解码一次日线 K 线；分钟 K 线返回了超出本次探测日期的未来时间标签，字段/时间语义仍未通过人工对账。抓包哈希和响应头已记录在 `docs/tdx-go-port.md`；其他四条 `7709` 线路超时，后续重试还观测到 `jstdx.gtjas.com:7709` 的 HTTP 403 和 `jstdx.gtjas.com:7727` 的 HTTP 502，均不是 TDX 帧；`jstdx.gtjas.com:7727`/`shtdx.gtjas.com:7727` 的先前 classic/MAC 尝试也以非完整 body 结束。仍需在目标 SCF 地域录制并人工对账 `normal_7709`，并分别确认 `ex_classic_7727`、`ex_mac_7727` 的完整请求、16 字节响应头、压缩体、解压体、错误帧、登录和字段语义，详见 `docs/tdx-go-port.md`。TDX 普通传输现已把 transport/protocol 错误与数据、Storage 错误分开，重连预算覆盖串行 items 和已选线路的重连/setup；非 TDX HTTP 响应也会归类为 `ErrProtocol`，这只改善故障处理和诊断，不替代目标地域的 Wire/Field Acceptance。
 - [x] 已把通用 `market_data` Timer 的静态 assignment 接到 SCF 运行时契约：Reconciler 将 Market/Instrument/Source 身份写入 assignment，CLI 将 Storage 应用身份写入函数环境，Timer 事件可从静态环境构造有界请求；当前测试仍使用 fake Storage，不等于正式 Storage 契约验收。
 - [x] 新浪 HTTP Provider 基线已实现：A 股 `stock_zh_a_minute` 的 Go JSONP 分钟适配器覆盖 1/5/15/30/60 分钟并保持 `catalog_only`；A 股、港股、美股日线已实现共享 K2 压缩 JS 解码和按市场绑定的 HTTP 客户端，A 股完整 6379 行、港股 5462 行、美股 10022 行临时实盘响应已与原始 AkShare 解码结果对账，US amount 按 AkShare 语义不写入。由于尚未完成目标 SCF 地域的实盘覆盖、单位/时段和闭合 bar 门禁，新浪日线、分钟线仍保持 `catalog_only`；同花顺、国证（CNI）和申万（SW）已补齐 Go 日线适配器，CNI 原始单位明确保留为 `10k_share`/`100m_cny`，但来源仍待实盘覆盖核验；腾讯 A 股已实现并标记为 enabled，仅覆盖不复权日线。期货、期权、基金、REITs、外汇、黄金同样只登记不实现。
-- [x] 已完成新项目 `crypto` 的 Binance 1m 正式 PrimaryStore 写入和精确读回：`binance_spot_kline_1m` 已激活并处于 `binding_locked/ready`，四个 `scf-event` Timer 节点 `ap-beijing`、`ap-shanghai`、`ap-singapore`、`ap-guangzhou` 均成功部署 `c11b4eb5...` 包；Timer 节点的同步 Invoke 在 `2026-09-01T14:02:00Z` 返回 `success=true`、`rows_written=2`、`request_id=9ffa5041-6618-47b7-910f-2c5fc177a441`。随后对 `PrimaryStore/ReadTimeSeriesRows` 做精确 key read-back，`2026-09-01T14:00:00Z` 和 `14:01:00Z` 两行均返回 `ret_info.code=0`，并核对了 OHLCV 字段。Storage View 进程当前未运行，范围查询返回 `dataset ... has no active view`，因此本项只证明 PrimaryStore 写入/精确读回，不宣称 View/range read-back 已通过；旧 `crypto_market` 云资源未被本次新项目验收复用或删除。
+- [x] 已完成新项目 `crypto` 的 Binance 1m 正式 PrimaryStore 写入和精确读回：`dataset_binance_spot_kline_1m` 已激活并处于 `binding_locked/ready`，四个 `scf-event` Timer 节点 `ap-beijing`、`ap-shanghai`、`ap-singapore`、`ap-guangzhou` 均成功部署 `c11b4eb5...` 包；Timer 节点的同步 Invoke 在 `2026-09-01T14:02:00Z` 返回 `success=true`、`rows_written=2`、`request_id=9ffa5041-6618-47b7-910f-2c5fc177a441`。随后对 `PrimaryStore/ReadTimeSeriesRows` 做精确 key read-back，`2026-09-01T14:00:00Z` 和 `14:01:00Z` 两行均返回 `ret_info.code=0`，并核对了 OHLCV 字段。Storage View 进程当前未运行，范围查询返回 `dataset ... has no active view`，因此本项只证明 PrimaryStore 写入/精确读回，不宣称 View/range read-back 已通过；旧 `crypto` 云资源未被本次新项目验收复用或删除。
 - [x] 已完成四地域 SCF 出口和 Binance HTTP live probe：当前项目节点的 r7 部署 job 分别为 `node-batch-418c9c7c-01fc-430a-8f8c-20d165b6c81c`（北京）、`node-batch-03c45fc6-5d71-441a-9ef9-4b2f7ef2af9d`（上海）、`node-batch-1bafeeb3-2dad-41ca-93a9-b0a6ae7fae32`（新加坡）和 `node-batch-ab698c92-9bdd-4f40-bdc0-198961173f2a`（广州）；四个节点的 Provider probe 均返回 HTTP `200`。本次只观测到新加坡出口 `43.134.111.139`，其余三个节点的 `api.ipify.org` 反射请求被拒绝；这不构成多 IP 证明，更不构成绕过频控的承诺。探针只验证实际节点到 Binance 的协议连通性和延迟观测。
 - [x] 已完成一次独立 `codeCR` 审查：报告未发现 P0，提出的 3 个 P1 和 5 个 P2 已逐项修复并由主 Agent 重新运行受影响的单测/全量回归；后续复审 Agent 未在等待窗口内返回，因此不能把复审超时视为“无问题”。
 - [x] 本轮 CNI/SW、manifest/config、SourceStatus 和公共时间契约修订后已完成一次独立 `codeCR`；首轮发现 1 个 P1（Pipeline 返回 bar 身份未与请求绑定）和 3 个 P2（月末 BarEnd、日历越界、SourceSpec 能力丢失），均已修复；同一独立 Agent 对修复做了定向复核，未发现 P0/P1/P2，并由主 Agent 运行 targeted/full/race tests 验证。此前其他复审 Agent 的超时仍不视为“无问题”。
 - [x] 本轮新浪分钟 Provider 另由独立 `codeCR` 审查：发现新浪分钟时间戳为 end-label 的 P1 和 `NaN/Inf` 校验缺口 P2，均已先补失败测试再修复；追加 `ProviderTime` 原始标签断言后复核未发现 P0/P1/P2。剩余缺口是其他周期的 end-label、未闭合 bar 和各数值字段的逐字段测试，不影响当前 `catalog_only` 状态。
-- [x] 最近几次独立 `codeCR` 复核 Pipeline、Handler、TDX transport、`NormalizedKline`、Scheduler retry 和 CloudNode cron：累计未发现 P0；提出的多标的 deadline、settle/畸形 bar、重连原子性与错误分类、IPv6、重连耗时、retry key、TDX Timer 单标的分配、`1w/1M` cron 白名单、symbol deadline、stale-row source event 和多地域发布补偿问题均已修复，并由主 Agent 运行受影响包测试、targeted race、全量 Collector 测试和 vet 验证。最新复核发现美股 `1M` Timer 使用北京时间零点会早于纽约月末收盘，已改为 `stock_us + equity + 1M` 使用 `0 0 8 1 * * *`，并同步加入 CloudNode cron 白名单和测试；该时间在纽约夏令时和标准时均位于前一交易日收盘之后。剩余缺口是完整 SCF deadline、真实 TDX 节点和 Storage read-back，不能以本地测试代替。
-- [x] 最后一次独立 `codeCR` 针对美股月线时区修复做了有效只读复核：检查 `BuildAssignments -> CronForMarketFrequency -> Reconciler -> CloudNode preflight/EnsureTimerTrigger` 调用链、`stock_us` manifest 以及对应单测，未发现可复现的 P0/P1/P2。该复核未修改文件或发布资源；随后补充了 `TestReconcilerUsesMarketAwareMonthlyCronForUSRule`，覆盖 Reconciler 生成最终 Timer patch 的调用链；腾讯云实际 cron 时区解释仍需在正式环境验证。
+- [x] 最近几次独立 `codeCR` 复核 Pipeline、Handler、TDX transport、`NormalizedKline`、Scheduler retry 和 CloudNode cron：累计未发现 P0；提出的多标的 deadline、settle/畸形 bar、重连原子性与错误分类、IPv6、重连耗时、retry key、TDX Timer 单标的分配、`1w/1M` cron 白名单、symbol deadline、stale-row source event 和多地域发布补偿问题均已修复，并由主 Agent 运行受影响包测试、targeted race、全量 Collector 测试和 vet 验证。最新复核发现美股 `1M` Timer 使用北京时间零点会早于纽约月末收盘，已改为 `stockus + equity + 1M` 使用 `0 0 8 1 * * *`，并同步加入 CloudNode cron 白名单和测试；该时间在纽约夏令时和标准时均位于前一交易日收盘之后。剩余缺口是完整 SCF deadline、真实 TDX 节点和 Storage read-back，不能以本地测试代替。
+- [x] 最后一次独立 `codeCR` 针对美股月线时区修复做了有效只读复核：检查 `BuildAssignments -> CronForMarketFrequency -> Reconciler -> CloudNode preflight/EnsureTimerTrigger` 调用链、`stockus` manifest 以及对应单测，未发现可复现的 P0/P1/P2。该复核未修改文件或发布资源；随后补充了 `TestReconcilerUsesMarketAwareMonthlyCronForUSRule`，覆盖 Reconciler 生成最终 Timer patch 的调用链；腾讯云实际 cron 时区解释仍需在正式环境验证。
 - [x] 该集成测试和当前架构文档追加一次独立 `codeCR` 后，修正了两个 P2 文档问题：Invoke 函数名补充强制的 `<space>` 标识，SCF 验收步骤改为按各 Market/Source 的 Timer fleet 分别验证，避免把不同 Dataset、频率或 Market 误写为单函数承载。复核未发现 P0/P1；代码和文档修订均未发布云端资源。
 - [x] 最新独立 `codeCR` 发现 TDX transport 的两个 P2：底层 Dial/读写错误丢失原始 `errors.Is` cause，以及完整帧后的 `SecurityBars` payload 解析错误仍复用连接；已改为保留底层错误链、解析错误后关闭连接，并增加对应 race 测试。该轮复核未发现 P0/P1；扩展 TDX 的 Wire/Field Acceptance 仍未通过。
 - [x] 随后一次独立 `codeCR` 针对 Handler/TDX transport/route selector 发现 2 个 P1（重复 Item `SourceEventID` 会被 Storage 去重、TDX 协议错误被字符串规则误判为永久 invalid）和 3 个 P2（symbol 多 Item 静默只取第一项、TDX 阻塞 I/O 不响应主动取消、显式零值配置被默认值覆盖）。已增加请求级来源事件去重和 symbol 单 Item 校验、按 `errors.Is` 分类 TDX protocol/transport、用 `context.AfterFunc` 关闭当前连接响应取消，并使用可保留显式零值的环境解析；对应失败测试先行补齐，targeted test/race 已通过。复审 Agent 在终止前未发现新的 P0/P1/P2，但未完成全量动态复核，因此不将其“clean”作为正式审查结论。
 - [x] 本轮最终本地回归已通过：Collector 全量 `go test -race`、`go vet`、server/cli/SCF build，CloudNode 全量 test/vet，CLI 全量 test/vet，`marketcalendar`/`routeprobe`/`marketmanifest`/`tdx` race/vet，以及日历校验脚本均通过；Metadata `apply --dry-run` 规划 438 个资源调用，A/H/美股筛选规划 153 个资源调用。最新 Linux/amd64 `market_data` SCF 包已重新构建并核对入口和配置清单。
-- [x] 新项目正式发布前置条件已按独立环境补齐并完成 Binance 路径验收：使用 `crypto` Space、新的 Metadata/Dataset、Storage 应用签名和网关 service auth，未复用旧 `custom.toml` 的旧 Space/入口；四地域 fleet 的创建/部署 job 均以 `success` 完成。新增的 `collector function invoke` 也已通过真实 SCF request-response 调用验证通用入口；一次非 Timer Invoke 返回 `rows_written=1`，`request_id=033264c6-5b8d-420f-9f99-373bb0e93217`。正式验收不等价于所有来源启用：TDX Wire/Field、Sina/EastMoney 等股票来源、Storage View/range query 仍按各自门禁保持未完成。
+- [x] 新项目正式发布前置条件已按独立环境补齐并完成 Binance 路径验收：使用 `crypto` Space、新的 Metadata/Dataset、Storage 应用签名和网关 service auth，未复用旧 `moox.toml` 的旧 Space/入口；四地域 fleet 的创建/部署 job 均以 `success` 完成。新增的 `collector function invoke` 也已通过真实 SCF request-response 调用验证通用入口；一次非 Timer Invoke 返回 `rows_written=1`，`request_id=033264c6-5b8d-420f-9f99-373bb0e93217`。正式验收不等价于所有来源启用：TDX Wire/Field、Sina/EastMoney 等股票来源、Storage View/range query 仍按各自门禁保持未完成。
 
-当前已经可以编译的目标 SCF 入口是 `modules/collector/cmd/scf/market_data`，它接受一批明确的 `MarketID/InstrumentType/SourceKey` 请求并调用通用 KlinePipeline；Kline 的非 Timer Invoke 也会按批次契约发布 completion。Binance symbol snapshot 同样从该入口进入，并由通用 InstrumentPipeline 完成一次性全量快照、记录写入和 Metadata membership 维护；多调用分片在缺少持久化 barrier 时会被拒绝。它不是旧 `crypto_market` 入口的兼容模式；旧入口已经删除。TDX 扩展 Source 仍必须等待 Wire Spike 结论后才能接入该入口。
+当前已经可以编译的目标 SCF 入口是 `modules/collector/cmd/scf/market_data`，它接受一批明确的 `MarketID/InstrumentType/SourceKey` 请求并调用通用 KlinePipeline；Kline 的非 Timer Invoke 也会按批次契约发布 completion。Binance symbol snapshot 同样从该入口进入，并由通用 InstrumentPipeline 完成一次性全量快照、记录写入和 Metadata membership 维护；多调用分片在缺少持久化 barrier 时会被拒绝。它不是旧 `crypto` 入口的兼容模式；旧入口已经删除。TDX 扩展 Source 仍必须等待 Wire Spike 结论后才能接入该入口。
 
-通用入口也已接入 `moox-cli collector function package --entrypoint market_data` 的本地打包路径，且 `collector function publish` 已能按 `market_data` 选择不携带 CLS/EventBus 控制面材料、生成 canonical Source 身份和 Storage 应用环境；正式发布仍必须先补齐新项目 Space、Metadata/Timer 规则、Storage 凭据和 SCF 出口 read-back，不能把仅通过本地构建的 zip 视为正式上线。发布切换完成后不再提供 `--entrypoint crypto_market`。
+通用入口也已接入 `moox-cli collector function package --entrypoint market_data` 的本地打包路径，且 `collector function publish` 已能按 `market_data` 选择不携带 CLS/EventBus 控制面材料、生成 canonical Source 身份和 Storage 应用环境；正式发布仍必须先补齐新项目 Space、Metadata/Timer 规则、Storage 凭据和 SCF 出口 read-back，不能把仅通过本地构建的 zip 视为正式上线。发布切换完成后不再提供 `--entrypoint crypto`。
 
 命名约定：本计划不再使用 `Feed` 或 `CapabilityKey` 作为公共概念。需要区分同一 Provider 的不同访问通道时使用 `SourceID`，组合身份使用 `SourceKey{ProviderID, SourceID}`；`ProtocolVariant` 仅描述协议握手/帧/登录差异，支持范围由 `SourceSpec`、Market/Instrument/Frequency 矩阵和 manifest 声明。
 
@@ -109,8 +109,8 @@
 | `tdx` | `normal_7709`，normal TCP `7709` | easy_tdx `TdxClient.get_security_bars`、`get_index_bars`；QUANTAXIS `QATdx.py`；tdx-go `config.GetBestStockQuotesServer` | A 股股票、指数、可转债及普通证券 | 实现 A 股日线/分钟线、指数日线/分钟线和线路优选 |
 | `tdx` | `ex_classic_7727`，extended classic TCP `7727` | easy_tdx `ExTdxClient.get_markets`、`get_instrument_info`、`get_instrument_bars` | 港股、美股及扩展市场 | 先做协议验证和最小目录能力 |
 | `tdx` | `ex_mac_7727`，extended mac TCP `7727` | easy_tdx `MacExClient` 及 MAC extended commands | 港股、美股及扩展市场 | 单独验证特殊帧和协议登录，未确认前不启用 |
-| `eastmoney` | HTTP | `stock_zh_a_hist`、`stock_hk_hist`、`stock_us_hist`、指数/可转债 EM 接口 | A 股、港股、美股、指数、可转债 | 实现日线和可用分钟线 |
-| `sina` | HTTP | `stock_zh_a_daily`、`stock_zh_a_minute`、`stock_hk_daily`、`stock_us_daily` | A 股、港股、美股及期权/期货扩展 | A 股分钟 JSONP 已有 catalog-only Go 适配器；日线压缩 JS 解码和港美股接口待单独验证 |
+| `eastmoney` | HTTP | `stock_zh_a_hist`、`stockhk_hist`、`stockus_hist`、指数/可转债 EM 接口 | A 股、港股、美股、指数、可转债 | 实现日线和可用分钟线 |
+| `sina` | HTTP | `stock_zh_a_daily`、`stock_zh_a_minute`、`stockhk_daily`、`stockus_daily` | A 股、港股、美股及期权/期货扩展 | A 股分钟 JSONP 已有 catalog-only Go 适配器；日线压缩 JS 解码和港美股接口待单独验证 |
 | `ths` | `daily_http` | QUANTAXIS `QAThs.py` 的 `QA_fetch_get_stock_day_in_year`、`QA_fetch_get_stock_day`；`d.10jqka.com.cn/v2/line/hs_{code}/{if_fq}/{year}.js` | A 股股票日线、板块元数据 | `catalog_only`，先验证年度切片、复权 `if_fq`、`date/open/high/low/close/volume/amount/factor` 单位和上游可用性 |
 | `tencent` | HTTP | `stock_zh_a_hist_tx`、`stock_zh_index_daily_tx`、`stock_zh_ah_daily` | A 股、A+H、指数 | 实现 A 股日线，其他能力登记 |
 | `cni` | HTTP | `index_hist_cni` | 国证指数 | Go 日线适配器已实现，待单位和覆盖范围实盘核验 |
@@ -123,13 +123,13 @@ Provider ID 代表真实上游，不代表 Python 包名；Source ID 代表 Prov
 
 | Market ID | Instrument Type | Dataset ID | 首批频率 | 日历/时区 |
 | --- | --- | --- | --- | --- |
-| `stock_cn` | `equity` | `stock_cn_kline` | `1m`、`1d`、`1w`、`1M` | 中国交易日历，`Asia/Shanghai` |
-| `stock_cn` | `index` | `stock_cn_index_kline` | `1m`、`1d`、`1w`、`1M` | 中国交易日历，`Asia/Shanghai` |
-| `stock_cn` | `convertible_bond` | `stock_cn_convertible_bond_kline` | `1m`、`1d` | 中国交易日历，`Asia/Shanghai` |
-| `stock_hk` | `equity` | `stock_hk_kline` | `1m`、`1d`、`1w`、`1M` | 港股时段，`Asia/Hong_Kong` |
-| `stock_us` | `equity` | `stock_us_kline` | `1m`、`1d`、`1w`、`1M` | 美股时段；`1M` Timer 为北京时间每月 1 日 08:00，确保纽约前一月已收盘 |
+| `stockcn` | `equity` | `dataset_stockcn_equity_kline` | `1m`、`1d`、`1w`、`1M` | 中国交易日历，`Asia/Shanghai` |
+| `stockcn` | `index` | `dataset_stockcn_index_kline` | `1m`、`1d`、`1w`、`1M` | 中国交易日历，`Asia/Shanghai` |
+| `stockcn` | `convertible_bond` | `dataset_stockcn_bond_kline` | `1m`、`1d` | 中国交易日历，`Asia/Shanghai` |
+| `stockhk` | `equity` | `dataset_stockhk_equity_kline` | `1m`、`1d`、`1w`、`1M` | 港股时段，`Asia/Hong_Kong` |
+| `stockus` | `equity` | `dataset_stockus_equity_kline` | `1m`、`1d`、`1w`、`1M` | 美股时段；`1M` Timer 为北京时间每月 1 日 08:00，确保纽约前一月已收盘 |
 
-现有 `stock_kline`、`index_kline` 和旧 `crypto_market` SCF 入口不构成兼容约束。Metadata、任务和代码直接迁移到本矩阵定义的 canonical 名称；不保留类型别名、兼容适配层、双写入口或旧资源保护逻辑。已有 crypto 采集能力迁移为统一 MarketData Provider/Job，但旧 Handler、旧 SCF entrypoint 和旧 Binance-oriented route 在迁移完成后删除。新资源仍需具备幂等初始化能力，但初始化目标只包含新契约。
+现有 `stock_kline`、`index_kline` 和旧 `crypto` SCF 入口不构成兼容约束。Metadata、任务和代码直接迁移到本矩阵定义的 canonical 名称；不保留类型别名、兼容适配层、双写入口或旧资源保护逻辑。已有 crypto 采集能力迁移为统一 MarketData Provider/Job，但旧 Handler、旧 SCF entrypoint 和旧 Binance-oriented route 在迁移完成后删除。新资源仍需具备幂等初始化能力，但初始化目标只包含新契约。
 
 ## 2. 文件边界
 
@@ -179,8 +179,8 @@ Provider ID 代表真实上游，不代表 Python 包名；Source ID 代表 Prov
 - `modules/collector/internal/sources/stockus/eastmoney/kline.go`、`stockus/eastmoney/parser.go`、`stockus/sina/kline.go`、`stockus/sina/parser.go`：美股适配器。
 - `modules/collector/internal/sources/stockus/tdx/kline.go`、`parser.go`、`symbol.go`：美股 TDX 扩展行情适配，保留盘前/盘后和 regular-session 边界。
 - `modules/collector/internal/sources/index/eastmoney/kline.go`、`index/eastmoney/parser.go`、`index/cni/kline.go`、`index/sw/kline.go`、`index/sina/kline.go`、`index/tencent/kline.go`、`index/csindex/kline.go`、`index/tdx/kline.go`、`index/tdx/parser.go`：指数适配器；CNI/SW 已有 catalog-only Go 日线基线，CSIndex 只有收盘价时不得伪装成完整 K 线。
-- `modules/collector/internal/sources/convertiblebond/eastmoney/kline.go`、`convertiblebond/eastmoney/parser.go`、`convertiblebond/sina/kline.go`：可转债适配器。
-- `modules/collector/internal/sources/convertiblebond/tdx/kline.go`、`convertiblebond/tdx/parser.go`：TDX 可转债适配，独立于普通股票路由。
+- `modules/collector/internal/sources/bond/eastmoney/kline.go`、`bond/eastmoney/parser.go`、`bond/sina/kline.go`：可转债适配器。
+- `modules/collector/internal/sources/bond/tdx/kline.go`、`bond/tdx/parser.go`：TDX 可转债适配，独立于普通股票路由。
 - `modules/collector/internal/markets/stockcn/calendar.go`、`sessions.go`：A 股、指数和可转债交易日/交易时段策略。
 - `modules/collector/internal/markets/stockhk/sessions.go`：港股时段策略。
 - `modules/collector/internal/markets/stockus/sessions.go`：美股时段策略。
@@ -196,12 +196,12 @@ Provider ID 代表真实上游，不代表 Python 包名；Source ID 代表 Prov
 - `modules/collector/internal/marketfetch/http_route_provider.go`、`http_route_provider_test.go`：Binance spot/swap HTTP health probe 和单次 SCF 调用内的端点选择缓存。
 - `modules/collector/internal/marketfetch/route_policy_test.go`：验证 Binance HTTP 和 TDX TCP 共用路由策略时的隔离键、快照更新和 fallback。
 - `modules/collector/internal/serverless/market_data/handler.go`、`handler_test.go`：通用短时 SCF HTTP/Provider Pipeline 入口和本地 fake Storage E2E。
-- `modules/collector/cmd/scf/market_data/main.go`：唯一通用市场行情 SCF 构建入口；通过 Market manifest 覆盖股票和 crypto，不接受 `crypto_market` 入口名。
-- 已删除 `modules/collector/cmd/scf/crypto_market/main.go`、`modules/collector/internal/serverless/crypto_market/handler.go` 及其测试和旧配置；新项目不保留兼容壳。
-- `modules/cli/internal/command/collector.go`：只保留 `market_data` entrypoint 选择和统一打包校验，删除 `crypto_market` 分支。
-- `modules/collector/config/markets/stock_cn/market.yaml`、`calendar.yaml`、`provider-validation.yaml`：A 股市场配置。
-- `modules/collector/config/markets/stock_hk/market.yaml`、`provider-validation.yaml`：港股市场配置。
-- `modules/collector/config/markets/stock_us/market.yaml`、`provider-validation.yaml`：美股市场配置。
+- `modules/collector/cmd/scf/market_data/main.go`：唯一通用市场行情 SCF 构建入口；通过 Market manifest 覆盖股票和 crypto，不接受 `crypto` 入口名。
+- 已删除 `modules/collector/cmd/scf/crypto/main.go`、`modules/collector/internal/serverless/crypto/handler.go` 及其测试和旧配置；新项目不保留兼容壳。
+- `modules/cli/internal/command/collector.go`：只保留 `market_data` entrypoint 选择和统一打包校验，删除 `crypto` 分支。
+- `modules/collector/config/markets/stockcn/market.yaml`、`calendar.yaml`、`provider-validation.yaml`：A 股市场配置。
+- `modules/collector/config/markets/stockhk/market.yaml`、`provider-validation.yaml`：港股市场配置。
+- `modules/collector/config/markets/stockus/market.yaml`、`provider-validation.yaml`：美股市场配置。
 - `docs/akshare-market-api-catalog.md`：AkShare 接口到 MooX Provider/Market/Dataset 的完整映射表。
 - `docs/tdx-go-port.md`：easy_tdx/QUANTAXIS/tdx-go TDX 能力、协议差异、线路优选、字段确认状态和 Go 移植边界。
 - `scripts/marketdata/validate-calendar.sh`：静态日历格式、排序、覆盖边界和哈希校验入口。
@@ -211,7 +211,7 @@ Provider ID 代表真实上游，不代表 Python 包名；Source ID 代表 Prov
 - `go.work`：按 P1/P2/P3/P4 依次接入 `marketcalendar`、`marketmanifest`、`routeprobe`、`tdx`；每个 module 创建后立即加入 workspace，TDX 不得在 `routeprobe` module 创建前引用它，CLI 和 Collector 均通过 `marketmanifest` 公共包共享契约。
 - `modules/collector/go.mod`：增加 `packages/marketcalendar`、`packages/routeprobe`、`packages/marketmanifest`、`packages/tdx` 本地依赖。
 - `modules/collector/internal/sources/binance/storage_rpc.go`：补充通用市场行情 SCF 所需的环境鉴权 Storage writer 构造。
-- `scripts/build.sh`、`scripts/build-collector-scf-package.sh`：增加并最终只保留 `market_data` SCF 编译和打包入口；删除旧 `crypto_market` 分支，行情包不携带 Binance 专用凭据渲染。
+- `scripts/build/build.sh`、`scripts/build/build-collector-scf-package.sh`：增加并最终只保留 `market_data` SCF 编译和打包入口；删除旧 `crypto` 分支，行情包不携带 Binance 专用凭据渲染。
 - `modules/collector/configs/scf/market_data/config.yaml`：通用市场行情 SCF 的最小运行时配置。
 - `modules/collector/internal/sources/interface.go:13-113`：从 Binance-oriented `Collector` 直接迁移到 Market/Provider/Source/Frequency 语义，迁移完成后删除旧接口。
 - `modules/collector/internal/sources/registry.go:9-129`：注册和查询 `ProviderDescriptor`、`SourceKey`、`MarketID`、`InstrumentType`，拒绝重复 SourceKey 或冲突的支持范围。
@@ -222,10 +222,10 @@ Provider ID 代表真实上游，不代表 Python 包名；Source ID 代表 Prov
 - `modules/collector/internal/marketfetch/request.go`、`completion_publisher.go`：保留 Scheduler/重试所需的批次边界和 completion publisher；旧 `executor.go` 不再存在。
 - `modules/collector/internal/marketfetch/pipeline.go`、`modules/collector/internal/sources/binance/storage_rpc.go`：由通用 Pipeline 传入完整来源字段和稳定 `SourceEventID`，Storage writer 保留必要的 RPC/auth 细节；按当前实际文件边界修改，不引用不存在的 `write_source.go`。
 - `modules/collector/internal/sources/binance/kline.go:34-509`、`symbol.go` 及相关测试：实现现有 Binance 到通用契约的适配，保持 crypto 的 `series_tag` 语义。
-- `modules/collector/internal/serverless`、`cmd/scf` 和 runtime 装配文件：按 Market manifest 选择唯一 composition root，不复制一份 Binance Executor；统一入口验证后删除旧 `crypto_market` runtime 文件。
+- `modules/collector/internal/serverless`、`cmd/scf` 和 runtime 装配文件：按 Market manifest 选择唯一 composition root，不复制一份 Binance Executor；统一入口验证后删除旧 `crypto` runtime 文件。
 - `modules/collector/configs/config.yaml` 和 `modules/collector/configs/sources/market/binance.yaml`：加入 Provider host、TDX Source 节点、Market manifest、静态日历、连接超时和批次边界配置；禁止把 API 密钥写入配置文件。
-- `examples/setup/default/metadata.yaml`、`examples/setup/default/collector-rules.yaml`：直接切换到新 Market/Dataset canonical 契约，删除不合理旧资源配置，不保留兼容示例。
-- `docs/内置市场行情采集架构.md`、`docs/架构总览.md`、`docs/大仓架构.md`、`docs/architecture/scf-short-lived-market-fetch.md`：同步公共日历包、公共线路探测、Binance/TDX 复用、stock_hk、指数/可转债 Dataset、SCF TCP 出口边界，并将“DNS 代理”准确表述为解析候选快照与应用层线路优选。
+- `config/setup/metadata.yaml`、`config/setup/collector-rules.yaml`：直接切换到新 Market/Dataset canonical 契约，删除不合理旧资源配置，不保留兼容示例。
+- `docs/内置市场行情采集架构.md`、`docs/架构总览.md`、`docs/大仓架构.md`、`docs/architecture/scf-short-lived-market-fetch.md`：同步公共日历包、公共线路探测、Binance/TDX 复用、stockhk、指数/可转债 Dataset、SCF TCP 出口边界，并将“DNS 代理”准确表述为解析候选快照与应用层线路优选。
 
 ## 3. Task 1：冻结 AkShare/QUANTAXIS/easy_tdx 接口目录和能力矩阵
 
@@ -235,9 +235,9 @@ Provider ID 代表真实上游，不代表 Python 包名；Source ID 代表 Prov
 
 - Create: `docs/akshare-market-api-catalog.md`
 - Create: `docs/tdx-go-port.md`
-- Create: `modules/collector/config/markets/stock_cn/provider-validation.yaml`
-- Create: `modules/collector/config/markets/stock_hk/provider-validation.yaml`
-- Create: `modules/collector/config/markets/stock_us/provider-validation.yaml`
+- Create: `modules/collector/config/markets/stockcn/provider-validation.yaml`
+- Create: `modules/collector/config/markets/stockhk/provider-validation.yaml`
+- Create: `modules/collector/config/markets/stockus/provider-validation.yaml`
 
 - [x] **Step 1: 记录接口来源、上游 URL 和响应字段**
 
@@ -246,14 +246,14 @@ Provider ID 代表真实上游，不代表 Python 包名；Source ID 代表 Prov
 ```text
 calendar:
   tool_trade_date_hist_sina
-stock_cn:
+stockcn:
   stock_zh_a_hist, stock_zh_a_hist_min_em
   stock_zh_a_daily, stock_zh_a_minute
   stock_zh_a_hist_tx
-stock_hk:
-  stock_hk_hist, stock_hk_hist_min_em, stock_hk_daily
-stock_us:
-  stock_us_hist, stock_us_hist_min_em, stock_us_daily
+stockhk:
+  stockhk_hist, stockhk_hist_min_em, stockhk_daily
+stockus:
+  stockus_hist, stockus_hist_min_em, stockus_daily
 index:
   index_zh_a_hist, index_zh_a_hist_min_em
   stock_zh_index_daily, stock_zh_index_daily_tx, stock_zh_index_daily_em
@@ -506,11 +506,11 @@ A 股、指数和可转债共用公共日历，但各自声明交易时段和午
 
 - [x] **Step 2A: 先实现 A 股分钟 JSONP 基线**
 
-已实现 `sina/stock_cn_minute_http`，覆盖 `1m`、`5m`、`15m`、`30m`、`60m` 请求、JSONP 提取、字段校验、时间区间过滤和标准化 K 线；由于上游只返回固定近期窗口，适配器不宣称任意历史范围；尚未完成新浪分钟覆盖、单位、闭合 bar 和实盘响应核验，仍保持 `catalog_only`。
+已实现 `sina/stockcn_minute_http`，覆盖 `1m`、`5m`、`15m`、`30m`、`60m` 请求、JSONP 提取、字段校验、时间区间过滤和标准化 K 线；由于上游只返回固定近期窗口，适配器不宣称任意历史范围；尚未完成新浪分钟覆盖、单位、闭合 bar 和实盘响应核验，仍保持 `catalog_only`。
 
 - [x] **Step 2B: 完成新浪压缩 JS 日线解码基线**
 
-不得把 `stock_zh_a_daily`、`stock_hk_daily`、`stock_us_daily` 的压缩字符串直接当作 JSON；Go K2 解码器已通过零行确定性 fixture，并以 A/H/US 临时实盘响应完成行数、首尾日期和 AkShare 原始解码值对账。成交额/复权因子、港美股时区与交易时段语义以及目标 SCF 地域验证仍未完成，因此这些 Source 继续保持 `catalog_only`。
+不得把 `stock_zh_a_daily`、`stockhk_daily`、`stockus_daily` 的压缩字符串直接当作 JSON；Go K2 解码器已通过零行确定性 fixture，并以 A/H/US 临时实盘响应完成行数、首尾日期和 AkShare 原始解码值对账。成交额/复权因子、港美股时区与交易时段语义以及目标 SCF 地域验证仍未完成，因此这些 Source 继续保持 `catalog_only`。
 
 - [ ] **Step 2C: 完成新浪 Provider 实盘门禁**
 
@@ -555,7 +555,7 @@ fixture 至少覆盖正常日线、正常分钟线、空数据、未闭合 bar�
 - Create: `packages/tdx/*_test.go`、`packages/tdx/codec/*_test.go`、`packages/tdx/ext/*_test.go`
 - Create: `modules/collector/internal/sources/stockcn/tdx/kline.go`、`parser.go`、`symbol.go`
 - Create: `modules/collector/internal/sources/index/tdx/kline.go`、`parser.go`、`kline_test.go`
-- Create: `modules/collector/internal/sources/convertiblebond/tdx/kline.go`、`parser.go`、`kline_test.go`
+- Create: `modules/collector/internal/sources/bond/tdx/kline.go`、`parser.go`、`kline_test.go`
 - Create: `modules/collector/internal/sources/stockhk/tdx/kline.go`、`parser.go`、`symbol.go`
 - Create: `modules/collector/internal/sources/stockus/tdx/kline.go`、`parser.go`、`symbol.go`
 - Modify: `go.work`
@@ -688,7 +688,7 @@ Binance 继续保留域名 Host/SNI 和 hostname fallback，但候选顺序、�
 
 - [ ] **Step 4: 测试跨市场隔离**
 
-测试必须证明 `stock_hk` 不会命中 `stock_cn` Provider 或日历，`stock_us` 不会使用中国交易时段，错误的 Market/Instrument/Provider 组合在 Registry 层失败。
+测试必须证明 `stockhk` 不会命中 `stockcn` Provider 或日历，`stockus` 不会使用中国交易时段，错误的 Market/Instrument/Provider 组合在 Registry 层失败。
 
 ## 10. Task 7：实现指数和可转债分类
 
@@ -705,11 +705,11 @@ Binance 继续保留域名 Host/SNI 和 hostname fallback，但候选顺序、�
 - Create: `modules/collector/internal/sources/index/csindex/kline_test.go`
 - Create: `modules/collector/internal/sources/index/sw/kline.go`
 - Create: `modules/collector/internal/sources/index/sw/kline_test.go`
-- Create: `modules/collector/internal/sources/convertiblebond/eastmoney/kline.go`
-- Create: `modules/collector/internal/sources/convertiblebond/eastmoney/parser.go`
-- Create: `modules/collector/internal/sources/convertiblebond/eastmoney/kline_test.go`
-- Create: `modules/collector/internal/sources/convertiblebond/sina/kline.go`
-- Create: `modules/collector/internal/sources/convertiblebond/sina/kline_test.go`
+- Create: `modules/collector/internal/sources/bond/eastmoney/kline.go`
+- Create: `modules/collector/internal/sources/bond/eastmoney/parser.go`
+- Create: `modules/collector/internal/sources/bond/eastmoney/kline_test.go`
+- Create: `modules/collector/internal/sources/bond/sina/kline.go`
+- Create: `modules/collector/internal/sources/bond/sina/kline_test.go`
 - Create: `modules/collector/internal/markets/stockcn/instrument_policy.go`
 - Modify: `modules/collector/internal/marketdata/kline_test.go`
 
@@ -745,8 +745,8 @@ Binance 继续保留域名 Host/SNI 和 hostname fallback，但候选顺序、�
 - Modify: `modules/collector/internal/sources/binance/symbol.go`
 - Modify: `modules/collector/internal/jobs/registry.go:16-64`
 - Modify: `modules/collector/internal/jobs/route.go:11-104`
-- Deleted: `modules/collector/internal/serverless/crypto_market/handler.go`
-- Deleted: `modules/collector/internal/serverless/crypto_market/handler_test.go`
+- Deleted: `modules/collector/internal/serverless/crypto/handler.go`
+- Deleted: `modules/collector/internal/serverless/crypto/handler_test.go`
 - Modify: `modules/collector/internal/marketfetch/egress_probe.go`
 - Created: `modules/collector/internal/serverless/market_data/handler.go`
 - Created: `modules/collector/internal/serverless/market_data/handler_test.go`
@@ -770,7 +770,7 @@ Router 按 `market_id + instrument_type + frequency + exchange_id + source` 查�
 
 - [x] **Step 5: 收敛通用 SCF Handler 和批次边界**
 
-唯一的 `market_data` SCF 入口根据 `market_id + provider + source` 选择 composition root，直接调用通用 Kline/Instrument Pipeline。HTTP Provider 和 TDX Provider 都从公共路由策略读取按地域/Provider/Transport/Source 隔离的快照；TDX Timer 运行时在单次函数内建立并复用 TCP 连接，按函数 deadline 完成请求、聚合和一次 Storage 写入后关闭连接；不得依赖 warm instance，也不得在 SCF 内无限重试。批次/重试仅保留 Scheduler 和 completion consumer 所需的数据结构；批次内每个标的必须使用独立且稳定的 `SourceEventID`，不能复用批次 ID 导致 Storage 去重丢行。统一入口回归通过后删除旧 `crypto_market` Handler/entrypoint 及 Binance-oriented Executor 旁路，不保留兼容壳。当前旧旁路已删除，剩余门禁是正式 Storage 契约和云端 read-back。
+唯一的 `market_data` SCF 入口根据 `market_id + provider + source` 选择 composition root，直接调用通用 Kline/Instrument Pipeline。HTTP Provider 和 TDX Provider 都从公共路由策略读取按地域/Provider/Transport/Source 隔离的快照；TDX Timer 运行时在单次函数内建立并复用 TCP 连接，按函数 deadline 完成请求、聚合和一次 Storage 写入后关闭连接；不得依赖 warm instance，也不得在 SCF 内无限重试。批次/重试仅保留 Scheduler 和 completion consumer 所需的数据结构；批次内每个标的必须使用独立且稳定的 `SourceEventID`，不能复用批次 ID 导致 Storage 去重丢行。统一入口回归通过后删除旧 `crypto` Handler/entrypoint 及 Binance-oriented Executor 旁路，不保留兼容壳。当前旧旁路已删除，剩余门禁是正式 Storage 契约和云端 read-back。
 
 - [x] **Step 6: 删除静态 Binance job route 依赖**
 
@@ -780,13 +780,13 @@ Job Definition 保留通用 `kline`、`instrument` 数据类型；Provider/Marke
 
 **Files:**
 
-- Create: `modules/collector/config/markets/stock_cn/market.yaml`
-- Create: `modules/collector/config/markets/stock_cn/calendar.yaml`
-- Create: `modules/collector/config/markets/stock_hk/market.yaml`
-- Create: `modules/collector/config/markets/stock_us/market.yaml`
+- Create: `modules/collector/config/markets/stockcn/market.yaml`
+- Create: `modules/collector/config/markets/stockcn/calendar.yaml`
+- Create: `modules/collector/config/markets/stockhk/market.yaml`
+- Create: `modules/collector/config/markets/stockus/market.yaml`
 - Modify: `modules/collector/configs/config.yaml`
-- Modify: `examples/setup/default/metadata.yaml`
-- Modify: `examples/setup/default/collector-rules.yaml`
+- Modify: `config/setup/metadata.yaml`
+- Modify: `config/setup/collector-rules.yaml`
 - Modify: `modules/collector/cmd/cli/init_schema.go`
 - Modify: `modules/cli/internal/command/metadata_types.go`
 - Modify: `modules/cli/internal/command/metadata_spaces.go`
@@ -815,14 +815,14 @@ Canonical K 线字段至少包含 `open`、`high`、`low`、`close`、`volume`�
 - Modify: `modules/collector/internal/marketfetch/storage_write_consumer.go`
 - Modify: `modules/collector/internal/sources/binance/storage_rpc.go:132-318`
 - Modify: `modules/collector/schema/collector.sql`
-- Modify: `examples/setup/default/metadata.yaml`
+- Modify: `config/setup/metadata.yaml`
 - Modify: `modules/collector/internal/marketfetch/pipeline_test.go`、`instrument_pipeline_test.go`、`modules/collector/test/short_lived_market_fetch_e2e_test.go`
 - Modify: `modules/collector/internal/marketfetch/storage_write_consumer_test.go`
 - Modify: `modules/collector/internal/sources/binance/kline_test.go`
 
 - [x] **Step 1: 固化逻辑 RowKey**
 
-股票、指数和可转债的 canonical RowKey 使用 `subject_id + freq + data_time + series_tag`；第一阶段股票类 `series_tag` 为空，Provider 只写来源字段。Crypto 保留现有明确 venue tag。
+股票、指数和可转债的 canonical RowKey 使用 `subject_id + freq + data_time + series_tag`；第一阶段股票类 `dataset_stockcn_equity_kline` 使用 `series_tag=default`，Provider 只写来源字段。Crypto 保留现有明确 venue tag。
 
 - [x] **Step 2: 固化单位字段和质量状态**
 
@@ -849,9 +849,9 @@ Canonical K 线字段至少包含 `open`、`high`、`low`、`close`、`volume`�
 - Modify: `modules/collector/internal/marketfetch/assignment.go`
 - Modify: `modules/collector/internal/health/server.go`
 - Modify: `modules/collector/internal/health/state.go`
-- Modify: `modules/collector/config/markets/stock_cn/provider-validation.yaml`
-- Modify: `modules/collector/config/markets/stock_hk/provider-validation.yaml`
-- Modify: `modules/collector/config/markets/stock_us/provider-validation.yaml`
+- Modify: `modules/collector/config/markets/stockcn/provider-validation.yaml`
+- Modify: `modules/collector/config/markets/stockhk/provider-validation.yaml`
+- Modify: `modules/collector/config/markets/stockus/provider-validation.yaml`
 - Modify: `docs/architecture/scf-short-lived-market-fetch.md`
 
 - [x] **Step 1: 固化“不主动限频”边界**
@@ -883,10 +883,10 @@ Provider/Market/Source 只有在 registry、manifest、calendar、Storage Datase
 **Files:**
 
 - Modify: `docs/akshare-market-api-catalog.md`
-- Modify: `modules/collector/config/markets/stock_cn/market.yaml`
-- Modify: `modules/collector/config/markets/stock_hk/market.yaml`
-- Modify: `modules/collector/config/markets/stock_us/market.yaml`
-- Modify: `examples/setup/default/metadata.yaml`
+- Modify: `modules/collector/config/markets/stockcn/market.yaml`
+- Modify: `modules/collector/config/markets/stockhk/market.yaml`
+- Modify: `modules/collector/config/markets/stockus/market.yaml`
+- Modify: `config/setup/metadata.yaml`
 
 本任务只登记目录和能力，不创建期货、期权、基金、REITs、外汇或黄金的实现文件；后续每类接口必须另立子计划。
 
@@ -935,7 +935,7 @@ git diff --check
 
 - [x] **Step 4: Metadata dry-run**
 
-使用本地 CLI 执行 `metadata apply --dry-run` 解析默认新项目 seed，验证新 Space/Dataset/Field/Column/Rule 的调用计划可生成且不发送 RPC；默认全量计划为 438 个资源调用，筛选 `stock_cn,stock_hk,stock_us` 为 153 个资源调用。真实 Storage create-or-verify、重复执行的 `unchanged` 结果和冲突失败行为仍属于正式 Storage 契约门禁，未因 dry-run 通过而提前标记完成。
+使用本地 CLI 执行 `metadata apply --dry-run` 解析默认新项目 seed，验证新 Space/Dataset/Field/Column/Rule 的调用计划可生成且不发送 RPC；默认全量计划为 438 个资源调用，筛选 `stockcn,stockhk,stockus` 为 153 个资源调用。真实 Storage create-or-verify、重复执行的 `unchanged` 结果和冲突失败行为仍属于正式 Storage 契约门禁，未因 dry-run 通过而提前标记完成。
 
 - [ ] **Step 5: Provider live probe（独立于默认测试）**
 
@@ -947,7 +947,7 @@ git diff --check
 
 #### 2026-09-01 已完成的正式验收子项
 
-- [x] **Step 6A：Binance/crypto 独立验收**：在新项目 `crypto` 中启用 `binance_spot_symbols` 和 `binance_spot_kline_1m`，四地域 `scf-event` Timer fleet 均已成功部署包 `c11b4eb555686d25af44d4ee96130649215d4f187050c6d99d533a838b99c431`。四个节点的 Binance Provider probe 均返回 HTTP `200`；只观测到一个公网反射地址 `43.134.111.139`，另外三个节点的 `api.ipify.org` 请求被拒绝，因此没有据此推导多 IP 或频控结论。
+- [x] **Step 6A：Binance/crypto 独立验收**：在新项目 `crypto` 中启用 `dataset_binance_spot_symbols` 和 `dataset_binance_spot_kline_1m`，四地域 `scf-event` Timer fleet 均已成功部署包 `c11b4eb555686d25af44d4ee96130649215d4f187050c6d99d533a838b99c431`。四个节点的 Binance Provider probe 均返回 HTTP `200`；只观测到一个公网反射地址 `43.134.111.139`，另外三个节点的 `api.ipify.org` 请求被拒绝，因此没有据此推导多 IP 或频控结论。
 - [x] **Step 6B：Timer 节点 Invoke 与 PrimaryStore 精确读回**：向广州 Timer 节点发送真实 SCF Timer 事件 `Type=Timer/TriggerName=moox-market-fetch-timer/Message=market_fetch_timer_v1`，返回 `success=true`、`rows_written=2`、`request_id=9ffa5041-6618-47b7-910f-2c5fc177a441`。随后使用 `PrimaryStore/ReadTimeSeriesRows` 的精确 keys 读回 `BTC-USDT` 在 `2026-09-01T14:00:00Z` 和 `14:01:00Z` 的 OHLCV，两行 `ret_info.code=0`。另一次非 Timer 通用入口 Invoke 写入 1 行，request ID 为 `033264c6-5b8d-420f-9f99-373bb0e93217`。
 - [ ] **Step 6C：Storage View/range 和其他 Provider**：正式环境的 `storage-view` 进程当前未运行，范围查询返回 `dataset ... has no active view`，所以不能把 range read-back 标为通过。TDX 三个 Source 的完整 Wire/Field Acceptance，以及 A/H/美股其他 Provider 的目标 SCF 覆盖、时段和字段门禁也尚未完成。
 
@@ -975,7 +975,7 @@ git diff --check
 5. P4：TDX `normal_7709` Go 协议库、A 股股票/指数/可转债 Provider 和普通线路探针。
 6. P5：东方财富、腾讯以及经证据确认的其他 HTTP Provider，完成 A 股/港股/美股/指数/可转债的独立 Dataset 分类。
 7. P6：`ex_classic_7727`、`ex_mac_7727` 分别实现独立 transport、动态目录、字段隔离和港股/美股扩展 Provider；任何未过 Source gate 的实现保持 `shadow/catalog_only`。
-8. P7：通用 Pipeline/Job Registry、唯一 `market_data` SCF 入口、Metadata、Storage、幂等/覆盖规则回归，并删除旧 `crypto_market` entrypoint、旧 Executor/Handler/Timer 旁路和旧路由。
+8. P7：通用 Pipeline/Job Registry、唯一 `market_data` SCF 入口、Metadata、Storage、幂等/覆盖规则回归，并删除旧 `crypto` entrypoint、旧 Executor/Handler/Timer 旁路和旧路由。
 9. P8：期货、期权、基金、REITs、外汇、黄金等只登记目录和未来 Dataset 边界，不创建实现文件、不启用规则。
 10. P9：新项目配置、disabled 发布回读、SCF 多地域 live probe、线路快照、Timer/Rule 和 Storage read-back；正式验收不包含主动限频结论。
 

@@ -109,7 +109,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		}
 		return runtimeHandler.HandleWithFunctionName(ctx, event, functionName)
 	case model.EventActionEgressProbe:
-		if spaceID == "stock_cn" {
+		if spaceID == "stockcn" {
 			return marketfetch.StockEgressIdentityProbe(ctx)
 		}
 		return marketfetch.EgressProbe(ctx, "binance", "spot")

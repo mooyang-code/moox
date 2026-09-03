@@ -160,7 +160,7 @@ func TestServiceImpl_SeedDefaults_PreservesRestrictedPrimaryStoreMethodSubset(t 
 	require.NoError(t, err)
 }
 
-func TestServiceImpl_SeedDefaults_PreservesExplicitPrimaryStoreRouteRestrictions(t *testing.T) {
+func TestServiceImpl_SeedDefaults_PreservesExplicitStorageRouteRestrictions(t *testing.T) {
 	tests := []struct {
 		name        string
 		routes      string

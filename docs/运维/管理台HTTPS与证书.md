@@ -59,4 +59,4 @@ Internal 模式的后端进程使用 `MOOX_SERVICE_GATEWAY_CA_FILE=<deploy>/cert
 - Internal CA 轮换会使所有已安装的浏览器信任和后端/SCF CA 配置失效，必须作为显式变更。
 - Internal CA 私钥丢失时无法从 `root.crt` 恢复；必须轮换 CA 并重新建立全部信任。
 
-当共享工作树中的部署脚本仍在调整参数名或默认值时，以 `scripts/deploy-moox.sh --help`、`deploy/caddy/Caddyfile` 和同版本部署包为实际配置契约，不应由本文推断尚未落地的自动化。
+当共享工作树中的部署脚本仍在调整参数名或默认值时，以 `scripts/deploy/deploy-moox.sh --help`、`deploy/caddy/Caddyfile` 和同版本部署包为实际配置契约，不应由本文推断尚未落地的自动化。

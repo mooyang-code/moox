@@ -23,7 +23,7 @@
 新增测试，加载 `examples/metadata-quant-initial.seed.yaml` 并断言：
 
 ```go
-require.Equal(t, []string{"stock_cn", "stock_hk", "stock_us", "crypto"}, metadataSeedSpaceIDs(seed))
+require.Equal(t, []string{"stockcn", "stockhk", "stockus", "crypto"}, metadataSeedSpaceIDs(seed))
 require.ElementsMatch(t, []string{"binance", "okx"}, cryptoDataSourceIDs(seed))
 require.ElementsMatch(t, []string{
     "binance_spot_kline_1h",

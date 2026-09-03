@@ -139,8 +139,8 @@ func (p *CollectParams) ValidateKlineResample() error {
 }
 
 func validateResampleTargetDatasetID(datasetID, canonicalFrequency string) error {
-	if len(datasetID) == 0 || len(datasetID) > 25 || !isLowerSnakeID(datasetID) {
-		return fmt.Errorf("target_dataset_id must be lower snake case and no more than 25 characters")
+	if len(datasetID) == 0 || len(datasetID) > 50 || !isLowerSnakeID(datasetID) || !strings.HasPrefix(datasetID, "dataset_") {
+		return fmt.Errorf("target_dataset_id must start with dataset_, use lower snake case, and be no more than 50 characters")
 	}
 	suffix := "_" + strings.ToLower(canonicalFrequency)
 	if !strings.HasSuffix(datasetID, suffix) {

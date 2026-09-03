@@ -38,7 +38,6 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_frequency TEXT NOT NULL DEFAULT '',
     c_source_id TEXT NOT NULL DEFAULT '',
     c_function_name TEXT NOT NULL DEFAULT '',
-    c_last_exec_node TEXT NOT NULL DEFAULT '',
     c_last_exec_status INTEGER NOT NULL DEFAULT 1,
     c_task_params TEXT NOT NULL DEFAULT '{}',
     c_last_exec_time DATETIME,

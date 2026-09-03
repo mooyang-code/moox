@@ -93,7 +93,7 @@ func TestFetchInstrumentSnapshotAcceptsEmptyTerminalPageAfterExactMultiple(t *te
 
 	now := time.Date(2026, 8, 29, 1, 32, 0, 0, time.UTC)
 	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, Now: func() time.Time { return now }})
-	snapshot, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", SnapshotAt: now, RequestID: "req"})
+	snapshot, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stockcn", SnapshotAt: now, RequestID: "req"})
 
 	require.NoError(t, err)
 	require.True(t, snapshot.Complete)
@@ -115,7 +115,7 @@ func TestFetchInstrumentSnapshotRejectsHTTP200ErrorObjectAsTerminalPage(t *testi
 	}))
 	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client})
 
-	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", RequestID: "req"})
+	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stockcn", RequestID: "req"})
 
 	require.ErrorContains(t, err, "no recognized item list")
 }
@@ -130,7 +130,7 @@ func TestFetchInstrumentSnapshotRejectsChangingDeclaredPageCount(t *testing.T) {
 	}))
 	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client})
 
-	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", RequestID: "req"})
+	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stockcn", RequestID: "req"})
 
 	require.ErrorContains(t, err, "page count changed")
 }
@@ -142,7 +142,7 @@ func TestFetchInstrumentSnapshotResetsGuardTimeoutForEveryPage(t *testing.T) {
 	}))
 	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, InstrumentRequestTimeout: 20 * time.Millisecond})
 
-	snapshot, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", RequestID: "req"})
+	snapshot, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stockcn", RequestID: "req"})
 
 	require.NoError(t, err)
 	require.Equal(t, 2, snapshot.PageCount)
@@ -181,7 +181,7 @@ func TestFetchInstrumentSnapshotPaginatesSuccessfullyAndCountsExchanges(t *testi
 	now := time.Date(2026, 8, 29, 1, 32, 0, 0, time.UTC)
 	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, Now: func() time.Time { return now }})
 	snapshot, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{
-		MarketID:   "stock_cn",
+		MarketID:   "stockcn",
 		SnapshotAt: now,
 		RequestID:  "req-sina-instrument",
 	})
@@ -210,7 +210,7 @@ func TestFetchInstrumentSnapshotDoesNotTreatShortPageAsCompleteWithoutTerminalEv
 	}))
 	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, RateLimit: marketdata.RateLimitPolicy{RequestsPerSecond: 100, Burst: 1, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: time.Second}})
 
-	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", RequestID: "short-page"})
+	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stockcn", RequestID: "short-page"})
 
 	require.ErrorIs(t, err, marketdata.ErrHTTPStatus)
 	require.Equal(t, []string{"1", "2"}, requests)
@@ -229,7 +229,7 @@ func TestFetchInstrumentSnapshotRejectsDeclaredTotalMismatch(t *testing.T) {
 	}))
 	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client})
 
-	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", RequestID: "declared-total"})
+	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stockcn", RequestID: "declared-total"})
 
 	require.ErrorContains(t, err, "does not match")
 }
@@ -248,7 +248,7 @@ func TestFetchInstrumentSnapshotRejectsShortFinalPageWhenCountDisagrees(t *testi
 	}))
 	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client})
 
-	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stock_cn", RequestID: "short-empty"})
+	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stockcn", RequestID: "short-empty"})
 
 	require.ErrorContains(t, err, "does not match")
 }
@@ -278,7 +278,7 @@ func TestFetchInstrumentSnapshotFailsWhenLaterPageReturnsHTTPError(t *testing.T)
 	now := time.Date(2026, 8, 29, 1, 32, 0, 0, time.UTC)
 	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, Now: func() time.Time { return now }})
 	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{
-		MarketID:   "stock_cn",
+		MarketID:   "stockcn",
 		SnapshotAt: now,
 		RequestID:  "req-sina-instrument",
 	})

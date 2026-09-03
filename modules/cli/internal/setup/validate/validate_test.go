@@ -77,7 +77,7 @@ address = "192.0.2.11"
 username = "ubuntu"
 password = "recognizable-compute-password"
 `
-	path := filepath.Join(root, "custom.toml")
+	path := filepath.Join(root, "moox.toml")
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	snapshot, err := setupconfig.Load(path, root)
 	require.NoError(t, err)

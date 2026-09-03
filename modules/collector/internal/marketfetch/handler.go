@@ -390,6 +390,16 @@ func (s *reservedDeadlineStorage) UpsertFieldsWithSource(_ context.Context, rows
 	return s.Storage.UpsertFields(ctx, rows)
 }
 
+func (s *reservedDeadlineStorage) ListInstrumentNames(_ context.Context, spaceID string, subjectIDs []string) (map[string]string, error) {
+	reader, ok := s.Storage.(instrumentNameReader)
+	if !ok {
+		return nil, nil
+	}
+	ctx, cancel := s.storageContext()
+	defer cancel()
+	return reader.ListInstrumentNames(ctx, spaceID, subjectIDs)
+}
+
 func (s *reservedDeadlineStorage) storageContext() (context.Context, context.CancelFunc) {
 	parent := s.parent
 	if parent == nil {

@@ -1,4 +1,4 @@
-# stock_cn Monitor Task12 validation
+# stockcn Monitor Task12 validation
 
 Date: 2026-08-30
 
@@ -8,11 +8,11 @@ process/readback check. This is not a production acceptance claim.
 ## Production Readback (2026-08-30)
 
 - `moox-monitor` was running and its metrics endpoint returned HTTP 200.
-- The endpoint exposed no `stock_cn`, `collector_market`, or `market_fetch`
+- The endpoint exposed no `stockcn`, `collector_market`, or `market_fetch`
   metric lines at readback time. No fresh SCF metrics-consumer observation was
   available, so the Monitor gate remains `PENDING`.
 - Storage metadata readback showed 5,550 active subjects for both
-  `stock_cn_instruments` and `stock_cn_kline`; CloudNode readback showed the
+  `dataset_stockcn_instruments` and `dataset_stockcn_equity_kline`; CloudNode readback showed the
   stock Timer fleet disabled. These are supporting facts, not Monitor
   freshness evidence.
 
@@ -20,8 +20,8 @@ process/readback check. This is not a production acceptance claim.
 
 | Alert domain from Task12 | Current producer | Monitor consumer | Status |
 | --- | --- | --- | --- |
-| K-line no-data, stale closed buckets, missing source fields, invalid OHLCV, calendar warning/expiry | Storage `stock_cn_kline` rows | `watchdog.MarketCanary.runStockCN` | Closed for configured canary subjects. The check is session-aware, treats lunch/closed days as idle/healthy, requires the configured percentage of the latest closed bars, and emits explicit reasons. It is a canary, not proof of 99% coverage across every active A-share instrument. |
-| Group/function count and Timer capacity | Collector `Reconciler` calls `ObserveConfiguredGroups`, `ObserveConfiguredGroupID`, `ObserveTimerCapacity`, assignment and trigger observers | `observability.Builder.buildMarketFetchCoordination`, then `buildBusinessFreshnessReporter` persists an external check/result and default alert rule | Closed for count/capacity/trigger facts. A `stock_cn` configured-group count or per-Group identity mismatch now produces a down result; Group IDs remain a bounded label. |
+| K-line no-data, stale closed buckets, missing source fields, invalid OHLCV, calendar warning/expiry | Storage `dataset_stockcn_equity_kline` rows | `watchdog.MarketCanary.runStockCN` | Closed for configured canary subjects. The check is session-aware, treats lunch/closed days as idle/healthy, requires the configured percentage of the latest closed bars, and emits explicit reasons. It is a canary, not proof of 99% coverage across every active A-share instrument. |
+| Group/function count and Timer capacity | Collector `Reconciler` calls `ObserveConfiguredGroups`, `ObserveConfiguredGroupID`, `ObserveTimerCapacity`, assignment and trigger observers | `observability.Builder.buildMarketFetchCoordination`, then `buildBusinessFreshnessReporter` persists an external check/result and default alert rule | Closed for count/capacity/trigger facts. A `stockcn` configured-group count or per-Group identity mismatch now produces a down result; Group IDs remain a bounded label. |
 | Provider HTTP 429, system failure rate, local rate-limit deadline exhaustion, fallback/no-candidate | `moox_collector_market_feed_results_total` | SCF common Handler and KlinePipeline observe outcomes and perform an optional one-shot EventBus report; Monitor aggregates fresh observations by provider over the configured window | Closed in source. Production status remains pending until the SCF EventBus environment is configured and a real failed/fallback invocation is observed. |
 | Instrument snapshot age, completeness, active count, exchange coverage | Instrument metric families | SCF InstrumentPipeline observes the complete/incomplete/stale result and reports it through the same one-shot metrics path; Monitor checks age, active lower bound and required exchanges | Closed in source. Production status remains pending until a real complete snapshot is reported and read back. |
 | Egress result/non-empty/distinct IP count | `moox_collector_market_egress_functions` | CLI may publish the bounded probe result when metrics EventBus is configured; it is diagnostic only and is not consumed as a Timer/Rule health gate. |

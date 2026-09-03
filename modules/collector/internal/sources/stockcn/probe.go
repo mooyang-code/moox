@@ -238,7 +238,7 @@ func (r ProbeReport) MarshalJSONStrict() ([]byte, error) {
 
 func (r ProbeReport) RenderMarkdown() string {
 	var b strings.Builder
-	b.WriteString("# stock_cn Provider Probe\n\n")
+	b.WriteString("# stockcn Provider Probe\n\n")
 	fmt.Fprintf(&b, "- GeneratedAt: `%s`\n", r.GeneratedAt)
 	fmt.Fprintf(&b, "- Frequency: `%s`\n", r.Frequency)
 	fmt.Fprintf(&b, "- Subjects: `%s`\n\n", strings.Join(r.Subjects, "`, `"))

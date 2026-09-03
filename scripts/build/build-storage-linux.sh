@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG="${CONFIG:-${ROOT}/custom.toml}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CONFIG="${CONFIG:-${ROOT}/moox.toml}"
 REMOTE_ROOT="${REMOTE_ROOT:-/tmp/moox-build}"
 MOOX_CLI="${MOOX_CLI:-${ROOT}/bin/moox-cli}"
 BIN_DIR="${BIN_DIR:-${ROOT}/bin}"
@@ -20,7 +20,7 @@ shell_quote() {
   printf "'%s'" "${1//\'/\'\\\'\'}"
 }
 
-[[ -f "${CONFIG}" ]] || die "missing repository custom.toml"
+[[ -f "${CONFIG}" ]] || die "missing repository moox.toml"
 [[ -x "${MOOX_CLI}" ]] || die "missing executable moox-cli: ${MOOX_CLI}"
 [[ -f "${KNOWN_HOSTS_PATH}" ]] || die "missing trusted SSH host-key store: ${KNOWN_HOSTS_PATH}"
 command -v jq >/dev/null 2>&1 || die "jq is required to read sanitized setup host output"
@@ -120,7 +120,7 @@ local_file_size() {
 echo "==> sync source to Storage build host ${name} (${username}@${address}:${port})"
 run_rsync -az --delete \
   --exclude='.git' \
-  --exclude='custom.toml' \
+  --exclude='moox.toml' \
   --exclude='bin' \
   --exclude='release' \
   --exclude='artifacts' \
@@ -136,7 +136,7 @@ run_rsync -az --delete \
 
 echo "==> build storage on ${name} (${version})"
 run_ssh "${remote}" \
-  "cd ${remote_root_q} && if ! command -v go >/dev/null 2>&1; then for go_bin in \"\$HOME\"/.local/go*/bin; do if [ -x \"\$go_bin/go\" ]; then export PATH=\"\$go_bin:\$PATH\"; break; fi; done; fi && command -v go >/dev/null 2>&1 || { echo 'Go is not installed on storage build host' >&2; exit 1; } && GOFLAGS=-buildvcs=false VERSION=${version_q} GIT_COMMIT=${git_commit_q} CGO_ENABLED=1 TARGET_GOOS=linux TARGET_GOARCH=${target_goarch_q} bash ./scripts/build.sh storage"
+  "cd ${remote_root_q} && if ! command -v go >/dev/null 2>&1; then for go_bin in \"\$HOME\"/.local/go*/bin; do if [ -x \"\$go_bin/go\" ]; then export PATH=\"\$go_bin:\$PATH\"; break; fi; done; fi && command -v go >/dev/null 2>&1 || { echo 'Go is not installed on storage build host' >&2; exit 1; } && GOFLAGS=-buildvcs=false VERSION=${version_q} GIT_COMMIT=${git_commit_q} CGO_ENABLED=1 TARGET_GOOS=linux TARGET_GOARCH=${target_goarch_q} bash ./scripts/build/build.sh storage"
 
 mkdir -p "${BIN_DIR}"
 echo "==> download Linux Storage binaries from ${name}"

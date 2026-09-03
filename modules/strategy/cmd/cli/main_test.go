@@ -15,13 +15,13 @@ input:
   source_view_id: source
   data_frequency: 1h
   factors:
-    - factor_id: bias
+    - factor_id: Bias
 instrument_pool:
   markets: [spot]
 long:
   side_weight: "1"
   scores:
-    - factor_id: bias
+    - factor_id: Bias
       direction: ascending
       weight: "1"
   selection:

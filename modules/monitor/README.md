@@ -10,7 +10,7 @@ Monitor 还消费 `moox.metrics.snapshot.reported.v1`，将每个已注册 tRPC
 由 `moox-cli setup init` 注册并校验 Storage 元数据。
 
 模块健康检查清单由 `packages/report` 代码注册表维护；实时 Dataset 阈值由
-`examples/setup/default/dataset-health-policy.yaml` 维护，只有 Monitor 读取。
+`config/setup/dataset-health-policy.yaml` 维护，只有 Monitor 读取。
 服务部署位置和健康 URL 来自 Admin SysDeploy，不进入 Dataset 健康策略。
 
 ## 持久化边界
@@ -22,7 +22,7 @@ Monitor 还消费 `moox.metrics.snapshot.reported.v1`，将每个已注册 tRPC
 
 - 检查结果和告警事件默认保留 14 天。`trpc.moox.monitor.data_cleanup.timer` 启动时执行一次，之后每 6 小时清理一次，单次超时 120 秒。
 - 指标消息去重记录默认有效 7 天，由同一 Timer 删除到期记录。结果、告警和去重三项会全部尝试，一个步骤失败不会阻断其他步骤，最终返回汇总错误。
-- 服务指标和主机指标的时序历史位于 Storage，不存放在 Monitor SQLite。服务指标 Dataset `moox_service_metrics` 默认保留 24 小时；四个主机指标 Dataset 默认保留 48 小时；Monitor 不删除任何 Storage 事实。
+- 服务指标和主机指标的时序历史位于 Storage，不存放在 Monitor SQLite。服务指标 Dataset `dataset_mooxsys_service_metrics` 默认保留 24 小时；四个主机指标 Dataset 默认保留 48 小时；Monitor 不删除任何 Storage 事实。
 - SQLite 异常增长通常意味着清理任务失败、事件数量异常或高基数 catalog 增长，不能只靠缩短 Storage 历史窗口解决。
 
 完整的数据保留矩阵、永久数据和磁盘巡检命令见[数据保留与磁盘空间](../../docs/运维/数据保留与磁盘空间.md)。
@@ -56,12 +56,12 @@ instance:
 ## 运行
 
 ```bash
-../../scripts/build.sh monitor
+../../scripts/build/build.sh monitor
 ./bin/moox-monitor-cli init --db-path ./data/monitor/monitor.db
 ./bin/moox-monitor -conf=config/trpc_go.yaml
 ```
 
-Admin 只作为控制面和 SysDeploy 注册中心。Monitor 会有界分页读取 SysDeploy 的 active/disabled 部署，并按 Doctor Manifest 中的独立进程过滤，生成 `moox-system` 内置检查；探测时不依赖 Admin。
+Admin 只作为控制面和 SysDeploy 注册中心。Monitor 会有界分页读取 SysDeploy 的 active/disabled 部署，并按 Doctor Manifest 中的独立进程过滤，生成 `mooxsys` 内置检查；探测时不依赖 Admin。
 
 所有独立部署进程都通过 tRPC `http_no_protocol` 提供 `/healthz` 与 `/readyz`；Monitor 默认探测 `/readyz`。`moox_gateway` 使用自身 Reporter 和健康接口，不借用 Admin 的健康状态。
 
@@ -81,7 +81,7 @@ Admin 只作为控制面和 SysDeploy 注册中心。Monitor 会有界分页读�
 `GetDoctorContext` 只聚合 Manifest、SysDeploy、最新检查、Reporter/功能指标、主机资源和告警事实，组件最多 64 个、模块健康检查最多 32 个、响应最多 2 MiB。它不抓取 `/metrics`、不运行 Doctor Engine，也不执行恢复动作。Monitor V1 只能部署一个实例，不包含 Peer、Owner 或 Lease。
 
 SysDeploy 同步由 Monitor 内部定时任务触发；同步后的内置检查使用 `source=sysdeploy` 和
-`group_name=moox-system`。管理台只展示健康摘要，不提供检查项的增删改或手动运行。
+`group_name=mooxsys`。管理台只展示健康摘要，不提供检查项的增删改或手动运行。
 
 通知配置保存在 `t_monitor_notification_channels` 的固定 `global` 行，支持企业微信和飞书。
 Webhook 只返回掩码值；清空 URL 后仍记录告警状态和事件，但停止站外发送。

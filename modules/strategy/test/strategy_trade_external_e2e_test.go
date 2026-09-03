@@ -27,7 +27,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	require.NoError(t, err)
 	js, err := nc.JetStream()
 	require.NoError(t, err)
-	_, err = js.AddStream(&nats.StreamConfig{Name: "MOOX_TRADE", Subjects: []string{"moox.trade.target.weight_requested.v1.>"}, Storage: nats.MemoryStorage})
+	_, err = js.AddStream(&nats.StreamConfig{Name: "MOOX_TRADE", Subjects: []string{"moox.event.trade.target.weight_requested.v1.>"}, Storage: nats.MemoryStorage})
 	require.NoError(t, err)
 	nc.Close()
 	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))

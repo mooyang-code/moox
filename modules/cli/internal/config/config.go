@@ -36,8 +36,8 @@ type DoctorConfig struct {
 func (c *Config) EffectiveDoctor() DoctorConfig {
 	value := DoctorConfig{
 		MonitorTarget: "ip://127.0.0.1:11410", SysDeployTarget: "ip://127.0.0.1:11109",
-		ReleaseRoot: ".", SeedPath: "examples/setup/default/service-deployments.yaml",
-		DatasetHealthPolicyPath: "config/dataset-health-policy.yaml",
+		ReleaseRoot: ".", SeedPath: "config/setup/service-deployments.yaml",
+		DatasetHealthPolicyPath: "config/setup/dataset-health-policy.yaml",
 	}
 	if c != nil {
 		mergeDoctor(&value, c.Doctor)

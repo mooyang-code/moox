@@ -6,7 +6,7 @@
 
 **Architecture:** Metadata Schema v5 stores `Dataset.data_node_id -> DataNode.service_target` as the only routing path. Dataset creation is disabled and unlocked; a shared read-only activation checker validates signed DataNode readiness, while explicit activation performs a short revision-CAS transaction and permanently locks the binding. Runtime reads and writes resolve only from the in-memory Metadata Snapshot; deployment registers nodes and explicitly activates healthy datasets after Doctor reports healthy.
 
-**Tech Stack:** Go 1.24, tRPC-Go, Protocol Buffers, SQLite, Pebble, Vue 3, TypeScript, Pinia, Arco Design, Vitest, Playwright, Bash, `moox-cli setup`, SSH deployment through ignored `custom.toml`.
+**Tech Stack:** Go 1.24, tRPC-Go, Protocol Buffers, SQLite, Pebble, Vue 3, TypeScript, Pinia, Arco Design, Vitest, Playwright, Bash, `moox-cli setup`, SSH deployment through ignored `moox.toml`.
 
 ---
 
@@ -16,8 +16,8 @@
 - Use test-driven development for every behavioral change: add one focused failing test, observe the intended failure, implement the smallest coherent change, and rerun the focused test.
 - Regenerate all Proto outputs with `make proto`; never edit generated `*.pb.go`, `*_trpc.pb.go`, or `common_alias.go` files by hand.
 - This is a clean break. Do not add aliases, redirects, migrations, dual reads, route fallbacks, or compatibility adapters for `PrimaryStoreNode`, `PrimaryStoreRoute`, Schema v4, or `/#/ops/storage/routes`.
-- Never open, parse, print, source, or log `custom.toml`. The approved interaction is only through `./bin/moox-cli setup ... --file ./custom.toml`; `setup hosts` returns sanitized host metadata.
-- Never put credentials, `AuthInfo`, SSH passwords, HMAC keys, cookies, or `custom.toml` contents in test artifacts, screenshots, logs, commits, or review messages.
+- Never open, parse, print, source, or log `moox.toml`. The approved interaction is only through `./bin/moox-cli setup ... --file ./moox.toml`; `setup hosts` returns sanitized host metadata.
+- Never put credentials, `AuthInfo`, SSH passwords, HMAC keys, cookies, or `moox.toml` contents in test artifacts, screenshots, logs, commits, or review messages.
 - Every commit command below is run from the dedicated worktree. Before each commit, inspect `git diff --check` and `git status --short` and stage only the files named by that task.
 - Completion requires two fresh independent review passes, exact-HEAD verification, browser and backend E2E, Linux amd64 release artifacts, SHA256 recording, deployment to `106.53.107.122`, and signed remote health verification.
 
@@ -119,7 +119,7 @@ SUBJECT_NOT_IN_DATASET = 18;
 - `modules/cli/internal/setup/deploy/deploy.go`: explicit storage-data reset and deploy readiness stages.
 - `web/src/views/ops/storage/nodes.vue`: DataNode table, tags, tooltips, drawer, and admin operations.
 - `web/src/views/data/datasets/index.vue`: DataNode selection, activation, revision display, and pre-activation rebind.
-- `scripts/test-storage-datanode-management-contract.sh`: positive and zero-residual contract checks.
+- `scripts/test/contract/test-storage-datanode-management-contract.sh`: positive and zero-residual contract checks.
 - `modules/storage/internal/service/e2e/datanode_management_test.go`: service and runtime lifecycle E2E.
 - `web/tests/storage-datanode-management.e2e.spec.ts`: browser workflow E2E at desktop and mobile widths.
 
@@ -540,9 +540,9 @@ git commit -m "refactor(storage): route Dataset requests directly to DataNode"
 **Files:**
 - Modify: `modules/storage/cmd/cli/main.go`
 - Create: `modules/storage/cmd/cli/main_test.go`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-deploy-moox-storage-profile.sh`
-- Modify: `scripts/test-deploy-moox-storage-view.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-storage-profile.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-storage-view.sh`
 - Modify: `examples/service-deployments.seed.yaml`
 
 - [ ] **Step 1: Write failing Storage CLI command tests**
@@ -580,14 +580,14 @@ Remove old PrimaryStore and route methods from `examples/service-deployments.see
 
 - [ ] **Step 7: Run deployment contract tests**
 
-Run: `bash scripts/test-deploy-moox-storage-profile.sh && bash scripts/test-deploy-moox-storage-view.sh && go test ./modules/storage/cmd/cli -count=1`
+Run: `bash scripts/test/contract/test-deploy-moox-storage-profile.sh && bash scripts/test/contract/test-deploy-moox-storage-view.sh && go test ./modules/storage/cmd/cli -count=1`
 
 Expected: PASS.
 
 - [ ] **Step 8: Commit deployment registration and activation**
 
 ```bash
-git add modules/storage/cmd/cli scripts/deploy-moox.sh scripts/test-deploy-moox-storage-profile.sh scripts/test-deploy-moox-storage-view.sh examples/service-deployments.seed.yaml
+git add modules/storage/cmd/cli scripts/deploy/deploy-moox.sh scripts/test/contract/test-deploy-moox-storage-profile.sh scripts/test/contract/test-deploy-moox-storage-view.sh examples/service-deployments.seed.yaml
 git commit -m "feat(storage): register and activate DataNodes during deployment"
 ```
 
@@ -600,7 +600,7 @@ git commit -m "feat(storage): register and activate DataNodes during deployment"
 - Modify: `modules/cli/internal/doctor/bootstrap_test.go`
 - Modify: `modules/cli/internal/command/doctor.go`
 - Modify: `modules/cli/internal/command/doctor_test.go`
-- Modify: `scripts/test-doctor-e2e.sh`
+- Modify: `scripts/test/e2e/test-doctor-e2e.sh`
 - Modify: `docs/superpowers/specs/2026-07-22-storage-datanode-management-model-design.md`
 - Modify: `docs/运维/MooX-Doctor运维.md`
 
@@ -635,14 +635,14 @@ Add `bootstrap.storage_dataset_activation` to bootstrap specs. Build a signed Me
 
 Capture Dataset status/revision before and after `doctor bootstrap` and `doctor diagnose`; assert byte-for-byte equality. Assert the report includes activation observations. Then invoke the separate deployment activation command and assert status/revision change only there.
 
-Run: `bash scripts/test-doctor-e2e.sh`
+Run: `bash scripts/test/e2e/test-doctor-e2e.sh`
 
 Expected: PASS.
 
 - [ ] **Step 6: Commit Doctor integration**
 
 ```bash
-git add modules/cli/internal/doctor modules/cli/internal/command/doctor.go modules/cli/internal/command/doctor_test.go scripts/test-doctor-e2e.sh docs/superpowers/specs/2026-07-22-storage-datanode-management-model-design.md docs/运维/MooX-Doctor运维.md
+git add modules/cli/internal/doctor modules/cli/internal/command/doctor.go modules/cli/internal/command/doctor_test.go scripts/test/e2e/test-doctor-e2e.sh docs/superpowers/specs/2026-07-22-storage-datanode-management-model-design.md docs/运维/MooX-Doctor运维.md
 git commit -m "feat(doctor): report Dataset activation readiness"
 ```
 
@@ -732,8 +732,8 @@ git commit -m "refactor(storage): remove route assumptions from consumers"
 - Delete: `examples/metadata-monitor-host-local-route.seed.yaml`
 - Modify: `examples/metadata-quant-initial.seed.yaml`
 - Modify: `examples/platform-local.seed.yaml`
-- Modify: `scripts/release.sh`
-- Modify: `scripts/test-deploy-moox-eventbus.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-eventbus.sh`
 
 - [ ] **Step 1: Write failing seed/import clean-break tests**
 
@@ -762,7 +762,7 @@ Remove local-route validation and route environment assumptions. Replace them wi
 ```bash
 go test ./modules/storage/internal/bootstrap/metadata ./modules/cli/internal/command -count=1
 go run ./modules/cli/cmd/moox-cli metadata apply --file ./examples/metadata-quant-initial.seed.yaml --dry-run
-bash scripts/test-deploy-moox-eventbus.sh
+bash scripts/test/contract/test-deploy-moox-eventbus.sh
 ```
 
 Expected: PASS; dry-run output contains no route/node seed counts and no active Dataset creation.
@@ -770,7 +770,7 @@ Expected: PASS; dry-run output contains no route/node seed counts and no active 
 - [ ] **Step 7: Commit seed cleanup**
 
 ```bash
-git add modules/storage/internal/bootstrap/metadata modules/cli/internal/command/metadata_types.go modules/cli/internal/command/metadata_implementation.go modules/cli/internal/command/metadata_spaces.go modules/cli/internal/command/metadata_test.go modules/cli/internal/command/metadata_quant_seed_test.go modules/storage/config examples scripts/release.sh scripts/test-deploy-moox-eventbus.sh
+git add modules/storage/internal/bootstrap/metadata modules/cli/internal/command/metadata_types.go modules/cli/internal/command/metadata_implementation.go modules/cli/internal/command/metadata_spaces.go modules/cli/internal/command/metadata_test.go modules/cli/internal/command/metadata_quant_seed_test.go modules/storage/config examples scripts/release/release.sh scripts/test/contract/test-deploy-moox-eventbus.sh
 git commit -m "refactor(storage): remove route based metadata seeds"
 ```
 
@@ -887,7 +887,7 @@ git commit -m "feat(web): manage Dataset activation and DataNode binding"
 ### Task 13: Add zero-residual contracts and update current documentation
 
 **Files:**
-- Create: `scripts/test-storage-datanode-management-contract.sh`
+- Create: `scripts/test/contract/test-storage-datanode-management-contract.sh`
 - Modify: `Makefile`
 - Modify: `README.md`
 - Modify: `modules/storage/README.md`
@@ -929,7 +929,7 @@ Scan source, generated output, schemas, seeds, examples, scripts, skills, and cu
 
 - [ ] **Step 2: Run the contract and capture residuals**
 
-Run: `bash scripts/test-storage-datanode-management-contract.sh`
+Run: `bash scripts/test/contract/test-storage-datanode-management-contract.sh`
 
 Expected: FAIL and print every remaining current symbol with file and line.
 
@@ -944,7 +944,7 @@ Add `test-storage-datanode-management-contract` to `Makefile` and include it in 
 - [ ] **Step 5: Run contract and documentation checks**
 
 ```bash
-bash scripts/test-storage-datanode-management-contract.sh
+bash scripts/test/contract/test-storage-datanode-management-contract.sh
 git diff --check
 ```
 
@@ -953,7 +953,7 @@ Expected: PASS with `storage DataNode management contract: ok` and no whitespace
 - [ ] **Step 6: Commit cleanup and docs**
 
 ```bash
-git add scripts/test-storage-datanode-management-contract.sh Makefile README.md modules/storage/README.md skills/moox/references/protocol.md examples/e2e/README.md docs/主机监控架构设计.md docs/云节点执行平台架构.md docs/内置市场行情采集架构.md docs/协议设计.md docs/因子计算模块设计.md docs/存储层架构.md docs/存储目标架构与元数据.md docs/数据库管理.md docs/存储服务架构与部署.md docs/架构总览.md docs/行情数据归档模块设计.md docs/量化金融数据概念.md docs/运维/MooX-EventBus运维.md docs/运维/MooX指标监控.md docs/运维/数据保留与磁盘空间.md docs/superpowers/specs/2026-07-19-storage-dataset-node-simplification-design.md
+git add scripts/test/contract/test-storage-datanode-management-contract.sh Makefile README.md modules/storage/README.md skills/moox/references/protocol.md examples/e2e/README.md docs/主机监控架构设计.md docs/云节点执行平台架构.md docs/内置市场行情采集架构.md docs/协议设计.md docs/因子计算模块设计.md docs/存储层架构.md docs/存储目标架构与元数据.md docs/数据库管理.md docs/存储服务架构与部署.md docs/架构总览.md docs/行情数据归档模块设计.md docs/量化金融数据概念.md docs/运维/MooX-EventBus运维.md docs/运维/MooX指标监控.md docs/运维/数据保留与磁盘空间.md docs/superpowers/specs/2026-07-19-storage-dataset-node-simplification-design.md
 git commit -m "docs(storage): document direct DataNode binding model"
 ```
 
@@ -961,7 +961,7 @@ git commit -m "docs(storage): document direct DataNode binding model"
 
 **Files:**
 - Create: `modules/storage/internal/service/e2e/datanode_management_test.go`
-- Create: `scripts/e2e/storage-datanode-management.sh`
+- Create: `scripts/test/e2e/storage-datanode-management.sh`
 - Modify: `Makefile`
 
 - [ ] **Step 1: Write the failing backend E2E**
@@ -1020,14 +1020,14 @@ Expected: PASS. Root `go test ./...` is not evidence in this multi-module worksp
 
 - [ ] **Step 6: Run the complete backend E2E entrypoint**
 
-Run: `bash scripts/e2e/storage-datanode-management.sh`
+Run: `bash scripts/test/e2e/storage-datanode-management.sh`
 
 Expected: PASS with lifecycle, Doctor read-only, and zero-residual summaries.
 
 - [ ] **Step 7: Commit backend E2E**
 
 ```bash
-git add modules/storage/internal/service/e2e scripts/e2e/storage-datanode-management.sh Makefile
+git add modules/storage/internal/service/e2e scripts/test/e2e/storage-datanode-management.sh Makefile
 git commit -m "test(storage): cover DataNode lifecycle end to end"
 ```
 
@@ -1111,7 +1111,7 @@ Add `ResetStorageData bool` to deploy Options and pass one positional `0|1` valu
 
 - [ ] **Step 4: Write failing signed verification and E2E command tests**
 
-Add command tests for `setup verify-storage`, `setup e2e-storage`, and `setup browser-e2e-storage`. All three load `custom.toml` only through the existing immutable Snapshot loader and require an explicit host. `verify-storage` is read-only and returns component health, exact commit, binary hashes, Schema version, signed DataNode identity/status, node count, Dataset count, and `route_rpc_registered:false`. `e2e-storage` uses a caller-supplied namespace, creates and cleans an isolated Space/DataSource/Dataset, and reports lifecycle assertions without row values. `browser-e2e-storage` launches the named Playwright remote spec, sends login material over the child process stdin, disables trace/video, and never writes credentials or browser storage state.
+Add command tests for `setup verify-storage`, `setup e2e-storage`, and `setup browser-e2e-storage`. All three load `moox.toml` only through the existing immutable Snapshot loader and require an explicit host. `verify-storage` is read-only and returns component health, exact commit, binary hashes, Schema version, signed DataNode identity/status, node count, Dataset count, and `route_rpc_registered:false`. `e2e-storage` uses a caller-supplied namespace, creates and cleans an isolated Space/DataSource/Dataset, and reports lifecycle assertions without row values. `browser-e2e-storage` launches the named Playwright remote spec, sends login material over the child process stdin, disables trace/video, and never writes credentials or browser storage state.
 
 - [ ] **Step 5: Run command tests and observe missing commands**
 
@@ -1125,7 +1125,7 @@ Use the existing setup SSH transport and loopback forwarder. Signed Storage requ
 
 - [ ] **Step 7: Document the destructive and credential boundaries**
 
-Document that reset is allowed only for explicitly confirmed pre-production Schema replacement. `custom.toml` remains read-only and only the setup CLI may load it. Verification output is sanitized; browser E2E must disable trace/video and must not persist session state.
+Document that reset is allowed only for explicitly confirmed pre-production Schema replacement. `moox.toml` remains read-only and only the setup CLI may load it. Verification output is sanitized; browser E2E must disable trace/video and must not persist session state.
 
 - [ ] **Step 8: Run setup tests**
 
@@ -1199,7 +1199,7 @@ test -z "$(git status --porcelain)"
 VERIFY_SHA="$(git rev-parse HEAD)"
 make proto
 test -z "$(git status --porcelain)"
-bash scripts/test-storage-datanode-management-contract.sh
+bash scripts/test/contract/test-storage-datanode-management-contract.sh
 ```
 
 Expected: clean before and after generation; contract PASS.
@@ -1207,7 +1207,7 @@ Expected: clean before and after generation; contract PASS.
 - [ ] **Step 2: Run all focused and repository verification suites**
 
 ```bash
-bash scripts/e2e/storage-datanode-management.sh
+bash scripts/test/e2e/storage-datanode-management.sh
 CI=true pnpm --dir web exec vitest run
 pnpm --dir web run typecheck
 pnpm --dir web run build:prod
@@ -1220,9 +1220,9 @@ Expected: PASS. If `make verify-pr` fails outside this change, diagnose and eith
 - [ ] **Step 3: Build exact-SHA Linux amd64 binaries**
 
 ```bash
-VERSION="${VERIFY_SHA}" GIT_COMMIT="${VERIFY_SHA}" ./scripts/build-storage-linux.sh
-VERSION="${VERIFY_SHA}" TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh cli
-VERSION="${VERIFY_SHA}" TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/release.sh
+VERSION="${VERIFY_SHA}" GIT_COMMIT="${VERIFY_SHA}" ./scripts/build/build-storage-linux.sh
+VERSION="${VERIFY_SHA}" TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh cli
+VERSION="${VERIFY_SHA}" TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/release/release.sh
 ```
 
 Expected: `bin/moox-storage-primary`, `bin/moox-storage-view`, `bin/moox-storage-node`, `bin/moox-storage-cli`, `bin/moox-cli`, and release archive(s) are Linux amd64 and embed the exact commit.
@@ -1240,7 +1240,7 @@ Expected: every executable reports Linux x86-64/amd64 and every hash has 64 hexa
 ### Task 19: Deploy to the configured 106 host and run signed remote E2E
 
 **Files:**
-- Read only through CLI: repository-root `custom.toml`
+- Read only through CLI: repository-root `moox.toml`
 - Artifact only: `artifacts/storage-datanode-106-deploy.json`
 - Artifact only: `artifacts/storage-datanode-106-health.json`
 - Artifact only: `artifacts/storage-datanode-106-e2e.json`
@@ -1248,17 +1248,17 @@ Expected: every executable reports Linux x86-64/amd64 and every hash has 64 hexa
 - [ ] **Step 1: Build the current `moox-cli` and validate the immutable setup file**
 
 ```bash
-./scripts/build.sh cli
-./bin/moox-cli setup validate --file ./custom.toml > artifacts/storage-datanode-106-validate.json
-./bin/moox-cli setup status --file ./custom.toml > artifacts/storage-datanode-106-status.json
+./scripts/build/build.sh cli
+./bin/moox-cli setup validate --file ./moox.toml > artifacts/storage-datanode-106-validate.json
+./bin/moox-cli setup status --file ./moox.toml > artifacts/storage-datanode-106-status.json
 ```
 
-Expected: sanitized JSON, validation success, and setup state `completed`. Do not use `cat`, `rg`, `sed`, shell `source`, TOML parsers, or editor tools on `custom.toml`.
+Expected: sanitized JSON, validation success, and setup state `completed`. Do not use `cat`, `rg`, `sed`, shell `source`, TOML parsers, or editor tools on `moox.toml`.
 
 - [ ] **Step 2: Select the 106 host only from sanitized CLI output**
 
 ```bash
-./bin/moox-cli setup hosts --file ./custom.toml > artifacts/storage-datanode-106-hosts.json
+./bin/moox-cli setup hosts --file ./moox.toml > artifacts/storage-datanode-106-hosts.json
 MOOX_106_HOST="$(jq -er '.hosts[] | select(.address == "106.53.107.122") | .name' artifacts/storage-datanode-106-hosts.json)"
 test "$(jq -r --arg name "$MOOX_106_HOST" '[.hosts[] | select(.name == $name and .address == "106.53.107.122")] | length' artifacts/storage-datanode-106-hosts.json)" = "1"
 ```
@@ -1268,7 +1268,7 @@ Expected: exactly one sanitized host matches; no credential fields exist in the 
 - [ ] **Step 3: Perform the explicitly approved pre-production reset deployment**
 
 ```bash
-./bin/moox-cli setup deploy-storage --file ./custom.toml --host "$MOOX_106_HOST" --reset-storage-data > artifacts/storage-datanode-106-deploy.json
+./bin/moox-cli setup deploy-storage --file ./moox.toml --host "$MOOX_106_HOST" --reset-storage-data > artifacts/storage-datanode-106-deploy.json
 ```
 
 Expected: JSON reports selected host, `status:"ready"`, and `reset_storage_data:true`. The command packages the exact checkout, deploys through setup SSH handling, rebuilds Schema v5, registers DataNode, runs read-only Doctor, explicitly activates ready Datasets, and updates Storage placement. Never call raw `ssh` with credentials extracted from the file.
@@ -1278,7 +1278,7 @@ Expected: JSON reports selected host, `status:"ready"`, and `reset_storage_data:
 Use the signed setup verification command added in Task 16. It obtains credentials internally and emits sanitized JSON. Verify storage-primary, storage-view, and storage-node are ready; DataNode `GetNodeState` returns `READY` and `storage-node-0`; Metadata Schema is v5; ListDataNodes returns the node and all Dataset summaries; no route endpoint is registered.
 
 ```bash
-./bin/moox-cli setup verify-storage --file ./custom.toml --host "$MOOX_106_HOST" > artifacts/storage-datanode-106-health.json
+./bin/moox-cli setup verify-storage --file ./moox.toml --host "$MOOX_106_HOST" > artifacts/storage-datanode-106-health.json
 jq -e '.schema_version == 5 and .data_node.node_id == "storage-node-0" and .data_node.status == "READY" and (.route_rpc_registered | not)' artifacts/storage-datanode-106-health.json
 ```
 
@@ -1289,7 +1289,7 @@ Expected: PASS with only component names, IDs, counts, versions, hashes, and sta
 Run the Task 16 lifecycle command through its internally managed SSH tunnel. It lists DataNode summaries, creates a disabled temporary Dataset, checks activation, activates with revision, writes/reads one row, verifies binding lock, rejects rebind, deletes temporary resources, and confirms node deletion remains constrained.
 
 ```bash
-./bin/moox-cli setup e2e-storage --file ./custom.toml --host "$MOOX_106_HOST" --namespace "codex-${VERIFY_SHA:0:12}" > artifacts/storage-datanode-106-e2e.json
+./bin/moox-cli setup e2e-storage --file ./moox.toml --host "$MOOX_106_HOST" --namespace "codex-${VERIFY_SHA:0:12}" > artifacts/storage-datanode-106-e2e.json
 jq -e '.status == "passed" and .cleanup == "completed"' artifacts/storage-datanode-106-e2e.json
 ```
 
@@ -1300,7 +1300,7 @@ Expected: PASS; output contains only IDs, revisions, check IDs, statuses, and as
 Run the Task 16 browser command. It loads login material inside the setup process, streams it to Playwright through stdin, disables trace/video, and persists no browser state.
 
 ```bash
-./bin/moox-cli setup browser-e2e-storage --file ./custom.toml --host "$MOOX_106_HOST" --repo-root . > artifacts/storage-datanode-106-browser.json
+./bin/moox-cli setup browser-e2e-storage --file ./moox.toml --host "$MOOX_106_HOST" --repo-root . > artifacts/storage-datanode-106-browser.json
 jq -e '.status == "passed" and .desktop == "passed" and .mobile == "passed"' artifacts/storage-datanode-106-browser.json
 ```
 
@@ -1358,4 +1358,4 @@ Report final commit SHA, remote branch SHA, both independent review task IDs and
 - [ ] Backend, Doctor, browser, contract, consumer, and exact-HEAD verification suites pass.
 - [ ] Two fresh independent Agent review passes are complete with no actionable findings.
 - [ ] Linux amd64 artifacts and hashes correspond to the exact deployed commit.
-- [ ] `custom.toml` was accessed only through setup CLI and 106 deployment/health/E2E evidence is sanitized and complete.
+- [ ] `moox.toml` was accessed only through setup CLI and 106 deployment/health/E2E evidence is sanitized and complete.

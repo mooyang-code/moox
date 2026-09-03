@@ -37,7 +37,7 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	t.Cleanup(func() { _ = dbm.Close() })
 	require.NoError(t, dbm.ApplySchema(collectorschema.AllSQL()))
 
-	rules, err := ruleseed.LoadFile(filepath.Join("..", "..", "..", "examples", "setup", "default", "collector-rules.yaml"))
+	rules, err := ruleseed.LoadFile(filepath.Join("..", "..", "..", "config", "setup", "collector-rules.yaml"))
 	require.NoError(t, err)
 	summary, err := ruleseed.SeedMissing(ctx, dbm.TaskRules(), rules)
 	require.NoError(t, err)
@@ -107,7 +107,7 @@ func (defaultRuleDatasetSource) GetDataset(context.Context, string, string) (sto
 }
 
 func (defaultRuleDatasetSource) ListSubjects(_ context.Context, _ string, datasetID string, _ string) ([]domain.DatasetSubject, error) {
-	if datasetID == "binance_swap_symbols" {
+	if datasetID == "dataset_binance_swap_symbols" {
 		return []domain.DatasetSubject{{SubjectID: "ETH-USDT", ExternalSymbol: "ETHUSDT", Status: "active"}}, nil
 	}
 	return []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}, nil

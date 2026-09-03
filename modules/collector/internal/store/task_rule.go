@@ -286,7 +286,7 @@ func resolveTaskRuleCoverageStart(rule *domain.TaskRule, now time.Time) (*time.T
 			}
 			start, err = calendar.LookbackStart(now.UTC(), policy.Lookback)
 			if err != nil {
-				return nil, fmt.Errorf("resolve stock_cn history lookback: %w", err)
+				return nil, fmt.Errorf("resolve stockcn history lookback: %w", err)
 			}
 		} else {
 			start = now.UTC().Add(-time.Duration(policy.Lookback) * 24 * time.Hour).Truncate(time.Minute)
@@ -301,17 +301,17 @@ func isStockCNRule(rule *domain.TaskRule) bool {
 	if rule == nil {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(rule.SpaceID), "stock_cn") || strings.EqualFold(strings.TrimSpace(rule.MarketType), "equity")
+	return strings.EqualFold(strings.TrimSpace(rule.SpaceID), "stockcn") || strings.EqualFold(strings.TrimSpace(rule.MarketType), "equity")
 }
 
 func loadStockCNCalendarForRule() (*stockmarket.Calendar, error) {
 	_, sourceFile, _, _ := runtime.Caller(0)
-	sourceRelative := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", "..", "config", "markets", "stock_cn", "calendar.yaml"))
+	sourceRelative := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", "..", "config", "markets", "stockcn", "calendar.yaml"))
 	candidates := []string{
 		strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_CALENDAR_PATH")),
-		"markets/stock_cn/calendar.yaml",
-		"config/markets/stock_cn/calendar.yaml",
-		"modules/collector/config/markets/stock_cn/calendar.yaml",
+		"markets/stockcn/calendar.yaml",
+		"config/markets/stockcn/calendar.yaml",
+		"modules/collector/config/markets/stockcn/calendar.yaml",
 		sourceRelative,
 	}
 	for _, candidate := range candidates {
@@ -324,9 +324,9 @@ func loadStockCNCalendarForRule() (*stockmarket.Calendar, error) {
 		}
 		calendar, err := stockmarket.LoadCalendar(candidate)
 		if err != nil {
-			return nil, fmt.Errorf("load stock_cn calendar %s: %w", candidate, err)
+			return nil, fmt.Errorf("load stockcn calendar %s: %w", candidate, err)
 		}
 		return calendar, nil
 	}
-	return nil, fmt.Errorf("stock_cn calendar config was not found")
+	return nil, fmt.Errorf("stockcn calendar config was not found")
 }

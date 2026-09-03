@@ -65,7 +65,7 @@ flowchart LR
   Patch --> CloudNode["CloudNode Batch Runtime Config"]
   CloudNode --> Env["Get + Merge + 4KB Check + Update + Readback"]
   CloudNode --> Trigger["Create/Update/Enable/Disable Timer"]
-  Trigger --> SCF["crypto_market Timer Handler"]
+  Trigger --> SCF["crypto Timer Handler"]
   SCF --> Binance["并发请求 Binance"]
   SCF --> Storage["一次聚合 Upsert"]
   SCF --> CLS["逐标的结构化日志"]
@@ -96,7 +96,7 @@ flowchart LR
 ```text
 MOOX_MARKET_FETCH_PROVIDER=binance
 MOOX_MARKET_FETCH_MARKET_TYPE=spot
-MOOX_MARKET_FETCH_DATASET_ID=binance_spot_kline_1m
+MOOX_MARKET_FETCH_DATASET_ID=dataset_binance_spot_kline_1m
 MOOX_MARKET_FETCH_FREQUENCY=1m
 MOOX_MARKET_FETCH_SUBJECTS=BTC-USDT|ETH-USDT|SOL-USDT
 MOOX_MARKET_FETCH_SYMBOLS_JSON={"BTC-USDT":"BTCUSDT","ETH-USDT":"ETHUSDT","SOL-USDT":"SOLUSDT"}
@@ -163,7 +163,7 @@ node_type=scf-event, trigger_type=invoke  # 探针、Symbol、补采、人工 E2
 | `modules/collector/internal/marketfetch/environment.go` | 任务与 DNS 环境变量编解码、哈希 |
 | `modules/collector/internal/marketfetch/reconciler.go` | Collector 控制面协调 |
 | `modules/collector/internal/dnscache/cache.go` | 稳定公共 DNS 快照，不再随 request 发送 |
-| `modules/collector/internal/serverless/crypto_market/timer.go` | Timer event 与环境变量解析 |
+| `modules/collector/internal/serverless/crypto/timer.go` | Timer event 与环境变量解析 |
 | `modules/collector/internal/marketfetch/executor.go` | 复用有界并发和一次 Storage 写入 |
 | `modules/collector/internal/scfinvoker/client.go` | 定时节点查询与 runtime-config batch 提交 |
 | `modules/cli/internal/command/collector.go` | 定时节点发布、精简环境和 Trigger 初始配置 |
@@ -559,13 +559,13 @@ git add modules/collector/internal/marketfetch modules/collector/internal/scfinv
 git commit -m "feat(collector): reconcile SCF timer configuration"
 ```
 
-### Task 6: 将 crypto_market SCF 改为 Timer 环境任务
+### Task 6: 将 crypto SCF 改为 Timer 环境任务
 
 **Files:**
-- Create: `modules/collector/internal/serverless/crypto_market/timer.go`
-- Create: `modules/collector/internal/serverless/crypto_market/timer_test.go`
-- Modify: `modules/collector/internal/serverless/crypto_market/handler.go:21-114`
-- Modify: `modules/collector/internal/serverless/crypto_market/handler_test.go`
+- Create: `modules/collector/internal/serverless/crypto/timer.go`
+- Create: `modules/collector/internal/serverless/crypto/timer_test.go`
+- Modify: `modules/collector/internal/serverless/crypto/handler.go:21-114`
+- Modify: `modules/collector/internal/serverless/crypto/handler_test.go`
 - Modify: `modules/collector/internal/marketfetch/handler.go:20-102`
 - Modify: `modules/collector/internal/marketfetch/executor.go:30-115`
 - Modify: `modules/collector/internal/marketfetch/executor_test.go`
@@ -591,7 +591,7 @@ type TimerEvent struct {
 
 - [ ] **Step 2: 运行测试确认先失败**
 
-Run: `cd modules/collector && go test ./internal/serverless/crypto_market ./internal/marketfetch -run 'Timer|EnvironmentRequest' -count=1`
+Run: `cd modules/collector && go test ./internal/serverless/crypto ./internal/marketfetch -run 'Timer|EnvironmentRequest' -count=1`
 
 Expected: FAIL。
 
@@ -613,12 +613,12 @@ Timer Handler 在 Storage 成功后直接返回；不初始化 EventBus Publishe
 
 - [ ] **Step 5: 运行 SCF 测试并提交**
 
-Run: `cd modules/collector && go test -race ./internal/serverless/crypto_market ./internal/marketfetch ./internal/sources/... -count=1`
+Run: `cd modules/collector && go test -race ./internal/serverless/crypto ./internal/marketfetch ./internal/sources/... -count=1`
 
 Expected: PASS，且测试证明 Timer 成功只调用一次 `Storage.UpsertFields`、不调用 EventBus Publish。
 
 ```bash
-git add modules/collector/internal/serverless/crypto_market modules/collector/internal/marketfetch modules/collector/internal/sources
+git add modules/collector/internal/serverless/crypto modules/collector/internal/marketfetch modules/collector/internal/sources
 git commit -m "feat(collector): run realtime fetch from SCF timer env"
 ```
 
@@ -680,7 +680,7 @@ git commit -m "refactor(collector): retire realtime SCF invoke scheduling"
 - Modify: `modules/cli/internal/adminclient/cloudnode_test.go`
 - Modify: `modules/cli/internal/command/collector.go:1246-1648`
 - Modify: `modules/cli/internal/command/collector_test.go`
-- Modify: `custom.toml`
+- Modify: `moox.toml`
 
 **Interfaces:**
 - Produces: `node_type=scf-event, trigger_type=timer` 的 realtime fetcher。
@@ -702,7 +702,7 @@ Expected: FAIL，当前仍默认 `scf-event` Invoke 环境且带 EventBus。
 - probe/catchup 包发布：`trigger_type=invoke`，不创建 Timer。
 - 配置驱动的标准发布会按每个启用地域自动创建 1 个 Invoke 辅助节点；`function_count` 只表示 Timer 实时节点数，避免 Symbol 快照、补采和探针没有执行节点。
 - Timer 函数只保留一个 Storage Gateway CA；不复制同一 CA 到多个别名。
-- `custom.toml` 只保存地域、节点数量、64MB/15s、Trigger 类型和默认 cron，不保存每节点 Subject 或 DNS；它们是运行态协调结果。
+- `moox.toml` 只保存地域、节点数量、64MB/15s、Trigger 类型和默认 cron，不保存每节点 Subject 或 DNS；它们是运行态协调结果。
 
 - [ ] **Step 4: 运行 CLI 测试并提交**
 
@@ -711,7 +711,7 @@ Run: `cd modules/cli && go test -race ./... -count=1`
 Expected: PASS。
 
 ```bash
-git add modules/cli custom.toml
+git add modules/cli moox.toml
 git commit -m "feat(cli): publish timer-triggered market fetchers"
 ```
 
@@ -804,7 +804,7 @@ moox_collector_market_fetch_assignment_errors_total{space_id,reason}
 
 - [ ] **Step 2: 完成全仓本地验证和独立 codeCR**
 
-Run: `./scripts/test-go-workspace.sh`
+Run: `./scripts/test/contract/test-go-workspace.sh`
 
 Run: `make verify-pr`
 
@@ -870,7 +870,7 @@ git commit -m "docs: finalize timer-triggered market fetch operations"
 7. 64MB、15 秒、Storage 5 秒维持不变；函数聚合后只写一次 Storage。
 8. 400 多个 active Symbol 连续三个 1m 已收盘周期均可在 Storage 查询到，CLS 可按函数/标的查看耗时与结果。
 9. Monitor 不再发“尚未收到行情采集完成回执”，但能对协调失败、Trigger 异常和 Dataset/K 线过期发出中文告警。
-10. `./scripts/test-go-workspace.sh`、`make verify-pr`、Web 全测/生产构建、独立 codeCR 和真实腾讯灰度/全量验收全部通过。
+10. `./scripts/test/contract/test-go-workspace.sh`、`make verify-pr`、Web 全测/生产构建、独立 codeCR 和真实腾讯灰度/全量验收全部通过。
 
 ## 6. 线上执行记录（2026-08-05）
 
@@ -879,7 +879,7 @@ git commit -m "docs: finalize timer-triggered market fetch operations"
 - Collector `/home/ubuntu/moox/prod/bin/moox-collector`：本地/远端 SHA-256 均为 `764aec1ef7f04b09ffa8dc8711f5bbfbd94cf80235448ed1691fe6b39c8b5a44`。
 - CloudNode `/home/ubuntu/moox/prod/bin/moox-cloudnode`：远端已重启并使用本轮 Timer 回读限流实现；每 5 分钟最多回读 4 个节点，避免 Tencent `RequestLimitExceeded` 触发协调风暴。
 - Storage-node：部署 SHA-256 `d023e750611093da446845095cbb95c15a1b8fbd7592f4529866aaed10b3cdba`。Relay 每次 JetStream publish 使用 5 秒独立超时，EventBus 断连时只保留 outbox 并等待下一轮重试，不再永久阻塞单 relay goroutine。
-- Collector storage consumer ACL 已从通配符改为显式 `MOOX_STORAGE` API 权限；远端用户凭据重新生成后，`collector-storage-write-v1-crypto_market` 已正常绑定且 pending 为 0。
+- Collector storage consumer ACL 已从通配符改为显式 `MOOX_STORAGE` API 权限；远端用户凭据重新生成后，`collector-storage-write-v1-crypto` 已正常绑定且 pending 为 0。
 
 ### 6.2 Timer 节点与环境变量核验
 
@@ -890,7 +890,7 @@ git commit -m "docs: finalize timer-triggered market fetch operations"
 
 ### 6.3 CLS 与任务实例结果
 
-CLS Topic `c7ff7bb7-622f-43c6-86ac-800552762a2c` 按 `event_type=market_fetch_item`、`dataset_id=binance_spot_kline_1m` 逐分钟核验：
+CLS Topic `c7ff7bb7-622f-43c6-86ac-800552762a2c` 按 `event_type=market_fetch_item`、`dataset_id=dataset_binance_spot_kline_1m` 逐分钟核验：
 
 | UTC 分钟 | 记录数 | 成功 | 失败 | 函数数 | symbol 数 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -908,7 +908,7 @@ EventBus 恢复后 Collector 任务实例查询结果为 `active=478, fresh=478,
 
 - 最新 Storage View 二进制 SHA-256：`e0ef974277e5454e14c2634233824f514e93b0197924e6cef8ac3acb300548ce`，远端 PID `3169241`，由提交 `0e7c03a4` 构建并重启。
 - 重启后的 Prometheus：`consumer_bound=1`、`consumer_lag_messages=0`、`lane_active=0`、`oldest_pending_event_age_seconds=0`；JetStream `storage_view` durable 的 `pending=0`，历史积压已清空。部署后日志未再出现 `nats: invalid subscription`。
-- 通过 SSH 隧道直读 Storage View 的 `crypto_market/binance_spot_kline_1m/BTC-USDT/1m` 连续 3 次（间隔 10 秒）：三次均返回 `total=3072`、`served_indexed_to=2026-08-05T01:58:00Z`，且返回数据稳定。
+- 通过 SSH 隧道直读 Storage View 的 `crypto/dataset_binance_spot_kline_1m/BTC-USDT/1m` 连续 3 次（间隔 10 秒）：三次均返回 `total=3072`、`served_indexed_to=2026-08-05T01:58:00Z`，且返回数据稳定。
 - Collector SQLite 实时核验：`active=478`、`success=478`；最近一轮执行时间为 `2026-08-05 02:03:01Z` 至 `02:03:03Z`，16 个 Timer 函数全部有任务实例。
 - CLS Topic `c7ff7bb7-622f-43c6-86ac-800552762a2c` 的 `market_fetch_item` 明细验证了函数名、symbol、耗时和结果字段；最新成功周期的任务实例已全部成功。CLS 中仍可看到个别周期因 `11003` Storage TCP 超时产生的失败明细，随后周期已恢复并由 Collector 任务实例反映最新成功状态；这属于可观测的瞬时 Storage 失败，不应被隐藏。
 

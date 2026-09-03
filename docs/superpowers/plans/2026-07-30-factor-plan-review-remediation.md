@@ -747,9 +747,9 @@ Expected: Go 无 race；Python `23 passed` 或更多。
 Run:
 
 ```bash
-./scripts/test-storage-boundary-contract.sh
-./scripts/test-storage-consistency-contract.sh
-./scripts/test-series-tag-e2e.sh
+./scripts/test/contract/test-storage-boundary-contract.sh
+./scripts/test/contract/test-storage-consistency-contract.sh
+./scripts/test/e2e/test-series-tag-e2e.sh
 ```
 
 Expected: 全部 PASS；E2E 覆盖 Storage/View、Factor Python、Archive Parquet 和 Monitor。

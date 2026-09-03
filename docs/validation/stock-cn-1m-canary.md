@@ -1,4 +1,4 @@
-# stock_cn 1m Canary
+# stockcn 1m Canary
 
 Status: `PENDING`. Formal SCF packages were built and the production CloudNode
 fleet was exercised. The historical all-node egress results below are retained
@@ -34,7 +34,7 @@ still requires fresh canary, Timer/Rule readback, Monitor, and Storage evidence.
   The stock Rule and all Timer nodes remain disabled.
 - The r24 full Instrument canary completed all 32 deterministic shards through
   SCF, Gateway, and Storage. Storage readback currently has 5,550 active
-  subjects in both `stock_cn_instruments` and `stock_cn_kline`; the
+  subjects in both `dataset_stockcn_instruments` and `dataset_stockcn_equity_kline`; the
   `amount_quality` column is active.
 - CloudNode readback confirms every configured stock Timer is disabled
   (`timer_actual_enabled=0`). A legacy Singapore Timer from an earlier package
@@ -81,14 +81,14 @@ still requires fresh canary, Timer/Rule readback, Monitor, and Storage evidence.
 
 ## Commands
 
-Run from the repository root with a populated local `custom.toml` and
+Run from the repository root with a populated local `moox.toml` and
 short-lived credentials supplied through the process environment. Do not put
 secrets in this document or in command output.
 
 ```bash
-./bin/moox-cli collector function publish submit --file ./custom.toml --space-id stock_cn --control-url "$MOOX_CONTROL_URL" > stock-cn-publish.json
-./bin/moox-cli collector function probe-egress --control-url "$MOOX_CONTROL_URL" --space-id stock_cn --file ./custom.toml --service-access-key "$MOOX_SERVICE_ACCESS_KEY" --service-secret-key "$MOOX_SERVICE_SECRET_KEY" > stock-cn-egress-probe.json
-./bin/moox-cli data kline get --config ./config/data-access-stock-cn.yaml --data-type stock_cn --exchange stock_cn --symbol 600000.XSHG --interval 1m --limit 10
+./bin/moox-cli collector function publish submit --file ./moox.toml --space-id stockcn --control-url "$MOOX_CONTROL_URL" > stock-cn-publish.json
+./bin/moox-cli collector function probe-egress --control-url "$MOOX_CONTROL_URL" --space-id stockcn --file ./moox.toml --service-access-key "$MOOX_SERVICE_ACCESS_KEY" --service-secret-key "$MOOX_SERVICE_SECRET_KEY" > stock-cn-egress-probe.json
+./bin/moox-cli data kline get --config ./config/data-access-stockcn.yaml --data-type stockcn --exchange stockcn --symbol 600000.XSHG --interval 1m --limit 10
 ```
 
 The Rule and Timer must remain disabled if any required check is not backed by

@@ -12,7 +12,7 @@
 
 ## File Map
 
-- `scripts/test-greenfield-contract.sh`: repository policy check for protocol reservations and explicitly retired compatibility symbols.
+- `scripts/test/contract/test-greenfield-contract.sh`: repository policy check for protocol reservations and explicitly retired compatibility symbols.
 - `Makefile`: exposes the policy check and includes it in `verify-pr`.
 - `modules/{admin,collector,storage}/proto/*.proto`: compact greenfield wire contracts.
 - `modules/{admin,collector,storage}/proto/*gen`: regenerated Go and tRPC bindings.
@@ -27,9 +27,9 @@
 ## Task 1: Add a Failing Greenfield Contract Gate
 
 **Files:**
-- Create: `scripts/test-greenfield-contract.sh`
+- Create: `scripts/test/contract/test-greenfield-contract.sh`
 - Modify: `Makefile`
-- Test: `scripts/test-greenfield-contract.sh`
+- Test: `scripts/test/contract/test-greenfield-contract.sh`
 
 - [ ] **Step 1: Add the policy script**
 
@@ -76,7 +76,7 @@ Add `test-greenfield-contract` to `.PHONY`, add:
 
 ```make
 test-greenfield-contract:
-	bash scripts/test-greenfield-contract.sh
+	bash scripts/test/contract/test-greenfield-contract.sh
 ```
 
 and make `verify-pr` depend on `test-greenfield-contract`.
@@ -86,7 +86,7 @@ and make `verify-pr` depend on `test-greenfield-contract`.
 Run:
 
 ```bash
-bash scripts/test-greenfield-contract.sh
+bash scripts/test/contract/test-greenfield-contract.sh
 ```
 
 Expected: non-zero exit with current `reserved` declarations and compatibility symbols listed. A syntax error or missing-file error is not the expected failure.
@@ -139,7 +139,6 @@ Apply these exact tag changes:
 
 ```protobuf
 // collector TaskInstance
-string last_exec_node = 12;
 TaskInstanceStatus last_exec_status = 13;
 string last_exec_time = 14;
 google.protobuf.Struct result = 15;
@@ -149,7 +148,6 @@ string modify_time = 18;
 string cloud_job_item_id = 19;
 
 // collector TaskInstanceFilter
-string last_exec_node = 12;
 bool include_deleted = 13;
 common.Page page = 14;
 
@@ -283,7 +281,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add Makefile scripts/test-greenfield-contract.sh \
+git add Makefile scripts/test/contract/test-greenfield-contract.sh \
   modules/admin modules/collector modules/factor modules/monitor modules/storage/proto modules/trade
 git diff --cached --check
 git commit -m "refactor(protocol): remove compatibility contracts"
@@ -696,7 +694,7 @@ unexported unreachable helpers and exports with no caller anywhere.
 Run:
 
 ```bash
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-go-workspace.sh
 staticcheck ./...
 ```
 
@@ -712,7 +710,7 @@ dynamic entry point.
 - Modify: `modules/storage/README.md`
 - Modify: other active README or architecture files that name removed APIs
 - Modify: affected `go.mod`/`go.sum` files after deleting whole dependencies
-- Modify: `scripts/test-greenfield-contract.sh`
+- Modify: `scripts/test/contract/test-greenfield-contract.sh`
 
 - [ ] **Step 1: Remove stale active documentation**
 
@@ -731,7 +729,7 @@ Run `go mod tidy` in each module whose imports changed. Inspect every
 Run:
 
 ```bash
-bash scripts/test-greenfield-contract.sh
+bash scripts/test/contract/test-greenfield-contract.sh
 ```
 
 Expected: exit 0 with no output.
@@ -873,7 +871,7 @@ If the review has no confirmed finding, do not create an empty commit.
 Run:
 
 ```bash
-bash scripts/test-greenfield-contract.sh
+bash scripts/test/contract/test-greenfield-contract.sh
 rg -n '^[[:space:]]*reserved([[:space:]]|$)' \
   --glob '*.proto' --glob '*.thrift' modules packages
 rg -n '\[[[:space:]]*deprecated[[:space:]]*=[[:space:]]*true' \

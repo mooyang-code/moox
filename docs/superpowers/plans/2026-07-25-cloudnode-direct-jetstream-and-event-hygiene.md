@@ -103,7 +103,7 @@ extra_config:
 
 启用 TLS 时，NATS 服务端和所有 MooX 客户端统一使用 TLS handshake-first。这样公网端口从第一个字节就是标准 TLS 握手，不依赖中间网络放行 NATS 的明文 `INFO` 前导；该行为由代码根据 TLS 自动启用，不暴露额外开关。
 
-用户只在仓库根目录的 0600 `custom.toml` 填写 `eventbus.public_address`、`eventbus.port` 和 `eventbus.tls_enabled`。`setup deploy-control` 根据这些值配置 bind、advertised URL、证书和腾讯云 Lighthouse 防火墙；防火墙规则用“查询后缺失才创建”保证重复部署不堆积重复规则。不做公网探测、自动回退或替换地址。
+用户只在仓库根目录的 0600 `moox.toml` 填写 `eventbus.public_address`、`eventbus.port` 和 `eventbus.tls_enabled`。`setup deploy-control` 根据这些值配置 bind、advertised URL、证书和腾讯云 Lighthouse 防火墙；防火墙规则用“查询后缺失才创建”保证重复部署不堆积重复规则。不做公网探测、自动回退或替换地址。
 
 ### 2.4 SCF EventBus 凭据
 
@@ -321,8 +321,8 @@ Phase 1 的 Task 5-9 必须同一次发布，不允许出现“服务端已按�
 - Modify: `examples/service-deployments.seed.yaml`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
 - Modify: 对应 Admin route/default tests
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-deploy-moox-gateway.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-gateway.sh`
 - Modify: `web/src/api/cloud-account.ts`
 - Modify: `web/src/views/collector/cloud-account/cloud-account-manage.vue`
 - Reuse: `web/src/api/admin/secret.ts`
@@ -390,8 +390,8 @@ type TencentCredential struct {
 - Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
 - Modify: `packages/jetstream/credentials.go`
 - Modify: `packages/jetstream/credentials_test.go`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-deploy-moox-eventbus.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-eventbus.sh`
 
 **Steps:**
 
@@ -409,12 +409,12 @@ type TencentCredential struct {
 - [ ] 脚本内部根据 URL host 推导 bind host：loopback 用 `127.0.0.1`，其他 host 用 `0.0.0.0`；覆盖并传递内部 `MOOX_EVENTBUS_HOST`，不要求运维填写。
 - [ ] 加脚本契约测试，断言本地和远端路径都传递计算后的 URL、node ID 与 bind host。
 - [ ] EventBus TLS 服务端、内部控制连接和 `packages/jetstream` 客户端统一启用 handshake-first；增加真实 TLS 握手测试，不能只断言配置字段。
-- [ ] `setup deploy-control --file ./custom.toml` 在服务部署成功后幂等确保 Lighthouse TCP 防火墙允许 EventBus 端口；规则创建失败则部署命令失败，不做探测或回退。
+- [ ] `setup deploy-control --file ./moox.toml` 在服务部署成功后幂等确保 Lighthouse TCP 防火墙允许 EventBus 端口；规则创建失败则部署命令失败，不做探测或回退。
 - [ ] 运行：
 
 ```bash
-bash -n scripts/deploy-moox.sh
-./scripts/test-deploy-moox-eventbus.sh
+bash -n scripts/deploy/deploy-moox.sh
+./scripts/test/contract/test-deploy-moox-eventbus.sh
 (cd modules/admin && go test ./cmd/cli/... ./internal/service/sysdeploy/... -race)
 (cd packages/jetstream && go test ./... -race)
 ```
@@ -695,7 +695,7 @@ type JobStateStore interface {
 
 - Modify: `modules/admin/cmd/cli/eventbus_credentials.go`
 - Modify: `modules/admin/cmd/cli/eventbus_credentials_test.go`
-- Modify: `scripts/verify-event-contracts.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
 - Modify: `docs/运维/MooX-EventBus运维.md`
 
 **Required ACL:**
@@ -715,9 +715,9 @@ subscribe allow:
 - [ ] 在 `eventBusRoles`、`eventBusKeys`、`usersYAML`、`roleFiles` 四处加入 `cloudnode-worker`，导出 `cloudnode-worker.yaml`。
 - [ ] 不授予 `$JS.API.CONSUMER.CREATE*`、DELETE、Stream 枚举、KV、业务 subject publish 或其他 Stream 权限。
 - [ ] 加生成文本测试，断言 allowlist 精确匹配并明确排除管理权限。
-- [ ] 扩展 `scripts/verify-event-contracts.sh`，校验 CloudNode server 与 worker 权限边界。
+- [ ] 扩展 `scripts/check/verify-event-contracts.sh`，校验 CloudNode server 与 worker 权限边界。
 - [ ] 真实 NATS 测试：worker 可 bind/fetch/ack，`NewConsumer`/CreateConsumer/业务 publish 均被拒。
-- [ ] 在 `modules/admin` 运行 `go test ./cmd/cli/... -race`，再运行 `./scripts/verify-event-contracts.sh`。
+- [ ] 在 `modules/admin` 运行 `go test ./cmd/cli/... -race`，再运行 `./scripts/check/verify-event-contracts.sh`。
 
 ---
 
@@ -737,7 +737,7 @@ subscribe allow:
 - Modify: `modules/cloudnode/internal/providers/tencentscf/client.go`
 - Modify: `modules/cloudnode/internal/providers/tencentscf/client_test.go`
 - Modify: `modules/cloudnode/internal/rpc/package.go`
-- Modify: `scripts/build-collector-scf-package.sh`
+- Modify: `scripts/build/build-collector-scf-package.sh`
 - Modify: 对应 package tests
 - Verify/Modify: `web/src/api/cloud-node.ts`
 - Verify/Modify: `web/src/views/collector/cloud-node/cloud-node.vue`
@@ -825,7 +825,7 @@ CREATE TABLE t_strategy_outbox (
 - [ ] 删除 `ClaimOutbox/ReleaseOutbox/tokenIndex/lease`；把 `MarkOutboxPublished` 明确改名为 `DeleteOutbox`。
 - [ ] relay 单线程、fail-fast；每条 publish 成功后立即删行，任一步失败立即 return。
 - [ ] 不为 Strategy 增加新 observability 抽象或复制 Storage 指标。
-- [ ] 在 `modules/strategy` 和 `modules/trade` 运行 focused tests，运行 `./scripts/test-strategy-trade-event-e2e.sh`。
+- [ ] 在 `modules/strategy` 和 `modules/trade` 运行 focused tests，运行 `./scripts/test/e2e/test-strategy-trade-event-e2e.sh`。
 
 ---
 
@@ -849,7 +849,7 @@ CREATE TABLE t_strategy_outbox (
 - Modify: `modules/storage/internal/config/loader.go`
 - Modify: `modules/storage/internal/config/loader_test.go`
 - Modify: `modules/storage/cmd/server/main_test.go`
-- Modify: `scripts/verify-event-contracts.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
 
 **Steps:**
 
@@ -857,8 +857,8 @@ CREATE TABLE t_strategy_outbox (
 - [ ] 把现有 Consumer 名和相关 ack 参数改成模块内常量，不建立跨 module 共享生产包。
 - [ ] 删除上述 YAML 中 `consumer/max_ack_pending/ack_wait_ms` 等已无读者的键。
 - [ ] 更新 loader structs、默认值、校验和测试夹具。
-- [ ] 让 `scripts/verify-event-contracts.sh` 静态校验代码常量与 EventBus ACL 字符串一致。
-- [ ] 在四个模块分别运行 config tests，再运行 `./scripts/verify-event-contracts.sh`。
+- [ ] 让 `scripts/check/verify-event-contracts.sh` 静态校验代码常量与 EventBus ACL 字符串一致。
+- [ ] 在四个模块分别运行 config tests，再运行 `./scripts/check/verify-event-contracts.sh`。
 
 **完成条件：** 当前生效配置 YAML 中不存在已被代码接管的 Consumer 身份和 ack 参数。
 
@@ -890,8 +890,8 @@ CREATE TABLE t_strategy_outbox (
 - [ ] 运行 `modules/storage` 全量测试和：
 
 ```bash
-./scripts/e2e/storage-datanode-management.sh
-./scripts/e2e/storage-field-upsert.sh
+./scripts/test/e2e/storage-datanode-management.sh
+./scripts/test/e2e/storage-field-upsert.sh
 ```
 
 **完成条件：** `modules/storage/internal/service/view{,index}` 含测试在内 `Replace|"REPLACE"` 零命中。
@@ -923,7 +923,7 @@ CREATE TABLE t_strategy_outbox (
 
 - [ ] 测试同时断言 Stream 数量为 4；增删 Stream 必须显式更新期望表。
 - [ ] 不修改 `packages/events` 公共 API，不增加 `DeliveryKind`。
-- [ ] 在 `modules/trade`、`modules/eventbus` 运行 `go test ./... -race`，再运行 `./scripts/verify-event-contracts.sh`。
+- [ ] 在 `modules/trade`、`modules/eventbus` 运行 `go test ./... -race`，再运行 `./scripts/check/verify-event-contracts.sh`。
 
 ---
 
@@ -963,12 +963,12 @@ modules/archive
 - [ ] 运行仓库验证：
 
 ```bash
-./scripts/test-go-workspace.sh
-./scripts/verify-event-contracts.sh
-./scripts/test-deploy-moox-eventbus.sh
-./scripts/test-strategy-trade-event-e2e.sh
-./scripts/e2e/storage-datanode-management.sh
-./scripts/e2e/storage-field-upsert.sh
+./scripts/test/contract/test-go-workspace.sh
+./scripts/check/verify-event-contracts.sh
+./scripts/test/contract/test-deploy-moox-eventbus.sh
+./scripts/test/e2e/test-strategy-trade-event-e2e.sh
+./scripts/test/e2e/storage-datanode-management.sh
+./scripts/test/e2e/storage-field-upsert.sh
 pnpm --dir web test
 pnpm --dir web build:prod
 make verify-pr
@@ -977,7 +977,7 @@ git diff --check
 
 ### 14.2 真实 EventBus 验证
 
-- [ ] 运行 `moox-cli setup e2e-eventbus --file ./custom.toml`：由 `cloudnode-eventbus` 创建队列并发布，`cloudnode-worker` 绑定/FETCH/ACK，`eventbus-internal-admin` 只负责清理探针 Consumer。命令只输出四个布尔证明，不输出凭据。
+- [ ] 运行 `moox-cli setup e2e-eventbus --file ./moox.toml`：由 `cloudnode-eventbus` 创建队列并发布，`cloudnode-worker` 绑定/FETCH/ACK，`eventbus-internal-admin` 只负责清理探针 Consumer。命令只输出四个布尔证明，不输出凭据。
 - [ ] 如需用 NATS CLI 单独诊断，使用 `cloudnode-worker.yaml` 的 `username/token/ca_file`；不得使用 JWT `--creds`：
 
 ```bash
@@ -1027,7 +1027,7 @@ EnsureJobExecutionQueue
 3. 使用初始化文件中的 EventBus 公网地址执行控制面重置：
 
 ```bash
-./bin/moox-cli setup deploy-control --file ./custom.toml --reset-data
+./bin/moox-cli setup deploy-control --file ./moox.toml --reset-data
 ```
 
 4. 确认部署脚本完成以下内部动作：

@@ -294,7 +294,6 @@ func (s *Service) GetTaskInstanceList(ctx context.Context, req *pb.GetTaskInstan
 		repoFilter.SubjectID = filter.GetSubjectId()
 		repoFilter.Frequency = filter.GetFrequency()
 		repoFilter.FunctionName = filter.GetFunctionName()
-		repoFilter.LastExecNode = filter.GetLastExecNode()
 		repoFilter.IncludeDeleted = filter.GetIncludeDeleted()
 		repoFilter.Page = page
 		repoFilter.PageSize = size
@@ -555,12 +554,12 @@ func validateTaskRule(rule domain.TaskRule) error {
 	if err := params.Validate(); err != nil {
 		return fmt.Errorf("invalid collect_params: %w", err)
 	}
-	if strings.EqualFold(params.Provider, "stock_cn_multi") &&
+	if strings.EqualFold(params.Provider, "stockcn_multi") &&
 		!strings.EqualFold(params.Collector.DataType, "kline") &&
 		!strings.EqualFold(params.Collector.DataType, domain.InstrumentDataType) {
-		return fmt.Errorf("stock_cn_multi only supports kline and instrument collectors")
+		return fmt.Errorf("stockcn_multi only supports kline and instrument collectors")
 	}
-	if !strings.EqualFold(params.Provider, "stock_cn_multi") {
+	if !strings.EqualFold(params.Provider, "stockcn_multi") {
 		definition, ok := jobs.JobDefinitionByDataType(params.Collector.DataType)
 		if !ok || !definition.ExecutionMode.Valid() || !definition.Matches(params) {
 			return fmt.Errorf(
@@ -646,8 +645,8 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 	if err != nil {
 		return err
 	}
-	// stock_cn_multi is the public multi-provider collector identity, while
-	// the shared stock datasets belong to the stock_cn data source.
+	// stockcn_multi is the public multi-provider collector identity, while
+	// the shared stock datasets belong to the stockcn data source.
 	datasetSourceID := collectorDatasetSourceID(params.Collector.Exchange)
 	switch params.Collector.DataType {
 	case domain.InstrumentDataType:
@@ -695,8 +694,8 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 }
 
 func collectorDatasetSourceID(exchange string) string {
-	if strings.EqualFold(strings.TrimSpace(exchange), "stock_cn_multi") {
-		return "stock_cn"
+	if strings.EqualFold(strings.TrimSpace(exchange), "stockcn_multi") {
+		return "stockcn"
 	}
 	return exchange
 }

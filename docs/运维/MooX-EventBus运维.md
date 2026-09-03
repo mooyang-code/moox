@@ -24,7 +24,7 @@ CloudNode 作业队列由 CloudNode ensure，SCF worker 只能 bind。
 
 | 资源 | Subject/用途 | 容量边界 |
 | --- | --- | --- |
-| `MOOX_STORAGE` | `storage.dataset.rows.upserted` | 72 小时或 1 GiB |
+| `MOOX_STORAGE` | `event.storage.dataset.rows.upserted` | 72 小时或 1 GiB |
 | `MOOX_METRICS` | 两类 metrics 事件 | 24 小时或 256 MiB |
 | `MOOX_CLOUDNODE_EXEC` | 云任务 work queue | 72 小时或 256 MiB |
 | `MOOX_TRADE` | Strategy 调仓 work queue | 7 天或 256 MiB |
@@ -76,7 +76,7 @@ tar -C data/eventbus -czf eventbus-jetstream-$(date +%Y%m%d%H%M%S).tar.gz jetstr
 NATS 密码、credentials 或 TLS 私钥拼进 SSH 命令行。
 
 初始化服务目录的 `eventbus.extra_config.nats_url` 是客户端 URL 唯一静态真源。用户在
-`custom.toml` 的 `[eventbus]` 中只填写公网地址、端口和 TLS 开关；setup CLI 将其传给
+`moox.toml` 的 `[eventbus]` 中只填写公网地址、端口和 TLS 开关；setup CLI 将其传给
 部署脚本。脚本根据 `MOOX_EVENTBUS_PUBLIC_IP` 和 `MOOX_EVENTBUS_PORT` 写入
 `tls://<host>:<port>`，并推导 Broker bind：
 loopback 为 `127.0.0.1`，其他地址为 `0.0.0.0`。
@@ -90,8 +90,8 @@ INFO/FETCH/ACK，不允许 CREATE/DELETE、Stream 枚举、KV 或业务消息发
 ## 验证
 
 ```bash
-./scripts/test-deploy-moox-eventbus.sh
-./scripts/verify-event-contracts.sh
+./scripts/test/contract/test-deploy-moox-eventbus.sh
+./scripts/check/verify-event-contracts.sh
 ```
 
 测试使用临时 Broker 和临时持久化目录。

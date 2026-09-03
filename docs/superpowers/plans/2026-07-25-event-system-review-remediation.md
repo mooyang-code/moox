@@ -64,7 +64,7 @@
 - Modify: `modules/cloudnode/config/app.yaml`
 - Modify: `modules/cloudnode/internal/config/config.go`
 - Modify: `modules/cloudnode/internal/jobqueue/jetstream_client.go`
-- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
 - Modify: Storage, Monitor, Archive, and Factor event config types and YAML
 - Test: affected config and deployment tests
 
@@ -76,7 +76,7 @@
 ### Task 5: Add real critical-path E2E coverage
 
 **Files:**
-- Modify: `scripts/verify-event-contracts.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
 - Add or modify: Strategy/Trade self-contained E2E test
 - Add or modify: Storage consumer fan-out E2E test
 
@@ -90,5 +90,5 @@
 - [x] Run focused unit and race tests.
 - [x] Dispatch a fresh review Agent with the six findings and full diff.
 - [x] Fix every Critical or Important review issue and rerun affected tests.
-- [x] Run `./scripts/verify-event-contracts.sh`, deploy tests, E2E tests, race tests,
+- [x] Run `./scripts/check/verify-event-contracts.sh`, deploy tests, E2E tests, race tests,
       `git diff --check`, and inspect the final worktree.

@@ -23,7 +23,7 @@
 - [x] 已补齐 Trade owner-generation additive migration、Strategy V1 表归档迁移，以及
   `VerifyDependencies` 临时 RPC 错误的 NAK/重试语义和回归测试；归档 V1 owner 的启动
   协调释放、runner 并发锁和已启用 Runner 重复 Enable 的 Claim 修复已补齐。
-- [x] 正式环境部署及跨进程就绪链路验收：使用 `custom.toml` 中的受保护凭据登录
+- [x] 正式环境部署及跨进程就绪链路验收：使用 `moox.toml` 中的受保护凭据登录
   `ubuntu@106.53.107.122`，以组件 overlay 方式发布到
   `/data/moox/prod`，保留既有 Control/Gateway/Storage 数据和密钥；EventBus、Trade、
   Strategy 按顺序启动并通过认证 `/readyz`。
@@ -42,7 +42,7 @@ schema 完整约束校验和 Factor source 文件整体原子性等低风险 P2�
 三者 `/readyz` 均返回 HTTP 200 且 `ready=true`；Strategy `outbox_pending_count=0`，Trade
 `target_worker_ready=true`，远端 Strategy/Trade 二进制 SHA-256 与本地发布包一致。部署前对既有
 EventBus 的 `MOOX_TRADE` stream 和 Trade role ACL 做了兼容迁移，当前同时保留旧 quantity subject
-并启用新的 `moox.trade.target.weight_requested.v1.>` subject；Trade 只消费新的权重 durable。
+并启用新的 `moox.event.trade.target.weight_requested.v1.>` subject；Trade 只消费新的权重 durable。
 
 这里的 `[x]` 表示该项已有对应的代码、测试或正式运行证据；未打勾项仍不得视为完成。
 
@@ -916,7 +916,7 @@ message LogicalAccountTargetWeightRequested { ... }
 ```
 
 权重消息使用独立的 `LogicalAccountTargetWeightRequested` /
-`trade.target.weight_requested` 事件和 durable；旧数量事件如继续注册，不得复用其字段号
+`event.trade.target.weight_requested` 事件和 durable；旧数量事件如继续注册，不得复用其字段号
 或被新的 Trade consumer 消费。切换前必须确认旧 quantity durable 已停用、排空或隔离；
 不得把同一个旧 subject 的未确认消息交给新的权重 consumer。
 
@@ -1146,14 +1146,14 @@ Expected: 业务代码无命中，提交成功。
 - Modify: `modules/admin/cmd/cli/eventbus_credentials_test.go`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
-- Modify: `examples/setup/default/service-deployments.yaml`
-- Modify: `scripts/test-eventbus-topology.sh`
-- Modify: `scripts/test-strategy-deploy.sh`
-- Modify: `scripts/test-strategy-deploy-e2e.sh`
+- Modify: `config/setup/service-deployments.yaml`
+- Modify: `scripts/test/contract/test-eventbus-topology.sh`
+- Modify: `scripts/test/contract/test-strategy-deploy.sh`
+- Modify: `scripts/test/contract/test-strategy-deploy-e2e.sh`
 
 - [ ] **Step 1: 写 ACL 与 Storage caller contract**
 
-Strategy credential 必须允许发布 `moox.trade.target.weight_requested.v1.>`，并只对 `strategy_view_factor_ready_v1` durable 拥有 create/info/fetch/ack；subscribe 允许 `_INBOX.>`。Trade 使用独立的 `trade_target_weight_v1` durable，只消费新权重 subject，不复用旧 quantity durable。
+Strategy credential 必须允许发布 `moox.event.trade.target.weight_requested.v1.>`，并只对 `strategy_view_factor_ready_v1` durable 拥有 create/info/fetch/ack；subscribe 允许 `_INBOX.>`。Trade 使用独立的 `trade_target_weight_v1` durable，只消费新权重 subject，不复用旧 quantity durable。
 
 ACL 精确包含：
 
@@ -1182,9 +1182,9 @@ secret 合并为一个 AppKey。
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/admin
 go test ./cmd/cli ./internal/service/sysdeploy -count=1
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-bash scripts/test-eventbus-topology.sh
-bash scripts/test-strategy-deploy.sh
-git add modules/admin examples/setup/default/service-deployments.yaml scripts/test-eventbus-topology.sh scripts/test-strategy-deploy.sh scripts/test-strategy-deploy-e2e.sh
+bash scripts/test/contract/test-eventbus-topology.sh
+bash scripts/test/contract/test-strategy-deploy.sh
+git add modules/admin config/setup/service-deployments.yaml scripts/test/contract/test-eventbus-topology.sh scripts/test/contract/test-strategy-deploy.sh scripts/test/contract/test-strategy-deploy-e2e.sh
 git commit -m "feat(deploy): authorize strategy ready consumer"
 ```
 

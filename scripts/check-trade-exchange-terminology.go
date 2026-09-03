@@ -1,1 +1,0 @@
-checks/check-trade-exchange-terminology.go

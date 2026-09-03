@@ -1,1 +1,0 @@
-tests/contract/test-secret-scan-contract.sh

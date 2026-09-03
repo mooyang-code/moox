@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	StockCNInstrumentDatasetID = "stock_cn_instruments"
-	StockCNDataSourceID        = "stock_cn"
+	StockCNInstrumentDatasetID = "dataset_stockcn_instruments"
+	StockCNDataSourceID        = "stockcn"
 	// Keep each PrimaryStore request bounded while avoiding hundreds of
 	// sequential RPCs for the full stock catalogue.
 	instrumentStorageRowsPerBatch = 500
@@ -512,7 +512,7 @@ func instrumentMetricResult(err error) string {
 
 func instrumentRouteID(marketID, instrumentType string) string {
 	if strings.EqualFold(strings.TrimSpace(marketID), StockCNSpaceID) {
-		return "stock_cn_instrument_v1"
+		return "stockcn_instrument_v1"
 	}
 	if strings.EqualFold(strings.TrimSpace(instrumentType), "swap") {
 		return "binance_swap_instrument_v1"

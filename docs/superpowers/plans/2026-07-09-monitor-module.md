@@ -8,7 +8,7 @@
 
 **Architecture:** V1 adds a new `modules/monitor` Go module with its own SQLite database, tRPC management API, local scheduler, HTTP/TCP probe engine, Gatus-inspired alert state machine, webhook notifier, system-service sync from Admin SysDeploy, and peer snapshot exchange. Admin remains only the gateway and deployment registry; existing Admin host resource monitoring stays unchanged. A small shared health package standardizes `/healthz` across independently deployable MooX processes so monitor can probe Admin, Web Host, Storage, CloudNode, Collector, Factor, Trade, and Monitor itself.
 
-**Tech Stack:** Go 1.24, tRPC-Go, GORM + SQLite (`github.com/glebarez/sqlite`), standard `net/http` and `net.Dialer`, Admin `SysDeploy` proto client, Vue 3 + Arco Design, existing Admin gateway `/api/admin/{service}/{method}`, `scripts/build.sh`, `scripts/deploy-moox.sh`, and `scripts/release.sh`.
+**Tech Stack:** Go 1.24, tRPC-Go, GORM + SQLite (`github.com/glebarez/sqlite`), standard `net/http` and `net.Dialer`, Admin `SysDeploy` proto client, Vue 3 + Arco Design, existing Admin gateway `/api/admin/{service}/{method}`, `scripts/build/build.sh`, `scripts/deploy/deploy-moox.sh`, and `scripts/release/release.sh`.
 
 ---
 
@@ -17,7 +17,7 @@
 - Gatus contributes the useful concepts: endpoint definitions, per-check intervals, HTTP/TCP probes, condition evaluation, result persistence, alert thresholds, reminder intervals, resolution notifications, and provider abstraction.
 - MooX should not copy Gatus UI or its large provider matrix. V1 internalizes the behavior into MooX style: independent module, tRPC API, SQLite schema, Admin gateway forwarding, and Arco-based operations pages.
 - The existing Admin `monitor` service is host resource monitoring based on Node Exporter. It remains in Admin for now and is not migrated in this plan.
-- Existing independently deployable modules follow the same broad shape: `cmd/server`, `cmd/cli`, `config/app.yaml`, `config/trpc_go.yaml`, embedded schema, generated proto package, `scripts/build.sh` target, SysDeploy defaults, release/deploy packaging.
+- Existing independently deployable modules follow the same broad shape: `cmd/server`, `cmd/cli`, `config/app.yaml`, `config/trpc_go.yaml`, embedded schema, generated proto package, `scripts/build/build.sh` target, SysDeploy defaults, release/deploy packaging.
 - Current health coverage is inconsistent: Admin has `/api/admin/health`, Trade has an internal `Health()` model but no standard public endpoint, and the other tRPC modules need a standardized `http_no_protocol` health service.
 
 ## Scope
@@ -146,9 +146,9 @@
 
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
 - Modify: `modules/admin/internal/service/sysdeploy/service.go`
-- Modify: `scripts/build.sh`
-- Modify: `scripts/release.sh`
-- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/build/build.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
 - Modify: `modules/README.md`
 - Modify: `README.md`
 - Create: `modules/monitor/README.md`
@@ -1187,10 +1187,10 @@ git commit -m "feat: add monitor overview queries"
 ### Task 12: Wire Build, Proto, Release, And Deploy
 
 **Files:**
-- Modify: `scripts/build.sh`
+- Modify: `scripts/build/build.sh`
 - Modify: `Makefile`
-- Modify: `scripts/release.sh`
-- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
 - Modify: `modules/README.md`
 - Create: `modules/monitor/README.md`
 - Modify: `README.md`
@@ -1200,14 +1200,14 @@ git commit -m "feat: add monitor overview queries"
 Add or update shell-script tests if a script test harness exists. If no harness exists, use direct dry-run shell checks:
 
 ```bash
-bash -n scripts/build.sh scripts/release.sh scripts/deploy-moox.sh
+bash -n scripts/build/build.sh scripts/release/release.sh scripts/deploy/deploy-moox.sh
 ```
 
 Expected before edits: scripts pass syntax but monitor target is missing.
 
 - [ ] **Step 2: Add build target**
 
-In `scripts/build.sh`:
+In `scripts/build/build.sh`:
 
 - all target builds `moox-monitor` and `moox-monitor-cli`;
 - add `monitor)` target;
@@ -1216,14 +1216,14 @@ In `scripts/build.sh`:
 Run:
 
 ```bash
-./scripts/build.sh monitor
+./scripts/build/build.sh monitor
 ```
 
 Expected: PASS and binaries appear in `bin/`.
 
 - [ ] **Step 3: Add release packaging**
 
-In `scripts/release.sh`:
+In `scripts/release/release.sh`:
 
 - create `monitor/bin` and `monitor/config`;
 - copy `moox-monitor`, `moox-monitor-cli`;
@@ -1231,7 +1231,7 @@ In `scripts/release.sh`:
 
 - [ ] **Step 4: Add deploy support**
 
-In `scripts/deploy-moox.sh`:
+In `scripts/deploy/deploy-moox.sh`:
 
 - add flag `--no-monitor`;
 - build monitor when enabled;
@@ -1255,8 +1255,8 @@ Document:
 
 ```bash
 go test ./modules/monitor/... ./packages/healthz/... -count=1
-./scripts/build.sh monitor
-bash -n scripts/build.sh scripts/release.sh scripts/deploy-moox.sh
+./scripts/build/build.sh monitor
+bash -n scripts/build/build.sh scripts/release/release.sh scripts/deploy/deploy-moox.sh
 ```
 
 Expected: PASS.
@@ -1264,7 +1264,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add scripts/build.sh Makefile scripts/release.sh scripts/deploy-moox.sh modules/README.md modules/monitor/README.md README.md
+git add scripts/build/build.sh Makefile scripts/release/release.sh scripts/deploy/deploy-moox.sh modules/README.md modules/monitor/README.md README.md
 git commit -m "feat: package monitor module"
 ```
 
@@ -1450,7 +1450,7 @@ Expected: PASS.
 - [ ] **Step 3: Build monitor**
 
 ```bash
-./scripts/build.sh monitor
+./scripts/build/build.sh monitor
 ```
 
 Expected:

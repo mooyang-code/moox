@@ -47,7 +47,7 @@ func TestConfigNormalizesDeliverPolicy(t *testing.T) {
 func TestConfigAcceptsExactPartitionFilters(t *testing.T) {
 	config, err := (Config{
 		PartitionID:    "kline",
-		FilterSubjects: []string{"moox.storage.dataset.rows.upserted.v2.crypto.binance"},
+		FilterSubjects: []string{"moox.event.storage.dataset.rows.upserted.v2.crypto.binance"},
 	}).withDefaults()
 	if err != nil {
 		t.Fatal(err)

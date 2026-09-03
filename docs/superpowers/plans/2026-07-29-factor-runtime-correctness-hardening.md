@@ -85,8 +85,8 @@ cd .worktrees/time-series-tag
 Run:
 
 ```bash
-bash scripts/test-storage-boundary-contract.sh
-bash scripts/test-storage-consistency-contract.sh
+bash scripts/test/contract/test-storage-boundary-contract.sh
+bash scripts/test/contract/test-storage-consistency-contract.sh
 (cd modules/storage && go test ./... -count=1)
 (cd modules/factor && go test ./... -count=1)
 (cd modules/archive && go test ./... -count=1)
@@ -164,7 +164,7 @@ message TimeSeriesSelector {
 
 - [x] **Step 3: 升级公共事件**
 
-把 `storage.dataset.rows.upserted@1` 升为 `@2`，同步 Registry、Subject 和验证测试。
+把 `event.storage.dataset.rows.upserted@1` 升为 `@2`，同步 Registry、Subject 和验证测试。
 本地与公共 Proto 的字段名、类型、语义完全一致，让 protojson mapper 继续只做结构
 复制。
 
@@ -390,7 +390,7 @@ Backfill 只按完整 PK 判断同一行。
 - Modify: `modules/storage/internal/service/metadata/sqlite/store.go`
 - Modify: `modules/storage/internal/service/metadata/sqlite/store_test.go`
 - Modify: `modules/storage/schema/metadata_schema_version_test.go`
-- Modify: `scripts/test-storage-datanode-management-contract.sh`
+- Modify: `scripts/test/contract/test-storage-datanode-management-contract.sh`
 - Modify: `examples/metadata-quant-initial.seed.yaml`
 - Modify: `examples/metadata-monitor-host.seed.yaml`
 - Modify: `examples/metadata-monitor-metrics.seed.yaml`
@@ -415,14 +415,14 @@ subject_id, freq, data_time, series_tag
 量化 seed 将同 Schema/频率/生命周期的 crypto venue 合并：
 
 ```text
-crypto/spot_kline_1h
-crypto/perpetual_kline_1h
+crypto/dataset_spot_kline_1h
+crypto/dataset_perpetual_kline_1h
 ```
 
 venue 由行 `series_tag` 区分。Monitor seed 的 TimeSeries grain 同步加 tag。
-共享 crypto Dataset 绑定一个逻辑聚合 `crypto_market` DataSource；物理 Binance/OKX
+共享 crypto Dataset 绑定一个逻辑聚合 `crypto` DataSource；物理 Binance/OKX
 DataSource 继续用于 Provider 配置，不把一个 Dataset 改成多 DataSource 绑定。
-共享 View ID 固定为 `spot_kline_1h_view` 和 `perpetual_kline_1h_view`，seed contract
+共享 View ID 固定为 `view_crypto_spot_kline_1h` 和 `view_crypto_swap_kline_1h`，seed contract
 测试同步删除四个 venue 专属 Dataset/View 断言。
 
 - [x] **Step 3: 验证当前子系统**
@@ -463,8 +463,8 @@ DataNode。
 - Modify: `modules/eventbus/test/storage_consumers_e2e_test.go`
 - Modify: `modules/admin/cmd/cli/eventbus_credentials.go`
 - Modify: `modules/admin/cmd/cli/eventbus_credentials_test.go`
-- Modify: `scripts/test-storage-boundary-contract.sh`
-- Modify: `scripts/test-storage-consistency-contract.sh`
+- Modify: `scripts/test/contract/test-storage-boundary-contract.sh`
+- Modify: `scripts/test/contract/test-storage-consistency-contract.sh`
 
 - [x] **Step 1: 添加真实双 tag E2E**
 
@@ -486,7 +486,7 @@ Pebble transaction/outbox -> outbox relay -> embedded authenticated JetStream
 或 consumer。
 
 EventBus 默认 stream subject 和 Admin 生成的 Storage/View/Factor/Archive ACL 必须
-同步切换到 `moox.storage.dataset.rows.upserted.v2.>`；registry 测试中的旧 subject
+同步切换到 `moox.event.storage.dataset.rows.upserted.v2.>`；registry 测试中的旧 subject
 场景改用与 Storage 无关的 synthetic obsolete subject，避免活跃源码保留 v1 合同。
 
 - [x] **Step 2: 添加旧接口 contract**
@@ -514,8 +514,8 @@ legacy-rejection 源码和对应负向测试中，不得排除整个模块或任
 ```bash
 (cd modules/storage && go test ./... -count=1)
 (cd modules/storage && CGO_ENABLED=1 go test ./... -count=1)
-MOOX_SERIES_IDENTITY_SCOPE=storage bash scripts/test-storage-boundary-contract.sh
-bash scripts/test-storage-consistency-contract.sh
+MOOX_SERIES_IDENTITY_SCOPE=storage bash scripts/test/contract/test-storage-boundary-contract.sh
+bash scripts/test/contract/test-storage-consistency-contract.sh
 ```
 
 ---
@@ -672,7 +672,7 @@ Field 中。所有生成 tag 都必须在写入前满足 Storage 形态合同。
 Target 和名称也包含完整 tag。双 tag 测试应证明 page size 2 返回同一 venue 的相邻
 两个 `data_time`，不会把同 timestamp 的 Binance/OKX 当成相邻 bar。
 
-`modules/monitor/config/app.yaml` 改为共享 `crypto/spot_kline_1h` 并显式设置
+`modules/monitor/config/app.yaml` 改为共享 `crypto/dataset_spot_kline_1h` 并显式设置
 `series_tag: venue:binance`。
 
 - [x] **Step 4: 验证当前子系统**
@@ -696,7 +696,7 @@ Target 和名称也包含完整 tag。双 tag 测试应证明 page size 2 返回
 - Modify: `modules/collector/cmd/scf/observability.go`
 - Modify: `modules/collector/cmd/scf/main_test.go`
 - Modify: `modules/collector/configs/observability.env.example`
-- Modify: `scripts/build-collector-scf-package_test.sh`
+- Modify: `scripts/build/build-collector-scf-package_test.sh`
 - Modify: `modules/cli/internal/command/storage_import.go`
 - Modify: `modules/cli/internal/command/storage_import_test.go`
 - Modify: `modules/cli/internal/command/data.go`
@@ -719,8 +719,8 @@ Target 和名称也包含完整 tag。双 tag 测试应证明 page size 2 返回
 - Modify: `examples/e2e/run.sh`
 - Modify: `examples/e2e/run-real-scf.sh`
 - Modify: `examples/e2e/verify.mjs`
-- Modify: `examples/data/kline/stock_cn/stock_kline_1d.csv`
-- Modify: `examples/data/kline/stock_cn/stock_kline_1h.csv`
+- Modify: `examples/data/kline/stockcn/stock_kline_1d.csv`
+- Modify: `examples/data/kline/stockcn/stock_kline_1h.csv`
 - Modify: `examples/data/kline/crypto/binance_spot_kline_1h.csv`
 - Modify: `examples/data/kline/crypto/binance_perpetual_kline_1h.csv`
 - Modify: `examples/data/kline/crypto/okx_spot_kline_1h.csv`
@@ -742,7 +742,7 @@ Target 和名称也包含完整 tag。双 tag 测试应证明 page size 2 返回
 
 删除 Web/JS 中 `dimensions: {}` 归一化逻辑。Crypto CSV 使用共享 Dataset ID，
 增加 `series_tag` 列；股票样本使用空 tag。
-SCF canary 默认 Dataset 改为 `crypto/spot_kline_1h`，新增必填
+SCF canary 默认 Dataset 改为 `crypto/dataset_spot_kline_1h`，新增必填
 `MOOX_SCF_CANARY_SERIES_TAG`，用 `os.LookupEnv` 区分“未配置”和“显式空 tag”，并
 将 tag 纳入配置校验和 Target identity。
 
@@ -750,7 +750,7 @@ SCF canary 默认 Dataset 改为 `crypto/spot_kline_1h`，新增必填
 
 ```bash
 (cd modules/collector && go test ./... -count=1)
-bash scripts/build-collector-scf-package_test.sh
+bash scripts/build/build-collector-scf-package_test.sh
 (cd modules/cli && go test ./... -count=1)
 (cd web && pnpm test)
 (cd web && pnpm exec vue-tsc --noEmit)
@@ -943,7 +943,7 @@ space + source_dataset + target_dataset + subject + freq + factor_id
 - Modify: `modules/factor/internal/scheduler/service_test.go`
 - Modify: `modules/factor/internal/observability/realtime_inventory.go`
 - Modify: `modules/factor/internal/observability/realtime_inventory_test.go`
-- Modify: `scripts/test-storage-boundary-contract.sh`
+- Modify: `scripts/test/contract/test-storage-boundary-contract.sh`
 
 - [x] **Step 1: 写 event-only retry 失败测试**
 
@@ -975,7 +975,7 @@ period 的下一纳秒。多 Factor 因已拆任务，各自按自己的窗口�
 
 - [x] **Step 4: 验证整个 wire cutover**
 
-先将 `scripts/test-storage-boundary-contract.sh` 的默认 scope 从 Task 6 过渡期的
+先将 `scripts/test/contract/test-storage-boundary-contract.sh` 的默认 scope 从 Task 6 过渡期的
 `storage` 切为 `all`。全树扫描继续使用精确的旧 wire/schema/API 标识，并只允许
 Archive 明确列出的 v1 Parquet 拒绝 sentinel；不能通过排除目录、模块 README、
 Proto、Web 或所有测试来消除失败。
@@ -995,9 +995,9 @@ Proto、Web 或所有测试来消除失败。
   uv run --with-requirements pyworker/requirements.txt \
     python -m pytest pyworker -q)
 (cd web && pnpm test && pnpm exec vue-tsc --noEmit)
-bash scripts/test-storage-boundary-contract.sh
-bash scripts/test-storage-consistency-contract.sh
-bash scripts/test-storage-datanode-management-contract.sh
+bash scripts/test/contract/test-storage-boundary-contract.sh
+bash scripts/test/contract/test-storage-consistency-contract.sh
+bash scripts/test/contract/test-storage-datanode-management-contract.sh
 ! rg -U -n 'ReadTimeSeriesRowsReq\{[\s\S]{0,800}?Keys:' \
   modules packages examples web
 ! rg -U -n 'QueryTimeSeriesRowsReq\{[\s\S]{0,800}?Keys:' \
@@ -1209,7 +1209,7 @@ git commit -m "docs: document scalar time series tags"
 ### Task 17: 执行真实跨模块 E2E
 
 **Files:**
-- Create: `scripts/test-series-tag-e2e.sh`
+- Create: `scripts/test/e2e/test-series-tag-e2e.sh`
 - Modify: `modules/factor/test/storage_e2e_test.go`
 - Modify: `modules/archive/test/archive_e2e_test.go`
 - Modify: `modules/monitor/test/host_monitor_direct_storage_e2e_test.go`
@@ -1245,7 +1245,7 @@ object key；不伪造 COS 已同步状态，也不要求开发机具备 COS 凭
 - [x] **Step 4: 运行脚本**
 
 ```bash
-bash scripts/test-series-tag-e2e.sh
+bash scripts/test/e2e/test-series-tag-e2e.sh
 ```
 
 Expected: 所有真实 Storage/View/Python/Parquet 路径 PASS；脚本自行创建并清理临时
@@ -1276,7 +1276,7 @@ Expected: 所有真实 Storage/View/Python/Parquet 路径 PASS；脚本自行创
 (cd modules/collector && go test ./... -count=1)
 (cd modules/cli && go test ./... -count=1)
 (cd web && pnpm test && pnpm exec vue-tsc --noEmit)
-bash scripts/test-go-workspace.sh
+bash scripts/test/contract/test-go-workspace.sh
 make verify-pr
 ```
 
@@ -1347,17 +1347,17 @@ Factor、Archive、Monitor、Collector 与 SCF 发布包。记录所有发布包
 
 - [ ] **Step 2: 清理旧 v1 数据并发布到 106**
 
-使用 `custom.toml` 的 `control` host（`106.53.107.122`）执行配置校验和发布：
+使用 `moox.toml` 的 `control` host（`106.53.107.122`）执行配置校验和发布：
 
 ```bash
-./bin/moox-cli setup validate --file ./custom.toml
-./bin/moox-cli setup deploy-control --file ./custom.toml
-./bin/moox-cli setup deploy-storage --file ./custom.toml --host control --reset-storage-data
-./bin/moox-cli setup verify-storage --file ./custom.toml --host control
+./bin/moox-cli setup validate --file ./moox.toml
+./bin/moox-cli setup deploy-control --file ./moox.toml
+./bin/moox-cli setup deploy-storage --file ./moox.toml --host control --reset-storage-data
+./bin/moox-cli setup verify-storage --file ./moox.toml --host control
 ```
 
 在切换前停止旧写入者，并清理会继续消费或发布
-`moox.storage.dataset.rows.upserted.v1` 的旧 Stream/Consumer 状态。Factor 与 Archive
+`moox.event.storage.dataset.rows.upserted.v1` 的旧 Stream/Consumer 状态。Factor 与 Archive
 通过 `setup deploy-service` 发布完整服务包到 106，不使用手工复制裸二进制。发布后
 核对 Storage Primary/View/DataNode、EventBus、Collector、Monitor、Factor、Archive
 的进程、健康检查、事件 subject 和启动日志。
@@ -1366,7 +1366,7 @@ Factor、Archive、Monitor、Collector 与 SCF 发布包。记录所有发布包
 
 ```bash
 ./bin/moox-cli setup e2e-storage \
-  --file ./custom.toml --host control --namespace series-tag-v2
+  --file ./moox.toml --host control --namespace series-tag-v2
 ```
 
 再通过远端 Gateway 写入同 Dataset、同 Subject、同 timestamp 的空 tag、Binance 和
@@ -1384,7 +1384,7 @@ MOOX_SERVICE_GATEWAY_CA_FILE=... \
 
 必须完成真实函数发布与状态检查、50 个节点、package/version、heartbeat、workload、
 Storage/View 写入和 CLS 生命周期证据。Collector 写入与 Market Canary 均使用
-`venue:binance`，读取共享 `crypto/spot_kline_1h` Dataset 的精确 tag。
+`venue:binance`，读取共享 `crypto/dataset_spot_kline_1h` Dataset 的精确 tag。
 
 - [ ] **Step 5: 核对远端运行版本与最终 SHA**
 

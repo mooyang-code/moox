@@ -342,6 +342,9 @@ func (s *Service) prepareFactorFile(path string, options ImportOptions) (domain.
 	if err != nil {
 		return domain.FactorDef{}, nil, err
 	}
+	if strings.TrimSpace(options.FactorID) != name {
+		return domain.FactorDef{}, nil, fmt.Errorf("factor_id %q must match factor file name %q", options.FactorID, name)
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return domain.FactorDef{}, nil, fmt.Errorf("read factor file %s: %w", path, err)

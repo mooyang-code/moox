@@ -30,7 +30,7 @@ make deploy
 Environment variables:
 
 - `MOOX_DEV_SSH_TARGET`: optional SSH target for developer scripts.
-- `scripts/deploy-moox.sh --target user@host`: preferred explicit deploy target.
+- `scripts/deploy/deploy-moox.sh --target user@host`: preferred explicit deploy target.
 - `REMOTE_ROOT`: default `/data/moox`.
 - `MOOX_COLLECTOR_ADMIN_GATEWAY_URL`: optional same-host service-directory override; current deployment contract uses the independent Gateway at `http://127.0.0.1:11002`.
 - `MOOX_GATEWAY_NODE_ID`, `MOOX_GATEWAY_SERVICE_KEY_ID`, and `MOOX_GATEWAY_SERVICE_SECRET_KEY`: node-scoped HMAC identity for machine calls to `/api/service/*`. Deployment persists it in mode-`0600` `secrets/gateway-service.env`.
@@ -42,7 +42,7 @@ Environment variables:
 
 仅发布或替换远端单个服务时，不必重新发布整个控制面。使用
 [`service-release.md`](service-release.md) 中的服务 ZIP 包流程，通过
-`moox-cli setup deploy-service` 从用户维护的 `custom.toml` 内部读取凭据，上传、解压并
+`moox-cli setup deploy-service` 从用户维护的 `moox.toml` 内部读取凭据，上传、解压并
 校验整个服务包。
 
 Public deployments require `--public-host`. Deployment installs pinned, checksum-verified, rootless Caddy `v2.11.4` automatically before acceptance; package-manager Caddy is not a prerequisite. `--tls-mode auto` uses Let's Encrypt `shortlived` certificates for public IP/DNS hosts and requires public TCP 80 for HTTP-01 issuance and renewal. Browser HTTPS `9527` exposes the site and `/api/admin/*`; service HTTPS `11001` is restricted to `/api/service/*`. Public diagnostics return `404`.

@@ -1,0 +1,17 @@
+provider:
+  id: tencent
+  market: stockcn
+  enabled_feeds: [kline]
+  hosts: [web.ifzq.gtimg.cn]
+  kline:
+    frequency: 1m
+    max_bars_per_request: 320
+    volume_unit: shares
+    amount_unit: CNY
+  rate_limit:
+    scope: egress_ip
+    requests_per_second: 5
+    burst: 2
+    max_concurrent: 1
+    cooldown: 1s
+    request_timeout: 5s

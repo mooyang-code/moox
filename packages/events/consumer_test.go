@@ -25,10 +25,10 @@ func TestConsumerEventFiltersSupportOneDurableWithMultipleEvents(t *testing.T) {
 		t.Fatalf("stream = %q", stream)
 	}
 	want := []string{
-		"moox.storage.dataset.rows.upserted.v2.>",
-		"moox.storage.dataset.period.collected.v1.>",
-		"moox.storage.dataset.factor_period.computed.v1.>",
-		"moox.storage.dataset.sync_point.v1.>",
+		"moox.event.storage.dataset.rows.upserted.v2.>",
+		"moox.event.storage.dataset.period.collected.v1.>",
+		"moox.event.storage.dataset.factor_period.computed.v1.>",
+		"moox.event.storage.dataset.sync_point.v1.>",
 	}
 	if !reflect.DeepEqual(filters, want) {
 		t.Fatalf("filters = %v, want %v", filters, want)
@@ -62,11 +62,11 @@ func TestConsumerEventFiltersAcceptExactSubjectPartition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row, err := registry.RenderSubject(DatasetRowsUpserted, "crypto_market", "binance_spot_kline_1m")
+	row, err := registry.RenderSubject(DatasetRowsUpserted, "crypto", "dataset_binance_spot_kline_1m")
 	if err != nil {
 		t.Fatal(err)
 	}
-	marker, err := registry.RenderSubject(DatasetPeriodCollected, "crypto_market", "binance_spot_kline_1m")
+	marker, err := registry.RenderSubject(DatasetPeriodCollected, "crypto", "dataset_binance_spot_kline_1m")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,8 +86,8 @@ func TestConsumerEventFiltersRejectExactSubjectWithoutStreamOrMixedMode(t *testi
 		t.Fatal(err)
 	}
 	for _, cfg := range []ConsumerConfig{
-		{FilterSubjects: []string{"moox.storage.dataset.rows.upserted.v2.crypto.binance"}},
-		{Stream: DatasetRowsUpserted.Stream(), FilterSubjects: []string{"moox.storage.dataset.rows.upserted.v2.crypto.binance"}, Event: DatasetRowsUpserted},
+		{FilterSubjects: []string{"moox.event.storage.dataset.rows.upserted.v2.crypto.binance"}},
+		{Stream: DatasetRowsUpserted.Stream(), FilterSubjects: []string{"moox.event.storage.dataset.rows.upserted.v2.crypto.binance"}, Event: DatasetRowsUpserted},
 	} {
 		if _, _, err := consumerEventFilters(registry, cfg); err == nil {
 			t.Fatalf("consumerEventFilters(%+v) accepted invalid exact filter config", cfg)

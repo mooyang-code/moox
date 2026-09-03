@@ -170,7 +170,7 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 }
 
 func isHostMonitoringDataset(item observability.DatasetFrequencyStatus) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(item.DatasetID)), "host_")
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(item.DatasetID)), "dataset_mooxsys_host_")
 }
 
 func storageDatasetScopes(items []observability.DatasetFrequencyStatus) map[string]struct{} {
@@ -205,7 +205,7 @@ func isHostMonitoringCheck(checkID string) bool {
 		return true
 	}
 	_, datasetID, _, ok := datasetCheckParts(checkID)
-	return ok && strings.HasPrefix(strings.ToLower(strings.TrimSpace(datasetID)), "host_")
+	return ok && strings.HasPrefix(strings.ToLower(strings.TrimSpace(datasetID)), "dataset_mooxsys_host_")
 }
 
 func checkResultKey(spaceID, checkID string) string {

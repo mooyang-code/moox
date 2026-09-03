@@ -11,7 +11,7 @@ import (
 )
 
 func defaultSetupBundlePath(parts ...string) string {
-	items := []string{"..", "..", "..", "..", "examples", "setup", "default"}
+	items := []string{"..", "..", "..", "..", "config", "setup"}
 	return filepath.Join(append(items, parts...)...)
 }
 
@@ -30,15 +30,15 @@ func TestDefaultSetupBundleDefinesBusinessAndInternalSpaces(t *testing.T) {
 	}
 	slices.Sort(business)
 	slices.Sort(internal)
-	require.Equal(t, []string{"crypto", "stock_cn", "stock_hk", "stock_us"}, business)
-	require.Equal(t, []string{"moox_system"}, internal)
+	require.Equal(t, []string{"crypto", "stockcn", "stockhk", "stockus"}, business)
+	require.Equal(t, []string{"mooxsys"}, internal)
 
 	byID := make(map[string]seedSpace, len(seed.Spaces))
 	for _, space := range seed.Spaces {
 		byID[space.SpaceID] = space
 	}
-	require.Equal(t, "CN", byID["stock_cn"].Market)
-	require.Equal(t, "Asia/Shanghai", byID["stock_cn"].Timezone)
+	require.Equal(t, "CN", byID["stockcn"].Market)
+	require.Equal(t, "Asia/Shanghai", byID["stockcn"].Timezone)
 	require.Equal(t, "crypto", byID["crypto"].Market)
 	require.Equal(t, "UTC", byID["crypto"].Timezone)
 }
@@ -57,18 +57,18 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	for _, dataset := range seed.Datasets {
 		datasetsBySpace[dataset.SpaceID] = append(datasetsBySpace[dataset.SpaceID], dataset.DatasetID)
 		require.LessOrEqual(t, utf8.RuneCountInString(dataset.Name), 10, dataset.SpaceID+"/"+dataset.DatasetID)
-		if dataset.SpaceID == "stock_cn" && dataset.DatasetID == "stock_cn_kline" {
+		if dataset.SpaceID == "stockcn" && dataset.DatasetID == "dataset_stockcn_equity_kline" {
 			require.Equal(t, []string{"1m"}, dataset.Freqs)
-			require.Equal(t, "stock_cn", dataset.DataSourceID)
+			require.Equal(t, "stockcn", dataset.DataSourceID)
 		}
-		if dataset.SpaceID == "crypto" && dataset.DatasetID != "binance_spot_symbols" && dataset.DatasetID != "binance_swap_symbols" && dataset.DatasetID != "binance_spot_kline_1m" && dataset.DatasetID != "binance_swap_kline_1m" {
+		if dataset.SpaceID == "crypto" && dataset.DatasetID != "dataset_binance_spot_symbols" && dataset.DatasetID != "dataset_binance_swap_symbols" && dataset.DatasetID != "dataset_binance_spot_kline_1m" && dataset.DatasetID != "dataset_binance_swap_kline_1m" {
 			require.Equal(t, []string{"1H"}, dataset.Freqs, dataset.DatasetID)
 		}
 		if dataset.SpaceID == "crypto" {
 			switch dataset.DatasetID {
-			case "binance_spot_symbols", "binance_spot_kline_1m", "spot_kline_1h":
+			case "dataset_binance_spot_symbols", "dataset_binance_spot_kline_1m", "dataset_spot_kline_1h":
 				require.Equal(t, "spot", dataset.Attributes["market_type"], dataset.DatasetID)
-			case "binance_swap_symbols", "perpetual_kline_1h":
+			case "dataset_binance_swap_symbols", "dataset_perpetual_kline_1h":
 				require.Equal(t, "swap", dataset.Attributes["market_type"], dataset.DatasetID)
 			}
 		}
@@ -81,7 +81,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		for _, datasetID := range view.DatasetIDs {
 			viewCount[view.SpaceID+"/"+datasetID]++
 		}
-		if view.SpaceID == "crypto" && view.ViewID != "binance_spot_kline_1m_view" && view.ViewID != "binance_swap_kline_1m_view" {
+		if view.SpaceID == "crypto" && view.ViewID != "view_crypto_spot_kline_1m" && view.ViewID != "view_crypto_swap_kline_1m" {
 			require.Contains(t, view.FilterJSON, `"freq":"1H"`, view.ViewID)
 		}
 	}
@@ -103,14 +103,14 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		slices.Sort(datasetsBySpace[spaceID])
 	}
 	require.Equal(t, []string{
-		"financial_statement_metric",
-		"financial_summary",
-		"stock_cn_convertible_bond_kline",
-		"stock_cn_index_kline",
-		"stock_cn_instruments",
-		"stock_cn_kline",
-	}, datasetsBySpace["stock_cn"])
-	require.Equal(t, []string{"binance_spot_kline_1m", "binance_spot_symbols", "binance_swap_kline_1m", "binance_swap_symbols", "perpetual_kline_1h", "spot_kline_1h"}, datasetsBySpace["crypto"])
+		"dataset_stockcn_bond_kline",
+		"dataset_stockcn_equity_kline",
+		"dataset_stockcn_financial_statement_metric",
+		"dataset_stockcn_financial_summary",
+		"dataset_stockcn_index_kline",
+		"dataset_stockcn_instruments",
+	}, datasetsBySpace["stockcn"])
+	require.Equal(t, []string{"dataset_binance_spot_kline_1m", "dataset_binance_spot_symbols", "dataset_binance_swap_kline_1m", "dataset_binance_swap_symbols", "dataset_perpetual_kline_1h", "dataset_spot_kline_1h"}, datasetsBySpace["crypto"])
 }
 
 func TestDefaultSetupBundleDefinesStockCNInstrumentsLikeSymbolDatasets(t *testing.T) {
@@ -120,13 +120,13 @@ func TestDefaultSetupBundleDefinesStockCNInstrumentsLikeSymbolDatasets(t *testin
 	var instrumentDataset *seedDataset
 	for i := range seed.Datasets {
 		dataset := &seed.Datasets[i]
-		if dataset.SpaceID == "stock_cn" && dataset.DatasetID == "stock_cn_instruments" {
+		if dataset.SpaceID == "stockcn" && dataset.DatasetID == "dataset_stockcn_instruments" {
 			instrumentDataset = dataset
 			break
 		}
 	}
 	require.NotNil(t, instrumentDataset)
-	require.Equal(t, "stock_cn", instrumentDataset.DataSourceID)
+	require.Equal(t, "stockcn", instrumentDataset.DataSourceID)
 	require.Equal(t, "record", instrumentDataset.DataKind)
 	require.Equal(t, "storage-node-0", instrumentDataset.DataNodeID)
 	require.Equal(t, "0", instrumentDataset.KeepDuration)
@@ -149,7 +149,7 @@ func TestDefaultSetupBundleDefinesStockCNInstrumentsLikeSymbolDatasets(t *testin
 	}
 	gotColumns := make(map[string]columnContract)
 	for _, column := range seed.DatasetColumns {
-		if column.SpaceID == "stock_cn" && column.DatasetID == "stock_cn_instruments" {
+		if column.SpaceID == "stockcn" && column.DatasetID == "dataset_stockcn_instruments" {
 			gotColumns[column.ColumnName] = columnContract{valueType: column.ValueType, required: column.Required}
 		}
 	}

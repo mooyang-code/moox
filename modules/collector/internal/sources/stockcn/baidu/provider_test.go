@@ -74,7 +74,7 @@ func TestFetchInstrumentSnapshotPaginatesSuccessfullyAndCountsExchanges(t *testi
 	now := time.Date(2026, 8, 29, 1, 32, 0, 0, time.UTC)
 	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, Now: func() time.Time { return now }})
 	snapshot, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{
-		MarketID:   "stock_cn",
+		MarketID:   "stockcn",
 		SnapshotAt: now,
 		RequestID:  "req-baidu-instrument",
 	})
@@ -112,7 +112,7 @@ func TestFetchInstrumentSnapshotFailsWhenLaterPageReturnsHTTPError(t *testing.T)
 	now := time.Date(2026, 8, 29, 1, 32, 0, 0, time.UTC)
 	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, Now: func() time.Time { return now }})
 	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{
-		MarketID:   "stock_cn",
+		MarketID:   "stockcn",
 		SnapshotAt: now,
 		RequestID:  "req-baidu-instrument",
 	})

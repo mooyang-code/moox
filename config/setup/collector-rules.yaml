@@ -1,0 +1,97 @@
+# Built-in Collector rules. This file contains no cloud credentials or node data.
+rules:
+- space_id: crypto
+  rule_id: builtin-binance-spot-symbols-1h
+  data_type: instrument
+  provider: binance
+  market_type: spot
+  enabled: true
+  creator: moox-setup
+  collect_params:
+    provider: binance
+    market_type: spot
+    symbol_source: exchange
+    target_dataset_id: dataset_binance_spot_symbols
+    frequency: 1H
+- space_id: crypto
+  rule_id: builtin-binance-swap-symbols-1h
+  data_type: instrument
+  provider: binance
+  market_type: swap
+  enabled: true
+  creator: moox-setup
+  collect_params:
+    provider: binance
+    market_type: swap
+    symbol_source: exchange
+    target_dataset_id: dataset_binance_swap_symbols
+    frequency: 1H
+- space_id: crypto
+  rule_id: builtin-binance-spot-kline-1m
+  data_type: kline
+  provider: binance
+  market_type: spot
+  enabled: true
+  creator: moox-setup
+  collect_params:
+    provider: binance
+    market_type: spot
+    symbol_source: dataset
+    symbol_dataset_id: dataset_binance_spot_symbols
+    target_dataset_id: dataset_binance_spot_kline_1m
+    frequency: 1m
+- space_id: crypto
+  rule_id: builtin-binance-spot-kline-1h
+  data_type: kline
+  provider: binance
+  market_type: spot
+  enabled: true
+  creator: moox-setup
+  collect_params:
+    provider: binance
+    market_type: spot
+    symbol_source: dataset
+    symbol_dataset_id: dataset_binance_spot_symbols
+    target_dataset_id: dataset_spot_kline_1h
+    frequency: 1H
+- space_id: crypto
+  rule_id: builtin-binance-swap-kline-1h
+  data_type: kline
+  provider: binance
+  market_type: swap
+  enabled: true
+  creator: moox-setup
+  collect_params:
+    provider: binance
+    market_type: swap
+    symbol_source: dataset
+    symbol_dataset_id: dataset_binance_swap_symbols
+    target_dataset_id: dataset_perpetual_kline_1h
+    frequency: 1h
+- space_id: stockcn
+  rule_id: builtin-stockcn-instrument-1d
+  data_type: instrument
+  provider: stockcn_multi
+  market_type: equity
+  enabled: false
+  creator: moox-setup
+  collect_params:
+    provider: stockcn_multi
+    market_type: equity
+    symbol_source: exchange
+    target_dataset_id: dataset_stockcn_instruments
+    frequency: 1d
+- space_id: stockcn
+  rule_id: builtin-stockcn-kline-1m
+  data_type: kline
+  provider: stockcn_multi
+  market_type: equity
+  enabled: false
+  creator: moox-setup
+  collect_params:
+    provider: stockcn_multi
+    market_type: equity
+    symbol_source: dataset
+    symbol_dataset_id: dataset_stockcn_instruments
+    target_dataset_id: dataset_stockcn_equity_kline
+    frequency: 1m

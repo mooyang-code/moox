@@ -42,7 +42,7 @@ func testManifest() Manifest {
 func setupSpaceManifest() Manifest {
 	manifest := testManifest()
 	manifest.Spaces = []Space{{
-		SpaceID: "stock_cn", Name: "A股市场", Description: "A股行情与基本面数据",
+		SpaceID: "stockcn", Name: "A股市场", Description: "A股行情与基本面数据",
 		Owner: "quant", Market: "CN", Timezone: "Asia/Shanghai", Status: "active",
 		AttributesJSON: `{"managed_by":"moox-cli","priority":1}`,
 	}}
@@ -60,7 +60,7 @@ func TestApplyCreatesAndInspectsSpaces(t *testing.T) {
 	assert.Zero(t, result.SpacesUnchanged)
 
 	var stored adminspace.Space
-	require.NoError(t, db.Where("c_space_id = ?", "stock_cn").First(&stored).Error)
+	require.NoError(t, db.Where("c_space_id = ?", "stockcn").First(&stored).Error)
 	assert.Equal(t, `{"managed_by":"moox-cli","priority":1}`, stored.Attributes)
 
 	status, err := service.Inspect(context.Background(), setupSpaceManifest())

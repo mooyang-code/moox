@@ -42,16 +42,16 @@ var storageImportCmd = &cobra.Command{
 示例:
   moox-cli storage import --format csv --file ~/Downloads/ARB-USDT.csv \
     --access-url http://127.0.0.1:20201 --metadata-url http://127.0.0.1:20200 \
-    --space crypto_market --dataset spot_kline_1h --subject ARB-USDT --freq 1h \
+    --space crypto --dataset dataset_spot_kline_1h --subject ARB-USDT --freq 1h \
     --series-tag venue:binance \
     --time-column candle_begin_time
 
   moox-cli storage import --file ~/Downloads/ARB-USDT.csv --dry-run \
-    --metadata-url http://127.0.0.1:20200 --space crypto_market --dataset spot_kline_1h \
+    --metadata-url http://127.0.0.1:20200 --space crypto --dataset dataset_spot_kline_1h \
     --subject ARB-USDT --freq 1h --time-column candle_begin_time
 
   moox-cli storage import --format csv --file ~/Downloads/ARB-USDT.csv \
-    --view perpetual_kline_1h_view --dataset perpetual_kline_1h --subject ARB-USDT --freq 1h`,
+    --view view_crypto_swap_kline_1h --dataset dataset_perpetual_kline_1h --subject ARB-USDT --freq 1h`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		opts := storageImportFlags
 		opts.Format = defaultFlag(opts.Format, defaultStorageImportFormat)

@@ -10,7 +10,7 @@ import (
 )
 
 func TestTimerRequestFromEnv(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "crypto_market")
+	t.Setenv("MOOX_SPACE_ID", "crypto")
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")
 	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "spot")
 	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "bars")
@@ -33,7 +33,7 @@ func TestTimerRequestFromEnv(t *testing.T) {
 }
 
 func TestTimerRequestFromEnvAllowsUnicodeSubjectNames(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "crypto_market")
+	t.Setenv("MOOX_SPACE_ID", "crypto")
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")
 	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "spot")
 	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "bars")
@@ -138,7 +138,7 @@ func joinSubjects(subjects []string) string {
 }
 
 func TestTimerRequestFromEnvMalformedDNSFallsBackToPlatformResolver(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "crypto_market")
+	t.Setenv("MOOX_SPACE_ID", "crypto")
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")
 	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "spot")
 	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "bars")

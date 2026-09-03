@@ -67,7 +67,6 @@ func toPBInstance(instance domain.TaskInstance) *pb.TaskInstance {
 		SourceId:       instance.SourceID,
 		FunctionName:   instance.FunctionName,
 		TaskParams:     structFromJSONString(instance.TaskParams),
-		LastExecNode:   instance.LastExecNode,
 		LastExecStatus: toPBStatus(instance.LastExecStatus),
 		LastExecTime:   formatPtrTime(instance.LastExecTime),
 		Result:         structFromJSONString(instance.Result),

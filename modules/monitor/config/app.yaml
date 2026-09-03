@@ -51,21 +51,21 @@ market_canary:
   closed_bar_min_coverage: 0.99
   subjects:
     - space_id: crypto
-      dataset_id: binance_spot_kline_1m
+      dataset_id: dataset_binance_spot_kline_1m
       # Keep the canary bound to a subject that is present in the active spot
       # symbol catalog. BTC-USDT is a perpetual-only subject in this setup;
       # probing it made the service page report a false "insufficient_closed_bars".
       symbol: OPG-USDT
       frequency: 1m
       series_tag: venue:binance
-    - space_id: stock_cn
-      dataset_id: stock_cn_kline
+    - space_id: stockcn
+      dataset_id: dataset_stockcn_equity_kline
       symbol: 600000.XSHG
       frequency: 1m
-      series_tag: ""
-      market_id: stock_cn
-      calendar_path: ../collector/config/markets/stock_cn/calendar.yaml
-      eligible_kline_providers: [sina, tencent, eastmoney]
+      series_tag: default
+      market_id: stockcn
+      calendar_path: ../collector/config/markets/stockcn/calendar.yaml
+      eligible_kline_providers: [sina, tencent, tdx, eastmoney]
 
 market_health:
   timer_coordination_stale_after: 15m
@@ -79,15 +79,15 @@ market_health:
 
 metrics:
   enabled: true
-  dataset_health_policy_path: ../../examples/setup/default/dataset-health-policy.yaml
+  dataset_health_policy_path: ../../config/setup/dataset-health-policy.yaml
   no_data_intervals: 2
   storage:
     gateway_target: ip://127.0.0.1:11003
     gateway_node_id: ""
     key_id: monitor
     hmac_key_file: ""
-    space_id: moox_system
-    dataset_id: moox_service_metrics
+    space_id: mooxsys
+    dataset_id: dataset_mooxsys_service_metrics
     frequency: 30s
     metadata_validation_interval: 30s
     write_batch_size: 1000
@@ -97,13 +97,13 @@ metrics:
     gateway_node_id: ""
     key_id: monitor
     hmac_key_file: ""
-    space_id: moox_system
+    space_id: mooxsys
     frequency: 1m
     write_timeout: 5s
     read_limit: 500
     metadata_refresh_interval: 1m
     rule_refresh_interval: 30s
-    resource_dataset_id: host_resource_v1
-    filesystem_dataset_id: host_fs_v1
-    disk_dataset_id: host_disk_v1
-    network_dataset_id: host_net_v1
+    resource_dataset_id: dataset_mooxsys_host_resource
+    filesystem_dataset_id: dataset_mooxsys_host_filesystem
+    disk_dataset_id: dataset_mooxsys_host_disk
+    network_dataset_id: dataset_mooxsys_host_network

@@ -424,9 +424,9 @@ func (m *Metrics) ObserveInstrumentSnapshot(marketID, routeID, providerID, resul
 }
 
 func boundedMarketRoute(marketID, routeID string) (string, string) {
-	marketID = boundedValue(marketID, []string{"stock_cn", "crypto"}, "unknown")
+	marketID = boundedValue(marketID, []string{"stockcn", "crypto"}, "unknown")
 	routeID = strings.TrimSpace(routeID)
-	allowed := routeID == StockCNRouteID || routeID == "stock_cn_instrument_v1" || routeID == "binance_spot_instrument_v1" || routeID == "binance_swap_instrument_v1"
+	allowed := routeID == StockCNRouteID || routeID == "stockcn_instrument_v1" || routeID == "binance_spot_instrument_v1" || routeID == "binance_swap_instrument_v1"
 	if !allowed {
 		for _, product := range []string{"spot", "swap"} {
 			prefix := "binance_" + product + "_kline_"

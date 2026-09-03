@@ -11,14 +11,13 @@
 1. Collector 根据启用的 K 线规则和全量 Symbol 快照，把每个任务组按最多 30 个标的分配给一个 Timer SCF。
 2. 分配结果写入 `TaskInstance.c_function_name`，同时提交该 SCF 的环境变量。稳定的 `task_id` 不随 SCF 迁移变化。
 3. SCF Timer 读取本地环境变量，调用行情接口，聚合结果后通过 Storage Primary 的 `UpsertFields` 写入 `write_source=scf:<function-name>`。
-4. PrimaryStore、DataNode 和 Pebble outbox 原样传递该字段，发布 `storage.dataset.rows.upserted@2`。字段位于事件顶层，不放到业务行 attributes 中。
+4. PrimaryStore、DataNode 和 Pebble outbox 原样传递该字段，发布 `event.storage.dataset.rows.upserted@2`。字段位于事件顶层，不放到业务行 attributes 中。
 5. Collector 以空间为范围启动持久 NATS JetStream consumer，消费 Storage 变更事件。对每个已写入的时序行，用事件 envelope 的 `occurred_at` 更新匹配任务实例的 `last_exec_status=SUCCESS` 和 `last_exec_time`。
 
 ## 一致性规则
 
 - 消费者只接受 `scf:` 写入源；空写入源不影响任务新鲜度。
 - 更新条件包含 `space_id + dataset_id + subject_id + frequency + function_name`。SCF 重新分配后，旧函数迟到的事件不会覆盖新函数的执行时间。
-- `last_exec_node` 仍表示逻辑执行节点；SCF 函数名单独存放在 `c_function_name`，前端“写入源”列展示该值。
 - Storage 事件重复投递是正常情况；更新时间只在事件时间更新时才前进，重复事件不会回退水位。
 - Timer 路径不发布行情完成事件；Storage 变更是成功写入的事实来源，CLS 仅用于单标的耗时和结果诊断。
 

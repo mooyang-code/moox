@@ -52,7 +52,7 @@ func TestProcessorCommitsFullWeightEvaluationAndDeduplicatesEvent(t *testing.T) 
 	period := time.UnixMilli(60_000).UTC()
 	loader := fakeInputLoader{value: input.EvaluationInput{SpaceID: "space", StrategyID: "strategy", PeriodEnd: period.Format(time.RFC3339Nano), SourceViewID: "source", DataFrequency: "1m", Items: []input.InstrumentInput{{PoolItem: input.PoolItem{InstrumentID: "BTC", SubjectID: "btc", Market: "spot"}, Values: map[string]quant.Decimal{"bias": quant.Must("1")}}, {PoolItem: input.PoolItem{InstrumentID: "ETH", SubjectID: "eth", Market: "spot"}, Values: map[string]quant.Decimal{"bias": quant.Must("2")}}}}}
 	processor := &Processor{Store: repo, Loader: loader, Now: func() time.Time { return period.Add(time.Second) }}
-	event := PeriodReady{MessageID: "ready-1", EventName: "storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period, ReadyViewIDs: []string{"factor-view"}}
+	event := PeriodReady{MessageID: "ready-1", EventName: "event.storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period, ReadyViewIDs: []string{"factor-view"}}
 	if err := processor.Handle(context.Background(), event); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestProcessorAcksTerminalStrictIncompleteReady(t *testing.T) {
 	}
 	period := time.UnixMilli(60_000).UTC()
 	processor := &Processor{Store: repo, Loader: fakeInputLoader{err: input.ErrStrictIncomplete}, Now: func() time.Time { return period.Add(time.Second) }}
-	event := PeriodReady{MessageID: "degraded-ready", EventName: "storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period, Status: "degraded", BindingStatuses: map[string]string{"binding": "degraded"}}
+	event := PeriodReady{MessageID: "degraded-ready", EventName: "event.storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period, Status: "degraded", BindingStatuses: map[string]string{"binding": "degraded"}}
 	if err := processor.Handle(context.Background(), event); err != nil {
 		t.Fatalf("terminal degraded event should be ACKable: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestProcessorAcksLegacyReadyWithoutIndexProvenance(t *testing.T) {
 	// loader cannot reconstruct the immutable generation, so the delivery must
 	// be acknowledged after recording the runner failure rather than retried
 	// forever by the unlimited consumer.
-	event := PeriodReady{MessageID: "legacy-ready", EventName: "storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period}
+	event := PeriodReady{MessageID: "legacy-ready", EventName: "event.storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period}
 	if err := processor.Handle(context.Background(), event); err != nil {
 		t.Fatalf("legacy ready marker should be terminal: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestProcessorRetriesTransientDependencyVerificationFailure(t *testing.T) {
 		VerifyDependencies: func(context.Context, compiler.CompiledStrategy) error { return transient },
 		Now:                func() time.Time { return period.Add(time.Second) },
 	}
-	event := PeriodReady{MessageID: "transient-ready", EventName: "storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period, ReadyViewIDs: []string{"factor-view"}}
+	event := PeriodReady{MessageID: "transient-ready", EventName: "event.storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period, ReadyViewIDs: []string{"factor-view"}}
 	if err := processor.Handle(context.Background(), event); !errors.Is(err, transient) {
 		t.Fatalf("Handle() error = %v, want transient dependency error", err)
 	}
@@ -239,7 +239,7 @@ func TestProcessorAcksPermanentDependencyVerificationFailure(t *testing.T) {
 		},
 		Now: func() time.Time { return period.Add(time.Second) },
 	}
-	event := PeriodReady{MessageID: "permanent-ready", EventName: "storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period, ReadyViewIDs: []string{"factor-view"}}
+	event := PeriodReady{MessageID: "permanent-ready", EventName: "event.storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period, ReadyViewIDs: []string{"factor-view"}}
 	if err := processor.Handle(context.Background(), event); err != nil {
 		t.Fatalf("Handle() permanent dependency failure should ACK: %v", err)
 	}

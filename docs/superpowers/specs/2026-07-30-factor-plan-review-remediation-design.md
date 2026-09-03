@@ -135,7 +135,7 @@ dry-run 和真实导入走同一校验入口。CLI 使用一个局部、无状�
 - Factor 和 Archive 高风险包 race；
 - Python worker 测试；
 - Storage boundary/consistency contract；
-- `scripts/test-series-tag-e2e.sh`；
+- `scripts/test/e2e/test-series-tag-e2e.sh`；
 - `make verify-pr`；
 - 独立 `codeCR` 审查。
 

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a repository-root `custom.toml` workflow that validates user credentials, deploys the minimal control plane, and atomically initializes the first Admin user, Tencent Cloud credential, and SSH hosts without exposing secrets to an Agent.
+**Goal:** Add a repository-root `moox.toml` workflow that validates user credentials, deploys the minimal control plane, and atomically initializes the first Admin user, Tencent Cloud credential, and SSH hosts without exposing secrets to an Agent.
 
-**Architecture:** `moox-cli setup` owns strict TOML loading, Tencent/SSH validation, control-plane deployment, SSH tunneling, and sanitized output. Admin owns a loopback-only setup RPC and one transaction that reconciles the initial records directly, without a separate setup-state table. The MooX Skill invokes only the high-level commands and never reads `custom.toml`.
+**Architecture:** `moox-cli setup` owns strict TOML loading, Tencent/SSH validation, control-plane deployment, SSH tunneling, and sanitized output. Admin owns a loopback-only setup RPC and one transaction that reconciles the initial records directly, without a separate setup-state table. The MooX Skill invokes only the high-level commands and never reads `moox.toml`.
 
 **Tech Stack:** Go 1.24, Cobra, BurntSushi TOML, `golang.org/x/crypto/ssh`, tRPC-Go HTTP/PB, GORM/SQLite, Tencent Cloud SDK, Bash deployment contract tests, MooX Skill Markdown.
 
@@ -29,8 +29,8 @@ inside `modules/cloudnode`. `cloudprovider` is reusable infrastructure for
 vendor API access; `cloudnode` remains the business module that manages node
 lifecycle and may consume those adapters later.
 
-- Create `custom.toml.example`: exact user-facing setup template with empty secrets.
-- Modify `.gitignore`: ignore only repository-root `/custom.toml`.
+- Create `moox.toml.example`: exact user-facing setup template with empty secrets.
+- Modify `.gitignore`: ignore only repository-root `/moox.toml`.
 - Create `modules/cli/internal/setup/config/config.go`: secure file snapshot, strict TOML decode, and field validation.
 - Create `modules/cli/internal/setup/config/config_test.go`: file security, parsing, uniqueness, and mutation tests.
 - Create `modules/cli/internal/setup/ssh/client.go`: password SSH, dedicated known-hosts policy, connection validation, and local forwarding.
@@ -65,22 +65,22 @@ lifecycle and may consume those adapters later.
 - Create `modules/cli/internal/setup/client/login_test.go`: browser-path login protocol and response redaction.
 - Create `modules/cli/internal/setup/deploy/deploy.go`: minimal control profile orchestration and safe Go SSH/SFTP transport.
 - Create `modules/cli/internal/setup/deploy/deploy_test.go`: profile arguments, upload behavior, readiness ordering, and no-secret output.
-- Modify `scripts/deploy-moox.sh`: add `control` profile and remove deploy-time Admin user creation.
-- Modify `scripts/test-deploy-moox-admin-bootstrap.sh`: enforce the new deployment/setup boundary.
-- Create `scripts/test-deploy-moox-control-profile.sh`: verify exact control-profile contents and service startup.
+- Modify `scripts/deploy/deploy-moox.sh`: add `control` profile and remove deploy-time Admin user creation.
+- Modify `scripts/test/contract/test-deploy-moox-admin-bootstrap.sh`: enforce the new deployment/setup boundary.
+- Create `scripts/test/contract/test-deploy-moox-control-profile.sh`: verify exact control-profile contents and service startup.
 - Create `modules/cli/internal/command/setup.go`: register `validate`, `deploy-control`, `apply`, `status`, and host trust commands.
 - Create `modules/cli/internal/command/setup_test.go`: CLI contract and stdout/stderr secrecy.
 - Modify `modules/cli/internal/command/root.go`: show the setup command without eager unrelated YAML warnings.
 - Modify `modules/cli/go.mod` and `modules/cli/go.sum`: make TOML and SSH dependencies direct.
 - Create `skills/moox/references/custom-setup.md`: operator contract and exact template.
 - Modify `skills/moox/SKILL.md`: mandatory two-stage setup sequence and prohibition on Agent file reads.
-- Create `skills/moox/scripts/test-custom-setup-contract.sh`: check template, ignore rule, command order, and forbidden secret-reading patterns.
+- Create `skills/moox/scripts/test/contract/test-custom-setup-contract.sh`: check template, ignore rule, command order, and forbidden secret-reading patterns.
 - Modify `modules/cli/README.md`: document `setup` commands and the read-only manifest contract.
 
 ## Task 1: Define And Secure The Manifest
 
 **Files:**
-- Create: `custom.toml.example`
+- Create: `moox.toml.example`
 - Modify: `.gitignore`
 - Create: `modules/cli/internal/setup/config/config.go`
 - Create: `modules/cli/internal/setup/config/config_test.go`
@@ -89,7 +89,7 @@ lifecycle and may consume those adapters later.
 
 - [ ] **Step 1: Add the ignored template contract**
 
-Create `custom.toml.example` with the exact approved structure and no real values:
+Create `moox.toml.example` with the exact approved structure and no real values:
 
 ```toml
 [admin]
@@ -115,14 +115,14 @@ username = "ubuntu"
 password = ""
 ```
 
-Add `/custom.toml` to `.gitignore`. Do not ignore every `*.toml`; module files and future checked-in TOML remain trackable.
+Add `/moox.toml` to `.gitignore`. Do not ignore every `*.toml`; module files and future checked-in TOML remain trackable.
 
 - [ ] **Step 2: Write failing secure-load tests**
 
 Create table-driven tests for the approved structure, missing required values, unknown fields, duplicate host names, duplicate addresses, a missing `other_hosts` array, a 73-byte Admin password, symlink input, mode `0644`, wrong basename, and mutation during a held snapshot. The core success assertion is:
 
 ```go
-snapshot, err := Load(filepath.Join(root, "custom.toml"), root)
+snapshot, err := Load(filepath.Join(root, "moox.toml"), root)
 require.NoError(t, err)
 assert.Equal(t, "admin", snapshot.Manifest.Admin.Username)
 assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
@@ -156,7 +156,7 @@ type Manifest struct {
 func decodeStrict(raw []byte, out *Manifest) error {
     md, err := toml.Decode(string(raw), out)
     if err != nil {
-        return fmt.Errorf("config_invalid: decode custom.toml")
+        return fmt.Errorf("config_invalid: decode moox.toml")
     }
     if keys := md.Undecoded(); len(keys) != 0 {
         return fmt.Errorf("config_invalid: unknown field %s", keys[0].String())
@@ -190,7 +190,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit the manifest loader**
 
 ```bash
-git add .gitignore custom.toml.example modules/cli/go.mod modules/cli/go.sum modules/cli/internal/setup/config
+git add .gitignore moox.toml.example modules/cli/go.mod modules/cli/go.sum modules/cli/internal/setup/config
 git commit -m "feat(cli): define secure setup manifest"
 ```
 
@@ -718,16 +718,16 @@ git commit -m "feat(cli): initialize Admin through SSH forwarding"
 ## Task 7: Separate The Control Deployment Profile
 
 **Files:**
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-deploy-moox-admin-bootstrap.sh`
-- Create: `scripts/test-deploy-moox-control-profile.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-admin-bootstrap.sh`
+- Create: `scripts/test/contract/test-deploy-moox-control-profile.sh`
 
 - [ ] **Step 1: Write failing shell contract tests**
 
 The control-profile test must assert:
 
 ```bash
-scripts/deploy-moox.sh --profile control --no-start ...
+scripts/deploy/deploy-moox.sh --profile control --no-start ...
 test -x "${stage}/bin/moox-admin"
 test -x "${stage}/bin/moox-gateway"
 test -x "${stage}/bin/moox-web-host"
@@ -742,8 +742,8 @@ Update the Admin setup test to fail if the script contains or accepts
 - [ ] **Step 2: Run and confirm failure**
 
 ```bash
-bash scripts/test-deploy-moox-admin-bootstrap.sh
-bash scripts/test-deploy-moox-control-profile.sh
+bash scripts/test/contract/test-deploy-moox-admin-bootstrap.sh
+bash scripts/test/contract/test-deploy-moox-control-profile.sh
 ```
 
 Expected: FAIL against the old deploy-time user creation and missing profile.
@@ -772,10 +772,10 @@ Admin encryption, JWT, health, service, and Gateway secrets in owner-only files.
 - [ ] **Step 4: Run deployment contracts**
 
 ```bash
-bash scripts/test-deploy-moox-admin-bootstrap.sh
-bash scripts/test-deploy-moox-control-profile.sh
-bash scripts/test-deploy-moox-gateway.sh
-bash scripts/test-deploy-moox-https.sh
+bash scripts/test/contract/test-deploy-moox-admin-bootstrap.sh
+bash scripts/test/contract/test-deploy-moox-control-profile.sh
+bash scripts/test/contract/test-deploy-moox-gateway.sh
+bash scripts/test/contract/test-deploy-moox-https.sh
 ```
 
 Expected: PASS.
@@ -783,7 +783,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit the profile**
 
 ```bash
-git add scripts/deploy-moox.sh scripts/test-deploy-moox-admin-bootstrap.sh scripts/test-deploy-moox-control-profile.sh
+git add scripts/deploy/deploy-moox.sh scripts/test/contract/test-deploy-moox-admin-bootstrap.sh scripts/test/contract/test-deploy-moox-control-profile.sh
 git commit -m "refactor(deploy): separate control setup profile"
 ```
 
@@ -792,7 +792,7 @@ git commit -m "refactor(deploy): separate control setup profile"
 **Files:**
 - Create: `modules/cli/internal/setup/deploy/deploy.go`
 - Create: `modules/cli/internal/setup/deploy/deploy_test.go`
-- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
 
 - [ ] **Step 1: Add a package-only deploy contract**
 
@@ -838,7 +838,7 @@ headers or secrets.
 cd modules/cli
 go test -count=1 ./internal/setup/deploy ./internal/setup/ssh
 cd ../..
-bash scripts/test-deploy-moox-control-profile.sh
+bash scripts/test/contract/test-deploy-moox-control-profile.sh
 ```
 
 Expected: PASS.
@@ -846,7 +846,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit deployment orchestration**
 
 ```bash
-git add modules/cli/internal/setup/deploy scripts/deploy-moox.sh scripts/test-deploy-moox-control-profile.sh
+git add modules/cli/internal/setup/deploy scripts/deploy/deploy-moox.sh scripts/test/contract/test-deploy-moox-control-profile.sh
 git commit -m "feat(cli): deploy setup control plane safely"
 ```
 
@@ -889,7 +889,7 @@ Expected: FAIL because the command is not registered.
 Use a shared file flag default:
 
 ```go
-const defaultSetupFile = "./custom.toml"
+const defaultSetupFile = "./moox.toml"
 
 func newSetupCommand(deps setupDeps) *cobra.Command {
     cmd := &cobra.Command{Use: "setup", Short: "初始化 MooX 控制面"}
@@ -904,7 +904,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 }
 ```
 
-Load `custom.toml` inside each `RunE`, never during package initialization.
+Load `moox.toml` inside each `RunE`, never during package initialization.
 Print only typed result structs through `json.Encoder`. Mark all secret-bearing
 variables as local and clear mutable copies in `defer` blocks.
 
@@ -942,25 +942,25 @@ git commit -m "feat(cli): add custom setup workflow"
 **Files:**
 - Create: `skills/moox/references/custom-setup.md`
 - Modify: `skills/moox/SKILL.md`
-- Create: `skills/moox/scripts/test-custom-setup-contract.sh`
+- Create: `skills/moox/scripts/test/contract/test-custom-setup-contract.sh`
 
 - [ ] **Step 1: Write the failing Skill contract test**
 
 The script must verify that the Skill/reference:
 
-- shows the exact `custom.toml.example` template;
+- shows the exact `moox.toml.example` template;
 - says the user writes the file before deployment;
 - requires mode `0600`;
 - orders `validate`, `deploy-control`, `apply`, then `status`;
 - says the file remains unchanged and contains plaintext credentials;
 - prohibits Agent use of `cat`, `sed`, `rg`, Python, or shell `source` on
-  `custom.toml`;
+  `moox.toml`;
 - starts later service placement only after setup status succeeds.
 
 - [ ] **Step 2: Run and verify failure**
 
 ```bash
-bash skills/moox/scripts/test-custom-setup-contract.sh
+bash skills/moox/scripts/test/contract/test-custom-setup-contract.sh
 ```
 
 Expected: FAIL because the reference and flow are absent.
@@ -970,11 +970,11 @@ Expected: FAIL because the reference and flow are absent.
 Document this exact Agent-safe sequence:
 
 ```bash
-test -e ./custom.toml || exit 2
-./bin/moox-cli setup validate --file ./custom.toml
-./bin/moox-cli setup deploy-control --file ./custom.toml
-./bin/moox-cli setup apply --file ./custom.toml
-./bin/moox-cli setup status --file ./custom.toml
+test -e ./moox.toml || exit 2
+./bin/moox-cli setup validate --file ./moox.toml
+./bin/moox-cli setup deploy-control --file ./moox.toml
+./bin/moox-cli setup apply --file ./moox.toml
+./bin/moox-cli setup status --file ./moox.toml
 ```
 
 The `test -e` check may inspect existence only. The Skill must never show a
@@ -984,8 +984,8 @@ command that reads the file outside `moox-cli`.
 
 Replace the current first-stage host interrogation with:
 
-1. show `custom.toml.example` when the manifest is absent;
-2. wait for the user to fill and protect `custom.toml`;
+1. show `moox.toml.example` when the manifest is absent;
+2. wait for the user to fill and protect `moox.toml`;
 3. run the four high-level commands;
 4. require the `setup apply` public-login check to pass and ask the user to
    confirm interactive browser login when needed;
@@ -995,8 +995,8 @@ Replace the current first-stage host interrogation with:
 - [ ] **Step 5: Run and commit**
 
 ```bash
-bash skills/moox/scripts/test-custom-setup-contract.sh
-git add skills/moox/SKILL.md skills/moox/references/custom-setup.md skills/moox/scripts/test-custom-setup-contract.sh
+bash skills/moox/scripts/test/contract/test-custom-setup-contract.sh
+git add skills/moox/SKILL.md skills/moox/references/custom-setup.md skills/moox/scripts/test/contract/test-custom-setup-contract.sh
 git commit -m "docs(skill): guide custom setup initialization"
 ```
 
@@ -1017,7 +1017,7 @@ Admin and node Gateway ports and require route-not-found.
 
 - [ ] **Step 2: Add the CLI workflow E2E**
 
-Use a temporary `0600 custom.toml`, an SSH fixture, fake Tencent identity
+Use a temporary `0600 moox.toml`, an SSH fixture, fake Tencent identity
 server, package-only control archive, and Admin setup server. Capture every
 process stream and scan all generated files:
 
@@ -1037,9 +1037,9 @@ Add `verify-custom-setup` to the root Makefile. It runs:
 (cd packages/cloudprovider && go test -count=1 ./...)
 (cd modules/admin && go test -count=1 ./internal/service/setup/... ./internal/bootstrap && go test -count=1 ./test -run Setup)
 (cd modules/cli && go test -count=1 ./internal/setup/... ./internal/command && go test -count=1 ./test -run Setup)
-bash scripts/test-deploy-moox-admin-bootstrap.sh
-bash scripts/test-deploy-moox-control-profile.sh
-bash skills/moox/scripts/test-custom-setup-contract.sh
+bash scripts/test/contract/test-deploy-moox-admin-bootstrap.sh
+bash scripts/test/contract/test-deploy-moox-control-profile.sh
+bash skills/moox/scripts/test/contract/test-custom-setup-contract.sh
 ```
 
 - [ ] **Step 4: Run focused verification**
@@ -1061,13 +1061,13 @@ failure and keep `make verify-custom-setup` green before proceeding.
 
 - [ ] **Step 6: Run a real remote acceptance**
 
-With a user-created `0600 custom.toml` that the Agent never reads:
+With a user-created `0600 moox.toml` that the Agent never reads:
 
 ```bash
-./bin/moox-cli setup validate --file ./custom.toml
-./bin/moox-cli setup deploy-control --file ./custom.toml
-./bin/moox-cli setup apply --file ./custom.toml
-./bin/moox-cli setup status --file ./custom.toml
+./bin/moox-cli setup validate --file ./moox.toml
+./bin/moox-cli setup deploy-control --file ./moox.toml
+./bin/moox-cli setup apply --file ./moox.toml
+./bin/moox-cli setup status --file ./moox.toml
 ```
 
 Verify signed health, public Web access, browser login, encrypted Admin rows,
@@ -1091,7 +1091,7 @@ git commit -m "test: verify custom setup workflow"
 ```bash
 rg -n "custom\.toml|password|secret_id|secret_key|InsecureIgnoreHostKey|admin-password" \
   packages/cloudprovider modules/cli modules/admin scripts skills/moox \
-  .gitignore custom.toml.example
+  .gitignore moox.toml.example
 ```
 
 Confirm every occurrence follows the design: no secret argv/env/temp files, no
@@ -1102,11 +1102,11 @@ Skill command.
 
 ```bash
 git status --short
-git ls-files --error-unmatch custom.toml && exit 1 || true
-git check-ignore -q custom.toml
+git ls-files --error-unmatch moox.toml && exit 1 || true
+git check-ignore -q moox.toml
 ```
 
-Expected: `custom.toml` is untracked and ignored; `custom.toml.example` is
+Expected: `moox.toml` is untracked and ignored; `moox.toml.example` is
 tracked.
 
 - [ ] **Step 3: Run final fresh verification**

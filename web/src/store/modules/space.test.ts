@@ -20,7 +20,7 @@ describe("space store", () => {
 
   it("only loads active Spaces for the global selector", async () => {
     vi.mocked(listSpaces).mockResolvedValue({
-      spaces: [{ space_id: "stock_cn", name: "A股市场", status: "active" }]
+      spaces: [{ space_id: "stockcn", name: "A股市场", status: "active" }]
     });
 
     const store = useSpaceStore();
@@ -30,7 +30,7 @@ describe("space store", () => {
       status: "active",
       page: { page: 1, size: 200 }
     });
-    expect(store.selectedSpaceId).toBe("stock_cn");
+    expect(store.selectedSpaceId).toBe("stockcn");
   });
 
   it("rejects a Space that is not in the active selector list", async () => {

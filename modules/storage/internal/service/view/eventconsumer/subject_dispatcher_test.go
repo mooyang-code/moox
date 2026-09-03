@@ -19,8 +19,8 @@ func TestDatasetQueueKeyUsesGovernedSubjectForMalformedPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rowSubject := "moox.storage.dataset_rows_upserted.v1." + space + "." + dataset
-	markerSubject := "moox.storage.dataset_period_collected.v1." + space + "." + dataset
+	rowSubject := "moox.event.storage.dataset_rows_upserted.v1." + space + "." + dataset
+	markerSubject := "moox.event.storage.dataset_period_collected.v1." + space + "." + dataset
 	row, err := datasetQueueKey(nil, &jetstream.Delivery{Subject: rowSubject, DecodeError: errors.New("bad row")})
 	if err != nil {
 		t.Fatal(err)

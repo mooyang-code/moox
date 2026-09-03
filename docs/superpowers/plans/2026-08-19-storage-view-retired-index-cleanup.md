@@ -28,7 +28,7 @@
 - Modify `modules/storage/internal/service/view/service_test.go`: prove the active index remains queryable while old-index cleanup is pending.
 - Modify `modules/storage/cmd/server/main.go`: register the cleanup Timer before serving.
 - Modify `modules/storage/config/storage_view/trpc_go.yaml`: declare the 30-second cleanup Timer service on port `20308` with a 20-second tRPC timeout.
-- Modify `scripts/tests/contract/test-deploy-moox-storage-view.sh`: assert the Timer service is packaged in the production Storage View config.
+- Modify `scripts/test/contract/test-deploy-moox-storage-view.sh`: assert the Timer service is packaged in the production Storage View config.
 
 ### Task 1: Add Engine-Owned Managed Index Discovery
 
@@ -530,7 +530,7 @@ git commit -m "refactor(storage): centralize view index cleanup"
 - Create: `modules/storage/internal/bootstrap/view_index_cleanup_timer_test.go`
 - Modify: `modules/storage/cmd/server/main.go`
 - Modify: `modules/storage/config/storage_view/trpc_go.yaml`
-- Modify: `scripts/tests/contract/test-deploy-moox-storage-view.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-storage-view.sh`
 
 - [ ] **Step 1: Add a failing bootstrap registration test**
 
@@ -654,7 +654,7 @@ Run:
 cd modules/storage
 go test ./internal/bootstrap ./cmd/server -count=1
 cd ../..
-bash scripts/test-deploy-moox-storage-view.sh
+bash scripts/test/contract/test-deploy-moox-storage-view.sh
 ```
 
 Expected: PASS; the staged `storage-view/config/trpc_go.yaml` contains both the metrics Timer and cleanup Timer.
@@ -666,7 +666,7 @@ git add modules/storage/internal/bootstrap/view_index_cleanup_timer.go \
   modules/storage/internal/bootstrap/view_index_cleanup_timer_test.go \
   modules/storage/cmd/server/main.go \
   modules/storage/config/storage_view/trpc_go.yaml \
-  scripts/tests/contract/test-deploy-moox-storage-view.sh
+  scripts/test/contract/test-deploy-moox-storage-view.sh
 git commit -m "feat(storage): schedule retired view cleanup"
 ```
 
@@ -678,7 +678,7 @@ git commit -m "feat(storage): schedule retired view cleanup"
 - Verify: `modules/storage/internal/service/viewindex/bleve/...`
 - Verify: `modules/storage/internal/bootstrap/...`
 - Verify: `modules/storage/cmd/server/...`
-- Verify: `scripts/tests/contract/test-deploy-moox-storage-view.sh`
+- Verify: `scripts/test/contract/test-deploy-moox-storage-view.sh`
 
 - [ ] **Step 1: Run formatting and static diff checks**
 
@@ -729,9 +729,9 @@ Expected: PASS with no race report.
 - [ ] **Step 4: Run deployment and workspace contracts**
 
 ```bash
-bash scripts/test-deploy-moox-storage-view.sh
-bash scripts/tests/contract/test-deploy-moox-storage-profile.sh
-bash -n scripts/deploy-moox.sh scripts/tests/contract/test-deploy-moox-storage-view.sh
+bash scripts/test/contract/test-deploy-moox-storage-view.sh
+bash scripts/test/contract/test-deploy-moox-storage-profile.sh
+bash -n scripts/deploy/deploy-moox.sh scripts/test/contract/test-deploy-moox-storage-view.sh
 ```
 
 Expected: all commands exit zero.
@@ -754,7 +754,7 @@ Repair every P0-P2 finding and rerun Steps 1-4 before proceeding.
 
 ```bash
 git status --short
-git add modules/storage scripts/tests/contract/test-deploy-moox-storage-view.sh
+git add modules/storage scripts/test/contract/test-deploy-moox-storage-view.sh
 git commit -m "fix(storage): harden retired index cleanup"
 ```
 

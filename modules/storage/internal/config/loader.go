@@ -122,7 +122,7 @@ func (p ViewMaintenancePolicy) ResolvePolicy(spaceID, viewID string) ViewMainten
 			resolved.MaxViewFileBytes = override.MaxViewFileBytes
 		}
 	}
-	if strings.TrimSpace(spaceID) == "moox_system" {
+	if strings.TrimSpace(spaceID) == "mooxsys" {
 		apply(p.SystemMonitor)
 	}
 	for _, override := range p.Views {
@@ -145,7 +145,7 @@ func (p ViewMaintenancePolicy) Validate() error {
 	if p.SystemMonitor.SpaceID != "" || p.SystemMonitor.ViewID != "" {
 		return errors.New("system_monitor override must not set space_id or view_id")
 	}
-	systemResolved := p.ResolvePolicy("moox_system", "")
+	systemResolved := p.ResolvePolicy("mooxsys", "")
 	if systemResolved.MaxPeriodsPerSeries <= systemResolved.RebuildLookbackPeriods || systemResolved.MaxViewFileBytes <= 0 {
 		return errors.New("system_monitor override has invalid limits")
 	}
@@ -253,14 +253,14 @@ func (p StorageViewConsumerPartition) Datasets() []StorageViewConsumerDataset {
 func (v *StorageView) applyConsumerPartitionDefaults() {
 	if len(v.ConsumerPartitions) == 0 {
 		v.ConsumerPartitions = []StorageViewConsumerPartition{
-			{ID: "kline", Durable: events.StorageViewKlineConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"binance_spot_kline_1m"}}}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
-			{ID: "factor", Durable: events.StorageViewFactorConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"binance_spot_kline_1m_factor"}}}, FetchBatch: 16, MaxWorkers: 8, MaxAckPending: 128},
-			{ID: "system_metrics", Durable: events.StorageViewMetricsConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "moox_system", DatasetIDs: []string{"moox_service_metrics"}}}, FetchBatch: 16, MaxWorkers: 4, MaxAckPending: 64},
+			{ID: "kline", Durable: events.StorageViewKlineConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m"}}}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
+			{ID: "factor", Durable: events.StorageViewFactorConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m_factor"}}}, FetchBatch: 16, MaxWorkers: 8, MaxAckPending: 128},
+			{ID: "system_metrics", Durable: events.StorageViewMetricsConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}}}, FetchBatch: 16, MaxWorkers: 4, MaxAckPending: 64},
 			{ID: "misc", Durable: events.StorageViewMiscConsumer, Routes: []StorageViewConsumerRoute{
-				{SpaceID: "moox_system", DatasetIDs: []string{"host_disk_v1", "host_fs_v1", "host_net_v1", "host_resource_v1"}},
-				{SpaceID: "stock_cn", DatasetIDs: []string{"financial_statement_metric", "financial_summary", "stock_cn_convertible_bond_kline", "stock_cn_index_kline", "stock_cn_instruments", "stock_cn_kline"}},
-				{SpaceID: "stock_hk", DatasetIDs: []string{"stock_hk_kline"}},
-				{SpaceID: "stock_us", DatasetIDs: []string{"stock_us_kline"}},
+				{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_host_disk", "dataset_mooxsys_host_filesystem", "dataset_mooxsys_host_network", "dataset_mooxsys_host_resource"}},
+				{SpaceID: "stockcn", DatasetIDs: []string{"dataset_stockcn_financial_statement_metric", "dataset_stockcn_financial_summary", "dataset_stockcn_bond_kline", "dataset_stockcn_index_kline", "dataset_stockcn_instruments", "dataset_stockcn_equity_kline"}},
+				{SpaceID: "stockhk", DatasetIDs: []string{"dataset_stockhk_equity_kline"}},
+				{SpaceID: "stockus", DatasetIDs: []string{"dataset_stockus_equity_kline"}},
 			}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
 		}
 	}
@@ -385,9 +385,9 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 		space   string
 		dataset string
 	}{
-		"kline":   {durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "binance_spot_kline_1m"},
-		"factor":  {durable: events.StorageViewFactorConsumer, space: "crypto", dataset: "binance_spot_kline_1m_factor"},
-		"metrics": {durable: events.StorageViewMetricsConsumer, space: "moox_system", dataset: "moox_service_metrics"},
+		"kline":   {durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_binance_spot_kline_1m"},
+		"factor":  {durable: events.StorageViewFactorConsumer, space: "crypto", dataset: "dataset_binance_spot_kline_1m_factor"},
+		"metrics": {durable: events.StorageViewMetricsConsumer, space: "mooxsys", dataset: "dataset_mooxsys_service_metrics"},
 	}
 	for name, required := range requiredRoutes {
 		partitionID, ok := routes[required.space+"\x00"+required.dataset]
@@ -556,7 +556,7 @@ func (c *StorageConfig) ApplyDefaults() {
 		cleanup.Enabled = &enabled
 	}
 	if len(cleanup.DatasetIDs) == 0 {
-		cleanup.DatasetIDs = []string{"host_resource_v1", "host_fs_v1", "host_disk_v1", "host_net_v1"}
+		cleanup.DatasetIDs = []string{"dataset_mooxsys_host_resource", "dataset_mooxsys_host_filesystem", "dataset_mooxsys_host_disk", "dataset_mooxsys_host_network"}
 	}
 	if cleanup.MaxAge == "" {
 		cleanup.MaxAge = "48h"

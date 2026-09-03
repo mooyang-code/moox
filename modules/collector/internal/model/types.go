@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// EventAction identifies the one-shot work accepted by the crypto_market SCF.
+// EventAction identifies the one-shot work accepted by the crypto SCF.
 type EventAction string
 
 const (

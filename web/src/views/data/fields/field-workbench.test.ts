@@ -11,9 +11,9 @@ import {
 } from "./field-workbench";
 
 const groups: FieldGroup[] = [
-  { space_id: "stock_cn", group_id: "market", name: "市场数据", status: "active", sort_order: 20 },
-  { space_id: "stock_cn", group_id: "quote", parent_group_id: "market", name: "行情价格", status: "active", sort_order: 10 },
-  { space_id: "stock_cn", group_id: "identity", name: "标识信息", status: "active", sort_order: 10 }
+  { space_id: "stockcn", group_id: "market", name: "市场数据", status: "active", sort_order: 20 },
+  { space_id: "stockcn", group_id: "quote", parent_group_id: "market", name: "行情价格", status: "active", sort_order: 10 },
+  { space_id: "stockcn", group_id: "identity", name: "标识信息", status: "active", sort_order: 10 }
 ];
 
 describe("field workbench helpers", () => {
@@ -44,8 +44,8 @@ describe("field workbench helpers", () => {
 
   it("keeps a delayed group deletion bound to its original space", () => {
     const request = buildFieldGroupDeleteRequest(groups[0]);
-    expect(request).toEqual({ space_id: "stock_cn", group_id: "market" });
+    expect(request).toEqual({ space_id: "stockcn", group_id: "market" });
     expect(isSpaceRequestCurrent(request, "crypto")).toBe(false);
-    expect(isSpaceRequestCurrent(request, "stock_cn")).toBe(true);
+    expect(isSpaceRequestCurrent(request, "stockcn")).toBe(true);
   });
 });

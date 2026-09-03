@@ -30,8 +30,8 @@ func main() {
 	}
 	start := now.Add(-lookback).Format(time.RFC3339Nano)
 	end := now.Format(time.RFC3339Nano)
-	datasetID := envDefault("MOOX_SMOKE_DATASET_ID", "binance_spot_kline_1m")
-	viewID := envDefault("MOOX_SMOKE_VIEW_ID", "binance_spot_kline_1m_view")
+	datasetID := envDefault("MOOX_SMOKE_DATASET_ID", "dataset_binance_spot_kline_1m")
+	viewID := envDefault("MOOX_SMOKE_VIEW_ID", "view_crypto_spot_kline_1m")
 	subjectID := envDefault("MOOX_SMOKE_SUBJECT_ID", "BTC-USDT")
 	frequency := envDefault("MOOX_SMOKE_FREQUENCY", "1m")
 	spaceID := envDefault("MOOX_SMOKE_SPACE_ID", "crypto")

@@ -1,1 +1,0 @@
-tests/contract/test-build-storage-linux-contract.sh

@@ -70,14 +70,14 @@ func TestUnifiedObservabilityConsumerRoutesAllEvents(t *testing.T) {
 func TestUnifiedObservabilityConsumerTermsInvalidAndUnknownEvents(t *testing.T) {
 	ctx, consumer, _, js := newObservabilityFixture(t, noopRoutes())
 	before := testutil.ToFloat64(rejectedEvents)
-	publishRawEvent(t, js, "moox.observability.health.check.reported.v1.moox_system.bad", &eventpb.EventMessage{
+	publishRawEvent(t, js, "moox.event.observability.health.check.reported.v1.mooxsys.bad", &eventpb.EventMessage{
 		EventId: "invalid-health", EventName: events.ObservabilityHealthCheckReported.Name(),
-		EventVersion: events.ObservabilityHealthCheckReported.Version(), SpaceId: "moox_system",
+		EventVersion: events.ObservabilityHealthCheckReported.Version(), SpaceId: "mooxsys",
 		SubjectId: "bad", OccurredAt: timestamppb.Now(), Payload: []byte("not-protobuf"),
 	})
-	publishRawEvent(t, js, "moox.observability.unknown.reported.v1.moox_system.bad", &eventpb.EventMessage{
+	publishRawEvent(t, js, "moox.event.observability.unknown.reported.v1.mooxsys.bad", &eventpb.EventMessage{
 		EventId: "unknown-event", EventName: "observability.unknown.reported", EventVersion: 1,
-		SpaceId: "moox_system", SubjectId: "bad", OccurredAt: timestamppb.Now(), Payload: []byte{1},
+		SpaceId: "mooxsys", SubjectId: "bad", OccurredAt: timestamppb.Now(), Payload: []byte{1},
 	})
 	for range 2 {
 		delivery := fetchDelivery(t, ctx, consumer)
@@ -238,13 +238,13 @@ func publishAllObservabilityEvents(t *testing.T, ctx context.Context, publisher 
 	agentID := uuid.Must(uuid.NewV7()).String()
 	_, err := publisher.Publish(ctx, events.ObservabilityHostSnapshotReported, &hostmetricpb.HostMetric{
 		AgentId: agentID, Hostname: "host-a", Snapshot: &hostmetricpb.HostSnapshot{},
-	}, events.PublishOptions{EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(), SpaceID: "moox_system", SubjectID: agentID})
+	}, events.PublishOptions{EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: agentID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = publisher.Publish(ctx, events.ObservabilityHealthCheckReported, &observabilitypb.HealthCheckReport{
 		ObserverId: "monitor", CheckId: "gateway-ready", Kind: "trpc", Success: true, CheckedAt: timestamppb.Now(),
-	}, events.PublishOptions{EventID: "health-route", OccurredAt: time.Now().UTC(), SpaceID: "moox_system", SubjectID: "monitor/gateway-ready"})
+	}, events.PublishOptions{EventID: "health-route", OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: "monitor/gateway-ready"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func publishMetric(t *testing.T, ctx context.Context, publisher *events.Publishe
 	_, err := publisher.Publish(ctx, events.ObservabilityMetricsSnapshotReported, &metricspb.MetricReport{
 		ServiceName: "collector", InstanceId: "collector-1", NodeId: "node-a",
 		Snapshot: &metricspb.MetricSnapshot{SchemaVersion: 1},
-	}, events.PublishOptions{EventID: eventID, OccurredAt: time.Now().UTC(), SpaceID: "moox_system", SubjectID: "collector/collector-1"})
+	}, events.PublishOptions{EventID: eventID, OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: "collector/collector-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

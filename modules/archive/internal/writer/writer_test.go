@@ -23,7 +23,7 @@ func TestWriterMergesPartialUpdateWithoutAddingDuplicateRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	key := domain.PartitionKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202606"}
+	key := domain.PartitionKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202606"}
 	open := 100.0
 	closeValue := 101.0
 	_, err = store.Append(context.Background(), domain.EventBatch{MessageID: "initial", Rows: []domain.RowPatch{{Partition: key, DataTime: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), Attributes: map[string]string{"provider": "binance"}, WrittenAt: time.Date(2026, 6, 1, 0, 0, 1, 0, time.UTC), Columns: map[string]domain.Scalar{"open": {Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: &open}, "close": {Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: &closeValue}}}}})

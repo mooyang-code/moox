@@ -110,7 +110,7 @@ ACK 边界：
 
 - `modules/cli/internal/command/storage_import.go`：import 写完追加并等待 SyncPoint，再选择是否 Recalc。
 - `modules/factor/test/view_driven_e2e_test.go`：完整实时链路和异常恢复。
-- `scripts/tests/e2e/test-factor-view-ready-e2e.sh`：二进制级验收入口。
+- `scripts/test/e2e/test-factor-view-ready-e2e.sh`：二进制级验收入口。
 
 ## 3. 实施任务
 
@@ -135,11 +135,11 @@ ACK 边界：
 
 ```go
 want := map[string]string{
-    "storage.dataset.period.collected":       "MOOX_STORAGE",
-    "storage.view.source_period.ready":       "MOOX_STORAGE",
-    "storage.dataset.factor_period.computed": "MOOX_STORAGE",
-    "storage.view.factor_period.ready":       "MOOX_STORAGE",
-    "storage.dataset.sync_point":              "MOOX_STORAGE",
+    "event.storage.dataset.period.collected":       "MOOX_STORAGE",
+    "event.storage.view.source_period.ready":       "MOOX_STORAGE",
+    "event.storage.dataset.factor_period.computed": "MOOX_STORAGE",
+    "event.storage.view.factor_period.ready":       "MOOX_STORAGE",
+    "event.storage.dataset.sync_point":              "MOOX_STORAGE",
 }
 ```
 
@@ -231,12 +231,12 @@ Expected: `storage_events.pb.go` 包含五个新 message；命令退出码为 0�
 
 ```yaml
 subjects:
-  - "moox.storage.dataset.rows.upserted.v2.>"
-  - "moox.storage.dataset.period.collected.v1.>"
-  - "moox.storage.view.source_period.ready.v1.>"
-  - "moox.storage.dataset.factor_period.computed.v1.>"
-  - "moox.storage.view.factor_period.ready.v1.>"
-  - "moox.storage.dataset.sync_point.v1.>"
+  - "moox.event.storage.dataset.rows.upserted.v2.>"
+  - "moox.event.storage.dataset.period.collected.v1.>"
+  - "moox.event.storage.view.source_period.ready.v1.>"
+  - "moox.event.storage.dataset.factor_period.computed.v1.>"
+  - "moox.event.storage.view.factor_period.ready.v1.>"
+  - "moox.event.storage.dataset.sync_point.v1.>"
 ```
 
 Storage EventBus 凭据可发布这六个 family，保证本提交后的 topology/credential contract 立即一致。
@@ -287,10 +287,10 @@ git commit -m "feat(events): define storage readiness events"
 ```go
 event := &eventpb.EventMessage{
     EventId:      "dataset-period-space-a-btc-1m-1722470400",
-    EventName:    "storage.dataset.period.collected",
+    EventName:    "event.storage.dataset.period.collected",
     EventVersion: 1,
     SpaceId:      "space-a",
-    Subject:      "moox.storage.dataset.period.collected.space-a.kline-1m",
+    Subject:      "moox.event.storage.dataset.period.collected.space-a.kline-1m",
 }
 ```
 
@@ -352,7 +352,7 @@ dedupe value 保存解码后业务 payload 的规范 protobuf bytes 的 SHA-256�
 ```go
 message, payload, err := events.DecodeRaw(registry, raw, subject, messageID, events.ContentType)
 if err != nil { return err }
-if !strings.HasPrefix(message.GetSubject(), "moox.storage.") { return ErrInvalidEvent }
+if !strings.HasPrefix(message.GetSubject(), "moox.event.storage.") { return ErrInvalidEvent }
 _ = payload
 ```
 
@@ -596,10 +596,10 @@ git commit -m "feat(storage): persist view readiness state"
 jetstream.ConsumerConfig{
     Stream: "MOOX_STORAGE",
     FilterSubjects: []string{
-        "moox.storage.dataset.rows.upserted.v2.>",
-        "moox.storage.dataset.period.collected.v1.>",
-        "moox.storage.dataset.factor_period.computed.v1.>",
-        "moox.storage.dataset.sync_point.v1.>",
+        "moox.event.storage.dataset.rows.upserted.v2.>",
+        "moox.event.storage.dataset.period.collected.v1.>",
+        "moox.event.storage.dataset.factor_period.computed.v1.>",
+        "moox.event.storage.dataset.sync_point.v1.>",
     },
     DeliverPolicy: jetstream.DeliverAllPolicy,
     MaxDeliver:    -1,
@@ -631,7 +631,7 @@ type MultiEventConsumerConfig struct {
 func NewMultiEventConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg MultiEventConsumerConfig) (*Consumer, error)
 ```
 
-它通过 registry 为每个 Event 生成 family pattern，拒绝空列表、不同 stream、重复 event，并传给 `FilterSubjects`。不要用 `moox.storage.>`，否则 View 会消费自己发布的 ready 事件。
+它通过 registry 为每个 Event 生成 family pattern，拒绝空列表、不同 stream、重复 event，并传给 `FilterSubjects`。不要用 `moox.event.storage.>`，否则 View 会消费自己发布的 ready 事件。
 
 - [ ] **Step 4: 实现全局串行模式**
 
@@ -949,7 +949,7 @@ func ResultDataset(sourceDatasetID string) string { return resultObjectID(source
 func ResultView(sourceDatasetID string) string    { return resultObjectID(sourceDatasetID, "_factor_v", 30) }
 ```
 
-`resultObjectID` 以 Source View 的 primary Dataset ID 为输入：输入先 lower/trim，Result Dataset 直接使用 `<source_dataset>_factor`，总长度上限为 50；Result View 使用 `<source_dataset>_factor_v`，遵守 View 30 字符上限。超长时保留 SHA-1 前 8 bytes 的稳定 suffix 并截断 prefix。比如 `binance_spot_kline_1m` 生成 `binance_spot_kline_1m_factor`，不再生成 `bin_*` 哈希 ID。
+`resultObjectID` 以 Source View 的 primary Dataset ID 为输入：输入先 lower/trim，Result Dataset 直接使用 `<source_dataset>_factor`，总长度上限为 50；Result View 使用 `<source_dataset>_factor_v`，遵守 View 30 字符上限。超长时保留 SHA-1 前 8 bytes 的稳定 suffix 并截断 prefix。比如 `dataset_binance_spot_kline_1m` 生成 `binance_spot_kline_1m_factor`，不再生成 `bin_*` 哈希 ID。
 
 当多个 Source View 共享同一个 primary Dataset 时，在 Dataset 基础名后加入 Source View 的短稳定摘要，避免结果命名空间冲突；标准的 `<dataset>_view` 仍保持上面的可读名称。
 
@@ -1330,8 +1330,8 @@ git commit -m "docs(factor): document view-driven period operations"
 
 **Files:**
 - Create: `modules/factor/test/view_driven_e2e_test.go`
-- Create: `scripts/tests/e2e/test-factor-view-ready-e2e.sh`
-- Modify: `scripts/verify-event-contracts.sh`
+- Create: `scripts/test/e2e/test-factor-view-ready-e2e.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
 - Modify: `Makefile`
 
 - [ ] **Step 1: 写完整链路 E2E**
@@ -1355,7 +1355,7 @@ git commit -m "docs(factor): document view-driven period operations"
 
 - [ ] **Step 2: 运行完整链路 E2E**
 
-Run: `./scripts/tests/e2e/test-factor-view-ready-e2e.sh`
+Run: `./scripts/test/e2e/test-factor-view-ready-e2e.sh`
 
 Expected: PASS。若失败，按首个未满足的 ACK/Marker/View 状态断言回到对应任务修复，不在 E2E 中放宽契约。
 
@@ -1390,8 +1390,8 @@ cd modules/factor
 PYTHONPATH="$PWD/../../packages/pyruntime/python:pyworker" \
   uv run --with-requirements pyworker/requirements.txt python -m pytest pyworker -q
 cd ../..
-./scripts/verify-event-contracts.sh
-./scripts/test-go-workspace.sh
+./scripts/check/verify-event-contracts.sh
+./scripts/test/contract/test-go-workspace.sh
 make verify-pr
 ```
 
@@ -1403,9 +1403,9 @@ Expected: 全部 PASS；若仓库已有基线失败，记录完整命令、首�
 (cd modules/storage && go test -race -count=1 ./internal/service/view/... ./internal/service/datanode/...)
 (cd modules/collector && go test -race -count=1 ./internal/marketfetch/...)
 (cd modules/factor && go test -race -count=1 ./internal/trigger/... ./internal/storageio/...)
-./scripts/tests/e2e/test-factor-storage-e2e.sh
-./scripts/tests/e2e/test-series-tag-e2e.sh
-./scripts/tests/e2e/test-factor-view-ready-e2e.sh
+./scripts/test/e2e/test-factor-storage-e2e.sh
+./scripts/test/e2e/test-series-tag-e2e.sh
+./scripts/test/e2e/test-factor-view-ready-e2e.sh
 ```
 
 已通过模块级测试、Storage/View 与 Factor 相关 race 测试，以及隔离多进程
@@ -1423,7 +1423,7 @@ Expected: 全部 PASS；若仓库已有基线失败，记录完整命令、首�
 - [x] **Step 8: 提交验收测试**
 
 ```bash
-git add modules/factor/test/view_driven_e2e_test.go scripts/tests/e2e/test-factor-view-ready-e2e.sh scripts/verify-event-contracts.sh Makefile
+git add modules/factor/test/view_driven_e2e_test.go scripts/test/e2e/test-factor-view-ready-e2e.sh scripts/check/verify-event-contracts.sh Makefile
 git commit -m "test(factor): verify view-driven calculation end to end"
 ```
 
@@ -1466,14 +1466,14 @@ git commit -m "test(factor): verify view-driven calculation end to end"
 
 已通过：
 
-- `./scripts/test-go-workspace.sh`（各模块 go test/vet）
+- `./scripts/test/contract/test-go-workspace.sh`（各模块 go test/vet）
 - `cd modules/storage && go test -count=1 ./...`
 - `cd modules/collector && go test -count=1 ./...`
 - `cd modules/factor && go test -count=1 ./...`
 - `cd modules/archive && go test -count=1 ./...`
-- `./scripts/tests/contract/test-deploy-moox-factor.sh`
-- `./scripts/tests/contract/test-storage-consistency-contract.sh` 及顶层兼容 wrapper
-- `./scripts/tests/e2e/test-series-tag-e2e.sh`（隔离多进程 Factor + Storage + Archive；Monitor 因未预置 host-metric catalog 跳过）
+- `./scripts/test/contract/test-deploy-moox-factor.sh`
+- `./scripts/test/contract/test-storage-consistency-contract.sh` 及顶层兼容 wrapper
+- `./scripts/test/e2e/test-series-tag-e2e.sh`（隔离多进程 Factor + Storage + Archive；Monitor 因未预置 host-metric catalog 跳过）
 - `CGO_ENABLED=1 go test -race -count=1 ./internal/service/view ./internal/service/view/eventconsumer`
 
 发布产物：`release/moox-dev-view-ready-linux-amd64.tar.gz`，最终 SHA-256：

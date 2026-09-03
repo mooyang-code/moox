@@ -85,7 +85,7 @@ ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db ".mode i
 Caddy 根证书：
 
 ```bash
-./scripts/deploy-moox.sh \
+./scripts/deploy/deploy-moox.sh \
   --target ubuntu@106.53.107.122 --dir /home/ubuntu/moox/prod \
   --public-host 106.53.107.122 --service-https-port 443 \
   --node-id gateway-gz-122 \
@@ -112,7 +112,7 @@ ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db' < /tmp/
 创建香港网关节点后再部署香港数据面；不要在第二个节点启用 Monitor：
 
 ```bash
-./scripts/deploy-moox.sh \
+./scripts/deploy/deploy-moox.sh \
   --target ubuntu@43.132.204.177 --dir /home/ubuntu/moox/prod \
   --public-host 43.132.204.177 --service-https-port 443 \
   --node-id gateway-hk-177 \

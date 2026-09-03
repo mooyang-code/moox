@@ -12,8 +12,8 @@ import (
 
 func TestLoadStockCNRouteUsesConfiguredProviderStates(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "route.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(`market_id: stock_cn
-route_id: stock_cn_kline_1m_v1
+	require.NoError(t, os.WriteFile(path, []byte(`market_id: stockcn
+route_id: stockcn_equity_kline_1m_v4
 frequency: 1m
 providers:
   - id: eastmoney
@@ -42,9 +42,9 @@ providers:
 }
 
 func TestLoadStockCNProviderRuntimeUsesPackagedFeedPolicies(t *testing.T) {
-	route, err := loadStockCNRouteFile(filepath.Join("..", "..", "config", "markets", "stock_cn", "route.yaml"))
+	route, err := loadStockCNRouteFile(filepath.Join("..", "..", "config", "markets", "stockcn", "route.yaml"))
 	require.NoError(t, err)
-	t.Setenv("MOOX_STOCK_CN_SOURCE_CONFIG_DIR", filepath.Join("..", "..", "configs", "scf", "stock_cn", "sources", "market"))
+	t.Setenv("MOOX_STOCK_CN_SOURCE_CONFIG_DIR", filepath.Join("..", "..", "configs", "scf", "stockcn", "sources", "market"))
 	providers, err := loadStockCNProviderRuntime(route)
 	require.NoError(t, err)
 
@@ -63,14 +63,14 @@ func TestLoadStockCNProviderRuntimeUsesPackagedFeedPolicies(t *testing.T) {
 }
 
 func TestStockCNRoutePutsTDXBeforeEastMoneyAsFallbacks(t *testing.T) {
-	route, err := loadStockCNRouteFile(filepath.Join("..", "..", "config", "markets", "stock_cn", "route.yaml"))
+	route, err := loadStockCNRouteFile(filepath.Join("..", "..", "config", "markets", "stockcn", "route.yaml"))
 	require.NoError(t, err)
 	require.Equal(t, []string{"sina", "tencent", "tdx", "eastmoney"}, route.KlineProviders())
 	require.Equal(t, []string{"sina", "tencent"}, route.KlinePrimaryProviders())
 }
 
 func TestNewStockCNProviderForSourceCarriesSourceIdentity(t *testing.T) {
-	provider, err := newStockCNProviderForSource("sina", "stock_cn_minute_http", stockCNProviderRuntime{
+	provider, err := newStockCNProviderForSource("sina", "stockcn_minute_http", stockCNProviderRuntime{
 		KlineSpec: stockCNProviderKlineFile{Frequency: "1m", MaxBarsPerRequest: 1023},
 		RateLimit: marketdata.RateLimitPolicy{
 			RequestsPerSecond: 5, Burst: 2, MaxConcurrent: 1,
@@ -79,7 +79,7 @@ func TestNewStockCNProviderForSourceCarriesSourceIdentity(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "sina", provider.Descriptor().ID)
-	require.Equal(t, "stock_cn_minute_http", provider.Descriptor().SourceID)
+	require.Equal(t, "stockcn_minute_http", provider.Descriptor().SourceID)
 }
 
 func TestNewStockCNProviderForSourceSupportsNormalTDX(t *testing.T) {
@@ -98,7 +98,7 @@ func TestNewStockCNProviderForSourceSupportsNormalTDX(t *testing.T) {
 
 func TestNewStockKlinePipelineUsesSourceBoundEnvironment(t *testing.T) {
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "tencent")
-	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stock_cn_http")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stockcn_http")
 	pipeline, err := NewStockKlinePipeline(timerHandlerStorage{})
 	require.NoError(t, err)
 	require.Equal(t, []string{"sina", "tencent", "tdx", "eastmoney"}, pipeline.CandidateChain)
@@ -106,17 +106,17 @@ func TestNewStockKlinePipelineUsesSourceBoundEnvironment(t *testing.T) {
 }
 
 func TestNewMarketKlinePipelineCreatesCatalogGatedHongKongSource(t *testing.T) {
-	pipeline, err := NewMarketKlinePipeline(timerHandlerStorage{}, "stock_hk", marketdata.InstrumentEquity, "eastmoney", "stock_hk_http")
+	pipeline, err := NewMarketKlinePipeline(timerHandlerStorage{}, "stockhk", marketdata.InstrumentEquity, "eastmoney", "stockhk_http")
 	require.NoError(t, err)
-	require.Equal(t, "stock_hk", pipeline.SpaceID)
-	require.Equal(t, "stock_hk", pipeline.MarketID)
-	require.Equal(t, "stock_hk_http", pipeline.SourceID)
+	require.Equal(t, "stockhk", pipeline.SpaceID)
+	require.Equal(t, "stockhk", pipeline.MarketID)
+	require.Equal(t, "stockhk_http", pipeline.SourceID)
 	require.Equal(t, []string{"eastmoney"}, pipeline.CandidateChain)
 }
 
 func TestStockCNRouteRequiresThreeActiveKlineProviders(t *testing.T) {
 	route := stockCNRoute{
-		MarketID:  "stock_cn",
+		MarketID:  "stockcn",
 		RouteID:   StockCNRouteID,
 		Frequency: "1m",
 		Providers: []stockCNRouteProvider{
@@ -126,7 +126,7 @@ func TestStockCNRouteRequiresThreeActiveKlineProviders(t *testing.T) {
 		},
 	}
 
-	require.ErrorContains(t, route.Validate(), "at least three active stock_cn kline providers")
+	require.ErrorContains(t, route.Validate(), "at least three active stockcn kline providers")
 }
 
 func TestStockCNRouteRejectsHistoryBeyondProviderPageCapability(t *testing.T) {

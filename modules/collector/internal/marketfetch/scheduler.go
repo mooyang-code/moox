@@ -92,7 +92,7 @@ type Scheduler struct {
 
 // fullInstrumentSnapshotShards keeps each SCF's SQLite metadata registration
 // small while still sourcing the complete exchange snapshot. The same fixed
-// shard count is used for crypto and stock_cn so deployment identity remains
+// shard count is used for crypto and stockcn so deployment identity remains
 // stable as the catalogue grows.
 const fullInstrumentSnapshotShards = 32
 
@@ -262,7 +262,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				for index := start; index < end; index++ {
 					batchItems[index].TargetDataTime = target.Format(time.RFC3339Nano)
 					batchItems[index].Frequency = frequency
-					batchItems[index].BarLimit = 3
+					batchItems[index].BarLimit = MaxRealtimeRows
 					if strings.EqualFold(batchItems[index].DataType, domain.InstrumentDataType) {
 						// Every snapshot shard must use one generation timestamp. The
 						// provider response is fetched independently, so this field is
@@ -667,7 +667,7 @@ func gapAuditCoverageStart(now time.Time, rule domain.TaskRule, instance domain.
 	if err := params.ValidateHistoryPolicy(); err != nil {
 		return time.Time{}, fmt.Errorf("validate history policy: %w", err)
 	}
-	stock := strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stock_cn_multi")
+	stock := strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stockcn_multi")
 	policyStart, err := historyPolicyStart(now.UTC(), params.HistoryPolicy, stock)
 	if err != nil {
 		return time.Time{}, err
@@ -682,7 +682,7 @@ func gapAuditCoverageStart(now time.Time, rule domain.TaskRule, instance domain.
 		return time.Time{}, nil
 	}
 	capability := marketdata.KlineHistoryCapability{SupportsArbitraryRange: true}
-	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stock_cn_multi") {
+	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stockcn_multi") {
 		capability = marketdata.KlineHistoryCapability{MaxLookback: stockCNHistoryMaxLookback}
 	}
 	if err := capability.ValidateStart(now.UTC(), start); err != nil {
@@ -692,7 +692,7 @@ func gapAuditCoverageStart(now time.Time, rule domain.TaskRule, instance domain.
 }
 
 // findEarliestMissingBucket reads a bounded range and compares only expected
-// market buckets. For stock_cn, the exchange calendar removes weekends,
+// market buckets. For stockcn, the exchange calendar removes weekends,
 // holidays and the lunch break from the expected set; for crypto, buckets are
 // continuous at the requested frequency. The range is intentionally capped so
 // an unhealthy Storage index cannot turn the five-minute audit into an
@@ -764,7 +764,7 @@ func gapAuditExpectedBuckets(start, end time.Time, duration time.Duration, stock
 	}
 	calendar, err := loadStockCNCalendar()
 	if err != nil {
-		return nil, fmt.Errorf("load stock_cn calendar for gap audit: %w", err)
+		return nil, fmt.Errorf("load stockcn calendar for gap audit: %w", err)
 	}
 	days, err := calendar.TradingDays(start, end)
 	if err != nil {
@@ -829,13 +829,13 @@ func buildGapAuditPlanChecked(now time.Time, rule domain.TaskRule, instance doma
 	if rule.CoverageStartTime != nil && !rule.CoverageStartTime.IsZero() {
 		start = rule.CoverageStartTime.UTC()
 	}
-	stock := strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stock_cn_multi")
+	stock := strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stockcn_multi")
 	policyStart, err := historyPolicyStart(now.UTC(), params.HistoryPolicy, stock)
 	if err != nil {
 		return gapAuditPlan{}, false, err
 	}
 	capability := marketdata.KlineHistoryCapability{SupportsArbitraryRange: true}
-	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stock_cn_multi") {
+	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stockcn_multi") {
 		capability = marketdata.KlineHistoryCapability{MaxLookback: stockCNHistoryMaxLookback}
 	}
 	for name, requested := range map[string]time.Time{"history": policyStart, "coverage": start} {
@@ -889,7 +889,7 @@ func historyPolicyStart(now time.Time, policy *domain.HistoryPolicy, stock bool)
 		if stock {
 			calendar, err := loadStockCNCalendar()
 			if err != nil {
-				return time.Time{}, fmt.Errorf("load stock_cn calendar for history lookback: %w", err)
+				return time.Time{}, fmt.Errorf("load stockcn calendar for history lookback: %w", err)
 			}
 			return calendar.LookbackStart(now, policy.Lookback)
 		}
@@ -907,7 +907,7 @@ func historyPolicyStart(now time.Time, policy *domain.HistoryPolicy, stock bool)
 
 func gapAuditSeriesTag(instance domain.TaskInstance) string {
 	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) {
-		return ""
+		return "default"
 	}
 	return "venue:" + strings.ToLower(strings.TrimSpace(instance.Provider))
 }

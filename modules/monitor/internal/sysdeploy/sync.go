@@ -174,7 +174,7 @@ func checkFromDeployment(deployment *adminpb.ServiceDeployment) (*domain.Check, 
 	check := &domain.Check{
 		CheckID:         sysDeployCheckID(nodeID, serviceName),
 		Name:            serviceName + "@" + nodeID,
-		GroupName:       "moox-system",
+		GroupName:       "mooxsys",
 		IntervalSeconds: 30,
 		TimeoutMS:       3000,
 		ExpectedStatus:  "200-299",

@@ -103,14 +103,14 @@ func TestEnableTaskRulePreservesCanonicalDefinition(t *testing.T) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		switch r.URL.Path {
 		case "/api/admin/collectmgr/GetTaskRuleDetail":
-			assert.Equal(t, "stock_cn", body["space_id"])
-			assert.Equal(t, "builtin-stock-cn-kline-1m", body["rule_id"])
-			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"rule":{"space_id":"stock_cn","rule_id":"builtin-stock-cn-kline-1m","data_type":"kline","provider":"stock_cn_multi","market_type":"equity","enabled":false,"collect_params":{"frequency":"1m","target_dataset_id":"stock_cn_kline"}}}`))
+			assert.Equal(t, "stockcn", body["space_id"])
+			assert.Equal(t, "builtin-stockcn-kline-1m", body["rule_id"])
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"rule":{"space_id":"stockcn","rule_id":"builtin-stockcn-kline-1m","data_type":"kline","provider":"stockcn_multi","market_type":"equity","enabled":false,"collect_params":{"frequency":"1m","target_dataset_id":"dataset_stockcn_equity_kline"}}}`))
 		case "/api/admin/collectmgr/UpdateTaskRule":
 			rule, ok := body["rule"].(map[string]any)
 			require.True(t, ok)
 			assert.Equal(t, true, rule["enabled"])
-			assert.Equal(t, "stock_cn_kline", rule["collect_params"].(map[string]any)["target_dataset_id"])
+			assert.Equal(t, "dataset_stockcn_equity_kline", rule["collect_params"].(map[string]any)["target_dataset_id"])
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0}}`))
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -118,7 +118,7 @@ func TestEnableTaskRulePreservesCanonicalDefinition(t *testing.T) {
 	}))
 	defer server.Close()
 
-	require.NoError(t, New(server.URL).EnableTaskRule(context.Background(), "stock_cn", "builtin-stock-cn-kline-1m"))
+	require.NoError(t, New(server.URL).EnableTaskRule(context.Background(), "stockcn", "builtin-stockcn-kline-1m"))
 }
 
 func TestCreateTaskRuleStartsDisabled(t *testing.T) {
@@ -128,20 +128,20 @@ func TestCreateTaskRuleStartsDisabled(t *testing.T) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		rule, ok := body["rule"].(map[string]any)
 		require.True(t, ok)
-		assert.Equal(t, "stock_cn", rule["space_id"])
-		assert.Equal(t, "builtin-stock-cn-kline-1m", rule["rule_id"])
+		assert.Equal(t, "stockcn", rule["space_id"])
+		assert.Equal(t, "builtin-stockcn-kline-1m", rule["rule_id"])
 		assert.Equal(t, false, rule["enabled"])
-		assert.Equal(t, "stock_cn_kline", rule["collect_params"].(map[string]any)["target_dataset_id"])
-		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"rule_id":"builtin-stock-cn-kline-1m"}`))
+		assert.Equal(t, "dataset_stockcn_equity_kline", rule["collect_params"].(map[string]any)["target_dataset_id"])
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"rule_id":"builtin-stockcn-kline-1m"}`))
 	}))
 	defer server.Close()
 
-	require.NoError(t, New(server.URL).CreateTaskRule(context.Background(), "stock_cn", "builtin-stock-cn-kline-1m", "kline", "stock_cn_multi", "equity", "moox-cli", map[string]any{
-		"provider":          "stock_cn_multi",
+	require.NoError(t, New(server.URL).CreateTaskRule(context.Background(), "stockcn", "builtin-stockcn-kline-1m", "kline", "stockcn_multi", "equity", "moox-cli", map[string]any{
+		"provider":          "stockcn_multi",
 		"market_type":       "equity",
 		"symbol_source":     "dataset",
-		"symbol_dataset_id": "stock_cn_instruments",
-		"target_dataset_id": "stock_cn_kline",
+		"symbol_dataset_id": "dataset_stockcn_instruments",
+		"target_dataset_id": "dataset_stockcn_equity_kline",
 		"frequency":         "1m",
 	}))
 }

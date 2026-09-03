@@ -4,9 +4,9 @@
 
 **Goal:** 在现有 `Go + NATS JetStream` 基础上，建立统一、显式、可治理的事件模块，打通 `Collector -> NATS -> streamcalc -> Storage` 的实时流计算路径；同时修复消费可靠性、Storage View 全局队头阻塞和 Factor Runtime 边界问题。
 
-**Architecture:** `modules/eventbus` 作为独立部署的 NATS/JetStream 基础设施服务；`packages/events` 作为所有业务事件的唯一契约和发布/消费入口；业务模块不得直接拼接 NATS Subject 或发布裸消息。实时链路采用 `Collector -> EventMessage -> NATS -> streamcalc -> Storage`，Storage 通过 Outbox 发布 `storage.dataset.rows.upserted`，下游 Factor、Strategy、View、Archive 再消费标准事件。Storage View 第一阶段按 `delivery.Subject` 建立有序 Lane，使不同 Dataset 并行、同一 Dataset 保序；暂不做同一 Dataset 内按标的并发，直到补齐 Row/Field revision 语义。
+**Architecture:** `modules/eventbus` 作为独立部署的 NATS/JetStream 基础设施服务；`packages/events` 作为所有业务事件的唯一契约和发布/消费入口；业务模块不得直接拼接 NATS Subject 或发布裸消息。实时链路采用 `Collector -> EventMessage -> NATS -> streamcalc -> Storage`，Storage 通过 Outbox 发布 `event.storage.dataset.rows.upserted`，下游 Factor、Strategy、View、Archive 再消费标准事件。Storage View 第一阶段按 `delivery.Subject` 建立有序 Lane，使不同 Dataset 并行、同一 Dataset 保序；暂不做同一 Dataset 内按标的并发，直到补齐 Row/Field revision 语义。
 
-> **Current contract note (2026-07-23):** 本文早期示例中的 `market.trade.received`、`storage.rows.upserted`、`TradeReceived`、`RowsUpserted` 外层 bytes wrapper 和 `EventSpec` 已被当前执行计划 [2026-07-23-event-contract-refactor-plan.md](2026-07-23-event-contract-refactor-plan.md) supersede。当前唯一命名为 `TickReceived`/`market.tick.received`、`TradingSignal`/`trading.signal`、`DatasetRowsUpserted`/`storage.dataset.rows.upserted`；结构化 Storage Payload 归属 `packages/storagepb`，Registry API 为 `EventSchema`/`Schema`/`Schemas`。本项目未上线，不保留旧名兼容别名。
+> **Current contract note (2026-07-23):** 本文早期示例中的 `market.trade.received`、`storage.rows.upserted`、`TradeReceived`、`RowsUpserted` 外层 bytes wrapper 和 `EventSpec` 已被当前执行计划 [2026-07-23-event-contract-refactor-plan.md](2026-07-23-event-contract-refactor-plan.md) supersede。当前唯一命名为 `TickReceived`/`market.tick.received`、`TradingSignal`/`trading.signal`、`DatasetRowsUpserted`/`event.storage.dataset.rows.upserted`；结构化 Storage Payload 归属 `packages/storagepb`，Registry API 为 `EventSchema`/`Schema`/`Schemas`。本项目未上线，不保留旧名兼容别名。
 
 **Tech Stack:** Go 1.25、NATS JetStream、Pebble、DuckDB、Bleve、SQLite、Protobuf、Prometheus、现有 MooX 多模块 `go.work`。
 
@@ -110,7 +110,7 @@ events.Publish(ctx, events.MarketTradeReceived, payload, events.PublishOptions{
 不允许业务代码直接写：
 
 ```go
-jetstream.Publish(ctx, "moox.market.trade.received.v1.crypto.BTC-USDT", rawBytes)
+jetstream.Publish(ctx, "moox.event.market.trade.received.v1.crypto.BTC-USDT", rawBytes)
 ```
 
 ### 2. Event Registry 与事件治理
@@ -125,21 +125,21 @@ events:
   - name: market.trade.received
     version: 1
     payload: trpc.moox.market.TradeReceived
-    subject: moox.market.trade.received.v1.<space>.<subject>
+    subject: moox.event.market.trade.received.v1.<space>.<subject>
     stream: market
     partition_key: subject_id
     owner: collector
   - name: market.kline.closed
     version: 1
     payload: trpc.moox.market.KlineClosed
-    subject: moox.market.kline.closed.v1.<space>.<subject>
+    subject: moox.event.market.kline.closed.v1.<space>.<subject>
     stream: market
     partition_key: subject_id
     owner: streamcalc
   - name: storage.rows.upserted
     version: 1
     payload: trpc.moox.storage.RowsUpserted
-    subject: moox.storage.rows.upserted.v1.<space>.<dataset>
+    subject: moox.event.storage.rows.upserted.v1.<space>.<dataset>
     stream: storage
     partition_key: subject_id
     owner: storage
@@ -373,7 +373,7 @@ Expected: 在迁移完成前因旧 `DatasetFieldsChanged`/`fields_changed` 契�
 将 [event.go](/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble/event.go) 改为使用 `packages/events.StorageRowsUpserted`，外层字段为 `event_name=storage.rows.upserted`、`event_version=1`、`space_id` 和 `subject_id=dataset_id`。Subject 由 Registry 生成：
 
 ```text
-moox.storage.rows.upserted.v1.<space-token>.<dataset-token>
+moox.event.storage.rows.upserted.v1.<space-token>.<dataset-token>
 ```
 
 Content-Type、MessageType 等传输描述不再由 DataNode 业务代码手写。
@@ -383,13 +383,13 @@ Content-Type、MessageType 等传输描述不再由 DataNode 业务代码手写�
 删除 active 配置中的：
 
 ```text
-moox.storage.rows.upserted.v1.>
+moox.event.storage.rows.upserted.v1.>
 ```
 
 统一替换为 Registry 生成的：
 
 ```text
-moox.storage.rows.upserted.v1.>
+moox.event.storage.rows.upserted.v1.>
 ```
 
 同步修复 Archive bootstrap 测试，使测试绑定真实 EventBus topology，而不是自行创建旧主题。
@@ -1323,7 +1323,7 @@ events.Publish(ctx, events.MarketTradeReceived, payload, events.PublishOptions{
 不允许业务代码直接写：
 
 ```go
-jetstream.Publish(ctx, "moox.market.trade.received.v1.crypto.BTC-USDT", rawBytes)
+jetstream.Publish(ctx, "moox.event.market.trade.received.v1.crypto.BTC-USDT", rawBytes)
 ```
 
 ### 2. Event Registry 与事件治理
@@ -1338,21 +1338,21 @@ events:
   - name: market.trade.received
     version: 1
     payload: trpc.moox.market.TradeReceived
-    subject: moox.market.trade.received.v1.<space>.<subject>
+    subject: moox.event.market.trade.received.v1.<space>.<subject>
     stream: market
     partition_key: subject_id
     owner: collector
   - name: market.kline.closed
     version: 1
     payload: trpc.moox.market.KlineClosed
-    subject: moox.market.kline.closed.v1.<space>.<subject>
+    subject: moox.event.market.kline.closed.v1.<space>.<subject>
     stream: market
     partition_key: subject_id
     owner: streamcalc
   - name: storage.rows.upserted
     version: 1
     payload: trpc.moox.storage.RowsUpserted
-    subject: moox.storage.rows.upserted.v1.<space>.<dataset>
+    subject: moox.event.storage.rows.upserted.v1.<space>.<dataset>
     stream: storage
     partition_key: subject_id
     owner: storage
@@ -1580,7 +1580,7 @@ Expected: 在迁移完成前因旧 `DatasetFieldsChanged`/`fields_changed` 契�
 将 [event.go](/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble/event.go) 改为使用 `packages/events.StorageRowsUpserted`，外层字段为 `event_name=storage.rows.upserted`、`event_version=1`、`space_id` 和 `subject_id=dataset_id`。Subject 由 Registry 生成：
 
 ```text
-moox.storage.rows.upserted.v1.<space-token>.<dataset-token>
+moox.event.storage.rows.upserted.v1.<space-token>.<dataset-token>
 ```
 
 Content-Type、MessageType 等传输描述不再由 DataNode 业务代码手写。
@@ -1590,13 +1590,13 @@ Content-Type、MessageType 等传输描述不再由 DataNode 业务代码手写�
 删除 active 配置中的：
 
 ```text
-moox.storage.rows.upserted.v1.>
+moox.event.storage.rows.upserted.v1.>
 ```
 
 统一替换为 Registry 生成的：
 
 ```text
-moox.storage.rows.upserted.v1.>
+moox.event.storage.rows.upserted.v1.>
 ```
 
 同步修复 Archive bootstrap 测试，使测试绑定真实 EventBus topology，而不是自行创建旧主题。

@@ -1248,7 +1248,7 @@ Expected: 全部通过，无 data race。
 ```bash
 make proto-check
 make verify-pr
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-go-workspace.sh
 (cd web && pnpm test && pnpm build:prod)
 ```
 

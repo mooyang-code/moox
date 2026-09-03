@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 )
 
@@ -70,20 +69,20 @@ func DefaultStockCNStaggerConfig() StockCNStaggerConfig {
 
 func (c StockCNStaggerConfig) Validate(timerFunctionCount int) error {
 	if timerFunctionCount <= 0 {
-		return fmt.Errorf("stock_cn timer function count must be positive")
+		return fmt.Errorf("stockcn timer function count must be positive")
 	}
 	if c.StartSecond < 0 || c.StartSecond > 59 {
-		return fmt.Errorf("stock_cn stagger start second must be between 0 and 59")
+		return fmt.Errorf("stockcn stagger start second must be between 0 and 59")
 	}
 	if c.WindowSeconds <= 0 || c.WindowSeconds > 60 || c.StartSecond+c.WindowSeconds > 60 {
-		return fmt.Errorf("stock_cn stagger window must fit between second %d and 59", c.StartSecond)
+		return fmt.Errorf("stockcn stagger window must fit between second %d and 59", c.StartSecond)
 	}
 	if c.MaxStartsPerSecond <= 0 {
-		return fmt.Errorf("stock_cn max starts per second must be positive")
+		return fmt.Errorf("stockcn max starts per second must be positive")
 	}
 	startsPerSecond := (timerFunctionCount + c.WindowSeconds - 1) / c.WindowSeconds
 	if startsPerSecond > c.MaxStartsPerSecond {
-		return fmt.Errorf("stock_cn stagger requires up to %d starts per second, above configured maximum %d", startsPerSecond, c.MaxStartsPerSecond)
+		return fmt.Errorf("stockcn stagger requires up to %d starts per second, above configured maximum %d", startsPerSecond, c.MaxStartsPerSecond)
 	}
 	return nil
 }
@@ -91,11 +90,11 @@ func (c StockCNStaggerConfig) Validate(timerFunctionCount int) error {
 func stockCNAssignmentRoute() (string, []stockCNSource, error) {
 	route, err := loadStockCNRoute()
 	if err != nil {
-		return "", nil, fmt.Errorf("load stock_cn assignment route: %w", err)
+		return "", nil, fmt.Errorf("load stockcn assignment route: %w", err)
 	}
 	sources := route.KlinePrimarySources()
 	if len(sources) < 2 {
-		return "", nil, fmt.Errorf("stock_cn assignment route must have at least two primary kline providers")
+		return "", nil, fmt.Errorf("stockcn assignment route must have at least two primary kline providers")
 	}
 	return route.RouteID, sources, nil
 }
@@ -112,10 +111,10 @@ func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, measuredS
 // conservative default while production receives the rendered release value.
 func BuildStockCNAssignmentsWithStagger(group TaskGroup, nodes []scfinvoker.Node, measuredSafeGroupSize int, tradingDate string, stagger StockCNStaggerConfig, expectedCounts ...int) ([]NodeAssignment, error) {
 	if measuredSafeGroupSize <= 0 {
-		return nil, fmt.Errorf("stock_cn measured safe group size must be positive")
+		return nil, fmt.Errorf("stockcn measured safe group size must be positive")
 	}
 	if len(expectedCounts) != 1 || expectedCounts[0] <= 0 {
-		return nil, fmt.Errorf("stock_cn requires an explicit positive timer function count")
+		return nil, fmt.Errorf("stockcn requires an explicit positive timer function count")
 	}
 	group.Provider = strings.ToLower(strings.TrimSpace(group.Provider))
 	group.MarketType = strings.ToLower(strings.TrimSpace(group.MarketType))
@@ -123,7 +122,7 @@ func BuildStockCNAssignmentsWithStagger(group TaskGroup, nodes []scfinvoker.Node
 	group.Frequency = strings.ToLower(strings.TrimSpace(group.Frequency))
 	group.Subjects = normalizeSubjects(group.Subjects)
 	if group.MarketType != "equity" || group.DatasetID != StockCNDatasetID || group.Frequency != "1m" {
-		return nil, fmt.Errorf("stock_cn assignment requires equity/%s/1m", StockCNDatasetID)
+		return nil, fmt.Errorf("stockcn assignment requires equity/%s/1m", StockCNDatasetID)
 	}
 	eligible := eligibleTimerNodes(nodes)
 	expectedCount := expectedCounts[0]
@@ -138,7 +137,7 @@ func BuildStockCNAssignmentsWithStagger(group TaskGroup, nodes []scfinvoker.Node
 		return nil, err
 	}
 	if len(timerNodes) == 0 {
-		return nil, fmt.Errorf("timer assignment capacity insufficient: stock_cn requires a published Timer SCF fleet")
+		return nil, fmt.Errorf("timer assignment capacity insufficient: stockcn requires a published Timer SCF fleet")
 	}
 	routeVersion, sources, err := stockCNAssignmentRoute()
 	if err != nil {
@@ -183,7 +182,7 @@ func BuildStockCNAssignmentsWithStagger(group TaskGroup, nodes []scfinvoker.Node
 
 func disabledStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, routeVersion string, sources []stockCNSource, stagger StockCNStaggerConfig) ([]NodeAssignment, error) {
 	if len(sources) == 0 {
-		return nil, fmt.Errorf("stock_cn disabled assignment requires a registered source")
+		return nil, fmt.Errorf("stockcn disabled assignment requires a registered source")
 	}
 	source := sources[0]
 	assignments := make([]NodeAssignment, 0, len(nodes))
@@ -208,29 +207,24 @@ type stockCNSourceGroup struct {
 
 func assignStockCNSourceGroups(subjects []string, sources []stockCNSource, nodeCount, maxSubjects int, routeVersion string) ([]stockCNSourceGroup, error) {
 	if nodeCount <= 0 || maxSubjects <= 0 {
-		return nil, fmt.Errorf("stock_cn source assignment requires positive node count and subject capacity")
+		return nil, fmt.Errorf("stockcn source assignment requires positive node count and subject capacity")
 	}
 	if len(sources) == 0 {
-		return nil, fmt.Errorf("stock_cn source assignment requires at least one source")
+		return nil, fmt.Errorf("stockcn source assignment requires at least one source")
 	}
 	totalWeight := 0
 	for _, source := range sources {
 		source.Provider = strings.ToLower(strings.TrimSpace(source.Provider))
 		source.SourceID = strings.ToLower(strings.TrimSpace(source.SourceID))
 		if source.Provider == "" || source.SourceID == "" || source.Weight <= 0 {
-			return nil, fmt.Errorf("invalid stock_cn source %q/%q", source.Provider, source.SourceID)
+			return nil, fmt.Errorf("invalid stockcn source %q/%q", source.Provider, source.SourceID)
 		}
 		totalWeight += source.Weight
 	}
 	if totalWeight <= 0 {
-		return nil, fmt.Errorf("stock_cn source weights must be positive")
+		return nil, fmt.Errorf("stockcn source weights must be positive")
 	}
-	normalized := normalizeSubjects(subjects)
-	groups, err := marketdata.RendezvousAssign(normalized, nodeCount, routeVersion)
-	if err != nil {
-		return nil, fmt.Errorf("assign stock_cn groups: %w", err)
-	}
-	groups, err = rebalanceRendezvousGroups(groups, maxSubjects, routeVersion)
+	groups, err := assignStockCNGroups(normalizeSubjects(subjects), nodeCount, maxSubjects, routeVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +239,58 @@ func assignStockCNSourceGroups(subjects []string, sources []stockCNSource, nodeC
 		result[groupID] = stockCNSourceGroup{Source: source, Subjects: append([]string(nil), group...)}
 	}
 	return result, nil
+}
+
+// assignStockCNGroups gives the first subject in each published slot a
+// distinct group, then uses bounded rendezvous scoring for the remainder.
+// Keeping the anchors stable makes an append-only Instrument refresh change
+// only the new subject instead of reshuffling a previously published fleet.
+func assignStockCNGroups(subjects []string, nodeCount, maxSubjects int, routeVersion string) ([][]string, error) {
+	if nodeCount <= 0 || maxSubjects <= 0 {
+		return nil, fmt.Errorf("stockcn rendezvous capacity must be positive")
+	}
+	if len(subjects) > nodeCount*maxSubjects {
+		return nil, fmt.Errorf("stockcn timer assignment capacity insufficient: %d subjects exceed %d groups x %d subjects", len(subjects), nodeCount, maxSubjects)
+	}
+
+	groups := make([][]string, nodeCount)
+	for index, subject := range subjects {
+		candidates := make([]int, 0, nodeCount)
+		for groupID, group := range groups {
+			if index < nodeCount {
+				if len(group) == 0 {
+					candidates = append(candidates, groupID)
+				}
+				continue
+			}
+			if len(group) < maxSubjects {
+				candidates = append(candidates, groupID)
+			}
+		}
+		if len(candidates) == 0 {
+			return nil, fmt.Errorf("stockcn subject %s has no available assignment group", subject)
+		}
+		selected := candidates[0]
+		selectedScore := stockCNGroupScore(routeVersion, subject, selected)
+		for _, groupID := range candidates[1:] {
+			score := stockCNGroupScore(routeVersion, subject, groupID)
+			if score > selectedScore || (score == selectedScore && groupID < selected) {
+				selected = groupID
+				selectedScore = score
+			}
+		}
+		groups[selected] = append(groups[selected], subject)
+	}
+	return groups, nil
+}
+
+func stockCNGroupScore(routeVersion, subject string, groupID int) uint64 {
+	hash := fnv.New64a()
+	for _, part := range []string{routeVersion, subject, strconv.Itoa(groupID)} {
+		_, _ = hash.Write([]byte(part))
+		_, _ = hash.Write([]byte{0})
+	}
+	return hash.Sum64()
 }
 
 func weightedSourceBucket(routeVersion, subject string, sources []stockCNSource, totalWeight int) stockCNSource {
@@ -264,10 +310,10 @@ func weightedSourceBucket(routeVersion, subject string, sources []stockCNSource,
 
 func requiredStockCNGroupSize(activeSubjects, timerFunctionCount int) (int, error) {
 	if activeSubjects < 0 {
-		return 0, fmt.Errorf("stock_cn active subject count must not be negative")
+		return 0, fmt.Errorf("stockcn active subject count must not be negative")
 	}
 	if timerFunctionCount <= 0 {
-		return 0, fmt.Errorf("stock_cn timer function count must be positive")
+		return 0, fmt.Errorf("stockcn timer function count must be positive")
 	}
 	if activeSubjects == 0 {
 		return 0, nil
@@ -281,10 +327,10 @@ func requiredStockCNGroupSize(activeSubjects, timerFunctionCount int) (int, erro
 
 func orderedStockCNTimerNodes(nodes []scfinvoker.Node, expectedCount int) ([]scfinvoker.Node, error) {
 	if expectedCount <= 0 {
-		return nil, fmt.Errorf("stock_cn expected timer function count must be positive")
+		return nil, fmt.Errorf("stockcn expected timer function count must be positive")
 	}
 	if len(nodes) != expectedCount {
-		return nil, fmt.Errorf("stock_cn timer fleet has %d nodes; expected %d", len(nodes), expectedCount)
+		return nil, fmt.Errorf("stockcn timer fleet has %d nodes; expected %d", len(nodes), expectedCount)
 	}
 	type regionalNode struct {
 		node scfinvoker.Node
@@ -296,16 +342,16 @@ func orderedStockCNTimerNodes(nodes []scfinvoker.Node, expectedCount int) ([]scf
 		name := strings.TrimSpace(node.FunctionName)
 		separator := strings.LastIndexByte(name, '-')
 		if separator < 0 || separator == len(name)-1 {
-			return nil, fmt.Errorf("stock_cn timer node %s function_name %q has no numeric slot", node.NodeID, name)
+			return nil, fmt.Errorf("stockcn timer node %s function_name %q has no numeric slot", node.NodeID, name)
 		}
 		slot, err := strconv.Atoi(name[separator+1:])
 		if err != nil || slot < 0 {
-			return nil, fmt.Errorf("stock_cn timer node %s function_name %q has invalid slot", node.NodeID, name)
+			return nil, fmt.Errorf("stockcn timer node %s function_name %q has invalid slot", node.NodeID, name)
 		}
 		if rawIndex, ok := node.Metadata["index"]; ok {
 			metadataSlot, parseErr := strictInteger(rawIndex)
 			if parseErr != nil || metadataSlot != slot {
-				return nil, fmt.Errorf("stock_cn timer node %s slot %d does not match metadata index %v", node.NodeID, slot, rawIndex)
+				return nil, fmt.Errorf("stockcn timer node %s slot %d does not match metadata index %v", node.NodeID, slot, rawIndex)
 			}
 		}
 		byRegion[region] = append(byRegion[region], regionalNode{node: node, slot: slot})
@@ -321,7 +367,7 @@ func orderedStockCNTimerNodes(nodes []scfinvoker.Node, expectedCount int) ([]scf
 		sort.Slice(regional, func(i, j int) bool { return regional[i].slot < regional[j].slot })
 		for expectedSlot, item := range regional {
 			if item.slot != expectedSlot {
-				return nil, fmt.Errorf("stock_cn timer fleet region %s is missing expected slot %d", region, expectedSlot)
+				return nil, fmt.Errorf("stockcn timer fleet region %s is missing expected slot %d", region, expectedSlot)
 			}
 			ordered = append(ordered, item.node)
 		}
@@ -360,76 +406,6 @@ func stockCNStaggeredCron(groupID int, configs ...StockCNStaggerConfig) string {
 	}
 	second := stagger.StartSecond + groupID%stagger.WindowSeconds
 	return fmt.Sprintf("%d * * * * * *", second)
-}
-
-func rebalanceRendezvousGroups(groups [][]string, maxSubjects int, routeVersion string) ([][]string, error) {
-	if len(groups) == 0 || maxSubjects <= 0 {
-		return nil, fmt.Errorf("stock_cn rendezvous capacity must be positive")
-	}
-	total := 0
-	for _, group := range groups {
-		total += len(group)
-	}
-	if total > len(groups)*maxSubjects {
-		return nil, fmt.Errorf("stock_cn timer assignment capacity insufficient: %d subjects exceed %d groups x %d subjects", total, len(groups), maxSubjects)
-	}
-	result := make([][]string, len(groups))
-	overflow := make([]string, 0)
-	for groupID, subjects := range groups {
-		keep := len(subjects)
-		if keep > maxSubjects {
-			keep = maxSubjects
-			overflow = append(overflow, subjects[keep:]...)
-		}
-		result[groupID] = append([]string(nil), subjects[:keep]...)
-	}
-	if total >= len(result) {
-		for empty := range result {
-			if len(result[empty]) != 0 {
-				continue
-			}
-			largest := -1
-			for candidate := range result {
-				if len(result[candidate]) <= 1 || (largest >= 0 && len(result[candidate]) <= len(result[largest])) {
-					continue
-				}
-				largest = candidate
-			}
-			if largest >= 0 {
-				last := len(result[largest]) - 1
-				result[empty] = append(result[empty], result[largest][last])
-				result[largest] = result[largest][:last]
-			}
-		}
-	}
-	sort.Strings(overflow)
-	for _, subject := range overflow {
-		candidates := make([]int, 0, len(result))
-		for groupID := range result {
-			if len(result[groupID]) < maxSubjects {
-				candidates = append(candidates, groupID)
-			}
-		}
-		choice, err := marketdata.RendezvousAssign([]string{subject}, len(candidates), routeVersion+"\x00overflow")
-		if err != nil {
-			return nil, fmt.Errorf("rebalance stock_cn rendezvous overflow: %w", err)
-		}
-		selected := -1
-		for candidateIndex, assigned := range choice {
-			if len(assigned) > 0 {
-				selected = candidates[candidateIndex]
-				break
-			}
-		}
-		if selected < 0 {
-			return nil, fmt.Errorf("rebalance stock_cn rendezvous overflow subject %s: no candidate group", subject)
-		}
-		result[selected] = append(result[selected], subject)
-	}
-	for groupID := range result {
-		sort.Strings(result[groupID])
-	}
-	return result, nil
 }
 
 // BuildAssignments sorts both inputs before assigning shards, so a refresh

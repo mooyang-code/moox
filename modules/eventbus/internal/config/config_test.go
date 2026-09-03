@@ -41,16 +41,16 @@ func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 		}
 		assert.Equal(t, retention, stream.Retention, stream.Name)
 		if stream.Name == "MOOX_TRADE" {
-			assert.Equal(t, []string{"moox.trade.target.requested.v1.>", "moox.trade.target.weight_requested.v1.>"}, stream.Subjects)
+			assert.Equal(t, []string{"moox.event.trade.target.requested.v1.>", "moox.event.trade.target.weight_requested.v1.>"}, stream.Subjects)
 		}
 		if stream.Name == "MOOX_STORAGE" {
 			assert.Equal(t, []string{
-				"moox.storage.dataset.rows.upserted.v2.>",
-				"moox.storage.dataset.period.collected.v1.>",
-				"moox.storage.view.source_period.ready.v1.>",
-				"moox.storage.dataset.factor_period.computed.v1.>",
-				"moox.storage.view.factor_period.ready.v1.>",
-				"moox.storage.dataset.sync_point.v1.>",
+				"moox.event.storage.dataset.rows.upserted.v2.>",
+				"moox.event.storage.dataset.period.collected.v1.>",
+				"moox.event.storage.view.source_period.ready.v1.>",
+				"moox.event.storage.dataset.factor_period.computed.v1.>",
+				"moox.event.storage.view.factor_period.ready.v1.>",
+				"moox.event.storage.dataset.sync_point.v1.>",
 			}, stream.Subjects)
 		}
 		delete(want, stream.Name)
@@ -59,7 +59,7 @@ func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 	for _, stream := range cfg.Streams {
 		assert.NotEqual(t, "MOOX_METRICS", stream.Name)
 		if stream.Name == "MOOX_OBSERVABILITY" {
-			assert.Equal(t, []string{"moox.observability.>"}, stream.Subjects)
+			assert.Equal(t, []string{"moox.event.observability.>"}, stream.Subjects)
 		}
 	}
 }
@@ -79,7 +79,7 @@ func TestRejectMissingGovernedEventFamily(t *testing.T) {
 	cfg := loadRepositoryConfig(t)
 	for i := range cfg.Streams {
 		if cfg.Streams[i].Name == "MOOX_TRADE" {
-			cfg.Streams[i].Subjects = []string{"moox.trade.other.>"}
+			cfg.Streams[i].Subjects = []string{"moox.event.trade.other.>"}
 		}
 	}
 	err := cfg.Validate()
@@ -95,7 +95,7 @@ func TestRejectUnsafeAndInvalidConfiguration(t *testing.T) {
 		"bad auth":             func(c *Config) { c.Broker.Auth.Enabled = true },
 		"cluster default name": func(c *Config) { c.Broker.Cluster.Enabled = true },
 		"overlap": func(c *Config) {
-			c.Streams[0].Subjects = []string{"moox.observability.>"}
+			c.Streams[0].Subjects = []string{"moox.event.observability.>"}
 		},
 		"negative duplicates": func(c *Config) { c.Streams[0].Duplicates = -time.Second },
 		"replicas":            func(c *Config) { c.Streams[0].Replicas = 2 },
@@ -110,7 +110,7 @@ func TestRejectUnsafeAndInvalidConfiguration(t *testing.T) {
 }
 
 func TestSubjectValidation(t *testing.T) {
-	require.NoError(t, validateSubject("moox.storage.>", true))
+	require.NoError(t, validateSubject("moox.event.storage.>", true))
 	require.Error(t, validateSubject("", true))
 	require.Error(t, validateSubject("moox..storage", true))
 	require.Error(t, validateSubject("moox.>", false))
@@ -120,7 +120,7 @@ func TestSubjectValidation(t *testing.T) {
 
 func TestPatternOverlap(t *testing.T) {
 	assert.True(t, patternsOverlap("moox.>", "moox.storage"))
-	assert.True(t, patternsOverlap("moox.*.rows", "moox.storage.rows"))
+	assert.True(t, patternsOverlap("moox.event.*.rows", "moox.event.storage.rows"))
 	assert.False(t, patternsOverlap("moox.storage", "moox.factor"))
 }
 

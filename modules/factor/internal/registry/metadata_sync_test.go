@@ -50,20 +50,20 @@ func TestResolveManagedResultIDsUsesSourcePrimaryDataset(t *testing.T) {
 	client := &fakeViewMetadataClient{
 		fakeMetadataClient: newFakeMetadataClient(),
 		views: map[string]*storagepb.View{
-			"binance_spot_kline_1m_view": {
+			"view_crypto_spot_kline_1m": {
 				SpaceId:          "space",
-				ViewId:           "binance_spot_kline_1m_view",
-				PrimaryDatasetId: "binance_spot_kline_1m",
-				DatasetIds:       []string{"binance_spot_kline_1m"},
+				ViewId:           "view_crypto_spot_kline_1m",
+				PrimaryDatasetId: "dataset_binance_spot_kline_1m",
+				DatasetIds:       []string{"dataset_binance_spot_kline_1m"},
 			},
 		},
 	}
 	datasetID, viewID, err := NewMetadataSync(client, nil).ResolveManagedResultIDs(
-		context.Background(), "space", "binance_spot_kline_1m_view",
+		context.Background(), "space", "view_crypto_spot_kline_1m",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "binance_spot_kline_1m_factor", datasetID)
-	require.Equal(t, "binance_spot_kline_1m_factor_v", viewID)
+	require.Equal(t, "dataset_binance_spot_kline_1m_e08e1f36_factor", datasetID)
+	require.Equal(t, "view_binance_ca9c99ed070619bf", viewID)
 }
 
 func TestResolveManagedResultIDsSeparatesViewsSharingPrimaryDataset(t *testing.T) {
@@ -344,7 +344,7 @@ func successRet() *commonpb.RetInfo {
 }
 
 func TestDatasetDisplayName(t *testing.T) {
-	name := datasetDisplayName("spot_kline_1h")
+	name := datasetDisplayName("dataset_spot_kline_1h")
 	assert.Contains(t, name, "因子")
 	assert.LessOrEqual(t, len([]rune(name)), 10)
 }

@@ -94,7 +94,7 @@
   - Update the architecture diagram and lifecycle description.
 - `docs/云节点管理.md`
   - Update storage responsibilities and table list.
-- `scripts/deploy-moox.sh`
+- `scripts/deploy/deploy-moox.sh`
   - Ensure `data/cloudnode/jobs` exists in deployment runtime directories.
 
 ---
@@ -1634,8 +1634,8 @@ git commit -m "refactor(cloudnode): drop online job item sqlite tables"
 ### Task 11: Update Deployment Runtime Directories
 
 **Files:**
-- Modify: `scripts/deploy-moox.sh`
-- Test: `scripts/test-deploy-moox-preserve-disabled.sh` if affected
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Test: `scripts/test/contract/test-deploy-moox-preserve-disabled.sh` if affected
 
 - [ ] **Step 1: Add runtime directory**
 
@@ -1652,7 +1652,7 @@ The existing command already creates `data/cloudnode`; extend it to include `dat
 Run:
 
 ```bash
-scripts/deploy-moox.sh --target localhost --dir /tmp/moox-jobstate-plan --goos "$(go env GOOS)" --goarch "$(go env GOARCH)" --no-storage --no-start
+scripts/deploy/deploy-moox.sh --target localhost --dir /tmp/moox-jobstate-plan --goos "$(go env GOOS)" --goarch "$(go env GOARCH)" --no-storage --no-start
 test -d /tmp/moox-jobstate-plan/data/cloudnode/jobs
 ```
 
@@ -1661,7 +1661,7 @@ Expected: directory exists.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add scripts/deploy-moox.sh
+git add scripts/deploy/deploy-moox.sh
 git commit -m "chore(deploy): create cloudnode job history directory"
 ```
 
@@ -1756,7 +1756,7 @@ Start local package or use integration test to verify:
 After user approval:
 
 ```bash
-scripts/deploy-moox.sh --target ubuntu@106.53.107.122 --dir /home/ubuntu/moox/prod --goos linux --goarch amd64 --no-storage
+scripts/deploy/deploy-moox.sh --target ubuntu@106.53.107.122 --dir /home/ubuntu/moox/prod --goos linux --goarch amd64 --no-storage
 ```
 
 - [ ] **Step 6: Remote verification**

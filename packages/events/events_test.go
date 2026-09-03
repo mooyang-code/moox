@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
@@ -17,34 +18,34 @@ func TestBuiltInEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"cloudnode.job.execution.requested@1",
-		"market.fetch.batch.completed@1",
-		"observability.health.check.reported@1",
-		"observability.host.snapshot.reported@1",
-		"observability.metrics.snapshot.reported@1",
-		"storage.dataset.factor_period.computed@1",
-		"storage.dataset.period.collected@1",
-		"storage.dataset.rows.upserted@2",
-		"storage.dataset.sync_point@1",
-		"storage.view.factor_period.ready@1",
-		"storage.view.source_period.ready@1",
-		"trade.target.requested@1",
-		"trade.target.weight_requested@1",
+		"event.cloudnode.job.execution.requested@1",
+		"event.market.fetch.batch.completed@1",
+		"event.observability.health.check.reported@1",
+		"event.observability.host.snapshot.reported@1",
+		"event.observability.metrics.snapshot.reported@1",
+		"event.storage.dataset.factor_period.computed@1",
+		"event.storage.dataset.period.collected@1",
+		"event.storage.dataset.rows.upserted@2",
+		"event.storage.dataset.sync_point@1",
+		"event.storage.view.factor_period.ready@1",
+		"event.storage.view.source_period.ready@1",
+		"event.trade.target.requested@1",
+		"event.trade.target.weight_requested@1",
 	}
 	wantOwners := map[string]string{
-		"cloudnode.job.execution.requested@1":       "cloudnode",
-		"observability.health.check.reported@1":     "watchdog",
-		"observability.host.snapshot.reported@1":    "hostagent",
-		"observability.metrics.snapshot.reported@1": "service",
-		"market.fetch.batch.completed@1":            "collector",
-		"storage.dataset.factor_period.computed@1":  "storage",
-		"storage.dataset.period.collected@1":        "storage",
-		"storage.dataset.rows.upserted@2":           "storage",
-		"storage.dataset.sync_point@1":              "storage",
-		"storage.view.factor_period.ready@1":        "storage",
-		"storage.view.source_period.ready@1":        "storage",
-		"trade.target.requested@1":                  "strategy",
-		"trade.target.weight_requested@1":           "strategy",
+		"event.cloudnode.job.execution.requested@1":       "cloudnode",
+		"event.observability.health.check.reported@1":     "watchdog",
+		"event.observability.host.snapshot.reported@1":    "hostagent",
+		"event.observability.metrics.snapshot.reported@1": "service",
+		"event.market.fetch.batch.completed@1":            "collector",
+		"event.storage.dataset.factor_period.computed@1":  "storage",
+		"event.storage.dataset.period.collected@1":        "storage",
+		"event.storage.dataset.rows.upserted@2":           "storage",
+		"event.storage.dataset.sync_point@1":              "storage",
+		"event.storage.view.factor_period.ready@1":        "storage",
+		"event.storage.view.source_period.ready@1":        "storage",
+		"event.trade.target.requested@1":                  "strategy",
+		"event.trade.target.weight_requested@1":           "strategy",
 	}
 	events := registry.Events()
 	if len(events) != len(want) {
@@ -64,6 +65,18 @@ func TestBuiltInEvents(t *testing.T) {
 			t.Fatalf("event %s family = %q, err=%v", want[i], family, err)
 		}
 	}
+}
+
+func TestRegistryRejectsEventWithoutPrefix(t *testing.T) {
+	_, err := newRegistry([]Event{{
+		name:       "storage.dataset.rows.upserted",
+		version:    1,
+		stream:     "MOOX_STORAGE",
+		owner:      "storage",
+		newPayload: func() proto.Message { return &storagepb.DatasetSyncPoint{} },
+		validate:   func(*eventpb.EventMessage, proto.Message) error { return nil },
+	}})
+	require.EqualError(t, err, "event name \"storage.dataset.rows.upserted\" must start with event.")
 }
 
 func TestStorageCompletionEventsRoundTrip(t *testing.T) {
@@ -150,7 +163,7 @@ func TestObservabilityEventsShareOneStream(t *testing.T) {
 		require.Equal(t, "MOOX_OBSERVABILITY", event.Stream())
 		family, err := registry.FamilyPattern(event)
 		require.NoError(t, err)
-		require.Contains(t, family, "moox.observability.")
+		require.Contains(t, family, "moox.event.observability.")
 	}
 	for _, event := range registry.Events() {
 		require.NotEqual(t, "MOOX_METRICS", event.Stream())
@@ -211,7 +224,7 @@ func TestLogicalAccountTargetRequestedContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	event, ok := registry.Lookup("trade.target.requested", 1)
+	event, ok := registry.Lookup("event.trade.target.requested", 1)
 	if !ok {
 		t.Fatal("trade target event is not registered")
 	}
@@ -227,7 +240,7 @@ func TestLogicalAccountTargetRequestedContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if subject != "moox.trade.target.requested.v1.onygcy3f.nrxwo2ldmfwc2mi" {
+	if subject != "moox.event.trade.target.requested.v1.onygcy3f.nrxwo2ldmfwc2mi" {
 		t.Fatalf("subject = %q", subject)
 	}
 	if _, exists := registry.Lookup("trade.rebalance.requested", 1); exists {

@@ -186,12 +186,14 @@ export function buildTimeSeriesBrowseSelector(
   seriesTag: string,
   exactSeriesTag: boolean
 ): TimeSeriesSelector {
+  const normalizedSeriesTag =
+    spaceId === "stockcn" && datasetId === "dataset_stockcn_equity_kline" && !seriesTag.trim() ? "default" : seriesTag.trim();
   return {
     space_id: spaceId,
     dataset_id: datasetId,
     subject_id: subjectId,
     freq,
-    ...(exactSeriesTag ? { series_tag: seriesTag.trim() } : {})
+    ...(exactSeriesTag ? { series_tag: normalizedSeriesTag } : {})
   };
 }
 

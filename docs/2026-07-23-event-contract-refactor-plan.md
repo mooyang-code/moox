@@ -96,7 +96,7 @@ message TradingSignal {
 Go event constant:
 
 ```go
-DatasetRowsUpserted = EventType{Name: "storage.dataset.rows.upserted", Version: 1}
+DatasetRowsUpserted = EventType{Name: "event.storage.dataset.rows.upserted", Version: 1}
 ```
 
 The event payload lives in `packages/storagepb` and is self-describing:
@@ -158,7 +158,7 @@ There must be no `EventSpec`, `Spec`, or `Specs` compatibility aliases. This is 
 
 - `packages/events/proto/marketpb/market_payloads.proto`: rename `TradeReceived` payload to `Tick`; keep market payloads under the market namespace.
 - `packages/events/marketpb/market_payloads.pb.go`: regenerate.
-- `packages/events/registry/events.yaml`: register `market.tick.received`, `trading.signal`, and `storage.dataset.rows.upserted`.
+- `packages/events/registry/events.yaml`: register `market.tick.received`, `trading.signal`, and `event.storage.dataset.rows.upserted`.
 - `packages/events/registry.go`: rename `EventSpec` to `EventSchema`, update payload factories, and rename `Spec`/`Specs`.
 - `packages/events/message.go`: use `Schema` for encoding.
 - `packages/events/decode.go`: use `DatasetRowsUpserted` and the new shared payload package.
@@ -243,7 +243,7 @@ option go_package = "github.com/mooyang-code/moox/packages/events/tradingpb;trad
 - name: market.tick.received
   version: 1
   payload: trpc.moox.market.Tick
-  subject: moox.market.tick.received.v1.<space>.<subject>
+  subject: moox.event.market.tick.received.v1.<space>.<subject>
   stream: MOOX_MARKET
   partition_key: subject_id
   owner: collector
@@ -256,10 +256,10 @@ option go_package = "github.com/mooyang-code/moox/packages/events/tradingpb;trad
   partition_key: subject_id
   owner: strategy
 
-- name: storage.dataset.rows.upserted
+- name: event.storage.dataset.rows.upserted
   version: 1
   payload: trpc.moox.storage.event.DatasetRowsUpserted
-  subject: moox.storage.dataset.rows.upserted.v1.<space>.<subject>
+  subject: moox.event.storage.dataset.rows.upserted.v1.<space>.<subject>
   stream: MOOX_STORAGE
   partition_key: subject_id
   owner: storage
@@ -276,9 +276,9 @@ option go_package = "github.com/mooyang-code/moox/packages/events/tradingpb;trad
 - Modify `modules/eventbus/internal/config/config_defaults.go`.
 - Modify `modules/eventbus/internal/config/config_validation.go` and tests.
 
-- [x] Change the MOOX_MARKET stream subjects to include `moox.market.tick.received.v1.>`.
+- [x] Change the MOOX_MARKET stream subjects to include `moox.event.market.tick.received.v1.>`.
 - [x] Add `moox.trading.>` to the MOOX_TRADE stream subject list.
-- [x] Add topic families for `market.tick.received`, `trading.signal`, and `storage.dataset.rows.upserted`.
+- [x] Add topic families for `market.tick.received`, `trading.signal`, and `event.storage.dataset.rows.upserted`.
 - [x] Keep the broker `payload_content_type` as the governed EventMessage media type
   `application/vnd.moox.event+protobuf`; the generated payload full names are owned by
   `packages/events/registry/events.yaml` and validated by the Registry factory. Do not
@@ -295,7 +295,7 @@ option go_package = "github.com/mooyang-code/moox/packages/events/tradingpb;trad
 
 - [x] Replace any existing `TradeReceived` payload construction with `marketpb.Tick`.
 - [x] Replace any existing `events.MarketTradeReceived` reference with `events.TickReceived`.
-- [x] Change all Tick subject strings to `moox.market.tick.received.v1.<space>.<subject>`.
+- [x] Change all Tick subject strings to `moox.event.market.tick.received.v1.<space>.<subject>`.
 - [x] Preserve the existing Streamcalc event-time ordering, deduplication, and K-line aggregation behavior.
 - [x] Add a Collector Tick producer using Binance Spot/Futures cursorable aggregate-trade REST endpoints, deterministic trade IDs, per-space/instrument/symbol cursors, ascending ordering, and governed `TickReceived` publication; register the `collect.tick` job definition/planner/CloudNode handler so the source is reachable through normal task execution.
 - [x] Add a contract test proving a Tick event is decoded by Streamcalc and contributes to the expected window.
@@ -392,7 +392,7 @@ option go_package = "github.com/mooyang-code/moox/packages/events/tradingpb;trad
 - Fixed the CloudNode Tick handler registration and added Tick taskrunner coverage.
 - Switched the public Binance Tick polling path to cursorable Spot/Futures aggregate-trade endpoints and added HTTPS query/path tests for `fromId`.
 - Added shared structured-row validation for key kind, time-series/record key fields, field IDs, typed values, lists, JSON/time values, finite doubles, and explicit NULL values, with malformed-row coverage.
-- Final independent re-review found one additional P1: the Streamcalc durable still filtered only closed K-lines, so Tick events could not reach the production consumer. Fixed the managed durable filter to `moox.market.>` and changed the embedded-NATS E2E to publish and aggregate Tick events.
+- Final independent re-review found one additional P1: the Streamcalc durable still filtered only closed K-lines, so Tick events could not reach the production consumer. Fixed the managed durable filter to `moox.event.market.>` and changed the embedded-NATS E2E to publish and aggregate Tick events.
 - A second independent review found two P1 issues: a duplicate `signal_id` with a new envelope `event_id` could retry forever on the recommendation unique key, and unknown TradingSignal action enum values were accepted. Fixed recommendation insertion with idempotent `INSERT OR IGNORE`, added the different-event duplicate test, and changed action validation to an explicit `OPEN/CLOSE/INCREASE/DECREASE` whitelist with unknown-action coverage.
 - Final independent re-review by Agent Herschel (2026-07-23) returned `APPROVED`; no P0/P1/P2 findings remain. Minor residuals are aggregate-trade semantics for the Binance Tick poller, limited CloudNode dispatch coverage, and no dedicated Streamcalc checkpoint-failure recovery test.
 

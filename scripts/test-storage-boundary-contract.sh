@@ -1,1 +1,0 @@
-tests/contract/test-storage-boundary-contract.sh

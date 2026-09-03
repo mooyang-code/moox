@@ -16,7 +16,7 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 	for _, space := range seed.Spaces {
 		spaceIDs = append(spaceIDs, space.SpaceID)
 	}
-	require.Equal(t, []string{"stock_cn", "stock_hk", "stock_us", "crypto", "moox_system"}, spaceIDs)
+	require.Equal(t, []string{"stockcn", "stockhk", "stockus", "crypto", "mooxsys"}, spaceIDs)
 
 	var dataSourceIDs []string
 	var datasetIDs []string
@@ -41,34 +41,34 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 
 	var stockCNSources []string
 	for _, item := range seed.DataSources {
-		if item.SpaceID == "stock_cn" {
+		if item.SpaceID == "stockcn" {
 			stockCNSources = append(stockCNSources, item.DataSourceID)
 		}
 	}
 	require.ElementsMatch(t, []string{
-		"stock_cn", "quantclass_stock", "eastmoney", "tdx", "tencent", "sina", "baidu", "ths", "market_data",
+		"stockcn", "quantclass_stock", "eastmoney", "tdx", "tencent", "sina", "baidu", "ths", "market_data",
 	}, stockCNSources)
 	var stockCNViews []string
 	for _, item := range seed.Views {
-		if item.SpaceID == "stock_cn" {
+		if item.SpaceID == "stockcn" {
 			stockCNViews = append(stockCNViews, item.ViewID)
 		}
 	}
 	require.ElementsMatch(t, []string{
-		"stock_cn_kline_view", "stock_cn_index_kline_view", "stock_cn_cb_kline_view",
+		"view_stockcn_equity_kline_1m", "view_stockcn_index_kline_1d", "view_stockcn_bond_kline_1m",
 	}, stockCNViews)
 	require.ElementsMatch(t, []string{
-		"binance_spot_symbols",
-		"binance_swap_symbols",
-		"binance_spot_kline_1m",
-		"binance_swap_kline_1m",
-		"spot_kline_1h",
-		"perpetual_kline_1h",
+		"dataset_binance_spot_symbols",
+		"dataset_binance_swap_symbols",
+		"dataset_binance_spot_kline_1m",
+		"dataset_binance_swap_kline_1m",
+		"dataset_spot_kline_1h",
+		"dataset_perpetual_kline_1h",
 	}, datasetIDs)
 	var stockKline seedDataset
 	foundStockKline := false
 	for _, item := range seed.Datasets {
-		if item.SpaceID == "stock_cn" && item.DatasetID == "stock_cn_kline" {
+		if item.SpaceID == "stockcn" && item.DatasetID == "dataset_stockcn_equity_kline" {
 			stockKline = item
 			foundStockKline = true
 			break
@@ -77,19 +77,19 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 	require.True(t, foundStockKline)
 	require.Equal(t, []string{"1m"}, stockKline.Freqs)
 	require.ElementsMatch(t, []string{
-		"binance_spot_kline_1m_view",
-		"binance_swap_kline_1m_view",
-		"spot_kline_1h_view",
-		"perpetual_kline_1h_view",
+		"view_crypto_spot_kline_1m",
+		"view_crypto_swap_kline_1m",
+		"view_crypto_spot_kline_1h",
+		"view_crypto_swap_kline_1h",
 	}, viewIDs)
 	for _, item := range seed.Datasets {
 		require.Equal(t, "storage-node-0", item.DataNodeID, item.DatasetID)
 		require.NotEmpty(t, item.KeepDuration, item.DatasetID)
 		require.Equal(t, "disabled", item.Status, item.DatasetID)
-		if item.SpaceID == "moox_system" && item.DatasetID == "moox_service_metrics" {
+		if item.SpaceID == "mooxsys" && item.DatasetID == "dataset_mooxsys_service_metrics" {
 			require.Equal(t, "24h", item.KeepDuration)
 		}
-		if item.SpaceID == "crypto" && item.DatasetID != "binance_spot_symbols" && item.DatasetID != "binance_swap_symbols" && item.DatasetID != "binance_spot_kline_1m" && item.DatasetID != "binance_swap_kline_1m" {
+		if item.SpaceID == "crypto" && item.DatasetID != "dataset_binance_spot_symbols" && item.DatasetID != "dataset_binance_swap_symbols" && item.DatasetID != "dataset_binance_spot_kline_1m" && item.DatasetID != "dataset_binance_swap_kline_1m" {
 			require.Equal(t, "crypto", item.DataSourceID, item.DatasetID)
 		}
 	}
@@ -97,7 +97,7 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 		if item.SpaceID == "crypto" {
 			require.Equal(t, []string{"subject_id", "freq", "data_time", "series_tag"}, item.GrainKeys, item.ViewID)
 		}
-		if item.SpaceID == "moox_system" && item.ViewID == "moox_service_metrics_view" {
+		if item.SpaceID == "mooxsys" && item.ViewID == "view_mooxsys_service_metrics" {
 			require.Equal(t, "24h", item.KeepDuration)
 		}
 	}
@@ -111,9 +111,9 @@ func TestQuantSampleCSVUsesSharedDatasetAndSeriesTag(t *testing.T) {
 		seriesTag string
 		frequency string
 	}{
-		{"crypto/binance_spot_kline_1h.csv", "spot_kline_1h", "venue:binance", "1H"},
-		{"crypto/binance_perpetual_kline_1h.csv", "perpetual_kline_1h", "venue:binance", "1H"},
-		{"crypto/okx_spot_kline_1h.csv", "spot_kline_1h", "venue:okx", "1H"},
+		{"crypto/binance_spot_kline_1h.csv", "dataset_spot_kline_1h", "venue:binance", "1H"},
+		{"crypto/binance_perpetual_kline_1h.csv", "dataset_perpetual_kline_1h", "venue:binance", "1H"},
+		{"crypto/okx_spot_kline_1h.csv", "dataset_spot_kline_1h", "venue:okx", "1H"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -142,7 +142,7 @@ func TestDefaultMetadataDefinesStrictStockCNKlineColumns(t *testing.T) {
 
 	var columns []string
 	for _, item := range seed.DatasetColumns {
-		if item.SpaceID == "stock_cn" && item.DatasetID == "stock_cn_kline" {
+		if item.SpaceID == "stockcn" && item.DatasetID == "dataset_stockcn_equity_kline" {
 			columns = append(columns, item.ColumnName)
 		}
 	}
@@ -153,6 +153,7 @@ func TestDefaultMetadataDefinesStrictStockCNKlineColumns(t *testing.T) {
 		"close",
 		"volume",
 		"amount",
+		"instrument_name",
 		"trade_date",
 		"close_time",
 		"volume_unit",

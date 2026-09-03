@@ -46,10 +46,16 @@ func defaultViewEngine(kind pb.DataKind) string {
 }
 
 func validateDatasetID(datasetID string) error {
+	if !strings.HasPrefix(datasetID, "dataset_") {
+		return errors.New("dataset_id must start with dataset_")
+	}
 	return validateLowerSnakeID("dataset_id", datasetID, 50)
 }
 
 func validateViewID(viewID string) error {
+	if !strings.HasPrefix(viewID, "view_") {
+		return errors.New("view_id must start with view_")
+	}
 	return validateLowerSnakeID("view_id", viewID, 30)
 }
 
@@ -81,7 +87,7 @@ func validateColumnDisplayName(field string, spaceID string, attrs map[string]st
 		}
 		return nil
 	}
-	if spaceID == "moox_system" {
+	if spaceID == "mooxsys" {
 		if displayName == "" {
 			return fmt.Errorf("%s is required", field)
 		}

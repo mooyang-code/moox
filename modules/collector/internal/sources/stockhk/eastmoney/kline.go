@@ -20,8 +20,8 @@ func New(cfg Config) *markethttp.Provider {
 		cfg.BaseURL = "https://push2.eastmoney.com"
 	}
 	return markethttp.New(markethttp.Config{
-		ProviderID: "eastmoney", SourceID: "stock_hk_http", DisplayName: "EastMoney Hong Kong",
-		MarketID: "stock_hk", InstrumentType: marketdata.InstrumentEquity,
+		ProviderID: "eastmoney", SourceID: "stockhk_http", DisplayName: "EastMoney Hong Kong",
+		MarketID: "stockhk", InstrumentType: marketdata.InstrumentEquity,
 		Exchanges: []string{"XHKG"}, BaseURL: cfg.BaseURL, Endpoint: "/api/qt/stock/kline/get",
 		Host: "push2.eastmoney.com", HTTPClient: cfg.HTTPClient, Location: mustLocation("Asia/Hong_Kong"),
 		SymbolFunc: SecID, Frequencies: []string{"1m", "5m", "15m", "30m", "60m", "1d", "1w", "1M"},

@@ -52,36 +52,36 @@ type setupInitFactor interface {
 	Close() error
 }
 
-// These defaults keep older custom.toml files useful after upgrading. Users
-// can replace the list in custom.toml when they need another View contract.
+// These defaults define the initial factor bindings for a fresh installation.
+// Users can replace the list in moox.toml when they need another View contract.
 func defaultSetupFactorItems() []setupconfig.FactorSetupItem {
 	return []setupconfig.FactorSetupItem{
 		{
-			FactorID: "bias", File: "timeseries/bias.py", Name: "bias",
+			FactorID: "Bias", File: "Bias.py", Name: "Bias",
 			InputColumns: []string{"close"}, Outputs: []string{"bias_5", "bias_20"},
 			ParamsJSON: `{"windows":[5,20]}`, LookbackPeriods: 20,
-			SpaceID: "crypto", SourceViewID: "binance_spot_kline_1m_view", Freq: "1m",
+			SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
 			SubjectMode: "all", Status: "enabled",
 		},
 		{
-			FactorID: "cci", File: "timeseries/cci.py", Name: "cci",
+			FactorID: "Cci", File: "Cci.py", Name: "Cci",
 			InputColumns: []string{"high", "low", "close"}, Outputs: []string{"cci"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-			SpaceID: "crypto", SourceViewID: "binance_spot_kline_1m_view", Freq: "1m",
+			SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
 			SubjectMode: "all", Status: "enabled",
 		},
 		{
-			FactorID: "ma", File: "timeseries/ma.py", Name: "ma",
-			InputColumns: []string{"close"}, Outputs: []string{"ma_5", "ma_20"},
-			ParamsJSON: `{"windows":[5,20]}`, LookbackPeriods: 20,
-			SpaceID: "crypto", SourceViewID: "binance_spot_kline_1m_view", Freq: "1m",
+			FactorID: "MinMax", File: "MinMax.py", Name: "MinMax",
+			InputColumns: []string{"high", "low", "close"}, Outputs: []string{"minmax_20"},
+			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
+			SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
 			SubjectMode: "all", Status: "enabled",
 		},
 		{
-			FactorID: "sma", File: "timeseries/sma.py", Name: "sma",
-			InputColumns: []string{"close"}, Outputs: []string{"sma_5", "sma_20"},
-			ParamsJSON: `{"windows":[5,20],"m":1}`, LookbackPeriods: 600,
-			SpaceID: "crypto", SourceViewID: "binance_spot_kline_1m_view", Freq: "1m",
+			FactorID: "QuoteVolumeMean", File: "QuoteVolumeMean.py", Name: "QuoteVolumeMean",
+			InputColumns: []string{"quote_volume"}, Outputs: []string{"quote_volume_mean_20"},
+			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
+			SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
 			SubjectMode: "all", Status: "enabled",
 		},
 	}
@@ -92,7 +92,7 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) ([]setupFa
 		return nil, nil
 	}
 	if strings.TrimSpace(manifest.Factors.SourceDir) == "" {
-		manifest.Factors.SourceDir = "examples/factors"
+		manifest.Factors.SourceDir = "modules/factor/factors"
 	}
 	items := manifest.Factors.Items
 	if len(items) == 0 {
@@ -139,9 +139,16 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) ([]setupFa
 			return nil, fmt.Errorf("read factor %q source: %w", factorID, err)
 		}
 		sourceCode := strings.TrimSpace(string(source))
+		factorName := strings.TrimSuffix(filepath.Base(resolvedPath), filepath.Ext(resolvedPath))
+		if factorID != factorName {
+			return nil, fmt.Errorf("factor_id %q must match factor file name %q", factorID, factorName)
+		}
 		name := strings.TrimSpace(item.Name)
 		if name == "" {
-			name = factorID
+			name = factorName
+		}
+		if name != factorName {
+			return nil, fmt.Errorf("factor %q name must match factor file name %q", factorID, factorName)
 		}
 		if !factorIDPattern.MatchString(name) {
 			return nil, fmt.Errorf("factor %q name is invalid", factorID)
@@ -354,7 +361,7 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, items []setupFactorItem) 
 			summary.Imported++
 		} else {
 			if !sameFactorContract(get.Factor, item) {
-				return summary, fmt.Errorf("factor %q already exists with a different definition; update custom.toml or replace it explicitly", item.FactorID)
+				return summary, fmt.Errorf("factor %q already exists with a different definition; update moox.toml or replace it explicitly", item.FactorID)
 			}
 			summary.Unchanged++
 		}
@@ -377,7 +384,14 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, items []setupFactorItem) 
 		}
 		upsert := factorAPIResponse{}
 		if err := r.callWithSourceViewRetry(ctx, "UpsertBinding", map[string]any{"binding": binding}, &upsert); err != nil {
-			return summary, err
+			if !isSourceViewUnavailable(err) {
+				return summary, err
+			}
+			binding["status"] = "pending_view"
+			pending := factorAPIResponse{}
+			if pendingErr := r.call(ctx, "UpsertBinding", map[string]any{"binding": binding}, &pending); pendingErr != nil {
+				return summary, pendingErr
+			}
 		}
 		if initialStatus == "enabled" && upsert.Binding.Status != "" && upsert.Binding.Status != "enabled" {
 			return summary, fmt.Errorf("factor %q binding is %s", item.FactorID, upsert.Binding.Status)
@@ -394,7 +408,18 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, items []setupFactorItem) 
 			binding["status"] = "enabled"
 			ready := factorAPIResponse{}
 			if err := r.callWithSourceViewRetry(ctx, "UpsertBinding", map[string]any{"binding": binding}, &ready); err != nil {
-				return summary, err
+				if !isSourceViewUnavailable(err) {
+					return summary, err
+				}
+				// Source Views have no active index on a brand-new installation
+				// until the first source data is indexed. Keep the intended
+				// executable factor enabled, but persist its binding as pending
+				// so the Factor reconciler can promote it later.
+				binding["status"] = "pending_view"
+				pending := factorAPIResponse{}
+				if pendingErr := r.call(ctx, "UpsertBinding", map[string]any{"binding": binding}, &pending); pendingErr != nil {
+					return summary, pendingErr
+				}
 			}
 			if ready.Binding.Status != "" && ready.Binding.Status != "enabled" {
 				return summary, fmt.Errorf("factor %q binding is %s", item.FactorID, ready.Binding.Status)
@@ -505,6 +530,9 @@ func (r *remoteSetupFactor) callWithSourceViewRetry(ctx context.Context, method 
 		if err == nil && !pendingView {
 			return nil
 		}
+		if isSourceViewUnavailable(err) {
+			return err
+		}
 		if err != nil && !strings.Contains(err.Error(), "must have an active index") {
 			return err
 		}
@@ -520,6 +548,10 @@ func (r *remoteSetupFactor) callWithSourceViewRetry(ctx context.Context, method 
 		case <-time.After(retryInterval):
 		}
 	}
+}
+
+func isSourceViewUnavailable(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "must have an active index")
 }
 
 func (r *remoteSetupFactor) Close() error {

@@ -86,7 +86,7 @@ func (s *Service) CreateView(ctx context.Context, req *pb.CreateViewReq) (*pb.Cr
 		return &pb.CreateViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id or name are required"))}, nil
 	}
 	if view.ViewId == "" {
-		view.ViewId = defaultID(view.GetName(), "view")
+		view.ViewId = "view_" + defaultID(view.GetName(), "view")
 	}
 	if err := validateChineseDisplayName("view name", view.GetName()); err != nil {
 		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil

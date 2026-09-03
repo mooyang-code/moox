@@ -41,34 +41,34 @@ func TestBuildSCFPackageIncludesStockCNCalendar(t *testing.T) {
 	tmp := t.TempDir()
 	binary := filepath.Join(tmp, "main")
 	require.NoError(t, os.WriteFile(binary, []byte("binary"), 0o755))
-	config := filepath.Join(tmp, "modules", "collector", "configs", "scf", "stock_cn")
+	config := filepath.Join(tmp, "modules", "collector", "configs", "scf", "stockcn")
 	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(config, "config.yaml"), []byte("system: {}\n"), 0o644))
-	calendar := filepath.Join(tmp, "modules", "collector", "config", "markets", "stock_cn", "calendar.yaml")
+	calendar := filepath.Join(tmp, "modules", "collector", "config", "markets", "stockcn", "calendar.yaml")
 	require.NoError(t, os.MkdirAll(filepath.Dir(calendar), 0o755))
 	require.NoError(t, os.WriteFile(calendar, []byte("timezone: Asia/Shanghai\n"), 0o644))
-	route := filepath.Join(tmp, "modules", "collector", "config", "markets", "stock_cn", "route.yaml")
-	require.NoError(t, os.WriteFile(route, []byte("market_id: stock_cn\nroute_id: test\nfrequency: 1m\n"), 0o644))
+	route := filepath.Join(tmp, "modules", "collector", "config", "markets", "stockcn", "route.yaml")
+	require.NoError(t, os.WriteFile(route, []byte("market_id: stockcn\nroute_id: test\nfrequency: 1m\n"), 0o644))
 
 	out := filepath.Join(tmp, "package.zip")
 	result, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: out})
 	require.NoError(t, err)
-	assert.Contains(t, result.Entries, "markets/stock_cn/calendar.yaml")
-	assert.Contains(t, result.Entries, "markets/stock_cn/route.yaml")
+	assert.Contains(t, result.Entries, "markets/stockcn/calendar.yaml")
+	assert.Contains(t, result.Entries, "markets/stockcn/route.yaml")
 
 	reader, err := zip.OpenReader(out)
 	require.NoError(t, err)
 	defer reader.Close()
 	var found bool
 	for _, file := range reader.File {
-		if file.Name == "markets/stock_cn/calendar.yaml" {
+		if file.Name == "markets/stockcn/calendar.yaml" {
 			found = true
 		}
 	}
 	assert.True(t, found)
 	var routeFound bool
 	for _, file := range reader.File {
-		if file.Name == "markets/stock_cn/route.yaml" {
+		if file.Name == "markets/stockcn/route.yaml" {
 			routeFound = true
 		}
 	}
@@ -79,12 +79,12 @@ func TestBuildSCFPackageRequiresStockCNCalendar(t *testing.T) {
 	tmp := t.TempDir()
 	binary := filepath.Join(tmp, "main")
 	require.NoError(t, os.WriteFile(binary, []byte("binary"), 0o755))
-	config := filepath.Join(tmp, "modules", "collector", "configs", "scf", "stock_cn")
+	config := filepath.Join(tmp, "modules", "collector", "configs", "scf", "stockcn")
 	require.NoError(t, os.MkdirAll(config, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(config, "config.yaml"), []byte("system: {}\n"), 0o644))
 
 	_, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: filepath.Join(tmp, "package.zip")})
-	require.ErrorContains(t, err, "stock_cn calendar")
+	require.ErrorContains(t, err, "stockcn calendar")
 }
 
 func TestBuildSCFPackageSetsOutputMode0600(t *testing.T) {

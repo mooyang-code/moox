@@ -1,1 +1,0 @@
-tests/e2e/test-observability-e2e.sh

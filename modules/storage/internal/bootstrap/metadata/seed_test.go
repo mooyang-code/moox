@@ -27,7 +27,7 @@ func openSeedTestStore(t *testing.T) *metasqlite.Store {
 }
 
 func TestDefaultViewInventory(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "examples", "setup", "default", "metadata.yaml"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "config", "setup", "metadata.yaml"))
 	require.NoError(t, err)
 	var seed seedFile
 	// The full example also contains deployment-only fields not needed by the
@@ -40,20 +40,20 @@ func TestDefaultViewInventory(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"crypto/binance_spot_kline_1m_view",
-		"crypto/binance_swap_kline_1m_view",
-		"crypto/perpetual_kline_1h_view",
-		"crypto/spot_kline_1h_view",
-		"moox_system/host_disk_view",
-		"moox_system/host_fs_view",
-		"moox_system/host_net_view",
-		"moox_system/host_resource_view",
-		"moox_system/moox_service_metrics_view",
-		"stock_cn/stock_cn_cb_kline_view",
-		"stock_cn/stock_cn_index_kline_view",
-		"stock_cn/stock_cn_kline_view",
-		"stock_hk/stock_hk_kline_view",
-		"stock_us/stock_us_kline_view",
+		"crypto/view_crypto_spot_kline_1m",
+		"crypto/view_crypto_swap_kline_1m",
+		"crypto/view_crypto_swap_kline_1h",
+		"crypto/view_crypto_spot_kline_1h",
+		"mooxsys/view_mooxsys_host_disk",
+		"mooxsys/view_mooxsys_host_fs",
+		"mooxsys/view_mooxsys_host_net",
+		"mooxsys/view_mooxsys_host_resource",
+		"mooxsys/view_mooxsys_service_metrics",
+		"stockcn/view_stockcn_bond_kline_1m",
+		"stockcn/view_stockcn_index_kline_1d",
+		"stockcn/view_stockcn_equity_kline_1m",
+		"stockhk/view_stockhk_equity_kline_1d",
+		"stockus/view_stockus_equity_kline_1d",
 	}
 	sort.Strings(want)
 	require.Equal(t, want, got)
@@ -109,7 +109,7 @@ func TestImportEntitiesValidatesDatasetBindingBeforeWrites(t *testing.T) {
 
 func TestSeedViewColumnAttributesDefaultsInternalDisplayName(t *testing.T) {
 	got := seedViewColumnAttributes(seedViewColumn{
-		SpaceID: "moox_system", ColumnName: "cpu_usage_percent",
+		SpaceID: "mooxsys", ColumnName: "cpu_usage_percent",
 	})
 	require.Equal(t, "cpu_usage_percent", got["display_name"])
 

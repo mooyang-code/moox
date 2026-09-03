@@ -1,1 +1,0 @@
-tests/contract/test-install-caddy-ca.sh

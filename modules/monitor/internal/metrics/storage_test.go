@@ -53,10 +53,10 @@ func (f *fakeAccess) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTi
 }
 
 func metricsStorageConfig() monconfig.MetricsStorageConfig {
-	return monconfig.MetricsStorageConfig{SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", WriteBatchSize: 1}
+	return monconfig.MetricsStorageConfig{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", WriteBatchSize: 1}
 }
 func TestStorageAdapterValidatesReadOnlySchemaAndWritesBoundedRows(t *testing.T) {
-	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "moox_system", Status: "active"}, dataset: &storagepb.Dataset{SpaceId: "moox_system", DatasetId: "moox_service_metrics", Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
+	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "mooxsys", Status: "active"}, dataset: &storagepb.Dataset{SpaceId: "mooxsys", DatasetId: "dataset_mooxsys_service_metrics", Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
 	for _, c := range []struct {
 		name     string
 		typ      storagepb.FieldValueType
@@ -102,7 +102,7 @@ func TestStorageAdapterQueryHistorySelectorsUseSeriesIdentity(t *testing.T) {
 	if len(a.readReq.GetSelectors()) != 1 {
 		t.Fatalf("selectors=%d, want 1", len(a.readReq.GetSelectors()))
 	}
-	if a.readReq.GetSpaceId() != "moox_system" || a.readReq.GetDatasetId() != "moox_service_metrics" {
+	if a.readReq.GetSpaceId() != "mooxsys" || a.readReq.GetDatasetId() != "dataset_mooxsys_service_metrics" {
 		t.Fatalf("request scope=%s/%s", a.readReq.GetSpaceId(), a.readReq.GetDatasetId())
 	}
 	key := a.readReq.GetSelectors()[0]
@@ -122,7 +122,7 @@ func TestStorageAdapterRejectsUnreadyDataNode(t *testing.T) {
 }
 
 func TestStorageAdapterResolvesDataNodeWithoutRouteRPC(t *testing.T) {
-	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "moox_system", Status: "active"}, dataset: &storagepb.Dataset{Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
+	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "mooxsys", Status: "active"}, dataset: &storagepb.Dataset{Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
 	for _, c := range []struct {
 		name     string
 		typ      storagepb.FieldValueType

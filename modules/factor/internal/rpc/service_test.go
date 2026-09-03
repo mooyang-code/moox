@@ -356,6 +356,27 @@ func TestUpsertDisabledBindingDoesNotAccessStorageMetadata(t *testing.T) {
 	require.Zero(t, metadata.listViewsCalls)
 }
 
+func TestUpsertPendingBindingPersistsWithoutActiveSourceIndex(t *testing.T) {
+	db := openRPCTestDB(t)
+	seedRPCFactorDefinitionWithStatus(t, db, "factor", domain.FactorStatusEnabled)
+	metadata := newRecordingFactorMetadataClient("space", "factor")
+	svc := NewWithRuntime(db, nil,
+		WithFactorsDir(t.TempDir()),
+		WithMetadataSync(registry.NewMetadataSync(metadata, nil)),
+	)
+	binding := testBindingPB(domain.SubjectModeAll, `[]`)
+	binding.Status = domain.BindingStatusPendingView
+
+	rsp, err := svc.UpsertBinding(context.Background(), &factorpb.UpsertBindingReq{Binding: binding})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, domain.BindingStatusPendingView, rsp.GetBinding().GetStatus())
+	rows, total, listErr := db.Bindings().List(context.Background(), store.BindingFilter{})
+	require.NoError(t, listErr)
+	require.EqualValues(t, 1, total)
+	require.Equal(t, domain.BindingStatusPendingView, rows[0].Status)
+}
+
 func TestUpsertBindingDisablesLocallyWithoutMetadataAccess(t *testing.T) {
 	db := openRPCTestDB(t)
 	seedRPCFactorDefinition(t, db, "factor")

@@ -54,7 +54,7 @@ func (e Event) Validate(message *eventpb.EventMessage, payload proto.Message) er
 
 var builtInEvents []Event
 
-const ObservabilityFilterSubject = "moox.observability.>"
+const ObservabilityFilterSubject = "moox.event.observability.>"
 
 func ObservabilityStreamName() string {
 	return ObservabilityMetricsSnapshotReported.Stream()
@@ -67,43 +67,43 @@ func declareEvent(name string, version uint32, stream, owner string, newPayload 
 }
 
 var (
-	CloudJobExecutionRequested = declareEvent("cloudnode.job.execution.requested", 1, "MOOX_CLOUDNODE_EXEC", "cloudnode", func() proto.Message {
+	CloudJobExecutionRequested = declareEvent("event.cloudnode.job.execution.requested", 1, "MOOX_CLOUDNODE_EXEC", "cloudnode", func() proto.Message {
 		return &cloudjobpb.JobExecutionRequested{}
 	}, validateCloudJobExecutionRequested)
-	ObservabilityMetricsSnapshotReported = declareEvent("observability.metrics.snapshot.reported", 1, "MOOX_OBSERVABILITY", "service", func() proto.Message {
+	ObservabilityMetricsSnapshotReported = declareEvent("event.observability.metrics.snapshot.reported", 1, "MOOX_OBSERVABILITY", "service", func() proto.Message {
 		return &metricspb.MetricReport{}
 	}, validateObservabilityMetricsSnapshotReported)
-	ObservabilityHostSnapshotReported = declareEvent("observability.host.snapshot.reported", 1, "MOOX_OBSERVABILITY", "hostagent", func() proto.Message {
+	ObservabilityHostSnapshotReported = declareEvent("event.observability.host.snapshot.reported", 1, "MOOX_OBSERVABILITY", "hostagent", func() proto.Message {
 		return &hostmetricpb.HostMetric{}
 	}, validateObservabilityHostSnapshotReported)
-	ObservabilityHealthCheckReported = declareEvent("observability.health.check.reported", 1, "MOOX_OBSERVABILITY", "watchdog", func() proto.Message {
+	ObservabilityHealthCheckReported = declareEvent("event.observability.health.check.reported", 1, "MOOX_OBSERVABILITY", "watchdog", func() proto.Message {
 		return &observabilitypb.HealthCheckReport{}
 	}, validateObservabilityHealthCheckReported)
-	DatasetRowsUpserted = declareEvent("storage.dataset.rows.upserted", 2, "MOOX_STORAGE", "storage", func() proto.Message {
+	DatasetRowsUpserted = declareEvent("event.storage.dataset.rows.upserted", 2, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetRowsUpserted{}
 	}, validateDatasetRowsUpserted)
-	DatasetPeriodCollected = declareEvent("storage.dataset.period.collected", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+	DatasetPeriodCollected = declareEvent("event.storage.dataset.period.collected", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetPeriodCollected{}
 	}, validateDatasetPeriodCollected)
-	ViewSourcePeriodReady = declareEvent("storage.view.source_period.ready", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+	ViewSourcePeriodReady = declareEvent("event.storage.view.source_period.ready", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.ViewSourcePeriodReady{}
 	}, validateViewSourcePeriodReady)
-	FactorPeriodComputed = declareEvent("storage.dataset.factor_period.computed", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+	FactorPeriodComputed = declareEvent("event.storage.dataset.factor_period.computed", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.FactorPeriodComputed{}
 	}, validateFactorPeriodComputed)
-	ViewFactorPeriodReady = declareEvent("storage.view.factor_period.ready", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+	ViewFactorPeriodReady = declareEvent("event.storage.view.factor_period.ready", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.ViewFactorPeriodReady{}
 	}, validateViewFactorPeriodReady)
-	DatasetSyncPoint = declareEvent("storage.dataset.sync_point", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+	DatasetSyncPoint = declareEvent("event.storage.dataset.sync_point", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetSyncPoint{}
 	}, validateDatasetSyncPoint)
-	MarketFetchBatchCompleted = declareEvent("market.fetch.batch.completed", 1, "MOOX_MARKET_FETCH", "collector", func() proto.Message {
+	MarketFetchBatchCompleted = declareEvent("event.market.fetch.batch.completed", 1, "MOOX_MARKET_FETCH", "collector", func() proto.Message {
 		return &marketfetchpb.MarketFetchBatchCompleted{}
 	}, validateMarketFetchBatchCompleted)
-	LogicalAccountTargetRequested = declareEvent("trade.target.requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
+	LogicalAccountTargetRequested = declareEvent("event.trade.target.requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
 		return &tradeeventpb.LogicalAccountTargetRequested{}
 	}, validateLogicalAccountTargetRequested)
-	LogicalAccountTargetWeightRequested = declareEvent("trade.target.weight_requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
+	LogicalAccountTargetWeightRequested = declareEvent("event.trade.target.weight_requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
 		return &tradeeventpb.LogicalAccountTargetWeightRequested{}
 	}, validateLogicalAccountTargetWeightRequested)
 )
@@ -132,6 +132,9 @@ func newRegistry(events []Event) (*Registry, error) {
 	for _, event := range events {
 		if strings.TrimSpace(event.Name()) == "" || event.Version() == 0 || strings.TrimSpace(event.Stream()) == "" || strings.TrimSpace(event.Owner()) == "" || event.NewPayload() == nil || event.validate == nil {
 			return nil, fmt.Errorf("event declaration %q is incomplete", eventKey(event))
+		}
+		if !strings.HasPrefix(event.Name(), "event.") {
+			return nil, fmt.Errorf("event name %q must start with event.", event.Name())
 		}
 		key := eventKey(event)
 		if _, exists := r.byKey[key]; exists {

@@ -18,7 +18,7 @@ func TestRequiresLocalCATrust(t *testing.T) {
 
 func TestEnsureLocalCATrustInstallsOnlyWhenCheckFails(t *testing.T) {
 	root := t.TempDir()
-	script := filepath.Join(root, "scripts", "install-caddy-ca.sh")
+	script := filepath.Join(root, "scripts", "deploy", "install-caddy-ca.sh")
 	marker := filepath.Join(root, "installed")
 	require.NoError(t, os.MkdirAll(filepath.Dir(script), 0o755))
 	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --check '*) test -f \"$MARKER\";;\n  *) : >\"$MARKER\";;\nesac\n"), 0o700))
@@ -30,7 +30,7 @@ func TestEnsureLocalCATrustInstallsOnlyWhenCheckFails(t *testing.T) {
 
 func TestEnsureLocalCATrustSkipsInstallWhenAlreadyTrusted(t *testing.T) {
 	root := t.TempDir()
-	script := filepath.Join(root, "scripts", "install-caddy-ca.sh")
+	script := filepath.Join(root, "scripts", "deploy", "install-caddy-ca.sh")
 	marker := filepath.Join(root, "installed")
 	require.NoError(t, os.MkdirAll(filepath.Dir(script), 0o755))
 	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --check '*) exit 0;;\n  *) : >\"$MARKER\";;\nesac\n"), 0o700))

@@ -51,12 +51,12 @@ module RPC
 |---|---|
 | `docs/运维/EdgeOne接入与应急回滚.md` | Console onboarding, rules, firewall, probes, rollback, and cost control. |
 | `deploy/caddy/Caddyfile` | EdgeOne-compatible origin routing and trusted-proxy policy. |
-| `scripts/test-edgeone-origin-contract.sh` | Caddy routing and security contract. |
+| `scripts/test/contract/test-edgeone-origin-contract.sh` | Caddy routing and security contract. |
 | `web-host/main.go` | Timeouts, method/body bounds, and safe origin logging. |
 | `web-host/health_test.go` | Static origin regressions. |
 | `modules/*/config/trpc_go.yaml` | Uniform filters and exporter wiring. |
 | `modules/*/cmd/server/main.go` | Anonymous plugin registration imports. |
-| `scripts/test-trpc-plugin-config.sh` | Config/import/dependency consistency. |
+| `scripts/test/contract/test-trpc-plugin-config.sh` | Config/import/dependency consistency. |
 | `packages/trpcplugintest/recovery_test.go` | Real recovery plugin integration test. |
 | `docs/运维/tRPC插件运行基线.md` | Rollout matrix and advanced-pilot boundaries. |
 
@@ -64,8 +64,8 @@ module RPC
 
 **Files:**
 - Create: `docs/运维/EdgeOne接入与应急回滚.md`
-- Create: `scripts/test-edgeone-origin-contract.sh`
-- Test: `scripts/test-edgeone-origin-contract.sh`
+- Create: `scripts/test/contract/test-edgeone-origin-contract.sh`
+- Test: `scripts/test/contract/test-edgeone-origin-contract.sh`
 
 - [ ] **Step 1: Write the operator runbook**
 
@@ -99,12 +99,12 @@ When `CADDY_BIN` exists, also run Caddy validation; otherwise print one SKIP lin
 
 - [ ] **Step 3: Verify and commit**
 
-Run: `bash scripts/test-edgeone-origin-contract.sh`
+Run: `bash scripts/test/contract/test-edgeone-origin-contract.sh`
 
 Expected: all routing/security assertions pass and Caddy validation either passes or emits the single documented SKIP line.
 
 ```bash
-git add docs/运维/EdgeOne接入与应急回滚.md scripts/test-edgeone-origin-contract.sh
+git add docs/运维/EdgeOne接入与应急回滚.md scripts/test/contract/test-edgeone-origin-contract.sh
 git commit -m "docs: add edgeone origin protection runbook"
 ```
 
@@ -112,9 +112,9 @@ git commit -m "docs: add edgeone origin protection runbook"
 
 **Files:**
 - Modify: `deploy/caddy/Caddyfile`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-caddy-config.sh`
-- Modify: `scripts/test-edgeone-origin-contract.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-caddy-config.sh`
+- Modify: `scripts/test/contract/test-edgeone-origin-contract.sh`
 
 - [ ] **Step 1: Add failing listener-contract checks**
 
@@ -126,7 +126,7 @@ Add Caddy trusted-proxy configuration generated from a reviewed EdgeOne origin-p
 
 - [ ] **Step 3: Reject public upstream listeners**
 
-Make `scripts/deploy-moox.sh` reject all effective values except the explicit `127.0.0.1:port` form for:
+Make `scripts/deploy/deploy-moox.sh` reject all effective values except the explicit `127.0.0.1:port` form for:
 
 ```text
 MOOX_WEB_HOST_ADDR
@@ -140,10 +140,10 @@ Do not accept wildcard addresses, IPv6 wildcard addresses, hostnames, or arbitra
 - [ ] **Step 4: Verify and commit**
 
 ```bash
-bash scripts/test-caddy-config.sh
-bash scripts/test-edgeone-origin-contract.sh
-bash scripts/test-deploy-moox-https.sh
-git add deploy/caddy/Caddyfile scripts/deploy-moox.sh scripts/test-caddy-config.sh scripts/test-edgeone-origin-contract.sh
+bash scripts/test/contract/test-caddy-config.sh
+bash scripts/test/contract/test-edgeone-origin-contract.sh
+bash scripts/test/contract/test-deploy-moox-https.sh
+git add deploy/caddy/Caddyfile scripts/deploy/deploy-moox.sh scripts/test/contract/test-caddy-config.sh scripts/test/contract/test-edgeone-origin-contract.sh
 git commit -m "feat: prepare caddy origin for edgeone"
 ```
 
@@ -217,7 +217,7 @@ git commit -m "feat: harden web host origin limits"
 - Modify: `modules/hostagent/config/trpc_go.yaml`
 - Modify: `modules/strategy/config/trpc_go.yaml`
 - Modify: `modules/archive/config/trpc_go.yaml`
-- Create: `scripts/test-trpc-plugin-config.sh`
+- Create: `scripts/test/contract/test-trpc-plugin-config.sh`
 
 - [ ] **Step 1: Create a failing plugin-matrix test**
 
@@ -272,10 +272,10 @@ Omit validation where there is no supported protobuf validation surface, omit co
 - [ ] **Step 4: Verify and commit**
 
 ```bash
-bash scripts/test-trpc-plugin-config.sh
+bash scripts/test/contract/test-trpc-plugin-config.sh
 go test -count=1 ./modules/admin/... ./modules/cloudnode/... ./modules/collector/... ./modules/factor/...
 go test -count=1 ./modules/eventbus/... ./modules/monitor/... ./modules/storage/... ./modules/trade/...
-git add modules/*/config/trpc_go.yaml scripts/test-trpc-plugin-config.sh
+git add modules/*/config/trpc_go.yaml scripts/test/contract/test-trpc-plugin-config.sh
 git commit -m "fix: standardize trpc metrics configuration"
 ```
 
@@ -285,7 +285,7 @@ git commit -m "fix: standardize trpc metrics configuration"
 - Modify: `modules/{admin,archive,cloudnode,collector,eventbus,factor,hostagent,monitor,storage,strategy,trade}/go.mod`
 - Modify: matching server entrypoints and tRPC configs
 - Create: `packages/trpcplugintest/recovery_test.go`
-- Modify: `scripts/test-trpc-plugin-config.sh`
+- Modify: `scripts/test/contract/test-trpc-plugin-config.sh`
 
 - [ ] **Step 1: Write an actual recovery-filter integration test**
 
@@ -323,9 +323,9 @@ Do not remove panic recovery from `packages/cloudruntime` or workflow executors.
 
 ```bash
 go test -count=1 ./packages/trpcplugintest
-bash scripts/test-trpc-plugin-config.sh
+bash scripts/test/contract/test-trpc-plugin-config.sh
 go test -count=1 ./modules/admin/... ./modules/storage/... ./modules/trade/...
-git add modules/*/go.mod modules/*/go.sum modules/*/cmd/server/main.go modules/*/config/trpc_go.yaml packages/trpcplugintest/recovery_test.go scripts/test-trpc-plugin-config.sh
+git add modules/*/go.mod modules/*/go.sum modules/*/cmd/server/main.go modules/*/config/trpc_go.yaml packages/trpcplugintest/recovery_test.go scripts/test/contract/test-trpc-plugin-config.sh
 git commit -m "feat: recover panics at trpc server boundaries"
 ```
 
@@ -337,7 +337,7 @@ git commit -m "feat: recover panics at trpc server boundaries"
 - Modify: `modules/collector/config/trpc_go.yaml`
 - Modify: `modules/factor/config/trpc_go.yaml`
 - Create: `docs/运维/tRPC插件运行基线.md`
-- Modify: `scripts/test-trpc-plugin-config.sh`
+- Modify: `scripts/test/contract/test-trpc-plugin-config.sh`
 
 - [ ] **Step 1: Document log routing**
 
@@ -358,8 +358,8 @@ Keep console logging. Add CLS writers only through production overlays or runtim
 - [ ] **Step 4: Verify and commit**
 
 ```bash
-bash scripts/test-trpc-plugin-config.sh
-git add docs/运维/tRPC插件运行基线.md modules/admin/config/trpc_go.yaml modules/cloudnode/config/trpc_go.yaml modules/collector/config/trpc_go.yaml modules/factor/config/trpc_go.yaml scripts/test-trpc-plugin-config.sh
+bash scripts/test/contract/test-trpc-plugin-config.sh
+git add docs/运维/tRPC插件运行基线.md modules/admin/config/trpc_go.yaml modules/cloudnode/config/trpc_go.yaml modules/collector/config/trpc_go.yaml modules/factor/config/trpc_go.yaml scripts/test/contract/test-trpc-plugin-config.sh
 git commit -m "docs: define trpc production logging baseline"
 ```
 
@@ -423,9 +423,9 @@ Use valid signed requests for protected API acceptance. Record authentication re
 - [ ] **Step 3: Final verification and push**
 
 ```bash
-bash scripts/test-edgeone-origin-contract.sh
-bash scripts/test-caddy-config.sh
-bash scripts/test-trpc-plugin-config.sh
+bash scripts/test/contract/test-edgeone-origin-contract.sh
+bash scripts/test/contract/test-caddy-config.sh
+bash scripts/test/contract/test-trpc-plugin-config.sh
 go test -count=1 ./web-host ./packages/trpcplugintest
 go test -count=1 ./modules/admin/... ./modules/storage/... ./modules/trade/...
 git diff --check

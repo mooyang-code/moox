@@ -1,17 +1,18 @@
 # MooX 示例
 
-默认系统初始化文件集中在 [`setup/default/`](./setup/default/)：
+默认系统初始化文件集中在仓库根目录 [`config/setup/`](../config/setup/)：
 
 - `metadata.yaml`：A 股、加密货币和内部监控元数据。
 - `dataset-health-policy.yaml`：Monitor 的 Dataset 健康判定阈值。
 - `service-deployments.yaml`：Admin 服务部署清单。
+- `collector-rules.yaml`：Collector 默认采集规则。
 
 新系统使用 `moox-cli setup init` 读取这个固定目录，不需要逐个挑选 YAML：
 
 ```bash
 moox-cli setup init \
-  --file ./custom.toml \
-  --config-dir ./examples/setup/default \
+  --file ./moox.toml \
+  --config-dir ./config/setup \
   --storage-host control
 ```
 

@@ -151,7 +151,7 @@ git push origin HEAD:main
 
 ```bash
 make -C web-host statik
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh web-host
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh web-host
 git add web-host/internal/statik/statik.go
 git commit -m "build: update embedded web assets"
 git push origin HEAD:main

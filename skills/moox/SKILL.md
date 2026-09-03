@@ -52,7 +52,7 @@ make deploy
 
 单独发布或替换已部署的二进制服务时，使用
 [`references/service-release.md`](references/service-release.md) 中的服务包发布流程；先用
-`scripts/package-service.sh` 生成 ZIP，再通过通用入口 `moox-cli setup deploy-service` 发布。
+`scripts/build/package-service.sh` 生成 ZIP，再通过通用入口 `moox-cli setup deploy-service` 发布。
 服务包包含二进制、配置和生命周期脚本，由 CLI 通过已核验的 SSH 主机指纹完成上传、解压、
 回滚和健康检查；不要在命令行中拼接密码。
 
@@ -134,7 +134,7 @@ metadata is written to the generated `config/resources.env`, while staged
 `trpc_go*.yaml` files reference `${MOOX_CLS_TOPIC_ID}`. Writer credentials are
 installed only in the target's `secrets/cls.env`, with mode `0600`.
 
-`custom.toml` contains only Tencent Cloud input credentials and region. The
+`moox.toml` contains only Tencent Cloud input credentials and region. The
 generated `config/resources.env` is the canonical runtime source for the
 selected cloud account, resolved Logset/Topic IDs, and CLS endpoint; it is non-secret, mode `0644`, and
 is atomically replaced with the release stage. Never add resource IDs or
@@ -171,8 +171,8 @@ healthcheck/renewal scheduler; do not ask the user to run a separate Caddy
 script during initialization:
 
 ```bash
-./bin/moox-cli setup validate --file ./custom.toml
-./bin/moox-cli setup deploy-control --file ./custom.toml
+./bin/moox-cli setup validate --file ./moox.toml
+./bin/moox-cli setup deploy-control --file ./moox.toml
 ```
 
 The command installs and verifies pinned Caddy `v2.11.4`, uploads the
@@ -187,7 +187,7 @@ The same check runs before publishing `admin` or `web-host` packages. If a
 previous run was interrupted, repair it with:
 
 ```bash
-./bin/moox-cli setup trust-browser --file ./custom.toml
+./bin/moox-cli setup trust-browser --file ./moox.toml
 ```
 
 Automatic mode selects Let's Encrypt public certificates for public IP/DNS
@@ -211,7 +211,7 @@ skills/moox/scripts/caddy-ca.sh status --ca-file "$CA_FILE"
 
 Internal-mode backend processes use `MOOX_SERVICE_GATEWAY_CA_FILE`; SCF uses `MOOX_SERVICE_GATEWAY_CA_PEM_B64`. Public mode must not set either service-edge CA variable. The separate `MOOX_GATEWAY_CA_FILE` peer bundle remains required in both modes. Never disable TLS verification.
 
-For a CLS-enabled release, `scripts/deploy-moox.sh --enable-cls` runs the CLS
+For a CLS-enabled release, `scripts/deploy/deploy-moox.sh --enable-cls` runs the CLS
 predeploy check after stage creation and before release archive sync or service
 shutdown.
 That check requires the already-running Admin/CloudNode control plane and at
@@ -245,7 +245,7 @@ indexing or delivery errors, but never print CLS credentials.
 
 When initializing a fresh MooX system, follow
 [`references/custom-setup.md`](references/custom-setup.md) exactly. The user
-creates repository-root `custom.toml` before deployment. The Agent may test only
+creates repository-root `moox.toml` before deployment. The Agent may test only
 whether it exists and must never read, parse, print, copy, or source it outside
 `moox-cli setup`.
 
@@ -254,9 +254,9 @@ ask about Storage until setup is complete and the public login API is verified.
 Then use `setup hosts`, ask the user in natural language for exactly one Storage
 host, and run `setup deploy-storage`; the four initial Storage processes stay on
 that machine. After Storage is ready, run `setup init --config-dir
-./examples/setup/default --storage-host <host-name>` to create or verify the
+./config/setup --storage-host <host-name>` to create or verify the
 default Admin spaces and Storage metadata, activate Datasets, and verify the
-result. Keep `custom.toml` unchanged and never parse either its secrets or a
+result. Keep `moox.toml` unchanged and never parse either its secrets or a
 generated filtered seed in Agent context.
 
 `t_service_deployments` remains the source of truth for service addresses.

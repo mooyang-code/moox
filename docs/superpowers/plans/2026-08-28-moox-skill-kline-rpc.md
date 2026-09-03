@@ -13,8 +13,8 @@
 ## 文件结构
 
 - `modules/admin/internal/service/sysdeploy/defaults.go`：Gateway 路由拆分。
-- `examples/setup/default/service-deployments.yaml`：正式 seed 与内置路由保持一致。
-- `scripts/deploy-moox.sh`：生成、注册和安装 `moox-skill` 派生密钥。
+- `config/setup/service-deployments.yaml`：正式 seed 与内置路由保持一致。
+- `scripts/deploy/deploy-moox.sh`：生成、注册和安装 `moox-skill` 派生密钥。
 - `modules/cli/internal/command/data_kline.go`：K 线命令、RPC 请求和输出。
 - `modules/cli/internal/command/data_kline_config.go`：严格配置与数据目录解析。
 - `modules/cli/internal/command/setup_skill_config.go`：导出最小 Skill 配置。
@@ -26,11 +26,11 @@
 **Files:**
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
-- Modify: `examples/setup/default/service-deployments.yaml`
+- Modify: `config/setup/service-deployments.yaml`
 - Modify: `modules/admin/cmd/cli/service_deployments_test.go`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/tests/contract/test-deploy-moox-gateway.sh`
-- Modify: `scripts/tests/contract/test-deploy-moox-control-profile.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-gateway.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-control-profile.sh`
 
 - [ ] **Step 1: 写失败的路由测试**
 
@@ -63,7 +63,7 @@ Expected: FAIL，指出缺少独立 route 或 seed/default 不一致。
 
 - [ ] **Step 6: 运行绿灯**
 
-Run: `(cd modules/admin && go test -count=1 ./internal/service/sysdeploy ./cmd/cli) && bash scripts/tests/contract/test-deploy-moox-gateway.sh && bash scripts/tests/contract/test-deploy-moox-control-profile.sh`
+Run: `(cd modules/admin && go test -count=1 ./internal/service/sysdeploy ./cmd/cli) && bash scripts/test/contract/test-deploy-moox-gateway.sh && bash scripts/test/contract/test-deploy-moox-control-profile.sh`
 
 Expected: PASS。
 
@@ -175,11 +175,11 @@ Expected: PASS。
 - Modify: `Makefile`
 - Modify: `skills/moox/SKILL.md`
 - Create: `skills/moox/references/data-query.md`
-- Create: `skills/moox/scripts/test-data-query-contract.sh`
+- Create: `skills/moox/scripts/test/contract/test-data-query-contract.sh`
 
 - [ ] **Step 1: 写失败的打包契约**
 
-fake CLI 生成 `0600` marker 配置；断言参数、archive/config 权限、清单、不含 `custom.toml`/root secret/SSH/腾讯云 marker，失败不覆盖旧包并清理 staging。
+fake CLI 生成 `0600` marker 配置；断言参数、archive/config 权限、清单、不含 `moox.toml`/root secret/SSH/腾讯云 marker，失败不覆盖旧包并清理 staging。
 
 - [ ] **Step 2: 运行红灯**
 
@@ -189,7 +189,7 @@ Expected: FAIL，因为当前脚本直接 tar 且 archive 为 `0644`。
 
 - [ ] **Step 3: 实现 staging 和原子打包**
 
-支持 `CONFIG/MOOX_CLI/OUT` 环境覆盖；默认使用根 `custom.toml`、`bin/moox-cli`、`dist/moox-skill.tar.gz`。流程为 mktemp、trap、复制 Skill、调用导出、校验 `0600`、临时 tar、chmod `0600`、原子 mv。
+支持 `CONFIG/MOOX_CLI/OUT` 环境覆盖；默认使用根 `moox.toml`、`bin/moox-cli`、`dist/moox-skill.tar.gz`。流程为 mktemp、trap、复制 Skill、调用导出、校验 `0600`、临时 tar、chmod `0600`、原子 mv。
 
 - [ ] **Step 4: 写文档契约并实现 Skill 文档**
 
@@ -197,7 +197,7 @@ Expected: FAIL，因为当前脚本直接 tar 且 archive 为 `0644`。
 
 - [ ] **Step 5: 运行脚本绿灯**
 
-Run: `bash scripts/build/package-skill_test.sh && bash skills/moox/scripts/test-data-query-contract.sh && bash -n scripts/build/package-skill.sh scripts/build/package-skill_test.sh skills/moox/scripts/test-data-query-contract.sh`
+Run: `bash scripts/build/package-skill_test.sh && bash skills/moox/scripts/test/contract/test-data-query-contract.sh && bash -n scripts/build/package-skill.sh scripts/build/package-skill_test.sh skills/moox/scripts/test/contract/test-data-query-contract.sh`
 
 Expected: PASS。
 
@@ -219,7 +219,7 @@ Expected: PASS。
 
 - [ ] **Step 3: 运行完整本地证明集**
 
-Run: `(cd modules/cli && go test -count=1 ./internal/command ./internal/setup/... ./test) && (cd modules/admin && go test -count=1 ./internal/service/sysdeploy ./cmd/cli) && (cd modules/gateway && go test -count=1 ./internal/router/...) && bash scripts/build/package-skill_test.sh && bash skills/moox/scripts/test-data-query-contract.sh && ./scripts/test-go-workspace.sh && git diff --check`
+Run: `(cd modules/cli && go test -count=1 ./internal/command ./internal/setup/... ./test) && (cd modules/admin && go test -count=1 ./internal/service/sysdeploy ./cmd/cli) && (cd modules/gateway && go test -count=1 ./internal/router/...) && bash scripts/build/package-skill_test.sh && bash skills/moox/scripts/test/contract/test-data-query-contract.sh && ./scripts/test/contract/test-go-workspace.sh && git diff --check`
 
 Expected: 全部 PASS。
 
@@ -247,21 +247,21 @@ Expected: 修复后全部 PASS，不复用审查前结果。
 
 - [ ] **Step 1: 提交并推送**
 
-Run: `git add modules/admin modules/cli examples/setup/default/service-deployments.yaml scripts/deploy-moox.sh scripts/build/package-skill.sh scripts/build/package-skill_test.sh scripts/tests/contract Makefile skills/moox docs/superpowers && git commit -m 'feat(skill): 增加 K 线 RPC 查询能力' && git push`
+Run: `git add modules/admin modules/cli config/setup/service-deployments.yaml scripts/deploy/deploy-moox.sh scripts/build/package-skill.sh scripts/build/package-skill_test.sh scripts/test/contract Makefile skills/moox docs/superpowers && git commit -m 'feat(skill): 增加 K 线 RPC 查询能力' && git push`
 
 Expected: `git rev-parse HEAD` 与 `git rev-parse origin/feature/mooyang` 一致。
 
 - [ ] **Step 2: 核验正式主机并发布**
 
-Run: `./bin/moox-cli setup validate --file ./custom.toml && ./bin/moox-cli setup hosts --file ./custom.toml && ./bin/moox-cli setup deploy-control --file ./custom.toml`
+Run: `./bin/moox-cli setup validate --file ./moox.toml && ./bin/moox-cli setup hosts --file ./moox.toml && ./bin/moox-cli setup deploy-control --file ./moox.toml`
 
-依据 `crypto_market.storage_gateway_node_id` 与脱敏 host 输出，若 Storage Gateway 不在 control，执行 `./bin/moox-cli setup deploy-storage --file ./custom.toml --host "$MOOX_STORAGE_HOST"`。禁止 reset 数据。
+依据 `crypto.storage_gateway_node_id` 与脱敏 host 输出，若 Storage Gateway 不在 control，执行 `./bin/moox-cli setup deploy-storage --file ./moox.toml --host "$MOOX_STORAGE_HOST"`。禁止 reset 数据。
 
 - [ ] **Step 3: 用正式配置打包**
 
 Run: `make package-skill && stat -f '%Lp %N' dist/moox-skill.tar.gz && tar -tzf dist/moox-skill.tar.gz`
 
-Expected: archive 为 `600`，包含 `moox/config/data-access.yaml`，不含 `custom.toml`。
+Expected: archive 为 `600`，包含 `moox/config/data-access.yaml`，不含 `moox.toml`。
 
 - [ ] **Step 4: 从打包产物执行真实查询**
 
@@ -272,7 +272,7 @@ Expected: archive 为 `600`，包含 `moox/config/data-access.yaml`，不含 `cu
   --symbol BTC-USDT --interval 1m --limit 5
 ```
 
-Expected: exit 0、`ret_info.code=SUCCESS`、rows 非空；所有行属于 `crypto_market/binance_spot_kline_1m/BTC-USDT/1m` 和 `venue:binance`，时间 DESC。
+Expected: exit 0、`ret_info.code=SUCCESS`、rows 非空；所有行属于 `crypto/dataset_binance_spot_kline_1m/BTC-USDT/1m` 和 `venue:binance`，时间 DESC。
 
 - [ ] **Step 5: 完成审计**
 

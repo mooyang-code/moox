@@ -428,8 +428,8 @@ Monitor 启动时不得自动跨服务清理 Canary。遗留运行只标记为 `
 - Create: `packages/doctor/report.schema.json`
 - Create: `packages/doctor/components.yaml`
 - Modify: `go.work`
-- Modify: `scripts/check-package-boundaries.sh`
-- Modify: `scripts/test-release-contract.sh`
+- Modify: `scripts/check/check-package-boundaries.sh`
+- Modify: `scripts/test/contract/test-release-contract.sh`
 - Modify: `examples/service-deployments.seed.yaml`
 
 **Interfaces:**
@@ -450,8 +450,8 @@ Monitor 启动时不得自动跨服务清理 Canary。遗留运行只标记为 `
 
 ```bash
 (cd packages/doctor && go test -count=1 ./...)
-./scripts/check-package-boundaries.sh
-bash scripts/test-release-contract.sh
+./scripts/check/check-package-boundaries.sh
+bash scripts/test/contract/test-release-contract.sh
 ```
 
 ### Task 2: 删除 Monitor 多实例并建立期望部署契约
@@ -505,9 +505,9 @@ bash scripts/test-release-contract.sh
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
 - Modify: `modules/admin/internal/gateway/config_test.go`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-deploy-moox-gateway.sh`
-- Create: `scripts/test-monitor-coverage-contract.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-gateway.sh`
+- Create: `scripts/test/contract/test-monitor-coverage-contract.sh`
 - Modify: `web/src/api/monitor/index.ts`
 - Modify: `web/src/api/monitor/types.ts`
 - Modify: `web/src/views/ops/service-monitor/index.vue`
@@ -532,8 +532,8 @@ bash scripts/test-release-contract.sh
 make -C modules/monitor/proto all
 (cd modules/monitor && go test -count=1 ./internal/config ./internal/bootstrap ./internal/alerting ./internal/sysdeploy ./internal/rpc ./internal/store ./schema)
 (cd modules/admin && go test -count=1 ./internal/service/sysdeploy)
-bash scripts/test-monitor-coverage-contract.sh
-bash scripts/test-trpc-plugin-config.sh
+bash scripts/test/contract/test-monitor-coverage-contract.sh
+bash scripts/test/contract/test-trpc-plugin-config.sh
 (cd web && pnpm build:prod)
 ```
 
@@ -575,9 +575,9 @@ bash scripts/test-trpc-plugin-config.sh
 - Modify: `modules/admin/cmd/cli/eventbus_credentials_test.go`
 - Modify: `modules/monitor/internal/bootstrap/metrics_runtime.go`
 - Modify: `modules/monitor/internal/bootstrap/bootstrap_test.go`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-deploy-moox-eventbus.sh`
-- Modify: `scripts/test-deploy-moox-gateway.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-eventbus.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-gateway.sh`
 
 **Interfaces:**
 - Produces: health `Response.BootID/BuildTime/ConfigHash/PipelineConfigHash`。
@@ -605,8 +605,8 @@ bash scripts/test-trpc-plugin-config.sh
 (cd modules/eventbus && go test -count=1 ./internal/config ./internal/registry ./internal/health ./internal/bootstrap)
 (cd modules/trade && go test -count=1 ./internal/bootstrap)
 (cd modules/monitor && go test -count=1 ./internal/bootstrap ./internal/metrics/... ./test -run MetricsEventBus)
-bash scripts/test-deploy-moox-eventbus.sh
-bash scripts/test-monitor-coverage-contract.sh
+bash scripts/test/contract/test-deploy-moox-eventbus.sh
+bash scripts/test/contract/test-monitor-coverage-contract.sh
 ```
 
 ### Task 4: 为非 Storage 关键模块增加功能指标和白名单水位
@@ -642,8 +642,8 @@ bash scripts/test-monitor-coverage-contract.sh
 - Modify: `modules/monitor/internal/config/config.go`
 - Modify: `modules/monitor/internal/config/config_test.go`
 - Modify: `modules/monitor/config/app.yaml`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/release.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/release/release.sh`
 
 **Interfaces:**
 - Produces: `report.ModuleMetrics`，只暴露固定的非 Storage module/stage/result/pipeline API。
@@ -732,7 +732,7 @@ make -C modules/monitor/proto all
 - Modify: `modules/cli/config/cli.yaml`
 - Modify: `modules/cli/go.mod`
 - Modify: `modules/cli/go.sum`
-- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
 
 **Interfaces:**
 - Consumes: `packages/doctor` Engine/Manifest/Report 和 `MonitorMgr.GetDoctorContext`。
@@ -757,9 +757,9 @@ make -C modules/monitor/proto all
 ### Task 7: 完成发布、文档、两轮审查和部署 E2E
 
 **Files:**
-- Modify: `scripts/release.sh`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-release-contract.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-release-contract.sh`
 - Modify: `modules/monitor/README.md`
 - Modify: `modules/README.md`
 - Modify: `README.md`
@@ -785,13 +785,13 @@ make -C modules/monitor/proto all
 - [ ] 修复第二轮所有 Critical/Important 后运行完整门禁：
 
 ```bash
-./scripts/check-module-boundaries.sh
-./scripts/check-package-boundaries.sh
-./scripts/check-gofmt.sh
-bash scripts/test-monitor-coverage-contract.sh
-bash scripts/test-trpc-plugin-config.sh
-bash scripts/test-release-contract.sh
-bash scripts/test-doctor-e2e.sh
+./scripts/check/check-module-boundaries.sh
+./scripts/check/check-package-boundaries.sh
+./scripts/check/check-gofmt.sh
+bash scripts/test/contract/test-monitor-coverage-contract.sh
+bash scripts/test/contract/test-trpc-plugin-config.sh
+bash scripts/test/contract/test-release-contract.sh
+bash scripts/test/e2e/test-doctor-e2e.sh
 make verify
 ```
 

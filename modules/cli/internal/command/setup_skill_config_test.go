@@ -37,7 +37,7 @@ func TestSetupExportSkillConfigWritesStrict0600ConfigWithoutLeakingSecrets(t *te
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"export-skill-config", "--file", "custom.toml", "--space", "crypto", "--output", output})
+	cmd.SetArgs([]string{"export-skill-config", "--file", "moox.toml", "--space", "crypto", "--output", output})
 	require.NoError(t, cmd.Execute())
 
 	info, err := os.Lstat(output)
@@ -113,9 +113,9 @@ func TestSetupExportSkillConfigRejectsSetupFileAsOutput(t *testing.T) {
 }
 
 func TestBuildSkillDataAccessConfigSelectsExactSpaceAndValidatesMaterial(t *testing.T) {
-	snapshot := setupSkillSnapshot(t, "crypto_market_archive", "ip://wrong:11003", "control")
+	snapshot := setupSkillSnapshot(t, "crypto_archive", "ip://wrong:11003", "control")
 	snapshot.Manifest.SCFFetcher.Spaces = append(snapshot.Manifest.SCFFetcher.Spaces, setupconfig.SCFFetcherSpace{
-		SpaceID: "crypto_market", StorageRPCGatewayTarget: "ip://203.0.113.8:11003", StorageGatewayNodeID: "control",
+		SpaceID: "crypto", StorageRPCGatewayTarget: "ip://203.0.113.8:11003", StorageGatewayNodeID: "control",
 	})
 	paths := snapshot.Manifest.Paths.Resolved()
 	read := func(_ context.Context, host setupconfig.Host, path string) ([]byte, error) {
@@ -136,17 +136,17 @@ func TestBuildSkillDataAccessConfigSelectsExactSpaceAndValidatesMaterial(t *test
 			return nil, errors.New("unexpected path")
 		}
 	}
-	got, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto_market", read)
+	got, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto", read)
 	require.NoError(t, err)
 	require.Equal(t, "ip://203.0.113.8:11003", got.Gateway.Target)
 	require.Equal(t, "control", got.Gateway.TargetNode)
 	require.Equal(t, testSkillGatewaySecret, got.Gateway.Secret)
 	require.Equal(t, security.HMACSHA256Hex(testSkillPrimarySecret, []byte("moox-skill")), got.Storage.AppKey)
-	require.Equal(t, "binance_spot_kline_1m", got.DataTypes["crypto"].Exchanges["binance"].KlineDatasets["1m"])
-	require.Equal(t, "stock_cn_kline", got.DataTypes["stock_cn"].Exchanges["stock_cn"].KlineDatasets["1m"])
-	require.Empty(t, got.DataTypes["stock_cn"].Exchanges["stock_cn"].SeriesTag)
+	require.Equal(t, "dataset_binance_spot_kline_1m", got.DataTypes["crypto"].Exchanges["binance"].KlineDatasets["1m"])
+	require.Equal(t, "dataset_stockcn_equity_kline", got.DataTypes["stockcn"].Exchanges["stockcn"].KlineDatasets["1m"])
+	require.Equal(t, "default", got.DataTypes["stockcn"].Exchanges["stockcn"].SeriesTag)
 
-	_, err = buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "stock_us", read)
+	_, err = buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "stockus", read)
 	require.ErrorContains(t, err, "space")
 }
 
@@ -182,15 +182,15 @@ func TestBuildSkillDataAccessConfigRejectsMissingTargetNodeAndRemoteSecrets(t *t
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			snapshot := setupSkillSnapshot(t, "crypto_market", test.target, test.node)
-			_, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto_market", test.read)
+			snapshot := setupSkillSnapshot(t, "crypto", test.target, test.node)
+			_, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto", test.read)
 			require.ErrorContains(t, err, test.want)
 		})
 	}
 }
 
 func TestBuildSkillDataAccessConfigReadsGatewayIdentityFromTargetHost(t *testing.T) {
-	snapshot := setupSkillSnapshot(t, "crypto_market", "ip://198.51.100.9:11003", "storage-node")
+	snapshot := setupSkillSnapshot(t, "crypto", "ip://198.51.100.9:11003", "storage-node")
 	snapshot.Manifest.ControlHost.Name = "Primary-Control"
 	snapshot.Manifest.OtherHosts = []setupconfig.Host{{Name: "Storage-Node", Address: "198.51.100.9", Port: 22, Username: "ubuntu"}}
 	paths := snapshot.Manifest.Paths.Resolved()
@@ -223,7 +223,7 @@ func TestBuildSkillDataAccessConfigReadsGatewayIdentityFromTargetHost(t *testing
 			return nil, errors.New("unexpected path")
 		}
 	}
-	got, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto_market", read)
+	got, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto", read)
 	require.NoError(t, err)
 	require.Equal(t, "Storage-Node", got.Gateway.TargetNode)
 	require.Equal(t, security.HMACSHA256Hex(deployedStoragePrimarySecret, []byte("moox-skill")), got.Storage.AppKey)
@@ -232,10 +232,10 @@ func TestBuildSkillDataAccessConfigReadsGatewayIdentityFromTargetHost(t *testing
 }
 
 func TestBuildSkillDataAccessConfigRejectsUnknownStorageRootBeforeReadingSecrets(t *testing.T) {
-	snapshot := setupSkillSnapshot(t, "crypto_market", "ip://203.0.113.8:11003", "control")
+	snapshot := setupSkillSnapshot(t, "crypto", "ip://203.0.113.8:11003", "control")
 	snapshot.Manifest.Paths.StorageRoot = "relative/storage"
 	readCalled := false
-	_, err := buildSkillDataAccessConfig(context.Background(), snapshot, "crypto_market",
+	_, err := buildSkillDataAccessConfig(context.Background(), snapshot, "crypto",
 		func(context.Context, setupconfig.Host, string) (skillGatewaySnapshot, error) {
 			readCalled = true
 			return skillGatewaySnapshot{}, errors.New("must not read")
@@ -249,7 +249,7 @@ func TestBuildSkillDataAccessConfigRejectsUnknownStorageRootBeforeReadingSecrets
 }
 
 func TestBuildSkillDataAccessConfigCanonicalizesControlGatewayNode(t *testing.T) {
-	snapshot := setupSkillSnapshot(t, "crypto_market", "ip://203.0.113.8:11003", "PRIMARY-CONTROL")
+	snapshot := setupSkillSnapshot(t, "crypto", "ip://203.0.113.8:11003", "PRIMARY-CONTROL")
 	snapshot.Manifest.ControlHost.Name = "Primary-Control"
 	paths := snapshot.Manifest.Paths.Resolved()
 	read := func(_ context.Context, host setupconfig.Host, path string) ([]byte, error) {
@@ -271,18 +271,18 @@ func TestBuildSkillDataAccessConfigCanonicalizesControlGatewayNode(t *testing.T)
 			return nil, errors.New("unexpected path")
 		}
 	}
-	got, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto_market", read)
+	got, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto", read)
 	require.NoError(t, err)
 	require.Equal(t, "control", got.Gateway.TargetNode)
 
 	snapshot.Manifest.SCFFetcher.Spaces[0].StorageGatewayNodeID = "CONTROL"
-	got, err = buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto_market", read)
+	got, err = buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto", read)
 	require.NoError(t, err)
 	require.Equal(t, "control", got.Gateway.TargetNode)
 }
 
 func TestBuildSkillDataAccessConfigRejectsMismatchedDeployedGatewayIdentity(t *testing.T) {
-	snapshot := setupSkillSnapshot(t, "crypto_market", "ip://203.0.113.8:11003", "control")
+	snapshot := setupSkillSnapshot(t, "crypto", "ip://203.0.113.8:11003", "control")
 	read := func(_ context.Context, _ setupconfig.Host, path string) ([]byte, error) {
 		switch filepath.Base(path) {
 		case "gateway-moox-skill.key":
@@ -295,7 +295,7 @@ func TestBuildSkillDataAccessConfigRejectsMismatchedDeployedGatewayIdentity(t *t
 			return []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=" + testSkillPrimarySecret + "\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), nil
 		}
 	}
-	_, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto_market", read)
+	_, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto", read)
 	require.ErrorContains(t, err, "identity")
 }
 
@@ -328,9 +328,9 @@ func TestValidateSkillGatewayTargetMatchesSelectedHost(t *testing.T) {
 }
 
 func TestBuildSkillDataAccessConfigRejectsGatewayTargetHostMismatchBeforeReadingSecrets(t *testing.T) {
-	snapshot := setupSkillSnapshot(t, "crypto_market", "ip://198.51.100.9:11003", "control")
+	snapshot := setupSkillSnapshot(t, "crypto", "ip://198.51.100.9:11003", "control")
 	readCalled := false
-	_, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto_market", func(context.Context, setupconfig.Host, string) ([]byte, error) {
+	_, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto", func(context.Context, setupconfig.Host, string) ([]byte, error) {
 		readCalled = true
 		return nil, errors.New("must not read")
 	})
@@ -339,9 +339,9 @@ func TestBuildSkillDataAccessConfigRejectsGatewayTargetHostMismatchBeforeReading
 }
 
 func TestBuildSkillDataAccessConfigRejectsGatewayTargetPortBeforeReadingSecrets(t *testing.T) {
-	snapshot := setupSkillSnapshot(t, "crypto_market", "ip://203.0.113.8:20102", "control")
+	snapshot := setupSkillSnapshot(t, "crypto", "ip://203.0.113.8:20102", "control")
 	readCalled := false
-	_, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto_market", func(context.Context, setupconfig.Host, string) ([]byte, error) {
+	_, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto", func(context.Context, setupconfig.Host, string) ([]byte, error) {
 		readCalled = true
 		return nil, errors.New("must not read")
 	})
@@ -381,10 +381,10 @@ func TestReadRemoteSkillGatewaySnapshotUsesOneStableReadWithoutRootSecret(t *tes
 }
 
 func TestBuildSkillDataAccessConfigFailsClosedOnGatewaySnapshotRotation(t *testing.T) {
-	snapshot := setupSkillSnapshot(t, "crypto_market", "ip://203.0.113.8:11003", "control")
+	snapshot := setupSkillSnapshot(t, "crypto", "ip://203.0.113.8:11003", "control")
 	transport := &rotatingSkillSSH{}
 	storageRead := false
-	_, err := buildSkillDataAccessConfig(context.Background(), snapshot, "crypto_market",
+	_, err := buildSkillDataAccessConfig(context.Background(), snapshot, "crypto",
 		func(ctx context.Context, _ setupconfig.Host, root string) (skillGatewaySnapshot, error) {
 			return readRemoteSkillGatewaySnapshot(ctx, transport, root)
 		},
@@ -439,7 +439,7 @@ func TestBuildSkillDataAccessConfigSupportsExistingGatewayServiceEnv(t *testing.
 	require.NoError(t, os.WriteFile(filepath.Join(storageRoot, "secrets/gateway-credentials.json"), testSkillRegistryRaw(), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(storageRoot, "secrets/storage-internal-auth.env"), []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET="+testSkillPrimarySecret+"\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), 0o600))
 
-	snapshot := setupSkillSnapshot(t, "crypto_market", "ip://198.51.100.9:11003", "storage")
+	snapshot := setupSkillSnapshot(t, "crypto", "ip://198.51.100.9:11003", "storage")
 	snapshot.Manifest.Paths.ControlRoot = controlRoot
 	snapshot.Manifest.Paths.StorageRoot = storageRoot
 	snapshot.Manifest.OtherHosts = []setupconfig.Host{{Name: "storage", Address: "198.51.100.9", Port: 22, Username: "ubuntu"}}
@@ -450,7 +450,7 @@ func TestBuildSkillDataAccessConfigSupportsExistingGatewayServiceEnv(t *testing.
 		}
 		return readRemoteSkillSecret(ctx, localSkillSSH{}, path)
 	}
-	config, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto_market", read)
+	config, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto", read)
 	require.NoError(t, err)
 	require.Equal(t, "storage", config.Gateway.TargetNode)
 	require.Equal(t, testSkillGatewaySecret, config.Gateway.Secret)
@@ -508,14 +508,14 @@ func TestBuildSkillDataAccessConfigRejectsUnsafeTargetGatewayKey(t *testing.T) {
 			keyPath := test.prepare(t, filepath.Join(storageRoot, "secrets/gateway-moox-skill.key"))
 			require.Equal(t, filepath.Join(storageRoot, "secrets/gateway-moox-skill.key"), keyPath)
 
-			snapshot := setupSkillSnapshot(t, "crypto_market", "ip://198.51.100.9:11003", "storage")
+			snapshot := setupSkillSnapshot(t, "crypto", "ip://198.51.100.9:11003", "storage")
 			snapshot.Manifest.Paths.ControlRoot = controlRoot
 			snapshot.Manifest.Paths.StorageRoot = storageRoot
 			snapshot.Manifest.OtherHosts = []setupconfig.Host{{Name: "storage", Address: "198.51.100.9", Port: 22, Username: "ubuntu"}}
 			read := func(ctx context.Context, _ setupconfig.Host, path string) ([]byte, error) {
 				return readRemoteSkillSecret(ctx, localSkillSSH{}, path)
 			}
-			_, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto_market", read)
+			_, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto", read)
 			require.ErrorContains(t, err, "Gateway snapshot")
 		})
 	}
@@ -572,7 +572,7 @@ func TestBuildSkillDataAccessConfigRequiresRegisteredSkillIdentity(t *testing.T)
 			require.NoError(t, os.WriteFile(filepath.Join(controlRoot, "secrets/storage-internal-auth.env"), []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET="+testSkillPrimarySecret+"\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), 0o600))
 			test.prepare(t, filepath.Join(storageRoot, "secrets/gateway-credentials.json"))
 
-			snapshot := setupSkillSnapshot(t, "crypto_market", "ip://198.51.100.9:11003", "storage")
+			snapshot := setupSkillSnapshot(t, "crypto", "ip://198.51.100.9:11003", "storage")
 			snapshot.Manifest.Paths.ControlRoot = controlRoot
 			snapshot.Manifest.Paths.StorageRoot = storageRoot
 			snapshot.Manifest.OtherHosts = []setupconfig.Host{{Name: "storage", Address: "198.51.100.9", Port: 22, Username: "ubuntu"}}
@@ -583,7 +583,7 @@ func TestBuildSkillDataAccessConfigRequiresRegisteredSkillIdentity(t *testing.T)
 				}
 				return readRemoteSkillSecret(ctx, localSkillSSH{}, path)
 			}
-			_, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto_market", read)
+			_, err := buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "crypto", read)
 			want := test.want
 			if want == "" {
 				want = "Gateway credential registry"
@@ -662,13 +662,13 @@ func testSkillDataAccessConfig() dataAccessConfig {
 			"crypto": {
 				DefaultExchange: "binance",
 				Exchanges: map[string]exchangeConfig{
-					"binance": {SpaceID: "crypto_market", SeriesTag: "venue:binance", KlineDatasets: map[string]string{"1m": "binance_spot_kline_1m"}},
+					"binance": {SpaceID: "crypto", SeriesTag: "venue:binance", KlineDatasets: map[string]string{"1m": "dataset_binance_spot_kline_1m"}},
 				},
 			},
-			"stock_cn": {
-				DefaultExchange: "stock_cn",
+			"stockcn": {
+				DefaultExchange: "stockcn",
 				Exchanges: map[string]exchangeConfig{
-					"stock_cn": {SpaceID: "stock_cn", SeriesTag: "", KlineDatasets: map[string]string{"1m": "stock_cn_kline"}},
+					"stockcn": {SpaceID: "stockcn", SeriesTag: "default", KlineDatasets: map[string]string{"1m": "dataset_stockcn_equity_kline"}},
 				},
 			},
 		},
@@ -711,7 +711,7 @@ func setupSkillSnapshot(t *testing.T, space, target, node string) *setupconfig.S
 func setupSkillSnapshotWithPath(t *testing.T, space, target, node string) (*setupconfig.Snapshot, string) {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "custom.toml")
+	path := filepath.Join(dir, "moox.toml")
 	raw := []byte("[admin]\nusername='admin'\npassword='admin-secret'\n[tencent_cloud]\nsecret_id='AKID-test'\nsecret_key='cloud-secret'\n[eventbus]\npublic_address='eventbus.example.test'\nport=4333\ntls_enabled=true\n[control_host]\nname='control'\naddress='203.0.113.8'\nport=22\nusername='ubuntu'\npassword='ssh-secret'\n")
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 	snapshot, err := setupconfig.Load(path, dir)

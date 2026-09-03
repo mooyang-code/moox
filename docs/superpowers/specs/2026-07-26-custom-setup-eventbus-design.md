@@ -2,7 +2,7 @@
 
 ## Context
 
-`custom.toml` is the user-owned input for a fresh MooX installation. The
+`moox.toml` is the user-owned input for a fresh MooX installation. The
 current manifest contains the initial Admin account, Tencent Cloud credential,
 and SSH hosts, but it does not describe the EventBus address that Collector
 SCF must reach.
@@ -22,18 +22,18 @@ to generate the private CA, server certificate, role tokens, and
 - Let `setup validate` reject an address that cannot support Collector SCF.
 - Let `setup deploy-control` configure the broker, service directory, TLS
   certificate, and exported role files from the same manifest snapshot.
-- Keep EventBus tokens and private key material out of `custom.toml`.
-- Preserve the rule that setup commands read `custom.toml` without modifying
+- Keep EventBus tokens and private key material out of `moox.toml`.
+- Preserve the rule that setup commands read `moox.toml` without modifying
   or copying it.
 
 ## Non-Goals
 
 - Letting users choose EventBus usernames or tokens.
-- Storing a CA certificate or private key in `custom.toml`.
+- Storing a CA certificate or private key in `moox.toml`.
 - Supporting plaintext public EventBus access.
 - Rotating an existing EventBus address without the existing destructive reset
   flow.
-- Copying `custom.toml` into a release archive or deployment host.
+- Copying `moox.toml` into a release archive or deployment host.
 
 ## Approaches Considered
 
@@ -81,7 +81,7 @@ private CA path.
 The strict TOML decoder continues to reject unknown fields. Error messages
 name only the invalid field and never include manifest values.
 
-`custom.toml.example` contains the same table with an empty public address,
+`moox.toml.example` contains the same table with an empty public address,
 port `4222`, and TLS enabled.
 
 ## Deployment Flow
@@ -90,7 +90,7 @@ port `4222`, and TLS enabled.
 deployment options:
 
 ```text
-custom.toml
+moox.toml
   -> setup config Snapshot
   -> deploy.Options
   -> CommandPackager environment
@@ -117,7 +117,7 @@ The deployment script:
 
 The script passes `MOOX_EVENTBUS_PORT` through remote deployment just like the
 existing TLS and public-address variables. It does not source or transfer
-`custom.toml`.
+`moox.toml`.
 
 ## Security Boundary
 
@@ -151,12 +151,12 @@ the existing instruction to use `--reset-data`.
 
 - Config tests cover valid IPv4 and DNS addresses, port defaulting, and every
   invalid field class.
-- Template contract tests keep `custom.toml.example` and setup documentation
+- Template contract tests keep `moox.toml.example` and setup documentation
   aligned.
 - Deployment tests assert that typed EventBus values reach the packager.
 - Script contract tests assert URL rendering, broker port rendering, and
   remote propagation.
 - Existing EventBus credential tests continue to verify the generated
   `cloudnode-worker.yaml` and its bind-only ACL.
-- `./scripts/test-go-workspace.sh`, `./scripts/test-deploy-moox-eventbus.sh`,
+- `./scripts/test/contract/test-go-workspace.sh`, `./scripts/test/contract/test-deploy-moox-eventbus.sh`,
   and `make verify-pr` remain the final repository checks.

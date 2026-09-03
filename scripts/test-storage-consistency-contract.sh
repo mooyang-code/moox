@@ -1,1 +1,0 @@
-tests/contract/test-storage-consistency-contract.sh

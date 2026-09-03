@@ -19,11 +19,11 @@ import (
 )
 
 func TestRetryCollectionItemUsesExactTaskIDBeforeSubjectFallback(t *testing.T) {
-	request := Request{DatasetID: "stock_cn_kline", Items: []domain.CollectionItem{
-		{TaskID: "snapshot-shard-0", SubjectID: "stock_cn", DatasetID: "stock_cn_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 0, SnapshotShardCount: 2},
-		{TaskID: "snapshot-shard-1", SubjectID: "stock_cn", DatasetID: "stock_cn_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 1, SnapshotShardCount: 2},
+	request := Request{DatasetID: "dataset_stockcn_equity_kline", Items: []domain.CollectionItem{
+		{TaskID: "snapshot-shard-0", SubjectID: "stockcn", DatasetID: "dataset_stockcn_equity_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 0, SnapshotShardCount: 2},
+		{TaskID: "snapshot-shard-1", SubjectID: "stockcn", DatasetID: "dataset_stockcn_equity_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 1, SnapshotShardCount: 2},
 	}}
-	result := &marketfetchpb.MarketFetchItemResult{TaskId: "snapshot-shard-1", SubjectId: "stock_cn", Outcome: string(domain.ItemOutcomeProviderError)}
+	result := &marketfetchpb.MarketFetchItemResult{TaskId: "snapshot-shard-1", SubjectId: "stockcn", Outcome: string(domain.ItemOutcomeProviderError)}
 
 	item := retryCollectionItem(request, result, "retry-shard-1")
 
@@ -55,7 +55,6 @@ func TestHandleCompletionMarksPermanentFailureOnTaskInstance(t *testing.T) {
 	instance, err := db.TaskInstances().Get(ctx, "crypto", "task-btc")
 	require.NoError(t, err)
 	assert.Equal(t, domain.InstanceStatusFailed, instance.LastExecStatus)
-	assert.Equal(t, "node-1", instance.LastExecNode)
 	require.NotNil(t, instance.LastExecTime)
 	assert.Equal(t, completedAt, instance.LastExecTime.UTC())
 	var result map[string]any

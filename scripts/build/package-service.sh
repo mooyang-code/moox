@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/package-service.sh --service-dir DIR --output FILE
+Usage: scripts/build/package-service.sh --service-dir DIR --output FILE
 
 Package a service directory for `moox-cli setup deploy-service`.
 

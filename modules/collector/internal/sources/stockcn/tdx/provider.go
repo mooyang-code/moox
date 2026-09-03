@@ -82,7 +82,7 @@ func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
 
 func (p *Provider) KlineSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
-		Markets:           []string{"stock_cn"},
+		Markets:           []string{"stockcn"},
 		Exchanges:         []string{"XSHG", "XSHE", "XBSE"},
 		Frequencies:       []string{"1m", "5m", "15m", "30m", "60m", "1d", "1w"},
 		CompleteOHLCV:     true,

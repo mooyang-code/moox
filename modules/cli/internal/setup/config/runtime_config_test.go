@@ -85,7 +85,7 @@ func TestRenderCollectorDNSResolverConfigDerivesTradeTarget(t *testing.T) {
 func TestRenderCollectorDNSResolverConfigIncludesStockCapacity(t *testing.T) {
 	snapshot := &Snapshot{Manifest: Manifest{
 		SCFFetcher: SCFFetcher{Spaces: []SCFFetcherSpace{{
-			SpaceID: "stock_cn", TimerFunctionCount: 200, MeasuredSafeGroupSize: 30,
+			SpaceID: "stockcn", TimerFunctionCount: 200, MeasuredSafeGroupSize: 30,
 			StaggerStartSecond: DefaultStockCNStaggerStartSecond, StaggerWindowSeconds: DefaultStockCNStaggerWindowSeconds, StaggerMaxStartsPerSecond: DefaultStockCNStaggerMaxStartsPerSecond,
 		}}},
 	}}
@@ -93,7 +93,7 @@ func TestRenderCollectorDNSResolverConfigIncludesStockCapacity(t *testing.T) {
 	require.NoError(t, err)
 	var got map[string]any
 	require.NoError(t, yaml.Unmarshal(rendered, &got))
-	stock := got["stock_cn"].(map[string]any)
+	stock := got["stockcn"].(map[string]any)
 	require.Equal(t, 200, stock["expected_timer_function_count"])
 	require.Equal(t, 30, stock["measured_safe_group_size"])
 	require.Equal(t, 5, stock["stagger_start_second"])

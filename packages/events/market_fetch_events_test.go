@@ -39,7 +39,7 @@ func TestMarketFetchBatchCompletedValidationAcceptsProviderError(t *testing.T) {
 		BatchId: "batch-provider-error", ScheduleId: "schedule-1", BatchKind: "backfill", DatasetId: "bars", Frequency: "1m", NodeId: "node-1",
 		PlannedCount: 1, RetryCount: 1, Items: []*marketfetchpb.MarketFetchItemResult{{SubjectId: "600000.XSHG", Outcome: "provider_error"}}, CompletedAt: timestamppb.New(time.Now().UTC()), Status: "failed",
 	}
-	encoded, err := registry.Encode(MarketFetchBatchCompleted, payload, PublishOptions{EventID: payload.BatchId, OccurredAt: time.Now().UTC(), SpaceID: "stock_cn", SubjectID: "bars"})
+	encoded, err := registry.Encode(MarketFetchBatchCompleted, payload, PublishOptions{EventID: payload.BatchId, OccurredAt: time.Now().UTC(), SpaceID: "stockcn", SubjectID: "bars"})
 	if err != nil {
 		t.Fatal(err)
 	}

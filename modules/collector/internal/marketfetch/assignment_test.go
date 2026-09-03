@@ -16,12 +16,12 @@ func TestBuildStockCNAssignmentsUsesEveryTimerNodeAndKeepsExistingSubjectsStable
 	subjects := []string{"600000.XSHG", "000001.XSHE", "601318.XSHG", "300750.XSHE", "000858.XSHE"}
 	externals := stockCNExternalSymbols(subjects)
 	nodes := []scfinvoker.Node{
-		{NodeID: "node-c", FunctionName: "moox-stock-cn-ap-shanghai-000", Region: "ap-shanghai", NodeType: "scf-event", TriggerType: "timer"},
-		{NodeID: "node-a", FunctionName: "moox-stock-cn-ap-guangzhou-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
-		{NodeID: "node-b", FunctionName: "moox-stock-cn-ap-beijing-000", Region: "ap-beijing", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "node-c", FunctionName: "moox-stockcn-ap-shanghai-000", Region: "ap-shanghai", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "node-a", FunctionName: "moox-stockcn-ap-guangzhou-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "node-b", FunctionName: "moox-stockcn-ap-beijing-000", Region: "ap-beijing", NodeType: "scf-event", TriggerType: "timer"},
 		{NodeID: "worker", FunctionName: "not-a-timer", NodeType: "scf-resident", TriggerType: "http"},
 	}
-	group := TaskGroup{Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: subjects, ExternalSymbols: externals}
+	group := TaskGroup{Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: subjects, ExternalSymbols: externals}
 
 	assignments, err := BuildStockCNAssignments(group, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 3)
 	require.NoError(t, err)
@@ -32,7 +32,7 @@ func TestBuildStockCNAssignmentsUsesEveryTimerNodeAndKeepsExistingSubjectsStable
 		require.True(t, assignment.Enabled)
 		require.Equal(t, index, assignment.GroupID)
 		require.Equal(t, StockCNRouteID, assignment.RouteVersion)
-		require.Equal(t, "stock_cn_multi", assignment.RouteProvider)
+		require.Equal(t, "stockcn_multi", assignment.RouteProvider)
 		require.NotEmpty(t, assignment.SourceID)
 		require.Len(t, assignment.ProviderChain, 1)
 		require.Equal(t, assignment.ProviderChain[0], assignment.Provider)
@@ -72,29 +72,29 @@ func TestEligibleTimerNodesExcludesIndependentInstrumentSnapshotTimer(t *testing
 func TestBuildStockCNAssignmentsRequiresConfiguredNodeCount(t *testing.T) {
 	subjects := []string{"600000.XSHG"}
 	nodes := []scfinvoker.Node{
-		{NodeID: "node-0", FunctionName: "moox-stock-cn-000", NodeType: "scf-event", TriggerType: "timer"},
-		{NodeID: "node-1", FunctionName: "moox-stock-cn-001", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "node-0", FunctionName: "moox-stockcn-000", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "node-1", FunctionName: "moox-stockcn-001", NodeType: "scf-event", TriggerType: "timer"},
 	}
 	_, err := BuildStockCNAssignments(TaskGroup{
-		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
 		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
 	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 3)
 	require.ErrorContains(t, err, "has 2 nodes; expected 3")
 }
 
 func TestBuildStockCNAssignmentsRequiresExplicitPositiveN(t *testing.T) {
-	nodes := []scfinvoker.Node{{NodeID: "node-0", FunctionName: "moox-stock-cn-000", NodeType: "scf-event", TriggerType: "timer"}}
+	nodes := []scfinvoker.Node{{NodeID: "node-0", FunctionName: "moox-stockcn-000", NodeType: "scf-event", TriggerType: "timer"}}
 	_, err := BuildStockCNAssignments(TaskGroup{
-		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
 		Subjects: []string{"600000.XSHG"}, ExternalSymbols: stockCNExternalSymbols([]string{"600000.XSHG"}),
 	}, nodes, 50, "2026-08-29")
 	require.ErrorContains(t, err, "explicit positive timer function count")
 }
 
 func TestBuildStockCNAssignmentsAllowsStrictlyConvertibleSubjectsWithoutOverrides(t *testing.T) {
-	nodes := []scfinvoker.Node{{NodeID: "node-0", FunctionName: "moox-stock-cn-000", NodeType: "scf-event", TriggerType: "timer"}}
+	nodes := []scfinvoker.Node{{NodeID: "node-0", FunctionName: "moox-stockcn-000", NodeType: "scf-event", TriggerType: "timer"}}
 	assignments, err := BuildStockCNAssignments(TaskGroup{
-		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
 		Subjects: []string{"600000.XSHG"},
 	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 1)
 	require.NoError(t, err)
@@ -111,11 +111,11 @@ func TestStockCNStaggeredCronUsesConfiguredFiveToThirtyNineSecondWindow(t *testi
 func TestBuildStockCNAssignmentsRejectsMissingPublishedSlot(t *testing.T) {
 	subjects := []string{"600000.XSHG"}
 	nodes := []scfinvoker.Node{
-		{NodeID: "node-0", FunctionName: "moox-stock-cn-000", NodeType: "scf-event", TriggerType: "timer"},
-		{NodeID: "node-2", FunctionName: "moox-stock-cn-002", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "node-0", FunctionName: "moox-stockcn-000", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "node-2", FunctionName: "moox-stockcn-002", NodeType: "scf-event", TriggerType: "timer"},
 	}
 	_, err := BuildStockCNAssignments(TaskGroup{
-		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
 		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
 	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 2)
 	require.ErrorContains(t, err, "slot")
@@ -124,11 +124,11 @@ func TestBuildStockCNAssignmentsRejectsMissingPublishedSlot(t *testing.T) {
 func TestBuildStockCNAssignmentsRejectsSlotMetadataMismatch(t *testing.T) {
 	subjects := []string{"600000.XSHG"}
 	nodes := []scfinvoker.Node{{
-		NodeID: "node-0", FunctionName: "moox-stock-cn-000", NodeType: "scf-event", TriggerType: "timer",
+		NodeID: "node-0", FunctionName: "moox-stockcn-000", NodeType: "scf-event", TriggerType: "timer",
 		Metadata: map[string]any{"index": "invalid"},
 	}}
 	_, err := BuildStockCNAssignments(TaskGroup{
-		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
 		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
 	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 1)
 	require.ErrorContains(t, err, "metadata index")
@@ -141,9 +141,9 @@ func TestBuildStockCNAssignmentsFitsApproximateFullMarketIntoTwoHundredGroups(t 
 	}
 	nodes := make([]scfinvoker.Node, 0, 200)
 	for index := 0; index < 200; index++ {
-		nodes = append(nodes, scfinvoker.Node{NodeID: fmt.Sprintf("node-%03d", index), FunctionName: fmt.Sprintf("moox-stock-cn-%03d", index), NodeType: "scf-event", TriggerType: "timer"})
+		nodes = append(nodes, scfinvoker.Node{NodeID: fmt.Sprintf("node-%03d", index), FunctionName: fmt.Sprintf("moox-stockcn-%03d", index), NodeType: "scf-event", TriggerType: "timer"})
 	}
-	group := TaskGroup{Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects)}
+	group := TaskGroup{Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects)}
 
 	assignments, err := BuildStockCNAssignments(group, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 200)
 	require.NoError(t, err)
@@ -207,14 +207,14 @@ func TestBuildStockCNAssignmentsFitsConfigured170GroupsAt40Subjects(t *testing.T
 	for region, count := range regionCounts {
 		for index := 0; index < count; index++ {
 			nodes = append(nodes, scfinvoker.Node{
-				NodeID: fmt.Sprintf("%s-%03d", region, index), FunctionName: fmt.Sprintf("moox-stock-cn-%s-%03d", region, index),
+				NodeID: fmt.Sprintf("%s-%03d", region, index), FunctionName: fmt.Sprintf("moox-stockcn-%s-%03d", region, index),
 				Region: region, NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"index": index},
 			})
 		}
 	}
 
 	assignments, err := BuildStockCNAssignments(TaskGroup{
-		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: subjects,
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: subjects,
 	}, nodes, maxSize, "2026-08-31", groups)
 	require.NoError(t, err)
 	require.Len(t, assignments, groups)
@@ -270,10 +270,10 @@ func TestBuildStockCNAssignmentsKeepsPublishedFleetWhenActiveInstrumentSetIsSmal
 	subjects := []string{"600000.XSHG", "000001.XSHE"}
 	nodes := make([]scfinvoker.Node, 0, 5)
 	for index := 0; index < 5; index++ {
-		nodes = append(nodes, scfinvoker.Node{NodeID: fmt.Sprintf("node-%d", index), FunctionName: fmt.Sprintf("moox-stock-cn-%03d", index), NodeType: "scf-event", TriggerType: "timer"})
+		nodes = append(nodes, scfinvoker.Node{NodeID: fmt.Sprintf("node-%d", index), FunctionName: fmt.Sprintf("moox-stockcn-%03d", index), NodeType: "scf-event", TriggerType: "timer"})
 	}
 	assignments, err := BuildStockCNAssignments(TaskGroup{
-		Provider: "stock_cn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
 		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
 	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 5)
 	require.NoError(t, err)
@@ -369,8 +369,8 @@ func TestBuildAssignmentsRejectsMissingExternalSymbolMapping(t *testing.T) {
 
 func TestBuildAssignmentsKeepsDistinctMarketSourcesSeparate(t *testing.T) {
 	groups := []TaskGroup{
-		{Provider: "eastmoney", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "stock_cn_http", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
-		{Provider: "tdx", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "normal_7709", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
+		{Provider: "tdx", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "normal_7709", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
 	}
 	nodes := []scfinvoker.Node{
 		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},
@@ -385,8 +385,8 @@ func TestBuildAssignmentsKeepsDistinctMarketSourcesSeparate(t *testing.T) {
 
 func TestBuildAssignmentsKeepsSeriesTagsSeparate(t *testing.T) {
 	groups := []TaskGroup{
-		{Provider: "eastmoney", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "stock_cn_http", SeriesTag: "raw", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
-		{Provider: "eastmoney", MarketType: "equity", MarketID: "stock_cn", InstrumentType: "equity", SourceID: "stock_cn_http", SeriesTag: "adjusted", DatasetID: "stock_cn_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", SeriesTag: "raw", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", SeriesTag: "adjusted", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
 	}
 	nodes := []scfinvoker.Node{
 		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},
@@ -409,7 +409,7 @@ func TestBuildStockCNAssignmentsBindsSubjectsToStableSourceKeys(t *testing.T) {
 	for index := 0; index < 9; index++ {
 		nodes = append(nodes, scfinvoker.Node{
 			NodeID:       fmt.Sprintf("source-node-%d", index),
-			FunctionName: fmt.Sprintf("moox-stock-cn-source-%03d", index),
+			FunctionName: fmt.Sprintf("moox-stockcn-source-%03d", index),
 			Region:       "ap-guangzhou",
 			NodeType:     "scf-event",
 			TriggerType:  "timer",
@@ -417,8 +417,8 @@ func TestBuildStockCNAssignmentsBindsSubjectsToStableSourceKeys(t *testing.T) {
 		})
 	}
 	group := TaskGroup{
-		Provider: "stock_cn_multi", MarketType: "equity",
-		MarketID: "stock_cn", InstrumentType: "equity",
+		Provider: "stockcn_multi", MarketType: "equity",
+		MarketID: "stockcn", InstrumentType: "equity",
 		DatasetID: StockCNDatasetID, Frequency: "1m",
 		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
 	}

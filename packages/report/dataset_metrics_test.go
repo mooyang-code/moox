@@ -122,7 +122,7 @@ func TestDatasetMetricsAcceptsCanonicalStorageFrequency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := DatasetKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", Freq: "1H"}
+	key := DatasetKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", Freq: "1H"}
 	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: key, Interval: time.Hour}}); err != nil {
 		t.Fatalf("canonical Storage frequency rejected: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestDatasetMetricsAcceptsSecondFrequency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := DatasetKey{SpaceID: "moox_system", DatasetID: "moox_service_metrics", Freq: "30s"}
+	key := DatasetKey{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Freq: "30s"}
 	if err := metrics.ObserveFact(DatasetObservation{Key: key, Result: "success", FinishedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("second frequency observation rejected: %v", err)
 	}
@@ -152,8 +152,8 @@ func TestDatasetMetricsUsesCanonicalFrequencyIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lowercase := DatasetKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", Freq: "1h"}
-	canonical := DatasetKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", Freq: "1H"}
+	lowercase := DatasetKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", Freq: "1h"}
+	canonical := DatasetKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", Freq: "1H"}
 	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: lowercase, Interval: time.Hour}}); err != nil {
 		t.Fatal(err)
 	}

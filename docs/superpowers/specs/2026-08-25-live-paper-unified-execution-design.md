@@ -796,7 +796,7 @@ sync、restart 和 cleanup。该验收需要显式凭据和确认变量，不作
 5. 删除并重建 Trade SQLite 和 Strategy SQLite。旧账户、模拟历史、策略、Runner 和执行结果
    都不迁移；需要的少量策略和配置由用户重新创建。
 6. 删除并重建 `MOOX_TRADE` JetStream Stream 及 `trade_target_v1` consumer。该 Stream 当前只承载
-   `trade.target.requested`，因此可以直接清空，不增加 event generation 或 fencing 协议。
+   `event.trade.target.requested`，因此可以直接清空，不增加 event generation 或 fencing 协议。
 7. 部署同一版本的 Trade、Strategy、Admin 路由和 Web，并保持
    `live_trading_enabled=false`。
 8. 重新创建 TradingAccount、LogicalAccount、Strategy 和 StrategyRunner，再建立新的

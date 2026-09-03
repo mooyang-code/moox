@@ -11,7 +11,7 @@ Invoke 会增加函数运行时长或控制面排队，不能重新引入。维�
 [SCF 短时行情采集架构](../../docs/architecture/scf-short-lived-market-fetch.md)。
 
 配置驱动的标准发布会在每个启用地域自动补 1 个 `trigger_type=invoke` 辅助函数；它不计入
-`custom.toml` 的 Timer `function_count`，只用于 Symbol 快照、缺口补采、探针和人工 E2E。
+`moox.toml` 的 Timer `function_count`，只用于 Symbol 快照、缺口补采、探针和人工 E2E。
 
 ## 职责
 
@@ -25,11 +25,11 @@ Invoke 会增加函数运行时长或控制面排队，不能重新引入。维�
 
 ### DNS 解析来源
 
-`custom.toml` 由 `moox-cli` 解析一次，并把脱敏的 Trade 配置和 Collector 连接配置分别渲染到
+`moox.toml` 由 `moox-cli` 解析一次，并把脱敏的 Trade 配置和 Collector 连接配置分别渲染到
 运行时 `app.yaml`。Trade Resolver 固定部署在配置选择的 `compute-1` 节点（当前为
 `43.132.204.177`），通过 `ResolveDomains` 返回最多 4 个经过 Trade 节点 TCP 探测的 IPv4；
 Collector 每 5 分钟批量请求一次，保留 Trade 提供的延迟排序，并在请求失败或单域未解析时保留
-上次成功快照，再回退本地 DNS。Trade 不读取完整 `custom.toml`，Collector 也不把凭据写入 SCF
+上次成功快照，再回退本地 DNS。Trade 不读取完整 `moox.toml`，Collector 也不把凭据写入 SCF
 Environment。SCF 仍使用原域名作为 Host/SNI，IP 只用于拨号，所有 IP 失败后继续尝试域名直连。
 
 实时主链：
@@ -50,7 +50,7 @@ Symbol Rule 将手动配置的 Binance 标的写入 RECORD Dataset。K 线 Rule 
 读取 active subjects，写入 TimeSeries Dataset。实时 K 线批次每项只请求最近 3 根并过滤未收盘
 数据；长缺口由独立 CatchupBatch 分页恢复。
 
-每个启用规则按当前 Kline Timer 函数确定性分片；stock_cn 单个函数最多 40 个标的，完整 Environment 还必须不超过 4KB。Kline 函数固定为 64MB、15 秒；独立 Instrument snapshot Timer 使用发布配置的全市场快照预算，Storage 请求预算为 5 秒，函数内 HTTP 并发由 Environment 配置；短暂失败由下一次 Timer 及独立缺口补采覆盖。
+每个启用规则按当前 Kline Timer 函数确定性分片；stockcn 单个函数最多 40 个标的，完整 Environment 还必须不超过 4KB。Kline 函数固定为 64MB、15 秒；独立 Instrument snapshot Timer 使用发布配置的全市场快照预算，Storage 请求预算为 5 秒，函数内 HTTP 并发由 Environment 配置；短暂失败由下一次 Timer 及独立缺口补采覆盖。
 
 Collector 同时上报 Space 级 Timer 容量指标：总节点数、当前分片需求、已分配节点数和容量余量。Monitor 会在需求超过节点数时立即告警，并在余量不超过 2 个节点时提前标记为降级，避免新增标的或频率后才发现容量不足。
 
@@ -65,9 +65,9 @@ make build-scf
 make package-scf
 
 # 仓库根目录
-./scripts/build.sh collector
-./scripts/build.sh collector-scf
-./scripts/build-collector-scf-package.sh
+./scripts/build/build.sh collector
+./scripts/build/build.sh collector-scf
+./scripts/build/build-collector-scf-package.sh
 ```
 
 SCF 包通过腾讯云 API 查询 `moox/moox-application` 资源并写入真实 Topic ID；没有资源或索引时
@@ -78,8 +78,8 @@ SCF 包通过腾讯云 API 查询 `moox/moox-application` 资源并写入真实 
 - CollectMgr HTTP：`:11402`。
 - 管理台 Rule API：`/api/admin/collectmgr/{Method}`。
 - Collector 调 CloudNode：`GetNodeList(trigger_type=timer)`、受管 Runtime Config Batch；
-  `InvokeFunction` 只供缺口补采、探针和人工 E2E；stock_cn 全市场标的快照由独立的每日 Instrument Timer SCF 执行。
-- EventBus：`moox.market.fetch.batch.completed.v1.*` 仅供有界 Invoke Completion，实时 Timer 不依赖它。
+  `InvokeFunction` 只供缺口补采、探针和人工 E2E；stockcn 全市场标的快照由独立的每日 Instrument Timer SCF 执行。
+- EventBus：`moox.event.market.fetch.batch.completed.v1.*` 仅供有界 Invoke Completion，实时 Timer 不依赖它。
 - Collector 数据库默认：`./data/moox_collector.db`。
 
 关键环境变量：
@@ -91,7 +91,7 @@ SCF 包通过腾讯云 API 查询 `moox/moox-application` 资源并写入真实 
 - `MOOX_FETCH_MAX_INFLIGHT_REQUESTS`：SCF 内 HTTP 并发，范围 1 到 64。
 - `MOOX_FETCH_REQUEST_TIMEOUT_MS`：单次行情 HTTP 超时，默认 1000ms。
 
-短时函数由 CloudNode metadata 和环境变量共同回读；`custom.toml` 只提供初始化发布种子，不是
+短时函数由 CloudNode metadata 和环境变量共同回读；`moox.toml` 只提供初始化发布种子，不是
 第二份运行时真值。
 
 ## 验证

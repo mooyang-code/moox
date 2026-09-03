@@ -116,7 +116,7 @@
 - [ ] 按现有发布流程重新生成 Go embed 静态资源并编译：
   ```bash
   make -C web-host statik
-  TARGET_GOOS=linux TARGET_GOARCH=amd64 VERSION=$(git rev-parse HEAD) ./scripts/build.sh web-host
+  TARGET_GOOS=linux TARGET_GOARCH=amd64 VERSION=$(git rev-parse HEAD) ./scripts/build/build.sh web-host
   ```
   只提交确实由本次前端变更生成且仓库已跟踪的 embed 文件，不提交本地 `dist` 或二进制产物。
 - [ ] 检查 `git status --short --branch` 和最近提交，确保只包含本计划相关文件，不触碰工作区中已有的其它修改。

@@ -596,11 +596,11 @@ func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session
 
 func verifyStockCNKlineColumns(ctx context.Context, metadata storageMetadataAPI, auth *storagepb.AuthInfo) error {
 	response, err := metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{
-		AuthInfo: auth, SpaceId: "stock_cn", DatasetId: "stock_cn_kline",
+		AuthInfo: auth, SpaceId: "stockcn", DatasetId: "dataset_stockcn_equity_kline",
 		Page: &commonpb.Page{Page: 1, Size: 100},
 	})
 	if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-		return errors.New("stock_cn_columns_unavailable")
+		return errors.New("stockcn_columns_unavailable")
 	}
 	columns := make(map[string]struct{}, len(response.GetColumns()))
 	for _, column := range response.GetColumns() {
@@ -610,7 +610,7 @@ func verifyStockCNKlineColumns(ctx context.Context, metadata storageMetadataAPI,
 	}
 	for _, required := range []string{"open", "high", "low", "close", "volume", "amount", "provider_id", "source_id"} {
 		if _, ok := columns[required]; !ok {
-			return fmt.Errorf("stock_cn_columns_missing: %s", required)
+			return fmt.Errorf("stockcn_columns_missing: %s", required)
 		}
 	}
 	return nil
@@ -958,7 +958,7 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 	result = storageE2EResult{Status: "running", Namespace: namespace, Assertions: []string{}, Cleanup: "pending"}
 	spaceID := namespace + "_space"
 	sourceID := namespace + "_source"
-	datasetID := namespace + "_dataset"
+	datasetID := "dataset_" + namespace
 	var space *storagepb.Space
 	var source *storagepb.DataSource
 	var dataset *storagepb.Dataset
@@ -1182,7 +1182,7 @@ func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSess
 	spaceID := namespace + "_space"
 	spaceName := "浏览器隔离空间 " + namespace
 	sourceID := namespace + "_source"
-	datasetID := namespace + "_dataset"
+	datasetID := "dataset_" + namespace
 	fixture = storageBrowserFixture{
 		Namespace: namespace, SpaceID: spaceID, SpaceName: spaceName,
 		SourceID: sourceID, DatasetID: datasetID, DatasetName: "浏览器验证集",

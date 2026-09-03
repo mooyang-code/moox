@@ -61,8 +61,8 @@ func TestDataKlineBuildsCatalogBackedRPCRequest(t *testing.T) {
 	assert.Equal(t, uint32(5), reader.request.GetPage().GetSize())
 	require.Len(t, reader.request.GetSelectors(), 1)
 	selector := reader.request.GetSelectors()[0]
-	assert.Equal(t, "crypto_market", selector.GetSpaceId())
-	assert.Equal(t, "binance_spot_kline_1m", selector.GetDatasetId())
+	assert.Equal(t, "crypto", selector.GetSpaceId())
+	assert.Equal(t, "dataset_binance_spot_kline_1m", selector.GetDatasetId())
 	assert.Equal(t, "BTC-USDT", selector.GetSubjectId())
 	assert.Equal(t, "1m", selector.GetFreq())
 	assert.Equal(t, "venue:binance", selector.GetSeriesTag())
@@ -75,19 +75,19 @@ func TestDataKlineBuildsCatalogBackedRPCRequest(t *testing.T) {
 func TestDataKlineBuildsStockCNCatalogBackedRPCRequest(t *testing.T) {
 	reader := &fakeTimeSeriesReader{rsp: &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}}
 	_, _, cmd := newTestDataKlineCommand(t, reader)
-	cmd.SetArgs([]string{"--data-type", "stock_cn", "--symbol", "600519.SH", "--interval", "1m"})
+	cmd.SetArgs([]string{"--data-type", "stockcn", "--symbol", "600519.SH", "--interval", "1m"})
 	err := cmd.Execute()
 	require.NoError(t, err)
 	require.NotNil(t, reader.request)
 	require.Len(t, reader.request.GetSelectors(), 1)
 	selector := reader.request.GetSelectors()[0]
-	assert.Equal(t, "stock_cn", selector.GetSpaceId())
-	assert.Equal(t, "stock_cn_kline", selector.GetDatasetId())
+	assert.Equal(t, "stockcn", selector.GetSpaceId())
+	assert.Equal(t, "dataset_stockcn_equity_kline", selector.GetDatasetId())
 	assert.Equal(t, "600519.SH", selector.GetSubjectId())
 	assert.Equal(t, "1m", selector.GetFreq())
-	assert.Empty(t, selector.GetSeriesTag())
-	assert.Equal(t, "stock_cn", reader.request.GetSpaceId())
-	assert.Equal(t, "stock_cn_kline", reader.request.GetDatasetId())
+	assert.Equal(t, "default", selector.GetSeriesTag())
+	assert.Equal(t, "stockcn", reader.request.GetSpaceId())
+	assert.Equal(t, "dataset_stockcn_equity_kline", reader.request.GetDatasetId())
 }
 
 func TestDataKlineValidatesRequiredFlagsAndRange(t *testing.T) {

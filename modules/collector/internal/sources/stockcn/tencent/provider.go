@@ -43,7 +43,7 @@ func New(cfg Config) *Provider {
 		cfg.KlineEndpoint = "/appstock/app/kline/mkline"
 	}
 	if strings.TrimSpace(cfg.SourceID) == "" {
-		cfg.SourceID = "stock_cn_http"
+		cfg.SourceID = "stockcn_http"
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 5 * time.Second}
@@ -66,7 +66,7 @@ func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
 
 func (p *Provider) KlineSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
-		Markets: []string{"stock_cn"},
+		Markets: []string{"stockcn"},
 		// The public Tencent m1 endpoint is verified for Shanghai and
 		// Shenzhen symbols only. Do not advertise XBSE and let the router
 		// choose Sina/EastMoney for Beijing symbols instead.

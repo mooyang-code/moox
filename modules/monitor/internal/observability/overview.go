@@ -977,7 +977,7 @@ func (b Builder) buildMarketFetchSignalHealth(ctx context.Context, spaceID strin
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil, nil
 	}
-	if spaceID != "" && spaceID != "stock_cn" && spaceID != monmetrics.InternalMetricSpaceID {
+	if spaceID != "" && spaceID != "stockcn" && spaceID != monmetrics.InternalMetricSpaceID {
 		return nil, nil
 	}
 	feed, err := b.buildStockCNFeedHealth(ctx, now)
@@ -1032,7 +1032,7 @@ func (b Builder) buildStockCNFeedHealth(ctx context.Context, now time.Time) ([]B
 		if err != nil {
 			return nil, fmt.Errorf("market feed labels for %s: %w", item.SeriesID, err)
 		}
-		if strings.TrimSpace(labels["market_id"]) != "stock_cn" || strings.TrimSpace(labels["feed_kind"]) != "kline" {
+		if strings.TrimSpace(labels["market_id"]) != "stockcn" || strings.TrimSpace(labels["feed_kind"]) != "kline" {
 			continue
 		}
 		sawStock = true
@@ -1091,10 +1091,10 @@ func (b Builder) buildStockCNFeedHealth(ctx context.Context, now time.Time) ([]B
 		} else if rate := state.failures / state.requests; rate > threshold {
 			status, reason = "down", fmt.Sprintf("%s Provider Feed 最近 %s 失败率 %.1f%%，超过 %.1f%%", provider, window, rate*100, threshold*100)
 		}
-		out = append(out, BusinessStatus{SpaceID: "stock_cn", Kind: "market_fetch", Module: "provider_feed:" + provider, Status: status, Reason: reason, LastCheckedAt: now})
+		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Module: "provider_feed:" + provider, Status: status, Reason: reason, LastCheckedAt: now})
 	}
 	if len(out) == 0 {
-		out = append(out, BusinessStatus{SpaceID: "stock_cn", Kind: "market_fetch", Module: "provider_feed", Status: "down", Reason: fmt.Sprintf("stock_cn Provider Feed 最近 %s 没有新指标", window), LastCheckedAt: now})
+		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Module: "provider_feed", Status: "down", Reason: fmt.Sprintf("stockcn Provider Feed 最近 %s 没有新指标", window), LastCheckedAt: now})
 	}
 	return out, nil
 }
@@ -1115,7 +1115,7 @@ func (b Builder) buildStockCNInstrumentHealth(ctx context.Context, now time.Time
 		if err != nil {
 			return nil, fmt.Errorf("instrument snapshot labels for %s: %w", item.SeriesID, err)
 		}
-		if labels["market_id"] != "stock_cn" || item.IsStale {
+		if labels["market_id"] != "stockcn" || item.IsStale {
 			continue
 		}
 		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
@@ -1148,7 +1148,7 @@ func (b Builder) buildStockCNInstrumentHealth(ctx context.Context, now time.Time
 			if err != nil {
 				return fmt.Errorf("instrument metric labels for %s: %w", item.SeriesID, err)
 			}
-			if labels["market_id"] != "stock_cn" || item.IsStale {
+			if labels["market_id"] != "stockcn" || item.IsStale {
 				continue
 			}
 			latest, err := b.Metrics.Latest(ctx, item.SeriesID)
@@ -1205,7 +1205,7 @@ func (b Builder) buildStockCNInstrumentHealth(ctx context.Context, now time.Time
 				}
 			}
 		}
-		out = append(out, BusinessStatus{SpaceID: "stock_cn", Kind: "market_fetch", Module: "instrument_snapshot:" + state.provider, Status: status, Reason: reason, LastCheckedAt: now})
+		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Module: "instrument_snapshot:" + state.provider, Status: status, Reason: reason, LastCheckedAt: now})
 	}
 	return out, nil
 }
@@ -1442,7 +1442,7 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 			return nil, fmt.Errorf("configured group labels for %s: %w", item.SeriesID, err)
 		}
 		currentSpace := strings.TrimSpace(labels["market_id"])
-		if currentSpace != "stock_cn" || (spaceID != "" && currentSpace != spaceID) {
+		if currentSpace != "stockcn" || (spaceID != "" && currentSpace != spaceID) {
 			continue
 		}
 		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
@@ -1480,7 +1480,7 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 			return nil, fmt.Errorf("configured group identity labels for %s: %w", item.SeriesID, err)
 		}
 		currentSpace := strings.TrimSpace(labels["market_id"])
-		if currentSpace != "stock_cn" || (spaceID != "" && currentSpace != spaceID) {
+		if currentSpace != "stockcn" || (spaceID != "" && currentSpace != spaceID) {
 			continue
 		}
 		groupID, parseErr := strconv.Atoi(strings.TrimSpace(labels["group_id"]))
@@ -1526,7 +1526,7 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		}
 		if state.hasConfiguredGroupsExpected && state.hasConfiguredGroupsActual &&
 			state.configuredGroupsExpected != state.configuredGroupsActual {
-			reason := fmt.Sprintf("stock_cn Group 数量不一致：期望 %.0f，实际 %.0f", state.configuredGroupsExpected, state.configuredGroupsActual)
+			reason := fmt.Sprintf("stockcn Group 数量不一致：期望 %.0f，实际 %.0f", state.configuredGroupsExpected, state.configuredGroupsActual)
 			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
 			continue
 		}
@@ -1568,7 +1568,7 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		case len(state.badNodes) > 0:
 			sort.Strings(state.badNodes)
 			status, reason = "down", "Timer 触发器不可用：节点 "+strings.Join(state.badNodes, ", ")
-		case currentSpace == "stock_cn" && state.hasConfiguredGroupsExpected:
+		case currentSpace == "stockcn" && state.hasConfiguredGroupsExpected:
 			status, reason = validateConfiguredGroupIDs(now, state, thresholds.CoordinationStaleAfter)
 		}
 		out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: status, Reason: reason, LastCheckedAt: now})
@@ -1582,24 +1582,24 @@ func validateConfiguredGroupIDs(now time.Time, state *timerCoordinationState, st
 		return "healthy", "Timer 分配和触发器正常"
 	}
 	if len(state.configuredGroupIDs) != expected {
-		return "down", fmt.Sprintf("stock_cn Group ID 数量不一致：期望 %d，实际 %d", expected, len(state.configuredGroupIDs))
+		return "down", fmt.Sprintf("stockcn Group ID 数量不一致：期望 %d，实际 %d", expected, len(state.configuredGroupIDs))
 	}
 	for groupID := 0; groupID < expected; groupID++ {
 		count, ok := state.configuredGroupIDs[groupID]
 		observed := state.configuredGroupIDObserved[groupID]
 		if !ok {
-			return "down", fmt.Sprintf("stock_cn 缺少 Group ID %d", groupID)
+			return "down", fmt.Sprintf("stockcn 缺少 Group ID %d", groupID)
 		}
 		if count != 1 {
-			return "down", fmt.Sprintf("stock_cn Group ID %d 出现 %.0f 次，期望 1 次", groupID, count)
+			return "down", fmt.Sprintf("stockcn Group ID %d 出现 %.0f 次，期望 1 次", groupID, count)
 		}
 		if !isFreshMetric(now, observed, staleAfter) {
-			return "down", fmt.Sprintf("stock_cn Group ID %d 的配置指标已过期", groupID)
+			return "down", fmt.Sprintf("stockcn Group ID %d 的配置指标已过期", groupID)
 		}
 	}
 	for groupID := range state.configuredGroupIDs {
 		if groupID < 0 || groupID >= expected {
-			return "down", fmt.Sprintf("stock_cn 出现越界 Group ID %d，期望范围 0..%d", groupID, expected-1)
+			return "down", fmt.Sprintf("stockcn 出现越界 Group ID %d，期望范围 0..%d", groupID, expected-1)
 		}
 	}
 	return "healthy", "Timer 分配和触发器正常"

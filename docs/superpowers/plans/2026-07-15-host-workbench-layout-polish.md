@@ -188,7 +188,7 @@ Run: `cd web-host && go test -count=1 ./...`
 
 Expected: all web-host packages pass.
 
-Run: `TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh web-host`
+Run: `TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh web-host`
 
 Expected: `bin/moox-web-host` is produced.
 

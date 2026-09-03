@@ -128,7 +128,7 @@ func openTestStore(t *testing.T, path string) *Store {
 }
 
 func fixturePartition() domain.PartitionKey {
-	return domain.PartitionKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202606"}
+	return domain.PartitionKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202606"}
 }
 
 func twoPartitions() []domain.PartitionKey {

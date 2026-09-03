@@ -27,7 +27,7 @@ const (
 
 func validateReservedInternalSpaces(seed metadataSeed) error {
 	for _, item := range seed.Spaces {
-		if !strings.HasPrefix(item.SpaceID, "moox_") {
+		if item.SpaceID != "mooxsys" {
 			continue
 		}
 		if item.Attributes["scope"] != "internal" || item.Attributes["owner_module"] == "" || item.Attributes["managed_by"] == "" {
@@ -36,7 +36,7 @@ func validateReservedInternalSpaces(seed metadataSeed) error {
 	}
 	check := func(resource, spaceID string) error {
 		spaceID = strings.TrimSpace(spaceID)
-		if strings.HasPrefix(spaceID, "moox_") && !hasInternalSpace(seed, spaceID) {
+		if spaceID == "mooxsys" && !hasInternalSpace(seed, spaceID) {
 			return fmt.Errorf("seed %s cannot claim reserved space %q", resource, spaceID)
 		}
 		return nil
@@ -909,7 +909,7 @@ func (s seedViewColumn) toPB() (*pb.ViewColumn, error) {
 		return nil, err
 	}
 	attributes := cloneStringMap(s.Attributes)
-	if s.SpaceID == "moox_system" && strings.TrimSpace(attributes["display_name"]) == "" {
+	if s.SpaceID == "mooxsys" && strings.TrimSpace(attributes["display_name"]) == "" {
 		attributes["display_name"] = s.ColumnName
 	}
 	return &pb.ViewColumn{SpaceId: s.SpaceID, ViewId: s.ViewID, ColumnName: s.ColumnName, OriginType: originType, OriginId: s.OriginID, ValueType: valueType, OnlineTime: s.OnlineTime, SortOrder: s.SortOrder, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: attributes}, nil

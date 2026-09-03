@@ -33,7 +33,7 @@
 - `/ops/resource-monitor` 当前仍调用 Admin 旧 `monitor` API；历史查询支持 `1h`、`24h`、`7d`，实时卡片每 5 秒刷新。
 - Admin 仍通过旧资源监控代码直接访问 node_exporter；页面迁移并完成影子比较后才能删除旧采集链路。
 - Admin 已有 `t_secrets` 和 AES-GCM 加密 DAO，但生产缺少加密根密钥时仍可能使用开发默认 key；本计划必须改成生产 fail closed。
-- `scripts/build.sh`、`scripts/release.sh` 和 `scripts/deploy-moox.sh` 负责中央 MooX；Host Agent 是独立制品，发布和远端部署入口按用户要求放入 `skills/moox/scripts`。
+- `scripts/build/build.sh`、`scripts/release/release.sh` 和 `scripts/deploy/deploy-moox.sh` 负责中央 MooX；Host Agent 是独立制品，发布和远端部署入口按用户要求放入 `skills/moox/scripts`。
 - 上游 node_exporter 只作为 Linux 指标语义参考。本项目不 vendor、不 import、不复制其 collector 实现或测试 fixture。
 
 ## 2. 锁定决策
@@ -48,7 +48,7 @@
 | 本地 API | tRPC 只提供 `GetStatus`、`GetSnapshot`、`RunOnce`；本地 health/tRPC 默认只监听 loopback。 |
 | 传输 | 只有 `packages/jetstream -> moox-eventbus` 一条上报链路；不提供 Host Agent HTTP 上报、Admin report proxy 或原生 `nats.go` 备选模式。 |
 | Topic | 所有主机样本只发布到 `moox.metrics.host.reported.v1`。 |
-| 系统空间 | 所有消息固定 `space_id=moox_system`；Host Agent 不配置 space。主机数据、告警、事件和通知在所有管理台 Space 中共享可见。 |
+| 系统空间 | 所有消息固定 `space_id=mooxsys`；Host Agent 不配置 space。主机数据、告警、事件和通知在所有管理台 Space 中共享可见。 |
 | Agent 身份 | 首次启动生成 UUID 并原子保存为稳定 `agent_id`；Monitor 收到第一条合法消息时自动注册。 |
 | 消息标识 | 每次采样生成 UUIDv7 作为 `MooxMessage.message_id`；不使用 `generation_id`、epoch 或 sequence allocator。 |
 | HostMetric | `HostMetric` 只有 `HostSnapshot snapshot`；身份、时间、空间、版本和消息 ID 全在 `MooxMessage`。 |
@@ -75,7 +75,7 @@
 
 - Linux 主机身份、CPU、内存、文件系统容量、磁盘 I/O 和网络采集。
 - 进程内 counter baseline、不可变最新快照和单次 best-effort EventBus 发布。
-- 标准 `HostMetric` payload、`MooxMessage` 映射、固定 Topic 和 `moox_system` 空间。
+- 标准 `HostMetric` payload、`MooxMessage` 映射、固定 Topic 和 `mooxsys` 空间。
 - Admin `t_secrets` 中六个 EventBus role token、两个 TLS bundle、幂等 provision/export/rotate CLI 和生产加密根密钥门禁。
 - EventBus 私有 CA TLS、六个隔离 NATS role、最小 ACL、`MOOX_METRICS` Topic registry 和固定 Monitor durable consumer。
 - Monitor 自动注册、inbox 去重、latest、分钟历史、资源告警、查询 API 和全局 Space 语义。
@@ -132,8 +132,8 @@ flowchart LR
 - Host Agent 只 import `packages/jetstream`，不得 import `nats.go` 或 `nats-server/v2`。
 - EventBus 是 Stream、durable consumer 和 NATS listener 的唯一 owner；Monitor 不修改 Stream retention。
 - Admin 是 EventBus 安全材料事实源，但不在运行时代理 Host Agent 数据，也不在 Agent 启动时下发 token。
-- `moox_system` 的全局可见仅由 Monitor 的主机监控 API 实现；不得修改 Admin/Storage 的通用 Space 隔离规则。
-- `moox_system` 全局可见不包含 secret 明文；EventBus 凭据只通过部署 CLI 写入受限文件。
+- `mooxsys` 的全局可见仅由 Monitor 的主机监控 API 实现；不得修改 Admin/Storage 的通用 Space 隔离规则。
+- `mooxsys` 全局可见不包含 secret 明文；EventBus 凭据只通过部署 CLI 写入受限文件。
 
 ## 5. 协议与指标契约
 
@@ -243,7 +243,7 @@ Descriptor contract test 必须断言：
 | `producer.node_id` | hostname，仅作展示元数据 |
 | `producer.boot_id` | `/proc/sys/kernel/random/boot_id` |
 | `producer.version` | Agent release version |
-| `space_id` | `moox_system` |
+| `space_id` | `mooxsys` |
 | `sequence` | `0` |
 | `occurred_at` | 本次采集完成时间，UTC |
 | `published_at` | 本次唯一发布尝试开始时间，UTC |
@@ -293,7 +293,7 @@ Content-Type: application/vnd.moox.message+protobuf
 八行统一：
 
 ```text
-c_space_id   = moox_system
+c_space_id   = mooxsys
 c_category   = eventbus
 c_provider   = moox_eventbus
 c_status     = active
@@ -428,7 +428,7 @@ EventBus 预创建 durable `monitor_hostmetrics_ingest_v1`。Monitor 使用 `pac
 每条消息校验：
 
 - outer protocol、固定 Topic、SNAPSHOT kind、固定 content type；
-- `space_id == moox_system`、`sequence == 0`；
+- `space_id == mooxsys`、`sequence == 0`；
 - `producer.service_name == moox-host-agent`、非空 UUID agent ID、hostname、boot ID；
 - UUIDv7 message ID、时间范围、payload/entity/string upper bounds；
 - protobuf 可解析、无 NaN/Inf、百分比合法、totals 不超过 `math.MaxInt64`、entity key 唯一。
@@ -471,25 +471,25 @@ SQLite 容量和清理策略固定如下：
 
 - Monitor latest 和资源告警保持收到样本的粒度。
 - Storage 使用 UTC minute bucket，在 `bucket_end + 30s` 前保留该分钟最后收到的样本；Dataset 行和 Monitor 历史均由 cleaner 按 3 天 retention 分批删除，删除失败不影响实时 latest。
-- Dataset ID 保持显式外部版本：`host_resource_v1`、`host_fs_v1`、`host_disk_v1`、`host_net_v1`。
-- 四个 Dataset 都是 `DATA_KIND_TIME_SERIES`、`freq=1m`、`space_id=moox_system`、`subject_id=agent_id`，`data_time=bucket_start UTC`。同一 key 重写只更新该分钟最终样本。
+- Dataset ID 保持显式外部版本：`dataset_mooxsys_host_resource`、`dataset_mooxsys_host_filesystem`、`dataset_mooxsys_host_disk`、`dataset_mooxsys_host_network`。
+- 四个 Dataset 都是 `DATA_KIND_TIME_SERIES`、`freq=1m`、`space_id=mooxsys`、`subject_id=agent_id`，`data_time=bucket_start UTC`。同一 key 重写只更新该分钟最终样本。
 - 历史缺口是合法状态；Host Agent best-effort 不承诺连续时间序列。
-- CPU、内存、文件系统、磁盘和网络阈值告警规则、事件和通知统一属于 `moox_system`。
+- CPU、内存、文件系统、磁盘和网络阈值告警规则、事件和通知统一属于 `mooxsys`。
 
 逻辑 seed 的 dimensions/columns 固定：
 
 | Dataset | dimensions | columns |
 |---|---|---|
-| `host_resource_v1` | 无 | `logical_cores`、`cpu_usage_percent`、`cpu_usage_available`、`memory_total_bytes`、`memory_used_bytes`、`memory_available_bytes`、`memory_usage_percent` |
-| `host_fs_v1` | `device` + `mountpoint` | `device`、`mountpoint`、`fs_type`、`total_bytes`、`used_bytes`、`available_bytes`、`usage_percent`、`read_only` |
-| `host_disk_v1` | `device` | 第 5.1 节 `DiskMetric` 的全部字段，除 dimension `device` 外字段名保持一致 |
-| `host_net_v1` | `device` | 第 5.1 节 `NetworkMetric` 的全部字段，除 dimension `device` 外字段名保持一致 |
+| `dataset_mooxsys_host_resource` | 无 | `logical_cores`、`cpu_usage_percent`、`cpu_usage_available`、`memory_total_bytes`、`memory_used_bytes`、`memory_available_bytes`、`memory_usage_percent` |
+| `dataset_mooxsys_host_filesystem` | `device` + `mountpoint` | `device`、`mountpoint`、`fs_type`、`total_bytes`、`used_bytes`、`available_bytes`、`usage_percent`、`read_only` |
+| `dataset_mooxsys_host_disk` | `device` | 第 5.1 节 `DiskMetric` 的全部字段，除 dimension `device` 外字段名保持一致 |
+| `dataset_mooxsys_host_network` | `device` | 第 5.1 节 `NetworkMetric` 的全部字段，除 dimension `device` 外字段名保持一致 |
 
 bytes/totals 使用 `INT`，percent/rate/IOPS 使用 `DOUBLE`，available/read-only 使用 `BOOL`，entity/operstate/fs type 使用 `STRING`。dimensions 必须来自已通过 payload validator 的原始 entity key，不能用数组下标；Monitor SQLite registry 保留已见 entity key，历史查询据此构造 exact Storage keys。local-route seed 为四个 Dataset 各建 wildcard subject route；不为每个动态 Agent 生成 metadata Subject/route。
 
 ### 8.4 全局 Space API
 
-- 只有主机监控相关 Monitor RPC/HTTP adapter 忽略 UI 当前 Space，并在服务内部强制使用 `moox_system`。
+- 只有主机监控相关 Monitor RPC/HTTP adapter 忽略 UI 当前 Space，并在服务内部强制使用 `mooxsys`。
 - Admin gateway、Storage 通用 API 和其他 Monitor checks 继续使用正常 Space 隔离。
 - UI Space 切换不清空或切换主机列表、历史和告警。
 - Secret 页面不因该规则暴露 EventBus secret value。
@@ -498,7 +498,7 @@ bytes/totals 使用 `INT`，percent/rate/IOPS 使用 `DOUBLE`，available/read-o
 
 ### 9.1 发布和部署边界
 
-- `scripts/release.sh` 和 Host Agent release 只生成二进制、空配置模板、文档、unit 和 checksums。
+- `scripts/release/release.sh` 和 Host Agent release 只生成二进制、空配置模板、文档、unit 和 checksums。
 - release archive、git、日志、命令行、health、SQLite、JetStream headers 中不得出现 token、Admin encryption key、CA private key 或 server private key。
 - 真实安全材料只在部署阶段生成。
 - fresh install 同时缺少 Admin DB 和根密钥时，部署工具生成根密钥并写 `0600` 文件。
@@ -542,8 +542,8 @@ $HOME/.config/moox/factor/eventbus.yaml               # 0600
 skills/moox/scripts/eventbus-credentials.sh
 skills/moox/scripts/hostagent-release.sh
 skills/moox/scripts/hostagent-deploy.sh
-skills/moox/scripts/test-hostagent-release.sh
-skills/moox/scripts/test-hostagent-deploy.sh
+skills/moox/scripts/test/contract/test-hostagent-release.sh
+skills/moox/scripts/test/contract/test-hostagent-deploy.sh
 skills/moox/references/host-agent.md
 ```
 
@@ -621,7 +621,7 @@ release/moox-host-agent-<version>-linux-<arch>.tar.gz
 
 ```bash
 go test -count=1 ./packages/messagepb ./packages/jetstream ./modules/eventbus/...
-./scripts/check-module-boundaries.sh
+./scripts/check/check-module-boundaries.sh
 ```
 
 ### Task 2: 定义共享 HostMetric payload 和 Host Agent tRPC
@@ -732,10 +732,10 @@ git commit -m "feat(admin): manage eventbus security material"
 **Files:**
 - Use (owned by EventBus plan): `modules/eventbus/config/app.yaml`
 - Use (owned by EventBus plan): `modules/eventbus/internal/registry/*`
-- Use (owned by EventBus plan): `scripts/build.sh`
-- Use (owned by EventBus plan): `scripts/release.sh`
-- Use (owned by EventBus plan): `scripts/deploy-moox.sh`
-- Use (owned by EventBus plan): `scripts/test-deploy-moox-eventbus.sh`
+- Use (owned by EventBus plan): `scripts/build/build.sh`
+- Use (owned by EventBus plan): `scripts/release/release.sh`
+- Use (owned by EventBus plan): `scripts/deploy/deploy-moox.sh`
+- Use (owned by EventBus plan): `scripts/test/contract/test-deploy-moox-eventbus.sh`
 
 - [ ] **Step 1: 执行 EventBus Task 7**
 
@@ -752,7 +752,7 @@ git commit -m "feat(admin): manage eventbus security material"
 - [ ] **Step 4: 运行 gate，不创建空提交**
 
 ```bash
-./scripts/test-deploy-moox-eventbus.sh
+./scripts/test/contract/test-deploy-moox-eventbus.sh
 go test -count=1 ./modules/eventbus/internal/config ./modules/eventbus/internal/broker ./modules/eventbus/internal/registry ./packages/jetstream
 ```
 
@@ -795,7 +795,7 @@ limits:
   max_networks: 128
 ```
 
-Topic 和 `moox_system` 是代码常量，不可配置。
+Topic 和 `mooxsys` 是代码常量，不可配置。
 
 - [ ] **Step 3: 实现安全身份文件**
 
@@ -965,7 +965,7 @@ git commit -m "feat(hostagent): publish best-effort host snapshots"
 
 - [ ] **Step 1: 写 schema 和重复消息 tests**
 
-断言 schema 幂等、message ID 唯一、first message 自动创建 Agent、重复消息不重复投影、所有行固定 `moox_system`。
+断言 schema 幂等、message ID 唯一、first message 自动创建 Agent、重复消息不重复投影、所有行固定 `mooxsys`。
 
 - [ ] **Step 2: 实现完整 validator**
 
@@ -1025,7 +1025,7 @@ git commit -m "feat(monitor): ingest host metrics from eventbus"
 
 - [ ] **Step 2: 建立四个 Storage datasets**
 
-使用固定 `moox_system`、`subject_id=agent_id`、确定性 minute key；projector 在 SQLite 中 upsert 每分钟最后样本，`bucket_end + 30s` 后由 history worker 写 Storage。重复写幂等，Storage 失败在第 8.2 节上限内保留 outbox，历史缺口不补零。逻辑 seed 定义四个 Dataset/Fields/Columns，local-route seed 只定义 bundled Storage 的 node/route，不能把 local topology 写进逻辑 seed。
+使用固定 `mooxsys`、`subject_id=agent_id`、确定性 minute key；projector 在 SQLite 中 upsert 每分钟最后样本，`bucket_end + 30s` 后由 history worker 写 Storage。重复写幂等，Storage 失败在第 8.2 节上限内保留 outbox，历史缺口不补零。逻辑 seed 定义四个 Dataset/Fields/Columns，local-route seed 只定义 bundled Storage 的 node/route，不能把 local topology 写进逻辑 seed。
 
 - [ ] **Step 3: 实现 projector 和两个有界 worker**
 
@@ -1037,7 +1037,7 @@ bootstrap 启动顺序固定为 repository -> Storage schema read-only validatio
 
 - [ ] **Step 5: 增加全局 Host API**
 
-提供 hosts/latest/history/alert rules/events；忽略请求中的 Space 并内部固定 `moox_system`。普通 Monitor API 继续按原 Space。
+提供 hosts/latest/history/alert rules/events；忽略请求中的 Space 并内部固定 `mooxsys`。普通 Monitor API 继续按原 Space。
 
 - [ ] **Step 6: 验证恢复并提交**
 
@@ -1118,9 +1118,9 @@ git commit -m "feat(monitor): move host resource monitoring to host agent"
 **Ownership:** EventBus build/release、credential provisioning、SysDeploy 和基础启动顺序仍唯一属于 EventBus Task 7。本 Task 只在其后追加 Host monitoring metadata 和 schema gate，不重复实现 EventBus packaging。
 
 **Files:**
-- Modify: `scripts/release.sh`
-- Modify: `scripts/deploy-moox.sh`
-- Modify (created by EventBus Task 7): `scripts/test-deploy-moox-eventbus.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify (created by EventBus Task 7): `scripts/test/contract/test-deploy-moox-eventbus.sh`
 - Modify: `modules/storage/cmd/cli/main.go`
 - Modify: `modules/storage/cmd/cli/main_test.go`
 - Create: `modules/storage/internal/bootstrap/metadata/apply.go`
@@ -1138,12 +1138,12 @@ git commit -m "feat(monitor): move host resource monitoring to host agent"
 
 - [ ] **Step 3: 保持 Host Agent 独立制品边界**
 
-Host Agent 不加入中央 `all` release；`scripts/build.sh hostagent` 已由 Skill release 作为显式底层 target 使用。`--reset-data` 继续保留 Admin DB、EventBus data 和 credential directory。
+Host Agent 不加入中央 `all` release；`scripts/build/build.sh hostagent` 已由 Skill release 作为显式底层 target 使用。`--reset-data` 继续保留 Admin DB、EventBus data 和 credential directory。
 
 - [ ] **Step 4: 验证并提交**
 
 ```bash
-./scripts/test-deploy-moox-eventbus.sh
+./scripts/test/contract/test-deploy-moox-eventbus.sh
 go test -count=1 ./modules/storage/cmd/cli ./modules/storage/internal/bootstrap/metadata ./modules/monitor/internal/hostmetrics ./modules/monitor/internal/bootstrap
 git add scripts modules/storage/cmd/cli modules/storage/internal/bootstrap/metadata examples/metadata-monitor-host.seed.yaml examples/metadata-monitor-host-local-route.seed.yaml
 git commit -m "feat(deploy): apply host monitoring metadata"
@@ -1155,8 +1155,8 @@ git commit -m "feat(deploy): apply host monitoring metadata"
 - Modify (created by EventBus Task 7): `skills/moox/scripts/eventbus-credentials.sh`
 - Create: `skills/moox/scripts/hostagent-release.sh`
 - Create: `skills/moox/scripts/hostagent-deploy.sh`
-- Create: `skills/moox/scripts/test-hostagent-release.sh`
-- Create: `skills/moox/scripts/test-hostagent-deploy.sh`
+- Create: `skills/moox/scripts/test/contract/test-hostagent-release.sh`
+- Create: `skills/moox/scripts/test/contract/test-hostagent-deploy.sh`
 - Create: `skills/moox/references/host-agent.md`
 - Modify: `skills/moox/SKILL.md`
 - Modify: `skills/moox/references/build.md`
@@ -1186,8 +1186,8 @@ git commit -m "feat(deploy): apply host monitoring metadata"
 - [ ] **Step 6: 验证并提交**
 
 ```bash
-./skills/moox/scripts/test-hostagent-release.sh
-./skills/moox/scripts/test-hostagent-deploy.sh
+./skills/moox/scripts/test/contract/test-hostagent-release.sh
+./skills/moox/scripts/test/contract/test-hostagent-deploy.sh
 git add skills/moox deploy/systemd/user/moox-host-agent.service
 git commit -m "feat(hostagent): add skill-driven release and deployment"
 ```
@@ -1207,7 +1207,7 @@ git commit -m "feat(hostagent): add skill-driven release and deployment"
 - [ ] `t_secrets` 无 owner/purpose/revision/client 新列，六个 role token 和两个 TLS bundle 幂等存在。
 - [ ] release/stage/log/process args/health/RPC response 全部通过 secret leakage scan。
 - [ ] Agent 首次生成 identity，升级/重启保持；corrupt/权限错误 fail closed。
-- [ ] `moox_system` 主机数据和告警在所有 UI Space 可见，其他业务数据仍正常隔离。
+- [ ] `mooxsys` 主机数据和告警在所有 UI Space 可见，其他业务数据仍正常隔离。
 - [ ] `/ops/resource-monitor` 实时、历史、离线、rate unavailable 和告警状态通过浏览器验收。
 - [ ] fresh deploy create-or-verify 四个 Host Dataset 和 active routes；缺失/不兼容 schema 时 consumer 不 fetch，补齐后自动恢复。
 - [ ] 普通升级复用 Admin 根密钥、CA、server certificate、六个 role token 和 EventBus data。
@@ -1221,5 +1221,5 @@ git commit -m "feat(hostagent): add skill-driven release and deployment"
 - 不因本计划修改 Storage 已有业务消息 outbox；“无 outbox”只指 Host Agent 主机样本上报。
 - 不把私有 CA 误写成公开 CA，不引入 ACME daily renewal。
 - 不在实现中重新加入 `client_token`、`bootstrap_token`、HTTP report 或每 Agent broker user。
-- 不把 `moox_system` 的全局读取规则扩散到通用 Secret、Admin gateway 或 Storage API。
+- 不把 `mooxsys` 的全局读取规则扩散到通用 Secret、Admin gateway 或 Storage API。
 - 对所有文件权限、ACL、TLS、token rotation 和 failure-mode 要求写负向测试，不能只测 happy path。

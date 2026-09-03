@@ -22,7 +22,9 @@
           </section>
 
           <section class="view-status-line">
-            <span>{{ currentDatasetName }}</span>
+            <span>View: {{ activeView?.view_id || "-" }}</span>
+            <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
+            <span>频率: {{ currentViewFrequency }}</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
             <a-tag size="small" :color="activeView?.active_index_id ? 'green' : 'orange'">
               {{ activeView?.active_index_id ? "已构建" : "未构建" }}
@@ -450,6 +452,7 @@ import {
   type OwnerModule,
   type ViewRole
 } from "@/views/data/shared/module-attribution";
+import { freqFromViewFilterJSON } from "@/views/data/views/view-form-utils";
 import { viewBuildTimeLabel } from "./view-build-time";
 import KlineModal from "./kline-modal.vue";
 import QueryControls from "./components/query-controls.vue";
@@ -597,9 +600,11 @@ const buildTimeText = computed(() => viewBuildTimeLabel(activeView.value));
 const primaryDataset = computed(() => datasets.value.find(item => item.dataset_id === activeView.value?.primary_dataset_id));
 const currentDatasetName = computed(() => {
   const dataset = primaryDataset.value;
-  if (!dataset) return activeView.value?.primary_dataset_id || "-";
-  return dataset.name ? `${dataset.name} (${dataset.dataset_id})` : dataset.dataset_id;
+  if (!dataset) return "-";
+  return dataset.name || dataset.dataset_id;
 });
+const currentDatasetId = computed(() => activeView.value?.primary_dataset_id || "-");
+const currentViewFrequency = computed(() => freqFromViewFilterJSON(activeView.value?.filter_json) || "-");
 
 const mode = computed(() => viewModeFromPrimaryDataset(datasets.value, activeView.value?.primary_dataset_id));
 const modeText = computed(() => {
@@ -1128,11 +1133,12 @@ function resetFilterRows() {
 }
 
 function createFilterState(option?: FilterFieldOption): ViewFilterState {
+  const isStockCNKline = activeView.value?.primary_dataset_id === "dataset_stockcn_equity_kline";
   return {
     fieldName: option?.value || "",
     operator: option?.value === "series_tag" ? "eq" : "contains",
     valueType: option?.valueType || "FIELD_VALUE_TYPE_STRING",
-    value: "",
+    value: option?.value === "series_tag" && isStockCNKline ? "default" : "",
     startValue: "",
     endValue: ""
   };
@@ -1268,7 +1274,7 @@ async function openKlineModal() {
   }
   const seriesTag = exactSeriesTagFromFilters(filters.value);
   if (seriesTag === undefined) {
-    Message.warning("请先精确选择序列标签；默认序列请选择为空");
+    Message.warning("请先精确选择序列标签；默认序列请输入 default");
     return;
   }
 
@@ -1286,7 +1292,7 @@ async function reloadKlineRecords() {
   }
   const seriesTag = exactSeriesTagFromFilters(filters.value);
   if (seriesTag === undefined) {
-    Message.warning("请先精确选择序列标签；默认序列请选择为空");
+    Message.warning("请先精确选择序列标签；默认序列请输入 default");
     return;
   }
   klineSubjectId.value = subjectId;

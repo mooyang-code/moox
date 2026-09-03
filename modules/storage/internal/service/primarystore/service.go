@@ -140,8 +140,9 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 	if req.GetAuthInfo().GetAppId() == "scf-market-canary" {
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("read-only primary credential"))}, nil
 	}
+	rows := normalizeStockCNSeriesTags(req.GetRows())
 	ctx = s.requestContext(ctx)
-	if err := validateDatasetWriteOwner(ctx, req.GetAuthInfo(), req.GetRows()); err != nil {
+	if err := validateDatasetWriteOwner(ctx, req.GetAuthInfo(), rows); err != nil {
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	groups := make(map[routeKey][]*pb.RowFieldUpsert)
@@ -149,11 +150,11 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 	if batchValidator, ok := s.validate.(interface {
 		ValidateRows(context.Context, []*pb.RowFieldUpsert) error
 	}); ok {
-		if err := batchValidator.ValidateRows(ctx, req.GetRows()); err != nil {
+		if err := batchValidator.ValidateRows(ctx, rows); err != nil {
 			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 	}
-	for _, row := range req.GetRows() {
+	for _, row := range rows {
 		validator := s.validate
 		if _, batched := s.validate.(interface {
 			ValidateRows(context.Context, []*pb.RowFieldUpsert) error
@@ -195,6 +196,26 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 		s.observeTimeSeriesRows(ctx, rows, "success", true)
 	}
 	return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
+}
+
+const stockCNDefaultSeriesTag = "default"
+
+func normalizeStockCNSeriesTags(input []*pb.RowFieldUpsert) []*pb.RowFieldUpsert {
+	rows := make([]*pb.RowFieldUpsert, 0, len(input))
+	for _, row := range input {
+		if row == nil {
+			rows = append(rows, nil)
+			continue
+		}
+		copyRow := proto.Clone(row).(*pb.RowFieldUpsert)
+		key := copyRow.GetKey()
+		series := key.GetTimeSeries()
+		if key.GetSpaceId() == "stockcn" && key.GetDatasetId() == "dataset_stockcn_equity_kline" && series != nil && strings.TrimSpace(series.GetSeriesTag()) == "" {
+			series.SeriesTag = stockCNDefaultSeriesTag
+		}
+		rows = append(rows, copyRow)
+	}
+	return rows
 }
 
 func rejectMooxSkillWrite(auth *pb.AuthInfo) error {

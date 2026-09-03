@@ -1138,7 +1138,7 @@ git commit -m "feat(cli): submit and query SCF publish jobs"
 - Modify: `examples/e2e/collector-symbol-kline.test.mjs`
 - Modify: `docs/云节点管理.md`
 - Modify: `docs/superpowers/plans/2026-07-27-collector-symbol-kline-real-scf-e2e.md` only to mark the superseded synchronous invocation command
-- Modify: `scripts/test-deploy-moox-control-profile.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-control-profile.sh`
 
 - [x] **Step 1: 更新 shell contract 测试**
 
@@ -1210,7 +1210,7 @@ moox-cli collector function publish status --job-id ...
 
 - [x] **Step 4: 锁定部署包配置**
 
-`scripts/deploy-moox.sh` 已复制整个 `modules/cloudnode/config`，不需要修改部署脚本。在 `scripts/test-deploy-moox-control-profile.sh` 中增加断言，确认打包后的：
+`scripts/deploy/deploy-moox.sh` 已复制整个 `modules/cloudnode/config`，不需要修改部署脚本。在 `scripts/test/contract/test-deploy-moox-control-profile.sh` 中增加断言，确认打包后的：
 
 ```text
 cloudnode/config/app.yaml
@@ -1229,7 +1229,7 @@ node_batch:
 ```bash
 node --test examples/e2e/collector-symbol-kline.test.mjs
 bash examples/e2e/test-run-real-symbol-kline-scf.sh
-bash scripts/test-deploy-moox-control-profile.sh
+bash scripts/test/contract/test-deploy-moox-control-profile.sh
 git diff --check
 ```
 
@@ -1269,14 +1269,14 @@ Expected: PASS，没有未提交生成差异。
 - [x] **Step 3: 运行仓库门禁**
 
 ```bash
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-go-workspace.sh
 make verify-pr
 git diff --check
 ```
 
 - [x] **Step 4: 部署到真实控制机**
 
-使用现有 `custom.toml`/部署配置定位目标机，按当前发布脚本部署至少：
+使用现有 `moox.toml`/部署配置定位目标机，按当前发布脚本部署至少：
 
 ```text
 moox-cloudnode
@@ -1455,5 +1455,5 @@ CLI 在访问控制面或上传 COS 前拒绝超过 100 个节点的批次。
 (web) pnpm lint:eslint:check                                      PASS
 (web) pnpm lint:prettier:check                                    PASS
 (web) pnpm build:prod                                             PASS
-./scripts/test-go-workspace.sh                                    PASS
+./scripts/test/contract/test-go-workspace.sh                                    PASS
 ```

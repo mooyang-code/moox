@@ -4,7 +4,7 @@
 
 Doctor V1 是 `moox-cli` 中由用户手工触发的只读诊断能力，不是后台服务。Monitor 只保存和聚合事实，CLI 负责执行检查 DAG 和生成结论。系统只有一个 Monitor 实例，不包含 Peer、Owner、Lease、DoctorMgr、自动恢复、Trade 模拟盘或 Full Canary。
 
-发布前运行 `bash scripts/test-doctor-e2e.sh`，复验部署清单、身份注入、Storage 零修改边界、上下文限制和故障注入用例。默认 seed 只把部署脚本实际编排的进程标为 active；Trade 和 HostAgent 保留在清单中，但在单独部署前为 disabled。
+发布前运行 `bash scripts/test/e2e/test-doctor-e2e.sh`，复验部署清单、身份注入、Storage 零修改边界、上下文限制和故障注入用例。默认 seed 只把部署脚本实际编排的进程标为 active；Trade 和 HostAgent 保留在清单中，但在单独部署前为 disabled。
 
 Storage 正在独立重构。V1 仍检查其 SysDeploy inventory 和已有 `/healthz`、`/readyz`、Reporter 事实，并启用固定 Check `bootstrap.storage_dataset_activation`：它使用现有 Metadata 配置和 Storage service HMAC，只读取 disabled Dataset 并调用 `CheckDatasetActivation`，不调用 `ActivateDataset`。Metadata endpoint 使用既有 `MOOX_METADATA_URL`（未设置时为本机 `http://127.0.0.1:20200`），服务身份使用 `MOOX_STORAGE_NODE_AUTH_SECRET` 计算 `storage-metadata` AppKey。所有 disabled Dataset 都 ready 才是 `HEALTHY`；ready 检查失败显示 `DEGRADED`，Metadata 不可达显示 `UNKNOWN/INCONCLUSIVE`。每次最多输出 16 条 Dataset Observation，超出部分只显示省略数量；Space/Dataset 排序固定，响应正文、地址、密钥和原始失败详情会被摘要化。更广泛的 Storage 功能水位以及穿过 Storage 的数据链路仍一律输出 `SKIPPED(storage_observability_deferred)`，不得解释为通过。
 
@@ -49,7 +49,7 @@ cd /home/ubuntu/moox/prod
 
 | Action ID | 常见原因 | 只读确认 | 人工恢复 | 重新接入检查 |
 | --- | --- | --- | --- | --- |
-| `apply_service_deployments_seed` | 缺少 required SysDeploy 记录或发布契约 | 对比 `examples/setup/default/service-deployments.yaml` 和 Admin 中的全量部署记录 | 使用 `moox-admin-cli service-deployments import` 重新导入当前 seed | 重跑 `doctor bootstrap`，确认 `bootstrap.inventory` 通过 |
+| `apply_service_deployments_seed` | 缺少 required SysDeploy 记录或发布契约 | 对比 `config/setup/service-deployments.yaml` 和 Admin 中的全量部署记录 | 使用 `moox-admin-cli service-deployments import` 重新导入当前 seed | 重跑 `doctor bootstrap`，确认 `bootstrap.inventory` 通过 |
 | `verify_service_identity` | `service/instance_id/node_id/boot_id` 缺失或冲突 | 带 HMAC 读取目标 `/readyz`，核对 `<service>@<node>` 与本次 boot ID | 修正部署 node ID/环境并手工重启单个服务 | 等待两个 Reporter 周期后重跑 `diagnose` |
 | `repair_path_permissions` | Manifest writable path 不存在或不可写 | 使用部署用户检查目录 owner、mode 和挂载只读状态 | 创建目录并只授予部署用户所需权限 | 重跑对应 `bootstrap.path_permissions:*`，确认无探针残留 |
 | `verify_eventbus_credentials` | Reporter 发布、Monitor Consumer 或 ACL 异常 | 检查 EventBus ready、consumer pending、凭据文件权限和服务 reporter 错误 | 用 Admin credential CLI 重新生成/导出凭据并手工重启受影响服务 | 等待两个周期，确认业务 health 与 Reporter coverage 同时通过 |
@@ -71,8 +71,8 @@ cd /home/ubuntu/moox/prod
 ## 验证
 
 ```bash
-bash scripts/test-monitor-coverage-contract.sh
-bash scripts/test-release-contract.sh
+bash scripts/test/contract/test-monitor-coverage-contract.sh
+bash scripts/test/contract/test-release-contract.sh
 (cd modules/monitor && go test -count=1 ./internal/doctor ./internal/hostmetrics ./internal/rpc)
 (cd modules/cli && go test -count=1 ./internal/doctor/... ./internal/command)
 ```

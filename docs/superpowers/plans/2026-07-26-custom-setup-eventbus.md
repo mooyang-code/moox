@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `custom.toml` the single user-authored source for the public TLS EventBus endpoint used by control deployment and Collector SCF.
+**Goal:** Make `moox.toml` the single user-authored source for the public TLS EventBus endpoint used by control deployment and Collector SCF.
 
-**Architecture:** Extend the strict setup manifest with a typed `EventBus` section, pass it through setup deployment options, and translate it into child-process environment variables for `deploy-moox.sh`. The deployment script renders one authoritative TLS URL and port into the broker, service directory, generated credentials, and remote package without copying `custom.toml`.
+**Architecture:** Extend the strict setup manifest with a typed `EventBus` section, pass it through setup deployment options, and translate it into child-process environment variables for `deploy-moox.sh`. The deployment script renders one authoritative TLS URL and port into the broker, service directory, generated credentials, and remote package without copying `moox.toml`.
 
 **Tech Stack:** Go 1.25, BurntSushi TOML, Cobra, Bash, embedded NATS JetStream, Testify, repository deployment contract scripts.
 
@@ -15,7 +15,7 @@
 **Files:**
 - Modify: `modules/cli/internal/setup/config/config.go`
 - Modify: `modules/cli/internal/setup/config/config_test.go`
-- Modify: `custom.toml.example`
+- Modify: `moox.toml.example`
 
 - [ ] **Step 1: Add failing manifest tests**
 
@@ -73,7 +73,7 @@ port = 4222
 tls_enabled = true
 ```
 
-into `custom.toml.example`.
+into `moox.toml.example`.
 
 - [ ] **Step 5: Run the focused tests**
 
@@ -88,7 +88,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add custom.toml.example modules/cli/internal/setup/config
+git add moox.toml.example modules/cli/internal/setup/config
 git commit -m "feat(setup): validate EventBus public endpoint"
 ```
 
@@ -174,8 +174,8 @@ git commit -m "feat(setup): pass EventBus endpoint to control deploy"
 ### Task 3: Make the deployment script honor the configured EventBus port
 
 **Files:**
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-deploy-moox-eventbus.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-eventbus.sh`
 
 - [ ] **Step 1: Add failing script contract assertions**
 
@@ -194,7 +194,7 @@ rejects non-numeric and out-of-range ports
 Run:
 
 ```bash
-./scripts/test-deploy-moox-eventbus.sh
+./scripts/test/contract/test-deploy-moox-eventbus.sh
 ```
 
 Expected: FAIL on the first missing port assertion.
@@ -227,8 +227,8 @@ environment in `sync_remote_stage`.
 Run:
 
 ```bash
-bash -n scripts/deploy-moox.sh
-./scripts/test-deploy-moox-eventbus.sh
+bash -n scripts/deploy/deploy-moox.sh
+./scripts/test/contract/test-deploy-moox-eventbus.sh
 ```
 
 Expected: PASS.
@@ -236,7 +236,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/deploy-moox.sh scripts/test-deploy-moox-eventbus.sh
+git add scripts/deploy/deploy-moox.sh scripts/test/contract/test-deploy-moox-eventbus.sh
 git commit -m "feat(eventbus): configure advertised and listen port"
 ```
 
@@ -247,7 +247,7 @@ git commit -m "feat(eventbus): configure advertised and listen port"
 - Modify: `README.md`
 - Modify: `docs/运维/MooX-EventBus运维.md`
 - Modify: `skills/moox/REFERENCE.md`
-- Modify: `skills/moox/scripts/test-custom-setup-contract.sh`
+- Modify: `skills/moox/scripts/test/contract/test-custom-setup-contract.sh`
 
 - [ ] **Step 1: Update the documented manifest**
 
@@ -257,16 +257,16 @@ MooX generates role tokens, the private CA, and `cloudnode-worker.yaml`.
 - [ ] **Step 2: Update the setup contract test**
 
 Extend the reference/template comparison so the EventBus block must match
-`custom.toml.example`. Retain the checks that forbid Agents from reading or
-printing `custom.toml`.
+`moox.toml.example`. Retain the checks that forbid Agents from reading or
+printing `moox.toml`.
 
 - [ ] **Step 3: Run documentation contracts**
 
 Run:
 
 ```bash
-./skills/moox/scripts/test-custom-setup-contract.sh
-./scripts/test-deploy-moox-eventbus.sh
+./skills/moox/scripts/test/contract/test-custom-setup-contract.sh
+./scripts/test/contract/test-deploy-moox-eventbus.sh
 ```
 
 Expected: PASS.
@@ -294,9 +294,9 @@ Expected: PASS.
 - [ ] **Step 2: Run repository contracts**
 
 ```bash
-./scripts/test-deploy-moox-eventbus.sh
-./scripts/verify-event-contracts.sh
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-deploy-moox-eventbus.sh
+./scripts/check/verify-event-contracts.sh
+./scripts/test/contract/test-go-workspace.sh
 make verify-pr
 git diff --check
 ```
@@ -307,13 +307,13 @@ Expected: PASS with no generated diff.
 
 **Files:**
 - Review the full diff from `65af3add` through candidate HEAD.
-- Read `custom.toml` only through `moox-cli setup` commands.
+- Read `moox.toml` only through `moox-cli setup` commands.
 
 - [ ] **Step 1: Start a fresh independent review Agent**
 
 Ask the Agent to inspect configuration validation, secret boundaries, port
 propagation, script quoting, deployment rollback, and test coverage. The Agent
-must not read `custom.toml` or modify files.
+must not read `moox.toml` or modify files.
 
 - [ ] **Step 2: Fix every actionable review finding**
 
@@ -331,7 +331,7 @@ Expected: `./bin/moox-cli` exits successfully for `setup --help`.
 - [ ] **Step 4: Validate the real manifest without exposing it**
 
 ```bash
-./bin/moox-cli setup validate --file ./custom.toml
+./bin/moox-cli setup validate --file ./moox.toml
 ```
 
 Expected: sanitized JSON with successful configuration, Tencent identity, and
@@ -340,7 +340,7 @@ SSH validation. Do not print or parse the manifest outside setup CLI.
 - [ ] **Step 5: Deploy the control profile**
 
 ```bash
-./bin/moox-cli setup deploy-control --file ./custom.toml
+./bin/moox-cli setup deploy-control --file ./moox.toml
 ```
 
 Expected: sanitized JSON with `status: ready`; the target runs Admin, Gateway,
@@ -349,8 +349,8 @@ Web, EventBus, CloudNode, and Collector from the candidate revision.
 - [ ] **Step 6: Apply setup state**
 
 ```bash
-./bin/moox-cli setup apply --file ./custom.toml
-./bin/moox-cli setup status --file ./custom.toml
+./bin/moox-cli setup apply --file ./moox.toml
+./bin/moox-cli setup status --file ./moox.toml
 ```
 
 Expected: setup state `completed`, with no credentials in output.
@@ -370,7 +370,7 @@ CloudNode submits a real JobItem and the Collector SCF path reports a terminal s
 ```
 
 All output must be sanitized. Do not copy tokens, private keys, or
-`custom.toml` into artifacts or chat.
+`moox.toml` into artifacts or chat.
 
 - [ ] **Step 8: Verify candidate revision and clean state**
 

@@ -1,1 +1,0 @@
-tests/contract/test-trade-exchange-terminology.sh

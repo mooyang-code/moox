@@ -40,9 +40,9 @@ Archive 已提交的业务事实。
 ## 验证
 
 ```bash
-./scripts/build.sh eventbus
+./scripts/build/build.sh eventbus
 go test -count=1 ./modules/eventbus/...
-./scripts/verify-event-contracts.sh
+./scripts/check/verify-event-contracts.sh
 ```
 
 运维说明见[EventBus 运维](../../docs/运维/MooX-EventBus运维.md)和

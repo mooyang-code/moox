@@ -37,7 +37,7 @@ go.work.sum
 skills/dev-helper/.env.local
 
 # User-owned initialization manifest. Keep the checked-in example only.
-/custom.toml
+/moox.toml
 
 # infra 真实部署值覆盖文件（唯一存放真实 IP/凭证处），不入库
 

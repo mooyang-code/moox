@@ -33,11 +33,11 @@ func (timerHandlerStorage) RegisterDataSubject(context.Context, *storagepb.Regis
 }
 
 func TestHandleTimerAtReportsMetricsForTimerExecution(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "stock_cn")
+	t.Setenv("MOOX_SPACE_ID", "stockcn")
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "sina")
-	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stock_cn_minute_http")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stockcn_minute_http")
 	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
-	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "stock_cn_kline")
+	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "dataset_stockcn_equity_kline")
 	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
 	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "600000.XSHG")
 	t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", `{"600000.XSHG":"sh600000"}`)

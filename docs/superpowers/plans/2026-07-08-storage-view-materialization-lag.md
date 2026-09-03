@@ -10,7 +10,7 @@
 
 **Architecture:** Keep PrimaryStore as the source of truth and DuckDB view tables as rebuildable read models. Optimize the incremental view builder by deduplicating event keys, batch-reading fact rows, caching view metadata briefly, and shortening DuckDB write transactions with staging-table upsert. Add a lightweight catch-up loop that periodically replays recent source rows into active time-series views based on each view table's current max `data_time`.
 
-**Tech Stack:** Go, tRPC-Go, NATS JetStream, Pebble PrimaryStore, DuckDB CGO driver, SQLite metadata store, existing `go test` suites, remote deploy via `scripts/deploy-moox.sh`.
+**Tech Stack:** Go, tRPC-Go, NATS JetStream, Pebble PrimaryStore, DuckDB CGO driver, SQLite metadata store, existing `go test` suites, remote deploy via `scripts/deploy/deploy-moox.sh`.
 
 ---
 
@@ -29,7 +29,7 @@
 - `max_workers` and NATS `MaxAckPending` are not the primary fix. They can hide symptoms, but the main work is reducing per-message cost and adding catch-up.
 - Record/Bleve view materialization should keep its current behavior unless a shared helper is explicitly safe for both time-series and record paths.
 - Catch-up should use the view table's own latest `data_time`, not wall-clock time, so it can repair a view that is already behind by more than the lookback window.
-- The first deploy should preserve production data directories. Use `scripts/deploy-moox.sh` without `--reset-data`.
+- The first deploy should preserve production data directories. Use `scripts/deploy/deploy-moox.sh` without `--reset-data`.
 
 ## File Structure
 
@@ -1465,7 +1465,7 @@ Add this section to `docs/存储模块设计.md` near the view materialization s
 ```markdown
 ## TimeSeries View 物化延迟控制
 
-TimeSeries View 是 DuckDB 读模型，PrimaryStore 仍然是事实数据源。写入事实数据后，Storage 通过 NATS `moox.storage.time_series.rows_changed.v1` 事件触发增量物化；增量链路会先对事件 key 去重，再批量回读事实行，按 View 定义投影后批量 upsert 到 DuckDB 结果表。
+TimeSeries View 是 DuckDB 读模型，PrimaryStore 仍然是事实数据源。写入事实数据后，Storage 通过 NATS `moox.event.storage.time_series.rows_changed.v1` 事件触发增量物化；增量链路会先对事件 key 去重，再批量回读事实行，按 View 定义投影后批量 upsert 到 DuckDB 结果表。
 
 为避免服务重启、NATS 积压或单次事件处理失败导致 View 长时间落后，View Builder 还会周期性执行 catch-up：读取每个 active DuckDB View 当前最大 `data_time`，从 `max(data_time) - catchup_lookback` 开始扫描 PrimaryStore，并重新 upsert 到 active result。Catch-up 不修改事实数据，只修复可重建的读模型。
 
@@ -1518,7 +1518,7 @@ Expected: PASS. If this fails because local DuckDB CGO dependencies are missing,
 Run:
 
 ```bash
-scripts/deploy-moox.sh \
+scripts/deploy/deploy-moox.sh \
   --target ubuntu@106.53.107.122 \
   --dir /home/ubuntu/moox/prod \
   --goos linux \

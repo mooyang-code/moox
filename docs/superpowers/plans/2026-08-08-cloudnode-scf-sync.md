@@ -28,7 +28,7 @@
 
 当前 `modules/cli/internal/setup/config/config.go` 已有 17 项 `supportedSCFRegion` 校验目录，而 `modules/cloudnode/internal/rpc/account.go` 的 `ListCloudRegions` 只有广州、上海、中国香港、新加坡四项；两者已经漂移。实施时建立一个共享的、带代码/中文名/国内外标签的 Tencent SCF region catalog，Setup 配置校验和 CloudNode `ListCloudRegions` 都复用它。同步按钮只调用后端返回的完整目录，不在 Vue 中复制地域列表。
 
-这里的“全部地域”指 MooX 当前支持目录中的全部地域，而不是只扫描当前部署配置，也不是把腾讯云 API 未来动态增加的所有地域自动纳入范围。这 17 项是当前 MooX 的支持地域边界，不代表腾讯云未来永远不会增加新地域。今后新增地域只改共享目录、目录测试和展示标签，不改同步算法。当前 `custom.toml` 中启用的 `ap-beijing`、`ap-chengdu`、`ap-guangzhou`、`ap-shanghai`、`ap-singapore`、`ap-tokyo` 只是本次部署配置，不应被误当成全部支持地域。
+这里的“全部地域”指 MooX 当前支持目录中的全部地域，而不是只扫描当前部署配置，也不是把腾讯云 API 未来动态增加的所有地域自动纳入范围。这 17 项是当前 MooX 的支持地域边界，不代表腾讯云未来永远不会增加新地域。今后新增地域只改共享目录、目录测试和展示标签，不改同步算法。当前 `moox.toml` 中启用的 `ap-beijing`、`ap-chengdu`、`ap-guangzhou`、`ap-shanghai`、`ap-singapore`、`ap-tokyo` 只是本次部署配置，不应被误当成全部支持地域。
 
 ## RPC Contract
 
@@ -277,7 +277,7 @@ git commit -m "feat(cloudnode): share complete scf region catalog"
 Cover new node, active existing node, soft-deleted restore, two references with the same Node ID, and transactional rollback on a database error.
 
 ```go
-states, err := repo.GetNodeImportStates(ctx, "crypto_market", []string{"fetcher-a"})
+states, err := repo.GetNodeImportStates(ctx, "crypto", []string{"fetcher-a"})
 require.NoError(t, err)
 assert.Equal(t, NodeImportStateDeleted, states["fetcher-a"])
 ```
@@ -583,7 +583,7 @@ cd web && pnpm test && pnpm lint:eslint:check && pnpm build:prod
 - [ ] **Step 2: Run serialized workspace verification**
 
 ```bash
-bash scripts/test-go-workspace.sh
+bash scripts/test/contract/test-go-workspace.sh
 make verify-pr
 ```
 
@@ -615,7 +615,7 @@ Use repository build/deploy scripts and explicitly omit `--reset-data`. Verify l
 
 - [ ] **Step 3: Restore cloud accounts through existing management**
 
-Use the account IDs, credential secret references, App IDs, regions, and COS buckets already declared in `custom.toml`; never print SecretID/SecretKey. Verify `ListCloudAccounts` returns the intended accounts before scanning.
+Use the account IDs, credential secret references, App IDs, regions, and COS buckets already declared in `moox.toml`; never print SecretID/SecretKey. Verify `ListCloudAccounts` returns the intended accounts before scanning.
 
 - [ ] **Step 4: Exercise real preview**
 
@@ -631,7 +631,7 @@ Confirm SQLite and `GetNodeList` contain exactly the selected functions with cor
 
 - [ ] **Step 7: Complete Collector joint acceptance**
 
-Verify the five default rules from the companion Collector plan, non-zero TaskInstances, successful Symbol refresh, Timer reconciliation, fresh SCF/CLS execution evidence, and continued fresh `binance_spot_kline_1m_view` rows. Distinguish control-plane restoration from the already-running legacy Timer writes.
+Verify the five default rules from the companion Collector plan, non-zero TaskInstances, successful Symbol refresh, Timer reconciliation, fresh SCF/CLS execution evidence, and continued fresh `view_crypto_spot_kline_1m` rows. Distinguish control-plane restoration from the already-running legacy Timer writes.
 
 - [ ] **Step 8: Browser acceptance**
 

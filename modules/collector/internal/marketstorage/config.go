@@ -109,7 +109,7 @@ func resolveConfigPath() (string, error) {
 		"config/sources/market/binance.yaml",
 		"configs/sources/market/binance.yaml",
 		"modules/collector/configs/sources/market/binance.yaml",
-		"modules/collector/configs/scf/stock_cn/sources/market/binance.yaml",
+		"modules/collector/configs/scf/stockcn/sources/market/binance.yaml",
 	}
 	for _, candidate := range candidates {
 		if candidate == "" {

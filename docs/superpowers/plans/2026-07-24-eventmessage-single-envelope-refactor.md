@@ -25,14 +25,14 @@
 - Storage Kline Consumer 将源 `EventMessage.event_id` 传入 PrimaryStore；DataNode 在同一 Pebble batch 持久化 source-event marker、行变更和 outbox，ACK 失败重投不会重复产生 DatasetRowsUpserted。
 - CloudNode 使用 typed payload 和 Registry 派生的精确 subject；Trade/Strategy outbox 持久化完整 deterministic EventMessage。
 - Storage View、Monitor、Archive、Factor、Trade、CloudNode、Streamcalc 的 poison message 均先经共享 DLQ 发布，DLQ 失败时保留原消息可重试，发布成功后才 TERM。
-- EventBus API 已收敛为 `ListEvents/EventInfo`，`EventInfo` 暴露 Registry owner，并增加生产 EventType 注册校验、EventBus topology gate、`packages/events/architecture_test.go` 与 `scripts/verify-event-contracts.sh` 门禁；EventType 声明与 `AllEventTypes` 不一致、生产代码直接构造 EventType 都会失败。
+- EventBus API 已收敛为 `ListEvents/EventInfo`，`EventInfo` 暴露 Registry owner，并增加生产 EventType 注册校验、EventBus topology gate、`packages/events/architecture_test.go` 与 `scripts/check/verify-event-contracts.sh` 门禁；EventType 声明与 `AllEventTypes` 不一致、生产代码直接构造 EventType 都会失败。
 
 目标 Linux/CGO Storage 验收已在配置的远端编译机完成；其余跨进程全链路验收仍需按对应模块证据逐项执行。后续勾选项只允许在有命令输出或 E2E 证据时更新，不以静态代码阅读代替目标环境证据。
 
 本次修复后的本机验证记录（2026-07-24）：
 
-- `./scripts/test-go-workspace.sh`：通过，包含各模块 `go test`、`go vet` 和生成代码模块检查。
-- `./scripts/verify-event-contracts.sh`：通过。
+- `./scripts/test/contract/test-go-workspace.sh`：通过，包含各模块 `go test`、`go vet` 和生成代码模块检查。
+- `./scripts/check/verify-event-contracts.sh`：通过。
 - `packages/events`、`modules/eventbus`、`modules/streamcalc`：`go test -race ./...` 通过。
 - `git diff --check`：通过。
 - 目标 Linux/CGO Storage：已完成 Linux/amd64 编译；Storage E2E 四项测试全部通过。
@@ -94,7 +94,7 @@ NATS Data = deterministic protobuf(EventMessage)
 
 统一 EventMessage 不等于把语义抹平。事件名必须显式表达语义：
 
-- 原命令 `cloudnode job item` 改为 `cloudnode.job.execution.requested`。
+- 原命令 `cloudnode job item` 改为 `event.cloudnode.job.execution.requested`。
 - 原命令 `trade reconciliation` 改为 `trade.reconciliation.requested`。
 - 原快照 `host metrics` 改为 `metrics.host.reported`。
 - 原快照 `service metrics` 改为 `metrics.snapshot.reported`。
@@ -199,12 +199,12 @@ packages/jetstream -X-> packages/messagepb
 |---|---|---|---|---|
 | `market.tick.received` | `trpc.moox.market.Tick` | `MOOX_MARKET` | symbol/instrument ID | collector |
 | `market.kline.closed` | `trpc.moox.market.KlineClosed` | `MOOX_MARKET` | symbol/instrument ID | streamcalc |
-| `storage.dataset.rows.upserted` | `trpc.moox.storage.event.DatasetRowsUpserted` | `MOOX_STORAGE` | dataset ID | storage |
+| `event.storage.dataset.rows.upserted` | `trpc.moox.storage.event.DatasetRowsUpserted` | `MOOX_STORAGE` | dataset ID | storage |
 | `trading.signal` | `trpc.moox.trading.TradingSignal` | `MOOX_TRADE` | symbol | factor/strategy |
 | `metrics.host.reported` | `trpc.moox.hostagent.HostMetric` | `MOOX_METRICS` | agent ID | hostagent |
 | `metrics.snapshot.reported` | `trpc.moox.metrics.MetricReport` | `MOOX_METRICS` | `service/instance` | report |
 | `dlq.message.rejected` | `trpc.moox.dlq.RejectedMessage` | `MOOX_DLQ` | rejecting consumer ID | consumers |
-| `cloudnode.job.execution.requested` | `trpc.moox.cloudjob.JobExecutionRequested` | `MOOX_CLOUDNODE_EXEC` | `code_package/job_type` | cloudnode |
+| `event.cloudnode.job.execution.requested` | `trpc.moox.cloudjob.JobExecutionRequested` | `MOOX_CLOUDNODE_EXEC` | `code_package/job_type` | cloudnode |
 | `trade.order.intent.created` | `trpc.moox.trade.event.OrderSnapshot` | `MOOX_TRADE` | order ID | trade |
 | `trade.execution.slice.ready` | `trpc.moox.trade.event.OrderSnapshot` | `MOOX_TRADE` | order ID | trade |
 | `trade.order.acknowledged` | `trpc.moox.trade.event.OrderSnapshot` | `MOOX_TRADE` | order ID | trade |
@@ -264,7 +264,7 @@ message HostMetric {
 校验：
 
 ```text
-EventMessage.space_id == "moox_system"
+EventMessage.space_id == "mooxsys"
 EventMessage.subject_id == HostMetric.agent_id
 agent_id is UUID
 snapshot != nil
@@ -289,7 +289,7 @@ message MetricReport {
 校验：
 
 ```text
-EventMessage.space_id == "moox_system"
+EventMessage.space_id == "mooxsys"
 EventMessage.subject_id == service_name + "/" + instance_id
 service_name != ""
 instance_id != ""
@@ -312,7 +312,7 @@ message RejectedMessage {
 }
 ```
 
-`EventMessage.subject_id = rejected_by`。若原始数据能解出合法 `space_id`，DLQ 事件沿用该空间；否则使用 `moox_system`。
+`EventMessage.subject_id = rejected_by`。若原始数据能解出合法 `space_id`，DLQ 事件沿用该空间；否则使用 `mooxsys`。
 
 ### 5.4 CloudNode JobExecutionRequested
 
@@ -436,7 +436,7 @@ message StrategyTarget {
 - `packages/strategyeventpb/strategy_events.pb.go`
 - `packages/strategyeventpb/Makefile`
 - `packages/events/architecture_test.go`
-- `scripts/verify-event-contracts.sh`
+- `scripts/check/verify-event-contracts.sh`
 - E2E tests listed in the tasks below.
 
 ### Modify
@@ -683,7 +683,7 @@ refactor(metrics): carry producer identity in typed event payloads
 
 - [ ] RPC `cloudnodegen.JobItem` 在 publish 边界转换为 `cloudjobpb.JobExecutionRequested`。
 - [ ] EventMessage `space_id` 来自 RPC item space；`subject_id` 由 code package + job type 生成。
-- [ ] 删除旧 `moox.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*` 拼接。
+- [ ] 删除旧 `moox.event.cloudnode.exec.v1.jobitem.s.*.pkg.*.type.*` 拼接。
 - [ ] consumer 使用 Registry 渲染 exact subject，并通过 `events.DecodeDelivery` 解码。
 - [ ] `JobItemMessage.SubmittedAt` 改取 EventMessage.occurred_at。
 - [ ] 保持 ActiveKVBucket、attempt、lease、ack 和 job state 行为。
@@ -807,7 +807,7 @@ refactor(events): centralize typed DLQ publication
 - Delete `packages/messagepb`.
 - Modify all affected `go.mod`, `go.sum`, `go.work`.
 - Delete obsolete code/tests/config.
-- Create `scripts/verify-event-contracts.sh`.
+- Create `scripts/check/verify-event-contracts.sh`.
 - Create `packages/events/architecture_test.go`.
 
 - [ ] 删除整个 `packages/messagepb` module。

@@ -783,8 +783,8 @@ git commit -m "feat(trade): add logical account persistence"
 - 修改：`modules/trade/internal/eventconsumer/target_test.go`
 - 修改：`modules/trade/internal/infra/store/target.go`
 - 修改：`modules/trade/internal/infra/store/target_test.go`
-- 修改：`scripts/verify-event-contracts.sh`
-- 修改：`scripts/test-strategy-trade-event-e2e.sh`
+- 修改：`scripts/check/verify-event-contracts.sh`
+- 修改：`scripts/test/e2e/test-strategy-trade-event-e2e.sh`
 - 修改：`modules/strategy/test/strategy_trade_external_e2e_test.go`
 - 修改：`modules/trade/test/strategy_target_external_e2e_test.go`
 
@@ -817,7 +817,7 @@ message LogicalAccountTargetRequested {
 }
 ```
 
-Strategy 发布时令 `target_id = result_id`。事件注册符号和 Proto 消息使用 `LogicalAccountTargetRequested`；简洁的 wire event name 继续使用 `trade.target.requested`，不额外扩展 subject 词层级。`InstrumentTarget.quantity` 是该 instrument 的有符号绝对期望持仓数量，不是订单数量或本次调整 delta；SPOT 不允许负数，SWAP 可用正负号表达方向。删除 `TargetIntent`、`TargetPosition`、`TradeTarget`、`TradeTargetRequested`、`target_quantity`、`strategy_run_id`、`strategy_result_id`、`execution_id`、`execution_binding_id`、`exchange_account_id`、`data_revision`、`not_after` 和 `symbol`。事件 `SubjectID` 使用 `logical_account_id`；目标按 `instrument_id` 唯一，空 targets 合法。
+Strategy 发布时令 `target_id = result_id`。事件注册符号和 Proto 消息使用 `LogicalAccountTargetRequested`；简洁的 wire event name 继续使用 `event.trade.target.requested`，不额外扩展 subject 词层级。`InstrumentTarget.quantity` 是该 instrument 的有符号绝对期望持仓数量，不是订单数量或本次调整 delta；SPOT 不允许负数，SWAP 可用正负号表达方向。删除 `TargetIntent`、`TargetPosition`、`TradeTarget`、`TradeTargetRequested`、`target_quantity`、`strategy_run_id`、`strategy_result_id`、`execution_id`、`execution_binding_id`、`exchange_account_id`、`data_revision`、`not_after` 和 `symbol`。事件 `SubjectID` 使用 `logical_account_id`；目标按 `instrument_id` 唯一，空 targets 合法。
 
 - [ ] **6.3 运行事件 RED 测试并生成 Proto**
 
@@ -865,7 +865,7 @@ TestFailedAttemptUpdatesRunnerErrorWithoutCreatingResult
 
 - [ ] **6.6 加入旧字段静态护栏**
 
-`scripts/verify-event-contracts.sh` 在生产 Target 链禁止：
+`scripts/check/verify-event-contracts.sh` 在生产 Target 链禁止：
 
 ```text
 strategy_run_id
@@ -892,8 +892,8 @@ target_quantity
 (cd modules/strategy && go test -count=1 ./internal/store ./internal/action ./internal/outbox ./internal/rpc)
 (cd modules/strategy && go test -race -count=1 ./internal/store ./internal/action ./internal/outbox)
 (cd modules/trade && go test -count=1 ./internal/domain/execution ./internal/eventconsumer ./internal/infra/store)
-bash scripts/verify-event-contracts.sh
-bash scripts/test-strategy-trade-event-e2e.sh
+bash scripts/check/verify-event-contracts.sh
+bash scripts/test/e2e/test-strategy-trade-event-e2e.sh
 ```
 
 - [ ] **6.8 提交**
@@ -907,7 +907,7 @@ git add packages/tradeeventpb packages/events \
   modules/trade/internal/infra/store/target.go \
   modules/trade/internal/infra/store/target_test.go \
   modules/trade/test/strategy_target_external_e2e_test.go \
-  scripts/verify-event-contracts.sh scripts/test-strategy-trade-event-e2e.sh
+  scripts/check/verify-event-contracts.sh scripts/test/e2e/test-strategy-trade-event-e2e.sh
 git commit -m "feat(trade): route full targets through logical accounts"
 ```
 
@@ -1700,7 +1700,7 @@ bash modules/trade/scripts/testnet-smoke.sh
   ./internal/application/accountsync \
   ./internal/runtime \
   ./internal/infra/store)
-bash scripts/test-strategy-trade-event-e2e.sh
+bash scripts/test/e2e/test-strategy-trade-event-e2e.sh
 ```
 
 - [ ] **14.4 在可用凭据环境运行两个 Testnet**
@@ -1745,8 +1745,8 @@ git status --short
 - [ ] **15.2 运行静态契约和 greenfield 检查**
 
 ```bash
-bash scripts/verify-event-contracts.sh
-bash scripts/test-greenfield-contract.sh
+bash scripts/check/verify-event-contracts.sh
+bash scripts/test/contract/test-greenfield-contract.sh
 rg -n 'StrategyDefinition|StrategyBinding|ExecutionBinding|StrategyRun|strategy_version|state_schema_version|state_format_version|state_json|state_revision|next_state|data_revision|not_after|TargetState|PortfolioExecutor|PortfolioWorker|control_state|control_revision|ControlFlattening|ControlDisabled|TargetIntent|TargetPosition|TradeTargetRequested|TradeTarget|target_quantity|RevealSecret|RevealedSecret' \
   modules/admin modules/strategy modules/trade packages web/src docs \
   --glob '!docs/superpowers/plans/**' \
@@ -1763,7 +1763,7 @@ rg -n 'TimeInForce|ReduceOnly|time_in_force|reduce_only' \
 (cd packages/events && go test -count=1 ./...)
 (cd modules/strategy && go test -count=1 ./...)
 (cd modules/trade && go test -count=1 ./...)
-./scripts/test-go-workspace.sh
+./scripts/test/contract/test-go-workspace.sh
 make verify-pr
 pnpm docs:build
 ```

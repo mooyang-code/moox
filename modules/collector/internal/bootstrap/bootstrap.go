@@ -52,7 +52,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if spaceID := marketFetchSpaceID(); spaceID == "" {
 		return nil, fmt.Errorf("MOOX_SPACE_ID is required for collector market scheduling")
 	}
-	log.InfoContextf(ctx, "collector stock_cn runtime config expected_timer_function_count=%d measured_safe_group_size=%d stagger_start_second=%d stagger_window_seconds=%d stagger_max_starts_per_second=%d", cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, cfg.StockCN.StaggerStartSecond, cfg.StockCN.StaggerWindowSeconds, cfg.StockCN.StaggerMaxStartsPerSecond)
+	log.InfoContextf(ctx, "collector stockcn runtime config expected_timer_function_count=%d measured_safe_group_size=%d stagger_start_second=%d stagger_window_seconds=%d stagger_max_starts_per_second=%d", cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, cfg.StockCN.StaggerStartSecond, cfg.StockCN.StaggerWindowSeconds, cfg.StockCN.StaggerMaxStartsPerSecond)
 	dbm, err := store.Open(&store.Options{
 		Path:            cfg.Database.Path,
 		MaxIdleConns:    cfg.Database.MaxIdleConns,
@@ -315,7 +315,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	// is only used to discover active deployments; using it here makes every
 	// scheduled invocation hit the browser/admin auth surface instead of the
 	// authenticated service route.
-	// A stock_cn reconciliation reads the complete 170-node Timer fleet from
+	// A stockcn reconciliation reads the complete 170-node Timer fleet from
 	// CloudNode. Keep the request bounded, but allow the control-plane query
 	// enough time to serialize the full fleet instead of treating a healthy
 	// large-fleet response as a coordination failure.

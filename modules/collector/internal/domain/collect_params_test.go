@@ -85,8 +85,8 @@ func TestParseCollectParamsAddsExplicitDefaultKlineHistoryPolicy(t *testing.T) {
 		"provider":"binance",
 		"market_type":"spot",
 		"symbol_source":"dataset",
-		"symbol_dataset_id":"binance_spot_symbols",
-		"target_dataset_id":"binance_spot_kline_1m",
+		"symbol_dataset_id":"dataset_binance_spot_symbols",
+		"target_dataset_id":"dataset_binance_spot_kline_1m",
 		"frequency":"1m"
 	}`, "", "", "kline")
 	require.NoError(t, err)
@@ -108,8 +108,8 @@ func TestParseCollectParamsAcceptsExplicitKlineHistoryPolicy(t *testing.T) {
 		"provider":"binance",
 		"market_type":"spot",
 		"symbol_source":"dataset",
-		"symbol_dataset_id":"binance_spot_symbols",
-		"target_dataset_id":"binance_spot_kline_1m",
+		"symbol_dataset_id":"dataset_binance_spot_symbols",
+		"target_dataset_id":"dataset_binance_spot_kline_1m",
 		"frequency":"1m",
 		"history_policy":{
 			"mode":"since",
@@ -172,8 +172,8 @@ func TestCollectParamsValidateRejectsInvalidKlineHistoryPolicy(t *testing.T) {
 				"provider":"binance",
 				"market_type":"spot",
 				"symbol_source":"dataset",
-				"symbol_dataset_id":"binance_spot_symbols",
-				"target_dataset_id":"binance_spot_kline_1m",
+				"symbol_dataset_id":"dataset_binance_spot_symbols",
+				"target_dataset_id":"dataset_binance_spot_kline_1m",
 				"frequency":"1m",
 				"history_policy":{"mode":"lookback","lookback":0}
 			}`,
@@ -185,8 +185,8 @@ func TestCollectParamsValidateRejectsInvalidKlineHistoryPolicy(t *testing.T) {
 				"provider":"binance",
 				"market_type":"spot",
 				"symbol_source":"dataset",
-				"symbol_dataset_id":"binance_spot_symbols",
-				"target_dataset_id":"binance_spot_kline_1m",
+				"symbol_dataset_id":"dataset_binance_spot_symbols",
+				"target_dataset_id":"dataset_binance_spot_kline_1m",
 				"frequency":"1m",
 				"history_policy":{"mode":"since","since":"yesterday"}
 			}`,
@@ -198,8 +198,8 @@ func TestCollectParamsValidateRejectsInvalidKlineHistoryPolicy(t *testing.T) {
 				"provider":"binance",
 				"market_type":"spot",
 				"symbol_source":"dataset",
-				"symbol_dataset_id":"binance_spot_symbols",
-				"target_dataset_id":"binance_spot_kline_1m",
+				"symbol_dataset_id":"dataset_binance_spot_symbols",
+				"target_dataset_id":"dataset_binance_spot_kline_1m",
 				"frequency":"1m",
 				"history_policy":{"mode":"live_only","rate_budget_ratio":1.5}
 			}`,
@@ -263,10 +263,10 @@ func TestParseCollectParamsAcceptsKlineResampleContract(t *testing.T) {
 	params, err := ParseCollectParams(`{
 		"provider":" MOOX ",
 		"market_type":" SPOT ",
-		"source_dataset_id":" binance_spot_kline_1m ",
+		"source_dataset_id":" dataset_binance_spot_kline_1m ",
 		"source_frequency":"60m",
 		"source_series_tag":" venue:binance ",
-		"target_dataset_id":" spot_kline_derived_4h ",
+		"target_dataset_id":" dataset_spot_kline_derived_4h ",
 		"target_frequency":"240m",
 		"alignment":" EPOCH_UTC ",
 		"settle_delay_ms":10000
@@ -276,10 +276,10 @@ func TestParseCollectParamsAcceptsKlineResampleContract(t *testing.T) {
 
 	assert.Equal(t, "moox", params.Provider)
 	assert.Equal(t, "spot", params.MarketType)
-	assert.Equal(t, "binance_spot_kline_1m", params.Source.DatasetID)
+	assert.Equal(t, "dataset_binance_spot_kline_1m", params.Source.DatasetID)
 	assert.Equal(t, "1H", params.SourceFrequency)
 	assert.Equal(t, "venue:binance", params.SourceSeriesTag)
-	assert.Equal(t, "spot_kline_derived_4h", params.Target.DatasetID)
+	assert.Equal(t, "dataset_spot_kline_derived_4h", params.Target.DatasetID)
 	assert.Equal(t, "4H", params.TargetFrequency)
 	assert.Equal(t, "epoch_utc", params.Alignment)
 	assert.Equal(t, time.Second*10, params.SettleDelay())
@@ -289,10 +289,10 @@ func TestParseCollectParamsRejectsResampleRepairOverride(t *testing.T) {
 	_, err := ParseCollectParams(`{
 		"provider":"moox",
 		"market_type":"spot",
-		"source_dataset_id":"binance_spot_kline_1m",
+		"source_dataset_id":"dataset_binance_spot_kline_1m",
 		"source_frequency":"1m",
 		"source_series_tag":"venue:binance",
-		"target_dataset_id":"spot_kline_derived_4h",
+		"target_dataset_id":"dataset_spot_kline_derived_4h",
 		"target_frequency":"4H",
 		"alignment":"epoch_utc",
 		"repair_lookback_buckets":3
@@ -345,7 +345,7 @@ func TestKlineResampleCanonicalJSONOmitsRuntimeRepairPolicy(t *testing.T) {
 }
 
 func TestKlineResampleSettleDelayPreservesExplicitZero(t *testing.T) {
-	params, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"target_kline_derived_2m","target_frequency":"2m","alignment":"epoch_utc","settle_delay_ms":0}`, "", "", "kline_resample")
+	params, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target_kline_derived_2m","target_frequency":"2m","alignment":"epoch_utc","settle_delay_ms":0}`, "", "", "kline_resample")
 	require.NoError(t, err)
 	require.NoError(t, params.Validate())
 	assert.NotNil(t, params.SettleDelayMS)
@@ -358,11 +358,11 @@ func TestKlineResampleSettleDelayPreservesExplicitZero(t *testing.T) {
 }
 
 func TestKlineResampleRejectsDurationAndSettleDelayOverflow(t *testing.T) {
-	tooLargeFrequency, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"9007199254740993m","source_series_tag":"venue:binance","target_dataset_id":"target_kline_derived_2m","target_frequency":"2m","alignment":"epoch_utc"}`, "", "", "kline_resample")
+	tooLargeFrequency, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"9007199254740993m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target_kline_derived_2m","target_frequency":"2m","alignment":"epoch_utc"}`, "", "", "kline_resample")
 	require.NoError(t, err)
 	require.ErrorContains(t, tooLargeFrequency.Validate(), "frequency must not exceed 30 days")
 
-	tooLargeDelay, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"target_kline_derived_2m","target_frequency":"2m","alignment":"epoch_utc","settle_delay_ms":288230376151711744}`, "", "", "kline_resample")
+	tooLargeDelay, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target_kline_derived_2m","target_frequency":"2m","alignment":"epoch_utc","settle_delay_ms":288230376151711744}`, "", "", "kline_resample")
 	require.NoError(t, err)
 	require.ErrorContains(t, tooLargeDelay.Validate(), "settle_delay_ms must not exceed")
 	assert.Equal(t, MaxResampleSettleDelay, tooLargeDelay.SettleDelayOr(0))

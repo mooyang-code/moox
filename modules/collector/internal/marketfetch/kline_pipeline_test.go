@@ -45,7 +45,7 @@ func TestFetchKlinesFromChainRetriesProviderThreeTimesBeforeFallback(t *testing.
 	require.NoError(t, err)
 
 	rows, selected, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
-		MarketID: "stock_cn", ExchangeID: "XSHG", SubjectID: "600000.XSHG", ProviderSymbol: "sh600000",
+		MarketID: "stockcn", ExchangeID: "XSHG", SubjectID: "600000.XSHG", ProviderSymbol: "sh600000",
 		Frequency: "1m", Limit: 1, RequestID: "retry-3",
 	}, []string{"sina", "tdx"}, 0)
 	require.NoError(t, err)
@@ -56,7 +56,7 @@ func TestFetchKlinesFromChainRetriesProviderThreeTimesBeforeFallback(t *testing.
 }
 
 func TestStockCNShouldCollectMinuteHonorsSessionsAndClosedDays(t *testing.T) {
-	calendar, err := stockmarket.LoadCalendar("../../config/markets/stock_cn/calendar.yaml")
+	calendar, err := stockmarket.LoadCalendar("../../config/markets/stockcn/calendar.yaml")
 	require.NoError(t, err)
 	location := calendar.Location()
 	openMinute := time.Date(2026, 8, 28, 9, 31, 0, 0, location)
@@ -74,7 +74,7 @@ func TestStockCNShouldCollectMinuteHonorsSessionsAndClosedDays(t *testing.T) {
 }
 
 func TestStockCNShouldCollectMinuteHonorsSettleDelay(t *testing.T) {
-	calendar, err := stockmarket.LoadCalendar("../../config/markets/stock_cn/calendar.yaml")
+	calendar, err := stockmarket.LoadCalendar("../../config/markets/stockcn/calendar.yaml")
 	require.NoError(t, err)
 	location := calendar.Location()
 	barEnd := time.Date(2026, 8, 28, 9, 31, 0, 0, location)
@@ -98,7 +98,7 @@ func (p pipelineProvider) KlineSpec() marketdata.KlineSpec {
 	if p.id == "binance" {
 		return marketdata.KlineSpec{Markets: []string{"crypto"}, Exchanges: []string{"binance"}, Frequencies: []string{"1m", "1h"}, CompleteOHLCV: true, HasAmount: true, MaxBarsPerRequest: 1000, TimestampMode: marketdata.TimestampModeOpen, RateLimit: rateLimit, History: marketdata.KlineHistoryCapability{SupportsArbitraryRange: true}}
 	}
-	return marketdata.KlineSpec{Markets: []string{"stock_cn"}, Exchanges: []string{"XSHG"}, Frequencies: []string{"1m"}, CompleteOHLCV: true, HasAmount: true, MaxBarsPerRequest: 3, TimestampMode: marketdata.TimestampModeOpen, RateLimit: rateLimit, History: marketdata.KlineHistoryCapability{MaxLookback: 7 * 24 * time.Hour}}
+	return marketdata.KlineSpec{Markets: []string{"stockcn"}, Exchanges: []string{"XSHG"}, Frequencies: []string{"1m"}, CompleteOHLCV: true, HasAmount: true, MaxBarsPerRequest: 3, TimestampMode: marketdata.TimestampModeOpen, RateLimit: rateLimit, History: marketdata.KlineHistoryCapability{MaxLookback: 7 * 24 * time.Hour}}
 }
 
 func (p pipelineProvider) FetchKlines(ctx context.Context, req marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
@@ -131,7 +131,7 @@ func TestKlinePipelineCanaryUsesLatestClosedCalendarSession(t *testing.T) {
 	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", err: marketdata.ErrNoClosedBar}))
 	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, nil)
 	require.NoError(t, err)
-	calendar, err := stockmarket.LoadCalendar("../../config/markets/stock_cn/calendar.yaml")
+	calendar, err := stockmarket.LoadCalendar("../../config/markets/stockcn/calendar.yaml")
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, Calendar: calendar, SettleDelay: 5 * time.Second, Now: func() time.Time { return now }}
@@ -234,28 +234,28 @@ func TestKlinePipelineDoesNotFallbackAcrossBoundSources(t *testing.T) {
 func TestKlinePipelinePersistsBoundProviderAndSourceIdentity(t *testing.T) {
 	now := time.Date(2026, 8, 28, 7, 5, 0, 0, time.UTC)
 	bar := marketdata.NormalizedKline{
-		SubjectID: "600000.XSHG", ProviderID: "sina", SourceID: "stock_cn_minute_http",
+		SubjectID: "600000.XSHG", ProviderID: "sina", SourceID: "stockcn_minute_http",
 		ProviderSymbol: "sh600000", Frequency: "1m",
 		BarStart: now.Add(-6 * time.Minute), BarEnd: now.Add(-5 * time.Minute),
 		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050,
 		ProviderTimestamp: now.Add(-5 * time.Minute), FetchedAt: now, RequestID: "source-row",
 	}
 	registry := marketdata.NewRegistry()
-	require.NoError(t, registry.Register(pipelineProvider{id: "sina", sourceID: "stock_cn_minute_http", rows: []marketdata.NormalizedKline{bar}}))
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", sourceID: "stockcn_minute_http", rows: []marketdata.NormalizedKline{bar}}))
 	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, nil)
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{
 		Router: router, Storage: storage, CandidateChain: []string{"sina"},
-		SourceID: "stock_cn_minute_http", MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID,
+		SourceID: "stockcn_minute_http", MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID,
 		DatasetID: StockCNDatasetID, Now: func() time.Time { return now },
 	}
 	_, err = pipeline.Execute(context.Background(), Request{
 		BatchID: "source-row", BatchKind: domain.BatchKindRealtime,
 		SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m",
-		Provider: "sina", SourceID: "stock_cn_minute_http", MarketType: "equity", RequestID: "source-row",
+		Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequestID: "source-row",
 		Items: []domain.CollectionItem{{
-			SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", SourceID: "stock_cn_minute_http",
+			SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", SourceID: "stockcn_minute_http",
 			MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: 1,
 		}},
 	})
@@ -266,7 +266,7 @@ func TestKlinePipelinePersistsBoundProviderAndSourceIdentity(t *testing.T) {
 		fields[field.GetFieldId()] = field.GetValue()
 	}
 	require.Equal(t, "sina", fields["provider_id"].GetStringValue())
-	require.Equal(t, "stock_cn_minute_http", fields["source_id"].GetStringValue())
+	require.Equal(t, "stockcn_minute_http", fields["source_id"].GetStringValue())
 }
 
 func TestKlinePipelineRejectsRollingHistoryWithoutProvenCoverage(t *testing.T) {
@@ -304,6 +304,21 @@ func (s *pipelineStorage) UpsertFieldsWithSource(_ context.Context, rows []*stor
 	return nil
 }
 
+type pipelineStorageWithInstrumentNames struct {
+	pipelineStorage
+	names map[string]string
+}
+
+func (s *pipelineStorageWithInstrumentNames) ListInstrumentNames(_ context.Context, _ string, subjectIDs []string) (map[string]string, error) {
+	result := make(map[string]string, len(subjectIDs))
+	for _, subjectID := range subjectIDs {
+		if name := s.names[subjectID]; name != "" {
+			result[subjectID] = name
+		}
+	}
+	return result, nil
+}
+
 func TestKlinePipelineWritesOneCompleteStockDatasetBatch(t *testing.T) {
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
 	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-1"}
@@ -323,16 +338,40 @@ func TestKlinePipelineWritesOneCompleteStockDatasetBatch(t *testing.T) {
 	row := storage.rows[0]
 	require.Equal(t, StockCNSpaceID, row.GetKey().GetSpaceId())
 	require.Equal(t, StockCNDatasetID, row.GetKey().GetDatasetId())
-	require.Empty(t, row.GetKey().GetTimeSeries().GetSeriesTag())
+	require.Equal(t, "default", row.GetKey().GetTimeSeries().GetSeriesTag())
 	fields := make(map[string]*storagepb.TypedValue, len(row.GetFields()))
 	for _, field := range row.GetFields() {
 		fields[field.GetFieldId()] = field.GetValue()
 	}
-	require.Len(t, fields, 19)
+	require.Len(t, fields, 20)
+	require.Equal(t, "600000.XSHG", fields["instrument_name"].GetStringValue())
 	require.Equal(t, "sina", fields["source_provider"].GetStringValue())
 	require.Equal(t, int64(1), fields["route_rank"].GetIntValue())
 	require.Equal(t, "shares", fields["volume_unit"].GetStringValue())
 	require.Equal(t, "reported", fields["amount_quality"].GetStringValue())
+}
+
+func TestKlinePipelineUsesInstrumentNameFromStorageMetadata(t *testing.T) {
+	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
+	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-name"}
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", rows: []marketdata.NormalizedKline{bar}}))
+	router, err := marketdata.NewRouter(registry, 1, pipelineClock{now}, func(time.Duration) {})
+	require.NoError(t, err)
+	storage := &pipelineStorageWithInstrumentNames{names: map[string]string{"600000.XSHG": "浦发银行"}}
+	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina"}, Now: func() time.Time { return now }}
+	_, err = pipeline.Execute(context.Background(), Request{BatchID: "batch-name", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-name", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 1}}})
+	require.NoError(t, err)
+	require.Equal(t, "浦发银行", findField(storage.rows[0], "instrument_name").GetStringValue())
+}
+
+func findField(row *storagepb.RowFieldUpsert, fieldID string) *storagepb.TypedValue {
+	for _, field := range row.GetFields() {
+		if field.GetFieldId() == fieldID {
+			return field.GetValue()
+		}
+	}
+	return nil
 }
 
 func TestKlinePipelineUsesRetrySourceEventID(t *testing.T) {
@@ -359,8 +398,8 @@ func TestKlinePipelineAcceptsCryptoHourFrequency(t *testing.T) {
 	router, err := marketdata.NewRouter(registry, 1, pipelineClock{now}, func(time.Duration) {})
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
-	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"binance"}, SpaceID: "crypto_market", MarketID: "crypto", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, DatasetID: "binance_spot_kline_1h", Now: func() time.Time { return now }}
-	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-hour", BatchKind: domain.BatchKindBackfill, SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1h", Frequency: "1h", Provider: "binance", MarketType: "spot", RequestID: "request-hour", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "binance_spot_kline_1h", Frequency: "1h", StartTime: barStart.Format(time.RFC3339), BarLimit: 1}}})
+	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"binance"}, SpaceID: "crypto", MarketID: "crypto", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, DatasetID: "binance_spot_kline_1h", Now: func() time.Time { return now }}
+	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-hour", BatchKind: domain.BatchKindBackfill, SpaceID: "crypto", DatasetID: "binance_spot_kline_1h", Frequency: "1h", Provider: "binance", MarketType: "spot", RequestID: "request-hour", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "binance_spot_kline_1h", Frequency: "1h", StartTime: barStart.Format(time.RFC3339), BarLimit: 1}}})
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.GetStatus())
 	require.Len(t, storage.rows, 1)
@@ -376,7 +415,7 @@ func TestRequestKlineRouteIDUsesCryptoFrequency(t *testing.T) {
 		{product: marketdata.ProductSpot, frequency: "1h", want: "binance_spot_kline_1h"},
 		{product: marketdata.ProductSwap, frequency: "1w", want: "binance_swap_kline_1w"},
 	} {
-		pipeline := &KlinePipeline{SpaceID: "crypto_market", MarketID: "crypto", ProductType: test.product}
+		pipeline := &KlinePipeline{SpaceID: "crypto", MarketID: "crypto", ProductType: test.product}
 		require.Equal(t, test.want, requestKlineRouteID(pipeline, test.frequency))
 	}
 }
@@ -447,7 +486,7 @@ func TestKlinePipelineAdvancesCandidateIndexAfterExhaustedChain(t *testing.T) {
 	router, err := marketdata.NewRouter(registry, 3, pipelineClock{now}, func(time.Duration) {})
 	require.NoError(t, err)
 	_, selected, next, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
-		MarketID: "stock_cn", ExchangeID: "XSHG", ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity,
+		MarketID: "stockcn", ExchangeID: "XSHG", ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity,
 		SubjectID: "600000.XSHG", ProviderSymbol: "sh600000", Frequency: "1m", Limit: 1, RequestID: "candidate-index",
 	}, []string{"sina", "tencent", "eastmoney"}, 1)
 	require.Error(t, err)
@@ -472,7 +511,7 @@ func TestFetchKlinesFromChainFallsBackWhenRequestedIntervalIsEmpty(t *testing.T)
 	require.NoError(t, err)
 
 	rows, selected, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
-		MarketID: "stock_cn", ExchangeID: "XSHG", ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity,
+		MarketID: "stockcn", ExchangeID: "XSHG", ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity,
 		SubjectID: valid.SubjectID, ProviderSymbol: valid.ProviderSymbol, Frequency: "1m", Limit: 1,
 		StartTime: start, EndTime: end, Now: now, RequestID: "coverage-fallback",
 	}, []string{"sina", "tencent"}, 0)

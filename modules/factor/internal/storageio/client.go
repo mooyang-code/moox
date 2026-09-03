@@ -94,7 +94,10 @@ type Client struct {
 }
 
 func NewClientWithCredentials(accessTarget, targetNode string, credentials gatewayauth.Credentials, auth *commonpb.AuthInfo) *Client {
-	target := gatewayauth.ServiceGatewayTarget(NormalizeStorageTarget(accessTarget, "11003"))
+	// Storage is an explicit dependency. Do not replace its target with the
+	// process-local service gateway: a control-plane Factor may use a remote
+	// Storage node and the target-node signature must match that endpoint.
+	target := NormalizeStorageTarget(accessTarget, "11003")
 	options := gatewayauth.NewTRPCClientOptions(target, targetNode, credentials)
 	return &Client{
 		access:   storagepb.NewPrimaryStoreClientProxy(options...),

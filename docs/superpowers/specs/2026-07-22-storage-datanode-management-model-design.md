@@ -309,7 +309,7 @@ Storage Dataset readiness 检查从现有 deferred 状态升级为 active 时，
 2. 修复发现的问题，并对修复结果重新审查；
 3. 运行后端测试、合同测试、前端检查和 E2E；
 4. 构建 Linux amd64 发布物并记录 SHA256；
-5. 根据 `custom.toml` 部署到 106 机器；
+5. 根据 `moox.toml` 部署到 106 机器；
 6. 在远端清理旧 Metadata 数据库并以 Schema v5 重建；
 7. 验证签名健康检查、DataNode 注册、Dataset 路由和管理台 E2E；
 8. 记录部署提交 SHA、二进制 SHA256 和远端验证结果。

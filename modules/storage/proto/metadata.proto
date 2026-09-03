@@ -326,12 +326,12 @@ message Field {
   uint32 sort_order = 14;
 }
 
-// Factor 是 Space 内、已参数化的因子结果定义。
+// Factor 是可跨 Space 复用的已参数化因子定义。
 message Factor {
-  // space_id 是 Factor 所属 Space。
-  string space_id = 1;
-  // factor_id 是 Space 内唯一因子英文名，例如 ma20_close。
-  string factor_id = 2;
+	// space_id 是创建或管理该 Factor 的 Space 上下文，不参与 Factor ID 命名。
+	string space_id = 1;
+	// factor_id 是与 Python 因子文件名主体一致的大小写组合，例如 Bias 或 QuoteVolumeMean。
+	string factor_id = 2;
   // name 是因子中文名或展示名。
   string name = 3;
   // description 是说明文本。

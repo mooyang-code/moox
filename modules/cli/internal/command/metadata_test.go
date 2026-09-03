@@ -18,7 +18,7 @@ import (
 )
 
 func TestValidateReservedInternalSpacesRejectsUndeclaredLogicalResource(t *testing.T) {
-	seed := metadataSeed{Datasets: []seedDataset{{SpaceID: "moox_system", DatasetID: "moox_service_metrics"}}}
+	seed := metadataSeed{Datasets: []seedDataset{{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics"}}}
 	if err := validateReservedInternalSpaces(seed); err == nil {
 		t.Fatal("logical resource without an internal space declaration should be rejected")
 	}
@@ -55,11 +55,11 @@ func TestLoadMetadataSeedRejectsSecondDocument(t *testing.T) {
 func TestBusinessSpacesExcludeInternalScopeAndSort(t *testing.T) {
 	seed := metadataSeed{Spaces: []seedSpace{
 		{
-			SpaceID: "stock_cn", Name: "A股市场", Market: "CN", Timezone: "Asia/Shanghai",
+			SpaceID: "stockcn", Name: "A股市场", Market: "CN", Timezone: "Asia/Shanghai",
 			seedCommon: seedCommon{Status: "active", Attributes: map[string]string{"managed_by": "moox-cli"}},
 		},
 		{
-			SpaceID: "moox_system", Name: "MooX System",
+			SpaceID: "mooxsys", Name: "MooX System",
 			seedCommon: seedCommon{Attributes: map[string]string{"scope": "internal"}},
 		},
 		{
@@ -71,7 +71,7 @@ func TestBusinessSpacesExcludeInternalScopeAndSort(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, spaces, 2)
 	assert.Equal(t, "crypto", spaces[0].SpaceID)
-	assert.Equal(t, "stock_cn", spaces[1].SpaceID)
+	assert.Equal(t, "stockcn", spaces[1].SpaceID)
 	assert.Equal(t, "CN", spaces[1].Market)
 	assert.Equal(t, "Asia/Shanghai", spaces[1].Timezone)
 	assert.Equal(t, `{"managed_by":"moox-cli"}`, spaces[1].AttributesJSON)
@@ -88,21 +88,21 @@ func TestBusinessSpacesRejectDuplicateID(t *testing.T) {
 func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
 	t.Parallel()
 	seed := metadataSeed{
-		Spaces:         []seedSpace{{SpaceID: "stock_cn", Name: "A股市场"}, {SpaceID: "crypto", Name: "加密货币市场"}},
-		DataSources:    []seedDataSource{{SpaceID: "stock_cn", DataSourceID: "stock"}, {SpaceID: "crypto", DataSourceID: "binance"}},
-		FieldGroups:    []seedFieldGroup{{SpaceID: "stock_cn", GroupID: "quote"}, {SpaceID: "crypto", GroupID: "quote"}},
-		Fields:         []seedField{{SpaceID: "stock_cn", FieldID: "close", GroupID: "quote"}, {SpaceID: "crypto", FieldID: "close", GroupID: "quote"}},
-		Datasets:       []seedDataset{{SpaceID: "stock_cn", DatasetID: "kline"}, {SpaceID: "crypto", DatasetID: "kline"}},
-		DatasetColumns: []seedDatasetColumn{{SpaceID: "stock_cn", DatasetID: "kline", ColumnName: "close"}, {SpaceID: "crypto", DatasetID: "kline", ColumnName: "close"}},
-		Views:          []seedView{{SpaceID: "stock_cn", ViewID: "kline"}, {SpaceID: "crypto", ViewID: "kline"}},
-		ViewColumns:    []seedViewColumn{{SpaceID: "stock_cn", ViewID: "kline", ColumnName: "close"}, {SpaceID: "crypto", ViewID: "kline", ColumnName: "close"}},
+		Spaces:         []seedSpace{{SpaceID: "stockcn", Name: "A股市场"}, {SpaceID: "crypto", Name: "加密货币市场"}},
+		DataSources:    []seedDataSource{{SpaceID: "stockcn", DataSourceID: "stock"}, {SpaceID: "crypto", DataSourceID: "binance"}},
+		FieldGroups:    []seedFieldGroup{{SpaceID: "stockcn", GroupID: "quote"}, {SpaceID: "crypto", GroupID: "quote"}},
+		Fields:         []seedField{{SpaceID: "stockcn", FieldID: "close", GroupID: "quote"}, {SpaceID: "crypto", FieldID: "close", GroupID: "quote"}},
+		Datasets:       []seedDataset{{SpaceID: "stockcn", DatasetID: "kline"}, {SpaceID: "crypto", DatasetID: "kline"}},
+		DatasetColumns: []seedDatasetColumn{{SpaceID: "stockcn", DatasetID: "kline", ColumnName: "close"}, {SpaceID: "crypto", DatasetID: "kline", ColumnName: "close"}},
+		Views:          []seedView{{SpaceID: "stockcn", ViewID: "kline"}, {SpaceID: "crypto", ViewID: "kline"}},
+		ViewColumns:    []seedViewColumn{{SpaceID: "stockcn", ViewID: "kline", ColumnName: "close"}, {SpaceID: "crypto", ViewID: "kline", ColumnName: "close"}},
 		Devices:        []seedDevice{{DeviceID: "duckdb"}},
 	}
 
 	selected, err := selectMetadataSpaces(seed, []string{" A股市场 "})
 	require.NoError(t, err)
 	require.Len(t, selected.Spaces, 1)
-	require.Equal(t, "stock_cn", selected.Spaces[0].SpaceID)
+	require.Equal(t, "stockcn", selected.Spaces[0].SpaceID)
 	require.Len(t, selected.DataSources, 1)
 	require.Len(t, selected.FieldGroups, 1)
 	require.Len(t, selected.Fields, 1)
@@ -115,21 +115,21 @@ func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
 
 func TestSelectMetadataSpacesRejectsUnknownAndDuplicateSelection(t *testing.T) {
 	t.Parallel()
-	seed := metadataSeed{Spaces: []seedSpace{{SpaceID: "stock_cn", Name: "A股市场"}}}
-	_, err := selectMetadataSpaces(seed, []string{"stock_us"})
-	require.EqualError(t, err, `unknown metadata space "stock_us"`)
-	_, err = selectMetadataSpaces(seed, []string{"stock_cn", "A股市场"})
-	require.EqualError(t, err, `duplicate metadata space "stock_cn"`)
+	seed := metadataSeed{Spaces: []seedSpace{{SpaceID: "stockcn", Name: "A股市场"}}}
+	_, err := selectMetadataSpaces(seed, []string{"stockus"})
+	require.EqualError(t, err, `unknown metadata space "stockus"`)
+	_, err = selectMetadataSpaces(seed, []string{"stockcn", "A股市场"})
+	require.EqualError(t, err, `duplicate metadata space "stockcn"`)
 }
 
 func TestMetadataSpaceCatalogIsStableAndSanitized(t *testing.T) {
 	t.Parallel()
 	seed := metadataSeed{Spaces: []seedSpace{
-		{SpaceID: "stock_cn", Name: "A股市场", Description: "A股数据"},
+		{SpaceID: "stockcn", Name: "A股市场", Description: "A股数据"},
 		{SpaceID: "crypto", Name: "加密货币市场", Description: "多交易所加密货币数据"},
 	}}
 	require.Equal(t, []metadataSpaceChoice{
-		{SpaceID: "stock_cn", Name: "A股市场", Description: "A股数据"},
+		{SpaceID: "stockcn", Name: "A股市场", Description: "A股数据"},
 		{SpaceID: "crypto", Name: "加密货币市场", Description: "多交易所加密货币数据"},
 	}, metadataSpaceCatalog(seed))
 }
@@ -245,14 +245,14 @@ func TestParseColumnAndValueTypes(t *testing.T) {
 }
 
 func TestHasInternalSpace(t *testing.T) {
-	seed := metadataSeed{Spaces: []seedSpace{{SpaceID: "moox_system", seedCommon: seedCommon{Attributes: map[string]string{"scope": "internal"}}}}}
-	assert.True(t, hasInternalSpace(seed, "moox_system"))
+	seed := metadataSeed{Spaces: []seedSpace{{SpaceID: "mooxsys", seedCommon: seedCommon{Attributes: map[string]string{"scope": "internal"}}}}}
+	assert.True(t, hasInternalSpace(seed, "mooxsys"))
 	assert.False(t, hasInternalSpace(seed, "default"))
 }
 
 func TestValidateReservedInternalSpacesAcceptsDeclaredSpace(t *testing.T) {
 	seed := metadataSeed{Spaces: []seedSpace{{
-		SpaceID: "moox_system",
+		SpaceID: "mooxsys",
 		seedCommon: seedCommon{Attributes: map[string]string{
 			"scope": "internal", "owner_module": "monitor", "managed_by": "platform",
 		}},
@@ -308,7 +308,7 @@ func TestBuildMetadataImportCallsBackfillsColumnDisplayName(t *testing.T) {
 func TestBuildMetadataImportCallsScopesColumnDisplayNameBySpaceAndOriginType(t *testing.T) {
 	seed := metadataSeed{
 		Fields: []seedField{
-			{SpaceID: "stock_cn", FieldID: "close", Name: "股票收盘价", ValueType: "DOUBLE"},
+			{SpaceID: "stockcn", FieldID: "close", Name: "股票收盘价", ValueType: "DOUBLE"},
 			{SpaceID: "crypto", FieldID: "close", Name: "币种收盘价", ValueType: "DOUBLE"},
 			{SpaceID: "crypto", FieldID: "alpha", Name: "普通指标", ValueType: "DOUBLE"},
 		},
@@ -317,7 +317,7 @@ func TestBuildMetadataImportCallsScopesColumnDisplayNameBySpaceAndOriginType(t *
 		},
 		DatasetColumns: []seedDatasetColumn{
 			{
-				SpaceID: "stock_cn", DatasetID: "stock", ColumnName: "close",
+				SpaceID: "stockcn", DatasetID: "stock", ColumnName: "close",
 				OriginType: "FIELD", OriginID: "close", ValueType: "DOUBLE",
 			},
 			{
@@ -345,7 +345,7 @@ func TestBuildMetadataImportCallsScopesColumnDisplayNameBySpaceAndOriginType(t *
 		got[column.GetSpaceId()+"/"+column.GetColumnName()] = column.GetAttributes()["display_name"]
 	}
 	require.Equal(t, map[string]string{
-		"stock_cn/close":      "股票收盘价",
+		"stockcn/close":       "股票收盘价",
 		"crypto/close":        "币种收盘价",
 		"crypto/alpha_field":  "普通指标",
 		"crypto/alpha_factor": "因子指标",
@@ -354,8 +354,8 @@ func TestBuildMetadataImportCallsScopesColumnDisplayNameBySpaceAndOriginType(t *
 
 func TestBuildMetadataImportCallsBackfillsInternalViewColumnDisplayName(t *testing.T) {
 	seed := metadataSeed{ViewColumns: []seedViewColumn{{
-		SpaceID: "moox_system", ViewID: "host_resource_view", ColumnName: "cpu_usage_percent",
-		OriginType: "DATASET_COLUMN", OriginID: "host_resource_v1.cpu_usage_percent", ValueType: "DOUBLE",
+		SpaceID: "mooxsys", ViewID: "view_mooxsys_host_resource", ColumnName: "cpu_usage_percent",
+		OriginType: "DATASET_COLUMN", OriginID: "dataset_mooxsys_host_resource.cpu_usage_percent", ValueType: "DOUBLE",
 	}}}
 	calls, err := buildMetadataImportCalls(seed)
 	require.NoError(t, err)
@@ -385,12 +385,12 @@ func TestMetadataContractsEqualAllResources(t *testing.T) {
 
 func TestMetadataContractsEqualTreatsNilAndEmptyAttributesAsEqual(t *testing.T) {
 	assert.True(t, metadataContractsEqual("spaces",
-		&pb.Space{SpaceId: "moox_system", Name: "MooX System", Status: "active"},
-		&pb.Space{SpaceId: "moox_system", Name: "MooX System", Status: "active", Attributes: map[string]string{}},
+		&pb.Space{SpaceId: "mooxsys", Name: "MooX System", Status: "active"},
+		&pb.Space{SpaceId: "mooxsys", Name: "MooX System", Status: "active", Attributes: map[string]string{}},
 	))
 	assert.True(t, metadataContractsEqual("data_sources",
-		&pb.DataSource{SpaceId: "moox_system", DataSourceId: "moox_monitor", Name: "MooX Monitor", Status: "active"},
-		&pb.DataSource{SpaceId: "moox_system", DataSourceId: "moox_monitor", Name: "MooX Monitor", Status: "active", Attributes: map[string]string{}},
+		&pb.DataSource{SpaceId: "mooxsys", DataSourceId: "moox_monitor", Name: "MooX Monitor", Status: "active"},
+		&pb.DataSource{SpaceId: "mooxsys", DataSourceId: "moox_monitor", Name: "MooX Monitor", Status: "active", Attributes: map[string]string{}},
 	))
 }
 
@@ -477,7 +477,7 @@ func TestParseEnumsAllValues(t *testing.T) {
 
 func TestBuildMetadataImportCallsRejectsUndefinedExplicitFieldGroup(t *testing.T) {
 	_, err := buildMetadataImportCalls(metadataSeed{Fields: []seedField{{
-		SpaceID: "stock_cn", GroupID: "missing", FieldID: "close", Name: "收盘价", ValueType: "double",
+		SpaceID: "stockcn", GroupID: "missing", FieldID: "close", Name: "收盘价", ValueType: "double",
 	}}})
 	require.ErrorContains(t, err, `undefined field_group "missing"`)
 }
@@ -504,8 +504,8 @@ func TestMetadataNotFoundAcceptsGenericNotFound(t *testing.T) {
 }
 
 func TestProtoMessageSpaceIDFindsNestedMetadataResource(t *testing.T) {
-	req := &pb.CreateFieldReq{Field: &pb.Field{SpaceId: "stock_cn", FieldId: "close"}}
-	assert.Equal(t, "stock_cn", protoMessageSpaceID(req.ProtoReflect()))
+	req := &pb.CreateFieldReq{Field: &pb.Field{SpaceId: "stockcn", FieldId: "close"}}
+	assert.Equal(t, "stockcn", protoMessageSpaceID(req.ProtoReflect()))
 	assert.Empty(t, protoMessageSpaceID((&pb.ListDataNodesReq{}).ProtoReflect()))
 }
 

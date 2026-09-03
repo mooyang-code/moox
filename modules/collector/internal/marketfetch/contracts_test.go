@@ -49,13 +49,27 @@ func TestRequestValidateAcceptsRFC3339NanoCoverage(t *testing.T) {
 	require.NoError(t, req.validate())
 }
 
+func TestRequestValidateAllowsTenRealtimeBarsAndRejectsEleven(t *testing.T) {
+	base := Request{
+		BatchID: "batch-realtime", SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		BatchKind: domain.BatchKindRealtime,
+		Items: []domain.CollectionItem{{
+			SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: StockCNDatasetID, BarLimit: MaxRealtimeRows,
+		}},
+	}
+	require.NoError(t, base.validate())
+
+	base.Items[0].BarLimit = MaxRealtimeRows + 1
+	require.ErrorContains(t, base.validate(), "realtime bar_limit")
+}
+
 func TestRequestValidateRejectsMixedSourceBinding(t *testing.T) {
 	req := Request{
 		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
-		Provider: "sina", SourceID: "stock_cn_minute_http",
+		Provider: "sina", SourceID: "stockcn_minute_http",
 		BatchKind: domain.BatchKindRealtime,
 		Items: []domain.CollectionItem{
-			{SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: StockCNDatasetID, Provider: "sina", SourceID: "stock_cn_minute_http"},
+			{SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: StockCNDatasetID, Provider: "sina", SourceID: "stockcn_minute_http"},
 			{SubjectID: "000001.XSHE", Symbol: "sz000001", DatasetID: StockCNDatasetID, Provider: "tdx", SourceID: "normal_7709"},
 		},
 	}

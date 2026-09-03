@@ -54,7 +54,7 @@ func TestBucketStorageProcessBucketIsIdempotentBySourceHash(t *testing.T) {
 		rows = append(rows, &storagepb.RowFieldValues{Key: rowKey("s", "src", "BTC", "1m", at, "venue:binance"), Fields: fields})
 	}
 	fake := &fakePrimary{rows: rows}
-	spec := RuleSpec{RuleID: "r", SpaceID: "s", SourceDatasetID: "src", SourceFrequency: freq1, SourceSeriesTag: "venue:binance", TargetDatasetID: "spot_kline_derived_5m", TargetFrequency: freq5, Alignment: AlignmentEpochUTC}
+	spec := RuleSpec{RuleID: "r", SpaceID: "s", SourceDatasetID: "src", SourceFrequency: freq1, SourceSeriesTag: "venue:binance", TargetDatasetID: "dataset_spot_kline_derived_5m", TargetFrequency: freq5, Alignment: AlignmentEpochUTC}
 	result, wrote, err := (&BucketStorage{Primary: fake}).ProcessBucket(context.Background(), spec, "BTC", start, end)
 	if err != nil || !wrote {
 		t.Fatalf("first process = %#v/%v/%v", result, wrote, err)

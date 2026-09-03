@@ -20,7 +20,7 @@ MooX Skill 需要把采集数据查询包装成自然语言能力。用户应能
    ```
 
 2. CLI 通过原生 tRPC Gateway 调用 `PrimaryStore.ReadTimeSeriesRows`。
-3. Skill 打包时从根目录 `custom.toml` 获取已配置的 RPC Gateway 地址和目标节点，并生成独立的 `0600` 数据访问配置。
+3. Skill 打包时从根目录 `moox.toml` 获取已配置的 RPC Gateway 地址和目标节点，并生成独立的 `0600` 数据访问配置。
 4. Skill 将自然语言中的标的、周期、数量和时间范围映射为 CLI 参数。
 5. 使用专用只读身份，不能复用权限较大的内部服务或现有 `moox-cli` 身份。
 
@@ -29,7 +29,7 @@ MooX Skill 需要把采集数据查询包装成自然语言能力。用户应能
 - 不使用 Admin JWT、登录会话或浏览器请求签名。
 - 不新增公网 HTTP JSON 数据接口。
 - 不为本次查询引入 tRPC TLS。行情数据属于非敏感数据，沿用现有 `:11003` HMAC 链路。
-- 不把 `custom.toml`、SSH 密码、腾讯云密钥、Gateway 根密钥或 Storage Primary 根密钥放入 Skill 包。
+- 不把 `moox.toml`、SSH 密码、腾讯云密钥、Gateway 根密钥或 Storage Primary 根密钥放入 Skill 包。
 - 首版只支持 Binance 现货 `1m` K 线，不声称支持尚未注册的周期或数据集。
 - Skill 包继续依赖仓库 `bin/moox-cli` 或 `PATH` 中的 `moox-cli`，本次不打包跨平台 CLI 二进制。
 
@@ -61,8 +61,8 @@ CLI 不根据字符串拼接猜测 Space、Dataset 或 series tag，而是使用
 | --- | --- |
 | Data type | `crypto` |
 | Exchange | `binance` |
-| Space | `crypto_market` |
-| Dataset | `binance_spot_kline_1m` |
+| Space | `crypto` |
+| Dataset | `dataset_binance_spot_kline_1m` |
 | Subject | `--symbol` |
 | Frequency | `1m` |
 | Series tag | `venue:binance` |
@@ -125,22 +125,22 @@ data_types:
     default_exchange: binance
     exchanges:
       binance:
-        space_id: crypto_market
+        space_id: crypto
         series_tag: venue:binance
         kline_datasets:
-          1m: binance_spot_kline_1m
+          1m: dataset_binance_spot_kline_1m
 ```
 
 `data_types`、交易所名称和周期键统一使用小写 ASCII 标识。CLI 对 `--data-type`、`--exchange` 和 `--interval` 做 trim 与小写规范化，再执行精确目录查找。配置不支持的组合必须返回明确错误，不能退化为猜测 Dataset ID。首版只写入 `crypto/binance/1m`；后续增加交易所或周期时扩展目录，不改变 CLI 命令形状。
 
 生成流程：
 
-1. `scripts/package-skill.sh` 创建临时 staging 目录，不直接修改 `skills/moox` 源目录。
-2. 脚本调用新的 `moox-cli setup export-skill-config --file ./custom.toml --space crypto_market --output <staging>/moox/config/data-access.yaml`。
-3. CLI 严格解析 `custom.toml`，从 `scf_fetcher.spaces[space_id=crypto_market]` 读取 `storage_rpc_gateway_target` 和 `storage_gateway_node_id`。
-4. CLI 使用 `custom.toml` 的控制机 SSH 信息，在远端读取专用 `gateway-moox-skill.key`，并从 Storage Primary 根密钥派生 `moox-skill` AppKey。CLI 只把派生值写入输出配置，并立即丢弃根密钥内容。
+1. `scripts/build/package-skill.sh` 创建临时 staging 目录，不直接修改 `skills/moox` 源目录。
+2. 脚本调用新的 `moox-cli setup export-skill-config --file ./moox.toml --space crypto --output <staging>/moox/config/data-access.yaml`。
+3. CLI 严格解析 `moox.toml`，从 `scf_fetcher.spaces[space_id=crypto]` 读取 `storage_rpc_gateway_target` 和 `storage_gateway_node_id`。
+4. CLI 使用 `moox.toml` 的控制机 SSH 信息，在远端读取专用 `gateway-moox-skill.key`，并从 Storage Primary 根密钥派生 `moox-skill` AppKey。CLI 只把派生值写入输出配置，并立即丢弃根密钥内容。
 5. 配置文件和最终 `dist/moox-skill.tar.gz` 权限均设为 `0600`。
-6. staging 在成功或失败时都删除。归档不得包含 `custom.toml`、共享密钥或临时文件。
+6. staging 在成功或失败时都删除。归档不得包含 `moox.toml`、共享密钥或临时文件。
 
 如果专用 Gateway 密钥尚未部署、目标 Space 缺少 RPC Gateway 配置、远端根密钥不可用或文件权限不安全，打包立即失败并给出明确错误，不生成不完整归档。
 
@@ -173,7 +173,7 @@ Skill 必须从用户表达中提取数据类型；用户未指定交易所时�
 1. CLI 单元测试覆盖命令树、参数校验、数据类型目录、默认/显式交易所、DESC、limit、时间范围、配置权限和错误输出。
 2. 使用 fake tRPC Gateway 或可注入 PrimaryStore proxy 验证 Gateway options、target node、双层 HMAC和请求体。
 3. Gateway 路由测试证明 `moox-skill` 可调用 `ReadTimeSeriesRows`，不能调用 `UpsertFields` 或其他 Storage 方法。
-4. 打包契约测试证明配置生成于 staging、权限为 `0600`，归档不包含 `custom.toml`、根密钥、SSH 密码或腾讯云凭据。
+4. 打包契约测试证明配置生成于 staging、权限为 `0600`，归档不包含 `moox.toml`、根密钥、SSH 密码或腾讯云凭据。
 5. Skill 文档契约测试覆盖自然语言到 CLI 参数的映射。
 6. 运行 CLI 模块测试、Gateway/Admin 路由测试、脚本契约测试、`git diff --check` 和 `make package-skill`。
 

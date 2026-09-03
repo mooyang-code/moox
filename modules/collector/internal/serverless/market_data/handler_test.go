@@ -16,11 +16,11 @@ import (
 )
 
 func TestHandlerRoutesTimerToSourceBoundMarketFetch(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "stock_cn")
+	t.Setenv("MOOX_SPACE_ID", "stockcn")
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "tencent")
-	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stock_cn_http")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stockcn_http")
 	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
-	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "stock_cn_kline")
+	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "dataset_stockcn_equity_kline")
 	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
 	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "600000.XSHG")
 	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://storage:11003")
@@ -53,18 +53,18 @@ func TestHandlerRoutesTimerToSourceBoundMarketFetch(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, response.(*model.Response).Success)
 	require.Equal(t, "tencent", observed.Provider)
-	require.Equal(t, "stock_cn_http", observed.SourceID)
-	require.Equal(t, "stock_cn_http", observed.Items[0].SourceID)
+	require.Equal(t, "stockcn_http", observed.SourceID)
+	require.Equal(t, "stockcn_http", observed.Items[0].SourceID)
 }
 
 func TestHandlerRoutesInstrumentTimerModeWithoutKlineSubjects(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "stock_cn")
+	t.Setenv("MOOX_SPACE_ID", "stockcn")
 	t.Setenv("MOOX_MARKET_FETCH_MODE", "instrument_snapshot")
-	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "stock_cn_multi")
-	t.Setenv("MOOX_MARKET_FETCH_MARKET_ID", "stock_cn")
+	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "stockcn_multi")
+	t.Setenv("MOOX_MARKET_FETCH_MARKET_ID", "stockcn")
 	t.Setenv("MOOX_MARKET_FETCH_INSTRUMENT_TYPE", "equity")
 	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
-	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "stock_cn_instruments")
+	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "dataset_stockcn_instruments")
 	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1d")
 	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://storage:11003")
 
@@ -100,11 +100,11 @@ func TestHandlerRoutesInstrumentTimerModeWithoutKlineSubjects(t *testing.T) {
 	require.Equal(t, domain.BatchKindInstrumentSnapshot, observed.BatchKind)
 	require.Len(t, observed.Items, 1)
 	require.Equal(t, "instrument", observed.Items[0].DataType)
-	require.Equal(t, "stock_cn_instruments", observed.Items[0].SubjectID)
+	require.Equal(t, "dataset_stockcn_instruments", observed.Items[0].SubjectID)
 }
 
 func TestHandlerAcceptsInstrumentCanaryActionPayloadInInstrumentMode(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "stock_cn")
+	t.Setenv("MOOX_SPACE_ID", "stockcn")
 	t.Setenv("MOOX_MARKET_FETCH_MODE", "instrument_snapshot")
 	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://storage:11003")
 
@@ -132,12 +132,12 @@ func TestHandlerAcceptsInstrumentCanaryActionPayloadInInstrumentMode(t *testing.
 		StorageRPCGatewayTarget: "ip://storage:11003",
 		Data: map[string]interface{}{
 			"batch_id": "instrument-canary", "batch_kind": "instrument_snapshot",
-			"space_id": "stock_cn", "dataset_id": "stock_cn_instruments", "frequency": "1d",
-			"provider": "stock_cn_multi", "market_type": "equity",
+			"space_id": "stockcn", "dataset_id": "dataset_stockcn_instruments", "frequency": "1d",
+			"provider": "stockcn_multi", "market_type": "equity",
 			"items": []map[string]interface{}{{
-				"subject_id": "stock_cn_instruments", "provider": "stock_cn_multi",
+				"subject_id": "dataset_stockcn_instruments", "provider": "stockcn_multi",
 				"market_type": "equity", "data_type": "instrument",
-				"dataset_id": "stock_cn_instruments", "snapshot_at": "2026-09-01T08:00:00Z",
+				"dataset_id": "dataset_stockcn_instruments", "snapshot_at": "2026-09-01T08:00:00Z",
 			}},
 		},
 	})
@@ -147,11 +147,11 @@ func TestHandlerAcceptsInstrumentCanaryActionPayloadInInstrumentMode(t *testing.
 	require.True(t, response.(*model.Response).Success)
 	require.False(t, published)
 	require.Equal(t, domain.BatchKindInstrumentSnapshot, observed.BatchKind)
-	require.Equal(t, "stock_cn_instruments", observed.Items[0].DatasetID)
+	require.Equal(t, "dataset_stockcn_instruments", observed.Items[0].DatasetID)
 }
 
 func TestHandlerRejectsActionOnlyTimerPayload(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "stock_cn")
+	t.Setenv("MOOX_SPACE_ID", "stockcn")
 	t.Setenv("MOOX_MARKET_FETCH_MODE", "instrument_snapshot")
 
 	handler := &Handler{NewMarketFetch: func() *marketfetch.Handler { return &marketfetch.Handler{} }}
@@ -164,7 +164,7 @@ func TestHandlerRejectsActionOnlyTimerPayload(t *testing.T) {
 }
 
 func TestHandlerRejectsTimerActionMismatchedWithConfiguredMode(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "stock_cn")
+	t.Setenv("MOOX_SPACE_ID", "stockcn")
 	t.Setenv("MOOX_MARKET_FETCH_MODE", "instrument_snapshot")
 
 	handler := &Handler{NewMarketFetch: func() *marketfetch.Handler { return &marketfetch.Handler{} }}

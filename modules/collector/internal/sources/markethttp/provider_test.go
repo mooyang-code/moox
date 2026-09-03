@@ -19,8 +19,8 @@ func TestProviderFetchesEastMoneyStyleRowsWithMarketSourceIdentity(t *testing.T)
 		return recorder.Result(), nil
 	})}
 	provider := New(Config{
-		ProviderID: "eastmoney", SourceID: "stock_hk_http", DisplayName: "EastMoney HK",
-		MarketID: "stock_hk", InstrumentType: marketdata.InstrumentEquity,
+		ProviderID: "eastmoney", SourceID: "stockhk_http", DisplayName: "EastMoney HK",
+		MarketID: "stockhk", InstrumentType: marketdata.InstrumentEquity,
 		BaseURL: "http://fixture.test", Endpoint: "/kline", Host: "fixture.test",
 		HTTPClient: client, Location: time.FixedZone("Asia/Hong_Kong", 8*60*60),
 		SymbolFunc:  func(string) (string, error) { return "116.00005", nil },
@@ -30,13 +30,13 @@ func TestProviderFetchesEastMoneyStyleRowsWithMarketSourceIdentity(t *testing.T)
 	})
 
 	rows, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{
-		MarketID: "stock_hk", ExchangeID: "XHKG", SubjectID: "00005.XHKG",
+		MarketID: "stockhk", ExchangeID: "XHKG", SubjectID: "00005.XHKG",
 		ProviderSymbol: "00005", Frequency: "1m", Limit: 1, RequestID: "request-1",
 	})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "eastmoney", rows[0].ProviderID)
-	require.Equal(t, "stock_hk_http", rows[0].SourceID)
+	require.Equal(t, "stockhk_http", rows[0].SourceID)
 	require.Equal(t, "00005", rows[0].ProviderSymbol)
 	require.Equal(t, time.Date(2026, 9, 1, 1, 30, 0, 0, time.UTC), rows[0].BarStart)
 	require.Equal(t, float64(12), rows[0].VolumeShares)
@@ -50,7 +50,7 @@ func TestProviderStripsJSONPAndKeepsCalendarDayInUTC(t *testing.T) {
 		return recorder.Result(), nil
 	})}
 	provider := New(Config{
-		ProviderID: "eastmoney", SourceID: "stock_hk_http", MarketID: "stock_hk",
+		ProviderID: "eastmoney", SourceID: "stockhk_http", MarketID: "stockhk",
 		InstrumentType: marketdata.InstrumentEquity, Exchanges: []string{"XHKG"},
 		BaseURL: "http://fixture.test", Endpoint: "/kline", Host: "fixture.test",
 		HTTPClient: client, Location: time.FixedZone("Asia/Hong_Kong", 8*60*60),
@@ -59,7 +59,7 @@ func TestProviderStripsJSONPAndKeepsCalendarDayInUTC(t *testing.T) {
 		Now: func() time.Time { return time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC) },
 	})
 	rows, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{
-		MarketID: "stock_hk", ExchangeID: "XHKG", SubjectID: "00005.XHKG",
+		MarketID: "stockhk", ExchangeID: "XHKG", SubjectID: "00005.XHKG",
 		ProviderSymbol: "00005", Frequency: "1d", Limit: 1, RequestID: "jsonp",
 	})
 	require.NoError(t, err)
@@ -71,7 +71,7 @@ func TestProviderStripsJSONPAndKeepsCalendarDayInUTC(t *testing.T) {
 func TestProviderRejectsUnsupportedMarketAndMissingAmount(t *testing.T) {
 	provider := New(Config{
 		ProviderID: "csindex", SourceID: "index_http", DisplayName: "CSIndex",
-		MarketID: "stock_cn", InstrumentType: marketdata.InstrumentIndex,
+		MarketID: "stockcn", InstrumentType: marketdata.InstrumentIndex,
 		BaseURL: "http://fixture.test", Endpoint: "/kline", Host: "fixture.test",
 		Location:    time.FixedZone("Asia/Shanghai", 8*60*60),
 		SymbolFunc:  func(string) (string, error) { return "1.000001", nil },
@@ -79,7 +79,7 @@ func TestProviderRejectsUnsupportedMarketAndMissingAmount(t *testing.T) {
 		TimestampMode: marketdata.TimestampModeOpen, HasAmount: false,
 	})
 	_, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{
-		MarketID: "stock_hk", ExchangeID: "XHKG", SubjectID: "00005.XHKG",
+		MarketID: "stockhk", ExchangeID: "XHKG", SubjectID: "00005.XHKG",
 		ProviderSymbol: "00005", Frequency: "1d", Limit: 1, RequestID: "request-2",
 	})
 	require.ErrorIs(t, err, marketdata.ErrProviderNotFound)
@@ -109,15 +109,15 @@ func TestProviderClassifiesHTTPAndPayloadFailures(t *testing.T) {
 				return recorder.Result(), nil
 			})}
 			provider := New(Config{
-				ProviderID: "eastmoney", SourceID: "stock_hk_http", DisplayName: "EastMoney HK",
-				MarketID: "stock_hk", InstrumentType: marketdata.InstrumentEquity,
+				ProviderID: "eastmoney", SourceID: "stockhk_http", DisplayName: "EastMoney HK",
+				MarketID: "stockhk", InstrumentType: marketdata.InstrumentEquity,
 				Exchanges: []string{"XHKG"}, BaseURL: "http://fixture.test", Endpoint: "/kline",
 				Host: "fixture.test", HTTPClient: client, Location: time.FixedZone("Asia/Hong_Kong", 8*60*60),
 				SymbolFunc:  func(string) (string, error) { return "116.00005", nil },
 				Frequencies: []string{"1m"}, MaxBarsPerRequest: 100, HasAmount: true,
 			})
 			_, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{
-				MarketID: "stock_hk", ExchangeID: "XHKG", SubjectID: "00005.XHKG",
+				MarketID: "stockhk", ExchangeID: "XHKG", SubjectID: "00005.XHKG",
 				ProviderSymbol: "00005", Frequency: "1m", Limit: 1, RequestID: "failure",
 			})
 			require.ErrorIs(t, err, tt.want)

@@ -6,9 +6,9 @@ import (
 )
 
 func TestObjectKey(t *testing.T) {
-	path := "/archive/crypto/spot_kline_1h/1h/BTC-USDT/series_tag=venue%3Abinance/crypto__spot_kline_1h__BTC-USDT__1h__series_tag=venue%3Abinance__202606.parquet"
+	path := "/archive/crypto/dataset_spot_kline_1h/1h/BTC-USDT/series_tag=venue%3Abinance/crypto__spot_kline_1h__BTC-USDT__1h__series_tag=venue%3Abinance__202606.parquet"
 	key, err := ObjectKey("/archive", "moox/archive", path)
-	if err != nil || key != "moox/archive/crypto/spot_kline_1h/1h/BTC-USDT/series_tag=venue%3Abinance/crypto__spot_kline_1h__BTC-USDT__1h__series_tag=venue%3Abinance__202606.parquet" {
+	if err != nil || key != "moox/archive/crypto/dataset_spot_kline_1h/1h/BTC-USDT/series_tag=venue%3Abinance/crypto__spot_kline_1h__BTC-USDT__1h__series_tag=venue%3Abinance__202606.parquet" {
 		t.Fatalf("key=%q err=%v", key, err)
 	}
 }

@@ -81,7 +81,7 @@ space_id
 集中定义常量和验证自身使用的 tag。
 
 Dataset 仍只绑定一个 `data_source_id`。当一个 Dataset 接收 Binance、OKX 等多个
-物理来源时，它绑定一个逻辑聚合 DataSource（例如 `crypto_market`），物理来源由
+物理来源时，它绑定一个逻辑聚合 DataSource（例如 `crypto`），物理来源由
 `series_tag` 和必要的普通 Field 记录。不要为 tag 改成 Dataset 多 DataSource
 绑定，也不要把凭据或 Provider 配置塞入 tag。
 
@@ -101,7 +101,7 @@ message TimeSeriesRowKey {
 所有 TimeSeries 写入、读取结果和 `DatasetRowsUpserted` 事件必须原样携带
 `series_tag`。Event mapper 只复制字符串，不做解析或格式转换。
 
-这是 wire-breaking 变更，`storage.dataset.rows.upserted` 升级到 `@2`。旧 v1
+这是 wire-breaking 变更，`event.storage.dataset.rows.upserted` 升级到 `@2`。旧 v1
 Stream/Consumer/Outbox 状态必须清空，不能让 v1 payload 被新消费者解释。
 
 DataNode Pebble 物理键为：

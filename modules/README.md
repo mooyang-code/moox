@@ -52,23 +52,23 @@ SCF 采集运行时通过 `/api/service/*`（HMAC 签名）回调后台，不经
 make build
 
 # 构建单个模块；build.sh 每次只接收一个 target
-./scripts/build.sh admin
-./scripts/build.sh storage
-./scripts/build.sh collector
-./scripts/build.sh cloudnode
-./scripts/build.sh trade
-./scripts/build.sh cli
-./scripts/build.sh factor
-./scripts/build.sh strategy
-./scripts/build.sh archive
-./scripts/build.sh monitor
-./scripts/build.sh eventbus
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh hostagent
+./scripts/build/build.sh admin
+./scripts/build/build.sh storage
+./scripts/build/build.sh collector
+./scripts/build/build.sh cloudnode
+./scripts/build/build.sh trade
+./scripts/build/build.sh cli
+./scripts/build/build.sh factor
+./scripts/build/build.sh strategy
+./scripts/build/build.sh archive
+./scripts/build/build.sh monitor
+./scripts/build/build.sh eventbus
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh hostagent
 
 # 本机/远端一键发布
 make deploy ARGS="--target localhost --dir /data/moox/dev"
 ```
 
-`scripts/deploy-moox.sh` 默认部署 Admin、Gateway、web-host、EventBus、CloudNode、Collector、Factor、Strategy、Trade、Monitor、Storage 和 Archive；可用对应的 `--no-<module>` 关闭。`control` profile 会部署 Strategy 和 Trade；HostAgent 使用独立的 Linux rootless 部署流程。
+`scripts/deploy/deploy-moox.sh` 默认部署 Admin、Gateway、web-host、EventBus、CloudNode、Collector、Factor、Strategy、Trade、Monitor、Storage 和 Archive；可用对应的 `--no-<module>` 关闭。`control` profile 会部署 Strategy 和 Trade；HostAgent 使用独立的 Linux rootless 部署流程。
 
 详细架构见仓库 [`docs/架构总览.md`](../docs/架构总览.md)。

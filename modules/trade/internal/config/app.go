@@ -26,7 +26,7 @@ type AppConfig struct {
 }
 
 // DNSResolverConfig is rendered from the sanitized dns_resolver section in
-// custom.toml by moox-cli. Trade never reads custom.toml directly.
+// moox.toml by moox-cli. Trade never reads moox.toml directly.
 type DNSResolverConfig struct {
 	Enabled         bool     `yaml:"enabled"`
 	Domains         []string `yaml:"domains"`

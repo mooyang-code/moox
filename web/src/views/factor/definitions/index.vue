@@ -100,7 +100,7 @@
     >
       <a-form class="factor-form" :model="form" layout="vertical">
         <a-form-item field="factor_id" label="因子ID" required>
-          <a-input v-model="form.factor_id" :disabled="editing" placeholder="bias" />
+          <a-input v-model="form.factor_id" :disabled="editing" placeholder="Bias" />
         </a-form-item>
         <a-form-item field="name" label="Python 模块名" required>
           <a-input v-model="form.name" :disabled="editing" placeholder="Bias" />

@@ -204,7 +204,7 @@ Remove `HostDatasetIDs`, `HostRetention`, and `HostInterval` from `StorageViewMa
 maintenance:
   host_metrics_cleanup:
     enabled: true
-    dataset_ids: [host_resource_v1, host_fs_v1, host_disk_v1, host_net_v1]
+    dataset_ids: [dataset_mooxsys_host_resource, dataset_mooxsys_host_filesystem, dataset_mooxsys_host_disk, dataset_mooxsys_host_network]
     max_age: 48h
     batch_size: 1000
     max_batches_per_run: 10
@@ -295,7 +295,7 @@ Expected: FAIL because the service and registration function do not exist.
 
 - [ ] **Step 3: Implement registration and remove the ticker loop**
 
-Create `registerHostMetricsCleanupTimer(s, access, cfg) error`. Parse `MaxAge` once at startup, construct a `timerjob.Job` with a 60-second timeout, and register its `Handle` using `timer.RegisterHandlerService`. The callback invokes `CleanupExpiredHostMetrics` for `moox_system` and logs deleted rows and batch count. Delete `startHostRetention`, its goroutine, cancellation channel, and shutdown waiter from `main.go`.
+Create `registerHostMetricsCleanupTimer(s, access, cfg) error`. Parse `MaxAge` once at startup, construct a `timerjob.Job` with a 60-second timeout, and register its `Handle` using `timer.RegisterHandlerService`. The callback invokes `CleanupExpiredHostMetrics` for `mooxsys` and logs deleted rows and batch count. Delete `startHostRetention`, its goroutine, cancellation channel, and shutdown waiter from `main.go`.
 
 - [ ] **Step 4: Run focused Storage verification**
 
@@ -672,9 +672,9 @@ git commit -m "refactor(factor): rename debounce to event batching"
 - Modify: `modules/gateway/config/trpc_go.yaml`
 - Modify: `modules/gateway/cmd/server/main.go`
 - Modify: `modules/gateway/README.md`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/release.sh`
-- Modify: `scripts/test-deploy-moox-gateway.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-gateway.sh`
 
 - [ ] **Step 1: Lock startup and refresh behavior with tests**
 
@@ -732,8 +732,8 @@ if rg -n 'RefreshInterval|DefaultRefreshInterval|refresh_interval|time\.NewTicke
   exit 1
 fi
 cd ../..
-scripts/test-deploy-moox-gateway.sh
-git add modules/gateway scripts/deploy-moox.sh scripts/release.sh scripts/test-deploy-moox-gateway.sh
+scripts/test/contract/test-deploy-moox-gateway.sh
+git add modules/gateway scripts/deploy/deploy-moox.sh scripts/release/release.sh scripts/test/contract/test-deploy-moox-gateway.sh
 git commit -m "refactor(gateway): schedule route refresh with tRPC timer"
 ```
 
@@ -752,7 +752,7 @@ Expected: all tests PASS; startup still performs one immediate pull, periodic re
 - Modify: `modules/hostagent/config/trpc_go.yaml`
 - Modify: `modules/hostagent/cmd/server/main.go`
 - Modify: `modules/hostagent/README.md`
-- Modify: `scripts/release.sh`
+- Modify: `scripts/release/release.sh`
 
 - [ ] **Step 1: Remove application-owned schedule configuration**
 
@@ -800,7 +800,7 @@ if rg -n 'Config\.Interval|interval: 15s|time\.NewTicker|go a\.Run|func \(a \*Ag
   exit 1
 fi
 cd ../..
-git add modules/hostagent scripts/release.sh
+git add modules/hostagent scripts/release/release.sh
 git commit -m "refactor(hostagent): schedule sampling with tRPC timer"
 ```
 

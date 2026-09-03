@@ -37,7 +37,7 @@ func setupRequest() *pb.ApplySetupReq {
 		ControlHost:  &pb.SetupHost{Name: "control", Address: "192.0.2.10", Port: 22, Username: "ubuntu", Password: "recognizable-control-password"},
 		OtherHosts:   []*pb.SetupHost{{Name: "compute", Address: "192.0.2.11", Port: 22, Username: "ubuntu", Password: "recognizable-compute-password"}},
 		Spaces: []*pb.SetupSpace{{
-			SpaceId: "stock_cn", Name: "A股市场", Description: "A股行情",
+			SpaceId: "stockcn", Name: "A股市场", Description: "A股行情",
 			Owner: "quant", Market: "CN", Timezone: "Asia/Shanghai",
 			Status: "active", AttributesJson: `{"managed_by":"moox-cli"}`,
 		}},

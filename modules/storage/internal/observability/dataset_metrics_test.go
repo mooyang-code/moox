@@ -69,12 +69,12 @@ func TestStorageDatasetMetricsAcceptsSecondFrequency(t *testing.T) {
 	metrics, err := NewDatasetMetrics(prometheus.NewRegistry())
 	require.NoError(t, err)
 	err = metrics.ObserveRun(report.DatasetObservation{
-		Key: report.DatasetKey{SpaceID: "moox_system", DatasetID: "moox_service_metrics", Freq: "30s"},
+		Key:    report.DatasetKey{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Freq: "30s"},
 		Result: "success", FinishedAt: time.Now(),
 	})
 	require.NoError(t, err)
 	require.Len(t, metrics.known, 1)
-	require.Equal(t, 30*time.Second, metrics.known[report.DatasetKey{SpaceID: "moox_system", DatasetID: "moox_service_metrics", Freq: "30s"}])
+	require.Equal(t, 30*time.Second, metrics.known[report.DatasetKey{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Freq: "30s"}])
 }
 
 func datasetGaugeValue(t *testing.T, registry *prometheus.Registry, name string) float64 {

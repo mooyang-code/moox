@@ -1,1 +1,0 @@
-tests/contract/test-quality-gates.sh

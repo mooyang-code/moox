@@ -2,26 +2,26 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在 `custom.toml` 指定的 Trade 节点 `compute-1 (43.132.204.177)` 上提供受鉴权的 `ResolveDomains` RPC，由 Collector 定时批量请求域名解析结果，并复用现有 CloudNode Environment Patch 将结果同步到所有 SCF Timer 函数。
+**Goal:** 在 `moox.toml` 指定的 Trade 节点 `compute-1 (43.132.204.177)` 上提供受鉴权的 `ResolveDomains` RPC，由 Collector 定时批量请求域名解析结果，并复用现有 CloudNode Environment Patch 将结果同步到所有 SCF Timer 函数。
 
-**Architecture:** `custom.toml` 是唯一配置源，`moox-cli` 解析后把脱敏的 `dns_resolver` 运行配置写入 Trade 的 `config/app.yaml`，同时把 Collector 访问 Trade 的目标和刷新参数写入 Collector/SCF 运行配置。Trade 只负责在自身网络出口执行 DNS 查询并对每个候选 IP 做 TCP 探测，返回 `domain -> ordered IP + latency`；Collector 负责刷新周期、来源优先级、快照保留和 SCF 环境协调。SCF 继续使用现有 `MOOX_MARKET_FETCH_DNS_ROUTES_JSON`，保持域名作为 Host/SNI、IP 仅用于 TCP 拨号，解析服务不可用时保留上次成功快照并允许 SCF 回退系统 DNS。
+**Architecture:** `moox.toml` 是唯一配置源，`moox-cli` 解析后把脱敏的 `dns_resolver` 运行配置写入 Trade 的 `config/app.yaml`，同时把 Collector 访问 Trade 的目标和刷新参数写入 Collector/SCF 运行配置。Trade 只负责在自身网络出口执行 DNS 查询并对每个候选 IP 做 TCP 探测，返回 `domain -> ordered IP + latency`；Collector 负责刷新周期、来源优先级、快照保留和 SCF 环境协调。SCF 继续使用现有 `MOOX_MARKET_FETCH_DNS_ROUTES_JSON`，保持域名作为 Host/SNI、IP 仅用于 TCP 拨号，解析服务不可用时保留上次成功快照并允许 SCF 回退系统 DNS。
 
-**Configuration flow (fixed decision):** `custom.toml -> moox-cli snapshot -> rendered Trade/Collector runtime config`. `moox-cli` 是唯一解析 `custom.toml` 的入口；Trade 不读取完整 TOML，也不自己推导 `compute-1` 地址。CLI 在同一次解析中生成一个不可变配置快照，再分别渲染 Trade 与 Collector 的配置文件，避免两边各自解析或出现字段漂移。渲染完成并通过校验后，部署流程才允许重启服务。
+**Configuration flow (fixed decision):** `moox.toml -> moox-cli snapshot -> rendered Trade/Collector runtime config`. `moox-cli` 是唯一解析 `moox.toml` 的入口；Trade 不读取完整 TOML，也不自己推导 `compute-1` 地址。CLI 在同一次解析中生成一个不可变配置快照，再分别渲染 Trade 与 Collector 的配置文件，避免两边各自解析或出现字段漂移。渲染完成并通过校验后，部署流程才允许重启服务。
 
 **本轮讨论的最终取舍（必须按此实现）：**
 
-- `custom.toml` 继续作为用户可编辑的唯一配置源；不在 Trade、Collector 或部署 Shell 中新增第二套 TOML 解析逻辑。
+- `moox.toml` 继续作为用户可编辑的唯一配置源；不在 Trade、Collector 或部署 Shell 中新增第二套 TOML 解析逻辑。
 - `moox-cli` 负责一次性解析并校验 `dns_resolver`，从同一份快照提取两份运行时配置：Trade 只得到 Resolver 自身需要的脱敏字段，Collector 得到访问 Trade 的目标、节点和刷新参数。
 - Trade 的目标地址只能由 `other_hosts[dns_resolver.trade_node]` 派生。当前配置为 `compute-1 -> 43.132.204.177`，该地址不得在 Trade 源码、Collector 源码或 SCF 包中重复硬编码。
 - 渲染采用“合并现有 YAML、只替换 `dns_resolver` 节点、临时文件写入后原子 `rename`”的方式；必须保留目标配置中的 `database`、`admin`、`eventbus`、`runtime` 等无关节点及原文件权限。
 - 禁用或删除 `dns_resolver` 时也要显式写入 `enabled: false`，防止旧部署中的启用配置残留；渲染失败必须在服务重启前终止部署。
-- Trade 进程只能读取渲染后的 `trade/config/app.yaml`，不得读取完整 `custom.toml`，不得接触 SSH、云账号或 Gateway secret。
+- Trade 进程只能读取渲染后的 `trade/config/app.yaml`，不得读取完整 `moox.toml`，不得接触 SSH、云账号或 Gateway secret。
 
 **Tech Stack:** Go 1.24, tRPC-Go, protobuf v3, Gateway HMAC/native tRPC, Tencent CloudNode SCF Environment Patch, Collector SQLite/runtime timers, `net.Resolver`。
 
 ## Global Constraints
 
-- Trade Resolver 只部署并使用 `custom.toml` 中的 `compute-1`，地址为 `43.132.204.177`；不把 46 台机器作为解析节点集合。
+- Trade Resolver 只部署并使用 `moox.toml` 中的 `compute-1`，地址为 `43.132.204.177`；不把 46 台机器作为解析节点集合。
 - Collector 不直接访问 Trade 的业务端口，不绕过 Gateway，不新增公网未鉴权 HTTP 入口。
 - `ResolveDomains` 支持一次请求多个域名；单域名请求等价于长度为 1 的批量请求。
 - 只返回合法 IPv4 地址，单域名最多返回 4 个地址，结果必须去重，并按 Trade 节点 TCP 探测延迟排序；不在单域结果中传递完成时间。
@@ -30,7 +30,7 @@
 - 保留现有 `MOOX_MARKET_FETCH_DNS_ROUTES_JSON`、`MOOX_MARKET_FETCH_DNS_HASH`、`MOOX_MARKET_FETCH_DNS_UPDATED_AT` 协议，不新增第二套 SCF DNS 环境变量。
 - DNS 解析成功不等于 Binance Futures HTTPS 可达；验收必须分别记录 DNS、TCP/443、HTTPS `/fapi/v1/ping` 三个阶段。
 - Collector 仍是 SCF DNS 环境的唯一写入者；Trade 不直接修改 CloudNode 或 SCF 配置。
-- `custom.toml` 不由 Trade 进程直接读取；`moox-cli` 只把 `dns_resolver` 的非敏感运行字段原子写入目标部署的 `trade/config/app.yaml`。Trade 不接触 SSH、云账号、Gateway secret 等无关配置。
+- `moox.toml` 不由 Trade 进程直接读取；`moox-cli` 只把 `dns_resolver` 的非敏感运行字段原子写入目标部署的 `trade/config/app.yaml`。Trade 不接触 SSH、云账号、Gateway secret 等无关配置。
 - `DomainResolution` 不携带逐域 `resolved_at_unix_ms` 或逐域 `error`。Collector 以收到并校验完整响应的时间作为快照时间；未解析域名通过响应级 `unresolved_domains` 和日志/指标表达。
 - 延迟字段表示 Trade 节点到目标 IP 的 TCP 探测耗时，不代表 SCF 到目标 IP 的耗时；Collector 只用它排序候选 IP，不把延迟写入 SCF 环境变量。
 - 本计划不把 DNS 结果写入 Trade 业务 SQLite；Trade 只保留短 TTL 内存缓存，重启后允许重新解析。
@@ -47,9 +47,9 @@
 - IP 拨号并保留 TLS SNI：`modules/collector/internal/httpclient/client.go`
 - Trade proto 与服务注册：`modules/trade/proto/trade_service.proto`、`modules/trade/internal/rpc/register.go`、`modules/trade/internal/bootstrap/bootstrap.go`
 - Trade 业务配置加载：`modules/trade/internal/config/app.go`、`modules/trade/config/app.yaml`
-- custom.toml 解析与严格字段校验：`modules/cli/internal/setup/config/config.go`
-- custom.toml 到服务配置的渲染：`modules/cli/internal/command/setup.go`、`modules/cli/internal/setup/config/*`
-- SCF/Trade/Collector 部署环境：`scripts/deploy-moox.sh`、`modules/cli/internal/command/collector.go`
+- moox.toml 解析与严格字段校验：`modules/cli/internal/setup/config/config.go`
+- moox.toml 到服务配置的渲染：`modules/cli/internal/command/setup.go`、`modules/cli/internal/setup/config/*`
+- SCF/Trade/Collector 部署环境：`scripts/deploy/deploy-moox.sh`、`modules/cli/internal/command/collector.go`
 
 ## Protocol Design
 
@@ -93,7 +93,7 @@ service TradeDNSResolverService {
 
 ## Configuration Contract
 
-在 `custom.toml` 增加明确的 Resolver 选择，不重复填写 `43.132.204.177`：
+在 `moox.toml` 增加明确的 Resolver 选择，不重复填写 `43.132.204.177`：
 
 ```toml
 [dns_resolver]
@@ -109,7 +109,7 @@ max_ips_per_domain = 4
 domains = ["data-api.binance.vision", "api.binance.com", "fapi.binance.com"]
 ```
 
-配置解析时通过 `trade_node` 在 `other_hosts` 中查找地址；当前 `compute-1` 必须解析为 `43.132.204.177`。其中 `refresh_interval_seconds`、`request_timeout_ms` 是 Collector 调用侧参数，`lookup_timeout_ms`、`probe_timeout_ms`、`probe_port`、`cache_ttl_seconds`、`max_ips_per_domain` 是 Trade Resolver 参数。`moox-cli` 不让 Trade 直接读取完整 `custom.toml`，而是在部署目标中把以下脱敏 YAML 合并写入 `trade/config/app.yaml`：
+配置解析时通过 `trade_node` 在 `other_hosts` 中查找地址；当前 `compute-1` 必须解析为 `43.132.204.177`。其中 `refresh_interval_seconds`、`request_timeout_ms` 是 Collector 调用侧参数，`lookup_timeout_ms`、`probe_timeout_ms`、`probe_port`、`cache_ttl_seconds`、`max_ips_per_domain` 是 Trade Resolver 参数。`moox-cli` 不让 Trade 直接读取完整 `moox.toml`，而是在部署目标中把以下脱敏 YAML 合并写入 `trade/config/app.yaml`：
 
 ```yaml
 dns_resolver:
@@ -139,27 +139,27 @@ Collector 仍通过已有 Service Gateway HMAC 凭据访问远程 Gateway；不�
 
 ```bash
 moox-cli setup render-runtime-config \
-  --file ./custom.toml \
+  --file ./moox.toml \
   --trade-output <stage>/trade/config/app.yaml \
   --collector-output <stage>/collector/config/app.yaml
 ```
 
-命令只读取一次 `custom.toml`，并使用同一份 `Manifest` 快照完成两份配置的合并写入：
+命令只读取一次 `moox.toml`，并使用同一份 `Manifest` 快照完成两份配置的合并写入：
 
 - Trade 输出只包含 `dns_resolver.enabled`、`domains`、`lookup_timeout_ms`、`probe_timeout_ms`、`probe_port`、`cache_ttl_seconds`、`max_ips_per_domain`；不写 `trade_node`、主机地址、刷新周期、Gateway 节点、SSH/云凭据或任何 secret。
 - Collector 输出包含 `enabled`、由 `other_hosts[trade_node].address` 派生的 `target`、`node_id`、`refresh_interval`、`request_timeout`、`cache_ttl` 与域名列表；Collector 仍从既有运行时凭据读取 Gateway HMAC secret。
 - 两份输出均为“只替换 `dns_resolver` 节点”的原子 YAML 更新，保留目标文件的其他配置和权限；禁用或删除该段时必须显式写入 `enabled: false`，不能让旧的启用配置残留。
-- 任何解析、主机映射、字段校验或写入失败都在服务重启前返回错误；部署脚本不得再独立解析 TOML，也不得把完整 `custom.toml` 拷贝到 Trade 或 Collector 运行目录。
+- 任何解析、主机映射、字段校验或写入失败都在服务重启前返回错误；部署脚本不得再独立解析 TOML，也不得把完整 `moox.toml` 拷贝到 Trade 或 Collector 运行目录。
 - 本地开发可以直接使用 `trade/config/app.yaml` 与 `collector/config/app.yaml` 中的 disabled 默认值；只有显式执行该命令或部署流程调用该命令后才启用远程 Resolver。
 
 ---
 
-### Task 1: Extend custom.toml Resolver Configuration
+### Task 1: Extend moox.toml Resolver Configuration
 
 **Files:**
 - Modify: `modules/cli/internal/setup/config/config.go`
-- Modify: `custom.toml`
-- Modify: `custom.toml.example`
+- Modify: `moox.toml`
+- Modify: `moox.toml.example`
 - Test: `modules/cli/internal/setup/config/config_test.go`
 
 **Interfaces:**
@@ -168,10 +168,10 @@ moox-cli setup render-runtime-config \
 
 - [x] Add the `DNSResolver` manifest struct and `toml:"dns_resolver"` field.
 - [x] Add the production entry selecting `compute-1`; do not duplicate its address outside `other_hosts`.
-- [x] Add the same section to `custom.toml.example` with a safe example node name and comments explaining that Trade receives a rendered YAML subset, not the full TOML.
+- [x] Add the same section to `moox.toml.example` with a safe example node name and comments explaining that Trade receives a rendered YAML subset, not the full TOML.
 - [x] Reject an enabled resolver that points to a missing host or to the control host.
 - [x] Validate `probe_port` is a valid TCP port, `max_ips_per_domain` is in `1..4`, and probe/lookup/cache intervals are positive.
-- [x] Test enabled production config, missing `compute-1`, duplicate domains, invalid intervals, invalid probe port, invalid max-IP cap, disabled resolver, and preservation of existing custom.toml files without the new section.
+- [x] Test enabled production config, missing `compute-1`, duplicate domains, invalid intervals, invalid probe port, invalid max-IP cap, disabled resolver, and preservation of existing moox.toml files without the new section.
 - [x] Run `cd modules/cli && go test ./internal/setup/config -count=1` and expect PASS.
 
 ### Task 2: Add Trade ResolveDomains Protocol
@@ -181,7 +181,7 @@ moox-cli setup render-runtime-config \
 - Regenerate: `modules/trade/proto/tradegen/*`
 - Modify: `modules/trade/internal/rpc/register.go`
 - Test: `modules/trade/internal/rpc/register_test.go`
-- Test: `scripts/tests/contract/test-trade-dns-resolver-contract.sh`
+- Test: `scripts/test/contract/test-trade-dns-resolver-contract.sh`
 
 **Interfaces:**
 - Produces `TradeDNSResolverService.ResolveDomains` and generated client/server proxy types for Collector.
@@ -233,7 +233,7 @@ moox-cli setup render-runtime-config \
 - Implements generated `TradeDNSResolverService` and maps validation failures to `common.RetInfo`.
 
 - [x] Add `AppConfig.DNSResolver` and load the rendered `dns_resolver` block from `trade/config/app.yaml`; a missing/disabled block keeps the resolver capability disabled without changing trading startup.
-- [x] Construct the resolver from the rendered Trade config in Trade bootstrap; do not make the Trade process locate or parse `custom.toml`.
+- [x] Construct the resolver from the rendered Trade config in Trade bootstrap; do not make the Trade process locate or parse `moox.toml`.
 - [x] Pass the resolver server to `rpc.RegisterAll`.
 - [x] Preserve the existing Trade `/readyz` behavior when DNS resolution is temporarily unavailable; DNS is an auxiliary capability and must expose failure through metrics/logs rather than make the trading process unhealthy.
 - [x] Log only domain, result count, probe latency summary, duration, and error category; never log account credentials or service secrets.
@@ -291,33 +291,33 @@ moox-cli setup render-runtime-config \
 - [x] Preserve `BuildManagedEnvironment`, `MOOX_MARKET_FETCH_DNS_HASH`, and CloudNode patch idempotency. A route hash change is the only reason to submit new environment values.
 - [x] Test startup with Trade success, Trade timeout, local fallback, partial domains, stale response, empty response, unchanged hash, changed hash, concurrent timer calls, and cancellation.
 
-### Task 7: Render custom.toml Resolver Settings into Trade and Collector Runtime
+### Task 7: Render moox.toml Resolver Settings into Trade and Collector Runtime
 
 **Files:**
 - Modify: `modules/cli/internal/setup/config/config.go`
 - Create/Modify: `modules/cli/internal/setup/config/runtime_config.go`
 - Modify: `modules/cli/internal/command/setup.go`
 - Modify: `modules/cli/internal/command/collector.go`
-- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
 - Modify: `modules/collector/config/app.yaml`
 - Modify: `modules/collector/internal/bootstrap/config.go`
 - Modify: `modules/trade/config/app.yaml`
 - Modify: `modules/trade/internal/config/app.go`
 - Test: `modules/cli/internal/command/collector_test.go`
 - Test: `modules/cli/internal/setup/config/trade_runtime_test.go`
-- Test: `scripts/tests/contract/test-deploy-moox-collector-dns-resolver.sh`
+- Test: `scripts/test/contract/test-deploy-moox-collector-dns-resolver.sh`
 
 **Interfaces:**
-- `moox-cli setup render-runtime-config` loads one `custom.toml` snapshot and invokes the Trade/Collector renderers; each renderer extracts only its owned resolver fields and merges them into the `dns_resolver` YAML node.
+- `moox-cli setup render-runtime-config` loads one `moox.toml` snapshot and invokes the Trade/Collector renderers; each renderer extracts only its owned resolver fields and merges them into the `dns_resolver` YAML node.
 - `func RenderTradeDNSResolverConfig(snapshot *setupconfig.Snapshot, existing []byte) ([]byte, error)` extracts only the Trade-owned resolver fields and merges them into the `dns_resolver` YAML node.
 - `func RenderCollectorDNSResolverConfig(snapshot *setupconfig.Snapshot, existing []byte) ([]byte, error)` extracts the Collector transport/refresh subset and derives the target from `other_hosts[trade_node]`.
 - Deployment invokes the same CLI command rather than parsing TOML in Shell, and transports the resulting Trade/Collector files together. `MOOX_COLLECTOR_DNS_RESOLVER_*` is derived from the same `dns_resolver` manifest snapshot and the `other_hosts` record named `compute-1`.
-- The Trade target receives a rendered `config/app.yaml`; it never reads `custom.toml` and never receives SSH/cloud/Gateway secrets through this path.
+- The Trade target receives a rendered `config/app.yaml`; it never reads `moox.toml` and never receives SSH/cloud/Gateway secrets through this path.
 
 - [x] Derive `ip://43.132.204.177:11003` from the configured `compute-1` host address; do not hardcode the address in Go source or SCF package code.
-- [x] Implement `moox-cli setup render-runtime-config` with required `--file` and optional `--trade-output`/`--collector-output` paths. It must load `custom.toml` once, render both outputs from the same snapshot, and reject a request that provides neither output.
-- [x] During `moox-cli` setup/deploy, render the sanitized Trade `dns_resolver` block atomically into the target Trade `config/app.yaml`; preserve all unrelated YAML nodes and file permissions. Do not mutate the repository source file `modules/trade/config/app.yaml` as a side effect of parsing `custom.toml`.
-- [x] Call the single render command from the existing setup/deploy stage after the `custom.toml` snapshot is loaded, and pass the same rendered bytes to local and remote deployment paths; do not add a second independent TOML parser in the shell script.
+- [x] Implement `moox-cli setup render-runtime-config` with required `--file` and optional `--trade-output`/`--collector-output` paths. It must load `moox.toml` once, render both outputs from the same snapshot, and reject a request that provides neither output.
+- [x] During `moox-cli` setup/deploy, render the sanitized Trade `dns_resolver` block atomically into the target Trade `config/app.yaml`; preserve all unrelated YAML nodes and file permissions. Do not mutate the repository source file `modules/trade/config/app.yaml` as a side effect of parsing `moox.toml`.
+- [x] Call the single render command from the existing setup/deploy stage after the `moox.toml` snapshot is loaded, and pass the same rendered bytes to local and remote deployment paths; do not add a second independent TOML parser in the shell script.
 - [x] Render Trade fields `enabled`, `domains`, `lookup_timeout_ms`, `probe_timeout_ms`, `probe_port`, `cache_ttl_seconds`, and `max_ips_per_domain`; keep `trade_node`, `refresh_interval_seconds`, and Collector `request_timeout_ms` out of the Trade block because they belong to deployment/Collector orchestration.
 - [x] Render the Collector subset from the same snapshot: `enabled`, `domains`, `target`, `node_id`, `refresh_interval`, `request_timeout`, and `cache_ttl`. Derive `target` with `net.JoinHostPort` from the selected `other_hosts` address and add the `ip://` scheme; never hardcode `43.132.204.177` in the renderer.
 - [x] When the section is absent or disabled, render `enabled: false` (or remove only the generated resolver node) so a previous enabled resolver cannot survive an explicit disable. Never delete unrelated Trade configuration.
@@ -325,8 +325,8 @@ moox-cli setup render-runtime-config \
 - [x] Keep local development defaults disabled or local-DNS-only when no `dns_resolver` section is present.
 - [x] Ensure remote deployment transports the rendered Trade app config and Collector resolver target/node/timeout/enabled values just like the existing Factor worker/read configuration; local and remote deployment must behave identically.
 - [x] Ensure remote deployment transports the rendered Trade app config and Collector resolver environment together, before restarting Trade/Collector; a failed render must abort before any service restart.
-- [x] Validate that resolver target is not loopback when enabled and that the target host matches the selected custom.toml host.
-- [x] Add tests that parse `custom.toml`, render Trade YAML, preserve unrelated `database/admin/eventbus/runtime` nodes, replace stale resolver settings on re-render, and prove no SSH/cloud/Gateway credentials are present in the rendered Trade block.
+- [x] Validate that resolver target is not loopback when enabled and that the target host matches the selected moox.toml host.
+- [x] Add tests that parse `moox.toml`, render Trade YAML, preserve unrelated `database/admin/eventbus/runtime` nodes, replace stale resolver settings on re-render, and prove no SSH/cloud/Gateway credentials are present in the rendered Trade block.
 - [x] Add a contract test checking the rendered Collector environment contains `compute-1` and `ip://43.132.204.177:11003`, and the staged Trade `config/app.yaml` contains the same domain list/timeouts while no credentials are printed or copied into SCF environments.
 - [x] Add a preserve/overlay assertion that the Collector-only deployment does not rewrite Trade secrets or unrelated service environments.
 
@@ -358,7 +358,7 @@ moox-cli setup render-runtime-config \
 - [x] Replace the statement that Collector always resolves with the host resolver by the source model: Trade Resolver -> Collector snapshot, with local fallback.
 - [x] Document that `compute-1 (43.132.204.177)` is the configured single Resolver node, not a 46-node Resolver fleet.
 - [x] Document `ResolveDomains`, response-level unresolved domains, per-IP TCP probe latency, allowed domains, five-minute refresh, last-known-good behavior, four-IP cap, and Gateway authentication.
-- [x] Document that `custom.toml` is parsed by `moox-cli`; Trade receives only the rendered `dns_resolver` YAML subset and must not read the full TOML directly.
+- [x] Document that `moox.toml` is parsed by `moox-cli`; Trade receives only the rendered `dns_resolver` YAML subset and must not read the full TOML directly.
 - [x] Document that DNS success and HTTPS reachability are separate checks; a returned IP must still pass an SCF egress probe.
 - [x] Document rollback: set resolver source to local, keep current SCF route snapshot, then redeploy Collector environment.
 - [x] Remove or explicitly mark the old unused `dnsproxy` configuration in `modules/collector/configs/config.yaml`; there must be one effective DNS configuration path.
@@ -368,7 +368,7 @@ moox-cli setup render-runtime-config \
 **Files:**
 - Test: `modules/trade/test/resolve_domains_e2e_test.go`
 - Test: `modules/collector/test/trade_dns_scf_environment_e2e_test.go`
-- Create: `scripts/tests/e2e/test-trade-dns-collector-scf-e2e.sh`
+- Create: `scripts/test/e2e/test-trade-dns-collector-scf-e2e.sh`
 
 - [x] Run local protocol/core tests (all listed module tests pass; the repository-level `make proto-check` remains open because its generator hangs):
 
@@ -381,17 +381,17 @@ cd modules/collector && go test -race ./internal/dnsresolver ./internal/dnscache
 - [x] Run contract checks:
 
 ```bash
-bash scripts/tests/contract/test-trade-dns-resolver-contract.sh
-bash scripts/tests/contract/test-deploy-moox-collector-dns-resolver.sh
+bash scripts/test/contract/test-trade-dns-resolver-contract.sh
+bash scripts/test/contract/test-deploy-moox-collector-dns-resolver.sh
 git diff --check
 ```
 
-- [x] Render and inspect the target Trade `config/app.yaml`; verify it contains the expected sanitized resolver fields and no custom.toml credentials. Deploy/restart Trade on `compute-1` at `43.132.204.177`; verify `ResolveDomains(["fapi.binance.com"])` returns at least one valid IP with a positive TCP probe latency when the endpoint is reachable.
+- [x] Render and inspect the target Trade `config/app.yaml`; verify it contains the expected sanitized resolver fields and no moox.toml credentials. Deploy/restart Trade on `compute-1` at `43.132.204.177`; verify `ResolveDomains(["fapi.binance.com"])` returns at least one valid IP with a positive TCP probe latency when the endpoint is reachable.
 - [x] From the control Collector, call the RPC through Gateway using target node `compute-1`; verify the request succeeds without exposing Trade's native port.
 - [x] Trigger one Collector DNS refresh and inspect every active SCF Timer environment. Confirm the same route hash and `fapi.binance.com` IP list are present.
 - [x] Run the real SCF egress probe and record separately: DNS route applied, TCP/443 connection, HTTPS `/fapi/v1/ping`, and K-line API response.
 - [x] If Trade DNS succeeds but all Trade-side TCP probes or SCF TCP/443 still time out, stop the rollout and report the remaining network/egress restriction; do not mark the Resolver implementation as fixing Binance connectivity.
-- [ ] After successful egress, run one perpetual K-line batch and verify Storage rows, `DatasetPeriodCollected`, and the next `perpetual_kline_1h` readiness state (the production Timer functions assigned in ap-shanghai/ap-guangzhou still time out at `fapi.binance.com`; a Singapore catch-up invocation succeeded at the function level but did not produce the required Timer/readiness evidence, so this item remains open).
+- [ ] After successful egress, run one perpetual K-line batch and verify Storage rows, `DatasetPeriodCollected`, and the next `dataset_perpetual_kline_1h` readiness state (the production Timer functions assigned in ap-shanghai/ap-guangzhou still time out at `fapi.binance.com`; a Singapore catch-up invocation succeeded at the function level but did not produce the required Timer/readiness evidence, so this item remains open).
 - [x] Test failure recovery by stopping/unreachable Trade: Collector must retain the previous route hash, SCF must continue using the last snapshot, and no empty environment patch may be submitted.
 - [x] Test rollback to local mode and verify the old Collector-only DNS path remains functional.
 
@@ -403,18 +403,18 @@ git diff --check
 
 - Trade `ResolveDomains` 已在 `compute-1 (43.132.204.177)` 的 `127.0.0.1:11203` 启动，Gateway 在 `0.0.0.0:11003` 提供 `compute-1` 路由；Collector 使用 Gateway HMAC 调用，不直连 Trade 原生端口。
 - Collector 已部署到 control，Trade/Gateway 已部署到 compute-1；重启后 control 全量服务、compute-1 Trade/Gateway 均保持运行。部署后二进制 hash 已与本地 Linux/amd64 构建产物核对。
-- 本地验证通过：Trade、Collector、CLI、Admin 相关 race/focused tests，DNS resolver 两个合同脚本，`bash -n scripts/deploy-moox.sh` 和 `git diff --check`。
+- 本地验证通过：Trade、Collector、CLI、Admin 相关 race/focused tests，DNS resolver 两个合同脚本，`bash -n scripts/deploy/deploy-moox.sh` 和 `git diff --check`。
 - 真实生产 E2E 已通过：`TestResolveDomainsProductionE2E`、`TestTradeDNSCollectorEnvironmentProductionE2E`。CloudNode 数据库回读显示 44 个 active timer 均有非空 DNS 路由；脚本允许短暂滚动窗口并轮询，最终要求 44 个 active timer 收敛到同一个 DNS hash，本次已收敛。
 - 最近一次线上复验（当前 Collector 二进制 `0239f333589803f6a5cef407ff4405655f3a722661530886fad8b1183e7c45f0`）再次通过：Trade/Collector 两个 production E2E 均通过，重启 control Collector 后先从滚动中的多 hash 收敛到 `deployed=44 enabled=44 populated=44 distinct=1`，最终 live Collector health 的 managed hash 为 `086914537650d399`。脚本把本轮本地 RPC hash作为诊断，同时从重启后 Collector health 读取同一进程的 managed hash作为传播目标，并逐节点比较，避免 DNS 探测时延抖动导致假失败或旧统一 hash 假通过；health 还必须报告 `source=trade`、域名数量为3且无错误，确保验证的是 Trade 到 live Collector 链路；缺失/重发布中的运行时字段不会把 Timer 从验收分母中静默排除，只有明确 provider readback disabled 的节点才排除。由于 CloudNode 的 44 节点异步批量更新可能超过三分钟，回读窗口扩为最多六分钟。
 - Collector health 现在同时暴露 coordinator 诊断 hash 与 CloudNode/SCF 使用的 `managed_hash`；生产脚本读取后者，避免把包含探测延迟元数据的内部 hash误当作环境变量 hash。
 - 最新持久化版本 Collector 二进制 `0239f333589803f6a5cef407ff4405655f3a722661530886fad8b1183e7c45f0` 已部署到 control。动态 E2E 随后通过，44/44 Timer 收敛到 `086914537650d399`；Collector 重启后的生产健康检查也确认快照文件权限为 `0600`。
-- 追加验收：生产 `ap-shanghai-9`（30 个 perpetual 标的）和 `ap-guangzhou-8`（14 个）直接 Timer 调用均返回 `fapi.binance.com` 请求超时；`perpetual_kline_1h` 的 `16:00Z` 与 `15:00Z` 周期仍为 `waiting`、284 个 subject pending。Singapore 函数的单标的 perpetual catch-up 调用返回 `succeeded`，但它不是 readiness 任务且未形成 `DatasetPeriodCollected`，不能替代完整 Timer 验收。为避免污染现网，临时 Singapore 环境 patch 已成功回滚，节点恢复原 spot assignment、Timer enabled 和 assignment hash。
+- 追加验收：生产 `ap-shanghai-9`（30 个 perpetual 标的）和 `ap-guangzhou-8`（14 个）直接 Timer 调用均返回 `fapi.binance.com` 请求超时；`dataset_perpetual_kline_1h` 的 `16:00Z` 与 `15:00Z` 周期仍为 `waiting`、284 个 subject pending。Singapore 函数的单标的 perpetual catch-up 调用返回 `succeeded`，但它不是 readiness 任务且未形成 `DatasetPeriodCollected`，不能替代完整 Timer 验收。为避免污染现网，临时 Singapore 环境 patch 已成功回滚，节点恢复原 spot assignment、Timer enabled 和 assignment hash。
 - `make proto-check` 的阻塞已在干净临时 worktree 复现为 `trpc-open create moox_common.proto` 长时间无输出；进程已清理，未留下额外 worktree。该工具链阻塞与生成代码/模块测试结果分开记录。
 - 2026-08-12 重新发布：本地构建 `linux/amd64` Trade、Collector、Admin server/CLI 二进制并通过 Trade/Collector/Admin focused race tests。Trade 已部署到 `43.132.204.177:/home/ubuntu/moox/trade-move`，Collector/Admin 已部署到 `106.53.107.122:/home/ubuntu/moox/prod`；旧二进制均保留为 `*.before-dns-20260812`，服务重启后 ready/status 均正常。
 - 本次线上二进制摘要：Trade `6b7ee25480da93b1f1c4db4c279ce92a1749b570d016ecb1192d1accc405dd28`；Collector `76a2715951185feeadf118371eadfe9836215a1d3b9bd6cf0e62459c57ca1f8c`；Admin `151a095a62e4506cd5f34dd40e28110f25934ef40753029b6a93eb8081fafac3`。生产 Trade `ResolveDomains(fapi.binance.com)` 通过，Collector DNS 生产 E2E 通过，CloudNode 回读 `44/44` active Timer 已启用、有 DNS 路由且最终统一为 live managed hash `17f4770982a7572e`。
 - 本轮补跑本地验证通过：Trade resolver/RPC/bootstrap/config、Collector dnsresolver/dnscache/bootstrap/marketfetch/httpclient（均 `go test -race`），CLI setup/command、Admin CLI/sysdeploy，两个 DNS 合同脚本、部署脚本语法检查和 `git diff --check` 均通过。`make proto-check` 的生成器在 dirty 与 clean 临时 worktree 都卡在 `trpc-open create moox_common.proto`，因此不误报为通过。
 - 故障恢复复验（最新二进制）已完成：停止 compute-1 Trade 后重启 Collector，health 保留 `managed_hash=086914537650d399`、3 个路由并报告 `trade_rpc`，没有清空快照或提交空环境；恢复 Trade 后重启 Collector，health 回到 `source=trade`、`managed_hash=b8fdd6f477bbcb6f`、无错误。
-- `perpetual_kline_1h` 的生产批次未标记为成功：Collector 数据库中对应任务的最近结果仍记录 `fapi.binance.com` 请求超时（`network_error`/`http_5xx`），当前周期 readiness 为 waiting/degraded。该结果说明部分 SCF 地域的 Binance 出口仍受限，不能把 DNS Resolver 链路验收误写成 K 线批次已恢复；待云端出口策略/地域权限处理后再补跑该项。
+- `dataset_perpetual_kline_1h` 的生产批次未标记为成功：Collector 数据库中对应任务的最近结果仍记录 `fapi.binance.com` 请求超时（`network_error`/`http_5xx`），当前周期 readiness 为 waiting/degraded。该结果说明部分 SCF 地域的 Binance 出口仍受限，不能把 DNS Resolver 链路验收误写成 K 线批次已恢复；待云端出口策略/地域权限处理后再补跑该项。
 - 为验证该阻断，本轮通过 CloudNode 内部受控 `InvokeFunction` 手工触发了 `ap-shanghai-9` 和 `ap-guangzhou-8` 的永续 Timer 批次；两个批次均被 SCF 接受，但分别返回 30/14 个 `network_error`，错误均为 `https://fapi.binance.com/fapi/v1/klines` 请求超时。触发后 Collector readiness 最新的 `16:00Z`、`15:00Z` 周期仍为 `waiting`，每周期 284 个 item 全部 `pending`；未产生可核验的 Storage 行或 `DatasetPeriodCollected`，因此该验收项继续保持未完成。
 - 生产 E2E 还覆盖了返回 IP 的公网校验、正 TCP 延迟、去重、最多四个候选和延迟升序；expected hash 测试输入与 live Collector 一样合并 Trade、legacy DNS 和 Collector resolver 三组域名，避免自定义域集合时产生假失败。
 - compute-1 出口分层探测已通过：`fapi.binance.com` DNS 返回、TCP/443 建连、HTTPS `/fapi/v1/ping` 返回 `{}`、K-line API 返回最近一根数据；这只证明 compute-1 出口，不等同于所有 SCF 地域出口。
@@ -431,7 +431,7 @@ git diff --check
 - `make proto` 已成功生成相关 Trade 文件；后续 `make proto-check` 在独立临时 worktree 仍卡在 `trpc-open create moox_common.proto`，因此不将仓库目标误报为通过。Trade `proto/tradegen` 安全测试已单独通过。
 
 - `ResolveDomains` accepts one or more configured domains through the authenticated Trade RPC on `compute-1 (43.132.204.177)` and returns normalized IPv4 results with Trade-side TCP probe latency; unresolved domains are reported at response level.
-- `moox-cli` parses `custom.toml` once and renders the sanitized Trade `dns_resolver` YAML block plus Collector transport/refresh settings; Trade never parses the full TOML.
+- `moox-cli` parses `moox.toml` once and renders the sanitized Trade `dns_resolver` YAML block plus Collector transport/refresh settings; Trade never parses the full TOML.
 - Collector requests the Resolver once per configured interval, not once per SCF function or per domain.
 - The returned routes are propagated through the existing CloudNode Environment Patch and appear in all relevant SCF Timer environments under the existing DNS environment variables.
 - A Trade RPC timeout, partial DNS failure, or Collector restart never erases the last good SCF route.
@@ -441,7 +441,7 @@ git diff --check
 
 ## Self-Review Checklist
 
-- The single configured resolver host is `compute-1`, mapped from `custom.toml` to `43.132.204.177`; no 46-machine fan-out remains in the plan.
+- The single configured resolver host is `compute-1`, mapped from `moox.toml` to `43.132.204.177`; no 46-machine fan-out remains in the plan.
 - Trade receives only the rendered resolver subset; `trade_node`, refresh orchestration, and Gateway transport remain deployment/Collector concerns.
 - No per-domain `resolved_at_unix_ms` or `error` remains in the protocol; latency is an active TCP probe measurement, while Collector receipt time is the snapshot timestamp.
 - The plan uses the existing DNS environment and CloudNode patch path rather than introducing a second SCF protocol.

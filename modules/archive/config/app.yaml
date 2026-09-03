@@ -3,9 +3,9 @@ archive:
   state_dir: ../data/archive-state
   device_id: parquet-local
   sources:
-    stock_cn: {datasets: [stock_cn_kline, stock_cn_index_kline, stock_cn_convertible_bond_kline]}
-    stock_us: {datasets: [equity_kline, etf_kline, index_kline]}
-    crypto: {datasets: [spot_kline_1h, perpetual_kline_1h]}
+    stockcn: {datasets: [dataset_stockcn_equity_kline, dataset_stockcn_index_kline, dataset_stockcn_bond_kline]}
+    stockus: {datasets: [equity_kline, etf_kline, index_kline]}
+    crypto: {datasets: [dataset_spot_kline_1h, dataset_perpetual_kline_1h]}
   eventbus:
     urls: [nats://127.0.0.1:4222]
     credential_file: ~/.config/moox/eventbus/archive-eventbus.yaml

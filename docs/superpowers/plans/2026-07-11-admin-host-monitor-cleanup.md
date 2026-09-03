@@ -336,7 +336,7 @@ Run:
 go test -race -count=1 ./modules/admin/... ./modules/monitor/...
 pnpm -C web check:host-monitor
 pnpm -C web build:prod
-./scripts/check-module-boundaries.sh
+./scripts/check/check-module-boundaries.sh
 git diff --check
 ```
 

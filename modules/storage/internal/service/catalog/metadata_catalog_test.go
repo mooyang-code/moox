@@ -236,7 +236,7 @@ func TestRegisterArchiveFileSucceedsWhenCachePublicationIsUnavailable(t *testing
 
 	rsp, err := service.RegisterArchiveFile(context.Background(), &pb.RegisterArchiveFileReq{
 		ArchiveFile: &pb.ArchiveFile{
-			SpaceId: "crypto", DatasetId: "spot_kline_1h", DeviceId: "parquet-local", FileUri: "file:///tmp/spot.parquet",
+			SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", DeviceId: "parquet-local", FileUri: "file:///tmp/spot.parquet",
 		},
 	})
 	require.NoError(t, err)
@@ -356,8 +356,8 @@ func TestReservedTimeSeriesSystemColumnNamesAreRejected(t *testing.T) {
 		})
 		t.Run("view_column/"+name, func(t *testing.T) {
 			column := &pb.ViewColumn{
-				SpaceId:    "moox_system",
-				ViewId:     "view",
+				SpaceId:    "mooxsys",
+				ViewId:     "view_test",
 				ColumnName: name,
 				OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION,
 				Attributes: map[string]string{"display_name": name},
@@ -375,7 +375,7 @@ func TestCreateAndUpdateViewRejectEmbeddedReservedColumns(t *testing.T) {
 	newView := func() *pb.View {
 		return &pb.View{
 			SpaceId:          "space",
-			ViewId:           "view",
+			ViewId:           "view_test",
 			Name:             "测试视图",
 			PrimaryDatasetId: "dataset",
 			Columns: []*pb.ViewColumn{

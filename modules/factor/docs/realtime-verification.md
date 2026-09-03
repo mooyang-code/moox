@@ -39,7 +39,7 @@ TaskRunner、独立 View read pool 和 PythonWorkerPool；StorageIO fake 用于�
 
 ```bash
 MOOX_DEPLOY_ROOT=/absolute/path/to/running/moox \
-  ./scripts/test-factor-storage-e2e.sh
+  ./scripts/test/e2e/test-factor-storage-e2e.sh
 ```
 
 脚本要求 Gateway、Metadata/Primary、View、DataNode 和 Factor 全部运行，缺服务或凭证

@@ -9,7 +9,7 @@ import (
 )
 
 func TestCalendarHonorsHolidayMiddayAndHorizon(t *testing.T) {
-	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
+	calendar, err := LoadCalendar("../../../config/markets/stockcn/calendar.yaml")
 	require.NoError(t, err)
 	require.NoError(t, calendar.ValidateHorizon(time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC), 30))
 
@@ -24,7 +24,7 @@ func TestCalendarHonorsHolidayMiddayAndHorizon(t *testing.T) {
 }
 
 func TestCalendarContainsEveryOfficial2026WeekdayClosure(t *testing.T) {
-	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
+	calendar, err := LoadCalendar("../../../config/markets/stockcn/calendar.yaml")
 	require.NoError(t, err)
 	location := calendar.Location()
 	for _, date := range []string{
@@ -43,7 +43,7 @@ func TestCalendarContainsEveryOfficial2026WeekdayClosure(t *testing.T) {
 }
 
 func TestCalendarHorizonDistinguishesWarningFromExpired(t *testing.T) {
-	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
+	calendar, err := LoadCalendar("../../../config/markets/stockcn/calendar.yaml")
 	require.NoError(t, err)
 	location := calendar.Location()
 
@@ -68,7 +68,7 @@ func TestCalendarHorizonWarningIsLimitedToOncePerLocalDay(t *testing.T) {
 }
 
 func TestCalendarFailsClosedOutsideConfiguredCoverage(t *testing.T) {
-	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
+	calendar, err := LoadCalendar("../../../config/markets/stockcn/calendar.yaml")
 	require.NoError(t, err)
 	location := calendar.Location()
 	require.False(t, calendar.IsOpen(time.Date(2025, 1, 1, 10, 0, 0, 0, location)))
@@ -76,7 +76,7 @@ func TestCalendarFailsClosedOutsideConfiguredCoverage(t *testing.T) {
 }
 
 func TestCalendarTradingDaysAndExpectedBars(t *testing.T) {
-	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
+	calendar, err := LoadCalendar("../../../config/markets/stockcn/calendar.yaml")
 	require.NoError(t, err)
 
 	location, err := time.LoadLocation("Asia/Shanghai")
@@ -99,7 +99,7 @@ func TestCalendarTradingDaysAndExpectedBars(t *testing.T) {
 }
 
 func TestCalendarLookbackCountsTradingDays(t *testing.T) {
-	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
+	calendar, err := LoadCalendar("../../../config/markets/stockcn/calendar.yaml")
 	require.NoError(t, err)
 
 	start, err := calendar.LookbackStart(time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), 2)
@@ -108,7 +108,7 @@ func TestCalendarLookbackCountsTradingDays(t *testing.T) {
 }
 
 func TestCalendarLatestClosedMinuteWalksBackAcrossClosedDays(t *testing.T) {
-	calendar, err := LoadCalendar("../../../config/markets/stock_cn/calendar.yaml")
+	calendar, err := LoadCalendar("../../../config/markets/stockcn/calendar.yaml")
 	require.NoError(t, err)
 
 	start, end, err := calendar.LatestClosedMinute(time.Date(2026, 8, 30, 4, 0, 0, 0, time.UTC), 5*time.Second)

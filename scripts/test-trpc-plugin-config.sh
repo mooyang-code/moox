@@ -1,1 +1,0 @@
-tests/contract/test-trpc-plugin-config.sh

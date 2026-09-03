@@ -10,10 +10,10 @@ func validManifestYAML() []byte {
 	return []byte(`api_version: moox.strategy/v2
 kind: coin_selection
 input:
-  source_view_id: crypto_spot_kline_1h
+  source_view_id: view_crypto_spot_kline_1h
   data_frequency: 1h
   factors:
-    - factor_id: bias_20
+    - factor_id: Bias
 instrument_pool:
   exchanges: [binance]
   markets: [spot]
@@ -26,12 +26,12 @@ readiness:
 long:
   side_weight: "1"
   scores:
-    - factor_id: bias_20
+    - factor_id: Bias
       direction: ascending
       weight: "1"
   filters:
     - phase: pre
-      factor_id: bias_20
+      factor_id: Bias
       value_type: value
       op: gt
       value: "0"
@@ -65,7 +65,7 @@ func TestParseManifestRejectsPureSpotShort(t *testing.T) {
 	require.NoError(t, err)
 	manifest.Short = &Side{
 		SideWeight: "1",
-		Scores:     []ScoreRule{{FactorID: "bias_20", Direction: "descending", Weight: "1"}},
+		Scores:     []ScoreRule{{FactorID: "Bias", Direction: "descending", Weight: "1"}},
 		Selection:  SelectionRule{Mode: "count", Value: "1"},
 	}
 	manifest.InstrumentPool.Markets = []string{"spot"}

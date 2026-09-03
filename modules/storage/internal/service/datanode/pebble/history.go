@@ -377,7 +377,7 @@ func (s *Store) backfillHistoryIndex(cacheKey, spaceID, datasetID string) {
 	// System metrics is a low-priority derived index. Defer its first full
 	// materialization so business datasets (notably K-line) can finish their
 	// initial View rebuild without competing with the largest metrics scan.
-	if spaceID == "moox_system" && datasetID == "moox_service_metrics" {
+	if spaceID == "mooxsys" && datasetID == "dataset_mooxsys_service_metrics" {
 		timer := time.NewTimer(10 * time.Minute)
 		defer timer.Stop()
 		ctx := s.historyContext()

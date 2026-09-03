@@ -452,9 +452,9 @@ func viewMaintenancePriority(view *pb.View) int {
 		return 100
 	}
 	switch view.GetViewId() {
-	case "binance_spot_kline_1m_view":
+	case "view_crypto_spot_kline_1m":
 		return 0
-	case "binance_spot_kline_1m_factor_v":
+	case "view_binance_spot_kline_1m_factor_v":
 		return 10
 	default:
 		return 50

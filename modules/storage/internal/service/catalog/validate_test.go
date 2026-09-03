@@ -9,28 +9,29 @@ import (
 )
 
 func TestValidateDatasetIDAllowsFiftyCharacters(t *testing.T) {
-	require.NoError(t, validateDatasetID("a"+strings.Repeat("b", 49)))
-	require.Error(t, validateDatasetID("a"+strings.Repeat("b", 50)))
+	require.NoError(t, validateDatasetID("dataset_a"+strings.Repeat("b", 41)))
+	require.Error(t, validateDatasetID("dataset_a"+strings.Repeat("b", 42)))
+	require.ErrorContains(t, validateDatasetID("a"+strings.Repeat("b", 49)), "must start with dataset_")
 }
 
 func TestValidateViewIDRemainsThirtyCharacters(t *testing.T) {
-	require.NoError(t, validateViewID("a"+strings.Repeat("b", 29)))
-	require.Error(t, validateViewID("a"+strings.Repeat("b", 30)))
+	require.NoError(t, validateViewID("view_"+"a"+strings.Repeat("b", 24)))
+	require.Error(t, validateViewID("view_"+"a"+strings.Repeat("b", 25)))
 }
 
 func TestValidateColumnDisplayNameAllowsMatchingFactorOutput(t *testing.T) {
-	require.NoError(t, validateColumnDisplayName("display_name", "crypto_market", map[string]string{
+	require.NoError(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
 		"display_name":  "bias_20",
 		"factor_output": "bias_20",
 	}, true))
-	require.Error(t, validateColumnDisplayName("display_name", "crypto_market", map[string]string{
+	require.Error(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
 		"display_name":  "bias_20",
 		"factor_output": "bias_20",
 	}, false))
-	require.Error(t, validateColumnDisplayName("display_name", "crypto_market", map[string]string{
+	require.Error(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
 		"display_name": "bias_20",
 	}, true))
-	require.Error(t, validateColumnDisplayName("display_name", "crypto_market", map[string]string{
+	require.Error(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
 		"display_name":  "ma_20",
 		"factor_output": "bias_20",
 	}, true))

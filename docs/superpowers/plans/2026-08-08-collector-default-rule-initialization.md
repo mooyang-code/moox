@@ -21,21 +21,21 @@
 
 ## Built-In Rule Contract
 
-`examples/setup/default/collector-rules.yaml` 固定包含以下五条规则：
+`config/setup/collector-rules.yaml` 固定包含以下五条规则：
 
 | rule_id | data_type | provider | market_type | target Dataset | frequency |
 | --- | --- | --- | --- | --- | --- |
-| `builtin-binance-spot-symbols-1h` | `symbol` | `binance` | `spot` | `binance_spot_symbols` | `1h` |
-| `builtin-binance-swap-symbols-1h` | `symbol` | `binance` | `swap` | `binance_swap_symbols` | `1h` |
-| `builtin-binance-spot-kline-1m` | `kline` | `binance` | `spot` | `binance_spot_kline_1m` | `1m` |
-| `builtin-binance-spot-kline-1h` | `kline` | `binance` | `spot` | `spot_kline_1h` | `1h` |
-| `builtin-binance-swap-kline-1h` | `kline` | `binance` | `swap` | `perpetual_kline_1h` | `1h` |
+| `builtin-binance-spot-symbols-1h` | `symbol` | `binance` | `spot` | `dataset_binance_spot_symbols` | `1h` |
+| `builtin-binance-swap-symbols-1h` | `symbol` | `binance` | `swap` | `dataset_binance_swap_symbols` | `1h` |
+| `builtin-binance-spot-kline-1m` | `kline` | `binance` | `spot` | `dataset_binance_spot_kline_1m` | `1m` |
+| `builtin-binance-spot-kline-1h` | `kline` | `binance` | `spot` | `dataset_spot_kline_1h` | `1h` |
+| `builtin-binance-swap-kline-1h` | `kline` | `binance` | `swap` | `dataset_perpetual_kline_1h` | `1h` |
 
-K 线规则分别引用 `binance_spot_symbols` 或 `binance_swap_symbols` 作为 `symbol_dataset_id`。种子中的 `collect_params` 必须是当前扁平契约：
+K 线规则分别引用 `dataset_binance_spot_symbols` 或 `dataset_binance_swap_symbols` 作为 `symbol_dataset_id`。种子中的 `collect_params` 必须是当前扁平契约：
 
 ```yaml
 rules:
-  - space_id: crypto_market
+  - space_id: crypto
     rule_id: builtin-binance-spot-kline-1m
     data_type: kline
     provider: binance
@@ -46,8 +46,8 @@ rules:
       provider: binance
       market_type: spot
       symbol_source: dataset
-      symbol_dataset_id: binance_spot_symbols
-      target_dataset_id: binance_spot_kline_1m
+      symbol_dataset_id: dataset_binance_spot_symbols
+      target_dataset_id: dataset_binance_spot_kline_1m
       frequency: 1m
 ```
 
@@ -55,14 +55,14 @@ rules:
 
 | Path | Responsibility |
 | --- | --- |
-| `examples/setup/default/collector-rules.yaml` | Stable built-in Collector Rule definitions |
-| `examples/setup/default/metadata.yaml` | Add the Binance swap Symbol Dataset and required market attributes |
+| `config/setup/collector-rules.yaml` | Stable built-in Collector Rule definitions |
+| `config/setup/metadata.yaml` | Add the Binance swap Symbol Dataset and required market attributes |
 | `modules/collector/internal/ruleseed/seed.go` | Parse, validate, and insert only missing default rules |
 | `modules/collector/internal/ruleseed/seed_test.go` | Seed contract, validation, idempotence, and preserve-user-change tests |
 | `modules/collector/cmd/cli/init_schema.go` | Add `--seed-file` and report created/unchanged counts |
 | `modules/collector/cmd/cli/init_schema_test.go` | CLI init seed behavior and JSON output |
-| `scripts/deploy-moox.sh` | Pass the packaged default seed to Collector init |
-| `scripts/tests/contract/test-deploy-moox-collector-seed.sh` | Prove bundle packaging and init wiring |
+| `scripts/deploy/deploy-moox.sh` | Pass the packaged default seed to Collector init |
+| `scripts/test/contract/test-deploy-moox-collector-seed.sh` | Prove bundle packaging and init wiring |
 | `modules/cli/internal/command/default_setup_bundle_test.go` | Verify the complete default Metadata contract |
 | `modules/cli/internal/command/metadata_quant_seed_test.go` | Verify new Dataset and frequency/market attributes |
 | `web/src/views/collector/collector-rules/collector-rule-params.ts` | Canonical request/list normalization helpers |
@@ -75,18 +75,18 @@ rules:
 ### Task 1: Add Complete Default Metadata Dependencies
 
 **Files:**
-- Modify: `examples/setup/default/metadata.yaml`
+- Modify: `config/setup/metadata.yaml`
 - Modify: `modules/cli/internal/command/default_setup_bundle_test.go`
 - Modify: `modules/cli/internal/command/metadata_quant_seed_test.go`
 
 - [ ] **Step 1: Write failing default-bundle assertions**
 
-Add assertions that the default Bundle contains `crypto_market/binance_swap_symbols`, that both Symbol Datasets are record Datasets with the correct `attributes.market_type`, and that the shared hourly targets expose `spot` or `swap` market attributes and frequency `1H`.
+Add assertions that the default Bundle contains `crypto/dataset_binance_swap_symbols`, that both Symbol Datasets are record Datasets with the correct `attributes.market_type`, and that the shared hourly targets expose `spot` or `swap` market attributes and frequency `1H`.
 
 ```go
-assertDataset(t, seed, "crypto_market", "binance_swap_symbols", "binance", "record", "swap")
-assertDataset(t, seed, "crypto_market", "spot_kline_1h", "crypto_market", "time_series", "spot")
-assertDataset(t, seed, "crypto_market", "perpetual_kline_1h", "crypto_market", "time_series", "swap")
+assertDataset(t, seed, "crypto", "dataset_binance_swap_symbols", "binance", "record", "swap")
+assertDataset(t, seed, "crypto", "dataset_spot_kline_1h", "crypto", "time_series", "spot")
+assertDataset(t, seed, "crypto", "dataset_perpetual_kline_1h", "crypto", "time_series", "swap")
 ```
 
 - [ ] **Step 2: Run tests and verify the missing Dataset/attributes fail**
@@ -97,11 +97,11 @@ Run:
 go test -count=1 ./modules/cli/internal/command -run 'Test(DefaultSetupBundle|DefaultMetadata)'
 ```
 
-Expected: FAIL because `binance_swap_symbols` and the shared target `market_type` attributes are absent.
+Expected: FAIL because `dataset_binance_swap_symbols` and the shared target `market_type` attributes are absent.
 
 - [ ] **Step 3: Add the Dataset and columns**
 
-Add `binance_swap_symbols` beside `binance_spot_symbols`, with `data_source_id: binance`, `data_kind: record`, `keep_duration: '0'`, and `attributes.market_type: swap`. Add the same nine Symbol columns used by the spot Dataset: `symbol`, `external_symbol`, `base_asset`, `quote_asset`, `status`, `min_qty`, `max_qty`, `tick_size`, and `lot_size`; preserve each column's existing type/required semantics. Add `attributes.market_type: spot` to `spot_kline_1h` and `attributes.market_type: swap` to `perpetual_kline_1h`.
+Add `dataset_binance_swap_symbols` beside `dataset_binance_spot_symbols`, with `data_source_id: binance`, `data_kind: record`, `keep_duration: '0'`, and `attributes.market_type: swap`. Add the same nine Symbol columns used by the spot Dataset: `symbol`, `external_symbol`, `base_asset`, `quote_asset`, `status`, `min_qty`, `max_qty`, `tick_size`, and `lot_size`; preserve each column's existing type/required semantics. Add `attributes.market_type: spot` to `dataset_spot_kline_1h` and `attributes.market_type: swap` to `dataset_perpetual_kline_1h`.
 
 - [ ] **Step 4: Re-run the focused tests**
 
@@ -110,7 +110,7 @@ Run the Step 2 command. Expected: PASS, and the default Dataset count increases 
 - [ ] **Step 5: Commit the metadata dependency**
 
 ```bash
-git add examples/setup/default/metadata.yaml modules/cli/internal/command/default_setup_bundle_test.go modules/cli/internal/command/metadata_quant_seed_test.go
+git add config/setup/metadata.yaml modules/cli/internal/command/default_setup_bundle_test.go modules/cli/internal/command/metadata_quant_seed_test.go
 git commit -m "feat(setup): add binance swap symbol metadata"
 ```
 
@@ -119,7 +119,7 @@ git commit -m "feat(setup): add binance swap symbol metadata"
 ### Task 2: Define And Validate The Collector Rule Bundle
 
 **Files:**
-- Create: `examples/setup/default/collector-rules.yaml`
+- Create: `config/setup/collector-rules.yaml`
 - Create: `modules/collector/internal/ruleseed/seed.go`
 - Create: `modules/collector/internal/ruleseed/seed_test.go`
 
@@ -173,12 +173,12 @@ Run:
 go test -count=1 ./modules/collector/internal/ruleseed -run 'TestLoadRuleSeed|TestDefaultRuleSeed'
 ```
 
-Expected: PASS with exactly five enabled rules in `crypto_market`.
+Expected: PASS with exactly five enabled rules in `crypto`.
 
 - [ ] **Step 5: Commit the seed contract**
 
 ```bash
-git add examples/setup/default/collector-rules.yaml modules/collector/internal/ruleseed/seed.go modules/collector/internal/ruleseed/seed_test.go
+git add config/setup/collector-rules.yaml modules/collector/internal/ruleseed/seed.go modules/collector/internal/ruleseed/seed_test.go
 git commit -m "feat(collector): define built-in binance rules"
 ```
 
@@ -249,15 +249,15 @@ git commit -m "feat(collector): seed missing rules during init"
 ### Task 4: Wire The Packaged Seed Into Deployment
 
 **Files:**
-- Modify: `scripts/deploy-moox.sh`
-- Create: `scripts/tests/contract/test-deploy-moox-collector-seed.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Create: `scripts/test/contract/test-deploy-moox-collector-seed.sh`
 
 - [ ] **Step 1: Write a failing deploy contract**
 
-Assert that packaging copies `examples/setup/default/collector-rules.yaml` and generated runtime init invokes:
+Assert that packaging copies `config/setup/collector-rules.yaml` and generated runtime init invokes:
 
 ```text
-moox-collector-cli init --db-path ../data/collector/moox_collector.db --seed-file ../examples/setup/default/collector-rules.yaml
+moox-collector-cli init --db-path ../data/collector/moox_collector.db --seed-file ../config/setup/collector-rules.yaml
 ```
 
 Also assert that no deployment path uses `INSERT OR REPLACE` or deletes the Collector DB unless the caller explicitly supplied `--reset-data`.
@@ -265,7 +265,7 @@ Also assert that no deployment path uses `INSERT OR REPLACE` or deletes the Coll
 - [ ] **Step 2: Run and verify RED**
 
 ```bash
-bash scripts/tests/contract/test-deploy-moox-collector-seed.sh
+bash scripts/test/contract/test-deploy-moox-collector-seed.sh
 ```
 
 Expected: FAIL because the seed flag is not wired.
@@ -277,8 +277,8 @@ Keep schema and seed in the same CLI invocation. Quote `${ROOT}` and do not reso
 - [ ] **Step 4: Run deploy contract and syntax checks**
 
 ```bash
-bash -n scripts/deploy-moox.sh
-bash scripts/tests/contract/test-deploy-moox-collector-seed.sh
+bash -n scripts/deploy/deploy-moox.sh
+bash scripts/test/contract/test-deploy-moox-collector-seed.sh
 ```
 
 Expected: PASS.
@@ -286,7 +286,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit deployment wiring**
 
 ```bash
-git add scripts/deploy-moox.sh scripts/tests/contract/test-deploy-moox-collector-seed.sh
+git add scripts/deploy/deploy-moox.sh scripts/test/contract/test-deploy-moox-collector-seed.sh
 git commit -m "fix(deploy): initialize collector default rules"
 ```
 
@@ -304,13 +304,13 @@ git commit -m "fix(deploy): initialize collector default rules"
 Add helpers whose public TypeScript shape uses UI-friendly `exchange` only inside `CollectorRuleInput`, but emits current RPC fields:
 
 ```ts
-expect(buildCollectorRuleRequest(input, "crypto_market", "admin")).toMatchObject({
-  space_id: "crypto_market",
+expect(buildCollectorRuleRequest(input, "crypto", "admin")).toMatchObject({
+  space_id: "crypto",
   data_type: "kline",
   provider: "binance",
   market_type: "spot"
 });
-expect(buildCollectorRuleRequest(input, "crypto_market", "admin")).not.toHaveProperty("exchange");
+expect(buildCollectorRuleRequest(input, "crypto", "admin")).not.toHaveProperty("exchange");
 expect(normalizeCollectorRule({ provider: "binance" }).data_source).toBe("binance");
 ```
 
@@ -394,15 +394,15 @@ git commit -m "test(collector): cover default rule initialization"
 ```bash
 go test -race -count=1 ./modules/collector/...
 go test -count=1 ./modules/cli/internal/command
-bash scripts/tests/contract/test-deploy-moox-collector-seed.sh
-bash -n scripts/deploy-moox.sh
+bash scripts/test/contract/test-deploy-moox-collector-seed.sh
+bash -n scripts/deploy/deploy-moox.sh
 cd web && pnpm test && pnpm build:prod
 ```
 
 - [ ] **Step 2: Run repository verification**
 
 ```bash
-bash scripts/test-go-workspace.sh
+bash scripts/test/contract/test-go-workspace.sh
 make verify-pr
 ```
 
@@ -448,7 +448,7 @@ At desktop and mobile widths, confirm the five rows display provider and market 
 
 - [ ] **Step 5: Complete joint acceptance after CloudNode sync plan**
 
-After cloud nodes are imported, wait for Symbol refresh and Scheduler reconciliation. Prove TaskInstance count is non-zero, both spot and swap rules generate their expected frequencies, Timer assignments are active, and `binance_spot_kline_1m_view` continues receiving fresh rows.
+After cloud nodes are imported, wait for Symbol refresh and Scheduler reconciliation. Prove TaskInstance count is non-zero, both spot and swap rules generate their expected frequencies, Timer assignments are active, and `view_crypto_spot_kline_1m` continues receiving fresh rows.
 
 - [ ] **Step 6: Commit/push only after runtime proof**
 
@@ -458,7 +458,7 @@ Confirm local/remote branch refs and include exact test, review, deployment, bro
 
 - Five built-in rules appear after a fresh Collector DB init.
 - Re-running init is idempotent and preserves user edits.
-- `binance_swap_symbols` and shared hourly targets satisfy Collector Dataset validation.
+- `dataset_binance_swap_symbols` and shared hourly targets satisfy Collector Dataset validation.
 - Rule page never sends the obsolete `exchange` RPC field.
 - TaskInstances are Scheduler-generated, not statically seeded.
 - Deployment without reset restores rules on the current host.

@@ -63,17 +63,17 @@ func TestStorageViewRebuildLookbackPeriodsNormalizeFrequency(t *testing.T) {
 
 func TestLoadViewMaintenancePolicyRejectsUnknownFieldsAndResolvesOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "maintenance.json")
-	if err := os.WriteFile(path, []byte(`{"maintenance_check_interval":"1m","rebuild_lookback_periods":1000,"max_periods_per_series":2000,"max_view_file_bytes":1073741824,"system_monitor":{"max_periods_per_series":3000},"views":[{"space_id":"crypto","view_id":"binance_spot_kline_1m_view","rebuild_lookback_periods":500}]}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"maintenance_check_interval":"1m","rebuild_lookback_periods":1000,"max_periods_per_series":2000,"max_view_file_bytes":1073741824,"system_monitor":{"max_periods_per_series":3000},"views":[{"space_id":"crypto","view_id":"view_crypto_spot_kline_1m","rebuild_lookback_periods":500}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	policy, err := LoadViewMaintenancePolicy(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := policy.ResolvePolicy("moox_system", "host_disk_view"); got.MaxPeriodsPerSeries != 3000 {
+	if got := policy.ResolvePolicy("mooxsys", "view_mooxsys_host_disk"); got.MaxPeriodsPerSeries != 3000 {
 		t.Fatalf("system policy=%#v", got)
 	}
-	if got := policy.ResolvePolicy("crypto", "binance_spot_kline_1m_view"); got.RebuildLookbackPeriods != 500 || got.MaxPeriodsPerSeries != 2000 {
+	if got := policy.ResolvePolicy("crypto", "view_crypto_spot_kline_1m"); got.RebuildLookbackPeriods != 500 || got.MaxPeriodsPerSeries != 2000 {
 		t.Fatalf("view policy=%#v", got)
 	}
 	if err := os.WriteFile(path, []byte(`{"maintenance_check_interval":"1m","rebuild_lookback_periods":1000,"max_periods_per_series":2000,"max_view_file_bytes":1073741824,"unexpected":true}`), 0o600); err != nil {
@@ -115,7 +115,7 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 		t.Fatalf("ValidateConsumerPartitions() error = %v", err)
 	}
 	klineDatasets := partitions[0].Datasets()
-	if partitions[0].ID != "kline" || partitions[0].Durable != "storage_view_kline" || len(klineDatasets) != 1 || klineDatasets[0].SpaceID != "crypto" || klineDatasets[0].DatasetID != "binance_spot_kline_1m" {
+	if partitions[0].ID != "kline" || partitions[0].Durable != "storage_view_kline" || len(klineDatasets) != 1 || klineDatasets[0].SpaceID != "crypto" || klineDatasets[0].DatasetID != "dataset_binance_spot_kline_1m" {
 		t.Fatalf("kline partition = %+v", partitions[0])
 	}
 	if partitions[1].ID != "factor" || partitions[1].Durable != "storage_view_factor" || partitions[1].FetchBatch != 16 || partitions[1].MaxWorkers != 8 || partitions[1].MaxAckPending != 128 {
@@ -126,32 +126,32 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 	}
 	miscDatasets := partitions[3].Datasets()
 	wantStockRoutes := map[string]bool{
-		"financial_statement_metric":      false,
-		"financial_summary":               false,
-		"stock_cn_convertible_bond_kline": false,
-		"stock_cn_index_kline":            false,
-		"stock_cn_instruments":            false,
-		"stock_cn_kline":                  false,
+		"dataset_stockcn_financial_statement_metric": false,
+		"dataset_stockcn_financial_summary":          false,
+		"dataset_stockcn_bond_kline":                 false,
+		"dataset_stockcn_index_kline":                false,
+		"dataset_stockcn_instruments":                false,
+		"dataset_stockcn_equity_kline":               false,
 	}
 	for _, dataset := range miscDatasets {
-		if dataset.SpaceID == "stock_cn" {
+		if dataset.SpaceID == "stockcn" {
 			if _, ok := wantStockRoutes[dataset.DatasetID]; !ok {
-				t.Fatalf("unexpected stock_cn default route %q", dataset.DatasetID)
+				t.Fatalf("unexpected stockcn default route %q", dataset.DatasetID)
 			}
 			wantStockRoutes[dataset.DatasetID] = true
 		}
 	}
 	for datasetID, found := range wantStockRoutes {
 		if !found {
-			t.Fatalf("stock_cn default route %q is missing: %+v", datasetID, miscDatasets)
+			t.Fatalf("stockcn default route %q is missing: %+v", datasetID, miscDatasets)
 		}
 	}
 }
 
 func TestStorageViewConsumerPartitionsRejectOverlapAndInvalidLimits(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "a", Durable: "storage_view_kline", SpaceID: "crypto", DatasetIDs: []string{"binance_spot_kline_1m"}, FetchBatch: 4, MaxAckPending: 8, MaxWorkers: 1, AckWaitMS: 1000},
-		{ID: "b", Durable: "storage_view_metrics", SpaceID: "crypto", DatasetIDs: []string{"binance_spot_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "a", Durable: "storage_view_kline", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m"}, FetchBatch: 4, MaxAckPending: 8, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "b", Durable: "storage_view_metrics", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}
 	if err := view.ValidateConsumerPartitions(nil); err == nil {
 		t.Fatal("overlapping Dataset partition was accepted")
@@ -165,7 +165,7 @@ func TestStorageViewConsumerPartitionsRejectOverlapAndInvalidLimits(t *testing.T
 
 func TestStorageViewConsumerPartitionsRejectInvalidDurableName(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{{
-		ID: "kline", Durable: "storage.view", SpaceID: "crypto", DatasetIDs: []string{"binance_spot_kline_1m"},
+		ID: "kline", Durable: "storage.view", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m"},
 		FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, AckWaitMS: 1000,
 	}}}
 	if err := view.ValidateConsumerPartitions(nil); err == nil {
@@ -175,12 +175,12 @@ func TestStorageViewConsumerPartitionsRejectInvalidDurableName(t *testing.T) {
 
 func TestStorageViewConsumerPartitionsAllowFutureConfiguredDatasets(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "kline", Durable: "storage_view_kline", SpaceID: "crypto", DatasetIDs: []string{"binance_spot_kline_1m", "future_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
-		{ID: "factor", Durable: "storage_view_factor", SpaceID: "crypto", DatasetIDs: []string{"binance_spot_kline_1m_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
-		{ID: "system_metrics", Durable: "storage_view_metrics", SpaceID: "moox_system", DatasetIDs: []string{"moox_service_metrics"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "kline", Durable: "storage_view_kline", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m", "future_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "factor", Durable: "storage_view_factor", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "system_metrics", Durable: "storage_view_metrics", SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 		{ID: "misc", Durable: "storage_view_misc", SpaceID: "crypto", DatasetIDs: []string{"other"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}
-	managed := []StorageViewConsumerDataset{{SpaceID: "crypto", DatasetID: "binance_spot_kline_1m"}}
+	managed := []StorageViewConsumerDataset{{SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m"}}
 	if err := view.ValidateConsumerPartitions(managed); err != nil {
 		t.Fatalf("future configured Dataset should not block startup: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestStorageViewConsumerPartitionsAllowFutureConfiguredDatasets(t *testing.T
 
 func TestStorageViewConsumerPartitionsRequireAllManagedDurables(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "kline", Durable: "storage_view_kline", SpaceID: "crypto", DatasetIDs: []string{"binance_spot_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "kline", Durable: "storage_view_kline", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}
 	if err := view.ValidateConsumerPartitions(nil); err == nil {
 		t.Fatal("partial consumer topology was accepted")
@@ -373,7 +373,7 @@ func TestStorageViewRebuildConfigDefaults(t *testing.T) {
 func TestHostMetricsCleanupValidation(t *testing.T) {
 	enabled := true
 	valid := HostMetricsCleanupConfig{
-		Enabled: &enabled, DatasetIDs: []string{"host_resource_v1"}, MaxAge: "48h", BatchSize: 1000, MaxBatchesPerRun: 10,
+		Enabled: &enabled, DatasetIDs: []string{"dataset_mooxsys_host_resource"}, MaxAge: "48h", BatchSize: 1000, MaxBatchesPerRun: 10,
 	}
 	tests := []struct {
 		name    string
@@ -388,7 +388,9 @@ func TestHostMetricsCleanupValidation(t *testing.T) {
 		{name: "zero max batches", mutate: func(c *HostMetricsCleanupConfig) { c.MaxBatchesPerRun = 0 }, wantErr: "max_batches_per_run"},
 		{name: "empty datasets", mutate: func(c *HostMetricsCleanupConfig) { c.DatasetIDs = nil }, wantErr: "dataset_ids"},
 		{name: "blank dataset", mutate: func(c *HostMetricsCleanupConfig) { c.DatasetIDs = []string{" "} }, wantErr: "dataset_ids"},
-		{name: "duplicate dataset", mutate: func(c *HostMetricsCleanupConfig) { c.DatasetIDs = []string{"host_resource_v1", "host_resource_v1"} }, wantErr: "duplicate"},
+		{name: "duplicate dataset", mutate: func(c *HostMetricsCleanupConfig) {
+			c.DatasetIDs = []string{"dataset_mooxsys_host_resource", "dataset_mooxsys_host_resource"}
+		}, wantErr: "duplicate"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

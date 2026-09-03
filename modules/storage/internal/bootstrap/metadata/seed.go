@@ -243,7 +243,7 @@ func seedViewColumnAttributes(item seedViewColumn) map[string]string {
 	for key, value := range item.Attributes {
 		attributes[key] = value
 	}
-	if item.SpaceID == "moox_system" && strings.TrimSpace(attributes["display_name"]) == "" {
+	if item.SpaceID == "mooxsys" && strings.TrimSpace(attributes["display_name"]) == "" {
 		attributes["display_name"] = item.ColumnName
 	}
 	return attributes

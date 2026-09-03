@@ -20,8 +20,8 @@ func New(cfg Config) *markethttp.Provider {
 		cfg.BaseURL = "https://quotes.sina.cn"
 	}
 	return markethttp.New(markethttp.Config{
-		ProviderID: "sina", SourceID: "stock_hk_http", DisplayName: "Sina Hong Kong",
-		MarketID: "stock_hk", InstrumentType: marketdata.InstrumentEquity,
+		ProviderID: "sina", SourceID: "stockhk_http", DisplayName: "Sina Hong Kong",
+		MarketID: "stockhk", InstrumentType: marketdata.InstrumentEquity,
 		Exchanges: []string{"XHKG"}, BaseURL: cfg.BaseURL,
 		Endpoint: "/cn/api/jsonp_v2.php/var%20moox_kline=/CN_MarketDataService.getKLineData",
 		Host:     "quotes.sina.cn", HTTPClient: cfg.HTTPClient, Location: mustLocation("Asia/Hong_Kong"),

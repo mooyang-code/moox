@@ -36,7 +36,7 @@
 
 `packages/tdx/commands.go` 已改为先取 `zipday%2048` 再解析月、日，并新增回归测试。修复后从 `shtdx.gtjas.com:7709` 实测 `600000.SH`、`000001.SZ` 的 1 分钟请求均返回 20 根有效记录，时间落在 `2026-09-03`；与 easy_tdx 同线路请求的分钟时间及最新 OHLCV 样本一致。easy_tdx 的协议实现也明确使用 `month=(zipday%2048)//100`、`day=(zipday%2048)%100`，并将 category 7 定义为 1 分钟线。[easy_tdx datetime codec](https://github.com/handsomejustin/easy_tdx/blob/main/src/easy_tdx/codec/datetime_.py)
 
-当前 `normal_7709` 已切换为 `stock_cn_kline` 的 active fallback 来源。正式运行链为 `sina -> tencent -> tdx -> eastmoney`：每个 Provider 请求失败最多重试 3 次，再进入下一个 Provider；TDX 失败后最后使用东方财富。TDX 不参与主分片分配，但会随每个 stock_cn SCF 包注册，因此源绑定的 Timer 也能跨 Provider fallback。
+当前 `normal_7709` 已切换为 `dataset_stockcn_equity_kline` 的 active fallback 来源。正式运行链为 `sina -> tencent -> tdx -> eastmoney`：每个 Provider 请求失败最多重试 3 次，再进入下一个 Provider；TDX 失败后最后使用东方财富。TDX 不参与主分片分配，但会随每个 stockcn SCF 包注册，因此源绑定的 Timer 也能跨 Provider fallback。
 
 仍有两个独立的后续门禁：日线标准化需要修正为公共 UTC bucket 语义，且日线接口返回的当天记录必须等收盘后再纳入；北交所还需要使用真实有效证券代码完成实测。这些门禁不影响当前 1m normal TDX fallback 的启用。
 

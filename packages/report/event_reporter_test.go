@@ -70,7 +70,7 @@ func TestEventReporterDoesNotLeakPublisherCredentials(t *testing.T) {
 		ObserverId: "monitor", CheckId: "gateway-ready", Kind: "trpc",
 		Success: false, CheckedAt: timestamppb.Now(),
 	}
-	err = reporter.ReportHealth(context.Background(), report, "moox_system")
+	err = reporter.ReportHealth(context.Background(), report, "mooxsys")
 	if err == nil {
 		t.Fatal("publisher error was lost")
 	}

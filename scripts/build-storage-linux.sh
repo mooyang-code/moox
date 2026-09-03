@@ -1,1 +1,0 @@
-build/build-storage-linux.sh

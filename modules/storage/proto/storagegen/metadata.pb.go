@@ -1904,15 +1904,15 @@ func (x *Field) GetSortOrder() uint32 {
 	return 0
 }
 
-// Factor 是 Space 内、已参数化的因子结果定义。
+// Factor 是可跨 Space 复用的已参数化因子定义。
 type Factor struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	// space_id 是 Factor 所属 Space。
+	// space_id 是创建或管理该 Factor 的 Space 上下文，不参与 Factor ID 命名。
 	SpaceId string `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
-	// factor_id 是 Space 内唯一因子英文名，例如 ma20_close。
+	// factor_id 是与 Python 因子文件名主体一致的大小写组合，例如 Bias 或 QuoteVolumeMean。
 	FactorId string `protobuf:"bytes,2,opt,name=factor_id,json=factorId,proto3" json:"factor_id,omitempty"`
 	// name 是因子中文名或展示名。
 	Name string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`

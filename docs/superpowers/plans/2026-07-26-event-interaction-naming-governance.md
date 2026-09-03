@@ -42,12 +42,12 @@ Do not add `internal/eventing`, a generic shared Outbox/Inbox framework, old-pat
 ### Task 1: Make the Naming Rules Fail on the Current Tree
 
 **Files:**
-- Modify: `scripts/check-package-boundaries.sh`
-- Modify: `scripts/verify-event-contracts.sh`
+- Modify: `scripts/check/check-package-boundaries.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
 
 - [ ] **Step 1: Add structural rejection checks**
 
-Add these exact legacy path and symbol checks to `scripts/check-package-boundaries.sh`:
+Add these exact legacy path and symbol checks to `scripts/check/check-package-boundaries.sh`:
 
 ```bash
 event_legacy_paths=(
@@ -70,7 +70,7 @@ done < <(rg -n '^type [A-Za-z0-9_]*Publisher struct' \
   modules --glob '*/eventconsumer/*.go' --glob '!**/*_test.go' || true)
 ```
 
-Update `scripts/verify-event-contracts.sh` test paths to the intended package
+Update `scripts/check/verify-event-contracts.sh` test paths to the intended package
 names before moving code:
 
 ```bash
@@ -85,7 +85,7 @@ names before moving code:
 Run:
 
 ```bash
-bash scripts/check-package-boundaries.sh
+bash scripts/check/check-package-boundaries.sh
 ```
 
 Expected: FAIL listing `modules/strategy/internal/bus`,
@@ -95,7 +95,7 @@ and `NATSConsumer`.
 Run:
 
 ```bash
-bash scripts/verify-event-contracts.sh
+bash scripts/check/verify-event-contracts.sh
 ```
 
 Expected: FAIL because the new package paths do not exist.
@@ -553,8 +553,8 @@ Expected: PASS.
 ### Task 7: Update Governance, Current Documentation, and Verification Paths
 
 **Files:**
-- Modify: `scripts/check-package-boundaries.sh`
-- Modify: `scripts/verify-event-contracts.sh`
+- Modify: `scripts/check/check-package-boundaries.sh`
+- Modify: `scripts/check/verify-event-contracts.sh`
 - Modify: `docs/架构总览.md`
 - Modify: `docs/协议设计.md`
 - Modify: `docs/存储层架构.md`
@@ -609,8 +609,8 @@ Do not rewrite dated files in `docs/superpowers/plans` or old review reports.
 Run:
 
 ```bash
-bash scripts/check-package-boundaries.sh
-bash scripts/verify-event-contracts.sh
+bash scripts/check/check-package-boundaries.sh
+bash scripts/check/verify-event-contracts.sh
 ```
 
 Expected: both PASS.
@@ -626,9 +626,9 @@ Expected: both PASS.
 Run:
 
 ```bash
-bash scripts/check-package-boundaries.sh
-bash scripts/verify-event-contracts.sh
-bash scripts/test-go-workspace.sh
+bash scripts/check/check-package-boundaries.sh
+bash scripts/check/verify-event-contracts.sh
+bash scripts/test/contract/test-go-workspace.sh
 make verify-pr
 git diff --check
 ```

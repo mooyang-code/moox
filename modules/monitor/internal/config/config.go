@@ -199,9 +199,9 @@ func Default() *Config {
 			SendTimeoutSeconds: 10,
 		},
 		Observability: ObservabilityConfig{Enabled: true, EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
-		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "binance_spot_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance")}}},
+		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance")}}},
 		MarketHealth:  MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, LowCapacityHeadroom: 2, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
-		Metrics:       MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../examples/setup/default/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
+		Metrics:       MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
 	}
 }
 
@@ -455,8 +455,8 @@ func (c *Config) Validate() error {
 			if subject.SeriesTag == nil {
 				return fmt.Errorf("market_canary subject requires series_tag (use an explicit empty value for the default series)")
 			}
-			if strings.EqualFold(subject.MarketID, "stock_cn") && (strings.TrimSpace(subject.CalendarPath) == "" || len(subject.EligibleKlineProviders) == 0) {
-				return fmt.Errorf("stock_cn market_canary subject requires calendar_path and eligible_kline_providers")
+			if strings.EqualFold(subject.MarketID, "stockcn") && (strings.TrimSpace(subject.CalendarPath) == "" || len(subject.EligibleKlineProviders) == 0) {
+				return fmt.Errorf("stockcn market_canary subject requires calendar_path and eligible_kline_providers")
 			}
 		}
 	}
@@ -483,8 +483,8 @@ func (c *Config) Validate() error {
 	}
 	if c.Metrics.HostStorage.Enabled {
 		h := c.Metrics.HostStorage
-		if h.SpaceID != "moox_system" {
-			return fmt.Errorf("metrics.host_storage.space_id must be moox_system")
+		if h.SpaceID != "mooxsys" {
+			return fmt.Errorf("metrics.host_storage.space_id must be mooxsys")
 		}
 		if h.Frequency != "1m" {
 			return fmt.Errorf("metrics.host_storage.frequency must be 1m")

@@ -1,1 +1,0 @@
-tests/e2e/test-strategy-trade-event-e2e.sh

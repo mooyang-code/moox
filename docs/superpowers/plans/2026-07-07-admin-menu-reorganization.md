@@ -1533,7 +1533,7 @@ git commit -m "feat(admin): reorganize data and factor assets"
 Because this plan changes factor metadata sync but not storage schema, collector, or cloudnode, deploy admin/web-host and factor:
 
 ```bash
-scripts/deploy-moox.sh --target ubuntu@106.53.107.122 --dir /home/ubuntu/moox/prod --goos linux --goarch amd64 --no-storage --no-cloudnode --no-collector --build-web-assets
+scripts/deploy/deploy-moox.sh --target ubuntu@106.53.107.122 --dir /home/ubuntu/moox/prod --goos linux --goarch amd64 --no-storage --no-cloudnode --no-collector --build-web-assets
 ```
 
 - [ ] **Step 4: Verify remote admin**

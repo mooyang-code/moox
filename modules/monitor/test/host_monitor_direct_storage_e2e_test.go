@@ -21,7 +21,7 @@ import (
 
 func TestHostMetricDirectStorageRoundTrip(t *testing.T) {
 	if os.Getenv("MOOX_SERIES_TAG_E2E") != "1" {
-		t.Fatal("integration test must be started through scripts/test-series-tag-e2e.sh")
+		t.Fatal("integration test must be started through scripts/test/e2e/test-series-tag-e2e.sh")
 	}
 	credentials := gatewayauth.CredentialsFromEnv()
 	if credentials.KeyID == "" || credentials.Caller == "" || credentials.Secret == "" {
@@ -130,7 +130,7 @@ func assertRawHostResource(t *testing.T, fields []*storagepb.FieldValue, agentID
 	t.Helper()
 	values := make(map[string]*storagepb.TypedValue, len(fields))
 	for _, field := range fields {
-		name := strings.TrimPrefix(field.GetFieldId(), "host_resource_v1.")
+		name := strings.TrimPrefix(field.GetFieldId(), "dataset_mooxsys_host_resource.")
 		values[name] = field.GetValue()
 	}
 	if len(values) != 8 ||

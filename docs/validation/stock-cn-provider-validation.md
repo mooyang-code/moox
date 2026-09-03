@@ -1,4 +1,4 @@
-# stock_cn Provider Probe
+# stockcn Provider Probe
 
 Release-route note: the current source route keeps Sina as the only active
 Instrument provider until EastMoney produces a complete stable snapshot. Sina,

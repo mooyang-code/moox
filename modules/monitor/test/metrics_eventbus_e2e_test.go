@@ -73,7 +73,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	access := &metricsE2EAccess{}
-	storageCfg := monconfig.MetricsStorageConfig{SpaceID: metrics.InternalMetricSpaceID, DatasetID: "moox_service_metrics", Frequency: "30s", WriteBatchSize: 20}
+	storageCfg := monconfig.MetricsStorageConfig{SpaceID: metrics.InternalMetricSpaceID, DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", WriteBatchSize: 20}
 	storage := metrics.NewStorageAdapter(access, nil, storageCfg)
 	messageStore, err := store.WithDatabase(mgr, metrics.NewMetricMessageStore)
 	if err != nil {

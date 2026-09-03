@@ -68,7 +68,7 @@ const forbidden = ['planned_exec_node', 'PlannedExecNode', 'c_planned_exec_node'
 const remaining = forbidden.filter((token) => joined.includes(token));
 const requirements = [
   [web.includes('pageSize: 20'), 'frontend default page size 20'],
-  [web.includes(':scroll="{ x: 1650 }"'), 'reduced table scroll width'],
+  [web.includes(':scroll="{ x: 1350 }"'), 'reduced table scroll width'],
   [(proto.match(/reserved 12;/g) || []).length === 2, 'reserved field number 12 twice'],
   [(proto.match(/reserved "planned_exec_node";/g) || []).length === 2, 'reserved field name twice'],
   [!proto.includes('string planned_exec_node = 12;'), 'removed protobuf field declaration'],
@@ -86,7 +86,7 @@ console.log('collector planned-node removal contract passed');
 
 - [ ] **Step 2: Extend the frontend style contract**
 
-In `web/scripts/check-collector-task-style.mjs`, replace the old scroll-width requirement with `:scroll="{ x: 1650 }"`, require `pageSize: 20`, and forbid `plannedExecNode`, `PlannedExecNode`, `planned_exec_node`, and `计划节点`.
+In `web/scripts/check-collector-task-style.mjs`, replace the old scroll-width requirement with `:scroll="{ x: 1350 }"`, require `pageSize: 20`, and forbid `plannedExecNode`, `PlannedExecNode`, `planned_exec_node`, and `计划节点`.
 
 - [ ] **Step 3: Strengthen the fresh-schema test**
 
@@ -133,7 +133,7 @@ In `task-instances.vue`:
 - delete `plannedExecNode` from the form initializer and reset object;
 - delete planned-node normalization and request mapping;
 - change `pagination.pageSize` from `10` to `20`;
-- change table scroll width from `1810` to `1650`.
+- change table scroll width from `1810` to `1350`.
 
 Do not change the last execution node field or filter.
 
@@ -259,7 +259,6 @@ CREATE TABLE t_collector_task_instances (
   c_symbol TEXT NOT NULL DEFAULT '',
   c_interval TEXT NOT NULL DEFAULT 'default',
   c_planned_exec_node TEXT NOT NULL DEFAULT '',
-  c_last_exec_node TEXT NOT NULL DEFAULT '',
   c_last_exec_status INTEGER NOT NULL DEFAULT 1,
   c_task_params TEXT NOT NULL DEFAULT '{}',
   c_last_exec_time DATETIME,
@@ -367,7 +366,7 @@ git commit -m "feat(collector): migrate away planned execution node"
 
 - [ ] **Step 1: Remove the obsolete documentation field**
 
-Update the task-instance field inventory so it lists `last_exec_node` and the remaining fields without `planned_exec_node`.
+Update the task-instance field inventory so it lists the remaining fields without `planned_exec_node` or an execution-node field.
 
 - [ ] **Step 2: Run the repository-wide removal contract**
 
@@ -412,8 +411,8 @@ Expected: only `web-host/internal/statik/statik.go` changes and web-host tests p
 - [ ] **Step 6: Build Linux deployment binaries**
 
 ```bash
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh collector
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh web-host
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh collector
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh web-host
 sha256sum bin/moox-collector bin/moox-collector-cli bin/moox-web-host
 ```
 

@@ -58,7 +58,7 @@ func InstallStorageViewWatchdogWithOptions(ctx context.Context, transport setups
 		gatewayNodeID = "control"
 	}
 
-	script, err := readWatchdogAsset(repositoryRoot, filepath.Join("scripts", storageViewWatchdogScriptName+".sh"))
+	script, err := readWatchdogAsset(repositoryRoot, filepath.Join("scripts", "runtime", storageViewWatchdogScriptName+".sh"))
 	if err != nil {
 		return fmt.Errorf("storage_watchdog_asset_invalid")
 	}

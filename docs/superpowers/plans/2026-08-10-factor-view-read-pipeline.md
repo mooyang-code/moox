@@ -98,8 +98,8 @@ engine:
 - Modify: `modules/factor/config/app.yaml`
 - Modify: `modules/factor/cmd/cli/run_once.go`
 - Modify: `modules/factor/cmd/cli/run_once_test.go`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/tests/contract/test-deploy-moox-factor.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-factor.sh`
 
 ### 读取流水线
 
@@ -566,8 +566,8 @@ git commit -m "test(factor): preserve period semantics across read pipeline"
 ### Task 7: 部署配置和结构化观测
 
 **Files:**
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/tests/contract/test-deploy-moox-factor.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-factor.sh`
 - Modify: `modules/factor/internal/taskrunner/read_pipeline.go`
 - Modify: `modules/factor/internal/taskrunner/read_pipeline_test.go`
 
@@ -597,12 +597,12 @@ run-once wrapper 不透传这两个服务并发值。
 
 - [x] **Step 4: 验证并提交**
 
-Run: `bash scripts/tests/contract/test-deploy-moox-factor.sh`
+Run: `bash scripts/test/contract/test-deploy-moox-factor.sh`
 
 Expected: PASS。
 
 ```bash
-git add scripts/deploy-moox.sh scripts/tests/contract/test-deploy-moox-factor.sh modules/factor/internal/taskrunner/read_pipeline.go modules/factor/internal/taskrunner/read_pipeline_test.go
+git add scripts/deploy/deploy-moox.sh scripts/test/contract/test-deploy-moox-factor.sh modules/factor/internal/taskrunner/read_pipeline.go modules/factor/internal/taskrunner/read_pipeline_test.go
 git commit -m "chore(factor): deploy and observe View read workers"
 ```
 
@@ -636,9 +636,9 @@ Run:
 (cd modules/factor && go test -race ./internal/taskrunner ./internal/trigger/... ./internal/rpc ./internal/bootstrap ./cmd/cli ./test -count=1)
 (cd modules/factor && go test ./... -count=1)
 (cd modules/factor && go vet ./...)
-bash scripts/tests/contract/test-deploy-moox-factor.sh
-bash scripts/tests/e2e/test-factor-view-ready-e2e.sh
-./scripts/test-go-workspace.sh
+bash scripts/test/contract/test-deploy-moox-factor.sh
+bash scripts/test/e2e/test-factor-view-ready-e2e.sh
+./scripts/test/contract/test-go-workspace.sh
 git diff --check
 ```
 
@@ -647,7 +647,7 @@ Expected: 全部 PASS；既有 workspace 失败必须记录原始命令和错误
 - [x] **Step 5: 部署环境真实 E2E**
 
 ```bash
-MOOX_RUN_REAL_FACTOR_E2E=1 MOOX_DEPLOY_ROOT=/home/ubuntu/moox/prod bash scripts/tests/e2e/test-factor-view-ready-e2e.sh
+MOOX_RUN_REAL_FACTOR_E2E=1 MOOX_DEPLOY_ROOT=/home/ubuntu/moox/prod bash scripts/test/e2e/test-factor-view-ready-e2e.sh
 ```
 
 Expected: PASS，并保存 report -> source-ready -> read pipeline -> computed marker -> final-ready 时间线。
@@ -714,9 +714,9 @@ go test -race ./internal/taskrunner ./internal/storageio ./internal/trigger/... 
 go test ./... -count=1
 go vet ./...
 CGO_ENABLED=1 go test -race ./internal/service/viewindex/duckdb ./internal/service/view -count=1
-bash scripts/tests/contract/test-deploy-moox-factor.sh
-bash scripts/tests/e2e/test-factor-view-ready-e2e.sh
-./scripts/test-go-workspace.sh
+bash scripts/test/contract/test-deploy-moox-factor.sh
+bash scripts/test/e2e/test-factor-view-ready-e2e.sh
+./scripts/test/contract/test-go-workspace.sh
 git diff --check
 ```
 

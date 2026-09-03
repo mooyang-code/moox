@@ -61,7 +61,7 @@ func loadStockCNRouteFile(path string) (stockCNRoute, error) {
 		return stockCNRoute{}, err
 	}
 	if err := route.Validate(); err != nil {
-		return stockCNRoute{}, fmt.Errorf("validate stock_cn route: %w", err)
+		return stockCNRoute{}, fmt.Errorf("validate stockcn route: %w", err)
 	}
 	return route, nil
 }
@@ -74,7 +74,7 @@ func (r stockCNRoute) Validate() error {
 		return fmt.Errorf("route_id and frequency are required")
 	}
 	if r.Frequency != "1m" {
-		return fmt.Errorf("stock_cn frequency must be 1m")
+		return fmt.Errorf("stockcn frequency must be 1m")
 	}
 	if r.TimerFunctionCount < 0 || r.MeasuredSafeGroupSize < 0 {
 		return fmt.Errorf("timer_function_count and measured_safe_group_size cannot be negative")
@@ -112,10 +112,10 @@ func (r stockCNRoute) Validate() error {
 		}
 	}
 	if len(r.KlineProviders()) < 3 {
-		return fmt.Errorf("at least three active stock_cn kline providers are required")
+		return fmt.Errorf("at least three active stockcn kline providers are required")
 	}
 	if len(r.KlinePrimaryProviders()) < 2 {
-		return fmt.Errorf("at least two primary stock_cn kline providers are required")
+		return fmt.Errorf("at least two primary stockcn kline providers are required")
 	}
 	return nil
 }
@@ -229,13 +229,13 @@ func (r stockCNRoute) providersFor(feed, wantedState string) []string {
 func stockCNRoutePathCandidates() []string {
 	candidates := []string{
 		strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_ROUTE_PATH")),
-		"markets/stock_cn/route.yaml",
-		"config/markets/stock_cn/route.yaml",
-		"modules/collector/config/markets/stock_cn/route.yaml",
+		"markets/stockcn/route.yaml",
+		"config/markets/stockcn/route.yaml",
+		"modules/collector/config/markets/stockcn/route.yaml",
 	}
 	if _, sourceFile, _, ok := runtime.Caller(0); ok {
 		collectorDir := filepath.Dir(sourceFile)
-		candidates = append(candidates, filepath.Join(collectorDir, "..", "..", "config", "markets", "stock_cn", "route.yaml"))
+		candidates = append(candidates, filepath.Join(collectorDir, "..", "..", "config", "markets", "stockcn", "route.yaml"))
 	}
 	return candidates
 }
@@ -250,7 +250,7 @@ func loadStockCNRoute() (stockCNRoute, error) {
 		}
 		return loadStockCNRouteFile(candidate)
 	}
-	return stockCNRoute{}, fmt.Errorf("stock_cn route config was not found")
+	return stockCNRoute{}, fmt.Errorf("stockcn route config was not found")
 }
 
 type stockCNProviderFile struct {
@@ -324,7 +324,7 @@ func loadStockCNProviderRuntime(route stockCNRoute) (map[string]stockCNProviderR
 			break
 		}
 		if found == "" {
-			return nil, fmt.Errorf("stock_cn provider config %q was not found", id)
+			return nil, fmt.Errorf("stockcn provider config %q was not found", id)
 		}
 		if err := validateStockCNProviderFile(id, file); err != nil {
 			return nil, fmt.Errorf("validate provider config %s: %w", found, err)
@@ -425,14 +425,14 @@ func stockCNProviderConfigPaths() []string {
 		strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_SOURCE_CONFIG_DIR")),
 		"sources/market",
 		"config/sources/market",
-		"configs/scf/stock_cn/sources/market",
+		"configs/scf/stockcn/sources/market",
 		"configs/sources/market",
-		"modules/collector/configs/scf/stock_cn/sources/market",
+		"modules/collector/configs/scf/stockcn/sources/market",
 		"modules/collector/configs/sources/market",
 	}
 	if _, sourceFile, _, ok := runtime.Caller(0); ok {
 		collectorDir := filepath.Dir(sourceFile)
-		paths = append(paths, filepath.Join(collectorDir, "..", "..", "configs", "scf", "stock_cn", "sources", "market"))
+		paths = append(paths, filepath.Join(collectorDir, "..", "..", "configs", "scf", "stockcn", "sources", "market"))
 	}
 	return paths
 }

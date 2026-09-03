@@ -54,7 +54,6 @@ type TaskInstance struct {
 	Frequency      string     `gorm:"column:c_frequency"`
 	SourceID       string     `gorm:"column:c_source_id"`
 	FunctionName   string     `gorm:"column:c_function_name"`
-	LastExecNode   string     `gorm:"column:c_last_exec_node"`
 	LastExecStatus int        `gorm:"column:c_last_exec_status"`
 	TaskParams     string     `gorm:"column:c_task_params"`
 	ExecuteAt      time.Time  `gorm:"-"`

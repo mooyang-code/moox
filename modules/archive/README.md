@@ -16,7 +16,7 @@ filter、ACK、DeliverPolicy 和投递限制由事件 Registry 与 Archive 代�
 ## 运行
 
 ```bash
-../../scripts/build.sh archive
+../../scripts/build/build.sh archive
 ./bin/moox-archive -config=config/app.yaml -conf=config/trpc_go.yaml
 ```
 

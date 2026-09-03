@@ -90,7 +90,7 @@
     <a-modal v-model:visible="visible" data-testid="create-dataset-modal" width="760px" :title="modalTitle" @ok="submit">
       <a-form :model="form" auto-label-width>
         <a-form-item field="dataset_id" label="数据集ID" required>
-          <a-input v-model="form.dataset_id" :disabled="editing" placeholder="例如 kline" />
+          <a-input v-model="form.dataset_id" :disabled="editing" placeholder="例如 dataset_stockcn_equity_kline" />
         </a-form-item>
         <a-form-item field="data_source_id" label="数据源ID" required>
           <a-select v-model="form.data_source_id" allow-search allow-create placeholder="选择或输入来源ID">
@@ -251,7 +251,7 @@ import {
   splitList,
   statusColor,
   validateChineseDisplayName,
-  validateLowerSnakeId
+  validateDatasetId
 } from "@/views/data/shared/metadata-utils";
 import {
   datasetMatchesAttribution,
@@ -556,7 +556,7 @@ async function submit() {
     Message.warning(nameError);
     return;
   }
-  const idError = validateLowerSnakeId(form.dataset_id, 50);
+  const idError = validateDatasetId(form.dataset_id, 50);
   if (idError) {
     Message.warning(`数据集${idError}`);
     return;

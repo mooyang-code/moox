@@ -1,1 +1,0 @@
-tests/contract/test-go-workspace.sh

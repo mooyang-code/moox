@@ -1,1 +1,0 @@
-checks/check-collector-planned-node-removal.mjs

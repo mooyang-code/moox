@@ -32,7 +32,6 @@ type TaskInstanceFilter struct {
 	SubjectID      string
 	Frequency      string
 	FunctionName   string
-	LastExecNode   string
 	LastExecStatus *int
 	IncludeDeleted bool
 	Page           int
@@ -489,9 +488,6 @@ func (r *TaskInstanceRepository) applyFilter(q *gorm.DB, filter TaskInstanceFilt
 	}
 	if filter.FunctionName != "" {
 		q = q.Where("c_function_name LIKE ?", "%"+filter.FunctionName+"%")
-	}
-	if filter.LastExecNode != "" {
-		q = q.Where("c_last_exec_node = ?", filter.LastExecNode)
 	}
 	if filter.LastExecStatus != nil {
 		q = q.Where("c_last_exec_status = ?", *filter.LastExecStatus)

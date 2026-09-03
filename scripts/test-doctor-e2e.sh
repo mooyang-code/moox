@@ -1,1 +1,0 @@
-tests/e2e/test-doctor-e2e.sh

@@ -1,1 +1,0 @@
-tests/contract/test-edgeone-origin-contract.sh

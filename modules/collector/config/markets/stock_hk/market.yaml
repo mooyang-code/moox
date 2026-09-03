@@ -1,9 +1,0 @@
-market_id: stock_hk
-timezone: Asia/Hong_Kong
-instrument_types:
-  - equity
-frequencies:
-  - 1m
-  - 1d
-  - 1w
-  - 1M

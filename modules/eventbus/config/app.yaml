@@ -34,12 +34,12 @@ health:
 streams:
   - name: MOOX_STORAGE
     subjects:
-      - "moox.storage.dataset.rows.upserted.v2.>"
-      - "moox.storage.dataset.period.collected.v1.>"
-      - "moox.storage.view.source_period.ready.v1.>"
-      - "moox.storage.dataset.factor_period.computed.v1.>"
-      - "moox.storage.view.factor_period.ready.v1.>"
-      - "moox.storage.dataset.sync_point.v1.>"
+      - "moox.event.storage.dataset.rows.upserted.v2.>"
+      - "moox.event.storage.dataset.period.collected.v1.>"
+      - "moox.event.storage.view.source_period.ready.v1.>"
+      - "moox.event.storage.dataset.factor_period.computed.v1.>"
+      - "moox.event.storage.view.factor_period.ready.v1.>"
+      - "moox.event.storage.dataset.sync_point.v1.>"
     retention: limits
     discard: old
     storage: file
@@ -50,7 +50,7 @@ streams:
     # production host; a full historical queue can prevent NATS bootstrap.
     max_bytes: 536870912
   - name: MOOX_OBSERVABILITY
-    subjects: ["moox.observability.>"]
+    subjects: ["moox.event.observability.>"]
     retention: limits
     discard: old
     storage: file
@@ -59,7 +59,7 @@ streams:
     duplicates: 2m
     max_bytes: 134217728
   - name: MOOX_CLOUDNODE_EXEC
-    subjects: ["moox.cloudnode.job.execution.requested.v1.>"]
+    subjects: ["moox.event.cloudnode.job.execution.requested.v1.>"]
     retention: work_queue
     discard: old
     storage: file
@@ -68,7 +68,7 @@ streams:
     duplicates: 2m
     max_bytes: 134217728
   - name: MOOX_MARKET_FETCH
-    subjects: ["moox.market.fetch.batch.completed.v1.>"]
+    subjects: ["moox.event.market.fetch.batch.completed.v1.>"]
     # Collector and Monitor both observe the completion; work_queue would let
     # the first durable consumer steal the message from the other one.
     retention: limits
@@ -81,7 +81,7 @@ streams:
   - name: MOOX_TRADE
     # Keep the legacy quantity family during migration; Trade consumes only
     # the versioned weight family and therefore cannot reinterpret old bytes.
-    subjects: ["moox.trade.target.requested.v1.>", "moox.trade.target.weight_requested.v1.>"]
+    subjects: ["moox.event.trade.target.requested.v1.>", "moox.event.trade.target.weight_requested.v1.>"]
     retention: work_queue
     discard: old
     storage: file

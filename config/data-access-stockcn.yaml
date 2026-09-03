@@ -1,0 +1,22 @@
+# Local acceptance template only. Replace every __REPLACE__ value with the
+# short-lived read-only credentials generated for this environment, then chmod
+# 0600 before using moox-cli. Never commit a populated copy of this file.
+version: 1
+gateway:
+  target: ip://127.0.0.1:11003
+  target_node: __REPLACE_STORAGE_GATEWAY_NODE__
+  key_id: moox-stockcn-readonly
+  caller: moox-stockcn-e2e
+  secret: __REPLACE_GATEWAY_SECRET__
+storage:
+  app_id: moox-stockcn-readonly
+  app_key: __REPLACE_STORAGE_APP_KEY__
+data_types:
+  stockcn:
+    default_exchange: stockcn
+    exchanges:
+      stockcn:
+        space_id: stockcn
+        series_tag: ""
+        kline_datasets:
+          1m: dataset_stockcn_equity_kline

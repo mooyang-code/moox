@@ -26,13 +26,13 @@ func TestLoadDefaultsAndMarketSources(t *testing.T) {
 	if cfg.Archive.EventBus.CredentialFile != "" {
 		t.Fatalf("default eventbus credential file = %q, want empty for development", cfg.Archive.EventBus.CredentialFile)
 	}
-	want := []string{"crypto", "stock_cn", "stock_us"}
+	want := []string{"crypto", "stockcn", "stockus"}
 	got := cfg.SourceSpaceIDs()
 	if len(got) != len(want) {
 		t.Fatalf("SourceSpaceIDs() = %v, want %v", got, want)
 	}
-	assert.Equal(t, []string{"spot_kline_1h", "perpetual_kline_1h"}, cfg.Archive.Sources["crypto"].Datasets)
-	assert.Equal(t, []string{"stock_cn_kline", "stock_cn_index_kline", "stock_cn_convertible_bond_kline"}, cfg.Archive.Sources["stock_cn"].Datasets)
+	assert.Equal(t, []string{"dataset_spot_kline_1h", "dataset_perpetual_kline_1h"}, cfg.Archive.Sources["crypto"].Datasets)
+	assert.Equal(t, []string{"dataset_stockcn_equity_kline", "dataset_stockcn_index_kline", "dataset_stockcn_bond_kline"}, cfg.Archive.Sources["stockcn"].Datasets)
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("SourceSpaceIDs() = %v, want %v", got, want)

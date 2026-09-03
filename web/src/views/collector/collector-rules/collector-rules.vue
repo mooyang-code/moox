@@ -153,7 +153,7 @@
             <a-input v-model="sourceSeriesTagValue" placeholder="例如 venue:binance" allow-clear />
           </a-form-item>
           <a-form-item label="目标 Dataset" required>
-            <a-input v-model="targetDatasetIdValue" placeholder="例如 spot_kline_derived_5m" allow-clear />
+            <a-input v-model="targetDatasetIdValue" placeholder="例如 dataset_spot_kline_derived_5m" allow-clear />
           </a-form-item>
           <a-form-item label="结算延迟（毫秒）">
             <a-input-number v-model="settleDelayMSValue" :min="0" :max="86400000" :precision="0" placeholder="留空使用全局默认" allow-clear style="width: 100%" />

@@ -150,7 +150,7 @@ func TestMarketCanaryPreservesStorageRejectionDetail(t *testing.T) {
 	result := (MarketCanary{
 		Reader: reader,
 		Config: MarketCanaryConfig{
-			SpaceID: "crypto", DatasetID: "spot_kline_1h",
+			SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h",
 			SubjectID: "BTC-USDT", Frequency: "1m",
 			SeriesTag: stringPtr("venue:binance"),
 			Freshness: time.Minute, ReturnThreshold: 0.05,
@@ -185,7 +185,7 @@ func TestMarketCanaryRejectsInvalidFrequency(t *testing.T) {
 	result := (MarketCanary{
 		Reader: reader,
 		Config: MarketCanaryConfig{
-			SpaceID: "crypto", DatasetID: "spot_kline_1h",
+			SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h",
 			SubjectID: "BTC-USDT", Frequency: "garbage",
 			SeriesTag: stringPtr("venue:binance"),
 			Freshness: time.Minute, ReturnThreshold: 0.05,
@@ -265,7 +265,7 @@ func TestMarketCanaryStockCNChecksLatestClosedBucketsAndOHLCV(t *testing.T) {
 	require.True(t, result.Success)
 	require.Equal(t, []string{"open", "high", "low", "close", "volume", "amount", "source_provider"}, reader.request.GetColumnNames())
 	require.Len(t, reader.request.GetKeys(), 3)
-	require.Equal(t, "", reader.request.GetKeys()[0].GetSeriesTag())
+	require.Equal(t, "default", reader.request.GetKeys()[0].GetSeriesTag())
 }
 
 func TestMarketCanaryStockCNChecksFinalBarDuringPostCloseGrace(t *testing.T) {
@@ -289,7 +289,7 @@ func TestMarketCanaryStockCNChecksFinalBarDuringPostCloseGrace(t *testing.T) {
 	require.NotNil(t, reader.request)
 	foundFinalBar := false
 	for _, key := range reader.request.GetKeys() {
-		if key.GetDataTime() == "2026-08-28T06:59:00Z" && key.GetSeriesTag() == "" {
+		if key.GetDataTime() == "2026-08-28T06:59:00Z" && key.GetSeriesTag() == "default" {
 			foundFinalBar = true
 			break
 		}
@@ -343,7 +343,7 @@ func TestMarketCanaryStockCNEnforcesConfiguredClosedBarCoverage(t *testing.T) {
 	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 
 	require.Equal(t, "closed_bar_coverage_below_threshold", result.ErrorMessage)
-	require.JSONEq(t, `{"type":"stock_cn_closed_bar_coverage","expected":3,"actual":2,"coverage":0.6666666666666666,"minimum":0.99}`, result.BodyExcerpt)
+	require.JSONEq(t, `{"type":"stockcn_closed_bar_coverage","expected":3,"actual":2,"coverage":0.6666666666666666,"minimum":0.99}`, result.BodyExcerpt)
 }
 
 func TestMarketCanaryStockCNReportsNoClosedBarData(t *testing.T) {
@@ -368,10 +368,10 @@ func TestMarketCanaryStockCNReportsNoEligibleKlineFeed(t *testing.T) {
 func stockCanaryConfig(t *testing.T, calendarPath string) MarketCanaryConfig {
 	t.Helper()
 	return MarketCanaryConfig{
-		SpaceID: "stock_cn", DatasetID: "stock_cn_kline", SubjectID: "600000.XSHG", Frequency: "1m", SeriesTag: stringPtr(""),
-		Freshness: 3 * time.Minute, ReturnThreshold: 0.2, MarketID: "stock_cn", CalendarPath: calendarPath,
+		SpaceID: "stockcn", DatasetID: "dataset_stockcn_equity_kline", SubjectID: "600000.XSHG", Frequency: "1m", SeriesTag: stringPtr("default"),
+		Freshness: 3 * time.Minute, ReturnThreshold: 0.2, MarketID: "stockcn", CalendarPath: calendarPath,
 		SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99,
-		EligibleKlineProviders: []string{"sina", "tencent", "eastmoney"},
+		EligibleKlineProviders: []string{"sina", "tencent", "tdx", "eastmoney"},
 	}
 }
 
@@ -384,7 +384,7 @@ func stockCalendarPath(t *testing.T, coverageEnd string) string {
 }
 
 func stockCanaryRow(at time.Time, provider string) *storagepb.TimeSeriesRow {
-	return &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: ""}, Fields: []*storagepb.FieldValue{
+	return &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "default"}, Fields: []*storagepb.FieldValue{
 		{FieldId: "open", Value: doubleTyped(10)}, {FieldId: "high", Value: doubleTyped(11)},
 		{FieldId: "low", Value: doubleTyped(9)}, {FieldId: "close", Value: doubleTyped(10.5)},
 		{FieldId: "volume", Value: doubleTyped(100)}, {FieldId: "amount", Value: doubleTyped(1000)},

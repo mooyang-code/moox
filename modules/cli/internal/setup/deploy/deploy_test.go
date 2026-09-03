@@ -245,7 +245,7 @@ func TestEventBusCommandEnvRejectsIncompleteEndpoint(t *testing.T) {
 
 func TestCommandPackagerPassesMonitoringWebhook(t *testing.T) {
 	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts", "deploy"), 0o700))
 	script := `#!/bin/sh
 set -eu
 	test "$MOOX_NOTIFICATION_WEBHOOK_URL" = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
@@ -255,7 +255,7 @@ while [ "$#" -gt 0 ]; do
 done
 exit 2
 `
-	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy-moox.sh"), []byte(script), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy", "deploy-moox.sh"), []byte(script), 0o700))
 
 	archive, err := (CommandPackager{}).Package(context.Background(), Options{
 		RepositoryRoot: root, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64",
@@ -289,9 +289,9 @@ func TestStorageDeploysAllComponentsAsOneUnit(t *testing.T) {
 
 func TestStorageInstallsWatchdogWhenRequested(t *testing.T) {
 	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts", "runtime"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "deploy", "systemd", "system"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "moox-storage-view-watchdog.sh"), []byte("#!/bin/sh\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "runtime", "moox-storage-view-watchdog.sh"), []byte("#!/bin/sh\n"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "deploy", "systemd", "system", storageViewWatchdogService), []byte("User=__MOOX_USER__\nGroup=__MOOX_GROUP__\nEnvironment=HOME=__MOOX_HOME__\nEnvironment=MOOX_STORAGE_ROOT=__MOOX_STORAGE_ROOT__\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "deploy", "systemd", "system", storageViewWatchdogTimer), []byte("[Timer]\nOnActiveSec=10s\nOnUnitActiveSec=10s\n"), 0o600))
 	archive := filepath.Join(root, "storage.tar.gz")
@@ -323,12 +323,13 @@ func TestStoragePackagerUsesCompileHostBuildForLinuxCrossBuild(t *testing.T) {
 		t.Skip("a native Linux host does not need compile_host")
 	}
 	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts", "build"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts", "deploy"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "bin"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "custom.toml"), []byte("placeholder"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "moox.toml"), []byte("placeholder"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "bin", "moox-cli"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "build-storage-linux.sh"), []byte("#!/bin/sh\nset -eu\n: \"${MOOX_CLI:?}\"\n: \"${CONFIG:?}\"\ntest \"$MOOX_SSH_PASSWORD\" = build-password\ntest \"$MOOX_STORAGE_BUILD_HOST\" = compile\ntest \"$MOOX_STORAGE_BUILD_HOST_ROLE\" = compile\ntest \"$MOOX_STORAGE_BUILD_GOARCH\" = amd64\ntouch ./compiled\n"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy-moox.sh"), []byte("#!/bin/sh\nset -eu\ntest -f ./compiled\ntest \"$MOOX_EVENTBUS_ENABLE_TLS\" = 1\ntest \"$MOOX_EVENTBUS_PUBLIC_IP\" = eventbus.example.test\ntest \"$MOOX_EVENTBUS_PORT\" = 4222\ntest \"$MOOX_STORAGE_PRIMARY_AUTH_SECRET\" = primary-secret\ntest \"$MOOX_STORAGE_VIEW_AUTH_SECRET\" = view-secret\ntest -n \"$MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64\"\ntest \"$MOOX_LOCAL_LOG_MAX_SIZE_MB\" = 88\ntest \"$MOOX_LOCAL_LOG_BACKUP_COUNT\" = 9\ntest \"$MOOX_HEALTH_AUTH_VERSION\" = moox-health-v1\ntest \"$MOOX_HEALTH_AUTH_ACCESS_KEY\" = monitor\ntest \"$MOOX_HEALTH_AUTH_SECRET_KEY\" = health-secret\ncase \" $* \" in *' --skip-build '*) ;; *) exit 2 ;; esac\ncase \" $* \" in *' --no-gateway '*) ;; *) exit 4 ;; esac\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --archive ]; then\n    dir=$(mktemp -d)\n    trap 'rm -rf \"$dir\"' EXIT\n    printf '%s' '{\"schema_version\":1,\"commit\":\"0123456789012345678901234567890123456789\",\"dirty\":false,\"binary_hashes\":{\"moox-storage-primary\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"moox-storage-node\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"moox-storage-view\":\"0000000000000000000000000000000000000000000000000000000000000000\"}}' >\"$dir/build-provenance.json\"\n    tar -czf \"$2\" -C \"$dir\" build-provenance.json\n    exit 0\n  fi\n  shift\ndone\nexit 3\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "build", "build-storage-linux.sh"), []byte("#!/bin/sh\nset -eu\n: \"${MOOX_CLI:?}\"\n: \"${CONFIG:?}\"\ntest \"$MOOX_SSH_PASSWORD\" = build-password\ntest \"$MOOX_STORAGE_BUILD_HOST\" = compile\ntest \"$MOOX_STORAGE_BUILD_HOST_ROLE\" = compile\ntest \"$MOOX_STORAGE_BUILD_GOARCH\" = amd64\ntouch ./compiled\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy", "deploy-moox.sh"), []byte("#!/bin/sh\nset -eu\ntest -f ./compiled\ntest \"$MOOX_EVENTBUS_ENABLE_TLS\" = 1\ntest \"$MOOX_EVENTBUS_PUBLIC_IP\" = eventbus.example.test\ntest \"$MOOX_EVENTBUS_PORT\" = 4222\ntest \"$MOOX_STORAGE_PRIMARY_AUTH_SECRET\" = primary-secret\ntest \"$MOOX_STORAGE_VIEW_AUTH_SECRET\" = view-secret\ntest -n \"$MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64\"\ntest \"$MOOX_LOCAL_LOG_MAX_SIZE_MB\" = 88\ntest \"$MOOX_LOCAL_LOG_BACKUP_COUNT\" = 9\ntest \"$MOOX_HEALTH_AUTH_VERSION\" = moox-health-v1\ntest \"$MOOX_HEALTH_AUTH_ACCESS_KEY\" = monitor\ntest \"$MOOX_HEALTH_AUTH_SECRET_KEY\" = health-secret\ncase \" $* \" in *' --skip-build '*) ;; *) exit 2 ;; esac\ncase \" $* \" in *' --no-gateway '*) ;; *) exit 4 ;; esac\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --archive ]; then\n    dir=$(mktemp -d)\n    trap 'rm -rf \"$dir\"' EXIT\n    printf '%s' '{\"schema_version\":1,\"commit\":\"0123456789012345678901234567890123456789\",\"dirty\":false,\"binary_hashes\":{\"moox-storage-primary\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"moox-storage-node\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"moox-storage-view\":\"0000000000000000000000000000000000000000000000000000000000000000\"}}' >\"$dir/build-provenance.json\"\n    tar -czf \"$2\" -C \"$dir\" build-provenance.json\n    exit 0\n  fi\n  shift\ndone\nexit 3\n"), 0o700))
 
 	archive, err := (StoragePackager{}).Package(context.Background(), Options{
 		RepositoryRoot: root, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64", StorageBuildPassword: "build-password", StorageBuildHost: "compile", StorageBuildHostRole: "compile",
@@ -474,17 +475,20 @@ func TestStorageInstallerCopiesEventBusMaterialForRestarts(t *testing.T) {
 	require.NoError(t, copyFileForTest(archive, remoteArchive))
 	credential := filepath.Join(t.TempDir(), "storage-eventbus.yaml")
 	ca := filepath.Join(t.TempDir(), "ca.pem")
+	metricsCredential := filepath.Join(t.TempDir(), "metrics-publisher.yaml")
 	require.NoError(t, os.WriteFile(credential, []byte("version: 1\nusername: storage-eventbus\ntoken: token\nca_file: ca.pem\n"), 0o600))
 	require.NoError(t, os.WriteFile(ca, []byte("ca"), 0o600))
+	require.NoError(t, os.WriteFile(metricsCredential, []byte("version: 1\nusername: metrics-publisher\ntoken: metrics-token\n"), 0o600))
 
 	storageRoot := filepath.Join(home, "moox", "storage")
 	controlRoot := filepath.Join(home, "moox", "prod")
-	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", storageRoot, controlRoot, "0", "0", "0", token, remoteArchive, credential, ca)
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", storageRoot, controlRoot, "0", "0", "0", token, remoteArchive, credential, ca, metricsCredential)
 	cmd.Env = storageInstallerEnv(t, home)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 	require.Equal(t, "version: 1\nusername: storage-eventbus\ntoken: token\nca_file: ca.pem\n", string(requireFile(t, filepath.Join(home, ".config", "moox", "eventbus", "storage-eventbus.yaml"))))
 	require.Equal(t, "ca", string(requireFile(t, filepath.Join(home, ".config", "moox", "eventbus", "ca.pem"))))
+	require.Equal(t, "version: 1\nusername: metrics-publisher\ntoken: metrics-token\n", string(requireFile(t, filepath.Join(home, ".config", "moox", "eventbus", "metrics-publisher.yaml"))))
 }
 
 func TestStorageInstallerDefaultPreservesExistingData(t *testing.T) {

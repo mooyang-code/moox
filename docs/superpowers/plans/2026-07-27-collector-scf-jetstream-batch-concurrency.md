@@ -491,7 +491,7 @@ git commit -m "refactor(collector): scope job types by provider"
 - Modify: `modules/collector/internal/taskrunner/direct_test.go`
 - Modify: `modules/collector/cmd/scf/main_test.go`
 - Modify: `modules/collector/internal/serverless/handler_test.go`
-- Modify: `scripts/build-collector-scf-package_test.sh`
+- Modify: `scripts/build/build-collector-scf-package_test.sh`
 
 - [x] **Step 1: 先写 worker 配置和 Fetch 参数测试**
 
@@ -590,7 +590,7 @@ func TestKeepaliveDoesNotFetchOrExecuteJobItems(t *testing.T)
 
 - [x] **Step 6: 验证 SCF 包含新配置**
 
-`scripts/build-collector-scf-package_test.sh` 解压 zip 后断言：
+`scripts/build/build-collector-scf-package_test.sh` 解压 zip 后断言：
 
 ```text
 config.yaml contains job_worker.batch_size: 10
@@ -603,7 +603,7 @@ config.yaml does not contain concurrency or in_progress_interval
 
 ```bash
 (cd modules/collector && go test -count=1 ./internal/app/runtime ./internal/taskrunner ./cmd/scf ./internal/serverless)
-bash scripts/build-collector-scf-package_test.sh
+bash scripts/build/build-collector-scf-package_test.sh
 ```
 
 - [x] **Step 7: 提交**
@@ -612,7 +612,7 @@ bash scripts/build-collector-scf-package_test.sh
 git add modules/collector/internal/taskrunner \
   modules/collector/cmd/scf \
   modules/collector/internal/serverless \
-  scripts/build-collector-scf-package_test.sh
+  scripts/build/build-collector-scf-package_test.sh
 git commit -m "feat(collector): fetch and execute job batches concurrently"
 ```
 
@@ -1003,7 +1003,7 @@ Storage 行写入继续依赖现有 RowKey upsert 获得结果幂等；本计划
 - Kline：`source.dataset_id` 和 `target.dataset_id` 均非空；个人量化默认在 UI 中选择同一个 Dataset。
 - Symbol：`source.kind=none`，`target.dataset_id` 非空。
 
-这会直接消除 `binance_spot_symbol` 与实际 `binance_spot_symbols` 的默认命名不一致，不需要维护类型到 Dataset 的魔法映射。
+这会直接消除 `binance_spot_symbol` 与实际 `dataset_binance_spot_symbols` 的默认命名不一致，不需要维护类型到 Dataset 的魔法映射。
 
 - [x] **Step 4: Create/Update 时按 jobs registry 完整校验**
 
@@ -1230,7 +1230,7 @@ duplicate handler starts: 0
 node --test examples/e2e/verify-status.test.mjs
 bash examples/e2e/test-run-scf-resident.sh
 bash examples/e2e/test-run-real-scf.sh
-bash scripts/test-go-workspace.sh
+bash scripts/test/contract/test-go-workspace.sh
 make verify-pr
 ```
 
@@ -1249,7 +1249,7 @@ git commit -m "test(collector): cover concurrent JetStream job batches"
 
 **Files:**
 
-- Modify if required by acceptance: `scripts/build-collector-scf-package.sh`
+- Modify if required by acceptance: `scripts/build/build-collector-scf-package.sh`
 - Modify if required by acceptance: `examples/e2e/run-real-scf.sh`
 - Modify if required by acceptance: `examples/e2e/verify.mjs`
 - Modify: `docs/superpowers/plans/2026-07-27-collector-scf-jetstream-batch-concurrency.md`
@@ -1413,7 +1413,7 @@ git ls-remote --heads origin feature/mooyang
 
 - 实施分支：`feature/collector-scf-batch-concurrency`。
 - 核心实现截止提交：`37d85162`；最终 E2E 断言加固提交：`e83a64bc`。
-- 本地验证：`make verify-pr`、`scripts/test-go-workspace.sh`、Collector/CloudRuntime race 测试、17 个 Node E2E 契约测试和 `git diff --check` 均通过。
+- 本地验证：`make verify-pr`、`scripts/test/contract/test-go-workspace.sh`、Collector/CloudRuntime race 测试、17 个 Node E2E 契约测试和 `git diff --check` 均通过。
 - 106 微服务：Collector、CloudNode、EventBus、Storage、Gateway 和 Web Host 均以本计划配置运行；Collector 已更新为当前实现。
 - 腾讯云 SCF 包：`moox-collector-batch-a5-20260727_37d85162-ca5` 与 `moox-collector-batch-b5-20260727_37d85162-ca5`。
 - 在线 SCF 节点：`moox-collector-batch-a5-20260727-ap-guangzhou-0` 与 `moox-collector-batch-b5-20260727-ap-guangzhou-0`。

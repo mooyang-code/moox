@@ -4,7 +4,7 @@
 
 **Goal:** 将 Storage 重构为单 PrimaryStore、多个单归属 DataNode、字段级 Pebble Upsert、每 Dataset 一个 NATS Subject 和单 View Consumer 的多进程系统，并通过 ActiveView/NewView A/B 数据库平滑完成 View 重建。
 
-**Architecture:** Metadata SQLite v4 通过现有 `snapshotcache` 定时发布不可变内存快照；PrimaryStore 校验 RowKey/Field 后直连 DataNode，DataNode 在同一 Pebble Batch 中 Upsert 独立 Field/Attribute Key 和内部有序 Outbox。每个 Dataset 发布到独立 `moox.storage.fields_changed.v1.<space-token>.<dataset-token>` Subject；`storage-view` 以单条串行方式消费全部 Dataset，重建期间实时双写 ActiveView/NewView，空闲 Backfill 从旧 ActiveView RowKey 补全历史字段。
+**Architecture:** Metadata SQLite v4 通过现有 `snapshotcache` 定时发布不可变内存快照；PrimaryStore 校验 RowKey/Field 后直连 DataNode，DataNode 在同一 Pebble Batch 中 Upsert 独立 Field/Attribute Key 和内部有序 Outbox。每个 Dataset 发布到独立 `moox.event.storage.fields_changed.v1.<space-token>.<dataset-token>` Subject；`storage-view` 以单条串行方式消费全部 Dataset，重建期间实时双写 ActiveView/NewView，空闲 Backfill 从旧 ActiveView RowKey 补全历史字段。
 
 **Tech Stack:** Go 1.25、tRPC-Go、Protocol Buffers、SQLite、snapshotcache、Pebble v1.1.5、NATS JetStream、DuckDB、Bleve、Vue 3、TypeScript、Shell。
 
@@ -95,8 +95,8 @@
 **文件：**
 - 读取：`docs/superpowers/specs/2026-07-19-storage-dataset-node-simplification-design.md`
 - 读取：`docs/superpowers/plans/2026-07-19-storage-consistency-review-remediation.md`
-- 读取：`scripts/test-storage-boundary-contract.sh`
-- 读取：`scripts/test-storage-consistency-contract.sh`
+- 读取：`scripts/test/contract/test-storage-boundary-contract.sh`
+- 读取：`scripts/test/contract/test-storage-consistency-contract.sh`
 
 **接口：**
 - 输入：当前 `origin/main` 和本设计规范。
@@ -118,8 +118,8 @@ git status --short --branch
 
 ```bash
 (cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./...)
-bash scripts/test-storage-boundary-contract.sh
-bash scripts/test-storage-consistency-contract.sh
+bash scripts/test/contract/test-storage-boundary-contract.sh
+bash scripts/test/contract/test-storage-consistency-contract.sh
 make verify
 ```
 
@@ -152,7 +152,7 @@ git rev-parse HEAD
 
 - [ ] **步骤 1：先写协议边界失败测试**
 
-更新 `scripts/test-storage-boundary-contract.sh`，要求活动 Proto 不得出现：
+更新 `scripts/test/contract/test-storage-boundary-contract.sh`，要求活动 Proto 不得出现：
 
 ```text
 FactKey, RowMarker, content_hash, FACT_VERSION_IMMUTABLE
@@ -165,7 +165,7 @@ keep_days, required, dimensions
 运行：
 
 ```bash
-bash scripts/test-storage-boundary-contract.sh
+bash scripts/test/contract/test-storage-boundary-contract.sh
 ```
 
 预期：FAIL，并报告当前旧符号。
@@ -239,7 +239,7 @@ t_view_builds.c_safe_error
 
 ```bash
 make generate
-bash scripts/test-storage-boundary-contract.sh
+bash scripts/test/contract/test-storage-boundary-contract.sh
 (cd modules/storage && env GOCACHE=/tmp/moox-gocache go test -count=1 ./schema ./proto/storagegen)
 ```
 
@@ -248,7 +248,7 @@ bash scripts/test-storage-boundary-contract.sh
 - [ ] **步骤 5：提交最终契约**
 
 ```bash
-git add modules/storage/proto modules/storage/schema scripts/test-storage-boundary-contract.sh
+git add modules/storage/proto modules/storage/schema scripts/test/contract/test-storage-boundary-contract.sh
 git commit -m "refactor(storage): define row key and field upsert protocol"
 ```
 
@@ -510,14 +510,14 @@ func ParseDatasetFieldsChangedSubject(prefix, subject string) (spaceID, datasetI
 ```yaml
 streams:
   - name: MOOX_STORAGE
-    subjects: ["moox.storage.fields_changed.v1.>"]
+    subjects: ["moox.event.storage.fields_changed.v1.>"]
     retention: interest
     discard: new
     storage: file
     replicas: 1
 
 topic_families:
-  - pattern: moox.storage.fields_changed.v1.>
+  - pattern: moox.event.storage.fields_changed.v1.>
     stream: MOOX_STORAGE
     kind: 1
     payload_content_type: "application/x-protobuf; message=trpc.moox.storage.DatasetFieldsChanged"
@@ -539,7 +539,7 @@ Subject 的顺序边界明确如下：
 ```yaml
 - stream: MOOX_STORAGE
   durable: storage_view
-  filter_subject: moox.storage.fields_changed.v1.>
+  filter_subject: moox.event.storage.fields_changed.v1.>
   max_ack_pending: 1
 ```
 
@@ -547,7 +547,7 @@ Storage Subscriber Options 固定 `MaxInFlight=1`，每次 `Fetch(1)`，处理�
 
 - [ ] **步骤 4：更新 ACL**
 
-DataNode Publisher 只能发布 `moox.storage.fields_changed.v1.>`；storage-view 只获得 `storage_view` 的 INFO/NEXT/ACK 权限；Archive/Factor 可按明确 Dataset Subject 授权。测试读取生成 YAML，但不得输出 Token 或 Password。
+DataNode Publisher 只能发布 `moox.event.storage.fields_changed.v1.>`；storage-view 只获得 `storage_view` 的 INFO/NEXT/ACK 权限；Archive/Factor 可按明确 Dataset Subject 授权。测试读取生成 YAML，但不得输出 Token 或 Password。
 
 - [ ] **步骤 5：运行测试并提交**
 
@@ -798,11 +798,11 @@ git commit -m "feat(storage): switch view slots atomically"
 - 修改：`web/src/api/storage/metadata.ts`
 - 修改：`web/src/api/storage/types.ts`
 - 修改：`web/src/views/data/datasets/components/dataset-column-panel.vue`
-- 修改：`scripts/storage-start.sh`
-- 修改：`scripts/storage-stop.sh`
-- 修改：`scripts/deploy-moox.sh`
-- 修改：`scripts/test-storage-boundary-contract.sh`
-- 修改：`scripts/test-storage-consistency-contract.sh`
+- 修改：`scripts/runtime/storage-start.sh`
+- 修改：`scripts/runtime/storage-stop.sh`
+- 修改：`scripts/deploy/deploy-moox.sh`
+- 修改：`scripts/test/contract/test-storage-boundary-contract.sh`
+- 修改：`scripts/test/contract/test-storage-consistency-contract.sh`
 - 修改：`docs/存储层架构.md`
 - 修改：`docs/存储目标架构与元数据.md`
 - 修改：`docs/存储引擎架构.md`
@@ -868,20 +868,20 @@ git commit -m "refactor(storage): integrate field upsert architecture"
 ### 任务 14：完成两服务器 E2E、两轮审查和最终交付
 
 **文件：**
-- 新建：`scripts/e2e/storage-field-upsert.sh`
-- 新建：`scripts/e2e/storage-field-upsert_test.sh`
+- 新建：`scripts/test/e2e/storage-field-upsert.sh`
+- 新建：`scripts/test/e2e/storage-field-upsert_test.sh`
 - 修改：`.gitignore`
 - 修改：`modules/storage/README.md`
 - 修改：`docs/运维/数据保留与磁盘空间.md`
 - 更新：`docs/superpowers/plans/2026-07-19-storage-consistency-review-remediation.md`
 
 **接口：**
-- 输入：最终候选 HEAD、忽略的 `custom.toml` 和两个远程节点。
+- 输入：最终候选 HEAD、忽略的 `moox.toml` 和两个远程节点。
 - 输出：本地门禁、两轮独立审查、两服务器 E2E 和同步远程分支。
 
 - [ ] **步骤 1：先写 E2E 脚本契约测试**
 
-覆盖：缺少 custom.toml 时安全失败；必须选择两个不同启用节点；日志不包含密码/Token/私钥/展开 SSH 命令；任一阶段失败返回非零；退出清理自身远程目录和进程。
+覆盖：缺少 moox.toml 时安全失败；必须选择两个不同启用节点；日志不包含密码/Token/私钥/展开 SSH 命令；任一阶段失败返回非零；退出清理自身远程目录和进程。
 
 - [ ] **步骤 2：实现安全 E2E Harness**
 
@@ -893,7 +893,7 @@ git commit -m "refactor(storage): integrate field upsert architecture"
 make verify
 make test-docs-architecture
 pnpm docs:build
-bash scripts/e2e/storage-field-upsert_test.sh
+bash scripts/test/e2e/storage-field-upsert_test.sh
 git diff --check
 ```
 
@@ -920,7 +920,7 @@ git commit -m "fix(storage): address view rebuild review"
 - [ ] **步骤 6：从最终 HEAD 运行两服务器 E2E**
 
 ```bash
-bash scripts/e2e/storage-field-upsert.sh --config custom.toml
+bash scripts/test/e2e/storage-field-upsert.sh --config moox.toml
 ```
 
 必须验证：两个 DataNode 上的 Dataset 发布不同 Subject；Token/Payload 校验；历史 Field 补写和覆盖；Outbox 失败不越序；Consumer Batch 1/MaxAckPending 1；三个重建触发条件；实时双写；空闲 Backfill；失败 Build 人工重试；查询无感切换；独立 Cleanup；OldView 删除。
@@ -953,7 +953,7 @@ git rev-parse '@{upstream}'
 - [ ] 字段 Upsert、内部 Outbox 条目和下一 ID 在一个 Pebble Batch 中提交。
 - [ ] TimeSeries 使用可配置时间桶和 `keep_duration`；Record 不自动清理。
 - [ ] Dataset/View `keep_duration` 分别生效且互不调用。
-- [ ] 每个 Dataset 发布到 `moox.storage.fields_changed.v1.<space-token>.<dataset-token>`。
+- [ ] 每个 Dataset 发布到 `moox.event.storage.fields_changed.v1.<space-token>.<dataset-token>`。
 - [ ] Subject Token 可逆，Subject 与 Payload 不一致时拒绝消费。
 - [ ] 事件没有 Node/Dataset Sequence，ViewIndex 没有 Source Progress。
 - [ ] JetStream 只有一个 `storage_view` Durable，`MaxAckPending=1`、`FetchBatch=1`。

@@ -216,7 +216,7 @@ func TestCollectorInvokeMarketFetcherKeepsEventBusButOmitsHTTPSCAs(t *testing.T)
 
 func TestLoadCollectorSCFFetcherConfigSelectsOnlyRequestedSpace(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "custom.toml")
+	path := filepath.Join(root, "moox.toml")
 	content := `[admin]
 username = "admin"
 password = "password"
@@ -242,10 +242,10 @@ password = "password"
 enabled = true
 
 [[scf_fetcher.spaces]]
-space_id = "crypto_market"
+space_id = "crypto"
 storage_rpc_gateway_target = "ip://106.53.107.122:11003"
-entrypoint = "crypto_market"
-package_config_dir = "scf/crypto_market"
+entrypoint = "crypto"
+package_config_dir = "scf/crypto"
 package_name = "moox-collector-crypto-market"
 function_prefix = "moox-fetcher-crypto-market"
 memory_size = 64
@@ -264,13 +264,13 @@ function_count = 1
 cloud_account_id = "tencent-scf-singapore"
 
 [[scf_fetcher.spaces]]
-space_id = "stock_cn"
+space_id = "stockcn"
 timer_function_count = 1
 measured_safe_group_size = 1
 storage_rpc_gateway_target = "ip://106.53.107.122:11003"
-package_config_dir = "scf/stock_cn"
-package_name = "moox-collector-stock_cn"
-function_prefix = "moox-fetcher-stock_cn"
+package_config_dir = "scf/stockcn"
+package_name = "moox-collector-stockcn"
+function_prefix = "moox-fetcher-stockcn"
 memory_size = 64
 timeout_seconds = 15
 realtime_batch_size = 10
@@ -288,16 +288,16 @@ cloud_account_id = "tencent-scf-guangzhou"
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
-	cryptoMarket, err := loadCollectorSCFFetcherConfig(path, "crypto_market")
+	cryptoMarket, err := loadCollectorSCFFetcherConfig(path, "crypto")
 	require.NoError(t, err)
 	require.NotNil(t, cryptoMarket)
-	assert.Equal(t, "crypto_market", cryptoMarket.SpaceID)
-	assert.Equal(t, "crypto_market", cryptoMarket.Entrypoint)
-	assert.Equal(t, "scf/crypto_market", cryptoMarket.PackageConfigDir)
+	assert.Equal(t, "crypto", cryptoMarket.SpaceID)
+	assert.Equal(t, "crypto", cryptoMarket.Entrypoint)
+	assert.Equal(t, "scf/crypto", cryptoMarket.PackageConfigDir)
 	assert.Equal(t, "ap-singapore", cryptoMarket.Regions[0].Region)
 
-	_, err = loadCollectorSCFFetcherConfig(path, "stock_us")
-	require.ErrorContains(t, err, `no configuration for space "stock_us"`)
+	_, err = loadCollectorSCFFetcherConfig(path, "stockus")
+	require.ErrorContains(t, err, `no configuration for space "stockus"`)
 }
 
 func TestEnsureCollectorSpaceCloudAccountsRegistersOnlyMissingAccount(t *testing.T) {
@@ -339,7 +339,7 @@ func TestEgressProbeResponseDataAcceptsStructuredAndRawResponses(t *testing.T) {
 
 func TestResolveCollectorProbeExpectedCountUsesStockCNFleetConfig(t *testing.T) {
 	configured := &setupconfig.SCFFetcherSpace{
-		SpaceID:            "stock_cn",
+		SpaceID:            "stockcn",
 		TimerFunctionCount: 200,
 		Regions: []setupconfig.SCFFetcherRegion{
 			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50},
@@ -349,19 +349,19 @@ func TestResolveCollectorProbeExpectedCountUsesStockCNFleetConfig(t *testing.T) 
 		},
 	}
 
-	count, err := resolveCollectorProbeExpectedCount("stock_cn", "", configured)
+	count, err := resolveCollectorProbeExpectedCount("stockcn", "", configured)
 	require.NoError(t, err)
 	assert.Equal(t, 200, count)
 
-	count, err = resolveCollectorProbeExpectedCount("stock_cn", "ap-shanghai", configured)
+	count, err = resolveCollectorProbeExpectedCount("stockcn", "ap-shanghai", configured)
 	require.NoError(t, err)
 	assert.Equal(t, 50, count)
 
-	count, err = resolveCollectorProbeExpectedCount("stock_cn", "", nil)
+	count, err = resolveCollectorProbeExpectedCount("stockcn", "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, setupconfig.DefaultStockCNMarketTimerFunctionCount, count)
 
-	count, err = resolveCollectorProbeExpectedCount("crypto_market", "", nil)
+	count, err = resolveCollectorProbeExpectedCount("crypto", "", nil)
 	require.NoError(t, err)
 	assert.Zero(t, count)
 }
@@ -398,11 +398,11 @@ func TestCollectorEgressProbeReportKeepsOnlyDiagnosticCounts(t *testing.T) {
 }
 
 func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
-	stock := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "stock_cn"}, Region: "ap-shanghai", StorageRPCGatewayTarget: "ip://storage:11003"}, "stock-node", "batch-stock")
+	stock := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "stockcn"}, Region: "ap-shanghai", StorageRPCGatewayTarget: "ip://storage:11003"}, "stock-node", "batch-stock")
 	stockData := stock["data"].(map[string]any)
-	assert.Equal(t, "stock_cn_kline", stockData["dataset_id"])
+	assert.Equal(t, "dataset_stockcn_equity_kline", stockData["dataset_id"])
 	assert.Equal(t, "tencent", stockData["provider"])
-	assert.Equal(t, "stock_cn_http", stockData["source_id"])
+	assert.Equal(t, "stockcn_http", stockData["source_id"])
 	assert.Equal(t, "equity", stockData["market_type"])
 	assert.Equal(t, "backfill", stockData["batch_kind"])
 	stockItem := stockData["items"].([]map[string]any)[0]
@@ -415,16 +415,16 @@ func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
 	require.NoError(t, err)
 	assert.InDelta(t, float64(23*time.Hour/time.Second), time.Since(start).Seconds(), 90)
 
-	crypto := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "crypto_market"}}, "crypto-node", "batch-crypto")
+	crypto := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "crypto"}}, "crypto-node", "batch-crypto")
 	cryptoData := crypto["data"].(map[string]any)
-	assert.Equal(t, "binance_spot_kline_1m", cryptoData["dataset_id"])
+	assert.Equal(t, "dataset_binance_spot_kline_1m", cryptoData["dataset_id"])
 	assert.Equal(t, "binance", cryptoData["provider"])
 	assert.Equal(t, "spot", cryptoData["market_type"])
 	assert.Equal(t, "realtime", cryptoData["batch_kind"])
 }
 
 func TestDefaultStockCNCollectorRulesRequireExplicitActivation(t *testing.T) {
-	content, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "collector-rules.yaml"))
+	content, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "config", "setup", "collector-rules.yaml"))
 	require.NoError(t, err)
 	var bundle struct {
 		Rules []struct {
@@ -436,15 +436,15 @@ func TestDefaultStockCNCollectorRulesRequireExplicitActivation(t *testing.T) {
 	require.NoError(t, yaml.Unmarshal(content, &bundle))
 	seen := map[string]bool{}
 	for _, rule := range bundle.Rules {
-		if rule.SpaceID != "stock_cn" {
+		if rule.SpaceID != "stockcn" {
 			continue
 		}
 		seen[rule.RuleID] = rule.Enabled
 	}
-	assert.Contains(t, seen, "builtin-stock-cn-instrument-1d")
-	assert.Contains(t, seen, "builtin-stock-cn-kline-1m")
-	assert.False(t, seen["builtin-stock-cn-instrument-1d"])
-	assert.False(t, seen["builtin-stock-cn-kline-1m"])
+	assert.Contains(t, seen, "builtin-stockcn-instrument-1d")
+	assert.Contains(t, seen, "builtin-stockcn-kline-1m")
+	assert.False(t, seen["builtin-stockcn-instrument-1d"])
+	assert.False(t, seen["builtin-stockcn-kline-1m"])
 }
 
 func TestCollectorFunctionEnvironmentRejectsInvalidOrConflictingCA(t *testing.T) {
@@ -1017,27 +1017,27 @@ func TestBuildCollectorCreateNodeItemStandardManifestFitsTimerAndInvokeBudgets(t
 func TestBuildCollectorCreateNodeItemUsesLongStockCNInstrumentInvokeTimeoutOnlyForInvoke(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	fetcher := &setupconfig.SCFFetcherSpace{
-		SpaceID: "stock_cn", MemorySize: 64, TimeoutSeconds: 15,
+		SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 15,
 		InstrumentInvokeTimeoutSeconds: 60,
 		RealtimeBatchSize:              10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
 		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
 	}
 	timer := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
-		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "timer", FetcherConfig: fetcher,
-	}, "moox-collector-stock-cn_dev")
+		SpaceID: "stockcn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "timer", FetcherConfig: fetcher,
+	}, "moox-collector-stockcn_dev")
 	assert.Equal(t, "15", timer.Config["timeout"])
 	assert.Equal(t, "15", timer.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
 
 	invoke := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
-		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "invoke", FetcherConfig: fetcher,
-	}, "moox-collector-stock-cn_dev")
+		SpaceID: "stockcn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "invoke", FetcherConfig: fetcher,
+	}, "moox-collector-stockcn_dev")
 	assert.Equal(t, "60", invoke.Config["timeout"])
 	assert.Equal(t, "60", invoke.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
 
 	fetcher.InstrumentInvokeTimeoutSeconds = 90
 	configured := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
-		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "invoke", FetcherConfig: fetcher,
-	}, "moox-collector-stock-cn_dev")
+		SpaceID: "stockcn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "invoke", FetcherConfig: fetcher,
+	}, "moox-collector-stockcn_dev")
 	assert.Equal(t, "90", configured.Config["timeout"])
 	assert.Equal(t, "90", configured.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
 }
@@ -1045,16 +1045,16 @@ func TestBuildCollectorCreateNodeItemUsesLongStockCNInstrumentInvokeTimeoutOnlyF
 func TestBuildCollectorCreateNodeItemUsesIndependentInstrumentTimerMode(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	fetcher := &setupconfig.SCFFetcherSpace{
-		SpaceID: "stock_cn", MemorySize: 64, TimeoutSeconds: 15,
+		SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 15,
 		InstrumentSnapshotTimeoutSeconds: 300,
 		RealtimeBatchSize:                10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
 		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
 	}
 
 	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
-		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-shanghai", TriggerType: "timer",
+		SpaceID: "stockcn", CloudAccountID: "account-a", Region: "ap-shanghai", TriggerType: "timer",
 		InstrumentSnapshotTimer: true, FetcherConfig: fetcher,
-	}, "moox-collector-stock-cn_dev")
+	}, "moox-collector-stockcn_dev")
 
 	assert.Equal(t, "300", item.Config["timeout"])
 	assert.Equal(t, "256", item.Config["memory_size"])
@@ -1069,21 +1069,21 @@ func TestBuildCollectorCreateNodeItemUsesIndependentInstrumentTimerMode(t *testi
 func TestBuildCollectorCreateNodeItemRejectsConcurrentSCFInstances(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
-		SpaceID: "stock_cn", CloudAccountID: "account-a", Region: "ap-shanghai", TriggerType: "timer",
+		SpaceID: "stockcn", CloudAccountID: "account-a", Region: "ap-shanghai", TriggerType: "timer",
 		Config: []string{"max_instance_concurrency=2"},
-	}, "moox-collector-stock-cn_dev")
+	}, "moox-collector-stockcn_dev")
 	require.ErrorContains(t, err, "max_instance_concurrency is fixed at 1")
 }
 
 func TestCollectorInstrumentCanaryEventUsesIndependentSnapshotAction(t *testing.T) {
-	event := collectorInstrumentCanaryEvent(collectorPublishOptions{StorageRPCGatewayTarget: "ip://storage:11003", SpaceID: "stock_cn", Region: "ap-singapore"}, "node-1", "batch-1", 0, stockInstrumentCanaryShardCount, "2026-08-30T00:00:00Z")
+	event := collectorInstrumentCanaryEvent(collectorPublishOptions{StorageRPCGatewayTarget: "ip://storage:11003", SpaceID: "stockcn", Region: "ap-singapore"}, "node-1", "batch-1", 0, stockInstrumentCanaryShardCount, "2026-08-30T00:00:00Z")
 
 	assert.Equal(t, "instrument_snapshot", event["action"])
 	assert.Equal(t, "ip://storage:11003", event["storage_rpc_gateway_target"])
 	data, ok := event["data"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "instrument_snapshot", data["batch_kind"])
-	assert.Equal(t, "stock_cn_instruments", data["dataset_id"])
+	assert.Equal(t, "dataset_stockcn_instruments", data["dataset_id"])
 	assert.Equal(t, "node-1", data["node_id"])
 	items, ok := data["items"].([]map[string]any)
 	require.True(t, ok)

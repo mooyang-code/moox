@@ -918,7 +918,7 @@ Expected: boundary check passes.
 Use the repo's existing deploy flow. Preserve production data directories.
 
 ```bash
-./scripts/deploy-moox.sh --target ubuntu@106.53.107.122
+./scripts/deploy/deploy-moox.sh --target ubuntu@106.53.107.122
 ```
 
 Expected: storage, admin gateway, and web-host restart successfully.

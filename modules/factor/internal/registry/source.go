@@ -8,22 +8,22 @@ import (
 
 // ResultDataset returns the managed factor result Dataset for one source Dataset.
 func ResultDataset(sourceDatasetID string) string {
-	return resultObjectID(sourceDatasetID, "_factor", 50)
+	return resultObjectID(withDatasetPrefix(sourceDatasetID), "_factor", 50)
 }
 
 // ResultView returns the managed factor result View for one source Dataset.
 func ResultView(sourceDatasetID string) string {
-	return resultObjectID(sourceDatasetID, "_factor_v", 30)
+	return "view_" + resultObjectID(datasetBaseID(sourceDatasetID), "_factor_v", 25)
 }
 
 // ResultDatasetForView keeps the readable Dataset-based name for the usual
-// <dataset>_view pairing, while preserving uniqueness when multiple Views
+// view_<dataset> pairing, while preserving uniqueness when multiple Views
 // share one primary Dataset.
 func ResultDatasetForView(sourceDatasetID, sourceViewID string) string {
 	if canonicalSourceView(sourceDatasetID, sourceViewID) {
 		return ResultDataset(sourceDatasetID)
 	}
-	return resultObjectID(withViewDiscriminator(sourceDatasetID, sourceViewID), "_factor", 50)
+	return resultObjectID(withDatasetPrefix(withViewDiscriminator(sourceDatasetID, sourceViewID)), "_factor", 50)
 }
 
 // ResultViewForView is the View counterpart of ResultDatasetForView.
@@ -31,17 +31,25 @@ func ResultViewForView(sourceDatasetID, sourceViewID string) string {
 	if canonicalSourceView(sourceDatasetID, sourceViewID) {
 		return ResultView(sourceDatasetID)
 	}
-	return resultObjectID(withViewDiscriminator(sourceDatasetID, sourceViewID), "_factor_v", 30)
+	return "view_" + resultObjectID(withViewDiscriminator(datasetBaseID(sourceDatasetID), sourceViewID), "_factor_v", 25)
+}
+
+func datasetBaseID(sourceDatasetID string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(sourceDatasetID)), "view_"), "dataset_")
+}
+
+func withDatasetPrefix(sourceDatasetID string) string {
+	return "dataset_" + datasetBaseID(sourceDatasetID)
 }
 
 func canonicalSourceView(sourceDatasetID, sourceViewID string) bool {
 	viewID := strings.ToLower(strings.TrimSpace(sourceViewID))
-	return viewID == "" || viewID == strings.ToLower(strings.TrimSpace(sourceDatasetID))+"_view"
+	return viewID == "" || viewID == "view_"+datasetBaseID(sourceDatasetID)
 }
 
 func withViewDiscriminator(sourceDatasetID, sourceViewID string) string {
 	sum := sha1.Sum([]byte(strings.ToLower(strings.TrimSpace(sourceViewID))))
-	return strings.TrimRight(strings.ToLower(strings.TrimSpace(sourceDatasetID)), "_") + fmt.Sprintf("_%x", sum[:4])
+	return strings.TrimRight(datasetBaseID(sourceDatasetID), "_") + fmt.Sprintf("_%x", sum[:4])
 }
 
 func resultObjectID(sourceID, objectSuffix string, maxLen int) string {
