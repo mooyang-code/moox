@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math"
 	"testing"
+	"time"
 )
 
 func TestSecurityBarsRequestMatchesWireLayout(t *testing.T) {
@@ -92,6 +93,21 @@ func TestParseSecurityBarsRestoresDifferentialPrices(t *testing.T) {
 	}
 	if len(bars) != 2 || bars[0].Open != 10 || bars[0].Close != 10.1 || bars[1].Open != 10.1 || bars[1].Close != 10.075 {
 		t.Fatalf("unexpected bars: %+v", bars)
+	}
+}
+
+func TestParseMinuteDateUsesPackedDayBits(t *testing.T) {
+	data := make([]byte, 4)
+	zipDay := uint16((2026-2004)<<11 | 903)
+	binary.LittleEndian.PutUint16(data[0:2], zipDay)
+	binary.LittleEndian.PutUint16(data[2:4], 11*60+28)
+	got, err := parseDateTime(Category1Min, data, new(int))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 9, 3, 11, 28, 0, 0, shanghaiLocation)
+	if !got.Equal(want) {
+		t.Fatalf("minute time = %s, want %s", got, want)
 	}
 }
 

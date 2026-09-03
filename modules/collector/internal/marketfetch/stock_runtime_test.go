@@ -62,6 +62,13 @@ func TestLoadStockCNProviderRuntimeUsesPackagedFeedPolicies(t *testing.T) {
 	require.True(t, providers["baidu"].KlineShadow)
 }
 
+func TestStockCNRoutePutsTDXBeforeEastMoneyAsFallbacks(t *testing.T) {
+	route, err := loadStockCNRouteFile(filepath.Join("..", "..", "config", "markets", "stock_cn", "route.yaml"))
+	require.NoError(t, err)
+	require.Equal(t, []string{"sina", "tencent", "tdx", "eastmoney"}, route.KlineProviders())
+	require.Equal(t, []string{"sina", "tencent"}, route.KlinePrimaryProviders())
+}
+
 func TestNewStockCNProviderForSourceCarriesSourceIdentity(t *testing.T) {
 	provider, err := newStockCNProviderForSource("sina", "stock_cn_minute_http", stockCNProviderRuntime{
 		KlineSpec: stockCNProviderKlineFile{Frequency: "1m", MaxBarsPerRequest: 1023},
@@ -94,8 +101,8 @@ func TestNewStockKlinePipelineUsesSourceBoundEnvironment(t *testing.T) {
 	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stock_cn_http")
 	pipeline, err := NewStockKlinePipeline(timerHandlerStorage{})
 	require.NoError(t, err)
-	require.Equal(t, []string{"tencent"}, pipeline.CandidateChain)
-	require.Equal(t, "stock_cn_http", pipeline.SourceID)
+	require.Equal(t, []string{"sina", "tencent", "tdx", "eastmoney"}, pipeline.CandidateChain)
+	require.Empty(t, pipeline.SourceID)
 }
 
 func TestNewMarketKlinePipelineCreatesCatalogGatedHongKongSource(t *testing.T) {

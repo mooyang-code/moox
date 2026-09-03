@@ -93,9 +93,9 @@ func stockCNAssignmentRoute() (string, []stockCNSource, error) {
 	if err != nil {
 		return "", nil, fmt.Errorf("load stock_cn assignment route: %w", err)
 	}
-	sources := route.KlineSources()
+	sources := route.KlinePrimarySources()
 	if len(sources) < 2 {
-		return "", nil, fmt.Errorf("stock_cn assignment route must have at least two active kline providers")
+		return "", nil, fmt.Errorf("stock_cn assignment route must have at least two primary kline providers")
 	}
 	return route.RouteID, sources, nil
 }
@@ -213,9 +213,6 @@ func assignStockCNSourceGroups(subjects []string, sources []stockCNSource, nodeC
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("stock_cn source assignment requires at least one source")
 	}
-	normalized := normalizeSubjects(subjects)
-	buckets := make(map[string][]string, len(sources))
-	sourceByKey := make(map[string]stockCNSource, len(sources))
 	totalWeight := 0
 	for _, source := range sources {
 		source.Provider = strings.ToLower(strings.TrimSpace(source.Provider))
@@ -223,74 +220,29 @@ func assignStockCNSourceGroups(subjects []string, sources []stockCNSource, nodeC
 		if source.Provider == "" || source.SourceID == "" || source.Weight <= 0 {
 			return nil, fmt.Errorf("invalid stock_cn source %q/%q", source.Provider, source.SourceID)
 		}
-		key := source.Provider + "/" + source.SourceID
-		if _, exists := sourceByKey[key]; exists {
-			return nil, fmt.Errorf("duplicate stock_cn source %q", key)
-		}
-		sourceByKey[key] = source
 		totalWeight += source.Weight
 	}
 	if totalWeight <= 0 {
 		return nil, fmt.Errorf("stock_cn source weights must be positive")
 	}
-	for _, subject := range normalized {
-		bucket := weightedSourceBucket(routeVersion, subject, sources, totalWeight)
-		key := bucket.Provider + "/" + bucket.SourceID
-		buckets[key] = append(buckets[key], subject)
+	normalized := normalizeSubjects(subjects)
+	groups, err := marketdata.RendezvousAssign(normalized, nodeCount, routeVersion)
+	if err != nil {
+		return nil, fmt.Errorf("assign stock_cn groups: %w", err)
 	}
-
-	activeSources := make([]stockCNSource, 0, len(sources))
-	for _, source := range sources {
-		key := source.Provider + "/" + source.SourceID
-		if len(buckets[key]) > 0 {
-			activeSources = append(activeSources, source)
-		}
+	groups, err = rebalanceRendezvousGroups(groups, maxSubjects, routeVersion)
+	if err != nil {
+		return nil, err
 	}
-	if len(activeSources) == 0 {
-		return nil, fmt.Errorf("stock_cn source assignment produced no non-empty source bucket")
-	}
-	nodeCounts := make([]int, len(activeSources))
-	usedNodes := 0
-	for index, source := range activeSources {
-		required := (len(buckets[source.Provider+"/"+source.SourceID]) + maxSubjects - 1) / maxSubjects
-		if required < 1 {
-			required = 1
-		}
-		nodeCounts[index] = required
-		usedNodes += required
-	}
-	if usedNodes > nodeCount {
-		return nil, fmt.Errorf("stock_cn source assignment capacity insufficient: %d nodes required for %d available", usedNodes, nodeCount)
-	}
-	for usedNodes < nodeCount {
-		best := 0
-		for index := 1; index < len(activeSources); index++ {
-			if sourceNodeAllocationLess(activeSources[index], nodeCounts[index], activeSources[best], nodeCounts[best]) {
-				best = index
-			}
-		}
-		nodeCounts[best]++
-		usedNodes++
-	}
-
 	result := make([]stockCNSourceGroup, nodeCount)
-	nodeOffset := 0
-	for index, source := range activeSources {
-		key := source.Provider + "/" + source.SourceID
-		sourceSubjects := append([]string(nil), buckets[key]...)
-		sort.Strings(sourceSubjects)
-		groups, err := marketdata.RendezvousAssign(sourceSubjects, nodeCounts[index], routeVersion+"\x00"+key)
-		if err != nil {
-			return nil, fmt.Errorf("assign stock_cn source %s groups: %w", key, err)
+	for groupID, group := range groups {
+		var source stockCNSource
+		if groupID < len(sources) {
+			source = sources[groupID]
+		} else {
+			source = weightedSourceBucket(routeVersion, strconv.Itoa(groupID), sources, totalWeight)
 		}
-		groups, err = rebalanceRendezvousGroups(groups, maxSubjects, routeVersion+"\x00"+key)
-		if err != nil {
-			return nil, err
-		}
-		for groupIndex, group := range groups {
-			result[nodeOffset+groupIndex] = stockCNSourceGroup{Source: source, Subjects: append([]string(nil), group...)}
-		}
-		nodeOffset += nodeCounts[index]
+		result[groupID] = stockCNSourceGroup{Source: source, Subjects: append([]string(nil), group...)}
 	}
 	return result, nil
 }
@@ -308,15 +260,6 @@ func weightedSourceBucket(routeVersion, subject string, sources []stockCNSource,
 		bucket -= source.Weight
 	}
 	return sources[len(sources)-1]
-}
-
-func sourceNodeAllocationLess(left stockCNSource, leftCount int, right stockCNSource, rightCount int) bool {
-	leftRatio := float64(leftCount) / float64(left.Weight)
-	rightRatio := float64(rightCount) / float64(right.Weight)
-	if leftRatio != rightRatio {
-		return leftRatio < rightRatio
-	}
-	return left.Provider+"/"+left.SourceID < right.Provider+"/"+right.SourceID
 }
 
 func requiredStockCNGroupSize(activeSubjects, timerFunctionCount int) (int, error) {
@@ -439,6 +382,25 @@ func rebalanceRendezvousGroups(groups [][]string, maxSubjects int, routeVersion 
 			overflow = append(overflow, subjects[keep:]...)
 		}
 		result[groupID] = append([]string(nil), subjects[:keep]...)
+	}
+	if total >= len(result) {
+		for empty := range result {
+			if len(result[empty]) != 0 {
+				continue
+			}
+			largest := -1
+			for candidate := range result {
+				if len(result[candidate]) <= 1 || (largest >= 0 && len(result[candidate]) <= len(result[largest])) {
+					continue
+				}
+				largest = candidate
+			}
+			if largest >= 0 {
+				last := len(result[largest]) - 1
+				result[empty] = append(result[empty], result[largest][last])
+				result[largest] = result[largest][:last]
+			}
+		}
 	}
 	sort.Strings(overflow)
 	for _, subject := range overflow {

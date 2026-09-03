@@ -140,7 +140,9 @@ func parseDateTime(category KlineCategory, data []byte, pos *int) (time.Time, er
 		*pos += 4
 		year := int(zipDay>>11) + 2004
 		month := int(zipDay%2048) / 100
-		day := int(zipDay % 100)
+		// The low 11 bits contain MMDD; applying %100 to the full packed
+		// value incorrectly turns 2026-09-03 into 2026-10-29.
+		day := int(zipDay%2048) % 100
 		hour := int(minutes) / 60
 		minute := int(minutes) % 60
 		return time.Date(year, time.Month(month), day, hour, minute, 0, 0, shanghaiLocation), nil

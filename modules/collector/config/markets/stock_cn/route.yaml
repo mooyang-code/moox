@@ -18,24 +18,28 @@ providers:
     source_id: stock_cn_minute_http
     weight: 1
     kline: active
-    instrument: active
-  - id: eastmoney
-    source_id: stock_cn_http
-    weight: 1
-    kline: active
+    kline_role: primary
     instrument: active
   - id: tencent
     source_id: stock_cn_http
     weight: 1
     kline: active
-    instrument: disabled
-  - id: baidu
-    source_id: stock_cn_http
-    weight: 1
-    kline: shadow
+    kline_role: primary
     instrument: disabled
   - id: tdx
     source_id: normal_7709
+    weight: 1
+    kline: active
+    kline_role: fallback
+    instrument: disabled
+  - id: eastmoney
+    source_id: stock_cn_http
+    weight: 1
+    kline: active
+    kline_role: fallback
+    instrument: active
+  - id: baidu
+    source_id: stock_cn_http
     weight: 1
     kline: shadow
     instrument: disabled

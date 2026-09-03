@@ -19,7 +19,7 @@
 3. `count`、周期编号、市场编号、分页上限和时间标签。
 4. 与 easy_tdx/QUANTAXIS 或客户端行情的人工逐字段对账。
 
-未完成以上证据的 Source 只能保持 `catalog_only`，不能被 Market manifest 选为唯一生产来源。尤其不能把 classic 7727 和 mac 7727 当成同一协议，也不能把未确认的扩展字段写入 canonical amount/volume。
+未完成以上证据的扩展 Source 只能保持 `catalog_only`，不能被 Market manifest 选为唯一生产来源。尤其不能把 classic 7727 和 mac 7727 当成同一协议，也不能把未确认的扩展字段写入 canonical amount/volume。
 
 ## 2026-09-01 探测记录
 
@@ -30,9 +30,19 @@
 - `113.105.73.88:7709`、`119.147.171.206:7709`、`218.108.50.178:7709` 和 `hq.cjis.cn:7709` 均建立 TCP 连接但在读取首个响应帧时超时；不能据此判定节点永久不可用。
 - `jstdx.gtjas.com:7727`、`shtdx.gtjas.com:7727` 的 classic/MAC 尝试都收到 443 bytes 非完整 TDX body，解析以 `unexpected EOF` 结束；当前没有可用的 `7727` 完整响应头、压缩体、解压体和登录成功证据。
 
+## 2026-09-03 分钟 K 线复验与修复
+
+此前 Go 实现将 `600000.SH` 的分钟时间解析成 `2026-10-29`，根因不是请求中的 `category=7` 或 `start=0` 参数，而是压缩日期字段的解码错误：`zipday` 的低 11 位才是 `MMDD`，原实现却直接对完整 16 位值执行 `%100`。例如原始字节 `87 b3` 表示 `2026-09-03`，旧逻辑得到日 `59`，被 `time.Date` 规范化为 `2026-10-29`。
+
+`packages/tdx/commands.go` 已改为先取 `zipday%2048` 再解析月、日，并新增回归测试。修复后从 `shtdx.gtjas.com:7709` 实测 `600000.SH`、`000001.SZ` 的 1 分钟请求均返回 20 根有效记录，时间落在 `2026-09-03`；与 easy_tdx 同线路请求的分钟时间及最新 OHLCV 样本一致。easy_tdx 的协议实现也明确使用 `month=(zipday%2048)//100`、`day=(zipday%2048)%100`，并将 category 7 定义为 1 分钟线。[easy_tdx datetime codec](https://github.com/handsomejustin/easy_tdx/blob/main/src/easy_tdx/codec/datetime_.py)
+
+当前 `normal_7709` 已切换为 `stock_cn_kline` 的 active fallback 来源。正式运行链为 `sina -> tencent -> tdx -> eastmoney`：每个 Provider 请求失败最多重试 3 次，再进入下一个 Provider；TDX 失败后最后使用东方财富。TDX 不参与主分片分配，但会随每个 stock_cn SCF 包注册，因此源绑定的 Timer 也能跨 Provider fallback。
+
+仍有两个独立的后续门禁：日线标准化需要修正为公共 UTC bucket 语义，且日线接口返回的当天记录必须等收盘后再纳入；北交所还需要使用真实有效证券代码完成实测。这些门禁不影响当前 1m normal TDX fallback 的启用。
+
 同日稍后重新执行三种 `wire-spike` 变体时，`jstdx.gtjas.com:7709` 的 normal 和 MAC 请求收到 `HTTP/1.1 403 Forbidden`，classic 请求收到 `HTTP/1.1 502 Bad Gateway`，三次均未收到 TDX 帧。原始响应分别保存在 `/tmp/tdx-wire-jstdx-normal-20260901-rerun`、`/tmp/tdx-wire-jstdx-classic-20260901-rerun` 和 `/tmp/tdx-wire-jstdx-mac-20260901-rerun`；这只是当次网络观测，不能据此判定节点永久不可用。Go transport 已将这类非 TDX HTTP 响应分类为 `ErrProtocol`，避免把代理/WAF 返回误报为 TDX body 的 `unexpected EOF`，但该诊断改进不改变 Wire/Field Acceptance 未通过的结论。
 
-因此 `normal_7709` 已有一条开发环境的完整 setup/count 普通会话证据和一次日线 K 线解码证据，但分钟 K 线的时间语义仍异常，`ex_classic_7727` 和 `ex_mac_7727` 也不能推进启用门禁。所有线路和结果都必须在目标 SCF 地域再次验证。
+因此 `normal_7709` 已有开发环境的完整 setup/count、日线和分钟 K 线解码证据；日线标准化、当日未收盘过滤、北交所有效样本以及目标 SCF 地域验证仍未完成，`ex_classic_7727` 和 `ex_mac_7727` 也不能推进启用门禁。
 
 ## 线路探测
 

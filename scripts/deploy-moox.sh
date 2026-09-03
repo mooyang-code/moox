@@ -1135,7 +1135,8 @@ patch_configs() {
     perl -0pi -e 's#path:\s*\./data/moox_collector\.db#path: ../data/collector/moox_collector.db#g' \
       "${STAGE_DIR}/collector/config/app.yaml"
     # Local collector config disables the timer for dev runs; deployments need it on.
-    perl -0pi -e 's#scheduler=collectorSchedule&disable=1&params=[^"]*#scheduler=collectorSchedule&disable=0&params=space_id=crypto#g; s#scheduler=collectorSchedule&disable=0&params=(?=")#scheduler=collectorSchedule&disable=0&params=space_id=crypto#g' \
+    collector_space_id="${MOOX_SPACE_ID:-crypto}"
+    perl -0pi -e 's#scheduler=collectorSchedule&disable=1&params=[^"]*#scheduler=collectorSchedule&disable=0&params=space_id='"${collector_space_id}"'#g; s#scheduler=collectorSchedule&disable=0&params=(?=")#scheduler=collectorSchedule&disable=0&params=space_id='"${collector_space_id}"'#g' \
       "${STAGE_DIR}/collector/config/trpc_go.yaml"
   fi
   if [[ "${WITH_FACTOR}" -eq 1 ]]; then
@@ -1646,6 +1647,9 @@ STORAGE_SCHEMA_ENV=(
 )
 
 COLLECTOR_ENV=(
+  # Collector control-plane scheduling is space-scoped.  Do not rely on the
+  # process default: the deployment must carry the selected market explicitly.
+  "MOOX_SPACE_ID=${MOOX_SPACE_ID:-crypto}"
   "MOOX_COLLECTOR_ADMIN_GATEWAY_URL=${MOOX_COLLECTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
   "MOOX_EVENTBUS_CREDENTIAL_FILE=${MOOX_EVENTBUS_CREDENTIAL_FILE:-${HOME}/.config/moox/eventbus/collector-market-fetch-consumer.yaml}"
 )

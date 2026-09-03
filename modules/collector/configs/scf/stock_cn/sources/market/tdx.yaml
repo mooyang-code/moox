@@ -2,14 +2,12 @@ provider:
   id: tdx
   market: stock_cn
   enabled_feeds: [kline]
-  shadow_feeds: [kline]
   hosts: [jstdx.gtjas.com]
   kline:
     frequency: 1m
     max_bars_per_request: 800
     volume_unit: shares
     amount_unit: CNY
-    mode: shadow
   rate_limit:
     scope: egress_ip
     requests_per_second: 5

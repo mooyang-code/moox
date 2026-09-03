@@ -331,12 +331,8 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 	}
 
 	var lastErr error
-	attempts := 0
 
 	for _, providerID := range candidateChain {
-		if attempts >= 2 {
-			break
-		}
 		providerID = strings.TrimSpace(providerID)
 		if providerID == "" {
 			lastErr = fmt.Errorf("%w: empty provider id in candidate chain", ErrInvalidRequest)
@@ -355,6 +351,12 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 		)
 		if sourceID := strings.TrimSpace(req.SourceID); sourceID != "" {
 			fetcher, err = s.router.registry.KlineFetcherBySource(SourceKey{ProviderID: providerID, SourceID: sourceID})
+			if err != nil {
+				// SourceID identifies the currently assigned primary feed. A
+				// fallback provider has its own source identity, so resolve it by
+				// provider and pass that identity to the provider implementation.
+				fetcher, err = s.router.registry.KlineFetcher(providerID)
+			}
 		} else {
 			fetcher, err = s.router.registry.KlineFetcher(providerID)
 		}
@@ -369,7 +371,9 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 			continue
 		}
 		spec := fetcher.KlineSpec()
-		if !spec.SupportsRequest(req) {
+		providerReq := req
+		providerReq.SourceID = fetcher.Descriptor().SourceID
+		if !spec.SupportsRequest(providerReq) {
 			// A provider may cover only part of a market, such as Tencent's
 			// SH/SZ endpoint. This is a routing decision, not a provider fault,
 			// and must not consume an invocation breaker or an HTTP attempt.
@@ -381,7 +385,7 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 		if !req.HistoryAsOf.IsZero() {
 			historyReference = req.HistoryAsOf
 		}
-		if err := spec.History.ValidateStart(historyReference, req.StartTime); err != nil {
+		if err := spec.History.ValidateStart(historyReference, providerReq.StartTime); err != nil {
 			s.breaker.Observe(providerID, err)
 			lastErr = err
 			continue
@@ -390,11 +394,10 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 		var rows []NormalizedKline
 		err = func() error {
 			var fetchErr error
-			rows, fetchErr = fetcher.FetchKlines(ctx, req)
+			rows, fetchErr = fetcher.FetchKlines(ctx, providerReq)
 			return fetchErr
 		}()
 		s.breaker.Observe(providerID, err)
-		attempts++
 
 		if err == nil {
 			return rows, nil

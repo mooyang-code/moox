@@ -49,6 +49,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "加载 collector 配置失败: %v", err)
 		return nil, err
 	}
+	if spaceID := marketFetchSpaceID(); spaceID == "" {
+		return nil, fmt.Errorf("MOOX_SPACE_ID is required for collector market scheduling")
+	}
 	log.InfoContextf(ctx, "collector stock_cn runtime config expected_timer_function_count=%d measured_safe_group_size=%d stagger_start_second=%d stagger_window_seconds=%d stagger_max_starts_per_second=%d", cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, cfg.StockCN.StaggerStartSecond, cfg.StockCN.StaggerWindowSeconds, cfg.StockCN.StaggerMaxStartsPerSecond)
 	dbm, err := store.Open(&store.Options{
 		Path:            cfg.Database.Path,
@@ -466,10 +469,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 }
 
 func marketFetchSpaceID() string {
-	if spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")); spaceID != "" {
-		return spaceID
-	}
-	return "crypto"
+	return strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
 }
 
 func runtimeAuth(cfg ServiceAuthConfig) runtimeapp.AuthConfig {

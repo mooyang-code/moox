@@ -45,6 +45,7 @@ type stockCNRouteProvider struct {
 	SourceID   string `yaml:"source_id"`
 	Weight     int    `yaml:"weight"`
 	Kline      string `yaml:"kline"`
+	KlineRole  string `yaml:"kline_role"`
 	Instrument string `yaml:"instrument"`
 }
 
@@ -103,12 +104,18 @@ func (r stockCNRoute) Validate() error {
 		if err := validateRouteState(provider.Kline); err != nil {
 			return fmt.Errorf("provider %q kline: %w", id, err)
 		}
+		if err := validateKlineRole(provider.KlineRole); err != nil {
+			return fmt.Errorf("provider %q kline_role: %w", id, err)
+		}
 		if err := validateRouteState(provider.Instrument); err != nil {
 			return fmt.Errorf("provider %q instrument: %w", id, err)
 		}
 	}
 	if len(r.KlineProviders()) < 3 {
 		return fmt.Errorf("at least three active stock_cn kline providers are required")
+	}
+	if len(r.KlinePrimaryProviders()) < 2 {
+		return fmt.Errorf("at least two primary stock_cn kline providers are required")
 	}
 	return nil
 }
@@ -122,8 +129,31 @@ func validateRouteState(value string) error {
 	}
 }
 
+func validateKlineRole(value string) error {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "primary", "fallback":
+		return nil
+	default:
+		return fmt.Errorf("role must be primary or fallback")
+	}
+}
+
 func (r stockCNRoute) KlineProviders() []string {
 	return r.providersFor("kline", "active")
+}
+
+func (r stockCNRoute) KlinePrimaryProviders() []string {
+	providers := make([]string, 0, len(r.Providers))
+	for _, provider := range r.Providers {
+		if !strings.EqualFold(strings.TrimSpace(provider.Kline), "active") {
+			continue
+		}
+		role := strings.ToLower(strings.TrimSpace(provider.KlineRole))
+		if role == "" || role == "primary" {
+			providers = append(providers, strings.TrimSpace(provider.ID))
+		}
+	}
+	return providers
 }
 
 func (r stockCNRoute) InstrumentProviders() []string {
@@ -147,9 +177,21 @@ type stockCNSource struct {
 }
 
 func (r stockCNRoute) KlineSources() []stockCNSource {
+	return r.klineSources(false)
+}
+
+func (r stockCNRoute) KlinePrimarySources() []stockCNSource {
+	return r.klineSources(true)
+}
+
+func (r stockCNRoute) klineSources(primaryOnly bool) []stockCNSource {
 	sources := make([]stockCNSource, 0, len(r.Providers))
 	for _, provider := range r.Providers {
 		if !strings.EqualFold(strings.TrimSpace(provider.Kline), "active") {
+			continue
+		}
+		role := strings.ToLower(strings.TrimSpace(provider.KlineRole))
+		if primaryOnly && role != "" && role != "primary" {
 			continue
 		}
 		sourceID := strings.TrimSpace(provider.SourceID)

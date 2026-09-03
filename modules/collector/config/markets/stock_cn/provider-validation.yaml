@@ -5,7 +5,7 @@ sources:
     protocol_variant: tdx_normal
     transport: tcp
     port: 7709
-    status: catalog_only
+    status: enabled
   - provider_id: eastmoney
     source_id: stock_cn_http
     protocol_variant: http

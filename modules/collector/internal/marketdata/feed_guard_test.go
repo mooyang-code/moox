@@ -379,6 +379,31 @@ func TestRouterSkipsProviderThatDoesNotAdvertiseExchange(t *testing.T) {
 	assert.Equal(t, 1, beijing.Calls())
 }
 
+func TestRouterResolvesFallbackProviderByItsOwnSource(t *testing.T) {
+	registry := NewRegistry()
+	spec := KlineSpec{
+		Markets: []string{"stock_cn"}, Exchanges: []string{"XSHG"}, Frequencies: []string{"1m"},
+		CompleteOHLCV: true, HasAmount: true, MaxBarsPerRequest: 1, TimestampMode: TimestampModeOpen,
+		RateLimit: RateLimitPolicy{RequestsPerSecond: 100, Burst: 2, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: time.Second},
+	}
+	require.NoError(t, registry.Register(&stubKlineProvider{
+		testProvider: testProvider{descriptor: ProviderDescriptor{ID: "sina", SourceID: "stock_cn_minute_http", DisplayName: "Sina", Hosts: []string{"sina.test"}}},
+		spec:         spec, err: ErrProtocol,
+	}))
+	require.NoError(t, registry.Register(&stubKlineProvider{
+		testProvider: testProvider{descriptor: ProviderDescriptor{ID: "tdx", SourceID: "normal_7709", DisplayName: "TDX", Hosts: []string{"tdx.test"}}},
+		spec:         spec, rows: []NormalizedKline{{SubjectID: "600000.XSHG"}},
+	}))
+	router, err := NewRouter(registry, 3, nil, nil)
+	require.NoError(t, err)
+	rows, err := router.FetchKlines(context.Background(), KlineRequest{
+		MarketID: "stock_cn", ExchangeID: "XSHG", SubjectID: "600000.XSHG", ProviderSymbol: "sh600000",
+		SourceID: "stock_cn_minute_http", Frequency: "1m", Limit: 1, RequestID: "source-fallback",
+	}, []string{"sina", "tdx"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+}
+
 type stubKlineProvider struct {
 	testProvider
 	spec      KlineSpec

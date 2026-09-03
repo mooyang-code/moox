@@ -30,6 +30,31 @@ type pipelineProvider struct {
 	rowsFor   func(marketdata.KlineRequest) []marketdata.NormalizedKline
 }
 
+func TestFetchKlinesFromChainRetriesProviderThreeTimesBeforeFallback(t *testing.T) {
+	var firstCalls, fallbackCalls int32
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", err: marketdata.ErrProtocol, calls: &firstCalls}))
+	bar := marketdata.NormalizedKline{
+		SubjectID: "600000.XSHG", ProviderID: "tdx", ProviderSymbol: "sh600000", Frequency: "1m",
+		BarStart: time.Date(2026, 9, 3, 3, 0, 0, 0, time.UTC), BarEnd: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC),
+		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050,
+		ProviderTimestamp: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC), FetchedAt: time.Now().UTC(), RequestID: "retry-3",
+	}
+	require.NoError(t, registry.Register(pipelineProvider{id: "tdx", rows: []marketdata.NormalizedKline{bar}, calls: &fallbackCalls}))
+	router, err := marketdata.NewRouter(registry, 10, pipelineClock{now: time.Now().UTC()}, nil)
+	require.NoError(t, err)
+
+	rows, selected, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+		MarketID: "stock_cn", ExchangeID: "XSHG", SubjectID: "600000.XSHG", ProviderSymbol: "sh600000",
+		Frequency: "1m", Limit: 1, RequestID: "retry-3",
+	}, []string{"sina", "tdx"}, 0)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "tdx", selected)
+	require.Equal(t, int32(3), atomic.LoadInt32(&firstCalls))
+	require.Equal(t, int32(1), atomic.LoadInt32(&fallbackCalls))
+}
+
 func TestStockCNShouldCollectMinuteHonorsSessionsAndClosedDays(t *testing.T) {
 	calendar, err := stockmarket.LoadCalendar("../../config/markets/stock_cn/calendar.yaml")
 	require.NoError(t, err)
@@ -390,23 +415,27 @@ func TestNormalizeCandidateChainKeepsConfiguredThreeProviderRoute(t *testing.T) 
 	require.Equal(t, []string{"eastmoney", "sina", "tencent"}, normalizeCandidateChain([]string{"sina", "tencent"}, "eastmoney"))
 }
 
-func TestKlinePipelineStopsAfterOneFallback(t *testing.T) {
+func TestKlinePipelineUsesThirdProviderAfterThreeAttempts(t *testing.T) {
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
 	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "eastmoney", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-third"}
 	registry := marketdata.NewRegistry()
-	require.NoError(t, registry.Register(pipelineProvider{id: "sina", err: marketdata.ErrTimeout, delay: time.Second}))
-	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", err: marketdata.ErrProtocol, delay: time.Second}))
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", err: marketdata.ErrTimeout}))
+	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", err: marketdata.ErrProtocol}))
 	require.NoError(t, registry.Register(pipelineProvider{id: "eastmoney", rows: []marketdata.NormalizedKline{bar}}))
 	router, err := marketdata.NewRouter(registry, 3, pipelineClock{now}, func(time.Duration) {})
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent", "eastmoney"}, Now: func() time.Time { return now }}
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	defer cancel()
-	payload, err := pipeline.Execute(ctx, Request{BatchID: "batch-third", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-third", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 3}}})
+	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-third", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-third", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 3}}})
 	require.NoError(t, err)
-	require.Equal(t, "failed", payload.GetStatus())
-	require.Empty(t, storage.rows)
+	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Len(t, storage.rows, 1)
+	fields := make(map[string]*storagepb.TypedValue)
+	for _, field := range storage.rows[0].GetFields() {
+		fields[field.GetFieldId()] = field.GetValue()
+	}
+	require.Equal(t, "fallback", fields["quality_status"].GetStringValue())
+	require.Equal(t, int64(3), fields["route_rank"].GetIntValue())
 }
 
 func TestKlinePipelineAdvancesCandidateIndexAfterExhaustedChain(t *testing.T) {
@@ -422,8 +451,8 @@ func TestKlinePipelineAdvancesCandidateIndexAfterExhaustedChain(t *testing.T) {
 		SubjectID: "600000.XSHG", ProviderSymbol: "sh600000", Frequency: "1m", Limit: 1, RequestID: "candidate-index",
 	}, []string{"sina", "tencent", "eastmoney"}, 1)
 	require.Error(t, err)
-	require.Equal(t, "eastmoney", selected)
-	require.Equal(t, 0, next, "the next retry must start at the candidate after the two attempted providers")
+	require.Equal(t, "sina", selected)
+	require.Equal(t, 1, next, "the next retry must start after all three providers receive three attempts")
 }
 
 func TestFetchKlinesFromChainFallsBackWhenRequestedIntervalIsEmpty(t *testing.T) {

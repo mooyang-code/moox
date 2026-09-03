@@ -50,7 +50,7 @@ func NewStockKlinePipeline(storage Storage) (*KlinePipeline, error) {
 			return nil, err
 		}
 	}
-	router, err := marketdata.NewRouter(registry, len(route.KlineProviders()), nil, nil)
+	router, err := marketdata.NewRouter(registry, len(route.KlineProviders())*klineProviderAttemptBudget, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -81,11 +81,9 @@ func NewStockKlinePipelineForSource(storage Storage, providerID, sourceID string
 	if err != nil {
 		return nil, err
 	}
-	var source stockCNSource
 	found := false
 	for _, candidate := range route.KlineSources() {
 		if candidate.Provider == providerID && candidate.SourceID == sourceID {
-			source = candidate
 			found = true
 			break
 		}
@@ -101,15 +99,22 @@ func NewStockKlinePipelineForSource(storage Storage, providerID, sourceID string
 	if !ok || !providerConfig.KlineEnabled || providerConfig.KlineShadow {
 		return nil, fmt.Errorf("stock_cn source %s/%s is not active in source config", providerID, sourceID)
 	}
-	provider, err := newStockCNProviderForSource(providerID, sourceID, providerConfig)
-	if err != nil {
-		return nil, err
-	}
 	registry := marketdata.NewRegistry()
-	if err := registry.Register(provider); err != nil {
-		return nil, err
+	for _, candidateID := range route.KlineProviders() {
+		candidateConfig, candidateOK := providerConfigs[candidateID]
+		if !candidateOK || !candidateConfig.KlineEnabled || candidateConfig.KlineShadow {
+			return nil, fmt.Errorf("stock_cn kline provider %q is not active in source config", candidateID)
+		}
+		candidateSourceID := stockCNSourceID(route, candidateID)
+		candidate, providerErr := newStockCNProviderForSource(candidateID, candidateSourceID, candidateConfig)
+		if providerErr != nil {
+			return nil, providerErr
+		}
+		if err := registry.Register(candidate); err != nil {
+			return nil, err
+		}
 	}
-	router, err := marketdata.NewRouter(registry, 2, nil, nil)
+	router, err := marketdata.NewRouter(registry, len(route.KlineProviders())*klineProviderAttemptBudget, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -118,12 +123,21 @@ func NewStockKlinePipelineForSource(storage Storage, providerID, sourceID string
 		return nil, err
 	}
 	return &KlinePipeline{
-		Router: router, Storage: storage, CandidateChain: []string{source.Provider},
+		Router: router, Storage: storage, CandidateChain: route.KlineProviders(),
 		RouteID: route.RouteID, SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID,
 		ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity,
-		DatasetID: StockCNDatasetID, SourceID: source.SourceID, Calendar: calendar,
+		DatasetID: StockCNDatasetID, Calendar: calendar,
 		SettleDelay: 5 * time.Second,
 	}, nil
+}
+
+func stockCNSourceID(route stockCNRoute, providerID string) string {
+	for _, source := range route.KlineSources() {
+		if source.Provider == strings.ToLower(strings.TrimSpace(providerID)) {
+			return source.SourceID
+		}
+	}
+	return ""
 }
 
 // NewCryptoKlinePipeline is the crypto composition root for the same common

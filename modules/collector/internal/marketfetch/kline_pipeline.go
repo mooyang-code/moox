@@ -20,9 +20,8 @@ const (
 	StockCNSpaceID   = "stock_cn"
 	StockCNDatasetID = "stock_cn_kline"
 	StockCNRouteID   = "stock_cn_kline_1m_v1"
-	// A single invocation may try the configured provider and one fallback.
-	// Retry generations resume after that same bounded window.
-	klineProviderAttemptBudget = 2
+	// Each provider gets three attempts before the next provider in the route.
+	klineProviderAttemptBudget = 3
 )
 
 // KlinePipeline is the provider-independent stock write boundary. Fetchers
@@ -150,7 +149,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 					return
 				}
 				itemSourceID = selectedSource.SourceID
-				itemChain = []string{selectedSource.Provider}
+				itemChain = append([]string{selectedSource.Provider}, chain...)
 			}
 			limit := item.BarLimit
 			if limit <= 0 {
@@ -187,7 +186,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				results[index] = failureResult(item, classifyError(err), errorType(err), err)
 				return
 			}
-			if err := bindKlineSource(fetched, itemChain[0], itemSourceID); err != nil {
+			if err := bindKlineSource(fetched, selectedProvider, ""); err != nil {
 				item.CandidateIndex = nextCandidateIndex
 				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "source_binding", err)
 				return
@@ -270,75 +269,57 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 	if len(chain) == 0 {
 		return nil, lastProvider, 0, fmt.Errorf("kline candidate chain is empty")
 	}
-	if strings.TrimSpace(req.SourceID) != "" && len(chain) > 1 {
-		// A source-bound Timer must never cross to another Provider merely
-		// because the first bound source failed. Route fallback is only valid
-		// among endpoints belonging to that same SourceKey.
-		chain = chain[:1]
-	}
 	startIndex %= len(chain)
 	if startIndex < 0 {
 		startIndex += len(chain)
 	}
-	maxAttempts := len(chain)
-	if maxAttempts > klineProviderAttemptBudget {
-		maxAttempts = klineProviderAttemptBudget
-	}
 	attempts := 0
-	for index := 0; index < maxAttempts; index++ {
+	for index := 0; index < len(chain); index++ {
 		chainIndex := (startIndex + index) % len(chain)
 		provider := chain[chainIndex]
 		lastProvider = provider
-		attemptCtx := ctx
-		cancel := func() {}
-		if deadline, ok := ctx.Deadline(); ok {
-			remaining := time.Until(deadline)
-			attemptsLeft := maxAttempts - index
-			if remaining <= 0 {
-				return nil, provider, (startIndex + attempts) % len(chain), ctx.Err()
+		for retry := 0; retry < klineProviderAttemptBudget; retry++ {
+			attemptCtx := ctx
+			cancel := func() {}
+			if deadline, ok := ctx.Deadline(); ok {
+				remaining := time.Until(deadline)
+				attemptsLeft := (len(chain)-index-1)*klineProviderAttemptBudget + klineProviderAttemptBudget - retry
+				if remaining <= 0 {
+					return nil, provider, (startIndex + attempts) % len(chain), ctx.Err()
+				}
+				attemptCtx, cancel = context.WithTimeout(ctx, remaining/time.Duration(attemptsLeft))
 			}
-			attemptCtx, cancel = context.WithTimeout(ctx, remaining/time.Duration(attemptsLeft))
-		}
-		rows, err := session.FetchKlines(attemptCtx, req, []string{provider})
-		cancel()
-		if err == nil {
-			spec, specErr := session.KlineSpec(provider)
-			if specErr != nil {
-				lastErr = specErr
-				attempts++
-				continue
+			rows, err := session.FetchKlines(attemptCtx, req, []string{provider})
+			cancel()
+			attempts++
+			if err == nil {
+				spec, specErr := session.KlineSpec(provider)
+				if specErr != nil {
+					lastErr = specErr
+					break
+				}
+				if coverageErr := spec.History.ValidateCoverage(rows, req.StartTime); coverageErr != nil {
+					lastErr = coverageErr
+					break
+				}
+				if !hasRowsWithinCoverage(rows, req.StartTime, req.EndTime) {
+					lastErr = fmt.Errorf("%w: provider %s returned no bars inside requested interval", marketdata.ErrHistoryCoverage, provider)
+					break
+				}
+				return rows, provider, startIndex, nil
 			}
-			if coverageErr := spec.History.ValidateCoverage(rows, req.StartTime); coverageErr != nil {
-				lastErr = coverageErr
-				attempts++
-				continue
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				err = fmt.Errorf("%w: provider %s attempt budget exhausted", marketdata.ErrTimeout, provider)
 			}
-			if !hasRowsWithinCoverage(rows, req.StartTime, req.EndTime) {
-				lastErr = fmt.Errorf("%w: provider %s returned no bars inside requested interval", marketdata.ErrHistoryCoverage, provider)
-				attempts++
-				continue
+			if errors.Is(err, marketdata.ErrProviderNotFound) || errors.Is(err, marketdata.ErrHistoryOutOfRange) || errors.Is(err, marketdata.ErrHistoryCoverage) {
+				lastErr = err
+				break
 			}
-			return rows, provider, startIndex, nil
-		}
-		attempts++
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			err = fmt.Errorf("%w: provider %s attempt budget exhausted", marketdata.ErrTimeout, provider)
-		}
-		if errors.Is(err, marketdata.ErrProviderNotFound) {
-			// A shared invocation breaker reports a provider skipped after its
-			// failure streak as ErrProviderNotFound. Keep the remaining budget
-			// for the next candidate instead of treating that skip as terminal.
+			if !marketdata.CanFallback(ctx, err) {
+				return nil, provider, (startIndex + attempts) % len(chain), err
+			}
 			lastErr = err
-			continue
 		}
-		if errors.Is(err, marketdata.ErrHistoryOutOfRange) || errors.Is(err, marketdata.ErrHistoryCoverage) {
-			lastErr = err
-			continue
-		}
-		if !marketdata.CanFallback(ctx, err) {
-			return nil, provider, (startIndex + attempts) % len(chain), err
-		}
-		lastErr = err
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("kline provider chain exhausted")
@@ -571,7 +552,7 @@ func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int
 
 func normalizeCandidateChain(configured []string, primary string) []string {
 	seen := make(map[string]struct{})
-	result := make([]string, 0, 3)
+	result := make([]string, 0, len(configured)+1)
 	for _, provider := range append([]string{primary}, configured...) {
 		provider = strings.ToLower(strings.TrimSpace(provider))
 		if provider == "" || provider == "stock_cn_multi" {
@@ -582,9 +563,6 @@ func normalizeCandidateChain(configured []string, primary string) []string {
 		}
 		seen[provider] = struct{}{}
 		result = append(result, provider)
-		if len(result) == 3 {
-			break
-		}
 	}
 	return result
 }
