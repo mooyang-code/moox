@@ -8,7 +8,9 @@ app:
 
 api:
   base_url: "https://data-api.binance.vision"
-  spot_base_url: "https://data-api.binance.vision"
+  spot_base_urls:
+    - "https://data-api.binance.vision"
+    - "https://api-gcp.binance.com"
   swap_base_url: "https://fapi.binance.com"
 
 storage:

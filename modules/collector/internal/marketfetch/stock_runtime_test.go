@@ -114,6 +114,15 @@ func TestNewMarketKlinePipelineCreatesCatalogGatedHongKongSource(t *testing.T) {
 	require.Equal(t, []string{"eastmoney"}, pipeline.CandidateChain)
 }
 
+func TestNewMarketKlinePipelineCreatesBinanceSpotSource(t *testing.T) {
+	pipeline, err := NewMarketKlinePipeline(timerHandlerStorage{}, "crypto", marketdata.InstrumentSpot, "binance", "spot_http")
+	require.NoError(t, err)
+	require.Equal(t, "crypto", pipeline.SpaceID)
+	require.Equal(t, "crypto", pipeline.MarketID)
+	require.Equal(t, "spot_http", pipeline.SourceID)
+	require.Equal(t, []string{"binance"}, pipeline.CandidateChain)
+}
+
 func TestStockCNRouteRequiresThreeActiveKlineProviders(t *testing.T) {
 	route := stockCNRoute{
 		MarketID:  "stockcn",

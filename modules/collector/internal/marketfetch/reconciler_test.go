@@ -438,7 +438,7 @@ func TestReconcilerSplitsLongSubjectsBeforeEnvironmentFailure(t *testing.T) {
 	for _, split := range groups {
 		_, err := BuildManagedEnvironment(NodeAssignment{
 			Provider: split.Provider, MarketType: split.MarketType, DatasetID: split.DatasetID,
-			Frequency: split.Frequency, Subjects: split.Subjects, ExternalSymbols: split.ExternalSymbols, Enabled: true,
+			Frequency: split.Frequency, Subjects: split.Subjects, ExternalSymbols: split.ExternalSymbols, GroupID: 999999, GroupCount: 999999, Enabled: true,
 		}, nil)
 		require.NoError(t, err)
 	}

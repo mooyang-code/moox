@@ -12,6 +12,9 @@ app:
   type: market
 api:
   base_url: https://data-api.binance.vision
+  spot_base_urls:
+    - https://data-api.binance.vision
+    - https://api-gcp.binance.com
 storage:
   bindings:
     spot:

@@ -28,6 +28,7 @@ const (
 type InstrumentStorage interface {
 	Storage
 	ListDatasetSubjects(context.Context, string, string) ([]*storagepb.DatasetSubject, error)
+	ListSubjectSymbols(context.Context, string, string) ([]*storagepb.SubjectSymbol, error)
 	StageDatasetSubjectSet(context.Context, string, string, []*storagepb.DatasetSubject) error
 	ActivateDatasetSubjectSet(context.Context, string, string) error
 }
@@ -561,6 +562,13 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 		return fmt.Errorf("instrument snapshot %s is older than active snapshot fetched at %s", snapshot.SnapshotID, publishedAt.UTC().Format(time.RFC3339Nano))
 	}
 	knownSubjects := instrumentSubjectIDs(existing, targetExisting)
+	if strings.EqualFold(spaceID, "crypto") {
+		symbols, symbolErr := p.Storage.ListSubjectSymbols(ctx, spaceID, dataSourceID)
+		if symbolErr != nil {
+			return fmt.Errorf("list existing crypto symbol mappings: %w", symbolErr)
+		}
+		knownSubjects = registeredSubjectIDs(symbols)
+	}
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(snapshot.Instruments))
 	present := make(map[string]marketdata.Instrument, len(snapshot.Instruments))
 	sort.Slice(snapshot.Instruments, func(i, j int) bool { return snapshot.Instruments[i].SubjectID < snapshot.Instruments[j].SubjectID })
@@ -589,8 +597,10 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 		go func() {
 			defer workers.Done()
 			for instrument := range jobs {
-				if _, known := knownSubjects[instrument.SubjectID]; known {
-					continue
+				if !strings.EqualFold(spaceID, "crypto") {
+					if _, known := knownSubjects[instrument.SubjectID]; known {
+						continue
+					}
 				}
 				if err := p.Storage.RegisterDataSubject(registerCtx, p.instrumentRegistration(spaceID, dataSourceID, snapshot, instrument)); err != nil {
 					select {
@@ -655,6 +665,13 @@ func (p *InstrumentPipeline) persistSnapshotShard(ctx context.Context, fullSnaps
 		}
 	}
 	knownSubjects := instrumentSubjectIDs(existing, targetExisting)
+	if strings.EqualFold(spaceID, "crypto") {
+		symbols, symbolErr := p.Storage.ListSubjectSymbols(ctx, spaceID, dataSourceID)
+		if symbolErr != nil {
+			return false, fmt.Errorf("list existing crypto symbol mappings: %w", symbolErr)
+		}
+		knownSubjects = registeredSubjectIDs(symbols)
+	}
 	// Provider fetching is intentionally full-snapshot per shard, but metadata
 	// writes must use only this shard's slice. Writing the full catalogue from
 	// every shard multiplies Storage work by the fixed fan-out and can outlive
@@ -686,8 +703,10 @@ func (p *InstrumentPipeline) persistSnapshotShard(ctx context.Context, fullSnaps
 		go func() {
 			defer workers.Done()
 			for instrument := range jobs {
-				if _, known := knownSubjects[instrument.SubjectID]; known {
-					continue
+				if !strings.EqualFold(spaceID, "crypto") {
+					if _, known := knownSubjects[instrument.SubjectID]; known {
+						continue
+					}
 				}
 				if err := p.Storage.RegisterDataSubject(registerCtx, p.instrumentRegistration(spaceID, dataSourceID, snapshot, instrument)); err != nil {
 					select {
@@ -818,6 +837,24 @@ func stagedInstrumentBindings(spaceID string, existing, targetExisting []*storag
 		updated.Attributes["active_instrument_set_version"] = snapshot.SnapshotID
 		updated.Attributes["active_instrument_set_fetched_at"] = snapshot.FetchedAt.UTC().Format(time.RFC3339Nano)
 		updated.Attributes["instrument_snapshot_fingerprint"] = contentFingerprint
+		if strings.EqualFold(spaceID, "crypto") {
+			// Binance snapshots are complete exchange snapshots. Retaining a
+			// missing symbol as active would make every Timer reconciliation fail
+			// for the whole fleet, so remove it from the active set immediately.
+			updated.Status = "disabled"
+			if targetDatasetID != "" && targetDatasetID != datasetID {
+				targetKey := targetDatasetID + "\x00" + membership.GetSubjectId()
+				target := desired[targetKey]
+				if target != nil {
+					target.Attributes = cloneAttributes(target.GetAttributes())
+					target.Attributes["active_instrument_set_version"] = snapshot.SnapshotID
+					target.Attributes["active_instrument_set_fetched_at"] = snapshot.FetchedAt.UTC().Format(time.RFC3339Nano)
+					target.Attributes["instrument_snapshot_fingerprint"] = contentFingerprint
+					target.Status = "disabled"
+				}
+			}
+			continue
+		}
 		if targetDatasetID != "" && targetDatasetID != datasetID {
 			targetKey := targetDatasetID + "\x00" + membership.GetSubjectId()
 			target := desired[targetKey]
@@ -862,6 +899,19 @@ func instrumentSubjectIDs(sets ...[]*storagepb.DatasetSubject) map[string]struct
 			if membership != nil && strings.TrimSpace(membership.GetSubjectId()) != "" {
 				known[membership.GetSubjectId()] = struct{}{}
 			}
+		}
+	}
+	return known
+}
+
+func registeredSubjectIDs(symbols []*storagepb.SubjectSymbol) map[string]struct{} {
+	known := make(map[string]struct{}, len(symbols))
+	for _, symbol := range symbols {
+		if symbol == nil || !strings.EqualFold(strings.TrimSpace(symbol.GetStatus()), "active") || strings.TrimSpace(symbol.GetExternalSymbol()) == "" {
+			continue
+		}
+		if subjectID := strings.TrimSpace(symbol.GetSubjectId()); subjectID != "" {
+			known[subjectID] = struct{}{}
 		}
 	}
 	return known
@@ -919,7 +969,40 @@ func instrumentRegistrationWithMetadata(spaceID, dataSourceID, subjectType, subj
 }
 
 func instrumentRecordRow(spaceID, datasetID string, snapshot marketdata.InstrumentSnapshot, instrument marketdata.Instrument) *storagepb.RowFieldUpsert {
-	return &storagepb.RowFieldUpsert{Key: &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: instrument.SubjectID, Version: snapshot.SnapshotID}}}, Fields: []*storagepb.FieldValue{stringValue("security_code", instrument.SubjectID), stringValue("provider_symbol", instrument.ProviderSymbol), stringValue("exchange", instrument.Exchange), stringValue("instrument_name", instrument.Name), stringValue("instrument_status", instrument.Status), stringValue("snapshot_id", snapshot.SnapshotID), stringValue("source_provider", snapshot.SourceProvider), timeValue("fetched_at", snapshot.FetchedAt)}}
+	fields := make([]*storagepb.FieldValue, 0, 9)
+	if strings.EqualFold(strings.TrimSpace(spaceID), "crypto") {
+		fields = append(fields,
+			stringValue("symbol", firstNonEmptyString(instrument.CanonicalSymbol, instrument.SubjectID)),
+			stringValue("external_symbol", instrument.ProviderSymbol),
+			stringValue("base_asset", instrument.BaseAsset),
+			stringValue("quote_asset", instrument.QuoteAsset),
+			stringValue("status", firstNonEmptyString(instrument.Status, "active")),
+		)
+		fields = appendOptionalInstrumentNumber(fields, "min_qty", instrument.MinQty)
+		fields = appendOptionalInstrumentNumber(fields, "max_qty", instrument.MaxQty)
+		fields = appendOptionalInstrumentNumber(fields, "tick_size", instrument.TickSize)
+		fields = appendOptionalInstrumentNumber(fields, "lot_size", instrument.LotSize)
+	} else {
+		fields = append(fields,
+			stringValue("security_code", instrument.SubjectID),
+			stringValue("provider_symbol", instrument.ProviderSymbol),
+			stringValue("exchange", instrument.Exchange),
+			stringValue("instrument_name", instrument.Name),
+			stringValue("instrument_status", instrument.Status),
+			stringValue("snapshot_id", snapshot.SnapshotID),
+			stringValue("source_provider", snapshot.SourceProvider),
+			timeValue("fetched_at", snapshot.FetchedAt),
+		)
+	}
+	return &storagepb.RowFieldUpsert{Key: &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: instrument.SubjectID, Version: snapshot.SnapshotID}}}, Fields: fields}
+}
+
+func appendOptionalInstrumentNumber(fields []*storagepb.FieldValue, field, raw string) []*storagepb.FieldValue {
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return fields
+	}
+	return append(fields, doubleValue(field, value))
 }
 
 func uniqueProviders(values []string) []string {

@@ -37,10 +37,11 @@ func TestBuildCreateFunctionRequestUsesCOSPackage(t *testing.T) {
 		Environment: map[string]string{
 			"MOOX_ENV": "prod",
 		},
-		COSBucket: "moox-scf-1255382561",
-		COSRegion: "ap-guangzhou",
-		COSObject: "moox/cloud-packages/collector/moox-collector/dev/collector-scf.zip",
-		Type:      "Event",
+		COSBucket:       "moox-scf-1255382561",
+		COSRegion:       "ap-guangzhou",
+		COSObject:       "moox/cloud-packages/collector/moox-collector/dev/collector-scf.zip",
+		Type:            "Event",
+		PublicNetStatus: "ENABLE",
 	})
 
 	if req.GetAction() == "" {
@@ -90,6 +91,9 @@ func TestBuildCreateFunctionRequestUsesCOSPackage(t *testing.T) {
 	}
 	if got := deref(req.AutoDeployClsTopicIndex); got != "FALSE" {
 		t.Fatalf("AutoDeployClsTopicIndex = %q, want FALSE", got)
+	}
+	if req.PublicNetConfig == nil || deref(req.PublicNetConfig.PublicNetStatus) != "ENABLE" || req.PublicNetConfig.EipConfig == nil || deref(req.PublicNetConfig.EipConfig.EipStatus) != "DISABLE" {
+		t.Fatalf("PublicNetConfig = %#v, want ENABLE", req.PublicNetConfig)
 	}
 }
 

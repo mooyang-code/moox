@@ -42,8 +42,8 @@ func TestContextWithReserveEndsFetchBeforeStorageAndCLSWindow(t *testing.T) {
 
 func TestStorageAndPublishReservesColdEventBusConnection(t *testing.T) {
 	commit, publish := storageAndPublishReserves(5*time.Second, 0, true)
-	require.Equal(t, 15*time.Second, commit)
-	require.Equal(t, 10*time.Second, publish)
+	require.Equal(t, 8*time.Second, commit)
+	require.Equal(t, 3*time.Second, publish)
 }
 
 func TestReservedDeadlineStorageUsesReservedParentBudget(t *testing.T) {

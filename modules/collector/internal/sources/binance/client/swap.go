@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -39,8 +40,18 @@ func (api *SwapAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 }
 
 func (api *SwapAPI) GetKlineWithIPs(ctx context.Context, req *exchange.KlineRequest, ips []string) ([]*exchange.Kline, error) {
+	return api.GetKlineWithDomainIPs(ctx, req, api.client.SwapDomain(), ips)
+}
+
+func (api *SwapAPI) GetKlineWithDomainIPs(ctx context.Context, req *exchange.KlineRequest, domain string, ips []string) ([]*exchange.Kline, error) {
+	if api == nil || api.client == nil || req == nil {
+		return nil, fmt.Errorf("永续合约 K 线请求无效")
+	}
 	params := url.Values{}
-	domain := api.client.SwapDomain()
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		domain = api.client.SwapDomain()
+	}
 
 	// 转换交易对格式
 	symbol := FormatSymbol(req.Symbol)

@@ -66,6 +66,17 @@ func TestClient_SetSpotBaseURL_ValidURL_ShouldUpdateDomain(t *testing.T) {
 	assert.Equal(t, "testnet.binance.vision", c.SpotDomain())
 }
 
+func TestClient_SetSpotBaseURLs_PreservesConfiguredFallbackOrder(t *testing.T) {
+	c := NewClient()
+	require.NoError(t, c.SetSpotBaseURLs([]string{
+		"https://data-api.binance.vision",
+		"https://api-gcp.binance.com",
+	}))
+
+	assert.Equal(t, "data-api.binance.vision", c.SpotDomain())
+	assert.Equal(t, []string{"data-api.binance.vision", "api-gcp.binance.com"}, c.SpotDomains())
+}
+
 func TestClient_SetSwapBaseURL_InvalidURL_ShouldReturnError(t *testing.T) {
 	c := NewClient()
 	err := c.SetSwapBaseURL("://bad")

@@ -49,6 +49,10 @@ const (
 	// measured full-market Sina instrument snapshot while Timer functions keep
 	// their fixed 15-second execution budget.
 	DefaultStockCNInstrumentInvokeTimeoutSeconds = 60
+	// DefaultCryptoInstrumentInvokeTimeoutSeconds leaves enough room for the
+	// crypto exchange symbol snapshot and its metadata repair writes while
+	// regular Kline Timer functions keep their fixed 15-second budget.
+	DefaultCryptoInstrumentInvokeTimeoutSeconds = 60
 	// DefaultStockCNInstrumentSnapshotTimeoutSeconds is the longer budget for
 	// the single daily full-market Instrument Timer, which is not a Kline Timer.
 	DefaultStockCNInstrumentSnapshotTimeoutSeconds = 300
@@ -299,38 +303,44 @@ type SCFFetcherSpace struct {
 	Namespace         string `toml:"namespace"`
 	Runtime           string `toml:"runtime"`
 	FunctionPrefix    string `toml:"function_prefix"`
+	// PublicNetStatus is rendered into the CloudNode SCF configuration. HTTP
+	// market providers need explicit public egress; VPC/NAT remains a separate
+	// deployment choice and must not be inferred from the region name.
+	PublicNetStatus string `toml:"public_net_status"`
 	// TimerFunctionCount is the total Timer fleet size for this Space. stockcn
 	// must set it explicitly to a positive value; other Spaces may use the
 	// built-in default when all enabled regional function_count values are zero.
-	TimerFunctionCount               int                `toml:"timer_function_count"`
-	MeasuredSafeGroupSize            int                `toml:"measured_safe_group_size"`
-	InstrumentSnapshotRegion         string             `toml:"instrument_snapshot_region"`
-	InstrumentSnapshotCloudAccountID string             `toml:"instrument_snapshot_cloud_account_id"`
-	InstrumentSnapshotFunctionPrefix string             `toml:"instrument_snapshot_function_prefix"`
-	InstrumentSnapshotTimerCron      string             `toml:"instrument_snapshot_timer_cron"`
-	InstrumentSnapshotTimeoutSeconds int                `toml:"instrument_snapshot_timeout_seconds"`
-	InstrumentSnapshotMemorySize     int                `toml:"instrument_snapshot_memory_size"`
-	StaggerStartSecond               int                `toml:"stagger_start_second"`
-	StaggerWindowSeconds             int                `toml:"stagger_window_seconds"`
-	StaggerMaxStartsPerSecond        int                `toml:"stagger_max_starts_per_second"`
-	StorageGatewayNodeID             string             `toml:"storage_gateway_node_id"`
-	StorageRPCGatewayTarget          string             `toml:"storage_rpc_gateway_target"`
-	MemorySize                       int                `toml:"memory_size"`
-	TimeoutSeconds                   int                `toml:"timeout_seconds"`
-	InstrumentInvokeTimeoutSeconds   int                `toml:"instrument_invoke_timeout_seconds"`
-	RealtimeBatchSize                int                `toml:"realtime_batch_size"`
-	RealtimeBarLimit                 int                `toml:"realtime_bar_limit"`
-	CatchupBatchSize                 int                `toml:"catchup_batch_size"`
-	CatchupBarLimit                  int                `toml:"catchup_bar_limit"`
-	MaxInflightRequests              int                `toml:"max_inflight_requests"`
-	RequestTimeoutMS                 int                `toml:"request_timeout_ms"`
-	HTTPMaxAttempts                  int                `toml:"http_max_attempts"`
-	StorageMaxAttempts               int                `toml:"storage_max_attempts"`
-	StorageTimeoutMS                 int                `toml:"storage_timeout_ms"`
-	MaxRetryAttempts                 int                `toml:"max_retry_attempts"`
-	RetryDelays                      []string           `toml:"retry_delays"`
-	StaggerEnabled                   bool               `toml:"stagger_enabled"`
-	Regions                          []SCFFetcherRegion `toml:"regions"`
+	TimerFunctionCount               int    `toml:"timer_function_count"`
+	MeasuredSafeGroupSize            int    `toml:"measured_safe_group_size"`
+	InstrumentSnapshotRegion         string `toml:"instrument_snapshot_region"`
+	InstrumentSnapshotCloudAccountID string `toml:"instrument_snapshot_cloud_account_id"`
+	InstrumentSnapshotFunctionPrefix string `toml:"instrument_snapshot_function_prefix"`
+	InstrumentSnapshotTimerCron      string `toml:"instrument_snapshot_timer_cron"`
+	InstrumentSnapshotTimeoutSeconds int    `toml:"instrument_snapshot_timeout_seconds"`
+	InstrumentSnapshotMemorySize     int    `toml:"instrument_snapshot_memory_size"`
+	StaggerStartSecond               int    `toml:"stagger_start_second"`
+	StaggerWindowSeconds             int    `toml:"stagger_window_seconds"`
+	StaggerMaxStartsPerSecond        int    `toml:"stagger_max_starts_per_second"`
+	StorageGatewayNodeID             string `toml:"storage_gateway_node_id"`
+	StorageRPCGatewayTarget          string `toml:"storage_rpc_gateway_target"`
+	MemorySize                       int    `toml:"memory_size"`
+	TimeoutSeconds                   int    `toml:"timeout_seconds"`
+	// InstrumentInvokeTimeoutSeconds is used by Invoke nodes that refresh a
+	// complete instrument snapshot. Timer nodes retain TimeoutSeconds.
+	InstrumentInvokeTimeoutSeconds int                `toml:"instrument_invoke_timeout_seconds"`
+	RealtimeBatchSize              int                `toml:"realtime_batch_size"`
+	RealtimeBarLimit               int                `toml:"realtime_bar_limit"`
+	CatchupBatchSize               int                `toml:"catchup_batch_size"`
+	CatchupBarLimit                int                `toml:"catchup_bar_limit"`
+	MaxInflightRequests            int                `toml:"max_inflight_requests"`
+	RequestTimeoutMS               int                `toml:"request_timeout_ms"`
+	HTTPMaxAttempts                int                `toml:"http_max_attempts"`
+	StorageMaxAttempts             int                `toml:"storage_max_attempts"`
+	StorageTimeoutMS               int                `toml:"storage_timeout_ms"`
+	MaxRetryAttempts               int                `toml:"max_retry_attempts"`
+	RetryDelays                    []string           `toml:"retry_delays"`
+	StaggerEnabled                 bool               `toml:"stagger_enabled"`
+	Regions                        []SCFFetcherRegion `toml:"regions"`
 }
 
 // DefaultTimerFunctionCount returns the built-in Timer capacity for a known
@@ -935,6 +945,13 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		cfg.Entrypoint = cfg.SpaceID
 	}
 	if strings.EqualFold(cfg.Entrypoint, "market_data") {
+		cfg.PublicNetStatus = strings.ToUpper(strings.TrimSpace(cfg.PublicNetStatus))
+		if cfg.PublicNetStatus == "" {
+			cfg.PublicNetStatus = "ENABLE"
+		}
+		if cfg.PublicNetStatus != "ENABLE" && cfg.PublicNetStatus != "DISABLE" {
+			return fmt.Errorf("config_invalid: %s.public_net_status must be ENABLE or DISABLE", path)
+		}
 		cfg.SourceBindingMode = strings.ToLower(strings.TrimSpace(cfg.SourceBindingMode))
 		if cfg.SourceBindingMode != "" && cfg.SourceBindingMode != "deterministic" {
 			return fmt.Errorf("config_invalid: %s.source_binding_mode must be deterministic", path)
@@ -1068,8 +1085,15 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		}
 	} else if cfg.MeasuredSafeGroupSize != 0 {
 		return fmt.Errorf("config_invalid: %s.measured_safe_group_size is only valid for stockcn", path)
+	} else if strings.EqualFold(cfg.SpaceID, "crypto") {
+		if cfg.InstrumentInvokeTimeoutSeconds == 0 {
+			cfg.InstrumentInvokeTimeoutSeconds = DefaultCryptoInstrumentInvokeTimeoutSeconds
+		}
+		if cfg.InstrumentInvokeTimeoutSeconds < DefaultCryptoInstrumentInvokeTimeoutSeconds || cfg.InstrumentInvokeTimeoutSeconds > 900 {
+			return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds must be between %d and 900", path, DefaultCryptoInstrumentInvokeTimeoutSeconds)
+		}
 	} else if cfg.InstrumentInvokeTimeoutSeconds != 0 {
-		return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds is only valid for stockcn", path)
+		return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds is only valid for stockcn or crypto", path)
 	} else if cfg.InstrumentSnapshotRegion != "" || cfg.InstrumentSnapshotCloudAccountID != "" || cfg.InstrumentSnapshotFunctionPrefix != "" || cfg.InstrumentSnapshotTimerCron != "" || cfg.InstrumentSnapshotTimeoutSeconds != 0 || cfg.InstrumentSnapshotMemorySize != 0 {
 		return fmt.Errorf("config_invalid: %s instrument snapshot settings are only valid for stockcn", path)
 	} else if cfg.StaggerStartSecond != 0 || cfg.StaggerWindowSeconds != 0 || cfg.StaggerMaxStartsPerSecond != 0 {
@@ -1294,13 +1318,7 @@ func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 		if remaining > len(autoRegions)*50 {
 			return fmt.Errorf("config_invalid: %s timer_function_count %d exceeds the 50-function-per-region limit for %d automatic regions", path, desired, len(autoRegions))
 		}
-		base, extra := remaining/len(autoRegions), remaining%len(autoRegions)
-		for order, index := range autoRegions {
-			cfg.Regions[index].FunctionCount = base
-			if order < extra {
-				cfg.Regions[index].FunctionCount++
-			}
-		}
+		allocateSCFAutoRegionCounts(cfg, autoRegions, remaining)
 	}
 	actualTotal := 0
 	for _, index := range enabledRegions {
@@ -1315,6 +1333,58 @@ func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 	}
 	cfg.TimerFunctionCount = desired
 	return nil
+}
+
+// allocateSCFAutoRegionCounts spreads automatically allocated Timer capacity
+// across enabled regions. Crypto deliberately fills overseas regions first so
+// domestic regions remain a fallback for quota or availability constraints.
+// Every configured automatic region still receives at least one function.
+func allocateSCFAutoRegionCounts(cfg *SCFFetcherSpace, autoRegions []int, remaining int) {
+	groups := [][]int{autoRegions}
+	if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "crypto") {
+		overseas := make([]int, 0, len(autoRegions))
+		domestic := make([]int, 0, len(autoRegions))
+		for _, index := range autoRegions {
+			if isOverseasSCFRegion(cfg.Regions[index].Region) {
+				overseas = append(overseas, index)
+			} else {
+				domestic = append(domestic, index)
+			}
+		}
+		groups = [][]int{overseas, domestic}
+	}
+
+	for groupIndex, group := range groups {
+		if len(group) == 0 {
+			continue
+		}
+		laterRegionCount := 0
+		for _, later := range groups[groupIndex+1:] {
+			laterRegionCount += len(later)
+		}
+		capacity := len(group) * 50
+		assign := remaining - laterRegionCount
+		if assign > capacity {
+			assign = capacity
+		}
+		base, extra := assign/len(group), assign%len(group)
+		for order, index := range group {
+			cfg.Regions[index].FunctionCount = base
+			if order < extra {
+				cfg.Regions[index].FunctionCount++
+			}
+		}
+		remaining -= assign
+	}
+}
+
+func isOverseasSCFRegion(code string) bool {
+	for _, region := range tencent.SCFRegions() {
+		if strings.EqualFold(region.Code, strings.TrimSpace(code)) {
+			return region.Tag == "海外"
+		}
+	}
+	return false
 }
 
 func validateStorageRPCTarget(raw, path string) error {

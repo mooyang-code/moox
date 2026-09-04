@@ -65,7 +65,7 @@ func (*MarketDataAdapter) Descriptor() marketdata.ProviderDescriptor {
 		ID:              "binance",
 		SourceID:        "spot_http",
 		DisplayName:     "Binance",
-		Hosts:           []string{"api.binance.com", "fapi.binance.com"},
+		Hosts:           []string{"data-api.binance.vision", "api-gcp.binance.com", "api.binance.com", "fapi.binance.com"},
 		ProtocolVariant: "http",
 		Transport:       "https",
 		Port:            443,

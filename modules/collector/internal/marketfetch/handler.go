@@ -58,10 +58,10 @@ type MetricsReporter interface {
 const (
 	// A fresh SCF invocation establishes a TLS connection to EventBus before
 	// publishing the only completion fact. The first connection can take
-	// several seconds on a cold path, so leave a ten-second reserve and allow
+	// several seconds on a cold path, so leave a three-second reserve and allow
 	// one bounded reconnect attempt. Invoke functions use the longer instrument
 	// timeout; Timer invocations do not publish completion events.
-	completionPublishReserve  = 10 * time.Second
+	completionPublishReserve  = 3 * time.Second
 	completionConnectTimeout  = 4 * time.Second
 	completionConnectAttempts = 2
 	defaultStorageTimeout     = 5 * time.Second

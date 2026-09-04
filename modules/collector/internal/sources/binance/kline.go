@@ -51,12 +51,56 @@ func (c *KlineCollector) fetchKlinesOnce(ctx context.Context, params *sources.Co
 func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
 	switch params.InstType {
 	case InstTypeSPOT:
-		return c.spotAPI.GetKlineWithIPs(ctx, req, params.DNSIPs(c.client.SpotDomain()))
+		var lastErr error
+		for index, domain := range c.client.SpotDomains() {
+			attemptCtx, cancel := endpointAttemptContext(ctx, len(c.client.SpotDomains())-index)
+			klines, err := c.spotAPI.GetKlineWithDomainIPs(attemptCtx, req, domain, params.DNSIPs(domain))
+			cancel()
+			if err == nil {
+				return klines, nil
+			}
+			lastErr = err
+			if ctx.Err() != nil {
+				break
+			}
+		}
+		return nil, lastErr
 	case InstTypeSWAP:
-		return c.swapAPI.GetKlineWithIPs(ctx, req, params.DNSIPs(c.client.SwapDomain()))
+		var lastErr error
+		for index, domain := range c.client.SwapDomains() {
+			attemptCtx, cancel := endpointAttemptContext(ctx, len(c.client.SwapDomains())-index)
+			klines, err := c.swapAPI.GetKlineWithDomainIPs(attemptCtx, req, domain, params.DNSIPs(domain))
+			cancel()
+			if err == nil {
+				return klines, nil
+			}
+			lastErr = err
+			if ctx.Err() != nil {
+				break
+			}
+		}
+		return nil, lastErr
 	default:
 		return nil, fmt.Errorf("不支持的产品类型: %s", params.InstType)
 	}
+}
+
+func endpointAttemptContext(parent context.Context, remainingEndpoints int) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if remainingEndpoints <= 1 {
+		return context.WithCancel(parent)
+	}
+	deadline, ok := parent.Deadline()
+	if !ok {
+		return context.WithCancel(parent)
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return context.WithDeadline(parent, deadline)
+	}
+	return context.WithTimeout(parent, remaining/time.Duration(remainingEndpoints))
 }
 
 func convertExchangeKlines(exchangeKlines []*exchange.Kline, symbol string, interval string) []*market.Kline {

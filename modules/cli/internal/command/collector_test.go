@@ -609,6 +609,7 @@ func TestBuildCollectorCreateNodeItemUsesManagedShortLivedConfiguration(t *testi
 	}
 	assert.NotContains(t, item.Config, "cls_logset_id")
 	assert.NotContains(t, item.Config, "cls_topic_id")
+	assert.Equal(t, "ENABLE", item.Config["public_net_status"])
 	if item.Environment["MOOX_ENV"] != "prod" {
 		t.Fatalf("env = %#v", item.Environment)
 	}
@@ -844,7 +845,7 @@ func TestPublishSubmitDeployFleetUsesOneJob(t *testing.T) {
 	}
 }
 
-func TestPublishSubmitRejectsPartialFleetToAvoidMixedVersions(t *testing.T) {
+func TestPublishSubmitPartialFleetUpdatesExistingAndCreatesMissingSlots(t *testing.T) {
 	nodes := make([]adminclient.CloudNode, 4)
 	nodes[0] = adminclient.CloudNode{NodeID: "fleet-0", PackageID: "pkg-old", BizType: "data_collector", Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(0)}}
 	items := make([]adminclient.NodeCreateItem, 4)
@@ -852,10 +853,18 @@ func TestPublishSubmitRejectsPartialFleetToAvoidMixedVersions(t *testing.T) {
 		items[index] = adminclient.NodeCreateItem{PackageID: "pkg-new", Metadata: map[string]any{"function_name_prefix": "fleet", "index": index}}
 	}
 	api := &fakeCollectorFleetAPI{}
-	_, err := submitCollectorFleet(context.Background(), api, collectorPublishOptions{NodeCount: 4}, "pkg-new", items, nodes)
-	require.ErrorContains(t, err, "refusing a mixed-version deployment")
-	assert.Empty(t, api.createCalls)
-	assert.Empty(t, api.deployCalls)
+	summary, err := submitCollectorFleet(context.Background(), api, collectorPublishOptions{NodeCount: 4}, "pkg-new", items, nodes)
+	require.NoError(t, err)
+	assert.Equal(t, "updated", summary.FleetMode)
+	assert.Equal(t, "deploy_nodes,create_nodes", summary.Operation)
+	assert.Equal(t, "deploy-1,create-1", summary.JobID)
+	assert.Equal(t, 4, summary.TotalCount)
+	require.Len(t, api.deployCalls, 1)
+	assert.Len(t, api.deployCalls[0], 1)
+	assert.Equal(t, "fleet-0", api.deployCalls[0][0].NodeID)
+	require.Len(t, api.createCalls, 1)
+	assert.Len(t, api.createCalls[0], 3)
+	assert.Equal(t, 1, api.createCalls[0][0].Metadata["index"])
 }
 
 func TestPublishSubmitRejectsOversizedFleetBeforeUpload(t *testing.T) {
@@ -1050,6 +1059,22 @@ func TestBuildCollectorCreateNodeItemUsesLongStockCNInstrumentInvokeTimeoutOnlyF
 	assert.Equal(t, "90", configured.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
 }
 
+func TestBuildCollectorCreateNodeItemUsesLongCryptoInstrumentInvokeTimeout(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	fetcher := &setupconfig.SCFFetcherSpace{
+		SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 15,
+		RealtimeBatchSize: 10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
+	}
+
+	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+		SpaceID: "crypto", CloudAccountID: "account-a", Region: "ap-singapore", TriggerType: "invoke", FetcherConfig: fetcher,
+	}, "moox-collector-crypto_dev")
+
+	assert.Equal(t, "60", item.Config["timeout"])
+	assert.Equal(t, "60", item.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
+}
+
 func TestBuildCollectorCreateNodeItemUsesIndependentInstrumentTimerMode(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	fetcher := &setupconfig.SCFFetcherSpace{
@@ -1114,13 +1139,13 @@ func TestCollectorTimerRestorePatchesOnlyPreviouslyEnabledNodes(t *testing.T) {
 	assert.Equal(t, "0 1 * * * * *", patches[0].TimerCron)
 }
 
-func TestCollectorStockCNTimerRestorePatchesIncludeFreshNodes(t *testing.T) {
+func TestCollectorTimerEnablePatchesIncludeFreshNodes(t *testing.T) {
 	nodes := []adminclient.CloudNode{
 		{NodeID: "sh-1", Region: "ap-shanghai", FunctionName: "stock-1", Metadata: map[string]any{"index": 1}},
 		{NodeID: "gz-0", Region: "ap-guangzhou", FunctionName: "stock-0", Metadata: map[string]any{"index": 0}},
 	}
 
-	patches := collectorStockCNTimerRestorePatches(nodes)
+	patches := collectorTimerEnablePatches(nodes)
 
 	require.Len(t, patches, 2)
 	assert.Equal(t, "gz-0", patches[0].NodeID)

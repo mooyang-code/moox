@@ -12,9 +12,11 @@ import (
 )
 
 type APIConfig struct {
-	BaseURL     string `yaml:"base_url"`
-	SpotBaseURL string `yaml:"spot_base_url"`
-	SwapBaseURL string `yaml:"swap_base_url"`
+	BaseURL      string   `yaml:"base_url"`
+	SpotBaseURL  string   `yaml:"spot_base_url"`
+	SpotBaseURLs []string `yaml:"spot_base_urls"`
+	SwapBaseURL  string   `yaml:"swap_base_url"`
+	SwapBaseURLs []string `yaml:"swap_base_urls"`
 }
 
 // InstTypeForMarket converts the scheduler's lower-case market label to the
@@ -47,8 +49,22 @@ func ResolveAPIConfig() (APIConfig, error) {
 		return APIConfig{}, err
 	}
 	cfg := source.API
-	if cfg.SpotBaseURL == "" {
-		cfg.SpotBaseURL = cfg.BaseURL
+	if len(cfg.SpotBaseURLs) == 0 {
+		if cfg.SpotBaseURL == "" {
+			cfg.SpotBaseURL = cfg.BaseURL
+		}
+		if cfg.SpotBaseURL != "" {
+			cfg.SpotBaseURLs = []string{cfg.SpotBaseURL}
+		}
+	}
+	if len(cfg.SwapBaseURLs) == 0 && cfg.SwapBaseURL != "" {
+		cfg.SwapBaseURLs = []string{cfg.SwapBaseURL}
+	}
+	if len(cfg.SpotBaseURLs) > 0 {
+		cfg.SpotBaseURL = cfg.SpotBaseURLs[0]
+	}
+	if len(cfg.SwapBaseURLs) > 0 {
+		cfg.SwapBaseURL = cfg.SwapBaseURLs[0]
 	}
 	return cfg, nil
 }

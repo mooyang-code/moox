@@ -91,6 +91,7 @@ type instrumentStorageStub struct {
 	rows            []*storagepb.RowFieldUpsert
 	rowBatchSizes   []int
 	registrations   []*storagepb.RegisterDataSubjectReq
+	symbols         []*storagepb.SubjectSymbol
 	existing        []*storagepb.DatasetSubject
 	bindings        []*storagepb.DatasetSubject
 	stagedBindings  []*storagepb.DatasetSubject
@@ -151,6 +152,9 @@ func (s *instrumentStorageStub) RegisterDataSubject(_ context.Context, req *stor
 }
 func (s *instrumentStorageStub) ListDatasetSubjects(context.Context, string, string) ([]*storagepb.DatasetSubject, error) {
 	return s.existing, nil
+}
+func (s *instrumentStorageStub) ListSubjectSymbols(context.Context, string, string) ([]*storagepb.SubjectSymbol, error) {
+	return s.symbols, nil
 }
 func (s *instrumentStorageStub) BindDatasetSubject(_ context.Context, item *storagepb.DatasetSubject) error {
 	s.bindCalls++
@@ -559,6 +563,29 @@ func TestInstrumentPipelineUsesMarketMetadataAndCanPublishOnlyInstrumentSet(t *t
 	require.Equal(t, "UTC", registration.GetSubject().GetTimezone())
 }
 
+func TestInstrumentPipelineRefreshesExistingCryptoSymbols(t *testing.T) {
+	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(&instrumentProviderStub{id: "binance", snapshot: marketdata.InstrumentSnapshot{
+		SnapshotID: "crypto-refresh", SourceProvider: "binance", MarketID: "crypto", FetchedAt: now,
+		Complete: true, PageCount: 1, ExchangeCounts: map[string]int{"binance": 1},
+		Instruments: []marketdata.Instrument{{SubjectID: "BTC-USDT-SPOT", CanonicalSymbol: "BTC-USDT", ProviderSymbol: "BTCUSDT", Exchange: "binance", Status: "active", BaseAsset: "BTC", QuoteAsset: "USDT"}},
+	}}))
+	storage := &instrumentStorageStub{existing: []*storagepb.DatasetSubject{{
+		SpaceId: "crypto", DatasetId: "dataset_binance_spot_symbols", SubjectId: "BTC-USDT-SPOT", Status: "active",
+	}}}
+	pipeline := &InstrumentPipeline{
+		Registry: registry, Storage: storage, CandidateChain: []string{"binance"},
+		SpaceID: "crypto", MarketID: "crypto", DatasetID: "dataset_binance_spot_symbols", DataSourceID: "binance",
+		RequiredExchanges: []string{"binance"}, MinimumCount: 1,
+	}
+
+	_, err := pipeline.Execute(context.Background(), InstrumentPipelineRequest{RequestID: "crypto-refresh-request", SnapshotAt: now})
+
+	require.NoError(t, err)
+	require.Len(t, storage.registrations, 1, "existing crypto subjects must refresh their external symbol mapping")
+}
+
 func TestInstrumentPipelineRejectsOlderSnapshotBeforeWriting(t *testing.T) {
 	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
 	registry := marketdata.NewRegistry()
@@ -614,6 +641,20 @@ func TestStagedInstrumentBindingsDisablesExistingTargetAfterRepeatedMissingSnaps
 	t.Fatal("target binding was not retained in staged snapshot")
 }
 
+func TestStagedInstrumentBindingsDisablesMissingCryptoSubjectImmediately(t *testing.T) {
+	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
+	snapshot := testInstrumentSnapshot("binance", now)
+	existing := []*storagepb.DatasetSubject{{SpaceId: "crypto", DatasetId: "dataset_binance_spot_symbols", SubjectId: "OLD-USDT-SPOT", Status: "active"}}
+	target := []*storagepb.DatasetSubject{{SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m", SubjectId: "OLD-USDT-SPOT", Status: "active"}}
+
+	bindings := stagedInstrumentBindings("crypto", existing, target, map[string]marketdata.Instrument{}, "dataset_binance_spot_symbols", "dataset_binance_spot_kline_1m", snapshot, "fingerprint")
+	for _, binding := range bindings {
+		if binding.GetSubjectId() == "OLD-USDT-SPOT" {
+			require.Equal(t, "disabled", binding.GetStatus(), binding.GetDatasetId())
+		}
+	}
+}
+
 func TestInstrumentSnapshotGenerationIDSeparatesDatasetAndContent(t *testing.T) {
 	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
 	spot := instrumentSnapshotGenerationID("crypto", []string{"binance"}, now, "dataset_binance_spot_symbols", "", "spot")
@@ -622,6 +663,34 @@ func TestInstrumentSnapshotGenerationIDSeparatesDatasetAndContent(t *testing.T) 
 
 	assert.NotEqual(t, spot, swap)
 	assert.Equal(t, spot, changed, "content differences must be fenced by Storage, not split the shard generation")
+}
+
+func TestInstrumentRecordRowUsesCryptoDatasetColumns(t *testing.T) {
+	snapshotAt := time.Date(2026, 9, 5, 2, 0, 0, 0, time.UTC)
+	snapshot := marketdata.InstrumentSnapshot{SnapshotID: "snapshot-crypto", SourceProvider: "binance", FetchedAt: snapshotAt}
+	instrument := marketdata.Instrument{
+		SubjectID: "BTC-USDT-SPOT", CanonicalSymbol: "BTC-USDT", ProviderSymbol: "BTCUSDT",
+		Exchange: "binance", Status: "TRADING", BaseAsset: "BTC", QuoteAsset: "USDT",
+		MinQty: "0.00001000", MaxQty: "9000.00000000", TickSize: "0.01000000", LotSize: "0.00001000",
+	}
+
+	row := instrumentRecordRow("crypto", "dataset_binance_spot_symbols", snapshot, instrument)
+
+	assert.Equal(t, []string{"symbol", "external_symbol", "base_asset", "quote_asset", "status", "min_qty", "max_qty", "tick_size", "lot_size"}, fieldIDs(row))
+	assert.Equal(t, "BTC-USDT", findField(row, "symbol").GetStringValue())
+	assert.Equal(t, "BTCUSDT", findField(row, "external_symbol").GetStringValue())
+	assert.Equal(t, "BTC", findField(row, "base_asset").GetStringValue())
+	assert.Equal(t, "USDT", findField(row, "quote_asset").GetStringValue())
+	assert.Equal(t, "TRADING", findField(row, "status").GetStringValue())
+	assert.InDelta(t, 0.00001, findField(row, "min_qty").GetDoubleValue(), 0.000000001)
+}
+
+func fieldIDs(row *storagepb.RowFieldUpsert) []string {
+	ids := make([]string, 0, len(row.GetFields()))
+	for _, field := range row.GetFields() {
+		ids = append(ids, field.GetFieldId())
+	}
+	return ids
 }
 
 func testInstrumentSnapshot(provider string, now time.Time) marketdata.InstrumentSnapshot {

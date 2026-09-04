@@ -22,6 +22,7 @@ type BatchStorage interface {
 	LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesSelector) (time.Time, bool, error)
 	RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error
 	ListDatasetSubjects(context.Context, string, string) ([]*storagepb.DatasetSubject, error)
+	ListSubjectSymbols(context.Context, string, string) ([]*storagepb.SubjectSymbol, error)
 	StageDatasetSubjectSet(context.Context, string, string, []*storagepb.DatasetSubject) error
 	ActivateDatasetSubjectSet(context.Context, string, string) error
 }
@@ -289,6 +290,31 @@ func (w *storageWriter) ListDatasetSubjects(ctx context.Context, spaceID, datase
 			return nil, err
 		}
 		all = append(all, response.GetDatasetSubjects()...)
+		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
+			return all, nil
+		}
+	}
+}
+
+func (w *storageWriter) ListSubjectSymbols(ctx context.Context, spaceID, dataSourceID string) ([]*storagepb.SubjectSymbol, error) {
+	var all []*storagepb.SubjectSymbol
+	for page := uint32(1); ; page++ {
+		var response *storagepb.ListSubjectSymbolsRsp
+		err := retryStorage(ctx, func() error {
+			var err error
+			response, err = w.metadata.ListSubjectSymbols(ctx, &storagepb.ListSubjectSymbolsReq{
+				AuthInfo: w.authInfo, SpaceId: spaceID, DataSourceId: dataSourceID,
+				Page: &storagepb.Page{Page: page, Size: datasetSubjectPageSize},
+			})
+			if err != nil {
+				return fmt.Errorf("list subject symbols: %w", err)
+			}
+			return ensureStorageOK("list subject symbols", response.GetRetInfo())
+		})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, response.GetSubjectSymbols()...)
 		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
 			return all, nil
 		}

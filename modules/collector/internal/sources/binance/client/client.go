@@ -29,57 +29,104 @@ const (
 // Client 币安客户端
 type Client struct {
 	*httpclient.HTTPClient
-	spotDomain string
-	swapDomain string
+	spotDomains []string
+	swapDomains []string
 }
 
 // NewClient 创建币安客户端
 func NewClient() *Client {
 	return &Client{
-		HTTPClient: httpclient.NewHTTPClient(),
-		spotDomain: SpotDomain,
-		swapDomain: SwapDomain,
+		HTTPClient:  httpclient.NewHTTPClient(),
+		spotDomains: []string{SpotDomain},
+		swapDomains: []string{SwapDomain},
 	}
 }
 
 // SetSpotBaseURL 设置现货 API 基础地址。
 func (c *Client) SetSpotBaseURL(rawURL string) error {
-	domain, err := domainFromBaseURL(rawURL)
+	return c.SetSpotBaseURLs([]string{rawURL})
+}
+
+// SetSpotBaseURLs configures the ordered public Spot endpoints. Binance
+// exposes several official endpoints; keeping the order explicit lets a
+// short-lived SCF invocation fail over within its bounded request budget.
+func (c *Client) SetSpotBaseURLs(rawURLs []string) error {
+	domains, err := domainsFromBaseURLs(rawURLs)
 	if err != nil {
 		return err
 	}
-	if domain != "" {
-		c.spotDomain = domain
+	if len(domains) == 0 {
+		return fmt.Errorf("Binance 现货 API 地址不能为空")
 	}
+	c.spotDomains = domains
 	return nil
 }
 
 // SetSwapBaseURL 设置合约 API 基础地址。
 func (c *Client) SetSwapBaseURL(rawURL string) error {
-	domain, err := domainFromBaseURL(rawURL)
+	return c.SetSwapBaseURLs([]string{rawURL})
+}
+
+func (c *Client) SetSwapBaseURLs(rawURLs []string) error {
+	domains, err := domainsFromBaseURLs(rawURLs)
 	if err != nil {
 		return err
 	}
-	if domain != "" {
-		c.swapDomain = domain
+	if len(domains) == 0 {
+		return fmt.Errorf("Binance 合约 API 地址不能为空")
 	}
+	c.swapDomains = domains
 	return nil
 }
 
 // SpotDomain 返回现货 API 域名。
 func (c *Client) SpotDomain() string {
-	if c.spotDomain == "" {
+	if len(c.spotDomains) == 0 {
 		return SpotDomain
 	}
-	return c.spotDomain
+	return c.spotDomains[0]
+}
+
+func (c *Client) SpotDomains() []string {
+	if len(c.spotDomains) == 0 {
+		return []string{SpotDomain}
+	}
+	return append([]string(nil), c.spotDomains...)
 }
 
 // SwapDomain 返回合约 API 域名。
 func (c *Client) SwapDomain() string {
-	if c.swapDomain == "" {
+	if len(c.swapDomains) == 0 {
 		return SwapDomain
 	}
-	return c.swapDomain
+	return c.swapDomains[0]
+}
+
+func (c *Client) SwapDomains() []string {
+	if len(c.swapDomains) == 0 {
+		return []string{SwapDomain}
+	}
+	return append([]string(nil), c.swapDomains...)
+}
+
+func domainsFromBaseURLs(rawURLs []string) ([]string, error) {
+	domains := make([]string, 0, len(rawURLs))
+	seen := make(map[string]struct{}, len(rawURLs))
+	for _, rawURL := range rawURLs {
+		domain, err := domainFromBaseURL(rawURL)
+		if err != nil {
+			return nil, err
+		}
+		if domain == "" {
+			continue
+		}
+		if _, exists := seen[domain]; exists {
+			continue
+		}
+		seen[domain] = struct{}{}
+		domains = append(domains, domain)
+	}
+	return domains, nil
 }
 
 func domainFromBaseURL(rawURL string) (string, error) {

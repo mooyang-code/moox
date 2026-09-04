@@ -878,13 +878,11 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if err := waitCollectorBatch(ctx, client, fleetSummary.JobID); err != nil {
 				return summary, fmt.Errorf("SCF Timer fleet for region %s: %w", regionOpts.Region, err)
 			}
-			if strings.EqualFold(fetcherConfig.SpaceID, "stockcn") {
-				deployedNodes, inspectDeployedErr := inspectCollectorFleet(ctx, client, regionOpts)
-				if inspectDeployedErr != nil {
-					return summary, inspectDeployedErr
-				}
-				publishedTimerFleets = append(publishedTimerFleets, collectorPublishedTimerFleet{opts: regionOpts, nodes: deployedNodes})
+			deployedNodes, inspectDeployedErr := inspectCollectorFleet(ctx, client, regionOpts)
+			if inspectDeployedErr != nil {
+				return summary, inspectDeployedErr
 			}
+			publishedTimerFleets = append(publishedTimerFleets, collectorPublishedTimerFleet{opts: regionOpts, nodes: deployedNodes})
 			summary.FleetMode = fleetSummary.FleetMode
 			summary.Operation = fleetSummary.Operation
 			summary.TotalCount += fleetSummary.TotalCount
@@ -896,6 +894,13 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			}
 			summary.JobIDs = append([]string(nil), jobs...)
 			summary.JobID = strings.Join(summary.JobIDs, ",")
+		}
+		// Keep the deployed Timer nodes available to every manifest space. Stock
+		// activation has extra canary gates; crypto activation only needs the
+		// built-in spot rule and a successful SCF package deployment.
+		allTimerNodes := make([]adminclient.CloudNode, 0, fetcherConfig.TimerFunctionCount)
+		for _, fleet := range publishedTimerFleets {
+			allTimerNodes = append(allTimerNodes, fleet.nodes...)
 		}
 		if strings.EqualFold(fetcherConfig.SpaceID, "stockcn") {
 			instrumentOpts := opts
@@ -959,13 +964,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			summary.TotalCount += instrumentSummary.TotalCount
 			instrumentSnapshotFleet = collectorPublishedTimerFleet{opts: instrumentOpts, nodes: instrumentNodes}
 			hasInstrumentSnapshotFleet = true
-			// Keep both Timer classes disabled until the fleet is fully deployed and
-			// the independent Instrument canary has passed. Egress probing is an
-			// optional diagnostic, not a release blocker.
-			allTimerNodes := make([]adminclient.CloudNode, 0, fetcherConfig.TimerFunctionCount)
-			for _, fleet := range publishedTimerFleets {
-				allTimerNodes = append(allTimerNodes, fleet.nodes...)
-			}
 			if opts.EnableStockCN {
 				// Enable the rule before the Timer fleet. Collector assignment is
 				// reconciled from the active rule, so waiting for assignments while
@@ -998,7 +996,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 					_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, "builtin-stockcn-kline-1m")
 					return summary, fmt.Errorf("verify stock Kline assignments after rule enable: %w", err)
 				}
-				enablePatches := collectorStockCNTimerRestorePatches(allTimerNodes, *fetcherConfig)
+				enablePatches := collectorTimerEnablePatches(allTimerNodes, *fetcherConfig)
 				enableJobs, enableErr := submitCollectorTimerRuntimeConfigs(ctx, client, enablePatches)
 				if enableErr != nil {
 					_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, "builtin-stockcn-kline-1m")
@@ -1035,6 +1033,39 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			// Without --enable-stockcn, Kline Timer nodes and the default rule
 			// remain disabled after publication. The independent Instrument Timer
 			// is enabled above because its daily snapshot workflow is self-contained.
+			summary.JobIDs = append([]string(nil), jobs...)
+			summary.JobID = strings.Join(summary.JobIDs, ",")
+		}
+		if strings.EqualFold(fetcherConfig.SpaceID, "crypto") {
+			if len(allTimerNodes) == 0 {
+				return summary, fmt.Errorf("crypto Kline Timer fleet is empty")
+			}
+			enabledRules, ruleErr := client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "spot")
+			if ruleErr != nil {
+				return summary, fmt.Errorf("verify crypto Kline rules before Timer activation: %w", ruleErr)
+			}
+			spotKlineEnabled := false
+			for _, rule := range enabledRules {
+				if rule.RuleID == "builtin-binance-spot-kline-1m" && rule.Enabled {
+					spotKlineEnabled = true
+					break
+				}
+			}
+			if !spotKlineEnabled {
+				return summary, fmt.Errorf("crypto publish requires enabled rule builtin-binance-spot-kline-1m")
+			}
+			enablePatches := collectorTimerEnablePatches(allTimerNodes, *fetcherConfig)
+			enableJobs, enableErr := submitCollectorTimerRuntimeConfigs(ctx, client, enablePatches)
+			if enableErr != nil {
+				return summary, fmt.Errorf("enable crypto Kline Timer fleet: %w", enableErr)
+			}
+			if err := waitCollectorBatches(ctx, client, enableJobs); err != nil {
+				return summary, fmt.Errorf("enable crypto Kline Timer fleet: %w", err)
+			}
+			if err := waitCollectorTimerFleetsEnabled(ctx, client, publishedTimerFleets); err != nil {
+				return summary, fmt.Errorf("verify crypto Kline Timer fleet enabled: %w", err)
+			}
+			jobs = append(jobs, enableJobs...)
 			summary.JobIDs = append([]string(nil), jobs...)
 			summary.JobID = strings.Join(summary.JobIDs, ",")
 		}
@@ -1231,7 +1262,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
 				return summary, fmt.Errorf("verify stock Kline assignments after rule enable: %w", err)
 			}
-			timerJobs, timerErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorStockCNTimerRestorePatches(allTimerNodes, *fetcherConfig))
+			timerJobs, timerErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerEnablePatches(allTimerNodes, *fetcherConfig))
 			if timerErr != nil {
 				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
 				return summary, fmt.Errorf("enable stock Kline Timer fleet: %w", timerErr)
@@ -1576,13 +1607,13 @@ func submitCollectorFleet(
 	if existing == 0 {
 		return summary, fmt.Errorf("collector fleet has empty node slots")
 	}
-	if len(missing) > 0 {
-		return summary, fmt.Errorf("collector fleet is partially populated (%d existing, %d missing); refusing a mixed-version deployment", existing, len(missing))
-	}
 
 	summary.FleetMode = "updated"
 	deployments := make([]adminclient.NodeDeployItem, 0, len(fleetNodes))
 	for index, node := range fleetNodes {
+		if strings.TrimSpace(node.NodeID) == "" {
+			continue
+		}
 		deployments = append(deployments, adminclient.NodeDeployItem{
 			NodeID:      node.NodeID,
 			PackageID:   packageID,
@@ -1590,13 +1621,32 @@ func submitCollectorFleet(
 			Environment: cloneCollectorStringMap(createItems[index].Environment),
 		})
 	}
-	resp, err := api.SubmitDeployNodes(ctx, deployments)
-	if err != nil {
-		return summary, err
+	jobIDs := make([]string, 0, 2)
+	if len(deployments) > 0 {
+		resp, err := api.SubmitDeployNodes(ctx, deployments)
+		if err != nil {
+			return summary, err
+		}
+		if resp != nil && strings.TrimSpace(resp.JobID) != "" {
+			jobIDs = append(jobIDs, resp.JobID)
+		}
 	}
-	summary.JobID = resp.JobID
-	summary.Operation = "deploy_nodes"
-	summary.TotalCount = resp.TotalCount
+	if len(missing) > 0 {
+		resp, err := api.SubmitCreateNodes(ctx, missing)
+		if err != nil {
+			return summary, fmt.Errorf("create %d missing collector fleet slots after updating %d existing nodes: %w", len(missing), existing, err)
+		}
+		if resp != nil && strings.TrimSpace(resp.JobID) != "" {
+			jobIDs = append(jobIDs, resp.JobID)
+		}
+	}
+	summary.JobID = strings.Join(jobIDs, ",")
+	if len(missing) == 0 {
+		summary.Operation = "deploy_nodes"
+	} else {
+		summary.Operation = "deploy_nodes,create_nodes"
+	}
+	summary.TotalCount = len(deployments) + len(missing)
 	return summary, nil
 }
 
@@ -1605,6 +1655,19 @@ func submitCollectorFleet(
 // success used to hide failed SCF deployments until the first production
 // timer fired.
 func waitCollectorBatch(ctx context.Context, client *adminclient.Client, jobID string) error {
+	for _, one := range strings.Split(jobID, ",") {
+		one = strings.TrimSpace(one)
+		if one == "" {
+			continue
+		}
+		if err := waitCollectorBatchOne(ctx, client, one); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func waitCollectorBatchOne(ctx context.Context, client *adminclient.Client, jobID string) error {
 	if strings.TrimSpace(jobID) == "" {
 		return nil
 	}
@@ -1825,12 +1888,12 @@ func collectorTimerRestorePatches(nodes []adminclient.CloudNode) []collectorRunt
 	return patches
 }
 
-// collectorStockCNTimerRestorePatches returns an enable patch for every
-// published stock Timer. New SCF nodes do not have timer metadata yet, so use
-// the same stable region/slot ordering as the Collector reconciler to give
-// them a deterministic cron until the first reconciliation writes the exact
+// collectorTimerEnablePatches returns an enable patch for every newly
+// published Timer. New SCF nodes do not have timer metadata yet, so use the
+// same stable region/slot ordering as the Collector reconciler to give them a
+// deterministic cron until the first reconciliation writes the exact
 // assignment.
-func collectorStockCNTimerRestorePatches(nodes []adminclient.CloudNode, configs ...setupconfig.SCFFetcherSpace) []collectorRuntimeConfigPatch {
+func collectorTimerEnablePatches(nodes []adminclient.CloudNode, configs ...setupconfig.SCFFetcherSpace) []collectorRuntimeConfigPatch {
 	startSecond := setupconfig.DefaultStockCNStaggerStartSecond
 	windowSeconds := setupconfig.DefaultStockCNStaggerWindowSeconds
 	if len(configs) > 0 {
@@ -2591,13 +2654,24 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if fetcher == nil {
 		fetcher = defaultCollectorSCFFetcherSpace()
 	}
+	status := strings.ToUpper(strings.TrimSpace(fetcher.PublicNetStatus))
+	if status == "" {
+		status = "ENABLE"
+	}
+	if status != "" {
+		config["public_net_status"] = status
+	}
 	triggerType := defaultFlag(opts.TriggerType, "timer")
 	effectiveTimeoutSeconds := defaultInt(fetcher.TimeoutSeconds, 15)
 	spaceID := firstNonEmpty(opts.SpaceID, fetcher.SpaceID, opts.collectorPackageOptions.SpaceID)
 	if strings.EqualFold(spaceID, "stockcn") && opts.InstrumentSnapshotTimer {
 		effectiveTimeoutSeconds = defaultInt(fetcher.InstrumentSnapshotTimeoutSeconds, setupconfig.DefaultStockCNInstrumentSnapshotTimeoutSeconds)
-	} else if strings.EqualFold(spaceID, "stockcn") && strings.EqualFold(triggerType, "invoke") {
-		effectiveTimeoutSeconds = defaultInt(fetcher.InstrumentInvokeTimeoutSeconds, setupconfig.DefaultStockCNInstrumentInvokeTimeoutSeconds)
+	} else if strings.EqualFold(triggerType, "invoke") && (strings.EqualFold(spaceID, "stockcn") || strings.EqualFold(spaceID, "crypto")) {
+		invokeTimeout := setupconfig.DefaultStockCNInstrumentInvokeTimeoutSeconds
+		if strings.EqualFold(spaceID, "crypto") {
+			invokeTimeout = setupconfig.DefaultCryptoInstrumentInvokeTimeoutSeconds
+		}
+		effectiveTimeoutSeconds = defaultInt(fetcher.InstrumentInvokeTimeoutSeconds, invokeTimeout)
 	}
 	effectiveMemorySize := defaultInt(fetcher.MemorySize, 64)
 	if strings.EqualFold(spaceID, "stockcn") && opts.InstrumentSnapshotTimer {
@@ -2894,12 +2968,18 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	spaceID := firstNonEmpty(opts.SpaceID, fetcher.SpaceID)
 	if strings.EqualFold(spaceID, "stockcn") && opts.InstrumentSnapshotTimer {
 		executionTimeoutSeconds = defaultInt(fetcher.InstrumentSnapshotTimeoutSeconds, setupconfig.DefaultStockCNInstrumentSnapshotTimeoutSeconds)
-	} else if strings.EqualFold(spaceID, "stockcn") && strings.EqualFold(strings.TrimSpace(opts.TriggerType), "invoke") {
+	} else if strings.EqualFold(strings.TrimSpace(opts.TriggerType), "invoke") && (strings.EqualFold(spaceID, "stockcn") || strings.EqualFold(spaceID, "crypto")) {
 		// Instrument and deployment canaries use the invoke fleet. Keep the
 		// runtime execution budget aligned with the longer SCF timeout selected
 		// by buildCollectorCreateNodeItem; otherwise a 15-second inner deadline
 		// leaves only a few seconds after Storage/CLS/completion reserves.
-		executionTimeoutSeconds = defaultInt(fetcher.InstrumentInvokeTimeoutSeconds, executionTimeoutSeconds)
+		invokeTimeout := executionTimeoutSeconds
+		if strings.EqualFold(spaceID, "stockcn") {
+			invokeTimeout = setupconfig.DefaultStockCNInstrumentInvokeTimeoutSeconds
+		} else if strings.EqualFold(spaceID, "crypto") {
+			invokeTimeout = setupconfig.DefaultCryptoInstrumentInvokeTimeoutSeconds
+		}
+		executionTimeoutSeconds = defaultInt(fetcher.InstrumentInvokeTimeoutSeconds, invokeTimeout)
 	}
 	setDefaultEnv(env, "MOOX_FETCH_TIMEOUT_SECONDS", strconv.Itoa(executionTimeoutSeconds))
 	setDefaultEnv(env, "MOOX_FETCH_MAX_INFLIGHT_REQUESTS", strconv.Itoa(defaultInt(fetcher.MaxInflightRequests, 10)))
@@ -3247,6 +3327,7 @@ func defaultCollectorSCFFetcherSpace() *setupconfig.SCFFetcherSpace {
 	return &setupconfig.SCFFetcherSpace{
 		MemorySize:          64,
 		TimeoutSeconds:      15,
+		PublicNetStatus:     "ENABLE",
 		RealtimeBatchSize:   30,
 		RealtimeBarLimit:    10,
 		CatchupBatchSize:    1,

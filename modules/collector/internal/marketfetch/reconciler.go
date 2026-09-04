@@ -338,6 +338,11 @@ func splitGroupsForEnvironment(groups []TaskGroup, snapshot map[string]sources.D
 		managedBudget = budgets[0]
 	}
 	result := make([]TaskGroup, 0, len(groups))
+	// The final assignment also carries GroupID and GroupCount. Include a
+	// deliberately wide numeric representation while finding the largest safe
+	// subject chunk; otherwise the preflight can accept a chunk that fails only
+	// after BuildAssignments adds the group metadata.
+	const environmentGroupCountProbe = 999999
 	for _, group := range groups {
 		subjects := normalizeSubjects(group.Subjects)
 		if len(subjects) == 0 {
@@ -354,7 +359,7 @@ func splitGroupsForEnvironment(groups []TaskGroup, snapshot map[string]sources.D
 				}
 				_, err := buildManagedEnvironment(NodeAssignment{
 					Provider: group.Provider, MarketType: group.MarketType, MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag, DatasetID: group.DatasetID,
-					Frequency: group.Frequency, Subjects: chunk, ExternalSymbols: externals, Enabled: true,
+					Frequency: group.Frequency, Subjects: chunk, ExternalSymbols: externals, GroupID: environmentGroupCountProbe, GroupCount: environmentGroupCountProbe, Enabled: true,
 				}, snapshot, managedBudget)
 				if err == nil {
 					result = append(result, TaskGroup{Provider: group.Provider, MarketType: group.MarketType, MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag, DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: chunk, ExternalSymbols: externals})

@@ -61,6 +61,7 @@ health:
 dns:
   domains:
     - data-api.binance.vision
+    - api-gcp.binance.com
     - api.binance.com
     - fapi.binance.com
   refresh_interval: 5m

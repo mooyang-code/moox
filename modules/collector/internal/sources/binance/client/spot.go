@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -40,8 +41,21 @@ func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 
 // GetKlineWithIPs uses the collector's DNS snapshot when one is available.
 func (api *SpotAPI) GetKlineWithIPs(ctx context.Context, req *exchange.KlineRequest, ips []string) ([]*exchange.Kline, error) {
+	return api.GetKlineWithDomainIPs(ctx, req, api.client.SpotDomain(), ips)
+}
+
+// GetKlineWithDomainIPs requests one explicitly selected official Spot
+// endpoint. The collector uses this narrow method to try the configured
+// endpoint order while keeping each endpoint's DNS snapshot separate.
+func (api *SpotAPI) GetKlineWithDomainIPs(ctx context.Context, req *exchange.KlineRequest, domain string, ips []string) ([]*exchange.Kline, error) {
+	if api == nil || api.client == nil || req == nil {
+		return nil, fmt.Errorf("现货 K 线请求无效")
+	}
 	params := url.Values{}
-	domain := api.client.SpotDomain()
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		domain = api.client.SpotDomain()
+	}
 
 	// 转换交易对格式
 	symbol := FormatSymbol(req.Symbol)

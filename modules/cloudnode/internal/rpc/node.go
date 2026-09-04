@@ -439,6 +439,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err != nil {
 			return err
 		}
+		if err := reconcileSCFPublicNetwork(ctx, client, ref, info, effectiveConfig); err != nil {
+			return err
+		}
 		if err := verifySCFFunctionConfiguration(info, effectiveConfig, item.GetEnvironment(), ref.FunctionName); err != nil {
 			return err
 		}
@@ -478,6 +481,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		COSRegion:              firstString(pkg.COSRegion, account.COSRegion),
 		COSObject:              strings.TrimPrefix(pkg.COSPath, "/"),
 		Type:                   firstString(config["function_type"], "Event"),
+		PublicNetStatus:        desiredSCFPublicNetStatus(effectiveConfig),
 	})
 	createCancel()
 	if err != nil {
@@ -512,6 +516,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err != nil {
 			return err
 		}
+		if err := reconcileSCFPublicNetwork(reconcileCtx, client, ref, info, effectiveConfig); err != nil {
+			return err
+		}
 		if err := verifySCFFunctionConfiguration(info, effectiveConfig, item.GetEnvironment(), ref.FunctionName); err != nil {
 			return err
 		}
@@ -525,6 +532,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	}
 	info, err = waitForSCFActive(ctx, client, ref, nil)
 	if err != nil {
+		return err
+	}
+	if err := reconcileSCFPublicNetwork(ctx, client, ref, info, effectiveConfig); err != nil {
 		return err
 	}
 	if err := verifySCFFunctionConfiguration(info, effectiveConfig, item.GetEnvironment(), ref.FunctionName); err != nil {
@@ -684,6 +694,7 @@ func (s *Service) updateSCFFunctionCode(
 		MemorySize:             configInt64(desiredConfig, "memory_size", 0),
 		Timeout:                configInt64(desiredConfig, "timeout", 0),
 		MaxInstanceConcurrency: configInt64(desiredConfig, "max_instance_concurrency", 0),
+		PublicNetStatus:        desiredSCFPublicNetStatus(desiredConfig),
 		ClearNativeCLS:         true,
 	}); err != nil {
 		return fmt.Errorf("update scf function %s configuration: %w", ref.FunctionName, err)
@@ -723,11 +734,36 @@ func verifySCFFunctionConfiguration(info *tencentscf.FunctionInfo, desiredConfig
 			return fmt.Errorf("scf function %s max_instance_concurrency=%d; expected %d (SCF readback unavailable or mismatched)", functionName, info.MaxInstanceConcurrency, expected)
 		}
 	}
+	if expected := desiredSCFPublicNetStatus(desiredConfig); expected != "" && !strings.EqualFold(info.PublicNetStatus, expected) {
+		return fmt.Errorf("scf function %s public_net_status=%q; expected %q", functionName, info.PublicNetStatus, expected)
+	}
 	for key, expected := range desiredEnvironment {
 		if actual, ok := info.Environment[key]; !ok || actual != expected {
 			return fmt.Errorf("scf function %s environment %q does not match desired configuration", functionName, key)
 		}
 	}
+	return nil
+}
+
+func desiredSCFPublicNetStatus(config map[string]string) string {
+	return strings.ToUpper(strings.TrimSpace(config["public_net_status"]))
+}
+
+func reconcileSCFPublicNetwork(ctx context.Context, client scfProvisioner, ref tencentscf.FunctionRef, info *tencentscf.FunctionInfo, desiredConfig map[string]string) error {
+	expected := desiredSCFPublicNetStatus(desiredConfig)
+	if expected == "" || info == nil || strings.EqualFold(info.PublicNetStatus, expected) {
+		return nil
+	}
+	if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
+		FunctionRef: ref, Environment: info.Environment, PublicNetStatus: expected,
+	}); err != nil {
+		return fmt.Errorf("update scf function %s public network: %w", ref.FunctionName, err)
+	}
+	updated, err := waitForSCFActive(ctx, client, ref, nil)
+	if err != nil {
+		return err
+	}
+	*info = *updated
 	return nil
 }
 

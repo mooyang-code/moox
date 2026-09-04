@@ -458,7 +458,11 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 				log.WarnContextf(tickCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
 			}
 			if err := reconciler.Reconcile(tickCtx, spaceID); err != nil {
-				log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s expected_timer_function_count=%d measured_safe_group_size=%d: %v", spaceID, cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, err)
+				if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
+					log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s expected_timer_function_count=%d measured_safe_group_size=%d: %v", spaceID, cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, err)
+				} else {
+					log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s: %v", spaceID, err)
+				}
 			}
 			if err := readiness.EnsureCurrentAndNext(tickCtx, spaceID, time.Now().UTC()); err != nil {
 				log.WarnContextf(tickCtx, "collector period readiness prebuild failed space=%s: %v", spaceID, err)

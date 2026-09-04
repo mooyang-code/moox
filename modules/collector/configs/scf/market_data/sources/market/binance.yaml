@@ -7,7 +7,11 @@ app:
 
 api:
   base_url: "https://data-api.binance.vision"
-  spot_base_url: "https://data-api.binance.vision"
+  # Prefer Binance's public-data endpoint, then fail over to an official
+  # global API endpoint when a cloud-region egress path cannot reach it.
+  spot_base_urls:
+    - "https://data-api.binance.vision"
+    - "https://api-gcp.binance.com"
   swap_base_url: "https://fapi.binance.com"
 
 storage:

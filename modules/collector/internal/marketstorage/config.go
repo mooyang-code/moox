@@ -33,8 +33,11 @@ type sourceConfig struct {
 	// The shared Binance source file also carries the app and api metadata used
 	// by the provider runtime. Keep strict decoding here so malformed storage
 	// bindings still fail closed without rejecting those unrelated sections.
-	App     map[string]string `yaml:"app"`
-	API     map[string]string `yaml:"api"`
+	App map[string]string `yaml:"app"`
+	// API contains provider-specific values that are not consumed by the
+	// storage adapter. Keep it structurally permissive because providers can
+	// declare scalar endpoints as well as ordered endpoint lists.
+	API     map[string]any `yaml:"api"`
 	Storage struct {
 		Bindings map[string]StorageBinding `yaml:"bindings"`
 	} `yaml:"storage"`

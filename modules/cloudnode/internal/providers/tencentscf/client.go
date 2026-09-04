@@ -43,6 +43,8 @@ type FunctionInfo struct {
 	// MaxInstanceConcurrency is the static per-instance concurrency guard used
 	// by short-lived market-fetch Timer functions. Zero means not requested.
 	MaxInstanceConcurrency int64
+	PublicNetStatus        string
+	FixedEgressIP          string
 	Environment            map[string]string
 }
 
@@ -60,6 +62,7 @@ type CreateFunctionRequest struct {
 	COSRegion              string
 	COSObject              string
 	Type                   string
+	PublicNetStatus        string
 }
 
 // CreateFunctionResponse describes a Tencent SCF function creation.
@@ -102,6 +105,7 @@ type UpdateFunctionConfigurationRequest struct {
 	MemorySize             int64
 	Timeout                int64
 	MaxInstanceConcurrency int64
+	PublicNetStatus        string
 	// ClearNativeCLS explicitly sends empty CLS ids during an update, removing
 	// any historical SCF-native log destination. MooX uses the shared tRPC CLS
 	// writer instead.
@@ -216,6 +220,14 @@ func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInf
 	if response.Response.Timeout != nil {
 		out.Timeout = int64(*response.Response.Timeout)
 	}
+	if response.Response.PublicNetConfig != nil {
+		out.PublicNetStatus = deref(response.Response.PublicNetConfig.PublicNetStatus)
+		if response.Response.PublicNetConfig.EipConfig != nil {
+			if len(response.Response.PublicNetConfig.EipConfig.EipAddress) > 0 {
+				out.FixedEgressIP = deref(response.Response.PublicNetConfig.EipConfig.EipAddress[0])
+			}
+		}
+	}
 	// Keep the CloudNode field flat, but do not discard this readback:
 	// market-fetch deployment verification requires the provider's accepted
 	// value rather than merely the requested value.
@@ -248,6 +260,14 @@ func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunc
 	}
 	if req.MaxInstanceConcurrency > 0 {
 		request.InstanceConcurrencyConfig = &scf.InstanceConcurrencyConfig{DynamicEnabled: common.StringPtr("FALSE"), MaxConcurrency: common.Uint64Ptr(uint64(req.MaxInstanceConcurrency))}
+	}
+	if status := strings.ToUpper(strings.TrimSpace(req.PublicNetStatus)); status != "" {
+		// Tencent requires EipConfig whenever PublicNetConfig is sent. DISABLE
+		// keeps ordinary SCF public egress while avoiding a fixed-EIP allocation.
+		request.PublicNetConfig = &scf.PublicNetConfigIn{
+			PublicNetStatus: common.StringPtr(status),
+			EipConfig:       &scf.EipConfigIn{EipStatus: common.StringPtr("DISABLE")},
+		}
 	}
 	if req.ClearNativeCLS {
 		request.ClsLogsetId = common.StringPtr("")
@@ -347,6 +367,12 @@ func buildCreateFunctionRequest(req CreateFunctionRequest) *scf.CreateFunctionRe
 	request.AutoDeployClsTopicIndex = common.StringPtr("FALSE")
 	if req.Type != "" {
 		request.Type = common.StringPtr(req.Type)
+	}
+	if status := strings.ToUpper(strings.TrimSpace(req.PublicNetStatus)); status != "" {
+		request.PublicNetConfig = &scf.PublicNetConfigIn{
+			PublicNetStatus: common.StringPtr(status),
+			EipConfig:       &scf.EipConfigIn{EipStatus: common.StringPtr("DISABLE")},
+		}
 	}
 	return request
 }

@@ -38,8 +38,9 @@ flowchart LR
 7. 配置驱动的标准发布会为 `stockcn` 额外保留 1 个独立的 `instrument_snapshot` Timer 函数，专门每日
    承载全市场 Instrument 快照；每个启用地域仍可保留 1 个 `trigger_type=invoke` 辅助函数，承载缺口补采、
    出口探针和人工 E2E。`function_count` 只表示用户配置的 Kline Timer 实时容量。Space 级 `timer_function_count` 表示 Kline Timer 总容量；启用地域的 `function_count`
-   可以显式分配，或设为 0 由 CLI 自动均分。`crypto` 使用既有默认容量；`stockcn` 必须
-   在发布配置显式设置 `timer_function_count=N`，初始值建议 200，也可以按压测结果设置更大。
+   可以显式分配，或设为 0 由 CLI 自动分配。`crypto` 自动分配时优先填充海外地域，国内
+   地域只承接剩余容量；其他 Space 自动均分。`stockcn` 必须在发布配置显式设置
+   `timer_function_count=N`，初始值建议 200，也可以按压测结果设置更大。
    N 在发布时固定，ActiveInstrumentSet 变化只更新分片，不在运行时创建或删除函数。这样不会把
    按需工作错误投递到静态 Timer 环境，也不需要 SCF 在每次调用时回调控制面。
 
@@ -56,6 +57,12 @@ flowchart LR
 429 cooldown，不设置跨所有函数的 Provider 总配额。所有 Provider 成功行写入同一个
 `stockcn/dataset_stockcn_equity_kline`，Provider 不进入 RowKey，来源通过 `source_provider`、
 `provider_symbol`、`provider_timestamp`、`route_id`、`route_rank` 等字段追溯。
+
+crypto 的 Binance 公共行情优先使用 `data-api.binance.vision`，失败时按配置切换到
+`api-gcp.binance.com` 等官方备用域名；探针同时验证 `/ping` 和真实 `/klines` 响应，不能只用
+`/ping` 判定出口可用。Trade Resolver 的 DNS 快照会复制到 Kline Timer 的 Environment，HTTP
+客户端通过解析出的 IP 建立连接但保留原始 Host/SNI；路由失效时再回退域名直连。crypto SCF
+显式开启公网访问，并在发布配置中优先分配海外地域，国内地域仅作 Storage 跨地域可达时的兜底。
 
 当前公开 A 股分钟接口只有有界最新页且没有可复用游标，stockcn 历史策略先限制在最近 24 小时；超过该范围的
 Backfill/GapRepair 在计划阶段 fail closed，不能反复请求同一页伪装成历史分页。后续只有接入可靠游标分页并补齐覆盖推进
@@ -92,10 +99,10 @@ Kline 采集。目录刷新失败时保留上一版完整快照，Kline Timer �
 出口探针和人工 E2E 没有执行节点；只有在明确不需要这些按需能力时才应删除。`moox.toml` 的
 `function_count` 只统计 Kline Timer 节点，Instrument snapshot Timer 是额外的单节点，Invoke 辅助节点也是额外的每地域 1 个固定容量。
 
-当前 `moox.toml` 启用新加坡、广州、上海和北京四个地域，所以 Kline Timer 按 N 分配；Instrument snapshot
-使用配置选定的一个地域；每个启用地域仍可看到一个辅助函数：
-`...-invoke-ap-singapore-0`、`...-invoke-ap-guangzhou-0`、`...-invoke-ap-shanghai-0` 和
-`...-invoke-ap-beijing-0`；东京、成都等未启用地域不会创建对应节点。
+当前部署配置启用新加坡 18 个和广州 10 个 Kline Timer，海外地域优先，广州作为国内兜底；东京因
+Storage Gateway 跨地域写入链路未满足稳定性要求暂不启用。每个启用地域仍有一个辅助函数：
+`...-invoke-ap-singapore-0` 和 `...-invoke-ap-guangzhou-0`。实际地域数量应以
+`moox.toml` 与腾讯云函数配额为准，不得把历史函数占用的配额忽略掉。
 
 ## 任务环境变量
 

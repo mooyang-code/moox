@@ -120,6 +120,26 @@ func TestValidateSCFFetcherRequiresMarketDataSourceIdentity(t *testing.T) {
 	require.NoError(t, validateSCFFetcher(&cfg))
 }
 
+func TestValidateSCFFetcherNormalizesMarketPublicNetworkStatus(t *testing.T) {
+	cfg := SCFFetcher{Enabled: true, CloudAccount: SCFFetcherCloudAccount{
+		AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
+		AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
+	}, Spaces: []SCFFetcherSpace{{
+		SpaceID: "crypto", Entrypoint: "market_data", MarketID: "crypto", InstrumentType: "spot",
+		ProviderID: "binance", SourceID: "spot_http", PublicNetStatus: "enable",
+		StorageRPCGatewayTarget: "ip://106.53.107.122:11003", MemorySize: 64, TimeoutSeconds: 15,
+		RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+		Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf"}},
+	}}}
+
+	require.NoError(t, validateSCFFetcher(&cfg))
+	assert.Equal(t, "ENABLE", cfg.Spaces[0].PublicNetStatus)
+	assert.Equal(t, DefaultCryptoInstrumentInvokeTimeoutSeconds, cfg.Spaces[0].InstrumentInvokeTimeoutSeconds)
+
+	cfg.Spaces[0].PublicNetStatus = "unknown"
+	require.ErrorContains(t, validateSCFFetcher(&cfg), "public_net_status must be ENABLE or DISABLE")
+}
+
 func TestValidateSCFFetcherRequiresTDXEndpointConfiguration(t *testing.T) {
 	cfg := SCFFetcher{Enabled: true, CloudAccount: SCFFetcherCloudAccount{
 		AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
@@ -195,6 +215,20 @@ func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
 		total += region.FunctionCount
 	}
 	assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, total)
+}
+
+func TestResolveSCFTimerFunctionCountsPrioritizesOverseasCryptoRegions(t *testing.T) {
+	cfg := SCFFetcherSpace{
+		SpaceID: "crypto",
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 0, CloudAccountID: "gz"},
+			{Region: "ap-singapore", Enabled: true, FunctionCount: 0, CloudAccountID: "sg"},
+		},
+	}
+
+	require.NoError(t, resolveSCFTimerFunctionCounts(&cfg, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, 10, cfg.Regions[0].FunctionCount)
+	assert.Equal(t, 50, cfg.Regions[1].FunctionCount)
 }
 
 func TestResolveSCFTimerFunctionCountsRequiresExplicitStockN(t *testing.T) {

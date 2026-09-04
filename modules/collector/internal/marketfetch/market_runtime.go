@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/bond/eastmoney"
 	bondsina "github.com/mooyang-code/moox/modules/collector/internal/sources/bond/sina"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/index/cni"
@@ -68,6 +69,9 @@ func NewMarketKlinePipeline(storage Storage, marketID string, instrumentType mar
 }
 
 func newMarketProvider(marketID string, instrumentType marketdata.InstrumentType, providerID, sourceID string) (marketdata.MarketProvider, error) {
+	if marketID == "crypto" && instrumentType == marketdata.InstrumentSpot && providerID == "binance" && sourceID == "spot_http" {
+		return binance.NewMarketDataAdapter(binance.AdapterConfig{ProductType: marketdata.ProductSpot}), nil
+	}
 	if instrumentType == marketdata.InstrumentConvertibleBond {
 		switch {
 		case providerID == "eastmoney" && sourceID == "convertible_bond_http":
