@@ -404,6 +404,7 @@ func TestCollectorEgressProbeReportKeepsOnlyDiagnosticCounts(t *testing.T) {
 }
 
 func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
+	t.Setenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON", `{"data-api.binance.vision":{"ips":["203.0.113.10"]}}`)
 	stock := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "stockcn"}, Region: "ap-shanghai", StorageRPCGatewayTarget: "ip://storage:11003"}, "stock-node", "batch-stock")
 	stockData := stock["data"].(map[string]any)
 	assert.Equal(t, "dataset_stockcn_equity_kline", stockData["dataset_id"])
@@ -427,6 +428,7 @@ func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
 	assert.Equal(t, "binance", cryptoData["provider"])
 	assert.Equal(t, "spot", cryptoData["market_type"])
 	assert.Equal(t, "realtime", cryptoData["batch_kind"])
+	assert.Equal(t, map[string]any{"data-api.binance.vision": map[string]any{"ips": []any{"203.0.113.10"}}}, cryptoData["dns_routes"])
 }
 
 func TestDefaultStockCNCollectorRulesRequireExplicitActivation(t *testing.T) {

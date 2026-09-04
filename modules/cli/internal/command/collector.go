@@ -2077,7 +2077,7 @@ func collectorSCFCanaryEvent(opts collectorPublishOptions, nodeID, batchID strin
 		// holiday can still replay a real historical page safely.
 		startTime = time.Now().UTC().Add(-23 * time.Hour).Truncate(time.Minute).Format(time.RFC3339Nano)
 	}
-	return map[string]any{
+	data := map[string]any{
 		"action":                     "market_fetch",
 		"storage_rpc_gateway_target": opts.StorageRPCGatewayTarget,
 		"data": map[string]any{
@@ -2086,16 +2086,18 @@ func collectorSCFCanaryEvent(opts collectorPublishOptions, nodeID, batchID strin
 			// identity. Keep a stable schedule fence on the canary as well;
 			// omitting it makes the canary fail after Storage has already
 			// succeeded, defeating the deployment gate.
-			"schedule_id": "deploy-canary-schedule",
-			"batch_kind":  batchKind,
-			"space_id":    spaceID,
-			"dataset_id":  datasetID,
-			"frequency":   "1m",
-			"provider":    provider,
-			"source_id":   sourceID,
-			"market_type": marketType,
-			"region":      opts.Region,
-			"node_id":     nodeID,
+			"schedule_id":     "deploy-canary-schedule",
+			"batch_kind":      batchKind,
+			"space_id":        spaceID,
+			"market_id":       spaceID,
+			"instrument_type": marketType,
+			"dataset_id":      datasetID,
+			"frequency":       "1m",
+			"provider":        provider,
+			"source_id":       sourceID,
+			"market_type":     marketType,
+			"region":          opts.Region,
+			"node_id":         nodeID,
 			"items": []map[string]any{{
 				"subject_id": subjectID, "symbol": symbol, "provider": provider, "source_id": sourceID, "market_type": marketType,
 				// The exchange response includes the currently-open candle. A
@@ -2105,6 +2107,17 @@ func collectorSCFCanaryEvent(opts collectorPublishOptions, nodeID, batchID strin
 			}},
 		},
 	}
+	// Invoke canaries do not receive the Timer reconciler's managed
+	// environment. When the operator has a current control-plane DNS snapshot,
+	// carry it in the canary payload so the release gate exercises the same
+	// resolved-IP path as production Timer requests.
+	if rawRoutes := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON")); rawRoutes != "" {
+		var routes map[string]any
+		if err := json.Unmarshal([]byte(rawRoutes), &routes); err == nil && len(routes) > 0 {
+			data["data"].(map[string]any)["dns_routes"] = routes
+		}
+	}
+	return data
 }
 
 func publishCollectorFunctionStatus(ctx context.Context, opts collectorPublishStatusOptions) (*adminclient.NodeBatchChangeResponse, error) {
