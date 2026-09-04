@@ -42,8 +42,9 @@ type CloudAccount struct {
 	IsDeleted          bool   `json:"is_deleted"`
 }
 
-// CloudAccountInput registers an existing Tencent credential and its
-// region-local COS bucket with CloudNode. It never contains SecretID/SecretKey.
+// CloudAccountInput registers one Tencent credential and its package-upload
+// COS location with CloudNode. The same account can operate SCF in every
+// configured region. It never contains SecretID/SecretKey.
 type CloudAccountInput struct {
 	AccountID          string `json:"account_id"`
 	AccountName        string `json:"account_name"`

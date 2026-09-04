@@ -204,22 +204,37 @@ type Host struct {
 }
 
 type SCFFetcherRegion struct {
-	Region             string `toml:"region"`
-	DisplayName        string `toml:"display_name"`
-	Enabled            bool   `toml:"enabled"`
-	FunctionCount      int    `toml:"function_count"`
-	CloudAccountID     string `toml:"cloud_account_id"`
-	CloudAccountName   string `toml:"cloud_account_name"`
+	Region        string `toml:"region"`
+	DisplayName   string `toml:"display_name"`
+	Enabled       bool   `toml:"enabled"`
+	FunctionCount int    `toml:"function_count"`
+
+	// These fields are populated from SCFFetcher.CloudAccount during manifest
+	// validation. Cloud account identity is global to the SCF fleet, not a
+	// property of an individual Tencent region.
+	CloudAccountID     string `toml:"-"`
+	CloudAccountName   string `toml:"-"`
+	CredentialSecretID string `toml:"-"`
+	AppID              string `toml:"-"`
+	COSRegion          string `toml:"-"`
+	COSBucket          string `toml:"-"`
+}
+
+type SCFFetcherCloudAccount struct {
+	AccountID          string `toml:"account_id"`
+	AccountName        string `toml:"account_name"`
 	CredentialSecretID string `toml:"credential_secret_id"`
 	AppID              string `toml:"app_id"`
+	COSRegion          string `toml:"cos_region"`
 	COSBucket          string `toml:"cos_bucket"`
 }
 
 // SCFFetcher is the manifest container for independent, space-scoped SCF
 // fleets. A function may only consume tasks from its configured space.
 type SCFFetcher struct {
-	Enabled bool              `toml:"enabled"`
-	Spaces  []SCFFetcherSpace `toml:"spaces"`
+	Enabled      bool                   `toml:"enabled"`
+	CloudAccount SCFFetcherCloudAccount `toml:"cloud_account"`
+	Spaces       []SCFFetcherSpace      `toml:"spaces"`
 }
 
 // FactorSetup describes the local Python factors and their default View
@@ -856,6 +871,19 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 	if cfg == nil || !cfg.Enabled {
 		return nil
 	}
+	account := &cfg.CloudAccount
+	account.AccountID = strings.TrimSpace(account.AccountID)
+	account.AccountName = strings.TrimSpace(account.AccountName)
+	account.CredentialSecretID = strings.TrimSpace(account.CredentialSecretID)
+	account.AppID = strings.TrimSpace(account.AppID)
+	account.COSRegion = strings.TrimSpace(account.COSRegion)
+	account.COSBucket = strings.TrimSpace(account.COSBucket)
+	if account.AccountID == "" || account.AccountName == "" || account.CredentialSecretID == "" || account.AppID == "" || account.COSRegion == "" || account.COSBucket == "" {
+		return fmt.Errorf("config_invalid: scf_fetcher.cloud_account requires account_id, account_name, credential_secret_id, app_id, cos_region, and cos_bucket")
+	}
+	if !supportedSCFRegion(account.COSRegion) {
+		return fmt.Errorf("config_invalid: scf_fetcher.cloud_account.cos_region %q is not supported", account.COSRegion)
+	}
 	if len(cfg.Spaces) == 0 {
 		return fmt.Errorf("config_invalid: scf_fetcher.spaces must not be empty when enabled")
 	}
@@ -869,9 +897,28 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 			return fmt.Errorf("config_invalid: scf_fetcher space %q is duplicated", spaceID)
 		}
 		seenSpaces[spaceID] = struct{}{}
+		for regionIndex := range cfg.Spaces[index].Regions {
+			region := &cfg.Spaces[index].Regions[regionIndex]
+			region.CloudAccountID = account.AccountID
+			region.CloudAccountName = account.AccountName
+			region.CredentialSecretID = account.CredentialSecretID
+			region.AppID = account.AppID
+			region.COSRegion = account.COSRegion
+			region.COSBucket = account.COSBucket
+		}
 		cfg.Spaces[index].SpaceID = spaceID
 		if err := validateSCFFetcherSpace(&cfg.Spaces[index], fmt.Sprintf("scf_fetcher.spaces[%d]", index)); err != nil {
 			return err
+		}
+	}
+	for index := range cfg.Spaces {
+		accountID := cfg.Spaces[index].CLSCloudAccountID
+		if accountID == "" {
+			cfg.Spaces[index].CLSCloudAccountID = account.AccountID
+			continue
+		}
+		if accountID != account.AccountID {
+			return fmt.Errorf("config_invalid: scf_fetcher.spaces[%d].cls_cloud_account_id must match scf_fetcher.cloud_account.account_id", index)
 		}
 	}
 	return nil
@@ -1087,7 +1134,7 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	for i := range cfg.Regions {
 		region := strings.TrimSpace(cfg.Regions[i].Region)
 		if region == "" || cfg.Regions[i].FunctionCount < 0 || cfg.Regions[i].FunctionCount > 50 || (cfg.Regions[i].Enabled && strings.TrimSpace(cfg.Regions[i].CloudAccountID) == "") {
-			return fmt.Errorf("config_invalid: %s.regions[%d] region, cloud_account_id, and function_count 0..50 are required (0 enables automatic allocation)", path, i)
+			return fmt.Errorf("config_invalid: %s.regions[%d] region and function_count 0..50 are required (0 enables automatic allocation)", path, i)
 		}
 		if !supportedSCFRegion(region) {
 			return fmt.Errorf("config_invalid: %s.regions[%d] region %q is not supported", path, i, region)
@@ -1101,17 +1148,8 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		cfg.Regions[i].CloudAccountName = strings.TrimSpace(cfg.Regions[i].CloudAccountName)
 		cfg.Regions[i].CredentialSecretID = strings.TrimSpace(cfg.Regions[i].CredentialSecretID)
 		cfg.Regions[i].AppID = strings.TrimSpace(cfg.Regions[i].AppID)
+		cfg.Regions[i].COSRegion = strings.TrimSpace(cfg.Regions[i].COSRegion)
 		cfg.Regions[i].COSBucket = strings.TrimSpace(cfg.Regions[i].COSBucket)
-		registrationFields := []string{cfg.Regions[i].CloudAccountName, cfg.Regions[i].CredentialSecretID, cfg.Regions[i].AppID, cfg.Regions[i].COSBucket}
-		registrationCount := 0
-		for _, field := range registrationFields {
-			if field != "" {
-				registrationCount++
-			}
-		}
-		if registrationCount != 0 && registrationCount != len(registrationFields) {
-			return fmt.Errorf("config_invalid: %s.regions[%d] cloud account registration requires cloud_account_name, credential_secret_id, app_id, and cos_bucket together", path, i)
-		}
 		if cfg.Regions[i].Enabled {
 			enabledRegions++
 		}
@@ -1173,7 +1211,7 @@ func normalizeStockCNInstrumentSnapshotConfig(cfg *SCFFetcherSpace, path string)
 		cfg.InstrumentSnapshotCloudAccountID = strings.TrimSpace(selected.CloudAccountID)
 	}
 	if cfg.InstrumentSnapshotCloudAccountID == "" || cfg.InstrumentSnapshotCloudAccountID != strings.TrimSpace(selected.CloudAccountID) {
-		return fmt.Errorf("config_invalid: %s.instrument_snapshot_cloud_account_id must match the selected region cloud_account_id", path)
+		return fmt.Errorf("config_invalid: %s.instrument_snapshot_cloud_account_id must match scf_fetcher.cloud_account.account_id", path)
 	}
 	if strings.TrimSpace(cfg.InstrumentSnapshotFunctionPrefix) == "" {
 		cfg.InstrumentSnapshotFunctionPrefix = strings.TrimSuffix(cfg.FunctionPrefix, "-") + "-instrument"

@@ -59,6 +59,10 @@ func TestFactorColumnIdentity(t *testing.T) {
 		Attributes: attrs,
 	}
 	require.True(t, isFactorViewColumn(viewColumn))
+	viewColumn.ColumnName = "result.bias__bias_20"
+	viewColumn.OriginId = "result.bias__bias_20"
+	viewColumn.Attributes["origin_factor_id"] = "Bias"
+	require.True(t, isFactorViewColumn(viewColumn))
 	viewColumn.OriginId = "result.other__bias_20"
 	require.False(t, isFactorViewColumn(viewColumn))
 }

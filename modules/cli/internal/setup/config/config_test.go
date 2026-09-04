@@ -16,6 +16,10 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 	base := func() SCFFetcher {
 		return SCFFetcher{
 			Enabled: true,
+			CloudAccount: SCFFetcherCloudAccount{
+				AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
+				AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
+			},
 			Spaces: []SCFFetcherSpace{{
 				SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 15,
 				StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
@@ -99,7 +103,10 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 }
 
 func TestValidateSCFFetcherRequiresMarketDataSourceIdentity(t *testing.T) {
-	cfg := SCFFetcher{Enabled: true, Spaces: []SCFFetcherSpace{{
+	cfg := SCFFetcher{Enabled: true, CloudAccount: SCFFetcherCloudAccount{
+		AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
+		AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
+	}, Spaces: []SCFFetcherSpace{{
 		SpaceID: "stockcn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
 		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
 		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
@@ -114,7 +121,10 @@ func TestValidateSCFFetcherRequiresMarketDataSourceIdentity(t *testing.T) {
 }
 
 func TestValidateSCFFetcherRequiresTDXEndpointConfiguration(t *testing.T) {
-	cfg := SCFFetcher{Enabled: true, Spaces: []SCFFetcherSpace{{
+	cfg := SCFFetcher{Enabled: true, CloudAccount: SCFFetcherCloudAccount{
+		AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
+		AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
+	}, Spaces: []SCFFetcherSpace{{
 		SpaceID: "stockcn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, MarketID: "stockcn", InstrumentType: "equity",
 		ProviderID: "tdx", SourceID: "normal_7709", StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
 		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
@@ -125,6 +135,31 @@ func TestValidateSCFFetcherRequiresTDXEndpointConfiguration(t *testing.T) {
 	cfg.Spaces[0].TDXHost = "quotes.example"
 	require.NoError(t, validateSCFFetcher(&cfg))
 	assert.Equal(t, 7709, cfg.Spaces[0].TDXPort)
+}
+
+func TestValidateSCFFetcherCopiesOneCloudAccountToEveryRegion(t *testing.T) {
+	cfg := SCFFetcher{
+		Enabled: true,
+		CloudAccount: SCFFetcherCloudAccount{
+			AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
+			AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
+		},
+		Spaces: []SCFFetcherSpace{{
+			SpaceID: "crypto", StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+			MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000,
+			HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+			Regions: []SCFFetcherRegion{
+				{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1},
+				{Region: "ap-shanghai", Enabled: true, FunctionCount: 1},
+			},
+		}},
+	}
+	require.NoError(t, validateSCFFetcher(&cfg))
+	for _, region := range cfg.Spaces[0].Regions {
+		assert.Equal(t, "tencent-scf", region.CloudAccountID)
+		assert.Equal(t, "ap-guangzhou", region.COSRegion)
+		assert.Equal(t, "moox-scf-guangzhou-1255382561", region.COSBucket)
+	}
 }
 
 func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {

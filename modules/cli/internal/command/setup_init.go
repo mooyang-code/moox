@@ -9,8 +9,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/spf13/cobra"
@@ -43,11 +45,19 @@ type setupInitMetadataCounts struct {
 	Unchanged int `json:"unchanged"`
 }
 
+type setupCloudAccountSummary struct {
+	Enabled    bool `json:"enabled"`
+	Planned    int  `json:"planned"`
+	Registered int  `json:"registered"`
+	Unchanged  int  `json:"unchanged"`
+}
+
 type setupInitSummary struct {
 	Status           string                        `json:"status"`
 	BusinessSpaces   int                           `json:"business_spaces"`
 	BusinessSpaceIDs []string                      `json:"business_space_ids"`
 	Admin            setupclient.ApplyResult       `json:"admin"`
+	CloudAccounts    *setupCloudAccountSummary     `json:"cloud_accounts,omitempty"`
 	AdminState       string                        `json:"admin_state"`
 	LoginAPI         string                        `json:"login_api"`
 	Metadata         setupInitMetadataCounts       `json:"metadata"`
@@ -87,6 +97,10 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 			}
 			if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
 				return fmt.Errorf("setup_incomplete")
+			}
+			cloudAccounts, err := deps.registerCloudAccounts(cmd.Context(), snapshot)
+			if err != nil {
+				return err
 			}
 			login, err := deps.login(cmd.Context(), snapshot)
 			if err != nil {
@@ -148,7 +162,7 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 			}
 			return writeSetupJSON(cmd, setupInitSummary{
 				Status: "ready", BusinessSpaces: len(bundle.Spaces), BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
-				Admin: admin, AdminState: adminStatus.State, LoginAPI: login.LoginAPI,
+				Admin: admin, CloudAccounts: cloudAccounts, AdminState: adminStatus.State, LoginAPI: login.LoginAPI,
 				Metadata: setupInitMetadataCounts{
 					Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,
 				},
@@ -165,6 +179,90 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().StringVar(&storageHost, "storage-host", "", "已部署 Storage 的主机名称")
 	_ = cmd.MarkFlagRequired("storage-host")
 	return cmd
+}
+
+// defaultSetupRegisterCloudAccounts makes the single declarative SCF account
+// in moox.toml a real CloudNode catalog record. The Tencent credential itself
+// is owned by Admin; CloudNode stores only its secret reference and COS
+// metadata, never the SecretKey. SCF regions are execution targets, not
+// separate cloud accounts.
+func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfig.Snapshot) (*setupCloudAccountSummary, error) {
+	if snapshot == nil {
+		return nil, fmt.Errorf("cloud_accounts: setup configuration is missing")
+	}
+	if !snapshot.Manifest.SCFFetcher.Enabled {
+		return nil, nil
+	}
+
+	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	if err != nil {
+		return nil, fmt.Errorf("cloud_accounts: connect control host: %w", err)
+	}
+	defer control.Close()
+
+	paths := snapshot.Manifest.Paths.Resolved()
+	serviceKeyRaw, err := readRemoteControlFile(ctx, control, filepath.Join(paths.ControlRoot, "secrets/gateway-moox-cli.key"))
+	if err != nil {
+		return nil, fmt.Errorf("cloud_accounts: read CLI service credential: %w", err)
+	}
+	serviceKey, err := normalizeCollectorServiceKey(serviceKeyRaw)
+	if err != nil {
+		return nil, fmt.Errorf("cloud_accounts: validate CLI service credential: %w", err)
+	}
+
+	client := newControlClient(
+		fmt.Sprintf("https://%s:11001", snapshot.Manifest.ControlHost.Address),
+		"", "moox-cli", serviceKey, "",
+	)
+	if client.ServiceAuth == nil {
+		return nil, fmt.Errorf("cloud_accounts: service authentication is unavailable")
+	}
+	client.ServiceAuth.Caller = "moox-cli"
+	client.ServiceAuth.TargetNode = snapshot.Manifest.ControlHost.Name
+	if setupdeploy.RequiresLocalCATrust(setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode), snapshot.Manifest.ControlHost.Address) {
+		client.ServiceAuth.CAFile = setupdeploy.CAPath(snapshot.Manifest.ControlHost.Address)
+	}
+
+	existingAccounts, err := client.ListCloudAccounts(ctx, "tencent")
+	if err != nil {
+		return nil, fmt.Errorf("cloud_accounts: list Tencent cloud accounts: %w", err)
+	}
+	existing := make(map[string]adminclient.CloudAccount, len(existingAccounts))
+	for _, account := range existingAccounts {
+		if account.Provider == "tencent" && !account.IsDeleted && strings.TrimSpace(account.AccountID) != "" {
+			existing[account.AccountID] = account
+		}
+	}
+
+	account := snapshot.Manifest.SCFFetcher.CloudAccount
+	input := adminclient.CloudAccountInput{
+		AccountID: account.AccountID, AccountName: account.AccountName,
+		Provider: "tencent", CredentialSecretID: account.CredentialSecretID,
+		AppID: account.AppID, COSRegion: account.COSRegion, COSBucket: account.COSBucket,
+	}
+	if strings.TrimSpace(input.AccountID) == "" || strings.TrimSpace(input.AccountName) == "" || strings.TrimSpace(input.CredentialSecretID) == "" || strings.TrimSpace(input.AppID) == "" || strings.TrimSpace(input.COSRegion) == "" || strings.TrimSpace(input.COSBucket) == "" {
+		return nil, fmt.Errorf("cloud_accounts: incomplete Tencent account in scf_fetcher.cloud_account")
+	}
+
+	summary := &setupCloudAccountSummary{Enabled: true, Planned: 1}
+	if existingAccount, ok := existing[input.AccountID]; ok {
+		if !sameSetupCloudAccount(existingAccount, input) {
+			return nil, fmt.Errorf("cloud_accounts: existing Tencent account %q differs from moox.toml", input.AccountID)
+		}
+		summary.Unchanged++
+		return summary, nil
+	}
+	if _, err := client.CreateCloudAccount(ctx, input); err != nil {
+		return nil, fmt.Errorf("cloud_accounts: register Tencent account %q: %w", input.AccountID, err)
+	}
+	summary.Registered++
+	return summary, nil
+}
+
+func sameSetupCloudAccount(account adminclient.CloudAccount, input adminclient.CloudAccountInput) bool {
+	return account.AccountID == input.AccountID && account.AccountName == input.AccountName &&
+		account.Provider == input.Provider && account.CredentialSecretID == input.CredentialSecretID &&
+		account.AppID == input.AppID && account.COSRegion == input.COSRegion && account.COSBucket == input.COSBucket
 }
 
 // newSetupFactorsCommand imports the repository's Python factor definitions

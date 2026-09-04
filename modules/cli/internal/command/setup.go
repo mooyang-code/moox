@@ -36,6 +36,7 @@ type setupDeps struct {
 	status                 func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
 	applySpaces            func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error)
 	statusSpaces           func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error)
+	registerCloudAccounts  func(context.Context, *setupconfig.Snapshot) (*setupCloudAccountSummary, error)
 	login                  func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
 	openInitStorage        func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error)
 	openInitFactor         func(context.Context, *setupconfig.Snapshot) (setupInitFactor, error)
@@ -598,6 +599,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.statusSpaces == nil {
 		deps.statusSpaces = defaults.statusSpaces
 	}
+	if deps.registerCloudAccounts == nil {
+		deps.registerCloudAccounts = defaults.registerCloudAccounts
+	}
 	if deps.login == nil {
 		deps.login = defaults.login
 	}
@@ -653,6 +657,7 @@ func defaultSetupDeps() setupDeps {
 		status:                 defaultSetupStatus,
 		applySpaces:            defaultSetupApplyWithSpaces,
 		statusSpaces:           defaultSetupStatusWithSpaces,
+		registerCloudAccounts:  defaultSetupRegisterCloudAccounts,
 		openInitStorage:        defaultOpenSetupInitStorage,
 		openInitFactor:         defaultOpenSetupFactor,
 		deployStorage:          defaultSetupDeployStorage,

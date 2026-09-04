@@ -49,6 +49,10 @@ type GatewayConfig struct {
 type ServiceDetail struct {
 	Address string
 	Path    string
+	// Timeout is the maximum duration the Admin BFF may wait for this
+	// deployment. Provider-backed read operations can legitimately outlive
+	// the short default used by ordinary control-plane calls.
+	Timeout time.Duration
 }
 
 // RateLimitConfig 限流配置

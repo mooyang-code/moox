@@ -114,8 +114,8 @@ func isFactorViewColumn(column *pb.ViewColumn) bool {
 	factorID := strings.TrimSpace(attrs["origin_factor_id"])
 	output := strings.TrimSpace(attrs["factor_output"])
 	originID := strings.TrimSpace(column.GetOriginId())
-	return factorID != "" && output != "" && originID == strings.TrimSpace(column.GetColumnName()) &&
-		strings.HasSuffix(originID, "."+factorID+"__"+output)
+	return factorID != "" && output != "" && strings.EqualFold(originID, strings.TrimSpace(column.GetColumnName())) &&
+		strings.HasSuffix(strings.ToLower(originID), "."+strings.ToLower(factorID)+"__"+strings.ToLower(output))
 }
 
 func validateLowerSnakeID(field string, value string, maxLen int) error {

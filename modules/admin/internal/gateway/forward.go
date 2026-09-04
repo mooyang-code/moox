@@ -136,16 +136,23 @@ func forwardHTTPToDetail(ctx context.Context, serviceID, method string, detail S
 	target := fmt.Sprintf("ip://%s", detail.Address)
 	targetURL := fmt.Sprintf("/%s/%s", detail.Path, method)
 	log.InfoContextf(ctx, "forwardHTTP: %s/%s -> %s", serviceID, method, targetURL)
+	timeout := detail.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
 
 	opts := []client.Option{
 		client.WithTarget(target),
 		client.WithCurrentSerializationType(codec.SerializationTypeNoop),
 		client.WithDisableServiceRouter(),
 		client.WithReqHead(buildForwardHeaders(headers)),
+		client.WithTimeout(timeout),
 	}
 	proxy := thttp.NewClientProxy(serviceID, opts...)
 	codecRsp := &codec.Body{}
-	if err := proxy.Post(ctx, targetURL, &codec.Body{Data: body}, codecRsp); err != nil {
+	forwardCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := proxy.Post(forwardCtx, targetURL, &codec.Body{Data: body}, codecRsp); err != nil {
 		return nil, err
 	}
 	return codecRsp.Data, nil

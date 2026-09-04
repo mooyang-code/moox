@@ -807,9 +807,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if !ok || account.IsDeleted {
 				return summary, fmt.Errorf("Tencent cloud account %q for region %s not found", regionOpts.CloudAccountID, regionOpts.Region)
 			}
-			if account.COSRegion != regionOpts.Region {
-				return summary, fmt.Errorf("Tencent cloud account %q COS region %q must match SCF region %q", account.AccountID, account.COSRegion, regionOpts.Region)
-			}
 			packageID, uploadErr := upload(regionOpts)
 			if uploadErr != nil {
 				return summary, uploadErr
@@ -1302,11 +1299,14 @@ func ensureCollectorSpaceCloudAccounts(
 		return nil
 	}
 	for _, region := range fetcher.Regions {
-		if !region.Enabled || accounts[region.CloudAccountID].AccountID != "" {
+		if !region.Enabled {
 			continue
 		}
-		if region.CloudAccountName == "" || region.CredentialSecretID == "" || region.AppID == "" || region.COSBucket == "" {
-			return fmt.Errorf("Tencent cloud account %q for space %s region %s is not registered; set cloud_account_name, credential_secret_id, app_id, and cos_bucket together", region.CloudAccountID, fetcher.SpaceID, region.Region)
+		if accounts[region.CloudAccountID].AccountID != "" {
+			return nil
+		}
+		if region.CloudAccountName == "" || region.CredentialSecretID == "" || region.AppID == "" || region.COSRegion == "" || region.COSBucket == "" {
+			return fmt.Errorf("Tencent cloud account %q for space %s is not registered; configure scf_fetcher.cloud_account with account_id, account_name, credential_secret_id, app_id, cos_region, and cos_bucket", region.CloudAccountID, fetcher.SpaceID)
 		}
 		account, err := client.CreateCloudAccount(ctx, adminclient.CloudAccountInput{
 			AccountID:          region.CloudAccountID,
@@ -1314,13 +1314,14 @@ func ensureCollectorSpaceCloudAccounts(
 			Provider:           "tencent",
 			CredentialSecretID: region.CredentialSecretID,
 			AppID:              region.AppID,
-			COSRegion:          region.Region,
+			COSRegion:          region.COSRegion,
 			COSBucket:          region.COSBucket,
 		})
 		if err != nil {
-			return fmt.Errorf("register Tencent cloud account %q for space %s region %s: %w", region.CloudAccountID, fetcher.SpaceID, region.Region, err)
+			return fmt.Errorf("register Tencent cloud account %q for space %s: %w", region.CloudAccountID, fetcher.SpaceID, err)
 		}
 		accounts[account.AccountID] = *account
+		return nil
 	}
 	return nil
 }

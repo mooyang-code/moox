@@ -377,6 +377,14 @@ SCF timeout = 0
 [scf_fetcher]
 enabled = true
 
+[scf_fetcher.cloud_account]
+account_id = "tencent-scf"
+account_name = "Tencent SCF"
+credential_secret_id = "tencent-default"
+app_id = "<tencent-app-id>"
+cos_region = "ap-guangzhou"
+cos_bucket = "moox-scf-<tencent-app-id>"
+
 [[scf_fetcher.spaces]]
 space_id = "crypto"
 package_config_dir = "scf/crypto"
@@ -404,22 +412,12 @@ region = "ap-singapore"
 display_name = "亚太东南（新加坡）"
 enabled = true
 function_count = 5
-cloud_account_id = "tencent-scf-singapore"
-cloud_account_name = "Tencent SCF Singapore"
-credential_secret_id = "tencent-default"
-app_id = "<tencent-app-id>"
-cos_bucket = "moox-scf-singapore-<tencent-app-id>"
 
 [[scf_fetcher.spaces.regions]]
 region = "ap-tokyo"
 display_name = "亚太东北（东京）"
 enabled = true
 function_count = 5
-cloud_account_id = "tencent-scf-tokyo"
-cloud_account_name = "Tencent SCF Tokyo"
-credential_secret_id = "tencent-default"
-app_id = "<tencent-app-id>"
-cos_bucket = "moox-scf-tokyo-<tencent-app-id>"
 ```
 
 配置校验：
@@ -434,9 +432,9 @@ cos_bucket = "moox-scf-tokyo-<tencent-app-id>"
 - `storage_max_attempts` 必须为 1 到 3；实时聚合写默认取 3，仍受 `storage_timeout_ms` 的总预算限制；
 - 同一 Space 内地域不能重复，且至少一个地域必须 `enabled = true`；
 - 每个启用地域 `function_count >= 1`；
-- 每个启用地域必须声明 `cloud_account_id`，且该云账户的 COS Region 与 SCF Region 相同；发布前 CLI 直接拒绝跨地域 COS 包和拼写错误的地域；
-- 未注册的地域云账户可由本次发布创建，但必须同时声明 `cloud_account_name`、`credential_secret_id`、`app_id`、`cos_bucket`；凭据只引用 SecretMgr ID，不写入 `moox.toml`；
-- `cls_cloud_account_id` 可按 Space 显式指定日志账户；未指定时取该 Space 的第一个启用地域账户；
+- 根目录 `moox.toml` 只配置一条 `[scf_fetcher.cloud_account]`；它引用 SecretMgr 的 `credential_secret_id`，并提供统一的 AppID、COS Region 和 COS bucket；
+- 启用地域只声明 `region` 和函数数量，所有地域复用同一个 CloudAccount；发布前 CLI 校验该账户存在，不再按地域拆分账户；
+- `cls_cloud_account_id` 可按 Space 显式指定日志账户，但必须使用这条统一的 SCF CloudAccount；未指定时自动使用它；
 - 函数包内置 tRPC CLS writer，投递 `info` 及以上日志到统一 Topic，并由受控环境变量注入 `MOOX_CLS_SECRET_*`；每个正常 K 线标的输出开始与成功日志，CLS 按 100 条批量发送；
 - CLS 初始化默认保存 2 天、固定 1 个分区且禁用自动扩分区；
 - `moox-cli` 上传函数包时经 CloudNode 自动确认配置的 COS 桶存在，不存在则创建私有桶；对象路径包含 UTC 日期，便于按日期清理；

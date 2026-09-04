@@ -143,6 +143,10 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 			require.Equal(t, spaces, got)
 			return setupclient.StatusResult{State: "completed", Spaces: 1}, nil
 		},
+		registerCloudAccounts: func(context.Context, *setupconfig.Snapshot) (*setupCloudAccountSummary, error) {
+			stages = append(stages, "cloud-accounts")
+			return &setupCloudAccountSummary{Enabled: true, Planned: 1, Registered: 1}, nil
+		},
 		login: func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			stages = append(stages, "login")
 			return setupclient.LoginResult{LoginAPI: "valid"}, nil
@@ -161,6 +165,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"load-config",
 		"admin-apply",
 		"admin-status",
+		"cloud-accounts",
 		"login",
 		"storage-apply",
 		"dataset-activate",
@@ -172,6 +177,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"business_spaces":1,
 		"business_space_ids":["crypto"],
 		"admin":{"action":"created","users":0,"secrets":0,"hosts":0,"spaces":1,"spaces_created":1,"spaces_unchanged":0},
+		"cloud_accounts":{"enabled":true,"planned":1,"registered":1,"unchanged":0},
 		"admin_state":"completed",
 		"login_api":"valid",
 		"metadata":{"planned":3,"applied":3,"unchanged":0},

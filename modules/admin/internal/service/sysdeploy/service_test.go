@@ -480,6 +480,21 @@ func TestServiceImpl_ResolveAdminServiceDetail_RequiresMatchingActiveNode(t *tes
 	assert.False(t, ok)
 }
 
+func TestServiceImpl_ResolveAdminServiceDetailCarriesForwardTimeout(t *testing.T) {
+	db := setupSysDeployTestDB(t)
+	svc := NewService(&database.Manager{}, testAdminNodeID)
+	svc.dao = NewDAO(db)
+	require.NoError(t, svc.dao.Create(context.Background(), &Deployment{
+		NodeID: testAdminNodeID, ServiceName: "moox_cloudnode", Host: "127.0.0.1", Port: 11401,
+		GatewayPath: "trpc.moox.cloudnode.CloudNodeMgr", Status: "active",
+		ExtraConfig: `{"timeout_ms":330000}`,
+	}))
+
+	detail, ok := svc.ResolveAdminServiceDetail(context.Background(), testAdminNodeID, "cloudnode")
+	require.True(t, ok)
+	assert.Equal(t, 330*time.Second, detail.Timeout)
+}
+
 func TestServiceImpl_ListActiveServiceDeployments_ActiveRows_ShouldReturnEndpoints(t *testing.T) {
 	db := setupSysDeployTestDB(t)
 	svc := NewService(&database.Manager{}, testAdminNodeID)

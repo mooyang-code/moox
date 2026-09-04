@@ -618,6 +618,14 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 		return fmt.Errorf("unsupported apply resource request %T", request)
 	}
 	if !metadataContractsEqual(resource, expected, actual) {
+		if resource == "views" {
+			view := expected.(*pb.View)
+			return fmt.Errorf("metadata views %s/%s exists but contract differs", view.GetSpaceId(), view.GetViewId())
+		}
+		if resource == "view_columns" {
+			column := expected.(*pb.ViewColumn)
+			return fmt.Errorf("metadata view_columns %s/%s/%s exists but contract differs", column.GetSpaceId(), column.GetViewId(), column.GetColumnName())
+		}
 		return fmt.Errorf("metadata %s exists but contract differs", resource)
 	}
 	return nil
@@ -730,7 +738,7 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			x.GetEngine() == y.GetEngine() &&
 			x.GetKeepDuration() == y.GetKeepDuration() &&
 			x.GetStatus() == y.GetStatus() &&
-			maps.Equal(x.GetAttributes(), y.GetAttributes())
+			metadataViewAttributesEqual(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "view_columns" {
 		x, y := a.(*pb.ViewColumn), b.(*pb.ViewColumn)
@@ -745,6 +753,18 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	return proto.Equal(a, b)
+}
+
+func metadataViewAttributesEqual(expected, actual map[string]string) bool {
+	// Storage records the active index contract under moox.* attributes after a
+	// View is activated. Those values are operational state, not setup contract.
+	actualContract := make(map[string]string, len(actual))
+	for key, value := range actual {
+		if !strings.HasPrefix(key, "moox.") {
+			actualContract[key] = value
+		}
+	}
+	return maps.Equal(expected, actualContract)
 }
 
 func metadataResourceExists(ctx context.Context, metadataURL string, probe *metadataExistsProbe) (bool, error) {

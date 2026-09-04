@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/snapshotcache"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -56,7 +57,17 @@ func (s *Service) refreshMetadataCache(ctx context.Context) error {
 	if s == nil || s.metadataCache == nil {
 		return nil
 	}
-	return s.metadataCache.Refresh(ctx)
+	if err := s.metadataCache.Refresh(ctx); err != nil {
+		// A committed mutation can race with the cache's periodic full refresh.
+		// The in-flight refresh will publish the latest committed metadata (or
+		// the next tick will retry it), so it must not turn a successful write
+		// into a false failure.
+		if errors.Is(err, snapshotcache.ErrRefreshInProgress) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Service) refreshMetadataCacheAfterCommit(ctx context.Context, operation string) {

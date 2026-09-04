@@ -393,7 +393,8 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, items []setupFactorItem) 
 				return summary, pendingErr
 			}
 		}
-		if initialStatus == "enabled" && upsert.Binding.Status != "" && upsert.Binding.Status != "enabled" {
+		if initialStatus == "enabled" && upsert.Binding.Status != "" &&
+			upsert.Binding.Status != "enabled" && upsert.Binding.Status != "pending_view" {
 			return summary, fmt.Errorf("factor %q binding is %s", item.FactorID, upsert.Binding.Status)
 		}
 		if item.Status == "enabled" {
@@ -421,7 +422,7 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, items []setupFactorItem) 
 					return summary, pendingErr
 				}
 			}
-			if ready.Binding.Status != "" && ready.Binding.Status != "enabled" {
+			if ready.Binding.Status != "" && ready.Binding.Status != "enabled" && ready.Binding.Status != "pending_view" {
 				return summary, fmt.Errorf("factor %q binding is %s", item.FactorID, ready.Binding.Status)
 			}
 		} else {
@@ -527,7 +528,13 @@ func (r *remoteSetupFactor) callWithSourceViewRetry(ctx context.Context, method 
 		*response = factorAPIResponse{}
 		err := r.call(ctx, method, body, response)
 		pendingView := method == "UpsertBinding" && response.Binding.Status == "pending_view"
-		if err == nil && !pendingView {
+		if err == nil && (method != "UpsertBinding" || !pendingView) {
+			return nil
+		}
+		if err == nil && pendingView {
+			// pending_view is a successful durable state on a fresh install: the
+			// source View has no active index until its first data arrives. The
+			// Factor reconciler will promote the binding after that index exists.
 			return nil
 		}
 		if isSourceViewUnavailable(err) {
@@ -537,9 +544,6 @@ func (r *remoteSetupFactor) callWithSourceViewRetry(ctx context.Context, method 
 			return err
 		}
 		if time.Now().After(deadline) {
-			if pendingView {
-				return fmt.Errorf("factor binding is still pending_view after %s", maxWait)
-			}
 			return err
 		}
 		select {

@@ -18,13 +18,24 @@
       </a-select>
     </a-form-item>
     <div class="sync-toolbar">
-      <a-button type="primary" :loading="scanning" :disabled="!accountId || importing" @click="scan">
+      <a-button type="primary" :loading="scanning" :disabled="!accountId || scanning || importing" @click="scan">
         <template #icon><icon-search /></template>
         扫描全部地域
       </a-button>
       <a-tag v-if="candidates.length" color="blue">函数 {{ candidates.length }}</a-tag>
       <a-tag v-if="selectedCandidates.length" color="green">可导入 {{ selectedCandidates.length }}</a-tag>
       <span class="sync-hint">共扫描 MooX 支持的全部地域；不可导入函数仍会展示原因。</span>
+    </div>
+    <div v-if="scanning" class="sync-loading" role="status" aria-live="polite">
+      <a-spin :size="20" />
+      <span>正在扫描全部地域，请稍候...</span>
+    </div>
+    <div v-if="importing" class="import-loading" role="status" aria-live="polite">
+      <div class="import-loading__header">
+        <a-spin :size="20" />
+        <span>正在导入 {{ selectedCandidates.length }} 个节点，请稍候...</span>
+      </div>
+      <a-progress :percent="1" :animation="true" :show-text="false" status="normal" />
     </div>
     <a-alert v-for="error in regionErrors" :key="error.region" type="warning" show-icon class="region-error">
       {{ error.region }}：{{ error.message }}
@@ -175,5 +186,34 @@ const importSelected = async () => {
 <style scoped>
 .sync-toolbar { display: flex; align-items: center; gap: var(--moox-space-3); margin-bottom: var(--moox-space-3); flex-wrap: wrap; }
 .sync-hint { color: var(--color-text-3); font-size: 12px; }
+.sync-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--moox-space-2);
+  min-height: 36px;
+  margin-bottom: var(--moox-space-3);
+  padding: 0 var(--moox-space-3);
+  color: rgb(var(--primary-6));
+  background: rgb(var(--primary-1));
+  border: 1px solid rgb(var(--primary-2));
+  border-radius: 4px;
+}
+.import-loading {
+  margin-bottom: var(--moox-space-3);
+  padding: var(--moox-space-3);
+  background: var(--color-fill-1);
+  border: 1px solid var(--color-fill-3);
+  border-radius: 4px;
+}
+.import-loading__header {
+  display: flex;
+  align-items: center;
+  gap: var(--moox-space-2);
+  margin-bottom: var(--moox-space-2);
+  color: var(--color-text-1);
+}
+.import-loading :deep(.arco-progress) {
+  display: block;
+}
 .region-error { margin-bottom: var(--moox-space-2); }
 </style>

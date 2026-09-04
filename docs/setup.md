@@ -27,13 +27,17 @@ HTTPS，并配置健康检查以维持 Caddy 运行和自动续期。公网 IP/D
 业务空间为 `stockcn` 和 `crypto`；`attributes.scope=internal` 的 `mooxsys`
 只进入 Storage。
 
+腾讯云 SCF 使用根目录 `moox.toml` 中唯一的 `[scf_fetcher.cloud_account]` 配置。
+其中只引用 Admin/SecretMgr 中的 `credential_secret_id`，并配置统一的 COS 区域和存储桶；
+SCF 的各个 `regions` 只描述函数部署地域，不再为每个地域复制云账户。
+
 ## 初始化命令
 
 ```bash
 moox-cli setup init \
   --file ./moox.toml \
   --config-dir ./config/setup \
-  --storage-host control
+  --storage-host storage
 ```
 
 `--storage-host` 是已部署 Storage 的主机名，不是 IP 地址。命令按以下顺序执行：
@@ -41,9 +45,10 @@ moox-cli setup init \
 1. 严格解析并校验 Metadata 依赖。
 2. 在 Admin 的同一事务中创建或核对管理员、凭据、主机和业务空间。
 3. 检查 Admin 状态并验证管理台登录。
-4. 通过 Storage 主机 SSH 隧道创建或逐字段核对元数据。
-5. 对每个 Dataset 执行就绪检查和 revision CAS 激活。
-6. 再次核对全部 Storage 元数据并输出脱敏 JSON 汇总。
+4. 在 CloudNode 中创建或逐字段核对这一条 Tencent CloudAccount。
+5. 通过 Storage 主机 SSH 隧道创建或逐字段核对元数据。
+6. 对每个 Dataset 执行就绪检查和 revision CAS 激活。
+7. 再次核对全部 Storage 元数据并输出脱敏 JSON 汇总。
 
 命令可重复执行。相同资源记为 `unchanged`；已激活且锁定绑定的 Dataset 也记为
 `unchanged`。同 ID 资源字段不一致时返回冲突，不自动覆盖现有配置或数据。

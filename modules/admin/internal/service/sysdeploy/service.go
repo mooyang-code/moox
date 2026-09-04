@@ -224,7 +224,15 @@ func (s *ServiceImpl) ResolveAdminServiceDetail(ctx context.Context, adminNodeID
 	if address == "" || path == "" || strings.HasPrefix(path, "/") {
 		return gateway.ServiceDetail{}, false
 	}
-	return gateway.ServiceDetail{Address: address, Path: path}, true
+	extra, err := parseRouteExtraConfig(row.ExtraConfig)
+	if err != nil {
+		return gateway.ServiceDetail{}, false
+	}
+	timeout := 30 * time.Second
+	if extra.TimeoutMS != nil && *extra.TimeoutMS > 0 {
+		timeout = time.Duration(*extra.TimeoutMS) * time.Millisecond
+	}
+	return gateway.ServiceDetail{Address: address, Path: path, Timeout: timeout}, true
 }
 
 func gatewayDeploymentName(serviceID string) string {

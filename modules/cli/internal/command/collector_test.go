@@ -241,6 +241,14 @@ password = "password"
 [scf_fetcher]
 enabled = true
 
+[scf_fetcher.cloud_account]
+account_id = "tencent-scf"
+account_name = "Tencent SCF"
+credential_secret_id = "tencent-default"
+app_id = "1255382561"
+cos_region = "ap-guangzhou"
+cos_bucket = "moox-scf-guangzhou-1255382561"
+
 [[scf_fetcher.spaces]]
 space_id = "crypto"
 storage_rpc_gateway_target = "ip://106.53.107.122:11003"
@@ -261,7 +269,6 @@ storage_timeout_ms = 5000
 region = "ap-singapore"
 enabled = true
 function_count = 1
-cloud_account_id = "tencent-scf-singapore"
 
 [[scf_fetcher.spaces]]
 space_id = "stockcn"
@@ -284,7 +291,6 @@ storage_timeout_ms = 5000
 region = "ap-guangzhou"
 enabled = true
 function_count = 1
-cloud_account_id = "tencent-scf-guangzhou"
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
@@ -313,7 +319,7 @@ func TestEnsureCollectorSpaceCloudAccountsRegistersOnlyMissingAccount(t *testing
 		Regions: []setupconfig.SCFFetcherRegion{{
 			Region: "ap-singapore", Enabled: true, CloudAccountID: "tencent-scf-singapore",
 			CloudAccountName: "Tencent SCF Singapore", CredentialSecretID: "tencent-default",
-			AppID: "1255382561", COSBucket: "moox-scf-singapore-1255382561",
+			AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
 		}},
 	}, accounts)
 	require.NoError(t, err)
