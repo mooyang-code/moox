@@ -254,7 +254,7 @@ func (v *StorageView) applyConsumerPartitionDefaults() {
 	if len(v.ConsumerPartitions) == 0 {
 		v.ConsumerPartitions = []StorageViewConsumerPartition{
 			{ID: "kline", Durable: events.StorageViewKlineConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m"}}}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
-			{ID: "factor", Durable: events.StorageViewFactorConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m_factor"}}}, FetchBatch: 16, MaxWorkers: 8, MaxAckPending: 128},
+			{ID: "factor", Durable: events.StorageViewFactorConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_crypto_spot_kline_1m_factor"}}}, FetchBatch: 16, MaxWorkers: 8, MaxAckPending: 128},
 			{ID: "system_metrics", Durable: events.StorageViewMetricsConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}}}, FetchBatch: 16, MaxWorkers: 4, MaxAckPending: 64},
 			{ID: "misc", Durable: events.StorageViewMiscConsumer, Routes: []StorageViewConsumerRoute{
 				{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_host_disk", "dataset_mooxsys_host_filesystem", "dataset_mooxsys_host_network", "dataset_mooxsys_host_resource"}},
@@ -386,7 +386,7 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 		dataset string
 	}{
 		"kline":   {durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_binance_spot_kline_1m"},
-		"factor":  {durable: events.StorageViewFactorConsumer, space: "crypto", dataset: "dataset_binance_spot_kline_1m_factor"},
+		"factor":  {durable: events.StorageViewFactorConsumer, space: "crypto", dataset: "dataset_crypto_spot_kline_1m_factor"},
 		"metrics": {durable: events.StorageViewMetricsConsumer, space: "mooxsys", dataset: "dataset_mooxsys_service_metrics"},
 	}
 	for name, required := range requiredRoutes {

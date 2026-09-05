@@ -253,7 +253,7 @@ func executableFactorGroups(
 		}
 		target := binding.TargetDataset
 		if target == "" {
-			target = registry.ResultDataset(strings.TrimPrefix(strings.TrimSpace(sourceScope), "view_"))
+			target = registry.ResultDataset(sourceScope)
 		}
 		groups[target] = append(groups[target], factor)
 	}

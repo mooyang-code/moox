@@ -56,7 +56,7 @@ func validateViewID(viewID string) error {
 	if !strings.HasPrefix(viewID, "view_") {
 		return errors.New("view_id must start with view_")
 	}
-	return validateLowerSnakeID("view_id", viewID, 30)
+	return validateLowerSnakeID("view_id", viewID, 50)
 }
 
 func validateChineseDisplayName(field string, value string) error {

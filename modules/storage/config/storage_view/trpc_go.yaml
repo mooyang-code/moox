@@ -156,7 +156,7 @@ storage:
         durable: storage_view_factor
         routes:
           - space_id: crypto
-            dataset_ids: [dataset_binance_spot_kline_1m_factor]
+            dataset_ids: [dataset_crypto_spot_kline_1m_factor]
         # Factor results are emitted once per factor/subject/period. Keep a
         # deeper fetch window and more worker capacity than Kline so a brief
         # Storage View restart can drain the durable backlog faster than the

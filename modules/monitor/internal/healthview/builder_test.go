@@ -178,10 +178,10 @@ func TestAlertTitleUsesHumanReadableHostAndServiceNames(t *testing.T) {
 	if got := alertTitle("sysdeploy:control:storage-view"); got != "数据存储" {
 		t.Fatalf("service alert title = %q", got)
 	}
-	if got := alertTitle("dataset:factor:binance_spot_kline_1m_factor:1m"); got != "因子计算任务 · binance_spot_kline_1m_factor / 1m" {
+	if got := alertTitle("dataset:factor:crypto_spot_kline_1m_factor:1m"); got != "因子计算任务 · crypto_spot_kline_1m_factor / 1m" {
 		t.Fatalf("factor alert title = %q", got)
 	}
-	if got := alertTitle("dataset:storage:binance_spot_kline_1m_factor:1m"); got != "因子结果数据 · binance_spot_kline_1m_factor / 1m" {
+	if got := alertTitle("dataset:storage:crypto_spot_kline_1m_factor:1m"); got != "因子结果数据 · crypto_spot_kline_1m_factor / 1m" {
 		t.Fatalf("storage alert title = %q", got)
 	}
 	if got := alertTitle("dataset:storage_view:view_crypto_spot_kline_1m:1m"); got != "行情结果视图 · view_crypto_spot_kline_1m / 1m" {
@@ -195,7 +195,7 @@ func TestAlertTitleUsesHumanReadableHostAndServiceNames(t *testing.T) {
 func TestDatasetAlertReasonIncludesFreshnessFacts(t *testing.T) {
 	now := time.Date(2026, 8, 23, 10, 38, 30, 0, time.UTC)
 	item := observability.DatasetFrequencyStatus{
-		DatasetID:         "binance_spot_kline_1m_factor",
+		DatasetID:         "crypto_spot_kline_1m_factor",
 		Freq:              "1m",
 		Reason:            "run stale",
 		LastRunAt:         time.Date(2026, 8, 23, 10, 29, 1, 0, time.UTC),
@@ -204,7 +204,7 @@ func TestDatasetAlertReasonIncludesFreshnessFacts(t *testing.T) {
 		LagSeconds:        690,
 	}
 	got := datasetAlertReason(item, now)
-	for _, want := range []string{"binance_spot_kline_1m_factor（1m）", "最近运行 2026-08-23 10:29:01 UTC", "最近成功 2026-08-23 10:29:01 UTC", "最新输出 2026-08-23 10:27:00 UTC", "当前落后 11 分 30 秒"} {
+	for _, want := range []string{"crypto_spot_kline_1m_factor（1m）", "最近运行 2026-08-23 10:29:01 UTC", "最近成功 2026-08-23 10:29:01 UTC", "最新输出 2026-08-23 10:27:00 UTC", "当前落后 11 分 30 秒"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("reason %q does not contain %q", got, want)
 		}

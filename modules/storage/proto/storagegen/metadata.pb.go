@@ -526,7 +526,7 @@ type View struct {
 
 	// space_id 是 View 所属 Space。
 	SpaceId string `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
-	// view_id 是 Space 内唯一的查询视图 ID；必须为 lower_snake_case，最长 30 字符。
+	// view_id 是 Space 内唯一的查询视图 ID；必须为 lower_snake_case，最长 50 字符。
 	ViewId string `protobuf:"bytes,2,opt,name=view_id,json=viewId,proto3" json:"view_id,omitempty"`
 	// name 是视图中文展示名，创建和更新时必须包含中文且不超过 10 个字符。
 	Name string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`

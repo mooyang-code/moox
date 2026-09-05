@@ -14,9 +14,9 @@ func TestValidateDatasetIDAllowsFiftyCharacters(t *testing.T) {
 	require.ErrorContains(t, validateDatasetID("a"+strings.Repeat("b", 49)), "must start with dataset_")
 }
 
-func TestValidateViewIDRemainsThirtyCharacters(t *testing.T) {
-	require.NoError(t, validateViewID("view_"+"a"+strings.Repeat("b", 24)))
-	require.Error(t, validateViewID("view_"+"a"+strings.Repeat("b", 25)))
+func TestValidateViewIDAllowsFiftyCharacters(t *testing.T) {
+	require.NoError(t, validateViewID("view_"+"a"+strings.Repeat("b", 44)))
+	require.Error(t, validateViewID("view_"+"a"+strings.Repeat("b", 45)))
 }
 
 func TestValidateColumnDisplayNameAllowsMatchingFactorOutput(t *testing.T) {

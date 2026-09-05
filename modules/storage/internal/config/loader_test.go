@@ -176,7 +176,7 @@ func TestStorageViewConsumerPartitionsRejectInvalidDurableName(t *testing.T) {
 func TestStorageViewConsumerPartitionsAllowFutureConfiguredDatasets(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
 		{ID: "kline", Durable: "storage_view_kline", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m", "future_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
-		{ID: "factor", Durable: "storage_view_factor", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "factor", Durable: "storage_view_factor", SpaceID: "crypto", DatasetIDs: []string{"dataset_crypto_spot_kline_1m_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 		{ID: "system_metrics", Durable: "storage_view_metrics", SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 		{ID: "misc", Durable: "storage_view_misc", SpaceID: "crypto", DatasetIDs: []string{"other"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}

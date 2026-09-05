@@ -46,7 +46,7 @@ func TestSyncTargetDatasetReconcilesOutputsForActiveLockedTarget(t *testing.T) {
 	require.Equal(t, "BTC-USDT", client.boundSubjects[0].GetSubjectId())
 }
 
-func TestResolveManagedResultIDsUsesSourcePrimaryDataset(t *testing.T) {
+func TestResolveManagedResultIDsUsesSourceViewIdentity(t *testing.T) {
 	client := &fakeViewMetadataClient{
 		fakeMetadataClient: newFakeMetadataClient(),
 		views: map[string]*storagepb.View{
@@ -62,8 +62,8 @@ func TestResolveManagedResultIDsUsesSourcePrimaryDataset(t *testing.T) {
 		context.Background(), "space", "view_crypto_spot_kline_1m",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "dataset_binance_spot_kline_1m_e08e1f36_factor", datasetID)
-	require.Equal(t, "view_binance_ca9c99ed070619bf", viewID)
+	require.Equal(t, "dataset_crypto_spot_kline_1m_factor", datasetID)
+	require.Equal(t, "view_crypto_spot_kline_1m_factor", viewID)
 }
 
 func TestResolveManagedResultIDsSeparatesViewsSharingPrimaryDataset(t *testing.T) {

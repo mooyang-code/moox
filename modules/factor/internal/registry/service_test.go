@@ -132,16 +132,16 @@ func TestEnsureSourceArtifactsRestoresEnabledFactorAfterDeployReplacement(t *tes
 
 func TestResultDataset(t *testing.T) {
 	require.Equal(t, "dataset_foo_kline_factor", ResultDataset("foo_kline"))
-	require.Equal(t, "dataset_binance_spot_kline_1m_factor", ResultDataset("dataset_binance_spot_kline_1m"))
-	require.Equal(t, "view_binance_8fa975bd497ebe66", ResultView("binance_spot_kline_1m"))
+	require.Equal(t, "dataset_crypto_spot_kline_1m_factor", ResultDatasetForView("dataset_binance_spot_kline_1m", "view_crypto_spot_kline_1m"))
+	require.Equal(t, "view_crypto_spot_kline_1m_factor", ResultViewForView("dataset_binance_spot_kline_1m", "view_crypto_spot_kline_1m"))
 	require.Equal(t, "dataset_foo_view_factor", ResultDataset("foo_view"))
 	require.Equal(t, ResultDataset("bars"), ResultDatasetForView("bars", "view_bars"))
 	require.NotEqual(t, ResultDatasetForView("bars", "view_a"), ResultDatasetForView("bars", "view_b"))
 	require.LessOrEqual(t, len(ResultDatasetForView("bars", "view_a")), 50)
-	require.LessOrEqual(t, len(ResultViewForView("bars", "view_a")), 30)
+	require.LessOrEqual(t, len(ResultViewForView("bars", "view_a")), 50)
 	require.NotEqual(t, ResultDataset("foo"), ResultDataset("foo_kline"))
 	require.NotEqual(t, ResultDataset("same-long-readable-prefix-one"), ResultDataset("same-long-readable-prefix-two"))
 	require.NotEqual(t, ResultDataset("same-long-prefix-138"), ResultDataset("same-long-prefix-489"))
 	require.LessOrEqual(t, len(ResultDataset("same-long-prefix-138")), 50)
-	require.LessOrEqual(t, len(ResultView("same-long-prefix-138")), 30)
+	require.LessOrEqual(t, len(ResultView("same-long-prefix-138")), 50)
 }

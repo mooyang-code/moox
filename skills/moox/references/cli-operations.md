@@ -67,7 +67,7 @@ moox-cli storage repair-view \
   --storage-conf /home/<user>/moox/prod/storage-view/config/trpc_go.yaml \
   --package-root /home/<user>/moox/prod \
   --space-id crypto \
-  --view-id binance_spot_kline_1m_factor \
+	--view-id view_crypto_spot_kline_1m_factor \
   --yes
 ```
 
@@ -88,7 +88,7 @@ moox-cli storage repair-view \
   --storage-conf /home/<user>/moox/prod/storage-view/config/trpc_go.yaml \
   --package-root /home/<user>/moox/prod \
   --space-id crypto \
-  --view-id binance_spot_kline_1m_factor \
+	--view-id view_crypto_spot_kline_1m_factor \
   --dry-run
 ```
 
@@ -152,7 +152,7 @@ moox-cli storage force-rebuild-view \
   --storage-conf /home/<user>/moox/storage/config/storage.yaml \
   --package-root /home/<user>/moox/storage \
   --space-id crypto \
-  --view-id binance_spot_kline_1m_factor \
+	--view-id view_crypto_spot_kline_1m_factor \
   --lookback 72h \
   --dry-run
 ```

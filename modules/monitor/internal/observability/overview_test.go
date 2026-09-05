@@ -695,7 +695,7 @@ func TestBuilderIncludesStorageCommitFactsWithoutEnabledInventory(t *testing.T) 
 func TestBuilderReportsStorageViewWatermarkAsIndependentDataset(t *testing.T) {
 	now := time.Date(2026, 8, 20, 15, 0, 0, 0, time.UTC)
 	watermark := now.Add(-20 * time.Minute)
-	labels := `{"space_id":"crypto","view_id":"binance_spot_kline_1m_factor","freq":"1m"}`
+	labels := `{"space_id":"crypto","view_id":"view_crypto_spot_kline_1m_factor","freq":"1m"}`
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
 		seedOverviewMetricForInstance(t, db, "factor-view-watermark", "storage-view", "storage-view@control", "moox_storage_view_output_watermark_timestamp_seconds", labels, float64(watermark.Unix()), now)
 	})
@@ -707,7 +707,7 @@ func TestBuilderReportsStorageViewWatermarkAsIndependentDataset(t *testing.T) {
 		t.Fatalf("datasets = %+v", got.Datasets)
 	}
 	row := got.Datasets[0]
-	if row.Producer != "storage_view" || row.DatasetID != "binance_spot_kline_1m_factor" || row.Freq != "1m" || row.Status != "stale" {
+	if row.Producer != "storage_view" || row.DatasetID != "view_crypto_spot_kline_1m_factor" || row.Freq != "1m" || row.Status != "stale" {
 		t.Fatalf("storage view status = %+v", row)
 	}
 	if !row.OutputWatermarkAt.Equal(watermark) || row.LagSeconds != int64((20*time.Minute).Seconds()) {

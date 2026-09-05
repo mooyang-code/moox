@@ -54,7 +54,7 @@ moox-cli storage repair-view \
   --storage-conf /data/moox/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_binance_spot_kline_1m_factor_v \
+  --view-id view_crypto_spot_kline_1m_factor \
   --yes
 ```
 

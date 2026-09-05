@@ -120,7 +120,7 @@ Token 是可逆的小写无 Padding Base32。View 使用四个相互独立的 du
 `FetchBatch`、`MaxAckPending`、worker 和精确 Dataset subject 都在
 `storage.view.consumer_partitions` 中配置；K 线分区默认只接收
 `crypto/dataset_binance_spot_kline_1m`，因子分区只接收
-`crypto/dataset_binance_spot_kline_1m_factor`。同一 Dataset 的 rows、Marker 和 SyncPoint
+`crypto/dataset_crypto_spot_kline_1m_factor`。同一 Dataset 的 rows、Marker 和 SyncPoint
 进入同一个 Dataset 队列（队列键为 `space_id + dataset_id`），不同分区和 Dataset 可并行；同一 Dataset
 仍按事件顺序消费，避免 rows 越过 Marker。连续 rows delivery 会在不跨越 Marker 的前提下合并为一次索引写入，
 因此单个因子 Dataset 也能通过批量事务提高吞吐。因子分区默认 `fetch_batch=16`、`max_workers=8`、

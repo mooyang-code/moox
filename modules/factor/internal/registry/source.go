@@ -6,32 +6,35 @@ import (
 	"strings"
 )
 
-// ResultDataset returns the managed factor result Dataset for one source Dataset.
+// ResultDataset returns the managed factor result Dataset for one source object.
+// Callers that have a source View should pass that View ID so the result keeps
+// the business Space and frequency instead of inheriting a provider-specific
+// primary Dataset ID.
 func ResultDataset(sourceDatasetID string) string {
 	return resultObjectID(withDatasetPrefix(sourceDatasetID), "_factor", 50)
 }
 
-// ResultView returns the managed factor result View for one source Dataset.
+// ResultView returns the managed factor result View for one source object.
 func ResultView(sourceDatasetID string) string {
-	return "view_" + resultObjectID(datasetBaseID(sourceDatasetID), "_factor_v", 25)
+	return "view_" + resultObjectID(datasetBaseID(sourceDatasetID), "_factor", 50)
 }
 
-// ResultDatasetForView keeps the readable Dataset-based name for the usual
-// view_<dataset> pairing, while preserving uniqueness when multiple Views
-// share one primary Dataset.
+// ResultDatasetForView derives the result Dataset from the source View. This
+// keeps the generated ID aligned with the user's query identity even when the
+// View's primary Dataset is owned by a specific provider.
 func ResultDatasetForView(sourceDatasetID, sourceViewID string) string {
-	if canonicalSourceView(sourceDatasetID, sourceViewID) {
-		return ResultDataset(sourceDatasetID)
+	if strings.TrimSpace(sourceViewID) != "" {
+		return ResultDataset(sourceViewID)
 	}
-	return resultObjectID(withDatasetPrefix(withViewDiscriminator(sourceDatasetID, sourceViewID)), "_factor", 50)
+	return ResultDataset(sourceDatasetID)
 }
 
 // ResultViewForView is the View counterpart of ResultDatasetForView.
 func ResultViewForView(sourceDatasetID, sourceViewID string) string {
-	if canonicalSourceView(sourceDatasetID, sourceViewID) {
-		return ResultView(sourceDatasetID)
+	if strings.TrimSpace(sourceViewID) != "" {
+		return ResultView(sourceViewID)
 	}
-	return "view_" + resultObjectID(withViewDiscriminator(datasetBaseID(sourceDatasetID), sourceViewID), "_factor_v", 25)
+	return ResultView(sourceDatasetID)
 }
 
 func datasetBaseID(sourceDatasetID string) string {
@@ -40,16 +43,6 @@ func datasetBaseID(sourceDatasetID string) string {
 
 func withDatasetPrefix(sourceDatasetID string) string {
 	return "dataset_" + datasetBaseID(sourceDatasetID)
-}
-
-func canonicalSourceView(sourceDatasetID, sourceViewID string) bool {
-	viewID := strings.ToLower(strings.TrimSpace(sourceViewID))
-	return viewID == "" || viewID == "view_"+datasetBaseID(sourceDatasetID)
-}
-
-func withViewDiscriminator(sourceDatasetID, sourceViewID string) string {
-	sum := sha1.Sum([]byte(strings.ToLower(strings.TrimSpace(sourceViewID))))
-	return strings.TrimRight(datasetBaseID(sourceDatasetID), "_") + fmt.Sprintf("_%x", sum[:4])
 }
 
 func resultObjectID(sourceID, objectSuffix string, maxLen int) string {
