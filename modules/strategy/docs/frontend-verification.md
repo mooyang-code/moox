@@ -1,5 +1,10 @@
 # Strategy 前端管理台验收
 
+> **范围说明：** 本文正文是 V2 Manifest/Runner/hold 契约的旧验收说明，不代表新三表方案已通过。
+> StrategyInstance、instance_id / session_id、派生 strategy_name 和结果投递四态的后续验收，
+> 以[新版实施计划](../../../docs/superpowers/plans/2026-08-29-moox-coin-selection-strategy.md)及
+> [目标前端设计](../../../docs/策略前端管理台设计.md)为准；不要把旧断言直接当作新方案门禁。
+
 ## 验收边界
 
 前端必须直接展示当前生产事实：
@@ -38,4 +43,4 @@
 - 观察型 Runner 不显示执行操作。
 - Strategy 或 Trade 服务不可达时显示独立错误，而不是空数据。
 
-详细交互见[策略前端管理台设计](../../../docs/策略前端管理台设计.md)。
+后续交互方案见[目标前端设计](../../../docs/策略前端管理台设计.md)，与本文旧契约的差异按新版计划实施。

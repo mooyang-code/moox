@@ -7,6 +7,10 @@ FULL `target_weight` 输出；具体格式与能力以该设计为准，不代�
 [2026-08-29 实施计划](superpowers/plans/2026-08-29-moox-coin-selection-strategy.md)
 已按新版设计同步为待执行任务，旧施工记录保留在 Git 历史中。
 
+新目标采用 StrategyDef / StrategyInstance，使用 instance_id / session_id 区分实例与运行会话；
+定义、实例、结果三表，投递信息并入结果。strategy_name 由 DSL.name 同步派生。
+下文旧字段仅为历史参考，不按新名称机械改写，也不表示上述方案已经实施。
+
 > **禁止新增依赖：** 不要根据本页创建 Python entrypoint、`RunOnce`、`quantity` 或
 > V1 schema。若需要兼容旧策略，必须在独立迁移方案中明确转换范围和下线时间。
 

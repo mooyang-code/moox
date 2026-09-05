@@ -1,5 +1,11 @@
 # Coin Selection Runtime
 
+> **范围说明：** 下文保留 V2 Manifest、Runner 和独立 outbox 的实现说明，不是新目标合同。
+> 后续 StrategyDef / StrategyInstance、instance_id / session_id、strategy_name 与三表方案以
+> [策略执行框架设计](../../../docs/策略执行框架设计.md)和
+> [实施计划](../../../docs/superpowers/plans/2026-08-29-moox-coin-selection-strategy.md)为准；
+> 本轮仅更新文档，不表示这些能力已实现，不能将下文旧字段用于新增方案。
+
 The Strategy service is a declarative, Go-only runtime. A `moox.strategy/v2`
 Manifest is validated and compiled into an immutable dependency record before
 it is persisted. The record freezes the source View, Factor Binding, result
