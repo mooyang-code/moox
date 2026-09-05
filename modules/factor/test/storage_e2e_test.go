@@ -166,7 +166,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		// Result-view schema cleanup waits for the storage reconciler to activate a
 		// new revision (normally up to one reconcile tick). Keep teardown separate
 		// from the assertion context and allow that asynchronous handoff to finish.
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 90*time.Second)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 180*time.Second)
 		defer cleanupCancel()
 		if strategyInstanceCreated {
 			if rsp, err := strategy.SetStrategyInstanceEnabled(cleanupCtx, &strategypb.SetStrategyInstanceEnabledReq{InstanceId: strategyInstanceID, Enabled: false}, strategyScope); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
@@ -175,18 +175,18 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		}
 		for i := len(createdBindings) - 1; i >= 0; i-- {
 			id := createdBindings[i]
-			if rsp, err := factor.DeleteBinding(cleanupCtx, &factorpb.DeleteBindingReq{BindingId: id}); err != nil ||
-				rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-				reportCleanupFailure(t, "binding "+id, rsp, err)
-			}
+			retryCleanup(t, cleanupCtx, "binding "+id, func(ctx context.Context) (bool, any, error) {
+				rsp, err := factor.DeleteBinding(ctx, &factorpb.DeleteBindingReq{BindingId: id})
+				return err == nil && rsp.GetRetInfo().GetCode() == commonpb.ErrorCode_SUCCESS, rsp, err
+			})
 		}
 		for i := len(createdFactors) - 1; i >= 0; i-- {
 			created := createdFactors[i]
-			if rsp, err := factor.DeleteFactor(cleanupCtx, &factorpb.DeleteFactorReq{
-				FactorId: created.id,
-			}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-				reportCleanupFailure(t, "factor "+created.id, rsp, err)
-			} else {
+			deleted := retryCleanup(t, cleanupCtx, "factor "+created.id, func(ctx context.Context) (bool, any, error) {
+				rsp, err := factor.DeleteFactor(ctx, &factorpb.DeleteFactorReq{FactorId: created.id})
+				return err == nil && rsp.GetRetInfo().GetCode() == commonpb.ErrorCode_SUCCESS, rsp, err
+			})
+			if deleted {
 				assertFactorArtifactsRemoved(t, deployRoot, created.name)
 			}
 		}
@@ -994,12 +994,43 @@ func assertFactorArtifactsRemoved(t *testing.T, deployRoot, factorName string) {
 	}
 }
 
+func retryCleanup(t *testing.T, ctx context.Context, resource string, operation func(context.Context) (bool, any, error)) bool {
+	t.Helper()
+	var lastRsp any
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		opCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		succeeded, rsp, err := operation(opCtx)
+		cancel()
+		if succeeded {
+			return true
+		}
+		lastRsp, lastErr = rsp, err
+		if attempt < 2 {
+			timer := time.NewTimer(time.Duration(attempt+1) * time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				break
+			case <-timer.C:
+			}
+		}
+	}
+	reportCleanupFailure(t, resource, lastRsp, lastErr)
+	return false
+}
+
 func reportCleanupFailure(t *testing.T, resource string, rsp any, err error) {
 	t.Helper()
-	// Teardown runs after all assertions and may race the asynchronous View
-	// maintainer. Keep the E2E result focused on the exercised data path while
-	// retaining enough detail to diagnose a best-effort cleanup warning.
-	t.Logf("cleanup %s warning: rsp=%v err=%v", resource, rsp, err)
+	// Cleanup runs against asynchronous Storage/Factor workers and may outlive
+	// the assertion path. Keep the default E2E useful when a stale worker cannot
+	// be reached, while allowing CI or a release gate to make residue fatal.
+	message := fmt.Sprintf("cleanup %s failed: rsp=%v err=%v", resource, rsp, err)
+	if strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_STRICT_CLEANUP")) == "1" {
+		t.Errorf("%s", message)
+		return
+	}
+	t.Logf("%s", message)
 }
 
 func inputRow(spaceID, datasetID, subjectID, freq string, at time.Time, seriesTag, fieldID string, value float64) *storagepb.RowFieldUpsert {
