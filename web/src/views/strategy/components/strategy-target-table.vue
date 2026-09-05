@@ -1,10 +1,15 @@
 <template>
   <div class="target-head">
     <span>FULL 快照，共 {{ targets.length }} 个 Instrument</span>
-    <a-tag size="small">sequence {{ commandSequence }}</a-tag>
+    <span class="target-meta" v-if="hasResult">
+      <a-tag v-if="barEndTime" size="small">bar {{ formatTime(barEndTime) }}</a-tag>
+      <a-tag v-if="validUntil" size="small">有效至 {{ formatTime(validUntil) }}</a-tag>
+      <a-tag v-else-if="commandSequence" size="small">sequence {{ commandSequence }}</a-tag>
+    </span>
   </div>
-  <a-alert v-if="targets.length === 0" type="info" show-icon> 空 FULL 目标：所有既有 Instrument 的期望持仓均为零。 </a-alert>
-  <a-table v-else size="small" :data="targets" :pagination="false" row-key="instrument_id">
+  <a-alert v-if="!hasResult" type="info" show-icon> 暂无成功策略结果。 </a-alert>
+  <a-alert v-else-if="targets.length === 0" type="info" show-icon> 空 FULL 目标：所有既有 Instrument 的期望持仓均为零。 </a-alert>
+  <a-table v-else-if="hasResult" size="small" :data="targets" :pagination="false" row-key="instrument_id">
     <template #columns>
       <a-table-column title="Instrument" data-index="instrument_id" />
       <a-table-column title="目标权重" data-index="target_weight" />
@@ -14,7 +19,10 @@
 
 <script setup lang="ts">
 import type { InstrumentTarget } from "@/api/strategy-types";
-defineProps<{ targets: InstrumentTarget[]; commandSequence: string }>();
+withDefaults(defineProps<{ targets: InstrumentTarget[]; commandSequence?: string; barEndTime?: string; validUntil?: string; hasResult?: boolean }>(), { hasResult: true });
+function formatTime(value?: string) {
+  return value ? new Date(value).toLocaleString() : "-";
+}
 </script>
 
 <style scoped>
@@ -24,5 +32,9 @@ defineProps<{ targets: InstrumentTarget[]; commandSequence: string }>();
   justify-content: space-between;
   margin-bottom: 10px;
   color: var(--color-text-2);
+}
+.target-meta {
+  display: inline-flex;
+  gap: 6px;
 }
 </style>

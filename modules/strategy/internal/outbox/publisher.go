@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	strategyStore "github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -78,4 +79,8 @@ func (p *JetStreamPublisher) Publish(ctx context.Context, row domain.OutboxMessa
 	}
 	_, err = p.Publisher.PublishMessage(ctx, message)
 	return err
+}
+
+func (p *JetStreamPublisher) PublishResult(ctx context.Context, row strategyStore.StrategyResult) error {
+	return p.Publish(ctx, domain.OutboxMessage{MessageID: row.ResultID, EventData: row.EventData, CreatedAt: row.CreatedAt})
 }

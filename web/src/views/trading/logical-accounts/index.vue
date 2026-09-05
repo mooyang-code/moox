@@ -88,7 +88,9 @@
               <a-tag :color="record.ready ? 'green' : 'red'">{{ record.ready ? "就绪" : "未就绪" }}</a-tag>
             </template>
           </a-table-column>
-          <a-table-column title="执行器" data-index="owner_runner_id" :width="140" :ellipsis="true" :tooltip="true" />
+          <a-table-column title="策略实例" :width="180" :ellipsis="true" :tooltip="true">
+            <template #cell="{ record }">{{ record.owner_instance_id || record.owner_runner_id || "-" }}</template>
+          </a-table-column>
           <a-table-column title="成员数" :width="80">
             <template #cell="{ record }">{{ record.members?.length || 0 }}</template>
           </a-table-column>
@@ -141,13 +143,16 @@
             {{ selected.readiness_reasons.join("；") }}
           </a-alert>
           <a-alert v-if="selected.automation_state === 'PAUSED' && target" type="info" show-icon class="section">
-            当前完整目标序号 {{ target.command_sequence }} 已保存但不会执行；恢复后会继续收敛。
+            <template v-if="target.command_sequence">当前完整目标序号 {{ target.command_sequence }} 已保存但不会执行；恢复后会继续收敛。</template>
+            <template v-else>当前目标已保存但不会执行；恢复后仅在目标仍未过期时继续收敛。</template>
           </a-alert>
 
           <a-descriptions :column="3" bordered class="section">
             <a-descriptions-item label="自动执行">{{ automationStateLabel(selected.automation_state) }}</a-descriptions-item>
             <a-descriptions-item label="就绪状态">{{ selected.ready ? "就绪" : "未就绪" }}</a-descriptions-item>
-            <a-descriptions-item label="执行器">{{ selected.owner_runner_id || "-" }}</a-descriptions-item>
+            <a-descriptions-item label="策略实例">{{ selected.owner_instance_id || selected.owner_runner_id || "-" }}</a-descriptions-item>
+            <a-descriptions-item label="运行会话">{{ target?.session_id || selected.owner_session_id || "-" }}</a-descriptions-item>
+            <a-descriptions-item label="目标有效至">{{ formatTargetTime(target?.valid_until) }}</a-descriptions-item>
           </a-descriptions>
 
           <div class="section">
@@ -402,6 +407,12 @@ const stateCounts = computed(() => ({
 }));
 function targetStatusLabel(status?: string) {
   return status ? targetStateLabels[status.toUpperCase()] || "未知" : "暂无";
+}
+function formatTargetTime(value?: number | string) {
+  if (value === undefined || value === null || value === "") return "-";
+  const numeric = typeof value === "number" ? value : Number(value);
+  const date = Number.isFinite(numeric) ? new Date(numeric) : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString();
 }
 function actionTypeLabel(type?: string) {
   const labels: Record<string, string> = { FLATTEN: "逐账户清仓", MANUAL_ORDER: "人工下单", PAUSE: "暂停", RESUME: "恢复" };

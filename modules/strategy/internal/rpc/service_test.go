@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
@@ -101,6 +102,20 @@ func TestReconcileLegacyOwnersReleasesDifferentAccount(t *testing.T) {
 	defer owner.mu.Unlock()
 	if len(owner.released) != 1 || owner.released[0] != (legacyRelease{spaceID: "space", logicalAccountID: "logical-a", runnerID: "legacy-runner"}) {
 		t.Fatalf("released owners = %+v", owner.released)
+	}
+}
+
+func TestValidatePoolUDFRequiresRegisteredFunction(t *testing.T) {
+	dsl, err := config.Parse([]byte(`name: udf
+triggers: {event: {name: ready}}
+data: {bar: 1m, calendar: crypto_24x7}
+rules: {r: {pool: {udf: missing_udf}, weight: 1}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Service{PoolRegistry: input.NewUDFRegistry()}).validatePoolUDFs(dsl); err == nil {
+		t.Fatal("unregistered pool UDF should be rejected before enable")
 	}
 }
 

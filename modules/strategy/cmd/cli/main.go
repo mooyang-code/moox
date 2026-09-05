@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -20,7 +18,7 @@ func main() {
 
 func runCLI(args []string, out, errOut *os.File) error {
 	if len(args) == 0 || args[0] != "validate" {
-		return errors.New("usage: strategy validate [--space-id <id>] <manifest.yaml>")
+		return errors.New("usage: strategy validate [--space-id <id>] <dsl.yaml>")
 	}
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	fs.SetOutput(errOut)
@@ -29,21 +27,20 @@ func runCLI(args []string, out, errOut *os.File) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: strategy validate [--space-id <id>] <manifest.yaml>")
+		return errors.New("usage: strategy validate [--space-id <id>] <dsl.yaml>")
 	}
 	raw, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
 		return err
 	}
-	manifest, err := strategyconfig.Parse(raw)
+	dsl, err := strategyconfig.Parse(raw)
 	if err != nil {
 		return err
 	}
-	sum := sha256.Sum256(raw)
 	if *spaceID == "" {
-		_, _ = fmt.Fprintf(out, "valid strategy api=%s kind=%s manifest_hash=%s\n", manifest.APIVersion, manifest.Kind, hex.EncodeToString(sum[:]))
+		_, _ = fmt.Fprintf(out, "valid strategy name=%s\n", dsl.Name)
 		return nil
 	}
-	_, _ = fmt.Fprintf(out, "valid strategy api=%s kind=%s space_id=%s manifest_hash=%s\n", manifest.APIVersion, manifest.Kind, *spaceID, hex.EncodeToString(sum[:]))
+	_, _ = fmt.Fprintf(out, "valid strategy name=%s space_id=%s\n", dsl.Name, *spaceID)
 	return nil
 }

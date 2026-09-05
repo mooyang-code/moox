@@ -3,13 +3,16 @@ import path from "node:path";
 import { mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { setRunnerStatus } = vi.hoisted(() => ({ setRunnerStatus: vi.fn() }));
-vi.mock("@/api/strategy", () => ({ setRunnerStatus }));
+const { setRunnerStatus, setInstanceEnabled } = vi.hoisted(() => ({ setRunnerStatus: vi.fn(), setInstanceEnabled: vi.fn() }));
+vi.mock("@/api/strategy", () => ({ setRunnerStatus, setInstanceEnabled }));
 
 import StrategyOperationPanel from "./strategy-operation-panel.vue";
 
 describe("Strategy Runner controls", () => {
-  beforeEach(() => setRunnerStatus.mockReset().mockResolvedValue({}));
+  beforeEach(() => {
+    setRunnerStatus.mockReset().mockResolvedValue({});
+    setInstanceEnabled.mockReset().mockResolvedValue({});
+  });
 
   it("only offers Runner enable when disabled", async () => {
     const wrapper = mount(StrategyOperationPanel, {
@@ -27,19 +30,18 @@ describe("Strategy Runner controls", () => {
     expect(wrapper.text()).not.toContain("Exchange Account");
   });
 
-  it("uses the uppercase backend status contract", () => {
+  it("uses the instance enabled contract and keeps the legacy adapter", () => {
     const source = fs.readFileSync(
       path.resolve(process.cwd(), "src/views/strategy/components/strategy-operation-panel.vue"),
       "utf8"
     );
-    expect(source).toMatch(/status === ["']ENABLED["']/);
-    expect(source).toMatch(/change\(["']DISABLED["']\)/);
-    expect(source).toMatch(/change\(["']ENABLED["']\)/);
-    expect(source).toContain(`"ENABLED" | "DISABLED"`);
+    expect(source).toContain("setInstanceEnabled");
+    expect(source).toContain("setRunnerStatus");
+    expect(source).toContain("enabled ? \"ENABLED\" : \"DISABLED\"");
 
     const running = fs.readFileSync(path.resolve(process.cwd(), "src/views/strategy/running/index.vue"), "utf8");
-    expect(running).toContain(`<a-option value="ENABLED">ENABLED</a-option>`);
-    expect(running).toContain(`<a-option value="DISABLED">DISABLED</a-option>`);
-    expect(running).toContain(`status: "DISABLED"`);
+    expect(running).toContain("loadInstances");
+    expect(running).toContain("input_bindings_json");
+    expect(running).toContain("新增实例");
   });
 });

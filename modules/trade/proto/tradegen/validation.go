@@ -224,6 +224,12 @@ func (r *RemoveLogicalAccountMemberReq) Validate() error {
 }
 
 func (r *ClaimLogicalAccountOwnerReq) Validate() error {
+	if r != nil && strings.TrimSpace(r.InstanceId) != "" {
+		if strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" {
+			return fmt.Errorf("logical_account_id, instance_id, session_id and expected_auth_fence are required")
+		}
+		return nil
+	}
 	return validateLogicalOwner(r != nil, value(func() string {
 		if r == nil {
 			return ""
@@ -238,6 +244,12 @@ func (r *ClaimLogicalAccountOwnerReq) Validate() error {
 }
 
 func (r *ReleaseLogicalAccountOwnerReq) Validate() error {
+	if r != nil && strings.TrimSpace(r.InstanceId) != "" {
+		if strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" {
+			return fmt.Errorf("logical_account_id, instance_id, session_id and expected_auth_fence are required")
+		}
+		return nil
+	}
 	return validateLogicalOwner(r != nil, value(func() string {
 		if r == nil {
 			return ""
@@ -252,6 +264,12 @@ func (r *ReleaseLogicalAccountOwnerReq) Validate() error {
 }
 
 func (r *RebindLogicalAccountOwnerReq) Validate() error {
+	if r != nil && strings.TrimSpace(r.InstanceId) != "" {
+		if strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" || strings.TrimSpace(r.NewInstanceId) == "" || strings.TrimSpace(r.NewSessionId) == "" {
+			return fmt.Errorf("logical_account_id, expected_auth_fence, old/new instance_id and old/new session_id are required")
+		}
+		return nil
+	}
 	if err := validateLogicalOwner(r != nil, value(func() string {
 		if r == nil {
 			return ""

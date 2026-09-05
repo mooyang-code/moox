@@ -208,12 +208,17 @@ func (h *LogicalAccountServer) ClaimLogicalAccountOwner(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	record, err := h.LogicalAccounts.ClaimOwner(
-		ctx,
-		spaceID,
-		req.GetLogicalAccountId(),
-		req.GetRunnerId(),
-	)
+	var record store.LogicalAccountRecord
+	if req.GetInstanceId() != "" {
+		record, _, err = h.LogicalAccounts.ClaimSession(
+			ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(),
+			req.GetSessionId(), req.GetExpectedAuthFence(),
+		)
+	} else {
+		record, err = h.LogicalAccounts.ClaimOwner(
+			ctx, spaceID, req.GetLogicalAccountId(), req.GetRunnerId(),
+		)
+	}
 	return &tradepb.ClaimLogicalAccountOwnerRsp{
 		RetInfo:        errorInfo(err),
 		LogicalAccount: h.logicalAccount(ctx, record),
@@ -233,12 +238,16 @@ func (h *LogicalAccountServer) ReleaseLogicalAccountOwner(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	err = h.LogicalAccounts.ReleaseOwner(
-		ctx,
-		spaceID,
-		req.GetLogicalAccountId(),
-		req.GetRunnerId(),
-	)
+	if req.GetInstanceId() != "" {
+		err = h.LogicalAccounts.ReleaseSession(
+			ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(),
+			req.GetSessionId(), req.GetExpectedAuthFence(),
+		)
+	} else {
+		err = h.LogicalAccounts.ReleaseOwner(
+			ctx, spaceID, req.GetLogicalAccountId(), req.GetRunnerId(),
+		)
+	}
 	if err != nil {
 		return &tradepb.ReleaseLogicalAccountOwnerRsp{RetInfo: errorInfo(err)}, nil
 	}
@@ -262,13 +271,17 @@ func (h *LogicalAccountServer) RebindLogicalAccountOwner(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	record, err := h.LogicalAccounts.RebindOwner(
-		ctx,
-		spaceID,
-		req.GetLogicalAccountId(),
-		req.GetRunnerId(),
-		req.GetRebindKey(),
-	)
+	var record store.LogicalAccountRecord
+	if req.GetInstanceId() != "" {
+		record, _, err = h.LogicalAccounts.RebindSession(
+			ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(), req.GetSessionId(),
+			req.GetExpectedAuthFence(), req.GetNewInstanceId(), req.GetNewSessionId(),
+		)
+	} else {
+		record, err = h.LogicalAccounts.RebindOwner(
+			ctx, spaceID, req.GetLogicalAccountId(), req.GetRunnerId(), req.GetRebindKey(),
+		)
+	}
 	return &tradepb.RebindLogicalAccountOwnerRsp{
 		RetInfo:        errorInfo(err),
 		LogicalAccount: h.logicalAccount(ctx, record),

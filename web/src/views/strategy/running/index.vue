@@ -3,65 +3,63 @@
     <div class="moox-inner">
       <div class="page-head">
         <div>
-          <h2>Strategy Runner</h2>
-          <span>同一策略可创建多个运行实例，每个运行实例最多关联一个组合账户。</span>
+          <h2>策略实例</h2>
+          <span>同一策略可创建多个实例；实例只负责绑定输入和投递目标，不保存交易状态。</span>
         </div>
         <a-space>
           <a-button :loading="store.loading" @click="refresh"
             ><template #icon><icon-refresh /></template>刷新</a-button
           >
           <a-button type="primary" status="success" :disabled="!spaceStore.selectedSpaceId" @click="openCreate"
-            ><template #icon><icon-plus /></template>新增 Runner</a-button
+            ><template #icon><icon-plus /></template>新增实例</a-button
           >
         </a-space>
       </div>
       <a-alert v-if="store.error" type="error" show-icon class="top-alert">{{ store.error }}</a-alert>
       <div class="filters">
         <a-input v-model="filters.strategy_id" allow-clear placeholder="策略 ID" @press-enter="reloadFirst" />
-        <a-select v-model="filters.status" allow-clear placeholder="状态" @change="reloadFirst">
-          <a-option value="ENABLED">ENABLED</a-option>
-          <a-option value="DISABLED">DISABLED</a-option>
+        <a-select v-model="filters.enabled" allow-clear placeholder="状态" @change="reloadFirst">
+          <a-option :value="true">运行中</a-option>
+          <a-option :value="false">已停用</a-option>
         </a-select>
         <a-button type="primary" @click="reloadFirst">查询</a-button>
       </div>
       <a-table
-        row-key="runner_id"
-        :data="store.runners"
+        row-key="instance_id"
+        :data="store.instances"
         :loading="store.loading"
         :pagination="pagination"
         @page-change="changePage"
       >
         <template #columns>
-          <a-table-column title="Runner">
+          <a-table-column title="实例">
             <template #cell="{ record }">
-              <a-link @click="openDetail(record.runner_id)">{{ record.runner_id }}</a-link>
+              <a-link @click="openDetail(record.instance_id)">{{ record.instance_id }}</a-link>
               <div class="muted">{{ record.strategy_id }}</div>
             </template>
           </a-table-column>
-          <a-table-column title="数据视图" data-index="source_view_id" />
-          <a-table-column title="频率" data-index="frequency" :width="110" />
           <a-table-column title="组合账户">
             <template #cell="{ record }">{{ record.logical_account_id || "观察模式" }}</template>
           </a-table-column>
           <a-table-column title="状态" :width="110">
-            <template #cell="{ record }"><StatusBadge :status="record.status" /></template>
+            <template #cell="{ record }"><StatusBadge :status="record.enabled ? 'ENABLED' : 'DISABLED'" /></template>
           </a-table-column>
-          <a-table-column title="最近成功">
-            <template #cell="{ record }">{{ formatTime(record.last_success_at) }}</template>
+          <a-table-column title="运行会话" data-index="session_id" :ellipsis="true" :tooltip="true" />
+          <a-table-column title="更新时间">
+            <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
           </a-table-column>
-          <a-table-column title="最近错误" data-index="last_error" :ellipsis="true" :tooltip="true" />
           <a-table-column title="操作" :width="110">
             <template #cell="{ record }">
-              <a-button size="mini" type="text" @click="openDetail(record.runner_id)">详情</a-button>
+              <a-button size="mini" type="text" @click="openDetail(record.instance_id)">详情</a-button>
             </template>
           </a-table-column>
         </template>
       </a-table>
 
-      <a-modal v-model:visible="createVisible" title="新增 Strategy Runner" :width="640" @ok="create">
+      <a-modal v-model:visible="createVisible" title="新增策略实例" :width="640" @ok="create">
         <a-form :model="form" layout="vertical">
           <a-grid :cols="2" :col-gap="16">
-            <a-form-item label="Runner ID" required><a-input v-model="form.runner_id" /></a-form-item>
+            <a-form-item label="实例 ID" required><a-input v-model="form.instance_id" /></a-form-item>
             <a-form-item label="策略" required>
               <a-select v-model="form.strategy_id" allow-search>
                 <a-option v-for="item in store.strategies" :key="item.strategy_id" :value="item.strategy_id">
@@ -73,7 +71,10 @@
               <a-input v-model="form.logical_account_id" placeholder="留空为观察模式" />
             </a-form-item>
           </a-grid>
-          <a-alert v-if="selectedMeta" type="info">数据视图：{{ selectedMeta.view }}，频率：{{ selectedMeta.frequency }}</a-alert>
+          <a-form-item label="输入绑定 JSON">
+            <a-textarea v-model="form.input_bindings_json" class="code-input" :auto-size="{ minRows: 4, maxRows: 8 }" />
+          </a-form-item>
+          <a-alert type="info">输入绑定决定行情 View 和 Factor 输出；观察模式只计算和保存结果，不投递 Trade。</a-alert>
         </a-form>
       </a-modal>
     </div>
@@ -81,11 +82,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
-import { createRunner } from "@/api/strategy";
-import type { Strategy, StrategyRunnerStatus } from "@/api/strategy-types";
+import { createInstance } from "@/api/strategy";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
@@ -95,35 +95,23 @@ const router = useRouter();
 const store = useStrategyStore();
 const spaceStore = useSpaceStore();
 const createVisible = ref(false);
-const filters = reactive<{ strategy_id: string; status: StrategyRunnerStatus | "" }>({ strategy_id: "", status: "" });
+const filters = reactive<{ strategy_id: string; enabled?: boolean }>({ strategy_id: "" });
 const pagination = reactive({ current: 1, pageSize: 20, total: 0 });
 const form = reactive({
-  runner_id: "",
+  instance_id: "",
   strategy_id: "",
-  logical_account_id: ""
+  logical_account_id: "",
+  input_bindings_json: "{}"
 });
 
-function strategyMeta(strategyId: string) {
-  const strategy = store.strategies.find((item: Strategy) => item.strategy_id === strategyId);
-  if (!strategy?.compiled_json) return null;
-  try {
-    const compiled = JSON.parse(strategy.compiled_json);
-    return { view: compiled.source_view?.id ?? "-", frequency: compiled.source_view?.frequency ?? "-" };
-  } catch {
-    return null;
-  }
-}
-
-const selectedMeta = computed(() => strategyMeta(form.strategy_id));
-
 async function refresh() {
-  await store.loadRunners({
+  await store.loadInstances({
     ...filters,
     space_id: spaceStore.selectedSpaceId,
     page: pagination.current,
     page_size: pagination.pageSize
   });
-  pagination.total = store.totalRunners;
+  pagination.total = store.totalInstances;
 }
 
 async function openCreate() {
@@ -132,23 +120,23 @@ async function openCreate() {
 }
 
 async function create() {
-  if (!form.runner_id.trim() || !form.strategy_id) {
+  if (!form.instance_id.trim() || !form.strategy_id || !form.input_bindings_json.trim()) {
     Message.warning("请填写所有必填字段");
     return false;
   }
-  const meta = strategyMeta(form.strategy_id);
-  if (!meta) {
-    Message.warning("策略尚未生成编译依赖");
+  try {
+    JSON.parse(form.input_bindings_json);
+  } catch {
+    Message.warning("输入绑定必须是合法 JSON");
     return false;
   }
-  await createRunner({
-    runner_id: form.runner_id.trim(),
+  await createInstance({
+    instance_id: form.instance_id.trim(),
     strategy_id: form.strategy_id,
-    source_view_id: meta.view,
-    frequency: meta.frequency,
     logical_account_id: form.logical_account_id.trim(),
-    space_id: spaceStore.requireSpaceId(), status: "DISABLED", current_targets: [], command_sequence: "0",
-    last_result_id: "", last_success_at: "", last_error: "", created_at: "", updated_at: ""
+    space_id: spaceStore.requireSpaceId(),
+    input_bindings_json: form.input_bindings_json,
+    enabled: false
   });
   createVisible.value = false;
   await refresh();
@@ -163,8 +151,8 @@ function changePage(page: number) {
   pagination.current = page;
   refresh();
 }
-function openDetail(runnerId: string) {
-  router.push({ name: "strategy-detail", params: { runnerId } });
+function openDetail(instanceId: string) {
+  router.push({ name: "strategy-detail", params: { instanceId } });
 }
 function formatTime(value: string) {
   return value ? new Date(value).toLocaleString() : "-";

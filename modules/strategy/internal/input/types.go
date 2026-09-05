@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 )
@@ -66,7 +67,8 @@ type PoolItem struct {
 // a single completed period.
 type InstrumentInput struct {
 	PoolItem
-	Values map[string]quant.Decimal
+	Values         map[string]quant.Decimal
+	PreviousValues map[string]quant.Decimal
 }
 
 // EvaluationInput is immutable input for one strategy period. The producer is
@@ -79,6 +81,11 @@ type EvaluationInput struct {
 	DataFrequency string
 	Items         []InstrumentInput
 	Ineligible    map[string]string
+	// BarIndex and BarEndAt let holding rules advance by valid market bars
+	// instead of assuming every calendar has a 24-hour cadence.
+	BarIndex    int64
+	BarDuration time.Duration
+	BarEndAt    func(int) time.Time
 }
 
 // Ordered returns a deterministic copy sorted by instrument identity.

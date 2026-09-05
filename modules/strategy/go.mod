@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/modules/strategy
 go 1.25.0
 
 require (
+	github.com/expr-lang/expr v1.17.8
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
@@ -12,10 +13,12 @@ require (
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/marketcalendar v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/pyruntime v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.17
 	github.com/nats-io/nats.go v1.51.0
 	github.com/prometheus/client_golang v1.23.2
+	github.com/robfig/cron v1.2.0
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
@@ -30,7 +33,6 @@ require (
 
 require (
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
-	github.com/robfig/cron v1.2.0 // indirect
 )
 
 require (
@@ -124,6 +126,8 @@ replace github.com/mooyang-code/moox/modules/trade/proto/tradegen => ../trade/pr
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
+
+replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
 
 replace github.com/mooyang-code/moox/modules/factor/proto/factorgen => ../factor/proto/factorgen
 

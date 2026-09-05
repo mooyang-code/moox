@@ -2,7 +2,9 @@ package compiler
 
 import (
 	"context"
+	"reflect"
 
+	"github.com/expr-lang/expr/vm"
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
 )
 
@@ -56,53 +58,99 @@ type Dependencies interface {
 	StorageCatalog
 }
 
+// ExpressionStage controls the type and function contract for an expression.
+// pct_rank and zscore are deliberately available only in StageScore.
+type ExpressionStage string
+
+const (
+	StageFilterBefore ExpressionStage = "filter_before"
+	StageScore        ExpressionStage = "score"
+	StageSelectWhere  ExpressionStage = "select.where"
+	StageSignalEntry  ExpressionStage = "signals.entry"
+	StageSignalExit   ExpressionStage = "signals.exit"
+	StageFilterAfter  ExpressionStage = "filter_after"
+)
+
+type ExpressionDependencies struct {
+	Fields    []string
+	Bars      map[int][]string
+	UsesScore bool
+}
+
+type CompiledExpression struct {
+	Source       string
+	Stage        ExpressionStage
+	Program      *vm.Program
+	Dependencies ExpressionDependencies
+}
+
+type CompiledRule struct {
+	Name         string
+	Definition   config.Rule
+	FilterBefore *CompiledExpression
+	Score        *CompiledExpression
+	SelectWhere  *CompiledExpression
+	SignalEntry  *CompiledExpression
+	SignalExit   *CompiledExpression
+	FilterAfter  *CompiledExpression
+}
+
+// CompiledStrategy is an in-memory artifact.  It intentionally has no JSON or
+// hash field: DSL text is persisted by the strategy definition, and programs
+// are rebuilt when an instance is enabled or the process restarts.
 type CompiledStrategy struct {
-	APIVersion     string                    `json:"api_version"`
-	Kind           string                    `json:"kind"`
-	SpaceID        string                    `json:"space_id"`
-	SourceView     CompiledView              `json:"source_view"`
-	InstrumentPool config.InstrumentPoolRule `json:"instrument_pool"`
-	Schedule       CompiledSchedule          `json:"schedule"`
-	Readiness      string                    `json:"readiness"`
-	Factors        []CompiledFactor          `json:"factors"`
+	Name         string
+	SpaceID      string
+	Data         config.Data
+	Triggers     config.Triggers
+	Rules        []CompiledRule
+	Factors      []CompiledFactor
+	Dependencies DependenciesSnapshot
+	InputFields  map[string]reflect.Type
+	// Deprecated fields below are compile adapters for older in-tree callers.
+	// New code must use Name/Data/Triggers/Rules and rebuild programs from DSL.
+	APIVersion     string                    `json:"api_version,omitempty"`
+	Kind           string                    `json:"kind,omitempty"`
+	CompiledJSON   []byte                    `json:"-"`
+	SourceView     CompiledView              `json:"source_view,omitempty"`
+	InstrumentPool config.InstrumentPoolRule `json:"instrument_pool,omitempty"`
+	Schedule       CompiledSchedule          `json:"schedule,omitempty"`
+	Readiness      string                    `json:"readiness,omitempty"`
 	Long           *config.Side              `json:"long,omitempty"`
 	Short          *config.Side              `json:"short,omitempty"`
-	Dependencies   DependenciesSnapshot      `json:"dependencies"`
-	CompiledJSON   []byte                    `json:"-"`
-	Hash           string                    `json:"-"`
 }
 
 type CompiledView struct {
-	ID        string `json:"id"`
-	Status    string `json:"status"`
-	Frequency string `json:"frequency"`
+	ID        string `json:"id,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Frequency string `json:"frequency,omitempty"`
 }
-
 type CompiledSchedule struct {
-	Every string `json:"every"`
+	Every string `json:"every,omitempty"`
 }
 
 type CompiledFactor struct {
-	FactorID        string   `json:"factor_id"`
-	SourceHash      string   `json:"source_hash,omitempty"`
-	InputColumns    []string `json:"input_columns,omitempty"`
-	ParamsJSON      string   `json:"params_json,omitempty"`
-	LookbackPeriods int      `json:"lookback_periods,omitempty"`
-	BindingID       string   `json:"binding_id"`
-	Frequency       string   `json:"frequency"`
-	ResultDatasetID string   `json:"result_dataset_id"`
-	ResultViewID    string   `json:"result_view_id"`
-	Output          string   `json:"output"`
-	ColumnName      string   `json:"column_name"`
-	SubjectMode     string   `json:"subject_mode,omitempty"`
-	SubjectsJSON    string   `json:"subjects_json,omitempty"`
+	FactorID        string
+	SourceHash      string
+	InputColumns    []string
+	ParamsJSON      string
+	LookbackPeriods int
+	BindingID       string
+	Frequency       string
+	ResultDatasetID string
+	ResultViewID    string
+	Output          string
+	ColumnName      string
+	SubjectMode     string
+	SubjectsJSON    string
 }
 
 type DependenciesSnapshot struct {
-	FactorResultViewIDs []string `json:"factor_result_view_ids"`
+	FactorResultViewIDs []string
 }
 
 type Compiler struct {
-	Factors FactorCatalog
-	Storage StorageCatalog
+	Factors     FactorCatalog
+	Storage     StorageCatalog
+	InputFields map[string]reflect.Type
 }

@@ -19,6 +19,17 @@ func (ReadinessChecker) Check(pool PoolResult, values map[string]InstrumentInput
 // while allowing the RPC loader to distinguish a missing source row from a
 // row that merely has no factor value yet.
 func (ReadinessChecker) CheckWithPresence(pool PoolResult, values map[string]InstrumentInput, present map[string]bool, requiredFactors []string) error {
+	requiredByInstrument := make(map[string][]string, len(pool.Items))
+	for _, item := range pool.Items {
+		requiredByInstrument[item.InstrumentID] = append([]string(nil), requiredFactors...)
+	}
+	return (ReadinessChecker{}).CheckWithPresenceByInstrument(pool, values, present, requiredByInstrument)
+}
+
+// CheckWithPresenceByInstrument is the rule-scoped variant used when different
+// rules intentionally bind different factors to different pools. A row only
+// needs the factors required by rules that can actually select that row.
+func (ReadinessChecker) CheckWithPresenceByInstrument(pool PoolResult, values map[string]InstrumentInput, present map[string]bool, requiredByInstrument map[string][]string) error {
 	missing := make([]string, 0)
 	for _, item := range pool.Items {
 		if present != nil && !present[item.InstrumentID] {
@@ -30,7 +41,7 @@ func (ReadinessChecker) CheckWithPresence(pool PoolResult, values map[string]Ins
 			missing = append(missing, item.InstrumentID)
 			continue
 		}
-		for _, factorID := range requiredFactors {
+		for _, factorID := range requiredByInstrument[item.InstrumentID] {
 			if _, present := row.Values[factorID]; !present {
 				missing = append(missing, item.InstrumentID+":"+factorID)
 			}

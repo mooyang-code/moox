@@ -65,12 +65,21 @@ var (
 	defaultMaxGrossWeight  = shared.MustDecimal("20")
 )
 
-func (r *WeightResolver) Resolve(ctx context.Context, messageSignalTime int64, request *tradeeventpb.LogicalAccountTargetWeightRequested, spaceID string) (WeightConversion, error) {
+func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeventpb.LogicalAccountTargetWeightRequested, spaceID string) (WeightConversion, error) {
 	if r == nil || r.Store == nil || r.Prices == nil || r.Equity == nil {
 		return WeightConversion{}, fmt.Errorf("%w: target weight resolver is not configured", ErrPermanent)
 	}
-	if request == nil || request.GetTargetId() == "" || request.GetLogicalAccountId() == "" || request.GetRunnerId() == "" || request.GetCommandSequence() <= 0 {
+	if request == nil || request.GetTargetId() == "" || request.GetLogicalAccountId() == "" || request.GetInstanceId() == "" || request.GetSessionId() == "" || request.GetStrategyId() == "" || request.GetBarEndTime() == nil || request.GetEffectiveAt() == nil || request.GetValidUntil() == nil {
 		return WeightConversion{}, fmt.Errorf("%w: target weight request is incomplete", ErrPermanent)
+	}
+	if err := request.GetBarEndTime().CheckValid(); err != nil {
+		return WeightConversion{}, fmt.Errorf("%w: invalid bar_end_time: %v", ErrPermanent, err)
+	}
+	if err := request.GetEffectiveAt().CheckValid(); err != nil || !request.GetEffectiveAt().AsTime().Equal(request.GetBarEndTime().AsTime()) {
+		return WeightConversion{}, fmt.Errorf("%w: effective_at must equal bar_end_time", ErrPermanent)
+	}
+	if err := request.GetValidUntil().CheckValid(); err != nil || !request.GetValidUntil().AsTime().After(request.GetEffectiveAt().AsTime()) {
+		return WeightConversion{}, fmt.Errorf("%w: valid_until must be after effective_at", ErrPermanent)
 	}
 	requestHash, weightsJSON, orderedWeights, err := canonicalWeights(request)
 	if err != nil {
@@ -79,20 +88,9 @@ func (r *WeightResolver) Resolve(ctx context.Context, messageSignalTime int64, r
 	if err := validateWeightRisk(orderedWeights); err != nil {
 		return WeightConversion{}, fmt.Errorf("%w: %v", ErrPermanent, err)
 	}
-	// The strategy period carried in the payload is the business signal time;
-	// broker publication time is only a fallback for legacy/malformed callers.
-	var signalTime int64
-	if request.GetSignalTime() != "" {
-		if parsed, parseErr := time.Parse(time.RFC3339Nano, request.GetSignalTime()); parseErr == nil {
-			signalTime = parsed.UnixMilli()
-		}
-	}
-	if signalTime <= 0 {
-		signalTime = messageSignalTime
-	}
-	if signalTime <= 0 {
-		signalTime = r.now().UnixMilli()
-	}
+	// The period carried by the event is the sole business timestamp. Do not
+	// fall back to broker or local processing time when it is malformed.
+	signalTime := request.GetBarEndTime().AsTime().UnixMilli()
 	// An empty FULL target is an explicit flatten command. It must not depend
 	// on an equity snapshot or a quote for an instrument that no longer exists.
 	if len(orderedWeights) == 0 {
@@ -225,12 +223,15 @@ func canonicalWeights(request *tradeeventpb.LogicalAccountTargetWeightRequested)
 	sort.Slice(weights, func(i, j int) bool { return weights[i].InstrumentID < weights[j].InstrumentID })
 	payload := struct {
 		TargetID         string          `json:"target_id"`
-		RunnerID         string          `json:"runner_id"`
+		InstanceID       string          `json:"instance_id"`
 		LogicalAccountID string          `json:"logical_account_id"`
-		CommandSequence  int64           `json:"command_sequence"`
-		SignalTime       string          `json:"signal_time"`
+		SessionID        string          `json:"session_id"`
+		StrategyID       string          `json:"strategy_id"`
+		BarEndTime       string          `json:"bar_end_time"`
+		EffectiveAt      string          `json:"effective_at"`
+		ValidUntil       string          `json:"valid_until"`
 		Targets          []orderedWeight `json:"targets"`
-	}{TargetID: request.GetTargetId(), RunnerID: request.GetRunnerId(), LogicalAccountID: request.GetLogicalAccountId(), CommandSequence: request.GetCommandSequence(), SignalTime: request.GetSignalTime(), Targets: weights}
+	}{TargetID: request.GetTargetId(), InstanceID: request.GetInstanceId(), LogicalAccountID: request.GetLogicalAccountId(), SessionID: request.GetSessionId(), StrategyID: request.GetStrategyId(), BarEndTime: request.GetBarEndTime().AsTime().UTC().Format(time.RFC3339Nano), EffectiveAt: request.GetEffectiveAt().AsTime().UTC().Format(time.RFC3339Nano), ValidUntil: request.GetValidUntil().AsTime().UTC().Format(time.RFC3339Nano), Targets: weights}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", "", nil, err

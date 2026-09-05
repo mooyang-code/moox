@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -194,6 +195,7 @@ func seedLogicalAccount(t *testing.T, tradeStore *store.Store) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount,
 			Name: "E2E logical account", OwnerRunnerID: testRunner,
+			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
 			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -244,12 +246,18 @@ func targetDeliveryWithTargets(
 	t.Helper()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
+	// Keep every bar at or before the fixture clock while preserving the
+	// command sequence ordering used by the stale-target assertions.
+	bar := now.Add(time.Duration(sequence-3) * time.Millisecond)
 	encoded, err := registry.Encode(
 		events.LogicalAccountTargetWeightRequested,
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
-			TargetId: targetID, RunnerId: testRunner,
+			TargetId: targetID, RunnerId: testRunner, InstanceId: testRunner,
+			SessionId: "session-e2e", StrategyId: "strategy-e2e",
 			LogicalAccountId: testLogicalAccount,
 			CommandSequence:  sequence, Targets: targets,
+			BarEndTime: timestamppb.New(bar), EffectiveAt: timestamppb.New(bar),
+			ValidUntil: timestamppb.New(bar.Add(time.Hour)),
 		},
 		events.PublishOptions{
 			EventID: targetID, OccurredAt: now,

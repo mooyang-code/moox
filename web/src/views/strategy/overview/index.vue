@@ -32,9 +32,6 @@
               <div class="muted">{{ record.strategy_id }}</div>
             </template>
           </a-table-column>
-          <a-table-column title="编译 Hash" :ellipsis="true" :tooltip="true">
-            <template #cell="{ record }">{{ record.source_hash || "-" }}</template>
-          </a-table-column>
           <a-table-column title="创建时间">
             <template #cell="{ record }">{{ formatTime(record.created_at) }}</template>
           </a-table-column>
@@ -48,12 +45,9 @@
 
       <a-modal v-model:visible="createVisible" title="新增策略" :width="720" @ok="create">
         <a-form :model="form" layout="vertical">
-          <a-grid :cols="2" :col-gap="16">
-            <a-form-item label="策略 ID" required><a-input v-model="form.strategy_id" /></a-form-item>
-            <a-form-item label="名称" required><a-input v-model="form.name" /></a-form-item>
-          </a-grid>
-          <a-form-item label="Manifest YAML" required>
-            <a-textarea v-model="form.manifest_yaml" class="code-input" :auto-size="{ minRows: 5, maxRows: 10 }" />
+          <a-form-item label="策略 ID" required><a-input v-model="form.strategy_id" /></a-form-item>
+          <a-form-item label="DSL YAML（名称由 name 派生）" required>
+            <a-textarea v-model="form.dsl_yaml" class="code-input" :auto-size="{ minRows: 8, maxRows: 16 }" />
           </a-form-item>
         </a-form>
       </a-modal>
@@ -62,13 +56,9 @@
         <a-descriptions v-if="selected" :column="1" bordered>
           <a-descriptions-item label="策略 ID">{{ selected.strategy_id }}</a-descriptions-item>
           <a-descriptions-item label="名称">{{ selected.name }}</a-descriptions-item>
-          <a-descriptions-item label="类型">{{ selected.kind }}</a-descriptions-item>
-          <a-descriptions-item label="编译 Hash">{{ selected.source_hash }}</a-descriptions-item>
-        </a-descriptions>
-        <h3>Manifest</h3>
-        <pre>{{ selected?.manifest_yaml }}</pre>
-        <h3>编译依赖</h3>
-        <pre>{{ selected?.compiled_json }}</pre>
+          </a-descriptions>
+        <h3>DSL YAML</h3>
+        <pre>{{ selected?.dsl_yaml }}</pre>
       </a-drawer>
     </div>
   </div>
@@ -89,32 +79,21 @@ const createVisible = ref(false);
 const artifactVisible = ref(false);
 const selected = ref<Strategy | null>(null);
 const pagination = reactive({ current: 1, pageSize: 20, total: 0 });
-const defaultManifest = `api_version: moox.strategy/v2
-kind: coin_selection
-input:
-  source_view_id: view_crypto_spot_kline_1h
-  data_frequency: 1h
-  factors:
-    - factor_id: Bias
-instrument_pool:
-  markets: [spot]
-schedule:
-  every: 1h
-readiness:
-  policy: strict
-long:
-  side_weight: "1"
-  scores:
-    - factor_id: Bias
-      direction: ascending
-      weight: "1"
-  filters: []
-  selection: {mode: count, value: 10}
+const defaultDSL = `name: momentum_demo
+triggers:
+  schedule: {cron: "5 * * * *", timezone: UTC}
+data: {bar: 1h, calendar: crypto_24x7}
+rules:
+  momentum:
+    pool: {udf: spot_symbols}
+    score: "return_20"
+    select: {top: 10}
+    weight: 0.60
+    filter_after: "return_20 > 0"
 `;
 const form = reactive({
   strategy_id: "",
-  name: "",
-  manifest_yaml: defaultManifest
+  dsl_yaml: defaultDSL
 });
 
 async function refresh() {
@@ -133,24 +112,21 @@ function showArtifact(strategy: Strategy) {
 }
 
 async function create() {
-  if (!form.strategy_id.trim() || !form.name.trim() || !form.manifest_yaml.trim() || !spaceStore.selectedSpaceId) {
+  if (!form.strategy_id.trim() || !form.dsl_yaml.trim() || !spaceStore.selectedSpaceId) {
     Message.warning("请填写完整策略定义");
     return false;
   }
   await createStrategy({
     ...form,
-    kind: "coin_selection",
-    compiled_json: "",
+    dsl_yaml: form.dsl_yaml,
+    name: "",
     strategy_id: form.strategy_id.trim(),
-    name: form.name.trim(),
-    source_hash: "",
     created_at: ""
   });
   createVisible.value = false;
   Object.assign(form, {
     strategy_id: "",
-    name: "",
-    manifest_yaml: defaultManifest
+    dsl_yaml: defaultDSL
   });
   await refresh();
   return true;

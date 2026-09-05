@@ -2,6 +2,8 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,8 +11,10 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
+	"github.com/mooyang-code/moox/modules/strategy/internal/config"
 	"github.com/mooyang-code/moox/modules/strategy/internal/factorio"
 	"github.com/mooyang-code/moox/modules/strategy/internal/health"
+	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
 	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
 	"github.com/mooyang-code/moox/modules/strategy/internal/rpc"
@@ -41,6 +45,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	var eventRuntime *strategyoutbox.Runtime
 	var readyConsumer *strategyeventconsumer.Consumer
 	var readyClient *jetstream.Client
+	var readyProcessor *strategytrigger.Processor
+	var scheduler *strategytrigger.Scheduler
 	var cancelReconcile context.CancelFunc
 	var readyErr error
 	defer func() {
@@ -55,6 +61,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		}
 		if readyClient != nil {
 			_ = readyClient.Close()
+		}
+		if scheduler != nil {
+			scheduler.Stop()
 		}
 		if cancelReconcile != nil {
 			cancelReconcile()
@@ -79,12 +88,21 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err := service.ReconcileDisabledOwners(ctx); err != nil {
 		return nil, nil, fmt.Errorf("reconcile disabled Strategy owners: %w", err)
 	}
+	if err := service.ReconcileDisabledInstances(ctx); err != nil {
+		return nil, nil, fmt.Errorf("reconcile disabled Strategy instances: %w", err)
+	}
 	if err := eventRuntime.Start(ctx); err != nil {
 		return nil, nil, err
 	}
-	readyConsumer, readyClient, readyErr = newReadyConsumer(ctx, repo, cfg)
+	readyConsumer, readyClient, readyProcessor, readyErr = newReadyConsumer(ctx, repo, cfg)
 	if readyErr != nil {
 		return nil, nil, readyErr
+	}
+	if readyProcessor != nil {
+		scheduler = &strategytrigger.Scheduler{OnError: func(err error) { log.Warnf("strategy scheduled trigger failed: %v", err) }}
+		if err := startScheduleTrigger(ctx, repo, readyProcessor, scheduler); err != nil {
+			return nil, nil, fmt.Errorf("start strategy scheduler: %w", err)
+		}
 	}
 	if _, err := registerMetricsReporter(s); err != nil {
 		return nil, nil, err
@@ -103,6 +121,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 			}
 			if err := service.ReconcileDisabledOwners(reconcileCtx); err != nil {
 				log.Warnf("strategy disabled owner reconciliation pending: %v", err)
+			}
+			if err := service.ReconcileDisabledInstances(reconcileCtx); err != nil {
+				log.Warnf("strategy disabled instance reconciliation pending: %v", err)
 			}
 			select {
 			case <-reconcileCtx.Done():
@@ -129,6 +150,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		}
 		if readyClient != nil {
 			_ = readyClient.Close()
+		}
+		if scheduler != nil {
+			scheduler.Stop()
 		}
 		dbErr := db.Close()
 		if eventBusErr != nil {
@@ -165,19 +189,34 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime,
 	})
 }
 
-func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config) (*strategyeventconsumer.Consumer, *jetstream.Client, error) {
+func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config) (*strategyeventconsumer.Consumer, *jetstream.Client, *strategytrigger.Processor, error) {
 	if strings.TrimSpace(cfg.Factor.Target) == "" || strings.TrimSpace(cfg.Storage.Target) == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	client, err := connectEventBus(ctx, cfg)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	reader := newStorageReader(cfg)
 	compilerFactory := newCompilerFactory(cfg)
 	logicalOwner := newLogicalAccountOwnerClient(cfg.LogicalAccountTarget, cfg.LogicalAccountTimeout)
+	poolRegistry := defaultPoolRegistry()
 	processor := &strategytrigger.Processor{
-		Inbox: repo, Store: repo, Loader: storageio.Loader{Reader: reader},
+		Inbox: repo, Store: repo, Loader: storageio.Loader{Reader: reader}, PoolRegistry: poolRegistry,
+		Compile: func(compileCtx context.Context, dsl config.DSL, spaceID string) (compiler.CompiledStrategy, error) {
+			selected := compilerFactory(spaceID)
+			if selected == nil {
+				return compiler.CompiledStrategy{}, fmt.Errorf("strategy compiler is not configured")
+			}
+			return selected.Compile(compileCtx, dsl, spaceID)
+		},
+		CompileWithBindings: func(compileCtx context.Context, dsl config.DSL, spaceID string, raw json.RawMessage) (compiler.CompiledStrategy, error) {
+			selected := compilerFactory(spaceID)
+			if selected == nil {
+				return compiler.CompiledStrategy{}, fmt.Errorf("strategy compiler is not configured")
+			}
+			return selected.CompileWithBindings(compileCtx, dsl, spaceID, raw)
+		},
 		OwnerGeneration: logicalOwner.Generation,
 		VerifyDependencies: func(ctx context.Context, compiled compiler.CompiledStrategy) error {
 			dependencyCompiler := compilerFactory(compiled.SpaceID)
@@ -190,9 +229,130 @@ func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config) (*stra
 	consumer := strategyeventconsumer.New(strategyeventconsumer.Config{Client: client, ConsumerName: cfg.EventBus.ConsumerName}, processor)
 	if err := consumer.Start(ctx); err != nil {
 		_ = client.Close()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return consumer, client, nil
+	return consumer, client, processor, nil
+}
+
+func defaultPoolRegistry() *input.UDFRegistry {
+	registry := input.NewUDFRegistry()
+	// The built-in pool is intentionally small and deterministic: it filters
+	// the frozen subject directory only, never calling Factor/Trade or an
+	// external service. User code can register additional UDFs in embedded
+	// deployments before constructing a Processor.
+	_ = registry.RegisterValidated("spot_symbols", validateSpotSymbolsParams, func(_ context.Context, in input.PoolUDFInput) ([]string, error) {
+		quote, _ := in.Params["quote_asset"].(string)
+		quote = strings.ToUpper(strings.TrimSpace(quote))
+		ids := make([]string, 0, len(in.Subjects))
+		for _, subject := range in.Subjects {
+			if !subject.Active || (subject.Market != "" && !strings.EqualFold(subject.Market, "spot")) {
+				continue
+			}
+			if quote != "" && !strings.EqualFold(subject.QuoteAsset, quote) {
+				continue
+			}
+			ids = append(ids, subject.InstrumentID)
+		}
+		return ids, nil
+	})
+	_ = registry.RegisterValidated("all_symbols", validateNoPoolParams, func(_ context.Context, in input.PoolUDFInput) ([]string, error) {
+		ids := make([]string, 0, len(in.Subjects))
+		for _, subject := range in.Subjects {
+			if subject.Active {
+				ids = append(ids, subject.InstrumentID)
+			}
+		}
+		return ids, nil
+	})
+	return registry
+}
+
+func validateSpotSymbolsParams(params map[string]any) error {
+	for key, value := range params {
+		if key != "quote_asset" {
+			return fmt.Errorf("unsupported parameter %q", key)
+		}
+		quote, ok := value.(string)
+		if !ok || strings.TrimSpace(quote) == "" {
+			return errors.New("quote_asset must be a non-empty string")
+		}
+	}
+	return nil
+}
+
+func validateNoPoolParams(params map[string]any) error {
+	if len(params) != 0 {
+		return errors.New("parameters are not supported")
+	}
+	return nil
+}
+
+func startScheduleTrigger(ctx context.Context, repo *store.Store, processor *strategytrigger.Processor, scheduler *strategytrigger.Scheduler) error {
+	return scheduler.StartDynamic(ctx, time.Minute, func(loadCtx context.Context) ([]strategytrigger.ScheduleJob, error) {
+		instances, err := repo.ListAllInstances(loadCtx, boolPtr(true))
+		if err != nil {
+			return nil, err
+		}
+		jobs := make([]strategytrigger.ScheduleJob, 0, len(instances))
+		for _, instance := range instances {
+			definition, err := repo.GetStrategyDefinition(loadCtx, instance.StrategyID)
+			if err != nil {
+				continue
+			}
+			dsl, err := config.Parse([]byte(definition.DSLYaml))
+			if err != nil || dsl.Triggers.Schedule == nil {
+				continue
+			}
+			viewID := sourceViewID(instance.InputBindingsJSON)
+			if viewID == "" {
+				// Without an explicit source View the loader cannot freeze an
+				// input snapshot, so leave this schedule disabled and visible in
+				// the instance diagnostics rather than guessing a View.
+				continue
+			}
+			instanceCopy, dslCopy := instance, dsl
+			jobs = append(jobs, strategytrigger.ScheduleJob{
+				Cron: dslCopy.Triggers.Schedule.Cron, Timezone: dslCopy.Triggers.Schedule.Timezone,
+				Run: func(runCtx context.Context, at time.Time) error {
+					period, err := input.ClosedPeriod(dslCopy.Data.Calendar, dslCopy.Data.Bar, at)
+					if err != nil {
+						return err
+					}
+					return processor.Handle(runCtx, strategytrigger.PeriodReady{
+						MessageID: fmt.Sprintf("schedule/%s/%d", instanceCopy.InstanceID, period.BarEnd.UnixMilli()),
+						EventName: "strategy.schedule", SpaceID: instanceCopy.SpaceID, ViewID: viewID,
+						Frequency: dslCopy.Data.Bar, PeriodTime: period.StorageStart, StoragePeriodTime: period.StorageStart, BarEndTime: period.BarEnd, Status: "complete",
+						ReadyViewIDs: []string{viewID}, TargetInstanceID: instanceCopy.InstanceID,
+					})
+				},
+			})
+		}
+		return jobs, nil
+	})
+}
+
+func boolPtr(value bool) *bool { return &value }
+
+func sourceViewID(raw json.RawMessage) string {
+	var binding struct {
+		SourceViewID string `json:"source_view_id"`
+		ViewID       string `json:"view_id"`
+	}
+	if json.Unmarshal(raw, &binding) != nil {
+		return ""
+	}
+	if strings.TrimSpace(binding.SourceViewID) != "" {
+		return strings.TrimSpace(binding.SourceViewID)
+	}
+	return strings.TrimSpace(binding.ViewID)
+}
+
+func scheduledBar(calendar, bar string, at time.Time) (time.Time, error) {
+	period, err := input.ClosedPeriod(calendar, bar, at)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return period.BarEnd, nil
 }
 
 func connectEventBus(ctx context.Context, cfg Config) (*jetstream.Client, error) {
@@ -220,7 +380,7 @@ func newStorageReader(cfg Config) *storageio.RPCClient {
 func newRPCService(repo *store.Store, cfg Config) *rpc.Service {
 	compilerFactory := newCompilerFactory(cfg)
 	return &rpc.Service{
-		Repo: repo, Registry: &registry.Service{Repo: repo}, CompilerFactory: compilerFactory,
+		Repo: repo, Registry: &registry.Service{Repo: repo}, CompilerFactory: compilerFactory, PoolRegistry: defaultPoolRegistry(),
 		LogicalAccounts: newLogicalAccountOwnerClient(
 			cfg.LogicalAccountTarget,
 			cfg.LogicalAccountTimeout,

@@ -20,6 +20,8 @@ import (
 var (
 	ErrExecutorConfig = errors.New("trade target: executor is not configured")
 	ErrInvalidTarget  = errors.New("trade target: invalid target")
+	ErrTargetExpired  = errors.New("trade target: target validity window elapsed")
+	ErrTargetSession  = errors.New("trade target: target session authorization changed")
 )
 
 const (
@@ -95,6 +97,12 @@ func (e *Executor) Converge(
 	if err != nil {
 		return Result{}, err
 	}
+	if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
+		// Expiry is a normal terminal condition for this target, not a reason to
+		// cancel existing orders or flatten positions. Trade will converge only
+		// after a newer valid target arrives.
+		return Result{Status: StatusPaused}, err
+	}
 	if logicalAccount.AutomationState != "ACTIVE" {
 		orders, _, listErr := e.Store.ListOrders(
 			ctx,
@@ -123,8 +131,12 @@ func (e *Executor) Converge(
 		}
 		return Result{Status: StatusPaused}, nil
 	}
-	if logicalAccount.OwnerRunnerID != target.RunnerID {
-		return Result{}, fmt.Errorf("%w: target runner no longer owns logical account", ErrInvalidTarget)
+	if target.InstanceID == "" {
+		if logicalAccount.OwnerRunnerID != target.RunnerID {
+			return Result{}, fmt.Errorf("%w: target runner no longer owns logical account", ErrInvalidTarget)
+		}
+	} else if logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
+		return Result{}, ErrTargetSession
 	}
 
 	members, err := e.loadMembers(ctx, spaceID, logicalAccountID)
@@ -203,6 +215,9 @@ func (e *Executor) Converge(
 		}
 		switch orderdomain.State(current.State) {
 		case orderdomain.Pending:
+			if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
+				return Result{Status: StatusPaused}, err
+			}
 			if _, err := e.Orders.Submit(ctx, spaceID, current.OrderID); err != nil {
 				if targetSubmitConflict(err) {
 					if _, discardErr := e.Orders.DiscardPending(
@@ -711,6 +726,14 @@ func (e *Executor) placeAction(
 		if err != nil {
 			return false, "", err
 		}
+		if target.InstanceID != "" {
+			if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{
+				SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID,
+				OwnerInstanceID: target.InstanceID, OwnerSessionID: target.SessionID,
+			}, target); err != nil {
+				return false, "", err
+			}
+		}
 		if e.MaxChildNotional.Cmp(shared.Zero()) > 0 {
 			maxQuantity := floorToStep(
 				e.MaxChildNotional.Div(quote.Price),
@@ -786,6 +809,42 @@ func (e *Executor) placeAction(
 	}
 	return false, "insufficient member capacity: " +
 		strings.Join(capacityErrors, "; "), nil
+}
+
+func (e *Executor) checkTargetExecutable(
+	ctx context.Context,
+	logicalAccount store.LogicalAccountRecord,
+	target store.LogicalAccountTargetRecord,
+) error {
+	if target.InstanceID == "" && target.SessionID == "" && target.ValidUntil == 0 {
+		if logicalAccount.OwnerRunnerID != "" && target.RunnerID != logicalAccount.OwnerRunnerID {
+			return ErrTargetSession
+		}
+		return nil
+	}
+	if target.InstanceID == "" || target.SessionID == "" || target.StrategyID == "" ||
+		target.BarEndTime <= 0 || target.EffectiveAt != target.BarEndTime || target.ValidUntil <= target.EffectiveAt {
+		return ErrInvalidTarget
+	}
+	// Always re-read the authorization immediately before an order can be
+	// submitted. The initial Converge snapshot protects the read path; this
+	// second read closes the authorization-change window during quote/prepare.
+	fresh, err := e.Store.GetLogicalAccount(ctx, logicalAccount.SpaceID, logicalAccount.LogicalAccountID)
+	if err != nil {
+		return err
+	}
+	logicalAccount = fresh
+	if logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
+		return ErrTargetSession
+	}
+	now := time.Now().UTC()
+	if e.Now != nil {
+		now = e.Now().UTC()
+	}
+	if now.Before(time.UnixMilli(target.EffectiveAt).UTC()) || !now.Before(time.UnixMilli(target.ValidUntil).UTC()) {
+		return ErrTargetExpired
+	}
+	return nil
 }
 
 func belowMinimumNotional(

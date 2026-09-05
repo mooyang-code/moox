@@ -87,7 +87,7 @@ export const staticRoutes = [
         meta: { title: "strategy-running" }
       },
       {
-        path: "/strategy/detail/:runnerId",
+        path: "/strategy/detail/:instanceId",
         name: "strategy-detail",
         component: () => import("@/views/strategy/detail/index.vue"),
         meta: { title: "strategy-detail", hide: true }

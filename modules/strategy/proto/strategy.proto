@@ -23,6 +23,20 @@ message Strategy {
   string created_at = 6;
   string kind = 7;
   string compiled_json = 8;
+  string dsl_yaml = 9;
+  string strategy_name = 10;
+}
+
+message StrategyInstance {
+  string instance_id = 1;
+  string strategy_id = 2;
+  string space_id = 3;
+  string input_bindings_json = 4;
+  string logical_account_id = 5;
+  bool enabled = 6;
+  string session_id = 7;
+  string created_at = 8;
+  string updated_at = 9;
 }
 
 message StrategyRunner {
@@ -58,6 +72,11 @@ message StrategyResult {
   string period_time = 11;
   repeated InstrumentTarget targets = 12;
   string debug_info_json = 13;
+  string instance_id = 14;
+  string session_id = 15;
+  string valid_until = 16;
+  string publish_status = 17;
+  string rule_states_json = 18;
 }
 
 message PageRequest {
@@ -70,6 +89,16 @@ message CreateStrategyReq {
 }
 
 message CreateStrategyRsp {
+  common.RetInfo ret_info = 1;
+  Strategy strategy = 2;
+}
+
+message UpdateStrategyReq {
+  string strategy_id = 1;
+  string dsl_yaml = 2;
+}
+
+message UpdateStrategyRsp {
   common.RetInfo ret_info = 1;
   Strategy strategy = 2;
 }
@@ -150,6 +179,8 @@ message SetRunnerStatusRsp {
 message ListStrategyResultsReq {
   PageRequest page = 1;
   string runner_id = 2;
+  string instance_id = 3;
+  string session_id = 4;
 }
 
 message ListStrategyResultsRsp {
@@ -171,16 +202,30 @@ message GetStrategyResultRsp {
 
 message ListStrategyTargetsReq {
   string runner_id = 1;
+  string instance_id = 2;
 }
 
 message ListStrategyTargetsRsp {
   common.RetInfo ret_info = 1;
   repeated InstrumentTarget targets = 2;
   int64 command_sequence = 3;
+  string session_id = 4;
+  string bar_end_time = 5;
+  string valid_until = 6;
 }
+
+message CreateStrategyInstanceReq { StrategyInstance instance = 1; }
+message CreateStrategyInstanceRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
+message GetStrategyInstanceReq { string instance_id = 1; }
+message GetStrategyInstanceRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
+message ListStrategyInstancesReq { PageRequest page = 1; string strategy_id = 2; string space_id = 3; optional bool enabled = 4; }
+message ListStrategyInstancesRsp { common.RetInfo ret_info = 1; repeated StrategyInstance instances = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
+message SetStrategyInstanceEnabledReq { string instance_id = 1; bool enabled = 2; }
+message SetStrategyInstanceEnabledRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
 
 service StrategyMgr {
   rpc CreateStrategy(CreateStrategyReq) returns (CreateStrategyRsp);
+  rpc UpdateStrategy(UpdateStrategyReq) returns (UpdateStrategyRsp);
   rpc GetStrategy(GetStrategyReq) returns (GetStrategyRsp);
   rpc ListStrategies(ListStrategiesReq) returns (ListStrategiesRsp);
   rpc CreateRunner(CreateRunnerReq) returns (CreateRunnerRsp);
@@ -191,4 +236,8 @@ service StrategyMgr {
   rpc ListStrategyResults(ListStrategyResultsReq) returns (ListStrategyResultsRsp);
   rpc GetStrategyResult(GetStrategyResultReq) returns (GetStrategyResultRsp);
   rpc ListStrategyTargets(ListStrategyTargetsReq) returns (ListStrategyTargetsRsp);
+  rpc CreateStrategyInstance(CreateStrategyInstanceReq) returns (CreateStrategyInstanceRsp);
+  rpc GetStrategyInstance(GetStrategyInstanceReq) returns (GetStrategyInstanceRsp);
+  rpc ListStrategyInstances(ListStrategyInstancesReq) returns (ListStrategyInstancesRsp);
+  rpc SetStrategyInstanceEnabled(SetStrategyInstanceEnabledReq) returns (SetStrategyInstanceEnabledRsp);
 }

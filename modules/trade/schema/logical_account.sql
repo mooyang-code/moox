@@ -4,6 +4,12 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
     c_name TEXT NOT NULL,
     c_owner_runner_id TEXT,
     c_owner_claimed_at INTEGER NOT NULL DEFAULT 0,
+    -- Strategy instances use an explicit lifecycle identity. The runner
+    -- columns above remain as a source-compatibility bridge for old console
+    -- clients, but new target acceptance never relies on them.
+    c_owner_instance_id TEXT,
+    c_owner_session_id TEXT,
+    c_auth_fence TEXT NOT NULL DEFAULT '',
     c_execution_mode TEXT NOT NULL,
     c_market_type TEXT NOT NULL,
     c_settlement_asset TEXT NOT NULL,
@@ -52,6 +58,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_owner_runner
 ON t_logical_accounts (c_space_id, c_owner_runner_id)
 WHERE c_owner_runner_id IS NOT NULL;
 
+CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_owner_instance
+ON t_logical_accounts (c_space_id, c_owner_instance_id)
+WHERE c_owner_instance_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS t_logical_account_owner_rebinds (
     c_space_id TEXT NOT NULL,
     c_logical_account_id TEXT NOT NULL,
@@ -75,6 +85,12 @@ CREATE TABLE IF NOT EXISTS t_logical_account_targets (
     c_target_id TEXT NOT NULL,
     c_runner_id TEXT NOT NULL,
     c_command_sequence INTEGER NOT NULL,
+    c_instance_id TEXT NOT NULL DEFAULT '',
+    c_session_id TEXT NOT NULL DEFAULT '',
+    c_strategy_id TEXT NOT NULL DEFAULT '',
+    c_bar_end_time INTEGER NOT NULL DEFAULT 0,
+    c_effective_at INTEGER NOT NULL DEFAULT 0,
+    c_valid_until INTEGER NOT NULL DEFAULT 0,
     c_targets_json TEXT NOT NULL,
     c_status TEXT NOT NULL,
     c_blocked_targets_json TEXT NOT NULL DEFAULT '[]',
@@ -87,6 +103,10 @@ CREATE TABLE IF NOT EXISTS t_logical_account_targets (
         REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
         ON DELETE CASCADE,
     CHECK (c_command_sequence > 0),
+    CHECK ((c_instance_id = '' AND c_session_id = '') OR
+           (c_instance_id <> '' AND c_session_id <> '' AND
+            c_strategy_id <> '' AND c_bar_end_time > 0 AND
+            c_effective_at = c_bar_end_time AND c_valid_until > c_effective_at)),
     CHECK (c_status IN ('PENDING', 'CONVERGING', 'CONVERGED', 'BLOCKED')),
     CHECK (json_valid(c_targets_json)),
     CHECK (json_type(c_targets_json) = 'array'),

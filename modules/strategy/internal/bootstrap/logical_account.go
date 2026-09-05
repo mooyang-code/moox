@@ -194,6 +194,71 @@ func (c *logicalAccountOwnerClient) Release(
 	return nil
 }
 
+func (c *logicalAccountOwnerClient) ClaimSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error {
+	if err := validateLogicalAccountIdentity(spaceID, logicalAccountID, instanceID, true); err != nil {
+		return err
+	}
+	expectedFence, err := c.readAuthFence(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return err
+	}
+	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	response, err := c.client.ClaimLogicalAccountOwner(callCtx, &tradepb.ClaimLogicalAccountOwnerReq{LogicalAccountId: logicalAccountID, InstanceId: instanceID, SessionId: sessionID, ExpectedAuthFence: expectedFence}, opts...)
+	if err != nil {
+		return c.transportError(callCtx, "claim session", err)
+	}
+	if response.GetRetInfo().GetCode() != 0 {
+		return fmt.Errorf("Trade claim session failed: %s", response.GetRetInfo().GetMsg())
+	}
+	if response.GetLogicalAccount().GetOwnerInstanceId() != instanceID || response.GetLogicalAccount().GetOwnerSessionId() != sessionID {
+		return errors.New("Trade claim session returned mismatched owner")
+	}
+	return nil
+}
+
+func (c *logicalAccountOwnerClient) ReleaseSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error {
+	if err := validateLogicalAccountIdentity(spaceID, logicalAccountID, instanceID, true); err != nil {
+		return err
+	}
+	expectedFence, err := c.readAuthFence(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return err
+	}
+	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	response, err := c.client.ReleaseLogicalAccountOwner(callCtx, &tradepb.ReleaseLogicalAccountOwnerReq{LogicalAccountId: logicalAccountID, InstanceId: instanceID, SessionId: sessionID, ExpectedAuthFence: expectedFence}, opts...)
+	if err != nil {
+		return c.transportError(callCtx, "release session", err)
+	}
+	if response.GetRetInfo().GetCode() != 0 {
+		return fmt.Errorf("Trade release session failed: %s", response.GetRetInfo().GetMsg())
+	}
+	return nil
+}
+
+func (c *logicalAccountOwnerClient) readAuthFence(ctx context.Context, spaceID, logicalAccountID string) (string, error) {
+	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	if err != nil {
+		return "", err
+	}
+	defer cancel()
+	response, err := c.client.GetLogicalAccount(callCtx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalAccountID}, opts...)
+	if err != nil {
+		return "", c.transportError(callCtx, "read auth fence", err)
+	}
+	if err := validateLogicalAccountResponse("read auth fence", spaceID, logicalAccountID, "", response.GetRetInfo(), response.GetLogicalAccount()); err != nil {
+		return "", err
+	}
+	return response.GetLogicalAccount().GetAuthFence(), nil
+}
+
 // Rebind starts a fresh Trade owner lifecycle without releasing the current
 // owner. This fences delayed targets when an archived V1 runner is reused by
 // a V2 runner with the same identity.

@@ -84,7 +84,7 @@ func matches(rule config.InstrumentPoolRule, subject Subject, include, exclude m
 	if _, ok := exclude[instrumentID]; ok {
 		return false
 	}
-	if len(include) > 0 {
+	if rule.IncludeSet || len(include) > 0 {
 		if _, ok := include[instrumentID]; !ok {
 			return false
 		}

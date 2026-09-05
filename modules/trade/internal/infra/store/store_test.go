@@ -233,3 +233,97 @@ VALUES ('space', 'owned', 'owned', 'runner', 'PAPER', 'SPOT', 'USDT', 'PAUSED', 
 	require.NoError(t, err)
 	require.NoError(t, reopened.Close())
 }
+
+func TestOpenMigratesLegacyStrategyTargetTables(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-targets.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(legacyLogicalAccountTableSQL).Error)
+	require.NoError(t, db.Exec(`
+CREATE UNIQUE INDEX ux_logical_account_owner_runner
+ON t_logical_accounts (c_space_id, c_owner_runner_id)
+WHERE c_owner_runner_id IS NOT NULL`).Error)
+	require.NoError(t, db.Exec(`
+CREATE TABLE t_logical_account_targets (
+    c_space_id TEXT NOT NULL,
+    c_logical_account_id TEXT NOT NULL,
+    c_target_id TEXT NOT NULL,
+    c_runner_id TEXT NOT NULL,
+    c_command_sequence INTEGER NOT NULL,
+    c_targets_json TEXT NOT NULL,
+    c_status TEXT NOT NULL,
+    c_blocked_targets_json TEXT NOT NULL DEFAULT '[]',
+    c_last_error TEXT NOT NULL DEFAULT '',
+    c_accepted_at INTEGER NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_logical_account_id),
+    UNIQUE (c_space_id, c_target_id),
+    FOREIGN KEY (c_space_id, c_logical_account_id)
+        REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
+        ON DELETE CASCADE,
+    CHECK (c_command_sequence > 0),
+    CHECK (c_status IN ('PENDING', 'CONVERGING', 'CONVERGED', 'BLOCKED')),
+    CHECK (json_valid(c_targets_json)),
+    CHECK (json_type(c_targets_json) = 'array'),
+    CHECK (json_valid(c_blocked_targets_json)),
+    CHECK (json_type(c_blocked_targets_json) = 'array')
+)`).Error)
+	require.NoError(t, db.Exec(`
+CREATE TABLE t_logical_account_target_receipts (
+    c_space_id TEXT NOT NULL,
+    c_target_id TEXT NOT NULL,
+    c_runner_id TEXT NOT NULL,
+    c_logical_account_id TEXT NOT NULL,
+    c_command_sequence INTEGER NOT NULL,
+    c_request_hash TEXT NOT NULL,
+    c_signal_time INTEGER NOT NULL,
+    c_weights_json TEXT NOT NULL,
+    c_equity TEXT NOT NULL,
+    c_equity_source_time INTEGER NOT NULL,
+    c_reference_prices_json TEXT NOT NULL,
+    c_quantity_targets_json TEXT NOT NULL,
+    c_accepted_at INTEGER NOT NULL,
+    PRIMARY KEY (c_space_id, c_target_id),
+    UNIQUE (c_space_id, c_logical_account_id, c_runner_id, c_command_sequence),
+    FOREIGN KEY (c_space_id, c_logical_account_id)
+        REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
+        ON DELETE CASCADE,
+    CHECK (c_command_sequence > 0),
+    CHECK (json_valid(c_weights_json)),
+    CHECK (json_type(c_weights_json) = 'array'),
+    CHECK (json_valid(c_reference_prices_json)),
+    CHECK (json_type(c_reference_prices_json) = 'object'),
+    CHECK (json_valid(c_quantity_targets_json)),
+    CHECK (json_type(c_quantity_targets_json) = 'array')
+)`).Error)
+	require.NoError(t, db.Exec(`
+INSERT INTO t_logical_accounts
+ (c_space_id, c_logical_account_id, c_name, c_execution_mode, c_market_type, c_settlement_asset, c_automation_state, c_pause_reason)
+VALUES ('space', 'logical', 'legacy', 'PAPER', 'SPOT', 'USDT', 'PAUSED', 'legacy')`).Error)
+	require.NoError(t, db.Exec(`
+INSERT INTO t_logical_account_targets
+ (c_space_id, c_logical_account_id, c_target_id, c_runner_id, c_command_sequence,
+  c_targets_json, c_status, c_blocked_targets_json, c_accepted_at)
+VALUES ('space', 'logical', 'target-1', 'runner', 1, '[]', 'PENDING', '[]', 1)`).Error)
+	require.NoError(t, db.Exec(`
+INSERT INTO t_logical_account_target_receipts
+ (c_space_id, c_target_id, c_runner_id, c_logical_account_id, c_command_sequence,
+  c_request_hash, c_signal_time, c_weights_json, c_equity, c_equity_source_time,
+  c_reference_prices_json, c_quantity_targets_json, c_accepted_at)
+VALUES ('space', 'target-1', 'runner', 'logical', 1, 'hash', 1, '[]', '1', 1, '{}', '[]', 1)`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	s, err := Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	for _, table := range []string{"t_logical_account_targets", "t_logical_account_target_receipts"} {
+		var count int64
+		require.NoError(t, s.db.Raw(`SELECT COUNT(*) FROM `+table).Scan(&count).Error)
+		require.Equal(t, int64(1), count, table)
+		var columns []string
+		require.NoError(t, s.db.Raw(`SELECT name FROM pragma_table_info(?)`, table).Scan(&columns).Error)
+		require.Contains(t, columns, "c_instance_id")
+	}
+}

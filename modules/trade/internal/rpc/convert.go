@@ -332,6 +332,9 @@ func logicalAccountToPB(
 		Name:             value.Name,
 		OwnerRunnerId:    value.OwnerRunnerID,
 		OwnerGeneration:  value.OwnerGeneration,
+		OwnerInstanceId:  value.OwnerInstanceID,
+		OwnerSessionId:   value.OwnerSessionID,
+		AuthFence:        value.AuthFence,
 		ExecutionMode:    executionModeToPB(value.ExecutionMode),
 		MarketType:       marketToPB(value.MarketType),
 		SettlementAsset:  value.SettlementAsset,
@@ -424,6 +427,8 @@ func logicalAccountTargetToPB(
 	return &tradepb.LogicalAccountTarget{
 		TargetId: value.TargetID, LogicalAccountId: value.LogicalAccountID,
 		RunnerId: value.RunnerID, CommandSequence: value.CommandSequence,
+		InstanceId: value.InstanceID, SessionId: value.SessionID, StrategyId: value.StrategyID,
+		BarEndTime: value.BarEndTime, EffectiveAt: value.EffectiveAt, ValidUntil: value.ValidUntil,
 		Targets: targets, Status: value.Status, BlockedTargets: blocked,
 		LastError: value.LastError, AcceptedAt: value.AcceptedAt,
 		UpdatedAt: unixMilli(value.UpdatedAt),

@@ -32,13 +32,28 @@ type LogicalAccountTargetRecord struct {
 	TargetID         string
 	RunnerID         string
 	CommandSequence  uint64
-	Targets          []InstrumentTarget
-	Status           string
-	BlockedTargets   []BlockedTarget
-	LastError        string
-	AcceptedAt       int64
-	UpdatedAt        time.Time
+	// Strategy target identity. The fields are authoritative when populated;
+	// RunnerID/CommandSequence are retained for older console fixtures.
+	InstanceID     string
+	SessionID      string
+	StrategyID     string
+	BarEndTime     int64
+	EffectiveAt    int64
+	ValidUntil     int64
+	Targets        []InstrumentTarget
+	Status         string
+	BlockedTargets []BlockedTarget
+	LastError      string
+	AcceptedAt     int64
+	UpdatedAt      time.Time
 }
+
+var (
+	// ErrTargetExpired is returned before any quote/equity or receipt fast path
+	// can accept a target whose validity window has elapsed.
+	ErrTargetExpired       = errors.New("trade store: target expired")
+	ErrTargetAuthorization = errors.New("trade store: target authorization mismatch")
+)
 
 type logicalAccountTargetRow struct {
 	SpaceID            string    `gorm:"column:c_space_id"`
@@ -46,6 +61,12 @@ type logicalAccountTargetRow struct {
 	TargetID           string    `gorm:"column:c_target_id"`
 	RunnerID           string    `gorm:"column:c_runner_id"`
 	CommandSequence    uint64    `gorm:"column:c_command_sequence"`
+	InstanceID         string    `gorm:"column:c_instance_id"`
+	SessionID          string    `gorm:"column:c_session_id"`
+	StrategyID         string    `gorm:"column:c_strategy_id"`
+	BarEndTime         int64     `gorm:"column:c_bar_end_time"`
+	EffectiveAt        int64     `gorm:"column:c_effective_at"`
+	ValidUntil         int64     `gorm:"column:c_valid_until"`
 	TargetsJSON        string    `gorm:"column:c_targets_json"`
 	Status             string    `gorm:"column:c_status"`
 	BlockedTargetsJSON string    `gorm:"column:c_blocked_targets_json"`
@@ -86,8 +107,7 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 		return LogicalAccountTargetRecord{}, false, err
 	}
 	if blank(record.SpaceID) || blank(record.LogicalAccountID) ||
-		blank(record.TargetID) || blank(record.RunnerID) ||
-		record.CommandSequence == 0 || record.CommandSequence > math.MaxInt64 ||
+		blank(record.TargetID) || record.CommandSequence > math.MaxInt64 ||
 		record.AcceptedAt <= 0 || !validLogicalAccountTargetStatus(record.Status) {
 		return LogicalAccountTargetRecord{}, false,
 			fmt.Errorf("%w: incomplete logical account target", ErrInvalidRecord)
@@ -96,9 +116,36 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	if err != nil {
 		return LogicalAccountTargetRecord{}, false, err
 	}
-	if account.OwnerRunnerID != record.RunnerID {
-		return LogicalAccountTargetRecord{}, false,
-			fmt.Errorf("%w: logical account target runner ownership", ErrConflict)
+	newIdentity := record.InstanceID != "" || record.SessionID != "" || record.BarEndTime != 0 || record.ValidUntil != 0
+	if newIdentity {
+		if blank(record.InstanceID) || blank(record.SessionID) || blank(record.StrategyID) ||
+			record.BarEndTime <= 0 || record.EffectiveAt != record.BarEndTime || record.ValidUntil <= record.EffectiveAt {
+			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete target session contract", ErrInvalidRecord)
+		}
+		if record.CommandSequence == 0 {
+			record.CommandSequence = uint64(record.BarEndTime)
+		}
+		if record.RunnerID == "" {
+			record.RunnerID = record.InstanceID
+		}
+		if account.OwnerInstanceID != record.InstanceID || account.OwnerSessionID != record.SessionID {
+			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: logical account target session authorization", ErrTargetAuthorization)
+		}
+		now := time.Now().UTC().UnixMilli()
+		if now < record.EffectiveAt || now >= record.ValidUntil {
+			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: target validity window", ErrTargetExpired)
+		}
+	} else {
+		if blank(record.RunnerID) {
+			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete logical account target", ErrInvalidRecord)
+		}
+		if record.CommandSequence == 0 {
+			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete logical account target", ErrInvalidRecord)
+		}
+		if account.OwnerRunnerID != record.RunnerID {
+			return LogicalAccountTargetRecord{}, false,
+				fmt.Errorf("%w: logical account target runner ownership", ErrConflict)
+		}
 	}
 	if account.MarketType == "SPOT" {
 		for _, target := range record.Targets {
@@ -125,13 +172,15 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 		}
 		same := current.TargetID == record.TargetID &&
 			current.RunnerID == record.RunnerID &&
-			current.CommandSequence == record.CommandSequence &&
+			((newIdentity && current.InstanceID == record.InstanceID && current.SessionID == record.SessionID && current.BarEndTime == record.BarEndTime) ||
+				(!newIdentity && current.CommandSequence == record.CommandSequence)) &&
 			row.TargetsJSON == targetsJSON
 		if same {
 			return current, false, nil
 		}
-		if record.CommandSequence <= current.CommandSequence ||
-			record.TargetID == current.TargetID {
+		if record.TargetID == current.TargetID ||
+			(newIdentity && current.InstanceID == record.InstanceID && current.SessionID == record.SessionID && record.BarEndTime <= current.BarEndTime) ||
+			(!newIdentity && record.CommandSequence <= current.CommandSequence) {
 			return current, false, fmt.Errorf("%w: stale or conflicting logical account target", ErrConflict)
 		}
 	case query.Error != nil && !errors.Is(query.Error, gorm.ErrRecordNotFound):
@@ -141,24 +190,36 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	result := tx.db.Exec(`
 		INSERT INTO t_logical_account_targets (
 			c_space_id, c_logical_account_id, c_target_id, c_runner_id,
-			c_command_sequence, c_targets_json, c_status,
+			c_command_sequence, c_instance_id, c_session_id, c_strategy_id,
+			c_bar_end_time, c_effective_at, c_valid_until,
+			c_targets_json, c_status,
 			c_blocked_targets_json, c_last_error, c_accepted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_logical_account_id) DO UPDATE SET
 			c_target_id = excluded.c_target_id,
 			c_runner_id = excluded.c_runner_id,
 			c_command_sequence = excluded.c_command_sequence,
+			c_instance_id = excluded.c_instance_id,
+			c_session_id = excluded.c_session_id,
+			c_strategy_id = excluded.c_strategy_id,
+			c_bar_end_time = excluded.c_bar_end_time,
+			c_effective_at = excluded.c_effective_at,
+			c_valid_until = excluded.c_valid_until,
 			c_targets_json = excluded.c_targets_json,
 			c_status = excluded.c_status,
 			c_blocked_targets_json = excluded.c_blocked_targets_json,
 			c_last_error = excluded.c_last_error,
 			c_accepted_at = excluded.c_accepted_at,
 			c_mtime = CURRENT_TIMESTAMP
-		WHERE excluded.c_command_sequence >
-			t_logical_account_targets.c_command_sequence
+		WHERE (excluded.c_instance_id <> '' AND
+			excluded.c_bar_end_time > t_logical_account_targets.c_bar_end_time)
+		   OR (excluded.c_instance_id = '' AND
+			excluded.c_command_sequence > t_logical_account_targets.c_command_sequence)
 	`,
 		record.SpaceID, record.LogicalAccountID, record.TargetID, record.RunnerID,
-		record.CommandSequence, targetsJSON, record.Status,
+		record.CommandSequence, record.InstanceID, record.SessionID, record.StrategyID,
+		record.BarEndTime, record.EffectiveAt, record.ValidUntil,
+		targetsJSON, record.Status,
 		blockedJSON, record.LastError, record.AcceptedAt,
 	)
 	if result.Error != nil {
@@ -247,7 +308,7 @@ func (s *Store) UpdateLogicalAccountTargetState(
 	record LogicalAccountTargetRecord,
 ) (bool, error) {
 	if blank(record.SpaceID) || blank(record.LogicalAccountID) ||
-		blank(record.TargetID) || record.CommandSequence == 0 ||
+		blank(record.TargetID) ||
 		!validLogicalAccountTargetStatus(record.Status) {
 		return false, fmt.Errorf("%w: invalid logical account target update", ErrInvalidRecord)
 	}
@@ -255,16 +316,26 @@ func (s *Store) UpdateLogicalAccountTargetState(
 	if err != nil {
 		return false, err
 	}
-	result := s.db.WithContext(ctx).Exec(`
+	where := `c_target_id = ? AND c_command_sequence = ?`
+	args := []any{record.TargetID, record.CommandSequence}
+	if record.InstanceID != "" || record.SessionID != "" {
+		if record.InstanceID == "" || record.SessionID == "" || record.BarEndTime <= 0 || record.ValidUntil <= record.EffectiveAt || record.EffectiveAt != record.BarEndTime {
+			return false, fmt.Errorf("%w: invalid logical account target session update", ErrInvalidRecord)
+		}
+		where = `c_target_id = ? AND c_instance_id = ? AND c_session_id = ? AND c_bar_end_time = ?`
+		args = []any{record.TargetID, record.InstanceID, record.SessionID, record.BarEndTime}
+	}
+	args = append(args, record.SpaceID, record.LogicalAccountID)
+	values := []any{record.Status, blockedJSON, record.LastError, record.SpaceID, record.LogicalAccountID}
+	values = append(values, args[:len(args)-2]...)
+	result := s.db.WithContext(ctx).Exec(fmt.Sprintf(`
 		UPDATE t_logical_account_targets
 		SET c_status = ?, c_blocked_targets_json = ?, c_last_error = ?,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
-			AND c_target_id = ? AND c_command_sequence = ?
-	`,
-		record.Status, blockedJSON, record.LastError,
-		record.SpaceID, record.LogicalAccountID,
-		record.TargetID, record.CommandSequence,
+			AND %s
+	`, where),
+		values...,
 	)
 	if result.Error != nil {
 		return false, result.Error
@@ -287,6 +358,8 @@ func logicalAccountTargetRecord(
 		SpaceID: row.SpaceID, LogicalAccountID: row.LogicalAccountID,
 		TargetID: row.TargetID, RunnerID: row.RunnerID,
 		CommandSequence: row.CommandSequence, Targets: targets,
+		InstanceID: row.InstanceID, SessionID: row.SessionID, StrategyID: row.StrategyID,
+		BarEndTime: row.BarEndTime, EffectiveAt: row.EffectiveAt, ValidUntil: row.ValidUntil,
 		Status: row.Status, BlockedTargets: blocked,
 		LastError: row.LastError, AcceptedAt: row.AcceptedAt,
 		UpdatedAt: row.UpdatedAt,

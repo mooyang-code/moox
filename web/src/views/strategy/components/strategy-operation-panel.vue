@@ -2,10 +2,10 @@
   <div class="operation-bar">
     <span>Runner 控制</span>
     <a-space>
-      <a-popconfirm v-if="status === 'ENABLED'" content="停用后不再计算新目标，确认继续？" @ok="change('DISABLED')">
+      <a-popconfirm v-if="currentEnabled" content="停用后不再计算新目标，确认继续？" @ok="change(false)">
         <a-button status="warning" :loading="loading">停用</a-button>
       </a-popconfirm>
-      <a-popconfirm v-else content="启用时会校验组合账户归属，确认继续？" @ok="change('ENABLED')">
+      <a-popconfirm v-else content="启用时会校验组合账户归属，确认继续？" @ok="change(true)">
         <a-button type="primary" status="success" :loading="loading">启用</a-button>
       </a-popconfirm>
     </a-space>
@@ -13,19 +13,24 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { setRunnerStatus } from "@/api/strategy";
+import { setInstanceEnabled, setRunnerStatus } from "@/api/strategy";
 
-const props = defineProps<{ runnerId: string; status: string }>();
+const props = defineProps<{ runnerId?: string; status?: string; instanceId?: string; enabled?: boolean }>();
 const emit = defineEmits<{ changed: [] }>();
 const loading = ref(false);
+const currentEnabled = computed(() => (props.instanceId ? Boolean(props.enabled) : props.status === "ENABLED"));
 
-async function change(status: "ENABLED" | "DISABLED") {
+async function change(enabled: boolean) {
   loading.value = true;
   try {
-    await setRunnerStatus(props.runnerId, status);
-    Message.success(status === "ENABLED" ? "Runner 已启用" : "Runner 已停用");
+    if (props.instanceId) {
+      await setInstanceEnabled(props.instanceId, enabled);
+    } else if (props.runnerId) {
+      await setRunnerStatus(props.runnerId, enabled ? "ENABLED" : "DISABLED");
+    }
+    Message.success(enabled ? "实例已启用" : "实例已停用");
     emit("changed");
   } finally {
     loading.value = false;

@@ -5,11 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/mooyang-code/moox/packages/report"
 )
 
-// ErrDependencyMismatch marks a permanent change to the metadata frozen in a
-// compiled strategy. Callers should acknowledge these deliveries after
-// recording the failure; errors from dependency RPCs remain retryable.
+// ErrDependencyMismatch marks a permanent change to metadata frozen in an
+// instance binding. RPC and transport errors remain retryable.
 var ErrDependencyMismatch = errors.New("strategy dependency mismatch")
 
 func dependencyMismatch(format string, args ...any) error {
@@ -17,8 +18,7 @@ func dependencyMismatch(format string, args ...any) error {
 }
 
 // DependencyMismatchError preserves a permanent catalog error returned by a
-// remote adapter while allowing the trigger to distinguish it from transport
-// or service-unavailable failures, which remain retryable.
+// remote adapter while allowing callers to classify it separately.
 func DependencyMismatchError(err error) error {
 	if err == nil {
 		return ErrDependencyMismatch
@@ -26,24 +26,26 @@ func DependencyMismatchError(err error) error {
 	return fmt.Errorf("%w: %w", ErrDependencyMismatch, err)
 }
 
-// VerifyDependencies rechecks only the identifiers and schema frozen in a
-// compiled artifact. It deliberately never chooses a replacement Binding.
+// VerifyDependencies rechecks bindings frozen by the instance.  A strategy
+// DSL itself contains logical field names, so the concrete Factor/View
+// binding is supplied by the instance and represented in CompiledStrategy.Factors.
 func (c Compiler) VerifyDependencies(ctx context.Context, compiled CompiledStrategy) error {
+	if len(compiled.Factors) == 0 && strings.TrimSpace(compiled.SourceView.ID) == "" {
+		return nil
+	}
 	if c.Factors == nil || c.Storage == nil {
 		return dependencyMismatch("strategy compiler dependencies are required")
 	}
-	if strings.TrimSpace(compiled.SpaceID) == "" || strings.TrimSpace(compiled.SourceView.ID) == "" {
-		return dependencyMismatch("compiled strategy identity is incomplete")
-	}
-	source, err := c.Storage.GetView(ctx, compiled.SourceView.ID)
-	if err != nil {
-		return fmt.Errorf("verify source view %q: %w", compiled.SourceView.ID, err)
-	}
-	if !isActive(source.Status) {
-		return dependencyMismatch("source view %q is not active", source.ID)
-	}
-	if source.Frequency != "" && compiled.SourceView.Frequency != "" && source.Frequency != compiled.SourceView.Frequency {
-		return dependencyMismatch("source view %q frequency changed", source.ID)
+	if sourceID := strings.TrimSpace(compiled.SourceView.ID); sourceID != "" {
+		source, err := c.Storage.GetView(ctx, sourceID)
+		if err != nil {
+			return fmt.Errorf("verify source view %q: %w", sourceID, err)
+		}
+		compiledFrequency, compiledFrequencyErr := normalizeOptionalFrequency(compiled.SourceView.Frequency)
+		sourceFrequency, sourceFrequencyErr := normalizeOptionalFrequency(source.Frequency)
+		if compiledFrequencyErr != nil || sourceFrequencyErr != nil || !isActive(source.Status) || (compiledFrequency != "" && sourceFrequency != "" && sourceFrequency != compiledFrequency) {
+			return dependencyMismatch("source view %q changed", sourceID)
+		}
 	}
 	for _, factor := range compiled.Factors {
 		descriptor, err := c.Factors.GetFactor(ctx, factor.FactorID)
@@ -63,13 +65,18 @@ func (c Compiler) VerifyDependencies(ctx context.Context, compiled CompiledStrat
 		}
 		found := false
 		for _, binding := range bindings {
-			if binding.ID == factor.BindingID {
-				if !isActive(binding.Status) || binding.FactorID != factor.FactorID || binding.SpaceID != compiled.SpaceID || binding.SourceViewID != compiled.SourceView.ID || binding.Frequency != factor.Frequency || binding.ResultDatasetID != factor.ResultDatasetID || binding.ResultViewID != factor.ResultViewID || binding.SubjectMode != factor.SubjectMode || binding.SubjectsJSON != factor.SubjectsJSON {
-					return dependencyMismatch("binding %q changed", factor.BindingID)
-				}
-				found = true
-				break
+			if binding.ID != factor.BindingID {
+				continue
 			}
+			bindingFrequency, bindingFrequencyErr := normalizeOptionalFrequency(binding.Frequency)
+			factorFrequency, factorFrequencyErr := normalizeOptionalFrequency(factor.Frequency)
+			if !isActive(binding.Status) || binding.FactorID != factor.FactorID || bindingFrequencyErr != nil || factorFrequencyErr != nil || bindingFrequency != factorFrequency ||
+				binding.ResultDatasetID != factor.ResultDatasetID || binding.ResultViewID != factor.ResultViewID ||
+				binding.SubjectMode != factor.SubjectMode || binding.SubjectsJSON != factor.SubjectsJSON {
+				return dependencyMismatch("binding %q changed", factor.BindingID)
+			}
+			found = true
+			break
 		}
 		if !found {
 			return dependencyMismatch("binding %q no longer exists", factor.BindingID)
@@ -78,11 +85,10 @@ func (c Compiler) VerifyDependencies(ctx context.Context, compiled CompiledStrat
 		if err != nil {
 			return fmt.Errorf("verify result view %q: %w", factor.ResultViewID, err)
 		}
-		if !isActive(view.Status) {
-			return dependencyMismatch("result view %q is not active", factor.ResultViewID)
-		}
-		if factor.Frequency != "" && view.Frequency != "" && view.Frequency != factor.Frequency {
-			return dependencyMismatch("result view %q frequency changed", factor.ResultViewID)
+		factorFrequency, factorFrequencyErr := normalizeOptionalFrequency(factor.Frequency)
+		viewFrequency, viewFrequencyErr := normalizeOptionalFrequency(view.Frequency)
+		if !isActive(view.Status) || factorFrequencyErr != nil || viewFrequencyErr != nil || (factorFrequency != "" && viewFrequency != "" && viewFrequency != factorFrequency) {
+			return dependencyMismatch("result view %q changed", factor.ResultViewID)
 		}
 		columns, err := c.Storage.ListViewColumns(ctx, factor.ResultViewID)
 		if err != nil {
@@ -94,6 +100,13 @@ func (c Compiler) VerifyDependencies(ctx context.Context, compiled CompiledStrat
 		}
 	}
 	return nil
+}
+
+func normalizeOptionalFrequency(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", nil
+	}
+	return report.NormalizeDatasetFrequency(value)
 }
 
 func sameStringSet(left, right []string) bool {
@@ -123,4 +136,22 @@ func containsOutput(outputs []string, wanted string) bool {
 		}
 	}
 	return false
+}
+
+func isActive(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "active", "enabled":
+		return true
+	default:
+		return false
+	}
+}
+
+func findFactorColumn(columns []ViewColumn, factorID, output string) (ViewColumn, bool) {
+	for _, column := range columns {
+		if column.Attributes["origin_factor_id"] == factorID && column.Attributes["factor_output"] == output {
+			return column, true
+		}
+	}
+	return ViewColumn{}, false
 }

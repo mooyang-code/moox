@@ -7,26 +7,13 @@ import (
 	"testing"
 )
 
-func TestValidateManifest(t *testing.T) {
+func TestValidateDSL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "strategy.yaml")
-	if err := os.WriteFile(path, []byte(`api_version: moox.strategy/v2
-kind: coin_selection
-input:
-  source_view_id: source
-  data_frequency: 1h
-  factors:
-    - factor_id: Bias
-instrument_pool:
-  markets: [spot]
-long:
-  side_weight: "1"
-  scores:
-    - factor_id: Bias
-      direction: ascending
-      weight: "1"
-  selection:
-    mode: count
-    value: "1"
+	if err := os.WriteFile(path, []byte(`name: momentum
+triggers: {event: {name: source.ready}}
+data: {bar: 1h, calendar: crypto_24x7}
+rules:
+  main: {pool: [BTC-USDT-SPOT], score: close, select: {top: 1}, weight: 1}
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +21,7 @@ long:
 	if err := runCLI([]string{"validate", "--space-id", "space-1", path}, out, errOut); err != nil {
 		t.Fatal(err)
 	}
-	if raw, err := os.ReadFile(out.Name()); err != nil || !strings.Contains(string(raw), "kind=coin_selection") {
+	if raw, err := os.ReadFile(out.Name()); err != nil || !strings.Contains(string(raw), "name=momentum") || strings.Contains(string(raw), "hash=") {
 		t.Fatalf("validate output = %s, err=%v", raw, err)
 	}
 }

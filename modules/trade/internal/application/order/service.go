@@ -22,6 +22,7 @@ var (
 	ErrExternalConflict    = errors.New("trade order: active external order conflicts with target")
 	ErrAutomationPaused    = errors.New("trade order: logical account automation is paused")
 	ErrTargetOwnerConflict = errors.New("trade order: target runner no longer owns logical account")
+	ErrTargetExpired       = errors.New("trade order: target validity window elapsed")
 	ErrAccountNotReady     = errors.New("trade order: exchange account is not ready")
 )
 
@@ -369,9 +370,37 @@ func (s *Service) rejectTargetExternalConflict(
 	if logicalAccount.AutomationState != "ACTIVE" {
 		return ErrAutomationPaused
 	}
-	if logicalAccount.OwnerRunnerID == "" ||
-		logicalAccount.OwnerRunnerID != record.RunnerID {
+	if logicalAccount.OwnerInstanceID != "" {
+		if logicalAccount.OwnerInstanceID != record.RunnerID {
+			return ErrTargetOwnerConflict
+		}
+	} else if logicalAccount.OwnerRunnerID == "" || logicalAccount.OwnerRunnerID != record.RunnerID {
 		return ErrTargetOwnerConflict
+	}
+	// A target order may be prepared long before Submit. Resolve the current
+	// target and re-check its session/validity immediately before the exchange
+	// call so a stale order cannot cross a Strategy lifecycle boundary.
+	currentTarget, targetErr := s.Store.GetLogicalAccountTarget(ctx, record.SpaceID, record.LogicalAccountID)
+	if targetErr != nil {
+		if errors.Is(targetErr, gorm.ErrRecordNotFound) {
+			if logicalAccount.OwnerSessionID != "" {
+				return ErrTargetOwnerConflict
+			}
+		} else {
+			return targetErr
+		}
+	}
+	if targetErr == nil && currentTarget.TargetID != record.OwnerID {
+		return ErrTargetOwnerConflict
+	}
+	if targetErr == nil && currentTarget.InstanceID != "" {
+		if logicalAccount.OwnerInstanceID != currentTarget.InstanceID || logicalAccount.OwnerSessionID != currentTarget.SessionID {
+			return ErrTargetOwnerConflict
+		}
+		now := time.Now().UTC().UnixMilli()
+		if now < currentTarget.EffectiveAt || now >= currentTarget.ValidUntil {
+			return ErrTargetExpired
+		}
 	}
 	records, _, err := s.Store.ListOrders(ctx, record.SpaceID, store.OrderQuery{
 		LogicalAccountID: record.LogicalAccountID,

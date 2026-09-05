@@ -5,11 +5,20 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 )
 
 func strategyProto(value domain.Strategy) *strategypb.Strategy {
-	return &strategypb.Strategy{StrategyId: value.ID, Name: value.Name, Kind: value.Kind, ManifestYaml: value.ManifestYAML, CompiledJson: string(value.CompiledJSON), SourceHash: value.SourceHash, CreatedAt: formatTime(value.CreatedAt)}
+	return &strategypb.Strategy{StrategyId: value.ID, Name: value.Name, StrategyName: value.Name, Kind: value.Kind, ManifestYaml: value.ManifestYAML, DslYaml: value.ManifestYAML, CompiledJson: string(value.CompiledJSON), SourceHash: value.SourceHash, CreatedAt: formatTime(value.CreatedAt)}
+}
+
+func strategyDefinitionProto(value store.StrategyDefinition) *strategypb.Strategy {
+	return &strategypb.Strategy{StrategyId: value.StrategyID, Name: value.StrategyName, StrategyName: value.StrategyName, DslYaml: value.DSLYaml, ManifestYaml: value.DSLYaml, CreatedAt: formatTime(value.CreatedAt)}
+}
+
+func instanceProto(value store.StrategyInstance) *strategypb.StrategyInstance {
+	return &strategypb.StrategyInstance{InstanceId: value.InstanceID, StrategyId: value.StrategyID, SpaceId: value.SpaceID, InputBindingsJson: string(value.InputBindingsJSON), LogicalAccountId: dereference(value.LogicalAccountID), Enabled: value.Enabled, SessionId: dereference(value.SessionID), CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt)}
 }
 
 func runnerProto(value domain.StrategyRunner) *strategypb.StrategyRunner {
@@ -24,6 +33,17 @@ func resultProto(value domain.StrategyResult) *strategypb.StrategyResult {
 		TriggerBarTime: period, InputHash: value.InputHash, Action: string(value.Action),
 		OutputJson: string(value.TargetsJSON), CommandSequence: value.CommandSequence, CreatedAt: formatTime(value.CreatedAt),
 		PeriodTime: period, Targets: decodeTargetProto(value.TargetsJSON), DebugInfoJson: string(value.DebugInfoJSON),
+	}
+}
+
+func modernResultProto(value store.StrategyResult) *strategypb.StrategyResult {
+	return &strategypb.StrategyResult{
+		ResultId: value.ResultID, InstanceId: value.InstanceID, SessionId: value.SessionID,
+		PeriodTime: formatTime(value.BarEndTime), TriggerBarTime: formatTime(value.BarEndTime),
+		ValidUntil: formatTime(value.ValidUntil), Targets: decodeTargetProto(value.TargetsJSON),
+		OutputJson: string(value.TargetsJSON),
+		RuleStatesJson: string(value.RuleStatesJSON), PublishStatus: string(value.PublishStatus),
+		CreatedAt: formatTime(value.CreatedAt),
 	}
 }
 

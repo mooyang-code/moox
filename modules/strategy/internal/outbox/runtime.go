@@ -10,7 +10,6 @@ import (
 )
 
 type RuntimeStore interface {
-	OutboxStore
 	PendingOutboxStats(context.Context) (domain.OutboxStats, error)
 }
 
@@ -19,7 +18,7 @@ type Connector func(context.Context) (JetStreamClient, error)
 type RuntimeConfig struct {
 	Connector         Connector
 	Probe             func(context.Context, JetStreamClient) error
-	Store             RuntimeStore
+	Store             any
 	InstanceID        string
 	RelayInterval     time.Duration
 	ReconnectInterval time.Duration

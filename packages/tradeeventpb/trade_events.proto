@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package trpc.moox.trade.event;
 
+import "google/protobuf/timestamp.proto";
+
 option go_package = "github.com/mooyang-code/moox/packages/tradeeventpb;tradeeventpb";
 
 message InstrumentTarget {
@@ -18,9 +20,6 @@ message LogicalAccountTargetRequested {
   string signal_time = 6;
 }
 
-// LogicalAccountTargetWeightRequested is the versioned Strategy -> Trade
-// contract. It deliberately uses a distinct payload type and event subject so
-// legacy quantity messages cannot be decoded as target weights.
 message InstrumentWeightTarget {
   string instrument_id = 1;
   string target_weight = 2;
@@ -28,10 +27,18 @@ message InstrumentWeightTarget {
 
 message LogicalAccountTargetWeightRequested {
   string target_id = 1;
-  string runner_id = 2;
+  string instance_id = 2;
   string logical_account_id = 3;
-  int64 command_sequence = 4;
+  // Deprecated fields remain only so older in-tree fixtures can be decoded;
+  // validators reject payloads that rely on them without the new identity.
+  int64 command_sequence = 4 [deprecated = true];
   repeated InstrumentWeightTarget targets = 5;
-  string signal_time = 6;
-  int64 owner_generation = 7;
+  string signal_time = 6 [deprecated = true];
+  int64 owner_generation = 7 [deprecated = true];
+  string session_id = 8;
+  string strategy_id = 9;
+  google.protobuf.Timestamp bar_end_time = 10;
+  google.protobuf.Timestamp effective_at = 11;
+  google.protobuf.Timestamp valid_until = 12;
+  string runner_id = 13 [deprecated = true];
 }

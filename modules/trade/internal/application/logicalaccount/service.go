@@ -388,6 +388,82 @@ func (s *Service) ReleaseOwner(
 	return err
 }
 
+// ClaimSession assigns the explicit Strategy instance/session identity used by
+// new target events. It deliberately keeps the old ClaimOwner API intact for
+// console clients while ensuring the new path uses auth_fence CAS semantics.
+func (s *Service) ClaimSession(
+	ctx context.Context,
+	spaceID, logicalAccountID, instanceID, sessionID, expectedFence string,
+) (store.LogicalAccountRecord, string, error) {
+	if s == nil || s.Store == nil {
+		return store.LogicalAccountRecord{}, "", ErrServiceConfig
+	}
+	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	defer unlock()
+	var fence string
+	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		var err error
+		fence, err = tx.ClaimLogicalAccountSession(spaceID, logicalAccountID, instanceID, sessionID, expectedFence)
+		if err != nil {
+			return err
+		}
+		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
+	})
+	if err != nil {
+		return store.LogicalAccountRecord{}, "", err
+	}
+	value, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	return value, fence, err
+}
+
+// RebindSession atomically switches an existing Strategy session. The old
+// target is cleared only when this CAS wins, so a delayed rebind cannot erase
+// a target accepted by a newer session.
+func (s *Service) RebindSession(
+	ctx context.Context,
+	spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence,
+	newInstanceID, newSessionID string,
+) (store.LogicalAccountRecord, string, error) {
+	if s == nil || s.Store == nil {
+		return store.LogicalAccountRecord{}, "", ErrServiceConfig
+	}
+	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	defer unlock()
+	var fence string
+	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		var err error
+		fence, err = tx.RebindLogicalAccountSession(spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID)
+		if err != nil {
+			return err
+		}
+		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
+	})
+	if err != nil {
+		return store.LogicalAccountRecord{}, "", err
+	}
+	value, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	return value, fence, err
+}
+
+// ReleaseSession is a compare-and-set release. A stale session cannot clear
+// a replacement session's authorization or target.
+func (s *Service) ReleaseSession(
+	ctx context.Context,
+	spaceID, logicalAccountID, instanceID, sessionID, expectedFence string,
+) error {
+	if s == nil || s.Store == nil {
+		return ErrServiceConfig
+	}
+	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	defer unlock()
+	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.ReleaseLogicalAccountSession(spaceID, logicalAccountID, instanceID, sessionID, expectedFence); err != nil {
+			return err
+		}
+		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
+	})
+}
+
 func (s *Service) Pause(
 	ctx context.Context,
 	spaceID string,

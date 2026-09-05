@@ -11,10 +11,30 @@
 ## 状态与范围
 
 修订日期：2026-09-05。依据 [策略执行框架设计](../../策略执行框架设计.md)，本文替换原文件中的旧实施步骤，
-保留原路径，避免出现两份并行施工基线。**以下任务均未执行；本轮只修改文档。**
+保留原路径，避免出现两份并行施工基线。当前分支的代码实现与本地验证已完成，尚待正式环境发布；勾选项仅在对应测试和运行验证完成后更新。
+
+本轮实现记录（2026-09-05）：Strategy/Trade 新契约代码已落地。已完成并验证 DSL 解析与 Expr、
+`bars[0]/bars[-1]`、标的池/UDF、前后筛、标准化、top/tail、RuleState、三表存储、异步目标发布、
+session/bar 授权与定时/事件触发；生产适配从实例 `input_bindings_json` 读取 source/factor View。
+验证命令：`go test ./... -count=1`（`modules/strategy`、`modules/trade`）、关键包 `go test -race`，
+`bash scripts/test/e2e/test-deploy-moox-strategy-e2e.sh`，以及
+`bash scripts/test/e2e/test-factor-view-ready-e2e.sh` 均通过。尚未连接真实 Factor/Storage 或生产账户，
+不能把本地 E2E 当作正式环境验证；后续发布记录须补充实际部署目标、版本和读回证据。
+
+补充实现（2026-09-05）：Storage 读取已明确区分 `bar_end_time` 与行键 `BarStart`，事件和定时触发
+分别填充两个时间边界；连续市场按频率换算，`cn_stock` 日线的事件、定时、上一根与有效期统一使用内置交易日历；启用实例要求完整 source View 绑定并
+校验因子绑定字段；表达式声明的当前/前一根 bar 缺字段时严格跳过；定时任务采用有界重试；Trade
+管理调用读取并携带 `auth_fence`，避免迟到的 Claim 复活已取消会话。管理台无结果时不再展示“空 FULL”，
+仍保留旧 Runner 页面兼容路径。上述改动已重新跑完 Strategy/Trade Go 测试、Web Vitest、生产构建和
+Strategy Playwright；Playwright 中一条旧组合账户断言已保留兼容文案。
+
+边界修复（2026-09-05）：分钟单位保持 `m`（不与月份 `M` 混淆），实例/因子绑定频率必须与
+`data.bar` 一致，省略因子频率时继承该周期；多规则的固定池和 Factor `subjects_json` 按规则/标的
+分别做完整性检查，避免不同标的绑定互相阻塞；Pool UDF 在启用时校验注册名称与参数，运行期也拒绝
+非法参数，标的 ID 统一按目录规范化并采用大小写不敏感匹配。
 
 原计划中的已完成勾选、测试、制品和生产部署记录仅适用于旧版实现，保留在 Git 历史中，
-不能证明本计划完成。源码检查确认当前仍是 `moox.strategy/v2` Manifest，而不是下面的新 DSL。
+不能证明本计划完成。源码迁移以新 DSL、三表结果和 session/bar 目标契约为准；兼容字段仅用于过渡编译，不构成旧 DSL 消费路径。
 
 实施边界：
 
@@ -24,8 +44,9 @@
 - 不重做已有 Collector 标的规范化、Factor catalog 与因子公式；不增加 FactorInstance。
 - 不全仓机械替换 Spec。确实表示定义的对象用 Def，Binding、Request、Params、Config 保持其含义。
 - 本计划不授权生产部署、清库、修改账户或实际下单；这些操作需另行确认。
-- 协议不提供旧 DSL 兼容分支；新旧权重协议不能同时消费。切换前停用相关实例、
-  隔离旧 outbox/消息及旧消费进程，再协调升级；不在启动时自动删除用户数据库。
+- 新客户端只使用 session/bar 目标契约；当前保留一个仅供旧 Runner 调用方过渡的 legacy adapter，
+  它使用独立的旧事件形状，不能与现代 session 事件混用同一实例。迁移完成后停用相关实例、
+  隔离旧 outbox/消息及旧消费进程，再移除该 adapter；不在启动时自动删除用户数据库。
 - 不把当前 Trade 首次换算回执当作 Strategy 的业务要求。本轮复用 Trade 的现有数量执行链，
   保留消息一致性与执行幂等保护，不扩展一套新的交易换算引擎。
 
@@ -507,11 +528,12 @@ message LogicalAccountTargetWeightRequested {
 
 - [ ] 保留现有 `event.trade.target.weight_requested@1` 事件名、MOOX_TRADE stream 和
   `trade_target_weight_v1` durable，不为 DSL 去版本化另造 subject；
-  这不表示支持旧 payload，新验证器必须拒绝缺少运行身份/期限的消息。
+  现代消息必须包含运行身份/期限；仅 legacy adapter 产生的旧 Runner 消息走显式兼容分支，
+  不得被新实例或新客户端使用。
   同步 Strategy 序列化、冻结 event_data、事件验证、Proto、RPC 中的目标展示、Trade schema 和 row 映射；
   字段 2 从 runner_id 改名为 instance_id，8 使用 session_id，目标事件的 event_id/target_id 均为 result_id。
-- [ ] 增加旧 wire fixture 解码测试：旧 payload 即使解码成功，仍因缺少 session_id 和期限被新验证器拒绝；
-  不添加旧字段到新字段的转换分支，也不只测新结构自己序列化后的往返。
+- [ ] 增加旧 wire fixture 解码测试：现代路径拒绝缺少 session_id 和期限的消息，legacy adapter 仅在
+  旧 Runner 兼容测试中接受；不添加旧字段到新字段的隐式转换，也不只测新结构自己序列化后的往返。
 - [ ] 接收严格执行第 1.5 节：授权/期限/周期检查先于 receipt 快路径和权益/报价读取，
   事务内再次校验，防止转换期间授权改变或目标到期。
   receipt 唯一周期键包含 space、logical_account、instance、session、bar_end_time，target_id 同样唯一。

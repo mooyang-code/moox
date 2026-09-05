@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { callControl } = vi.hoisted(() => ({ callControl: vi.fn() }));
 vi.mock("@/api/admin/http", () => ({ callControl }));
 
-import { listRunners, listStrategies, listStrategyResults, listStrategyTargets, setRunnerStatus } from "./strategy";
+import { createInstance, listInstances, listRunners, listStrategies, listStrategyResults, listStrategyTargets, setInstanceEnabled, setRunnerStatus } from "./strategy";
 
 describe("strategy API", () => {
   beforeEach(() => callControl.mockReset());
@@ -48,5 +48,22 @@ describe("strategy API", () => {
       runner_id: "runner-1",
       status: "ENABLED"
     });
+  });
+
+  it("uses instance/session fields for the modern strategy contract", async () => {
+    callControl
+      .mockResolvedValueOnce({ instance: { instance_id: "i-1", strategy_id: "s-1", space_id: "space-1", input_bindings_json: "{}", enabled: false } })
+      .mockResolvedValueOnce({ instances: [{ instance_id: "i-1", enabled: true }], total: 1 })
+      .mockResolvedValueOnce({ instance: { instance_id: "i-1", enabled: true, session_id: "session-1" } });
+    await createInstance({ instance_id: "i-1", strategy_id: "s-1", space_id: "space-1", input_bindings_json: "{}", logical_account_id: "", enabled: false });
+    await listInstances({ strategy_id: "s-1", space_id: "space-1", enabled: true });
+    await setInstanceEnabled("i-1", true);
+    expect(callControl).toHaveBeenNthCalledWith(1, "strategy", "CreateStrategyInstance", {
+      instance: { instance_id: "i-1", strategy_id: "s-1", space_id: "space-1", input_bindings_json: "{}", logical_account_id: "", enabled: false }
+    });
+    expect(callControl).toHaveBeenNthCalledWith(2, "strategy", "ListStrategyInstances", {
+      page: { page: 1, page_size: 20 }, strategy_id: "s-1", space_id: "space-1", enabled: true
+    });
+    expect(callControl).toHaveBeenNthCalledWith(3, "strategy", "SetStrategyInstanceEnabled", { instance_id: "i-1", enabled: true });
   });
 });

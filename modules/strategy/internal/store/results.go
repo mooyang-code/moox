@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -15,9 +14,9 @@ import (
 	"gorm.io/gorm"
 )
 
-var ErrLogicalResultConflict = errors.New("strategy result logical key is invalid")
-var ErrRunnerNotEnabled = errors.New("strategy runner must be enabled to accept an evaluation")
-
+// The legacy request/result names remain as adapters while callers migrate to
+// CommitResult and the instance-scoped result model. They do not reintroduce
+// the old database columns.
 type CommitEvaluationRequest struct {
 	Result          domain.StrategyResult
 	Evaluation      domain.Evaluation
@@ -29,166 +28,80 @@ type CommitEvaluationOutcome struct {
 	Created bool
 }
 
-// CommitEvaluation atomically stores the latest result for a runner/strategy/
-// period and, for a rebalance, advances the runner and appends one outbox
-// event. A changed input hash is deliberately latest-wins for the same period.
+var ErrLogicalResultConflict = errors.New("strategy result logical key is invalid")
+var ErrRunnerNotEnabled = errors.New("strategy instance must be enabled to accept an evaluation")
+
 func (s *Store) CommitEvaluation(ctx context.Context, request CommitEvaluationRequest) (CommitEvaluationOutcome, error) {
-	if err := validateCommitEvaluationRequest(request); err != nil {
+	legacy := request.Result
+	if strings.TrimSpace(legacy.RunnerID) == "" || strings.TrimSpace(legacy.StrategyID) == "" {
+		return CommitEvaluationOutcome{}, errors.New("strategy evaluation identity is incomplete")
+	}
+	instance, err := s.GetInstance(ctx, legacy.RunnerID)
+	if err != nil {
 		return CommitEvaluationOutcome{}, err
 	}
-	var outcome CommitEvaluationOutcome
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var runner runnerRow
-		if err := tx.Table("t_strategy_runners").Where("runner_id = ?", request.Result.RunnerID).Take(&runner).Error; err != nil {
-			return err
+	if !instance.Enabled || instance.SessionID == nil {
+		return CommitEvaluationOutcome{}, ErrRunnerNotEnabled
+	}
+	targets, ruleStates, err := encodeLegacyEvaluation(request.Evaluation)
+	if err != nil {
+		return CommitEvaluationOutcome{}, err
+	}
+	snapshot := json.RawMessage(fmt.Sprintf(`{"strategy_id":%q,"dsl_yaml":null,"inputs":%s}`, legacy.StrategyID, instance.InputBindingsJSON))
+	status := PublishNone
+	var eventData []byte
+	result := StrategyResult{
+		ResultID: legacy.ID, InstanceID: legacy.RunnerID, SessionID: *instance.SessionID,
+		BarEndTime: legacy.PeriodTime.UTC(), ValidUntil: time.Now().UTC().Add(24 * time.Hour),
+		SnapshotJSON: snapshot, TargetsJSON: targets, RuleStatesJSON: ruleStates,
+		EventData: eventData, PublishStatus: status, CreatedAt: legacy.CreatedAt.UTC(),
+	}
+	if instance.LogicalAccountID != nil && request.Evaluation.Action == domain.ActionRebalance {
+		status = PublishPending
+		eventData, err = marshalLegacyTargetEvent(instance, result, legacy.StrategyID)
+		if err != nil {
+			return CommitEvaluationOutcome{}, err
 		}
-		if runner.StrategyID != request.Result.StrategyID {
-			return errors.New("strategy evaluation does not match runner strategy")
-		}
-		if domain.RunnerStatus(runner.Status) != domain.RunnerStatusEnabled {
-			return ErrRunnerNotEnabled
-		}
-		// A claim/rebind can advance the Trade owner lifecycle while the local
-		// Strategy snapshot still points at the previous result. Treat the next
-		// evaluation as a rebalance even when its weights are unchanged; a HOLD
-		// would not recreate the target that Trade correctly fenced away.
-		forceRebalance := false
-		if request.OwnerGeneration > 0 && runner.LastResultID.Valid {
-			var last resultRow
-			if err := tx.Table("t_strategy_results").Where("result_id = ?", runner.LastResultID.String).Take(&last).Error; err == nil {
-				forceRebalance = resultOwnerGeneration(last) != request.OwnerGeneration
-			}
-		}
-		if runner.LastResultID.Valid {
-			var last resultRow
-			if err := tx.Table("t_strategy_results").Where("result_id = ?", runner.LastResultID.String).Take(&last).Error; err == nil && request.Result.PeriodTime.Before(time.UnixMilli(last.PeriodTime)) {
-				return ErrLogicalResultConflict
-			}
-		}
-
-		var existing resultRow
-		replacingExisting := false
-		existingErr := tx.Table("t_strategy_results").Where(
-			"runner_id = ? AND strategy_id = ? AND period_time = ?",
-			request.Result.RunnerID, request.Result.StrategyID, request.Result.PeriodTime.UTC().UnixMilli(),
-		).Order("created_at DESC, result_id DESC").Take(&existing).Error
-		// Same-hash is idempotent only when the existing result is still the
-		// runner's current result. A disabled runner may be rebound to another
-		// Strategy or LogicalAccount and then switched back; in that case the
-		// historical row must be replaced so a fresh target event is emitted for
-		// the new binding instead of being silently swallowed.
-		if existingErr == nil && existing.InputHash == request.Result.InputHash &&
-			runner.LastResultID.Valid && runner.LastResultID.String == existing.ID &&
-			(!forceRebalance && resultOwnerGeneration(existing) == request.OwnerGeneration) {
-			outcome = CommitEvaluationOutcome{Result: existing.domain(), Created: false}
-			return nil
-		}
-		if existingErr != nil && !errors.Is(existingErr, gorm.ErrRecordNotFound) {
-			return existingErr
-		}
-		if existingErr == nil {
-			replacingExisting = true
-		}
-
-		result := request.Result
-		evaluation := request.Evaluation
-		if forceRebalance && result.Action == domain.ActionHold {
-			result.Action = domain.ActionRebalance
-			evaluation.Action = domain.ActionRebalance
-		}
-		var encodeErr error
-		result.TargetsJSON, result.DebugInfoJSON, encodeErr = encodeEvaluation(evaluation)
-		if encodeErr != nil {
-			return encodeErr
-		}
-		nextSequence := runner.CommandSequence
-		if result.Action == domain.ActionRebalance {
-			nextSequence++
-			result.CommandSequence = &nextSequence
-		} else {
-			result.CommandSequence = nil
-		}
-		if replacingExisting {
-			// The original result ID is also the outbox message ID and Trade
-			// target ID. Allocate a new immutable identity when replacing a
-			// historical same-period row, otherwise the old outbox/receipt would
-			// make the fresh binding look like a replay.
-			suffix := fmt.Sprintf("r%d", nextSequence)
-			if result.Action != domain.ActionRebalance {
-				suffix = fmt.Sprintf("r%d", result.CreatedAt.UTC().UnixNano())
-			}
-			result.ID = result.ID + "-" + suffix
-		}
-		if err := insertResult(tx, result); err != nil {
-			return err
-		}
-		currentTargets := runner.CurrentTargetsJSON
-		if result.Action == domain.ActionRebalance {
-			currentTargets = string(result.TargetsJSON)
-		}
-		if err := tx.Exec(`
-			UPDATE t_strategy_runners
-			SET current_targets_json = ?, command_sequence = ?, last_result_id = ?,
-			    last_success_at = ?, last_error = NULL, updated_at = ?
-			WHERE runner_id = ?
-		`, currentTargets, nextSequence, result.ID, result.CreatedAt.UTC().UnixMilli(), result.CreatedAt.UTC().UnixMilli(), result.RunnerID).Error; err != nil {
-			return err
-		}
-		if result.Action == domain.ActionRebalance && runner.LogicalAccountID.Valid {
-			eventData, eventErr := marshalTargetEvent(result, runner)
-			if eventErr != nil {
-				return eventErr
-			}
-			if err := tx.Exec(`INSERT INTO t_strategy_outbox (message_id, event_data, created_at) VALUES (?, ?, ?)`, result.ID, eventData, result.CreatedAt.UTC().UnixMilli()).Error; err != nil {
-				return err
-			}
-		}
-		outcome = CommitEvaluationOutcome{Result: result, Created: true}
-		return nil
-	})
-	return outcome, err
+	}
+	result.EventData = eventData
+	result.PublishStatus = status
+	committed, created, err := s.CommitResult(ctx, CommitResultRequest{Result: result, Now: time.Now().UTC()})
+	if err != nil {
+		return CommitEvaluationOutcome{}, err
+	}
+	return CommitEvaluationOutcome{Result: legacyResult(committed, request.Result), Created: created}, nil
 }
 
 func (s *Store) RecordRunnerFailure(ctx context.Context, runnerID string, failure error, at time.Time) error {
 	if strings.TrimSpace(runnerID) == "" || failure == nil {
-		return errors.New("runner id and failure are required")
+		return errors.New("instance id and failure are required")
 	}
-	result := s.db.WithContext(ctx).Exec(`UPDATE t_strategy_runners SET last_error = ?, updated_at = ? WHERE runner_id = ?`, failure.Error(), at.UTC().UnixMilli(), runnerID)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
+	// Failures are deliberately not represented as StrategyResult rows. The
+	// strategy process owns diagnostics; this adapter only verifies the instance
+	// still exists so old callers retain a useful error boundary.
+	_, err := s.GetInstance(ctx, runnerID)
+	return err
 }
 
-// InvalidateEvaluation clears a result committed under an owner generation
-// that changed before the corresponding Trade event could be accepted. The
-// event is removed when it is still in the outbox; if it was already
-// published, Trade's generation fence rejects it. Clearing the live snapshot
-// ensures the next ready period is emitted as a rebalance rather than a hold.
 func (s *Store) InvalidateEvaluation(ctx context.Context, runnerID, resultID string, at time.Time) error {
 	if strings.TrimSpace(runnerID) == "" || strings.TrimSpace(resultID) == "" {
-		return errors.New("runner id and result id are required")
+		return errors.New("instance id and result id are required")
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec(`
-			UPDATE t_strategy_runners
-			SET current_targets_json = '[]', last_result_id = NULL,
-				last_success_at = NULL, last_error = ?, updated_at = ?
-			WHERE runner_id = ? AND last_result_id = ?
-		`, "owner generation changed during evaluation", at.UTC().UnixMilli(), runnerID, resultID).Error; err != nil {
-			return err
-		}
-		return tx.Exec(`DELETE FROM t_strategy_outbox WHERE message_id = ?`, resultID).Error
+		result := tx.Exec(`
+			UPDATE t_strategy_results SET publish_status = 'cancelled'
+			WHERE result_id = ? AND instance_id = ? AND publish_status = 'pending'
+		`, resultID, runnerID)
+		return result.Error
 	})
 }
 
 func (s *Store) GetResult(ctx context.Context, resultID string) (domain.StrategyResult, error) {
-	var row resultRow
-	err := s.db.WithContext(ctx).Table("t_strategy_results").Where("result_id = ?", resultID).Take(&row).Error
-	return row.domain(), err
+	result, err := s.GetStrategyResult(ctx, resultID)
+	if err != nil {
+		return domain.StrategyResult{}, err
+	}
+	return legacyResult(result, domain.StrategyResult{ID: result.ResultID, RunnerID: result.InstanceID, PeriodTime: result.BarEndTime, CreatedAt: result.CreatedAt}), nil
 }
 
 type ResultFilter struct{ RunnerID string }
@@ -196,55 +109,21 @@ type ResultFilter struct{ RunnerID string }
 func (s *Store) ListResults(ctx context.Context, filter ResultFilter) ([]domain.StrategyResult, error) {
 	query := s.db.WithContext(ctx).Table("t_strategy_results")
 	if filter.RunnerID != "" {
-		query = query.Where("runner_id = ?", filter.RunnerID)
+		query = query.Where("instance_id = ?", filter.RunnerID)
 	}
-	var rows []resultRow
-	if err := query.Order("period_time DESC, result_id").Find(&rows).Error; err != nil {
+	var rows []resultRecord
+	if err := query.Order("bar_end_time DESC, result_id").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	results := make([]domain.StrategyResult, 0, len(rows))
 	for _, row := range rows {
-		results = append(results, row.domain())
+		results = append(results, legacyResult(row.result(), domain.StrategyResult{}))
 	}
 	return results, nil
 }
 
-func validateCommitEvaluationRequest(request CommitEvaluationRequest) error {
-	result := request.Result
-	if strings.TrimSpace(result.ID) == "" || strings.TrimSpace(result.RunnerID) == "" || strings.TrimSpace(result.StrategyID) == "" || strings.TrimSpace(result.InputHash) == "" || result.PeriodTime.IsZero() || result.CreatedAt.IsZero() {
-		return errors.New("strategy evaluation identity is incomplete")
-	}
-	if result.Action != request.Evaluation.Action || (result.Action != domain.ActionHold && result.Action != domain.ActionRebalance) {
-		return errors.New("strategy evaluation action is invalid or inconsistent")
-	}
-	return nil
-}
-
-func resultOwnerGeneration(result resultRow) int64 {
-	if strings.TrimSpace(result.DebugInfoJSON) == "" {
-		return 0
-	}
-	var debug struct {
-		OwnerGeneration int64 `json:"owner_generation"`
-	}
-	if err := json.Unmarshal([]byte(result.DebugInfoJSON), &debug); err != nil {
-		return 0
-	}
-	return debug.OwnerGeneration
-}
-
-func insertResult(db *gorm.DB, result domain.StrategyResult) error {
-	return db.Exec(`
-		INSERT INTO t_strategy_results (
-			result_id, runner_id, strategy_id, period_time, targets_json, debug_info_json,
-			input_hash, action, command_sequence, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, result.ID, result.RunnerID, result.StrategyID, result.PeriodTime.UTC().UnixMilli(), string(result.TargetsJSON), string(result.DebugInfoJSON), result.InputHash, result.Action, int64Value(result.CommandSequence), result.CreatedAt.UTC().UnixMilli()).Error
-}
-
-func encodeEvaluation(evaluation domain.Evaluation) (json.RawMessage, json.RawMessage, error) {
-	targets := append([]domain.InstrumentTarget(nil), evaluation.Targets...)
-	sort.Slice(targets, func(i, j int) bool { return targets[i].InstrumentID < targets[j].InstrumentID })
+func encodeLegacyEvaluation(evaluation domain.Evaluation) (json.RawMessage, json.RawMessage, error) {
+	targets := evaluation.Targets
 	if targets == nil {
 		targets = []domain.InstrumentTarget{}
 	}
@@ -252,14 +131,17 @@ func encodeEvaluation(evaluation domain.Evaluation) (json.RawMessage, json.RawMe
 	if err != nil {
 		return nil, nil, fmt.Errorf("encode strategy targets: %w", err)
 	}
-	debugJSON, err := json.Marshal(evaluation.DebugInfo)
+	stateJSON, err := json.Marshal(evaluation.RuleStates)
 	if err != nil {
-		return nil, nil, fmt.Errorf("encode strategy debug info: %w", err)
+		return nil, nil, fmt.Errorf("encode strategy rule states: %w", err)
 	}
-	return targetJSON, debugJSON, nil
+	if string(stateJSON) == "null" {
+		stateJSON = json.RawMessage(`{}`)
+	}
+	return targetJSON, stateJSON, nil
 }
 
-func marshalTargetEvent(result domain.StrategyResult, runner runnerRow) ([]byte, error) {
+func marshalLegacyTargetEvent(instance StrategyInstance, result StrategyResult, strategyID string) ([]byte, error) {
 	var targets []domain.InstrumentTarget
 	if err := json.Unmarshal(result.TargetsJSON, &targets); err != nil {
 		return nil, fmt.Errorf("decode strategy targets: %w", err)
@@ -272,21 +154,29 @@ func marshalTargetEvent(result domain.StrategyResult, runner runnerRow) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	var debug map[string]any
-	if len(result.DebugInfoJSON) > 0 {
-		if err := json.Unmarshal(result.DebugInfoJSON, &debug); err != nil {
-			return nil, fmt.Errorf("decode strategy debug info: %w", err)
-		}
+	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
+		// CommitEvaluation is the compatibility adapter for the old Runner
+		// contract. Keep its event legacy-shaped; modern instances use the
+		// trigger processor's session-fenced payload instead.
+		TargetId: result.ResultID, RunnerId: result.InstanceID,
+		LogicalAccountId: valueOrEmpty(instance.LogicalAccountID), CommandSequence: 1,
+		Targets: payloadTargets,
 	}
-	var ownerGeneration int64
-	if value, ok := debug["owner_generation"]; ok {
-		switch number := value.(type) {
-		case float64:
-			ownerGeneration = int64(number)
-		case json.Number:
-			ownerGeneration, _ = number.Int64()
-		}
+	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{
+		EventID: result.ResultID, OccurredAt: result.CreatedAt.UTC(), SpaceID: instance.SpaceID, SubjectID: valueOrEmpty(instance.LogicalAccountID),
+	})
+}
+
+func legacyResult(result StrategyResult, seed domain.StrategyResult) domain.StrategyResult {
+	action := seed.Action
+	if action == "" {
+		action = domain.ActionRebalance
 	}
-	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{TargetId: result.ID, RunnerId: result.RunnerID, LogicalAccountId: runner.LogicalAccountID.String, CommandSequence: *result.CommandSequence, SignalTime: result.PeriodTime.UTC().Format(time.RFC3339Nano), Targets: payloadTargets, OwnerGeneration: ownerGeneration}
-	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{EventID: result.ID, OccurredAt: result.CreatedAt.UTC(), SpaceID: runner.SpaceID, SubjectID: runner.LogicalAccountID.String})
+	sequence := int64(1)
+	return domain.StrategyResult{
+		ID: result.ResultID, RunnerID: result.InstanceID, StrategyID: seed.StrategyID,
+		PeriodTime: result.BarEndTime, TargetsJSON: append(json.RawMessage(nil), result.TargetsJSON...),
+		DebugInfoJSON: append(json.RawMessage(nil), result.RuleStatesJSON...), InputHash: seed.InputHash,
+		Action: action, CommandSequence: &sequence, CreatedAt: result.CreatedAt,
+	}
 }

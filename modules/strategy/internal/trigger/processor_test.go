@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -76,6 +77,21 @@ func TestProcessorCommitsFullWeightEvaluationAndDeduplicatesEvent(t *testing.T) 
 	}
 	if !processed {
 		t.Fatal("expected event to be recorded in inbox")
+	}
+}
+
+func TestAugmentCompiledBindingsPreservesCompiledProgramAndAddsFactorViews(t *testing.T) {
+	compiled := compiler.CompiledStrategy{
+		SourceView:  compiler.CompiledView{ID: "catalog-source", Frequency: "1m", Status: "active"},
+		Rules:       []compiler.CompiledRule{{Name: "rank"}},
+		InputFields: map[string]reflect.Type{"bias": reflect.TypeOf(float64(0))},
+	}
+	augmentCompiledBindings(&compiled, json.RawMessage(`{"source_view_id":"bound-source","factors":[{"factor_id":"bias","binding_id":"b1","result_view_id":"factor-view","column_name":"bias"}]}`))
+	if compiled.SourceView.ID != "bound-source" || compiled.SourceView.Frequency != "1m" || len(compiled.Rules) != 1 || len(compiled.InputFields) != 1 {
+		t.Fatalf("compiled binding augmentation lost catalog program: %+v", compiled)
+	}
+	if len(compiled.Factors) != 1 || compiled.Dependencies.FactorResultViewIDs[0] != "factor-view" {
+		t.Fatalf("factor binding not added: %+v", compiled)
 	}
 }
 

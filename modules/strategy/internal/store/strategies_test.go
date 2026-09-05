@@ -23,25 +23,21 @@ func openCurrentStore(t *testing.T) *Store {
 	return repo
 }
 
-func TestStrategyStoreRoundTrip(t *testing.T) {
+func TestLegacySaveStrategyWritesDSLNameColumns(t *testing.T) {
 	repo := openCurrentStore(t)
-	want := domain.Strategy{
-		ID:           "strategy-1",
-		Name:         "trend",
-		Kind:         "coin_selection",
-		ManifestYAML: "api_version: moox.strategy/v2",
-		CompiledJSON: []byte(`{"api_version":"moox.strategy/v2","kind":"coin_selection"}`),
-		SourceHash:   "sha256",
-		CreatedAt:    time.UnixMilli(1000).UTC(),
-	}
+	now := time.UnixMilli(1000).UTC()
+	want := domain.Strategy{ID: "s1", Name: "trend", ManifestYAML: "name: trend", CreatedAt: now}
 	if err := repo.SaveStrategy(context.Background(), want); err != nil {
 		t.Fatal(err)
 	}
-	got, err := repo.GetStrategy(context.Background(), want.ID)
-	if err != nil {
+	var row struct {
+		StrategyName string
+		DSLYaml      string
+	}
+	if err := repo.db.Table("t_strategies").Where("strategy_id = ?", want.ID).Take(&row).Error; err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != want.ID || got.Name != want.Name || got.Kind != want.Kind || string(got.CompiledJSON) != string(want.CompiledJSON) || got.SourceHash != want.SourceHash || !got.CreatedAt.Equal(want.CreatedAt) {
-		t.Fatalf("GetStrategy() = %+v, want %+v", got, want)
+	if row.StrategyName != want.Name || row.DSLYaml != want.ManifestYAML {
+		t.Fatalf("stored strategy = %+v", row)
 	}
 }

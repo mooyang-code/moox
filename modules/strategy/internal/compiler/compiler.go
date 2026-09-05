@@ -2,193 +2,145 @@ package compiler
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
-	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 )
 
-func (c Compiler) Compile(ctx context.Context, manifest config.Manifest, spaceID string) (CompiledStrategy, error) {
-	if c.Factors == nil || c.Storage == nil {
-		return CompiledStrategy{}, errors.New("strategy compiler dependencies are required")
-	}
+// Compile builds the in-memory execution programs for one strategy DSL.  It
+// never persists an artifact; callers persist the original dsl_yaml and call
+// Compile again when an instance is enabled or the process restarts.
+func (c Compiler) Compile(_ context.Context, dsl config.DSL, spaceID string) (CompiledStrategy, error) {
 	if strings.TrimSpace(spaceID) == "" {
 		return CompiledStrategy{}, errors.New("strategy compiler space_id is required")
 	}
-	if err := config.Validate(&manifest); err != nil {
+	if err := config.Validate(&dsl); err != nil {
 		return CompiledStrategy{}, err
 	}
-	source, err := c.Storage.GetView(ctx, manifest.Input.SourceViewID)
-	if err != nil {
-		return CompiledStrategy{}, fmt.Errorf("get source view %q: %w", manifest.Input.SourceViewID, err)
-	}
-	if !isActive(source.Status) {
-		return CompiledStrategy{}, fmt.Errorf("source view %q is not active", source.ID)
-	}
-	if source.Frequency != "" && source.Frequency != manifest.Input.DataFrequency {
-		return CompiledStrategy{}, fmt.Errorf("source view %q frequency %q does not match %q", source.ID, source.Frequency, manifest.Input.DataFrequency)
-	}
-	sourceFrequency := source.Frequency
-	if sourceFrequency == "" {
-		sourceFrequency = manifest.Input.DataFrequency
-	}
 	compiled := CompiledStrategy{
-		APIVersion: manifest.APIVersion, Kind: manifest.Kind, SpaceID: spaceID,
-		SourceView:     CompiledView{ID: source.ID, Status: source.Status, Frequency: sourceFrequency},
-		InstrumentPool: manifest.InstrumentPool,
-		Schedule:       CompiledSchedule{Every: manifest.Schedule.Every},
-		Readiness:      manifest.Readiness.Policy, Long: manifest.Long, Short: manifest.Short,
+		Name:        dsl.Name,
+		SpaceID:     spaceID,
+		Data:        dsl.Data,
+		Triggers:    dsl.Triggers,
+		InputFields: cloneTypes(c.InputFields),
+		Rules:       make([]CompiledRule, 0, len(dsl.Rules)),
+		APIVersion:  config.APIVersion,
+		Kind:        config.Kind,
+		Readiness:   "strict",
 	}
-	normalizeSideWeights(&compiled)
-	compiled.Factors = make([]CompiledFactor, 0, len(manifest.Input.Factors))
-	viewIDs := make(map[string]struct{})
-	for _, factorRef := range manifest.Input.Factors {
-		factor, err := c.Factors.GetFactor(ctx, factorRef.FactorID)
-		if err != nil {
-			return CompiledStrategy{}, fmt.Errorf("get factor %q: %w", factorRef.FactorID, err)
-		}
-		if !isActive(factor.Status) {
-			return CompiledStrategy{}, fmt.Errorf("factor %q is not enabled", factor.ID)
-		}
-		output, outputErr := selectOutput(factor, factorRef.Output)
-		if outputErr != nil {
-			return CompiledStrategy{}, outputErr
-		}
-		bindings, err := c.Factors.ListBindings(ctx, factor.ID)
-		if err != nil {
-			return CompiledStrategy{}, fmt.Errorf("list bindings for factor %q: %w", factor.ID, err)
-		}
-		binding, err := chooseBinding(bindings, factor.ID, spaceID, manifest.Input.SourceViewID, manifest.Input.DataFrequency)
+	if dsl.Triggers.Schedule != nil {
+		compiled.Schedule = CompiledSchedule{Every: dsl.Data.Bar}
+	}
+	// Compatibility marker only; the new store persists DSL text, not this
+	// field. It lets older embedders continue to construct a compiled value.
+	compiled.CompiledJSON = []byte(`{"dsl":true}`)
+	names := make([]string, 0, len(dsl.Rules))
+	for name := range dsl.Rules {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		rule := dsl.Rules[name]
+		compiledRule, err := compileRule(name, rule, c.InputFields)
 		if err != nil {
 			return CompiledStrategy{}, err
 		}
-		resultView, err := c.Storage.GetView(ctx, binding.ResultViewID)
-		if err != nil {
-			return CompiledStrategy{}, fmt.Errorf("get result view %q: %w", binding.ResultViewID, err)
+		compiled.Rules = append(compiled.Rules, compiledRule)
+		for _, expression := range []*CompiledExpression{compiledRule.FilterBefore, compiledRule.Score, compiledRule.SelectWhere, compiledRule.SignalEntry, compiledRule.SignalExit, compiledRule.FilterAfter} {
+			if expression == nil {
+				continue
+			}
+			if compiled.InputFields == nil {
+				compiled.InputFields = make(map[string]reflect.Type)
+			}
+			for _, field := range expression.Dependencies.Fields {
+				if _, exists := compiled.InputFields[field]; exists {
+					continue
+				}
+				if field == "instrument_id" {
+					compiled.InputFields[field] = reflect.TypeOf("")
+				} else {
+					compiled.InputFields[field] = reflect.TypeOf(float64(0))
+				}
+			}
+			for _, fields := range expression.Dependencies.Bars {
+				for _, field := range fields {
+					if _, exists := compiled.InputFields[field]; !exists {
+						compiled.InputFields[field] = reflect.TypeOf(float64(0))
+					}
+				}
+			}
 		}
-		if !isActive(resultView.Status) {
-			return CompiledStrategy{}, fmt.Errorf("factor %q result view %q is not active", factor.ID, binding.ResultViewID)
-		}
-		columns, err := c.Storage.ListViewColumns(ctx, binding.ResultViewID)
-		if err != nil {
-			return CompiledStrategy{}, fmt.Errorf("list result view %q columns: %w", binding.ResultViewID, err)
-		}
-		column, ok := findFactorColumn(columns, factor.ID, output)
-		if !ok {
-			return CompiledStrategy{}, fmt.Errorf("factor %q output %q is missing from result view %q", factor.ID, output, binding.ResultViewID)
-		}
-		compiled.Factors = append(compiled.Factors, CompiledFactor{
-			FactorID: factor.ID, SourceHash: factor.SourceHash,
-			InputColumns: append([]string(nil), factor.InputColumns...), ParamsJSON: factor.ParamsJSON,
-			LookbackPeriods: factor.LookbackPeriods, BindingID: binding.ID, ResultDatasetID: binding.ResultDatasetID,
-			Frequency: binding.Frequency, ResultViewID: binding.ResultViewID, Output: output, ColumnName: column.Name,
-			SubjectMode: binding.SubjectMode, SubjectsJSON: binding.SubjectsJSON,
-		})
-		viewIDs[binding.ResultViewID] = struct{}{}
 	}
-	if len(viewIDs) > 1 {
-		return CompiledStrategy{}, fmt.Errorf("strategy must use one factor result view; found %d", len(viewIDs))
-	}
-	sort.Slice(compiled.Factors, func(i, j int) bool { return compiled.Factors[i].FactorID < compiled.Factors[j].FactorID })
-	for viewID := range viewIDs {
-		compiled.Dependencies.FactorResultViewIDs = append(compiled.Dependencies.FactorResultViewIDs, viewID)
-	}
-	sort.Strings(compiled.Dependencies.FactorResultViewIDs)
-	raw, err := json.Marshal(compiled)
-	if err != nil {
-		return CompiledStrategy{}, fmt.Errorf("marshal compiled strategy: %w", err)
-	}
-	sum := sha256.Sum256(raw)
-	compiled.CompiledJSON = raw
-	compiled.Hash = hex.EncodeToString(sum[:])
 	return compiled, nil
 }
 
-func selectOutput(factor FactorDescriptor, requested string) (string, error) {
-	requested = strings.TrimSpace(requested)
-	if requested != "" {
-		for _, output := range factor.Outputs {
-			if strings.TrimSpace(output) == requested {
-				return requested, nil
-			}
-		}
-		return "", fmt.Errorf("factor %q output %q is not declared", factor.ID, requested)
-	}
-	if len(factor.Outputs) != 1 || strings.TrimSpace(factor.Outputs[0]) == "" {
-		return "", fmt.Errorf("factor %q has multiple outputs; input.factors[].output is required", factor.ID)
-	}
-	return strings.TrimSpace(factor.Outputs[0]), nil
+func Compile(ctx context.Context, dsl config.DSL, spaceID string, deps Dependencies) (CompiledStrategy, error) {
+	return (Compiler{Factors: deps, Storage: deps}).Compile(ctx, dsl, spaceID)
 }
 
-func normalizeSideWeights(compiled *CompiledStrategy) {
-	values := make([]quant.Decimal, 0, 2)
-	if compiled.Long != nil {
-		if value, err := quant.Parse(compiled.Long.SideWeight); err == nil && !value.IsZero() {
-			values = append(values, value)
+func compileRule(name string, rule config.Rule, fields map[string]reflect.Type) (CompiledRule, error) {
+	result := CompiledRule{Name: name, Definition: rule}
+	var err error
+	if rule.FilterBefore != "" {
+		result.FilterBefore, err = compileRuleExpression(name, rule.FilterBefore, StageFilterBefore, fields)
+		if err != nil {
+			return CompiledRule{}, err
 		}
 	}
-	if compiled.Short != nil {
-		if value, err := quant.Parse(compiled.Short.SideWeight); err == nil && !value.IsZero() {
-			values = append(values, value)
+	if rule.Score != "" {
+		result.Score, err = compileRuleExpression(name, rule.Score, StageScore, fields)
+		if err != nil {
+			return CompiledRule{}, err
 		}
 	}
+	if rule.Select != nil && rule.Select.Where != "" {
+		result.SelectWhere, err = compileRuleExpression(name, rule.Select.Where, StageSelectWhere, fields)
+		if err != nil {
+			return CompiledRule{}, err
+		}
+	}
+	if rule.Signals != nil {
+		result.SignalEntry, err = compileRuleExpression(name, rule.Signals.Entry, StageSignalEntry, fields)
+		if err != nil {
+			return CompiledRule{}, err
+		}
+		result.SignalExit, err = compileRuleExpression(name, rule.Signals.Exit, StageSignalExit, fields)
+		if err != nil {
+			return CompiledRule{}, err
+		}
+	}
+	if rule.FilterAfter != "" {
+		result.FilterAfter, err = compileRuleExpression(name, rule.FilterAfter, StageFilterAfter, fields)
+		if err != nil {
+			return CompiledRule{}, err
+		}
+	}
+	if rule.Signals != nil && ((result.FilterAfter != nil && result.FilterAfter.Dependencies.UsesScore) || (result.SignalEntry != nil && result.SignalEntry.Dependencies.UsesScore) || (result.SignalExit != nil && result.SignalExit.Dependencies.UsesScore)) {
+		return CompiledRule{}, fmt.Errorf("strategy DSL rules.%s signals and filter_after cannot reference score", name)
+	}
+	return result, nil
+}
+
+func compileRuleExpression(ruleName string, source string, stage ExpressionStage, fields map[string]reflect.Type) (*CompiledExpression, error) {
+	compiled, err := CompileExpression(source, stage, fields)
+	if err != nil {
+		return nil, fmt.Errorf("strategy DSL rules.%s.%s: %w", ruleName, stage, err)
+	}
+	return &compiled, nil
+}
+
+func cloneTypes(values map[string]reflect.Type) map[string]reflect.Type {
 	if len(values) == 0 {
-		return
+		return nil
 	}
-	total := quant.Zero()
-	for _, value := range values {
-		total = total.Add(value)
+	result := make(map[string]reflect.Type, len(values))
+	for key, value := range values {
+		result[key] = value
 	}
-	index := 0
-	if compiled.Long != nil && !sideZero(compiled.Long.SideWeight) {
-		compiled.Long.SideWeight = values[index].Div(total).String()
-		index++
-	}
-	if compiled.Short != nil && !sideZero(compiled.Short.SideWeight) {
-		compiled.Short.SideWeight = values[index].Div(total).String()
-	}
-}
-
-func sideZero(raw string) bool { value, err := quant.Parse(raw); return err != nil || value.IsZero() }
-
-func Compile(ctx context.Context, manifest config.Manifest, spaceID string, deps Dependencies) (CompiledStrategy, error) {
-	return (Compiler{Factors: deps, Storage: deps}).Compile(ctx, manifest, spaceID)
-}
-
-func chooseBinding(bindings []BindingDescriptor, factorID, spaceID, sourceViewID, frequency string) (BindingDescriptor, error) {
-	matches := make([]BindingDescriptor, 0, len(bindings))
-	for _, binding := range bindings {
-		if binding.FactorID == factorID && binding.SpaceID == spaceID && binding.SourceViewID == sourceViewID && binding.Frequency == frequency && isActive(binding.Status) {
-			matches = append(matches, binding)
-		}
-	}
-	if len(matches) == 0 {
-		return BindingDescriptor{}, fmt.Errorf("factor %q has no enabled binding for space/view/frequency", factorID)
-	}
-	sort.Slice(matches, func(i, j int) bool { return matches[i].ID < matches[j].ID })
-	return matches[0], nil
-}
-
-func findFactorColumn(columns []ViewColumn, factorID, output string) (ViewColumn, bool) {
-	for _, column := range columns {
-		if column.Attributes["origin_factor_id"] == factorID && column.Attributes["factor_output"] == output {
-			return column, true
-		}
-	}
-	return ViewColumn{}, false
-}
-
-func isActive(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "", "active", "enabled":
-		return status != ""
-	default:
-		return false
-	}
+	return result
 }

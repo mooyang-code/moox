@@ -21,6 +21,23 @@ type Service struct {
 	Now  func() time.Time
 }
 
+// PrepareDefinition validates the user DSL and returns the minimal persisted
+// definition. Compilation is intentionally deferred to instance enable/start
+// so a shared definition never stores a stale executable artifact.
+func (s *Service) PrepareDefinition(strategyID, dslYAML string, now time.Time) (store.StrategyDefinition, config.DSL, error) {
+	dsl, err := config.Parse([]byte(dslYAML))
+	if err != nil {
+		return store.StrategyDefinition{}, config.DSL{}, err
+	}
+	if strings.TrimSpace(strategyID) == "" {
+		return store.StrategyDefinition{}, config.DSL{}, errors.New("strategy id is required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return store.StrategyDefinition{StrategyID: strategyID, StrategyName: dsl.Name, DSLYaml: dslYAML, CreatedAt: now.UTC(), UpdatedAt: now.UTC()}, dsl, nil
+}
+
 // PrepareCompiled creates an immutable StrategyDef from a compiled manifest.
 func (s *Service) PrepareCompiled(strategyID, name, manifestYAML string, compiled compiler.CompiledStrategy) (domain.Strategy, error) {
 	if strings.TrimSpace(strategyID) == "" || strings.TrimSpace(name) == "" {

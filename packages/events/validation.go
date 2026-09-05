@@ -483,11 +483,32 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 	if !ok {
 		return fmt.Errorf("trade target weight payload has type %T", value)
 	}
-	if strings.TrimSpace(payload.GetTargetId()) == "" ||
-		strings.TrimSpace(payload.GetRunnerId()) == "" ||
-		strings.TrimSpace(payload.GetLogicalAccountId()) == "" ||
-		payload.GetCommandSequence() <= 0 {
-		return fmt.Errorf("trade target weight identity or command_sequence is incomplete")
+	modern := payload.GetInstanceId() != "" || payload.GetSessionId() != "" || payload.GetStrategyId() != "" || payload.GetBarEndTime() != nil || payload.GetEffectiveAt() != nil || payload.GetValidUntil() != nil
+	if strings.TrimSpace(payload.GetTargetId()) == "" || strings.TrimSpace(payload.GetLogicalAccountId()) == "" {
+		return fmt.Errorf("trade target weight identity is incomplete")
+	}
+	if modern {
+		if strings.TrimSpace(payload.GetInstanceId()) == "" || strings.TrimSpace(payload.GetSessionId()) == "" || strings.TrimSpace(payload.GetStrategyId()) == "" {
+			return fmt.Errorf("trade target weight session identity is incomplete")
+		}
+		if payload.GetBarEndTime() == nil || payload.GetEffectiveAt() == nil || payload.GetValidUntil() == nil {
+			return fmt.Errorf("trade target weight timestamps are required")
+		}
+		for name, timestamp := range map[string]*timestamppb.Timestamp{
+			"bar_end_time": payload.GetBarEndTime(), "effective_at": payload.GetEffectiveAt(), "valid_until": payload.GetValidUntil(),
+		} {
+			if err := timestamp.CheckValid(); err != nil {
+				return fmt.Errorf("trade target weight %s: %w", name, err)
+			}
+		}
+		if !payload.GetEffectiveAt().AsTime().Equal(payload.GetBarEndTime().AsTime()) {
+			return fmt.Errorf("trade target weight effective_at must equal bar_end_time")
+		}
+		if !payload.GetValidUntil().AsTime().After(payload.GetEffectiveAt().AsTime()) {
+			return fmt.Errorf("trade target weight valid_until must be after effective_at")
+		}
+	} else if strings.TrimSpace(payload.GetRunnerId()) == "" || payload.GetCommandSequence() <= 0 {
+		return fmt.Errorf("trade target weight legacy runner identity is incomplete")
 	}
 	seenInstruments := make(map[string]struct{}, len(payload.GetTargets()))
 	gross := new(big.Rat)

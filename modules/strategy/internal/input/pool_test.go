@@ -30,6 +30,18 @@ func TestBuildPoolFallsBackToNextVenueWhenPreferredHasNoHistory(t *testing.T) {
 	}
 }
 
+func TestBuildPoolDistinguishesExplicitEmptyInclude(t *testing.T) {
+	rule := config.InstrumentPoolRule{Include: []string{}, IncludeSet: true}
+	got := BuildPool(rule, []Subject{{SubjectID: "btc", InstrumentID: "BTC", Active: true}}, nil)
+	if len(got.Items) != 0 {
+		t.Fatalf("explicit empty include should select no subjects: %+v", got.Items)
+	}
+	all := BuildPool(config.InstrumentPoolRule{}, []Subject{{SubjectID: "btc", InstrumentID: "BTC", Active: true}}, nil)
+	if len(all.Items) != 1 {
+		t.Fatalf("omitted include should select the directory: %+v", all.Items)
+	}
+}
+
 func TestEvaluationInputHashIsStableAcrossItemOrder(t *testing.T) {
 	a := InstrumentInput{PoolItem: PoolItem{InstrumentID: "A"}, Values: map[string]quant.Decimal{"x": quant.Must("1")}}
 	b := InstrumentInput{PoolItem: PoolItem{InstrumentID: "B"}, Values: map[string]quant.Decimal{"x": quant.Must("2")}}

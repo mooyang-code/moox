@@ -21,6 +21,8 @@ import (
 type StrategyMgrService interface {
 	CreateStrategy(ctx context.Context, req *CreateStrategyReq) (*CreateStrategyRsp, error)
 
+	UpdateStrategy(ctx context.Context, req *UpdateStrategyReq) (*UpdateStrategyRsp, error)
+
 	GetStrategy(ctx context.Context, req *GetStrategyReq) (*GetStrategyRsp, error)
 
 	ListStrategies(ctx context.Context, req *ListStrategiesReq) (*ListStrategiesRsp, error)
@@ -40,6 +42,14 @@ type StrategyMgrService interface {
 	GetStrategyResult(ctx context.Context, req *GetStrategyResultReq) (*GetStrategyResultRsp, error)
 
 	ListStrategyTargets(ctx context.Context, req *ListStrategyTargetsReq) (*ListStrategyTargetsRsp, error)
+
+	CreateStrategyInstance(ctx context.Context, req *CreateStrategyInstanceReq) (*CreateStrategyInstanceRsp, error)
+
+	GetStrategyInstance(ctx context.Context, req *GetStrategyInstanceReq) (*GetStrategyInstanceRsp, error)
+
+	ListStrategyInstances(ctx context.Context, req *ListStrategyInstancesReq) (*ListStrategyInstancesRsp, error)
+
+	SetStrategyInstanceEnabled(ctx context.Context, req *SetStrategyInstanceEnabledReq) (*SetStrategyInstanceEnabledRsp, error)
 }
 
 func StrategyMgrService_CreateStrategy_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -50,6 +60,24 @@ func StrategyMgrService_CreateStrategy_Handler(svr interface{}, ctx context.Cont
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(StrategyMgrService).CreateStrategy(ctx, reqbody.(*CreateStrategyReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StrategyMgrService_UpdateStrategy_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateStrategyReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).UpdateStrategy(ctx, reqbody.(*UpdateStrategyReq))
 	}
 
 	var rsp interface{}
@@ -240,6 +268,78 @@ func StrategyMgrService_ListStrategyTargets_Handler(svr interface{}, ctx context
 	return rsp, nil
 }
 
+func StrategyMgrService_CreateStrategyInstance_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateStrategyInstanceReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).CreateStrategyInstance(ctx, reqbody.(*CreateStrategyInstanceReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StrategyMgrService_GetStrategyInstance_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetStrategyInstanceReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).GetStrategyInstance(ctx, reqbody.(*GetStrategyInstanceReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StrategyMgrService_ListStrategyInstances_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListStrategyInstancesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).ListStrategyInstances(ctx, reqbody.(*ListStrategyInstancesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StrategyMgrService_SetStrategyInstanceEnabled_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetStrategyInstanceEnabledReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).SetStrategyInstanceEnabled(ctx, reqbody.(*SetStrategyInstanceEnabledReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // StrategyMgrServer_ServiceDesc descriptor for server.RegisterService.
 var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.strategy.StrategyMgr",
@@ -248,6 +348,10 @@ var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.strategy.StrategyMgr/CreateStrategy",
 			Func: StrategyMgrService_CreateStrategy_Handler,
+		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/UpdateStrategy",
+			Func: StrategyMgrService_UpdateStrategy_Handler,
 		},
 		{
 			Name: "/trpc.moox.strategy.StrategyMgr/GetStrategy",
@@ -289,6 +393,22 @@ var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.strategy.StrategyMgr/ListStrategyTargets",
 			Func: StrategyMgrService_ListStrategyTargets_Handler,
 		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/CreateStrategyInstance",
+			Func: StrategyMgrService_CreateStrategyInstance_Handler,
+		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/GetStrategyInstance",
+			Func: StrategyMgrService_GetStrategyInstance_Handler,
+		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/ListStrategyInstances",
+			Func: StrategyMgrService_ListStrategyInstances_Handler,
+		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/SetStrategyInstanceEnabled",
+			Func: StrategyMgrService_SetStrategyInstanceEnabled_Handler,
+		},
 	},
 }
 
@@ -305,6 +425,9 @@ type UnimplementedStrategyMgr struct{}
 
 func (s *UnimplementedStrategyMgr) CreateStrategy(ctx context.Context, req *CreateStrategyReq) (*CreateStrategyRsp, error) {
 	return nil, errors.New("rpc CreateStrategy of service StrategyMgr is not implemented")
+}
+func (s *UnimplementedStrategyMgr) UpdateStrategy(ctx context.Context, req *UpdateStrategyReq) (*UpdateStrategyRsp, error) {
+	return nil, errors.New("rpc UpdateStrategy of service StrategyMgr is not implemented")
 }
 func (s *UnimplementedStrategyMgr) GetStrategy(ctx context.Context, req *GetStrategyReq) (*GetStrategyRsp, error) {
 	return nil, errors.New("rpc GetStrategy of service StrategyMgr is not implemented")
@@ -336,6 +459,18 @@ func (s *UnimplementedStrategyMgr) GetStrategyResult(ctx context.Context, req *G
 func (s *UnimplementedStrategyMgr) ListStrategyTargets(ctx context.Context, req *ListStrategyTargetsReq) (*ListStrategyTargetsRsp, error) {
 	return nil, errors.New("rpc ListStrategyTargets of service StrategyMgr is not implemented")
 }
+func (s *UnimplementedStrategyMgr) CreateStrategyInstance(ctx context.Context, req *CreateStrategyInstanceReq) (*CreateStrategyInstanceRsp, error) {
+	return nil, errors.New("rpc CreateStrategyInstance of service StrategyMgr is not implemented")
+}
+func (s *UnimplementedStrategyMgr) GetStrategyInstance(ctx context.Context, req *GetStrategyInstanceReq) (*GetStrategyInstanceRsp, error) {
+	return nil, errors.New("rpc GetStrategyInstance of service StrategyMgr is not implemented")
+}
+func (s *UnimplementedStrategyMgr) ListStrategyInstances(ctx context.Context, req *ListStrategyInstancesReq) (*ListStrategyInstancesRsp, error) {
+	return nil, errors.New("rpc ListStrategyInstances of service StrategyMgr is not implemented")
+}
+func (s *UnimplementedStrategyMgr) SetStrategyInstanceEnabled(ctx context.Context, req *SetStrategyInstanceEnabledReq) (*SetStrategyInstanceEnabledRsp, error) {
+	return nil, errors.New("rpc SetStrategyInstanceEnabled of service StrategyMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -346,6 +481,8 @@ func (s *UnimplementedStrategyMgr) ListStrategyTargets(ctx context.Context, req 
 // StrategyMgrClientProxy defines service client proxy
 type StrategyMgrClientProxy interface {
 	CreateStrategy(ctx context.Context, req *CreateStrategyReq, opts ...client.Option) (rsp *CreateStrategyRsp, err error)
+
+	UpdateStrategy(ctx context.Context, req *UpdateStrategyReq, opts ...client.Option) (rsp *UpdateStrategyRsp, err error)
 
 	GetStrategy(ctx context.Context, req *GetStrategyReq, opts ...client.Option) (rsp *GetStrategyRsp, err error)
 
@@ -366,6 +503,14 @@ type StrategyMgrClientProxy interface {
 	GetStrategyResult(ctx context.Context, req *GetStrategyResultReq, opts ...client.Option) (rsp *GetStrategyResultRsp, err error)
 
 	ListStrategyTargets(ctx context.Context, req *ListStrategyTargetsReq, opts ...client.Option) (rsp *ListStrategyTargetsRsp, err error)
+
+	CreateStrategyInstance(ctx context.Context, req *CreateStrategyInstanceReq, opts ...client.Option) (rsp *CreateStrategyInstanceRsp, err error)
+
+	GetStrategyInstance(ctx context.Context, req *GetStrategyInstanceReq, opts ...client.Option) (rsp *GetStrategyInstanceRsp, err error)
+
+	ListStrategyInstances(ctx context.Context, req *ListStrategyInstancesReq, opts ...client.Option) (rsp *ListStrategyInstancesRsp, err error)
+
+	SetStrategyInstanceEnabled(ctx context.Context, req *SetStrategyInstanceEnabledReq, opts ...client.Option) (rsp *SetStrategyInstanceEnabledRsp, err error)
 }
 
 type StrategyMgrClientProxyImpl struct {
@@ -391,6 +536,26 @@ func (c *StrategyMgrClientProxyImpl) CreateStrategy(ctx context.Context, req *Cr
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CreateStrategyRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) UpdateStrategy(ctx context.Context, req *UpdateStrategyReq, opts ...client.Option) (*UpdateStrategyRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/UpdateStrategy")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("UpdateStrategy")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpdateStrategyRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -591,6 +756,86 @@ func (c *StrategyMgrClientProxyImpl) ListStrategyTargets(ctx context.Context, re
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListStrategyTargetsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) CreateStrategyInstance(ctx context.Context, req *CreateStrategyInstanceReq, opts ...client.Option) (*CreateStrategyInstanceRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/CreateStrategyInstance")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("CreateStrategyInstance")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CreateStrategyInstanceRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) GetStrategyInstance(ctx context.Context, req *GetStrategyInstanceReq, opts ...client.Option) (*GetStrategyInstanceRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/GetStrategyInstance")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("GetStrategyInstance")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetStrategyInstanceRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) ListStrategyInstances(ctx context.Context, req *ListStrategyInstancesReq, opts ...client.Option) (*ListStrategyInstancesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/ListStrategyInstances")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("ListStrategyInstances")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListStrategyInstancesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) SetStrategyInstanceEnabled(ctx context.Context, req *SetStrategyInstanceEnabledReq, opts ...client.Option) (*SetStrategyInstanceEnabledRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/SetStrategyInstanceEnabled")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("SetStrategyInstanceEnabled")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SetStrategyInstanceEnabledRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

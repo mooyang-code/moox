@@ -132,6 +132,14 @@ message LogicalAccount {
   int64 created_at = 13;
   int64 updated_at = 14;
   int64 owner_generation = 15;
+  // New strategy lifecycle identity. The legacy owner_runner_id and
+  // owner_generation fields remain only for source compatibility.
+  string owner_instance_id = 16;
+  string owner_session_id = 17;
+  // Opaque compare-and-set token used by Strategy lifecycle calls. It is
+  // returned to trusted internal callers only; target events use the numeric
+  // owner_generation fence instead.
+  string auth_fence = 18;
 }
 
 message Order {
@@ -233,6 +241,12 @@ message LogicalAccountTarget {
   string last_error = 8;
   int64 accepted_at = 9;
   int64 updated_at = 10;
+  string instance_id = 11;
+  string session_id = 12;
+  string strategy_id = 13;
+  int64 bar_end_time = 14;
+  int64 effective_at = 15;
+  int64 valid_until = 16;
 }
 
 message OperatorAction {
@@ -381,6 +395,9 @@ message RemoveLogicalAccountMemberRsp {
 message ClaimLogicalAccountOwnerReq {
   string logical_account_id = 1;
   string runner_id = 2;
+  string instance_id = 3;
+  string session_id = 4;
+  string expected_auth_fence = 5;
 }
 message ClaimLogicalAccountOwnerRsp {
   common.RetInfo ret_info = 1;
@@ -390,6 +407,9 @@ message ClaimLogicalAccountOwnerRsp {
 message ReleaseLogicalAccountOwnerReq {
   string logical_account_id = 1;
   string runner_id = 2;
+  string instance_id = 3;
+  string session_id = 4;
+  string expected_auth_fence = 5;
 }
 message ReleaseLogicalAccountOwnerRsp {
   common.RetInfo ret_info = 1;
@@ -400,6 +420,11 @@ message RebindLogicalAccountOwnerReq {
   string logical_account_id = 1;
   string runner_id = 2;
   string rebind_key = 3;
+  string instance_id = 4;
+  string session_id = 5;
+  string expected_auth_fence = 6;
+  string new_instance_id = 7;
+  string new_session_id = 8;
 }
 message RebindLogicalAccountOwnerRsp {
   common.RetInfo ret_info = 1;

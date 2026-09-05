@@ -86,7 +86,10 @@ export interface LogicalAccount {
   logical_account_id: string;
   space_id: string;
   name: string;
-  owner_runner_id: string;
+  /** @deprecated compatibility field for legacy strategy runners. */
+  owner_runner_id?: string;
+  owner_instance_id?: string;
+  owner_session_id?: string;
   execution_mode: ExecutionMode;
   market_type: MarketType;
   settlement_asset: string;
@@ -188,14 +191,20 @@ export interface BlockedTarget extends InstrumentTarget {
 export interface LogicalAccountTarget {
   target_id: string;
   logical_account_id: string;
-  runner_id: string;
-  command_sequence: string;
+  runner_id?: string;
+  command_sequence?: string;
   targets: InstrumentTarget[];
   status: string;
   blocked_targets: BlockedTarget[];
   last_error: string;
   accepted_at: string;
   updated_at: string;
+  instance_id?: string;
+  session_id?: string;
+  strategy_id?: string;
+  bar_end_time?: number | string;
+  effective_at?: number | string;
+  valid_until?: number | string;
 }
 
 export interface OperatorAction {

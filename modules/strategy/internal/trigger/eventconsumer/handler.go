@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -37,7 +38,15 @@ func HandleViewFactorPeriodReady(ctx context.Context, delivery *jetstream.Delive
 			}
 		}
 	}
-	if processErr := processor.Handle(ctx, trigger.PeriodReady{MessageID: message.GetEventId(), EventName: message.GetEventName(), SpaceID: message.GetSpaceId(), ViewID: payload.GetResultViewId(), Frequency: payload.GetFrequency(), PeriodTime: periodTime(payload.GetPeriodTime()), Status: payload.GetStatus(), ReadyViewIDs: []string{payload.GetResultViewId()}, SourceIndexID: payload.GetSourceIndexId(), ResultIndexID: payload.GetResultIndexId(), SourceIndexRevision: payload.GetSourceIndexRevision(), ResultIndexRevision: payload.GetResultIndexRevision(), BindingStatuses: bindingStatuses, BindingStates: bindingStates}); processErr != nil {
+	storagePeriod := periodTime(payload.GetPeriodTime())
+	period, periodErr := input.FromStorageStart("crypto_24x7", payload.GetFrequency(), storagePeriod)
+	if periodErr != nil {
+		// The event payload does not carry a calendar. Strategy instances may
+		// use cn_stock, so preserve the Storage timestamp here and let the
+		// instance-specific processor normalize it from its DSL.
+		period = input.PeriodBoundaries{StorageStart: storagePeriod, BarEnd: storagePeriod, PreviousStart: storagePeriod}
+	}
+	if processErr := processor.Handle(ctx, trigger.PeriodReady{MessageID: message.GetEventId(), EventName: message.GetEventName(), SpaceID: message.GetSpaceId(), ViewID: payload.GetResultViewId(), Frequency: payload.GetFrequency(), PeriodTime: storagePeriod, StoragePeriodTime: storagePeriod, BarEndTime: period.BarEnd, Status: payload.GetStatus(), ReadyViewIDs: []string{payload.GetResultViewId()}, SourceIndexID: payload.GetSourceIndexId(), ResultIndexID: payload.GetResultIndexId(), SourceIndexRevision: payload.GetSourceIndexRevision(), ResultIndexRevision: payload.GetResultIndexRevision(), BindingStatuses: bindingStatuses, BindingStates: bindingStates}); processErr != nil {
 		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: processErr}
 	}
 	return jetstream.HandlerResult{Decision: jetstream.ACK}

@@ -39,6 +39,7 @@ func Hash(in EvaluationInput) (string, error) {
 		QuoteAsset   string            `json:"quote_asset,omitempty"`
 		SeriesTag    string            `json:"series_tag,omitempty"`
 		Values       map[string]string `json:"values"`
+		Previous     map[string]string `json:"previous,omitempty"`
 	}
 	payload := struct {
 		SpaceID       string          `json:"space_id"`
@@ -54,7 +55,11 @@ func Hash(in EvaluationInput) (string, error) {
 		for factorID, value := range item.Values {
 			values[factorID] = value.String()
 		}
-		payload.Items = append(payload.Items, canonicalItem{InstrumentID: item.InstrumentID, SubjectID: item.SubjectID, Exchange: item.Exchange, Market: item.Market, QuoteAsset: item.QuoteAsset, SeriesTag: item.SeriesTag, Values: values})
+		previous := make(map[string]string, len(item.PreviousValues))
+		for field, value := range item.PreviousValues {
+			previous[field] = value.String()
+		}
+		payload.Items = append(payload.Items, canonicalItem{InstrumentID: item.InstrumentID, SubjectID: item.SubjectID, Exchange: item.Exchange, Market: item.Market, QuoteAsset: item.QuoteAsset, SeriesTag: item.SeriesTag, Values: values, Previous: previous})
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

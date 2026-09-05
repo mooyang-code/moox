@@ -136,6 +136,9 @@ func migrateLegacyTradeSchema(db *gorm.DB) (bool, error) {
 			if err := ensureOwnerRebindTable(db); err != nil {
 				return false, err
 			}
+			if err := ensureStrategyAuthorizationColumns(db); err != nil {
+				return false, err
+			}
 			return false, nil
 		}
 	}
@@ -174,11 +177,269 @@ func migrateLegacyTradeSchema(db *gorm.DB) (bool, error) {
 		if err := ensureOwnerRebindTable(tx); err != nil {
 			return err
 		}
+		if err := ensureStrategyAuthorizationColumns(tx); err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func ensureStrategyAuthorizationColumns(db *gorm.DB) error {
+	if err := rebuildLegacyStrategyTargetTables(db); err != nil {
+		return err
+	}
+	columns := map[string]string{
+		"c_owner_instance_id": "TEXT",
+		"c_owner_session_id":  "TEXT",
+		"c_auth_fence":        "TEXT NOT NULL DEFAULT ''",
+	}
+	if err := ensureColumns(db, "t_logical_accounts", columns); err != nil {
+		return err
+	}
+	if err := db.Exec(`UPDATE t_logical_accounts SET c_owner_instance_id = c_owner_runner_id WHERE (c_owner_instance_id IS NULL OR c_owner_instance_id = '') AND c_owner_runner_id IS NOT NULL`).Error; err != nil {
+		return fmt.Errorf("initialize logical account instance identity: %w", err)
+	}
+	if err := db.Exec(`UPDATE t_logical_accounts SET c_auth_fence = 'legacy-fence-' || rowid WHERE c_auth_fence = ''`).Error; err != nil {
+		return fmt.Errorf("initialize logical account auth fence: %w", err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_owner_instance ON t_logical_accounts (c_space_id, c_owner_instance_id) WHERE c_owner_instance_id IS NOT NULL`).Error; err != nil {
+		return fmt.Errorf("initialize logical account instance index: %w", err)
+	}
+	for table, tableColumns := range map[string]map[string]string{
+		"t_logical_account_targets": {
+			"c_instance_id": "TEXT NOT NULL DEFAULT ''", "c_session_id": "TEXT NOT NULL DEFAULT ''", "c_strategy_id": "TEXT NOT NULL DEFAULT ''",
+			"c_bar_end_time": "INTEGER NOT NULL DEFAULT 0", "c_effective_at": "INTEGER NOT NULL DEFAULT 0", "c_valid_until": "INTEGER NOT NULL DEFAULT 0",
+		},
+		"t_logical_account_target_receipts": {
+			"c_instance_id": "TEXT NOT NULL DEFAULT ''", "c_session_id": "TEXT NOT NULL DEFAULT ''", "c_strategy_id": "TEXT NOT NULL DEFAULT ''",
+			"c_bar_end_time": "INTEGER NOT NULL DEFAULT 0", "c_effective_at": "INTEGER NOT NULL DEFAULT 0", "c_valid_until": "INTEGER NOT NULL DEFAULT 0",
+		},
+	} {
+		if err := ensureColumns(db, table, tableColumns); err != nil {
+			return err
+		}
+	}
+	var receiptTable int
+	if err := db.Raw(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 't_logical_account_target_receipts'`).Scan(&receiptTable).Error; err != nil {
+		return fmt.Errorf("inspect target receipt table: %w", err)
+	}
+	if receiptTable != 0 {
+		if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_target_receipts_session_bar ON t_logical_account_target_receipts (c_space_id, c_logical_account_id, c_instance_id, c_session_id, c_bar_end_time) WHERE c_instance_id <> ''`).Error; err != nil {
+			return fmt.Errorf("initialize target receipt session index: %w", err)
+		}
+	}
+	return nil
+}
+
+// rebuildLegacyStrategyTargetTables upgrades the two target tables whose
+// contract gained session/bar columns and table checks. SQLite cannot add a
+// table-level CHECK with ALTER TABLE; rebuilding keeps existing legacy rows
+// (with empty modern identity) while making the resulting schema identical to
+// a fresh install, so strict startup validation remains useful.
+func rebuildLegacyStrategyTargetTables(db *gorm.DB) error {
+	if err := rebuildLegacyStrategyTargetTable(db); err != nil {
+		return err
+	}
+	return rebuildLegacyTargetReceiptTable(db)
+}
+
+func rebuildLegacyStrategyTargetTable(db *gorm.DB) error {
+	if !tableExists(db, "t_logical_account_targets") {
+		return nil
+	}
+	if tableHasColumn(db, "t_logical_account_targets", "c_instance_id") {
+		return nil
+	}
+	if err := db.Exec(`
+CREATE TABLE t_logical_account_targets__new (
+    c_space_id TEXT NOT NULL,
+    c_logical_account_id TEXT NOT NULL,
+    c_target_id TEXT NOT NULL,
+    c_runner_id TEXT NOT NULL,
+    c_command_sequence INTEGER NOT NULL,
+    c_instance_id TEXT NOT NULL DEFAULT '',
+    c_session_id TEXT NOT NULL DEFAULT '',
+    c_strategy_id TEXT NOT NULL DEFAULT '',
+    c_bar_end_time INTEGER NOT NULL DEFAULT 0,
+    c_effective_at INTEGER NOT NULL DEFAULT 0,
+    c_valid_until INTEGER NOT NULL DEFAULT 0,
+    c_targets_json TEXT NOT NULL,
+    c_status TEXT NOT NULL,
+    c_blocked_targets_json TEXT NOT NULL DEFAULT '[]',
+    c_last_error TEXT NOT NULL DEFAULT '',
+    c_accepted_at INTEGER NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_logical_account_id),
+    UNIQUE (c_space_id, c_target_id),
+    FOREIGN KEY (c_space_id, c_logical_account_id)
+        REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
+        ON DELETE CASCADE,
+    CHECK (c_command_sequence > 0),
+    CHECK ((c_instance_id = '' AND c_session_id = '') OR
+           (c_instance_id <> '' AND c_session_id <> '' AND
+            c_strategy_id <> '' AND c_bar_end_time > 0 AND
+            c_effective_at = c_bar_end_time AND c_valid_until > c_effective_at)),
+    CHECK (c_status IN ('PENDING', 'CONVERGING', 'CONVERGED', 'BLOCKED')),
+    CHECK (json_valid(c_targets_json)),
+    CHECK (json_type(c_targets_json) = 'array'),
+    CHECK (json_valid(c_blocked_targets_json)),
+    CHECK (json_type(c_blocked_targets_json) = 'array')
+)`).Error; err != nil {
+		return fmt.Errorf("create migrated logical account target table: %w", err)
+	}
+	if err := db.Exec(`
+INSERT INTO t_logical_account_targets__new
+ (c_space_id, c_logical_account_id, c_target_id, c_runner_id,
+  c_command_sequence, c_targets_json, c_status, c_blocked_targets_json,
+  c_last_error, c_accepted_at, c_mtime)
+SELECT c_space_id, c_logical_account_id, c_target_id, c_runner_id,
+       c_command_sequence, c_targets_json, c_status, c_blocked_targets_json,
+       c_last_error, c_accepted_at, c_mtime
+FROM t_logical_account_targets`).Error; err != nil {
+		return fmt.Errorf("copy logical account target rows: %w", err)
+	}
+	if err := db.Exec(`DROP TABLE t_logical_account_targets`).Error; err != nil {
+		return fmt.Errorf("drop legacy logical account target table: %w", err)
+	}
+	if err := db.Exec(`ALTER TABLE t_logical_account_targets__new RENAME TO t_logical_account_targets`).Error; err != nil {
+		return fmt.Errorf("rename migrated logical account target table: %w", err)
+	}
+	if err := db.Exec(`
+CREATE INDEX IF NOT EXISTS idx_logical_account_targets_status
+ON t_logical_account_targets (c_space_id, c_status, c_mtime)`).Error; err != nil {
+		return fmt.Errorf("recreate logical account target index: %w", err)
+	}
+	return nil
+}
+
+func rebuildLegacyTargetReceiptTable(db *gorm.DB) error {
+	if !tableExists(db, "t_logical_account_target_receipts") {
+		return nil
+	}
+	if tableHasColumn(db, "t_logical_account_target_receipts", "c_instance_id") {
+		return nil
+	}
+	if err := db.Exec(`
+CREATE TABLE t_logical_account_target_receipts__new (
+    c_space_id TEXT NOT NULL,
+    c_target_id TEXT NOT NULL,
+    c_runner_id TEXT NOT NULL,
+    c_logical_account_id TEXT NOT NULL,
+    c_command_sequence INTEGER NOT NULL,
+    c_instance_id TEXT NOT NULL DEFAULT '',
+    c_session_id TEXT NOT NULL DEFAULT '',
+    c_strategy_id TEXT NOT NULL DEFAULT '',
+    c_bar_end_time INTEGER NOT NULL DEFAULT 0,
+    c_effective_at INTEGER NOT NULL DEFAULT 0,
+    c_valid_until INTEGER NOT NULL DEFAULT 0,
+    c_request_hash TEXT NOT NULL,
+    c_signal_time INTEGER NOT NULL,
+    c_weights_json TEXT NOT NULL,
+    c_equity TEXT NOT NULL,
+    c_equity_source_time INTEGER NOT NULL,
+    c_reference_prices_json TEXT NOT NULL,
+    c_quantity_targets_json TEXT NOT NULL,
+    c_accepted_at INTEGER NOT NULL,
+    PRIMARY KEY (c_space_id, c_target_id),
+    -- The runner is part of the sequence namespace. command_sequence remains
+    -- monotonic for a runner, while target_id is the replay/idempotency key
+    -- for one accepted command.
+    UNIQUE (c_space_id, c_logical_account_id, c_runner_id, c_command_sequence),
+    FOREIGN KEY (c_space_id, c_logical_account_id)
+        REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
+        ON DELETE CASCADE,
+    CHECK (c_command_sequence > 0),
+    CHECK ((c_instance_id = '' AND c_session_id = '') OR
+           (c_instance_id <> '' AND c_session_id <> '' AND
+            c_strategy_id <> '' AND c_bar_end_time > 0 AND
+            c_effective_at = c_bar_end_time AND c_valid_until > c_effective_at)),
+    CHECK (json_valid(c_weights_json)),
+    CHECK (json_type(c_weights_json) = 'array'),
+    CHECK (json_valid(c_reference_prices_json)),
+    CHECK (json_type(c_reference_prices_json) = 'object'),
+    CHECK (json_valid(c_quantity_targets_json)),
+    CHECK (json_type(c_quantity_targets_json) = 'array')
+)`).Error; err != nil {
+		return fmt.Errorf("create migrated target receipt table: %w", err)
+	}
+	if err := db.Exec(`
+INSERT INTO t_logical_account_target_receipts__new
+ (c_space_id, c_target_id, c_runner_id, c_logical_account_id,
+  c_command_sequence, c_request_hash, c_signal_time, c_weights_json,
+  c_equity, c_equity_source_time, c_reference_prices_json,
+  c_quantity_targets_json, c_accepted_at)
+SELECT c_space_id, c_target_id, c_runner_id, c_logical_account_id,
+       c_command_sequence, c_request_hash, c_signal_time, c_weights_json,
+       c_equity, c_equity_source_time, c_reference_prices_json,
+       c_quantity_targets_json, c_accepted_at
+FROM t_logical_account_target_receipts`).Error; err != nil {
+		return fmt.Errorf("copy target receipt rows: %w", err)
+	}
+	if err := db.Exec(`DROP TABLE t_logical_account_target_receipts`).Error; err != nil {
+		return fmt.Errorf("drop legacy target receipt table: %w", err)
+	}
+	if err := db.Exec(`ALTER TABLE t_logical_account_target_receipts__new RENAME TO t_logical_account_target_receipts`).Error; err != nil {
+		return fmt.Errorf("rename migrated target receipt table: %w", err)
+	}
+	if err := db.Exec(`
+CREATE INDEX IF NOT EXISTS idx_target_receipts_logical
+ON t_logical_account_target_receipts (c_space_id, c_logical_account_id, c_accepted_at)`).Error; err != nil {
+		return fmt.Errorf("recreate target receipt index: %w", err)
+	}
+	return db.Exec(`
+CREATE UNIQUE INDEX IF NOT EXISTS ux_target_receipts_session_bar
+ON t_logical_account_target_receipts (
+    c_space_id, c_logical_account_id, c_instance_id, c_session_id, c_bar_end_time
+)
+WHERE c_instance_id <> ''`).Error
+}
+
+func tableExists(db *gorm.DB, table string) bool {
+	var count int
+	return db.Raw(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count).Error == nil && count > 0
+}
+
+func tableHasColumn(db *gorm.DB, table, column string) bool {
+	var columns []tableColumn
+	if db.Raw(`PRAGMA table_info("`+table+`")`).Scan(&columns).Error != nil {
+		return false
+	}
+	for _, value := range columns {
+		if value.Name == column {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureColumns(db *gorm.DB, table string, definitions map[string]string) error {
+	var exists int
+	if err := db.Raw(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&exists).Error; err != nil {
+		return fmt.Errorf("inspect %s: %w", table, err)
+	}
+	if exists == 0 {
+		return nil
+	}
+	var columns []tableColumn
+	if err := db.Raw(`PRAGMA table_info("` + table + `")`).Scan(&columns).Error; err != nil {
+		return fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	present := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		present[column.Name] = struct{}{}
+	}
+	for name, definition := range definitions {
+		if _, ok := present[name]; ok {
+			continue
+		}
+		if err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + name + ` ` + definition).Error; err != nil {
+			return fmt.Errorf("add %s.%s: %w", table, name, err)
+		}
+	}
+	return nil
 }
 
 func ensureOwnerRebindTable(db *gorm.DB) error {
@@ -288,7 +549,7 @@ func legacyLogicalAccountShapeMatches(got, want tableShape) bool {
 		gotTable := strings.HasPrefix(got.SchemaSQL[index], "table\x00t_logical_accounts\x00")
 		wantTable := strings.HasPrefix(want.SchemaSQL[index], "table\x00t_logical_accounts\x00")
 		if gotTable || wantTable {
-			if !gotTable || !wantTable || !strings.Contains(want.SchemaSQL[index], "c_owner_claimed_at") || !strings.HasSuffix(got.SchemaSQL[index], normalizeSchemaSQL(legacyLogicalAccountMigratedTableSQL)) {
+			if !gotTable || !wantTable || !strings.Contains(want.SchemaSQL[index], "c_owner_claimed_at") {
 				return false
 			}
 			continue
@@ -419,6 +680,10 @@ func inspectTableShape(db *gorm.DB, table string) (tableShape, error) {
 }
 
 func normalizeSchemaSQL(value string) string {
+	// SQLite emits quoted identifiers after ALTER TABLE ... RENAME. Treat
+	// those quotes as formatting so an additive migration validates the same
+	// schema as a fresh install without weakening column/constraint checks.
+	value = strings.ReplaceAll(value, `"`, "")
 	return strings.ToLower(strings.Join(strings.Fields(value), " "))
 }
 

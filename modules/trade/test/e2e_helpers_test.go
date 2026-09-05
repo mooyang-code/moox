@@ -30,7 +30,10 @@ const (
 	testInstrumentID = "BTC-USDT"
 )
 
-var testNow = time.Unix(1_700_000_000, 0).UTC()
+// Target validity is checked against the real Trade clock. Keep the shared
+// fixture clock near process start so generated target windows remain valid
+// while the package tests run.
+var testNow = time.Now().UTC()
 
 // fakeExchange models only Exchange facts. It deliberately does not use the
 // production order reducer, so reducer assertions do not mirror production.

@@ -16,13 +16,14 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestHandleLogicalAccountTargetMapsTargetIdentity(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, true, true)
 	var wakes atomic.Int32
-	now := time.UnixMilli(1_700_000_000_000).UTC()
+	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-2", "runner-1", "logical-1", 2,
@@ -55,7 +56,7 @@ func TestHandleLogicalAccountTargetMapsTargetIdentity(t *testing.T) {
 func TestHandleLogicalAccountTargetAcceptsEmptyFullWhilePaused(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, false, true)
-	now := time.UnixMilli(1_700_000_000_000).UTC()
+	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-empty", "runner-1", "logical-1", 1, nil,
@@ -73,7 +74,7 @@ func TestHandleLogicalAccountTargetAcceptsEmptyFullWhilePaused(t *testing.T) {
 func TestHandleLogicalAccountTargetRejectsWrongRunner(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, true, true)
-	now := time.UnixMilli(1_700_000_000_000).UTC()
+	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-1", "runner-other", "logical-1", 1, nil,
@@ -86,7 +87,7 @@ func TestHandleLogicalAccountTargetRejectsWrongRunner(t *testing.T) {
 func TestHandleLogicalAccountTargetRejectsDelayedEventFromPreviousOwnerLifecycle(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, true, true)
-	claimAt := time.UnixMilli(1_700_000_000_100).UTC()
+	claimAt := time.Now().UTC()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.SetLogicalAccountOwnerAt("space-1", "logical-1", "runner-1", claimAt)
 	}))
@@ -104,10 +105,7 @@ func TestHandleLogicalAccountTargetRejectsDelayedEventFromPreviousOwnerLifecycle
 func TestHandleLogicalAccountTargetAcceptsMatchingOwnerGeneration(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, true, true)
-	now := time.UnixMilli(1_700_000_000_000).UTC()
-	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountOwnerAt("space-1", "logical-1", "runner-1", now)
-	}))
+	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-generation-match", "runner-1", "logical-1", 1,
@@ -124,7 +122,7 @@ func TestHandleLogicalAccountTargetAcceptsMatchingOwnerGeneration(t *testing.T) 
 func TestHandleLogicalAccountTargetRejectsUnsupportedInstrument(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, true, true)
-	now := time.UnixMilli(1_700_000_000_000).UTC()
+	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-1", "runner-1", "logical-1", 1,
@@ -149,7 +147,7 @@ func TestHandleLogicalAccountTargetRejectsInstrumentForDifferentSettlementAsset(
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 		})
 	}))
-	now := time.UnixMilli(1_700_000_000_000).UTC()
+	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-usdc", "runner-1", "logical-1", 1,
@@ -174,7 +172,7 @@ func TestHandleLogicalAccountTargetRejectsNonCanonicalInstrumentStatus(t *testin
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "trading",
 		})
 	}))
-	now := time.UnixMilli(1_700_000_000_000).UTC()
+	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-lowercase-status", "runner-1", "logical-1", 1,
@@ -200,7 +198,7 @@ func TestHandleLogicalAccountTargetRetriesMissingMetadataUntilMembersReady(t *te
 		t.Run(test.name, func(t *testing.T) {
 			tradeStore := openTargetStore(t)
 			seedLogicalTargetAccount(t, tradeStore, test.ready, false)
-			now := time.UnixMilli(1_700_000_000_000).UTC()
+			now := time.Now().UTC()
 
 			result := HandleTarget(context.Background(), logicalTargetDelivery(
 				t, now, "target-1", "runner-1", "logical-1", 1,
@@ -221,7 +219,7 @@ func TestHandleLogicalAccountTargetRetriesWhenAllMembersDisabled(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.SetTradingAccountStatus("space-1", "account-1", "DISABLED")
 	}))
-	now := time.UnixMilli(1_700_000_000_000).UTC()
+	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-disabled", "runner-1", "logical-1", 1,
@@ -237,12 +235,12 @@ func TestHandleLogicalAccountTargetRetriesUntilMemberExists(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", ExecutionMode: "PAPER",
+			OwnerRunnerID: "runner-1", OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
 			MarketType: "SPOT", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		})
 	}))
-	now := time.UnixMilli(1_700_000_000_000).UTC()
+	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-1", "runner-1", "logical-1", 1,
@@ -268,7 +266,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", ExecutionMode: "PAPER",
+			OwnerRunnerID: "runner-1", OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
 			MarketType: "SWAP", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -288,7 +286,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 			MinExchangeQuantity: "1", PriceTick: "0.1", Status: "live",
 		})
 	}))
-	now := time.UnixMilli(1_700_000_000_000).UTC()
+	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-1", "runner-1", "logical-1", 1,
@@ -305,7 +303,7 @@ func TestHandleLogicalAccountTargetDoesNotWakeForExactRetry(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, true, true)
 	var wakes atomic.Int32
-	now := time.UnixMilli(1_700_000_000_000).UTC()
+	now := time.Now().UTC()
 	delivery := logicalTargetDelivery(
 		t, now, "target-1", "runner-1", "logical-1", 1, nil,
 	)
@@ -328,7 +326,7 @@ func TestHandleTargetTermsInvalidDelivery(t *testing.T) {
 }
 
 func TestHandleTargetTermsMalformedEnvelope(t *testing.T) {
-	now := time.UnixMilli(1_700_000_000_000).UTC()
+	now := time.Now().UTC()
 	result := HandleTarget(context.Background(), &jetstream.Delivery{
 		RawData: []byte("malformed"), ContentType: events.ContentType,
 	}, targetOptions(openTargetStore(t), now))
@@ -386,7 +384,7 @@ func seedLogicalTargetAccount(
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", ExecutionMode: "PAPER",
+			OwnerRunnerID: "runner-1", OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
 			MarketType: "SPOT", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -427,12 +425,13 @@ func logicalTargetDelivery(
 	if len(ownerGeneration) > 0 {
 		generation = ownerGeneration[0]
 	}
+	bar := timestamppb.New(now)
 	encoded, err := registry.Encode(
 		events.LogicalAccountTargetWeightRequested,
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
-			TargetId: targetID, RunnerId: runnerID,
-			LogicalAccountId: logicalAccountID,
-			CommandSequence:  sequence, Targets: targets, OwnerGeneration: generation,
+			TargetId: targetID, RunnerId: runnerID, InstanceId: runnerID, SessionId: "session-1", StrategyId: "strategy-1",
+			LogicalAccountId: logicalAccountID, CommandSequence: sequence, Targets: targets, OwnerGeneration: generation,
+			BarEndTime: bar, EffectiveAt: bar, ValidUntil: timestamppb.New(now.Add(time.Hour)),
 		},
 		events.PublishOptions{
 			EventID: targetID, OccurredAt: now,

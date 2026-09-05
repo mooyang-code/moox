@@ -70,9 +70,32 @@ type InstrumentTarget struct {
 	TargetWeight string `json:"target_weight"`
 }
 
+// RuleState is the small amount of theoretical state that a stateful rule
+// needs for its next evaluation. It deliberately contains no broker, order,
+// fill, or actual-position data.
+type RuleState struct {
+	Signals []SignalState       `json:"signals,omitempty"`
+	Batches []HoldingBatchState `json:"batches,omitempty"`
+}
+
+type SignalState struct {
+	InstrumentID string `json:"instrument_id"`
+	EnteredAt    int64  `json:"entered_at,omitempty"`
+}
+
+type HoldingBatchState struct {
+	Offset        int               `json:"offset"`
+	EstablishedAt int64             `json:"established_at"`
+	ExpiresAt     int64             `json:"expires_at"`
+	BaseWeights   map[string]string `json:"base_weights"`
+}
+
+func (s RuleState) Empty() bool { return len(s.Signals) == 0 && len(s.Batches) == 0 }
+
 // Evaluation is the result of one pure evaluator invocation.
 type Evaluation struct {
-	Action    Action
-	Targets   []InstrumentTarget
-	DebugInfo map[string]any
+	Action     Action
+	Targets    []InstrumentTarget
+	DebugInfo  map[string]any
+	RuleStates map[string]RuleState
 }

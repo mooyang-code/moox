@@ -530,9 +530,14 @@ func validateOrderOwnership(tx *Tx, record OrderRecord) error {
 	if err != nil {
 		return err
 	}
-	if owner.Type == orderdomain.OwnerTarget &&
-		account.OwnerRunnerID != record.RunnerID {
-		return fmt.Errorf("%w: TARGET runner does not own logical account", ErrConflict)
+	if owner.Type == orderdomain.OwnerTarget {
+		if account.OwnerInstanceID != "" {
+			if account.OwnerInstanceID != record.RunnerID {
+				return fmt.Errorf("%w: TARGET instance does not own logical account", ErrConflict)
+			}
+		} else if account.OwnerRunnerID != record.RunnerID {
+			return fmt.Errorf("%w: TARGET runner does not own logical account", ErrConflict)
+		}
 	}
 	var membership int64
 	if err := tx.db.Raw(`
