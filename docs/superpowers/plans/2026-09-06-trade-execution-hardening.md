@@ -8,7 +8,7 @@
 
 **技术栈：** Go、tRPC/Protobuf、SQLite/GORM、JetStream、Vue/TypeScript、Binance/OKX、Vitest/Playwright。
 
-**状态：** 待用户确认，尚未开始编码。本次只新增本计划；下文的命令、SQL、接口草案和任务均为后续执行说明，不表示已经实施、部署或通过验收。
+**状态：** 用户于 2026-09-06 授权按本计划开始编码、另起 Agent 审查、发布正式环境并用模拟账户完成真实端到端验收。执行中；下文未勾选项不表示已完成。实施证据记录在同目录 `2026-09-06-trade-execution-hardening-progress.md`。
 
 **审查基线：** `feature/mooyang`，`2bd4f508d45031e5a8fb629e5b62b88b9743810a`，2026-09-06。工作区同时存在 Strategy、Storage、文档和部署配置的其他修改；实施时重新核验，禁止覆盖或顺带提交。
 
@@ -28,7 +28,7 @@
 
 ### 1.2 阶段 B 采用的推荐设计
 
-以下为本计划的明确推荐，不代表用户已经批准：
+以下推荐随用户“根据该执行计划文档，开始编码注意不要遗漏”的授权执行：
 
 1. 执行授权最终统一为 `logical_account_id -> (instance_id, session_id)`；`auth_fence` 只用于控制面 CAS，不放入策略目标。旧 runner/sequence 不再成为另一套自动交易授权入口。
 2. 组合账户继续支持多个同质执行账户。冻结的是组合权益、参考价和总目标数量，不冻结执行账户；参考价来源账户只作为 receipt 证据。
@@ -93,7 +93,7 @@ OKX 协议依据：[Orders channel 官方文档](https://www.okx.com/docs-v5#ord
 - 修改测试：`modules/trade/internal/exchange/okx/account_events_test.go`
 - 新增测试：`modules/trade/test/modern_target_execution_e2e_test.go`
 
-- [ ] 记录当前 HEAD、工作区/index 文件列表、Trade/Strategy/EventBus 的实际构建命令；执行用独立工作区必须基于用户确认的当前代码，而不是丢弃未提交的现代 Strategy 改动。
+- [x] 记录当前 HEAD、工作区/index 文件列表、Trade/Strategy/EventBus 的实际构建命令；执行用独立工作区必须基于用户确认的当前代码，而不是丢弃未提交的现代 Strategy 改动。
 - [ ] 把三个已复现问题写成正常包测试，不依赖 `/tmp`、已有服务、真实凭据或壁钟等待。测试名称固定为 `TestModernSessionTargetCanResume`、`TestIdempotentClaimSessionPreservesTarget`、`TestIdempotentRebindSessionPreservesTarget`、`TestOrdersChannelUsesPerFillFee`。
 - [ ] 为人工链增加 `TestManualUnknownSubmissionRemainsRecoverable`，注入交易所 TransportUnknown，验证底层订单未知时 action 不得进入失败终态。
 - [ ] 运行以下测试，确认在修复前分别因为 runner mismatch、目标消失、0.02/0.01 费用不符、action FAILED 而失败，不能接受初始化或编译失败充当红测。
@@ -115,10 +115,10 @@ go test -count=1 ./modules/trade/internal/exchange/okx -run TestOrdersChannelUse
 - 测试：对应 `service_test.go`、`rpc/logical_account_test.go`、`infra/store/session_target_test.go`
 - 复核调用方：`modules/strategy/internal/bootstrap/logical_account.go`
 
-- [ ] Store 的 Claim/Rebind 返回 `(fence string, changed bool, err error)`。首次建立/真实替换才返回 changed；相同身份与当前 fence 的重试返回原 fence、false；旧 fence 和旧身份仍冲突。
-- [ ] Service 在同一事务内仅当 changed 时删除当前可执行目标。历史 receipt 保留；失败事务不得改变 owner、fence 或目标。
-- [ ] readiness 对现代目标检查 instance/session 的完整相等关系，与 OrderService 的提交授权规则一致。过期目标不得因“持有旧目标”而伪装成可执行目标；允许组合恢复为 ACTIVE 等待下一条有效目标，不据此自动重新交易。
-- [ ] 控制面重试不得因重新读取 fence 而撤销另一个新 session：完整身份匹配仍为必要条件。测试旧 release/rebind 的延迟到达。
+- [x] Store 的 Claim/Rebind 返回 `(fence string, changed bool, err error)`。首次建立/真实替换才返回 changed；相同身份与当前 fence 的重试返回原 fence、false；旧 fence 和旧身份仍冲突。
+- [x] Service 在同一事务内仅当 changed 时删除当前可执行目标。历史 receipt 保留；失败事务不得改变 owner、fence 或目标。
+- [x] readiness 对现代目标检查 instance/session 的完整相等关系，与 OrderService 的提交授权规则一致。过期目标不得因“持有旧目标”而伪装成可执行目标；允许组合恢复为 ACTIVE 等待下一条有效目标，不据此自动重新交易。
+- [x] 控制面重试不得因重新读取 fence 而撤销另一个新 session：完整身份匹配仍为必要条件。测试旧 release/rebind 的延迟到达。
 
 ```text
 Claim/Rebind transaction:
@@ -128,9 +128,9 @@ Claim/Rebind transaction:
   commit
 ```
 
-- [ ] 验收矩阵：相同认领不删目标、不转 fence；真实切换只清当前目标；失败 CAS 不改任何数据；现代目标 Resume 成功；旧 session 消息拒绝；PAUSED 接收目标不下单。
-- [ ] 运行 `go test -count=1 ./modules/trade/internal/application/logicalaccount ./modules/trade/internal/infra/store ./modules/trade/internal/rpc ./modules/strategy/internal/bootstrap`，再运行相关包 `-race`；结果必须通过。
-- [ ] 提交建议：`fix(trade): preserve targets across idempotent session claims`。
+- [x] 验收矩阵：相同认领不删目标、不转 fence；真实切换只清当前目标；失败 CAS 不改任何数据；现代目标 Resume 成功；旧 session 消息拒绝；PAUSED 接收目标不下单。
+- [x] 运行 `go test -count=1 ./modules/trade/internal/application/logicalaccount ./modules/trade/internal/infra/store ./modules/trade/internal/rpc ./modules/strategy/internal/bootstrap`，再运行相关包 `-race`；结果必须通过。
+- [x] 提交建议：`fix(trade): preserve targets across idempotent session claims`。实际提交 `839255b2`，独立 codeCR 及增量复核通过，见执行记录。
 
 ### T03：贯通人工操作与订单的不确定状态
 
@@ -202,6 +202,7 @@ Claim/Rebind transaction:
 - 修改：`modules/trade/internal/infra/store/store.go`、`paper_simulation.go`
 - 修改：`modules/trade/schema/schema.go`、`schema_test.go`
 - 修改：`modules/trade/internal/application/consumer/fill.go`、`application/papersimulation/service.go`
+- 修改/验证：`modules/trade/internal/application/order/service.go`、`infra/store/reservation.go`、`reservation_facts.go` 及对应测试
 - 修改：`modules/trade/internal/execution/paper/adapter.go`、`internal/bootstrap/bootstrap.go`
 - 测试：`modules/trade/test/paper_matcher_restart_e2e_test.go`、`close_paper_simulation_e2e_test.go`
 
@@ -234,7 +235,7 @@ CREATE TABLE IF NOT EXISTS t_paper_asset_balances (
 - [ ] 用稳定复合键 `(traded_at, fill_id)` 扫描事务内历史；`applied_fill_count` 只用于审计，不是按交易所时间过滤新 Fill 的水位。迟到 Fill 也必须增量入账；再次启动不覆盖已经初始化的投影。
 - [ ] 每笔新 Paper Fill 的插入、订单状态、reservation 释放、持仓和余额投影在同一事务更新。只有 `InsertFill` 确认新增才修改投影；重复 Fill 不加计，冲突或任何中途错误全部回滚。禁止在已有 Tx 内调用会新建事务的 Store 方法。
 - [ ] Spot：买入扣 quote、加 base；卖出相反；手续费按实际费用币种扣除。Swap：初始结算现金加已实现收益、扣费用；未实现收益和保证金仍由当前持仓/价格计算。所有金额用现有 Decimal，不用浮点数或 SQLite 浮点 SUM。
-- [ ] `GetAccountSnapshot` 改读投影和活动 reservation，不再每次读取全部 Fill/全部终态订单。现有快照 watermark 与未反映 reservation 逻辑必须保留，避免预占计算两次。
+- [ ] `GetAccountSnapshot` 改读投影和活动 reservation，不再每次读取全部 Fill/全部终态订单。保留“预占只扣一次”的合同，而非照搬有重扣风险的实现：先红测覆盖 Paper 快照已含 PENDING locked、随后又 Place 的情况。Paper 在同一 Place 事务读取余额投影与全部活动 reservation 校验资金，不再对已反映预占的 Paper 可用余额叠加 `GetUnreflectedReservation`；Live 仍保留现有 snapshot watermark 路径，防止扩大账户事实合同变更。
 - [ ] Close 只关闭执行并取消活动模拟订单，保留 Fill、余额投影与资金曲线；同事务取消并释放 reservation 后刷新最终快照，避免已关闭账户仍显示旧 locked。不得通过重建重新开启 CLOSED 账户。
 - [ ] 验收：100001 笔历史、不同费币种、买卖回转、Swap 已实现收益、重复重放、事务失败、重启、关闭、重建与增量结果一致。增加查询计数断言：普通快照不调用全历史 ListFills，不用墙钟性能阈值代替结构验证。
 - [ ] 运行 `go test -count=1 ./modules/trade/schema ./modules/trade/internal/infra/store ./modules/trade/internal/application/consumer ./modules/trade/internal/application/papersimulation ./modules/trade/internal/bootstrap ./modules/trade/internal/execution/paper ./modules/trade/test`，并对所有 schema 执行内存 SQLite 载入与外键检查。
@@ -431,4 +432,4 @@ git diff --check
 - [ ] 本计划全部已执行项有明确测试命令和结果；未执行的真实交易所/部署项明确标识未验证。
 - [ ] 最终提交只包含本计划范围的文件；独立审查完成；本地提交、远端 SHA 与目标分支经过核验。
 
-**当前交付仅为这份执行计划，所有实施检查项保持未勾选。**
+**完成标准仍为完整实施、独立审查、正式环境发布和隔离模拟账户真实端到端验收，不以阶段性单测通过替代最终交付。**
