@@ -75,11 +75,11 @@ if [[ -z "${storage_view_secret}" || "${storage_view_secret}" == *$'\n'* || "${s
   exit 1
 fi
 
-export MOOX_FACTOR_DB_PATH="${ROOT}/data/factor/factor.db"
-export MOOX_FACTOR_ENGINE_PYTHON_BIN="${ROOT}/data/factor/venv/bin/python"
-export MOOX_FACTOR_ENGINE_WORKER_PATH="${ROOT}/factor/pyworker/worker.py"
-export MOOX_FACTOR_ENGINE_FACTORS_DIR="${ROOT}/factor/factors"
-export MOOX_PYTHON_RUNTIME_PATH="${ROOT}/python-runtime"
+export MOOX_FACTOR_DB_PATH="${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor/factor.db}"
+export MOOX_FACTOR_ENGINE_PYTHON_BIN="${MOOX_FACTOR_ENGINE_PYTHON_BIN:-${ROOT}/data/factor/venv/bin/python}"
+export MOOX_FACTOR_ENGINE_WORKER_PATH="${MOOX_FACTOR_ENGINE_WORKER_PATH:-${ROOT}/factor/pyworker/worker.py}"
+export MOOX_FACTOR_ENGINE_FACTORS_DIR="${MOOX_FACTOR_ENGINE_FACTORS_DIR:-${ROOT}/factor/factors}"
+export MOOX_PYTHON_RUNTIME_PATH="${MOOX_PYTHON_RUNTIME_PATH:-${ROOT}/python-runtime}"
 export MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET="ip://127.0.0.1:11003"
 export MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID="${gateway_node_id}"
 export MOOX_GATEWAY_SERVICE_KEY_ID="factor"

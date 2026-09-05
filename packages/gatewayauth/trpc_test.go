@@ -63,3 +63,27 @@ func TestTRPCClientFilterSignsExactMapContainingWireBody(t *testing.T) {
 		t.Fatalf("response status = %q, want ok", got)
 	}
 }
+
+func TestTRPCClientFilterPreservesTransparentMetadata(t *testing.T) {
+	credentials := Credentials{KeyID: "strategy", Caller: "strategy", Secret: "secret"}
+	clientFilter := NewTRPCClientFilter(credentials, "control", func() time.Time {
+		return time.Unix(1_700_000_000, 0)
+	})
+	ctx, msg := codec.EnsureMessage(context.Background())
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/CreateStrategy")
+	msg.WithCalleeServiceName("trpc.moox.strategy.StrategyMgr")
+	msg.WithCalleeMethod("CreateStrategy")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	msg.WithClientMetaData(codec.MetaData{"space_id": []byte("factor_e2e")})
+
+	rsp := &structpb.Struct{}
+	err := clientFilter(ctx, &structpb.Struct{}, rsp, func(ctx context.Context, _, _ interface{}) error {
+		if got := string(codec.Message(ctx).ClientMetaData()["space_id"]); got != "factor_e2e" {
+			t.Fatalf("space_id metadata = %q, want factor_e2e", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

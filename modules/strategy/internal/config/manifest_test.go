@@ -50,6 +50,30 @@ func TestDSLAllowsEitherTrigger(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDSLRejectsStaticWeightBudgetOverflow(t *testing.T) {
+	raw := []byte("name: over\ntriggers: {event: {name: ready}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {a: {pool: [BTC], weight: 0.7}, b: {pool: [ETH], weight: 0.4}}\n")
+	_, err := Parse(raw)
+	require.ErrorContains(t, err, "weight upper bound exceeds 1")
+}
+
+func TestDSLRejectsDynamicWeightEachPool(t *testing.T) {
+	raw := []byte("name: dynamic\ntriggers: {event: {name: ready}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {pool: {udf: spot_symbols}, weight_each: 0.1}}\n")
+	_, err := Parse(raw)
+	require.ErrorContains(t, err, "weight_each requires a fixed pool")
+}
+
+func TestDSLRejectsUnsupportedCalendarBarCombination(t *testing.T) {
+	raw := []byte("name: stock-hour\ntriggers: {event: {name: ready}}\ndata: {bar: 1h, calendar: cn_stock}\nrules: {r: {pool: [000001.SZ], weight: 1}}\n")
+	_, err := Parse(raw)
+	require.ErrorContains(t, err, "cn_stock only supports 1d bars")
+}
+
+func TestDSLReservesFullPoolForSignalWeightEach(t *testing.T) {
+	raw := []byte("name: signal-budget\ntriggers: {event: {name: ready}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {pool: [BTC, ETH], score: close, select: {top: 1}, signals: {entry: close > 0, exit: close < 0}, weight_each: 0.6}}\n")
+	_, err := Parse(raw)
+	require.ErrorContains(t, err, "weight upper bound exceeds 1")
+}
+
 func TestDSLPreservesMinuteFrequencyUnit(t *testing.T) {
 	dsl, err := Parse([]byte("name: minute\ntriggers: {event: {name: ready}}\ndata: {bar: 1m, calendar: crypto_24x7}\nrules: {r: {pool: [BTC], weight: 1}}\n"))
 	if err != nil {

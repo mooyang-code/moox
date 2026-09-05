@@ -42,3 +42,14 @@ rules: {r: {pool: [BTC], score: close, weight: 1}}
 	_, err = (Compiler{}).CompileWithBindings(context.Background(), dsl, "space-1", []byte(`{"source_view_id":"source","frequency":"5m"}`))
 	require.Error(t, err)
 }
+
+func TestCompileWithBindingsRejectsUndeclaredScalarField(t *testing.T) {
+	dsl, err := config.Parse([]byte(`name: typo
+triggers: {event: {name: factor.ready}}
+data: {bar: 1h, calendar: crypto_24x7}
+rules: {r: {pool: [BTC], score: misspelled_factor, weight: 1}}
+`))
+	require.NoError(t, err)
+	_, err = (Compiler{}).CompileWithBindings(context.Background(), dsl, "space-1", []byte(`{"source_view_id":"source"}`))
+	require.ErrorContains(t, err, "not declared by instance bindings")
+}

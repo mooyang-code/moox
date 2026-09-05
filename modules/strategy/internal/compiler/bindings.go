@@ -101,6 +101,9 @@ func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, space
 	if err != nil {
 		return CompiledStrategy{}, err
 	}
+	if err := rejectUndeclaredFields(compiled, fields); err != nil {
+		return CompiledStrategy{}, err
+	}
 	if binding.SourceViewID != "" {
 		compiled.SourceView.ID = binding.SourceViewID
 	}
@@ -146,6 +149,33 @@ func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, space
 		compiled.SourceView.Frequency = compiled.Data.Bar
 	}
 	return compiled, nil
+}
+
+func rejectUndeclaredFields(compiled CompiledStrategy, declared map[string]reflect.Type) error {
+	allowed := make(map[string]struct{}, len(declared)+len(defaultExpressionFields)+len(defaultExpressionIdentifiers))
+	for name := range declared {
+		allowed[name] = struct{}{}
+	}
+	for name := range defaultExpressionFields {
+		allowed[name] = struct{}{}
+	}
+	for name := range defaultExpressionIdentifiers {
+		allowed[name] = struct{}{}
+	}
+	for _, rule := range compiled.Rules {
+		expressions := []*CompiledExpression{rule.FilterBefore, rule.Score, rule.SelectWhere, rule.SignalEntry, rule.SignalExit, rule.FilterAfter}
+		for _, expression := range expressions {
+			if expression == nil {
+				continue
+			}
+			for _, field := range expression.Dependencies.Fields {
+				if _, ok := allowed[field]; !ok {
+					return fmt.Errorf("strategy expression field %q is not declared by instance bindings", field)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func containsString(values []string, wanted string) bool {

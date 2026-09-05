@@ -9,9 +9,15 @@ server:
     - prometheus
   timeout: 30000
   service:
-    - name: trpc.moox.strategy.StrategyMgr
+    - name: trpc.moox.strategy.StrategyMgr.trpc
       ip: 127.0.0.1
       port: 11430
+      network: tcp
+      protocol: trpc
+      timeout: 30000
+    - name: trpc.moox.strategy.StrategyMgr
+      ip: 127.0.0.1
+      port: 11433
       network: tcp
       protocol: http
       timeout: 30000

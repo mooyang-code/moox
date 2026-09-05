@@ -217,7 +217,8 @@ func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config) (*stra
 			}
 			return selected.CompileWithBindings(compileCtx, dsl, spaceID, raw)
 		},
-		OwnerGeneration: logicalOwner.Generation,
+		OwnerGeneration:   logicalOwner.Generation,
+		SessionGeneration: logicalOwner.SessionGeneration,
 		VerifyDependencies: func(ctx context.Context, compiled compiler.CompiledStrategy) error {
 			dependencyCompiler := compilerFactory(compiled.SpaceID)
 			if dependencyCompiler == nil {
@@ -225,6 +226,7 @@ func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config) (*stra
 			}
 			return dependencyCompiler.VerifyDependencies(ctx, compiled)
 		},
+		Diagnostic: func(err error) { log.Warnf("strategy trigger evaluation skipped: %v", err) },
 	}
 	consumer := strategyeventconsumer.New(strategyeventconsumer.Config{Client: client, ConsumerName: cfg.EventBus.ConsumerName}, processor)
 	if err := consumer.Start(ctx); err != nil {

@@ -16,6 +16,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
+	"google.golang.org/protobuf/proto"
 )
 
 type fakeInputLoader struct {
@@ -28,6 +31,30 @@ func (f fakeInputLoader) Load(context.Context, domain.StrategyRunner, compiler.C
 }
 
 type fakeIndexedInputLoader struct{ fakeInputLoader }
+
+func TestMarshalTargetEventCarriesOwnerGeneration(t *testing.T) {
+	account := "logical-1"
+	now := time.UnixMilli(1000).UTC()
+	raw, err := marshalTargetEvent(store.StrategyInstance{InstanceID: "instance-1", StrategyID: "strategy-1", SpaceID: "space-1", LogicalAccountID: &account}, store.StrategyResult{ResultID: "result-1", InstanceID: "instance-1", SessionID: "session-1", BarEndTime: now, ValidUntil: now.Add(time.Hour), CreatedAt: now}, nil, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := registry.UnmarshalMessage(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := new(tradeeventpb.LogicalAccountTargetWeightRequested)
+	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.GetOwnerGeneration() != 7 {
+		t.Fatalf("owner generation = %d, want 7", payload.GetOwnerGeneration())
+	}
+}
 
 func (f fakeIndexedInputLoader) LoadAt(context.Context, domain.StrategyRunner, compiler.CompiledStrategy, time.Time, map[string]string) (input.EvaluationInput, error) {
 	return f.value, f.err

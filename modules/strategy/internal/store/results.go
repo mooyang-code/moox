@@ -58,7 +58,7 @@ func (s *Store) CommitEvaluation(ctx context.Context, request CommitEvaluationRe
 	}
 	if instance.LogicalAccountID != nil && request.Evaluation.Action == domain.ActionRebalance {
 		status = PublishPending
-		eventData, err = marshalLegacyTargetEvent(instance, result, legacy.StrategyID)
+		eventData, err = marshalLegacyTargetEvent(instance, result, legacy.StrategyID, request.OwnerGeneration)
 		if err != nil {
 			return CommitEvaluationOutcome{}, err
 		}
@@ -141,7 +141,7 @@ func encodeLegacyEvaluation(evaluation domain.Evaluation) (json.RawMessage, json
 	return targetJSON, stateJSON, nil
 }
 
-func marshalLegacyTargetEvent(instance StrategyInstance, result StrategyResult, strategyID string) ([]byte, error) {
+func marshalLegacyTargetEvent(instance StrategyInstance, result StrategyResult, strategyID string, ownerGeneration int64) ([]byte, error) {
 	var targets []domain.InstrumentTarget
 	if err := json.Unmarshal(result.TargetsJSON, &targets); err != nil {
 		return nil, fmt.Errorf("decode strategy targets: %w", err)
@@ -156,11 +156,11 @@ func marshalLegacyTargetEvent(instance StrategyInstance, result StrategyResult, 
 	}
 	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		// CommitEvaluation is the compatibility adapter for the old Runner
-		// contract. Keep its event legacy-shaped; modern instances use the
-		// trigger processor's session-fenced payload instead.
+		// contract. Keep its identity fields legacy-shaped while preserving the
+		// optional owner-generation fence for modern callers.
 		TargetId: result.ResultID, RunnerId: result.InstanceID,
 		LogicalAccountId: valueOrEmpty(instance.LogicalAccountID), CommandSequence: 1,
-		Targets: payloadTargets,
+		Targets: payloadTargets, OwnerGeneration: ownerGeneration,
 	}
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{
 		EventID: result.ResultID, OccurredAt: result.CreatedAt.UTC(), SpaceID: instance.SpaceID, SubjectID: valueOrEmpty(instance.LogicalAccountID),

@@ -239,6 +239,16 @@ func Validate(dsl *DSL) error {
 	if dsl.Data.Calendar == "" {
 		return errors.New("strategy DSL data.calendar is required")
 	}
+	switch calendar := strings.ToLower(dsl.Data.Calendar); calendar {
+	case "crypto_24x7":
+		// Continuous markets support the configured minute/hour/day bar.
+	case "cn_stock":
+		if dsl.Data.Bar != "1D" {
+			return fmt.Errorf("strategy DSL data.calendar cn_stock only supports 1d bars")
+		}
+	default:
+		return fmt.Errorf("strategy DSL data.calendar %q is unsupported", dsl.Data.Calendar)
+	}
 	if len(dsl.Rules) == 0 {
 		return errors.New("strategy DSL rules is required")
 	}
@@ -251,7 +261,7 @@ func Validate(dsl *DSL) error {
 		}
 		dsl.Rules[name] = rule
 	}
-	return nil
+	return validateWeightBudget(dsl.Rules)
 }
 
 func normalizeFrequency(value string) (string, error) {
@@ -335,6 +345,9 @@ func validateRule(name string, rule *Rule) error {
 		if len(rule.Holding.Offsets) == 0 {
 			return fmt.Errorf("strategy DSL rules.%s.holding.offsets is required", name)
 		}
+		if strings.TrimSpace(rule.WeightEach) != "" {
+			return fmt.Errorf("strategy DSL rules.%s.holding requires weight, not weight_each", name)
+		}
 		seen := make(map[int]struct{}, len(rule.Holding.Offsets))
 		for _, offset := range rule.Holding.Offsets {
 			if offset < 0 || offset >= rule.Holding.Bars {
@@ -345,6 +358,45 @@ func validateRule(name string, rule *Rule) error {
 			}
 			seen[offset] = struct{}{}
 		}
+	}
+	return nil
+}
+
+// validateWeightBudget rejects configurations whose maximum declared
+// allocation can exceed one. A dynamic UDF pool has no statically knowable
+// cardinality, so it must use weight (which is split across the actual
+// selected rows) rather than weight_each.
+func validateWeightBudget(rules map[string]Rule) error {
+	total := quant.Zero()
+	for name, rule := range rules {
+		if strings.TrimSpace(rule.Weight) != "" {
+			value, err := quant.Parse(strings.TrimSpace(rule.Weight))
+			if err != nil {
+				return fmt.Errorf("strategy DSL rules.%s.weight: %w", name, err)
+			}
+			total = total.Add(value)
+			continue
+		}
+		if rule.Pool.Fixed == nil {
+			return fmt.Errorf("strategy DSL rules.%s.weight_each requires a fixed pool with known size", name)
+		}
+		count := len(rule.Pool.Fixed)
+		if rule.Select != nil && rule.Signals == nil {
+			if rule.Select.Top != nil && *rule.Select.Top < count {
+				count = *rule.Select.Top
+			}
+			if rule.Select.Tail != nil && *rule.Select.Tail < count {
+				count = *rule.Select.Tail
+			}
+		}
+		each, err := quant.Parse(strings.TrimSpace(rule.WeightEach))
+		if err != nil {
+			return fmt.Errorf("strategy DSL rules.%s.weight_each: %w", name, err)
+		}
+		total = total.Add(each.Mul(quant.Must(strconv.Itoa(count))))
+	}
+	if total.Cmp(quant.One()) > 0 {
+		return fmt.Errorf("strategy DSL rule weight upper bound exceeds 1: %s", total.String())
 	}
 	return nil
 }

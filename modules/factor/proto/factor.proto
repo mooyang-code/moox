@@ -33,8 +33,8 @@ message FactorBinding {
   string status = 10;
   string created_at = 11;
   string updated_at = 12;
-  string source_dataset = 13 [deprecated = true];
-  string target_dataset = 14 [deprecated = true];
+  string source_dataset = 13;
+  string target_dataset = 14;
 }
 
 message CreateFactorReq { FactorDef factor = 1; }
@@ -105,7 +105,7 @@ message DeleteBindingRsp { common.RetInfo ret_info = 1; }
 message RecalcFactorReq {
   string factor_id = 1;
   string space_id = 2;
-  string source_dataset = 3 [deprecated = true];
+  string source_dataset = 3;
   string subject_id = 4;
   string freq = 5;
   string start_time = 6;

@@ -36,19 +36,25 @@ require_running_service() {
 # Reuse the running Factor process' EventBus URL and the deployment-generated
 # Factor credentials instead of relying on the checked-in local defaults.
 factor_pid_file="${DEPLOY_ROOT}/run/factor.pid"
+factor_eventbus_url=""
 if [[ -r "/proc/$(tr -d '[:space:]' <"${factor_pid_file}")/environ" ]]; then
   factor_eventbus_url="$(tr '\0' '\n' <"/proc/$(tr -d '[:space:]' <"${factor_pid_file}")/environ" | sed -n 's/^MOOX_EVENTBUS_NATS_URL=//p' | head -1)"
-  [[ -n "${factor_eventbus_url}" ]] && export MOOX_EVENTBUS_NATS_URL="${factor_eventbus_url}"
 fi
 factor_eventbus_credentials="${HOME}/.config/moox/eventbus/factor-eventbus.yaml"
 if [[ -r "${factor_eventbus_credentials}" ]]; then
+  # macOS does not expose /proc, so fall back to the role credential file's
+  # endpoint instead of silently attempting an unauthenticated nats:// URL.
+  if [[ -z "${factor_eventbus_url}" ]]; then
+    factor_eventbus_url="$(sed -n 's/^  -[[:space:]]*//p' "${factor_eventbus_credentials}" | head -1)"
+  fi
+  [[ -n "${factor_eventbus_url}" ]] && export MOOX_EVENTBUS_NATS_URL="${factor_eventbus_url}"
   export MOOX_EVENTBUS_NATS_CREDENTIALS="${factor_eventbus_credentials}"
   factor_eventbus_ca="$(sed -n 's/^ca_file:[[:space:]]*//p' "${factor_eventbus_credentials}" | head -1 | sed 's/[[:space:]]*$//')"
   [[ "${factor_eventbus_ca}" = /* ]] || factor_eventbus_ca="$(cd "$(dirname "${factor_eventbus_credentials}")" && pwd -P)/${factor_eventbus_ca}"
   [[ -n "${factor_eventbus_ca}" && -r "${factor_eventbus_ca}" ]] && export MOOX_EVENTBUS_NATS_TLS_CA_FILE="${factor_eventbus_ca}"
 fi
 
-for service in gateway storage-primary storage-node storage-view factor; do
+for service in gateway storage-primary storage-node storage-view factor strategy; do
   require_running_service "${service}"
 done
 
@@ -56,11 +62,42 @@ require_executable "${DEPLOY_ROOT}/bin/moox-factor-run-once"
 require_executable "${DEPLOY_ROOT}/bin/moox-factor-cli"
 require_file "${DEPLOY_ROOT}/factor/config/app.yaml"
 require_file "${DEPLOY_ROOT}/secrets/gateway-factor.key"
+require_file "${DEPLOY_ROOT}/secrets/gateway-strategy.key"
 require_file "${DEPLOY_ROOT}/secrets/gateway-moox-cli.key"
 require_file "${DEPLOY_ROOT}/secrets/gateway-service.env"
 require_file "${DEPLOY_ROOT}/secrets/storage-internal-auth.env"
 require_file "${DEPLOY_ROOT}/secrets/storage-node-auth.env"
 require_file "${DEPLOY_ROOT}/certs/gateway/peers.pem"
+
+# View wildcard discovery is fixed at process startup. A caller that owns the
+# local deployment may opt into a controlled storage-view restart so the
+# temporary E2E space is in its explicit allow-list. The default is off: a
+# test must not stop an unrelated running service or lose its existing PID
+# ownership merely to change an environment variable.
+e2e_space_id="${MOOX_FACTOR_STORAGE_E2E_SPACE_ID:-factor_e2e}"
+e2e_allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-${e2e_space_id}}"
+if [[ "${MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW:-0}" == "1" ]]; then
+  storage_view_start="${DEPLOY_ROOT}/storage-view/start.sh"
+  if [[ -x "${storage_view_start}" ]]; then
+    storage_view_command=("${storage_view_start}")
+  elif [[ -x "${DEPLOY_ROOT}/start.sh" ]]; then
+    storage_view_command=("${DEPLOY_ROOT}/start.sh" storage-view)
+  else
+    fail "deployment has no storage-view start command"
+  fi
+  storage_view_credential_file="${HOME}/.config/moox/eventbus/storage-eventbus.yaml"
+  if [[ -r "${storage_view_credential_file}" ]]; then
+    env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
+      MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE="${storage_view_credential_file}" \
+      MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${e2e_allowed_spaces}" \
+      "${storage_view_command[@]}"
+  else
+    env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
+      MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${e2e_allowed_spaces}" \
+      "${storage_view_command[@]}"
+  fi
+  require_running_service storage-view
+fi
 
 secret_raw="$(cat "${DEPLOY_ROOT}/secrets/gateway-factor.key"; printf x)"
 secret_raw="${secret_raw%x}"
@@ -80,6 +117,15 @@ else
 fi
 [[ -n "${factor_mgr_secret}" && "${factor_mgr_secret}" != *$'\n'* && "${factor_mgr_secret}" != *$'\r'* ]] ||
   fail "gateway moox-cli secret must contain exactly one non-empty line"
+strategy_secret_raw="$(cat "${DEPLOY_ROOT}/secrets/gateway-strategy.key"; printf x)"
+strategy_secret_raw="${strategy_secret_raw%x}"
+if [[ "${strategy_secret_raw}" == *$'\n' ]]; then
+  strategy_secret="${strategy_secret_raw%$'\n'}"
+else
+  strategy_secret="${strategy_secret_raw}"
+fi
+[[ -n "${strategy_secret}" && "${strategy_secret}" != *$'\n'* && "${strategy_secret}" != *$'\r'* ]] ||
+  fail "gateway strategy secret must contain exactly one non-empty line"
 
 gateway_node_id="$(
   sed -n 's/^MOOX_GATEWAY_NODE_ID=//p' "${DEPLOY_ROOT}/secrets/gateway-service.env"
@@ -125,6 +171,11 @@ storage_node_secret="$(
   export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_KEY_ID="moox-cli"
   export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_CALLER="moox-cli"
   export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_SECRET="${factor_mgr_secret}"
+  export MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_KEY_ID="strategy"
+  export MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_CALLER="strategy"
+  export MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_SECRET="${strategy_secret}"
+  export MOOX_FACTOR_STORAGE_E2E_SPACE_ID="${e2e_space_id}"
+  export MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${e2e_allowed_spaces}"
 
   cd "${REPO_ROOT}/modules/factor"
   go test -tags=integration ./test -run '^TestFactorRealStorageE2E$' -count=1 -v

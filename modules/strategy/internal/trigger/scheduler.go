@@ -120,15 +120,10 @@ func buildCron(ctx context.Context, jobs []ScheduleJob, onError func(error), str
 		jobCopy := job
 		cronRunner.Schedule(planned, cron.FuncJob(func() {
 			// robfig/cron computes the next occurrence before starting the
-			// asynchronous Job.  Read the occurrence that just fired, not the
-			// newly computed one.
-			at := planned.PreviousTime()
-			if at.IsZero() {
-				at = planned.PlannedTime()
-			}
-			if at.IsZero() {
-				at = time.Now().UTC()
-			}
+			// asynchronous Job. Reading a mutable schedule field here can race
+			// with that update (especially while a retry is in flight), so use the
+			// actual wake-up time and let ClosedPeriod map it to the last closed bar.
+			at := time.Now().UTC()
 			if err := runScheduledJob(ctx, jobCopy.Run, at); err != nil && onError != nil {
 				onError(err)
 			}
@@ -138,8 +133,29 @@ func buildCron(ctx context.Context, jobs []ScheduleJob, onError func(error), str
 }
 
 func runScheduledJob(ctx context.Context, run func(context.Context, time.Time) error, at time.Time) error {
+	return runScheduledJobWithWait(ctx, run, at, func(waitCtx context.Context, delay time.Duration) error {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-waitCtx.Done():
+			return waitCtx.Err()
+		case <-timer.C:
+			return nil
+		}
+	})
+}
+
+func runScheduledJobWithWait(
+	ctx context.Context,
+	run func(context.Context, time.Time) error,
+	at time.Time,
+	wait func(context.Context, time.Duration) error,
+) error {
 	if run == nil {
 		return errors.New("strategy schedule job is incomplete")
+	}
+	if wait == nil {
+		return errors.New("strategy schedule wait is incomplete")
 	}
 	var err error
 	// A scheduled wake-up may arrive just before Storage/Factor publishes its
@@ -158,12 +174,8 @@ func runScheduledJob(ctx context.Context, run func(context.Context, time.Time) e
 			if delay > 30*time.Second {
 				delay = 30 * time.Second
 			}
-			timer := time.NewTimer(delay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			case <-timer.C:
+			if waitErr := wait(ctx, delay); waitErr != nil {
+				return waitErr
 			}
 		}
 	}

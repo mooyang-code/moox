@@ -123,7 +123,7 @@ services:
       health_kind: readiness
       monitor_enabled: true
       gateway_methods: [QueryTimeSeriesRows, SearchRecordRows]
-      gateway_callers: [admin-gateway, collector, factor, monitor]
+      gateway_callers: [admin-gateway, collector, factor, monitor, strategy]
   - name: eventbus
     kind: eventbus
     deployment_mode: process

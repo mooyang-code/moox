@@ -29,16 +29,16 @@ message LogicalAccountTargetWeightRequested {
   string target_id = 1;
   string instance_id = 2;
   string logical_account_id = 3;
-  // Deprecated fields remain only so older in-tree fixtures can be decoded;
+  // Compatibility fields remain so older in-tree fixtures can be decoded;
   // validators reject payloads that rely on them without the new identity.
-  int64 command_sequence = 4 [deprecated = true];
+  int64 command_sequence = 4;
   repeated InstrumentWeightTarget targets = 5;
-  string signal_time = 6 [deprecated = true];
-  int64 owner_generation = 7 [deprecated = true];
+  string signal_time = 6;
+  int64 owner_generation = 7;
   string session_id = 8;
   string strategy_id = 9;
   google.protobuf.Timestamp bar_end_time = 10;
   google.protobuf.Timestamp effective_at = 11;
   google.protobuf.Timestamp valid_until = 12;
-  string runner_id = 13 [deprecated = true];
+  string runner_id = 13;
 }

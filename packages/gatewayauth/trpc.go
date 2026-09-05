@@ -38,7 +38,12 @@ func NewTRPCClientFilter(credentials Credentials, targetNode string, now func() 
 		if err != nil {
 			return err
 		}
-		metadata := make(codec.MetaData, len(headers))
+		// Preserve transparent metadata supplied by the caller (for example the
+		// strategy space scope) while adding the gateway authentication headers.
+		metadata := make(codec.MetaData, len(msg.ClientMetaData())+len(headers))
+		for key, value := range msg.ClientMetaData() {
+			metadata[key] = value
+		}
 		for key, values := range headers {
 			if len(values) == 1 {
 				metadata[key] = []byte(values[0])

@@ -98,6 +98,45 @@ func (c *logicalAccountOwnerClient) Generation(
 	return generation, nil
 }
 
+// SessionGeneration reads the active modern owner lifecycle and validates the
+// complete instance/session identity. Legacy owner_runner_id is intentionally
+// ignored because a migrated account may still retain that compatibility
+// column while its executable owner is a Strategy session.
+func (c *logicalAccountOwnerClient) SessionGeneration(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	instanceID string,
+	sessionID string,
+) (int64, error) {
+	if err := validateLogicalAccountIdentity(spaceID, logicalAccountID, instanceID, true); err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return 0, errors.New("Trade LogicalAccount session_id is required")
+	}
+	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	if err != nil {
+		return 0, err
+	}
+	defer cancel()
+	response, err := c.client.GetLogicalAccount(callCtx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalAccountID}, opts...)
+	if err != nil {
+		return 0, c.transportError(callCtx, "session generation", err)
+	}
+	if err := validateLogicalAccountResponse("session generation", spaceID, logicalAccountID, "", response.GetRetInfo(), response.GetLogicalAccount()); err != nil {
+		return 0, err
+	}
+	account := response.GetLogicalAccount()
+	if account.GetOwnerInstanceId() != instanceID || account.GetOwnerSessionId() != sessionID {
+		return 0, fmt.Errorf("Trade LogicalAccount session owner mismatch")
+	}
+	if generation := account.GetOwnerGeneration(); generation > 0 {
+		return generation, nil
+	}
+	return 0, fmt.Errorf("Trade LogicalAccount generation is not active")
+}
+
 func (c *logicalAccountOwnerClient) Claim(
 	ctx context.Context,
 	spaceID string,

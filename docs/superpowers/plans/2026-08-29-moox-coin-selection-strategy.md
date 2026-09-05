@@ -10,7 +10,7 @@
 
 ## 状态与范围
 
-修订日期：2026-09-05。依据 [策略执行框架设计](../../策略执行框架设计.md)，本文替换原文件中的旧实施步骤，
+修订日期：2026-09-06。依据 [策略执行框架设计](../../策略执行框架设计.md)，本文替换原文件中的旧实施步骤，
 保留原路径，避免出现两份并行施工基线。当前分支的代码实现与本地验证已完成，尚待正式环境发布；勾选项仅在对应测试和运行验证完成后更新。
 
 本轮实现记录（2026-09-05）：Strategy/Trade 新契约代码已落地。已完成并验证 DSL 解析与 Expr、
@@ -21,8 +21,8 @@ session/bar 授权与定时/事件触发；生产适配从实例 `input_bindings
 `bash scripts/test/e2e/test-factor-view-ready-e2e.sh` 均通过。尚未连接真实 Factor/Storage 或生产账户，
 不能把本地 E2E 当作正式环境验证；后续发布记录须补充实际部署目标、版本和读回证据。
 
-补充实现（2026-09-05）：Storage 读取已明确区分 `bar_end_time` 与行键 `BarStart`，事件和定时触发
-分别填充两个时间边界；连续市场按频率换算，`cn_stock` 日线的事件、定时、上一根与有效期统一使用内置交易日历；启用实例要求完整 source View 绑定并
+补充实现（2026-09-06）：Storage 读取已明确区分 `bar_end_time` 与行键 `BarStart`，事件和定时触发
+分别填充两个时间边界；连续市场按频率换算，`cn_stock` 日线的事件、定时、上一根与有效期统一使用内置交易日历；定时回调使用实际唤醒时间，避免读取 cron 共享的下一次计划时间；启用实例要求完整 source View 绑定并
 校验因子绑定字段；表达式声明的当前/前一根 bar 缺字段时严格跳过；定时任务采用有界重试；Trade
 管理调用读取并携带 `auth_fence`，避免迟到的 Claim 复活已取消会话。管理台无结果时不再展示“空 FULL”，
 仍保留旧 Runner 页面兼容路径。上述改动已重新跑完 Strategy/Trade Go 测试、Web Vitest、生产构建和
@@ -32,6 +32,25 @@ Strategy Playwright；Playwright 中一条旧组合账户断言已保留兼容�
 `data.bar` 一致，省略因子频率时继承该周期；多规则的固定池和 Factor `subjects_json` 按规则/标的
 分别做完整性检查，避免不同标的绑定互相阻塞；Pool UDF 在启用时校验注册名称与参数，运行期也拒绝
 非法参数，标的 ID 统一按目录规范化并采用大小写不敏感匹配。
+
+本轮收口验证（2026-09-06）：已完成本地隔离部署的真实 Storage/Factor/Strategy 链路测试，使用
+动态 DSL 创建实例，收到 `ViewFactorPeriodReady` 后查询到完整目标权重；`TestFactorRealStorageE2E`
+通过。该验证仍是本机临时部署，不包含正式主机发布、真实账户或实际下单；现代 Trade 会话代际的
+跨进程接收由单元测试覆盖，需在有独立 Trade/EventBus 的环境再补完整联合 E2E。
+
+仓库级 `make verify-pr` 已尝试运行：`proto-check` 和 greenfield contract 通过，随后在既有
+`scripts/check/verify-event-contracts.sh` 的 Storage 配置检查处因 `modules/storage/config/**`
+仍使用 `durable` 配置键而停止。该检查与本策略改动无关，本轮不放宽该全局门禁，也不将
+`verify-pr` 记为通过；正式发布仍须由维护者先处理该独立门禁。
+
+正式主机发布也已尝试核验：`ubuntu@106.53.107.122` 的 SSH 公钥认证被拒绝，GitHub
+self-hosted runner `moox-106-53-107-122` 当前为 offline；因此没有执行正式部署、重启服务或
+触碰真实账户/订单。
+
+`test-factor-storage-e2e.sh` 默认不接管已有 `storage-view` 进程；运行前须让该进程以
+`MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES` 包含测试 Space 启动，或由部署所有者显式设置
+`MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW=1` 让脚本执行受控重启。脚本无法把测试子进程的
+环境变量回写到已经运行的服务。
 
 原计划中的已完成勾选、测试、制品和生产部署记录仅适用于旧版实现，保留在 Git 历史中，
 不能证明本计划完成。源码迁移以新 DSL、三表结果和 session/bar 目标契约为准；兼容字段仅用于过渡编译，不构成旧 DSL 消费路径。
@@ -459,7 +478,8 @@ go test ./modules/strategy/internal/bootstrap
 **新增：** `modules/strategy/internal/trigger/scheduler.go`、`scheduler_test.go`。
 
 - [ ] 启用时解析五段 cron 和 timezone，注册可取消的进程内日程；使用成熟 cron 库，
-  不手写 cron 解析器。回调保留原计划时刻，延迟执行不换成当前时间。
+  不手写 cron 解析器。回调使用实际唤醒时刻，再由日历映射到最近已闭合 bar；不能读取
+  cron 计算下一次计划时刻后被覆盖的共享字段。
   事件保留原数据周期与来源信息；两者调用同一按实例/周期求值入口。
 - [ ] 新增 `TestTimerEventFirstSuccess`：只定时、只事件、双触发均可运行；
   定时缺数后事件补算，定时成功后事件去重；旧周期不倒灌；

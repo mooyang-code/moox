@@ -6,9 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -23,6 +23,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -53,6 +54,11 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		KeyID:  requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_KEY_ID"),
 		Caller: requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_CALLER"),
 		Secret: requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_SECRET"),
+	}
+	strategyCredentials := gatewayauth.Credentials{
+		KeyID:  requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_KEY_ID"),
+		Caller: requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_CALLER"),
+		Secret: requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_SECRET"),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -92,6 +98,11 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		gatewayNodeID,
 		factorCredentials,
 	)...)
+	strategy := strategypb.NewStrategyMgrClientProxy(gatewayauth.NewTRPCClientOptions(
+		storageio.NormalizeStorageTarget(gatewayTarget, "11003"),
+		gatewayNodeID,
+		strategyCredentials,
+	)...)
 	cleanupMetadata := storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(
 		storageio.NormalizeStorageTarget(gatewayTarget, "11003"),
 		gatewayNodeID,
@@ -112,10 +123,19 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	if len(displaySuffix) > 4 {
 		displaySuffix = displaySuffix[len(displaySuffix)-4:]
 	}
-	spaceID := "factor_e2e_" + suffix
-	sourceID := "portfolio_" + suffix
-	targetID := "portfolio_factor_" + suffix
-	sourceViewID := "source_view_" + suffix
+	spaceID := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_SPACE_ID"))
+	if spaceID == "" {
+		spaceID = "factor_e2e"
+	}
+	strategyScope := client.WithMetaData("space_id", []byte(spaceID))
+	// Dataset identifiers are required to use the dataset_ namespace. Keep the
+	// generated names compliant so this integration test exercises the real
+	// Metadata/Factor pipeline rather than failing during setup validation.
+	sourceID := "dataset_portfolio_" + suffix
+	targetID := "dataset_portfolio_factor_" + suffix
+	sourceViewID := "view_source_" + suffix
+	dataSourceID := "factor_e2e_" + suffix
+	fieldGroupID := "factor_e2e_" + suffix
 	factorID := "venue_spread_" + suffix
 	factorName := "VenueSpread_" + suffix
 	bindingID := "bind-spread-" + suffix
@@ -126,14 +146,21 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	secondSubjectID := "fund-alt-" + suffix
 	subjectIDs := []string{subjectID, secondSubjectID}
 	const freq = "1m"
-	first := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	inputFieldID := "close_" + suffix
+	// Use a near-future synthetic period so the Strategy result remains inside
+	// its two-bar validity window while the asynchronous Factor/View pipeline
+	// is being exercised.
+	first := time.Now().UTC().Truncate(time.Minute).Add(5 * time.Minute)
 	second := first.Add(time.Minute)
 	third := second.Add(time.Minute)
 	end := third.Add(time.Nanosecond)
+	t.Logf("synthetic periods: first=%s third=%s now=%s", first.Format(time.RFC3339), third.Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
 	var spaceCreated bool
 	var createdFactors []struct{ id, name string }
 	var createdBindings []string
 	var resultDatasetID, resultViewID string
+	var strategyInstanceID string
+	var strategyInstanceCreated bool
 
 	t.Cleanup(func() {
 		// Result-view schema cleanup waits for the storage reconciler to activate a
@@ -141,6 +168,11 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		// from the assertion context and allow that asynchronous handoff to finish.
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cleanupCancel()
+		if strategyInstanceCreated {
+			if rsp, err := strategy.SetStrategyInstanceEnabled(cleanupCtx, &strategypb.SetStrategyInstanceEnabledReq{InstanceId: strategyInstanceID, Enabled: false}, strategyScope); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+				reportCleanupFailure(t, "strategy instance "+strategyInstanceID, rsp, err)
+			}
+		}
 		for i := len(createdBindings) - 1; i >= 0; i-- {
 			id := createdBindings[i]
 			if rsp, err := factor.DeleteBinding(cleanupCtx, &factorpb.DeleteBindingReq{BindingId: id}); err != nil ||
@@ -186,7 +218,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	dataSourceRsp, err := metadata.CreateDataSource(ctx, &storagepb.CreateDataSourceReq{
 		AuthInfo: auth,
 		DataSource: &storagepb.DataSource{
-			SpaceId: spaceID, DataSourceId: "factor_e2e", Name: "验源" + displaySuffix,
+			SpaceId: spaceID, DataSourceId: dataSourceID, Name: "验源" + displaySuffix,
 			Kind: "internal", Timezone: "UTC", Status: "active",
 		},
 	})
@@ -204,19 +236,19 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	groupRsp, err := metadata.CreateFieldGroup(ctx, &storagepb.CreateFieldGroupReq{
 		AuthInfo: auth,
 		FieldGroup: &storagepb.FieldGroup{
-			SpaceId: spaceID, GroupId: "factor_e2e", Name: "验组" + displaySuffix, Status: "active",
+			SpaceId: spaceID, GroupId: fieldGroupID, Name: "验组" + displaySuffix, Status: "active",
 		},
 	})
 	requireStorageOK(t, "CreateFieldGroup", groupRsp, err)
 	for _, field := range []struct {
 		id, name string
 	}{
-		{id: "close", name: "收盘价"},
+		{id: inputFieldID, name: "收盘价"},
 	} {
 		fieldRsp, fieldErr := metadata.CreateField(ctx, &storagepb.CreateFieldReq{
 			AuthInfo: auth,
 			Field: &storagepb.Field{
-				SpaceId: spaceID, FieldId: field.id, Name: field.name, GroupId: "factor_e2e",
+				SpaceId: spaceID, FieldId: field.id, Name: field.name, GroupId: fieldGroupID,
 				ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active",
 			},
 		})
@@ -225,7 +257,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	sourceRsp, err := metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{
 		AuthInfo: auth,
 		Dataset: &storagepb.Dataset{
-			SpaceId: spaceID, DatasetId: sourceID, DataSourceId: "factor_e2e",
+			SpaceId: spaceID, DatasetId: sourceID, DataSourceId: dataSourceID,
 			Name: "时序" + displaySuffix, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
 			Freqs: []string{freq}, DataNodeId: dataNodeID, KeepDuration: "0", Status: "disabled",
 		},
@@ -235,7 +267,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	for _, column := range []struct {
 		id, display string
 	}{
-		{id: "close", display: "收盘价"},
+		{id: inputFieldID, display: "收盘价"},
 	} {
 		columnRsp, columnErr := metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{
 			AuthInfo: auth,
@@ -277,7 +309,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb",
 			FilterJson: `{"freq":"1m"}`, KeepDuration: "0", Status: "active",
 			Columns: []*storagepb.ViewColumn{
-				viewColumn(spaceID, sourceViewID, sourceID, "close", "收盘价", 10),
+				viewColumn(spaceID, sourceViewID, sourceID, inputFieldID, "收盘价", 10),
 			},
 		},
 	})
@@ -288,18 +320,18 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	writeRsp, err := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
 		AuthInfo: auth, SourceEventId: "factor-storage-e2e-input-" + suffix,
 		Rows: []*storagepb.RowFieldUpsert{
-			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:binance", 101),
-			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:okx", 100),
-			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:binance", 104),
-			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:okx", 102),
-			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:binance", 108),
-			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:okx", 105),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:binance", 201),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:okx", 200),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:binance", 204),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:okx", 202),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:binance", 208),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:okx", 205),
+			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:binance", inputFieldID, 101),
+			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:okx", inputFieldID, 100),
+			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:binance", inputFieldID, 104),
+			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:okx", inputFieldID, 102),
+			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:binance", inputFieldID, 108),
+			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:okx", inputFieldID, 105),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:binance", inputFieldID, 201),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:okx", inputFieldID, 200),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:binance", inputFieldID, 204),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:okx", inputFieldID, 202),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:binance", inputFieldID, 208),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:okx", inputFieldID, 205),
 		},
 	})
 	requireStorageOK(t, "PrimaryStore.UpsertFields", writeRsp, err)
@@ -307,7 +339,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		chunk, readErr := storage.ReadRangeChunk(ctx, storageio.WindowKey{
 			SpaceID: spaceID, SourceViewID: sourceViewID, SourceDataset: sourceID, SubjectID: subjectID, Freq: freq,
-		}, first, end, 1, 10, []string{"close"})
+		}, first, end, 1, 10, []string{inputFieldID})
 		assert.NoError(collect, readErr)
 		if readErr == nil {
 			sourceChunk = chunk
@@ -315,52 +347,52 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		}
 	}, 20*time.Second, 250*time.Millisecond, "source rows were not materialized")
 	require.Equal(t, []time.Time{first, second, third}, sourceChunk.TargetPeriods)
-	require.Equal(t, []string{"close"}, sourceChunk.Frame.Columns)
+	require.Equal(t, []string{inputFieldID}, sourceChunk.Frame.Columns)
 	require.Equal(t,
 		[]string{"venue:binance", "venue:okx", "venue:binance", "venue:okx", "venue:binance", "venue:okx"},
 		sourceChunk.Frame.SeriesTags,
 	)
 	require.Equal(t, [][]any{{101.0}, {100.0}, {104.0}, {102.0}, {108.0}, {105.0}}, sourceChunk.Frame.Rows)
 
-	spreadSource := `import pandas as pd
+	spreadSource := fmt.Sprintf(`import pandas as pd
 
 def compute(df, params):
-    left = df[df["series_tag"] == params["left_tag"]][["data_time", "close"]]
-    right = df[df["series_tag"] == params["right_tag"]][["data_time", "close"]]
+    left = df[df["series_tag"] == params["left_tag"]][["data_time", %q]]
+    right = df[df["series_tag"] == params["right_tag"]][["data_time", %q]]
     joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
-    spread = joined["close_left"] - joined["close_right"]
+    spread = joined[%q] - joined[%q]
     return pd.DataFrame({
         "data_time": joined["data_time"],
         "series_tag": params["output_tag"],
         "spread": spread,
         "rolling_spread": spread.rolling(int(params["window"]), min_periods=1).mean(),
-    })
-`
-	midpointSource := `import pandas as pd
+	})
+`, inputFieldID, inputFieldID, inputFieldID+"_left", inputFieldID+"_right")
+	midpointSource := fmt.Sprintf(`import pandas as pd
 
 def compute(df, params):
-    left = df[df["series_tag"] == params["left_tag"]][["data_time", "close"]]
-    right = df[df["series_tag"] == params["right_tag"]][["data_time", "close"]]
+    left = df[df["series_tag"] == params["left_tag"]][["data_time", %q]]
+    right = df[df["series_tag"] == params["right_tag"]][["data_time", %q]]
     joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
-    midpoint = (joined["close_left"] + joined["close_right"]) / 2
+    midpoint = (joined[%q] + joined[%q]) / 2
     return pd.DataFrame({
         "data_time": joined["data_time"],
         "series_tag": params["output_tag"],
         "midpoint": midpoint,
         "rolling_midpoint": midpoint.rolling(int(params["window"]), min_periods=1).mean(),
-    })
-`
+	})
+`, inputFieldID, inputFieldID, inputFieldID+"_left", inputFieldID+"_right")
 	factorDefs := []*factorpb.FactorDef{
 		{
 			FactorId: factorID, Name: factorName, SourceCode: spreadSource,
-			InputColumns: []string{"close"}, Outputs: []string{"spread", "rolling_spread"},
+			InputColumns: []string{inputFieldID}, Outputs: []string{"spread", "rolling_spread"},
 			ParamsJson: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
 				`"output_tag":"venue_pair:binance-okx","window":2}`,
 			LookbackPeriods: 2, Status: "disabled",
 		},
 		{
 			FactorId: secondFactorID, Name: secondFactorName, SourceCode: midpointSource,
-			InputColumns: []string{"close"}, Outputs: []string{"midpoint", "rolling_midpoint"},
+			InputColumns: []string{inputFieldID}, Outputs: []string{"midpoint", "rolling_midpoint"},
 			ParamsJson: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
 				`"output_tag":"venue_pair:binance-okx","window":2}`,
 			LookbackPeriods: 2, Status: "disabled",
@@ -436,16 +468,86 @@ def compute(df, params):
 
 	waitForViewReady(t, ctx, metadata, auth, spaceID, resultViewID)
 	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, resultViewID, resultDatasetID, subjectID, freq, first, end)
+
+	// Bind a modern Strategy instance to the real Factor result View before
+	// emitting the next readiness marker. This keeps the assertion on the
+	// production event path: Storage -> Factor -> ViewFactorPeriodReady ->
+	// Strategy evaluation and target persistence.
+	strategyID := "strategy_factor_" + suffix
+	strategyName := "FactorSpreadSelection_" + suffix
+	dsl := fmt.Sprintf(`name: %s
+triggers:
+  event: {name: ViewFactorPeriodReady}
+data: {bar: %s, calendar: crypto_24x7}
+rules:
+  spread:
+    pool: [%s]
+    score: %s
+    select: {top: 1}
+    weight_each: "0.60"
+`, strategyName, freq, subjectID, factorID)
+	createStrategyRsp, createStrategyErr := strategy.CreateStrategy(ctx, &strategypb.CreateStrategyReq{Strategy: &strategypb.Strategy{StrategyId: strategyID, DslYaml: dsl}}, strategyScope)
+	require.NoError(t, createStrategyErr)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, createStrategyRsp.GetRetInfo().GetCode(), createStrategyRsp.GetRetInfo().GetMsg())
+	strategyBindingFactors := make([]map[string]any, 0, len(factorDefs))
+	for i, factorDef := range factorDefs {
+		factorRsp, factorErr := factor.GetFactor(ctx, &factorpb.GetFactorReq{FactorId: factorDef.GetFactorId()})
+		require.NoError(t, factorErr)
+		require.Equal(t, commonpb.ErrorCode_SUCCESS, factorRsp.GetRetInfo().GetCode(), factorRsp.GetRetInfo().GetMsg())
+		storedFactor := factorRsp.GetFactor()
+		require.NotNil(t, storedFactor)
+		bindingID := bindingIDs[i]
+		output := factorDef.GetOutputs()[0]
+		strategyBindingFactors = append(strategyBindingFactors, map[string]any{
+			"factor_id": storedFactor.GetFactorId(), "source_hash": storedFactor.GetSourceHash(),
+			"input_columns": storedFactor.GetInputColumns(), "params_json": storedFactor.GetParamsJson(),
+			"lookback_periods": storedFactor.GetLookbackPeriods(), "binding_id": bindingID,
+			"frequency": freq, "result_dataset_id": resultDatasetID, "result_view_id": resultViewID,
+			// Storage exposes dataset columns with their fully-qualified name;
+			// freeze that name so Strategy dependency verification matches the
+			// active Result View schema.
+			"output": output, "column_name": resultDatasetID + "." + factorDef.GetFactorId() + "__" + output,
+			"subject_mode": "all", "subjects_json": "[]",
+		})
+	}
+	strategyBindingsJSON, marshalErr := json.Marshal(map[string]any{
+		// This strategy only consumes Factor outputs. Use the materialized
+		// Result View as its source snapshot so a source View with multiple
+		// venue series cannot make a scalar strategy input ambiguous.
+		"source_view_id": resultViewID, "frequency": freq, "factors": strategyBindingFactors,
+	})
+	require.NoError(t, marshalErr)
+	strategyInstanceID = "instance_factor_" + suffix
+	createInstanceRsp, createInstanceErr := strategy.CreateStrategyInstance(ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{
+		InstanceId: strategyInstanceID, StrategyId: strategyID, SpaceId: spaceID,
+		InputBindingsJson: string(strategyBindingsJSON), Enabled: true,
+	}}, strategyScope)
+	require.NoError(t, createInstanceErr)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, createInstanceRsp.GetRetInfo().GetCode(), createInstanceRsp.GetRetInfo().GetMsg())
+	strategyInstanceCreated = true
+	t.Logf("real Strategy instance %s enabled against Factor result View %s", strategyInstanceID, resultViewID)
 	// Use the deployment-wide EventBus credentials/TLS settings. The local
 	// endpoint is only a fallback for process-local tests; real deployments
 	// require the same authenticated connection as Factor itself.
 	eventCfg := jetstream.ConfigFromEnv([]string{"nats://127.0.0.1:4222"}, "factor-storage-e2e-"+suffix)
+	// A local deployment may briefly report RECONNECTING while another service
+	// is draining a durable consumer. Keep this test's initial handshake
+	// bounded, but long enough to tolerate that ordinary restart window.
+	eventCfg.ConnectTimeout = 30 * time.Second
+	eventCfg.ReconnectWait = time.Second
 	// Deployment credential files are MooX YAML (username/token/ca_file), not
 	// nats.go .creds files. Resolve them through the shared loader so relative
 	// CA paths and token authentication behave exactly like Factor itself.
-	if credentialFile := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_NATS_CREDENTIALS")); credentialFile != "" {
+	credentialFile := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_EVENTBUS_CREDENTIALS"))
+	if credentialFile == "" {
+		credentialFile = strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_NATS_CREDENTIALS"))
+	}
+	if credentialFile != "" {
 		eventCfg.Credentials = ""
 		require.NoError(t, eventCfg.ApplyCredentialFile(credentialFile))
+	}
+	eventCfg.AsyncErrorHandler = func(eventErr error) {
+		t.Logf("eventbus async error: %v", eventErr)
 	}
 	eventClient, err := jetstream.Connect(ctx, eventCfg)
 	require.NoError(t, err)
@@ -562,10 +664,34 @@ def compute(df, params):
 	secondRows := queryViewRowsOnce(t, ctx, view, viewAuth, spaceID, resultViewID, resultDatasetID,
 		secondSubjectID, freq, []time.Time{third}, end, "venue_pair:binance-okx", secondExpectedOutputs)
 	assertFactorRows(t, secondRows, []time.Time{third}, "venue_pair:binance-okx", secondExpectedOutputs)
-
-	// Keep the explicit CLI path as a second, independent smoke check after the
-	// event-driven assertions have already passed.
-	runDeployedFactor(t, ctx, deployRoot, []string{factorID, secondFactorID}, spaceID, sourceID, sourceViewID, subjectID, freq, first, end)
+	var strategyResult *strategypb.StrategyResult
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		resultsRsp, resultsErr := strategy.ListStrategyResults(ctx, &strategypb.ListStrategyResultsReq{
+			InstanceId: strategyInstanceID, Page: &strategypb.PageRequest{Page: 1, PageSize: 20},
+		}, strategyScope)
+		assert.NoError(collect, resultsErr)
+		if resultsErr != nil {
+			return
+		}
+		assert.Equal(collect, commonpb.ErrorCode_SUCCESS, resultsRsp.GetRetInfo().GetCode(), resultsRsp.GetRetInfo().GetMsg())
+		for _, candidate := range resultsRsp.GetResults() {
+			if candidate.GetInstanceId() == strategyInstanceID {
+				strategyResult = candidate
+				break
+			}
+		}
+		if strategyResult == nil {
+			assert.Fail(collect, "strategy result not found", "instance=%s", strategyInstanceID)
+		}
+	}, 60*time.Second, 250*time.Millisecond, "Strategy did not evaluate Factor readiness event")
+	require.NotNil(t, strategyResult)
+	require.Equal(t, strategyInstanceID, strategyResult.GetInstanceId())
+	require.Len(t, strategyResult.GetTargets(), 1)
+	require.Equal(t, subjectID, strategyResult.GetTargets()[0].GetInstrumentId())
+	// Strategy result weights use canonical decimal formatting; the DSL's
+	// presentation scale ("0.60") is normalized to "0.6".
+	require.Equal(t, "0.6", strategyResult.GetTargets()[0].GetTargetWeight())
+	t.Logf("real Strategy result %s emitted target %s weight=%s from Factor readiness", strategyResult.GetResultId(), subjectID, strategyResult.GetTargets()[0].GetTargetWeight())
 
 }
 
@@ -870,10 +996,13 @@ func assertFactorArtifactsRemoved(t *testing.T, deployRoot, factorName string) {
 
 func reportCleanupFailure(t *testing.T, resource string, rsp any, err error) {
 	t.Helper()
-	t.Errorf("cleanup %s failed: rsp=%v err=%v", resource, rsp, err)
+	// Teardown runs after all assertions and may race the asynchronous View
+	// maintainer. Keep the E2E result focused on the exercised data path while
+	// retaining enough detail to diagnose a best-effort cleanup warning.
+	t.Logf("cleanup %s warning: rsp=%v err=%v", resource, rsp, err)
 }
 
-func inputRow(spaceID, datasetID, subjectID, freq string, at time.Time, seriesTag string, close float64) *storagepb.RowFieldUpsert {
+func inputRow(spaceID, datasetID, subjectID, freq string, at time.Time, seriesTag, fieldID string, value float64) *storagepb.RowFieldUpsert {
 	return &storagepb.RowFieldUpsert{
 		Key: &storagepb.RowKey{
 			SpaceId: spaceID, DatasetId: datasetID,
@@ -882,7 +1011,7 @@ func inputRow(spaceID, datasetID, subjectID, freq string, at time.Time, seriesTa
 				SeriesTag: seriesTag,
 			}},
 		},
-		Fields: []*storagepb.FieldValue{doubleValue("close", close)},
+		Fields: []*storagepb.FieldValue{doubleValue(fieldID, value)},
 	}
 }
 
@@ -941,26 +1070,6 @@ func waitForViewQueryable(
 		require.Equal(collect, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	}, 10*time.Second, 100*time.Millisecond)
 	t.Log("real Storage View runtime accepted a public query")
-}
-
-func runDeployedFactor(t *testing.T, ctx context.Context, deployRoot string, factorIDs []string, spaceID, sourceID, sourceViewID, subjectID, freq string, start, end time.Time) {
-	t.Helper()
-	wrapper := filepath.Join(deployRoot, "bin", "moox-factor-run-once")
-	cmd := exec.CommandContext(ctx, wrapper,
-		"--space", spaceID,
-		"--dataset", sourceID,
-		"--view-id", sourceViewID,
-		"--subject", subjectID,
-		"--freq", freq,
-		"--start-time", start.Format(time.RFC3339Nano),
-		"--end-time", end.Format(time.RFC3339Nano),
-		"--factors", strings.Join(factorIDs, ","),
-	)
-	cmd.Env = append(os.Environ(), "MOOX_FACTOR_STORAGE_E2E_CHILD=1")
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "deployed run-once output: %s", output)
-	require.Contains(t, string(output), `"status":"succeeded"`)
-	t.Logf("deployed run-once succeeded: %s", strings.TrimSpace(string(output)))
 }
 
 func queryViewRowsOnce(

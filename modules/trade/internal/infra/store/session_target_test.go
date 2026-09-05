@@ -29,6 +29,9 @@ func TestSessionAuthorizationCASAndTargetPeriod(t *testing.T) {
 		return err
 	}))
 	require.NotEmpty(t, fence)
+	claimed, err := s.GetLogicalAccount(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), claimed.OwnerGeneration)
 
 	staleErr := s.Transaction(ctx, func(tx *Tx) error {
 		_, err := tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance-2", "session-2", fence)
@@ -58,6 +61,7 @@ func TestSessionAuthorizationCASAndTargetPeriod(t *testing.T) {
 	account, err := s.GetLogicalAccount(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Empty(t, account.OwnerInstanceID)
+	require.Equal(t, int64(2), account.OwnerGeneration)
 	missingFenceErr := s.Transaction(ctx, func(tx *Tx) error {
 		_, err := tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance-2", "session-2", "")
 		return err

@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-20260709100258-8b1b64632c9f
+	github.com/mooyang-code/moox/modules/strategy/proto/strategygen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
@@ -43,6 +44,8 @@ require (
 )
 
 replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../storage/proto/storagegen
+
+replace github.com/mooyang-code/moox/modules/strategy/proto/strategygen => ../strategy/proto/strategygen
 
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 

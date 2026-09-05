@@ -382,7 +382,7 @@ func (tx *Tx) ClaimLogicalAccountSession(
 	result := tx.db.Exec(`
 		UPDATE t_logical_accounts
 		SET c_owner_instance_id = ?, c_owner_session_id = ?,
-			c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
+			c_owner_claimed_at = c_owner_claimed_at + 1, c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 		  AND COALESCE(c_owner_instance_id, '') = ''
 		  AND COALESCE(c_owner_session_id, '') = ''
@@ -425,7 +425,7 @@ func (tx *Tx) RebindLogicalAccountSession(
 	fence := newAuthFence()
 	result := tx.db.Exec(`
 		UPDATE t_logical_accounts
-		SET c_owner_instance_id = ?, c_owner_session_id = ?, c_auth_fence = ?,
+		SET c_owner_instance_id = ?, c_owner_session_id = ?, c_owner_claimed_at = c_owner_claimed_at + 1, c_auth_fence = ?,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 		  AND c_owner_instance_id = ? AND c_owner_session_id = ?
@@ -467,6 +467,7 @@ func (tx *Tx) ReleaseLogicalAccountSession(
 	result := tx.db.Exec(`
 		UPDATE t_logical_accounts
 		SET c_owner_instance_id = NULL, c_owner_session_id = NULL,
+			c_owner_claimed_at = c_owner_claimed_at + 1,
 			c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 		  AND c_owner_instance_id = ? AND c_owner_session_id = ?

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
@@ -94,7 +95,14 @@ type IndexedPeriodInputLoader interface {
 }
 
 type Processor struct {
-	Inbox interface {
+	// evaluationMu serializes modern evaluations in this process. A schedule
+	// callback and a View-ready callback can arrive concurrently; keeping the
+	// whole evaluation path single-file preserves RuleState ordering and lets
+	// the existing Result CAS remain a last-line guard rather than the normal
+	// coordination mechanism. This is intentionally process-local for the
+	// personal deployment model; cross-process delivery is fenced by session_id.
+	evaluationMu sync.Mutex
+	Inbox        interface {
 		IsProcessed(context.Context, string) (bool, error)
 		MarkProcessed(context.Context, string, string, time.Time) error
 	}
@@ -114,12 +122,27 @@ type Processor struct {
 	// bootstrap supplies the compiler-backed verifier so a running Runner is
 	// not allowed to consume a Factor that changed after it was compiled.
 	VerifyDependencies func(context.Context, compiler.CompiledStrategy) error
+	// Diagnostic receives non-fatal per-event evaluation errors. The trigger
+	// path still decides whether to retry or acknowledge the event; callers can
+	// use this hook to make skipped evaluations observable without coupling the
+	// processor to a logging implementation.
+	Diagnostic func(error)
 	// OwnerGeneration snapshots the Trade logical-account lifecycle token for
 	// each executable runner and verifies that the account is still owned by
 	// that runner. It is embedded in the target event so Trade can reject
 	// delayed messages without comparing clocks across processes.
 	OwnerGeneration func(context.Context, string, string, string) (int64, error)
-	Now             func() time.Time
+	// SessionGeneration is the session-aware variant used by modern instances.
+	// It must validate instance_id and session_id together; the legacy
+	// OwnerGeneration callback only understands owner_runner_id.
+	SessionGeneration func(context.Context, string, string, string, string) (int64, error)
+	Now               func() time.Time
+}
+
+func (p *Processor) reportDiagnostic(err error) {
+	if p != nil && err != nil && p.Diagnostic != nil {
+		p.Diagnostic(err)
+	}
 }
 
 func (p *Processor) Handle(ctx context.Context, event PeriodReady) error {
@@ -393,6 +416,11 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 	IsProcessed(context.Context, string) (bool, error)
 	MarkProcessed(context.Context, string, string, time.Time) error
 }, event PeriodReady) (bool, error) {
+	// robfig/cron starts each job in its own goroutine, while ready events are
+	// consumed independently. Serialize the modern path so stateful signal
+	// rules cannot evaluate two periods from the same stale predecessor.
+	p.evaluationMu.Lock()
+	defer p.evaluationMu.Unlock()
 	instances, err := p.Store.ListInstances(ctx, event.SpaceID, ptrBool(true))
 	if err != nil || len(instances) == 0 {
 		return false, err
@@ -443,6 +471,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 		if p.CompileWithBindings != nil {
 			compiled, err = p.CompileWithBindings(ctx, dsl, instance.SpaceID, instance.InputBindingsJSON)
 			if err != nil {
+				p.reportDiagnostic(fmt.Errorf("instance %s compile: %w", instance.InstanceID, err))
 				// A persisted binding must never fall through to a zero-value
 				// artifact. Keep the delivery retryable so an operator can repair
 				// the binding and rerun the same period deterministically.
@@ -455,6 +484,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 			compiled, err = p.Compile(ctx, dsl, instance.SpaceID)
 			if err != nil {
 				if retryErr == nil && retryableModernError(err) {
+					p.reportDiagnostic(fmt.Errorf("instance %s compile: %w", instance.InstanceID, err))
 					retryErr = err
 				}
 				continue
@@ -466,6 +496,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 		configureFixedPool(&compiled, dsl)
 		if p.VerifyDependencies != nil {
 			if verifyErr := p.VerifyDependencies(ctx, compiled); verifyErr != nil {
+				p.reportDiagnostic(fmt.Errorf("instance %s dependency check: %w", instance.InstanceID, verifyErr))
 				if retryErr == nil && !errors.Is(verifyErr, compiler.ErrDependencyMismatch) {
 					retryErr = verifyErr
 				}
@@ -501,6 +532,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 			evaluated, err = p.Loader.Load(ctx, runner, compiled, instanceStorage.UTC())
 		}
 		if err != nil {
+			p.reportDiagnostic(fmt.Errorf("instance %s load period %s: %w", instance.InstanceID, period.Format(time.RFC3339), err))
 			if errors.Is(err, input.ErrStrictIncomplete) {
 				// A scheduled wake-up owns this bar and must keep retrying while
 				// Storage/Factor finishes publishing it. Ready events carrying a
@@ -535,6 +567,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 				}
 				ids, resolveErr := p.PoolRegistry.Resolve(ctx, rule.Pool, subjects, period)
 				if resolveErr != nil {
+					p.reportDiagnostic(fmt.Errorf("instance %s resolve pool %s: %w", instance.InstanceID, name, resolveErr))
 					if retryErr == nil {
 						if !errors.Is(resolveErr, input.ErrPoolUDFNotRegistered) && !errors.Is(resolveErr, input.ErrPoolUDFInvalidParams) {
 							retryErr = resolveErr
@@ -556,6 +589,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 		}
 		evaluation, evalErr := selection.Evaluate(dsl, evaluated, previous)
 		if evalErr != nil {
+			p.reportDiagnostic(fmt.Errorf("instance %s evaluate: %w", instance.InstanceID, evalErr))
 			if retryErr == nil {
 				if retryableModernError(evalErr) || (event.TargetInstanceID != "" && errors.Is(evalErr, input.ErrStrictIncomplete)) {
 					retryErr = evalErr
@@ -571,8 +605,35 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 		if len(states) == 0 {
 			states = json.RawMessage(`{}`)
 		}
+		var ownerGeneration int64
+		if instance.LogicalAccountID != nil && (p.SessionGeneration != nil || p.OwnerGeneration != nil) {
+			var generation int64
+			var generationErr error
+			if p.SessionGeneration != nil {
+				generation, generationErr = p.SessionGeneration(ctx, event.SpaceID, *instance.LogicalAccountID, instance.InstanceID, valueOrEmpty(instance.SessionID))
+			} else {
+				generation, generationErr = p.OwnerGeneration(ctx, event.SpaceID, *instance.LogicalAccountID, instance.InstanceID)
+			}
+			if generationErr != nil {
+				p.reportDiagnostic(fmt.Errorf("instance %s owner generation: %w", instance.InstanceID, generationErr))
+				if retryErr == nil {
+					retryErr = generationErr
+				}
+				continue
+			}
+			if generation <= 0 {
+				generationErr = fmt.Errorf("logical account %s has no active owner generation", *instance.LogicalAccountID)
+				p.reportDiagnostic(fmt.Errorf("instance %s owner generation: %w", instance.InstanceID, generationErr))
+				if retryErr == nil {
+					retryErr = generationErr
+				}
+				continue
+			}
+			ownerGeneration = generation
+		}
 		validUntil, validUntilErr := input.AdvanceBarEnd(dsl.Data.Calendar, dsl.Data.Bar, period, 2)
 		if validUntilErr != nil {
+			p.reportDiagnostic(fmt.Errorf("instance %s validity: %w", instance.InstanceID, validUntilErr))
 			if retryErr == nil {
 				retryErr = validUntilErr
 			}
@@ -585,6 +646,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 			"source_index_revision": event.SourceIndexRevision, "result_index_revision": event.ResultIndexRevision,
 		})
 		if snapshotErr != nil {
+			p.reportDiagnostic(fmt.Errorf("instance %s snapshot: %w", instance.InstanceID, snapshotErr))
 			if retryErr == nil {
 				if retryableModernError(snapshotErr) {
 					retryErr = snapshotErr
@@ -595,7 +657,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 		result := store.StrategyResult{ResultID: resultID(event.MessageID, instance.InstanceID, period, valueOrEmpty(instance.SessionID)), InstanceID: instance.InstanceID, SessionID: valueOrEmpty(instance.SessionID), BarEndTime: period, ValidUntil: validUntil, SnapshotJSON: snapshot, TargetsJSON: targets, RuleStatesJSON: states, PublishStatus: store.PublishNone, CreatedAt: p.now()}
 		if instance.LogicalAccountID != nil {
 			result.PublishStatus = store.PublishPending
-			result.EventData, err = marshalTargetEvent(instance, result, evaluation.Targets)
+			result.EventData, err = marshalTargetEvent(instance, result, evaluation.Targets, ownerGeneration)
 			if err != nil {
 				if retryErr == nil {
 					if retryableModernError(err) {
@@ -610,6 +672,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 			expected = &latest.ResultID
 		}
 		if _, _, commitErr := p.Store.CommitResult(ctx, store.CommitResultRequest{Result: result, ExpectedResultID: expected, Now: p.now()}); commitErr != nil {
+			p.reportDiagnostic(fmt.Errorf("instance %s commit result %s: %w", instance.InstanceID, result.ResultID, commitErr))
 			if retryErr == nil && retryableModernError(commitErr) {
 				retryErr = commitErr
 			}
@@ -863,7 +926,7 @@ func retryableModernError(err error) bool {
 	return errors.Is(err, input.ErrNotReady) || errors.Is(err, context.DeadlineExceeded)
 }
 
-func marshalTargetEvent(instance store.StrategyInstance, result store.StrategyResult, targets []selection.TargetWeight) ([]byte, error) {
+func marshalTargetEvent(instance store.StrategyInstance, result store.StrategyResult, targets []selection.TargetWeight, ownerGeneration int64) ([]byte, error) {
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return nil, err
@@ -872,7 +935,13 @@ func marshalTargetEvent(instance store.StrategyInstance, result store.StrategyRe
 	for _, target := range targets {
 		payloadTargets = append(payloadTargets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight})
 	}
-	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{TargetId: result.ResultID, InstanceId: result.InstanceID, LogicalAccountId: valueOrEmpty(instance.LogicalAccountID), SessionId: result.SessionID, StrategyId: instance.StrategyID, BarEndTime: timestamppb.New(result.BarEndTime), EffectiveAt: timestamppb.New(result.BarEndTime), ValidUntil: timestamppb.New(result.ValidUntil), Targets: payloadTargets}
+	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
+		TargetId: result.ResultID, InstanceId: result.InstanceID,
+		LogicalAccountId: valueOrEmpty(instance.LogicalAccountID), SessionId: result.SessionID,
+		StrategyId: instance.StrategyID, OwnerGeneration: ownerGeneration,
+		BarEndTime: timestamppb.New(result.BarEndTime), EffectiveAt: timestamppb.New(result.BarEndTime),
+		ValidUntil: timestamppb.New(result.ValidUntil), Targets: payloadTargets,
+	}
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{EventID: result.ResultID, OccurredAt: result.CreatedAt, SpaceID: instance.SpaceID, SubjectID: valueOrEmpty(instance.LogicalAccountID)})
 }
 
