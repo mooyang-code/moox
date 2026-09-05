@@ -19,13 +19,13 @@
 
 | 任务 | 当前状态 | 证据/待办 |
 | --- | --- | --- |
-| T01 基线与红测 | 执行中 | 授权/Store/RPC/Strategy bootstrap 基线四包通过；三个授权红测已复现；人工和 OKX 红测待执行 |
+| T01 基线与红测 | 执行中 | 授权、人工 unknown、OKX费用行为红测已复现；现代目标全链E2E仍待T11集成 |
 | T02 session 授权与幂等 | 已完成 | `839255b2`；独立 codeCR 和增量复核闭环，主 Agent race 复验通过 |
-| T03 人工未知提交恢复 | 未开始 | 包括截止时间、RPC 语义、撤单竞态和重启恢复 |
-| T04 OKX 单笔成交费用 | 未开始 | 包括 WS/REST 相同成交一致性 |
+| T03 人工未知提交恢复 | 已完成 | `34e92f78`；durable恢复、错误身份/终态校验、deadline和Paper报价闭环；新起codeCR及主Agent复验通过 |
+| T04 OKX 单笔成交费用 | 已完成 | `e2162efa`；signed cost、fillTime排序、不可变重放及真实Paper余额；新Agent/codeCR复核闭环 |
 | T05 Paper 余额投影 | 未开始 | 包括完整历史、原子性、旧库受控转换 |
 | T06 故障隔离与过期 | 未开始 | 包括真实 Decider、账户健康和 targetGate |
-| T07 消息结果可观测 | 未开始 | ActionReporter、日志、低基数指标和 UI 语义 |
+| T07 消息结果可观测 | 已完成 | `1a941da7`；真实Runner、四包race、组件及生产构建通过；独立codeCR所有增量发现闭环 |
 | T08 动态账户路由 | 未开始 | 不重新估值、不搬同向仓位、保护已有目标 |
 | T09 普通 SubmitOrder | 未开始 | MANUAL/STRATEGY、持久化提交、完整接口/鉴权 |
 | T10 契约与控制台 | 未开始 | 现代身份、删除旧执行分支、前后端与文档一致 |
@@ -59,6 +59,24 @@ T02 正式红测：`TestModernSessionTargetCanResume` 因 `target runner does no
 - 当前 Fee 合同是非负成本，RealizedPnL 是有符号数。T04/T05 对返佣字段必须明确处理，不得以 Abs 伪装成已经支持正确返佣，也不得在 T05 顺手扩展未定义的资金模型。
 
 ## 发布调查
+
+### 本轮实现与验证增量
+
+- T03 基线行为红测位于独立 `/tmp/moox-t03-red-20260906` 的 `cc0cd408`；同名真实 OrderService 用例期望 RUNNING、实际 FAILED。原实现者遗留的两个测试进程句柄已不存在，主 Agent 重新执行五包普通测试及 operator/order/runtime race 均通过，不把缺失句柄当作通过证据。
+- T03 新 codeCR 发现并正在闭环：client ID 冲突永久 RUNNING、unknown 撤单递归热循环、临时提交错误被空 Order ID 误判系统失败、无效 instrument 未终结、Cancel CAS 的终态竞态。另补已有不一致成员关系下 PENDING 的 fail-closed 校验；公开成员管理原本已禁止带未终态订单的迁移，不把该用例说成正常 API 可直接制造的漏洞。
+- T04 两个协议红测为第二笔累计费用 0.02 被误当单笔 0.01、REST ts 与 WS fillTime 相差 1ms 导致不可变事实不一致。已改为 WS fillFee/REST fee 并统一 fillTime，费用使用有符号成本（正收费、负返佣）；Store canonicalization 与 Reducer 同步接纳负费用，不放宽相同 trade ID 不可变比较。
+- Signed fee 新 Reducer 红测先因 `incomplete normalized Fill` 拒绝返佣，修复后 consumer/store 普通及 race 通过；非零返佣仍必须有费用币种。测试涵盖重复不入账及费用符号冲突拒绝。
+- T07 真实隔离 NATS 的 RunTarget 业务 TERM 指标红测转绿；Go eventconsumer/jetstream/events/outbox race 通过。原始传输错误不再进入日志；可信 UTF-8 身份保持原值，超长或控制字符处理带摘要避免碰撞。
+- T07 trace 是明确标记 `trace_source=event_id` 的稳定事件级关联 ID；仅存在真正 RPC metadata 时才标记 `rpc_metadata`。不声称已经实现跨服务 span 传播。业务验证失败通过 events 的 typed PayloadValidationError 与信封损坏区分。
+- Web timeline 四个状态真实组件红测转绿，连同相邻操作组件共 6 个测试通过，`vue-tsc --noEmit` 和 `pnpm build:prod` 通过。构建仍有现有 Browserslist/Sass/大包警告，未顺手更新依赖。`sent` 显示“Broker 已确认”，不是成交。尚未完成浏览器及正式环境验收。
+- T07 最后一项增量发现已补：业务 payload 不合法但 envelope 已完成校验时，保留 event/space/local trace，仍不记录未经验证的 target/account/session；真实 HandleTarget 到 reporter 的两种 decode-error 形态均覆盖，独立 codeCR 最终无剩余发现。
+- T04 独立 codeCR 发现 REST billId 顺序不等于实际 fillTime，以及 canonical FillID 重放绕过跨订单关联冲突。均已有效红测后修复：按 fillTime/billId 稳定排序而保留 billId 游标；所有重复成交无条件比较 OrderID/ExchangeOrderID。真实 Reducer 跨订单同 trade ID 原来返回 nil，现返回冲突，第二订单不被修改。
+- T03 已补陈旧报价错误类型；只对未曾 POST 的人工 PENDING 刷新服务端报价并同事务重算预占。报价上升/下降、其他订单预占导致资金不足、unknown 重试不得改旧报价均有测试。
+- 新起 `review_t03_t04_final` 审查并闭环全部发现：永久错误代码持久化与正确 RPC 映射；旧 deadline 按持久化 CreatedAt 回填、新 action 同一时钟创建；Paper 固定成交价同步刷新并保留原滑点；九种终态损坏在应用层 fail closed 且 RPC 映射 INNER_ERR。最终阶段报告无剩余 P0-P2，不代替 T11 的全目标独立审查及生产验收。
+- 最新主 Agent 验证：`go test -count=1 ./modules/trade/...` 全量通过；operator/order/consumer/store/runtime/rpc/test 七包整包 `-race` 通过；operator/order/consumer/store/okx/eventconsumer/events 的 `go vet` 通过。这仍不是正式环境或真实交易所验证。
+- 最后终态校验调整后，主 Agent 再执行 `env MOOX_RUN_REAL_TRADE_DNS_E2E=0 go test -count=1 ./modules/trade/...` 全量及 operator/rpc 整包 race，均通过。下一步从 T05 完整余额投影推进，不跳过 T06、T08-T11；正式环境仍未发布。
+
+### 既有只读发布调查
 
 - 现行本地配置文件是原工作区的 `moox.toml`，不是旧记录中的 `custom.toml`。不复制或提交配置凭据。
 - 配置确认 control/compile host 为 `106.53.107.122`，用户 `ubuntu`，control root 为 `/data/moox/prod`。远端实际有 Strategy/Web，但此目录没有 Trade binary/DB，不能向 control root 盲目发布 Trade。

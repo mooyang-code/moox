@@ -141,9 +141,9 @@ Claim/Rebind transaction:
 - 必要修改：`modules/trade/internal/application/order/service.go`、`infra/store/operator_action.go`
 - 测试：上述对应测试；新增 `modules/trade/test/manual_unknown_recovery_e2e_test.go`
 
-- [ ] `Place` 成功后，先把 child order ID 写入 action 的 `ResultJSON`，再发起 Submit。崩溃发生在这两次提交之间时，按原 client ID 找到同一订单并补关联，禁止生成新 ID。
-- [ ] 复用现有 `RUNNING/COMPLETED/FAILED`，不为相同语义新增第二套订单状态。`COMPLETED` 只表示操作的提交阶段完成，不表示订单已成交。
-- [ ] 按下表实现恢复分流；运行中临时错误写 last_error，但不调用通用 `failManualAction`。持久化必须有有界、可取消的操作上下文；进程停止后依靠 durable action 恢复，不能起无管理的重试 goroutine。
+- [x] `Place` 成功后，先把 child order ID 写入 action 的 `ResultJSON`，再发起 Submit。崩溃发生在这两次提交之间时，按原 client ID 找到同一订单并补关联，禁止生成新 ID。
+- [x] 复用现有 `RUNNING/COMPLETED/FAILED`，不为相同语义新增第二套订单状态。`COMPLETED` 只表示操作的提交阶段完成，不表示订单已成交。
+- [x] 按下表实现恢复分流；运行中临时错误写 last_error，但不调用通用 `failManualAction`。持久化必须有有界、可取消的操作上下文；进程停止后依靠 durable action 恢复，不能起无管理的重试 goroutine。
 
 | child order 状态/事实 | action 行为 | 是否重新 POST |
 | --- | --- | --- |
@@ -154,29 +154,31 @@ Claim/Rebind transaction:
 | 明确参数错误或交易所拒单 | FAILED，保留 order ID 和原因 | 不允许 |
 | 临时行情/同步/账户不可用 | RUNNING，保留关联，等待恢复或显式人工取消 | 不允许绕过校验 |
 
-- [ ] 相同 action ID 的重试返回同一个 action/order；人工响应可表达 RUNNING/UNKNOWN，不能引导客户端换 ID“再试一次”。错误或重启不得丢失已有 reservation；明确终态按现有订单事务释放。
-- [ ] 同步修改 `loadManualOrderResult` 和 RPC 错误映射：已有 durable RUNNING action 的 last_error 只用于诊断，正常读回时返回 nil application error、`RetInfo=0`，不能仅因 last_error 非空就表示“提交失败”。真实持久化/读取失败仍返回系统错误；尚未受理的校验失败、幂等冲突及明确 FAILED 保持对应错误语义。
-- [ ] 关联 child order 后先恢复该订单，不能重新从暂停/撤单开始，把自己的已受理订单当作待清理挂单。若尚未关联，先按原 client ID 查找并校验完整 spec，再决定是否创建。
-- [ ] 持久化绝对提交截止时间，避免依赖恢复后在任意未来时刻执行旧人工请求。A 阶段首次创建 action 的同一事务中，用 CreatedAt 加当时的默认窗口算出 `deadline_at`，写入 ResultJSON 进度；恢复只读取该绝对值，不按新配置重算。已有缺少 deadline 的 RUNNING action 一次性补值并持久化后再恢复。B 阶段允许接口显式指定 `deadline_at`；服务端生成值不加入 RequestJSON 幂等身份。默认窗口值作为执行前配置决策记录，并测试修改配置后重启仍不改变旧截止时间。
-- [ ] ResultJSON 写入 order ID、错误明细或终态结果时必须保留同一 deadline，不用只含 OrderID 的新对象覆盖完整进度；同一 action 的并发 RPC/worker 更新受现有 action/组合锁保护。
-- [ ] 截止时，尚未创建 child 可直接失败；已确认交易所不存在且回到 PENDING 的订单先 `DiscardPending` 释放预占，再失败。SUBMITTING/SUBMIT_UNKNOWN 继续 RUNNING，只查询、不重新 POST；查询证明已受理则完成提交阶段。不能把“超时”当成“交易所没有订单”，也不能把本地丢弃的 CANCELED 误判为提交成功。
-- [ ] 顺带覆盖已确认的撤单竞态：Cancel 返回错误后重新读取订单，若私有流已推进为 FILLED/CANCELED，返回权威终态；不再对终态执行 `MarkCancelUnknown/CancelRejected`。
-- [ ] 测试四个故障点：Place 后、关联后、POST 后响应丢失、后台查到 absent 后重启；分别断言已收单不重复、未收单在截止前可继续、截止后不发新单、同 ID 不变、确定终态后资金占用释放。补“交易所已 ACK，仅后置账户同步失败”的用例，action 仍应完成。
-- [ ] 运行 `go test -count=1 ./modules/trade/internal/application/operator ./modules/trade/internal/application/order ./modules/trade/internal/runtime ./modules/trade/internal/rpc ./modules/trade/test`；再对前面三个包运行 `-race`。
-- [ ] 提交建议：`fix(trade): recover uncertain manual order submissions`。
+- [x] 相同 action ID 的重试返回同一个 action/order；人工响应可表达 RUNNING/UNKNOWN，不能引导客户端换 ID“再试一次”。错误或重启不得丢失已有 reservation；明确终态按现有订单事务释放。
+- [x] 同步修改 `loadManualOrderResult` 和 RPC 错误映射：已有 durable RUNNING action 的 last_error 只用于诊断，正常读回时返回 nil application error、`RetInfo=0`，不能仅因 last_error 非空就表示“提交失败”。真实持久化/读取失败仍返回系统错误；尚未受理的校验失败、幂等冲突及明确 FAILED 保持对应错误语义。
+- [x] 关联 child order 后先恢复该订单，不能重新从暂停/撤单开始，把自己的已受理订单当作待清理挂单。若尚未关联，先按原 client ID 查找并校验完整 spec，再决定是否创建。
+- [x] 持久化绝对提交截止时间，避免依赖恢复后在任意未来时刻执行旧人工请求。A 阶段首次创建 action 的同一事务中，用 CreatedAt 加当时的默认窗口算出 `deadline_at`，写入 ResultJSON 进度；恢复只读取该绝对值，不按新配置重算。已有缺少 deadline 的 RUNNING action 一次性补值并持久化后再恢复。B 阶段允许接口显式指定 `deadline_at`；服务端生成值不加入 RequestJSON 幂等身份。默认窗口值作为执行前配置决策记录，并测试修改配置后重启仍不改变旧截止时间。
+- [x] ResultJSON 写入 order ID、错误明细或终态结果时必须保留同一 deadline，不用只含 OrderID 的新对象覆盖完整进度；同一 action 的并发 RPC/worker 更新受现有 action/组合锁保护。
+- [x] 截止时，尚未创建 child 可直接失败；已确认交易所不存在且回到 PENDING 的订单先 `DiscardPending` 释放预占，再失败。SUBMITTING/SUBMIT_UNKNOWN 继续 RUNNING，只查询、不重新 POST；查询证明已受理则完成提交阶段。不能把“超时”当成“交易所没有订单”，也不能把本地丢弃的 CANCELED 误判为提交成功。
+- [x] 顺带覆盖已确认的撤单竞态：Cancel 返回错误后重新读取订单，若私有流已推进为 FILLED/CANCELED，返回权威终态；不再对终态执行 `MarkCancelUnknown/CancelRejected`。
+- [x] 测试四个故障点：Place 后、关联后、POST 后响应丢失、后台查到 absent 后重启；分别断言已收单不重复、未收单在截止前可继续、截止后不发新单、同 ID 不变、确定终态后资金占用释放。补“交易所已 ACK，仅后置账户同步失败”的用例，action 仍应完成。
+- [x] 运行 `go test -count=1 ./modules/trade/internal/application/operator ./modules/trade/internal/application/order ./modules/trade/internal/runtime ./modules/trade/internal/rpc ./modules/trade/test`；再对前面三个包运行 `-race`。
+- [x] 提交：`34e92f78 fix(trade): recover durable manual submissions safely`；新起 codeCR 阶段审查闭环。默认提交窗口为 60 秒；旧 action 仅按其已持久化 CreatedAt 回填一次。补齐永久错误代码重放、损坏终态系统错误及真实 Paper 固定成交价刷新测试。
 
 ### T04：修正 OKX 单笔费用并验证 WS/REST 事实一致性
 
 **文件：**
 - 修改：`modules/trade/internal/exchange/okx/account_events.go`、`account_events_test.go`
 - 测试：`modules/trade/internal/exchange/okx/okx_test.go`
-- 新增：`modules/trade/test/okx_fill_replay_e2e_test.go`
+- 跨层重放测试：`modules/trade/internal/exchange/okx/account_events_test.go`；使用 HTTP REST、真实私有流 dispatcher、SQLite 和 Reducer，不为测试导出生产私有方法。
+- 新增：`modules/trade/test/paper_signed_fee_e2e_test.go`，验证费用合同进入真实 Paper 余额。
+- 修改：`modules/trade/internal/exchange/types.go`、`application/consumer/fill.go`、`infra/store/fact.go` 及对应测试；Fee 统一为有符号成本，正数收费、负数返佣，非零费用必须有币种。
 - 复核不放宽：`modules/trade/internal/infra/store/fact.go` 的不可变 Fill 冲突检查
 
-- [ ] WS Orders 结构显式接收 `fillFee/fillFeeCcy`，转入标准 Fill；REST fills 仍用该端点的 `fee/feeCcy`。不能采用“fillFee 为空则用累计 fee”的猜测式回退。
-- [ ] 在标准 Fill 字段中校验本次成交费用完整性。收费、返佣、零费用均有明确归一规则；缺少必要字段时不得先落一笔猜测费用的不可变 Fill，再指望 REST 修正。
-- [ ] 使用同时包含累计与单笔字段的真实结构 fixture：第一笔 fee=-0.01/fillFee=-0.01；第二笔 fee=-0.02/fillFee=-0.01。验证两笔费用合计 0.02，而不是 0.03。
-- [ ] 覆盖 WS 先到、REST 先到、重复推送、多个部分成交、同 trade ID 内容冲突；费用币种、成交时间和手续费方向必须在两种来源间归一一致。已有错误历史 Fill 只输出诊断，不自动篡改交易事实。
+- [x] WS Orders 结构显式接收 `fillFee/fillFeeCcy`，转入标准 Fill；REST fills 仍用该端点的 `fee/feeCcy`。不能采用“fillFee 为空则用累计 fee”的猜测式回退。
+- [x] 在标准 Fill 字段中校验本次成交费用完整性。收费、返佣、零费用均有明确归一规则；缺少必要字段时不得先落一笔猜测费用的不可变 Fill，再指望 REST 修正。
+- [x] 使用同时包含累计与单笔字段的真实结构 fixture：第一笔 fee=-0.01/fillFee=-0.01；第二笔 fee=-0.02/fillFee=-0.01。验证两笔费用合计 0.02，而不是 0.03。
+- [x] 覆盖 WS 先到、REST 先到、重复推送、多个部分成交、同 trade ID 内容冲突；费用币种、成交时间和手续费方向必须在两种来源间归一一致。已有错误历史 Fill 只输出诊断，不自动篡改交易事实。补充 REST 聚合批内按 fillTime/billId 排序及 canonical Fill 跨订单冲突。
 
 ```json
 {
@@ -190,8 +192,8 @@ Claim/Rebind transaction:
 }
 ```
 
-- [ ] 运行 `go test -count=1 ./modules/trade/internal/exchange/okx ./modules/trade/internal/application/consumer ./modules/trade/internal/application/accountsync ./modules/trade/test`；只有跨来源重放不重复记账且无 immutable replay 冲突才通过。
-- [ ] 提交建议：`fix(trade): normalize OKX websocket per-fill fees`。
+- [x] 运行 `go test -count=1 ./modules/trade/internal/exchange/okx ./modules/trade/internal/application/consumer ./modules/trade/internal/application/accountsync ./modules/trade/test`；只有合法跨来源重放不重复记账且无 immutable replay 冲突才通过，故意改变费用或关联订单必须拒绝。
+- [x] 提交：`e2162efa fix(trade): normalize immutable per-fill fees and ordering`；独立 codeCR 阶段审查闭环。
 
 ### T05：建立可重建的 Paper 余额投影
 
@@ -236,6 +238,7 @@ CREATE TABLE IF NOT EXISTS t_paper_asset_balances (
 - [ ] 每笔新 Paper Fill 的插入、订单状态、reservation 释放、持仓和余额投影在同一事务更新。只有 `InsertFill` 确认新增才修改投影；重复 Fill 不加计，冲突或任何中途错误全部回滚。禁止在已有 Tx 内调用会新建事务的 Store 方法。
 - [ ] Spot：买入扣 quote、加 base；卖出相反；手续费按实际费用币种扣除。Swap：初始结算现金加已实现收益、扣费用；未实现收益和保证金仍由当前持仓/价格计算。所有金额用现有 Decimal，不用浮点数或 SQLite 浮点 SUM。
 - [ ] `GetAccountSnapshot` 改读投影和活动 reservation，不再每次读取全部 Fill/全部终态订单。保留“预占只扣一次”的合同，而非照搬有重扣风险的实现：先红测覆盖 Paper 快照已含 PENDING locked、随后又 Place 的情况。Paper 在同一 Place 事务读取余额投影与全部活动 reservation 校验资金，不再对已反映预占的 Paper 可用余额叠加 `GetUnreflectedReservation`；Live 仍保留现有 snapshot watermark 路径，防止扩大账户事实合同变更。
+- [ ] 同样覆盖 T03 新增的人工 PENDING 报价刷新：用投影与其他活动预占检查替换后的 reservation，不叠加快照已反映的自身/其他 Paper 预占；真实 Paper 已同步 locked 后报价上升、下降和资金不足均需验证原子性。
 - [ ] Close 只关闭执行并取消活动模拟订单，保留 Fill、余额投影与资金曲线；同事务取消并释放 reservation 后刷新最终快照，避免已关闭账户仍显示旧 locked。不得通过重建重新开启 CLOSED 账户。
 - [ ] 验收：100001 笔历史、不同费币种、买卖回转、Swap 已实现收益、重复重放、事务失败、重启、关闭、重建与增量结果一致。增加查询计数断言：普通快照不调用全历史 ListFills，不用墙钟性能阈值代替结构验证。
 - [ ] 运行 `go test -count=1 ./modules/trade/schema ./modules/trade/internal/infra/store ./modules/trade/internal/application/consumer ./modules/trade/internal/application/papersimulation ./modules/trade/internal/bootstrap ./modules/trade/internal/execution/paper ./modules/trade/test`，并对所有 schema 执行内存 SQLite 载入与外键检查。
@@ -271,14 +274,14 @@ CREATE TABLE IF NOT EXISTS t_paper_asset_balances (
 - 测试：`modules/trade/internal/eventconsumer/target_test.go`、`modules/strategy/internal/outbox/relay_test.go`
 - 后续展示：`web/src/views/strategy/components/strategy-status-badge.vue`、`strategy-run-timeline.vue`
 
-- [ ] 配置 `ActionReporter`，同时记录 handler 的业务结果与实际 ACK/NAK/TERM 动作是否成功。ErrorReporter 继续用于传输和运行错误，不把二者混为一谈。
-- [ ] 结构化日志含 space、target、logical account、instance/session、decision、error_code、trace；解析失败时只记录可信 envelope/transport 信息，不输出完整 payload、签名、凭据或无限长度错误。
-- [ ] 指标标签限定低基数 `decision/error_code`；target/account ID 只进日志和查询，不作为 Prometheus label。重试、旧周期被替代、过期、身份错误、永久业务拒绝分别可区分。
-- [ ] Reporter 观察失败不能改变已经执行的消息动作。成功受理仍以现有 receipt 与目标原子提交为准，不能把“写了日志”当成受理成功。
-- [ ] 控制台明确 `sent=Broker 已确认`，不显示为“交易成功”。当前执行状态读取 Trade 的目标/订单事实；本轮拒绝原因通过结构化日志与明确错误入口追踪，不声称已有可靠的 Trade 回报事件。
-- [ ] 验收：ACK、TERM、RETRY/NAK 的业务原因均可观测；同目标重复投递不生成新订单；日志脱敏与长度上限；Reporter panic/失败不影响消息控制流。
-- [ ] 运行 `go test -count=1 ./modules/trade/internal/eventconsumer ./packages/jetstream ./modules/strategy/internal/outbox`。
-- [ ] 提交建议：`fix(trade): report target delivery decisions explicitly`。
+- [x] 配置 `ActionReporter`，同时记录 handler 的业务结果与实际 ACK/NAK/TERM 动作是否成功。ErrorReporter 继续用于传输和运行错误，不把二者混为一谈。
+- [x] 结构化日志含 space、target、logical account、instance/session、decision、error_code、trace；解析失败时只记录可信 envelope/transport 信息，不输出完整 payload、签名、凭据或无限长度错误。无上游 RPC metadata 的事件使用确定性事件级关联 trace 并标记 `trace_source=event_id`，不宣称实现分布式 span 传播。
+- [x] 指标标签限定低基数 `decision/error_code/action_result`；target/account ID 只进日志和查询，不作为 Prometheus label。重试、旧周期被替代、过期、身份错误、永久业务拒绝分别可区分。
+- [x] Reporter 观察失败不能改变已经执行的消息动作。成功受理仍以现有 receipt 与目标原子提交为准，不能把“写了日志”当成受理成功。
+- [x] 控制台明确 `sent=Broker 已确认`，不显示为“交易成功”。当前执行状态读取 Trade 的目标/订单事实；本轮拒绝原因通过结构化日志与明确错误入口追踪，不声称已有可靠的 Trade 回报事件。
+- [x] 验收：ACK、TERM、RETRY/NAK 的业务原因均可观测；同目标重复投递不生成新订单；日志脱敏与长度上限；Reporter panic/失败不影响消息控制流。
+- [x] 运行 `go test -count=1 ./modules/trade/internal/eventconsumer ./packages/jetstream ./modules/strategy/internal/outbox`，以及增加 events 包的四包 race。
+- [x] 提交：`1a941da7 fix(trade): report target delivery decisions explicitly`，远端同 SHA 已核验。
 
 ### T08：分离目标估值与多账户执行路由
 
