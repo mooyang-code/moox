@@ -9,6 +9,19 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// PayloadValidationError distinguishes a decoded but invalid business payload
+// from malformed envelope or transport metadata.
+type PayloadValidationError struct {
+	EventName string
+	Cause     error
+}
+
+func (e *PayloadValidationError) Error() string {
+	return fmt.Sprintf("validate %s payload: %v", e.EventName, e.Cause)
+}
+
+func (e *PayloadValidationError) Unwrap() error { return e.Cause }
+
 // DecodeRaw is the single envelope decoder for governed EventMessage values.
 // It validates broker metadata, registry membership, rendered subject, and the
 // registered protobuf payload type before returning the typed payload.
@@ -54,7 +67,7 @@ func DecodeRaw(registry *Registry, raw []byte, subject, messageID, contentType s
 		return message, nil, fmt.Errorf("decode %s payload: %w", event.Name(), err)
 	}
 	if err := event.Validate(message, payload); err != nil {
-		return message, nil, fmt.Errorf("validate %s payload: %w", event.Name(), err)
+		return message, nil, &PayloadValidationError{EventName: event.Name(), Cause: err}
 	}
 	return message, payload, nil
 }

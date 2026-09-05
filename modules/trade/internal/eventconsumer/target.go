@@ -59,7 +59,11 @@ func HandleTarget(
 		delivery.ContentType,
 	)
 	if err != nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+		var invalidPayload *events.PayloadValidationError
+		if errors.As(err, &invalidPayload) {
+			return targetRejection("invalid_contract", err)
+		}
+		return targetRejection("invalid_event", err)
 	}
 	request, ok := payload.(*tradeeventpb.LogicalAccountTargetWeightRequested)
 	if !ok ||
@@ -76,7 +80,7 @@ func HandleTarget(
 		defer opts.Gate.Unlock()
 	}
 	if opts.WeightResolver == nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: errors.New("trade target weight resolver is required")}
+		return targetRejection("resolver_missing", errors.New("trade target weight resolver is required"))
 	}
 	// Fencing and expiry precede receipt replay and all market-data work for a
 	// modern session target. Legacy Runner events remain accepted through the
@@ -84,7 +88,7 @@ func HandleTarget(
 	// stop publishing targets.
 	modernContract := request.GetInstanceId() != "" || request.GetSessionId() != "" || request.GetStrategyId() != "" || request.GetBarEndTime() != nil || request.GetEffectiveAt() != nil || request.GetValidUntil() != nil
 	if modernContract && (request.GetInstanceId() == "" || request.GetSessionId() == "" || request.GetStrategyId() == "" || request.GetBarEndTime() == nil || request.GetEffectiveAt() == nil || request.GetValidUntil() == nil) {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("trade target: new session contract is incomplete")}
+		return targetRejection("invalid_contract", fmt.Errorf("trade target: new session contract is incomplete"))
 	}
 	account, accountErr := opts.Store.GetLogicalAccount(ctx, message.GetSpaceId(), request.GetLogicalAccountId())
 	if accountErr != nil {
@@ -95,7 +99,7 @@ func HandleTarget(
 	}
 	if modernContract {
 		if account.OwnerInstanceID != request.GetInstanceId() || account.OwnerSessionID != request.GetSessionId() {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("%w: target session authorization", store.ErrConflict)}
+			return targetRejection("authorization_conflict", fmt.Errorf("%w: target session authorization", store.ErrConflict))
 		}
 	}
 	now := time.Now().UTC()
@@ -111,7 +115,7 @@ func HandleTarget(
 	}
 	if existing, lookupErr := opts.Store.GetTargetReceipt(ctx, message.GetSpaceId(), request.GetTargetId()); lookupErr == nil {
 		if existing.RequestHash != requestHash {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("%w: target receipt request hash conflict", store.ErrConflict)}
+			return targetRejection("receipt_conflict", fmt.Errorf("%w: target receipt request hash conflict", store.ErrConflict))
 		}
 		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
@@ -140,7 +144,7 @@ func HandleTarget(
 				(current.CommandSequence == sequence && current.TargetID != request.GetTargetId()))) {
 			// The command is permanently superseded. TERM preserves the
 			// consumer's poison-message semantics without doing market-data I/O.
-			return jetstream.HandlerResult{Decision: jetstream.TERM}
+			return targetRejection("superseded", nil)
 		}
 	} else if !errors.Is(currentErr, gorm.ErrRecordNotFound) {
 		return retryTarget(currentErr)
