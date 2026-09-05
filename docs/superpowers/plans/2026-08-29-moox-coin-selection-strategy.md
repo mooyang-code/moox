@@ -56,7 +56,8 @@ EventBus 的 `MOOX_TRADE` stream 和 Trade role ACL 做了兼容迁移，当前�
 
 ## 实施基线
 
-本计划只以 [选币策略执行框架设计](../../选币策略执行框架设计.md) 为目标基线，原计划内容不再继承。
+本计划记录上一版 `moox.strategy/v2` 实施基线。[策略执行框架设计](../../策略执行框架设计.md)
+已于 2026-09-05 修订；本计划施工步骤和验收项尚未同步，不可直接作为新版实施计划执行。
 
 - Factor 保持现有 `FactorDef + FactorBinding` 两层模型；不增加 `FactorInstance`，不修改 Factor 计算和完成事件协议。12 个 XBX 因子作为独立因子文件交付，`circulating_supply` 不进入框架模型，需要时由独立 Factor 提供。
 - 一个 Runner 只有一个 Strategy、一个 UTC 日程、一份 InstrumentPoolRule 和最多一个 LogicalAccount。
@@ -1254,7 +1255,7 @@ Expected: PASS 后提交。
 - Create: `modules/strategy/test/view_factor_ready_e2e_test.go`
 - Modify: `modules/strategy/docs/frontend-verification.md`
 - Create: `modules/strategy/docs/coin-selection-runtime.md`
-- Modify: `docs/选币策略执行框架设计.md`
+- Modify: `docs/策略执行框架设计.md`
 
 - [ ] **Step 1: 写 Strategy 完整链路测试**
 
@@ -1342,7 +1343,7 @@ binary: remote SHA-256 matches release/moox-dev-linux-amd64.tar.gz contents
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-git add modules/strategy/test modules/strategy/docs docs/选币策略执行框架设计.md
+git add modules/strategy/test modules/strategy/docs docs/策略执行框架设计.md
 git commit -m "test(strategy): verify weighted selection end to end"
 ```
 
