@@ -35,8 +35,10 @@ Strategy Playwright；Playwright 中一条旧组合账户断言已保留兼容�
 
 本轮收口验证（2026-09-06）：已完成本地隔离部署的真实 Storage/Factor/Strategy 链路测试，使用
 动态 DSL 创建实例，收到 `ViewFactorPeriodReady` 后查询到完整目标权重；`TestFactorRealStorageE2E`
-通过。该验证仍是本机临时部署，不包含正式主机发布、真实账户或实际下单；现代 Trade 会话代际的
-跨进程接收由单元测试覆盖，需在有独立 Trade/EventBus 的环境再补完整联合 E2E。
+通过。测试清理对异步 Factor/Storage 操作做有界重试，默认将无法访问旧 worker 的清理失败记为
+日志警告；设置 `MOOX_FACTOR_STORAGE_E2E_STRICT_CLEANUP=1` 时才把残留升级为测试失败，适合
+CI 门禁。该验证仍是本机临时部署，不包含正式主机发布、真实账户或实际下单；现代 Trade 会话
+代际的跨进程接收由单元测试覆盖，需在有独立 Trade/EventBus 的环境再补完整联合 E2E。
 
 仓库级 `make verify-pr` 已尝试运行：`proto-check` 和 greenfield contract 通过，随后在既有
 `scripts/check/verify-event-contracts.sh` 的 Storage 配置检查处因 `modules/storage/config/**`
