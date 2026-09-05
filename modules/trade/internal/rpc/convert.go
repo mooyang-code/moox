@@ -7,6 +7,7 @@ import (
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
+	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
@@ -30,6 +31,8 @@ func errorInfo(err error) *tradepb.RetInfo {
 	}
 	code := tradepb.ErrorCode_INNER_ERR
 	switch {
+	case errors.Is(err, operatorapp.ErrInvalidActionResult):
+		code = tradepb.ErrorCode_INNER_ERR
 	case errors.Is(err, errSpaceRequired):
 		code = tradepb.ErrorCode_NO_PERMISSION
 	case errors.Is(err, gorm.ErrRecordNotFound),
@@ -41,6 +44,8 @@ func errorInfo(err error) *tradepb.RetInfo {
 		errors.Is(err, orderapp.ErrIdempotencyConflict):
 		code = tradepb.ErrorCode_CONFLICT
 	case errors.Is(err, store.ErrInvalidRecord),
+		errors.Is(err, operatorapp.ErrInvalidCommand),
+		errors.Is(err, orderapp.ErrCrossZero),
 		errors.Is(err, tradingaccount.ErrInvalidAccount),
 		errors.Is(err, logicalapp.ErrAdoptionRequired),
 		errors.Is(err, logicalapp.ErrMemberHasExposure),

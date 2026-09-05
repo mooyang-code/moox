@@ -2,13 +2,90 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/application/operator"
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
+
+type manualReplayDependencies struct{}
+
+func (manualReplayDependencies) SyncAccount(context.Context, string) error { return nil }
+func (manualReplayDependencies) LatestPrice(context.Context, string, string) (operator.Quote, error) {
+	return operator.Quote{}, nil
+}
+
+func TestManualPersistedFailureMapsToInvalidParam(t *testing.T) {
+	for _, code := range []string{"INSUFFICIENT_FUNDS", "QUANTITY_RULE", "INVALID_SPEC", "INVALID_COMMAND", "CROSS_ZERO", "UNKNOWN_CODE"} {
+		t.Run(code, func(t *testing.T) {
+			db := openRPCStore(t)
+			ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
+			if err := db.Transaction(ctx, func(tx *store.Tx) error {
+				return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "manual", OwnerRunnerID: "runner-1", ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"})
+			}); err != nil {
+				t.Fatal(err)
+			}
+			raw := `{"error_code":"` + code + `"}`
+			_, _, err := db.CreateOperatorAction(ctx, store.OperatorActionRecord{SpaceID: "space-1", ActionID: "action-1", LogicalAccountID: "logical-1", ActionType: "MANUAL_ORDER", Status: "FAILED", Reason: "manual intervention", LastError: "retained failure detail", ResultJSON: &raw,
+				RequestJSON: `{"trading_account_id":"account-1","client_order_id":"client-1","instrument_id":"BTCUSDT","order_type":"MARKET","side":"BUY","position_side":"NET","quantity":"1"}`})
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := &operator.Service{Store: db, Orders: &orderapp.Service{Store: db}, Syncer: manualReplayDependencies{}, Prices: manualReplayDependencies{}}
+			h := &ExecutionServer{PlaceManual: func(ctx context.Context, c ManualOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
+				result, err := service.PlaceManualOrder(ctx, operator.ManualOrderCommand{SpaceID: c.SpaceID, ActionID: c.ActionID, TradingAccountID: c.TradingAccountID, ClientOrderID: c.ClientOrderID, InstrumentID: c.InstrumentID, Type: c.OrderType, FillPolicy: c.FillPolicy, Side: c.Side, PositionSide: c.PositionSide, Quantity: c.Quantity, LimitPrice: c.LimitPrice, Reason: c.Reason})
+				return result.Action, result.Order, err
+			}}
+			for attempt := 0; attempt < 2; attempt++ {
+				rsp, err := h.PlaceManualOrder(ctx, &tradepb.PlaceManualOrderReq{ActionId: "action-1", TradingAccountId: "account-1", ClientOrderId: "client-1", InstrumentId: "BTCUSDT", OrderType: tradepb.OrderType_ORDER_TYPE_MARKET, Side: tradepb.OrderSide_ORDER_SIDE_BUY, PositionSide: tradepb.PositionSide_POSITION_SIDE_NET, Quantity: "1", Reason: "manual intervention"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := tradepb.ErrorCode_INVALID_PARAM
+				if code == "UNKNOWN_CODE" {
+					want = tradepb.ErrorCode_INNER_ERR
+				}
+				if rsp.GetRetInfo().GetCode() != want {
+					t.Fatalf("response = %+v", rsp)
+				}
+			}
+		})
+	}
+}
+
+func TestCorruptManualResultTakesPrecedenceOverInvalidRecord(t *testing.T) {
+	err := errors.Join(operator.ErrInvalidActionResult, store.ErrInvalidRecord)
+	if got := errorInfo(err).GetCode(); got != tradepb.ErrorCode_INNER_ERR {
+		t.Fatalf("code = %v", got)
+	}
+}
+
+func TestManualRunningDiagnosticDoesNotHideStorageFailure(t *testing.T) {
+	for _, failure := range []error{nil, errors.New("database unavailable")} {
+		h := &ExecutionServer{PlaceManual: func(context.Context, ManualOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
+			return store.OperatorActionRecord{ActionID: "action-1", Status: "RUNNING", LastError: "submission outcome unknown"}, store.OrderRecord{}, failure
+		}}
+		rsp, err := h.PlaceManualOrder(spacecontext.WithSpaceID(context.Background(), "space-1"), &tradepb.PlaceManualOrderReq{
+			ActionId: "action-1", TradingAccountId: "account-1", ClientOrderId: "client-1", InstrumentId: "BTCUSDT",
+			OrderType: tradepb.OrderType_ORDER_TYPE_MARKET, Side: tradepb.OrderSide_ORDER_SIDE_BUY,
+			PositionSide: tradepb.PositionSide_POSITION_SIDE_NET, Quantity: "1", Reason: "manual intervention",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (rsp.GetRetInfo().GetCode() == tradepb.ErrorCode_SUCCESS) != (failure == nil) {
+			t.Fatalf("response = %+v, failure = %v", rsp, failure)
+		}
+		if rsp.GetAction().GetLastError() != "submission outcome unknown" {
+			t.Fatalf("lost diagnostic: %+v", rsp)
+		}
+	}
+}
 
 func TestExecutionRPCRejectsMissingSpace(t *testing.T) {
 	response, err := (&ExecutionServer{}).GetOrder(

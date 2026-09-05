@@ -480,6 +480,11 @@ func (s *Service) Cancel(
 	if getErr != nil {
 		return orderdomain.Order{}, getErr
 	}
+	// A private execution update can settle the order while CancelOrder is in
+	// flight. The persisted terminal state is authoritative over its late error.
+	if current.State.Terminal() {
+		return current, nil
+	}
 	expected = current.Version
 	if uncertainExchangeError(callErr) {
 		_, err = current.MarkCancelUnknown()
@@ -493,7 +498,7 @@ func (s *Service) Cancel(
 	if err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpdateOrder(latest, expected)
 	}); err != nil {
-		return orderdomain.Order{}, err
+		return s.cancelUpdateError(ctx, spaceID, orderID, err)
 	}
 	return current, callErr
 }
@@ -530,21 +535,20 @@ func (s *Service) RecoverCancel(
 		return s.Get(ctx, spaceID, orderID)
 	}
 	if !uncertainExchangeError(callErr) {
-		if syncErr := s.Syncer.SyncAccount(ctx, record.TradingAccountID); syncErr == nil {
-			latest, getErr := s.Get(ctx, spaceID, orderID)
-			if getErr == nil {
-				if latest.State.Terminal() ||
-					(latest.State != orderdomain.Canceling &&
-						latest.State != orderdomain.CancelUnknown) {
-					return latest, nil
-				}
-				current = latest
-				record, getErr = s.Store.GetOrder(ctx, spaceID, orderID)
-				if getErr != nil {
-					return orderdomain.Order{}, getErr
-				}
-			}
-		}
+		_ = s.Syncer.SyncAccount(ctx, record.TradingAccountID)
+	}
+	// Even an uncertain response can arrive after a private terminal update.
+	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	current, err = domainOrder(record)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	if current.State.Terminal() ||
+		(current.State != orderdomain.Canceling && current.State != orderdomain.CancelUnknown) {
+		return current, nil
 	}
 	expected := current.Version
 	switch {
@@ -564,9 +568,22 @@ func (s *Service) RecoverCancel(
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpdateOrder(record, expected)
 	}); err != nil {
-		return orderdomain.Order{}, err
+		return s.cancelUpdateError(ctx, spaceID, orderID, err)
 	}
 	return current, callErr
+}
+
+func (s *Service) cancelUpdateError(ctx context.Context, spaceID, orderID string, updateErr error) (orderdomain.Order, error) {
+	if errors.Is(updateErr, store.ErrConflict) {
+		latest, err := s.Get(ctx, spaceID, orderID)
+		if err != nil {
+			return orderdomain.Order{}, err
+		}
+		if latest.State.Terminal() {
+			return latest, nil
+		}
+	}
+	return orderdomain.Order{}, updateErr
 }
 
 func (s *Service) DiscardPending(
@@ -758,6 +775,32 @@ func (s *Service) submit(
 		validator.MaxReferenceAge = now.Sub(aggregate.Spec.ReferencePriceAt) + time.Second
 	}
 	validation, err := validator.Validate(ctx, record.SpaceID, aggregate.Spec)
+	refreshedReference := false
+	if errors.Is(err, orderdomain.ErrReferencePriceStale) && record.SubmittedAt == 0 &&
+		aggregate.Spec.Owner.Type == orderdomain.OwnerOperator {
+		adapter, adapterErr := s.Adapters.Adapter(record.TradingAccountID)
+		if adapterErr != nil {
+			return aggregate, false, adapterErr
+		}
+		marketData, ok := adapter.(execution.MarketDataSource)
+		if !ok {
+			return aggregate, false, err
+		}
+		quote, quoteErr := marketData.GetQuote(ctx, shared.ExchangeSymbol(record.ExchangeSymbol))
+		if quoteErr != nil {
+			return aggregate, false, quoteErr
+		}
+		if !paperQuoteFresh(quote, s.now(), validator.MaxReferenceAge) {
+			return aggregate, false, orderdomain.ErrReferencePriceStale
+		}
+		price, priceErr := paperExecutablePrice(aggregate.Spec.Side, quote)
+		if priceErr != nil {
+			return aggregate, false, priceErr
+		}
+		aggregate.Spec.ReferencePrice, aggregate.Spec.ReferencePriceAt = price, quote.SourceTime
+		validation, err = validator.Validate(ctx, record.SpaceID, aggregate.Spec)
+		refreshedReference = err == nil
+	}
 	if err != nil {
 		if permanentValidationError(err) {
 			rejected, rejectErr := s.rejectPending(ctx, record, aggregate, err)
@@ -769,6 +812,9 @@ func (s *Service) submit(
 	if err != nil {
 		return orderdomain.Order{}, false, err
 	}
+	if err := ctx.Err(); err != nil {
+		return aggregate, false, err
+	}
 	expected := aggregate.Version
 	if _, err = aggregate.BeginSubmit(); err != nil {
 		return orderdomain.Order{}, false, err
@@ -776,7 +822,27 @@ func (s *Service) submit(
 	releaseReservationForReduction := !record.ReduceOnly &&
 		aggregate.Spec.ReducePositionOnly
 	record.ReduceOnly = aggregate.Spec.ReducePositionOnly
-	if releaseReservationForReduction {
+	oldReservedAsset, oldRemaining := record.ReservedAsset, record.RemainingReservedQuantity
+	if refreshedReference && validation.Account.ExecutionMode == exchange.ExecutionModePaper && aggregate.Spec.Type == exchange.OrderTypeMarket {
+		price := aggregate.Spec.ReferencePrice
+		if record.PaperExecutionPrice != nil {
+			previous, parseErr := shared.ParseDecimal(*record.PaperExecutionPrice)
+			if parseErr != nil {
+				return aggregate, false, parseErr
+			}
+			reference, parseErr := shared.ParseDecimal(record.ReferencePrice)
+			if parseErr != nil || reference.Cmp(shared.Zero()) <= 0 {
+				return aggregate, false, store.ErrInvalidRecord
+			}
+			// Preserve the slippage fixed at Place, even if account settings changed.
+			price = previous.Mul(price).Div(reference)
+		} else if validation.Account.Paper != nil {
+			price = paperExecutionPrice(price, aggregate.Spec.Side, validation.Account.Paper.SlippageBPS)
+		}
+		raw := price.String()
+		record.PaperExecutionPrice = &raw
+	}
+	if releaseReservationForReduction || refreshedReference {
 		record.ReservedAsset = validation.ReservedAsset
 		record.ReservedQuantity = validation.ReservedQuantity.String()
 		record.RemainingReservedQuantity = validation.ReservedQuantity.String()
@@ -784,6 +850,31 @@ func (s *Service) submit(
 	applyAggregate(&record, aggregate)
 	record.SubmittedAt = s.now().UnixMilli()
 	if err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if refreshedReference {
+			unreflected, err := tx.GetUnreflectedReservation(record.SpaceID, record.TradingAccountID, validation.ReservedAsset, validation.Account.LastSyncAt.UnixMilli())
+			if err != nil {
+				return err
+			}
+			if oldReservedAsset == validation.ReservedAsset {
+				previous, parseErr := shared.ParseDecimal(oldRemaining)
+				if parseErr != nil {
+					return parseErr
+				}
+				unreflected = unreflected.Sub(previous)
+			}
+			available := availableBalance(validation.Account.Snapshot, validation.ReservedAsset)
+			if validation.Account.MarketType == exchange.MarketTypeSwap {
+				available = validation.Account.Snapshot.AvailableFunds
+			}
+			if available.Cmp(unreflected.Add(validation.ReservedQuantity)) < 0 {
+				return ErrInsufficientFunds
+			}
+			record.ReferencePrice = aggregate.Spec.ReferencePrice.String()
+			record.ReferencePriceAt = aggregate.Spec.ReferencePriceAt.UnixMilli()
+			if err := tx.UpdatePendingOrderReference(record, expected); err != nil {
+				return err
+			}
+		}
 		return tx.UpdateOrder(record, expected)
 	}); err != nil {
 		return orderdomain.Order{}, false, err
@@ -792,6 +883,9 @@ func (s *Service) submit(
 	exchangeSymbol := validation.Instrument.ExchangeSymbol
 	if exchangeSymbol == "" {
 		exchangeSymbol = aggregate.Spec.InstrumentID
+	}
+	if err := ctx.Err(); err != nil {
+		return aggregate, false, err
 	}
 	response, callErr := adapter.PlaceOrder(ctx, exchange.OrderRequest{
 		ClientOrderID:  aggregate.Spec.ClientOrderID,
@@ -876,6 +970,9 @@ func (s *Service) rejectPending(
 }
 
 func permanentValidationError(err error) bool {
+	if errors.Is(err, orderdomain.ErrReferencePriceStale) {
+		return false
+	}
 	for _, target := range []error{
 		orderdomain.ErrInvalidSpec,
 		ErrAccountOwnership,

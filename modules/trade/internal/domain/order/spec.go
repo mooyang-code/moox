@@ -12,6 +12,8 @@ import (
 
 var ErrInvalidSpec = errors.New("trade: invalid order specification")
 
+var ErrReferencePriceStale = errors.New("reference price is stale")
+
 type ClientOrderSpec struct {
 	TradingAccountID string
 	ClientOrderID    string
@@ -99,7 +101,7 @@ func (s OrderSpec) Validate(
 	}
 	age := now.Sub(s.ReferencePriceAt)
 	if maxReferenceAge <= 0 || s.ReferencePriceAt.IsZero() || age < 0 || age > maxReferenceAge {
-		return invalidSpec("reference price is stale")
+		return fmt.Errorf("%w: %w", ErrInvalidSpec, ErrReferencePriceStale)
 	}
 
 	switch s.Type {

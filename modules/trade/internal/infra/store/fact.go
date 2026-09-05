@@ -782,6 +782,31 @@ func (tx *Tx) FindOrderForFill(
 	return orderRecordFromRow(row), nil
 }
 
+// UpdatePendingOrderReference must share the transaction with the following
+// versioned order update, so a refreshed quote and reservation commit together.
+func (tx *Tx) UpdatePendingOrderReference(record OrderRecord, expectedVersion uint64) error {
+	price, err := shared.ParseDecimal(record.ReferencePrice)
+	if err != nil || price.Cmp(shared.Zero()) <= 0 || record.ReferencePriceAt <= 0 {
+		return fmt.Errorf("%w: invalid order reference", ErrInvalidRecord)
+	}
+	if record.PaperExecutionPrice != nil {
+		paperPrice, err := shared.ParseDecimal(*record.PaperExecutionPrice)
+		if err != nil || paperPrice.Cmp(shared.Zero()) <= 0 {
+			return fmt.Errorf("%w: invalid paper execution price", ErrInvalidRecord)
+		}
+	}
+	result := tx.db.Exec(`UPDATE t_trade_orders SET c_reference_price = ?, c_reference_price_at = ?, c_paper_execution_price = ?
+		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ? AND c_state = 'PENDING' AND c_submitted_at = 0`,
+		price.String(), record.ReferencePriceAt, record.PaperExecutionPrice, record.SpaceID, record.OrderID, expectedVersion)
+	if result.Error != nil {
+		return writeError(result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return ErrConflict
+	}
+	return nil
+}
+
 func (tx *Tx) UpdateOrder(record OrderRecord, expectedVersion uint64) error {
 	if record.SpaceID == "" || record.OrderID == "" || record.Version != expectedVersion+1 {
 		return fmt.Errorf("%w: invalid order update", ErrInvalidRecord)
