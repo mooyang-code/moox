@@ -1,1398 +1,567 @@
-# MooX 选币策略执行框架实施计划
-
-> **文档状态（2026-08-30）：** 本文是 Strategy v2 的执行基线。实现、测试、独立
-> `codeCR`、发布和正式环境验收结果已回填；后续变更仍必须重新执行对应门禁，不能
-> 仅凭工作树状态、单元测试或本地制品宣称完成正式验收。
+# MooX 策略执行框架实施计划
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-## 当前实施状态
+**Goal:** 将当前截面选币实现改为简洁的规则 DSL，支持定时与事件触发，只向 Trade 输出完整目标持仓权重。
 
-截至 2026-08-30，以下工作已在当前工作树完成并经过验证：
+**Architecture:** 固定 Go 流水线处理标的池、前筛、评分、选择、信号、权重、后筛与合成，Expr 只执行受约束表达式。定义仅保存 `dsl_yaml`，编译态留在内存；每个运行周期首次成功的 Result 保存规则后态，并与 outbox 原子提交。Strategy 与 Trade 共同使用 `run_id` 隔离运行身份，在该身份内以 `bar_end_time` 判断目标先后。
 
-- [x] Strategy v2 声明式 Manifest、编译依赖冻结、InstrumentPool、EvaluationInput、PoolScoring、WeightAllocator、ready 消费、Result/outbox。
-- [x] Trade `target_weight` 消费、权益/报价换算、不可变 `TargetReceipt` 和现有 TargetExecutor 衔接。
-- [x] 12 个 XBX 因子 MooX 化、Bias/Cci 覆盖、catalog 导入入口及 Factor source hash 校验。
-- [x] Storage marker/outbox、View provenance attributes、跨 View active-index 快照屏障和当期单 RPC 读取约束。
-- [x] Factor ready 事件强制携带 `source_hash`；Trade 对共享 LIVE credential 去重权益，并保留 release-time owner fence。
-- [x] Strategy 对 DISABLED Runner 的 Trade release 具备启动及周期性重试；reset 部署可用既有 role 文件重建最新 EventBus ACL。
-- [x] 管理台、运行文档、模块测试、Web 测试/构建、事件/部署 E2E、发布包和二进制构建。
-- [x] 独立 `codeCR` 复审提出的 active-index 同代修订、recalc provenance fail-open、
-  终态 degraded 无限重试、Trade 跨服务 wall-clock owner fence、冻结 venue 误切换问题
-  已修复并补测试；最终独立 v15 复审确认 P0/P1 已清零。
-- [x] 已补齐 Trade owner-generation additive migration、Strategy V1 表归档迁移，以及
-  `VerifyDependencies` 临时 RPC 错误的 NAK/重试语义和回归测试；归档 V1 owner 的启动
-  协调释放、runner 并发锁和已启用 Runner 重复 Enable 的 Claim 修复已补齐。
-- [x] 正式环境部署及跨进程就绪链路验收：使用 `moox.toml` 中的受保护凭据登录
-  `ubuntu@106.53.107.122`，以组件 overlay 方式发布到
-  `/data/moox/prod`，保留既有 Control/Gateway/Storage 数据和密钥；EventBus、Trade、
-  Strategy 按顺序启动并通过认证 `/readyz`。
+**Tech Stack:** Go 1.25、tRPC-Go、Protobuf、SQLite/GORM、NATS JetStream、Expr、现有 Storage/Factor 输入绑定、Vue 3/Pinia/Arco Design、Vitest/Playwright。
 
-验证记录：独立 `codeCR` v10 发现并已修复同 ID 接管绕过 Trade 生命周期重置的 P1；随后复审提出的
-owner 冲突、启动顺序、owner-generation TOCTOU、失效失败重投和同状态 Claim 快照问题也已修复：
-Generation 查询强制校验当前 Runner，失效重投比较 generation 并强制新 rebalance，Claim 返回的
-generation 会触发本地生命周期清理。Factor catalog 已改为批量事务并补回滚测试，当前保留的低风险 P2 包括纯 V1 schema
-属性/约束完整校验及 catalog 源文件提交后的整体原子性。归档 owner 已增加持久化完成标记，避免重复 Trade RPC。相关 Go 模块全量测试、定向 race、XBX
-Python 7 项测试、Strategy→EventBus→Trade E2E、发布/部署/架构合同测试均通过。最新独立
-`codeCR` v15、v16 复审确认 P0/P1 已清零；控制面响应刷新已落地，当前仅保留故障注入覆盖、V1
-schema 完整约束校验和 Factor source 文件整体原子性等低风险 P2。最新本地 Linux/amd64 发布包 `release/moox-dev-linux-amd64.tar.gz`
-的 SHA-256 为
-`57772255e433635496f785dfe16742ffbc76f04afc3bf305768776a75424197d`；该包已上传并部署到
-正式主机的 `/data/moox/prod`。正式验收记录为：EventBus、Trade、Strategy 三个进程运行中，
-三者 `/readyz` 均返回 HTTP 200 且 `ready=true`；Strategy `outbox_pending_count=0`，Trade
-`target_worker_ready=true`，远端 Strategy/Trade 二进制 SHA-256 与本地发布包一致。部署前对既有
-EventBus 的 `MOOX_TRADE` stream 和 Trade role ACL 做了兼容迁移，当前同时保留旧 quantity subject
-并启用新的 `moox.event.trade.target.weight_requested.v1.>` subject；Trade 只消费新的权重 durable。
+## 状态与范围
 
-这里的 `[x]` 表示该项已有对应的代码、测试或正式运行证据；未打勾项仍不得视为完成。
+修订日期：2026-09-05。依据 [策略执行框架设计](../../策略执行框架设计.md)，本文替换原文件中的旧实施步骤，
+保留原路径，避免出现两份并行施工基线。**以下任务均未执行；本轮只修改文档。**
 
-**Goal:** 将当前 Python `run-once + quantity` Strategy V1 直接替换为由 `ViewFactorPeriodReady` 驱动、按完整标的池当期求值并向 Trade 输出 FULL 目标权重的声明式选币策略框架。
+原计划中的已完成勾选、测试、制品和生产部署记录仅适用于旧版实现，保留在 Git 历史中，
+不能证明本计划完成。源码检查确认当前仍是 `moox.strategy/v2` Manifest，而不是下面的新 DSL。
 
-**Architecture:** 发布阶段将 `moox.strategy/v2` `Manifest` 严格编译为不可变 `StrategyDef.compiled_json`，冻结 Source View、Factor Binding、Factor Result View 和列依赖；运行阶段动态解析 InstrumentPool、加载当期 `EvaluationInput`、使用纯 Go evaluator 生成规范权重。Strategy 通过 inbox/outbox 和单 SQLite 事务保证事件幂等，Trade 在消费 `LogicalAccountTargetWeightRequested` 时同步冻结权益、参考价格和 raw quantity，保存不可变 `TargetReceipt`，再复用现有 TargetExecutor 做账户选择、步长量化和下单。Proto 采用增量字段和独立事件 subject，旧数量消息即使保留注册也不得进入新 consumer。
+实施边界：
 
-**Tech Stack:** Go 1.25、tRPC-Go、Protobuf、SQLite/GORM、NATS JetStream、Storage Metadata/DataView、FactorMgr、Trade LogicalAccount、Vue 3/Pinia/Arco Design、Vitest/Playwright。
+- Strategy 只计算目标权重；Trade 负责权益、数量换算、账户选择、风控、订单与失败恢复。
+- 保留 JetStream 异步链路；Trade 通知供监控展示，不反向推进 Strategy 的规则状态。
+- 单进程、SQLite、每 Runner 串行求值，不增加通用 DAG、分布式锁、Saga 或版本平台。
+- 不重做已有 Collector 标的规范化、Factor catalog 与因子公式；不增加 FactorInstance。
+- 不全仓机械替换 Spec。确实表示定义的对象用 Def，Binding、Request、Params、Config 保持其含义。
+- 本计划不授权生产部署、清库、修改账户或实际下单；这些操作需另行确认。
+- 协议不提供旧 DSL 兼容分支；新旧权重协议不能同时消费。切换前停用相关 Runner、
+  隔离旧 outbox/消息及旧消费进程，再协调升级；不在启动时自动删除用户数据库。
+- 不把当前 Trade 首次换算回执当作 Strategy 的业务要求。本轮复用 Trade 的现有数量执行链，
+  保留消息一致性与执行幂等保护，不扩展一套新的交易换算引擎。
 
----
+## 一、固定合同
 
-## 实施基线
+### 1.1 最小对象
 
-本计划记录上一版 `moox.strategy/v2` 实施基线。[策略执行框架设计](../../策略执行框架设计.md)
-已于 2026-09-05 修订；本计划施工步骤和验收项尚未同步，不可直接作为新版实施计划执行。
-
-- Factor 保持现有 `FactorDef + FactorBinding` 两层模型；不增加 `FactorInstance`，不修改 Factor 计算和完成事件协议。12 个 XBX 因子作为独立因子文件交付，`circulating_supply` 不进入框架模型，需要时由独立 Factor 提供。
-- 一个 Runner 只有一个 Strategy、一个 UTC 日程、一份 InstrumentPoolRule 和最多一个 LogicalAccount。
-- 不建设 UniverseSnapshot、MarketFrame 制品、readiness 进度表、Slot、WeightMerger、Python 策略入口或 Backtest。
-- Strategy 只读取当期一行；历史窗口和 rolling 计算由 Factor 负责。
-- 一期 readiness 只有 `strict`；缺依赖、缺行或缺列时不写 Result、不改 sequence、不写 outbox。
-- Strategy 到 Trade 的跨模块目标只包含 `target_weight`；quantity 只在 Trade 内部同步换算后出现。
-- 运行语义不保留 V1 schema、RPC、Python SDK 或兼容适配层；旧 Strategy V1 表仅在启动时
-  归档为 `legacy_strategy_v1_*`，不做字段语义映射。为避免 protobuf tag 重用，历史字段
-  可以保留在 wire descriptor 中，但 V2 服务必须拒绝并且不生成这些
-  字段。数量事件与权重事件使用不同 subject、payload 和 durable，切换前完成旧 durable
-  的排空或隔离。
-- 12 个 XBX 因子重写属于 Factor 独立交付；仓库提供 `modules/factor/factors/catalog.json` 与
-  `moox-factor-cli import-catalog` 作为可重复导入入口。本计划只依赖已启用的 `factor_id + Binding`，
-  不替环境决定 source View、space 或 Binding scope。
-- 命名固定为：用户 YAML 类型 `config.Manifest`、当期求值数据 `EvaluationInput`、启用复核
-  `Compiler.VerifyDependencies`、标的池评分步骤 `PoolScoring`、方向权重分配步骤
-  `WeightAllocator`、Trade 不可变处理回执 `TargetReceipt`。
-- 不使用 `config.Config`、`CrossSection`、`Panel`、`InputBarrier`、`PortfolioComposer` 等
-  泛化或容易产生歧义的名称。输入完整性检查使用无状态 `ReadinessChecker`；没有持久化
-  barrier 状态。
-- Trade 回执表固定为 `t_logical_account_target_receipts`，不创建
-  `t_logical_account_target_conversions` 或 `t_logical_account_target_resolutions`。
-- `circulating_supply` 不属于 Strategy 框架字段；需要时由独立 Factor 提供并以
-  `factor_id` 引用。
-- ready 处理器只依赖 `InboxStore` 与 `EvaluationStore` 两个调用方接口，不建设覆盖 Strategy 全模块的大 Repository。
-
-### 命名落地检查表
-
-| 旧名称或易混淆概念 | 本计划中的名称 | 约束 |
+| 对象 | 必需内容 | 删除或改名 |
 | --- | --- | --- |
-| `config.Config`、`Spec` | `config.Manifest` | 只表示用户 YAML，不承载进程环境配置 |
-| `ValidateFrozenDependencies` | `Compiler.VerifyDependencies` | 只验证编译后冻结的依赖 ID、状态、schema 和频率 |
-| `Panel` | `EvaluationInput` | 单周期、逐标的一行输入；不提供 DataFrame/持久化面板 API |
-| `CrossSection` | `PoolScoring` | 排名和加权评分的步骤名，输入是已解析的 `InstrumentPool` |
-| `InputBarrier` | `ReadinessChecker` | 无状态检查 View、行、列是否可读，不保存 barrier 进度 |
-| `PortfolioComposer` | `WeightAllocator` | 只在 long/short 方向内分配权重，不做跨策略合成 |
-| `t_logical_account_target_conversions`、`..._resolutions` | `t_logical_account_target_receipts` | 保存首次接受目标的不可变换算回执 |
-
-## 实施口径补充
-
-设计文档未完全展开、但编码前必须固定的口径如下：
-
-1. `input.factors[]` 至少写 `factor_id`，可选写 `output`。省略 `output` 时，被引用 Factor
-   必须恰好只有一个 output；多 output Factor 必须显式选择 output，编译产物冻结对应列。
-2. 配置和目标权重最多 18 位小数。归一化和等权使用固定 18 位整数单位及稳定余数分配，余数按配置顺序或 `instrument_id` 升序分配。
-3. 同一 instrument 同时入选 long/short 时求和净额；净额为零则省略，最终目标中 instrument 唯一。
-4. 混合市场时 rank 仍在完整 Pool 上计算；short 候选只允许非 Spot。纯 Spot 池配置 short 在编译期失败。
-5. `exchanges` 的配置顺序也是行情路由优先级；同一 instrument 多 venue 可用时选择第一个历史适格 venue，并写入 `debug_info`。
-6. Runner 尚无 `last_result_id` 时，即使求值为空也生成一次 `rebalance`，向 Trade 明确发送 FULL 清仓目标。
-7. 每次成功求值都保存当期 Result。权重与 current targets 相同则为 `hold`：更新最近结果/成功时间，但不改 targets、不增 sequence、不写 outbox。
-8. Result 逻辑键为 `(runner_id,strategy_id,period_time)`。同 hash 返回现有行；不同 hash 重新求值并 UPSERT 最新行。只有 `rebalance` 增加 sequence 和重发目标。
-9. 早于 Runner 最近成功周期的事件只记 inbox 后 ACK，防止旧信号倒灌；同周期允许 Factor latest-wins 重算。
-10. Trade 增加不可变回执表 `t_logical_account_target_receipts`，永久复用已接受 `target_id` 的首次权益、价格和 quantity；它不是异步 Resolver，不增加 PENDING/CAS/SUPERSEDED 状态机。回执自然唯一键必须包含 `runner_id`，允许不同 Runner 各自从 1 开始；同一 Runner 的 sequence 仍必须单调不回退。
-11. Trade 报价按 LogicalAccount member 的 `(priority,trading_account_id)` 选择第一个 ready member；同一 LIVE `credential_secret_id`（结合 exchange/environment）只计入一次权益。TargetExecutor 仍负责最终账户选择、contract value、step、minimum 和容量。
-12. 一期每个 Result 逻辑键只保留 latest-wins 当前行，不增加 revision/history 表；ready event ID 只放 `debug_info.source_event_ids`，不参与 input hash。
-13. 新发布的 `FactorPeriodComputed`/`ViewFactorPeriodReady` 每个 Binding 必须携带非空
-    `source_hash`，并传递 source/result active-index provenance；升级窗口兼容旧 v1 outbox
-   （无 provenance 的旧消息可发布但 Strategy 不据此执行），公共事件、Storage marker
-   和 Strategy 运行期对新代际 fail-closed。
-14. View provenance 同时包含 `active_index_revision`。该 revision 由 Storage 依据持久化
-    View index 的 `updated_at` 派生，查询前后及分页间必须保持一致；Factor recalc 若无法
-    获取 active index 或 revision 直接失败，不得生成无 fence 的结果 marker。Strategy 对
-    已终态 degraded 的 strict 缺行/缺列只记录失败并 ACK inbox，避免无限重试污染消费者。
-
-## 周期事件与全市场完整性
-
-全市场选币不由 Strategy 维护一个跨标的计数器，也不等待一个不具备明确数据归属的
-“全市场完成”事件。周期完成信号按数据层级上报并发布。Collector/Factor 只负责判定并向 Storage 上报
-marker；Storage DataNode 将 marker 与结果行按同一持久化顺序写入 outbox，再实际发布 EventBus 消息：
-
-| 事件 | 判定/上报者 | Storage 发布合同 |
-| --- | --- | --- |
-| `DatasetPeriodCollected` | Collector -> Storage marker | Source View 的某个 `period_time` 已提交并可查询；Storage outbox 发布后用于触发 Factor |
-| `ViewFactorPeriodReady` | Factor -> Storage marker | Factor Result View 的该周期结果已提交并可查询；Storage outbox 发布后用于触发 Strategy |
-
-Factor 可以在内部日志中记录“factor period collected”，但不再额外维护一个与
-`ViewFactorPeriodReady` 语义重复的 Strategy 触发事件。Strategy 收到任意相关 ready 后，
-由 `ReadinessChecker` 加载 Manifest 解析出的完整 `InstrumentPool`；缺少任一标的、必需
-列或未完成 View 时，`strict` 策略整期跳过，等待重复/后续 ready 事件重试。这样排名
-始终基于全池样本，且事件重复由 inbox 去重、输入 hash 负责同周期 latest-wins。
-
-本计划只实现 Strategy 对 `ViewFactorPeriodReady` 的消费。`DatasetPeriodCollected` 的
-marker 上报和 Factor 的结果 marker 上报属于 Collector/Factor 的上游职责，Storage 负责
-持久化及实际发布；发布前必须满足“数据已提交且可查询”的约束，缺少该上游能力时将
-阻塞 Strategy 的正式 E2E 验收，而不是在 Strategy 内补一个临时全市场计数器。
-
-## 目标文件图
-
-```text
-modules/strategy/
-  internal/config/{manifest.go,parse.go,validate.go}
-  internal/quant/{decimal.go,normalize.go}
-  internal/compiler/{compiler.go,types.go,verify_dependencies.go}
-  internal/factorio/client.go
-  internal/storageio/{catalog.go,view.go,auth.go}
-  internal/input/{types.go,pool.go,evaluation_input.go,hash.go}
-  internal/selection/{rank.go,filter.go,select.go,weight.go,evaluator.go}
-  internal/trigger/{schedule.go,processor.go,consumer.go,jetstream.go}
-  internal/{domain,registry,store,rpc,bootstrap}/...
-  proto/strategy.proto
-  schema/strategy.sql
-
-modules/trade/
-  internal/application/equity/service.go
-  internal/application/target/{weight_resolver.go,price.go,executor.go}
-  internal/eventconsumer/target.go
-  internal/infra/store/{target.go,target_receipt.go,equity_point.go}
-  schema/logical_account.sql
-
-modules/collector/internal/sources/binance/{symbol.go,symbol_test.go}
-packages/tradeeventpb/trade_events.proto
-packages/events/{validation.go,logical_account_target_test.go}
-web/src/api/{strategy-types.ts,strategy.ts,strategy.test.ts}
-web/src/store/modules/strategy.ts
-web/src/views/strategy/...
-```
-
-删除：
-
-```text
-modules/strategy/internal/action/
-modules/strategy/internal/engine/
-modules/strategy/pysdk/
-modules/strategy/pyworker/
-modules/strategy/strategies/
-```
-
-## 依赖顺序
-
-```text
-Task 1 -> Task 2
-Task 1 -> Task 4 -> Task 5 -> Task 6
-Task 3 -> Task 4
-Task 7 -> Task 8
-Task 2 + Task 5 + Task 6 + Task 8 -> Task 9
-Task 9 -> Task 10 -> Task 11 -> Task 12
-```
-
-Task 8 是 Trade event wire contract 与 Trade consumer 的原子切换；Task 9 是 Strategy Proto、持久化、RPC 与既有调用方的原子切换。两者都禁止中间提交 quantity/weight 双写适配。
-
-### Task 1: 建立严格 Manifest DSL 与确定性数值内核
-
-**Files:**
-- Create: `modules/strategy/internal/config/manifest.go`
-- Create: `modules/strategy/internal/config/parse.go`
-- Create: `modules/strategy/internal/config/validate.go`
-- Create: `modules/strategy/internal/config/parse_test.go`
-- Create: `modules/strategy/internal/quant/decimal.go`
-- Create: `modules/strategy/internal/quant/normalize.go`
-- Create: `modules/strategy/internal/quant/normalize_test.go`
-- Modify: `modules/strategy/go.mod`
-- Modify: `modules/strategy/go.sum`
-
-- [ ] **Step 1: 写 DSL 解析失败测试**
-
-覆盖未知字段、错误 api version/kind、空 source view、非法 frequency/every、`every` 非 data frequency 整数倍、空/重复 factor、非法 market/operator/value type、非法 count/fraction、负权重、纯 Spot short、readiness 非 strict。
-
-```go
-func TestParseRejectsUnknownAndUnsupportedFields(t *testing.T) {
-    cases := []string{
-        "api_version: moox.strategy/v2\nkind: coin_selection\nunknown: true\n",
-        "api_version: moox.strategy/v1\nkind: coin_selection\n",
-        "api_version: moox.strategy/v2\nkind: python\n",
-    }
-    for _, raw := range cases {
-        _, err := config.Parse([]byte(raw))
-        require.Error(t, err)
-    }
-}
-
-func TestValidateRejectsPureSpotShort(t *testing.T) {
-    manifest := validManifest()
-    manifest.InstrumentPool.Markets = []string{"spot"}
-    manifest.Short = &config.Side{SideWeight: "1", Scores: validScores(), Selection: count(1)}
-    require.ErrorContains(t, config.Validate(manifest), "spot-only instrument_pool cannot enable short")
-}
-```
-
-- [ ] **Step 2: 运行测试并确认失败**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
-go test ./internal/config ./internal/quant -count=1
-```
-
-Expected: FAIL，`Parse/Validate` 和 quant 包尚不存在。
-
-- [ ] **Step 3: 定义版本化 Manifest 类型**
-
-```go
-type Manifest struct {
-    APIVersion     string             `yaml:"api_version"`
-    Kind           string             `yaml:"kind"`
-    Input          ManifestInput      `yaml:"input"`
-    InstrumentPool InstrumentPoolRule `yaml:"instrument_pool"`
-    Schedule       Schedule           `yaml:"schedule"`
-    Readiness      Readiness          `yaml:"readiness"`
-    Long           *Side              `yaml:"long,omitempty"`
-    Short          *Side              `yaml:"short,omitempty"`
-}
-
-type ManifestInput struct {
-    SourceViewID  string      `yaml:"source_view_id"`
-    DataFrequency string      `yaml:"data_frequency"`
-    Factors       []FactorRef `yaml:"factors"`
-}
-
-type FactorRef struct {
-    FactorID string `yaml:"factor_id"`
-    Output   string `yaml:"output,omitempty"`
-}
-
-type InstrumentPoolRule struct {
-    Exchanges         []string `yaml:"exchanges"`
-    Markets           []string `yaml:"markets"`
-    QuoteAssets       []string `yaml:"quote_assets"`
-    Include           []string `yaml:"include"`
-    Exclude           []string `yaml:"exclude"`
-    MinHistoryPeriods int      `yaml:"min_history_periods"`
-}
-
-type ScoreRule struct {
-    FactorID  string `yaml:"factor_id"`
-    Direction string `yaml:"direction"`
-    Weight    string `yaml:"weight"`
-}
-
-type FilterRule struct {
-    Phase     string `yaml:"phase"`
-    FactorID  string `yaml:"factor_id"`
-    ValueType string `yaml:"value_type"`
-    Op        string `yaml:"op"`
-    Value     string `yaml:"value"`
-}
-
-type SelectionRule struct {
-    Mode  string `yaml:"mode"`
-    Value string `yaml:"value"`
-}
-
-type Schedule struct {
-    Every string `yaml:"every"`
-}
-
-type Readiness struct {
-    Policy string `yaml:"policy"`
-}
-
-type Side struct {
-    SideWeight string        `yaml:"side_weight"`
-    Scores     []ScoreRule   `yaml:"scores"`
-    Filters    []FilterRule  `yaml:"filters"`
-    Selection  SelectionRule `yaml:"selection"`
-}
-```
-
-`parse.go` 使用 `yaml.Decoder.KnownFields(true)` 并拒绝第二份 YAML document。
-
-- [ ] **Step 4: 实现固定 18 位权重数值**
-
-`quant.Decimal` 内部保存 `big.Int` 的 `1e-18` 单位，只接受规范十进制；不接受指数、NaN、Inf、前导正号或超过 18 位小数。
-
-```go
-func Parse(string) (Decimal, error)
-func Zero() Decimal
-func One() Decimal
-func (Decimal) Add(Decimal) Decimal
-func (Decimal) Sub(Decimal) Decimal
-func (Decimal) Neg() Decimal
-func (Decimal) Cmp(Decimal) int
-func (Decimal) String() string
-func NormalizeStable(values []Decimal) ([]Decimal, error)
-func DivideStable(total Decimal, orderedKeys []string) map[string]Decimal
-```
-
-`NormalizeStable` 用最大余数法；相同余数按配置顺序决胜。`DivideStable` 先排序 key，再逐单位分配余数，确保和严格等于 total。
-
-- [ ] **Step 5: 实现校验和默认值**
-
-固定规则：`api_version=moox.strategy/v2`、`kind=coin_selection`、`schedule.every` 默认 data frequency、readiness 默认且只接受 strict、include/exclude 规范化为完整大写 ID、至少启用一侧、启用侧必须有 score/selection/正权重、count 为正整数、fraction 在 `(0,1]`。
-
-frequency 复用 `packages/report.NormalizeDatasetFrequency` 和 `ParseDatasetFrequency`。
-
-- [ ] **Step 6: 运行测试并提交**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
-go test ./internal/config ./internal/quant -count=1
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-git add modules/strategy/internal/config modules/strategy/internal/quant modules/strategy/go.mod modules/strategy/go.sum
-git commit -m "feat(strategy): define coin selection manifest"
-```
-
-Expected: PASS 后提交。
-
-### Task 2: 编译 Factor 与 View 依赖
-
-**Files:**
-- Create: `modules/strategy/internal/compiler/types.go`
-- Create: `modules/strategy/internal/compiler/compiler.go`
-- Create: `modules/strategy/internal/compiler/verify_dependencies.go`
-- Create: `modules/strategy/internal/compiler/compiler_test.go`
-- Create: `modules/strategy/internal/factorio/client.go`
-- Create: `modules/strategy/internal/factorio/client_test.go`
-- Create: `modules/strategy/internal/storageio/catalog.go`
-- Create: `modules/strategy/internal/storageio/auth.go`
-- Create: `modules/strategy/internal/storageio/catalog_test.go`
-- Modify: `modules/strategy/go.mod`
-- Modify: `modules/strategy/go.sum`
-
-- [ ] **Step 1: 写编译失败矩阵**
-
-覆盖 Factor 不存在/disabled、多 output 未选择 output、显式 output 不存在、缺匹配 Binding、Binding 非 enabled 或 space/source/frequency 不匹配、Source/Result View 非 active、Factor output 列找不到、Source primary dataset 不支持 frequency。
-
-```go
-func TestCompileFreezesSingleOutputFactorBinding(t *testing.T) {
-    compiled, err := compiler.Compile(context.Background(), validManifest(), "crypto", completeFakeDeps())
-    require.NoError(t, err)
-    require.Equal(t, "factor_bias.bias_20", compiled.Factors[0].ColumnName)
-    require.Equal(t, []string{"factor_bias_view"}, compiled.Dependencies.FactorResultViewIDs)
-}
-```
-
-- [ ] **Step 2: 运行测试并确认失败**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
-go test ./internal/compiler ./internal/factorio ./internal/storageio -count=1
-```
-
-Expected: FAIL，编译器和依赖客户端尚不存在。
-
-- [ ] **Step 3: 定义 compiled JSON 契约**
-
-```go
-type CompiledStrategy struct {
-    APIVersion string
-    Kind string
-    SpaceID string
-    SourceView CompiledView
-    InstrumentPool config.InstrumentPoolRule
-    Schedule CompiledSchedule
-    Readiness string
-    Factors []CompiledFactor
-    Long *CompiledSide
-    Short *CompiledSide
-    Dependencies Dependencies
-}
-
-type CompiledFactor struct {
-    FactorID string
-    SourceHash string
-    BindingID string
-    ResultDatasetID string
-    ResultViewID string
-    Output string
-    ColumnName string
-}
-```
-
-Factors 按 factor_id 排序，Result View IDs 去重排序，使用显式 JSON tag 和 `json.Marshal` 生成确定性 compiled bytes/hash。
-
-- [ ] **Step 4: 实现 FactorMgr 与 Storage catalog 客户端**
-
-Factor 客户端只封装 `GetFactor/ListBindings` 并读完分页；Storage 客户端封装 `GetView/ListViewColumns/GetDataset/ListDatasetSubjects/GetSubject`。Factor 列必须同时匹配 ViewColumn attributes：
-
-```text
-origin_factor_id == factor_id
-factor_output == input.factors[].output（省略时才要求 FactorDef.outputs 恰好一个）
-```
-
-运行期使用冻结的实际 `column_name`，不猜列名、不访问 Factor SQLite。
-
-- [ ] **Step 5: 实现 Compile 和 Enable 复核**
-
-顺序：解析配置 -> Source View/Dataset -> 收集 factor_id -> enabled Factor/Binding -> Result ViewColumn -> 归一化 score/side weight -> compiled JSON/hash。
-
-```go
-func (c *Compiler) VerifyDependencies(
-    ctx context.Context,
-    compiled CompiledStrategy,
-) error
-```
-
-`Compiler` 持有 Factor 与 Storage Catalog。Enable 时只复核冻结 ID/status/schema，不重新选择其他 Binding。
-Factor 的 `source_hash`、outputs 和 Binding 参数一旦被已启用 Runner 引用，不允许原地
-修改；公式修订必须创建新的 `factor_id`，再重新编译/启用 Strategy。`VerifyDependencies`
-只验证这个不可变发布事实，不负责把同名 Factor 自动切换到新公式。
-
-- [ ] **Step 6: 运行测试并提交**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
-go test ./internal/compiler ./internal/factorio ./internal/storageio -count=1
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-git add modules/strategy/internal/compiler modules/strategy/internal/factorio modules/strategy/internal/storageio modules/strategy/go.mod modules/strategy/go.sum
-git commit -m "feat(strategy): compile factor and view dependencies"
-```
-
-Expected: PASS 后提交。
-
-### Task 3: 统一 Storage 与 Trade 的 canonical instrument_id
-
-**Files:**
-- Modify: `modules/collector/internal/sources/binance/symbol.go`
-- Modify: `modules/collector/internal/sources/binance/symbol_test.go`
-- Modify: `modules/collector/internal/sources/binance/storage_config_test.go`
-- Modify: `modules/collector/internal/jobs/kline/handler_test.go`
-- Modify: `modules/collector/internal/jobs/kline/planner_test.go`
-- Modify: `modules/collector/internal/planner/storagesource/source_test.go`
-
-- [ ] **Step 1: 写现货与永续不冲突测试**
-
-```go
-func TestBuildSymbolRegisterRequestUsesMarketQualifiedSubjectID(t *testing.T) {
-    symbol := &exchange.SymbolInfo{BaseAsset: "BTC", QuoteAsset: "USDT", Status: "TRADING"}
-    spot := buildSymbolRegisterRequest(symbol, "crypto", "spot_dataset", spotBinding())
-    swap := buildSymbolRegisterRequest(symbol, "crypto", "swap_dataset", swapBinding())
-    require.Equal(t, "BTC-USDT-SPOT", spot.GetSubject().GetSubjectId())
-    require.Equal(t, "BTC-USDT-SWAP", swap.GetSubject().GetSubjectId())
-    require.Equal(t, "binance", spot.GetSubject().GetAttributes()["exchange"])
-}
-```
-
-- [ ] **Step 2: 运行测试并确认失败**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/collector
-go test ./internal/sources/binance -run 'SubjectID|SymbolRegister' -count=1
-```
-
-Expected: FAIL，当前 subject ID 为 `BTC-USDT`。
-
-- [ ] **Step 3: 改为完整 instrument identity**
-
-`normalizedSubjectID` 同时接收 StorageBinding，返回 `BASE-QUOTE-SPOT|SWAP`。所有 symbol rows、Subject、DatasetSubject 使用完整 ID；Subject attributes 写 `instrument_id/exchange/market_type/base_asset/quote_asset/external_symbol`。SubjectSymbol 继续保存交易所原始 symbol。
-
-所有测试 fixture 改为完整 ID，不保留旧 ID 兼容。部署后重新采集/导入本地历史数据，不写迁移脚本。
-
-- [ ] **Step 4: 运行测试并提交**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/collector
-go test ./internal/sources/binance ./internal/jobs/kline ./internal/planner/storagesource -count=1
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-git add modules/collector/internal
-git commit -m "refactor(collector): qualify crypto instrument ids by market"
-```
-
-Expected: PASS 后提交。
-
-### Task 4: 解析 InstrumentPool、加载 EvaluationInput 并生成 input hash
-
-**Files:**
-- Create: `modules/strategy/internal/input/types.go`
-- Create: `modules/strategy/internal/input/pool.go`
-- Create: `modules/strategy/internal/input/pool_test.go`
-- Create: `modules/strategy/internal/input/evaluation_input.go`
-- Create: `modules/strategy/internal/input/evaluation_input_test.go`
-- Create: `modules/strategy/internal/input/hash.go`
-- Create: `modules/strategy/internal/input/hash_test.go`
-- Create: `modules/strategy/internal/storageio/view.go`
-- Create: `modules/strategy/internal/storageio/view_test.go`
-
-- [ ] **Step 1: 写 Pool 与 strict EvaluationInput 测试**
-
-覆盖 exchange/market/quote/include/exclude、inactive subject、distinct history、venue 优先级、新上市排除、稳定排序；EvaluationInput 覆盖 `[period,period+1ns)`、完整 selector、分页、重复行、缺行/列、非数值、NaN/Inf、`complete=false`。
-
-```go
-func TestLoadEvaluationInputRejectsMissingPoolRow(t *testing.T) {
-    _, err := loader.Load(ctx, compiled, pool("BTC-USDT-SPOT", "ETH-USDT-SPOT"), period)
-    require.ErrorContains(t, err, "missing current rows: ETH-USDT-SPOT")
-}
-```
-
-- [ ] **Step 2: 运行测试并确认失败**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
-go test ./internal/input ./internal/storageio -count=1
-```
-
-Expected: FAIL，输入构造器尚不存在。
-
-- [ ] **Step 3: 实现候选和历史适格检查**
-
-```go
-type PoolItem struct {
-    InstrumentID string
-    SubjectID string
-    Exchange string
-    Market string
-    QuoteAsset string
-    SeriesTag string
-}
-```
-
-候选来自 Source View primary dataset 的 active DatasetSubject/Subject。历史查询窗口：
-
-```go
-start := period.Add(-time.Duration(minHistory-1) * dataFrequency)
-end := period.Add(time.Nanosecond)
-```
-
-每个 `(subject_id,series_tag)` 只计 distinct data_time。多 venue 都适格时按配置顺序选第一个；历史不足写 `Ineligible` 而非运行错误。查询必须使用完整
-`space_id/dataset_id/subject_id/frequency/series_tag` selector；不得仅凭 instrument
-或 symbol 猜测数据集。
-
-- [ ] **Step 4: 实现当期 Source/Result View EvaluationInput 合并**
-
-Source View 和一个承载全部因子输出的 Factor Result View 分别查询，selector 必须包含 `space_id/dataset_id/subject_id/frequency/series_tag`，时间窗统一为已闭合的
-`[period_time, period_time+1ns)`。上游必须先把该周期写入并标记可读；若 View 尚未完成
-则返回 RETRY，而不是把结束点悄悄推迟到下一根 K 线。以 instrument_id 左连接，Factor
-列按 compiled column_name 映射回 factor_id。
-当期横截面查询使用单个 DataView RPC（page size 为 selector 基数加一）读取，第一次记录
-View 的 `active_index_id` 并携带 `expected_active_index_id`。Storage 为每次成功写入递增
-`active_index_revision`，在查询前后核对 revision，并由后续分页携带
-`expected_active_index_revision`；检测到 A/B 切换或同一索引原地修订时返回
-`VIEW_NOT_READY`。同一 Strategy 若引用多个 Factor Result View，编译阶段直接拒绝；不能用
-单个 ready 事件拼出缺少代际信息的多 View 输入。若返回行数超过 selector 基数则拒绝该周期，不能分页拼接或静默丢弃重复
-序列。历史窗口统计仍可分页，但不参与当期权重计算。
-
-```go
-type InstrumentInput struct {
-    Instrument PoolItem
-    Values map[string]*big.Rat
-}
-type EvaluationInput struct {
-    Period time.Time
-    Instruments []InstrumentInput
-}
-```
-
-TypedValue 只接受 int/double/string decimal；double 先拒绝 NaN/Inf，再用 `strconv.FormatFloat` 规范化。
-
-- [ ] **Step 5: 实现规范 input hash**
-
-SHA-256 输入只含 source hash、compiled hash、period、排序后 pool 和排序后 EvaluationInput values；不含 ready event ID、ready_at、查询耗时或分页游标。
-
-一期不持久化原始 `EvaluationInput` 或内容寻址快照，也不声称支持跨版本的 point-in-time
-重放。重试/重算会重新读取当前可查询 View；相同逻辑周期以 input hash 做 latest-wins。
-`active_index_id` 与 `active_index_revision` 只用于检测切代/并发原地修订；检测到旧代际时将
-ready 标记为 superseded 并 ACK，避免无限重试，用户可通过新 ready 或显式 recalc 重新生成。
-审计依赖 Result 的 debug、hash 和上游 View 保留期；若以后需要严格重放，应另行引入内容寻址
-的 Storage snapshot，不在本计划中偷偷模拟快照。
-
-- [ ] **Step 6: 运行测试并提交**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
-go test ./internal/input ./internal/storageio -count=1
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-git add modules/strategy/internal/input modules/strategy/internal/storageio
-git commit -m "feat(strategy): build strategy evaluation input"
-```
-
-Expected: PASS 后提交。
-
-### Task 5: 实现纯 Go 标的池选币 evaluator
-
-**Files:**
-- Create: `modules/strategy/internal/selection/rank.go`
-- Create: `modules/strategy/internal/selection/filter.go`
-- Create: `modules/strategy/internal/selection/select.go`
-- Create: `modules/strategy/internal/selection/weight.go`
-- Create: `modules/strategy/internal/selection/evaluator.go`
-- Create: `modules/strategy/internal/selection/evaluator_test.go`
-- Create: `modules/strategy/internal/selection/golden_test.go`
-
-- [ ] **Step 1: 写排名和流水线顺序测试**
-
-```go
-func TestEvaluatorRanksFullPoolBeforePreFilter(t *testing.T) {
-    input := evaluationInputWithValues(
-        row("A-USDT-SPOT", "score", "1", "liquidity", "1"),
-        row("B-USDT-SPOT", "score", "2", "liquidity", "100"),
-        row("C-USDT-SPOT", "score", "2", "liquidity", "100"),
-    )
-    got, err := selection.Evaluate(compiledWithPreFilter(), input)
-    require.NoError(t, err)
-    require.Equal(t, []int{1, 2, 2}, got.Debug.ScoreRanks["score"])
-}
-```
-
-测试锁定 `method=min`，不能先用 instrument_id 拆开并列 rank；最终截取才用 `(score,instrument_id)`。
-
-- [ ] **Step 2: 写过滤、选币和权重矩阵**
-
-覆盖 ascending/descending、多 score 归一化、pre/post AND、value/percentile、所有比较符、count/fraction、post 不回补、short 非 Spot 候选、long/short 等权、重叠净额、空结果、gross/net。
-
-percentile 固定为 `method=min rank / pool_size`，并在完整未过滤 Pool 上预计算。
-
-- [ ] **Step 3: 运行测试并确认失败**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
-go test ./internal/selection -count=1
-```
-
-Expected: FAIL，evaluator 尚不存在。
-
-- [ ] **Step 4: 实现无状态流水线**
-
-执行顺序固定：score rank -> pre filters -> stable select -> post filters -> side weight。两个 Side 独立评分，但所有 rank/percentile 的 scope 都是完整 `EvaluationInput` 中的 InstrumentPool。
-
-```go
-type TargetWeight struct {
-    InstrumentID string `json:"instrument_id"`
-    TargetWeight string `json:"target_weight"`
-}
-type Evaluation struct {
-    Targets []TargetWeight
-    DebugInfo DebugInfo
-}
-```
-
-使用 Task 1 的 `DivideStable` 分配方向内权重；short 取负；按 instrument 求和并删除零。DebugInfo 至少保存 pool、venue route、history ineligible、各阶段数量、long/short 入选、gross、net。Strategy 仅做语义校验和方向内分配，不因为 gross 未达到 1 而拒绝；单项和 gross 风险上限由 Trade 统一执行。
-
-- [ ] **Step 5: 加入稳定 golden fixture**
-
-使用 6 个 instrument、并列值、pre/post filter 和 long/short；随机打乱输入行 100 次，targets/debug JSON 必须逐字节相同。
-
-- [ ] **Step 6: 运行测试并提交**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
-go test ./internal/selection -count=1
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-git add modules/strategy/internal/selection
-git commit -m "feat(strategy): evaluate instrument pool coin selection"
-```
-
-Expected: PASS 后提交。
-
-### Task 6: 实现调度、Runner 串行和 ready 处理器内核
-
-**Files:**
-- Create: `modules/strategy/internal/trigger/schedule.go`
-- Create: `modules/strategy/internal/trigger/schedule_test.go`
-- Create: `modules/strategy/internal/trigger/processor.go`
-- Create: `modules/strategy/internal/trigger/processor_test.go`
-- Create: `modules/strategy/internal/trigger/consumer.go`
-- Create: `modules/strategy/internal/trigger/consumer_test.go`
-- Create: `modules/strategy/internal/trigger/jetstream.go`
-- Create: `modules/strategy/internal/trigger/jetstream_test.go`
-
-- [ ] **Step 1: 写 UTC 对齐和状态矩阵测试**
-
-```go
-func TestAlignedUsesUnixEpochAsUTCAnchor(t *testing.T) {
-    require.True(t, trigger.Aligned(time.Unix(48*3600, 0), 24*time.Hour))
-    require.False(t, trigger.Aligned(time.Unix(48*3600+3600, 0), 24*time.Hour))
-}
-```
-
-再覆盖重复 message、非 complete、无匹配 Runner、未对齐、旧周期、依赖未齐、strict
-缺行/缺列、same/changed hash、周期 N 不齐但 N+1 成功、同 Runner 串行、不同 Runner 并行。
-明确断言：View 未完成或 Storage 暂时失败为 RETRY；View 已完成但池内缺行/缺列为终态
-ACK 并记录 `last_error`，不能让同一 delivery 无限重投。
-
-- [ ] **Step 2: 运行测试并确认失败**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
-go test ./internal/trigger -count=1
-```
-
-Expected: FAIL，trigger 包尚不存在。
-
-- [ ] **Step 3: 实现 Processor 边界**
-
-```go
-type InboxStore interface {
-    IsProcessed(context.Context, string) (bool, error)
-    MarkProcessed(context.Context, InboxMessage) error
-}
-
-type EvaluationStore interface {
-    ListTriggeredRunners(context.Context, ReadyDependency) ([]RunnerContext, error)
-    CommitEvaluation(context.Context, CommitRequest) (CommitOutcome, error)
-    RecordFailure(context.Context, RunnerFailure) error
-}
-```
-
-`ReadyDependency` 封装 `space_id/result_view_id/frequency`，避免裸字符串参数。`RunnerContext` 通过 `last_result_id` JOIN Result 一次携带 `LastSuccessfulPeriod`，不再逐 Runner 查询。`CommitEvaluation` 在事务内再次检查 period，防止旧周期覆盖新目标。
-
-Processor 使用 `sync.Map[runner_id]*sync.Mutex` 串行单 Runner，不等待未齐依赖，不创建 run 状态。协议/格式错误 TERM；Storage/Factor/SQLite/JetStream 暂时错误 RETRY；业务 no-op、superseded ready 和 strict skip ACK。依赖事件匹配至少包含 `(result_view_id, frequency)`；每个 Strategy 只允许一个 Factor Result View，随后由 Loader 对 Source/Result 两个依赖 View 做严格行/列完整性检查。
-
-错误分类必须显式落地：`ErrNotReady`、SQLite/Storage 临时错误返回 RETRY；已停用 Runner、逻辑周期冲突、非法 Manifest/权重、无效 Spot 负权重等确定性错误记失败并 ACK/TERM，不能把毒性消息无限重投，也不能把瞬时数据库错误吞掉后直接标记 inbox 已处理。
-
-- [ ] **Step 4: 实现 message 级 inbox 时机**
-
-先通过 `InboxStore.IsProcessed` 查 inbox；处理该 message 匹配的全部 Runner。只有全部 Runner 都得到 ACK/业务 no-op 后才调用 `MarkProcessed` 并 ACK broker。任一 Runner RETRY 时不写 inbox；崩溃重放由 Result input hash 吸收已提交 Runner。
-
-- [ ] **Step 5: 实现 JetStream consumer**
-
-复用 Factor pull/ACK 模式，durable 固定为 `strategy_view_factor_ready_v1`，使用现有 `events.DecodeViewFactorPeriodReadyWithContentType`，不新增 Factor/Storage 事件协议。
-
-- [ ] **Step 6: 运行测试并提交**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
-go test ./internal/trigger -count=1
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-git add modules/strategy/internal/trigger
-git commit -m "feat(strategy): process factor view ready events"
-```
-
-Expected: PASS 后提交。
-
-### Task 7: 建立 Trade 同步权重换算与不可变 TargetReceipt
-
-**Files:**
-- Create: `modules/trade/internal/application/target/weight_resolver.go`
-- Create: `modules/trade/internal/application/target/weight_resolver_test.go`
-- Create: `modules/trade/internal/infra/store/target_receipt.go`
-- Create: `modules/trade/internal/infra/store/target_receipt_test.go`
-- Modify: `modules/trade/internal/application/equity/service.go`
-- Modify: `modules/trade/internal/application/equity/service_test.go`
-- Modify: `modules/trade/internal/infra/store/equity_point.go`
-- Modify: `modules/trade/schema/logical_account.sql`
-- Modify: `modules/trade/schema/schema_test.go`
-
-- [ ] **Step 1: 写实时权益、换算和 TargetReceipt 测试**
-
-从 `sampleLogicalAccounts` 抽出：
-
-```go
-func (s *Service) ResolveLogicalAccountEquity(
-    ctx context.Context,
-    spaceID string,
-    logicalAccountID string,
-) (shared.Decimal, int64, error)
-```
-
-覆盖 live/paper、Spot 估值、多 member 汇总、disabled/unready、过期 snapshot。WeightResolver 覆盖正/负权重、Spot 负权重拒绝、空 FULL 无需行情、确定报价 member、过期价格、无支持 instrument。
-
-```go
-func TestResolveWeightsFreezesEquityPriceAndRawBaseQuantity(t *testing.T) {
-    got, err := resolver.Resolve(ctx, request("10000", "BTC-USDT-SPOT", "0.25", "20000"))
-    require.NoError(t, err)
-    require.Equal(t, "0.125", got.QuantityTargets[0].Quantity)
-}
-```
-
-TargetReceipt 测试覆盖同 target 同 payload 复用、同 target 不同 payload conflict、旧 target 被覆盖后重投仍读首次结果、receipt/current target 事务回滚。
-
-- [ ] **Step 2: 运行测试并确认失败**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/trade
-go test ./internal/application/equity ./internal/application/target ./internal/infra/store -run 'Equity|Weight|Receipt' -count=1
-```
-
-Expected: FAIL，weight resolver 和 TargetReceipt store 尚不存在。
-
-- [ ] **Step 3: 增加 TargetReceipt schema**
-
-```sql
-CREATE TABLE IF NOT EXISTS t_logical_account_target_receipts (
-    c_space_id TEXT NOT NULL,
-    c_target_id TEXT NOT NULL,
-    c_logical_account_id TEXT NOT NULL,
-    c_runner_id TEXT NOT NULL,
-    c_command_sequence INTEGER NOT NULL,
-    c_request_hash TEXT NOT NULL,
-    c_signal_time INTEGER NOT NULL,
-    c_weights_json TEXT NOT NULL,
-    c_equity TEXT NOT NULL,
-    c_equity_source_time INTEGER NOT NULL,
-    c_reference_prices_json TEXT NOT NULL,
-    c_quantity_targets_json TEXT NOT NULL,
-    c_accepted_at INTEGER NOT NULL,
-    PRIMARY KEY (c_space_id, c_target_id),
-    UNIQUE (c_space_id, c_logical_account_id, c_runner_id, c_command_sequence),
-    FOREIGN KEY (c_space_id, c_logical_account_id)
-        REFERENCES t_logical_accounts (c_space_id, c_logical_account_id),
-    CHECK (c_request_hash <> ''),
-    CHECK (json_valid(c_weights_json)),
-    CHECK (json_type(c_weights_json) = 'array'),
-    CHECK (json_valid(c_reference_prices_json)),
-    CHECK (json_type(c_reference_prices_json) = 'object'),
-    CHECK (json_valid(c_quantity_targets_json)),
-    CHECK (json_type(c_quantity_targets_json) = 'array')
-);
-```
-
-`request_hash` 覆盖 space、target、runner、logical account、sequence、signal time 和按 instrument_id 排序后的规范权重。回执列保存原始规范权重、首次权益及来源时间、参考价格及来源账户、raw quantity 和 accepted time；weights、prices、targets 均按 instrument_id 排序并保存 canonical decimal。空 FULL 目标也写 receipt，但不读取权益和行情。
-
-- [ ] **Step 4: 实现实时权益、报价路由和 raw quantity**
-
-权益复用现有 snapshot freshness/Spot valuation，不读分钟曲线。报价候选只取 enabled/ready member 和 TRADING instrument，按 priority/id 排序。选中的
-`trading_account_id/exchange_symbol/price` 必须作为回执事实传给后续 TargetExecutor；Executor
-不得静默切换到另一 member 后继续使用原 raw quantity。选中 member 失效时应走明确的
-重试/失败路径，不能重新估值而破坏回执可重放性。
-
-公式：
-
-```text
-notional = equity * target_weight
-raw_base_quantity = notional / reference_price
-```
-
-这里只规范化 decimal 和符号；不做 floor、contract multiplier、minimum notional 或 capacity。
-
-- [ ] **Step 5: 实现原子 AcceptTargetWithReceipt**
-
-在 `LockLogicalAccount` 内：规范请求并计算 hash -> 查 TargetReceipt -> 查 current sequence -> 首次请求同步换算 -> transaction 插入 receipt 并调用 `Tx.AcceptLogicalAccountTarget`。事务内再次查 receipt、核验 sequence，避免换算期间新 sequence 抢先落库。已存在且 hash 相同直接返回回执；hash 不同返回 conflict；从未接受的 stale target 直接 ACK，不写 receipt。
-
-- [ ] **Step 6: 运行测试、schema 校验并提交**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/trade
-go test ./internal/application/equity ./internal/application/target ./internal/infra/store ./schema -count=1
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-git diff --check
-git add modules/trade/internal/application modules/trade/internal/infra/store modules/trade/schema
-git commit -m "feat(trade): persist weighted target receipts"
-```
-
-Expected: PASS 后提交。
-
-### Task 8: 原子切换权重 wire contract 与 Trade consumer
-
-**Files:**
-- Modify: `packages/tradeeventpb/trade_events.proto`
-- Modify: `packages/tradeeventpb/trade_events.pb.go` (generated)
-- Modify: `packages/events/validation.go`
-- Modify: `packages/events/validation_test.go`
-- Modify: `packages/events/logical_account_target_test.go`
-- Modify: `modules/trade/internal/eventconsumer/target.go`
-- Modify: `modules/trade/internal/eventconsumer/target_test.go`
-- Modify: `modules/trade/internal/bootstrap/bootstrap.go`
-- Modify: `modules/trade/internal/bootstrap/bootstrap_test.go`
-
-- [ ] **Step 1: 写新 descriptor 和校验测试**
-
-```go
-func TestLogicalAccountTargetUsesWeightOnly(t *testing.T) {
-    fields := (&tradeeventpb.InstrumentWeightTarget{}).ProtoReflect().Descriptor().Fields()
-    require.NotNil(t, fields.ByName("target_weight"))
-    require.Nil(t, fields.ByName("quantity"))
-}
-```
-
-校验 target_weight 为有限规范十进制、instrument 唯一、空 targets 合法、logical account 与 EventMessage subject 一致。
-
-- [ ] **Step 2: 修改 Proto 并生成**
-
-```protobuf
-message InstrumentWeightTarget {
-  string instrument_id = 1;
-  string target_weight = 2;
-}
-message LogicalAccountTargetWeightRequested { ... }
-```
-
-权重消息使用独立的 `LogicalAccountTargetWeightRequested` /
-`event.trade.target.weight_requested` 事件和 durable；旧数量事件如继续注册，不得复用其字段号
-或被新的 Trade consumer 消费。切换前必须确认旧 quantity durable 已停用、排空或隔离；
-不得把同一个旧 subject 的未确认消息交给新的权重 consumer。
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/packages/tradeeventpb
-make all
-```
-
-- [ ] **Step 3: 改写 Trade consumer**
-
-顺序：decode -> Gate -> 查 TargetReceipt -> current sequence 预检 -> `WeightResolver.Resolve` -> `AcceptTargetWithReceipt` -> Wake -> ACK。
-
-错误分类：
-
-```text
-协议/decimal/owner/Spot负权重/同target不同payload -> TERM
-无ready member、权益/价格暂不可用、数据库或adapter暂时失败 -> RETRY
-已接受target、stale sequence -> ACK，不重新定价、不回写旧current target
-```
-
-Bootstrap 复用已有 equity service、ExchangePriceSource、Store 和 adapter registry，不创建第二套连接。
-
-- [ ] **Step 4: 运行测试并提交**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/packages/events
-go test ./... -run LogicalAccountTarget -count=1
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/trade
-go test ./internal/eventconsumer ./internal/bootstrap -count=1
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-git add packages/tradeeventpb packages/events modules/trade/internal/eventconsumer modules/trade/internal/bootstrap
-git commit -m "refactor(events): replace trade quantity target with weight"
-```
-
-Expected: PASS 后提交。
-
-### Task 9: 原子切换 Strategy V2 控制面、持久化和自动运行
-
-**Files:**
-- Modify: `modules/strategy/proto/strategy.proto`
-- Modify: `modules/strategy/proto/strategygen/strategy.pb.go` (generated)
-- Modify: `modules/strategy/proto/strategygen/strategy.trpc.go` (generated)
-- Modify: `modules/strategy/proto/strategygen/validation.go`
-- Modify: `modules/strategy/proto/strategy_contract_test.go`
-- Modify: `modules/strategy/internal/domain/types.go`
-- Modify: `modules/strategy/internal/domain/types_test.go`
-- Modify: `modules/strategy/schema/strategy.sql`
-- Modify: `modules/strategy/schema/schema_test.go`
-- Modify: `modules/strategy/internal/store/database.go`
-- Modify: `modules/strategy/internal/store/database_test.go`
-- Modify: `modules/strategy/internal/store/store.go`
-- Modify: `modules/strategy/internal/store/strategies.go`
-- Modify: `modules/strategy/internal/store/runners.go`
-- Modify: `modules/strategy/internal/store/runner_queries.go`
-- Modify: `modules/strategy/internal/store/results.go`
-- Modify: `modules/strategy/internal/store/result_commit_test.go`
-- Create: `modules/strategy/internal/store/inbox.go`
-- Create: `modules/strategy/internal/store/inbox_test.go`
-- Modify: `modules/strategy/internal/registry/service.go`
-- Modify: `modules/strategy/internal/registry/service_test.go`
-- Modify: `modules/strategy/internal/rpc/service.go`
-- Modify: `modules/strategy/internal/rpc/service_test.go`
-- Modify: `modules/strategy/internal/rpc/frontend_service.go`
-- Modify: `modules/strategy/internal/rpc/frontend_service_test.go`
-- Modify: `modules/strategy/internal/bootstrap/config.go`
-- Modify: `modules/strategy/internal/bootstrap/config_test.go`
-- Modify: `modules/strategy/internal/bootstrap/bootstrap.go`
-- Modify: `modules/strategy/internal/bootstrap/health_test.go`
-- Modify: `modules/strategy/internal/bootstrap/metrics_reporter.go`
-- Modify: `modules/strategy/config/app.yaml`
-- Modify: `modules/strategy/config/trpc_go.yaml`
-- Modify: `modules/strategy/cmd/cli/main.go`
-- Modify: `modules/strategy/cmd/cli/main_test.go`
-- Delete: `modules/strategy/internal/action/`
-- Delete: `modules/strategy/internal/engine/`
-- Delete: `modules/strategy/pysdk/`
-- Delete: `modules/strategy/pyworker/`
-- Delete: `modules/strategy/strategies/`
-- Modify: `modules/strategy/go.mod`
-- Modify: `modules/strategy/go.sum`
-
-- [ ] **Step 1: 写 V2 Proto、schema 和 Commit 状态矩阵**
-
-Proto 目标（保持已有字段号不变，V2 只追加字段）：
-
-```protobuf
-message InstrumentTarget {
-  string instrument_id = 1;
-  string quantity = 2;       // legacy，仅保留 wire 兼容，V2 不生成
-  string target_weight = 3;  // V2
-}
-message Strategy {
-  string strategy_id = 1;
-  string name = 2;
-  string manifest_yaml = 3;  // legacy tag
-  string source_code = 4;    // legacy tag，V2 不接受
-  string source_hash = 5;
-  string created_at = 6;
-  string kind = 7;
-  string compiled_json = 8;
-}
-message StrategyRunner {
-  string runner_id = 1;
-  string strategy_id = 2;
-  string space_id = 3;
-  string view_id = 4;        // legacy tag
-  string frequency = 5;
-  string params_json = 6;    // legacy tag
-  string logical_account_id = 7;
-  string status = 8;
-  repeated InstrumentTarget current_targets = 9;
-  int64 command_sequence = 10;
-  string last_result_id = 11;
-  string last_success_at = 12;
-  string last_error = 13;
-  string source_view_id = 16; // V2
-}
-```
-
-Result 使用追加的 `period_time/targets/debug_info_json` 字段；旧
-`trigger_bar_time/namespace/output_json` 字段保留 wire tag 但 V2 不读写。服务删除
-RunOnce/GetEngineStatus。删除 RPC 时不得复用旧 message/RPC 字段号；生成 descriptor
-后运行 breaking check。
-
-Schema 只允许 `t_strategies/t_strategy_runners/t_strategy_results/t_strategy_outbox/t_strategy_inbox`；
-数据库不再写 source_code、params_json、namespace、quantity、snapshot、slot、lease。Result
-unique 为 `(runner_id,strategy_id,period_time)`。
-
-Commit 测试覆盖首次空目标 rebalance、same hash、changed hash + same targets 的 hold、changed targets、观察 Runner、空 FULL 清仓和事务回滚。
-
-- [ ] **Step 2: 生成 Proto**
-
-CreateStrategyReq 只接受 `strategy_id/name/manifest_yaml`；CreateRunnerReq 只接受 `runner_id/strategy_id/space_id/logical_account_id`。source view/frequency 由 compiled Strategy 派生。UpdateRunnerReq 只允许 DISABLED Runner 更换 strategy/account。
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy/proto
-make all
-```
-
-Expected: generated service 不含 RunOnce/GetEngineStatus。
-
-- [ ] **Step 3: 重写 domain、schema 和 store**
-
-运行域删除 ExecutionRequest、Python Output、Quantity、Namespace 的业务语义。Proto 中的
-legacy 字段只作反序列化兼容，服务入口必须拒绝非空 `source_code/params_json/quantity`
-并只生成 `compiled_json/target_weight`；Strategy 保存 compiled JSON，Runner 保存权重
-current targets，Result 保存 latest row。删除字段时保留原 tag，或使用新 message/RPC，
-禁止把旧 tag 改作新语义。
-
-事务顺序：锁定 Runner -> 读取同逻辑 Result -> same hash 返回 -> canonical 比较 targets -> UPSERT Result -> 更新 last result/success/error -> rebalance 时更新 targets/sequence -> 执行 Runner 写 outbox。`target_id=result_id`；观察 Runner不发 outbox。
-
-`command_sequence` 是 Runner 的持久命名空间：停用后重新启用、切换 Strategy 或重新绑定
-LogicalAccount 时不得将它重置为一个可能已使用的值。若产品确实需要从 1 开始，必须引入
-持久化 `runner_generation` 并把 generation 同时写入 target、outbox 和 TargetReceipt；
-本期采用更简单的方案，沿用同一 Runner 的单调 sequence，并为 Strategy/account 切换补
-回归测试。
-
-`t_strategy_inbox.c_message_id` 为主键，并保存 event_id/result_view_id/space/frequency/period/processed_at 供排障。
-
-- [ ] **Step 4: 重写 Registry 和 Runner 生命周期**
-
-CreateStrategy 调用 Task 2 compiler，`source_hash=sha256(manifest_yaml bytes)`，保存 immutable StrategyDef。重复 strategy_id 仅在所有字段一致时幂等，否则 conflict。
-
-Enable 顺序：Strategy -> `Compiler.VerifyDependencies` -> source/frequency -> 至少一个 metadata candidate -> validate/claim LogicalAccount -> SQLite enable。任一步失败保持 DISABLED；claim 成功但 DB 失败时补偿 release。
-
-- [ ] **Step 5: 删除 Python V1**
-
-删除目录和 pyruntime 依赖。CLI 改为 `strategy validate <manifest.yaml> --space-id <id>` 并通过配置的 Factor/Storage 目标真实 compile；删除 run-once。Bootstrap 不再检查 Python binary/worker，不再暴露 worker health。
-
-- [ ] **Step 6: 接入输入、evaluator、trigger 和配置**
-
-启动顺序：DB/schema -> Factor/Storage clients -> outbox runtime -> ready consumer -> RPC/health；关闭反向。
+| StrategyDef | strategy_id、dsl_yaml、created_at、updated_at | 不持久化另一份 name、kind、compiled_json 或定义 hash |
+| StrategyRunner | runner_id、strategy_id、space_id、input_bindings、可空 logical_account_id、enabled、run_id | 删除 command_sequence、last_result_id；目标从 Result 查询 |
+| StrategyResult | result_id、runner_id、run_id、strategy_id、bar_end_time、dsl_yaml 副本、前结果 ID、输入出处、rule_states、解释与目标 | 不再以 input_hash 判断同周期修订，不再区分 hold/rebalance |
+| RuleState | 按规则名保存信号持有项或批次 | 替代 TheoryState/DecisionState；无状态规则不保存 |
+| PositionTargets | target_id、runner_id、run_id、strategy_id、logical_account_id、bar_end_time、effective_at、valid_until、targets | 不包含 command_sequence；固定 FULL 快照 |
+
+`run_id` 是一次显式启用的身份，可用 UUID，不比较大小。普通进程重启保持原值；
+停用、修改后重新启用使用新值，从空规则状态开始。对已启用 Runner 重复 Enable 不换 ID。
+稳定停用时 run_id 为空；false+非空 run_id 是未完成控制操作，重启后只清理、不自动续启。
+
+`last_result_id` 删除后，按 `(runner_id, run_id)` 查询周期最大的成功 Result。
+保留求值开始时读取的前结果 ID，作为提交事务的校验参数和审计字段，不放回 Runner。
+清理历史结果时必须保留当前运行最新成功 Result。
+
+`bar_end_time` 替代策略语境的 as_of/period_time，是决策使用的已闭合 bar 的结束时刻，
+不是触发时间、处理时间、创建时间或行情源的开盘标签。其他模块的原始 period_time 不全局改名，
+只在输入适配边界明确转换。
+
+### 1.2 DSL 示例与流程
 
 ```yaml
-factor:
-  target: ip://127.0.0.1:11201
-  timeout: 3s
-storage:
-  target: ip://127.0.0.1:11003
-  target_node: storage-gateway
-  app_id: strategy
-  app_key: ${MOOX_STORAGE_PRIMARY_AUTH_SECRET -> HMAC-SHA256(app_id)}
-  view_app_key: ${MOOX_STORAGE_VIEW_AUTH_SECRET -> HMAC-SHA256(app_id)}
-  timeout: 5s
-eventbus:
-  consumer_name: strategy_view_factor_ready_v1
-  reconnect_interval: 1s
-  connect_timeout: 3s
+name: strategy_demo
+triggers:
+  schedule: {cron: "5 * * * *", timezone: UTC}
+  event: {name: ViewFactorPeriodReady}
+data: {bar: 1h, calendar: crypto_24x7}
+rules:
+  momentum_selection:
+    pool: {udf: spot_symbols}
+    filter_before: "turnover_20 > 1000000"
+    score: "0.6 * pct_rank(return_20) + 0.4 * pct_rank(turnover_20)"
+    select: {top: 10}
+    weight: 0.60
+    filter_after: "return_20 > 0"
+  ma_signal:
+    pool: [BTC-USDT-SPOT, ETH-USDT-SPOT]
+    signals:
+      entry: "bars[-1].ma20 <= bars[-1].close && bars[0].ma20 > bars[0].close"
+      exit: "bars[-1].ma20 >= bars[-1].close && bars[0].ma20 < bars[0].close"
+    weight_each: 0.10
 ```
 
-Storage Metadata/Primary 请求使用 `app_key`，DataView 请求使用独立 `view_app_key`；两者均只在
-进程内存中派生/使用，不把 secret、AppKey 写入日志或 compiled JSON。
-
-- [ ] **Step 7: 实现旧周期保护、指标和 health**
-
-Runner 查询通过 `last_result_id` JOIN Result，一次返回 `LastSuccessfulPeriod`；同周期允许重算，较旧周期只记 inbox。`CommitEvaluation` 在事务内再次执行旧周期保护；strict input error 只调用 `RecordFailure`。同周期 latest-wins 不删除旧 `StrategyResult`，逻辑期查询使用普通索引并以当前 Runner 的 `last_result_id` 区分幂等与新生命周期重算，确保审计链和 Trade `TargetReceipt` 可回溯。
-
-指标：`strategy_runs_total{status}`、run duration、pool size、selected by side、gross、outbox pending。日志含 space/runner/period/result/trace。Health 使用 database/eventbus/ready consumer/outbox 字段，删除 Python 字段。
-
-- [ ] **Step 8: 运行 Strategy 定向和全模块测试**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
-go test ./proto/... ./schema ./internal/domain ./internal/config ./internal/compiler ./internal/input ./internal/selection ./internal/trigger ./internal/store ./internal/registry ./internal/rpc ./internal/bootstrap -count=1
-go test ./... -count=1
-```
-
-Expected: PASS。
-
-- [ ] **Step 9: 搜索 V1 残留并提交**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-rg -n 'RunOnce|GetEngineStatus|python_worker|target_quantity|FactorInstance|UniverseSnapshot|WeightMerger|RebalanceSlot' \
-  modules/strategy --glob '!proto/strategy.proto' --glob '!proto/strategygen/**'
-rg -n 'source_code|params_json|\.quantity|quantity:' modules/strategy/internal modules/strategy/cmd modules/strategy/config
-git add modules/strategy
-git commit -m "refactor(strategy): replace python runner with weighted coin selection"
-```
-
-Expected: 业务代码无命中，提交成功。
-
-### Task 10: 完成 EventBus ACL、Storage 鉴权和默认部署
-
-**Files:**
-- Modify: `modules/admin/cmd/cli/eventbus_credentials.go`
-- Modify: `modules/admin/cmd/cli/eventbus_credentials_test.go`
-- Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
-- Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
-- Modify: `config/setup/service-deployments.yaml`
-- Modify: `scripts/test/contract/test-eventbus-topology.sh`
-- Modify: `scripts/test/contract/test-strategy-deploy.sh`
-- Modify: `scripts/test/contract/test-strategy-deploy-e2e.sh`
-
-- [ ] **Step 1: 写 ACL 与 Storage caller contract**
-
-Strategy credential 必须允许发布 `moox.event.trade.target.weight_requested.v1.>`，并只对 `strategy_view_factor_ready_v1` durable 拥有 create/info/fetch/ack；subscribe 允许 `_INBOX.>`。Trade 使用独立的 `trade_target_weight_v1` durable，只消费新权重 subject，不复用旧 quantity durable。
-
-ACL 精确包含：
+示例 UDF、字段和标的必须由测试夹具或真实绑定提供，不假设它们已注册。
 
 ```text
-$JS.API.STREAM.NAMES
-$JS.API.CONSUMER.INFO.*.strategy_view_factor_ready_v1
-$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_factor_ready_v1
-$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_factor_ready_v1.>
-$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.strategy_view_factor_ready_v1
-$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.strategy_view_factor_ready_v1
-$JS.ACK.MOOX_STORAGE.strategy_view_factor_ready_v1.>
+定时 / 事件
+  -> 确定 runner_id + run_id + bar_end_time
+  -> 查询本期是否已成功、是否已有更晚结果，恢复当前运行最近 RuleState
+  -> pool -> 按阶段加载必要输入 -> filter_before
+  -> 标准化 / score -> select -> 可选 signals
+  -> 基础份额与权重分配 -> filter_after
+  -> 合成完整目标与下一期 rule_states
+  -> 事务复核身份、前态和有效期，提交 Result + outbox
+  -> 异步发送给 Trade
 ```
 
-默认 Storage gateway/DataView caller 列表包含独立 app_id/key_id `strategy`。Strategy 同时配置
-`storage.app_key`（Primary/Metadata）和 `storage.view_app_key`（DataView）；部署时分别由
-`MOOX_STORAGE_PRIMARY_AUTH_SECRET`、`MOOX_STORAGE_VIEW_AUTH_SECRET` 派生，禁止把两个
-secret 合并为一个 AppKey。
+两种触发为 OR，不是交易调仓模式。每个 `(runner_id, run_id, bar_end_time)` 最多成功一次；
+失败可在时效内重试，同期成功后的输入修订不重算。新成功周期即使权重不变也生成目标。
+任何必要规则失败都不提交部分 FULL；成功空集才是完整零目标。
 
-- [ ] **Step 2: 更新部署脚本**
+### 1.3 历史引用
 
-删除 Python/worker 探测；增加 Strategy 到 FactorMgr、Storage Gateway/DataView、JetStream consumer 的配置检查；health 必须看到 ready consumer connected。
+- `bars[0]`：本次决策已闭合 bar 的行情与因子值。
+- `bars[-1]`：同一交易日历的紧邻前一有效 bar，不是上次触发或最近可找到的记录。
+- 第一版只允许常量索引 0/-1。拒绝正索引、-2、动态索引及未收盘数据。
+- 这是相对周期视图，不采用普通 slice 的负下标含义。实现用整数键视图或受限 AST 转换。
+- 跨期表达式两期均显式索引；普通单期评分、过滤仍支持裸字段简写。
+- 缺少必需历史就跳过整次决策，不删除子条件、不补零、不把已有理论持仓解释成退出。
+- ma20 等值来自 Factor 绑定；不在 Strategy 内重算指标窗口。
 
-- [ ] **Step 3: 运行测试并提交**
+### 1.4 异步接收顺序
 
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/admin
-go test ./cmd/cli ./internal/service/sysdeploy -count=1
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-bash scripts/test/contract/test-eventbus-topology.sh
-bash scripts/test/contract/test-strategy-deploy.sh
-git add modules/admin config/setup/service-deployments.yaml scripts/test/contract/test-eventbus-topology.sh scripts/test/contract/test-strategy-deploy.sh scripts/test/contract/test-strategy-deploy-e2e.sh
-git commit -m "feat(deploy): authorize strategy ready consumer"
-```
+Trade 在任何去重快路径前校验当前授权 `(runner_id, run_id)` 和 `[effective_at, valid_until)`，
+在接收事务内复核，再比较当前授权运行内的 `bar_end_time`：
 
-Expected: PASS 后提交。
-
-### Task 11: 更新管理台为声明式权重策略
-
-**Files:**
-- Modify: `web/src/api/strategy-types.ts`
-- Modify: `web/src/api/strategy.ts`
-- Modify: `web/src/api/strategy.test.ts`
-- Modify: `web/src/store/modules/strategy.ts`
-- Modify: `web/src/views/strategy/overview/index.vue`
-- Modify: `web/src/views/strategy/overview/strategy-create-defaults.test.ts`
-- Modify: `web/src/views/strategy/running/index.vue`
-- Modify: `web/src/views/strategy/detail/index.vue`
-- Modify: `web/src/views/strategy/components/strategy-target-table.vue`
-- Modify: `web/src/views/strategy/components/strategy-run-timeline.vue`
-- Modify: `web/src/views/strategy/components/strategy-operation-panel.vue`
-- Modify: `web/src/views/strategy/components/strategy-operation-panel.test.ts`
-- Modify: `web/tests/strategy-console.spec.ts`
-
-- [ ] **Step 1: 写前端 contract 失败测试**
-
-断言类型只有 target_weight；Strategy 有 kind/compiled_json、无 source_code；Runner 有 source_view_id、无 params_json；Result 有 period_time、无 namespace；API 无 runOnce/getEngineStatus。
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/web
-pnpm test -- src/api/strategy.test.ts src/views/strategy/overview/strategy-create-defaults.test.ts src/views/strategy/components/strategy-operation-panel.test.ts
-```
-
-Expected: FAIL，仍存在 V1 contract。
-
-- [ ] **Step 2: 更新 API、Store 和发布界面**
-
-删除 EngineStatus、runOnce/getEngineStatus 和 engineReady。CreateStrategy 只发 id/name/manifest；CreateRunner 只发 id/strategy/space/account。
-
-移除 Worker tag 与 Python textarea；默认 YAML 使用 `moox.strategy/v2` 示例。定义 drawer 展示 manifest、compiled JSON、source hash 和冻结依赖。
-
-- [ ] **Step 3: 更新 Runner 和结果界面**
-
-Runner 创建时 source view/frequency 从所选 Strategy compiled JSON 只读展示。LogicalAccount 可空并显示观察模式。Targets 表显示目标权重；详情展示 gross/net、pool size、long/short、period、input hash、strict last_error。删除 Python、Run Once、namespace、quantity 文案。
-
-- [ ] **Step 4: 更新 Playwright 并验证**
-
-覆盖发布声明式 Strategy、创建观察/执行 Runner、启停、查看 weight targets、查看 hold/rebalance Result。
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/web
-pnpm test -- src/api/strategy.test.ts src/views/strategy
-pnpm exec playwright test tests/strategy-console.spec.ts
-pnpm build:prod
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-git add web/src/api web/src/store/modules/strategy.ts web/src/views/strategy web/tests/strategy-console.spec.ts
-git commit -m "feat(web): manage declarative weighted strategies"
-```
-
-Expected: PASS 后提交。
-
-### Task 12: 完成跨模块 E2E、文档和最终验收
-
-**Files:**
-- Modify: `modules/strategy/test/e2e_test.go`
-- Modify: `modules/strategy/test/frontend_e2e_test.go`
-- Modify: `modules/strategy/test/outbox_jetstream_e2e_test.go`
-- Modify: `modules/strategy/test/strategy_trade_external_e2e_test.go`
-- Create: `modules/strategy/test/view_factor_ready_e2e_test.go`
-- Modify: `modules/strategy/docs/frontend-verification.md`
-- Create: `modules/strategy/docs/coin-selection-runtime.md`
-- Modify: `docs/策略执行框架设计.md`
-
-- [ ] **Step 1: 写 Strategy 完整链路测试**
-
-在测试中用 fake Collector/Factor publisher 产生两个 ready event 乱序到达：第一个依赖
-不齐时返回 RETRY 且不标记 inbox，第二个补齐后完成；只有本周期所有 Runner 都得到
-终态 ACK 后才标记该 message：
-
-```text
-ViewFactorPeriodReady
--> inbox/message routing
--> ResolveInstrumentPool
--> LoadEvaluationInput
--> Evaluate
--> Commit StrategyResult/current targets/outbox
-```
-
-断言 result、debug、input hash、sequence 和 outbox target_weight。
-
-- [ ] **Step 2: 写 Strategy -> Trade E2E**
-
-使用内嵌 NATS/JetStream、两个 SQLite 和 fake equity/price adapter，验证 outbox publish -> Trade consumer -> TargetReceipt -> current quantity target PENDING -> TargetWorker wake。
-
-重复同 target、重启 Trade、再投旧 target，TargetReceipt 的 equity/price/quantity 字节必须不变。
-
-- [ ] **Step 3: 写关键故障矩阵**
-
-覆盖 strict 缺行无 Result/sequence/outbox、下一周期恢复、同周期 Factor 重算、相同目标 hold、旧周期晚到不倒灌、outbox 重投、事务回滚、一个 LogicalAccount 不能启用两个 owner Runner。
-
-- [ ] **Step 4: 更新运行文档和设计补充**
-
-`coin-selection-runtime.md` 写发布/启用、ready 链、strict 排障、debug_info、hold/rebalance、Trade TargetReceipt、指标和日志。frontend verification 删除 quantity/Python。
-
-设计文档只补充本计划固定的四个行为：hold 同周期重算、多空重叠净额、旧周期忽略、Trade TargetReceipt；不扩大一期范围。
-
-- [ ] **Step 5: 运行模块级测试**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
-go test ./... -count=1
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/trade
-go test ./internal/eventconsumer ./internal/application/equity ./internal/application/target ./internal/infra/store ./test -count=1
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/collector
-go test ./internal/sources/binance ./internal/jobs/kline ./internal/planner/storagesource -count=1
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/packages/events
-go test ./... -count=1
-```
-
-Expected: PASS。
-
-- [x] **Step 6: 运行外部 E2E 与正式链路验收**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/strategy
-go test -tags=e2e_external ./test -run 'ViewFactorReady|StrategyTrade' -count=1 -v
-```
-
-Expected: 本地 external 测试证明事件协议与 Trade 消费链；环境具备 Collector/Storage/Factor/Strategy/Trade
-时，再通过部署脚本证明真实 `DatasetPeriodCollected -> ViewFactorPeriodReady -> Strategy -> Trade`
-链路。环境不具备时记录明确未运行原因，不能用本地单测代替正式验收。
-
-本轮已完成正式运行验收，但由于该主机未配置启用的交易所账户，验收范围限定为服务启动、认证
-就绪、EventBus subject/ACL 和 Strategy -> Trade 消费基础设施，不执行真实下单。部署摘要：
-
-```text
-target: ubuntu@106.53.107.122:/data/moox/prod
-mode: component overlay; EventBus + Trade + Strategy enabled
-startup: EventBus -> Trade (schema/init/ready) -> Strategy
-health: EventBus/Trade/Strategy /readyz = HTTP 200, ready=true
-trade: target_worker_ready=true, enabled_exchange_accounts=0
-strategy: ready_consumer_connected=true, outbox_pending_count=0
-binary: remote SHA-256 matches release/moox-dev-linux-amd64.tar.gz contents
-```
-
-需要后续补充的不是服务就绪，而是配置交易所账户后的真实 `target_weight` 业务消息、权益/价格
-冻结、数量换算和订单执行验收；这些不应被本次零账户部署误报为已完成。
-
-补充的模拟盘验证记录：已通过 Trade Console RPC 创建临时 Binance SPOT Paper 账户，确认账户创建
-和生命周期关闭接口可用；该主机访问 Binance 公共行情接口时被网络策略拒绝（`exchangeInfo`
-连接失败），因此账户无法进入 `ready`，未继续提交订单。临时账户已调用
-`ClosePaperSimulation` 关闭。订单撮合本身已在本地生产 Paper Adapter/Matcher/SQLite E2E 中验证，
-覆盖 MARKET 买卖、撮合成交、Fill/Holding 投影、重启恢复和账户关闭清理；远端真实行情可用后，
-再重复一次 RPC 级别的创建→就绪→下单→成交验收。
-
-- [ ] **Step 7: 提交 E2E 和文档**
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-git add modules/strategy/test modules/strategy/docs docs/策略执行框架设计.md
-git commit -m "test(strategy): verify weighted selection end to end"
-```
-
-- [ ] **Step 8: 在干净的实施改动上运行仓库门禁**
-
-先确认本计划产生的文件已全部提交；用户在实施前已有的无关改动不得暂存、回滚或带入本计划 commit。
-
-```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
-git diff --check
-make verify-pr
-```
-
-Expected: PASS，`make proto` 不产生 generated diff。
-
-- [ ] **Step 9: 检查并推送**
-
-```bash
-git status --short
-git log --oneline --max-count=12
-git push
-```
-
-Expected: 各 Task commit 已推送；status 只允许显示实施前已存在且与本计划无关的用户改动。
-
-## 验收矩阵
-
-| 能力 | 必须证明的结果 |
+| 输入 | 处理 |
 | --- | --- |
-| 配置发布 | 未知字段、非法 decimal/operator/frequency、disabled Factor/Binding、多 output 未选择 output、显式 output 不存在、Spot short 均拒绝；compiled JSON/hash 稳定 |
-| Runner 生命周期 | 观察 Runner 可无账户；执行 Runner 独占 owner；仅 DISABLED 可换 Strategy/account；Enable 调用 `Compiler.VerifyDependencies` |
-| InstrumentPool | metadata/include/exclude/market/quote/venue 生效；历史不足只排除；venue 选择稳定；完整 ID 与 Trade 一致 |
-| EvaluationInput | 每个 pool instrument 恰好一行；View 未完成/Storage 暂时失败 RETRY；View 已完成但缺行/列/非数值终态 ACK 并记录 `last_error`；不缩小求值样本 |
-| Evaluator | method=min、先排名后过滤、AND、percentile、count/fraction、post 不回补、稳定 tie break、多空等权和净额确定 |
-| Trigger | ready 乱序、重复、未对齐、依赖不齐、同周期重算、重启、旧周期晚到均符合口径；终态 ACK 不会无限重投 |
-| Result/Outbox | same hash 零副作用；hold 写 Result 不发目标；rebalance 原子写 Result/Runner/outbox；空 FULL 清仓 |
-| Trade | target_weight 是唯一 wire 字段；首次权益/价格/quantity 永久冻结；重投不重估；Executor 继续负责量化和容量 |
-| Live/Paper | 相同 compiled config 和 EvaluationInput 生成逐字节相同权重；差异只来自账户和执行环境 |
-| 可观测性 | runs、耗时、pool、selected、gross、outbox 指标存在；日志包含 space/runner/period/result/trace |
+| 更晚周期 | 接受；允许中间没有目标 |
+| 同周期、同 target_id、全部规范内容相同 | 幂等，不重复唤醒执行 |
+| 同周期但 ID 或内容不同 | 冲突，不替换 |
+| 更早周期、旧 run_id 或过期 | 拒绝，不恢复旧目标 |
+| 相同 target_id 但任意业务字段变化 | 冲突，即使已经存在 receipt |
 
-## 完成标准
+新 run 单独建立周期基线，不继承旧发布者的高水位。Trade 重试、恢复和子订单提交前仍需检查
+当前目标身份、授权与有效期；过期只停止新交易，不自动清仓，不隐含撤销已挂订单。
+请求内容摘要可以保留，它不是 DSL 定义 hash。Trade 订单 Version 乐观锁不删除。
 
-- `ViewFactorPeriodReady -> Strategy inbox -> InstrumentPool/EvaluationInput -> evaluator -> StrategyResult/outbox -> Trade TargetReceipt -> quantity TargetExecutor` 全链路通过。
-- Strategy 运行代码和 V2 服务契约中不再使用 Python entrypoint、RunOnce、EngineStatus、
-  quantity output、namespace、FactorInstance、Snapshot、Slot 或 WeightMerger；为避免
-  protobuf tag 重用，旧 wire 字段可以保留但必须是只读兼容字段，不能重新赋予新语义。
-- Factor 协议和 FactorDef/Binding schema 未被 Strategy 改造。
-- strict 缺数周期无 Result、无 outbox、无 sequence 变化，且下一周期不受影响。
-- 同 message、同 input hash、同 target_id 重投均无重复副作用；同周期更新 latest-wins；相同规范权重只产生 hold。
-- Trade TargetReceipt 在进程重启和当前 target 更新后仍能复用旧 target_id 的首次换算事实。
-- 管理台只展示声明式 manifest、编译依赖、权重目标、Result 和 debug，不再暴露 Python worker 或绝对 quantity。
-- 模块测试、Web 测试/构建、外部 E2E（具备环境时）和 `make verify-pr` 达到计划声明结果。
+## 二、当前源码与改动地图
+
+以下均为仓库根目录相对路径；“新增”路径目前不存在，其余为已有文件或目录。
+实施时先检查工作树，不覆盖用户修改。
+
+| 责任 | 当前入口 | 需要改变的行为 |
+| --- | --- | --- |
+| DSL / 编译 | modules/strategy/internal/config/manifest.go；internal/compiler/compiler.go、types.go | v2 long/short 与持久化制品改为 rules、输入依赖、内存 Expr |
+| 输入 | modules/strategy/internal/input/types.go、pool.go、readiness.go；internal/storageio/view.go、rpc.go | 保留快照与 provenance；增加行情列和精确前一周期，检查按真实依赖进行 |
+| 求值 | modules/strategy/internal/selection/evaluator.go | 当前全池排名、后筛后均分，均与新设计相反，必须修改 |
+| 周期提交 | modules/strategy/internal/store/results.go；internal/trigger/processor.go | 删除 input_hash latest-wins、hold、递增序号和 Runner 结果指针 |
+| 控制面 | modules/strategy/internal/registry/service.go；internal/rpc/service.go；internal/bootstrap/logical_account.go | 可停用编辑、启用编译、共同 run_id 授权 |
+| Trade | modules/trade/internal/eventconsumer/target.go；internal/infra/store/target.go、target_receipt.go | 现有 receipt/sequence 快路径早于 owner 校验，需改为授权、时效、周期合同 |
+| 再次执行 | modules/trade/internal/application/target/executor.go；internal/application/order/service.go；internal/infra/store/fact.go | 现有仅检查 owner runner，增加 run 与目标期限保护 |
+| 协议 / UI | packages/tradeeventpb/trade_events.proto；两个模块 proto；web/src/api/strategy-types.ts | 同步去掉旧字段，不能只改 StrategyRunner |
+
+当前 `packages/marketcalendar/calendar.go` 只提供 `cn_stock` 交易日工具，没有 crypto_24x7
+或完整分钟会话映射；`packages/timerjob` 是任务回调工具，不是现成的动态 cron 调度器。
+不得在计划执行时假称这些能力已经存在。
+
+## 三、任务清单
+
+任务按合同、纯计算、存储/触发、Trade、管理台、集成的顺序推进。每项先写列出的失败用例，
+运行确认失败原因，再实现并复跑。共享类型或 Proto 变更要同步最小调用方，保持检查点可编译；
+紧密依赖的任务可放在同一未发布分支，不能将单边协议变更部署出去。
+
+以下命令除特别注明外均在 MooX 仓库根目录执行，使用现有 go.work。
+每项通过后只暂存该项文件并提交，提交信息按仓库 moo-git-commit 规范填写。
+
+### Task 1：定义 DSL 与表达式合同
+
+**修改：** `modules/strategy/internal/config/manifest.go`、`manifest_test.go`；
+`modules/strategy/internal/compiler/compiler.go`、`types.go`、`verify_dependencies.go`、`compiler_test.go`；
+`modules/strategy/go.mod`、`go.sum`。
+**新增：** `modules/strategy/internal/compiler/expressions.go`、`expressions_test.go`。
+
+- [ ] 在现有配置文件内以 `config.DSL` 替代旧 Manifest 类型，不为改名字额外拆目录。
+  YAML 根只接受 name/triggers/data/rules；规则字段和互斥关系逐项按设计第 3、6、7 节校验。
+- [ ] 增加 `TestDSLContract` 表驱动用例：示例可解析；schedule-only/event-only 合法；
+  重复键、未知字段、空 rules、空 select、top+tail、select 无 score、weight+weight_each、
+  signals 缺 entry/exit、holding+signals、旧 api_version/kind 均失败。
+- [ ] 将下面的表达式表落为 `TestBarsExpressionContract`，验证编译期字段类型与依赖提取：
+
+| 表达式 | 预期 |
+| --- | --- |
+| bars[-1].ma20 <= bars[-1].close && bars[0].ma20 > bars[0].close | bool；依赖两期 ma20/close |
+| bars[0].close > 0 | bool；只依赖当前期 |
+| bars[1].close > 0、bars[-2].close > 0、bars[offset].close > 0 | 编译拒绝 |
+| prev.close > 0、bars[0].unknown > 0 | 编译拒绝 |
+| now()、rand()、未注册函数 | 编译拒绝 |
+| pct_rank(return_20) | 仅 score 阶段合法，参数为绑定字段名 |
+| pct_rank(return_20 + 1)、signals.entry 引用 score | 编译拒绝 |
+
+- [ ] 为 Strategy 引入 Expr，复用 DataMind 已验证的类型约束思路，但不移植解释器或 DAG。
+  禁用默认内置函数，只开放明确的纯函数与 pct_rank/zscore；遍历 AST 拒绝未授权能力。
+  为输入别名保留 bars、score 及函数名称，防止命名冲突。
+- [ ] CompiledStrategy 只保存内存程序、字段类型和阶段/偏移依赖，删除可落盘 JSON/hash。
+  保留 Factor 多输出显式选择、Space/View/Binding/频率与来源校验；不删除 Factor source_hash。
+- [ ] 运行前述新测试，再运行两个包全量，预期 PASS，无静默接受旧字段：
+
+```sh
+go test ./modules/strategy/internal/config ./modules/strategy/internal/compiler
+```
+
+### Task 2：标的池、周期映射与按阶段输入
+
+**修改：** `modules/strategy/internal/input/types.go`、`pool.go`、`pool_test.go`；
+`modules/strategy/internal/storageio/view.go`、`rpc.go`、`view_test.go`。
+**新增：** `modules/strategy/internal/input/udf.go`、`udf_test.go`、`calendar.go`、`calendar_test.go`。
+**收拢删除：** `internal/input/readiness.go`、`readiness_test.go`、`hash.go`：
+先将有用检查和测试迁入加载流程，再删除独立检查器和同周期输入 hash 路径。
+
+- [ ] 固定 pool UDF 注册签名：输入为预加载标的目录快照、bar_end_time、已校验参数；
+  输出规范 instrument_id 列表和 error。列表排序去重校验，重复或目录外 ID 报错，不静默截取。
+  固定列表与 UDF 走同一输出校验；合法空列表与 UDF 错误明确区分。
+- [ ] 实现薄周期适配层。首版支持 crypto_24x7 的整分钟/整小时/日 bar，以及 cn_stock 日 bar；
+  股票分钟会话、多频率混合暂不开放，启用时明确报不支持，不按 24 小时伪造交易日。
+  连续市场锚点为 UTC 1970-01-01；股票使用已加载交易日历的稳定有序交易日索引，范围外报错。
+  锚点和日历数据改变须停用后重新启用。
+- [ ] 新增 `TestBarCalendarContract`：小时 10:00–11:00 在原定 11:05 触发、延迟到 11:07
+  处理仍映射 11:00；股票周一前一根是日历中的前一交易日；节假日、范围外、未闭合 bar 均覆盖。
+  明确源 timestamp 表示开盘还是收盘，在适配层转换，不改变 Storage 原始时间含义。
+- [ ] 当前行情字段和因子字段一起装入相对周期视图；只引用 [0] 不读历史，引用 [-1]
+  读取精确上一周期。保留事件指定的索引身份/修订，当前与历史读取不能混入不同冻结索引。
+- [ ] 按规则阶段读字段：前筛对 pool、评分对初筛后集合、退出/后筛对旧持有项；
+  池外旧信号持仓仍加载，非新批次不加载无关评分字段。
+- [ ] 扩展 `view_test.go`：上一期缺失但更早一期存在仍失败；当前有 close 而因子缺失不能补值；
+  前筛剔除项缺未使用评分列不阻塞；旧持仓缺退出列阻塞整次；分页索引切换、跨 venue、
+  Factor source_hash 错配维持原有拒绝语义。临时未就绪与永久缺失错误分类保留。
+- [ ] 运行并预期 PASS：
+
+```sh
+go test ./modules/strategy/internal/input ./modules/strategy/internal/storageio
+go test ./packages/marketcalendar/...
+```
+
+### Task 3：标准化、选择、权重与后筛
+
+**修改：** `modules/strategy/internal/selection/evaluator.go`、`evaluator_test.go`；
+`modules/strategy/internal/quant/decimal.go`、`decimal_test.go`。
+**新增：** `modules/strategy/internal/selection/normalize.go`、`normalize_test.go`。
+
+- [ ] 将 `TestEvaluateRanksFullPoolBeforePreFilter` 替换为初筛集合评分测试。
+  pct_rank 采用升序平均名次 (r-1)/(N-1)，单元素或全相同为 0.5；
+  zscore 使用总体标准差，零方差为 0。只在 score 阶段批量预计算，不覆盖原始列。
+- [ ] 使用下面固定输入验证 `TestNormalizeAndSelectContract`，再覆盖同分、零方差、NaN/Inf：
+
+| ID | return_20 | turnover_20 | pct_rank(return_20) | pct_rank(turnover_20) | 0.6/0.4 合成分 |
+| --- | --- | --- | --- | --- | --- |
+| A | 0.05 | 10000000 | 0 | 1 | 0.4 |
+| B | 0.10 | 2000000 | 0.5 | 0 | 0.3 |
+| C | 0.15 | 5000000 | 1 | 0.5 | 0.8 |
+
+- [ ] 排序固定 score 降序、ID 升序；top:2 得 C/A，tail:1 得 B。
+  select.where 在标准化之后、top/tail 截取之前筛分数；不足取现有，同分不扩容；
+  省略 select 全选，省略 score 则不提供排名和分数筛选。
+- [ ] 新增 `TestPostFilterKeepsVacancy`：10 个拟持有项、weight=0.60，每个先分配 0.06，
+  后筛去掉两项只剩 0.48，不补位、不把八项重新分到 0.60。
+- [ ] 复用 quant 的 18 位定点：先按 ID 升序 DivideStable(1, IDs) 得 base_weights，
+  再乘规则预算，最后应用方向；三个 offset 按数值升序分预算；乘法尾差留空。
+  M=7、删除分得余数的首项、规则 map 顺序打乱均有精确字符串断言。
+  空集合直接输出空，不调用除零；其他除零必须报错，不能沿用当前 Div 返回零而静默成功。
+- [ ] 编译期证明总预留比例不超过 1，运行期在后筛/净额前再次检查。
+  weight_each 需要可证明的数量上界；signals+weight_each 只允许固定池并按全池预留。
+  现货 short 在规则层拒绝，不能靠其他 long 抵消。多规则同标的合并，零净额省略，输出按 ID 排序。
+- [ ] 运行并预期 PASS：
+
+```sh
+go test ./modules/strategy/internal/selection ./modules/strategy/internal/quant
+```
+
+### Task 4：最小 RuleState 与时序规则
+
+**修改：** `modules/strategy/internal/domain/types.go`、`types_test.go`；
+`modules/strategy/internal/selection/evaluator.go`、`evaluator_test.go`。
+**新增：** `modules/strategy/internal/selection/state.go`、`state_test.go`。
+
+- [ ] 在 domain 中定义 RuleState：信号项保存 instrument_id、必要 entered_at；
+  批次保存 offset、建立/到期 bar_end_time、后筛后 base_weights。
+  Evaluation 返回 targets、按规则名组织的 rule_states 与解释，不返回 Trade 状态或 hold 动作。
+- [ ] 新增 `TestSignalStateTransitions`：先 exit 后 entry；同周期退出不再进入；
+  entry/exit 同真时 exit 优先；相等保持；固定池外旧持仓仍检查退出。
+  后筛删除后从后态移除，下次必须再次满足 entry，不保留隐藏持仓自动恢复。
+- [ ] 穿越夹具：上一期 ma20=9/close=10，本期 ma20=11/close=10，entry=true；
+  两期 ma20 都为 11 时穿越 entry=false，但持续条件 entry=true。严格保留用户给定方向。
+- [ ] 新增 `TestHoldingOffsets`：holding.bars=24、offsets=[0,12]、weight=0.60，
+  每批预算 0.30；先清理到期，再建立命中 offset 的批次；未建批次预算留空；
+  批次仅创建时筛选，期间不重分 base_weights；中断触发不补建中间批次。
+- [ ] 新增 `TestRuleStateIsolation`：同一标的同时属于信号规则和两个批次，
+  合成目标不能替代归属状态；一批到期不删另一批。任一规则失败时所有后态均不提交。
+  无信号/无 holding 的普通规则没有跨期状态，不写空的持仓对象。
+- [ ] 运行并预期 PASS：
+
+```sh
+go test ./modules/strategy/internal/domain ./modules/strategy/internal/selection
+```
+
+### Task 5：定义、Runner 与 Result 持久化
+
+**修改：** `modules/strategy/schema/strategy.sql`、`schema_test.go`；
+`modules/strategy/internal/store/database.go`、`database_test.go`、`store.go`、
+`strategies.go`、`strategies_test.go`、`runners.go`、`runners_test.go`、
+`results.go`、`results_test.go`、`runner_queries.go`、`runner_queries_test.go`；
+`modules/strategy/internal/registry/service.go`、`service_test.go`。
+**删除旧路径：** `modules/strategy/internal/store/inbox.go`；
+`legacy.go` 中仅用于旧 Strategy 格式兼容的逻辑及调用方，不新增版本迁移平台。
+
+- [ ] 先改 schema/结构测试，保留 definitions/runners/results/outbox 四张表。
+  Result 增加 run_id、bar_end_time、dsl_yaml、rule_states 及解释，Runner 不持久化目标副本或结果指针。
+  created_at/updated_at 等管理时间可保留，不参与决策排序。
+- [ ] 用下面的唯一键和查询合同替换当前 latest-wins 索引，更新 database.go 的列校验与行转换：
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS ux_strategy_results_run_bar
+ON t_strategy_results (runner_id, run_id, bar_end_time);
+```
+
+```sql
+SELECT *
+FROM t_strategy_results
+WHERE runner_id = ? AND run_id = ?
+ORDER BY bar_end_time DESC
+LIMIT 1;
+```
+
+- [ ] 定义 CRUD 只保存 dsl_yaml。编辑与启用共用控制面串行校验：
+  任一引用 Runner 启用时拒绝编辑；停用后可改，历史 Result 的 DSL 副本不可随之改变。
+- [ ] CommitEvaluation 接收本次 Result 和预期前结果 ID；事务内复查 enabled/run_id、
+  当前最近成功结果与预期一致、无更晚成功周期、目标未过期。
+  本期已成功直接返回原行，失败不占周期；Result/后态/outbox 同事务，无单独状态更新。
+- [ ] 新增 `TestCommitFirstSuccessfulBar`：定时和事件并发只插一条 Result/outbox；
+  同期输入变化不覆盖；相同权重新期仍写 outbox；失败后同周期可成功；
+  计算期间 run 改变、前结果改变或到期均整体回滚；观察模式不写 outbox。
+- [ ] 新增 `TestRestoreLatestRuleState`：重启按当前 run 最大 bar_end_time 恢复；
+  新 run 不读旧 run；跳过多个 bar 后仍读最近成功状态；保留策略不得删当前恢复点。
+  去掉序号增长、同 hash 重算及旧字段存在的测试断言，不能只把测试删掉而不补新合同。
+- [ ] 在空临时 SQLite 库加载 schema，并运行以下检查，预期 PASS；不读取或迁移个人实盘库：
+
+```sh
+go test ./modules/strategy/schema ./modules/strategy/internal/store ./modules/strategy/internal/registry
+```
+
+### Task 6：共同运行授权与管理协议
+
+**修改：** `modules/trade/proto/trade_service.proto`；
+`modules/trade/schema/logical_account.sql`；
+`modules/trade/internal/domain/logicalaccount/account.go`、`account_test.go`；
+`modules/trade/internal/application/logicalaccount/service.go`、`service_test.go`；
+`modules/trade/internal/infra/store/logical_account.go`、`store.go`、`store_test.go`；
+`modules/trade/internal/rpc/logical_account.go`、`logical_account_test.go`、`convert.go`；
+`modules/strategy/internal/bootstrap/logical_account.go`、`logical_account_test.go`。
+**生成并验证：** `modules/trade/proto/tradegen`，包括已有合同测试。
+
+- [ ] Trade 显式保存当前授权 runner_id/run_id，替换当前 owner_generation 借用 c_owner_claimed_at 的行为；
+  Claim/Rebind/Release 使用 expected 旧身份与 desired 新身份的原子比较，不靠跨服务墙上时钟排序。
+- [ ] Trade 授权记录保留独立 auth_fence，仅为内部管理 CAS 元数据，不进入 Runner、DSL 或目标。
+  Claim/Rebind 比较 expected 身份及 fence，实际状态转换生成新且不复用的 fence。
+  空闲授权也保留该值：取消/释放原子推进新值，不恢复初始全空或任何旧值；
+  取消遇到其他活动身份时不撤销它。Claim/Rebind 内部重试固定原 expected 值，不重新取值套用旧命令。
+  已空闲且 fence 已变化时旧取消仅确认结果，不回写旧值；不新增历史版本表。
+- [ ] 固定 Runner 三种组合：稳定停用=false+NULL；活动=true+run_id；未完成操作=false+run_id。
+  Disable 保留旧 ID/目的地直到撤销确认，再清 ID；改绑必须先完成这一步。
+  Enable 从稳定停用开始保存新 ID，授权确认后才 true；同一存活控制操作内部重试复用 ID。
+- [ ] 新增启动恢复表驱动用例：true+ID 只在 Trade 同身份授权下恢复该 run，授权不同则停止；
+  false+ID 一律取消并清理授权，确认后清 ID，不自动续启；false+NULL 不执行。
+  准备身份后、新授权成功但本地未启用时崩溃，均走取消；用户之后显式启用产生新 ID。
+  观察模式不调用 Trade。放弃未完成启用的自动续作，避免增加 pending_action/流程表。
+  同一 Runner 的启停、编辑、授权协调和求值使用同一串行入口，撤销失败不能报告清理完成。
+- [ ] 新增 `TestRunAuthorizationCAS`：expected 不匹配拒绝；desired 已是当前身份幂等；
+  别的 Runner 占用拒绝；旧 run 迟到的 Release/Rebind 不影响新 run；
+  新 run 不继承旧目标周期，普通重启不清目标。
+- [ ] 新增 `TestDelayedClaimCannotReviveAfterCancel`：Claim(F0 -> runA) 挂起，
+  Cancel 在 idle/F0 上提交 idle/F1，迟到 Claim 仍携带 F0，必须失败；
+  重复取消不恢复旧检查值；已经由其他 run 接管时旧取消不能撤销新授权。
+- [ ] 同步 RPC 转换和 Strategy 管理客户端，删除 generation=0 绕过验证的旧兼容分支。
+  不改 Trade 订单 Version、独立订单管理及显式清仓接口。
+- [ ] 通过真实 Makefile 生成代码，不手改 pb.go/trpc.go，再运行相关测试，预期 PASS：
+
+```sh
+make -C modules/trade/proto
+go test ./modules/trade/proto/tradegen/...
+go test ./modules/trade/internal/application/logicalaccount ./modules/trade/internal/infra/store ./modules/trade/internal/rpc
+go test ./modules/strategy/internal/bootstrap
+```
+
+### Task 7：定时 / 事件统一触发与 outbox
+
+**修改：** `modules/strategy/internal/trigger/processor.go`、`processor_test.go`；
+`internal/trigger/eventconsumer/handler.go`、`handler_test.go`；
+`internal/bootstrap/bootstrap.go`、`config.go`、`config_test.go`；
+`internal/outbox/runtime.go`、`relay.go`、`publisher.go` 及对应测试；
+`internal/store/outbox.go`、`outbox_test.go`。
+以上 internal 路径均位于 `modules/strategy/`。
+**新增：** `modules/strategy/internal/trigger/scheduler.go`、`scheduler_test.go`。
+
+- [ ] 启用时解析五段 cron 和 timezone，注册可取消的进程内日程；使用成熟 cron 库，
+  不手写 cron 解析器。回调保留原计划时刻，延迟执行不换成当前时间。
+  事件保留原数据周期与来源信息；两者调用同一按 Runner/周期求值入口。
+- [ ] 新增 `TestTimerEventFirstSuccess`：只定时、只事件、双触发均可运行；
+  定时缺数后事件补算，定时成功后事件去重；旧周期不倒灌；
+  启动不批量补历史 cron，非每 bar 强制求值。
+- [ ] 将 ready 的实际依赖/标的范围判断合并输入加载流程，保留无关 binding degraded 不阻塞、
+  相关 failed 不当 ready。暂时失败只在本周期有效期内有界重试，终态记录后 ACK；
+  同一事件多个 Runner 独立按成功周期去重，不让已成功 Runner 重做。
+- [ ] 框架运行配置提供默认目标有效长度 2 个 data.bar：
+  effective_at=bar_end_time，valid_until=第 2 个后续有效 bar 结束；
+  仍有效批次存在时取与最近批次到期时间的较小值。DSL 不增加 target 配置。
+- [ ] outbox 冻结 target_id 和所有内容；发布前复核当前 run、enabled 与有效期。
+  超期/旧 run 停止发布，不刷新时间。broker 确认丢失时仅重投原消息；
+  本地停止不能证明 Trade 从未收到，最终保护由 Trade 自己执行。
+- [ ] 扩展 outbox 测试覆盖确认丢失、身份变化、超期、空 FULL；
+  保留 published 与 Trade accepted/filled 状态区别，失败摘要不伪装成功。
+- [ ] 运行并预期 PASS：
+
+```sh
+go test ./modules/strategy/internal/trigger/... ./modules/strategy/internal/bootstrap
+go test ./modules/strategy/internal/outbox ./modules/strategy/internal/store
+```
+
+### Task 8：目标事件与 Trade 接收 / 再次执行
+
+**修改：** `packages/tradeeventpb/trade_events.proto`；
+`packages/events/validation.go`、`validation_test.go`、`logical_account_target_test.go`；
+`modules/strategy/internal/store/results.go` 及事件序列化测试；
+`modules/trade/proto/trade_service.proto`、`internal/rpc/convert.go`；
+`modules/trade/schema/logical_account.sql`、`target_receipt.sql`；
+`modules/trade/internal/eventconsumer/target.go`、`target_test.go`；
+`internal/infra/store/target.go`、`target_test.go`、`target_receipt.go`；
+`internal/application/target/weight_resolver.go`、`weight_resolver_test.go`、`executor.go`、`executor_test.go`；
+`internal/application/order/service.go`、`internal/infra/store/fact.go` 及对应测试。
+本段缩写 internal 路径均位于 `modules/trade/`。
+
+- [ ] LogicalAccountTargetWeightRequested 增加 run_id、strategy_id、bar_end_time、effective_at、valid_until，
+  移除 command_sequence、signal_time、owner_generation。时间统一使用 Protobuf Timestamp，
+  持久化为 UTC 毫秒；严格检查有效值、effective_at=bar_end_time、valid_until>effective_at。
+  保留既有字段 1/2/3/5，新字段明确使用 8 至 12，不复用旧字段号 4/6/7：
+
+```proto
+message LogicalAccountTargetWeightRequested {
+  string target_id = 1;
+  string runner_id = 2;
+  string logical_account_id = 3;
+  repeated InstrumentWeightTarget targets = 5;
+  string run_id = 8;
+  string strategy_id = 9;
+  google.protobuf.Timestamp bar_end_time = 10;
+  google.protobuf.Timestamp effective_at = 11;
+  google.protobuf.Timestamp valid_until = 12;
+}
+```
+
+- [ ] 保留现有 `event.trade.target.weight_requested@1` 事件名、MOOX_TRADE stream 和
+  `trade_target_weight_v1` durable，不为 DSL 去版本化另造 subject；
+  这不表示支持旧 payload，新验证器必须拒绝缺少运行身份/期限的消息。
+  同步 Strategy 序列化、事件验证、Proto、RPC 中的目标展示、Trade schema 和 row 映射。
+- [ ] 增加旧 wire fixture 解码测试：旧 payload 即使解码成功，仍因缺少 run_id 和期限被新验证器拒绝；
+  不添加旧字段到新字段的转换分支，也不只测新结构自己序列化后的往返。
+- [ ] 接收严格执行第 1.4 节：授权/期限/周期检查先于 receipt 快路径和权益/报价读取，
+  事务内再次校验，防止转换期间授权改变或目标到期。
+  receipt 唯一周期键包含 space、logical_account、runner、run、bar_end_time，target_id 同样唯一。
+- [ ] RequestHash 覆盖身份、周期、生效/失效时间及规范权重；删除 weight_resolver 业务时间解析失败
+  后回退事件时间/当前时间的路径。已有 receipt 只能用于同一内容重试，不能越过旧 run 或过期判断。
+- [ ] 当前目标写回 CAS 使用目标 ID/run/周期，旧任务不能覆盖新目标状态。
+  executor 启动恢复、重试、继续收敛及子订单真正 Submit 前检查当前有效目标与授权，
+  已准备但尚未提交的订单也受限。可由现有 OwnerID 回查目标，不重构整个订单域。
+- [ ] 新增 `TestTargetRunAndBarContract`：新/同/旧周期、不同 ID 同周期、同 ID 改内容、
+  旧 run 更晚时间、新 run 首目标、已接受 receipt 的旧身份重投、过期、边界等于 valid_until。
+- [ ] 新增 `TestTargetExpiresBeforeSubmit`：接受时有效、转换后过期、重试时过期、
+  订单准备后 run 被切换，均不得继续提交；不自动清仓。
+  扩展现有 executor/order 测试，并保留 FULL omission 与空列表归零的回归。
+- [ ] 生成并验证，预期 PASS；不要把旧“报价陈旧”测试当作目标有效期测试：
+
+```sh
+make -C packages/tradeeventpb
+make -C modules/trade/proto
+go test ./packages/tradeeventpb/... ./packages/events/...
+go test ./modules/trade/proto/tradegen/... ./modules/trade/internal/rpc
+go test ./modules/trade/internal/eventconsumer ./modules/trade/internal/infra/store
+go test ./modules/trade/internal/application/target ./modules/trade/internal/application/order ./modules/trade/test
+```
+
+### Task 9：Strategy RPC、CLI 与管理台
+
+**修改：** `modules/strategy/proto/strategy.proto`、`strategy_contract_test.go`；
+`modules/strategy/internal/rpc/convert.go`、`service.go`、`service_test.go`；
+`modules/strategy/cmd/cli/main.go`、`main_test.go`；
+`web/src/api/strategy-types.ts`、`strategy.ts`、`strategy.test.ts`；
+`web/src/store/modules/strategy.ts`；
+`web/src/views/strategy/overview/index.vue`、`strategy-create-defaults.test.ts`；
+`web/src/views/strategy/detail/index.vue`、`running/index.vue`；
+`web/src/views/strategy/components/strategy-run-timeline.vue`、`strategy-target-table.vue`、
+`strategy-operation-panel.vue`、`strategy-operation-panel.test.ts`、`strategy-status-badge.vue`；
+`web/tests/strategy-console.spec.ts`；
+`web/src/api/trade/types.ts`、`index.ts`、`trade.test.ts`；
+`web/src/views/trading/logical-accounts/index.vue`、`logical-account-contract.test.ts`。
+
+- [ ] RPC 定义对齐第 1.1 节。删除旧 source_code、namespace、trigger_bar_time、output_json、
+  manifest_yaml、compiled_json、source_hash 等 Strategy 旧契约，不保留空兼容字段。
+  ListStrategyTargets 从当前 run 最近成功 Result 返回目标及 bar_end_time，不返回 sequence。
+- [ ] CLI validate 接受 DSL 文件，输出解析/绑定/编译错误位置，不再输出 API version、kind 或定义 hash。
+  无真实绑定时只报告语法校验，不能宣称可执行；启用必须完成实际依赖验证。
+- [ ] 管理台使用 dsl_yaml 编辑器和 rules 示例；展示 run_id、决策周期、目标、rule_states 解释、
+  计算与投递状态。删除 compiled JSON 页签、sequence 标签、Runner 结果指针和重复 name 编辑。
+  停用编辑约束由后端保证，不能只隐藏按钮。观察模式明确不投递。
+- [ ] Trade 资金单元页面同步移除目标序号，展示运行身份、周期及有效期；
+  将“恢复后继续收敛”改为仅对当前仍有效目标成立，不能暗示过期目标会恢复执行。
+- [ ] 扩展现有 API/默认配置/操作面板测试：新请求字段、未知旧字段拒绝、停用编辑、
+  重新启用 ID 改变、重复启用 ID 不变。Playwright 覆盖创建、启停、结果查看和异常提示；
+  延续现有紧凑管理界面，不增加营销页或策略收益承诺。
+- [ ] 生成并运行，预期 Go/Vitest/类型检查与构建均 PASS：
+
+```sh
+make -C modules/strategy/proto
+go test ./modules/strategy/proto/... ./modules/strategy/internal/rpc ./modules/strategy/cmd/cli
+pnpm --dir web test src/api/strategy.test.ts src/views/strategy/overview/strategy-create-defaults.test.ts src/views/strategy/components/strategy-operation-panel.test.ts
+pnpm --dir web test src/api/trade/trade.test.ts src/views/trading/logical-accounts/logical-account-contract.test.ts
+pnpm --dir web build:prod
+```
+
+### Task 10：集成验收与文档收口
+
+**修改：** `modules/strategy/test/strategy_trade_external_e2e_test.go`；
+`modules/strategy/internal/bootstrap/logical_account_external_e2e_test.go`；
+`modules/trade/test/strategy_target_e2e_test.go`；
+`scripts/test/e2e/test-strategy-trade-event-e2e.sh`；
+`scripts/test/e2e/test-strategy-trade-logical-account-e2e.sh`；
+`modules/strategy/docs/coin-selection-runtime.md`、`frontend-verification.md`；
+本设计文档、本计划及 `docs/策略模块架构设计.md` 的状态说明。
+仅有合同变化时更新相关部署合同测试，不在该任务执行远程部署。
+
+- [ ] 更新本地 E2E 夹具为新 DSL、共同 run_id 和期限字段；覆盖定时缺数后事件成功、
+  相同权重新期发布、信号跨期、后筛留空、旧 run/outbox 拒绝、Trade 执行前到期。
+- [ ] 保留真实 NATS 外部测试的 PASS 标记检查；被 Skip 不算通过。
+  使用现有本地隔离端口与临时数据目录，不读取生产账户配置。
+  本地 paper/mock 结果不能被描述为真实交易所成交验收。
+- [ ] 运行下列模块级门禁。根目录 `go test ./...` 不覆盖整个多模块仓库，不能替代这些命令：
+
+```sh
+go test ./modules/strategy/... ./modules/strategy/proto/strategygen/...
+go test ./modules/trade/... ./modules/trade/proto/tradegen/...
+go test ./packages/events/... ./packages/tradeeventpb/... ./packages/marketcalendar/...
+go test -race ./modules/strategy/internal/store ./modules/strategy/internal/trigger/...
+go test -race ./modules/trade/internal/eventconsumer ./modules/trade/internal/infra/store
+bash scripts/test/e2e/test-strategy-trade-event-e2e.sh
+bash scripts/test/e2e/test-strategy-trade-logical-account-e2e.sh
+pnpm --dir web test
+env -u MOOX_REMOTE_BASE_URL MOOX_REMOTE_PLAYWRIGHT=0 pnpm --dir web exec playwright test tests/strategy-console.spec.ts
+git diff --check
+```
+
+预期全部 PASS。环境缺失、跳过或外部依赖失败单独记录，不包装成代码通过。
+启动本地服务时按现有 Playwright 配置使用隔离环境；不得误用 remote 测试配置连接生产。
+
+- [ ] 运行残留扫描，并逐项区分“待删旧 Strategy 合同”与“必须保留的其他模块概念”：
+
+```sh
+rg -n 'command_sequence|last_result_id|run_generation|DecisionState|TheoryState|prev\.' modules/strategy modules/trade packages/tradeeventpb web/src/api/strategy* web/src/views/strategy web/src/api/trade web/src/views/trading/logical-accounts
+rg -n 'compiled_json|manifest_yaml|input_hash|api_version|ReadinessChecker' modules/strategy web/src/api/strategy* web/src/views/strategy
+```
+
+策略目标链不能再依赖旧序号/指针/定义 hash。其他模块输入 provenance、订单版本锁、
+不相关 API 版本或领域对象不因命中字符串而删除。
+
+- [ ] 用 codeCR 子 Agent 审查代码与测试，主 Agent 独立核验所有结论；存在独立调查任务时并行，
+  等待全部结束后汇总。重点检查缺数误清仓、旧 run 重投、同周期覆盖、后筛重分配、
+  状态恢复和订单提交前失效检查；未解决 P0/P1 不进入发布。
+- [ ] 在本计划逐项记录实际完成范围、命令、结果与提交号，再勾选对应任务。
+  设计文档标注已实现/仍未支持的能力；不复制原计划历史部署成功结论。
+- [ ] 对不兼容数据库/队列切换单列操作说明：先停用并撤销旧授权，停止旧消费者，
+  备份并确认旧数据处置、隔离旧消息，协调升级后再启用。未经用户授权，不执行清库或部署。
+
+## 四、完成标准
+
+只有以下条件同时满足，才可把本计划标记完成：
+
+- [ ] DSL 示例可在明确输入绑定下执行，定时与事件均走同一周期合同。
+- [ ] bars[0]/bars[-1]、初筛后标准化、top/tail、先分配后筛、信号/批次状态符合设计。
+- [ ] Runner 无 command_sequence/last_result_id，运行隔离和最近成功状态恢复仍可靠。
+- [ ] Strategy/Trade/协议/持久化/UI 同步使用 run_id、bar_end_time，不存在单边字段精简。
+- [ ] 所有必需规则成功才形成 FULL，Result/RuleState/outbox 原子；缺数不清仓。
+- [ ] 旧身份、旧周期、同 ID 改内容和过期目标不能启动新交易。
+- [ ] 本地测试、跨进程事件验证、独立审查及文档状态有本轮实施证据。
+- [ ] 生产发布与真实交易验证仍作为单独授权事项，不与本地计划完成混淆。

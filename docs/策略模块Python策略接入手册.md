@@ -3,9 +3,9 @@
 本文仅保留旧版 `moox.strategy/v1` Python `run-once + quantity` 契约，供迁移和历史数据
 解释使用，不定义当前 Strategy 的新接入方式。新策略应遵循
 [MooX 策略执行框架设计](策略执行框架设计.md)，采用声明式 `StrategyDef` 和
-FULL `target_weight` 输出；具体版本与能力以该设计为准，不代表当前实现已支持。
+FULL `target_weight` 输出；具体格式与能力以该设计为准，不代表当前实现已支持。
 [2026-08-29 实施计划](superpowers/plans/2026-08-29-moox-coin-selection-strategy.md)
-保留上一版施工记录，尚未按新版设计同步。
+已按新版设计同步为待执行任务，旧施工记录保留在 Git 历史中。
 
 > **禁止新增依赖：** 不要根据本页创建 Python entrypoint、`RunOnce`、`quantity` 或
 > V1 schema。若需要兼容旧策略，必须在独立迁移方案中明确转换范围和下线时间。
