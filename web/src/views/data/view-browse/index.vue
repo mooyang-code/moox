@@ -24,12 +24,10 @@
           <section class="view-status-line">
             <span>View: {{ activeView?.view_id || "-" }}</span>
             <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
-            <span>频率: {{ currentViewFrequency }}</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
             <a-tag size="small" :color="activeView?.active_index_id ? 'green' : 'orange'">
               {{ activeView?.active_index_id ? "已构建" : "未构建" }}
             </a-tag>
-            <span>{{ buildTimeText }}</span>
             <a-button type="text" size="mini" :loading="rebuildLogsLoading" @click="openRebuildLogs">日志</a-button>
             <a-button
               type="text"
@@ -42,7 +40,6 @@
               重建视图
             </a-button>
             <slot name="status-extra" />
-            <span v-if="activeView?.active_view_revision">活跃版本 {{ activeView.active_view_revision }}</span>
           </section>
 
           <a-alert v-if="queryError" class="query-alert" type="error" show-icon>{{ queryError }}</a-alert>
@@ -452,8 +449,6 @@ import {
   type OwnerModule,
   type ViewRole
 } from "@/views/data/shared/module-attribution";
-import { freqFromViewFilterJSON } from "@/views/data/views/view-form-utils";
-import { viewBuildTimeLabel } from "./view-build-time";
 import KlineModal from "./kline-modal.vue";
 import QueryControls from "./components/query-controls.vue";
 import ResultTable from "./components/result-table.vue";
@@ -596,7 +591,6 @@ const filterOperatorSymbols: Record<ViewFilterOperator, string> = {
 };
 
 const activeView = computed(() => visibleViews.value.find(item => item.view_id === activeViewId.value));
-const buildTimeText = computed(() => viewBuildTimeLabel(activeView.value));
 const primaryDataset = computed(() => datasets.value.find(item => item.dataset_id === activeView.value?.primary_dataset_id));
 const currentDatasetName = computed(() => {
   const dataset = primaryDataset.value;
@@ -604,7 +598,6 @@ const currentDatasetName = computed(() => {
   return dataset.name || dataset.dataset_id;
 });
 const currentDatasetId = computed(() => activeView.value?.primary_dataset_id || "-");
-const currentViewFrequency = computed(() => freqFromViewFilterJSON(activeView.value?.filter_json) || "-");
 
 const mode = computed(() => viewModeFromPrimaryDataset(datasets.value, activeView.value?.primary_dataset_id));
 const modeText = computed(() => {

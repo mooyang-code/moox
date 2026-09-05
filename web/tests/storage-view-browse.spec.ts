@@ -28,6 +28,14 @@ describe("storage view browse workflows", () => {
     expect(source).toContain("hasExactSubjectIDFilter()");
   });
 
+  it("keeps the view status line focused on identity and actions", () => {
+    const source = readFileSync(resolve(__dirname, "../src/views/data/view-browse/index.vue"), "utf8");
+
+    expect(source).not.toContain("频率: {{ currentViewFrequency }}");
+    expect(source).not.toContain("{{ buildTimeText }}");
+    expect(source).not.toContain("活跃版本 {{ activeView.active_view_revision }}");
+  });
+
   it("selects the first remaining view when the active view disappears", () => {
     const catalog = useViewCatalog<{ view_id: string }>();
     catalog.replaceViews([{ view_id: "view-a" }, { view_id: "view-b" }]);
