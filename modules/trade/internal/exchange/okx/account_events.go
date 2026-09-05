@@ -230,14 +230,14 @@ func (a *Adapter) dispatchPrivate(
 	case "orders":
 		var rows []struct {
 			orderPayload
-			TradeID  string `json:"tradeId"`
-			FillSz   string `json:"fillSz"`
-			FillPx   string `json:"fillPx"`
-			Fee      string `json:"fee"`
-			FeeCcy   string `json:"feeCcy"`
-			FillPnl  string `json:"fillPnl"`
-			ExecType string `json:"execType"`
-			FillTime string `json:"fillTime"`
+			TradeID    string `json:"tradeId"`
+			FillSz     string `json:"fillSz"`
+			FillPx     string `json:"fillPx"`
+			FillFee    string `json:"fillFee"`
+			FillFeeCcy string `json:"fillFeeCcy"`
+			FillPnl    string `json:"fillPnl"`
+			ExecType   string `json:"execType"`
+			FillTime   string `json:"fillTime"`
 		}
 		if err := json.Unmarshal(message.Data, &rows); err != nil {
 			return rejected("decode private orders", err)
@@ -258,8 +258,8 @@ func (a *Adapter) dispatchPrivate(
 				OrdID: row.OrdID, ClOrdID: row.ClOrdID,
 				Side: row.Side, PosSide: row.PosSide,
 				FillSz: row.FillSz, FillPx: row.FillPx,
-				Fee: row.Fee, FeeCcy: row.FeeCcy,
-				FillPnl: row.FillPnl, ExecType: row.ExecType, Ts: row.FillTime,
+				Fee: row.FillFee, FeeCcy: row.FillFeeCcy,
+				FillPnl: row.FillPnl, ExecType: row.ExecType, FillTime: row.FillTime,
 			})
 			if err != nil {
 				return err

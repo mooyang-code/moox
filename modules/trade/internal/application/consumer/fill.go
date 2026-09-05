@@ -221,14 +221,13 @@ func validateFillInput(r *Reducer, fill exchange.Fill, source Source) error {
 			strings.TrimSpace(fill.ExchangeOrderID) == "") ||
 		!fill.Side.Valid() ||
 		fill.Quantity.Cmp(shared.Zero()) <= 0 ||
-		fill.Price.Cmp(shared.Zero()) <= 0 ||
-		fill.Fee.IsNegative() {
+		fill.Price.Cmp(shared.Zero()) <= 0 {
 		return errors.New("trade: incomplete normalized Fill")
 	}
 	if fill.TradedAt.IsZero() || fill.TradedAt.UnixMilli() <= 0 {
 		return errors.New("trade: Fill traded time is required")
 	}
-	if fill.Fee.Cmp(shared.Zero()) > 0 && strings.TrimSpace(fill.FeeAsset) == "" {
+	if fill.Fee.Cmp(shared.Zero()) != 0 && strings.TrimSpace(fill.FeeAsset) == "" {
 		return errors.New("trade: Fill fee asset is required")
 	}
 	return nil

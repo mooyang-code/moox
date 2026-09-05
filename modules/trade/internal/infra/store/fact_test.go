@@ -482,7 +482,7 @@ func TestInsertFillValidatesDecimalsAndCanonicalizesReplay(t *testing.T) {
 	}{
 		{"price zero", func(v *FillRecord) { v.Price = "0" }},
 		{"quantity negative", func(v *FillRecord) { v.Quantity = "-1" }},
-		{"fee negative", func(v *FillRecord) { v.Fee = "-1" }},
+		{"fee malformed", func(v *FillRecord) { v.Fee = "rebate" }},
 		{"realized malformed", func(v *FillRecord) { v.RealizedPnL = "many" }},
 	}
 	for _, tt := range tests {

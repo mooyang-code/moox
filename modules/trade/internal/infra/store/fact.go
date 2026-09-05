@@ -1123,12 +1123,10 @@ func (tx *Tx) resolveDuplicateFill(
 		existing.Role != want.Role || existing.TradedAt != want.TradedAt {
 		return false, fmt.Errorf("%w: conflicting immutable Fill replay", conflict)
 	}
-	if !canonicalReplay && (existing.OrderID != want.OrderID || existing.ExchangeOrderID != want.ExchangeOrderID) {
+	if existing.OrderID != want.OrderID || existing.ExchangeOrderID != want.ExchangeOrderID {
 		return false, fmt.Errorf("%w: conflicting immutable Fill order replay", conflict)
 	}
-	// The unique Exchange trade identity is authoritative. Older Paper
-	// snapshots can replay the same trade with a generated fill/order ID;
-	// treating the row as an idempotent replay avoids re-applying the fill.
+	// A trade identity can only replay the same immutable facts and order.
 	return false, nil
 }
 
@@ -1505,7 +1503,7 @@ func canonicalizeFill(record *FillRecord) error {
 	if err != nil {
 		return err
 	}
-	record.Fee, err = canonicalDefaultZero(record.Fee, "Fill fee", decimalNonNegative)
+	record.Fee, err = canonicalDefaultZero(record.Fee, "Fill fee", decimalSigned)
 	if err != nil {
 		return err
 	}
