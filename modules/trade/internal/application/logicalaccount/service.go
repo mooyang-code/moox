@@ -403,8 +403,9 @@ func (s *Service) ClaimSession(
 	var fence string
 	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		var err error
-		fence, err = tx.ClaimLogicalAccountSession(spaceID, logicalAccountID, instanceID, sessionID, expectedFence)
-		if err != nil {
+		var changed bool
+		fence, changed, err = tx.ClaimLogicalAccountSession(spaceID, logicalAccountID, instanceID, sessionID, expectedFence)
+		if err != nil || !changed {
 			return err
 		}
 		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
@@ -432,8 +433,9 @@ func (s *Service) RebindSession(
 	var fence string
 	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		var err error
-		fence, err = tx.RebindLogicalAccountSession(spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID)
-		if err != nil {
+		var changed bool
+		fence, changed, err = tx.RebindLogicalAccountSession(spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID)
+		if err != nil || !changed {
 			return err
 		}
 		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
@@ -631,7 +633,18 @@ func (s *Service) readiness(
 	)
 	switch {
 	case targetErr == nil:
-		if target.RunnerID != logicalAccount.OwnerRunnerID {
+		modern := target.InstanceID != "" || target.SessionID != "" || target.BarEndTime != 0 || target.ValidUntil != 0
+		if modern {
+			if target.InstanceID == "" || target.SessionID == "" ||
+				target.InstanceID != logicalAccount.OwnerInstanceID || target.SessionID != logicalAccount.OwnerSessionID {
+				reasons = append(reasons, "target session does not own logical account")
+			}
+			// Resume enables automation, not an expired target. Execution waits
+			// for the next valid target and checks its validity window itself.
+			if now.UnixMilli() >= target.ValidUntil {
+				break
+			}
+		} else if target.RunnerID != logicalAccount.OwnerRunnerID {
 			reasons = append(reasons, "target runner does not own logical account")
 		}
 		for _, desired := range target.Targets {
@@ -643,7 +656,8 @@ func (s *Service) readiness(
 			}
 		}
 	case errors.Is(targetErr, gorm.ErrRecordNotFound):
-		if logicalAccount.OwnerRunnerID != "" {
+		if logicalAccount.OwnerRunnerID != "" &&
+			(logicalAccount.OwnerInstanceID == "" || logicalAccount.OwnerSessionID == "") {
 			reasons = append(reasons, "owner runner has no current target")
 		}
 	default:

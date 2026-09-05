@@ -358,25 +358,26 @@ func (tx *Tx) ReleaseLogicalAccountOwner(spaceID, logicalAccountID, runnerID str
 // auth_fence and is mandatory for the V2 session path. Keeping it out of the
 // public target contract makes delayed management calls harmless even when a
 // new session has already claimed the account. The returned fence is the value
-// to retain for the next CAS.
+// to retain for the next CAS. changed is false for an identical session retry
+// with the current fence, so callers retain its already-accepted target.
 func (tx *Tx) ClaimLogicalAccountSession(
 	spaceID, logicalAccountID, instanceID, sessionID, expectedFence string,
-) (string, error) {
+) (string, bool, error) {
 	if blank(spaceID) || blank(logicalAccountID) || blank(instanceID) || blank(sessionID) || blank(expectedFence) {
-		return "", fmt.Errorf("%w: session authorization identity and expected auth fence are required", ErrInvalidRecord)
+		return "", false, fmt.Errorf("%w: session authorization identity and expected auth fence are required", ErrInvalidRecord)
 	}
 	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if account.AuthFence != expectedFence {
-		return "", fmt.Errorf("%w: session authorization fence changed", ErrConflict)
+		return "", false, fmt.Errorf("%w: session authorization fence changed", ErrConflict)
 	}
 	if account.OwnerInstanceID == instanceID && account.OwnerSessionID == sessionID {
-		return account.AuthFence, nil
+		return account.AuthFence, false, nil
 	}
 	if account.OwnerInstanceID != "" || account.OwnerSessionID != "" {
-		return "", fmt.Errorf("%w: logical account is owned by another session", ErrConflict)
+		return "", false, fmt.Errorf("%w: logical account is owned by another session", ErrConflict)
 	}
 	fence := newAuthFence()
 	result := tx.db.Exec(`
@@ -389,38 +390,39 @@ func (tx *Tx) ClaimLogicalAccountSession(
 		  AND c_auth_fence = ?
 	`, instanceID, sessionID, fence, spaceID, logicalAccountID, account.AuthFence)
 	if result.Error != nil {
-		return "", writeError(result.Error)
+		return "", false, writeError(result.Error)
 	}
 	if result.RowsAffected != 1 {
-		return "", fmt.Errorf("%w: session authorization claim lost compare-and-set", ErrConflict)
+		return "", false, fmt.Errorf("%w: session authorization claim lost compare-and-set", ErrConflict)
 	}
-	return fence, nil
+	return fence, true, nil
 }
 
 // RebindLogicalAccountSession switches an existing instance to a new session
 // only when the complete old identity and fence still match. It is useful for
 // explicit re-enable/rebind operations and intentionally does not revive an
-// account that another instance has claimed in the meantime.
+// account that another instance has claimed in the meantime. changed is false
+// when the requested new identity already owns the account with this fence.
 func (tx *Tx) RebindLogicalAccountSession(
 	spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence,
 	newInstanceID, newSessionID string,
-) (string, error) {
+) (string, bool, error) {
 	if blank(oldInstanceID) || blank(oldSessionID) || blank(expectedFence) || blank(newInstanceID) || blank(newSessionID) {
-		return "", fmt.Errorf("%w: session authorization identity and expected auth fence are required", ErrInvalidRecord)
+		return "", false, fmt.Errorf("%w: session authorization identity and expected auth fence are required", ErrInvalidRecord)
 	}
 	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if account.AuthFence != expectedFence {
-		return "", fmt.Errorf("%w: stale session authorization rebind", ErrConflict)
+		return "", false, fmt.Errorf("%w: stale session authorization rebind", ErrConflict)
 	}
 	if account.OwnerInstanceID == newInstanceID && account.OwnerSessionID == newSessionID {
-		return account.AuthFence, nil
+		return account.AuthFence, false, nil
 	}
 	if account.OwnerInstanceID != oldInstanceID || account.OwnerSessionID != oldSessionID ||
 		account.AuthFence != expectedFence {
-		return "", fmt.Errorf("%w: stale session authorization rebind", ErrConflict)
+		return "", false, fmt.Errorf("%w: stale session authorization rebind", ErrConflict)
 	}
 	fence := newAuthFence()
 	result := tx.db.Exec(`
@@ -433,12 +435,12 @@ func (tx *Tx) RebindLogicalAccountSession(
 	`, newInstanceID, newSessionID, fence, spaceID, logicalAccountID,
 		oldInstanceID, oldSessionID, account.AuthFence)
 	if result.Error != nil {
-		return "", writeError(result.Error)
+		return "", false, writeError(result.Error)
 	}
 	if result.RowsAffected != 1 {
-		return "", fmt.Errorf("%w: session authorization rebind lost compare-and-set", ErrConflict)
+		return "", false, fmt.Errorf("%w: session authorization rebind lost compare-and-set", ErrConflict)
 	}
-	return fence, nil
+	return fence, true, nil
 }
 
 // ReleaseLogicalAccountSession releases only the expected identity and fence. Releasing
