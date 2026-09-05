@@ -49,9 +49,9 @@ RPC 链路。上述验证仍是本机临时部署/内存测试，不包含正式
 仍使用 `durable` 配置键而停止。该检查与本策略改动无关，本轮不放宽该全局门禁，也不将
 `verify-pr` 记为通过；正式发布仍须由维护者先处理该独立门禁。
 
-正式主机发布也已尝试核验：`ubuntu@106.53.107.122` 的 SSH 公钥认证被拒绝，GitHub
-self-hosted runner `moox-106-53-107-122` 当前为 offline；因此没有执行正式部署、重启服务或
-触碰真实账户/订单。
+正式主机发布也已尝试核验：`ubuntu@106.53.107.122` 的 SSH 公钥认证被拒绝；GitHub Actions
+当前没有登记可用的 self-hosted runner（API 返回 `total_count=0`）。因此没有执行正式部署、
+重启服务或触碰真实账户/订单。
 
 `test-factor-storage-e2e.sh` 默认不接管已有 `storage-view` 进程；运行前须让该进程以
 `MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES` 包含测试 Space 启动，或由部署所有者显式设置
