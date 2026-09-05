@@ -41,6 +41,8 @@ CI 门禁。另行运行 `test-strategy-trade-event-e2e.sh` 与
 `test-strategy-trade-logical-account-e2e.sh`，已通过隔离 NATS 的发布者→Trade 消费者和会话授权
 RPC 链路。上述验证仍是本机临时部署/内存测试，不包含正式主机发布、真实账户或实际下单；使用
 真实 Strategy 进程、独立 Trade/EventBus 与真实执行账户的联合 E2E 仍需单独环境。
+本地使用 `SKIP_WEB_ASSETS=1` 构建 `darwin/arm64` 发布包也已成功，产物仅用于构建验收，不能替代
+生产目标架构的发布包。
 
 仓库级 `make verify-pr` 已尝试运行：`proto-check` 和 greenfield contract 通过，随后在既有
 `scripts/check/verify-event-contracts.sh` 的 Storage 配置检查处因 `modules/storage/config/**`
