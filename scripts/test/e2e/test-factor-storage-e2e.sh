@@ -72,6 +72,35 @@ require_file "${DEPLOY_ROOT}/secrets/storage-internal-auth.env"
 require_file "${DEPLOY_ROOT}/secrets/storage-node-auth.env"
 require_file "${DEPLOY_ROOT}/certs/gateway/peers.pem"
 
+# Read deployment-owned storage credentials before an optional View restart.
+# The package-local start script stops the old process first and otherwise
+# cannot recover from a missing environment variable.
+storage_primary_secret="$(
+  bash -c 'set -u; source "$1"; printf "%s" "${MOOX_STORAGE_PRIMARY_AUTH_SECRET-}"' \
+    _ "${DEPLOY_ROOT}/secrets/storage-internal-auth.env"
+)"
+[[ -n "${storage_primary_secret}" && "${storage_primary_secret}" != *$'\n'* && "${storage_primary_secret}" != *$'\r'* ]] ||
+  fail "storage-internal-auth.env must contain one MOOX_STORAGE_PRIMARY_AUTH_SECRET"
+storage_view_secret="$(
+  bash -c 'set -u; source "$1"; printf "%s" "${MOOX_STORAGE_VIEW_AUTH_SECRET-}"' \
+    _ "${DEPLOY_ROOT}/secrets/storage-internal-auth.env"
+)"
+[[ -n "${storage_view_secret}" && "${storage_view_secret}" != *$'\n'* && "${storage_view_secret}" != *$'\r'* ]] ||
+  fail "storage-internal-auth.env must contain one MOOX_STORAGE_VIEW_AUTH_SECRET"
+storage_node_secret="$(
+  bash -c 'set -u; source "$1"; printf "%s" "${MOOX_STORAGE_NODE_AUTH_SECRET-}"' \
+    _ "${DEPLOY_ROOT}/secrets/storage-node-auth.env"
+)"
+[[ -n "${storage_node_secret}" && "${storage_node_secret}" != *$'\n'* && "${storage_node_secret}" != *$'\r'* ]] ||
+  fail "storage-node-auth.env must contain one MOOX_STORAGE_NODE_AUTH_SECRET"
+storage_eventbus_url="${MOOX_STORAGE_EVENTBUS_URL:-}"
+if [[ -z "${storage_eventbus_url}" && -r "/proc/$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")/environ" ]]; then
+  storage_eventbus_url="$(tr '\0' '\n' <"/proc/$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")/environ" | sed -n 's/^MOOX_STORAGE_EVENTBUS_URL=//p' | head -1)"
+fi
+if [[ -z "${storage_eventbus_url}" ]]; then
+  storage_eventbus_url="${factor_eventbus_url:-}"
+fi
+
 # View wildcard discovery is fixed at process startup. A caller that owns the
 # local deployment may opt into a controlled storage-view restart so the
 # temporary E2E space is in its explicit allow-list. Without that opt-in, the
@@ -91,6 +120,7 @@ else
 fi
 e2e_allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-}"
 if [[ "${restart_storage_view}" == "1" ]]; then
+  [[ -n "${storage_eventbus_url}" ]] || fail "MOOX_STORAGE_EVENTBUS_URL is required when restarting storage-view"
   if [[ -n "${e2e_allowed_spaces}" ]]; then
     # Preserve operator-provided entries while ensuring this run's Space is
     # actually consumed by the freshly started View process.
@@ -110,10 +140,18 @@ if [[ "${restart_storage_view}" == "1" ]]; then
   if [[ -r "${storage_view_credential_file}" ]]; then
     env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
       MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE="${storage_view_credential_file}" \
+      MOOX_STORAGE_EVENTBUS_URL="${storage_eventbus_url}" \
+      MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}" \
+      MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}" \
+      MOOX_STORAGE_NODE_AUTH_SECRET="${storage_node_secret}" \
       MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${e2e_allowed_spaces}" \
       "${storage_view_command[@]}"
   else
     env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
+      MOOX_STORAGE_EVENTBUS_URL="${storage_eventbus_url}" \
+      MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}" \
+      MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}" \
+      MOOX_STORAGE_NODE_AUTH_SECRET="${storage_node_secret}" \
       MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${e2e_allowed_spaces}" \
       "${storage_view_command[@]}"
   fi
