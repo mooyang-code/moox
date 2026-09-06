@@ -252,6 +252,11 @@ func disableSeedServices(seed *serviceDeploymentSeed, raw string) error {
 	for i := range seed.Services {
 		if requested[seed.Services[i].Name] {
 			seed.Services[i].Status = "disabled"
+			// Disabled services must not contribute routes to the gateway
+			// snapshot. Keep the deployment row for inventory/reconciliation,
+			// but clear its route identity before validating the seed.
+			seed.Services[i].GatewayEnabled = false
+			seed.Services[i].GatewayService = ""
 			delete(requested, seed.Services[i].Name)
 		}
 	}

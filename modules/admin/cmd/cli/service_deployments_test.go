@@ -439,14 +439,18 @@ func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
 func TestDisableSeedServicesUsesDeploymentProfile(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml"))
 	require.NoError(t, err)
-	require.NoError(t, disableSeedServices(&seed, "moox_archive, moox_factor,moox_strategy"))
+	require.NoError(t, disableSeedServices(&seed, "moox_archive, moox_factor,moox_strategy,trade_owner"))
 	statuses := map[string]string{}
+	gatewayEnabled := map[string]bool{}
 	for _, service := range seed.Services {
 		statuses[service.Name] = service.Status
+		gatewayEnabled[service.Name] = service.GatewayEnabled
 	}
 	require.Equal(t, "disabled", statuses["moox_archive"])
 	require.Equal(t, "disabled", statuses["moox_factor"])
 	require.Equal(t, "disabled", statuses["moox_strategy"])
+	require.Equal(t, "disabled", statuses["trade_owner"])
+	require.False(t, gatewayEnabled["trade_owner"])
 	require.Equal(t, "active", statuses["moox_monitor"])
 	require.ErrorContains(t, disableSeedServices(&seed, "missing"), "unknown services")
 }
