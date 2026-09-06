@@ -348,6 +348,10 @@ expected: buy 1 on B; no sell on B; receipt quantity remains 2
 - [ ] 控制模式校验贯穿 Consumer 估值前、Store 原子受理与 receipt 回放前、Executor 收敛和 OrderService 实际提交前；不能只在 Claim/RPC 检查。分别测试直接调用 Store、重放旧 receipt 和恢复已存在的 PENDING 目标订单均不能绕过 MANUAL 边界。读取账户失败保留可重试的基础设施错误，只把真实模式冲突归类为永久授权拒绝。
 - [ ] 新 SubmitOrder RPC 不等待交易所 POST 或最终成交，也不触发撤单；必要的行情与本地风控检查有超时。响应含 action、order ID 和实际受理状态，`RetInfo=0` 只说明成功受理。正常初次返回 RUNNING/PENDING；后台已推进时返回实际状态。ACCEPTED 仅是本文的受理描述，不增加同名 action/order 状态。
 - [ ] 同时覆盖锁等待的响应边界：当前 `infra/store/store.go` 的组合锁和执行账户锁使用 `sync.Mutex.Lock`，仅设置 RPC/行情 context 不能取消排队。普通受理路径使用可取消的同一锁注册表，不能另建一套不互斥的锁；测试持锁时请求超时返回、无 action/order/预占写入，以及释放后后续请求成功。不在持锁等待期间启动遗留 goroutine。
+- [ ] 账户不可用的验收使用生产 `account.Service.ExecutionEligibility`，不能只使用自定义错误的替身。初次受理发现账户禁用时拒绝且不创建 action/order；已受理后禁用或暂未就绪时停止新提交，保留 RUNNING 至恢复或绝对截止时间，未知订单仍只查询。此类账户级条件不降低全局 readiness；数据库读取或写入失败仍必须暴露。
+- [ ] 错误分类覆盖组合错误：交易所余额拒绝与后置账户同步的数据库故障同时发生时，允许保留订单的 REJECTED 事实，但不能因 `errors.As` 命中账户错误而吞掉另一分支的存储故障。增加组合故障回归，断言 worker 能观察到数据库错误，不以业务终态代替基础设施健康判断。
+- [ ] 增加依赖确实等待到 `ctx.Done()` 才返回的行情、下单及恢复测试。请求截止后不再启动交易副作用；仅允许失败诊断用 `context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)` 做一次有界持久化，不用该上下文继续下单。诊断写入同时失败时保留原始错误和存储错误，不能用后者覆盖前者。
+- [ ] 已持久创建 action 后，任何错误响应都保留其 action ID；已有 child 时保留 order ID。增加“下单失败且诊断写入也失败”的双故障测试，验证 RPC 与 Web 错误对象仍携带恢复身份，客户端继续查询或使用原 key 重试，不生成新 key。
 - [ ] 上述快速响应要求不改变显式接管的顺序：PlaceManualOrder 仍须先暂停并确认策略订单已撤销，再创建 child。取消尚未确认时 action 可以 RUNNING 且没有 order ID，不承诺两种接口都能立即返回 child；未知恢复继续遵守 T03。
 
 ```text
