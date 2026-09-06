@@ -20,6 +20,15 @@
 
 ## 一、范围与决策
 
+### 1.0 本次交付与阅读入口
+
+本次按“先生成修改执行计划、先不要编码”的要求，仅维护本文档。核对基线为 `df69020d603ae13e65c219936b5a818bed38fc5d`；其他工作区的代码、测试及审查结果不自动算作本分支完成项。保留现有未提交修改，不继续实现、不运行部署、不触发交易。
+
+- 先读 1.2、1.3、1.5，确认设计选择、安全边界及三项能力的交付合同。
+- T01-T07 对应执行正确性；T08-T10 对应架构和接口收敛；T11 及第五节规定验收和发布门禁。
+- 每个任务已有文件范围、执行步骤和验收条件。实施前重新验证问题是否仍存在，避免重复修复或覆盖其他分支的有效修改。
+- 本次额外补齐 T10.1 的实际节点路由注册和配置启动期校验；仅客户端配置正确或手工构造 Gateway snapshot 的测试通过，不代表正式部署可用。
+
 ### 1.1 执行分期
 
 | 阶段 | 任务 | 目的 | 开始条件 |
@@ -418,6 +427,10 @@ GetOrder / GetOperatorAction -> current facts, never infer fill from RPC success
 - [ ] 最终自动交易事件只接受完整现代身份、bar_end_time、effective_at、valid_until 与 target_weight；删掉旧数量事件执行入口、legacy owner generation/command sequence 的授权 fallback。历史结果和交易事实不因此删除。
 - [ ] 本任务只处理执行边界及直接调用方，不重写 Strategy DSL、因子、选股或调度实现。Strategy 同时在修改时先对齐实际契约；无法闭合直接调用链则停止该切换，不把半完成接口作为已交付版本。
 - [ ] **T10.1：补齐独立 Trade 接线。** 当前 `bootstrap/config.go:63` 默认本机 `11200`，`logical_account.go:newLogicalAccountOwnerClient` 使用直接 HTTP，部署契约又允许 Strategy 不部署 Trade。为 Trade 依赖显式配置 Gateway target、接收节点 ID、caller 凭据及 timeout，复用现有签名客户端，不新增旁路认证。Trade 依赖配置不得被通用本机 `MOOX_SERVICE_GATEWAY_TARGET/MOOX_GATEWAY_TARGET_NODE` 无条件覆盖；渲染部署配置与实际注册节点保持一致，不能把服务名当作签名节点 ID。
+- [ ] **配置必须在启动期校验。** 新增 Trade Gateway URL/node 配置时，只有两者都空才允许显式未接线状态；仅 URL、仅 node、非法节点标识、非正 timeout 均在加载配置时失败。远端要求 HTTPS 和可信 CA，本地测试可使用 loopback HTTP。YAML 与专用环境变量采用同一校验规则，部署脚本不能比应用本身多出一套相矛盾的规则。测试覆盖两种缺半配置及环境变量覆盖后变成不完整配置的情况。
+- [ ] **同时补齐两条实际注册链。** 核对 `scripts/deploy/deploy-moox.sh:start_admin` 和 `modules/cli/internal/command/setup.go` 的 `setup deploy-service trade`，以及 `modules/cli/internal/setup/client/registry.go`、`modules/admin/internal/service/sysdeploy/defaults.go`、`config/setup/service-deployments.yaml`。当前前者的远端导入只包含 `trade_dns_resolver`，后者只注册 Trade 服务及浏览器 Console；新增 ownership 路由必须落在实际接收节点，不能只在 Admin 本节点 seed 增加一行。推荐独立最小方法路由 `trade_owner`，复用现有 Trade HTTP Console 上游，不新增监听端口，不把远端节点无关的本机服务一起导入，也不改变浏览器 `trade_console` 的既有职责。
+- [ ] **注册必须可重放并处理失败。** 为目标节点导入或更新 ownership 路由后，核验该节点编译出的 snapshot 的服务 ID、HTTP 上游、允许方法和 caller；重复发布不得产生重复行。DNS resolver 关闭时仍能独立注册 ownership 路由。部分注册失败不得返回 `RegistrySynced=true`，按现行发布流程停止或回退本次启用的服务，保留可重试错误；不撤销其他节点有效路由。
+- [ ] **增加部署闭环测试。** 扩展 `scripts/test/contract/test-deploy-moox-strategy.sh` 验证目标配置持久化；在 `modules/admin/cmd/cli/service_deployments_test.go` 使用真实 CLI 导入临时 SQLite，并调用 `CompileGatewaySnapshot` 检查指定 Trade 节点得到预期最小路由、Admin 节点不被错误作为目标。为 setup-client 注册补测试，覆盖独立节点、重复注册、无 DNS resolver、注册失败。更新 seed 数量断言时，同时保留逐字段默认合同检查，不能仅改数量让测试通过。
 - [ ] T10.1 先增加失败测试：Strategy 所在节点没有 Trade，目标在另一 Gateway；请求经生产客户端和 Gateway 转发仍可 Get/Claim/Release 现代身份，保留的现代 Rebind 管理入口也通过其授权调用方验证。验证 Space 元数据在签名和转发后保留；错误签名、错误节点、跨 Space、未授权方法均拒绝。按最终调用图列出 caller-method ACL，Strategy 只获得运行必需的方法，不因修复连通性而开放人工下单等全部 Trade 方法。部署契约覆盖生成配置和凭据注入，日志不输出 secret。
 - [ ] Gateway 与现代协议作为同一切换批次：先暂停并处置 legacy owner，完成新 session 授权前不得恢复策略；删除 `bootstrap.go` 启动及周期调用的 `ReconcileLegacyOwners` 和旧 Rebind 客户端路径后，再验收最终最小 ACL。不把依赖 legacy Rebind 的旧启动代码与现代方法白名单混合发布，也不为此保留长期旧协议。T02/T11 的 Rebind 用例明确验证现代 session CAS，不用旧 runner rebind 代替。
 - [ ] **T10.2：明确创建与启用失败恢复。** `rpc/service.go:CreateStrategyInstance` 已先保存 disabled 实例/session 再 Claim，但后置错误响应没有实例。持久创建后的任何错误必须返回可查询的 instance ID 和已知状态；查库失败时只返回可靠身份，不伪造 enabled/session 状态。Claim 超时保留 disabled/session 证据，明确拒绝才可受控清理该 session；清理失败也必须暴露，禁止删除实例来掩盖未知远端认领。
