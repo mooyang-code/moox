@@ -13,6 +13,13 @@ const adminClient = axios.create({
 });
 const reportedErrors = new WeakSet<object>();
 
+export class ControlRequestError<T = unknown> extends Error {
+  constructor(message: string, public readonly response?: ControlResponse<T>) {
+    super(message);
+    this.name = "ControlRequestError";
+  }
+}
+
 export function reportControlError(error: unknown) {
   if (typeof error === "object" && error !== null && reportedErrors.has(error)) return;
   const message = error instanceof Error ? error.message : String(error || "Control 请求失败");
@@ -31,7 +38,7 @@ function assertControlSuccess<T>(rsp: ControlResponse<T>): T {
   }
   const retCode = rsp.ret_info.code;
   if (!isRetInfoSuccess(retCode)) {
-    throw new Error(rsp.ret_info.msg || `control request failed: ${retCode}`);
+    throw new ControlRequestError(rsp.ret_info.msg || `control request failed: ${retCode}`, rsp);
   }
   return rsp as T;
 }
@@ -64,7 +71,7 @@ adminClient.interceptors.response.use(
   error => {
     const data = error?.response?.data as ControlResponse<unknown> | undefined;
     const message = data?.ret_info?.msg || error?.message || "Control 请求失败";
-    const reportedError = new Error(message);
+    const reportedError = new ControlRequestError(message, data);
     reportControlError(reportedError);
     return Promise.reject(reportedError);
   }

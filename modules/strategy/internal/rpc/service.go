@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -533,6 +534,9 @@ func (s *Service) UpdateRunner(ctx context.Context, req *strategypb.UpdateRunner
 	if err := ensureRunnerScope(ctx, current); err != nil {
 		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
 	}
+	if err := s.ensureLegacyRunner(ctx, current); err != nil {
+		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
+	}
 	if current.Status != domain.RunnerStatusDisabled {
 		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(store.ErrRunnerEnabled)}, nil
 	}
@@ -774,13 +778,18 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 	}
 	unlockStrategy := s.lockStrategy(v.GetStrategyId())
 	defer unlockStrategy()
-	if _, err := s.Repo.GetStrategyDefinition(ctx, v.GetStrategyId()); err != nil {
-		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
-	}
 	now := s.nowTime()
 	instance := store.StrategyInstance{InstanceID: v.GetInstanceId(), StrategyID: v.GetStrategyId(), SpaceID: v.GetSpaceId(), InputBindingsJSON: json.RawMessage(v.GetInputBindingsJson()), LogicalAccountID: optionalString(v.GetLogicalAccountId()), Enabled: false, CreatedAt: now, UpdatedAt: now}
 	if instance.InstanceID == "" || instance.StrategyID == "" {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("instance_id and strategy_id are required"))}, nil
+	}
+	if existing, err := s.Repo.GetInstance(ctx, instance.InstanceID); err == nil {
+		return createInstanceRetryResponse(existing, instance, v.GetEnabled()), nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
+	}
+	if _, err := s.Repo.GetStrategyDefinition(ctx, v.GetStrategyId()); err != nil {
+		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
 	}
 	if v.GetEnabled() {
 		if instance.LogicalAccountID != nil {
@@ -824,30 +833,89 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 		instance.SessionID = &session
 	}
 	if err := s.Repo.CreateInstance(ctx, instance); err != nil {
+		// Another service may have inserted the ID after the initial lookup.
+		// Only matching configuration may expose that durable identity.
+		if existing, getErr := s.Repo.GetInstance(ctx, instance.InstanceID); getErr == nil {
+			return createInstanceRetryResponse(existing, instance, v.GetEnabled()), nil
+		}
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
+	}
+	// Creation is already durable. Report its identity even when the later
+	// enable handshake fails, including for clients that keep only the message.
+	createdFailure := func(err error) (*strategypb.CreateStrategyInstanceRsp, error) {
+		current, getErr := s.Repo.GetInstance(ctx, instance.InstanceID)
+		if getErr != nil {
+			return &strategypb.CreateStrategyInstanceRsp{
+				RetInfo:  invalid(fmt.Errorf("strategy instance %q was created; state unavailable, inspect the instance before using SetStrategyInstanceEnabled: %w", instance.InstanceID, errors.Join(err, fmt.Errorf("read created instance: %w", getErr)))),
+				Instance: &strategypb.StrategyInstance{InstanceId: instance.InstanceID, StrategyId: instance.StrategyID, SpaceId: instance.SpaceID},
+			}, nil
+		}
+		return &strategypb.CreateStrategyInstanceRsp{
+			RetInfo:  invalid(fmt.Errorf("strategy instance %q was created; inspect the instance and use SetStrategyInstanceEnabled to change enabled state: %w", instance.InstanceID, err)),
+			Instance: instanceProto(current),
+		}, nil
 	}
 	if v.GetEnabled() {
 		if instance.LogicalAccountID != nil {
 			owner, ok := s.LogicalAccounts.(LogicalAccountSessionOwner)
 			if !ok {
-				return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("logical account session owner is unavailable"))}, nil
+				return createdFailure(errors.New("logical account session owner is unavailable"))
 			}
 			if err := owner.ClaimSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID); err != nil {
 				if isPermanentOwnerClaimError(err) {
-					_ = s.Repo.ClearInstanceSession(ctx, instance.InstanceID, *instance.SessionID, now)
+					if clearErr := s.Repo.ClearInstanceSession(ctx, instance.InstanceID, *instance.SessionID, now); clearErr == nil {
+						instance.SessionID = nil
+					} else {
+						err = errors.Join(err, fmt.Errorf("clear rejected session: %w", clearErr))
+					}
 				}
-				return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
+				return createdFailure(err)
 			}
 		}
 		if err := s.Repo.SetInstanceEnabled(ctx, instance.InstanceID, true, instance.SessionID, now); err != nil {
-			return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
+			return createdFailure(err)
 		}
+		instance.Enabled = true
 	}
 	created, err := s.Repo.GetInstance(ctx, instance.InstanceID)
 	if err != nil {
-		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
+		return createdFailure(err)
 	}
 	return &strategypb.CreateStrategyInstanceRsp{RetInfo: success(), Instance: instanceProto(created)}, nil
+}
+
+func createInstanceRetryResponse(existing, requested store.StrategyInstance, desiredEnabled bool) *strategypb.CreateStrategyInstanceRsp {
+	if existing.SpaceID != requested.SpaceID || existing.StrategyID != requested.StrategyID ||
+		!reflect.DeepEqual(existing.LogicalAccountID, requested.LogicalAccountID) || !equalInstanceBindings(existing.InputBindingsJSON, requested.InputBindingsJSON) {
+		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("instance_id conflicts with an existing instance configuration"))}
+	}
+	response := &strategypb.CreateStrategyInstanceRsp{RetInfo: success(), Instance: instanceProto(existing)}
+	// Enabled is current lifecycle state, not an original-request fingerprint.
+	// Create retries never claim ownership or silently undo a later disable.
+	if existing.Enabled != desiredEnabled {
+		response.RetInfo = invalid(fmt.Errorf("strategy instance %q already exists with enabled=%t; use SetStrategyInstanceEnabled to change enabled state", existing.InstanceID, existing.Enabled))
+	}
+	return response
+}
+
+func equalInstanceBindings(left, right json.RawMessage) bool {
+	decode := func(raw json.RawMessage) (any, error) {
+		if len(raw) == 0 {
+			raw = json.RawMessage(`{}`)
+		}
+		if !json.Valid(raw) {
+			return nil, errors.New("invalid input bindings JSON")
+		}
+		decoder := json.NewDecoder(strings.NewReader(string(raw)))
+		// Do not collapse distinct large integer inputs through float64.
+		decoder.UseNumber()
+		var value any
+		err := decoder.Decode(&value)
+		return value, err
+	}
+	l, leftErr := decode(left)
+	r, rightErr := decode(right)
+	return leftErr == nil && rightErr == nil && reflect.DeepEqual(l, r)
 }
 
 func (s *Service) GetStrategyInstance(ctx context.Context, req *strategypb.GetStrategyInstanceReq) (*strategypb.GetStrategyInstanceRsp, error) {
