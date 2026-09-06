@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"crypto/hmac"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,7 +79,10 @@ func (s *Service) DeleteSpace(ctx context.Context, req *pb.DeleteSpaceReq) (*pb.
 func (s *Service) GetSpace(ctx context.Context, req *pb.GetSpaceReq) (*pb.GetSpaceRsp, error) {
 	space, err := s.metadata.GetSpace(ctx, req.GetSpaceId())
 	if err != nil {
-		return &pb.GetSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_SPACE_NOT_FOUND, err)}, nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return &pb.GetSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_SPACE_NOT_FOUND, err)}, nil
+		}
+		return &pb.GetSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.GetSpaceRsp{RetInfo: retinfo.Success("success"), Space: space}, nil
 }

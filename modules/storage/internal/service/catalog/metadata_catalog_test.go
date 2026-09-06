@@ -39,12 +39,20 @@ type createSpaceMetadataStore struct {
 	metadata.Store
 	space      *pb.Space
 	createCall int
+	readErr    error
 }
 
 func (s *createSpaceMetadataStore) CreateSpace(_ context.Context, item *pb.Space) (*pb.Space, error) {
 	s.createCall++
 	s.space = item
 	return item, nil
+}
+
+func (s *createSpaceMetadataStore) GetSpace(context.Context, string) (*pb.Space, error) {
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	return s.space, nil
 }
 
 type manualRebuildMetadataStore struct {
@@ -268,6 +276,21 @@ func TestCreateSpaceSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Equal(t, 1, store.createCall)
 	require.Equal(t, "space-create", rsp.GetSpace().GetSpaceId())
+}
+
+func TestGetSpaceDistinguishesMissingFromStoreFailure(t *testing.T) {
+	store := &createSpaceMetadataStore{readErr: errors.New("sqlite read failed")}
+	service, err := NewMetadataService(store, nil, Options{})
+	require.NoError(t, err)
+
+	failed, err := service.GetSpace(context.Background(), &pb.GetSpaceReq{SpaceId: "space"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, failed.GetRetInfo().GetCode())
+
+	store.readErr = fmt.Errorf("missing: %w", sql.ErrNoRows)
+	missing, err := service.GetSpace(context.Background(), &pb.GetSpaceReq{SpaceId: "space"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SPACE_NOT_FOUND, missing.GetRetInfo().GetCode())
 }
 
 func TestActivateDatasetCASConflictDoesNotChangeState(t *testing.T) {

@@ -93,12 +93,21 @@ storage_node_secret="$(
 )"
 [[ -n "${storage_node_secret}" && "${storage_node_secret}" != *$'\n'* && "${storage_node_secret}" != *$'\r'* ]] ||
   fail "storage-node-auth.env must contain one MOOX_STORAGE_NODE_AUTH_SECRET"
-storage_eventbus_url="${MOOX_STORAGE_EVENTBUS_URL:-}"
-if [[ -z "${storage_eventbus_url}" && -r "/proc/$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")/environ" ]]; then
-  storage_eventbus_url="$(tr '\0' '\n' <"/proc/$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")/environ" | sed -n 's/^MOOX_STORAGE_EVENTBUS_URL=//p' | head -1)"
+original_storage_eventbus_url="${MOOX_STORAGE_EVENTBUS_URL:-}"
+storage_eventbus_url="${original_storage_eventbus_url}"
+if [[ -r "/proc/$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")/environ" ]]; then
+  original_storage_eventbus_url="$(tr '\0' '\n' <"/proc/$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")/environ" | sed -n 's/^MOOX_STORAGE_EVENTBUS_URL=//p' | head -1)"
+  if [[ -n "${original_storage_eventbus_url}" ]]; then
+    storage_eventbus_url="${original_storage_eventbus_url}"
+  fi
 fi
 if [[ -z "${storage_eventbus_url}" ]]; then
   storage_eventbus_url="${factor_eventbus_url:-}"
+fi
+storage_view_pid="$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")"
+original_storage_allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-}"
+if [[ -r "/proc/${storage_view_pid}/environ" ]]; then
+  original_storage_allowed_spaces="$(tr '\0' '\n' </proc/${storage_view_pid}/environ | sed -n 's/^MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES=//p' | head -1)"
 fi
 
 # View wildcard discovery is fixed at process startup. A caller that owns the
@@ -118,7 +127,76 @@ elif [[ "${restart_storage_view}" == "1" ]]; then
 else
   fail "MOOX_FACTOR_STORAGE_E2E_SPACE_ID is required unless MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW=1"
 fi
-e2e_allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-}"
+e2e_allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-${original_storage_allowed_spaces:-}}"
+start_storage_view() {
+  local allowed_spaces="$1" eventbus_url="$2"
+  if [[ -r "${storage_view_credential_file}" ]]; then
+    env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
+      MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE="${storage_view_credential_file}" \
+      MOOX_STORAGE_EVENTBUS_URL="${eventbus_url}" \
+      MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}" \
+      MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}" \
+      MOOX_STORAGE_NODE_AUTH_SECRET="${storage_node_secret}" \
+      MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${allowed_spaces}" \
+      "${storage_view_command[@]}"
+  else
+    env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
+      MOOX_STORAGE_EVENTBUS_URL="${eventbus_url}" \
+      MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}" \
+      MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}" \
+      MOOX_STORAGE_NODE_AUTH_SECRET="${storage_node_secret}" \
+      MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${allowed_spaces}" \
+      "${storage_view_command[@]}"
+  fi
+}
+storage_view_health_url="${MOOX_STORAGE_VIEW_HEALTH_URL:-http://127.0.0.1:20211/readyz}"
+storage_view_health_auth() {
+  [[ -r "${DEPLOY_ROOT}/secrets/health-auth.env" ]] || return 1
+  (
+    set -a
+    source "${DEPLOY_ROOT}/secrets/health-auth.env"
+    set +a
+    local timestamp nonce body_hash canonical signature
+    timestamp="$(date +%s)"
+    nonce="$(openssl rand -hex 32)"
+    body_hash="$(printf '' | openssl dgst -sha256 | awk '{print $NF}')"
+    canonical="$(printf 'moox-request-v1\nGET\n/readyz\n%s\n%s\n%s' "${body_hash}" "${timestamp}" "${nonce}")"
+    signature="$(printf '%s' "${canonical}" | openssl dgst -sha256 -hmac "${MOOX_HEALTH_AUTH_SECRET_KEY}" | awk '{print $NF}')"
+    printf '%s/%s/%s/%s/%s' "${MOOX_HEALTH_AUTH_VERSION}" "${MOOX_HEALTH_AUTH_ACCESS_KEY}" "${timestamp}" "${nonce}" "${signature}"
+  )
+}
+storage_view_ready() {
+  local auth_header=""
+  if [[ -r "${DEPLOY_ROOT}/secrets/health-auth.env" ]]; then
+    auth_header="$(storage_view_health_auth)" || return 1
+  fi
+  if [[ -n "${auth_header}" ]]; then
+    curl --fail --silent --show-error --max-time 2 -H "X-Moox-Health-Auth: ${auth_header}" "${storage_view_health_url}" >/dev/null
+  else
+    curl --fail --silent --show-error --max-time 2 "${storage_view_health_url}" >/dev/null
+  fi
+}
+wait_storage_view_ready() {
+  local timeout_seconds="${MOOX_FACTOR_STORAGE_VIEW_READY_TIMEOUT_SECONDS:-60}"
+  for _ in $(seq 1 "${timeout_seconds}"); do
+    if storage_view_ready; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+restore_storage_view() {
+  local restore_url="${original_storage_eventbus_url:-${storage_eventbus_url}}"
+  echo "restoring storage-view after failed E2E restart" >&2
+  if ! start_storage_view "${original_storage_allowed_spaces}" "${restore_url}"; then
+    return 1
+  fi
+  if ! wait_storage_view_ready; then
+    return 1
+  fi
+  return 0
+}
 if [[ "${restart_storage_view}" == "1" ]]; then
   [[ -n "${storage_eventbus_url}" ]] || fail "MOOX_STORAGE_EVENTBUS_URL is required when restarting storage-view"
   if [[ -n "${e2e_allowed_spaces}" ]]; then
@@ -137,25 +215,22 @@ if [[ "${restart_storage_view}" == "1" ]]; then
     fail "deployment has no storage-view start command"
   fi
   storage_view_credential_file="${HOME}/.config/moox/eventbus/storage-eventbus.yaml"
-  if [[ -r "${storage_view_credential_file}" ]]; then
-    env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
-      MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE="${storage_view_credential_file}" \
-      MOOX_STORAGE_EVENTBUS_URL="${storage_eventbus_url}" \
-      MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}" \
-      MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}" \
-      MOOX_STORAGE_NODE_AUTH_SECRET="${storage_node_secret}" \
-      MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${e2e_allowed_spaces}" \
-      "${storage_view_command[@]}"
-  else
-    env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
-      MOOX_STORAGE_EVENTBUS_URL="${storage_eventbus_url}" \
-      MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}" \
-      MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}" \
-      MOOX_STORAGE_NODE_AUTH_SECRET="${storage_node_secret}" \
-      MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${e2e_allowed_spaces}" \
-      "${storage_view_command[@]}"
+  restart_error=""
+  if ! start_storage_view "${e2e_allowed_spaces}" "${storage_eventbus_url}"; then
+    restart_error="storage-view start command failed"
+  elif ! current_storage_view_pid="$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")"; then
+    restart_error="storage-view pid file is unreadable"
+  elif ! kill -0 "${current_storage_view_pid}" 2>/dev/null; then
+    restart_error="storage-view did not leave a running process"
+  elif ! wait_storage_view_ready; then
+    restart_error="storage-view readiness probe failed"
   fi
-  require_running_service storage-view
+  if [[ -n "${restart_error}" ]]; then
+    if restore_storage_view; then
+      fail "${restart_error}; original storage-view was restored"
+    fi
+    fail "${restart_error}; original storage-view could not be restored"
+  fi
 else
   [[ -n "${e2e_allowed_spaces}" ]] || fail "MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES must include ${e2e_space_id} when storage-view restart is disabled"
   space_is_allowed=0
