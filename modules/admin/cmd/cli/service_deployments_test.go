@@ -90,6 +90,14 @@ func TestScopedTradeOwnerImportCompilesOnlyReceivingNodeRoute(t *testing.T) {
 		"--node-id", "control", "--public-host", "control.example.test",
 		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--disabled-services", "moox_trade,trade_owner,trade_dns_resolver",
 	}, &bytes.Buffer{}, &bytes.Buffer{}))
+	// Simulate a node upgraded from the old full TradeConsole route. The
+	// owner-only import must retire this colliding route rather than leaving
+	// Gateway with two owners for the same native RPC methods.
+	require.NoError(t, runServiceDeploymentsCommand([]string{
+		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
+		"--node-id", "trade-node", "--public-host", "trade.example.test",
+		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--only-services", "trade_console",
+	}, &bytes.Buffer{}, &bytes.Buffer{}))
 	for range 2 {
 		require.NoError(t, runServiceDeploymentsCommand([]string{
 			"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
@@ -101,9 +109,17 @@ func TestScopedTradeOwnerImportCompilesOnlyReceivingNodeRoute(t *testing.T) {
 	require.NoError(t, err)
 	var rows []sysdeploy.Deployment
 	require.NoError(t, db.Where("c_node_id = ?", "trade-node").Find(&rows).Error)
-	require.Len(t, rows, 1)
-	require.Equal(t, "trade-node", rows[0].NodeID)
-	require.Equal(t, "trade_owner", rows[0].ServiceName)
+	require.Len(t, rows, 2)
+	byName := map[string]sysdeploy.Deployment{}
+	for _, row := range rows {
+		byName[row.ServiceName] = row
+	}
+	require.Equal(t, "trade-node", byName["trade_owner"].NodeID)
+	require.True(t, byName["trade_owner"].GatewayEnabled)
+	require.Equal(t, "active", byName["trade_owner"].Status)
+	require.False(t, byName["trade_console"].GatewayEnabled)
+	require.Equal(t, "disabled", byName["trade_console"].Status)
+	require.Empty(t, byName["trade_console"].GatewayServiceID)
 	snapshot, err := sysdeploy.NewDAO(db).CompileGatewaySnapshot(context.Background(), "trade-node")
 	require.NoError(t, err)
 	require.Len(t, snapshot.Routes, 1)
@@ -113,8 +129,8 @@ func TestScopedTradeOwnerImportCompilesOnlyReceivingNodeRoute(t *testing.T) {
 	require.Equal(t, "trpc.moox.trade.TradeConsoleService", route.ServicePath)
 	require.Equal(t, []string{"strategy"}, route.AllowedCallers)
 	require.ElementsMatch(t, []string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"}, route.AllowedMethods)
-	require.Equal(t, "127.0.0.1", rows[0].Host)
-	require.Equal(t, int32(11200), rows[0].Port)
+	require.Equal(t, "127.0.0.1", byName["trade_owner"].Host)
+	require.Equal(t, int32(11200), byName["trade_owner"].Port)
 	control, err := sysdeploy.NewDAO(db).CompileGatewaySnapshot(context.Background(), "control")
 	require.NoError(t, err)
 	for _, route := range control.Routes {

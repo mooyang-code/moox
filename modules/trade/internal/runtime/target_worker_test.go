@@ -101,7 +101,7 @@ func TestTargetWorkerPeriodicScanRecoversUnsignaledTargets(t *testing.T) {
 	}
 }
 
-func TestTargetWorkerDirectedWakeSkipsStaleTargetsAndPreservesOtherDiagnostics(t *testing.T) {
+func TestTargetWorkerDirectedWakeRepairsExpiredTargetsAndPreservesOtherDiagnostics(t *testing.T) {
 	targets := &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{
 		{SpaceID: "space", LogicalAccountID: "expired", Status: targetapp.StatusExpired},
 		{SpaceID: "space", LogicalAccountID: "healthy", Status: targetapp.StatusPending},
@@ -112,8 +112,19 @@ func TestTargetWorkerDirectedWakeSkipsStaleTargetsAndPreservesOtherDiagnostics(t
 	require.NoError(t, worker.runTargets(context.Background(), []targetKey{
 		{"space", "missing"}, {"space", "expired"}, {"space", "healthy"},
 	}))
-	require.Equal(t, []string{"space/healthy"}, converger.calls)
+	require.Equal(t, []string{"space/expired", "space/healthy"}, converger.calls)
 	require.Equal(t, []TargetFailure{previous}, worker.Snapshot().TargetErrors)
+}
+
+func TestTargetWorkerPeriodicScanIncludesExpiredTargetsForRecovery(t *testing.T) {
+	targets := &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{{
+		SpaceID: "space", LogicalAccountID: "expired", Status: targetapp.StatusExpired,
+	}}}
+	converger := &logicalTargetConvergerStub{wake: make(chan struct{}, 1)}
+	worker := &TargetWorker{Store: targets, Executor: converger}
+	require.NoError(t, worker.runOnce(context.Background()))
+	require.Equal(t, []string{"space/expired"}, converger.calls)
+	require.Contains(t, targets.statuses, targetapp.StatusExpired)
 }
 
 func TestTargetWorkerDirectedCancellationStopsQueuedCandidates(t *testing.T) {

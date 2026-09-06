@@ -167,6 +167,7 @@ func (w *TargetWorker) runOnce(ctx context.Context) error {
 		targetapp.StatusConverging,
 		targetapp.StatusBlocked,
 		targetapp.StatusConverged,
+		targetapp.StatusExpired,
 	)
 	if err != nil {
 		return err
@@ -189,7 +190,7 @@ func (w *TargetWorker) runTargets(ctx context.Context, keys []targetKey) error {
 			continue
 		}
 		switch record.Status {
-		case targetapp.StatusPending, targetapp.StatusConverging, targetapp.StatusBlocked, targetapp.StatusConverged:
+		case targetapp.StatusPending, targetapp.StatusConverging, targetapp.StatusBlocked, targetapp.StatusConverged, targetapp.StatusExpired:
 			runErrors = append(runErrors, w.runRecords(ctx, []store.LogicalAccountTargetRecord{record}, false))
 		}
 	}

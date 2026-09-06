@@ -4707,7 +4707,7 @@ sync_remote_stage() {
   scp -p "${archive}" "${TARGET}:${remote_archive}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
-  local quoted_dir quoted_archive quoted_node_id quoted_no_start quoted_component_overlay quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_hostagent quoted_with_web_host quoted_with_admin quoted_with_gateway quoted_reset_data quoted_metrics_storage_metadata_url quoted_eventbus_url quoted_storage_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch quoted_local_storage_gateway_target quoted_local_storage_gateway_node_id quoted_storage_view_duckdb_memory_limit quoted_factor_python_workers quoted_factor_view_read_workers quoted_factor_view_read_timeout_ms quoted_control_root quoted_storage_root
+  local quoted_dir quoted_archive quoted_node_id quoted_no_start quoted_component_overlay quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_hostagent quoted_with_web_host quoted_with_admin quoted_with_gateway quoted_reset_data quoted_metrics_storage_metadata_url quoted_eventbus_url quoted_storage_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_trade_gateway_health_addr quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch quoted_local_storage_gateway_target quoted_local_storage_gateway_node_id quoted_storage_view_duckdb_memory_limit quoted_factor_python_workers quoted_factor_view_read_workers quoted_factor_view_read_timeout_ms quoted_control_root quoted_storage_root
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_node_id="$(shell_quote "${NODE_ID}")"
@@ -4739,6 +4739,7 @@ sync_remote_stage() {
   quoted_metrics_eventbus_url="$(shell_quote "${METRICS_EVENTBUS_URL_ENV}")"
   quoted_eventbus_enable_tls="$(shell_quote "${MOOX_EVENTBUS_ENABLE_TLS:-0}")"
   quoted_eventbus_public_ip="$(shell_quote "${MOOX_EVENTBUS_PUBLIC_IP:-}")"
+  quoted_trade_gateway_health_addr="$(shell_quote "${MOOX_TRADE_GATEWAY_HEALTH_ADDR:-127.0.0.1:11014}")"
   quoted_public_host="$(shell_quote "${PUBLIC_HOST}")"
   quoted_tls_mode="$(shell_quote "${TLS_MODE_RESOLVED}")"
   quoted_browser_https_port="$(shell_quote "${BROWSER_HTTPS_PORT}")"
@@ -4755,7 +4756,7 @@ sync_remote_stage() {
   quoted_control_root="$(shell_quote "${MOOX_CONTROL_ROOT:-}")"
   quoted_storage_root="$(shell_quote "${MOOX_STORAGE_ROOT:-}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NODE_ID=${quoted_node_id} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_HOSTAGENT=${quoted_with_hostagent} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_STORAGE_EVENTBUS_URL=${quoted_storage_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64=${quoted_storage_view_maintenance_policy_b64} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NODE_ID=${quoted_node_id} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_HOSTAGENT=${quoted_with_hostagent} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_STORAGE_EVENTBUS_URL=${quoted_storage_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_TRADE_GATEWAY_HEALTH_ADDR=${quoted_trade_gateway_health_addr} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64=${quoted_storage_view_maintenance_policy_b64} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 
 generate_secret() {
@@ -4847,6 +4848,14 @@ prepare_gateway_rollback() {
   tar -C "${DEPLOY_DIR}" -czf "${GATEWAY_ROLLBACK_ARCHIVE}" "${entries[@]}"
   chmod 0600 "${GATEWAY_ROLLBACK_ARCHIVE}"
   GATEWAY_ROLLBACK_ACTIVE=1
+}
+
+gateway_health_addr() {
+  if [[ "${WITH_TRADE:-0}" == "1" && "${WITH_STORAGE:-0}" == "0" && "${WITH_ADMIN:-0}" == "0" && "${WITH_GATEWAY:-0}" == "1" ]]; then
+    printf '%s' "${MOOX_TRADE_GATEWAY_HEALTH_ADDR:-127.0.0.1:11014}"
+    return
+  fi
+  printf '%s' '127.0.0.1:11012'
 }
 
 rollback_gateway() {

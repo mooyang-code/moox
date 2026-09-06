@@ -221,3 +221,28 @@ func TestExpiredTargetDiscardsPersistedPendingChildren(t *testing.T) {
 	require.Equal(t, "CANCELED", current.State)
 	require.Equal(t, "0", current.RemainingReservedQuantity)
 }
+
+func TestAlreadyExpiredTargetRepairsPersistedPendingChildren(t *testing.T) {
+	f := newTargetFixture(t, exchange.MarketTypeSwap)
+	modernExpiryTarget(t, f)
+	f.orders.store = f.store
+	f.order(t, store.OrderRecord{
+		SpaceID: "space-1", OrderID: "pending-child", TradingAccountID: "account-a",
+		ClientOrderID: "pending-child", ExchangeOrderID: "", ExchangeSymbol: "BTCUSDT",
+		OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
+		Quantity: "1", ReferencePrice: "100", OwnerType: "TARGET", OwnerID: "target-current",
+		RunnerID: "instance-1", LogicalAccountID: "logical-1", State: "PENDING", Version: 1,
+		ReservedAsset: "USDT", ReservedQuantity: "20", RemainingReservedQuantity: "20",
+	})
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_account_targets
+		SET c_status = 'EXPIRED' WHERE c_space_id = 'space-1' AND c_logical_account_id = 'logical-1'`).Error)
+
+	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusExpired, result.Status)
+	require.Equal(t, []string{"pending-child"}, f.orders.discarded)
+	current, err := f.store.GetOrder(context.Background(), "space-1", "pending-child")
+	require.NoError(t, err)
+	require.Equal(t, "CANCELED", current.State)
+	require.Equal(t, "0", current.RemainingReservedQuantity)
+}

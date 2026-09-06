@@ -153,6 +153,11 @@ grep -Fq 'gateway native listener ${current_native:-<missing>} does not match ex
 grep -Fq 'gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'gateway_health_addr() {' "${TMP_ROOT}/unpacked/healthcheck.sh"
 grep -Fq 'gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:}"' "${TMP_ROOT}/unpacked/healthcheck.sh"
+# The remote component-overlay rollback runs from its own heredoc rather than
+# the generated helpers, so its health-address function must be defined there
+# as well.
+sed -n '/^prepare_gateway_rollback() {$/,/^rollback_gateway() {$/p' \
+  "${ROOT}/scripts/deploy/deploy-moox.sh" | grep -Fq 'gateway_health_addr() {'
 
 run_native_listener_guard() {
   local target="$1"

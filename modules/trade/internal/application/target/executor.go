@@ -129,6 +129,13 @@ func (e *Executor) Converge(
 		}
 	}()
 	if target.Status == StatusExpired {
+		// EXPIRED targets are normally terminal, but an older process may have
+		// persisted that state before releasing a PENDING child reservation. Run
+		// the idempotent cleanup on every recovery pass so upgrades/restarts can
+		// repair that durable state as well.
+		if err := e.discardExpiredPendingOrders(ctx, spaceID, target); err != nil {
+			return Result{}, err
+		}
 		return Result{Status: StatusExpired}, nil
 	}
 	if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
