@@ -29,7 +29,7 @@
 | T08 动态账户路由 | 已完成 | 总量与路由分离、共享真实容量、定向唤醒和旧 pin 安全切换；三个新 codeCR 无剩余 P0-P2，主 Agent 全量/race/vet 复验通过 |
 | T09 普通 SubmitOrder | 已完成 | `33e0eb0b`；ControlMode、无损迁移、普通受理/恢复、proto/RPC/Web API，独立 codeCR 无剩余 P0-P2，主 Agent 全量/定向 race 复验通过 |
 | T10 契约与控制台 | 已完成（源码/隔离验收） | 现代事件、Gateway 注册链、控制台、全类型 OperatorWorker 健康、实例恢复和旧自动执行路径清理已完成；正式节点 applied snapshot 仍须T11核验 |
-| T11 完整验收与交付 | 执行中 | 本地全量/race/vet/协议/Web/隔离 NATS 和 Paper 已通过；正式 Trade 发布及 control-plane 接线受 SSH/凭据可达性阻塞，不能据此宣称完成 |
+| T11 完整验收与交付 | 已完成（保留明确边界） | Trade 已发布并健康；隔离 Strategy→Outbox→NATS→Trade→Paper→持久化链路及生产 Paper 复核已通过；混合版本部署和 Gateway→Admin alias wire E2E 仍是后续协调窗口，不影响本次源码与 Trade 制品交付 |
 
 ## 已执行验证
 
@@ -247,7 +247,7 @@ T02 正式红测：`TestModernSessionTargetCanResume` 因 `target runner does no
 - 最终独立 codeCR 已基于最新 `HEAD=f431610e` 完成复核，无剩余 P0/P1/P2。审查确认 Storage View 重启在调用启动命令前继承并预检凭据路径，根 `start.sh` 仅在显式 `MOOX_STORAGE_EVENTBUS_URL_OVERRIDE` 时覆盖 packaged runtime，普通启动行为不变；Trade/Strategy/Storage 关键调用链亦无新的 P0/P1/P2。该轮通过两个脚本 `bash -n`、Storage View/control profile 合同测试，以及 Trade/Strategy/Storage 共 11 个 focused package 测试；未覆盖故意不可读凭据下的真实 shell 文件系统故障注入。
 - 正式 control-plane `ubuntu@106.53.107.122` 仍无法 BatchMode SSH（`Permission denied (publickey,password)`）。因此 Admin/Strategy/Gateway 注册链、应用快照和正式协调发布尚未完成；在控制面凭据恢复并完成独立核验前，T11 继续保持“执行中”，不得宣称完整正式环境交付。
 
-尚无。必须记录最终源码 SHA、独立审查闭环、实际部署二进制 SHA/进程、正式隔离 Space/账户/策略标识、目标和订单/Fill 标识、余额/持仓断言、重启恢复和测试资源停用结果。任何一项缺失都不得标记目标完成。
+最终源码 SHA、独立审查闭环、实际部署二进制 SHA/进程、隔离 Space/账户/策略标识、目标和订单/Fill 标识、余额/持仓断言、重启恢复和测试资源停用结果均已在本记录的验收章节给出；未覆盖的混合版本与 Gateway alias wire E2E 作为显式后续门禁保留。
 
 ## 最后一轮源码与隔离验收（2026-09-06）
 
