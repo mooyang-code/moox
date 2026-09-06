@@ -192,15 +192,12 @@ func (w *TargetWorker) runOnce(ctx context.Context) error {
 		retry = append(retry, key)
 	}
 	w.expiredMu.Unlock()
+	recordKeys := make(map[targetKey]struct{}, len(records))
+	for _, record := range records {
+		recordKeys[targetKey{record.SpaceID, record.LogicalAccountID}] = struct{}{}
+	}
 	for _, key := range retry {
-		found := false
-		for _, record := range records {
-			if record.SpaceID == key.spaceID && record.LogicalAccountID == key.logicalAccountID {
-				found = true
-				break
-			}
-		}
-		if found {
+		if _, found := recordKeys[key]; found {
 			continue
 		}
 		record, getErr := w.Store.GetLogicalAccountTarget(ctx, key.spaceID, key.logicalAccountID)
@@ -215,6 +212,7 @@ func (w *TargetWorker) runOnce(ctx context.Context) error {
 		}
 		if record.Status == targetapp.StatusExpired {
 			records = append(records, record)
+			recordKeys[key] = struct{}{}
 		} else {
 			w.expiredMu.Lock()
 			delete(w.expiredRetry, key)
