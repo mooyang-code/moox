@@ -259,3 +259,23 @@ T02 正式红测：`TestModernSessionTargetCanResume` 因 `target runner does no
 - control host `ubuntu@106.53.107.122` 当前 BatchMode SSH 返回 `Permission denied (publickey,password)`，故无法执行 Admin/Strategy/Gateway 正式注册链、应用快照核验及协调发布。未尝试发现或重建凭据；在控制面可达前，T11 仍为阻塞状态，不能将 Trade 单组件重启宣称为完整正式环境交付。
 - 隔离 Paper 真实链路已验收：`crypto` / `paper-account-230bef26ed938b41` / `paper-logical-230bef26ed938b41`，策略事件经 Strategy Processor -> Outbox -> NATS -> Trade Consumer/Receipt -> Worker/Paper Matcher；订单 `ZHIujZQJpQAc9Amh5XY-1`、Paper order `paper-order-9989b96f6709d5082121ab7f`、Fill `paper-account-...:mtdaelt2u9vsd9i6rrn1bg`，成交 0.12504 @ 79974.25，重投不重复；重启后仍 PAPER/ready、receipt hash/order/fill 保留。该资源为隔离测试资源，未连接实盘。
 - `f431610e` 之后的主 Agent 核验完成，代码审查门禁已闭环；当前唯一硬阻塞仍是正式 control-plane 接线与生产节点应用快照核验。
+
+## 最终执行与正式环境验收（2026-09-07）
+
+- 最终独立 codeCR 的 P2 已闭环：目标在 Place 后或 Submit 内跨过 `valid_until` 时，Executor 现在丢弃仍为 PENDING 的目标子单；初始过期检查会分页收集后再释放全部匹配子单，避免边遍历边改变结果集导致漏清理。成功释放后目标才进入 `EXPIRED`；释放失败与过期原因以 joined error 返回，保留重试/人工处理入口。真实 Store 夹具验证 `CANCELED`、`RemainingReservedQuantity=0`，三类跨期 Paper E2E 断言同步更新。
+- `scripts/deploy/deploy-moox.sh` 生成的 `healthcheck.sh` 补齐 `gateway_health_addr` 函数；此前控制面健康检查会因函数未定义误报 Gateway 失败并触发重启。Control profile 合同新增函数存在性断言。远端 `./healthcheck.sh` 已无输出错误并返回成功。
+- 注册链路最终修复提交为 `25b8de15`（禁用服务清理 Gateway 字段）和 `496c2481`（compute 节点只导入 `trade_owner`，不再把 `trade_console` 的 Admin 方法导入远端，消除重复 native RPC route）；过期释放与健康检查修复为 `4df9138f`。最终工作树仅保留其他任务已有未提交文件，本轮未覆盖或提交它们。
+- 正式 control-plane 部署已通过临时过滤掉本地不受支持的 `[strategy_host]` 配置段后执行：`go run ./modules/cli/cmd/moox-cli setup deploy-control --file ./moox.toml` 返回 `{"host":"control","status":"ready","reset_data":false}`。远端 `ubuntu@106.53.107.122:/data/moox/prod` 的 Caddy/Admin/Gateway/EventBus/CloudNode/Collector/Factor/Monitor/HostAgent/Archive/Web 均 running/ready；Control profile 预期不运行 Strategy，残留 PID 仅为 stale 文件，不代表进程。Admin 日志显示 control 26 项与 compute-1 1 项部署导入均 `status=ok`，未再出现 duplicate native route 或 `init_failed`。
+- Dedicated Trade 节点 `ubuntu@43.132.204.177:/home/ubuntu/moox/trade-move` 仍运行 PID `1308017`，认证 `./healthcheck.sh trade` 通过；`bin/moox-trade` SHA-256 为 `c1ebe2368a0735451f1d3e60f5d8b2a6dd59e030b26959b3b5379ea8d26a4a83`，`trade/config/app.yaml` 保持 `live_trading_enabled=false`。未连接或开启 LIVE 账户。
+- 正式隔离 Paper 资源通过 Trade HTTP RPC 复核：Space `crypto`、Paper account `paper-account-230bef26ed938b41`、logical account `paper-logical-230bef26ed938b41`；target `paper-target-e2e-1788698251135260751` 为 `EXPIRED`；订单 `ZHIujZQJpQAc9Amh5XY-1` 为 `FILLED`（数量 `0.12504`、均价 `79974.25`、剩余预占 `0`），Fill 数量与订单一致、手续费为 `0`；Holdings 显示 BTC `0.12504` 与 USDT `90000.01978`。这些查询未改动账户，也未使用 LIVE 凭据。
+- 最终验证通过：`go test -count=1 ./modules/trade/...`（含前次全模块通过；本轮 `modules/trade/test` 重新通过）、`go test -race -count=1 ./modules/trade/internal/application/target`、Admin CLI 普通/race/vet、Trade/Control deploy contract、`bash -n`、`git diff --check`、`env GOFLAGS=-race bash scripts/test/e2e/test-strategy-trade-event-e2e.sh` 与 `test-strategy-trade-gateway-e2e.sh`。前端及 Strategy/Storage 验证沿用本记录前述通过证据；`make verify-pr` 的 proto-check 与 check-module-boundaries 仍被既有非本任务 dirty 基线/Storage durable 命名阻断。
+- 仍需保留的边界：本轮 Control deploy 使用未提交本地配置的安全过滤副本，未把凭据或该副本写回仓库；远端 Trade Paper E2E 复核基于既有隔离资源和已成交事实，未进行新的实盘请求。最终独立 codeCR（基于 `HEAD=4df9138f`）若发现新 P0-P2，必须先闭环再推送分支；在此之前不标记整个目标完成。
+
+## 最终收敛增量（2026-09-07）
+
+- 修复目标执行器在 `Place` 成功后、最终 `Submit` 前 session/fence 或目标有效性变化时的悬挂预占：现在会先丢弃仍为 `PENDING` 的子单，再返回 `ErrTargetSession`/`ErrInvalidTarget`，并以确定性测试覆盖跨 session 变更。
+- Gateway 路由归一化改为对同一 `service_id` 的方法重叠做全量两两检查，补齐 wildcard、非相邻重复方法的拒绝；保留历史上 caller allowlist 不相交的 native 路由兼容，并由 `ResolveRPCForCaller` 在认证后选择正确路由。
+- Dedicated Trade 节点新增 `TradeConsoleAdminService` 原生路径别名，复用同一 Console handler；远端 `trade_console` 注册和 scoped seed 使用别名，`trade_owner` 继续使用 canonical 路径，避免新部署在 native route 上产生歧义。别名 descriptor 有单测，注册/快照/Verify 路径均已同步。
+- 部署合同修复 `import_trade_owner_route` 的 shell 续行语义，避免注释截断命令；Strategy deployment contract 实际执行通过。
+- 本轮 focused 测试：`packages/gatewayproxy`、Gateway router/bootstrap/controlplane、Admin cmd/internal sysdeploy、CLI setup client/command、Trade 全模块普通测试均通过；Trade target/eventconsumer/runtime/paper/rpc 与 gatewayproxy race 通过。`bash -n`、`git diff --check`、Strategy contract 通过。
+- 独立 codeCR 复核上述 route pairwise、Trade alias、目标子单释放和 shell 修复未发现新增 P0/P2；旧版本 remote canonical 双路由与新 alias 的混合升级仍需按 Trade-first/控制面协调窗口执行，当前不改变已发布控制面制品。
