@@ -76,6 +76,9 @@ func Open(path string) (*Store, error) {
 }
 
 func initializeTradeStore(db *gorm.DB) error {
+	if err := preflightControlModeSchema(db); err != nil {
+		return err
+	}
 	if _, err := migrateLegacyTradeSchema(db); err != nil {
 		return err
 	}
@@ -84,6 +87,9 @@ func initializeTradeStore(db *gorm.DB) error {
 	}
 	if err := migrateTargetExpiryStatus(db); err != nil {
 		return fmt.Errorf("migrate target expiry status: %w", err)
+	}
+	if err := migrateControlModeSchema(db); err != nil {
+		return fmt.Errorf("migrate control mode: %w", err)
 	}
 	if err := validateExistingTradeSchema(db); err != nil {
 		return err
@@ -123,6 +129,11 @@ func (s *Store) LockLogicalAccount(spaceID string, logicalAccountID string) func
 	mutex := value.(*sync.Mutex)
 	mutex.Lock()
 	return mutex.Unlock
+}
+
+func (s *Store) LockLogicalAccountContext(ctx context.Context, spaceID, logicalAccountID string) (func(), error) {
+	value, _ := s.logicalLocks.LoadOrStore(spaceID+"\x00"+logicalAccountID, &sync.Mutex{})
+	return lockContext(ctx, value.(*sync.Mutex))
 }
 
 func (s *Store) LockLogicalAccountExecution(
@@ -562,6 +573,12 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		return fmt.Errorf("apply schema reference: %w", err)
 	}
 	for _, table := range tables {
+		if table == "t_logical_accounts" || table == "t_operator_actions" {
+			if _, err := validateControlTable(db, table, true); err != nil {
+				return err
+			}
+			continue
+		}
 		got, err := inspectTableShape(db, table)
 		if err != nil {
 			return err
@@ -570,7 +587,7 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		if err != nil {
 			return err
 		}
-		if !reflect.DeepEqual(got, want) && !(table == "t_logical_accounts" && legacyLogicalAccountShapeMatches(got, want)) {
+		if !reflect.DeepEqual(got, want) {
 			return fmt.Errorf(
 				"%w: %s does not match current columns and constraints",
 				ErrIncompatibleSchema,
@@ -579,59 +596,6 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		}
 	}
 	return nil
-}
-
-func legacyLogicalAccountShapeMatches(got, want tableShape) bool {
-	if !sameColumnsIgnoringOwnerGenerationPosition(got.Columns, want.Columns) ||
-		!reflect.DeepEqual(got.UniqueKeys, want.UniqueKeys) ||
-		!reflect.DeepEqual(got.ForeignKeys, want.ForeignKeys) ||
-		len(got.SchemaSQL) != len(want.SchemaSQL) {
-		return false
-	}
-	for index := range got.SchemaSQL {
-		gotTable := strings.HasPrefix(got.SchemaSQL[index], "table\x00t_logical_accounts\x00")
-		wantTable := strings.HasPrefix(want.SchemaSQL[index], "table\x00t_logical_accounts\x00")
-		if gotTable || wantTable {
-			if !gotTable || !wantTable || !strings.Contains(want.SchemaSQL[index], "c_owner_claimed_at") {
-				return false
-			}
-			continue
-		}
-		if got.SchemaSQL[index] != want.SchemaSQL[index] {
-			return false
-		}
-	}
-	return true
-}
-
-var legacyLogicalAccountMigratedTableSQL = strings.Replace(
-	legacyLogicalAccountTableSQL,
-	"    PRIMARY KEY (c_space_id, c_logical_account_id),",
-	"    c_owner_claimed_at INTEGER NOT NULL DEFAULT 0,\n    PRIMARY KEY (c_space_id, c_logical_account_id),",
-	1,
-)
-
-func sameColumnsIgnoringOwnerGenerationPosition(got, want []tableColumn) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	byName := make(map[string]tableColumn, len(got))
-	for _, column := range got {
-		byName[column.Name] = column
-	}
-	for _, column := range want {
-		actual, ok := byName[column.Name]
-		if !ok || actual.Type != column.Type || actual.NotNull != column.NotNull || actual.PrimaryKey != column.PrimaryKey {
-			return false
-		}
-		if (actual.DefaultSQL == nil) != (column.DefaultSQL == nil) {
-			return false
-		}
-		if actual.DefaultSQL != nil && *actual.DefaultSQL != *column.DefaultSQL {
-			return false
-		}
-	}
-	return true
 }
 
 type tableShape struct {

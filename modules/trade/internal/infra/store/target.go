@@ -114,6 +114,9 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	if err != nil {
 		return LogicalAccountTargetRecord{}, false, err
 	}
+	if account.ControlMode != "STRATEGY" {
+		return LogicalAccountTargetRecord{}, false, ErrTargetAuthorization
+	}
 	newIdentity := record.InstanceID != "" || record.SessionID != "" || record.BarEndTime != 0 || record.ValidUntil != 0
 	if newIdentity {
 		if blank(record.InstanceID) || blank(record.SessionID) || blank(record.StrategyID) ||

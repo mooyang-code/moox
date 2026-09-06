@@ -26,6 +26,12 @@ enum ExecutionMode {
   EXECUTION_MODE_LIVE = 2;
 }
 
+enum ControlMode {
+  CONTROL_MODE_UNSPECIFIED = 0;
+  CONTROL_MODE_STRATEGY = 1;
+  CONTROL_MODE_MANUAL = 2;
+}
+
 enum AccountEnvironment {
   ACCOUNT_ENVIRONMENT_UNSPECIFIED = 0;
   ACCOUNT_ENVIRONMENT_TESTNET = 1;
@@ -140,6 +146,7 @@ message LogicalAccount {
   // returned to trusted internal callers only; target events use the numeric
   // owner_generation fence instead.
   string auth_fence = 18;
+  ControlMode control_mode = 19;
 }
 
 message Order {
@@ -339,6 +346,8 @@ message CreateLogicalAccountReq {
   ExecutionMode execution_mode = 2;
   MarketType market_type = 3;
   string settlement_asset = 4;
+  // Unspecified creates a STRATEGY-controlled account.
+  ControlMode control_mode = 5;
 }
 message CreateLogicalAccountRsp {
   common.RetInfo ret_info = 1;
@@ -471,8 +480,34 @@ message PlaceManualOrderReq {
   string quantity = 9;
   optional string limit_price = 10;
   string reason = 11;
+  // Unix milliseconds; zero freezes the server default at first acceptance.
+  int64 deadline_at = 12;
 }
 message PlaceManualOrderRsp {
+  common.RetInfo ret_info = 1;
+  OperatorAction action = 2;
+  Order order = 3;
+}
+
+// Ordinary admission for a MANUAL logical account. It does not pause or cancel
+// other orders and returns durable acceptance, not exchange acceptance or a fill.
+message SubmitOrderReq {
+  string action_id = 1;
+  string logical_account_id = 2;
+  string trading_account_id = 3;
+  string client_order_id = 4;
+  string instrument_id = 5;
+  OrderType order_type = 6;
+  FillPolicy fill_policy = 7;
+  OrderSide side = 8;
+  PositionSide position_side = 9;
+  string quantity = 10;
+  optional string limit_price = 11;
+  string reason = 12;
+  // Unix milliseconds; zero freezes the server default at first acceptance.
+  int64 deadline_at = 13;
+}
+message SubmitOrderRsp {
   common.RetInfo ret_info = 1;
   OperatorAction action = 2;
   Order order = 3;
@@ -585,6 +620,8 @@ message CreatePaperSimulationReq {
   string maker_fee_rate = 8;
   string taker_fee_rate = 9;
   string slippage_bps = 10;
+  // Independent of PAPER/LIVE execution mode; immutable after creation.
+  ControlMode control_mode = 11;
 }
 
 message CreatePaperSimulationRsp {
@@ -687,6 +724,7 @@ service TradeConsoleService {
   rpc ResumeLogicalAccount(ResumeLogicalAccountReq) returns (ResumeLogicalAccountRsp);
   rpc FlattenLogicalAccount(FlattenLogicalAccountReq) returns (FlattenLogicalAccountRsp);
   rpc PlaceManualOrder(PlaceManualOrderReq) returns (PlaceManualOrderRsp);
+  rpc SubmitOrder(SubmitOrderReq) returns (SubmitOrderRsp);
   rpc CancelOrder(CancelOrderReq) returns (CancelOrderRsp);
   rpc GetOperatorAction(GetOperatorActionReq) returns (GetOperatorActionRsp);
   rpc GetLogicalAccountTarget(GetLogicalAccountTargetReq) returns (GetLogicalAccountTargetRsp);

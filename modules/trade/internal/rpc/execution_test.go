@@ -152,7 +152,7 @@ func TestPlaceManualOrderUsesServerOwnedApplicationPath(t *testing.T) {
 			OrderType:    tradepb.OrderType_ORDER_TYPE_MARKET,
 			Side:         tradepb.OrderSide_ORDER_SIDE_BUY,
 			PositionSide: tradepb.PositionSide_POSITION_SIDE_NET,
-			Quantity:     "1", Reason: "manual intervention",
+			Quantity:     "1", Reason: "manual intervention", DeadlineAt: 2000000000000,
 		},
 	)
 	if err != nil {
@@ -163,6 +163,7 @@ func TestPlaceManualOrderUsesServerOwnedApplicationPath(t *testing.T) {
 		response.GetOrder().GetOwnerType() != "OPERATOR" ||
 		got.SpaceID != "space-1" ||
 		got.ActionID != "action-1" ||
+		got.DeadlineAt != 2000000000000 ||
 		got.Quantity.String() != "1" {
 		t.Fatalf("response = %+v, command = %+v", response, got)
 	}

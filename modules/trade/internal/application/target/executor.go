@@ -97,6 +97,9 @@ func (e *Executor) Converge(
 	if err != nil {
 		return Result{}, err
 	}
+	if logicalAccount.ControlMode != "STRATEGY" {
+		return Result{}, ErrTargetSession
+	}
 	target, err := e.Store.GetLogicalAccountTarget(ctx, spaceID, logicalAccountID)
 	if err != nil {
 		return Result{}, err
@@ -846,6 +849,9 @@ func (e *Executor) checkTargetExecutable(
 		return err
 	}
 	logicalAccount = fresh
+	if logicalAccount.ControlMode != "STRATEGY" {
+		return ErrTargetSession
+	}
 	if logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
 		return ErrTargetSession
 	}

@@ -122,6 +122,15 @@ func TestLogicalAccountFullTargetConvergesAcrossBinanceAndOKX(t *testing.T) {
 	require.Equal(t, StatusConverged, target.Status)
 }
 
+func TestManualAccountCannotExecutePersistedTarget(t *testing.T) {
+	f := newTargetFixture(t, exchange.MarketTypeSwap)
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}})
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+	_, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
+	require.Error(t, err)
+	require.Empty(t, f.orders.specs)
+}
+
 func TestTargetExecutorDiscardsPendingChildWhenAutomationChangesBeforeSubmit(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.orders.submitErrors = map[string]error{

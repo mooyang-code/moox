@@ -23,11 +23,18 @@ type ManualOrderCommand struct {
 	Quantity         shared.Decimal
 	LimitPrice       *shared.Decimal
 	Reason           string
+	DeadlineAt       int64
+}
+
+type SubmitOrderCommand struct {
+	ManualOrderCommand
+	LogicalAccountID string
 }
 
 type ExecutionServer struct {
-	Store       *store.Store
-	PlaceManual func(
+	Store          *store.Store
+	SubmitOrdinary func(context.Context, SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error)
+	PlaceManual    func(
 		context.Context,
 		ManualOrderCommand,
 	) (store.OperatorActionRecord, store.OrderRecord, error)
@@ -82,6 +89,7 @@ func (h *ExecutionServer) PlaceManualOrder(
 			Side:         sideFromPB(req.GetSide()),
 			PositionSide: positionSideFromPB(req.GetPositionSide()),
 			Quantity:     quantity, LimitPrice: limitPrice, Reason: req.GetReason(),
+			DeadlineAt: req.GetDeadlineAt(),
 		})
 	}
 	return &tradepb.PlaceManualOrderRsp{

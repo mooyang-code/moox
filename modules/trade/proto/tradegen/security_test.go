@@ -21,7 +21,7 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 			"RemoveLogicalAccountMember", "ClaimLogicalAccountOwner",
 			"ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner", "PauseLogicalAccount",
 			"ResumeLogicalAccount", "FlattenLogicalAccount",
-			"PlaceManualOrder", "CancelOrder", "GetOperatorAction",
+			"PlaceManualOrder", "SubmitOrder", "CancelOrder", "GetOperatorAction",
 			"GetLogicalAccountTarget", "GetOrder", "ListOrders", "ListFills",
 			"ListPositions", "CreatePaperSimulation", "ClosePaperSimulation",
 			"GetExecutionCapabilities", "QueryEquityCurve", "ListHoldings",
@@ -66,6 +66,9 @@ func TestTradeRPCUsesApprovedEnums(t *testing.T) {
 		"ExecutionMode": {
 			"EXECUTION_MODE_UNSPECIFIED", "EXECUTION_MODE_PAPER",
 			"EXECUTION_MODE_LIVE",
+		},
+		"ControlMode": {
+			"CONTROL_MODE_UNSPECIFIED", "CONTROL_MODE_STRATEGY", "CONTROL_MODE_MANUAL",
 		},
 		"AccountEnvironment": {
 			"ACCOUNT_ENVIRONMENT_UNSPECIFIED", "ACCOUNT_ENVIRONMENT_TESTNET",
@@ -129,6 +132,7 @@ func TestManualOrderRequestHasExactApprovedShape(t *testing.T) {
 		"quantity":           9,
 		"limit_price":        10,
 		"reason":             11,
+		"deadline_at":        12,
 	}
 	fields := (&PlaceManualOrderReq{}).ProtoReflect().Descriptor().Fields()
 	if fields.Len() != len(want) {
@@ -242,6 +246,7 @@ func TestScopedRequestsRejectMissingIdentity(t *testing.T) {
 		&ResumeLogicalAccountReq{},
 		&FlattenLogicalAccountReq{},
 		&PlaceManualOrderReq{},
+		&SubmitOrderReq{},
 		&CancelOrderReq{},
 		&GetOperatorActionReq{},
 		&GetLogicalAccountTargetReq{},

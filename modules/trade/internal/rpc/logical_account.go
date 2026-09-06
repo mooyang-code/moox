@@ -44,6 +44,7 @@ func (h *LogicalAccountServer) CreateLogicalAccount(
 		executionModeFromPB(req.GetExecutionMode()),
 		marketFromPB(req.GetMarketType()),
 		req.GetSettlementAsset(),
+		controlModeFromPB(req.GetControlMode()),
 	)
 	return &tradepb.CreateLogicalAccountRsp{
 		RetInfo:        errorInfo(err),

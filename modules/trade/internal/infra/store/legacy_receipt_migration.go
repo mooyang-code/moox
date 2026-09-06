@@ -124,8 +124,12 @@ func validateLegacyTargetReceiptTable(db *gorm.DB) error {
 // Supplement the shared shape inspector without changing other migrations:
 // its SQL normalization folds case and removes quotes even inside literals.
 func receiptSchemaTokens(db *gorm.DB) ([][]string, error) {
+	return migrationSchemaTokens(db, "t_logical_account_target_receipts")
+}
+
+func migrationSchemaTokens(db *gorm.DB, table string) ([][]string, error) {
 	var definitions []string
-	if err := db.Raw(`SELECT sql FROM sqlite_master WHERE tbl_name = 't_logical_account_target_receipts' COLLATE NOCASE AND type IN ('table','index') AND sql IS NOT NULL ORDER BY type,name`).Scan(&definitions).Error; err != nil {
+	if err := db.Raw(`SELECT sql FROM sqlite_master WHERE tbl_name = ? COLLATE NOCASE AND type IN ('table','index') AND sql IS NOT NULL ORDER BY type,name`, table).Scan(&definitions).Error; err != nil {
 		return nil, err
 	}
 	result := make([][]string, 0, len(definitions))
@@ -169,8 +173,8 @@ func receiptSchemaTokens(db *gorm.DB) ([][]string, error) {
 				}
 				token := definition[start:i]
 				// SQLite quotes the table name after the known rebuild's RENAME.
-				if strings.EqualFold(token, `"t_logical_account_target_receipts"`) {
-					token = "t_logical_account_target_receipts"
+				if strings.EqualFold(token, `"`+table+`"`) {
+					token = table
 				}
 				tokens = append(tokens, token)
 				continue

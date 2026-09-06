@@ -147,16 +147,19 @@ func (s *Store) acceptLogicalAccountTargetWithReceipt(ctx context.Context, targe
 	var current LogicalAccountTargetRecord
 	var accepted bool
 	err := s.Transaction(ctx, func(tx *Tx) error {
+		account, accountErr := tx.GetLogicalAccount(target.SpaceID, target.LogicalAccountID)
+		if accountErr != nil {
+			return accountErr
+		}
+		if account.ControlMode != "STRATEGY" {
+			return fmt.Errorf("%w: logical account is not strategy controlled", ErrTargetAuthorization)
+		}
 		// New targets are checked against the current Trade authorization and
 		// validity window before receipt replay. A stale duplicate must not turn
 		// an old accepted receipt into a way around session/expiry fencing.
 		if target.InstanceID != "" || target.SessionID != "" || target.BarEndTime != 0 || target.ValidUntil != 0 {
 			if receipt.InstanceID != target.InstanceID || receipt.SessionID != target.SessionID || receipt.StrategyID != target.StrategyID || receipt.BarEndTime != target.BarEndTime || receipt.EffectiveAt != target.EffectiveAt || receipt.ValidUntil != target.ValidUntil {
 				return fmt.Errorf("%w: target and receipt session contract mismatch", ErrInvalidRecord)
-			}
-			account, accountErr := tx.GetLogicalAccount(target.SpaceID, target.LogicalAccountID)
-			if accountErr != nil {
-				return accountErr
 			}
 			if account.OwnerInstanceID != target.InstanceID || account.OwnerSessionID != target.SessionID {
 				return fmt.Errorf("%w: target session authorization", ErrTargetAuthorization)
@@ -180,10 +183,6 @@ func (s *Store) acceptLogicalAccountTargetWithReceipt(ctx context.Context, targe
 			return query.Error
 		}
 		if len(ownerGenerations) > 0 {
-			account, accountErr := tx.GetLogicalAccount(target.SpaceID, target.LogicalAccountID)
-			if accountErr != nil {
-				return accountErr
-			}
 			generation := ownerGenerations[0]
 			// Legacy fixtures/accounts may not have entered an ownership
 			// lifecycle yet (generation zero). Once a claim/release has advanced

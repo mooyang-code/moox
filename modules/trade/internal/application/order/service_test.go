@@ -300,6 +300,18 @@ func TestSubmitTargetRechecksAccountReadinessBeforeExchangeCall(t *testing.T) {
 	require.Zero(t, adapter.placeCalls)
 }
 
+func TestSubmitTargetRejectsManualControlBeforeExchangeCall(t *testing.T) {
+	s, db, adapter := newTestService(t)
+	spec := testSpec(s.now())
+	setTestOwner(&spec, orderdomain.OwnerTarget)
+	pending, err := s.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+	_, err = s.Submit(context.Background(), "space-1", string(pending.ID))
+	require.Error(t, err)
+	require.Zero(t, adapter.placeCalls)
+}
+
 func TestSubmitSubmittingQueriesExchangeBeforeRetry(t *testing.T) {
 	service, tradeStore, adapter := newTestService(t)
 	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))

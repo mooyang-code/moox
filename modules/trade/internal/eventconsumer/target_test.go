@@ -84,6 +84,22 @@ func TestHandleTargetDirectedWakeOnlyAfterNewAcceptance(t *testing.T) {
 	require.Equal(t, []string{"space-1/logical-1"}, wakes)
 }
 
+func TestManualTargetReplayRejectedBeforeResolverAndWake(t *testing.T) {
+	db := openTargetStore(t)
+	seedLogicalTargetAccount(t, db, true, true)
+	now := time.Now().UTC()
+	delivery := logicalTargetDelivery(t, now, "target-manual", "runner-1", "logical-1", 2, nil)
+	opts := targetOptions(db, now)
+	require.Equal(t, jetstream.ACK, HandleTarget(context.Background(), delivery, opts).Decision)
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+	opts.Wake = func() { t.Error("manual target must not wake") }
+	opts.WeightResolver = targetResolverFunc(func(context.Context, int64, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
+		t.Error("manual target must not resolve")
+		return targetapp.WeightConversion{}, nil
+	})
+	require.Equal(t, jetstream.TERM, HandleTarget(context.Background(), delivery, opts).Decision)
+}
+
 func TestHandleLogicalAccountTargetAcceptsEmptyFullWhilePaused(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, false, true)

@@ -39,6 +39,28 @@ func TestAddMemberRequiresAdoptionForExistingExposure(t *testing.T) {
 	}))
 }
 
+func TestManualControlRejectsIdempotentClaimAndResume(t *testing.T) {
+	s, db := logicalAccountServiceFixture(t)
+	ctx := context.Background()
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_runner_id = 'runner', c_owner_instance_id = 'runner' WHERE c_logical_account_id = 'logical-1'").Error)
+	_, err := s.ClaimOwner(ctx, "space-1", "logical-1", "runner")
+	require.Error(t, err)
+	_, _, err = s.Resume(ctx, "space-1", "logical-1")
+	require.Error(t, err)
+}
+
+func TestManualReadinessUsesActualMembersWithoutStrategyOwner(t *testing.T) {
+	s, db := logicalAccountServiceFixture(t)
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_runner_id = NULL, c_owner_instance_id = NULL").Error)
+	ready, err := s.Readiness(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.True(t, ready.Ready, ready.Reasons)
+	require.NoError(t, db.DBForTest().Exec("DELETE FROM t_logical_account_members").Error)
+	ready, err = s.Readiness(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.False(t, ready.Ready)
+}
+
 func TestRemoveMemberRejectsActiveOrdersOrPositions(t *testing.T) {
 	service, tradeStore := logicalAccountServiceFixture(t)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {

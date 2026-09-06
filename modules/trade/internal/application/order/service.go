@@ -285,7 +285,10 @@ func (s *Service) Submit(
 		}
 		defer unlockExecution()
 
-		unlockAccount := s.Store.LockTradingAccount(record.TradingAccountID)
+		unlockAccount, lockErr := s.Store.LockTradingAccountContext(ctx, record.TradingAccountID)
+		if lockErr != nil {
+			return &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "submit_lock", Err: lockErr}
+		}
 		defer unlockAccount()
 		currentRecord, getErr := s.Store.GetOrder(ctx, spaceID, orderID)
 		if getErr != nil {
@@ -385,6 +388,9 @@ func (s *Service) authorizeTargetSubmit(
 	)
 	if err != nil {
 		return err
+	}
+	if logicalAccount.ControlMode != "STRATEGY" {
+		return ErrTargetOwnerConflict
 	}
 	if logicalAccount.AutomationState != "ACTIVE" {
 		return ErrAutomationPaused
@@ -611,7 +617,10 @@ func (s *Service) DiscardPending(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	unlock := s.Store.LockTradingAccount(record.TradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, record.TradingAccountID)
+	if err != nil {
+		return orderdomain.Order{}, &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "discard_pending_lock", Err: err}
+	}
 	defer unlock()
 	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
 	if err != nil {

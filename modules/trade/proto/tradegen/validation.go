@@ -90,6 +90,9 @@ func (r *CreatePaperSimulationReq) Validate() error {
 		!validExchange(r.Exchange) || !validMarketType(r.MarketType) || strings.TrimSpace(r.SettlementAsset) == "" {
 		return fmt.Errorf("account_name, logical_account_name, exchange, market_type and settlement_asset are required")
 	}
+	if !validCreationControlMode(r.ControlMode) {
+		return fmt.Errorf("control_mode is invalid")
+	}
 	if !isCanonicalPositiveDecimal(r.InitialBalance) || !canonicalUnsignedDecimalPattern.MatchString(r.MakerFeeRate) ||
 		!canonicalUnsignedDecimalPattern.MatchString(r.TakerFeeRate) || !canonicalUnsignedDecimalPattern.MatchString(r.SlippageBps) {
 		return fmt.Errorf("paper configuration decimals are invalid")
@@ -176,7 +179,14 @@ func (r *CreateLogicalAccountReq) Validate() error {
 			"name, execution_mode, market_type and settlement_asset are required",
 		)
 	}
+	if !validCreationControlMode(r.ControlMode) {
+		return fmt.Errorf("control_mode is invalid")
+	}
 	return nil
+}
+
+func validCreationControlMode(mode ControlMode) bool {
+	return mode == ControlMode_CONTROL_MODE_UNSPECIFIED || mode == ControlMode_CONTROL_MODE_STRATEGY || mode == ControlMode_CONTROL_MODE_MANUAL
 }
 
 func (r *GetLogicalAccountReq) Validate() error {
@@ -326,6 +336,9 @@ func (r *PlaceManualOrderReq) Validate() error {
 			"action_id, trading_account_id, client_order_id, instrument_id and reason are required",
 		)
 	}
+	if r.DeadlineAt < 0 {
+		return fmt.Errorf("deadline_at must be zero or positive Unix milliseconds")
+	}
 	if !validOrderType(r.OrderType) ||
 		!validFillPolicy(r.FillPolicy) ||
 		!validOrderSide(r.Side) ||
@@ -355,6 +368,19 @@ func (r *PlaceManualOrderReq) Validate() error {
 		return fmt.Errorf("unsupported order_type")
 	}
 	return nil
+}
+
+func (r *SubmitOrderReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" {
+		return fmt.Errorf("logical_account_id is required")
+	}
+	return (&PlaceManualOrderReq{
+		ActionId: r.ActionId, TradingAccountId: r.TradingAccountId,
+		ClientOrderId: r.ClientOrderId, InstrumentId: r.InstrumentId,
+		OrderType: r.OrderType, FillPolicy: r.FillPolicy, Side: r.Side,
+		PositionSide: r.PositionSide, Quantity: r.Quantity, LimitPrice: r.LimitPrice,
+		Reason: r.Reason, DeadlineAt: r.DeadlineAt,
+	}).Validate()
 }
 
 func (r *CancelOrderReq) Validate() error {

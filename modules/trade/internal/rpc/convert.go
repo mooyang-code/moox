@@ -341,6 +341,7 @@ func logicalAccountToPB(
 		OwnerSessionId:   value.OwnerSessionID,
 		AuthFence:        value.AuthFence,
 		ExecutionMode:    executionModeToPB(value.ExecutionMode),
+		ControlMode:      controlModeToPB(value.ControlMode),
 		MarketType:       marketToPB(value.MarketType),
 		SettlementAsset:  value.SettlementAsset,
 		AutomationState:  value.AutomationState,

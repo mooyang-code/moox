@@ -17,9 +17,11 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
     c_pause_reason TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_control_mode TEXT NOT NULL DEFAULT 'STRATEGY',
     PRIMARY KEY (c_space_id, c_logical_account_id),
     UNIQUE (c_space_id, c_name),
     CHECK (c_execution_mode IN ('PAPER', 'LIVE')),
+    CHECK (c_control_mode IN ('STRATEGY', 'MANUAL')),
     CHECK (c_market_type IN ('SPOT', 'SWAP')),
     CHECK (c_automation_state IN ('ACTIVE', 'PAUSED')),
     CHECK (
@@ -132,7 +134,7 @@ CREATE TABLE IF NOT EXISTS t_operator_actions (
     PRIMARY KEY (c_space_id, c_action_id),
     FOREIGN KEY (c_space_id, c_logical_account_id)
         REFERENCES t_logical_accounts (c_space_id, c_logical_account_id),
-    CHECK (c_action_type IN ('MANUAL_ORDER', 'CANCEL_ORDER', 'FLATTEN')),
+    CHECK (c_action_type IN ('MANUAL_ORDER', 'CANCEL_ORDER', 'FLATTEN', 'SUBMIT_ORDER')),
     CHECK (c_status IN ('RUNNING', 'COMPLETED', 'PARTIAL', 'FAILED')),
     CHECK (json_valid(c_request_json)),
     CHECK (c_result_json IS NULL OR json_valid(c_result_json))

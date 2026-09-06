@@ -58,6 +58,7 @@ func (s *Service) Create(
 	mode exchange.ExecutionMode,
 	market exchange.MarketType,
 	settlementAsset string,
+	controlMode string,
 ) (store.LogicalAccountRecord, error) {
 	if s == nil || s.Store == nil {
 		return store.LogicalAccountRecord{}, ErrServiceConfig
@@ -69,13 +70,15 @@ func (s *Service) Create(
 		mode,
 		market,
 		strings.ToUpper(strings.TrimSpace(settlementAsset)),
+		logicaldomain.ControlMode(controlMode),
 	)
 	if err != nil {
 		return store.LogicalAccountRecord{}, err
 	}
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: value.SpaceID, LogicalAccountID: value.ID, Name: value.Name,
+			ControlMode: string(value.ControlMode),
+			SpaceID:     value.SpaceID, LogicalAccountID: value.ID, Name: value.Name,
 			ExecutionMode:   string(value.ExecutionMode),
 			MarketType:      string(value.MarketType),
 			SettlementAsset: value.SettlementAsset,
@@ -224,6 +227,9 @@ func (s *Service) ClaimOwner(
 	if err != nil {
 		return store.LogicalAccountRecord{}, err
 	}
+	if current.ControlMode != "STRATEGY" {
+		return store.LogicalAccountRecord{}, ErrOwnerConflict
+	}
 	if current.OwnerRunnerID == runnerID {
 		return current, nil
 	}
@@ -296,6 +302,9 @@ func (s *Service) RebindOwner(
 	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {
 		return store.LogicalAccountRecord{}, err
+	}
+	if current.ControlMode != "STRATEGY" {
+		return store.LogicalAccountRecord{}, ErrOwnerConflict
 	}
 	if current.OwnerRunnerID != "" && current.OwnerRunnerID != runnerID {
 		return store.LogicalAccountRecord{}, ErrOwnerConflict
@@ -501,6 +510,9 @@ func (s *Service) Resume(
 	if err != nil {
 		return store.LogicalAccountRecord{}, "", err
 	}
+	if before.ControlMode != "STRATEGY" {
+		return store.LogicalAccountRecord{}, "", ErrNotReady
+	}
 	unlockExecution := s.Store.LockLogicalAccountExecution(spaceID, logicalAccountID)
 	defer unlockExecution()
 	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
@@ -627,6 +639,10 @@ func (s *Service) readiness(
 				)
 			}
 		}
+	}
+	if logicalAccount.ControlMode == "MANUAL" {
+		sort.Strings(reasons)
+		return Readiness{Ready: len(reasons) == 0, Reasons: reasons}, nil
 	}
 	target, targetErr := s.Store.GetLogicalAccountTarget(
 		ctx, spaceID, logicalAccountID,

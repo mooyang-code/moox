@@ -18,12 +18,20 @@ var (
 
 type AutomationState string
 
+type ControlMode string
+
+const (
+	ControlStrategy ControlMode = "STRATEGY"
+	ControlManual   ControlMode = "MANUAL"
+)
+
 const (
 	AutomationActive AutomationState = "ACTIVE"
 	AutomationPaused AutomationState = "PAUSED"
 )
 
 type Account struct {
+	ControlMode     ControlMode
 	SpaceID         string
 	ID              string
 	Name            string
@@ -50,9 +58,14 @@ func New(
 	mode exchange.ExecutionMode,
 	market exchange.MarketType,
 	settlementAsset string,
+	controlMode ControlMode,
 ) (Account, error) {
+	if controlMode == "" {
+		controlMode = ControlStrategy
+	}
 	account := Account{
-		SpaceID: spaceID, ID: id, Name: name,
+		ControlMode: controlMode,
+		SpaceID:     spaceID, ID: id, Name: name,
 		ExecutionMode: mode, MarketType: market,
 		SettlementAsset: settlementAsset,
 		AutomationState: AutomationPaused,
@@ -65,6 +78,12 @@ func New(
 }
 
 func (a Account) Validate() error {
+	if a.ControlMode != ControlStrategy && a.ControlMode != ControlManual {
+		return fmt.Errorf("%w: unsupported control mode %q", ErrInvalidAccount, a.ControlMode)
+	}
+	if a.ControlMode == ControlManual && (!blank(a.OwnerRunnerID) || a.AutomationState == AutomationActive) {
+		return fmt.Errorf("%w: manual account cannot have strategy ownership or automation", ErrInvalidAccount)
+	}
 	if blank(a.SpaceID) || blank(a.ID) || blank(a.Name) ||
 		!a.ExecutionMode.Valid() || !a.MarketType.Valid() ||
 		blank(a.SettlementAsset) {

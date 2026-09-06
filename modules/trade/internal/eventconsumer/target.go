@@ -93,6 +93,9 @@ func HandleTarget(
 		}
 		return retryTarget(accountErr)
 	}
+	if account.ControlMode != "STRATEGY" {
+		return targetRejection("authorization_conflict", fmt.Errorf("%w: logical account is not strategy controlled", store.ErrTargetAuthorization))
+	}
 	if modernContract {
 		if account.OwnerInstanceID != request.GetInstanceId() || account.OwnerSessionID != request.GetSessionId() {
 			return targetRejection("authorization_conflict", fmt.Errorf("%w: target session authorization", store.ErrConflict))

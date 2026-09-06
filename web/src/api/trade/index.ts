@@ -1,4 +1,5 @@
 import { callTrade } from "./http";
+export { TradeResponseError } from "./http";
 import type {
   AccountResponse,
   AddLogicalAccountMemberReq,
@@ -22,6 +23,7 @@ import type {
   Page,
   PageResult,
   PlaceManualOrderReq,
+  SubmitOrderReq,
   Position,
   RetInfo,
   UpdateTradingAccountReq
@@ -169,8 +171,12 @@ export function flattenLogicalAccount(action_id: string, logical_account_id: str
   >("console", "FlattenLogicalAccount", { action_id, logical_account_id, reason });
 }
 
+export function submitOrder(req: SubmitOrderReq) {
+  return callTrade<SubmitOrderReq, { ret_info: RetInfo; action: OperatorAction; order: Order }>("console", "SubmitOrder", req);
+}
+
 export function placeManualOrder(req: PlaceManualOrderReq) {
-  return callTrade<PlaceManualOrderReq, { ret_info: RetInfo; action: OperatorAction; order: Order }>(
+  return callTrade<PlaceManualOrderReq, { ret_info: RetInfo; action: OperatorAction; order?: Order }>(
     "console",
     "PlaceManualOrder",
     req
