@@ -14,7 +14,7 @@
 
 **上次计划复核记录：** 原仓库 `feature/mooyang`，`c15d688ba3e25226c42c1fd10b5800ec21df5652`。该次复核开始时工作区干净；上述审查基线及其测试记录属于此前快照，不代表本轮重新运行测试。当前 Strategy 已有新的执行流水线提交，T01/T10 必须以最新生产者代码验证契约，而不是照搬旧工作区。
 
-**最新计划核对：** 2026-09-06，原仓库 HEAD 为 `cbf423c094526ea158c3ace29328148b04c2d6d5`。本轮只更新计划；当前已有 `modules/factor/test/storage_e2e_test.go`、`scripts/deploy/deploy-moox.sh`、`scripts/test/e2e/test-series-tag-e2e.sh` 的其他修改，不纳入本次文档提交。旧审查问题表用于追踪问题来源，不代表每项仍能在最新 HEAD 复现；T01 必须逐项判断“仍需修复 / 已修复待回归 / 设计增量”，不得覆盖已有修复。
+**最新计划核对：** 2026-09-06，原仓库 HEAD 为 `8744061605c1aec3a66b3a98714feaacda272dfc`。本轮只更新计划；当前已有 `modules/factor/test/storage_e2e_test.go`、`modules/strategy/internal/storageio/rpc.go`、`scripts/test/e2e/test-series-tag-e2e.sh` 的其他修改，不纳入本次文档提交。旧审查问题表用于追踪问题来源，不代表每项仍能在最新 HEAD 复现；T01 必须逐项判断“仍需修复 / 已修复待回归 / 设计增量”，不得覆盖已有修复。此次只静态核对计划及相关入口，不将此前工作区的测试结果算作本轮验收。
 
 ---
 
@@ -405,6 +405,8 @@ GetOrder / GetOperatorAction -> current facts, never infer fill from RPC success
 - 修改：`modules/trade/proto/trade_service.proto`、`internal/rpc/convert.go`、`logical_account.go`、`internal/domain/order/spec.go`
 - 修改及测试：`modules/trade/internal/eventconsumer/target.go`、`modules/trade/internal/infra/store/target.go`、`modules/trade/internal/infra/store/target_receipt.go`、`modules/trade/internal/application/target/executor.go`、`modules/trade/internal/application/order/service.go`、`modules/trade/internal/application/logicalaccount/service.go`、`modules/trade/internal/infra/store/logical_account.go`
 - 协同修改：`modules/strategy/internal/trigger/processor.go`、`processor_test.go`、`modern_test.go`、`internal/store/results.go`、`internal/bootstrap/logical_account.go`、`internal/rpc/service.go`、`proto/strategy.proto` 及对应生成文件/测试
+- 接线修改及测试：`modules/strategy/internal/bootstrap/config.go`、`bootstrap.go`、`logical_account_test.go`、`config_test.go`、`modules/strategy/config/app.yaml`、`packages/gatewayauth/trpc.go` 及对应测试、`modules/admin/internal/service/sysdeploy/defaults.go`、`scripts/deploy/deploy-moox.sh`、`scripts/test/contract/test-deploy-moox-strategy.sh`
+- 恢复调用方核验及必要修改：`modules/strategy/internal/rpc/service_test.go`、`web/src/api/admin/http.ts` 及 Strategy API 对应测试
 - 协同核验并按旧分支删除需要修改：`modules/strategy/internal/store/definitions.go`、`modules/strategy/internal/outbox/relay.go`、`modules/strategy/internal/outbox/publisher.go` 及对应测试；保留 `CommitResult -> PublishPending -> PublishResult` 的持久事件语义
 - 修改 Web：`web/src/api/strategy.ts`、`web/src/api/strategy-types.ts`、`web/src/api/trade/types.ts`、`web/src/store/modules/strategy.ts`、`web/src/views/strategy/detail/index.vue`、`web/src/views/strategy/components/strategy-operation-panel.vue`、`web/src/views/trading/logical-accounts/index.vue`、`web/src/views/trading/account-workbench/index.vue` 及对应测试
 - 修改文档：`modules/trade/DESIGN.md`、`modules/trade/README.md`、`docs/交易模块架构设计.md`、`docs/交易模块功能说明.md`、`docs/运维/MooX-Trade运维.md`
@@ -415,6 +417,12 @@ GetOrder / GetOperatorAction -> current facts, never infer fill from RPC success
 - [ ] 删除旧外部 Runner 创建/启用/授权入口前，检查 Strategy RPC、Web store、详情页 `runnerId/loadRunnerDetail` 和操作面板的真实调用。现代 Loader 如果仍借用 `StrategyRunner` 作为内部求值输入类型，只消除其旧外部授权/发布语义，不凭类型名机械删除现代流水线依赖。
 - [ ] 最终自动交易事件只接受完整现代身份、bar_end_time、effective_at、valid_until 与 target_weight；删掉旧数量事件执行入口、legacy owner generation/command sequence 的授权 fallback。历史结果和交易事实不因此删除。
 - [ ] 本任务只处理执行边界及直接调用方，不重写 Strategy DSL、因子、选股或调度实现。Strategy 同时在修改时先对齐实际契约；无法闭合直接调用链则停止该切换，不把半完成接口作为已交付版本。
+- [ ] **T10.1：补齐独立 Trade 接线。** 当前 `bootstrap/config.go:63` 默认本机 `11200`，`logical_account.go:newLogicalAccountOwnerClient` 使用直接 HTTP，部署契约又允许 Strategy 不部署 Trade。为 Trade 依赖显式配置 Gateway target、接收节点 ID、caller 凭据及 timeout，复用现有签名客户端，不新增旁路认证。Trade 依赖配置不得被通用本机 `MOOX_SERVICE_GATEWAY_TARGET/MOOX_GATEWAY_TARGET_NODE` 无条件覆盖；渲染部署配置与实际注册节点保持一致，不能把服务名当作签名节点 ID。
+- [ ] T10.1 先增加失败测试：Strategy 所在节点没有 Trade，目标在另一 Gateway；请求经生产客户端和 Gateway 转发仍可 Get/Claim/Release 现代身份，保留的现代 Rebind 管理入口也通过其授权调用方验证。验证 Space 元数据在签名和转发后保留；错误签名、错误节点、跨 Space、未授权方法均拒绝。按最终调用图列出 caller-method ACL，Strategy 只获得运行必需的方法，不因修复连通性而开放人工下单等全部 Trade 方法。部署契约覆盖生成配置和凭据注入，日志不输出 secret。
+- [ ] Gateway 与现代协议作为同一切换批次：先暂停并处置 legacy owner，完成新 session 授权前不得恢复策略；删除 `bootstrap.go` 启动及周期调用的 `ReconcileLegacyOwners` 和旧 Rebind 客户端路径后，再验收最终最小 ACL。不把依赖 legacy Rebind 的旧启动代码与现代方法白名单混合发布，也不为此保留长期旧协议。T02/T11 的 Rebind 用例明确验证现代 session CAS，不用旧 runner rebind 代替。
+- [ ] **T10.2：明确创建与启用失败恢复。** `rpc/service.go:CreateStrategyInstance` 已先保存 disabled 实例/session 再 Claim，但后置错误响应没有实例。持久创建后的任何错误必须返回可查询的 instance ID 和已知状态；查库失败时只返回可靠身份，不伪造 enabled/session 状态。Claim 超时保留 disabled/session 证据，明确拒绝才可受控清理该 session；清理失败也必须暴露，禁止删除实例来掩盖未知远端认领。
+- [ ] T10.2 推荐使用现有“创建 disabled -> 显式 SetStrategyInstanceEnabled”作为客户端标准流程。保留 Create(enabled=true) 时，同 ID 重试必须先核对 Space、策略、输入绑定、逻辑账户：配置不同返回冲突且不修改原实例；配置相同返回现有持久状态，启用未完成则明确引导同 ID 的显式 Enable，不由重试创建新 session 或实例。不根据 mutable enabled 字段猜测原创建请求；若要精确重放原请求，则需先增加持久请求指纹，不能宣称当前表已支持完整请求幂等。
+- [ ] T10.2 先增加失败测试：Claim 响应丢失、明确拒绝、Claim 成功但启用落库失败、错误后查询失败、同 ID 同参/异参重试、重启后 Enable 恢复。断言身份不丢失、未知 session 不提前清空、不重复创建、不释放其他 session。Web 当前创建传 enabled=false，继续保留此流程；同时核验非零 RetInfo 被通用 HTTP 层转为 Error 时仍可保留恢复身份，避免提示用户换 ID 重建。
 - [ ] 不添加 `reserved`、别名、长期双写/双读兼容层。需要保留的历史审计字段明确为只读来源，不参与新授权或新目标生成。已有 legacy owner 必须通过受控停用/重新授权切换，不能猜测 session。
 - [ ] 同步清理 EventBus 配置和架构契约脚本的旧 quantity subject/事件名。发布时核查实际 MOOX_TRADE stream、consumer filter 和发布 ACL，现代 weight subject 必须保留；停止旧 producer 后先记录旧积压的数量和处置决策，再受控更新 subject。禁止删除并重建生产 stream，也不能认为改本地 YAML 就已修改远端。旧事件负例、现代发布/消费正例和已有消息保留均纳入验收。
 - [ ] 控制台保留现有订单、成交、持仓、资金曲线和账户信息；只调整身份字段、受理/未知/过期状态及新提交入口，不扩大成 UI 重设计。
@@ -456,6 +464,8 @@ pnpm -C web exec vue-tsc --noEmit
 | Paper 大历史与事务恢复 | 100001 笔完整；增量/重建一致；中途失败不半更新 |
 | 多账户容量与故障 | 不无故搬同向仓；健康账户不被坏候选永久阻塞 |
 | Paper 关闭与隔离 | 关闭后不撮合；历史可查；Live/Paper 不串账；跨 space 请求拒绝 |
+| 独立节点鉴权接线 | Strategy 无本机 Trade，仍经正确 Gateway/节点/Space 完成现代 Claim 与查询；越权负例拒绝 |
+| 实例创建部分成功 | 返回持久实例身份；相同 ID 可查询并显式恢复启用；未知 session 不丢失，异参不覆盖 |
 
 - [ ] 执行本地后端验收：
 
@@ -470,6 +480,7 @@ git diff --check
 ```
 
 - [ ] 修订 E2E shell 的成功断言，必须确实跑到现代身份与目标成交用例，不能仅凭旧 Runner 用例通过或测试因 tag/环境 SKIP 判定成功。隔离服务必须清理，不连接现有生产 NATS。
+- [ ] 对 T10.1 单独运行 `go test -count=1 ./modules/strategy/internal/bootstrap ./packages/gatewayauth/... ./modules/gateway/... ./modules/admin/internal/service/sysdeploy` 与 `bash scripts/test/contract/test-deploy-moox-strategy.sh`，期望全部 PASS。对 T10.2 运行 `go test -count=1 ./modules/strategy/internal/rpc`，并补对应 Web 测试。直接 HTTP 替身或手写查询桥通过，不等于生产 Gateway 接线通过。
 - [ ] 执行前端单测、类型检查、`pnpm -C web build:prod` 和 Playwright；验证提交返回受理而非成交、未知态可追踪、过期可见、拒绝不显示成交成功。
 - [ ] 使用隔离配置运行 `pnpm -C web exec playwright test tests/strategy-console.spec.ts tests/trade-execution.spec.ts`；提前确认测试服务、数据库和 API 均为本地替身，不把浏览器验收指向生产账户。
 - [ ] 安排两个独立 `codeCR`：一个审查订单/资金/恢复，另一个审查目标/session/API；主 Agent 核验所有发现并闭环，不以测试通过代替资金语义审查。
@@ -484,6 +495,7 @@ git diff --check
 - [ ] 旧 pinned/current target 或 legacy 授权的切换先暂停、保留历史 receipt，再完成新身份授权并等待新目标；不得通过批量 SQL 改现有目标路由后自动开仓。
 - [ ] 回滚必须考虑升级后是否产生新订单/Fill：有新交易事实时不能简单恢复旧库快照。先暂停新动作并确认账户事实，再决定回滚应用或修复向前；任何历史事实修复单独审批。
 - [ ] 真正部署前重新核验该节点的服务依赖和 schema。涉及嵌入式前端时按现行流程重新生成 statik、构建并只重启授权服务；本计划生成阶段不运行这些动作。
+- [ ] 获得部署授权后，使用新建且隔离的 Paper 账户与 Strategy 实例进行目标环境验收：通过正式管理接口建账户/实例和启用，经实际 Processor、Outbox、JetStream、Trade Worker 到 Fill，再查询余额/持仓。记录构建 SHA、目标节点和各关联 ID；不手写 DB owner/target，不用手工 payload 代替策略输出，不把 Paper 验收表述为真实交易所验收。复核没有触碰既有 Live 账户后再关闭测试实例，保留测试成交事实。
 - [ ] Testnet 下单另需确认账户、secret ID、允许标的、最大名义金额与清理方案。PRODUCTION 开关不因测试被自动打开。
 
 ## 六、完成定义
