@@ -23,7 +23,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import OperationPanel from "@/views/strategy/components/strategy-operation-panel.vue";
-import ResultTimeline from "@/views/strategy/components/strategy-run-timeline.vue";
+import ResultTimeline from "@/views/strategy/components/strategy-result-table.vue";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import TargetTable from "@/views/strategy/components/strategy-target-table.vue";
 import { deriveTargetState, formatStrategyTime } from "@/views/strategy/model";

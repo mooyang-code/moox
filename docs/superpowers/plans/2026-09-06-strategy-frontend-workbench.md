@@ -372,4 +372,13 @@ pnpm check:detail-pages
 - [ ] 分页、空间切换、迟到响应、移动布局和相邻 Trade 测试均有验证。
 - [ ] 单测、mock E2E、构建、独立审查、文档与 Git 推送分别有证据；远端发布状态单独报告。
 
-**当前状态：仅计划文档已生成，以上实现、测试、构建和发布任务均未执行。**
+## 执行结果（2026-09-07）
+
+本计划已按现代 StrategyInstance 契约执行，相关前端代码、单测、mock Playwright、生产构建和
+web-host 制品已完成，并由独立 codeCR Agent 复审。实现提交为 `6aaefffb`、`e45679ee`，
+已推送到 `feature/mooyang`；详细命令、远端制品 SHA 和已知环境问题见
+`modules/strategy/docs/frontend-verification.md`。
+
+正式环境静态前端已发布并验证登录、菜单、路由和错误态；远端 `ListStrategies` 当前仍因
+Strategy 服务 `127.0.0.1:11430` 返回 EOF，策略数据读取未通过。该问题单独记录，不在本次
+前端重构中修改后台业务或运行配置。
