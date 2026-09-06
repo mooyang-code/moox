@@ -54,9 +54,8 @@ func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 			if err != nil {
 				return err
 			}
-			if limit < len(rows) {
-				rows = rows[:limit]
-			}
+			// Scan the complete pending set. A fixed prefix cap lets a run of
+			// transiently failing rows starve every later result indefinitely.
 			var firstErr error
 			for _, row := range rows {
 				prepared, valid, prepErr := resultStore.PreparePendingResult(ctx, row.ResultID, time.Now().UTC())

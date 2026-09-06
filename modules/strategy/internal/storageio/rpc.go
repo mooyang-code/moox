@@ -7,6 +7,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -33,12 +34,25 @@ type RPCClient struct {
 // index on every request, so an index rebuild or cutover fails closed instead
 // of producing a mixed-generation input frame.
 type viewSnapshot struct {
+	mu        sync.Mutex
 	client    *RPCClient
 	spaceID   string
 	indexes   map[string]string
 	revisions map[string]uint64
 	selectors map[string][]*storagepb.TimeSeriesSelector
 	subjects  map[string][]input.Subject
+}
+
+// ViewSnapshotProvenance exposes the actual active index generations latched
+// by a snapshot after its first successful row read.
+func (s *viewSnapshot) ViewProvenance(viewID string) (string, uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	indexID, ok := s.indexes[viewID]
+	if !ok {
+		return "", 0, false
+	}
+	return indexID, s.revisions[viewID], true
 }
 
 func (c *RPCClient) BeginViewSnapshot(ctx context.Context, spaceID string, viewIDs []string) (ViewReader, error) {
@@ -95,7 +109,7 @@ func (c *RPCClient) beginViewSnapshot(ctx context.Context, spaceID string, viewI
 }
 
 func (s *viewSnapshot) ReadPeriod(ctx context.Context, spaceID, viewID string, period time.Time) ([]ViewRow, error) {
-	return s.client.readRowsAt(ctx, spaceID, viewID, period, period.Add(time.Nanosecond), s.indexes[viewID], s.revisions[viewID], s.selectors[viewID])
+	return s.readPinnedRows(ctx, spaceID, viewID, period, period.Add(time.Nanosecond))
 }
 
 func (s *viewSnapshot) ListSubjects(_ context.Context, _, viewID string) ([]input.Subject, error) {
@@ -107,7 +121,7 @@ func (s *viewSnapshot) ListSubjects(_ context.Context, _, viewID string) ([]inpu
 }
 
 func (s *viewSnapshot) HistoryPeriods(ctx context.Context, spaceID, viewID, _ string, start, end time.Time) (map[string]int, error) {
-	rows, err := s.client.readRowsAt(ctx, spaceID, viewID, start, end, s.indexes[viewID], s.revisions[viewID], s.selectors[viewID])
+	rows, err := s.readPinnedRows(ctx, spaceID, viewID, start, end)
 	if err != nil {
 		return nil, err
 	}
@@ -142,6 +156,27 @@ func (s *viewSnapshot) HistoryPeriods(ctx context.Context, spaceID, viewID, _ st
 		result[instrumentID] = len(values)
 	}
 	return result, nil
+}
+
+func (s *viewSnapshot) readPinnedRows(ctx context.Context, spaceID, viewID string, start, end time.Time) ([]ViewRow, error) {
+	s.mu.Lock()
+	indexID := s.indexes[viewID]
+	revision := s.revisions[viewID]
+	selectors := s.selectors[viewID]
+	s.mu.Unlock()
+	rows, servedRevision, err := s.client.readRowsAtWithRevision(ctx, spaceID, viewID, start, end, indexID, revision, selectors)
+	if err != nil {
+		return nil, err
+	}
+	if servedRevision != 0 {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.revisions[viewID] != 0 && s.revisions[viewID] != servedRevision {
+			return nil, fmt.Errorf("%w: view %s active index revision changed: expected=%d actual=%d", input.ErrStaleViewSnapshot, viewID, s.revisions[viewID], servedRevision)
+		}
+		s.revisions[viewID] = servedRevision
+	}
+	return rows, nil
 }
 
 func (c *RPCClient) metadataAuth() *commonpb.AuthInfo {
@@ -351,14 +386,19 @@ func (c *RPCClient) readRows(ctx context.Context, spaceID, viewID string, start,
 }
 
 func (c *RPCClient) readRowsAt(ctx context.Context, spaceID, viewID string, start, end time.Time, expectedIndexID string, expectedRevision uint64, selectors []*storagepb.TimeSeriesSelector) ([]ViewRow, error) {
+	rows, _, err := c.readRowsAtWithRevision(ctx, spaceID, viewID, start, end, expectedIndexID, expectedRevision, selectors)
+	return rows, err
+}
+
+func (c *RPCClient) readRowsAtWithRevision(ctx context.Context, spaceID, viewID string, start, end time.Time, expectedIndexID string, expectedRevision uint64, selectors []*storagepb.TimeSeriesSelector) ([]ViewRow, uint64, error) {
 	if c == nil || c.DataView == nil {
-		return nil, fmt.Errorf("storage data view client is not configured")
+		return nil, 0, fmt.Errorf("storage data view client is not configured")
 	}
 	if strings.TrimSpace(expectedIndexID) == "" {
-		return nil, fmt.Errorf("%w: storage view %s has no active index", input.ErrNotReady, viewID)
+		return nil, 0, fmt.Errorf("%w: storage view %s has no active index", input.ErrNotReady, viewID)
 	}
 	if len(selectors) == 0 {
-		return nil, fmt.Errorf("%w: storage view %s has no active selectors", input.ErrNotReady, viewID)
+		return nil, 0, fmt.Errorf("%w: storage view %s has no active selectors", input.ErrNotReady, viewID)
 	}
 	// A strategy period is a cross-sectional point-in-time read. Keep that
 	// read in one DuckDB statement so its MVCC snapshot cannot change between
@@ -375,27 +415,27 @@ func (c *RPCClient) readRowsAt(ctx context.Context, spaceID, viewID string, star
 	for page := uint32(1); ; page++ {
 		rsp, queryErr := c.DataView.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{AuthInfo: c.viewAuth(), SpaceId: spaceID, ViewId: viewID, Selectors: selectors, TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)}, Page: &commonpb.Page{Page: page, Size: pageSize}, TotalMode: commonpb.TotalMode_NONE, ExpectedActiveIndexId: expectedIndexID, ExpectedActiveIndexRevision: currentExpectedRevision})
 		if queryErr != nil {
-			return nil, queryErr
+			return nil, 0, queryErr
 		}
 		if err := retErrorForView(rsp.GetRetInfo(), viewID); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if servedRevision := rsp.GetServedActiveIndexRevision(); servedRevision != 0 {
 			if currentExpectedRevision != 0 && currentExpectedRevision != servedRevision {
-				return nil, fmt.Errorf("%w: view %s active index revision changed: expected=%d actual=%d", input.ErrStaleViewSnapshot, viewID, currentExpectedRevision, servedRevision)
+				return nil, 0, fmt.Errorf("%w: view %s active index revision changed: expected=%d actual=%d", input.ErrStaleViewSnapshot, viewID, currentExpectedRevision, servedRevision)
 			}
 			currentExpectedRevision = servedRevision
 		}
 		if !rsp.GetComplete() {
-			return nil, fmt.Errorf("%w: view %s is not complete", input.ErrNotReady, viewID)
+			return nil, 0, fmt.Errorf("%w: view %s is not complete", input.ErrNotReady, viewID)
 		}
 		if singlePeriod && (rsp.GetPageResult().GetHasMore() || len(rsp.GetRows()) > len(selectors)) {
-			return nil, fmt.Errorf("%w: view %s period has more rows than active selectors", input.ErrStrictIncomplete, viewID)
+			return nil, 0, fmt.Errorf("%w: view %s period has more rows than active selectors", input.ErrStrictIncomplete, viewID)
 		}
 		for _, row := range rsp.GetRows() {
 			converted, convertErr := convertRow(row)
 			if convertErr != nil {
-				return nil, convertErr
+				return nil, 0, convertErr
 			}
 			result = append(result, converted)
 		}
@@ -409,7 +449,7 @@ func (c *RPCClient) readRowsAt(ctx context.Context, spaceID, viewID string, star
 			break
 		}
 	}
-	return result, nil
+	return result, currentExpectedRevision, nil
 }
 
 func (c *RPCClient) selectorsForDataset(ctx context.Context, spaceID, datasetID, frequency string) ([]*storagepb.TimeSeriesSelector, error) {

@@ -1,6 +1,7 @@
 package input
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
@@ -39,6 +40,30 @@ func TestBuildPoolDistinguishesExplicitEmptyInclude(t *testing.T) {
 	all := BuildPool(config.InstrumentPoolRule{}, []Subject{{SubjectID: "btc", InstrumentID: "BTC", Active: true}}, nil)
 	if len(all.Items) != 1 {
 		t.Fatalf("omitted include should select the directory: %+v", all.Items)
+	}
+}
+
+func TestBuildPoolRejectsUnknownOrIncompleteExplicitInclude(t *testing.T) {
+	rule := config.InstrumentPoolRule{Include: []string{"BTC", "ETH"}, IncludeSet: true, MinHistoryPeriods: 2}
+	got := BuildPool(rule, []Subject{{SubjectID: "btc", InstrumentID: "BTC", Active: true}}, map[string]int{"BTC": 2})
+	if !errors.Is(got.Err, ErrPoolInvalid) {
+		t.Fatalf("expected invalid explicit pool, got %+v", got)
+	}
+	if len(got.Items) != 1 || got.Items[0].InstrumentID != "BTC" {
+		t.Fatalf("eligible items should remain observable, got %+v", got.Items)
+	}
+}
+
+func TestBuildPoolAllowsMissingHistoricalInclude(t *testing.T) {
+	rule := config.InstrumentPoolRule{
+		Include: []string{"BTC", "OLD"}, IncludeSet: true, HistoricalInclude: []string{"OLD"},
+	}
+	got := BuildPool(rule, []Subject{{SubjectID: "btc", InstrumentID: "BTC", Active: true}}, nil)
+	if got.Err != nil {
+		t.Fatalf("historical subject absence should not invalidate the current pool: %v", got.Err)
+	}
+	if len(got.Items) != 1 || got.Items[0].InstrumentID != "BTC" {
+		t.Fatalf("unexpected pool items: %+v", got.Items)
 	}
 }
 

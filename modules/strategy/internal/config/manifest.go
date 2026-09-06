@@ -66,7 +66,12 @@ type InstrumentPoolRule struct {
 	// IncludeSet distinguishes an explicit empty fixed pool (select nothing)
 	// from an omitted include constraint (select every subject). It is an
 	// internal loader hint and is not part of the user DSL.
-	IncludeSet        bool
+	IncludeSet bool
+	// HistoricalInclude contains IDs carried forward from prior RuleState.
+	// They are read when available so exit signals can be evaluated, but a
+	// temporarily absent/inactive historical subject must not make the whole
+	// current pool invalid.
+	HistoricalInclude []string
 	Exclude           []string
 	MinHistoryPeriods int
 }
@@ -225,6 +230,9 @@ func Validate(dsl *DSL) error {
 		if dsl.Triggers.Event.Name == "" {
 			return errors.New("strategy DSL triggers.event.name is required")
 		}
+		if !supportedEventName(dsl.Triggers.Event.Name) {
+			return fmt.Errorf("strategy DSL triggers.event.name %q is not supported", dsl.Triggers.Event.Name)
+		}
 	}
 	dsl.Data.Bar = strings.TrimSpace(dsl.Data.Bar)
 	dsl.Data.Calendar = strings.TrimSpace(dsl.Data.Calendar)
@@ -280,6 +288,15 @@ func normalizeFrequency(value string) (string, error) {
 		unit = strings.ToUpper(unit)
 	}
 	return matches[1] + unit, nil
+}
+
+func supportedEventName(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "viewfactorperiodready", "factor.ready", "event.storage.view.factor_period.ready", "viewsourceperiodready", "ready", "source.ready", "event.storage.view.source_period.ready":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateRule(name string, rule *Rule) error {
@@ -415,10 +432,11 @@ func validatePool(name string, pool *Pool) error {
 			if value == "" {
 				return fmt.Errorf("strategy DSL rules.%s.pool[%d] is empty", name, i)
 			}
-			if _, exists := seen[value]; exists {
+			key := strings.ToUpper(value)
+			if _, exists := seen[key]; exists {
 				return fmt.Errorf("strategy DSL rules.%s.pool contains duplicate %q", name, value)
 			}
-			seen[value] = struct{}{}
+			seen[key] = struct{}{}
 			pool.Fixed[i] = value
 		}
 		return nil

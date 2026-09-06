@@ -249,10 +249,15 @@ func validateViewFactorPeriodReady(message *eventpb.EventMessage, value proto.Me
 	if err := validateStoragePeriod(message, payload.GetResultViewId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetReadyAt(), "view factor period ready"); err != nil {
 		return err
 	}
-	if (payload.GetSourceIndexId() == "") != (payload.GetSourceIndexRevision() == 0) || (payload.GetResultIndexId() == "") != (payload.GetResultIndexRevision() == 0) {
+	hasSourceIndex := payload.GetSourceIndexId() != ""
+	hasResultIndex := payload.GetResultIndexId() != ""
+	if hasSourceIndex != (payload.GetSourceIndexRevision() != 0) || hasResultIndex != (payload.GetResultIndexRevision() != 0) {
 		return fmt.Errorf("view factor period ready index provenance is incomplete")
 	}
-	return validateFactorBindingStates(payload.GetBindings(), payload.GetStatus(), "view factor period ready", payload.GetSourceIndexId() != "" || payload.GetResultIndexId() != "")
+	if hasSourceIndex != hasResultIndex {
+		return fmt.Errorf("view factor period ready source and result index provenance must be provided together")
+	}
+	return validateFactorBindingStates(payload.GetBindings(), payload.GetStatus(), "view factor period ready", hasSourceIndex)
 }
 
 func validateDatasetSyncPoint(message *eventpb.EventMessage, value proto.Message) error {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,8 @@ var defaultExpressionFields = map[string]reflect.Type{
 	"close":  reflect.TypeOf(float64(0)),
 	"volume": reflect.TypeOf(float64(0)),
 }
+
+var barFieldRef = regexp.MustCompile(`bars\[(-?[0-9]+)\]\.([A-Za-z_][A-Za-z0-9_]*)`)
 
 var defaultExpressionIdentifiers = map[string]reflect.Type{
 	"instrument_id": reflect.TypeOf(""),
@@ -145,10 +148,15 @@ func (i *expressionInspector) Visit(node *ast.Node) {
 }
 
 func (i *expressionInspector) inspectIdentifier(n *ast.IdentifierNode) {
-	if n.Value == "bars" || n.Value == "score" || n.Value == "pct_rank" || n.Value == "zscore" {
-		if n.Value == "score" {
-			i.dependencies.UsesScore = true
+	if n.Value == "bars" || n.Value == "pct_rank" || n.Value == "zscore" {
+		return
+	}
+	if n.Value == "score" {
+		if i.stage != StageSelectWhere && i.stage != StageFilterAfter {
+			i.setError(fmt.Errorf("score is not available in %s expressions", i.stage))
+			return
 		}
+		i.dependencies.UsesScore = true
 		return
 	}
 	if n.Value == "prev" {

@@ -33,6 +33,12 @@ var ErrStaleViewSnapshot = errors.New("evaluation input View snapshot is stale")
 // forever.
 var ErrStrictIncomplete = errors.New("evaluation input is strictly incomplete")
 
+// ErrPoolInvalid means an explicitly configured pool could not be resolved
+// against the current subject directory. It is terminal for this evaluation
+// attempt: publishing an empty FULL target would otherwise be interpreted by
+// Trade as an instruction to flatten the account.
+var ErrPoolInvalid = errors.New("strategy pool is invalid")
+
 // StrictIncompleteError carries the resolved pool that was checked before a
 // strict readiness failure. Trigger handling uses it to scope terminal
 // subject failures even when the pool was selected dynamically (without an
@@ -69,6 +75,11 @@ type InstrumentInput struct {
 	PoolItem
 	Values         map[string]quant.Decimal
 	PreviousValues map[string]quant.Decimal
+	// ScopedFields marks aliases that are intentionally unavailable for this
+	// instrument because the corresponding subject-scoped binding does not
+	// cover it.  Other missing fields remain strict evaluation errors.
+	ScopedFields      map[string]bool
+	ScopedFieldsReady bool
 }
 
 // EvaluationInput is immutable input for one strategy period. The producer is
@@ -79,8 +90,16 @@ type EvaluationInput struct {
 	PeriodEnd     string
 	SourceViewID  string
 	DataFrequency string
-	Items         []InstrumentInput
-	Ineligible    map[string]string
+	// View provenance is populated by Storage-backed loaders when available.
+	// It makes the immutable generation used for a scheduled evaluation
+	// auditable; event-driven evaluations additionally carry the producer's
+	// expected generations.
+	SourceIndexID       string
+	SourceIndexRevision uint64
+	ResultIndexID       string
+	ResultIndexRevision uint64
+	Items               []InstrumentInput
+	Ineligible          map[string]string
 	// BarIndex and BarEndAt let holding rules advance by valid market bars
 	// instead of assuming every calendar has a 24-hour cadence.
 	BarIndex    int64

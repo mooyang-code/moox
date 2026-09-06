@@ -121,10 +121,11 @@ func TestDSLRejectsUnknownLegacyAndInvalidFields(t *testing.T) {
 
 func TestDSLRejectsInvalidPoolAndHolding(t *testing.T) {
 	for name, raw := range map[string]string{
-		"pool missing":     "name: x\ntriggers: {event: {name: ready}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {weight: 1}}\n",
-		"pool duplicate":   "name: x\ntriggers: {event: {name: ready}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {pool: [BTC, BTC], weight: 1}}\n",
-		"offset duplicate": "name: x\ntriggers: {event: {name: ready}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {pool: [BTC], score: close, holding: {bars: 2, offsets: [0, 0]}, weight: 1}}\n",
-		"offset range":     "name: x\ntriggers: {event: {name: ready}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {pool: [BTC], score: close, holding: {bars: 2, offsets: [2]}, weight: 1}}\n",
+		"pool missing":        "name: x\ntriggers: {event: {name: ready}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {weight: 1}}\n",
+		"pool duplicate":      "name: x\ntriggers: {event: {name: ready}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {pool: [BTC, BTC], weight: 1}}\n",
+		"pool case duplicate": "name: x\ntriggers: {event: {name: ready}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {pool: [BTC, btc], weight: 1}}\n",
+		"offset duplicate":    "name: x\ntriggers: {event: {name: ready}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {pool: [BTC], score: close, holding: {bars: 2, offsets: [0, 0]}, weight: 1}}\n",
+		"offset range":        "name: x\ntriggers: {event: {name: ready}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {pool: [BTC], score: close, holding: {bars: 2, offsets: [2]}, weight: 1}}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Parse([]byte(raw))

@@ -75,6 +75,11 @@ type Row struct {
 	Market         string
 	Values         map[string]quant.Decimal
 	PreviousValues map[string]quant.Decimal
+	// ScopedFields are intentionally absent for this instrument because a
+	// subject-scoped binding does not cover it.  Missing non-scoped fields are
+	// treated as incomplete input rather than silently evaluated as zero.
+	ScopedFields      map[string]bool
+	ScopedFieldsReady bool
 }
 
 type TargetWeight struct {
@@ -101,10 +106,12 @@ type Evaluation struct {
 }
 
 type row struct {
-	id       string
-	market   string
-	values   map[string]quant.Decimal
-	previous map[string]quant.Decimal
+	id                string
+	market            string
+	values            map[string]quant.Decimal
+	previous          map[string]quant.Decimal
+	scopedFields      map[string]bool
+	scopedFieldsReady bool
 }
 
 type scoredRow struct {
@@ -118,6 +125,10 @@ var (
 	barFieldRef    = regexp.MustCompile(`bars\[(-?[0-9]+)\]\.([A-Za-z_][A-Za-z0-9_]*)`)
 	quotedTextRef  = regexp.MustCompile(`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`)
 	identifierRef  = regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*\b`)
+	scoreWordRef   = regexp.MustCompile(`\bscore\b`)
+	// NUL-delimited placeholders cannot be valid DSL identifiers, preventing
+	// a user field from colliding with a quote token during restoration.
+	quoteTokenRef = regexp.MustCompile("\\x00moox_quote_([0-9]+)\\x00")
 )
 
 // Evaluate computes one complete set of target weights. The definition and
@@ -261,6 +272,23 @@ func evaluateRule(name string, rule Rule, rows []row, period time.Time, barIndex
 	if rule.Signals != nil && (strings.TrimSpace(rule.Signals.Entry) == "" || strings.TrimSpace(rule.Signals.Exit) == "") {
 		return nil, domain.RuleState{}, DebugInfo{}, errors.New("signals requires entry and exit")
 	}
+	if rule.Holding != nil {
+		if state, reuse := reusableHoldingState(rule, previous, period, barIndex); reuse {
+			weights, err := holdingWeights(state, rule.Weight, rule.Holding.Offsets)
+			if err != nil {
+				return nil, domain.RuleState{}, DebugInfo{}, err
+			}
+			if strings.EqualFold(rule.Side, "short") {
+				for id, weight := range weights {
+					weights[id] = weight.Neg()
+				}
+			}
+			debug := DebugInfo{PreCount: map[string]int{name: 0}, SelectedCount: map[string]int{name: 0}, PostCount: map[string]int{name: len(weights)}, Scores: map[string]map[string]string{name: {}}}
+			debug.LongInstruments, debug.ShortInstruments = instrumentIDs(weights, strings.EqualFold(rule.Side, "short"))
+			debug.Gross = sumAbsolute(weights).String()
+			return weights, state, debug, nil
+		}
+	}
 	candidates := filterPool(rows, rule.Pool, rule.PoolSet)
 	// A Factor binding may intentionally cover only part of a rule's literal
 	// pool. Rows without that scoped value are not candidates for this rule;
@@ -269,7 +297,20 @@ func evaluateRule(name string, rule Rule, rows []row, period time.Time, barIndex
 	// required by every admitted rule row.
 	candidates = filterRowsByAvailableFields(candidates, rule)
 	debug := DebugInfo{PreCount: map[string]int{}, SelectedCount: map[string]int{}, PostCount: map[string]int{}, Scores: map[string]map[string]string{}}
-	if rule.FilterBefore != "" {
+	// An explicitly empty pool is a valid full evaluation with no targets. Do
+	// not compile a stage expression against an empty runtime environment: the
+	// expression was already syntax/type checked when the definition was
+	// enabled, and there is no row on which to evaluate it in this period.
+	if len(candidates) == 0 && (rule.Signals == nil || len(previous.Signals) == 0) && (rule.Holding == nil || len(previous.Batches) == 0) {
+		debug.PreCount[name] = 0
+		debug.SelectedCount[name] = 0
+		debug.PostCount[name] = 0
+		return map[string]quant.Decimal{}, domain.RuleState{}, debug, nil
+	}
+	if rule.FilterBefore != "" && len(candidates) > 0 {
+		if err := ensureExpressionFields(candidates, rule.FilterBefore, "filter_before"); err != nil {
+			return nil, domain.RuleState{}, DebugInfo{}, err
+		}
 		program, err := compileBoolean(rule.FilterBefore, candidates, false)
 		if err != nil {
 			return nil, domain.RuleState{}, DebugInfo{}, fmt.Errorf("filter_before: %w", err)
@@ -288,11 +329,24 @@ func evaluateRule(name string, rule Rule, rows []row, period time.Time, barIndex
 	}
 	debug.PreCount[name] = len(candidates)
 
-	scored, scores, err := scoreRows(candidates, rule.Score)
+	var scored []scoredRow
+	var scores map[string]string
+	var err error
+	if rule.Score != "" {
+		if fieldErr := ensureExpressionFields(candidates, rule.Score, "score"); fieldErr != nil {
+			return nil, domain.RuleState{}, DebugInfo{}, fieldErr
+		}
+	}
+	scored, scores, err = scoreRows(candidates, rule.Score)
 	if err != nil {
 		return nil, domain.RuleState{}, DebugInfo{}, err
 	}
 	debug.Scores[name] = scores
+	if rule.Select.Where != "" {
+		if fieldErr := ensureExpressionFields(selectedRows(scored), rule.Select.Where, "select.where"); fieldErr != nil {
+			return nil, domain.RuleState{}, DebugInfo{}, fieldErr
+		}
+	}
 	selected, err := selectRows(scored, rule.Select, rule.Score != "")
 	if err != nil {
 		return nil, domain.RuleState{}, DebugInfo{}, err
@@ -301,6 +355,12 @@ func evaluateRule(name string, rule Rule, rows []row, period time.Time, barIndex
 
 	var nextState domain.RuleState
 	if rule.Signals != nil {
+		if err := ensureExpressionFields(candidates, rule.Signals.Entry, "signals.entry"); err != nil {
+			return nil, domain.RuleState{}, DebugInfo{}, err
+		}
+		if err := ensureExpressionFields(signalExitRows(rows, candidates, previous), rule.Signals.Exit, "signals.exit"); err != nil {
+			return nil, domain.RuleState{}, DebugInfo{}, err
+		}
 		selected, nextState, err = applySignals(selected, candidates, rows, rule, previous, period)
 		if err != nil {
 			return nil, domain.RuleState{}, DebugInfo{}, err
@@ -315,7 +375,7 @@ func evaluateRule(name string, rule Rule, rows []row, period time.Time, barIndex
 
 	var weights map[string]quant.Decimal
 	if rule.Holding != nil {
-		weights, err = holdingWeights(nextState, rule.Weight, len(rule.Holding.Offsets))
+		weights, err = holdingWeights(nextState, rule.Weight, rule.Holding.Offsets)
 	} else {
 		weights, err = assignWeights(selected, rule)
 	}
@@ -323,12 +383,19 @@ func evaluateRule(name string, rule Rule, rows []row, period time.Time, barIndex
 		return nil, domain.RuleState{}, DebugInfo{}, err
 	}
 	if rule.FilterAfter != "" && len(selected) > 0 && rule.Holding == nil {
+		if err := ensureExpressionFields(selectedRows(selected), rule.FilterAfter, "filter_after"); err != nil {
+			return nil, domain.RuleState{}, DebugInfo{}, err
+		}
 		program, err := compileBoolean(rule.FilterAfter, rows, rule.Signals == nil)
 		if err != nil {
 			return nil, domain.RuleState{}, DebugInfo{}, fmt.Errorf("filter_after: %w", err)
 		}
 		for _, item := range selected {
-			ok, err := runBoolean(program, item.row, item.score)
+			ok := !expressionHasScopedMissing(item.row, rule.FilterAfter)
+			var err error
+			if ok {
+				ok, err = runBoolean(program, item.row, item.score)
+			}
 			if err != nil {
 				return nil, domain.RuleState{}, DebugInfo{}, fmt.Errorf("filter_after on %s: %w", item.id, err)
 			}
@@ -354,6 +421,28 @@ func evaluateRule(name string, rule Rule, rows []row, period time.Time, barIndex
 	return weights, nextState, debug, nil
 }
 
+func reusableHoldingState(rule Rule, previous domain.RuleState, period time.Time, barIndex int64) (domain.RuleState, bool) {
+	if rule.Holding == nil {
+		return domain.RuleState{}, false
+	}
+	active := make([]domain.HoldingBatchState, 0, len(previous.Batches))
+	for _, batch := range previous.Batches {
+		if !expiredBatch(batch, period) {
+			active = append(active, batch)
+		}
+	}
+	hitOffset := -1
+	if barIndex >= 0 {
+		hitOffset = int(barIndex % int64(rule.Holding.Bars))
+	}
+	for _, offset := range rule.Holding.Offsets {
+		if offset == hitOffset {
+			return domain.RuleState{}, false
+		}
+	}
+	return domain.RuleState{Batches: active}, true
+}
+
 type expressionField struct {
 	name string
 	prev bool
@@ -361,7 +450,10 @@ type expressionField struct {
 
 func filterRowsByAvailableFields(rows []row, rule Rule) []row {
 	fields := make([]expressionField, 0)
-	for _, expression := range []string{rule.FilterBefore, rule.Score, rule.Select.Where, rule.FilterAfter} {
+	// Only stages that determine the candidate/score set may narrow the input
+	// before evaluation. filter_after is deliberately excluded: it runs after
+	// base allocation and must not change the normalization sample.
+	for _, expression := range []string{rule.FilterBefore, rule.Score, rule.Select.Where} {
 		fields = append(fields, expressionFields(expression)...)
 	}
 	if rule.Signals != nil {
@@ -371,9 +463,47 @@ func filterRowsByAvailableFields(rows []row, rule Rule) []row {
 	if len(fields) == 0 {
 		return rows
 	}
-	// Only scope fields that occur in at least one loaded row. A field absent
-	// from every row remains a strict compiler/readiness error, not an implicit
-	// empty candidate set.
+	// Legacy in-memory callers do not carry scoped-field metadata. Preserve
+	// their historical behavior when a field is present on some rows but not
+	// others; production Storage rows carry ScopedFields and therefore use the
+	// strict path below.
+	hasScopeMetadata := false
+	for _, item := range rows {
+		if item.scopedFieldsReady {
+			hasScopeMetadata = true
+			break
+		}
+	}
+	if !hasScopeMetadata {
+		return filterLegacyRowsByAvailableFields(rows, fields)
+	}
+	result := make([]row, 0, len(rows))
+	for _, item := range rows {
+		eligible := true
+		for _, field := range fields {
+			values := item.values
+			if field.prev {
+				values = item.previous
+			}
+			if _, ok := values[field.name]; ok {
+				continue
+			}
+			if item.scopedFields[field.name] {
+				eligible = false
+				break
+			}
+			// A non-scoped field may be absent because a later stage does not
+			// need it for this row. The consuming stage performs the strict
+			// completeness check after earlier filters have run.
+		}
+		if eligible {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func filterLegacyRowsByAvailableFields(rows []row, fields []expressionField) []row {
 	available := map[string]bool{}
 	for _, field := range fields {
 		for _, item := range rows {
@@ -403,6 +533,64 @@ func filterRowsByAvailableFields(rows []row, rule Rule) []row {
 			}
 		}
 		if eligible {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func ensureExpressionFields(rows []row, expression, stage string) error {
+	fields := expressionFields(expression)
+	missing := make([]string, 0)
+	for _, item := range rows {
+		for _, field := range fields {
+			if field.name == "instrument_id" {
+				continue
+			}
+			values := item.values
+			if field.prev {
+				values = item.previous
+			}
+			if _, ok := values[field.name]; ok || item.scopedFields[field.name] {
+				continue
+			}
+			missing = append(missing, item.id+":"+field.name)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+	return &input.StrictIncompleteError{Missing: []string{stage + ": " + strings.Join(missing, ", ")}}
+}
+
+func expressionHasScopedMissing(item row, expression string) bool {
+	for _, field := range expressionFields(expression) {
+		if field.name == "instrument_id" {
+			continue
+		}
+		values := item.values
+		if field.prev {
+			values = item.previous
+		}
+		if _, ok := values[field.name]; !ok && item.scopedFields[field.name] {
+			return true
+		}
+	}
+	return false
+}
+
+func signalExitRows(rows, candidates []row, previous domain.RuleState) []row {
+	needed := make(map[string]struct{}, len(previous.Signals)+len(candidates))
+	for _, signal := range previous.Signals {
+		needed[strings.ToUpper(strings.TrimSpace(signal.InstrumentID))] = struct{}{}
+	}
+	for _, item := range candidates {
+		needed[strings.ToUpper(strings.TrimSpace(item.id))] = struct{}{}
+	}
+	result := make([]row, 0, len(needed))
+	for _, item := range rows {
+		if _, ok := needed[strings.ToUpper(strings.TrimSpace(item.id))]; ok {
 			result = append(result, item)
 		}
 	}
@@ -502,6 +690,9 @@ func selectRows(rows []scoredRow, selectRule Select, hasScore bool) ([]scoredRow
 	}
 	if selectRule.Top > 0 && selectRule.Tail > 0 {
 		return nil, errors.New("select top and tail are mutually exclusive")
+	}
+	if len(rows) == 0 {
+		return []scoredRow{}, nil
 	}
 	selected := append([]scoredRow(nil), rows...)
 	if selectRule.Where != "" {
@@ -690,7 +881,11 @@ func applyHolding(selected []scoredRow, rule Rule, previous domain.RuleState, pe
 			}
 			filtered := make([]scoredRow, 0, len(newSelected))
 			for _, item := range newSelected {
-				ok, runErr := runBoolean(program, item.row, item.score)
+				ok := !expressionHasScopedMissing(item.row, filterAfter)
+				var runErr error
+				if ok {
+					ok, runErr = runBoolean(program, item.row, item.score)
+				}
 				if runErr != nil {
 					return nil, domain.RuleState{}, fmt.Errorf("filter_after on %s: %w", item.id, runErr)
 				}
@@ -748,23 +943,33 @@ func applyHolding(selected []scoredRow, rule Rule, previous domain.RuleState, pe
 	return rows, state, nil
 }
 
-func holdingWeights(state domain.RuleState, rawBudget string, offsetCount int) (map[string]quant.Decimal, error) {
+func holdingWeights(state domain.RuleState, rawBudget string, offsets []int) (map[string]quant.Decimal, error) {
 	weights := make(map[string]quant.Decimal)
-	if offsetCount <= 0 {
+	if len(offsets) == 0 {
 		return nil, errors.New("holding offsets are required")
 	}
 	budget, err := quant.Parse(strings.TrimSpace(rawBudget))
 	if err != nil || budget.IsNegative() || budget.IsZero() {
 		return nil, errors.New("holding weight must be a positive decimal")
 	}
-	perBatch := budget.Div(quant.Must(strconv.Itoa(offsetCount)))
+	sortedOffsets := append([]int(nil), offsets...)
+	sort.Ints(sortedOffsets)
+	offsetKeys := make([]string, len(sortedOffsets))
+	for index, offset := range sortedOffsets {
+		offsetKeys[index] = strconv.Itoa(offset)
+	}
+	perBatch := quant.DivideStable(budget, offsetKeys)
 	for _, batch := range state.Batches {
+		batchBudget, ok := perBatch[strconv.Itoa(batch.Offset)]
+		if !ok {
+			return nil, fmt.Errorf("batch offset %d is outside holding offsets", batch.Offset)
+		}
 		for id, raw := range batch.BaseWeights {
 			base, parseErr := quant.Parse(raw)
 			if parseErr != nil {
 				return nil, fmt.Errorf("batch %d base weight %s: %w", batch.Offset, id, parseErr)
 			}
-			weights[id] = weights[id].Add(base.Mul(perBatch))
+			weights[id] = weights[id].Add(base.Mul(batchBudget))
 		}
 	}
 	return weights, nil
@@ -816,10 +1021,10 @@ func compileBoolean(expression string, rows []row, allowScore bool) (*vm.Program
 	if strings.TrimSpace(expression) == "" {
 		return nil, errors.New("expression is empty")
 	}
-	if !allowScore && strings.Contains(expression, "score") {
+	if !allowScore && strings.Contains(maskQuotedText(expression), "score") {
 		// This is a conservative lexical guard. The compiler still validates
 		// the complete expression and unknown identifiers below.
-		if regexp.MustCompile(`\bscore\b`).MatchString(expression) {
+		if scoreWordRef.MatchString(maskQuotedText(expression)) {
 			return nil, errors.New("score is not available in this expression")
 		}
 	}
@@ -843,14 +1048,38 @@ func compileNumeric(expression string, rows []row, normalized map[string]map[str
 }
 
 func prepareExpression(expression string) (string, error) {
-	for _, match := range barIndexRef.FindAllStringSubmatch(expression, -1) {
+	quoted := make([]string, 0)
+	prepared := quotedTextRef.ReplaceAllStringFunc(expression, func(value string) string {
+		quoted = append(quoted, value)
+		return fmt.Sprintf("\x00moox_quote_%d\x00", len(quoted)-1)
+	})
+	for _, match := range barIndexRef.FindAllStringSubmatch(prepared, -1) {
 		index, _ := strconv.Atoi(match[1])
 		if index != 0 && index != -1 {
 			return "", fmt.Errorf("bars[%d] is not supported; only bars[0] and bars[-1] are allowed", index)
 		}
 	}
-	prepared := strings.ReplaceAll(expression, "bars[-1]", "bars[1]")
-	return normalizerCall.ReplaceAllString(prepared, "__norm_$2"), nil
+	prepared = strings.ReplaceAll(prepared, "bars[-1]", "bars[1]")
+	prepared = normalizerCall.ReplaceAllStringFunc(prepared, func(value string) string {
+		match := normalizerCall.FindStringSubmatch(value)
+		return "__norm_" + normalizerKey(match[1], match[2])
+	})
+	// Restore all placeholders in one pass. Replacement text is not scanned
+	// again, so a literal containing another placeholder token remains a
+	// literal instead of being recursively rewritten.
+	prepared = quoteTokenRef.ReplaceAllStringFunc(prepared, func(token string) string {
+		match := quoteTokenRef.FindStringSubmatch(token)
+		index, err := strconv.Atoi(match[1])
+		if err != nil || index < 0 || index >= len(quoted) {
+			return token
+		}
+		return quoted[index]
+	})
+	return prepared, nil
+}
+
+func maskQuotedText(expression string) string {
+	return quotedTextRef.ReplaceAllString(expression, " ")
 }
 
 func expressionEnvironment(rows []row, normalized map[string]map[string]float64) map[string]any {
@@ -870,10 +1099,9 @@ func expressionEnvironment(rows []row, normalized map[string]map[string]float64)
 	}
 	for field := range fields {
 		env[field] = float64(0)
-		env["__norm_"+field] = float64(0)
 	}
-	for factor := range normalized {
-		env["__norm_"+factor] = float64(0)
+	for key := range normalized {
+		env["__norm_"+key] = float64(0)
 	}
 	return env
 }
@@ -893,8 +1121,8 @@ func runBoolean(program *vm.Program, item row, score float64) (bool, error) {
 
 func runNumeric(program *vm.Program, item row, normalized map[string]float64, score float64) (float64, error) {
 	env := rowEnvironment(item, score)
-	for factor, value := range normalized {
-		env["__norm_"+factor] = value
+	for key, value := range normalized {
+		env["__norm_"+key] = value
 	}
 	value, err := expr.Run(program, env)
 	if err != nil {
@@ -930,9 +1158,10 @@ func decimalMap(values map[string]quant.Decimal) map[string]float64 {
 
 func normalizerValues(expression string, rows []row) (map[string]map[string]float64, error) {
 	result := map[string]map[string]float64{}
-	for _, match := range normalizerCall.FindAllStringSubmatch(expression, -1) {
+	for _, match := range normalizerCall.FindAllStringSubmatch(maskQuotedText(expression), -1) {
 		name, factor := match[1], match[2]
-		if _, exists := result[factor]; exists {
+		key := normalizerKey(name, factor)
+		if _, exists := result[key]; exists {
 			continue
 		}
 		for _, item := range rows {
@@ -946,12 +1175,16 @@ func normalizerValues(expression string, rows []row) (map[string]map[string]floa
 			}
 		}
 		if name == "pct_rank" {
-			result[factor] = pctRankForRows(rows, factor)
+			result[key] = pctRankForRows(rows, factor)
 		} else {
-			result[factor] = zScoreForRows(rows, factor)
+			result[key] = zScoreForRows(rows, factor)
 		}
 	}
 	return result, nil
+}
+
+func normalizerKey(method, factor string) string {
+	return method + "_" + factor
 }
 
 func pctRankForRows(rows []row, factor string) map[string]float64 {
@@ -1154,7 +1387,7 @@ func adaptInput(raw any) ([]row, time.Time, int64, time.Duration, func(int) time
 		}
 		rows := make([]row, 0, len(typed.Items))
 		for _, item := range typed.Items {
-			rows = append(rows, row{id: item.InstrumentID, market: item.Market, values: item.Values, previous: item.PreviousValues})
+			rows = append(rows, row{id: item.InstrumentID, market: item.Market, values: item.Values, previous: item.PreviousValues, scopedFields: item.ScopedFields, scopedFieldsReady: item.ScopedFieldsReady})
 		}
 		if typed.BarIndex != 0 || typed.BarEndAt != nil {
 			index = typed.BarIndex

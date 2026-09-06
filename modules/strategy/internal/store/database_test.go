@@ -47,7 +47,7 @@ func TestOpenRejectsOldOrUnknownStrategyTables(t *testing.T) {
 	if err := sqlDB.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "删除旧数据库后重建") {
+	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "停止消费者并备份数据库") {
 		t.Fatalf("Open() error = %v", err)
 	}
 }

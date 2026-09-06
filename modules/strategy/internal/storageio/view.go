@@ -45,7 +45,20 @@ type ViewSnapshotReaderWithIndexes interface {
 	BeginViewSnapshotAt(context.Context, string, []string, map[string]string) (ViewReader, error)
 }
 
+type SnapshotProvenanceReader interface {
+	ViewProvenance(string) (string, uint64, bool)
+}
+
 type Loader struct{ Reader ViewReader }
+
+// ListSubjects implements trigger.SubjectDirectoryLoader without widening the
+// storage reader contract used by older callers.
+func (l Loader) ListSubjects(ctx context.Context, spaceID, viewID string) ([]input.Subject, error) {
+	if l.Reader == nil {
+		return nil, fmt.Errorf("strategy storage reader is required")
+	}
+	return l.Reader.ListSubjects(ctx, spaceID, viewID)
+}
 
 func (l Loader) Load(ctx context.Context, runner domain.StrategyRunner, compiled compiler.CompiledStrategy, period time.Time) (input.EvaluationInput, error) {
 	return l.load(ctx, runner, compiled, period, nil)
@@ -62,18 +75,25 @@ func (l Loader) LoadAt(ctx context.Context, runner domain.StrategyRunner, compil
 // keys use BarStart; keeping this conversion at the adapter boundary avoids
 // leaking the storage convention into the DSL/evaluator.
 func (l Loader) LoadPeriodAt(ctx context.Context, runner domain.StrategyRunner, compiled compiler.CompiledStrategy, barEnd, storagePeriod time.Time, expected map[string]string) (input.EvaluationInput, error) {
-	return l.loadWithPeriods(ctx, runner, compiled, barEnd, storagePeriod, expected)
+	return l.loadWithPeriods(ctx, runner, compiled, barEnd, storagePeriod, expected, nil)
 }
 
 func (l Loader) LoadPeriod(ctx context.Context, runner domain.StrategyRunner, compiled compiler.CompiledStrategy, barEnd, storagePeriod time.Time) (input.EvaluationInput, error) {
-	return l.loadWithPeriods(ctx, runner, compiled, barEnd, storagePeriod, nil)
+	return l.loadWithPeriods(ctx, runner, compiled, barEnd, storagePeriod, nil, nil)
+}
+
+// LoadPeriodAtWithPool pins the View snapshot before resolving a pool UDF.
+// This keeps the subject directory used by the UDF and the rows used by the
+// evaluator at the same Storage generation.
+func (l Loader) LoadPeriodAtWithPool(ctx context.Context, runner domain.StrategyRunner, compiled compiler.CompiledStrategy, barEnd, storagePeriod time.Time, expected map[string]string, resolve func([]input.Subject, time.Time) (map[string][]string, []string, error)) (input.EvaluationInput, error) {
+	return l.loadWithPeriods(ctx, runner, compiled, barEnd, storagePeriod, expected, resolve)
 }
 
 func (l Loader) load(ctx context.Context, runner domain.StrategyRunner, compiled compiler.CompiledStrategy, period time.Time, expected map[string]string) (input.EvaluationInput, error) {
-	return l.loadWithPeriods(ctx, runner, compiled, period, period, expected)
+	return l.loadWithPeriods(ctx, runner, compiled, period, period, expected, nil)
 }
 
-func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunner, compiled compiler.CompiledStrategy, period, storagePeriod time.Time, expected map[string]string) (input.EvaluationInput, error) {
+func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunner, compiled compiler.CompiledStrategy, period, storagePeriod time.Time, expected map[string]string, resolve func([]input.Subject, time.Time) (map[string][]string, []string, error)) (input.EvaluationInput, error) {
 	if l.Reader == nil {
 		return input.EvaluationInput{}, fmt.Errorf("strategy storage reader is required")
 	}
@@ -100,6 +120,19 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 	subjects, err := reader.ListSubjects(ctx, runner.SpaceID, compiled.SourceView.ID)
 	if err != nil {
 		return input.EvaluationInput{}, fmt.Errorf("%w: list subjects: %v", input.ErrNotReady, err)
+	}
+	if resolve != nil {
+		rulePools, poolIDs, resolveErr := resolve(subjects, period)
+		if resolveErr != nil {
+			return input.EvaluationInput{}, fmt.Errorf("%w: resolve pool: %v", input.ErrNotReady, resolveErr)
+		}
+		compiled.InstrumentPool.Include = append([]string(nil), poolIDs...)
+		compiled.InstrumentPool.IncludeSet = true
+		for index := range compiled.Rules {
+			if ids, ok := rulePools[compiled.Rules[index].Name]; ok {
+				compiled.Rules[index].Definition.Pool = config.Pool{Fixed: append([]string(nil), ids...)}
+			}
+		}
 	}
 	duration, err := report.ParseDatasetFrequency(compiled.SourceView.Frequency)
 	if err != nil || duration <= 0 {
@@ -128,12 +161,14 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 		return input.EvaluationInput{}, fmt.Errorf("%w: read history: %w", input.ErrNotReady, err)
 	}
 	pool := input.BuildPool(compiled.InstrumentPool, subjects, history)
-	requiredFactors := requiredFactorsByInstrument(compiled, pool.Items)
+	if pool.Err != nil {
+		return input.EvaluationInput{}, pool.Err
+	}
 	rowsByInstrument := make(map[string]input.InstrumentInput, len(pool.Items))
 	sourceRowsPresent := make(map[string]bool, len(pool.Items))
 	subjectToInstrument := make(map[string]string, len(pool.Items))
 	for _, item := range pool.Items {
-		rowsByInstrument[item.InstrumentID] = input.InstrumentInput{PoolItem: item, Values: map[string]quant.Decimal{}, PreviousValues: map[string]quant.Decimal{}}
+		rowsByInstrument[item.InstrumentID] = input.InstrumentInput{PoolItem: item, Values: map[string]quant.Decimal{}, PreviousValues: map[string]quant.Decimal{}, ScopedFields: scopedFieldsForItem(compiled, item), ScopedFieldsReady: true}
 		subjectToInstrument[item.SubjectID] = item.InstrumentID
 	}
 	for _, viewID := range viewIDs {
@@ -155,14 +190,16 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 			if item.SeriesTag != "" && row.SeriesTag != "" && item.SeriesTag != row.SeriesTag {
 				continue
 			}
-			// Keep source OHLCV and any other numeric columns available to the
-			// expression runtime. Previously only explicitly compiled Factor
-			// columns were copied, which made bars[0].close/ma20 evaluate against
-			// an empty value map after a process restart.
-			for column, raw := range row.Values {
-				parsed, parseErr := quant.Parse(raw)
-				if parseErr == nil {
-					item.Values[column] = parsed
+			// Keep source OHLCV and other source columns available to the
+			// expression runtime. Result Views are restricted to explicitly
+			// bound Factor columns so a stale/unscoped result column cannot
+			// masquerade as a valid subject-scoped factor.
+			if viewID == compiled.SourceView.ID {
+				for column, raw := range row.Values {
+					parsed, parseErr := quant.Parse(raw)
+					if parseErr == nil {
+						item.Values[column] = parsed
+					}
 				}
 			}
 			if viewID == compiled.SourceView.ID {
@@ -170,6 +207,9 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 			}
 			for _, factor := range compiled.Factors {
 				if factor.ResultViewID != viewID {
+					continue
+				}
+				if !factorAppliesToItem(factor, item.PoolItem) {
 					continue
 				}
 				value, exists := row.Values[factor.ColumnName]
@@ -180,7 +220,11 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 				if parseErr != nil {
 					return input.EvaluationInput{}, fmt.Errorf("view %s instrument %s factor %s: %w", viewID, row.InstrumentID, factor.FactorID, parseErr)
 				}
-				item.Values[factor.FactorID] = parsed
+				for _, alias := range []string{factor.FactorID, factor.Output, factor.ColumnName} {
+					if alias = strings.TrimSpace(alias); alias != "" {
+						item.Values[alias] = parsed
+					}
+				}
 				sourceHash := strings.TrimSpace(row.Attributes["factor.source_hash."+factor.FactorID])
 				if sourceHash == "" && singleFactorSourceHash(compiled) {
 					sourceHash = strings.TrimSpace(row.Attributes["factor.source_hash"])
@@ -224,10 +268,43 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 				if item.SeriesTag != "" && row.SeriesTag != "" && item.SeriesTag != row.SeriesTag {
 					continue
 				}
-				for column, raw := range row.Values {
+				if viewID == compiled.SourceView.ID {
+					for column, raw := range row.Values {
+						parsed, parseErr := quant.Parse(raw)
+						if parseErr == nil {
+							item.PreviousValues[column] = parsed
+						}
+					}
+				}
+				for _, factor := range compiled.Factors {
+					if factor.ResultViewID != viewID {
+						continue
+					}
+					if !factorAppliesToItem(factor, item.PoolItem) {
+						continue
+					}
+					raw, exists := row.Values[factor.ColumnName]
+					if !exists {
+						continue
+					}
 					parsed, parseErr := quant.Parse(raw)
-					if parseErr == nil {
-						item.PreviousValues[column] = parsed
+					if parseErr != nil {
+						return input.EvaluationInput{}, fmt.Errorf("previous view %s instrument %s factor %s: %w", viewID, row.InstrumentID, factor.FactorID, parseErr)
+					}
+					for _, alias := range []string{factor.FactorID, factor.Output, factor.ColumnName} {
+						if alias = strings.TrimSpace(alias); alias != "" {
+							item.PreviousValues[alias] = parsed
+						}
+					}
+					sourceHash := strings.TrimSpace(row.Attributes["factor.source_hash."+factor.FactorID])
+					if sourceHash == "" && singleFactorSourceHash(compiled) {
+						sourceHash = strings.TrimSpace(row.Attributes["factor.source_hash"])
+					}
+					if factor.SourceHash != "" && sourceHash == "" {
+						return input.EvaluationInput{}, fmt.Errorf("previous view %s instrument %s factor %s source hash is missing", viewID, row.InstrumentID, factor.FactorID)
+					}
+					if sourceHash != "" && sourceHash != factor.SourceHash {
+						return input.EvaluationInput{}, fmt.Errorf("previous view %s instrument %s factor %s source hash mismatch: compiled=%s row=%s", viewID, row.InstrumentID, factor.FactorID, factor.SourceHash, sourceHash)
 					}
 				}
 				rowsByInstrument[instrumentID] = item
@@ -247,18 +324,39 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 		}
 	}
 	result := input.EvaluationInput{SpaceID: runner.SpaceID, StrategyID: runner.StrategyID, PeriodEnd: period.UTC().Format(time.RFC3339Nano), SourceViewID: compiled.SourceView.ID, DataFrequency: compiled.SourceView.Frequency, Ineligible: pool.Ineligible, BarIndex: barIndex, BarDuration: duration, BarEndAt: barEndAt}
-	if err := (input.ReadinessChecker{}).CheckWithPresenceByInstrument(pool, rowsByInstrument, sourceRowsPresent, requiredFactors); err != nil {
+	if provenance, ok := reader.(SnapshotProvenanceReader); ok {
+		result.SourceIndexID, result.SourceIndexRevision, _ = provenance.ViewProvenance(compiled.SourceView.ID)
+		if len(compiled.Dependencies.FactorResultViewIDs) > 0 {
+			result.ResultIndexID, result.ResultIndexRevision, _ = provenance.ViewProvenance(compiled.Dependencies.FactorResultViewIDs[0])
+		}
+	}
+	// Source rows are required for every admitted instrument. Expression and
+	// Factor-column completeness is checked at the stage that consumes it: a
+	// row rejected by filter_before must not be blocked by a score-only field.
+	if err := (input.ReadinessChecker{}).CheckWithPresenceByInstrument(pool, rowsByInstrument, sourceRowsPresent, nil); err != nil {
 		return input.EvaluationInput{}, err
 	}
 	for _, item := range pool.Items {
 		value := rowsByInstrument[item.InstrumentID]
 		result.Items = append(result.Items, value)
 	}
-	if missing := missingRequiredFields(compiled, rowsByInstrument, pool.Items); len(missing) > 0 {
-		return input.EvaluationInput{}, &input.StrictIncompleteError{Pool: pool, Missing: missing}
-	}
 	sort.Slice(result.Items, func(i, j int) bool { return result.Items[i].InstrumentID < result.Items[j].InstrumentID })
 	return result, nil
+}
+
+func scopedFieldsForItem(compiled compiler.CompiledStrategy, item input.PoolItem) map[string]bool {
+	result := make(map[string]bool)
+	for _, factor := range compiled.Factors {
+		if factorAppliesToItem(factor, item) {
+			continue
+		}
+		for _, alias := range []string{factor.FactorID, factor.Output, factor.ColumnName} {
+			if alias = strings.TrimSpace(alias); alias != "" {
+				result[alias] = true
+			}
+		}
+	}
+	return result
 }
 
 func compiledUsesPreviousBar(compiled compiler.CompiledStrategy) bool {

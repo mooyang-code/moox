@@ -126,7 +126,11 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	spaceID := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_SPACE_ID"))
 	if spaceID == "" {
 		spaceID = "factor_e2e"
+		if strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_USE_EXISTING_SPACE")) == "1" {
+			spaceID = "crypto"
+		}
 	}
+	useExistingSpace := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_USE_EXISTING_SPACE")) == "1"
 	strategyScope := client.WithMetaData("space_id", []byte(spaceID))
 	// Dataset identifiers are required to use the dataset_ namespace. Keep the
 	// generated names compliant so this integration test exercises the real
@@ -190,31 +194,37 @@ func TestFactorRealStorageE2E(t *testing.T) {
 				assertFactorArtifactsRemoved(t, deployRoot, created.name)
 			}
 		}
-		if spaceCreated {
+		if spaceCreated || useExistingSpace {
 			cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, sourceID)
 			cleanupDataset := resultDatasetID
 			if cleanupDataset == "" {
 				cleanupDataset = targetID
 			}
 			cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, cleanupDataset)
-			if rsp, err := cleanupMetadata.DeleteSpace(cleanupCtx, &storagepb.DeleteSpaceReq{
-				AuthInfo: auth, SpaceId: spaceID,
-			}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-				reportCleanupFailure(t, "space "+spaceID, rsp, err)
-			} else {
-				t.Logf("cleanup space %s succeeded", spaceID)
+			if spaceCreated {
+				if rsp, err := cleanupMetadata.DeleteSpace(cleanupCtx, &storagepb.DeleteSpaceReq{
+					AuthInfo: auth, SpaceId: spaceID,
+				}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+					reportCleanupFailure(t, "space "+spaceID, rsp, err)
+				} else {
+					t.Logf("cleanup space %s succeeded", spaceID)
+				}
 			}
 		}
 	})
 
-	spaceRsp, err := metadata.CreateSpace(ctx, &storagepb.CreateSpaceReq{
-		AuthInfo: auth,
-		Space: &storagepb.Space{
-			SpaceId: spaceID, Name: "验收" + displaySuffix, Owner: "factor-storage-e2e", Status: "active",
-		},
-	})
-	requireStorageOK(t, "CreateSpace", spaceRsp, err)
-	spaceCreated = true
+	if !useExistingSpace {
+		spaceRsp, err := metadata.CreateSpace(ctx, &storagepb.CreateSpaceReq{
+			AuthInfo: auth,
+			Space: &storagepb.Space{
+				SpaceId: spaceID, Name: "验收" + displaySuffix, Owner: "factor-storage-e2e", Status: "active",
+			},
+		})
+		requireStorageOK(t, "CreateSpace", spaceRsp, err)
+		spaceCreated = true
+	} else {
+		t.Logf("reuse existing Storage space %s; dynamic datasets/views remain uniquely named", spaceID)
+	}
 	dataSourceRsp, err := metadata.CreateDataSource(ctx, &storagepb.CreateDataSourceReq{
 		AuthInfo: auth,
 		DataSource: &storagepb.DataSource{
@@ -314,8 +324,6 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		},
 	})
 	requireStorageOK(t, "CreateView(source)", sourceViewRsp, err)
-	waitForViewReady(t, ctx, metadata, auth, spaceID, sourceViewID)
-	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, sourceViewID, sourceID, subjectID, freq, first, end)
 
 	writeRsp, err := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
 		AuthInfo: auth, SourceEventId: "factor-storage-e2e-input-" + suffix,
@@ -335,6 +343,11 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		},
 	})
 	requireStorageOK(t, "PrimaryStore.UpsertFields", writeRsp, err)
+	// Some Storage View builds only materialize an empty index after the first
+	// source rows arrive. Wait after the write so the test remains valid for
+	// both empty-index and row-driven reconciliation implementations.
+	waitForViewReady(t, ctx, metadata, auth, spaceID, sourceViewID)
+	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, sourceViewID, sourceID, subjectID, freq, first, end)
 	var sourceChunk *storageio.RangeChunk
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		chunk, readErr := storage.ReadRangeChunk(ctx, storageio.WindowKey{
@@ -511,10 +524,11 @@ rules:
 		})
 	}
 	strategyBindingsJSON, marshalErr := json.Marshal(map[string]any{
-		// This strategy only consumes Factor outputs. Use the materialized
-		// Result View as its source snapshot so a source View with multiple
-		// venue series cannot make a scalar strategy input ambiguous.
-		"source_view_id": resultViewID, "frequency": freq, "factors": strategyBindingFactors,
+		// The strategy source remains the Factor binding's upstream View. The
+		// result View is an additional dependency carrying the materialized
+		// factor columns; keeping the two IDs distinct preserves generation
+		// provenance and allows the loader to read both snapshots consistently.
+		"source_view_id": sourceViewID, "frequency": freq, "factors": strategyBindingFactors,
 	})
 	require.NoError(t, marshalErr)
 	strategyInstanceID = "instance_factor_" + suffix

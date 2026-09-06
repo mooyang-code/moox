@@ -230,11 +230,19 @@ func HandleTarget(
 	receipt := store.TargetReceiptRecord{
 		SpaceID: message.GetSpaceId(), TargetID: request.GetTargetId(), RunnerID: receiptRunnerID, InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), StrategyID: request.GetStrategyId(), LogicalAccountID: request.GetLogicalAccountId(), CommandSequence: sequence, BarEndTime: record.BarEndTime, EffectiveAt: record.EffectiveAt, ValidUntil: record.ValidUntil, RequestHash: requestHash, SignalTime: conversion.SignalTime, WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime, ReferencePricesJSON: string(referencePrices), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets), AcceptedAt: now.UnixMilli(),
 	}
-	var ownerGeneration int64
-	if request.GetOwnerGeneration() > 0 {
-		ownerGeneration = request.GetOwnerGeneration()
+	var accepted bool
+	if modernContract {
+		// Modern session targets are fenced by instance_id + session_id. Do
+		// not pass a zero owner-generation variadic argument: the store treats
+		// that argument as an explicit legacy fence when present.
+		_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithReceiptLocked(ctx, record, receipt)
+	} else {
+		var ownerGeneration int64
+		if request.GetOwnerGeneration() > 0 {
+			ownerGeneration = request.GetOwnerGeneration()
+		}
+		_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithReceiptLocked(ctx, record, receipt, ownerGeneration)
 	}
-	_, accepted, err := opts.Store.AcceptLogicalAccountTargetWithReceiptLocked(ctx, record, receipt, ownerGeneration)
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidRecord) ||
 			errors.Is(err, store.ErrConflict) ||

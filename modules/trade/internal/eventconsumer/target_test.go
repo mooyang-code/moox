@@ -119,6 +119,40 @@ func TestHandleLogicalAccountTargetAcceptsMatchingOwnerGeneration(t *testing.T) 
 	require.Equal(t, "target-generation-match", got.TargetID)
 }
 
+func TestHandleLogicalAccountTargetAcceptsSessionFenceWithoutOwnerGeneration(t *testing.T) {
+	tradeStore := openTargetStore(t)
+	seedLogicalTargetAccount(t, tradeStore, true, true)
+	now := time.Now().UTC()
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		account, err := tx.GetLogicalAccount("space-1", "logical-1")
+		if err != nil {
+			return err
+		}
+		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", "runner-1", "session-1", account.AuthFence); err != nil {
+			return err
+		}
+		account, err = tx.GetLogicalAccount("space-1", "logical-1")
+		if err != nil {
+			return err
+		}
+		_, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "runner-1", "session-1", account.AuthFence)
+		return err
+	}))
+	claimed, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Greater(t, claimed.OwnerGeneration, int64(0))
+
+	result := HandleTarget(context.Background(), logicalTargetDelivery(
+		t, now, "target-session-fence", "runner-1", "logical-1", 1,
+		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", TargetWeight: "1"}},
+	), targetOptions(tradeStore, now))
+
+	if result.Decision != jetstream.ACK {
+		t.Fatalf("decision=%v err=%v", result.Decision, result.Err)
+	}
+	require.NoError(t, result.Err)
+}
+
 func TestHandleLogicalAccountTargetRejectsUnsupportedInstrument(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, true, true)

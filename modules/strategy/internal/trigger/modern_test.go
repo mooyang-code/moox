@@ -3,18 +3,127 @@ package trigger
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
+	"github.com/mooyang-code/moox/modules/strategy/internal/config"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 )
+
+func TestModernCompileFailureDoesNotAcknowledgeReadyEvent(t *testing.T) {
+	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(2_000_000).UTC()
+	dsl := `name: compile-retry
+triggers:
+  event: {name: factor.ready}
+data: {bar: 1m, calendar: crypto_24x7}
+rules:
+  rank:
+    pool: [BTC]
+    score: close
+    select: {top: 1}
+    weight: "1"
+`
+	if err := repo.SaveStrategyDefinition(context.Background(), store.StrategyDefinition{StrategyID: "s1", StrategyName: "compile-retry", DSLYaml: dsl, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	session := "session-1"
+	if err := repo.CreateInstance(context.Background(), store.StrategyInstance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", InputBindingsJSON: json.RawMessage(`{"source_view_id":"source","frequency":"1m"}`), Enabled: true, SessionID: &session, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	transient := errors.New("factor catalog unavailable")
+	p := &Processor{
+		Store:  repo,
+		Loader: fakeInputLoader{},
+		CompileWithBindings: func(context.Context, config.DSL, string, json.RawMessage) (compiler.CompiledStrategy, error) {
+			return compiler.CompiledStrategy{}, transient
+		},
+		Now: func() time.Time { return now },
+	}
+	event := PeriodReady{MessageID: "compile-retry-ready", EventName: "factor.ready", SpaceID: "space", ViewID: "factor", PeriodTime: now.Add(-time.Minute), Status: "complete"}
+	if err := p.Handle(context.Background(), event); !errors.Is(err, transient) {
+		t.Fatalf("Handle() error = %v, want compile error", err)
+	}
+	processed, err := repo.IsProcessed(context.Background(), event.MessageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed {
+		t.Fatal("modern compile failure must leave the ready event retryable")
+	}
+}
+
+func TestScheduledFactorStrategyWaitsForFactorReadyProvenance(t *testing.T) {
+	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(2_000_000).UTC()
+	dsl := `name: scheduled-factor
+triggers:
+  schedule: {cron: "@daily"}
+  event: {name: factor.ready}
+data: {bar: 1d, calendar: crypto_24x7}
+rules:
+  rank: {pool: [BTC], score: ma20, select: {top: 1}, weight: "1"}
+`
+	if err := repo.SaveStrategyDefinition(context.Background(), store.StrategyDefinition{StrategyID: "s1", StrategyName: "scheduled-factor", DSLYaml: dsl, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	session := "session-1"
+	if err := repo.CreateInstance(context.Background(), store.StrategyInstance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", InputBindingsJSON: json.RawMessage(`{"source_view_id":"source","frequency":"1d","factors":[{"factor_id":"ma20","binding_id":"binding","result_view_id":"factor"}]}`), Enabled: true, SessionID: &session, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	loader := &countingLoader{}
+	p := &Processor{
+		Store:  repo,
+		Loader: loader,
+		CompileWithBindings: func(context.Context, config.DSL, string, json.RawMessage) (compiler.CompiledStrategy, error) {
+			return compiler.CompiledStrategy{Data: config.Data{Bar: "1d", Calendar: "crypto_24x7"}, Triggers: config.Triggers{Schedule: &config.Schedule{Cron: "@daily"}, Event: &config.Event{Name: "factor.ready"}}, SourceView: compiler.CompiledView{ID: "source", Frequency: "1d"}, Factors: []compiler.CompiledFactor{{BindingID: "binding", ResultViewID: "factor"}}, Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"factor"}}}, nil
+		},
+		Now: func() time.Time { return now },
+	}
+	event := PeriodReady{MessageID: "schedule-factor", EventName: "strategy.schedule", SpaceID: "space", ViewID: "source", PeriodTime: now.Add(-time.Hour), TargetInstanceID: "i1", Status: "complete"}
+	if err := p.Handle(context.Background(), event); !errors.Is(err, input.ErrNotReady) {
+		t.Fatalf("scheduled factor wake error = %v, want ErrNotReady", err)
+	}
+	if loader.calls != 0 {
+		t.Fatalf("scheduled factor wake loaded rows %d times", loader.calls)
+	}
+	processed, err := repo.IsProcessed(context.Background(), event.MessageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed {
+		t.Fatal("scheduled factor wake must remain retryable until factor.ready provenance arrives")
+	}
+}
+
+type countingLoader struct{ calls int }
+
+func (l *countingLoader) Load(context.Context, domain.StrategyRunner, compiler.CompiledStrategy, time.Time) (input.EvaluationInput, error) {
+	l.calls++
+	return input.EvaluationInput{}, nil
+}
 
 func TestModernDSLInstanceProducesTargetResult(t *testing.T) {
 	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))

@@ -159,7 +159,7 @@ func marshalLegacyTargetEvent(instance StrategyInstance, result StrategyResult, 
 		// contract. Keep its identity fields legacy-shaped while preserving the
 		// optional owner-generation fence for modern callers.
 		TargetId: result.ResultID, RunnerId: result.InstanceID,
-		LogicalAccountId: valueOrEmpty(instance.LogicalAccountID), CommandSequence: 1,
+		LogicalAccountId: valueOrEmpty(instance.LogicalAccountID), CommandSequence: legacySequence(result.BarEndTime),
 		Targets: payloadTargets, OwnerGeneration: ownerGeneration,
 	}
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{
@@ -172,11 +172,18 @@ func legacyResult(result StrategyResult, seed domain.StrategyResult) domain.Stra
 	if action == "" {
 		action = domain.ActionRebalance
 	}
-	sequence := int64(1)
+	sequence := legacySequence(result.BarEndTime)
 	return domain.StrategyResult{
 		ID: result.ResultID, RunnerID: result.InstanceID, StrategyID: seed.StrategyID,
 		PeriodTime: result.BarEndTime, TargetsJSON: append(json.RawMessage(nil), result.TargetsJSON...),
 		DebugInfoJSON: append(json.RawMessage(nil), result.RuleStatesJSON...), InputHash: seed.InputHash,
 		Action: action, CommandSequence: &sequence, CreatedAt: result.CreatedAt,
 	}
+}
+
+func legacySequence(barEnd time.Time) int64 {
+	if barEnd.IsZero() || barEnd.UnixMilli() <= 0 {
+		return 1
+	}
+	return barEnd.UnixMilli()
 }

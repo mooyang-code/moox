@@ -212,9 +212,12 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 			c_accepted_at = excluded.c_accepted_at,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE (excluded.c_instance_id <> '' AND
-			excluded.c_bar_end_time > t_logical_account_targets.c_bar_end_time)
+			(t_logical_account_targets.c_instance_id <> excluded.c_instance_id OR
+			 t_logical_account_targets.c_session_id <> excluded.c_session_id OR
+			 excluded.c_bar_end_time > t_logical_account_targets.c_bar_end_time))
 		   OR (excluded.c_instance_id = '' AND
-			excluded.c_command_sequence > t_logical_account_targets.c_command_sequence)
+			 t_logical_account_targets.c_instance_id = '' AND
+			 excluded.c_command_sequence > t_logical_account_targets.c_command_sequence)
 	`,
 		record.SpaceID, record.LogicalAccountID, record.TargetID, record.RunnerID,
 		record.CommandSequence, record.InstanceID, record.SessionID, record.StrategyID,

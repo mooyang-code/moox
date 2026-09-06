@@ -86,3 +86,32 @@ rules:
 	require.NotNil(t, compiled.Rules[0].Score)
 	require.Contains(t, compiled.Rules[0].Score.Dependencies.Fields, "bias")
 }
+
+func TestValidateDSLAllowsUnboundHistoricalFactorFields(t *testing.T) {
+	dsl, err := config.Parse([]byte(`name: cross
+triggers: {event: {name: ready}}
+data: {bar: 1h, calendar: crypto_24x7}
+rules:
+  signal:
+    pool: [BTC]
+    signals: {entry: "bars[-1].ma20 <= bars[-1].close && bars[0].ma20 > bars[0].close", exit: "bars[0].ma20 < bars[0].close"}
+    weight_each: 1
+`))
+	require.NoError(t, err)
+	require.NoError(t, (Compiler{}).ValidateDSL(context.Background(), dsl))
+}
+
+func TestValidateDSLAllowsUnboundNormalizerFields(t *testing.T) {
+	dsl, err := config.Parse([]byte(`name: rank
+triggers: {event: {name: ready}}
+data: {bar: 1h, calendar: crypto_24x7}
+rules:
+  rank:
+    pool: [BTC]
+    score: "0.5 * pct_rank(return_20) + 0.5 * zscore(turnover_20)"
+    select: {top: 1}
+    weight: 1
+`))
+	require.NoError(t, err)
+	require.NoError(t, (Compiler{}).ValidateDSL(context.Background(), dsl))
+}

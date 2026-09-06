@@ -33,6 +33,10 @@ type LogicalAccountSessionOwner interface {
 	ReleaseSession(context.Context, string, string, string, string) error
 }
 
+type LogicalAccountSessionValidator interface {
+	ValidateSession(context.Context, string, string, string, string) error
+}
+
 // LogicalAccountOwnerRebinder is implemented by the Trade client when a V1
 // archived runner is reused by a V2 runner with the same identity. Keeping it
 // separate preserves compatibility with lightweight owner stubs while making
@@ -59,6 +63,7 @@ type Service struct {
 	LogicalAccounts LogicalAccountOwner
 	Now             func() time.Time
 	runnerLocks     sync.Map
+	strategyLocks   sync.Map
 }
 
 // ReconcileDisabledOwners repairs the cross-service half of a disable
@@ -121,24 +126,65 @@ func (s *Service) ReconcileDisabledInstances(ctx context.Context) error {
 	}
 	var reconcileErr error
 	for _, instance := range instances {
-		if instance.SessionID == nil {
-			continue
-		}
-		if instance.LogicalAccountID == nil {
-			if err := s.Repo.ClearInstanceSession(ctx, instance.InstanceID, *instance.SessionID, s.nowTime()); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-				reconcileErr = errors.Join(reconcileErr, fmt.Errorf("instance %s: clear observation session: %w", instance.InstanceID, err))
+		unlock := s.lockStrategy(instance.StrategyID)
+		func() {
+			defer unlock()
+			current, getErr := s.Repo.GetInstance(ctx, instance.InstanceID)
+			if getErr != nil {
+				reconcileErr = errors.Join(reconcileErr, fmt.Errorf("instance %s: reload: %w", instance.InstanceID, getErr))
+				return
 			}
-			continue
-		}
-		if err := owner.ReleaseSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID); err != nil && !isOwnerConflict(err) {
-			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("instance %s: release session: %w", instance.InstanceID, err))
-			continue
-		}
-		if err := s.Repo.ClearInstanceSession(ctx, instance.InstanceID, *instance.SessionID, s.nowTime()); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("instance %s: clear session: %w", instance.InstanceID, err))
-		}
+			// Re-read under the same strategy lock used by enable/disable. An
+			// enable handshake that has already claimed Trade must not be
+			// mistaken for a stale disabled session and released here.
+			if current.Enabled || current.SessionID == nil {
+				return
+			}
+			instance = current
+			if instance.LogicalAccountID == nil {
+				if err := s.Repo.ClearInstanceSession(ctx, instance.InstanceID, *instance.SessionID, s.nowTime()); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					reconcileErr = errors.Join(reconcileErr, fmt.Errorf("instance %s: clear observation session: %w", instance.InstanceID, err))
+				}
+				return
+			}
+			if err := owner.ReleaseSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID); err != nil && !isOwnerConflict(err) {
+				reconcileErr = errors.Join(reconcileErr, fmt.Errorf("instance %s: release session: %w", instance.InstanceID, err))
+				return
+			}
+			if err := s.Repo.ClearInstanceSession(ctx, instance.InstanceID, *instance.SessionID, s.nowTime()); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				reconcileErr = errors.Join(reconcileErr, fmt.Errorf("instance %s: clear session: %w", instance.InstanceID, err))
+			}
+		}()
 	}
 	return reconcileErr
+}
+
+// ReconcileEnabledInstances verifies that persisted enabled instances still
+// own the same Trade session before Strategy starts consuming readiness
+// events. A mismatch is a startup error rather than a best-effort warning so
+// the instance cannot keep calculating against an authorization it no longer
+// holds.
+func (s *Service) ReconcileEnabledInstances(ctx context.Context) error {
+	if s == nil || s.Repo == nil || s.LogicalAccounts == nil {
+		return nil
+	}
+	validator, ok := s.LogicalAccounts.(LogicalAccountSessionValidator)
+	if !ok {
+		return nil
+	}
+	instances, err := s.Repo.ListAllInstances(ctx, ptrBool(true))
+	if err != nil {
+		return err
+	}
+	for _, instance := range instances {
+		if instance.LogicalAccountID == nil || instance.SessionID == nil || strings.TrimSpace(*instance.SessionID) == "" {
+			continue
+		}
+		if err := validator.ValidateSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID); err != nil {
+			return fmt.Errorf("enabled strategy instance %s session validation: %w", instance.InstanceID, err)
+		}
+	}
+	return nil
 }
 
 func ptrBool(value bool) *bool { return &value }
@@ -147,8 +193,32 @@ func isOwnerConflict(err error) bool {
 	if err == nil {
 		return false
 	}
+	var coded interface{ Code() int32 }
+	if errors.As(err, &coded) {
+		return coded.Code() == 14
+	}
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "owner conflict") || strings.Contains(message, "code=14")
+}
+
+// A failed claim with one of these codes is a definitive Trade response. The
+// local pending session was never authorized and can be cleared immediately;
+// transport/internal errors retain it so reconciliation can safely recover an
+// outcome that may have succeeded remotely.
+func isPermanentOwnerClaimError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var coded interface{ Code() int32 }
+	if !errors.As(err, &coded) {
+		return false
+	}
+	switch coded.Code() {
+	case 1, 2, 3, 5, 6, 7, 8, 9, 10, 12, 13, 14, 16, 17, 18:
+		return true
+	default:
+		return false
+	}
 }
 
 // ReconcileLegacyOwners releases Trade owners left behind when a V1 runner
@@ -231,6 +301,16 @@ func (s *Service) lockRunner(runnerID string) func() {
 	return lock.Unlock
 }
 
+// lockStrategy serializes edits to a shared DSL with instance enablement. A
+// definition update is allowed only while all referencing instances are
+// disabled, so both RPCs must observe that state atomically.
+func (s *Service) lockStrategy(strategyID string) func() {
+	value, _ := s.strategyLocks.LoadOrStore(strategyID, &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
+}
+
 func (s *Service) CreateStrategy(ctx context.Context, req *strategypb.CreateStrategyReq) (*strategypb.CreateStrategyRsp, error) {
 	if req == nil || req.GetStrategy() == nil || s.Registry == nil {
 		return &strategypb.CreateStrategyRsp{RetInfo: invalid(errors.New("strategy registry and dsl_yaml are required"))}, nil
@@ -251,11 +331,15 @@ func (s *Service) CreateStrategy(ctx context.Context, req *strategypb.CreateStra
 	if err := s.validatePoolUDFs(dsl); err != nil {
 		return &strategypb.CreateStrategyRsp{RetInfo: invalid(err)}, nil
 	}
-	if selectedCompiler := s.compilerFor(spaceID); selectedCompiler != nil {
-		if _, err := selectedCompiler.Compile(ctx, dsl, spaceID); err != nil {
+	if selected := s.compilerFor(spaceID); selected != nil {
+		if err := selected.ValidateDSL(ctx, dsl); err != nil {
 			return &strategypb.CreateStrategyRsp{RetInfo: invalid(err)}, nil
 		}
 	}
+	// Definition creation validates DSL shape and pool UDF contracts only.
+	// Factor/View fields are instance bindings, so compiling them here would
+	// reject valid bars[-1].factor expressions before a binding exists. Full
+	// dependency compilation is performed when an instance is enabled.
 	if err := s.Repo.SaveStrategyDefinition(ctx, definition); err != nil {
 		return &strategypb.CreateStrategyRsp{RetInfo: invalid(err)}, nil
 	}
@@ -270,6 +354,8 @@ func (s *Service) UpdateStrategy(ctx context.Context, req *strategypb.UpdateStra
 	if req == nil || strings.TrimSpace(req.GetStrategyId()) == "" || strings.TrimSpace(req.GetDslYaml()) == "" || s.Repo == nil || s.Registry == nil {
 		return &strategypb.UpdateStrategyRsp{RetInfo: invalid(errors.New("strategy_id and dsl_yaml are required"))}, nil
 	}
+	unlock := s.lockStrategy(req.GetStrategyId())
+	defer unlock()
 	definition, dsl, err := s.Registry.PrepareDefinition(req.GetStrategyId(), req.GetDslYaml(), s.nowTime())
 	if err != nil {
 		return &strategypb.UpdateStrategyRsp{RetInfo: invalid(err)}, nil
@@ -277,13 +363,13 @@ func (s *Service) UpdateStrategy(ctx context.Context, req *strategypb.UpdateStra
 	if err := s.validatePoolUDFs(dsl); err != nil {
 		return &strategypb.UpdateStrategyRsp{RetInfo: invalid(err)}, nil
 	}
-	if spaceID := requestSpaceID(ctx); spaceID != "" {
-		if selectedCompiler := s.compilerFor(spaceID); selectedCompiler != nil {
-			if _, err := selectedCompiler.Compile(ctx, dsl, spaceID); err != nil {
-				return &strategypb.UpdateStrategyRsp{RetInfo: invalid(err)}, nil
-			}
+	if selected := s.compilerFor(requestSpaceID(ctx)); selected != nil {
+		if err := selected.ValidateDSL(ctx, dsl); err != nil {
+			return &strategypb.UpdateStrategyRsp{RetInfo: invalid(err)}, nil
 		}
 	}
+	// As in CreateStrategy, defer binding-dependent expression compilation to
+	// instance enablement; the shared DSL has no concrete Factor catalog yet.
 	if err := s.Repo.UpdateStrategyDefinition(ctx, definition); err != nil {
 		return &strategypb.UpdateStrategyRsp{RetInfo: invalid(err)}, nil
 	}
@@ -508,31 +594,19 @@ func (s *Service) SetRunnerStatus(ctx context.Context, req *strategypb.SetRunner
 	if err := ensureRunnerScope(ctx, runner); err != nil {
 		return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
 	}
+	if err := s.ensureLegacyRunner(ctx, runner); err != nil {
+		return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
+	}
 	if runner.Status == status {
-		// Both same-status operations reconcile the cross-service owner. An
-		// ENABLED retry repairs a missing Trade claim; a DISABLED retry repairs
-		// a release that may have failed after the local status was persisted.
+		// Same-status ENABLED is a true idempotent read. Re-claiming a legacy
+		// owner can rotate its generation and clear the live target even though
+		// the caller only retried the same command. DISABLED remains a repair
+		// path because release is explicitly idempotent.
 		if status == domain.RunnerStatusEnabled {
 			if err := s.verifyRunnerDependencies(ctx, runner); err != nil {
 				return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
 			}
-			generation, err := s.claimRunnerWithGeneration(ctx, runner)
-			if err != nil {
-				return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-			}
-			if generation > 0 {
-				if err := s.Repo.ResetRunnerLifecycle(ctx, runner.ID, generation, s.nowTime()); err != nil {
-					return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-				}
-			}
-			// ResetRunnerLifecycle may clear the cached target/result after the
-			// claim. Return the persisted state rather than the stale pre-claim
-			// runner snapshot.
-			updated, getErr := s.Repo.GetRunner(ctx, runner.ID)
-			if getErr != nil {
-				return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(getErr)}, nil
-			}
-			return &strategypb.SetRunnerStatusRsp{RetInfo: success(), Runner: runnerProto(updated)}, nil
+			return &strategypb.SetRunnerStatusRsp{RetInfo: success(), Runner: runnerProto(runner)}, nil
 		} else if err := s.releaseRunner(ctx, runner); err != nil {
 			return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
 		}
@@ -698,6 +772,8 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 	if scoped != v.GetSpaceId() {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("instance is outside current space"))}, nil
 	}
+	unlockStrategy := s.lockStrategy(v.GetStrategyId())
+	defer unlockStrategy()
 	if _, err := s.Repo.GetStrategyDefinition(ctx, v.GetStrategyId()); err != nil {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
 	}
@@ -707,6 +783,11 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("instance_id and strategy_id are required"))}, nil
 	}
 	if v.GetEnabled() {
+		if instance.LogicalAccountID != nil {
+			if _, ok := s.LogicalAccounts.(LogicalAccountSessionOwner); !ok {
+				return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("logical account session owner is unavailable"))}, nil
+			}
+		}
 		if err := validateEnabledBindings(instance.InputBindingsJSON); err != nil {
 			return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
 		}
@@ -721,14 +802,16 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 		if err := s.validatePoolUDFs(dsl); err != nil {
 			return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
 		}
-		if selected := s.compilerFor(instance.SpaceID); selected != nil {
-			compiled, compileErr := selected.CompileWithBindings(ctx, dsl, instance.SpaceID, instance.InputBindingsJSON)
-			if compileErr != nil {
-				return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(compileErr)}, nil
-			}
-			if verifyErr := selected.VerifyDependencies(ctx, compiled); verifyErr != nil {
-				return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(verifyErr)}, nil
-			}
+		selected := s.compilerFor(instance.SpaceID)
+		if selected == nil {
+			return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("strategy compiler/execution dependencies are unavailable"))}, nil
+		}
+		compiled, compileErr := selected.CompileWithBindings(ctx, dsl, instance.SpaceID, instance.InputBindingsJSON)
+		if compileErr != nil {
+			return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(compileErr)}, nil
+		}
+		if verifyErr := selected.VerifyDependencies(ctx, compiled); verifyErr != nil {
+			return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(verifyErr)}, nil
 		}
 		session, genErr := newSessionID()
 		if genErr != nil {
@@ -750,6 +833,9 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 				return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("logical account session owner is unavailable"))}, nil
 			}
 			if err := owner.ClaimSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID); err != nil {
+				if isPermanentOwnerClaimError(err) {
+					_ = s.Repo.ClearInstanceSession(ctx, instance.InstanceID, *instance.SessionID, now)
+				}
 				return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
 			}
 		}
@@ -822,12 +908,38 @@ func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategyp
 	if scoped := requestSpaceID(ctx); scoped != "" && scoped != instance.SpaceID {
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("instance is outside current space"))}, nil
 	}
+	unlock := s.lockStrategy(instance.StrategyID)
+	defer unlock()
+	// The initial read only chooses the strategy lock. Re-read after acquiring
+	// it so a concurrent enable/disable cannot apply its transition to a stale
+	// snapshot and skip the matching Trade release.
+	instance, err = s.Repo.GetInstance(ctx, req.GetInstanceId())
+	if err != nil {
+		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(err)}, nil
+	}
+	if scoped := requestSpaceID(ctx); scoped != "" && scoped != instance.SpaceID {
+		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("instance is outside the current space"))}, nil
+	}
 	if req.GetEnabled() && instance.Enabled {
 		// Repeated enable is idempotent and must not allocate a new session or
-		// contend with Trade's existing claim.
+		// contend with Trade's existing claim. When a logical account is
+		// configured, verify that the persisted session is still the live Trade
+		// owner instead of returning a false-success after an external rebind.
+		if instance.LogicalAccountID != nil && instance.SessionID != nil {
+			if validator, ok := s.LogicalAccounts.(LogicalAccountSessionValidator); ok {
+				if err := validator.ValidateSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID); err != nil {
+					return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(fmt.Errorf("strategy instance session is no longer authorized: %w", err))}, nil
+				}
+			}
+		}
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: success(), Instance: instanceProto(instance)}, nil
 	}
 	if req.GetEnabled() {
+		if instance.LogicalAccountID != nil {
+			if _, ok := s.LogicalAccounts.(LogicalAccountSessionOwner); !ok {
+				return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("logical account session owner is unavailable"))}, nil
+			}
+		}
 		if err := validateEnabledBindings(instance.InputBindingsJSON); err != nil {
 			return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(err)}, nil
 		}
@@ -842,23 +954,30 @@ func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategyp
 		if err := s.validatePoolUDFs(dsl); err != nil {
 			return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(err)}, nil
 		}
-		if selected := s.compilerFor(instance.SpaceID); selected != nil {
-			compiled, compileErr := selected.CompileWithBindings(ctx, dsl, instance.SpaceID, instance.InputBindingsJSON)
-			if compileErr != nil {
-				return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(compileErr)}, nil
-			}
-			if verifyErr := selected.VerifyDependencies(ctx, compiled); verifyErr != nil {
-				return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(verifyErr)}, nil
-			}
+		selected := s.compilerFor(instance.SpaceID)
+		if selected == nil {
+			return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("strategy compiler/execution dependencies are unavailable"))}, nil
+		}
+		compiled, compileErr := selected.CompileWithBindings(ctx, dsl, instance.SpaceID, instance.InputBindingsJSON)
+		if compileErr != nil {
+			return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(compileErr)}, nil
+		}
+		if verifyErr := selected.VerifyDependencies(ctx, compiled); verifyErr != nil {
+			return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(verifyErr)}, nil
 		}
 	}
 	var session *string
 	if req.GetEnabled() {
-		value, genErr := newSessionID()
-		if genErr != nil {
-			return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(genErr)}, nil
+		if instance.SessionID != nil && strings.TrimSpace(*instance.SessionID) != "" {
+			value := strings.TrimSpace(*instance.SessionID)
+			session = &value
+		} else {
+			value, genErr := newSessionID()
+			if genErr != nil {
+				return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(genErr)}, nil
+			}
+			session = &value
 		}
-		session = &value
 		if err := s.Repo.SetInstanceEnabled(ctx, instance.InstanceID, false, session, s.nowTime()); err != nil {
 			return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(err)}, nil
 		}
@@ -868,6 +987,9 @@ func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategyp
 				return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("logical account session owner is unavailable"))}, nil
 			}
 			if err := owner.ClaimSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *session); err != nil {
+				if isPermanentOwnerClaimError(err) {
+					_ = s.Repo.ClearInstanceSession(ctx, instance.InstanceID, *session, s.nowTime())
+				}
 				return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(err)}, nil
 			}
 		}
@@ -998,6 +1120,24 @@ func decodeCompiled(strategy domain.Strategy) (compiler.CompiledStrategy, error)
 func validateRunnerIdentity(value *strategypb.StrategyRunner) error {
 	if strings.TrimSpace(value.GetRunnerId()) == "" || strings.TrimSpace(value.GetStrategyId()) == "" || strings.TrimSpace(value.GetSpaceId()) == "" {
 		return errors.New("runner_id, strategy_id and space_id are required")
+	}
+	return nil
+}
+
+// ensureLegacyRunner keeps the source-compatible runner RPCs from mutating a
+// modern strategy instance. The legacy adapter has no session-aware release
+// handshake, so allowing it to operate on a modern row could clear ownership
+// without releasing the exact Trade session.
+func (s *Service) ensureLegacyRunner(ctx context.Context, runner domain.StrategyRunner) error {
+	if s == nil || s.Repo == nil {
+		return errors.New("strategy repository is unavailable")
+	}
+	strategy, err := s.Repo.GetStrategy(ctx, runner.StrategyID)
+	if err != nil {
+		return err
+	}
+	if len(strategy.CompiledJSON) == 0 {
+		return errors.New("legacy runner API cannot mutate a modern strategy instance")
 	}
 	return nil
 }

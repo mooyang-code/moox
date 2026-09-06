@@ -63,10 +63,12 @@ the live convergence target on ownership claim, and Strategy clears its cached
 targets so the next successful period is emitted as a new rebalance rather than
 an unobservable hold. Immutable Strategy/Trade history and `TargetReceipt`
 rows are retained.
-Trade also persists a monotonic `owner_generation` lifecycle token. Strategy
-puts the token in each target event and Trade accepts only the current
-generation, covering messages already published but still in flight during a
-release/reclaim transition without comparing wall clocks across services.
+Trade still persists a monotonic `owner_generation` token for the legacy
+Runner adapter. Modern Strategy target events are fenced by the pair
+`instance_id` + `session_id` and intentionally omit that compatibility field;
+Trade validates the pair before accepting a target. This keeps the modern
+contract small while preserving delayed-message protection across a release or
+reclaim transition.
 Strategy retries release for disabled Runners at startup and periodically,
 treating an owner-conflict response as an already-completed release. Archived
 same-ID takeover uses a durable `rebind_key`; Trade applies each key once and
@@ -75,18 +77,16 @@ newer target. Strategy performs owner reconciliation before starting the
 EventBus relay/ready consumer, and deployment waits for Trade `/readyz` before
 starting Strategy.
 
-Database startup performs safe migrations before strict schema validation. Trade
-adds the known owner-generation column to an older logical-account table and
-initializes existing owners at generation one (unowned rows remain zero). Strategy V1 tables are renamed into
-`legacy_strategy_v1_*` archive tables because their source-code and trigger
-fields have no V2 execution meaning; unknown or partially malformed schemas
-remain fail-closed instead of being reset implicitly. A startup/periodic
-reconciler releases archived Trade owners under the runner lock. When an
-ENABLED V2 runner has deliberately taken over the same space/account binding,
-it calls Trade's explicit rebind lifecycle operation, which advances
-`owner_generation` and clears the old live target without dropping ownership or
-pausing automation. Successful release or rebind is marked in the archive table
-so later passes do not issue duplicate Trade calls.
+Database startup applies only the current schema and then performs strict
+structure validation. This release does not automatically migrate or rename
+old Strategy tables: before upgrading, stop the old consumer, revoke old
+ownership, back up the database, and explicitly choose whether to archive or
+rebuild it. Unknown or partially malformed schemas fail closed rather than
+being reset implicitly. A startup/periodic reconciler releases any explicitly
+archived Trade owners under the runner lock. When an ENABLED V2 runner has
+deliberately taken over the same space/account binding, it calls Trade's
+explicit rebind lifecycle operation, which advances `owner_generation` and
+clears the old live target without dropping ownership or pausing automation.
 
 Trade owns the only weight-to-quantity conversion. It uses authoritative
 enabled-and-ready member equity, separate Storage Primary/Metadata and DataView

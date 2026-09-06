@@ -32,10 +32,30 @@ func (f fakeInputLoader) Load(context.Context, domain.StrategyRunner, compiler.C
 
 type fakeIndexedInputLoader struct{ fakeInputLoader }
 
-func TestMarshalTargetEventCarriesOwnerGeneration(t *testing.T) {
+func TestIndexProvenanceIsPartial(t *testing.T) {
+	tests := []struct {
+		name    string
+		event   PeriodReady
+		partial bool
+	}{
+		{name: "none", event: PeriodReady{}, partial: false},
+		{name: "paired", event: PeriodReady{SourceIndexID: "source", SourceIndexRevision: 1, ResultIndexID: "result", ResultIndexRevision: 2}, partial: false},
+		{name: "source only", event: PeriodReady{SourceIndexID: "source", SourceIndexRevision: 1}, partial: true},
+		{name: "result only", event: PeriodReady{ResultIndexID: "result", ResultIndexRevision: 2}, partial: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := indexProvenanceIsPartial(tt.event); got != tt.partial {
+				t.Fatalf("indexProvenanceIsPartial() = %v, want %v", got, tt.partial)
+			}
+		})
+	}
+}
+
+func TestMarshalTargetEventUsesSessionFenceWithoutOwnerGeneration(t *testing.T) {
 	account := "logical-1"
 	now := time.UnixMilli(1000).UTC()
-	raw, err := marshalTargetEvent(store.StrategyInstance{InstanceID: "instance-1", StrategyID: "strategy-1", SpaceID: "space-1", LogicalAccountID: &account}, store.StrategyResult{ResultID: "result-1", InstanceID: "instance-1", SessionID: "session-1", BarEndTime: now, ValidUntil: now.Add(time.Hour), CreatedAt: now}, nil, 7)
+	raw, err := marshalTargetEvent(store.StrategyInstance{InstanceID: "instance-1", StrategyID: "strategy-1", SpaceID: "space-1", LogicalAccountID: &account}, store.StrategyResult{ResultID: "result-1", InstanceID: "instance-1", SessionID: "session-1", BarEndTime: now, ValidUntil: now.Add(time.Hour), CreatedAt: now}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,8 +71,8 @@ func TestMarshalTargetEventCarriesOwnerGeneration(t *testing.T) {
 	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.GetOwnerGeneration() != 7 {
-		t.Fatalf("owner generation = %d, want 7", payload.GetOwnerGeneration())
+	if payload.GetOwnerGeneration() != 0 {
+		t.Fatalf("modern target unexpectedly carries owner generation: %d", payload.GetOwnerGeneration())
 	}
 }
 
@@ -88,7 +108,7 @@ func TestProcessorCommitsFullWeightEvaluationAndDeduplicatesEvent(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Action != domain.ActionRebalance || result.CommandSequence == nil || *result.CommandSequence != 1 {
+	if result.Action != domain.ActionRebalance || result.CommandSequence == nil || *result.CommandSequence != period.UnixMilli() {
 		t.Fatalf("result=%+v", result)
 	}
 	var targets []domain.InstrumentTarget
@@ -104,6 +124,15 @@ func TestProcessorCommitsFullWeightEvaluationAndDeduplicatesEvent(t *testing.T) 
 	}
 	if !processed {
 		t.Fatal("expected event to be recorded in inbox")
+	}
+}
+
+func TestCanonicalEventNameSeparatesSourceAndFactorReady(t *testing.T) {
+	if got := canonicalEventName("source.ready"); got != "event.storage.view.source_period.ready" {
+		t.Fatalf("source.ready canonical name = %q", got)
+	}
+	if got := canonicalEventName("factor.ready"); got != "event.storage.view.factor_period.ready" {
+		t.Fatalf("factor.ready canonical name = %q", got)
 	}
 }
 
@@ -352,7 +381,7 @@ func TestRequiredBindingsReadyAllowsSkippedOnlyBindingState(t *testing.T) {
 }
 
 func TestRequiredBindingsReadyMatchesLoadedPoolBySubjectOrInstrument(t *testing.T) {
-	compiled := compiler.CompiledStrategy{Factors: []compiler.CompiledFactor{{BindingID: "binding-required"}}}
+	compiled := compiler.CompiledStrategy{Factors: []compiler.CompiledFactor{{BindingID: "binding-required", SubjectMode: "include", SubjectsJSON: `["btc-binance"]`}}}
 	event := PeriodReady{Status: "degraded", BindingStatuses: map[string]string{"binding-required": "degraded"}, BindingStates: map[string]BindingPeriodState{
 		"binding-required": {Status: "degraded", FailedSubjects: []string{"BUSD-USDT"}},
 	}}
@@ -367,6 +396,17 @@ func TestRequiredBindingsReadyMatchesLoadedPoolBySubjectOrInstrument(t *testing.
 	event.BindingStates["binding-required"] = BindingPeriodState{Status: "degraded", SkippedSubjects: []string{"BTC-USDT"}}
 	if requiredBindingsReady(compiled, event, pool) {
 		t.Fatal("instrument ID reported by a factor must also match the selected pool")
+	}
+}
+
+func TestRequiredBindingsReadyIgnoresScopedSkippedSubjectsOutsidePool(t *testing.T) {
+	compiled := compiler.CompiledStrategy{Factors: []compiler.CompiledFactor{{BindingID: "binding-required", SubjectMode: "include", SubjectsJSON: `["BTC"]`}}}
+	event := PeriodReady{Status: "degraded", BindingStatuses: map[string]string{"binding-required": "degraded"}, BindingStates: map[string]BindingPeriodState{
+		"binding-required": {Status: "degraded", SkippedSubjects: []string{"ETH"}},
+	}}
+	pool := []input.InstrumentInput{{PoolItem: input.PoolItem{InstrumentID: "ETH", SubjectID: "eth-binance"}}}
+	if !requiredBindingsReady(compiled, event, pool) {
+		t.Fatal("a subject-scoped binding skipped outside its scope should not block the pool")
 	}
 }
 
@@ -434,5 +474,34 @@ func TestTerminalReadyForRunnerIsConservativeForDynamicPool(t *testing.T) {
 	event.BindingStates["binding-required"] = BindingPeriodState{Status: "degraded", FailedSubjects: []string{"btc"}}
 	if !terminalReadyForRunner(compiled, event, pool) {
 		t.Fatal("resolved pool failure must be terminal")
+	}
+}
+
+func TestTrimCompiledInputDropsHoldingRulesAndUnrelatedFactors(t *testing.T) {
+	active := compiler.CompiledRule{
+		Name:  "active",
+		Score: &compiler.CompiledExpression{Dependencies: compiler.ExpressionDependencies{Fields: []string{"momentum"}}},
+	}
+	holding := compiler.CompiledRule{
+		Name:  "holding",
+		Score: &compiler.CompiledExpression{Dependencies: compiler.ExpressionDependencies{Fields: []string{"slow"}}},
+	}
+	compiled := compiler.CompiledStrategy{
+		Rules: []compiler.CompiledRule{active, holding},
+		Factors: []compiler.CompiledFactor{
+			{FactorID: "momentum", Output: "momentum", ColumnName: "momentum", ResultViewID: "view-fast"},
+			{FactorID: "slow", Output: "slow", ColumnName: "slow", ResultViewID: "view-slow"},
+		},
+		Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"view-fast", "view-slow"}},
+	}
+	trimCompiledInput(&compiled, config.DSL{Rules: map[string]config.Rule{"active": {}}})
+	if len(compiled.Rules) != 1 || compiled.Rules[0].Name != "active" {
+		t.Fatalf("rules=%v, want only active", compiled.Rules)
+	}
+	if len(compiled.Factors) != 1 || compiled.Factors[0].FactorID != "momentum" {
+		t.Fatalf("factors=%v, want only momentum", compiled.Factors)
+	}
+	if len(compiled.Dependencies.FactorResultViewIDs) != 1 || compiled.Dependencies.FactorResultViewIDs[0] != "view-fast" {
+		t.Fatalf("views=%v, want only view-fast", compiled.Dependencies.FactorResultViewIDs)
 	}
 }

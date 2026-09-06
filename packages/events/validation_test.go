@@ -171,6 +171,33 @@ func TestFactorCompletionRequiresSourceHash(t *testing.T) {
 	require.Contains(t, err.Error(), "source_hash is required")
 }
 
+func TestViewFactorReadyRequiresPairedIndexProvenance(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	base := &storagepb.ViewFactorPeriodReady{
+		SourceViewId: "source-view", ResultViewId: "result-view", Frequency: "1m", PeriodTime: 1,
+		Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}},
+		ReadyAt: timestamppb.Now(), SourceIndexId: "source-index", SourceIndexRevision: 1,
+		ResultIndexId: "result-index", ResultIndexRevision: 2,
+	}
+	_, err = registry.Encode(ViewFactorPeriodReady, base, validationOptions("factor-ready-1", "space", "result-view"))
+	require.NoError(t, err)
+
+	missingResult := proto.Clone(base).(*storagepb.ViewFactorPeriodReady)
+	missingResult.ResultIndexId = ""
+	missingResult.ResultIndexRevision = 0
+	_, err = registry.Encode(ViewFactorPeriodReady, missingResult, validationOptions("factor-ready-2", "space", "result-view"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "source and result index provenance")
+
+	missingSource := proto.Clone(base).(*storagepb.ViewFactorPeriodReady)
+	missingSource.SourceIndexId = ""
+	missingSource.SourceIndexRevision = 0
+	_, err = registry.Encode(ViewFactorPeriodReady, missingSource, validationOptions("factor-ready-3", "space", "result-view"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "source and result index provenance")
+}
+
 type semanticValidationPublisher struct {
 	calls int
 }

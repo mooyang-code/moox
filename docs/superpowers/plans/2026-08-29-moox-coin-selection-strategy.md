@@ -16,10 +16,8 @@
 本轮实现记录（2026-09-05）：Strategy/Trade 新契约代码已落地。已完成并验证 DSL 解析与 Expr、
 `bars[0]/bars[-1]`、标的池/UDF、前后筛、标准化、top/tail、RuleState、三表存储、异步目标发布、
 session/bar 授权与定时/事件触发；生产适配从实例 `input_bindings_json` 读取 source/factor View。
-验证命令：`go test ./... -count=1`（`modules/strategy`、`modules/trade`）、关键包 `go test -race`，
-`bash scripts/test/e2e/test-deploy-moox-strategy-e2e.sh`，以及
-`bash scripts/test/e2e/test-factor-view-ready-e2e.sh` 均通过。尚未连接真实 Factor/Storage 或生产账户，
-不能把本地 E2E 当作正式环境验证；后续发布记录须补充实际部署目标、版本和读回证据。
+模块级 Go 测试、关键包 race 测试和本地策略部署 E2E 已通过。Factor/Storage/Strategy 的正式联合
+链路受现有远端 View active-index 基线限制，未将未完成的真实因子链路包装为通过。
 
 补充实现（2026-09-06）：Storage 读取已明确区分 `bar_end_time` 与行键 `BarStart`，事件和定时触发
 分别填充两个时间边界；连续市场按频率换算，`cn_stock` 日线的事件、定时、上一根与有效期统一使用内置交易日历；定时回调使用实际唤醒时间，避免读取 cron 共享的下一次计划时间；启用实例要求完整 source View 绑定并
@@ -28,19 +26,21 @@ session/bar 授权与定时/事件触发；生产适配从实例 `input_bindings
 仍保留旧 Runner 页面兼容路径。上述改动已重新跑完 Strategy/Trade Go 测试、Web Vitest、生产构建和
 Strategy Playwright；Playwright 中一条旧组合账户断言已保留兼容文案。
 
+因子输入的安全边界：首版要求含 Factor Result View 的实例配置能携带因子完成周期与来源的
+`event` 触发；schedule-only 仅适用于行情源字段规则。没有可验证的因子周期快照协议时，编译器
+拒绝因子规则的 schedule-only 配置，避免把未完成或跨周期的因子值当作本期输入。普通行情规则仍可
+只配 schedule、只配 event 或同时配置，两者在运行时保持 OR 语义。
+
 边界修复（2026-09-05）：分钟单位保持 `m`（不与月份 `M` 混淆），实例/因子绑定频率必须与
 `data.bar` 一致，省略因子频率时继承该周期；多规则的固定池和 Factor `subjects_json` 按规则/标的
 分别做完整性检查，避免不同标的绑定互相阻塞；Pool UDF 在启用时校验注册名称与参数，运行期也拒绝
 非法参数，标的 ID 统一按目录规范化并采用大小写不敏感匹配。
 
-本轮收口验证（2026-09-06）：已完成本地隔离部署的真实 Storage/Factor/Strategy 链路测试，使用
-动态 DSL 创建实例，收到 `ViewFactorPeriodReady` 后查询到完整目标权重；`TestFactorRealStorageE2E`
-通过。测试清理对异步 Factor/Storage 操作做有界重试，默认将无法访问旧 worker 的清理失败记为
-日志警告；设置 `MOOX_FACTOR_STORAGE_E2E_STRICT_CLEANUP=1` 时才把残留升级为测试失败，适合
-CI 门禁。另行运行 `test-strategy-trade-event-e2e.sh` 与
-`test-strategy-trade-logical-account-e2e.sh`，已通过隔离 NATS 的发布者→Trade 消费者和会话授权
-RPC 链路。上述验证仍是本机临时部署/内存测试，不包含正式主机发布、真实账户或实际下单；使用
-真实 Strategy 进程、独立 Trade/EventBus 与真实执行账户的联合 E2E 仍需单独环境。
+本轮收口验证（2026-09-06）：`test-strategy-trade-event-e2e.sh` 与
+`test-strategy-trade-logical-account-e2e.sh` 已通过，验证隔离 NATS 的发布者→Trade 消费者和会话授权
+RPC 链路。Factor/Storage/Strategy 联合 E2E 曾受远端旧 View active-index 基线阻塞，测试产生的临时
+Space/View 不作为成功证据；本轮不触碰真实账户或实际下单。使用真实 Factor、Storage、Strategy
+进程和独立执行账户的联合 E2E 仍需在具备可控 View 基线的环境单独验收。
 本地使用 `SKIP_WEB_ASSETS=1` 构建 `darwin/arm64` 发布包也已成功，产物仅用于构建验收，不能替代
 生产目标架构的发布包。
 
@@ -50,11 +50,11 @@ RPC 链路。上述验证仍是本机临时部署/内存测试，不包含正式
 `verify-pr` 记为通过；正式发布仍须由维护者先处理该独立门禁。
 
 正式主机发布记录（2026-09-06）：用户单独授权后，使用 `moox.toml` 的 `strategy_host`（`ubuntu@106.53.107.122`）
-通过账号密码完成 Linux/amd64 组件覆盖发布，目标目录为 `/data/moox/prod`。发布前保留策略数据库备份
+通过账号密码完成 Linux/amd64 策略组件覆盖发布，目标目录为 `/data/moox/prod`。发布前保留策略数据库备份
 `/data/moox/prod/data/strategy/strategy.sqlite.pre-v2-20260906025510`；该库原有 V1 表均为空，因新版本严格
-拒绝旧 schema，备份后重建为空的三表 schema。Strategy 二进制 SHA-256 为
-`39d4325e01069367a0cfaa928bf9842c73ba8885c19f3a958d0540d725db51df`，远端 `run/strategy.binary.sha256`
-读回一致；`healthcheck.sh strategy` 返回 `running ... ready`。EventBus、Gateway、Factor、Collector、
+拒绝旧 schema，备份后重建为空的三表 schema。最终 Strategy 二进制 SHA-256 为
+`fdde6c44c7e94c145af31bd90906e588ac11d504854f7b22f11662273f2091b7`，远端文件读回一致；
+`healthcheck.sh strategy` 返回 `running pid=4083894 ready`。EventBus、Gateway、Factor、Collector、
 CloudNode、Monitor、HostAgent、Archive、Admin 和 WebHost 的既有进程保持运行，策略使用 TLS EventBus
 和远程 Storage Gateway 配置启动。本次仅完成服务发布与健康检查，未触碰真实账户或下单。
 
@@ -240,7 +240,8 @@ Trade 在任何去重快路径前校验当前授权 `(instance_id, session_id)` 
 
 - [ ] 在现有配置文件内以 `config.DSL` 替代旧 Manifest 类型，不为改名字额外拆目录。
   YAML 根只接受 name/triggers/data/rules；规则字段和互斥关系逐项按设计第 3、6、7 节校验。
-- [ ] 增加 `TestDSLContract` 表驱动用例：示例可解析；schedule-only/event-only 合法；
+- [ ] 增加 `TestDSLContract` 表驱动用例：示例可解析；无因子绑定时 schedule-only/event-only 合法，含因子绑定时
+  schedule-only 拒绝且 event 触发合法；
   重复键、未知字段、空 rules、空 select、top+tail、select 无 score、weight+weight_each、
   signals 缺 entry/exit、holding+signals、旧 api_version/kind 均失败。
 - [ ] 将下面的表达式表落为 `TestBarsExpressionContract`，验证编译期字段类型与依赖提取：
@@ -540,7 +541,7 @@ go test ./modules/strategy/internal/outbox ./modules/strategy/internal/store
 本段缩写 internal 路径均位于 `modules/trade/`。
 
 - [ ] LogicalAccountTargetWeightRequested 增加 session_id、strategy_id、bar_end_time、effective_at、valid_until，
-  移除 command_sequence、signal_time、owner_generation。时间统一使用 Protobuf Timestamp，
+  现代消息移除 command_sequence、signal_time、owner_generation（Proto 中旧字段仅为 legacy adapter 保留的源兼容），时间统一使用 Protobuf Timestamp，
   持久化为 UTC 毫秒；严格检查有效值、effective_at=bar_end_time、valid_until>effective_at。
   保留既有字段 1/2/3/5，新字段明确使用 8 至 12，不复用旧字段号 4/6/7：
 
@@ -694,6 +695,32 @@ rg -n 'compiled_json|manifest_yaml|input_hash|api_version|ReadinessChecker' modu
   设计文档标注已实现/仍未支持的能力；不复制原计划历史部署成功结论。
 - [ ] 对不兼容数据库/队列切换单列操作说明：先停用并撤销旧授权，停止旧消费者，
   备份并确认旧数据处置、隔离旧消息，协调升级后再启用。未经用户授权，不执行清库或部署。
+
+## 本轮实施与发布记录
+
+本轮按个人量化系统的简化边界完成了 Strategy/Trade 核心链路：DSL 作为定义唯一来源，定义/实例/结果
+三表持久化，定时与事件统一周期，标的池/UDF、前后筛、评分标准化、top/tail、信号/持有状态，严格
+缺数处理，以及 `instance_id + session_id + bar_end_time` 的目标授权、CAS 和异步投递。Strategy 只
+输出目标持仓权重；Trade 负责账户、数量、风控、下单及执行失败恢复。Pool UDF 在生产 Storage
+快照内解析，Factor/View 依赖按绑定校验，旧 Runner 仅保留过渡 adapter，不操作现代 Instance。
+
+本轮验证结果：
+
+- `go test ./modules/strategy/... ./modules/trade/... ./packages/events/... ./packages/tradeeventpb/... ./packages/marketcalendar/... -count=1`：PASS。
+- `go test -race ./modules/strategy/internal/input ./modules/strategy/internal/compiler ./modules/strategy/internal/selection ./modules/strategy/internal/storageio ./modules/strategy/internal/trigger ./modules/strategy/internal/rpc ./modules/strategy/internal/store ./modules/strategy/internal/outbox ./modules/strategy/internal/trigger/eventconsumer -count=1`：PASS。
+- `go test ./modules/admin/... -count=1`：PASS。
+- `bash scripts/test/e2e/test-deploy-moox-strategy-e2e.sh`：PASS。
+- `bash scripts/test/e2e/test-strategy-trade-event-e2e.sh`、`bash scripts/test/e2e/test-strategy-trade-logical-account-e2e.sh`：PASS。
+- Factor/Storage/Strategy 联合 E2E：受远端旧 View active-index 基线限制，未作为通过证据；未执行真实账户或下单。
+- `git diff --check`：PASS；仓库级 `make verify-pr` 仍受既有 Storage `durable` 配置键门禁阻塞，与本策略改动无关。
+
+正式发布已完成：目标为 `moox.toml` 的 `strategy_host`，目录 `/data/moox/prod`，最终 Strategy 二进制
+SHA-256 为 `fdde6c44c7e94c145af31bd90906e588ac11d504854f7b22f11662273f2091b7`，远端文件校验一致；
+`healthcheck.sh strategy` 返回 `running pid=4083894 ready`。发布使用 TLS EventBus 及已有 Storage
+Gateway，其他服务保持运行。生产数据库升级前已备份旧文件并重建空三表 schema；未删除备份、未触碰真实账户。
+
+未完成或需后续单独验收的范围：管理台完整 DSL 编辑器/Playwright 全流程、可控 View 基线下的 Factor→Storage→Strategy
+真实联合 E2E、真实账户与交易所成交验证，以及旧 Runner 跨进程恢复。以上不影响当前策略服务启动和核心目标链路的本地验证。
 
 ## 四、完成标准
 
