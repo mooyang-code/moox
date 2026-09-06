@@ -41,6 +41,12 @@ type viewSnapshot struct {
 	revisions map[string]uint64
 	selectors map[string][]*storagepb.TimeSeriesSelector
 	subjects  map[string][]input.Subject
+	// requireComplete is true for source Views in scheduled snapshots and false
+	// for factor result Views or provenance-fenced event snapshots. A
+	// factor-ready event is the completeness contract for its current period;
+	// the View may still report incomplete historical coverage while the
+	// just-published row is already readable.
+	requireComplete map[string]bool
 }
 
 // ViewSnapshotProvenance exposes the actual active index generations latched
@@ -67,8 +73,9 @@ func (c *RPCClient) beginViewSnapshot(ctx context.Context, spaceID string, viewI
 	if c == nil || c.Metadata == nil || c.DataView == nil {
 		return nil, fmt.Errorf("storage metadata/data view clients are not configured")
 	}
-	snapshot := &viewSnapshot{client: c, spaceID: spaceID, indexes: make(map[string]string), revisions: make(map[string]uint64), selectors: make(map[string][]*storagepb.TimeSeriesSelector), subjects: make(map[string][]input.Subject)}
-	for _, viewID := range uniqueStrings(viewIDs) {
+	uniqueViewIDs := uniqueStrings(viewIDs)
+	snapshot := &viewSnapshot{client: c, spaceID: spaceID, indexes: make(map[string]string), revisions: make(map[string]uint64), selectors: make(map[string][]*storagepb.TimeSeriesSelector), subjects: make(map[string][]input.Subject), requireComplete: make(map[string]bool, len(uniqueViewIDs))}
+	for index, viewID := range uniqueViewIDs {
 		viewRsp, err := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.metadataAuth(), SpaceId: spaceID, ViewId: viewID})
 		if err != nil {
 			return nil, err
@@ -104,6 +111,12 @@ func (c *RPCClient) beginViewSnapshot(ctx context.Context, spaceID string, viewI
 		snapshot.revisions[viewID] = expectedRevision
 		snapshot.selectors[viewID] = selectors
 		snapshot.subjects[viewID] = subjects
+		// Event-driven Factor-ready evaluations carry the source/result index
+		// provenance that proves the current period. Their source View may still
+		// report partial historical coverage, so row presence/readiness checks
+		// remain authoritative. Scheduled snapshots have no such event fence and
+		// keep the strict source coverage requirement.
+		snapshot.requireComplete[viewID] = index == 0 && expected == nil
 	}
 	return snapshot, nil
 }
@@ -121,7 +134,11 @@ func (s *viewSnapshot) ListSubjects(_ context.Context, _, viewID string) ([]inpu
 }
 
 func (s *viewSnapshot) HistoryPeriods(ctx context.Context, spaceID, viewID, _ string, start, end time.Time) (map[string]int, error) {
-	rows, err := s.readPinnedRows(ctx, spaceID, viewID, start, end)
+	// History is used only to count available bars for pool eligibility. The
+	// current period read below remains strict, while an older partial index
+	// coverage must not block a factor-ready snapshot that already proves the
+	// requested current bar.
+	rows, err := s.readPinnedRowsWithRequirement(ctx, spaceID, viewID, start, end, false)
 	if err != nil {
 		return nil, err
 	}
@@ -160,11 +177,18 @@ func (s *viewSnapshot) HistoryPeriods(ctx context.Context, spaceID, viewID, _ st
 
 func (s *viewSnapshot) readPinnedRows(ctx context.Context, spaceID, viewID string, start, end time.Time) ([]ViewRow, error) {
 	s.mu.Lock()
+	requireComplete := s.requireComplete[viewID]
+	s.mu.Unlock()
+	return s.readPinnedRowsWithRequirement(ctx, spaceID, viewID, start, end, requireComplete)
+}
+
+func (s *viewSnapshot) readPinnedRowsWithRequirement(ctx context.Context, spaceID, viewID string, start, end time.Time, requireComplete bool) ([]ViewRow, error) {
+	s.mu.Lock()
 	indexID := s.indexes[viewID]
 	revision := s.revisions[viewID]
 	selectors := s.selectors[viewID]
 	s.mu.Unlock()
-	rows, servedRevision, err := s.client.readRowsAtWithRevision(ctx, spaceID, viewID, start, end, indexID, revision, selectors)
+	rows, servedRevision, err := s.client.readRowsAtWithRevision(ctx, spaceID, viewID, start, end, indexID, revision, selectors, requireComplete)
 	if err != nil {
 		return nil, err
 	}
@@ -386,11 +410,11 @@ func (c *RPCClient) readRows(ctx context.Context, spaceID, viewID string, start,
 }
 
 func (c *RPCClient) readRowsAt(ctx context.Context, spaceID, viewID string, start, end time.Time, expectedIndexID string, expectedRevision uint64, selectors []*storagepb.TimeSeriesSelector) ([]ViewRow, error) {
-	rows, _, err := c.readRowsAtWithRevision(ctx, spaceID, viewID, start, end, expectedIndexID, expectedRevision, selectors)
+	rows, _, err := c.readRowsAtWithRevision(ctx, spaceID, viewID, start, end, expectedIndexID, expectedRevision, selectors, true)
 	return rows, err
 }
 
-func (c *RPCClient) readRowsAtWithRevision(ctx context.Context, spaceID, viewID string, start, end time.Time, expectedIndexID string, expectedRevision uint64, selectors []*storagepb.TimeSeriesSelector) ([]ViewRow, uint64, error) {
+func (c *RPCClient) readRowsAtWithRevision(ctx context.Context, spaceID, viewID string, start, end time.Time, expectedIndexID string, expectedRevision uint64, selectors []*storagepb.TimeSeriesSelector, requireComplete bool) ([]ViewRow, uint64, error) {
 	if c == nil || c.DataView == nil {
 		return nil, 0, fmt.Errorf("storage data view client is not configured")
 	}
@@ -400,11 +424,10 @@ func (c *RPCClient) readRowsAtWithRevision(ctx context.Context, spaceID, viewID 
 	if len(selectors) == 0 {
 		return nil, 0, fmt.Errorf("%w: storage view %s has no active selectors", input.ErrNotReady, viewID)
 	}
-	// A strategy period is a cross-sectional point-in-time read. Keep that
-	// read in one DuckDB statement so its MVCC snapshot cannot change between
-	// pages while live factor patches arrive. The extra slot lets us detect a
-	// subject that unexpectedly has multiple series rows instead of silently
-	// truncating it and mixing a later page.
+	// A strategy period is a cross-sectional point-in-time read. Keep the active
+	// index and served revision pinned while walking all pages so a large
+	// wildcard subject set cannot be silently truncated. The extra slot lets us
+	// detect an exact selector that unexpectedly has multiple series rows.
 	singlePeriod := end.Sub(start) == time.Nanosecond
 	pageSize := c.pageSize()
 	if singlePeriod && uint32(len(selectors)+1) > pageSize {
@@ -426,10 +449,16 @@ func (c *RPCClient) readRowsAtWithRevision(ctx context.Context, spaceID, viewID 
 			}
 			currentExpectedRevision = servedRevision
 		}
-		if !rsp.GetComplete() {
+		if requireComplete && !rsp.GetComplete() {
 			return nil, 0, fmt.Errorf("%w: view %s is not complete", input.ErrNotReady, viewID)
 		}
-		if singlePeriod && (rsp.GetPageResult().GetHasMore() || len(rsp.GetRows()) > len(selectors)) {
+		// A selector without series_tag intentionally matches every series for
+		// that subject.  Such a wildcard is needed by factor-backed strategies
+		// whose source factor combines several venue rows.  Exact selectors are
+		// one-row contracts, so a second page or an extra row is incomplete.
+		// Wildcard pages are validated by Loader when the view contributes values
+		// to the strategy; source-only presence checks may safely ignore extras.
+		if singlePeriod && selectorsHaveExactSeriesTags(selectors) && (rsp.GetPageResult().GetHasMore() || len(result)+len(rsp.GetRows()) > len(selectors)) {
 			return nil, 0, fmt.Errorf("%w: view %s period has more rows than active selectors", input.ErrStrictIncomplete, viewID)
 		}
 		for _, row := range rsp.GetRows() {
@@ -439,17 +468,23 @@ func (c *RPCClient) readRowsAtWithRevision(ctx context.Context, spaceID, viewID 
 			}
 			result = append(result, converted)
 		}
-		if singlePeriod {
-			// The current-period read is intentionally one query. Do not use the
-			// default page-size heuristic here: a full-sized response must not
-			// trigger a second query against a newer MVCC snapshot.
-			break
-		}
 		if !rsp.GetPageResult().GetHasMore() {
 			break
 		}
 	}
 	return result, currentExpectedRevision, nil
+}
+
+func selectorsHaveExactSeriesTags(selectors []*storagepb.TimeSeriesSelector) bool {
+	if len(selectors) == 0 {
+		return false
+	}
+	for _, selector := range selectors {
+		if selector == nil || selector.SeriesTag == nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *RPCClient) selectorsForDataset(ctx context.Context, spaceID, datasetID, frequency string) ([]*storagepb.TimeSeriesSelector, error) {

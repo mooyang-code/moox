@@ -11,6 +11,29 @@ DEPLOY_ROOT=""
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-series-tag-e2e.XXXXXX")"
 OWN_DEPLOY=0
 export HOME="${TMP_ROOT}/home"
+# Storage View only discovers dynamic datasets in explicitly allowed spaces.
+# The test creates its temporary Factor dataset after the isolated deployment
+# starts, so opt that space into the wildcard misc partition before start.sh
+# launches Storage View. Existing-space runs keep their configured space.
+series_tag_space_id="${MOOX_FACTOR_STORAGE_E2E_SPACE_ID:-}"
+if [[ -z "${series_tag_space_id}" ]]; then
+  if [[ "${MOOX_FACTOR_STORAGE_E2E_USE_EXISTING_SPACE:-0}" == "1" ]]; then
+    series_tag_space_id="crypto"
+  else
+    series_tag_space_id="factor_e2e"
+  fi
+fi
+allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-}"
+case ",${allowed_spaces}," in
+  *,"${series_tag_space_id}",*) ;;
+  *)
+    if [[ -n "${allowed_spaces}" ]]; then
+      allowed_spaces+=",";
+    fi
+    allowed_spaces+="${series_tag_space_id}"
+    ;;
+esac
+export MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${allowed_spaces}"
 # The Factor integration test exercises the real Factor -> Storage -> Strategy
 # path, so this deployment always includes Strategy.
 # Storage requires an explicit maintenance policy even for an isolated test

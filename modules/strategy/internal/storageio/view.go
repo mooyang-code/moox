@@ -176,6 +176,9 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 		if readErr != nil {
 			return input.EvaluationInput{}, fmt.Errorf("%w: read view %s: %w", input.ErrNotReady, viewID, readErr)
 		}
+		if err := validateUniqueSeriesRows(rows, viewID, compiled, rowsByInstrument, subjectToInstrument); err != nil {
+			return input.EvaluationInput{}, err
+		}
 		for _, row := range rows {
 			instrumentID := row.InstrumentID
 			if row.SubjectID != "" {
@@ -253,6 +256,9 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 			rows, readErr := reader.ReadPeriod(ctx, runner.SpaceID, viewID, previousPeriod)
 			if readErr != nil {
 				return input.EvaluationInput{}, fmt.Errorf("%w: read previous view %s: %w", input.ErrNotReady, viewID, readErr)
+			}
+			if err := validateUniqueSeriesRows(rows, viewID, compiled, rowsByInstrument, subjectToInstrument); err != nil {
+				return input.EvaluationInput{}, err
 			}
 			for _, row := range rows {
 				instrumentID := row.InstrumentID
@@ -342,6 +348,92 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 	}
 	sort.Slice(result.Items, func(i, j int) bool { return result.Items[i].InstrumentID < result.Items[j].InstrumentID })
 	return result, nil
+}
+
+// validateUniqueSeriesRows prevents a wildcard selector from silently
+// overwriting values when a subject has multiple physical series.  Multiple
+// source rows are valid when the strategy only consumes a factor result and
+// needs the source View merely as a readiness/presence signal; they become an
+// error as soon as this View contributes an expression or factor value.
+func validateUniqueSeriesRows(rows []ViewRow, viewID string, compiled compiler.CompiledStrategy, items map[string]input.InstrumentInput, subjectToInstrument map[string]string) error {
+	if !viewContributesStrategyValues(viewID, compiled, items) {
+		return nil
+	}
+	counts := make(map[string]int)
+	for _, row := range rows {
+		instrumentID := row.InstrumentID
+		if row.SubjectID != "" {
+			if mapped := subjectToInstrument[row.SubjectID]; mapped != "" {
+				instrumentID = mapped
+			}
+		}
+		item, ok := items[instrumentID]
+		if !ok || (row.SubjectID != "" && row.SubjectID != item.SubjectID) {
+			continue
+		}
+		if item.SeriesTag != "" && row.SeriesTag != "" && item.SeriesTag != row.SeriesTag {
+			continue
+		}
+		counts[instrumentID]++
+		if counts[instrumentID] > 1 {
+			return fmt.Errorf("%w: view %s instrument %s has multiple series rows; bind an explicit series_tag", input.ErrStrictIncomplete, viewID, instrumentID)
+		}
+	}
+	return nil
+}
+
+func viewContributesStrategyValues(viewID string, compiled compiler.CompiledStrategy, items map[string]input.InstrumentInput) bool {
+	if viewID == compiled.SourceView.ID {
+		return compiledUsesSourceFields(compiled)
+	}
+	for _, factor := range compiled.Factors {
+		if factor.ResultViewID != viewID {
+			continue
+		}
+		for _, item := range items {
+			if factorAppliesToItem(factor, item.PoolItem) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func compiledUsesSourceFields(compiled compiler.CompiledStrategy) bool {
+	factorFields := make(map[string]struct{}, len(compiled.Factors)*3)
+	for _, factor := range compiled.Factors {
+		for _, alias := range []string{factor.FactorID, factor.Output, factor.ColumnName} {
+			if alias = strings.ToLower(strings.TrimSpace(alias)); alias != "" {
+				factorFields[alias] = struct{}{}
+			}
+		}
+	}
+	for _, rule := range compiled.Rules {
+		for _, expression := range []*compiler.CompiledExpression{rule.FilterBefore, rule.Score, rule.SelectWhere, rule.SignalEntry, rule.SignalExit, rule.FilterAfter} {
+			if expression == nil {
+				continue
+			}
+			for _, field := range expression.Dependencies.Fields {
+				name := strings.ToLower(strings.TrimSpace(field))
+				if name != "" && name != "instrument_id" {
+					if _, factorField := factorFields[name]; !factorField {
+						return true
+					}
+				}
+			}
+			for _, fields := range expression.Dependencies.Bars {
+				for _, field := range fields {
+					name := strings.ToLower(strings.TrimSpace(field))
+					if name != "" {
+						if _, factorField := factorFields[name]; !factorField {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 func scopedFieldsForItem(compiled compiler.CompiledStrategy, item input.PoolItem) map[string]bool {

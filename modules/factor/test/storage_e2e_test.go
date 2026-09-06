@@ -157,14 +157,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	subjectIDs := []string{subjectID, secondSubjectID}
 	const freq = "1m"
 	inputFieldID := "close_" + suffix
-	// Use recently closed synthetic periods. A future period would wait for the
-	// Factor watermark before producing its durable marker, making this E2E
-	// depend on wall-clock time rather than the event chain under test.
-	first := time.Now().UTC().Truncate(time.Minute).Add(-3 * time.Minute)
-	second := first.Add(time.Minute)
-	third := second.Add(time.Minute)
-	end := third.Add(time.Nanosecond)
-	t.Logf("synthetic periods: first=%s third=%s now=%s", first.Format(time.RFC3339), third.Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
+	var first, second, third, end time.Time
 	var spaceCreated bool
 	var createdFactors []struct{ id, name string }
 	var createdBindings []string
@@ -330,48 +323,32 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		},
 	})
 	requireStorageOK(t, "CreateView(source)", sourceViewRsp, err)
-
-	writeRsp, err := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
-		AuthInfo: auth, SourceEventId: "factor-storage-e2e-input-" + suffix,
+	// Factor bindings freeze the source View generation. Materialize its empty
+	// index before creating the bindings. A small seed period is enough for the
+	// reconciler; the periods asserted by the strategy are written later so its
+	// validity window starts close to the readiness event.
+	seedAt := time.Now().UTC().Truncate(time.Minute).Add(-10 * time.Minute)
+	seedSecond := seedAt.Add(time.Minute)
+	seedThird := seedSecond.Add(time.Minute)
+	seedRsp, seedErr := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
+		AuthInfo: auth, SourceEventId: "factor-storage-e2e-seed-" + suffix,
 		Rows: []*storagepb.RowFieldUpsert{
-			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:binance", inputFieldID, 101),
-			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:okx", inputFieldID, 100),
-			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:binance", inputFieldID, 104),
-			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:okx", inputFieldID, 102),
-			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:binance", inputFieldID, 108),
-			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:okx", inputFieldID, 105),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:binance", inputFieldID, 201),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:okx", inputFieldID, 200),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:binance", inputFieldID, 204),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:okx", inputFieldID, 202),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:binance", inputFieldID, 208),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:okx", inputFieldID, 205),
+			inputRow(spaceID, sourceID, subjectID, freq, seedAt, "venue:binance", inputFieldID, 1),
+			inputRow(spaceID, sourceID, subjectID, freq, seedAt, "venue:okx", inputFieldID, 0),
+			inputRow(spaceID, sourceID, subjectID, freq, seedSecond, "venue:binance", inputFieldID, 2),
+			inputRow(spaceID, sourceID, subjectID, freq, seedSecond, "venue:okx", inputFieldID, 1),
+			inputRow(spaceID, sourceID, subjectID, freq, seedThird, "venue:binance", inputFieldID, 3),
+			inputRow(spaceID, sourceID, subjectID, freq, seedThird, "venue:okx", inputFieldID, 2),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, seedAt, "venue:binance", inputFieldID, 1),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, seedAt, "venue:okx", inputFieldID, 0),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, seedSecond, "venue:binance", inputFieldID, 2),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, seedSecond, "venue:okx", inputFieldID, 1),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, seedThird, "venue:binance", inputFieldID, 3),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, seedThird, "venue:okx", inputFieldID, 2),
 		},
 	})
-	requireStorageOK(t, "PrimaryStore.UpsertFields", writeRsp, err)
-	// Some Storage View builds only materialize an empty index after the first
-	// source rows arrive. Wait after the write so the test remains valid for
-	// both empty-index and row-driven reconciliation implementations.
+	requireStorageOK(t, "PrimaryStore.UpsertFields(seed)", seedRsp, seedErr)
 	waitForViewReady(t, ctx, metadata, auth, spaceID, sourceViewID)
-	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, sourceViewID, sourceID, subjectID, freq, first, end)
-	var sourceChunk *storageio.RangeChunk
-	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		chunk, readErr := storage.ReadRangeChunk(ctx, storageio.WindowKey{
-			SpaceID: spaceID, SourceViewID: sourceViewID, SourceDataset: sourceID, SubjectID: subjectID, Freq: freq,
-		}, first, end, 1, 10, []string{inputFieldID})
-		assert.NoError(collect, readErr)
-		if readErr == nil {
-			sourceChunk = chunk
-			assert.Equal(collect, []time.Time{first, second, third}, chunk.TargetPeriods)
-		}
-	}, 20*time.Second, 250*time.Millisecond, "source rows were not materialized")
-	require.Equal(t, []time.Time{first, second, third}, sourceChunk.TargetPeriods)
-	require.Equal(t, []string{inputFieldID}, sourceChunk.Frame.Columns)
-	require.Equal(t,
-		[]string{"venue:binance", "venue:okx", "venue:binance", "venue:okx", "venue:binance", "venue:okx"},
-		sourceChunk.Frame.SeriesTags,
-	)
-	require.Equal(t, [][]any{{101.0}, {100.0}, {104.0}, {102.0}, {108.0}, {105.0}}, sourceChunk.Frame.Rows)
 
 	spreadSource := fmt.Sprintf(`import pandas as pd
 
@@ -484,9 +461,10 @@ def compute(df, params):
 		}
 	}, 30*time.Second, 250*time.Millisecond, "factor result columns were not synchronized")
 	require.NotNil(t, targetColumnsRsp)
-
+	// The Result View may be created with no rows yet. Wait for its empty
+	// index before the first Factor write so ViewFactorPeriodReady can publish
+	// the generation carrying the materialized result rows.
 	waitForViewReady(t, ctx, metadata, auth, spaceID, resultViewID)
-	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, resultViewID, resultDatasetID, subjectID, freq, first, end)
 
 	// Bind a modern Strategy instance to the real Factor result View before
 	// emitting the next readiness marker. This keeps the assertion on the
@@ -500,11 +478,11 @@ triggers:
 data: {bar: %s, calendar: crypto_24x7}
 rules:
   spread:
-    pool: [%s]
+    pool: [%s, %s]
     score: %s
     select: {top: 1}
     weight_each: "0.60"
-`, strategyName, freq, subjectID, factorID)
+`, strategyName, freq, subjectID, secondSubjectID, factorID)
 	createStrategyRsp, createStrategyErr := strategy.CreateStrategy(ctx, &strategypb.CreateStrategyReq{Strategy: &strategypb.Strategy{StrategyId: strategyID, DslYaml: dsl}}, strategyScope)
 	require.NoError(t, createStrategyErr)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, createStrategyRsp.GetRetInfo().GetCode(), createStrategyRsp.GetRetInfo().GetMsg())
@@ -584,6 +562,57 @@ rules:
 	})
 	require.NoError(t, err)
 	defer readyConsumer.Close()
+
+	// Create the synthetic bars only after the Strategy instance and its
+	// consumers are ready. Strategy result validity is two closed bars by
+	// design; writing them earlier would make the end-to-end assertion expire
+	// while the metadata and Factor pipeline are being prepared.
+	first = time.Now().UTC().Truncate(time.Minute).Add(-3 * time.Minute)
+	second = first.Add(time.Minute)
+	third = second.Add(time.Minute)
+	end = third.Add(time.Nanosecond)
+	t.Logf("synthetic periods: first=%s third=%s now=%s", first.Format(time.RFC3339), third.Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
+	writeRsp, err := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
+		AuthInfo: auth, SourceEventId: "factor-storage-e2e-input-" + suffix,
+		Rows: []*storagepb.RowFieldUpsert{
+			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:binance", inputFieldID, 101),
+			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:okx", inputFieldID, 100),
+			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:binance", inputFieldID, 104),
+			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:okx", inputFieldID, 102),
+			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:binance", inputFieldID, 108),
+			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:okx", inputFieldID, 105),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:binance", inputFieldID, 201),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:okx", inputFieldID, 200),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:binance", inputFieldID, 204),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:okx", inputFieldID, 202),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:binance", inputFieldID, 207),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:okx", inputFieldID, 205),
+		},
+	})
+	requireStorageOK(t, "PrimaryStore.UpsertFields", writeRsp, err)
+	// Some Storage View builds only materialize an empty index after the first
+	// source rows arrive. Wait after the write so the test remains valid for
+	// both empty-index and row-driven reconciliation implementations.
+	waitForViewReady(t, ctx, metadata, auth, spaceID, sourceViewID)
+	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, sourceViewID, sourceID, subjectID, freq, first, end)
+	var sourceChunk *storageio.RangeChunk
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		chunk, readErr := storage.ReadRangeChunk(ctx, storageio.WindowKey{
+			SpaceID: spaceID, SourceViewID: sourceViewID, SourceDataset: sourceID, SubjectID: subjectID, Freq: freq,
+		}, first, end, 1, 10, []string{inputFieldID})
+		assert.NoError(collect, readErr)
+		if readErr == nil {
+			sourceChunk = chunk
+			assert.Equal(collect, []time.Time{first, second, third}, chunk.TargetPeriods)
+		}
+	}, 20*time.Second, 250*time.Millisecond, "source rows were not materialized")
+	require.Equal(t, []time.Time{first, second, third}, sourceChunk.TargetPeriods)
+	require.Equal(t, []string{inputFieldID}, sourceChunk.Frame.Columns)
+	require.Equal(t,
+		[]string{"venue:binance", "venue:okx", "venue:binance", "venue:okx", "venue:binance", "venue:okx"},
+		sourceChunk.Frame.SeriesTags,
+	)
+	require.Equal(t, [][]any{{101.0}, {100.0}, {104.0}, {102.0}, {108.0}, {105.0}}, sourceChunk.Frame.Rows)
 
 	// Drive the production event chain instead of jumping straight to the
 	// run-once RPC: rows are already committed, then Collector-style period
@@ -674,10 +703,10 @@ rules:
 		[]time.Time{third}, end, "venue_pair:binance-okx", expectedOutputs)
 	assertFactorRows(t, rows, []time.Time{third}, "venue_pair:binance-okx", expectedOutputs)
 	secondExpectedOutputs := []factorOutputExpectation{
-		{fieldID: factorID + "__spread", values: []float64{3}},
-		{fieldID: factorID + "__rolling_spread", values: []float64{2.5}},
-		{fieldID: secondFactorID + "__midpoint", values: []float64{206.5}},
-		{fieldID: secondFactorID + "__rolling_midpoint", values: []float64{204.75}},
+		{fieldID: factorID + "__spread", values: []float64{2}},
+		{fieldID: factorID + "__rolling_spread", values: []float64{2}},
+		{fieldID: secondFactorID + "__midpoint", values: []float64{206}},
+		{fieldID: secondFactorID + "__rolling_midpoint", values: []float64{204.5}},
 	}
 	assertPrimaryFactorRows(t, ctx, primary, auth, spaceID, resultDatasetID, secondSubjectID, freq,
 		[]time.Time{third}, "venue_pair:binance-okx", secondExpectedOutputs)
