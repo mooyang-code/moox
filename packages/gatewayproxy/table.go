@@ -63,9 +63,8 @@ func (table *Table) ResolveRPC(rpcName string) (Route, string, bool) {
 
 // ResolveRPCForCaller resolves a native request after authentication. Native
 // routes may share a service path and method when their caller allowlists are
-// disjoint (for example the Strategy ownership route and the Admin console
-// route); caller-aware selection prevents the first route from shadowing the
-// other one.
+// disjoint (for example legacy Strategy ownership and Admin console rows);
+// caller-aware selection prevents the first route from shadowing the other.
 func (table *Table) ResolveRPCForCaller(rpcName, caller string) (Route, string, bool) {
 	return table.resolveRPC(rpcName, caller, true)
 }

@@ -261,13 +261,15 @@ func NormalizeAndHashState(nodeID string, disabled bool, routes []Route) (Snapsh
 		}
 		return normalized[i].ServiceID < normalized[j].ServiceID
 	})
-	for index := 1; index < len(normalized); index++ {
-		if normalized[index-1].ServiceID == normalized[index].ServiceID {
-			left, right := normalized[index-1], normalized[index]
-			for _, method := range left.AllowedMethods {
-				if right.AllowsMethod(method) {
-					return Snapshot{}, fmt.Errorf("duplicate service_id %q method %q", left.ServiceID, method)
-				}
+	for i := range normalized {
+		for j := i + 1; j < len(normalized); j++ {
+			if normalized[i].ServiceID != normalized[j].ServiceID {
+				continue
+			}
+			left, right := normalized[i], normalized[j]
+			if nativeMethodsOverlap(left.AllowedMethods, right.AllowedMethods) {
+				method := overlappingNativeMethod(left.AllowedMethods, right.AllowedMethods)
+				return Snapshot{}, fmt.Errorf("duplicate service_id %q method %q", left.ServiceID, method)
 			}
 		}
 	}

@@ -25,6 +25,7 @@ type targetOrderServiceStub struct {
 	canceled     []string
 	discarded    []string
 	resolved     []string
+	afterPlace   func()
 }
 
 func (s *targetOrderServiceStub) Capacity(_ context.Context, _ string, spec orderdomain.OrderSpec) (shared.Decimal, error) {
@@ -42,6 +43,9 @@ func (s *targetOrderServiceStub) Place(
 	s.specs = append(s.specs, spec)
 	if err := s.placeErrors[spec.TradingAccountID]; err != nil {
 		return orderdomain.Order{}, err
+	}
+	if s.afterPlace != nil {
+		s.afterPlace()
 	}
 	return orderdomain.Order{
 		ID:   shared.OrderID("child-" + spec.TradingAccountID),
@@ -171,6 +175,38 @@ func TestTargetExecutorDiscardsPendingChildWhenAutomationChangesBeforeSubmit(t *
 	)
 	require.NoError(t, err)
 	require.Equal(t, "PAUSED", account.AutomationState)
+}
+
+func TestTargetExecutorDiscardsPendingChildWhenSessionChangesAfterPlace(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.now = time.Now().UTC()
+	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	var fence string
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		var err error
+		fence, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", logical.AuthFence)
+		return err
+	}))
+	now := fixture.now
+	_, accepted, err := fixture.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-session-change",
+		InstanceID: "instance-1", SessionID: "session-1", StrategyID: "strategy-1",
+		BarEndTime: now.UnixMilli(), EffectiveAt: now.UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
+		AcceptedAt: now.UnixMilli(), Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}}, Status: StatusPending,
+	})
+	require.NoError(t, err)
+	require.True(t, accepted)
+	fixture.orders.afterPlace = func() {
+		require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+			_, _, err := tx.RebindLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", fence, "instance-2", "session-2")
+			return err
+		}))
+	}
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+	require.ErrorIs(t, err, ErrTargetSession)
+	require.Empty(t, result.Status)
+	require.Equal(t, []string{"child-account-a"}, fixture.orders.discarded)
 }
 
 func TestTargetExecutorWaitsWithoutPausingWhenAccountTurnsNotReady(t *testing.T) {

@@ -325,11 +325,14 @@ func (c *Client) VerifyTradeOwnerRoute(ctx context.Context, nodeID string) error
 	}
 	ownerFound, consoleFound := false, false
 	for _, route := range response.GetRoutes() {
-		if route == nil || route.GetServicePath() != "trpc.moox.trade.TradeConsoleService" || route.GetAddress() != "127.0.0.1:11200" {
+		if route == nil || route.GetAddress() != "127.0.0.1:11200" {
 			continue
 		}
 		switch route.GetServiceId() {
 		case "trade_owner":
+			if route.GetServicePath() != "trpc.moox.trade.TradeConsoleService" {
+				return fmt.Errorf("trade_route_probe_failed")
+			}
 			if len(route.GetAllowedCallers()) != 1 || route.GetAllowedCallers()[0] != "strategy" {
 				return fmt.Errorf("trade_route_probe_failed")
 			}
@@ -340,6 +343,9 @@ func (c *Client) VerifyTradeOwnerRoute(ctx context.Context, nodeID string) error
 			}
 			ownerFound = true
 		case "trade_console":
+			if route.GetServicePath() != "trpc.moox.trade.TradeConsoleAdminService" {
+				return fmt.Errorf("trade_route_probe_failed")
+			}
 			if len(route.GetAllowedCallers()) != 1 || route.GetAllowedCallers()[0] != "admin-gateway" {
 				return fmt.Errorf("trade_route_probe_failed")
 			}

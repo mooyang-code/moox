@@ -194,9 +194,30 @@ func TestCanonicalSnapshotHashExcludesGeneratedAt(t *testing.T) {
 }
 
 func TestNormalizeAndHashRejectsDuplicateServiceIDs(t *testing.T) {
-	route := Route{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin"}
+	route := Route{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin", AllowedMethods: []string{"GetStatus"}, AllowedCallers: []string{"admin-gateway"}}
 	if _, err := NormalizeAndHash("node-1", []Route{route, route}); err == nil {
 		t.Fatal("NormalizeAndHash accepted duplicate service IDs")
+	}
+}
+
+func TestNormalizeAndHashRejectsWildcardOverlapForDuplicateServiceIDs(t *testing.T) {
+	_, err := NormalizeAndHash("node-1", []Route{
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"*"}, AllowedCallers: []string{"strategy"}},
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"admin-gateway"}},
+	})
+	if err == nil {
+		t.Fatal("accepted wildcard and concrete method overlap for duplicate service IDs")
+	}
+}
+
+func TestNormalizeAndHashRejectsNonAdjacentMethodOverlapForDuplicateServiceIDs(t *testing.T) {
+	_, err := NormalizeAndHash("node-1", []Route{
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.Bar", AllowedMethods: []string{"GetOther"}, AllowedCallers: []string{"admin-gateway"}},
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.Foo", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}},
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.Zoo", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"operator"}},
+	})
+	if err == nil {
+		t.Fatal("accepted non-adjacent method overlap for duplicate service IDs")
 	}
 }
 

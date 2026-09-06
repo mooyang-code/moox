@@ -269,7 +269,7 @@ func (e *Executor) Converge(
 		switch orderdomain.State(current.State) {
 		case orderdomain.Pending:
 			if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
-				if expiryErr := e.discardPendingOnExpiry(ctx, spaceID, current.OrderID, err); expiryErr != nil {
+				if expiryErr := e.discardPendingOnTargetInvalidation(ctx, spaceID, current.OrderID, err); expiryErr != nil {
 					return Result{}, expiryErr
 				}
 				return Result{Status: StatusPaused}, err
@@ -819,7 +819,7 @@ func (e *Executor) placeAction(
 			return false, "", err
 		}
 		if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID}, target); err != nil {
-			return false, "", e.discardPendingOnExpiry(ctx, spaceID, string(placed.ID), err)
+			return false, "", e.discardPendingOnTargetInvalidation(ctx, spaceID, string(placed.ID), err)
 		}
 		if _, err := e.Orders.Submit(ctx, spaceID, string(placed.ID)); err != nil {
 			if targetSubmitConflict(err) {
@@ -998,13 +998,14 @@ func targetSubmitConflict(err error) bool {
 		errors.Is(err, orderapp.ErrTargetExpired)
 }
 
-func (e *Executor) discardPendingOnExpiry(
+func (e *Executor) discardPendingOnTargetInvalidation(
 	ctx context.Context,
 	spaceID string,
 	orderID string,
 	err error,
 ) error {
-	if !errors.Is(err, ErrTargetExpired) && !errors.Is(err, orderapp.ErrTargetExpired) {
+	if !errors.Is(err, ErrTargetExpired) && !errors.Is(err, orderapp.ErrTargetExpired) &&
+		!errors.Is(err, ErrTargetSession) && !errors.Is(err, ErrInvalidTarget) {
 		return err
 	}
 	_, discardErr := e.Orders.DiscardPending(ctx, spaceID, orderID)

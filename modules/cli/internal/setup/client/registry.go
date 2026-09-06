@@ -60,7 +60,11 @@ func (c *Client) RegisterServiceDeployment(ctx context.Context, nodeID, serviceN
 	console := &pb.ServiceDeployment{
 		NodeId: strings.TrimSpace(nodeID), ServiceName: "trade_console", ServiceKind: "trade",
 		Protocol: "http", Host: "127.0.0.1", Port: 11200, Scope: "internal", Status: "active",
-		GatewayPath: "trpc.moox.trade.TradeConsoleService", GatewayServiceId: "trade_console", GatewayEnabled: true,
+		// Dedicated Trade nodes expose the browser/operator methods through a
+		// distinct native service path. This keeps the strategy ownership route
+		// on the canonical path and makes route snapshots unambiguous even when
+		// an older Gateway is rolled back.
+		GatewayPath: "trpc.moox.trade.TradeConsoleAdminService", GatewayServiceId: "trade_console", GatewayEnabled: true,
 		Description: "Authenticated Admin TradeConsole route; ownership fencing remains strategy-only",
 		ExtraConfig: tradeConsoleGatewayExtraConfig(),
 	}
