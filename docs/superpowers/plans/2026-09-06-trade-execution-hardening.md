@@ -10,9 +10,11 @@
 
 **状态：** 待用户确认，本轮仅核对并完善计划，不修改业务代码。下文的命令、SQL、接口草案和任务均为后续执行说明，不表示已经实施、部署或通过验收；其他分支的实现进度不据此自动勾选。
 
-**审查基线：** `feature/mooyang`，`2bd4f508d45031e5a8fb629e5b62b88b9743810a`，2026-09-06。工作区同时存在 Strategy、Storage、文档和部署配置的其他修改；实施时重新核验，禁止覆盖或顺带提交。
+**历史审查快照（非执行基线）：** `feature/mooyang`，`2bd4f508d45031e5a8fb629e5b62b88b9743810a`，2026-09-06。当时工作区同时存在 Strategy、Storage、文档和部署配置的其他修改；实施时重新核验，禁止覆盖或顺带提交。
 
-**本次计划复核：** 原仓库 `feature/mooyang`，`c15d688ba3e25226c42c1fd10b5800ec21df5652`。复核开始时工作区干净；上述审查基线及其测试记录属于此前快照，不代表本轮重新运行测试。当前 Strategy 已有新的执行流水线提交，T01/T10 必须以最新生产者代码验证契约，而不是照搬旧工作区。
+**上次计划复核记录：** 原仓库 `feature/mooyang`，`c15d688ba3e25226c42c1fd10b5800ec21df5652`。该次复核开始时工作区干净；上述审查基线及其测试记录属于此前快照，不代表本轮重新运行测试。当前 Strategy 已有新的执行流水线提交，T01/T10 必须以最新生产者代码验证契约，而不是照搬旧工作区。
+
+**最新计划核对：** 2026-09-06，原仓库 HEAD 为 `cbf423c094526ea158c3ace29328148b04c2d6d5`。本轮只更新计划；当前已有 `modules/factor/test/storage_e2e_test.go`、`scripts/deploy/deploy-moox.sh`、`scripts/test/e2e/test-series-tag-e2e.sh` 的其他修改，不纳入本次文档提交。旧审查问题表用于追踪问题来源，不代表每项仍能在最新 HEAD 复现；T01 必须逐项判断“仍需修复 / 已修复待回归 / 设计增量”，不得覆盖已有修复。
 
 ---
 
@@ -88,6 +90,34 @@ OKX 协议依据：[Orders channel 官方文档](https://www.okx.com/docs-v5#ord
 
 ## 三、执行组织与命令约定
 
+### 3.1 当前调用链与集成基线
+
+```text
+Strategy Processor -> StrategyResult + EventData (CommitResult)
+                   -> Outbox Relay -> JetStream weight_requested
+Trade Consumer -> session/time validation -> receipt + frozen quantities
+               -> target worker -> shared OrderService -> Live/Paper adapter
+                                                    -> Fill -> position/balance
+MANUAL SubmitOrder -----------------> shared OrderService
+STRATEGY PlaceManualOrder -> pause/cancel -> shared OrderService
+```
+
+前两行与当前生产者源码对应；普通 SubmitOrder 是本计划的目标入口，不据此声明当前分支已具备。具体核验锚点：
+
+| 范围 | 当前源码锚点 | 实施约束 |
+| --- | --- | --- |
+| 现代生产者 | `modules/strategy/internal/trigger/processor.go:819`、`:1320` | 从实际求值结果生成完整 instance/session/strategy 和时间窗，持久化 EventData 后发布 |
+| 持久发布 | `modules/strategy/internal/outbox/relay.go:38` | 重试已保存的结果，不重新求值或换 target ID；移除旧分支时同时检查 Relay 的旧 OutboxStore 路径 |
+| 现代受理 | `modules/trade/internal/eventconsumer/target.go:234` | 当前主库现代分支已不传 legacy generation；不能从旧工作区覆盖回无条件传 0 的行为 |
+| 旧生产入口 | `modules/strategy/internal/store/results.go:marshalLegacyTargetEvent`、`trigger/processor.go:Handle` | 旧 Runner 求值和发布链仍需枚举调用方，不能仅删除 quantity 定义就宣称完成现代切换 |
+| 旧事件注册 | `packages/events/registry.go`、`modules/eventbus/config/app.yaml` | Trade 当前订阅是 weight-only；quantity 残留是注册/配置合同，不描述成现役 quantity consumer |
+
+已有实现工作区与主库可能各自包含有效修改。集成前按提交和具体 hunk 比较，保留主库现代 session 受理及跨 session 目标替换语义；不得整文件覆盖 Trade consumer/store，也不得把其他工作区的旧 Strategy 副本当成现代生产者。本计划不授权合并或继续已有实现任务。
+
+### 3.2 任务依赖与检查方法
+
+推荐顺序：`T01 -> T02/T03/T04 -> T05/T06/T07 -> T08/T09 -> T10 -> T11`。同一文件有交叉时串行集成；T10 的生产者、消费者、管理入口和 Web 必须形成一个可同时交付的版本。每项先用红测判断是否仍存在问题；已经修复的行为只补验收和证据，不重复实现。
+
 - 仓库根目录记为 `ROOT=/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox`。下文路径相对 ROOT；这是文件清单，不是要求新建同名目录树。
 - 未另行说明的 Go 命令从 ROOT 执行，使用具体模块路径；禁止把根目录 `go test ./...` 当作多模块验证。
 - 每个任务依次执行：编写失败测试、确认失败原因、最小实现、定向测试、独立 review、提交；所有检查项起始未勾选。
@@ -149,7 +179,7 @@ Claim/Rebind transaction:
 ### T03：贯通人工操作与订单的不确定状态
 
 **文件：**
-- 修改：`modules/trade/internal/application/operator/service.go`、`cancel.go`
+- 修改：`modules/trade/internal/application/operator/service.go`、`cancel.go`、`flatten.go` 及对应测试
 - 修改：`modules/trade/internal/runtime/operator_worker.go`
 - 测试及健康语义复核：`modules/trade/internal/runtime/operator_worker_test.go`、`modules/trade/internal/health/state.go` 及对应测试
 - 修改：`modules/trade/internal/rpc/execution.go`、`execution_test.go`
@@ -171,6 +201,7 @@ Claim/Rebind transaction:
 
 - [ ] 相同 action ID 的重试返回同一个 action/order；人工响应可表达 RUNNING/UNKNOWN，不能引导客户端换 ID“再试一次”。错误或重启不得丢失已有 reservation；明确终态按现有订单事务释放。
 - [ ] OperatorWorker 每个 action 的完整恢复调用使用有界、可取消 context，单 action 的行情/交易所失败或超时写入诊断后继续下一项，不把业务错误汇总成全局 Not Ready。公共存储读取/持久化失败、错误配置和 worker 退出仍影响健康，不能吞掉数据库错误。保持有界串行恢复，不为此新建工作流框架；测试 A 超时后 B 能推进、业务失败不拖低全局 readiness、公共 List/DB 失败仍不健康，并替换目前固化“任意恢复错误导致全局失败”的测试。
+- [ ] 上述恢复与健康门禁覆盖 `MANUAL_ORDER`、`FLATTEN`、`CANCEL_ORDER`，T09 新增 `SUBMIT_ORDER` 后同样适用。逐项覆盖锁等待、行情请求、撤单查询、后置同步和诊断持久化；仅在最外层添加 timeout 但内部仍不可取消阻塞，不算完成。组合错误含任一数据库/公共设施失败时仍上报健康故障，不能因同时存在账户业务错误而整体吞掉；FLATTEN 保持先撤已知挂单再依据实际持仓平仓，未知状态不得重复下单。
 - [ ] 同步修改 `loadManualOrderResult` 和 RPC 错误映射：已有 durable RUNNING action 的 last_error 只用于诊断，正常读回时返回 nil application error、`RetInfo=0`，不能仅因 last_error 非空就表示“提交失败”。真实持久化/读取失败仍返回系统错误；尚未受理的校验失败、幂等冲突及明确 FAILED 保持对应错误语义。
 - [ ] 关联 child order 后先恢复该订单，不能重新从暂停/撤单开始，把自己的已受理订单当作待清理挂单。若尚未关联，先按原 client ID 查找并校验完整 spec，再决定是否创建。
 - [ ] 持久化绝对提交截止时间，避免依赖恢复后在任意未来时刻执行旧人工请求。A 阶段首次创建 action 的同一事务中，用 CreatedAt 加当时的默认窗口算出 `deadline_at`，写入 ResultJSON 进度；恢复只读取该绝对值，不按新配置重算。已有缺少 deadline 的 RUNNING action 一次性补值并持久化后再恢复。B 阶段允许接口显式指定 `deadline_at`；服务端生成值不加入 RequestJSON 幂等身份。默认窗口值作为执行前配置决策记录，并测试修改配置后重启仍不改变旧截止时间。
@@ -372,13 +403,16 @@ GetOrder / GetOperatorAction -> current facts, never infer fill from RPC success
 - 修改：`packages/tradeeventpb/trade_events.proto` 及生成文件；`packages/events/registry.go`、`validation.go` 和相关测试
 - 修改及测试：`modules/eventbus/config/app.yaml`、`modules/eventbus/internal/config/config_test.go`、`scripts/test/contract/test-docs-architecture.sh`
 - 修改：`modules/trade/proto/trade_service.proto`、`internal/rpc/convert.go`、`logical_account.go`、`internal/domain/order/spec.go`
+- 修改及测试：`modules/trade/internal/eventconsumer/target.go`、`modules/trade/internal/infra/store/target.go`、`modules/trade/internal/infra/store/target_receipt.go`、`modules/trade/internal/application/target/executor.go`、`modules/trade/internal/application/order/service.go`、`modules/trade/internal/application/logicalaccount/service.go`、`modules/trade/internal/infra/store/logical_account.go`
 - 协同修改：`modules/strategy/internal/trigger/processor.go`、`processor_test.go`、`modern_test.go`、`internal/store/results.go`、`internal/bootstrap/logical_account.go`、`internal/rpc/service.go`、`proto/strategy.proto` 及对应生成文件/测试
-- 修改 Web：`web/src/api/strategy.ts`、`strategy-types.ts`、`api/trade/types.ts`、`views/trading/logical-accounts/index.vue`、`views/trading/account-workbench/index.vue` 及对应测试
+- 协同核验并按旧分支删除需要修改：`modules/strategy/internal/store/definitions.go`、`modules/strategy/internal/outbox/relay.go`、`modules/strategy/internal/outbox/publisher.go` 及对应测试；保留 `CommitResult -> PublishPending -> PublishResult` 的持久事件语义
+- 修改 Web：`web/src/api/strategy.ts`、`web/src/api/strategy-types.ts`、`web/src/api/trade/types.ts`、`web/src/store/modules/strategy.ts`、`web/src/views/strategy/detail/index.vue`、`web/src/views/strategy/components/strategy-operation-panel.vue`、`web/src/views/trading/logical-accounts/index.vue`、`web/src/views/trading/account-workbench/index.vue` 及对应测试
 - 修改文档：`modules/trade/DESIGN.md`、`modules/trade/README.md`、`docs/交易模块架构设计.md`、`docs/交易模块功能说明.md`、`docs/运维/MooX-Trade运维.md`
 - 对齐不重写：`docs/策略执行框架设计.md`、`docs/策略模块架构设计.md`
 
 - [ ] 枚举所有 producer、consumer、RPC 和 Web 使用者，先把仍在使用的 UI/管理调用切到 instance/session，再删除旧自动执行 producer/consumer 分支。不得只删 proto 导致运行中的 Strategy 发布无人消费的消息。
 - [ ] 以本次复核基线的 `trigger/processor.go:marshalTargetEvent` 作为现代生产入口，追踪求值结果持久化及 Outbox；`store/results.go:marshalLegacyTargetEvent` 是旧适配入口，不再把它误当唯一 producer。T01/T11 的现代 E2E 必须从实际 Processor 产出事件，验证 instance/session、时间窗和 FULL 目标，而非测试手工组装等价 payload。
+- [ ] 删除旧外部 Runner 创建/启用/授权入口前，检查 Strategy RPC、Web store、详情页 `runnerId/loadRunnerDetail` 和操作面板的真实调用。现代 Loader 如果仍借用 `StrategyRunner` 作为内部求值输入类型，只消除其旧外部授权/发布语义，不凭类型名机械删除现代流水线依赖。
 - [ ] 最终自动交易事件只接受完整现代身份、bar_end_time、effective_at、valid_until 与 target_weight；删掉旧数量事件执行入口、legacy owner generation/command sequence 的授权 fallback。历史结果和交易事实不因此删除。
 - [ ] 本任务只处理执行边界及直接调用方，不重写 Strategy DSL、因子、选股或调度实现。Strategy 同时在修改时先对齐实际契约；无法闭合直接调用链则停止该切换，不把半完成接口作为已交付版本。
 - [ ] 不添加 `reserved`、别名、长期双写/双读兼容层。需要保留的历史审计字段明确为只读来源，不参与新授权或新目标生成。已有 legacy owner 必须通过受控停用/重新授权切换，不能猜测 session。
@@ -414,6 +448,7 @@ pnpm -C web exec vue-tsc --noEmit
 | 现代策略到 Paper 成交 | Claim -> Result/Outbox -> NATS -> Receipt/目标 -> Resume -> Order -> Fill -> 持仓和余额 |
 | 重复消息与乱序 | 同目标不重新估值/不重复下单；旧 bar/session 不覆盖新目标 |
 | Claim/Rebind 重试 | 目标、receipt、fence 保持幂等；真实换 session 才废止旧执行目标 |
+| session 切换与相同 bar | 新 session 可接收其有效目标，旧 session 延迟消息不能覆盖；不被旧 receipt 索引或旧目标 bar 比较误挡 |
 | FULL/hold/有效期 | 遗漏/空目标归零；hold 保留；过期不发新单、不清仓、健康不被拖低 |
 | 人工/普通下单 | 两入口权限和暂停语义不同，但同一订单内核和恢复链 |
 | 未知提交与重启 | 收到单只恢复；未收到单受控重试；action/order ID 不变，无幽灵预占 |
