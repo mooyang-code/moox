@@ -54,7 +54,10 @@ func (s *Store) CreateSpace(ctx context.Context, item *pb.Space) (*pb.Space, err
 	`, item.GetSpaceId(), item.GetName(), item.GetDescription(), item.GetOwner(), item.GetStatus(), raw); err != nil {
 		return nil, err
 	}
-	return s.GetSpace(ctx, item.GetSpaceId())
+	// The INSERT is committed by the SQLite connection. Do not perform a
+	// second read whose transient failure could make a committed create appear
+	// unsuccessful to an RPC caller and trigger an unsafe duplicate retry.
+	return item, nil
 }
 
 func (s *Store) GetSpace(ctx context.Context, spaceID string) (*pb.Space, error) {
