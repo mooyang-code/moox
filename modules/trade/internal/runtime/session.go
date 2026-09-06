@@ -561,6 +561,7 @@ type sessionHandler struct {
 	ready     chan struct{}
 	readyOnce sync.Once
 	apply     func(context.Context, privateEvent) error
+	setReady  func() error
 	gateMu    sync.Mutex
 	gateCond  *sync.Cond
 	closing   bool
@@ -642,10 +643,9 @@ func (h *sessionHandler) activate(
 	for {
 		h.mu.Lock()
 		if len(h.pending) == 0 {
-			if err := setReady(); err != nil {
-				h.mu.Unlock()
-				return err
-			}
+			// Persist readiness only after the final gate has drained events
+			// admitted during this initial activation pass.
+			h.setReady = setReady
 			h.mu.Unlock()
 			return nil
 		}
@@ -665,10 +665,8 @@ func (h *sessionHandler) activate(
 	}
 }
 
-// finishActivation drains events that arrived while the readiness callback
-// was committing its snapshot. The final buffering transition is performed
-// while holding the same mutex, so no pre-ready event can race the caller's
-// Ready publication.
+// finishActivation closes admission, drains pre-ready events, then commits
+// readiness before allowing synchronous event processing.
 func (h *sessionHandler) finishActivation(ctx context.Context) error {
 	h.gateMu.Lock()
 	h.closing = true
@@ -676,16 +674,22 @@ func (h *sessionHandler) finishActivation(ctx context.Context) error {
 		h.gateCond.Wait()
 	}
 	h.gateMu.Unlock()
+	defer func() {
+		h.gateMu.Lock()
+		h.activated = true
+		h.closing = false
+		h.gateCond.Broadcast()
+		h.gateMu.Unlock()
+	}()
 	for {
 		h.mu.Lock()
 		if len(h.pending) == 0 {
+			setReady := h.setReady
 			h.buffering = false
 			h.mu.Unlock()
-			h.gateMu.Lock()
-			h.activated = true
-			h.closing = false
-			h.gateCond.Broadcast()
-			h.gateMu.Unlock()
+			if setReady != nil {
+				return setReady()
+			}
 			return nil
 		}
 		pending := append([]privateEvent(nil), h.pending...)
@@ -693,11 +697,6 @@ func (h *sessionHandler) finishActivation(ctx context.Context) error {
 		h.mu.Unlock()
 		for _, event := range pending {
 			if err := h.apply(ctx, event); err != nil {
-				h.gateMu.Lock()
-				h.activated = true
-				h.closing = false
-				h.gateCond.Broadcast()
-				h.gateMu.Unlock()
 				return err
 			}
 		}

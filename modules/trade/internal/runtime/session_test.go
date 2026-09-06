@@ -26,11 +26,12 @@ func (s sessionAdapterSource) Adapter(string) (execution.ExecutionAdapter, error
 }
 
 type scriptedSessionAdapter struct {
-	mu          sync.Mutex
-	calls       []string
-	disconnect  chan error
-	loadStarted chan struct{}
-	loadRelease chan struct{}
+	mu               sync.Mutex
+	calls            []string
+	disconnect       chan error
+	loadStarted      chan struct{}
+	loadRelease      chan struct{}
+	positionBuffered chan struct{}
 }
 
 func (a *scriptedSessionAdapter) record(call string) {
@@ -140,11 +141,18 @@ func (a *scriptedSessionAdapter) SetLeverage(
 	return nil
 }
 func (a *scriptedSessionAdapter) SetMarginMode(
-	context.Context,
-	shared.ExchangeSymbol,
-	exchange.MarginMode,
+	ctx context.Context,
+	_ shared.ExchangeSymbol,
+	_ exchange.MarginMode,
 ) error {
 	a.record("SetMarginMode")
+	if a.positionBuffered != nil {
+		select {
+		case <-a.positionBuffered:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	return nil
 }
 func (a *scriptedSessionAdapter) Subscribe(
@@ -162,6 +170,9 @@ func (a *scriptedSessionAdapter) Subscribe(
 	}); err != nil {
 		return err
 	}
+	if a.positionBuffered != nil {
+		close(a.positionBuffered)
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -175,7 +186,9 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 ) {
 	tradeStore := openRuntimeStore(t)
 	account := seedRuntimeAccount(t, tradeStore)
-	adapter := &scriptedSessionAdapter{disconnect: make(chan error, 1)}
+	adapter := &scriptedSessionAdapter{
+		disconnect: make(chan error, 1), positionBuffered: make(chan struct{}),
+	}
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: sessionAdapterSource{adapter: adapter},
 		Fills: &consumer.Reducer{Store: tradeStore},
@@ -184,8 +197,21 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 		Account: account, Adapter: adapter, Sync: syncService,
 		SyncInterval: time.Hour,
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- session.Run(context.Background()) }()
+	stopped := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(2 * time.Second):
+			t.Error("session did not stop before store cleanup")
+		}
+	})
+	go func() {
+		defer close(stopped)
+		done <- session.Run(ctx)
+	}()
 
 	require.Eventually(t, session.Ready, 2*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
@@ -234,31 +260,136 @@ func TestSessionHandlerActivationDrainsEventsBeforeReadyHandoff(t *testing.T) {
 		applied <- struct{}{}
 		return nil
 	})
+	require.NoError(t, handler.activate(context.Background(), func() error {
+		close(started)
+		<-release
+		return nil
+	}))
+	require.NoError(t, handler.handle(context.Background(), privateEvent{}))
 	activateDone := make(chan error, 1)
-	go func() {
-		activateDone <- handler.activate(context.Background(), func() error {
-			close(started)
-			<-release
-			return nil
-		})
-	}()
+	go func() { activateDone <- handler.finishActivation(context.Background()) }()
 	<-started
+	select {
+	case <-applied:
+	default:
+		t.Fatal("pre-ready event must apply before readiness persistence")
+	}
 	eventDone := make(chan error, 1)
 	go func() { eventDone <- handler.handle(context.Background(), privateEvent{}) }()
 	select {
 	case <-eventDone:
-		t.Fatal("event must remain buffered during activation")
+		t.Fatal("new event must wait for readiness persistence")
 	case <-time.After(20 * time.Millisecond):
 	}
 	close(release)
 	require.NoError(t, <-activateDone)
-	require.NoError(t, handler.finishActivation(context.Background()))
 	select {
 	case <-applied:
 	case <-time.After(time.Second):
 		t.Fatal("activation did not apply the buffered event")
 	}
 	require.NoError(t, <-eventDone)
+}
+
+func TestSessionHandlerPersistsReadyAfterLateBufferedPosition(t *testing.T) {
+	ctx := context.Background()
+	tradeStore := openRuntimeStore(t)
+	account := seedRuntimeAccount(t, tradeStore)
+	adapter := &scriptedSessionAdapter{}
+	session := &ExchangeSession{
+		Account: account,
+		Sync: &accountsync.Service{
+			Store: tradeStore, Adapters: sessionAdapterSource{adapter: adapter},
+			Fills: &consumer.Reducer{Store: tradeStore},
+		},
+	}
+	handler := newSessionHandler(session.applyEvent)
+	require.NoError(t, handler.activate(ctx, func() error {
+		return session.Sync.SetReady(ctx, account.TradingAccountID, true, nil)
+	}))
+	// This event arrives after the initial activation pass but before its final
+	// gate closes, exactly the handoff window between Run's two calls.
+	require.NoError(t, handler.OnPosition(ctx, exchange.Position{
+		ExchangeSymbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
+		SignedQuantity: shared.MustDecimal("0.25"),
+		EntryPrice:     shared.MustDecimal("100"), MarkPrice: shared.MustDecimal("101"),
+		Leverage: shared.MustDecimal("5"), MarginMode: exchange.MarginModeCross,
+		ExchangeUpdatedAt: time.UnixMilli(2_500),
+	}))
+	require.NoError(t, handler.finishActivation(ctx))
+	session.ready.Store(true)
+	require.True(t, session.Ready())
+	stored, err := tradeStore.GetTradingAccountByID(ctx, account.TradingAccountID)
+	require.NoError(t, err)
+	require.True(t, stored.Ready, "late buffered position must precede durable readiness")
+	_, err = session.Sync.SyncAccount(ctx, account.TradingAccountID)
+	require.NoError(t, err)
+	stored, err = tradeStore.GetTradingAccountByID(ctx, account.TradingAccountID)
+	require.NoError(t, err)
+	require.True(t, stored.Ready, "queued sync without SessionState must retain readiness")
+}
+
+func TestSessionHandlerReadinessFailureReleasesEventGate(t *testing.T) {
+	ctx := context.Background()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	callbackErr := errors.New("readiness write failed")
+	handler := newSessionHandler(func(context.Context, privateEvent) error { return nil })
+	require.NoError(t, handler.activate(ctx, func() error {
+		close(started)
+		<-release
+		return callbackErr
+	}))
+	done := make(chan error, 1)
+	go func() { done <- handler.finishActivation(ctx) }()
+	<-started
+	eventDone := make(chan error, 1)
+	go func() { eventDone <- handler.handle(ctx, privateEvent{}) }()
+	close(release)
+	require.ErrorIs(t, <-done, callbackErr)
+	select {
+	case err := <-eventDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("readiness failure left event admission blocked")
+	}
+}
+
+func TestSessionHandlerPostActivationPositionRequiresFullSync(t *testing.T) {
+	ctx := context.Background()
+	tradeStore := openRuntimeStore(t)
+	account := seedRuntimeAccount(t, tradeStore)
+	adapter := &scriptedSessionAdapter{}
+	session := &ExchangeSession{Account: account}
+	manager := &Manager{sessions: map[string]*managedEntry{
+		account.TradingAccountID: {session: session},
+	}}
+	session.Sync = &accountsync.Service{
+		Store: tradeStore, Adapters: sessionAdapterSource{adapter: adapter},
+		Fills: &consumer.Reducer{Store: tradeStore}, SessionState: manager,
+	}
+	handler := newSessionHandler(session.applyEvent)
+	require.NoError(t, handler.activate(ctx, func() error {
+		return session.Sync.SetReady(ctx, account.TradingAccountID, true, nil)
+	}))
+	require.NoError(t, handler.finishActivation(ctx))
+	session.ready.Store(true)
+	require.NoError(t, handler.OnPosition(ctx, exchange.Position{
+		ExchangeSymbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
+		SignedQuantity: shared.MustDecimal("0.25"),
+		EntryPrice:     shared.MustDecimal("100"), MarkPrice: shared.MustDecimal("101"),
+		Leverage: shared.MustDecimal("5"), MarginMode: exchange.MarginModeCross,
+		ExchangeUpdatedAt: time.UnixMilli(2_500),
+	}))
+	stored, err := tradeStore.GetTradingAccountByID(ctx, account.TradingAccountID)
+	require.NoError(t, err)
+	require.False(t, stored.Ready, "post-activation private position requires full sync")
+	require.True(t, manager.Ready(account.TradingAccountID))
+	_, err = session.Sync.SyncAccount(ctx, account.TradingAccountID)
+	require.NoError(t, err)
+	stored, err = tradeStore.GetTradingAccountByID(ctx, account.TradingAccountID)
+	require.NoError(t, err)
+	require.True(t, stored.Ready, "full sync must recover readiness from the running session")
 }
 
 func openRuntimeStore(t *testing.T) *store.Store {

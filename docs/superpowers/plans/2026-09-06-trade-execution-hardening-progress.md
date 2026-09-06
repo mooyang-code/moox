@@ -136,6 +136,14 @@ T02 正式红测：`TestModernSessionTargetCanResume` 因 `target runner does no
 - 新 `review_receipt_place_gate` 最终无剩余 P0/P1/P2，主 Agent Store 全量、receipt/组合迁移 race、Order/Operator/Target/Test 四包完整 race、Place 截止时间 race 三次及 Trade vet 通过。Place 提交为 `a4b62b62`。
 - Trade 全量首轮通过，但最终重跑出现 Session Ready 与持久化 Ready 不一致的间歇失败；定向 race 50 次没有复现，已另外建立确定性 handoff 用例调查，不能用重跑通过冲淡该失败。处理记录在后续补记。T09 普通下单、T10 完整契约切换、T11 正式部署及虚拟账户真实端到端仍未完成。
 
+### Session 启动交接回归
+
+- 调查区分了两个窗口：原脚本测试在 OnSubscribed 后发送 position，并未保证 position 在启动缓冲期到达；激活后 position 暂时置账户未就绪本来就是合法行为。另有真实实现缺陷：activate 已写 Ready=true 后，finishActivation 又重放迟到的缓冲 position，将数据库 Ready 改回 false。
+- 新 `TestSessionHandlerPersistsReadyAfterLateBufferedPosition` 使用真实 Session.applyEvent、Store、AccountSync，固定“初次 drain 后、最终 gate 前”的到达顺序，原实现在 stored.Ready 断言稳定失败。现在 readiness callback 延迟到最终关闭准入并排空事件之后；回调或应用失败仍释放 gate，不遗留事件等待者。
+- 原启动测试加显式 positionBuffered 屏障，保持即时 stored.Ready 断言；另外验证激活后的 position 确实临时未就绪，并由实际 Manager.SessionState + SyncAccount 恢复。运行 Session 的测试失败也会取消并等待退出后才关闭数据库。
+- 修复后主 Agent Trade 全模块普通测试通过；Runtime/AccountSync/Test 三包整包 race 通过，最终测试清理增量另跑定向 race 三次通过；Trade vet/diff-check 通过。实现者 expanded session/handler race 50 次与最终 Runtime 整包 race 通过。新 `review_session_handoff_gate` 独立定向 race 20 次通过，最终无剩余 P0/P1/P2；未连接真实交易所私有流，不据此宣称网络端到端已验收。
+- 本轮 Place 和 receipt 分别提交为 `a4b62b62`、`020fa35f`；Session 交接修复和本记录随 `fix(trade): persist session readiness after buffered events` 提交。没有正式部署；下一项实现仍是 T09 显式控制模式与普通 SubmitOrder，而不是把前置门禁当作 T09/T10 完成。
+
 ## 发布调查
 
 ### 本轮实现与验证增量
