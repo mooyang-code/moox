@@ -271,25 +271,14 @@ func NormalizeAndHashState(nodeID string, disabled bool, routes []Route) (Snapsh
 			}
 		}
 	}
-	seenRPC := make(map[string]string)
-	for _, route := range normalized {
-		for _, method := range route.AllowedMethods {
-			if method == "*" {
-				key := route.ServicePath + "/*"
-				if owner, exists := seenRPC[key]; exists {
-					return Snapshot{}, fmt.Errorf("duplicate native RPC route %q owned by %q and %q", key, owner, route.ServiceID)
-				}
-				seenRPC[key] = route.ServiceID
+	for i := range normalized {
+		for j := i + 1; j < len(normalized); j++ {
+			left, right := normalized[i], normalized[j]
+			if left.ServicePath != right.ServicePath || !nativeMethodsOverlap(left.AllowedMethods, right.AllowedMethods) || nativeCallersDisjoint(left.AllowedCallers, right.AllowedCallers) {
 				continue
 			}
-			key := route.ServicePath + "/" + method
-			if owner, exists := seenRPC[route.ServicePath+"/*"]; exists {
-				return Snapshot{}, fmt.Errorf("native RPC route %q overlaps wildcard owner %q", key, owner)
-			}
-			if owner, exists := seenRPC[key]; exists {
-				return Snapshot{}, fmt.Errorf("duplicate native RPC route %q owned by %q and %q", key, owner, route.ServiceID)
-			}
-			seenRPC[key] = route.ServiceID
+			method := overlappingNativeMethod(left.AllowedMethods, right.AllowedMethods)
+			return Snapshot{}, fmt.Errorf("duplicate native RPC route %q owned by %q and %q", left.ServicePath+"/"+method, left.ServiceID, right.ServiceID)
 		}
 	}
 	hash, err := hashSnapshot(Snapshot{NodeID: nodeID, Disabled: disabled, Routes: normalized})
@@ -303,6 +292,45 @@ func NormalizeAndHashState(nodeID string, disabled bool, routes []Route) (Snapsh
 		Disabled:    disabled,
 		Routes:      normalized,
 	}, nil
+}
+
+func nativeCallersDisjoint(left, right []string) bool {
+	for _, l := range left {
+		for _, r := range right {
+			if l == "*" || r == "*" || l == r {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func nativeMethodsOverlap(left, right []string) bool {
+	for _, l := range left {
+		for _, r := range right {
+			if l == "*" || r == "*" || l == r {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func overlappingNativeMethod(left, right []string) string {
+	for _, l := range left {
+		for _, r := range right {
+			if l == "*" {
+				if r != "*" {
+					return r
+				}
+				return "*"
+			}
+			if r == "*" || l == r {
+				return l
+			}
+		}
+	}
+	return "*"
 }
 
 func normalizeRouteDefaults(route *Route) {

@@ -891,57 +891,7 @@ func importServiceDeploymentSeed(db *gorm.DB, seed serviceDeploymentSeed, preser
 				created++
 			}
 		}
-		if preserveExistingNodeMetadata {
-			// Scoped imports intentionally leave unrelated service inventory in
-			// place, but they must retire an older route that would collide with
-			// one of the selected native RPC paths. This is what makes an owner
-			// route migration safe when the node was previously serving the full
-			// TradeConsole route.
-			retired, reconcileErr := reconcileScopedServiceRoutes(tx, seed)
-			if reconcileErr != nil {
-				return reconcileErr
-			}
-			updated += retired
-		}
 		return nil
 	})
 	return created, updated, err
-}
-
-func reconcileScopedServiceRoutes(tx *gorm.DB, seed serviceDeploymentSeed) (int, error) {
-	selected := make(map[string]struct{}, len(seed.Services))
-	paths := make(map[string]struct{}, len(seed.Services))
-	for _, item := range seed.Services {
-		selected[item.Name] = struct{}{}
-		if !item.GatewayEnabled || item.Status != "active" || strings.TrimSpace(item.GatewayPath) == "" {
-			continue
-		}
-		paths[item.GatewayPath] = struct{}{}
-	}
-	if len(paths) == 0 {
-		return 0, nil
-	}
-	var existing []sysdeploy.Deployment
-	if err := tx.Where("c_node_id = ? AND c_status = ? AND c_gateway_enabled = ?", seed.Node.ID, "active", true).Find(&existing).Error; err != nil {
-		return 0, fmt.Errorf("list scoped service deployments: %w", err)
-	}
-	retired := 0
-	for _, row := range existing {
-		if _, isSelected := selected[row.ServiceName]; isSelected {
-			continue
-		}
-		if _, collides := paths[row.GatewayPath]; !collides {
-			continue
-		}
-		result := tx.Model(&sysdeploy.Deployment{}).Where("c_id = ?", row.ID).Updates(map[string]any{
-			"c_gateway_enabled":    false,
-			"c_gateway_service_id": "",
-			"c_status":             "disabled",
-		})
-		if result.Error != nil {
-			return retired, fmt.Errorf("retire colliding service deployment %q: %w", row.ServiceName, result.Error)
-		}
-		retired += int(result.RowsAffected)
-	}
-	return retired, nil
 }

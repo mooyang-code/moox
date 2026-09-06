@@ -622,6 +622,16 @@ gateway_ready_at() {
 # Its dedicated authenticated Gateway therefore uses an independent health
 # listener and every acceptance/rollback probe must follow the same port.
 gateway_health_addr() {
+  local config="${DEPLOY_DIR}/gateway/config/app.yaml" restored=""
+  if [[ -r "${config}" ]]; then
+    restored="$(awk '/^[[:space:]]*health_addr:[[:space:]]*/ {print $2; exit}' "${config}" 2>/dev/null || true)"
+    restored="${restored%,}"
+    if [[ "${restored}" == 0.0.0.0:* ]]; then restored="127.0.0.1:${restored##*:}"; fi
+    if [[ "${restored}" == 127.0.0.1:* || "${restored}" == \[::1\]:* || "${restored}" == ::1:* ]]; then
+      printf '%s' "${restored}"
+      return
+    fi
+  fi
   if [[ "${WITH_TRADE:-0}" == "1" && "${WITH_STORAGE:-0}" == "0" && "${WITH_ADMIN:-0}" == "0" && "${WITH_GATEWAY:-0}" == "1" ]]; then
     printf '%s' "${MOOX_TRADE_GATEWAY_HEALTH_ADDR:-127.0.0.1:11014}"
     return
@@ -4851,6 +4861,16 @@ prepare_gateway_rollback() {
 }
 
 gateway_health_addr() {
+  local config="${DEPLOY_DIR}/gateway/config/app.yaml" restored=""
+  if [[ -r "${config}" ]]; then
+    restored="$(awk '/^[[:space:]]*health_addr:[[:space:]]*/ {print $2; exit}' "${config}" 2>/dev/null || true)"
+    restored="${restored%,}"
+    if [[ "${restored}" == 0.0.0.0:* ]]; then restored="127.0.0.1:${restored##*:}"; fi
+    if [[ "${restored}" == 127.0.0.1:* || "${restored}" == \[::1\]:* || "${restored}" == ::1:* ]]; then
+      printf '%s' "${restored}"
+      return
+    fi
+  fi
   if [[ "${WITH_TRADE:-0}" == "1" && "${WITH_STORAGE:-0}" == "0" && "${WITH_ADMIN:-0}" == "0" && "${WITH_GATEWAY:-0}" == "1" ]]; then
     printf '%s' "${MOOX_TRADE_GATEWAY_HEALTH_ADDR:-127.0.0.1:11014}"
     return

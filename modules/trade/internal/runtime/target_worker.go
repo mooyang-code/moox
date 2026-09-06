@@ -48,6 +48,9 @@ type TargetWorker struct {
 	ready        bool
 	lastError    string
 	targetErrors []TargetFailure
+	expiredMu    sync.Mutex
+	expiredSweep bool
+	expiredRetry map[targetKey]struct{}
 }
 
 type targetKey struct {
@@ -161,16 +164,62 @@ func (w *TargetWorker) setResult(err error) {
 }
 
 func (w *TargetWorker) runOnce(ctx context.Context) error {
-	records, err := w.Store.ListLogicalAccountTargets(
-		ctx,
-		targetapp.StatusPending,
-		targetapp.StatusConverging,
-		targetapp.StatusBlocked,
-		targetapp.StatusConverged,
-		targetapp.StatusExpired,
-	)
+	statuses := []string{targetapp.StatusPending, targetapp.StatusConverging, targetapp.StatusBlocked, targetapp.StatusConverged}
+	w.expiredMu.Lock()
+	if w.expiredRetry == nil {
+		w.expiredRetry = make(map[targetKey]struct{})
+	}
+	includeExpired := !w.expiredSweep
+	w.expiredMu.Unlock()
+	if includeExpired {
+		statuses = append(statuses, targetapp.StatusExpired)
+	}
+	records, err := w.Store.ListLogicalAccountTargets(ctx, statuses...)
 	if err != nil {
 		return err
+	}
+	w.expiredMu.Lock()
+	if includeExpired {
+		w.expiredSweep = true
+	}
+	for _, record := range records {
+		if record.Status == targetapp.StatusExpired {
+			w.expiredRetry[targetKey{record.SpaceID, record.LogicalAccountID}] = struct{}{}
+		}
+	}
+	retry := make([]targetKey, 0, len(w.expiredRetry))
+	for key := range w.expiredRetry {
+		retry = append(retry, key)
+	}
+	w.expiredMu.Unlock()
+	for _, key := range retry {
+		found := false
+		for _, record := range records {
+			if record.SpaceID == key.spaceID && record.LogicalAccountID == key.logicalAccountID {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		record, getErr := w.Store.GetLogicalAccountTarget(ctx, key.spaceID, key.logicalAccountID)
+		if errors.Is(getErr, gorm.ErrRecordNotFound) {
+			w.expiredMu.Lock()
+			delete(w.expiredRetry, key)
+			w.expiredMu.Unlock()
+			continue
+		}
+		if getErr != nil {
+			return getErr
+		}
+		if record.Status == targetapp.StatusExpired {
+			records = append(records, record)
+		} else {
+			w.expiredMu.Lock()
+			delete(w.expiredRetry, key)
+			w.expiredMu.Unlock()
+		}
 	}
 	return w.runRecords(ctx, records, true)
 }
@@ -255,6 +304,18 @@ func (w *TargetWorker) runRecords(ctx context.Context, records []store.LogicalAc
 				runErrors = append(runErrors, convergeErr)
 			}
 		}
+		if record.Status == targetapp.StatusExpired {
+			w.expiredMu.Lock()
+			if w.expiredRetry == nil {
+				w.expiredRetry = make(map[targetKey]struct{})
+			}
+			if convergeErr == nil {
+				delete(w.expiredRetry, targetKey{record.SpaceID, record.LogicalAccountID})
+			} else {
+				w.expiredRetry[targetKey{record.SpaceID, record.LogicalAccountID}] = struct{}{}
+			}
+			w.expiredMu.Unlock()
+		}
 		w.observe(result, convergeErr, now)
 	}
 	return errors.Join(runErrors...)
@@ -286,5 +347,6 @@ func (w *TargetWorker) initWake() {
 		w.wake = make(chan struct{}, 1)
 		w.targetWake = make(chan struct{}, 1)
 		w.pending = make(map[targetKey]struct{})
+		w.expiredRetry = make(map[targetKey]struct{})
 	})
 }

@@ -125,6 +125,8 @@ func TestTargetWorkerPeriodicScanIncludesExpiredTargetsForRecovery(t *testing.T)
 	require.NoError(t, worker.runOnce(context.Background()))
 	require.Equal(t, []string{"space/expired"}, converger.calls)
 	require.Contains(t, targets.statuses, targetapp.StatusExpired)
+	require.NoError(t, worker.runOnce(context.Background()))
+	require.NotContains(t, targets.statuses, targetapp.StatusExpired)
 }
 
 func TestTargetWorkerDirectedCancellationStopsQueuedCandidates(t *testing.T) {

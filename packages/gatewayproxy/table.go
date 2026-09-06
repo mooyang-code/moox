@@ -58,6 +58,19 @@ func (table *Table) ResolveMethod(serviceID, method string) (Route, bool) {
 
 // ResolveRPC resolves a native tRPC request by callee service path and method.
 func (table *Table) ResolveRPC(rpcName string) (Route, string, bool) {
+	return table.resolveRPC(rpcName, "", false)
+}
+
+// ResolveRPCForCaller resolves a native request after authentication. Native
+// routes may share a service path and method when their caller allowlists are
+// disjoint (for example the Strategy ownership route and the Admin console
+// route); caller-aware selection prevents the first route from shadowing the
+// other one.
+func (table *Table) ResolveRPCForCaller(rpcName, caller string) (Route, string, bool) {
+	return table.resolveRPC(rpcName, caller, true)
+}
+
+func (table *Table) resolveRPC(rpcName, caller string, requireCaller bool) (Route, string, bool) {
 	rpcName = strings.TrimPrefix(strings.TrimSpace(rpcName), "/")
 	servicePath, method, ok := strings.Cut(rpcName, "/")
 	if !ok || servicePath == "" || method == "" {
@@ -68,7 +81,7 @@ func (table *Table) ResolveRPC(rpcName string) (Route, string, bool) {
 		return Route{}, "", false
 	}
 	for _, route := range snapshot.Routes {
-		if route.ServicePath == servicePath && route.AllowsMethod(method) {
+		if route.ServicePath == servicePath && route.AllowsMethod(method) && (!requireCaller || route.AllowsCaller(caller)) {
 			route.AllowedMethods = append([]string(nil), route.AllowedMethods...)
 			route.AllowedCallers = append([]string(nil), route.AllowedCallers...)
 			return route, method, true

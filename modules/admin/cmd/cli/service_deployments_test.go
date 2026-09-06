@@ -10,6 +10,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	"github.com/mooyang-code/moox/packages/gatewayproxy"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -90,9 +91,9 @@ func TestScopedTradeOwnerImportCompilesOnlyReceivingNodeRoute(t *testing.T) {
 		"--node-id", "control", "--public-host", "control.example.test",
 		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--disabled-services", "moox_trade,trade_owner,trade_dns_resolver",
 	}, &bytes.Buffer{}, &bytes.Buffer{}))
-	// Simulate a node upgraded from the old full TradeConsole route. The
-	// owner-only import must retire this colliding route rather than leaving
-	// Gateway with two owners for the same native RPC methods.
+	// Simulate a node upgraded from the old full TradeConsole route. Scoped
+	// owner imports preserve the console route; native Gateway dispatch picks
+	// the route after authenticating the caller.
 	require.NoError(t, runServiceDeploymentsCommand([]string{
 		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
 		"--node-id", "trade-node", "--public-host", "trade.example.test",
@@ -117,18 +118,27 @@ func TestScopedTradeOwnerImportCompilesOnlyReceivingNodeRoute(t *testing.T) {
 	require.Equal(t, "trade-node", byName["trade_owner"].NodeID)
 	require.True(t, byName["trade_owner"].GatewayEnabled)
 	require.Equal(t, "active", byName["trade_owner"].Status)
-	require.False(t, byName["trade_console"].GatewayEnabled)
-	require.Equal(t, "disabled", byName["trade_console"].Status)
-	require.Empty(t, byName["trade_console"].GatewayServiceID)
+	require.True(t, byName["trade_console"].GatewayEnabled)
+	require.Equal(t, "active", byName["trade_console"].Status)
+	require.Equal(t, "trade_console", byName["trade_console"].GatewayServiceID)
 	snapshot, err := sysdeploy.NewDAO(db).CompileGatewaySnapshot(context.Background(), "trade-node")
 	require.NoError(t, err)
-	require.Len(t, snapshot.Routes, 1)
-	route := snapshot.Routes[0]
-	require.Equal(t, "trade_owner", route.ServiceID)
-	require.Equal(t, "127.0.0.1:11200", route.Address)
-	require.Equal(t, "trpc.moox.trade.TradeConsoleService", route.ServicePath)
-	require.Equal(t, []string{"strategy"}, route.AllowedCallers)
-	require.ElementsMatch(t, []string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"}, route.AllowedMethods)
+	require.Len(t, snapshot.Routes, 2)
+	var owner, console gatewayproxy.Route
+	for _, candidate := range snapshot.Routes {
+		switch candidate.ServiceID {
+		case "trade_owner":
+			owner = candidate
+		case "trade_console":
+			console = candidate
+		}
+	}
+	require.Equal(t, "127.0.0.1:11200", owner.Address)
+	require.Equal(t, "trpc.moox.trade.TradeConsoleService", owner.ServicePath)
+	require.Equal(t, []string{"strategy"}, owner.AllowedCallers)
+	require.ElementsMatch(t, []string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"}, owner.AllowedMethods)
+	require.Equal(t, []string{"admin-gateway"}, console.AllowedCallers)
+	require.Contains(t, console.AllowedMethods, "GetLogicalAccount")
 	require.Equal(t, "127.0.0.1", byName["trade_owner"].Host)
 	require.Equal(t, int32(11200), byName["trade_owner"].Port)
 	control, err := sysdeploy.NewDAO(db).CompileGatewaySnapshot(context.Background(), "control")

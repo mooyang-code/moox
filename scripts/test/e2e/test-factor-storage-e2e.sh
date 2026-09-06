@@ -209,6 +209,20 @@ restore_storage_view() {
   fi
   return 0
 }
+storage_view_restore_needed=0
+restore_storage_view_on_exit() {
+  local status=$?
+  if [[ "${storage_view_restore_needed}" == "1" ]]; then
+    if restore_storage_view; then
+      storage_view_restore_needed=0
+    else
+      echo "storage-view restore failed after E2E run" >&2
+      [[ "${status}" -eq 0 ]] && status=1
+    fi
+  fi
+  exit "${status}"
+}
+trap restore_storage_view_on_exit EXIT
 if [[ "${restart_storage_view}" == "1" ]]; then
   [[ -n "${storage_eventbus_url}" ]] || fail "MOOX_STORAGE_EVENTBUS_URL is required when restarting storage-view"
   if [[ -n "${e2e_allowed_spaces}" ]]; then
@@ -247,10 +261,12 @@ if [[ "${restart_storage_view}" == "1" ]]; then
   fi
   if [[ -n "${restart_error}" ]]; then
     if restore_storage_view; then
+	  storage_view_restore_needed=0
       fail "${restart_error}; original storage-view was restored"
     fi
     fail "${restart_error}; original storage-view could not be restored"
   fi
+  storage_view_restore_needed=1
 else
   [[ -n "${e2e_allowed_spaces}" ]] || fail "MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES must include ${e2e_space_id} when storage-view restart is disabled"
   space_is_allowed=0

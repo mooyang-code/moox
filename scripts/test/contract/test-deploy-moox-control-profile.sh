@@ -157,7 +157,18 @@ grep -Fq 'gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:
 # the generated helpers, so its health-address function must be defined there
 # as well.
 sed -n '/^prepare_gateway_rollback() {$/,/^rollback_gateway() {$/p' \
-  "${ROOT}/scripts/deploy/deploy-moox.sh" | grep -Fq 'gateway_health_addr() {'
+  "${ROOT}/scripts/deploy/deploy-moox.sh" | grep -Fq 'restored="$(awk'
+rollback_health_script="${TMP_ROOT}/rollback-health.sh"
+awk '
+  /^prepare_gateway_rollback\(\) \{$/ { scoped=1 }
+  scoped && /^gateway_health_addr\(\) \{$/ { capture=1 }
+  capture && /^rollback_gateway\(\) \{$/ { exit }
+  capture { print }
+' "${ROOT}/scripts/deploy/deploy-moox.sh" >"${rollback_health_script}"
+mkdir -p "${TMP_ROOT}/rollback-root/gateway/config"
+printf '  health_addr: 0.0.0.0:11014\n' >"${TMP_ROOT}/rollback-root/gateway/config/app.yaml"
+rollback_health_addr="$(DEPLOY_DIR="${TMP_ROOT}/rollback-root" WITH_TRADE=0 WITH_STORAGE=0 WITH_ADMIN=0 WITH_GATEWAY=1 bash -c 'source "$1"; gateway_health_addr' _ "${rollback_health_script}")"
+[[ "${rollback_health_addr}" == "127.0.0.1:11014" ]]
 
 run_native_listener_guard() {
   local target="$1"
