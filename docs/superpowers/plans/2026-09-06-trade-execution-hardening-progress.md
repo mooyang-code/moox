@@ -279,3 +279,11 @@ T02 正式红测：`TestModernSessionTargetCanResume` 因 `target runner does no
 - 部署合同修复 `import_trade_owner_route` 的 shell 续行语义，避免注释截断命令；Strategy deployment contract 实际执行通过。
 - 本轮 focused 测试：`packages/gatewayproxy`、Gateway router/bootstrap/controlplane、Admin cmd/internal sysdeploy、CLI setup client/command、Trade 全模块普通测试均通过；Trade target/eventconsumer/runtime/paper/rpc 与 gatewayproxy race 通过。`bash -n`、`git diff --check`、Strategy contract 通过。
 - 独立 codeCR 复核上述 route pairwise、Trade alias、目标子单释放和 shell 修复未发现新增 P0/P2；旧版本 remote canonical 双路由与新 alias 的混合升级仍需按 Trade-first/控制面协调窗口执行，当前不改变已发布控制面制品。
+
+## 最终发布核验（2026-09-07）
+
+- 源码最终核验基于 `385a550586886c9fe6233905c046ce9c78937b97`（文档随后仅追加本节）。独立 codeCR 对当前实现未发现可复现的 P0/P1/P2；保留的风险是尚未做真实混合版本部署，以及尚未通过 Gateway 对 `TradeConsoleAdminService` alias 做 wire-level 请求。
+- Trade 专用节点 `ubuntu@43.132.204.177:/home/ubuntu/moox/trade-move` 已原子替换并重启，PID `1559697`，现有 `healthcheck.sh trade` 返回 `ready`。运行制品来自上述源码提交：`moox-trade` SHA-256 `23b6d66b6158a3710603dbfe9b92baf1a0b5239265dffba7ec4c9a4dff0caa81`，`moox-trade-cli` SHA-256 `bb7a0b2159f3d0c042382a5f8bb62440158729619878cbdf2acd7b4b0992de88`；`live_trading_enabled=false`，未发起实盘请求。
+- 在生产 Trade HTTP 入口对 canonical `TradeConsoleService` 和新增 `TradeConsoleAdminService` alias 的 `GetExecutionCapabilities` 均得到 HTTP 200，证明两套 descriptor/handler 已加载；该检查不是 Gateway 转发验收。
+- 已复核隔离 Paper 资源（Space `crypto`、账户 `paper-account-230bef26ed938b41`、logical `paper-logical-230bef26ed938b41`）：target `paper-target-e2e-1788698251135260751` 为 `EXPIRED`；订单 `ZHIujZQJpQAc9Amh5XY-1` 为 `FILLED`，成交数量与订单均为 `0.12504`，均价 `79974.25`，剩余预占 `0`，手续费 `0`；持仓为 BTC `0.12504`、USDT `90000.01978`。查询为只读复核，未创建或触发 LIVE 账户。
+- 最终通过：Trade 全模块普通测试、Target race、Gateway/Admin/CLI 相关测试与 race/vet、部署 contract、全部相关脚本 `bash -n`、Strategy→NATS→Trade 事件 E2E、Strategy→Gateway→Trade 授权 E2E、`git diff --check`。`make verify-pr` 仍被工作树既有 proto dirty 基线及 Storage `durable` 命名规则阻断，非本轮 Trade 改动引入。
