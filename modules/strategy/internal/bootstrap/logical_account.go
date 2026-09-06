@@ -20,6 +20,32 @@ type logicalAccountOwnerClient struct {
 	timeout time.Duration
 }
 
+// logicalAccountResponseError preserves Trade's typed status code so callers
+// can distinguish a deterministic claim conflict/not-found from a transport
+// outcome whose result is unknown and must remain recoverable.
+type logicalAccountResponseError struct {
+	operation string
+	code      tradepb.ErrorCode
+	message   string
+}
+
+func (e *logicalAccountResponseError) Error() string {
+	if e == nil {
+		return "Trade LogicalAccount request failed"
+	}
+	return fmt.Sprintf("Trade LogicalAccount %s failed (code=%d): %s", e.operation, e.code, e.message)
+}
+
+// Code implements the small optional contract consumed by the RPC service;
+// keeping it as int32 avoids coupling the service package to generated Trade
+// protobuf aliases.
+func (e *logicalAccountResponseError) Code() int32 {
+	if e == nil {
+		return 0
+	}
+	return int32(e.code)
+}
+
 func newLogicalAccountOwnerClient(
 	target string,
 	timeout time.Duration,
@@ -96,6 +122,47 @@ func (c *logicalAccountOwnerClient) Generation(
 		return 0, fmt.Errorf("Trade LogicalAccount generation is not active")
 	}
 	return generation, nil
+}
+
+// SessionGeneration validates the modern instance/session identity. The
+// numeric return value is retained for callback compatibility with the legacy
+// generation fence, but modern target events are fenced by session_id and do
+// not carry owner_generation.
+func (c *logicalAccountOwnerClient) SessionGeneration(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	instanceID string,
+	sessionID string,
+) (int64, error) {
+	if err := validateLogicalAccountIdentity(spaceID, logicalAccountID, instanceID, true); err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return 0, errors.New("Trade LogicalAccount session_id is required")
+	}
+	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	if err != nil {
+		return 0, err
+	}
+	defer cancel()
+	response, err := c.client.GetLogicalAccount(callCtx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalAccountID}, opts...)
+	if err != nil {
+		return 0, c.transportError(callCtx, "session generation", err)
+	}
+	if err := validateLogicalAccountResponse("session generation", spaceID, logicalAccountID, "", response.GetRetInfo(), response.GetLogicalAccount()); err != nil {
+		return 0, err
+	}
+	account := response.GetLogicalAccount()
+	if account.GetOwnerInstanceId() != instanceID || account.GetOwnerSessionId() != sessionID {
+		return 0, fmt.Errorf("Trade LogicalAccount session owner mismatch")
+	}
+	return account.GetOwnerGeneration(), nil
+}
+
+func (c *logicalAccountOwnerClient) ValidateSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error {
+	_, err := c.SessionGeneration(ctx, spaceID, logicalAccountID, instanceID, sessionID)
+	return err
 }
 
 func (c *logicalAccountOwnerClient) Claim(
@@ -211,8 +278,8 @@ func (c *logicalAccountOwnerClient) ClaimSession(ctx context.Context, spaceID, l
 	if err != nil {
 		return c.transportError(callCtx, "claim session", err)
 	}
-	if response.GetRetInfo().GetCode() != 0 {
-		return fmt.Errorf("Trade claim session failed: %s", response.GetRetInfo().GetMsg())
+	if err := validateLogicalAccountResponse("claim session", spaceID, logicalAccountID, "", response.GetRetInfo(), response.GetLogicalAccount()); err != nil {
+		return err
 	}
 	if response.GetLogicalAccount().GetOwnerInstanceId() != instanceID || response.GetLogicalAccount().GetOwnerSessionId() != sessionID {
 		return errors.New("Trade claim session returned mismatched owner")
@@ -237,10 +304,7 @@ func (c *logicalAccountOwnerClient) ReleaseSession(ctx context.Context, spaceID,
 	if err != nil {
 		return c.transportError(callCtx, "release session", err)
 	}
-	if response.GetRetInfo().GetCode() != 0 {
-		return fmt.Errorf("Trade release session failed: %s", response.GetRetInfo().GetMsg())
-	}
-	return nil
+	return validateLogicalAccountResponse("release session", spaceID, logicalAccountID, "", response.GetRetInfo(), response.GetLogicalAccount())
 }
 
 func (c *logicalAccountOwnerClient) readAuthFence(ctx context.Context, spaceID, logicalAccountID string) (string, error) {
@@ -355,12 +419,7 @@ func validateLogicalAccountResponse(
 		return fmt.Errorf("Trade LogicalAccount %s returned no status", operation)
 	}
 	if retInfo.GetCode() != tradepb.ErrorCode_SUCCESS {
-		return fmt.Errorf(
-			"Trade LogicalAccount %s failed (code=%d): %s",
-			operation,
-			retInfo.GetCode(),
-			retInfo.GetMsg(),
-		)
+		return &logicalAccountResponseError{operation: operation, code: retInfo.GetCode(), message: retInfo.GetMsg()}
 	}
 	if account == nil {
 		return fmt.Errorf("Trade LogicalAccount %s returned no account", operation)

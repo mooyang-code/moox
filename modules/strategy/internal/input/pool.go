@@ -1,6 +1,7 @@
 package input
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -20,6 +21,7 @@ type Subject struct {
 type PoolResult struct {
 	Items      []PoolItem
 	Ineligible map[string]string
+	Err        error
 }
 
 // BuildPool applies the compiled instrument-pool rule to active metadata and
@@ -67,6 +69,26 @@ func BuildPool(rule config.InstrumentPoolRule, subjects []Subject, history map[s
 			continue
 		}
 		result.Items = append(result.Items, PoolItem{InstrumentID: instrumentID, SubjectID: selected.SubjectID, Exchange: selected.Exchange, Market: selected.Market, QuoteAsset: selected.QuoteAsset, SeriesTag: selected.SeriesTag})
+	}
+	if rule.IncludeSet && len(include) > 0 {
+		historical := tokenSet(rule.HistoricalInclude)
+		selected := make(map[string]struct{}, len(result.Items))
+		for _, item := range result.Items {
+			selected[strings.ToUpper(strings.TrimSpace(item.InstrumentID))] = struct{}{}
+		}
+		missing := make([]string, 0)
+		for id := range include {
+			if _, carried := historical[id]; carried {
+				continue
+			}
+			if _, ok := selected[id]; !ok {
+				missing = append(missing, id)
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			result.Err = fmt.Errorf("%w: configured instruments are unavailable or incomplete: %s", ErrPoolInvalid, strings.Join(missing, ","))
+		}
 	}
 	sort.Slice(result.Items, func(i, j int) bool { return result.Items[i].InstrumentID < result.Items[j].InstrumentID })
 	return result

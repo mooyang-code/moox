@@ -58,7 +58,7 @@ func (s *Store) CommitEvaluation(ctx context.Context, request CommitEvaluationRe
 	}
 	if instance.LogicalAccountID != nil && request.Evaluation.Action == domain.ActionRebalance {
 		status = PublishPending
-		eventData, err = marshalLegacyTargetEvent(instance, result, legacy.StrategyID)
+		eventData, err = marshalLegacyTargetEvent(instance, result, legacy.StrategyID, request.OwnerGeneration)
 		if err != nil {
 			return CommitEvaluationOutcome{}, err
 		}
@@ -141,7 +141,7 @@ func encodeLegacyEvaluation(evaluation domain.Evaluation) (json.RawMessage, json
 	return targetJSON, stateJSON, nil
 }
 
-func marshalLegacyTargetEvent(instance StrategyInstance, result StrategyResult, strategyID string) ([]byte, error) {
+func marshalLegacyTargetEvent(instance StrategyInstance, result StrategyResult, strategyID string, ownerGeneration int64) ([]byte, error) {
 	var targets []domain.InstrumentTarget
 	if err := json.Unmarshal(result.TargetsJSON, &targets); err != nil {
 		return nil, fmt.Errorf("decode strategy targets: %w", err)
@@ -156,11 +156,11 @@ func marshalLegacyTargetEvent(instance StrategyInstance, result StrategyResult, 
 	}
 	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		// CommitEvaluation is the compatibility adapter for the old Runner
-		// contract. Keep its event legacy-shaped; modern instances use the
-		// trigger processor's session-fenced payload instead.
+		// contract. Keep its identity fields legacy-shaped while preserving the
+		// optional owner-generation fence for modern callers.
 		TargetId: result.ResultID, RunnerId: result.InstanceID,
-		LogicalAccountId: valueOrEmpty(instance.LogicalAccountID), CommandSequence: 1,
-		Targets: payloadTargets,
+		LogicalAccountId: valueOrEmpty(instance.LogicalAccountID), CommandSequence: legacySequence(result.BarEndTime),
+		Targets: payloadTargets, OwnerGeneration: ownerGeneration,
 	}
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{
 		EventID: result.ResultID, OccurredAt: result.CreatedAt.UTC(), SpaceID: instance.SpaceID, SubjectID: valueOrEmpty(instance.LogicalAccountID),
@@ -172,11 +172,18 @@ func legacyResult(result StrategyResult, seed domain.StrategyResult) domain.Stra
 	if action == "" {
 		action = domain.ActionRebalance
 	}
-	sequence := int64(1)
+	sequence := legacySequence(result.BarEndTime)
 	return domain.StrategyResult{
 		ID: result.ResultID, RunnerID: result.InstanceID, StrategyID: seed.StrategyID,
 		PeriodTime: result.BarEndTime, TargetsJSON: append(json.RawMessage(nil), result.TargetsJSON...),
 		DebugInfoJSON: append(json.RawMessage(nil), result.RuleStatesJSON...), InputHash: seed.InputHash,
 		Action: action, CommandSequence: &sequence, CreatedAt: result.CreatedAt,
 	}
+}
+
+func legacySequence(barEnd time.Time) int64 {
+	if barEnd.IsZero() || barEnd.UnixMilli() <= 0 {
+		return 1
+	}
+	return barEnd.UnixMilli()
 }

@@ -98,8 +98,17 @@ func (s *Store) ResetRunnerLifecycle(ctx context.Context, runnerID string, expec
 	if strings.TrimSpace(runnerID) == "" {
 		return errors.New("runner id is required")
 	}
-	if _, err := s.GetInstance(ctx, runnerID); err != nil { return err }
-	return s.db.WithContext(ctx).Exec("DELETE FROM t_strategy_results WHERE instance_id = ?", runnerID).Error
+	if _, err := s.GetInstance(ctx, runnerID); err != nil {
+		return err
+	}
+	// Results are immutable audit records and remain valid across sessions. Move
+	// the legacy adapter to a fresh session instead of deleting rows; this makes
+	// the current-target projection empty while preserving the audit trail.
+	sessionID, err := newSessionID()
+	if err != nil {
+		return err
+	}
+	return s.db.WithContext(ctx).Exec("UPDATE t_strategy_instances SET session_id = ?, updated_at = ? WHERE instance_id = ?", sessionID, at.UTC().UnixMilli(), runnerID).Error
 }
 
 func runnerMutationError(ctx context.Context, db *gorm.DB, runnerID string) error {

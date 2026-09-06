@@ -91,6 +91,12 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err := service.ReconcileDisabledInstances(ctx); err != nil {
 		return nil, nil, fmt.Errorf("reconcile disabled Strategy instances: %w", err)
 	}
+	if err := service.ReconcileEnabledInstances(ctx); err != nil {
+		return nil, nil, fmt.Errorf("reconcile enabled Strategy instances: %w", err)
+	}
+	if err := requireExecutionDependencies(ctx, repo, cfg); err != nil {
+		return nil, nil, err
+	}
 	if err := eventRuntime.Start(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -164,6 +170,24 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	return s, closeFn, nil
 }
 
+// requireExecutionDependencies prevents a restart from silently keeping an
+// enabled instance and its Trade authorization alive while no input/Factor
+// execution path can consume it. Observation-only instances may still run
+// without these optional worker targets.
+func requireExecutionDependencies(ctx context.Context, repo *store.Store, cfg Config) error {
+	if repo == nil || (strings.TrimSpace(cfg.Factor.Target) != "" && strings.TrimSpace(cfg.Storage.Target) != "") {
+		return nil
+	}
+	instances, err := repo.ListAllInstances(ctx, boolPtr(true))
+	if err != nil {
+		return fmt.Errorf("check enabled Strategy instances: %w", err)
+	}
+	if len(instances) > 0 {
+		return errors.New("enabled strategy instances require configured Factor and Storage targets")
+	}
+	return nil
+}
+
 func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime, error) {
 	connector := func(ctx context.Context) (strategyoutbox.JetStreamClient, error) {
 		jsConfig := jetstream.ConfigFromEnv(cfg.EventBus.URLs, "moox-strategy")
@@ -217,7 +241,8 @@ func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config) (*stra
 			}
 			return selected.CompileWithBindings(compileCtx, dsl, spaceID, raw)
 		},
-		OwnerGeneration: logicalOwner.Generation,
+		OwnerGeneration:   logicalOwner.Generation,
+		SessionGeneration: logicalOwner.SessionGeneration,
 		VerifyDependencies: func(ctx context.Context, compiled compiler.CompiledStrategy) error {
 			dependencyCompiler := compilerFactory(compiled.SpaceID)
 			if dependencyCompiler == nil {
@@ -225,6 +250,7 @@ func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config) (*stra
 			}
 			return dependencyCompiler.VerifyDependencies(ctx, compiled)
 		},
+		Diagnostic: func(err error) { log.Warnf("strategy trigger evaluation skipped: %v", err) },
 	}
 	consumer := strategyeventconsumer.New(strategyeventconsumer.Config{Client: client, ConsumerName: cfg.EventBus.ConsumerName}, processor)
 	if err := consumer.Start(ctx); err != nil {
@@ -244,6 +270,7 @@ func defaultPoolRegistry() *input.UDFRegistry {
 		quote, _ := in.Params["quote_asset"].(string)
 		quote = strings.ToUpper(strings.TrimSpace(quote))
 		ids := make([]string, 0, len(in.Subjects))
+		seen := make(map[string]struct{}, len(in.Subjects))
 		for _, subject := range in.Subjects {
 			if !subject.Active || (subject.Market != "" && !strings.EqualFold(subject.Market, "spot")) {
 				continue
@@ -251,15 +278,34 @@ func defaultPoolRegistry() *input.UDFRegistry {
 			if quote != "" && !strings.EqualFold(subject.QuoteAsset, quote) {
 				continue
 			}
-			ids = append(ids, subject.InstrumentID)
+			id := strings.TrimSpace(subject.InstrumentID)
+			key := strings.ToUpper(id)
+			if id == "" {
+				continue
+			}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			ids = append(ids, id)
 		}
 		return ids, nil
 	})
 	_ = registry.RegisterValidated("all_symbols", validateNoPoolParams, func(_ context.Context, in input.PoolUDFInput) ([]string, error) {
 		ids := make([]string, 0, len(in.Subjects))
+		seen := make(map[string]struct{}, len(in.Subjects))
 		for _, subject := range in.Subjects {
 			if subject.Active {
-				ids = append(ids, subject.InstrumentID)
+				id := strings.TrimSpace(subject.InstrumentID)
+				key := strings.ToUpper(id)
+				if id == "" {
+					continue
+				}
+				if _, exists := seen[key]; exists {
+					continue
+				}
+				seen[key] = struct{}{}
+				ids = append(ids, id)
 			}
 		}
 		return ids, nil

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
@@ -79,6 +80,20 @@ func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, space
 	if err != nil {
 		return CompiledStrategy{}, err
 	}
+	if isSourceReadyEvent(dsl) && (len(binding.Factors) > 0 || len(binding.FactorViewIDs) > 0) {
+		return CompiledStrategy{}, fmt.Errorf("strategy trigger source.ready cannot be used with factor bindings; use factor.ready")
+	}
+	if dsl.Triggers.Schedule != nil && dsl.Triggers.Event == nil && (len(binding.Factors) > 0 || len(binding.FactorViewIDs) > 0) {
+		return CompiledStrategy{}, fmt.Errorf("scheduled strategies with factor bindings require a factor.ready event trigger")
+	}
+	if err := validateFactorAliases(binding.Factors); err != nil {
+		return CompiledStrategy{}, err
+	}
+	if resultViews := uniqueResultViews(binding.Factors); len(resultViews) > 1 {
+		return CompiledStrategy{}, fmt.Errorf("strategy factor bindings must share one result_view_id, got %s", strings.Join(resultViews, ", "))
+	} else if len(resultViews) == 1 && strings.TrimSpace(binding.SourceViewID) != "" && resultViews[0] == strings.TrimSpace(binding.SourceViewID) {
+		return CompiledStrategy{}, fmt.Errorf("strategy source_view_id must differ from factor result_view_id %q", resultViews[0])
+	}
 	fields := cloneTypes(c.InputFields)
 	if fields == nil {
 		fields = map[string]reflect.Type{}
@@ -99,6 +114,9 @@ func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, space
 	clone.InputFields = fields
 	compiled, err := clone.Compile(ctx, dsl, spaceID)
 	if err != nil {
+		return CompiledStrategy{}, err
+	}
+	if err := rejectUndeclaredFields(compiled, fields); err != nil {
 		return CompiledStrategy{}, err
 	}
 	if binding.SourceViewID != "" {
@@ -146,6 +164,103 @@ func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, space
 		compiled.SourceView.Frequency = compiled.Data.Bar
 	}
 	return compiled, nil
+}
+
+func isSourceReadyEvent(dsl config.DSL) bool {
+	if dsl.Triggers.Event == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(dsl.Triggers.Event.Name)) {
+	case "viewsourceperiodready", "source.ready", "ready", "event.storage.view.source_period.ready":
+		return true
+	default:
+		return false
+	}
+}
+
+// validateFactorAliases protects the expression namespace from ambiguous
+// bindings. Aliases belonging to one factor may intentionally be synonyms;
+// aliases belonging to different factors must remain unique and must not
+// shadow the built-in OHLCV/instrument/score fields.
+func validateFactorAliases(factors []CompiledFactor) error {
+	owners := make(map[string]int)
+	sourceFields := make(map[string]struct{})
+	for _, factor := range factors {
+		for _, raw := range factor.InputColumns {
+			if name := strings.TrimSpace(raw); name != "" {
+				sourceFields[name] = struct{}{}
+			}
+		}
+	}
+	reserved := make(map[string]struct{}, len(defaultExpressionFields)+len(defaultExpressionIdentifiers)+1)
+	for name := range defaultExpressionFields {
+		reserved[name] = struct{}{}
+	}
+	for name := range defaultExpressionIdentifiers {
+		reserved[name] = struct{}{}
+	}
+	reserved["score"] = struct{}{}
+	for index, factor := range factors {
+		for _, raw := range []string{factor.FactorID, factor.Output, factor.ColumnName} {
+			name := strings.TrimSpace(raw)
+			if name == "" {
+				continue
+			}
+			if _, exists := reserved[name]; exists {
+				return fmt.Errorf("strategy factor alias %q conflicts with a built-in field", name)
+			}
+			if _, exists := sourceFields[name]; exists {
+				return fmt.Errorf("strategy factor alias %q conflicts with a source input column", name)
+			}
+			if owner, exists := owners[name]; exists && owner != index {
+				return fmt.Errorf("strategy factor alias %q is used by multiple factors", name)
+			}
+			owners[name] = index
+		}
+	}
+	return nil
+}
+
+func uniqueResultViews(factors []CompiledFactor) []string {
+	seen := make(map[string]struct{})
+	for _, factor := range factors {
+		if value := strings.TrimSpace(factor.ResultViewID); value != "" {
+			seen[value] = struct{}{}
+		}
+	}
+	values := make([]string, 0, len(seen))
+	for value := range seen {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return values
+}
+
+func rejectUndeclaredFields(compiled CompiledStrategy, declared map[string]reflect.Type) error {
+	allowed := make(map[string]struct{}, len(declared)+len(defaultExpressionFields)+len(defaultExpressionIdentifiers))
+	for name := range declared {
+		allowed[name] = struct{}{}
+	}
+	for name := range defaultExpressionFields {
+		allowed[name] = struct{}{}
+	}
+	for name := range defaultExpressionIdentifiers {
+		allowed[name] = struct{}{}
+	}
+	for _, rule := range compiled.Rules {
+		expressions := []*CompiledExpression{rule.FilterBefore, rule.Score, rule.SelectWhere, rule.SignalEntry, rule.SignalExit, rule.FilterAfter}
+		for _, expression := range expressions {
+			if expression == nil {
+				continue
+			}
+			for _, field := range expression.Dependencies.Fields {
+				if _, ok := allowed[field]; !ok {
+					return fmt.Errorf("strategy expression field %q is not declared by instance bindings", field)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func containsString(values []string, wanted string) bool {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -69,6 +70,18 @@ const (
 	PublishPending   PublishStatus = "pending"
 	PublishSent      PublishStatus = "sent"
 	PublishCancelled PublishStatus = "cancelled"
+)
+
+// ErrResultCASConflict means another worker committed a newer predecessor
+// while this evaluation was in flight. The caller should redeliver and
+// recompute from the newly observed state.
+var ErrResultCASConflict = errors.New("strategy result compare-and-swap conflict")
+
+var (
+	ErrResultInvalid           = errors.New("strategy result is invalid")
+	ErrResultInstanceNotActive = errors.New("strategy instance is not enabled for this session")
+	ErrResultExpired           = errors.New("strategy result is expired")
+	ErrResultOlder             = errors.New("strategy result is older than the latest committed bar")
 )
 
 // StrategyResult is one successful calculation and its immutable publication
@@ -356,7 +369,7 @@ type CommitResultRequest struct {
 // ID is intentionally an in-memory compare-and-swap value and is never stored.
 func (s *Store) CommitResult(ctx context.Context, request CommitResultRequest) (StrategyResult, bool, error) {
 	if err := validateResult(request.Result); err != nil {
-		return StrategyResult{}, false, err
+		return StrategyResult{}, false, fmt.Errorf("%w: %v", ErrResultInvalid, err)
 	}
 	if request.Now.IsZero() {
 		request.Now = time.Now().UTC()
@@ -369,10 +382,10 @@ func (s *Store) CommitResult(ctx context.Context, request CommitResultRequest) (
 			return err
 		}
 		if instance.Enabled != 1 || !instance.SessionID.Valid || instance.SessionID.String != request.Result.SessionID {
-			return errors.New("strategy instance is not enabled for this session")
+			return ErrResultInstanceNotActive
 		}
 		if !request.Result.ValidUntil.After(request.Now.UTC()) {
-			return errors.New("strategy result is expired")
+			return ErrResultExpired
 		}
 		latest, latestErr := latestResult(tx, request.Result.InstanceID, request.Result.SessionID)
 		if latestErr != nil && !errors.Is(latestErr, gorm.ErrRecordNotFound) {
@@ -380,13 +393,13 @@ func (s *Store) CommitResult(ctx context.Context, request CommitResultRequest) (
 		}
 		if latestErr == nil {
 			if request.Result.BarEndTime.Before(latest.BarEndTime) {
-				return errors.New("strategy result is older than the latest committed bar")
+				return ErrResultOlder
 			}
 			if request.ExpectedResultID != nil && latest.ResultID != *request.ExpectedResultID {
-				return errors.New("strategy result compare-and-swap conflict")
+				return ErrResultCASConflict
 			}
 		} else if request.ExpectedResultID != nil && *request.ExpectedResultID != "" {
-			return errors.New("strategy result compare-and-swap conflict")
+			return ErrResultCASConflict
 		}
 		var existing resultRecord
 		err := tx.Table("t_strategy_results").Where(
@@ -535,6 +548,27 @@ func validateResult(result StrategyResult) error {
 	}
 	if len(result.SnapshotJSON) == 0 || len(result.TargetsJSON) == 0 || len(result.RuleStatesJSON) == 0 {
 		return errors.New("strategy result snapshots are required")
+	}
+	for field, raw := range map[string]json.RawMessage{
+		"snapshot_json":    result.SnapshotJSON,
+		"targets_json":     result.TargetsJSON,
+		"rule_states_json": result.RuleStatesJSON,
+	} {
+		if !json.Valid(raw) {
+			return fmt.Errorf("strategy result %s must contain valid JSON", field)
+		}
+	}
+	var snapshot map[string]json.RawMessage
+	if err := json.Unmarshal(result.SnapshotJSON, &snapshot); err != nil || snapshot == nil {
+		return errors.New("strategy result snapshot_json must be a JSON object")
+	}
+	var targets []json.RawMessage
+	if err := json.Unmarshal(result.TargetsJSON, &targets); err != nil || targets == nil {
+		return errors.New("strategy result targets_json must be a JSON array")
+	}
+	var ruleStates map[string]json.RawMessage
+	if err := json.Unmarshal(result.RuleStatesJSON, &ruleStates); err != nil || ruleStates == nil {
+		return errors.New("strategy result rule_states_json must be a JSON object")
 	}
 	if result.PublishStatus == PublishNone && len(result.EventData) != 0 {
 		return errors.New("observation result cannot have event data")

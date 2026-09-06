@@ -1,10 +1,14 @@
 package bootstrap
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/config"
+	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 )
 
 func TestLoadAppliesSafeDefaults(t *testing.T) {
@@ -22,6 +26,21 @@ func TestLoadAppliesSafeDefaults(t *testing.T) {
 	if cfg.LogicalAccountTarget != "ip://127.0.0.1:11200" ||
 		cfg.LogicalAccountTimeout != defaultLogicalAccountTimeout {
 		t.Fatalf("logical account config=%+v", cfg)
+	}
+}
+
+func TestDefaultPoolRegistryDeduplicatesMultiVenueSymbols(t *testing.T) {
+	registry := defaultPoolRegistry()
+	ids, err := registry.Resolve(context.Background(), config.Pool{UDF: &config.PoolUDF{Name: "all_symbols"}}, []input.Subject{
+		{InstrumentID: "BTCUSDT", Exchange: "binance", Active: true},
+		{InstrumentID: "btcusdt", Exchange: "okx", Active: true},
+		{InstrumentID: "ETHUSDT", Exchange: "binance", Active: true},
+	}, time.UnixMilli(1))
+	if err != nil {
+		t.Fatalf("resolve built-in pool: %v", err)
+	}
+	if got, want := len(ids), 2; got != want || ids[0] != "BTCUSDT" || ids[1] != "ETHUSDT" {
+		t.Fatalf("ids=%v, want [%s %s]", ids, "BTCUSDT", "ETHUSDT")
 	}
 }
 

@@ -133,4 +133,20 @@ func TestCommitResultRejectsInvalidObservationEventAndStatusTransition(t *testin
 	}
 }
 
+func TestCommitResultRejectsNullResultJSON(t *testing.T) {
+	repo := openCurrentStore(t)
+	now := time.UnixMilli(1000).UTC()
+	session := "session-1"
+	if err := repo.CreateInstance(context.Background(), StrategyInstance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetInstanceEnabled(context.Background(), "i1", true, &session, now); err != nil {
+		t.Fatal(err)
+	}
+	result := StrategyResult{ResultID: "null-result", InstanceID: "i1", SessionID: session, BarEndTime: time.UnixMilli(2000), ValidUntil: time.UnixMilli(10000), SnapshotJSON: json.RawMessage(`null`), TargetsJSON: json.RawMessage(`null`), RuleStatesJSON: json.RawMessage(`null`), PublishStatus: PublishNone, CreatedAt: time.UnixMilli(2001)}
+	if _, _, err := repo.CommitResult(context.Background(), CommitResultRequest{Result: result, Now: now}); err == nil {
+		t.Fatal("null result JSON should be rejected")
+	}
+}
+
 func ptr(value string) *string { return &value }

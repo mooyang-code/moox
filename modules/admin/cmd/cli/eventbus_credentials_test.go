@@ -159,7 +159,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, yaml, "moox.event.trade.target.weight_requested.v1.>")
 	strategyACL := eventBusACLBlock(yaml, "strategy-eventbus")
 	assert.NotContains(t, strategyACL, "$JS.API.>")
-	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.factor_period.ready.v1.>"]}`)
+	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.factor_period.ready.v1.>", "moox.event.storage.view.source_period.ready.v1.>"]}`)
 	tradeACL := eventBusACLBlock(yaml, "trade-eventbus")
 	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1")
 	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.INFO.*.trade_target_weight_v1")
@@ -253,7 +253,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.API")
 		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.ACK")
 		if role == "strategy-eventbus" {
-			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.factor_period.ready.v1.>"]}`)
+			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.factor_period.ready.v1.>", "moox.event.storage.view.source_period.ready.v1.>"]}`)
 		} else {
 			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>"]}`)
 		}

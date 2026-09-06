@@ -53,10 +53,10 @@ func (c Compiler) VerifyDependencies(ctx context.Context, compiled CompiledStrat
 			return fmt.Errorf("verify factor %q: %w", factor.FactorID, err)
 		}
 		if !isActive(descriptor.Status) || !containsOutput(descriptor.Outputs, factor.Output) ||
-			(factor.SourceHash != "" && descriptor.SourceHash != factor.SourceHash) ||
+			descriptor.SourceHash != factor.SourceHash ||
 			!sameStringSet(descriptor.InputColumns, factor.InputColumns) ||
-			(strings.TrimSpace(factor.ParamsJSON) != "" && strings.TrimSpace(descriptor.ParamsJSON) != strings.TrimSpace(factor.ParamsJSON)) ||
-			(factor.LookbackPeriods > 0 && descriptor.LookbackPeriods != factor.LookbackPeriods) {
+			strings.TrimSpace(descriptor.ParamsJSON) != strings.TrimSpace(factor.ParamsJSON) ||
+			descriptor.LookbackPeriods != factor.LookbackPeriods {
 			return dependencyMismatch("factor %q status or output changed", factor.FactorID)
 		}
 		bindings, err := c.Factors.ListBindings(ctx, factor.FactorID)
@@ -70,7 +70,7 @@ func (c Compiler) VerifyDependencies(ctx context.Context, compiled CompiledStrat
 			}
 			bindingFrequency, bindingFrequencyErr := normalizeOptionalFrequency(binding.Frequency)
 			factorFrequency, factorFrequencyErr := normalizeOptionalFrequency(factor.Frequency)
-			if !isActive(binding.Status) || binding.FactorID != factor.FactorID || bindingFrequencyErr != nil || factorFrequencyErr != nil || bindingFrequency != factorFrequency ||
+			if !isActive(binding.Status) || binding.FactorID != factor.FactorID || binding.SpaceID != compiled.SpaceID || binding.SourceViewID != compiled.SourceView.ID || bindingFrequencyErr != nil || factorFrequencyErr != nil || bindingFrequency != factorFrequency ||
 				binding.ResultDatasetID != factor.ResultDatasetID || binding.ResultViewID != factor.ResultViewID ||
 				binding.SubjectMode != factor.SubjectMode || binding.SubjectsJSON != factor.SubjectsJSON {
 				return dependencyMismatch("binding %q changed", factor.BindingID)

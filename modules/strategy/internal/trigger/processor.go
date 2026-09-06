@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
@@ -26,11 +27,12 @@ import (
 )
 
 type PeriodReady struct {
-	MessageID string
-	EventName string
-	SpaceID   string
-	ViewID    string
-	Frequency string
+	MessageID    string
+	EventName    string
+	SpaceID      string
+	ViewID       string
+	SourceViewID string
+	Frequency    string
 	// PeriodTime is retained as the legacy timestamp alias. New producers set
 	// StoragePeriodTime to the Storage row key (bar start) and BarEndTime to the
 	// public strategy boundary used for results and target validity.
@@ -93,8 +95,30 @@ type IndexedPeriodInputLoader interface {
 	LoadPeriodAt(context.Context, domain.StrategyRunner, compiler.CompiledStrategy, time.Time, time.Time, map[string]string) (input.EvaluationInput, error)
 }
 
+// PooledPeriodInputLoader resolves pool UDFs after it has pinned the same
+// View snapshot that supplies the evaluation rows. The callback returns each
+// rule's resolved pool and the union used to narrow the Storage read.
+type PooledPeriodInputLoader interface {
+	LoadPeriodAtWithPool(context.Context, domain.StrategyRunner, compiler.CompiledStrategy, time.Time, time.Time, map[string]string, func([]input.Subject, time.Time) (map[string][]string, []string, error)) (input.EvaluationInput, error)
+}
+
+// SubjectDirectoryLoader exposes the frozen subject catalog before row
+// loading. Production storage implements it so a pool UDF can narrow the
+// read set before completeness checks run; older embedders may omit it and
+// retain the compatibility path.
+type SubjectDirectoryLoader interface {
+	ListSubjects(context.Context, string, string) ([]input.Subject, error)
+}
+
 type Processor struct {
-	Inbox interface {
+	// evaluationMu serializes modern evaluations in this process. A schedule
+	// callback and a View-ready callback can arrive concurrently; keeping the
+	// whole evaluation path single-file preserves RuleState ordering and lets
+	// the existing Result CAS remain a last-line guard rather than the normal
+	// coordination mechanism. This is intentionally process-local for the
+	// personal deployment model; cross-process delivery is fenced by session_id.
+	evaluationMu sync.Mutex
+	Inbox        interface {
 		IsProcessed(context.Context, string) (bool, error)
 		MarkProcessed(context.Context, string, string, time.Time) error
 	}
@@ -114,12 +138,26 @@ type Processor struct {
 	// bootstrap supplies the compiler-backed verifier so a running Runner is
 	// not allowed to consume a Factor that changed after it was compiled.
 	VerifyDependencies func(context.Context, compiler.CompiledStrategy) error
-	// OwnerGeneration snapshots the Trade logical-account lifecycle token for
-	// each executable runner and verifies that the account is still owned by
-	// that runner. It is embedded in the target event so Trade can reject
-	// delayed messages without comparing clocks across processes.
+	// Diagnostic receives non-fatal per-event evaluation errors. The trigger
+	// path still decides whether to retry or acknowledge the event; callers can
+	// use this hook to make skipped evaluations observable without coupling the
+	// processor to a logging implementation.
+	Diagnostic func(error)
+	// OwnerGeneration validates and snapshots the legacy Trade logical-account
+	// lifecycle token. It is used only by the legacy Runner adapter; modern
+	// target events use instance_id + session_id instead.
 	OwnerGeneration func(context.Context, string, string, string) (int64, error)
-	Now             func() time.Time
+	// SessionGeneration is the session-aware variant used by modern instances.
+	// It must validate instance_id and session_id together; the legacy
+	// OwnerGeneration callback only understands owner_runner_id.
+	SessionGeneration func(context.Context, string, string, string, string) (int64, error)
+	Now               func() time.Time
+}
+
+func (p *Processor) reportDiagnostic(err error) {
+	if p != nil && err != nil && p.Diagnostic != nil {
+		p.Diagnostic(err)
+	}
 }
 
 func (p *Processor) Handle(ctx context.Context, event PeriodReady) error {
@@ -138,9 +176,7 @@ func (p *Processor) Handle(ctx context.Context, event PeriodReady) error {
 	// New instances are evaluated from the persisted DSL on every process
 	// start. Keep the legacy path below only as a source adapter for old
 	// embedders; it is never used for a valid current DSL definition.
-	if handled, modernErr := p.handleInstances(ctx, inbox, event); handled {
-		return modernErr
-	}
+	_, modernErr := p.handleInstances(ctx, inbox, event)
 	// Degraded and legacy readiness markers are terminal for the compatibility
 	// path. Modern instances have already checked only their referenced
 	// bindings above, so an unrelated degraded binding cannot suppress them.
@@ -148,6 +184,9 @@ func (p *Processor) Handle(ctx context.Context, event PeriodReady) error {
 	// Factor result Views do carry binding states, so defer the decision until
 	// each compiled runner can check only the bindings it references.
 	if event.Status != "" && event.Status != "complete" && len(event.BindingStatuses) == 0 {
+		if modernErr != nil {
+			return modernErr
+		}
 		return inbox.MarkProcessed(ctx, event.MessageID, event.EventName, p.now())
 	}
 	runners, err := p.Store.ListRunners(ctx, store.RunnerFilter{SpaceID: event.SpaceID, Status: domain.RunnerStatusEnabled})
@@ -186,10 +225,6 @@ func (p *Processor) Handle(ctx context.Context, event PeriodReady) error {
 		// evaluate them with a partial generation map.
 		if compiledResultViewCount(compiled) > 1 {
 			_ = p.Store.RecordRunnerFailure(ctx, runner.ID, fmt.Errorf("strategy %s references multiple factor result Views", strategy.ID), p.now())
-			continue
-		}
-		if mismatchErr := bindingEventSourceMismatch(compiled, event); mismatchErr != nil {
-			_ = p.Store.RecordRunnerFailure(ctx, runner.ID, mismatchErr, p.now())
 			continue
 		}
 		if runner.LastResultID != nil {
@@ -383,6 +418,12 @@ func (p *Processor) Handle(ctx context.Context, event PeriodReady) error {
 			}
 		}
 	}
+	if modernErr != nil {
+		if retryErr != nil {
+			return errors.Join(modernErr, retryErr)
+		}
+		return modernErr
+	}
 	if retryErr != nil {
 		return retryErr
 	}
@@ -393,6 +434,11 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 	IsProcessed(context.Context, string) (bool, error)
 	MarkProcessed(context.Context, string, string, time.Time) error
 }, event PeriodReady) (bool, error) {
+	// robfig/cron starts each job in its own goroutine, while ready events are
+	// consumed independently. Serialize the modern path so stateful signal
+	// rules cannot evaluate two periods from the same stale predecessor.
+	p.evaluationMu.Lock()
+	defer p.evaluationMu.Unlock()
 	instances, err := p.Store.ListInstances(ctx, event.SpaceID, ptrBool(true))
 	if err != nil || len(instances) == 0 {
 		return false, err
@@ -417,7 +463,6 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 			// processor below, so do not ACK it as a modern evaluation.
 			continue
 		}
-		modern = true
 		// Ready events carry the Storage BarStart but not the strategy calendar.
 		// Normalize it with the instance DSL so cn_stock events use the same
 		// exchange-close boundary as scheduled triggers.
@@ -443,6 +488,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 		if p.CompileWithBindings != nil {
 			compiled, err = p.CompileWithBindings(ctx, dsl, instance.SpaceID, instance.InputBindingsJSON)
 			if err != nil {
+				p.reportDiagnostic(fmt.Errorf("instance %s compile: %w", instance.InstanceID, err))
 				// A persisted binding must never fall through to a zero-value
 				// artifact. Keep the delivery retryable so an operator can repair
 				// the binding and rerun the same period deterministically.
@@ -455,6 +501,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 			compiled, err = p.Compile(ctx, dsl, instance.SpaceID)
 			if err != nil {
 				if retryErr == nil && retryableModernError(err) {
+					p.reportDiagnostic(fmt.Errorf("instance %s compile: %w", instance.InstanceID, err))
 					retryErr = err
 				}
 				continue
@@ -463,9 +510,9 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 			compiled = compiler.CompiledStrategy{Name: dsl.Name, SpaceID: instance.SpaceID, Data: dsl.Data, Triggers: dsl.Triggers}
 		}
 		augmentCompiledBindings(&compiled, instance.InputBindingsJSON)
-		configureFixedPool(&compiled, dsl)
 		if p.VerifyDependencies != nil {
 			if verifyErr := p.VerifyDependencies(ctx, compiled); verifyErr != nil {
+				p.reportDiagnostic(fmt.Errorf("instance %s dependency check: %w", instance.InstanceID, verifyErr))
 				if retryErr == nil && !errors.Is(verifyErr, compiler.ErrDependencyMismatch) {
 					retryErr = verifyErr
 				}
@@ -475,14 +522,150 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 		if event.EventName != "strategy.schedule" && (len(compiled.Factors) > 0 || len(compiled.Dependencies.FactorResultViewIDs) > 0) && !dependsOnEvent(compiled, event) {
 			continue
 		}
-		runner := instanceRunner(instance, compiled)
-		period := instanceBarEnd.UTC()
-		if latest, latestErr := p.Store.LatestResult(ctx, instance.InstanceID, valueOrEmpty(instance.SessionID)); latestErr == nil && !period.After(latest.BarEndTime) {
+		if hasCompiledFactorBindings(compiled) && indexProvenanceIsPartial(event) {
+			// A malformed in-process event must not allow Storage to pin one
+			// View generation while silently using the other View's current
+			// generation. Public event validation rejects this shape as well.
+			if retryErr == nil {
+				retryErr = fmt.Errorf("%w: factor ready index provenance is incomplete", input.ErrNotReady)
+			}
 			continue
 		}
+		if event.SourceViewID != "" && compiled.SourceView.ID != "" && event.SourceViewID != compiled.SourceView.ID {
+			// A result-ready event from another source View must not be used to
+			// satisfy this instance's input binding or index provenance.
+			continue
+		}
+		// Only claim the delivery once this instance is routed to the same
+		// source/factor View. In a Space that still contains legacy runners, an
+		// unrelated modern definition must not short-circuit the compatibility
+		// path merely because it uses the same event name.
+		modern = true
+		if event.TargetInstanceID != "" && hasCompiledFactorBindings(compiled) {
+			// A timer wake-up has no Factor source/result index provenance. Do not
+			// combine a newly revised source row with an older factor row; the
+			// factor.ready event will evaluate this instance once its generation is
+			// published. Schedule-only factor strategies are rejected at enable time.
+			if retryErr == nil {
+				retryErr = fmt.Errorf("%w: factor-backed strategy requires factor.ready provenance", input.ErrNotReady)
+			}
+			continue
+		}
+		runner := instanceRunner(instance, compiled)
+		period := instanceBarEnd.UTC()
+		var previous map[string]domain.RuleState
+		var latestResult store.StrategyResult
+		hasLatestResult := false
+		if latest, latestErr := p.Store.LatestResult(ctx, instance.InstanceID, valueOrEmpty(instance.SessionID)); latestErr == nil {
+			latestResult = latest
+			hasLatestResult = true
+			if len(strings.TrimSpace(string(latest.RuleStatesJSON))) > 0 {
+				if stateErr := json.Unmarshal(latest.RuleStatesJSON, &previous); stateErr != nil {
+					stateErr = fmt.Errorf("instance %s rule state is corrupt: %w", instance.InstanceID, stateErr)
+					p.reportDiagnostic(stateErr)
+					if retryErr == nil {
+						retryErr = stateErr
+					}
+					continue
+				}
+			}
+		}
+		if hasLatestResult && !period.After(latestResult.BarEndTime) {
+			continue
+		}
+		// Keep the predecessor observed at the start of evaluation. Re-reading
+		// LatestResult after loading/evaluating would allow a concurrent worker
+		// to advance the state and make this stale computation overwrite it.
+		expectedResultID := ""
+		if hasLatestResult {
+			expectedResultID = latestResult.ResultID
+		}
+		withoutInput := holdingPeriodNeedsNoInput(dsl, compiled, period, previous)
+		inputDSL := inputDSLForPeriod(dsl, compiled, period, previous)
+		loadCompiled := compiled
+		// Rebuild the compatibility pool from only rules that need current
+		// input. Holding rules on non-establishment bars are carried from
+		// RuleState and must not make unrelated source/factor rows a readiness
+		// prerequisite for ordinary rules.
+		loadCompiled.InstrumentPool.Include = nil
+		loadCompiled.InstrumentPool.IncludeSet = false
+		loadCompiled.InstrumentPool.HistoricalInclude = nil
+		trimCompiledInput(&loadCompiled, inputDSL)
+		if mismatchErr := bindingEventSourceMismatch(loadCompiled, event); mismatchErr != nil {
+			p.reportDiagnostic(fmt.Errorf("instance %s binding source: %w", instance.InstanceID, mismatchErr))
+			continue
+		}
+		configureFixedPool(&loadCompiled, inputDSL)
+		_, pooledLoader := p.Loader.(PooledPeriodInputLoader)
+		if hasPoolUDF(inputDSL) && p.PoolRegistry != nil && !pooledLoader {
+			directory, ok := p.Loader.(SubjectDirectoryLoader)
+			if !ok {
+				if retryErr == nil {
+					retryErr = errors.New("strategy pool UDF requires a subject directory loader")
+				}
+				continue
+			}
+			subjects, listErr := directory.ListSubjects(ctx, instance.SpaceID, compiled.SourceView.ID)
+			if listErr != nil {
+				if retryErr == nil {
+					retryErr = fmt.Errorf("list subjects for pool UDF: %w", listErr)
+				}
+				continue
+			}
+			resolved, poolIDs, resolveErr := resolveRulePools(ctx, inputDSL, p.PoolRegistry, subjects, period)
+			if resolveErr != nil {
+				p.reportDiagnostic(fmt.Errorf("instance %s resolve pools: %w", instance.InstanceID, resolveErr))
+				if retryErr == nil && !errors.Is(resolveErr, input.ErrPoolUDFNotRegistered) && !errors.Is(resolveErr, input.ErrPoolUDFInvalidParams) {
+					retryErr = resolveErr
+				}
+				continue
+			}
+			for name, rule := range resolved.Rules {
+				dsl.Rules[name] = rule
+				inputDSL.Rules[name] = rule
+			}
+			loadCompiled.InstrumentPool.Include = poolIDs
+			loadCompiled.InstrumentPool.IncludeSet = true
+		}
+		includeRuleStateIDs(&loadCompiled, previous)
 		var evaluated input.EvaluationInput
 		expectedIndexesMap := expectedIndexes(compiled, event)
-		if indexed, ok := p.Loader.(IndexedPeriodInputLoader); ok {
+		if withoutInput {
+			duration, durationErr := report.ParseDatasetFrequency(compiled.Data.Bar)
+			if durationErr != nil || duration <= 0 {
+				if retryErr == nil {
+					retryErr = fmt.Errorf("holding period frequency %q: %w", compiled.Data.Bar, durationErr)
+				}
+				continue
+			}
+			barIndex := int64(-1)
+			barEndAt := func(offset int) time.Time { return period.UTC().Add(time.Duration(offset) * duration) }
+			if boundaries, boundaryErr := input.FromBarEnd(compiled.Data.Calendar, compiled.SourceView.Frequency, period); boundaryErr == nil {
+				barIndex = boundaries.BarIndex
+				barEndAt = func(offset int) time.Time {
+					value, advanceErr := input.AdvanceBarEnd(compiled.Data.Calendar, compiled.SourceView.Frequency, period, offset)
+					if advanceErr != nil {
+						return period.UTC().Add(time.Duration(offset) * duration)
+					}
+					return value
+				}
+			}
+			evaluated = input.EvaluationInput{SpaceID: instance.SpaceID, StrategyID: instance.StrategyID, PeriodEnd: period.UTC().Format(time.RFC3339Nano), SourceViewID: compiled.SourceView.ID, DataFrequency: compiled.SourceView.Frequency, BarIndex: barIndex, BarDuration: duration, BarEndAt: barEndAt}
+		} else if pooled, ok := p.Loader.(PooledPeriodInputLoader); ok && hasPoolUDF(inputDSL) && p.PoolRegistry != nil {
+			evaluated, err = pooled.LoadPeriodAtWithPool(ctx, runner, loadCompiled, period, instanceStorage.UTC(), expectedIndexesMap, func(subjects []input.Subject, at time.Time) (map[string][]string, []string, error) {
+				resolved, poolIDs, resolveErr := resolveRulePools(ctx, inputDSL, p.PoolRegistry, subjects, at)
+				if resolveErr != nil {
+					return nil, nil, resolveErr
+				}
+				rulePools := make(map[string][]string, len(resolved.Rules))
+				for name, rule := range resolved.Rules {
+					inputDSL.Rules[name] = rule
+					dsl.Rules[name] = rule
+					rulePools[name] = append([]string(nil), rule.Pool.Fixed...)
+				}
+				return rulePools, poolIDs, nil
+			})
+		} else if indexed, ok := p.Loader.(IndexedPeriodInputLoader); ok {
 			if event.TargetInstanceID == "" && len(expectedIndexesMap) == 0 {
 				if retryErr == nil {
 					retryErr = fmt.Errorf("%w: View-ready event has no index provenance", input.ErrLegacyProvenance)
@@ -492,15 +675,16 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 			if event.TargetInstanceID != "" {
 				expectedIndexesMap = nil // scheduled jobs intentionally use the active snapshot
 			}
-			evaluated, err = indexed.LoadPeriodAt(ctx, runner, compiled, period, instanceStorage.UTC(), expectedIndexesMap)
+			evaluated, err = indexed.LoadPeriodAt(ctx, runner, loadCompiled, period, instanceStorage.UTC(), expectedIndexesMap)
 		} else if periodLoader, ok := p.Loader.(PeriodInputLoader); ok {
-			evaluated, err = periodLoader.LoadPeriod(ctx, runner, compiled, period, instanceStorage.UTC())
+			evaluated, err = periodLoader.LoadPeriod(ctx, runner, loadCompiled, period, instanceStorage.UTC())
 		} else if indexed, ok := p.Loader.(IndexedInputLoader); ok {
-			evaluated, err = indexed.LoadAt(ctx, runner, compiled, instanceStorage.UTC(), expectedIndexesMap)
+			evaluated, err = indexed.LoadAt(ctx, runner, loadCompiled, instanceStorage.UTC(), expectedIndexesMap)
 		} else {
-			evaluated, err = p.Loader.Load(ctx, runner, compiled, instanceStorage.UTC())
+			evaluated, err = p.Loader.Load(ctx, runner, loadCompiled, instanceStorage.UTC())
 		}
 		if err != nil {
+			p.reportDiagnostic(fmt.Errorf("instance %s load period %s: %w", instance.InstanceID, period.Format(time.RFC3339), err))
 			if errors.Is(err, input.ErrStrictIncomplete) {
 				// A scheduled wake-up owns this bar and must keep retrying while
 				// Storage/Factor finishes publishing it. Ready events carrying a
@@ -516,7 +700,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 			continue
 		}
 		poolResolutionFailed := false
-		for _, rule := range dsl.Rules {
+		for _, rule := range inputDSL.Rules {
 			if rule.Pool.UDF != nil && p.PoolRegistry == nil {
 				poolResolutionFailed = true
 			}
@@ -524,17 +708,18 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 		if poolResolutionFailed {
 			continue
 		}
-		if p.PoolRegistry != nil {
+		if p.PoolRegistry != nil && hasPoolUDF(inputDSL) {
 			subjects := make([]input.Subject, 0, len(evaluated.Items))
 			for _, item := range evaluated.Items {
 				subjects = append(subjects, input.Subject{SubjectID: item.SubjectID, InstrumentID: item.InstrumentID, Exchange: item.Exchange, Market: item.Market, QuoteAsset: item.QuoteAsset, SeriesTag: item.SeriesTag, Active: true})
 			}
-			for name, rule := range dsl.Rules {
+			for name, rule := range inputDSL.Rules {
 				if rule.Pool.UDF == nil {
 					continue
 				}
 				ids, resolveErr := p.PoolRegistry.Resolve(ctx, rule.Pool, subjects, period)
 				if resolveErr != nil {
+					p.reportDiagnostic(fmt.Errorf("instance %s resolve pool %s: %w", instance.InstanceID, name, resolveErr))
 					if retryErr == nil {
 						if !errors.Is(resolveErr, input.ErrPoolUDFNotRegistered) && !errors.Is(resolveErr, input.ErrPoolUDFInvalidParams) {
 							retryErr = resolveErr
@@ -550,12 +735,16 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 		if poolResolutionFailed {
 			continue
 		}
-		var previous map[string]domain.RuleState
-		if latest, latestErr := p.Store.LatestResult(ctx, instance.InstanceID, valueOrEmpty(instance.SessionID)); latestErr == nil {
-			_ = json.Unmarshal(latest.RuleStatesJSON, &previous)
+		if !requiredBindingsReady(loadCompiled, event, evaluated.Items) {
+			// A required binding that is degraded for this period must not be
+			// replaced by a stale/partial row that happens to remain readable.
+			// The check is against the trimmed plan so a carried holding rule does
+			// not make an unrelated Factor a prerequisite for this bar.
+			continue
 		}
 		evaluation, evalErr := selection.Evaluate(dsl, evaluated, previous)
 		if evalErr != nil {
+			p.reportDiagnostic(fmt.Errorf("instance %s evaluate: %w", instance.InstanceID, evalErr))
 			if retryErr == nil {
 				if retryableModernError(evalErr) || (event.TargetInstanceID != "" && errors.Is(evalErr, input.ErrStrictIncomplete)) {
 					retryErr = evalErr
@@ -571,20 +760,55 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 		if len(states) == 0 {
 			states = json.RawMessage(`{}`)
 		}
+		if instance.LogicalAccountID != nil && (p.SessionGeneration != nil || p.OwnerGeneration != nil) {
+			var generationErr error
+			if p.SessionGeneration != nil {
+				// Modern targets are fenced by instance_id + session_id. The
+				// callback name is retained for compatibility, but its numeric
+				// generation is not part of the modern event contract.
+				_, generationErr = p.SessionGeneration(ctx, event.SpaceID, *instance.LogicalAccountID, instance.InstanceID, valueOrEmpty(instance.SessionID))
+			} else {
+				_, generationErr = p.OwnerGeneration(ctx, event.SpaceID, *instance.LogicalAccountID, instance.InstanceID)
+			}
+			if generationErr != nil {
+				p.reportDiagnostic(fmt.Errorf("instance %s owner generation: %w", instance.InstanceID, generationErr))
+				if retryErr == nil {
+					retryErr = generationErr
+				}
+				continue
+			}
+		}
 		validUntil, validUntilErr := input.AdvanceBarEnd(dsl.Data.Calendar, dsl.Data.Bar, period, 2)
 		if validUntilErr != nil {
+			p.reportDiagnostic(fmt.Errorf("instance %s validity: %w", instance.InstanceID, validUntilErr))
 			if retryErr == nil {
 				retryErr = validUntilErr
 			}
 			continue
 		}
+		validUntil = tightenValidUntil(validUntil, evaluation.RuleStates)
+		sourceIndexID, resultIndexID := event.SourceIndexID, event.ResultIndexID
+		sourceIndexRevision, resultIndexRevision := event.SourceIndexRevision, event.ResultIndexRevision
+		if evaluated.SourceIndexID != "" {
+			sourceIndexID = evaluated.SourceIndexID
+		}
+		if evaluated.ResultIndexID != "" {
+			resultIndexID = evaluated.ResultIndexID
+		}
+		if evaluated.SourceIndexRevision != 0 {
+			sourceIndexRevision = evaluated.SourceIndexRevision
+		}
+		if evaluated.ResultIndexRevision != 0 {
+			resultIndexRevision = evaluated.ResultIndexRevision
+		}
 		snapshot, snapshotErr := json.Marshal(map[string]any{
 			"strategy_id": instance.StrategyID, "dsl_yaml": definition.DSLYaml,
 			"inputs": json.RawMessage(instance.InputBindingsJSON), "period_end": period,
-			"source_index_id": event.SourceIndexID, "result_index_id": event.ResultIndexID,
-			"source_index_revision": event.SourceIndexRevision, "result_index_revision": event.ResultIndexRevision,
+			"source_index_id": sourceIndexID, "result_index_id": resultIndexID,
+			"source_index_revision": sourceIndexRevision, "result_index_revision": resultIndexRevision,
 		})
 		if snapshotErr != nil {
+			p.reportDiagnostic(fmt.Errorf("instance %s snapshot: %w", instance.InstanceID, snapshotErr))
 			if retryErr == nil {
 				if retryableModernError(snapshotErr) {
 					retryErr = snapshotErr
@@ -605,12 +829,9 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 				continue
 			}
 		}
-		var expected *string
-		if latest, latestErr := p.Store.LatestResult(ctx, instance.InstanceID, valueOrEmpty(instance.SessionID)); latestErr == nil {
-			expected = &latest.ResultID
-		}
-		if _, _, commitErr := p.Store.CommitResult(ctx, store.CommitResultRequest{Result: result, ExpectedResultID: expected, Now: p.now()}); commitErr != nil {
-			if retryErr == nil && retryableModernError(commitErr) {
+		if _, _, commitErr := p.Store.CommitResult(ctx, store.CommitResultRequest{Result: result, ExpectedResultID: &expectedResultID, Now: p.now()}); commitErr != nil {
+			p.reportDiagnostic(fmt.Errorf("instance %s commit result %s: %w", instance.InstanceID, result.ResultID, commitErr))
+			if retryErr == nil && retryableCommitResultError(commitErr) {
 				retryErr = commitErr
 			}
 		}
@@ -619,12 +840,221 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 		if retryErr != nil {
 			return true, retryErr
 		}
-		return true, inbox.MarkProcessed(ctx, event.MessageID, event.EventName, p.now())
+		// ACK is owned by Handle after the legacy compatibility path has also
+		// had a chance to process this delivery. A Space may temporarily contain
+		// both modern instances and legacy runners for the same event.
+		return true, nil
+	}
+	if retryErr != nil {
+		// A modern instance may have matched this delivery but failed before it
+		// could be routed (for example while reading its definition or compiling
+		// bindings). Do not let the legacy compatibility path ACK that event and
+		// make the modern evaluation unrecoverable.
+		return false, retryErr
 	}
 	return false, nil
 }
 
+func holdingPeriodNeedsNoInput(dsl config.DSL, compiled compiler.CompiledStrategy, period time.Time, previous map[string]domain.RuleState) bool {
+	if len(dsl.Rules) == 0 {
+		return false
+	}
+	for name, rule := range dsl.Rules {
+		if ruleNeedsCurrentInput(name, rule, dsl, compiled, period, previous) {
+			return false
+		}
+	}
+	return true
+}
+
+// inputDSLForPeriod describes only the rules that need current source/factor
+// rows for this bar. A holding rule on a non-offset bar is carried from its
+// persisted batches and must not contribute its pool or UDF to the load plan.
+func inputDSLForPeriod(dsl config.DSL, compiled compiler.CompiledStrategy, period time.Time, previous map[string]domain.RuleState) config.DSL {
+	result := dsl
+	result.Rules = make(map[string]config.Rule, len(dsl.Rules))
+	for name, rule := range dsl.Rules {
+		if ruleNeedsCurrentInput(name, rule, dsl, compiled, period, previous) {
+			result.Rules[name] = rule
+		}
+	}
+	return result
+}
+
+// trimCompiledInput keeps the Storage read plan limited to rules that need a
+// fresh row for this period. Holding rules carried from RuleState must not
+// pull in their independent Factor Views or bars[-1] history and make an
+// otherwise evaluable period wait for unrelated data.
+func trimCompiledInput(compiled *compiler.CompiledStrategy, dsl config.DSL) {
+	if compiled == nil {
+		return
+	}
+	wanted := make(map[string]struct{}, len(dsl.Rules))
+	for name := range dsl.Rules {
+		wanted[name] = struct{}{}
+	}
+	rules := make([]compiler.CompiledRule, 0, len(compiled.Rules))
+	fields := make(map[string]struct{})
+	for _, rule := range compiled.Rules {
+		if _, ok := wanted[rule.Name]; !ok {
+			continue
+		}
+		rules = append(rules, rule)
+		for _, expression := range []*compiler.CompiledExpression{rule.FilterBefore, rule.Score, rule.SelectWhere, rule.SignalEntry, rule.SignalExit, rule.FilterAfter} {
+			if expression == nil {
+				continue
+			}
+			for _, field := range expression.Dependencies.Fields {
+				fields[strings.TrimSpace(field)] = struct{}{}
+			}
+			for _, bars := range expression.Dependencies.Bars {
+				for _, field := range bars {
+					fields[strings.TrimSpace(field)] = struct{}{}
+				}
+			}
+		}
+	}
+	compiled.Rules = rules
+	if len(compiled.Factors) == 0 {
+		compiled.Dependencies.FactorResultViewIDs = nil
+		return
+	}
+	factors := make([]compiler.CompiledFactor, 0, len(compiled.Factors))
+	views := make([]string, 0, len(compiled.Dependencies.FactorResultViewIDs))
+	seenViews := make(map[string]struct{})
+	for _, factor := range compiled.Factors {
+		used := false
+		for _, alias := range []string{factor.FactorID, factor.Output, factor.ColumnName} {
+			alias = strings.TrimSpace(alias)
+			if alias == "" {
+				continue
+			}
+			if _, ok := fields[alias]; ok {
+				used = true
+				break
+			}
+			for field := range fields {
+				if strings.EqualFold(field, alias) {
+					used = true
+					break
+				}
+			}
+			if used {
+				break
+			}
+		}
+		if !used {
+			continue
+		}
+		factors = append(factors, factor)
+		if id := strings.TrimSpace(factor.ResultViewID); id != "" {
+			if _, ok := seenViews[id]; !ok {
+				seenViews[id] = struct{}{}
+				views = append(views, id)
+			}
+		}
+	}
+	compiled.Factors = factors
+	sort.Strings(views)
+	compiled.Dependencies.FactorResultViewIDs = views
+}
+
+func ruleNeedsCurrentInput(name string, rule config.Rule, dsl config.DSL, compiled compiler.CompiledStrategy, period time.Time, previous map[string]domain.RuleState) bool {
+	if rule.Holding == nil {
+		return true
+	}
+	boundaries, err := input.FromBarEnd(dsl.Data.Calendar, compiled.SourceView.Frequency, period)
+	if err != nil || rule.Holding.Bars <= 0 {
+		return true
+	}
+	hit := boundaries.BarIndex
+	if containsIntValue(rule.Holding.Offsets, int(hit%int64(rule.Holding.Bars))) {
+		return true
+	}
+	// A malformed state should still take the normal loader path so the
+	// evaluator can report it instead of silently treating it as empty.
+	if state, ok := previous[name]; ok && len(state.Signals) > 0 {
+		return true
+	}
+	return false
+}
+
+func containsIntValue(values []int, target int) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func ptrBool(v bool) *bool { return &v }
+
+func hasPoolUDF(dsl config.DSL) bool {
+	for _, rule := range dsl.Rules {
+		if rule.Pool.UDF != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCompiledFactorBindings(compiled compiler.CompiledStrategy) bool {
+	return len(compiled.Factors) > 0 || len(compiled.Dependencies.FactorResultViewIDs) > 0
+}
+
+func resolveRulePools(ctx context.Context, dsl config.DSL, registry *input.UDFRegistry, subjects []input.Subject, at time.Time) (config.DSL, []string, error) {
+	if registry == nil {
+		return config.DSL{}, nil, input.ErrPoolUDFRegistryUnavailable
+	}
+	resolved := dsl
+	resolved.Rules = make(map[string]config.Rule, len(dsl.Rules))
+	ids := make([]string, 0)
+	for name, rule := range dsl.Rules {
+		current := rule
+		poolIDs, err := registry.Resolve(ctx, rule.Pool, subjects, at)
+		if err != nil {
+			return config.DSL{}, nil, fmt.Errorf("rule %s: %w", name, err)
+		}
+		current.Pool = config.Pool{Fixed: poolIDs}
+		resolved.Rules[name] = current
+		ids = append(ids, poolIDs...)
+	}
+	return resolved, uniquePoolIDs(ids), nil
+}
+
+func tightenValidUntil(defaultUntil time.Time, states map[string]domain.RuleState) time.Time {
+	until := defaultUntil
+	for _, state := range states {
+		for _, batch := range state.Batches {
+			if batch.ExpiresAt <= 0 {
+				continue
+			}
+			expires := time.UnixMilli(batch.ExpiresAt).UTC()
+			if expires.Before(until) {
+				until = expires
+			}
+		}
+	}
+	return until
+}
+
+func includeRuleStateIDs(compiled *compiler.CompiledStrategy, states map[string]domain.RuleState) {
+	if compiled == nil || len(states) == 0 {
+		return
+	}
+	ids := append([]string(nil), compiled.InstrumentPool.Include...)
+	historical := append([]string(nil), compiled.InstrumentPool.HistoricalInclude...)
+	for _, state := range states {
+		for _, signal := range state.Signals {
+			ids = append(ids, signal.InstrumentID)
+			historical = append(historical, signal.InstrumentID)
+		}
+	}
+	compiled.InstrumentPool.Include = uniquePoolIDs(ids)
+	compiled.InstrumentPool.HistoricalInclude = uniquePoolIDs(historical)
+	compiled.InstrumentPool.IncludeSet = true
+}
 
 func triggerMatchesDSL(dsl config.DSL, event PeriodReady) bool {
 	// Timer wakeups carry an explicit source marker; they must not be
@@ -645,6 +1075,8 @@ func canonicalEventName(name string) string {
 	switch strings.ToLower(name) {
 	case "viewfactorperiodready", "factor.ready", "event.storage.view.factor_period.ready":
 		return "event.storage.view.factor_period.ready"
+	case "viewsourceperiodready", "source.ready", "ready", "event.storage.view.source_period.ready":
+		return "event.storage.view.source_period.ready"
 	default:
 		return name
 	}
@@ -820,6 +1252,12 @@ func expectedIndexes(compiled compiler.CompiledStrategy, event PeriodReady) map[
 	return expected
 }
 
+func indexProvenanceIsPartial(event PeriodReady) bool {
+	hasSource := event.SourceIndexID != "" || event.SourceIndexRevision != 0
+	hasResult := event.ResultIndexID != "" || event.ResultIndexRevision != 0
+	return hasSource != hasResult
+}
+
 func instanceRunner(instance store.StrategyInstance, compiled compiler.CompiledStrategy) domain.StrategyRunner {
 	status := domain.RunnerStatusDisabled
 	if instance.Enabled {
@@ -860,7 +1298,23 @@ func retryableModernError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return errors.Is(err, input.ErrNotReady) || errors.Is(err, context.DeadlineExceeded)
+	return errors.Is(err, input.ErrNotReady) || errors.Is(err, input.ErrStrictIncomplete) || errors.Is(err, store.ErrResultCASConflict) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func retryableCommitResultError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// These errors describe a terminal lifecycle decision for this delivery;
+	// retrying it would only replay an inactive, expired, older, or malformed
+	// target.
+	if errors.Is(err, store.ErrResultInvalid) || errors.Is(err, store.ErrResultInstanceNotActive) || errors.Is(err, store.ErrResultExpired) || errors.Is(err, store.ErrResultOlder) {
+		return false
+	}
+	// SQLite busy/I/O and other unknown persistence errors must remain
+	// retryable. A successful calculation that was not durably committed must
+	// never be acknowledged as if it had produced a target.
+	return true
 }
 
 func marshalTargetEvent(instance store.StrategyInstance, result store.StrategyResult, targets []selection.TargetWeight) ([]byte, error) {
@@ -872,7 +1326,13 @@ func marshalTargetEvent(instance store.StrategyInstance, result store.StrategyRe
 	for _, target := range targets {
 		payloadTargets = append(payloadTargets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight})
 	}
-	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{TargetId: result.ResultID, InstanceId: result.InstanceID, LogicalAccountId: valueOrEmpty(instance.LogicalAccountID), SessionId: result.SessionID, StrategyId: instance.StrategyID, BarEndTime: timestamppb.New(result.BarEndTime), EffectiveAt: timestamppb.New(result.BarEndTime), ValidUntil: timestamppb.New(result.ValidUntil), Targets: payloadTargets}
+	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
+		TargetId: result.ResultID, InstanceId: result.InstanceID,
+		LogicalAccountId: valueOrEmpty(instance.LogicalAccountID), SessionId: result.SessionID,
+		StrategyId: instance.StrategyID,
+		BarEndTime: timestamppb.New(result.BarEndTime), EffectiveAt: timestamppb.New(result.BarEndTime),
+		ValidUntil: timestamppb.New(result.ValidUntil), Targets: payloadTargets,
+	}
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{EventID: result.ResultID, OccurredAt: result.CreatedAt, SpaceID: instance.SpaceID, SubjectID: valueOrEmpty(instance.LogicalAccountID)})
 }
 
@@ -931,11 +1391,17 @@ func terminalReadyForRunner(compiled compiler.CompiledStrategy, event PeriodRead
 		// subject as terminally irrelevant; the caller will retry with the loaded
 		// pool instead. An explicit include list can safely scope the event here.
 		if len(pools) > 0 {
-			if bindingStateIntersectsPool(compiled, state, pools...) {
+			if bindingStateAffectsPool(factor, state, pools...) {
 				return true
 			}
-		} else if len(compiled.InstrumentPool.Include) > 0 && bindingStateIntersectsPool(compiled, state) {
-			return true
+		} else if len(compiled.InstrumentPool.Include) > 0 {
+			items := make([]input.InstrumentInput, 0, len(compiled.InstrumentPool.Include))
+			for _, id := range compiled.InstrumentPool.Include {
+				items = append(items, input.InstrumentInput{PoolItem: input.PoolItem{InstrumentID: id}})
+			}
+			if bindingStateAffectsPool(factor, state, items) {
+				return true
+			}
 		}
 	}
 	return false
@@ -944,6 +1410,14 @@ func terminalReadyForRunner(compiled compiler.CompiledStrategy, event PeriodRead
 func requiredBindingsReady(compiled compiler.CompiledStrategy, event PeriodReady, pools ...[]input.InstrumentInput) bool {
 	if len(event.BindingStatuses) == 0 {
 		return event.Status == "" || event.Status == "complete"
+	}
+	scopedPools := pools
+	if len(scopedPools) == 0 && len(compiled.InstrumentPool.Include) > 0 {
+		items := make([]input.InstrumentInput, 0, len(compiled.InstrumentPool.Include))
+		for _, id := range compiled.InstrumentPool.Include {
+			items = append(items, input.InstrumentInput{PoolItem: input.PoolItem{InstrumentID: id}})
+		}
+		scopedPools = [][]input.InstrumentInput{items}
 	}
 	required := 0
 	for _, factor := range compiled.Factors {
@@ -970,7 +1444,7 @@ func requiredBindingsReady(compiled compiler.CompiledStrategy, event PeriodReady
 		if !hasState || (len(state.FailedSubjects) == 0 && len(state.SkippedSubjects) == 0) {
 			return false
 		}
-		if bindingStateIntersectsPool(compiled, state, pools...) {
+		if bindingStateAffectsPool(factor, state, scopedPools...) {
 			return false
 		}
 	}
@@ -986,6 +1460,49 @@ func requiredBindingsReady(compiled compiler.CompiledStrategy, event PeriodReady
 	return true
 }
 
+func bindingStateAffectsPool(factor compiler.CompiledFactor, state BindingPeriodState, pools ...[]input.InstrumentInput) bool {
+	if len(pools) == 0 {
+		return true
+	}
+	var scoped map[string]struct{}
+	if strings.EqualFold(strings.TrimSpace(factor.SubjectMode), "include") {
+		var values []string
+		if json.Unmarshal([]byte(factor.SubjectsJSON), &values) != nil {
+			return true
+		}
+		scoped = make(map[string]struct{}, len(values))
+		for _, value := range values {
+			scoped[strings.ToUpper(strings.TrimSpace(value))] = struct{}{}
+		}
+	}
+	for _, value := range append(append([]string(nil), state.FailedSubjects...), state.SkippedSubjects...) {
+		key := strings.ToUpper(strings.TrimSpace(value))
+		for _, item := range pools[0] {
+			subject := strings.ToUpper(strings.TrimSpace(item.SubjectID))
+			instrument := strings.ToUpper(strings.TrimSpace(item.InstrumentID))
+			if key != subject && key != instrument {
+				continue
+			}
+			if len(scoped) == 0 {
+				return true
+			}
+			if _, ok := scoped[key]; ok {
+				return true
+			}
+			if _, ok := scoped[subject]; ok {
+				return true
+			}
+			if _, ok := scoped[instrument]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// bindingStateIntersectsPool is retained for legacy callers/tests that do not
+// carry the binding scope. New readiness checks use bindingStateAffectsPool so
+// a subject-scoped binding's expected skipped subjects do not block a pool.
 func bindingStateIntersectsPool(compiled compiler.CompiledStrategy, state BindingPeriodState, pools ...[]input.InstrumentInput) bool {
 	// The event carries storage subject IDs, while a manifest may select by
 	// instrument, venue, market, quote asset, or history. The loaded pool is

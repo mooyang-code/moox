@@ -272,7 +272,7 @@ func (m *Store) validateResultIndexes() error {
 }
 
 func obsoleteSchemaError(table string) error {
-	return fmt.Errorf("Strategy 数据库表 %s 使用旧 schema；请删除旧数据库后重建", table)
+	return fmt.Errorf("Strategy 数据库表 %s 使用旧 schema；请先停止消费者并备份数据库，再人工选择归档旧库或重建当前 schema", table)
 }
 
 // Close releases the underlying SQL connection.

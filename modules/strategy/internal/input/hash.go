@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 )
 
 func (in EvaluationInput) Validate() error {
@@ -40,6 +41,7 @@ func Hash(in EvaluationInput) (string, error) {
 		SeriesTag    string            `json:"series_tag,omitempty"`
 		Values       map[string]string `json:"values"`
 		Previous     map[string]string `json:"previous,omitempty"`
+		Scoped       []string          `json:"scoped,omitempty"`
 	}
 	payload := struct {
 		SpaceID       string          `json:"space_id"`
@@ -59,7 +61,14 @@ func Hash(in EvaluationInput) (string, error) {
 		for field, value := range item.PreviousValues {
 			previous[field] = value.String()
 		}
-		payload.Items = append(payload.Items, canonicalItem{InstrumentID: item.InstrumentID, SubjectID: item.SubjectID, Exchange: item.Exchange, Market: item.Market, QuoteAsset: item.QuoteAsset, SeriesTag: item.SeriesTag, Values: values, Previous: previous})
+		scoped := make([]string, 0, len(item.ScopedFields))
+		for field, unavailable := range item.ScopedFields {
+			if unavailable {
+				scoped = append(scoped, field)
+			}
+		}
+		sort.Strings(scoped)
+		payload.Items = append(payload.Items, canonicalItem{InstrumentID: item.InstrumentID, SubjectID: item.SubjectID, Exchange: item.Exchange, Market: item.Market, QuoteAsset: item.QuoteAsset, SeriesTag: item.SeriesTag, Values: values, Previous: previous, Scoped: scoped})
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

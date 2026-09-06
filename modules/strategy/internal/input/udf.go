@@ -121,7 +121,10 @@ func normalizePoolIDs(ids []string, subjects []Subject) ([]string, error) {
 	known := map[string]string{}
 	for _, subject := range subjects {
 		id := strings.TrimSpace(subject.InstrumentID)
-		known[strings.ToUpper(id)] = id
+		key := strings.ToUpper(id)
+		if _, exists := known[key]; !exists {
+			known[key] = id
+		}
 	}
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(ids))

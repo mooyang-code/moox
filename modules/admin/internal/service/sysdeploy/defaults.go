@@ -17,7 +17,7 @@ const storageViewGatewayMethods = "[\"QueryTimeSeriesRows\",\"SearchRecordRows\"
 const storageMetadataGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"moox-cli\",\"storage-view\"]"
 const storagePrimaryGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\"]"
 const storageTimeSeriesGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\",\"strategy\",\"moox-skill\"]"
-const storageViewGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\"]"
+const storageViewGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"strategy\"]"
 
 func DefaultDeployments(nodeID string) []Deployment {
 	rows := []Deployment{

@@ -184,7 +184,7 @@ func TestReconcileLegacyOwnersWaitsForRunnerLock(t *testing.T) {
 	}
 }
 
-func TestSetRunnerStatusReclaimsOwnerWhenAlreadyEnabled(t *testing.T) {
+func TestSetRunnerStatusIsIdempotentWhenAlreadyEnabled(t *testing.T) {
 	repo := openLegacyOwnerStore(t)
 	compiled, err := json.Marshal(compiler.CompiledStrategy{
 		APIVersion: config.APIVersion,
@@ -215,6 +215,10 @@ func TestSetRunnerStatusReclaimsOwnerWhenAlreadyEnabled(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	before, err := repo.GetRunner(context.Background(), "runner-enabled")
+	if err != nil {
+		t.Fatal(err)
+	}
 	owner := &legacyOwnerStub{claimGeneration: 2}
 	catalog := &runnerVerifyCatalog{}
 	service := &Service{Repo: repo, LogicalAccounts: owner, Compiler: &compiler.Compiler{Factors: catalog, Storage: catalog}}
@@ -224,17 +228,51 @@ func TestSetRunnerStatusReclaimsOwnerWhenAlreadyEnabled(t *testing.T) {
 	if err != nil || response.GetRetInfo().GetCode() != 0 {
 		t.Fatalf("SetRunnerStatus() = %+v, %v", response, err)
 	}
-	owner.mu.Lock()
-	defer owner.mu.Unlock()
-	if len(owner.claimed) != 1 || owner.claimed[0] != (legacyRelease{spaceID: "space", logicalAccountID: "logical-a", runnerID: "runner-enabled"}) {
-		t.Fatalf("claimed owners = %+v", owner.claimed)
-	}
 	runner, err := repo.GetRunner(context.Background(), "runner-enabled")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(runner.CurrentTargetsJSON) != `[]` || runner.LastResultID != nil {
-		t.Fatalf("same-status claim did not reset stale lifecycle: %+v", runner)
+	if string(runner.CurrentTargetsJSON) != string(before.CurrentTargetsJSON) || (runner.LastResultID == nil) != (before.LastResultID == nil) {
+		t.Fatalf("same-status enable changed the existing lifecycle: %+v", runner)
+	}
+}
+
+func TestSetRunnerStatusRejectsModernStrategyInstance(t *testing.T) {
+	repo := openLegacyOwnerStore(t)
+	definition := store.StrategyDefinition{
+		StrategyID: "modern-strategy", StrategyName: "modern", DSLYaml: `name: modern
+triggers: {event: {name: source.ready}}
+data: {bar: 1m, calendar: crypto_24x7}
+rules: {r: {pool: [BTC], score: close, weight: 1}}
+`, CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1),
+	}
+	if err := repo.SaveStrategyDefinition(context.Background(), definition); err != nil {
+		t.Fatal(err)
+	}
+	session := "session-modern"
+	if err := repo.CreateInstance(context.Background(), store.StrategyInstance{
+		InstanceID: "modern-instance", StrategyID: definition.StrategyID, SpaceID: "space",
+		InputBindingsJSON: json.RawMessage(`{"source_view_id":"source"}`), Enabled: true, SessionID: &session,
+		CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Repo: repo}
+	ctx := trpc.BackgroundContext()
+	trpc.SetMetaData(ctx, "X-Space-Id", []byte("space"))
+	response, err := service.SetRunnerStatus(ctx, &strategypb.SetRunnerStatusReq{RunnerId: "modern-instance", Status: string(domain.RunnerStatusDisabled)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetRetInfo().GetCode() == 0 {
+		t.Fatal("legacy runner RPC unexpectedly mutated a modern instance")
+	}
+	instance, err := repo.GetInstance(context.Background(), "modern-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !instance.Enabled || instance.SessionID == nil || *instance.SessionID != session {
+		t.Fatalf("modern instance lifecycle changed: %+v", instance)
 	}
 }
 

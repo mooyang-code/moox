@@ -103,6 +103,58 @@ func TestSessionTransitionRollsBackWhenTargetDeleteFails(t *testing.T) {
 	}
 }
 
+func TestAuthorizedSessionReplacesStaleTargetAtSameOrEarlierBar(t *testing.T) {
+	for _, offset := range []time.Duration{0, -time.Second} {
+		t.Run(offset.String(), func(t *testing.T) {
+			s := openTestStore(t)
+			ctx := context.Background()
+			require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+				return tx.CreateLogicalAccount(LogicalAccountRecord{
+					SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
+					OwnerInstanceID: "instance-1", OwnerSessionID: "session-1",
+					ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+					AutomationState: "PAUSED", PauseReason: "setup",
+				})
+			}))
+			now := time.Now().UTC()
+			bar := now.Add(-time.Second).UnixMilli()
+			first := LogicalAccountTargetRecord{
+				SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-1",
+				InstanceID: "instance-1", SessionID: "session-1", StrategyID: "strategy-1",
+				BarEndTime: bar, EffectiveAt: bar, ValidUntil: now.Add(time.Hour).UnixMilli(),
+				Targets: []InstrumentTarget{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
+			}
+			_, accepted, err := s.AcceptLogicalAccountTarget(ctx, first)
+			require.NoError(t, err)
+			require.True(t, accepted)
+			// The store-level transition leaves the old target until its caller deletes it.
+			require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+				account, err := tx.GetLogicalAccount("space-1", "logical-1")
+				if err != nil {
+					return err
+				}
+				_, changed, err := tx.RebindLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", account.AuthFence, "instance-1", "session-2")
+				require.True(t, changed)
+				return err
+			}))
+			second := first
+			second.TargetID, second.SessionID = "target-2", "session-2"
+			second.BarEndTime += offset.Milliseconds()
+			second.EffectiveAt = second.BarEndTime
+			_, accepted, err = s.AcceptLogicalAccountTarget(ctx, second)
+			require.NoError(t, err)
+			require.True(t, accepted)
+			_, accepted, err = s.AcceptLogicalAccountTarget(ctx, first)
+			require.ErrorIs(t, err, ErrTargetAuthorization)
+			require.False(t, accepted)
+			current, err := s.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
+			require.NoError(t, err)
+			require.Equal(t, "target-2", current.TargetID)
+			require.Equal(t, "session-2", current.SessionID)
+		})
+	}
+}
+
 func TestSessionAuthorizationCASAndTargetPeriod(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

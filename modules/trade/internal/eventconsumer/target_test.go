@@ -149,6 +149,55 @@ func TestHandleLogicalAccountTargetRejectsDelayedEventFromPreviousOwnerLifecycle
 	require.Error(t, err)
 }
 
+func TestHandleModernTargetUsesSessionFenceWithoutLegacyGeneration(t *testing.T) {
+	db := openTargetStore(t)
+	seedLogicalTargetAccount(t, db, true, true)
+	ctx := context.Background()
+	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
+		account, err := tx.GetLogicalAccount("space-1", "logical-1")
+		if err != nil {
+			return err
+		}
+		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", "runner-1", "session-1", account.AuthFence); err != nil {
+			return err
+		}
+		// A prior legacy lifecycle remains in the audit column after session authorization.
+		if err := tx.SetLogicalAccountOwnerGeneration("space-1", "logical-1", ""); err != nil {
+			return err
+		}
+		account, err = tx.GetLogicalAccount("space-1", "logical-1")
+		if err != nil {
+			return err
+		}
+		_, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "runner-1", "session-1", account.AuthFence)
+		return err
+	}))
+	account, err := db.GetLogicalAccount(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Positive(t, account.OwnerGeneration)
+	now := time.Now().UTC()
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+	bar := timestamppb.New(now)
+	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested,
+		&tradeeventpb.LogicalAccountTargetWeightRequested{
+			TargetId: "modern-session-target", LogicalAccountId: "logical-1",
+			InstanceId: "runner-1", SessionId: "session-1", StrategyId: "strategy-1",
+			BarEndTime: bar, EffectiveAt: bar, ValidUntil: timestamppb.New(now.Add(time.Hour)),
+		}, events.PublishOptions{EventID: "modern-session-target", OccurredAt: now, SpaceID: "space-1", SubjectID: "logical-1"})
+	require.NoError(t, err)
+	raw, err := proto.Marshal(encoded.Message)
+	require.NoError(t, err)
+	delivery := &jetstream.Delivery{RawData: raw, Subject: encoded.Subject, RawMessageID: "modern-session-target", ContentType: events.ContentType}
+	result := HandleTarget(ctx, delivery, targetOptions(db, now))
+	require.NoError(t, result.Err)
+	require.Equal(t, jetstream.ACK, result.Decision)
+	receipt, err := db.GetTargetReceipt(ctx, "space-1", "modern-session-target")
+	require.NoError(t, err)
+	require.Equal(t, "session-1", receipt.SessionID)
+	require.Equal(t, jetstream.ACK, HandleTarget(ctx, delivery, targetOptions(db, now)).Decision)
+}
+
 func TestHandleLogicalAccountTargetAcceptsMatchingOwnerGeneration(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, true, true)

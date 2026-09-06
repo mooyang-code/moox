@@ -281,6 +281,32 @@ func TestLogicalAccountOwnerClientGenerationRequiresExpectedOwner(t *testing.T) 
 	}
 }
 
+func TestLogicalAccountOwnerClientSessionGenerationUsesModernIdentity(t *testing.T) {
+	owner := &logicalAccountOwnerClient{
+		client: &logicalAccountClientProxyStub{
+			getResponse: &tradepb.GetLogicalAccountRsp{
+				RetInfo: &tradepb.RetInfo{},
+				LogicalAccount: &tradepb.LogicalAccount{
+					LogicalAccountId: "logical-1",
+					SpaceId:          "space-1",
+					OwnerInstanceId:  "instance-1",
+					OwnerSessionId:   "session-1",
+					OwnerRunnerId:    "legacy-runner",
+					OwnerGeneration:  3,
+				},
+			},
+		},
+		timeout: time.Second,
+	}
+	generation, err := owner.SessionGeneration(context.Background(), "space-1", "logical-1", "instance-1", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generation != 3 {
+		t.Fatalf("generation = %d, want 3", generation)
+	}
+}
+
 func TestLogicalAccountOwnerClientEnforcesTimeout(t *testing.T) {
 	owner := &logicalAccountOwnerClient{
 		client:  &logicalAccountClientProxyStub{waitForContext: true},

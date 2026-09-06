@@ -1,10 +1,12 @@
 package selection
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
+	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 )
 
@@ -28,6 +30,26 @@ func TestExplicitEmptyPoolProducesNoTargets(t *testing.T) {
 	}
 }
 
+func TestExplicitEmptyPoolSkipsExpressionsWithoutRows(t *testing.T) {
+	top := 1
+	dsl := config.DSL{Rules: map[string]config.Rule{
+		"empty": {
+			Pool:         config.Pool{Fixed: []string{}},
+			FilterBefore: "turnover_20 > 100",
+			Score:        "return_20",
+			Select:       &config.Select{Where: "score > 0", Top: &top},
+			Weight:       "1",
+		},
+	}}
+	got, err := Evaluate(dsl, EvaluationInput{Rows: []Row{makeRow("BTC", "close", "1")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Targets) != 0 {
+		t.Fatalf("empty pool produced targets: %#v", got.Targets)
+	}
+}
+
 func TestInstrumentIDIsAvailableToExpressions(t *testing.T) {
 	definition := Definition{Rules: map[string]Rule{
 		"r": {Pool: []string{"BTC", "ETH"}, PoolSet: true, FilterBefore: `instrument_id == "BTC"`, WeightEach: "0.1"},
@@ -38,6 +60,80 @@ func TestInstrumentIDIsAvailableToExpressions(t *testing.T) {
 	}
 	if len(got.Targets) != 1 || got.Targets[0].InstrumentID != "BTC" {
 		t.Fatalf("instrument_id filter result = %#v", got.Targets)
+	}
+}
+
+func TestExpressionRewritesDoNotTouchStringLiterals(t *testing.T) {
+	definition := Definition{Rules: map[string]Rule{
+		"r": {Pool: []string{"bars[-1]"}, PoolSet: true, FilterBefore: `instrument_id == "bars[-1]"`, WeightEach: "0.1"},
+	}}
+	got, err := Evaluate(definition, EvaluationInput{Rows: []Row{{InstrumentID: "bars[-1]", Values: map[string]quant.Decimal{"close": quant.Must("1")}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Targets) != 1 || got.Targets[0].InstrumentID != "bars[-1]" {
+		t.Fatalf("string literal was rewritten: %#v", got.Targets)
+	}
+}
+
+func TestExpressionQuotePlaceholdersAreNotRecursivelyRewritten(t *testing.T) {
+	definition := Definition{Rules: map[string]Rule{
+		"r": {
+			Pool: []string{"__moox_quote_1__", "bars[-1]"}, PoolSet: true,
+			FilterBefore: `instrument_id == "__moox_quote_1__" || instrument_id == "bars[-1]"`, WeightEach: "0.1",
+		},
+	}}
+	got, err := Evaluate(definition, EvaluationInput{Rows: []Row{
+		{InstrumentID: "__moox_quote_1__", Values: map[string]quant.Decimal{"close": quant.Must("1")}},
+		{InstrumentID: "bars[-1]", Values: map[string]quant.Decimal{"close": quant.Must("1")}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Targets) != 2 {
+		t.Fatalf("placeholder literal was rewritten: %#v", got.Targets)
+	}
+}
+
+func TestExpressionQuotePlaceholderCannotCollideWithFieldName(t *testing.T) {
+	definition := Definition{Rules: map[string]Rule{
+		"r": {Pool: []string{"BTC"}, PoolSet: true, FilterBefore: `__moox_quote_0__ > 1 && instrument_id == "BTC"`, WeightEach: "0.1"},
+	}}
+	got, err := Evaluate(definition, EvaluationInput{Rows: []Row{{
+		InstrumentID: "BTC",
+		Values:       map[string]quant.Decimal{"__moox_quote_0__": quant.Must("2")},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Targets) != 1 {
+		t.Fatalf("field name collided with quote placeholder: %#v", got.Targets)
+	}
+}
+
+func TestExpressionGuardsDoNotTreatStringLiteralsAsIdentifiers(t *testing.T) {
+	definition := Definition{Rules: map[string]Rule{
+		"r": {Pool: []string{"BTC"}, PoolSet: true, FilterBefore: `instrument_id == "score"`, WeightEach: "0.1"},
+	}}
+	got, err := Evaluate(definition, EvaluationInput{Rows: []Row{makeRow("score", "close", "1"), makeRow("BTC", "close", "1")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Targets) != 0 {
+		t.Fatalf("string literal score was treated as score identifier: %#v", got.Targets)
+	}
+}
+
+func TestNormalizerDetectionDoesNotTreatStringLiteralsAsCalls(t *testing.T) {
+	definition := Definition{Rules: map[string]Rule{
+		"r": {Pool: []string{"BTC"}, PoolSet: true, Score: `instrument_id == "zscore(foo)" ? 1 : 0`, WeightEach: "0.1"},
+	}}
+	got, err := Evaluate(definition, EvaluationInput{Rows: []Row{makeRow("BTC", "close", "1")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Targets) != 1 || got.Targets[0].TargetWeight != "0.1" {
+		t.Fatalf("score string literal was treated as normalizer call: %#v", got.Targets)
 	}
 }
 
@@ -107,6 +203,34 @@ func TestPreFilterDefinesNormalizationSample(t *testing.T) {
 	}
 }
 
+func TestPreFilterCanRemoveRowBeforeScoreCompletenessCheck(t *testing.T) {
+	definition := Definition{Rules: map[string]Rule{
+		"r": {Pool: []string{"A", "B"}, PoolSet: true, FilterBefore: "eligible > 0", Score: "x", Select: Select{Top: 1}, Weight: "1"},
+	}}
+	got, err := Evaluate(definition, input.EvaluationInput{Items: []input.InstrumentInput{
+		{PoolItem: input.PoolItem{InstrumentID: "A"}, ScopedFieldsReady: true, Values: map[string]quant.Decimal{"eligible": quant.Must("0")}},
+		{PoolItem: input.PoolItem{InstrumentID: "B"}, ScopedFieldsReady: true, Values: map[string]quant.Decimal{"eligible": quant.Must("1"), "x": quant.Must("2")}},
+	}, PeriodEnd: "2026-01-01T00:01:00Z", DataFrequency: "1m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Targets) != 1 || got.Targets[0].InstrumentID != "B" {
+		t.Fatalf("targets = %#v", got.Targets)
+	}
+}
+
+func TestMissingScoreOnPassingRowIsStrictIncomplete(t *testing.T) {
+	definition := Definition{Rules: map[string]Rule{
+		"r": {Pool: []string{"A"}, PoolSet: true, FilterBefore: "eligible > 0", Score: "x", Select: Select{Top: 1}, Weight: "1"},
+	}}
+	_, err := Evaluate(definition, input.EvaluationInput{Items: []input.InstrumentInput{
+		{PoolItem: input.PoolItem{InstrumentID: "A"}, ScopedFieldsReady: true, Values: map[string]quant.Decimal{"eligible": quant.Must("1")}},
+	}, PeriodEnd: "2026-01-01T00:01:00Z", DataFrequency: "1m"})
+	if !errors.Is(err, input.ErrStrictIncomplete) {
+		t.Fatalf("expected strict incomplete, got %v", err)
+	}
+}
+
 func TestSelectTailAndWhere(t *testing.T) {
 	definition := Definition{Rules: map[string]Rule{
 		"r": {Score: "x", Select: Select{Where: "score >= 0.5", Tail: 1}, Weight: "1"},
@@ -163,6 +287,19 @@ func TestZeroVarianceZScore(t *testing.T) {
 	evaluation, err = Evaluate(one, EvaluationInput{Rows: []Row{makeRow("A", "x", "2")}})
 	if err != nil || evaluation.Debug.Scores["r"]["A"] != "0.5" {
 		t.Fatalf("single pct_rank = %#v, err=%v", evaluation.Debug.Scores, err)
+	}
+}
+
+func TestMixedNormalizersOnSameFactorUseIndependentValues(t *testing.T) {
+	definition := Definition{Rules: map[string]Rule{"r": {Score: "pct_rank(x) + zscore(x)", WeightEach: "0.1"}}}
+	evaluation, err := Evaluate(definition, EvaluationInput{Rows: []Row{
+		makeRow("A", "x", "1"), makeRow("B", "x", "2"), makeRow("C", "x", "3"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := evaluation.Debug.Scores["r"]["B"]; got != "0.5" {
+		t.Fatalf("mixed normalizer score for B = %s, want 0.5", got)
 	}
 }
 
