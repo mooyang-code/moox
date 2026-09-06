@@ -21,15 +21,15 @@ func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validati
 	}
 	adapter, err := s.Adapters.Adapter(validation.Account.ID)
 	if err != nil {
-		return shared.Zero(), err
+		return shared.Zero(), accountExecutionError(validation.Account.ID, "adapter", err)
 	}
 	snapshot, err := adapter.GetAccountSnapshot(ctx)
 	if err != nil {
-		return shared.Zero(), err
+		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", err)
 	}
 	if !snapshot.Present.UsedMargin || !snapshot.Present.UnrealizedPnL || snapshot.UsedMargin.IsNegative() ||
 		snapshot.ExchangeUpdatedAt.IsZero() || snapshot.ExchangeUpdatedAt.After(s.now()) || s.now().Sub(snapshot.ExchangeUpdatedAt) > 10*time.Second {
-		return shared.Zero(), fmt.Errorf("%w: paper margin valuation unavailable", ErrServiceConfig)
+		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", fmt.Errorf("%w: paper margin valuation unavailable", ErrServiceConfig))
 	}
 	return snapshot.UnrealizedPnL.Sub(snapshot.UsedMargin), nil
 }

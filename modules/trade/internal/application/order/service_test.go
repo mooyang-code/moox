@@ -973,6 +973,67 @@ func TestServiceResolveUnknownRecoversSubmittingAfterCrash(t *testing.T) {
 	require.Equal(t, "SUBMIT_UNKNOWN", string(got.State))
 }
 
+func TestSubmitErrorPreservesPrivateExecutionState(t *testing.T) {
+	for _, state := range []string{"OPEN", "FILLED", "CANCELED", "REJECTED", "EXPIRED"} {
+		for _, kind := range []exchange.ErrorKind{exchange.ErrorTransportUnknown, exchange.ErrorRejected, ""} {
+			t.Run(state+"/"+string(kind), func(t *testing.T) {
+				service, db, adapter := newTestService(t)
+				pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
+				require.NoError(t, err)
+				if kind != "" {
+					adapter.placeErr = &exchange.Error{Kind: kind, Err: errors.New("late HTTP failure")}
+				}
+				adapter.placeResult.ExchangeOrderID = "private-order"
+				adapter.placeHook = func() {
+					record, err := db.GetOrder(context.Background(), "space-1", string(pending.ID))
+					require.NoError(t, err)
+					expected := record.Version
+					record.ExchangeOrderID = "private-order"
+					record.State = state
+					record.Version++
+					if state == "FILLED" {
+						record.FilledQuantity = record.Quantity
+						record.AveragePrice = "100"
+						record.RemainingReservedQuantity = "0"
+					}
+					require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error { return tx.UpdateOrder(record, expected) }))
+				}
+				got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+				require.NoError(t, err)
+				require.Equal(t, state, string(got.State))
+				require.Equal(t, "private-order", got.ExchangeOrderID)
+				require.Equal(t, 1, adapter.placeCalls)
+			})
+		}
+	}
+}
+
+func TestSubmitConflictingPrivateIdentityIsAccountScoped(t *testing.T) {
+	s, db, adapter := newTestService(t)
+	pending, err := s.Place(context.Background(), "space-1", testSpec(s.now()))
+	require.NoError(t, err)
+	adapter.placeHook = func() {
+		record, err := db.GetOrder(context.Background(), "space-1", string(pending.ID))
+		require.NoError(t, err)
+		expected := record.Version
+		record.ExchangeOrderID = "private-order"
+		record.State = "FILLED"
+		record.FilledQuantity = record.Quantity
+		record.AveragePrice = "100"
+		record.RemainingReservedQuantity = "0"
+		record.Version++
+		require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error { return tx.UpdateOrder(record, expected) }))
+	}
+	_, err = s.Submit(context.Background(), "space-1", string(pending.ID))
+	var accountErr *AccountExecutionError
+	require.ErrorAs(t, err, &accountErr)
+	require.ErrorIs(t, err, orderdomain.ErrInvalidTransition)
+	record, err := db.GetOrder(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, "FILLED", record.State)
+	require.Equal(t, "private-order", record.ExchangeOrderID)
+}
+
 func TestServiceCancelWaitsForAccountSyncBeforeTerminalRelease(t *testing.T) {
 	service, tradeStore, _ := newTestService(t)
 	syncer := &syncerStub{}

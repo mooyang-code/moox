@@ -406,8 +406,10 @@ func TestFlattenRetryStopsAtDeadline(t *testing.T) {
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	service := fixture.service()
 	service.FlattenMaxAttempts = 2
-	service.FlattenRetryInterval = time.Second
-	service.FlattenTimeout = 20 * time.Millisecond
+	// Leave room for real SQLite work under race instrumentation, while the
+	// retry interval remains much longer than the action deadline.
+	service.FlattenRetryInterval = 10 * time.Second
+	service.FlattenTimeout = time.Second
 
 	started := time.Now()
 	result, err := service.FlattenLogicalAccount(
@@ -419,7 +421,7 @@ func TestFlattenRetryStopsAtDeadline(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Less(t, time.Since(started), 500*time.Millisecond)
+	require.Less(t, time.Since(started), 5*time.Second)
 	require.Equal(t, "PARTIAL", result.Action.Status)
 	require.Equal(t, 3, fixture.syncer.callsFor("account-a"))
 }

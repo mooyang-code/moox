@@ -695,8 +695,14 @@ func TestModernResumeIgnoresExpiredTargetMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	executor := nonTradingExecutor(tradeStore, service.Now)
-	_, err = executor.Converge(context.Background(), "space-1", "logical-1")
-	require.ErrorIs(t, err, targetapp.ErrTargetExpired)
+	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, targetapp.StatusExpired, result.Status)
+	got, err = tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	want.Status = targetapp.StatusExpired
+	require.Equal(t, want.TargetID, got.TargetID)
+	require.Equal(t, want.Status, got.Status)
 }
 
 func TestPausedModernTargetDoesNotTrade(t *testing.T) {

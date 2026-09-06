@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/packages/healthz"
 )
@@ -26,6 +27,8 @@ type Readiness struct {
 	LogicalAccountWorker func() (bool, string)
 	TargetWorker         func() traderuntime.TargetWorkerSnapshot
 	OperatorWorker       func() traderuntime.OperatorWorkerSnapshot
+	PaperMatcherWorker   func() (bool, string)
+	PaperAccountErrors   func() map[string]paper.MatcherState
 	ConfigErrors         func() []string
 }
 
@@ -43,8 +46,11 @@ func (r Readiness) Evaluate(ctx context.Context) (bool, map[string]any) {
 	if r.ConfigErrors != nil {
 		configErrors = append(configErrors, r.ConfigErrors()...)
 	}
-	sessionsReady := sessionSnapshot.Reconciled &&
-		sessionSnapshot.Ready == sessionSnapshot.Enabled
+	sessionsReady := sessionSnapshot.Reconciled
+	paperMatcherReady, paperMatcherError := false, ""
+	if r.PaperMatcherWorker != nil {
+		paperMatcherReady, paperMatcherError = r.PaperMatcherWorker()
+	}
 	targetWorker := traderuntime.TargetWorkerSnapshot{}
 	if r.TargetWorker != nil {
 		targetWorker = r.TargetWorker()
@@ -61,7 +67,11 @@ func (r Readiness) Evaluate(ctx context.Context) (bool, map[string]any) {
 	}
 	ready := databaseReady && eventBusReady && sessionsReady &&
 		logicalAccountWorkerReady && targetWorker.Ready &&
-		operatorWorker.Ready && len(configErrors) == 0
+		operatorWorker.Ready && paperMatcherReady && len(configErrors) == 0
+	paperAccountErrors := map[string]paper.MatcherState{}
+	if r.PaperAccountErrors != nil {
+		paperAccountErrors = r.PaperAccountErrors()
+	}
 	return ready, map[string]any{
 		"database_ready":               databaseReady,
 		"eventbus_enabled":             r.EventBusEnabled,
@@ -73,9 +83,14 @@ func (r Readiness) Evaluate(ctx context.Context) (bool, map[string]any) {
 		"logical_account_worker_error": logicalAccountWorkerError,
 		"target_worker_ready":          targetWorker.Ready,
 		"target_worker_error":          targetWorker.LastError,
+		"target_errors":                targetWorker.TargetErrors,
 		"operator_worker_ready":        operatorWorker.Ready,
 		"operator_worker_error":        operatorWorker.LastError,
+		"paper_matcher_ready":          paperMatcherReady,
+		"paper_matcher_error":          paperMatcherError,
 		"configuration_errors":         configErrors,
+		"account_errors":               sessionSnapshot.AccountErrors,
+		"paper_account_errors":         paperAccountErrors,
 	}
 }
 

@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS t_logical_account_targets (
            (c_instance_id <> '' AND c_session_id <> '' AND
             c_strategy_id <> '' AND c_bar_end_time > 0 AND
             c_effective_at = c_bar_end_time AND c_valid_until > c_effective_at)),
-    CHECK (c_status IN ('PENDING', 'CONVERGING', 'CONVERGED', 'BLOCKED')),
+    CHECK (c_status IN ('PENDING', 'CONVERGING', 'CONVERGED', 'BLOCKED', 'EXPIRED')),
     CHECK (json_valid(c_targets_json)),
     CHECK (json_type(c_targets_json) = 'array'),
     CHECK (json_valid(c_blocked_targets_json)),

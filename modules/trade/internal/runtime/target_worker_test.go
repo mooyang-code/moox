@@ -106,28 +106,6 @@ func TestTargetWorkerReportsAcceptedAndRejectedOutcomes(t *testing.T) {
 	}, metrics.runs)
 }
 
-func TestTargetWorkerGateSerializesTargetAcceptance(t *testing.T) {
-	targets := &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{{
-		SpaceID: "space-1", LogicalAccountID: "logical-1",
-		Status: targetapp.StatusPending,
-	}}}
-	converger := &logicalTargetConvergerStub{wake: make(chan struct{}, 1)}
-	gate := &sync.Mutex{}
-	gate.Lock()
-	worker := &TargetWorker{Store: targets, Executor: converger, Gate: gate}
-	done := make(chan error, 1)
-	go func() { done <- worker.runOnce(context.Background()) }()
-
-	select {
-	case <-converger.wake:
-		t.Fatal("target execution crossed the acceptance gate")
-	case <-time.After(20 * time.Millisecond):
-	}
-	gate.Unlock()
-	require.NoError(t, <-done)
-	require.Equal(t, []string{"space-1/logical-1"}, converger.calls)
-}
-
 func TestTargetWorkerWakeIsCoalescedAndCancellationStopsRun(t *testing.T) {
 	targets := &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
@@ -150,6 +128,7 @@ func TestTargetWorkerWakeIsCoalescedAndCancellationStopsRun(t *testing.T) {
 	}
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
+	require.False(t, worker.Snapshot().Ready, "an exited worker must not remain ready")
 }
 
 func TestTargetWorkerReadinessRecoversAfterTransientStoreError(t *testing.T) {
@@ -176,4 +155,76 @@ func TestTargetWorkerReadinessRecoversAfterTransientStoreError(t *testing.T) {
 
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+type targetConvergeFunc func(context.Context, string, string) (targetapp.Result, error)
+
+func (f targetConvergeFunc) Converge(ctx context.Context, space, logical string) (targetapp.Result, error) {
+	return f(ctx, space, logical)
+}
+
+func TestTargetWorkerBoundsSlowCandidateAndContinues(t *testing.T) {
+	var calls []string
+	worker := &TargetWorker{
+		Store: &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{
+			{SpaceID: "space", LogicalAccountID: "slow"},
+			{SpaceID: "space", LogicalAccountID: "healthy"},
+		}},
+		ConvergeTimeout: 20 * time.Millisecond,
+		Executor: targetConvergeFunc(func(ctx context.Context, _, logical string) (targetapp.Result, error) {
+			calls = append(calls, logical)
+			if logical == "slow" {
+				if _, ok := ctx.Deadline(); !ok {
+					return targetapp.Result{}, errors.New("no candidate deadline")
+				}
+				<-ctx.Done()
+				return targetapp.Result{}, ctx.Err()
+			}
+			return targetapp.Result{Status: targetapp.StatusConverged}, nil
+		}),
+	}
+	require.ErrorIs(t, worker.runOnce(context.Background()), context.DeadlineExceeded)
+	require.Equal(t, []string{"slow", "healthy"}, calls)
+}
+
+func TestTargetWorkerParentCancellationStopsRemainingCandidates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	worker := &TargetWorker{
+		Store: &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{
+			{SpaceID: "space", LogicalAccountID: "first"},
+			{SpaceID: "space", LogicalAccountID: "second"},
+		}},
+		Executor: targetConvergeFunc(func(context.Context, string, string) (targetapp.Result, error) {
+			calls++
+			cancel()
+			return targetapp.Result{}, context.Canceled
+		}),
+	}
+	require.ErrorIs(t, worker.runOnce(ctx), context.Canceled)
+	require.Equal(t, 1, calls)
+}
+
+func TestTargetWorkerAccountErrorIsDiagnosticAndRecovers(t *testing.T) {
+	bad := true
+	worker := &TargetWorker{
+		Store: &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{
+			{SpaceID: "space", LogicalAccountID: "logical", TargetID: "target"},
+		}},
+		Executor: targetConvergeFunc(func(context.Context, string, string) (targetapp.Result, error) {
+			if bad {
+				return targetapp.Result{}, &targetapp.AccountError{TradingAccountID: "account", Err: errors.New("quote unavailable")}
+			}
+			return targetapp.Result{Status: targetapp.StatusConverged}, nil
+		}),
+	}
+	require.NoError(t, worker.runOnce(context.Background()))
+	snapshot := worker.Snapshot()
+	require.Equal(t, []TargetFailure{{SpaceID: "space", LogicalAccountID: "logical", TargetID: "target", TradingAccountID: "account", Error: "target account account: quote unavailable"}}, snapshot.TargetErrors)
+	snapshot.TargetErrors[0].Error = "changed by caller"
+	require.NotEqual(t, "changed by caller", worker.Snapshot().TargetErrors[0].Error)
+	bad = false
+	require.NoError(t, worker.runOnce(context.Background()))
+	require.Empty(t, worker.Snapshot().TargetErrors)
 }

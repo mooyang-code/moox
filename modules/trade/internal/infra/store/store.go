@@ -74,6 +74,10 @@ func Open(path string) (*Store, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("migrate paper balance history index: %w", err)
 	}
+	if err := migrateTargetExpiryStatus(db); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("migrate target expiry status: %w", err)
+	}
 	if err := validateExistingTradeSchema(db); err != nil {
 		_ = sqlDB.Close()
 		return nil, err
@@ -94,6 +98,16 @@ func (s *Store) LockTradingAccount(tradingAccountID string) func() {
 	mutex := value.(*sync.Mutex)
 	mutex.Lock()
 	return mutex.Unlock
+}
+
+// A background scan can defer a busy account without waiting behind its sync.
+func (s *Store) TryLockTradingAccount(tradingAccountID string) (func(), bool) {
+	value, _ := s.accountLocks.LoadOrStore(tradingAccountID, &sync.Mutex{})
+	mutex := value.(*sync.Mutex)
+	if !mutex.TryLock() {
+		return nil, false
+	}
+	return mutex.Unlock, true
 }
 
 func (s *Store) LockLogicalAccount(spaceID string, logicalAccountID string) func() {
@@ -125,6 +139,9 @@ func (s *Store) LockLogicalAccountMembership() func() {
 // add columns to an existing table, so the owner generation column needs an
 // explicit migration before schema validation runs.
 func migrateLegacyTradeSchema(db *gorm.DB) (bool, error) {
+	if err := validateLegacyStrategyTargetTable(db); err != nil {
+		return false, err
+	}
 	var exists int
 	if err := db.Raw(`
 		SELECT COUNT(*) FROM sqlite_master
@@ -255,13 +272,17 @@ func rebuildLegacyStrategyTargetTables(db *gorm.DB) error {
 }
 
 func rebuildLegacyStrategyTargetTable(db *gorm.DB) error {
+	if err := validateLegacyStrategyTargetTable(db); err != nil {
+		return err
+	}
 	if !tableExists(db, "t_logical_account_targets") {
 		return nil
 	}
 	if tableHasColumn(db, "t_logical_account_targets", "c_instance_id") {
 		return nil
 	}
-	if err := db.Exec(`
+	return db.Transaction(func(db *gorm.DB) error {
+		if err := db.Exec(`
 CREATE TABLE t_logical_account_targets__new (
     c_space_id TEXT NOT NULL,
     c_logical_account_id TEXT NOT NULL,
@@ -290,15 +311,15 @@ CREATE TABLE t_logical_account_targets__new (
            (c_instance_id <> '' AND c_session_id <> '' AND
             c_strategy_id <> '' AND c_bar_end_time > 0 AND
             c_effective_at = c_bar_end_time AND c_valid_until > c_effective_at)),
-    CHECK (c_status IN ('PENDING', 'CONVERGING', 'CONVERGED', 'BLOCKED')),
+    CHECK (c_status IN ('PENDING', 'CONVERGING', 'CONVERGED', 'BLOCKED', 'EXPIRED')),
     CHECK (json_valid(c_targets_json)),
     CHECK (json_type(c_targets_json) = 'array'),
     CHECK (json_valid(c_blocked_targets_json)),
     CHECK (json_type(c_blocked_targets_json) = 'array')
 )`).Error; err != nil {
-		return fmt.Errorf("create migrated logical account target table: %w", err)
-	}
-	if err := db.Exec(`
+			return fmt.Errorf("create migrated logical account target table: %w", err)
+		}
+		if err := db.Exec(`
 INSERT INTO t_logical_account_targets__new
  (c_space_id, c_logical_account_id, c_target_id, c_runner_id,
   c_command_sequence, c_targets_json, c_status, c_blocked_targets_json,
@@ -307,20 +328,21 @@ SELECT c_space_id, c_logical_account_id, c_target_id, c_runner_id,
        c_command_sequence, c_targets_json, c_status, c_blocked_targets_json,
        c_last_error, c_accepted_at, c_mtime
 FROM t_logical_account_targets`).Error; err != nil {
-		return fmt.Errorf("copy logical account target rows: %w", err)
-	}
-	if err := db.Exec(`DROP TABLE t_logical_account_targets`).Error; err != nil {
-		return fmt.Errorf("drop legacy logical account target table: %w", err)
-	}
-	if err := db.Exec(`ALTER TABLE t_logical_account_targets__new RENAME TO t_logical_account_targets`).Error; err != nil {
-		return fmt.Errorf("rename migrated logical account target table: %w", err)
-	}
-	if err := db.Exec(`
+			return fmt.Errorf("copy logical account target rows: %w", err)
+		}
+		if err := db.Exec(`DROP TABLE t_logical_account_targets`).Error; err != nil {
+			return fmt.Errorf("drop legacy logical account target table: %w", err)
+		}
+		if err := db.Exec(`ALTER TABLE t_logical_account_targets__new RENAME TO t_logical_account_targets`).Error; err != nil {
+			return fmt.Errorf("rename migrated logical account target table: %w", err)
+		}
+		if err := db.Exec(`
 CREATE INDEX IF NOT EXISTS idx_logical_account_targets_status
 ON t_logical_account_targets (c_space_id, c_status, c_mtime)`).Error; err != nil {
-		return fmt.Errorf("recreate logical account target index: %w", err)
-	}
-	return nil
+			return fmt.Errorf("recreate logical account target index: %w", err)
+		}
+		return nil
+	})
 }
 
 func rebuildLegacyTargetReceiptTable(db *gorm.DB) error {

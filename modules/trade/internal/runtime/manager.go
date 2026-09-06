@@ -26,10 +26,11 @@ type ManagedSession interface {
 type SessionFactory func(store.TradingAccountRecord) (ManagedSession, error)
 
 type SessionSnapshot struct {
-	Enabled      int
-	Ready        int
-	Reconciled   bool
-	ConfigErrors []string
+	Enabled       int
+	Ready         int
+	Reconciled    bool
+	ConfigErrors  []string
+	AccountErrors map[string]string
 }
 
 type Manager struct {
@@ -40,10 +41,12 @@ type Manager struct {
 	RetryMax         time.Duration
 	OnSessionRemoved func(string)
 
-	mu           sync.RWMutex
-	sessions     map[string]*managedEntry
-	configErrors []string
-	reconciled   bool
+	mu            sync.RWMutex
+	sessions      map[string]*managedEntry
+	configErrors  []string
+	accountErrors map[string]string
+	enabled       int
+	reconciled    bool
 }
 
 type managedEntry struct {
@@ -209,12 +212,18 @@ func (m *Manager) Snapshot() SessionSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	result := SessionSnapshot{
-		Enabled:      len(m.sessions),
+		Enabled:      m.enabled,
 		Reconciled:   m.reconciled,
 		ConfigErrors: append([]string(nil), m.configErrors...),
 	}
+	if len(m.accountErrors) > 0 {
+		result.AccountErrors = make(map[string]string, len(m.accountErrors))
+		for id, message := range m.accountErrors {
+			result.AccountErrors[id] = message
+		}
+	}
 	for _, entry := range m.sessions {
-		if entry.session.Ready() {
+		if !entry.stopping && entry.session.Ready() {
 			result.Ready++
 		}
 	}
@@ -225,10 +234,12 @@ func (m *Manager) Snapshot() SessionSnapshot {
 func (m *Manager) reconcile(ctx context.Context) error {
 	accounts, err := m.Accounts.ListEnabledTradingAccounts(ctx)
 	if err != nil {
+		m.setConfigErrors([]string{err.Error()})
 		return err
 	}
 	wanted := make(map[string]store.TradingAccountRecord, len(accounts))
 	configErrors := make([]string, 0)
+	accountErrors := make(map[string]string)
 	for _, account := range accounts {
 		if _, duplicate := wanted[account.TradingAccountID]; duplicate {
 			configErrors = append(
@@ -241,6 +252,7 @@ func (m *Manager) reconcile(ctx context.Context) error {
 	}
 
 	m.mu.Lock()
+	m.enabled = len(accounts)
 	if m.sessions == nil {
 		m.sessions = make(map[string]*managedEntry)
 	}
@@ -276,8 +288,11 @@ func (m *Manager) reconcile(ctx context.Context) error {
 			continue
 		}
 		session, createErr := m.NewSession(account)
+		if createErr == nil && session == nil {
+			createErr = ErrSessionConfig
+		}
 		if createErr != nil {
-			configErrors = append(configErrors, createErr.Error())
+			accountErrors[id] = createErr.Error()
 			continue
 		}
 		sessionCtx, cancel := context.WithCancel(ctx)
@@ -292,7 +307,8 @@ func (m *Manager) reconcile(ctx context.Context) error {
 		}()
 	}
 	m.configErrors = configErrors
-	m.reconciled = true
+	m.accountErrors = accountErrors
+	m.reconciled = len(configErrors) == 0
 	m.mu.Unlock()
 	return nil
 }
@@ -359,11 +375,13 @@ func (m *Manager) runSession(ctx context.Context, session ManagedSession) {
 func (m *Manager) setConfigErrors(values []string) {
 	m.mu.Lock()
 	m.configErrors = append([]string(nil), values...)
+	m.reconciled = false
 	m.mu.Unlock()
 }
 
 func (m *Manager) stopAll() {
 	m.mu.Lock()
+	m.reconciled = false
 	entries := make([]*managedEntry, 0, len(m.sessions))
 	for _, entry := range m.sessions {
 		entry.stopping = true

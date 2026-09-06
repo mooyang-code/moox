@@ -24,7 +24,7 @@
 | T03 人工未知提交恢复 | 已完成 | `34e92f78`；durable恢复、错误身份/终态校验、deadline和Paper报价闭环；新起codeCR及主Agent复验通过 |
 | T04 OKX 单笔成交费用 | 已完成 | `e2162efa`；signed cost、fillTime排序、不可变重放及真实Paper余额；新Agent/codeCR复核闭环 |
 | T05 Paper 余额投影 | 已完成 | 完整历史与增量投影、原子资金校验/关闭、受控旧库迁移；新 codeCR 无剩余 P0-P2，主 Agent 全量/race 复验通过 |
-| T06 故障隔离与过期 | 未开始 | 包括真实 Decider、账户健康和 targetGate |
+| T06 故障隔离与过期 | 核心已完成 | 真实 Decider、EXPIRED/CAS、故障/锁隔离及实际超时持久化闭环；两位新独立 codeCR 无剩余 P0-P2，主 Agent 全量普通与相关整包 race/vet 通过；按 ID 定向唤醒与 T08 一并完成 |
 | T07 消息结果可观测 | 已完成 | `1a941da7`；真实Runner、四包race、组件及生产构建通过；独立codeCR所有增量发现闭环 |
 | T08 动态账户路由 | 未开始 | 不重新估值、不搬同向仓位、保护已有目标 |
 | T09 普通 SubmitOrder | 未开始 | MANUAL/STRATEGY、持久化提交、完整接口/鉴权 |
@@ -71,6 +71,37 @@ T02 正式红测：`TestModernSessionTargetCanResume` 因 `target runner does no
 - 最终主 Agent `env MOOX_RUN_REAL_TRADE_DNS_E2E=0 go test -count=1 ./modules/trade/...` 全部通过；`order/paper/test` 整包 race 再次全部通过，索引/初始化/回填异常/roundtrip/重启小集 race 通过，相关 vet 和 diff-check 通过。Store/schema 普通全量含 100002 笔历史通过；Store/schema 全量 race 曾通过，最后索引/时间戳/资产合同增量均另有小集 race。
 - `review_t05_core` 最终独立复核上述所有发现，结论为本阶段无剩余 P0-P2；独立 projection/index/asset/roundtrip/Close 定向测试通过。主 Agent 核验源码和测试覆盖后确认 T05 完成。既有 schema inspector 不枚举 trigger，已删除新增注释中不准确的 trigger 保证；这不等于生产库已经验收。
 - 下一阶段为 T06，随后 T08-T11。T01 的现代完整事件链、全部协议/UI/最终新 Agent 审查、正式部署和真实 Paper 验收均未据此宣告完成。
+
+### T06 实施与阶段审查
+
+- 已将生产撮合决策提取为 `paper.Decider`，真实 Paper parity 和账户隔离测试复用该实现，不再用测试闭包复制简化业务规则。
+- 已拆除目标 consumer 与全量 worker 共用的 Gate。真实 SQLite、Executor 和事件受理测试覆盖 A 行情阻塞时 B 仍可持久化目标；每候选外部调用有截止时间，仍保留单轮串行执行。
+- 已增加目标 EXPIRED 状态及 target/session CAS，发起副作用前重新检查有效期。过期不自动撤销已发送订单，也不自动丢弃本地 PENDING 或释放其 reservation；后者等待新有效目标或显式人工操作处理，不把过期解释为交易所未收单。
+- 订单层外部错误带账户身份，数据库、事务和成交归并失败保持基础设施错误。真实 OrderService 测试覆盖参考价成功但第二次 Paper 报价失败、明确拒单、未知提交及限流；单账户失败不再错误地拉低全局 Worker 健康。
+- Paper Session 初始化改用现有 `SyncAccount`，使事实读取与事务应用共用账户锁；账户故障恢复带 generation，旧同步不能清除新撮合故障。真实并发测试覆盖初始化快照与成交/刷新交错。
+- 首轮两个独立 codeCR 指出的固定候选上限、快照覆盖、Store deadline 误分类、订单级诊断缺失、目标过期错误吞掉持久化失败以及旧 target 结构预检问题均已补实现与回归用例。
+- 增量审查另发现 keyset 分页丢失首次撮合优先级：大量健康 resting GTC 会延迟新单。已通过首次撮合/resting 两阶段分页修复，513 个慢 resting 订单加高排序新单的红测转绿，首次撮合转 resting 的订单同轮不重复执行。原 100001 候选故障隔离仍通过。
+- 新增真实 Submit 内部依赖跨期及 SQLite 写入 SUBMITTING 后跨期红测。最终发送前再次查授权并检查当前时间，确定未发送的订单通过版本 CAS 回到 PENDING、SubmittedAt 清零而预占保留；回退 SQL 失败不被 EXPIRED 吞掉，不会继续发送。新增领域 AbortSubmit 区别于未知提交恢复。
+- 真实 AccountSync 在 adapter 获取、订单/持仓/快照/成交及关联订单查询源头包装账户错误，再执行 readiness 落库；外部失败与 readiness SQL 失败同时发生仍保留共享错误分支。真实目标撤单到 AccountSync 再到 Worker 的集成测试验证两类健康结果。
+- 20ms 撮合候选超时测试曾在全包 race 负载下使健康订单的 SQLite 事务超时。测试预算调整为 2s，保留阻塞直到 ctx.Done 和健康 B 真成交的断言；不是删除失败场景或仅重跑掩盖。调整后主 Agent Paper 整包 race 通过。
+- 最新主 Agent Trade 全模块普通测试通过，相关 vet 和 diff-check 通过；最终两位独立 codeCR 与阶段 race 验收结果见本节末尾。
+- 最终独立复核新增的实际 timeout 问题已红测修复：已调用交易所的 Submit/Cancel/RecoverCancel 在调用预算耗尽后，使用独立 3s 上下文持久化 unknown，保留预占；裸 context cancellation/deadline 也按不确定结果处理。确定尚未 POST 的回退和 AccountSync readiness 清理同样使用有界上下文，真实 SQL 失败仍是共享故障，不能因为调用方取消就伪造数据库不可用。
+- 账户缺少 adapter 时现在也清除持久化 Ready，而非只返回账户错误。Paper Matcher 使用同一账户 mutex 的 TryLock，忙账户本轮全部候选延后；18 个忙账户候选跨页只报价一次，健康 B 成交，旧故障不会被跳过行为错误清除。真实 Session 快照期间订单仍 OPEN，同步释放后才可成交。
+- 预加载行情标的同时缓存 canonical/native 映射，Binance/OKX 的原生 symbol 不再每轮重复加载全量 instruments；未知标的仍传播加载错误。Matcher 每轮清理已禁用账户的活动故障诊断，关闭账户不会留下永久健康告警。
+- Manager 停止测试修正调度假设：父 context 会独立唤醒 Session 和 Manager，不能在仅观察 Session canceled 后假定 Manager 已执行 stopAll。改成等待 Manager gate 关闭，但仍在释放 Session shutdown 前断言，不把异步调度窗口当行为失败；该定向 race 连续 20 次通过。
+- 成功响应与 caller deadline 同时发生也有完整覆盖：订单成功后的同步和 Executor 完成状态 CAS 使用有界收尾上下文。真实 Worker 撤单返回成功但候选超时的场景仍正常完成、不会虚报全局失败；测试观察预算覆盖实际 3s 收尾，而不是仍假设原 1s 候选窗口。
+- Private OPEN/终态先于 HTTP 返回时保留权威事实，晚到的成功、拒绝或 unknown 不再倒退状态；15 种组合通过。成功响应与 private ExchangeOrderID 冲突仍失败关闭并保留原事实，错误属于对应账户。
+- 整包 race 揭示已有 Flatten 测试的 20ms 截止时间可能在真实 SQLite 前耗尽，导致本应先有子单的断言失败；仅把测试改为 1s 截止、10s 重试间隔、5s 观察上限，仍断言 PARTIAL 和三次同步，不改生产 Flatten。真实 Paper 隔离测试的恢复步骤也按 worker 方式重试正常 deferred scan，每一轮仍必须无错误；两项并发 E2E 重复 race 五次通过。
+- 最终 `review_t06_paper_final`、`review_t06_execution_final` 分别给出限定范围无剩余 P0/P1/P2。主 Agent 独立核验源码后，最终 Trade 全模块普通测试通过；runtime/target/order/accountsync/operator/health/eventconsumer/test 八包整包 race 全部通过，Paper 整包 race 通过，迁移定向及独立 Store 整包 race 通过，相关 vet/diff-check 通过。临时编译/预期红测/并发编辑前快照及已修测试时序失败未当作通过证据。
+- 本阶段没有正式部署、生产下单或更改生产开关；后续 T08-T11 与完整正式 Paper 验收仍然必须执行。
+
+### T08 实施前核验
+
+- 权重受理已有 receipt 命中不重新估值；当前 `WeightResolver` 同时把报价来源写入参考价证据和 `InstrumentTarget` 的执行 pin。后续只保留前者，不能连审计证据一起删除。
+- Executor 非 pinned 分支已有反向物理仓位优先平仓、总量比较和实际持仓账户减仓，但容量失败换 B 的现有测试仅用 stub 拒单。它不证明真实容量拆单：A/B 各能买 1、总差额为 2 时，现有实现仍会分别尝试下 2 并失败。T08 必须增加真实 OrderService/Paper 资金与成交后的再次收敛测试。
+- 删除 Go pin 字段会让旧 JSON 被静默忽略，从而把原 pinned 目标立即变成动态路由。切换必须在 workers 启动前暂停相关组合、废止旧 current target，保留 receipt、Order 和 Fill；等待新 session/新目标，不允许靠 JSON 解码的宽松行为完成迁移。
+- 原工作区分支已有后续 Strategy 和 tradeeventpb 提交及未提交修改。T10 集成前必须重新核验当前契约，不能直接用执行 worktree 中较早的复制基线覆盖生产者。
+- 发布前还须对历史 `rebuildLegacyTargetReceiptTable` 做完整 known-shape/扩展列、索引、trigger、外键依赖保护及事务测试。独立审查确认它不是 T06 新改动引入，但不能因此跳过 T10/T11 的历史事实保护门禁；现有 target 表保护不代表 receipt 表也已验收。
 
 ## 发布调查
 

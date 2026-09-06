@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,6 +15,22 @@ import (
 
 type healthSessions struct {
 	snapshot traderuntime.SessionSnapshot
+}
+
+func TestReadinessExposesPaperOrderDiagnosticWithoutGlobalFailure(t *testing.T) {
+	fault := paper.MatcherState{OrderID: "order-a", Stage: "decision", ErrorCode: "PAPER_DECISION_FAILED", LastError: "quote unavailable", Generation: 1}
+	r := Readiness{
+		DatabaseReady:        func(context.Context) error { return nil },
+		Sessions:             healthSessions{snapshot: traderuntime.SessionSnapshot{Enabled: 2, Ready: 1, Reconciled: true}},
+		LogicalAccountWorker: func() (bool, string) { return true, "" },
+		TargetWorker:         func() traderuntime.TargetWorkerSnapshot { return traderuntime.TargetWorkerSnapshot{Ready: true} },
+		OperatorWorker:       func() traderuntime.OperatorWorkerSnapshot { return traderuntime.OperatorWorkerSnapshot{Ready: true} },
+		PaperMatcherWorker:   func() (bool, string) { return true, "" },
+		PaperAccountErrors:   func() map[string]paper.MatcherState { return map[string]paper.MatcherState{"account-a": fault} },
+	}
+	ready, details := r.Evaluate(context.Background())
+	require.True(t, ready)
+	require.Equal(t, map[string]paper.MatcherState{"account-a": fault}, details["paper_account_errors"])
 }
 
 func (s healthSessions) Snapshot() traderuntime.SessionSnapshot { return s.snapshot }
@@ -54,7 +71,7 @@ func TestHandler_MetricsEndpoint_ShouldExposePrometheusMetrics(t *testing.T) {
 	assert.True(t, strings.Contains(rec.Body.String(), "# HELP") || strings.Contains(rec.Body.String(), "# TYPE"))
 }
 
-func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testing.T) {
+func TestReadinessSeparatesAccountFailuresFromSharedDependencies(t *testing.T) {
 	tests := []struct {
 		name            string
 		databaseErr     error
@@ -65,6 +82,7 @@ func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testi
 		targetReady     bool
 		operatorReady   bool
 		configErrors    []string
+		matcherFailed   bool
 		want            bool
 	}{
 		{
@@ -89,14 +107,25 @@ func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testi
 			name: "enabled EventBus unavailable", eventBusEnabled: true,
 		},
 		{
-			name:     "one live session disconnected",
-			sessions: traderuntime.SessionSnapshot{Enabled: 2, Ready: 1, Reconciled: true},
+			name:         "one live session disconnected",
+			sessions:     traderuntime.SessionSnapshot{Enabled: 2, Ready: 1, Reconciled: true},
+			logicalReady: true, targetReady: true, operatorReady: true, want: true,
+		},
+		{
+			name:         "paper matcher shared failure",
+			sessions:     traderuntime.SessionSnapshot{Reconciled: true},
+			logicalReady: true, targetReady: true, operatorReady: true, matcherFailed: true,
 		},
 		{
 			name:         "configuration error",
 			sessions:     traderuntime.SessionSnapshot{Reconciled: true},
 			logicalReady: true, targetReady: true, operatorReady: true,
 			configErrors: []string{"invalid account"},
+		},
+		{
+			name:         "account configuration error does not stop healthy accounts",
+			sessions:     traderuntime.SessionSnapshot{Enabled: 2, Ready: 1, Reconciled: true, AccountErrors: map[string]string{"bad-account": "missing adapter"}},
+			logicalReady: true, targetReady: true, operatorReady: true, want: true,
 		},
 		{
 			name:          "logical account worker has not recovered",
@@ -133,7 +162,8 @@ func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testi
 				OperatorWorker: func() traderuntime.OperatorWorkerSnapshot {
 					return traderuntime.OperatorWorkerSnapshot{Ready: tt.operatorReady}
 				},
-				ConfigErrors: func() []string { return tt.configErrors },
+				ConfigErrors:       func() []string { return tt.configErrors },
+				PaperMatcherWorker: func() (bool, string) { return !tt.matcherFailed, "" },
 			}
 			ready, details := readiness.Evaluate(context.Background())
 			require.Equal(t, tt.want, ready)
@@ -141,6 +171,7 @@ func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testi
 			require.Equal(t, tt.logicalReady, details["logical_account_worker_ready"])
 			require.Equal(t, tt.targetReady, details["target_worker_ready"])
 			require.Equal(t, tt.operatorReady, details["operator_worker_ready"])
+			require.Equal(t, tt.sessions.AccountErrors, details["account_errors"])
 		})
 	}
 }

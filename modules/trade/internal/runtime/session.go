@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
@@ -20,15 +21,17 @@ var ErrSessionConfig = errors.New("trade runtime: ExchangeSession is not configu
 var errPrivateDisconnected = errors.New("trade runtime: private stream disconnected")
 
 type ExchangeSession struct {
-	Account           store.TradingAccountRecord
-	Adapter           execution.ExecutionAdapter
-	MarketData        execution.MarketDataSource
-	AccountEvents     execution.AccountEventSource
-	ReservationPolicy execution.ReservationPolicy
-	Sync              *accountsync.Service
-	SyncInterval      time.Duration
-	PaperMatcherReady func() bool
-	OnReady           func(string)
+	Account               store.TradingAccountRecord
+	Adapter               execution.ExecutionAdapter
+	MarketData            execution.MarketDataSource
+	AccountEvents         execution.AccountEventSource
+	ReservationPolicy     execution.ReservationPolicy
+	Sync                  *accountsync.Service
+	SyncInterval          time.Duration
+	PaperMatcherReady     func() bool
+	PaperAccountState     func(string) paper.MatcherState
+	PaperAccountRecovered func(string, uint64)
+	OnReady               func(string)
 
 	ready         atomic.Bool
 	opMu          sync.Mutex
@@ -38,7 +41,18 @@ type ExchangeSession struct {
 type TradingSession = ExchangeSession
 
 func (s *ExchangeSession) Ready() bool {
-	return s != nil && s.ready.Load()
+	if s == nil || !s.ready.Load() {
+		return false
+	}
+	if s.Account.ExecutionMode == string(exchange.ExecutionModePaper) {
+		if s.PaperMatcherReady == nil || !s.PaperMatcherReady() {
+			return false
+		}
+		if s.PaperAccountState != nil && !s.PaperAccountState(s.Account.TradingAccountID).Ready {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *ExchangeSession) ExecutionAdapter() execution.ExecutionAdapter {
@@ -307,6 +321,7 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 	if marketData == nil {
 		marketData, _ = s.Adapter.(execution.MarketDataSource)
 	}
+	generation := s.paperAccountGeneration()
 	if marketData == nil {
 		return ErrSessionConfig
 	}
@@ -331,38 +346,26 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 			return s.disconnect(ctx, err)
 		}
 	}
-	accountSnapshot, err := s.Adapter.GetAccountSnapshot(ctx)
-	if err != nil {
-		return s.disconnect(ctx, err)
-	}
-	positions, err := s.Adapter.ListPositionSnapshots(ctx)
-	if err != nil {
+	// SyncAccount reads and applies the complete batch under the account lock.
+	// Prefetching here could overwrite a fill committed while ApplySnapshot
+	// waits for that lock, then falsely retire its refresh failure.
+	if _, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID); err != nil {
 		return s.disconnect(ctx, err)
 	}
 	orders, err := s.Adapter.ListOpenOrders(ctx)
 	if err != nil {
 		return s.disconnect(ctx, err)
 	}
-	localOrders, err := s.Sync.Store.ListOrdersForAccount(ctx, s.Account.SpaceID, s.Account.TradingAccountID, 0)
-	if err != nil {
-		return s.disconnect(ctx, err)
-	}
-	symbols := sessionSymbols(s.Account, orders, localOrders, positions, instruments, accountSnapshot)
-	fills := make([]exchange.Fill, 0)
-	for _, symbol := range symbols {
-		rows, _, listErr := s.Adapter.ListRecentFills(ctx, shared.ExchangeSymbol(symbol), "")
-		if listErr != nil {
-			return s.disconnect(ctx, listErr)
-		}
-		fills = append(fills, rows...)
-	}
-	if _, err := s.Sync.ApplySnapshot(ctx, s.Account.TradingAccountID, accountsync.Snapshot{
-		Fills: fills, Orders: orders, Positions: positions, Account: accountSnapshot, Ready: false,
-	}); err != nil {
-		return s.disconnect(ctx, err)
-	}
+	s.recoverPaperAccountAfterSync(generation, orders)
 	setReady := func(ready bool) error {
-		if err := s.Sync.SetReady(ctx, s.Account.TradingAccountID, ready, nil); err != nil {
+		var cause error
+		if !ready && s.PaperAccountState != nil {
+			state := s.PaperAccountState(s.Account.TradingAccountID)
+			if !state.Ready && state.LastError != "" {
+				cause = errors.New(state.LastError)
+			}
+		}
+		if err := s.Sync.SetReady(ctx, s.Account.TradingAccountID, ready, cause); err != nil {
 			return err
 		}
 		previous := s.ready.Swap(ready)
@@ -381,7 +384,10 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 	defer refresh.Stop()
 	for {
 		matcherReady := s.PaperMatcherReady != nil && s.PaperMatcherReady()
-		if matcherReady != s.Ready() {
+		if s.PaperAccountState != nil {
+			matcherReady = matcherReady && s.PaperAccountState(s.Account.TradingAccountID).Ready
+		}
+		if matcherReady != s.ready.Load() {
 			if err := setReady(matcherReady); err != nil {
 				return s.disconnect(ctx, err)
 			}
@@ -392,11 +398,39 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 			return ctx.Err()
 		case <-poll.C:
 		case <-refresh.C:
+			generation := s.paperAccountGeneration()
 			if _, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID); err != nil {
 				return s.disconnect(ctx, err)
 			}
+			orders, err := s.Adapter.ListOpenOrders(ctx)
+			if err != nil {
+				return s.disconnect(ctx, err)
+			}
+			s.recoverPaperAccountAfterSync(generation, orders)
 		}
 	}
+}
+
+func (s *ExchangeSession) paperAccountGeneration() uint64 {
+	if s.PaperAccountState == nil {
+		return 0
+	}
+	return s.PaperAccountState(s.Account.TradingAccountID).Generation
+}
+
+func (s *ExchangeSession) recoverPaperAccount(generation uint64) {
+	if s.PaperAccountRecovered != nil {
+		s.PaperAccountRecovered(s.Account.TradingAccountID, generation)
+	}
+}
+
+func (s *ExchangeSession) recoverPaperAccountAfterSync(generation uint64, orders []exchange.Order) {
+	// A balance-only sync does not prove that a failing order quote recovered.
+	// Once that order is gone, sync can retire the otherwise orphaned fault.
+	if s.PaperAccountState != nil && s.PaperAccountState(s.Account.TradingAccountID).Stage == "decision" && len(orders) != 0 {
+		return
+	}
+	s.recoverPaperAccount(generation)
 }
 
 func privateStreamError(

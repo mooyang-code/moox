@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
@@ -23,8 +22,8 @@ type TargetOptions struct {
 	Wake           func()
 	Now            func() time.Time
 	SetReady       func(bool)
-	Gate           sync.Locker
 	WeightResolver TargetWeightResolver
+	ResolveTimeout time.Duration
 }
 
 // TargetWeightResolver converts the strategy-owned target weights into the
@@ -75,10 +74,6 @@ func HandleTarget(
 		}
 	}
 
-	if opts.Gate != nil {
-		opts.Gate.Lock()
-		defer opts.Gate.Unlock()
-	}
 	if opts.WeightResolver == nil {
 		return targetRejection("resolver_missing", errors.New("trade target weight resolver is required"))
 	}
@@ -201,7 +196,16 @@ func HandleTarget(
 	if request.GetValidUntil() != nil {
 		record.ValidUntil = request.GetValidUntil().AsTime().UTC().UnixMilli()
 	}
-	conversion, conversionErr := opts.WeightResolver.Resolve(ctx, message.GetOccurredAt().AsTime().UnixMilli(), request, message.GetSpaceId())
+	timeout := opts.ResolveTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	resolveCtx, cancel := context.WithTimeout(ctx, timeout)
+	conversion, conversionErr := opts.WeightResolver.Resolve(resolveCtx, message.GetOccurredAt().AsTime().UnixMilli(), request, message.GetSpaceId())
+	if conversionErr == nil {
+		conversionErr = resolveCtx.Err()
+	}
+	cancel()
 	if conversionErr != nil {
 		if errors.Is(conversionErr, targetapp.ErrPermanent) {
 			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: conversionErr}
@@ -242,6 +246,8 @@ func HandleTarget(
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidRecord) ||
 			errors.Is(err, store.ErrConflict) ||
+			errors.Is(err, store.ErrTargetExpired) ||
+			errors.Is(err, store.ErrTargetAuthorization) ||
 			errors.Is(err, gorm.ErrRecordNotFound) {
 			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 		}

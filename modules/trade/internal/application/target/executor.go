@@ -13,15 +13,17 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/rs/xid"
 )
 
 var (
-	ErrExecutorConfig = errors.New("trade target: executor is not configured")
-	ErrInvalidTarget  = errors.New("trade target: invalid target")
-	ErrTargetExpired  = errors.New("trade target: target validity window elapsed")
-	ErrTargetSession  = errors.New("trade target: target session authorization changed")
+	ErrExecutorConfig     = errors.New("trade target: executor is not configured")
+	ErrInvalidTarget      = errors.New("trade target: invalid target")
+	ErrTargetExpired      = errors.New("trade target: target validity window elapsed")
+	ErrTargetSession      = errors.New("trade target: target session authorization changed")
+	errTargetNotEffective = errors.New("trade target: target is not effective yet")
 )
 
 const (
@@ -30,6 +32,8 @@ const (
 	StatusConverged  = "CONVERGED"
 	StatusBlocked    = "BLOCKED"
 	StatusPaused     = "PAUSED"
+	StatusExpired    = "EXPIRED"
+	StatusSuperseded = "SUPERSEDED"
 )
 
 type Quote struct {
@@ -82,7 +86,7 @@ func (e *Executor) Converge(
 	ctx context.Context,
 	spaceID string,
 	logicalAccountID string,
-) (Result, error) {
+) (result Result, resultErr error) {
 	if e == nil || e.Store == nil || e.Orders == nil || e.Prices == nil {
 		return Result{}, ErrExecutorConfig
 	}
@@ -96,6 +100,33 @@ func (e *Executor) Converge(
 	target, err := e.Store.GetLogicalAccountTarget(ctx, spaceID, logicalAccountID)
 	if err != nil {
 		return Result{}, err
+	}
+	// Validity may lapse during quote/prepare as well as before the scan. All
+	// expiry exits persist the original target identity, never a replacement.
+	defer func() {
+		switch {
+		case singleCauseIs(resultErr, ErrTargetExpired) || singleCauseIs(resultErr, orderapp.ErrTargetExpired):
+			target.Status = StatusExpired
+			target.LastError = ""
+			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			defer cancel()
+			updated, err := e.Store.UpdateLogicalAccountTargetState(persistCtx, target)
+			if err != nil {
+				result, resultErr = Result{}, err
+				return
+			}
+			result, resultErr = Result{Status: StatusExpired}, nil
+			if !updated {
+				result.Status = StatusSuperseded
+			}
+		case singleCauseIs(resultErr, errTargetNotEffective):
+			result, resultErr = Result{Status: StatusPaused}, nil
+		default:
+			resultErr = accountExecutionError(resultErr)
+		}
+	}()
+	if target.Status == StatusExpired {
+		return Result{Status: StatusExpired}, nil
 	}
 	if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
 		// Expiry is a normal terminal condition for this target, not a reason to
@@ -120,7 +151,7 @@ func (e *Executor) Converge(
 			if current.OwnerType != string(orderdomain.OwnerTarget) {
 				continue
 			}
-			if err := e.stopOrder(ctx, current); err != nil {
+			if err := e.stopOrder(ctx, target, current); err != nil {
 				return Result{}, err
 			}
 			target.LastError = logicalAccount.PauseReason
@@ -173,7 +204,7 @@ func (e *Executor) Converge(
 			return Result{Status: StatusPaused, Action: "pause"}, nil
 		case current.OwnerType == string(orderdomain.OwnerTarget) &&
 			current.OwnerID != target.TargetID:
-			if err := e.stopOrder(ctx, current); err != nil {
+			if err := e.stopOrder(ctx, target, current); err != nil {
 				return Result{}, err
 			}
 			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
@@ -190,7 +221,7 @@ func (e *Executor) Converge(
 				current.OwnerID != target.TargetID {
 				continue
 			}
-			if err := e.stopOrder(ctx, current); err != nil {
+			if err := e.stopOrder(ctx, target, current); err != nil {
 				return Result{}, err
 			}
 			target.BlockedTargets = blocked
@@ -243,16 +274,22 @@ func (e *Executor) Converge(
 				}
 				return Result{}, err
 			}
-			_ = e.updateTarget(ctx, &target, StatusConverging)
+			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+				return Result{}, err
+			}
 			return Result{Status: StatusConverging, Action: "submit"}, nil
 		case orderdomain.Submitting, orderdomain.SubmitUnknown:
 			if _, err := e.Orders.ResolveUnknown(ctx, spaceID, current.OrderID); err != nil {
 				return Result{}, err
 			}
-			_ = e.updateTarget(ctx, &target, StatusConverging)
+			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+				return Result{}, err
+			}
 			return Result{Status: StatusConverging, Action: "resolve"}, nil
 		default:
-			_ = e.updateTarget(ctx, &target, StatusConverging)
+			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+				return Result{}, err
+			}
 			return Result{Status: StatusConverging}, nil
 		}
 	}
@@ -724,7 +761,13 @@ func (e *Executor) placeAction(
 			candidate.instrument.ExchangeSymbol,
 		)
 		if err != nil {
-			return false, "", err
+			if paper.IsInfrastructureError(err) {
+				return false, "", err
+			}
+			return false, "", &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: err}
+		}
+		if quote.Price.Cmp(shared.Zero()) <= 0 {
+			return false, "", &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: orderdomain.ErrInvalidSpec}
 		}
 		if target.InstanceID != "" {
 			if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{
@@ -793,6 +836,9 @@ func (e *Executor) placeAction(
 			}
 			return false, "", err
 		}
+		if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID}, target); err != nil {
+			return false, "", err
+		}
 		if _, err := e.Orders.Submit(ctx, spaceID, string(placed.ID)); err != nil {
 			if targetSubmitConflict(err) {
 				_, discardErr := e.Orders.DiscardPending(
@@ -826,6 +872,16 @@ func (e *Executor) checkTargetExecutable(
 		target.BarEndTime <= 0 || target.EffectiveAt != target.BarEndTime || target.ValidUntil <= target.EffectiveAt {
 		return ErrInvalidTarget
 	}
+	now := time.Now().UTC()
+	if e.Now != nil {
+		now = e.Now().UTC()
+	}
+	if !now.Before(time.UnixMilli(target.ValidUntil).UTC()) {
+		return ErrTargetExpired
+	}
+	if now.Before(time.UnixMilli(target.EffectiveAt).UTC()) {
+		return errTargetNotEffective
+	}
 	// Always re-read the authorization immediately before an order can be
 	// submitted. The initial Converge snapshot protects the read path; this
 	// second read closes the authorization-change window during quote/prepare.
@@ -836,13 +892,6 @@ func (e *Executor) checkTargetExecutable(
 	logicalAccount = fresh
 	if logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
 		return ErrTargetSession
-	}
-	now := time.Now().UTC()
-	if e.Now != nil {
-		now = e.Now().UTC()
-	}
-	if now.Before(time.UnixMilli(target.EffectiveAt).UTC()) || !now.Before(time.UnixMilli(target.ValidUntil).UTC()) {
-		return ErrTargetExpired
 	}
 	return nil
 }
@@ -880,8 +929,12 @@ func (e *Executor) childQuantity(
 
 func (e *Executor) stopOrder(
 	ctx context.Context,
+	target store.LogicalAccountTargetRecord,
 	current store.OrderRecord,
 ) error {
+	if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{SpaceID: current.SpaceID, LogicalAccountID: target.LogicalAccountID}, target); err != nil {
+		return err
+	}
 	switch orderdomain.State(current.State) {
 	case orderdomain.Pending:
 		_, err := e.Orders.DiscardPending(ctx, current.SpaceID, current.OrderID)
@@ -903,6 +956,9 @@ func (e *Executor) pauseLogicalAccount(
 	target store.LogicalAccountTargetRecord,
 	reason string,
 ) error {
+	if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
+		return err
+	}
 	if err := e.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.SetLogicalAccountAutomation(
 			logicalAccount.SpaceID,
@@ -922,6 +978,13 @@ func (e *Executor) updateTarget(
 	target *store.LogicalAccountTargetRecord,
 	status string,
 ) error {
+	// Finishing a completed action must not fail merely because its external
+	// call consumed the candidate budget. No new order is authorized here.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{SpaceID: target.SpaceID, LogicalAccountID: target.LogicalAccountID}, *target); err != nil {
+		return err
+	}
 	target.Status = status
 	updated, err := e.Store.UpdateLogicalAccountTargetState(ctx, *target)
 	if err != nil {

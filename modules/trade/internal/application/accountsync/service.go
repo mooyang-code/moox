@@ -134,12 +134,13 @@ func (s *Service) syncAccountLocked(
 	}
 	adapter, err := s.Adapters.Adapter(tradingAccountID)
 	if err != nil {
-		return Result{}, 0, err
+		result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "adapter", err))
+		return result, 0, failErr
 	}
 
 	openOrders, err := adapter.ListOpenOrders(ctx)
 	if err != nil {
-		result, failErr := s.fail(ctx, account, err)
+		result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_open_orders", err))
 		return result, 0, failErr
 	}
 	localOrders, err := s.Store.ListOrdersForAccount(
@@ -154,12 +155,12 @@ func (s *Service) syncAccountLocked(
 	}
 	positions, err := adapter.ListPositionSnapshots(ctx)
 	if err != nil {
-		result, failErr := s.fail(ctx, account, err)
+		result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_positions", err))
 		return result, 0, failErr
 	}
 	accountSnapshot, err := adapter.GetAccountSnapshot(ctx)
 	if err != nil {
-		result, failErr := s.fail(ctx, account, err)
+		result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "snapshot", err))
 		return result, 0, failErr
 	}
 	maxDifference := maxBalanceDifference(
@@ -184,7 +185,7 @@ func (s *Service) syncAccountLocked(
 	for _, symbol := range symbols {
 		rows, cursor, listErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(symbol), cursors[symbol])
 		if listErr != nil {
-			result, failErr := s.fail(ctx, account, listErr)
+			result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_fills", listErr))
 			return result, maxDifference, failErr
 		}
 		fills = append(fills, rows...)
@@ -212,7 +213,7 @@ func (s *Service) syncAccountLocked(
 		case exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound):
 			continue
 		default:
-			result, failErr := s.fail(ctx, account, lookupErr)
+			result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "get_order", lookupErr))
 			return result, maxDifference, failErr
 		}
 	}
@@ -720,7 +721,7 @@ func (s *Service) ensureOrderForFill(
 	}
 	adapter, err := s.Adapters.Adapter(account.TradingAccountID)
 	if err != nil {
-		return false, err
+		return false, accountDependencyError(account.TradingAccountID, "adapter", err)
 	}
 	var current exchange.Order
 	var lookupErr error
@@ -740,7 +741,7 @@ func (s *Service) ensureOrderForFill(
 	}
 	if lookupErr != nil {
 		if !exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound) {
-			return false, lookupErr
+			return false, accountDependencyError(account.TradingAccountID, "fill_order_lookup", lookupErr)
 		}
 		if syntheticQuantity.Cmp(shared.Zero()) <= 0 {
 			syntheticQuantity = fill.Quantity
@@ -1033,7 +1034,9 @@ func (s *Service) fail(
 	account store.TradingAccountRecord,
 	cause error,
 ) (Result, error) {
-	if setErr := s.setReady(ctx, account, false, cause); setErr != nil {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	if setErr := s.setReady(cleanupCtx, account, false, cause); setErr != nil {
 		return Result{}, errors.Join(cause, setErr)
 	}
 	return Result{}, cause

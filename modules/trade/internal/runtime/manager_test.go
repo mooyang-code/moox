@@ -324,6 +324,11 @@ func TestManagerRunWaitsForSessionShutdown(t *testing.T) {
 	<-session.started
 	cancel()
 	<-session.canceled
+	// Parent cancellation reaches the session and manager independently.
+	// The gate must close while session shutdown is still blocked, not before
+	// the manager goroutine has had a chance to observe cancellation.
+	require.Eventually(t, func() bool { return !manager.Snapshot().Reconciled }, time.Second, time.Millisecond,
+		"shutdown must gate readiness before sessions finish stopping")
 	select {
 	case <-done:
 		t.Fatal("Manager.Run returned before the session stopped")
@@ -331,6 +336,7 @@ func TestManagerRunWaitsForSessionShutdown(t *testing.T) {
 	}
 	close(session.release)
 	require.ErrorIs(t, <-done, context.Canceled)
+	require.False(t, manager.Snapshot().Reconciled)
 }
 
 func TestManagerReconnectsTheExistingSessionAfterRunFailure(t *testing.T) {
@@ -389,4 +395,71 @@ func TestManagerCancellationInterruptsReconnectBackoff(t *testing.T) {
 		t.Fatal("session reconnect backoff ignored cancellation")
 	}
 	require.Equal(t, int32(1), session.runCalls.Load())
+}
+
+func TestManagerFactoryFailureIsAccountLocalAndRecovers(t *testing.T) {
+	source := &managerAccountSource{accounts: []store.TradingAccountRecord{{TradingAccountID: "good"}, {TradingAccountID: "bad"}}}
+	good := &managedSessionStub{started: make(chan struct{}), stopped: make(chan struct{})}
+	bad := &managedSessionStub{started: make(chan struct{}), stopped: make(chan struct{})}
+	fail := true
+	m := &Manager{Accounts: source, NewSession: func(account store.TradingAccountRecord) (ManagedSession, error) {
+		if account.TradingAccountID == "good" {
+			return good, nil
+		}
+		if fail {
+			return nil, errors.New("account credentials unavailable")
+		}
+		return bad, nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer m.stopAll()
+	require.NoError(t, m.reconcile(ctx))
+	<-good.started
+	require.Eventually(t, func() bool { return m.Ready("good") }, time.Second, time.Millisecond)
+	snapshot := m.Snapshot()
+	require.Equal(t, 2, snapshot.Enabled)
+	require.Equal(t, 1, snapshot.Ready)
+	require.Empty(t, snapshot.ConfigErrors)
+	require.Equal(t, map[string]string{"bad": "account credentials unavailable"}, snapshot.AccountErrors)
+	snapshot.AccountErrors["bad"] = "mutated caller copy"
+	require.Equal(t, "account credentials unavailable", m.Snapshot().AccountErrors["bad"])
+	fail = false
+	require.NoError(t, m.reconcile(ctx))
+	<-bad.started
+	require.Eventually(t, func() bool { return m.Snapshot().Ready == 2 }, time.Second, time.Millisecond)
+	require.Empty(t, m.Snapshot().AccountErrors)
+	m.stopAll()
+	require.False(t, m.Snapshot().Reconciled)
+}
+
+func TestManagerStoppingSessionDoesNotCountReady(t *testing.T) {
+	session := &managedSessionStub{}
+	session.ready.Store(true)
+	m := &Manager{sessions: map[string]*managedEntry{"stopping": {session: session, stopping: true}}}
+	require.Zero(t, m.Snapshot().Ready)
+}
+
+func TestManagerEnumerationFailureClearsReconciled(t *testing.T) {
+	source := &managerAccountSource{}
+	m := &Manager{Accounts: source, NewSession: func(store.TradingAccountRecord) (ManagedSession, error) { panic("no accounts") }}
+	require.NoError(t, m.reconcile(context.Background()))
+	require.True(t, m.Snapshot().Reconciled)
+	source.failures = 1
+	require.Error(t, m.reconcile(context.Background()))
+	require.False(t, m.Snapshot().Reconciled)
+	require.NotEmpty(t, m.Snapshot().ConfigErrors)
+	require.NoError(t, m.reconcile(context.Background()))
+	require.True(t, m.Snapshot().Reconciled)
+	require.Empty(t, m.Snapshot().ConfigErrors)
+}
+
+func TestManagerDuplicateIDsRemainGlobalConfigurationFailure(t *testing.T) {
+	source := &managerAccountSource{accounts: []store.TradingAccountRecord{{TradingAccountID: "duplicate"}, {TradingAccountID: "duplicate"}}}
+	m := &Manager{Accounts: source, NewSession: func(store.TradingAccountRecord) (ManagedSession, error) { return nil, errors.New("factory failure") }}
+	require.NoError(t, m.reconcile(context.Background()))
+	snapshot := m.Snapshot()
+	require.False(t, snapshot.Reconciled)
+	require.Equal(t, []string{"duplicate enabled Exchange account ID duplicate"}, snapshot.ConfigErrors)
+	require.Equal(t, "factory failure", snapshot.AccountErrors["duplicate"])
 }

@@ -262,17 +262,24 @@ CREATE TABLE IF NOT EXISTS t_paper_asset_balances (
 - 修改：`modules/trade/internal/bootstrap/bootstrap.go`
 - 新增：`modules/trade/internal/execution/paper/decider.go`、`decider_test.go`
 - 新增：`modules/trade/test/paper_account_isolation_e2e_test.go`
+- 修改：`modules/trade/internal/application/order/service.go`、`internal/domain/order/order.go`、`internal/application/accountsync/service.go` 及对应测试
+- 新增：`modules/trade/internal/application/order/account_error.go`、`internal/application/accountsync/account_error.go`、`internal/application/target/account_error.go` 及对应测试
+- 新增：`modules/trade/internal/infra/store/target_expiry_migration.go`、`legacy_target_migration.go` 及对应测试
+- 新增：`modules/trade/test/target_acceptance_isolation_e2e_test.go`、`target_account_sync_error_e2e_test.go`
 
-- [ ] 从 bootstrap 移出真实 `DecideContext` 逻辑到 `paper.Decider`，注入 Store、adapter/行情获取与 Now。Bootstrap 只组装依赖；生产和测试使用相同决策实现，不再在 parity 测试中复制另一套简化撮合规则。
-- [ ] Paper Scan 按候选隔离 adapter、行情和配置错误，记录账户/订单及错误分类后继续其他账户。订单版本变化、同时撤单、账户关闭视为失效候选，不视为全局故障。
-- [ ] 每个候选的外部调用设置有界 timeout；保持一轮串行即可，不为优化先引入并行撮合。不可仅用 session Ready 过滤候选，因为 Paper Ready 本身依赖 matcher，必须避免启动循环依赖。
-- [ ] 区分 worker 存活/数据库可用与账户业务错误。matcher 已启动且公共持久化可用时可服务健康账户；某账户的失败只使该账户不可交易。worker 退出必须立刻不健康，不得只修成永远返回 true。
-- [ ] 目标增加持久化 `EXPIRED`；到期使用当前 target ID/session 的 CAS 更新，旧扫描不能覆盖新目标。EXPIRED 不再参与正常收敛扫描；已有 Order/Fill 继续由账户同步处理，新目标仍可覆盖它。
-- [ ] 撤销 consumer 与全量 worker 共用的 `targetGate`，保留现有组合账户锁。验收“A 的行情阻塞时，B 可以持久化受理目标”；不承诺单串行执行器下 B 完全不受执行排队影响。耗时外部调用有界，按 ID 唤醒优化放在此项的最后。
-- [ ] 锁顺序统一为组合账户、组合执行、执行账户；禁止在持有执行账户锁时回调获取组合锁。复核 AccountsSync/FactsObserver 的 wake 必须在释放账户锁后发生。
-- [ ] 验收：A 永久失败、B 仍成交；坏候选不饿死健康候选；目标自然过期不新发单/不撤单/不清仓，实例仍健康；新目标并发到达不被过期 CAS 覆盖；真实 worker 退出可检测。
-- [ ] 运行 `go test -race -count=1 ./modules/trade/internal/runtime ./modules/trade/internal/execution/paper ./modules/trade/internal/application/target ./modules/trade/internal/health ./modules/trade/internal/eventconsumer ./modules/trade/test`。
-- [ ] 提交建议分为 `refactor(trade): share the production paper match decider` 与 `fix(trade): isolate account failures and expired targets`。
+**审查闭环补充：** 候选按首次撮合、resting 两阶段做不可变 keyset 分页，不保留固定总量上限；本轮首次撮合转 resting 的订单不再二次报价。目标有效期在 Submit 的慢依赖之后及 SUBMITTING 持久化后复查，最终查询结束才取当前时间，之后不再有阻塞 I/O 才调用 adapter。若确定尚未调用 adapter，使用订单版本 CAS 回到 PENDING、清零 SubmittedAt 并保留预占；回退失败不得吞掉数据库错误，也不得继续 POST。真实 AccountSync 的外部错误在调用源头携带账户身份，不能把后续 readiness 写入失败包装成普通账户故障。过期本身不自动清理既有本地 PENDING，等待新有效目标或显式人工操作。
+
+- [x] 从 bootstrap 移出真实 `DecideContext` 逻辑到 `paper.Decider`，注入 Store、adapter/行情获取与 Now。Bootstrap 只组装依赖；生产和测试使用相同决策实现，不再在 parity 测试中复制另一套简化撮合规则。
+- [x] Paper Scan 按候选隔离 adapter、行情和配置错误，记录账户/订单及错误分类后继续其他账户。订单版本变化、同时撤单、账户关闭视为失效候选，不视为全局故障。
+- [x] 每个候选的外部调用设置有界 timeout；保持一轮串行即可，不为优化先引入并行撮合。不可仅用 session Ready 过滤候选，因为 Paper Ready 本身依赖 matcher，必须避免启动循环依赖。
+- [x] 区分 worker 存活/数据库可用与账户业务错误。matcher 已启动且公共持久化可用时可服务健康账户；某账户的失败只使该账户不可交易。worker 退出必须立刻不健康，不得只修成永远返回 true。
+- [x] 目标增加持久化 `EXPIRED`；到期使用当前 target ID/session 的 CAS 更新，旧扫描不能覆盖新目标。EXPIRED 不再参与正常收敛扫描；已有 Order/Fill 继续由账户同步处理，新目标仍可覆盖它。
+- [x] 撤销 consumer 与全量 worker 共用的 `targetGate`，保留现有组合账户锁。验收“A 的行情阻塞时，B 可以持久化受理目标”；不承诺单串行执行器下 B 完全不受执行排队影响。耗时外部调用有界。
+- [ ] 按组合账户 ID 定向唤醒与 T08 的候选路由改造一并完成；当前仍使用已有全局 Wake/周期扫描，本阶段未将它宣称为已实现。
+- [x] 锁顺序统一为组合账户、组合执行、执行账户；禁止在持有执行账户锁时回调获取组合锁。复核 AccountsSync/FactsObserver 的 wake 必须在释放账户锁后发生。
+- [x] 验收：A 永久失败、B 仍成交；坏候选不饿死健康候选；目标自然过期不新发单/不撤单/不清仓，实例仍健康；新目标并发到达不被过期 CAS 覆盖；真实 worker 退出可检测。
+- [x] 运行 `go test -race -count=1 ./modules/trade/internal/runtime ./modules/trade/internal/execution/paper ./modules/trade/internal/application/target ./modules/trade/internal/health ./modules/trade/internal/eventconsumer ./modules/trade/test`。
+- [x] 以完整可构建阶段交付共享 Decider 与账户隔离，提交使用 `fix(trade): isolate account failures and expired targets`；Bootstrap、错误边界和状态变更共同验收，不拆出缺依赖的中间版本。
 
 ### T07：补齐目标受理与拒绝的最小可观测闭环
 
@@ -300,6 +307,7 @@ CREATE TABLE IF NOT EXISTS t_paper_asset_balances (
 - 修改：`modules/trade/internal/application/target/weight_resolver.go`、`executor.go` 及对应测试
 - 修改：`modules/trade/internal/infra/store/target.go`、`target_receipt.go`
 - 修改：`modules/trade/test/strategy_target_e2e_test.go`、`live_paper_unified_execution_e2e_test.go`
+- 修改：`modules/trade/internal/runtime/target_worker.go`、`internal/eventconsumer/target.go` 及 Bootstrap 接线/对应测试，完成 T06 留下的组合账户 ID 定向唤醒。
 
 - [ ] `InstrumentTarget` 只表达规范化 instrument 和总 quantity；参考价格证据保留报价账户、原生 symbol 和时间，但它们不再构成执行账户 pin。
 - [ ] 去重重投只读取原 receipt，不重新估值；执行重试和路由改变也不得改变原目标 quantity。禁止为了换账户而生成“同 target ID、不同估值”的回执。
@@ -367,6 +375,7 @@ GetOrder / GetOperatorAction -> current facts, never infer fill from RPC success
 - [ ] 枚举所有 producer、consumer、RPC 和 Web 使用者，先把仍在使用的 UI/管理调用切到 instance/session，再删除旧自动执行 producer/consumer 分支。不得只删 proto 导致运行中的 Strategy 发布无人消费的消息。
 - [ ] 最终自动交易事件只接受完整现代身份、bar_end_time、effective_at、valid_until 与 target_weight；删掉旧数量事件执行入口、legacy owner generation/command sequence 的授权 fallback。历史结果和交易事实不因此删除。
 - [ ] 本任务只处理执行边界及直接调用方，不重写 Strategy DSL、因子、选股或调度实现。Strategy 同时在修改时先对齐实际契约；无法闭合直接调用链则停止该切换，不把半完成接口作为已交付版本。
+- [ ] 发布前补齐旧 receipt 表受控迁移的 known-shape、扩展列/索引/trigger/外键依赖检查及事务回滚测试。T06 仅闭环旧 target 表保护，不能将其推广为所有历史表已无损验收；未知 receipt 结构必须拒绝且保持原状，不允许 copy/drop 静默删字段或留下半迁移。
 - [ ] 不添加 `reserved`、别名、长期双写/双读兼容层。需要保留的历史审计字段明确为只读来源，不参与新授权或新目标生成。已有 legacy owner 必须通过受控停用/重新授权切换，不能猜测 session。
 - [ ] 控制台保留现有订单、成交、持仓、资金曲线和账户信息；只调整身份字段、受理/未知/过期状态及新提交入口，不扩大成 UI 重设计。
 - [ ] 创建账户时展示控制模式；MANUAL 显示“下单”，STRATEGY 显示“接管并下单”及暂停/撤单警告。RUNNING action 即使有 transient last_error 也继续查询，不把临时错误显示为不可恢复失败。

@@ -328,12 +328,14 @@ func (s *Store) UpdateLogicalAccountTargetState(
 	args = append(args, record.SpaceID, record.LogicalAccountID)
 	values := []any{record.Status, blockedJSON, record.LastError, record.SpaceID, record.LogicalAccountID}
 	values = append(values, args[:len(args)-2]...)
+	values = append(values, record.Status)
 	result := s.db.WithContext(ctx).Exec(fmt.Sprintf(`
 		UPDATE t_logical_account_targets
 		SET c_status = ?, c_blocked_targets_json = ?, c_last_error = ?,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 			AND %s
+			AND (c_status <> 'EXPIRED' OR ? = 'EXPIRED')
 	`, where),
 		values...,
 	)
@@ -368,7 +370,7 @@ func logicalAccountTargetRecord(
 
 func validLogicalAccountTargetStatus(status string) bool {
 	switch status {
-	case "PENDING", "CONVERGING", "CONVERGED", "BLOCKED":
+	case "PENDING", "CONVERGING", "CONVERGED", "BLOCKED", "EXPIRED":
 		return true
 	default:
 		return false

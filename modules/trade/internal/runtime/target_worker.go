@@ -28,24 +28,34 @@ type TargetRunMetrics interface {
 }
 
 type TargetWorker struct {
-	Store    LogicalTargetStore
-	Executor TargetConverger
-	Interval time.Duration
-	Now      func() time.Time
-	Gate     sync.Locker
-	Metrics  TargetRunMetrics
+	Store           LogicalTargetStore
+	Executor        TargetConverger
+	Interval        time.Duration
+	Now             func() time.Time
+	ConvergeTimeout time.Duration
+	Metrics         TargetRunMetrics
 
 	wakeOnce sync.Once
 	wake     chan struct{}
 
-	mu        sync.RWMutex
-	ready     bool
-	lastError string
+	mu           sync.RWMutex
+	ready        bool
+	lastError    string
+	targetErrors []TargetFailure
+}
+
+type TargetFailure struct {
+	SpaceID          string `json:"space_id"`
+	LogicalAccountID string `json:"logical_account_id"`
+	TargetID         string `json:"target_id"`
+	TradingAccountID string `json:"trading_account_id"`
+	Error            string `json:"error"`
 }
 
 type TargetWorkerSnapshot struct {
-	Ready     bool
-	LastError string
+	Ready        bool
+	LastError    string
+	TargetErrors []TargetFailure
 }
 
 func (w *TargetWorker) Wake() {
@@ -63,6 +73,7 @@ func (w *TargetWorker) Run(ctx context.Context) error {
 	if w == nil || w.Store == nil || w.Executor == nil {
 		return ErrTargetWorkerConfig
 	}
+	defer func() { w.setResult(context.Canceled) }()
 	w.initWake()
 	interval := w.Interval
 	if interval <= 0 {
@@ -90,6 +101,7 @@ func (w *TargetWorker) Snapshot() TargetWorkerSnapshot {
 	defer w.mu.RUnlock()
 	return TargetWorkerSnapshot{
 		Ready: w.ready, LastError: w.lastError,
+		TargetErrors: append([]TargetFailure(nil), w.targetErrors...),
 	}
 }
 
@@ -104,10 +116,6 @@ func (w *TargetWorker) setResult(err error) {
 }
 
 func (w *TargetWorker) runOnce(ctx context.Context) error {
-	if w.Gate != nil {
-		w.Gate.Lock()
-		defer w.Gate.Unlock()
-	}
 	records, err := w.Store.ListLogicalAccountTargets(
 		ctx,
 		targetapp.StatusPending,
@@ -123,14 +131,40 @@ func (w *TargetWorker) runOnce(ctx context.Context) error {
 		now = w.Now().UTC()
 	}
 	var runErrors []error
+	var failures []TargetFailure
+	defer func() {
+		w.mu.Lock()
+		w.targetErrors = failures
+		w.mu.Unlock()
+	}()
+	timeout := w.ConvergeTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
 	for _, record := range records {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		candidateCtx, cancel := context.WithTimeout(ctx, timeout)
 		result, convergeErr := w.Executor.Converge(
-			ctx,
+			candidateCtx,
 			record.SpaceID,
 			record.LogicalAccountID,
 		)
+		cancel()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if convergeErr != nil {
-			runErrors = append(runErrors, convergeErr)
+			if accountErr, ok := convergeErr.(*targetapp.AccountError); ok {
+				failures = append(failures, TargetFailure{
+					SpaceID: record.SpaceID, LogicalAccountID: record.LogicalAccountID,
+					TargetID: record.TargetID, TradingAccountID: accountErr.TradingAccountID,
+					Error: convergeErr.Error(),
+				})
+			} else {
+				runErrors = append(runErrors, convergeErr)
+			}
 		}
 		w.observe(result, convergeErr, now)
 	}
