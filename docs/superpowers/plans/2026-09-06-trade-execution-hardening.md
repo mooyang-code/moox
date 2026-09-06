@@ -379,7 +379,7 @@ GetOrder / GetOperatorAction -> current facts, never infer fill from RPC success
 - [ ] 枚举所有 producer、consumer、RPC 和 Web 使用者，先把仍在使用的 UI/管理调用切到 instance/session，再删除旧自动执行 producer/consumer 分支。不得只删 proto 导致运行中的 Strategy 发布无人消费的消息。
 - [ ] 最终自动交易事件只接受完整现代身份、bar_end_time、effective_at、valid_until 与 target_weight；删掉旧数量事件执行入口、legacy owner generation/command sequence 的授权 fallback。历史结果和交易事实不因此删除。
 - [ ] 本任务只处理执行边界及直接调用方，不重写 Strategy DSL、因子、选股或调度实现。Strategy 同时在修改时先对齐实际契约；无法闭合直接调用链则停止该切换，不把半完成接口作为已交付版本。
-- [ ] 发布前补齐旧 receipt 表受控迁移的 known-shape、扩展列/索引/trigger/外键依赖检查及事务回滚测试。T06 仅闭环旧 target 表保护，不能将其推广为所有历史表已无损验收；未知 receipt 结构必须拒绝且保持原状，不允许 copy/drop 静默删字段或留下半迁移。
+- [x] 发布前补齐旧 receipt 表受控迁移的 known-shape、扩展列/索引/trigger/外键依赖检查及事务回滚测试。T06 仅闭环旧 target 表保护，不能将其推广为所有历史表已无损验收；未知 receipt 结构必须拒绝且保持原状，不允许 copy/drop 静默删字段或留下半迁移。已补字面量保真和大小写依赖匹配，独立 codeCR 闭环；实际生产库升级仍须 T11 核验。
 - [ ] 不添加 `reserved`、别名、长期双写/双读兼容层。需要保留的历史审计字段明确为只读来源，不参与新授权或新目标生成。已有 legacy owner 必须通过受控停用/重新授权切换，不能猜测 session。
 - [ ] 控制台保留现有订单、成交、持仓、资金曲线和账户信息；只调整身份字段、受理/未知/过期状态及新提交入口，不扩大成 UI 重设计。
 - [ ] 创建账户时展示控制模式；MANUAL 显示“下单”，STRATEGY 显示“接管并下单”及暂停/撤单警告。RUNNING action 即使有 transient last_error 也继续查询，不把临时错误显示为不可恢复失败。

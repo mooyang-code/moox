@@ -27,8 +27,8 @@
 | T06 故障隔离与过期 | 已完成 | 核心 `dcd9f491`；按 ID 定向唤醒随 T08 完成，独立 codeCR 与全量/相关 race/vet 闭环 |
 | T07 消息结果可观测 | 已完成 | `1a941da7`；真实Runner、四包race、组件及生产构建通过；独立codeCR所有增量发现闭环 |
 | T08 动态账户路由 | 已完成 | 总量与路由分离、共享真实容量、定向唤醒和旧 pin 安全切换；三个新 codeCR 无剩余 P0-P2，主 Agent 全量/race/vet 复验通过 |
-| T09 普通 SubmitOrder | 未开始 | MANUAL/STRATEGY、持久化提交、完整接口/鉴权 |
-| T10 契约与控制台 | 未开始 | 现代身份、删除旧执行分支、前后端与文档一致 |
+| T09 普通 SubmitOrder | 执行中 | 已补 Place 准入锁截止时间；MANUAL/STRATEGY、持久化提交、完整接口/鉴权仍未实现 |
+| T10 契约与控制台 | 执行中 | 已补历史 receipt 迁移安全门禁；现代身份、删除旧执行分支、前后端与文档一致仍未实现 |
 | T11 完整验收与交付 | 未开始 | 全量/race/vet/协议/Web/隔离 NATS/新 Agent 审查/发布/正式 Paper E2E |
 
 ## 已执行验证
@@ -125,6 +125,16 @@ T02 正式红测：`TestModernSessionTargetCanResume` 因 `target runner does no
 - 下一阶段必须同步 Domain/Store/Create/Paper Create/Proto 手写 validation/返回转换，以及 Claim/Rebind/Resume/Consumer/Executor/最终 Submit 的控制模式边界，不能仅在新 SubmitOrder HTTP 入口拦截。
 - `modules/trade/proto/tradegen/validation.go` 是手写契约，不是 proto 自动生成文件；生成只使用当前 Makefile，不 clean 删除该文件；嵌套 tradegen module 要单独测试。
 - 新 ControlMode 迁移不能复用跳过整个 CREATE TABLE SQL 比较的 `legacyLogicalAccountShapeMatches` 宽松逻辑；必须精确认识已知旧 CHECK/列/default，并保留旧 action、order、fill。该项与 T10 已列出的 receipt exact-shape/事务门禁一起在发布前完成。
+
+### T09/T10 前置门禁增量
+
+- 历史 receipt 迁移正式红测复现：未知列、CHECK/default/unique、额外或改形索引、trigger 原先可被 copy/drop 静默删除；直接迁移在 rename 失败时会留下 `__new` 且丢失原表。现在只接受精确已知历史形状（含实际注释与可选原索引）和当前形状，拒绝未知扩展及入站外键，迁移自身也处于事务内；Open 外层事务保留较早 target 表升级的回滚。
+- 主 Agent 新增 `TestOpenLegacyPinnedCutoverRollsBackAfterPaperFailure`：从旧 logical/target schema、pinned 目标和真实 Paper Order/Fill 开始，末尾余额回填故意失败，连续两次 Open 后全库 schema/data 均与原样一致。仅修复测试故意损坏的 fee 后，升级成功、目标暂停且废止、成交和正确余额保留，再打开无二次变化。这是本地故障注入验证，不是生产迁移证明。
+- T09 快速受理前置问题已红测复现：账户 mutex 占用时 Place 超过 50ms deadline 仍等待到 1s 测试上限。现复用同一账户锁注册表的 context 获取，超时返回带账户归属的 `place_lock` 错误，不创建订单、不消耗 client ID；释放锁后同请求可正常准入。锁定范围与后续风控/预占逻辑未改变。
+- 独立只读调查确认普通 SubmitOrder 不能调用现有 `PlaceManualOrder` 或完整 `recoverManualChild`：前者会暂停/撤单，二者最终均会同步调用 Submit。后续应拆开“寻找/创建并关联 child”与“推进提交”，RPC 只完成前者，既有 OperatorWorker 执行后者。显式 logical ID、用户输入 deadline 必须参与请求幂等，服务端默认 deadline 只计算一次；还需补 logical-account context 锁，不能用外层 timeout 掩盖不可取消的锁等待。
+- Receipt 增量核验继续发现 shared SQL normalizer 会改变字面量语义，独立 codeCR 又发现 SQLite 大小写标识符可绕过 trigger/入站 FK 检查。两类均先红后绿：receipt 专属词法比对保留 literal 和注释边界，依赖枚举按 NOCASE 比较，非规范表名拒绝；不放宽或重写其他迁移的 shared 校验。已覆盖 15 类未知结构，以及有/无原索引、有/无历史注释的四种已知形状。
+- 新 `review_receipt_place_gate` 最终无剩余 P0/P1/P2，主 Agent Store 全量、receipt/组合迁移 race、Order/Operator/Target/Test 四包完整 race、Place 截止时间 race 三次及 Trade vet 通过。Place 提交为 `a4b62b62`。
+- Trade 全量首轮通过，但最终重跑出现 Session Ready 与持久化 Ready 不一致的间歇失败；定向 race 50 次没有复现，已另外建立确定性 handoff 用例调查，不能用重跑通过冲淡该失败。处理记录在后续补记。T09 普通下单、T10 完整契约切换、T11 正式部署及虚拟账户真实端到端仍未完成。
 
 ## 发布调查
 

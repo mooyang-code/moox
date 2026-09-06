@@ -353,13 +353,17 @@ ON t_logical_account_targets (c_space_id, c_status, c_mtime)`).Error; err != nil
 }
 
 func rebuildLegacyTargetReceiptTable(db *gorm.DB) error {
+	if err := validateLegacyTargetReceiptTable(db); err != nil {
+		return err
+	}
 	if !tableExists(db, "t_logical_account_target_receipts") {
 		return nil
 	}
 	if tableHasColumn(db, "t_logical_account_target_receipts", "c_instance_id") {
 		return nil
 	}
-	if err := db.Exec(`
+	return db.Transaction(func(db *gorm.DB) error {
+		if err := db.Exec(`
 CREATE TABLE t_logical_account_target_receipts__new (
     c_space_id TEXT NOT NULL,
     c_target_id TEXT NOT NULL,
@@ -400,9 +404,9 @@ CREATE TABLE t_logical_account_target_receipts__new (
     CHECK (json_valid(c_quantity_targets_json)),
     CHECK (json_type(c_quantity_targets_json) = 'array')
 )`).Error; err != nil {
-		return fmt.Errorf("create migrated target receipt table: %w", err)
-	}
-	if err := db.Exec(`
+			return fmt.Errorf("create migrated target receipt table: %w", err)
+		}
+		if err := db.Exec(`
 INSERT INTO t_logical_account_target_receipts__new
  (c_space_id, c_target_id, c_runner_id, c_logical_account_id,
   c_command_sequence, c_request_hash, c_signal_time, c_weights_json,
@@ -413,25 +417,26 @@ SELECT c_space_id, c_target_id, c_runner_id, c_logical_account_id,
        c_equity, c_equity_source_time, c_reference_prices_json,
        c_quantity_targets_json, c_accepted_at
 FROM t_logical_account_target_receipts`).Error; err != nil {
-		return fmt.Errorf("copy target receipt rows: %w", err)
-	}
-	if err := db.Exec(`DROP TABLE t_logical_account_target_receipts`).Error; err != nil {
-		return fmt.Errorf("drop legacy target receipt table: %w", err)
-	}
-	if err := db.Exec(`ALTER TABLE t_logical_account_target_receipts__new RENAME TO t_logical_account_target_receipts`).Error; err != nil {
-		return fmt.Errorf("rename migrated target receipt table: %w", err)
-	}
-	if err := db.Exec(`
+			return fmt.Errorf("copy target receipt rows: %w", err)
+		}
+		if err := db.Exec(`DROP TABLE t_logical_account_target_receipts`).Error; err != nil {
+			return fmt.Errorf("drop legacy target receipt table: %w", err)
+		}
+		if err := db.Exec(`ALTER TABLE t_logical_account_target_receipts__new RENAME TO t_logical_account_target_receipts`).Error; err != nil {
+			return fmt.Errorf("rename migrated target receipt table: %w", err)
+		}
+		if err := db.Exec(`
 CREATE INDEX IF NOT EXISTS idx_target_receipts_logical
 ON t_logical_account_target_receipts (c_space_id, c_logical_account_id, c_accepted_at)`).Error; err != nil {
-		return fmt.Errorf("recreate target receipt index: %w", err)
-	}
-	return db.Exec(`
+			return fmt.Errorf("recreate target receipt index: %w", err)
+		}
+		return db.Exec(`
 CREATE UNIQUE INDEX IF NOT EXISTS ux_target_receipts_session_bar
 ON t_logical_account_target_receipts (
     c_space_id, c_logical_account_id, c_instance_id, c_session_id, c_bar_end_time
 )
 WHERE c_instance_id <> ''`).Error
+	})
 }
 
 func tableExists(db *gorm.DB, table string) bool {
