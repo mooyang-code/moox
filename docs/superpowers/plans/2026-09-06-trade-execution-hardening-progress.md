@@ -238,6 +238,15 @@ T02 正式红测：`TestModernSessionTargetCanResume` 因 `target runner does no
 - 主库文档提交 `16a60ea5` 的配置与真实节点注册验收门禁已同步到执行计划；保留此工作区已有执行记录，不整体覆盖成全未执行或全已执行。
 - 仍需完成：最终旧协议和启动 reconciliation 清理、注册链审查及集成、全目标最终审查、生产发布、正式隔离 Paper 的真实策略到成交及重启验收。上述本地进展不勾选 T10/T11 的整体完成项。
 
+## 最终源码增量与发布边界（2026-09-07）
+
+- `376dfc18` 收敛了最后一轮注册与隔离测试风险：Strategy 的 Gateway native route 指向 tRPC 11430（HTTP 管理端口仍为 11433）；Strategy ACL 从旧 wildcard methods/callers 收紧为显式方法和 `admin-gateway`/`moox-cli` 调用方，并在 Admin seed 时迁移已有 wildcard 配置；Factor E2E 改用 `moox-cli` Strategy 凭据。
+- `3ac59138`、`03d6142f`、`712a6505`、`d6516b85`、`68d0b5cd` 补齐 Space/事件总线资源安全边界：SQLite `CreateSpace` 为 create-only 且重复 ID 不覆盖原 metadata，使用同一规范化时间写入并返回 `created_at/updated_at`，不依赖提交后回读；catalog cache refresh 改为 after-commit best-effort，`GetSpace` 只把真实 `sql.ErrNoRows` 映射为 `SPACE_NOT_FOUND`。Factor E2E 在创建前拒绝已存在 Space，使用每次运行唯一 owner，在响应丢失或创建失败时仅清理仍归属本次运行的 Space；脚本无重启时要求预配置 allow-list，重启时合并运行进程/调用方的原有 allow-list、自动加入临时 Space，给 package-local/root 两种 View 启动命令传入 Storage secrets、`MOOX_STORAGE_EVENTBUS_URL` 和 allow-list，重启后校验 `/readyz`，失败尝试恢复原 View，且无 role credential 文件时仍保留 Factor 进程实际 EventBus URL，清理失败升级为测试失败。
+- 最新本地核验：Storage metadata/catalog、Admin sysdeploy、Gateway router、gatewayproxy 普通测试及 `-race` 通过；相关 `go vet`、`git diff --check`、`bash -n scripts/test/e2e/test-factor-storage-e2e.sh` 通过。此前记录的 Trade/Strategy/Admin/CLI/Web、隔离 NATS/Paper、Gateway 授权验证仍有效；`make verify-pr` 仍受复制基线 dirty proto 与既有 Storage durable 命名规则阻断。
+- 本轮改动不改变已发布 Trade 制品；Trade/CLI 制品仍来自 `89757d58`，`moox-trade` SHA-256 为 `c1ebe2368a0735451f1d3e60f5d8b2a6dd59e030b26959b3b5379ea8d26a4a83`，远端 dedicated Trade 节点已运行该制品并通过认证 `/readyz`，Paper 订单/成交及重启恢复证据保持不变。
+- 最终独立 codeCR 已基于最新 `HEAD=f431610e` 完成复核，无剩余 P0/P1/P2。审查确认 Storage View 重启在调用启动命令前继承并预检凭据路径，根 `start.sh` 仅在显式 `MOOX_STORAGE_EVENTBUS_URL_OVERRIDE` 时覆盖 packaged runtime，普通启动行为不变；Trade/Strategy/Storage 关键调用链亦无新的 P0/P1/P2。该轮通过两个脚本 `bash -n`、Storage View/control profile 合同测试，以及 Trade/Strategy/Storage 共 11 个 focused package 测试；未覆盖故意不可读凭据下的真实 shell 文件系统故障注入。
+- 正式 control-plane `ubuntu@106.53.107.122` 仍无法 BatchMode SSH（`Permission denied (publickey,password)`）。因此 Admin/Strategy/Gateway 注册链、应用快照和正式协调发布尚未完成；在控制面凭据恢复并完成独立核验前，T11 继续保持“执行中”，不得宣称完整正式环境交付。
+
 尚无。必须记录最终源码 SHA、独立审查闭环、实际部署二进制 SHA/进程、正式隔离 Space/账户/策略标识、目标和订单/Fill 标识、余额/持仓断言、重启恢复和测试资源停用结果。任何一项缺失都不得标记目标完成。
 
 ## 最后一轮源码与隔离验收（2026-09-06）
@@ -249,4 +258,4 @@ T02 正式红测：`TestModernSessionTargetCanResume` 因 `target runner does no
 - 正式发布：专用 Trade 节点 `ubuntu@43.132.204.177` 缺少新部署脚本要求的 `config/components.env`，因此未伪造 component overlay；在保留二进制、配置和 SQLite/WAL 备份（`/home/ubuntu/moox/trade-move/release-backups/trade-89757d58-20260906234615`）后，原子替换 Trade/CLI 并通过现有 `start.sh trade` 重启。当前进程 PID `1308017`，认证 `/readyz` 返回 200/`ready=true`，EventBus、数据库、Paper Matcher、Target/Operator Worker 均 ready，远端二进制 hash 与本地制品一致。Trade 迁移后保留 5 个 PAPER 账户、2 笔 FILLED 订单/成交且无 LIVE 账户；未修改 live_trading_enabled。
 - control host `ubuntu@106.53.107.122` 当前 BatchMode SSH 返回 `Permission denied (publickey,password)`，故无法执行 Admin/Strategy/Gateway 正式注册链、应用快照核验及协调发布。未尝试发现或重建凭据；在控制面可达前，T11 仍为阻塞状态，不能将 Trade 单组件重启宣称为完整正式环境交付。
 - 隔离 Paper 真实链路已验收：`crypto` / `paper-account-230bef26ed938b41` / `paper-logical-230bef26ed938b41`，策略事件经 Strategy Processor -> Outbox -> NATS -> Trade Consumer/Receipt -> Worker/Paper Matcher；订单 `ZHIujZQJpQAc9Amh5XY-1`、Paper order `paper-order-9989b96f6709d5082121ab7f`、Fill `paper-account-...:mtdaelt2u9vsd9i6rrn1bg`，成交 0.12504 @ 79974.25，重投不重复；重启后仍 PAPER/ready、receipt hash/order/fill 保留。该资源为隔离测试资源，未连接实盘。
-- 新一轮独立 `codeCR` 正在基于上述最后源码增量审查；在其完成且主 Agent 核验前，不标记最终交付完成。当前唯一硬阻塞是正式 control-plane 接线与生产节点应用快照核验。
+- `f431610e` 之后的主 Agent 核验完成，代码审查门禁已闭环；当前唯一硬阻塞仍是正式 control-plane 接线与生产节点应用快照核验。
