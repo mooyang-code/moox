@@ -54,6 +54,10 @@ if [[ -r "${factor_eventbus_credentials}" ]]; then
   [[ -n "${factor_eventbus_ca}" && -r "${factor_eventbus_ca}" ]] && export MOOX_EVENTBUS_NATS_TLS_CA_FILE="${factor_eventbus_ca}"
 fi
 
+# Preserve a custom EventBus endpoint even for deployments that authenticate
+# with no role credential file (for example a local non-TLS broker).
+[[ -n "${factor_eventbus_url}" ]] && export MOOX_EVENTBUS_NATS_URL="${factor_eventbus_url}"
+
 for service in gateway storage-primary storage-node storage-view factor strategy; do
   require_running_service "${service}"
 done
