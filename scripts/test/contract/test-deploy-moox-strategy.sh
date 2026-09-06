@@ -94,7 +94,7 @@ assert args[:2] == ["service-deployments", "import"]
 flags = dict(zip(args[2::2], args[3::2]))
 assert flags["--node-id"] == "trade-node", flags
 assert flags["--public-host"] == "trade.example.test", flags
-assert flags["--only-services"] == "trade_owner,trade_console", flags
+assert flags["--only-services"] == "trade_owner", flags
 PY
 cp "${TMP_ROOT}/unpacked/config/trade-gateway.json" "${TMP_ROOT}/trade-gateway-original.json"
 printf '%s\n' '{"gateway_url":"http://127.0.0.2:11002","target_node":"trade-node"}' >"${TMP_ROOT}/unpacked/config/trade-gateway.json"

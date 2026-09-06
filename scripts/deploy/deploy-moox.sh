@@ -2302,7 +2302,7 @@ PY
     --file "${ROOT}/config/setup/service-deployments.yaml" \
     --node-id "${owner_node}" --public-host "${owner_host}" \
     --eventbus-nats-url "${MOOX_EVENTBUS_NATS_URL}" \
-    --only-services trade_owner,trade_console >>"${ROOT}/logs/admin/stdout.log" 2>&1
+    --only-services trade_owner >>"${ROOT}/logs/admin/stdout.log" 2>&1
 }
 
 start_admin() {
