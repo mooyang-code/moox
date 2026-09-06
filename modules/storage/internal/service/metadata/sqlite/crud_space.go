@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -44,14 +45,17 @@ func (s *Store) CreateSpace(ctx context.Context, item *pb.Space) (*pb.Space, err
 		return nil, errors.New("space_id and name are required")
 	}
 	item.Status = defaultStatus(item.GetStatus())
+	now := s.nowUTC().Format(time.RFC3339Nano)
+	item.CreatedAt = now
+	item.UpdatedAt = now
 	raw, err := marshal(item)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO t_spaces (c_space_id, c_name, c_description, c_owner, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, item.GetSpaceId(), item.GetName(), item.GetDescription(), item.GetOwner(), item.GetStatus(), raw); err != nil {
+		INSERT INTO t_spaces (c_space_id, c_name, c_description, c_owner, c_status, c_attrs_json, c_ctime, c_mtime)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, item.GetSpaceId(), item.GetName(), item.GetDescription(), item.GetOwner(), item.GetStatus(), raw, now, now); err != nil {
 		return nil, err
 	}
 	// The INSERT is committed by the SQLite connection. Do not perform a
