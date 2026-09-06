@@ -144,6 +144,7 @@ start_storage_view() {
     env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
       MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE="${storage_view_credential_file}" \
       MOOX_STORAGE_EVENTBUS_URL="${eventbus_url}" \
+      MOOX_STORAGE_EVENTBUS_URL_OVERRIDE="${eventbus_url}" \
       MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}" \
       MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}" \
       MOOX_STORAGE_NODE_AUTH_SECRET="${storage_node_secret}" \
@@ -152,6 +153,7 @@ start_storage_view() {
   else
     env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
       MOOX_STORAGE_EVENTBUS_URL="${eventbus_url}" \
+      MOOX_STORAGE_EVENTBUS_URL_OVERRIDE="${eventbus_url}" \
       MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}" \
       MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}" \
       MOOX_STORAGE_NODE_AUTH_SECRET="${storage_node_secret}" \
@@ -229,6 +231,9 @@ if [[ "${restart_storage_view}" == "1" ]]; then
   storage_view_credential_file="${original_storage_credential_file:-}"
   if [[ -z "${storage_view_credential_file}" && -r "${HOME}/.config/moox/eventbus/storage-eventbus.yaml" ]]; then
     storage_view_credential_file="${HOME}/.config/moox/eventbus/storage-eventbus.yaml"
+  fi
+  if [[ -n "${storage_view_credential_file}" && ! -r "${storage_view_credential_file}" ]]; then
+    fail "captured storage-view EventBus credential file is not readable: ${storage_view_credential_file}"
   fi
   restart_error=""
   if ! start_storage_view "${e2e_allowed_spaces}" "${storage_eventbus_url}"; then

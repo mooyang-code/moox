@@ -1381,6 +1381,14 @@ if [[ -r "${ROOT}/config/resources.env" ]]; then
   source "${ROOT}/config/resources.env"
   set +a
 fi
+# A controlled service restart may need to preserve the broker endpoint from
+# the currently running process even when runtime.env contains the deployment
+# default. Keep this explicit override opt-in; ordinary starts remain governed
+# by the packaged runtime configuration.
+storage_eventbus_url_override="${MOOX_STORAGE_EVENTBUS_URL_OVERRIDE:-}"
+if [[ -n "${storage_eventbus_url_override}" ]]; then
+  export MOOX_STORAGE_EVENTBUS_URL="${storage_eventbus_url_override}"
+fi
 HEALTH_AUTH_FILE="${ROOT}/secrets/health-auth.env"
 [[ -r "${HEALTH_AUTH_FILE}" ]] || { echo "missing health credentials: ${HEALTH_AUTH_FILE}" >&2; exit 1; }
 [[ -r "${ROOT}/secrets/gateway-control.env" ]] || { echo "missing Gateway control credentials" >&2; exit 1; }
