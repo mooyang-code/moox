@@ -8,9 +8,11 @@
 
 **技术栈：** Go、tRPC/Protobuf、SQLite/GORM、JetStream、Vue/TypeScript、Binance/OKX、Vitest/Playwright。
 
-**状态：** 待用户确认，尚未开始编码。本次只新增本计划；下文的命令、SQL、接口草案和任务均为后续执行说明，不表示已经实施、部署或通过验收。
+**状态：** 待用户确认，本轮仅核对并完善计划，不修改业务代码。下文的命令、SQL、接口草案和任务均为后续执行说明，不表示已经实施、部署或通过验收；其他分支的实现进度不据此自动勾选。
 
 **审查基线：** `feature/mooyang`，`2bd4f508d45031e5a8fb629e5b62b88b9743810a`，2026-09-06。工作区同时存在 Strategy、Storage、文档和部署配置的其他修改；实施时重新核验，禁止覆盖或顺带提交。
+
+**本次计划复核：** 原仓库 `feature/mooyang`，`c15d688ba3e25226c42c1fd10b5800ec21df5652`。复核开始时工作区干净；上述审查基线及其测试记录属于此前快照，不代表本轮重新运行测试。当前 Strategy 已有新的执行流水线提交，T01/T10 必须以最新生产者代码验证契约，而不是照搬旧工作区。
 
 ---
 
@@ -48,6 +50,18 @@
 ### 1.4 本轮不做
 
 不引入微服务拆分、分布式事务/锁、全局 exactly-once、通用工作流引擎、完整双式账本、订单簿仿真、部分成交模拟、高频延迟 SLA、多策略共享账户的虚拟持仓分账。Paper 杠杆配置、资金费和强平另立需求。Trade 到 Strategy 的可靠回报事件及其 outbox 不在本轮引入；先交付可查询状态与结构化错误记录。
+
+### 1.5 三条能力的交付合同
+
+| 用户需求 | 入口与执行方式 | 返回或可查询事实 | 对应任务 |
+| --- | --- | --- | --- |
+| 事件触发异步交易 | Strategy FULL 权重事件；Trade 持久受理后由 Worker 收敛 | receipt、目标状态、订单、成交、持仓；Broker ACK 不等于成交 | T02、T06-T08、T10-T11 |
+| 实时交易接口 | MANUAL 的普通 SubmitOrder 快速受理；接管接口另行显式暂停/撤单 | action/order ID；查询真实订单状态，复用现有撤单与账户查询接口 | T03、T09-T11 |
+| 模拟账户 | Paper Adapter 接入同一订单/成交内核，使用行情和简化撮合 | 余额、预占、订单、成交、持仓及重启后的同一结果 | T04-T06、T09、T11 |
+
+这里的“实时”表示请求可及时受理和查询，不承诺同步成交或固定毫秒 SLA。第一版不新增第二套推送总线；客户端通过现有查询接口跟踪结果。
+
+优先完成 A 阶段的正确性修复；普通 SubmitOrder 是明确的功能缺口。多账户动态路由和旧协议清理在确认设计后实施，不作为无限扩展交易平台的理由。
 
 ## 二、审查问题与任务映射
 
@@ -137,6 +151,7 @@ Claim/Rebind transaction:
 **文件：**
 - 修改：`modules/trade/internal/application/operator/service.go`、`cancel.go`
 - 修改：`modules/trade/internal/runtime/operator_worker.go`
+- 测试及健康语义复核：`modules/trade/internal/runtime/operator_worker_test.go`、`modules/trade/internal/health/state.go` 及对应测试
 - 修改：`modules/trade/internal/rpc/execution.go`、`execution_test.go`
 - 必要修改：`modules/trade/internal/application/order/service.go`、`infra/store/operator_action.go`
 - 测试：上述对应测试；新增 `modules/trade/test/manual_unknown_recovery_e2e_test.go`
@@ -155,6 +170,7 @@ Claim/Rebind transaction:
 | 临时行情/同步/账户不可用 | RUNNING，保留关联，等待恢复或显式人工取消 | 不允许绕过校验 |
 
 - [ ] 相同 action ID 的重试返回同一个 action/order；人工响应可表达 RUNNING/UNKNOWN，不能引导客户端换 ID“再试一次”。错误或重启不得丢失已有 reservation；明确终态按现有订单事务释放。
+- [ ] OperatorWorker 每个 action 的完整恢复调用使用有界、可取消 context，单 action 的行情/交易所失败或超时写入诊断后继续下一项，不把业务错误汇总成全局 Not Ready。公共存储读取/持久化失败、错误配置和 worker 退出仍影响健康，不能吞掉数据库错误。保持有界串行恢复，不为此新建工作流框架；测试 A 超时后 B 能推进、业务失败不拖低全局 readiness、公共 List/DB 失败仍不健康，并替换目前固化“任意恢复错误导致全局失败”的测试。
 - [ ] 同步修改 `loadManualOrderResult` 和 RPC 错误映射：已有 durable RUNNING action 的 last_error 只用于诊断，正常读回时返回 nil application error、`RetInfo=0`，不能仅因 last_error 非空就表示“提交失败”。真实持久化/读取失败仍返回系统错误；尚未受理的校验失败、幂等冲突及明确 FAILED 保持对应错误语义。
 - [ ] 关联 child order 后先恢复该订单，不能重新从暂停/撤单开始，把自己的已受理订单当作待清理挂单。若尚未关联，先按原 client ID 查找并校验完整 spec，再决定是否创建。
 - [ ] 持久化绝对提交截止时间，避免依赖恢复后在任意未来时刻执行旧人工请求。A 阶段首次创建 action 的同一事务中，用 CreatedAt 加当时的默认窗口算出 `deadline_at`，写入 ResultJSON 进度；恢复只读取该绝对值，不按新配置重算。已有缺少 deadline 的 RUNNING action 一次性补值并持久化后再恢复。B 阶段允许接口显式指定 `deadline_at`；服务端生成值不加入 RequestJSON 幂等身份。默认窗口值作为执行前配置决策记录，并测试修改配置后重启仍不改变旧截止时间。
@@ -245,6 +261,7 @@ CREATE TABLE IF NOT EXISTS t_paper_asset_balances (
 **文件：**
 - 修改：`modules/trade/internal/execution/paper/matcher.go`、`runtime/paper_matcher_worker.go`、`runtime/session.go`
 - 修改：`modules/trade/internal/application/target/executor.go`、`runtime/target_worker.go`
+- 修改及测试：`modules/trade/internal/eventconsumer/jetstream.go`、`target.go` 及对应测试
 - 修改：`modules/trade/internal/infra/store/target.go`、`schema/logical_account.sql`、`internal/health/state.go`
 - 修改：`modules/trade/internal/bootstrap/bootstrap.go`
 - 新增：`modules/trade/internal/execution/paper/decider.go`、`decider_test.go`
@@ -256,6 +273,7 @@ CREATE TABLE IF NOT EXISTS t_paper_asset_balances (
 - [ ] 区分 worker 存活/数据库可用与账户业务错误。matcher 已启动且公共持久化可用时可服务健康账户；某账户的失败只使该账户不可交易。worker 退出必须立刻不健康，不得只修成永远返回 true。
 - [ ] 目标增加持久化 `EXPIRED`；到期使用当前 target ID/session 的 CAS 更新，旧扫描不能覆盖新目标。EXPIRED 不再参与正常收敛扫描；已有 Order/Fill 继续由账户同步处理，新目标仍可覆盖它。
 - [ ] 撤销 consumer 与全量 worker 共用的 `targetGate`，保留现有组合账户锁。验收“A 的行情阻塞时，B 可以持久化受理目标”；不承诺单串行执行器下 B 完全不受执行排队影响。耗时外部调用有界，按 ID 唤醒优化放在此项的最后。
+- [ ] 接收端复用 `RunnerConfig.IndependentBatch`，并发上限沿用有界 BatchSize，同一组合仍串行。当前默认整批串行且受理前同步估值，仅删除 targetGate 不能满足账户隔离。设置 handler 总时限及小于 AckWait 的 InProgressInterval；阻塞 A 的 Resolver 时，测试同批 B 在 A 释放前已持久化 receipt/target。后续批次仍需等待本批结束，不把批内并行描述成无排队；超时必须释放任务和锁。
 - [ ] 锁顺序统一为组合账户、组合执行、执行账户；禁止在持有执行账户锁时回调获取组合锁。复核 AccountsSync/FactsObserver 的 wake 必须在释放账户锁后发生。
 - [ ] 验收：A 永久失败、B 仍成交；坏候选不饿死健康候选；目标自然过期不新发单/不撤单/不清仓，实例仍健康；新目标并发到达不被过期 CAS 覆盖；真实 worker 退出可检测。
 - [ ] 运行 `go test -race -count=1 ./modules/trade/internal/runtime ./modules/trade/internal/execution/paper ./modules/trade/internal/application/target ./modules/trade/internal/health ./modules/trade/internal/eventconsumer ./modules/trade/test`。
@@ -317,16 +335,19 @@ expected: buy 1 on B; no sell on B; receipt quantity remains 2
 - 修改：`modules/trade/internal/application/operator/service.go`、`internal/domain/operator/action.go`、`schema/logical_account.sql`
 - 修改：`modules/trade/internal/domain/logicalaccount/account.go`、`application/logicalaccount/service.go`、`application/papersimulation/service.go`
 - 修改：`modules/trade/internal/infra/store/logical_account.go`、`store.go`、`internal/rpc/logical_account.go`、`convert.go`
+- 修改及测试：`modules/trade/internal/eventconsumer/target.go`、`internal/infra/store/target.go`、`target_receipt.go`、`internal/application/target/executor.go`、`internal/application/order/service.go` 及对应测试
 - 修改：`modules/trade/internal/runtime/operator_worker.go`、`infra/store/operator_action.go`
 - 修改：`web/src/api/trade/index.ts`、`types.ts`、`trade.test.ts`
 
 - [ ] 复用 OperatorAction 的持久化与恢复能力，新增 action type `SUBMIT_ORDER`；Order owner 仍由服务端设为 OPERATOR。不引入独立的订单提交数据库或后台进程。
 - [ ] 新增持久化 `ControlMode=MANUAL/STRATEGY`，与 Live/Paper、ACTIVE/PAUSED 两个维度分开。已有组合明确迁移为 STRATEGY，不根据 owner 是否为空猜测；创建组合/Paper 时允许显式选择 MANUAL。同步 schema CHECK、Store 校验、RPC 转换与契约测试。
 - [ ] 在 Store 严格结构校验前执行已知基线的一次性事务升级：无损增加 `c_control_mode DEFAULT 'STRATEGY'`，重建带新 action type CHECK 的 `t_operator_actions` 并保留所有行、索引和关联。测试包含历史 Order/Fill/OperatorAction 的旧库升级、再次打开，以及新 SUBMIT_ORDER 插入；不只验证空库。
-- [ ] 新 `SubmitOrder` 请求使用 action ID、logical account ID、client order ID、trading account ID、instrument、方向、数量、类型、FillPolicy、限价、reason、绝对 `deadline_at`；不接受 owner、instance、session、reduce-only 等可信字段。`PlaceManualOrder` 同步支持 deadline，省略时沿用 T03 的持久化默认截止时间。
+- [ ] 新 `SubmitOrder` 请求使用 action ID、logical account ID、client order ID、trading account ID、instrument、方向、position_side、数量、类型、FillPolicy、限价、reason、绝对 `deadline_at`；不接受 owner、instance、session、reduce-only 等可信字段。position_side 沿用现有 ClientOrderSpec：SPOT 必须 UNSPECIFIED，SWAP 必须 NET，拒绝其他组合，不新增双向持仓模式。Paper 和 Live mock 都覆盖 SPOT/SWAP 正负例，避免新接口省略字段造成所有 SWAP 单校验失败。`PlaceManualOrder` 同步支持 deadline，省略时沿用 T03 的持久化默认截止时间。
 - [ ] 组合锁内校验 MANUAL 模式、当前启用成员关系及账户可执行条件，持久化关联订单后返回受理结果。普通接口不调用 Pause，不撤其他订单；STRATEGY 账户在产生 action/order/预占副作用之前拒绝，提示使用显式人工接管接口。
 - [ ] MANUAL 账户拒绝策略 Claim/Rebind、自动 Resume 和目标事件；readiness 不要求策略 owner/target。允许多个活动人工单，资金预占继续由现有执行账户锁串行保护。本轮控制模式创建后不可直接修改；后续切换功能必须另做暂停、清理活动 action/order 和身份重建，不能复用“owner 为空”绕过边界。
+- [ ] 控制模式校验贯穿 Consumer 估值前、Store 原子受理与 receipt 回放前、Executor 收敛和 OrderService 实际提交前；不能只在 Claim/RPC 检查。分别测试直接调用 Store、重放旧 receipt 和恢复已存在的 PENDING 目标订单均不能绕过 MANUAL 边界。读取账户失败保留可重试的基础设施错误，只把真实模式冲突归类为永久授权拒绝。
 - [ ] 新 SubmitOrder RPC 不等待交易所 POST 或最终成交，也不触发撤单；必要的行情与本地风控检查有超时。响应含 action、order ID 和实际受理状态，`RetInfo=0` 只说明成功受理。正常初次返回 RUNNING/PENDING；后台已推进时返回实际状态。ACCEPTED 仅是本文的受理描述，不增加同名 action/order 状态。
+- [ ] 同时覆盖锁等待的响应边界：当前 `infra/store/store.go` 的组合锁和执行账户锁使用 `sync.Mutex.Lock`，仅设置 RPC/行情 context 不能取消排队。普通受理路径使用可取消的同一锁注册表，不能另建一套不互斥的锁；测试持锁时请求超时返回、无 action/order/预占写入，以及释放后后续请求成功。不在持锁等待期间启动遗留 goroutine。
 - [ ] 上述快速响应要求不改变显式接管的顺序：PlaceManualOrder 仍须先暂停并确认策略订单已撤销，再创建 child。取消尚未确认时 action 可以 RUNNING 且没有 order ID，不承诺两种接口都能立即返回 child；未知恢复继续遵守 T03。
 
 ```text
@@ -345,16 +366,19 @@ GetOrder / GetOperatorAction -> current facts, never infer fill from RPC success
 
 **文件：**
 - 修改：`packages/tradeeventpb/trade_events.proto` 及生成文件；`packages/events/registry.go`、`validation.go` 和相关测试
+- 修改及测试：`modules/eventbus/config/app.yaml`、`modules/eventbus/internal/config/config_test.go`、`scripts/test/contract/test-docs-architecture.sh`
 - 修改：`modules/trade/proto/trade_service.proto`、`internal/rpc/convert.go`、`logical_account.go`、`internal/domain/order/spec.go`
-- 协同修改：`modules/strategy/internal/store/results.go`、`internal/bootstrap/logical_account.go`、`internal/rpc/service.go`、`proto/strategy.proto` 及对应生成文件/测试
+- 协同修改：`modules/strategy/internal/trigger/processor.go`、`processor_test.go`、`modern_test.go`、`internal/store/results.go`、`internal/bootstrap/logical_account.go`、`internal/rpc/service.go`、`proto/strategy.proto` 及对应生成文件/测试
 - 修改 Web：`web/src/api/strategy.ts`、`strategy-types.ts`、`api/trade/types.ts`、`views/trading/logical-accounts/index.vue`、`views/trading/account-workbench/index.vue` 及对应测试
 - 修改文档：`modules/trade/DESIGN.md`、`modules/trade/README.md`、`docs/交易模块架构设计.md`、`docs/交易模块功能说明.md`、`docs/运维/MooX-Trade运维.md`
 - 对齐不重写：`docs/策略执行框架设计.md`、`docs/策略模块架构设计.md`
 
 - [ ] 枚举所有 producer、consumer、RPC 和 Web 使用者，先把仍在使用的 UI/管理调用切到 instance/session，再删除旧自动执行 producer/consumer 分支。不得只删 proto 导致运行中的 Strategy 发布无人消费的消息。
+- [ ] 以本次复核基线的 `trigger/processor.go:marshalTargetEvent` 作为现代生产入口，追踪求值结果持久化及 Outbox；`store/results.go:marshalLegacyTargetEvent` 是旧适配入口，不再把它误当唯一 producer。T01/T11 的现代 E2E 必须从实际 Processor 产出事件，验证 instance/session、时间窗和 FULL 目标，而非测试手工组装等价 payload。
 - [ ] 最终自动交易事件只接受完整现代身份、bar_end_time、effective_at、valid_until 与 target_weight；删掉旧数量事件执行入口、legacy owner generation/command sequence 的授权 fallback。历史结果和交易事实不因此删除。
 - [ ] 本任务只处理执行边界及直接调用方，不重写 Strategy DSL、因子、选股或调度实现。Strategy 同时在修改时先对齐实际契约；无法闭合直接调用链则停止该切换，不把半完成接口作为已交付版本。
 - [ ] 不添加 `reserved`、别名、长期双写/双读兼容层。需要保留的历史审计字段明确为只读来源，不参与新授权或新目标生成。已有 legacy owner 必须通过受控停用/重新授权切换，不能猜测 session。
+- [ ] 同步清理 EventBus 配置和架构契约脚本的旧 quantity subject/事件名。发布时核查实际 MOOX_TRADE stream、consumer filter 和发布 ACL，现代 weight subject 必须保留；停止旧 producer 后先记录旧积压的数量和处置决策，再受控更新 subject。禁止删除并重建生产 stream，也不能认为改本地 YAML 就已修改远端。旧事件负例、现代发布/消费正例和已有消息保留均纳入验收。
 - [ ] 控制台保留现有订单、成交、持仓、资金曲线和账户信息；只调整身份字段、受理/未知/过期状态及新提交入口，不扩大成 UI 重设计。
 - [ ] 创建账户时展示控制模式；MANUAL 显示“下单”，STRATEGY 显示“接管并下单”及暂停/撤单警告。RUNNING action 即使有 transient last_error 也继续查询，不把临时错误显示为不可恢复失败。
 - [ ] 更新文档：权重外部合同、数量内部合同、动态路由、人工接管/普通提交差异、Paper 仿真边界、停止/过期/清仓语义，以及错误定位字段。
