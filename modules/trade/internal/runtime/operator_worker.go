@@ -24,9 +24,10 @@ type OperatorActionResumer interface {
 }
 
 type OperatorWorker struct {
-	Actions  RunningActionSource
-	Resumer  OperatorActionResumer
-	Interval time.Duration
+	Actions       RunningActionSource
+	Resumer       OperatorActionResumer
+	Interval      time.Duration
+	ActionTimeout time.Duration
 
 	mu        sync.RWMutex
 	ready     bool
@@ -89,8 +90,18 @@ func (w *OperatorWorker) runOnce(ctx context.Context) error {
 		return err
 	}
 	var runErrors []error
+	timeout := w.ActionTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
 	for _, action := range actions {
-		if err := w.Resumer.ResumeOperatorAction(ctx, action); err != nil {
+		if ctx.Err() != nil {
+			break
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		err := w.Resumer.ResumeOperatorAction(attemptCtx, action)
+		cancel()
+		if err != nil {
 			runErrors = append(runErrors, err)
 		}
 	}

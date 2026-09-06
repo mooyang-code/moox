@@ -522,6 +522,8 @@ func (s *Service) RecoverCancel(
 	spaceID string,
 	orderID string,
 ) (orderdomain.Order, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	if s == nil || s.Store == nil || s.Adapters == nil || s.Syncer == nil {
 		return orderdomain.Order{}, ErrServiceConfig
 	}
@@ -541,19 +543,52 @@ func (s *Service) RecoverCancel(
 	if err != nil {
 		return current, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
-	_, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
-	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-	defer persistCancel()
-	ctx = persistCtx
-	if callErr == nil {
+	found, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
+	if lookupErr != nil {
+		return current, accountExecutionError(record.TradingAccountID, "cancel_lookup", lookupErr)
+	}
+	if found.Status != exchange.OrderStatusOpen && found.Status != exchange.OrderStatusPartiallyFilled {
+		// Only the sync/reducer pipeline can import fills and release resources.
+		// A terminal lookup suppresses another cancel even while those facts lag.
+		if err := ctx.Err(); err != nil {
+			return current, accountExecutionError(record.TradingAccountID, "cancel_sync", err)
+		}
 		if err := s.Syncer.SyncAccount(ctx, record.TradingAccountID); err != nil {
 			return current, err
 		}
-		return s.Get(ctx, spaceID, orderID)
+		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		return s.Get(readCtx, spaceID, orderID)
+	}
+	latest, err := s.Get(ctx, spaceID, orderID)
+	if err != nil {
+		return current, err
+	}
+	if latest.State.Terminal() {
+		return latest, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return latest, accountExecutionError(record.TradingAccountID, "cancel_lookup", err)
+	}
+	ioCtx := ctx
+	_, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer persistCancel()
+	if callErr == nil {
+		if err := ioCtx.Err(); err != nil {
+			return current, accountExecutionError(record.TradingAccountID, "cancel_sync", err)
+		}
+		if err := s.Syncer.SyncAccount(ioCtx, record.TradingAccountID); err != nil {
+			return current, err
+		}
+		return s.Get(persistCtx, spaceID, orderID)
 	}
 	if !uncertainExchangeError(callErr) {
-		if err := s.Syncer.SyncAccount(ctx, record.TradingAccountID); err != nil {
-			return current, err
+		if err := ioCtx.Err(); err != nil {
+			return current, errors.Join(accountExecutionError(record.TradingAccountID, "cancel", callErr), accountExecutionError(record.TradingAccountID, "cancel_sync", err))
+		}
+		if err := s.Syncer.SyncAccount(ioCtx, record.TradingAccountID); err != nil {
+			return current, errors.Join(accountExecutionError(record.TradingAccountID, "cancel", callErr), err)
 		}
 	}
 	// Even an uncertain response can arrive after a private terminal update.

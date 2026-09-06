@@ -68,7 +68,7 @@ func TestPaperManualRefreshReplacesReflectedReservationE2E(t *testing.T) {
 				ClientOrderID: "reflected-refresh", InstrumentID: testInstrumentID, Type: exchange.OrderTypeMarket,
 				Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("18"), Reason: "delayed paper order"}
 			initial, err := service.PlaceManualOrder(ctx, command)
-			require.NoError(t, err)
+			require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 			_, err = f.sync.SyncAccount(ctx, testAccount)
 			require.NoError(t, err)
 			now = now.Add(70 * time.Second)

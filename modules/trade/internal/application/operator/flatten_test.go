@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -119,7 +120,7 @@ func TestFlattenWaitsForCancellationConfirmation(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Empty(t, fixture.orders.specs)
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, "RUNNING", result.Action.Status)
 	require.Contains(t, result.Accounts[0].Error, "cancellation is not confirmed")
 }
 
@@ -152,7 +153,7 @@ func TestFlattenSkipsStaleFailedAccountAndContinuesOthers(t *testing.T) {
 	fixture.orders.nextID = ""
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	fixture.position(t, "account-b", "BTC-USDT-SWAP", "-3")
-	fixture.syncer.fail = map[string]error{"account-a": errors.New("sync unavailable")}
+	fixture.syncer.fail = map[string]error{"account-a": &orderapp.AccountExecutionError{TradingAccountID: "account-a", Err: errors.New("sync unavailable")}}
 
 	result, err := fixture.service().FlattenLogicalAccount(
 		context.Background(),
@@ -167,7 +168,7 @@ func TestFlattenSkipsStaleFailedAccountAndContinuesOthers(t *testing.T) {
 	require.Equal(t, "account-b", fixture.orders.specs[0].TradingAccountID)
 	require.Equal(t, exchange.SideBuy, fixture.orders.specs[0].Side)
 	require.Equal(t, "3", fixture.orders.specs[0].Quantity.String())
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, "RUNNING", result.Action.Status)
 	require.Equal(t, "sync unavailable", result.Accounts[0].Error)
 }
 
@@ -294,11 +295,11 @@ func TestFlattenIncludesDisabledMembersAndKeepsSpotSettlementCash(t *testing.T) 
 	require.Equal(t, "1", fixture.orders.specs[0].Quantity.String())
 }
 
-func TestFlattenFailsWhenNoMemberCanExecute(t *testing.T) {
+func TestFlattenRemainsRecoverableWhenEveryMemberIsUnavailable(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	fixture.syncer.fail = map[string]error{
-		"account-a": errors.New("a failed"),
-		"account-b": errors.New("b failed"),
+		"account-a": &orderapp.AccountExecutionError{TradingAccountID: "account-a", Err: errors.New("a failed")},
+		"account-b": &orderapp.AccountExecutionError{TradingAccountID: "account-b", Err: errors.New("b failed")},
 	}
 
 	result, err := fixture.service().FlattenLogicalAccount(
@@ -310,7 +311,7 @@ func TestFlattenFailsWhenNoMemberCanExecute(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, "FAILED", result.Action.Status)
+	require.Equal(t, "RUNNING", result.Action.Status)
 	require.Empty(t, fixture.orders.specs)
 }
 
@@ -422,7 +423,7 @@ func TestFlattenRetryStopsAtDeadline(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Less(t, time.Since(started), 5*time.Second)
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, "RUNNING", result.Action.Status)
 	require.Equal(t, 3, fixture.syncer.callsFor("account-a"))
 }
 
@@ -450,7 +451,7 @@ func TestFlattenRecoveryCallsReceiveDeadlineContext(t *testing.T) {
 	require.True(t, allCallsBounded)
 }
 
-func TestFlattenPartialReplayContinuesSameActionWithoutDuplicateChild(t *testing.T) {
+func TestFlattenRunningReplayContinuesSameActionWithoutDuplicateChild(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	fixture.orders.nextID = ""
 	fixture.orders.leaveOpen = map[string]bool{
@@ -465,7 +466,7 @@ func TestFlattenPartialReplayContinuesSameActionWithoutDuplicateChild(t *testing
 		context.Background(), command,
 	)
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", first.Action.Status)
+	require.Equal(t, "RUNNING", first.Action.Status)
 	require.NoError(t, setOperatorOrderState(
 		context.Background(),
 		fixture.store,

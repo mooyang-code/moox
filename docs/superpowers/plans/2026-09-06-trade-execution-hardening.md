@@ -14,6 +14,10 @@
 
 **计划增量：** 已核对原仓库 `db7ce722` 的文档补充；保留本执行工作区的既有完成记录，不用原仓库未勾选版覆盖实施证据。原仓库 Strategy 已推进至 `c15d688b`，T10 必须重新集成真实 `trigger/processor.go:marshalTargetEvent`，不能误把 `store/results.go:marshalLegacyTargetEvent` 当作唯一生产入口。
 
+**最新计划增量：** 已核对原仓库 `7c8e4fea` 的计划复核。T10 切换面必须覆盖 Strategy Store/Outbox、Trade consumer/store/executor/最终 OrderService 授权，以及 Strategy Web store/详情页/操作面板的旧 Runner 调用，不能只删 proto。所有 `MANUAL_ORDER/FLATTEN/CANCEL_ORDER/SUBMIT_ORDER` 都须通过独立有界恢复、可取消锁、账户错误隔离和共享 DB 错误上报门禁。实施进度仍以本工作区证据为准，不把计划复核或已有其他分支修复当作本工作区验收。
+
+**T10 新审查门禁：** 发布前补齐 Strategy 到独立 Trade 节点的鉴权 Gateway 接线和部署配置渲染/合同测试，不继续依赖 localhost 原生 Trade 端口。修正现代实例创建后 Claim 失败的接口恢复语义，返回已创建实例身份；未知 RPC 结果必须保留 disabled/session 证据，不能简单删除记录。相关文件为 Strategy bootstrap/config/logical_account、RPC service、部署 renderer 与对应测试；修改部署脚本前核对原工作区其他改动。
+
 ---
 
 ## 一、范围与决策

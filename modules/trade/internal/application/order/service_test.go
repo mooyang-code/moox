@@ -1265,6 +1265,7 @@ func newTestServiceForMarket(
 	}))
 	adapter := &adapterStub{
 		placeResult: exchange.Order{ExchangeOrderID: "exchange-order-1"},
+		getResult:   exchange.Order{ExchangeOrderID: "exchange-order-1", Status: exchange.OrderStatusOpen},
 	}
 	service := &Service{
 		Store: tradeStore,

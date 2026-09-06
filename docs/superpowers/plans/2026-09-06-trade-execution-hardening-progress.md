@@ -28,10 +28,36 @@
 | T07 消息结果可观测 | 已完成 | `1a941da7`；真实Runner、四包race、组件及生产构建通过；独立codeCR所有增量发现闭环 |
 | T08 动态账户路由 | 已完成 | 总量与路由分离、共享真实容量、定向唤醒和旧 pin 安全切换；三个新 codeCR 无剩余 P0-P2，主 Agent 全量/race/vet 复验通过 |
 | T09 普通 SubmitOrder | 已完成 | `33e0eb0b`；ControlMode、无损迁移、普通受理/恢复、proto/RPC/Web API，独立 codeCR 无剩余 P0-P2，主 Agent 全量/定向 race 复验通过 |
-| T10 契约与控制台 | 执行中 | 已补历史 receipt 迁移门禁、ControlMode 创建界面、普通/接管下单分流与错误恢复；现代身份清理和全类型 OperatorWorker 健康复核仍待实现 |
+| T10 契约与控制台 | 执行中 | 已补控制台、现代生产流水线集成、隔离 NATS/Paper 成交和全类型 OperatorWorker 健康复核；现代旧协议清理、跨节点 Gateway 接线和实例创建失败恢复仍待闭环 |
 | T11 完整验收与交付 | 未开始 | 全量/race/vet/协议/Web/隔离 NATS/新 Agent 审查/发布/正式 Paper E2E |
 
 ## 已执行验证
+
+### T10 现代生产流水线集成
+
+- 前一目标轮为计划文档复核，提交 `7c8e4fea`，没有发布；本轮用户恢复完整实施目标后继续编码，目标完成标准不变。
+- 独立只读调查将原仓库 `c15d688b` 的 38 个 Strategy 文件与实施工作树逐一比较。8 个重叠 dirty 文件的既有行为已被主库提交吸收或修正，另补 `bootstrap/logical_account_test.go` 的 session 回归；仅移植这些已核实最终 blob，保留 scheduler/config 及其他模块复制基线。没有重新设计 DSL 或选股逻辑。
+- 同时集成该提交直接依赖的 Admin Strategy source-ready ACL、Storage View 调用方权限和 Events 双侧 index provenance 校验及测试。39 + 5 个文件逐一 `git hash-object` 与 c15 提交对象比对一致；部署配置的修改仍待发布时验证，不据源码 ACL 声称正式权限已更新。
+- 新 `TestHandleModernTargetUsesSessionFenceWithoutLegacyGeneration` 以旧生命周期审计值非零、当前 session 合法且消息不含旧身份字段为输入，先复现 `target event belongs to stale owner lifecycle`，再修复现代受理不传 legacy generation。初次 fixture 的 generation 为零断言失败不算业务红测。
+- 新 `TestAuthorizedSessionReplacesStaleTargetAtSameOrEarlierBar` 两个分支先复现 Store SQL 错判 stale，修复为按 instance/session 独立比较 bar；同时验证旧 session 延迟消息不能覆盖已受理目标。保留 T02 的幂等认领与事务删除规则。
+- 主 Agent Strategy 全量测试通过；Bootstrap/Trigger/Outbox/Store 四包 race 通过。Trade EventConsumer 和 Store 全量测试通过，新增两项定向 race 通过。Events/Admin CLI/Sysdeploy 测试及 Strategy/Events/Trade 两个改动包 vet 通过。
+- 三文件外部 E2E 已改为真实 Processor 求值和持久发布，而非直接 CommitEvaluation 构造旧目标。Trade 通过 RPC handler 创建 STRATEGY Paper、认领 session、Resume，真实权益采样/WeightResolver/TargetWorker/OrderService/Paper matcher/reducer 完成 1 BTC 买入；成交 1 笔、BTC=1、USDT=50000，再次收敛无新增订单，SQLite 重开后 receipt/order/fill 保留。
+- 子 Agent 执行 `env GOFLAGS=-race bash scripts/test/e2e/test-strategy-trade-event-e2e.sh` 通过；主 Agent 独立运行普通脚本通过（Strategy 0.13s、Trade 1.20s），核验实际测试 PASS 而非跳过。Broker 和两个进程均为脚本创建的 loopback 隔离实例，已退出；市场数据输入/行情为 fixture，跨进程授权是 HTTP/protojson 到真实 RPC handler 的测试桥，不覆盖生产 Gateway/tRPC。
+- 新起 `review_modern_integration` 确认发布前尚有两项直接调用方缺口：Strategy 的 Trade 客户端仍默认 localhost:11200、无 Gateway target-node/鉴权配置，无法据当前代码支持独立 Trade 节点；CreateStrategyInstance 插入后 Claim 失败没有返回已创建实例，调用方不能按正常创建响应恢复。两项须在 T10 管理入口/生产接线闭环，不以本地桥接 E2E 替代。
+- 审查提出的“Strategy 停用后应自动撤旧挂单”经主 Agent 按计划和最终 Submit/新目标扫描路径核验后撤回：既定合同明确停用不隐含撤单或清仓；旧待发订单仍受当前目标/session 提交检查，新目标先处理旧挂单，不能为通过审查改变停用语义。
+- 主 Agent 扩大至 Trade/嵌套 tradegen、Strategy/嵌套 strategygen、Events 全量时，其余包通过，Trade/test 的 12 项人工恢复用例失败，已交实施 Agent 区分旧 fixture 的原始错误与新的 shared/account 分类并处理；不把先前局部通过当作全量通过。全类型 OperatorAction 的最终审查与复验仍在执行。旧协议删除、正式部署和生产 Paper 全链仍未完成。
+
+### T10 全类型人工操作恢复增量
+
+- `OperatorWorker` 为每个 action 设置独立默认 30 秒尝试预算，保持串行处理。MANUAL_ORDER、FLATTEN、CANCEL_ORDER、SUBMIT_ORDER 都使用可取消逻辑账户锁；锁超时通过单独事务读取最新 durable action，只更新诊断，不把持锁者的新状态覆盖为旧快照。
+- shared DB/配置错误保留并影响健康；账户边界临时错误和已记录的业务失败只影响对应 action。`errors.Join` 必须全部分支都属于可隔离类别才允许忽略，诊断写入失败仍是 shared 故障。真实 Store/OrderService/AccountSyncService 用例覆盖 A 超时后 B 推进、SUBMIT 锁竞争正常 Ready 和诊断 DB 故障 Not Ready。
+- Cancel 保持不确定 action 为 RUNNING；诊断或 COMPLETED 写入失败只返回最后持久化 Action/Order 身份。RecoverCancel 先 GetOrder，查询不确定不重发；查询终态交真实 Sync/Reducer 导入成交，查询仍 OPEN 才受控撤单。网络查询、撤单和同步使用原 context，脱离取消的短 context 仅用于本地事实与诊断。
+- FLATTEN 先恢复已经持久化的 child，之后才决定是否需要新行情和新单；没有当前持仓快照但仍有 SUBMIT_UNKNOWN child 时不得完成。真实红测覆盖未知 child 先查询、无重复 POST、仍 RUNNING，以及 shared sync 错误不能被吞掉。
+- 扩大回归中，原始 dispatch-loss / post-ACK sync 的注入错误本来不是 typed 账户错误，故明确上抛，同时保留原 RUNNING/COMPLETED、child ID、余额、单次 POST 和后续恢复断言。账户暂未就绪和陈旧行情仍保持原人工受理 NoError/可查询 RUNNING 合同；没有为了统一健康分类把这两项改成参数失败。
+- 主 Agent 最终 `env MOOX_RUN_REAL_TRADE_DNS_E2E=0 go test -count=1 ./modules/trade/... ./modules/trade/proto/tradegen ./modules/strategy/... ./modules/strategy/proto/strategygen ./packages/events/...` 全部通过。operator/order/runtime/test 四包整包 race 分别 47.653s/48.081s/12.318s/67.362s，通过。Trade/Strategy/嵌套生成包/Events 的 vet、diff-check 通过。此前失败记录保留为修复过程，不再是当前失败状态。
+- 独立 codeCR 最后发现的 Cancel 响应携带旧 OPEN 状态已先红后绿：失败路径重读最新订单；读取失败仅返回已知身份并合并 DB 错误，不把陈旧状态当最新事实。主 Agent 最后 operator/rpc/test 三包普通复验通过（7.362s/3.385s/13.700s），Cancel/Lock 等定向 race 10.482s 通过，相关 vet 通过。
+- `review_modern_integration` 对该 Operator/RecoverCancel 最终范围无剩余 P0/P1/P2；其指出的分层测试缺口也已补成真实 ExecutionServer -> OperatorService -> Store 的 `TestManualRPCTransientAcceptanceReturnsSuccessWithDurableAction`：not-ready/stale 两分支初次和重试均 RetInfo=SUCCESS，RUNNING/LastError 等于持久事实，0 次 POST；主 Agent 定向 race 4.339s 通过。
+- 实施 Agent 自行完整普通/race 复验也通过并确认所有命令 session 退出。此处不标记整个 T10/T11 完成，不发布、不操作正式账户。现代流水线集成为 `3bbcdae7`，隔离 NATS/Paper 成交测试为 `602de472`；两者不是生产发布证明。
 
 ### T09 普通下单与控制模式阶段证据
 

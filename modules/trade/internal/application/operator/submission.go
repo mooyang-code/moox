@@ -75,6 +75,10 @@ func (s *Service) SubmitOrder(ctx context.Context, command SubmitOrderCommand) (
 	}
 	unlock, err := s.Store.LockLogicalAccountContext(ctx, command.SpaceID, command.LogicalAccountID)
 	if err != nil {
+		if knownAction.ActionID != "" {
+			current, diagnosticErr := s.deferActionLock(ctx, knownAction, err)
+			return submissionIdentity(current), diagnosticErr
+		}
 		return ManualOrderResult{}, err
 	}
 	defer unlock()
@@ -187,7 +191,8 @@ func (s *Service) resumeSubmission(ctx context.Context, action store.OperatorAct
 	}
 	unlock, err := s.Store.LockLogicalAccountContext(ctx, action.SpaceID, action.LogicalAccountID)
 	if err != nil {
-		return err
+		current, diagnosticErr := s.deferActionLock(ctx, result.Action, err)
+		return submissionRecoveryError(submissionIdentity(current), diagnosticErr)
 	}
 	defer unlock()
 	current, err := s.Store.GetOperatorAction(ctx, action.SpaceID, action.ActionID)
@@ -236,7 +241,7 @@ func (s *Service) deferSubmission(ctx context.Context, action store.OperatorActi
 func submissionAccountError(err error) bool {
 	return allSubmissionErrors(err, func(leaf error) bool {
 		_, account := leaf.(*orderapp.AccountExecutionError)
-		return account || leaf == orderdomain.ErrReferencePriceStale || leaf == orderapp.ErrAccountNotReady || leaf == tradingaccount.ErrAccountNotExecutable
+		return account || leaf == ErrCancelUnconfirmed || leaf == orderdomain.ErrReferencePriceStale || leaf == orderapp.ErrAccountNotReady || leaf == tradingaccount.ErrAccountNotExecutable
 	})
 }
 
@@ -276,7 +281,7 @@ func submissionBusinessError(err error) bool {
 }
 
 func (s *Service) submissionOrderError(ctx context.Context, action store.OperatorActionRecord, cause error) (ManualOrderResult, error) {
-	if submissionAccountError(cause) {
+	if allSubmissionErrors(cause, func(err error) bool { return submissionAccountError(err) || submissionBusinessError(err) }) {
 		return s.deferSubmission(ctx, action, cause)
 	}
 	// A durable diagnostic must not turn a shared persistence failure into a
@@ -303,12 +308,12 @@ func submissionIdentity(action store.OperatorActionRecord) ManualOrderResult {
 	return result
 }
 
-func (s *Service) submissionDiagnostic(ctx context.Context, action store.OperatorActionRecord, cause error) (ManualOrderResult, error) {
+func (s *Service) submissionDiagnostic(ctx context.Context, action store.OperatorActionRecord, cause error, accounts ...OperatorAccountError) (ManualOrderResult, error) {
 	// This detached budget only persists/reads diagnostics, never authorizes I/O
 	// to an exchange or starts a fresh child order.
 	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	result, err := s.deferManualAction(persistCtx, action, cause, nil)
+	result, err := s.deferManualAction(persistCtx, action, cause, accounts)
 	if err != nil {
 		fallback := submissionIdentity(action)
 		if result.Action.ActionID == "" {
@@ -322,8 +327,35 @@ func (s *Service) submissionDiagnostic(ctx context.Context, action store.Operato
 }
 
 func (s *Service) deferChildOrderError(ctx context.Context, action store.OperatorActionRecord, cause error) (ManualOrderResult, error) {
-	if action.ActionType == "SUBMIT_ORDER" {
-		return s.submissionOrderError(ctx, action, cause)
+	return s.submissionOrderError(ctx, action, cause)
+}
+
+// Lock waiters may only append a diagnostic to the current action. They must
+// not overwrite progress or reopen an action completed by the lock owner.
+func (s *Service) deferActionLock(ctx context.Context, action store.OperatorActionRecord, cause error) (store.OperatorActionRecord, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		current, err := tx.GetOperatorAction(action.SpaceID, action.ActionID)
+		if err != nil {
+			return err
+		}
+		action = current
+		if current.Status != "RUNNING" {
+			return nil
+		}
+		current.LastError = cause.Error()
+		if err := tx.UpdateOperatorAction(current); err != nil {
+			return err
+		}
+		action = current
+		return nil
+	})
+	if err != nil {
+		return action, errors.Join(cause, err)
 	}
-	return s.deferManualAction(ctx, action, cause, nil)
+	if action.Status != "RUNNING" {
+		return action, nil
+	}
+	return action, submissionDeferredError{cause: cause}
 }

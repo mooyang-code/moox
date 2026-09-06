@@ -28,7 +28,7 @@ func TestManualRefreshedPaperMarketUsesFrozenSlippageAtMatcher(t *testing.T) {
 	service := &operator.Service{Store: f.store, Orders: manualSubmitDispatchLoss{Service: f.orders}, Syncer: syncBridge{service: f.sync}, Prices: logicalAccountE2EPriceSource{at: testNow}, Now: func() time.Time { return now }, ManualSubmitWindow: 2 * time.Minute}
 	command := operator.ManualOrderCommand{SpaceID: testSpace, ActionID: "paper-refresh", TradingAccountID: testAccount, ClientOrderID: "paper-refresh", InstrumentID: testInstrumentID, Type: exchange.OrderTypeMarket, Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("0.01"), Reason: "paper delayed submission"}
 	initial, err := service.PlaceManualOrder(ctx, command)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 	require.NotNil(t, initial.Order.PaperExecutionPrice)
 	originalPrice := shared.MustDecimal(*initial.Order.PaperExecutionPrice)
 	now = testNow.Add(70 * time.Second)
@@ -166,7 +166,7 @@ func TestManualAcknowledgedSubmissionCompletesDespiteSyncFailure(t *testing.T) {
 	f.orders.Syncer = failure
 	f.orders.Adapters = adapterSource{adapter: manualImmediateFillExchange{fakeExchange: f.fake}}
 	result, err := service.PlaceManualOrder(ctx, command)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "account sync failed after acknowledged submission")
 	require.Equal(t, 1, failure.calls, "exercise the actual OrderService post-ACK sync failure")
 	require.Equal(t, "COMPLETED", result.Action.Status)
 	require.Empty(t, result.Action.LastError)
@@ -203,7 +203,7 @@ func TestManualLinkedPendingChildRecoveredBeforeSubmit(t *testing.T) {
 	f, service, command := manualRecoveryFixture(t)
 	service.Orders = manualSubmitDispatchLoss{Service: f.orders}
 	initial, err := service.PlaceManualOrder(ctx, command)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 	require.Equal(t, "RUNNING", initial.Action.Status)
 	child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, command.ClientOrderID)
 	require.NoError(t, err)
@@ -232,7 +232,7 @@ func TestManualPendingAccountNotReadyRemainsAccepted(t *testing.T) {
 	f, service, command := manualRecoveryFixture(t)
 	service.Orders = manualSubmitDispatchLoss{Service: f.orders}
 	initial, err := service.PlaceManualOrder(ctx, command)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 	require.Equal(t, "RUNNING", initial.Action.Status)
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpdateTradingAccountReadiness(testSpace, testAccount, false, testNow.UnixMilli(), "sync temporarily unavailable")
@@ -313,7 +313,7 @@ func TestManualDelayedPendingRefreshesOnlyServerQuote(t *testing.T) {
 			f, service, command := manualRecoveryFixture(t)
 			service.Orders = manualSubmitDispatchLoss{Service: f.orders}
 			initial, err := service.PlaceManualOrder(ctx, command)
-			require.NoError(t, err)
+			require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 			before := initial.Order
 			reserved := shared.MustDecimal(before.ReservedQuantity)
 			now := testNow.Add(70 * time.Second)
@@ -348,6 +348,7 @@ func TestManualDelayedPendingRefreshesOnlyServerQuote(t *testing.T) {
 				require.Equal(t, before.RemainingReservedQuantity, result.Order.RemainingReservedQuantity)
 				require.Equal(t, string(orderdomain.Pending), result.Order.State)
 				require.Zero(t, f.fake.placeCalls)
+				require.NoError(t, service.ResumeOperatorAction(ctx, result.Action), "pending capacity rejection is an action-local outcome")
 				return
 			}
 			runManualRecoveryWorker(t, f, service)
@@ -372,7 +373,7 @@ func TestManualLinkedPendingCannotSubmitAfterMembershipRemoval(t *testing.T) {
 	f, service, command := manualRecoveryFixture(t)
 	service.Orders = manualSubmitDispatchLoss{Service: f.orders}
 	initial, err := service.PlaceManualOrder(ctx, command)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 	require.Equal(t, "RUNNING", initial.Action.Status)
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.DeleteLogicalAccountMember(testSpace, initial.Action.LogicalAccountID, testAccount)
@@ -426,7 +427,7 @@ func TestManualPendingChildRecoveredWithoutActionLink(t *testing.T) {
 	f, service, command := manualRecoveryFixture(t)
 	service.Orders = manualPlaceAcknowledgmentLoss{OrderService: f.orders}
 	initial, err := service.PlaceManualOrder(ctx, command)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "fault after durable Place before action link")
 	require.Equal(t, "RUNNING", initial.Action.Status)
 	child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, command.ClientOrderID)
 	require.NoError(t, err)
@@ -473,11 +474,7 @@ func TestManualConfirmedAbsentPendingRespectsOriginalDeadline(t *testing.T) {
 			restarted.Now = func() time.Time { return now }
 			restarted.ManualSubmitWindow = 24 * time.Hour
 			err = restarted.ResumeOperatorAction(ctx, initial.Action)
-			if expired {
-				require.ErrorContains(t, err, "deadline")
-			} else {
-				require.NoError(t, err)
-			}
+			require.NoError(t, err, "a durably recorded expiration does not fail worker health")
 			result, err := restarted.PlaceManualOrder(ctx, command)
 			persisted, getErr := f.store.GetOrderByClientID(ctx, testSpace, testAccount, command.ClientOrderID)
 			require.NoError(t, getErr)

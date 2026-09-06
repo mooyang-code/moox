@@ -49,7 +49,11 @@ func TestSuccessfulMutationAfterDeadlineCanReconcile(t *testing.T) {
 					_, err = s.RecoverCancel(ctx, "space-1", string(pending.ID))
 				}
 			}
-			require.NoError(t, err)
+			if operation == "recover_cancel" {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+			} else {
+				require.NoError(t, err)
+			}
 		})
 	}
 }
@@ -102,7 +106,11 @@ func TestExchangeDeadlinePersistsUncertainOutcome(t *testing.T) {
 			}
 			require.Equal(t, expected, record.State)
 			require.NotEqual(t, "0", record.RemainingReservedQuantity)
-			require.Zero(t, adapter.getCalls)
+			if operation == "recover_cancel" {
+				require.Equal(t, 1, adapter.getCalls)
+			} else {
+				require.Zero(t, adapter.getCalls)
+			}
 		})
 	}
 }
@@ -229,8 +237,9 @@ func TestRecoverCancelDoesNotHideSyncFailure(t *testing.T) {
 	syncer.err = cause
 	_, err = s.RecoverCancel(ctx, "space-1", string(pending.ID))
 	require.ErrorIs(t, err, cause)
-	var accountErr *AccountExecutionError
-	require.False(t, errors.As(err, &accountErr))
+	_, accountBoundary := err.(*AccountExecutionError)
+	require.False(t, accountBoundary, "shared sync error must remain outside the account boundary")
+	require.ErrorIs(t, err, adapter.cancelErr)
 }
 
 func TestCancelAccountErrorOnlyAfterPersistedOutcome(t *testing.T) {
