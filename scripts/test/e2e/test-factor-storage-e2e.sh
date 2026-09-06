@@ -94,6 +94,7 @@ storage_node_secret="$(
 [[ -n "${storage_node_secret}" && "${storage_node_secret}" != *$'\n'* && "${storage_node_secret}" != *$'\r'* ]] ||
   fail "storage-node-auth.env must contain one MOOX_STORAGE_NODE_AUTH_SECRET"
 original_storage_eventbus_url="${MOOX_STORAGE_EVENTBUS_URL:-}"
+original_storage_credential_file="${MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE:-}"
 storage_eventbus_url="${original_storage_eventbus_url}"
 storage_view_pid="$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")"
 storage_view_proc_environ="/proc/${storage_view_pid}/environ"
