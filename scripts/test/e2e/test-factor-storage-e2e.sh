@@ -95,8 +95,11 @@ storage_node_secret="$(
   fail "storage-node-auth.env must contain one MOOX_STORAGE_NODE_AUTH_SECRET"
 original_storage_eventbus_url="${MOOX_STORAGE_EVENTBUS_URL:-}"
 storage_eventbus_url="${original_storage_eventbus_url}"
-if [[ -r "/proc/$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")/environ" ]]; then
-  original_storage_eventbus_url="$(tr '\0' '\n' <"/proc/$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")/environ" | sed -n 's/^MOOX_STORAGE_EVENTBUS_URL=//p' | head -1)"
+storage_view_pid="$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")"
+storage_view_proc_environ="/proc/${storage_view_pid}/environ"
+if [[ -r "${storage_view_proc_environ}" ]]; then
+  original_storage_eventbus_url="$(tr '\0' '\n' <"${storage_view_proc_environ}" | sed -n 's/^MOOX_STORAGE_EVENTBUS_URL=//p' | head -1)"
+  original_storage_credential_file="$(tr '\0' '\n' <"${storage_view_proc_environ}" | sed -n 's/^MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE=//p' | head -1)"
   if [[ -n "${original_storage_eventbus_url}" ]]; then
     storage_eventbus_url="${original_storage_eventbus_url}"
   fi
@@ -104,10 +107,9 @@ fi
 if [[ -z "${storage_eventbus_url}" ]]; then
   storage_eventbus_url="${factor_eventbus_url:-}"
 fi
-storage_view_pid="$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")"
 original_storage_allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-}"
-if [[ -r "/proc/${storage_view_pid}/environ" ]]; then
-  original_storage_allowed_spaces="$(tr '\0' '\n' </proc/${storage_view_pid}/environ | sed -n 's/^MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES=//p' | head -1)"
+if [[ -r "${storage_view_proc_environ}" ]]; then
+  original_storage_allowed_spaces="$(tr '\0' '\n' <"${storage_view_proc_environ}" | sed -n 's/^MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES=//p' | head -1)"
 fi
 
 # View wildcard discovery is fixed at process startup. A caller that owns the
@@ -137,7 +139,7 @@ if [[ -n "${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-}" ]]; then
 fi
 start_storage_view() {
   local allowed_spaces="$1" eventbus_url="$2"
-  if [[ -r "${storage_view_credential_file}" ]]; then
+  if [[ -n "${storage_view_credential_file}" ]]; then
     env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
       MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE="${storage_view_credential_file}" \
       MOOX_STORAGE_EVENTBUS_URL="${eventbus_url}" \
@@ -221,7 +223,12 @@ if [[ "${restart_storage_view}" == "1" ]]; then
   else
     fail "deployment has no storage-view start command"
   fi
-  storage_view_credential_file="${HOME}/.config/moox/eventbus/storage-eventbus.yaml"
+  # Preserve the credential path used by the running View. If it did not
+  # advertise one, retain the historical default only when that file exists.
+  storage_view_credential_file="${original_storage_credential_file:-}"
+  if [[ -z "${storage_view_credential_file}" && -r "${HOME}/.config/moox/eventbus/storage-eventbus.yaml" ]]; then
+    storage_view_credential_file="${HOME}/.config/moox/eventbus/storage-eventbus.yaml"
+  fi
   restart_error=""
   if ! start_storage_view "${e2e_allowed_spaces}" "${storage_eventbus_url}"; then
     restart_error="storage-view start command failed"
