@@ -35,6 +35,16 @@ func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validati
 }
 
 func checkPaperFunds(tx *store.Tx, validation Validation, marginAdjustment, required shared.Decimal, oldAsset, oldQuantity string) error {
+	if oldAsset == "" && oldQuantity == "" {
+		available, err := availableReservationFunds(tx, validation, marginAdjustment)
+		if err != nil {
+			return err
+		}
+		if available.Cmp(required) < 0 {
+			return ErrInsufficientFunds
+		}
+		return nil
+	}
 	balances, err := tx.GetPaperBalanceSnapshot(validation.Account.SpaceID, validation.Account.ID)
 	if err != nil {
 		return err

@@ -98,13 +98,25 @@ func (s *Service) SyncAccount(
 			s.Metrics.Observe(tradingAccountID, s.now(), maxDifference, err)
 		}
 	}()
-	unlockMembership := s.Store.LockLogicalAccountMembership()
+	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
+	if err != nil {
+		return s.failLock(ctx, tradingAccountID, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "sync_membership_lock", Err: err})
+	}
 	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
 	if err != nil {
 		unlockMembership()
+		var accountErr *orderapp.AccountExecutionError
+		if errors.As(err, &accountErr) && accountErr.Operation == "sync_execution_lock" {
+			return s.failLock(ctx, tradingAccountID, err)
+		}
 		return Result{}, err
 	}
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if err != nil {
+		unlockExecution()
+		unlockMembership()
+		return s.failLock(ctx, tradingAccountID, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "sync_account_lock", Err: err})
+	}
 	result, maxDifference, err = s.syncAccountLocked(ctx, tradingAccountID)
 	unlock()
 	if err == nil && result.ExternalFactsImported {
@@ -117,6 +129,10 @@ func (s *Service) SyncAccount(
 	}
 	result, err = s.resolveUnknownOrders(ctx, tradingAccountID, result)
 	if err != nil {
+		var accountErr *orderapp.AccountExecutionError
+		if errors.As(err, &accountErr) && accountErr.Operation == "resolve_unknown_lock" {
+			_, err = s.failLock(ctx, tradingAccountID, err)
+		}
 		return result, err
 	}
 	return result, s.notifyFacts(
@@ -438,6 +454,9 @@ func (s *Service) resolveUnknownOrders(
 			current.OrderID,
 		)
 		if resolveErr != nil {
+			if ctx.Err() != nil {
+				return result, resolveErr
+			}
 			result.Warnings = append(result.Warnings, resolveErr.Error())
 			continue
 		}
@@ -1042,6 +1061,21 @@ func (s *Service) fail(
 	return Result{}, cause
 }
 
+// A failed refresh must disable stale admission even while another operation
+// owns the account mutex. Only persist readiness; never retry that mutex here.
+func (s *Service) failLock(ctx context.Context, tradingAccountID string, cause error) (Result, error) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	account, err := s.Store.GetTradingAccountByID(cleanupCtx, tradingAccountID)
+	if err != nil {
+		return Result{}, errors.Join(cause, err)
+	}
+	if err := s.setReady(cleanupCtx, account, false, cause); err != nil {
+		return Result{}, errors.Join(cause, err)
+	}
+	return Result{}, cause
+}
+
 func (s *Service) validate() error {
 	if s == nil || s.Store == nil || s.Adapters == nil || s.Fills == nil {
 		return ErrServiceConfig
@@ -1079,10 +1113,15 @@ func (s *Service) lockLogicalAccountExecution(
 	if err != nil {
 		return nil, err
 	}
-	return s.Store.LockLogicalAccountExecution(
+	unlock, err := s.Store.LockLogicalAccountExecutionContext(
+		ctx,
 		logicalAccount.SpaceID,
 		logicalAccount.LogicalAccountID,
-	), nil
+	)
+	if err != nil {
+		return nil, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "sync_execution_lock", Err: err}
+	}
+	return unlock, nil
 }
 
 func (s *Service) pauseForExternalFact(

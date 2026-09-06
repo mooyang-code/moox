@@ -77,6 +77,11 @@ func (v Validator) Validate(
 // OrderService checks Paper funds against the ledger and reservations in its
 // write transaction; a display snapshot must not reject or authorize that write.
 func (v Validator) validate(ctx context.Context, spaceID string, spec orderdomain.OrderSpec, deferPaperFunds bool) (Validation, error) {
+	return v.validateOptions(ctx, spaceID, spec, deferPaperFunds, false)
+}
+
+// Capacity quotes reuse reservation pricing before enforcing the final size.
+func (v Validator) validateOptions(ctx context.Context, spaceID string, spec orderdomain.OrderSpec, deferPaperFunds, capacity bool) (Validation, error) {
 	if v.Accounts == nil || v.Instruments == nil || strings.TrimSpace(spaceID) == "" {
 		return Validation{}, ErrValidatorConfig
 	}
@@ -113,7 +118,7 @@ func (v Validator) validate(ctx context.Context, spaceID string, spec orderdomai
 		}
 		exchangeQuantity = spec.Quantity.Div(instrument.ContractValue)
 	}
-	if !validQuantity(
+	if !capacity && !validQuantity(
 		exchangeQuantity,
 		instrument.ExchangeQuantityStep,
 		instrument.MinExchangeQuantity,
@@ -126,11 +131,11 @@ func (v Validator) validate(ctx context.Context, spaceID string, spec orderdomai
 	if spec.Type == exchange.OrderTypeLimit {
 		orderNotional = spec.Quantity.Mul(*spec.LimitPrice)
 	}
-	if instrument.MinNotional.Cmp(shared.Zero()) > 0 &&
+	if !capacity && instrument.MinNotional.Cmp(shared.Zero()) > 0 &&
 		orderNotional.Cmp(instrument.MinNotional) < 0 {
 		return Validation{}, ErrQuantityRule
 	}
-	if v.MaxChildNotional.Cmp(shared.Zero()) > 0 &&
+	if !capacity && v.MaxChildNotional.Cmp(shared.Zero()) > 0 &&
 		referenceNotional.Cmp(v.MaxChildNotional) > 0 {
 		return Validation{}, ErrNotionalLimit
 	}
@@ -165,7 +170,7 @@ func (v Validator) validate(ctx context.Context, spaceID string, spec orderdomai
 			result.ReservedAsset = instrument.BaseAsset
 			result.ReservedQuantity = spec.Quantity
 		}
-		if !(deferPaperFunds && account.ExecutionMode == exchange.ExecutionModePaper) &&
+		if !capacity && !(deferPaperFunds && account.ExecutionMode == exchange.ExecutionModePaper) &&
 			availableBalance(account.Snapshot, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
 			return Validation{}, ErrInsufficientFunds
 		}
@@ -214,7 +219,7 @@ func (v Validator) validate(ctx context.Context, spaceID string, spec orderdomai
 				result.ReservedQuantity = withFeeBuffer(margin, feeRate)
 			}
 		}
-		if !(deferPaperFunds && account.ExecutionMode == exchange.ExecutionModePaper) &&
+		if !capacity && !(deferPaperFunds && account.ExecutionMode == exchange.ExecutionModePaper) &&
 			account.Snapshot.AvailableFunds.Cmp(result.ReservedQuantity) < 0 {
 			return Validation{}, ErrInsufficientFunds
 		}

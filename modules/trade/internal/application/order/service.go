@@ -103,30 +103,10 @@ func (s *Service) Place(
 	// side-executable quote, not a Last-only reference. Revalidate once with the
 	// fresh bid/ask so the reservation and matcher consume the same price.
 	if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
-		if s.Adapters == nil {
-			return orderdomain.Order{}, ErrServiceConfig
+		spec, err = s.paperReference(ctx, spec, validation)
+		if err != nil {
+			return orderdomain.Order{}, err
 		}
-		adapter, adapterErr := s.Adapters.Adapter(spec.TradingAccountID)
-		if adapterErr != nil {
-			return orderdomain.Order{}, accountExecutionError(spec.TradingAccountID, "adapter", adapterErr)
-		}
-		marketData, ok := adapter.(execution.MarketDataSource)
-		if !ok {
-			return orderdomain.Order{}, accountExecutionError(spec.TradingAccountID, "quote", errors.New("trade order: paper market data source is unavailable"))
-		}
-		quote, quoteErr := marketData.GetQuote(ctx, shared.ExchangeSymbol(validation.Instrument.ExchangeSymbol))
-		if quoteErr != nil {
-			return orderdomain.Order{}, accountExecutionError(spec.TradingAccountID, "quote", quoteErr)
-		}
-		if !paperQuoteFresh(quote, s.now(), 10*time.Second) {
-			return orderdomain.Order{}, accountExecutionError(spec.TradingAccountID, "quote", errors.New("trade order: paper quote is stale"))
-		}
-		executable, executableErr := paperExecutablePrice(spec.Side, quote)
-		if executableErr != nil {
-			return orderdomain.Order{}, accountExecutionError(spec.TradingAccountID, "quote", executableErr)
-		}
-		spec.ReferencePrice = executable
-		spec.ReferencePriceAt = quote.SourceTime
 		validation, err = s.Validator.validate(ctx, spaceID, spec, true)
 		if err != nil {
 			return orderdomain.Order{}, err
@@ -180,24 +160,11 @@ func (s *Service) Place(
 				}
 				return tx.CreateOrder(record)
 			}
-			unreflected, err := tx.GetUnreflectedReservation(
-				validation.Account.SpaceID,
-				spec.TradingAccountID,
-				validation.ReservedAsset,
-				validation.Account.LastSyncAt.UnixMilli(),
-			)
+			available, err := availableReservationFunds(tx, validation, marginAdjustment)
 			if err != nil {
 				return err
 			}
-			available := availableBalance(
-				validation.Account.Snapshot,
-				validation.ReservedAsset,
-			)
-			if validation.Account.MarketType == exchange.MarketTypeSwap {
-				available = validation.Account.Snapshot.AvailableFunds
-			}
-			required := unreflected.Add(validation.ReservedQuantity)
-			if available.Cmp(required) < 0 {
+			if available.Cmp(validation.ReservedQuantity) < 0 {
 				return ErrInsufficientFunds
 			}
 		}
@@ -343,6 +310,14 @@ func (s *Service) Submit(
 		}
 		return domainErr
 	}()
+	if result.State == orderdomain.Rejected && exchange.IsKind(err, exchange.ErrorInsufficientBalance) && s.Syncer != nil {
+		// A definitive balance rejection invalidates the local capacity estimate.
+		// Refresh outside execution locks; the next convergence may choose another
+		// member, but this call must not submit a second child or mask the rejection.
+		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		return result, errors.Join(err, s.Syncer.SyncAccount(refreshCtx, record.TradingAccountID))
+	}
 	if err != nil || !synchronize || s.Syncer == nil {
 		return result, err
 	}
@@ -670,7 +645,10 @@ func (s *Service) ResolveUnknown(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	unlock := s.Store.LockTradingAccount(record.TradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, record.TradingAccountID)
+	if err != nil {
+		return orderdomain.Order{}, &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "resolve_unknown_lock", Err: err}
+	}
 	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
 	if err != nil {
 		unlock()
