@@ -3,10 +3,13 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +23,7 @@ const (
 	setupRemoteAddress     = "127.0.0.1:11110"
 	sysDeployRemoteAddress = "127.0.0.1:11109"
 	maxResponseBytes       = 1 << 20
+	TradeGatewayHTTPSPort  = 11001
 )
 
 var storageDeploymentNames = []string{
@@ -70,17 +74,135 @@ type StoragePlacementResult struct {
 	Deployments int `json:"deployments"`
 }
 
+// TradeDeploymentSnapshot preserves the control-plane rows that existed
+// before a Trade upgrade. Rollback restores these exact rows instead of
+// disabling a previously healthy route.
+type TradeDeploymentSnapshot struct {
+	Rows                map[string]*pb.ServiceDeployment
+	ControlTradeConsole *pb.ServiceDeployment
+	GatewayNode         *pb.GatewayNode
+}
+
+func (c *Client) SnapshotTradeDeployments(ctx context.Context, nodeID string) (TradeDeploymentSnapshot, error) {
+	nodeID = strings.TrimSpace(nodeID)
+	if c == nil || c.forwarder == nil || nodeID == "" {
+		return TradeDeploymentSnapshot{}, fmt.Errorf("trade_snapshot_invalid")
+	}
+	snapshot := TradeDeploymentSnapshot{Rows: make(map[string]*pb.ServiceDeployment, 3)}
+	for _, name := range []string{"moox_trade", "trade_owner", "trade_console"} {
+		response := &pb.GetServiceDeploymentRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment", &pb.GetServiceDeploymentReq{NodeId: nodeID, ServiceName: name}, response); err != nil {
+			return TradeDeploymentSnapshot{}, fmt.Errorf("trade_snapshot_failed")
+		}
+		if response.GetRetInfo().GetCode() == pb.ErrorCode_NOT_FOUND {
+			continue
+		}
+		if err := checkRetInfo(response.GetRetInfo()); err != nil || response.GetDeployment() == nil {
+			return TradeDeploymentSnapshot{}, fmt.Errorf("trade_snapshot_failed")
+		}
+		snapshot.Rows[name] = proto.Clone(response.GetDeployment()).(*pb.ServiceDeployment)
+	}
+	control := &pb.GetServiceDeploymentRsp{}
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment", &pb.GetServiceDeploymentReq{NodeId: "control", ServiceName: "trade_console"}, control); err != nil {
+		return TradeDeploymentSnapshot{}, fmt.Errorf("trade_snapshot_failed")
+	}
+	if control.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS && control.GetDeployment() != nil {
+		snapshot.ControlTradeConsole = proto.Clone(control.GetDeployment()).(*pb.ServiceDeployment)
+	} else if control.GetRetInfo().GetCode() != pb.ErrorCode_NOT_FOUND {
+		return TradeDeploymentSnapshot{}, fmt.Errorf("trade_snapshot_failed")
+	}
+	nodes := &pb.ListGatewayNodesRsp{}
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, nodes); err != nil || checkRetInfo(nodes.GetRetInfo()) != nil {
+		return TradeDeploymentSnapshot{}, fmt.Errorf("trade_snapshot_failed")
+	}
+	for _, node := range nodes.GetNodes() {
+		if node != nil && node.GetNodeId() == nodeID {
+			snapshot.GatewayNode = proto.Clone(node).(*pb.GatewayNode)
+			break
+		}
+	}
+	return snapshot, nil
+}
+
+func (c *Client) RestoreTradeDeployments(ctx context.Context, nodeID string, snapshot TradeDeploymentSnapshot) error {
+	nodeID = strings.TrimSpace(nodeID)
+	if c == nil || c.forwarder == nil || nodeID == "" {
+		return fmt.Errorf("trade_snapshot_invalid")
+	}
+	var restoreErr error
+	for _, name := range []string{"moox_trade", "trade_owner", "trade_console"} {
+		if row := snapshot.Rows[name]; row != nil {
+			row = proto.Clone(row).(*pb.ServiceDeployment)
+			if err := c.upsertDeployment(ctx, row); err != nil {
+				restoreErr = errors.Join(restoreErr, fmt.Errorf("restore %s: %w", name, err))
+			}
+			continue
+		}
+		if err := c.disableServiceDeployment(ctx, nodeID, name); err != nil {
+			restoreErr = errors.Join(restoreErr, fmt.Errorf("disable new %s: %w", name, err))
+		}
+	}
+	if row := snapshot.ControlTradeConsole; row != nil {
+		if err := c.upsertDeployment(ctx, row); err != nil {
+			restoreErr = errors.Join(restoreErr, fmt.Errorf("restore control trade_console: %w", err))
+		}
+	} else if err := c.disableServiceDeployment(ctx, "control", "trade_console"); err != nil {
+		restoreErr = errors.Join(restoreErr, fmt.Errorf("disable new control trade_console: %w", err))
+	}
+	if snapshot.GatewayNode != nil {
+		node := proto.Clone(snapshot.GatewayNode).(*pb.GatewayNode)
+		response := &pb.UpdateGatewayNodeRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "UpdateGatewayNode", &pb.UpdateGatewayNodeReq{NodeId: nodeID, Node: node}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
+			restoreErr = errors.Join(restoreErr, fmt.Errorf("restore gateway node: gateway_node_update_failed"))
+		}
+	} else {
+		// The setup API has no delete operation. Disable a node created by the
+		// failed attempt so it cannot receive a stale or partial route snapshot.
+		nodes := &pb.ListGatewayNodesRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, nodes); err != nil {
+			restoreErr = errors.Join(restoreErr, fmt.Errorf("find new gateway node: %w", err))
+		} else if err := checkRetInfo(nodes.GetRetInfo()); err != nil {
+			restoreErr = errors.Join(restoreErr, fmt.Errorf("find new gateway node: %w", err))
+		} else {
+			for _, node := range nodes.GetNodes() {
+				if node == nil || node.GetNodeId() != nodeID {
+					continue
+				}
+				copy := proto.Clone(node).(*pb.GatewayNode)
+				copy.Status = "disabled"
+				response := &pb.UpdateGatewayNodeRsp{}
+				if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "UpdateGatewayNode", &pb.UpdateGatewayNodeReq{NodeId: nodeID, Node: copy}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
+					restoreErr = errors.Join(restoreErr, fmt.Errorf("disable new gateway node: gateway_node_update_failed"))
+				}
+				break
+			}
+		}
+	}
+	return restoreErr
+}
+
 // ApplyTradeConsolePlacement records the browser-facing TradeConsole endpoint
 // on the control node. Trade may run on a dedicated execution node, while the
 // Admin browser gateway still resolves the canonical trade_console row from
 // its own node. Keeping this placement explicit prevents a control deploy from
 // silently restoring the loopback seed (127.0.0.1:11200).
 func (c *Client) ApplyTradeConsolePlacement(ctx context.Context, host string) error {
+	return c.applyTradeConsolePlacement(ctx, host, "")
+}
+
+// ApplyTradeConsolePlacementForNode additionally records the authenticated
+// remote Gateway origin used by Admin's browser BFF. The direct TradeConsole
+// listener stays loopback-only on the execution node.
+func (c *Client) ApplyTradeConsolePlacementForNode(ctx context.Context, host, nodeID string) error {
+	return c.applyTradeConsolePlacement(ctx, host, nodeID)
+}
+
+func (c *Client) applyTradeConsolePlacement(ctx context.Context, host, nodeID string) error {
 	host = strings.TrimSpace(host)
 	if c == nil || c.forwarder == nil || host == "" {
 		return fmt.Errorf("trade_placement_invalid")
 	}
-	if ip := net.ParseIP(host); ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+	if !validTradePlacementHost(host) {
 		return fmt.Errorf("trade_placement_invalid")
 	}
 	getResponse := &pb.GetServiceDeploymentRsp{}
@@ -107,10 +229,146 @@ func (c *Client) ApplyTradeConsolePlacement(ctx context.Context, host string) er
 	deployment.Scope = "internal"
 	deployment.Status = "active"
 	deployment.GatewayEnabled = false
+	if strings.TrimSpace(nodeID) != "" {
+		deployment.ExtraConfig = tradeConsoleGatewayExtra(deployment.ExtraConfig, host, nodeID)
+	}
 	if err := c.upsertDeployment(ctx, deployment); err != nil {
 		return fmt.Errorf("trade_placement_failed")
 	}
 	return nil
+}
+
+func validTradePlacementHost(host string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		return !ip.IsLoopback() && !ip.IsUnspecified() && !ip.IsMulticast() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast()
+	}
+	if len(host) == 0 || len(host) > 253 || strings.Contains(host, "..") {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, ch := range label {
+			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func tradeConsoleGatewayExtra(raw, host, nodeID string) string {
+	values := make(map[string]any)
+	if strings.TrimSpace(raw) != "" {
+		_ = json.Unmarshal([]byte(raw), &values)
+	}
+	values["gateway_url"] = "https://" + net.JoinHostPort(host, strconv.Itoa(TradeGatewayHTTPSPort))
+	values["gateway_node"] = strings.TrimSpace(nodeID)
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return raw
+	}
+	return string(encoded)
+}
+
+// VerifyTradeOwnerRoute confirms that Admin has compiled the dedicated
+// Strategy-only route for the target Gateway node. A registry row alone is
+// not enough: the Gateway may still hold a stale/disabled route snapshot.
+func (c *Client) VerifyTradeOwnerRoute(ctx context.Context, nodeID string) error {
+	nodeID = strings.TrimSpace(nodeID)
+	if c == nil || c.forwarder == nil || nodeID == "" {
+		return fmt.Errorf("trade_route_invalid")
+	}
+	response := &pb.GetGatewayNodeRoutesRsp{}
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetGatewayNodeRoutes", &pb.GetGatewayNodeRoutesReq{NodeId: nodeID}, response); err != nil {
+		return fmt.Errorf("trade_route_probe_failed")
+	}
+	if err := checkRetInfo(response.GetRetInfo()); err != nil || response.GetDisabled() || response.GetRouteHash() == "" {
+		return fmt.Errorf("trade_route_probe_failed")
+	}
+	// GetGatewayNodeRoutes is the desired snapshot compiled by Admin. The
+	// destination Gateway refreshes on a timer, so poll its applied hash and
+	// heartbeat for a bounded window instead of declaring a healthy deployment
+	// failed merely because the first refresh has not run yet.
+	deadline := time.Now().Add(30 * time.Second)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	for {
+		nodes := &pb.ListGatewayNodesRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, nodes); err == nil && checkRetInfo(nodes.GetRetInfo()) == nil {
+			var observed *pb.GatewayNode
+			for _, candidate := range nodes.GetNodes() {
+				if candidate != nil && candidate.GetNodeId() == nodeID {
+					observed = candidate
+					break
+				}
+			}
+			if observed != nil && observed.GetStatus() == "enabled" && observed.GetAppliedRouteHash() == response.GetRouteHash() && observed.GetLastError() == "" && observed.GetLastSeenAt() != "" {
+				lastSeen, parseErr := time.Parse(time.RFC3339Nano, observed.GetLastSeenAt())
+				if parseErr == nil && time.Since(lastSeen) <= 5*time.Minute && !lastSeen.After(time.Now().Add(30*time.Second)) {
+					break
+				}
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("trade_route_probe_failed")
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("trade_route_probe_failed")
+		case <-timer.C:
+		}
+	}
+	ownerFound, consoleFound := false, false
+	for _, route := range response.GetRoutes() {
+		if route == nil || route.GetServicePath() != "trpc.moox.trade.TradeConsoleService" || route.GetAddress() != "127.0.0.1:11200" {
+			continue
+		}
+		switch route.GetServiceId() {
+		case "trade_owner":
+			if len(route.GetAllowedCallers()) != 1 || route.GetAllowedCallers()[0] != "strategy" {
+				return fmt.Errorf("trade_route_probe_failed")
+			}
+			for _, method := range []string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"} {
+				if !containsString(route.GetAllowedMethods(), method) {
+					return fmt.Errorf("trade_route_probe_failed")
+				}
+			}
+			ownerFound = true
+		case "trade_console":
+			if len(route.GetAllowedCallers()) != 1 || route.GetAllowedCallers()[0] != "admin-gateway" {
+				return fmt.Errorf("trade_route_probe_failed")
+			}
+			for _, method := range tradeConsoleGatewayMethods {
+				if !containsString(route.GetAllowedMethods(), method) {
+					return fmt.Errorf("trade_route_probe_failed")
+				}
+			}
+			for _, method := range []string{"ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"} {
+				if containsString(route.GetAllowedMethods(), method) {
+					return fmt.Errorf("trade_route_probe_failed")
+				}
+			}
+			consoleFound = true
+		}
+	}
+	if ownerFound && consoleFound {
+		return nil
+	}
+	return fmt.Errorf("trade_route_probe_failed")
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func New(forwarder Forwarder) *Client {
@@ -266,17 +524,34 @@ func (c *Client) PrepareStoragePlacement(ctx context.Context, nodeID, host strin
 }
 
 func (c *Client) ensureGatewayNode(ctx context.Context, nodeID, host string) error {
+	return c.ensureGatewayNodeAt(ctx, nodeID, host, TradeGatewayHTTPSPort)
+}
+
+func (c *Client) ensureGatewayNodeAt(ctx context.Context, nodeID, host string, port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("gateway_node_port_invalid")
+	}
 	response := &pb.ListGatewayNodesRsp{}
 	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
 		return fmt.Errorf("gateway_node_lookup_failed")
 	}
-	node := &pb.GatewayNode{NodeId: nodeID, Name: nodeID, PublicAddress: "https://" + net.JoinHostPort(host, "11001"), Status: "enabled"}
+	desiredAddress := "https://" + net.JoinHostPort(host, strconv.Itoa(port))
+	node := &pb.GatewayNode{NodeId: nodeID, Name: nodeID, PublicAddress: desiredAddress, Status: "enabled"}
 	if len(response.GetNodes()) == 0 {
 		created := &pb.CreateGatewayNodeRsp{}
 		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "CreateGatewayNode", &pb.CreateGatewayNodeReq{Node: node}, created); err != nil || checkRetInfo(created.GetRetInfo()) != nil {
 			return fmt.Errorf("gateway_node_create_failed")
 		}
 		return nil
+	}
+	// Preserve operator-managed fields (notably HostId and Name) when
+	// reconciling an existing node. Sending a sparse replacement would clear
+	// the SSH host association and could unexpectedly re-enable a disabled node.
+	existing := response.GetNodes()[0]
+	if existing != nil {
+		node = proto.Clone(existing).(*pb.GatewayNode)
+		node.NodeId = nodeID
+		node.PublicAddress = desiredAddress
 	}
 	updated := &pb.UpdateGatewayNodeRsp{}
 	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "UpdateGatewayNode", &pb.UpdateGatewayNodeReq{NodeId: nodeID, Node: node}, updated); err != nil || checkRetInfo(updated.GetRetInfo()) != nil {

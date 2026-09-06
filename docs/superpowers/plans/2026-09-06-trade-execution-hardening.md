@@ -18,6 +18,8 @@
 
 **T10 新审查门禁：** 发布前补齐 Strategy 到独立 Trade 节点的鉴权 Gateway 接线和部署配置渲染/合同测试，不继续依赖 localhost 原生 Trade 端口。修正现代实例创建后 Claim 失败的接口恢复语义，返回已创建实例身份；未知 RPC 结果必须保留 disabled/session 证据，不能简单删除记录。相关文件为 Strategy bootstrap/config/logical_account、RPC service、部署 renderer 与对应测试；修改部署脚本前核对原工作区其他改动。
 
+**2026-09-06 恢复执行：** 已核对原仓库 `df69020d` 的计划增量，补入下列 T10.1/T10.2 和真实 Gateway 验收，不覆盖本分支已完成项目的记录。协议切换时仍需清理旧启动授权调用、核验实际部署 ACL；本地 Gateway 验收不表示正式环境已升级。
+
 ---
 
 ## 一、范围与决策
@@ -100,9 +102,9 @@ OKX 协议依据：[Orders channel 官方文档](https://www.okx.com/docs-v5#ord
 - 新增测试：`modules/trade/test/modern_target_execution_e2e_test.go`
 
 - [x] 记录当前 HEAD、工作区/index 文件列表、Trade/Strategy/EventBus 的实际构建命令；执行用独立工作区必须基于用户确认的当前代码，而不是丢弃未提交的现代 Strategy 改动。
-- [ ] 把三个已复现问题写成正常包测试，不依赖 `/tmp`、已有服务、真实凭据或壁钟等待。测试名称固定为 `TestModernSessionTargetCanResume`、`TestIdempotentClaimSessionPreservesTarget`、`TestIdempotentRebindSessionPreservesTarget`、`TestOrdersChannelUsesPerFillFee`。
-- [ ] 为人工链增加 `TestManualUnknownSubmissionRemainsRecoverable`，注入交易所 TransportUnknown，验证底层订单未知时 action 不得进入失败终态。
-- [ ] 运行以下测试，确认在修复前分别因为 runner mismatch、目标消失、0.02/0.01 费用不符、action FAILED 而失败，不能接受初始化或编译失败充当红测。
+- [x] 把三个已复现问题写成正常包测试，不依赖 `/tmp`、已有服务、真实凭据或壁钟等待。测试名称固定为 `TestModernSessionTargetCanResume`、`TestIdempotentClaimSessionPreservesTarget`、`TestIdempotentRebindSessionPreservesTarget`、`TestOrdersChannelUsesPerFillFee`。
+- [x] 为人工链增加 `TestManualUnknownSubmissionRemainsRecoverable`，注入交易所 TransportUnknown，验证底层订单未知时 action 不得进入失败终态。
+- [x] 运行以下测试，确认在修复前分别因为 runner mismatch、目标消失、0.02/0.01 费用不符、action FAILED 而失败，不能接受初始化或编译失败充当红测。
 
 ```bash
 go test -count=1 ./modules/trade/internal/application/logicalaccount -run 'TestModernSessionTargetCanResume|TestIdempotent.*SessionPreservesTarget'
@@ -110,7 +112,7 @@ go test -count=1 ./modules/trade/internal/application/operator -run TestManualUn
 go test -count=1 ./modules/trade/internal/exchange/okx -run TestOrdersChannelUsesPerFillFee
 ```
 
-- [ ] 记录红测结果后将这些用例与各自修复一起交付，避免把默认测试失败的中间提交作为阶段发布版本。
+- [x] 记录红测结果后将这些用例与各自修复一起交付，避免把默认测试失败的中间提交作为阶段发布版本。
 
 ### T02：统一现代授权校验，修复 session 幂等
 
@@ -390,16 +392,23 @@ GetOrder / GetOperatorAction -> current facts, never infer fill from RPC success
 - 修改文档：`modules/trade/DESIGN.md`、`modules/trade/README.md`、`docs/交易模块架构设计.md`、`docs/交易模块功能说明.md`、`docs/运维/MooX-Trade运维.md`
 - 对齐不重写：`docs/策略执行框架设计.md`、`docs/策略模块架构设计.md`
 
-- [ ] 枚举所有 producer、consumer、RPC 和 Web 使用者，先把仍在使用的 UI/管理调用切到 instance/session，再删除旧自动执行 producer/consumer 分支。不得只删 proto 导致运行中的 Strategy 发布无人消费的消息。
-- [ ] 从真实 Processor 求值、持久化 Result/Outbox 进入现代事件，不以测试手工 payload 代替生产接线。更新 EventBus 的 legacy quantity subject、consumer filter、发布 ACL 和架构断言；停止旧生产者后记录积压处置，不删除重建生产 Stream，不把本地 YAML 改动当作远端配置生效。
-- [ ] 最终自动交易事件只接受完整现代身份、bar_end_time、effective_at、valid_until 与 target_weight；删掉旧数量事件执行入口、legacy owner generation/command sequence 的授权 fallback。历史结果和交易事实不因此删除。
+- [x] 枚举所有 producer、consumer、RPC 和 Web 使用者，先把仍在使用的 UI/管理调用切到 instance/session，再删除旧自动执行 producer/consumer 分支。不得只删 proto 导致运行中的 Strategy 发布无人消费的消息。
+- [x] 从真实 Processor 求值、持久化 Result/Outbox 进入现代事件，不以测试手工 payload 代替生产接线。更新 EventBus 的 legacy quantity subject、consumer filter、发布 ACL 和架构断言；停止旧生产者后记录积压处置，不删除重建生产 Stream，不把本地 YAML 改动当作远端配置生效。
+- [x] 最终自动交易事件只接受完整现代身份、bar_end_time、effective_at、valid_until 与 target_weight；删掉旧数量事件执行入口、legacy owner generation/command sequence 的授权 fallback。历史结果和交易事实不因此删除。
 - [ ] 本任务只处理执行边界及直接调用方，不重写 Strategy DSL、因子、选股或调度实现。Strategy 同时在修改时先对齐实际契约；无法闭合直接调用链则停止该切换，不把半完成接口作为已交付版本。
+- [x] T10.1：Strategy 的 Trade 依赖显式配置 `trade.gateway_url/target_node/ca_file/timeout`，使用现有 HTTPS 服务网关和 HMAC；不复用只向 tRPC 上游转发的 native Gateway。`MOOX_TRADE_GATEWAY_URL/MOOX_TRADE_GATEWAY_NODE_ID` 为专用覆盖项，通用本地 native env 不覆盖该依赖。部署生成可重启的配置，专用 `trade_owner` 路由仅允许 Strategy 账户查询与认领/释放/重绑定，不公开 `trade_console` 的下单及资金管理方法。
+- [x] 同步主库计划提交 `16a60ea5` 的部署门禁：URL/node 必须成对且在配置加载期校验；实际节点 ID 必须可由 Admin 注册。`start_admin` 和 `setup deploy-service trade` 两条链都必须在真实接收节点注册最小 ownership 路由，不能依赖 DNS resolver 开关或只导入 Admin 本节点。配置要持久化，重复注册无重复行，注册失败不报告同步成功，也不影响其他节点路由。
+- [x] 部署验收覆盖生成配置及真实 CLI 导入临时 SQLite 后的 `CompileGatewaySnapshot`；检查指定 Trade 节点的 HTTP 上游和四方法/strategy-only ACL。手工 snapshot 的 TLS 测试不替代实际注册链测试；生产节点的 applied snapshot 仍须在 T11 实际核验。
+- [x] T10.1 的验收必须运行生产客户端、真实 Gateway handler/nonce/Forward、真实 Trade HTTP RPC 和 Space filter。覆盖信任 CA、错误/缺失 CA、错误节点/签名、跨 Space、越权 SubmitOrder，以及 Paper 账户现代 Claim/Release；不以直接 HTTP 桥代替 Gateway。最后在目标环境核验目标节点、凭据和实际 route snapshot。
+- [x] T10.2：创建后 Claim、启用写入或读取失败必须返回持久身份；未知 Claim 保留 disabled/session，确定拒绝的清理失败不吞掉。查库失败只返回可靠身份和合并错误，不返回推测 enabled/session。相同 ID 同配置（JSON 结构比较）只读回当前状态；enabled 不一致引导显式 Enable，同 ID 异配置冲突不修改实例。
+- [x] T10.2：保留 Web 创建 disabled 的标准流程，通用 Control HTTP 错误对象保留服务端恢复身份；测试业务失败及非 2xx 响应。覆盖重启显式 Enable、不重复创建、不由 Create 重试改变生命周期；等待 Claim 的 session 不得被旧 UpdateRunner 改写账户/策略。
+- [x] 最终切换须移除 `ReconcileLegacyOwners` 启动/周期调用和旧客户端 Rebind 授权路径，先暂停并处置 legacy owner，再完成现代 session 认领；不能把仍依赖旧授权的启动代码与最终 ACL 混合发布。现代 Rebind 测试检查 session CAS，不以旧 runner rebind 用例代替。
 - [x] 发布前补齐旧 receipt 表受控迁移的 known-shape、扩展列/索引/trigger/外键依赖检查及事务回滚测试。T06 仅闭环旧 target 表保护，不能将其推广为所有历史表已无损验收；未知 receipt 结构必须拒绝且保持原状，不允许 copy/drop 静默删字段或留下半迁移。已补字面量保真和大小写依赖匹配，独立 codeCR 闭环；实际生产库升级仍须 T11 核验。
-- [ ] 不添加 `reserved`、别名、长期双写/双读兼容层。需要保留的历史审计字段明确为只读来源，不参与新授权或新目标生成。已有 legacy owner 必须通过受控停用/重新授权切换，不能猜测 session。
+- [x] 不添加 `reserved`、别名、长期双写/双读兼容层。需要保留的历史审计字段明确为只读来源，不参与新授权或新目标生成。已有 legacy owner 必须通过受控停用/重新授权切换，不能猜测 session。
 - [ ] 控制台保留现有订单、成交、持仓、资金曲线和账户信息；只调整身份字段、受理/未知/过期状态及新提交入口，不扩大成 UI 重设计。
 - [x] 创建账户时展示控制模式；MANUAL 显示“下单”，STRATEGY 显示“接管并下单”及暂停/撤单警告。RUNNING action 即使有 transient last_error 也继续查询，不把临时错误显示为不可恢复失败。20 项 mounted 下单用例、Paper 表单与 API 测试通过；双模式桌面/移动浏览器受理到状态查询通过，非生产交易验收。
-- [ ] 新增计划复核门禁：复核全部 OperatorAction 类型的逐项超时、锁取消和健康分类。当前 T09 只为 SUBMIT_ORDER 区分已持久业务结果与共享故障；MANUAL_ORDER/FLATTEN/CANCEL_ORDER 仍须分别验证“单 action 失败不使全局 Not Ready、公共 List/DB 失败必须不健康”，不能用普通下单测试概括所有接管/撤单恢复链。
-- [ ] 更新文档：权重外部合同、数量内部合同、动态路由、人工接管/普通提交差异、Paper 仿真边界、停止/过期/清仓语义，以及错误定位字段。
+- [x] 新增计划复核门禁：复核全部 OperatorAction 类型的逐项超时、锁取消和健康分类。当前 T09 只为 SUBMIT_ORDER 区分已持久业务结果与共享故障；MANUAL_ORDER/FLATTEN/CANCEL_ORDER 仍须分别验证“单 action 失败不使全局 Not Ready、公共 List/DB 失败必须不健康”，不能用普通下单测试概括所有接管/撤单恢复链。
+- [x] 更新文档：权重外部合同、数量内部合同、动态路由、人工接管/普通提交差异、Paper 仿真边界、停止/过期/清仓语义，以及错误定位字段。
 
 ```bash
 make -C packages/tradeeventpb all
@@ -419,6 +428,7 @@ pnpm -C web exec vue-tsc --noEmit
 - 新增/完善：`modules/trade/test/modern_target_execution_e2e_test.go`、`manual_unknown_recovery_e2e_test.go`、`okx_fill_replay_e2e_test.go`、`paper_account_isolation_e2e_test.go`
 - 修改：`modules/strategy/test/strategy_trade_external_e2e_test.go`、`modules/trade/test/strategy_target_external_e2e_test.go`
 - 修改：`scripts/test/e2e/test-strategy-trade-event-e2e.sh`、`test-strategy-trade-logical-account-e2e.sh`
+- 新增：`scripts/test/e2e/test-strategy-trade-gateway-e2e.sh`，以及 Strategy bootstrap、Gateway router、Trade test 下的三个 `gateway_owner` 外部测试文件。
 - 修改/新增浏览器验收：`web/tests/strategy-console.spec.ts`、`web/tests/trade-execution.spec.ts`（新增）
 
 - [ ] 在临时 SQLite、隔离 NATS、本地 HTTP/WS 交易所替身中执行下列验收矩阵。替身只模拟外部边界，必须复用生产 OrderService、Decider、Reducer、Consumer/Worker 组装，不能重写内部执行逻辑来证明自己正确。
@@ -435,24 +445,27 @@ pnpm -C web exec vue-tsc --noEmit
 | Paper 大历史与事务恢复 | 100001 笔完整；增量/重建一致；中途失败不半更新 |
 | 多账户容量与故障 | 不无故搬同向仓；健康账户不被坏候选永久阻塞 |
 | Paper 关闭与隔离 | 关闭后不撮合；历史可查；Live/Paper 不串账；跨 space 请求拒绝 |
+| 独立 Trade Gateway | 真实 HTTPS/CA/HMAC/节点/Space 转发，现代 ownership 成功，越权下单不触达 Trade |
+| 实例创建部分成功 | 返回 durable 身份；原 ID 查询并显式恢复启用；未知 session 不丢失，异参及旧 Runner 不篡改 |
 
-- [ ] 执行本地后端验收：
+- [x] 执行本地后端验收：
 
 ```bash
 env MOOX_RUN_REAL_TRADE_DNS_E2E=0 go test -count=1 ./modules/trade/... ./modules/trade/proto/tradegen ./modules/strategy/... ./modules/strategy/proto/strategygen ./packages/events/... ./packages/tradeeventpb/...
 go test -race -count=1 ./modules/trade/internal/runtime ./modules/trade/internal/application/... ./modules/trade/internal/eventconsumer ./modules/trade/internal/execution/paper ./modules/trade/internal/infra/store
 go vet ./modules/trade/... ./modules/trade/proto/tradegen ./modules/strategy/... ./modules/strategy/proto/strategygen ./packages/events/... ./packages/tradeeventpb/...
 bash scripts/test/e2e/test-strategy-trade-event-e2e.sh
+bash scripts/test/e2e/test-strategy-trade-gateway-e2e.sh
 bash scripts/test/e2e/test-strategy-trade-logical-account-e2e.sh
 make verify-pr
 git diff --check
 ```
 
-- [ ] 修订 E2E shell 的成功断言，必须确实跑到现代身份与目标成交用例，不能仅凭旧 Runner 用例通过或测试因 tag/环境 SKIP 判定成功。隔离服务必须清理，不连接现有生产 NATS。
-- [ ] 执行前端单测、类型检查、`pnpm -C web build:prod` 和 Playwright；验证提交返回受理而非成交、未知态可追踪、过期可见、拒绝不显示成交成功。
-- [ ] 使用隔离配置运行 `pnpm -C web exec playwright test tests/strategy-console.spec.ts tests/trade-execution.spec.ts`；提前确认测试服务、数据库和 API 均为本地替身，不把浏览器验收指向生产账户。
-- [ ] 安排两个独立 `codeCR`：一个审查订单/资金/恢复，另一个审查目标/session/API；主 Agent 核验所有发现并闭环，不以测试通过代替资金语义审查。
-- [ ] 区分记录：源码检查、定向测试、mock E2E、隔离 NATS E2E、真实 Testnet、部署验收。前三类通过不能声称真实交易所已验证。
+- [x] 修订 E2E shell 的成功断言，必须确实跑到现代身份与目标成交用例，不能仅凭旧 Runner 用例通过或测试因 tag/环境 SKIP 判定成功。隔离服务必须清理，不连接现有生产 NATS。
+- [x] 执行前端单测、类型检查、`pnpm -C web build:prod` 和 Playwright；验证提交返回受理而非成交、未知态可追踪、过期可见、拒绝不显示成交成功。
+- [x] 使用隔离配置运行 `pnpm -C web exec playwright test tests/strategy-console.spec.ts tests/trade-execution.spec.ts`；提前确认测试服务、数据库和 API 均为本地替身，不把浏览器验收指向生产账户。
+- [x] 安排两个独立 `codeCR`：一个审查订单/资金/恢复，另一个审查目标/session/API；主 Agent 核验所有发现并闭环，不以测试通过代替资金语义审查。
+- [x] 区分记录：源码检查、定向测试、mock E2E、隔离 NATS E2E、真实 Testnet、部署验收。前三类通过不能声称真实交易所已验证。
 
 ## 五、发布与数据保护门禁
 

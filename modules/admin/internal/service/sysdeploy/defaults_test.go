@@ -9,6 +9,42 @@ import (
 	"testing"
 )
 
+func TestDefaultTradeGatewayOnlyExposesStrategyOwnership(t *testing.T) {
+	for _, row := range DefaultDeployments("trade-node") {
+		if row.ServiceName != "trade_owner" {
+			continue
+		}
+		if !row.GatewayEnabled || row.GatewayServiceID != "trade_owner" {
+			t.Fatal("Trade ownership route is missing")
+		}
+		extra, err := parseRouteExtraConfig(row.ExtraConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		routes, err := deploymentGatewayRoutes(row, extra)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(routes) != 1 {
+			t.Fatalf("routes = %v", routes)
+		}
+		route := routes[0]
+		if !reflect.DeepEqual(route.AllowedCallers, []string{"strategy"}) {
+			t.Fatalf("callers = %v", route.AllowedCallers)
+		}
+		if !reflect.DeepEqual(route.AllowedMethods, []string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"}) {
+			t.Fatalf("methods = %v", route.AllowedMethods)
+		}
+		for _, method := range []string{"SubmitOrder", "PlaceManualOrder", "FlattenLogicalAccount", "CreatePaperSimulation", "CancelOrder"} {
+			if route.AllowsMethod(method) {
+				t.Errorf("strategy can invoke %s", method)
+			}
+		}
+		return
+	}
+	t.Fatal("trade_owner deployment is missing")
+}
+
 func TestTRPCHealthAndAdminRPCServicesBindLoopback(t *testing.T) {
 	root := filepath.Join("..", "..", "..", "..", "..")
 	matches, err := filepath.Glob(filepath.Join(root, "modules", "*", "config", "trpc_go*.yaml"))
@@ -121,6 +157,9 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	}
 	if !monitorEnabled(byName["moox_strategy"].ExtraConfig) {
 		t.Fatal("moox_strategy monitoring must be enabled after standard release integration")
+	}
+	if item := byName["moox_strategy"]; item.Port != 11433 || item.Protocol != "http" || item.GatewayPath != "trpc.moox.strategy.StrategyMgr" {
+		t.Fatalf("moox_strategy endpoint = %+v, want HTTP 11433", item)
 	}
 	if healthURL(byName["storage-primary"].ExtraConfig) != "http://127.0.0.1:20210/readyz" {
 		t.Fatalf("storage-primary extra_config = %s", byName["storage-primary"].ExtraConfig)

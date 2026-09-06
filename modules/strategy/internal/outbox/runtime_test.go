@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	strategystore "github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -18,28 +19,39 @@ import (
 
 type runtimeTestStore struct {
 	mu        sync.Mutex
-	row       domain.OutboxMessage
+	row       strategystore.StrategyResult
 	published bool
 }
 
-func (s *runtimeTestStore) ListPendingOutbox(context.Context, int) ([]domain.OutboxMessage, error) {
+func (s *runtimeTestStore) ListPendingResults(_ context.Context, limit int) ([]strategystore.StrategyResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.published || s.row.MessageID == "" {
+	if s.published || s.row.ResultID == "" || limit <= 0 || s.row.PublishStatus != strategystore.PublishPending {
 		return nil, nil
 	}
-	return []domain.OutboxMessage{s.row}, nil
+	return []strategystore.StrategyResult{s.row}, nil
 }
-func (s *runtimeTestStore) DeleteOutbox(context.Context, string) error {
+func (s *runtimeTestStore) PreparePendingResult(_ context.Context, resultID string, _ time.Time) (strategystore.StrategyResult, bool, error) {
 	s.mu.Lock()
-	s.published = true
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if s.row.ResultID != resultID || s.row.PublishStatus != strategystore.PublishPending {
+		return strategystore.StrategyResult{}, false, nil
+	}
+	return s.row, true, nil
+}
+func (s *runtimeTestStore) TransitionPublishStatus(_ context.Context, resultID string, from, to strategystore.PublishStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.row.ResultID == resultID && s.row.PublishStatus == from {
+		s.row.PublishStatus = to
+		s.published = to == strategystore.PublishSent
+	}
 	return nil
 }
 func (s *runtimeTestStore) PendingOutboxStats(context.Context) (domain.OutboxStats, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.published || s.row.MessageID == "" {
+	if s.published || s.row.ResultID == "" {
 		return domain.OutboxStats{}, nil
 	}
 	return domain.OutboxStats{PendingCount: 1, OldestPending: s.row.CreatedAt}, nil
@@ -98,7 +110,7 @@ func TestRuntimeReconnectsAndCatchesUpPendingOutbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &runtimeTestStore{row: domain.OutboxMessage{MessageID: "run-1", EventData: data, CreatedAt: time.Now().Add(-time.Minute)}}
+	store := &runtimeTestStore{row: strategystore.StrategyResult{ResultID: "run-1", EventData: data, PublishStatus: strategystore.PublishPending, CreatedAt: time.Now().Add(-time.Minute)}}
 	client := newRuntimeTestClient()
 	var attempts atomic.Int32
 	runtime, err := NewRuntime(RuntimeConfig{

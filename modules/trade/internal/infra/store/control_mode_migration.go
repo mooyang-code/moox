@@ -209,6 +209,18 @@ func validateControlTable(db *gorm.DB, table string, requireMode bool) (bool, er
 
 func preflightControlModeSchema(db *gorm.DB) error {
 	for _, table := range []string{"t_logical_accounts", "t_operator_actions"} {
+		// Older Trade databases may have the original logical-account table
+		// without the owner index. Let migrateLegacyTradeSchema add the
+		// generation/index before strict control-shape validation runs.
+		if table == "t_logical_accounts" {
+			legacy, err := matchesLegacyLogicalAccountShape(db)
+			if err != nil {
+				return err
+			}
+			if legacy {
+				continue
+			}
+		}
 		if _, err := validateControlTable(db, table, false); err != nil {
 			return err
 		}

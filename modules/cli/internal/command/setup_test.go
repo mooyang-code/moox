@@ -6,14 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
+	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -414,6 +418,27 @@ func TestSetupDeployControlValidatesConfiguredResolverHost(t *testing.T) {
 	require.Equal(t, "compute-1", hosts[1].Name)
 }
 
+func TestSetupDeployControlValidatesConfiguredTradeHostWhenResolverDisabled(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	snapshot.Manifest.OtherHosts[0].Name = "compute-1"
+	snapshot.Manifest.DNSResolver = setupconfig.DNSResolver{TradeNode: "compute-1"}
+	var hosts []setupconfig.Host
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(_ context.Context, _ *setupconfig.Snapshot, values []setupconfig.Host) (setupvalidate.Result, error) {
+			hosts = append([]setupconfig.Host(nil), values...)
+			return setupvalidate.Result{}, nil
+		},
+		deployControl: func(context.Context, *setupconfig.Snapshot, bool) error { return nil },
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-control", "--file", "moox.toml"})
+	require.NoError(t, cmd.Execute())
+	require.Len(t, hosts, 2)
+	require.Equal(t, "compute-1", hosts[1].Name)
+}
+
 func TestSetupCertificateSummarySelectsTrustModel(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, map[string]any{
@@ -426,6 +451,7 @@ func TestSetupCertificateSummarySelectsTrustModel(t *testing.T) {
 
 func TestControlDeployOptionsUseManifestEventBusEndpoint(t *testing.T) {
 	snapshot := setupSnapshot(t)
+	snapshot.Manifest.DNSResolver.TradeNode = "compute"
 	opts := controlDeployOptions(snapshot, "/repo")
 	require.Equal(t, "/repo", opts.RepositoryRoot)
 	require.Equal(t, "203.0.113.8", opts.PublicHost)
@@ -434,7 +460,46 @@ func TestControlDeployOptionsUseManifestEventBusEndpoint(t *testing.T) {
 	require.True(t, opts.EventBusTLSEnabled)
 	require.Equal(t, "wecom", opts.NotificationChannelType)
 	require.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", opts.NotificationWebhookURL)
+	require.Equal(t, "https://203.0.113.9:11001", opts.TradeGatewayURL)
+	require.Equal(t, "compute", opts.TradeGatewayNode)
 }
+
+func TestReadTradeGatewayCASeparatesMissingFromReadFailure(t *testing.T) {
+	root := t.TempDir()
+	missing, exists, err := readTradeGatewayCA(context.Background(), localReadSSH{}, root)
+	require.NoError(t, err)
+	require.False(t, exists)
+	require.Empty(t, missing)
+	target := filepath.Join(root, "certs", "caddy", "trade-gateway-root.crt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o700))
+	require.NoError(t, os.Mkdir(target, 0o700))
+	_, exists, err = readTradeGatewayCA(context.Background(), localReadSSH{}, root)
+	require.Error(t, err)
+	require.False(t, exists, "failed reads must not be treated as a valid existing CA")
+}
+
+type localReadSSH struct{}
+
+func (localReadSSH) Check(context.Context) error { return nil }
+func (localReadSSH) ForwardLocal(context.Context, string) (net.Listener, error) {
+	return nil, errors.New("not implemented")
+}
+func (localReadSSH) Upload(context.Context, io.Reader, int64, string, fs.FileMode) error {
+	return errors.New("not implemented")
+}
+func (localReadSSH) Run(ctx context.Context, argv []string, stdin io.Reader) (setupssh.Result, error) {
+	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	command.Stdin = stdin
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	err := command.Run()
+	result := setupssh.Result{Stdout: stdout.String(), Stderr: stderr.String()}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		result.ExitCode = exitErr.ExitCode()
+	}
+	return result, err
+}
+func (localReadSSH) Close() error { return nil }
 
 func TestControlDeployOptionsUsesConfiguredStorageGatewayHost(t *testing.T) {
 	snapshot := setupSnapshot(t)

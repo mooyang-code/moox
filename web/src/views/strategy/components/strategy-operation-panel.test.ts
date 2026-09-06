@@ -3,20 +3,19 @@ import path from "node:path";
 import { mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { setRunnerStatus, setInstanceEnabled } = vi.hoisted(() => ({ setRunnerStatus: vi.fn(), setInstanceEnabled: vi.fn() }));
-vi.mock("@/api/strategy", () => ({ setRunnerStatus, setInstanceEnabled }));
+const { setInstanceEnabled } = vi.hoisted(() => ({ setInstanceEnabled: vi.fn() }));
+vi.mock("@/api/strategy", () => ({ setInstanceEnabled }));
 
 import StrategyOperationPanel from "./strategy-operation-panel.vue";
 
-describe("Strategy Runner controls", () => {
+describe("Strategy instance controls", () => {
   beforeEach(() => {
-    setRunnerStatus.mockReset().mockResolvedValue({});
     setInstanceEnabled.mockReset().mockResolvedValue({});
   });
 
-  it("only offers Runner enable when disabled", async () => {
+  it("only offers instance enable when disabled", async () => {
     const wrapper = mount(StrategyOperationPanel, {
-      props: { runnerId: "runner-1", status: "DISABLED" },
+      props: { instanceId: "instance-1", enabled: false },
       global: {
         stubs: {
           "a-space": { template: "<div><slot /></div>" },
@@ -30,14 +29,13 @@ describe("Strategy Runner controls", () => {
     expect(wrapper.text()).not.toContain("Exchange Account");
   });
 
-  it("uses the instance enabled contract and keeps the legacy adapter", () => {
+  it("uses only the instance enabled contract", () => {
     const source = fs.readFileSync(
       path.resolve(process.cwd(), "src/views/strategy/components/strategy-operation-panel.vue"),
       "utf8"
     );
     expect(source).toContain("setInstanceEnabled");
-    expect(source).toContain("setRunnerStatus");
-    expect(source).toContain("enabled ? \"ENABLED\" : \"DISABLED\"");
+    expect(source).not.toContain("setRunnerStatus");
 
     const running = fs.readFileSync(path.resolve(process.cwd(), "src/views/strategy/running/index.vue"), "utf8");
     expect(running).toContain("loadInstances");

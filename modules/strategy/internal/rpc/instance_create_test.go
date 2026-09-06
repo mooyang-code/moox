@@ -43,7 +43,7 @@ func (createClaimRejected) Code() int32   { return 14 }
 
 func newCreateInstanceService(t *testing.T) (*Service, context.Context, *strategypb.CreateStrategyInstanceReq, *createSessionOwner) {
 	t.Helper()
-	repo := openLegacyOwnerStore(t)
+	repo := openRPCStore(t)
 	if err := repo.SaveStrategyDefinition(context.Background(), store.StrategyDefinition{
 		StrategyID: "create-strategy", StrategyName: "create", DSLYaml: `name: create
 triggers: {event: {name: source.ready}}

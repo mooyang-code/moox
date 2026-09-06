@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -26,6 +28,7 @@ import (
 
 const minGzipForwardResponseBytes = 1024
 const nodeGatewayServiceKeyID = "moox-gateway-service"
+const maxForwardResponseBytes = 16 << 20
 
 // setForwardCommonHeaders 设置透传响应的公共头（CORS + 暴露 trpc 错误头供前端读取）。
 func setForwardCommonHeaders(w http.ResponseWriter, origin string) {
@@ -85,6 +88,87 @@ func forwardStorageToNodeGateway(ctx context.Context, serviceID, method string, 
 		return nil, true, fmt.Errorf("Node Service Gateway %s unavailable: %w", target, err)
 	}
 	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(response.Data))}, true, nil
+}
+
+// forwardTradeConsoleToGateway keeps a dedicated TradeConsole listener
+// loopback-only while allowing the Admin browser BFF to reach it through the
+// authenticated HTTPS Node Gateway. The gateway ACL, not the browser-facing
+// Admin route, remains the authority for permitted TradeConsole methods.
+func forwardTradeConsoleToGateway(ctx context.Context, method string, detail ServiceDetail, body []byte, headers map[string]string) ([]byte, error) {
+	if method == "" || strings.IndexFunc(method, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-')
+	}) >= 0 {
+		return nil, fmt.Errorf("Trade method is invalid")
+	}
+	base := strings.TrimRight(strings.TrimSpace(detail.GatewayURL), "/")
+	if base == "" || strings.TrimSpace(detail.GatewayNode) == "" {
+		return nil, fmt.Errorf("Trade Gateway placement is incomplete")
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Host == "" || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
+		return nil, fmt.Errorf("Trade Gateway URL is invalid")
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "https" && scheme != "http" {
+		return nil, fmt.Errorf("Trade Gateway URL is invalid")
+	}
+	if scheme == "http" {
+		hostname := strings.TrimSpace(parsed.Hostname())
+		if hostname != "localhost" {
+			ip := net.ParseIP(hostname)
+			if ip == nil || !ip.IsLoopback() {
+				return nil, fmt.Errorf("Trade Gateway URL must use HTTPS")
+			}
+		}
+	}
+	path := "/api/service/trade_console/" + method
+	secret := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))
+	keyID := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
+	if secret == "" || keyID == "" {
+		return nil, fmt.Errorf("Trade Gateway credentials are not configured")
+	}
+	signed, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: keyID, Caller: "admin-gateway", Secret: secret}, gatewayauth.Request{
+		Method: http.MethodPost, Path: path, TargetNode: detail.GatewayNode, Body: body,
+	}, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	for name, values := range signed {
+		for _, value := range values {
+			request.Header.Add(name, value)
+		}
+	}
+	for key, name := range map[string]string{"space_id": "X-Space-Id", "trace_id": "X-Trace-Id", "user_id": "X-User-Id", "user_role": "X-User-Role"} {
+		if value := headers[key]; value != "" {
+			request.Header.Set(name, value)
+		}
+	}
+	caFile := strings.TrimSpace(os.Getenv("MOOX_TRADE_GATEWAY_CA_FILE"))
+	if caFile == "" {
+		caFile = strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CA_FILE"))
+	}
+	httpClient, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: 30 * time.Second, CAFile: caFile})
+	if err != nil {
+		return nil, err
+	}
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("Trade Gateway unavailable: %w", err)
+	}
+	defer response.Body.Close()
+	encoded, err := io.ReadAll(io.LimitReader(response.Body, maxForwardResponseBytes+1))
+	if err != nil || len(encoded) > maxForwardResponseBytes {
+		return nil, fmt.Errorf("Trade Gateway response is invalid")
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Trade Gateway returned HTTP %d", response.StatusCode)
+	}
+	return encoded, nil
 }
 
 // normalizeNodeGatewayTarget accepts the deployment formats used by the

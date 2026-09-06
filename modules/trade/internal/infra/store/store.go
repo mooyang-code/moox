@@ -185,16 +185,23 @@ func migrateLegacyTradeSchema(db *gorm.DB) (bool, error) {
 			return false, nil
 		}
 	}
-	var tableSQL string
-	if err := db.Raw(`
-		SELECT sql FROM sqlite_master
-		WHERE type = 'table' AND name = 't_logical_accounts'
-	`).Scan(&tableSQL).Error; err != nil {
-		return false, fmt.Errorf("inspect logical account legacy SQL: %w", err)
+	// Historical installations before the owner-claim index was introduced
+	// have the exact legacy table DDL but no explicit owner index. Recognize
+	// that shape separately; the migration below recreates the index after
+	// adding the generation column. Newer legacy layouts are validated by the
+	// strict control-table matcher.
+	knownLegacy, err := matchesLegacyLogicalAccountShape(db)
+	if err != nil {
+		return false, err
 	}
-	if normalizeSchemaSQL(tableSQL) != normalizeSchemaSQL(legacyLogicalAccountTableSQL) {
-		// Unknown shapes remain fail-closed and are reported by the strict
-		// validator below rather than being partially mutated.
+	known := knownLegacy
+	if !known {
+		known, err = validateControlTable(db, "t_logical_accounts", false)
+		if err != nil {
+			return false, err
+		}
+	}
+	if !known {
 		return false, nil
 	}
 	// Keep the DDL and owner-generation initialization atomic. If the process
@@ -216,6 +223,13 @@ func migrateLegacyTradeSchema(db *gorm.DB) (bool, error) {
 			WHERE c_owner_runner_id IS NOT NULL AND c_owner_claimed_at = 0
 		`).Error; err != nil {
 			return fmt.Errorf("initialize logical account owner generation: %w", err)
+		}
+		if err := tx.Exec(`
+			CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_owner_runner
+			ON t_logical_accounts (c_space_id, c_owner_runner_id)
+			WHERE c_owner_runner_id IS NOT NULL
+		`).Error; err != nil {
+			return fmt.Errorf("initialize logical account owner index: %w", err)
 		}
 		if err := ensureOwnerRebindTable(tx); err != nil {
 			return err
@@ -692,6 +706,30 @@ func normalizeSchemaSQL(value string) string {
 	// schema as a fresh install without weakening column/constraint checks.
 	value = strings.ReplaceAll(value, `"`, "")
 	return strings.ToLower(strings.Join(strings.Fields(value), " "))
+}
+
+func matchesLegacyLogicalAccountShape(db *gorm.DB) (bool, error) {
+	reference, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		return false, fmt.Errorf("open legacy schema reference: %w", err)
+	}
+	sqlDB, err := reference.DB()
+	if err != nil {
+		return false, fmt.Errorf("open legacy schema reference connection: %w", err)
+	}
+	defer sqlDB.Close()
+	if err := reference.Exec(legacyLogicalAccountTableSQL).Error; err != nil {
+		return false, fmt.Errorf("apply legacy schema reference: %w", err)
+	}
+	got, err := inspectTableShape(db, "t_logical_accounts")
+	if err != nil {
+		return false, err
+	}
+	want, err := inspectTableShape(reference, "t_logical_accounts")
+	if err != nil {
+		return false, err
+	}
+	return reflect.DeepEqual(got, want), nil
 }
 
 func (s *Store) Close() error {

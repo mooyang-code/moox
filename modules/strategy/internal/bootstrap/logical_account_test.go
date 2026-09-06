@@ -86,9 +86,9 @@ func (s *logicalAccountServiceStub) account(id string) *tradepb.LogicalAccount {
 	}
 }
 
-func TestLogicalAccountOwnerClientUsesTradeHTTPAndTrustedSpace(t *testing.T) {
+func TestLogicalAccountOwnerDirectProxyCarriesTrustedSpace(t *testing.T) {
 	target, service := startLogicalAccountService(t)
-	owner := newLogicalAccountOwnerClient(target, time.Second)
+	owner := &logicalAccountOwnerClient{client: tradepb.NewTradeConsoleServiceClientProxy(client.WithTarget(target), client.WithProtocol("http")), timeout: time.Second}
 
 	if err := owner.Validate(context.Background(), "space-1", "logical-1"); err != nil {
 		t.Fatal(err)

@@ -64,7 +64,9 @@ func TestLogicalAccountTargetConsumerPersistsLatestAndWorkerConverges(t *testing
 	)
 	require.NoError(t, err)
 	require.Equal(t, "target-3", current.TargetID)
-	require.Equal(t, uint64(3), current.CommandSequence)
+	// Modern target events derive the historical ordering value from bar_end_time;
+	// command_sequence is deprecated and no longer authorizes execution.
+	require.Equal(t, uint64(now.UnixMilli()), current.CommandSequence)
 	require.Equal(t, "0.03", current.Targets[0].Quantity)
 	require.Equal(t, int32(2), wakes.Load(), "stale command must not wake convergence")
 

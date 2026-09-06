@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -36,6 +37,26 @@ func TestWeightResolverFreezesTotalQuantityWithoutExecutionPin(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"instrument_id":"BTC-USDT-SWAP","quantity":"10"}]`, string(quantities))
 	require.Equal(t, []ReferencePriceEvidence{{InstrumentID: "BTC-USDT-SWAP", TradingAccountID: "account-a", ExchangeSymbol: "BTCUSDT", Price: "100", UpdatedAt: 2000}}, conversion.ReferencePriceEvidence)
+}
+
+func TestWeightResolverPersistsRepeatingQuantityAtLogicalPrecision(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSpot)
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: "BINANCE", MarketType: string(exchange.MarketTypeSpot), ExchangeSymbol: "BTCUSDT",
+			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
+			ExchangeQuantityStep: "0.01", MinExchangeQuantity: "0.01", PriceTick: "0.1", Status: "TRADING",
+		})
+	}))
+	resolver := WeightResolver{Store: fixture.store, Prices: targetPriceStub{price: shared.MustDecimal("3")}, Equity: conversionEquityStub{}, Now: func() time.Time { return fixture.now }}
+	request := &tradeeventpb.LogicalAccountTargetWeightRequested{
+		TargetId: "target-quantized", LogicalAccountId: "logical-1", InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1",
+		BarEndTime: timestamppb.New(time.UnixMilli(1000)), EffectiveAt: timestamppb.New(time.UnixMilli(1000)), ValidUntil: timestamppb.New(time.UnixMilli(3000)),
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", TargetWeight: "0.1"}},
+	}
+	conversion, err := resolver.Resolve(context.Background(), 0, request, "space-1")
+	require.NoError(t, err)
+	require.JSONEq(t, `[{"instrument_id":"BTC-USDT-SPOT","quantity":"66.666666666666666666"}]`, string(mustJSON(conversion.QuantityTargets)))
 }
 
 func TestRequestHashCanonicalizesTargetOrderAndDecimal(t *testing.T) {

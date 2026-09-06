@@ -18,6 +18,7 @@ import (
 	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
 	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
 	"github.com/mooyang-code/moox/modules/strategy/internal/rpc"
+	_ "github.com/mooyang-code/moox/modules/strategy/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/strategy/internal/storageio"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategytrigger "github.com/mooyang-code/moox/modules/strategy/internal/trigger"
@@ -79,15 +80,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return nil, nil, err
 	}
 	service := newRPCService(repo, cfg)
-	// Reconcile archived and disabled owners before subscribing to Factor-ready
-	// events. This closes the upgrade window in which a new V2 target could be
-	// accepted and then cleared by a late owner handoff.
-	if err := service.ReconcileLegacyOwners(ctx); err != nil {
-		return nil, nil, fmt.Errorf("reconcile legacy Strategy owners: %w", err)
-	}
-	if err := service.ReconcileDisabledOwners(ctx); err != nil {
-		return nil, nil, fmt.Errorf("reconcile disabled Strategy owners: %w", err)
-	}
+	// Reconcile incomplete modern disable/enable handshakes before subscribing
+	// to Factor-ready events. Historical V1 owner rows are audit data and are
+	// never implicitly released or rebound during startup.
 	if err := service.ReconcileDisabledInstances(ctx); err != nil {
 		return nil, nil, fmt.Errorf("reconcile disabled Strategy instances: %w", err)
 	}
@@ -113,21 +108,15 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if _, err := registerMetricsReporter(s); err != nil {
 		return nil, nil, err
 	}
-	// Disable is committed locally before the Trade release RPC. Retry the
-	// release on startup and periodically so a crash or temporary network
-	// outage cannot leave an ACTIVE Trade owner behind indefinitely.
+	// Disable is committed locally before the Trade release RPC. Retry modern
+	// session/owner release on startup and periodically so a crash or temporary
+	// network outage cannot leave an ACTIVE owner behind indefinitely.
 	reconcileCtx, cancel := context.WithCancel(context.Background())
 	cancelReconcile = cancel
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
-			if err := service.ReconcileLegacyOwners(reconcileCtx); err != nil {
-				log.Warnf("strategy legacy owner reconciliation pending: %v", err)
-			}
-			if err := service.ReconcileDisabledOwners(reconcileCtx); err != nil {
-				log.Warnf("strategy disabled owner reconciliation pending: %v", err)
-			}
 			if err := service.ReconcileDisabledInstances(reconcileCtx); err != nil {
 				log.Warnf("strategy disabled instance reconciliation pending: %v", err)
 			}
@@ -223,7 +212,7 @@ func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config) (*stra
 	}
 	reader := newStorageReader(cfg)
 	compilerFactory := newCompilerFactory(cfg)
-	logicalOwner := newLogicalAccountOwnerClient(cfg.LogicalAccountTarget, cfg.LogicalAccountTimeout)
+	logicalOwner := newLogicalAccountOwnerClient(cfg.Trade)
 	poolRegistry := defaultPoolRegistry()
 	processor := &strategytrigger.Processor{
 		Inbox: repo, Store: repo, Loader: storageio.Loader{Reader: reader}, PoolRegistry: poolRegistry,
@@ -241,7 +230,6 @@ func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config) (*stra
 			}
 			return selected.CompileWithBindings(compileCtx, dsl, spaceID, raw)
 		},
-		OwnerGeneration:   logicalOwner.Generation,
 		SessionGeneration: logicalOwner.SessionGeneration,
 		VerifyDependencies: func(ctx context.Context, compiled compiler.CompiledStrategy) error {
 			dependencyCompiler := compilerFactory(compiled.SpaceID)
@@ -427,10 +415,7 @@ func newRPCService(repo *store.Store, cfg Config) *rpc.Service {
 	compilerFactory := newCompilerFactory(cfg)
 	return &rpc.Service{
 		Repo: repo, Registry: &registry.Service{Repo: repo}, CompilerFactory: compilerFactory, PoolRegistry: defaultPoolRegistry(),
-		LogicalAccounts: newLogicalAccountOwnerClient(
-			cfg.LogicalAccountTarget,
-			cfg.LogicalAccountTimeout,
-		),
+		LogicalAccounts: newLogicalAccountOwnerClient(cfg.Trade),
 	}
 }
 

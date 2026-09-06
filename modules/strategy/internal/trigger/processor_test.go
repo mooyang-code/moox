@@ -13,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
-	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/events"
@@ -30,7 +29,59 @@ func (f fakeInputLoader) Load(context.Context, domain.StrategyRunner, compiler.C
 	return f.value, f.err
 }
 
-type fakeIndexedInputLoader struct{ fakeInputLoader }
+type legacyRunnerProbeLoader struct{ calls int }
+
+func (l *legacyRunnerProbeLoader) Load(context.Context, domain.StrategyRunner, compiler.CompiledStrategy, time.Time) (input.EvaluationInput, error) {
+	l.calls++
+	return input.EvaluationInput{}, errors.New("legacy runner execution must be disabled")
+}
+
+func TestProcessorDoesNotExecuteLegacyRunner(t *testing.T) {
+	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatal(err)
+	}
+	compiled := compiler.CompiledStrategy{
+		APIVersion: config.APIVersion,
+		Kind:       config.Kind,
+		SpaceID:    "space",
+		SourceView: compiler.CompiledView{ID: "source", Status: "active", Frequency: "1m"},
+		Schedule:   compiler.CompiledSchedule{Every: "1m"},
+	}
+	raw, err := json.Marshal(compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveStrategy(context.Background(), domain.Strategy{ID: "legacy-strategy", Name: "legacy", Kind: config.Kind, CompiledJSON: raw, CreatedAt: time.UnixMilli(1)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateRunner(context.Background(), domain.StrategyRunner{
+		ID: "legacy-runner", StrategyID: "legacy-strategy", SpaceID: "space", SourceViewID: "source", Frequency: "1m", Status: domain.RunnerStatusEnabled,
+		CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loader := &legacyRunnerProbeLoader{}
+	processor := &Processor{Store: repo, Loader: loader, Now: func() time.Time { return time.UnixMilli(2_000) }}
+	event := PeriodReady{MessageID: "legacy-runner-ready", EventName: "event.storage.view.source_period.ready", SpaceID: "space", ViewID: "source", PeriodTime: time.UnixMilli(60_000)}
+	if err := processor.Handle(context.Background(), event); err != nil {
+		t.Fatalf("legacy runner event should be acknowledged without execution: %v", err)
+	}
+	if loader.calls != 0 {
+		t.Fatalf("legacy runner entered the evaluator %d times", loader.calls)
+	}
+	processed, err := repo.IsProcessed(context.Background(), event.MessageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !processed {
+		t.Fatal("legacy runner event was not acknowledged")
+	}
+}
 
 func TestIndexProvenanceIsPartial(t *testing.T) {
 	tests := []struct {
@@ -76,57 +127,6 @@ func TestMarshalTargetEventUsesSessionFenceWithoutOwnerGeneration(t *testing.T) 
 	}
 }
 
-func (f fakeIndexedInputLoader) LoadAt(context.Context, domain.StrategyRunner, compiler.CompiledStrategy, time.Time, map[string]string) (input.EvaluationInput, error) {
-	return f.value, f.err
-}
-
-func TestProcessorCommitsFullWeightEvaluationAndDeduplicatesEvent(t *testing.T) {
-	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = repo.Close() })
-	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
-		t.Fatal(err)
-	}
-	compiled := compiler.CompiledStrategy{APIVersion: config.APIVersion, Kind: config.Kind, SpaceID: "space", SourceView: compiler.CompiledView{ID: "source", Status: "active", Frequency: "1m"}, Schedule: compiler.CompiledSchedule{Every: "1m"}, Readiness: "strict", Long: &config.Side{SideWeight: "1", Scores: []config.ScoreRule{{FactorID: "bias", Direction: "ascending", Weight: "1"}}, Selection: config.SelectionRule{Mode: "count", Value: 1}}, Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"factor-view"}}}
-	compiled.CompiledJSON, _ = json.Marshal(compiled)
-	if err := repo.SaveStrategy(context.Background(), domain.Strategy{ID: "strategy", Name: "strategy", Kind: config.Kind, ManifestYAML: "manifest", CompiledJSON: compiled.CompiledJSON, SourceHash: "hash", CreatedAt: time.UnixMilli(1)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.CreateRunner(context.Background(), domain.StrategyRunner{ID: "runner", StrategyID: "strategy", SpaceID: "space", SourceViewID: "source", Frequency: "1m", Status: domain.RunnerStatusEnabled, CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1)}); err != nil {
-		t.Fatal(err)
-	}
-	period := time.UnixMilli(60_000).UTC()
-	loader := fakeInputLoader{value: input.EvaluationInput{SpaceID: "space", StrategyID: "strategy", PeriodEnd: period.Format(time.RFC3339Nano), SourceViewID: "source", DataFrequency: "1m", Items: []input.InstrumentInput{{PoolItem: input.PoolItem{InstrumentID: "BTC", SubjectID: "btc", Market: "spot"}, Values: map[string]quant.Decimal{"bias": quant.Must("1")}}, {PoolItem: input.PoolItem{InstrumentID: "ETH", SubjectID: "eth", Market: "spot"}, Values: map[string]quant.Decimal{"bias": quant.Must("2")}}}}}
-	processor := &Processor{Store: repo, Loader: loader, Now: func() time.Time { return period.Add(time.Second) }}
-	event := PeriodReady{MessageID: "ready-1", EventName: "event.storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period, ReadyViewIDs: []string{"factor-view"}}
-	if err := processor.Handle(context.Background(), event); err != nil {
-		t.Fatal(err)
-	}
-	result, err := repo.GetResult(context.Background(), resultID(event.MessageID, "runner", period))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Action != domain.ActionRebalance || result.CommandSequence == nil || *result.CommandSequence != period.UnixMilli() {
-		t.Fatalf("result=%+v", result)
-	}
-	var targets []domain.InstrumentTarget
-	if err := json.Unmarshal(result.TargetsJSON, &targets); err != nil || len(targets) != 1 || targets[0].InstrumentID != "BTC" || targets[0].TargetWeight != "1" {
-		t.Fatalf("targets=%s err=%v", result.TargetsJSON, err)
-	}
-	if err := processor.Handle(context.Background(), event); err != nil {
-		t.Fatal(err)
-	}
-	processed, err := repo.IsProcessed(context.Background(), event.MessageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !processed {
-		t.Fatal("expected event to be recorded in inbox")
-	}
-}
-
 func TestCanonicalEventNameSeparatesSourceAndFactorReady(t *testing.T) {
 	if got := canonicalEventName("source.ready"); got != "event.storage.view.source_period.ready" {
 		t.Fatalf("source.ready canonical name = %q", got)
@@ -148,179 +148,6 @@ func TestAugmentCompiledBindingsPreservesCompiledProgramAndAddsFactorViews(t *te
 	}
 	if len(compiled.Factors) != 1 || compiled.Dependencies.FactorResultViewIDs[0] != "factor-view" {
 		t.Fatalf("factor binding not added: %+v", compiled)
-	}
-}
-
-func TestProcessorAcksTerminalStrictIncompleteReady(t *testing.T) {
-	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = repo.Close() })
-	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
-		t.Fatal(err)
-	}
-	compiled := compiler.CompiledStrategy{
-		APIVersion: config.APIVersion, Kind: config.Kind, SpaceID: "space",
-		SourceView: compiler.CompiledView{ID: "source", Status: "active", Frequency: "1m"},
-		Schedule:   compiler.CompiledSchedule{Every: "1m"}, Readiness: "strict",
-		Factors:      []compiler.CompiledFactor{{FactorID: "bias", BindingID: "binding", ResultViewID: "factor-view", Frequency: "1m", ColumnName: "bias"}},
-		Long:         &config.Side{SideWeight: "1", Scores: []config.ScoreRule{{FactorID: "bias", Direction: "ascending", Weight: "1"}}, Selection: config.SelectionRule{Mode: "count", Value: 1}},
-		Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"factor-view"}},
-	}
-	compiled.CompiledJSON, _ = json.Marshal(compiled)
-	if err := repo.SaveStrategy(context.Background(), domain.Strategy{ID: "strategy", Name: "strategy", Kind: config.Kind, ManifestYAML: "manifest", CompiledJSON: compiled.CompiledJSON, SourceHash: "hash", CreatedAt: time.UnixMilli(1)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.CreateRunner(context.Background(), domain.StrategyRunner{ID: "runner", StrategyID: "strategy", SpaceID: "space", SourceViewID: "source", Frequency: "1m", Status: domain.RunnerStatusEnabled, CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1)}); err != nil {
-		t.Fatal(err)
-	}
-	period := time.UnixMilli(60_000).UTC()
-	processor := &Processor{Store: repo, Loader: fakeInputLoader{err: input.ErrStrictIncomplete}, Now: func() time.Time { return period.Add(time.Second) }}
-	event := PeriodReady{MessageID: "degraded-ready", EventName: "event.storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period, Status: "degraded", BindingStatuses: map[string]string{"binding": "degraded"}}
-	if err := processor.Handle(context.Background(), event); err != nil {
-		t.Fatalf("terminal degraded event should be ACKable: %v", err)
-	}
-	processed, err := repo.IsProcessed(context.Background(), event.MessageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !processed {
-		t.Fatal("expected terminal degraded event to be recorded in inbox")
-	}
-}
-
-func TestProcessorAcksLegacyReadyWithoutIndexProvenance(t *testing.T) {
-	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = repo.Close() })
-	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
-		t.Fatal(err)
-	}
-	compiled := compiler.CompiledStrategy{
-		APIVersion: config.APIVersion, Kind: config.Kind, SpaceID: "space",
-		SourceView: compiler.CompiledView{ID: "source", Status: "active", Frequency: "1m"},
-		Schedule:   compiler.CompiledSchedule{Every: "1m"}, Readiness: "strict",
-		Factors:      []compiler.CompiledFactor{{FactorID: "bias", BindingID: "binding", ResultViewID: "factor-view", Frequency: "1m", ColumnName: "bias"}},
-		Long:         &config.Side{SideWeight: "1", Scores: []config.ScoreRule{{FactorID: "bias", Direction: "ascending", Weight: "1"}}, Selection: config.SelectionRule{Mode: "count", Value: 1}},
-		Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"factor-view"}},
-	}
-	compiled.CompiledJSON, _ = json.Marshal(compiled)
-	if err := repo.SaveStrategy(context.Background(), domain.Strategy{ID: "strategy", Name: "strategy", Kind: config.Kind, ManifestYAML: "manifest", CompiledJSON: compiled.CompiledJSON, SourceHash: "hash", CreatedAt: time.UnixMilli(1)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.CreateRunner(context.Background(), domain.StrategyRunner{ID: "runner", StrategyID: "strategy", SpaceID: "space", SourceViewID: "source", Frequency: "1m", Status: domain.RunnerStatusEnabled, CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1)}); err != nil {
-		t.Fatal(err)
-	}
-	period := time.UnixMilli(60_000).UTC()
-	loader := fakeIndexedInputLoader{fakeInputLoader{value: input.EvaluationInput{SpaceID: "space", StrategyID: "strategy", PeriodEnd: period.Format(time.RFC3339Nano), SourceViewID: "source", DataFrequency: "1m"}}}
-	processor := &Processor{Store: repo, Loader: loader, Now: func() time.Time { return period.Add(time.Second) }}
-	// This marker intentionally omits SourceIndexID/ResultIndexID. The indexed
-	// loader cannot reconstruct the immutable generation, so the delivery must
-	// be acknowledged after recording the runner failure rather than retried
-	// forever by the unlimited consumer.
-	event := PeriodReady{MessageID: "legacy-ready", EventName: "event.storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period}
-	if err := processor.Handle(context.Background(), event); err != nil {
-		t.Fatalf("legacy ready marker should be terminal: %v", err)
-	}
-	processed, err := repo.IsProcessed(context.Background(), event.MessageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !processed {
-		t.Fatal("expected legacy event to be recorded in inbox")
-	}
-	if _, err := repo.GetResult(context.Background(), resultID(event.MessageID, "runner", period)); err == nil {
-		t.Fatal("legacy event must not commit an evaluation")
-	}
-}
-
-func TestProcessorRetriesTransientDependencyVerificationFailure(t *testing.T) {
-	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = repo.Close() })
-	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
-		t.Fatal(err)
-	}
-	compiled := compiler.CompiledStrategy{
-		APIVersion: config.APIVersion, Kind: config.Kind, SpaceID: "space",
-		SourceView: compiler.CompiledView{ID: "source", Status: "active", Frequency: "1m"},
-		Schedule:   compiler.CompiledSchedule{Every: "1m"}, Readiness: "strict",
-		Long:         &config.Side{SideWeight: "1", Scores: []config.ScoreRule{{FactorID: "bias", Direction: "ascending", Weight: "1"}}, Selection: config.SelectionRule{Mode: "count", Value: 1}},
-		Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"factor-view"}},
-	}
-	compiled.CompiledJSON, _ = json.Marshal(compiled)
-	if err := repo.SaveStrategy(context.Background(), domain.Strategy{ID: "strategy", Name: "strategy", Kind: config.Kind, ManifestYAML: "manifest", CompiledJSON: compiled.CompiledJSON, SourceHash: "hash", CreatedAt: time.UnixMilli(1)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.CreateRunner(context.Background(), domain.StrategyRunner{ID: "runner", StrategyID: "strategy", SpaceID: "space", SourceViewID: "source", Frequency: "1m", Status: domain.RunnerStatusEnabled, CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1)}); err != nil {
-		t.Fatal(err)
-	}
-	transient := errors.New("factor RPC unavailable")
-	period := time.UnixMilli(60_000).UTC()
-	processor := &Processor{
-		Store: repo, Loader: fakeInputLoader{},
-		VerifyDependencies: func(context.Context, compiler.CompiledStrategy) error { return transient },
-		Now:                func() time.Time { return period.Add(time.Second) },
-	}
-	event := PeriodReady{MessageID: "transient-ready", EventName: "event.storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period, ReadyViewIDs: []string{"factor-view"}}
-	if err := processor.Handle(context.Background(), event); !errors.Is(err, transient) {
-		t.Fatalf("Handle() error = %v, want transient dependency error", err)
-	}
-	processed, err := repo.IsProcessed(context.Background(), event.MessageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if processed {
-		t.Fatal("transient dependency failure must leave inbox message retryable")
-	}
-}
-
-func TestProcessorAcksPermanentDependencyVerificationFailure(t *testing.T) {
-	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = repo.Close() })
-	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
-		t.Fatal(err)
-	}
-	compiled := compiler.CompiledStrategy{
-		APIVersion: config.APIVersion, Kind: config.Kind, SpaceID: "space",
-		SourceView: compiler.CompiledView{ID: "source", Status: "active", Frequency: "1m"},
-		Schedule:   compiler.CompiledSchedule{Every: "1m"}, Readiness: "strict",
-		Long:         &config.Side{SideWeight: "1", Scores: []config.ScoreRule{{FactorID: "bias", Direction: "ascending", Weight: "1"}}, Selection: config.SelectionRule{Mode: "count", Value: 1}},
-		Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"factor-view"}},
-	}
-	compiled.CompiledJSON, _ = json.Marshal(compiled)
-	if err := repo.SaveStrategy(context.Background(), domain.Strategy{ID: "strategy", Name: "strategy", Kind: config.Kind, ManifestYAML: "manifest", CompiledJSON: compiled.CompiledJSON, SourceHash: "hash", CreatedAt: time.UnixMilli(1)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.CreateRunner(context.Background(), domain.StrategyRunner{ID: "runner", StrategyID: "strategy", SpaceID: "space", SourceViewID: "source", Frequency: "1m", Status: domain.RunnerStatusEnabled, CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1)}); err != nil {
-		t.Fatal(err)
-	}
-	period := time.UnixMilli(60_000).UTC()
-	processor := &Processor{
-		Store: repo, Loader: fakeInputLoader{},
-		VerifyDependencies: func(context.Context, compiler.CompiledStrategy) error {
-			return compiler.DependencyMismatchError(errors.New("factor FACTOR_NOT_FOUND"))
-		},
-		Now: func() time.Time { return period.Add(time.Second) },
-	}
-	event := PeriodReady{MessageID: "permanent-ready", EventName: "event.storage.view.factor_period.ready", SpaceID: "space", ViewID: "factor-view", PeriodTime: period, ReadyViewIDs: []string{"factor-view"}}
-	if err := processor.Handle(context.Background(), event); err != nil {
-		t.Fatalf("Handle() permanent dependency failure should ACK: %v", err)
-	}
-	processed, err := repo.IsProcessed(context.Background(), event.MessageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !processed {
-		t.Fatal("permanent dependency failure must be recorded in inbox")
 	}
 }
 
@@ -432,7 +259,7 @@ func TestRequiredBindingsReadyScopesStatusesToEventView(t *testing.T) {
 	}
 }
 
-func TestTerminalReadyForRunnerIgnoresUnrelatedDegradedBinding(t *testing.T) {
+func TestTerminalReadyForInstanceIgnoresUnrelatedDegradedBinding(t *testing.T) {
 	compiled := compiler.CompiledStrategy{
 		SourceView: compiler.CompiledView{ID: "source", Frequency: "1m"},
 		Factors: []compiler.CompiledFactor{
@@ -442,16 +269,16 @@ func TestTerminalReadyForRunnerIgnoresUnrelatedDegradedBinding(t *testing.T) {
 	event := PeriodReady{ViewID: "factor-view", Status: "degraded", BindingStatuses: map[string]string{
 		"binding-required": "complete", "binding-unrelated": "degraded",
 	}}
-	if terminalReadyForRunner(compiled, event) {
+	if terminalReadyForInstance(compiled, event) {
 		t.Fatal("unrelated degraded binding must not terminally ACK a strict-incomplete read")
 	}
 	event.BindingStatuses["binding-required"] = "degraded"
-	if !terminalReadyForRunner(compiled, event) {
+	if !terminalReadyForInstance(compiled, event) {
 		t.Fatal("required degraded binding should be terminal")
 	}
 }
 
-func TestTerminalReadyForRunnerIsConservativeForDynamicPool(t *testing.T) {
+func TestTerminalReadyForInstanceIsConservativeForDynamicPool(t *testing.T) {
 	compiled := compiler.CompiledStrategy{
 		SourceView: compiler.CompiledView{ID: "source", Frequency: "1m"},
 		Factors: []compiler.CompiledFactor{
@@ -463,16 +290,16 @@ func TestTerminalReadyForRunnerIsConservativeForDynamicPool(t *testing.T) {
 	}, BindingStates: map[string]BindingPeriodState{
 		"binding-required": {Status: "degraded", FailedSubjects: []string{"UNKNOWN"}},
 	}}
-	if terminalReadyForRunner(compiled, event) {
+	if terminalReadyForInstance(compiled, event) {
 		t.Fatal("dynamic pool with explicit subject failure must remain retryable")
 	}
 	pool := []input.InstrumentInput{{PoolItem: input.PoolItem{InstrumentID: "BTC", SubjectID: "btc"}}}
 	event.BindingStates["binding-required"] = BindingPeriodState{Status: "degraded", FailedSubjects: []string{"other"}}
-	if terminalReadyForRunner(compiled, event, pool) {
+	if terminalReadyForInstance(compiled, event, pool) {
 		t.Fatal("dynamic pool failure outside resolved pool must remain retryable")
 	}
 	event.BindingStates["binding-required"] = BindingPeriodState{Status: "degraded", FailedSubjects: []string{"btc"}}
-	if !terminalReadyForRunner(compiled, event, pool) {
+	if !terminalReadyForInstance(compiled, event, pool) {
 		t.Fatal("resolved pool failure must be terminal")
 	}
 }

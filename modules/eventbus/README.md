@@ -34,6 +34,10 @@ filter 或 deliver policy 等不可变参数冲突会显式失败，不会删除
 是个人系统的磁盘容量策略，允许旧消息自然淘汰，不会删除 Storage、Trade、Strategy 或
 Archive 已提交的业务事实。
 
+Trade 仅消费 session-scoped 权重目标 subject
+`moox.event.trade.target.weight_requested.v1.>`；旧 quantity target subject 不在当前
+拓扑中注册或路由。已存在的 Stream 和历史消息由发布门禁按版本切换流程处置，不删除重建。
+
 `store_dir` 是运行态目录，不进入发布包。部署时实际路径为
 `data/eventbus/jetstream`。
 

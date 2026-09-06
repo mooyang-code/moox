@@ -133,7 +133,7 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: logical account target session authorization", ErrTargetAuthorization)
 		}
 		now := time.Now().UTC().UnixMilli()
-		if now < record.EffectiveAt || now >= record.ValidUntil {
+		if now >= record.ValidUntil {
 			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: target validity window", ErrTargetExpired)
 		}
 	} else {

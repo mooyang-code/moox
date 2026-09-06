@@ -1,6 +1,6 @@
 <template>
   <div class="operation-bar">
-    <span>Runner 控制</span>
+    <span>实例控制</span>
     <a-space>
       <a-popconfirm v-if="currentEnabled" content="停用后不再计算新目标，确认继续？" @ok="change(false)">
         <a-button status="warning" :loading="loading">停用</a-button>
@@ -15,21 +15,17 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { setInstanceEnabled, setRunnerStatus } from "@/api/strategy";
+import { setInstanceEnabled } from "@/api/strategy";
 
-const props = defineProps<{ runnerId?: string; status?: string; instanceId?: string; enabled?: boolean }>();
+const props = defineProps<{ instanceId: string; enabled?: boolean }>();
 const emit = defineEmits<{ changed: [] }>();
 const loading = ref(false);
-const currentEnabled = computed(() => (props.instanceId ? Boolean(props.enabled) : props.status === "ENABLED"));
+const currentEnabled = computed(() => Boolean(props.enabled));
 
 async function change(enabled: boolean) {
   loading.value = true;
   try {
-    if (props.instanceId) {
-      await setInstanceEnabled(props.instanceId, enabled);
-    } else if (props.runnerId) {
-      await setRunnerStatus(props.runnerId, enabled ? "ENABLED" : "DISABLED");
-    }
+    await setInstanceEnabled(props.instanceId, enabled);
     Message.success(enabled ? "实例已启用" : "实例已停用");
     emit("changed");
   } finally {

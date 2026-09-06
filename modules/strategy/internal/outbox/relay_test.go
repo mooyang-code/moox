@@ -3,89 +3,98 @@ package outbox
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
+	"time"
 
-	"github.com/glebarez/sqlite"
-	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
-	"gorm.io/gorm"
 )
 
-type recordingPublisher struct {
-	mu   sync.Mutex
-	rows []domain.OutboxMessage
-	err  error
+type recordingResultStore struct {
+	rows  []store.StrategyResult
+	limit int
 }
 
-func (p *recordingPublisher) Publish(_ context.Context, row domain.OutboxMessage) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+func (s *recordingResultStore) ListPendingResults(_ context.Context, limit int) ([]store.StrategyResult, error) {
+	s.limit = limit
+	rows := make([]store.StrategyResult, 0, limit)
+	for _, row := range s.rows {
+		if row.PublishStatus != store.PublishPending {
+			continue
+		}
+		rows = append(rows, row)
+		if len(rows) == limit {
+			break
+		}
+	}
+	return rows, nil
+}
+
+func (s *recordingResultStore) PreparePendingResult(_ context.Context, resultID string, _ time.Time) (store.StrategyResult, bool, error) {
+	for _, row := range s.rows {
+		if row.ResultID == resultID {
+			return row, true, nil
+		}
+	}
+	return store.StrategyResult{}, false, nil
+}
+
+func (s *recordingResultStore) TransitionPublishStatus(_ context.Context, resultID string, from, to store.PublishStatus) error {
+	for index := range s.rows {
+		if s.rows[index].ResultID == resultID && (from == "" || s.rows[index].PublishStatus == from || s.rows[index].PublishStatus == store.PublishNone) {
+			s.rows[index].PublishStatus = to
+			return nil
+		}
+	}
+	return nil
+}
+
+type recordingResultPublisher struct {
+	rows   []store.StrategyResult
+	failID string
+}
+
+func (p *recordingResultPublisher) PublishResult(_ context.Context, row store.StrategyResult) error {
+	if row.ResultID == p.failID {
+		return &PermanentPublishError{Err: errors.New("unknown event type")}
+	}
 	p.rows = append(p.rows, row)
-	return p.err
+	return nil
 }
 
-func openOutboxTestStore(t *testing.T) (*gorm.DB, *store.Store) {
-	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
+func TestRelayHonorsResultBatchLimit(t *testing.T) {
+	resultStore := &recordingResultStore{rows: []store.StrategyResult{
+		{ResultID: "r1", PublishStatus: store.PublishPending},
+		{ResultID: "r2", PublishStatus: store.PublishPending},
+		{ResultID: "r3", PublishStatus: store.PublishPending},
+	}}
+	publisher := &recordingResultPublisher{}
+	relay := &Relay{Store: resultStore, Publisher: publisher}
+	if err := relay.PublishPending(context.Background(), 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec(`CREATE TABLE t_strategy_outbox (
-		message_id TEXT PRIMARY KEY,
-		event_data BLOB NOT NULL,
-		created_at INTEGER NOT NULL
-	)`).Error; err != nil {
-		t.Fatal(err)
-	}
-	return db, store.New(db)
-}
-
-func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
-	db, repo := openOutboxTestStore(t)
-	if err := db.Exec("INSERT INTO t_strategy_outbox(message_id,event_data,created_at) VALUES(?,?,?)", "run-1", []byte("event-data"), 1).Error; err != nil {
-		t.Fatal(err)
-	}
-	publisher := &recordingPublisher{}
-	relay := &Relay{Store: repo, Publisher: publisher}
-	if err := relay.PublishPending(context.Background(), 10); err != nil {
-		t.Fatal(err)
-	}
-	if len(publisher.rows) != 1 || publisher.rows[0].MessageID != "run-1" || len(publisher.rows[0].EventData) == 0 {
-		t.Fatalf("published rows=%+v", publisher.rows)
-	}
-	var count int64
-	if err := db.Table("t_strategy_outbox").Where("message_id=?", "run-1").Count(&count).Error; err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Fatalf("remaining=%d", count)
+	if resultStore.limit != 2 || len(publisher.rows) != 2 {
+		t.Fatalf("result batch limit=%d published=%d", resultStore.limit, len(publisher.rows))
 	}
 }
 
-func TestRelayReleasesFailedPublishAndRetries(t *testing.T) {
-	db, repo := openOutboxTestStore(t)
-	if err := db.Exec("INSERT INTO t_strategy_outbox(message_id,event_data,created_at) VALUES(?,?,?)", "run-1", []byte("event-data"), 1).Error; err != nil {
-		t.Fatal(err)
+func TestRelayQuarantinesPermanentResultAndAdvancesPrefix(t *testing.T) {
+	resultStore := &recordingResultStore{rows: []store.StrategyResult{
+		{ResultID: "bad", PublishStatus: store.PublishPending},
+		{ResultID: "good", PublishStatus: store.PublishPending},
+	}}
+	publisher := &recordingResultPublisher{failID: "bad"}
+	relay := &Relay{Store: resultStore, Publisher: publisher}
+	if err := relay.PublishPending(context.Background(), 1); err == nil {
+		t.Fatal("permanent publish error was swallowed")
 	}
-	want := errors.New("broker unavailable")
-	publisher := &recordingPublisher{err: want}
-	relay := &Relay{Store: repo, Publisher: publisher}
-	if err := relay.PublishPending(context.Background(), 1); !errors.Is(err, want) {
-		t.Fatalf("error=%v", err)
+	if resultStore.rows[0].PublishStatus != store.PublishCancelled {
+		t.Fatalf("permanent row status=%q, want cancelled", resultStore.rows[0].PublishStatus)
 	}
-	var count int64
-	if err := db.Table("t_strategy_outbox").Where("message_id=?", "run-1").Count(&count).Error; err != nil {
-		t.Fatal(err)
-	}
-	if count != 1 {
-		t.Fatalf("failed row was removed")
-	}
-	publisher.err = nil
+	publisher.failID = ""
 	if err := relay.PublishPending(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
-	if len(publisher.rows) != 2 {
-		t.Fatalf("publish attempts=%d", len(publisher.rows))
+	if len(publisher.rows) != 1 || publisher.rows[0].ResultID != "good" {
+		t.Fatalf("published rows=%+v", publisher.rows)
 	}
 }

@@ -89,6 +89,30 @@ func TestLoadAcceptsExplicitPublicNativeListener(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsDedicatedTradeGatewayListeners(t *testing.T) {
+	dir := t.TempDir()
+	control := writeKey(t, dir, "control.key", 0o600)
+	service := writeKey(t, dir, "service.key", 0o600)
+	path := filepath.Join(dir, "app.yaml")
+	yaml := strings.ReplaceAll(validYAML(control, service, filepath.Join(dir, "data"), ""),
+		"127.0.0.1:11002", DedicatedTradeServiceAddress)
+	yaml = strings.ReplaceAll(yaml, "127.0.0.1:11012", DedicatedTradeHealthAddress)
+	yaml = strings.Replace(yaml, "  health_addr: "+DedicatedTradeHealthAddress,
+		"  native_addr: "+DedicatedTradeNativeAddress+"\n  health_addr: "+DedicatedTradeHealthAddress, 1)
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.ServiceAddr != DedicatedTradeServiceAddress ||
+		cfg.Server.NativeAddr != DedicatedTradeNativeAddress ||
+		cfg.Server.HealthAddr != DedicatedTradeHealthAddress {
+		t.Fatalf("addresses = %+v", cfg.Server)
+	}
+}
+
 func TestLoadRejectsInvalidListenersAndInsecureKeys(t *testing.T) {
 	dir := t.TempDir()
 	control := writeKey(t, dir, "control.key", 0o600)

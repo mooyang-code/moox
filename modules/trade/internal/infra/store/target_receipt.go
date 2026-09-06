@@ -165,7 +165,7 @@ func (s *Store) acceptLogicalAccountTargetWithReceipt(ctx context.Context, targe
 				return fmt.Errorf("%w: target session authorization", ErrTargetAuthorization)
 			}
 			now := time.Now().UTC().UnixMilli()
-			if now < target.EffectiveAt || now >= target.ValidUntil {
+			if now >= target.ValidUntil {
 				return fmt.Errorf("%w: target validity window [%d,%d), now=%d", ErrTargetExpired, target.EffectiveAt, target.ValidUntil, now)
 			}
 		}

@@ -17,8 +17,10 @@ file_mode() {
   stat -c '%a' "$1"
 }
 
-mkdir -p "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" \
-  "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/packages" "${FIXTURE_ROOT}/bin"
+mkdir -p "${FIXTURE_ROOT}/scripts/deploy" "${FIXTURE_ROOT}/scripts/runtime" \
+  "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" \
+  "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/packages" \
+  "${FIXTURE_ROOT}/config/setup" "${FIXTURE_ROOT}/bin"
 cp "${ROOT}/scripts/deploy/deploy-moox.sh" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh"
 cp "${ROOT}/scripts/runtime/moox-storage-auth-check.sh" "${FIXTURE_ROOT}/scripts/runtime/moox-storage-auth-check.sh"
 cp "${ROOT}/scripts/runtime/moox-storage-auth-rotate.sh" "${FIXTURE_ROOT}/scripts/runtime/moox-storage-auth-rotate.sh"
@@ -148,6 +150,8 @@ grep -Fq 'SCF_SERVICE_GATEWAY_TARGET="${MOOX_SCF_SERVICE_GATEWAY_TARGET:-https:/
 grep -Fq 'SCF_STORAGE_RPC_GATEWAY_TARGET="${MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET:-ip://106.53.107.122:11003}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq "gateway: reconciled native listener to %s for SCF target %s" "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'gateway native listener ${current_native:-<missing>} does not match expected ${expected_native}' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:}"' "${TMP_ROOT}/unpacked/healthcheck.sh"
 
 run_native_listener_guard() {
   local target="$1"

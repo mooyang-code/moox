@@ -27,7 +27,7 @@ CloudNode 作业队列由 CloudNode ensure，SCF worker 只能 bind。
 | `MOOX_STORAGE` | `event.storage.dataset.rows.upserted` | 72 小时或 1 GiB |
 | `MOOX_METRICS` | 两类 metrics 事件 | 24 小时或 256 MiB |
 | `MOOX_CLOUDNODE_EXEC` | 云任务 work queue | 72 小时或 256 MiB |
-| `MOOX_TRADE` | Strategy 调仓 work queue | 7 天或 256 MiB |
+| `MOOX_TRADE` | Strategy session-scoped weight target work queue (`moox.event.trade.target.weight_requested.v1.>`) | 7 天或 256 MiB |
 | `MOOX_CLOUDNODE_JOB_ACTIVE` | active JobItem KV | 48 小时 |
 
 `limits + discard old` 是个人系统的磁盘容量策略：达到时间或字节上限后允许最旧消息自然

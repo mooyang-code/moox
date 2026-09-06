@@ -32,9 +32,9 @@ type ServiceOptions struct {
 	// the deployed process receives the remote endpoint from start.sh.
 	EventBusURL string
 	// TradeConsoleBindAddress is applied only when Trade runs on a dedicated
-	// node. Dedicated cloud hosts may expose a public SSH address while the
-	// process only sees a private interface, so the deployment uses 0.0.0.0
-	// and relies on the cloud firewall to limit port 11200 to the control host.
+	// node. TradeConsole is an unauthenticated internal service; dedicated
+	// deployments must keep it on loopback and expose the authenticated
+	// trade_owner route through Gateway/Caddy instead.
 	TradeConsoleBindAddress string
 }
 
@@ -51,9 +51,9 @@ func Service(ctx context.Context, transport setupssh.Client, opts ServiceOptions
 	if transport == nil || strings.TrimSpace(opts.PackagePath) == "" || !validReleaseToken(opts.ServiceName) {
 		return result, fmt.Errorf("service_deploy_invalid")
 	}
-	if strings.EqualFold(strings.TrimSpace(opts.ServiceName), "trade") && strings.TrimSpace(opts.TradeConsoleBindAddress) != "" {
+	if isTradeServiceName(opts.ServiceName) && strings.TrimSpace(opts.TradeConsoleBindAddress) != "" {
 		ip := net.ParseIP(strings.TrimSpace(opts.TradeConsoleBindAddress))
-		if ip == nil || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || (ip.IsUnspecified() && strings.TrimSpace(opts.TradeConsoleBindAddress) != "0.0.0.0") {
+		if ip == nil || !ip.IsLoopback() {
 			return result, fmt.Errorf("service_deploy_invalid")
 		}
 	}
@@ -116,11 +116,40 @@ func Service(ctx context.Context, transport setupssh.Client, opts ServiceOptions
 	if _, err := transport.Run(ctx, []string{"bash", "-lc", activateServiceScript, "moox-activate-service", deployDir, opts.ServiceName}, nil); err != nil {
 		return result, fmt.Errorf("service_activate_failed")
 	}
-	if _, err := transport.Run(ctx, []string{"bash", "-lc", finalizeServiceScript, "moox-finalize-service", deployDir}, nil); err != nil {
-		return result, fmt.Errorf("service_finalize_failed")
-	}
+	// Keep .moox-service.previous until the caller has completed registry,
+	// route, and placement checks. This lets post-activation failures restore
+	// the previous binary/config instead of leaving an unregistered upgrade.
 	prepared = false
 	return result, nil
+}
+
+func isTradeServiceName(name string) bool {
+	name = strings.TrimSpace(name)
+	return strings.EqualFold(name, "trade") || strings.EqualFold(name, "moox_trade")
+}
+
+// FinalizeService commits a successfully activated deployment after all
+// control-plane registration and route checks have passed.
+func FinalizeService(ctx context.Context, transport setupssh.Client, deployDir string) error {
+	if transport == nil || strings.TrimSpace(deployDir) == "" {
+		return fmt.Errorf("service_finalize_invalid")
+	}
+	if _, err := transport.Run(ctx, []string{"bash", "-lc", finalizeServiceScript, "moox-finalize-service", deployDir}, nil); err != nil {
+		return fmt.Errorf("service_finalize_failed")
+	}
+	return nil
+}
+
+// RollbackService restores the previous deployment retained by Service after
+// an activation or post-activation validation failure.
+func RollbackService(ctx context.Context, transport setupssh.Client, deployDir, service string) error {
+	if transport == nil || strings.TrimSpace(deployDir) == "" || !validReleaseToken(service) {
+		return fmt.Errorf("service_rollback_invalid")
+	}
+	if _, err := transport.Run(ctx, []string{"bash", "-lc", rollbackServiceScript, "moox-rollback-service", deployDir, service}, nil); err != nil {
+		return fmt.Errorf("service_rollback_failed")
+	}
+	return nil
 }
 
 func inspectServicePackage(packagePath string) (int64, string, error) {
@@ -220,8 +249,8 @@ trade_console_bind=${5:-}
 stage="$deploy/.moox-service.next"
 previous="$deploy/.moox-service.previous"
 manifest="$previous/manifest"
-rm -rf -- "$stage" "$previous"
-mkdir -p -- "$stage" "$previous"
+rm -rf -- "$stage"
+mkdir -p -- "$stage"
 command -v unzip >/dev/null 2>&1
 unzip -q -- "$archive" -d "$stage"
 test -f "$stage/start.sh"
@@ -235,7 +264,7 @@ while IFS= read -r entry; do
     ''|data|data/*|logs|logs/*|run|run/*|secrets|secrets/*|certs|certs/*|/*|../*|*/../*|*'/../'*|*'\\'*|*'	'*) exit 1 ;;
   esac
 done < <(unzip -Z1 -- "$archive")
-if [ "$service" = "trade" ]; then
+if [ "$service" = "trade" ] || [ "$service" = "moox_trade" ]; then
   [ -x "$stage/bin/moox-trade-cli" ] || {
     echo "trade_eventbus_preflight_binary_missing" >&2
     exit 1
@@ -246,7 +275,7 @@ if [ "$service" = "trade" ]; then
     echo "trade_eventbus_preflight_config_missing" >&2
     exit 1
   }
-  if [ -n "$trade_console_bind" ]; then
+if [ -n "$trade_console_bind" ]; then
     trpc_config="$stage/config/trpc_go.yaml"
     [ -f "$trpc_config" ] || trpc_config="$stage/trade/config/trpc_go.yaml"
     [ -f "$trpc_config" ] || {
@@ -263,8 +292,8 @@ import sys
 path = pathlib.Path(sys.argv[1])
 bind = os.environ["TRADE_CONSOLE_BIND"]
 ip = ipaddress.ip_address(bind)
-if ip.is_loopback or ip.is_multicast or ip.is_link_local or (ip.is_unspecified and bind != "0.0.0.0"):
-    raise SystemExit("trade_console_bind must be 0.0.0.0 or a routable unicast IP")
+if not ip.is_loopback:
+    raise SystemExit("trade_console_bind must be a loopback address")
 raw = path.read_text(encoding="utf-8")
 pattern = re.compile(r"(?ms)(^[ \t]*- name:[ \t]*trpc\.moox\.trade\.TradeConsoleService[ \t]*\n.*?^[ \t]+ip:[ \t]*)[^\r\n]+")
 updated, count = pattern.subn(lambda match: match.group(1) + bind, raw, count=1)
@@ -285,9 +314,48 @@ fi
 if [ -x "$deploy/stop.sh" ]; then
   if ! "$deploy/stop.sh" "$service"; then
     "$deploy/start.sh" "$service" >/dev/null 2>&1 || true
-    rm -rf -- "$stage" "$previous"
+    rm -rf -- "$stage"
     exit 1
   fi
+fi
+rm -rf -- "$previous"
+mkdir -p -- "$previous"
+if [ "$service" = "trade" ] || [ "$service" = "moox_trade" ]; then
+  # Trade schema migrations run during init/startup. Keep the stopped
+  # SQLite database (including WAL/SHM) outside the package manifest so a
+  # registry or readiness failure can restore the exact pre-upgrade schema.
+  trade_config_path="$deploy/config/app.yaml"
+  trade_work_dir="$deploy"
+  if [ ! -f "$trade_config_path" ] && [ -f "$deploy/trade/config/app.yaml" ]; then
+    trade_config_path="$deploy/trade/config/app.yaml"
+    trade_work_dir="$deploy/trade"
+  fi
+  db_rel=$(python3 - "$trade_config_path" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+try:
+    raw = path.read_text(encoding="utf-8")
+except OSError:
+    raw = ""
+match = re.search(r"(?ms)^\s*database:\s*\n\s+path:\s*['\"]?([^#\r\n'\"]+)", raw)
+print(match.group(1).strip() if match else "./data/moox_trade.db")
+PY
+)
+  case "$db_rel" in
+    /*) db_path="$db_rel" ;;
+    *) db_path="$trade_work_dir/$db_rel" ;;
+  esac
+  db_backup="$previous/database-backup"
+  mkdir -p -- "$db_backup"
+  printf '%s\n' "$db_path" >"$previous/database-path"
+  for suffix in "" "-wal" "-shm"; do
+    if [ -e "$db_path$suffix" ] || [ -L "$db_path$suffix" ]; then
+      cp -a -- "$db_path$suffix" "$db_backup/$(basename "$db_path$suffix")"
+    fi
+  done
 fi
 while IFS= read -r entry; do
   case "$entry" in ''|*/|data|data/*|logs|logs/*|run|run/*|secrets|secrets/*|certs|certs/*) continue ;; esac
@@ -322,7 +390,7 @@ if [ ! -f "$manifest" ]; then
   exit 0
 fi
 "$deploy/stop.sh" "$service" >/dev/null 2>&1 || true
-while IFS="$(printf '\\t')" read -r kind entry; do
+while IFS="$(printf '\t')" read -r kind entry; do
   [ -n "$entry" ] || continue
   target="$deploy/$entry"
   rm -rf -- "$target"
@@ -331,8 +399,29 @@ while IFS="$(printf '\\t')" read -r kind entry; do
     cp -a -- "$previous/$entry" "$target"
   fi
 done <"$manifest"
+if [ "$service" = "trade" ] || [ "$service" = "moox_trade" ]; then
+  # Restore the database before starting the previous binary. Without this,
+  # an init_schema migration would leave the old binary unable to open the
+  # expanded schema after a post-activation rollback.
+  if [ -f "$previous/database-path" ]; then
+    db_path=$(cat "$previous/database-path")
+    db_backup="$previous/database-backup"
+    for suffix in "" "-wal" "-shm"; do
+      rm -f -- "$db_path$suffix"
+      backup_file="$db_backup/$(basename "$db_path$suffix")"
+      if [ -e "$backup_file" ] || [ -L "$backup_file" ]; then
+        mkdir -p -- "$(dirname "$db_path$suffix")"
+        cp -a -- "$backup_file" "$db_path$suffix"
+      fi
+    done
+  fi
+fi
+# Do not discard the recovery snapshot until the restored version has started
+# and passed its service health check. A failed rollback must remain retryable
+# and must be surfaced to the caller instead of silently leaving Trade down.
+"$deploy/start.sh" "$service"
+"$deploy/healthcheck.sh" "$service"
 rm -rf -- "$deploy/.moox-service.next" "$previous"
-"$deploy/start.sh" "$service" >/dev/null 2>&1 || true
 `
 
 const finalizeServiceScript = `set -eu

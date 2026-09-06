@@ -741,28 +741,33 @@ func validateStorageView(cfg *StorageView) error {
 }
 
 func validateDNSResolver(cfg *DNSResolver, manifest *Manifest) error {
-	if cfg == nil || !cfg.Enabled {
+	if cfg == nil {
 		return nil
 	}
 	cfg.TradeNode = strings.TrimSpace(cfg.TradeNode)
-	if cfg.TradeNode == "" {
-		return fmt.Errorf("config_invalid: dns_resolver.trade_node is required when enabled")
-	}
-	if strings.EqualFold(cfg.TradeNode, manifest.ControlHost.Name) {
-		return fmt.Errorf("config_invalid: dns_resolver.trade_node must not be control_host")
-	}
-	var selected *Host
-	for i := range manifest.OtherHosts {
-		if strings.EqualFold(strings.TrimSpace(manifest.OtherHosts[i].Name), cfg.TradeNode) {
-			selected = &manifest.OtherHosts[i]
-			break
+	if cfg.TradeNode != "" {
+		if strings.EqualFold(cfg.TradeNode, manifest.ControlHost.Name) {
+			return fmt.Errorf("config_invalid: dns_resolver.trade_node must not be control_host")
+		}
+		var selected *Host
+		for i := range manifest.OtherHosts {
+			if strings.EqualFold(strings.TrimSpace(manifest.OtherHosts[i].Name), cfg.TradeNode) {
+				selected = &manifest.OtherHosts[i]
+				break
+			}
+		}
+		if selected == nil || strings.TrimSpace(selected.Address) == "" {
+			return fmt.Errorf("config_invalid: dns_resolver.trade_node %q must match an other_hosts entry with an address", cfg.TradeNode)
+		}
+		if ip := net.ParseIP(strings.TrimSpace(selected.Address)); ip == nil || !isPublicResolverIP(ip) {
+			return fmt.Errorf("config_invalid: dns_resolver.trade_node %q must use a public address", cfg.TradeNode)
 		}
 	}
-	if selected == nil || strings.TrimSpace(selected.Address) == "" {
-		return fmt.Errorf("config_invalid: dns_resolver.trade_node %q must match an other_hosts entry with an address", cfg.TradeNode)
+	if !cfg.Enabled {
+		return nil
 	}
-	if ip := net.ParseIP(strings.TrimSpace(selected.Address)); ip == nil || !isPublicResolverIP(ip) {
-		return fmt.Errorf("config_invalid: dns_resolver.trade_node %q must use a public address", cfg.TradeNode)
+	if cfg.TradeNode == "" {
+		return fmt.Errorf("config_invalid: dns_resolver.trade_node is required when enabled")
 	}
 	if cfg.RefreshIntervalSeconds <= 0 {
 		return fmt.Errorf("config_invalid: dns_resolver.refresh_interval_seconds must be positive")

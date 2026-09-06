@@ -1,9 +1,13 @@
 package command
 
 import (
+	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -331,8 +335,8 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 		}
 		defer clearSetupSecrets(snapshot)
 		deploymentHosts := []setupconfig.Host{snapshot.Manifest.ControlHost}
-		if snapshot.Manifest.DNSResolver.Enabled {
-			resolverHost, resolveErr := findSetupHost(snapshot.Manifest, snapshot.Manifest.DNSResolver.TradeNode)
+		if tradeNode := strings.TrimSpace(snapshot.Manifest.DNSResolver.TradeNode); tradeNode != "" {
+			resolverHost, resolveErr := findSetupHost(snapshot.Manifest, tradeNode)
 			if resolveErr != nil {
 				return resolveErr
 			}
@@ -1176,12 +1180,12 @@ func deploySetupControl(ctx context.Context, snapshot *setupconfig.Snapshot, res
 	// browser-facing control route after Admin has seeded its defaults; doing
 	// this here makes a reset/redeploy deterministic instead of restoring the
 	// unusable loopback 127.0.0.1:11200 endpoint.
-	if snapshot.Manifest.DNSResolver.Enabled {
-		tradeHost, resolveErr := findSetupHost(snapshot.Manifest, snapshot.Manifest.DNSResolver.TradeNode)
+	if tradeNode := strings.TrimSpace(snapshot.Manifest.DNSResolver.TradeNode); tradeNode != "" {
+		tradeHost, resolveErr := findSetupHost(snapshot.Manifest, tradeNode)
 		if resolveErr != nil {
 			return resolveErr
 		}
-		if err := setupclient.New(transport).ApplyTradeConsolePlacement(ctx, tradeHost.Address); err != nil {
+		if err := setupclient.New(transport).ApplyTradeConsolePlacementForNode(ctx, tradeHost.Address, tradeHost.Name); err != nil {
 			return err
 		}
 	}
@@ -1380,7 +1384,7 @@ func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string)
 		localStorageTarget = "ip://" + net.JoinHostPort(strings.Trim(storageHost.Address, "[]"), "11003")
 		localStorageNodeID = storageHost.Name
 	}
-	return setupdeploy.Options{
+	options := setupdeploy.Options{
 		RepositoryRoot:               repositoryRoot,
 		DeployRoot:                   paths.DeployRoot,
 		ControlRoot:                  paths.ControlRoot,
@@ -1398,6 +1402,16 @@ func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string)
 		TLSMode:                      setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode),
 		InstallLocalCA:               true,
 	}
+	// The Trade execution host is an explicit placement, independent of the
+	// optional DNS resolver workload. A deployment may disable market-domain
+	// probing while Strategy still needs the authenticated ownership Gateway.
+	if tradeHostName := strings.TrimSpace(snapshot.Manifest.DNSResolver.TradeNode); tradeHostName != "" {
+		if tradeHost, err := findSetupHost(snapshot.Manifest, tradeHostName); err == nil {
+			options.TradeGatewayURL = "https://" + net.JoinHostPort(strings.Trim(tradeHost.Address, "[]"), strconv.Itoa(setupclient.TradeGatewayHTTPSPort))
+			options.TradeGatewayNode = tradeHost.Name
+		}
+	}
+	return options
 }
 
 func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapshot, hostName, packagePath, service, deployDir string) (setupdeploy.ServiceResult, error) {
@@ -1416,11 +1430,12 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 		}
 	}
 	tradeConsoleBindAddress := ""
-	if strings.EqualFold(strings.TrimSpace(service), "trade") && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
-		// SSH/public addresses can be NAT front doors and are not necessarily
-		// assigned to a target interface. Bind all interfaces on the dedicated
-		// Trade host; the cloud firewall must restrict 11200 to control_host.
-		tradeConsoleBindAddress = "0.0.0.0"
+	isTrade := strings.EqualFold(strings.TrimSpace(service), "trade") || strings.EqualFold(strings.TrimSpace(service), "moox_trade")
+	if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+		// TradeConsole has no authentication and trusts X-Space-Id. Keep it on
+		// loopback; external callers must use the authenticated trade_owner
+		// Gateway route.
+		tradeConsoleBindAddress = "127.0.0.1"
 	}
 	result, err := setupdeploy.Service(ctx, transport, setupdeploy.ServiceOptions{
 		PackagePath: packagePath, ServiceName: service, DeployDir: deployDir,
@@ -1429,7 +1444,6 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return setupdeploy.ServiceResult{}, err
 	}
-
 	// Keep the Admin deployment directory in sync with every successful
 	// package deployment. Monitor derives system checks from this store, so a
 	// service published only through SSH must still become visible in the
@@ -1440,6 +1454,14 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 	if !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
 		control, err = dialSetupHost(ctx, snapshot.Manifest.ControlHost)
 		if err != nil {
+			// The package has already been activated on the target node. If the
+			// control-plane SSH connection fails, roll it back immediately rather
+			// than leaving a running service with no registry/route ownership.
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if rollbackErr := setupdeploy.RollbackService(cleanupCtx, transport, result.DeployDir, service); rollbackErr != nil {
+				return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w; rollback: %v", err, rollbackErr)
+			}
 			return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", err)
 		}
 		closeControl = true
@@ -1447,27 +1469,212 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 	if closeControl {
 		defer control.Close()
 	}
+	var previousTradeCA []byte
+	var previousTradeCAExists bool
+	if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+		controlPaths := snapshot.Manifest.Paths.Resolved()
+		var readErr error
+		previousTradeCA, previousTradeCAExists, readErr = readTradeGatewayCA(ctx, control, controlPaths.ControlRoot)
+		if readErr != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = transport.Run(cleanupCtx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-ca-read-failure", result.DeployDir}, nil)
+			if rollbackErr := setupdeploy.RollbackService(cleanupCtx, transport, result.DeployDir, service); rollbackErr != nil {
+				readErr = errors.Join(readErr, fmt.Errorf("rollback service after CA read failure: %w", rollbackErr))
+			}
+			return setupdeploy.ServiceResult{}, readErr
+		}
+		if err := syncTradeGatewayCA(ctx, transport, control, result.DeployDir, controlPaths.ControlRoot); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = transport.Run(cleanupCtx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-ca-failure", result.DeployDir}, nil)
+			_ = setupdeploy.RollbackService(cleanupCtx, transport, result.DeployDir, service)
+			if restoreErr := restoreTradeGatewayRuntime(cleanupCtx, control, controlPaths.ControlRoot, previousTradeCA, previousTradeCAExists); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore Trade Gateway runtime after CA sync failure: %w", restoreErr))
+			}
+			return setupdeploy.ServiceResult{}, err
+		}
+		if _, err := control.Run(ctx, []string{"bash", "-lc", `set -eu; "$1/restart.sh" admin; "$1/restart.sh" strategy`, "moox-restart-control-after-trade-ca", controlPaths.ControlRoot}, nil); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, _ = transport.Run(cleanupCtx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-ca-restart-failure", result.DeployDir}, nil)
+			_ = setupdeploy.RollbackService(cleanupCtx, transport, result.DeployDir, service)
+			if restoreErr := restoreTradeGatewayRuntime(cleanupCtx, control, controlPaths.ControlRoot, previousTradeCA, previousTradeCAExists); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore Trade Gateway runtime after restart failure: %w", restoreErr))
+			}
+			return setupdeploy.ServiceResult{}, fmt.Errorf("trade_gateway_ca_sync_failed: %w", err)
+		}
+	}
+	result, err = syncSetupServiceRegistry(ctx, transport, control, host, service, tradeConsoleBindAddress != "", result, snapshot.Manifest.Paths.Resolved().ControlRoot)
+	if err != nil {
+		if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if restoreErr := restoreTradeGatewayRuntime(cleanupCtx, control, snapshot.Manifest.Paths.Resolved().ControlRoot, previousTradeCA, previousTradeCAExists); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore Trade Gateway runtime after registry failure: %w", restoreErr))
+			}
+		}
+		return setupdeploy.ServiceResult{}, err
+	}
+	if err := setupdeploy.FinalizeService(ctx, transport, result.DeployDir); err != nil {
+		// Finalize only removes the retained rollback snapshot. The service,
+		// registry, and Trade Gateway CA are already consistent at this point;
+		// leave that state intact so cleanup can be retried without invalidating
+		// the live Admin/Strategy TLS trust cache.
+		return setupdeploy.ServiceResult{}, fmt.Errorf("service_finalize_failed: %w", err)
+	}
+	return result, nil
+}
+
+func syncTradeGatewayCA(ctx context.Context, trade, control setupssh.Client, tradeDeployDir, controlRoot string) error {
+	if trade == nil || control == nil || strings.TrimSpace(tradeDeployDir) == "" || strings.TrimSpace(controlRoot) == "" {
+		return fmt.Errorf("trade_gateway_ca_sync_failed")
+	}
+	result, err := trade.Run(ctx, []string{"sh", "-lc", `cat -- "$1/certs/caddy/root.crt"`, "moox-read-trade-gateway-ca", tradeDeployDir}, nil)
+	if err != nil {
+		return fmt.Errorf("trade_gateway_ca_sync_failed")
+	}
+	ca := []byte(result.Stdout)
+	if len(ca) == 0 || len(ca) > 1<<20 {
+		return fmt.Errorf("trade_gateway_ca_sync_failed")
+	}
+	block, rest := pem.Decode(ca)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		return fmt.Errorf("trade_gateway_ca_sync_failed")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil || !cert.IsCA {
+		return fmt.Errorf("trade_gateway_ca_sync_failed")
+	}
+	target := filepath.Join(strings.TrimRight(controlRoot, "/"), "certs", "caddy", "trade-gateway-root.crt")
+	tmp := target + ".next"
+	if err := control.Upload(ctx, bytes.NewReader(ca), int64(len(ca)), tmp, 0o600); err != nil {
+		return fmt.Errorf("trade_gateway_ca_sync_failed")
+	}
+	if _, err := control.Run(ctx, []string{"sh", "-lc", `set -eu; mkdir -p -- "$(dirname -- "$2")"; chmod 600 -- "$1"; mv -f -- "$1" "$2"; chmod 644 -- "$2"`, "moox-install-trade-gateway-ca", tmp, target}, nil); err != nil {
+		return fmt.Errorf("trade_gateway_ca_sync_failed")
+	}
+	return nil
+}
+
+func readTradeGatewayCA(ctx context.Context, control setupssh.Client, controlRoot string) ([]byte, bool, error) {
+	target := filepath.Join(strings.TrimRight(controlRoot, "/"), "certs", "caddy", "trade-gateway-root.crt")
+	result, err := control.Run(ctx, []string{"sh", "-lc", `if [ ! -e "$1" ]; then exit 3; fi; cat -- "$1"`, "moox-read-previous-trade-gateway-ca", target}, nil)
+	if err != nil {
+		if result.ExitCode == 3 {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("trade_gateway_ca_read_failed")
+	}
+	if len(result.Stdout) == 0 {
+		return nil, true, fmt.Errorf("trade_gateway_ca_read_failed")
+	}
+	return []byte(result.Stdout), true, nil
+}
+
+func restoreTradeGatewayCA(ctx context.Context, control setupssh.Client, controlRoot string, ca []byte, exists bool) error {
+	target := filepath.Join(strings.TrimRight(controlRoot, "/"), "certs", "caddy", "trade-gateway-root.crt")
+	if !exists {
+		_, err := control.Run(ctx, []string{"sh", "-lc", `rm -f -- "$1"`, "moox-remove-trade-gateway-ca", target}, nil)
+		return err
+	}
+	tmp := target + ".restore"
+	if err := control.Upload(ctx, bytes.NewReader(ca), int64(len(ca)), tmp, 0o600); err != nil {
+		return err
+	}
+	_, err := control.Run(ctx, []string{"sh", "-lc", `set -eu; mv -f -- "$1" "$2"; chmod 644 -- "$2"`, "moox-restore-trade-gateway-ca", tmp, target}, nil)
+	return err
+}
+
+// restoreTradeGatewayRuntime restores both the CA file and the processes that
+// cache its certificate pool. Restoring only the file leaves an already-running
+// Admin/Strategy process trusting the new CA, which can make the next restart
+// fail after a deployment rollback.
+func restoreTradeGatewayRuntime(ctx context.Context, control setupssh.Client, controlRoot string, ca []byte, exists bool) error {
+	if err := restoreTradeGatewayCA(ctx, control, controlRoot, ca, exists); err != nil {
+		return err
+	}
+	if _, err := control.Run(ctx, []string{"bash", "-lc", `set -eu; "$1/restart.sh" admin; "$1/restart.sh" strategy`, "moox-restart-control-after-trade-ca-restore", controlRoot}, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
+func probeTradeGatewayFromControl(ctx context.Context, control setupssh.Client, host, nodeID, controlRoot string) error {
+	host, nodeID, controlRoot = strings.TrimSpace(host), strings.TrimSpace(nodeID), strings.TrimSpace(controlRoot)
+	if control == nil || host == "" || nodeID == "" || controlRoot == "" {
+		return fmt.Errorf("trade_gateway_probe_failed")
+	}
+	endpoint := "https://" + net.JoinHostPort(host, strconv.Itoa(setupclient.TradeGatewayHTTPSPort)) + "/api/service/trade_console/GetExecutionCapabilities"
+	script := "set -eu\n" +
+		"root=\"$1\"; endpoint=\"$2\"; target=\"$3\"\n" +
+		"set -a; source \"$root/secrets/gateway-service.env\"; set +a\n" +
+		"[ -r \"$root/certs/caddy/trade-gateway-root.crt\" ] || exit 1\n" +
+		"[ \"${MOOX_GATEWAY_CALLER:-}\" = \"admin-gateway\" ] || exit 1\n" +
+		"body='{}'; path='/api/service/trade_console/GetExecutionCapabilities'; timestamp=$(date +%s); nonce=$(openssl rand -hex 32)\n" +
+		"body_hash=$(printf '%s' \"$body\" | openssl dgst -sha256 | awk '{print $NF}')\n" +
+		"canonical=$(printf 'moox-gateway-auth-v1\\n%s\\nPOST\\n%s\\n\\n\\n%s\\n%s\\n%s\\n%s' \"$MOOX_GATEWAY_CALLER\" \"$path\" \"$body_hash\" \"$timestamp\" \"$nonce\" \"$target\")\n" +
+		"signature=$(printf '%s' \"$canonical\" | openssl dgst -sha256 -hmac \"$MOOX_GATEWAY_SERVICE_SECRET_KEY\" | awk '{print $NF}')\n" +
+		"status=$(curl --silent --show-error --fail --max-time 8 --cacert \"$root/certs/caddy/trade-gateway-root.crt\" -X POST -H 'Content-Type: application/json' -H \"X-Moox-Key-Id: $MOOX_GATEWAY_SERVICE_KEY_ID\" -H \"X-Moox-Caller: $MOOX_GATEWAY_CALLER\" -H \"X-Moox-Timestamp: $timestamp\" -H \"X-Moox-Nonce: $nonce\" -H \"X-Moox-Target-Node: $target\" -H \"X-Moox-Signature: $signature\" --data \"$body\" --output /dev/null --write-out '%{http_code}' \"$endpoint\")\n" +
+		"[ \"$status\" = 200 ]\n"
+	if _, err := control.Run(ctx, []string{"bash", "-lc", script, "moox-probe-trade-gateway-from-control", controlRoot, endpoint, nodeID}, nil); err != nil {
+		return fmt.Errorf("trade_gateway_probe_failed")
+	}
+	return nil
+}
+
+func syncSetupServiceRegistry(ctx context.Context, transport, control setupssh.Client, host setupconfig.Host, service string, remoteTrade bool, result setupdeploy.ServiceResult, controlRoots ...string) (setupdeploy.ServiceResult, error) {
+	isTrade := strings.EqualFold(strings.TrimSpace(service), "trade") || strings.EqualFold(strings.TrimSpace(service), "moox_trade")
 	controlClient := setupclient.New(control)
+	var tradeSnapshot setupclient.TradeDeploymentSnapshot
+	failRegistration := func(cause error, stage string) (setupdeploy.ServiceResult, error) {
+		// Registration may have committed before the caller timed out. Cleanup
+		// must not inherit that cancellation or hide a still-running process.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if isTrade {
+			if _, err := transport.Run(cleanupCtx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-" + stage + "-failure", result.DeployDir}, nil); err != nil {
+				cause = errors.Join(cause, fmt.Errorf("stop Trade after registry failure: %w", err))
+			}
+		}
+		if err := setupdeploy.RollbackService(cleanupCtx, transport, result.DeployDir, service); err != nil {
+			cause = errors.Join(cause, fmt.Errorf("rollback service deployment after failure: %w", err))
+		}
+		if isTrade && tradeSnapshot.Rows != nil {
+			if err := controlClient.RestoreTradeDeployments(cleanupCtx, host.Name, tradeSnapshot); err != nil {
+				cause = errors.Join(cause, fmt.Errorf("restore Trade registry after failure: %w", err))
+			}
+		}
+		return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", cause)
+	}
+	if isTrade {
+		var snapshotErr error
+		tradeSnapshot, snapshotErr = controlClient.SnapshotTradeDeployments(ctx, host.Name)
+		if snapshotErr != nil {
+			return failRegistration(snapshotErr, "registry-snapshot")
+		}
+	}
 	if err := controlClient.RegisterServiceDeployment(ctx, host.Name, service, host.Address); err != nil {
 		// The service has already been activated by setupdeploy.Service. Do not
 		// leave a running Trade process without a matching control-plane route.
-		if tradeConsoleBindAddress != "" {
-			_, _ = transport.Run(ctx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-registry-failure", result.DeployDir}, nil)
-		}
-		return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", err)
+		return failRegistration(err, "registry")
 	}
-	if tradeConsoleBindAddress != "" {
-		if err := probeTradeConsole(ctx, control, host.Address); err != nil {
-			_, _ = transport.Run(ctx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-probe-failure", result.DeployDir}, nil)
-			_ = controlClient.DisableServiceDeployment(ctx, host.Name, service)
-			return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", err)
+	if remoteTrade {
+		if err := probeTradeConsole(ctx, transport, "127.0.0.1"); err != nil {
+			return failRegistration(err, "probe")
 		}
-		if err := controlClient.ApplyTradeConsolePlacement(ctx, host.Address); err != nil {
+		if err := controlClient.ApplyTradeConsolePlacementForNode(ctx, host.Address, host.Name); err != nil {
 			// Keep registry and process state aligned when the second control-plane
 			// write fails after activation.
-			_, _ = transport.Run(ctx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-route-failure", result.DeployDir}, nil)
-			_ = controlClient.DisableServiceDeployment(ctx, host.Name, service)
-			return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", err)
+			return failRegistration(err, "route")
+		}
+		if err := controlClient.VerifyTradeOwnerRoute(ctx, host.Name); err != nil {
+			return failRegistration(err, "gateway-route")
+		}
+		if len(controlRoots) > 0 {
+			if err := probeTradeGatewayFromControl(ctx, control, host.Address, host.Name, controlRoots[0]); err != nil {
+				return failRegistration(err, "gateway-https")
+			}
 		}
 	}
 	result.RegistrySynced = true
@@ -1478,12 +1685,12 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 // publishing the browser route. Trade returns HTTP 200 with a business error
 // when no space header is supplied, which is sufficient for this liveness
 // probe and avoids requiring operator credentials.
-func probeTradeConsole(ctx context.Context, control setupssh.Client, host string) error {
+func probeTradeConsole(ctx context.Context, transport setupssh.Client, host string) error {
 	host = strings.TrimSpace(host)
-	if control == nil || net.ParseIP(host) == nil {
+	if transport == nil || host == "" {
 		return fmt.Errorf("trade_console_probe_invalid")
 	}
-	_, err := control.Run(ctx, []string{"bash", "-lc", `set -eu
+	_, err := transport.Run(ctx, []string{"bash", "-lc", `set -eu
 host="$1"
 curl --fail --silent --show-error --max-time 5 \
   -X POST -H 'Content-Type: application/json' --data '{}' \

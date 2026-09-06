@@ -9,7 +9,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/errs"
@@ -83,6 +85,25 @@ func TestBuildForwardHeaders_WithHeaders_ShouldMapToHTTPHeaders(t *testing.T) {
 	assert.Equal(t, "trace-1", reqHead.Header.Get("X-Trace-Id"))
 	assert.Equal(t, "token-1", reqHead.Header.Get("X-Access-Token"))
 	assert.Equal(t, "space-1", reqHead.Header.Get("X-Space-Id"))
+}
+
+func TestForwardTradeConsoleToGatewaySignsRemoteRequest(t *testing.T) {
+	const secret = "trade-gateway-secret"
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "moox-gateway-service")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", secret)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.Equal(t, "/api/service/trade_console/ListTradingAccounts", r.URL.Path)
+		_, err = gatewayauth.Verify(gatewayauth.Credentials{KeyID: "moox-gateway-service", Secret: secret}, gatewayauth.Request{Method: http.MethodPost, Path: r.URL.EscapedPath(), TargetNode: "trade-node", Body: body}, r.Header, time.Now())
+		require.NoError(t, err)
+		require.Equal(t, "space-1", r.Header.Get("X-Space-Id"))
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0}}`))
+	}))
+	defer server.Close()
+	body, err := forwardTradeConsoleToGateway(context.Background(), "ListTradingAccounts", ServiceDetail{GatewayURL: server.URL, GatewayNode: "trade-node"}, []byte(`{}`), map[string]string{"space_id": "space-1"})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"ret_info":{"code":0}}`, string(body))
 }
 
 func TestWriteForwardError_ShouldWriteRetInfo(t *testing.T) {

@@ -273,14 +273,15 @@ func (h *LogicalAccountServer) RebindLogicalAccountOwner(
 		}, nil
 	}
 	var record store.LogicalAccountRecord
-	if req.GetInstanceId() != "" {
+	if req.GetInstanceId() == "" {
+		// The endpoint name is retained for the modern session CAS contract, but
+		// runner/rebind_key requests are no longer an executable authorization
+		// path. Historical owner rows require an explicit administrative cutover.
+		err = fmt.Errorf("%w: legacy logical account owner rebind is disabled", store.ErrConflict)
+	} else {
 		record, _, err = h.LogicalAccounts.RebindSession(
 			ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(), req.GetSessionId(),
 			req.GetExpectedAuthFence(), req.GetNewInstanceId(), req.GetNewSessionId(),
-		)
-	} else {
-		record, err = h.LogicalAccounts.RebindOwner(
-			ctx, spaceID, req.GetLogicalAccountId(), req.GetRunnerId(), req.GetRebindKey(),
 		)
 	}
 	return &tradepb.RebindLogicalAccountOwnerRsp{

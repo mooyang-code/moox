@@ -604,7 +604,8 @@ is_local_target() {
 }
 
 gateway_ready_at() {
-  local root="$1" timestamp nonce body_hash canonical signature auth
+  local root="$1" timestamp nonce body_hash canonical signature auth health_addr
+  health_addr=$(gateway_health_addr)
   set -a
   source "${root}/secrets/health-auth.env"
   set +a
@@ -614,7 +615,18 @@ gateway_ready_at() {
   canonical=$(printf "%s\nGET\n/readyz\n%s\n%s\n%s" moox-request-v1 "${body_hash}" "${timestamp}" "${nonce}")
   signature=$(printf "%s" "${canonical}" | openssl dgst -sha256 -hmac "${MOOX_HEALTH_AUTH_SECRET_KEY}"); signature=${signature##* }
   auth="${MOOX_HEALTH_AUTH_VERSION}/${MOOX_HEALTH_AUTH_ACCESS_KEY}/${timestamp}/${nonce}/${signature}"
-  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: ${auth}" http://127.0.0.1:11012/readyz >/dev/null
+  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: ${auth}" "http://${health_addr}/readyz" >/dev/null
+}
+
+# A Trade-only execution node may retain an older Storage Gateway on 11012.
+# Its dedicated authenticated Gateway therefore uses an independent health
+# listener and every acceptance/rollback probe must follow the same port.
+gateway_health_addr() {
+  if [[ "${WITH_TRADE:-0}" == "1" && "${WITH_STORAGE:-0}" == "0" && "${WITH_ADMIN:-0}" == "0" && "${WITH_GATEWAY:-0}" == "1" ]]; then
+    printf '%s' "${MOOX_TRADE_GATEWAY_HEALTH_ADDR:-127.0.0.1:11014}"
+    return
+  fi
+  printf '%s' '127.0.0.1:11012'
 }
 
 prepare_local_gateway_rollback() {
@@ -689,16 +701,18 @@ if [[ -x "$root/start.sh" ]]; then MOOX_WITH_GATEWAY=1 "$root/start.sh" gateway 
 set -a
 source "$root/secrets/health-auth.env"
 set +a
+health_addr="$(awk '/^[[:space:]]+health_addr:/ {print $2; exit}' "$root/gateway/config/app.yaml" 2>/dev/null || true)"
+health_addr="${health_addr:-127.0.0.1:11012}"
 for _ in $(seq 1 30); do
   timestamp=$(date +%s); nonce=$(openssl rand -hex 32)
   body_hash=$(printf %s "" | openssl dgst -sha256); body_hash=${body_hash##* }
   canonical=$(printf "%s\nGET\n/readyz\n%s\n%s\n%s" moox-request-v1 "$body_hash" "$timestamp" "$nonce")
   signature=$(printf "%s" "$canonical" | openssl dgst -sha256 -hmac "$MOOX_HEALTH_AUTH_SECRET_KEY"); signature=${signature##* }
   auth="$MOOX_HEALTH_AUTH_VERSION/$MOOX_HEALTH_AUTH_ACCESS_KEY/$timestamp/$nonce/$signature"
-  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $auth" http://127.0.0.1:11012/readyz >/dev/null 2>&1 && break
+  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $auth" "http://${health_addr}/readyz" >/dev/null 2>&1 && break
   sleep 1
 done
-curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $auth" http://127.0.0.1:11012/readyz >/dev/null 2>&1 || exit 1
+  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $auth" "http://${health_addr}/readyz" >/dev/null 2>&1 || exit 1
 rm -f "$archive"
 EOF
   if [[ "${status}" -ne 0 ]]; then
@@ -1126,6 +1140,22 @@ patch_configs() {
   else
     perl -0pi -e 's#(  hmac_key_file: ../../secrets/gateway-control\.key\n)#$1  ca_file: ../../certs/gateway/peers.pem\n#' "${STAGE_DIR}/gateway/config/app.yaml"
   fi
+  # A dedicated Trade execution node may still host the legacy Storage
+  # Gateway on 11002/11003/11012. Give its authenticated Trade Gateway a
+  # separate local port set and point Caddy at that service listener.
+  if [[ "${WITH_TRADE}" -eq 1 && "${WITH_STORAGE}" -eq 0 && "${WITH_ADMIN}" -eq 0 && "${WITH_GATEWAY}" -eq 1 ]]; then
+    local trade_gateway_service_addr="${MOOX_TRADE_GATEWAY_SERVICE_ADDR:-127.0.0.1:11004}"
+    local trade_gateway_native_addr="${MOOX_TRADE_GATEWAY_NATIVE_ADDR:-127.0.0.1:11005}"
+    local trade_gateway_health_addr="${MOOX_TRADE_GATEWAY_HEALTH_ADDR:-127.0.0.1:11014}"
+    TRADE_GATEWAY_SERVICE_ADDR="${trade_gateway_service_addr}" TRADE_GATEWAY_NATIVE_ADDR="${trade_gateway_native_addr}" TRADE_GATEWAY_HEALTH_ADDR="${trade_gateway_health_addr}" \
+      perl -0pi -e 's#^  service_addr:.*#  service_addr: $ENV{TRADE_GATEWAY_SERVICE_ADDR}#m; s#^  native_addr:.*#  native_addr: $ENV{TRADE_GATEWAY_NATIVE_ADDR}#m; s#^  health_addr:.*#  health_addr: $ENV{TRADE_GATEWAY_HEALTH_ADDR}#m' \
+      "${STAGE_DIR}/gateway/config/app.yaml"
+    if [[ -f "${STAGE_DIR}/config/caddy/Caddyfile.next" ]]; then
+      TRADE_GATEWAY_SERVICE_ADDR="${trade_gateway_service_addr}" \
+        perl -0pi -e 's#reverse_proxy 127\.0\.0\.1:11002#reverse_proxy $ENV{TRADE_GATEWAY_SERVICE_ADDR}#g' \
+        "${STAGE_DIR}/config/caddy/Caddyfile.next"
+    fi
+  fi
 
   if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/moox_cloudnode\.db#path: ../data/cloudnode/moox_cloudnode.db#g' \
@@ -1143,9 +1173,66 @@ patch_configs() {
     perl -0pi -e 's#path:\s*\./data/factor/factor\.db#path: ../data/factor/factor.db#g' \
       "${STAGE_DIR}/factor/config/app.yaml"
   fi
+  local trade_gateway_url="${MOOX_TRADE_GATEWAY_URL:-}" trade_gateway_node="${MOOX_TRADE_GATEWAY_NODE_ID:-}"
+  # Component overlays may replace the Strategy files while intentionally
+  # omitting dedicated Trade variables. Preserve the installed placement so a
+  # Strategy-only upgrade cannot silently disconnect ownership calls.
+  if [[ "${COMPONENT_OVERLAY:-0}" -eq 1 && -z "${trade_gateway_url}" && -z "${trade_gateway_node}" && -r "${DEPLOY_DIR}/config/trade-gateway.json" ]]; then
+    read -r trade_gateway_url trade_gateway_node < <(python3 - "${DEPLOY_DIR}/config/trade-gateway.json" <<'PY'
+import ipaddress, json, re, sys
+from urllib.parse import urlsplit
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+raw, node = str(value.get("gateway_url", "")), str(value.get("target_node", ""))
+if not raw and not node:
+    sys.exit(0)
+url = urlsplit(raw)
+host = url.hostname
+loopback = False
+if host:
+    loopback = host.lower() == "localhost"
+    if not loopback:
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            pass
+if not re.fullmatch(r"[a-z0-9_-]+", node) or not host or url.username or url.password or url.path not in ("", "/") or url.query or url.fragment:
+    sys.exit("invalid persisted Trade Gateway placement")
+if url.scheme != "https" and not (url.scheme == "http" and loopback):
+    sys.exit("Trade Gateway placement requires HTTPS except loopback")
+print(raw + "\t" + node)
+PY
+    )
+  fi
+  if [[ -z "${trade_gateway_url}" && -z "${trade_gateway_node}" && "${WITH_TRADE}" -eq 1 ]]; then
+    if [[ "${WITH_STORAGE}" -eq 0 && "${WITH_ADMIN}" -eq 0 && "${WITH_GATEWAY}" -eq 1 ]]; then
+      trade_gateway_url="http://${MOOX_TRADE_GATEWAY_SERVICE_ADDR:-127.0.0.1:11004}"
+    else
+      trade_gateway_url="http://127.0.0.1:11002"
+    fi
+    trade_gateway_node="${NODE_ID}"
+  fi
+  if [[ -n "${trade_gateway_url}" || -n "${trade_gateway_node}" ]]; then
+    [[ -n "${trade_gateway_url}" && "${trade_gateway_node}" =~ ^[a-z0-9_-]+$ ]] || fail "Trade Gateway requires MOOX_TRADE_GATEWAY_URL and MOOX_TRADE_GATEWAY_NODE_ID together"
+    validate_gateway_control_url "${trade_gateway_url}" || fail "Trade Gateway URL requires HTTPS (loopback HTTP allowed), without credentials or a path"
+  fi
+  # Control-only packages also need the receiving node's owner route. Persist
+  # placement independently of Strategy so an Admin restart imports it again.
+  if [[ "${COMPONENT_OVERLAY:-0}" -eq 0 || -n "${trade_gateway_node}" ]]; then
+    python3 - "${trade_gateway_url}" "${trade_gateway_node}" >"${STAGE_DIR}/config/trade-gateway.json" <<'PY'
+import json, sys
+print(json.dumps({"gateway_url": sys.argv[1], "target_node": sys.argv[2]}))
+PY
+  fi
   if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
     perl -0pi -e 's#database:\s*\./data/strategy\.sqlite#database: ../data/strategy/strategy.sqlite#g' \
       "${STAGE_DIR}/strategy/config/app.yaml"
+    local trade_gateway_url_yaml trade_gateway_node_yaml
+    trade_gateway_url_yaml=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "${trade_gateway_url}")
+    trade_gateway_node_yaml=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "${trade_gateway_node}")
+    TRADE_GATEWAY_URL_YAML="${trade_gateway_url_yaml}" TRADE_GATEWAY_NODE_YAML="${trade_gateway_node_yaml}" \
+      perl -0pi -e 's#^trade:\n  gateway_url: ""\n  target_node: ""\n  ca_file: ""\n#trade:\n  gateway_url: $ENV{TRADE_GATEWAY_URL_YAML}\n  target_node: $ENV{TRADE_GATEWAY_NODE_YAML}\n  ca_file: ""\n#m or die "unexpected Strategy Trade config template\n"' \
+        "${STAGE_DIR}/strategy/config/app.yaml"
   fi
   if [[ "${WITH_TRADE}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/moox_trade\.db#path: ../data/trade/moox_trade.db#g' \
@@ -1318,6 +1405,14 @@ if [[ -r "${ROOT}/certs/caddy/root.crt" ]]; then
 fi
 MOOX_GATEWAY_CA_FILE="${ROOT}/certs/gateway/peers.pem"
 export MOOX_SERVICE_GATEWAY_CA_FILE MOOX_SERVICE_GATEWAY_CA_PEM_B64 MOOX_GATEWAY_CA_FILE
+
+# Keep restarts independent of deployment-time shell state.
+STORAGE_EVENTBUS_URL_ENV="${MOOX_STORAGE_EVENTBUS_URL:-tls://127.0.0.1:${MOOX_EVENTBUS_PORT:-4222}}"
+STORAGE_EVENTBUS_CREDENTIAL_FILE="${MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE:-${HOME}/.config/moox/eventbus/storage-eventbus.yaml}"
+STORAGE_EVENTBUS_CREDENTIAL_ENV=()
+if [[ -r "${STORAGE_EVENTBUS_CREDENTIAL_FILE}" ]]; then
+  STORAGE_EVENTBUS_CREDENTIAL_ENV=("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE=${STORAGE_EVENTBUS_CREDENTIAL_FILE}")
+fi
 set +a
 
 disable_conflicting_eventbus_supervisor() {
@@ -1825,11 +1920,19 @@ sign_health_request() {
   printf '%s/%s/%s/%s/%s' "${MOOX_HEALTH_AUTH_VERSION}" "${MOOX_HEALTH_AUTH_ACCESS_KEY}" "${timestamp}" "${nonce}" "${signature}"
 }
 
+gateway_health_addr() {
+  if [[ "${WITH_TRADE:-0}" == "1" && "${WITH_STORAGE:-0}" == "0" && "${WITH_ADMIN:-0}" == "0" && "${WITH_GATEWAY:-0}" == "1" ]]; then
+    printf '%s' "${MOOX_TRADE_GATEWAY_HEALTH_ADDR:-127.0.0.1:11014}"
+    return
+  fi
+  printf '%s' '127.0.0.1:11012'
+}
+
 probe_service() {
   local name="$1" url="" health_path=/healthz
   case "${name}" in
     admin) url=http://127.0.0.1:11010/readyz ;;
-    gateway) url=http://127.0.0.1:11012/readyz ;;
+    gateway) url="http://$(gateway_health_addr)/readyz" ;;
     archive) url=http://127.0.0.1:11416/readyz ;;
     cloudnode) url=http://127.0.0.1:11411/readyz ;;
     collector) url=http://127.0.0.1:11412/readyz ;;
@@ -1849,9 +1952,9 @@ probe_service() {
 }
 
 listener_open() {
-  local name="$1" port
+  local name="$1" port health_addr
   case "${name}" in
-    admin) port=11010 ;; gateway) port=11012 ;; archive) port=11416 ;;
+    admin) port=11010 ;; gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:}" ;; archive) port=11416 ;;
     cloudnode) port=11411 ;; collector) port=11412 ;; eventbus) port=11419 ;;
     factor) port=11414 ;; strategy) port=11431 ;; trade) port=11210 ;;
     monitor) port=11409 ;; hostagent) port=11425 ;; web-host) port=19527 ;; storage-primary) port=20210 ;;
@@ -1979,7 +2082,7 @@ start_storage_process() {
       "MOOX_STORAGE_HOME=${ROOT}/data/storage" \
       "MOOX_STORAGE_ROLE=${role}" \
       "MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}" \
-      "${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]}" \
+      "${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]+"${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]}"}" \
       "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
       "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}" \
       "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:?MOOX_STORAGE_VIEW_AUTH_SECRET is required}" \
@@ -2089,7 +2192,7 @@ start_storage_view() {
       "MOOX_STORAGE_HOME=${ROOT}/data/storage" \
       "MOOX_STORAGE_ROLE=view" \
       "MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}" \
-      "${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]}" \
+      "${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]+"${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]}"}" \
       "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-256MB}" \
       "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
       "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}" \
@@ -2117,7 +2220,7 @@ start_storage_node() {
       "MOOX_STORAGE_ROLE=node" \
       "MOOX_STORAGE_NODE_ID=${MOOX_STORAGE_NODE_ID:-storage-node-0}" \
       "MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}" \
-      "${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]}" \
+      "${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]+"${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]}"}" \
       "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
       "${ROOT}/bin/moox-storage-node" \
       -conf=config/trpc_go.yaml
@@ -2157,6 +2260,43 @@ complete_storage_bootstrap() {
   fi
 }
 
+import_trade_owner_route() {
+  local placement="${ROOT}/config/trade-gateway.json"
+  [[ -r "${placement}" ]] || return 0
+  local owner_placement owner_node owner_host
+  owner_placement=$(python3 - "${placement}" <<'PY'
+import ipaddress, json, re, sys
+from urllib.parse import urlsplit
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+raw, node = value.get("gateway_url", ""), value.get("target_node", "")
+if not raw and not node:
+    sys.exit(0)
+url = urlsplit(raw)
+host = url.hostname
+if not re.fullmatch(r"[a-z0-9_-]+", node) or not host or url.username or url.password or url.path not in ("", "/") or url.query or url.fragment:
+    sys.exit("invalid persisted Trade Gateway placement")
+loopback = host.lower() == "localhost"
+if not loopback:
+    try:
+        loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        pass
+if url.scheme != "https" and not (url.scheme == "http" and loopback):
+    sys.exit("Trade Gateway placement requires HTTPS except loopback")
+print(node + "\t" + ("[" + host + "]" if ":" in host else host))
+PY
+  ) || return 1
+  [[ -n "${owner_placement}" ]] || return 0
+  IFS=$'\t' read -r owner_node owner_host <<<"${owner_placement}"
+  "${ROOT}/bin/moox-admin-cli" service-deployments import \
+    --db-path "${ROOT}/data/admin.db" \
+    --file "${ROOT}/config/setup/service-deployments.yaml" \
+    --node-id "${owner_node}" --public-host "${owner_host}" \
+    --eventbus-nats-url "${MOOX_EVENTBUS_NATS_URL}" \
+    --only-services trade_owner,trade_console >>"${ROOT}/logs/admin/stdout.log" 2>&1
+}
+
 start_admin() {
   [[ "${WITH_ADMIN}" == "1" ]] || { echo "admin is disabled in this deployment package" >&2; exit 2; }
   local encryption_key_file="${HOME}/.config/moox/credentials/admin-encryption-key"
@@ -2175,6 +2315,20 @@ start_admin() {
       service_seed_args+=(--disable-storage-shard)
     fi
     local resolver_enabled=0 resolver_node="" resolver_target=""
+    local trade_gateway_url="${MOOX_TRADE_GATEWAY_URL:-}" trade_gateway_node="${MOOX_TRADE_GATEWAY_NODE_ID:-}"
+    if [[ -z "${trade_gateway_url}" && -z "${trade_gateway_node}" && -r "${ROOT}/config/trade-gateway.json" ]]; then
+      IFS=$'\t' read -r trade_gateway_url trade_gateway_node < <(python3 - "${ROOT}/config/trade-gateway.json" <<'PY'
+import json, sys
+from urllib.parse import urlsplit
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+raw, node = str(value.get("gateway_url", "")), str(value.get("target_node", ""))
+if raw and node:
+    parsed = urlsplit(raw)
+    print(raw + "\t" + node)
+PY
+      )
+    fi
     local resolver_json="${ROOT}/config/render-runtime-config.json"
     local trade_console_host="" trade_console_port=""
     if [[ -r "${resolver_json}" ]]; then
@@ -2205,13 +2359,20 @@ PY
     [[ "${WITH_MONITOR}" == "1" ]] || disabled_services+=(moox_monitor)
     [[ "${WITH_HOSTAGENT}" == "1" ]] || disabled_services+=(moox_hostagent)
     [[ "${WITH_STRATEGY}" == "1" ]] || disabled_services+=(moox_strategy)
-    [[ "${WITH_TRADE}" == "1" ]] || disabled_services+=(moox_trade)
+    [[ "${WITH_TRADE}" == "1" ]] || disabled_services+=(moox_trade trade_owner)
     if [[ "${resolver_enabled}" != "1" || -z "${resolver_node}" || "${resolver_node}" != "${MOOX_ADMIN_NODE_ID}" ]]; then
       disabled_services+=(trade_dns_resolver)
     fi
     [[ "${WITH_WEB_HOST}" == "1" ]] || disabled_services+=(web_host)
     if [[ -n "${trade_console_host}" ]]; then
       service_seed_args+=(--trade-console-host "${trade_console_host}" --trade-console-port "${trade_console_port:-11200}")
+    fi
+    # A same-node Trade process is reachable through Admin's normal loopback
+    # endpoint. Persisted placement metadata is only a browser-BFF override for
+    # a genuinely remote execution node; writing it for control would route to
+    # the non-gateway-enabled local trade_console row and break single-node UI.
+    if [[ -n "${trade_gateway_url}" || -n "${trade_gateway_node}" ]] && [[ "${trade_gateway_node}" != "${MOOX_ADMIN_NODE_ID}" ]]; then
+      service_seed_args+=(--trade-gateway-url "${trade_gateway_url}" --trade-gateway-node "${trade_gateway_node}")
     fi
     if (( ${#disabled_services[@]} > 0 )); then
       local disabled_services_csv
@@ -2240,6 +2401,7 @@ PY
             exit 1
           }
     fi
+    import_trade_owner_route || { echo "Trade owner service deployment import failed" >&2; exit 1; }
   fi
   if [[ "${WITH_EVENTBUS}" == "1" && "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" && -x "${ROOT}/bin/moox-admin-cli" ]]; then
     local eventbus_credentials_dir="${HOME}/.config/moox/eventbus"
@@ -2298,9 +2460,14 @@ PY
     fi
   fi
   gateway_service_env_for admin-gateway
+  local -a trade_gateway_ca_env=()
+  if [[ -r "${ROOT}/certs/caddy/trade-gateway-root.crt" ]]; then
+    trade_gateway_ca_env=("MOOX_TRADE_GATEWAY_CA_FILE=${ROOT}/certs/caddy/trade-gateway-root.crt")
+  fi
   runtime_identity_env admin_gateway "${ROOT}/admin/config/trpc_go.yaml"
   start_service "admin" "${ROOT}/admin" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${ADMIN_SECRET_ENV[@]}" "${NOTIFICATION_ENV[@]+"${NOTIFICATION_ENV[@]}"}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+      "${trade_gateway_ca_env[@]}" \
       "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=${LOCAL_STORAGE_RPC_GATEWAY_ADDRESS}" "MOOX_NODE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
       "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_DB_PATH=${ROOT}/data/admin.db" \
       "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
@@ -2419,10 +2586,50 @@ start_strategy() {
   if [[ "${WITH_TRADE}" == "1" ]]; then
     wait_http "http://127.0.0.1:11210/readyz" "${MOOX_WAIT_TRADE_READY_SECONDS:-60}"
   fi
+  local -a trade_gateway_env=()
+  if [[ -r "${ROOT}/config/trade-gateway.json" ]]; then
+    local persisted_trade_gateway
+    persisted_trade_gateway=$(python3 - "${ROOT}/config/trade-gateway.json" <<'PY'
+import ipaddress, json, re, sys
+from urllib.parse import urlsplit
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+raw, node = str(value.get("gateway_url", "")), str(value.get("target_node", ""))
+if not raw and not node:
+    sys.exit(0)
+url = urlsplit(raw)
+host = url.hostname
+loopback = False
+if host:
+    loopback = host.lower() == "localhost"
+    if not loopback:
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            pass
+if not re.fullmatch(r"[a-z0-9_-]+", node) or not host or url.username or url.password or url.path not in ("", "/") or url.query or url.fragment:
+    sys.exit("invalid persisted Trade Gateway placement")
+if url.scheme != "https" and not (url.scheme == "http" and loopback):
+    sys.exit("Trade Gateway placement requires HTTPS except loopback")
+print(raw + "\t" + node)
+PY
+    ) || {
+      echo "invalid persisted Trade Gateway placement" >&2
+      exit 1
+    }
+    if [[ -n "${persisted_trade_gateway}" ]]; then
+      local persisted_trade_gateway_url persisted_trade_gateway_node
+      IFS=$'\t' read -r persisted_trade_gateway_url persisted_trade_gateway_node <<<"${persisted_trade_gateway}"
+      trade_gateway_env=("MOOX_TRADE_GATEWAY_URL=${persisted_trade_gateway_url}" "MOOX_TRADE_GATEWAY_NODE_ID=${persisted_trade_gateway_node}")
+      if [[ -r "${ROOT}/certs/caddy/trade-gateway-root.crt" ]]; then
+        trade_gateway_env+=("MOOX_TRADE_GATEWAY_CA_FILE=${ROOT}/certs/caddy/trade-gateway-root.crt")
+      fi
+    fi
+  fi
   gateway_service_env_for strategy
   runtime_identity_env moox_strategy "${ROOT}/strategy/config/app.yaml"
   start_service "strategy" "${ROOT}/strategy" \
-    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}" "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:-}" "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "${trade_gateway_env[@]}" "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}" "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:-}" "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "${ROOT}/bin/moox-strategy" -conf=config/trpc_go.yaml
 }
 
@@ -2501,6 +2708,7 @@ start_caddy() {
 }
 
 SERVICE="${1:-}"
+[[ "${SERVICE}" == "moox_trade" ]] && SERVICE=trade
 case "${SERVICE}" in
   "")
     if [[ "${WITH_ADMIN}" == "1" ]]; then
@@ -2752,6 +2960,7 @@ stop_service() {
 }
 
 SERVICE="${1:-}"
+[[ "${SERVICE}" == "moox_trade" ]] && SERVICE=trade
 case "${SERVICE}" in
   "")
     if [[ "${WITH_WEB_HOST}" == "1" ]]; then
@@ -2897,6 +3106,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE="${1:-}"
+[[ "${SERVICE}" == "moox_trade" ]] && SERVICE=trade
 
 if [[ -n "${SERVICE}" ]]; then
   echo "restarting ${SERVICE}"
@@ -3068,7 +3278,7 @@ probe_service() {
   local name="$1" url="" health_path=/healthz
   case "${name}" in
     admin) url=http://127.0.0.1:11010/healthz ;;
-    gateway) url=http://127.0.0.1:11012/healthz ;;
+    gateway) url="http://$(gateway_health_addr)/healthz" ;;
     archive) url=http://127.0.0.1:11416/healthz ;;
     cloudnode) url=http://127.0.0.1:11411/healthz ;;
     collector) url=http://127.0.0.1:11412/healthz ;;
@@ -3117,9 +3327,9 @@ probe_liveness() {
 }
 
 listener_open() {
-  local name="$1" port
+  local name="$1" port health_addr
   case "${name}" in
-    admin) port=11010 ;; gateway) port=11012 ;; archive) port=11416 ;;
+    admin) port=11010 ;; gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:}" ;; archive) port=11416 ;;
     cloudnode) port=11411 ;; collector) port=11412 ;; eventbus) port=11419 ;;
     factor) port=11414 ;; strategy) port=11431 ;; trade) port=11210 ;;
     monitor) port=11409 ;; hostagent) port=11425 ;; web-host) port=19527 ;; storage-primary) port=20210 ;;
@@ -3462,6 +3672,12 @@ EOF
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
   perl -0pi -e "s#__WITH_HOSTAGENT__#${WITH_HOSTAGENT}#g" \
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
+  # Dedicated Trade packages use a separate Gateway listener set because a
+  # Storage Gateway may already own the legacy 11002/11003/11012 ports.
+  if [[ "${WITH_TRADE}" -eq 1 && "${WITH_STORAGE}" -eq 0 && "${WITH_ADMIN}" -eq 0 && "${WITH_GATEWAY}" -eq 1 ]]; then
+    perl -pi -e 's/127\.0\.0\.1:11012/127.0.0.1:11014/g' \
+      "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
+  fi
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
 
@@ -4639,7 +4855,7 @@ rollback_gateway() {
       canonical=$(printf "%s\nGET\n/readyz\n%s\n%s\n%s" moox-request-v1 "${body_hash}" "${timestamp}" "${nonce}")
       signature=$(printf "%s" "${canonical}" | openssl dgst -sha256 -hmac "${MOOX_HEALTH_AUTH_SECRET_KEY}"); signature=${signature##* }
       auth="${MOOX_HEALTH_AUTH_VERSION}/${MOOX_HEALTH_AUTH_ACCESS_KEY}/${timestamp}/${nonce}/${signature}"
-      if curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: ${auth}" http://127.0.0.1:11012/readyz >/dev/null 2>&1; then
+      if curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: ${auth}" "http://$(gateway_health_addr)/readyz" >/dev/null 2>&1; then
         ready=1
         break
       fi
@@ -5080,6 +5296,8 @@ verify_gateway_control_plane() {
   local verify_script='set -euo pipefail
 root=$1
 node_id=$2
+health_addr="$(awk '/^[[:space:]]+health_addr:/ {print $2; exit}' "$root/gateway/config/app.yaml" 2>/dev/null || true)"
+health_addr="${health_addr:-127.0.0.1:11012}"
 gateway_ready() {
   local timestamp nonce body_hash canonical signature auth
   set -a
@@ -5094,7 +5312,7 @@ gateway_ready() {
   signature=${signature##* }
   auth="$MOOX_HEALTH_AUTH_VERSION/$MOOX_HEALTH_AUTH_ACCESS_KEY/$timestamp/$nonce/$signature"
   curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $auth" \
-    http://127.0.0.1:11012/readyz >/dev/null
+    "http://${health_addr}/readyz" >/dev/null
 }
 for _ in $(seq 1 60); do
   if gateway_ready &&
@@ -5210,7 +5428,7 @@ verify_public_https() {
   local browser="https://${PUBLIC_HOST}:${BROWSER_HTTPS_PORT}"
   local service="https://${PUBLIC_HOST}:${SERVICE_HTTPS_PORT}"
   local verify_script='set -euo pipefail
-ca=$1; browser=$2; service=$3; service_auth_file=$4; with_admin=$5; node_id=$6; tls_mode=$7
+ca=$1; browser=$2; service=$3; service_auth_file=$4; with_admin=$5; node_id=$6; tls_mode=$7; with_trade=$8
 case "$ca" in "~/"*) ca="$HOME/${ca#\~/}";; esac
 case "$service_auth_file" in "~/"*) service_auth_file="$HOME/${service_auth_file#\~/}";; esac
 browser_authority=${browser#https://}; service_authority=${service#https://}
@@ -5232,6 +5450,23 @@ expect_status() {
   printf "expected HTTP %s, got %s for %s\n" "$expected" "${actual:-curl-error}" "$*" >&2
   return 1
 }
+expect_signed_status() {
+  expected=$1; path=$2
+  for _ in $(seq 1 30); do
+    timestamp=$(date +%s); nonce=$(openssl rand -hex 32)
+    body_hash=$(printf "{}" | openssl dgst -sha256 | awk "{print \\$NF}")
+    canonical=$(printf "moox-gateway-auth-v1\n%s\nPOST\n%s\n\n\n%s\n%s\n%s\n%s" "$MOOX_GATEWAY_CALLER" "$path" "$body_hash" "$timestamp" "$nonce" "$node_id")
+    signature=$(printf %s "$canonical" | openssl dgst -sha256 -hmac "$MOOX_GATEWAY_SERVICE_SECRET_KEY" | awk "{print \\$NF}")
+    actual=$(status -X POST -H "Content-Type: application/json" \
+      -H "X-Moox-Key-Id: $MOOX_GATEWAY_SERVICE_KEY_ID" -H "X-Moox-Caller: $MOOX_GATEWAY_CALLER" -H "X-Moox-Timestamp: $timestamp" \
+      -H "X-Moox-Nonce: $nonce" -H "X-Moox-Target-Node: $node_id" -H "X-Moox-Signature: $signature" \
+      --data "{}" "$service$path" 2>/dev/null || true)
+    [[ "$actual" == "$expected" ]] && return 0
+    sleep 1
+  done
+  printf "expected HTTP %s, got %s for signed %s\n" "$expected" "\${actual:-curl-error}" "$path" >&2
+  return 1
+}
 if [[ "$with_admin" == 1 ]]; then
   expect_status 200 "$browser/"
   expect_status 404 "$browser/healthz"
@@ -5245,22 +5480,26 @@ timestamp=$(date +%s); nonce=$(openssl rand -hex 32); body_hash=$(printf "{}" | 
 canonical=$(printf "moox-gateway-auth-v1\n%s\nPOST\n%s\n\n\n%s\n%s\n%s\n%s" "$MOOX_GATEWAY_CALLER" "$path" "$body_hash" "$timestamp" "$nonce" "$node_id")
 signature=$(printf %s "$canonical" | openssl dgst -sha256 -hmac "$MOOX_GATEWAY_SERVICE_SECRET_KEY" | awk "{print \$NF}")
 expected=404; [[ "$with_admin" == 0 ]] || expected=200
-expect_status "$expected" -X POST -H "Content-Type: application/json" \
-  -H "X-Moox-Key-Id: $MOOX_GATEWAY_SERVICE_KEY_ID" -H "X-Moox-Caller: $MOOX_GATEWAY_CALLER" -H "X-Moox-Timestamp: $timestamp" \
-  -H "X-Moox-Nonce: $nonce" -H "X-Moox-Target-Node: $node_id" -H "X-Moox-Signature: $signature" \
-  --data "{}" "$service$path"'
+expect_signed_status "$expected" "$path"
+if [[ "$with_admin" == 0 && "$with_trade" == 1 ]]; then
+  path=/api/service/trade_console/GetExecutionCapabilities
+  timestamp=$(date +%s); nonce=$(openssl rand -hex 32); body_hash=$(printf "{}" | openssl dgst -sha256 | awk "{print \$NF}")
+  canonical=$(printf "moox-gateway-auth-v1\n%s\nPOST\n%s\n\n\n%s\n%s\n%s\n%s" "$MOOX_GATEWAY_CALLER" "$path" "$body_hash" "$timestamp" "$nonce" "$node_id")
+  signature=$(printf %s "$canonical" | openssl dgst -sha256 -hmac "$MOOX_GATEWAY_SERVICE_SECRET_KEY" | awk "{print \$NF}")
+  expect_signed_status 200 "$path"
+fi'
   if is_local_target; then
-    bash -c "${verify_script}" _ "$(expand_local_path "${DEPLOY_DIR}")/certs/caddy/root.crt" "${browser}" "${service}" "$(expand_local_path "${DEPLOY_DIR}")/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" "${TLS_MODE_RESOLVED}" || {
+    bash -c "${verify_script}" _ "$(expand_local_path "${DEPLOY_DIR}")/certs/caddy/root.crt" "${browser}" "${service}" "$(expand_local_path "${DEPLOY_DIR}")/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" "${TLS_MODE_RESOLVED}" "${WITH_TRADE}" || {
       "$(expand_local_path "${DEPLOY_DIR}")/lib/caddy-managed.sh" rollback --deploy-dir "$(expand_local_path "${DEPLOY_DIR}")" || true
       fail "public HTTPS acceptance failed"
     }
   elif [[ -n "${FETCHED_CA_FILE}" ]]; then
-    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" "${TLS_MODE_RESOLVED}" <<<"${verify_script}" || {
+    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" "${TLS_MODE_RESOLVED}" "${WITH_TRADE}" <<<"${verify_script}" || {
       ssh -o BatchMode=yes "${TARGET}" "$(shell_quote "${DEPLOY_DIR%/}/lib/caddy-managed.sh") rollback --deploy-dir $(shell_quote "${DEPLOY_DIR}")" || true
       fail "public HTTPS acceptance failed"
     }
   else
-    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" "${TLS_MODE_RESOLVED}" <<<"${verify_script}" || {
+    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" "${TLS_MODE_RESOLVED}" "${WITH_TRADE}" <<<"${verify_script}" || {
       ssh -o BatchMode=yes "${TARGET}" "$(shell_quote "${DEPLOY_DIR%/}/lib/caddy-managed.sh") rollback --deploy-dir $(shell_quote "${DEPLOY_DIR}")" || true
       fail "remote public HTTPS acceptance failed"
     }

@@ -353,6 +353,14 @@ func (a *Adapter) GetOrder(ctx context.Context, symbol shared.ExchangeSymbol, cl
 		return exchange.Order{}, fmt.Errorf("paper: symbol mismatch")
 	}
 	result := orderFromRecord(row)
+	// A crash can happen after the local Paper matcher accepted PlaceOrder but
+	// before the execution result was persisted. Paper order IDs are derived
+	// solely from account and client ID, so reconstruct the deterministic
+	// exchange identity instead of leaving SubmitUnknown permanently stuck.
+	if result.ExchangeOrderID == "" && (row.State == "SUBMITTING" || row.State == "SUBMIT_UNKNOWN") {
+		result.ExchangeOrderID = paperOrderID(a.Account.TradingAccountID, row.ClientOrderID)
+		result.Status = exchange.OrderStatusOpen
+	}
 	// Paper cancellation is local and deterministic. Returning the terminal
 	// exchange view lets the normal account sync path run ConfirmCancel and
 	// release the persisted reservation in the same reducer used by Live.

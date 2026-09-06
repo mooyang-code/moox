@@ -19,7 +19,7 @@
 
 | 任务 | 当前状态 | 证据/待办 |
 | --- | --- | --- |
-| T01 基线与红测 | 执行中 | 授权、人工 unknown、OKX费用行为红测已复现；现代目标全链E2E仍待T11集成 |
+| T01 基线与红测 | 已完成 | 基线、三类行为红测和现代全链用例均已落库；正式环境验收仍单列于T11 |
 | T02 session 授权与幂等 | 已完成 | `839255b2`；独立 codeCR 和增量复核闭环，主 Agent race 复验通过 |
 | T03 人工未知提交恢复 | 已完成 | `34e92f78`；durable恢复、错误身份/终态校验、deadline和Paper报价闭环；新起codeCR及主Agent复验通过 |
 | T04 OKX 单笔成交费用 | 已完成 | `e2162efa`；signed cost、fillTime排序、不可变重放及真实Paper余额；新Agent/codeCR复核闭环 |
@@ -28,8 +28,8 @@
 | T07 消息结果可观测 | 已完成 | `1a941da7`；真实Runner、四包race、组件及生产构建通过；独立codeCR所有增量发现闭环 |
 | T08 动态账户路由 | 已完成 | 总量与路由分离、共享真实容量、定向唤醒和旧 pin 安全切换；三个新 codeCR 无剩余 P0-P2，主 Agent 全量/race/vet 复验通过 |
 | T09 普通 SubmitOrder | 已完成 | `33e0eb0b`；ControlMode、无损迁移、普通受理/恢复、proto/RPC/Web API，独立 codeCR 无剩余 P0-P2，主 Agent 全量/定向 race 复验通过 |
-| T10 契约与控制台 | 执行中 | 已补控制台、现代生产流水线集成、隔离 NATS/Paper 成交和全类型 OperatorWorker 健康复核；现代旧协议清理、跨节点 Gateway 接线和实例创建失败恢复仍待闭环 |
-| T11 完整验收与交付 | 未开始 | 全量/race/vet/协议/Web/隔离 NATS/新 Agent 审查/发布/正式 Paper E2E |
+| T10 契约与控制台 | 已完成（源码/隔离验收） | 现代事件、Gateway 注册链、控制台、全类型 OperatorWorker 健康、实例恢复和旧自动执行路径清理已完成；正式节点 applied snapshot 仍须T11核验 |
+| T11 完整验收与交付 | 执行中 | 本地全量/race/vet/协议/Web/隔离 NATS 和 Paper 已通过；正式 Trade 发布及 control-plane 接线受 SSH/凭据可达性阻塞，不能据此宣称完成 |
 
 ## 已执行验证
 
@@ -225,4 +225,27 @@ T02 正式红测：`TestModernSessionTargetCanResume` 因 `target runner does no
 
 ## 最终验收证据
 
+### T10 Gateway 与实例恢复增量（2026-09-06）
+
+- 新增生产 Strategy HTTPS/HMAC Trade 客户端及专用 `trade` 配置，保持 Space 透传和最小 `trade_owner` 方法权限。客户端配置不再被本地 native Gateway 环境变量覆盖。直接 HTTP fixture 不算 Gateway 验证。
+- 三进程真实 TLS Gateway/Trade HTTP/Paper Store 授权 E2E 已由主 Agent 在 `GOFLAGS=-race` 下复验：认领一次、释放一次、SubmitOrder 为零；缺失/错误 CA、错误签名/节点、跨 Space、越权方法均拒绝。该证据仅覆盖授权，不是部署或成交证明。
+- CreateStrategyInstance 持久插入后的 Claim/启用/查询失败保留恢复身份；同 ID 同配置不重新 Claim，异配置不覆盖。未知 session 保留，明确拒绝后的清理错误不吞掉。Web 通用错误对象保留返回体。旧 UpdateRunner 在 RPC 和 Store CAS 两层禁止修改仍持有 session 的实例。
+- 独立 `review_instance_recovery` 的 P1 旧 UpdateRunner 干扰已修复并复核；“全局唯一实例 ID 可探测占用”不构成新增字段泄露，审查者撤回该项。没有以测试成功代替跨 Space 返回字段检查。
+- 独立 Gateway 审查发现实际部署仅 seed 到 Admin 本节点、setup Trade 发布未注册 ownership 路由，以及 target_node 单独配置被延迟到运行期失败。正在闭环两条注册链，必须由新 codeCR 审查后才记录其完成；手工构造的 snapshot 不再被当作部署证据。
+- 本轮配置红测确认缺 URL、非法控制字符 node、仅 node 环境变量，以及 Admin 无法注册的大小写/点号 node 均被错误接受。修复后与 Admin 的小写字母/数字/连字符/下划线规则一致；Bootstrap 整包 race 通过。RPC/Store 整包 race、三包 vet、Web 全量 62 文件 236 测试和 vue-tsc 均通过。
+- 新 `review_instance_response_final` 独立复核无剩余 P1/P2，另行通过 RPC/Store race、Web 全量及类型检查。该项提交 `a1e6f757`；旧 `legacyCompiled` 的进程缓存不扩展为兼容层，必须随旧 Runner API 在 T10 删除，当前中间版本不单独发布。
+- 主 Agent 本轮完整 Trade/Strategy/events 测试、Gateway/Admin/CLI 注册相关全包测试和 race、完整相关 vet 均通过；Strategy/control-only 打包契约通过。运维文档已移除清库/删除 Stream 的破坏式步骤，替换为事实保留、受控升级、版本协调和正式 Paper 验收门禁。
+- 主库文档提交 `16a60ea5` 的配置与真实节点注册验收门禁已同步到执行计划；保留此工作区已有执行记录，不整体覆盖成全未执行或全已执行。
+- 仍需完成：最终旧协议和启动 reconciliation 清理、注册链审查及集成、全目标最终审查、生产发布、正式隔离 Paper 的真实策略到成交及重启验收。上述本地进展不勾选 T10/T11 的整体完成项。
+
 尚无。必须记录最终源码 SHA、独立审查闭环、实际部署二进制 SHA/进程、正式隔离 Space/账户/策略标识、目标和订单/Fill 标识、余额/持仓断言、重启恢复和测试资源停用结果。任何一项缺失都不得标记目标完成。
+
+## 最后一轮源码与隔离验收（2026-09-06）
+
+- 完成旧自动执行兼容路径收敛：Strategy outbox 仅从 `t_strategy_results` 读取并发布现代 `LogicalAccountTargetWeightRequested`；删除 `t_strategy_outbox` 双读/删除分支、旧 owner 自动 reconciliation 和旧 Rebind 授权入口。历史表/字段只保留在事实读取与审计模型中，不参与新目标授权。
+- 最新未提交增量包含固定精度的跨交易所逻辑数量、Gateway/Space ACL、Strategy HTTP 11433 配置与迁移、Result outbox 限额及永久错误隔离；相关定向包测试通过。嵌入式前端已重新执行 `make -C web-host statik`。
+- 验证通过：`go test -count=1 ./modules/trade/...`、`./modules/strategy/...`、`./modules/admin/...`、`./modules/cli/...`；相关 Trade/Strategy/Admin/CLI race；相关 `go vet`；`git diff --check`；`bash scripts/test/contract/test-deploy-moox-strategy.sh`；`bash scripts/test/contract/test-deploy-moox-control-profile.sh`；`env GOFLAGS=-race bash scripts/test/e2e/test-strategy-trade-event-e2e.sh`；`env GOFLAGS=-race bash scripts/test/e2e/test-strategy-trade-gateway-e2e.sh`；Web 62 文件/236 测试、`vue-tsc --noEmit`、`pnpm run build:prod`。`make verify-pr` 的 `proto-check` 因工作树存在既有未提交基线而停止；`check-module-boundaries` 仍被 Storage 配置中的历史 `durable` 命名规则阻断，均非本任务 Trade 行为回归。
+- Linux/amd64 重新构建 `moox-trade`、`moox-trade-cli`、`moox-strategy`、`moox-admin`、`moox-gateway` 和 `moox-web-host` 均成功。源码尚未形成最终提交 SHA，正式发布前还必须提交、推送并重新构建记录完整 SHA。
+- 正式发布尝试：专用 Trade 节点 `ubuntu@43.132.204.177` 可 SSH，现有 `/home/ubuntu/moox/trade-move` 缺少新部署脚本要求的 `config/components.env`，不能安全走 component overlay；control host `ubuntu@106.53.107.122` 当前 BatchMode SSH 不可达。未绕过部署门禁直接覆盖二进制，未停止现役进程，未修改生产数据库或开关。需补齐已授权控制面凭据/注册链后再执行正式发布。
+- 隔离 Paper 真实链路已验收：`crypto` / `paper-account-230bef26ed938b41` / `paper-logical-230bef26ed938b41`，策略事件经 Strategy Processor -> Outbox -> NATS -> Trade Consumer/Receipt -> Worker/Paper Matcher；订单 `ZHIujZQJpQAc9Amh5XY-1`、Paper order `paper-order-9989b96f6709d5082121ab7f`、Fill `paper-account-...:mtdaelt2u9vsd9i6rrn1bg`，成交 0.12504 @ 79974.25，重投不重复；重启后仍 PAPER/ready、receipt hash/order/fill 保留。该资源为隔离测试资源，未连接实盘。
+- 新一轮独立 `codeCR` 正在基于上述最后源码增量审查；在其完成且主 Agent 核验前，不标记最终交付完成。当前唯一硬阻塞是正式 control-plane 接线与生产节点应用快照核验。

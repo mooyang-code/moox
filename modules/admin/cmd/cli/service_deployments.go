@@ -83,6 +83,8 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 	onlyServices := ""
 	tradeConsoleHost := ""
 	tradeConsolePort := 11200
+	tradeGatewayURL := ""
+	tradeGatewayNode := ""
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
 	fs.StringVar(&seedPath, "file", seedPath, "service deployment seed YAML")
 	fs.StringVar(&nodeID, "node-id", nodeID, "override the seed node ID")
@@ -94,6 +96,8 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 	fs.StringVar(&onlyServices, "only-services", "", "comma-separated services to import; all other seed services are ignored")
 	fs.StringVar(&tradeConsoleHost, "trade-console-host", "", "TradeConsole browser endpoint host for a dedicated Trade node")
 	fs.IntVar(&tradeConsolePort, "trade-console-port", 11200, "TradeConsole browser endpoint port")
+	fs.StringVar(&tradeGatewayURL, "trade-gateway-url", "", "authenticated Trade Gateway HTTPS origin for the Admin BFF")
+	fs.StringVar(&tradeGatewayNode, "trade-gateway-node", "", "authenticated Trade Gateway node ID for the Admin BFF")
 	if err := fs.Parse(args[2:]); err != nil {
 		return err
 	}
@@ -129,6 +133,9 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 		if err := selectSeedServices(&seed, onlyServices); err != nil {
 			return err
 		}
+		if err := enableScopedTradeConsoleRoute(&seed); err != nil {
+			return err
+		}
 	}
 	if err := validateServiceDeploymentSeed(seed); err != nil {
 		return err
@@ -142,6 +149,9 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 		return err
 	}
 	if err := setSeedTradeConsoleEndpoint(&seed, tradeConsoleHost, tradeConsolePort); err != nil {
+		return err
+	}
+	if err := setSeedTradeGatewayPlacement(&seed, tradeGatewayURL, tradeGatewayNode); err != nil {
 		return err
 	}
 	if strings.TrimSpace(onlyServices) != "" {
@@ -333,9 +343,8 @@ func setSeedTradeConsoleEndpoint(seed *serviceDeploymentSeed, rawHost string, po
 	if rawHost != host {
 		return errors.New("--trade-console-host must not contain surrounding whitespace")
 	}
-	ip := net.ParseIP(host)
-	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return errors.New("--trade-console-host must be a routable IP address")
+	if !validTradeConsoleHost(host) {
+		return errors.New("--trade-console-host must be a routable IP address or DNS name")
 	}
 	if port < 1 || port > 65535 {
 		return errors.New("--trade-console-port must be between 1 and 65535")
@@ -355,6 +364,105 @@ func setSeedTradeConsoleEndpoint(seed *serviceDeploymentSeed, rawHost string, po
 		return errors.New("service deployment seed is missing trade_console")
 	}
 	return nil
+}
+
+func validTradeConsoleHost(host string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		return !ip.IsLoopback() && !ip.IsUnspecified() && !ip.IsMulticast() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast()
+	}
+	if len(host) == 0 || len(host) > 253 || strings.Contains(host, "..") {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, ch := range label {
+			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// enableScopedTradeConsoleRoute turns the otherwise control-only browser row
+// into an authenticated route when a deployment seed is intentionally scoped
+// to a remote Trade node. The full control seed remains non-gateway-enabled.
+func enableScopedTradeConsoleRoute(seed *serviceDeploymentSeed) error {
+	if seed == nil || seed.Node.ID == "control" {
+		return nil
+	}
+	if !hasSeedService(*seed, "trade_console") {
+		return nil
+	}
+	for i := range seed.Services {
+		if seed.Services[i].Name != "trade_console" {
+			continue
+		}
+		seed.Services[i].GatewayEnabled = true
+		seed.Services[i].GatewayService = "trade_console"
+		seed.Services[i].Protocol = "http"
+		seed.Services[i].Host = "127.0.0.1"
+		seed.Services[i].Port = 11200
+		seed.Services[i].Status = "active"
+		seed.Services[i].ExtraConfig = map[string]any{
+			"gateway_methods": []any{
+				"CreateTradingAccount", "UpdateTradingAccount", "GetTradingAccount", "ListTradingAccounts",
+				"SetLeverage", "SyncTradingAccount", "CreateLogicalAccount", "GetLogicalAccount",
+				"ListLogicalAccounts", "UpdateLogicalAccount", "AddLogicalAccountMember", "RemoveLogicalAccountMember",
+				"PauseLogicalAccount", "ResumeLogicalAccount", "FlattenLogicalAccount", "PlaceManualOrder",
+				"SubmitOrder", "CancelOrder", "GetOperatorAction", "GetLogicalAccountTarget", "GetOrder",
+				"ListOrders", "ListFills", "ListPositions", "CreatePaperSimulation", "ClosePaperSimulation",
+				"GetExecutionCapabilities", "QueryEquityCurve", "ListHoldings",
+			},
+			"gateway_callers": []any{"admin-gateway"},
+			"monitor_enabled": false,
+			"managed_by":      "moox-cli",
+		}
+		return nil
+	}
+	return errors.New("service deployment seed is missing trade_console")
+}
+
+func setSeedTradeGatewayPlacement(seed *serviceDeploymentSeed, rawURL, rawNode string) error {
+	if seed == nil {
+		return errors.New("service deployment seed is required")
+	}
+	rawURL, rawNode = strings.TrimSpace(rawURL), strings.TrimSpace(rawNode)
+	if rawURL == "" && rawNode == "" {
+		return nil
+	}
+	if rawURL == "" || rawNode == "" || !serviceDeploymentNodeIDPattern.MatchString(rawNode) {
+		return errors.New("--trade-gateway-url and --trade-gateway-node are required together")
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("--trade-gateway-url must be an origin without credentials, path, query, or fragment")
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "https" && scheme != "http" {
+		return errors.New("--trade-gateway-url must use HTTPS")
+	}
+	if scheme == "http" {
+		host := strings.ToLower(parsed.Hostname())
+		ip := net.ParseIP(host)
+		if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return errors.New("--trade-gateway-url must use HTTPS")
+		}
+	}
+	for i := range seed.Services {
+		if seed.Services[i].Name != "trade_console" {
+			continue
+		}
+		if seed.Services[i].ExtraConfig == nil {
+			seed.Services[i].ExtraConfig = map[string]any{}
+		}
+		seed.Services[i].ExtraConfig["gateway_url"] = rawURL
+		seed.Services[i].ExtraConfig["gateway_node"] = rawNode
+		return nil
+	}
+	return errors.New("service deployment seed is missing trade_console")
 }
 
 func disableOptionalStorageShard(seed *serviceDeploymentSeed) error {

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +22,6 @@ import (
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"gorm.io/gorm"
 )
 
 type PeriodReady struct {
@@ -127,7 +125,7 @@ type Processor struct {
 	PoolRegistry *input.UDFRegistry
 	// Compile rebuilds executable expressions and the dependency snapshot for
 	// a persisted DSL. Production supplies a compiler backed by the Factor and
-	// Storage catalogs; tests and legacy embedders may omit it and use the
+	// Storage catalogs; tests and embedded callers may omit it and use the
 	// lightweight DSL fallback below.
 	Compile func(context.Context, config.DSL, string) (compiler.CompiledStrategy, error)
 	// CompileWithBindings is the production path for instance-specific fields;
@@ -135,7 +133,7 @@ type Processor struct {
 	// attached to the shared DSL artifact.
 	CompileWithBindings func(context.Context, config.DSL, string, json.RawMessage) (compiler.CompiledStrategy, error)
 	// VerifyDependencies is optional for embedded/test processors. Production
-	// bootstrap supplies the compiler-backed verifier so a running Runner is
+	// bootstrap supplies the compiler-backed verifier so a running instance is
 	// not allowed to consume a Factor that changed after it was compiled.
 	VerifyDependencies func(context.Context, compiler.CompiledStrategy) error
 	// Diagnostic receives non-fatal per-event evaluation errors. The trigger
@@ -143,13 +141,8 @@ type Processor struct {
 	// use this hook to make skipped evaluations observable without coupling the
 	// processor to a logging implementation.
 	Diagnostic func(error)
-	// OwnerGeneration validates and snapshots the legacy Trade logical-account
-	// lifecycle token. It is used only by the legacy Runner adapter; modern
-	// target events use instance_id + session_id instead.
-	OwnerGeneration func(context.Context, string, string, string) (int64, error)
 	// SessionGeneration is the session-aware variant used by modern instances.
-	// It must validate instance_id and session_id together; the legacy
-	// OwnerGeneration callback only understands owner_runner_id.
+	// It must validate instance_id and session_id together.
 	SessionGeneration func(context.Context, string, string, string, string) (int64, error)
 	Now               func() time.Time
 }
@@ -168,272 +161,17 @@ func (p *Processor) Handle(ctx context.Context, event PeriodReady) error {
 	if inbox == nil {
 		inbox = p.Store
 	}
-	barEnd, storagePeriod := effectivePeriodTimes(event)
 	processed, err := inbox.IsProcessed(ctx, event.MessageID)
 	if err != nil || processed {
 		return err
 	}
-	// New instances are evaluated from the persisted DSL on every process
-	// start. Keep the legacy path below only as a source adapter for old
-	// embedders; it is never used for a valid current DSL definition.
-	_, modernErr := p.handleInstances(ctx, inbox, event)
-	// Degraded and legacy readiness markers are terminal for the compatibility
-	// path. Modern instances have already checked only their referenced
-	// bindings above, so an unrelated degraded binding cannot suppress them.
-	// A source View degradation has no per-binding detail and is unusable.
-	// Factor result Views do carry binding states, so defer the decision until
-	// each compiled runner can check only the bindings it references.
-	if event.Status != "" && event.Status != "complete" && len(event.BindingStatuses) == 0 {
-		if modernErr != nil {
-			return modernErr
-		}
-		return inbox.MarkProcessed(ctx, event.MessageID, event.EventName, p.now())
-	}
-	runners, err := p.Store.ListRunners(ctx, store.RunnerFilter{SpaceID: event.SpaceID, Status: domain.RunnerStatusEnabled})
-	if err != nil {
+	if err := p.handleInstances(ctx, event); err != nil {
 		return err
-	}
-	var retryErr error
-	for _, runner := range runners {
-		strategy, getErr := p.Store.GetStrategy(ctx, runner.StrategyID)
-		if getErr != nil {
-			_ = p.Store.RecordRunnerFailure(ctx, runner.ID, getErr, p.now())
-			if !errors.Is(getErr, gorm.ErrRecordNotFound) && retryErr == nil {
-				retryErr = getErr
-			}
-			continue
-		}
-		var compiled compiler.CompiledStrategy
-		if len(strategy.CompiledJSON) == 0 || json.Unmarshal(strategy.CompiledJSON, &compiled) != nil {
-			_ = p.Store.RecordRunnerFailure(ctx, runner.ID, fmt.Errorf("strategy %s has no compiled artifact", strategy.ID), p.now())
-			continue
-		}
-		if !dependsOnEvent(compiled, event) {
-			continue
-		}
-		if p.VerifyDependencies != nil {
-			if verifyErr := p.VerifyDependencies(ctx, compiled); verifyErr != nil {
-				_ = p.Store.RecordRunnerFailure(ctx, runner.ID, verifyErr, p.now())
-				if !errors.Is(verifyErr, compiler.ErrDependencyMismatch) && retryErr == nil {
-					retryErr = verifyErr
-				}
-				continue
-			}
-		}
-		// The current runtime contract has one immutable Result View per
-		// strategy. Older compiled artifacts may still contain several; do not
-		// evaluate them with a partial generation map.
-		if compiledResultViewCount(compiled) > 1 {
-			_ = p.Store.RecordRunnerFailure(ctx, runner.ID, fmt.Errorf("strategy %s references multiple factor result Views", strategy.ID), p.now())
-			continue
-		}
-		if runner.LastResultID != nil {
-			last, resultErr := p.Store.GetResult(ctx, *runner.LastResultID)
-			if resultErr == nil && barEnd.Before(last.PeriodTime) {
-				continue
-			}
-		}
-		if !aligned(event.PeriodTime, runner.Frequency, compiled.Schedule.Every) {
-			continue
-		}
-		var evaluationInput input.EvaluationInput
-		var loadErr error
-		if indexed, ok := p.Loader.(IndexedInputLoader); ok {
-			expected := map[string]string{}
-			if event.SourceIndexID != "" {
-				expected[compiled.SourceView.ID] = event.SourceIndexID
-			}
-			if event.ResultIndexID != "" {
-				for _, factor := range compiled.Factors {
-					if factor.ResultViewID != "" && factor.ResultViewID == event.ViewID {
-						expected[factor.ResultViewID] = event.ResultIndexID
-					}
-				}
-			}
-			if event.SourceIndexRevision != 0 {
-				expected[compiled.SourceView.ID] = expected[compiled.SourceView.ID] + "\x00" + fmt.Sprint(event.SourceIndexRevision)
-			}
-			if event.ResultIndexRevision != 0 {
-				for _, factor := range compiled.Factors {
-					if factor.ResultViewID != "" && factor.ResultViewID == event.ViewID {
-						expected[factor.ResultViewID] = expected[factor.ResultViewID] + "\x00" + fmt.Sprint(event.ResultIndexRevision)
-					}
-				}
-			}
-			if len(expected) == 0 {
-				// Compatibility markers from before index provenance can never
-				// become valid by redelivery. Record the runner failure and ACK the
-				// event instead of retrying it forever on an unlimited consumer.
-				loadErr = fmt.Errorf("%w: View-ready event has no index provenance", input.ErrLegacyProvenance)
-			} else {
-				evaluationInput, loadErr = indexed.LoadAt(ctx, runner, compiled, storagePeriod.UTC(), expected)
-			}
-		} else {
-			evaluationInput, loadErr = p.Loader.Load(ctx, runner, compiled, storagePeriod.UTC())
-		}
-		if loadErr != nil {
-			if errors.Is(loadErr, input.ErrLegacyProvenance) {
-				_ = p.Store.RecordRunnerFailure(ctx, runner.ID, loadErr, p.now())
-				continue
-			}
-			if errors.Is(loadErr, compiler.ErrDependencyMismatch) {
-				// A permanently removed or invalidated View/column cannot be
-				// repaired by redelivery of this ready marker. ACK after recording
-				// the runner failure rather than retrying forever.
-				_ = p.Store.RecordRunnerFailure(ctx, runner.ID, loadErr, p.now())
-				continue
-			}
-			if errors.Is(loadErr, input.ErrStaleViewSnapshot) {
-				// A newer View generation supersedes this readiness delivery. ACK
-				// instead of filling the unlimited-delivery consumer with a message
-				// that can never satisfy its old generation fence.
-				_ = p.Store.RecordRunnerFailure(ctx, runner.ID, loadErr, p.now())
-				continue
-			}
-			if errors.Is(loadErr, input.ErrStrictIncomplete) {
-				// A terminal degraded Factor-ready marker is authoritative: the
-				// selected subject/column will not be repaired by another delivery.
-				// ACK it after recording the failure instead of poisoning the
-				// unlimited-delivery consumer forever. Complete markers remain
-				// retryable because a View rebuild can still be catching up.
-				_ = p.Store.RecordRunnerFailure(ctx, runner.ID, loadErr, p.now())
-				var incomplete *input.StrictIncompleteError
-				terminal := terminalReadyForRunner(compiled, event)
-				if errors.As(loadErr, &incomplete) {
-					resolvedPool := make([]input.InstrumentInput, len(incomplete.Pool.Items))
-					for i, item := range incomplete.Pool.Items {
-						resolvedPool[i].PoolItem = item
-					}
-					terminal = terminalReadyForRunner(compiled, event, resolvedPool)
-				}
-				if terminal {
-					continue
-				}
-				if retryErr == nil {
-					retryErr = loadErr
-				}
-				continue
-			}
-			if errors.Is(loadErr, input.ErrNotReady) {
-				if retryErr == nil {
-					retryErr = loadErr
-				}
-			}
-			_ = p.Store.RecordRunnerFailure(ctx, runner.ID, loadErr, p.now())
-			continue
-		}
-		// Verify again after the View read to narrow the metadata/data TOCTOU
-		// window. A changed Factor/Binding is recorded and this period is not
-		// evaluated under a potentially stale compiled artifact.
-		if p.VerifyDependencies != nil {
-			if verifyErr := p.VerifyDependencies(ctx, compiled); verifyErr != nil {
-				_ = p.Store.RecordRunnerFailure(ctx, runner.ID, verifyErr, p.now())
-				if !errors.Is(verifyErr, compiler.ErrDependencyMismatch) && retryErr == nil {
-					retryErr = verifyErr
-				}
-				continue
-			}
-		}
-		if !requiredBindingsReady(compiled, event, evaluationInput.Items) {
-			// The event is terminal for this period. Do not retry forever because
-			// an unrelated binding or subject in the same result View was degraded.
-			continue
-		}
-		inputHash, hashErr := input.Hash(evaluationInput)
-		if hashErr != nil {
-			_ = p.Store.RecordRunnerFailure(ctx, runner.ID, hashErr, p.now())
-			continue
-		}
-		evaluation, evalErr := selection.Evaluate(manifestFromCompiled(compiled), evaluationInput)
-		if evalErr != nil {
-			_ = p.Store.RecordRunnerFailure(ctx, runner.ID, evalErr, p.now())
-			continue
-		}
-		// Recheck after the pure evaluation as well. This closes the remaining
-		// practical window between reading the View and committing a target when
-		// an administrator replaces a Factor/Binding during a long ranking run.
-		if p.VerifyDependencies != nil {
-			if verifyErr := p.VerifyDependencies(ctx, compiled); verifyErr != nil {
-				_ = p.Store.RecordRunnerFailure(ctx, runner.ID, verifyErr, p.now())
-				if !errors.Is(verifyErr, compiler.ErrDependencyMismatch) && retryErr == nil {
-					retryErr = verifyErr
-				}
-				continue
-			}
-		}
-		eval := domain.Evaluation{Action: domain.ActionRebalance, DebugInfo: map[string]any{"selection": evaluation.Debug}}
-		var ownerGeneration int64
-		if runner.LogicalAccountID != nil && p.OwnerGeneration != nil {
-			generation, generationErr := p.OwnerGeneration(ctx, event.SpaceID, *runner.LogicalAccountID, runner.ID)
-			if generationErr != nil {
-				_ = p.Store.RecordRunnerFailure(ctx, runner.ID, generationErr, p.now())
-				if retryErr == nil {
-					retryErr = generationErr
-				}
-				continue
-			}
-			if generation <= 0 {
-				generationErr = fmt.Errorf("logical account %s has no active owner generation", *runner.LogicalAccountID)
-				_ = p.Store.RecordRunnerFailure(ctx, runner.ID, generationErr, p.now())
-				if retryErr == nil {
-					retryErr = generationErr
-				}
-				continue
-			}
-			ownerGeneration = generation
-			eval.DebugInfo["owner_generation"] = generation
-		}
-		if len(evaluationInput.Ineligible) > 0 {
-			eval.DebugInfo["ineligible"] = evaluationInput.Ineligible
-		}
-		for _, target := range evaluation.Targets {
-			eval.Targets = append(eval.Targets, domain.InstrumentTarget{InstrumentID: target.InstrumentID, TargetWeight: target.TargetWeight})
-		}
-		if runner.LastResultID != nil && sameTargets(runner.CurrentTargetsJSON, eval.Targets) {
-			eval.Action = domain.ActionHold
-		}
-		result := domain.StrategyResult{ID: resultID(event.MessageID, runner.ID, barEnd), RunnerID: runner.ID, StrategyID: runner.StrategyID, PeriodTime: barEnd.UTC(), InputHash: inputHash, Action: eval.Action, CreatedAt: p.now()}
-		outcome, commitErr := p.Store.CommitEvaluation(ctx, store.CommitEvaluationRequest{Result: result, Evaluation: eval, OwnerGeneration: ownerGeneration})
-		if commitErr != nil {
-			_ = p.Store.RecordRunnerFailure(ctx, runner.ID, commitErr, p.now())
-			if !errors.Is(commitErr, store.ErrRunnerNotEnabled) && !errors.Is(commitErr, store.ErrLogicalResultConflict) && retryErr == nil {
-				retryErr = commitErr
-			}
-			continue
-		}
-		if ownerGeneration > 0 && p.OwnerGeneration != nil && runner.LogicalAccountID != nil {
-			currentGeneration, generationErr := p.OwnerGeneration(ctx, event.SpaceID, *runner.LogicalAccountID, runner.ID)
-			if generationErr != nil || currentGeneration != ownerGeneration {
-				invalidateErr := p.Store.InvalidateEvaluation(ctx, runner.ID, outcome.Result.ID, p.now())
-				if generationErr == nil {
-					generationErr = fmt.Errorf("logical account %s owner generation changed during evaluation", *runner.LogicalAccountID)
-				}
-				if invalidateErr != nil {
-					generationErr = errors.Join(generationErr, fmt.Errorf("invalidate stale evaluation: %w", invalidateErr))
-				}
-				_ = p.Store.RecordRunnerFailure(ctx, runner.ID, generationErr, p.now())
-				if retryErr == nil {
-					retryErr = generationErr
-				}
-			}
-		}
-	}
-	if modernErr != nil {
-		if retryErr != nil {
-			return errors.Join(modernErr, retryErr)
-		}
-		return modernErr
-	}
-	if retryErr != nil {
-		return retryErr
 	}
 	return inbox.MarkProcessed(ctx, event.MessageID, event.EventName, p.now())
 }
 
-func (p *Processor) handleInstances(ctx context.Context, inbox interface {
-	IsProcessed(context.Context, string) (bool, error)
-	MarkProcessed(context.Context, string, string, time.Time) error
-}, event PeriodReady) (bool, error) {
+func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) error {
 	// robfig/cron starts each job in its own goroutine, while ready events are
 	// consumed independently. Serialize the modern path so stateful signal
 	// rules cannot evaluate two periods from the same stale predecessor.
@@ -441,9 +179,8 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 	defer p.evaluationMu.Unlock()
 	instances, err := p.Store.ListInstances(ctx, event.SpaceID, ptrBool(true))
 	if err != nil || len(instances) == 0 {
-		return false, err
+		return err
 	}
-	modern := false
 	var retryErr error
 	barEnd, storagePeriod := effectivePeriodTimes(event)
 	for _, instance := range instances {
@@ -459,8 +196,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 		}
 		dsl, parseErr := config.Parse([]byte(definition.DSLYaml))
 		if parseErr != nil {
-			// A row containing a legacy manifest is handled by the compatibility
-			// processor below, so do not ACK it as a modern evaluation.
+			p.reportDiagnostic(fmt.Errorf("instance %s parse definition: %w", instance.InstanceID, parseErr))
 			continue
 		}
 		// Ready events carry the Storage BarStart but not the strategy calendar.
@@ -537,10 +273,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 			continue
 		}
 		// Only claim the delivery once this instance is routed to the same
-		// source/factor View. In a Space that still contains legacy runners, an
-		// unrelated modern definition must not short-circuit the compatibility
-		// path merely because it uses the same event name.
-		modern = true
+		// source/factor View. An unrelated instance must not affect this delivery.
 		if event.TargetInstanceID != "" && hasCompiledFactorBindings(compiled) {
 			// A timer wake-up has no Factor source/result index provenance. Do not
 			// combine a newly revised source row with an older factor row; the
@@ -689,7 +422,7 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 				// A scheduled wake-up owns this bar and must keep retrying while
 				// Storage/Factor finishes publishing it. Ready events carrying a
 				// terminal degraded binding are acknowledged instead.
-				if event.TargetInstanceID != "" || !terminalReadyForRunner(compiled, event) {
+				if event.TargetInstanceID != "" || !terminalReadyForInstance(compiled, event) {
 					if retryErr == nil {
 						retryErr = err
 					}
@@ -760,16 +493,11 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 		if len(states) == 0 {
 			states = json.RawMessage(`{}`)
 		}
-		if instance.LogicalAccountID != nil && (p.SessionGeneration != nil || p.OwnerGeneration != nil) {
+		if instance.LogicalAccountID != nil && p.SessionGeneration != nil {
 			var generationErr error
-			if p.SessionGeneration != nil {
-				// Modern targets are fenced by instance_id + session_id. The
-				// callback name is retained for compatibility, but its numeric
-				// generation is not part of the modern event contract.
-				_, generationErr = p.SessionGeneration(ctx, event.SpaceID, *instance.LogicalAccountID, instance.InstanceID, valueOrEmpty(instance.SessionID))
-			} else {
-				_, generationErr = p.OwnerGeneration(ctx, event.SpaceID, *instance.LogicalAccountID, instance.InstanceID)
-			}
+			// Modern targets are fenced by instance_id + session_id. The numeric
+			// return value is not part of the event contract.
+			_, generationErr = p.SessionGeneration(ctx, event.SpaceID, *instance.LogicalAccountID, instance.InstanceID, valueOrEmpty(instance.SessionID))
 			if generationErr != nil {
 				p.reportDiagnostic(fmt.Errorf("instance %s owner generation: %w", instance.InstanceID, generationErr))
 				if retryErr == nil {
@@ -836,23 +564,10 @@ func (p *Processor) handleInstances(ctx context.Context, inbox interface {
 			}
 		}
 	}
-	if modern {
-		if retryErr != nil {
-			return true, retryErr
-		}
-		// ACK is owned by Handle after the legacy compatibility path has also
-		// had a chance to process this delivery. A Space may temporarily contain
-		// both modern instances and legacy runners for the same event.
-		return true, nil
-	}
 	if retryErr != nil {
-		// A modern instance may have matched this delivery but failed before it
-		// could be routed (for example while reading its definition or compiling
-		// bindings). Do not let the legacy compatibility path ACK that event and
-		// make the modern evaluation unrecoverable.
-		return false, retryErr
+		return retryErr
 	}
-	return false, nil
+	return nil
 }
 
 func holdingPeriodNeedsNoInput(dsl config.DSL, compiled compiler.CompiledStrategy, period time.Time, previous map[string]domain.RuleState) bool {
@@ -1164,23 +879,12 @@ func augmentCompiledBindings(compiled *compiler.CompiledStrategy, raw json.RawMe
 			compiled.Dependencies.FactorResultViewIDs = append(compiled.Dependencies.FactorResultViewIDs, factor.ResultViewID)
 		}
 	}
-	// The storage adapter still accepts the old pool shape. Literal pools from
-	// the legacy compiled artifact are copied directly; modern DSL rules keep
-	// their per-rule pool out of this global metadata filter so a UDF rule can
-	// still see the complete subject directory when mixed with fixed pools.
-	if compiled.Name == "" {
-		for _, rule := range compiled.Rules {
-			if len(rule.Definition.Pool.Fixed) > 0 {
-				compiled.InstrumentPool.Include = append(compiled.InstrumentPool.Include, rule.Definition.Pool.Fixed...)
-			}
-		}
-	}
 }
 
 // configureFixedPool keeps the Storage read set narrow for the common case
 // where every rule names a literal pool. A dynamic UDF must see the complete
 // subject directory, so mixed fixed/UDF strategies intentionally leave the
-// compatibility Include filter unset.
+// Include filter unset.
 func configureFixedPool(compiled *compiler.CompiledStrategy, dsl config.DSL) {
 	if compiled == nil || len(dsl.Rules) == 0 {
 		return
@@ -1336,21 +1040,6 @@ func marshalTargetEvent(instance store.StrategyInstance, result store.StrategyRe
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{EventID: result.ResultID, OccurredAt: result.CreatedAt, SpaceID: instance.SpaceID, SubjectID: valueOrEmpty(instance.LogicalAccountID)})
 }
 
-func compiledResultViewCount(compiled compiler.CompiledStrategy) int {
-	views := make(map[string]struct{}, len(compiled.Dependencies.FactorResultViewIDs))
-	for _, viewID := range compiled.Dependencies.FactorResultViewIDs {
-		if value := strings.TrimSpace(viewID); value != "" {
-			views[value] = struct{}{}
-		}
-	}
-	for _, factor := range compiled.Factors {
-		if value := strings.TrimSpace(factor.ResultViewID); value != "" {
-			views[value] = struct{}{}
-		}
-	}
-	return len(views)
-}
-
 func bindingEventSourceMismatch(compiled compiler.CompiledStrategy, event PeriodReady) error {
 	for _, factor := range compiled.Factors {
 		if factor.BindingID == "" || (event.ViewID != "" && factor.ResultViewID != event.ViewID) {
@@ -1370,7 +1059,7 @@ func bindingEventSourceMismatch(compiled compiler.CompiledStrategy, event Period
 	return nil
 }
 
-func terminalReadyForRunner(compiled compiler.CompiledStrategy, event PeriodReady, pools ...[]input.InstrumentInput) bool {
+func terminalReadyForInstance(compiled compiler.CompiledStrategy, event PeriodReady, pools ...[]input.InstrumentInput) bool {
 	if status := strings.TrimSpace(strings.ToLower(event.Status)); status != "" && status != "complete" && len(event.BindingStatuses) == 0 {
 		return true
 	}
@@ -1500,43 +1189,6 @@ func bindingStateAffectsPool(factor compiler.CompiledFactor, state BindingPeriod
 	return false
 }
 
-// bindingStateIntersectsPool is retained for legacy callers/tests that do not
-// carry the binding scope. New readiness checks use bindingStateAffectsPool so
-// a subject-scoped binding's expected skipped subjects do not block a pool.
-func bindingStateIntersectsPool(compiled compiler.CompiledStrategy, state BindingPeriodState, pools ...[]input.InstrumentInput) bool {
-	// The event carries storage subject IDs, while a manifest may select by
-	// instrument, venue, market, quote asset, or history. The loaded pool is
-	// therefore the only authoritative scope for this period. Match both IDs
-	// because factor implementations may publish either representation.
-	selected := make(map[string]struct{})
-	if len(pools) > 0 {
-		for _, item := range pools[0] {
-			if value := strings.TrimSpace(item.SubjectID); value != "" {
-				selected[strings.ToUpper(value)] = struct{}{}
-			}
-			if value := strings.TrimSpace(item.InstrumentID); value != "" {
-				selected[strings.ToUpper(value)] = struct{}{}
-			}
-		}
-	} else {
-		// Keep the helper useful for direct callers and legacy tests. Without a
-		// loaded pool, an explicit include list is the best available scope;
-		// otherwise stay conservative.
-		if len(compiled.InstrumentPool.Include) == 0 {
-			return true
-		}
-		for _, value := range compiled.InstrumentPool.Include {
-			selected[strings.ToUpper(strings.TrimSpace(value))] = struct{}{}
-		}
-	}
-	for _, value := range append(append([]string(nil), state.FailedSubjects...), state.SkippedSubjects...) {
-		if _, ok := selected[strings.ToUpper(strings.TrimSpace(value))]; ok {
-			return true
-		}
-	}
-	return false
-}
-
 func dependsOnEvent(compiled compiler.CompiledStrategy, event PeriodReady) bool {
 	if event.ViewID == compiled.SourceView.ID && frequencyMatches(event.Frequency, compiled.SourceView.Frequency) {
 		return true
@@ -1566,76 +1218,8 @@ func frequencyMatches(eventFrequency, expected string) bool {
 	return eventErr == nil && expectedErr == nil && eventValue == expectedValue
 }
 
-func manifestFromCompiled(compiled compiler.CompiledStrategy) config.DSL {
-	dsl := config.DSL{Name: "legacy", Data: config.Data{Bar: compiled.SourceView.Frequency, Calendar: "crypto_24x7"}, Rules: map[string]config.Rule{}}
-	if dsl.Data.Bar == "" {
-		dsl.Data.Bar = compiled.Schedule.Every
-	}
-	for name, side := range map[string]*config.Side{"long": compiled.Long, "short": compiled.Short} {
-		if side == nil || side.SideWeight == "" {
-			continue
-		}
-		rule := config.Rule{Pool: config.Pool{Fixed: append([]string(nil), compiled.InstrumentPool.Include...)}, Weight: side.SideWeight, Side: name}
-		if len(side.Scores) > 0 {
-			rule.Score = side.Scores[0].FactorID
-		}
-		if side.Selection.Mode == "count" {
-			n := 0
-			switch value := side.Selection.Value.(type) {
-			case int:
-				n = value
-			case int64:
-				n = int(value)
-			case float64:
-				n = int(value)
-			case string:
-				if parsed, parseErr := strconv.Atoi(value); parseErr == nil {
-					n = parsed
-				}
-			}
-			if n > 0 {
-				selectRule := &config.Select{Top: &n}
-				if len(side.Scores) > 0 && strings.EqualFold(side.Scores[0].Direction, "ascending") {
-					selectRule.Top = nil
-					selectRule.Tail = &n
-				}
-				rule.Select = selectRule
-			}
-		}
-		dsl.Rules[name] = rule
-	}
-	return dsl
-}
-
-func aligned(period time.Time, runnerFrequency, every string) bool {
-	frequency := every
-	if frequency == "" {
-		frequency = runnerFrequency
-	}
-	duration, err := report.ParseDatasetFrequency(frequency)
-	if err != nil || duration <= 0 {
-		return false
-	}
-	return period.UnixNano()%duration.Nanoseconds() == 0
-}
-
-func sameTargets(raw json.RawMessage, targets []domain.InstrumentTarget) bool {
-	var current []domain.InstrumentTarget
-	if len(raw) > 0 && json.Unmarshal(raw, &current) == nil {
-		return targetJSON(current) == targetJSON(targets)
-	}
-	return len(targets) == 0 && (len(raw) == 0 || string(raw) == "[]")
-}
-
-func targetJSON(targets []domain.InstrumentTarget) string {
-	copyTargets := append([]domain.InstrumentTarget(nil), targets...)
-	sort.Slice(copyTargets, func(i, j int) bool { return copyTargets[i].InstrumentID < copyTargets[j].InstrumentID })
-	raw, _ := json.Marshal(copyTargets)
-	return string(raw)
-}
-
-func resultID(messageID, runnerID string, period time.Time, sessionID ...string) string {
-	parts := []string{messageID, runnerID, period.UTC().Format(time.RFC3339Nano)}
+func resultID(messageID, instanceID string, period time.Time, sessionID ...string) string {
+	parts := []string{messageID, instanceID, period.UTC().Format(time.RFC3339Nano)}
 	if len(sessionID) > 0 {
 		parts = append(parts, sessionID[0])
 	}

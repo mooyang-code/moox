@@ -29,7 +29,6 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.storage.dataset.sync_point@1",
 		"event.storage.view.factor_period.ready@1",
 		"event.storage.view.source_period.ready@1",
-		"event.trade.target.requested@1",
 		"event.trade.target.weight_requested@1",
 	}
 	wantOwners := map[string]string{
@@ -44,7 +43,6 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.storage.dataset.sync_point@1":              "storage",
 		"event.storage.view.factor_period.ready@1":        "storage",
 		"event.storage.view.source_period.ready@1":        "storage",
-		"event.trade.target.requested@1":                  "strategy",
 		"event.trade.target.weight_requested@1":           "strategy",
 	}
 	events := registry.Events()
@@ -211,7 +209,7 @@ func TestDatasetRowsRoundTrip(t *testing.T) {
 
 func TestEncodeRejectsWrongPayload(t *testing.T) {
 	registry, _ := DefaultRegistry()
-	_, err := registry.Encode(DatasetRowsUpserted, LogicalAccountTargetRequested.NewPayload(), PublishOptions{
+	_, err := registry.Encode(DatasetRowsUpserted, LogicalAccountTargetWeightRequested.NewPayload(), PublishOptions{
 		EventID: "event-1", OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "dataset",
 	})
 	if err == nil {
@@ -219,29 +217,32 @@ func TestEncodeRejectsWrongPayload(t *testing.T) {
 	}
 }
 
-func TestLogicalAccountTargetRequestedContract(t *testing.T) {
+func TestLogicalAccountTargetWeightRequestedContract(t *testing.T) {
 	registry, err := DefaultRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
-	event, ok := registry.Lookup("event.trade.target.requested", 1)
+	event, ok := registry.Lookup("event.trade.target.weight_requested", 1)
 	if !ok {
 		t.Fatal("trade target event is not registered")
 	}
-	if event.Name() != LogicalAccountTargetRequested.Name() ||
+	if event.Name() != LogicalAccountTargetWeightRequested.Name() ||
 		event.Stream() != "MOOX_TRADE" ||
 		event.Owner() != "strategy" {
 		t.Fatalf("unexpected trade target event: name=%q stream=%q owner=%q", event.Name(), event.Stream(), event.Owner())
 	}
-	if _, ok := event.NewPayload().(*tradeeventpb.LogicalAccountTargetRequested); !ok {
-		t.Fatalf("payload type = %T, want *tradeeventpb.LogicalAccountTargetRequested", event.NewPayload())
+	if _, ok := event.NewPayload().(*tradeeventpb.LogicalAccountTargetWeightRequested); !ok {
+		t.Fatalf("payload type = %T, want *tradeeventpb.LogicalAccountTargetWeightRequested", event.NewPayload())
 	}
 	subject, err := registry.RenderSubject(event, "space", "logical-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if subject != "moox.event.trade.target.requested.v1.onygcy3f.nrxwo2ldmfwc2mi" {
+	if subject != "moox.event.trade.target.weight_requested.v1.onygcy3f.nrxwo2ldmfwc2mi" {
 		t.Fatalf("subject = %q", subject)
+	}
+	if _, exists := registry.Lookup("event.trade.target.requested", 1); exists {
+		t.Fatal("legacy trade target event remains registered")
 	}
 	if _, exists := registry.Lookup("trade.rebalance.requested", 1); exists {
 		t.Fatal("legacy trade rebalance event remains registered")

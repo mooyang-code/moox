@@ -123,7 +123,7 @@ services:
       health_kind: readiness
       monitor_enabled: true
       gateway_methods: [QueryTimeSeriesRows, SearchRecordRows]
-      gateway_callers: [admin-gateway, collector, factor, monitor]
+      gateway_callers: [admin-gateway, collector, factor, monitor, strategy]
   - name: eventbus
     kind: eventbus
     deployment_mode: process
@@ -240,7 +240,7 @@ services:
     deployment_mode: process
     protocol: http
     host: 127.0.0.1
-    port: 11430
+    port: 11433
     gateway_path: trpc.moox.strategy.StrategyMgr
     gateway_service_id: strategymgr
     gateway_enabled: true
@@ -395,6 +395,21 @@ services:
     status: active
     description: 统一交易控制台与执行服务
     extra_config: {}
+  - name: trade_owner
+    kind: trade
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11200
+    gateway_path: trpc.moox.trade.TradeConsoleService
+    gateway_enabled: true
+    gateway_service_id: trade_owner
+    scope: internal
+    status: active
+    description: Strategy 专用交易账户授权路由，不开放下单及资金管理
+    extra_config:
+      gateway_methods: [GetLogicalAccount, ClaimLogicalAccountOwner, ReleaseLogicalAccountOwner, RebindLogicalAccountOwner]
+      gateway_callers: [strategy]
   - name: trade_dns_resolver
     kind: trade
     deployment_mode: endpoint

@@ -6,8 +6,8 @@
           <a-button type="text" @click="router.push({ name: 'strategy-running' })">
             <template #icon><icon-left /></template>返回
           </a-button>
-          <h2>{{ store.instance?.instance_id || store.runner?.runner_id || instanceId }}</h2>
-          <span>{{ store.strategy?.name || store.instance?.strategy_id || store.runner?.strategy_id || "-" }}</span>
+          <h2>{{ store.instance?.instance_id || instanceId }}</h2>
+          <span>{{ store.strategy?.name || store.instance?.strategy_id || "-" }}</span>
         </div>
         <a-button :loading="store.loading" @click="load"
           ><template #icon><icon-refresh /></template>刷新</a-button
@@ -22,17 +22,7 @@
         <a-descriptions-item label="创建时间">{{ formatTime(store.instance.created_at) }}</a-descriptions-item>
         <a-descriptions-item label="更新时间">{{ formatTime(store.instance.updated_at) }}</a-descriptions-item>
       </a-descriptions>
-      <a-descriptions v-else-if="store.runner" :column="3" bordered class="summary">
-        <a-descriptions-item label="状态"><StatusBadge :status="store.runner.status" /></a-descriptions-item>
-        <a-descriptions-item label="数据视图">{{ store.runner.source_view_id }}</a-descriptions-item>
-        <a-descriptions-item label="频率">{{ store.runner.frequency }}</a-descriptions-item>
-        <a-descriptions-item label="组合账户">{{ store.runner.logical_account_id || "观察模式" }}</a-descriptions-item>
-        <a-descriptions-item label="命令序号">{{ store.commandSequence }}</a-descriptions-item>
-        <a-descriptions-item label="最近成功">{{ formatTime(store.runner.last_success_at) }}</a-descriptions-item>
-      </a-descriptions>
-      <a-alert v-if="store.runner?.last_error" type="error" show-icon class="top-alert">{{ store.runner.last_error }}</a-alert>
       <OperationPanel v-if="store.instance" :instance-id="instanceId" :enabled="store.instance.enabled" @changed="load" />
-      <OperationPanel v-else-if="store.runner" :runner-id="instanceId" :status="store.runner.status" @changed="load" />
       <a-tabs default-active-key="targets">
         <a-tab-pane key="targets" title="当前完整目标">
           <TargetTable :targets="store.targets" :command-sequence="store.commandSequence" :bar-end-time="latestBarEnd" :valid-until="latestValidUntil" :has-result="hasCurrentTarget" />
@@ -61,16 +51,12 @@ defineOptions({ name: "StrategyDetail" });
 const route = useRoute();
 const router = useRouter();
 const store = useStrategyStore();
-const instanceId = String(route.params.instanceId || route.params.runnerId || "");
+const instanceId = String(route.params.instanceId || "");
 const latestBarEnd = computed(() => store.results[0]?.bar_end_time || store.results[0]?.period_time || "");
 const latestValidUntil = computed(() => store.results[0]?.valid_until || "");
 const hasCurrentTarget = computed(() => store.instance ? store.instance.enabled && store.results.length > 0 : store.results.length > 0);
 const load = async () => {
-  try {
-    await store.loadInstanceDetail(instanceId);
-  } catch {
-    await store.loadRunnerDetail(instanceId);
-  }
+  await store.loadInstanceDetail(instanceId);
 };
 
 function formatTime(value?: string) {

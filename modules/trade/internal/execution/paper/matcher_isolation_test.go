@@ -389,6 +389,18 @@ func TestPaperAdapterStoreBoundariesPreserveInfrastructureErrors(t *testing.T) {
 	}
 }
 
+func TestPaperAdapterReconstructsTransientOrderIdentityAfterCrash(t *testing.T) {
+	s := matcherFixture(t)
+	require.NoError(t, s.DBForTest().Exec("UPDATE t_trade_orders SET c_state='SUBMIT_UNKNOWN', c_exchange_order_id='' WHERE c_order_id='a'").Error)
+	account, err := s.GetTradingAccountByID(context.Background(), "a")
+	require.NoError(t, err)
+	order, err := (&Adapter{Store: s, Account: account}).GetOrder(context.Background(), "BTCUSDT", "a")
+	require.NoError(t, err)
+	want, _, _ := PaperIDs("a", "a")
+	require.Equal(t, want, order.ExchangeOrderID)
+	require.Equal(t, exchange.OrderStatusOpen, order.Status)
+}
+
 type instrumentLoadFailure struct {
 	execution.MarketDataSource
 	err         error

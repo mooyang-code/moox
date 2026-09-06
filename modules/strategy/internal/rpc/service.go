@@ -38,14 +38,6 @@ type LogicalAccountSessionValidator interface {
 	ValidateSession(context.Context, string, string, string, string) error
 }
 
-// LogicalAccountOwnerRebinder is implemented by the Trade client when a V1
-// archived runner is reused by a V2 runner with the same identity. Keeping it
-// separate preserves compatibility with lightweight owner stubs while making
-// the production handoff explicit and atomic.
-type LogicalAccountOwnerRebinder interface {
-	Rebind(context.Context, string, string, string, string) (int64, error)
-}
-
 // LogicalAccountOwnerClaimer is an optional stronger claim contract. The
 // returned generation lets Strategy repair its local snapshot when an
 // already-enabled Runner's Trade owner was lost and Claim starts a new
@@ -65,49 +57,6 @@ type Service struct {
 	Now             func() time.Time
 	runnerLocks     sync.Map
 	strategyLocks   sync.Map
-}
-
-// ReconcileDisabledOwners repairs the cross-service half of a disable
-// transition. Strategy persists DISABLED before asking Trade to release an
-// owner; if the process or network fails between those steps, the next
-// reconciliation pass retries the idempotent release.
-func (s *Service) ReconcileDisabledOwners(ctx context.Context) error {
-	if s == nil || s.Repo == nil || s.LogicalAccounts == nil {
-		return nil
-	}
-	runners, err := s.Repo.ListRunners(ctx, store.RunnerFilter{Status: domain.RunnerStatusDisabled})
-	if err != nil {
-		return err
-	}
-	var releaseErr error
-	for _, runner := range runners {
-		// SetRunnerStatus acquires the same per-runner lock while it claims a
-		// new owner. Re-read under that lock so a stale DISABLED list cannot
-		// release an owner that EnableRunner has just claimed.
-		unlock := s.lockRunner(runner.ID)
-		current, getErr := s.Repo.GetRunner(ctx, runner.ID)
-		if getErr != nil {
-			unlock()
-			releaseErr = errors.Join(releaseErr, fmt.Errorf("runner %s: reload: %w", runner.ID, getErr))
-			continue
-		}
-		if current.Status != domain.RunnerStatusDisabled || current.LogicalAccountID == nil {
-			unlock()
-			continue
-		}
-		if err := s.releaseRunner(ctx, current); err != nil {
-			// A different Runner may have claimed the account after this
-			// Runner was disabled. Trade's owner-conflict response means the
-			// disabled Runner is already released and is therefore reconciled.
-			if isOwnerConflict(err) {
-				unlock()
-				continue
-			}
-			releaseErr = errors.Join(releaseErr, fmt.Errorf("runner %s: %w", runner.ID, err))
-		}
-		unlock()
-	}
-	return releaseErr
 }
 
 // ReconcileDisabledInstances finishes modern disable/enable handshakes left
@@ -220,79 +169,6 @@ func isPermanentOwnerClaimError(err error) bool {
 	default:
 		return false
 	}
-}
-
-// ReconcileLegacyOwners releases Trade owners left behind when a V1 runner
-// was archived during the V2 schema migration. The operation is idempotent;
-// it is retried periodically until Trade confirms that the old owner is gone.
-func (s *Service) ReconcileLegacyOwners(ctx context.Context) error {
-	if s == nil || s.Repo == nil || s.LogicalAccounts == nil {
-		return nil
-	}
-	owners, err := s.Repo.ListLegacyRunnerOwners(ctx)
-	if err != nil {
-		return err
-	}
-	var releaseErr error
-	for _, owner := range owners {
-		// SetRunnerStatus uses the same per-runner lock while claiming a new
-		// owner. Re-read under that lock so an archived row cannot release a
-		// live V2 owner between the read and the Trade release call.
-		unlock := s.lockRunner(owner.RunnerID)
-		current, getErr := s.Repo.GetRunner(ctx, owner.RunnerID)
-		if getErr == nil {
-			// Reusing a runner ID for the same space/account is a deliberate
-			// takeover of the archived binding. Rebind must advance Trade's
-			// lifecycle generation and clear the old target without dropping
-			// ownership or pausing automation.
-			if current.Status == domain.RunnerStatusEnabled &&
-				current.SpaceID == owner.SpaceID &&
-				current.LogicalAccountID != nil &&
-				*current.LogicalAccountID == owner.LogicalAccountID {
-				rebinder, ok := s.LogicalAccounts.(LogicalAccountOwnerRebinder)
-				if !ok {
-					unlock()
-					releaseErr = errors.Join(releaseErr, fmt.Errorf("legacy runner %s: Trade owner rebind is unavailable", owner.RunnerID))
-					continue
-				}
-				rebindKey := owner.TableName + "/" + owner.RunnerID
-				generation, err := rebinder.Rebind(ctx, owner.SpaceID, owner.LogicalAccountID, owner.RunnerID, rebindKey)
-				if err != nil {
-					unlock()
-					releaseErr = errors.Join(releaseErr, fmt.Errorf("legacy runner %s: rebind: %w", owner.RunnerID, err))
-					continue
-				}
-				if err := s.Repo.ResetRunnerLifecycle(ctx, owner.RunnerID, generation, s.nowTime()); err != nil {
-					unlock()
-					releaseErr = errors.Join(releaseErr, fmt.Errorf("legacy runner %s: reset Strategy lifecycle: %w", owner.RunnerID, err))
-					continue
-				}
-				markErr := s.Repo.MarkLegacyRunnerOwnerReconciled(ctx, owner)
-				unlock()
-				if markErr != nil {
-					releaseErr = errors.Join(releaseErr, fmt.Errorf("legacy runner %s: mark takeover: %w", owner.RunnerID, markErr))
-				}
-				continue
-			}
-		} else if !errors.Is(getErr, gorm.ErrRecordNotFound) {
-			unlock()
-			releaseErr = errors.Join(releaseErr, fmt.Errorf("legacy runner %s: reload: %w", owner.RunnerID, getErr))
-			continue
-		}
-		releaseErrForOwner := s.LogicalAccounts.Release(ctx, owner.SpaceID, owner.LogicalAccountID, owner.RunnerID)
-		if err := releaseErrForOwner; err != nil {
-			unlock()
-			releaseErr = errors.Join(releaseErr, fmt.Errorf("legacy runner %s: %w", owner.RunnerID, err))
-			continue
-		}
-		if err := s.Repo.MarkLegacyRunnerOwnerReconciled(ctx, owner); err != nil {
-			unlock()
-			releaseErr = errors.Join(releaseErr, fmt.Errorf("legacy runner %s: mark release: %w", owner.RunnerID, err))
-			continue
-		}
-		unlock()
-	}
-	return releaseErr
 }
 
 func (s *Service) lockRunner(runnerID string) func() {
@@ -579,67 +455,10 @@ func (s *Service) UpdateRunner(ctx context.Context, req *strategypb.UpdateRunner
 }
 
 func (s *Service) SetRunnerStatus(ctx context.Context, req *strategypb.SetRunnerStatusReq) (*strategypb.SetRunnerStatusRsp, error) {
-	if req == nil || req.GetRunnerId() == "" || s.Repo == nil {
+	if req == nil || req.GetRunnerId() == "" {
 		return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(errors.New("runner_id and status are required"))}, nil
 	}
-	if _, err := requireSpaceID(ctx); err != nil {
-		return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-	}
-	unlock := s.lockRunner(req.GetRunnerId())
-	defer unlock()
-	status := domain.RunnerStatus(req.GetStatus())
-	if status != domain.RunnerStatusEnabled && status != domain.RunnerStatusDisabled {
-		return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(errors.New("runner status must be ENABLED or DISABLED"))}, nil
-	}
-	runner, err := s.Repo.GetRunner(ctx, req.GetRunnerId())
-	if err != nil {
-		return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-	}
-	if err := ensureRunnerScope(ctx, runner); err != nil {
-		return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-	}
-	if err := s.ensureLegacyRunner(ctx, runner); err != nil {
-		return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-	}
-	if runner.Status == status {
-		// Same-status ENABLED is a true idempotent read. Re-claiming a legacy
-		// owner can rotate its generation and clear the live target even though
-		// the caller only retried the same command. DISABLED remains a repair
-		// path because release is explicitly idempotent.
-		if status == domain.RunnerStatusEnabled {
-			if err := s.verifyRunnerDependencies(ctx, runner); err != nil {
-				return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-			}
-			return &strategypb.SetRunnerStatusRsp{RetInfo: success(), Runner: runnerProto(runner)}, nil
-		} else if err := s.releaseRunner(ctx, runner); err != nil {
-			return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-		}
-		return &strategypb.SetRunnerStatusRsp{RetInfo: success(), Runner: runnerProto(runner)}, nil
-	}
-	if status == domain.RunnerStatusEnabled {
-		if err := s.verifyRunnerDependencies(ctx, runner); err != nil {
-			return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-		}
-		if err := s.claimRunner(ctx, runner); err != nil {
-			return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-		}
-		if err := s.Repo.SetRunnerStatus(ctx, runner.ID, status, s.nowTime()); err != nil {
-			_ = s.releaseRunner(ctx, runner)
-			return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-		}
-	} else {
-		if err := s.Repo.SetRunnerStatus(ctx, runner.ID, status, s.nowTime()); err != nil {
-			return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-		}
-		if err := s.releaseRunner(ctx, runner); err != nil {
-			return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-		}
-	}
-	updated, err := s.Repo.GetRunner(ctx, runner.ID)
-	if err != nil {
-		return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
-	}
-	return &strategypb.SetRunnerStatusRsp{RetInfo: success(), Runner: runnerProto(updated)}, nil
+	return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(errors.New("legacy runner status API is retired; use SetStrategyInstanceEnabled"))}, nil
 }
 
 func (s *Service) ListStrategyResults(ctx context.Context, req *strategypb.ListStrategyResultsReq) (*strategypb.ListStrategyResultsRsp, error) {
@@ -922,11 +741,15 @@ func (s *Service) GetStrategyInstance(ctx context.Context, req *strategypb.GetSt
 	if req == nil || req.GetInstanceId() == "" || s.Repo == nil {
 		return &strategypb.GetStrategyInstanceRsp{RetInfo: invalid(errors.New("instance_id is required"))}, nil
 	}
+	scoped, scopeErr := requireSpaceID(ctx)
+	if scopeErr != nil {
+		return &strategypb.GetStrategyInstanceRsp{RetInfo: invalid(scopeErr)}, nil
+	}
 	instance, err := s.Repo.GetInstance(ctx, req.GetInstanceId())
 	if err != nil {
 		return &strategypb.GetStrategyInstanceRsp{RetInfo: invalid(err)}, nil
 	}
-	if scoped := requestSpaceID(ctx); scoped != "" && scoped != instance.SpaceID {
+	if scoped != instance.SpaceID {
 		return &strategypb.GetStrategyInstanceRsp{RetInfo: invalid(errors.New("instance is outside current space"))}, nil
 	}
 	return &strategypb.GetStrategyInstanceRsp{RetInfo: success(), Instance: instanceProto(instance)}, nil
@@ -969,11 +792,15 @@ func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategyp
 	if req == nil || req.GetInstanceId() == "" || s.Repo == nil {
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("instance_id is required"))}, nil
 	}
+	scoped, scopeErr := requireSpaceID(ctx)
+	if scopeErr != nil {
+		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(scopeErr)}, nil
+	}
 	instance, err := s.Repo.GetInstance(ctx, req.GetInstanceId())
 	if err != nil {
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(err)}, nil
 	}
-	if scoped := requestSpaceID(ctx); scoped != "" && scoped != instance.SpaceID {
+	if scoped != instance.SpaceID {
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("instance is outside current space"))}, nil
 	}
 	unlock := s.lockStrategy(instance.StrategyID)
@@ -985,7 +812,7 @@ func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategyp
 	if err != nil {
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(err)}, nil
 	}
-	if scoped := requestSpaceID(ctx); scoped != "" && scoped != instance.SpaceID {
+	if scoped != instance.SpaceID {
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("instance is outside the current space"))}, nil
 	}
 	if req.GetEnabled() && instance.Enabled {

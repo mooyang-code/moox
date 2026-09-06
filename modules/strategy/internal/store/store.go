@@ -13,11 +13,10 @@ import (
 )
 
 type Store struct {
-	db             *gorm.DB
-	legacyCompiled sync.Map
-	processed      sync.Map
-	processedMu    sync.Mutex
-	processedOps   uint64
+	db           *gorm.DB
+	processed    sync.Map
+	processedMu  sync.Mutex
+	processedOps uint64
 }
 
 func New(db *gorm.DB) *Store { return &Store{db: db} }

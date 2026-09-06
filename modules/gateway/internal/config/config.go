@@ -15,12 +15,17 @@ import (
 )
 
 const (
-	ServiceAddress                   = "127.0.0.1:11002"
-	NativeServiceAddress             = "127.0.0.1:11003"
-	PublicNativeServiceAddress       = "0.0.0.0:11003"
-	HealthAddress                    = "127.0.0.1:11012"
-	PublicHealthAddress              = "0.0.0.0:11012"
-	DefaultMaxBodyBytes        int64 = 4 << 20
+	ServiceAddress             = "127.0.0.1:11002"
+	NativeServiceAddress       = "127.0.0.1:11003"
+	PublicNativeServiceAddress = "0.0.0.0:11003"
+	HealthAddress              = "127.0.0.1:11012"
+	PublicHealthAddress        = "0.0.0.0:11012"
+	// Dedicated Trade nodes use a separate local listener set when a Storage
+	// Gateway already owns the legacy 11002/11003/11012 ports.
+	DedicatedTradeServiceAddress       = "127.0.0.1:11004"
+	DedicatedTradeNativeAddress        = "127.0.0.1:11005"
+	DedicatedTradeHealthAddress        = "127.0.0.1:11014"
+	DefaultMaxBodyBytes          int64 = 4 << 20
 )
 
 type Config struct {
@@ -124,14 +129,23 @@ func Validate(cfg Config) error {
 	if cfg.Node.ID == "" {
 		return errors.New("node.id is required")
 	}
-	if cfg.Server.ServiceAddr != ServiceAddress {
-		return fmt.Errorf("server.service_addr must be %s", ServiceAddress)
-	}
-	if cfg.Server.NativeAddr != NativeServiceAddress && cfg.Server.NativeAddr != PublicNativeServiceAddress {
-		return fmt.Errorf("server.native_addr must be %s or %s", NativeServiceAddress, PublicNativeServiceAddress)
-	}
-	if cfg.Server.HealthAddr != HealthAddress && cfg.Server.HealthAddr != PublicHealthAddress {
-		return fmt.Errorf("server.health_addr must be %s or %s", HealthAddress, PublicHealthAddress)
+	if cfg.Server.ServiceAddr == DedicatedTradeServiceAddress {
+		if cfg.Server.NativeAddr != DedicatedTradeNativeAddress {
+			return fmt.Errorf("dedicated Trade server.native_addr must be %s", DedicatedTradeNativeAddress)
+		}
+		if cfg.Server.HealthAddr != DedicatedTradeHealthAddress {
+			return fmt.Errorf("dedicated Trade server.health_addr must be %s", DedicatedTradeHealthAddress)
+		}
+	} else {
+		if cfg.Server.ServiceAddr != ServiceAddress {
+			return fmt.Errorf("server.service_addr must be %s", ServiceAddress)
+		}
+		if cfg.Server.NativeAddr != NativeServiceAddress && cfg.Server.NativeAddr != PublicNativeServiceAddress {
+			return fmt.Errorf("server.native_addr must be %s or %s", NativeServiceAddress, PublicNativeServiceAddress)
+		}
+		if cfg.Server.HealthAddr != HealthAddress && cfg.Server.HealthAddr != PublicHealthAddress {
+			return fmt.Errorf("server.health_addr must be %s or %s", HealthAddress, PublicHealthAddress)
+		}
 	}
 	if cfg.ControlPlane.BaseURL == "" {
 		return errors.New("control_plane.base_url is required")

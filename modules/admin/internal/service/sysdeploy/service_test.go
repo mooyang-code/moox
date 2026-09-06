@@ -495,6 +495,21 @@ func TestServiceImpl_ResolveAdminServiceDetailCarriesForwardTimeout(t *testing.T
 	assert.Equal(t, 330*time.Second, detail.Timeout)
 }
 
+func TestServiceImpl_ResolveAdminServiceDetailCarriesTradeGatewayPlacement(t *testing.T) {
+	db := setupSysDeployTestDB(t)
+	svc := NewService(&database.Manager{}, testAdminNodeID)
+	svc.dao = NewDAO(db)
+	require.NoError(t, svc.dao.Create(context.Background(), &Deployment{
+		NodeID: testAdminNodeID, ServiceName: "trade_console", Host: "43.132.204.177", Port: 11200,
+		GatewayPath: "trpc.moox.trade.TradeConsoleService", Status: "active",
+		ExtraConfig: `{"gateway_url":"https://43.132.204.177","gateway_node":"trade-node"}`,
+	}))
+	detail, ok := svc.ResolveAdminServiceDetail(context.Background(), testAdminNodeID, "trade_console")
+	require.True(t, ok)
+	assert.Equal(t, "https://43.132.204.177", detail.GatewayURL)
+	assert.Equal(t, "trade-node", detail.GatewayNode)
+}
+
 func TestServiceImpl_ListActiveServiceDeployments_ActiveRows_ShouldReturnEndpoints(t *testing.T) {
 	db := setupSysDeployTestDB(t)
 	svc := NewService(&database.Manager{}, testAdminNodeID)
@@ -650,13 +665,18 @@ func TestValidateDeployment_RejectsInvalidStaticDirectoryFields(t *testing.T) {
 		{"unspecified IP", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "0.0.0.0", Port: 80}, "routable unicast"},
 		{"link-local IP", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "169.254.1.1", Port: 80}, "routable unicast"},
 		{"multicast IP", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "224.0.0.1", Port: 80}, "routable unicast"},
-		{"hostname unsupported", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "service.local", Port: 80}, "host must be an IP address"},
+		{"hostname accepted", &Deployment{NodeID: "node-a", ServiceName: "svc", Protocol: "http", Host: "service.local", Port: 80}, ""},
 		{"rpc path starts with slash", &Deployment{NodeID: "node-a", ServiceName: "svc", ServiceKind: "service", Protocol: "http", Host: "127.0.0.1", Port: 80, GatewayPath: "/api/service"}, "gateway_path must be a tRPC service path"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.ErrorContains(t, validateDeployment(tt.item), tt.wantErr)
+			err := validateDeployment(tt.item)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tt.wantErr)
 		})
 	}
 }

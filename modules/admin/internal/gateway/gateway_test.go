@@ -12,7 +12,21 @@ import (
 	"strings"
 	"testing"
 	"trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
+
+type fakeTradeSpaceAuthorizer struct {
+	err        error
+	userID     string
+	spaceID    string
+	method     string
+	globalRole int32
+}
+
+func (a *fakeTradeSpaceAuthorizer) AuthorizeTradeRequest(_ context.Context, userID, spaceID, method string, globalRole int32) error {
+	a.userID, a.spaceID, a.method, a.globalRole = userID, spaceID, method, globalRole
+	return a.err
+}
 
 func TestHTTPRequestHandler_ParseRequestParams_ValidPath_ShouldReturnServiceAndMethod(t *testing.T) {
 	h := NewHTTPRequestHandler()
@@ -116,6 +130,46 @@ func TestHandleGatewayRequest_InvalidParams_ShouldReturnBadRequest(t *testing.T)
 	req = mux.SetURLVars(req, map[string]string{"service": "auth", "method": ""})
 	_, _, err := h.parseRequestParams(req)
 	require.Error(t, err)
+}
+
+func TestHTTPRouterAuthorizeTradeConsoleRequestRequiresAuthenticatedSpace(t *testing.T) {
+	a := &fakeTradeSpaceAuthorizer{}
+	hr := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test", a)
+	ctx, msg := codec.WithNewMessage(context.WithValue(context.Background(), authmodel.CtxUserID, "user-1"))
+	msg.WithServerMetaData(map[string][]byte{authmodel.CtxUserRole: []byte("1")})
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/trade_console/ListOrders", nil)
+	assert.Error(t, hr.authorizeTradeConsoleRequest(ctx, req, "ListOrders"))
+	req.Header.Set("X-Space-Id", "crypto")
+	assert.NoError(t, hr.authorizeTradeConsoleRequest(ctx, req, "ListOrders"))
+	assert.Equal(t, "user-1", a.userID)
+	assert.Equal(t, "crypto", a.spaceID)
+	assert.Equal(t, int32(1), a.globalRole)
+}
+
+func TestHTTPRouterAuthorizeTradeConsoleRequestFailsClosedWithoutAuthorizer(t *testing.T) {
+	hr := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test")
+	ctx := context.WithValue(context.Background(), authmodel.CtxUserID, "user-1")
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/trade_console/ListOrders", nil)
+	req.Header.Set("X-Space-Id", "crypto")
+	assert.Error(t, hr.authorizeTradeConsoleRequest(ctx, req, "ListOrders"))
+}
+
+func TestGatewayServiceScopeClassificationProtectsInternalTradeOwnerAndStrategyBFF(t *testing.T) {
+	assert.True(t, isInternalTradeService("trade_owner"))
+	assert.True(t, isInternalTradeService("trade-owner"))
+	assert.False(t, isInternalTradeService("trade_console"))
+	for _, serviceID := range []string{"trade_console", "strategy", "strategymgr", "moox_strategy"} {
+		assert.True(t, isSpaceScopedService(serviceID), serviceID)
+	}
+	assert.False(t, isSpaceScopedService("collector"))
+}
+
+func TestTradeConsoleDoesNotExposeStrategyOwnershipFencingToBrowser(t *testing.T) {
+	for _, method := range []string{"ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"} {
+		assert.True(t, isTradeOwnerOnlyMethod("trade_console", method), method)
+	}
+	assert.False(t, isTradeOwnerOnlyMethod("trade_console", "GetLogicalAccount"))
+	assert.False(t, isTradeOwnerOnlyMethod("trade_owner", "ReleaseLogicalAccountOwner"))
 }
 
 func TestHandleGatewayRequest_RawHandlerHit_ShouldServeWithoutForward(t *testing.T) {

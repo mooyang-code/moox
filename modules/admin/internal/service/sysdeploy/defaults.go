@@ -35,7 +35,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 		withExtra(deployment("moox_collector", "collector", "http", "127.0.0.1", 11402, "trpc.moox.collector.CollectMgr", "internal", "独立采集管理服务，承载采集规则、任务实例和 planner"), `{"health_url":"http://127.0.0.1:11412/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("moox_cloudnode", "cloudnode", "http", "127.0.0.1", 11401, "trpc.moox.cloudnode.CloudNodeMgr", "internal", "独立云节点执行平台，承载云节点、代码包、异步 JobItem 队列和同步调用"), `{"health_url":"http://127.0.0.1:11411/readyz","health_kind":"readiness","monitor_enabled":true,"timeout_ms":330000,"max_body_bytes":33554432}`),
 		withExtra(deployment("moox_factor", "factor", "http", "127.0.0.1", 11404, "trpc.moox.factor.FactorMgr", "internal", "因子计算服务，承载因子定义、绑定、补算与结果写回"), `{"health_url":"http://127.0.0.1:11414/readyz","health_kind":"readiness","monitor_enabled":true,"timeout_ms":120000,"gateway_methods":["CreateFactor","UpdateFactor","SetFactorStatus","DeleteFactor","UpsertBinding","DeleteBinding","RecalcFactor","GetEngineStatus"],"gateway_callers":["admin-gateway","moox-cli"],"gateway_routes":[{"service_path":"trpc.moox.factor.FactorMgr","port":11403,"gateway_methods":["GetFactor","ListFactors","ListBindings"],"gateway_callers":["admin-gateway","moox-cli","strategy"]}]}`),
-		withExtra(deployment("moox_strategy", "strategy", "http", "127.0.0.1", 11430, "trpc.moox.strategy.StrategyMgr", "internal", "交易策略运行、目标和绩效查询服务"), `{"health_url":"http://127.0.0.1:11431/readyz","health_kind":"readiness","monitor_enabled":true}`),
+		withExtra(deployment("moox_strategy", "strategy", "http", "127.0.0.1", 11433, "trpc.moox.strategy.StrategyMgr", "internal", "交易策略运行、目标和绩效查询服务"), `{"health_url":"http://127.0.0.1:11431/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("moox_archive", "archive", "http", "127.0.0.1", 11416, "", "internal", "事件归档和物化服务"), `{"health_url":"http://127.0.0.1:11416/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("moox_hostagent", "hostagent", "http", "127.0.0.1", 11426, "trpc.moox.hostagent.HostAgentMgr", "internal", "主机指标采集代理"), `{"health_url":"http://127.0.0.1:11425/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("moox_trade", "trade", "http", "127.0.0.1", 11210, "", "internal", "量化交易执行服务"), `{"health_url":"http://127.0.0.1:11210/readyz","health_kind":"readiness","monitor_enabled":true}`),
@@ -44,6 +44,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 		deployment("secret", "admin_rpc", "http", "127.0.0.1", 11108, "trpc.moox.ops.SecretMgr", "internal", "秘钥管理 RPC 服务"),
 		deployment("sysdeploy", "admin_rpc", "http", "127.0.0.1", 11109, "trpc.moox.ops.SysDeploy", "internal", "系统服务部署信息 RPC 服务"),
 		deployment("trade_console", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.TradeConsoleService", "internal", "统一交易控制台与执行服务"),
+		withExtra(deployment("trade_owner", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.TradeConsoleService", "internal", "Strategy 专用交易账户授权路由，不开放下单及资金管理"), `{"gateway_methods":["GetLogicalAccount","ClaimLogicalAccountOwner","ReleaseLogicalAccountOwner","RebindLogicalAccountOwner"],"gateway_callers":["strategy"]}`),
 		withExtra(deployment("trade_dns_resolver", "trade", "http", "127.0.0.1", 11203, "trpc.moox.trade.TradeDNSResolverService", "internal", "交易节点 DNS 解析与连通性探测服务"), `{"gateway_methods":["ResolveDomains"],"gateway_callers":["collector"]}`),
 	}
 	canonical := map[string]string{
@@ -61,7 +62,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 			rows[i].Host = "127.0.0.1"
 			rows[i].GatewayServiceID = rows[i].ServiceName
 			rows[i].GatewayEnabled = true
-		case "trade_dns_resolver":
+		case "trade_dns_resolver", "trade_owner":
 			rows[i].GatewayServiceID = rows[i].ServiceName
 			rows[i].GatewayEnabled = true
 		}
