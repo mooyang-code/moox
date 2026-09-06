@@ -3282,6 +3282,14 @@ sign_health_request() {
   printf '%s/%s/%s/%s/%s' "${MOOX_HEALTH_AUTH_VERSION}" "${MOOX_HEALTH_AUTH_ACCESS_KEY}" "${timestamp}" "${nonce}" "${signature}"
 }
 
+gateway_health_addr() {
+  if [[ "${WITH_TRADE:-0}" == "1" && "${WITH_STORAGE:-0}" == "0" && "${WITH_ADMIN:-0}" == "0" && "${WITH_GATEWAY:-0}" == "1" ]]; then
+    printf '%s' "${MOOX_TRADE_GATEWAY_HEALTH_ADDR:-127.0.0.1:11014}"
+    return
+  fi
+  printf '%s' '127.0.0.1:11012'
+}
+
 probe_service() {
   local name="$1" url="" health_path=/healthz
   case "${name}" in

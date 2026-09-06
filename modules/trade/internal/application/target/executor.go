@@ -134,7 +134,14 @@ func (e *Executor) Converge(
 	if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
 		// Expiry is a normal terminal condition for this target, not a reason to
 		// cancel existing orders or flatten positions. Trade will converge only
-		// after a newer valid target arrives.
+		// after a newer valid target arrives. Pending children are different:
+		// they have not reached an exchange and must release their reservation
+		// before the target becomes terminal.
+		if errors.Is(err, ErrTargetExpired) {
+			if expiryErr := e.discardExpiredPendingOrders(ctx, spaceID, target); expiryErr != nil {
+				return Result{}, errors.Join(err, expiryErr)
+			}
+		}
 		return Result{Status: StatusPaused}, err
 	}
 	if logicalAccount.AutomationState != "ACTIVE" {
@@ -255,6 +262,9 @@ func (e *Executor) Converge(
 		switch orderdomain.State(current.State) {
 		case orderdomain.Pending:
 			if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
+				if expiryErr := e.discardPendingOnExpiry(ctx, spaceID, current.OrderID, err); expiryErr != nil {
+					return Result{}, expiryErr
+				}
 				return Result{Status: StatusPaused}, err
 			}
 			if _, err := e.Orders.Submit(ctx, spaceID, current.OrderID); err != nil {
@@ -263,6 +273,9 @@ func (e *Executor) Converge(
 						ctx, spaceID, current.OrderID,
 					); discardErr != nil {
 						return Result{}, errors.Join(err, discardErr)
+					}
+					if errors.Is(err, orderapp.ErrTargetExpired) {
+						return Result{Status: StatusPaused}, err
 					}
 					if errors.Is(err, orderapp.ErrAccountNotReady) {
 						target.LastError = err.Error()
@@ -331,6 +344,9 @@ func (e *Executor) Converge(
 		)
 		if placeErr != nil {
 			if targetSubmitConflict(placeErr) {
+				if errors.Is(placeErr, orderapp.ErrTargetExpired) {
+					return Result{}, placeErr
+				}
 				if errors.Is(placeErr, orderapp.ErrAccountNotReady) {
 					target.LastError = placeErr.Error()
 					if updateErr := e.updateTarget(
@@ -796,14 +812,17 @@ func (e *Executor) placeAction(
 			return false, "", err
 		}
 		if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID}, target); err != nil {
-			return false, "", err
+			return false, "", e.discardPendingOnExpiry(ctx, spaceID, string(placed.ID), err)
 		}
 		if _, err := e.Orders.Submit(ctx, spaceID, string(placed.ID)); err != nil {
 			if targetSubmitConflict(err) {
 				_, discardErr := e.Orders.DiscardPending(
 					ctx, spaceID, string(placed.ID),
 				)
-				return false, "", errors.Join(err, discardErr)
+				if discardErr != nil {
+					return false, "", errors.Join(err, discardErr)
+				}
+				return false, "", err
 			}
 			return false, "", err
 		}
@@ -968,7 +987,65 @@ func targetSubmitConflict(err error) bool {
 	return errors.Is(err, orderapp.ErrExternalConflict) ||
 		errors.Is(err, orderapp.ErrAutomationPaused) ||
 		errors.Is(err, orderapp.ErrTargetOwnerConflict) ||
-		errors.Is(err, orderapp.ErrAccountNotReady)
+		errors.Is(err, orderapp.ErrAccountNotReady) ||
+		errors.Is(err, orderapp.ErrTargetExpired)
+}
+
+func (e *Executor) discardPendingOnExpiry(
+	ctx context.Context,
+	spaceID string,
+	orderID string,
+	err error,
+) error {
+	if !errors.Is(err, ErrTargetExpired) && !errors.Is(err, orderapp.ErrTargetExpired) {
+		return err
+	}
+	_, discardErr := e.Orders.DiscardPending(ctx, spaceID, orderID)
+	if discardErr != nil {
+		return errors.Join(err, discardErr)
+	}
+	return err
+}
+
+func (e *Executor) discardExpiredPendingOrders(
+	ctx context.Context,
+	spaceID string,
+	target store.LogicalAccountTargetRecord,
+) error {
+	if target.LogicalAccountID == "" || target.TargetID == "" {
+		return nil
+	}
+	var pending []store.OrderRecord
+	const pageSize = 1000
+	for offset := 0; ; offset += pageSize {
+		orders, total, err := e.Store.ListOrders(ctx, spaceID, store.OrderQuery{
+			LogicalAccountID: target.LogicalAccountID,
+			OnlyOpen:         true,
+			Offset:           offset,
+			Limit:            pageSize,
+		})
+		if err != nil {
+			return err
+		}
+		for _, current := range orders {
+			if current.OwnerType != string(orderdomain.OwnerTarget) ||
+				current.OwnerID != target.TargetID ||
+				orderdomain.State(current.State) != orderdomain.Pending {
+				continue
+			}
+			pending = append(pending, current)
+		}
+		if int64(offset+len(orders)) >= total || len(orders) == 0 {
+			break
+		}
+	}
+	var discardErrs []error
+	for _, current := range pending {
+		if _, err := e.Orders.DiscardPending(ctx, spaceID, current.OrderID); err != nil {
+			discardErrs = append(discardErrs, err)
+		}
+	}
+	return errors.Join(discardErrs...)
 }
 
 func baseQuantityRules(

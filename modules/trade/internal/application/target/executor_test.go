@@ -19,6 +19,7 @@ type targetOrderServiceStub struct {
 	capacities   map[string]shared.Decimal
 	placeErrors  map[string]error
 	submitErrors map[string]error
+	store        *store.Store
 	specs        []orderdomain.OrderSpec
 	submitted    []string
 	canceled     []string
@@ -70,12 +71,29 @@ func (s *targetOrderServiceStub) Cancel(
 }
 
 func (s *targetOrderServiceStub) DiscardPending(
-	_ context.Context,
-	_ string,
+	ctx context.Context,
+	spaceID string,
 	orderID string,
 ) (orderdomain.Order, error) {
 	s.discarded = append(s.discarded, orderID)
-	return orderdomain.Order{ID: shared.OrderID(orderID)}, nil
+	if s.store == nil {
+		return orderdomain.Order{ID: shared.OrderID(orderID)}, nil
+	}
+	record, err := s.store.GetOrder(ctx, spaceID, orderID)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	expected := record.Version
+	record.State = string(orderdomain.Canceled)
+	record.RemainingReservedQuantity = "0"
+	record.FinishedAt = time.Now().UnixMilli()
+	record.Version++
+	if err := s.store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.UpdateOrder(record, expected)
+	}); err != nil {
+		return orderdomain.Order{}, err
+	}
+	return orderdomain.Order{ID: shared.OrderID(orderID), State: orderdomain.Canceled}, nil
 }
 
 func (s *targetOrderServiceStub) ResolveUnknown(
