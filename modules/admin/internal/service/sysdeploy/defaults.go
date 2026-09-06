@@ -18,6 +18,8 @@ const storageMetadataGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor
 const storagePrimaryGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\"]"
 const storageTimeSeriesGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\",\"strategy\",\"moox-skill\"]"
 const storageViewGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"strategy\"]"
+const strategyGatewayMethods = "[\"CreateStrategy\",\"UpdateStrategy\",\"GetStrategy\",\"ListStrategies\",\"CreateRunner\",\"GetRunner\",\"ListRunners\",\"UpdateRunner\",\"SetRunnerStatus\",\"ListStrategyResults\",\"GetStrategyResult\",\"ListStrategyTargets\",\"CreateStrategyInstance\",\"GetStrategyInstance\",\"ListStrategyInstances\",\"SetStrategyInstanceEnabled\"]"
+const strategyGatewayCallers = "[\"admin-gateway\",\"moox-cli\"]"
 
 func DefaultDeployments(nodeID string) []Deployment {
 	rows := []Deployment{
@@ -35,7 +37,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 		withExtra(deployment("moox_collector", "collector", "http", "127.0.0.1", 11402, "trpc.moox.collector.CollectMgr", "internal", "独立采集管理服务，承载采集规则、任务实例和 planner"), `{"health_url":"http://127.0.0.1:11412/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("moox_cloudnode", "cloudnode", "http", "127.0.0.1", 11401, "trpc.moox.cloudnode.CloudNodeMgr", "internal", "独立云节点执行平台，承载云节点、代码包、异步 JobItem 队列和同步调用"), `{"health_url":"http://127.0.0.1:11411/readyz","health_kind":"readiness","monitor_enabled":true,"timeout_ms":330000,"max_body_bytes":33554432}`),
 		withExtra(deployment("moox_factor", "factor", "http", "127.0.0.1", 11404, "trpc.moox.factor.FactorMgr", "internal", "因子计算服务，承载因子定义、绑定、补算与结果写回"), `{"health_url":"http://127.0.0.1:11414/readyz","health_kind":"readiness","monitor_enabled":true,"timeout_ms":120000,"gateway_methods":["CreateFactor","UpdateFactor","SetFactorStatus","DeleteFactor","UpsertBinding","DeleteBinding","RecalcFactor","GetEngineStatus"],"gateway_callers":["admin-gateway","moox-cli"],"gateway_routes":[{"service_path":"trpc.moox.factor.FactorMgr","port":11403,"gateway_methods":["GetFactor","ListFactors","ListBindings"],"gateway_callers":["admin-gateway","moox-cli","strategy"]}]}`),
-		withExtra(deployment("moox_strategy", "strategy", "http", "127.0.0.1", 11433, "trpc.moox.strategy.StrategyMgr", "internal", "交易策略运行、目标和绩效查询服务"), `{"health_url":"http://127.0.0.1:11431/readyz","health_kind":"readiness","monitor_enabled":true}`),
+		withExtra(deployment("moox_strategy", "strategy", "http", "127.0.0.1", 11433, "trpc.moox.strategy.StrategyMgr", "internal", "交易策略运行、目标和绩效查询服务"), fmt.Sprintf(`{"health_url":"http://127.0.0.1:11431/readyz","health_kind":"readiness","monitor_enabled":true,"gateway_methods":%s,"gateway_callers":%s}`, strategyGatewayMethods, strategyGatewayCallers)),
 		withExtra(deployment("moox_archive", "archive", "http", "127.0.0.1", 11416, "", "internal", "事件归档和物化服务"), `{"health_url":"http://127.0.0.1:11416/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("moox_hostagent", "hostagent", "http", "127.0.0.1", 11426, "trpc.moox.hostagent.HostAgentMgr", "internal", "主机指标采集代理"), `{"health_url":"http://127.0.0.1:11425/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("moox_trade", "trade", "http", "127.0.0.1", 11210, "", "internal", "量化交易执行服务"), `{"health_url":"http://127.0.0.1:11210/readyz","health_kind":"readiness","monitor_enabled":true}`),

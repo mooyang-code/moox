@@ -75,6 +75,20 @@ func TestFactorGatewayRouteUsesNativeTRPCListener(t *testing.T) {
 	assert.Equal(t, "127.0.0.1:11403", routes[0].Address)
 }
 
+func TestStrategyGatewayRouteUsesNativeTRPCListener(t *testing.T) {
+	row := Deployment{
+		Host: "127.0.0.1", Port: 11433,
+		GatewayPath: "trpc.moox.strategy.StrategyMgr", GatewayServiceID: "strategymgr",
+	}
+	routes, err := deploymentGatewayRoutes(row, routeExtraConfig{
+		GatewayMethods: []string{"GetStrategy", "CreateStrategyInstance"},
+		GatewayCallers: []string{"admin-gateway", "moox-cli"},
+	})
+	require.NoError(t, err)
+	require.Len(t, routes, 1)
+	assert.Equal(t, "127.0.0.1:11430", routes[0].Address)
+}
+
 func TestReportGatewayStatus_UpdatesHeartbeat(t *testing.T) {
 	dao := NewDAO(setupSysDeployTestDB(t))
 	ctx := context.Background()

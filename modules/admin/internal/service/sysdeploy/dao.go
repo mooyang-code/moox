@@ -201,6 +201,15 @@ func (d *DAO) backfillDefaultExtraConfig(ctx context.Context, item *Deployment) 
 		return err
 	}
 	next, changed := mergeDefaultExtraConfig(row.ExtraConfig, item.ExtraConfig)
+	// Strategy is a privileged control surface. Older nodes were seeded with
+	// wildcard methods/callers; do not preserve those wildcards merely because
+	// the generic merge keeps operator additions. Tighten only this route to
+	// the versioned explicit ACL on the next Admin seed.
+	if row.GatewayServiceID == "strategymgr" || row.ServiceName == "moox_strategy" {
+		var aclChanged bool
+		next, aclChanged = tightenStrategyGatewayACL(next, item.ExtraConfig)
+		changed = changed || aclChanged
+	}
 	updates := map[string]interface{}{}
 	if changed {
 		updates["c_extra_config"] = next
@@ -634,6 +643,39 @@ func mergeDefaultGatewayMethods(existingValue, defaultValue any) ([]string, bool
 		changed = true
 	}
 	return merged, changed
+}
+
+func tightenStrategyGatewayACL(existingRaw, defaultRaw string) (string, bool) {
+	var existing, defaults map[string]any
+	if json.Unmarshal([]byte(existingRaw), &existing) != nil || json.Unmarshal([]byte(defaultRaw), &defaults) != nil {
+		return existingRaw, false
+	}
+	changed := false
+	for _, key := range []string{"gateway_methods", "gateway_callers"} {
+		values, ok := existing[key].([]any)
+		if !ok {
+			continue
+		}
+		wildcard := false
+		for _, value := range values {
+			if strings.TrimSpace(fmt.Sprint(value)) == "*" {
+				wildcard = true
+				break
+			}
+		}
+		if wildcard {
+			existing[key] = defaults[key]
+			changed = true
+		}
+	}
+	if !changed {
+		return existingRaw, false
+	}
+	raw, err := json.Marshal(existing)
+	if err != nil {
+		return existingRaw, false
+	}
+	return string(raw), true
 }
 
 func (d *DAO) exists(ctx context.Context, nodeID, serviceName string) (bool, error) {

@@ -3,7 +3,27 @@ package sqlite
 import (
 	"context"
 	"testing"
+
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
+
+func TestCreateSpaceDoesNotOverwriteExistingSpace(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	if _, err := store.CreateSpace(ctx, &pb.Space{SpaceId: "space", Name: "Original", Owner: "owner-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSpace(ctx, &pb.Space{SpaceId: "space", Name: "Replacement", Owner: "owner-b"}); err == nil {
+		t.Fatal("duplicate CreateSpace unexpectedly succeeded")
+	}
+	space, err := store.GetSpace(ctx, "space")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if space.GetName() != "Original" || space.GetOwner() != "owner-a" {
+		t.Fatalf("existing Space was overwritten: %+v", space)
+	}
+}
 
 func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 	ctx := context.Background()

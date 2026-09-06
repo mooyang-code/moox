@@ -52,6 +52,30 @@ func TestServiceImpl_SeedDefaults_ShouldInsertRows(t *testing.T) {
 	}
 }
 
+func TestServiceImpl_SeedDefaults_TightensLegacyStrategyWildcardACL(t *testing.T) {
+	svc := newTestService(setupEmptySysDeployTestDB(t), testAdminNodeID)
+	ctx := context.Background()
+	require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: testAdminNodeID, Name: testAdminNodeID, PublicAddress: "https://example.com", Status: "enabled"}))
+	legacy := DefaultDeployments(testAdminNodeID)
+	for _, row := range legacy {
+		if row.ServiceName != "moox_strategy" {
+			continue
+		}
+		row.ExtraConfig = `{"gateway_methods":["*"],"gateway_callers":["*"]}`
+		require.NoError(t, svc.dao.Create(ctx, &row))
+		break
+	}
+	require.NoError(t, svc.SeedDefaults(ctx))
+	row, err := svc.dao.Get(ctx, testAdminNodeID, "moox_strategy")
+	require.NoError(t, err)
+	extra, err := parseRouteExtraConfig(row.ExtraConfig)
+	require.NoError(t, err)
+	assert.NotContains(t, extra.GatewayMethods, "*")
+	assert.NotContains(t, extra.GatewayCallers, "*")
+	assert.Contains(t, extra.GatewayMethods, "SetStrategyInstanceEnabled")
+	assert.ElementsMatch(t, []string{"admin-gateway", "moox-cli"}, extra.GatewayCallers)
+}
+
 func TestServiceImpl_SeedDefaults_BackfillsSkillReadRouteInLegacyStorageDeployment(t *testing.T) {
 	db := setupSysDeployTestDB(t)
 	svc := NewService(&database.Manager{}, testAdminNodeID)

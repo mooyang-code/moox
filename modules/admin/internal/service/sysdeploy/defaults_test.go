@@ -45,6 +45,38 @@ func TestDefaultTradeGatewayOnlyExposesStrategyOwnership(t *testing.T) {
 	t.Fatal("trade_owner deployment is missing")
 }
 
+func TestDefaultStrategyGatewayUsesExplicitLeastPrivilegeACL(t *testing.T) {
+	for _, row := range DefaultDeployments("strategy-node") {
+		if row.ServiceName != "moox_strategy" {
+			continue
+		}
+		extra, err := parseRouteExtraConfig(row.ExtraConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if containsString(extra.GatewayMethods, "*") || containsString(extra.GatewayCallers, "*") {
+			t.Fatalf("strategy route must not use wildcard ACL: methods=%v callers=%v", extra.GatewayMethods, extra.GatewayCallers)
+		}
+		for _, caller := range []string{"admin-gateway", "moox-cli"} {
+			if !containsString(extra.GatewayCallers, caller) {
+				t.Fatalf("strategy route missing caller %s: %v", caller, extra.GatewayCallers)
+			}
+		}
+		for _, caller := range []string{"factor", "collector", "monitor"} {
+			if containsString(extra.GatewayCallers, caller) {
+				t.Fatalf("strategy route must not allow caller %s: %v", caller, extra.GatewayCallers)
+			}
+		}
+		for _, method := range []string{"CreateStrategyInstance", "SetStrategyInstanceEnabled", "CreateStrategy", "ListStrategyResults"} {
+			if !containsString(extra.GatewayMethods, method) {
+				t.Fatalf("strategy route missing method %s: %v", method, extra.GatewayMethods)
+			}
+		}
+		return
+	}
+	t.Fatal("moox_strategy deployment is missing")
+}
+
 func TestTRPCHealthAndAdminRPCServicesBindLoopback(t *testing.T) {
 	root := filepath.Join("..", "..", "..", "..", "..")
 	matches, err := filepath.Glob(filepath.Join(root, "modules", "*", "config", "trpc_go*.yaml"))

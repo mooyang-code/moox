@@ -769,6 +769,15 @@ func buildStorageViewConsumerOptions(runtimeConfig storageconfig.RuntimeConfig) 
 		})
 	}
 	allowed := make([]string, 0, len(allowedSpaces))
+	// Local/integration deployments may create short-lived spaces dynamically.
+	// Keep the checked-in route allow-list closed by default, while permitting
+	// an operator to opt in additional exact space IDs without editing YAML.
+	for _, raw := range strings.Split(os.Getenv("MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES"), ",") {
+		if spaceID := strings.TrimSpace(raw); spaceID != "" {
+			allowedSpaces[spaceID] = struct{}{}
+		}
+	}
+	allowed = allowed[:0]
 	for spaceID := range allowedSpaces {
 		allowed = append(allowed, spaceID)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -198,6 +199,23 @@ func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 	}
 	if opts.PartitionConfigs[1].PartitionID != "factor" || opts.PartitionConfigs[1].Consumer != "storage_view_factor" || len(opts.PartitionConfigs[1].FilterSubjects) != 4 || opts.PartitionConfigs[1].FetchBatch != 16 || opts.PartitionConfigs[1].MaxWorkers != 8 || opts.PartitionConfigs[1].MaxAckPending != 128 {
 		t.Fatalf("factor consumer options = %+v", opts.PartitionConfigs[1])
+	}
+}
+
+func TestStorageViewConsumerOptionsAllowExplicitDynamicSpaces(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "storage.yaml")
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    consumer_partitions:\n      - id: misc\n        durable: storage_view_misc\n        routes:\n          - space_id: crypto\n            dataset_ids: [\"*\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MOOX_STORAGE_CONFIG", path)
+	t.Setenv("MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES", " factor_e2e, crypto, factor_e2e ")
+	opts, err := storageViewConsumerOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := opts.AllowedDatasetSpaces, []string{"crypto", "factor_e2e"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("allowed dynamic spaces = %v, want %v", got, want)
 	}
 }
 

@@ -36,6 +36,27 @@ func (s *Store) UpsertSpace(ctx context.Context, item *pb.Space) (*pb.Space, err
 	return s.GetSpace(ctx, item.GetSpaceId())
 }
 
+// CreateSpace inserts a new Space without overwriting an existing one. The
+// catalog CreateSpace RPC uses this path so concurrent acceptance runs cannot
+// race through an existence check and then delete each other's metadata.
+func (s *Store) CreateSpace(ctx context.Context, item *pb.Space) (*pb.Space, error) {
+	if item == nil || item.GetSpaceId() == "" || item.GetName() == "" {
+		return nil, errors.New("space_id and name are required")
+	}
+	item.Status = defaultStatus(item.GetStatus())
+	raw, err := marshal(item)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO t_spaces (c_space_id, c_name, c_description, c_owner, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, item.GetSpaceId(), item.GetName(), item.GetDescription(), item.GetOwner(), item.GetStatus(), raw); err != nil {
+		return nil, err
+	}
+	return s.GetSpace(ctx, item.GetSpaceId())
+}
+
 func (s *Store) GetSpace(ctx context.Context, spaceID string) (*pb.Space, error) {
 	return scanMessageWithSQLTimestamps(s.queryDB(ctx).QueryRowContext(ctx, `SELECT c_attrs_json, c_ctime, c_mtime FROM t_spaces WHERE c_space_id = ?`, spaceID), func() *pb.Space { return &pb.Space{} })
 }

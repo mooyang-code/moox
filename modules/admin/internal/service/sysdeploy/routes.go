@@ -136,6 +136,11 @@ func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayp
 		basePort = 20103
 	case "factormgr":
 		basePort = 11403
+	case "strategymgr":
+		// Strategy keeps its browser-facing HTTP listener on 11433, while the
+		// native service gateway must speak tRPC to the dedicated 11430 listener.
+		// Deployment.Port remains the HTTP endpoint used by the Admin BFF.
+		basePort = 11430
 	}
 	base := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(basePort))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods, AllowedCallers: extra.GatewayCallers}
 	if extra.TimeoutMS != nil {
