@@ -127,7 +127,14 @@ elif [[ "${restart_storage_view}" == "1" ]]; then
 else
   fail "MOOX_FACTOR_STORAGE_E2E_SPACE_ID is required unless MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW=1"
 fi
-e2e_allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-${original_storage_allowed_spaces:-}}"
+e2e_allowed_spaces="${original_storage_allowed_spaces:-}"
+if [[ -n "${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-}" ]]; then
+  if [[ -n "${e2e_allowed_spaces}" ]]; then
+    e2e_allowed_spaces="${e2e_allowed_spaces},${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES}"
+  else
+    e2e_allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES}"
+  fi
+fi
 start_storage_view() {
   local allowed_spaces="$1" eventbus_url="$2"
   if [[ -r "${storage_view_credential_file}" ]]; then
