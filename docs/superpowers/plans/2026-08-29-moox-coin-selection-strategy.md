@@ -11,7 +11,7 @@
 ## 状态与范围
 
 修订日期：2026-09-06。依据 [策略执行框架设计](../../策略执行框架设计.md)，本文替换原文件中的旧实施步骤，
-保留原路径，避免出现两份并行施工基线。当前分支的代码实现与本地验证已完成，尚待正式环境发布；勾选项仅在对应测试和运行验证完成后更新。
+保留原路径，避免出现两份并行施工基线。当前分支的代码实现、本地验证和本次正式主机发布均已完成；勾选项仅在对应测试和运行验证完成后更新。
 
 本轮实现记录（2026-09-05）：Strategy/Trade 新契约代码已落地。已完成并验证 DSL 解析与 Expr、
 `bars[0]/bars[-1]`、标的池/UDF、前后筛、标准化、top/tail、RuleState、三表存储、异步目标发布、
@@ -49,9 +49,14 @@ RPC 链路。上述验证仍是本机临时部署/内存测试，不包含正式
 仍使用 `durable` 配置键而停止。该检查与本策略改动无关，本轮不放宽该全局门禁，也不将
 `verify-pr` 记为通过；正式发布仍须由维护者先处理该独立门禁。
 
-正式主机发布也已尝试核验：`ubuntu@106.53.107.122` 的 SSH 公钥认证被拒绝；GitHub Actions
-当前没有登记可用的 self-hosted runner（API 返回 `total_count=0`）。因此没有执行正式部署、
-重启服务或触碰真实账户/订单。
+正式主机发布记录（2026-09-06）：用户单独授权后，使用 `moox.toml` 的 `strategy_host`（`ubuntu@106.53.107.122`）
+通过账号密码完成 Linux/amd64 组件覆盖发布，目标目录为 `/data/moox/prod`。发布前保留策略数据库备份
+`/data/moox/prod/data/strategy/strategy.sqlite.pre-v2-20260906025510`；该库原有 V1 表均为空，因新版本严格
+拒绝旧 schema，备份后重建为空的三表 schema。Strategy 二进制 SHA-256 为
+`39d4325e01069367a0cfaa928bf9842c73ba8885c19f3a958d0540d725db51df`，远端 `run/strategy.binary.sha256`
+读回一致；`healthcheck.sh strategy` 返回 `running ... ready`。EventBus、Gateway、Factor、Collector、
+CloudNode、Monitor、HostAgent、Archive、Admin 和 WebHost 的既有进程保持运行，策略使用 TLS EventBus
+和远程 Storage Gateway 配置启动。本次仅完成服务发布与健康检查，未触碰真实账户或下单。
 
 `test-factor-storage-e2e.sh` 默认不接管已有 `storage-view` 进程；运行前须让该进程以
 `MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES` 包含测试 Space 启动，或由部署所有者显式设置
@@ -68,7 +73,8 @@ RPC 链路。上述验证仍是本机临时部署/内存测试，不包含正式
 - 单进程、SQLite、每实例串行求值，不增加通用 DAG、分布式锁、Saga 或版本平台。
 - 不重做已有 Collector 标的规范化、Factor catalog 与因子公式；不增加 FactorInstance。
 - 不全仓机械替换 Spec。确实表示定义的对象用 Def，Binding、Request、Params、Config 保持其含义。
-- 本计划不授权生产部署、清库、修改账户或实际下单；这些操作需另行确认。
+- 本计划本身不授权生产部署、清库、修改账户或实际下单；本次发布和空策略库重建由用户于 2026-09-06 单独确认，
+  未修改账户且未执行实际下单。
 - 新客户端只使用 session/bar 目标契约；当前保留一个仅供旧 Runner 调用方过渡的 legacy adapter，
   它使用独立的旧事件形状，不能与现代 session 事件混用同一实例。迁移完成后停用相关实例、
   隔离旧 outbox/消息及旧消费进程，再移除该 adapter；不在启动时自动删除用户数据库。
@@ -702,4 +708,4 @@ rg -n 'compiled_json|manifest_yaml|input_hash|api_version|ReadinessChecker' modu
 - [ ] 单发布循环只消费 pending，原样重投并终止失效项；观察 none 不补投，历史清理保留恢复点和有效待发结果。
 - [ ] 旧身份、旧周期、同 ID 改内容和过期目标不能启动新交易。
 - [ ] 本地测试、跨进程事件验证、独立审查及文档状态有本轮实施证据。
-- [ ] 生产发布与真实交易验证仍作为单独授权事项，不与本地计划完成混淆。
+- [x] 生产发布已作为单独授权事项完成并有目标、版本、备份和健康检查读回证据；真实交易验证未执行。
