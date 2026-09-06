@@ -10,12 +10,21 @@ fi
 DEPLOY_ROOT=""
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-series-tag-e2e.XXXXXX")"
 OWN_DEPLOY=0
+export HOME="${TMP_ROOT}/home"
+# The Factor integration test exercises the real Factor -> Storage -> Strategy
+# path, so this deployment always includes Strategy.
+# Storage requires an explicit maintenance policy even for an isolated test
+# deployment. Keep the default small and deterministic; callers may override
+# it when exercising a different View workload.
+if [[ -z "${MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64:-}" ]]; then
+  export MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64="$(printf '%s' '{"maintenance_check_interval":"1m","rebuild_lookback_periods":1000,"max_periods_per_series":2000,"max_view_file_bytes":1073741824,"system_monitor":{"max_periods_per_series":2000},"views":[]}' | base64 | tr -d '\n')"
+fi
 
 cleanup() {
   if [[ "${OWN_DEPLOY}" -eq 1 && -n "${DEPLOY_ROOT}" ]]; then
     if [[ "${MOOX_KEEP_SERIES_TAG_E2E:-0}" != "1" && -x "${DEPLOY_ROOT}/stop.sh" ]]; then
       MOOX_WITH_EVENTBUS=1 MOOX_WITH_STORAGE_NODE=1 MOOX_WITH_ARCHIVE=1 MOOX_WITH_FACTOR=1 \
-        MOOX_WITH_MONITOR=1 "${DEPLOY_ROOT}/stop.sh" >/dev/null 2>&1 || true
+        MOOX_WITH_MONITOR=1 MOOX_WITH_STRATEGY=1 "${DEPLOY_ROOT}/stop.sh" >/dev/null 2>&1 || true
     fi
     # stop.sh intentionally treats an ownership mismatch as stale. This
     # fallback is still narrowly scoped to commands containing this unique
@@ -82,8 +91,8 @@ if [[ -z "${DEPLOY_ROOT}" ]]; then
     --no-web-host \
     --no-cloudnode \
     --no-collector \
+    --no-hostagent \
     --no-trade \
-    --no-strategy \
     --local-ca skip \
     --target-ca skip
   )
@@ -97,7 +106,8 @@ fi
 [[ -d "${DEPLOY_ROOT}" ]] || fail "deployment root does not exist: ${DEPLOY_ROOT}"
 DEPLOY_ROOT="$(cd "${DEPLOY_ROOT}" && pwd -P)"
 
-for service in gateway storage-primary storage-node storage-view factor archive; do
+required_services=(gateway storage-primary storage-node storage-view factor archive strategy)
+for service in "${required_services[@]}"; do
   pid_file="${DEPLOY_ROOT}/run/${service}.pid"
   [[ -f "${pid_file}" ]] || fail "missing ${service} pid file: ${pid_file}"
   pid="$(tr -d '[:space:]' <"${pid_file}")"
@@ -118,6 +128,9 @@ for path in \
   [[ -e "${path}" ]] || fail "missing required deployment artifact: ${path}"
 done
 
+[[ -e "${DEPLOY_ROOT}/secrets/gateway-strategy.key" ]] ||
+  fail "missing required deployment artifact: ${DEPLOY_ROOT}/secrets/gateway-strategy.key"
+
 read_one_line_secret() {
   local path="$1"
   local value
@@ -131,6 +144,7 @@ read_one_line_secret() {
 
 factor_secret="$(read_one_line_secret "${DEPLOY_ROOT}/secrets/gateway-factor.key")"
 cli_secret="$(read_one_line_secret "${DEPLOY_ROOT}/secrets/gateway-moox-cli.key")"
+strategy_secret="$(read_one_line_secret "${DEPLOY_ROOT}/secrets/gateway-strategy.key")"
 gateway_node_id="$(sed -n 's/^MOOX_GATEWAY_NODE_ID=//p' "${DEPLOY_ROOT}/secrets/gateway-service.env")"
 [[ -n "${gateway_node_id}" && "${gateway_node_id}" != *$'\n'* ]] ||
   fail "gateway-service.env has no unique MOOX_GATEWAY_NODE_ID"
@@ -182,6 +196,9 @@ fi
 export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_KEY_ID="moox-cli"
 export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_CALLER="moox-cli"
 export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_SECRET="${cli_secret}"
+export MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_KEY_ID="strategy"
+export MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_CALLER="strategy"
+export MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_SECRET="${strategy_secret}"
 export MOOX_ARCHIVE_E2E_ROOT="${DEPLOY_ROOT}/data/archive"
 export MOOX_ARCHIVE_E2E_PID_FILE="${DEPLOY_ROOT}/run/archive.pid"
 

@@ -61,7 +61,13 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		Secret: requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_SECRET"),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	e2eTimeout := 3 * time.Minute
+	if raw := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_TIMEOUT")); raw != "" {
+		if configured, err := time.ParseDuration(raw); err == nil && configured > 0 {
+			e2eTimeout = configured
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), e2eTimeout)
 	defer cancel()
 	auth := &commonpb.AuthInfo{
 		AppId: "moox-factor", Operator: "factor-storage-e2e",
@@ -151,10 +157,10 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	subjectIDs := []string{subjectID, secondSubjectID}
 	const freq = "1m"
 	inputFieldID := "close_" + suffix
-	// Use a near-future synthetic period so the Strategy result remains inside
-	// its two-bar validity window while the asynchronous Factor/View pipeline
-	// is being exercised.
-	first := time.Now().UTC().Truncate(time.Minute).Add(5 * time.Minute)
+	// Use recently closed synthetic periods. A future period would wait for the
+	// Factor watermark before producing its durable marker, making this E2E
+	// depend on wall-clock time rather than the event chain under test.
+	first := time.Now().UTC().Truncate(time.Minute).Add(-3 * time.Minute)
 	second := first.Add(time.Minute)
 	third := second.Add(time.Minute)
 	end := third.Add(time.Nanosecond)
@@ -1081,13 +1087,27 @@ func viewColumn(spaceID, viewID, datasetID, output, display string, order uint32
 
 func waitForViewReady(t *testing.T, ctx context.Context, metadata storagepb.MetadataClientProxy, auth *commonpb.AuthInfo, spaceID, viewID string) {
 	t.Helper()
+	timeout := 60 * time.Second
+	if raw := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_VIEW_READY_TIMEOUT")); raw != "" {
+		if configured, err := time.ParseDuration(raw); err == nil && configured > 0 {
+			timeout = configured
+		}
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < timeout {
+			timeout = remaining
+		}
+	}
+	if timeout <= 0 {
+		timeout = time.Nanosecond
+	}
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		rsp, err := metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: auth, SpaceId: spaceID, ViewId: viewID})
 		require.NoError(collect, err)
 		require.Equal(collect, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 		require.NotEmpty(collect, rsp.GetView().GetActiveIndexId())
 		require.Equal(collect, rsp.GetView().GetDesiredViewRevision(), rsp.GetView().GetActiveViewRevision())
-	}, 60*time.Second, 250*time.Millisecond)
+	}, timeout, 250*time.Millisecond)
 	t.Log("real Storage View reconcile became active")
 }
 

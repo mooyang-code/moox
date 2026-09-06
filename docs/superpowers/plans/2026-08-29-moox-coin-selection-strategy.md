@@ -41,6 +41,12 @@ Strategy Playwright；Playwright 中一条旧组合账户断言已保留兼容�
 RPC 链路。Factor/Storage/Strategy 联合 E2E 曾受远端旧 View active-index 基线阻塞，测试产生的临时
 Space/View 不作为成功证据；本轮不触碰真实账户或实际下单。使用真实 Factor、Storage、Strategy
 进程和独立执行账户的联合 E2E 仍需在具备可控 View 基线的环境单独验收。
+本次补充修复了隔离 `test-series-tag-e2e.sh` 的本地部署脚本（Strategy、TLS EventBus、Storage
+维护策略和 Darwin 无 HostAgent），并实际启动了 Factor/Storage/Strategy 三进程；Storage View
+建索引、Factor 绑定和 Strategy 实例创建均成功，但 `ViewSourcePeriodReady` 未在 Factor 的
+JetStream 消费者中形成可见的 `FactorPeriodComputed` 标记，测试超时，因此仍不把该次运行记为联合
+E2E 通过。该问题与 Strategy 二进制发布无关，后续应单独检查本地 EventBus 的 Storage→Factor
+事件投递和消费者状态。
 本地使用 `SKIP_WEB_ASSETS=1` 构建 `darwin/arm64` 发布包也已成功，产物仅用于构建验收，不能替代
 生产目标架构的发布包。
 
@@ -711,6 +717,7 @@ rg -n 'compiled_json|manifest_yaml|input_hash|api_version|ReadinessChecker' modu
 - `go test ./modules/admin/... -count=1`：PASS。
 - `bash scripts/test/e2e/test-deploy-moox-strategy-e2e.sh`：PASS。
 - `bash scripts/test/e2e/test-strategy-trade-event-e2e.sh`、`bash scripts/test/e2e/test-strategy-trade-logical-account-e2e.sh`：PASS。
+- `MOOX_FACTOR_ENGINE_PYTHON_BIN=$(command -v python3) MOOX_FACTOR_STORAGE_E2E_TIMEOUT=8m MOOX_FACTOR_STORAGE_E2E_VIEW_READY_TIMEOUT=5m bash scripts/test/e2e/test-series-tag-e2e.sh`：启动链路和 View/绑定/实例创建成功，但因 `ViewSourcePeriodReady` 未形成 Factor marker 超时，FAIL（不作为通过证据）。
 - Factor/Storage/Strategy 联合 E2E：受远端旧 View active-index 基线限制，未作为通过证据；未执行真实账户或下单。
 - `git diff --check`：PASS；仓库级 `make verify-pr` 仍受既有 Storage `durable` 配置键门禁阻塞，与本策略改动无关。
 
