@@ -70,14 +70,30 @@ require_file "${DEPLOY_ROOT}/certs/gateway/peers.pem"
 
 # View wildcard discovery is fixed at process startup. A caller that owns the
 # local deployment may opt into a controlled storage-view restart so the
-# temporary E2E space is in its explicit allow-list. The default is off: a
-# test must not stop an unrelated running service or lose its existing PID
-# ownership merely to change an environment variable.
-# Keep the default isolated on macOS as well: BSD date does not implement
-# GNU's %N nanosecond formatter, so combine epoch seconds, PID and RANDOM.
-e2e_space_id="${MOOX_FACTOR_STORAGE_E2E_SPACE_ID:-factor_e2e_$(date +%s)_$$_${RANDOM}}"
-e2e_allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-${e2e_space_id}}"
-if [[ "${MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW:-0}" == "1" ]]; then
+# temporary E2E space is in its explicit allow-list. Without that opt-in, the
+# caller must provide a preconfigured Space already present in the running
+# View allow-list; fail fast instead of creating metadata that cannot be
+# consumed by the current process.
+restart_storage_view="${MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW:-0}"
+configured_space_id="${MOOX_FACTOR_STORAGE_E2E_SPACE_ID:-}"
+if [[ -n "${configured_space_id}" ]]; then
+  e2e_space_id="${configured_space_id}"
+elif [[ "${restart_storage_view}" == "1" ]]; then
+  # BSD date does not implement GNU's %N nanosecond formatter, so combine
+  # epoch seconds, PID and RANDOM for a sufficiently unique local test ID.
+  e2e_space_id="factor_e2e_$(date +%s)_$$_${RANDOM}"
+else
+  fail "MOOX_FACTOR_STORAGE_E2E_SPACE_ID is required unless MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW=1"
+fi
+e2e_allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-}"
+if [[ "${restart_storage_view}" == "1" ]]; then
+  if [[ -n "${e2e_allowed_spaces}" ]]; then
+    # Preserve operator-provided entries while ensuring this run's Space is
+    # actually consumed by the freshly started View process.
+    e2e_allowed_spaces="${e2e_allowed_spaces},${e2e_space_id}"
+  else
+    e2e_allowed_spaces="${e2e_space_id}"
+  fi
   storage_view_start="${DEPLOY_ROOT}/storage-view/start.sh"
   if [[ -x "${storage_view_start}" ]]; then
     storage_view_command=("${storage_view_start}")
@@ -98,6 +114,19 @@ if [[ "${MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW:-0}" == "1" ]]; then
       "${storage_view_command[@]}"
   fi
   require_running_service storage-view
+else
+  [[ -n "${e2e_allowed_spaces}" ]] || fail "MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES must include ${e2e_space_id} when storage-view restart is disabled"
+  space_is_allowed=0
+  IFS=',' read -r -a configured_allowed_spaces <<<"${e2e_allowed_spaces}"
+  for raw_space in "${configured_allowed_spaces[@]}"; do
+    raw_space="${raw_space#${raw_space%%[![:space:]]*}}"
+    raw_space="${raw_space%${raw_space##*[![:space:]]}}"
+    if [[ "${raw_space}" == "${e2e_space_id}" ]]; then
+      space_is_allowed=1
+      break
+    fi
+  done
+  [[ "${space_is_allowed}" == "1" ]] || fail "Space ${e2e_space_id} is not in MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES; preconfigure it or set MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW=1"
 fi
 
 secret_raw="$(cat "${DEPLOY_ROOT}/secrets/gateway-factor.key"; printf x)"

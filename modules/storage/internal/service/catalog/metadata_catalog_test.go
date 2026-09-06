@@ -35,6 +35,18 @@ type registerArchiveFileMetadataStore struct {
 	registered bool
 }
 
+type createSpaceMetadataStore struct {
+	metadata.Store
+	space      *pb.Space
+	createCall int
+}
+
+func (s *createSpaceMetadataStore) CreateSpace(_ context.Context, item *pb.Space) (*pb.Space, error) {
+	s.createCall++
+	s.space = item
+	return item, nil
+}
+
 type manualRebuildMetadataStore struct {
 	metadata.Store
 	view       *pb.View
@@ -242,6 +254,20 @@ func TestRegisterArchiveFileSucceedsWhenCachePublicationIsUnavailable(t *testing
 	require.NoError(t, err)
 	require.True(t, store.registered)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+}
+
+func TestCreateSpaceSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) {
+	store := &createSpaceMetadataStore{}
+	service, err := NewMetadataService(store, &metacache.Store{}, Options{AuthSecret: "secret"})
+	require.NoError(t, err)
+
+	rsp, err := service.CreateSpace(context.Background(), &pb.CreateSpaceReq{Space: &pb.Space{
+		SpaceId: "space-create", Name: "Create", Owner: "test",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, 1, store.createCall)
+	require.Equal(t, "space-create", rsp.GetSpace().GetSpaceId())
 }
 
 func TestActivateDatasetCASConflictDoesNotChangeState(t *testing.T) {

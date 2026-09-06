@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -122,6 +123,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	if spaceID == "" {
 		spaceID = "factor_e2e_" + suffix
 	}
+	spaceOwner := "factor-storage-e2e-" + suffix
 	strategyScope := client.WithMetaData("space_id", []byte(spaceID))
 	// Dataset identifiers are required to use the dataset_ namespace. Keep the
 	// generated names compliant so this integration test exercises the real
@@ -186,25 +188,45 @@ func TestFactorRealStorageE2E(t *testing.T) {
 			}
 		}
 		if spaceCreated {
-			cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, sourceID)
-			cleanupDataset := resultDatasetID
-			if cleanupDataset == "" {
-				cleanupDataset = targetID
+			// CreateSpace commits before the RPC response is serialized. Re-read
+			// the durable owner before cleanup so a lost response or a duplicate
+			// create cannot delete another run's Space and its dependent metadata.
+			current, getErr := cleanupMetadata.GetSpace(cleanupCtx, &storagepb.GetSpaceReq{AuthInfo: auth, SpaceId: spaceID})
+			owned := false
+			switch {
+			case getErr != nil:
+				reportCleanupFailure(t, "space "+spaceID+" ownership lookup", current, getErr)
+			case current == nil || current.GetRetInfo() == nil:
+				reportCleanupFailure(t, "space "+spaceID+" ownership lookup", current, errors.New("missing ret_info"))
+			case current.GetRetInfo().GetCode() == commonpb.ErrorCode_SPACE_NOT_FOUND:
+				t.Logf("space %s was not committed; skipping cleanup", spaceID)
+			case current.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS:
+				reportCleanupFailure(t, "space "+spaceID+" ownership lookup", current, nil)
+			case current.GetSpace() == nil || current.GetSpace().GetOwner() != spaceOwner:
+				t.Logf("space %s belongs to another run; refusing cleanup", spaceID)
+			default:
+				owned = true
 			}
-			cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, cleanupDataset)
-			if rsp, err := cleanupMetadata.DeleteSpace(cleanupCtx, &storagepb.DeleteSpaceReq{
-				AuthInfo: auth, SpaceId: spaceID,
-			}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-				reportCleanupFailure(t, "space "+spaceID, rsp, err)
-			} else {
-				t.Logf("cleanup space %s succeeded", spaceID)
+			if owned {
+				cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, sourceID)
+				cleanupDataset := resultDatasetID
+				if cleanupDataset == "" {
+					cleanupDataset = targetID
+				}
+				cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, cleanupDataset)
+				if rsp, err := cleanupMetadata.DeleteSpace(cleanupCtx, &storagepb.DeleteSpaceReq{
+					AuthInfo: auth, SpaceId: spaceID,
+				}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+					reportCleanupFailure(t, "space "+spaceID, rsp, err)
+				} else {
+					t.Logf("cleanup space %s succeeded", spaceID)
+				}
 			}
 		}
 	})
 
-	// CreateSpace is an upsert. Refuse to mutate an existing Space before the
-	// test marks it for cleanup; otherwise a typo in the override could cascade
-	// delete unrelated datasets, views, and factors during teardown.
+	// Refuse to mutate an existing Space before the test marks it for cleanup;
+	// otherwise a typo in the override could cascade delete unrelated metadata.
 	existingSpaceRsp, existingSpaceErr := metadata.GetSpace(ctx, &storagepb.GetSpaceReq{AuthInfo: auth, SpaceId: spaceID})
 	require.NoError(t, existingSpaceErr, "preflight GetSpace")
 	require.NotNil(t, existingSpaceRsp, "preflight GetSpace response")
@@ -213,14 +235,16 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	}
 	require.Equal(t, commonpb.ErrorCode_SPACE_NOT_FOUND, existingSpaceRsp.GetRetInfo().GetCode(), "refusing to reuse existing Space %s", spaceID)
 
+	// Mark the create as potentially committed before the call so a lost RPC
+	// response still enters the ownership-checked cleanup path.
+	spaceCreated = true
 	spaceRsp, err := metadata.CreateSpace(ctx, &storagepb.CreateSpaceReq{
 		AuthInfo: auth,
 		Space: &storagepb.Space{
-			SpaceId: spaceID, Name: "验收" + displaySuffix, Owner: "factor-storage-e2e", Status: "active",
+			SpaceId: spaceID, Name: "验收" + displaySuffix, Owner: spaceOwner, Status: "active",
 		},
 	})
 	requireStorageOK(t, "CreateSpace", spaceRsp, err)
-	spaceCreated = true
 	dataSourceRsp, err := metadata.CreateDataSource(ctx, &storagepb.CreateDataSourceReq{
 		AuthInfo: auth,
 		DataSource: &storagepb.DataSource{

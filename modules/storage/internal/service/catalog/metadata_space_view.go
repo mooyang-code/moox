@@ -39,9 +39,10 @@ func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.
 	if err != nil {
 		return &pb.CreateSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.CreateSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
+	// The SQLite INSERT is already committed before this point. Cache
+	// publication is best-effort so a response retry cannot turn a successful
+	// create into a duplicate-key failure or leak an orphaned Space.
+	s.refreshMetadataCacheAfterCommit(ctx, "CreateSpace")
 	return &pb.CreateSpaceRsp{RetInfo: retinfo.Success("success"), Space: created}, nil
 }
 
