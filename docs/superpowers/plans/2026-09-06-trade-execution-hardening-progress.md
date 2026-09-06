@@ -27,11 +27,33 @@
 | T06 故障隔离与过期 | 已完成 | 核心 `dcd9f491`；按 ID 定向唤醒随 T08 完成，独立 codeCR 与全量/相关 race/vet 闭环 |
 | T07 消息结果可观测 | 已完成 | `1a941da7`；真实Runner、四包race、组件及生产构建通过；独立codeCR所有增量发现闭环 |
 | T08 动态账户路由 | 已完成 | 总量与路由分离、共享真实容量、定向唤醒和旧 pin 安全切换；三个新 codeCR 无剩余 P0-P2，主 Agent 全量/race/vet 复验通过 |
-| T09 普通 SubmitOrder | 执行中 | 已补 Place 准入锁截止时间；MANUAL/STRATEGY、持久化提交、完整接口/鉴权仍未实现 |
-| T10 契约与控制台 | 执行中 | 已补历史 receipt 迁移安全门禁；现代身份、删除旧执行分支、前后端与文档一致仍未实现 |
+| T09 普通 SubmitOrder | 已完成 | `33e0eb0b`；ControlMode、无损迁移、普通受理/恢复、proto/RPC/Web API，独立 codeCR 无剩余 P0-P2，主 Agent 全量/定向 race 复验通过 |
+| T10 契约与控制台 | 执行中 | 已补历史 receipt 迁移门禁、ControlMode 创建界面、普通/接管下单分流与错误恢复；现代身份清理和全类型 OperatorWorker 健康复核仍待实现 |
 | T11 完整验收与交付 | 未开始 | 全量/race/vet/协议/Web/隔离 NATS/新 Agent 审查/发布/正式 Paper E2E |
 
 ## 已执行验证
+
+### T09 普通下单与控制模式阶段证据
+
+- ControlMode 在 Domain/Store/Schema/RPC/Paper 创建贯通；默认 STRATEGY，显式 MANUAL 不允许策略 Claim/Rebind/Resume、目标受理/receipt 回放或目标提交。Claim/Rebind 的现代与旧入口均返回冲突；不是根据 owner 为空允许普通下单。
+- 无损迁移增加控制模式并扩展 action CHECK，保留已有账户、成员、订单、成交、目标、receipt 和 action；12 种实际已知历史列布局、未知扩展拒绝、迟发初始化故障整事务回滚及重开均有正式用例。未触碰生产数据库。
+- 普通 SubmitOrder 只做本地受理/预占，后台共用 OrderService；没有 Pause/Cancel/同步交易所 POST。绝对 deadline 首次持久化后不随恢复重算，重复请求以原 action/client ID 恢复，未知提交先查询，已过期未发单释放预占。
+- codeCR 指出的生产 ErrAccountNotExecutable 分类、账户错误与 DB 的 Join、依赖等到 ctx.Done 后诊断落库、双故障/锁超时/link 失败身份丢失均已补真实行为红测和修复。最后 crash-gap 用例还断言响应 action JSON 等于数据库事实，而非内存中尚未成功保存的 link。未知 wrapper 的 nil unwrap 负例也已补齐。
+- 本地 `TestOrdinaryPaperRPCWorkerFillAndReplay` 实际经过 RPC 创建 MANUAL Paper、生产 OrderService/Worker/Decider/Matcher/Reducer、查询订单成交持仓和重开 SQLite；SPOT/SWAP 均通过。`TestOrdinaryLiveMockSubmissionMarketRules` 使用实际 account.Service 和本地 fake adapter，覆盖 SPOT/SWAP 正负例、禁用初次无 action/order、无额外 POST。它不是实盘或生产网络测试。
+- `control_mode_final_audit` 最终逐项核验，报告限定 T09 后端无剩余 P0/P1/P2；独立普通下单和实际 AccountService/Paper 集成测试通过。`submission_rpc_review` 复核 RPC 与 Web API 错误携带身份无剩余问题。主 Agent 已复核最新代码及定向 race，提交 `33e0eb0b` 不包含复制的无关 dirty 基线。
+- 主 Agent 全 Trade、嵌套 tradegen、Gateway 和 Strategy bootstrap 普通测试全部通过；operator/order/rpc/runtime/test/tradegen 六包 race 通过。最后恢复增量的定向 race 分别 11.404s/12.606s，通过；Store ControlMode/逻辑锁定向 race 20.687s，通过。Trade/tradegen vet、schema 单独载入 SQLite、diff-check 通过。
+- 之前生成阶段的未定义方法/遗漏 validator 编译错误、测试 fixture 缺少 fence/行情 catalog 等不作为行为红测证据；文档中的旧测试记录不等于当前正式环境验收。
+
+### T10 控制台下单增量证据
+
+- 创建组合和 Paper 显式选 STRATEGY/MANUAL；MANUAL 普通下单不显示接管警告，STRATEGY 入口明确为“接管并下单”。请求携带绝对提交截止时间，SPOT 不传 NET、SWAP 传 NET。
+- 受理与成交分开显示。RUNNING 无 child 继续查 action；提交阶段完成仍查询 OPEN 订单到真实终态。错误中已有 action 时保留其身份并查询；传输/系统结果不确定时冻结原请求，同 ID/同参数重试。明确未受理错误才恢复编辑，不生成新 key。
+- 新起 `t10_order_ui_review` 审查并补回归：明确拒绝不永久锁表单、不查询同 key 的冲突旧 action；迟到响应不串到另一个账户；Flatten 不沿用旧订单；MANUAL 不计入暂停自动执行筛选；接管后同步刷新详情和列表；接口声明允许接管 RUNNING 暂无订单。
+- 审查者对旧接管路径的“CAS 返回冲突并丢 action”疑问经实际 Store 核验撤回：该更新没有所述 CAS；未为不可达假设保留额外模式分支。保留真实可达的 transport/system 不确定与明确拒绝分流。最终限定 UI 范围无剩余 P0/P1/P2，独立 44 项定向测试、类型检查和 diff-check 通过。
+- Mounted Vue/Arco 用例与 Paper 表单、API 定向测试通过；主 Agent 最终 Web 全量 61 文件/234 测试通过。类型检查通过，最终生产构建通过（13.99s），存在原有 Browserslist/Sass/lottie/chunk 大小警告，不为本任务更新依赖。
+- 新增 `web/tests/trade-execution.spec.ts`，拦截真实 HTTP 形状但不连接 Trade 服务。两模式、1440px/390px 共四个 Chromium 用例通过；本地截图发现固定宽度抽屉裁切，已补边界断言与响应式修复。初次 mock 路由误拦 Vite 源码 import 导致空页，修正后通过，不把该 fixture 故障作为产品缺陷。
+- 最后截图另发现移动端订单 modal 的固定 520px 宽度裁切，动画中的 boundingBox 曾让断言假通过；改成检查实际 CSS 宽度后获得真实红测，再以响应式宽度修复。最终四例通过（19.5s），主 Agent 复看桌面和移动端截图确认表单及成交状态可见。生成的 mock 截图留存 `/tmp/moox-trade-ui-t09-33e0eb0b/`，不提交测试产物或虚拟 session trace。
+- 尚未完成现代 Strategy producer/Outbox/EventBus 协议清理、其他 OperatorAction 的全链健康门禁、嵌入式 statik/正式发布和真实 Paper E2E。这些仍是 T10/T11 的必要待办，不能因上述本地证据宣告总目标完成。
 
 2026-09-06，在上述 worktree、复制基线后执行：
 

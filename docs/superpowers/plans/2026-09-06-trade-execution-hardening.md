@@ -12,6 +12,8 @@
 
 **审查基线：** `feature/mooyang`，`2bd4f508d45031e5a8fb629e5b62b88b9743810a`，2026-09-06。工作区同时存在 Strategy、Storage、文档和部署配置的其他修改；实施时重新核验，禁止覆盖或顺带提交。
 
+**计划增量：** 已核对原仓库 `db7ce722` 的文档补充；保留本执行工作区的既有完成记录，不用原仓库未勾选版覆盖实施证据。原仓库 Strategy 已推进至 `c15d688b`，T10 必须重新集成真实 `trigger/processor.go:marshalTargetEvent`，不能误把 `store/results.go:marshalLegacyTargetEvent` 当作唯一生产入口。
+
 ---
 
 ## 一、范围与决策
@@ -342,17 +344,24 @@ expected: buy 1 on B; no sell on B; receipt quantity remains 2
 - 修改：`modules/trade/internal/application/operator/service.go`、`internal/domain/operator/action.go`、`schema/logical_account.sql`
 - 修改：`modules/trade/internal/domain/logicalaccount/account.go`、`application/logicalaccount/service.go`、`application/papersimulation/service.go`
 - 修改：`modules/trade/internal/infra/store/logical_account.go`、`store.go`、`internal/rpc/logical_account.go`、`convert.go`
+- 修改及测试：`modules/trade/internal/eventconsumer/target.go`、`internal/infra/store/target.go`、`target_receipt.go`、`internal/application/target/executor.go`、`internal/application/order/service.go` 的控制模式边界
+- 新增：`modules/trade/internal/infra/store/control_mode_migration.go` 及测试、`internal/rpc/submission.go` 及测试、`modules/trade/test/ordinary_submission_e2e_test.go`
 - 修改：`modules/trade/internal/runtime/operator_worker.go`、`infra/store/operator_action.go`
 - 修改：`web/src/api/trade/index.ts`、`types.ts`、`trade.test.ts`
 
-- [ ] 复用 OperatorAction 的持久化与恢复能力，新增 action type `SUBMIT_ORDER`；Order owner 仍由服务端设为 OPERATOR。不引入独立的订单提交数据库或后台进程。
-- [ ] 新增持久化 `ControlMode=MANUAL/STRATEGY`，与 Live/Paper、ACTIVE/PAUSED 两个维度分开。已有组合明确迁移为 STRATEGY，不根据 owner 是否为空猜测；创建组合/Paper 时允许显式选择 MANUAL。同步 schema CHECK、Store 校验、RPC 转换与契约测试。
-- [ ] 在 Store 严格结构校验前执行已知基线的一次性事务升级：无损增加 `c_control_mode DEFAULT 'STRATEGY'`，重建带新 action type CHECK 的 `t_operator_actions` 并保留所有行、索引和关联。测试包含历史 Order/Fill/OperatorAction 的旧库升级、再次打开，以及新 SUBMIT_ORDER 插入；不只验证空库。
-- [ ] 新 `SubmitOrder` 请求使用 action ID、logical account ID、client order ID、trading account ID、instrument、方向、数量、类型、FillPolicy、限价、reason、绝对 `deadline_at`；不接受 owner、instance、session、reduce-only 等可信字段。`PlaceManualOrder` 同步支持 deadline，省略时沿用 T03 的持久化默认截止时间。
-- [ ] 组合锁内校验 MANUAL 模式、当前启用成员关系及账户可执行条件，持久化关联订单后返回受理结果。普通接口不调用 Pause，不撤其他订单；STRATEGY 账户在产生 action/order/预占副作用之前拒绝，提示使用显式人工接管接口。
-- [ ] MANUAL 账户拒绝策略 Claim/Rebind、自动 Resume 和目标事件；readiness 不要求策略 owner/target。允许多个活动人工单，资金预占继续由现有执行账户锁串行保护。本轮控制模式创建后不可直接修改；后续切换功能必须另做暂停、清理活动 action/order 和身份重建，不能复用“owner 为空”绕过边界。
-- [ ] 新 SubmitOrder RPC 不等待交易所 POST 或最终成交，也不触发撤单；必要的行情与本地风控检查有超时。响应含 action、order ID 和实际受理状态，`RetInfo=0` 只说明成功受理。正常初次返回 RUNNING/PENDING；后台已推进时返回实际状态。ACCEPTED 仅是本文的受理描述，不增加同名 action/order 状态。
-- [ ] 上述快速响应要求不改变显式接管的顺序：PlaceManualOrder 仍须先暂停并确认策略订单已撤销，再创建 child。取消尚未确认时 action 可以 RUNNING 且没有 order ID，不承诺两种接口都能立即返回 child；未知恢复继续遵守 T03。
+- [x] 复用 OperatorAction 的持久化与恢复能力，新增 action type `SUBMIT_ORDER`；Order owner 仍由服务端设为 OPERATOR。不引入独立的订单提交数据库或后台进程。
+- [x] 新增持久化 `ControlMode=MANUAL/STRATEGY`，与 Live/Paper、ACTIVE/PAUSED 两个维度分开。已有组合明确迁移为 STRATEGY，不根据 owner 是否为空猜测；创建组合/Paper 时允许显式选择 MANUAL。同步 schema CHECK、Store 校验、RPC 转换与契约测试。
+- [x] 在 Store 严格结构校验前执行已知基线的一次性事务升级：无损增加 `c_control_mode DEFAULT 'STRATEGY'`，重建带新 action type CHECK 的 `t_operator_actions` 并保留所有行、索引和关联。测试包含历史 Order/Fill/OperatorAction 的旧库升级、再次打开，以及新 SUBMIT_ORDER 插入；不只验证空库。
+- [x] 新 `SubmitOrder` 请求使用 action ID、logical account ID、client order ID、trading account ID、instrument、方向、position_side、数量、类型、FillPolicy、限价、reason、绝对 `deadline_at`；不接受 owner、instance、session、reduce-only 等可信字段。position_side 沿用 SPOT=UNSPECIFIED、SWAP=NET；Paper/Live mock 均需覆盖市场正负例。`PlaceManualOrder` 同步支持 deadline，省略时沿用 T03 的持久化默认截止时间。
+- [x] 组合锁内校验 MANUAL 模式、当前启用成员关系及账户可执行条件，持久化关联订单后返回受理结果。普通接口不调用 Pause，不撤其他订单；STRATEGY 账户在产生 action/order/预占副作用之前拒绝，提示使用显式人工接管接口。
+- [x] MANUAL 账户拒绝策略 Claim/Rebind、自动 Resume 和目标事件；readiness 不要求策略 owner/target。允许多个活动人工单，资金预占继续由现有执行账户锁串行保护。本轮控制模式创建后不可直接修改；后续切换功能必须另做暂停、清理活动 action/order 和身份重建，不能复用“owner 为空”绕过边界。
+- [x] 新 SubmitOrder RPC 不等待交易所 POST 或最终成交，也不触发撤单；必要的行情与本地风控检查有超时。响应含 action、order ID 和实际受理状态，`RetInfo=0` 只说明成功受理。正常初次返回 RUNNING/PENDING；后台已推进时返回实际状态。ACCEPTED 仅是本文的受理描述，不增加同名 action/order 状态。
+- [x] 无 child 时行情/本地 Place 暂时失败仍保留 RUNNING action 供恢复，但 RPC 必须返回原错误并附 action，不伪装成已完成订单准入。客户端保留 action/client ID 查询或原样重试，不换 key；已有 child 的 RUNNING 回放继续返回正常状态，last_error 不等于终态失败。Web API 错误对象保留完整响应，T10 负责界面接入。
+- [x] 组合及执行账户锁复用同一注册表的可取消获取；测试普通受理、Submit 和 DiscardPending 持锁超时均不出现额外订单/成交/预占变化。公共持久化错误不得因保存 action 诊断成功而被降级为账户业务错误。
+- [x] 账户不可用验收使用生产 `account.Service.ExecutionEligibility`；初次禁用在创建 action/order 前拒绝，已受理后禁用或未就绪保留 RUNNING 至恢复/截止，未知订单只查询。账户业务错误与基础设施错误分别影响恢复和健康。
+- [x] 组合错误逐分支分类：交易所余额拒绝加后置同步数据库故障不能只因命中账户错误就吞掉存储失败；明确 REJECTED 事实仍保留。未知且 Unwrap 返回 nil 的错误不被当作成功或已分类业务错误。
+- [x] 依赖真实等待 `ctx.Done()` 后，仅用 `WithoutCancel` 加 5 秒硬上限保存诊断，不启动新交易。诊断写入失败保留原 cause 与存储错误；账户锁、Place/link 和 crash-gap 恢复错误均保留已知持久 action 与可信 child 身份，不把失败的 link 写入宣称为已持久化事实。
+- [x] 上述快速响应要求不改变显式接管的顺序：PlaceManualOrder 仍须先暂停并确认策略订单已撤销，再创建 child。取消尚未确认时 action 可以 RUNNING 且没有 order ID，不承诺两种接口都能立即返回 child；未知恢复继续遵守 T03。
 
 ```text
 SubmitOrder -> validate ownership + risk -> durable action/order -> RetInfo=0 + current state
@@ -361,28 +370,31 @@ PlaceManualOrder -> explicit pause/cancel takeover -> same OrderService
 GetOrder / GetOperatorAction -> current facts, never infer fill from RPC success
 ```
 
-- [ ] 验收：MANUAL Paper/Live mock 账户可以提交且不撤其他人工单；无人认领的 STRATEGY 账户仍被拒且状态不变；MANUAL 无法被策略认领；跨 space、禁用账户和伪造 ownership 被拒；同 action/client ID 重试稳定；同 key 异参冲突；响应前后任意崩溃不丢已受理订单。
-- [ ] 生成 `make -C modules/trade/proto all`；运行 `go test -count=1 ./modules/trade/... ./modules/trade/proto/tradegen ./modules/gateway/...`。tradegen 是嵌套 Go module，必须单独包含其 validation/security 契约测试；Gateway 保持透明转发，不硬编码另一套业务规则。仅使用现有签名 Space 路由 `/api/admin/trade_console/SubmitOrder`，目标环境若收紧了 gateway_methods allowlist，部署时显式加入新方法，不另开旁路端口。
-- [ ] 从 ROOT 执行 `pnpm -C web test -- src/api/trade/trade.test.ts`。
-- [ ] 提交建议：`feat(trade): add durable standalone order submission`。
+- [x] 验收：MANUAL Paper/Live mock 账户可以提交且不撤其他人工单；无人认领的 STRATEGY 账户仍被拒且状态不变；MANUAL 无法被策略认领；跨 space、禁用账户和伪造 ownership 被拒；同 action/client ID 重试稳定；同 key 异参冲突；响应前后任意崩溃不丢已受理订单。
+- [x] 生成 `make -C modules/trade/proto all`；运行 `go test -count=1 ./modules/trade/... ./modules/trade/proto/tradegen ./modules/gateway/...`。tradegen 是嵌套 Go module，必须单独包含其 validation/security 契约测试；Gateway 保持透明转发，不硬编码另一套业务规则。仅使用现有签名 Space 路由 `/api/admin/trade_console/SubmitOrder`，目标环境若收紧了 gateway_methods allowlist，部署时显式加入新方法，不另开旁路端口。
+- [x] 从 ROOT 执行 `pnpm -C web test -- src/api/trade/trade.test.ts`。
+- [x] 提交建议：`feat(trade): add durable standalone order submission`。
 
 ### T10：收敛协议、控制台与现役文档
 
 **文件：**
 - 修改：`packages/tradeeventpb/trade_events.proto` 及生成文件；`packages/events/registry.go`、`validation.go` 和相关测试
+- 修改及测试：`modules/eventbus/config/app.yaml`、`modules/eventbus/internal/config/config_test.go`、`scripts/test/contract/test-docs-architecture.sh`
 - 修改：`modules/trade/proto/trade_service.proto`、`internal/rpc/convert.go`、`logical_account.go`、`internal/domain/order/spec.go`
-- 协同修改：`modules/strategy/internal/store/results.go`、`internal/bootstrap/logical_account.go`、`internal/rpc/service.go`、`proto/strategy.proto` 及对应生成文件/测试
+- 协同修改：`modules/strategy/internal/trigger/processor.go` 及对应测试、`internal/store/results.go`、`internal/bootstrap/logical_account.go`、`internal/rpc/service.go`、`proto/strategy.proto` 及对应生成文件/测试
 - 修改 Web：`web/src/api/strategy.ts`、`strategy-types.ts`、`api/trade/types.ts`、`views/trading/logical-accounts/index.vue`、`views/trading/account-workbench/index.vue` 及对应测试
 - 修改文档：`modules/trade/DESIGN.md`、`modules/trade/README.md`、`docs/交易模块架构设计.md`、`docs/交易模块功能说明.md`、`docs/运维/MooX-Trade运维.md`
 - 对齐不重写：`docs/策略执行框架设计.md`、`docs/策略模块架构设计.md`
 
 - [ ] 枚举所有 producer、consumer、RPC 和 Web 使用者，先把仍在使用的 UI/管理调用切到 instance/session，再删除旧自动执行 producer/consumer 分支。不得只删 proto 导致运行中的 Strategy 发布无人消费的消息。
+- [ ] 从真实 Processor 求值、持久化 Result/Outbox 进入现代事件，不以测试手工 payload 代替生产接线。更新 EventBus 的 legacy quantity subject、consumer filter、发布 ACL 和架构断言；停止旧生产者后记录积压处置，不删除重建生产 Stream，不把本地 YAML 改动当作远端配置生效。
 - [ ] 最终自动交易事件只接受完整现代身份、bar_end_time、effective_at、valid_until 与 target_weight；删掉旧数量事件执行入口、legacy owner generation/command sequence 的授权 fallback。历史结果和交易事实不因此删除。
 - [ ] 本任务只处理执行边界及直接调用方，不重写 Strategy DSL、因子、选股或调度实现。Strategy 同时在修改时先对齐实际契约；无法闭合直接调用链则停止该切换，不把半完成接口作为已交付版本。
 - [x] 发布前补齐旧 receipt 表受控迁移的 known-shape、扩展列/索引/trigger/外键依赖检查及事务回滚测试。T06 仅闭环旧 target 表保护，不能将其推广为所有历史表已无损验收；未知 receipt 结构必须拒绝且保持原状，不允许 copy/drop 静默删字段或留下半迁移。已补字面量保真和大小写依赖匹配，独立 codeCR 闭环；实际生产库升级仍须 T11 核验。
 - [ ] 不添加 `reserved`、别名、长期双写/双读兼容层。需要保留的历史审计字段明确为只读来源，不参与新授权或新目标生成。已有 legacy owner 必须通过受控停用/重新授权切换，不能猜测 session。
 - [ ] 控制台保留现有订单、成交、持仓、资金曲线和账户信息；只调整身份字段、受理/未知/过期状态及新提交入口，不扩大成 UI 重设计。
-- [ ] 创建账户时展示控制模式；MANUAL 显示“下单”，STRATEGY 显示“接管并下单”及暂停/撤单警告。RUNNING action 即使有 transient last_error 也继续查询，不把临时错误显示为不可恢复失败。
+- [x] 创建账户时展示控制模式；MANUAL 显示“下单”，STRATEGY 显示“接管并下单”及暂停/撤单警告。RUNNING action 即使有 transient last_error 也继续查询，不把临时错误显示为不可恢复失败。20 项 mounted 下单用例、Paper 表单与 API 测试通过；双模式桌面/移动浏览器受理到状态查询通过，非生产交易验收。
+- [ ] 新增计划复核门禁：复核全部 OperatorAction 类型的逐项超时、锁取消和健康分类。当前 T09 只为 SUBMIT_ORDER 区分已持久业务结果与共享故障；MANUAL_ORDER/FLATTEN/CANCEL_ORDER 仍须分别验证“单 action 失败不使全局 Not Ready、公共 List/DB 失败必须不健康”，不能用普通下单测试概括所有接管/撤单恢复链。
 - [ ] 更新文档：权重外部合同、数量内部合同、动态路由、人工接管/普通提交差异、Paper 仿真边界、停止/过期/清仓语义，以及错误定位字段。
 
 ```bash
