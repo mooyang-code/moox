@@ -78,13 +78,25 @@ export const staticRoutes = [
         path: "/strategy/overview",
         name: "strategy-overview",
         component: () => import("@/views/strategy/overview/index.vue"),
-        meta: { title: "strategy-overview" }
+        meta: { title: "strategy-definitions" }
       },
       {
         path: "/strategy/running",
         name: "strategy-running",
         component: () => import("@/views/strategy/running/index.vue"),
         meta: { title: "strategy-running" }
+      },
+      {
+        path: "/strategy/definitions/new",
+        name: "strategy-definition-new",
+        component: () => import("@/views/strategy/editor/index.vue"),
+        meta: { title: "strategy-definition-new", hide: true }
+      },
+      {
+        path: "/strategy/definitions/:strategyId/edit",
+        name: "strategy-definition-edit",
+        component: () => import("@/views/strategy/editor/index.vue"),
+        meta: { title: "strategy-definition-edit", hide: true }
       },
       {
         path: "/strategy/detail/:instanceId",

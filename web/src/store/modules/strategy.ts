@@ -2,157 +2,231 @@ import { ref } from "vue";
 import { defineStore } from "pinia";
 import {
   getInstance,
-  getRunner,
   getStrategy,
   listInstances,
-  listRunners,
   listStrategies,
   listStrategyResults,
-  listStrategyTargets
+  listStrategyTargets,
+  setInstanceEnabled
 } from "@/api/strategy";
-import type { InstrumentTarget, Strategy, StrategyInstance, StrategyResult, StrategyRunner } from "@/api/strategy-types";
+import type { InstrumentTarget, Strategy, StrategyInstance, StrategyResult, StrategyTargetSnapshot } from "@/api/strategy-types";
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
 
 export const useStrategyStore = defineStore("strategy", () => {
   const strategies = ref<Strategy[]>([]);
-  const runners = ref<StrategyRunner[]>([]);
   const instances = ref<StrategyInstance[]>([]);
-  const runner = ref<StrategyRunner | null>(null);
   const instance = ref<StrategyInstance | null>(null);
   const strategy = ref<Strategy | null>(null);
   const results = ref<StrategyResult[]>([]);
-  const targets = ref<InstrumentTarget[]>([]);
-  const commandSequence = ref("0");
+  const targetSnapshot = ref<StrategyTargetSnapshot | null>(null);
   const totalStrategies = ref(0);
-  const totalRunners = ref(0);
+  const strategiesComplete = ref(false);
   const totalInstances = ref(0);
-  const loading = ref(false);
+  const totalResults = ref(0);
+  const listLoading = ref(false);
+  const detailLoading = ref(false);
   const error = ref("");
+  const detailError = ref("");
+  const operationLoading = ref(false);
   const poller = ref<ReturnType<typeof setInterval> | null>(null);
+  let pollingBusy = false;
+  let detailRequest = 0;
+  let resultRequest = 0;
+  let strategiesRequest = 0;
+  let instancesRequest = 0;
 
   async function loadStrategies(params: Parameters<typeof listStrategies>[0] = {}) {
-    loading.value = true;
+    const requestId = ++strategiesRequest;
+    listLoading.value = true;
     error.value = "";
     try {
       const result = await listStrategies(params);
+      if (requestId !== strategiesRequest) return;
       strategies.value = result.items;
       totalStrategies.value = result.page.total;
+      strategiesComplete.value = result.items.length >= result.page.total;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "策略列表加载失败";
+      if (requestId === strategiesRequest) error.value = errorMessage(err, "策略定义加载失败");
+      throw err;
     } finally {
-      loading.value = false;
+      if (requestId === strategiesRequest) listLoading.value = false;
     }
   }
 
-  async function loadRunners(params: Parameters<typeof listRunners>[0] = {}) {
-    loading.value = true;
+  async function loadAllStrategies(pageSize = 200) {
+    const requestId = ++strategiesRequest;
+    listLoading.value = true;
     error.value = "";
     try {
-      const result = await listRunners(params);
-      runners.value = result.items;
-      totalRunners.value = result.page.total;
+      const items: Strategy[] = [];
+      let page = 1;
+      let total = 0;
+      do {
+        const response = await listStrategies({ page, page_size: pageSize });
+        if (requestId !== strategiesRequest) return;
+        items.push(...response.items);
+        total = response.page.total;
+        if (!response.items.length || items.length >= total) break;
+        page += 1;
+      } while (true);
+      strategies.value = items;
+      totalStrategies.value = total || items.length;
+      strategiesComplete.value = true;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "Runner 列表加载失败";
+      if (requestId === strategiesRequest) error.value = errorMessage(err, "策略定义加载失败");
+      throw err;
     } finally {
-      loading.value = false;
+      if (requestId === strategiesRequest) listLoading.value = false;
     }
   }
 
   async function loadInstances(params: Parameters<typeof listInstances>[0] = {}) {
-    loading.value = true;
+    const requestId = ++instancesRequest;
+    listLoading.value = true;
     error.value = "";
     try {
       const result = await listInstances(params);
+      if (requestId !== instancesRequest) return;
       instances.value = result.items;
       totalInstances.value = result.page.total;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "实例列表加载失败";
-    } finally {
-      loading.value = false;
-    }
-  }
-
-  async function loadRunnerDetail(runnerId: string) {
-    loading.value = true;
-    error.value = "";
-    instance.value = null;
-    results.value = [];
-    targets.value = [];
-    try {
-      const [runnerRsp, resultRsp, targetRsp] = await Promise.all([
-        getRunner(runnerId),
-        listStrategyResults(runnerId, { page: 1, page_size: 50 }),
-        listStrategyTargets(runnerId)
-      ]);
-      runner.value = runnerRsp.runner;
-      results.value = resultRsp.items;
-      targets.value = targetRsp.targets;
-      commandSequence.value = targetRsp.command_sequence;
-      strategy.value = (await getStrategy(runnerRsp.runner.strategy_id)).strategy;
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : "Runner 详情加载失败";
-    } finally {
-      loading.value = false;
-    }
-  }
-
-  async function loadInstanceDetail(instanceId: string) {
-    loading.value = true;
-    error.value = "";
-    runner.value = null;
-    results.value = [];
-    targets.value = [];
-    try {
-      const instanceRsp = await getInstance(instanceId);
-      const current = instanceRsp.instance;
-      const [resultRsp, targetRsp, strategyRsp] = await Promise.all([
-        listStrategyResults("", { instance_id: current.instance_id, session_id: current.session_id, page: 1, page_size: 50 }),
-        listStrategyTargets("", current.instance_id),
-        getStrategy(current.strategy_id)
-      ]);
-      instance.value = current;
-      results.value = resultRsp.items;
-      targets.value = targetRsp.targets;
-      commandSequence.value = "";
-      strategy.value = strategyRsp.strategy;
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : "实例详情加载失败";
+      if (requestId === instancesRequest) error.value = errorMessage(err, "策略实例加载失败");
       throw err;
     } finally {
-      loading.value = false;
+      if (requestId === instancesRequest) listLoading.value = false;
     }
   }
 
-  function startPolling(callback: () => void, interval = 15000) {
+  async function loadInstanceDetail(instanceId: string, page = 1, pageSize = 20, allHistory = false) {
+    const requestId = ++detailRequest;
+    const resultRequestId = ++resultRequest;
+    detailLoading.value = true;
+    detailError.value = "";
+    try {
+      const instanceResponse = await getInstance(instanceId);
+      if (requestId !== detailRequest) return false;
+      const current = instanceResponse.instance;
+      instance.value = current;
+      const strategyResponse = await getStrategy(current.strategy_id);
+      if (requestId !== detailRequest) return false;
+      strategy.value = strategyResponse.strategy;
+      const tasks: [Promise<StrategyTargetSnapshot | null>, Promise<{ items: StrategyResult[]; page: { total: number } }> | null] = [
+        listStrategyTargets(instanceId),
+        current.session_id || allHistory
+          ? listStrategyResults(instanceId, { session_id: allHistory ? undefined : current.session_id, page, page_size: pageSize })
+          : null
+      ];
+      const [targetResponse, resultResponse] = await Promise.all(tasks);
+      if (requestId !== detailRequest) return false;
+      targetSnapshot.value = targetResponse;
+      if (resultRequestId === resultRequest) {
+        results.value = resultResponse?.items ?? [];
+        totalResults.value = resultResponse?.page.total ?? 0;
+      }
+      return true;
+    } catch (err) {
+      if (requestId === detailRequest) {
+        detailError.value = errorMessage(err, "实例详情加载失败");
+      }
+      throw err;
+    } finally {
+      if (requestId === detailRequest) detailLoading.value = false;
+    }
+  }
+
+  async function loadResultPage(page: number, pageSize = 20, allHistory = false) {
+    if (!instance.value) return;
+    if (!allHistory && !instance.value.session_id) {
+      results.value = [];
+      totalResults.value = 0;
+      detailError.value = "";
+      return;
+    }
+    const requestId = ++resultRequest;
+    detailError.value = "";
+    try {
+      const response = await listStrategyResults(instance.value.instance_id, {
+        page,
+        page_size: pageSize,
+        session_id: allHistory ? undefined : instance.value.session_id || undefined
+      });
+      if (requestId !== resultRequest) return;
+      results.value = response.items;
+      totalResults.value = response.page.total;
+    } catch (err) {
+      if (requestId === resultRequest) detailError.value = errorMessage(err, "策略结果加载失败");
+      throw err;
+    }
+  }
+
+  async function changeEnabled(instanceId: string, enabled: boolean) {
+    operationLoading.value = true;
+    try {
+      await setInstanceEnabled(instanceId, enabled);
+    } finally {
+      operationLoading.value = false;
+    }
+  }
+
+  function startPolling(callback: () => void | Promise<void>, interval = 10000) {
     stopPolling();
-    poller.value = setInterval(callback, interval);
+    poller.value = setInterval(async () => {
+      if (pollingBusy || (typeof document !== "undefined" && document.visibilityState !== "visible")) return;
+      pollingBusy = true;
+      try {
+        await callback();
+      } finally {
+        pollingBusy = false;
+      }
+    }, interval);
   }
 
   function stopPolling() {
     if (poller.value) clearInterval(poller.value);
     poller.value = null;
+    pollingBusy = false;
+  }
+
+  function clearDetail() {
+    detailRequest += 1;
+    instance.value = null;
+    strategy.value = null;
+    results.value = [];
+    targetSnapshot.value = null;
+    totalResults.value = 0;
+    resultRequest += 1;
+    detailError.value = "";
   }
 
   return {
     strategies,
-    runners,
     instances,
-    runner,
     instance,
     strategy,
     results,
-    targets,
-    commandSequence,
+    targetSnapshot,
     totalStrategies,
-    totalRunners,
+    strategiesComplete,
     totalInstances,
-    loading,
+    totalResults,
+    listLoading,
+    detailLoading,
+    operationLoading,
     error,
+    detailError,
     loadStrategies,
-    loadRunners,
+    loadAllStrategies,
     loadInstances,
-    loadRunnerDetail,
     loadInstanceDetail,
+    loadResultPage,
+    changeEnabled,
     startPolling,
-    stopPolling
+    stopPolling,
+    clearDetail
   };
 });
+
+export type StrategyTarget = InstrumentTarget;

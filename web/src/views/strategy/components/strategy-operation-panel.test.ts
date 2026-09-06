@@ -1,47 +1,24 @@
-import fs from "node:fs";
-import path from "node:path";
 import { mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { setRunnerStatus, setInstanceEnabled } = vi.hoisted(() => ({ setRunnerStatus: vi.fn(), setInstanceEnabled: vi.fn() }));
-vi.mock("@/api/strategy", () => ({ setRunnerStatus, setInstanceEnabled }));
+const { setInstanceEnabled } = vi.hoisted(() => ({ setInstanceEnabled: vi.fn() }));
+vi.mock("@/api/strategy", () => ({ setInstanceEnabled }));
+vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), error: vi.fn() } }));
 
 import StrategyOperationPanel from "./strategy-operation-panel.vue";
 
-describe("Strategy Runner controls", () => {
-  beforeEach(() => {
-    setRunnerStatus.mockReset().mockResolvedValue({});
-    setInstanceEnabled.mockReset().mockResolvedValue({});
+describe("strategy instance controls", () => {
+  beforeEach(() => setInstanceEnabled.mockReset().mockResolvedValue({}));
+
+  it("shows an enable action for a disabled instance", () => {
+    const wrapper = mount(StrategyOperationPanel, { props: { instanceId: "i-1", enabled: false }, global: { stubs: { "a-popconfirm": { template: "<div><slot /></div>" }, "a-button": { template: "<button><slot /></button>" } } } });
+    expect(wrapper.text()).toContain("启用实例");
+    expect(wrapper.text()).toContain("不执行清仓");
   });
 
-  it("only offers Runner enable when disabled", async () => {
-    const wrapper = mount(StrategyOperationPanel, {
-      props: { runnerId: "runner-1", status: "DISABLED" },
-      global: {
-        stubs: {
-          "a-space": { template: "<div><slot /></div>" },
-          "a-popconfirm": { template: "<div><slot /></div>" },
-          "a-button": { template: "<button><slot /></button>" }
-        }
-      }
-    });
-    expect(wrapper.text()).toContain("启用");
-    expect(wrapper.text()).not.toContain("执行模式");
-    expect(wrapper.text()).not.toContain("Exchange Account");
-  });
-
-  it("uses the instance enabled contract and keeps the legacy adapter", () => {
-    const source = fs.readFileSync(
-      path.resolve(process.cwd(), "src/views/strategy/components/strategy-operation-panel.vue"),
-      "utf8"
-    );
-    expect(source).toContain("setInstanceEnabled");
-    expect(source).toContain("setRunnerStatus");
-    expect(source).toContain("enabled ? \"ENABLED\" : \"DISABLED\"");
-
-    const running = fs.readFileSync(path.resolve(process.cwd(), "src/views/strategy/running/index.vue"), "utf8");
-    expect(running).toContain("loadInstances");
-    expect(running).toContain("input_bindings_json");
-    expect(running).toContain("新增实例");
+  it("calls the modern enable endpoint only", async () => {
+    const wrapper = mount(StrategyOperationPanel, { props: { instanceId: "i-1", enabled: false }, global: { stubs: { "a-popconfirm": { emits: ["ok"], template: "<div @click=\"$emit('ok')\"><slot /></div>" }, "a-button": { template: "<button><slot /></button>" } } } });
+    await wrapper.find("button").trigger("click");
+    expect(setInstanceEnabled).toHaveBeenCalledWith("i-1", true);
   });
 });

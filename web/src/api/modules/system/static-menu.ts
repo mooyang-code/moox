@@ -85,9 +85,9 @@ export const systemMenu = [
   menu("024002", "0240", "/factor/bindings", "factor-bindings", "factor-bindings", "factor/bindings/index", 2),
   menu("024004", "0240", "/factor/results", "factor-results", "factor-results", "factor/results/index", 3),
 
-  directory("0250", "0", "/strategy/overview", "strategy", "strategy", 5, { svgIcon: "mind-mapping", icon: "" }),
-  menu("025001", "0250", "/strategy/overview", "strategy-overview", "strategy-overview", "strategy/overview/index", 1),
-  menu("025002", "0250", "/strategy/running", "strategy-running", "strategy-running", "strategy/running/index", 2),
+  directory("0250", "0", "/strategy/running", "strategy", "strategy", 5, { svgIcon: "mind-mapping", icon: "" }),
+  menu("025001", "0250", "/strategy/running", "strategy-running", "strategy-running", "strategy/running/index", 1),
+  menu("025002", "0250", "/strategy/overview", "strategy-overview", "strategy-definitions", "strategy/overview/index", 2),
 
   directory("05", "0", "/trading/accounts", "trading", "trading", 6, { svgIcon: "balance-inquiry", icon: "" }),
   menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-workbench/index", 1),

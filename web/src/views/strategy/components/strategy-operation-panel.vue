@@ -1,55 +1,46 @@
 <template>
   <div class="operation-bar">
-    <span>Runner 控制</span>
-    <a-space>
-      <a-popconfirm v-if="currentEnabled" content="停用后不再计算新目标，确认继续？" @ok="change(false)">
-        <a-button status="warning" :loading="loading">停用</a-button>
-      </a-popconfirm>
-      <a-popconfirm v-else content="启用时会校验组合账户归属，确认继续？" @ok="change(true)">
-        <a-button type="primary" status="success" :loading="loading">启用</a-button>
-      </a-popconfirm>
-    </a-space>
+    <div><strong>实例控制</strong><span class="hint">启停只控制策略计算与目标投递，不执行清仓。</span></div>
+    <a-popconfirm
+      :content="currentEnabled ? '停用后不会再计算新目标，也不会自动清仓。确认继续？' : '启用会校验绑定并在交易模式下认领账户会话。确认继续？'"
+      @ok="change(!currentEnabled)"
+    >
+      <a-button :type="currentEnabled ? 'outline' : 'primary'" :status="currentEnabled ? 'warning' : 'success'" :loading="loading" :disabled="uncertain">
+        {{ currentEnabled ? "停用实例" : "启用实例" }}
+      </a-button>
+    </a-popconfirm>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { setInstanceEnabled, setRunnerStatus } from "@/api/strategy";
+import { setInstanceEnabled } from "@/api/strategy";
 
-const props = defineProps<{ runnerId?: string; status?: string; instanceId?: string; enabled?: boolean }>();
-const emit = defineEmits<{ changed: [] }>();
+const props = defineProps<{ instanceId: string; enabled: boolean; uncertain?: boolean }>();
+const emit = defineEmits<{ started: []; changed: []; failed: [unknown] }>();
 const loading = ref(false);
-const currentEnabled = computed(() => (props.instanceId ? Boolean(props.enabled) : props.status === "ENABLED"));
-
+const currentEnabled = computed(() => Boolean(props.enabled));
 async function change(enabled: boolean) {
+  if (loading.value || props.uncertain) return;
   loading.value = true;
+  emit("started");
   try {
-    if (props.instanceId) {
-      await setInstanceEnabled(props.instanceId, enabled);
-    } else if (props.runnerId) {
-      await setRunnerStatus(props.runnerId, enabled ? "ENABLED" : "DISABLED");
-    }
+    await setInstanceEnabled(props.instanceId, enabled);
     Message.success(enabled ? "实例已启用" : "实例已停用");
-    emit("changed");
+  } catch (error) {
+    Message.error("控制请求失败，正在重新读取实例状态");
+    emit("failed", error);
   } finally {
     loading.value = false;
+    emit("changed");
   }
 }
 </script>
 
 <style scoped>
-.operation-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--moox-space-2);
-  padding: 10px 12px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 6px;
-}
-.operation-bar > span {
-  color: var(--color-text-2);
-  font-weight: 600;
-}
+.operation-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: var(--moox-space-2); padding: 12px 0; border-top: 1px solid var(--color-border-2); border-bottom: 1px solid var(--color-border-2); }
+.operation-bar > div { display: grid; gap: 3px; }
+.hint { color: var(--color-text-3); font-size: 12px; }
+@media (max-width: 640px) { .operation-bar { align-items: flex-start; flex-direction: column; } }
 </style>
