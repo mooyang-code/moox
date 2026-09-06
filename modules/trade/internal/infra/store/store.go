@@ -70,6 +70,10 @@ func Open(path string) (*Store, error) {
 		_ = sqlDB.Close()
 		return nil, err
 	}
+	if err := migratePaperBalanceHistoryIndex(db); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("migrate paper balance history index: %w", err)
+	}
 	if err := validateExistingTradeSchema(db); err != nil {
 		_ = sqlDB.Close()
 		return nil, err
@@ -77,6 +81,10 @@ func Open(path string) (*Store, error) {
 	if err := db.Exec(schema.AllSQL()).Error; err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("apply trade schema: %w", err)
+	}
+	if err := initializePaperBalances(db); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("initialize paper balances: %w", err)
 	}
 	return &Store{db: db}, nil
 }
@@ -502,6 +510,7 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		"t_logical_account_owner_rebinds": {},
 		"t_logical_account_targets":       {}, "t_operator_actions": {},
 		"t_paper_account_configs": {}, "t_account_equity_points": {},
+		"t_paper_balance_projections": {}, "t_paper_asset_balances": {},
 		"t_logical_account_equity_points":   {},
 		"t_logical_account_target_receipts": {},
 	}

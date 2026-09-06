@@ -71,6 +71,12 @@ func (v Validator) Validate(
 	spaceID string,
 	spec orderdomain.OrderSpec,
 ) (Validation, error) {
+	return v.validate(ctx, spaceID, spec, false)
+}
+
+// OrderService checks Paper funds against the ledger and reservations in its
+// write transaction; a display snapshot must not reject or authorize that write.
+func (v Validator) validate(ctx context.Context, spaceID string, spec orderdomain.OrderSpec, deferPaperFunds bool) (Validation, error) {
 	if v.Accounts == nil || v.Instruments == nil || strings.TrimSpace(spaceID) == "" {
 		return Validation{}, ErrValidatorConfig
 	}
@@ -159,7 +165,8 @@ func (v Validator) Validate(
 			result.ReservedAsset = instrument.BaseAsset
 			result.ReservedQuantity = spec.Quantity
 		}
-		if availableBalance(account.Snapshot, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
+		if !(deferPaperFunds && account.ExecutionMode == exchange.ExecutionModePaper) &&
+			availableBalance(account.Snapshot, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
 			return Validation{}, ErrInsufficientFunds
 		}
 	case exchange.MarketTypeSwap:
@@ -207,7 +214,8 @@ func (v Validator) Validate(
 				result.ReservedQuantity = withFeeBuffer(margin, feeRate)
 			}
 		}
-		if account.Snapshot.AvailableFunds.Cmp(result.ReservedQuantity) < 0 {
+		if !(deferPaperFunds && account.ExecutionMode == exchange.ExecutionModePaper) &&
+			account.Snapshot.AvailableFunds.Cmp(result.ReservedQuantity) < 0 {
 			return Validation{}, ErrInsufficientFunds
 		}
 	}

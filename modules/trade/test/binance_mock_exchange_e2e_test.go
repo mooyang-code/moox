@@ -38,7 +38,9 @@ func TestBinanceHTTPMockTargetToFilledOrderConvergesEndToEnd(t *testing.T) {
 		APIKey:    "mock-api-key",
 		APISecret: "mock-api-secret",
 	})
-	f := newFixture(t, exchange.MarketTypeSpot, adapter)
+	// This exercises the live protocol adapter against httptest, not Paper's
+	// local ledger; its persisted account must use the same mode as the adapter.
+	f := newFixtureWithMode(t, exchange.MarketTypeSpot, adapter, exchange.ExecutionModeLive)
 	seedLogicalAccount(t, f.store)
 	f.orders.Now = func() time.Time { return now }
 	f.orders.Validator.Now = func() time.Time { return time.Now().UTC() }

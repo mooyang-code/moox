@@ -23,7 +23,7 @@
 | T02 session 授权与幂等 | 已完成 | `839255b2`；独立 codeCR 和增量复核闭环，主 Agent race 复验通过 |
 | T03 人工未知提交恢复 | 已完成 | `34e92f78`；durable恢复、错误身份/终态校验、deadline和Paper报价闭环；新起codeCR及主Agent复验通过 |
 | T04 OKX 单笔成交费用 | 已完成 | `e2162efa`；signed cost、fillTime排序、不可变重放及真实Paper余额；新Agent/codeCR复核闭环 |
-| T05 Paper 余额投影 | 未开始 | 包括完整历史、原子性、旧库受控转换 |
+| T05 Paper 余额投影 | 已完成 | 完整历史与增量投影、原子资金校验/关闭、受控旧库迁移；新 codeCR 无剩余 P0-P2，主 Agent 全量/race 复验通过 |
 | T06 故障隔离与过期 | 未开始 | 包括真实 Decider、账户健康和 targetGate |
 | T07 消息结果可观测 | 已完成 | `1a941da7`；真实Runner、四包race、组件及生产构建通过；独立codeCR所有增量发现闭环 |
 | T08 动态账户路由 | 未开始 | 不重新估值、不搬同向仓位、保护已有目标 |
@@ -56,7 +56,21 @@ T02 正式红测：`TestModernSessionTargetCanResume` 因 `target runner does no
 - 独立 explorer 与主 Agent 核验：真实 Paper Snapshot 在 `execution/paper/adapter.go`，不是另一套 `account_state.go` Rebuild；余额当前截断 100000 Fill，并把所有活动订单预占计入 locked。
 - `OrderService.Place` 又对 PENDING/SUBMITTING/SUBMIT_UNKNOWN 无条件叠加 GetUnreflectedReservation，因而 T05 必须以专项红测覆盖快照已有 locked 的情况，保证一次预占只扣一次。计划已细化为 Paper 同事务读投影和活动 reservation，Live watermark 保持原合同；不能因机械保留旧实现而重扣。
 - 投影初始化需覆盖底层 CreateTradingAccount 的 Paper 路径，不只 CreatePaperSimulation；增量入口必须覆盖所有真实 InsertFill 调用，只有新增 Fill 才更新，重复/冲突不加计。
-- 当前 Fee 合同是非负成本，RealizedPnL 是有符号数。T04/T05 对返佣字段必须明确处理，不得以 Abs 伪装成已经支持正确返佣，也不得在 T05 顺手扩展未定义的资金模型。
+- 实施前 Fee 合同是非负成本，RealizedPnL 是有符号数。T04 已将 Fee 收敛为有符号成本；T05 延续这一合同，负 Fee 按返佣增加对应资产，不能使用 Abs。
+
+### T05 实施与审查证据
+
+- 新增每账户初始化元数据（含初始化时间和审计计数）及每资产精确十进制总额。底层账户创建、配置、投影同事务；`InsertFill` 只有新增才更新余额，重复/冲突不增加计数，订单/持仓归并失败会一起回滚。
+- 启动时以 `(traded_at, fill_id)` keyset 完整回填；实际 100002 笔含同时间跨页数据、较早时间迟到成交通过。初始化失败与第二笔历史金额损坏均整体回滚；再次打开不重置投影、时间或 Closed 状态。Spot 买卖回转、多费用资产、负费用和 Swap PnL 的增量结果与全历史重建逐资产一致。
+- 主 Agent 真实 Paper 红测：快照已锁定 50000，第二笔只需 30000 却被拒；陈旧快照又使实际现金/保证金不足的新订单被放行。现改成事务内投影与全部活动预占校验，已有预占只算一次；Live 原同步水位逻辑不变。已同步 locked 的人工 PENDING 报价上升/下降/不足资金和自身 Submit 均覆盖。
+- 新发现并红测修复冻结滑点资金问题：已冻结 1% 滑点但配置改为 0%，刷新后实际需保证金 100747.5，原先只预占 99750。现按同一个冻结执行价重算预占；资金不足时价格、预占、订单状态与调用次数不变。
+- 非零 Swap 持仓 leverage=0 原先被当成 margin=0，可能继续放行订单。实际 Fill 后的红测已复现；Paper 估值现在严格校验数量、入场价和杠杆，无效事实明确拒绝。快照查询计数用例证明不调用历史 ListFills/全部订单查询。
+- 旧测试夹具改成事实一致：Binance httptest 使用 LIVE TESTNET 身份；Paper 的初始 BTC 来自真实历史 Order/Fill，不再只写余额快照；预占不足通过真实 Place 创建另一笔订单，不通过修改派生现金伪造。
+- 新起 `review_t05_core` 确认旧库缺新索引会在回填前被严格校验拒绝。已补缺索引的真实旧表红测和受限迁移：只给完整匹配已知旧形状的 Fill 表加索引，未知列/约束/索引仍拒绝且不变更。关闭时 Fill 已提交但后续刷新失败的 P2 已改为同事务使用当前持仓派生值；另覆盖旧持仓标价 t1、账户新报价 t2 的窗口，关闭估值时间保守回到 t1，未知时间保持 0，不伪造 fresh 报价。
+- 资产合同 P2 已闭环：Swap 非空结算币必须等于账户结算币，非零正负 Fee 必须提供实际 FeeAsset，不再猜费用币种。真实 InsertFill 和旧库回填的错误场景都验证 fact/余额/count 一起回滚，正常异币手续费与返佣保留。
+- 最终主 Agent `env MOOX_RUN_REAL_TRADE_DNS_E2E=0 go test -count=1 ./modules/trade/...` 全部通过；`order/paper/test` 整包 race 再次全部通过，索引/初始化/回填异常/roundtrip/重启小集 race 通过，相关 vet 和 diff-check 通过。Store/schema 普通全量含 100002 笔历史通过；Store/schema 全量 race 曾通过，最后索引/时间戳/资产合同增量均另有小集 race。
+- `review_t05_core` 最终独立复核上述所有发现，结论为本阶段无剩余 P0-P2；独立 projection/index/asset/roundtrip/Close 定向测试通过。主 Agent 核验源码和测试覆盖后确认 T05 完成。既有 schema inspector 不枚举 trigger，已删除新增注释中不准确的 trigger 保证；这不等于生产库已经验收。
+- 下一阶段为 T06，随后 T08-T11。T01 的现代完整事件链、全部协议/UI/最终新 Agent 审查、正式部署和真实 Paper 验收均未据此宣告完成。
 
 ## 发布调查
 

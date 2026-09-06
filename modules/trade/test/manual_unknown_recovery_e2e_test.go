@@ -327,20 +327,18 @@ func TestManualDelayedPendingRefreshesOnlyServerQuote(t *testing.T) {
 			require.Equal(t, string(orderdomain.Pending), stale.Order.State)
 			require.Zero(t, f.fake.placeCalls)
 			factor := shared.MustDecimal(tc.factor)
+			f.fake.account.ExchangeUpdatedAt = now
+			f.fake.reference.UpdatedAt = now
+			if tc.insufficient {
+				// Reserve real projected cash with another validated child rather
+				// than changing a derived account snapshot.
+				other := swapSpec("another-client", exchange.SideBuy, "19.99", false)
+				other.ReferencePriceAt = now
+				mustPlace(t, f, other)
+			}
 			f.fake.reference.Price = f.fake.reference.Price.Mul(factor)
 			f.fake.reference.UpdatedAt = now
 			if tc.insufficient {
-				account, getErr := f.store.GetTradingAccountByID(ctx, testAccount)
-				require.NoError(t, getErr)
-				account.Snapshot.AvailableFunds = reserved.Mul(factor).String()
-				other := before
-				other.OrderID, other.ClientOrderID = "another-pending", "another-client"
-				require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
-					if err := tx.CreateOrder(other); err != nil {
-						return err
-					}
-					return tx.UpdateTradingAccountSnapshot(testSpace, testAccount, account.Snapshot)
-				}))
 				result, callErr := service.PlaceManualOrder(ctx, command)
 				require.NoError(t, callErr)
 				require.Equal(t, "RUNNING", result.Action.Status)

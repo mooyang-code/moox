@@ -125,6 +125,9 @@ CREATE TABLE IF NOT EXISTS t_order_fills (
 CREATE INDEX IF NOT EXISTS idx_order_fills_order_time
 ON t_order_fills (c_space_id, c_order_id, c_traded_at);
 
+CREATE INDEX IF NOT EXISTS idx_order_fills_paper_balance_history
+ON t_order_fills (c_space_id, c_trading_account_id, c_traded_at, c_fill_id);
+
 CREATE TABLE IF NOT EXISTS t_trading_positions (
     c_space_id TEXT NOT NULL,
     c_trading_account_id TEXT NOT NULL,

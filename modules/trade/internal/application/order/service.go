@@ -94,7 +94,7 @@ func (s *Service) Place(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	validation, err := s.Validator.Validate(ctx, spaceID, spec)
+	validation, err := s.Validator.validate(ctx, spaceID, spec, true)
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
@@ -126,12 +126,16 @@ func (s *Service) Place(
 		}
 		spec.ReferencePrice = executable
 		spec.ReferencePriceAt = quote.SourceTime
-		validation, err = s.Validator.Validate(ctx, spaceID, spec)
+		validation, err = s.Validator.validate(ctx, spaceID, spec, true)
 		if err != nil {
 			return orderdomain.Order{}, err
 		}
 	}
 
+	marginAdjustment, err := s.paperMarginAdjustment(ctx, validation)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
 	id := s.orderID()
 	aggregate, _, err := orderdomain.New(shared.OrderID(id), spec)
 	if err != nil {
@@ -169,6 +173,12 @@ func (s *Service) Place(
 			}
 		}
 		if !validation.ReservedQuantity.IsZero() {
+			if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
+				if err := checkPaperFunds(tx, validation, marginAdjustment, validation.ReservedQuantity, "", ""); err != nil {
+					return err
+				}
+				return tx.CreateOrder(record)
+			}
 			unreflected, err := tx.GetUnreflectedReservation(
 				validation.Account.SpaceID,
 				spec.TradingAccountID,
@@ -774,7 +784,7 @@ func (s *Service) submit(
 		validator.Now = func() time.Time { return now }
 		validator.MaxReferenceAge = now.Sub(aggregate.Spec.ReferencePriceAt) + time.Second
 	}
-	validation, err := validator.Validate(ctx, record.SpaceID, aggregate.Spec)
+	validation, err := validator.validate(ctx, record.SpaceID, aggregate.Spec, true)
 	refreshedReference := false
 	if errors.Is(err, orderdomain.ErrReferencePriceStale) && record.SubmittedAt == 0 &&
 		aggregate.Spec.Owner.Type == orderdomain.OwnerOperator {
@@ -798,7 +808,7 @@ func (s *Service) submit(
 			return aggregate, false, priceErr
 		}
 		aggregate.Spec.ReferencePrice, aggregate.Spec.ReferencePriceAt = price, quote.SourceTime
-		validation, err = validator.Validate(ctx, record.SpaceID, aggregate.Spec)
+		validation, err = validator.validate(ctx, record.SpaceID, aggregate.Spec, true)
 		refreshedReference = err == nil
 	}
 	if err != nil {
@@ -807,6 +817,10 @@ func (s *Service) submit(
 			return rejected, false, rejectErr
 		}
 		return orderdomain.Order{}, false, err
+	}
+	marginAdjustment, err := s.paperMarginAdjustment(ctx, validation)
+	if err != nil {
+		return aggregate, false, err
 	}
 	adapter, err := s.Adapters.Adapter(record.TradingAccountID)
 	if err != nil {
@@ -841,6 +855,21 @@ func (s *Service) submit(
 		}
 		raw := price.String()
 		record.PaperExecutionPrice = &raw
+		// Repricing preserves the original execution slippage. Reserve against
+		// that same price, not a newly edited account slippage setting.
+		feeRate := validator.FeeBufferRate
+		if validation.Account.Paper != nil {
+			feeRate = maxDecimal(validation.Account.Paper.MakerFeeRate, validation.Account.Paper.TakerFeeRate)
+		}
+		notional := aggregate.Spec.Quantity.Mul(price)
+		if validation.Account.MarketType == exchange.MarketTypeSwap {
+			validation.ReservedQuantity = notional.Mul(feeRate)
+			if !aggregate.Spec.ReducePositionOnly {
+				validation.ReservedQuantity = validation.ReservedQuantity.Add(notional.Div(validation.Leverage))
+			}
+		} else if aggregate.Spec.Side == exchange.SideBuy {
+			validation.ReservedQuantity = withFeeBuffer(notional, feeRate)
+		}
 	}
 	if releaseReservationForReduction || refreshedReference {
 		record.ReservedAsset = validation.ReservedAsset
@@ -850,7 +879,17 @@ func (s *Service) submit(
 	applyAggregate(&record, aggregate)
 	record.SubmittedAt = s.now().UnixMilli()
 	if err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if refreshedReference {
+		if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
+			required, err := shared.ParseDecimal(record.RemainingReservedQuantity)
+			if err != nil {
+				return err
+			}
+			if !required.IsZero() {
+				if err := checkPaperFunds(tx, validation, marginAdjustment, required, oldReservedAsset, oldRemaining); err != nil {
+					return err
+				}
+			}
+		} else if refreshedReference {
 			unreflected, err := tx.GetUnreflectedReservation(record.SpaceID, record.TradingAccountID, validation.ReservedAsset, validation.Account.LastSyncAt.UnixMilli())
 			if err != nil {
 				return err
@@ -869,6 +908,8 @@ func (s *Service) submit(
 			if available.Cmp(unreflected.Add(validation.ReservedQuantity)) < 0 {
 				return ErrInsufficientFunds
 			}
+		}
+		if refreshedReference {
 			record.ReferencePrice = aggregate.Spec.ReferencePrice.String()
 			record.ReferencePriceAt = aggregate.Spec.ReferencePriceAt.UnixMilli()
 			if err := tx.UpdatePendingOrderReference(record, expected); err != nil {

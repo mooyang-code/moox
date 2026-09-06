@@ -40,12 +40,15 @@ func (tx *Tx) CreatePaperAccountConfig(record PaperAccountConfigRecord) error {
 	if slipValue.Cmp(shared.MustDecimal("10000")) >= 0 {
 		return fmt.Errorf("%w: slippage bps must be below 10000", ErrInvalidRecord)
 	}
-	return writeError(tx.db.Exec(`
+	if err := writeError(tx.db.Exec(`
 		INSERT INTO t_paper_account_configs (
 			c_space_id, c_trading_account_id, c_initial_balance,
 			c_maker_fee_rate, c_taker_fee_rate, c_slippage_bps
 		) VALUES (?, ?, ?, ?, ?, ?)
-	`, record.SpaceID, record.TradingAccountID, initial, maker, taker, slippage).Error)
+	`, record.SpaceID, record.TradingAccountID, initial, maker, taker, slippage).Error); err != nil {
+		return err
+	}
+	return tx.initializePaperBalance(record.SpaceID, record.TradingAccountID, initial)
 }
 
 func (s *Store) GetPaperAccountConfig(ctx context.Context, spaceID, tradingAccountID string) (PaperAccountConfigRecord, error) {

@@ -1016,6 +1016,9 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 		}
 		return false, conflict
 	}
+	if err := tx.applyPaperFill(record); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 

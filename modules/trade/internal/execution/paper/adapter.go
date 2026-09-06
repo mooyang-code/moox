@@ -16,6 +16,7 @@ import (
 
 type FactStore interface {
 	GetTradingAccountByID(context.Context, string) (store.TradingAccountRecord, error)
+	GetPaperBalanceSnapshot(context.Context, string, string) (store.PaperBalanceSnapshot, error)
 	GetPaperAccountConfig(context.Context, string, string) (store.PaperAccountConfigRecord, error)
 	GetOrderByClientID(context.Context, string, string, string) (store.OrderRecord, error)
 	ListOrdersForAccount(context.Context, string, string, int64) ([]store.OrderRecord, error)
@@ -59,73 +60,14 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	if err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
-	config, err := a.Store.GetPaperAccountConfig(ctx, account.SpaceID, account.TradingAccountID)
+	projection, err := a.Store.GetPaperBalanceSnapshot(ctx, account.SpaceID, account.TradingAccountID)
 	if err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
-	initial := decimalOrZero(config.InitialBalance)
-	balances := map[string]shared.Decimal{account.SettlementAsset: initial}
+	balances, locked := projection.Totals, projection.Reserved
 	instruments, err := a.Store.ListInstruments(ctx, account.Exchange, account.MarketType)
 	if err != nil {
 		return exchange.AccountSnapshot{}, err
-	}
-	byID := make(map[string]store.InstrumentRecord, len(instruments))
-	for _, instrument := range instruments {
-		byID[instrument.InstrumentID] = instrument
-	}
-	fills, _, err := a.Store.ListFills(ctx, account.SpaceID, store.FillQuery{TradingAccountID: account.TradingAccountID, Limit: 100000})
-	if err != nil {
-		return exchange.AccountSnapshot{}, err
-	}
-	for _, fill := range fills {
-		price, quantity := decimalOrZero(fill.Price), decimalOrZero(fill.Quantity)
-		fee := decimalOrZero(fill.Fee)
-		instrument := byID[fill.InstrumentID]
-		if instrument.InstrumentID == "" {
-			for _, candidate := range instruments {
-				if candidate.ExchangeSymbol == fill.ExchangeSymbol {
-					instrument = candidate
-					break
-				}
-			}
-		}
-		if account.MarketType == "SPOT" {
-			quote, base := instrument.QuoteAsset, instrument.BaseAsset
-			if quote == "" {
-				quote = account.SettlementAsset
-			}
-			if base == "" {
-				base = fill.ExchangeSymbol
-			}
-			cash := price.Mul(quantity)
-			if fill.Side == string(exchange.SideBuy) {
-				balances[quote] = balances[quote].Sub(cash)
-				balances[base] = balances[base].Add(quantity)
-			} else {
-				balances[quote] = balances[quote].Add(cash)
-				balances[base] = balances[base].Sub(quantity)
-			}
-		} else {
-			balances[account.SettlementAsset] = balances[account.SettlementAsset].Add(decimalOrZero(fill.RealizedPnL))
-		}
-		feeAsset := fill.FeeAsset
-		if feeAsset == "" {
-			feeAsset = account.SettlementAsset
-		}
-		balances[feeAsset] = balances[feeAsset].Sub(fee)
-	}
-	orders, err := a.Store.ListOrdersForAccount(ctx, account.SpaceID, account.TradingAccountID, 0)
-	if err != nil {
-		return exchange.AccountSnapshot{}, err
-	}
-	locked := make(map[string]shared.Decimal)
-	for _, order := range orders {
-		if order.State == "FILLED" || order.State == "CANCELED" || order.State == "PARTIALLY_CANCELED" || order.State == "REJECTED" || order.State == "EXPIRED" {
-			continue
-		}
-		if order.ReservedAsset != "" {
-			locked[order.ReservedAsset] = locked[order.ReservedAsset].Add(decimalOrZero(order.RemainingReservedQuantity))
-		}
 	}
 	settlement := balances[account.SettlementAsset]
 	equity := settlement
@@ -158,20 +100,27 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 			return exchange.AccountSnapshot{}, positionErr
 		}
 		for _, position := range positions {
-			quantity := decimalOrZero(position.SignedQuantity)
+			quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
+			if parseErr != nil {
+				return exchange.AccountSnapshot{}, fmt.Errorf("%w: paper position quantity", store.ErrInvalidRecord)
+			}
 			if quantity.IsZero() {
 				continue
+			}
+			entry, parseErr := shared.ParseDecimal(position.EntryPrice)
+			if parseErr != nil || entry.Cmp(shared.Zero()) <= 0 {
+				return exchange.AccountSnapshot{}, fmt.Errorf("%w: paper position entry price", store.ErrInvalidRecord)
+			}
+			leverage, parseErr := shared.ParseDecimal(position.Leverage)
+			if parseErr != nil || leverage.Cmp(shared.Zero()) <= 0 {
+				return exchange.AccountSnapshot{}, fmt.Errorf("%w: paper position leverage", store.ErrInvalidRecord)
 			}
 			mark, quoteErr := a.valuationQuote(ctx, position.ExchangeSymbol)
 			if quoteErr != nil {
 				return exchange.AccountSnapshot{}, quoteErr
 			}
-			entry := decimalOrZero(position.EntryPrice)
 			unrealizedPnL = unrealizedPnL.Add(mark.Sub(entry).Mul(quantity))
-			leverage := decimalOrZero(position.Leverage)
-			if leverage.Cmp(shared.Zero()) > 0 {
-				usedMargin = usedMargin.Add(quantity.Abs().Mul(mark).Div(leverage))
-			}
+			usedMargin = usedMargin.Add(quantity.Abs().Mul(mark).Div(leverage))
 		}
 		equity = settlement.Add(unrealizedPnL)
 	}

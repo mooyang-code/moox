@@ -202,23 +202,28 @@ Claim/Rebind transaction:
 - 新增：`modules/trade/internal/infra/store/paper_balance.go`、`paper_balance_test.go`
 - 新增：`modules/trade/internal/infra/store/paper_balance_migration.go`
 - 修改：`modules/trade/internal/infra/store/store.go`、`paper_simulation.go`
+- 修改：`modules/trade/internal/infra/store/fact.go`、`paper_account_config.go`
 - 修改：`modules/trade/schema/schema.go`、`schema_test.go`
-- 修改：`modules/trade/internal/application/consumer/fill.go`、`application/papersimulation/service.go`
+- 修改/验证：`modules/trade/internal/application/consumer/fill.go`、`application/papersimulation/service.go`
 - 修改/验证：`modules/trade/internal/application/order/service.go`、`infra/store/reservation.go`、`reservation_facts.go` 及对应测试
-- 修改：`modules/trade/internal/execution/paper/adapter.go`、`internal/bootstrap/bootstrap.go`
+- 新增：`modules/trade/internal/application/order/paper_funds.go`、`modules/trade/test/paper_balance_funds_e2e_test.go`
+- 修改：`modules/trade/internal/application/order/validator.go`、`modules/trade/internal/execution/paper/adapter.go`
+- 验证：`modules/trade/internal/bootstrap/bootstrap.go`
 - 测试：`modules/trade/test/paper_matcher_restart_e2e_test.go`、`close_paper_simulation_e2e_test.go`
 
-- [ ] 定义最小投影：每账户一行初始化元数据，每资产一行精确十进制总余额。不要把行情估值、可用资金、冻结资金再各存一套权威数据。新表加入 `validateExistingTradeSchema` 的 approved/reference schema，并验证第二次打开数据库仍成功。
+- [x] 定义最小投影：每账户一行初始化元数据，每资产一行精确十进制总余额。不要把行情估值、可用资金、冻结资金再各存一套权威数据。新表加入 `validateExistingTradeSchema` 的 approved/reference schema，并验证第二次打开数据库仍成功。
 
 ```sql
-CREATE TABLE IF NOT EXISTS t_paper_balance_states (
+CREATE TABLE IF NOT EXISTS t_paper_balance_projections (
     c_space_id TEXT NOT NULL,
     c_trading_account_id TEXT NOT NULL,
     c_applied_fill_count INTEGER NOT NULL DEFAULT 0,
     c_initialized_at INTEGER NOT NULL,
     PRIMARY KEY (c_space_id, c_trading_account_id),
     FOREIGN KEY (c_space_id, c_trading_account_id)
-        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id)
+        REFERENCES t_paper_account_configs (c_space_id, c_trading_account_id),
+    CHECK (c_applied_fill_count >= 0),
+    CHECK (c_initialized_at > 0)
 );
 
 CREATE TABLE IF NOT EXISTS t_paper_asset_balances (
@@ -228,21 +233,25 @@ CREATE TABLE IF NOT EXISTS t_paper_asset_balances (
     c_total TEXT NOT NULL,
     PRIMARY KEY (c_space_id, c_trading_account_id, c_asset),
     FOREIGN KEY (c_space_id, c_trading_account_id)
-        REFERENCES t_paper_balance_states (c_space_id, c_trading_account_id)
+        REFERENCES t_paper_balance_projections (c_space_id, c_trading_account_id),
+    CHECK (c_asset <> ''),
+    CHECK (c_total <> '')
 );
 ```
 
-- [ ] 新 Paper 创建账户、配置、初始余额投影在同一事务完成。已有 Paper 在允许撮合前，持账户锁、用单事务从初始资金和全部 Fill 重建；按稳定复合游标分页，不使用 OFFSET 作为长期游标，不以 100000 为总量上限。
-- [ ] 重建中断必须整体回滚；初始化标记与结果一起提交。未初始化账户不可 Ready，不允许先截断余额运行。测试账户数据全部在临时 SQLite 中创建；正式库回填在发布阶段单独授权。
-- [ ] 用稳定复合键 `(traded_at, fill_id)` 扫描事务内历史；`applied_fill_count` 只用于审计，不是按交易所时间过滤新 Fill 的水位。迟到 Fill 也必须增量入账；再次启动不覆盖已经初始化的投影。
-- [ ] 每笔新 Paper Fill 的插入、订单状态、reservation 释放、持仓和余额投影在同一事务更新。只有 `InsertFill` 确认新增才修改投影；重复 Fill 不加计，冲突或任何中途错误全部回滚。禁止在已有 Tx 内调用会新建事务的 Store 方法。
-- [ ] Spot：买入扣 quote、加 base；卖出相反；手续费按实际费用币种扣除。Swap：初始结算现金加已实现收益、扣费用；未实现收益和保证金仍由当前持仓/价格计算。所有金额用现有 Decimal，不用浮点数或 SQLite 浮点 SUM。
-- [ ] `GetAccountSnapshot` 改读投影和活动 reservation，不再每次读取全部 Fill/全部终态订单。保留“预占只扣一次”的合同，而非照搬有重扣风险的实现：先红测覆盖 Paper 快照已含 PENDING locked、随后又 Place 的情况。Paper 在同一 Place 事务读取余额投影与全部活动 reservation 校验资金，不再对已反映预占的 Paper 可用余额叠加 `GetUnreflectedReservation`；Live 仍保留现有 snapshot watermark 路径，防止扩大账户事实合同变更。
-- [ ] 同样覆盖 T03 新增的人工 PENDING 报价刷新：用投影与其他活动预占检查替换后的 reservation，不叠加快照已反映的自身/其他 Paper 预占；真实 Paper 已同步 locked 后报价上升、下降和资金不足均需验证原子性。
-- [ ] Close 只关闭执行并取消活动模拟订单，保留 Fill、余额投影与资金曲线；同事务取消并释放 reservation 后刷新最终快照，避免已关闭账户仍显示旧 locked。不得通过重建重新开启 CLOSED 账户。
-- [ ] 验收：100001 笔历史、不同费币种、买卖回转、Swap 已实现收益、重复重放、事务失败、重启、关闭、重建与增量结果一致。增加查询计数断言：普通快照不调用全历史 ListFills，不用墙钟性能阈值代替结构验证。
-- [ ] 运行 `go test -count=1 ./modules/trade/schema ./modules/trade/internal/infra/store ./modules/trade/internal/application/consumer ./modules/trade/internal/application/papersimulation ./modules/trade/internal/bootstrap ./modules/trade/internal/execution/paper ./modules/trade/test`，并对所有 schema 执行内存 SQLite 载入与外键检查。
-- [ ] 提交建议：`fix(trade): maintain complete paper balance projections`。
+**实现落点：** 初始化放在底层 `CreatePaperAccountConfig`，增量放在 `InsertFill` 新增成功分支，因此现有 Simulation、Reducer 和生产 Bootstrap 无需另加一套入账回调。历史回填在 `Store.Open` 返回之前完成，执行 worker 尚未启动；用单事务隔离，避免在运行中边撮合边重建。关闭 Swap 使用同事务持仓派生值，估值时间取所用持仓与旧快照的保守最小值；关闭不访问行情，不把旧标价伪装成新报价。
+
+- [x] 新 Paper 创建账户、配置、初始余额投影在同一事务完成。已有 Paper 在允许撮合前，持账户锁、用单事务从初始资金和全部 Fill 重建；按稳定复合游标分页，不使用 OFFSET 作为长期游标，不以 100000 为总量上限。
+- [x] 重建中断必须整体回滚；初始化标记与结果一起提交。未初始化账户不可 Ready，不允许先截断余额运行。测试账户数据全部在临时 SQLite 中创建；正式库回填在发布阶段单独授权。
+- [x] 用稳定复合键 `(traded_at, fill_id)` 扫描事务内历史；`applied_fill_count` 只用于审计，不是按交易所时间过滤新 Fill 的水位。迟到 Fill 也必须增量入账；再次启动不覆盖已经初始化的投影。
+- [x] 每笔新 Paper Fill 的插入、订单状态、reservation 释放、持仓和余额投影在同一事务更新。只有 `InsertFill` 确认新增才修改投影；重复 Fill 不加计，冲突或任何中途错误全部回滚。禁止在已有 Tx 内调用会新建事务的 Store 方法。
+- [x] Spot：买入扣 quote、加 base；卖出相反；手续费按实际费用币种扣除。Swap：初始结算现金加已实现收益、扣费用；未实现收益和保证金仍由当前持仓/价格计算。所有金额用现有 Decimal，不用浮点数或 SQLite 浮点 SUM。
+- [x] `GetAccountSnapshot` 改读投影和活动 reservation，不再每次读取全部 Fill/全部终态订单。保留“预占只扣一次”的合同，而非照搬有重扣风险的实现：先红测覆盖 Paper 快照已含 PENDING locked、随后又 Place 的情况。Paper 在同一 Place 事务读取余额投影与全部活动 reservation 校验资金，不再对已反映预占的 Paper 可用余额叠加 `GetUnreflectedReservation`；Live 仍保留现有 snapshot watermark 路径，防止扩大账户事实合同变更。
+- [x] 同样覆盖 T03 新增的人工 PENDING 报价刷新：用投影与其他活动预占检查替换后的 reservation，不叠加快照已反映的自身/其他 Paper 预占；真实 Paper 已同步 locked 后报价上升、下降和资金不足均需验证原子性。
+- [x] Close 只关闭执行并取消活动模拟订单，保留 Fill、余额投影与资金曲线；同事务取消并释放 reservation 后刷新最终快照，避免已关闭账户仍显示旧 locked。不得通过重建重新开启 CLOSED 账户。
+- [x] 验收：100001 笔历史、不同费币种、买卖回转、Swap 已实现收益、重复重放、事务失败、重启、关闭、重建与增量结果一致。增加查询计数断言：普通快照不调用全历史 ListFills，不用墙钟性能阈值代替结构验证。
+- [x] 运行 `go test -count=1 ./modules/trade/schema ./modules/trade/internal/infra/store ./modules/trade/internal/application/consumer ./modules/trade/internal/application/papersimulation ./modules/trade/internal/bootstrap ./modules/trade/internal/execution/paper ./modules/trade/test`，并对所有 schema 执行内存 SQLite 载入与外键检查。
+- [x] 提交建议：`fix(trade): maintain complete paper balance projections`。
 
 ### T06：隔离账户故障，拆开目标状态与 worker 健康
 

@@ -578,6 +578,10 @@ type fixture struct {
 }
 
 func newFixture(t *testing.T, market exchange.MarketType, adapter execution.ExecutionAdapter) *fixture {
+	return newFixtureWithMode(t, market, adapter, exchange.ExecutionModePaper)
+}
+
+func newFixtureWithMode(t *testing.T, market exchange.MarketType, adapter execution.ExecutionAdapter, mode exchange.ExecutionMode) *fixture {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "trade.db")
 	tradeStore, err := store.Open(path)
@@ -589,7 +593,7 @@ func newFixture(t *testing.T, market exchange.MarketType, adapter execution.Exec
 	if !ok {
 		fake = newFakeExchange(market)
 	}
-	seedFixture(t, tradeStore, market, fake.instrument)
+	seedFixtureWithMode(t, tradeStore, market, fake.instrument, mode)
 	if adapter == nil {
 		adapter = fake
 	}
@@ -654,7 +658,19 @@ func buildFixture(
 }
 
 func seedFixture(t *testing.T, tradeStore *store.Store, market exchange.MarketType, instrument exchange.Instrument) {
+	seedFixtureWithMode(t, tradeStore, market, instrument, exchange.ExecutionModePaper)
+}
+
+func seedFixtureWithMode(t *testing.T, tradeStore *store.Store, market exchange.MarketType, instrument exchange.Instrument, mode exchange.ExecutionMode) {
 	t.Helper()
+	environment := exchange.AccountEnvironmentPaper
+	instrumentEnvironment := exchange.AccountEnvironmentProduction
+	credentialID := ""
+	if mode == exchange.ExecutionModeLive {
+		environment = exchange.AccountEnvironmentTestnet
+		instrumentEnvironment = environment
+		credentialID = "local-http-mock-only"
+	}
 	margin := ""
 	leverage := store.LeverageSettings{}
 	if market == exchange.MarketTypeSwap {
@@ -665,10 +681,11 @@ func seedFixture(t *testing.T, tradeStore *store.Store, market exchange.MarketTy
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, Name: "E2E",
 			Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
-			ExecutionMode:   string(exchange.ExecutionModePaper),
-			Environment:     string(exchange.AccountEnvironmentPaper),
-			SettlementAsset: "USDT",
-			MarginMode:      margin, Status: string(exchange.AccountStatusEnabled), Ready: true,
+			ExecutionMode:      string(mode),
+			Environment:        string(environment),
+			CredentialSecretID: credentialID,
+			SettlementAsset:    "USDT",
+			MarginMode:         margin, Status: string(exchange.AccountStatusEnabled), Ready: true,
 			SyncSymbols: []string{testSymbol}, LeverageSettings: leverage,
 			Snapshot: store.TradingAccountSnapshot{
 				Balances: []store.AssetBalance{
@@ -683,6 +700,7 @@ func seedFixture(t *testing.T, tradeStore *store.Store, market exchange.MarketTy
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
 			Exchange: string(instrument.Exchange), MarketType: string(market),
+			Environment:    string(instrumentEnvironment),
 			ExchangeSymbol: instrument.ExchangeSymbol, InstrumentID: instrument.InstrumentID,
 			BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
 			SettlementAsset: instrument.SettlementAsset, Linear: instrument.Linear,

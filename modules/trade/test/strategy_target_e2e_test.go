@@ -29,6 +29,7 @@ const (
 
 func TestLogicalAccountTargetConsumerPersistsLatestAndWorkerConverges(t *testing.T) {
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
+	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
 	var wakes atomic.Int32
 	now := time.Now().UTC()
@@ -125,6 +126,7 @@ func TestLogicalAccountEmptyFullFlattensAllPhysicalPositions(t *testing.T) {
 func testEmptyFullTargetClosesExistingPosition(t *testing.T) {
 	now := time.Now().UTC()
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
+	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
 	result := eventconsumer.HandleTarget(
 		context.Background(),
@@ -160,6 +162,7 @@ func testEmptyFullTargetClosesExistingPosition(t *testing.T) {
 func TestLogicalAccountTargetRejectsStaleReferenceBeforePlacement(t *testing.T) {
 	now := time.Now().UTC()
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
+	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
 	result := eventconsumer.HandleTarget(
 		context.Background(),
@@ -189,14 +192,48 @@ func TestLogicalAccountTargetRejectsStaleReferenceBeforePlacement(t *testing.T) 
 	f.fake.mu.Unlock()
 }
 
+func seedTargetPaperHoldings(t *testing.T, f *fixture) {
+	t.Helper()
+	// The starting BTC must have matching ledger history, not only a snapshot.
+	// A historical buy at 5000 leaves 50000 USDT and 10 BTC from initial cash.
+	ctx := context.Background()
+	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.CreateOrder(store.OrderRecord{
+			SpaceID: testSpace, TradingAccountID: testAccount, OrderID: "historical-buy",
+			ClientOrderID: "historical-buy", ExchangeSymbol: testSymbol, OrderType: "MARKET",
+			Side: "BUY", Quantity: "10", ReferencePrice: "5000", State: "FILLED",
+			FilledQuantity: "10", AveragePrice: "5000",
+			OwnerType: "EXTERNAL", OwnerID: "historical-buy",
+		}); err != nil {
+			return err
+		}
+		_, err := tx.InsertFill(store.FillRecord{
+			SpaceID: testSpace, TradingAccountID: testAccount, OrderID: "historical-buy",
+			FillID: "historical-buy-fill", ExchangeTradeID: "historical-buy-fill",
+			Price: "5000", Quantity: "10", Fee: "0", SettlementAsset: "USDT",
+			TradedAt: testNow.Add(-time.Hour).UnixMilli(),
+		})
+		return err
+	}))
+	f.fake.account.Balances[0].Total = shared.MustDecimal("50000")
+	f.fake.account.Balances[0].Available = shared.MustDecimal("50000")
+	f.fake.account.Equity = shared.MustDecimal("550000")
+	f.fake.account.AvailableFunds = shared.MustDecimal("50000")
+	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.UpdateTradingAccountSnapshot(testSpace, testAccount, paperSnapshotRecordForTest(f.fake.account))
+	}))
+}
+
 func seedLogicalAccount(t *testing.T, tradeStore *store.Store) {
 	t.Helper()
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), testAccount)
+	require.NoError(t, err)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount,
 			Name: "E2E logical account", OwnerRunnerID: testRunner,
 			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: account.ExecutionMode, MarketType: "SPOT", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
