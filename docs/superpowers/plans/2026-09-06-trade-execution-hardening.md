@@ -275,7 +275,7 @@ CREATE TABLE IF NOT EXISTS t_paper_asset_balances (
 - [x] 区分 worker 存活/数据库可用与账户业务错误。matcher 已启动且公共持久化可用时可服务健康账户；某账户的失败只使该账户不可交易。worker 退出必须立刻不健康，不得只修成永远返回 true。
 - [x] 目标增加持久化 `EXPIRED`；到期使用当前 target ID/session 的 CAS 更新，旧扫描不能覆盖新目标。EXPIRED 不再参与正常收敛扫描；已有 Order/Fill 继续由账户同步处理，新目标仍可覆盖它。
 - [x] 撤销 consumer 与全量 worker 共用的 `targetGate`，保留现有组合账户锁。验收“A 的行情阻塞时，B 可以持久化受理目标”；不承诺单串行执行器下 B 完全不受执行排队影响。耗时外部调用有界。
-- [ ] 按组合账户 ID 定向唤醒与 T08 的候选路由改造一并完成；当前仍使用已有全局 Wake/周期扫描，本阶段未将它宣称为已实现。
+- [x] 按组合账户 ID 定向唤醒已与 T08 一并完成；持久化首次受理后入去重队列，执行中重唤醒不丢失，保留全局 Wake/周期恢复。定向成功不能清除全量扫描故障，独立 codeCR 与回归闭环。
 - [x] 锁顺序统一为组合账户、组合执行、执行账户；禁止在持有执行账户锁时回调获取组合锁。复核 AccountsSync/FactsObserver 的 wake 必须在释放账户锁后发生。
 - [x] 验收：A 永久失败、B 仍成交；坏候选不饿死健康候选；目标自然过期不新发单/不撤单/不清仓，实例仍健康；新目标并发到达不被过期 CAS 覆盖；真实 worker 退出可检测。
 - [x] 运行 `go test -race -count=1 ./modules/trade/internal/runtime ./modules/trade/internal/execution/paper ./modules/trade/internal/application/target ./modules/trade/internal/health ./modules/trade/internal/eventconsumer ./modules/trade/test`。
@@ -305,16 +305,20 @@ CREATE TABLE IF NOT EXISTS t_paper_asset_balances (
 
 **文件：**
 - 修改：`modules/trade/internal/application/target/weight_resolver.go`、`executor.go` 及对应测试
-- 修改：`modules/trade/internal/infra/store/target.go`、`target_receipt.go`
-- 修改：`modules/trade/test/strategy_target_e2e_test.go`、`live_paper_unified_execution_e2e_test.go`
+- 修改：`modules/trade/internal/infra/store/target.go`、`store.go`、`logical_account.go`；新增 `target_pin_migration.go` 及测试。`target_receipt.go` 保持原实现，整记录原样保留测试已覆盖，无需修改。
+- 新增：`modules/trade/test/target_capacity_routing_e2e_test.go`、`internal/application/target/pin_cutover_test.go`；原有 strategy/unified 测试纳入全模块回归。
+- 新增：`modules/trade/internal/application/order/capacity.go` 及容量/拒绝测试；共享 `validator.go`、`paper_funds.go`、`service.go` 的准入与资金计算。
+- 新增：`modules/trade/internal/infra/store/context_lock.go` 及测试；同步调整 AccountSync 和 ResolveUnknown 的锁等待及失败 readiness 闭环，不改变锁顺序。
 - 修改：`modules/trade/internal/runtime/target_worker.go`、`internal/eventconsumer/target.go` 及 Bootstrap 接线/对应测试，完成 T06 留下的组合账户 ID 定向唤醒。
 
-- [ ] `InstrumentTarget` 只表达规范化 instrument 和总 quantity；参考价格证据保留报价账户、原生 symbol 和时间，但它们不再构成执行账户 pin。
-- [ ] 去重重投只读取原 receipt，不重新估值；执行重试和路由改变也不得改变原目标 quantity。禁止为了换账户而生成“同 target ID、不同估值”的回执。
-- [ ] 收敛时先处理反向物理仓位，再按组合总量增减；同向已存在于 B 的仓位可以直接贡献目标，不因 A 优先级更高而先平 B 再开 A。
-- [ ] 加仓按 priority、可用资金、最小量、步长和合约乘数选择账户；可拆到多个成员。A 容量不足或不满足最小量时继续 B；未知/未映射敞口仍 fail closed，不能作为可忽略账户跳过。
-- [ ] 减仓在持仓所属账户执行，不用不同账户的相反仓位净额抵消宣告完成。一个组合一次最多一个新子订单，等待实际成交/账户事实重算，不同时创建互相基于旧快照的重复订单。
-- [ ] 阶段切换不得把已有 pinned 目标静默解钉并立即交易。受控切换时暂停相关组合，保存旧 receipt 供审计，废止旧可执行目标，等待新 session/新 target；是否撤既有订单仍需显式操作。最终不保留第二套 pinned 新目标入口。
+- [x] `InstrumentTarget` 只表达规范化 instrument 和总 quantity；参考价格证据保留报价账户、原生 symbol 和时间，但它们不再构成执行账户 pin。
+- [x] 去重重投只读取原 receipt，不重新估值；执行重试和路由改变也不得改变原目标 quantity。禁止为了换账户而生成“同 target ID、不同估值”的回执。
+- [x] 收敛时先处理反向物理仓位，再按组合总量增减；同向已存在于 B 的仓位可以直接贡献目标，不因 A 优先级更高而先平 B 再开 A。
+- [x] 加仓按 priority、可用资金、最小量、步长和合约乘数选择账户；可拆到多个成员。A 容量不足或不满足最小量时继续 B；未知/未映射敞口仍 fail closed，不能作为可忽略账户跳过。
+- [x] 减仓在持仓所属账户执行，不用不同账户的相反仓位净额抵消宣告完成。一个组合一次最多一个新子订单，等待实际成交/账户事实重算，不同时创建互相基于旧快照的重复订单。
+- [x] 阶段切换不得把已有 pinned 目标静默解钉并立即交易。受控切换时暂停相关组合，保存旧 receipt 供审计，废止旧可执行目标，等待新 session/新 target；是否撤既有订单仍需显式操作。最终不保留第二套 pinned 新目标入口。
+
+**审查补充：** Live 已确定持久化为 REJECTED 的余额不足响应触发锁外有界事实刷新，本轮结束，下一轮再依据新容量选择账户；UNKNOWN 不进入此分支。刷新锁等待也可取消，失败持久化 not-ready，数据库清理失败保持共享错误。旧 pin 必须是整行一致的确知结构，mixed/未知结构拒绝且回滚全部启动改动。迁移暂停门禁不被后续自动 PAUSED 原因覆盖，新 Claim/new target 不会自动撤旧单。
 
 ```text
 equity=200, reference_price=100, weight=1 -> total_target=2
@@ -323,9 +327,9 @@ B: available=100, position=1
 expected: buy 1 on B; no sell on B; receipt quantity remains 2
 ```
 
-- [ ] 验收上述例子以及 A/B 分摊容量、相反仓位、零目标、最小量残差、同 target 重投、成员变动、市场报价短暂失败。将原“新目标必须搬仓到冻结账户”的测试替换为新合同，不删掉测试后不补等价覆盖。
-- [ ] 运行 `go test -count=1 ./modules/trade/internal/application/target ./modules/trade/internal/infra/store ./modules/trade/test`。
-- [ ] 提交建议：`refactor(trade): separate target valuation from execution routing`。
+- [x] 验收上述例子以及 A/B 分摊容量、相反仓位、零目标、最小量残差、同 target 重投、成员变动、市场报价短暂失败。将原“新目标必须搬仓到冻结账户”的测试替换为新合同，不删掉测试后不补等价覆盖。
+- [x] 运行目标包和 Trade 全模块普通测试；AccountSync/Order/Target/Runtime/Consumer/Test 整包 race、Store 整包与最新增量 race、Trade vet 通过。三个新 codeCR 的阶段发现全部闭环，主 Agent 独立复验；这不替代 T11 的正式环境验收。
+- [x] 按共享容量与有界刷新、目标路由与安全切换、定向唤醒三个逻辑提交交付；提交及远端核验见进度记录。
 
 ### T09：增加有明确归属边界的普通订单提交
 

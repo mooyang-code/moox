@@ -10,6 +10,7 @@ import (
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 type logicalTargetStoreStub struct {
@@ -17,6 +18,181 @@ type logicalTargetStoreStub struct {
 	records  []store.LogicalAccountTargetRecord
 	statuses []string
 	err      error
+}
+
+func (s *logicalTargetStoreStub) GetLogicalAccountTarget(_ context.Context, space, logical string) (store.LogicalAccountTargetRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, record := range s.records {
+		if record.SpaceID == space && record.LogicalAccountID == logical {
+			return record, s.err
+		}
+	}
+	return store.LogicalAccountTargetRecord{}, gorm.ErrRecordNotFound
+}
+
+func TestTargetWorkerDirectedWakeCoalescesAndRetainsWakeDuringExecution(t *testing.T) {
+	targets := &logicalTargetStoreStub{}
+	started := make(chan string, 8)
+	release := make(chan struct{}, 8)
+	worker := &TargetWorker{Store: targets, Interval: time.Hour, Executor: targetConvergeFunc(func(ctx context.Context, space, logical string) (targetapp.Result, error) {
+		started <- space + "/" + logical
+		select {
+		case <-release:
+			return targetapp.Result{}, nil
+		case <-ctx.Done():
+			return targetapp.Result{}, ctx.Err()
+		}
+	})}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	t.Cleanup(func() { cancel(); require.ErrorIs(t, <-done, context.Canceled) })
+	require.Eventually(t, func() bool { return worker.Snapshot().Ready }, time.Second, time.Millisecond)
+	targets.mu.Lock()
+	targets.records = []store.LogicalAccountTargetRecord{
+		{SpaceID: "space", LogicalAccountID: "one", Status: targetapp.StatusPending},
+		{SpaceID: "other-space", LogicalAccountID: "one", Status: targetapp.StatusPending},
+	}
+	targets.mu.Unlock()
+	worker.WakeTarget("space", "one")
+	select {
+	case got := <-started:
+		require.Equal(t, "space/one", got)
+	case <-time.After(time.Second):
+		t.Fatal("directed wake was lost")
+	}
+	for range 100 {
+		worker.WakeTarget("space", "one")
+	}
+	release <- struct{}{}
+	select {
+	case got := <-started:
+		require.Equal(t, "space/one", got)
+	case <-time.After(time.Second):
+		t.Fatal("wake during execution was lost")
+	}
+	release <- struct{}{}
+	select {
+	case got := <-started:
+		t.Fatalf("unexpected extra target execution: %s", got)
+	case <-time.After(30 * time.Millisecond):
+	}
+	worker.WakeTarget("space", "missing")
+	require.Never(t, func() bool { return !worker.Snapshot().Ready }, 30*time.Millisecond, time.Millisecond)
+}
+
+func TestTargetWorkerPeriodicScanRecoversUnsignaledTargets(t *testing.T) {
+	targets := &logicalTargetStoreStub{}
+	converger := &logicalTargetConvergerStub{wake: make(chan struct{}, 4)}
+	worker := &TargetWorker{Store: targets, Executor: converger, Interval: 20 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	t.Cleanup(func() { cancel(); require.ErrorIs(t, <-done, context.Canceled) })
+	require.Eventually(t, func() bool { return worker.Snapshot().Ready }, time.Second, time.Millisecond)
+	targets.mu.Lock()
+	targets.records = []store.LogicalAccountTargetRecord{{SpaceID: "space", LogicalAccountID: "unsignaled"}}
+	targets.mu.Unlock()
+	select {
+	case <-converger.wake:
+	case <-time.After(time.Second):
+		t.Fatal("periodic recovery did not run")
+	}
+}
+
+func TestTargetWorkerDirectedWakeSkipsStaleTargetsAndPreservesOtherDiagnostics(t *testing.T) {
+	targets := &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{
+		{SpaceID: "space", LogicalAccountID: "expired", Status: targetapp.StatusExpired},
+		{SpaceID: "space", LogicalAccountID: "healthy", Status: targetapp.StatusPending},
+	}}
+	converger := &logicalTargetConvergerStub{}
+	previous := TargetFailure{SpaceID: "space", LogicalAccountID: "other", Error: "offline"}
+	worker := &TargetWorker{Store: targets, Executor: converger, targetErrors: []TargetFailure{previous}}
+	require.NoError(t, worker.runTargets(context.Background(), []targetKey{
+		{"space", "missing"}, {"space", "expired"}, {"space", "healthy"},
+	}))
+	require.Equal(t, []string{"space/healthy"}, converger.calls)
+	require.Equal(t, []TargetFailure{previous}, worker.Snapshot().TargetErrors)
+}
+
+func TestTargetWorkerDirectedCancellationStopsQueuedCandidates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	worker := &TargetWorker{
+		Store: &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{
+			{SpaceID: "space", LogicalAccountID: "first", Status: targetapp.StatusPending},
+			{SpaceID: "space", LogicalAccountID: "second", Status: targetapp.StatusPending},
+		}},
+		Executor: targetConvergeFunc(func(context.Context, string, string) (targetapp.Result, error) {
+			calls++
+			cancel()
+			return targetapp.Result{}, context.Canceled
+		}),
+	}
+	require.ErrorIs(t, worker.runTargets(ctx, []targetKey{{"space", "first"}, {"space", "second"}}), context.Canceled)
+	require.Equal(t, 1, calls)
+}
+
+func TestTargetWorkerDirectedWakePreservesAccountLookupDiagnostics(t *testing.T) {
+	worker := &TargetWorker{
+		Store: &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{
+			{SpaceID: "space", LogicalAccountID: "logical", Status: targetapp.StatusPending},
+		}},
+		Executor: targetConvergeFunc(func(context.Context, string, string) (targetapp.Result, error) {
+			return targetapp.Result{}, &targetapp.AccountError{TradingAccountID: "account", Err: gorm.ErrRecordNotFound}
+		}),
+	}
+	require.NoError(t, worker.runTargets(context.Background(), []targetKey{{"space", "logical"}}))
+	require.Len(t, worker.Snapshot().TargetErrors, 1)
+	require.Equal(t, "account", worker.Snapshot().TargetErrors[0].TradingAccountID)
+}
+
+func TestTargetWorkerDirectedSuccessPreservesFullScanFailureUntilFullRecovery(t *testing.T) {
+	targets := &logicalTargetStoreStub{err: errors.New("invalid target JSON")}
+	converger := &logicalTargetConvergerStub{wake: make(chan struct{}, 8)}
+	worker := &TargetWorker{Store: targets, Executor: converger, Interval: time.Hour}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	t.Cleanup(func() { cancel(); require.ErrorIs(t, <-done, context.Canceled) })
+	require.Eventually(t, func() bool { return worker.Snapshot().LastError == "invalid target JSON" }, time.Second, time.Millisecond)
+	targets.mu.Lock()
+	targets.err = nil
+	targets.records = []store.LogicalAccountTargetRecord{{SpaceID: "space", LogicalAccountID: "healthy", Status: targetapp.StatusPending}}
+	targets.mu.Unlock()
+	worker.WakeTarget("space", "healthy")
+	select {
+	case <-converger.wake:
+	case <-time.After(time.Second):
+		t.Fatal("directed execution did not run")
+	}
+	require.Never(t, func() bool { return worker.Snapshot().Ready }, 30*time.Millisecond, time.Millisecond)
+	require.Equal(t, "invalid target JSON", worker.Snapshot().LastError)
+	worker.Wake()
+	require.Eventually(t, func() bool { return worker.Snapshot().Ready }, time.Second, time.Millisecond)
+	require.Empty(t, worker.Snapshot().LastError)
+}
+
+func TestTargetWorkerEmptyDirectedSignalDoesNotClearDirectedFailure(t *testing.T) {
+	targets := &logicalTargetStoreStub{}
+	worker := &TargetWorker{Store: targets, Interval: time.Hour, Executor: targetConvergeFunc(func(context.Context, string, string) (targetapp.Result, error) {
+		return targetapp.Result{}, errors.New("database unavailable")
+	})}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	t.Cleanup(func() { cancel(); require.ErrorIs(t, <-done, context.Canceled) })
+	require.Eventually(t, func() bool { return worker.Snapshot().Ready }, time.Second, time.Millisecond)
+	targets.mu.Lock()
+	targets.records = []store.LogicalAccountTargetRecord{{SpaceID: "space", LogicalAccountID: "broken", Status: targetapp.StatusPending}}
+	targets.mu.Unlock()
+	worker.WakeTarget("space", "broken")
+	require.Eventually(t, func() bool { return worker.Snapshot().LastError == "database unavailable" }, time.Second, time.Millisecond)
+	worker.targetWake <- struct{}{}
+	require.Never(t, func() bool { return worker.Snapshot().Ready }, 30*time.Millisecond, time.Millisecond)
+	require.Equal(t, "database unavailable", worker.Snapshot().LastError)
 }
 
 func (s *logicalTargetStoreStub) ListLogicalAccountTargets(

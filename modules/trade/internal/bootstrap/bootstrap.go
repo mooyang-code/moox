@@ -316,7 +316,7 @@ func initialize(
 		runWorker(func(workerCtx context.Context) error {
 			return eventconsumer.RunTarget(workerCtx, eventconsumer.TargetOptions{
 				Client: client, ConsumerName: cfg.EventBus.TargetConsumer,
-				Store: tradeStore, Wake: targetWorker.Wake,
+				Store: tradeStore, WakeTarget: targetWorker.WakeTarget,
 				SetReady:       targetConsumerReady.Store,
 				WeightResolver: weightResolver,
 			})

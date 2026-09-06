@@ -3,6 +3,7 @@ package eventconsumer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -51,6 +52,36 @@ func TestHandleLogicalAccountTargetMapsTargetIdentity(t *testing.T) {
 	}}, got.Targets)
 	require.Equal(t, "PENDING", got.Status)
 	require.Equal(t, now.UnixMilli(), got.AcceptedAt)
+}
+
+func TestHandleTargetDirectedWakeOnlyAfterNewAcceptance(t *testing.T) {
+	tradeStore := openTargetStore(t)
+	seedLogicalTargetAccount(t, tradeStore, true, true)
+	now := time.Now().UTC()
+	opts := targetOptions(tradeStore, now)
+	var wakes []string
+	opts.Wake = func() { t.Error("directed wake must not trigger global scan") }
+	opts.WakeTarget = func(space, logical string) {
+		record, err := tradeStore.GetLogicalAccountTarget(context.Background(), space, logical)
+		require.NoError(t, err)
+		_, err = tradeStore.GetTargetReceipt(context.Background(), space, record.TargetID)
+		require.NoError(t, err, "receipt must be committed before wake")
+		wakes = append(wakes, space+"/"+logical)
+	}
+	delivery := logicalTargetDelivery(t, now, "target-directed", "runner-1", "logical-1", 2, nil)
+	require.Equal(t, jetstream.ACK, HandleTarget(context.Background(), delivery, opts).Decision)
+	require.Equal(t, []string{"space-1/logical-1"}, wakes)
+	require.Equal(t, jetstream.ACK, HandleTarget(context.Background(), delivery, opts).Decision)
+	rejected := logicalTargetDelivery(t, now, "target-rejected", "runner-other", "logical-1", 3, nil)
+	require.Equal(t, jetstream.TERM, HandleTarget(context.Background(), rejected, opts).Decision)
+	opts.WeightResolver = targetResolverFunc(func(context.Context, int64, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
+		return targetapp.WeightConversion{}, errors.New("resolver unavailable")
+	})
+	next := now.Add(time.Minute)
+	opts.Now = func() time.Time { return next }
+	failed := logicalTargetDelivery(t, next, "target-failed", "runner-1", "logical-1", 3, nil)
+	require.Equal(t, jetstream.RETRY, HandleTarget(context.Background(), failed, opts).Decision)
+	require.Equal(t, []string{"space-1/logical-1"}, wakes)
 }
 
 func TestHandleLogicalAccountTargetAcceptsEmptyFullWhilePaused(t *testing.T) {

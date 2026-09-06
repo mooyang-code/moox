@@ -20,6 +20,7 @@ type TargetOptions struct {
 	ConsumerName   string
 	Store          *store.Store
 	Wake           func()
+	WakeTarget     func(spaceID, logicalAccountID string)
 	Now            func() time.Time
 	SetReady       func(bool)
 	WeightResolver TargetWeightResolver
@@ -253,8 +254,12 @@ func HandleTarget(
 		}
 		return retryTarget(err)
 	}
-	if accepted && opts.Wake != nil {
-		opts.Wake()
+	if accepted {
+		if opts.WakeTarget != nil {
+			opts.WakeTarget(record.SpaceID, record.LogicalAccountID)
+		} else if opts.Wake != nil {
+			opts.Wake()
+		}
 	}
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }

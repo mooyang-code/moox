@@ -8,11 +8,13 @@ import (
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 )
 
 var ErrTargetWorkerConfig = errors.New("trade runtime: TargetWorker is not configured")
 
 type LogicalTargetStore interface {
+	GetLogicalAccountTarget(context.Context, string, string) (store.LogicalAccountTargetRecord, error)
 	ListLogicalAccountTargets(
 		context.Context,
 		...string,
@@ -35,13 +37,50 @@ type TargetWorker struct {
 	ConvergeTimeout time.Duration
 	Metrics         TargetRunMetrics
 
-	wakeOnce sync.Once
-	wake     chan struct{}
+	wakeOnce   sync.Once
+	wake       chan struct{}
+	targetWake chan struct{}
+	queueMu    sync.Mutex
+	pending    map[targetKey]struct{}
+	queue      []targetKey
 
 	mu           sync.RWMutex
 	ready        bool
 	lastError    string
 	targetErrors []TargetFailure
+}
+
+type targetKey struct {
+	spaceID          string
+	logicalAccountID string
+}
+
+func (w *TargetWorker) WakeTarget(spaceID, logicalAccountID string) {
+	if w == nil || spaceID == "" || logicalAccountID == "" {
+		return
+	}
+	w.initWake()
+	key := targetKey{spaceID, logicalAccountID}
+	w.queueMu.Lock()
+	if _, exists := w.pending[key]; !exists {
+		w.pending[key] = struct{}{}
+		w.queue = append(w.queue, key)
+	}
+	w.queueMu.Unlock()
+	select {
+	case w.targetWake <- struct{}{}:
+	default:
+	}
+}
+
+func (w *TargetWorker) takeTargets() []targetKey {
+	w.queueMu.Lock()
+	defer w.queueMu.Unlock()
+	// Detach before I/O so a wake arriving during convergence queues a new pass.
+	keys := w.queue
+	w.queue = nil
+	w.pending = make(map[targetKey]struct{})
+	return keys
 }
 
 type TargetFailure struct {
@@ -88,6 +127,12 @@ func (w *TargetWorker) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-w.wake:
 		case <-ticker.C:
+		case <-w.targetWake:
+			// Only a full scan can establish that an earlier shared failure recovered.
+			if err := w.runTargets(ctx, w.takeTargets()); err != nil {
+				w.setResult(err)
+			}
+			continue
 		}
 		w.setResult(w.runOnce(ctx))
 	}
@@ -126,6 +171,32 @@ func (w *TargetWorker) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return w.runRecords(ctx, records, true)
+}
+
+func (w *TargetWorker) runTargets(ctx context.Context, keys []targetKey) error {
+	var runErrors []error
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		record, err := w.Store.GetLogicalAccountTarget(ctx, key.spaceID, key.logicalAccountID)
+		if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, store.ErrTargetExpired) {
+			continue
+		}
+		if err != nil {
+			runErrors = append(runErrors, err)
+			continue
+		}
+		switch record.Status {
+		case targetapp.StatusPending, targetapp.StatusConverging, targetapp.StatusBlocked, targetapp.StatusConverged:
+			runErrors = append(runErrors, w.runRecords(ctx, []store.LogicalAccountTargetRecord{record}, false))
+		}
+	}
+	return errors.Join(runErrors...)
+}
+
+func (w *TargetWorker) runRecords(ctx context.Context, records []store.LogicalAccountTargetRecord, full bool) error {
 	now := time.Now().UTC()
 	if w.Now != nil {
 		now = w.Now().UTC()
@@ -134,6 +205,20 @@ func (w *TargetWorker) runOnce(ctx context.Context) error {
 	var failures []TargetFailure
 	defer func() {
 		w.mu.Lock()
+		if !full {
+			for _, previous := range w.targetErrors {
+				matched := false
+				for _, record := range records {
+					if previous.SpaceID == record.SpaceID && previous.LogicalAccountID == record.LogicalAccountID {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					failures = append(failures, previous)
+				}
+			}
+		}
 		w.targetErrors = failures
 		w.mu.Unlock()
 	}()
@@ -156,6 +241,9 @@ func (w *TargetWorker) runOnce(ctx context.Context) error {
 			return err
 		}
 		if convergeErr != nil {
+			if !full && convergeErr == gorm.ErrRecordNotFound {
+				continue
+			}
 			if accountErr, ok := convergeErr.(*targetapp.AccountError); ok {
 				failures = append(failures, TargetFailure{
 					SpaceID: record.SpaceID, LogicalAccountID: record.LogicalAccountID,
@@ -195,5 +283,7 @@ func (w *TargetWorker) observe(
 func (w *TargetWorker) initWake() {
 	w.wakeOnce.Do(func() {
 		w.wake = make(chan struct{}, 1)
+		w.targetWake = make(chan struct{}, 1)
+		w.pending = make(map[targetKey]struct{})
 	})
 }

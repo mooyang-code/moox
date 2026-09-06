@@ -24,9 +24,9 @@
 | T03 人工未知提交恢复 | 已完成 | `34e92f78`；durable恢复、错误身份/终态校验、deadline和Paper报价闭环；新起codeCR及主Agent复验通过 |
 | T04 OKX 单笔成交费用 | 已完成 | `e2162efa`；signed cost、fillTime排序、不可变重放及真实Paper余额；新Agent/codeCR复核闭环 |
 | T05 Paper 余额投影 | 已完成 | 完整历史与增量投影、原子资金校验/关闭、受控旧库迁移；新 codeCR 无剩余 P0-P2，主 Agent 全量/race 复验通过 |
-| T06 故障隔离与过期 | 核心已完成 | 真实 Decider、EXPIRED/CAS、故障/锁隔离及实际超时持久化闭环；两位新独立 codeCR 无剩余 P0-P2，主 Agent 全量普通与相关整包 race/vet 通过；按 ID 定向唤醒与 T08 一并完成 |
+| T06 故障隔离与过期 | 已完成 | 核心 `dcd9f491`；按 ID 定向唤醒随 T08 完成，独立 codeCR 与全量/相关 race/vet 闭环 |
 | T07 消息结果可观测 | 已完成 | `1a941da7`；真实Runner、四包race、组件及生产构建通过；独立codeCR所有增量发现闭环 |
-| T08 动态账户路由 | 未开始 | 不重新估值、不搬同向仓位、保护已有目标 |
+| T08 动态账户路由 | 已完成 | 总量与路由分离、共享真实容量、定向唤醒和旧 pin 安全切换；三个新 codeCR 无剩余 P0-P2，主 Agent 全量/race/vet 复验通过 |
 | T09 普通 SubmitOrder | 未开始 | MANUAL/STRATEGY、持久化提交、完整接口/鉴权 |
 | T10 契约与控制台 | 未开始 | 现代身份、删除旧执行分支、前后端与文档一致 |
 | T11 完整验收与交付 | 未开始 | 全量/race/vet/协议/Web/隔离 NATS/新 Agent 审查/发布/正式 Paper E2E |
@@ -95,13 +95,36 @@ T02 正式红测：`TestModernSessionTargetCanResume` 因 `target runner does no
 - 最终 `review_t06_paper_final`、`review_t06_execution_final` 分别给出限定范围无剩余 P0/P1/P2。主 Agent 独立核验源码后，最终 Trade 全模块普通测试通过；runtime/target/order/accountsync/operator/health/eventconsumer/test 八包整包 race 全部通过，Paper 整包 race 通过，迁移定向及独立 Store 整包 race 通过，相关 vet/diff-check 通过。临时编译/预期红测/并发编辑前快照及已修测试时序失败未当作通过证据。
 - 本阶段没有正式部署、生产下单或更改生产开关；后续 T08-T11 与完整正式 Paper 验收仍然必须执行。
 
-### T08 实施前核验
+### T08 实施与阶段审查
+
+- 已完成总目标数量与报价来源证据分离，删除 executor 两处 pinned 分支；同向 B 持仓直接贡献总目标，不因 A 优先级搬仓。
+- OrderService 新增只读 Capacity，复用原 Validator reservation、Paper 可执行报价与账本投影、Live 同步水位；最终 Place 仍在账户锁与事务内准入。精确有理数按 base step 向下取整，不复制简化资金公式。
+- 主 Agent 正式红测复现：两账户各容量 1 时原执行器仍给 A 下数量 2；MaxChildNotional 小于一个 step 时原执行器反而放行整笔。当前两项已转绿。
+- 新增真实 Paper 多账户集成测试：现代权重事件经真实估值转换为总数量 4，A/B 各有 100000 USDT、参考价 50000，先 A 买 2，实际 Fill 后再 B 买 2；活动 child 阻止重复预占，最终两笔成交、每账户余额与持仓正确，重投不改变 receipt。此测试不是生产 Broker 端到端证明。
+- Store.Open 整体事务执行受控切换：严格识别旧 pin JSON，暂停受影响组合、清 owner 并更新 fence、废止旧 current target；历史 receipt、OPEN order、Fill 和余额保持原样。未知字段、重复键、半 pin、触发器/FK 依赖拒绝；失败回滚包含此前 DDL，不能留下半升级状态。
+- 定向 wake 使用去重队列并保留周期全扫描；独立 codeCR 发现的“定向成功清除仍存在的全量错误”已红测修复，只由成功全量扫描恢复共享健康。
+- 首轮 Trade 全模块普通测试通过；目标路由及真实 Paper 拆单定向 race 通过。最终审查与修复后回归结果后续补记。
+- 容量审查发现 Live 真实余额拒绝后，本地旧快照会让下一轮继续选择 A。新增真实 Store + fake Live adapter 红测复现后，在确定 REJECTED 且余额不足时锁外刷新事实；本轮仅创建 A 一单，下一轮按新余额选择 B，B 的证明状态是 OPEN，不是成交。UNKNOWN、限流、其他拒绝不进入此路径；刷新失败与原拒绝都保留。
+- 升级审查发现混合 pinned/unpinned 数组不属于已知写入形状，现两种排列均拒绝并保留原库。另复现“新 Claim + 新 target 在迁移 PAUSED 状态下自动撤旧 OPEN 单”：增加迁移暂停门禁，并让后续自动 PAUSED 原因更新保留该门禁，显式 ACTIVE 恢复才解除。跨重启 Store + Executor 回归先红后绿。
+- 主 Agent 补查子单 notional 上限裁剪后的最小数量：减仓仍须满足合约乘数后的 base minimum，不能裁剪到无效量再交给 OrderService；对应行为红测已转绿。
+- 已补相同 mutex 注册表上的可取消获取，Capacity、SyncAccount 三层锁以及 ResolveUnknown 同步尾链不再无界等待。锁超时独立完成 readiness 清理，不再抢被占锁；SQL 清理错误保留共享分类。三种锁超时、持久化 not-ready、释放后恢复，以及真实 Submit 到 AccountSync 的持锁截止时间场景均通过。
+- 最终 `review_t08_wake`、`review_t08_cutover`、`review_t08_routing` 均无剩余 P0/P1/P2。主 Agent 最终 Trade 全模块普通测试通过；AccountSync/Order/Target/Runtime/EventConsumer/Test 六包整包 race 通过；Store 整包 race 为 342.568s，之后迁移门禁和 context lock 增量另做定向 race；Trade 全模块 vet 与 diff-check 通过。
+- 本阶段没有正式部署或实盘操作。T09 普通提交、T10 契约/控制台及历史 receipt 迁移安全门禁、T11 全链生产虚拟账户验收仍未完成，不能据本阶段完成标记整个目标结束。
+- 本阶段按三个逻辑提交交付：`870e4ea5` 共享容量与有界刷新；`94c1831e` 动态路由与旧目标安全切换；定向唤醒及本记录随 `feat(trade): wake accepted targets by logical account` 提交。目标分支仍为 `feature/trade-execution-hardening`，不合入或发布尚未完成的 T09-T11。
+
+### T08 实施前核验记录
 
 - 权重受理已有 receipt 命中不重新估值；当前 `WeightResolver` 同时把报价来源写入参考价证据和 `InstrumentTarget` 的执行 pin。后续只保留前者，不能连审计证据一起删除。
 - Executor 非 pinned 分支已有反向物理仓位优先平仓、总量比较和实际持仓账户减仓，但容量失败换 B 的现有测试仅用 stub 拒单。它不证明真实容量拆单：A/B 各能买 1、总差额为 2 时，现有实现仍会分别尝试下 2 并失败。T08 必须增加真实 OrderService/Paper 资金与成交后的再次收敛测试。
 - 删除 Go pin 字段会让旧 JSON 被静默忽略，从而把原 pinned 目标立即变成动态路由。切换必须在 workers 启动前暂停相关组合、废止旧 current target，保留 receipt、Order 和 Fill；等待新 session/新目标，不允许靠 JSON 解码的宽松行为完成迁移。
 - 原工作区分支已有后续 Strategy 和 tradeeventpb 提交及未提交修改。T10 集成前必须重新核验当前契约，不能直接用执行 worktree 中较早的复制基线覆盖生产者。
 - 发布前还须对历史 `rebuildLegacyTargetReceiptTable` 做完整 known-shape/扩展列、索引、trigger、外键依赖保护及事务测试。独立审查确认它不是 T06 新改动引入，但不能因此跳过 T10/T11 的历史事实保护门禁；现有 target 表保护不代表 receipt 表也已验收。
+
+### T09 实施前接口定位
+
+- 下一阶段必须同步 Domain/Store/Create/Paper Create/Proto 手写 validation/返回转换，以及 Claim/Rebind/Resume/Consumer/Executor/最终 Submit 的控制模式边界，不能仅在新 SubmitOrder HTTP 入口拦截。
+- `modules/trade/proto/tradegen/validation.go` 是手写契约，不是 proto 自动生成文件；生成只使用当前 Makefile，不 clean 删除该文件；嵌套 tradegen module 要单独测试。
+- 新 ControlMode 迁移不能复用跳过整个 CREATE TABLE SQL 比较的 `legacyLogicalAccountShapeMatches` 宽松逻辑；必须精确认识已知旧 CHECK/列/default，并保留旧 action、order、fill。该项与 T10 已列出的 receipt exact-shape/事务门禁一起在发布前完成。
 
 ## 发布调查
 
