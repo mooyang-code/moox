@@ -14,10 +14,8 @@ import (
 )
 
 type InstrumentTarget struct {
-	InstrumentID     string `json:"instrument_id"`
-	Quantity         string `json:"quantity"`
-	TradingAccountID string `json:"trading_account_id,omitempty"`
-	ExchangeSymbol   string `json:"exchange_symbol,omitempty"`
+	InstrumentID string `json:"instrument_id"`
+	Quantity     string `json:"quantity"`
 }
 
 type BlockedTarget struct {
@@ -348,8 +346,8 @@ func (s *Store) UpdateLogicalAccountTargetState(
 func logicalAccountTargetRecord(
 	row logicalAccountTargetRow,
 ) (LogicalAccountTargetRecord, error) {
-	var targets []InstrumentTarget
-	if err := json.Unmarshal([]byte(row.TargetsJSON), &targets); err != nil {
+	targets, _, err := decodeCurrentTargets(row.TargetsJSON, false)
+	if err != nil {
 		return LogicalAccountTargetRecord{}, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
 	}
 	var blocked []BlockedTarget

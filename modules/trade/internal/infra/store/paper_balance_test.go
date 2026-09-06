@@ -109,6 +109,8 @@ func TestPaperBalanceMigrationRejectsMalformedStoredDecimalAtomically(t *testing
 			fill.FillID, fill.ExchangeTradeID = "z-bad-fill", "z-bad-trade"
 			require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error { _, err := tx.InsertFill(fill); return err }))
 			require.NoError(t, s.db.Exec(fmt.Sprintf("UPDATE t_order_fills SET %s = '' WHERE c_fill_id = 'z-bad-fill'", column)).Error)
+			var originalFills []map[string]interface{}
+			require.NoError(t, s.db.Table("t_order_fills").Order("c_fill_id").Find(&originalFills).Error)
 			require.NoError(t, s.db.Exec("DROP TABLE t_paper_asset_balances").Error)
 			require.NoError(t, s.db.Exec("DROP TABLE t_paper_balance_projections").Error)
 			require.NoError(t, s.Close())
@@ -123,10 +125,16 @@ func TestPaperBalanceMigrationRejectsMalformedStoredDecimalAtomically(t *testing
 			require.NoError(t, err)
 			defer sqlDB.Close()
 			for _, table := range []string{"t_paper_asset_balances", "t_paper_balance_projections"} {
-				var count int64
-				require.NoError(t, raw.Table(table).Count(&count).Error)
-				require.Zero(t, count, "failed migration must roll back balances and initialization marker")
+				require.False(t, tableExists(raw, table), "failed startup must roll back new balance tables as well as their data")
 			}
+			var count int64
+			require.NoError(t, raw.Table("t_order_fills").Count(&count).Error)
+			require.Equal(t, int64(2), count, "failed startup must retain historical fills")
+			_, err = Open(path)
+			require.ErrorIs(t, err, ErrInvalidRecord)
+			var retainedFills []map[string]interface{}
+			require.NoError(t, raw.Table("t_order_fills").Order("c_fill_id").Find(&retainedFills).Error)
+			require.Equal(t, originalFills, retainedFills)
 		})
 	}
 }
@@ -221,6 +229,8 @@ func TestPaperBalanceHistoryRejectsAmbiguousFillAssetsAtomically(t *testing.T) {
 			} else {
 				require.NoError(t, s.db.Exec("UPDATE t_order_fills SET c_fee_asset = '' WHERE c_fill_id = 'z-bad-fill'").Error)
 			}
+			var originalFills []map[string]interface{}
+			require.NoError(t, s.db.Table("t_order_fills").Order("c_fill_id").Find(&originalFills).Error)
 			require.NoError(t, s.db.Exec("DROP TABLE t_paper_asset_balances").Error)
 			require.NoError(t, s.db.Exec("DROP TABLE t_paper_balance_projections").Error)
 			require.NoError(t, s.db.Exec("DROP INDEX idx_order_fills_paper_balance_history").Error)
@@ -237,11 +247,15 @@ func TestPaperBalanceHistoryRejectsAmbiguousFillAssetsAtomically(t *testing.T) {
 			defer sqlDB.Close()
 			var count int64
 			for _, table := range []string{"t_paper_balance_projections", "t_paper_asset_balances"} {
-				require.NoError(t, raw.Table(table).Count(&count).Error)
-				require.Zero(t, count, "valid replay prefix must also roll back")
+				require.False(t, tableExists(raw, table), "failed startup must roll back new tables and valid replay prefix")
 			}
 			require.NoError(t, raw.Table("t_order_fills").Count(&count).Error)
 			require.Equal(t, int64(2), count, "migration must retain historical facts for diagnosis")
+			_, err = Open(path)
+			require.ErrorIs(t, err, ErrInvalidRecord)
+			var retainedFills []map[string]interface{}
+			require.NoError(t, raw.Table("t_order_fills").Order("c_fill_id").Find(&retainedFills).Error)
+			require.Equal(t, originalFills, retainedFills)
 		})
 	}
 }

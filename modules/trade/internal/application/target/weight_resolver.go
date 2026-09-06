@@ -135,7 +135,6 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 		})
 		quantities = append(quantities, store.InstrumentTarget{
 			InstrumentID: weight.InstrumentID, Quantity: quantity.String(),
-			TradingAccountID: tradingAccountID, ExchangeSymbol: instrument.ExchangeSymbol,
 		})
 	}
 	return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: equity, EquitySourceTime: equityTime, ReferencePrices: prices, ReferencePriceEvidence: evidence, WeightsJSON: weightsJSON, QuantityTargets: quantities}, nil

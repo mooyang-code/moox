@@ -515,10 +515,12 @@ func (tx *Tx) SetLogicalAccountAutomation(
 	}
 	result := tx.db.Exec(`
 		UPDATE t_logical_accounts
-		SET c_automation_state = ?, c_pause_reason = ?,
+		SET c_automation_state = ?, c_pause_reason = CASE
+			WHEN c_pause_reason = ? AND ? = 'PAUSED' THEN c_pause_reason
+			ELSE ? END,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
-	`, state, reason, spaceID, logicalAccountID)
+	`, state, TargetPinMigrationPauseReason, state, reason, spaceID, logicalAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account automation")
 }
 

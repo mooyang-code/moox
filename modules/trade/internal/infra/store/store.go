@@ -65,32 +65,39 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("access trade database: %w", err)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	_, err = migrateLegacyTradeSchema(db)
+	// Startup is one atomic cutover: even earlier schema/identity upgrades
+	// must roll back if current executable target data is not recognized.
+	err = db.Transaction(initializeTradeStore)
 	if err != nil {
 		_ = sqlDB.Close()
 		return nil, err
 	}
+	return &Store{db: db}, nil
+}
+
+func initializeTradeStore(db *gorm.DB) error {
+	if _, err := migrateLegacyTradeSchema(db); err != nil {
+		return err
+	}
 	if err := migratePaperBalanceHistoryIndex(db); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("migrate paper balance history index: %w", err)
+		return fmt.Errorf("migrate paper balance history index: %w", err)
 	}
 	if err := migrateTargetExpiryStatus(db); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("migrate target expiry status: %w", err)
+		return fmt.Errorf("migrate target expiry status: %w", err)
 	}
 	if err := validateExistingTradeSchema(db); err != nil {
-		_ = sqlDB.Close()
-		return nil, err
+		return err
 	}
 	if err := db.Exec(schema.AllSQL()).Error; err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("apply trade schema: %w", err)
+		return fmt.Errorf("apply trade schema: %w", err)
+	}
+	if err := migratePinnedCurrentTargets(db); err != nil {
+		return fmt.Errorf("migrate pinned current targets: %w", err)
 	}
 	if err := initializePaperBalances(db); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("initialize paper balances: %w", err)
+		return fmt.Errorf("initialize paper balances: %w", err)
 	}
-	return &Store{db: db}, nil
+	return nil
 }
 
 func (s *Store) LockTradingAccount(tradingAccountID string) func() {

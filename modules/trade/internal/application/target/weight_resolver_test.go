@@ -1,10 +1,42 @@
 package target
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+type conversionEquityStub struct{}
+
+func (conversionEquityStub) ResolveLogicalAccountEquity(context.Context, string, string) (shared.Decimal, int64, error) {
+	return shared.MustDecimal("2000"), 1900, nil
+}
+
+func TestWeightResolverFreezesTotalQuantityWithoutExecutionPin(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	resolver := WeightResolver{Store: fixture.store, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return fixture.now }}
+	request := &tradeeventpb.LogicalAccountTargetWeightRequested{
+		TargetId: "target-1", LogicalAccountId: "logical-1", InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1",
+		BarEndTime: timestamppb.New(time.UnixMilli(1000)), EffectiveAt: timestamppb.New(time.UnixMilli(1000)), ValidUntil: timestamppb.New(time.UnixMilli(3000)),
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SWAP", TargetWeight: "0.5"}},
+	}
+	conversion, err := resolver.Resolve(context.Background(), 0, request, "space-1")
+	require.NoError(t, err)
+	require.Equal(t, "2000", conversion.Equity.String())
+	require.Equal(t, int64(1900), conversion.EquitySourceTime)
+	require.Equal(t, "100", conversion.ReferencePrices["BTC-USDT-SWAP"])
+	quantities, err := json.Marshal(conversion.QuantityTargets)
+	require.NoError(t, err)
+	require.JSONEq(t, `[{"instrument_id":"BTC-USDT-SWAP","quantity":"10"}]`, string(quantities))
+	require.Equal(t, []ReferencePriceEvidence{{InstrumentID: "BTC-USDT-SWAP", TradingAccountID: "account-a", ExchangeSymbol: "BTCUSDT", Price: "100", UpdatedAt: 2000}}, conversion.ReferencePriceEvidence)
+}
 
 func TestRequestHashCanonicalizesTargetOrderAndDecimal(t *testing.T) {
 	left := &tradeeventpb.LogicalAccountTargetWeightRequested{RunnerId: "r", LogicalAccountId: "l", CommandSequence: 1, Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "B", TargetWeight: "0.50"}, {InstrumentId: "A", TargetWeight: "-0"}}}

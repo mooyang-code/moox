@@ -46,6 +46,7 @@ type PriceSource interface {
 }
 
 type OrderService interface {
+	Capacity(context.Context, string, orderdomain.OrderSpec) (shared.Decimal, error)
 	Place(context.Context, string, orderdomain.OrderSpec) (orderdomain.Order, error)
 	Submit(context.Context, string, string) (orderdomain.Order, error)
 	Cancel(context.Context, string, string) (orderdomain.Order, error)
@@ -79,7 +80,6 @@ type laneAction struct {
 	instrument store.InstrumentRecord
 	delta      shared.Decimal
 	reducing   bool
-	pinned     bool
 }
 
 func (e *Executor) Converge(
@@ -135,6 +135,11 @@ func (e *Executor) Converge(
 		return Result{Status: StatusPaused}, err
 	}
 	if logicalAccount.AutomationState != "ACTIVE" {
+		// Reclaiming ownership and accepting a new target do not authorize
+		// cancellation of pre-upgrade orders while the cutover is still paused.
+		if logicalAccount.PauseReason == store.TargetPinMigrationPauseReason {
+			return Result{Status: StatusPaused}, nil
+		}
 		orders, _, listErr := e.Store.ListOrders(
 			ctx,
 			spaceID,
@@ -525,9 +530,7 @@ func (e *Executor) activeOrders(
 }
 
 type desiredTarget struct {
-	Quantity         shared.Decimal
-	TradingAccountID string
-	ExchangeSymbol   string
+	Quantity shared.Decimal
 }
 
 func desiredTargets(
@@ -540,9 +543,7 @@ func desiredTargets(
 			return nil, err
 		}
 		desired[current.InstrumentID] = desiredTarget{
-			Quantity:         quantity,
-			TradingAccountID: current.TradingAccountID,
-			ExchangeSymbol:   current.ExchangeSymbol,
+			Quantity: quantity,
 		}
 	}
 	return desired, nil
@@ -576,60 +577,6 @@ func nextLaneAction(
 	desired desiredTarget,
 	members []memberState,
 ) (laneAction, bool, string, error) {
-	if desired.TradingAccountID != "" {
-		var pinnedMember *memberState
-		for i := range members {
-			if members[i].account.TradingAccountID == desired.TradingAccountID {
-				pinnedMember = &members[i]
-				break
-			}
-		}
-		if pinnedMember == nil {
-			return laneAction{}, false, "frozen target member is no longer available", nil
-		}
-		pinnedInstrument, ok := pinnedMember.instruments[instrumentID]
-		if !ok || (desired.ExchangeSymbol != "" && pinnedInstrument.ExchangeSymbol != desired.ExchangeSymbol) {
-			return laneAction{}, false, "frozen target member no longer supports instrument", nil
-		}
-		// A frozen conversion is an executable venue decision, not merely a
-		// preferred opening venue. Drain any existing exposure on other members
-		// first; otherwise aggregate convergence could silently leave the target
-		// on a different venue (or skip the frozen member entirely).
-		for _, member := range positionsByAbsoluteSize(members, instrumentID) {
-			if member.account.TradingAccountID == desired.TradingAccountID {
-				continue
-			}
-			position := member.positions[instrumentID]
-			if position.IsZero() {
-				continue
-			}
-			instrument, mapped := member.instruments[instrumentID]
-			if !mapped {
-				return laneAction{}, false, "position has no tradable instrument mapping", nil
-			}
-			return laneAction{member: member, instrument: instrument, delta: position.Neg(), reducing: true}, false, "", nil
-		}
-		pinnedPosition := pinnedMember.positions[instrumentID]
-		if desired.Quantity.IsZero() || !sameSign(pinnedPosition, desired.Quantity) {
-			if !pinnedPosition.IsZero() {
-				return laneAction{member: *pinnedMember, instrument: pinnedInstrument, delta: pinnedPosition.Neg(), reducing: true}, false, "", nil
-			}
-			if desired.Quantity.IsZero() {
-				return laneAction{}, true, "", nil
-			}
-		}
-		if sameSign(pinnedPosition, desired.Quantity) && pinnedPosition.Abs().Cmp(desired.Quantity.Abs()) > 0 {
-			excess := pinnedPosition.Abs().Sub(desired.Quantity.Abs())
-			if pinnedPosition.Cmp(shared.Zero()) > 0 {
-				excess = excess.Neg()
-			}
-			return laneAction{member: *pinnedMember, instrument: pinnedInstrument, delta: excess, reducing: true}, false, "", nil
-		}
-		if pinnedPosition.Cmp(desired.Quantity) == 0 {
-			return laneAction{}, true, "", nil
-		}
-		return laneAction{member: *pinnedMember, instrument: pinnedInstrument, delta: desired.Quantity.Sub(pinnedPosition), pinned: true}, false, "", nil
-	}
 	confirmed := shared.Zero()
 	for _, member := range members {
 		confirmed = confirmed.Add(member.positions[instrumentID])
@@ -680,19 +627,6 @@ func nextLaneAction(
 			}, false, "", nil
 		}
 	}
-	if desired.TradingAccountID != "" {
-		for _, member := range members {
-			if member.account.TradingAccountID != desired.TradingAccountID {
-				continue
-			}
-			instrument, ok := member.instruments[instrumentID]
-			if !ok || (desired.ExchangeSymbol != "" && instrument.ExchangeSymbol != desired.ExchangeSymbol) {
-				return laneAction{}, false, "frozen target member no longer supports instrument", nil
-			}
-			return laneAction{member: member, instrument: instrument, delta: delta, pinned: true}, false, "", nil
-		}
-		return laneAction{}, false, "frozen target member is no longer available", nil
-	}
 	for _, member := range members {
 		if instrument, ok := member.instruments[instrumentID]; ok {
 			return laneAction{
@@ -733,7 +667,7 @@ func (e *Executor) placeAction(
 	members []memberState,
 ) (bool, string, error) {
 	candidates := []laneAction{action}
-	if !action.reducing && !action.pinned {
+	if !action.reducing {
 		candidates = candidates[:0]
 		for _, member := range members {
 			instrument, ok := member.instruments[action.instrument.InstrumentID]
@@ -782,9 +716,17 @@ func (e *Executor) placeAction(
 				e.MaxChildNotional.Div(quote.Price),
 				mustBaseStep(candidate.instrument),
 			)
-			if maxQuantity.Cmp(shared.Zero()) > 0 && quantity.Cmp(maxQuantity) > 0 {
+			if quantity.Cmp(maxQuantity) > 0 {
 				quantity = maxQuantity
 			}
+		}
+		_, minimum, err := baseQuantityRules(candidate.instrument)
+		if err != nil {
+			return false, "", err
+		}
+		if quantity.Cmp(shared.Zero()) <= 0 || quantity.Cmp(minimum) < 0 {
+			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": child notional limit is below Exchange minimum quantity")
+			continue
 		}
 		belowMinimum, err := belowMinimumNotional(
 			quantity,
@@ -822,6 +764,23 @@ func (e *Executor) placeAction(
 		if candidate.member.account.MarketType == string(exchange.MarketTypeSwap) {
 			spec.PositionSide = exchange.PositionSideNet
 		}
+		if !candidate.reducing {
+			capacity, err := e.Orders.Capacity(ctx, spaceID, spec)
+			if err != nil {
+				if capacityError(err) {
+					capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": "+err.Error())
+					continue
+				}
+				return false, "", err
+			}
+			if capacity.Cmp(shared.Zero()) <= 0 {
+				capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": no executable capacity")
+				continue
+			}
+			if capacity.Cmp(spec.Quantity) < 0 {
+				spec.Quantity = capacity
+			}
+		}
 		placed, err := e.Orders.Place(ctx, spaceID, spec)
 		if err != nil {
 			if capacityError(err) && !candidate.reducing {
@@ -829,9 +788,6 @@ func (e *Executor) placeAction(
 					capacityErrors,
 					candidate.member.account.TradingAccountID+": "+err.Error(),
 				)
-				if action.pinned {
-					return false, "frozen target member capacity: " + strings.Join(capacityErrors, "; "), nil
-				}
 				continue
 			}
 			return false, "", err

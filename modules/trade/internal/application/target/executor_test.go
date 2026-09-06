@@ -2,6 +2,7 @@ package target
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 )
 
 type targetOrderServiceStub struct {
+	capacities   map[string]shared.Decimal
 	placeErrors  map[string]error
 	submitErrors map[string]error
 	specs        []orderdomain.OrderSpec
@@ -22,6 +24,13 @@ type targetOrderServiceStub struct {
 	canceled     []string
 	discarded    []string
 	resolved     []string
+}
+
+func (s *targetOrderServiceStub) Capacity(_ context.Context, _ string, spec orderdomain.OrderSpec) (shared.Decimal, error) {
+	if capacity, ok := s.capacities[spec.TradingAccountID]; ok && capacity.Cmp(spec.Quantity) < 0 {
+		return capacity, nil
+	}
+	return spec.Quantity, nil
 }
 
 func (s *targetOrderServiceStub) Place(
@@ -80,6 +89,7 @@ func (s *targetOrderServiceStub) ResolveUnknown(
 
 type targetPriceStub struct {
 	price shared.Decimal
+	err   error
 }
 
 func (s targetPriceStub) LatestPrice(
@@ -87,7 +97,7 @@ func (s targetPriceStub) LatestPrice(
 	string,
 	string,
 ) (Quote, error) {
-	return Quote{Price: s.price, UpdatedAt: time.UnixMilli(2_000)}, nil
+	return Quote{Price: s.price, UpdatedAt: time.UnixMilli(2_000)}, s.err
 }
 
 func TestLogicalAccountFullTargetConvergesAcrossBinanceAndOKX(t *testing.T) {
@@ -261,40 +271,135 @@ func TestTargetExecutorIncreaseFallsThroughPriorityOnCapacity(t *testing.T) {
 	require.Equal(t, []string{"child-account-b"}, fixture.orders.submitted)
 }
 
-func TestTargetExecutorDoesNotRerouteFrozenConversionOnCapacity(t *testing.T) {
+func TestTargetExecutorRoutesTotalQuantityToAvailableMember(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.orders.placeErrors = map[string]error{"account-a": orderapp.ErrInsufficientFunds}
 	fixture.target(t, []store.InstrumentTarget{{
 		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
-		TradingAccountID: "account-a", ExchangeSymbol: "BTCUSDT",
-	}})
-
-	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Equal(t, StatusBlocked, result.Status)
-	require.Len(t, fixture.orders.specs, 1)
-	require.Equal(t, "account-a", fixture.orders.specs[0].TradingAccountID)
-	require.Empty(t, fixture.orders.submitted)
-	target, err := fixture.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Contains(t, target.BlockedTargets[0].Reason, "frozen target member capacity")
-}
-
-func TestTargetExecutorDrainsOtherMembersBeforeFrozenVenue(t *testing.T) {
-	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
-	fixture.position(t, "account-b", "BTC-USDT-SWAP", "1")
-	fixture.target(t, []store.InstrumentTarget{{
-		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
-		TradingAccountID: "account-a", ExchangeSymbol: "BTCUSDT",
 	}})
 
 	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 2)
+	require.Equal(t, "account-b", fixture.orders.specs[1].TradingAccountID)
+	require.Equal(t, []string{"child-account-b"}, fixture.orders.submitted)
+	target, err := fixture.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "1", target.Targets[0].Quantity)
+}
+
+func TestTargetExecutorKeepsExistingSameDirectionMemberPosition(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-b", "BTC-USDT-SWAP", "1")
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
+	}})
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusConverged, result.Status)
+	require.Empty(t, fixture.orders.specs)
+	require.Empty(t, fixture.orders.submitted)
+}
+
+func TestTargetExecutorSplitsCapacityAfterConfirmedFill(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.capacities = map[string]shared.Decimal{
+		"account-a": shared.MustDecimal("1"), "account-b": shared.MustDecimal("1"),
+	}
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "account-a", fixture.orders.specs[0].TradingAccountID)
+	require.Equal(t, "1", fixture.orders.specs[0].Quantity.String())
+
+	fixture.position(t, "account-a", "BTCUSDT", "1")
+	fixture.orders.capacities["account-a"] = shared.Zero()
+	result, err = fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 2)
+	require.Equal(t, "account-b", fixture.orders.specs[1].TradingAccountID)
+	require.Equal(t, "1", fixture.orders.specs[1].Quantity.String())
+	current, err := fixture.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "2", current.Targets[0].Quantity)
+}
+
+func TestTargetExecutorChildNotionalBelowStepCannotPlace(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}})
+	executor := fixture.executor()
+	executor.MaxChildNotional = shared.MustDecimal("0.000001")
+	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, result.Status)
+	require.Empty(t, fixture.orders.specs)
+}
+
+func TestTargetExecutorChildCapBelowMinimumReductionCannotPlace(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "1")
+	fixture.target(t, nil)
+	instrument := fixture.instruments()[0]
+	instrument.MinExchangeQuantity = "100"
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error { return tx.UpsertInstrument(instrument) }))
+	executor := fixture.executor()
+	executor.MaxChildNotional = shared.MustDecimal("5")
+	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, result.Status)
+	require.Empty(t, fixture.orders.specs)
+}
+
+func TestTargetExecutorAddsOnFundedMemberWithoutMovingExistingPosition(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-b", "BTC-USDT-SWAP", "1")
+	fixture.orders.capacities = map[string]shared.Decimal{"account-a": shared.Zero(), "account-b": shared.MustDecimal("1")}
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
 	require.Len(t, fixture.orders.specs, 1)
 	require.Equal(t, "account-b", fixture.orders.specs[0].TradingAccountID)
-	require.True(t, fixture.orders.specs[0].ReducePositionOnly)
-	require.Equal(t, 0, fixture.orders.specs[0].Quantity.Cmp(shared.MustDecimal("1")))
+	require.Equal(t, exchange.SideBuy, fixture.orders.specs[0].Side)
+	require.Equal(t, "1", fixture.orders.specs[0].Quantity.String())
+	require.False(t, fixture.orders.specs[0].ReducePositionOnly)
+}
+
+func TestTargetExecutorRetriesQuoteAgainstCurrentMemberPriorityWithoutRevaluation(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
+	executor := fixture.executor()
+	quoteErr := errors.New("temporary quote outage")
+	executor.Prices = targetPriceStub{err: quoteErr}
+	_, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.ErrorIs(t, err, quoteErr)
+	require.Empty(t, fixture.orders.specs)
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "change priority"); err != nil {
+			return err
+		}
+		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b", Enabled: true, Priority: 0,
+		}); err != nil {
+			return err
+		}
+		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+	}))
+	executor.Prices = targetPriceStub{price: shared.MustDecimal("200")}
+	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "account-b", fixture.orders.specs[0].TradingAccountID)
+	require.Equal(t, "2", fixture.orders.specs[0].Quantity.String())
+	current, err := fixture.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "2", current.Targets[0].Quantity)
 }
 
 func TestTargetExecutorFullOmissionCancelsOldTargetBeforeClosing(t *testing.T) {
@@ -527,6 +632,7 @@ func TestTargetExecutorRecordsBlockedRemainingDelta(t *testing.T) {
 }
 
 type targetFixture struct {
+	path   string
 	t      *testing.T
 	store  *store.Store
 	orders *targetOrderServiceStub
@@ -536,11 +642,12 @@ type targetFixture struct {
 
 func newTargetFixture(t *testing.T, market exchange.MarketType) *targetFixture {
 	t.Helper()
-	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	path := filepath.Join(t.TempDir(), "trade.db")
+	tradeStore, err := store.Open(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
 	fixture := &targetFixture{
-		t: t, store: tradeStore, orders: &targetOrderServiceStub{},
+		t: t, path: path, store: tradeStore, orders: &targetOrderServiceStub{},
 		market: market, now: time.UnixMilli(2_000).UTC(),
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
