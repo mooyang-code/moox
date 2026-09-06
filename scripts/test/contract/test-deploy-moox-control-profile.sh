@@ -158,6 +158,10 @@ grep -Fq 'gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:
 # as well.
 sed -n '/^prepare_gateway_rollback() {$/,/^rollback_gateway() {$/p' \
   "${ROOT}/scripts/deploy/deploy-moox.sh" | grep -Fq 'restored="$(awk'
+sed -n '/^prepare_gateway_rollback() {$/,/^rollback_gateway() {$/p' \
+  "${ROOT}/scripts/deploy/deploy-moox.sh" | grep -Fq 'data/gateway/routes.json'
+sed -n '/^prepare_local_gateway_rollback() {$/,/^rollback_local_gateway() {$/p' \
+  "${ROOT}/scripts/deploy/deploy-moox.sh" | grep -Fq 'data/gateway/routes.json'
 rollback_health_script="${TMP_ROOT}/rollback-health.sh"
 awk '
   /^prepare_gateway_rollback\(\) \{$/ { scoped=1 }

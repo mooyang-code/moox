@@ -651,6 +651,7 @@ prepare_local_gateway_rollback() {
   local entries=(gateway)
   [[ -f "${deploy_dir}/bin/moox-gateway" ]] && entries+=(bin/moox-gateway)
   [[ -f "${deploy_dir}/bin/moox-gateway-cli" ]] && entries+=(bin/moox-gateway-cli)
+  [[ -f "${deploy_dir}/data/gateway/routes.json" ]] && entries+=(data/gateway/routes.json)
   tar -C "${deploy_dir}" -czf "${GATEWAY_ROLLBACK_ARCHIVE}" "${entries[@]}"
   chmod 0600 "${GATEWAY_ROLLBACK_ARCHIVE}"
   GATEWAY_ROLLBACK_ACTIVE=1
@@ -4855,6 +4856,9 @@ prepare_gateway_rollback() {
   local entries=(gateway)
   [[ -f "${DEPLOY_DIR}/bin/moox-gateway" ]] && entries+=(bin/moox-gateway)
   [[ -f "${DEPLOY_DIR}/bin/moox-gateway-cli" ]] && entries+=(bin/moox-gateway-cli)
+  # Restore the route snapshot with an older binary so rollback cannot leave
+  # it reading a snapshot whose schema/validation has changed.
+  [[ -f "${DEPLOY_DIR}/data/gateway/routes.json" ]] && entries+=(data/gateway/routes.json)
   tar -C "${DEPLOY_DIR}" -czf "${GATEWAY_ROLLBACK_ARCHIVE}" "${entries[@]}"
   chmod 0600 "${GATEWAY_ROLLBACK_ARCHIVE}"
   GATEWAY_ROLLBACK_ACTIVE=1

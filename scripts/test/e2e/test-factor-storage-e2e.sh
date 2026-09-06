@@ -250,6 +250,10 @@ if [[ "${restart_storage_view}" == "1" ]]; then
     fail "captured storage-view EventBus credential file is not readable: ${storage_view_credential_file}"
   fi
   restart_error=""
+  # start_storage_view stops the existing process before launching the test
+  # instance. Mark restoration before that destructive step so an interrupt
+  # during startup still puts the original process back.
+  storage_view_restore_needed=1
   if ! start_storage_view "${e2e_allowed_spaces}" "${storage_eventbus_url}"; then
     restart_error="storage-view start command failed"
   elif ! current_storage_view_pid="$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")"; then
@@ -261,12 +265,11 @@ if [[ "${restart_storage_view}" == "1" ]]; then
   fi
   if [[ -n "${restart_error}" ]]; then
     if restore_storage_view; then
-	  storage_view_restore_needed=0
+      storage_view_restore_needed=0
       fail "${restart_error}; original storage-view was restored"
     fi
     fail "${restart_error}; original storage-view could not be restored"
   fi
-  storage_view_restore_needed=1
 else
   [[ -n "${e2e_allowed_spaces}" ]] || fail "MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES must include ${e2e_space_id} when storage-view restart is disabled"
   space_is_allowed=0
