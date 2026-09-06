@@ -76,7 +76,10 @@ func (s *Service) Place(
 		spec.ClientOrderID = xid.New().String()
 		spec.ClientOrderSpec.ClientOrderID = spec.ClientOrderID
 	}
-	unlock := s.Store.LockTradingAccount(spec.TradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, spec.TradingAccountID)
+	if err != nil {
+		return orderdomain.Order{}, accountExecutionError(spec.TradingAccountID, "place_lock", err)
+	}
 	defer unlock()
 	if existing, err := s.Store.GetOrderByClientID(
 		ctx,
@@ -91,7 +94,7 @@ func (s *Service) Place(
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return orderdomain.Order{}, err
 	}
-	spec, err := s.deriveReducePositionOnly(ctx, spec)
+	spec, err = s.deriveReducePositionOnly(ctx, spec)
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
