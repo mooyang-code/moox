@@ -90,11 +90,18 @@ type Scheduler struct {
 	invokeSem        chan struct{}
 }
 
-// fullInstrumentSnapshotShards keeps each SCF's SQLite metadata registration
-// small while still sourcing the complete exchange snapshot. The same fixed
-// shard count is used for crypto and stockcn so deployment identity remains
-// stable as the catalogue grows.
+// fullInstrumentSnapshotShards keeps stockcn's large metadata registration
+// small. Crypto symbol snapshots use one invocation because Binance returns a
+// complete exchange snapshot and there is no benefit in issuing the same
+// exchangeInfo request from every shard.
 const fullInstrumentSnapshotShards = 32
+
+func instrumentSnapshotShardCount(marketID string) int {
+	if strings.EqualFold(strings.TrimSpace(marketID), "crypto") {
+		return 1
+	}
+	return fullInstrumentSnapshotShards
+}
 
 const (
 	defaultBatchCompletionDeadline     = 70 * time.Second
@@ -1288,9 +1295,10 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 		if params.SymbolSource != "exchange" {
 			return nil, nil, fmt.Errorf("symbol task requires exchange snapshot source")
 		}
-		items := make([]domain.CollectionItem, fullInstrumentSnapshotShards)
+		shardCount := instrumentSnapshotShardCount(marketID)
+		items := make([]domain.CollectionItem, shardCount)
 		for shard := range items {
-			items[shard] = domain.CollectionItem{SubjectID: targetDataset, Provider: provider, SourceID: sourceID, MarketID: marketID, InstrumentType: instrumentType, MarketType: marketType, DataType: domain.InstrumentDataType, DatasetID: targetDataset, SnapshotShardIndex: shard, SnapshotShardCount: fullInstrumentSnapshotShards}
+			items[shard] = domain.CollectionItem{SubjectID: targetDataset, Provider: provider, SourceID: sourceID, MarketID: marketID, InstrumentType: instrumentType, MarketType: marketType, DataType: domain.InstrumentDataType, DatasetID: targetDataset, SnapshotShardIndex: shard, SnapshotShardCount: shardCount}
 		}
 		return items, frequencies[:1], nil
 	}

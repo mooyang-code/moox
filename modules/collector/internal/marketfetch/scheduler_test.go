@@ -292,7 +292,7 @@ func TestInvocationCandidatesUsesOneDeterministicFailover(t *testing.T) {
 	assert.Equal(t, []string{"node-a"}, []string{invocationCandidates(nodes[0], nodes[:1])[0].NodeID})
 }
 
-func TestExpandRuleUsesAllShardsForExchangeInstrumentSnapshot(t *testing.T) {
+func TestExpandRuleUsesOneShardForCryptoExchangeInstrumentSnapshot(t *testing.T) {
 	scheduler := &Scheduler{}
 	items, frequencies, err := scheduler.expandRule(t.Context(), domain.TaskRule{
 		SpaceID: "crypto", RuleID: "binance_spot_instruments", DataType: "instrument", Provider: "binance", MarketType: "spot",
@@ -300,12 +300,22 @@ func TestExpandRuleUsesAllShardsForExchangeInstrumentSnapshot(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"1h"}, frequencies)
-	if assert.Len(t, items, fullInstrumentSnapshotShards) {
+	if assert.Len(t, items, 1) {
 		assert.Equal(t, "dataset_binance_spot_symbols", items[0].DatasetID)
 		assert.Equal(t, 0, items[0].SnapshotShardIndex)
-		assert.Equal(t, fullInstrumentSnapshotShards, items[0].SnapshotShardCount)
-		assert.Equal(t, fullInstrumentSnapshotShards-1, items[len(items)-1].SnapshotShardIndex)
+		assert.Equal(t, 1, items[0].SnapshotShardCount)
 	}
+}
+
+func TestExpandRuleKeepsStockCNInstrumentShards(t *testing.T) {
+	scheduler := &Scheduler{}
+	items, _, err := scheduler.expandRule(t.Context(), domain.TaskRule{
+		SpaceID: "stockcn", RuleID: "stockcn_instruments", DataType: "instrument", Provider: "sina", MarketType: "equity",
+		CollectParams: `{"provider":"sina","market_type":"equity","symbol_source":"exchange","target_dataset_id":"dataset_stockcn_instruments","frequency":"1h"}`,
+	})
+	assert.NoError(t, err)
+	assert.Len(t, items, fullInstrumentSnapshotShards)
+	assert.Equal(t, fullInstrumentSnapshotShards, items[0].SnapshotShardCount)
 }
 
 func TestBatchKindForRuleUsesPublicInstrumentDataType(t *testing.T) {

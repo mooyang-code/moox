@@ -80,8 +80,8 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 
 	instances, total, err := dbm.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: "crypto", Page: 1, PageSize: 200})
 	require.NoError(t, err)
-	require.Equal(t, int64(64), total)
-	require.Len(t, instances, 64)
+	require.Equal(t, int64(2), total)
+	require.Len(t, instances, 2)
 	var spot, swap, kline int
 	for _, instance := range instances {
 		if instance.MarketType == "spot" {
@@ -94,8 +94,8 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 			kline++
 		}
 	}
-	require.Equal(t, 32, spot)
-	require.Equal(t, 32, swap)
+	require.Equal(t, 1, spot)
+	require.Equal(t, 1, swap)
 	require.Zero(t, kline, "realtime kline rules use Timer nodes, while this test provides only an Invoke node")
 	require.Eventually(t, func() bool { return invocationCount.Load() >= 2 }, 2*time.Second, 10*time.Millisecond)
 }

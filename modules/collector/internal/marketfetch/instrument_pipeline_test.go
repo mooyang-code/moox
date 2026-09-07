@@ -313,6 +313,31 @@ func TestInstrumentPipelineContinuesWhenOneProviderFails(t *testing.T) {
 	require.Equal(t, 1, working.callCount())
 }
 
+func TestInstrumentPipelineUsesActiveStorageSubjectCacheWhenProvidersFail(t *testing.T) {
+	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(&instrumentProviderStub{id: "binance", err: marketdata.ErrTimeout}))
+	storage := &instrumentStorageStub{
+		existing: []*storagepb.DatasetSubject{{
+			SpaceId: "crypto", DatasetId: "dataset_binance_spot_symbols", SubjectId: "BTC-USDT-SPOT", Status: "active",
+			Attributes: map[string]string{"active_instrument_set_fetched_at": now.Format(time.RFC3339Nano)},
+		}},
+		symbols: []*storagepb.SubjectSymbol{{SpaceId: "crypto", SubjectId: "BTC-USDT-SPOT", DataSourceId: "binance", ExternalSymbol: "BTCUSDT", Status: "active"}},
+	}
+	pipeline := &InstrumentPipeline{
+		Registry: registry, Storage: storage, CandidateChain: []string{"binance"}, SpaceID: "crypto", MarketID: "crypto",
+		DatasetID: "dataset_binance_spot_symbols", DataSourceID: "binance", RequiredExchanges: []string{"binance"}, MinimumCount: 1,
+	}
+
+	result, err := pipeline.Execute(context.Background(), InstrumentPipelineRequest{RequestID: "cache-fallback", SnapshotAt: now.Add(time.Hour)})
+
+	require.NoError(t, err)
+	assert.True(t, result.Fallback)
+	assert.Equal(t, "storage_cache", result.SourceProvider)
+	assert.Equal(t, 1, result.InstrumentCount)
+	assert.Empty(t, storage.stageCalls, "a stale fallback must not publish a new active set")
+}
+
 func TestInstrumentPipelineDoesNotWaitForSlowProviderAfterTimeout(t *testing.T) {
 	now := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
 	registry := marketdata.NewRegistry()

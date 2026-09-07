@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -74,6 +75,7 @@ type InstrumentPipelineResult struct {
 	SourceProvider   string         `json:"source_provider"`
 	FetchedAt        time.Time      `json:"fetched_at"`
 	Complete         bool           `json:"complete"`
+	Fallback         bool           `json:"fallback,omitempty"`
 	PageCount        int            `json:"page_count"`
 	InstrumentCount  int            `json:"instrument_count"`
 	ExchangeCounts   map[string]int `json:"exchange_counts"`
@@ -110,6 +112,7 @@ func (p *InstrumentPipeline) Execute(ctx context.Context, req InstrumentPipeline
 	var lastErr error
 	selectedProvider := "none"
 	metricResult := "invalid"
+	fallbackUsed := false
 	defer func() {
 		if p.Metrics == nil {
 			return
@@ -120,6 +123,9 @@ func (p *InstrumentPipeline) Execute(ctx context.Context, req InstrumentPipeline
 			metricResult = "success"
 			active = len(snapshot.Instruments)
 			exchanges = snapshot.ExchangeCounts
+		}
+		if fallbackUsed {
+			metricResult = "fallback"
 		}
 		routeID := firstNonEmptyString(p.RouteID, instrumentRouteID(marketID, p.InstrumentType))
 		p.Metrics.ObserveInstrumentSnapshot(marketID, routeID, selectedProvider, metricResult, active, exchanges, snapshot.FetchedAt)
@@ -148,7 +154,24 @@ func (p *InstrumentPipeline) Execute(ctx context.Context, req InstrumentPipeline
 		validProviders = append(validProviders, fetch.providerID)
 	}
 	if len(validSnapshots) == 0 {
-		lastErr = fmt.Errorf("all instrument providers failed: %w", errors.Join(fetchErrors...))
+		fallbackSnapshot, fallbackErr := p.loadStorageFallbackSnapshot(ctx, marketID, req.SnapshotAt.UTC())
+		if fallbackErr == nil {
+			snapshot = fallbackSnapshot
+			selectedProvider = "storage_cache"
+			fallbackUsed = true
+			lastErr = nil
+			log.WarnContextf(ctx, "instrument providers unavailable; using active Storage subject cache market=%s dataset=%s instruments=%d fetched_at=%s", marketID, p.DatasetID, len(snapshot.Instruments), snapshot.FetchedAt.UTC().Format(time.RFC3339Nano))
+			return InstrumentPipelineResult{
+				SnapshotID: snapshot.SnapshotID, SourceProvider: snapshot.SourceProvider, FetchedAt: snapshot.FetchedAt,
+				Complete: snapshot.Complete, Fallback: true, PageCount: snapshot.PageCount,
+				InstrumentCount: len(snapshot.Instruments), ExchangeCounts: cloneCounts(snapshot.ExchangeCounts),
+			}, nil
+		}
+		providerErr := errors.Join(fetchErrors...)
+		if providerErr == nil {
+			providerErr = fmt.Errorf("no usable instrument provider")
+		}
+		lastErr = fmt.Errorf("all instrument providers failed: %w; storage fallback failed: %v", providerErr, fallbackErr)
 		metricResult = instrumentMetricResult(lastErr)
 		return InstrumentPipelineResult{}, lastErr
 	}
@@ -209,6 +232,132 @@ func (p *InstrumentPipeline) Execute(ctx context.Context, req InstrumentPipeline
 		return InstrumentPipelineResult{}, err
 	}
 	return InstrumentPipelineResult{SnapshotID: snapshot.SnapshotID, SourceProvider: snapshot.SourceProvider, FetchedAt: snapshot.FetchedAt, Complete: snapshot.Complete, PageCount: snapshot.PageCount, InstrumentCount: len(snapshot.Instruments), ExchangeCounts: cloneCounts(snapshot.ExchangeCounts), ActiveSetVersion: snapshot.SnapshotID}, nil
+}
+
+// loadStorageFallbackSnapshot reconstructs the last known-good instrument set
+// from the same metadata consumed by the Subjects page. It is deliberately
+// read-only: an unavailable provider must never publish a stale set as a new
+// complete exchange snapshot or disable symbols missing from that stale set.
+func (p *InstrumentPipeline) loadStorageFallbackSnapshot(ctx context.Context, marketID string, snapshotAt time.Time) (marketdata.InstrumentSnapshot, error) {
+	spaceID := firstNonEmptyString(p.SpaceID, marketID, StockCNSpaceID)
+	datasetID := firstNonEmptyString(p.DatasetID, StockCNInstrumentDatasetID)
+	dataSourceID := firstNonEmptyString(p.DataSourceID, StockCNDataSourceID)
+	memberships, err := p.Storage.ListDatasetSubjects(ctx, spaceID, datasetID)
+	if err != nil {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("list fallback dataset subjects: %w", err)
+	}
+	symbols, err := p.Storage.ListSubjectSymbols(ctx, spaceID, dataSourceID)
+	if err != nil {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("list fallback subject symbols: %w", err)
+	}
+	symbolBySubject := make(map[string]*storagepb.SubjectSymbol, len(symbols))
+	for _, symbol := range symbols {
+		if symbol == nil || !strings.EqualFold(strings.TrimSpace(symbol.GetStatus()), "active") {
+			continue
+		}
+		subjectID := strings.TrimSpace(symbol.GetSubjectId())
+		if subjectID == "" || strings.TrimSpace(symbol.GetExternalSymbol()) == "" {
+			continue
+		}
+		symbolBySubject[subjectID] = symbol
+	}
+	activeSubjectIDs := make(map[string]struct{}, len(memberships))
+	latestFetchedAt := time.Time{}
+	for _, membership := range memberships {
+		if membership == nil || !strings.EqualFold(strings.TrimSpace(membership.GetStatus()), "active") {
+			continue
+		}
+		subjectID := strings.TrimSpace(membership.GetSubjectId())
+		if subjectID == "" {
+			continue
+		}
+		activeSubjectIDs[subjectID] = struct{}{}
+		if fetchedAt := parseInstrumentFetchedAt(membership.GetAttributes()); fetchedAt.After(latestFetchedAt) {
+			latestFetchedAt = fetchedAt
+		}
+	}
+	// Some older metadata deployments populated SubjectSymbol before dataset
+	// bindings. In that case the active symbol catalog is still a valid
+	// fallback set, but only when the requested dataset has no active bindings.
+	if len(activeSubjectIDs) == 0 {
+		for subjectID := range symbolBySubject {
+			activeSubjectIDs[subjectID] = struct{}{}
+		}
+	}
+	if len(activeSubjectIDs) == 0 {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("fallback subject cache is empty")
+	}
+
+	subjectIDs := make([]string, 0, len(activeSubjectIDs))
+	for subjectID := range activeSubjectIDs {
+		subjectIDs = append(subjectIDs, subjectID)
+	}
+	sort.Strings(subjectIDs)
+	instruments := make([]marketdata.Instrument, 0, len(subjectIDs))
+	exchangeCounts := make(map[string]int)
+	for _, subjectID := range subjectIDs {
+		symbol := symbolBySubject[subjectID]
+		if symbol == nil {
+			continue
+		}
+		instrument := instrumentFromStorageSymbol(marketID, subjectID, symbol.GetExternalSymbol())
+		instruments = append(instruments, instrument)
+		exchangeCounts[instrument.Exchange]++
+	}
+	if len(instruments) == 0 {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("fallback subject cache has no active external symbol mappings")
+	}
+	if latestFetchedAt.IsZero() {
+		latestFetchedAt = snapshotAt.UTC()
+	}
+	if latestFetchedAt.IsZero() {
+		latestFetchedAt = time.Now().UTC()
+	}
+	return marketdata.InstrumentSnapshot{
+		SnapshotID:     marketdata.SnapshotID("storage_cache", marketID, latestFetchedAt),
+		SourceProvider: "storage_cache",
+		MarketID:       marketID,
+		FetchedAt:      latestFetchedAt.UTC(),
+		Complete:       true,
+		PageCount:      1,
+		ExchangeCounts: exchangeCounts,
+		Instruments:    instruments,
+	}, nil
+}
+
+func parseInstrumentFetchedAt(attributes map[string]string) time.Time {
+	value := strings.TrimSpace(attributes["active_instrument_set_fetched_at"])
+	if value == "" {
+		return time.Time{}
+	}
+	fetchedAt, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return fetchedAt.UTC()
+}
+
+func instrumentFromStorageSymbol(marketID, subjectID, externalSymbol string) marketdata.Instrument {
+	marketID = strings.ToLower(strings.TrimSpace(marketID))
+	subjectID = strings.TrimSpace(subjectID)
+	externalSymbol = strings.ToUpper(strings.TrimSpace(externalSymbol))
+	if marketID == "crypto" {
+		parts := strings.Split(strings.ToUpper(subjectID), "-")
+		base, quote := "", ""
+		if len(parts) >= 2 {
+			base, quote = parts[0], parts[1]
+		}
+		canonical := subjectID
+		if base != "" && quote != "" {
+			canonical = base + "-" + quote
+		}
+		return marketdata.Instrument{SubjectID: subjectID, CanonicalSymbol: canonical, ProviderSymbol: externalSymbol, Exchange: "binance", Name: canonical, Status: "active", BaseAsset: base, QuoteAsset: quote}
+	}
+	exchange := "unknown"
+	if parts := strings.SplitN(strings.ToUpper(subjectID), ".", 2); len(parts) == 2 && parts[1] != "" {
+		exchange = parts[1]
+	}
+	return marketdata.Instrument{SubjectID: subjectID, CanonicalSymbol: subjectID, ProviderSymbol: externalSymbol, Exchange: exchange, Name: subjectID, Status: "active"}
 }
 
 func fetchInstrumentSnapshots(ctx context.Context, registry *marketdata.Registry, chain []string, req marketdata.InstrumentRequest, providerTimeout time.Duration) []instrumentFetchResult {

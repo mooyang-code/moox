@@ -411,8 +411,8 @@ func (m *Metrics) ObserveInstrumentSnapshot(marketID, routeID, providerID, resul
 		return
 	}
 	marketID, routeID = boundedMarketRoute(marketID, routeID)
-	providerID = boundedValue(providerID, []string{"sina", "eastmoney", "baidu", "binance", "tencent", "none"}, "unknown")
-	result = boundedValue(result, []string{"success", "incomplete", "stale", "invalid"}, "unknown")
+	providerID = boundedValue(providerID, []string{"sina", "eastmoney", "baidu", "binance", "tencent", "storage_cache", "none"}, "unknown")
+	result = boundedValue(result, []string{"success", "fallback", "incomplete", "stale", "invalid"}, "unknown")
 	m.instrumentActive.WithLabelValues(marketID, routeID, providerID, result).Set(float64(max(active, 0)))
 	if !fetchedAt.IsZero() {
 		m.instrumentLastSnapshot.WithLabelValues(marketID, routeID, providerID, result).Set(float64(fetchedAt.UTC().Unix()))
