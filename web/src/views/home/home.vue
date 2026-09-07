@@ -108,7 +108,7 @@
                 <small>{{ item.dataset }}</small>
               </span>
               <b>{{ item.delay }}</b>
-              <em>{{ item.status }}</em>
+              <em>{{ statusLabel(item.status) }}</em>
             </button>
           </div>
         </section>
@@ -175,7 +175,7 @@
               @click="go('/trading/accounts')"
             >
               <span>{{ account.name }}</span>
-              <b>{{ account.status }}</b>
+              <b>{{ statusLabel(account.status) }}</b>
               <em>{{ account.detail }}</em>
             </button>
           </div>
@@ -214,7 +214,7 @@
               @click="go('/ops/services?tab=instances')"
             >
               <span>{{ dep.name }}</span>
-              <b>{{ dep.status }}</b>
+              <b>{{ statusLabel(dep.status) }}</b>
               <em>{{ dep.addr }}</em>
             </button>
           </div>
@@ -262,7 +262,7 @@ import { useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { listDataSources, listDatasets, listFactors, listSubjects, listViews } from "@/api/storage/metadata";
 import type { Dataset, PageResult, View } from "@/api/storage/types";
-import { pageResultTotal } from "@/views/data/shared/metadata-utils";
+import { pageResultTotal, statusLabel } from "@/views/data/shared/metadata-utils";
 import {
   datasetMatchesAttribution,
   isLikelyFactorResultDataset,
@@ -404,7 +404,7 @@ const healthBreakdown = computed(() => [
   { key: "freshness", label: "数据新鲜度", score: 26, max: 30, tone: "ok", note: "主力 K 线 6 分钟前入库" },
   { key: "collector", label: "采集任务健康", score: 16, max: 20, tone: "warn", note: "7 个任务需要处理" },
   { key: "nodes", label: "云节点登记", score: 15, max: 15, tone: "ok", note: "已登记云函数节点" },
-  { key: "services", label: "服务部署健康", score: 14, max: 15, tone: "ok", note: "核心服务 active" },
+  { key: "services", label: "服务部署健康", score: 14, max: 15, tone: "ok", note: "核心服务已启用" },
   { key: "assets", label: "数据资产完整度", score: 8, max: 10, tone: "ok", note: "Dataset / View 已配置" },
   { key: "trade", label: "执行账户状态", score: 8, max: 10, tone: "ok", note: "5 / 6 账户可用" }
 ]);
@@ -471,7 +471,7 @@ const dashboardKpis = computed(() => [
     label: "服务在线",
     value: String(deploymentsLoaded.value ? deployments.value.length : 28),
     unit: "",
-    note: "active 部署",
+    note: "已启用部署",
     delta: "gateway ok",
     tone: "ok",
     path: "/ops/services?tab=instances"

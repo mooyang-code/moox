@@ -55,7 +55,7 @@
           </a-table-column>
           <a-table-column title="状态" :width="90">
             <template #cell="{ record }">
-              <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+              <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
             </template>
           </a-table-column>
           <a-table-column
@@ -85,7 +85,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { listArchiveFiles } from "@/api/storage/metadata";
 import type { ArchiveFile } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
-import { applyPageResult, defaultPagination, formatTime, joinList, statusColor } from "@/views/data/shared/metadata-utils";
+import { applyPageResult, defaultPagination, formatTime, joinList, statusColor, statusLabel } from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "OpsStorageArchive" });
 

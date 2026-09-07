@@ -48,6 +48,19 @@ export function statusColor(status?: string) {
   return "gray";
 }
 
+export function statusLabel(status?: string) {
+  switch (status?.toLowerCase()) {
+    case "active":
+    case "enabled":
+      return "已启用";
+    case "disabled":
+    case "inactive":
+      return "已停用";
+    default:
+      return status || "-";
+  }
+}
+
 export function formatTime(value?: string) {
   if (!value) return "-";
   return value.replace("T", " ").replace(/Z$/, "");

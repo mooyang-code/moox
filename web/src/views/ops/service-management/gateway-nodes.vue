@@ -7,8 +7,8 @@
       </a-button>
       <a-input v-model="filters.node_id" allow-clear placeholder="节点 ID" style="width: 280px" @press-enter="reloadFirstPage" />
       <a-select v-model="filters.status" allow-clear placeholder="配置状态" class="status-filter" @change="reloadFirstPage">
-        <a-option value="enabled">enabled</a-option>
-        <a-option value="disabled">disabled</a-option>
+        <a-option value="enabled">已启用</a-option>
+        <a-option value="disabled">已停用</a-option>
       </a-select>
       <a-button type="primary" @click="reloadFirstPage">
         <template #icon><icon-search /></template>
@@ -32,7 +32,7 @@
             <div class="node-identity">
               <div class="node-name">
                 <strong>{{ record.name || record.node_id }}</strong
-                ><a-tag size="small" :color="record.status === 'enabled' ? 'blue' : 'gray'">{{ record.status }}</a-tag>
+                ><a-tag size="small" :color="record.status === 'enabled' ? 'blue' : 'gray'">{{ statusLabel(record.status) }}</a-tag>
               </div>
               <span>{{ record.node_id }}</span>
             </div>
@@ -123,7 +123,7 @@
         </a-form-item>
         <a-form-item field="status" label="配置状态">
           <a-select v-model="form.status"
-            ><a-option value="enabled">enabled</a-option><a-option value="disabled">disabled</a-option></a-select
+            ><a-option value="enabled">已启用</a-option><a-option value="disabled">已停用</a-option></a-select
           >
         </a-form-item>
         <a-form-item class="form-span-2" field="public_address" label="Gateway 公开地址" required>
@@ -181,7 +181,7 @@ import {
 } from "@/api/admin/sysdeploy";
 import type { GatewayNode, GatewayNodeInput, GatewayRoute } from "@/api/admin/types";
 import { listSSHHosts, type SSHHost } from "@/api/modules/ssh";
-import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
+import { applyPageResult, defaultPagination, formatTime, statusLabel } from "@/views/data/shared/metadata-utils";
 import {
   createLatestRequestGuard,
   gatewayHashState,

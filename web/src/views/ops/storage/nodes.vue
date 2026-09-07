@@ -75,7 +75,7 @@
           </a-table-column>
           <a-table-column title="状态" :width="90">
             <template #cell="{ record }">
-              <a-tag size="small" :color="statusColor(record.node.status)">{{ record.node.status }}</a-tag>
+              <a-tag size="small" :color="statusColor(record.node.status)">{{ statusLabel(record.node.status) }}</a-tag>
             </template>
           </a-table-column>
           <a-table-column title="更新时间" :width="180">
@@ -152,7 +152,7 @@
         <a-descriptions-item label="名称">{{ detailNode.node.name || "-" }}</a-descriptions-item>
         <a-descriptions-item label="服务目标" :span="2">{{ detailNode.node.service_target || "-" }}</a-descriptions-item>
         <a-descriptions-item label="状态">
-          <a-tag size="small" :color="statusColor(detailNode.node.status)">{{ detailNode.node.status }}</a-tag>
+          <a-tag size="small" :color="statusColor(detailNode.node.status)">{{ statusLabel(detailNode.node.status) }}</a-tag>
         </a-descriptions-item>
         <a-descriptions-item label="更新时间">{{ formatTime(detailNode.node.updated_at) }}</a-descriptions-item>
       </a-descriptions>
@@ -178,7 +178,7 @@
               <a-table-column title="保留时长" :width="120" data-index="keep_duration" />
               <a-table-column title="状态" :width="90">
                 <template #cell="{ record }">
-                  <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+                  <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
                 </template>
               </a-table-column>
               <a-table-column title="操作" :width="100" align="center">
@@ -211,7 +211,7 @@ import { Message } from "@arco-design/web-vue";
 import { useRouter } from "vue-router";
 import { deleteDataNode, listDataNodes, updateDataNode } from "@/api/storage/metadata";
 import type { DataNodeListItem, DatasetSummary } from "@/api/storage/types";
-import { applyPageResult, defaultPagination, formatTime, statusColor, statusOptions } from "@/views/data/shared/metadata-utils";
+import { applyPageResult, defaultPagination, formatTime, statusColor, statusLabel, statusOptions } from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "OpsStorageDataNodes" });
 

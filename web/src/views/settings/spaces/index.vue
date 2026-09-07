@@ -32,7 +32,7 @@
           <a-table-column title="时区" data-index="timezone" :width="150" />
           <a-table-column title="状态" :width="90">
             <template #cell="{ record }">
-              <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+              <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
             </template>
           </a-table-column>
           <a-table-column title="更新时间" :width="180">
@@ -93,7 +93,7 @@ import { Message } from "@arco-design/web-vue";
 import { createSpace, listSpaces, updateSpace } from "@/api/admin/spaces";
 import type { Space } from "@/api/admin/types";
 import { useSpaceStore } from "@/store/modules/space";
-import { applyPageResult, defaultPagination, formatTime, statusColor, statusOptions } from "@/views/data/shared/metadata-utils";
+import { applyPageResult, defaultPagination, formatTime, statusColor, statusLabel, statusOptions } from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "SettingsSpaces" });
 

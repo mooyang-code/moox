@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { dataKindOptions, validateDatasetId, validateViewId } from "./metadata-utils";
+import { dataKindOptions, statusLabel, validateDatasetId, validateViewId } from "./metadata-utils";
+
+describe("statusLabel", () => {
+  it("localizes enabled and disabled status values without changing API values", () => {
+    expect(statusLabel("enabled")).toBe("已启用");
+    expect(statusLabel("disabled")).toBe("已停用");
+    expect(statusLabel("active")).toBe("已启用");
+    expect(statusLabel("inactive")).toBe("已停用");
+    expect(statusLabel("building")).toBe("building");
+  });
+});
 
 describe("dataKindOptions", () => {
   it("only exposes record and time-series datasets", () => {

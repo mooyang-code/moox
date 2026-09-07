@@ -32,8 +32,8 @@
           <a-option value="internal">internal</a-option>
         </a-select>
         <a-select v-model="filters.status" allow-clear placeholder="状态" style="width: 110px" @change="reloadFirstPage">
-          <a-option value="active">active</a-option>
-          <a-option value="disabled">disabled</a-option>
+          <a-option value="active">已启用</a-option>
+          <a-option value="disabled">已停用</a-option>
         </a-select>
         <a-select
           v-model="filters.gateway_enabled"
@@ -94,7 +94,7 @@
           </a-table-column>
           <a-table-column title="配置状态" :width="100">
             <template #cell="{ record }">
-              <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+              <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
             </template>
           </a-table-column>
           <a-table-column class="low-priority-column" title="更新时间" :width="165">
@@ -152,8 +152,8 @@
           </a-form-item>
           <a-form-item field="status" label="状态">
             <a-select v-model="form.status">
-              <a-option value="active">active</a-option>
-              <a-option value="disabled">disabled</a-option>
+              <a-option value="active">已启用</a-option>
+              <a-option value="disabled">已停用</a-option>
             </a-select>
           </a-form-item>
           <a-form-item field="protocol" label="协议">
@@ -202,7 +202,7 @@ import {
   updateServiceDeployment
 } from "@/api/admin/sysdeploy";
 import type { GatewayNode, ServiceDeployment, ServiceDeploymentInput } from "@/api/admin/types";
-import { applyPageResult, defaultPagination, formatTime, statusColor } from "@/views/data/shared/metadata-utils";
+import { applyPageResult, defaultPagination, formatTime, statusColor, statusLabel } from "@/views/data/shared/metadata-utils";
 import { createLatestRequestGuard, runModalSubmission, serviceDeploymentRowKey, validateGatewayDeployment } from "./health";
 
 defineOptions({ name: "SettingsServiceDeployments" });

@@ -59,7 +59,7 @@
           </a-table-column>
           <a-table-column title="状态" :width="90">
             <template #cell="{ record }">
-              <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+              <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
             </template>
           </a-table-column>
           <a-table-column title="修订/绑定" :width="130">
@@ -120,7 +120,7 @@
           </div>
         </a-form-item>
         <a-form-item v-if="!editing" field="data_node_id" label="DataNode" required>
-          <a-select v-model="form.data_node_id" allow-search placeholder="选择 active DataNode">
+          <a-select v-model="form.data_node_id" allow-search placeholder="选择可用 DataNode">
             <a-option v-for="node in activeDataNodes" :key="node.node_id" :value="node.node_id">
               {{ node.name || node.node_id }} ({{ node.node_id }})
             </a-option>
@@ -128,7 +128,7 @@
         </a-form-item>
         <a-descriptions v-if="editing" :column="{ xs: 1, sm: 2 }" bordered>
           <a-descriptions-item label="当前 DataNode">{{ dataNodeLabel(form.data_node_id) }}</a-descriptions-item>
-          <a-descriptions-item label="状态">{{ form.status }}</a-descriptions-item>
+          <a-descriptions-item label="状态">{{ statusLabel(form.status) }}</a-descriptions-item>
           <a-descriptions-item label="revision">{{ form.revision || "-" }}</a-descriptions-item>
           <a-descriptions-item label="绑定状态">{{ lockLabel(form.binding_locked) }}</a-descriptions-item>
         </a-descriptions>
@@ -176,14 +176,14 @@
       <a-form v-else auto-label-width>
         <a-form-item label="当前 DataNode">{{ dataNodeLabel(rebindDataset?.data_node_id) }}</a-form-item>
         <a-form-item label="目标 DataNode" required>
-          <a-select v-model="rebindNodeId" allow-search placeholder="选择 active DataNode">
+          <a-select v-model="rebindNodeId" allow-search placeholder="选择可用 DataNode">
             <a-option v-for="node in rebindNodes" :key="node.node_id" :value="node.node_id">
               {{ node.name || node.node_id }} ({{ node.node_id }})
             </a-option>
           </a-select>
         </a-form-item>
         <a-form-item label="revision">{{ rebindDataset?.revision ?? "-" }}</a-form-item>
-        <a-alert v-if="!rebindNodes.length" type="warning" show-icon>没有可用的其他 active DataNode。</a-alert>
+        <a-alert v-if="!rebindNodes.length" type="warning" show-icon>没有可用的其他 DataNode。</a-alert>
       </a-form>
       <a-alert v-if="rebindError" type="error" show-icon>{{ rebindError }}</a-alert>
     </a-modal>
@@ -250,6 +250,7 @@ import {
   optionLabel,
   splitList,
   statusColor,
+  statusLabel,
   validateChineseDisplayName,
   validateDatasetId
 } from "@/views/data/shared/metadata-utils";
@@ -544,7 +545,7 @@ async function submit() {
     return;
   }
   if (!editing.value && !form.data_node_id) {
-    Message.warning("请选择 active DataNode");
+    Message.warning("请选择可用 DataNode");
     return;
   }
   if (!form.keep_duration.trim()) {

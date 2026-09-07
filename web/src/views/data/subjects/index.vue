@@ -42,7 +42,7 @@
           <a-table-column title="时区" data-index="timezone" :width="150" />
           <a-table-column title="状态" :width="90">
             <template #cell="{ record }">
-              <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+              <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
             </template>
           </a-table-column>
           <a-table-column title="更新时间" :width="180">
@@ -110,7 +110,7 @@
             <a-table-column title="外部符号" data-index="external_symbol" />
             <a-table-column title="状态" :width="90">
               <template #cell="{ record }">
-                <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+                <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
               </template>
             </a-table-column>
             <a-table-column title="操作" :width="90" align="center">
@@ -147,7 +147,7 @@ import { Message } from "@arco-design/web-vue";
 import { listSubjectSymbols, listSubjects, upsertSubject, upsertSubjectSymbol } from "@/api/storage/metadata";
 import type { Subject, SubjectSymbol } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
-import { applyPageResult, defaultPagination, formatTime, statusColor, statusOptions } from "@/views/data/shared/metadata-utils";
+import { applyPageResult, defaultPagination, formatTime, statusColor, statusLabel, statusOptions } from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "DataSubjects" });
 

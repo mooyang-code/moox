@@ -48,7 +48,7 @@
         </a-table-column>
         <a-table-column title="状态" :width="90">
           <template #cell="{ record }">
-            <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+            <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
           </template>
         </a-table-column>
         <a-table-column title="操作" :width="90" align="center" :fixed="'right'">
@@ -114,6 +114,7 @@ import {
   optionLabel,
   splitList,
   statusColor,
+  statusLabel,
   statusOptions,
   validateChineseDisplayName
 } from "@/views/data/shared/metadata-utils";

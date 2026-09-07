@@ -7,8 +7,8 @@
           <a-input v-model="filters.source_view_id" allow-clear placeholder="源视图" @press-enter="reloadFirstPage" />
           <a-input v-model="filters.freq" allow-clear placeholder="频率" style="width: 120px" @press-enter="reloadFirstPage" />
           <a-select v-model="filters.status" allow-clear placeholder="状态" style="width: 130px" @change="reloadFirstPage">
-            <a-option value="enabled">enabled</a-option>
-            <a-option value="disabled">disabled</a-option>
+            <a-option value="enabled">已启用</a-option>
+            <a-option value="disabled">已停用</a-option>
           </a-select>
           <a-button @click="reloadFirstPage">查询</a-button>
           <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
@@ -45,7 +45,7 @@
             <a-table-column title="标的列表" data-index="subjects_json" :width="220" :ellipsis="true" :tooltip="true" />
             <a-table-column title="状态" :width="100">
               <template #cell="{ record }">
-                <a-tag size="small" :color="bindingStatusColor(record.status)">{{ record.status }}</a-tag>
+                <a-tag size="small" :color="bindingStatusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
               </template>
             </a-table-column>
             <a-table-column title="更新时间" :width="180">
@@ -105,8 +105,8 @@
         </a-form-item>
         <a-form-item field="status" label="状态">
           <a-select v-model="form.status">
-            <a-option value="enabled">enabled</a-option>
-            <a-option value="disabled">disabled</a-option>
+            <a-option value="enabled">已启用</a-option>
+            <a-option value="disabled">已停用</a-option>
           </a-select>
         </a-form-item>
         <a-form-item class="form-span-2" field="subjects_json" label="标的白名单JSON">
@@ -130,7 +130,7 @@ import type { FactorBinding, FactorDef } from "@/api/factor/types";
 import { listViews } from "@/api/storage/metadata";
 import type { View } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
-import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
+import { applyPageResult, defaultPagination, formatTime, statusLabel } from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "FactorBindings" });
 
