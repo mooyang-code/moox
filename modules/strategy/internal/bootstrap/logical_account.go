@@ -16,7 +16,7 @@ import (
 const defaultLogicalAccountTimeout = 3 * time.Second
 
 type logicalAccountOwnerClient struct {
-	client  tradepb.TradeConsoleServiceClientProxy
+	client  logicalAccountProxy
 	timeout time.Duration
 }
 
@@ -46,19 +46,13 @@ func (e *logicalAccountResponseError) Code() int32 {
 	return int32(e.code)
 }
 
-func newLogicalAccountOwnerClient(
-	target string,
-	timeout time.Duration,
-) *logicalAccountOwnerClient {
+func newLogicalAccountOwnerClient(cfg TradeConfig) *logicalAccountOwnerClient {
+	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = defaultLogicalAccountTimeout
 	}
 	return &logicalAccountOwnerClient{
-		client: tradepb.NewTradeConsoleServiceClientProxy(
-			client.WithTarget(strings.TrimSpace(target)),
-			client.WithNetwork("tcp"),
-			client.WithProtocol("http"),
-		),
+		client:  newLogicalAccountGateway(cfg),
 		timeout: timeout,
 	}
 }
@@ -323,56 +317,6 @@ func (c *logicalAccountOwnerClient) readAuthFence(ctx context.Context, spaceID, 
 	return response.GetLogicalAccount().GetAuthFence(), nil
 }
 
-// Rebind starts a fresh Trade owner lifecycle without releasing the current
-// owner. This fences delayed targets when an archived V1 runner is reused by
-// a V2 runner with the same identity.
-func (c *logicalAccountOwnerClient) Rebind(
-	ctx context.Context,
-	spaceID string,
-	logicalAccountID string,
-	runnerID string,
-	rebindKey string,
-) (int64, error) {
-	if err := validateLogicalAccountIdentity(spaceID, logicalAccountID, runnerID, true); err != nil {
-		return 0, err
-	}
-	if strings.TrimSpace(rebindKey) == "" {
-		return 0, errors.New("rebind key is required")
-	}
-	callCtx, cancel, opts, err := c.call(ctx, spaceID)
-	if err != nil {
-		return 0, err
-	}
-	defer cancel()
-	response, err := c.client.RebindLogicalAccountOwner(
-		callCtx,
-		&tradepb.RebindLogicalAccountOwnerReq{
-			LogicalAccountId: logicalAccountID,
-			RunnerId:         runnerID,
-			RebindKey:        rebindKey,
-		},
-		opts...,
-	)
-	if err != nil {
-		return 0, c.transportError(callCtx, "rebind", err)
-	}
-	if err := validateLogicalAccountResponse(
-		"rebind",
-		spaceID,
-		logicalAccountID,
-		runnerID,
-		response.GetRetInfo(),
-		response.GetLogicalAccount(),
-	); err != nil {
-		return 0, err
-	}
-	generation := response.GetLogicalAccount().GetOwnerGeneration()
-	if generation <= 0 {
-		return 0, fmt.Errorf("Trade LogicalAccount rebind returned inactive owner generation")
-	}
-	return generation, nil
-}
-
 func (c *logicalAccountOwnerClient) call(
 	ctx context.Context,
 	spaceID string,
@@ -387,7 +331,7 @@ func (c *logicalAccountOwnerClient) call(
 	if timeout <= 0 {
 		timeout = defaultLogicalAccountTimeout
 	}
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	callCtx, cancel := context.WithTimeout(context.WithValue(ctx, logicalAccountSpaceKey{}, spaceID), timeout)
 	reqHead := &thttp.ClientReqHeader{Header: make(http.Header)}
 	reqHead.Header.Set("X-Space-Id", spaceID)
 	return callCtx, cancel, []client.Option{

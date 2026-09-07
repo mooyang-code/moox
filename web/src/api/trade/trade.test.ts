@@ -52,6 +52,15 @@ describe("Trade public API", () => {
     expect(trade.environmentLabels).toEqual({ 0: "-", 1: "Testnet", 2: "Production" });
   });
 
+  it("preserves explicit account control mode in creation requests", async () => {
+    const logical = { name: "manual", execution_mode: 1 as const, market_type: 1 as const, settlement_asset: "USDT", control_mode: 2 as const };
+    await trade.createLogicalAccount(logical);
+    expect(callTrade).toHaveBeenLastCalledWith("console", "CreateLogicalAccount", logical);
+    const paper = { account_name: "paper", logical_account_name: "manual", exchange: 1 as const, market_type: 1 as const, settlement_asset: "USDT", initial_balance: "1000", maker_fee_rate: "0", taker_fee_rate: "0", slippage_bps: "0", control_mode: 2 as const };
+    await trade.createPaperSimulation(paper);
+    expect(callTrade).toHaveBeenLastCalledWith("console", "CreatePaperSimulation", paper);
+  });
+
   it("exposes canonical Chinese order state labels", () => {
     expect(trade.orderStateLabels).toEqual({
       PENDING: "等待提交",
@@ -98,6 +107,18 @@ describe("Trade public API", () => {
     expect(request).not.toHaveProperty("source");
     expect(request).not.toHaveProperty("owner_id");
     expect(request).not.toHaveProperty("reduce_position_only");
+  });
+
+  it("uses ordinary admission without the takeover endpoint", async () => {
+    const request = {
+      action_id: "ordinary-1", logical_account_id: "manual-1", trading_account_id: "paper-1",
+      client_order_id: "client-1", instrument_id: "BTCUSDT", order_type: 1 as const,
+      fill_policy: 0 as const, side: 1 as const, position_side: 0 as const,
+      quantity: "0.01", reason: "ordinary", deadline_at: "2000000000000"
+    };
+    await trade.submitOrder(request);
+    expect(callTrade).toHaveBeenCalledTimes(1);
+    expect(callTrade).toHaveBeenCalledWith("console", "SubmitOrder", request);
   });
 
   it("reads current quantity targets and parses per-account flatten progress", async () => {

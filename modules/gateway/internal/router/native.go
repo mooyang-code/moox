@@ -20,6 +20,10 @@ type nativeRouteTable interface {
 	ResolveRPC(string) (gatewayproxy.Route, string, bool)
 }
 
+type callerAwareNativeRouteTable interface {
+	ResolveRPCForCaller(string, string) (gatewayproxy.Route, string, bool)
+}
+
 type NativeOptions struct {
 	NodeID             string
 	Credentials        gatewayauth.Credentials
@@ -65,12 +69,9 @@ func (proxy *nativeProxy) handle(_ interface{}, ctx context.Context, f server.Fi
 			return nil, errors.New("native gateway is disabled")
 		}
 		rpcName := codec.Message(ctx).ServerRPCName()
-		route, method, ok := proxy.options.Table.ResolveRPC(rpcName)
+		servicePath, method, ok := splitRPCName(rpcName)
 		if !ok {
 			return nil, fmt.Errorf("native gateway route not found: %s", rpcName)
-		}
-		if route.MaxBodyBytes > 0 && int64(len(req.Data)) > route.MaxBodyBytes {
-			return nil, errors.New("native gateway request body exceeds route limit")
 		}
 		metadata := codec.Message(ctx).ServerMetaData()
 		headers := make(http.Header, len(metadata))
@@ -78,10 +79,22 @@ func (proxy *nativeProxy) handle(_ interface{}, ctx context.Context, f server.Fi
 			headers.Add(key, string(value))
 		}
 		claims, err := proxy.verify(gatewayauth.Request{
-			Method: "POST", Path: "/" + strings.TrimPrefix(rpcName, "/"), TargetNode: proxy.options.NodeID, Callee: route.ServicePath, Func: method, Body: req.Data,
+			Method: "POST", Path: "/" + strings.TrimPrefix(rpcName, "/"), TargetNode: proxy.options.NodeID, Callee: servicePath, Func: method, Body: req.Data,
 		}, headers)
 		if err != nil {
 			return nil, err
+		}
+		var route gatewayproxy.Route
+		if callerTable, supported := proxy.options.Table.(callerAwareNativeRouteTable); supported {
+			route, method, ok = callerTable.ResolveRPCForCaller(rpcName, claims.Caller)
+		} else {
+			route, method, ok = proxy.options.Table.ResolveRPC(rpcName)
+		}
+		if !ok {
+			return nil, fmt.Errorf("native gateway route not found: %s", rpcName)
+		}
+		if route.MaxBodyBytes > 0 && int64(len(req.Data)) > route.MaxBodyBytes {
+			return nil, errors.New("native gateway request body exceeds route limit")
 		}
 		if !nativeCallerPolicyAllows(claims.Caller, route.ServicePath, method) {
 			return nil, errors.New("native gateway caller is not allowed for route")
@@ -129,6 +142,12 @@ func (proxy *nativeProxy) handle(_ interface{}, ctx context.Context, f server.Fi
 		}
 		return response, nil
 	})
+}
+
+func splitRPCName(rpcName string) (string, string, bool) {
+	value := strings.TrimPrefix(strings.TrimSpace(rpcName), "/")
+	servicePath, method, ok := strings.Cut(value, "/")
+	return servicePath, method, ok && servicePath != "" && method != ""
 }
 
 // nativeReadOnlyMethod keeps retries limited to idempotent reads. Gateway

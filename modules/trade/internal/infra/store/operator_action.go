@@ -86,16 +86,20 @@ func (tx *Tx) EnsureOperatorAction(
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return OperatorActionRecord{}, false, err
 	}
+	var createdAt any
+	if !record.CreatedAt.IsZero() {
+		createdAt = record.CreatedAt.UTC()
+	}
 	result := tx.db.Exec(`
 		INSERT INTO t_operator_actions (
 			c_space_id, c_action_id, c_logical_account_id, c_action_type,
-			c_reason, c_request_json, c_status, c_result_json, c_last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			c_reason, c_request_json, c_status, c_result_json, c_last_error, c_ctime
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
 		ON CONFLICT(c_space_id, c_action_id) DO NOTHING
 	`,
 		record.SpaceID, record.ActionID, record.LogicalAccountID,
 		record.ActionType, record.Reason, record.RequestJSON,
-		record.Status, record.ResultJSON, record.LastError,
+		record.Status, record.ResultJSON, record.LastError, createdAt,
 	)
 	if result.Error != nil {
 		return OperatorActionRecord{}, false, writeError(result.Error)

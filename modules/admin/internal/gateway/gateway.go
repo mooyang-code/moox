@@ -55,18 +55,23 @@ type HTTPRouter struct {
 	gateway              *GatewayHandle
 	controlProvider      GatewayProvider
 	adminServiceProvider AdminServiceDetailProvider
+	tradeAuthorizer      TradeSpaceAuthorizer
 	adminNodeID          string
 }
 
 // NewHTTPRouter 创建HTTP路由管理器
-func NewHTTPRouter(gateway *GatewayHandle, provider GatewayProvider, adminNodeID string) *HTTPRouter {
-	return &HTTPRouter{gateway: gateway, controlProvider: provider, adminServiceProvider: provider, adminNodeID: adminNodeID}
+func NewHTTPRouter(gateway *GatewayHandle, provider GatewayProvider, adminNodeID string, authorizers ...TradeSpaceAuthorizer) *HTTPRouter {
+	var authorizer TradeSpaceAuthorizer
+	if len(authorizers) > 0 {
+		authorizer = authorizers[0]
+	}
+	return &HTTPRouter{gateway: gateway, controlProvider: provider, adminServiceProvider: provider, tradeAuthorizer: authorizer, adminNodeID: adminNodeID}
 }
 
 // RegisterGatewayHTTPHandlers 注册网关HTTP接口
-func RegisterGatewayHTTPHandlers(s *server.Server, provider GatewayProvider, adminNodeID string) error {
+func RegisterGatewayHTTPHandlers(s *server.Server, provider GatewayProvider, adminNodeID string, authorizers ...TradeSpaceAuthorizer) error {
 	gateway := GetGatewayHandleInstance()
-	router := NewHTTPRouter(gateway, provider, adminNodeID)
+	router := NewHTTPRouter(gateway, provider, adminNodeID, authorizers...)
 	return router.setupRoutes(s)
 }
 
@@ -136,7 +141,24 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		http.NotFound(w, r)
 		return
 	}
+	// trade_owner is an internal Strategy-only alias for the TradeConsole
+	// service. It intentionally has a different Gateway ACL and must never be
+	// reachable through the browser-facing Admin BFF, which otherwise forwards
+	// non-console deployments directly to their loopback listener.
+	if isInternalTradeService(serviceID) {
+		http.NotFound(w, r)
+		return
+	}
 	if isMachineOnlyAdminMethod(serviceID, method) {
+		http.NotFound(w, r)
+		return
+	}
+	// Ownership fencing is a machine-to-machine Strategy lifecycle contract.
+	// Even a Space administrator using the browser TradeConsole must not be
+	// able to release or rebind another instance's session through the local
+	// direct-forward path; those methods are exposed only by trade_owner with
+	// the service-gateway caller ACL set to strategy.
+	if isTradeOwnerOnlyMethod(serviceID, method) {
 		http.NotFound(w, r)
 		return
 	}
@@ -178,6 +200,13 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		if err != nil || role < 2 {
 			log.WarnContextf(ctx, "manual view rebuild denied: administrator role required")
 			http.Error(w, "administrator role required", http.StatusForbidden)
+			return
+		}
+	}
+	if isSpaceScopedService(serviceID) {
+		if err := hr.authorizeSpaceRequest(ctx, r, method); err != nil {
+			log.WarnContextf(ctx, "space-scoped request denied: %v", err)
+			http.Error(w, "space access denied", http.StatusForbidden)
 			return
 		}
 	}
@@ -234,6 +263,15 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		http.NotFound(w, r)
 		return
 	}
+	if detail.GatewayURL != "" {
+		respBody, err := forwardTradeConsoleToGateway(ctx, method, detail, body, headers)
+		if err != nil {
+			writeForwardError(ctx, w, err, headers)
+			return
+		}
+		writeForwardResponse(w, respBody, headers)
+		return
+	}
 	// 纯透传到目标服务的有协议 http 端口（本进程服务 / 远端 storage），
 	// 框架服务端自动 JSON↔PB，网关不加工 body；未配置 serviceID 返回 404。
 	respBody, err := forwardHTTPToDetail(ctx, serviceID, method, detail, body, headers)
@@ -242,6 +280,58 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeForwardResponse(w, respBody, headers)
+}
+
+func isTradeConsoleService(serviceID string) bool {
+	return canonicalAdminSegment(serviceID) == "tradeconsole"
+}
+
+func isInternalTradeService(serviceID string) bool {
+	return canonicalAdminSegment(serviceID) == "tradeowner"
+}
+
+func isTradeOwnerOnlyMethod(serviceID, method string) bool {
+	if !isTradeConsoleService(serviceID) {
+		return false
+	}
+	switch canonicalAdminSegment(method) {
+	case "claimlogicalaccountowner", "releaselogicalaccountowner", "rebindlogicalaccountowner":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSpaceScopedService(serviceID string) bool {
+	switch canonicalAdminSegment(serviceID) {
+	case "tradeconsole", "strategy", "strategymgr", "mooxstrategy":
+		return true
+	default:
+		return false
+	}
+}
+
+func (hr *HTTPRouter) authorizeSpaceRequest(ctx context.Context, r *http.Request, method string) error {
+	if hr.tradeAuthorizer == nil {
+		return errors.New("trade space authorizer is unavailable")
+	}
+	userID, _ := ctx.Value(authmodel.CtxUserID).(string)
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return errors.New("authenticated user is required")
+	}
+	spaceID := strings.TrimSpace(r.Header.Get("X-Space-Id"))
+	if spaceID == "" {
+		return errors.New("space_id is required")
+	}
+	role, _ := strconv.ParseInt(string(trpc.GetMetaData(ctx, authmodel.CtxUserRole)), 10, 32)
+	return hr.tradeAuthorizer.AuthorizeTradeRequest(ctx, userID, spaceID, method, int32(role))
+}
+
+// authorizeTradeConsoleRequest is kept as a narrow compatibility wrapper for
+// callers and tests that predate the Strategy BFF's Space boundary.
+func (hr *HTTPRouter) authorizeTradeConsoleRequest(ctx context.Context, r *http.Request, method string) error {
+	return hr.authorizeSpaceRequest(ctx, r, method)
 }
 
 func isMachineOnlyAdminMethod(serviceID, method string) bool {

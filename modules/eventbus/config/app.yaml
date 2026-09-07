@@ -79,9 +79,10 @@ streams:
     duplicates: 10m
     max_bytes: 134217728
   - name: MOOX_TRADE
-    # Keep the legacy quantity family during migration; Trade consumes only
-    # the versioned weight family and therefore cannot reinterpret old bytes.
-    subjects: ["moox.event.trade.target.requested.v1.>", "moox.event.trade.target.weight_requested.v1.>"]
+    # Automatic execution consumes only the session-scoped weight contract.
+    # Historical quantity messages are intentionally not routed into this
+    # stream after the protocol cutover.
+    subjects: ["moox.event.trade.target.weight_requested.v1.>"]
     retention: work_queue
     discard: old
     storage: file

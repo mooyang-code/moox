@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -34,6 +35,33 @@ func (s *Store) UpsertSpace(ctx context.Context, item *pb.Space) (*pb.Space, err
 		return nil, err
 	}
 	return s.GetSpace(ctx, item.GetSpaceId())
+}
+
+// CreateSpace inserts a new Space without overwriting an existing one. The
+// catalog CreateSpace RPC uses this path so concurrent acceptance runs cannot
+// race through an existence check and then delete each other's metadata.
+func (s *Store) CreateSpace(ctx context.Context, item *pb.Space) (*pb.Space, error) {
+	if item == nil || item.GetSpaceId() == "" || item.GetName() == "" {
+		return nil, errors.New("space_id and name are required")
+	}
+	item.Status = defaultStatus(item.GetStatus())
+	now := s.nowUTC().Format(time.RFC3339Nano)
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	raw, err := marshal(item)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO t_spaces (c_space_id, c_name, c_description, c_owner, c_status, c_attrs_json, c_ctime, c_mtime)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, item.GetSpaceId(), item.GetName(), item.GetDescription(), item.GetOwner(), item.GetStatus(), raw, now, now); err != nil {
+		return nil, err
+	}
+	// The INSERT is committed by the SQLite connection. Do not perform a
+	// second read whose transient failure could make a committed create appear
+	// unsuccessful to an RPC caller and trigger an unsafe duplicate retry.
+	return item, nil
 }
 
 func (s *Store) GetSpace(ctx context.Context, spaceID string) (*pb.Space, error) {

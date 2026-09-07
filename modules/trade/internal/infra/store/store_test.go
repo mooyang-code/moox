@@ -234,6 +234,40 @@ VALUES ('space', 'owned', 'owned', 'runner', 'PAPER', 'SPOT', 'USDT', 'PAUSED', 
 	require.NoError(t, reopened.Close())
 }
 
+func TestOpenMigratesLegacyLogicalAccountWithoutOwnerIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-no-owner-index.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(legacyLogicalAccountTableSQL).Error)
+	require.NoError(t, db.Exec(`
+INSERT INTO t_logical_accounts
+ (c_space_id, c_logical_account_id, c_name, c_owner_runner_id, c_execution_mode, c_market_type, c_settlement_asset, c_automation_state, c_pause_reason)
+VALUES ('space', 'owned', 'owned', 'runner', 'PAPER', 'SPOT', 'USDT', 'PAUSED', 'legacy')`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	s, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+	check, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	var indexes []struct {
+		Name string `gorm:"column:name"`
+	}
+	require.NoError(t, check.Raw(`PRAGMA index_list("t_logical_accounts")`).Scan(&indexes).Error)
+	var ownerIndexFound bool
+	for _, index := range indexes {
+		if index.Name == "ux_logical_account_owner_runner" {
+			ownerIndexFound = true
+		}
+	}
+	require.True(t, ownerIndexFound)
+	sqlDB, err = check.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+}
+
 func TestOpenMigratesLegacyStrategyTargetTables(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy-targets.db")
 	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})

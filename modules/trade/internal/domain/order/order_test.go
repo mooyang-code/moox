@@ -63,6 +63,25 @@ func TestDiscardPendingIsLocalTerminalTransition(t *testing.T) {
 	}
 }
 
+func TestAbortUnsentSubmitReturnsToPending(t *testing.T) {
+	value, _, err := New("order-1", validSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.BeginSubmit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.AbortSubmit(); err != nil {
+		t.Fatal(err)
+	}
+	if value.State != Pending {
+		t.Fatalf("state = %s, want %s", value.State, Pending)
+	}
+	if _, err := value.AbortSubmit(); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("second AbortSubmit() error = %v", err)
+	}
+}
+
 func TestCancelAndFillRaceMatrix(t *testing.T) {
 	tests := []struct {
 		name          string

@@ -31,6 +31,13 @@ func (w *PaperMatcherWorker) Wake() {
 	}
 }
 func (w *PaperMatcherWorker) Ready() bool { return w != nil && w.ready.Load() }
+func (w *PaperMatcherWorker) State() (bool, string) {
+	if w == nil {
+		return false, "paper matcher worker is not configured"
+	}
+	lastError, _ := w.lastError.Load().(string)
+	return w.Ready(), lastError
+}
 func (w *PaperMatcherWorker) Run(ctx context.Context) error {
 	if w == nil || w.Matcher == nil {
 		return context.Canceled
@@ -57,5 +64,11 @@ func (w *PaperMatcherWorker) scan(ctx context.Context) {
 		w.lastError.Store(err.Error())
 		return
 	}
+	if err := ctx.Err(); err != nil {
+		w.ready.Store(false)
+		w.lastError.Store(err.Error())
+		return
+	}
 	w.ready.Store(true)
+	w.lastError.Store("")
 }

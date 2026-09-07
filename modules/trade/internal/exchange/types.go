@@ -307,6 +307,7 @@ type Fill struct {
 	PositionSide    PositionSide
 	Quantity        shared.Decimal
 	Price           shared.Decimal
+	// Fee is a signed cost: positive charges funds, negative credits a rebate.
 	Fee             shared.Decimal
 	FeeAsset        string
 	RealizedPnL     shared.Decimal

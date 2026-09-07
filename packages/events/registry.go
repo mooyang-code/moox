@@ -100,9 +100,6 @@ var (
 	MarketFetchBatchCompleted = declareEvent("event.market.fetch.batch.completed", 1, "MOOX_MARKET_FETCH", "collector", func() proto.Message {
 		return &marketfetchpb.MarketFetchBatchCompleted{}
 	}, validateMarketFetchBatchCompleted)
-	LogicalAccountTargetRequested = declareEvent("event.trade.target.requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
-		return &tradeeventpb.LogicalAccountTargetRequested{}
-	}, validateLogicalAccountTargetRequested)
 	LogicalAccountTargetWeightRequested = declareEvent("event.trade.target.weight_requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
 		return &tradeeventpb.LogicalAccountTargetWeightRequested{}
 	}, validateLogicalAccountTargetWeightRequested)

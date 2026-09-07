@@ -112,6 +112,7 @@
 
       <a-modal
         v-model:visible="createVisible"
+        width="min(520px, calc(100vw - 24px))"
         :title="form.execution_mode === 1 ? '创建模拟账户' : '创建真实账户'"
         :ok-text="form.execution_mode === 2 && form.environment === 2 ? '创建生产账户' : '创建账户'"
         @ok="create"
@@ -159,6 +160,12 @@
             <a-input model-value="全仓" disabled />
           </a-form-item>
           <template v-if="form.execution_mode === 1">
+            <a-form-item field="control_mode" label="控制模式" required>
+              <a-radio-group v-model="form.control_mode" type="button">
+                <a-radio :value="1">策略驱动</a-radio>
+                <a-radio :value="2">自主下单</a-radio>
+              </a-radio-group>
+            </a-form-item>
             <a-form-item field="initial_balance" label="初始资金" required>
               <a-input v-model="form.initial_balance" name="initial_balance" autocomplete="off" />
             </a-form-item>

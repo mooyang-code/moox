@@ -41,7 +41,7 @@ func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 		}
 		assert.Equal(t, retention, stream.Retention, stream.Name)
 		if stream.Name == "MOOX_TRADE" {
-			assert.Equal(t, []string{"moox.event.trade.target.requested.v1.>", "moox.event.trade.target.weight_requested.v1.>"}, stream.Subjects)
+			assert.Equal(t, []string{"moox.event.trade.target.weight_requested.v1.>"}, stream.Subjects)
 		}
 		if stream.Name == "MOOX_STORAGE" {
 			assert.Equal(t, []string{

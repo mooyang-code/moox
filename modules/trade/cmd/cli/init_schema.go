@@ -9,9 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/glebarez/sqlite"
-	tradeschema "github.com/mooyang-code/moox/modules/trade/schema"
-	"gorm.io/gorm"
+	tradestore "github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/schema"
 )
 
 const defaultInitDBPath = "./data/moox_trade.db"
@@ -47,7 +46,7 @@ func runInitCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected init arguments: %s", strings.Join(fs.Args(), " "))
 	}
-	if err := applySchema(dbPath, tradeschema.AllSQL()); err != nil {
+	if err := applySchema(dbPath, schema.AllSQL()); err != nil {
 		return err
 	}
 	return json.NewEncoder(stdout).Encode(initResult{
@@ -75,17 +74,16 @@ func applySchema(dbPath string, rawSQL string) error {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return fmt.Errorf("create database directory: %w", err)
 	}
-	db, err := gorm.Open(sqlite.Open(initSQLiteDSN(dbPath)), &gorm.Config{})
+	// Use the same startup path as the Trade server. The previous CLI applied
+	// schema.AllSQL directly, which bypassed additive migrations and caused a
+	// production restart to fail on legacy logical-account tables.
+	_ = rawSQL
+	store, err := tradestore.Open(dbPath)
 	if err != nil {
-		return fmt.Errorf("open database: %w", err)
+		return fmt.Errorf("initialize trade store: %w", err)
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return fmt.Errorf("get sql db: %w", err)
-	}
-	defer sqlDB.Close()
-	if err := db.Exec(rawSQL).Error; err != nil {
-		return fmt.Errorf("apply schema: %w", err)
+	if err := store.Close(); err != nil {
+		return fmt.Errorf("close trade store: %w", err)
 	}
 	return nil
 }

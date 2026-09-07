@@ -10,6 +10,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	"github.com/mooyang-code/moox/packages/gatewayproxy"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -19,7 +20,7 @@ func TestLoadServiceDeploymentSeed_Example(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, seed.Version)
 	require.Equal(t, "control", seed.Node.ID)
-	require.Len(t, seed.Services, 24)
+	require.Len(t, seed.Services, 25)
 	processes := 0
 	for _, service := range seed.Services {
 		if service.DeploymentMode == "process" {
@@ -73,13 +74,117 @@ func TestRunServiceDeploymentsCommand_IsIdempotent(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(second.Bytes(), &result))
 	require.Equal(t, 0, result.Created)
-	require.Equal(t, 24, result.Updated)
+	require.Equal(t, 25, result.Updated)
 
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, db.Table("t_service_deployments").Count(&count).Error)
-	require.Equal(t, int64(24), count)
+	require.Equal(t, int64(25), count)
+}
+
+func TestScopedTradeOwnerImportCompilesOnlyReceivingNodeRoute(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "admin.db")
+	seedPath := filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml")
+	require.NoError(t, runServiceDeploymentsCommand([]string{
+		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
+		"--node-id", "control", "--public-host", "control.example.test",
+		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--disabled-services", "moox_trade,trade_owner,trade_dns_resolver",
+	}, &bytes.Buffer{}, &bytes.Buffer{}))
+	// A scoped execution node exposes both surfaces with distinct native paths:
+	// ownership stays canonical while the browser route uses the admin alias.
+	require.NoError(t, runServiceDeploymentsCommand([]string{
+		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
+		"--node-id", "trade-node", "--public-host", "trade.example.test",
+		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--only-services", "trade_console",
+	}, &bytes.Buffer{}, &bytes.Buffer{}))
+	for range 2 {
+		require.NoError(t, runServiceDeploymentsCommand([]string{
+			"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
+			"--node-id", "trade-node", "--public-host", "trade.example.test",
+			"--eventbus-nats-url", "tls://127.0.0.1:4222", "--only-services", "trade_owner",
+		}, &bytes.Buffer{}, &bytes.Buffer{}))
+	}
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err)
+	var rows []sysdeploy.Deployment
+	require.NoError(t, db.Where("c_node_id = ?", "trade-node").Find(&rows).Error)
+	require.Len(t, rows, 2)
+	byName := map[string]sysdeploy.Deployment{}
+	for _, row := range rows {
+		byName[row.ServiceName] = row
+	}
+	require.Equal(t, "trade-node", byName["trade_owner"].NodeID)
+	require.True(t, byName["trade_owner"].GatewayEnabled)
+	require.Equal(t, "active", byName["trade_owner"].Status)
+	require.True(t, byName["trade_console"].GatewayEnabled)
+	require.Equal(t, "active", byName["trade_console"].Status)
+	require.Equal(t, "trade_console", byName["trade_console"].GatewayServiceID)
+	snapshot, err := sysdeploy.NewDAO(db).CompileGatewaySnapshot(context.Background(), "trade-node")
+	require.NoError(t, err)
+	require.Len(t, snapshot.Routes, 2)
+	var owner, console gatewayproxy.Route
+	for _, candidate := range snapshot.Routes {
+		switch candidate.ServiceID {
+		case "trade_owner":
+			owner = candidate
+		case "trade_console":
+			console = candidate
+		}
+	}
+	require.Equal(t, "127.0.0.1:11200", owner.Address)
+	require.Equal(t, "trpc.moox.trade.TradeConsoleService", owner.ServicePath)
+	require.Equal(t, []string{"strategy"}, owner.AllowedCallers)
+	require.ElementsMatch(t, []string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"}, owner.AllowedMethods)
+	require.Equal(t, "trpc.moox.trade.TradeConsoleAdminService", console.ServicePath)
+	require.Equal(t, []string{"admin-gateway"}, console.AllowedCallers)
+	require.Equal(t, "127.0.0.1", byName["trade_owner"].Host)
+	require.Equal(t, int32(11200), byName["trade_owner"].Port)
+	control, err := sysdeploy.NewDAO(db).CompileGatewaySnapshot(context.Background(), "control")
+	require.NoError(t, err)
+	for _, route := range control.Routes {
+		require.NotEqual(t, "trade_owner", route.ServiceID)
+	}
+}
+
+func TestScopedTradeConsoleImportCompilesAuthenticatedAdminRoute(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "admin.db")
+	seedPath := filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml")
+	require.NoError(t, runServiceDeploymentsCommand([]string{
+		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
+		"--node-id", "trade-node", "--public-host", "43.132.204.177",
+		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--only-services", "trade_console",
+	}, &bytes.Buffer{}, &bytes.Buffer{}))
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err)
+	var row sysdeploy.Deployment
+	require.NoError(t, db.Where("c_node_id = ? AND c_service_name = ?", "trade-node", "trade_console").First(&row).Error)
+	require.True(t, row.GatewayEnabled)
+	require.Equal(t, "trade_console", row.GatewayServiceID)
+	require.Equal(t, "trpc.moox.trade.TradeConsoleAdminService", row.GatewayPath)
+	extra, err := sysdeploy.NewDAO(db).CompileGatewaySnapshot(context.Background(), "trade-node")
+	require.NoError(t, err)
+	require.Len(t, extra.Routes, 1)
+	require.Equal(t, "trpc.moox.trade.TradeConsoleAdminService", extra.Routes[0].ServicePath)
+}
+
+func TestTradeGatewayPlacementPersistsAcrossSeedImport(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "admin.db")
+	seedPath := filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml")
+	args := []string{"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
+		"--node-id", "control", "--public-host", "106.53.107.122", "--eventbus-nats-url", "tls://127.0.0.1:4222",
+		"--trade-gateway-url", "https://43.132.204.177", "--trade-gateway-node", "trade-node"}
+	require.NoError(t, runServiceDeploymentsCommand(args, &bytes.Buffer{}, &bytes.Buffer{}))
+	args = append(args[:len(args)-4], "--trade-gateway-url", "https://43.132.204.177", "--trade-gateway-node", "trade-node")
+	require.NoError(t, runServiceDeploymentsCommand(args, &bytes.Buffer{}, &bytes.Buffer{}))
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err)
+	var row sysdeploy.Deployment
+	require.NoError(t, db.Where("c_node_id = ? AND c_service_name = ?", "control", "trade_console").First(&row).Error)
+	var extra map[string]any
+	require.NoError(t, json.Unmarshal([]byte(row.ExtraConfig), &extra))
+	require.Equal(t, "https://43.132.204.177", extra["gateway_url"])
+	require.Equal(t, "trade-node", extra["gateway_node"])
 }
 
 func TestRunServiceDeploymentsCommand_AllowsScopedResolverImport(t *testing.T) {
@@ -236,7 +341,7 @@ func TestEnableOptionalStorageShardReplacesEmbeddedRoute(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, enableOptionalStorageShard(&seed))
-	require.Len(t, seed.Services, 25)
+	require.Len(t, seed.Services, 26)
 
 	var primary, shard serviceDeploymentEntry
 	for _, item := range seed.Services {
@@ -347,7 +452,7 @@ func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, disableOptionalStorageShard(&seed))
-	require.Len(t, seed.Services, 25)
+	require.Len(t, seed.Services, 26)
 	shard := seed.Services[len(seed.Services)-1]
 	require.Equal(t, "storage-shard", shard.Name)
 	require.False(t, shard.GatewayEnabled)
@@ -357,14 +462,18 @@ func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
 func TestDisableSeedServicesUsesDeploymentProfile(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml"))
 	require.NoError(t, err)
-	require.NoError(t, disableSeedServices(&seed, "moox_archive, moox_factor,moox_strategy"))
+	require.NoError(t, disableSeedServices(&seed, "moox_archive, moox_factor,moox_strategy,trade_owner"))
 	statuses := map[string]string{}
+	gatewayEnabled := map[string]bool{}
 	for _, service := range seed.Services {
 		statuses[service.Name] = service.Status
+		gatewayEnabled[service.Name] = service.GatewayEnabled
 	}
 	require.Equal(t, "disabled", statuses["moox_archive"])
 	require.Equal(t, "disabled", statuses["moox_factor"])
 	require.Equal(t, "disabled", statuses["moox_strategy"])
+	require.Equal(t, "disabled", statuses["trade_owner"])
+	require.False(t, gatewayEnabled["trade_owner"])
 	require.Equal(t, "active", statuses["moox_monitor"])
 	require.ErrorContains(t, disableSeedServices(&seed, "missing"), "unknown services")
 }

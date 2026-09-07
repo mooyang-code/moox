@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 	"sort"
 	"sync"
 	"time"
@@ -16,6 +18,7 @@ import (
 
 type FactStore interface {
 	GetTradingAccountByID(context.Context, string) (store.TradingAccountRecord, error)
+	GetPaperBalanceSnapshot(context.Context, string, string) (store.PaperBalanceSnapshot, error)
 	GetPaperAccountConfig(context.Context, string, string) (store.PaperAccountConfigRecord, error)
 	GetOrderByClientID(context.Context, string, string, string) (store.OrderRecord, error)
 	ListOrdersForAccount(context.Context, string, string, int64) ([]store.OrderRecord, error)
@@ -57,75 +60,16 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	}
 	account, err := a.Store.GetTradingAccountByID(ctx, a.Account.TradingAccountID)
 	if err != nil {
-		return exchange.AccountSnapshot{}, err
+		return exchange.AccountSnapshot{}, storageError(err)
 	}
-	config, err := a.Store.GetPaperAccountConfig(ctx, account.SpaceID, account.TradingAccountID)
+	projection, err := a.Store.GetPaperBalanceSnapshot(ctx, account.SpaceID, account.TradingAccountID)
 	if err != nil {
-		return exchange.AccountSnapshot{}, err
+		return exchange.AccountSnapshot{}, storageError(err)
 	}
-	initial := decimalOrZero(config.InitialBalance)
-	balances := map[string]shared.Decimal{account.SettlementAsset: initial}
+	balances, locked := projection.Totals, projection.Reserved
 	instruments, err := a.Store.ListInstruments(ctx, account.Exchange, account.MarketType)
 	if err != nil {
-		return exchange.AccountSnapshot{}, err
-	}
-	byID := make(map[string]store.InstrumentRecord, len(instruments))
-	for _, instrument := range instruments {
-		byID[instrument.InstrumentID] = instrument
-	}
-	fills, _, err := a.Store.ListFills(ctx, account.SpaceID, store.FillQuery{TradingAccountID: account.TradingAccountID, Limit: 100000})
-	if err != nil {
-		return exchange.AccountSnapshot{}, err
-	}
-	for _, fill := range fills {
-		price, quantity := decimalOrZero(fill.Price), decimalOrZero(fill.Quantity)
-		fee := decimalOrZero(fill.Fee)
-		instrument := byID[fill.InstrumentID]
-		if instrument.InstrumentID == "" {
-			for _, candidate := range instruments {
-				if candidate.ExchangeSymbol == fill.ExchangeSymbol {
-					instrument = candidate
-					break
-				}
-			}
-		}
-		if account.MarketType == "SPOT" {
-			quote, base := instrument.QuoteAsset, instrument.BaseAsset
-			if quote == "" {
-				quote = account.SettlementAsset
-			}
-			if base == "" {
-				base = fill.ExchangeSymbol
-			}
-			cash := price.Mul(quantity)
-			if fill.Side == string(exchange.SideBuy) {
-				balances[quote] = balances[quote].Sub(cash)
-				balances[base] = balances[base].Add(quantity)
-			} else {
-				balances[quote] = balances[quote].Add(cash)
-				balances[base] = balances[base].Sub(quantity)
-			}
-		} else {
-			balances[account.SettlementAsset] = balances[account.SettlementAsset].Add(decimalOrZero(fill.RealizedPnL))
-		}
-		feeAsset := fill.FeeAsset
-		if feeAsset == "" {
-			feeAsset = account.SettlementAsset
-		}
-		balances[feeAsset] = balances[feeAsset].Sub(fee)
-	}
-	orders, err := a.Store.ListOrdersForAccount(ctx, account.SpaceID, account.TradingAccountID, 0)
-	if err != nil {
-		return exchange.AccountSnapshot{}, err
-	}
-	locked := make(map[string]shared.Decimal)
-	for _, order := range orders {
-		if order.State == "FILLED" || order.State == "CANCELED" || order.State == "PARTIALLY_CANCELED" || order.State == "REJECTED" || order.State == "EXPIRED" {
-			continue
-		}
-		if order.ReservedAsset != "" {
-			locked[order.ReservedAsset] = locked[order.ReservedAsset].Add(decimalOrZero(order.RemainingReservedQuantity))
-		}
+		return exchange.AccountSnapshot{}, storageError(err)
 	}
 	settlement := balances[account.SettlementAsset]
 	equity := settlement
@@ -155,23 +99,30 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	} else {
 		positions, positionErr := a.Store.ListPositions(ctx, account.SpaceID, account.TradingAccountID, "")
 		if positionErr != nil {
-			return exchange.AccountSnapshot{}, positionErr
+			return exchange.AccountSnapshot{}, storageError(positionErr)
 		}
 		for _, position := range positions {
-			quantity := decimalOrZero(position.SignedQuantity)
+			quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
+			if parseErr != nil {
+				return exchange.AccountSnapshot{}, fmt.Errorf("%w: paper position quantity", store.ErrInvalidRecord)
+			}
 			if quantity.IsZero() {
 				continue
+			}
+			entry, parseErr := shared.ParseDecimal(position.EntryPrice)
+			if parseErr != nil || entry.Cmp(shared.Zero()) <= 0 {
+				return exchange.AccountSnapshot{}, fmt.Errorf("%w: paper position entry price", store.ErrInvalidRecord)
+			}
+			leverage, parseErr := shared.ParseDecimal(position.Leverage)
+			if parseErr != nil || leverage.Cmp(shared.Zero()) <= 0 {
+				return exchange.AccountSnapshot{}, fmt.Errorf("%w: paper position leverage", store.ErrInvalidRecord)
 			}
 			mark, quoteErr := a.valuationQuote(ctx, position.ExchangeSymbol)
 			if quoteErr != nil {
 				return exchange.AccountSnapshot{}, quoteErr
 			}
-			entry := decimalOrZero(position.EntryPrice)
 			unrealizedPnL = unrealizedPnL.Add(mark.Sub(entry).Mul(quantity))
-			leverage := decimalOrZero(position.Leverage)
-			if leverage.Cmp(shared.Zero()) > 0 {
-				usedMargin = usedMargin.Add(quantity.Abs().Mul(mark).Div(leverage))
-			}
+			usedMargin = usedMargin.Add(quantity.Abs().Mul(mark).Div(leverage))
 		}
 		equity = settlement.Add(unrealizedPnL)
 	}
@@ -249,6 +200,9 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	byID := make(map[string]string, len(instruments))
 	for _, instrument := range instruments {
 		native := instrument.ExchangeSymbol
+		if native != "" {
+			byID[native] = native
+		}
 		if instrument.InstrumentID != "" && native != "" {
 			byID[instrument.InstrumentID] = native
 		}
@@ -259,32 +213,37 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	return instruments, nil
 }
 
-func (a *Adapter) nativeSymbol(ctx context.Context, symbol string) string {
+func (a *Adapter) nativeSymbol(ctx context.Context, symbol string) (string, error) {
 	a.mu.RLock()
 	native, found := a.instruments[symbol]
 	a.mu.RUnlock()
 	if found {
-		return native
+		return native, nil
 	}
 	// RPC/operator paths can request a quote before the session's initial
 	// snapshot. Lazily populate the same map used by runPaper so canonical
 	// instrument IDs never leak into a broker's public endpoint.
-	if _, err := a.LoadInstruments(ctx); err == nil {
+	if _, err := a.LoadInstruments(ctx); err != nil {
+		return "", err
+	} else {
 		a.mu.RLock()
 		native, found = a.instruments[symbol]
 		a.mu.RUnlock()
 		if found {
-			return native
+			return native, nil
 		}
 	}
-	return symbol
+	return symbol, nil
 }
 
 func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (execution.MarketQuote, error) {
 	if a.MarketData == nil {
 		return execution.MarketQuote{}, fmt.Errorf("paper: public market data source is unavailable")
 	}
-	native := a.nativeSymbol(ctx, symbol.String())
+	native, err := a.nativeSymbol(ctx, symbol.String())
+	if err != nil {
+		return execution.MarketQuote{}, err
+	}
 	return a.MarketData.GetQuote(ctx, shared.ExchangeSymbol(native))
 }
 
@@ -319,7 +278,7 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 	}
 	rows, err := a.Store.ListPositions(ctx, a.Account.SpaceID, a.Account.TradingAccountID, "")
 	if err != nil {
-		return nil, err
+		return nil, storageError(err)
 	}
 	result := make([]exchange.Position, 0, len(rows))
 	for _, row := range rows {
@@ -334,9 +293,11 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			RealizedPnL: decimalOrZero(row.RealizedPnL), ExchangeUpdatedAt: time.UnixMilli(row.ExchangeUpdatedAt).UTC(),
 		}
 		if a.Account.MarketType == string(exchange.MarketTypeSwap) && !position.SignedQuantity.IsZero() {
-			if quote, quoteErr := a.GetReferencePrice(ctx, position.ExchangeSymbol); quoteErr == nil {
-				position.MarkPrice = quote.Price
+			quote, quoteErr := a.GetReferencePrice(ctx, position.ExchangeSymbol)
+			if quoteErr != nil {
+				return nil, quoteErr
 			}
+			position.MarkPrice = quote.Price
 			position.UnrealizedPnL = position.MarkPrice.Sub(position.EntryPrice).Mul(position.SignedQuantity)
 			if position.Leverage.Cmp(shared.Zero()) > 0 {
 				position.UsedMargin = position.SignedQuantity.Abs().Mul(position.MarkPrice).Div(position.Leverage)
@@ -352,7 +313,7 @@ func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) 
 	}
 	rows, err := a.Store.ListOrdersForAccount(ctx, a.Account.SpaceID, a.Account.TradingAccountID, 0)
 	if err != nil {
-		return nil, err
+		return nil, storageError(err)
 	}
 	result := make([]exchange.Order, 0, len(rows))
 	for _, row := range rows {
@@ -369,7 +330,7 @@ func (a *Adapter) ListRecentFills(ctx context.Context, symbol shared.ExchangeSym
 	}
 	rows, _, err := a.Store.ListFills(ctx, a.Account.SpaceID, store.FillQuery{TradingAccountID: a.Account.TradingAccountID, ExchangeSymbol: symbol.String(), Limit: 1000})
 	if err != nil {
-		return nil, "", err
+		return nil, "", storageError(err)
 	}
 	result := make([]exchange.Fill, 0, len(rows))
 	for _, row := range rows {
@@ -383,12 +344,23 @@ func (a *Adapter) GetOrder(ctx context.Context, symbol shared.ExchangeSymbol, cl
 	}
 	row, err := a.Store.GetOrderByClientID(ctx, a.Account.SpaceID, a.Account.TradingAccountID, clientID)
 	if err != nil {
-		return exchange.Order{}, err
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound, Err: err}
+		}
+		return exchange.Order{}, storageError(err)
 	}
 	if symbol != "" && row.ExchangeSymbol != symbol.String() {
 		return exchange.Order{}, fmt.Errorf("paper: symbol mismatch")
 	}
 	result := orderFromRecord(row)
+	// A crash can happen after the local Paper matcher accepted PlaceOrder but
+	// before the execution result was persisted. Paper order IDs are derived
+	// solely from account and client ID, so reconstruct the deterministic
+	// exchange identity instead of leaving SubmitUnknown permanently stuck.
+	if result.ExchangeOrderID == "" && (row.State == "SUBMITTING" || row.State == "SUBMIT_UNKNOWN") {
+		result.ExchangeOrderID = paperOrderID(a.Account.TradingAccountID, row.ClientOrderID)
+		result.Status = exchange.OrderStatusOpen
+	}
 	// Paper cancellation is local and deterministic. Returning the terminal
 	// exchange view lets the normal account sync path run ConfirmCancel and
 	// release the persisted reservation in the same reducer used by Live.

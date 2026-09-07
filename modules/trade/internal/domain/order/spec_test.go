@@ -11,6 +11,25 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
+func TestStaleReferencePriceRetainsInvalidSpecCompatibility(t *testing.T) {
+	now := time.Now()
+	spec := OrderSpec{
+		ClientOrderSpec: ClientOrderSpec{TradingAccountID: "account", ClientOrderID: "client", InstrumentID: "BTC-USDT", Type: exchange.OrderTypeMarket, Side: exchange.SideBuy, Quantity: shared.MustDecimal("1")},
+		Owner:           OrderOwner{Type: OwnerOperator, OwnerID: "action", LogicalAccountID: "logical"},
+		ReferencePrice:  shared.MustDecimal("100"), ReferencePriceAt: now.Add(-2 * time.Minute),
+	}
+	err := spec.Validate(exchange.MarketTypeSpot, now, time.Minute)
+	if !errors.Is(err, ErrInvalidSpec) || !errors.Is(err, ErrReferencePriceStale) {
+		t.Fatalf("stale error identity lost: %v", err)
+	}
+	spec.ReferencePriceAt = now
+	spec.Quantity = shared.Zero()
+	err = spec.Validate(exchange.MarketTypeSpot, now, time.Minute)
+	if !errors.Is(err, ErrInvalidSpec) || errors.Is(err, ErrReferencePriceStale) {
+		t.Fatalf("invalid quantity misclassified: %v", err)
+	}
+}
+
 func TestOrderSpecValidationMatrix(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	price := shared.MustDecimal("100")

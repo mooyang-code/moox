@@ -79,6 +79,20 @@ func TestOperatorWorkerRejectsMissingDependencies(t *testing.T) {
 	require.ErrorIs(t, (&OperatorWorker{}).Run(context.Background()), ErrOperatorWorkerConfig)
 }
 
+type deadlineActionResumer struct{ t *testing.T }
+
+func (r deadlineActionResumer) ResumeOperatorAction(ctx context.Context, _ store.OperatorActionRecord) error {
+	deadline, ok := ctx.Deadline()
+	require.True(r.t, ok, "every action must have a finite worker attempt budget")
+	require.LessOrEqual(r.t, time.Until(deadline), 30*time.Second)
+	return nil
+}
+
+func TestOperatorWorkerBoundsEveryAction(t *testing.T) {
+	w := &OperatorWorker{Actions: runningActionSourceStub{actions: []store.OperatorActionRecord{{ActionID: "bounded"}}}, Resumer: deadlineActionResumer{t}}
+	require.NoError(t, w.runOnce(context.Background()))
+}
+
 func TestOperatorWorkerRunsImmediatelyAndStopsOnCancellation(t *testing.T) {
 	resumer := &actionResumerStub{}
 	worker := &OperatorWorker{

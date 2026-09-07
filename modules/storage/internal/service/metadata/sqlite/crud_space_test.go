@@ -3,7 +3,37 @@ package sqlite
 import (
 	"context"
 	"testing"
+	"time"
+
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
+
+func TestCreateSpaceDoesNotOverwriteExistingSpace(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	wantTime := time.Date(2026, time.September, 7, 1, 2, 3, 456000000, time.UTC)
+	store.now = func() time.Time { return wantTime }
+	created, err := store.CreateSpace(ctx, &pb.Space{SpaceId: "space", Name: "Original", Owner: "owner-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.GetCreatedAt() != wantTime.Format(time.RFC3339Nano) || created.GetUpdatedAt() != wantTime.Format(time.RFC3339Nano) {
+		t.Fatalf("CreateSpace timestamps = %q/%q", created.GetCreatedAt(), created.GetUpdatedAt())
+	}
+	if _, err := store.CreateSpace(ctx, &pb.Space{SpaceId: "space", Name: "Replacement", Owner: "owner-b"}); err == nil {
+		t.Fatal("duplicate CreateSpace unexpectedly succeeded")
+	}
+	space, err := store.GetSpace(ctx, "space")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if space.GetName() != "Original" || space.GetOwner() != "owner-a" {
+		t.Fatalf("existing Space was overwritten: %+v", space)
+	}
+	if space.GetCreatedAt() != wantTime.Format(time.RFC3339Nano) || space.GetUpdatedAt() != wantTime.Format(time.RFC3339Nano) {
+		t.Fatalf("persisted timestamps = %q/%q", space.GetCreatedAt(), space.GetUpdatedAt())
+	}
+}
 
 func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 	ctx := context.Background()

@@ -54,6 +54,10 @@ if [[ -r "${factor_eventbus_credentials}" ]]; then
   [[ -n "${factor_eventbus_ca}" && -r "${factor_eventbus_ca}" ]] && export MOOX_EVENTBUS_NATS_TLS_CA_FILE="${factor_eventbus_ca}"
 fi
 
+# Preserve a custom EventBus endpoint even for deployments that authenticate
+# with no role credential file (for example a local non-TLS broker).
+[[ -n "${factor_eventbus_url}" ]] && export MOOX_EVENTBUS_NATS_URL="${factor_eventbus_url}"
+
 for service in gateway storage-primary storage-node storage-view factor strategy; do
   require_running_service "${service}"
 done
@@ -62,21 +66,172 @@ require_executable "${DEPLOY_ROOT}/bin/moox-factor-run-once"
 require_executable "${DEPLOY_ROOT}/bin/moox-factor-cli"
 require_file "${DEPLOY_ROOT}/factor/config/app.yaml"
 require_file "${DEPLOY_ROOT}/secrets/gateway-factor.key"
-require_file "${DEPLOY_ROOT}/secrets/gateway-strategy.key"
 require_file "${DEPLOY_ROOT}/secrets/gateway-moox-cli.key"
 require_file "${DEPLOY_ROOT}/secrets/gateway-service.env"
 require_file "${DEPLOY_ROOT}/secrets/storage-internal-auth.env"
 require_file "${DEPLOY_ROOT}/secrets/storage-node-auth.env"
 require_file "${DEPLOY_ROOT}/certs/gateway/peers.pem"
 
+# Read deployment-owned storage credentials before an optional View restart.
+# The package-local start script stops the old process first and otherwise
+# cannot recover from a missing environment variable.
+storage_primary_secret="$(
+  bash -c 'set -u; source "$1"; printf "%s" "${MOOX_STORAGE_PRIMARY_AUTH_SECRET-}"' \
+    _ "${DEPLOY_ROOT}/secrets/storage-internal-auth.env"
+)"
+[[ -n "${storage_primary_secret}" && "${storage_primary_secret}" != *$'\n'* && "${storage_primary_secret}" != *$'\r'* ]] ||
+  fail "storage-internal-auth.env must contain one MOOX_STORAGE_PRIMARY_AUTH_SECRET"
+storage_view_secret="$(
+  bash -c 'set -u; source "$1"; printf "%s" "${MOOX_STORAGE_VIEW_AUTH_SECRET-}"' \
+    _ "${DEPLOY_ROOT}/secrets/storage-internal-auth.env"
+)"
+[[ -n "${storage_view_secret}" && "${storage_view_secret}" != *$'\n'* && "${storage_view_secret}" != *$'\r'* ]] ||
+  fail "storage-internal-auth.env must contain one MOOX_STORAGE_VIEW_AUTH_SECRET"
+storage_node_secret="$(
+  bash -c 'set -u; source "$1"; printf "%s" "${MOOX_STORAGE_NODE_AUTH_SECRET-}"' \
+    _ "${DEPLOY_ROOT}/secrets/storage-node-auth.env"
+)"
+[[ -n "${storage_node_secret}" && "${storage_node_secret}" != *$'\n'* && "${storage_node_secret}" != *$'\r'* ]] ||
+  fail "storage-node-auth.env must contain one MOOX_STORAGE_NODE_AUTH_SECRET"
+original_storage_eventbus_url="${MOOX_STORAGE_EVENTBUS_URL:-}"
+original_storage_credential_file="${MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE:-}"
+storage_eventbus_url="${original_storage_eventbus_url}"
+storage_view_pid="$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")"
+storage_view_proc_environ="/proc/${storage_view_pid}/environ"
+if [[ -r "${storage_view_proc_environ}" ]]; then
+  original_storage_eventbus_url="$(tr '\0' '\n' <"${storage_view_proc_environ}" | sed -n 's/^MOOX_STORAGE_EVENTBUS_URL=//p' | head -1)"
+  original_storage_credential_file="$(tr '\0' '\n' <"${storage_view_proc_environ}" | sed -n 's/^MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE=//p' | head -1)"
+  if [[ -n "${original_storage_eventbus_url}" ]]; then
+    storage_eventbus_url="${original_storage_eventbus_url}"
+  fi
+fi
+if [[ -z "${storage_eventbus_url}" ]]; then
+  storage_eventbus_url="${factor_eventbus_url:-}"
+fi
+original_storage_allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-}"
+if [[ -r "${storage_view_proc_environ}" ]]; then
+  original_storage_allowed_spaces="$(tr '\0' '\n' <"${storage_view_proc_environ}" | sed -n 's/^MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES=//p' | head -1)"
+fi
+
 # View wildcard discovery is fixed at process startup. A caller that owns the
 # local deployment may opt into a controlled storage-view restart so the
-# temporary E2E space is in its explicit allow-list. The default is off: a
-# test must not stop an unrelated running service or lose its existing PID
-# ownership merely to change an environment variable.
-e2e_space_id="${MOOX_FACTOR_STORAGE_E2E_SPACE_ID:-factor_e2e}"
-e2e_allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-${e2e_space_id}}"
-if [[ "${MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW:-0}" == "1" ]]; then
+# temporary E2E space is in its explicit allow-list. Without that opt-in, the
+# caller must provide a preconfigured Space already present in the running
+# View allow-list; fail fast instead of creating metadata that cannot be
+# consumed by the current process.
+restart_storage_view="${MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW:-0}"
+configured_space_id="${MOOX_FACTOR_STORAGE_E2E_SPACE_ID:-}"
+if [[ -n "${configured_space_id}" ]]; then
+  e2e_space_id="${configured_space_id}"
+elif [[ "${restart_storage_view}" == "1" ]]; then
+  # BSD date does not implement GNU's %N nanosecond formatter, so combine
+  # epoch seconds, PID and RANDOM for a sufficiently unique local test ID.
+  e2e_space_id="factor_e2e_$(date +%s)_$$_${RANDOM}"
+else
+  fail "MOOX_FACTOR_STORAGE_E2E_SPACE_ID is required unless MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW=1"
+fi
+e2e_allowed_spaces="${original_storage_allowed_spaces:-}"
+if [[ -n "${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES:-}" ]]; then
+  if [[ -n "${e2e_allowed_spaces}" ]]; then
+    e2e_allowed_spaces="${e2e_allowed_spaces},${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES}"
+  else
+    e2e_allowed_spaces="${MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES}"
+  fi
+fi
+start_storage_view() {
+  local allowed_spaces="$1" eventbus_url="$2"
+  if [[ -n "${storage_view_credential_file}" ]]; then
+    env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
+      MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE="${storage_view_credential_file}" \
+      MOOX_STORAGE_EVENTBUS_URL="${eventbus_url}" \
+      MOOX_STORAGE_EVENTBUS_URL_OVERRIDE="${eventbus_url}" \
+      MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}" \
+      MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}" \
+      MOOX_STORAGE_NODE_AUTH_SECRET="${storage_node_secret}" \
+      MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${allowed_spaces}" \
+      "${storage_view_command[@]}"
+  else
+    env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
+      MOOX_STORAGE_EVENTBUS_URL="${eventbus_url}" \
+      MOOX_STORAGE_EVENTBUS_URL_OVERRIDE="${eventbus_url}" \
+      MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}" \
+      MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}" \
+      MOOX_STORAGE_NODE_AUTH_SECRET="${storage_node_secret}" \
+      MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${allowed_spaces}" \
+      "${storage_view_command[@]}"
+  fi
+}
+storage_view_health_url="${MOOX_STORAGE_VIEW_HEALTH_URL:-http://127.0.0.1:20211/readyz}"
+storage_view_health_auth() {
+  [[ -r "${DEPLOY_ROOT}/secrets/health-auth.env" ]] || return 1
+  (
+    set -a
+    source "${DEPLOY_ROOT}/secrets/health-auth.env"
+    set +a
+    local timestamp nonce body_hash canonical signature
+    timestamp="$(date +%s)"
+    nonce="$(openssl rand -hex 32)"
+    body_hash="$(printf '' | openssl dgst -sha256 | awk '{print $NF}')"
+    canonical="$(printf 'moox-request-v1\nGET\n/readyz\n%s\n%s\n%s' "${body_hash}" "${timestamp}" "${nonce}")"
+    signature="$(printf '%s' "${canonical}" | openssl dgst -sha256 -hmac "${MOOX_HEALTH_AUTH_SECRET_KEY}" | awk '{print $NF}')"
+    printf '%s/%s/%s/%s/%s' "${MOOX_HEALTH_AUTH_VERSION}" "${MOOX_HEALTH_AUTH_ACCESS_KEY}" "${timestamp}" "${nonce}" "${signature}"
+  )
+}
+storage_view_ready() {
+  local auth_header=""
+  if [[ -r "${DEPLOY_ROOT}/secrets/health-auth.env" ]]; then
+    auth_header="$(storage_view_health_auth)" || return 1
+  fi
+  if [[ -n "${auth_header}" ]]; then
+    curl --fail --silent --show-error --max-time 2 -H "X-Moox-Health-Auth: ${auth_header}" "${storage_view_health_url}" >/dev/null
+  else
+    curl --fail --silent --show-error --max-time 2 "${storage_view_health_url}" >/dev/null
+  fi
+}
+wait_storage_view_ready() {
+  local timeout_seconds="${MOOX_FACTOR_STORAGE_VIEW_READY_TIMEOUT_SECONDS:-60}"
+  for _ in $(seq 1 "${timeout_seconds}"); do
+    if storage_view_ready; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+restore_storage_view() {
+  local restore_url="${original_storage_eventbus_url:-${storage_eventbus_url}}"
+  echo "restoring storage-view after failed E2E restart" >&2
+  if ! start_storage_view "${original_storage_allowed_spaces}" "${restore_url}"; then
+    return 1
+  fi
+  if ! wait_storage_view_ready; then
+    return 1
+  fi
+  return 0
+}
+storage_view_restore_needed=0
+restore_storage_view_on_exit() {
+  local status=$?
+  if [[ "${storage_view_restore_needed}" == "1" ]]; then
+    if restore_storage_view; then
+      storage_view_restore_needed=0
+    else
+      echo "storage-view restore failed after E2E run" >&2
+      [[ "${status}" -eq 0 ]] && status=1
+    fi
+  fi
+  exit "${status}"
+}
+trap restore_storage_view_on_exit EXIT
+if [[ "${restart_storage_view}" == "1" ]]; then
+  [[ -n "${storage_eventbus_url}" ]] || fail "MOOX_STORAGE_EVENTBUS_URL is required when restarting storage-view"
+  if [[ -n "${e2e_allowed_spaces}" ]]; then
+    # Preserve operator-provided entries while ensuring this run's Space is
+    # actually consumed by the freshly started View process.
+    e2e_allowed_spaces="${e2e_allowed_spaces},${e2e_space_id}"
+  else
+    e2e_allowed_spaces="${e2e_space_id}"
+  fi
   storage_view_start="${DEPLOY_ROOT}/storage-view/start.sh"
   if [[ -x "${storage_view_start}" ]]; then
     storage_view_command=("${storage_view_start}")
@@ -85,18 +240,49 @@ if [[ "${MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW:-0}" == "1" ]]; then
   else
     fail "deployment has no storage-view start command"
   fi
-  storage_view_credential_file="${HOME}/.config/moox/eventbus/storage-eventbus.yaml"
-  if [[ -r "${storage_view_credential_file}" ]]; then
-    env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
-      MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE="${storage_view_credential_file}" \
-      MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${e2e_allowed_spaces}" \
-      "${storage_view_command[@]}"
-  else
-    env -u MOOX_EVENTBUS_NATS_CREDENTIALS \
-      MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${e2e_allowed_spaces}" \
-      "${storage_view_command[@]}"
+  # Preserve the credential path used by the running View. If it did not
+  # advertise one, retain the historical default only when that file exists.
+  storage_view_credential_file="${original_storage_credential_file:-}"
+  if [[ -z "${storage_view_credential_file}" && -r "${HOME}/.config/moox/eventbus/storage-eventbus.yaml" ]]; then
+    storage_view_credential_file="${HOME}/.config/moox/eventbus/storage-eventbus.yaml"
   fi
-  require_running_service storage-view
+  if [[ -n "${storage_view_credential_file}" && ! -r "${storage_view_credential_file}" ]]; then
+    fail "captured storage-view EventBus credential file is not readable: ${storage_view_credential_file}"
+  fi
+  restart_error=""
+  # start_storage_view stops the existing process before launching the test
+  # instance. Mark restoration before that destructive step so an interrupt
+  # during startup still puts the original process back.
+  storage_view_restore_needed=1
+  if ! start_storage_view "${e2e_allowed_spaces}" "${storage_eventbus_url}"; then
+    restart_error="storage-view start command failed"
+  elif ! current_storage_view_pid="$(tr -d '[:space:]' <"${DEPLOY_ROOT}/run/storage-view.pid")"; then
+    restart_error="storage-view pid file is unreadable"
+  elif ! kill -0 "${current_storage_view_pid}" 2>/dev/null; then
+    restart_error="storage-view did not leave a running process"
+  elif ! wait_storage_view_ready; then
+    restart_error="storage-view readiness probe failed"
+  fi
+  if [[ -n "${restart_error}" ]]; then
+    if restore_storage_view; then
+      storage_view_restore_needed=0
+      fail "${restart_error}; original storage-view was restored"
+    fi
+    fail "${restart_error}; original storage-view could not be restored"
+  fi
+else
+  [[ -n "${e2e_allowed_spaces}" ]] || fail "MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES must include ${e2e_space_id} when storage-view restart is disabled"
+  space_is_allowed=0
+  IFS=',' read -r -a configured_allowed_spaces <<<"${e2e_allowed_spaces}"
+  for raw_space in "${configured_allowed_spaces[@]}"; do
+    raw_space="${raw_space#${raw_space%%[![:space:]]*}}"
+    raw_space="${raw_space%${raw_space##*[![:space:]]}}"
+    if [[ "${raw_space}" == "${e2e_space_id}" ]]; then
+      space_is_allowed=1
+      break
+    fi
+  done
+  [[ "${space_is_allowed}" == "1" ]] || fail "Space ${e2e_space_id} is not in MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES; preconfigure it or set MOOX_FACTOR_STORAGE_E2E_RESTART_STORAGE_VIEW=1"
 fi
 
 secret_raw="$(cat "${DEPLOY_ROOT}/secrets/gateway-factor.key"; printf x)"
@@ -117,16 +303,6 @@ else
 fi
 [[ -n "${factor_mgr_secret}" && "${factor_mgr_secret}" != *$'\n'* && "${factor_mgr_secret}" != *$'\r'* ]] ||
   fail "gateway moox-cli secret must contain exactly one non-empty line"
-strategy_secret_raw="$(cat "${DEPLOY_ROOT}/secrets/gateway-strategy.key"; printf x)"
-strategy_secret_raw="${strategy_secret_raw%x}"
-if [[ "${strategy_secret_raw}" == *$'\n' ]]; then
-  strategy_secret="${strategy_secret_raw%$'\n'}"
-else
-  strategy_secret="${strategy_secret_raw}"
-fi
-[[ -n "${strategy_secret}" && "${strategy_secret}" != *$'\n'* && "${strategy_secret}" != *$'\r'* ]] ||
-  fail "gateway strategy secret must contain exactly one non-empty line"
-
 gateway_node_id="$(
   sed -n 's/^MOOX_GATEWAY_NODE_ID=//p' "${DEPLOY_ROOT}/secrets/gateway-service.env"
 )"
@@ -171,9 +347,6 @@ storage_node_secret="$(
   export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_KEY_ID="moox-cli"
   export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_CALLER="moox-cli"
   export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_SECRET="${factor_mgr_secret}"
-  export MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_KEY_ID="strategy"
-  export MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_CALLER="strategy"
-  export MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_SECRET="${strategy_secret}"
   export MOOX_FACTOR_STORAGE_E2E_SPACE_ID="${e2e_space_id}"
   export MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES="${e2e_allowed_spaces}"
 

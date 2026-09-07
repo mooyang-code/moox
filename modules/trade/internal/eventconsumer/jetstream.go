@@ -27,7 +27,7 @@ func RunTarget(ctx context.Context, opts TargetOptions) error {
 			DeliverDecodeErrors: true,
 		})
 		if openErr != nil {
-			log.WarnContextf(ctx, "open trade target consumer: %v", openErr)
+			log.WarnContextf(ctx, "open trade target consumer: error_code=%s", transportErrorCode(openErr))
 			if !sleepContext(ctx, time.Second) {
 				return ctx.Err()
 			}
@@ -40,9 +40,10 @@ func RunTarget(ctx context.Context, opts TargetOptions) error {
 			return HandleTarget(handlerCtx, delivery, opts)
 		})
 		runner := jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{
-			BatchSize: 16,
+			BatchSize:      16,
+			ActionReporter: targetActionReporter{},
 			ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
-				log.WarnContextf(ctx, "trade target delivery failed: %v", err)
+				log.WarnContextf(ctx, "trade target delivery failed: error_code=%s", transportErrorCode(err))
 			}),
 		})
 		runErr := runner.Run(ctx)
@@ -54,7 +55,7 @@ func RunTarget(ctx context.Context, opts TargetOptions) error {
 			return ctx.Err()
 		}
 		if runErr != nil {
-			log.WarnContextf(ctx, "trade target consumer stopped: %v", runErr)
+			log.WarnContextf(ctx, "trade target consumer stopped: error_code=%s", transportErrorCode(runErr))
 		}
 		if !sleepContext(ctx, time.Second) {
 			return ctx.Err()

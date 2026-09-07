@@ -2,6 +2,9 @@ package store
 
 import (
 	"fmt"
+	"sort"
+
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
 
 // ClosePaperSimulation atomically stops a paper account and its single logical
@@ -45,6 +48,9 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 			}
 		}
 	}
+	if err := tx.refreshClosedPaperBalances(account); err != nil {
+		return err
+	}
 	if err := tx.SetTradingAccountStatus(spaceID, tradingAccountID, "DISABLED"); err != nil {
 		return err
 	}
@@ -72,6 +78,100 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 		}
 	}
 	return nil
+}
+
+func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
+	projection, err := tx.GetPaperBalanceSnapshot(account.SpaceID, account.TradingAccountID)
+	if err != nil {
+		return err
+	}
+	snapshot := account.Snapshot
+	assets := make([]string, 0, len(projection.Totals))
+	for asset := range projection.Totals {
+		assets = append(assets, asset)
+	}
+	sort.Strings(assets)
+	snapshot.Balances = make([]AssetBalance, 0, len(assets))
+	for _, asset := range assets {
+		total := projection.Totals[asset].String()
+		snapshot.Balances = append(snapshot.Balances, AssetBalance{Asset: asset, Total: total, Available: total, Locked: "0"})
+	}
+	// Closing must work without quotes. Cash is authoritative, but mark-based
+	// valuation remains cached and none of its freshness timestamps advance.
+	cash := projection.Totals[account.SettlementAsset]
+	snapshot.AvailableFunds = cash.String()
+	if account.MarketType == "SWAP" {
+		margin, unrealized, valuedAt, err := tx.closedPaperPositionValuation(account)
+		if err != nil {
+			return err
+		}
+		equity := cash.Add(unrealized)
+		snapshot.UsedMargin = margin.String()
+		snapshot.UnrealizedPnL = unrealized.String()
+		snapshot.ExchangeUpdatedAt = valuedAt
+		snapshot.Equity = equity.String()
+		snapshot.AvailableFunds = equity.Sub(margin).String()
+	}
+	encoded, err := encodeSnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	result := tx.db.Exec(`UPDATE t_trading_accounts SET c_snapshot_json = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?`, encoded, account.SpaceID, account.TradingAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "closed paper balance snapshot")
+}
+
+func (tx *Tx) closedPaperPositionValuation(account TradingAccountRecord) (shared.Decimal, shared.Decimal, int64, error) {
+	var positions []struct {
+		Quantity   string `gorm:"column:c_signed_quantity"`
+		Entry      string `gorm:"column:c_entry_price"`
+		Mark       string `gorm:"column:c_mark_price"`
+		Leverage   string `gorm:"column:c_leverage"`
+		Margin     string `gorm:"column:c_used_margin"`
+		Unrealized string `gorm:"column:c_unrealized_pnl"`
+		ValuedAt   int64  `gorm:"column:c_exchange_updated_at"`
+	}
+	margin, unrealized := shared.Zero(), shared.Zero()
+	valuedAt := account.Snapshot.ExchangeUpdatedAt
+	if valuedAt < 0 {
+		valuedAt = 0
+	}
+	if err := tx.db.Table("t_trading_positions").Where("c_space_id = ? AND c_trading_account_id = ?", account.SpaceID, account.TradingAccountID).Find(&positions).Error; err != nil {
+		return margin, unrealized, valuedAt, err
+	}
+	for _, position := range positions {
+		quantity, err := shared.ParseDecimal(position.Quantity)
+		if err != nil {
+			return margin, unrealized, valuedAt, fmt.Errorf("%w: paper position quantity", ErrInvalidRecord)
+		}
+		if quantity.IsZero() {
+			continue
+		}
+		if position.ValuedAt <= 0 {
+			valuedAt = 0
+		} else if valuedAt > position.ValuedAt {
+			valuedAt = position.ValuedAt
+		}
+		for _, raw := range []string{position.Entry, position.Mark, position.Leverage} {
+			value, err := shared.ParseDecimal(raw)
+			if err != nil || value.Cmp(shared.Zero()) <= 0 {
+				return margin, unrealized, valuedAt, fmt.Errorf("%w: paper position valuation inputs", ErrInvalidRecord)
+			}
+		}
+		used, err := shared.ParseDecimal(position.Margin)
+		if err != nil || used.IsNegative() {
+			return margin, unrealized, valuedAt, fmt.Errorf("%w: paper position used margin", ErrInvalidRecord)
+		}
+		pnl, err := shared.ParseDecimal(position.Unrealized)
+		if err != nil {
+			return margin, unrealized, valuedAt, fmt.Errorf("%w: paper position unrealized PnL", ErrInvalidRecord)
+		}
+		// The fill reducer updates these derived fields atomically with the
+		// position. Account snapshot refresh may have failed after that commit.
+		margin = margin.Add(used)
+		unrealized = unrealized.Add(pnl)
+	}
+	return margin, unrealized, valuedAt, nil
 }
 
 func (tx *Tx) listOpenOrdersForAccount(spaceID, tradingAccountID string) ([]OrderRecord, error) {

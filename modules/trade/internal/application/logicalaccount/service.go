@@ -58,6 +58,7 @@ func (s *Service) Create(
 	mode exchange.ExecutionMode,
 	market exchange.MarketType,
 	settlementAsset string,
+	controlMode string,
 ) (store.LogicalAccountRecord, error) {
 	if s == nil || s.Store == nil {
 		return store.LogicalAccountRecord{}, ErrServiceConfig
@@ -69,13 +70,15 @@ func (s *Service) Create(
 		mode,
 		market,
 		strings.ToUpper(strings.TrimSpace(settlementAsset)),
+		logicaldomain.ControlMode(controlMode),
 	)
 	if err != nil {
 		return store.LogicalAccountRecord{}, err
 	}
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: value.SpaceID, LogicalAccountID: value.ID, Name: value.Name,
+			ControlMode: string(value.ControlMode),
+			SpaceID:     value.SpaceID, LogicalAccountID: value.ID, Name: value.Name,
 			ExecutionMode:   string(value.ExecutionMode),
 			MarketType:      string(value.MarketType),
 			SettlementAsset: value.SettlementAsset,
@@ -224,6 +227,9 @@ func (s *Service) ClaimOwner(
 	if err != nil {
 		return store.LogicalAccountRecord{}, err
 	}
+	if current.ControlMode != "STRATEGY" {
+		return store.LogicalAccountRecord{}, ErrOwnerConflict
+	}
 	if current.OwnerRunnerID == runnerID {
 		return current, nil
 	}
@@ -296,6 +302,9 @@ func (s *Service) RebindOwner(
 	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {
 		return store.LogicalAccountRecord{}, err
+	}
+	if current.ControlMode != "STRATEGY" {
+		return store.LogicalAccountRecord{}, ErrOwnerConflict
 	}
 	if current.OwnerRunnerID != "" && current.OwnerRunnerID != runnerID {
 		return store.LogicalAccountRecord{}, ErrOwnerConflict
@@ -403,8 +412,9 @@ func (s *Service) ClaimSession(
 	var fence string
 	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		var err error
-		fence, err = tx.ClaimLogicalAccountSession(spaceID, logicalAccountID, instanceID, sessionID, expectedFence)
-		if err != nil {
+		var changed bool
+		fence, changed, err = tx.ClaimLogicalAccountSession(spaceID, logicalAccountID, instanceID, sessionID, expectedFence)
+		if err != nil || !changed {
 			return err
 		}
 		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
@@ -432,8 +442,9 @@ func (s *Service) RebindSession(
 	var fence string
 	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		var err error
-		fence, err = tx.RebindLogicalAccountSession(spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID)
-		if err != nil {
+		var changed bool
+		fence, changed, err = tx.RebindLogicalAccountSession(spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID)
+		if err != nil || !changed {
 			return err
 		}
 		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
@@ -498,6 +509,9 @@ func (s *Service) Resume(
 	before, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {
 		return store.LogicalAccountRecord{}, "", err
+	}
+	if before.ControlMode != "STRATEGY" {
+		return store.LogicalAccountRecord{}, "", ErrNotReady
 	}
 	unlockExecution := s.Store.LockLogicalAccountExecution(spaceID, logicalAccountID)
 	defer unlockExecution()
@@ -626,12 +640,27 @@ func (s *Service) readiness(
 			}
 		}
 	}
+	if logicalAccount.ControlMode == "MANUAL" {
+		sort.Strings(reasons)
+		return Readiness{Ready: len(reasons) == 0, Reasons: reasons}, nil
+	}
 	target, targetErr := s.Store.GetLogicalAccountTarget(
 		ctx, spaceID, logicalAccountID,
 	)
 	switch {
 	case targetErr == nil:
-		if target.RunnerID != logicalAccount.OwnerRunnerID {
+		modern := target.InstanceID != "" || target.SessionID != "" || target.BarEndTime != 0 || target.ValidUntil != 0
+		if modern {
+			if target.InstanceID == "" || target.SessionID == "" ||
+				target.InstanceID != logicalAccount.OwnerInstanceID || target.SessionID != logicalAccount.OwnerSessionID {
+				reasons = append(reasons, "target session does not own logical account")
+			}
+			// Resume enables automation, not an expired target. Execution waits
+			// for the next valid target and checks its validity window itself.
+			if now.UnixMilli() >= target.ValidUntil {
+				break
+			}
+		} else if target.RunnerID != logicalAccount.OwnerRunnerID {
 			reasons = append(reasons, "target runner does not own logical account")
 		}
 		for _, desired := range target.Targets {
@@ -643,7 +672,8 @@ func (s *Service) readiness(
 			}
 		}
 	case errors.Is(targetErr, gorm.ErrRecordNotFound):
-		if logicalAccount.OwnerRunnerID != "" {
+		if logicalAccount.OwnerRunnerID != "" &&
+			(logicalAccount.OwnerInstanceID == "" || logicalAccount.OwnerSessionID == "") {
 			reasons = append(reasons, "owner runner has no current target")
 		}
 	default:

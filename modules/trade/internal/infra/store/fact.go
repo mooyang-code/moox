@@ -782,6 +782,31 @@ func (tx *Tx) FindOrderForFill(
 	return orderRecordFromRow(row), nil
 }
 
+// UpdatePendingOrderReference must share the transaction with the following
+// versioned order update, so a refreshed quote and reservation commit together.
+func (tx *Tx) UpdatePendingOrderReference(record OrderRecord, expectedVersion uint64) error {
+	price, err := shared.ParseDecimal(record.ReferencePrice)
+	if err != nil || price.Cmp(shared.Zero()) <= 0 || record.ReferencePriceAt <= 0 {
+		return fmt.Errorf("%w: invalid order reference", ErrInvalidRecord)
+	}
+	if record.PaperExecutionPrice != nil {
+		paperPrice, err := shared.ParseDecimal(*record.PaperExecutionPrice)
+		if err != nil || paperPrice.Cmp(shared.Zero()) <= 0 {
+			return fmt.Errorf("%w: invalid paper execution price", ErrInvalidRecord)
+		}
+	}
+	result := tx.db.Exec(`UPDATE t_trade_orders SET c_reference_price = ?, c_reference_price_at = ?, c_paper_execution_price = ?
+		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ? AND c_state = 'PENDING' AND c_submitted_at = 0`,
+		price.String(), record.ReferencePriceAt, record.PaperExecutionPrice, record.SpaceID, record.OrderID, expectedVersion)
+	if result.Error != nil {
+		return writeError(result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return ErrConflict
+	}
+	return nil
+}
+
 func (tx *Tx) UpdateOrder(record OrderRecord, expectedVersion uint64) error {
 	if record.SpaceID == "" || record.OrderID == "" || record.Version != expectedVersion+1 {
 		return fmt.Errorf("%w: invalid order update", ErrInvalidRecord)
@@ -991,6 +1016,9 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 		}
 		return false, conflict
 	}
+	if err := tx.applyPaperFill(record); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -1123,12 +1151,10 @@ func (tx *Tx) resolveDuplicateFill(
 		existing.Role != want.Role || existing.TradedAt != want.TradedAt {
 		return false, fmt.Errorf("%w: conflicting immutable Fill replay", conflict)
 	}
-	if !canonicalReplay && (existing.OrderID != want.OrderID || existing.ExchangeOrderID != want.ExchangeOrderID) {
+	if existing.OrderID != want.OrderID || existing.ExchangeOrderID != want.ExchangeOrderID {
 		return false, fmt.Errorf("%w: conflicting immutable Fill order replay", conflict)
 	}
-	// The unique Exchange trade identity is authoritative. Older Paper
-	// snapshots can replay the same trade with a generated fill/order ID;
-	// treating the row as an idempotent replay avoids re-applying the fill.
+	// A trade identity can only replay the same immutable facts and order.
 	return false, nil
 }
 
@@ -1505,7 +1531,7 @@ func canonicalizeFill(record *FillRecord) error {
 	if err != nil {
 		return err
 	}
-	record.Fee, err = canonicalDefaultZero(record.Fee, "Fill fee", decimalNonNegative)
+	record.Fee, err = canonicalDefaultZero(record.Fee, "Fill fee", decimalSigned)
 	if err != nil {
 		return err
 	}

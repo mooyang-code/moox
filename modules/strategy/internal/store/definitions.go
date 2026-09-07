@@ -468,9 +468,12 @@ func (s *Store) ListStrategyResults(ctx context.Context, instanceID, sessionID s
 	return results, nil
 }
 
-func (s *Store) ListPendingResults(ctx context.Context) ([]StrategyResult, error) {
+func (s *Store) ListPendingResults(ctx context.Context, limit int) ([]StrategyResult, error) {
+	if limit <= 0 {
+		return []StrategyResult{}, nil
+	}
 	var rows []resultRecord
-	if err := s.db.WithContext(ctx).Table("t_strategy_results").Where("publish_status = ?", PublishPending).Order("created_at, result_id").Find(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Table("t_strategy_results").Where("publish_status = ?", PublishPending).Order("created_at, result_id").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	results := make([]StrategyResult, 0, len(rows))

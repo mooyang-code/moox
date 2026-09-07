@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,19 +56,8 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		Caller: requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_CALLER"),
 		Secret: requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_SECRET"),
 	}
-	strategyCredentials := gatewayauth.Credentials{
-		KeyID:  requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_KEY_ID"),
-		Caller: requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_CALLER"),
-		Secret: requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_STRATEGY_GATEWAY_SECRET"),
-	}
 
-	e2eTimeout := 3 * time.Minute
-	if raw := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_TIMEOUT")); raw != "" {
-		if configured, err := time.ParseDuration(raw); err == nil && configured > 0 {
-			e2eTimeout = configured
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), e2eTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	auth := &commonpb.AuthInfo{
 		AppId: "moox-factor", Operator: "factor-storage-e2e",
@@ -107,7 +97,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	strategy := strategypb.NewStrategyMgrClientProxy(gatewayauth.NewTRPCClientOptions(
 		storageio.NormalizeStorageTarget(gatewayTarget, "11003"),
 		gatewayNodeID,
-		strategyCredentials,
+		factorCredentials,
 	)...)
 	cleanupMetadata := storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(
 		storageio.NormalizeStorageTarget(gatewayTarget, "11003"),
@@ -131,12 +121,9 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	}
 	spaceID := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_SPACE_ID"))
 	if spaceID == "" {
-		spaceID = "factor_e2e"
-		if strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_USE_EXISTING_SPACE")) == "1" {
-			spaceID = "crypto"
-		}
+		spaceID = "factor_e2e_" + suffix
 	}
-	useExistingSpace := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_USE_EXISTING_SPACE")) == "1"
+	spaceOwner := "factor-storage-e2e-" + suffix
 	strategyScope := client.WithMetaData("space_id", []byte(spaceID))
 	// Dataset identifiers are required to use the dataset_ namespace. Keep the
 	// generated names compliant so this integration test exercises the real
@@ -157,7 +144,14 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	subjectIDs := []string{subjectID, secondSubjectID}
 	const freq = "1m"
 	inputFieldID := "close_" + suffix
-	var first, second, third, end time.Time
+	// Use a near-future synthetic period so the Strategy result remains inside
+	// its two-bar validity window while the asynchronous Factor/View pipeline
+	// is being exercised.
+	first := time.Now().UTC().Truncate(time.Minute).Add(5 * time.Minute)
+	second := first.Add(time.Minute)
+	third := second.Add(time.Minute)
+	end := third.Add(time.Nanosecond)
+	t.Logf("synthetic periods: first=%s third=%s now=%s", first.Format(time.RFC3339), third.Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
 	var spaceCreated bool
 	var createdFactors []struct{ id, name string }
 	var createdBindings []string
@@ -169,7 +163,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		// Result-view schema cleanup waits for the storage reconciler to activate a
 		// new revision (normally up to one reconcile tick). Keep teardown separate
 		// from the assertion context and allow that asynchronous handoff to finish.
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 180*time.Second)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cleanupCancel()
 		if strategyInstanceCreated {
 			if rsp, err := strategy.SetStrategyInstanceEnabled(cleanupCtx, &strategypb.SetStrategyInstanceEnabledReq{InstanceId: strategyInstanceID, Enabled: false}, strategyScope); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
@@ -178,29 +172,48 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		}
 		for i := len(createdBindings) - 1; i >= 0; i-- {
 			id := createdBindings[i]
-			retryCleanup(t, cleanupCtx, "binding "+id, func(ctx context.Context) (bool, any, error) {
-				rsp, err := factor.DeleteBinding(ctx, &factorpb.DeleteBindingReq{BindingId: id})
-				return err == nil && rsp.GetRetInfo().GetCode() == commonpb.ErrorCode_SUCCESS, rsp, err
-			})
+			if rsp, err := factor.DeleteBinding(cleanupCtx, &factorpb.DeleteBindingReq{BindingId: id}); err != nil ||
+				rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+				reportCleanupFailure(t, "binding "+id, rsp, err)
+			}
 		}
 		for i := len(createdFactors) - 1; i >= 0; i-- {
 			created := createdFactors[i]
-			deleted := retryCleanup(t, cleanupCtx, "factor "+created.id, func(ctx context.Context) (bool, any, error) {
-				rsp, err := factor.DeleteFactor(ctx, &factorpb.DeleteFactorReq{FactorId: created.id})
-				return err == nil && rsp.GetRetInfo().GetCode() == commonpb.ErrorCode_SUCCESS, rsp, err
-			})
-			if deleted {
+			if rsp, err := factor.DeleteFactor(cleanupCtx, &factorpb.DeleteFactorReq{
+				FactorId: created.id,
+			}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+				reportCleanupFailure(t, "factor "+created.id, rsp, err)
+			} else {
 				assertFactorArtifactsRemoved(t, deployRoot, created.name)
 			}
 		}
-		if spaceCreated || useExistingSpace {
-			cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, sourceID)
-			cleanupDataset := resultDatasetID
-			if cleanupDataset == "" {
-				cleanupDataset = targetID
+		if spaceCreated {
+			// CreateSpace commits before the RPC response is serialized. Re-read
+			// the durable owner before cleanup so a lost response or a duplicate
+			// create cannot delete another run's Space and its dependent metadata.
+			current, getErr := cleanupMetadata.GetSpace(cleanupCtx, &storagepb.GetSpaceReq{AuthInfo: auth, SpaceId: spaceID})
+			owned := false
+			switch {
+			case getErr != nil:
+				reportCleanupFailure(t, "space "+spaceID+" ownership lookup", current, getErr)
+			case current == nil || current.GetRetInfo() == nil:
+				reportCleanupFailure(t, "space "+spaceID+" ownership lookup", current, errors.New("missing ret_info"))
+			case current.GetRetInfo().GetCode() == commonpb.ErrorCode_SPACE_NOT_FOUND:
+				t.Logf("space %s was not committed; skipping cleanup", spaceID)
+			case current.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS:
+				reportCleanupFailure(t, "space "+spaceID+" ownership lookup", current, nil)
+			case current.GetSpace() == nil || current.GetSpace().GetOwner() != spaceOwner:
+				t.Logf("space %s belongs to another run; refusing cleanup", spaceID)
+			default:
+				owned = true
 			}
-			cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, cleanupDataset)
-			if spaceCreated {
+			if owned {
+				cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, sourceID)
+				cleanupDataset := resultDatasetID
+				if cleanupDataset == "" {
+					cleanupDataset = targetID
+				}
+				cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, cleanupDataset)
 				if rsp, err := cleanupMetadata.DeleteSpace(cleanupCtx, &storagepb.DeleteSpaceReq{
 					AuthInfo: auth, SpaceId: spaceID,
 				}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
@@ -212,18 +225,26 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		}
 	})
 
-	if !useExistingSpace {
-		spaceRsp, err := metadata.CreateSpace(ctx, &storagepb.CreateSpaceReq{
-			AuthInfo: auth,
-			Space: &storagepb.Space{
-				SpaceId: spaceID, Name: "验收" + displaySuffix, Owner: "factor-storage-e2e", Status: "active",
-			},
-		})
-		requireStorageOK(t, "CreateSpace", spaceRsp, err)
-		spaceCreated = true
-	} else {
-		t.Logf("reuse existing Storage space %s; dynamic datasets/views remain uniquely named", spaceID)
+	// Refuse to mutate an existing Space before the test marks it for cleanup;
+	// otherwise a typo in the override could cascade delete unrelated metadata.
+	existingSpaceRsp, existingSpaceErr := metadata.GetSpace(ctx, &storagepb.GetSpaceReq{AuthInfo: auth, SpaceId: spaceID})
+	require.NoError(t, existingSpaceErr, "preflight GetSpace")
+	require.NotNil(t, existingSpaceRsp, "preflight GetSpace response")
+	if existingSpaceRsp.GetRetInfo() == nil {
+		t.Fatal("preflight GetSpace returned no ret_info")
 	}
+	require.Equal(t, commonpb.ErrorCode_SPACE_NOT_FOUND, existingSpaceRsp.GetRetInfo().GetCode(), "refusing to reuse existing Space %s", spaceID)
+
+	// Mark the create as potentially committed before the call so a lost RPC
+	// response still enters the ownership-checked cleanup path.
+	spaceCreated = true
+	spaceRsp, err := metadata.CreateSpace(ctx, &storagepb.CreateSpaceReq{
+		AuthInfo: auth,
+		Space: &storagepb.Space{
+			SpaceId: spaceID, Name: "验收" + displaySuffix, Owner: spaceOwner, Status: "active",
+		},
+	})
+	requireStorageOK(t, "CreateSpace", spaceRsp, err)
 	dataSourceRsp, err := metadata.CreateDataSource(ctx, &storagepb.CreateDataSourceReq{
 		AuthInfo: auth,
 		DataSource: &storagepb.DataSource{
@@ -323,32 +344,45 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		},
 	})
 	requireStorageOK(t, "CreateView(source)", sourceViewRsp, err)
-	// Factor bindings freeze the source View generation. Materialize its empty
-	// index before creating the bindings. A small seed period is enough for the
-	// reconciler; the periods asserted by the strategy are written later so its
-	// validity window starts close to the readiness event.
-	seedAt := time.Now().UTC().Truncate(time.Minute).Add(-10 * time.Minute)
-	seedSecond := seedAt.Add(time.Minute)
-	seedThird := seedSecond.Add(time.Minute)
-	seedRsp, seedErr := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
-		AuthInfo: auth, SourceEventId: "factor-storage-e2e-seed-" + suffix,
+	waitForViewReady(t, ctx, metadata, auth, spaceID, sourceViewID)
+	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, sourceViewID, sourceID, subjectID, freq, first, end)
+
+	writeRsp, err := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
+		AuthInfo: auth, SourceEventId: "factor-storage-e2e-input-" + suffix,
 		Rows: []*storagepb.RowFieldUpsert{
-			inputRow(spaceID, sourceID, subjectID, freq, seedAt, "venue:binance", inputFieldID, 1),
-			inputRow(spaceID, sourceID, subjectID, freq, seedAt, "venue:okx", inputFieldID, 0),
-			inputRow(spaceID, sourceID, subjectID, freq, seedSecond, "venue:binance", inputFieldID, 2),
-			inputRow(spaceID, sourceID, subjectID, freq, seedSecond, "venue:okx", inputFieldID, 1),
-			inputRow(spaceID, sourceID, subjectID, freq, seedThird, "venue:binance", inputFieldID, 3),
-			inputRow(spaceID, sourceID, subjectID, freq, seedThird, "venue:okx", inputFieldID, 2),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, seedAt, "venue:binance", inputFieldID, 1),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, seedAt, "venue:okx", inputFieldID, 0),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, seedSecond, "venue:binance", inputFieldID, 2),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, seedSecond, "venue:okx", inputFieldID, 1),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, seedThird, "venue:binance", inputFieldID, 3),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, seedThird, "venue:okx", inputFieldID, 2),
+			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:binance", inputFieldID, 101),
+			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:okx", inputFieldID, 100),
+			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:binance", inputFieldID, 104),
+			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:okx", inputFieldID, 102),
+			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:binance", inputFieldID, 108),
+			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:okx", inputFieldID, 105),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:binance", inputFieldID, 201),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:okx", inputFieldID, 200),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:binance", inputFieldID, 204),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:okx", inputFieldID, 202),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:binance", inputFieldID, 208),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:okx", inputFieldID, 205),
 		},
 	})
-	requireStorageOK(t, "PrimaryStore.UpsertFields(seed)", seedRsp, seedErr)
-	waitForViewReady(t, ctx, metadata, auth, spaceID, sourceViewID)
+	requireStorageOK(t, "PrimaryStore.UpsertFields", writeRsp, err)
+	var sourceChunk *storageio.RangeChunk
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		chunk, readErr := storage.ReadRangeChunk(ctx, storageio.WindowKey{
+			SpaceID: spaceID, SourceViewID: sourceViewID, SourceDataset: sourceID, SubjectID: subjectID, Freq: freq,
+		}, first, end, 1, 10, []string{inputFieldID})
+		assert.NoError(collect, readErr)
+		if readErr == nil {
+			sourceChunk = chunk
+			assert.Equal(collect, []time.Time{first, second, third}, chunk.TargetPeriods)
+		}
+	}, 20*time.Second, 250*time.Millisecond, "source rows were not materialized")
+	require.Equal(t, []time.Time{first, second, third}, sourceChunk.TargetPeriods)
+	require.Equal(t, []string{inputFieldID}, sourceChunk.Frame.Columns)
+	require.Equal(t,
+		[]string{"venue:binance", "venue:okx", "venue:binance", "venue:okx", "venue:binance", "venue:okx"},
+		sourceChunk.Frame.SeriesTags,
+	)
+	require.Equal(t, [][]any{{101.0}, {100.0}, {104.0}, {102.0}, {108.0}, {105.0}}, sourceChunk.Frame.Rows)
 
 	spreadSource := fmt.Sprintf(`import pandas as pd
 
@@ -461,10 +495,9 @@ def compute(df, params):
 		}
 	}, 30*time.Second, 250*time.Millisecond, "factor result columns were not synchronized")
 	require.NotNil(t, targetColumnsRsp)
-	// The Result View may be created with no rows yet. Wait for its empty
-	// index before the first Factor write so ViewFactorPeriodReady can publish
-	// the generation carrying the materialized result rows.
+
 	waitForViewReady(t, ctx, metadata, auth, spaceID, resultViewID)
+	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, resultViewID, resultDatasetID, subjectID, freq, first, end)
 
 	// Bind a modern Strategy instance to the real Factor result View before
 	// emitting the next readiness marker. This keeps the assertion on the
@@ -478,11 +511,11 @@ triggers:
 data: {bar: %s, calendar: crypto_24x7}
 rules:
   spread:
-    pool: [%s, %s]
+    pool: [%s]
     score: %s
     select: {top: 1}
     weight_each: "0.60"
-`, strategyName, freq, subjectID, secondSubjectID, factorID)
+`, strategyName, freq, subjectID, factorID)
 	createStrategyRsp, createStrategyErr := strategy.CreateStrategy(ctx, &strategypb.CreateStrategyReq{Strategy: &strategypb.Strategy{StrategyId: strategyID, DslYaml: dsl}}, strategyScope)
 	require.NoError(t, createStrategyErr)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, createStrategyRsp.GetRetInfo().GetCode(), createStrategyRsp.GetRetInfo().GetMsg())
@@ -508,11 +541,10 @@ rules:
 		})
 	}
 	strategyBindingsJSON, marshalErr := json.Marshal(map[string]any{
-		// The strategy source remains the Factor binding's upstream View. The
-		// result View is an additional dependency carrying the materialized
-		// factor columns; keeping the two IDs distinct preserves generation
-		// provenance and allows the loader to read both snapshots consistently.
-		"source_view_id": sourceViewID, "frequency": freq, "factors": strategyBindingFactors,
+		// This strategy only consumes Factor outputs. Use the materialized
+		// Result View as its source snapshot so a source View with multiple
+		// venue series cannot make a scalar strategy input ambiguous.
+		"source_view_id": resultViewID, "frequency": freq, "factors": strategyBindingFactors,
 	})
 	require.NoError(t, marshalErr)
 	strategyInstanceID = "instance_factor_" + suffix
@@ -562,57 +594,6 @@ rules:
 	})
 	require.NoError(t, err)
 	defer readyConsumer.Close()
-
-	// Create the synthetic bars only after the Strategy instance and its
-	// consumers are ready. Strategy result validity is two closed bars by
-	// design; writing them earlier would make the end-to-end assertion expire
-	// while the metadata and Factor pipeline are being prepared.
-	first = time.Now().UTC().Truncate(time.Minute).Add(-3 * time.Minute)
-	second = first.Add(time.Minute)
-	third = second.Add(time.Minute)
-	end = third.Add(time.Nanosecond)
-	t.Logf("synthetic periods: first=%s third=%s now=%s", first.Format(time.RFC3339), third.Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
-	writeRsp, err := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
-		AuthInfo: auth, SourceEventId: "factor-storage-e2e-input-" + suffix,
-		Rows: []*storagepb.RowFieldUpsert{
-			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:binance", inputFieldID, 101),
-			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:okx", inputFieldID, 100),
-			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:binance", inputFieldID, 104),
-			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:okx", inputFieldID, 102),
-			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:binance", inputFieldID, 108),
-			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:okx", inputFieldID, 105),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:binance", inputFieldID, 201),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:okx", inputFieldID, 200),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:binance", inputFieldID, 204),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:okx", inputFieldID, 202),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:binance", inputFieldID, 207),
-			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:okx", inputFieldID, 205),
-		},
-	})
-	requireStorageOK(t, "PrimaryStore.UpsertFields", writeRsp, err)
-	// Some Storage View builds only materialize an empty index after the first
-	// source rows arrive. Wait after the write so the test remains valid for
-	// both empty-index and row-driven reconciliation implementations.
-	waitForViewReady(t, ctx, metadata, auth, spaceID, sourceViewID)
-	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, sourceViewID, sourceID, subjectID, freq, first, end)
-	var sourceChunk *storageio.RangeChunk
-	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		chunk, readErr := storage.ReadRangeChunk(ctx, storageio.WindowKey{
-			SpaceID: spaceID, SourceViewID: sourceViewID, SourceDataset: sourceID, SubjectID: subjectID, Freq: freq,
-		}, first, end, 1, 10, []string{inputFieldID})
-		assert.NoError(collect, readErr)
-		if readErr == nil {
-			sourceChunk = chunk
-			assert.Equal(collect, []time.Time{first, second, third}, chunk.TargetPeriods)
-		}
-	}, 20*time.Second, 250*time.Millisecond, "source rows were not materialized")
-	require.Equal(t, []time.Time{first, second, third}, sourceChunk.TargetPeriods)
-	require.Equal(t, []string{inputFieldID}, sourceChunk.Frame.Columns)
-	require.Equal(t,
-		[]string{"venue:binance", "venue:okx", "venue:binance", "venue:okx", "venue:binance", "venue:okx"},
-		sourceChunk.Frame.SeriesTags,
-	)
-	require.Equal(t, [][]any{{101.0}, {100.0}, {104.0}, {102.0}, {108.0}, {105.0}}, sourceChunk.Frame.Rows)
 
 	// Drive the production event chain instead of jumping straight to the
 	// run-once RPC: rows are already committed, then Collector-style period
@@ -703,10 +684,10 @@ rules:
 		[]time.Time{third}, end, "venue_pair:binance-okx", expectedOutputs)
 	assertFactorRows(t, rows, []time.Time{third}, "venue_pair:binance-okx", expectedOutputs)
 	secondExpectedOutputs := []factorOutputExpectation{
-		{fieldID: factorID + "__spread", values: []float64{2}},
-		{fieldID: factorID + "__rolling_spread", values: []float64{2}},
-		{fieldID: secondFactorID + "__midpoint", values: []float64{206}},
-		{fieldID: secondFactorID + "__rolling_midpoint", values: []float64{204.5}},
+		{fieldID: factorID + "__spread", values: []float64{3}},
+		{fieldID: factorID + "__rolling_spread", values: []float64{2.5}},
+		{fieldID: secondFactorID + "__midpoint", values: []float64{206.5}},
+		{fieldID: secondFactorID + "__rolling_midpoint", values: []float64{204.75}},
 	}
 	assertPrimaryFactorRows(t, ctx, primary, auth, spaceID, resultDatasetID, secondSubjectID, freq,
 		[]time.Time{third}, "venue_pair:binance-okx", secondExpectedOutputs)
@@ -1043,43 +1024,11 @@ func assertFactorArtifactsRemoved(t *testing.T, deployRoot, factorName string) {
 	}
 }
 
-func retryCleanup(t *testing.T, ctx context.Context, resource string, operation func(context.Context) (bool, any, error)) bool {
-	t.Helper()
-	var lastRsp any
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		opCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		succeeded, rsp, err := operation(opCtx)
-		cancel()
-		if succeeded {
-			return true
-		}
-		lastRsp, lastErr = rsp, err
-		if attempt < 2 {
-			timer := time.NewTimer(time.Duration(attempt+1) * time.Second)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				break
-			case <-timer.C:
-			}
-		}
-	}
-	reportCleanupFailure(t, resource, lastRsp, lastErr)
-	return false
-}
-
 func reportCleanupFailure(t *testing.T, resource string, rsp any, err error) {
 	t.Helper()
-	// Cleanup runs against asynchronous Storage/Factor workers and may outlive
-	// the assertion path. Keep the default E2E useful when a stale worker cannot
-	// be reached, while allowing CI or a release gate to make residue fatal.
-	message := fmt.Sprintf("cleanup %s failed: rsp=%v err=%v", resource, rsp, err)
-	if strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_STRICT_CLEANUP")) == "1" {
-		t.Errorf("%s", message)
-		return
-	}
-	t.Logf("%s", message)
+	// Cleanup failures are test failures: leaving an enabled instance or a
+	// mutable Space behind can contaminate later acceptance runs.
+	t.Errorf("cleanup %s failed: rsp=%v err=%v", resource, rsp, err)
 }
 
 func inputRow(spaceID, datasetID, subjectID, freq string, at time.Time, seriesTag, fieldID string, value float64) *storagepb.RowFieldUpsert {
@@ -1116,27 +1065,13 @@ func viewColumn(spaceID, viewID, datasetID, output, display string, order uint32
 
 func waitForViewReady(t *testing.T, ctx context.Context, metadata storagepb.MetadataClientProxy, auth *commonpb.AuthInfo, spaceID, viewID string) {
 	t.Helper()
-	timeout := 60 * time.Second
-	if raw := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_VIEW_READY_TIMEOUT")); raw != "" {
-		if configured, err := time.ParseDuration(raw); err == nil && configured > 0 {
-			timeout = configured
-		}
-	}
-	if deadline, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(deadline); remaining < timeout {
-			timeout = remaining
-		}
-	}
-	if timeout <= 0 {
-		timeout = time.Nanosecond
-	}
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		rsp, err := metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: auth, SpaceId: spaceID, ViewId: viewID})
 		require.NoError(collect, err)
 		require.Equal(collect, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 		require.NotEmpty(collect, rsp.GetView().GetActiveIndexId())
 		require.Equal(collect, rsp.GetView().GetDesiredViewRevision(), rsp.GetView().GetActiveViewRevision())
-	}, timeout, 250*time.Millisecond)
+	}, 60*time.Second, 250*time.Millisecond)
 	t.Log("real Storage View reconcile became active")
 }
 

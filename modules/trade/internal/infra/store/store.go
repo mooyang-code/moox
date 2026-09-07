@@ -65,20 +65,45 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("access trade database: %w", err)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	_, err = migrateLegacyTradeSchema(db)
+	// Startup is one atomic cutover: even earlier schema/identity upgrades
+	// must roll back if current executable target data is not recognized.
+	err = db.Transaction(initializeTradeStore)
 	if err != nil {
 		_ = sqlDB.Close()
 		return nil, err
 	}
+	return &Store{db: db}, nil
+}
+
+func initializeTradeStore(db *gorm.DB) error {
+	if err := preflightControlModeSchema(db); err != nil {
+		return err
+	}
+	if _, err := migrateLegacyTradeSchema(db); err != nil {
+		return err
+	}
+	if err := migratePaperBalanceHistoryIndex(db); err != nil {
+		return fmt.Errorf("migrate paper balance history index: %w", err)
+	}
+	if err := migrateTargetExpiryStatus(db); err != nil {
+		return fmt.Errorf("migrate target expiry status: %w", err)
+	}
+	if err := migrateControlModeSchema(db); err != nil {
+		return fmt.Errorf("migrate control mode: %w", err)
+	}
 	if err := validateExistingTradeSchema(db); err != nil {
-		_ = sqlDB.Close()
-		return nil, err
+		return err
 	}
 	if err := db.Exec(schema.AllSQL()).Error; err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("apply trade schema: %w", err)
+		return fmt.Errorf("apply trade schema: %w", err)
 	}
-	return &Store{db: db}, nil
+	if err := migratePinnedCurrentTargets(db); err != nil {
+		return fmt.Errorf("migrate pinned current targets: %w", err)
+	}
+	if err := initializePaperBalances(db); err != nil {
+		return fmt.Errorf("initialize paper balances: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) LockTradingAccount(tradingAccountID string) func() {
@@ -88,12 +113,27 @@ func (s *Store) LockTradingAccount(tradingAccountID string) func() {
 	return mutex.Unlock
 }
 
+// A background scan can defer a busy account without waiting behind its sync.
+func (s *Store) TryLockTradingAccount(tradingAccountID string) (func(), bool) {
+	value, _ := s.accountLocks.LoadOrStore(tradingAccountID, &sync.Mutex{})
+	mutex := value.(*sync.Mutex)
+	if !mutex.TryLock() {
+		return nil, false
+	}
+	return mutex.Unlock, true
+}
+
 func (s *Store) LockLogicalAccount(spaceID string, logicalAccountID string) func() {
 	key := spaceID + "\x00" + logicalAccountID
 	value, _ := s.logicalLocks.LoadOrStore(key, &sync.Mutex{})
 	mutex := value.(*sync.Mutex)
 	mutex.Lock()
 	return mutex.Unlock
+}
+
+func (s *Store) LockLogicalAccountContext(ctx context.Context, spaceID, logicalAccountID string) (func(), error) {
+	value, _ := s.logicalLocks.LoadOrStore(spaceID+"\x00"+logicalAccountID, &sync.Mutex{})
+	return lockContext(ctx, value.(*sync.Mutex))
 }
 
 func (s *Store) LockLogicalAccountExecution(
@@ -117,6 +157,9 @@ func (s *Store) LockLogicalAccountMembership() func() {
 // add columns to an existing table, so the owner generation column needs an
 // explicit migration before schema validation runs.
 func migrateLegacyTradeSchema(db *gorm.DB) (bool, error) {
+	if err := validateLegacyStrategyTargetTable(db); err != nil {
+		return false, err
+	}
 	var exists int
 	if err := db.Raw(`
 		SELECT COUNT(*) FROM sqlite_master
@@ -142,16 +185,23 @@ func migrateLegacyTradeSchema(db *gorm.DB) (bool, error) {
 			return false, nil
 		}
 	}
-	var tableSQL string
-	if err := db.Raw(`
-		SELECT sql FROM sqlite_master
-		WHERE type = 'table' AND name = 't_logical_accounts'
-	`).Scan(&tableSQL).Error; err != nil {
-		return false, fmt.Errorf("inspect logical account legacy SQL: %w", err)
+	// Historical installations before the owner-claim index was introduced
+	// have the exact legacy table DDL but no explicit owner index. Recognize
+	// that shape separately; the migration below recreates the index after
+	// adding the generation column. Newer legacy layouts are validated by the
+	// strict control-table matcher.
+	knownLegacy, err := matchesLegacyLogicalAccountShape(db)
+	if err != nil {
+		return false, err
 	}
-	if normalizeSchemaSQL(tableSQL) != normalizeSchemaSQL(legacyLogicalAccountTableSQL) {
-		// Unknown shapes remain fail-closed and are reported by the strict
-		// validator below rather than being partially mutated.
+	known := knownLegacy
+	if !known {
+		known, err = validateControlTable(db, "t_logical_accounts", false)
+		if err != nil {
+			return false, err
+		}
+	}
+	if !known {
 		return false, nil
 	}
 	// Keep the DDL and owner-generation initialization atomic. If the process
@@ -173,6 +223,13 @@ func migrateLegacyTradeSchema(db *gorm.DB) (bool, error) {
 			WHERE c_owner_runner_id IS NOT NULL AND c_owner_claimed_at = 0
 		`).Error; err != nil {
 			return fmt.Errorf("initialize logical account owner generation: %w", err)
+		}
+		if err := tx.Exec(`
+			CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_owner_runner
+			ON t_logical_accounts (c_space_id, c_owner_runner_id)
+			WHERE c_owner_runner_id IS NOT NULL
+		`).Error; err != nil {
+			return fmt.Errorf("initialize logical account owner index: %w", err)
 		}
 		if err := ensureOwnerRebindTable(tx); err != nil {
 			return err
@@ -247,13 +304,17 @@ func rebuildLegacyStrategyTargetTables(db *gorm.DB) error {
 }
 
 func rebuildLegacyStrategyTargetTable(db *gorm.DB) error {
+	if err := validateLegacyStrategyTargetTable(db); err != nil {
+		return err
+	}
 	if !tableExists(db, "t_logical_account_targets") {
 		return nil
 	}
 	if tableHasColumn(db, "t_logical_account_targets", "c_instance_id") {
 		return nil
 	}
-	if err := db.Exec(`
+	return db.Transaction(func(db *gorm.DB) error {
+		if err := db.Exec(`
 CREATE TABLE t_logical_account_targets__new (
     c_space_id TEXT NOT NULL,
     c_logical_account_id TEXT NOT NULL,
@@ -282,15 +343,15 @@ CREATE TABLE t_logical_account_targets__new (
            (c_instance_id <> '' AND c_session_id <> '' AND
             c_strategy_id <> '' AND c_bar_end_time > 0 AND
             c_effective_at = c_bar_end_time AND c_valid_until > c_effective_at)),
-    CHECK (c_status IN ('PENDING', 'CONVERGING', 'CONVERGED', 'BLOCKED')),
+    CHECK (c_status IN ('PENDING', 'CONVERGING', 'CONVERGED', 'BLOCKED', 'EXPIRED')),
     CHECK (json_valid(c_targets_json)),
     CHECK (json_type(c_targets_json) = 'array'),
     CHECK (json_valid(c_blocked_targets_json)),
     CHECK (json_type(c_blocked_targets_json) = 'array')
 )`).Error; err != nil {
-		return fmt.Errorf("create migrated logical account target table: %w", err)
-	}
-	if err := db.Exec(`
+			return fmt.Errorf("create migrated logical account target table: %w", err)
+		}
+		if err := db.Exec(`
 INSERT INTO t_logical_account_targets__new
  (c_space_id, c_logical_account_id, c_target_id, c_runner_id,
   c_command_sequence, c_targets_json, c_status, c_blocked_targets_json,
@@ -299,30 +360,35 @@ SELECT c_space_id, c_logical_account_id, c_target_id, c_runner_id,
        c_command_sequence, c_targets_json, c_status, c_blocked_targets_json,
        c_last_error, c_accepted_at, c_mtime
 FROM t_logical_account_targets`).Error; err != nil {
-		return fmt.Errorf("copy logical account target rows: %w", err)
-	}
-	if err := db.Exec(`DROP TABLE t_logical_account_targets`).Error; err != nil {
-		return fmt.Errorf("drop legacy logical account target table: %w", err)
-	}
-	if err := db.Exec(`ALTER TABLE t_logical_account_targets__new RENAME TO t_logical_account_targets`).Error; err != nil {
-		return fmt.Errorf("rename migrated logical account target table: %w", err)
-	}
-	if err := db.Exec(`
+			return fmt.Errorf("copy logical account target rows: %w", err)
+		}
+		if err := db.Exec(`DROP TABLE t_logical_account_targets`).Error; err != nil {
+			return fmt.Errorf("drop legacy logical account target table: %w", err)
+		}
+		if err := db.Exec(`ALTER TABLE t_logical_account_targets__new RENAME TO t_logical_account_targets`).Error; err != nil {
+			return fmt.Errorf("rename migrated logical account target table: %w", err)
+		}
+		if err := db.Exec(`
 CREATE INDEX IF NOT EXISTS idx_logical_account_targets_status
 ON t_logical_account_targets (c_space_id, c_status, c_mtime)`).Error; err != nil {
-		return fmt.Errorf("recreate logical account target index: %w", err)
-	}
-	return nil
+			return fmt.Errorf("recreate logical account target index: %w", err)
+		}
+		return nil
+	})
 }
 
 func rebuildLegacyTargetReceiptTable(db *gorm.DB) error {
+	if err := validateLegacyTargetReceiptTable(db); err != nil {
+		return err
+	}
 	if !tableExists(db, "t_logical_account_target_receipts") {
 		return nil
 	}
 	if tableHasColumn(db, "t_logical_account_target_receipts", "c_instance_id") {
 		return nil
 	}
-	if err := db.Exec(`
+	return db.Transaction(func(db *gorm.DB) error {
+		if err := db.Exec(`
 CREATE TABLE t_logical_account_target_receipts__new (
     c_space_id TEXT NOT NULL,
     c_target_id TEXT NOT NULL,
@@ -363,9 +429,9 @@ CREATE TABLE t_logical_account_target_receipts__new (
     CHECK (json_valid(c_quantity_targets_json)),
     CHECK (json_type(c_quantity_targets_json) = 'array')
 )`).Error; err != nil {
-		return fmt.Errorf("create migrated target receipt table: %w", err)
-	}
-	if err := db.Exec(`
+			return fmt.Errorf("create migrated target receipt table: %w", err)
+		}
+		if err := db.Exec(`
 INSERT INTO t_logical_account_target_receipts__new
  (c_space_id, c_target_id, c_runner_id, c_logical_account_id,
   c_command_sequence, c_request_hash, c_signal_time, c_weights_json,
@@ -376,25 +442,26 @@ SELECT c_space_id, c_target_id, c_runner_id, c_logical_account_id,
        c_equity, c_equity_source_time, c_reference_prices_json,
        c_quantity_targets_json, c_accepted_at
 FROM t_logical_account_target_receipts`).Error; err != nil {
-		return fmt.Errorf("copy target receipt rows: %w", err)
-	}
-	if err := db.Exec(`DROP TABLE t_logical_account_target_receipts`).Error; err != nil {
-		return fmt.Errorf("drop legacy target receipt table: %w", err)
-	}
-	if err := db.Exec(`ALTER TABLE t_logical_account_target_receipts__new RENAME TO t_logical_account_target_receipts`).Error; err != nil {
-		return fmt.Errorf("rename migrated target receipt table: %w", err)
-	}
-	if err := db.Exec(`
+			return fmt.Errorf("copy target receipt rows: %w", err)
+		}
+		if err := db.Exec(`DROP TABLE t_logical_account_target_receipts`).Error; err != nil {
+			return fmt.Errorf("drop legacy target receipt table: %w", err)
+		}
+		if err := db.Exec(`ALTER TABLE t_logical_account_target_receipts__new RENAME TO t_logical_account_target_receipts`).Error; err != nil {
+			return fmt.Errorf("rename migrated target receipt table: %w", err)
+		}
+		if err := db.Exec(`
 CREATE INDEX IF NOT EXISTS idx_target_receipts_logical
 ON t_logical_account_target_receipts (c_space_id, c_logical_account_id, c_accepted_at)`).Error; err != nil {
-		return fmt.Errorf("recreate target receipt index: %w", err)
-	}
-	return db.Exec(`
+			return fmt.Errorf("recreate target receipt index: %w", err)
+		}
+		return db.Exec(`
 CREATE UNIQUE INDEX IF NOT EXISTS ux_target_receipts_session_bar
 ON t_logical_account_target_receipts (
     c_space_id, c_logical_account_id, c_instance_id, c_session_id, c_bar_end_time
 )
 WHERE c_instance_id <> ''`).Error
+	})
 }
 
 func tableExists(db *gorm.DB, table string) bool {
@@ -502,6 +569,7 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		"t_logical_account_owner_rebinds": {},
 		"t_logical_account_targets":       {}, "t_operator_actions": {},
 		"t_paper_account_configs": {}, "t_account_equity_points": {},
+		"t_paper_balance_projections": {}, "t_paper_asset_balances": {},
 		"t_logical_account_equity_points":   {},
 		"t_logical_account_target_receipts": {},
 	}
@@ -519,6 +587,12 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		return fmt.Errorf("apply schema reference: %w", err)
 	}
 	for _, table := range tables {
+		if table == "t_logical_accounts" || table == "t_operator_actions" {
+			if _, err := validateControlTable(db, table, true); err != nil {
+				return err
+			}
+			continue
+		}
 		got, err := inspectTableShape(db, table)
 		if err != nil {
 			return err
@@ -527,7 +601,7 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		if err != nil {
 			return err
 		}
-		if !reflect.DeepEqual(got, want) && !(table == "t_logical_accounts" && legacyLogicalAccountShapeMatches(got, want)) {
+		if !reflect.DeepEqual(got, want) {
 			return fmt.Errorf(
 				"%w: %s does not match current columns and constraints",
 				ErrIncompatibleSchema,
@@ -536,59 +610,6 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		}
 	}
 	return nil
-}
-
-func legacyLogicalAccountShapeMatches(got, want tableShape) bool {
-	if !sameColumnsIgnoringOwnerGenerationPosition(got.Columns, want.Columns) ||
-		!reflect.DeepEqual(got.UniqueKeys, want.UniqueKeys) ||
-		!reflect.DeepEqual(got.ForeignKeys, want.ForeignKeys) ||
-		len(got.SchemaSQL) != len(want.SchemaSQL) {
-		return false
-	}
-	for index := range got.SchemaSQL {
-		gotTable := strings.HasPrefix(got.SchemaSQL[index], "table\x00t_logical_accounts\x00")
-		wantTable := strings.HasPrefix(want.SchemaSQL[index], "table\x00t_logical_accounts\x00")
-		if gotTable || wantTable {
-			if !gotTable || !wantTable || !strings.Contains(want.SchemaSQL[index], "c_owner_claimed_at") {
-				return false
-			}
-			continue
-		}
-		if got.SchemaSQL[index] != want.SchemaSQL[index] {
-			return false
-		}
-	}
-	return true
-}
-
-var legacyLogicalAccountMigratedTableSQL = strings.Replace(
-	legacyLogicalAccountTableSQL,
-	"    PRIMARY KEY (c_space_id, c_logical_account_id),",
-	"    c_owner_claimed_at INTEGER NOT NULL DEFAULT 0,\n    PRIMARY KEY (c_space_id, c_logical_account_id),",
-	1,
-)
-
-func sameColumnsIgnoringOwnerGenerationPosition(got, want []tableColumn) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	byName := make(map[string]tableColumn, len(got))
-	for _, column := range got {
-		byName[column.Name] = column
-	}
-	for _, column := range want {
-		actual, ok := byName[column.Name]
-		if !ok || actual.Type != column.Type || actual.NotNull != column.NotNull || actual.PrimaryKey != column.PrimaryKey {
-			return false
-		}
-		if (actual.DefaultSQL == nil) != (column.DefaultSQL == nil) {
-			return false
-		}
-		if actual.DefaultSQL != nil && *actual.DefaultSQL != *column.DefaultSQL {
-			return false
-		}
-	}
-	return true
 }
 
 type tableShape struct {
@@ -685,6 +706,30 @@ func normalizeSchemaSQL(value string) string {
 	// schema as a fresh install without weakening column/constraint checks.
 	value = strings.ReplaceAll(value, `"`, "")
 	return strings.ToLower(strings.Join(strings.Fields(value), " "))
+}
+
+func matchesLegacyLogicalAccountShape(db *gorm.DB) (bool, error) {
+	reference, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		return false, fmt.Errorf("open legacy schema reference: %w", err)
+	}
+	sqlDB, err := reference.DB()
+	if err != nil {
+		return false, fmt.Errorf("open legacy schema reference connection: %w", err)
+	}
+	defer sqlDB.Close()
+	if err := reference.Exec(legacyLogicalAccountTableSQL).Error; err != nil {
+		return false, fmt.Errorf("apply legacy schema reference: %w", err)
+	}
+	got, err := inspectTableShape(db, "t_logical_accounts")
+	if err != nil {
+		return false, err
+	}
+	want, err := inspectTableShape(reference, "t_logical_accounts")
+	if err != nil {
+		return false, err
+	}
+	return reflect.DeepEqual(got, want), nil
 }
 
 func (s *Store) Close() error {

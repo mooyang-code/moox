@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"crypto/hmac"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,13 +26,24 @@ func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.
 	if space.Name == "" {
 		space.Name = space.GetSpaceId()
 	}
-	created, err := s.metadata.UpsertSpace(ctx, space)
+	var created *pb.Space
+	var err error
+	if creator, ok := s.metadata.(interface {
+		CreateSpace(context.Context, *pb.Space) (*pb.Space, error)
+	}); ok {
+		created, err = creator.CreateSpace(ctx, space)
+	} else {
+		// Non-SQLite test/compatibility stores may only expose the historical
+		// Writer contract. Production SQLite always takes the atomic path above.
+		created, err = s.metadata.UpsertSpace(ctx, space)
+	}
 	if err != nil {
 		return &pb.CreateSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.CreateSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
+	// The SQLite INSERT is already committed before this point. Cache
+	// publication is best-effort so a response retry cannot turn a successful
+	// create into a duplicate-key failure or leak an orphaned Space.
+	s.refreshMetadataCacheAfterCommit(ctx, "CreateSpace")
 	return &pb.CreateSpaceRsp{RetInfo: retinfo.Success("success"), Space: created}, nil
 }
 
@@ -67,7 +79,10 @@ func (s *Service) DeleteSpace(ctx context.Context, req *pb.DeleteSpaceReq) (*pb.
 func (s *Service) GetSpace(ctx context.Context, req *pb.GetSpaceReq) (*pb.GetSpaceRsp, error) {
 	space, err := s.metadata.GetSpace(ctx, req.GetSpaceId())
 	if err != nil {
-		return &pb.GetSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_SPACE_NOT_FOUND, err)}, nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return &pb.GetSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_SPACE_NOT_FOUND, err)}, nil
+		}
+		return &pb.GetSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.GetSpaceRsp{RetInfo: retinfo.Success("success"), Space: space}, nil
 }

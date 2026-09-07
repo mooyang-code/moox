@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -684,6 +685,7 @@ type fillPayload struct {
 	FillPnl  string `json:"fillPnl"`
 	ExecType string `json:"execType"`
 	Ts       string `json:"ts"`
+	FillTime string `json:"fillTime"`
 }
 
 func (a *Adapter) ListRecentFills(
@@ -722,10 +724,13 @@ func (a *Adapter) ListRecentFills(
 		payload = nextPage
 		rows = append(rows, payload...)
 	}
-	// OKX returns newest first. Apply only rows newer than the stored cursor,
-	// oldest first, so a large synchronization gap cannot skip intermediate
-	// Fills and downstream reducers observe chronological facts.
-	out := make([]exchange.Fill, 0, len(rows))
+	// Pagination follows bill IDs, but position reducers need execution order.
+	// Record generation may lag execution, so reversing pages is insufficient.
+	type billedFill struct {
+		fill   exchange.Fill
+		billID string
+	}
+	normalized := make([]billedFill, 0, len(rows))
 	for index := len(rows) - 1; index >= 0; index-- {
 		row := rows[index]
 		if cursor != "" && compareBillID(row.BillID, cursor) <= 0 {
@@ -735,7 +740,17 @@ func (a *Adapter) ListRecentFills(
 		if err != nil {
 			return nil, cursor, err
 		}
-		out = append(out, fill)
+		normalized = append(normalized, billedFill{fill: fill, billID: row.BillID})
+	}
+	sort.SliceStable(normalized, func(i, j int) bool {
+		if normalized[i].fill.TradedAt.Equal(normalized[j].fill.TradedAt) {
+			return compareBillID(normalized[i].billID, normalized[j].billID) < 0
+		}
+		return normalized[i].fill.TradedAt.Before(normalized[j].fill.TradedAt)
+	})
+	out := make([]exchange.Fill, len(normalized))
+	for i, row := range normalized {
+		out[i] = row.fill
 	}
 	return out, next, nil
 }
@@ -868,6 +883,14 @@ func (a *Adapter) order(row orderPayload) (exchange.Order, error) {
 }
 
 func (a *Adapter) fill(row fillPayload) (exchange.Fill, error) {
+	fillMillis, err := strconv.ParseInt(row.FillTime, 10, 64)
+	if err != nil || fillMillis <= 0 {
+		return exchange.Fill{}, rejected("fill execution time is required", err)
+	}
+	// An incomplete fee must be recovered from REST, not guessed in an immutable fill.
+	if strings.TrimSpace(row.Fee) == "" || strings.TrimSpace(row.FeeCcy) == "" {
+		return exchange.Fill{}, rejected("fill fee amount and currency are required", nil)
+	}
 	contracts, err := decimalOrZero(row.FillSz)
 	if err != nil {
 		return exchange.Fill{}, err
@@ -899,9 +922,9 @@ func (a *Adapter) fill(row fillPayload) (exchange.Fill, error) {
 		ExchangeTradeID: row.TradeID, ExchangeOrderID: row.OrdID,
 		ClientOrderID: row.ClOrdID, ExchangeSymbol: row.InstID,
 		Side: exchange.Side(strings.ToUpper(row.Side)), PositionSide: positionSide,
-		Quantity: quantity, Price: price, Fee: fee.Abs(), FeeAsset: row.FeeCcy,
+		Quantity: quantity, Price: price, Fee: fee.Neg(), FeeAsset: row.FeeCcy,
 		RealizedPnL: pnl, SettlementAsset: a.config.SettlementAsset,
-		LiquidityRole: liquidityRole(row.ExecType), TradedAt: millisString(row.Ts),
+		LiquidityRole: liquidityRole(row.ExecType), TradedAt: time.UnixMilli(fillMillis).UTC(),
 	}, nil
 }
 

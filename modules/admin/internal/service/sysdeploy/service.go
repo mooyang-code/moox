@@ -232,7 +232,12 @@ func (s *ServiceImpl) ResolveAdminServiceDetail(ctx context.Context, adminNodeID
 	if extra.TimeoutMS != nil && *extra.TimeoutMS > 0 {
 		timeout = time.Duration(*extra.TimeoutMS) * time.Millisecond
 	}
-	return gateway.ServiceDetail{Address: address, Path: path, Timeout: timeout}, true
+	detail := gateway.ServiceDetail{Address: address, Path: path, Timeout: timeout}
+	if gatewayDeploymentName(serviceID) == "trade_console" && extra.GatewayURL != "" && extra.GatewayNode != "" {
+		detail.GatewayURL = strings.TrimRight(strings.TrimSpace(extra.GatewayURL), "/")
+		detail.GatewayNode = strings.TrimSpace(extra.GatewayNode)
+	}
+	return detail, true
 }
 
 func gatewayDeploymentName(serviceID string) string {
@@ -274,12 +279,12 @@ func validateDeployment(item *Deployment) error {
 	if item.Host == "" {
 		return fmt.Errorf("host is required")
 	}
-	ip := net.ParseIP(item.Host)
-	if ip == nil {
-		return fmt.Errorf("host must be an IP address")
-	}
-	if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return fmt.Errorf("host must be a routable unicast IP address")
+	if ip := net.ParseIP(item.Host); ip != nil {
+		if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("host must be a routable unicast IP address")
+		}
+	} else if !validDeploymentDNSName(item.Host) {
+		return fmt.Errorf("host must be a routable IP address or DNS name")
 	}
 	if item.Port <= 0 || item.Port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535")
@@ -333,6 +338,31 @@ func validateDeployment(item *Deployment) error {
 		}
 	}
 	return nil
+}
+
+// validDeploymentHost accepts the same DNS-capable host values used by setup
+// manifests. Route targets are still constrained to a single syntactic host
+// (no URL, port, wildcard, or whitespace), while IP multicast/unspecified and
+// link-local addresses remain forbidden.
+func validDeploymentDNSName(raw string) bool {
+	host := strings.TrimSpace(raw)
+	if host == "" || host != raw || len(host) > 253 || strings.Contains(host, "..") {
+		return false
+	}
+	if net.ParseIP(host) != nil {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, ch := range label {
+			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func normalizePage(page *pb.Page) (int, int, int) {

@@ -60,6 +60,26 @@ func TestDAO_ListSpaceMembers_EmptySpace_ShouldReturnZero(t *testing.T) {
 	assert.Empty(t, rows)
 }
 
+func TestDAO_AuthorizeTradeRequest_RequiresActiveMembershipForOrdinaryUser(t *testing.T) {
+	db := setupSpaceTestDB(t)
+	d := NewDAO(db)
+	require.NoError(t, d.CreateSpace(context.Background(), &Space{SpaceID: "crypto", Name: "Crypto", Status: "active"}))
+	err := d.AuthorizeTradeRequest(context.Background(), "user-1", "crypto", "ListOrders", 1)
+	assert.Error(t, err)
+	require.NoError(t, db.Create(&SpaceMember{SpaceID: "crypto", UserID: "user-1", Role: "member", Status: "active"}).Error)
+	require.NoError(t, d.AuthorizeTradeRequest(context.Background(), "user-1", "crypto", "ListOrders", 1))
+	assert.Error(t, d.AuthorizeTradeRequest(context.Background(), "user-1", "crypto", "PlaceManualOrder", 1))
+}
+
+func TestDAO_AuthorizeTradeRequest_GlobalAdminAndInactiveSpace(t *testing.T) {
+	db := setupSpaceTestDB(t)
+	d := NewDAO(db)
+	require.NoError(t, d.CreateSpace(context.Background(), &Space{SpaceID: "crypto", Name: "Crypto", Status: "active"}))
+	require.NoError(t, d.AuthorizeTradeRequest(context.Background(), "admin-1", "crypto", "PlaceManualOrder", 2))
+	require.NoError(t, db.Model(&Space{}).Where("c_space_id = ?", "crypto").Update("c_status", "disabled").Error)
+	assert.Error(t, d.AuthorizeTradeRequest(context.Background(), "admin-1", "crypto", "ListOrders", 2))
+}
+
 func TestService_CreateSpace_MissingRequired_ShouldError(t *testing.T) {
 	svc := newTestService(t)
 	_, err := svc.CreateSpace(context.Background(), &pb.CreateSpaceReq{

@@ -17,8 +17,10 @@ file_mode() {
   stat -c '%a' "$1"
 }
 
-mkdir -p "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" \
-  "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/packages" "${FIXTURE_ROOT}/bin"
+mkdir -p "${FIXTURE_ROOT}/scripts/deploy" "${FIXTURE_ROOT}/scripts/runtime" \
+  "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" \
+  "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/packages" \
+  "${FIXTURE_ROOT}/config/setup" "${FIXTURE_ROOT}/bin"
 cp "${ROOT}/scripts/deploy/deploy-moox.sh" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh"
 cp "${ROOT}/scripts/runtime/moox-storage-auth-check.sh" "${FIXTURE_ROOT}/scripts/runtime/moox-storage-auth-check.sh"
 cp "${ROOT}/scripts/runtime/moox-storage-auth-rotate.sh" "${FIXTURE_ROOT}/scripts/runtime/moox-storage-auth-rotate.sh"
@@ -148,6 +150,29 @@ grep -Fq 'SCF_SERVICE_GATEWAY_TARGET="${MOOX_SCF_SERVICE_GATEWAY_TARGET:-https:/
 grep -Fq 'SCF_STORAGE_RPC_GATEWAY_TARGET="${MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET:-ip://106.53.107.122:11003}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq "gateway: reconciled native listener to %s for SCF target %s" "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'gateway native listener ${current_native:-<missing>} does not match expected ${expected_native}' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'gateway_health_addr() {' "${TMP_ROOT}/unpacked/healthcheck.sh"
+grep -Fq 'gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:}"' "${TMP_ROOT}/unpacked/healthcheck.sh"
+# The remote component-overlay rollback runs from its own heredoc rather than
+# the generated helpers, so its health-address function must be defined there
+# as well.
+sed -n '/^prepare_gateway_rollback() {$/,/^rollback_gateway() {$/p' \
+  "${ROOT}/scripts/deploy/deploy-moox.sh" | grep -Fq 'restored="$(awk'
+sed -n '/^prepare_gateway_rollback() {$/,/^rollback_gateway() {$/p' \
+  "${ROOT}/scripts/deploy/deploy-moox.sh" | grep -Fq 'data/gateway/routes.json'
+sed -n '/^prepare_local_gateway_rollback() {$/,/^rollback_local_gateway() {$/p' \
+  "${ROOT}/scripts/deploy/deploy-moox.sh" | grep -Fq 'data/gateway/routes.json'
+rollback_health_script="${TMP_ROOT}/rollback-health.sh"
+awk '
+  /^prepare_gateway_rollback\(\) \{$/ { scoped=1 }
+  scoped && /^gateway_health_addr\(\) \{$/ { capture=1 }
+  capture && /^rollback_gateway\(\) \{$/ { exit }
+  capture { print }
+' "${ROOT}/scripts/deploy/deploy-moox.sh" >"${rollback_health_script}"
+mkdir -p "${TMP_ROOT}/rollback-root/gateway/config"
+printf '  health_addr: 0.0.0.0:11014\n' >"${TMP_ROOT}/rollback-root/gateway/config/app.yaml"
+rollback_health_addr="$(DEPLOY_DIR="${TMP_ROOT}/rollback-root" WITH_TRADE=0 WITH_STORAGE=0 WITH_ADMIN=0 WITH_GATEWAY=1 bash -c 'source "$1"; gateway_health_addr' _ "${rollback_health_script}")"
+[[ "${rollback_health_addr}" == "127.0.0.1:11014" ]]
 
 run_native_listener_guard() {
   local target="$1"

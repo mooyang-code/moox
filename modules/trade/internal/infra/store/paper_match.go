@@ -22,6 +22,28 @@ func (s *Store) ListPaperMatchCandidates(ctx context.Context, limit int) ([]Orde
 	return result, nil
 }
 
+// IDs are immutable within a first-match phase. Matching a page can move an
+// order out of that phase, but cannot move an unseen order behind this cursor.
+func (s *Store) ListPaperMatchCandidatePage(ctx context.Context, firstMatchPending bool, afterSpaceID, afterOrderID string, limit int) ([]OrderRecord, error) {
+	var rows []orderRow
+	query := s.db.WithContext(ctx).Table("t_trade_orders AS o").Joins("JOIN t_trading_accounts AS a ON a.c_space_id=o.c_space_id AND a.c_trading_account_id=o.c_trading_account_id").Where("a.c_execution_mode='PAPER' AND a.c_status='ENABLED' AND o.c_state='OPEN' AND o.c_first_match_pending=?", firstMatchPending).Order("o.c_space_id, o.c_order_id")
+	if afterSpaceID != "" || afterOrderID != "" {
+		query = query.Where("(o.c_space_id, o.c_order_id) > (?, ?)", afterSpaceID, afterOrderID)
+	}
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	err := query.Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make([]OrderRecord, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, orderRecordFromRow(row))
+	}
+	return result, nil
+}
+
 func (tx *Tx) GetOpenOrderForMatch(spaceID, orderID string, expectedVersion uint64) (OrderRecord, error) {
 	var row orderRow
 	result := tx.db.Table("t_trade_orders").Where(`

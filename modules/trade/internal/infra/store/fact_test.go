@@ -482,7 +482,7 @@ func TestInsertFillValidatesDecimalsAndCanonicalizesReplay(t *testing.T) {
 	}{
 		{"price zero", func(v *FillRecord) { v.Price = "0" }},
 		{"quantity negative", func(v *FillRecord) { v.Quantity = "-1" }},
-		{"fee negative", func(v *FillRecord) { v.Fee = "-1" }},
+		{"fee malformed", func(v *FillRecord) { v.Fee = "rebate" }},
 		{"realized malformed", func(v *FillRecord) { v.RealizedPnL = "many" }},
 	}
 	for _, tt := range tests {
@@ -511,6 +511,7 @@ func TestInsertFillValidatesDecimalsAndCanonicalizesReplay(t *testing.T) {
 		SpaceID: "space-1", FillID: "canonical-fill",
 		ExchangeTradeID: "canonical-trade", OrderID: "order-1",
 		Price: "100.00", Quantity: "1.0", Fee: "0.10", RealizedPnL: "-1.00",
+		FeeAsset: "USDT",
 	}
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		inserted, err := tx.InsertFill(record)

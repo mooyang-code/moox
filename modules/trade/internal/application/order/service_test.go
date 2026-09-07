@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 type adapterSourceStub struct{ adapter *adapterStub }
@@ -37,6 +38,7 @@ type adapterStub struct {
 	fills       []exchange.Fill
 	fillsErr    error
 	placeHook   func()
+	cancelHook  func()
 	placed      exchange.OrderRequest
 }
 
@@ -75,8 +77,103 @@ func (a *adapterStub) PlaceOrder(_ context.Context, request exchange.OrderReques
 }
 func (a *adapterStub) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
 	a.cancelCalls++
+	if a.cancelHook != nil {
+		a.cancelHook()
+	}
 	return exchange.Order{}, a.cancelErr
 }
+
+func TestCancelResponseErrorPreservesPrivateTerminal(t *testing.T) {
+	for _, kind := range []exchange.ErrorKind{exchange.ErrorRejected, exchange.ErrorTransportUnknown} {
+		t.Run(string(kind), func(t *testing.T) {
+			s, db, adapter := newTestService(t)
+			s.Syncer = &syncerStub{}
+			pending, err := s.Place(context.Background(), "space-1", testSpec(time.Unix(1_700_000_000, 0)))
+			require.NoError(t, err)
+			_, err = s.Submit(context.Background(), "space-1", string(pending.ID))
+			require.NoError(t, err)
+			adapter.cancelErr = &exchange.Error{Kind: kind}
+			adapter.cancelHook = func() {
+				record, err := db.GetOrder(context.Background(), "space-1", string(pending.ID))
+				require.NoError(t, err)
+				version := record.Version
+				record.State = "FILLED"
+				record.Version++
+				require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error { return tx.UpdateOrder(record, version) }))
+			}
+			got, err := s.Cancel(context.Background(), "space-1", string(pending.ID))
+			require.NoError(t, err)
+			require.Equal(t, orderdomain.Filled, got.State)
+		})
+	}
+}
+func TestCancelErrorCASPreservesConcurrentState(t *testing.T) {
+	for _, recoverCancel := range []bool{false, true} {
+		for _, state := range []string{"FILLED", "CANCELING"} {
+			t.Run(fmt.Sprintf("recover=%t/%s", recoverCancel, state), func(t *testing.T) {
+				s, db, adapter := newTestService(t)
+				s.Syncer = &syncerStub{}
+				ctx := context.Background()
+				pending, err := s.Place(ctx, "space-1", testSpec(s.now()))
+				require.NoError(t, err)
+				_, err = s.Submit(ctx, "space-1", string(pending.ID))
+				require.NoError(t, err)
+				if recoverCancel {
+					_, err = s.Cancel(ctx, "space-1", string(pending.ID))
+					require.NoError(t, err)
+				}
+				armed := false
+				fired := false
+				require.NoError(t, db.DBForTest().Callback().Query().After("gorm:query").Register("test:cancel_race", func(query *gorm.DB) {
+					if !armed || fired || query.Statement.Table != "t_trade_orders" {
+						return
+					}
+					fired = true
+					// Advance persisted state after the recovery read, before its CAS.
+					require.NoError(t, db.DBForTest().Exec("UPDATE t_trade_orders SET c_state = ?, c_version = c_version + 1 WHERE c_order_id = ?", state, string(pending.ID)).Error)
+				}))
+				adapter.cancelErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown}
+				if recoverCancel {
+					adapter.cancelErr = &exchange.Error{Kind: exchange.ErrorRejected}
+				}
+				adapter.cancelHook = func() { armed = true }
+				var got orderdomain.Order
+				if recoverCancel {
+					got, err = s.RecoverCancel(ctx, "space-1", string(pending.ID))
+				} else {
+					got, err = s.Cancel(ctx, "space-1", string(pending.ID))
+				}
+				require.True(t, fired)
+				if state == "FILLED" {
+					require.NoError(t, err)
+					require.Equal(t, orderdomain.Filled, got.State)
+				} else {
+					require.ErrorIs(t, err, store.ErrConflict)
+				}
+			})
+		}
+	}
+}
+
+func TestRecoverCancelUncertainErrorReloadsPrivateTerminal(t *testing.T) {
+	s, db, adapter := newTestService(t)
+	s.Syncer = &syncerStub{}
+	ctx := context.Background()
+	pending, err := s.Place(ctx, "space-1", testSpec(s.now()))
+	require.NoError(t, err)
+	_, err = s.Submit(ctx, "space-1", string(pending.ID))
+	require.NoError(t, err)
+	adapter.cancelErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown}
+	_, err = s.Cancel(ctx, "space-1", string(pending.ID))
+	require.Error(t, err)
+	adapter.cancelHook = func() {
+		require.NoError(t, db.DBForTest().Exec("UPDATE t_trade_orders SET c_state = 'FILLED', c_version = c_version + 1 WHERE c_order_id = ?", string(pending.ID)).Error)
+	}
+	got, err := s.RecoverCancel(ctx, "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Filled, got.State)
+}
+
 func (a *adapterStub) SetLeverage(context.Context, shared.ExchangeSymbol, shared.Decimal) error {
 	return nil
 }
@@ -200,6 +297,18 @@ func TestSubmitTargetRechecksAccountReadinessBeforeExchangeCall(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrAccountNotReady)
 	require.Equal(t, orderdomain.Pending, got.State)
+	require.Zero(t, adapter.placeCalls)
+}
+
+func TestSubmitTargetRejectsManualControlBeforeExchangeCall(t *testing.T) {
+	s, db, adapter := newTestService(t)
+	spec := testSpec(s.now())
+	setTestOwner(&spec, orderdomain.OwnerTarget)
+	pending, err := s.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+	_, err = s.Submit(context.Background(), "space-1", string(pending.ID))
+	require.Error(t, err)
 	require.Zero(t, adapter.placeCalls)
 }
 
@@ -693,12 +802,13 @@ func TestServiceSubmitRevalidatesReadinessAndReferencePrice(t *testing.T) {
 	}
 	_, err = service.Submit(context.Background(), "space-1", string(pending.ID))
 	require.ErrorIs(t, err, orderdomain.ErrInvalidSpec)
+	require.ErrorIs(t, err, orderdomain.ErrReferencePriceStale)
 	require.Equal(t, 0, adapter.placeCalls)
 	stored, err = tradeStore.GetOrder(context.Background(), "space-1", string(pending.ID))
 	require.NoError(t, err)
-	require.Equal(t, "REJECTED", stored.State)
-	require.Equal(t, "0", stored.RemainingReservedQuantity)
-	require.Positive(t, stored.FinishedAt)
+	require.Equal(t, "PENDING", stored.State)
+	require.Equal(t, stored.ReservedQuantity, stored.RemainingReservedQuantity)
+	require.Zero(t, stored.FinishedAt)
 }
 
 func TestServiceResolveUnknownFindsOrderOrReturnsPendingAfterWindow(t *testing.T) {
@@ -873,6 +983,67 @@ func TestServiceResolveUnknownRecoversSubmittingAfterCrash(t *testing.T) {
 	got, err := service.ResolveUnknown(context.Background(), "space-1", string(pending.ID))
 	require.NoError(t, err)
 	require.Equal(t, "SUBMIT_UNKNOWN", string(got.State))
+}
+
+func TestSubmitErrorPreservesPrivateExecutionState(t *testing.T) {
+	for _, state := range []string{"OPEN", "FILLED", "CANCELED", "REJECTED", "EXPIRED"} {
+		for _, kind := range []exchange.ErrorKind{exchange.ErrorTransportUnknown, exchange.ErrorRejected, ""} {
+			t.Run(state+"/"+string(kind), func(t *testing.T) {
+				service, db, adapter := newTestService(t)
+				pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
+				require.NoError(t, err)
+				if kind != "" {
+					adapter.placeErr = &exchange.Error{Kind: kind, Err: errors.New("late HTTP failure")}
+				}
+				adapter.placeResult.ExchangeOrderID = "private-order"
+				adapter.placeHook = func() {
+					record, err := db.GetOrder(context.Background(), "space-1", string(pending.ID))
+					require.NoError(t, err)
+					expected := record.Version
+					record.ExchangeOrderID = "private-order"
+					record.State = state
+					record.Version++
+					if state == "FILLED" {
+						record.FilledQuantity = record.Quantity
+						record.AveragePrice = "100"
+						record.RemainingReservedQuantity = "0"
+					}
+					require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error { return tx.UpdateOrder(record, expected) }))
+				}
+				got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+				require.NoError(t, err)
+				require.Equal(t, state, string(got.State))
+				require.Equal(t, "private-order", got.ExchangeOrderID)
+				require.Equal(t, 1, adapter.placeCalls)
+			})
+		}
+	}
+}
+
+func TestSubmitConflictingPrivateIdentityIsAccountScoped(t *testing.T) {
+	s, db, adapter := newTestService(t)
+	pending, err := s.Place(context.Background(), "space-1", testSpec(s.now()))
+	require.NoError(t, err)
+	adapter.placeHook = func() {
+		record, err := db.GetOrder(context.Background(), "space-1", string(pending.ID))
+		require.NoError(t, err)
+		expected := record.Version
+		record.ExchangeOrderID = "private-order"
+		record.State = "FILLED"
+		record.FilledQuantity = record.Quantity
+		record.AveragePrice = "100"
+		record.RemainingReservedQuantity = "0"
+		record.Version++
+		require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error { return tx.UpdateOrder(record, expected) }))
+	}
+	_, err = s.Submit(context.Background(), "space-1", string(pending.ID))
+	var accountErr *AccountExecutionError
+	require.ErrorAs(t, err, &accountErr)
+	require.ErrorIs(t, err, orderdomain.ErrInvalidTransition)
+	record, err := db.GetOrder(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, "FILLED", record.State)
+	require.Equal(t, "private-order", record.ExchangeOrderID)
 }
 
 func TestServiceCancelWaitsForAccountSyncBeforeTerminalRelease(t *testing.T) {
@@ -1094,6 +1265,7 @@ func newTestServiceForMarket(
 	}))
 	adapter := &adapterStub{
 		placeResult: exchange.Order{ExchangeOrderID: "exchange-order-1"},
+		getResult:   exchange.Order{ExchangeOrderID: "exchange-order-1", Status: exchange.OrderStatusOpen},
 	}
 	service := &Service{
 		Store: tradeStore,

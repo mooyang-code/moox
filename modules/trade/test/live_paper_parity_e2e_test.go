@@ -148,32 +148,7 @@ func productionPaperMatch(t *testing.T, f *fixture) {
 				)
 			})
 		},
-		DecideContext: func(ctx context.Context, candidate store.OrderRecord) (paperexec.Decision, error) {
-			price := shared.Zero()
-			if candidate.PaperExecutionPrice != nil {
-				price = shared.MustDecimal(*candidate.PaperExecutionPrice)
-			} else {
-				price = shared.MustDecimal(candidate.ReferencePrice)
-			}
-			config, err := f.store.GetPaperAccountConfig(ctx, candidate.SpaceID, candidate.TradingAccountID)
-			if err != nil {
-				return paperexec.Decision{}, err
-			}
-			feeRate := shared.Zero()
-			if config.TakerFeeRate != "" {
-				feeRate = shared.MustDecimal(config.TakerFeeRate)
-			}
-			fee := price.Mul(shared.MustDecimal(candidate.Quantity)).Mul(feeRate)
-			return paperexec.Decision{Fill: exchange.Fill{
-				ExchangeTradeID: candidate.TradingAccountID + ":" + candidate.ClientOrderID,
-				ExchangeOrderID: candidate.ExchangeOrderID, ClientOrderID: candidate.ClientOrderID,
-				ExchangeSymbol: candidate.ExchangeSymbol,
-				Side:           exchange.Side(candidate.Side), PositionSide: exchange.PositionSide(candidate.PositionSide),
-				Quantity: shared.MustDecimal(candidate.Quantity), Price: price, Fee: fee,
-				FeeAsset: candidate.ReservedAsset, SettlementAsset: candidate.ReservedAsset,
-				LiquidityRole: "TAKER", TradedAt: testNow,
-			}}, nil
-		},
+		DecideContext: (&paperexec.Decider{Store: f.store, Adapters: adapterSource{adapter: f.adapter}, Now: func() time.Time { return testNow }}).Decide,
 	}
 	require.NoError(t, matcher.Scan(context.Background()))
 }

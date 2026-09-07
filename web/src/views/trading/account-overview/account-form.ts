@@ -5,6 +5,7 @@ export interface AccountFormModel {
   exchange: 1 | 2;
   market_type: MarketType;
   execution_mode: 1 | 2;
+  control_mode: 1 | 2;
   environment: 1 | 2;
   credential_secret_id: string;
   settlement_asset: string;
@@ -34,6 +35,7 @@ export function createDefaultAccountForm(): AccountFormModel {
     exchange: 1,
     market_type: 1,
     execution_mode: 1,
+    control_mode: 1,
     environment: 1,
     credential_secret_id: "",
     settlement_asset: "USDT",
@@ -89,6 +91,7 @@ export function buildPaperSimulationRequest(form: AccountFormModel): CreatePaper
   return {
     account_name: form.name.trim(),
     logical_account_name: (form.logical_account_name || `${form.name.trim()}-logical`).trim(),
+    control_mode: form.control_mode,
     exchange: form.exchange,
     market_type: form.market_type,
     settlement_asset: form.settlement_asset.trim().toUpperCase(),

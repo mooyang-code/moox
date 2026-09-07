@@ -674,6 +674,8 @@ domains = ["FAPI.BINANCE.COM.", "api.binance.com"]
 
 	disabled := snapshot.Manifest
 	disabled.DNSResolver = DNSResolver{Enabled: false, TradeNode: "missing"}
+	require.Error(t, validateDNSResolver(&disabled.DNSResolver, &disabled))
+	disabled.DNSResolver.TradeNode = ""
 	require.NoError(t, validateDNSResolver(&disabled.DNSResolver, &disabled))
 }
 

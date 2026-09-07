@@ -74,6 +74,8 @@ type Options struct {
 	GatewayControlKey      string
 	GatewayServiceKey      string
 	GatewayCABundle        []byte
+	TradeGatewayURL        string
+	TradeGatewayNode       string
 	TLSMode                TLSMode
 	// InstallLocalCA makes an internal-TLS control deployment verify that the
 	// browser machine trusts the Caddy root certificate. This is intentionally
@@ -677,6 +679,10 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 	}
 	if nodeID := strings.TrimSpace(opts.LocalStorageGatewayNodeID); nodeID != "" {
 		command.Env = setCommandEnv(command.Env, "MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID", nodeID)
+	}
+	if gatewayURL := strings.TrimSpace(opts.TradeGatewayURL); gatewayURL != "" {
+		command.Env = setCommandEnv(command.Env, "MOOX_TRADE_GATEWAY_URL", gatewayURL)
+		command.Env = setCommandEnv(command.Env, "MOOX_TRADE_GATEWAY_NODE_ID", strings.TrimSpace(opts.TradeGatewayNode))
 	}
 	command.Env = notificationCommandEnv(command.Env, opts.NotificationChannelType, opts.NotificationWebhookURL)
 	command.Env = localLogCommandEnv(command.Env, opts.LocalLogs)

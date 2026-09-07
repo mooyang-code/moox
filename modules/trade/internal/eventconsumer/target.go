@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
@@ -21,10 +20,11 @@ type TargetOptions struct {
 	ConsumerName   string
 	Store          *store.Store
 	Wake           func()
+	WakeTarget     func(spaceID, logicalAccountID string)
 	Now            func() time.Time
 	SetReady       func(bool)
-	Gate           sync.Locker
 	WeightResolver TargetWeightResolver
+	ResolveTimeout time.Duration
 }
 
 // TargetWeightResolver converts the strategy-owned target weights into the
@@ -59,7 +59,11 @@ func HandleTarget(
 		delivery.ContentType,
 	)
 	if err != nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+		var invalidPayload *events.PayloadValidationError
+		if errors.As(err, &invalidPayload) {
+			return targetRejection("invalid_contract", err)
+		}
+		return targetRejection("invalid_event", err)
 	}
 	request, ok := payload.(*tradeeventpb.LogicalAccountTargetWeightRequested)
 	if !ok ||
@@ -71,21 +75,12 @@ func HandleTarget(
 		}
 	}
 
-	if opts.Gate != nil {
-		opts.Gate.Lock()
-		defer opts.Gate.Unlock()
-	}
 	if opts.WeightResolver == nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: errors.New("trade target weight resolver is required")}
+		return targetRejection("resolver_missing", errors.New("trade target weight resolver is required"))
 	}
-	// Fencing and expiry precede receipt replay and all market-data work for a
-	// modern session target. Legacy Runner events remain accepted through the
-	// compatibility adapter so old console-created Runners do not silently
-	// stop publishing targets.
-	modernContract := request.GetInstanceId() != "" || request.GetSessionId() != "" || request.GetStrategyId() != "" || request.GetBarEndTime() != nil || request.GetEffectiveAt() != nil || request.GetValidUntil() != nil
-	if modernContract && (request.GetInstanceId() == "" || request.GetSessionId() == "" || request.GetStrategyId() == "" || request.GetBarEndTime() == nil || request.GetEffectiveAt() == nil || request.GetValidUntil() == nil) {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("trade target: new session contract is incomplete")}
-	}
+	// DecodeRaw has already enforced the complete session-scoped contract. Do
+	// not infer ownership or ordering from the deprecated runner/sequence
+	// fields: they are retained in the protobuf only for wire compatibility.
 	account, accountErr := opts.Store.GetLogicalAccount(ctx, message.GetSpaceId(), request.GetLogicalAccountId())
 	if accountErr != nil {
 		if errors.Is(accountErr, gorm.ErrRecordNotFound) {
@@ -93,16 +88,21 @@ func HandleTarget(
 		}
 		return retryTarget(accountErr)
 	}
-	if modernContract {
-		if account.OwnerInstanceID != request.GetInstanceId() || account.OwnerSessionID != request.GetSessionId() {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("%w: target session authorization", store.ErrConflict)}
-		}
+	if account.ControlMode != "STRATEGY" {
+		return targetRejection("authorization_conflict", fmt.Errorf("%w: logical account is not strategy controlled", store.ErrTargetAuthorization))
+	}
+	if account.OwnerInstanceID != request.GetInstanceId() || account.OwnerSessionID != request.GetSessionId() {
+		return targetRejection("authorization_conflict", fmt.Errorf("%w: target session authorization", store.ErrConflict))
 	}
 	now := time.Now().UTC()
 	if opts.Now != nil {
 		now = opts.Now().UTC()
 	}
-	if modernContract && (!now.Before(request.GetValidUntil().AsTime()) || now.Before(request.GetEffectiveAt().AsTime())) {
+	// A target may arrive before its effective bar boundary because Strategy
+	// and Trade clocks/transport are not perfectly aligned. Persist it while
+	// the validity window is still open; the executor will hold it in PENDING
+	// until effective_at and only terminally reject it after valid_until.
+	if !now.Before(request.GetValidUntil().AsTime()) {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: store.ErrTargetExpired}
 	}
 	requestHash, err := targetapp.RequestHash(request)
@@ -111,7 +111,7 @@ func HandleTarget(
 	}
 	if existing, lookupErr := opts.Store.GetTargetReceipt(ctx, message.GetSpaceId(), request.GetTargetId()); lookupErr == nil {
 		if existing.RequestHash != requestHash {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("%w: target receipt request hash conflict", store.ErrConflict)}
+			return targetRejection("receipt_conflict", fmt.Errorf("%w: target receipt request hash conflict", store.ErrConflict))
 		}
 		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
@@ -121,26 +121,18 @@ func HandleTarget(
 	// already been superseded. The transactional accept path remains the
 	// authority, but this read-only fast path prevents stale redeliveries from
 	// blocking a durable consumer on unavailable market data.
-	sequence := uint64(request.GetCommandSequence())
-	if sequence == 0 && request.GetBarEndTime() != nil {
-		sequence = uint64(request.GetBarEndTime().AsTime().UnixMilli())
-	}
+	// The historical target table still stores a sequence for ordering and
+	// migration queries. For the modern contract it is derived from the
+	// immutable bar timestamp, never supplied as an authorization fallback.
+	barEnd := request.GetBarEndTime().AsTime().UnixMilli()
+	sequence := uint64(barEnd)
 	instanceID := request.GetInstanceId()
-	if instanceID == "" {
-		instanceID = request.GetRunnerId()
-	}
 	if current, currentErr := opts.Store.GetLogicalAccountTarget(ctx, message.GetSpaceId(), request.GetLogicalAccountId()); currentErr == nil {
-		barEnd := int64(0)
-		if request.GetBarEndTime() != nil {
-			barEnd = request.GetBarEndTime().AsTime().UnixMilli()
-		}
-		isNewContract := request.GetInstanceId() != "" && request.GetSessionId() != "" && barEnd > 0
-		if (isNewContract && current.InstanceID == request.GetInstanceId() && current.SessionID == request.GetSessionId() && (current.BarEndTime > barEnd || (current.BarEndTime == barEnd && current.TargetID != request.GetTargetId()))) ||
-			(!isNewContract && (current.CommandSequence > sequence ||
-				(current.CommandSequence == sequence && current.TargetID != request.GetTargetId()))) {
+		if current.InstanceID == request.GetInstanceId() && current.SessionID == request.GetSessionId() &&
+			(current.BarEndTime > barEnd || (current.BarEndTime == barEnd && current.TargetID != request.GetTargetId())) {
 			// The command is permanently superseded. TERM preserves the
 			// consumer's poison-message semantics without doing market-data I/O.
-			return jetstream.HandlerResult{Decision: jetstream.TERM}
+			return targetRejection("superseded", nil)
 		}
 	} else if !errors.Is(currentErr, gorm.ErrRecordNotFound) {
 		return retryTarget(currentErr)
@@ -188,16 +180,19 @@ func HandleTarget(
 		Status:           "PENDING",
 		AcceptedAt:       now.UnixMilli(),
 	}
-	if request.GetBarEndTime() != nil {
-		record.BarEndTime = request.GetBarEndTime().AsTime().UTC().UnixMilli()
+	record.BarEndTime = request.GetBarEndTime().AsTime().UTC().UnixMilli()
+	record.EffectiveAt = request.GetEffectiveAt().AsTime().UTC().UnixMilli()
+	record.ValidUntil = request.GetValidUntil().AsTime().UTC().UnixMilli()
+	timeout := opts.ResolveTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
 	}
-	if request.GetEffectiveAt() != nil {
-		record.EffectiveAt = request.GetEffectiveAt().AsTime().UTC().UnixMilli()
+	resolveCtx, cancel := context.WithTimeout(ctx, timeout)
+	conversion, conversionErr := opts.WeightResolver.Resolve(resolveCtx, message.GetOccurredAt().AsTime().UnixMilli(), request, message.GetSpaceId())
+	if conversionErr == nil {
+		conversionErr = resolveCtx.Err()
 	}
-	if request.GetValidUntil() != nil {
-		record.ValidUntil = request.GetValidUntil().AsTime().UTC().UnixMilli()
-	}
-	conversion, conversionErr := opts.WeightResolver.Resolve(ctx, message.GetOccurredAt().AsTime().UnixMilli(), request, message.GetSpaceId())
+	cancel()
 	if conversionErr != nil {
 		if errors.Is(conversionErr, targetapp.ErrPermanent) {
 			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: conversionErr}
@@ -222,37 +217,29 @@ func HandleTarget(
 	if marshalErr != nil {
 		return retryTarget(marshalErr)
 	}
-	receiptRunnerID := instanceID
-	if request.GetInstanceId() != "" && request.GetSessionId() != "" {
-		// Keep the legacy receipt index unique across independent sessions.
-		receiptRunnerID = instanceID + "@" + request.GetSessionId()
-	}
+	// Keep the historical receipt index unique across independent sessions.
+	receiptRunnerID := instanceID + "@" + request.GetSessionId()
 	receipt := store.TargetReceiptRecord{
 		SpaceID: message.GetSpaceId(), TargetID: request.GetTargetId(), RunnerID: receiptRunnerID, InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), StrategyID: request.GetStrategyId(), LogicalAccountID: request.GetLogicalAccountId(), CommandSequence: sequence, BarEndTime: record.BarEndTime, EffectiveAt: record.EffectiveAt, ValidUntil: record.ValidUntil, RequestHash: requestHash, SignalTime: conversion.SignalTime, WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime, ReferencePricesJSON: string(referencePrices), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets), AcceptedAt: now.UnixMilli(),
 	}
 	var accepted bool
-	if modernContract {
-		// Modern session targets are fenced by instance_id + session_id. Do
-		// not pass a zero owner-generation variadic argument: the store treats
-		// that argument as an explicit legacy fence when present.
-		_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithReceiptLocked(ctx, record, receipt)
-	} else {
-		var ownerGeneration int64
-		if request.GetOwnerGeneration() > 0 {
-			ownerGeneration = request.GetOwnerGeneration()
-		}
-		_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithReceiptLocked(ctx, record, receipt, ownerGeneration)
-	}
+	_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithReceiptLocked(ctx, record, receipt)
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidRecord) ||
 			errors.Is(err, store.ErrConflict) ||
+			errors.Is(err, store.ErrTargetExpired) ||
+			errors.Is(err, store.ErrTargetAuthorization) ||
 			errors.Is(err, gorm.ErrRecordNotFound) {
 			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 		}
 		return retryTarget(err)
 	}
-	if accepted && opts.Wake != nil {
-		opts.Wake()
+	if accepted {
+		if opts.WakeTarget != nil {
+			opts.WakeTarget(record.SpaceID, record.LogicalAccountID)
+		} else if opts.Wake != nil {
+			opts.Wake()
+		}
 	}
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }

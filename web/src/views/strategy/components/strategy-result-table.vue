@@ -34,7 +34,7 @@ function changePage(page: number) { emit("page", page, props.scope); }
 function changeScope(value: string) { emit("page", 1, value === "all" ? "all" : "session"); }
 function showTargets(value: StrategyResult["targets"]) { targetText.value = JSON.stringify(value || [], null, 2); targetVisible.value = true; }
 function showState(value?: string) { stateText.value = value || "{}"; stateVisible.value = true; }
-function publishLabel(value?: string) { return ({ none: "无需投递", pending: "待投递", sent: "已发送", cancelled: "已取消" } as Record<string, string>)[value || ""] || "未知"; }
+function publishLabel(value?: string) { return ({ none: "无需投递", pending: "待投递", sent: "已发送", cancelled: "已取消投递" } as Record<string, string>)[value || ""] || "未知"; }
 function publishColor(value?: string) { return ({ pending: "orange", sent: "green", cancelled: "gray" } as Record<string, string>)[value || ""] || "blue"; }
 </script>
 

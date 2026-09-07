@@ -75,6 +75,7 @@ func (s *ConsoleServer) CreatePaperSimulation(
 	result, err := s.Paper.Create(ctx, papersimulation.CreateCommand{
 		SpaceID: spaceID, AccountName: strings.TrimSpace(req.GetAccountName()),
 		LogicalAccountName: strings.TrimSpace(req.GetLogicalAccountName()),
+		ControlMode:        controlModeFromPB(req.GetControlMode()),
 		Exchange:           exchangeFromPB(req.GetExchange()), MarketType: marketFromPB(req.GetMarketType()),
 		SettlementAsset: strings.TrimSpace(req.GetSettlementAsset()), MarginMode: exchange.MarginMode(req.GetMarginMode()),
 		InitialBalance: initial, MakerFeeRate: maker, TakerFeeRate: taker, SlippageBPS: slippage,

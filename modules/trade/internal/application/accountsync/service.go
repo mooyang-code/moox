@@ -98,13 +98,25 @@ func (s *Service) SyncAccount(
 			s.Metrics.Observe(tradingAccountID, s.now(), maxDifference, err)
 		}
 	}()
-	unlockMembership := s.Store.LockLogicalAccountMembership()
+	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
+	if err != nil {
+		return s.failLock(ctx, tradingAccountID, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "sync_membership_lock", Err: err})
+	}
 	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
 	if err != nil {
 		unlockMembership()
+		var accountErr *orderapp.AccountExecutionError
+		if errors.As(err, &accountErr) && accountErr.Operation == "sync_execution_lock" {
+			return s.failLock(ctx, tradingAccountID, err)
+		}
 		return Result{}, err
 	}
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if err != nil {
+		unlockExecution()
+		unlockMembership()
+		return s.failLock(ctx, tradingAccountID, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "sync_account_lock", Err: err})
+	}
 	result, maxDifference, err = s.syncAccountLocked(ctx, tradingAccountID)
 	unlock()
 	if err == nil && result.ExternalFactsImported {
@@ -117,6 +129,10 @@ func (s *Service) SyncAccount(
 	}
 	result, err = s.resolveUnknownOrders(ctx, tradingAccountID, result)
 	if err != nil {
+		var accountErr *orderapp.AccountExecutionError
+		if errors.As(err, &accountErr) && accountErr.Operation == "resolve_unknown_lock" {
+			_, err = s.failLock(ctx, tradingAccountID, err)
+		}
 		return result, err
 	}
 	return result, s.notifyFacts(
@@ -134,12 +150,13 @@ func (s *Service) syncAccountLocked(
 	}
 	adapter, err := s.Adapters.Adapter(tradingAccountID)
 	if err != nil {
-		return Result{}, 0, err
+		result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "adapter", err))
+		return result, 0, failErr
 	}
 
 	openOrders, err := adapter.ListOpenOrders(ctx)
 	if err != nil {
-		result, failErr := s.fail(ctx, account, err)
+		result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_open_orders", err))
 		return result, 0, failErr
 	}
 	localOrders, err := s.Store.ListOrdersForAccount(
@@ -154,12 +171,12 @@ func (s *Service) syncAccountLocked(
 	}
 	positions, err := adapter.ListPositionSnapshots(ctx)
 	if err != nil {
-		result, failErr := s.fail(ctx, account, err)
+		result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_positions", err))
 		return result, 0, failErr
 	}
 	accountSnapshot, err := adapter.GetAccountSnapshot(ctx)
 	if err != nil {
-		result, failErr := s.fail(ctx, account, err)
+		result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "snapshot", err))
 		return result, 0, failErr
 	}
 	maxDifference := maxBalanceDifference(
@@ -184,7 +201,7 @@ func (s *Service) syncAccountLocked(
 	for _, symbol := range symbols {
 		rows, cursor, listErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(symbol), cursors[symbol])
 		if listErr != nil {
-			result, failErr := s.fail(ctx, account, listErr)
+			result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_fills", listErr))
 			return result, maxDifference, failErr
 		}
 		fills = append(fills, rows...)
@@ -212,7 +229,7 @@ func (s *Service) syncAccountLocked(
 		case exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound):
 			continue
 		default:
-			result, failErr := s.fail(ctx, account, lookupErr)
+			result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "get_order", lookupErr))
 			return result, maxDifference, failErr
 		}
 	}
@@ -437,6 +454,9 @@ func (s *Service) resolveUnknownOrders(
 			current.OrderID,
 		)
 		if resolveErr != nil {
+			if ctx.Err() != nil {
+				return result, resolveErr
+			}
 			result.Warnings = append(result.Warnings, resolveErr.Error())
 			continue
 		}
@@ -720,7 +740,7 @@ func (s *Service) ensureOrderForFill(
 	}
 	adapter, err := s.Adapters.Adapter(account.TradingAccountID)
 	if err != nil {
-		return false, err
+		return false, accountDependencyError(account.TradingAccountID, "adapter", err)
 	}
 	var current exchange.Order
 	var lookupErr error
@@ -740,7 +760,7 @@ func (s *Service) ensureOrderForFill(
 	}
 	if lookupErr != nil {
 		if !exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound) {
-			return false, lookupErr
+			return false, accountDependencyError(account.TradingAccountID, "fill_order_lookup", lookupErr)
 		}
 		if syntheticQuantity.Cmp(shared.Zero()) <= 0 {
 			syntheticQuantity = fill.Quantity
@@ -1033,8 +1053,25 @@ func (s *Service) fail(
 	account store.TradingAccountRecord,
 	cause error,
 ) (Result, error) {
-	if setErr := s.setReady(ctx, account, false, cause); setErr != nil {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	if setErr := s.setReady(cleanupCtx, account, false, cause); setErr != nil {
 		return Result{}, errors.Join(cause, setErr)
+	}
+	return Result{}, cause
+}
+
+// A failed refresh must disable stale admission even while another operation
+// owns the account mutex. Only persist readiness; never retry that mutex here.
+func (s *Service) failLock(ctx context.Context, tradingAccountID string, cause error) (Result, error) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	account, err := s.Store.GetTradingAccountByID(cleanupCtx, tradingAccountID)
+	if err != nil {
+		return Result{}, errors.Join(cause, err)
+	}
+	if err := s.setReady(cleanupCtx, account, false, cause); err != nil {
+		return Result{}, errors.Join(cause, err)
 	}
 	return Result{}, cause
 }
@@ -1076,10 +1113,15 @@ func (s *Service) lockLogicalAccountExecution(
 	if err != nil {
 		return nil, err
 	}
-	return s.Store.LockLogicalAccountExecution(
+	unlock, err := s.Store.LockLogicalAccountExecutionContext(
+		ctx,
 		logicalAccount.SpaceID,
 		logicalAccount.LogicalAccountID,
-	), nil
+	)
+	if err != nil {
+		return nil, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "sync_execution_lock", Err: err}
+	}
+	return unlock, nil
 }
 
 func (s *Service) pauseForExternalFact(

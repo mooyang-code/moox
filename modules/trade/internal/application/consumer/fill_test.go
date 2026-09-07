@@ -94,6 +94,59 @@ func spotFill(id string, quantity string) exchange.Fill {
 	}
 }
 
+func TestReducerPersistsSignedFeeAndDeduplicatesRebate(t *testing.T) {
+	s := openFillStore(t, exchange.MarketTypeSpot)
+	seedFillOrder(t, s, exchange.MarketTypeSpot, order.Open, "1", "100")
+	reducer := Reducer{Store: s}
+	fill := spotFill("rebate-1", "0.5")
+	fill.Fee = shared.MustDecimal("-0.01")
+	applied, err := reducer.ApplyFill(context.Background(), fill, fillSource())
+	require.NoError(t, err)
+	require.True(t, applied)
+	applied, err = reducer.ApplyFill(context.Background(), fill, Source{SpaceID: testSpace, TradingAccountID: testAccount, Kind: OriginRESTSnapshot})
+	require.NoError(t, err)
+	require.False(t, applied)
+	fills, total, err := s.ListFills(context.Background(), testSpace, store.FillQuery{TradingAccountID: testAccount, Limit: 10})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, fills, 1)
+	require.Equal(t, "-0.01", fills[0].Fee)
+	fill.Fee = shared.MustDecimal("0.01")
+	_, err = reducer.ApplyFill(context.Background(), fill, fillSource())
+	require.ErrorIs(t, err, store.ErrConflict)
+}
+
+func TestReducerRebateRequiresFeeAsset(t *testing.T) {
+	s := openFillStore(t, exchange.MarketTypeSpot)
+	seedFillOrder(t, s, exchange.MarketTypeSpot, order.Open, "1", "100")
+	reducer := Reducer{Store: s}
+	fill := spotFill("rebate-no-asset", "0.5")
+	fill.Fee, fill.FeeAsset = shared.MustDecimal("-0.01"), ""
+	_, err := reducer.ApplyFill(context.Background(), fill, fillSource())
+	require.ErrorContains(t, err, "fee asset is required")
+}
+
+func TestReducerRejectsCanonicalFillReplayBoundToAnotherOrder(t *testing.T) {
+	ctx := context.Background()
+	s := openFillStore(t, exchange.MarketTypeSpot)
+	first := seedFillOrder(t, s, exchange.MarketTypeSpot, order.Open, "1", "100")
+	reducer := Reducer{Store: s}
+	fill := spotFill("same-exchange-trade", "0.5")
+	applied, err := reducer.ApplyFill(ctx, fill, fillSource())
+	require.NoError(t, err)
+	require.True(t, applied)
+	other := first
+	other.OrderID, other.ClientOrderID, other.ExchangeOrderID, other.OwnerID = "order-2", "client-2", "exchange-order-2", "exchange-order-2"
+	require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error { return tx.CreateOrder(other) }))
+	fill.ClientOrderID, fill.ExchangeOrderID = other.ClientOrderID, other.ExchangeOrderID
+	_, err = reducer.ApplyFill(ctx, fill, Source{SpaceID: testSpace, TradingAccountID: testAccount, Kind: OriginRESTSnapshot})
+	require.ErrorIs(t, err, store.ErrConflict)
+	current, err := s.GetOrder(ctx, testSpace, other.OrderID)
+	require.NoError(t, err)
+	require.Equal(t, "0", current.FilledQuantity)
+	require.Equal(t, other.Version, current.Version)
+}
+
 func TestReducerApplyFillSpotPersistsFillAndReservationOnce(t *testing.T) {
 	s := openFillStore(t, exchange.MarketTypeSpot)
 	seedFillOrder(t, s, exchange.MarketTypeSpot, order.Open, "1", "100")

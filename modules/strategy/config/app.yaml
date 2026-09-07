@@ -1,6 +1,9 @@
 database: ./data/strategy.sqlite
-logical_account_target: ip://127.0.0.1:11200
-logical_account_timeout: 3s
+trade:
+  gateway_url: ""
+  target_node: ""
+  ca_file: ""
+  timeout: 3s
 instance_id: strategy-1
 eventbus:
   urls:

@@ -2,7 +2,7 @@ import axios from "axios";
 import { Message } from "@arco-design/web-vue";
 import { gatewayOrigin } from "@/api/gateway";
 import { isRetInfoSuccess } from "../ret-info";
-import type { RetInfo } from "./types";
+import type { OperatorAction, Order, RetInfo } from "./types";
 import { installSpaceAwareSignedClient } from "../admin/signed-client";
 
 export const tradeServiceMap = {
@@ -15,10 +15,18 @@ const tradeClient = axios.create({
   headers: { "Content-Type": "application/json" }
 });
 
-function assertSuccess(retInfo?: RetInfo) {
+export class TradeResponseError extends Error {
+  constructor(readonly response: { ret_info: RetInfo; action?: OperatorAction; order?: Order }) {
+    super(response.ret_info.msg || `trade request failed: ${response.ret_info.code}`);
+    this.name = "TradeResponseError";
+  }
+}
+
+function assertSuccess(response: { ret_info?: RetInfo }) {
+  const retInfo = response.ret_info;
   if (!retInfo) throw new Error("trade response missing ret_info");
   if (!isRetInfoSuccess(retInfo.code)) {
-    throw new Error(retInfo.msg || `trade request failed: ${retInfo.code}`);
+    throw new TradeResponseError({ ...response, ret_info: retInfo });
   }
 }
 
@@ -28,7 +36,7 @@ export async function callTrade<TReq extends object, TRsp extends { ret_info: Re
   req: TReq
 ): Promise<TRsp> {
   const rsp = await tradeClient.post<TRsp>(`/api/admin/${tradeServiceMap[group]}/${method}`, req);
-  assertSuccess(rsp.data.ret_info);
+  assertSuccess(rsp.data);
   return rsp.data;
 }
 

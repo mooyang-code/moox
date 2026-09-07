@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	strategyStore "github.com/mooyang-code/moox/modules/strategy/internal/store"
@@ -58,6 +59,25 @@ type EventPublisher interface {
 	PublishMessage(context.Context, *eventpb.EventMessage) (*jetstream.PublishAck, error)
 }
 
+// PermanentPublishError identifies an event that can never be accepted by the
+// current protocol (for example corrupt bytes or an unknown event type). The
+// relay quarantines such rows instead of retrying the same prefix forever.
+type PermanentPublishError struct{ Err error }
+
+func (e *PermanentPublishError) Error() string {
+	if e == nil || e.Err == nil {
+		return "permanent strategy event publish error"
+	}
+	return e.Err.Error()
+}
+
+func (e *PermanentPublishError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 func (p *JetStreamPublisher) Publish(ctx context.Context, row domain.OutboxMessage) error {
 	if p == nil || p.Publisher == nil {
 		return errors.New("strategy JetStream publisher is unavailable")
@@ -68,16 +88,25 @@ func (p *JetStreamPublisher) Publish(ctx context.Context, row domain.OutboxMessa
 	}
 	rawMessage := new(eventpb.EventMessage)
 	if err := proto.Unmarshal(row.EventData, rawMessage); err != nil {
-		return err
+		return &PermanentPublishError{Err: err}
 	}
 	message, err := registry.UnmarshalMessage(row.EventData)
 	if err != nil {
-		return err
+		return &PermanentPublishError{Err: err}
 	}
 	if message.GetEventId() != row.MessageID {
-		return errors.New("strategy outbox event_id does not match message_id")
+		return &PermanentPublishError{Err: errors.New("strategy outbox event_id does not match message_id")}
 	}
 	_, err = p.Publisher.PublishMessage(ctx, message)
+	if err != nil {
+		// NATS rejects an over-sized payload locally/server-side and retrying it
+		// cannot succeed without changing the event. Keep ordinary transport
+		// errors retryable, but quarantine this deterministic protocol failure.
+		text := strings.ToLower(err.Error())
+		if strings.Contains(text, "maximum payload") || strings.Contains(text, "message size") {
+			return &PermanentPublishError{Err: err}
+		}
+	}
 	return err
 }
 

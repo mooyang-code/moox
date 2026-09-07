@@ -34,6 +34,8 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 		"t_order_fills",
 		"t_trade_orders",
 		"t_paper_account_configs",
+		"t_paper_balance_projections",
+		"t_paper_asset_balances",
 		"t_account_equity_points",
 		"t_logical_account_equity_points",
 		"t_logical_account_target_receipts",
@@ -41,6 +43,24 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 	}
 	sort.Strings(want)
 	require.Equal(t, want, tables)
+}
+
+func TestEachSQLLoadsIntoEmptyDatabase(t *testing.T) {
+	for name, sql := range map[string]string{
+		"account.sql": accountSQL, "instrument.sql": instrumentSQL,
+		"logical_account.sql": logicalAccountSQL, "paper_account_config.sql": paperAccountConfigSQL,
+		"paper_balance.sql": paperBalanceSQL, "equity.sql": equitySQL,
+		"target_receipt.sql": targetReceiptSQL, "execution.sql": executionSQL,
+	} {
+		t.Run(name, func(t *testing.T) {
+			db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			defer sqlDB.Close()
+			require.NoError(t, db.Exec(sql).Error)
+		})
+	}
 }
 
 func TestAllSQLHasNoRetiredTables(t *testing.T) {
@@ -124,6 +144,8 @@ func TestAllSQLDefinesApprovedIdentityScopes(t *testing.T) {
 		{"t_logical_account_targets", []string{"c_space_id", "c_logical_account_id"}},
 		{"t_logical_account_targets", []string{"c_space_id", "c_target_id"}},
 		{"t_operator_actions", []string{"c_space_id", "c_action_id"}},
+		{"t_paper_balance_projections", []string{"c_space_id", "c_trading_account_id"}},
+		{"t_paper_asset_balances", []string{"c_space_id", "c_trading_account_id", "c_asset"}},
 	}
 	for _, tt := range tests {
 		require.True(t, hasUniqueIndex(t, db, tt.table, tt.columns),

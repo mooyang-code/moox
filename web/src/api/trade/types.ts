@@ -18,6 +18,7 @@ export interface PageResult {
 export type Exchange = 0 | 1 | 2;
 export type MarketType = 0 | 1 | 2;
 export type ExecutionMode = 0 | 1 | 2;
+export type ControlMode = 0 | 1 | 2;
 export type AccountEnvironment = 0 | 1 | 2;
 export type OrderType = 0 | 1 | 2;
 export type FillPolicy = 0 | 1 | 2 | 3;
@@ -90,6 +91,7 @@ export interface LogicalAccount {
   owner_runner_id?: string;
   owner_instance_id?: string;
   owner_session_id?: string;
+  control_mode: ControlMode;
   execution_mode: ExecutionMode;
   market_type: MarketType;
   settlement_asset: string;
@@ -268,6 +270,7 @@ export interface ListTradingAccountsReq {
 
 export interface CreateLogicalAccountReq {
   name: string;
+  control_mode?: ControlMode;
   execution_mode: ExecutionMode;
   market_type: MarketType;
   settlement_asset: string;
@@ -293,6 +296,11 @@ export interface PlaceManualOrderReq {
   quantity: string;
   limit_price?: string;
   reason: string;
+  deadline_at?: string;
+}
+
+export interface SubmitOrderReq extends PlaceManualOrderReq {
+  logical_account_id: string;
 }
 
 export interface ListOrdersReq {
@@ -333,6 +341,7 @@ export interface LogicalAccountResponse {
 
 export interface CreatePaperSimulationReq {
   account_name: string;
+  control_mode?: ControlMode;
   logical_account_name: string;
   exchange: Exchange;
   market_type: MarketType;

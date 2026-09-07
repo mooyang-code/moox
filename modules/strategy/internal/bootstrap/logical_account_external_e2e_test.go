@@ -49,7 +49,8 @@ func TestExternalStrategyClaimsLogicalAccountFromTrade(t *testing.T) {
 		t.Fatalf("create response = %+v", created)
 	}
 	logicalAccountID := created.GetLogicalAccount().GetLogicalAccountId()
-	owner := newLogicalAccountOwnerClient(target, 3*time.Second)
+	// This direct-HTTP fixture checks the old RPC contract, not Gateway wiring.
+	owner := &logicalAccountOwnerClient{client: proxy, timeout: 3 * time.Second}
 	if err = owner.Validate(ctx, "space-e2e", logicalAccountID); err != nil {
 		t.Fatal(err)
 	}

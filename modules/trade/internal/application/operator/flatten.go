@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -39,6 +40,7 @@ type FlattenAccountResult struct {
 	ChildOrderIDs    []string            `json:"child_order_ids,omitempty"`
 	Remaining        []RemainingPosition `json:"remaining_positions,omitempty"`
 	Error            string              `json:"error,omitempty"`
+	cause            error
 }
 
 type FlattenResult struct {
@@ -57,13 +59,12 @@ func (s *Service) FlattenLogicalAccount(
 	if err := s.validate(); err != nil {
 		return FlattenResult{}, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, s.flattenTimeout())
+	defer cancel()
 	requestJSON, err := flattenRequestJSON(command)
 	if err != nil {
 		return FlattenResult{}, err
 	}
-	unlock := s.Store.LockLogicalAccount(command.SpaceID, command.LogicalAccountID)
-	defer unlock()
-
 	expectedAction := store.OperatorActionRecord{
 		SpaceID: command.SpaceID, ActionID: command.ActionID,
 		LogicalAccountID: command.LogicalAccountID,
@@ -73,6 +74,22 @@ func (s *Service) FlattenLogicalAccount(
 	existing, found, err := s.existingAction(ctx, expectedAction)
 	if err != nil {
 		return FlattenResult{}, err
+	}
+	if found && existing.Status == string(operatordomain.StatusCompleted) {
+		return decodeFlattenResult(existing)
+	}
+	unlock, err := s.Store.LockLogicalAccountContext(ctx, command.SpaceID, command.LogicalAccountID)
+	if err != nil {
+		if !found {
+			return FlattenResult{}, err
+		}
+		current, diagnosticErr := s.deferActionLock(ctx, existing, err)
+		return FlattenResult{Action: current}, diagnosticErr
+	}
+	defer unlock()
+	existing, found, err = s.existingAction(ctx, expectedAction)
+	if err != nil {
+		return FlattenResult{Action: existing}, err
 	}
 	if found && existing.Status == string(operatordomain.StatusCompleted) {
 		return decodeFlattenResult(existing)
@@ -100,13 +117,13 @@ func (s *Service) FlattenLogicalAccount(
 		return nil
 	})
 	if err != nil {
-		return FlattenResult{}, err
+		return FlattenResult{Action: action}, err
 	}
 	members, err := s.Store.ListLogicalAccountMembers(
 		ctx, command.SpaceID, command.LogicalAccountID, true,
 	)
 	if err != nil {
-		return FlattenResult{}, err
+		return FlattenResult{Action: action}, err
 	}
 	result := FlattenResult{
 		Action:   action,
@@ -114,6 +131,8 @@ func (s *Service) FlattenLogicalAccount(
 	}
 	deadline := time.Now().Add(s.flattenTimeout())
 	executable := 0
+	var sharedErrors []error
+	retry := false
 	for _, member := range members {
 		accountResult, wasExecutable := s.flattenAccount(
 			ctx, command, member.TradingAccountID, deadline,
@@ -121,19 +140,33 @@ func (s *Service) FlattenLogicalAccount(
 		if wasExecutable {
 			executable++
 		}
+		if accountResult.cause != nil {
+			if accountResult.Error == "" {
+				accountResult.Error = accountResult.cause.Error()
+			}
+			if !submissionBusinessError(accountResult.cause) {
+				retry = true
+				if accountResult.Status == "COMPLETED" {
+					accountResult.Status = "RUNNING"
+				}
+			}
+			if !allSubmissionErrors(accountResult.cause, func(err error) bool { return submissionAccountError(err) || submissionBusinessError(err) }) {
+				sharedErrors = append(sharedErrors, accountResult.cause)
+			}
+		}
 		result.Accounts = append(result.Accounts, accountResult)
 		if err := s.persistFlattenProgress(ctx, &result, "RUNNING"); err != nil {
-			return FlattenResult{}, err
+			return result, errors.Join(errors.Join(sharedErrors...), err)
 		}
 	}
 	status := flattenStatus(result.Accounts, executable)
-	if err := s.persistFlattenProgress(ctx, &result, status); err != nil {
-		return FlattenResult{}, err
+	if retry {
+		status = "RUNNING"
 	}
-	result.Action, err = s.Store.GetOperatorAction(
-		ctx, command.SpaceID, command.ActionID,
-	)
-	return result, err
+	if err := s.persistFlattenProgress(ctx, &result, status); err != nil {
+		return result, errors.Join(errors.Join(sharedErrors...), err)
+	}
+	return result, errors.Join(sharedErrors...)
 }
 
 func flattenRequestJSON(command FlattenCommand) (string, error) {
@@ -160,9 +193,14 @@ func (s *Service) flattenAccount(
 	recoveryCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	ctx = recoveryCtx
+	if err := ctx.Err(); err != nil {
+		result.addError(&orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_budget", Err: err})
+		return result, false
+	}
 	if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 		result.Status = "FAILED"
 		result.Error = err.Error()
+		result.cause = err
 		return result, false
 	}
 	if err := s.cancelAccountOrders(
@@ -173,16 +211,18 @@ func (s *Service) flattenAccount(
 	); err != nil {
 		result.Status = "PARTIAL"
 		result.Error = err.Error()
+		result.cause = err
 		result.Remaining = s.remainingForAccount(
-			ctx, command.SpaceID, tradingAccountID, nil,
+			ctx, command.SpaceID, tradingAccountID, nil, &result,
 		)
 		return result, false
 	}
 	if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 		result.Status = "PARTIAL"
 		result.Error = err.Error()
+		result.cause = err
 		result.Remaining = s.remainingForAccount(
-			ctx, command.SpaceID, tradingAccountID, nil,
+			ctx, command.SpaceID, tradingAccountID, nil, &result,
 		)
 		return result, false
 	}
@@ -191,9 +231,15 @@ func (s *Service) flattenAccount(
 	); err != nil {
 		result.Status = "PARTIAL"
 		result.Error = err.Error()
+		result.cause = err
 		result.Remaining = s.remainingForAccount(
-			ctx, command.SpaceID, tradingAccountID, nil,
+			ctx, command.SpaceID, tradingAccountID, nil, &result,
 		)
+		return result, false
+	}
+	if err := s.recoverFlattenChildren(ctx, command, tradingAccountID, &result); err != nil {
+		result.addError(err)
+		result.Remaining = s.remainingForAccount(ctx, command.SpaceID, tradingAccountID, nil, &result)
 		return result, false
 	}
 	account, err := s.Store.GetTradingAccount(
@@ -202,36 +248,46 @@ func (s *Service) flattenAccount(
 	if err != nil {
 		result.Status = "PARTIAL"
 		result.Error = err.Error()
+		result.cause = err
 		return result, false
 	}
 	attempts := s.flattenAttempts()
 	for attempt := 0; attempt < attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			result.addError(&orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_budget", Err: err})
+			break
+		}
 		if attempt > 0 && !time.Now().Before(deadline) {
 			break
 		}
 		if attempt > 0 {
 			if err := s.waitFlattenRetry(ctx); err != nil {
 				result.Error = err.Error()
+				result.cause = errors.Join(result.cause, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_wait", Err: err})
 				break
 			}
 			if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 				result.Error = err.Error()
+				result.cause = errors.Join(result.cause, err)
 				break
 			}
 			if err := s.cancelAccountOrders(
 				ctx, command.SpaceID, tradingAccountID, command.ActionID,
 			); err != nil {
 				result.Error = err.Error()
+				result.cause = errors.Join(result.cause, err)
 				break
 			}
 			if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 				result.Error = err.Error()
+				result.cause = errors.Join(result.cause, err)
 				break
 			}
 			if err := s.confirmAccountCancellations(
 				ctx, command.SpaceID, tradingAccountID, command.ActionID,
 			); err != nil {
 				result.Error = err.Error()
+				result.cause = errors.Join(result.cause, err)
 				break
 			}
 			account, err = s.Store.GetTradingAccount(
@@ -239,6 +295,7 @@ func (s *Service) flattenAccount(
 			)
 			if err != nil {
 				result.Error = err.Error()
+				result.cause = errors.Join(result.cause, err)
 				break
 			}
 		}
@@ -252,19 +309,72 @@ func (s *Service) flattenAccount(
 		default:
 			result.Error = "unsupported market type " + account.MarketType
 		}
+		if ctx.Err() != nil {
+			result.addError(&orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_deadline", Err: ctx.Err()})
+			break
+		}
 		if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 			result.Error = joinError(result.Error, err.Error())
+			result.cause = errors.Join(result.cause, err)
 		}
 		result.Remaining = s.remainingForAccount(
-			ctx, command.SpaceID, tradingAccountID, reasons,
+			ctx, command.SpaceID, tradingAccountID, reasons, &result,
 		)
+		if err := s.confirmFlattenChildren(ctx, command, tradingAccountID, &result); err != nil {
+			result.addError(err)
+		}
 		if result.Error == "" && len(result.Remaining) == 0 {
+			if submissionAccountError(result.cause) {
+				result.cause = nil
+			}
 			result.Status = "COMPLETED"
 			return result, true
 		}
 	}
 	result.Status = "PARTIAL"
 	return result, true
+}
+
+func (s *Service) recoverFlattenChildren(ctx context.Context, command FlattenCommand, accountID string, result *FlattenAccountResult) error {
+	orders, err := s.Store.ListOrdersForAccount(ctx, command.SpaceID, accountID, 1)
+	if err != nil {
+		return err
+	}
+	for _, child := range orders {
+		if child.OwnerType != string(orderdomain.OwnerOperator) || child.OwnerID != command.ActionID || orderdomain.State(child.State).Terminal() {
+			continue
+		}
+		result.ChildOrderIDs = appendUnique(result.ChildOrderIDs, child.OrderID)
+		switch orderdomain.State(child.State) {
+		case orderdomain.Pending:
+			_, err = s.Orders.Submit(ctx, command.SpaceID, child.OrderID)
+		case orderdomain.Submitting, orderdomain.SubmitUnknown:
+			_, err = s.Orders.ResolveUnknown(ctx, command.SpaceID, child.OrderID)
+		case orderdomain.Canceling, orderdomain.CancelUnknown:
+			_, err = s.Orders.RecoverCancel(ctx, command.SpaceID, child.OrderID)
+		}
+		if err != nil {
+			return err
+		}
+		if ctx.Err() != nil {
+			return &orderapp.AccountExecutionError{TradingAccountID: accountID, Operation: "flatten_recovery", Err: ctx.Err()}
+		}
+	}
+	return s.confirmFlattenChildren(ctx, command, accountID, result)
+}
+
+func (s *Service) confirmFlattenChildren(ctx context.Context, command FlattenCommand, accountID string, result *FlattenAccountResult) error {
+	orders, err := s.Store.ListOrdersForAccount(ctx, command.SpaceID, accountID, 1)
+	if err != nil {
+		return err
+	}
+	for _, child := range orders {
+		if child.OwnerType == string(orderdomain.OwnerOperator) && child.OwnerID == command.ActionID && !orderdomain.State(child.State).Terminal() {
+			result.ChildOrderIDs = appendUnique(result.ChildOrderIDs, child.OrderID)
+			return &orderapp.AccountExecutionError{TradingAccountID: accountID, Operation: "flatten_confirmation", Err: fmt.Errorf("flatten child %s remains %s", child.OrderID, child.State)}
+		}
+	}
+	return nil
 }
 
 func (s *Service) cancelAccountOrders(
@@ -336,12 +446,12 @@ func (s *Service) flattenSwap(
 		ctx, command.SpaceID, account.TradingAccountID, "",
 	)
 	if err != nil {
-		result.Error = joinError(result.Error, err.Error())
+		result.addError(err)
 		return
 	}
 	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 	if err != nil {
-		result.Error = joinError(result.Error, err.Error())
+		result.addError(err)
 		return
 	}
 	bySymbol := make(map[string]store.InstrumentRecord, len(instruments))
@@ -353,7 +463,7 @@ func (s *Service) flattenSwap(
 	for _, position := range positions {
 		quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
 		if parseErr != nil {
-			result.Error = joinError(result.Error, parseErr.Error())
+			result.addError(parseErr)
 			continue
 		}
 		if quantity.IsZero() {
@@ -376,6 +486,7 @@ func (s *Service) flattenSwap(
 			ctx, command, account, instrument, side, quantity.Abs(), result,
 		); err != nil {
 			reasons[position.ExchangeSymbol] = err.Error()
+			result.addError(err)
 		}
 	}
 }
@@ -389,7 +500,7 @@ func (s *Service) flattenSpot(
 ) {
 	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 	if err != nil {
-		result.Error = joinError(result.Error, err.Error())
+		result.addError(err)
 		return
 	}
 	byAsset := make(map[string]store.InstrumentRecord)
@@ -409,7 +520,7 @@ func (s *Service) flattenSpot(
 		}
 		total, err := decimalOrZero(balance.Total)
 		if err != nil {
-			result.Error = joinError(result.Error, err.Error())
+			result.addError(err)
 			continue
 		}
 		if total.Cmp(shared.Zero()) <= 0 {
@@ -422,12 +533,13 @@ func (s *Service) flattenSpot(
 		}
 		available, err := decimalOrZero(balance.Available)
 		if err != nil {
-			result.Error = joinError(result.Error, err.Error())
+			result.addError(err)
 			continue
 		}
 		step, _, ruleErr := baseQuantityRules(instrument)
 		if ruleErr != nil {
 			reasons["asset:"+balance.Asset] = ruleErr.Error()
+			result.addError(ruleErr)
 			continue
 		}
 		quantity := floorToStep(available, step)
@@ -440,11 +552,13 @@ func (s *Service) flattenSpot(
 		)
 		if quoteErr != nil {
 			reasons["asset:"+balance.Asset] = quoteErr.Error()
+			result.addError(&orderapp.AccountExecutionError{TradingAccountID: account.TradingAccountID, Operation: "flatten_quote", Err: quoteErr})
 			continue
 		}
 		minNotional, parseErr := decimalOrZero(instrument.MinNotional)
 		if parseErr != nil {
 			reasons["asset:"+balance.Asset] = parseErr.Error()
+			result.addError(parseErr)
 			continue
 		}
 		if minNotional.Cmp(shared.Zero()) > 0 &&
@@ -457,6 +571,7 @@ func (s *Service) flattenSpot(
 			exchange.SideSell, quantity, quote, result,
 		); err != nil {
 			reasons["asset:"+balance.Asset] = err.Error()
+			result.addError(err)
 		}
 	}
 }
@@ -474,7 +589,7 @@ func (s *Service) placeOrContinueFlattenChild(
 		ctx, account.TradingAccountID, instrument.ExchangeSymbol,
 	)
 	if err != nil {
-		return err
+		return &orderapp.AccountExecutionError{TradingAccountID: account.TradingAccountID, Operation: "flatten_quote", Err: err}
 	}
 	return s.placeOrContinueFlattenChildWithQuote(
 		ctx, command, account, instrument, side, quantity, quote, result,
@@ -521,7 +636,7 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 			return err
 		case orderdomain.Rejected, orderdomain.Canceled,
 			orderdomain.PartiallyCanceled, orderdomain.Expired:
-			return fmt.Errorf("existing flatten child ended %s", existing.State)
+			return manualFailureError{message: fmt.Sprintf("existing flatten child ended %s", existing.State), cause: ErrInvalidCommand}
 		default:
 			return nil
 		}
@@ -600,9 +715,13 @@ func (s *Service) remainingForAccount(
 	spaceID string,
 	tradingAccountID string,
 	reasons map[string]string,
+	result *FlattenAccountResult,
 ) []RemainingPosition {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	account, err := s.Store.GetTradingAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
+		result.addError(err)
 		return []RemainingPosition{{
 			Quantity: "unknown", Reason: err.Error(),
 		}}
@@ -613,13 +732,18 @@ func (s *Service) remainingForAccount(
 			ctx, spaceID, tradingAccountID, "",
 		)
 		if listErr != nil {
+			result.addError(listErr)
 			return []RemainingPosition{{
 				Quantity: "unknown", Reason: listErr.Error(),
 			}}
 		}
 		for _, position := range positions {
 			quantity, parseErr := decimalOrZero(position.SignedQuantity)
-			if parseErr != nil || quantity.IsZero() {
+			if parseErr != nil {
+				result.addError(parseErr)
+				continue
+			}
+			if quantity.IsZero() {
 				continue
 			}
 			reason := reasonFor(reasons, position.ExchangeSymbol, "position remains after final sync")
@@ -637,7 +761,11 @@ func (s *Service) remainingForAccount(
 				continue
 			}
 			quantity, parseErr := decimalOrZero(balance.Total)
-			if parseErr != nil || quantity.Cmp(shared.Zero()) <= 0 {
+			if parseErr != nil {
+				result.addError(parseErr)
+				continue
+			}
+			if quantity.Cmp(shared.Zero()) <= 0 {
 				continue
 			}
 			reason := reasonFor(
@@ -655,11 +783,18 @@ func (s *Service) remainingForAccount(
 	return remaining
 }
 
+func (r *FlattenAccountResult) addError(err error) {
+	r.Error = joinError(r.Error, err.Error())
+	r.cause = errors.Join(r.cause, err)
+}
+
 func (s *Service) persistFlattenProgress(
 	ctx context.Context,
 	result *FlattenResult,
 	status string,
 ) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	data, err := json.Marshal(struct {
 		Accounts []FlattenAccountResult `json:"accounts"`
 	}{Accounts: result.Accounts})
@@ -667,18 +802,23 @@ func (s *Service) persistFlattenProgress(
 		return err
 	}
 	raw := string(data)
-	result.Action.Status = status
-	result.Action.ResultJSON = &raw
-	result.Action.LastError = ""
+	action := result.Action
+	action.Status = status
+	action.ResultJSON = &raw
+	action.LastError = ""
 	for _, account := range result.Accounts {
 		if account.Error != "" {
-			result.Action.LastError = joinError(
-				result.Action.LastError,
+			action.LastError = joinError(
+				action.LastError,
 				account.TradingAccountID+": "+account.Error,
 			)
 		}
 	}
-	return s.updateAction(ctx, result.Action)
+	if err := s.updateAction(ctx, action); err != nil {
+		return err
+	}
+	result.Action = action
+	return nil
 }
 
 func decodeFlattenResult(action store.OperatorActionRecord) (FlattenResult, error) {

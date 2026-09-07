@@ -99,6 +99,8 @@ type TradeConsoleServiceService interface {
 
 	PlaceManualOrder(ctx context.Context, req *PlaceManualOrderReq) (*PlaceManualOrderRsp, error)
 
+	SubmitOrder(ctx context.Context, req *SubmitOrderReq) (*SubmitOrderRsp, error)
+
 	CancelOrder(ctx context.Context, req *CancelOrderReq) (*CancelOrderRsp, error)
 
 	GetOperatorAction(ctx context.Context, req *GetOperatorActionReq) (*GetOperatorActionRsp, error)
@@ -466,6 +468,24 @@ func TradeConsoleServiceService_PlaceManualOrder_Handler(svr interface{}, ctx co
 	return rsp, nil
 }
 
+func TradeConsoleServiceService_SubmitOrder_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SubmitOrderReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).SubmitOrder(ctx, reqbody.(*SubmitOrderReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func TradeConsoleServiceService_CancelOrder_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &CancelOrderReq{}
 	filters, err := f(req)
@@ -764,6 +784,10 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_PlaceManualOrder_Handler,
 		},
 		{
+			Name: "/trpc.moox.trade.TradeConsoleService/SubmitOrder",
+			Func: TradeConsoleServiceService_SubmitOrder_Handler,
+		},
+		{
 			Name: "/trpc.moox.trade.TradeConsoleService/CancelOrder",
 			Func: TradeConsoleServiceService_CancelOrder_Handler,
 		},
@@ -888,6 +912,9 @@ func (s *UnimplementedTradeConsoleService) FlattenLogicalAccount(ctx context.Con
 func (s *UnimplementedTradeConsoleService) PlaceManualOrder(ctx context.Context, req *PlaceManualOrderReq) (*PlaceManualOrderRsp, error) {
 	return nil, errors.New("rpc PlaceManualOrder of service TradeConsoleService is not implemented")
 }
+func (s *UnimplementedTradeConsoleService) SubmitOrder(ctx context.Context, req *SubmitOrderReq) (*SubmitOrderRsp, error) {
+	return nil, errors.New("rpc SubmitOrder of service TradeConsoleService is not implemented")
+}
 func (s *UnimplementedTradeConsoleService) CancelOrder(ctx context.Context, req *CancelOrderReq) (*CancelOrderRsp, error) {
 	return nil, errors.New("rpc CancelOrder of service TradeConsoleService is not implemented")
 }
@@ -1004,6 +1031,8 @@ type TradeConsoleServiceClientProxy interface {
 	FlattenLogicalAccount(ctx context.Context, req *FlattenLogicalAccountReq, opts ...client.Option) (rsp *FlattenLogicalAccountRsp, err error)
 
 	PlaceManualOrder(ctx context.Context, req *PlaceManualOrderReq, opts ...client.Option) (rsp *PlaceManualOrderRsp, err error)
+
+	SubmitOrder(ctx context.Context, req *SubmitOrderReq, opts ...client.Option) (rsp *SubmitOrderRsp, err error)
 
 	CancelOrder(ctx context.Context, req *CancelOrderReq, opts ...client.Option) (rsp *CancelOrderRsp, err error)
 
@@ -1413,6 +1442,26 @@ func (c *TradeConsoleServiceClientProxyImpl) PlaceManualOrder(ctx context.Contex
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &PlaceManualOrderRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) SubmitOrder(ctx context.Context, req *SubmitOrderReq, opts ...client.Option) (*SubmitOrderRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/SubmitOrder")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("SubmitOrder")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SubmitOrderRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

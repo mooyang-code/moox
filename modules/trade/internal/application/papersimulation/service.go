@@ -13,6 +13,7 @@ import (
 )
 
 type CreateCommand struct {
+	ControlMode        string
 	SpaceID            string
 	AccountName        string
 	LogicalAccountName string
@@ -86,9 +87,13 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 		},
 	}
 	logical := store.LogicalAccountRecord{
-		SpaceID: command.SpaceID, LogicalAccountID: logicalID, Name: command.LogicalAccountName,
+		ControlMode: command.ControlMode,
+		SpaceID:     command.SpaceID, LogicalAccountID: logicalID, Name: command.LogicalAccountName,
 		ExecutionMode: "PAPER", MarketType: string(command.MarketType), SettlementAsset: command.SettlementAsset,
 		AutomationState: "PAUSED", PauseReason: "paper simulation created",
+	}
+	if logical.ControlMode == "" {
+		logical.ControlMode = "STRATEGY"
 	}
 	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(account); err != nil {

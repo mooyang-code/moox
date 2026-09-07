@@ -3,6 +3,7 @@ package order
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
@@ -75,7 +76,10 @@ func (s *Service) Place(
 		spec.ClientOrderID = xid.New().String()
 		spec.ClientOrderSpec.ClientOrderID = spec.ClientOrderID
 	}
-	unlock := s.Store.LockTradingAccount(spec.TradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, spec.TradingAccountID)
+	if err != nil {
+		return orderdomain.Order{}, accountExecutionError(spec.TradingAccountID, "place_lock", err)
+	}
 	defer unlock()
 	if existing, err := s.Store.GetOrderByClientID(
 		ctx,
@@ -90,11 +94,11 @@ func (s *Service) Place(
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return orderdomain.Order{}, err
 	}
-	spec, err := s.deriveReducePositionOnly(ctx, spec)
+	spec, err = s.deriveReducePositionOnly(ctx, spec)
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	validation, err := s.Validator.Validate(ctx, spaceID, spec)
+	validation, err := s.Validator.validate(ctx, spaceID, spec, true)
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
@@ -102,36 +106,20 @@ func (s *Service) Place(
 	// side-executable quote, not a Last-only reference. Revalidate once with the
 	// fresh bid/ask so the reservation and matcher consume the same price.
 	if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
-		if s.Adapters == nil {
-			return orderdomain.Order{}, ErrServiceConfig
+		spec, err = s.paperReference(ctx, spec, validation)
+		if err != nil {
+			return orderdomain.Order{}, err
 		}
-		adapter, adapterErr := s.Adapters.Adapter(spec.TradingAccountID)
-		if adapterErr != nil {
-			return orderdomain.Order{}, adapterErr
-		}
-		marketData, ok := adapter.(execution.MarketDataSource)
-		if !ok {
-			return orderdomain.Order{}, errors.New("trade order: paper market data source is unavailable")
-		}
-		quote, quoteErr := marketData.GetQuote(ctx, shared.ExchangeSymbol(validation.Instrument.ExchangeSymbol))
-		if quoteErr != nil {
-			return orderdomain.Order{}, quoteErr
-		}
-		if !paperQuoteFresh(quote, s.now(), 10*time.Second) {
-			return orderdomain.Order{}, errors.New("trade order: paper quote is stale")
-		}
-		executable, executableErr := paperExecutablePrice(spec.Side, quote)
-		if executableErr != nil {
-			return orderdomain.Order{}, executableErr
-		}
-		spec.ReferencePrice = executable
-		spec.ReferencePriceAt = quote.SourceTime
-		validation, err = s.Validator.Validate(ctx, spaceID, spec)
+		validation, err = s.Validator.validate(ctx, spaceID, spec, true)
 		if err != nil {
 			return orderdomain.Order{}, err
 		}
 	}
 
+	marginAdjustment, err := s.paperMarginAdjustment(ctx, validation)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
 	id := s.orderID()
 	aggregate, _, err := orderdomain.New(shared.OrderID(id), spec)
 	if err != nil {
@@ -169,24 +157,17 @@ func (s *Service) Place(
 			}
 		}
 		if !validation.ReservedQuantity.IsZero() {
-			unreflected, err := tx.GetUnreflectedReservation(
-				validation.Account.SpaceID,
-				spec.TradingAccountID,
-				validation.ReservedAsset,
-				validation.Account.LastSyncAt.UnixMilli(),
-			)
+			if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
+				if err := checkPaperFunds(tx, validation, marginAdjustment, validation.ReservedQuantity, "", ""); err != nil {
+					return err
+				}
+				return tx.CreateOrder(record)
+			}
+			available, err := availableReservationFunds(tx, validation, marginAdjustment)
 			if err != nil {
 				return err
 			}
-			available := availableBalance(
-				validation.Account.Snapshot,
-				validation.ReservedAsset,
-			)
-			if validation.Account.MarketType == exchange.MarketTypeSwap {
-				available = validation.Account.Snapshot.AvailableFunds
-			}
-			required := unreflected.Add(validation.ReservedQuantity)
-			if available.Cmp(required) < 0 {
+			if available.Cmp(validation.ReservedQuantity) < 0 {
 				return ErrInsufficientFunds
 			}
 		}
@@ -304,7 +285,10 @@ func (s *Service) Submit(
 		}
 		defer unlockExecution()
 
-		unlockAccount := s.Store.LockTradingAccount(record.TradingAccountID)
+		unlockAccount, lockErr := s.Store.LockTradingAccountContext(ctx, record.TradingAccountID)
+		if lockErr != nil {
+			return &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "submit_lock", Err: lockErr}
+		}
 		defer unlockAccount()
 		currentRecord, getErr := s.Store.GetOrder(ctx, spaceID, orderID)
 		if getErr != nil {
@@ -332,9 +316,19 @@ func (s *Service) Submit(
 		}
 		return domainErr
 	}()
+	if result.State == orderdomain.Rejected && exchange.IsKind(err, exchange.ErrorInsufficientBalance) && s.Syncer != nil {
+		// A definitive balance rejection invalidates the local capacity estimate.
+		// Refresh outside execution locks; the next convergence may choose another
+		// member, but this call must not submit a second child or mask the rejection.
+		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		return result, errors.Join(err, s.Syncer.SyncAccount(refreshCtx, record.TradingAccountID))
+	}
 	if err != nil || !synchronize || s.Syncer == nil {
 		return result, err
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
 	if err := s.Syncer.SyncAccount(ctx, record.TradingAccountID); err != nil {
 		return result, err
 	}
@@ -342,6 +336,34 @@ func (s *Service) Submit(
 }
 
 func (s *Service) rejectTargetExternalConflict(
+	ctx context.Context,
+	record store.OrderRecord,
+) error {
+	if err := s.authorizeTargetSubmit(ctx, record); err != nil {
+		return err
+	}
+	if record.OwnerType != string(orderdomain.OwnerTarget) ||
+		record.LogicalAccountID == "" {
+		return nil
+	}
+	records, _, err := s.Store.ListOrders(ctx, record.SpaceID, store.OrderQuery{
+		LogicalAccountID: record.LogicalAccountID,
+		OnlyOpen:         true,
+		Limit:            1000,
+	})
+	if err != nil {
+		return err
+	}
+	for _, current := range records {
+		if current.OrderID != record.OrderID &&
+			current.OwnerType == string(orderdomain.OwnerExternal) {
+			return ErrExternalConflict
+		}
+	}
+	return nil
+}
+
+func (s *Service) authorizeTargetSubmit(
 	ctx context.Context,
 	record store.OrderRecord,
 ) error {
@@ -366,6 +388,9 @@ func (s *Service) rejectTargetExternalConflict(
 	)
 	if err != nil {
 		return err
+	}
+	if logicalAccount.ControlMode != "STRATEGY" {
+		return ErrTargetOwnerConflict
 	}
 	if logicalAccount.AutomationState != "ACTIVE" {
 		return ErrAutomationPaused
@@ -397,23 +422,9 @@ func (s *Service) rejectTargetExternalConflict(
 		if logicalAccount.OwnerInstanceID != currentTarget.InstanceID || logicalAccount.OwnerSessionID != currentTarget.SessionID {
 			return ErrTargetOwnerConflict
 		}
-		now := time.Now().UTC().UnixMilli()
+		now := s.now().UTC().UnixMilli()
 		if now < currentTarget.EffectiveAt || now >= currentTarget.ValidUntil {
 			return ErrTargetExpired
-		}
-	}
-	records, _, err := s.Store.ListOrders(ctx, record.SpaceID, store.OrderQuery{
-		LogicalAccountID: record.LogicalAccountID,
-		OnlyOpen:         true,
-		Limit:            1000,
-	})
-	if err != nil {
-		return err
-	}
-	for _, current := range records {
-		if current.OrderID != record.OrderID &&
-			current.OwnerType == string(orderdomain.OwnerExternal) {
-			return ErrExternalConflict
 		}
 	}
 	return nil
@@ -433,7 +444,7 @@ func (s *Service) Cancel(
 	}
 	adapter, err := s.Adapters.Adapter(record.TradingAccountID)
 	if err != nil {
-		return orderdomain.Order{}, err
+		return orderdomain.Order{}, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
 	aggregate, err := domainOrder(record)
 	if err != nil {
@@ -451,6 +462,9 @@ func (s *Service) Cancel(
 	}
 
 	response, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer persistCancel()
+	ctx = persistCtx
 	if callErr == nil {
 		account, accountErr := s.Store.GetTradingAccountByID(ctx, record.TradingAccountID)
 		if accountErr != nil {
@@ -472,13 +486,18 @@ func (s *Service) Cancel(
 		return aggregate, err
 	}
 
-	latest, getErr := s.Store.GetOrder(ctx, spaceID, orderID)
+	latest, getErr := s.Store.GetOrder(persistCtx, spaceID, orderID)
 	if getErr != nil {
 		return orderdomain.Order{}, getErr
 	}
 	current, getErr := domainOrder(latest)
 	if getErr != nil {
 		return orderdomain.Order{}, getErr
+	}
+	// A private execution update can settle the order while CancelOrder is in
+	// flight. The persisted terminal state is authoritative over its late error.
+	if current.State.Terminal() {
+		return current, nil
 	}
 	expected = current.Version
 	if uncertainExchangeError(callErr) {
@@ -490,12 +509,12 @@ func (s *Service) Cancel(
 		return orderdomain.Order{}, err
 	}
 	applyAggregate(&latest, current)
-	if err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+	if err = s.Store.Transaction(persistCtx, func(tx *store.Tx) error {
 		return tx.UpdateOrder(latest, expected)
 	}); err != nil {
-		return orderdomain.Order{}, err
+		return s.cancelUpdateError(persistCtx, spaceID, orderID, err)
 	}
-	return current, callErr
+	return current, accountExecutionError(record.TradingAccountID, "cancel", callErr)
 }
 
 func (s *Service) RecoverCancel(
@@ -503,6 +522,8 @@ func (s *Service) RecoverCancel(
 	spaceID string,
 	orderID string,
 ) (orderdomain.Order, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	if s == nil || s.Store == nil || s.Adapters == nil || s.Syncer == nil {
 		return orderdomain.Order{}, ErrServiceConfig
 	}
@@ -520,38 +541,75 @@ func (s *Service) RecoverCancel(
 	}
 	adapter, err := s.Adapters.Adapter(record.TradingAccountID)
 	if err != nil {
-		return current, err
+		return current, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
-	_, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
-	if callErr == nil {
+	found, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
+	if lookupErr != nil {
+		return current, accountExecutionError(record.TradingAccountID, "cancel_lookup", lookupErr)
+	}
+	if found.Status != exchange.OrderStatusOpen && found.Status != exchange.OrderStatusPartiallyFilled {
+		// Only the sync/reducer pipeline can import fills and release resources.
+		// A terminal lookup suppresses another cancel even while those facts lag.
+		if err := ctx.Err(); err != nil {
+			return current, accountExecutionError(record.TradingAccountID, "cancel_sync", err)
+		}
 		if err := s.Syncer.SyncAccount(ctx, record.TradingAccountID); err != nil {
 			return current, err
 		}
-		return s.Get(ctx, spaceID, orderID)
+		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		return s.Get(readCtx, spaceID, orderID)
+	}
+	latest, err := s.Get(ctx, spaceID, orderID)
+	if err != nil {
+		return current, err
+	}
+	if latest.State.Terminal() {
+		return latest, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return latest, accountExecutionError(record.TradingAccountID, "cancel_lookup", err)
+	}
+	ioCtx := ctx
+	_, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer persistCancel()
+	if callErr == nil {
+		if err := ioCtx.Err(); err != nil {
+			return current, accountExecutionError(record.TradingAccountID, "cancel_sync", err)
+		}
+		if err := s.Syncer.SyncAccount(ioCtx, record.TradingAccountID); err != nil {
+			return current, err
+		}
+		return s.Get(persistCtx, spaceID, orderID)
 	}
 	if !uncertainExchangeError(callErr) {
-		if syncErr := s.Syncer.SyncAccount(ctx, record.TradingAccountID); syncErr == nil {
-			latest, getErr := s.Get(ctx, spaceID, orderID)
-			if getErr == nil {
-				if latest.State.Terminal() ||
-					(latest.State != orderdomain.Canceling &&
-						latest.State != orderdomain.CancelUnknown) {
-					return latest, nil
-				}
-				current = latest
-				record, getErr = s.Store.GetOrder(ctx, spaceID, orderID)
-				if getErr != nil {
-					return orderdomain.Order{}, getErr
-				}
-			}
+		if err := ioCtx.Err(); err != nil {
+			return current, errors.Join(accountExecutionError(record.TradingAccountID, "cancel", callErr), accountExecutionError(record.TradingAccountID, "cancel_sync", err))
 		}
+		if err := s.Syncer.SyncAccount(ioCtx, record.TradingAccountID); err != nil {
+			return current, errors.Join(accountExecutionError(record.TradingAccountID, "cancel", callErr), err)
+		}
+	}
+	// Even an uncertain response can arrive after a private terminal update.
+	record, err = s.Store.GetOrder(persistCtx, spaceID, orderID)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	current, err = domainOrder(record)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	if current.State.Terminal() ||
+		(current.State != orderdomain.Canceling && current.State != orderdomain.CancelUnknown) {
+		return current, nil
 	}
 	expected := current.Version
 	switch {
 	case uncertainExchangeError(callErr) && current.State == orderdomain.Canceling:
 		_, err = current.MarkCancelUnknown()
 	case uncertainExchangeError(callErr):
-		return current, callErr
+		return current, accountExecutionError(record.TradingAccountID, "cancel", callErr)
 	case current.State == orderdomain.Canceling:
 		_, err = current.CancelRejected()
 	default:
@@ -561,12 +619,25 @@ func (s *Service) RecoverCancel(
 		return current, err
 	}
 	applyAggregate(&record, current)
-	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+	if err := s.Store.Transaction(persistCtx, func(tx *store.Tx) error {
 		return tx.UpdateOrder(record, expected)
 	}); err != nil {
-		return orderdomain.Order{}, err
+		return s.cancelUpdateError(persistCtx, spaceID, orderID, err)
 	}
-	return current, callErr
+	return current, accountExecutionError(record.TradingAccountID, "cancel", callErr)
+}
+
+func (s *Service) cancelUpdateError(ctx context.Context, spaceID, orderID string, updateErr error) (orderdomain.Order, error) {
+	if errors.Is(updateErr, store.ErrConflict) {
+		latest, err := s.Get(ctx, spaceID, orderID)
+		if err != nil {
+			return orderdomain.Order{}, err
+		}
+		if latest.State.Terminal() {
+			return latest, nil
+		}
+	}
+	return orderdomain.Order{}, updateErr
 }
 
 func (s *Service) DiscardPending(
@@ -581,7 +652,10 @@ func (s *Service) DiscardPending(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	unlock := s.Store.LockTradingAccount(record.TradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, record.TradingAccountID)
+	if err != nil {
+		return orderdomain.Order{}, &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "discard_pending_lock", Err: err}
+	}
 	defer unlock()
 	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
 	if err != nil {
@@ -618,7 +692,10 @@ func (s *Service) ResolveUnknown(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	unlock := s.Store.LockTradingAccount(record.TradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, record.TradingAccountID)
+	if err != nil {
+		return orderdomain.Order{}, &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "resolve_unknown_lock", Err: err}
+	}
 	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
 	if err != nil {
 		unlock()
@@ -664,18 +741,18 @@ func (s *Service) resolveUnknown(
 	}
 	adapter, err := s.Adapters.Adapter(record.TradingAccountID)
 	if err != nil {
-		return current, err
+		return current, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
 	found, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
 	if lookupErr == nil {
 		return s.resolveUnknownFound(ctx, record, current, found.ExchangeOrderID)
 	}
 	if !exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound) {
-		return current, lookupErr
+		return current, accountExecutionError(record.TradingAccountID, "get_order", lookupErr)
 	}
 	fills, _, fillsErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), "")
 	if fillsErr != nil {
-		return current, fillsErr
+		return current, accountExecutionError(record.TradingAccountID, "list_fills", fillsErr)
 	}
 	exchangeOrderID := ""
 	for _, fill := range fills {
@@ -757,7 +834,33 @@ func (s *Service) submit(
 		validator.Now = func() time.Time { return now }
 		validator.MaxReferenceAge = now.Sub(aggregate.Spec.ReferencePriceAt) + time.Second
 	}
-	validation, err := validator.Validate(ctx, record.SpaceID, aggregate.Spec)
+	validation, err := validator.validate(ctx, record.SpaceID, aggregate.Spec, true)
+	refreshedReference := false
+	if errors.Is(err, orderdomain.ErrReferencePriceStale) && record.SubmittedAt == 0 &&
+		aggregate.Spec.Owner.Type == orderdomain.OwnerOperator {
+		adapter, adapterErr := s.Adapters.Adapter(record.TradingAccountID)
+		if adapterErr != nil {
+			return aggregate, false, accountExecutionError(record.TradingAccountID, "adapter", adapterErr)
+		}
+		marketData, ok := adapter.(execution.MarketDataSource)
+		if !ok {
+			return aggregate, false, accountExecutionError(record.TradingAccountID, "quote", err)
+		}
+		quote, quoteErr := marketData.GetQuote(ctx, shared.ExchangeSymbol(record.ExchangeSymbol))
+		if quoteErr != nil {
+			return aggregate, false, accountExecutionError(record.TradingAccountID, "quote", quoteErr)
+		}
+		if !paperQuoteFresh(quote, s.now(), validator.MaxReferenceAge) {
+			return aggregate, false, accountExecutionError(record.TradingAccountID, "quote", orderdomain.ErrReferencePriceStale)
+		}
+		price, priceErr := paperExecutablePrice(aggregate.Spec.Side, quote)
+		if priceErr != nil {
+			return aggregate, false, accountExecutionError(record.TradingAccountID, "quote", priceErr)
+		}
+		aggregate.Spec.ReferencePrice, aggregate.Spec.ReferencePriceAt = price, quote.SourceTime
+		validation, err = validator.validate(ctx, record.SpaceID, aggregate.Spec, true)
+		refreshedReference = err == nil
+	}
 	if err != nil {
 		if permanentValidationError(err) {
 			rejected, rejectErr := s.rejectPending(ctx, record, aggregate, err)
@@ -765,9 +868,22 @@ func (s *Service) submit(
 		}
 		return orderdomain.Order{}, false, err
 	}
+	marginAdjustment, err := s.paperMarginAdjustment(ctx, validation)
+	if err != nil {
+		return aggregate, false, err
+	}
 	adapter, err := s.Adapters.Adapter(record.TradingAccountID)
 	if err != nil {
-		return orderdomain.Order{}, false, err
+		return orderdomain.Order{}, false, accountExecutionError(record.TradingAccountID, "adapter", err)
+	}
+	// Place and margin preparation may perform account-scoped I/O. Re-read the
+	// target after those calls and before persisting SUBMITTING so a target that
+	// expired meanwhile remains a local PENDING intent and never reaches POST.
+	if err := s.authorizeTargetSubmit(ctx, record); err != nil {
+		return aggregate, false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return aggregate, false, err
 	}
 	expected := aggregate.Version
 	if _, err = aggregate.BeginSubmit(); err != nil {
@@ -776,7 +892,42 @@ func (s *Service) submit(
 	releaseReservationForReduction := !record.ReduceOnly &&
 		aggregate.Spec.ReducePositionOnly
 	record.ReduceOnly = aggregate.Spec.ReducePositionOnly
-	if releaseReservationForReduction {
+	oldReservedAsset, oldRemaining := record.ReservedAsset, record.RemainingReservedQuantity
+	if refreshedReference && validation.Account.ExecutionMode == exchange.ExecutionModePaper && aggregate.Spec.Type == exchange.OrderTypeMarket {
+		price := aggregate.Spec.ReferencePrice
+		if record.PaperExecutionPrice != nil {
+			previous, parseErr := shared.ParseDecimal(*record.PaperExecutionPrice)
+			if parseErr != nil {
+				return aggregate, false, parseErr
+			}
+			reference, parseErr := shared.ParseDecimal(record.ReferencePrice)
+			if parseErr != nil || reference.Cmp(shared.Zero()) <= 0 {
+				return aggregate, false, store.ErrInvalidRecord
+			}
+			// Preserve the slippage fixed at Place, even if account settings changed.
+			price = previous.Mul(price).Div(reference)
+		} else if validation.Account.Paper != nil {
+			price = paperExecutionPrice(price, aggregate.Spec.Side, validation.Account.Paper.SlippageBPS)
+		}
+		raw := price.String()
+		record.PaperExecutionPrice = &raw
+		// Repricing preserves the original execution slippage. Reserve against
+		// that same price, not a newly edited account slippage setting.
+		feeRate := validator.FeeBufferRate
+		if validation.Account.Paper != nil {
+			feeRate = maxDecimal(validation.Account.Paper.MakerFeeRate, validation.Account.Paper.TakerFeeRate)
+		}
+		notional := aggregate.Spec.Quantity.Mul(price)
+		if validation.Account.MarketType == exchange.MarketTypeSwap {
+			validation.ReservedQuantity = notional.Mul(feeRate)
+			if !aggregate.Spec.ReducePositionOnly {
+				validation.ReservedQuantity = validation.ReservedQuantity.Add(notional.Div(validation.Leverage))
+			}
+		} else if aggregate.Spec.Side == exchange.SideBuy {
+			validation.ReservedQuantity = withFeeBuffer(notional, feeRate)
+		}
+	}
+	if releaseReservationForReduction || refreshedReference {
 		record.ReservedAsset = validation.ReservedAsset
 		record.ReservedQuantity = validation.ReservedQuantity.String()
 		record.RemainingReservedQuantity = validation.ReservedQuantity.String()
@@ -784,14 +935,65 @@ func (s *Service) submit(
 	applyAggregate(&record, aggregate)
 	record.SubmittedAt = s.now().UnixMilli()
 	if err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
+			required, err := shared.ParseDecimal(record.RemainingReservedQuantity)
+			if err != nil {
+				return err
+			}
+			if !required.IsZero() {
+				if err := checkPaperFunds(tx, validation, marginAdjustment, required, oldReservedAsset, oldRemaining); err != nil {
+					return err
+				}
+			}
+		} else if refreshedReference {
+			unreflected, err := tx.GetUnreflectedReservation(record.SpaceID, record.TradingAccountID, validation.ReservedAsset, validation.Account.LastSyncAt.UnixMilli())
+			if err != nil {
+				return err
+			}
+			if oldReservedAsset == validation.ReservedAsset {
+				previous, parseErr := shared.ParseDecimal(oldRemaining)
+				if parseErr != nil {
+					return parseErr
+				}
+				unreflected = unreflected.Sub(previous)
+			}
+			available := availableBalance(validation.Account.Snapshot, validation.ReservedAsset)
+			if validation.Account.MarketType == exchange.MarketTypeSwap {
+				available = validation.Account.Snapshot.AvailableFunds
+			}
+			if available.Cmp(unreflected.Add(validation.ReservedQuantity)) < 0 {
+				return ErrInsufficientFunds
+			}
+		}
+		if refreshedReference {
+			record.ReferencePrice = aggregate.Spec.ReferencePrice.String()
+			record.ReferencePriceAt = aggregate.Spec.ReferencePriceAt.UnixMilli()
+			if err := tx.UpdatePendingOrderReference(record, expected); err != nil {
+				return err
+			}
+		}
 		return tx.UpdateOrder(record, expected)
 	}); err != nil {
 		return orderdomain.Order{}, false, err
+	}
+	if authorizationErr := s.authorizeTargetSubmit(ctx, record); authorizationErr != nil {
+		pending, abortErr := s.abortUnsentSubmit(ctx, record, aggregate)
+		if abortErr != nil {
+			return orderdomain.Order{}, false, errors.Join(authorizationErr, abortErr)
+		}
+		return pending, false, authorizationErr
 	}
 
 	exchangeSymbol := validation.Instrument.ExchangeSymbol
 	if exchangeSymbol == "" {
 		exchangeSymbol = aggregate.Spec.InstrumentID
+	}
+	if err := ctx.Err(); err != nil {
+		pending, abortErr := s.abortUnsentSubmit(ctx, record, aggregate)
+		if abortErr != nil {
+			return orderdomain.Order{}, false, errors.Join(err, abortErr)
+		}
+		return pending, false, err
 	}
 	response, callErr := adapter.PlaceOrder(ctx, exchange.OrderRequest{
 		ClientOrderID:  aggregate.Spec.ClientOrderID,
@@ -802,13 +1004,26 @@ func (s *Service) submit(
 		ReduceOnly: aggregate.Spec.ReducePositionOnly,
 	})
 
-	latest, getErr := s.Store.GetOrder(ctx, record.SpaceID, record.OrderID)
+	// Once the adapter was called, record its outcome even if it used the
+	// caller's entire budget. This context cannot authorize another POST.
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer persistCancel()
+	latest, getErr := s.Store.GetOrder(persistCtx, record.SpaceID, record.OrderID)
 	if getErr != nil {
 		return orderdomain.Order{}, false, getErr
 	}
 	current, getErr := domainOrder(latest)
 	if getErr != nil {
 		return orderdomain.Order{}, false, getErr
+	}
+	if callErr == nil && current.ExchangeOrderID != "" && response.ExchangeOrderID != "" && current.ExchangeOrderID != response.ExchangeOrderID {
+		return orderdomain.Order{}, false, accountExecutionError(record.TradingAccountID, "place",
+			fmt.Errorf("%w: conflicting Exchange order ID", orderdomain.ErrInvalidTransition))
+	}
+	// Private execution facts can win the race with a late HTTP error.
+	if current.State.Terminal() || (callErr != nil && (current.State == orderdomain.Open || current.State == orderdomain.PartiallyFilled ||
+		current.State == orderdomain.Canceling || current.State == orderdomain.CancelUnknown)) {
+		return current, false, nil
 	}
 	expected = current.Version
 	switch {
@@ -835,7 +1050,7 @@ func (s *Service) submit(
 		latest.RemainingReservedQuantity = "0"
 		latest.FinishedAt = s.now().UnixMilli()
 	}
-	if err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+	if err = s.Store.Transaction(persistCtx, func(tx *store.Tx) error {
 		if err := tx.UpdateOrder(latest, expected); err != nil {
 			return err
 		}
@@ -845,11 +1060,34 @@ func (s *Service) submit(
 	}
 	return current, callErr == nil &&
 		response.Status != "" &&
-		response.Status != exchange.OrderStatusOpen, callErr
+		response.Status != exchange.OrderStatusOpen, accountExecutionError(record.TradingAccountID, "place", callErr)
+}
+
+func (s *Service) abortUnsentSubmit(
+	ctx context.Context,
+	record store.OrderRecord,
+	current orderdomain.Order,
+) (orderdomain.Order, error) {
+	// This local transition must survive cancellation after SUBMITTING commits.
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	expected := current.Version
+	if _, err := current.AbortSubmit(); err != nil {
+		return orderdomain.Order{}, err
+	}
+	applyAggregate(&record, current)
+	record.SubmittedAt = 0
+	if err := s.Store.Transaction(cleanupCtx, func(tx *store.Tx) error {
+		return tx.UpdateOrder(record, expected)
+	}); err != nil {
+		return orderdomain.Order{}, err
+	}
+	return current, nil
 }
 
 func uncertainExchangeError(err error) bool {
-	return exchange.IsKind(err, exchange.ErrorTransportUnknown) ||
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		exchange.IsKind(err, exchange.ErrorTransportUnknown) ||
 		exchange.IsKind(err, exchange.ErrorRateLimited)
 }
 
@@ -876,6 +1114,9 @@ func (s *Service) rejectPending(
 }
 
 func permanentValidationError(err error) bool {
+	if errors.Is(err, orderdomain.ErrReferencePriceStale) {
+		return false
+	}
 	for _, target := range []error{
 		orderdomain.ErrInvalidSpec,
 		ErrAccountOwnership,

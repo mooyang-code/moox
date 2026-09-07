@@ -14,10 +14,8 @@ import (
 )
 
 type InstrumentTarget struct {
-	InstrumentID     string `json:"instrument_id"`
-	Quantity         string `json:"quantity"`
-	TradingAccountID string `json:"trading_account_id,omitempty"`
-	ExchangeSymbol   string `json:"exchange_symbol,omitempty"`
+	InstrumentID string `json:"instrument_id"`
+	Quantity     string `json:"quantity"`
 }
 
 type BlockedTarget struct {
@@ -116,6 +114,9 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	if err != nil {
 		return LogicalAccountTargetRecord{}, false, err
 	}
+	if account.ControlMode != "STRATEGY" {
+		return LogicalAccountTargetRecord{}, false, ErrTargetAuthorization
+	}
 	newIdentity := record.InstanceID != "" || record.SessionID != "" || record.BarEndTime != 0 || record.ValidUntil != 0
 	if newIdentity {
 		if blank(record.InstanceID) || blank(record.SessionID) || blank(record.StrategyID) ||
@@ -132,7 +133,7 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: logical account target session authorization", ErrTargetAuthorization)
 		}
 		now := time.Now().UTC().UnixMilli()
-		if now < record.EffectiveAt || now >= record.ValidUntil {
+		if now >= record.ValidUntil {
 			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: target validity window", ErrTargetExpired)
 		}
 	} else {
@@ -331,12 +332,14 @@ func (s *Store) UpdateLogicalAccountTargetState(
 	args = append(args, record.SpaceID, record.LogicalAccountID)
 	values := []any{record.Status, blockedJSON, record.LastError, record.SpaceID, record.LogicalAccountID}
 	values = append(values, args[:len(args)-2]...)
+	values = append(values, record.Status)
 	result := s.db.WithContext(ctx).Exec(fmt.Sprintf(`
 		UPDATE t_logical_account_targets
 		SET c_status = ?, c_blocked_targets_json = ?, c_last_error = ?,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 			AND %s
+			AND (c_status <> 'EXPIRED' OR ? = 'EXPIRED')
 	`, where),
 		values...,
 	)
@@ -349,8 +352,8 @@ func (s *Store) UpdateLogicalAccountTargetState(
 func logicalAccountTargetRecord(
 	row logicalAccountTargetRow,
 ) (LogicalAccountTargetRecord, error) {
-	var targets []InstrumentTarget
-	if err := json.Unmarshal([]byte(row.TargetsJSON), &targets); err != nil {
+	targets, _, err := decodeCurrentTargets(row.TargetsJSON, false)
+	if err != nil {
 		return LogicalAccountTargetRecord{}, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
 	}
 	var blocked []BlockedTarget
@@ -371,7 +374,7 @@ func logicalAccountTargetRecord(
 
 func validLogicalAccountTargetStatus(status string) bool {
 	switch status {
-	case "PENDING", "CONVERGING", "CONVERGED", "BLOCKED":
+	case "PENDING", "CONVERGING", "CONVERGED", "BLOCKED", "EXPIRED":
 		return true
 	default:
 		return false

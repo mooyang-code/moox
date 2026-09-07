@@ -347,7 +347,7 @@ func TestRecentFillsAndPositionsConvertContracts(t *testing.T) {
 				request.URL.Query().Has("after") {
 				t.Fatalf("query = %v", request.URL.Query())
 			}
-			ok(w, `[{"billId":"101","instId":"BTC-USDT-SWAP","tradeId":"7","ordId":"42","clOrdId":"cid","side":"sell","posSide":"net","fillSz":"3","fillPx":"100","fee":"-0.01","feeCcy":"USDT","fillPnl":"2","execType":"T","ts":"1700000000000"}]`)
+			ok(w, `[{"billId":"101","instId":"BTC-USDT-SWAP","tradeId":"7","ordId":"42","clOrdId":"cid","side":"sell","posSide":"net","fillSz":"3","fillPx":"100","fee":"-0.01","feeCcy":"USDT","fillPnl":"2","execType":"T","ts":"1700000000001","fillTime":"1700000000000"}]`)
 		case "/api/v5/account/positions":
 			ok(w, `[{"instId":"BTC-USDT-SWAP","posSide":"net","pos":"-4","avgPx":"100","markPx":"101","lever":"5","mgnMode":"cross","margin":"10","liqPx":"50","upl":"2","realizedPnl":"1","uTime":"1700000000000"}]`)
 		}
@@ -398,7 +398,7 @@ func TestRecentFillsPaginatesWithoutSkippingGap(t *testing.T) {
 			rows = append(rows, fillPayload{
 				BillID: id, InstID: "BTC-USDT", TradeID: id,
 				OrdID: "42", ClOrdID: "cid", Side: "buy",
-				FillSz: "1", FillPx: "100", Ts: "1700000000000",
+				FillSz: "1", FillPx: "100", Fee: "0", FeeCcy: "USDT", FillTime: "1700000000000",
 			})
 		}
 		data, err := json.Marshal(rows)
@@ -434,6 +434,35 @@ func TestRecentFillsPaginatesWithoutSkippingGap(t *testing.T) {
 	}
 }
 
+func TestRecentFillsOrdersByExecutionTimeWithBillIDTieBreak(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		ok(w, `[
+		{"billId":"12","instId":"BTC-USDT","tradeId":"t12","ordId":"42","side":"buy","fillSz":"1","fillPx":"100","fee":"0","feeCcy":"USDT","fillTime":"1700000000000"},
+		{"billId":"11","instId":"BTC-USDT","tradeId":"t11","ordId":"42","side":"buy","fillSz":"1","fillPx":"100","fee":"0","feeCcy":"USDT","fillTime":"1700000000002"},
+		{"billId":"10","instId":"BTC-USDT","tradeId":"t10","ordId":"42","side":"buy","fillSz":"1","fillPx":"100","fee":"0","feeCcy":"USDT","fillTime":"1700000000000"},
+		{"billId":"9","instId":"BTC-USDT","tradeId":"t9","ordId":"42","side":"buy","fillSz":"1","fillPx":"100","fee":"0","feeCcy":"USDT","fillTime":"1700000000000"}
+		]`)
+	}))
+	defer server.Close()
+	adapter := newWithClient(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{}, httpclient.New(server.URL))
+	fills, cursor, err := adapter.ListRecentFills(context.Background(), "BTC-USDT", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor != "12" {
+		t.Fatalf("cursor=%s, want highest bill ID 12", cursor)
+	}
+	want := []string{"t9", "t10", "t12", "t11"}
+	if len(fills) != len(want) {
+		t.Fatalf("fills=%+v", fills)
+	}
+	for i, fill := range fills {
+		if fill.ExchangeTradeID != want[i] {
+			t.Fatalf("fill[%d]=%s, want %s ordered by fillTime then numeric billId", i, fill.ExchangeTradeID, want[i])
+		}
+	}
+}
+
 func TestRecentFillsEmptyCursorConsumesAllAvailablePages(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -453,7 +482,7 @@ func TestRecentFillsEmptyCursorConsumesAllAvailablePages(t *testing.T) {
 			rows = append(rows, fillPayload{
 				BillID: id, InstID: "BTC-USDT", TradeID: id,
 				OrdID: "42", ClOrdID: "cid", Side: "buy",
-				FillSz: "1", FillPx: "100", Ts: "1700000000000",
+				FillSz: "1", FillPx: "100", Fee: "0", FeeCcy: "USDT", FillTime: "1700000000000",
 			})
 		}
 		data, err := json.Marshal(rows)

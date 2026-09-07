@@ -41,7 +41,7 @@ func modernResultProto(value store.StrategyResult) *strategypb.StrategyResult {
 		ResultId: value.ResultID, InstanceId: value.InstanceID, SessionId: value.SessionID,
 		PeriodTime: formatTime(value.BarEndTime), TriggerBarTime: formatTime(value.BarEndTime),
 		ValidUntil: formatTime(value.ValidUntil), Targets: decodeTargetProto(value.TargetsJSON),
-		OutputJson: string(value.TargetsJSON),
+		OutputJson:     string(value.TargetsJSON),
 		RuleStatesJson: string(value.RuleStatesJSON), PublishStatus: string(value.PublishStatus),
 		CreatedAt: formatTime(value.CreatedAt),
 	}

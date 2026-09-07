@@ -9,10 +9,8 @@ import (
 	"testing"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
-	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
@@ -144,19 +142,4 @@ func TestBootstrapOwnsOneStoreAndOneShutdownHook(t *testing.T) {
 			t.Fatalf("bootstrap still contains obsolete symbol %q", forbidden)
 		}
 	}
-}
-
-func TestPaperOpeningReservationRejectsPriceIncrease(t *testing.T) {
-	candidate := store.OrderRecord{
-		InstrumentID:              "BTC-USDT-SWAP",
-		ExchangeSymbol:            "BTCUSDT",
-		Quantity:                  "1",
-		RemainingReservedQuantity: "10.1",
-	}
-	account := store.TradingAccountRecord{LeverageSettings: map[string]string{
-		"BTC-USDT-SWAP": "10",
-	}}
-	fee := shared.MustDecimal("0.12")
-	require.False(t, paperOpeningReservationSufficient(candidate, account, shared.MustDecimal("120"), fee))
-	require.True(t, paperOpeningReservationSufficient(candidate, account, shared.MustDecimal("100"), shared.MustDecimal("0.1")))
 }

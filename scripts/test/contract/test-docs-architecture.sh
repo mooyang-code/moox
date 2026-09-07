@@ -33,9 +33,9 @@ grep -Fq '每台服务器的 `moox-gateway`' modules/README.md
 grep -Fq 'strategy/strategy-cli' README.md
 grep -Fq 'Strategy、Monitor、Storage 和 Archive' README.md
 
-grep -Fq 'Strategy 只有四张业务表' docs/策略模块架构设计.md
-grep -Fq 'Python 是完整历史窗口上的无状态函数' docs/策略模块架构设计.md
-grep -Fq 'LogicalAccountTargetRequested' docs/策略模块架构设计.md
+grep -Fq 'Strategy 只保留三张业务表' docs/策略模块架构设计.md
+grep -Fq '开放纯函数白名单' docs/策略模块架构设计.md
+grep -Fq 'LogicalAccountTargetWeightRequested' docs/策略模块架构设计.md
 ! grep -Fq '建议 HTTP 端口 `11408`' docs/策略模块架构设计.md
 
 grep -Fq '全部 Active 写入成功后才 ACK' docs/存储引擎架构.md

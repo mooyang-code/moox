@@ -52,10 +52,13 @@ func (s *Store) UpdateRunner(ctx context.Context, runner domain.StrategyRunner) 
 		if current.Enabled == 1 {
 			return ErrRunnerEnabled
 		}
+		if current.SessionID.Valid {
+			return errors.New("strategy instance control operation is unfinished")
+		}
 		result := tx.Exec(`
 			UPDATE t_strategy_instances
 			SET strategy_id = ?, space_id = ?, input_bindings_json = ?, logical_account_id = ?, updated_at = ?
-			WHERE instance_id = ? AND enabled = 0
+			WHERE instance_id = ? AND enabled = 0 AND session_id IS NULL
 		`, runner.StrategyID, runner.SpaceID, string(bindings), stringValue(runner.LogicalAccountID), runner.UpdatedAt.UTC().UnixMilli(), runner.ID)
 		if result.Error != nil {
 			return result.Error

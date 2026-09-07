@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -35,7 +36,21 @@ type cancelOrderActionResult struct {
 func (s *Service) CancelOrder(
 	ctx context.Context,
 	command CancelOrderCommand,
-) (CancelOrderResult, error) {
+) (result CancelOrderResult, retErr error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var knownAction store.OperatorActionRecord
+	defer func() {
+		if retErr == nil || knownAction.ActionID == "" {
+			return
+		}
+		if result.Action.ActionID == "" {
+			result.Action = knownAction
+		}
+		if result.Order.OrderID == "" {
+			result.Order = store.OrderRecord{SpaceID: command.SpaceID, OrderID: command.OrderID, LogicalAccountID: knownAction.LogicalAccountID}
+		}
+	}()
 	if err := s.validate(); err != nil {
 		return CancelOrderResult{}, err
 	}
@@ -59,6 +74,7 @@ func (s *Service) CancelOrder(
 		if ensureErr != nil {
 			return CancelOrderResult{}, ensureErr
 		}
+		knownAction = current
 		if current.Status != "RUNNING" {
 			return s.loadCancelOrderResult(ctx, current)
 		}
@@ -80,9 +96,14 @@ func (s *Service) CancelOrder(
 		existing.LogicalAccountID != orderRecord.LogicalAccountID {
 		return CancelOrderResult{}, store.ErrConflict
 	}
-	unlock := s.Store.LockLogicalAccount(
-		command.SpaceID, orderRecord.LogicalAccountID,
-	)
+	unlock, err := s.Store.LockLogicalAccountContext(ctx, command.SpaceID, orderRecord.LogicalAccountID)
+	if err != nil {
+		if existing.ActionID != "" {
+			current, diagnosticErr := s.deferActionLock(ctx, existing, err)
+			return CancelOrderResult{Action: current, Order: orderRecord}, diagnosticErr
+		}
+		return CancelOrderResult{Order: orderRecord}, err
+	}
 	defer unlock()
 	var action store.OperatorActionRecord
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
@@ -108,9 +129,15 @@ func (s *Service) CancelOrder(
 	if err != nil {
 		return CancelOrderResult{}, err
 	}
+	knownAction = action
 	if action.Status != "RUNNING" {
 		return s.loadCancelOrderResult(ctx, action)
 	}
+	current, err := s.Store.GetOrder(ctx, command.SpaceID, command.OrderID)
+	if err != nil {
+		return s.failCancelAction(ctx, action, orderRecord, err)
+	}
+	orderRecord = current
 	if !orderdomain.State(orderRecord.State).Terminal() {
 		if err := s.stopOrder(ctx, orderRecord); err != nil {
 			return s.failCancelAction(ctx, action, orderRecord, err)
@@ -121,10 +148,11 @@ func (s *Service) CancelOrder(
 			return s.failCancelAction(ctx, action, orderRecord, err)
 		}
 	}
-	orderRecord, err = s.Store.GetOrder(ctx, command.SpaceID, command.OrderID)
+	current, err = s.Store.GetOrder(ctx, command.SpaceID, command.OrderID)
 	if err != nil {
 		return s.failCancelAction(ctx, action, orderRecord, err)
 	}
+	orderRecord = current
 	if !orderdomain.State(orderRecord.State).Terminal() {
 		err = fmt.Errorf(
 			"%w: order %s remains %s",
@@ -141,14 +169,14 @@ func (s *Service) CancelOrder(
 		return s.failCancelAction(ctx, action, orderRecord, err)
 	}
 	raw := string(resultData)
+	previousAction := action
 	action.Status = "COMPLETED"
 	action.ResultJSON = &raw
 	action.LastError = ""
 	if err := s.updateAction(ctx, action); err != nil {
-		return CancelOrderResult{}, err
+		return CancelOrderResult{Action: previousAction, Order: orderRecord}, err
 	}
-	action, err = s.Store.GetOperatorAction(ctx, action.SpaceID, action.ActionID)
-	return CancelOrderResult{Action: action, Order: orderRecord}, err
+	return CancelOrderResult{Action: action, Order: orderRecord}, nil
 }
 
 func cancelOrderRequestJSON(command CancelOrderCommand) (string, error) {
@@ -187,7 +215,21 @@ func (s *Service) failCancelAction(
 	orderRecord store.OrderRecord,
 	cause error,
 ) (CancelOrderResult, error) {
-	action.Status = "FAILED"
+	previousAction := action
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	current, readErr := s.Store.GetOrder(ctx, action.SpaceID, orderRecord.OrderID)
+	if readErr != nil {
+		cause = errors.Join(cause, readErr)
+		orderRecord = store.OrderRecord{
+			SpaceID: orderRecord.SpaceID, OrderID: orderRecord.OrderID,
+			TradingAccountID: orderRecord.TradingAccountID, LogicalAccountID: orderRecord.LogicalAccountID,
+			ClientOrderID: orderRecord.ClientOrderID,
+		}
+	} else {
+		orderRecord = current
+	}
+	action.Status = "RUNNING"
 	action.LastError = cause.Error()
 	data, marshalErr := json.Marshal(map[string]string{
 		"order_id": orderRecord.OrderID,
@@ -198,8 +240,10 @@ func (s *Service) failCancelAction(
 		action.ResultJSON = &raw
 	}
 	if err := s.updateAction(ctx, action); err != nil {
-		return CancelOrderResult{}, errors.Join(cause, err)
+		return CancelOrderResult{Action: previousAction, Order: orderRecord}, errors.Join(cause, err)
 	}
-	current, _ := s.Store.GetOperatorAction(ctx, action.SpaceID, action.ActionID)
-	return CancelOrderResult{Action: current, Order: orderRecord}, cause
+	if submissionAccountError(cause) {
+		cause = submissionDeferredError{cause: cause}
+	}
+	return CancelOrderResult{Action: action, Order: orderRecord}, cause
 }

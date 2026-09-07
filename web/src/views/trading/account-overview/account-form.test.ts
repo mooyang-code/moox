@@ -14,6 +14,7 @@ const form = (): AccountFormModel => ({
   environment: 1,
   credential_secret_id: " secret-1 ",
   execution_mode: 2,
+  control_mode: 1,
   settlement_asset: "usdt",
   margin_mode: "CROSS",
   initial_balance: "100000",
@@ -31,6 +32,7 @@ describe("account form builders", () => {
       exchange: 1,
       market_type: 1,
       execution_mode: 1,
+      control_mode: 1,
       environment: 1,
       credential_secret_id: "",
       settlement_asset: "USDT",
@@ -101,6 +103,7 @@ describe("account form builders", () => {
     expect(request).toEqual({
       account_name: "Live",
       logical_account_name: "Paper Logical",
+      control_mode: 1,
       exchange: 1,
       market_type: 1,
       settlement_asset: "USDT",
@@ -113,5 +116,10 @@ describe("account form builders", () => {
     expect(request).not.toHaveProperty("live");
     expect(request).not.toHaveProperty("credential_secret_id");
     expect(request).not.toHaveProperty("sync_symbols");
+  });
+
+  it("sends the explicitly selected Paper control mode", () => {
+    const paper = { ...createDefaultAccountForm(), control_mode: 2 as const };
+    expect(buildPaperSimulationRequest(paper).control_mode).toBe(2);
   });
 });

@@ -2,7 +2,6 @@ package events
 
 import (
 	"context"
-	"math"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/mooyang-code/moox/packages/storagepb"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -259,33 +257,6 @@ func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 				value.(*storagepb.DatasetRowsUpserted).Rows[0].Key.DatasetId = "other"
 			},
 		},
-		{
-			name:    "trade logical account",
-			event:   LogicalAccountTargetRequested,
-			payload: validLogicalAccountTarget(),
-			opts:    validationOptions("target-1", "space", "logical-1"),
-			mutate: func(value proto.Message) {
-				value.(*tradeeventpb.LogicalAccountTargetRequested).LogicalAccountId = "other"
-			},
-		},
-		{
-			name:    "trade event id",
-			event:   LogicalAccountTargetRequested,
-			payload: validLogicalAccountTarget(),
-			opts:    validationOptions("target-1", "space", "logical-1"),
-			mutate: func(value proto.Message) {
-				value.(*tradeeventpb.LogicalAccountTargetRequested).TargetId = "other"
-			},
-		},
-		{
-			name:    "trade command sequence",
-			event:   LogicalAccountTargetRequested,
-			payload: validLogicalAccountTarget(),
-			opts:    validationOptions("target-1", "space", "logical-1"),
-			mutate: func(value proto.Message) {
-				value.(*tradeeventpb.LogicalAccountTargetRequested).CommandSequence = 0
-			},
-		},
 	}
 	registry, err := DefaultRegistry()
 	if err != nil {
@@ -354,101 +325,6 @@ func TestHealthCheckReportValidation(t *testing.T) {
 			mutate(invalid)
 			if _, err := registry.Encode(ObservabilityHealthCheckReported, invalid, opts); err == nil {
 				t.Fatal("invalid health check was accepted")
-			}
-		})
-	}
-}
-
-func TestLogicalAccountTargetRequestedRejectsInvalidPayload(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(*tradeeventpb.LogicalAccountTargetRequested)
-	}{
-		{name: "empty target", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) { value.TargetId = "" }},
-		{name: "empty runner", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) { value.RunnerId = "" }},
-		{name: "empty logical account", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) { value.LogicalAccountId = "" }},
-		{name: "zero command sequence", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) { value.CommandSequence = 0 }},
-		{name: "negative command sequence", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) { value.CommandSequence = -1 }},
-		{name: "duplicate instrument", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) {
-			value.Targets = append(value.Targets, &tradeeventpb.InstrumentTarget{
-				InstrumentId: value.Targets[0].GetInstrumentId(), Quantity: "2",
-			})
-		}},
-		{name: "blank instrument id", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) {
-			value.Targets[0].InstrumentId = " \t "
-		}},
-		{name: "non-decimal quantity", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) {
-			value.Targets[0].Quantity = "one"
-		}},
-	}
-
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			payload := validLogicalAccountTarget()
-			test.mutate(payload)
-			if _, err := registry.Encode(
-				LogicalAccountTargetRequested,
-				payload,
-				validationOptions("target-1", "space", "logical-1"),
-			); err == nil {
-				t.Fatal("invalid logical account target was accepted")
-			}
-		})
-	}
-}
-
-func TestLogicalAccountTargetRequestedAcceptsCanonicalQuantitiesAndMaximumSequence(t *testing.T) {
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, quantity := range []string{"0", "-0", "1", "-1", "1.25", "-0.0001"} {
-		t.Run(quantity, func(t *testing.T) {
-			payload := validLogicalAccountTarget()
-			payload.CommandSequence = math.MaxInt64
-			payload.Targets[0].Quantity = quantity
-			if _, err := registry.Encode(
-				LogicalAccountTargetRequested,
-				payload,
-				validationOptions("target-1", "space", "logical-1"),
-			); err != nil {
-				t.Fatalf("canonical quantity %q rejected: %v", quantity, err)
-			}
-		})
-	}
-}
-
-func TestLogicalAccountTargetRequestedRejectsNonCanonicalQuantities(t *testing.T) {
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, quantity := range []string{
-		"",
-		"+1",
-		".5",
-		"1.",
-		"01",
-		"1e3",
-		"1/2",
-		"NaN",
-		"Inf",
-		" 1",
-		strings.Repeat("9", 257),
-	} {
-		t.Run(quantity, func(t *testing.T) {
-			payload := validLogicalAccountTarget()
-			payload.Targets[0].Quantity = quantity
-			if _, err := registry.Encode(
-				LogicalAccountTargetRequested,
-				payload,
-				validationOptions("target-1", "space", "logical-1"),
-			); err == nil {
-				t.Fatalf("non-canonical quantity %q was accepted", quantity)
 			}
 		})
 	}

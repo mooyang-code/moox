@@ -14,6 +14,7 @@ import (
 )
 
 type LogicalAccountRecord struct {
+	ControlMode      string
 	SpaceID          string
 	LogicalAccountID string
 	Name             string
@@ -47,6 +48,7 @@ type LogicalAccountMemberRecord struct {
 }
 
 type logicalAccountRow struct {
+	ControlMode      string    `gorm:"column:c_control_mode"`
 	SpaceID          string    `gorm:"column:c_space_id"`
 	LogicalAccountID string    `gorm:"column:c_logical_account_id"`
 	Name             string    `gorm:"column:c_name"`
@@ -83,6 +85,13 @@ func (logicalAccountMemberRow) TableName() string {
 }
 
 func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
+	if record.ControlMode == "" {
+		record.ControlMode = string(logicalaccount.ControlStrategy)
+	}
+	if record.ControlMode == string(logicalaccount.ControlManual) &&
+		(record.OwnerInstanceID != "" || record.OwnerSessionID != "") {
+		return fmt.Errorf("%w: manual account cannot have a strategy session", ErrInvalidRecord)
+	}
 	account := logicalAccountDomain(record)
 	if err := account.Validate(); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, err)
@@ -114,13 +123,13 @@ func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
 		INSERT INTO t_logical_accounts (
 			c_space_id, c_logical_account_id, c_name, c_owner_runner_id, c_owner_claimed_at,
 			c_owner_instance_id, c_owner_session_id, c_auth_fence,
-			c_execution_mode, c_market_type, c_settlement_asset,
+			c_control_mode, c_execution_mode, c_market_type, c_settlement_asset,
 			c_automation_state, c_pause_reason
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.SpaceID, record.LogicalAccountID, record.Name, owner, ownerGeneration,
 		ownerInstance, ownerSession, authFence,
-		record.ExecutionMode, record.MarketType, record.SettlementAsset,
+		record.ControlMode, record.ExecutionMode, record.MarketType, record.SettlementAsset,
 		record.AutomationState, record.PauseReason,
 	).Error
 	return writeError(err)
@@ -233,7 +242,7 @@ func (tx *Tx) SetLogicalAccountOwnerGeneration(
 		UPDATE t_logical_accounts
 		SET c_owner_runner_id = ?, c_owner_instance_id = ?, c_owner_session_id = NULL,
 			c_owner_claimed_at = c_owner_claimed_at + 1, c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ?
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_control_mode = 'STRATEGY'
 	`, owner, instance, fence, spaceID, logicalAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account owner")
 }
@@ -253,6 +262,7 @@ func (tx *Tx) TryClaimLogicalAccountOwner(spaceID, logicalAccountID, runnerID st
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 		  AND (c_owner_runner_id IS NULL OR c_owner_runner_id = '')
+		  AND c_control_mode = 'STRATEGY'
 	`, runnerID, runnerID, newAuthFence(), spaceID, logicalAccountID)
 	if result.Error != nil {
 		return writeError(result.Error)
@@ -269,6 +279,9 @@ func (tx *Tx) TryClaimLogicalAccountOwner(spaceID, logicalAccountID, runnerID st
 // delayed targets from the archived lifecycle must be fenced and the live
 // target must be cleared before the new runner emits its first result.
 func (tx *Tx) RebindLogicalAccountOwner(spaceID, logicalAccountID, runnerID, rebindKey string) (bool, error) {
+	if err := tx.requireStrategyControl(spaceID, logicalAccountID); err != nil {
+		return false, err
+	}
 	if blank(runnerID) || blank(rebindKey) {
 		return false, fmt.Errorf("%w: owner runner and rebind key are required", ErrInvalidRecord)
 	}
@@ -319,6 +332,7 @@ func (tx *Tx) RebindLogicalAccountOwner(spaceID, logicalAccountID, runnerID, reb
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 		  AND (c_owner_runner_id IS NULL OR c_owner_runner_id = ?)
+		  AND c_control_mode = 'STRATEGY'
 	`, runnerID, runnerID, newAuthFence(), spaceID, logicalAccountID, runnerID)
 	if result.Error != nil {
 		return false, writeError(result.Error)
@@ -358,25 +372,29 @@ func (tx *Tx) ReleaseLogicalAccountOwner(spaceID, logicalAccountID, runnerID str
 // auth_fence and is mandatory for the V2 session path. Keeping it out of the
 // public target contract makes delayed management calls harmless even when a
 // new session has already claimed the account. The returned fence is the value
-// to retain for the next CAS.
+// to retain for the next CAS. changed is false for an identical session retry
+// with the current fence, so callers retain its already-accepted target.
 func (tx *Tx) ClaimLogicalAccountSession(
 	spaceID, logicalAccountID, instanceID, sessionID, expectedFence string,
-) (string, error) {
+) (string, bool, error) {
 	if blank(spaceID) || blank(logicalAccountID) || blank(instanceID) || blank(sessionID) || blank(expectedFence) {
-		return "", fmt.Errorf("%w: session authorization identity and expected auth fence are required", ErrInvalidRecord)
+		return "", false, fmt.Errorf("%w: session authorization identity and expected auth fence are required", ErrInvalidRecord)
 	}
 	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
 	if err != nil {
-		return "", err
+		return "", false, err
+	}
+	if account.ControlMode != "STRATEGY" {
+		return "", false, fmt.Errorf("%w: logical account is not strategy controlled", ErrConflict)
 	}
 	if account.AuthFence != expectedFence {
-		return "", fmt.Errorf("%w: session authorization fence changed", ErrConflict)
+		return "", false, fmt.Errorf("%w: session authorization fence changed", ErrConflict)
 	}
 	if account.OwnerInstanceID == instanceID && account.OwnerSessionID == sessionID {
-		return account.AuthFence, nil
+		return account.AuthFence, false, nil
 	}
 	if account.OwnerInstanceID != "" || account.OwnerSessionID != "" {
-		return "", fmt.Errorf("%w: logical account is owned by another session", ErrConflict)
+		return "", false, fmt.Errorf("%w: logical account is owned by another session", ErrConflict)
 	}
 	fence := newAuthFence()
 	result := tx.db.Exec(`
@@ -385,42 +403,47 @@ func (tx *Tx) ClaimLogicalAccountSession(
 			c_owner_claimed_at = c_owner_claimed_at + 1, c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 		  AND COALESCE(c_owner_instance_id, '') = ''
+		  AND c_control_mode = 'STRATEGY'
 		  AND COALESCE(c_owner_session_id, '') = ''
 		  AND c_auth_fence = ?
 	`, instanceID, sessionID, fence, spaceID, logicalAccountID, account.AuthFence)
 	if result.Error != nil {
-		return "", writeError(result.Error)
+		return "", false, writeError(result.Error)
 	}
 	if result.RowsAffected != 1 {
-		return "", fmt.Errorf("%w: session authorization claim lost compare-and-set", ErrConflict)
+		return "", false, fmt.Errorf("%w: session authorization claim lost compare-and-set", ErrConflict)
 	}
-	return fence, nil
+	return fence, true, nil
 }
 
 // RebindLogicalAccountSession switches an existing instance to a new session
 // only when the complete old identity and fence still match. It is useful for
 // explicit re-enable/rebind operations and intentionally does not revive an
-// account that another instance has claimed in the meantime.
+// account that another instance has claimed in the meantime. changed is false
+// when the requested new identity already owns the account with this fence.
 func (tx *Tx) RebindLogicalAccountSession(
 	spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence,
 	newInstanceID, newSessionID string,
-) (string, error) {
+) (string, bool, error) {
 	if blank(oldInstanceID) || blank(oldSessionID) || blank(expectedFence) || blank(newInstanceID) || blank(newSessionID) {
-		return "", fmt.Errorf("%w: session authorization identity and expected auth fence are required", ErrInvalidRecord)
+		return "", false, fmt.Errorf("%w: session authorization identity and expected auth fence are required", ErrInvalidRecord)
 	}
 	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
 	if err != nil {
-		return "", err
+		return "", false, err
+	}
+	if account.ControlMode != "STRATEGY" {
+		return "", false, fmt.Errorf("%w: logical account is not strategy controlled", ErrConflict)
 	}
 	if account.AuthFence != expectedFence {
-		return "", fmt.Errorf("%w: stale session authorization rebind", ErrConflict)
+		return "", false, fmt.Errorf("%w: stale session authorization rebind", ErrConflict)
 	}
 	if account.OwnerInstanceID == newInstanceID && account.OwnerSessionID == newSessionID {
-		return account.AuthFence, nil
+		return account.AuthFence, false, nil
 	}
 	if account.OwnerInstanceID != oldInstanceID || account.OwnerSessionID != oldSessionID ||
 		account.AuthFence != expectedFence {
-		return "", fmt.Errorf("%w: stale session authorization rebind", ErrConflict)
+		return "", false, fmt.Errorf("%w: stale session authorization rebind", ErrConflict)
 	}
 	fence := newAuthFence()
 	result := tx.db.Exec(`
@@ -429,16 +452,17 @@ func (tx *Tx) RebindLogicalAccountSession(
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 		  AND c_owner_instance_id = ? AND c_owner_session_id = ?
+		  AND c_control_mode = 'STRATEGY'
 		  AND c_auth_fence = ?
 	`, newInstanceID, newSessionID, fence, spaceID, logicalAccountID,
 		oldInstanceID, oldSessionID, account.AuthFence)
 	if result.Error != nil {
-		return "", writeError(result.Error)
+		return "", false, writeError(result.Error)
 	}
 	if result.RowsAffected != 1 {
-		return "", fmt.Errorf("%w: session authorization rebind lost compare-and-set", ErrConflict)
+		return "", false, fmt.Errorf("%w: session authorization rebind lost compare-and-set", ErrConflict)
 	}
-	return fence, nil
+	return fence, true, nil
 }
 
 // ReleaseLogicalAccountSession releases only the expected identity and fence. Releasing
@@ -514,10 +538,13 @@ func (tx *Tx) SetLogicalAccountAutomation(
 	}
 	result := tx.db.Exec(`
 		UPDATE t_logical_accounts
-		SET c_automation_state = ?, c_pause_reason = ?,
+		SET c_automation_state = ?, c_pause_reason = CASE
+			WHEN c_pause_reason = ? AND ? = 'PAUSED' THEN c_pause_reason
+			ELSE ? END,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
-	`, state, reason, spaceID, logicalAccountID)
+		  AND (? <> 'ACTIVE' OR c_control_mode = 'STRATEGY')
+	`, state, TargetPinMigrationPauseReason, state, reason, spaceID, logicalAccountID, state)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account automation")
 }
 
@@ -647,7 +674,8 @@ func (s *Store) FindLogicalAccountByTradingAccount(
 
 func logicalAccountDomain(record LogicalAccountRecord) logicalaccount.Account {
 	return logicalaccount.Account{
-		SpaceID: record.SpaceID, ID: record.LogicalAccountID, Name: record.Name,
+		ControlMode: logicalaccount.ControlMode(record.ControlMode),
+		SpaceID:     record.SpaceID, ID: record.LogicalAccountID, Name: record.Name,
 		OwnerRunnerID:   record.OwnerRunnerID,
 		ExecutionMode:   exchange.ExecutionMode(record.ExecutionMode),
 		MarketType:      exchange.MarketType(record.MarketType),
@@ -655,6 +683,17 @@ func logicalAccountDomain(record LogicalAccountRecord) logicalaccount.Account {
 		AutomationState: logicalaccount.AutomationState(record.AutomationState),
 		PauseReason:     record.PauseReason,
 	}
+}
+
+func (tx *Tx) requireStrategyControl(spaceID, logicalAccountID string) error {
+	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
+	if err != nil {
+		return err
+	}
+	if account.ControlMode != string(logicalaccount.ControlStrategy) {
+		return fmt.Errorf("%w: logical account is not strategy controlled", ErrConflict)
+	}
+	return nil
 }
 
 func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {
@@ -670,7 +709,8 @@ func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {
 		sessionID = *row.OwnerSessionID
 	}
 	return LogicalAccountRecord{
-		SpaceID: row.SpaceID, LogicalAccountID: row.LogicalAccountID,
+		ControlMode: row.ControlMode,
+		SpaceID:     row.SpaceID, LogicalAccountID: row.LogicalAccountID,
 		Name: row.Name, OwnerRunnerID: owner, OwnerInstanceID: instanceID,
 		OwnerSessionID: sessionID, AuthFence: row.AuthFence,
 		OwnerGeneration: row.OwnerClaimedAt, OwnerClaimedAt: row.OwnerClaimedAt,

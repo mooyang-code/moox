@@ -18,6 +18,8 @@ import (
 type routeExtraConfig struct {
 	TimeoutMS      *int64   `json:"timeout_ms"`
 	MaxBodyBytes   *int64   `json:"max_body_bytes"`
+	GatewayURL     string   `json:"gateway_url"`
+	GatewayNode    string   `json:"gateway_node"`
 	GatewayMethods []string `json:"gateway_methods"`
 	GatewayCallers []string `json:"gateway_callers"`
 	GatewayRoutes  []struct {
@@ -134,6 +136,11 @@ func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayp
 		basePort = 20103
 	case "factormgr":
 		basePort = 11403
+	case "strategymgr":
+		// Strategy keeps its browser-facing HTTP listener on 11433, while the
+		// native service gateway must speak tRPC to the dedicated 11430 listener.
+		// Deployment.Port remains the HTTP endpoint used by the Admin BFF.
+		basePort = 11430
 	}
 	base := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(basePort))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods, AllowedCallers: extra.GatewayCallers}
 	if extra.TimeoutMS != nil {
@@ -187,6 +194,16 @@ func parseRouteExtraConfig(raw string) (routeExtraConfig, error) {
 	if value, ok := object["gateway_methods"]; ok {
 		if string(value) == "null" || json.Unmarshal(value, &extra.GatewayMethods) != nil {
 			return extra, fmt.Errorf("gateway_methods must be an array of strings")
+		}
+	}
+	if value, ok := object["gateway_url"]; ok {
+		if string(value) == "null" || json.Unmarshal(value, &extra.GatewayURL) != nil {
+			return extra, fmt.Errorf("gateway_url must be a string")
+		}
+	}
+	if value, ok := object["gateway_node"]; ok {
+		if string(value) == "null" || json.Unmarshal(value, &extra.GatewayNode) != nil {
+			return extra, fmt.Errorf("gateway_node must be a string")
 		}
 	}
 	if value, ok := object["gateway_callers"]; ok {

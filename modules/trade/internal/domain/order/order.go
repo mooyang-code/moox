@@ -62,6 +62,12 @@ func (o *Order) MarkSubmitUnknown() ([]Event, error) {
 	return o.transition(SubmitUnknown, Submitting)
 }
 
+// AbortSubmit is only valid before the adapter call. Unlike ReturnToPending,
+// it records that submission is known not to have left the process.
+func (o *Order) AbortSubmit() ([]Event, error) {
+	return o.transition(Pending, Submitting)
+}
+
 func (o *Order) ReturnToPending() ([]Event, error) {
 	return o.transition(Pending, SubmitUnknown)
 }

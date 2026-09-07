@@ -63,6 +63,11 @@ var ErrPermanent = errors.New("permanent target weight request")
 var (
 	defaultMaxSingleWeight = shared.MustDecimal("10")
 	defaultMaxGrossWeight  = shared.MustDecimal("20")
+	// Logical targets are expressed in base units, before the executor fans
+	// them out to venue-specific child orders. Keep a venue-independent finite
+	// precision for the persisted snapshot; child orders apply each venue's
+	// own quantity step later.
+	logicalTargetQuantityStep = shared.MustDecimal("0.000000000000000001")
 )
 
 func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeventpb.LogicalAccountTargetWeightRequested, spaceID string) (WeightConversion, error) {
@@ -127,6 +132,16 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 		if strings.EqualFold(instrument.MarketType, "SPOT") && quantity.IsNegative() {
 			return WeightConversion{}, fmt.Errorf("%w: target weight resolver: Spot target cannot be negative for %s", ErrPermanent, weight.InstrumentID)
 		}
+		// Division of exact rationals often produces a repeating quotient (for
+		// example 100000*0.1/79999.5). Persist a finite, venue-independent
+		// snapshot. Venue-specific quantity steps are applied only when the
+		// executor creates child orders; quantizing here would let the first
+		// member's step silently erase a quantity that another member can fill.
+		negative := quantity.IsNegative()
+		quantity = floorToStep(quantity.Abs(), logicalTargetQuantityStep)
+		if negative {
+			quantity = quantity.Neg()
+		}
 		prices[weight.InstrumentID] = quote.Price.String()
 		evidence = append(evidence, ReferencePriceEvidence{
 			InstrumentID: weight.InstrumentID, TradingAccountID: tradingAccountID,
@@ -135,7 +150,6 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 		})
 		quantities = append(quantities, store.InstrumentTarget{
 			InstrumentID: weight.InstrumentID, Quantity: quantity.String(),
-			TradingAccountID: tradingAccountID, ExchangeSymbol: instrument.ExchangeSymbol,
 		})
 	}
 	return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: equity, EquitySourceTime: equityTime, ReferencePrices: prices, ReferencePriceEvidence: evidence, WeightsJSON: weightsJSON, QuantityTargets: quantities}, nil
