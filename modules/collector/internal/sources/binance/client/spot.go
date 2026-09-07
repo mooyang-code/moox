@@ -109,13 +109,27 @@ func (api *SpotAPI) getExchangeInfo(ctx context.Context, query url.Values) ([]*e
 }
 
 func (api *SpotAPI) GetExchangeInfoWithIPs(ctx context.Context, ips []string) ([]*exchange.SymbolInfo, error) {
-	return api.getExchangeInfoWithIPs(ctx, nil, ips)
+	return api.GetExchangeInfoWithDomainIPs(ctx, api.client.SpotDomain(), ips)
+}
+
+// GetExchangeInfoWithDomainIPs requests Spot exchange metadata from the
+// explicitly selected official endpoint. The caller owns endpoint fallback so
+// each configured domain can use its own DNS snapshot.
+func (api *SpotAPI) GetExchangeInfoWithDomainIPs(ctx context.Context, domain string, ips []string) ([]*exchange.SymbolInfo, error) {
+	return api.getExchangeInfoWithDomainIPs(ctx, domain, nil, ips)
 }
 
 func (api *SpotAPI) getExchangeInfoWithIPs(ctx context.Context, query url.Values, ips []string) ([]*exchange.SymbolInfo, error) {
+	return api.getExchangeInfoWithDomainIPs(ctx, api.client.SpotDomain(), query, ips)
+}
+
+func (api *SpotAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain string, query url.Values, ips []string) ([]*exchange.SymbolInfo, error) {
 	var symbols []*exchange.SymbolInfo
 	var total int
-	domain := api.client.SpotDomain()
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		domain = api.client.SpotDomain()
+	}
 
 	err := retryBinance(ctx,
 		func() error {
