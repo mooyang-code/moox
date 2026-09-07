@@ -157,6 +157,21 @@ func (r *PeriodReadinessRepository) MarkSubjectSuccessWithFields(ctx context.Con
 // before the reporter constructs its payload, so a crash/retry cannot change
 // the event's timestamp.
 func (r *PeriodReadinessRepository) FinalizeDue(ctx context.Context, now time.Time, limit int) ([]domain.PeriodReport, error) {
+	return r.finalizeDue(ctx, "", now, limit)
+}
+
+// FinalizeDueInSpace is the space-scoped form used when one Collector owns
+// readiness state for more than one market. Keeping the filter in the
+// repository prevents per-space reporters from finalizing each other's rows.
+func (r *PeriodReadinessRepository) FinalizeDueInSpace(ctx context.Context, spaceID string, now time.Time, limit int) ([]domain.PeriodReport, error) {
+	spaceID, err := requiredPeriodSpaceID(spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return r.finalizeDue(ctx, spaceID, now, limit)
+}
+
+func (r *PeriodReadinessRepository) finalizeDue(ctx context.Context, spaceID string, now time.Time, limit int) ([]domain.PeriodReport, error) {
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("period readiness repository is not initialized")
 	}
@@ -164,9 +179,11 @@ func (r *PeriodReadinessRepository) FinalizeDue(ctx context.Context, now time.Ti
 		limit = 100
 	}
 	var parents []domain.PeriodReadiness
-	if err := r.db.WithContext(ctx).
-		Where("c_report_state = ? AND (c_deadline_at <= ? OR c_id IN (SELECT c_readiness_id FROM t_period_readiness_items GROUP BY c_readiness_id HAVING SUM(CASE WHEN c_state = 'pending' THEN 1 ELSE 0 END) = 0))", domain.PeriodReportWaiting, now.UTC()).
-		Order("c_deadline_at ASC, c_id ASC").Limit(limit).Find(&parents).Error; err != nil {
+	query := r.db.WithContext(ctx).Where("c_report_state = ? AND (c_deadline_at <= ? OR c_id IN (SELECT c_readiness_id FROM t_period_readiness_items GROUP BY c_readiness_id HAVING SUM(CASE WHEN c_state = 'pending' THEN 1 ELSE 0 END) = 0))", domain.PeriodReportWaiting, now.UTC())
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	if err := query.Order("c_deadline_at ASC, c_id ASC").Limit(limit).Find(&parents).Error; err != nil {
 		return nil, err
 	}
 	result := make([]domain.PeriodReport, 0, len(parents))
@@ -270,11 +287,28 @@ func (r *PeriodReadinessRepository) PersistPayload(ctx context.Context, readines
 }
 
 func (r *PeriodReadinessRepository) ListPendingReports(ctx context.Context, limit int) ([]domain.PeriodReport, error) {
+	return r.listPendingReports(ctx, "", limit)
+}
+
+// ListPendingReportsInSpace returns only reports owned by one market space.
+func (r *PeriodReadinessRepository) ListPendingReportsInSpace(ctx context.Context, spaceID string, limit int) ([]domain.PeriodReport, error) {
+	spaceID, err := requiredPeriodSpaceID(spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return r.listPendingReports(ctx, spaceID, limit)
+}
+
+func (r *PeriodReadinessRepository) listPendingReports(ctx context.Context, spaceID string, limit int) ([]domain.PeriodReport, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	var parents []domain.PeriodReadiness
-	if err := r.db.WithContext(ctx).Where("c_report_state = ?", domain.PeriodReportPending).Order("c_id ASC").Limit(limit).Find(&parents).Error; err != nil {
+	query := r.db.WithContext(ctx).Where("c_report_state = ?", domain.PeriodReportPending)
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	if err := query.Order("c_id ASC").Limit(limit).Find(&parents).Error; err != nil {
 		return nil, err
 	}
 	result := make([]domain.PeriodReport, 0, len(parents))
@@ -292,6 +326,20 @@ func (r *PeriodReadinessRepository) ListPendingReports(ctx context.Context, limi
 // dataset/frequency. It is intentionally unbounded by the delivery page so
 // operational gauges cannot report zero merely because the first page drained.
 func (r *PeriodReadinessRepository) CountPendingReports(ctx context.Context) (map[string]int, error) {
+	return r.countPendingReports(ctx, "")
+}
+
+// CountPendingReportsInSpace reports the pending backlog for one market
+// space, keeping metrics from the two reporters independent.
+func (r *PeriodReadinessRepository) CountPendingReportsInSpace(ctx context.Context, spaceID string) (map[string]int, error) {
+	spaceID, err := requiredPeriodSpaceID(spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return r.countPendingReports(ctx, spaceID)
+}
+
+func (r *PeriodReadinessRepository) countPendingReports(ctx context.Context, spaceID string) (map[string]int, error) {
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("period readiness repository is not initialized")
 	}
@@ -301,7 +349,11 @@ func (r *PeriodReadinessRepository) CountPendingReports(ctx context.Context) (ma
 		Count     int    `gorm:"column:c_count"`
 	}
 	var rows []countRow
-	if err := r.db.WithContext(ctx).Table("t_period_readiness").Select("c_dataset_id, c_frequency, count(*) AS c_count").Where("c_report_state = ?", domain.PeriodReportPending).Group("c_dataset_id, c_frequency").Scan(&rows).Error; err != nil {
+	query := r.db.WithContext(ctx).Table("t_period_readiness").Select("c_dataset_id, c_frequency, count(*) AS c_count").Where("c_report_state = ?", domain.PeriodReportPending)
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	if err := query.Group("c_dataset_id, c_frequency").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	result := make(map[string]int, len(rows))
@@ -321,7 +373,24 @@ func (r *PeriodReadinessRepository) MarkReported(ctx context.Context, readinessI
 }
 
 func (r *PeriodReadinessRepository) DeleteBefore(ctx context.Context, before time.Time) (int64, error) {
-	result := r.db.WithContext(ctx).Where("c_report_state = ? AND c_collected_at < ?", domain.PeriodReportReported, before.UTC()).Delete(&domain.PeriodReadiness{})
+	return r.deleteBefore(ctx, "", before)
+}
+
+// DeleteBeforeInSpace cleans only one market space's reported parents.
+func (r *PeriodReadinessRepository) DeleteBeforeInSpace(ctx context.Context, spaceID string, before time.Time) (int64, error) {
+	spaceID, err := requiredPeriodSpaceID(spaceID)
+	if err != nil {
+		return 0, err
+	}
+	return r.deleteBefore(ctx, spaceID, before)
+}
+
+func (r *PeriodReadinessRepository) deleteBefore(ctx context.Context, spaceID string, before time.Time) (int64, error) {
+	query := r.db.WithContext(ctx).Where("c_report_state = ? AND c_collected_at < ?", domain.PeriodReportReported, before.UTC())
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	result := query.Delete(&domain.PeriodReadiness{})
 	return result.RowsAffected, result.Error
 }
 
@@ -329,24 +398,52 @@ func (r *PeriodReadinessRepository) DeleteBefore(ctx context.Context, before tim
 // snapshots per Dataset/frequency. Pending parents are excluded so a delayed
 // report can still be retried with its full subject state.
 func (r *PeriodReadinessRepository) DeleteReportedItemsOutsideWindow(ctx context.Context, periods int) (int64, error) {
+	return r.deleteReportedItemsOutsideWindow(ctx, "", periods)
+}
+
+// DeleteReportedItemsOutsideWindowInSpace keeps the retention policy scoped
+// to one market space when multiple reporters share the SQLite repository.
+func (r *PeriodReadinessRepository) DeleteReportedItemsOutsideWindowInSpace(ctx context.Context, spaceID string, periods int) (int64, error) {
+	spaceID, err := requiredPeriodSpaceID(spaceID)
+	if err != nil {
+		return 0, err
+	}
+	return r.deleteReportedItemsOutsideWindow(ctx, spaceID, periods)
+}
+
+func (r *PeriodReadinessRepository) deleteReportedItemsOutsideWindow(ctx context.Context, spaceID string, periods int) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, fmt.Errorf("period readiness repository is not initialized")
 	}
 	if periods <= 0 {
 		return 0, nil
 	}
+	spaceClause := ""
+	args := []any{domain.PeriodReportReported, periods}
+	if spaceID != "" {
+		spaceClause = " AND c_space_id = ?"
+		args = []any{domain.PeriodReportReported, spaceID, periods}
+	}
 	query := `DELETE FROM t_period_readiness_items
 WHERE c_readiness_id IN (
-  SELECT c_id FROM (
-    SELECT c_id,
-           ROW_NUMBER() OVER (PARTITION BY c_dataset_id, c_frequency ORDER BY c_period_time DESC, c_id DESC) AS c_rank
-      FROM t_period_readiness
-     WHERE c_report_state = ?
-  )
+	  SELECT c_id FROM (
+	    SELECT c_id,
+	           ROW_NUMBER() OVER (PARTITION BY c_dataset_id, c_frequency ORDER BY c_period_time DESC, c_id DESC) AS c_rank
+	      FROM t_period_readiness
+	     WHERE c_report_state = ?` + spaceClause + `
+	  )
  WHERE c_rank > ?
 )`
-	result := r.db.WithContext(ctx).Exec(query, domain.PeriodReportReported, periods)
+	result := r.db.WithContext(ctx).Exec(query, args...)
 	return result.RowsAffected, result.Error
+}
+
+func requiredPeriodSpaceID(spaceID string) (string, error) {
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return "", fmt.Errorf("space_id is required")
+	}
+	return spaceID, nil
 }
 
 func periodEventID(spaceID, datasetID, frequency string, period time.Time) string {

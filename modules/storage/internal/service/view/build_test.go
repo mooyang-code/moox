@@ -16,6 +16,7 @@ import (
 type primaryHistoryBackfillEngine struct {
 	queryCalls int
 	writeRows  int
+	queryRows  []*pb.RowFieldValues
 }
 
 func (*primaryHistoryBackfillEngine) Engine() string { return "duckdb" }
@@ -28,7 +29,7 @@ func (e *primaryHistoryBackfillEngine) Write(_ context.Context, _ string, batch 
 }
 func (e *primaryHistoryBackfillEngine) Query(context.Context, string, viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
 	e.queryCalls++
-	return nil, 0, nil
+	return e.queryRows, int64(len(e.queryRows)), nil
 }
 func (*primaryHistoryBackfillEngine) Stat(context.Context, string) (viewindex.ViewIndexStats, error) {
 	return viewindex.ViewIndexStats{Exists: true}, nil
@@ -159,6 +160,41 @@ func TestFactorResultViewMayStartEmptyBeforeFirstFactorPeriod(t *testing.T) {
 	}
 	if written != 0 || runtime.status != "ready" {
 		t.Fatalf("written=%d status=%q, want empty ready build", written, runtime.status)
+	}
+}
+
+func TestFactorResultViewBackfillsExistingPrimaryOutput(t *testing.T) {
+	activeKey := timeSeriesTestRowKey("venue:binance")
+	activeKey.DatasetId = "factor-results"
+	activeKey.GetTimeSeries().DataTime = "2026-08-18T00:01:00Z"
+	engine := &primaryHistoryBackfillEngine{queryRows: []*pb.RowFieldValues{{Key: activeKey}}}
+	view := &pb.View{
+		SpaceId:          "space",
+		ViewId:           "factor-result-view",
+		Engine:           "duckdb",
+		PrimaryDatasetId: "factor-results",
+		FilterJson:       `{"freq":"1m"}`,
+		Attributes:       map[string]string{"dataset_role": "factor_result"},
+	}
+	runtime := &viewRuntime{active: "factor-result-view-a", next: "factor-result-view-b"}
+	rangeReader := &primaryHistoryRangeReader{rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{
+		SpaceId: "space", DatasetId: "factor-results", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-18T00:00:00Z", SeriesTag: "venue:binance",
+	}}, {Key: &pb.TimeSeriesKey{
+		SpaceId: "space", DatasetId: "factor-results", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-18T00:01:00Z", SeriesTag: "venue:binance",
+	}}}}
+	svc := &Service{
+		engines:      map[string]viewindex.Engine{"duckdb": engine},
+		indexEngine:  map[string]string{"factor-result-view-a": "duckdb", "factor-result-view-b": "duckdb"},
+		schemas:      map[string]viewindex.ViewIndexSchema{"factor-result-view-a": {SpaceID: "space", ViewID: view.ViewId, PrimaryDatasetID: view.PrimaryDatasetId, Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema"}, "factor-result-view-b": {SpaceID: "space", ViewID: view.ViewId, PrimaryDatasetID: view.PrimaryDatasetId, Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema"}},
+		views:        map[viewRef]*viewRuntime{{spaceID: "space", viewID: view.ViewId}: runtime},
+		catalogViews: map[viewRef]*pb.View{{spaceID: "space", viewID: view.ViewId}: view},
+	}
+	written, err := svc.backfillViewWithReader(context.Background(), "space", view.ViewId, 100, &primaryHistoryFieldReader{}, rangeReader, 0, 2, defaultMaxHistoryScanRows)
+	if err != nil {
+		t.Fatalf("factor result history backfill: %v", err)
+	}
+	if written != 2 || engine.writeRows != 2 || engine.queryCalls != 0 {
+		t.Fatalf("written=%d engine_rows=%d query_calls=%d, want authoritative Primary rebuild", written, engine.writeRows, engine.queryCalls)
 	}
 }
 

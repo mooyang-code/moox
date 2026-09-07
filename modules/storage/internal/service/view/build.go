@@ -59,16 +59,16 @@ func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID st
 	// copying the active index can reproduce a short or stale View. Record
 	// Bleve Views retain the active-copy path because they have no time-series
 	// Primary history reader.
-	// Factor result Views are derived outputs. On their first creation there is
-	// no historical result stream to scan, and on later revisions the current
-	// active result index is authoritative. Requiring the generic Primary
-	// lookback here creates a bootstrap deadlock: the binding stays pending until
-	// the result View is active, while no factor rows can be produced while the
-	// binding is pending. Keep the strict Primary lookback contract for source
-	// and user-managed time-series Views, but let managed result Views start
-	// empty and copy their active index on subsequent revisions.
+	// Factor result Views are derived outputs. They may legitimately start empty
+	// before the first Factor period, but an existing active index is not
+	// authoritative for rebuild completeness: it can contain only a partial
+	// result set after an interrupted build or a lost event. When Primary history
+	// is available, rebuild directly from that authoritative source instead of
+	// merging it with active rows under Backfill's non-overwrite semantics.
 	factorResultView := isFactorResultView(catalogView)
-	if activeID != "" && (minimumLookback > 0 || lookbackPeriods > 0) && !factorResultView {
+	historyConfigured := minimumLookback > 0 || lookbackPeriods > 0
+	primaryHistoryRebuild := historyConfigured && factorResultView && reader != nil && rangeReader != nil
+	if activeID != "" && historyConfigured && (!factorResultView || primaryHistoryRebuild) {
 		nextEngine, err := s.engineFor(nextID)
 		if err != nil {
 			return 0, err
@@ -158,13 +158,10 @@ func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID st
 		if strings.EqualFold(strings.TrimSpace(next.Engine()), "bleve") {
 			log.Printf("storage record View %s/%s starts empty: no Primary history reader", spaceID, viewID)
 		} else if factorResultView {
-			// Factor results are produced by the Factor service from future
-			// source-ready periods. Their Primary dataset is intentionally empty
-			// until the binding becomes executable, so scanning it here would
-			// block bootstrap on history materialization and recreate the
-			// pending-view deadlock. The first result build is an empty, valid
-			// index; later revisions copy the active result index above.
-			log.Printf("storage factor result View %s/%s starts empty; waiting for Factor output", spaceID, viewID)
+			written, err = s.backfillFactorResultHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, minimumLookback, lookbackPeriods, maxHistoryScanRows)
+			if err != nil {
+				return written, err
+			}
 		} else {
 			if reader == nil {
 				return 0, errors.New("Primary field reader is required for a time-series View rebuild")
@@ -182,6 +179,21 @@ func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID st
 	}
 	runtime.status = "ready"
 	runtime.mu.Unlock()
+	return written, nil
+}
+
+func (s *Service) backfillFactorResultHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, minimumLookback time.Duration, lookbackPeriods, maxHistoryScanRows uint64) (uint64, error) {
+	if reader == nil || rangeReader == nil {
+		log.Printf("storage factor result View %s/%s starts empty; waiting for Factor output", spaceID, viewID)
+		return 0, nil
+	}
+	written, err := s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, minimumLookback, lookbackPeriods, maxHistoryScanRows)
+	if err != nil {
+		return written, err
+	}
+	if written == 0 {
+		log.Printf("storage factor result View %s/%s starts empty; waiting for Factor output", spaceID, viewID)
+	}
 	return written, nil
 }
 

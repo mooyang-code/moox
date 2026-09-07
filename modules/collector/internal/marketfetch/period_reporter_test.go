@@ -53,3 +53,32 @@ func TestPeriodReporterRequiresStorageAndSchema(t *testing.T) {
 	require.NoError(t, s.ApplySchema(schema.AllSQL()))
 	require.Error(t, NewPeriodReporter(s.PeriodReadiness(), nil, "crypto", time.Hour).Flush(context.Background()))
 }
+
+func TestPeriodReporterIsolatesSpaceBacklog(t *testing.T) {
+	s, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	require.NoError(t, s.ApplySchema(schema.AllSQL()))
+	period := time.Date(2026, 8, 9, 12, 2, 0, 0, time.UTC)
+	for _, spaceID := range []string{"crypto", "stockcn"} {
+		key := domain.PeriodKey{SpaceID: spaceID, DatasetID: "bars", Frequency: "1m", PeriodTime: period}
+		_, err = s.PeriodReadiness().EnsurePeriod(context.Background(), domain.PeriodSeed{
+			PeriodKey: key, DeadlineAt: period.Add(time.Minute),
+			Tasks: []domain.PeriodTaskSeed{{TaskID: "task-" + spaceID, SubjectID: "subject-" + spaceID, FunctionName: "fetch-1", WriteSource: "scf:fetch-1"}},
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.PeriodReadiness().MarkSubjectSuccess(context.Background(), key, "subject-"+spaceID, "fetch-1", "scf:fetch-1", period))
+	}
+
+	cryptoFake := &periodReporterFake{}
+	stockFake := &periodReporterFake{}
+	cryptoReporter := NewPeriodReporter(s.PeriodReadiness(), cryptoFake, "crypto", time.Hour)
+	stockReporter := NewPeriodReporter(s.PeriodReadiness(), stockFake, "stockcn", time.Hour)
+	cryptoReporter.now = func() time.Time { return period.Add(10 * time.Second) }
+	stockReporter.now = cryptoReporter.now
+	require.NoError(t, cryptoReporter.Flush(context.Background()))
+	require.Len(t, cryptoFake.payloads, 1)
+	require.Empty(t, stockFake.payloads)
+	require.NoError(t, stockReporter.Flush(context.Background()))
+	require.Len(t, stockFake.payloads, 1)
+}

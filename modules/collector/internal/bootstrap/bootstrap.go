@@ -321,8 +321,13 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	// large-fleet response as a coordination failure.
 	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 60 * time.Second})
 	metadataSource := storagesource.NewDatasetSource(deps.StorageRPCGatewayTarget)
-	completionSpaceID := marketFetchSpaceID()
+	spaceIDs := marketFetchSpaceIDs()
+	if len(spaceIDs) == 0 {
+		log.Warn("collector market fetch scheduler has no configured spaces")
+		return
+	}
 	var resampleRunner *collectorresample.Runner
+	var resampleRunners []*collectorresample.Runner
 	var resamplePreparer *collectorresample.Preparer
 	var resampleMetrics *collectorresample.Metrics
 	if cfg.KlineResample.Enabled {
@@ -339,11 +344,14 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			} else {
 				log.Warn("collector kline resample disabled: Storage adapter has no View sync waiter")
 			}
-			resampleRunner = &collectorresample.Runner{Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Readiness: dbm.PeriodReadiness(), Source: metadataSource, Primary: localStorage, Config: collectorresample.RunnerConfig{
-				SpaceID: completionSpaceID, ScanTimeout: cfg.KlineResample.ScanTimeout, WorkerConcurrency: cfg.KlineResample.WorkerConcurrency, MaxClaimsPerTick: cfg.KlineResample.MaxClaimsPerTick, WorkerJobTimeout: cfg.KlineResample.WorkerJobTimeout,
-				WorkerPollInterval: cfg.KlineResample.WorkerPollInterval, WorkerMaxSourceKeys: cfg.KlineResample.WorkerMaxSourceKeysPerClaim,
-				StaleRunningAfter: cfg.KlineResample.StaleRunningAfter, DefaultSettleDelay: cfg.KlineResample.DefaultSettleDelay, RepairLookbackBuckets: cfg.KlineResample.RepairLookbackBuckets,
-			}, Metrics: resampleMetrics}
+			for _, spaceID := range spaceIDs {
+				resampleRunner = &collectorresample.Runner{Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Readiness: dbm.PeriodReadiness(), Source: metadataSource, Primary: localStorage, Config: collectorresample.RunnerConfig{
+					SpaceID: spaceID, ScanTimeout: cfg.KlineResample.ScanTimeout, WorkerConcurrency: cfg.KlineResample.WorkerConcurrency, MaxClaimsPerTick: cfg.KlineResample.MaxClaimsPerTick, WorkerJobTimeout: cfg.KlineResample.WorkerJobTimeout,
+					WorkerPollInterval: cfg.KlineResample.WorkerPollInterval, WorkerMaxSourceKeys: cfg.KlineResample.WorkerMaxSourceKeysPerClaim,
+					StaleRunningAfter: cfg.KlineResample.StaleRunningAfter, DefaultSettleDelay: cfg.KlineResample.DefaultSettleDelay, RepairLookbackBuckets: cfg.KlineResample.RepairLookbackBuckets,
+				}, Metrics: resampleMetrics}
+				resampleRunners = append(resampleRunners, resampleRunner)
+			}
 			prepareCtx, prepareCancel := context.WithTimeout(trpc.BackgroundContext(), cfg.KlineResample.ScanTimeout)
 			if err := resamplePreparer.RunOnce(prepareCtx); err != nil {
 				log.WarnContextf(trpc.BackgroundContext(), "collector kline resample initial preparation failed: %v", err)
@@ -351,42 +359,53 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			prepareCancel()
 		}
 	}
-	reconciler := &marketfetch.Reconciler{
-		Rules: dbm.TaskRules(), Symbols: metadataSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
-		Metrics: metrics, MaxSubjects: 30,
-		ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
-		MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
-		StockCNStagger: marketfetch.StockCNStaggerConfig{
-			StartSecond:        cfg.StockCN.StaggerStartSecond,
-			WindowSeconds:      cfg.StockCN.StaggerWindowSeconds,
-			MaxStartsPerSecond: cfg.StockCN.StaggerMaxStartsPerSecond,
-		},
+	type marketFetchRuntime struct {
+		spaceID     string
+		reconciler  *marketfetch.Reconciler
+		readiness   *marketfetch.PeriodReadinessService
+		scheduler   *marketfetch.Scheduler
+		replayReady <-chan struct{}
 	}
-	readiness := marketfetch.NewPeriodReadinessService(dbm.TaskInstances(), dbm.PeriodReadiness(), cfg.PeriodReadiness.Grace)
-	invokeScheduler := &marketfetch.Scheduler{
-		Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
-		// Use the target resolved by discovery rather than the static local
-		// config.  Invoke SCFs may run outside the Collector host, so a
-		// 127.0.0.1 gateway target would point back at the function itself.
-		Invoker: invoker, Storage: marketfetch.NewMarketStorageForMarket, StorageTarget: deps.StorageRPCGatewayTarget,
-		InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: completionSpaceID, DNSCache: dnsCache,
-		Symbols:               metadataSource,
-		InvokeNonRealtimeOnly: true,
-	}
-	if err := readiness.EnsureCurrentAndNext(trpc.BackgroundContext(), completionSpaceID, time.Now().UTC()); err != nil {
-		log.WarnContextf(trpc.BackgroundContext(), "collector period readiness prebuild failed space=%s: %v", completionSpaceID, err)
-	}
-	if err := marketfetch.StartCompletionConsumer(trpc.BackgroundContext(), completionSpaceID, dbm.FetchBatches(), dbm.FetchRetries(), dbm.TaskInstances(), metrics); err != nil {
-		log.WarnContextf(trpc.BackgroundContext(), "collector market fetch completion consumer disabled: %v", err)
-	}
-	replayReady, err := marketfetch.StartStorageWriteConsumerReady(trpc.BackgroundContext(), completionSpaceID, dbm.TaskInstances(), readiness)
-	if err != nil {
-		log.WarnContextf(trpc.BackgroundContext(), "collector storage write consumer disabled: %v", err)
+	runtimes := make([]marketFetchRuntime, 0, len(spaceIDs))
+	for _, spaceID := range spaceIDs {
+		reconciler := &marketfetch.Reconciler{
+			Rules: dbm.TaskRules(), Symbols: metadataSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
+			Metrics: metrics, MaxSubjects: 30,
+			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
+			MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
+			StockCNStagger: marketfetch.StockCNStaggerConfig{
+				StartSecond:        cfg.StockCN.StaggerStartSecond,
+				WindowSeconds:      cfg.StockCN.StaggerWindowSeconds,
+				MaxStartsPerSecond: cfg.StockCN.StaggerMaxStartsPerSecond,
+			},
+		}
+		readiness := marketfetch.NewPeriodReadinessService(dbm.TaskInstances(), dbm.PeriodReadiness(), cfg.PeriodReadiness.Grace)
+		invokeScheduler := &marketfetch.Scheduler{
+			Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
+			// Use the target resolved by discovery rather than the static local
+			// config. Invoke SCFs may run outside the Collector host, so a
+			// 127.0.0.1 gateway target would point back at the function itself.
+			Invoker: invoker, Storage: marketfetch.NewMarketStorageForMarket, StorageTarget: deps.StorageRPCGatewayTarget,
+			InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: spaceID, DNSCache: dnsCache,
+			Symbols:               metadataSource,
+			InvokeNonRealtimeOnly: true,
+		}
+		if err := readiness.EnsureCurrentAndNext(trpc.BackgroundContext(), spaceID, time.Now().UTC()); err != nil {
+			log.WarnContextf(trpc.BackgroundContext(), "collector period readiness prebuild failed space=%s: %v", spaceID, err)
+		}
+		if err := marketfetch.StartCompletionConsumer(trpc.BackgroundContext(), spaceID, dbm.FetchBatches(), dbm.FetchRetries(), dbm.TaskInstances(), metrics); err != nil {
+			log.WarnContextf(trpc.BackgroundContext(), "collector market fetch completion consumer disabled space=%s: %v", spaceID, err)
+		}
+		replayReady, err := marketfetch.StartStorageWriteConsumerReady(trpc.BackgroundContext(), spaceID, dbm.TaskInstances(), readiness)
+		if err != nil {
+			log.WarnContextf(trpc.BackgroundContext(), "collector storage write consumer disabled space=%s: %v", spaceID, err)
+		}
+		runtimes = append(runtimes, marketFetchRuntime{spaceID: spaceID, reconciler: reconciler, readiness: readiness, scheduler: invokeScheduler, replayReady: replayReady})
 	}
 	// Resampling owns a dedicated minute timer. Its callback only schedules a
 	// bounded background scan, so slow source/target Storage I/O cannot delay the
 	// existing SCF coordination timer.
-	if resampleRunner != nil || resamplePreparer != nil {
+	if len(resampleRunners) > 0 || resamplePreparer != nil {
 		resampleService := s.Service("trpc.moox.collector.kline_resample.timer")
 		if resampleService == nil {
 			log.Warn("collector kline resample timer service is not configured, skip register")
@@ -403,13 +422,13 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 					if resamplePreparer != nil {
 						prepareCtx, prepareCancel := context.WithTimeout(tickCtx, cfg.KlineResample.ScanTimeout)
 						if err := resamplePreparer.RunOnce(prepareCtx); err != nil {
-							log.WarnContextf(tickCtx, "collector kline resample preparation failed space=%s: %v", completionSpaceID, err)
+							log.WarnContextf(tickCtx, "collector kline resample preparation failed: %v", err)
 						}
 						prepareCancel()
 					}
-					if resampleRunner != nil {
-						if err := resampleRunner.Tick(tickCtx, time.Now().UTC()); err != nil {
-							log.WarnContextf(tickCtx, "collector kline resample tick failed space=%s: %v", completionSpaceID, err)
+					for _, runner := range resampleRunners {
+						if err := runner.Tick(tickCtx, time.Now().UTC()); err != nil {
+							log.WarnContextf(tickCtx, "collector kline resample tick failed space=%s: %v", runner.Config.SpaceID, err)
 						}
 					}
 				}()
@@ -417,36 +436,44 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			})
 		}
 	}
-	periodMarketType := "spot"
-	if strings.EqualFold(completionSpaceID, marketfetch.StockCNSpaceID) {
-		periodMarketType = "equity"
-	}
-	periodStorage, storageErr := marketfetch.NewMarketStorageForMarket(deps.StorageRPCGatewayTarget, periodMarketType, "collector")
-	if storageErr != nil {
-		log.WarnContextf(trpc.BackgroundContext(), "collector period readiness reporter disabled: %v", storageErr)
-	} else if reporter, ok := periodStorage.(marketfetch.DatasetPeriodReporter); ok {
-		periodReporter := marketfetch.NewPeriodReporter(dbm.PeriodReadiness(), reporter, completionSpaceID, cfg.PeriodReadiness.ParentRetention)
+	for _, runtime := range runtimes {
+		periodMarketType := "spot"
+		if strings.EqualFold(runtime.spaceID, marketfetch.StockCNSpaceID) {
+			periodMarketType = "equity"
+		}
+		periodStorage, storageErr := marketfetch.NewMarketStorageForMarket(deps.StorageRPCGatewayTarget, periodMarketType, "collector")
+		if storageErr != nil {
+			log.WarnContextf(trpc.BackgroundContext(), "collector period readiness reporter disabled space=%s: %v", runtime.spaceID, storageErr)
+			continue
+		}
+		reporter, ok := periodStorage.(marketfetch.DatasetPeriodReporter)
+		if !ok {
+			log.WarnContextf(trpc.BackgroundContext(), "collector Storage adapter does not support period readiness reports space=%s", runtime.spaceID)
+			continue
+		}
+		if runtime.replayReady == nil {
+			log.WarnContextf(trpc.BackgroundContext(), "collector period readiness reporter disabled space=%s because storage replay did not start", runtime.spaceID)
+			continue
+		}
+		periodReporter := marketfetch.NewPeriodReporter(dbm.PeriodReadiness(), reporter, runtime.spaceID, cfg.PeriodReadiness.ParentRetention)
 		periodReporter.SetItemRetention(cfg.PeriodReadiness.ItemRetention)
 		periodReporter.SetMetrics(metrics)
 		// DeliverAll replay is a one-time migration/readiness projection. Do
 		// not finalize deadlines until the replay has drained, otherwise a
 		// slow startup can publish degraded before its historical rows arrive.
-		go func() {
+		go func(spaceID string, replayReady <-chan struct{}, periodReporter *marketfetch.PeriodReporter) {
 			// A DeliverAll replay is part of the readiness evidence. Do not
 			// fail open after a wall-clock timeout: starting FinalizeDue while
 			// the row tail is still pending would permanently publish degraded.
 			<-replayReady
 			if err := marketfetch.StartPeriodReporter(trpc.BackgroundContext(), periodReporter, cfg.PeriodReadiness.ReportInterval); err != nil {
-				log.WarnContextf(trpc.BackgroundContext(), "collector period readiness reporter disabled: %v", err)
+				log.WarnContextf(trpc.BackgroundContext(), "collector period readiness reporter disabled space=%s: %v", spaceID, err)
 			}
-		}()
-	} else {
-		log.Warn("collector Storage adapter does not support period readiness reports")
+		}(runtime.spaceID, runtime.replayReady, periodReporter)
 	}
 	timer.RegisterScheduler("collectorMarketFetch", &timer.DefaultScheduler{})
 	var marketFetchTickRunning atomic.Bool
 	timer.RegisterHandlerService(service, func(ctx context.Context) error {
-		spaceID := completionSpaceID
 		if !marketFetchTickRunning.CompareAndSwap(false, true) {
 			log.WarnContextf(ctx, "collector market fetch timer tick skipped because the previous tick is still running")
 			return nil
@@ -454,18 +481,21 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		go func() {
 			defer marketFetchTickRunning.Store(false)
 			tickCtx := trpc.BackgroundContext()
-			if err := invokeScheduler.Tick(tickCtx, spaceID); err != nil {
-				log.WarnContextf(tickCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
-			}
-			if err := reconciler.Reconcile(tickCtx, spaceID); err != nil {
-				if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
-					log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s expected_timer_function_count=%d measured_safe_group_size=%d: %v", spaceID, cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, err)
-				} else {
-					log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s: %v", spaceID, err)
+			for _, runtime := range runtimes {
+				spaceID := runtime.spaceID
+				if err := runtime.scheduler.Tick(tickCtx, spaceID); err != nil {
+					log.WarnContextf(tickCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
 				}
-			}
-			if err := readiness.EnsureCurrentAndNext(tickCtx, spaceID, time.Now().UTC()); err != nil {
-				log.WarnContextf(tickCtx, "collector period readiness prebuild failed space=%s: %v", spaceID, err)
+				if err := runtime.reconciler.Reconcile(tickCtx, spaceID); err != nil {
+					if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
+						log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s expected_timer_function_count=%d measured_safe_group_size=%d: %v", spaceID, cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, err)
+					} else {
+						log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s: %v", spaceID, err)
+					}
+				}
+				if err := runtime.readiness.EnsureCurrentAndNext(tickCtx, spaceID, time.Now().UTC()); err != nil {
+					log.WarnContextf(tickCtx, "collector period readiness prebuild failed space=%s: %v", spaceID, err)
+				}
 			}
 		}()
 		return nil
@@ -473,7 +503,37 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 }
 
 func marketFetchSpaceID() string {
-	return strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
+	spaceIDs := marketFetchSpaceIDs()
+	if len(spaceIDs) == 0 {
+		return ""
+	}
+	return spaceIDs[0]
+}
+
+func marketFetchSpaceIDs() []string {
+	raw := strings.TrimSpace(os.Getenv("MOOX_SPACE_IDS"))
+	if raw == "" {
+		raw = os.Getenv("MOOX_SPACE_ID")
+	}
+	return parseMarketFetchSpaceIDs(raw)
+}
+
+func parseMarketFetchSpaceIDs(raw string) []string {
+	seen := make(map[string]struct{})
+	spaceIDs := make([]string, 0, 2)
+	for _, value := range strings.Split(raw, ",") {
+		spaceID := strings.TrimSpace(value)
+		if spaceID == "" {
+			continue
+		}
+		key := strings.ToLower(spaceID)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		spaceIDs = append(spaceIDs, spaceID)
+	}
+	return spaceIDs
 }
 
 func runtimeAuth(cfg ServiceAuthConfig) runtimeapp.AuthConfig {

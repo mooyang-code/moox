@@ -29,6 +29,10 @@ WITH_GATEWAY=1
 BUILD_WEB_ASSETS=1
 RESET_DATA=0
 COMPONENT_OVERLAY=0
+MOOX_SPACE_CONFIG_EXPLICIT=0
+if [[ -n "${MOOX_SPACE_ID:-}" || -n "${MOOX_SPACE_IDS:-}" ]]; then
+  MOOX_SPACE_CONFIG_EXPLICIT=1
+fi
 TARGET_GOOS=""
 TARGET_GOARCH=""
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
@@ -53,7 +57,17 @@ if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
 else
   EVENTBUS_SCHEME=nats
 fi
-if [[ -n "${MOOX_EVENTBUS_PUBLIC_IP:-}" ]]; then
+if [[ -n "${MOOX_EVENTBUS_NATS_URL:-}" ]]; then
+  # A component overlay may need to keep an existing public EventBus listener
+  # while letting a local service use the loopback TLS endpoint. Preserve an
+  # explicit client URL instead of silently rebuilding it from public_ip.
+  EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL}"
+  if [[ -n "${MOOX_EVENTBUS_PUBLIC_IP:-}" ]]; then
+    MOOX_EVENTBUS_HOST=0.0.0.0
+  else
+    MOOX_EVENTBUS_HOST=127.0.0.1
+  fi
+elif [[ -n "${MOOX_EVENTBUS_PUBLIC_IP:-}" ]]; then
   EVENTBUS_URL_ENV="${EVENTBUS_SCHEME}://${MOOX_EVENTBUS_PUBLIC_IP}:${MOOX_EVENTBUS_PORT}"
   MOOX_EVENTBUS_HOST=0.0.0.0
 else
@@ -588,6 +602,9 @@ fi
 if [[ "${PACKAGE_ONLY}" -eq 1 ]]; then
   [[ -n "${PACKAGE_ARCHIVE}" ]] || fail "--archive is required with --package-only"
   PACKAGE_ARCHIVE="$(cd "$(dirname "${PACKAGE_ARCHIVE}")" && pwd)/$(basename "${PACKAGE_ARCHIVE}")"
+  if [[ "${COMPONENT_OVERLAY}" -eq 1 ]]; then
+    fail "--package-only cannot be combined with --component-overlay; deploy the overlay to a target instead"
+  fi
 fi
 [[ "${NODE_ID}" =~ ^[a-z0-9][a-z0-9_-]{0,127}$ ]] || fail "--node-id is required and must use lowercase letters, digits, dash, or underscore"
 validate_gateway_control_url "${GATEWAY_CONTROL_URL}" || fail "--gateway-control-url must be HTTPS, or loopback HTTP, without credentials, path, query, fragment, or whitespace"
@@ -1175,10 +1192,13 @@ patch_configs() {
   if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/moox_collector\.db#path: ../data/collector/moox_collector.db#g' \
       "${STAGE_DIR}/collector/config/app.yaml"
-    # Local collector config disables the timer for dev runs; deployments need it on.
-    collector_space_id="${MOOX_SPACE_ID:-crypto}"
-    perl -0pi -e 's#scheduler=collectorSchedule&disable=1&params=[^"]*#scheduler=collectorSchedule&disable=0&params=space_id='"${collector_space_id}"'#g; s#scheduler=collectorSchedule&disable=0&params=(?=")#scheduler=collectorSchedule&disable=0&params=space_id='"${collector_space_id}"'#g' \
-      "${STAGE_DIR}/collector/config/trpc_go.yaml"
+    if [[ "${COMPONENT_OVERLAY}" -eq 0 || "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 1 ]]; then
+      # Local collector config disables the timer for dev runs; deployments need it on.
+      collector_space_id="${MOOX_SPACE_ID:-${MOOX_SPACE_IDS%%,*}}"
+      collector_space_id="${collector_space_id:-crypto}"
+      perl -0pi -e 's#scheduler=collectorSchedule&disable=1&params=[^"]*#scheduler=collectorSchedule&disable=0&params=space_id='"${collector_space_id}"'#g; s#scheduler=collectorSchedule&disable=0&params=(?=")#scheduler=collectorSchedule&disable=0&params=space_id='"${collector_space_id}"'#g' \
+        "${STAGE_DIR}/collector/config/trpc_go.yaml"
+    fi
   fi
   if [[ "${WITH_FACTOR}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/factor/factor\.db#path: ../data/factor/factor.db#g' \
@@ -1367,12 +1387,27 @@ write_runtime_scripts() {
 MOOX_EVENTBUS_HOST=$(printf '%q' "${MOOX_EVENTBUS_HOST}")
 MOOX_EVENTBUS_PORT=$(printf '%q' "${MOOX_EVENTBUS_PORT}")
 MOOX_EVENTBUS_ENABLE_TLS=$(printf '%q' "${MOOX_EVENTBUS_ENABLE_TLS:-0}")
+MOOX_EVENTBUS_NATS_URL=$(printf '%q' "${EVENTBUS_URL_ENV}")
 MOOX_STORAGE_EVENTBUS_URL=$(printf '%q' "${MOOX_STORAGE_EVENTBUS_URL:-}")
 MOOX_GATEWAY_NODE_ID=$(printf '%q' "${MOOX_GATEWAY_NODE_ID:-}")
 MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=$(printf '%q' "${MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET:-ip://127.0.0.1:11003}")
 MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=$(printf '%q' "${MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID:-${MOOX_GATEWAY_NODE_ID:-}}")
 EOF
+  if [[ "${COMPONENT_OVERLAY}" -eq 0 || "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 1 ]]; then
+    printf 'MOOX_SPACE_ID=%q\n' "${MOOX_SPACE_ID:-crypto}" >>"${STAGE_DIR}/config/runtime.env"
+    printf 'MOOX_SPACE_IDS=%q\n' "${MOOX_SPACE_IDS:-${MOOX_SPACE_ID:-crypto}}" >>"${STAGE_DIR}/config/runtime.env"
+  fi
   chmod 0600 "${STAGE_DIR}/config/runtime.env"
+  if [[ "${WITH_COLLECTOR}" -eq 1 && ( "${COMPONENT_OVERLAY}" -eq 0 || "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 1 ) ]]; then
+    # Collector-only overlays preserve the installed EventBus contract. Keep
+    # the Collector's market selection in its own durable file so a restart
+    # does not fall back to a stale runtime.env from the control plane.
+    cat >"${STAGE_DIR}/config/collector-runtime.env" <<EOF
+MOOX_SPACE_ID=$(printf '%q' "${MOOX_SPACE_ID:-crypto}")
+MOOX_SPACE_IDS=$(printf '%q' "${MOOX_SPACE_IDS:-${MOOX_SPACE_ID:-crypto}}")
+EOF
+    chmod 0600 "${STAGE_DIR}/config/collector-runtime.env"
+  fi
 
   cat > "${STAGE_DIR}/start.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -1385,6 +1420,11 @@ fi
 if [[ -r "${ROOT}/config/runtime.env" ]]; then
   set -a
   source "${ROOT}/config/runtime.env"
+  set +a
+fi
+if [[ -r "${ROOT}/config/collector-runtime.env" ]]; then
+  set -a
+  source "${ROOT}/config/collector-runtime.env"
   set +a
 fi
 if [[ -r "${ROOT}/config/resources.env" ]]; then
@@ -1768,8 +1808,9 @@ STORAGE_SCHEMA_ENV=(
 
 COLLECTOR_ENV=(
   # Collector control-plane scheduling is space-scoped.  Do not rely on the
-  # process default: the deployment must carry the selected market explicitly.
+  # process default: the deployment must carry the selected markets explicitly.
   "MOOX_SPACE_ID=${MOOX_SPACE_ID:-crypto}"
+  "MOOX_SPACE_IDS=${MOOX_SPACE_IDS:-${MOOX_SPACE_ID:-crypto}}"
   "MOOX_COLLECTOR_ADMIN_GATEWAY_URL=${MOOX_COLLECTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
   "MOOX_EVENTBUS_CREDENTIAL_FILE=${MOOX_EVENTBUS_CREDENTIAL_FILE:-${HOME}/.config/moox/eventbus/collector-market-fetch-consumer.yaml}"
 )
@@ -4067,9 +4108,10 @@ EOF
   if [[ "${WITH_TRADE}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/trade/config/." "${STAGE_DIR}/trade/config/"
   fi
-  if [[ -f "${ROOT}/moox.toml" && -x "${STAGE_DIR}/bin/moox-cli" && \
+  local runtime_config_file="${MOOX_RUNTIME_CONFIG_FILE:-${ROOT}/moox.toml}"
+  if [[ -f "${runtime_config_file}" && -x "${STAGE_DIR}/bin/moox-cli" && \
         ("${WITH_TRADE}" -eq 1 || "${WITH_COLLECTOR}" -eq 1) ]]; then
-    render_args=(--file "${ROOT}/moox.toml")
+    render_args=(--file "${runtime_config_file}")
     if [[ "${WITH_TRADE}" -eq 1 ]]; then
       render_args+=(--trade-output "${STAGE_DIR}/trade/config/app.yaml")
     fi
@@ -4077,7 +4119,7 @@ EOF
       render_args+=(--collector-output "${STAGE_DIR}/collector/config/app.yaml")
     fi
     render_args+=(--node-id "${NODE_ID}")
-    log "render Trade/Collector DNS resolver runtime config from moox.toml"
+    log "render Trade/Collector DNS resolver runtime config from ${runtime_config_file}"
     # The staged CLI is built for the deployment target. When packaging a
     # Linux bundle on macOS, execute the host tool instead of trying to run
     # the staged ELF binary locally; the staged target CLI remains in the
@@ -4264,6 +4306,51 @@ stop_foreign_gateway() {
   done
 }
 
+preserve_legacy_collector_space_config() {
+  [[ "${COMPONENT_OVERLAY}" -eq 1 && "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 0 ]] || return 0
+  local deploy_dir="$1"
+  local runtime_file="${deploy_dir}/config/runtime.env"
+  local collector_runtime_file="${deploy_dir}/config/collector-runtime.env"
+  [[ -e "${collector_runtime_file}" || -L "${collector_runtime_file}" ]] && return 0
+  [[ -r "${runtime_file}" ]] || return 0
+  mkdir -p "${deploy_dir}/config"
+  local next_file="${collector_runtime_file}.migration"
+  local runtime_next="${runtime_file}.migration"
+  rm -f "${next_file}"
+  (
+    set -a
+    source "${runtime_file}"
+    set +a
+    [[ -n "${MOOX_SPACE_ID:-}" || -n "${MOOX_SPACE_IDS:-}" ]] || exit 0
+    printf 'MOOX_SPACE_ID=%q\n' "${MOOX_SPACE_ID:-crypto}"
+    printf 'MOOX_SPACE_IDS=%q\n' "${MOOX_SPACE_IDS:-${MOOX_SPACE_ID:-crypto}}"
+  ) >"${next_file}"
+  if [[ -s "${next_file}" ]]; then
+    chmod 0600 "${next_file}"
+    mv "${next_file}" "${collector_runtime_file}"
+  else
+    rm -f "${next_file}"
+  fi
+  if [[ "${WITH_EVENTBUS}" -eq 0 ]]; then
+    rm -f "${runtime_next}"
+    (
+      set -a
+      source "${runtime_file}"
+      set +a
+      [[ -n "${MOOX_SPACE_ID:-}" || -n "${MOOX_SPACE_IDS:-}" ]] || exit 0
+      awk '!/^[[:space:]]*MOOX_SPACE_ID(S)?=/' "${runtime_file}"
+      printf 'MOOX_SPACE_ID=%q\n' "${MOOX_SPACE_ID:-crypto}"
+      printf 'MOOX_SPACE_IDS=%q\n' "${MOOX_SPACE_IDS:-${MOOX_SPACE_ID:-crypto}}"
+    ) >"${runtime_next}"
+    if [[ -s "${runtime_next}" ]]; then
+      chmod 0600 "${runtime_next}"
+      mv "${runtime_next}" "${runtime_file}"
+    else
+      rm -f "${runtime_next}"
+    fi
+  fi
+}
+
 sync_local_stage() {
   local deploy_dir component_overlay="${COMPONENT_OVERLAY}"
   deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
@@ -4272,6 +4359,7 @@ sync_local_stage() {
     exec 8>"${deploy_dir}.maintenance.lock"
     flock 8
   fi
+  preserve_legacy_collector_space_config "${deploy_dir}"
 
   # The control package signs browser-facing Storage BFF requests, while the
   # independent storage package verifies them.  A storage deployment must use
@@ -4415,13 +4503,16 @@ sync_local_stage() {
         --exclude '/build-provenance.json' --exclude '/reset-storage-view-indexes.sh' \
         --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli' --exclude '/bin/moox-storage-primary' --exclude '/bin/moox-storage-view' --exclude '/bin/moox-storage-node')
     fi
-  if [[ "${WITH_EVENTBUS}" -eq 0 ]]; then
-    rsync_excludes+=(--exclude '/eventbus/' --exclude '/bin/moox-eventbus')
-    if [[ "${component_overlay}" -eq 1 ]]; then
-      # A component overlay which does not own EventBus must preserve the
-      # installed listener contract for the next restart.
-      rsync_excludes+=(--exclude '/config/runtime.env')
-    fi
+    if [[ "${WITH_EVENTBUS}" -eq 0 ]]; then
+      rsync_excludes+=(--exclude '/eventbus/' --exclude '/bin/moox-eventbus')
+      if [[ "${component_overlay}" -eq 1 ]]; then
+        # A component overlay which does not own EventBus must preserve the
+        # installed listener contract for the next restart.
+        rsync_excludes+=(--exclude '/config/runtime.env')
+        if [[ "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 0 ]]; then
+          rsync_excludes+=(--exclude '/start.sh' --exclude '/stop.sh' --exclude '/restart.sh' --exclude '/status.sh' --exclude '/healthcheck.sh')
+        fi
+      fi
     fi
     if [[ "${WITH_ARCHIVE}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/archive/' --exclude '/bin/moox-archive' --exclude '/bin/moox-archive-cli')
@@ -4431,6 +4522,9 @@ sync_local_stage() {
     fi
     if [[ "${WITH_COLLECTOR}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/collector/' --exclude '/bin/moox-collector' --exclude '/bin/moox-collector-cli' --exclude '/bin/moox-collector-scf')
+    fi
+    if [[ "${component_overlay}" -eq 1 && ( "${WITH_COLLECTOR}" -eq 0 || "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 0 ) ]]; then
+      rsync_excludes+=(--exclude '/config/collector-runtime.env')
     fi
     if [[ "${WITH_FACTOR}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/factor/' --exclude '/bin/moox-factor' --exclude '/bin/moox-factor-cli' --exclude '/bin/moox-factor-run-once')
@@ -4520,6 +4614,12 @@ sync_local_stage() {
       fi
       if [[ "${WITH_EVENTBUS}" -eq 0 ]]; then
         overlay_excludes+=(--exclude='./config/runtime.env')
+        if [[ "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 0 ]]; then
+          overlay_excludes+=(--exclude='./start.sh' --exclude='./stop.sh' --exclude='./restart.sh' --exclude='./status.sh' --exclude='./healthcheck.sh')
+        fi
+      fi
+      if [[ "${WITH_COLLECTOR}" -eq 0 || "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 0 ]]; then
+        overlay_excludes+=(--exclude='./config/collector-runtime.env')
       fi
       tar -C "${STAGE_DIR}" -cf - "${overlay_excludes[@]}" . | tar -C "${deploy_dir}" -xf -
     else
@@ -4766,9 +4866,14 @@ sync_remote_stage() {
   quoted_factor_view_read_timeout_ms="$(shell_quote "${MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS:-}")"
   quoted_control_root="$(shell_quote "${MOOX_CONTROL_ROOT:-}")"
   quoted_storage_root="$(shell_quote "${MOOX_STORAGE_ROOT:-}")"
+  quoted_space_config_explicit="$(shell_quote "${MOOX_SPACE_CONFIG_EXPLICIT}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NODE_ID=${quoted_node_id} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_HOSTAGENT=${quoted_with_hostagent} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_STORAGE_EVENTBUS_URL=${quoted_storage_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_TRADE_GATEWAY_HEALTH_ADDR=${quoted_trade_gateway_health_addr} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64=${quoted_storage_view_maintenance_policy_b64} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NODE_ID=${quoted_node_id} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_HOSTAGENT=${quoted_with_hostagent} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_SPACE_CONFIG_EXPLICIT=${quoted_space_config_explicit} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_STORAGE_EVENTBUS_URL=${quoted_storage_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_TRADE_GATEWAY_HEALTH_ADDR=${quoted_trade_gateway_health_addr} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64=${quoted_storage_view_maintenance_policy_b64} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
+MOOX_SPACE_CONFIG_EXPLICIT="${MOOX_SPACE_CONFIG_EXPLICIT:-0}"
+if [[ "${COMPONENT_OVERLAY}" == "1" && "${MOOX_SPACE_CONFIG_EXPLICIT}" == "0" ]] && tar -tzf "${ARCHIVE}" ./config/collector-runtime.env >/dev/null 2>&1; then
+  MOOX_SPACE_CONFIG_EXPLICIT=1
+fi
 
 generate_secret() {
   local purpose="$1" output secret
@@ -5035,6 +5140,50 @@ if [[ "${COMPONENT_OVERLAY}" == "0" && ( -e "${DEPLOY_DIR}/config/caddy/edge.env
     exit 1
   fi
 fi
+if [[ "${COMPONENT_OVERLAY}" == "1" && "${MOOX_SPACE_CONFIG_EXPLICIT}" == "0" ]]; then
+  legacy_runtime_file="${DEPLOY_DIR}/config/runtime.env"
+  legacy_collector_runtime_file="${DEPLOY_DIR}/config/collector-runtime.env"
+  if [[ -r "${legacy_runtime_file}" ]]; then
+    if [[ ! -e "${legacy_collector_runtime_file}" && ! -L "${legacy_collector_runtime_file}" ]]; then
+      mkdir -p "${DEPLOY_DIR}/config"
+      legacy_collector_runtime_next="${legacy_collector_runtime_file}.migration"
+      rm -f "${legacy_collector_runtime_next}"
+      (
+        set -a
+        source "${legacy_runtime_file}"
+        set +a
+        [[ -n "${MOOX_SPACE_ID:-}" || -n "${MOOX_SPACE_IDS:-}" ]] || exit 0
+        printf 'MOOX_SPACE_ID=%q\n' "${MOOX_SPACE_ID:-crypto}"
+        printf 'MOOX_SPACE_IDS=%q\n' "${MOOX_SPACE_IDS:-${MOOX_SPACE_ID:-crypto}}"
+      ) >"${legacy_collector_runtime_next}"
+      if [[ -s "${legacy_collector_runtime_next}" ]]; then
+        chmod 0600 "${legacy_collector_runtime_next}"
+        mv "${legacy_collector_runtime_next}" "${legacy_collector_runtime_file}"
+      else
+        rm -f "${legacy_collector_runtime_next}"
+      fi
+    fi
+    if [[ "${WITH_EVENTBUS}" == "0" ]]; then
+      legacy_runtime_next="${legacy_runtime_file}.migration"
+      rm -f "${legacy_runtime_next}"
+      (
+        set -a
+        source "${legacy_runtime_file}"
+        set +a
+        [[ -n "${MOOX_SPACE_ID:-}" || -n "${MOOX_SPACE_IDS:-}" ]] || exit 0
+        awk '!/^[[:space:]]*MOOX_SPACE_ID(S)?=/' "${legacy_runtime_file}"
+        printf 'MOOX_SPACE_ID=%q\n' "${MOOX_SPACE_ID:-crypto}"
+        printf 'MOOX_SPACE_IDS=%q\n' "${MOOX_SPACE_IDS:-${MOOX_SPACE_ID:-crypto}}"
+      ) >"${legacy_runtime_next}"
+      if [[ -s "${legacy_runtime_next}" ]]; then
+        chmod 0600 "${legacy_runtime_next}"
+        mv "${legacy_runtime_next}" "${legacy_runtime_file}"
+      else
+        rm -f "${legacy_runtime_next}"
+      fi
+    fi
+  fi
+fi
 
 # All preflight checks above must pass before we stop or replace a running
 # Gateway. This keeps a rejected package from causing avoidable downtime.
@@ -5066,7 +5215,6 @@ if [[ "${RESET_DATA}" == "1" ]]; then
     find "${DEPLOY_DIR}/data" -mindepth 1 -maxdepth 1 ! -name caddy -exec rm -rf -- {} +
   fi
 fi
-
 if [[ "${COMPONENT_OVERLAY}" == "0" ]]; then
   rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/gateway" "${DEPLOY_DIR}/examples" \
     "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/restart.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh"
@@ -5142,6 +5290,12 @@ if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
     # A remote component overlay which does not own EventBus must preserve
     # the installed listener contract for the next restart.
     TAR_EXCLUDES+=(--exclude='./config/runtime.env')
+    if [[ "${MOOX_SPACE_CONFIG_EXPLICIT}" == "0" ]]; then
+      TAR_EXCLUDES+=(--exclude='./start.sh' --exclude='./stop.sh' --exclude='./restart.sh' --exclude='./status.sh' --exclude='./healthcheck.sh')
+    fi
+  fi
+  if [[ "${WITH_COLLECTOR}" == "0" || "${MOOX_SPACE_CONFIG_EXPLICIT}" == "0" ]]; then
+    TAR_EXCLUDES+=(--exclude='./config/collector-runtime.env')
   fi
   if [[ "${WITH_GATEWAY}" == "1" ]]; then
     mkdir -p "${DEPLOY_DIR}/secrets"

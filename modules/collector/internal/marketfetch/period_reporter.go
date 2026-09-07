@@ -89,10 +89,10 @@ func (r *PeriodReporter) Flush(ctx context.Context) error {
 	if r.now != nil {
 		now = r.now
 	}
-	if _, err := r.periods.FinalizeDue(ctx, now().UTC(), r.batchSize); err != nil {
+	if _, err := r.periods.FinalizeDueInSpace(ctx, r.spaceID, now().UTC(), r.batchSize); err != nil {
 		return fmt.Errorf("finalize period readiness: %w", err)
 	}
-	reports, err := r.periods.ListPendingReports(ctx, r.batchSize)
+	reports, err := r.periods.ListPendingReportsInSpace(ctx, r.spaceID, r.batchSize)
 	if err != nil {
 		return fmt.Errorf("list pending period reports: %w", err)
 	}
@@ -127,20 +127,20 @@ func (r *PeriodReporter) Flush(ctx context.Context) error {
 		}
 	}
 	if r.parentRetention > 0 {
-		if _, err := r.periods.DeleteBefore(ctx, now().UTC().Add(-r.parentRetention)); err != nil {
+		if _, err := r.periods.DeleteBeforeInSpace(ctx, r.spaceID, now().UTC().Add(-r.parentRetention)); err != nil {
 			if firstReportErr == nil {
 				firstReportErr = fmt.Errorf("cleanup period readiness: %w", err)
 			}
 		}
 	}
 	if r.itemRetention > 0 {
-		if _, err := r.periods.DeleteReportedItemsOutsideWindow(ctx, r.itemRetention); err != nil {
+		if _, err := r.periods.DeleteReportedItemsOutsideWindowInSpace(ctx, r.spaceID, r.itemRetention); err != nil {
 			if firstReportErr == nil {
 				firstReportErr = fmt.Errorf("cleanup period readiness items: %w", err)
 			}
 		}
 	}
-	counts, err := r.periods.CountPendingReports(ctx)
+	counts, err := r.periods.CountPendingReportsInSpace(ctx, r.spaceID)
 	if err != nil {
 		if firstReportErr == nil {
 			firstReportErr = fmt.Errorf("count pending period reports: %w", err)

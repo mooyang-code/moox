@@ -42,10 +42,22 @@ storage:
 }
 
 func TestMarketFetchSpaceIDUsesConfiguredMarketForScheduler(t *testing.T) {
+	t.Setenv("MOOX_SPACE_IDS", "")
 	t.Setenv("MOOX_SPACE_ID", "stockcn")
 	if got := marketFetchSpaceID(); got != "stockcn" {
 		t.Fatalf("marketFetchSpaceID() = %q, want stockcn", got)
 	}
+}
+
+func TestMarketFetchSpaceIDsSupportsMultipleSpacesAndDeduplicates(t *testing.T) {
+	got := parseMarketFetchSpaceIDs(" stockcn, crypto, STOCKCN,,crypto ")
+	assert.Equal(t, []string{"stockcn", "crypto"}, got)
+}
+
+func TestMarketFetchSpaceIDsPrefersPluralEnvironment(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "stockcn")
+	t.Setenv("MOOX_SPACE_IDS", "crypto,stockcn")
+	assert.Equal(t, []string{"crypto", "stockcn"}, marketFetchSpaceIDs())
 }
 
 func TestLoadKlineResampleConfig(t *testing.T) {

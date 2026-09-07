@@ -11,6 +11,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
+	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -105,6 +106,35 @@ func (w *storageWriter) UpsertFieldsWithSource(ctx context.Context, rows []*stor
 			return fmt.Errorf("write time-series rows: %w", err)
 		}
 		return ensureStorageOK("write time-series rows", response.GetRetInfo())
+	})
+}
+
+// ReportDatasetPeriodCollected appends the terminal source-period marker that
+// Storage View uses to publish ViewSourcePeriodReady. Keep this on the common
+// market storage adapter so equity and crypto readiness follow the same path.
+func (w *storageWriter) ReportDatasetPeriodCollected(ctx context.Context, spaceID string, payload *storageeventpb.DatasetPeriodCollected) error {
+	if w == nil || w.access == nil {
+		return fmt.Errorf("report dataset period collected: storage client is required")
+	}
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" || payload == nil || strings.TrimSpace(payload.GetDatasetId()) == "" || strings.TrimSpace(payload.GetFrequency()) == "" || payload.GetPeriodTime() <= 0 {
+		return fmt.Errorf("report dataset period collected: space_id, dataset, frequency, period_time and payload are required")
+	}
+	marker := &storagepb.DatasetPeriodCollectedMarker{
+		DatasetId:      payload.GetDatasetId(),
+		Frequency:      payload.GetFrequency(),
+		PeriodTime:     payload.GetPeriodTime(),
+		Status:         payload.GetStatus(),
+		SubjectIds:     append([]string(nil), payload.GetSubjectIds()...),
+		FailedSubjects: append([]string(nil), payload.GetFailedSubjects()...),
+		CollectedAt:    payload.GetCollectedAt(),
+	}
+	return retryStorage(ctx, func() error {
+		response, err := w.access.ReportDatasetPeriodCollected(ctx, &storagepb.ReportDatasetPeriodCollectedReq{AuthInfo: w.authInfo, SpaceId: spaceID, Marker: marker})
+		if err != nil {
+			return fmt.Errorf("report dataset period collected: %w", err)
+		}
+		return ensureStorageOK("report dataset period collected", response.GetRetInfo())
 	})
 }
 
