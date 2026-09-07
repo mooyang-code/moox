@@ -73,6 +73,9 @@ describe("page layout standards", () => {
     expect(staticMenuSource.match(/\/trading\/accounts/g)?.length).toBe(2);
     expect(staticMenuSource).not.toContain('"0504"');
     expect(staticMenuSource).not.toContain("/trading/logical-accounts");
+    const strategyDefinitionsPos = staticMenuSource.indexOf('menu("025002",');
+    const strategyRunningPos = staticMenuSource.indexOf('menu("025001",');
+    expect(strategyDefinitionsPos).toBeLessThan(strategyRunningPos);
 
     expect(secrets).not.toContain('class="filter-bar"');
     expect(secrets.indexOf('placeholder="搜索名称或描述"')).toBeLessThan(secrets.indexOf('placeholder="分类"'));
