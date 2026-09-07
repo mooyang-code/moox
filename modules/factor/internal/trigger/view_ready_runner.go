@@ -268,6 +268,14 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 			SourceHash: factors[binding.BindingID].SourceHash,
 		}
 	}
+	expectedActiveIndexRevision := uint64(0)
+	if strings.HasPrefix(triggerEventID, "recalc-") {
+		// Recalculation explicitly probes a current source snapshot. A normal
+		// source-ready event is asynchronous and its write watermark is already
+		// stale by the time the Factor worker starts; the active index ID still
+		// fences A/B cutovers without rejecting ordinary live writes.
+		expectedActiveIndexRevision = ready.GetActiveIndexRevision()
+	}
 
 	tasks := make([]taskrunner.Task, 0, len(subjects)*len(selected))
 	for _, subjectID := range subjects {
@@ -278,7 +286,7 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 				SubjectID: subjectID, Freq: binding.Freq, PeriodTime: ready.GetPeriodTime(),
 				TriggerEventID: triggerEventID, TriggeredAt: triggeredAt, StartTime: period, EndTime: periodEnd,
 				ExpectedActiveIndexID:       ready.GetActiveIndexId(),
-				ExpectedActiveIndexRevision: ready.GetActiveIndexRevision(),
+				ExpectedActiveIndexRevision: expectedActiveIndexRevision,
 			}, factors[binding.BindingID], r.factorsDir)
 			if buildErr != nil {
 				return buildErr

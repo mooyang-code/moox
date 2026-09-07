@@ -24,7 +24,7 @@ func TestViewReadyRunnerRunsSubjectFactorCartesianProduct(t *testing.T) {
 	period := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
 	ready := &publicstoragepb.ViewSourcePeriodReady{
 		SourceViewId: "source_view", Frequency: "1m", PeriodTime: period.Unix(), Status: "complete",
-		PrimarySubjects: []string{"SOL", "BTC", "ETH"}, ReadyAt: timestamppb.New(period),
+		PrimarySubjects: []string{"SOL", "BTC", "ETH"}, ReadyAt: timestamppb.New(period), ActiveIndexRevision: 99,
 	}
 
 	done := make(chan error, 1)
@@ -34,6 +34,7 @@ func TestViewReadyRunnerRunsSubjectFactorCartesianProduct(t *testing.T) {
 	for _, task := range tasks {
 		got = append(got, task.SubjectID+"/"+task.Factor.FactorID)
 		require.Equal(t, taskrunner.DeterministicTaskID(task), task.TaskID)
+		require.Zero(t, task.ExpectedActiveIndexRevision, "live View writes must not fence a view-ready read")
 	}
 	require.Equal(t, []string{
 		"BTC/bias5", "BTC/bias20", "ETH/bias5", "ETH/bias20", "SOL/bias5", "SOL/bias20",

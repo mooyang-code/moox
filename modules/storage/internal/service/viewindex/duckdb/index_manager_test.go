@@ -84,6 +84,7 @@ func TestOpenAppliesResourceLimits(t *testing.T) {
 
 func TestOpenUsesDefaultMemoryLimit(t *testing.T) {
 	t.Setenv(duckDBMemoryLimitEnv, "")
+	t.Setenv(duckDBMaxOpenConnsEnv, "")
 	db, err := open(filepath.Join(t.TempDir(), "view.duckdb"))
 	if err != nil {
 		t.Fatal(err)
@@ -110,6 +111,29 @@ func TestOpenUsesDefaultMemoryLimit(t *testing.T) {
 	}
 	if memoryMiB < 230 || memoryMiB > 260 || !strings.EqualFold(memoryUnit, "MiB") {
 		t.Fatalf("memory_limit=%q, want approximately 256MB", memoryLimit)
+	}
+}
+
+func TestOpenUsesConfiguredMaxOpenConnections(t *testing.T) {
+	t.Setenv(duckDBMaxOpenConnsEnv, "16")
+	db, err := open(filepath.Join(t.TempDir(), "view.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if got := db.Stats().MaxOpenConnections; got != 16 {
+		t.Fatalf("max open connections=%d, want 16", got)
+	}
+}
+
+func TestOpenRejectsInvalidMaxOpenConnections(t *testing.T) {
+	for _, raw := range []string{"0", "65", "not-a-number"} {
+		t.Run(raw, func(t *testing.T) {
+			t.Setenv(duckDBMaxOpenConnsEnv, raw)
+			if _, err := open(filepath.Join(t.TempDir(), "view.duckdb")); err == nil {
+				t.Fatal("open succeeded with invalid max open connections")
+			}
+		})
 	}
 }
 

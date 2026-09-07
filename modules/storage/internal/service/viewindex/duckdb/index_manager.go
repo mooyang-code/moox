@@ -64,12 +64,13 @@ var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-
 var duckDBMemoryLimitRE = regexp.MustCompile(`^[1-9][0-9]*(?:KB|MB|GB|TB)$`)
 
 const (
-	duckDBMemoryLimitEnv = "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT"
-	duckDBThreadsEnv     = "MOOX_STORAGE_VIEW_DUCKDB_THREADS"
-	defaultDuckDBMemory  = "256MB"
-	defaultDuckDBThreads = 1
-	defaultMaxOpenConns  = 4
-	defaultMaxIdleConns  = 1
+	duckDBMemoryLimitEnv  = "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT"
+	duckDBThreadsEnv      = "MOOX_STORAGE_VIEW_DUCKDB_THREADS"
+	duckDBMaxOpenConnsEnv = "MOOX_STORAGE_VIEW_DUCKDB_MAX_OPEN_CONNS"
+	defaultDuckDBMemory   = "256MB"
+	defaultDuckDBThreads  = 1
+	defaultMaxOpenConns   = 4
+	defaultMaxIdleConns   = 1
 	// DuckDB accepts a large parameter count, but keeping each statement
 	// bounded avoids oversized SQL packets during a 10k-row backfill while
 	// still amortizing per-row Exec overhead for the event consumer.
@@ -1312,7 +1313,15 @@ func open(path string) (*sql.DB, error) {
 	// concurrent readers and one writer within the same process; keep a modest
 	// fixed pool so read concurrency is useful without mirroring the much larger
 	// Factor worker count.
-	db.SetMaxOpenConns(defaultMaxOpenConns)
+	maxOpenConns := defaultMaxOpenConns
+	if raw := strings.TrimSpace(os.Getenv(duckDBMaxOpenConnsEnv)); raw != "" {
+		maxOpenConns, err = strconv.Atoi(raw)
+		if err != nil || maxOpenConns < 1 || maxOpenConns > 64 {
+			_ = db.Close()
+			return nil, fmt.Errorf("invalid %s %q", duckDBMaxOpenConnsEnv, raw)
+		}
+	}
+	db.SetMaxOpenConns(maxOpenConns)
 	db.SetMaxIdleConns(defaultMaxIdleConns)
 	memoryLimit := strings.TrimSpace(os.Getenv(duckDBMemoryLimitEnv))
 	if memoryLimit == "" {
