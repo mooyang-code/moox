@@ -38,7 +38,7 @@ MooX 后端 Go 模块目录，由仓库根目录 `go.work` 统一管理。各模
 :11200-11208  moox-trade
 :11409/:11410 moox-monitor（/healthz + MonitorMgr）
 :11419/:11420 moox-eventbus（/readyz + EventBusMgr）
-:11430/:11431 moox-strategy（StrategyMgr + /readyz）
+:11433/:11431 moox-strategy（StrategyMgr HTTP + /readyz；native tRPC 11430）
 ```
 
 SCF 采集运行时通过 `/api/service/*`（HMAC 签名）回调后台，不经 JWT 用户鉴权。

@@ -21,7 +21,7 @@ V1 保持单进程串行协调。SQLite 事务、账户锁、组合账户锁、�
 exactly-once 或通用调度框架。
 
 ```text
-LogicalAccountTargetRequested / operator RPC
+LogicalAccountTargetWeightRequested / operator RPC
                     |
         LogicalAccount / TargetExecutor / OrderService
                     |
@@ -35,18 +35,20 @@ SQLite: account, logical account, target, operator action,
 
 ## 组合账户与归属
 
-`LogicalAccount`（组合账户）把多个执行账户视为一个总持仓：
+`LogicalAccount`（组合账户）把多个执行账户视为一个总持仓，由一个
+`StrategyInstance` 的当前 session 生命周期控制：
 
 ```text
-Strategy 1 -> N StrategyRunner
-StrategyRunner 1 -> 0..1 LogicalAccount
+Strategy 1 -> N StrategyInstance
+StrategyInstance 1 -> 0..1 LogicalAccount
 LogicalAccount 1 -> N TradingAccount
 TradingAccount 1 -> 0..1 enabled LogicalAccount
 ```
 
-观察型 Runner 可以不关联组合账户。执行型 Runner 的 `logical_account_id` 必须和 Trade
-保存的 `owner_runner_id` 相互匹配。启用期间不允许换 owner；先停用并释放旧归属，再
-建立新关系。
+观察型 StrategyInstance 可以不关联组合账户。执行型实例的 `logical_account_id` 必须和
+Trade 保存的 `owner_instance_id` + `owner_session_id` 相互匹配。启用期间不允许无条件换
+owner；生命周期切换必须使用带 `auth_fence` 的 session CAS，并由 Trade 原子清理旧目标。
+旧 `runner_id`/`owner_runner_id` 只用于历史审计和旧数据读取，不能建立新的执行归属。
 
 启用成员（执行账户）必须同质：
 
@@ -76,7 +78,7 @@ ready =
 ```text
 t_logical_accounts
   space_id + logical_account_id
-  name + owner_runner_id
+  name + owner_instance_id + owner_session_id + auth_fence
   execution_mode + market_type + settlement_asset
   automation_state + pause_reason
 
@@ -86,7 +88,8 @@ t_logical_account_members
 
 t_logical_account_targets
   space_id + logical_account_id
-  target_id + runner_id + command_sequence
+  target_id + instance_id + session_id + strategy_id
+  bar_end_time + effective_at + valid_until
   targets_json
   status + blocked_targets_json + last_error
   accepted_at + mtime
@@ -99,7 +102,8 @@ t_operator_actions
 
 每个组合账户只有一行当前目标。`target_id` 是全局幂等与订单归属 ID；Strategy 发布时
 令其等于 `result_id`，Trade 不复制 StrategyResult。执行进度通过当前目标、持仓、活动
-订单和账户快照重算，不再保存第二份进度快照。
+订单和账户快照重算，不再保存第二份进度快照。历史表中可能仍有 `runner_id` 和
+`command_sequence`，它们不作为现代 session 目标的授权或排序依据。
 
 `blocked_targets_json` 记录暂时无法执行的数量和原因，例如低于交易所最小量。它不是
 下一轮目标，也不参与 Strategy 输入。
@@ -107,24 +111,38 @@ t_operator_actions
 ## FULL 目标契约
 
 ```text
-LogicalAccountTargetRequested
+LogicalAccountTargetWeightRequested
   target_id
-  runner_id
+  instance_id
+  session_id
+  strategy_id
   logical_account_id
-  command_sequence
-  targets[] InstrumentTarget
+  bar_end_time
+  effective_at
+  valid_until
+  targets[] InstrumentWeightTarget
     instrument_id
-    quantity
+    target_weight
 ```
 
-`quantity` 是规范化标的的带符号绝对目标持仓量。FULL 规则：
+`target_weight` 是相对 LogicalAccount 权益的带符号目标权重。Trade 在接受事件后，使用
+权威权益和参考报价将其转换为内部 `quantity`，并在不可变 `TargetReceipt` 中记录完整的
+权重、权益、报价、成员和换算结果。策略事件从不直接携带执行数量。
+
+现代 FULL 规则：
 
 - 遗漏标的等于目标 `0`。
 - 空列表表示所有目标归零。
 - `hold` 不发事件并保留旧目标。
-- 更高 sequence 原子替换旧目标。
-- 低序号、重复和乱序命令不改变状态。
-- PAUSED 中收到的新目标只更新存储，不创建订单。
+- `instance_id`、`session_id`、`strategy_id`、`bar_end_time`、`effective_at` 和 `valid_until`
+  必须完整，且 `effective_at == bar_end_time < valid_until`。
+- Trade 只接受当前 owner session 的事件；过期、尚未生效、旧 session 或旧
+  `bar_end_time` 的事件在估值和下单前拒绝。
+- 相同 `target_id` 与请求哈希的重投幂等；同一 session 的较新 `bar_end_time` 原子替换旧
+  FULL 目标，旧目标和冲突 payload 不改变状态。
+- PAUSED 中收到的有效新目标只更新存储，不创建订单；恢复后才继续收敛。
+- `runner_id`、`command_sequence` 及旧 `LogicalAccountTargetRequested.quantity` 只保留
+  用于历史审计、兼容解码或迁移检查，不是现代事件的执行入口。
 
 收敛集合是当前 FULL 目标、任一成员非零持仓、任一成员活动自有订单的并集。因此旧
 持仓或外部漂移不会因目标遗漏而失去处理机会。
@@ -190,7 +208,12 @@ Paper V1 使用公共行情支持 MARKET 和简化 LIMIT 撮合：可立即成�
 余额和持仓权威。OKX client order ID 使用 `xid` 生成一次、先持久化，随后查询与受控重试
 复用原值；适配器仍校验最多 32 位字母数字。
 
-## 人工控制
+## 生命周期与人工控制
+
+StrategyInstance 通过 Claim/Release 建立或结束当前 `(instance_id, session_id)` 归属；
+Rebind 只能使用旧 session、新 session 和 `auth_fence` 做 CAS。仅携带旧 Runner
+`runner_id`/`rebind_key` 的 Rebind 请求必须拒绝。现代 CAS 获胜时才清理当前目标，迟到的
+旧 session 请求不能清理新 session 的目标。
 
 人工下单、撤单和逐账户清仓需要幂等 `action_id` 和 reason。Pause 需要 reason；
 Resume 在不存在运行中人工操作或外部冲突且启用成员 Ready 后恢复。

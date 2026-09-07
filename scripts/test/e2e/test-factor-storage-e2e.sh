@@ -47,13 +47,11 @@ if [[ -r "${factor_eventbus_credentials}" ]]; then
   if [[ -z "${factor_eventbus_url}" ]]; then
     factor_eventbus_url="$(sed -n 's/^  -[[:space:]]*//p' "${factor_eventbus_credentials}" | head -1)"
   fi
-  [[ -n "${factor_eventbus_url}" ]] && export MOOX_EVENTBUS_NATS_URL="${factor_eventbus_url}"
   export MOOX_EVENTBUS_NATS_CREDENTIALS="${factor_eventbus_credentials}"
   factor_eventbus_ca="$(sed -n 's/^ca_file:[[:space:]]*//p' "${factor_eventbus_credentials}" | head -1 | sed 's/[[:space:]]*$//')"
   [[ "${factor_eventbus_ca}" = /* ]] || factor_eventbus_ca="$(cd "$(dirname "${factor_eventbus_credentials}")" && pwd -P)/${factor_eventbus_ca}"
   [[ -n "${factor_eventbus_ca}" && -r "${factor_eventbus_ca}" ]] && export MOOX_EVENTBUS_NATS_TLS_CA_FILE="${factor_eventbus_ca}"
 fi
-
 # Preserve a custom EventBus endpoint even for deployments that authenticate
 # with no role credential file (for example a local non-TLS broker).
 [[ -n "${factor_eventbus_url}" ]] && export MOOX_EVENTBUS_NATS_URL="${factor_eventbus_url}"
