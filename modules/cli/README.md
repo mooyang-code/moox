@@ -20,6 +20,31 @@ moox-cli setup ...                  # 初始化控制面、发布服务包、部
 
 中文别名：`认证`、`注册`、`存储`（见各子命令 `--help`）。
 
+### Doctor 自助修复
+
+当 Storage View 因 JetStream durable consumer 的 `FilterSubjects` 与当前配置不一致而启动失败，或页面出现
+`tcp client transport connection pool` 时，先检查实际消费范围，再只重建发生漂移的静态 View consumer：
+
+```bash
+moox-cli doctor repair-view-consumers \
+  --storage-conf /data/moox/storage/config/storage.yaml \
+  --package-root /data/moox/storage \
+  --credential-file /home/ubuntu/.config/moox/eventbus/internal-admin.yaml \
+  --dry-run
+
+moox-cli doctor repair-view-consumers \
+  --storage-conf /data/moox/storage/config/storage.yaml \
+  --package-root /data/moox/storage \
+  --credential-file /home/ubuntu/.config/moox/eventbus/internal-admin.yaml \
+  --yes
+```
+
+该命令只检查并删除过滤范围漂移的 `storage_view_kline`、`storage_view_factor`、
+`storage_view_metrics`，随后重启 `storage-view`；不会删除 Primary 数据、View 索引，也不会触碰由库存对账器管理的
+`storage_view_misc` 动态 consumer。删除 JetStream consumer 需要权限为 `0600` 的 internal-admin 凭据，
+也可通过 `MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE` 指定。`doctor diagnose` 仍是只读诊断，
+`doctor repair-view-consumers` 才执行修复。
+
 ### View 自助修复
 
 项目尚未上线或需要彻底丢弃 View 历史时，可先预览再执行一次性分区清理：

@@ -43,8 +43,22 @@ func init() {
 
 func newDoctorCommand(deps doctorCommandDeps) *cobra.Command {
 	cmd := &cobra.Command{Use: "doctor", Short: "Run bounded MooX deployment checks", SilenceUsage: true}
-	cmd.AddCommand(newDoctorModeCommand("bootstrap", deps), newDoctorModeCommand("diagnose", deps))
+	cmd.AddCommand(newDoctorModeCommand("bootstrap", deps), newDoctorModeCommand("diagnose", deps), newDoctorViewConsumerRepairCommand())
 	return cmd
+}
+
+func newDoctorViewConsumerRepairCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:                "repair-view-consumers [flags]",
+		Aliases:            []string{"repair-storage-view", "修复视图消费"},
+		Short:              "检查并修复 Storage View durable consumer 的过滤范围漂移",
+		DisableFlagParsing: true,
+		Args:               cobra.ArbitraryArgs,
+		SilenceUsage:       true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runStorageMaintenanceBinaryAction(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), "reconcile-view-consumers", args)
+		},
+	}
 }
 
 func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
