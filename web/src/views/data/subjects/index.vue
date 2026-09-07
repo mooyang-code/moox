@@ -147,7 +147,14 @@ import { Message } from "@arco-design/web-vue";
 import { listSubjectSymbols, listSubjects, upsertSubject, upsertSubjectSymbol } from "@/api/storage/metadata";
 import type { Subject, SubjectSymbol } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
-import { applyPageResult, defaultPagination, formatTime, statusColor, statusLabel, statusOptions } from "@/views/data/shared/metadata-utils";
+import {
+  applyPageResult,
+  defaultPagination,
+  formatTime,
+  statusColor,
+  statusLabel,
+  statusOptions
+} from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "DataSubjects" });
 

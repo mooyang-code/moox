@@ -211,7 +211,14 @@ import { Message } from "@arco-design/web-vue";
 import { useRouter } from "vue-router";
 import { deleteDataNode, listDataNodes, updateDataNode } from "@/api/storage/metadata";
 import type { DataNodeListItem, DatasetSummary } from "@/api/storage/types";
-import { applyPageResult, defaultPagination, formatTime, statusColor, statusLabel, statusOptions } from "@/views/data/shared/metadata-utils";
+import {
+  applyPageResult,
+  defaultPagination,
+  formatTime,
+  statusColor,
+  statusLabel,
+  statusOptions
+} from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "OpsStorageDataNodes" });
 

@@ -85,7 +85,14 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { listArchiveFiles } from "@/api/storage/metadata";
 import type { ArchiveFile } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
-import { applyPageResult, defaultPagination, formatTime, joinList, statusColor, statusLabel } from "@/views/data/shared/metadata-utils";
+import {
+  applyPageResult,
+  defaultPagination,
+  formatTime,
+  joinList,
+  statusColor,
+  statusLabel
+} from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "OpsStorageArchive" });
 

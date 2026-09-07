@@ -32,7 +32,9 @@
             <div class="node-identity">
               <div class="node-name">
                 <strong>{{ record.name || record.node_id }}</strong
-                ><a-tag size="small" :color="record.status === 'enabled' ? 'blue' : 'gray'">{{ statusLabel(record.status) }}</a-tag>
+                ><a-tag size="small" :color="record.status === 'enabled' ? 'blue' : 'gray'">{{
+                  statusLabel(record.status)
+                }}</a-tag>
               </div>
               <span>{{ record.node_id }}</span>
             </div>

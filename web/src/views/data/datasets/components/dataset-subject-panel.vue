@@ -71,7 +71,14 @@ import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { bindDatasetSubject, listDatasetSubjects } from "@/api/storage/metadata";
 import type { DatasetSubject } from "@/api/storage/types";
-import { applyPageResult, defaultPagination, formatTime, statusColor, statusLabel, statusOptions } from "@/views/data/shared/metadata-utils";
+import {
+  applyPageResult,
+  defaultPagination,
+  formatTime,
+  statusColor,
+  statusLabel,
+  statusOptions
+} from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "DatasetSubjectPanel" });
 
