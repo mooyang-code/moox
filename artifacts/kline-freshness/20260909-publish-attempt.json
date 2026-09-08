@@ -1,0 +1,17 @@
+{
+  "commit": "26bfdeaacb4b429c1528c3f1c599aa4ead79ce4f",
+  "command": "moox-cli collector function publish submit --file ./moox.toml --space-id stockcn --enable-stockcn",
+  "control_url": "https://106.53.107.122:11001",
+  "configuration": {
+    "timer_function_count": 170,
+    "max_subjects_per_function": 40,
+    "instrument_snapshot": "one independent daily Timer"
+  },
+  "result": "aborted_before_final_summary",
+  "last_observed_gate": "stockcn instrument snapshot canary did not return a successful response",
+  "success_job_readback": false,
+  "rows_written": null,
+  "request_id": null,
+  "formal_acceptance": false,
+  "next_action": "inspect and reconcile partially updated SCF fleet/rule state before retry"
+}
