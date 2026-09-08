@@ -13,6 +13,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
@@ -154,7 +155,11 @@ func (s *DatasetSource) ListSubjects(ctx context.Context, spaceID string, datase
 		}
 		symbols = filtered
 	}
-	return mergeDatasetSubjects(bindings, symbols)
+	subjects, skipped, mergeErr := mergeDatasetSubjectsWithSkipped(bindings, symbols)
+	if len(skipped) > 0 {
+		log.WarnContextf(ctx, "skip active dataset subjects without external symbols space=%s dataset=%s skipped=%d subjects=%s", spaceID, datasetID, len(skipped), subjectIDPreview(skipped))
+	}
+	return subjects, mergeErr
 }
 
 // ListResampleSubjects returns the source Dataset's active subject set
@@ -413,6 +418,14 @@ func mergeDatasetSubjects(
 	bindings []*storagepb.DatasetSubject,
 	symbols map[string]string,
 ) ([]domain.DatasetSubject, error) {
+	subjects, _, err := mergeDatasetSubjectsWithSkipped(bindings, symbols)
+	return subjects, err
+}
+
+func mergeDatasetSubjectsWithSkipped(
+	bindings []*storagepb.DatasetSubject,
+	symbols map[string]string,
+) ([]domain.DatasetSubject, []string, error) {
 	// Runtime K-line Datasets are often written for the full exchange symbol
 	// active subject set without maintaining a duplicate DatasetSubject row for every
 	// symbol. In that case the active data-source symbol catalog is the explicit
@@ -427,25 +440,41 @@ func mergeDatasetSubjects(
 		for _, subjectID := range ids {
 			result = append(result, domain.DatasetSubject{SubjectID: subjectID, SubjectName: subjectID, ExternalSymbol: symbols[subjectID], Status: "active"})
 		}
-		return result, nil
+		return result, nil, nil
 	}
 	subjects := make([]domain.DatasetSubject, 0, len(bindings))
+	skipped := make([]string, 0)
+	activeCount := 0
 	for _, binding := range bindings {
-		if binding.GetSubjectId() == "" || !isActive(binding.GetStatus()) {
+		if binding == nil || binding.GetSubjectId() == "" || !isActive(binding.GetStatus()) {
 			continue
 		}
-		external := strings.TrimSpace(symbols[binding.GetSubjectId()])
+		activeCount++
+		subjectID := strings.TrimSpace(binding.GetSubjectId())
+		external := strings.TrimSpace(symbols[subjectID])
 		if external == "" {
-			return nil, fmt.Errorf("active dataset subject %s has no active external symbol", binding.GetSubjectId())
+			skipped = append(skipped, subjectID)
+			continue
 		}
 		subjects = append(subjects, domain.DatasetSubject{
-			SubjectID:      binding.GetSubjectId(),
-			SubjectName:    binding.GetSubjectId(),
+			SubjectID:      subjectID,
+			SubjectName:    subjectID,
 			ExternalSymbol: external,
 			Status:         binding.GetStatus(),
 		})
 	}
-	return subjects, nil
+	if activeCount > 0 && len(subjects) == 0 {
+		return nil, skipped, fmt.Errorf("all active dataset subjects have no active external symbol: %s", subjectIDPreview(skipped))
+	}
+	return subjects, skipped, nil
+}
+
+func subjectIDPreview(subjectIDs []string) string {
+	const maxPreview = 20
+	if len(subjectIDs) <= maxPreview {
+		return strings.Join(subjectIDs, ",")
+	}
+	return fmt.Sprintf("%s,...(+%d)", strings.Join(subjectIDs[:maxPreview], ","), len(subjectIDs)-maxPreview)
 }
 
 func ensureStorageOK(action string, ret *storagepb.RetInfo) error {

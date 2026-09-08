@@ -162,6 +162,16 @@ func TestMergeDatasetSubjectsRequiresActiveSubjectSymbol(t *testing.T) {
 	assert.Equal(t, "BTCUSDT_MAP", subjects[0].ExternalSymbol)
 }
 
+func TestMergeDatasetSubjectsSkipsMissingSymbolWithoutBlockingValidSubjects(t *testing.T) {
+	subjects, err := mergeDatasetSubjects([]*storagepb.DatasetSubject{
+		{SubjectId: "BAD-USDT", Status: "active"},
+		{SubjectId: "BTC-USDT", Status: "active"},
+	}, map[string]string{"BTC-USDT": "BTCUSDT"})
+	require.NoError(t, err)
+	require.Len(t, subjects, 1)
+	assert.Equal(t, "BTC-USDT", subjects[0].SubjectID)
+}
+
 func TestDatasetSourceRejectsDuplicateActiveSubjectSymbols(t *testing.T) {
 	src := &DatasetSource{metadata: &fakeMetadataClient{
 		subjects: []*storagepb.DatasetSubject{{SubjectId: "BTC-USDT", Status: "active"}},

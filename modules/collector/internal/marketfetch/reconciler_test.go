@@ -218,7 +218,7 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 	require.Len(t, groups, 2)
 }
 
-func TestReconcilerFailsClosedForMalformedActiveStockSubject(t *testing.T) {
+func TestReconcilerSkipsMalformedActiveStockSubjectWithoutBlockingValidSubjects(t *testing.T) {
 	rule := domain.TaskRule{
 		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity", Enabled: true,
 		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
@@ -233,10 +233,28 @@ func TestReconcilerFailsClosedForMalformedActiveStockSubject(t *testing.T) {
 		Nodes: nodes, ExpectedStockCNTimerFunctions: 1, MeasuredSafeGroupSize: 30,
 	}
 
-	err := reconciler.Reconcile(context.Background(), StockCNSpaceID)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid stock symbol")
-	require.Zero(t, nodes.submits, "a malformed active subject must not be silently dropped")
+	require.NoError(t, reconciler.Reconcile(context.Background(), StockCNSpaceID))
+	require.Len(t, nodes.patches, 1)
+	require.Equal(t, "600000.XSHG", nodes.patches[0].GetManagedEnvironment()["MOOX_MARKET_FETCH_SUBJECTS"])
+}
+
+func TestReconcilerFailsClosedWhenAllActiveStockSubjectsAreMalformed(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity", Enabled: true,
+		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-stockcn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
+	reconciler := &Reconciler{
+		Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{
+			{SubjectID: "BAD-1", ExternalSymbol: "", Status: "active"},
+			{SubjectID: "BAD-2", ExternalSymbol: "", Status: "active"},
+		}},
+		Nodes: nodes, ExpectedStockCNTimerFunctions: 1, MeasuredSafeGroupSize: 30,
+	}
+
+	require.ErrorContains(t, reconciler.Reconcile(context.Background(), StockCNSpaceID), "all active equity subjects are invalid")
+	require.Zero(t, nodes.submits)
 }
 
 func TestReconcilerFailsClosedWhenStockRequiredGroupSizeExceedsMeasuredSafeSize(t *testing.T) {

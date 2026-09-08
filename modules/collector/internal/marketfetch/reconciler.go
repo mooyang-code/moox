@@ -809,17 +809,27 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		}
 		symbolIDs := make([]string, 0, len(subjects))
 		externalSymbols := make(map[string]string, len(subjects))
+		activeSubjectCount := 0
+		invalidSubjects := make([]string, 0)
 		for _, subject := range subjects {
 			if !strings.EqualFold(strings.TrimSpace(subject.Status), "active") {
 				continue
 			}
+			activeSubjectCount++
 			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
 			external, symbolErr := marketProviderSymbol(params.MarketType, subjectID, subject.ExternalSymbol)
 			if symbolErr != nil {
-				return nil, fmt.Errorf("invalid stock symbol subject %s: %w", subjectID, symbolErr)
+				invalidSubjects = append(invalidSubjects, subjectID)
+				continue
 			}
 			symbolIDs = append(symbolIDs, subjectID)
 			externalSymbols[subjectID] = external
+		}
+		if activeSubjectCount > 0 && len(symbolIDs) == 0 {
+			return nil, fmt.Errorf("all active %s subjects are invalid: %s", params.MarketType, strings.Join(invalidSubjects, ","))
+		}
+		if len(invalidSubjects) > 0 {
+			log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s rule=%s skipped=%d subjects=%s", spaceID, rule.RuleID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
 		}
 		marketID, instrumentType := marketIdentity(params.MarketID, params.InstrumentType, params.Target.DatasetID)
 		for _, frequency := range params.Collector.Intervals {
