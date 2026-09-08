@@ -696,6 +696,25 @@ username = "builder"
 	assert.Len(t, snapshot.Manifest.Hosts(), 1)
 }
 
+func TestLoadOptionalStrategyHost(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[strategy_host]
+name = "strategy"
+address = "192.0.2.21"
+username = "ubuntu"
+password = "strategy-password"
+`
+
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.True(t, snapshot.Manifest.HasStrategyHost())
+	assert.Equal(t, "strategy", snapshot.Manifest.StrategyHost.Name)
+	assert.Equal(t, 22, snapshot.Manifest.StrategyHost.Port)
+	require.Len(t, snapshot.Manifest.Hosts(), 2)
+	assert.Equal(t, "strategy", snapshot.Manifest.Hosts()[1].Name)
+}
+
 func TestLoadRejectsInvalidManifest(t *testing.T) {
 	tests := []struct {
 		name string

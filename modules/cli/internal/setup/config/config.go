@@ -370,14 +370,18 @@ type Manifest struct {
 	SCFFetcher   SCFFetcher   `toml:"scf_fetcher"`
 	ControlHost  Host         `toml:"control_host"`
 	CompileHost  Host         `toml:"compile_host"`
+	StrategyHost Host         `toml:"strategy_host"`
 	StorageHost  Host         `toml:"storage_host"`
 	ViewHost     Host         `toml:"view_host"`
 	OtherHosts   []Host       `toml:"other_hosts"`
 }
 
 func (m Manifest) Hosts() []Host {
-	hosts := make([]Host, 0, 3+len(m.OtherHosts))
+	hosts := make([]Host, 0, 4+len(m.OtherHosts))
 	hosts = append(hosts, m.ControlHost)
+	if hostConfigured(m.StrategyHost) {
+		hosts = append(hosts, m.StrategyHost)
+	}
 	if hostConfigured(m.StorageHost) {
 		hosts = append(hosts, m.StorageHost)
 	}
@@ -394,6 +398,10 @@ func (m Manifest) HasCompileHost() bool {
 
 func (m Manifest) HasStorageHost() bool {
 	return hostConfigured(m.StorageHost)
+}
+
+func (m Manifest) HasStrategyHost() bool {
+	return hostConfigured(m.StrategyHost)
 }
 
 func (m Manifest) HasViewHost() bool {
@@ -502,6 +510,9 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if out.HasViewHost() && out.ViewHost.Port == 0 {
 		out.ViewHost.Port = 22
 	}
+	if out.HasStrategyHost() && out.StrategyHost.Port == 0 {
+		out.StrategyHost.Port = 22
+	}
 	if !md.IsDefined("eventbus", "port") {
 		out.EventBus.Port = 4222
 	}
@@ -608,7 +619,7 @@ func validate(manifest *Manifest) error {
 		return fmt.Errorf("config_invalid: local_logs.backup_count must be between 1 and 100")
 	}
 
-	names := make(map[string]struct{}, 1+len(manifest.OtherHosts))
+	names := make(map[string]struct{}, 2+len(manifest.OtherHosts))
 	addresses := make(map[string]struct{}, 1+len(manifest.OtherHosts))
 	if err := validateHost("control_host", &manifest.ControlHost, names, addresses, true); err != nil {
 		return err
@@ -617,6 +628,11 @@ func validate(manifest *Manifest) error {
 		// The compiler may intentionally run on the control host. Keep it out
 		// of the deployment-host uniqueness sets while still validating it.
 		if err := validateHost("compile_host", &manifest.CompileHost, nil, nil, false); err != nil {
+			return err
+		}
+	}
+	if manifest.HasStrategyHost() {
+		if err := validateHost("strategy_host", &manifest.StrategyHost, names, nil, true); err != nil {
 			return err
 		}
 	}
