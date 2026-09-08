@@ -139,6 +139,24 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			}
 			observed = append(observed, *item)
 		}
+		if strings.TrimSpace(rule.DatasetID) != "" {
+			activeSubjects, catalogErr := e.query.ActiveDatasetSubjects(ctx, rule.SpaceID, rule.DatasetID)
+			if catalogErr != nil {
+				report.Success, report.Reason = false, "subject_catalog_unavailable"
+				report.Diagnostic = catalogErr.Error()
+				reports = append(reports, report)
+				continue
+			}
+			if activeSubjects != nil {
+				filtered := observed[:0]
+				for _, item := range observed {
+					if _, ok := activeSubjects[item.identity.SubjectID]; ok {
+						filtered = append(filtered, item)
+					}
+				}
+				observed = filtered
+			}
+		}
 		if len(observed) == 0 {
 			// An enabled rule with no output watermark is a real failure: a
 			// misrouted View or an unbound consumer must not remain silent.

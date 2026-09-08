@@ -13,12 +13,14 @@ import (
 )
 
 type fakeMetadata struct {
-	columns   []*storagepb.DatasetColumn
-	dataset   *storagepb.Dataset
-	node      *storagepb.DataNode
-	space     *storagepb.Space
-	nodeErr   error
-	nodeCalls int
+	columns      []*storagepb.DatasetColumn
+	subjects     []*storagepb.DatasetSubject
+	dataset      *storagepb.Dataset
+	node         *storagepb.DataNode
+	space        *storagepb.Space
+	nodeErr      error
+	nodeCalls    int
+	subjectCalls int
 }
 
 func (f *fakeMetadata) GetSpace(context.Context, *storagepb.GetSpaceReq, ...client.Option) (*storagepb.GetSpaceRsp, error) {
@@ -36,6 +38,10 @@ func (f *fakeMetadata) GetDataNode(context.Context, *storagepb.GetDataNodeReq, .
 }
 func (f *fakeMetadata) ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error) {
 	return &storagepb.ListDatasetColumnsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Columns: f.columns}, nil
+}
+func (f *fakeMetadata) ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
+	f.subjectCalls++
+	return &storagepb.ListDatasetSubjectsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, DatasetSubjects: f.subjects}, nil
 }
 
 type fakeAccess struct {
@@ -112,6 +118,22 @@ func TestStorageAdapterQueryHistorySelectorsUseSeriesIdentity(t *testing.T) {
 	if key.SeriesTag != nil {
 		t.Fatal("metrics history selector must omit series_tag")
 	}
+}
+
+func TestStorageAdapterListsAndCachesActiveDatasetSubjects(t *testing.T) {
+	f := &fakeMetadata{subjects: []*storagepb.DatasetSubject{
+		{SubjectId: "BTC", Status: "active"},
+		{SubjectId: "OLD", Status: "archived"},
+		{SubjectId: "", Status: "active"},
+	}}
+	adapter := NewStorageAdapter(nil, f, metricsStorageConfig())
+	first, err := adapter.ListActiveDatasetSubjects(context.Background(), "crypto", "dataset")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]struct{}{"BTC": {}}, first)
+	second, err := adapter.ListActiveDatasetSubjects(context.Background(), "crypto", "dataset")
+	require.NoError(t, err)
+	assert.Equal(t, first, second)
+	assert.Equal(t, 1, f.subjectCalls)
 }
 func TestStorageAdapterRejectsUnreadyDataNode(t *testing.T) {
 	f := &fakeMetadata{space: &storagepb.Space{Status: "active"}, dataset: &storagepb.Dataset{Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}}

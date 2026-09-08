@@ -28,19 +28,33 @@ type MetadataClient interface {
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
 	GetDataNode(context.Context, *storagepb.GetDataNodeReq, ...client.Option) (*storagepb.GetDataNodeRsp, error)
 	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
+	ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error)
 }
 
 type StorageAdapter struct {
-	access   AccessClient
-	metadata MetadataClient
-	auth     *commonpb.AuthInfo
-	cfg      monconfig.MetricsStorageConfig
-	mu       sync.RWMutex
-	schema   SchemaStatus
+	access    AccessClient
+	metadata  MetadataClient
+	auth      *commonpb.AuthInfo
+	cfg       monconfig.MetricsStorageConfig
+	mu        sync.RWMutex
+	schema    SchemaStatus
+	subjectMu sync.Mutex
+	subjects  map[string]cachedSubjectCatalog
+}
+
+const (
+	datasetSubjectPageSize = 1000
+	maxDatasetSubjects     = 100000
+	subjectCatalogTTL      = time.Minute
+)
+
+type cachedSubjectCatalog struct {
+	loadedAt time.Time
+	ids      map[string]struct{}
 }
 
 func NewStorageAdapter(access AccessClient, metadata MetadataClient, cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	return &StorageAdapter{access: access, metadata: metadata, auth: storageauth.Primary(cfg.KeyID), cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}}
+	return &StorageAdapter{access: access, metadata: metadata, auth: storageauth.Primary(cfg.KeyID), cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}, subjects: make(map[string]cachedSubjectCatalog)}
 }
 func NewStorageAdapterFromConfig(cfg monconfig.MetricsStorageConfig) *StorageAdapter {
 	// Monitor's Storage target is a dedicated dependency setting. Do not let the
@@ -348,6 +362,67 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 		return out[i].ObservedAt.Before(out[j].ObservedAt)
 	})
 	return out, nil
+}
+
+// ListActiveDatasetSubjects returns the authoritative active subject set for a
+// monitored dataset. Monitor uses this to ignore metric series left behind by
+// retired instruments instead of treating their old watermarks as failures.
+// Successful catalogs are cached briefly so a 30-second monitor evaluation does
+// not turn metadata into another high-frequency dependency.
+func (a *StorageAdapter) ListActiveDatasetSubjects(ctx context.Context, spaceID, datasetID string) (map[string]struct{}, error) {
+	if a == nil || a.metadata == nil {
+		return nil, errors.New("metrics storage metadata client is not initialized")
+	}
+	key := strings.TrimSpace(spaceID) + "\x00" + strings.TrimSpace(datasetID)
+	now := time.Now().UTC()
+	a.subjectMu.Lock()
+	if cached, ok := a.subjects[key]; ok && now.Sub(cached.loadedAt) < subjectCatalogTTL {
+		ids := cloneSubjectSet(cached.ids)
+		a.subjectMu.Unlock()
+		return ids, nil
+	}
+	a.subjectMu.Unlock()
+
+	ids := make(map[string]struct{})
+	for page := uint32(1); ; page++ {
+		rsp, err := a.metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{
+			AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID,
+			Page: &commonpb.Page{Page: page, Size: datasetSubjectPageSize},
+		}, client.WithFilter(trpcretry.ReadOnly()))
+		if err != nil {
+			return nil, fmt.Errorf("list monitored dataset subjects: %w", err)
+		}
+		if err := storageOK("list monitored dataset subjects", rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		for _, subject := range rsp.GetDatasetSubjects() {
+			if subject == nil || !isActive(subject.GetStatus()) || strings.TrimSpace(subject.GetSubjectId()) == "" {
+				continue
+			}
+			if len(ids) >= maxDatasetSubjects {
+				return nil, fmt.Errorf("monitored dataset subject catalog exceeds %d subjects", maxDatasetSubjects)
+			}
+			ids[strings.TrimSpace(subject.GetSubjectId())] = struct{}{}
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+			break
+		}
+	}
+	a.subjectMu.Lock()
+	a.subjects[key] = cachedSubjectCatalog{loadedAt: now, ids: cloneSubjectSet(ids)}
+	a.subjectMu.Unlock()
+	return ids, nil
+}
+
+func cloneSubjectSet(input map[string]struct{}) map[string]struct{} {
+	if input == nil {
+		return nil
+	}
+	output := make(map[string]struct{}, len(input))
+	for id := range input {
+		output[id] = struct{}{}
+	}
+	return output
 }
 
 func metricStringValue(value string) *storagepb.TypedValue {

@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -68,6 +70,23 @@ func TestKlineFreshnessEvaluatorPrefersNewestProducerObservation(t *testing.T) {
 	require.Len(t, reports, 1)
 	require.True(t, reports[0].Success)
 	require.Equal(t, 1, reports[0].ObservedCount)
+}
+
+func TestKlineFreshnessEvaluatorIgnoresRetiredSubjects(t *testing.T) {
+	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
+	query := newViewDatasetQuery(t, []viewDatasetTestSample{
+		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "BTC", Output: now.Add(-time.Minute), Commit: now},
+		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "OLD", Output: now.Add(-10 * time.Minute), Commit: now},
+	})
+	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{{SubjectId: "BTC", Status: "active"}, {SubjectId: "OLD", Status: "archived"}}}
+	query.storage = NewStorageAdapter(nil, metadata, monconfig.MetricsStorageConfig{SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m"})
+	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.True(t, reports[0].Success)
+	require.Equal(t, 1, reports[0].ObservedCount)
+	require.Equal(t, []string{"BTC"}, reports[0].ObservedSubjects)
 }
 
 func TestKlineFreshnessEvaluatorSkipsStockClosedAndWarmup(t *testing.T) {

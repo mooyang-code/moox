@@ -4,7 +4,7 @@
 
 **Goal:** 删除 Collector 中自动周期 gap audit 及其 Storage 读放大路径；Storage 底层只提供通用的 View 数据进入/成功写入观测，不识别 K 线语义；由 Monitor 针对指定 View 判断 K 线业务时间是否持续停更并产生可恢复告警，最后完成正式编译、SCF 发布和 106 主机真实端到端验收。
 
-> **执行状态（2026-09-09）：** 自动 gap audit 删除、Storage 通用 View input/output/commit 观测、Primary 解耦和 Monitor 指定 View freshness 主链路已实现。最新独立 codeCR 未发现 P0，但发现 4 个 P1 和 3 个 P2；本轮已修复“无 output 静默跳过”、disabled rule 不恢复、Kline `evaluation_interval` 被 30 秒 watchdog 绕过、跨实例旧业务水位回退、View 指标 label/series 上限，以及 active index 成功而 replacement 失败时 output watermark 丢失。新增的 Monitor E2E 已覆盖 reporter-shaped snapshot -> JetStream -> Monitor latest -> Kline evaluator；仍需完成新一轮 codeCR 和回归验证。退市/旧 subject 的生命周期清理仍是 P1 风险，完整生产 Storage->Reporter->Monitor->Alert 证据仍未形成，不能写成正式验收。
+> **执行状态（2026-09-09）：** 自动 gap audit 删除、Storage 通用 View input/output/commit 观测、Primary 解耦和 Monitor 指定 View freshness 主链路已实现。最新独立 codeCR 未发现 P0；此前发现的 4 个 P1 已全部处理：无 output 静默、动态 label/series 无界、退市/旧 subject 污染、evaluation interval 被 watchdog 绕过；3 个 P2 中 active/replacement watermark 丢失和 disabled rule 不收敛也已处理。Monitor 现在从 Storage Metadata `ListDatasetSubjects` 分页读取并短缓存 active subject catalog，只对仍 active 的 canonical subject 判定 freshness；metadata 不可用时该组显式失败，不回退为健康。新增的 Monitor E2E 已覆盖 reporter-shaped snapshot -> JetStream -> Monitor latest -> Kline evaluator；完整生产 Storage->Reporter->Monitor->Alert 证据仍未形成，不能写成正式验收。
 
 > **最新运行负载结论（2026-09-09）：** 对上一次中止后的控制面只读盘点发现 `crypto` 的 5 条 Binance 规则仍启用，`stockcn` 的 `builtin-stockcn-kline-1m` 也因中止发生了部分启用；已通过 `DisableTaskRule` 逐条停用，保留历史数据和运行记录。Storage 日志进一步确认拖垮链路的不是已删除的 Collector gap audit，而是 Storage View 的历史 maintenance/backfill：`view_crypto_spot_kline_1m`、`view_mooxsys_service_metrics` 等任务持续做 Primary 历史扫描，出现百万行扫描上限、View series capacity、EventBus publish timeout 和 Collector 到 Storage 的 tRPC timeout。已在真实 Storage 主机持久化 `MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED=1` 并仅重启 `storage-view`；启动日志确认 `historical maintenance disabled`，未删除 Primary/View 数据。当前 stockcn publish 已在关闭上述负载后重新提交，仍必须等待最终 job/canary/readback，不得把“正在更新 fleet”写成正式通过。
 
@@ -54,6 +54,7 @@
 **Monitor freshness 和告警：**
 
 - Modify: `modules/monitor/internal/metrics/message_store.go`、`modules/monitor/internal/metrics/query.go`：增加带 metric-name 白名单、上限和稳定排序的 latest 批量读取，不允许无界 SQL 扫描。
+- Modify: `modules/monitor/internal/metrics/storage.go`、`modules/monitor/internal/metrics/query.go`、`modules/monitor/internal/metrics/kline_freshness.go`：从 Metadata `ListDatasetSubjects` 获取 active canonical subject catalog，分页、短缓存并设置容量上限；只在 Monitor 过滤退市/归档 subject，catalog 查询失败时该 freshness group 明确失败。
 - Create: `modules/monitor/internal/metrics/kline_freshness.go`：实现标签解析、按规则过滤、市场时段判断、分组 stale 计算、诊断摘要和 no-data 行为。
 - Create: `modules/monitor/internal/metrics/kline_freshness_test.go`：覆盖 transient hole、持续 stale、View input/output 隔离、crypto/stockcn session、calendar unknown、限长 subject 列表、commit/data 时间区分。
 - Modify: `modules/monitor/internal/config/config.go`、`modules/monitor/internal/config/config_test.go`、`modules/monitor/config/app.yaml`：增加 `kline_freshness` 配置和严格校验。
@@ -265,14 +266,15 @@ func (r *MetricMessageStore) ListLatestByMetricNames(
 - [ ] **Step 5: 实现有界 stale 聚合。** 解析 `labels_json`，只接受完整 canonical labels；按 `SpaceID + ViewID + DatasetID + Frequency` 分组，只使用 output `data_time` 判定 stale。每组输出一个 `KlineFreshnessReport`：`Success`、`Reason`、`StaleCount`、`ObservedCount`、`OldestDataTime`、`LatestInputTime`、`LatestCommitTime` 和最多 20 个排序后的 `subject_id`。不要为每个 subject 构造 `domain.Check`。
 
 - [ ] **Step 6: 实现异常策略。** malformed labels、非法 unix value、future data_time 超过 10 分钟、未知 frequency 只记录该 series 的结构化错误并跳过，不让一个坏 series 阻塞其他标的；若一个 enabled group 没有任何可用 output watermark，返回 `no_observation` 失败并进入去抖告警，不得静默成功。市场关闭/calendar unknown 仍跳过本轮。
+- [x] **Step 7: 实现 active subject 生命周期过滤。** Monitor 通过 Storage Metadata `ListDatasetSubjects` 分页读取 active canonical subject，成功目录短缓存 1 分钟、上限 100000 个 subject；归档/停用/空 subject 不参与 freshness，metadata 不可用返回 `subject_catalog_unavailable` 失败，不把旧 series 当成健康或持续 stale。
 
-- [ ] **Step 7: 运行 evaluator 单测。**
+- [ ] **Step 8: 运行 evaluator 单测。**
 
 ```bash
 go test -count=1 ./modules/monitor/internal/metrics -run 'KlineFreshness|ListLatestByMetricNames'
 ```
 
-Expected: transient hole PASS；stale/recovery、View input/output 隔离、stock calendar 和 subject 限长 PASS；测试不会访问 Storage RPC。
+Expected: transient hole PASS；stale/recovery、View input/output 隔离、stock calendar、subject 限长和 retired subject 过滤 PASS；无 Storage adapter 的纯 evaluator 单测使用显式 fixture，带 Storage adapter 的测试覆盖 Metadata catalog 合同。
 
 ### Task 7: 把 Kline freshness 接入现有 Monitor business freshness/alerting
 

@@ -63,6 +63,16 @@ func (q *QueryService) History(ctx context.Context, seriesID, serviceName, metri
 	return q.storage.QueryHistorySelectors(ctx, selectors, start, end, desc, limit)
 }
 
+func (q *QueryService) ActiveDatasetSubjects(ctx context.Context, spaceID, datasetID string) (map[string]struct{}, error) {
+	if q == nil || q.storage == nil {
+		// Unit-level metric evaluation can operate on its explicit observations;
+		// the production monitor wires the Storage metadata adapter here and gets
+		// authoritative lifecycle filtering.
+		return nil, nil
+	}
+	return q.storage.ListActiveDatasetSubjects(ctx, spaceID, datasetID)
+}
+
 func parseTimeValue(raw string) (time.Time, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
