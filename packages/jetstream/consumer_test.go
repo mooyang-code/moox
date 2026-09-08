@@ -189,6 +189,38 @@ func TestNewConsumerSupportsMultipleFilterSubjects(t *testing.T) {
 	}
 }
 
+func TestNewConsumerAcceptsExistingFiltersInDifferentOrder(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+
+	// Simulate a durable created before filter normalization was introduced.
+	_, err := client.js.AddConsumer("TEST", &nats.ConsumerConfig{
+		Name:           "legacy-filter-order",
+		Durable:        "legacy-filter-order",
+		FilterSubjects: []string{"moox.test.beta.>", "moox.test.alpha.>"},
+		AckPolicy:      nats.AckExplicitPolicy,
+		AckWait:        time.Second,
+		MaxDeliver:     3,
+		MaxAckPending:  8,
+		DeliverPolicy:  nats.DeliverAllPolicy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := testConsumerConfig("legacy-filter-order")
+	cfg.FilterSubject = ""
+	cfg.FilterSubjects = []string{"moox.test.alpha.>", "moox.test.beta.>"}
+	consumer, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+}
+
 func TestNewConsumerRejectsAmbiguousFilterConfiguration(t *testing.T) {
 	cfg := testConsumerConfig("ambiguous-filters")
 	cfg.FilterSubjects = []string{"moox.test.alpha.>", "moox.test.beta.>"}

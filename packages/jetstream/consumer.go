@@ -168,7 +168,7 @@ func (c *Client) BindConsumer(ctx context.Context, cfg ConsumerConfig) (*Consume
 	if err != nil {
 		return nil, classifyConsumerError("inspect consumer", err)
 	}
-	if info.Config.FilterSubject != cfg.FilterSubject || !slices.Equal(info.Config.FilterSubjects, cfg.FilterSubjects) || info.Config.AckPolicy != nats.AckExplicitPolicy {
+	if !consumerFiltersEqual(info.Config.FilterSubject, info.Config.FilterSubjects, cfg) || info.Config.AckPolicy != nats.AckExplicitPolicy {
 		return nil, fmt.Errorf("%w: consumer %s/%s filter or ack policy differs", ErrConsumerConfigConflict, cfg.Stream, cfg.Durable)
 	}
 	if err := contextErr(ctx, "before consumer binding"); err != nil {
@@ -323,13 +323,28 @@ func normalizeConsumerFilters(cfg *ConsumerConfig) error {
 	return nil
 }
 
+// consumerFiltersEqual compares the semantic filter set rather than the
+// server's slice order. Older JetStream consumers can retain the order in
+// which filters were originally created, while current configs are sorted
+// during normalization.
+func consumerFiltersEqual(actualSubject string, actualSubjects []string, expected ConsumerConfig) bool {
+	actual := ConsumerConfig{
+		FilterSubject:  actualSubject,
+		FilterSubjects: append([]string(nil), actualSubjects...),
+	}
+	if err := normalizeConsumerFilters(&actual); err != nil {
+		return false
+	}
+	return actual.FilterSubject == expected.FilterSubject && slices.Equal(actual.FilterSubjects, expected.FilterSubjects)
+}
+
 func reconcileConsumerConfig(ctx context.Context, js nats.JetStreamContext, stream, durable string, info *nats.ConsumerInfo, cfg ConsumerConfig) error {
 	if info == nil {
 		return fmt.Errorf("%w: consumer info is empty", ErrInvalidConsumer)
 	}
 	actual := info.Config
 	var conflicts []string
-	if actual.FilterSubject != cfg.FilterSubject || !slices.Equal(actual.FilterSubjects, cfg.FilterSubjects) {
+	if !consumerFiltersEqual(actual.FilterSubject, actual.FilterSubjects, cfg) {
 		conflicts = append(conflicts, "FilterSubjects")
 	}
 	if actual.DeliverPolicy != cfg.DeliverPolicy {
