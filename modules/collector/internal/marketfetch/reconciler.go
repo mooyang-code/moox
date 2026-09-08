@@ -807,6 +807,9 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		if subjectErr != nil {
 			return nil, fmt.Errorf("list symbol dataset %s: %w", params.Source.DatasetID, subjectErr)
 		}
+		if len(subjects) == 0 {
+			return nil, fmt.Errorf("no active subjects for symbol dataset %s", params.Source.DatasetID)
+		}
 		symbolIDs := make([]string, 0, len(subjects))
 		externalSymbols := make(map[string]string, len(subjects))
 		activeSubjectCount := 0

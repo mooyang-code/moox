@@ -257,6 +257,18 @@ func TestReconcilerFailsClosedWhenAllActiveStockSubjectsAreMalformed(t *testing.
 	require.Zero(t, nodes.submits)
 }
 
+func TestReconcilerFailsClosedWhenSymbolCatalogIsEmpty(t *testing.T) {
+	rule := domain.TaskRule{
+		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-fetcher-crypto-0", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
+	reconciler := &Reconciler{Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}}, Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}}, Nodes: nodes}
+
+	require.ErrorContains(t, reconciler.Reconcile(context.Background(), "crypto"), "no active subjects for symbol dataset symbols")
+	require.Zero(t, nodes.submits, "an empty symbol catalog must not disable the existing Timer fleet")
+}
+
 func TestReconcilerFailsClosedWhenStockRequiredGroupSizeExceedsMeasuredSafeSize(t *testing.T) {
 	rule := domain.TaskRule{
 		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity", Enabled: true,
