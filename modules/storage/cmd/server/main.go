@@ -479,12 +479,24 @@ func runViewRole() error {
 		return fmt.Errorf("start storage view dynamic inventory reconciler: %w", err)
 	}
 	defer stopDynamicConsumer()
-	stopViewMaintainer, err := svc.StartViewMaintainerAsync(trpc.BackgroundContext(), maintenanceOptions)
-	if err != nil {
-		return err
+	if storageViewMaintenanceDisabled() {
+		// Keep live View consumers available while an operator deliberately
+		// pauses historical maintenance on an overloaded Storage host.
+		svc.MarkMaintenanceReady()
+		log.Printf("storage view historical maintenance disabled by MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED=1")
+	} else {
+		stopViewMaintainer, err := svc.StartViewMaintainerAsync(trpc.BackgroundContext(), maintenanceOptions)
+		if err != nil {
+			return err
+		}
+		defer stopViewMaintainer()
 	}
-	defer stopViewMaintainer()
 	return <-serveErr
+}
+
+func storageViewMaintenanceDisabled() bool {
+	value := strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED"))
+	return value == "1" || strings.EqualFold(value, "true") || strings.EqualFold(value, "yes")
 }
 
 func stripWildcardConsumerRoutes(options *viewservice.EventConsumerOptions) {

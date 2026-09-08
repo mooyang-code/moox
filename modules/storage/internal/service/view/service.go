@@ -241,6 +241,14 @@ func (s *Service) setMaintenanceReady(ready bool) {
 	s.mu.Unlock()
 }
 
+// MarkMaintenanceReady allows an operator to run the View in live-consumer
+// only mode while a historical rebuild is intentionally paused. Event rows
+// remain processable; no historical maintainer goroutine is started by the
+// server in that mode.
+func (s *Service) MarkMaintenanceReady() {
+	s.setMaintenanceReady(true)
+}
+
 func (s *Service) isMaintenanceReady() bool {
 	s.mu.RLock()
 	ready := s.maintenanceReady

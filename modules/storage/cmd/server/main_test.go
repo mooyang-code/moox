@@ -103,6 +103,25 @@ func TestStorageViewRebuildSettingsRejectsTooShortInterval(t *testing.T) {
 	}
 }
 
+func TestStorageViewMaintenanceDisabled(t *testing.T) {
+	for _, value := range []string{"1", "true", "TRUE", "yes"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED", value)
+			if !storageViewMaintenanceDisabled() {
+				t.Fatalf("value %q did not disable maintenance", value)
+			}
+		})
+	}
+	for _, value := range []string{"", "0", "false", "no"} {
+		t.Run("enabled_"+value, func(t *testing.T) {
+			t.Setenv("MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED", value)
+			if storageViewMaintenanceDisabled() {
+				t.Fatalf("value %q unexpectedly disabled maintenance", value)
+			}
+		})
+	}
+}
+
 func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "storage.yaml")
 	if err := os.WriteFile(path, []byte("storage:\n  view:\n    maintenance_check_interval: 2m\n    max_view_file_bytes: 2097152\n"), 0o600); err != nil {
