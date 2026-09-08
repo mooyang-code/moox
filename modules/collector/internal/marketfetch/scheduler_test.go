@@ -15,6 +15,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGapAuditDisabledFromEnvironment(t *testing.T) {
+	for _, value := range []string{"1", "true", "yes", "TRUE", " Yes "} {
+		t.Setenv("MOOX_COLLECTOR_GAP_AUDIT_DISABLED", value)
+		if !gapAuditDisabled() {
+			t.Fatalf("gapAuditDisabled() = false for %q", value)
+		}
+	}
+	for _, value := range []string{"", "0", "false", "no", "random"} {
+		t.Setenv("MOOX_COLLECTOR_GAP_AUDIT_DISABLED", value)
+		if gapAuditDisabled() {
+			t.Fatalf("gapAuditDisabled() = true for %q", value)
+		}
+	}
+}
+
 func TestRotateRulesAfterAdvancesPastLastCappedRule(t *testing.T) {
 	rules := []domain.TaskRule{{RuleID: "rule-a"}, {RuleID: "rule-b"}, {RuleID: "rule-c"}}
 	rotated := rotateRulesAfter(rules, "rule-a")

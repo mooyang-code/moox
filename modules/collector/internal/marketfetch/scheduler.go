@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -318,7 +319,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		}
 		s.lastRuleID = rule.RuleID
 	}
-	if s.Instances != nil && (s.lastGapAudit.IsZero() || now.Sub(s.lastGapAudit) >= gapAuditInterval) {
+	if s.Instances != nil && !gapAuditDisabled() && (s.lastGapAudit.IsZero() || now.Sub(s.lastGapAudit) >= gapAuditInterval) {
 		if err := s.auditGaps(ctx, spaceID, rules, invokeNodes, now); err != nil {
 			log.WarnContextf(ctx, "market fetch gap audit failed: %v", err)
 		} else {
@@ -334,6 +335,11 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		}
 	}
 	return nil
+}
+
+func gapAuditDisabled() bool {
+	value := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_GAP_AUDIT_DISABLED"))
+	return value == "1" || strings.EqualFold(value, "true") || strings.EqualFold(value, "yes")
 }
 
 func filterMarketFetchRules(rules []domain.TaskRule) []domain.TaskRule {
