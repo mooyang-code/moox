@@ -113,6 +113,15 @@ type viewDatasetObservationWatermark struct {
 	outputCommitAt float64
 }
 
+const (
+	// Keep the three per-series families below the reporter's 100k sample
+	// budget (three samples per identity) while leaving room for crypto and the
+	// full stock universe. Existing identities continue to advance; only a new
+	// identity beyond the cap is rejected.
+	maxViewDatasetObservationSeries = 20000
+	maxViewDatasetMetricLabelBytes  = 256
+)
+
 // ViewMetricsSnapshot is the aggregate runtime state exported by the view and
 // outbox instrumentation. It intentionally has no subject, symbol, or message
 // identity fields.
@@ -436,6 +445,9 @@ func (m *ViewMetrics) ObserveViewDatasetInput(observation ViewDatasetObservation
 	m.datasetObservationMu.Lock()
 	defer m.datasetObservationMu.Unlock()
 	key := strings.Join(labels, "\x00")
+	if _, exists := m.datasetObservations[key]; !exists && len(m.datasetObservations) >= maxViewDatasetObservationSeries {
+		return fmt.Errorf("storage view dataset observation series limit exceeded: %d", maxViewDatasetObservationSeries)
+	}
 	state := m.datasetObservations[key]
 	value := timestampSeconds(observation.DataTime)
 	if value > state.inputDataTime {
@@ -455,6 +467,9 @@ func (m *ViewMetrics) ObserveViewDatasetOutput(observation ViewDatasetObservatio
 	m.datasetObservationMu.Lock()
 	defer m.datasetObservationMu.Unlock()
 	key := strings.Join(labels, "\x00")
+	if _, exists := m.datasetObservations[key]; !exists && len(m.datasetObservations) >= maxViewDatasetObservationSeries {
+		return fmt.Errorf("storage view dataset observation series limit exceeded: %d", maxViewDatasetObservationSeries)
+	}
 	state := m.datasetObservations[key]
 	dataTime := timestampSeconds(observation.DataTime)
 	commitTime := timestampSeconds(observation.CommittedAt)
@@ -482,6 +497,11 @@ func canonicalViewDatasetLabels(observation ViewDatasetObservation, requireCommi
 	for _, value := range values[:5] {
 		if value == "" {
 			return nil, fmt.Errorf("storage view dataset observation requires space_id, view_id, dataset_id, subject_id, and freq")
+		}
+	}
+	for _, value := range values {
+		if len(value) > maxViewDatasetMetricLabelBytes {
+			return nil, fmt.Errorf("storage view dataset observation label exceeds %d bytes", maxViewDatasetMetricLabelBytes)
 		}
 	}
 	if _, err := parseDatasetFrequency(values[4]); err != nil {

@@ -184,6 +184,13 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			// consumer and preserve the row-before-marker fence.
 			log.Printf("storage view active index unavailable; applying live row to replacement space=%s view=%s index=%s", viewKey.spaceID, viewKey.viewID, nextID)
 		}
+		// Publish the successful active-index watermark before touching the
+		// replacement. A replacement failure must not hide data already committed
+		// by the authoritative index from freshness monitoring.
+		for indexID, writtenRows := range activeWatermarkRows {
+			s.observeViewWatermark(indexID, datasetID, writtenRows, false)
+		}
+		activeWatermarkRows = nil
 		if nextID != "" {
 			if _, err := s.applyEventToIndex(ctx, nextID, datasetID, rows); err != nil {
 				failedID := nextID
@@ -254,9 +261,6 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			}
 		}
 		runtime.mu.Unlock()
-		for indexID, writtenRows := range activeWatermarkRows {
-			s.observeActiveViewWatermark(indexID, datasetID, writtenRows)
-		}
 	}
 	for _, id := range standalone {
 		writtenRows, err := s.applyEventToIndex(ctx, id, datasetID, rows)
@@ -418,6 +422,10 @@ func rowsWrittenByIndexKeys(rows []*pb.RowFieldUpsert, writes []viewindex.RowWri
 }
 
 func (s *Service) observeActiveViewWatermark(indexID, datasetID string, rows []*pb.RowFieldUpsert) {
+	s.observeViewWatermark(indexID, datasetID, rows, true)
+}
+
+func (s *Service) observeViewWatermark(indexID, datasetID string, rows []*pb.RowFieldUpsert, requireActive bool) {
 	if s == nil || s.metrics == nil || indexID == "" || len(rows) == 0 {
 		return
 	}
@@ -429,11 +437,13 @@ func (s *Service) observeActiveViewWatermark(indexID, datasetID string, rows []*
 	if !ok || runtime == nil || view == nil {
 		return
 	}
-	runtime.mu.Lock()
-	isActive := runtime.active == indexID
-	runtime.mu.Unlock()
-	if !isActive {
-		return
+	if requireActive {
+		runtime.mu.Lock()
+		isActive := runtime.active == indexID
+		runtime.mu.Unlock()
+		if !isActive {
+			return
+		}
 	}
 	spaceID := strings.TrimSpace(view.GetSpaceId())
 	viewID := strings.TrimSpace(view.GetViewId())

@@ -121,6 +121,9 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 	reports := make([]KlineFreshnessReport, 0, len(e.rules))
 	for _, rule := range e.rules {
 		if !rule.Enabled {
+			reports = append(reports, KlineFreshnessReport{
+				Rule: rule, CheckID: KlineFreshnessCheckID(rule), Skipped: true, Reason: "disabled",
+			})
 			continue
 		}
 		report := KlineFreshnessReport{Rule: rule, CheckID: KlineFreshnessCheckID(rule)}
@@ -137,7 +140,9 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			observed = append(observed, *item)
 		}
 		if len(observed) == 0 {
-			report.Skipped, report.Reason = true, "no_observation"
+			// An enabled rule with no output watermark is a real failure: a
+			// misrouted View or an unbound consumer must not remain silent.
+			report.Success, report.Reason = false, "no_observation"
 			report.Diagnostic = formatKlineDiagnostic(report)
 			reports = append(reports, report)
 			continue
@@ -209,10 +214,13 @@ type viewObservation struct {
 }
 
 func preferMetricSample(currentObservedAt, candidateObservedAt, currentValue, candidateValue time.Time) bool {
-	if currentObservedAt.IsZero() || candidateObservedAt.After(currentObservedAt) {
+	if currentObservedAt.IsZero() || candidateValue.After(currentValue) {
 		return true
 	}
-	return candidateObservedAt.Equal(currentObservedAt) && candidateValue.After(currentValue)
+	if candidateValue.Before(currentValue) {
+		return false
+	}
+	return candidateObservedAt.After(currentObservedAt)
 }
 
 func parseViewDatasetMetric(metricName, rawLabels string) (viewObservationIdentity, viewMetricKind, error) {

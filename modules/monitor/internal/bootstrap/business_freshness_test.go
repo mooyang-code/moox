@@ -134,7 +134,7 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 	}
 }
 
-func TestBusinessFreshnessReporterDoesNotCreateKlineSuccessWithoutObservation(t *testing.T) {
+func TestBusinessFreshnessReporterReportsKlineFailureWithoutObservation(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -157,16 +157,19 @@ func TestBusinessFreshnessReporterDoesNotCreateKlineSuccessWithoutObservation(t 
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
 	}}, 20)
-	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Checks: repositories.Checks, Results: repositories.Results}, repositories, nil, evaluator)
+	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{Metrics: query, Checks: repositories.Checks, Results: repositories.Results}, repositories, nil, 5*time.Minute, evaluator)
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	results, err := repositories.Results.Recent(t.Context(), check.SpaceID, check.CheckID, 1)
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	results, err := repositories.Results.Recent(t.Context(), check.SpaceID, check.CheckID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 0 {
-		t.Fatalf("no-observation kline check produced a result: %+v", results)
+	if len(results) != 1 || results[0].Success || !strings.HasPrefix(results[0].ErrorMessage, "no_observation") {
+		t.Fatalf("no-observation kline check result = %+v", results)
 	}
 }
 

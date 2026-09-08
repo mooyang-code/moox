@@ -38,6 +38,10 @@ func buildBusinessFreshnessReporterWithInterval(
 	if builder == nil || repositories == nil {
 		return nil
 	}
+	if klineInterval <= 0 {
+		klineInterval = 30 * time.Second
+	}
+	var lastKlineEvaluation time.Time
 	return func(ctx context.Context) error {
 		klineIntervalSeconds := 30
 		if seconds := int(klineInterval.Round(time.Second) / time.Second); seconds > 0 {
@@ -49,13 +53,26 @@ func buildBusinessFreshnessReporterWithInterval(
 		}
 		items := make(map[string]businessFreshnessItem, len(overview.Services)+len(overview.Datasets)+len(overview.BusinessChecks)+1)
 		suppressed := make(map[string]struct{})
-		if len(klineEvaluators) > 0 && klineEvaluators[0] != nil {
+		klineEvaluationRan := len(klineEvaluators) == 0 || klineEvaluators[0] == nil
+		klineEvaluated := make(map[string]struct{})
+		if len(klineEvaluators) > 0 && klineEvaluators[0] != nil &&
+			(lastKlineEvaluation.IsZero() || overview.GeneratedAt.Sub(lastKlineEvaluation) >= klineInterval) {
+			lastKlineEvaluation = overview.GeneratedAt
+			klineEvaluationRan = true
 			reports, err := klineEvaluators[0].Evaluate(ctx, overview.GeneratedAt)
 			if err != nil {
 				return err
 			}
 			for _, report := range reports {
+				klineEvaluated[report.CheckID] = struct{}{}
 				if report.Skipped {
+					if report.Reason == "disabled" {
+						items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
+							spaceID: report.Rule.SpaceID, checkID: report.CheckID,
+							name:    fmt.Sprintf("K线新鲜度 %s %s %s", report.Rule.SpaceID, report.Rule.ViewID, report.Rule.Frequency),
+							success: true, reason: "no_longer_expected",
+						}
+					}
 					continue
 				}
 				reason := report.Reason
@@ -187,7 +204,20 @@ func buildBusinessFreshnessReporterWithInterval(
 			// scheduler. Business freshness must not synthesize a success for an
 			// absent overview item, otherwise a real canary failure is immediately
 			// resolved by a concurrent no_longer_expected result.
-			if strings.HasPrefix(check.CheckID, "market_canary:") || strings.HasPrefix(check.CheckID, "kline_freshness:") {
+			if strings.HasPrefix(check.CheckID, "market_canary:") {
+				continue
+			}
+			if strings.HasPrefix(check.CheckID, "kline_freshness:") {
+				if !klineEvaluationRan {
+					continue
+				}
+				if _, expected := klineEvaluated[check.CheckID]; !expected {
+					key := check.SpaceID + "\x00" + check.CheckID
+					items[key] = businessFreshnessItem{
+						spaceID: check.SpaceID, checkID: check.CheckID, name: check.Name,
+						success: true, reason: "no_longer_expected",
+					}
+				}
 				continue
 			}
 			key := check.SpaceID + "\x00" + check.CheckID
