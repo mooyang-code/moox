@@ -37,6 +37,14 @@ import (
 
 var collectorStartedAt = time.Now()
 
+const (
+	// A slow Storage gap audit must not hold the market coordination loop for
+	// the next timer tick. Timer reconciliation and readiness use their own
+	// context below so the realtime control plane keeps progressing.
+	marketFetchScheduleTimeout  = 10 * time.Second
+	marketFetchReconcileTimeout = 30 * time.Second
+)
+
 // Initialize loads config, initializes persistence, and registers RPC services.
 func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if ctx == nil {
@@ -365,6 +373,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		readiness   *marketfetch.PeriodReadinessService
 		scheduler   *marketfetch.Scheduler
 		replayReady <-chan struct{}
+		tickRunning atomic.Bool
 	}
 	runtimes := make([]marketFetchRuntime, 0, len(spaceIDs))
 	for _, spaceID := range spaceIDs {
@@ -472,20 +481,24 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		}(runtime.spaceID, runtime.replayReady, periodReporter)
 	}
 	timer.RegisterScheduler("collectorMarketFetch", &timer.DefaultScheduler{})
-	var marketFetchTickRunning atomic.Bool
 	timer.RegisterHandlerService(service, func(ctx context.Context) error {
-		if !marketFetchTickRunning.CompareAndSwap(false, true) {
-			log.WarnContextf(ctx, "collector market fetch timer tick skipped because the previous tick is still running")
-			return nil
-		}
-		go func() {
-			defer marketFetchTickRunning.Store(false)
-			tickCtx := trpc.BackgroundContext()
-			for _, runtime := range runtimes {
+		for index := range runtimes {
+			runtime := &runtimes[index]
+			if !runtime.tickRunning.CompareAndSwap(false, true) {
+				log.WarnContextf(ctx, "collector market fetch timer tick skipped because the previous tick is still running space=%s", runtime.spaceID)
+				continue
+			}
+			go func(runtime *marketFetchRuntime) {
+				defer runtime.tickRunning.Store(false)
 				spaceID := runtime.spaceID
-				if err := runtime.scheduler.Tick(tickCtx, spaceID); err != nil {
-					log.WarnContextf(tickCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
+				scheduleCtx, scheduleCancel := context.WithTimeout(trpc.BackgroundContext(), marketFetchScheduleTimeout)
+				if err := runtime.scheduler.Tick(scheduleCtx, spaceID); err != nil {
+					log.WarnContextf(scheduleCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
 				}
+				scheduleCancel()
+
+				tickCtx, tickCancel := context.WithTimeout(trpc.BackgroundContext(), marketFetchReconcileTimeout)
+				defer tickCancel()
 				if err := runtime.reconciler.Reconcile(tickCtx, spaceID); err != nil {
 					if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
 						log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s expected_timer_function_count=%d measured_safe_group_size=%d: %v", spaceID, cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, err)
@@ -496,8 +509,8 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 				if err := runtime.readiness.EnsureCurrentAndNext(tickCtx, spaceID, time.Now().UTC()); err != nil {
 					log.WarnContextf(tickCtx, "collector period readiness prebuild failed space=%s: %v", spaceID, err)
 				}
-			}
-		}()
+			}(runtime)
+		}
 		return nil
 	})
 }
