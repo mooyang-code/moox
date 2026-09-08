@@ -315,7 +315,7 @@ kline_freshness:
       stale_after: 10m
 ```
 
-规则必须指定唯一的 `view_id`；`dataset_id` 可选，用于进一步限定 View 输入 dataset；不再存在 `scope` 字段，也禁止配置 Primary 规则。stockcn 必须有 calendar/session/timezone；crypto 不允许配置 stock session。校验 `evaluation_interval >= 30s`，`stale_after >= 2 * evaluation_interval`，`max_subjects_per_alert` 在 1 到 100 之间，规则 key 唯一；运行时按该 interval 设置 Kline check 的调度周期，默认仍为 30s。
+规则必须指定唯一的 `dataset_id + view_id`；dataset 是 active subject catalog 的生命周期边界，不允许省略；不再存在 `scope` 字段，也禁止配置 Primary 规则。stockcn 必须有 calendar/session/timezone；crypto 不允许配置 stock session。校验 `evaluation_interval >= 30s`，`stale_after >= 2 * evaluation_interval`，`max_subjects_per_alert` 在 1 到 100 之间，规则 key 唯一；运行时按该 interval 设置 Kline check 的调度周期，默认仍为 30s。
 
 - [ ] **Step 2: 写配置测试。** 覆盖缺字段、view_id 唯一性、可选 dataset_id、stock session 解析、calendar id、重复规则、太小 stale_after、负 duration、超过 subject limit、废弃 `scope` 字段和 `KnownFields(true)` 拒绝拼写错误。
 

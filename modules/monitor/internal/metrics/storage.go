@@ -32,14 +32,15 @@ type MetadataClient interface {
 }
 
 type StorageAdapter struct {
-	access    AccessClient
-	metadata  MetadataClient
-	auth      *commonpb.AuthInfo
-	cfg       monconfig.MetricsStorageConfig
-	mu        sync.RWMutex
-	schema    SchemaStatus
-	subjectMu sync.Mutex
-	subjects  map[string]cachedSubjectCatalog
+	access           AccessClient
+	metadata         MetadataClient
+	auth             *commonpb.AuthInfo
+	cfg              monconfig.MetricsStorageConfig
+	mu               sync.RWMutex
+	schema           SchemaStatus
+	subjectMu        sync.Mutex
+	subjectRefreshMu sync.Mutex
+	subjects         map[string]cachedSubjectCatalog
 }
 
 const (
@@ -375,6 +376,8 @@ func (a *StorageAdapter) ListActiveDatasetSubjects(ctx context.Context, spaceID,
 	}
 	key := strings.TrimSpace(spaceID) + "\x00" + strings.TrimSpace(datasetID)
 	now := time.Now().UTC()
+	a.subjectRefreshMu.Lock()
+	defer a.subjectRefreshMu.Unlock()
 	a.subjectMu.Lock()
 	if cached, ok := a.subjects[key]; ok && now.Sub(cached.loadedAt) < subjectCatalogTTL {
 		ids := cloneSubjectSet(cached.ids)
@@ -384,6 +387,7 @@ func (a *StorageAdapter) ListActiveDatasetSubjects(ctx context.Context, spaceID,
 	a.subjectMu.Unlock()
 
 	ids := make(map[string]struct{})
+	rowCount := 0
 	for page := uint32(1); ; page++ {
 		rsp, err := a.metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{
 			AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID,
@@ -395,7 +399,12 @@ func (a *StorageAdapter) ListActiveDatasetSubjects(ctx context.Context, spaceID,
 		if err := storageOK("list monitored dataset subjects", rsp.GetRetInfo()); err != nil {
 			return nil, err
 		}
-		for _, subject := range rsp.GetDatasetSubjects() {
+		pageSubjects := rsp.GetDatasetSubjects()
+		rowCount += len(pageSubjects)
+		if rowCount > maxDatasetSubjects*2 {
+			return nil, fmt.Errorf("monitored dataset subject catalog exceeds %d rows", maxDatasetSubjects*2)
+		}
+		for _, subject := range pageSubjects {
 			if subject == nil || !isActive(subject.GetStatus()) || strings.TrimSpace(subject.GetSubjectId()) == "" {
 				continue
 			}
@@ -406,6 +415,9 @@ func (a *StorageAdapter) ListActiveDatasetSubjects(ctx context.Context, spaceID,
 		}
 		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
 			break
+		}
+		if len(pageSubjects) == 0 {
+			return nil, errors.New("monitored dataset subject catalog pagination did not advance")
 		}
 	}
 	a.subjectMu.Lock()

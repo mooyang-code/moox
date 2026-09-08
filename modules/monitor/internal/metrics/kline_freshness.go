@@ -139,8 +139,10 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			}
 			observed = append(observed, *item)
 		}
+		activeSubjects := map[string]struct{}(nil)
 		if strings.TrimSpace(rule.DatasetID) != "" {
-			activeSubjects, catalogErr := e.query.ActiveDatasetSubjects(ctx, rule.SpaceID, rule.DatasetID)
+			var catalogErr error
+			activeSubjects, catalogErr = e.query.ActiveDatasetSubjects(ctx, rule.SpaceID, rule.DatasetID)
 			if catalogErr != nil {
 				report.Success, report.Reason = false, "subject_catalog_unavailable"
 				report.Diagnostic = catalogErr.Error()
@@ -187,6 +189,17 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			if now.Sub(item.outputTime) > rule.StaleAfter {
 				report.StaleCount++
 				staleSubjects[item.identity.SubjectID] = struct{}{}
+			}
+		}
+		// Once at least one active subject has produced output, an active
+		// subject with no output at all is also stale. Keep the all-missing case
+		// as no_observation above so a brand-new View remains distinguishable.
+		if activeSubjects != nil {
+			for subjectID := range activeSubjects {
+				if _, ok := observedSubjects[subjectID]; !ok {
+					report.StaleCount++
+					staleSubjects[subjectID] = struct{}{}
+				}
 			}
 		}
 		report.ObservedSubjects = sortedLimitedSubjects(observedSubjects, len(observedSubjects))

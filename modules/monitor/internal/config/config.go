@@ -564,8 +564,8 @@ func (c *Config) validateKlineFreshness() error {
 		if strings.TrimSpace(rule.SpaceID) == "" || strings.TrimSpace(rule.Frequency) == "" || strings.TrimSpace(rule.MarketID) == "" {
 			return fmt.Errorf("%s requires space_id, frequency, and market_id", prefix)
 		}
-		if strings.TrimSpace(rule.ViewID) == "" {
-			return fmt.Errorf("%s requires view_id", prefix)
+		if strings.TrimSpace(rule.DatasetID) == "" || strings.TrimSpace(rule.ViewID) == "" {
+			return fmt.Errorf("%s requires dataset_id and view_id", prefix)
 		}
 		if !validKlineFrequency(rule.Frequency) {
 			return fmt.Errorf("%s.frequency is invalid", prefix)

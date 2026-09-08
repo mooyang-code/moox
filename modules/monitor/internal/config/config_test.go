@@ -274,7 +274,7 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 	cfg.KlineFreshness.Enabled = true
 	cfg.KlineFreshness.Rules = []KlineFreshnessRule{
 		{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute},
-		{Enabled: true, SpaceID: "crypto", ViewID: "view-factor", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute},
+		{Enabled: true, SpaceID: "crypto", DatasetID: "dataset-factor", ViewID: "view-factor", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid kline freshness config rejected: %v", err)
@@ -285,6 +285,7 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 		edit func(*Config)
 	}{
 		{"missing view", func(c *Config) { c.KlineFreshness.Rules[0].ViewID = "" }},
+		{"missing dataset", func(c *Config) { c.KlineFreshness.Rules[0].DatasetID = "" }},
 		{"duplicate rule", func(c *Config) { c.KlineFreshness.Rules = append(c.KlineFreshness.Rules, c.KlineFreshness.Rules[0]) }},
 		{"stale after too short", func(c *Config) { c.KlineFreshness.Rules[0].StaleAfter = 30 * time.Second }},
 		{"subjects out of range", func(c *Config) { c.KlineFreshness.MaxSubjectsPerAlert = 101 }},
