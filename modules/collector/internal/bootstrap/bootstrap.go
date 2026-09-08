@@ -41,7 +41,7 @@ const (
 	// A slow Storage gap audit must not hold the market coordination loop for
 	// the next timer tick. Timer reconciliation and readiness use their own
 	// context below so the realtime control plane keeps progressing.
-	marketFetchScheduleTimeout  = 10 * time.Second
+	marketFetchScheduleTimeout  = 30 * time.Second
 	marketFetchReconcileTimeout = 30 * time.Second
 )
 
@@ -329,6 +329,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	// large-fleet response as a coordination failure.
 	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 60 * time.Second})
 	metadataSource := storagesource.NewDatasetSource(deps.StorageRPCGatewayTarget)
+	plannerSource := marketfetch.NewTaskInstanceDatasetSource(metadataSource, dbm.TaskInstances())
 	spaceIDs := marketFetchSpaceIDs()
 	if len(spaceIDs) == 0 {
 		log.Warn("collector market fetch scheduler has no configured spaces")
@@ -378,7 +379,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	runtimes := make([]marketFetchRuntime, 0, len(spaceIDs))
 	for _, spaceID := range spaceIDs {
 		reconciler := &marketfetch.Reconciler{
-			Rules: dbm.TaskRules(), Symbols: metadataSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
+			Rules: dbm.TaskRules(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
 			Metrics: metrics, MaxSubjects: 30,
 			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
 			MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
@@ -396,7 +397,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			// 127.0.0.1 gateway target would point back at the function itself.
 			Invoker: invoker, Storage: marketfetch.NewMarketStorageForMarket, StorageTarget: deps.StorageRPCGatewayTarget,
 			InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: spaceID, DNSCache: dnsCache,
-			Symbols:               metadataSource,
+			Symbols:               plannerSource,
 			InvokeNonRealtimeOnly: true,
 		}
 		if err := readiness.EnsureCurrentAndNext(trpc.BackgroundContext(), spaceID, time.Now().UTC()); err != nil {
@@ -414,36 +415,39 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	// Resampling owns a dedicated minute timer. Its callback only schedules a
 	// bounded background scan, so slow source/target Storage I/O cannot delay the
 	// existing SCF coordination timer.
-	if len(resampleRunners) > 0 || resamplePreparer != nil {
-		resampleService := s.Service("trpc.moox.collector.kline_resample.timer")
-		if resampleService == nil {
+	resampleService := s.Service("trpc.moox.collector.kline_resample.timer")
+	if resampleService == nil {
+		if len(resampleRunners) > 0 || resamplePreparer != nil {
 			log.Warn("collector kline resample timer service is not configured, skip register")
-		} else {
-			var resampleTickRunning atomic.Bool
-			timer.RegisterHandlerService(resampleService, func(ctx context.Context) error {
-				if !resampleTickRunning.CompareAndSwap(false, true) {
-					log.WarnContextf(ctx, "collector kline resample timer tick skipped because the previous tick is still running")
-					return nil
-				}
-				go func() {
-					defer resampleTickRunning.Store(false)
-					tickCtx := trpc.BackgroundContext()
-					if resamplePreparer != nil {
-						prepareCtx, prepareCancel := context.WithTimeout(tickCtx, cfg.KlineResample.ScanTimeout)
-						if err := resamplePreparer.RunOnce(prepareCtx); err != nil {
-							log.WarnContextf(tickCtx, "collector kline resample preparation failed: %v", err)
-						}
-						prepareCancel()
-					}
-					for _, runner := range resampleRunners {
-						if err := runner.Tick(tickCtx, time.Now().UTC()); err != nil {
-							log.WarnContextf(tickCtx, "collector kline resample tick failed space=%s: %v", runner.Config.SpaceID, err)
-						}
-					}
-				}()
-				return nil
-			})
 		}
+	} else {
+		var resampleTickRunning atomic.Bool
+		timer.RegisterHandlerService(resampleService, func(ctx context.Context) error {
+			if len(resampleRunners) == 0 && resamplePreparer == nil {
+				return nil
+			}
+			if !resampleTickRunning.CompareAndSwap(false, true) {
+				log.WarnContextf(ctx, "collector kline resample timer tick skipped because the previous tick is still running")
+				return nil
+			}
+			go func() {
+				defer resampleTickRunning.Store(false)
+				tickCtx := trpc.BackgroundContext()
+				if resamplePreparer != nil {
+					prepareCtx, prepareCancel := context.WithTimeout(tickCtx, cfg.KlineResample.ScanTimeout)
+					if err := resamplePreparer.RunOnce(prepareCtx); err != nil {
+						log.WarnContextf(tickCtx, "collector kline resample preparation failed: %v", err)
+					}
+					prepareCancel()
+				}
+				for _, runner := range resampleRunners {
+					if err := runner.Tick(tickCtx, time.Now().UTC()); err != nil {
+						log.WarnContextf(tickCtx, "collector kline resample tick failed space=%s: %v", runner.Config.SpaceID, err)
+					}
+				}
+			}()
+			return nil
+		})
 	}
 	for _, runtime := range runtimes {
 		periodMarketType := "spot"

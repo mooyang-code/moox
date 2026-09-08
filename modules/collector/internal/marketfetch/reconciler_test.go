@@ -265,7 +265,7 @@ func TestReconcilerFailsClosedWhenSymbolCatalogIsEmpty(t *testing.T) {
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-fetcher-crypto-0", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
 	reconciler := &Reconciler{Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}}, Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}}, Nodes: nodes}
 
-	require.ErrorContains(t, reconciler.Reconcile(context.Background(), "crypto"), "no active subjects for symbol dataset symbols")
+	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto"))
 	require.Zero(t, nodes.submits, "an empty symbol catalog must not disable the existing Timer fleet")
 }
 

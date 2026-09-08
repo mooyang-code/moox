@@ -203,3 +203,10 @@ func TestNormalizeTRPCTarget_RawFormats_ShouldNormalize(t *testing.T) {
 	assert.Equal(t, "ip://10.0.0.1:20100", normalizeTRPCTarget("10.0.0.1:20100", "20100"))
 	assert.Equal(t, "ip://custom", normalizeTRPCTarget("ip://custom", "20100"))
 }
+
+func TestDirectMetadataTarget_DerivesPrivateMetadataListener(t *testing.T) {
+	assert.Equal(t, "ip://146.56.196.204:20100", directMetadataTarget("ip://146.56.196.204:11003"))
+	assert.Empty(t, directMetadataTarget("http://127.0.0.1:11002"))
+	t.Setenv("MOOX_COLLECTOR_STORAGE_METADATA_TARGET", "146.56.196.204:20100")
+	assert.Equal(t, "ip://146.56.196.204:20100", directMetadataTarget("ip://127.0.0.1:11003"))
+}

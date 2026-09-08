@@ -437,6 +437,25 @@ func (r *TaskInstanceRepository) ListAll(ctx context.Context, spaceID string, li
 	return instances, err
 }
 
+// ListActiveKline returns the persisted realtime K-line inventory used as a
+// last-good planner snapshot when Storage metadata is temporarily unavailable.
+func (r *TaskInstanceRepository) ListActiveKline(ctx context.Context, spaceID string) ([]domain.TaskInstance, error) {
+	var all []domain.TaskInstance
+	for page := 1; ; page++ {
+		rows, total, err := r.List(ctx, TaskInstanceFilter{
+			SpaceID: spaceID, DataType: "kline", IncludeDeleted: false,
+			Page: page, PageSize: maxPageSize,
+		})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, rows...)
+		if int64(len(all)) >= total || len(rows) == 0 {
+			return all, nil
+		}
+	}
+}
+
 // ListAfterID returns a bounded page after the audit cursor. The cursor keeps
 // gap auditing fair when the task table grows beyond one page.
 func (r *TaskInstanceRepository) ListAfterID(ctx context.Context, spaceID string, afterID, limit int) ([]domain.TaskInstance, error) {

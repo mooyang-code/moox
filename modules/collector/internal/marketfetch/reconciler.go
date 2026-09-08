@@ -134,6 +134,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 			InstrumentType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
 		}}
 	}
+	if !stockCN && len(groups) == 0 {
+		// A transient/empty symbol catalog must not turn into a destructive
+		// zero-assignment patch. Keep the last known-good Timer fleet running and
+		// let the next reconciliation retry the catalog.
+		log.WarnContextf(ctx, "collector SCF timer reconciliation kept existing assignments space=%s: no usable kline groups", spaceID)
+		return nil
+	}
 	dns := map[string]sources.DNSResolution(nil)
 	if r.DNS != nil && !stockCN {
 		dns = r.DNS.Snapshot()
@@ -811,7 +818,8 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 			return nil, fmt.Errorf("list symbol dataset %s: %w", params.Source.DatasetID, subjectErr)
 		}
 		if len(subjects) == 0 {
-			return nil, fmt.Errorf("no active subjects for symbol dataset %s", params.Source.DatasetID)
+			log.WarnContextf(ctx, "skip collection rule=%s: no active subjects for symbol dataset %s", rule.RuleID, params.Source.DatasetID)
+			continue
 		}
 		symbolIDs := make([]string, 0, len(subjects))
 		externalSymbols := make(map[string]string, len(subjects))
