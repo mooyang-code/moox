@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/eventmapper"
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -358,22 +359,54 @@ func (s *Service) observeActiveViewWatermark(indexID string, rows []*pb.RowField
 	if !isActive {
 		return
 	}
-	frequency := viewFrequencyValue(view)
-	if frequency == "" {
+	spaceID := strings.TrimSpace(view.GetSpaceId())
+	viewID := strings.TrimSpace(view.GetViewId())
+	if spaceID == "" || viewID == "" {
 		return
 	}
+	frequency := viewFrequencyValue(view)
 	var watermark time.Time
+	type klineKey struct {
+		subjectID, frequency, seriesTag string
+	}
+	klineWatermarks := make(map[klineKey]time.Time)
 	for _, row := range rows {
 		if row == nil || row.GetKey() == nil || row.GetKey().GetTimeSeries() == nil {
 			continue
 		}
-		at, err := time.Parse(time.RFC3339Nano, row.GetKey().GetTimeSeries().GetDataTime())
-		if err == nil && at.After(watermark) {
+		timeSeries := row.GetKey().GetTimeSeries()
+		at, err := time.Parse(time.RFC3339Nano, timeSeries.GetDataTime())
+		if err != nil {
+			continue
+		}
+		if at.After(watermark) {
 			watermark = at
 		}
+		subjectID := strings.TrimSpace(timeSeries.GetSubjectId())
+		rowFrequency := strings.TrimSpace(timeSeries.GetFreq())
+		if subjectID == "" || rowFrequency == "" {
+			continue
+		}
+		seriesTag := strings.TrimSpace(timeSeries.GetSeriesTag())
+		if seriesTag == "" {
+			seriesTag = "default"
+		}
+		key := klineKey{subjectID: subjectID, frequency: rowFrequency, seriesTag: seriesTag}
+		if previous, ok := klineWatermarks[key]; !ok || at.After(previous) {
+			klineWatermarks[key] = at
+		}
 	}
-	if !watermark.IsZero() {
-		s.metrics.ObserveViewOutputWatermark(view.GetSpaceId(), view.GetViewId(), frequency, watermark)
+	if frequency != "" && !watermark.IsZero() {
+		s.metrics.ObserveViewOutputWatermark(spaceID, viewID, frequency, watermark)
+	}
+	committedAt := time.Now().UTC()
+	for key, dataTime := range klineWatermarks {
+		if err := s.metrics.ObserveViewKline(observability.KlineObservation{
+			SpaceID: spaceID, ViewID: viewID, SubjectID: key.subjectID, Frequency: key.frequency,
+			SeriesTag: key.seriesTag, DataTime: dataTime, CommittedAt: committedAt,
+		}); err != nil {
+			log.Printf("storage view kline metrics observe failed space=%s view=%s subject=%s freq=%s series_tag=%s: %v", spaceID, viewID, key.subjectID, key.frequency, key.seriesTag, err)
+		}
 	}
 }
 

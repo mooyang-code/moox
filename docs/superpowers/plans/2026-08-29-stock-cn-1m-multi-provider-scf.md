@@ -62,7 +62,7 @@
 - 当前 `stockcn` 默认函数数是 300，配置层已经支持 `timer_function_count` 和地域自动分配；本计划把数量改为显式可配置 `N`，初始建议 200，并用真实 `ActiveInstrumentSet` 数量和 SCF 压测共同验证每 Group 安全容量。
 - `marketfetch.Executor`、Handler、DNS 日志、Job route、SCF 入口和 Storage 构造仍直接依赖 Binance，不能只加一条 stock 规则上线。
 - 当前弱类型 `sources.Collector`/`CollectorRegistry` 虽按 source/market/data_type 注册，但 Timer Handler 绕过 Registry 直接构造 Binance Kline/Symbol Collector；统一框架必须替换这两个扩展面，不能并存。
-- `Scheduler.auditGaps` 在新任务无水位时会隐式从 `now-1h` 生成 catchup，没有遵循显式 HistoryPolicy；新模型必须由 `live_only/lookback/since` 决定唯一覆盖下界。
+- 旧 Scheduler 曾在新任务无水位时隐式从 `now-1h` 生成 catchup，没有遵循显式 HistoryPolicy；当前模型必须由 `live_only/lookback/since` 决定唯一覆盖下界，缺口修复只接受显式 GapRepair 请求。
 - Storage RowKey 已包含 `subject_id + freq + data_time + series_tag`；`dataset_stockcn_equity_kline` 固定使用 `default` tag，同一标的同一分钟无论由哪个 Provider 成功都 Upsert 同一个 RowKey。
 - 当前 `probe-egress` 已能遍历指定 Space 的 active `market_fetcher` 节点、逐个 Invoke 并汇总 `distinct_outbound_ips`，但只支持 crypto/Binance，且尚未校验 `result_count == non_empty_ip_count == distinct_ip_count == N`，也没有与 Rule 启用形成门禁。
 - 当前 `stock_kline` 仍是文件导入模型，没有 `1m`，需要直接替换为新契约，不保留旧兼容逻辑。
@@ -736,18 +736,19 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
   覆盖首次启用、禁用后重新启用、午休前后、跨日和重启恢复。断言 `live_only` 的覆盖下界等于启用时刻；`lookback` 按交易日历回退指定交易日；`since` 使用显式 RFC3339 起点；任何 Realtime、Backfill 或 GapRepair 结果都不得早于持久化的 `coverage_start_time`。
 
-- [ ] **Step 3: 写 Gap Audit 红灯测试**
+- [ ] **Step 3: 写自动缺口扫描删除与显式补采保留的静态契约回归测试**
 
-  断言无水位时按 HistoryPolicy 生成 Backfill 起点，不再隐式使用 `now-1h`；`auditGaps` 只检查已建立水位的配置覆盖区间；超过 `gap_repair_lookback` 的缺口转 alert-only；RetryItem 保存 `candidate_index`，不重复永远打同一坏源。
+  断言 Collector 不包含自动缺口扫描的实现、状态、环境变量或死接口；同时断言 `HistoryPolicy`、`BatchKindBackfill` 和 `BatchKindGapRepair` 仍存在。无水位时按 HistoryPolicy 生成 Backfill 起点，不再隐式使用 `now-1h`；已知缺口由显式 GapRepair 请求处理，超过 `gap_repair_lookback` 的请求拒绝排队，Monitor 只按 freshness 事实告警；RetryItem 保存 `candidate_index`，不重复永远打同一坏源。
 
-- [ ] **Step 4: 运行红灯测试**
+- [ ] **Step 4: 运行静态契约和历史策略测试**
 
   ```bash
+  bash scripts/test/contract/test-collector-no-gap-audit.sh
   cd modules/collector
-  go test -run 'TestStableTaskID|TestHistoryPolicy|TestCoverageStart|TestAuditGaps.*Coverage|TestRetry.*Candidate' ./internal/domain ./internal/marketfetch
+  go test -run 'TestStableTaskID|TestHistoryPolicy|TestCoverageStart|TestRetry.*Candidate' ./internal/domain ./internal/marketfetch
   ```
 
-  Expected: FAIL，现有 TaskID 包含 Provider，Gap Audit 会从 `now-1h` 追补。
+  Expected: 静态契约通过，且 HistoryPolicy、Backfill/GapRepair 领域与 Pipeline 回归测试通过；禁止把本地验证描述为 production E2E。
 
 - [ ] **Step 5: 实现新 Rule/Task 模型**
 
@@ -755,7 +756,7 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
 - [ ] **Step 6: 实现分离的 Realtime、Backfill 和 GapRepair**
 
-  `BatchKindRealtime` 最多读最近 3 根并按覆盖下界过滤；`BatchKindBackfill` 从覆盖下界向当前水位按 Provider 历史能力分页；`BatchKindGapRepair` 只修复覆盖区间内已发现缺口。三种 BatchKind 的 Subject/时间桶不得并发重叠。Realtime 始终优先，Backfill 和 GapRepair 只使用每函数单 IP 能力的配置比例；Gap Audit 使用交易日历生成期望桶，不把停牌无成交简单等同系统故障。
+  `BatchKindRealtime` 最多读最近 3 根并按覆盖下界过滤；`BatchKindBackfill` 从覆盖下界向当前水位按 Provider 历史能力分页；`BatchKindGapRepair` 只修复调用方明确给出的、位于覆盖区间内的缺口。三种 BatchKind 的 Subject/时间桶不得并发重叠。Realtime 始终优先，Backfill 和 GapRepair 只使用每函数单 IP 能力的配置比例；Monitor freshness 使用交易日历跳过休市、午休和停牌等非交易时段，不自动生成补采任务。
 
 - [ ] **Step 7: 校验 SQL 和提交**
 
@@ -1186,7 +1187,7 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
 - [ ] **Step 7: 验证历史 Backfill 与 GapRepair**
 
-  分别创建受控测试 Rule：`live_only` 不写启用前数据；`lookback` 只回填配置的交易日数且不超过 Provider 已验证的最近 24 小时窗口；`since` 从显式起点开始，超出 Provider 能力时 fail closed。验证 Backfill 不超过 `batch_bar_limit/max_concurrency/rate_budget_ratio` 且 Realtime 优先。再对一个 Canary 标的人为跳过覆盖区间内一分钟，确认 Gap Audit 只补该分钟；制造超过 `gap_repair_lookback` 的缺口，确认只告警不排队。
+  分别创建受控测试 Rule：`live_only` 不写启用前数据；`lookback` 只回填配置的交易日数且不超过 Provider 已验证的最近 24 小时窗口；`since` 从显式起点开始，超出 Provider 能力时 fail closed。验证 Backfill 不超过 `batch_bar_limit/max_concurrency/rate_budget_ratio` 且 Realtime 优先。对一个 Canary 标的人为指定覆盖区间内一分钟的 GapRepair 请求，确认只修复该分钟；超过 `gap_repair_lookback` 的修复请求拒绝排队，Monitor 只依据 freshness 事实告警。
 
 - [ ] **Step 8: 回滚演练**
 
@@ -1217,7 +1218,7 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 - [ ] 所有 Provider 使用 `default` `series_tag` 写同一个 RowKey；fallback、重试、Backfill 和 GapRepair 不产生 Provider 副本或跨 Dataset partial success。
 - [ ] `live_only/lookback/since` 分别建立正确且持久化的覆盖下界，历史 Backfill 受批次、并发、速率比例和 Provider 历史能力约束，Realtime 始终优先。
 - [ ] 同一 Subject/分钟不会同时进入 Realtime、Backfill 和 GapRepair，单 Dataset 不发生不同 BatchKind 的并发来源覆盖。
-- [ ] Gap Audit 只修复配置覆盖区间内的短期缺口，休市/午休/停牌不制造错误和无限重试。
+- [ ] Monitor freshness 只在 crypto 24x7 或 stockcn 交易日历/交易时段内判断最新 K 线；历史 Backfill 和已知缺口 GapRepair 均为显式、有界请求，不自动扫描或补洞。
 - [ ] 交易日历过期 fail closed，并在到期前 14 天告警。
 - [ ] stock 与 crypto 都通过 InstrumentPipeline 维护完整快照；一次快照不跨 Provider 拼页，失败不替换旧 `ActiveInstrumentSet`，连续两个完整日快照缺失后才下线标的。
 - [ ] SH/SZ/BSE 普通 symbol 使用实测固定的严格转换，特殊 symbol 来自完整 InstrumentSnapshot 的紧凑 override，不在 SCF 内启发式猜测。

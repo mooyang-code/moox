@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,11 +14,9 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/mooyang-code/moox/packages/report"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -29,31 +26,11 @@ import (
 const (
 	DefaultBatchSize = MaxRealtimeItems
 	DefaultMaxPlan   = 1000
-	// 80 items / 16 workers yields at most five 1.5-second storage-read waves,
-	// leaving room inside the fixed 10-second tRPC timer deadline.
-	gapAuditPageSize      = 40
-	gapAuditWorkers       = 4
-	gapAuditInterval      = 5 * time.Minute
-	gapAuditRangePageSize = 1000
-	gapAuditMaxRangePages = 3
 )
 
 type scheduleState struct {
 	target      time.Time
 	fingerprint string
-}
-
-type gapAuditPlan struct {
-	Kind            domain.BatchKind
-	Start           time.Time
-	End             time.Time
-	BarLimit        int
-	MaxConcurrency  int
-	RateBudgetRatio float64
-}
-
-type timeSeriesRangeReader interface {
-	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq) (*storagepb.ReadTimeSeriesRowsRsp, error)
 }
 
 // Scheduler scans enabled rules and creates stable SCF batches. Realtime work
@@ -82,8 +59,6 @@ type Scheduler struct {
 	}
 	Now              func() time.Time
 	mu               sync.Mutex
-	lastGapAudit     time.Time
-	gapAuditCursorID int
 	lastRuleID       string
 	lastCleanup      time.Time
 	planStates       map[string]scheduleState
@@ -153,8 +128,8 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		return fmt.Errorf("list enabled collection rules: %w", err)
 	}
 	// Local collector jobs (for example kline_resample) are driven by their
-	// own timer workers. Keep them out of the SCF planner and gap audit: the
-	// market-fetch scheduler only owns cloud-invoked collection rules.
+	// own timer workers. The market-fetch scheduler only owns cloud-invoked
+	// collection rules.
 	rules := filterMarketFetchRules(allRules)
 	invokeRules := filterInvokeRules(rules)
 	rules = rotateRulesAfter(rules, s.lastRuleID)
@@ -245,8 +220,8 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			state := s.planStates[stateKey]
 			frequencyFingerprint := taskFingerprint(frequencyTaskIDs, rule.CollectParams)
 			if s.InvokeNonRealtimeOnly && isKlineRule(rule) {
-				// Keep the TaskInstance inventory for the bounded gap auditor, but
-				// leave realtime K-line execution to Timer-triggered functions.
+				// Keep the TaskInstance inventory while realtime K-line execution is
+				// owned by Timer-triggered functions.
 				s.planStates[stateKey] = scheduleState{fingerprint: frequencyFingerprint}
 				continue
 			}
@@ -319,13 +294,6 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		}
 		s.lastRuleID = rule.RuleID
 	}
-	if s.Instances != nil && !gapAuditDisabled() && (s.lastGapAudit.IsZero() || now.Sub(s.lastGapAudit) >= gapAuditInterval) {
-		if err := s.auditGaps(ctx, spaceID, rules, invokeNodes, now); err != nil {
-			log.WarnContextf(ctx, "market fetch gap audit failed: %v", err)
-		} else {
-			s.lastGapAudit = now
-		}
-	}
 	if s.Retries != nil && (s.lastCleanup.IsZero() || now.Sub(s.lastCleanup) >= time.Hour) {
 		s.lastCleanup = now
 		if err := s.Batches.Cleanup(ctx, now.Add(-48*time.Hour), now.Add(-7*24*time.Hour)); err != nil {
@@ -335,11 +303,6 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		}
 	}
 	return nil
-}
-
-func gapAuditDisabled() bool {
-	value := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_GAP_AUDIT_DISABLED"))
-	return value == "1" || strings.EqualFold(value, "true") || strings.EqualFold(value, "yes")
 }
 
 func filterMarketFetchRules(rules []domain.TaskRule) []domain.TaskRule {
@@ -440,445 +403,11 @@ func taskFingerprint(taskIDs []string, params string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domain.TaskRule, nodes []scfinvoker.Node, now time.Time) error {
-	if len(nodes) == 0 {
-		return nil
-	}
-	byRule := make(map[string]domain.TaskRule, len(rules))
-	externalSymbols := make(map[string]string)
-	for _, rule := range rules {
-		byRule[rule.RuleID] = rule
-		if !isKlineRule(rule) {
-			continue
-		}
-		items, _, err := s.expandRule(ctx, rule)
-		if err != nil {
-			log.WarnContextf(ctx, "skip external symbol map rule=%s: %v", rule.RuleID, err)
-			continue
-		}
-		for _, item := range items {
-			if item.SubjectID == "" {
-				continue
-			}
-			symbol, symbolErr := marketProviderSymbol(rule.MarketType, item.SubjectID, item.Symbol)
-			if symbolErr != nil {
-				continue
-			}
-			externalSymbols[rule.RuleID+"\x00"+strings.ToUpper(strings.TrimSpace(item.SubjectID))] = symbol
-		}
-	}
-	// Do not filter by last_exec_time here. A recent invocation can still leave
-	// the Storage watermark stale. Scan a bounded cursor page and rotate through
-	// the table; watermark reads run in parallel so the 10s timer is not spent
-	// on a thousand sequential RPCs.
-	instances, err := s.Instances.ListAfterID(ctx, spaceID, s.gapAuditCursorID, gapAuditPageSize)
-	if err != nil {
-		return err
-	}
-	if len(instances) == 0 {
-		s.gapAuditCursorID = 0
-		return nil
-	}
-	s.gapAuditCursorID = instances[len(instances)-1].ID
-	type auditResult struct {
-		instance domain.TaskInstance
-		rule     domain.TaskRule
-		symbol   string
-		plan     gapAuditPlan
-		stale    bool
-		err      error
-	}
-	jobs := make(chan domain.TaskInstance)
-	results := make(chan auditResult, len(instances))
-	workerCount := gapAuditWorkers
-	if workerCount > len(instances) {
-		workerCount = len(instances)
-	}
-	var workers sync.WaitGroup
-	for i := 0; i < workerCount; i++ {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for instance := range jobs {
-				rule, ok := byRule[instance.RuleID]
-				if !ok || !strings.EqualFold(instance.DataType, "kline") || instance.SubjectID == "" {
-					continue
-				}
-				result := auditResult{instance: instance, rule: rule}
-				result.symbol = externalSymbols[rule.RuleID+"\x00"+strings.ToUpper(strings.TrimSpace(instance.SubjectID))]
-				if result.symbol == "" {
-					result.err = fmt.Errorf("external symbol is missing for subject %s", instance.SubjectID)
-					results <- result
-					continue
-				}
-				threshold := gapAuditThreshold(instance.Frequency)
-				if s.Storage == nil {
-					watermark, found := time.Time{}, false
-					if instance.LastExecTime != nil && !instance.LastExecTime.IsZero() {
-						watermark = instance.LastExecTime.UTC()
-						found = true
-					}
-					result.plan, result.stale, result.err = buildGapAuditPlanChecked(now, rule, instance, watermark, found)
-					if result.err != nil || result.stale {
-						results <- result
-					}
-					continue
-				}
-				freq, freqErr := normalizeStorageFrequency(instance.Frequency)
-				if freqErr != nil {
-					continue
-				}
-				checkCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-				storage, storageErr := s.Storage(s.StorageTarget, instance.MarketType, "")
-				if storageErr == nil {
-					watermark, found, watermarkErr := storage.LatestTimeSeriesTime(checkCtx, &storagepb.TimeSeriesSelector{
-						SpaceId: spaceID, DatasetId: instance.DatasetID, SubjectId: instance.SubjectID,
-						Freq: freq, SeriesTag: stringPtr(gapAuditSeriesTag(instance)),
-					})
-					storageErr = watermarkErr
-					if storageErr == nil && found && !watermark.IsZero() {
-						result.plan, result.stale, result.err = buildGapAuditPlanChecked(now, rule, instance, watermark.UTC(), true)
-						if result.err == nil {
-							if rangeReader, ok := storage.(timeSeriesRangeReader); ok {
-								rangeStart, rangeErr := gapAuditCoverageStart(now, rule, instance)
-								if rangeErr != nil {
-									result.err = rangeErr
-								} else if !rangeStart.IsZero() && watermark.After(rangeStart) {
-									missing, hasGap, gapErr := findEarliestMissingBucket(checkCtx, rangeReader, &storagepb.TimeSeriesSelector{
-										SpaceId: spaceID, DatasetId: instance.DatasetID, SubjectId: instance.SubjectID,
-										Freq: freq, SeriesTag: stringPtr(gapAuditSeriesTag(instance)),
-									}, rangeStart, watermark.Add(gapAuditFrequencyDuration(instance.Frequency)), instance.Frequency, strings.EqualFold(spaceID, StockCNSpaceID))
-									if gapErr != nil {
-										result.err = gapErr
-									} else if hasGap {
-										result.plan.Kind = domain.BatchKindGapRepair
-										result.plan.Start = missing
-										result.plan.End = missing.Add(gapAuditFrequencyDuration(instance.Frequency))
-										result.plan.BarLimit = 1
-										result.stale = now.Sub(missing) >= threshold
-									}
-								}
-							}
-						}
-					} else if storageErr == nil {
-						watermark, found := time.Time{}, false
-						if instance.LastExecTime != nil && !instance.LastExecTime.IsZero() {
-							watermark = instance.LastExecTime.UTC()
-							found = true
-						}
-						result.plan, result.stale, result.err = buildGapAuditPlanChecked(now, rule, instance, watermark, found)
-					}
-				}
-				cancel()
-				if storageErr != nil {
-					result.err = storageErr
-				}
-				if result.err != nil {
-					results <- result
-				} else if result.stale && (result.plan.Start.IsZero() || now.Sub(result.plan.Start) < threshold) {
-					result.stale = false
-				} else if result.stale {
-					results <- result
-				}
-			}
-		}()
-	}
-	go func() {
-		for _, instance := range instances {
-			jobs <- instance
-		}
-		close(jobs)
-		workers.Wait()
-		close(results)
-	}()
-	stale := make([]auditResult, 0, 5)
-	for result := range results {
-		if result.err != nil {
-			log.WarnContextf(ctx, "skip market fetch gap audit task=%s: %v", result.instance.TaskID, result.err)
-			continue
-		}
-		stale = append(stale, result)
-	}
-	sort.Slice(stale, func(i, j int) bool { return stale[i].instance.ID < stale[j].instance.ID })
-	perRulePlanned := make(map[string]int)
-	for index, candidate := range stale {
-		if index >= 5 {
-			break
-		}
-		if candidate.plan.MaxConcurrency > 0 && perRulePlanned[candidate.rule.RuleID] >= candidate.plan.MaxConcurrency {
-			continue
-		}
-		active, err := s.Batches.HasActiveTask(ctx, spaceID, candidate.instance.TaskID,
-			domain.BatchKindRealtime, domain.BatchKindBackfill, domain.BatchKindGapRepair)
-		if err != nil {
-			return err
-		}
-		if active {
-			// Realtime is planned before this audit. Never put historical repair
-			// work behind the same task while a newer batch is still in flight.
-			continue
-		}
-		node := nodes[index%len(nodes)]
-		item := domain.CollectionItem{TaskID: candidate.instance.TaskID, SubjectID: candidate.instance.SubjectID, Symbol: candidate.symbol, Provider: candidate.instance.Provider, SourceID: candidate.instance.SourceID, MarketType: candidate.instance.MarketType, DataType: "kline", DatasetID: candidate.instance.DatasetID, Frequency: candidate.instance.Frequency, StartTime: candidate.plan.Start.Format(time.RFC3339Nano), BarLimit: candidate.plan.BarLimit, RateBudgetRatio: candidate.plan.RateBudgetRatio}
-		if !candidate.plan.End.IsZero() {
-			item.EndTime = candidate.plan.End.Format(time.RFC3339Nano)
-		}
-		// A bounded 1,000-bar catchup must be allowed to advance on every audit
-		// minute. A ten-minute identity keeps the first page deduplicated but
-		// stalls large gaps for nine unnecessary minutes.
-		scheduleID := fmt.Sprintf("%s:%s:%s", candidate.plan.Kind, candidate.instance.TaskID, now.Truncate(time.Minute).Format(time.RFC3339Nano))
-		batchID := stableID(spaceID, scheduleID, string(candidate.plan.Kind), "0", "1")
-		syncPointID := stableID(spaceID, scheduleID, string(candidate.plan.Kind), "write")
-		req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: candidate.plan.Kind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
-		if _, err := s.planOne(ctx, candidate.rule, req, node, nodes); err != nil {
-			return err
-		}
-		perRulePlanned[candidate.rule.RuleID]++
-	}
-	return nil
-}
-
 // The public stock endpoints currently expose only a bounded latest page and
 // have no safe cursor shared by all active providers. Reject older history at
 // planning time instead of repeatedly requesting a page that cannot cover the
 // requested start. A future cursor-paginated feed can raise this deliberately.
 const stockCNHistoryMaxLookback = 24 * time.Hour
-
-func gapAuditFrequencyDuration(frequency string) time.Duration {
-	parsed, err := marketdata.ParseFrequency(frequency)
-	if err != nil {
-		return time.Minute
-	}
-	if duration := parsed.Duration(); duration > 0 {
-		return duration
-	}
-	return time.Minute
-}
-
-// gapAuditCoverageStart returns the earliest configured bucket that may be
-// repaired. It intentionally applies the same HistoryPolicy and provider
-// history boundary as the batch planner, so an internal-hole scan cannot widen
-// the configured retention window by accident.
-func gapAuditCoverageStart(now time.Time, rule domain.TaskRule, instance domain.TaskInstance) (time.Time, error) {
-	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
-	if strings.TrimSpace(rule.CollectParams) == "" {
-		params = &domain.CollectParams{HistoryPolicy: &domain.HistoryPolicy{
-			Mode:              domain.HistoryModeLiveOnly,
-			BatchBarLimit:     domain.DefaultHistoryBatchBarLimit,
-			MaxConcurrency:    domain.DefaultHistoryMaxConcurrency,
-			GapRepairLookback: domain.DefaultHistoryGapRepairLookback,
-			RateBudgetRatio:   domain.DefaultHistoryRateBudgetRatio,
-		}}
-		err = nil
-	}
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse history policy: %w", err)
-	}
-	if params == nil || params.HistoryPolicy == nil {
-		return time.Time{}, fmt.Errorf("history policy is not configured")
-	}
-	if err := params.ValidateHistoryPolicy(); err != nil {
-		return time.Time{}, fmt.Errorf("validate history policy: %w", err)
-	}
-	stock := strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stockcn_multi")
-	policyStart, err := historyPolicyStart(now.UTC(), params.HistoryPolicy, stock)
-	if err != nil {
-		return time.Time{}, err
-	}
-	start := time.Time{}
-	if rule.CoverageStartTime != nil && !rule.CoverageStartTime.IsZero() {
-		start = rule.CoverageStartTime.UTC()
-	}
-	start = laterTime(start, policyStart)
-	start = laterTime(start, gapRepairFloor(now, params))
-	if start.IsZero() {
-		return time.Time{}, nil
-	}
-	capability := marketdata.KlineHistoryCapability{SupportsArbitraryRange: true}
-	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stockcn_multi") {
-		capability = marketdata.KlineHistoryCapability{MaxLookback: stockCNHistoryMaxLookback}
-	}
-	if err := capability.ValidateStart(now.UTC(), start); err != nil {
-		return time.Time{}, fmt.Errorf("coverage boundary is outside provider capability: %w", err)
-	}
-	return start, nil
-}
-
-// findEarliestMissingBucket reads a bounded range and compares only expected
-// market buckets. For stockcn, the exchange calendar removes weekends,
-// holidays and the lunch break from the expected set; for crypto, buckets are
-// continuous at the requested frequency. The range is intentionally capped so
-// an unhealthy Storage index cannot turn the five-minute audit into an
-// unbounded scan.
-func findEarliestMissingBucket(ctx context.Context, reader timeSeriesRangeReader, selector *storagepb.TimeSeriesSelector, start, end time.Time, frequency string, stock bool) (time.Time, bool, error) {
-	if reader == nil || selector == nil || start.IsZero() || !end.After(start) {
-		return time.Time{}, false, nil
-	}
-	duration := gapAuditFrequencyDuration(frequency)
-	if duration <= 0 {
-		return time.Time{}, false, fmt.Errorf("unsupported gap audit frequency %q", frequency)
-	}
-	seen := make(map[int64]struct{})
-	for page := uint32(1); page <= gapAuditMaxRangePages; page++ {
-		response, err := reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-			SpaceId: selector.GetSpaceId(), DatasetId: selector.GetDatasetId(),
-			Selectors: []*storagepb.TimeSeriesSelector{selector},
-			TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)},
-			Order:     storagepb.SortOrder_SORT_ORDER_ASC,
-			Page:      &storagepb.Page{Page: page, Size: gapAuditRangePageSize},
-		})
-		if err != nil {
-			return time.Time{}, false, fmt.Errorf("read gap audit range: %w", err)
-		}
-		if response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != 0 {
-			return time.Time{}, false, fmt.Errorf("read gap audit range: storage rejected request")
-		}
-		for _, row := range response.GetRows() {
-			if row == nil || row.GetKey() == nil {
-				continue
-			}
-			at, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
-			if err != nil {
-				return time.Time{}, false, fmt.Errorf("read gap audit range: parse data_time %q: %w", row.GetKey().GetDataTime(), err)
-			}
-			seen[at.UTC().UnixNano()] = struct{}{}
-		}
-		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
-			break
-		}
-		if page == gapAuditMaxRangePages {
-			return time.Time{}, false, fmt.Errorf("read gap audit range exceeds %d pages", gapAuditMaxRangePages)
-		}
-	}
-
-	expected, err := gapAuditExpectedBuckets(start, end, duration, stock)
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	for _, at := range expected {
-		if _, ok := seen[at.UTC().UnixNano()]; !ok {
-			return at.UTC(), true, nil
-		}
-	}
-	return time.Time{}, false, nil
-}
-
-func gapAuditExpectedBuckets(start, end time.Time, duration time.Duration, stock bool) ([]time.Time, error) {
-	if !stock {
-		first := start.UTC().Truncate(duration)
-		if first.Before(start.UTC()) {
-			first = first.Add(duration)
-		}
-		buckets := make([]time.Time, 0)
-		for at := first; at.Before(end.UTC()); at = at.Add(duration) {
-			buckets = append(buckets, at)
-		}
-		return buckets, nil
-	}
-	calendar, err := loadStockCNCalendar()
-	if err != nil {
-		return nil, fmt.Errorf("load stockcn calendar for gap audit: %w", err)
-	}
-	days, err := calendar.TradingDays(start, end)
-	if err != nil {
-		return nil, err
-	}
-	buckets := make([]time.Time, 0)
-	for _, day := range days {
-		dayBuckets, dayErr := calendar.ExpectedMinuteBars(day.TradeDate)
-		if dayErr != nil {
-			return nil, dayErr
-		}
-		for _, at := range dayBuckets {
-			if !at.Before(start.UTC()) && at.Before(end.UTC()) {
-				buckets = append(buckets, at)
-			}
-		}
-	}
-	return buckets, nil
-}
-
-func buildGapAuditPlan(now time.Time, rule domain.TaskRule, instance domain.TaskInstance, watermark time.Time, found bool) (gapAuditPlan, bool) {
-	plan, stale, _ := buildGapAuditPlanChecked(now, rule, instance, watermark, found)
-	return plan, stale
-}
-
-func buildGapAuditPlanChecked(now time.Time, rule domain.TaskRule, instance domain.TaskInstance, watermark time.Time, found bool) (gapAuditPlan, bool, error) {
-	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
-	if strings.TrimSpace(rule.CollectParams) == "" {
-		params = &domain.CollectParams{HistoryPolicy: &domain.HistoryPolicy{
-			Mode:              domain.HistoryModeLiveOnly,
-			BatchBarLimit:     domain.DefaultHistoryBatchBarLimit,
-			MaxConcurrency:    domain.DefaultHistoryMaxConcurrency,
-			GapRepairLookback: domain.DefaultHistoryGapRepairLookback,
-			RateBudgetRatio:   domain.DefaultHistoryRateBudgetRatio,
-		}}
-		err = nil
-	}
-	if err != nil {
-		return gapAuditPlan{}, false, fmt.Errorf("parse history policy: %w", err)
-	}
-	if params == nil || params.HistoryPolicy == nil {
-		return gapAuditPlan{}, false, fmt.Errorf("history policy is not configured")
-	}
-	if err := params.ValidateHistoryPolicy(); err != nil {
-		return gapAuditPlan{}, false, fmt.Errorf("validate history policy: %w", err)
-	}
-	plan := gapAuditPlan{BarLimit: params.HistoryPolicy.BatchBarLimit, MaxConcurrency: params.HistoryPolicy.MaxConcurrency, RateBudgetRatio: params.HistoryPolicy.RateBudgetRatio}
-	if plan.BarLimit <= 0 {
-		plan.BarLimit = domain.DefaultHistoryBatchBarLimit
-	}
-	if plan.RateBudgetRatio <= 0 {
-		plan.RateBudgetRatio = domain.DefaultHistoryRateBudgetRatio
-	}
-	// rate_budget_ratio is applied by the per-feed limiter. Keep the requested
-	// batch size intact; scaling both rows and request rate compounds the
-	// throttle and needlessly increases historical completion time.
-	if plan.MaxConcurrency <= 0 {
-		plan.MaxConcurrency = domain.DefaultHistoryMaxConcurrency
-	}
-	threshold := gapAuditThreshold(instance.Frequency)
-	start := time.Time{}
-	if rule.CoverageStartTime != nil && !rule.CoverageStartTime.IsZero() {
-		start = rule.CoverageStartTime.UTC()
-	}
-	stock := strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stockcn_multi")
-	policyStart, err := historyPolicyStart(now.UTC(), params.HistoryPolicy, stock)
-	if err != nil {
-		return gapAuditPlan{}, false, err
-	}
-	capability := marketdata.KlineHistoryCapability{SupportsArbitraryRange: true}
-	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) || strings.EqualFold(strings.TrimSpace(instance.Provider), "stockcn_multi") {
-		capability = marketdata.KlineHistoryCapability{MaxLookback: stockCNHistoryMaxLookback}
-	}
-	for name, requested := range map[string]time.Time{"history": policyStart, "coverage": start} {
-		if requested.IsZero() {
-			continue
-		}
-		if err := capability.ValidateStart(now.UTC(), requested); err != nil {
-			return gapAuditPlan{}, false, fmt.Errorf("%s boundary is outside provider capability: %w", name, err)
-		}
-	}
-	start = laterTime(start, policyStart)
-	if start.IsZero() {
-		return gapAuditPlan{}, false, nil
-	}
-	if found && !watermark.IsZero() {
-		plan.Kind = domain.BatchKindGapRepair
-		start = laterTime(start, watermark.UTC())
-		start = laterTime(start, gapRepairFloor(now, params))
-	} else {
-		plan.Kind = domain.BatchKindBackfill
-	}
-	plan.Start = start
-	if plan.Start.IsZero() {
-		return gapAuditPlan{}, false, nil
-	}
-	if plan.Kind == domain.BatchKindGapRepair {
-		return plan, now.Sub(plan.Start) >= threshold, nil
-	}
-	return plan, now.After(plan.Start), nil
-}
 
 func collectionItemTaskID(spaceID, ruleID string, item domain.CollectionItem, frequency string) string {
 	if strings.EqualFold(strings.TrimSpace(item.DataType), domain.InstrumentDataType) && item.SnapshotShardCount > 0 {
@@ -886,72 +415,6 @@ func collectionItemTaskID(spaceID, ruleID string, item domain.CollectionItem, fr
 	}
 	spec := domain.TaskSpec{RouteID: stableRouteID(item.MarketType, item.DatasetID, frequency), Provider: item.Provider, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency}
 	return domain.StableTaskID(spaceID, ruleID, spec)
-}
-
-func historyPolicyStart(now time.Time, policy *domain.HistoryPolicy, stock bool) (time.Time, error) {
-	if policy == nil {
-		return time.Time{}, fmt.Errorf("history policy is required")
-	}
-	switch policy.Mode {
-	case domain.HistoryModeLiveOnly:
-		return time.Time{}, nil
-	case domain.HistoryModeLookback:
-		if policy.Lookback <= 0 {
-			return time.Time{}, fmt.Errorf("history lookback must be positive")
-		}
-		if stock {
-			calendar, err := loadStockCNCalendar()
-			if err != nil {
-				return time.Time{}, fmt.Errorf("load stockcn calendar for history lookback: %w", err)
-			}
-			return calendar.LookbackStart(now, policy.Lookback)
-		}
-		return now.Add(-time.Duration(policy.Lookback) * 24 * time.Hour), nil
-	case domain.HistoryModeSince:
-		start, err := time.Parse(time.RFC3339, policy.Since)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("parse history since %q: %w", policy.Since, err)
-		}
-		return start.UTC(), nil
-	default:
-		return time.Time{}, fmt.Errorf("unsupported history mode %q", policy.Mode)
-	}
-}
-
-func gapAuditSeriesTag(instance domain.TaskInstance) string {
-	if strings.EqualFold(strings.TrimSpace(instance.SpaceID), StockCNSpaceID) {
-		return "default"
-	}
-	return "venue:" + strings.ToLower(strings.TrimSpace(instance.Provider))
-}
-
-func gapRepairFloor(now time.Time, params *domain.CollectParams) time.Time {
-	var floor time.Time
-	if params != nil && params.HistoryPolicy != nil {
-		if lookback, err := domain.ParseScheduleInterval(params.HistoryPolicy.GapRepairLookback); err == nil && lookback > 0 {
-			floor = now.UTC().Add(-lookback)
-		}
-	}
-	return floor
-}
-
-func laterTime(left, right time.Time) time.Time {
-	if left.IsZero() || right.After(left) {
-		return right
-	}
-	return left
-}
-
-func gapAuditThreshold(frequency string) time.Duration {
-	interval, err := report.ParseDatasetFrequency(strings.TrimSpace(frequency))
-	if err != nil {
-		return 10 * time.Minute
-	}
-	threshold := 3 * interval
-	if threshold < 10*time.Minute {
-		threshold = 10 * time.Minute
-	}
-	return threshold
 }
 
 func (s *Scheduler) planOne(ctx context.Context, rule domain.TaskRule, req Request, node scfinvoker.Node, nodes []scfinvoker.Node) (bool, error) {
@@ -1389,8 +852,6 @@ func targetDataTime(now time.Time, frequency string) (time.Time, error) {
 func normalizeStorageFrequency(frequency string) (string, error) {
 	return report.NormalizeDatasetFrequency(strings.TrimSpace(frequency))
 }
-
-func stringPtr(value string) *string { return &value }
 
 func stableID(parts ...string) string {
 	hash := sha256.Sum256([]byte(strings.Join(parts, "|")))

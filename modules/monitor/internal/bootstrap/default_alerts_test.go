@@ -27,6 +27,7 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 	for _, check := range []domain.Check{
 		{CheckID: "sysdeploy:node-a:moox_collector", Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, Enabled: true},
 		{SpaceID: "crypto", CheckID: "market_canary:kline:BTC-USDT:1m", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
+		{SpaceID: "crypto", CheckID: "kline_freshness:primary:crypto:dataset:1m", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
 	} {
 		check := check
 		if err := repositories.Checks.Create(ctx, &check); err != nil {
@@ -54,6 +55,13 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 	}
 	if canaryRule.FailureThreshold != 1 || canaryRule.SuccessThreshold != 1 {
 		t.Fatalf("canary rule = %+v", canaryRule)
+	}
+	klineRule, err := repositories.Alerts.GetRule(ctx, "crypto", "default:kline_freshness:primary:crypto:dataset:1m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if klineRule.FailureThreshold != 2 || klineRule.SuccessThreshold != 2 || klineRule.MinimumReminderIntervalSeconds != 300 || !klineRule.SendOnResolved {
+		t.Fatalf("kline rule = %+v", klineRule)
 	}
 }
 

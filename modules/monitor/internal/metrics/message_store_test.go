@@ -2,13 +2,18 @@ package metrics
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestMetricMessageStoreNilGuards(t *testing.T) {
@@ -38,10 +43,97 @@ func TestMonotonicMetricRecognizesCanonicalModuleNames(t *testing.T) {
 		"moox_strategy_input_watermark_timestamp_seconds",
 		"moox_trade_metrics_errors_total",
 		"moox_archive_metrics_last_error_timestamp_seconds",
+		"moox_storage_kline_last_data_time_seconds",
+		"moox_storage_kline_last_commit_timestamp_seconds",
+		"moox_storage_view_kline_last_data_time_seconds",
+		"moox_storage_view_kline_last_commit_timestamp_seconds",
 	} {
 		require.True(t, monotonicMetric(name), name)
 	}
 	require.False(t, monotonicMetric("moox_factor_runs_total"))
+}
+
+func TestMetricMessageStoreKlineTimestampsIgnoreOutOfOrderSnapshot(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	r := metricMessageStoreForTest(t, mgr)
+	newer := time.Unix(200, 0).UTC()
+	report := &metricspb.MetricReport{ServiceName: "storage", InstanceId: "storage@node-a", BootId: "boot-a"}
+	for index, name := range []string{
+		"moox_storage_kline_last_data_time_seconds",
+		"moox_storage_kline_last_commit_timestamp_seconds",
+		"moox_storage_view_kline_last_data_time_seconds",
+		"moox_storage_view_kline_last_commit_timestamp_seconds",
+	} {
+		seriesID := fmt.Sprintf("kline-series-%d", index)
+		_, err := r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: fmt.Sprintf("new-%d", index)}, report, []Sample{{
+			SeriesID: seriesID, ServiceName: report.ServiceName, InstanceID: report.InstanceId, MetricName: name,
+			MetricType: "gauge", Value: 200, ObservedAt: newer, MessageID: fmt.Sprintf("new-%d", index),
+		}})
+		require.NoError(t, err)
+		_, err = r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: fmt.Sprintf("old-%d", index)}, report, []Sample{{
+			SeriesID: seriesID, ServiceName: report.ServiceName, InstanceID: report.InstanceId, MetricName: name,
+			MetricType: "gauge", Value: 100, ObservedAt: newer.Add(time.Second), MessageID: fmt.Sprintf("old-%d", index),
+		}})
+		require.NoError(t, err)
+		latest, err := r.GetLatest(context.Background(), seriesID)
+		require.NoError(t, err)
+		require.Equal(t, float64(200), latest.Value, name)
+	}
+}
+
+func TestMetricMessageStoreListLatestByMetricNamesIsBoundedAndStable(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	_, err = store.WithDatabase(mgr, func(db *gorm.DB) error {
+		rows := make([]MetricLatest, 0, 5003)
+		for index := 0; index < 5000; index++ {
+			rows = append(rows, MetricLatest{
+				SeriesID: fmt.Sprintf("kline-%05d", index), MetricName: "moox_storage_kline_last_data_time_seconds",
+				LabelsJSON: fmt.Sprintf(`{"space_id":"crypto","dataset_id":"dataset","freq":"1m","series_tag":"default","subject_id":"%05d"}`, index),
+				Value:      float64(index + 1), ObservedAt: time.Unix(int64(index+1), 0).UTC(),
+			})
+		}
+		rows = append(rows,
+			MetricLatest{SeriesID: "unrelated", MetricName: "moox_storage_dataset_output_watermark_timestamp_seconds", LabelsJSON: `{}`, Value: 1},
+			MetricLatest{SeriesID: "kline-commit", MetricName: "moox_storage_kline_last_commit_timestamp_seconds", LabelsJSON: `{}`, Value: 1},
+			MetricLatest{SeriesID: "kline-view", MetricName: "moox_storage_view_kline_last_data_time_seconds", LabelsJSON: `{}`, Value: 1},
+		)
+		return db.CreateInBatches(&rows, 500).Error
+	})
+	require.NoError(t, err)
+	r := metricMessageStoreForTest(t, mgr)
+	rows, err := r.ListLatestByMetricNames(context.Background(), []string{
+		"moox_storage_kline_last_data_time_seconds",
+		"moox_storage_kline_last_commit_timestamp_seconds",
+		"moox_storage_view_kline_last_data_time_seconds",
+	}, 0)
+	require.NoError(t, err)
+	require.Len(t, rows, 5002)
+	for index := 1; index < len(rows); index++ {
+		previous := rows[index-1]
+		current := rows[index]
+		require.LessOrEqual(t, previous.MetricName, current.MetricName)
+		if previous.MetricName == current.MetricName {
+			require.LessOrEqual(t, previous.LabelsJSON, current.LabelsJSON)
+			if previous.LabelsJSON == current.LabelsJSON {
+				require.Less(t, previous.SeriesID, current.SeriesID)
+			}
+		}
+	}
+	_, err = r.ListLatestByMetricNames(context.Background(), []string{"not_a_kline_metric"}, 1)
+	require.Error(t, err)
+	_, err = r.ListLatestByMetricNames(context.Background(), []string{"moox_storage_kline_last_data_time_seconds"}, 20001)
+	require.Error(t, err)
+
+	query := NewQueryService(r, nil)
+	rows, err = query.ListLatestByMetricNames(context.Background(), []string{"moox_storage_kline_last_data_time_seconds"}, 1)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
 }
 
 func metricMessageStoreForTest(t *testing.T, db *store.Store) *MetricMessageStore {

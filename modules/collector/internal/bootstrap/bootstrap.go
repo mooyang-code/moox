@@ -38,9 +38,6 @@ import (
 var collectorStartedAt = time.Now()
 
 const (
-	// A slow Storage gap audit must not hold the market coordination loop for
-	// the next timer tick. Timer reconciliation and readiness use their own
-	// context below so the realtime control plane keeps progressing.
 	marketFetchScheduleTimeout  = 30 * time.Second
 	marketFetchReconcileTimeout = 30 * time.Second
 )

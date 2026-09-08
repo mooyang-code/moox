@@ -241,13 +241,14 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		InstrumentMinimumCount:      cfg.MarketHealth.InstrumentMinimumCount,
 		InstrumentRequiredExchanges: append([]string(nil), cfg.MarketHealth.InstrumentRequiredExchanges...),
 	}
+	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg)
 	businessFreshness := buildBusinessFreshnessReporter(&monitorobservability.Builder{
 		Metrics: metricsQuery, Hosts: hostStore,
 		Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
 		Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
 		BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
 		MarketFetchThresholds:      marketFetchThresholds,
-	}, runtime.Repositories, resultHook)
+	}, runtime.Repositories, resultHook, klineFreshness)
 	watchdogRun := func(watchdogCtx context.Context) error {
 		var marketErr, freshnessErr error
 		if marketCanary != nil {
@@ -291,6 +292,21 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
+}
+
+func buildKlineFreshnessEvaluator(query *monmetrics.QueryService, cfg *config.Config) *monmetrics.KlineFreshnessEvaluator {
+	if query == nil || cfg == nil || !cfg.KlineFreshness.Enabled {
+		return nil
+	}
+	rules := make([]monmetrics.KlineFreshnessRule, 0, len(cfg.KlineFreshness.Rules))
+	for _, rule := range cfg.KlineFreshness.Rules {
+		rules = append(rules, monmetrics.KlineFreshnessRule{
+			Enabled: rule.Enabled, Scope: rule.Scope, SpaceID: rule.SpaceID, DatasetID: rule.DatasetID,
+			ViewID: rule.ViewID, Frequency: rule.Frequency, MarketID: rule.MarketID, CalendarID: rule.CalendarID,
+			Timezone: rule.Timezone, Sessions: append([]string(nil), rule.Sessions...), StaleAfter: rule.StaleAfter,
+		})
+	}
+	return monmetrics.NewKlineFreshnessEvaluator(query, rules, cfg.KlineFreshness.MaxSubjectsPerAlert)
 }
 
 func loadMonitorDatasetHealthPolicy(cfg *config.Config) (report.DatasetHealthPolicy, error) {

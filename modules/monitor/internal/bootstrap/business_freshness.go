@@ -23,6 +23,7 @@ func buildBusinessFreshnessReporter(
 	builder *monitorobservability.Builder,
 	repositories *store.Repositories,
 	hook func(context.Context, domain.Check, domain.CheckResult),
+	klineEvaluators ...*monmetrics.KlineFreshnessEvaluator,
 ) func(context.Context) error {
 	if builder == nil || repositories == nil {
 		return nil
@@ -34,6 +35,33 @@ func buildBusinessFreshnessReporter(
 		}
 		items := make(map[string]businessFreshnessItem, len(overview.Services)+len(overview.Datasets)+len(overview.BusinessChecks)+1)
 		suppressed := make(map[string]struct{})
+		if len(klineEvaluators) > 0 && klineEvaluators[0] != nil {
+			reports, err := klineEvaluators[0].Evaluate(ctx, overview.GeneratedAt)
+			if err != nil {
+				return err
+			}
+			for _, report := range reports {
+				if report.Skipped {
+					continue
+				}
+				target := report.Rule.DatasetID
+				if report.Rule.Scope == monmetrics.KlineScopeView {
+					target = report.Rule.ViewID
+				}
+				reason := report.Reason
+				if report.Diagnostic != "" {
+					reason += "; " + report.Diagnostic
+				}
+				items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
+					spaceID:    report.Rule.SpaceID,
+					checkID:    report.CheckID,
+					name:       fmt.Sprintf("K线新鲜度 %s %s %s %s", report.Rule.Scope, report.Rule.SpaceID, target, report.Rule.Frequency),
+					success:    report.Success,
+					reason:     reason,
+					diagnostic: report.Diagnostic,
+				}
+			}
+		}
 		for _, service := range overview.Services {
 			if service.ReporterStatus == "" {
 				continue
@@ -149,7 +177,7 @@ func buildBusinessFreshnessReporter(
 			// scheduler. Business freshness must not synthesize a success for an
 			// absent overview item, otherwise a real canary failure is immediately
 			// resolved by a concurrent no_longer_expected result.
-			if strings.HasPrefix(check.CheckID, "market_canary:") {
+			if strings.HasPrefix(check.CheckID, "market_canary:") || strings.HasPrefix(check.CheckID, "kline_freshness:") {
 				continue
 			}
 			key := check.SpaceID + "\x00" + check.CheckID

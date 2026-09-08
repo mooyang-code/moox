@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -56,6 +57,7 @@ type Service struct {
 	view      ViewResolver
 	snapshot  SnapshotProvider
 	metrics   DatasetRunObserver
+	kline     *observability.KlineMetrics
 	result    ResultDatasetResolver
 	syncPoint ViewSyncPointReader
 }
@@ -72,6 +74,7 @@ type Options struct {
 	View           ViewResolver
 	Snapshot       SnapshotProvider
 	DatasetMetrics DatasetRunObserver
+	KlineMetrics   *observability.KlineMetrics
 	ResultDataset  ResultDatasetResolver
 	SyncPoints     ViewSyncPointReader
 }
@@ -102,7 +105,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{
 		resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer,
-		view: opts.View, snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, result: opts.ResultDataset, syncPoint: opts.SyncPoints,
+		view: opts.View, snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, kline: opts.KlineMetrics, result: opts.ResultDataset, syncPoint: opts.SyncPoints,
 	}, nil
 }
 
@@ -175,25 +178,25 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 		rows := groups[group]
 		node, err := s.resolve(ctx, group.spaceID, group.datasetID)
 		if err != nil {
-			s.observeTimeSeriesRows(ctx, rows, "error", false)
+			s.observeTimeSeriesRows(ctx, rows, "error", false, false)
 			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: route %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
 		}
 		auth, err := s.signAuth(req.GetAuthInfo())
 		if err != nil {
-			s.observeTimeSeriesRows(ctx, rows, "error", false)
+			s.observeTimeSeriesRows(ctx, rows, "error", false, false)
 			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, fmt.Errorf("partial success after %d rows: %w", len(keys), err)), Keys: keys}, nil
 		}
 		rsp, err := node.UpsertFields(ctx, &pb.UpsertFieldsReq{AuthInfo: auth, Rows: rows, SourceEventId: req.GetSourceEventId(), WriteSource: req.GetWriteSource()})
 		if err != nil {
-			s.observeTimeSeriesRows(ctx, rows, "error", false)
+			s.observeTimeSeriesRows(ctx, rows, "error", false, false)
 			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: write %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
 		}
 		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			s.observeTimeSeriesRows(ctx, rows, "error", false)
+			s.observeTimeSeriesRows(ctx, rows, "error", false, false)
 			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(rsp.GetRetInfo().GetCode(), fmt.Errorf("partial success after %d rows: %s", len(keys), rsp.GetRetInfo().GetMsg())), Keys: keys}, nil
 		}
 		keys = append(keys, rsp.GetKeys()...)
-		s.observeTimeSeriesRows(ctx, rows, "success", true)
+		s.observeTimeSeriesRows(ctx, rows, "success", true, len(rsp.GetKeys()) == len(rows))
 	}
 	return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
 }
@@ -256,8 +259,8 @@ func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*p
 	return nil
 }
 
-func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowFieldUpsert, result string, committed bool) {
-	if s == nil || s.metrics == nil {
+func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowFieldUpsert, result string, committed, accepted bool) {
+	if s == nil || (s.metrics == nil && s.kline == nil) {
 		return
 	}
 	type aggregate struct {
@@ -265,45 +268,90 @@ func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowField
 		rows      uint64
 		watermark time.Time
 	}
+	type klineAggregate struct {
+		observation observability.KlineObservation
+	}
 	groups := make(map[report.DatasetKey]*aggregate)
+	klineGroups := make(map[struct {
+		spaceID, datasetID, subjectID, frequency, seriesTag string
+	}]*klineAggregate)
 	for _, row := range rows {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
 		key := row.GetKey()
 		timeSeries := key.GetTimeSeries()
 		if timeSeries == nil {
 			continue
 		}
-		datasetKey := report.DatasetKey{
-			SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), Freq: timeSeries.GetFreq(),
+		if s.metrics != nil {
+			datasetKey := report.DatasetKey{
+				SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), Freq: timeSeries.GetFreq(),
+			}
+			item := groups[datasetKey]
+			if item == nil {
+				item = &aggregate{key: datasetKey}
+				groups[datasetKey] = item
+			}
+			item.rows++
 		}
-		item := groups[datasetKey]
-		if item == nil {
-			item = &aggregate{key: datasetKey}
-			groups[datasetKey] = item
-		}
-		item.rows++
 		if !committed {
 			continue
 		}
 		dataTime, err := time.Parse(time.RFC3339Nano, timeSeries.GetDataTime())
 		if err != nil {
-			log.WarnContextf(ctx, "storage dataset metrics skipped invalid data_time=%q: %v", timeSeries.GetDataTime(), err)
+			if s.metrics != nil {
+				log.WarnContextf(ctx, "storage dataset metrics skipped invalid data_time=%q: %v", timeSeries.GetDataTime(), err)
+			}
 			continue
 		}
-		if item.watermark.IsZero() || dataTime.After(item.watermark) {
-			item.watermark = dataTime
+		if s.metrics != nil {
+			datasetKey := report.DatasetKey{SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), Freq: timeSeries.GetFreq()}
+			if item := groups[datasetKey]; item.watermark.IsZero() || dataTime.After(item.watermark) {
+				item.watermark = dataTime
+			}
+		}
+		if !accepted {
+			continue
+		}
+		if s.kline != nil && strings.TrimSpace(key.GetSpaceId()) != "" && strings.TrimSpace(key.GetDatasetId()) != "" && strings.TrimSpace(timeSeries.GetSubjectId()) != "" && strings.TrimSpace(timeSeries.GetFreq()) != "" {
+			seriesTag := strings.TrimSpace(timeSeries.GetSeriesTag())
+			if seriesTag == "" {
+				seriesTag = "default"
+			}
+			groupKey := struct {
+				spaceID, datasetID, subjectID, frequency, seriesTag string
+			}{key.GetSpaceId(), key.GetDatasetId(), timeSeries.GetSubjectId(), timeSeries.GetFreq(), seriesTag}
+			item := klineGroups[groupKey]
+			if item == nil {
+				item = &klineAggregate{observation: observability.KlineObservation{SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), SubjectID: timeSeries.GetSubjectId(), Frequency: timeSeries.GetFreq(), SeriesTag: seriesTag, DataTime: dataTime}}
+				klineGroups[groupKey] = item
+			} else if dataTime.After(item.observation.DataTime) {
+				item.observation.DataTime = dataTime
+			}
 		}
 	}
 	finishedAt := time.Now().UTC()
-	for _, item := range groups {
-		observation := report.DatasetObservation{
-			Key: item.key, Result: result, FinishedAt: finishedAt,
+	if s.metrics != nil {
+		for _, item := range groups {
+			observation := report.DatasetObservation{
+				Key: item.key, Result: result, FinishedAt: finishedAt,
+			}
+			if committed {
+				observation.Rows = item.rows
+				observation.OutputWatermark = item.watermark
+			}
+			if err := s.metrics.ObserveRun(observation); err != nil {
+				log.WarnContextf(ctx, "storage dataset metrics observe failed key=%+v result=%s: %v", item.key, result, err)
+			}
 		}
-		if committed {
-			observation.Rows = item.rows
-			observation.OutputWatermark = item.watermark
-		}
-		if err := s.metrics.ObserveRun(observation); err != nil {
-			log.WarnContextf(ctx, "storage dataset metrics observe failed key=%+v result=%s: %v", item.key, result, err)
+	}
+	if s.kline != nil && committed && accepted {
+		for _, item := range klineGroups {
+			item.observation.CommittedAt = finishedAt
+			if err := s.kline.ObservePrimary(item.observation); err != nil {
+				log.WarnContextf(ctx, "storage kline metrics observe failed observation=%+v: %v", item.observation, err)
+			}
 		}
 	}
 }

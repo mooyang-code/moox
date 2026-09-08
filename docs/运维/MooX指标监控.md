@@ -65,6 +65,28 @@ export MOOX_METRICS_STORAGE_METADATA_URL=http://storage-metadata:20200
 
 服务可以通过 `MOOX_METRICS_*` 环境变量覆盖大小、family、sample、label 和 gzip 限制；业务指标白名单由代码维护，用户不能通过 include/exclude 环境变量重新引入 Go、进程、tRPC 或 HTTP 技术指标。timer 周期仍以配置文件的 30 秒为准。Reporter 失败会记录日志并增加本地错误计数，不维护业务 outbox。
 
+### K 线 freshness 指标
+
+Storage Primary 和 active View 在成功接受 K 线写入后，分别维护两类有界 Gauge，共四个指标：
+
+| 指标 | 标签 | 语义 |
+| --- | --- | --- |
+| `moox_storage_kline_last_data_time_seconds` | `space_id,dataset_id,subject_id,freq,series_tag` | Primary 最近提交的 K 线业务 `data_time` |
+| `moox_storage_kline_last_commit_timestamp_seconds` | `space_id,dataset_id,subject_id,freq,series_tag` | Primary 最近一次成功写入的 UTC 墙钟 `commit_timestamp` |
+| `moox_storage_view_kline_last_data_time_seconds` | `space_id,view_id,subject_id,freq,series_tag` | active View 最近提交的 K 线业务 `data_time` |
+| `moox_storage_view_kline_last_commit_timestamp_seconds` | `space_id,view_id,subject_id,freq,series_tag` | active View 最近一次成功写入的 UTC 墙钟 `commit_timestamp` |
+
+`data_time` 用于判断上游业务时间是否前进；`commit_timestamp` 用于区分上游没有新业务时间和 Storage/View 写入链路停止。两者不能互换，Primary 的 `dataset_id` 与 View 的 `view_id` 也不能混在同一个标签语义中。空 `series_tag` 统一为 `default`，`subject_id` 使用 Storage canonical subject，不使用 Provider symbol。
+
+服务通过各自的 tRPC metrics timer 每 30 秒发布快照，Monitor 的
+`trpc.moox.monitor.check_schedule.timer` 同样每 30 秒读取现有
+MetricSnapshot/EventBus/Monitor Consumer 链路中的 latest 并评估 freshness，
+不抓取 HTTP `/metrics`。K 线检查连续两次 stale 才告警，连续两次 fresh 才恢复；
+诊断正文只列出有界数量的 stale subject，也不扫描历史内部桶或自动触发补采。
+
+freshness 先经过市场日历门禁：`crypto` 按 UTC 24x7 运行，`stockcn` 必须同时满足
+有效的 `cn_stock` 交易日历、`Asia/Shanghai` 时区和当前交易时段。周末、节假日、午休、盘前盘后或日历未知时跳过 stale 判断；历史数据只通过显式 `Backfill`，已知缺口只通过覆盖范围内的显式 `GapRepair` 修复。
+
 发布使用一个共享 `metrics-publisher` 发布角色和一个独立 `monitor-metrics-consumer` 消费角色。Publisher 只能发布 metrics snapshot；Monitor consumer 只订阅固定 metrics/host topic 和 durable。Monitor 为单实例，不能复用 Publisher 凭据消费，也不通过多实例抢占 durable。
 
 Collector、CloudNode、Factor、Strategy、Trade、Archive 使用固定低基数

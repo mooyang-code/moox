@@ -35,6 +35,9 @@ func ensureDefaultCheckAlertRules(ctx context.Context, repositories *store.Repos
 		if check.Kind == domain.CheckKindExternal {
 			failureThreshold, successThreshold = 1, 1
 		}
+		if strings.HasPrefix(check.CheckID, "kline_freshness:") {
+			failureThreshold, successThreshold = 2, 2
+		}
 		rule := &domain.AlertRule{
 			SpaceID: check.SpaceID, RuleID: "default:" + check.CheckID, CheckID: check.CheckID,
 			FailureThreshold: failureThreshold, SuccessThreshold: successThreshold,

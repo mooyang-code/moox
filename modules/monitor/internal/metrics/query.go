@@ -38,6 +38,13 @@ func (q *QueryService) Latest(ctx context.Context, seriesID string) (*MetricLate
 	return q.messageStore.GetLatest(ctx, seriesID)
 }
 
+func (q *QueryService) ListLatestByMetricNames(ctx context.Context, names []string, limit int) ([]MetricLatest, error) {
+	if q == nil || q.messageStore == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	return q.messageStore.ListLatestByMetricNames(ctx, names, limit)
+}
+
 func (q *QueryService) History(ctx context.Context, seriesID, serviceName, metricName, labelsJSON string, start, end time.Time, desc bool, limit int) ([]HistoryPoint, error) {
 	if q == nil || q.catalog == nil || q.storage == nil {
 		return nil, ErrMetricsStoreUnavailable

@@ -44,6 +44,7 @@ type ViewMetrics struct {
 	outboxReconnectAttempts          *prometheus.CounterVec
 	periodWaitingDatasets            *prometheus.GaugeVec
 	viewOutputWatermark              *prometheus.GaugeVec
+	klineMetrics                     *KlineMetrics
 	readyPublishRetry                *prometheus.CounterVec
 	restoreDuration                  prometheus.Gauge
 	restoreReady                     prometheus.Gauge
@@ -137,6 +138,10 @@ type ConsumerPartitionSnapshot struct {
 func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if registerer == nil {
 		return nil, fmt.Errorf("storage view metrics registerer is nil")
+	}
+	klineMetrics, err := NewKlineMetrics(registerer)
+	if err != nil {
+		return nil, err
 	}
 	metrics := &ViewMetrics{
 		deriveTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -266,6 +271,7 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		pendingDeliveries: make(map[*jetstream.Delivery]time.Time),
 		partitionStates:   make(map[string]ConsumerPartitionSnapshot),
 		viewWatermarks:    make(map[string]int64),
+		klineMetrics:      klineMetrics,
 	}
 	metrics.oldestPendingEventAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: "moox", Subsystem: "storage_view", Name: "oldest_pending_event_age_seconds",
@@ -275,7 +281,7 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		Namespace: "moox", Subsystem: "storage_outbox", Name: "publisher_unavailable_age_seconds",
 		Help: "Continuous time the Storage outbox EventBus publisher has been unavailable.",
 	}, func() float64 { return metrics.currentOutboxPublisherUnavailableAge(time.Now().UTC()).Seconds() })
-	var err error
+	err = nil
 	if metrics.deriveTotal, err = registerOrReuse(registerer, metrics.deriveTotal); err != nil {
 		return nil, err
 	}
@@ -376,6 +382,15 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		return nil, err
 	}
 	return metrics, nil
+}
+
+// ObserveViewKline records a successful active View write with per-subject
+// freshness labels while leaving the low-cardinality View watermark separate.
+func (m *ViewMetrics) ObserveViewKline(observation KlineObservation) error {
+	if m == nil || m.klineMetrics == nil {
+		return fmt.Errorf("storage view kline metrics are nil")
+	}
+	return m.klineMetrics.ObserveView(observation)
 }
 
 // ObserveViewOutputWatermark advances the committed watermark for one active

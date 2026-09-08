@@ -83,6 +83,93 @@ func TestBusinessFreshnessReporterDoesNotResolveMarketCanary(t *testing.T) {
 	}
 }
 
+func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
+	labels := `{"space_id":"crypto","dataset_id":"dataset","subject_id":"BTC","freq":"1m","series_tag":"default"}`
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		for _, row := range []monmetrics.MetricLatest{
+			{SeriesID: "data", MetricName: monmetrics.KlinePrimaryLastDataTimeMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
+			{SeriesID: "commit", MetricName: monmetrics.KlinePrimaryLastCommitTimestampMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Unix()), ObservedAt: now},
+		} {
+			if err := db.Create(&row).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositories := manager.Repositories()
+	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
+		Enabled: true, Scope: monmetrics.KlineScopePrimary, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
+	}}, 20)
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: query, Checks: repositories.Checks, Results: repositories.Results, Now: func() time.Time { return now },
+	}, repositories, nil, evaluator)
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	check, err := repositories.Checks.Get(t.Context(), "crypto", "kline_freshness:primary:crypto:dataset:1m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if check.Name != "K线新鲜度 primary crypto dataset 1m" {
+		t.Fatalf("check = %+v", check)
+	}
+	results, err := repositories.Results.Recent(t.Context(), "crypto", check.CheckID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Success || !strings.HasPrefix(results[0].ErrorMessage, "business_data_stale") || !strings.Contains(results[0].BodyExcerpt, "stale_count=1") {
+		t.Fatalf("results = %+v", results)
+	}
+}
+
+func TestBusinessFreshnessReporterDoesNotCreateKlineSuccessWithoutObservation(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	repositories := manager.Repositories()
+	check := &domain.Check{SpaceID: "crypto", CheckID: "kline_freshness:primary:crypto:dataset:1m", Name: "kline", GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30}
+	if err := repositories.Checks.Create(t.Context(), check); err != nil {
+		t.Fatal(err)
+	}
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
+		Enabled: true, Scope: monmetrics.KlineScopePrimary, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
+	}}, 20)
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Checks: repositories.Checks, Results: repositories.Results}, repositories, nil, evaluator)
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	results, err := repositories.Results.Recent(t.Context(), check.SpaceID, check.CheckID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("no-observation kline check produced a result: %+v", results)
+	}
+}
+
 func TestBusinessFreshnessReporterKeepsCollectorExpectationBeforeStorage(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {

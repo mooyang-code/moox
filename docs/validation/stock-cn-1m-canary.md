@@ -77,7 +77,7 @@ still requires fresh canary, Timer/Rule readback, Monitor, and Storage evidence.
 | Three-symbol 1m canary write | `PARTIAL` | r44 `600000.XSHG` bounded SCF canary succeeded; durable row query pending |
 | Provider fallback / rate-limit drill | `PENDING` | batch ID and source_provider |
 | Historical K-line query | `PENDING` | symbol, interval, row count, earliest/latest |
-| Gap audit and rollback drill | `PENDING` | audit/rollback IDs |
+| Explicit Backfill/GapRepair and rollback drill | `PENDING` | batch/repair/rollback IDs |
 
 ## Commands
 
@@ -108,9 +108,16 @@ initial start is kept below the active providers' 24-hour page capability; the
 stock runtime then resolves the latest closed 1m session from the packaged
 trading calendar and replays that exact bucket on weekends and holidays. This
 calendar-aware replay is limited to the deployment canary and does not weaken
-the normal `HistoryPolicy` fail-closed boundary. The Monitor canary also checks
-the final 14:59 bucket during the short post-close grace window before treating
-the market as idle.
+the normal `HistoryPolicy` fail-closed boundary. Historical data is imported
+only through an explicit `Backfill` request, and a known missing interval is
+repaired only through an explicit `GapRepair` request within the configured
+coverage and lookback limits. Collector does not run a periodic gap scan or
+automatic hole repair. The Monitor canary checks the four Storage Primary/View
+freshness metrics through its 30-second tRPC check cycle, requires two
+consecutive stale results before alerting, and uses the crypto 24x7 or stockcn
+trading-calendar/session gate before evaluating freshness. It also checks the
+final 14:59 bucket during the short post-close grace window before treating the
+market as idle.
 
 The stock production Kline scheduler uses the configured fixed `N` Timer
 fleet. The stock production Instrument path is a separate daily Timer with one

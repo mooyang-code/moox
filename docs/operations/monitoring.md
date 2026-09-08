@@ -64,6 +64,38 @@ Monitor treats each View/frequency tuple as a separate `storage_view` freshness
 row, so a lagging Factor View raises its own watermark-lag check without
 masking or being masked by the K-line View or Primary dataset.
 
+### K-line Freshness
+
+Storage records four bounded per-series K-line gauges after a successful write:
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `moox_storage_kline_last_data_time_seconds` | `space_id,dataset_id,subject_id,freq,series_tag` | Latest committed K-line business `data_time` in Primary |
+| `moox_storage_kline_last_commit_timestamp_seconds` | `space_id,dataset_id,subject_id,freq,series_tag` | UTC wall-clock time of the latest successful Primary commit |
+| `moox_storage_view_kline_last_data_time_seconds` | `space_id,view_id,subject_id,freq,series_tag` | Latest committed K-line business `data_time` in the active View |
+| `moox_storage_view_kline_last_commit_timestamp_seconds` | `space_id,view_id,subject_id,freq,series_tag` | UTC wall-clock time of the latest successful active View commit |
+
+`data_time` answers whether the upstream business bar is advancing;
+`commit_timestamp` answers whether the Storage or View write path is still
+advancing. They are not interchangeable, and Primary `dataset_id` is not
+folded into View `view_id`.
+
+The Storage and Collector reporters publish through their 30-second tRPC
+metrics timers. Monitor's `trpc.moox.monitor.check_schedule.timer` also runs
+every 30 seconds, reads the latest snapshot through the existing EventBus and
+Monitor Consumer path, and evaluates freshness without scraping HTTP
+`/metrics`. A K-line check alerts only after two consecutive stale evaluations
+and resolves after two consecutive fresh evaluations. It reports a bounded set
+of stale subjects and never audits individual historical buckets.
+
+Freshness evaluation is market-calendar aware: `crypto` uses its 24x7 UTC
+session, while `stockcn` first requires a valid `cn_stock` calendar trading day
+and an active `Asia/Shanghai` session. Weekends, holidays, lunch breaks, and
+closed sessions are skipped rather than reported as stale. History remains
+explicit: `Backfill` follows `HistoryPolicy`, `GapRepair` repairs a known
+interval within coverage/lookback limits, and Monitor freshness does not enqueue
+either one automatically.
+
 ## K-line Resample Monitoring
 
 For a `kline_resample` rule, inspect the rule's target Dataset and the matching

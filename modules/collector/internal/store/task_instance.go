@@ -382,8 +382,8 @@ func taskInstanceDefinitionChanged(current, desired domain.TaskInstance) bool {
 		current.IsDeleted != desired.IsDeleted
 }
 
-// DeactivateMissingMarketFetchRuleInstances prevents the gap auditor from
-// reviving symbols or frequencies removed from an enabled market rule.
+// DeactivateMissingMarketFetchRuleInstances removes symbols or frequencies
+// that are no longer part of an enabled market rule from the stable inventory.
 func (r *TaskInstanceRepository) DeactivateMissingMarketFetchRuleInstances(ctx context.Context, spaceID, ruleID string, activeTaskIDs []string) error {
 	query := r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
 		Where("c_space_id = ? AND c_rule_id = ? AND c_is_deleted = ?", spaceID, ruleID, false)
@@ -421,9 +421,7 @@ func (r *TaskInstanceRepository) ListStale(ctx context.Context, spaceID string, 
 }
 
 // ListAll returns the enabled stable instances in a bounded deterministic
-// order. Gap auditing must inspect the Storage watermark even when the last
-// invocation was recent, so a last_exec_time cutoff would starve slower
-// frequencies (for example 1h) behind the same few stale rows.
+// order without applying an execution-time cutoff.
 func (r *TaskInstanceRepository) ListAll(ctx context.Context, spaceID string, limit int) ([]domain.TaskInstance, error) {
 	if limit <= 0 || limit > maxPageSize {
 		limit = maxPageSize
@@ -456,8 +454,8 @@ func (r *TaskInstanceRepository) ListActiveKline(ctx context.Context, spaceID st
 	}
 }
 
-// ListAfterID returns a bounded page after the audit cursor. The cursor keeps
-// gap auditing fair when the task table grows beyond one page.
+// ListAfterID returns a bounded page after the supplied ID for deterministic
+// scans over a growing task table.
 func (r *TaskInstanceRepository) ListAfterID(ctx context.Context, spaceID string, afterID, limit int) ([]domain.TaskInstance, error) {
 	if limit <= 0 || limit > maxPageSize {
 		limit = maxPageSize

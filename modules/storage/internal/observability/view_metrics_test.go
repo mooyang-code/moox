@@ -32,6 +32,20 @@ func TestViewMetricsRecordFixedOutcomeLabels(t *testing.T) {
 	assert.Equal(t, float64(0), testutil.ToFloat64(metrics.deriveInFlight))
 }
 
+func TestViewMetricsExposePerSubjectKlineFreshness(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewViewMetrics(registry)
+	require.NoError(t, err)
+	dataTime := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, metrics.ObserveViewKline(KlineObservation{
+		SpaceID: "crypto", ViewID: "prices-view", SubjectID: "BTC-USDT", Frequency: "1m", SeriesTag: "venue:binance",
+		DataTime: dataTime, CommittedAt: dataTime.Add(time.Second),
+	}))
+	assertKlineMetricContract(t, registry, "moox_storage_view_kline_last_data_time_seconds", map[string]string{
+		"space_id": "crypto", "view_id": "prices-view", "subject_id": "BTC-USDT", "freq": "1m", "series_tag": "venue:binance",
+	}, float64(dataTime.Unix()))
+}
+
 func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewViewMetrics(registry)

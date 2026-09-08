@@ -205,6 +205,18 @@ func TestMonitorAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 	}
 }
 
+func TestMonitorAppConfigLoadsKlineFreshnessRules(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	cfg, err := Load(filepath.Join("..", "..", "config", "app.yaml"))
+	if err != nil {
+		t.Fatalf("Load(app.yaml) error = %v", err)
+	}
+	if !cfg.KlineFreshness.Enabled || len(cfg.KlineFreshness.Rules) != 4 {
+		t.Fatalf("kline freshness = %+v", cfg.KlineFreshness)
+	}
+}
+
 func TestMonitorDefaultDatasetHealthPolicyPathExistsFromModuleWorkingDirectory(t *testing.T) {
 	moduleRoot := filepath.Join("..", "..")
 	cfg := Default()
@@ -250,6 +262,68 @@ func TestMonitorConfigRequiresPresenceAwareMarketCanarySeriesTag(t *testing.T) {
 	cfg.MarketCanary.Subjects[0].SeriesTag = &empty
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("explicit default series tag must be valid: %v", err)
+	}
+}
+
+func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
+	cfg := Default()
+	if cfg.KlineFreshness.EvaluationInterval != 30*time.Second || cfg.KlineFreshness.MaxSubjectsPerAlert != 20 {
+		t.Fatalf("kline freshness defaults = %+v", cfg.KlineFreshness)
+	}
+	cfg.SysDeploy.Enabled = false
+	cfg.KlineFreshness.Enabled = true
+	cfg.KlineFreshness.Rules = []KlineFreshnessRule{
+		{Enabled: true, Scope: "primary", SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute},
+		{Enabled: true, Scope: "view", SpaceID: "crypto", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid kline freshness config rejected: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		edit func(*Config)
+	}{
+		{"missing target", func(c *Config) { c.KlineFreshness.Rules[0].DatasetID = "" }},
+		{"scope target mismatch", func(c *Config) { c.KlineFreshness.Rules[0].ViewID = "view" }},
+		{"duplicate rule", func(c *Config) { c.KlineFreshness.Rules = append(c.KlineFreshness.Rules, c.KlineFreshness.Rules[0]) }},
+		{"stale after too short", func(c *Config) { c.KlineFreshness.Rules[0].StaleAfter = 30 * time.Second }},
+		{"subjects out of range", func(c *Config) { c.KlineFreshness.MaxSubjectsPerAlert = 101 }},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			copy := *cfg
+			copy.KlineFreshness.Rules = append([]KlineFreshnessRule(nil), cfg.KlineFreshness.Rules...)
+			test.edit(&copy)
+			if err := copy.Validate(); err == nil {
+				t.Fatal("Validate() error = nil")
+			}
+		})
+	}
+}
+
+func TestMonitorConfigKlineFreshnessStockRuleRequiresTradingSession(t *testing.T) {
+	cfg := Default()
+	cfg.SysDeploy.Enabled = false
+	cfg.KlineFreshness.Enabled = true
+	cfg.KlineFreshness.Rules = []KlineFreshnessRule{{
+		Enabled: true, Scope: "primary", SpaceID: "stockcn", DatasetID: "dataset", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, StaleAfter: 10 * time.Minute,
+	}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid stock rule rejected: %v", err)
+	}
+	cfg.KlineFreshness.Rules[0].Sessions = []string{"bad"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("invalid stock session accepted")
+	}
+}
+
+func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	_, err := Load(writeConfig(t, "kline_freshness:\n  enabled: true\n  typo_interval: 30s\n"))
+	if err == nil {
+		t.Fatal("Load() accepted unknown kline freshness field")
 	}
 }
 

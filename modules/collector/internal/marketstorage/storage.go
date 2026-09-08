@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"time"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -20,7 +19,6 @@ const datasetSubjectPageSize = 1000
 type BatchStorage interface {
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
-	LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesSelector) (time.Time, bool, error)
 	RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error
 	ListDatasetSubjects(context.Context, string, string) ([]*storagepb.DatasetSubject, error)
 	ListSubjectSymbols(context.Context, string, string) ([]*storagepb.SubjectSymbol, error)
@@ -136,54 +134,6 @@ func (w *storageWriter) ReportDatasetPeriodCollected(ctx context.Context, spaceI
 		}
 		return ensureStorageOK("report dataset period collected", response.GetRetInfo())
 	})
-}
-
-func (w *storageWriter) LatestTimeSeriesTime(ctx context.Context, selector *storagepb.TimeSeriesSelector) (time.Time, bool, error) {
-	var response *storagepb.ReadTimeSeriesRowsRsp
-	err := retryStorage(ctx, func() error {
-		var err error
-		response, err = w.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{AuthInfo: w.authInfo, SpaceId: selector.GetSpaceId(), DatasetId: selector.GetDatasetId(), Selectors: []*storagepb.TimeSeriesSelector{selector}, Order: storagepb.SortOrder_SORT_ORDER_DESC, Page: &storagepb.Page{Page: 1, Size: 1}})
-		if err != nil {
-			return fmt.Errorf("read latest time-series row: %w", err)
-		}
-		return ensureStorageOK("read latest time-series row", response.GetRetInfo())
-	})
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	if len(response.GetRows()) == 0 || response.GetRows()[0].GetKey() == nil {
-		return time.Time{}, false, nil
-	}
-	value := strings.TrimSpace(response.GetRows()[0].GetKey().GetDataTime())
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return time.Time{}, false, fmt.Errorf("read latest time-series row: parse data_time %q: %w", value, err)
-	}
-	return parsed.UTC(), true, nil
-}
-
-// ReadTimeSeriesRows is the bounded range-read surface used by the gap audit.
-// Keeping the generated response here preserves page metadata so callers can
-// inspect an internal hole without introducing a market-specific Storage type.
-func (w *storageWriter) ReadTimeSeriesRows(ctx context.Context, req *storagepb.ReadTimeSeriesRowsReq) (*storagepb.ReadTimeSeriesRowsRsp, error) {
-	if req == nil {
-		return nil, fmt.Errorf("read time-series rows: request is required")
-	}
-	copyReq := proto.Clone(req).(*storagepb.ReadTimeSeriesRowsReq)
-	copyReq.AuthInfo = w.authInfo
-	var response *storagepb.ReadTimeSeriesRowsRsp
-	err := retryStorage(ctx, func() error {
-		var err error
-		response, err = w.access.ReadTimeSeriesRows(ctx, copyReq)
-		if err != nil {
-			return fmt.Errorf("read time-series rows: %w", err)
-		}
-		return ensureStorageOK("read time-series rows", response.GetRetInfo())
-	})
-	if err != nil {
-		return nil, err
-	}
-	return response, nil
 }
 
 func (w *storageWriter) ReadFields(ctx context.Context, keys []*storagepb.RowKey, fieldIDs, attributeKeys []string) ([]*storagepb.RowFieldValues, error) {

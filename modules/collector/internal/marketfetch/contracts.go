@@ -155,11 +155,9 @@ type Storage interface {
 	RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error
 }
 
-// StorageReader adds the bounded reads needed by scheduling and gap audit.
+// StorageReader is the metadata and write surface used by collector planning.
 type StorageReader interface {
 	Storage
-	LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesSelector) (time.Time, bool, error)
-	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq) (*storagepb.ReadTimeSeriesRowsRsp, error)
 	ListDatasetSubjects(context.Context, string, string) ([]*storagepb.DatasetSubject, error)
 }
 

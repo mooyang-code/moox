@@ -34,5 +34,8 @@ bash skills/moox/scripts/test-hostagent-deploy.sh
 printf '\n==> Monitor coverage contract\n'
 bash scripts/test/contract/test-monitor-coverage-contract.sh
 
+printf '\n==> K-line freshness local contract/E2E\n'
+bash scripts/test/e2e/verify-kline-freshness-e2e.sh
+
 printf '\nObservability local verification passed.\n'
 printf 'Remote readiness, real BTC-USDT canary, and external notification delivery require deployment evidence.\n'

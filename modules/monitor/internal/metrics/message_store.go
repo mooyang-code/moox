@@ -20,6 +20,18 @@ type MetricMessageStore struct {
 	DedupeRetention time.Duration
 }
 
+const (
+	defaultKlineLatestLimit = 20000
+	maxKlineLatestLimit     = 20000
+)
+
+var klineMetricNames = map[string]struct{}{
+	KlinePrimaryLastDataTimeMetric:        {},
+	KlinePrimaryLastCommitTimestampMetric: {},
+	KlineViewLastDataTimeMetric:           {},
+	KlineViewLastCommitTimestampMetric:    {},
+}
+
 func NewMetricMessageStore(db *gorm.DB) *MetricMessageStore {
 	return &MetricMessageStore{db: db, DedupeRetention: 7 * 24 * time.Hour}
 }
@@ -123,6 +135,8 @@ func monotonicMetric(name string) bool {
 		strings.HasSuffix(name, "_input_watermark_timestamp_seconds") ||
 		strings.HasSuffix(name, "_last_success_timestamp_seconds") ||
 		strings.HasSuffix(name, "_last_error_timestamp_seconds") ||
+		strings.HasSuffix(name, "_kline_last_data_time_seconds") ||
+		strings.HasSuffix(name, "_kline_last_commit_timestamp_seconds") ||
 		strings.HasSuffix(name, "_metrics_errors_total")
 }
 
@@ -138,6 +152,9 @@ func (r *MetricMessageStore) PruneDedupe(ctx context.Context, now time.Time) (in
 }
 
 func (r *MetricMessageStore) GetLatest(ctx context.Context, seriesID string) (*MetricLatest, error) {
+	if r == nil || r.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
 	var row MetricLatest
 	err := r.db.WithContext(ctx).Where("c_series_id = ?", seriesID).First(&row).Error
 	if err != nil {
@@ -145,6 +162,42 @@ func (r *MetricMessageStore) GetLatest(ctx context.Context, seriesID string) (*M
 	}
 	return &row, nil
 }
+
+// ListLatestByMetricNames is intentionally limited to the four Kline
+// freshness families. It is the bounded read path used by the evaluator and
+// must not become a general metric scan API.
+func (r *MetricMessageStore) ListLatestByMetricNames(ctx context.Context, names []string, limit int) ([]MetricLatest, error) {
+	if r == nil || r.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	if limit <= 0 {
+		limit = defaultKlineLatestLimit
+	}
+	if limit > maxKlineLatestLimit {
+		return nil, fmt.Errorf("kline latest limit %d exceeds maximum %d", limit, maxKlineLatestLimit)
+	}
+	if len(names) == 0 {
+		return nil, errors.New("kline metric names must not be empty")
+	}
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if _, ok := klineMetricNames[name]; !ok {
+			return nil, fmt.Errorf("metric name %q is not a supported kline metric", name)
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return nil, fmt.Errorf("duplicate kline metric name %q", name)
+		}
+		seen[name] = struct{}{}
+	}
+	var rows []MetricLatest
+	err := r.db.WithContext(ctx).
+		Where("c_metric_name IN ?", names).
+		Order("c_metric_name ASC, c_labels_json ASC, c_series_id ASC").
+		Limit(limit).
+		Find(&rows).Error
+	return rows, err
+}
+
 func (r *MetricMessageStore) ListSeries(ctx context.Context, serviceName, metricName string, limit int) ([]MetricSeries, error) {
 	if limit <= 0 {
 		limit = 500
