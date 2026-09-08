@@ -137,9 +137,12 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			// whether the active pointer is stale. If the write itself fails and
 			// a replacement is healthy, keep the delivery pending until the
 			// replacement is READY and activation can make it authoritative.
-			if err := s.applyEventToIndex(ctx, activeID, datasetID, rows); err == nil {
+			wrote, err := s.applyEventToIndex(ctx, activeID, datasetID, rows)
+			if err == nil {
 				activeReady, activeErr = true, nil
-				activeWatermarkIndexes[activeID] = struct{}{}
+				if wrote {
+					activeWatermarkIndexes[activeID] = struct{}{}
+				}
 			} else if nextID != "" {
 				log.Printf("storage view active index failed while replacement is ready; routing to replacement space=%s view=%s index=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, err)
 				activeFailure = err
@@ -158,7 +161,8 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			return fmt.Errorf("storage view active index %q is unavailable", activeID)
 		}
 		if activeErr == nil && activeReady {
-			if err := s.applyEventToIndex(ctx, activeID, datasetID, rows); err != nil {
+			wrote, err := s.applyEventToIndex(ctx, activeID, datasetID, rows)
+			if err != nil {
 				log.Printf("storage view active index write failed space=%s view=%s index=%s dataset=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, datasetID, err)
 				if nextID == "" {
 					runtime.mu.Unlock()
@@ -170,7 +174,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 				// pending for activation.
 				activeFailure = err
 				activeReady = false
-			} else {
+			} else if wrote {
 				activeWatermarkIndexes[activeID] = struct{}{}
 			}
 		} else if activeErr == nil {
@@ -181,7 +185,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			log.Printf("storage view active index unavailable; applying live row to replacement space=%s view=%s index=%s", viewKey.spaceID, viewKey.viewID, nextID)
 		}
 		if nextID != "" {
-			if err := s.applyEventToIndex(ctx, nextID, datasetID, rows); err != nil {
+			if _, err := s.applyEventToIndex(ctx, nextID, datasetID, rows); err != nil {
 				failedID := nextID
 				failedGeneration := s.indexGenerationOf(failedID)
 				// A live delivery has a short deadline. A timeout while the
@@ -251,14 +255,17 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		}
 		runtime.mu.Unlock()
 		for indexID := range activeWatermarkIndexes {
-			s.observeActiveViewWatermark(indexID, rows)
+			s.observeActiveViewWatermark(indexID, datasetID, rows)
 		}
 	}
 	for _, id := range standalone {
-		if err := s.applyEventToIndex(ctx, id, datasetID, rows); err != nil {
+		wrote, err := s.applyEventToIndex(ctx, id, datasetID, rows)
+		if err != nil {
 			return err
 		}
-		s.observeActiveViewWatermark(id, rows)
+		if wrote {
+			s.observeActiveViewWatermark(id, datasetID, rows)
+		}
 	}
 	return nil
 }
@@ -309,39 +316,39 @@ func (s *Service) liveIndexReady(ctx context.Context, indexID string) (bool, err
 	return stats.Exists, nil
 }
 
-func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, rows []*pb.RowFieldUpsert) error {
+func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, rows []*pb.RowFieldUpsert) (bool, error) {
 	if id == "" {
-		return nil
+		return false, nil
 	}
 	engine, err := s.engineFor(id)
 	if err != nil {
-		return err
+		return false, err
 	}
 	s.mu.RLock()
 	schema := s.schemas[id]
 	s.mu.RUnlock()
 	writes := eventWrites(schema, datasetID, rows)
 	if len(writes) == 0 {
-		return nil
+		return false, nil
 	}
 	complete, incomplete := partitionCompleteWrites(schema, writes)
 	if len(incomplete) > 0 {
 		recovered, err := s.recoverMissingRows(ctx, engine, id, schema, datasetID, rows, incomplete)
 		if err != nil {
-			return err
+			return false, err
 		}
 		complete = append(complete, recovered...)
 	}
 	if len(complete) == 0 {
-		return nil
+		return false, nil
 	}
 	if err := s.writeIndex(ctx, id, engine, viewindex.ViewIndexWriteBatch{RowWrites: complete, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite}); err != nil {
-		return err
+		return false, err
 	}
-	return nil
+	return true, nil
 }
 
-func (s *Service) observeActiveViewWatermark(indexID string, rows []*pb.RowFieldUpsert) {
+func (s *Service) observeActiveViewWatermark(indexID, datasetID string, rows []*pb.RowFieldUpsert) {
 	if s == nil || s.metrics == nil || indexID == "" || len(rows) == 0 {
 		return
 	}
@@ -362,6 +369,9 @@ func (s *Service) observeActiveViewWatermark(indexID string, rows []*pb.RowField
 	spaceID := strings.TrimSpace(view.GetSpaceId())
 	viewID := strings.TrimSpace(view.GetViewId())
 	if spaceID == "" || viewID == "" {
+		return
+	}
+	if !observability.IsKlineDatasetID(datasetID) && !observability.IsKlineViewID(viewID) {
 		return
 	}
 	frequency := viewFrequencyValue(view)

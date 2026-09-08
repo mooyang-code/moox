@@ -242,13 +242,13 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		InstrumentRequiredExchanges: append([]string(nil), cfg.MarketHealth.InstrumentRequiredExchanges...),
 	}
 	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg)
-	businessFreshness := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+	businessFreshness := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
 		Metrics: metricsQuery, Hosts: hostStore,
 		Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
 		Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
 		BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
 		MarketFetchThresholds:      marketFetchThresholds,
-	}, runtime.Repositories, resultHook, klineFreshness)
+	}, runtime.Repositories, resultHook, cfg.KlineFreshness.EvaluationInterval, klineFreshness)
 	watchdogRun := func(watchdogCtx context.Context) error {
 		var marketErr, freshnessErr error
 		if marketCanary != nil {

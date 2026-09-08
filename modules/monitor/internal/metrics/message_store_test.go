@@ -127,7 +127,7 @@ func TestMetricMessageStoreListLatestByMetricNamesIsBoundedAndStable(t *testing.
 	}
 	_, err = r.ListLatestByMetricNames(context.Background(), []string{"not_a_kline_metric"}, 1)
 	require.Error(t, err)
-	_, err = r.ListLatestByMetricNames(context.Background(), []string{"moox_storage_kline_last_data_time_seconds"}, 20001)
+	_, err = r.ListLatestByMetricNames(context.Background(), []string{"moox_storage_kline_last_data_time_seconds"}, 100001)
 	require.Error(t, err)
 
 	query := NewQueryService(r, nil)

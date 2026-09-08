@@ -314,7 +314,7 @@ func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowField
 		if !accepted {
 			continue
 		}
-		if s.kline != nil && strings.TrimSpace(key.GetSpaceId()) != "" && strings.TrimSpace(key.GetDatasetId()) != "" && strings.TrimSpace(timeSeries.GetSubjectId()) != "" && strings.TrimSpace(timeSeries.GetFreq()) != "" {
+		if s.kline != nil && observability.IsKlineDatasetID(key.GetDatasetId()) && strings.TrimSpace(key.GetSpaceId()) != "" && strings.TrimSpace(key.GetDatasetId()) != "" && strings.TrimSpace(timeSeries.GetSubjectId()) != "" && strings.TrimSpace(timeSeries.GetFreq()) != "" {
 			seriesTag := strings.TrimSpace(timeSeries.GetSeriesTag())
 			if seriesTag == "" {
 				seriesTag = "default"

@@ -48,6 +48,10 @@ var healthMetricNames = map[string]struct{}{
 	"moox_storage_outbox_pending_entries":                                      {},
 	"moox_storage_outbox_oldest_age_seconds":                                   {},
 	"moox_storage_view_period_waiting_datasets":                                {},
+	KlinePrimaryLastDataTimeMetric:                                             {},
+	KlinePrimaryLastCommitTimestampMetric:                                      {},
+	KlineViewLastDataTimeMetric:                                                {},
+	KlineViewLastCommitTimestampMetric:                                         {},
 }
 
 func IsHealthMetric(name string) bool {

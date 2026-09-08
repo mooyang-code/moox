@@ -105,6 +105,24 @@ func TestKlineFreshnessEvaluatorSkipsStockClosedAndHoliday(t *testing.T) {
 	}
 }
 
+func TestKlineFreshnessEvaluatorSkipsStockSessionWarmup(t *testing.T) {
+	rule := KlineFreshnessRule{Enabled: true, Scope: KlineScopePrimary, SpaceID: "stockcn", DatasetID: "dataset", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, StaleAfter: 10 * time.Minute}
+	query := newKlineQuery(t, []klineTestSample{{
+		Scope: KlineScopePrimary, SpaceID: "stockcn", Target: "dataset", Subject: "600000",
+		DataTime: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC), CommitTime: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC),
+	}})
+	for _, now := range []time.Time{
+		time.Date(2026, 9, 8, 1, 30, 30, 0, time.UTC), // 09:30:30 Asia/Shanghai
+		time.Date(2026, 9, 8, 5, 0, 30, 0, time.UTC),  // 13:00:30 Asia/Shanghai
+	} {
+		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+		require.NoError(t, err)
+		require.Len(t, reports, 1)
+		require.True(t, reports[0].Skipped)
+		require.Equal(t, "skipped_session_warmup", reports[0].Reason)
+	}
+}
+
 type klineTestSample struct {
 	Scope, SpaceID, Target, Subject string
 	DataTime, CommitTime            time.Time

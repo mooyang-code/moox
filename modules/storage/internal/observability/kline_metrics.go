@@ -10,6 +10,17 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
+// IsKlineDatasetID keeps freshness observations scoped to market K-line
+// datasets. Other time-series datasets, including Monitor's own metrics,
+// must not feed the K-line freshness loop.
+func IsKlineDatasetID(datasetID string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(datasetID)), "kline")
+}
+
+func IsKlineViewID(viewID string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(viewID)), "kline")
+}
+
 const defaultKlineSeriesTag = "default"
 
 // KlineObservation is the committed freshness fact for one canonical K-line

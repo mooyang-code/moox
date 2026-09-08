@@ -144,6 +144,9 @@ func TestDefaultConfigUsesCentralEventBus(t *testing.T) {
 	if cfg.EventBusURL != DefaultBusURL || cfg.SpaceID != DefaultSpace {
 		t.Fatalf("defaults: %+v", cfg)
 	}
+	if cfg.MaxSamples < 100000 || cfg.MaxUncompressedBytes < 16*1024*1024 || cfg.MaxCompressedBytes < 4*1024*1024 {
+		t.Fatalf("metric snapshot limits are too small: %+v", cfg)
+	}
 }
 
 func TestNewHandlerWithRegistrySupportsDedicatedSCFMetrics(t *testing.T) {

@@ -25,10 +25,24 @@ func buildBusinessFreshnessReporter(
 	hook func(context.Context, domain.Check, domain.CheckResult),
 	klineEvaluators ...*monmetrics.KlineFreshnessEvaluator,
 ) func(context.Context) error {
+	return buildBusinessFreshnessReporterWithInterval(builder, repositories, hook, 30*time.Second, klineEvaluators...)
+}
+
+func buildBusinessFreshnessReporterWithInterval(
+	builder *monitorobservability.Builder,
+	repositories *store.Repositories,
+	hook func(context.Context, domain.Check, domain.CheckResult),
+	klineInterval time.Duration,
+	klineEvaluators ...*monmetrics.KlineFreshnessEvaluator,
+) func(context.Context) error {
 	if builder == nil || repositories == nil {
 		return nil
 	}
 	return func(ctx context.Context) error {
+		klineIntervalSeconds := 30
+		if seconds := int(klineInterval.Round(time.Second) / time.Second); seconds > 0 {
+			klineIntervalSeconds = seconds
+		}
 		overview, err := builder.Build(ctx, "")
 		if err != nil {
 			return err
@@ -213,11 +227,15 @@ func buildBusinessFreshnessReporter(
 				}
 				checks[key] = *check
 			case errors.Is(err, gorm.ErrRecordNotFound):
+				intervalSeconds := 30
+				if strings.HasPrefix(item.checkID, "kline_freshness:") {
+					intervalSeconds = klineIntervalSeconds
+				}
 				check := domain.Check{
 					SpaceID: item.spaceID, CheckID: item.checkID, Name: item.name,
 					GroupName: "business", Kind: domain.CheckKindExternal,
 					Source: domain.CheckSourceObservability, Enabled: true,
-					IntervalSeconds: 30, TimeoutMS: 20000,
+					IntervalSeconds: intervalSeconds, TimeoutMS: 20000,
 				}
 				if err := repositories.Checks.Create(ctx, &check); err != nil {
 					return err
@@ -237,6 +255,9 @@ func buildBusinessFreshnessReporter(
 			check, ok := checks[key]
 			if !ok {
 				continue
+			}
+			if strings.HasPrefix(check.CheckID, "kline_freshness:") && check.IntervalSeconds != klineIntervalSeconds {
+				check.IntervalSeconds = klineIntervalSeconds
 			}
 			status := domain.CheckStatusDown
 			if item.success {

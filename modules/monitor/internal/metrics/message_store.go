@@ -21,8 +21,10 @@ type MetricMessageStore struct {
 }
 
 const (
-	defaultKlineLatestLimit = 20000
-	maxKlineLatestLimit     = 20000
+	// Four freshness families are stored per subject. Keep the bounded read
+	// large enough for the full A-share universe plus crypto and multiple tags.
+	defaultKlineLatestLimit = 100000
+	maxKlineLatestLimit     = 100000
 )
 
 var klineMetricNames = map[string]struct{}{

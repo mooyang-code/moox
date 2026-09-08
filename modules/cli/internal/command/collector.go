@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -964,23 +965,27 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			summary.TotalCount += instrumentSummary.TotalCount
 			instrumentSnapshotFleet = collectorPublishedTimerFleet{opts: instrumentOpts, nodes: instrumentNodes}
 			hasInstrumentSnapshotFleet = true
+			rollbackRuleID := ""
+			if opts.EnableStockCN {
+				rollbackRuleID = "builtin-stockcn-kline-1m"
+			}
+			rollbackActivation := func(cause error) error {
+				rollbackErr := rollbackStockCNActivation(ctx, client, fetcherConfig.SpaceID, rollbackRuleID, allTimerNodes, instrumentSnapshotFleet.nodes)
+				if rollbackErr != nil {
+					return fmt.Errorf("%w; rollback stockcn activation failed: %v", cause, rollbackErr)
+				}
+				return cause
+			}
 			if opts.EnableStockCN {
 				// Enable the rule before the Timer fleet. Collector assignment is
 				// reconciled from the active rule, so waiting for assignments while
 				// the rule is still disabled can never become ready.
 				if err := ensureStockCNKlineRule(ctx, client, fetcherConfig.SpaceID); err != nil {
-					disableJobs, disableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(allTimerNodes))
-					if disableErr == nil {
-						disableErr = waitCollectorBatches(ctx, client, disableJobs)
-					}
-					if disableErr != nil {
-						return summary, fmt.Errorf("enable stock Kline rule: %w; rollback Timer fleet failed: %v", err, disableErr)
-					}
-					return summary, fmt.Errorf("enable stock Kline rule: %w", err)
+					return summary, rollbackActivation(fmt.Errorf("enable stock Kline rule: %w", err))
 				}
 				enabledRules, ruleErr := client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "equity")
 				if ruleErr != nil {
-					return summary, fmt.Errorf("verify stock Kline rule enabled: %w", ruleErr)
+					return summary, rollbackActivation(fmt.Errorf("verify stock Kline rule enabled: %w", ruleErr))
 				}
 				found := false
 				for _, rule := range enabledRules {
@@ -990,25 +995,21 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 					}
 				}
 				if !found {
-					return summary, fmt.Errorf("stock Kline rule enable was not confirmed by control-plane readback")
+					return summary, rollbackActivation(fmt.Errorf("stock Kline rule enable was not confirmed by control-plane readback"))
 				}
 				if err := waitCollectorTimerFleetsAssigned(ctx, client, publishedTimerFleets); err != nil {
-					_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, "builtin-stockcn-kline-1m")
-					return summary, fmt.Errorf("verify stock Kline assignments after rule enable: %w", err)
+					return summary, rollbackActivation(fmt.Errorf("verify stock Kline assignments after rule enable: %w", err))
 				}
 				enablePatches := collectorTimerEnablePatches(allTimerNodes, *fetcherConfig)
 				enableJobs, enableErr := submitCollectorTimerRuntimeConfigs(ctx, client, enablePatches)
 				if enableErr != nil {
-					_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, "builtin-stockcn-kline-1m")
-					return summary, fmt.Errorf("enable stock Kline Timer fleet: %w", enableErr)
+					return summary, rollbackActivation(fmt.Errorf("enable stock Kline Timer fleet: %w", enableErr))
 				}
 				if err := waitCollectorBatches(ctx, client, enableJobs); err != nil {
-					_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, "builtin-stockcn-kline-1m")
-					return summary, fmt.Errorf("enable stock Kline Timer fleet: %w", err)
+					return summary, rollbackActivation(fmt.Errorf("enable stock Kline Timer fleet: %w", err))
 				}
 				if err := waitCollectorTimerFleetsEnabled(ctx, client, publishedTimerFleets); err != nil {
-					_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, "builtin-stockcn-kline-1m")
-					return summary, fmt.Errorf("verify stock Kline Timer fleet enabled: %w", err)
+					return summary, rollbackActivation(fmt.Errorf("verify stock Kline Timer fleet enabled: %w", err))
 				}
 				jobs = append(jobs, enableJobs...)
 			}
@@ -1017,13 +1018,13 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				// activation decision is complete, avoiding a half-active release.
 				enableJobs, enableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorStockCNInstrumentTimerEnablePatches(instrumentSnapshotFleet.nodes, fetcherConfig.InstrumentSnapshotTimerCron))
 				if enableErr != nil {
-					return summary, fmt.Errorf("enable daily stock instrument snapshot Timer: %w", enableErr)
+					return summary, rollbackActivation(fmt.Errorf("enable daily stock instrument snapshot Timer: %w", enableErr))
 				}
 				if err := waitCollectorBatches(ctx, client, enableJobs); err != nil {
-					return summary, fmt.Errorf("enable daily stock instrument snapshot Timer: %w", err)
+					return summary, rollbackActivation(fmt.Errorf("enable daily stock instrument snapshot Timer: %w", err))
 				}
 				if err := waitCollectorInstrumentTimerEnabled(ctx, client, instrumentSnapshotFleet.opts); err != nil {
-					return summary, fmt.Errorf("verify daily stock instrument snapshot Timer: %w", err)
+					return summary, rollbackActivation(fmt.Errorf("verify daily stock instrument snapshot Timer: %w", err))
 				}
 				jobs = append(jobs, enableJobs...)
 			}
@@ -1242,59 +1243,52 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if err := runCollectorInstrumentCanaryWithExtendedControlTimeout(ctx, client, instrumentOpts, instrumentNodes[0].NodeID); err != nil {
 		return summary, fmt.Errorf("stock Instrument canary: %w", err)
 	}
+	rollbackActivation := func(cause error) error {
+		rollbackErr := rollbackStockCNActivation(ctx, client, fetcherConfig.SpaceID, summary.RuleID, allTimerNodes, instrumentNodes)
+		if rollbackErr != nil {
+			return fmt.Errorf("%w; rollback stockcn activation failed: %v", cause, rollbackErr)
+		}
+		return cause
+	}
 	if err := ensureStockCNKlineRule(ctx, client, fetcherConfig.SpaceID); err != nil {
-		disableJobs, disableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(append(allTimerNodes, instrumentNodes...)))
-		if disableErr == nil {
-			disableErr = waitCollectorBatches(ctx, client, disableJobs)
-		}
-		if disableErr != nil {
-			return summary, fmt.Errorf("enable stock Kline rule: %w; rollback Timer state failed: %v", err, disableErr)
-		}
-		return summary, fmt.Errorf("enable stock Kline rule: %w", err)
+		return summary, rollbackActivation(fmt.Errorf("enable stock Kline rule: %w", err))
 	}
 	enabledRules, err = client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "equity")
 	if err != nil {
-		return summary, fmt.Errorf("verify stock Kline rule enabled: %w", err)
+		return summary, rollbackActivation(fmt.Errorf("verify stock Kline rule enabled: %w", err))
 	}
 	for _, rule := range enabledRules {
 		if rule.RuleID == summary.RuleID && rule.Enabled {
 			if err := waitCollectorTimerFleetsAssigned(ctx, client, fleets); err != nil {
-				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
-				return summary, fmt.Errorf("verify stock Kline assignments after rule enable: %w", err)
+				return summary, rollbackActivation(fmt.Errorf("verify stock Kline assignments after rule enable: %w", err))
 			}
 			timerJobs, timerErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerEnablePatches(allTimerNodes, *fetcherConfig))
 			if timerErr != nil {
-				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
-				return summary, fmt.Errorf("enable stock Kline Timer fleet: %w", timerErr)
+				return summary, rollbackActivation(fmt.Errorf("enable stock Kline Timer fleet: %w", timerErr))
 			}
 			if timerErr = waitCollectorBatches(ctx, client, timerJobs); timerErr != nil {
-				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
-				return summary, fmt.Errorf("enable stock Kline Timer fleet: %w", timerErr)
+				return summary, rollbackActivation(fmt.Errorf("enable stock Kline Timer fleet: %w", timerErr))
 			}
 			if timerErr = waitCollectorTimerFleetsEnabled(ctx, client, fleets); timerErr != nil {
-				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
-				return summary, fmt.Errorf("verify stock Kline Timer fleet: %w", timerErr)
+				return summary, rollbackActivation(fmt.Errorf("verify stock Kline Timer fleet: %w", timerErr))
 			}
 			summary.TimerJobIDs = append(summary.TimerJobIDs, timerJobs...)
 			instrumentJobs, instrumentErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorStockCNInstrumentTimerEnablePatches(instrumentNodes, fetcherConfig.InstrumentSnapshotTimerCron))
 			if instrumentErr != nil {
-				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
-				return summary, fmt.Errorf("enable daily stock Instrument Timer: %w", instrumentErr)
+				return summary, rollbackActivation(fmt.Errorf("enable daily stock Instrument Timer: %w", instrumentErr))
 			}
 			if instrumentErr = waitCollectorBatches(ctx, client, instrumentJobs); instrumentErr != nil {
-				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
-				return summary, fmt.Errorf("enable daily stock Instrument Timer: %w", instrumentErr)
+				return summary, rollbackActivation(fmt.Errorf("enable daily stock Instrument Timer: %w", instrumentErr))
 			}
 			if instrumentErr = waitCollectorInstrumentTimerEnabled(ctx, client, instrumentOpts); instrumentErr != nil {
-				_ = client.DisableTaskRule(ctx, fetcherConfig.SpaceID, summary.RuleID)
-				return summary, fmt.Errorf("verify daily stock Instrument Timer: %w", instrumentErr)
+				return summary, rollbackActivation(fmt.Errorf("verify daily stock Instrument Timer: %w", instrumentErr))
 			}
 			summary.InstrumentJobIDs = append(summary.InstrumentJobIDs, instrumentJobs...)
 			summary.Enabled = true
 			return summary, nil
 		}
 	}
-	return summary, fmt.Errorf("stock Kline rule enable was not confirmed by control-plane readback")
+	return summary, rollbackActivation(fmt.Errorf("stock Kline rule enable was not confirmed by control-plane readback"))
 }
 
 func ensureStockCNKlineRule(ctx context.Context, client *adminclient.Client, spaceID string) error {
@@ -1938,6 +1932,30 @@ func collectorTimerDisablePatches(nodes []adminclient.CloudNode) []collectorRunt
 		patches = append(patches, collectorRuntimeConfigPatch{NodeID: node.NodeID, TimerEnabled: false, TimerCron: cron})
 	}
 	return patches
+}
+
+func rollbackStockCNActivation(
+	ctx context.Context,
+	client *adminclient.Client,
+	spaceID, ruleID string,
+	timerNodes, instrumentNodes []adminclient.CloudNode,
+) error {
+	nodes := append(append([]adminclient.CloudNode(nil), timerNodes...), instrumentNodes...)
+	var errs []error
+	if patches := collectorTimerDisablePatches(nodes); len(patches) > 0 {
+		jobs, err := submitCollectorTimerRuntimeConfigs(ctx, client, patches)
+		if err != nil {
+			errs = append(errs, err)
+		} else if err := waitCollectorBatches(ctx, client, jobs); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if strings.TrimSpace(ruleID) != "" {
+		if err := client.DisableTaskRule(ctx, spaceID, ruleID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func collectorStockCNInstrumentTimerEnablePatches(nodes []adminclient.CloudNode, cron string) []collectorRuntimeConfigPatch {

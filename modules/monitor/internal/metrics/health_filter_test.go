@@ -18,6 +18,10 @@ func TestFilterHealthSamplesKeepsBusinessFactsOnly(t *testing.T) {
 		"moox_collector_kline_resample_writes_total",
 		"moox_collector_kline_resample_retries_total",
 		"moox_collector_kline_resample_errors_total",
+		KlinePrimaryLastDataTimeMetric,
+		KlinePrimaryLastCommitTimestampMetric,
+		KlineViewLastDataTimeMetric,
+		KlineViewLastCommitTimestampMetric,
 	}
 	drop := []string{
 		"go_gc_duration_seconds",

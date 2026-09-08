@@ -123,13 +123,13 @@ func TestActiveViewKlineFreshnessTracksSubjectsAndDoesNotRollback(t *testing.T) 
 		viewFreshnessRow("BTC-USDT", "1m", "venue:binance", newer),
 		viewFreshnessRow("ETH-USDT", "5m", "", newer),
 	}
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market", rows); err != nil {
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market_kline", rows); err != nil {
 		t.Fatal(err)
 	}
 	assertViewKlineMetric(t, registry, "BTC-USDT", "1m", "venue:binance", newer)
 	assertViewKlineMetric(t, registry, "ETH-USDT", "5m", "default", newer)
 
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:03:00Z")}); err != nil {
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market_kline", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:03:00Z")}); err != nil {
 		t.Fatal(err)
 	}
 	assertViewKlineMetric(t, registry, "BTC-USDT", "1m", "venue:binance", newer)
@@ -144,7 +144,7 @@ func TestViewKlineFreshnessIgnoresReplacementFailuresAndMissingIdentity(t *testi
 	engine := &existenceQueryEngine{queryEngine: &queryEngine{writeErrs: map[string]error{"prices-next": errors.New("replacement failed")}}, exists: true}
 	svc, _ := queryTestService(engine, false)
 	configureKlineFreshnessView(svc, metrics, "prices-next", "prices-next")
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market_kline", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
 		t.Fatal("replacement write unexpectedly succeeded")
 	}
 	assertNoViewKlineMetric(t, registry)
@@ -152,23 +152,23 @@ func TestViewKlineFreshnessIgnoresReplacementFailuresAndMissingIdentity(t *testi
 	engine.writeErrs = nil
 	engine.writeErrs = map[string]error{"prices-index": errors.New("active failed")}
 	configureKlineFreshnessView(svc, metrics, "prices-index", "")
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market_kline", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
 		t.Fatal("active write unexpectedly succeeded")
 	}
 	assertNoViewKlineMetric(t, registry)
 
 	engine.writeErrs = nil
 	configureKlineFreshnessView(svc, metrics, "prices-index", "")
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{viewFreshnessRow("", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err != nil {
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market_kline", []*pb.RowFieldUpsert{viewFreshnessRow("", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err != nil {
 		t.Fatal(err)
 	}
 	assertNoViewKlineMetric(t, registry)
 }
 
 func configureKlineFreshnessView(svc *Service, metrics *observability.ViewMetrics, indexID, nextID string) {
-	key := viewRef{spaceID: "space", viewID: "prices"}
+	key := viewRef{spaceID: "space", viewID: "prices_kline"}
 	svc.metrics = metrics
-	svc.catalogViews = map[viewRef]*pb.View{key: {SpaceId: "space", ViewId: "prices", FilterJson: `{"freq":"1m"}`}}
+	svc.catalogViews = map[viewRef]*pb.View{key: {SpaceId: "space", ViewId: "prices_kline", FilterJson: `{"freq":"1m"}`}}
 	svc.views[key] = &viewRuntime{active: "prices-index", next: nextID, status: "active"}
 	if indexID == nextID {
 		svc.views[key].active = ""
@@ -176,20 +176,20 @@ func configureKlineFreshnessView(svc *Service, metrics *observability.ViewMetric
 	}
 	svc.indexView = map[string]viewRef{"prices-index": key, indexID: key}
 	svc.indexEngine[indexID] = "query-test"
-	svc.schemas[indexID] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market", Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}}}
-	svc.byData = map[datasetRef]map[string]struct{}{{spaceID: "space", datasetID: "market"}: {indexID: {}}}
+	svc.schemas[indexID] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices_kline", PrimaryDatasetID: "market_kline", Columns: []*pb.ViewColumn{{OriginId: "market_kline.close", ColumnName: "close"}}}
+	svc.byData = map[datasetRef]map[string]struct{}{{spaceID: "space", datasetID: "market_kline"}: {indexID: {}}}
 }
 
 func viewFreshnessRow(subject, frequency, seriesTag, dataTime string) *pb.RowFieldUpsert {
 	return &pb.RowFieldUpsert{
-		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Freq: frequency, SeriesTag: seriesTag, DataTime: dataTime}}},
+		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "market_kline", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Freq: frequency, SeriesTag: seriesTag, DataTime: dataTime}}},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
 	}
 }
 
 func assertViewKlineMetric(t *testing.T, registry *prometheus.Registry, subject, frequency, seriesTag, dataTime string) {
 	t.Helper()
-	want := map[string]string{"space_id": "space", "view_id": "prices", "subject_id": subject, "freq": frequency, "series_tag": seriesTag}
+	want := map[string]string{"space_id": "space", "view_id": "prices_kline", "subject_id": subject, "freq": frequency, "series_tag": seriesTag}
 	families, err := registry.Gather()
 	if err != nil {
 		t.Fatal(err)

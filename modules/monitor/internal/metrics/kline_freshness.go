@@ -359,8 +359,48 @@ func sessionSkipReason(rule KlineFreshnessRule, now time.Time, location *time.Lo
 		start = time.Date(localNow.Year(), localNow.Month(), localNow.Day(), start.Hour(), start.Minute(), 0, 0, location)
 		end = time.Date(localNow.Year(), localNow.Month(), localNow.Day(), end.Hour(), end.Minute(), 0, 0, location)
 		if !localNow.Before(start) && localNow.Before(end) {
+			// At an opening or post-lunch restart the previous session's
+			// watermark is expected to be old until the first closed bucket is
+			// published. Allow two frequency buckets so a single missed minute
+			// remains a transient hole rather than a daily false alert.
+			if warmup := 2 * klineFrequencyDuration(rule.Frequency); warmup > 0 && localNow.Sub(start) < warmup {
+				return "skipped_session_warmup"
+			}
 			return ""
 		}
 	}
 	return "skipped_market_closed"
+}
+
+func klineFrequencyDuration(value string) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	index := 0
+	for index < len(value) && value[index] >= '0' && value[index] <= '9' {
+		index++
+	}
+	if index == 0 || index == len(value) {
+		return 0
+	}
+	amount, err := strconv.Atoi(value[:index])
+	if err != nil || amount <= 0 {
+		return 0
+	}
+	unit := time.Duration(amount)
+	switch value[index:] {
+	case "s":
+		return unit * time.Second
+	case "m":
+		return unit * time.Minute
+	case "h":
+		return unit * time.Hour
+	case "d":
+		return unit * 24 * time.Hour
+	case "w":
+		return unit * 7 * 24 * time.Hour
+	default:
+		return 0
+	}
 }

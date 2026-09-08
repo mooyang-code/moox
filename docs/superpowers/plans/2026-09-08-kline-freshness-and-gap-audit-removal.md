@@ -319,7 +319,7 @@ kline_freshness:
       stale_after: 10m
 ```
 
-`scope` 只能是 `primary` 或 `view`；Primary 必须有 dataset_id 且没有 view_id，View 反之；stockcn 必须有 calendar/session/timezone；crypto 不允许配置 stock session。校验 `evaluation_interval == 30s` 或不小于 30s，`stale_after >= 2 * evaluation_interval`，`max_subjects_per_alert` 在 1 到 100 之间，规则 key 唯一。
+`scope` 只能是 `primary` 或 `view`；Primary 必须有 dataset_id 且没有 view_id，View 反之；stockcn 必须有 calendar/session/timezone；crypto 不允许配置 stock session。校验 `evaluation_interval >= 30s`，`stale_after >= 2 * evaluation_interval`，`max_subjects_per_alert` 在 1 到 100 之间，规则 key 唯一；运行时按该 interval 设置 Kline check 的调度周期，默认仍为 30s。
 
 - [ ] **Step 2: 写配置测试。** 覆盖缺字段、scope/dataset/view 互斥、stock session 解析、calendar id、重复规则、太小 stale_after、负 duration、超过 subject limit、默认值和 `KnownFields(true)` 拒绝拼写错误。
 
@@ -402,7 +402,7 @@ Expected: 新增 Kline case PASS；crypto 回归 PASS；Monitor retired metric-r
 ### Task 9: 正式编译、发布到 106 并做真实 SCF/Storage/View/Monitor 验收
 
 **Files/Artifacts:**
-- Use: `custom.toml`（只读输入，不打印、不提交、不修改）
+- Use: `moox.toml`（只读输入，不打印、不提交、不修改；如另有本地部署配置，必须先复制为受支持的文件名并保持 0600，不能把 `custom.toml` 直接传给当前 Loader）
 - Use: `bin/moox-cli`
 - Use: `scripts/deploy/deploy-moox.sh`
 - Create locally: `artifacts/kline-freshness/<timestamp>-publish.json`
@@ -418,14 +418,14 @@ make release
 sha256sum bin/moox-cli
 ```
 
-Expected: working tree 状态、commit、release archive、CLI SHA 记录到脱敏 artifact；构建日志不包含 custom.toml 内容或任何 secret。
+Expected: working tree 状态、commit、release archive、CLI SHA 记录到脱敏 artifact；构建日志不包含 `moox.toml` 内容或任何 secret。
 
-- [ ] **Step 2: 发布 106 主机服务包。** 先按现有部署脚本的 `--help` 确认参数，再使用 `custom.toml` 的 host/path 配置执行标准 deploy，不手工 scp 二进制。部署前保存当前 release/provenance 和 systemd 状态；允许重启 106，但不删除 Storage Primary 数据、View active index、Monitor SQLite 或 EventBus JetStream。
+- [ ] **Step 2: 发布 106 主机服务包。** 先按现有部署脚本的 `--help` 确认参数，再使用 `moox.toml` 的 host/path 配置执行标准 deploy，不手工 scp 二进制。部署前保存当前 release/provenance 和 systemd 状态；允许重启 106，但不删除 Storage Primary 数据、View active index、Monitor SQLite 或 EventBus JetStream。
 
 ```bash
 ./scripts/deploy/deploy-moox.sh --help
-./bin/moox-cli setup validate --file ./custom.toml
-./bin/moox-cli setup status --file ./custom.toml
+./bin/moox-cli setup validate --file ./moox.toml
+./bin/moox-cli setup status --file ./moox.toml
 ```
 
 若需要更新控制面/Storage/Monitor，使用仓库既有 `setup deploy-control`、`setup deploy-storage`、`setup deploy-service` 流程；每一步保存服务 health、监听端口、进程 SHA 和 rollback archive。服务未 ready 时停止后续 SCF 发布，不以“进程已启动”作为验收。
@@ -436,7 +436,7 @@ Expected: working tree 状态、commit、release archive、CLI SHA 记录到脱�
 
 ```bash
 ./bin/moox-cli collector function publish submit \
-  --file ./custom.toml \
+  --file ./moox.toml \
   --space-id stockcn \
   --control-url "$MOOX_CONTROL_URL" \
   --enable-stockcn \
@@ -451,7 +451,7 @@ Expected: working tree 状态、commit、release archive、CLI SHA 记录到脱�
 ./bin/moox-cli collector function probe-egress \
   --control-url "$MOOX_CONTROL_URL" \
   --space-id stockcn \
-  --file ./custom.toml \
+  --file ./moox.toml \
   --service-access-key "$MOOX_SERVICE_ACCESS_KEY" \
   --service-secret-key "$MOOX_SERVICE_SECRET_KEY" \
   > "artifacts/kline-freshness/$(date +%Y%m%d%H%M%S)-egress.json"
@@ -467,17 +467,21 @@ Acceptance requires canary response `success=true`、真实 provider request、`
   --space stockcn \
   --subject 600000.XSHG \
   --freq 1m \
-  --limit 10
+  --page-size 10 \
+  --storage-url "$MOOX_STORAGE_URL" \
+  --storage-auth-file "$MOOX_STORAGE_AUTH_FILE"
 
 ./bin/moox-cli data rows export \
   --dataset view_stockcn_equity_kline_1m \
   --space stockcn \
   --subject 600000.XSHG \
   --freq 1m \
-  --limit 10
+  --page-size 10 \
+  --storage-url "$MOOX_STORAGE_URL" \
+  --storage-auth-file "$MOOX_STORAGE_AUTH_FILE"
 ```
 
-实际字段名、Gateway route 和 Storage auth 按 `custom.toml` 既有配置解析；若 View dataset 不能直接用 CLI 读取，改用已有 `ReadTimeSeriesRows` admin/read-only route，仍必须保存 request/response 的脱敏 JSON。Primary 和 View 都必须存在相同业务周期的 `data_time`，View 不得只返回旧 active index。
+实际字段名、Gateway route 和 Storage auth 按 `moox.toml` 既有配置解析；`data rows export` 的 selector range read 默认经过 active View，不能单独作为 Primary durable-row 证据。Primary 必须另外使用 Storage 内部 `storage-view` 身份调用 `ReadTimeSeriesRows` 的历史路由（或同等只读 DataNode history route），View 则使用 Access route 读取 active View；两份 request/response 都保存脱敏 JSON。Primary 和 View 都必须存在相同业务周期的 `data_time`，View 不得只返回旧 active index。
 
 - [ ] **Step 7: 验证四个指标和 Monitor latest。** 在 106 的 Monitor SQLite 使用只读连接检查固定 metric family、标签和时间，不直接修改数据库：
 

@@ -53,6 +53,16 @@ func TestDecodeSnapshotNoneUsesUncompressedLimit(t *testing.T) {
 	}
 }
 
+func TestDefaultLimitsAllowFullKlineSnapshot(t *testing.T) {
+	limits := DefaultLimits()
+	if limits.MaxSamples < 100000 {
+		t.Fatalf("MaxSamples = %d, want at least 100000", limits.MaxSamples)
+	}
+	if limits.MaxUncompressedBytes < 16<<20 || limits.MaxCompressedBytes < 4<<20 {
+		t.Fatalf("snapshot byte limits are too small: %+v", limits)
+	}
+}
+
 func TestParseSnapshotRejectsDeclaredFamilyCountMismatch(t *testing.T) {
 	snapshot, err := testSnapshot([]byte("# TYPE x gauge\nx 1\n"), time.Second)
 	if err != nil {

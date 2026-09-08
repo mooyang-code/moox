@@ -9,6 +9,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIsKlineDatasetID(t *testing.T) {
+	if !IsKlineDatasetID("dataset_stockcn_equity_kline") || !IsKlineDatasetID("market_kline") {
+		t.Fatal("kline datasets must be recognized")
+	}
+	if IsKlineDatasetID("dataset_mooxsys_service_metrics") {
+		t.Fatal("service metrics must not be recognized as kline")
+	}
+}
+
 func TestKlineMetricsExposePrimaryAndViewContracts(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewKlineMetrics(registry)

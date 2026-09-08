@@ -20,10 +20,13 @@ import (
 )
 
 const (
-	DefaultMaxUncompressedBytes int64 = 4 << 20
-	DefaultMaxCompressedBytes   int64 = 1 << 20
+	// A full Kline snapshot contains four series per subject (Primary/View
+	// data and commit watermarks). Keep enough headroom for the A-share
+	// universe while retaining bounded parsing.
+	DefaultMaxUncompressedBytes int64 = 16 << 20
+	DefaultMaxCompressedBytes   int64 = 4 << 20
 	DefaultMaxMetricFamilies          = 2000
-	DefaultMaxSamples                 = 20000
+	DefaultMaxSamples                 = 100000
 	DefaultMaxLabelsPerSample         = 20
 	DefaultMaxLabelNameBytes          = 128
 	DefaultMaxLabelValueBytes         = 512
