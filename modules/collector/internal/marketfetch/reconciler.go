@@ -78,10 +78,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	if spaceID == "" {
 		return fmt.Errorf("space_id is required")
 	}
-	// The timer callback starts a goroutine on every tick. Serialize the full
-	// check-to-submit sequence so two slow ticks cannot publish overlapping
-	// snapshots and overwrite pendingJob.
-	r.reconcileMu.Lock()
+	// The timer callback starts a goroutine on every tick. Do not wait behind a
+	// slow CloudNode/Storage call: the next tick must remain available for
+	// another market space, while this Reconciler's own mutex still prevents
+	// overlapping snapshots from being published.
+	if !r.reconcileMu.TryLock() {
+		return fmt.Errorf("SCF timer reconciliation already running")
+	}
 	defer r.reconcileMu.Unlock()
 	if pendingJobs, pendingSince := r.pendingRuntimeJobsState(); len(pendingJobs) > 0 {
 		for _, pendingJob := range pendingJobs {

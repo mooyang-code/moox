@@ -366,7 +366,7 @@ func TestReconcilerDoesNotEraseDNSWhenRefreshHasNoSnapshot(t *testing.T) {
 	require.False(t, hasHash)
 }
 
-func TestReconcilerSerializesOverlappingTicks(t *testing.T) {
+func TestReconcilerSkipsOverlappingTicks(t *testing.T) {
 	rule := domain.TaskRule{SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}, listStarted: make(chan struct{}), listRelease: make(chan struct{})}
@@ -376,9 +376,9 @@ func TestReconcilerSerializesOverlappingTicks(t *testing.T) {
 	<-nodes.listStarted
 	second := make(chan error, 1)
 	go func() { second <- reconciler.Reconcile(context.Background(), "crypto") }()
+	require.ErrorContains(t, <-second, "already running")
 	close(nodes.listRelease)
 	require.NoError(t, <-first)
-	require.NoError(t, <-second)
 	require.Equal(t, 1, nodes.submits, "overlapping schedule ticks must not submit two snapshots")
 }
 
