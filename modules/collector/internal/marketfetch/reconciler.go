@@ -804,18 +804,25 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 	for _, rule := range rules {
 		params, parseErr := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
 		if parseErr != nil {
-			return nil, fmt.Errorf("parse rule %s: %w", rule.RuleID, parseErr)
+			// A malformed or temporarily unavailable rule must not prevent the
+			// other market/frequency groups from being reconciled. Scheduler.Tick
+			// already treats rules independently; keep the Timer control plane
+			// consistent with that behavior.
+			log.WarnContextf(ctx, "skip collection rule=%s during timer reconciliation: parse rule: %v", rule.RuleID, parseErr)
+			continue
 		}
 		if params.Collector.DataType != "kline" {
 			continue
 		}
 		dataset, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Source.DatasetID)
 		if datasetErr != nil {
-			return nil, fmt.Errorf("get symbol dataset %s: %w", params.Source.DatasetID, datasetErr)
+			log.WarnContextf(ctx, "skip collection rule=%s during timer reconciliation: get symbol dataset %s: %v", rule.RuleID, params.Source.DatasetID, datasetErr)
+			continue
 		}
 		subjects, subjectErr := r.Symbols.ListSubjects(ctx, spaceID, params.Source.DatasetID, dataset.DataSourceID)
 		if subjectErr != nil {
-			return nil, fmt.Errorf("list symbol dataset %s: %w", params.Source.DatasetID, subjectErr)
+			log.WarnContextf(ctx, "skip collection rule=%s during timer reconciliation: list symbol dataset %s: %v", rule.RuleID, params.Source.DatasetID, subjectErr)
+			continue
 		}
 		if len(subjects) == 0 {
 			log.WarnContextf(ctx, "skip collection rule=%s: no active subjects for symbol dataset %s", rule.RuleID, params.Source.DatasetID)

@@ -27,13 +27,25 @@ func (s reconcilerRulesStub) ListEnabled(context.Context, string) ([]domain.Task
 type reconcilerSymbolsStub struct {
 	dataset  storagesource.DatasetInfo
 	subjects []domain.DatasetSubject
+	datasets map[string]storagesource.DatasetInfo
+	getErrs  map[string]error
+	listErrs map[string]error
 }
 
-func (s reconcilerSymbolsStub) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
+func (s reconcilerSymbolsStub) GetDataset(_ context.Context, _ string, datasetID string) (storagesource.DatasetInfo, error) {
+	if err := s.getErrs[datasetID]; err != nil {
+		return storagesource.DatasetInfo{}, err
+	}
+	if dataset, ok := s.datasets[datasetID]; ok {
+		return dataset, nil
+	}
 	return s.dataset, nil
 }
 
-func (s reconcilerSymbolsStub) ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error) {
+func (s reconcilerSymbolsStub) ListSubjects(_ context.Context, _ string, datasetID, _ string) ([]domain.DatasetSubject, error) {
+	if err := s.listErrs[datasetID]; err != nil {
+		return nil, err
+	}
 	return append([]domain.DatasetSubject(nil), s.subjects...), nil
 }
 
@@ -267,6 +279,32 @@ func TestReconcilerFailsClosedWhenSymbolCatalogIsEmpty(t *testing.T) {
 
 	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto"))
 	require.Zero(t, nodes.submits, "an empty symbol catalog must not disable the existing Timer fleet")
+}
+
+func TestReconcilerSkipsUnavailableRuleWithoutBlockingHealthyGroups(t *testing.T) {
+	badRule := domain.TaskRule{
+		SpaceID: "crypto", RuleID: "swap-bars", DataType: "kline", Provider: "binance", MarketType: "swap", Enabled: true,
+		CollectParams: `{"provider":"binance","market_type":"swap","symbol_source":"dataset","symbol_dataset_id":"missing-swap-symbols","target_dataset_id":"dataset_binance_swap_kline","frequency":"1h"}`,
+	}
+	goodRule := domain.TaskRule{
+		SpaceID: "crypto", RuleID: "spot-bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"spot-symbols","target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m"}`,
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-fetcher-crypto-0", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
+	reconciler := &Reconciler{
+		Rules: reconcilerRulesStub{rules: []domain.TaskRule{badRule, goodRule}},
+		Symbols: reconcilerSymbolsStub{
+			datasets: map[string]storagesource.DatasetInfo{"spot-symbols": {DataSourceID: "spot-source"}},
+			getErrs:  map[string]error{"missing-swap-symbols": fmt.Errorf("metadata unavailable")},
+			subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}},
+		},
+		Nodes: nodes,
+	}
+
+	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto"))
+	require.Equal(t, 1, nodes.submits)
+	require.Len(t, nodes.patches, 1)
+	require.Equal(t, "dataset_binance_spot_kline_1m", nodes.patches[0].GetManagedEnvironment()["MOOX_MARKET_FETCH_DATASET_ID"])
 }
 
 func TestReconcilerFailsClosedWhenStockRequiredGroupSizeExceedsMeasuredSafeSize(t *testing.T) {
