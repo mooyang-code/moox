@@ -212,7 +212,7 @@ func TestMonitorAppConfigLoadsKlineFreshnessRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(app.yaml) error = %v", err)
 	}
-	if !cfg.KlineFreshness.Enabled || len(cfg.KlineFreshness.Rules) != 4 {
+	if !cfg.KlineFreshness.Enabled || len(cfg.KlineFreshness.Rules) != 2 {
 		t.Fatalf("kline freshness = %+v", cfg.KlineFreshness)
 	}
 }
@@ -273,8 +273,8 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 	cfg.SysDeploy.Enabled = false
 	cfg.KlineFreshness.Enabled = true
 	cfg.KlineFreshness.Rules = []KlineFreshnessRule{
-		{Enabled: true, Scope: "primary", SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute},
-		{Enabled: true, Scope: "view", SpaceID: "crypto", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute},
+		{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute},
+		{Enabled: true, SpaceID: "crypto", ViewID: "view-factor", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid kline freshness config rejected: %v", err)
@@ -284,8 +284,7 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 		name string
 		edit func(*Config)
 	}{
-		{"missing target", func(c *Config) { c.KlineFreshness.Rules[0].DatasetID = "" }},
-		{"scope target mismatch", func(c *Config) { c.KlineFreshness.Rules[0].ViewID = "view" }},
+		{"missing view", func(c *Config) { c.KlineFreshness.Rules[0].ViewID = "" }},
 		{"duplicate rule", func(c *Config) { c.KlineFreshness.Rules = append(c.KlineFreshness.Rules, c.KlineFreshness.Rules[0]) }},
 		{"stale after too short", func(c *Config) { c.KlineFreshness.Rules[0].StaleAfter = 30 * time.Second }},
 		{"subjects out of range", func(c *Config) { c.KlineFreshness.MaxSubjectsPerAlert = 101 }},
@@ -307,7 +306,7 @@ func TestMonitorConfigKlineFreshnessStockRuleRequiresTradingSession(t *testing.T
 	cfg.SysDeploy.Enabled = false
 	cfg.KlineFreshness.Enabled = true
 	cfg.KlineFreshness.Rules = []KlineFreshnessRule{{
-		Enabled: true, Scope: "primary", SpaceID: "stockcn", DatasetID: "dataset", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, StaleAfter: 10 * time.Minute,
+		Enabled: true, SpaceID: "stockcn", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, StaleAfter: 10 * time.Minute,
 	}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid stock rule rejected: %v", err)
@@ -315,6 +314,11 @@ func TestMonitorConfigKlineFreshnessStockRuleRequiresTradingSession(t *testing.T
 	cfg.KlineFreshness.Rules[0].Sessions = []string{"bad"}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("invalid stock session accepted")
+	}
+	cfg.KlineFreshness.Rules[0].Sessions = []string{"09:30-11:30", "13:00-15:00"}
+	cfg.KlineFreshness.Rules[0].CalendarID = "missing_calendar"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("unknown stock calendar accepted")
 	}
 }
 

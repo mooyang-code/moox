@@ -32,18 +32,46 @@ func TestViewMetricsRecordFixedOutcomeLabels(t *testing.T) {
 	assert.Equal(t, float64(0), testutil.ToFloat64(metrics.deriveInFlight))
 }
 
-func TestViewMetricsExposePerSubjectKlineFreshness(t *testing.T) {
+func TestViewMetricsExposeGenericDatasetInputAndOutput(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewViewMetrics(registry)
 	require.NoError(t, err)
 	dataTime := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
-	require.NoError(t, metrics.ObserveViewKline(KlineObservation{
-		SpaceID: "crypto", ViewID: "prices-view", SubjectID: "BTC-USDT", Frequency: "1m", SeriesTag: "venue:binance",
-		DataTime: dataTime, CommittedAt: dataTime.Add(time.Second),
-	}))
-	assertKlineMetricContract(t, registry, "moox_storage_view_kline_last_data_time_seconds", map[string]string{
-		"space_id": "crypto", "view_id": "prices-view", "subject_id": "BTC-USDT", "freq": "1m", "series_tag": "venue:binance",
-	}, float64(dataTime.Unix()))
+	commitTime := dataTime.Add(time.Second)
+	observation := ViewDatasetObservation{
+		SpaceID: "crypto", ViewID: "prices-view", DatasetID: "market-prices", SubjectID: "BTC-USDT", Frequency: "1m", SeriesTag: "venue:binance",
+		DataTime: dataTime, CommittedAt: commitTime,
+	}
+	require.NoError(t, metrics.ObserveViewDatasetInput(observation))
+	require.NoError(t, metrics.ObserveViewDatasetOutput(observation))
+	labels := map[string]string{
+		"space_id": "crypto", "view_id": "prices-view", "dataset_id": "market-prices", "subject_id": "BTC-USDT", "freq": "1m", "series_tag": "venue:binance",
+	}
+	assertViewDatasetMetric(t, registry, "moox_storage_view_dataset_input_last_data_time_seconds", labels, float64(dataTime.Unix()))
+	assertViewDatasetMetric(t, registry, "moox_storage_view_dataset_output_last_data_time_seconds", labels, float64(dataTime.Unix()))
+	assertViewDatasetMetric(t, registry, "moox_storage_view_dataset_output_last_commit_timestamp_seconds", labels, float64(commitTime.Unix()))
+}
+
+func assertViewDatasetMetric(t *testing.T, registry *prometheus.Registry, name string, wantLabels map[string]string, wantValue float64) {
+	t.Helper()
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			labels := make(map[string]string, len(metric.GetLabel()))
+			for _, label := range metric.GetLabel() {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if assert.ObjectsAreEqual(labels, wantLabels) {
+				assert.Equal(t, wantValue, metric.GetGauge().GetValue())
+				return
+			}
+		}
+	}
+	t.Fatalf("metric %q labels=%v not found", name, wantLabels)
 }
 
 func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {

@@ -43,17 +43,16 @@ func TestMonotonicMetricRecognizesCanonicalModuleNames(t *testing.T) {
 		"moox_strategy_input_watermark_timestamp_seconds",
 		"moox_trade_metrics_errors_total",
 		"moox_archive_metrics_last_error_timestamp_seconds",
-		"moox_storage_kline_last_data_time_seconds",
-		"moox_storage_kline_last_commit_timestamp_seconds",
-		"moox_storage_view_kline_last_data_time_seconds",
-		"moox_storage_view_kline_last_commit_timestamp_seconds",
+		ViewDatasetInputLastDataTimeMetric,
+		ViewDatasetOutputLastDataTimeMetric,
+		ViewDatasetOutputLastCommitTimestampMetric,
 	} {
 		require.True(t, monotonicMetric(name), name)
 	}
 	require.False(t, monotonicMetric("moox_factor_runs_total"))
 }
 
-func TestMetricMessageStoreKlineTimestampsIgnoreOutOfOrderSnapshot(t *testing.T) {
+func TestMetricMessageStoreViewDatasetTimestampsIgnoreOutOfOrderSnapshot(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.Close() })
@@ -62,10 +61,9 @@ func TestMetricMessageStoreKlineTimestampsIgnoreOutOfOrderSnapshot(t *testing.T)
 	newer := time.Unix(200, 0).UTC()
 	report := &metricspb.MetricReport{ServiceName: "storage", InstanceId: "storage@node-a", BootId: "boot-a"}
 	for index, name := range []string{
-		"moox_storage_kline_last_data_time_seconds",
-		"moox_storage_kline_last_commit_timestamp_seconds",
-		"moox_storage_view_kline_last_data_time_seconds",
-		"moox_storage_view_kline_last_commit_timestamp_seconds",
+		ViewDatasetInputLastDataTimeMetric,
+		ViewDatasetOutputLastDataTimeMetric,
+		ViewDatasetOutputLastCommitTimestampMetric,
 	} {
 		seriesID := fmt.Sprintf("kline-series-%d", index)
 		_, err := r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: fmt.Sprintf("new-%d", index)}, report, []Sample{{
@@ -93,24 +91,24 @@ func TestMetricMessageStoreListLatestByMetricNamesIsBoundedAndStable(t *testing.
 		rows := make([]MetricLatest, 0, 5003)
 		for index := 0; index < 5000; index++ {
 			rows = append(rows, MetricLatest{
-				SeriesID: fmt.Sprintf("kline-%05d", index), MetricName: "moox_storage_kline_last_data_time_seconds",
-				LabelsJSON: fmt.Sprintf(`{"space_id":"crypto","dataset_id":"dataset","freq":"1m","series_tag":"default","subject_id":"%05d"}`, index),
+				SeriesID: fmt.Sprintf("view-%05d", index), MetricName: ViewDatasetOutputLastDataTimeMetric,
+				LabelsJSON: fmt.Sprintf(`{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1m","series_tag":"default","subject_id":"%05d"}`, index),
 				Value:      float64(index + 1), ObservedAt: time.Unix(int64(index+1), 0).UTC(),
 			})
 		}
 		rows = append(rows,
 			MetricLatest{SeriesID: "unrelated", MetricName: "moox_storage_dataset_output_watermark_timestamp_seconds", LabelsJSON: `{}`, Value: 1},
-			MetricLatest{SeriesID: "kline-commit", MetricName: "moox_storage_kline_last_commit_timestamp_seconds", LabelsJSON: `{}`, Value: 1},
-			MetricLatest{SeriesID: "kline-view", MetricName: "moox_storage_view_kline_last_data_time_seconds", LabelsJSON: `{}`, Value: 1},
+			MetricLatest{SeriesID: "view-commit", MetricName: ViewDatasetOutputLastCommitTimestampMetric, LabelsJSON: `{}`, Value: 1},
+			MetricLatest{SeriesID: "view-input", MetricName: ViewDatasetInputLastDataTimeMetric, LabelsJSON: `{}`, Value: 1},
 		)
 		return db.CreateInBatches(&rows, 500).Error
 	})
 	require.NoError(t, err)
 	r := metricMessageStoreForTest(t, mgr)
 	rows, err := r.ListLatestByMetricNames(context.Background(), []string{
-		"moox_storage_kline_last_data_time_seconds",
-		"moox_storage_kline_last_commit_timestamp_seconds",
-		"moox_storage_view_kline_last_data_time_seconds",
+		ViewDatasetInputLastDataTimeMetric,
+		ViewDatasetOutputLastDataTimeMetric,
+		ViewDatasetOutputLastCommitTimestampMetric,
 	}, 0)
 	require.NoError(t, err)
 	require.Len(t, rows, 5002)
@@ -125,15 +123,14 @@ func TestMetricMessageStoreListLatestByMetricNamesIsBoundedAndStable(t *testing.
 			}
 		}
 	}
-	_, err = r.ListLatestByMetricNames(context.Background(), []string{"not_a_kline_metric"}, 1)
+	_, err = r.ListLatestByMetricNames(context.Background(), []string{"not_a_view_dataset_metric"}, 1)
 	require.Error(t, err)
-	_, err = r.ListLatestByMetricNames(context.Background(), []string{"moox_storage_kline_last_data_time_seconds"}, 100001)
+	_, err = r.ListLatestByMetricNames(context.Background(), []string{ViewDatasetOutputLastDataTimeMetric}, 100001)
 	require.Error(t, err)
 
 	query := NewQueryService(r, nil)
-	rows, err = query.ListLatestByMetricNames(context.Background(), []string{"moox_storage_kline_last_data_time_seconds"}, 1)
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
+	rows, err = query.ListLatestByMetricNames(context.Background(), []string{ViewDatasetOutputLastDataTimeMetric}, 1)
+	require.Error(t, err)
 }
 
 func metricMessageStoreForTest(t *testing.T, db *store.Store) *MetricMessageStore {

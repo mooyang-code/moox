@@ -67,16 +67,15 @@ export MOOX_METRICS_STORAGE_METADATA_URL=http://storage-metadata:20200
 
 ### K 线 freshness 指标
 
-Storage Primary 和 active View 在成功接受 K 线写入后，分别维护两类有界 Gauge，共四个指标：
+Storage View 维护三类通用的有界 Gauge；Storage 不识别 K 线语义，Monitor 只对配置的 View 身份执行 K 线新鲜度判断：
 
 | 指标 | 标签 | 语义 |
 | --- | --- | --- |
-| `moox_storage_kline_last_data_time_seconds` | `space_id,dataset_id,subject_id,freq,series_tag` | Primary 最近提交的 K 线业务 `data_time` |
-| `moox_storage_kline_last_commit_timestamp_seconds` | `space_id,dataset_id,subject_id,freq,series_tag` | Primary 最近一次成功写入的 UTC 墙钟 `commit_timestamp` |
-| `moox_storage_view_kline_last_data_time_seconds` | `space_id,view_id,subject_id,freq,series_tag` | active View 最近提交的 K 线业务 `data_time` |
-| `moox_storage_view_kline_last_commit_timestamp_seconds` | `space_id,view_id,subject_id,freq,series_tag` | active View 最近一次成功写入的 UTC 墙钟 `commit_timestamp` |
+| `moox_storage_view_dataset_input_last_data_time_seconds` | `space_id,view_id,dataset_id,subject_id,freq,series_tag` | View 完成路由/过滤、尚未写索引前看到的业务 `data_time` |
+| `moox_storage_view_dataset_output_last_data_time_seconds` | `space_id,view_id,dataset_id,subject_id,freq,series_tag` | active View 成功提交后的业务 `data_time` |
+| `moox_storage_view_dataset_output_last_commit_timestamp_seconds` | `space_id,view_id,dataset_id,subject_id,freq,series_tag` | active View 最近一次成功提交的 UTC 墙钟时间 |
 
-`data_time` 用于判断上游业务时间是否前进；`commit_timestamp` 用于区分上游没有新业务时间和 Storage/View 写入链路停止。两者不能互换，Primary 的 `dataset_id` 与 View 的 `view_id` 也不能混在同一个标签语义中。空 `series_tag` 统一为 `default`，`subject_id` 使用 Storage canonical subject，不使用 Provider symbol。
+Monitor 以 active View 的 output `data_time` 作为告警依据，input 与 `commit_timestamp` 只用于定位是 View 写入链路还是上游业务时间停滞。单个周期缺失由 stale 窗口吸收，Storage 不扫描历史范围，也不触发补采。空 `series_tag` 统一为 `default`，`subject_id` 使用 Storage canonical subject，不使用 Provider symbol。
 
 服务通过各自的 tRPC metrics timer 每 30 秒发布快照，Monitor 的
 `trpc.moox.monitor.check_schedule.timer` 同样每 30 秒读取现有

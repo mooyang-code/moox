@@ -44,7 +44,9 @@ type ViewMetrics struct {
 	outboxReconnectAttempts          *prometheus.CounterVec
 	periodWaitingDatasets            *prometheus.GaugeVec
 	viewOutputWatermark              *prometheus.GaugeVec
-	klineMetrics                     *KlineMetrics
+	datasetInputLastDataTime         *prometheus.GaugeVec
+	datasetOutputLastDataTime        *prometheus.GaugeVec
+	datasetOutputLastCommitTimestamp *prometheus.GaugeVec
 	readyPublishRetry                *prometheus.CounterVec
 	restoreDuration                  prometheus.Gauge
 	restoreReady                     prometheus.Gauge
@@ -58,6 +60,8 @@ type ViewMetrics struct {
 	partitionStates                  map[string]ConsumerPartitionSnapshot
 	viewWatermarkMu                  sync.Mutex
 	viewWatermarks                   map[string]int64
+	datasetObservationMu             sync.Mutex
+	datasetObservations              map[string]viewDatasetObservationWatermark
 	outboxObservedSnapshot           atomic.Bool
 	outboxDynamicAge                 atomic.Bool
 	outboxOldestEventAt              atomic.Int64
@@ -86,6 +90,27 @@ type ViewMetrics struct {
 	rebuildAuditDroppedSnapshot      atomic.Int64
 	pendingMu                        sync.Mutex
 	pendingDeliveries                map[*jetstream.Delivery]time.Time
+}
+
+// ViewDatasetObservation identifies the data watermark observed while a View
+// routes an upstream Dataset event and after the active index commits it.
+// Storage records this generic contract; Monitor decides whether a given View
+// represents a K-line business stream and whether its watermark is stale.
+type ViewDatasetObservation struct {
+	SpaceID     string
+	ViewID      string
+	DatasetID   string
+	SubjectID   string
+	Frequency   string
+	SeriesTag   string
+	DataTime    time.Time
+	CommittedAt time.Time
+}
+
+type viewDatasetObservationWatermark struct {
+	inputDataTime  float64
+	outputDataTime float64
+	outputCommitAt float64
 }
 
 // ViewMetricsSnapshot is the aggregate runtime state exported by the view and
@@ -138,10 +163,6 @@ type ConsumerPartitionSnapshot struct {
 func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if registerer == nil {
 		return nil, fmt.Errorf("storage view metrics registerer is nil")
-	}
-	klineMetrics, err := NewKlineMetrics(registerer)
-	if err != nil {
-		return nil, err
 	}
 	metrics := &ViewMetrics{
 		deriveTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -240,6 +261,18 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "output_watermark_timestamp_seconds",
 			Help: "Latest business timestamp successfully committed to an active Storage View.",
 		}, []string{"space_id", "view_id", "freq"}),
+		datasetInputLastDataTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "dataset_input_last_data_time_seconds",
+			Help: "Latest business data time observed after routing an upstream Dataset event into a View.",
+		}, []string{"space_id", "view_id", "dataset_id", "subject_id", "freq", "series_tag"}),
+		datasetOutputLastDataTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "dataset_output_last_data_time_seconds",
+			Help: "Latest business data time successfully committed to an active View index.",
+		}, []string{"space_id", "view_id", "dataset_id", "subject_id", "freq", "series_tag"}),
+		datasetOutputLastCommitTimestamp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "dataset_output_last_commit_timestamp_seconds",
+			Help: "Latest successful active View index commit timestamp.",
+		}, []string{"space_id", "view_id", "dataset_id", "subject_id", "freq", "series_tag"}),
 		readyPublishRetry: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "ready_publish_retry_total",
 			Help: "View source/result ready event publishes that need retry.",
@@ -268,10 +301,10 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "rebuild_audit_dropped_total",
 			Help: "View rebuild audit retry records dropped after reaching the queue limit.",
 		}),
-		pendingDeliveries: make(map[*jetstream.Delivery]time.Time),
-		partitionStates:   make(map[string]ConsumerPartitionSnapshot),
-		viewWatermarks:    make(map[string]int64),
-		klineMetrics:      klineMetrics,
+		pendingDeliveries:   make(map[*jetstream.Delivery]time.Time),
+		partitionStates:     make(map[string]ConsumerPartitionSnapshot),
+		viewWatermarks:      make(map[string]int64),
+		datasetObservations: make(map[string]viewDatasetObservationWatermark),
 	}
 	metrics.oldestPendingEventAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: "moox", Subsystem: "storage_view", Name: "oldest_pending_event_age_seconds",
@@ -281,7 +314,7 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		Namespace: "moox", Subsystem: "storage_outbox", Name: "publisher_unavailable_age_seconds",
 		Help: "Continuous time the Storage outbox EventBus publisher has been unavailable.",
 	}, func() float64 { return metrics.currentOutboxPublisherUnavailableAge(time.Now().UTC()).Seconds() })
-	err = nil
+	var err error
 	if metrics.deriveTotal, err = registerOrReuse(registerer, metrics.deriveTotal); err != nil {
 		return nil, err
 	}
@@ -360,6 +393,15 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.viewOutputWatermark, err = registerOrReuse(registerer, metrics.viewOutputWatermark); err != nil {
 		return nil, err
 	}
+	if metrics.datasetInputLastDataTime, err = registerOrReuse(registerer, metrics.datasetInputLastDataTime); err != nil {
+		return nil, err
+	}
+	if metrics.datasetOutputLastDataTime, err = registerOrReuse(registerer, metrics.datasetOutputLastDataTime); err != nil {
+		return nil, err
+	}
+	if metrics.datasetOutputLastCommitTimestamp, err = registerOrReuse(registerer, metrics.datasetOutputLastCommitTimestamp); err != nil {
+		return nil, err
+	}
 	if metrics.readyPublishRetry, err = registerOrReuse(registerer, metrics.readyPublishRetry); err != nil {
 		return nil, err
 	}
@@ -384,13 +426,78 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	return metrics, nil
 }
 
-// ObserveViewKline records a successful active View write with per-subject
-// freshness labels while leaving the low-cardinality View watermark separate.
-func (m *ViewMetrics) ObserveViewKline(observation KlineObservation) error {
-	if m == nil || m.klineMetrics == nil {
-		return fmt.Errorf("storage view kline metrics are nil")
+// ObserveViewDatasetInput records a routed Dataset event before the View index
+// write. It is intentionally agnostic to the Dataset's business meaning.
+func (m *ViewMetrics) ObserveViewDatasetInput(observation ViewDatasetObservation) error {
+	labels, err := canonicalViewDatasetLabels(observation, false)
+	if err != nil {
+		return err
 	}
-	return m.klineMetrics.ObserveView(observation)
+	m.datasetObservationMu.Lock()
+	defer m.datasetObservationMu.Unlock()
+	key := strings.Join(labels, "\x00")
+	state := m.datasetObservations[key]
+	value := timestampSeconds(observation.DataTime)
+	if value > state.inputDataTime {
+		state.inputDataTime = value
+		m.datasetInputLastDataTime.WithLabelValues(labels...).Set(value)
+	}
+	m.datasetObservations[key] = state
+	return nil
+}
+
+// ObserveViewDatasetOutput records a successful active View index commit.
+func (m *ViewMetrics) ObserveViewDatasetOutput(observation ViewDatasetObservation) error {
+	labels, err := canonicalViewDatasetLabels(observation, true)
+	if err != nil {
+		return err
+	}
+	m.datasetObservationMu.Lock()
+	defer m.datasetObservationMu.Unlock()
+	key := strings.Join(labels, "\x00")
+	state := m.datasetObservations[key]
+	dataTime := timestampSeconds(observation.DataTime)
+	commitTime := timestampSeconds(observation.CommittedAt)
+	if dataTime > state.outputDataTime {
+		state.outputDataTime = dataTime
+		m.datasetOutputLastDataTime.WithLabelValues(labels...).Set(dataTime)
+	}
+	if commitTime > state.outputCommitAt {
+		state.outputCommitAt = commitTime
+		m.datasetOutputLastCommitTimestamp.WithLabelValues(labels...).Set(commitTime)
+	}
+	m.datasetObservations[key] = state
+	return nil
+}
+
+func canonicalViewDatasetLabels(observation ViewDatasetObservation, requireCommit bool) ([]string, error) {
+	values := []string{
+		strings.TrimSpace(observation.SpaceID), strings.TrimSpace(observation.ViewID),
+		strings.TrimSpace(observation.DatasetID), strings.TrimSpace(observation.SubjectID),
+		strings.TrimSpace(observation.Frequency), strings.TrimSpace(observation.SeriesTag),
+	}
+	if values[5] == "" {
+		values[5] = "default"
+	}
+	for _, value := range values[:5] {
+		if value == "" {
+			return nil, fmt.Errorf("storage view dataset observation requires space_id, view_id, dataset_id, subject_id, and freq")
+		}
+	}
+	if _, err := parseDatasetFrequency(values[4]); err != nil {
+		return nil, fmt.Errorf("storage view dataset observation freq %q is invalid", values[4])
+	}
+	if observation.DataTime.IsZero() {
+		return nil, fmt.Errorf("storage view dataset observation data_time is required")
+	}
+	if requireCommit && observation.CommittedAt.IsZero() {
+		return nil, fmt.Errorf("storage view dataset observation committed_at is required")
+	}
+	return values, nil
+}
+
+func timestampSeconds(value time.Time) float64 {
+	return float64(value.UnixNano()) / float64(time.Second)
 }
 
 // ObserveViewOutputWatermark advances the committed watermark for one active

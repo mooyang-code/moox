@@ -83,32 +83,15 @@ kline_freshness:
   max_subjects_per_alert: 20
   rules:
     - enabled: true
-      scope: primary
       space_id: crypto
       dataset_id: dataset_binance_spot_kline_1m
-      frequency: 1m
-      market_id: crypto
-      stale_after: 5m
-    - enabled: true
-      scope: view
-      space_id: crypto
       view_id: view_crypto_spot_kline_1m
       frequency: 1m
       market_id: crypto
       stale_after: 5m
     - enabled: true
-      scope: primary
       space_id: stockcn
       dataset_id: dataset_stockcn_equity_kline
-      frequency: 1m
-      market_id: stockcn
-      calendar_id: cn_stock
-      timezone: Asia/Shanghai
-      sessions: ["09:30-11:30", "13:00-15:00"]
-      stale_after: 10m
-    - enabled: true
-      scope: view
-      space_id: stockcn
       view_id: view_stockcn_equity_kline_1m
       frequency: 1m
       market_id: stockcn

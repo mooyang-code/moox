@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 type queryEngine struct {
@@ -107,7 +108,7 @@ func TestLiveWritePreservesRowInReplacementWhenExistingActiveIsUnwritable(t *tes
 	}
 }
 
-func TestActiveViewKlineFreshnessTracksSubjectsAndDoesNotRollback(t *testing.T) {
+func TestActiveViewDatasetFreshnessTracksSubjectsAndDoesNotRollback(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := observability.NewViewMetrics(registry)
 	if err != nil {
@@ -115,7 +116,7 @@ func TestActiveViewKlineFreshnessTracksSubjectsAndDoesNotRollback(t *testing.T) 
 	}
 	engine := &existenceQueryEngine{queryEngine: &queryEngine{}, exists: true}
 	svc, _ := queryTestService(engine, true)
-	configureKlineFreshnessView(svc, metrics, "prices-index", "")
+	configureDatasetFreshnessView(svc, metrics, "prices-index", "")
 
 	newer := "2026-09-08T10:05:00Z"
 	rows := []*pb.RowFieldUpsert{
@@ -123,19 +124,19 @@ func TestActiveViewKlineFreshnessTracksSubjectsAndDoesNotRollback(t *testing.T) 
 		viewFreshnessRow("BTC-USDT", "1m", "venue:binance", newer),
 		viewFreshnessRow("ETH-USDT", "5m", "", newer),
 	}
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market_kline", rows); err != nil {
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", rows); err != nil {
 		t.Fatal(err)
 	}
-	assertViewKlineMetric(t, registry, "BTC-USDT", "1m", "venue:binance", newer)
-	assertViewKlineMetric(t, registry, "ETH-USDT", "5m", "default", newer)
+	assertViewDatasetMetric(t, registry, "BTC-USDT", "1m", "venue:binance", newer)
+	assertViewDatasetMetric(t, registry, "ETH-USDT", "5m", "default", newer)
 
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market_kline", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:03:00Z")}); err != nil {
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:03:00Z")}); err != nil {
 		t.Fatal(err)
 	}
-	assertViewKlineMetric(t, registry, "BTC-USDT", "1m", "venue:binance", newer)
+	assertViewDatasetMetric(t, registry, "BTC-USDT", "1m", "venue:binance", newer)
 }
 
-func TestViewKlineFreshnessIgnoresReplacementFailuresAndMissingIdentity(t *testing.T) {
+func TestViewDatasetFreshnessIgnoresReplacementFailuresAndMissingIdentity(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := observability.NewViewMetrics(registry)
 	if err != nil {
@@ -143,32 +144,34 @@ func TestViewKlineFreshnessIgnoresReplacementFailuresAndMissingIdentity(t *testi
 	}
 	engine := &existenceQueryEngine{queryEngine: &queryEngine{writeErrs: map[string]error{"prices-next": errors.New("replacement failed")}}, exists: true}
 	svc, _ := queryTestService(engine, false)
-	configureKlineFreshnessView(svc, metrics, "prices-next", "prices-next")
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market_kline", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
+	configureDatasetFreshnessView(svc, metrics, "prices-next", "prices-next")
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
 		t.Fatal("replacement write unexpectedly succeeded")
 	}
-	assertNoViewKlineMetric(t, registry)
+	assertViewDatasetInputMetric(t, registry, "BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")
+	assertNoViewDatasetOutputMetric(t, registry)
 
 	engine.writeErrs = nil
 	engine.writeErrs = map[string]error{"prices-index": errors.New("active failed")}
-	configureKlineFreshnessView(svc, metrics, "prices-index", "")
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market_kline", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
+	configureDatasetFreshnessView(svc, metrics, "prices-index", "")
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
 		t.Fatal("active write unexpectedly succeeded")
 	}
-	assertNoViewKlineMetric(t, registry)
+	assertViewDatasetInputMetric(t, registry, "BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")
+	assertNoViewDatasetOutputMetric(t, registry)
 
 	engine.writeErrs = nil
-	configureKlineFreshnessView(svc, metrics, "prices-index", "")
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market_kline", []*pb.RowFieldUpsert{viewFreshnessRow("", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err != nil {
+	configureDatasetFreshnessView(svc, metrics, "prices-index", "")
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err != nil {
 		t.Fatal(err)
 	}
-	assertNoViewKlineMetric(t, registry)
+	assertNoEmptySubjectDatasetMetric(t, registry)
 }
 
-func configureKlineFreshnessView(svc *Service, metrics *observability.ViewMetrics, indexID, nextID string) {
-	key := viewRef{spaceID: "space", viewID: "prices_kline"}
+func configureDatasetFreshnessView(svc *Service, metrics *observability.ViewMetrics, indexID, nextID string) {
+	key := viewRef{spaceID: "space", viewID: "prices_view"}
 	svc.metrics = metrics
-	svc.catalogViews = map[viewRef]*pb.View{key: {SpaceId: "space", ViewId: "prices_kline", FilterJson: `{"freq":"1m"}`}}
+	svc.catalogViews = map[viewRef]*pb.View{key: {SpaceId: "space", ViewId: "prices_view", FilterJson: `{"freq":"1m"}`}}
 	svc.views[key] = &viewRuntime{active: "prices-index", next: nextID, status: "active"}
 	if indexID == nextID {
 		svc.views[key].active = ""
@@ -176,26 +179,26 @@ func configureKlineFreshnessView(svc *Service, metrics *observability.ViewMetric
 	}
 	svc.indexView = map[string]viewRef{"prices-index": key, indexID: key}
 	svc.indexEngine[indexID] = "query-test"
-	svc.schemas[indexID] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices_kline", PrimaryDatasetID: "market_kline", Columns: []*pb.ViewColumn{{OriginId: "market_kline.close", ColumnName: "close"}}}
-	svc.byData = map[datasetRef]map[string]struct{}{{spaceID: "space", datasetID: "market_kline"}: {indexID: {}}}
+	svc.schemas[indexID] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices_view", PrimaryDatasetID: "market_prices", Columns: []*pb.ViewColumn{{OriginId: "market_prices.close", ColumnName: "close"}}}
+	svc.byData = map[datasetRef]map[string]struct{}{{spaceID: "space", datasetID: "market_prices"}: {indexID: {}}}
 }
 
 func viewFreshnessRow(subject, frequency, seriesTag, dataTime string) *pb.RowFieldUpsert {
 	return &pb.RowFieldUpsert{
-		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "market_kline", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Freq: frequency, SeriesTag: seriesTag, DataTime: dataTime}}},
+		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "market_prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Freq: frequency, SeriesTag: seriesTag, DataTime: dataTime}}},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
 	}
 }
 
-func assertViewKlineMetric(t *testing.T, registry *prometheus.Registry, subject, frequency, seriesTag, dataTime string) {
+func assertViewDatasetMetric(t *testing.T, registry *prometheus.Registry, subject, frequency, seriesTag, dataTime string) {
 	t.Helper()
-	want := map[string]string{"space_id": "space", "view_id": "prices_kline", "subject_id": subject, "freq": frequency, "series_tag": seriesTag}
+	want := map[string]string{"space_id": "space", "view_id": "prices_view", "dataset_id": "market_prices", "subject_id": subject, "freq": frequency, "series_tag": seriesTag}
 	families, err := registry.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, family := range families {
-		if family.GetName() != "moox_storage_view_kline_last_data_time_seconds" {
+		if family.GetName() != "moox_storage_view_dataset_output_last_data_time_seconds" {
 			continue
 		}
 		for _, metric := range family.GetMetric() {
@@ -212,20 +215,82 @@ func assertViewKlineMetric(t *testing.T, registry *prometheus.Registry, subject,
 			}
 		}
 	}
-	t.Fatalf("view kline metric labels=%v not found", want)
+	t.Fatalf("view dataset metric labels=%v not found", want)
 }
 
-func assertNoViewKlineMetric(t *testing.T, registry *prometheus.Registry) {
+func assertNoViewDatasetMetric(t *testing.T, registry *prometheus.Registry) {
 	t.Helper()
 	families, err := registry.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, family := range families {
-		if family.GetName() == "moox_storage_view_kline_last_data_time_seconds" && len(family.GetMetric()) != 0 {
-			t.Fatalf("unexpected view kline metrics: %v", family)
+		if (family.GetName() == "moox_storage_view_dataset_input_last_data_time_seconds" || family.GetName() == "moox_storage_view_dataset_output_last_data_time_seconds") && len(family.GetMetric()) != 0 {
+			t.Fatalf("unexpected view dataset metrics: %v", family)
 		}
 	}
+}
+
+func assertViewDatasetInputMetric(t *testing.T, registry *prometheus.Registry, subject, frequency, seriesTag, dataTime string) {
+	t.Helper()
+	want := map[string]string{"space_id": "space", "view_id": "prices_view", "dataset_id": "market_prices", "subject_id": subject, "freq": frequency, "series_tag": seriesTag}
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "moox_storage_view_dataset_input_last_data_time_seconds" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			labels := make(map[string]string, len(metric.GetLabel()))
+			for _, label := range metric.GetLabel() {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if reflect.DeepEqual(labels, want) {
+				got := time.Unix(int64(metric.GetGauge().GetValue()), 0).UTC().Format(time.RFC3339)
+				if got != dataTime {
+					t.Fatalf("subject=%s input freshness=%s, want %s", subject, got, dataTime)
+				}
+				return
+			}
+		}
+	}
+	t.Fatalf("view dataset input metric labels=%v not found", want)
+}
+
+func assertNoViewDatasetOutputMetric(t *testing.T, registry *prometheus.Registry) {
+	t.Helper()
+	for _, family := range mustGather(t, registry) {
+		if family.GetName() == "moox_storage_view_dataset_output_last_data_time_seconds" && len(family.GetMetric()) != 0 {
+			t.Fatalf("unexpected view dataset output metrics: %v", family)
+		}
+	}
+}
+
+func assertNoEmptySubjectDatasetMetric(t *testing.T, registry *prometheus.Registry) {
+	t.Helper()
+	for _, family := range mustGather(t, registry) {
+		if family.GetName() != "moox_storage_view_dataset_input_last_data_time_seconds" && family.GetName() != "moox_storage_view_dataset_output_last_data_time_seconds" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "subject_id" && label.GetValue() == "" {
+					t.Fatalf("unexpected empty subject metric: %v", family)
+				}
+			}
+		}
+	}
+}
+
+func mustGather(t *testing.T, registry *prometheus.Registry) []*dto.MetricFamily {
+	t.Helper()
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return families
 }
 
 func TestReplacementFailurePersistenceRetriesBeforeAcknowledgingRedelivery(t *testing.T) {

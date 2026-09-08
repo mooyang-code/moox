@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"testing"
 	"time"
 
@@ -15,121 +14,85 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestKlineFreshnessEvaluatorUsesBusinessDataTimeAndGroupsReports(t *testing.T) {
+func TestKlineFreshnessEvaluatorUsesActiveViewOutputAndInputDiagnostics(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
-	rules := []KlineFreshnessRule{
-		{Enabled: true, Scope: KlineScopePrimary, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute},
-		{Enabled: true, Scope: KlineScopeView, SpaceID: "crypto", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute},
-	}
-	query := newKlineQuery(t, []klineTestSample{
-		{Scope: KlineScopePrimary, SpaceID: "crypto", Target: "dataset", Subject: "BTC", DataTime: now.Add(-30 * time.Second), CommitTime: now.Add(-time.Second)},
-		{Scope: KlineScopeView, SpaceID: "crypto", Target: "view", Subject: "BTC", DataTime: now.Add(-10 * time.Minute), CommitTime: now.Add(-time.Second)},
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
+	query := newViewDatasetQuery(t, []viewDatasetTestSample{
+		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "BTC", Input: now.Add(-30 * time.Second), Output: now.Add(-10 * time.Minute), Commit: now.Add(-time.Second)},
 	})
-	evaluator := NewKlineFreshnessEvaluator(query, rules, 20)
-	reports, err := evaluator.Evaluate(context.Background(), now)
+	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
-	require.Len(t, reports, 2)
-	sort.Slice(reports, func(i, j int) bool { return reports[i].Rule.Scope < reports[j].Rule.Scope })
-	require.True(t, reports[0].Success)
-	require.Equal(t, "fresh", reports[0].Reason)
-	require.False(t, reports[1].Success)
-	require.Equal(t, "business_data_stale", reports[1].Reason)
-	require.Equal(t, 1, reports[1].StaleCount)
-	require.Equal(t, 1, reports[1].ObservedCount)
-	require.Equal(t, []string{"BTC"}, reports[1].StaleSubjects)
-	require.Contains(t, reports[1].Diagnostic, "latest_commit_time")
+	require.Len(t, reports, 1)
+	require.False(t, reports[0].Success)
+	require.Equal(t, "view_output_stale", reports[0].Reason)
+	require.Equal(t, 1, reports[0].StaleCount)
+	require.Equal(t, now.Add(-30*time.Second), reports[0].LatestInputTime)
+	require.Contains(t, reports[0].Diagnostic, "latest_input_data_time")
 }
 
 func TestKlineFreshnessEvaluatorDoesNotAlertTransientHole(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
-	query := newKlineQuery(t, []klineTestSample{{
-		Scope: KlineScopePrimary, SpaceID: "crypto", Target: "dataset", Subject: "BTC",
-		DataTime: time.Date(2026, 9, 8, 10, 2, 0, 0, time.UTC), CommitTime: now,
-	}})
-	evaluator := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{{
-		Enabled: true, Scope: KlineScopePrimary, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute,
-	}}, 20)
-	reports, err := evaluator.Evaluate(context.Background(), now)
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
+	query := newViewDatasetQuery(t, []viewDatasetTestSample{{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "BTC", Input: now.Add(-30 * time.Second), Output: now.Add(-90 * time.Second), Commit: now}})
+	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
 	require.True(t, reports[0].Success)
-	require.Zero(t, reports[0].StaleCount)
+	require.Equal(t, "fresh", reports[0].Reason)
 }
 
 func TestKlineFreshnessEvaluatorSkipsMalformedAndFutureSeries(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
-	query := newKlineQuery(t, []klineTestSample{
-		{Scope: KlineScopePrimary, SpaceID: "crypto", Target: "dataset", Subject: "bad-label", DataTime: now.Add(-time.Minute), CommitTime: now, RawLabels: `{"space_id":"crypto"}`},
-		{Scope: KlineScopePrimary, SpaceID: "crypto", Target: "dataset", Subject: "future", DataTime: now.Add(11 * time.Minute), CommitTime: now},
-		{Scope: KlineScopePrimary, SpaceID: "crypto", Target: "dataset", Subject: "valid", DataTime: now.Add(-time.Minute), CommitTime: now},
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
+	query := newViewDatasetQuery(t, []viewDatasetTestSample{
+		{RawLabels: `{"space_id":"crypto"}`, Output: now.Add(-time.Minute), Commit: now},
+		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "future", Output: now.Add(11 * time.Minute), Commit: now},
+		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "valid", Output: now.Add(-time.Minute), Commit: now},
 	})
-	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{{
-		Enabled: true, Scope: KlineScopePrimary, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute,
-	}}, 20).Evaluate(context.Background(), now)
+	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
 	require.Equal(t, 1, reports[0].ObservedCount)
 	require.Equal(t, []string{"valid"}, reports[0].ObservedSubjects)
 }
 
-func TestKlineFreshnessEvaluatorBoundsStaleSubjects(t *testing.T) {
+func TestKlineFreshnessEvaluatorPrefersNewestProducerObservation(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
-	samples := make([]klineTestSample, 25)
-	for index := range samples {
-		samples[index] = klineTestSample{Scope: KlineScopePrimary, SpaceID: "crypto", Target: "dataset", Subject: fmt.Sprintf("subject-%02d", index), DataTime: now.Add(-time.Hour), CommitTime: now}
-	}
-	reports, err := NewKlineFreshnessEvaluator(newKlineQuery(t, samples), []KlineFreshnessRule{{
-		Enabled: true, Scope: KlineScopePrimary, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
-	}}, 20).Evaluate(context.Background(), now)
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
+	query := newViewDatasetQuery(t, []viewDatasetTestSample{
+		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "BTC", Output: now.Add(-10 * time.Minute), Commit: now.Add(-2 * time.Minute), ObservedAt: now.Add(-2 * time.Minute)},
+		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "BTC", Output: now.Add(-30 * time.Second), Commit: now, ObservedAt: now},
+	})
+	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
-	require.Equal(t, 25, reports[0].StaleCount)
-	require.Len(t, reports[0].StaleSubjects, 20)
-	require.Equal(t, "subject-00", reports[0].StaleSubjects[0])
-	require.Equal(t, "subject-19", reports[0].StaleSubjects[19])
+	require.True(t, reports[0].Success)
+	require.Equal(t, 1, reports[0].ObservedCount)
 }
 
-func TestKlineFreshnessEvaluatorSkipsStockClosedAndHoliday(t *testing.T) {
-	rule := KlineFreshnessRule{Enabled: true, Scope: KlineScopePrimary, SpaceID: "stockcn", DatasetID: "dataset", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, StaleAfter: 10 * time.Minute}
-	sample := klineTestSample{Scope: KlineScopePrimary, SpaceID: "stockcn", Target: "dataset", Subject: "600000", DataTime: time.Date(2026, 10, 1, 1, 0, 0, 0, time.UTC), CommitTime: time.Date(2026, 10, 1, 1, 0, 0, 0, time.UTC)}
-	query := newKlineQuery(t, []klineTestSample{sample})
-	for _, now := range []time.Time{
-		time.Date(2026, 9, 8, 4, 0, 0, 0, time.UTC),  // 12:00 Asia/Shanghai
-		time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC), // holiday
+func TestKlineFreshnessEvaluatorSkipsStockClosedAndWarmup(t *testing.T) {
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockcn", ViewID: "view", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, StaleAfter: 10 * time.Minute}
+	query := newViewDatasetQuery(t, []viewDatasetTestSample{{SpaceID: "stockcn", ViewID: "view", DatasetID: "dataset", Subject: "600000", Output: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC), Commit: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC)}})
+	for now, reason := range map[time.Time]string{
+		time.Date(2026, 9, 8, 4, 0, 0, 0, time.UTC):   "skipped_market_closed",
+		time.Date(2026, 9, 8, 1, 30, 30, 0, time.UTC): "skipped_session_warmup",
 	} {
 		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 		require.NoError(t, err)
 		require.Len(t, reports, 1)
 		require.True(t, reports[0].Skipped)
-		require.Contains(t, reports[0].Reason, "skipped_")
+		require.Equal(t, reason, reports[0].Reason)
 	}
 }
 
-func TestKlineFreshnessEvaluatorSkipsStockSessionWarmup(t *testing.T) {
-	rule := KlineFreshnessRule{Enabled: true, Scope: KlineScopePrimary, SpaceID: "stockcn", DatasetID: "dataset", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, StaleAfter: 10 * time.Minute}
-	query := newKlineQuery(t, []klineTestSample{{
-		Scope: KlineScopePrimary, SpaceID: "stockcn", Target: "dataset", Subject: "600000",
-		DataTime: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC), CommitTime: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC),
-	}})
-	for _, now := range []time.Time{
-		time.Date(2026, 9, 8, 1, 30, 30, 0, time.UTC), // 09:30:30 Asia/Shanghai
-		time.Date(2026, 9, 8, 5, 0, 30, 0, time.UTC),  // 13:00:30 Asia/Shanghai
-	} {
-		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
-		require.NoError(t, err)
-		require.Len(t, reports, 1)
-		require.True(t, reports[0].Skipped)
-		require.Equal(t, "skipped_session_warmup", reports[0].Reason)
-	}
+type viewDatasetTestSample struct {
+	SpaceID, ViewID, DatasetID, Subject string
+	Input, Output, Commit               time.Time
+	ObservedAt                          time.Time
+	RawLabels                           string
 }
 
-type klineTestSample struct {
-	Scope, SpaceID, Target, Subject string
-	DataTime, CommitTime            time.Time
-	RawLabels                       string
-}
-
-func newKlineQuery(t *testing.T, samples []klineTestSample) *QueryService {
+func newViewDatasetQuery(t *testing.T, samples []viewDatasetTestSample) *QueryService {
 	t.Helper()
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
@@ -139,23 +102,24 @@ func newKlineQuery(t *testing.T, samples []klineTestSample) *QueryService {
 		for index, sample := range samples {
 			labels := sample.RawLabels
 			if labels == "" {
-				labelsMap := map[string]string{"space_id": sample.SpaceID, "subject_id": sample.Subject, "freq": "1m", "series_tag": "default"}
-				if sample.Scope == KlineScopePrimary {
-					labelsMap["dataset_id"] = sample.Target
-				} else {
-					labelsMap["view_id"] = sample.Target
-				}
+				labelsMap := map[string]string{"space_id": sample.SpaceID, "view_id": sample.ViewID, "dataset_id": sample.DatasetID, "subject_id": sample.Subject, "freq": "1m", "series_tag": "default"}
 				raw, marshalErr := json.Marshal(labelsMap)
 				require.NoError(t, marshalErr)
 				labels = string(raw)
 			}
-			dataName, commitName := KlinePrimaryLastDataTimeMetric, KlinePrimaryLastCommitTimestampMetric
-			if sample.Scope == KlineScopeView {
-				dataName, commitName = KlineViewLastDataTimeMetric, KlineViewLastCommitTimestampMetric
+			observedAt := sample.ObservedAt
+			if observedAt.IsZero() {
+				observedAt = sample.Commit
 			}
-			rows := []MetricLatest{
-				{SeriesID: fmt.Sprintf("data-%d", index), MetricName: dataName, LabelsJSON: labels, Value: float64(sample.DataTime.Unix()), ObservedAt: sample.CommitTime},
-				{SeriesID: fmt.Sprintf("commit-%d", index), MetricName: commitName, LabelsJSON: labels, Value: float64(sample.CommitTime.Unix()), ObservedAt: sample.CommitTime},
+			rows := make([]MetricLatest, 0, 3)
+			if !sample.Input.IsZero() {
+				rows = append(rows, MetricLatest{SeriesID: fmt.Sprintf("input-%d", index), MetricName: ViewDatasetInputLastDataTimeMetric, LabelsJSON: labels, Value: float64(sample.Input.Unix()), ObservedAt: observedAt})
+			}
+			if !sample.Output.IsZero() {
+				rows = append(rows, MetricLatest{SeriesID: fmt.Sprintf("output-%d", index), MetricName: ViewDatasetOutputLastDataTimeMetric, LabelsJSON: labels, Value: float64(sample.Output.Unix()), ObservedAt: observedAt})
+			}
+			if !sample.Commit.IsZero() {
+				rows = append(rows, MetricLatest{SeriesID: fmt.Sprintf("commit-%d", index), MetricName: ViewDatasetOutputLastCommitTimestampMetric, LabelsJSON: labels, Value: float64(sample.Commit.Unix()), ObservedAt: observedAt})
 			}
 			if err := db.Create(&rows).Error; err != nil {
 				return err

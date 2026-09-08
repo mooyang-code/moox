@@ -131,10 +131,6 @@ func runPrimaryRole() error {
 	if err != nil {
 		return fmt.Errorf("initialize storage dataset metrics: %w", err)
 	}
-	klineMetrics, err := observability.NewKlineMetrics(prometheus.DefaultRegisterer)
-	if err != nil {
-		return fmt.Errorf("initialize storage kline metrics: %w", err)
-	}
 	resultDatasetResolver := func(ctx context.Context, spaceID, sourceViewID string) (string, error) {
 		for pageNo := uint32(1); ; pageNo++ {
 			datasets, page, err := cached.ListDatasets(ctx, metadata.DatasetQuery{SpaceID: spaceID, Page: &pb.Page{Page: pageNo, Size: 100}})
@@ -166,7 +162,7 @@ func runPrimaryRole() error {
 		clone := proto.Clone(auth).(*pb.AuthInfo)
 		clone.AppKey = datanode.ServiceAuthKey(secret, clone.GetAppId())
 		return clone, nil
-	}, DatasetMetrics: datasetMetrics, KlineMetrics: klineMetrics})
+	}, DatasetMetrics: datasetMetrics})
 	if err != nil {
 		return err
 	}

@@ -301,7 +301,7 @@ func buildKlineFreshnessEvaluator(query *monmetrics.QueryService, cfg *config.Co
 	rules := make([]monmetrics.KlineFreshnessRule, 0, len(cfg.KlineFreshness.Rules))
 	for _, rule := range cfg.KlineFreshness.Rules {
 		rules = append(rules, monmetrics.KlineFreshnessRule{
-			Enabled: rule.Enabled, Scope: rule.Scope, SpaceID: rule.SpaceID, DatasetID: rule.DatasetID,
+			Enabled: rule.Enabled, SpaceID: rule.SpaceID, DatasetID: rule.DatasetID,
 			ViewID: rule.ViewID, Frequency: rule.Frequency, MarketID: rule.MarketID, CalendarID: rule.CalendarID,
 			Timezone: rule.Timezone, Sessions: append([]string(nil), rule.Sessions...), StaleAfter: rule.StaleAfter,
 		})

@@ -21,17 +21,16 @@ type MetricMessageStore struct {
 }
 
 const (
-	// Four freshness families are stored per subject. Keep the bounded read
+	// Three View freshness families are stored per subject. Keep the bounded read
 	// large enough for the full A-share universe plus crypto and multiple tags.
 	defaultKlineLatestLimit = 100000
 	maxKlineLatestLimit     = 100000
 )
 
-var klineMetricNames = map[string]struct{}{
-	KlinePrimaryLastDataTimeMetric:        {},
-	KlinePrimaryLastCommitTimestampMetric: {},
-	KlineViewLastDataTimeMetric:           {},
-	KlineViewLastCommitTimestampMetric:    {},
+var viewDatasetMetricNames = map[string]struct{}{
+	ViewDatasetInputLastDataTimeMetric:         {},
+	ViewDatasetOutputLastDataTimeMetric:        {},
+	ViewDatasetOutputLastCommitTimestampMetric: {},
 }
 
 func NewMetricMessageStore(db *gorm.DB) *MetricMessageStore {
@@ -132,6 +131,9 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 func monotonicMetric(name string) bool {
 	return strings.HasSuffix(name, "_dataset_input_watermark_timestamp_seconds") ||
 		strings.HasSuffix(name, "_dataset_output_watermark_timestamp_seconds") ||
+		name == ViewDatasetInputLastDataTimeMetric ||
+		name == ViewDatasetOutputLastDataTimeMetric ||
+		name == ViewDatasetOutputLastCommitTimestampMetric ||
 		strings.HasSuffix(name, "_view_output_watermark_timestamp_seconds") ||
 		strings.HasSuffix(name, "_business_watermark_timestamp_seconds") ||
 		strings.HasSuffix(name, "_input_watermark_timestamp_seconds") ||
@@ -165,7 +167,7 @@ func (r *MetricMessageStore) GetLatest(ctx context.Context, seriesID string) (*M
 	return &row, nil
 }
 
-// ListLatestByMetricNames is intentionally limited to the four Kline
+// ListLatestByMetricNames is intentionally limited to the three generic View
 // freshness families. It is the bounded read path used by the evaluator and
 // must not become a general metric scan API.
 func (r *MetricMessageStore) ListLatestByMetricNames(ctx context.Context, names []string, limit int) ([]MetricLatest, error) {
@@ -176,18 +178,18 @@ func (r *MetricMessageStore) ListLatestByMetricNames(ctx context.Context, names 
 		limit = defaultKlineLatestLimit
 	}
 	if limit > maxKlineLatestLimit {
-		return nil, fmt.Errorf("kline latest limit %d exceeds maximum %d", limit, maxKlineLatestLimit)
+		return nil, fmt.Errorf("view dataset latest limit %d exceeds maximum %d", limit, maxKlineLatestLimit)
 	}
 	if len(names) == 0 {
-		return nil, errors.New("kline metric names must not be empty")
+		return nil, errors.New("view dataset metric names must not be empty")
 	}
 	seen := make(map[string]struct{}, len(names))
 	for _, name := range names {
-		if _, ok := klineMetricNames[name]; !ok {
-			return nil, fmt.Errorf("metric name %q is not a supported kline metric", name)
+		if _, ok := viewDatasetMetricNames[name]; !ok {
+			return nil, fmt.Errorf("metric name %q is not a supported View dataset metric", name)
 		}
 		if _, duplicate := seen[name]; duplicate {
-			return nil, fmt.Errorf("duplicate kline metric name %q", name)
+			return nil, fmt.Errorf("duplicate View dataset metric name %q", name)
 		}
 		seen[name] = struct{}{}
 	}
@@ -195,9 +197,15 @@ func (r *MetricMessageStore) ListLatestByMetricNames(ctx context.Context, names 
 	err := r.db.WithContext(ctx).
 		Where("c_metric_name IN ?", names).
 		Order("c_metric_name ASC, c_labels_json ASC, c_series_id ASC").
-		Limit(limit).
+		Limit(limit + 1).
 		Find(&rows).Error
-	return rows, err
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > limit {
+		return nil, fmt.Errorf("view dataset latest result exceeds limit %d", limit)
+	}
+	return rows, nil
 }
 
 func (r *MetricMessageStore) ListSeries(ctx context.Context, serviceName, metricName string, limit int) ([]MetricSeries, error) {

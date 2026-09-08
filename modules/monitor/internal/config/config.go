@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/marketcalendar"
 	"gopkg.in/yaml.v3"
 )
 
@@ -118,7 +119,6 @@ type KlineFreshnessConfig struct {
 
 type KlineFreshnessRule struct {
 	Enabled    bool          `yaml:"enabled"`
-	Scope      string        `yaml:"scope"`
 	SpaceID    string        `yaml:"space_id"`
 	DatasetID  string        `yaml:"dataset_id"`
 	ViewID     string        `yaml:"view_id"`
@@ -561,27 +561,16 @@ func (c *Config) validateKlineFreshness() error {
 	seen := make(map[string]struct{}, len(kline.Rules))
 	for index, rule := range kline.Rules {
 		prefix := fmt.Sprintf("kline_freshness.rules[%d]", index)
-		if rule.Scope != "primary" && rule.Scope != "view" {
-			return fmt.Errorf("%s.scope must be primary or view", prefix)
-		}
 		if strings.TrimSpace(rule.SpaceID) == "" || strings.TrimSpace(rule.Frequency) == "" || strings.TrimSpace(rule.MarketID) == "" {
 			return fmt.Errorf("%s requires space_id, frequency, and market_id", prefix)
+		}
+		if strings.TrimSpace(rule.ViewID) == "" {
+			return fmt.Errorf("%s requires view_id", prefix)
 		}
 		if !validKlineFrequency(rule.Frequency) {
 			return fmt.Errorf("%s.frequency is invalid", prefix)
 		}
-		target := rule.DatasetID
-		if rule.Scope == "primary" {
-			if strings.TrimSpace(rule.DatasetID) == "" || strings.TrimSpace(rule.ViewID) != "" {
-				return fmt.Errorf("%s requires dataset_id and forbids view_id", prefix)
-			}
-		} else {
-			target = rule.ViewID
-			if strings.TrimSpace(rule.ViewID) == "" || strings.TrimSpace(rule.DatasetID) != "" {
-				return fmt.Errorf("%s requires view_id and forbids dataset_id", prefix)
-			}
-		}
-		key := strings.Join([]string{rule.Scope, rule.SpaceID, target, rule.Frequency}, "\x00")
+		key := strings.Join([]string{rule.SpaceID, rule.ViewID, rule.Frequency}, "\x00")
 		if _, exists := seen[key]; exists {
 			return fmt.Errorf("%s duplicates rule identity", prefix)
 		}
@@ -600,6 +589,9 @@ func (c *Config) validateKlineFreshness() error {
 			}
 			if _, err := time.LoadLocation(rule.Timezone); err != nil {
 				return fmt.Errorf("%s.timezone: %w", prefix, err)
+			}
+			if _, err := marketcalendar.Load(strings.TrimSpace(rule.CalendarID)); err != nil {
+				return fmt.Errorf("%s.calendar_id: %w", prefix, err)
 			}
 			for sessionIndex, session := range rule.Sessions {
 				parts := strings.Split(strings.TrimSpace(session), "-")

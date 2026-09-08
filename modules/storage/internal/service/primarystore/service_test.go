@@ -9,14 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/report"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -788,138 +786,6 @@ func TestPrimaryDoesNotObserveRecordDataset(t *testing.T) {
 	}
 	if len(metrics.observations) != 0 {
 		t.Fatalf("record dataset observations=%v", metrics.observations)
-	}
-}
-
-func TestPrimaryObservesKlineFreshnessOnlyAfterAcceptedSuccess(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	klineMetrics, err := observability.NewKlineMetrics(registry)
-	require.NoError(t, err)
-	writeErr := error(nil)
-	node := &recordingNode{write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-		if writeErr != nil {
-			return nil, writeErr
-		}
-		keys := make([]*pb.RowKey, 0, len(req.GetRows()))
-		for _, row := range req.GetRows() {
-			keys = append(keys, row.GetKey())
-		}
-		return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: keys}, nil
-	}}
-	svc, err := New(Options{Node: node, KlineMetrics: klineMetrics})
-	require.NoError(t, err)
-
-	newRow := func(subject, freq, seriesTag string, at time.Time) *pb.RowFieldUpsert {
-		return &pb.RowFieldUpsert{
-			Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "market_kline", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-				SubjectId: subject, Freq: freq, SeriesTag: seriesTag, DataTime: at.UTC().Format(time.RFC3339Nano),
-			}}},
-			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
-		}
-	}
-	newer := time.Date(2026, 9, 8, 10, 5, 0, 0, time.UTC)
-	older := newer.Add(-time.Minute)
-	rows := []*pb.RowFieldUpsert{
-		newRow("BTC-USDT", "1m", "venue:binance", older),
-		newRow("BTC-USDT", "1m", "venue:binance", newer),
-		newRow("ETH-USDT", "5m", "", newer),
-	}
-	_, err = svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"}, Rows: rows})
-	require.NoError(t, err)
-
-	assertPrimaryKlineMetric(t, registry, "moox_storage_kline_last_data_time_seconds", map[string]string{
-		"space_id": "crypto", "dataset_id": "market_kline", "subject_id": "BTC-USDT", "freq": "1m", "series_tag": "venue:binance",
-	}, float64(newer.Unix()))
-	assertPrimaryKlineMetric(t, registry, "moox_storage_kline_last_data_time_seconds", map[string]string{
-		"space_id": "crypto", "dataset_id": "market_kline", "subject_id": "ETH-USDT", "freq": "5m", "series_tag": "default",
-	}, float64(newer.Unix()))
-
-	writeErr = errors.New("write failed")
-	_, err = svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"}, Rows: []*pb.RowFieldUpsert{newRow("BTC-USDT", "1m", "venue:binance", newer.Add(time.Minute))}})
-	require.NoError(t, err)
-	assertPrimaryKlineMetric(t, registry, "moox_storage_kline_last_data_time_seconds", map[string]string{
-		"space_id": "crypto", "dataset_id": "market_kline", "subject_id": "BTC-USDT", "freq": "1m", "series_tag": "venue:binance",
-	}, float64(newer.Unix()))
-
-	writeErr = nil
-	_, err = svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"}, Rows: []*pb.RowFieldUpsert{newRow("BTC-USDT", "1m", "venue:binance", older)}})
-	require.NoError(t, err)
-	assertPrimaryKlineMetric(t, registry, "moox_storage_kline_last_data_time_seconds", map[string]string{
-		"space_id": "crypto", "dataset_id": "market_kline", "subject_id": "BTC-USDT", "freq": "1m", "series_tag": "venue:binance",
-	}, float64(newer.Unix()))
-}
-
-func TestPrimaryDoesNotAdvanceKlineFreshnessForInvalidOrUnacceptedRows(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	klineMetrics, err := observability.NewKlineMetrics(registry)
-	require.NoError(t, err)
-	accepted := false
-	node := &recordingNode{write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-		keys := []*pb.RowKey(nil)
-		if accepted {
-			keys = make([]*pb.RowKey, 0, len(req.GetRows()))
-			for _, row := range req.GetRows() {
-				keys = append(keys, row.GetKey())
-			}
-		}
-		return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: keys}, nil
-	}}
-	svc, err := New(Options{Node: node, KlineMetrics: klineMetrics})
-	require.NoError(t, err)
-	invalid := &pb.RowFieldUpsert{
-		Key:    &pb.RowKey{SpaceId: "crypto", DatasetId: "market_kline", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "not-a-time"}}},
-		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
-	}
-	_, err = svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"}, Rows: []*pb.RowFieldUpsert{invalid}})
-	require.NoError(t, err)
-	assertPrimaryKlineMetricAbsent(t, registry, "moox_storage_kline_last_data_time_seconds")
-	accepted = true
-	_, err = svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"}, Rows: []*pb.RowFieldUpsert{invalid}})
-	require.NoError(t, err)
-	assertPrimaryKlineMetricAbsent(t, registry, "moox_storage_kline_last_data_time_seconds")
-	invalid.Key.GetTimeSeries().DataTime = "2026-09-08T10:05:00Z"
-	accepted = false
-	_, err = svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"}, Rows: []*pb.RowFieldUpsert{invalid}})
-	require.NoError(t, err)
-	assertPrimaryKlineMetricAbsent(t, registry, "moox_storage_kline_last_data_time_seconds")
-	accepted = true
-	_, err = svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"}, Rows: []*pb.RowFieldUpsert{invalid}})
-	require.NoError(t, err)
-	assertPrimaryKlineMetric(t, registry, "moox_storage_kline_last_data_time_seconds", map[string]string{
-		"space_id": "crypto", "dataset_id": "market_kline", "subject_id": "BTC-USDT", "freq": "1m", "series_tag": "default",
-	}, float64(time.Date(2026, 9, 8, 10, 5, 0, 0, time.UTC).Unix()))
-}
-
-func assertPrimaryKlineMetric(t *testing.T, registry *prometheus.Registry, name string, wantLabels map[string]string, wantValue float64) {
-	t.Helper()
-	families, err := registry.Gather()
-	require.NoError(t, err)
-	for _, family := range families {
-		if family.GetName() != name {
-			continue
-		}
-		for _, metric := range family.GetMetric() {
-			labels := make(map[string]string, len(metric.GetLabel()))
-			for _, label := range metric.GetLabel() {
-				labels[label.GetName()] = label.GetValue()
-			}
-			if reflect.DeepEqual(labels, wantLabels) {
-				require.Equal(t, wantValue, metric.GetGauge().GetValue())
-				return
-			}
-		}
-	}
-	t.Fatalf("metric %q labels=%v not found", name, wantLabels)
-}
-
-func assertPrimaryKlineMetricAbsent(t *testing.T, registry *prometheus.Registry, name string) {
-	t.Helper()
-	families, err := registry.Gather()
-	require.NoError(t, err)
-	for _, family := range families {
-		if family.GetName() == name {
-			require.Empty(t, family.GetMetric())
-		}
 	}
 }
 

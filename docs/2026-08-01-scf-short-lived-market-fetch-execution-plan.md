@@ -1,6 +1,8 @@
 # SCF 短时行情采集执行计划
 
 > **历史计划，实时链路已被替代：** 2026-08-04 起，实时 K 线不再以“Collector 每分钟逐批 `InvokeFunction`”作为目标架构，改由腾讯 Timer Trigger 直接触发并从每函数 Environment 读取任务。请执行 [SCF 定时触发行情采集执行计划](superpowers/plans/2026-08-04-scf-timer-market-fetch.md)。本文只保留短时函数、补采和历史决策背景。
+>
+> **Gap Audit 已废弃：** 本文中关于周期性 Gap Audit、自动生成 CatchupBatch 的内容是历史设计，不再描述当前运行时行为。当前 Collector 不自动扫描 Storage 缺口；历史数据只能通过显式 Backfill/GapRepair 任务恢复，停更判断由 Monitor freshness 告警完成。
 
 > **执行要求：** 实现本计划时使用 `superpowers:executing-plans` 或 `superpowers:subagent-driven-development`，逐任务执行并在每个阶段完成测试、独立代码审查和提交。
 
@@ -306,18 +308,11 @@ Handler 必须拒绝未知字段组合、空 Dataset、重复 task_id、跨 Data
 - 固定小窗口能控制 HTTP 响应大小和 15 秒预算；
 - 不需要在 SCF 内先读取 Storage 水位。
 
-### 6.2 Gap Audit 与 CatchupBatch
+### 6.2 历史缺口处理（现行规则）
 
-历史缺口不进入每分钟实时批次。Collector 在现有 Timer 中每分钟执行一次轻量 Gap Audit：
+历史缺口不进入实时批次，也不由 Collector 周期性读取 Storage 水位。当前运行时不再执行 Gap Audit 或自动生成 CatchupBatch。
 
-1. 先筛选最近成功时间已经落后 3 个 Frequency 的 TaskInstance，只对这些候选项读取 Storage 最新水位。
-2. 若水位落后目标时间超过实时窗口覆盖范围，生成 CatchupBatch。
-3. 一个 CatchupBatch 只包含 1 个 Symbol。
-4. 单次 Binance 请求最多拉取 1000 根；函数内不翻页。
-5. 如果仍有缺口，下一个 Gap Audit 继续生成下一段 CatchupBatch。
-6. CatchupBatch 与实时批次使用不同 `batch_kind`，且每分钟最多投递 5 个，避免挤占实时调用。
-
-短时停采由最近 3 根自动恢复；长时间停采由 CatchupBatch 分段恢复。实时批次不再承担长历史补采。
+短时停采由实时任务下一轮的有限窗口自然覆盖；长时间停采由 Monitor freshness 告警发现，再由运维显式提交 Backfill/GapRepair 任务分段恢复。显式历史任务仍受批次大小、并发、速率和请求超时约束，不得退化为常驻扫描。
 
 ## 7. SCF 执行预算与环境变量
 
@@ -796,7 +791,7 @@ Dispatcher 对 CloudNode 调用使用最多 20 个并发；这是控制面请求
 9. 按当前 SCF 数量优先均分；单函数最多 64 个标的，超过时才追加批次。
 10. 按启用地域和函数 round-robin 分配批次。
 11. 先保存 `planned`，再异步调用 CloudNode。
-12. 每分钟执行 Gap Audit；每小时执行历史状态清理。
+12. 每小时执行历史状态清理；旧版每分钟 Gap Audit 设计已废弃。
 
 确定性的 `batch_id` 和 `space_id + schedule_id + batch_kind + shard_index + attempt` 唯一索引，保证 Timer 每 10 秒扫描时不会重复创建同一周期的同一分片；`schedule_id` 用于聚合一个周期内的多个批次，不要求单列唯一。
 
@@ -924,7 +919,7 @@ Monitor 的职责分成两层，避免把 Collector 的 SQLite 明细复制进 M
 
 - `businessFreshness` 读取 Storage 真值，按每个启用的实时 TimeSeries Dataset + Frequency 检查最近一次数据时间；因此 Monitor 重启、EventBus 暂时不可用或从未收到 Completion 时，仍能通过 Dataset freshness 发现“没有新数据”。
 - `market_fetch` Completion Consumer 只保存每个 Dataset + Frequency 的最后一条小快照，并生成批次状态、新鲜度、失败摘要和待重试数量的 CheckResult；这部分用于中文告警诊断，不声称它等价于 Collector 的完整 planned/success/retry/permanent 明细。
-- Collector 的 gap audit 不用 `last_exec_time` 截断候选，而是以 `c_id` 游标轮转扫描，每分钟读取最多 80 个启用实例；Storage watermark 查询并发上限为 16、单项超时 1.5 秒，每分钟最多创建 5 个 catch-up 批次。最坏为 5 轮查询，给固定 10 秒 tRPC timer 预留收尾时间；只有本轮审计完整返回才推进审计时间，超时或错误会在下一次 timer 重试。这样既不会让 1h 等慢频率任务被固定旧行饿死，也不会在 10 秒 tRPC timer 内顺序阻塞一千次 RPC。
+- Collector 的周期性 gap audit 设计已废弃；当前不自动轮询 Storage watermark 或创建 catch-up 批次。历史数据只通过显式 Backfill/GapRepair 任务恢复，Monitor freshness 负责告警。
 - CloudNode Fetcher 是否 Active 继续由现有 sysdeploy/CloudNode 检查负责；短时函数不使用心跳判活。
 
 Collector 自己负责 BatchInvocation、Completion timeout、RetryItem 最老等待时间和批次完成率；Monitor 不直接查询 Collector SQLite。若后续需要在 Monitor 展示这些精确字段，再增加一个只读 Collector overview RPC，不通过 EventBus 复制明细表。
@@ -1195,7 +1190,7 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 - [ ] 写 100 个批次提交时 CloudNode 并发不超过 20，Timer 不等待 SCF 完成的测试。
 - [ ] 写 Dispatcher 固定使用 Event 调用、保存腾讯云 request_id，并用 CAS 防止 terminal 状态回退的测试。
 - [ ] 写 Fetcher 节点只选择 `biz_type=market_fetcher` 且部署状态 Active 的测试。
-- [ ] 写 Gap Audit 每分钟运行一次、Catchup 每分钟最多 5 个的测试。
+- [ ] （历史设计，已废弃）写 Gap Audit 每分钟运行一次、Catchup 每分钟最多 5 个的测试。
 - [ ] 使用 `timerjob.New("collector_schedule", 25*time.Second, ...)` 包装 Handler。
 - [ ] 运行 `cd modules/collector && go test -race -count=1 ./internal/bootstrap ./internal/rpc`。
 - [ ] 提交：`feat(collector): guard short-lived market scheduler`。
@@ -1293,7 +1288,7 @@ make test-collector-scf-package-contract
 - 连续运行 2 小时；
 - 验证 region round-robin；
 - 验证 429、5xx 和网络超时能进入 RetryItem 并恢复；
-- 验证 Gap Audit 不影响实时批次。
+- 验证显式 Backfill/GapRepair 不影响实时批次；Gap Audit 已不再运行。
 
 #### 阶段 C：1000 个 Symbol、5 个地域
 
@@ -1342,7 +1337,7 @@ resource_usage_gbs =
 4. SCF 只写 Storage Primary，不直接发布 Storage 已提交事实。
 5. Storage RowKey 和 `source_event_id` 保证重复执行不产生重复 K 线。
 6. 实时路径只抓最近 3 根，不读取水位、不循环追赶 5000 根。
-7. 长历史缺口通过受限 CatchupBatch 分段恢复。
+7. 长历史缺口通过显式、有界 Backfill/GapRepair 分段恢复；不运行自动 Gap Audit。
 8. 函数配置固定为 64MB、15 秒，正常实时批次 P99 小于 13 秒。
 9. 函数内并发、batch size 和 timeout 环境变量与 CloudNode DB 一致。
 10. 429、网络超时和 5xx 能通过完成事件落为 RetryItem，并在最多 3 次内终结。

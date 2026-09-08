@@ -93,11 +93,11 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
-	labels := `{"space_id":"crypto","dataset_id":"dataset","subject_id":"BTC","freq":"1m","series_tag":"default"}`
+	labels := `{"space_id":"crypto","view_id":"view","dataset_id":"dataset","subject_id":"BTC","freq":"1m","series_tag":"default"}`
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
 		for _, row := range []monmetrics.MetricLatest{
-			{SeriesID: "data", MetricName: monmetrics.KlinePrimaryLastDataTimeMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
-			{SeriesID: "commit", MetricName: monmetrics.KlinePrimaryLastCommitTimestampMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Unix()), ObservedAt: now},
+			{SeriesID: "data", MetricName: monmetrics.ViewDatasetOutputLastDataTimeMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
+			{SeriesID: "commit", MetricName: monmetrics.ViewDatasetOutputLastCommitTimestampMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Unix()), ObservedAt: now},
 		} {
 			if err := db.Create(&row).Error; err != nil {
 				t.Fatal(err)
@@ -110,7 +110,7 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 	}
 	repositories := manager.Repositories()
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
-		Enabled: true, Scope: monmetrics.KlineScopePrimary, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
 	}}, 20)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
 		Metrics: query, Checks: repositories.Checks, Results: repositories.Results, Now: func() time.Time { return now },
@@ -118,11 +118,11 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	check, err := repositories.Checks.Get(t.Context(), "crypto", "kline_freshness:primary:crypto:dataset:1m")
+	check, err := repositories.Checks.Get(t.Context(), "crypto", "kline_freshness:crypto:view:1m")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.Name != "K线新鲜度 primary crypto dataset 1m" {
+	if check.Name != "K线新鲜度 crypto view 1m" {
 		t.Fatalf("check = %+v", check)
 	}
 	results, err := repositories.Results.Recent(t.Context(), "crypto", check.CheckID, 1)
@@ -144,7 +144,7 @@ func TestBusinessFreshnessReporterDoesNotCreateKlineSuccessWithoutObservation(t 
 		t.Fatal(err)
 	}
 	repositories := manager.Repositories()
-	check := &domain.Check{SpaceID: "crypto", CheckID: "kline_freshness:primary:crypto:dataset:1m", Name: "kline", GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30}
+	check := &domain.Check{SpaceID: "crypto", CheckID: "kline_freshness:crypto:view:1m", Name: "kline", GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30}
 	if err := repositories.Checks.Create(t.Context(), check); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestBusinessFreshnessReporterDoesNotCreateKlineSuccessWithoutObservation(t 
 		t.Fatal(err)
 	}
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
-		Enabled: true, Scope: monmetrics.KlineScopePrimary, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
 	}}, 20)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Checks: repositories.Checks, Results: repositories.Results}, repositories, nil, evaluator)
 	if err := run(t.Context()); err != nil {

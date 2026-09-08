@@ -58,10 +58,6 @@ func buildBusinessFreshnessReporterWithInterval(
 				if report.Skipped {
 					continue
 				}
-				target := report.Rule.DatasetID
-				if report.Rule.Scope == monmetrics.KlineScopeView {
-					target = report.Rule.ViewID
-				}
 				reason := report.Reason
 				if report.Diagnostic != "" {
 					reason += "; " + report.Diagnostic
@@ -69,7 +65,7 @@ func buildBusinessFreshnessReporterWithInterval(
 				items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
 					spaceID:    report.Rule.SpaceID,
 					checkID:    report.CheckID,
-					name:       fmt.Sprintf("K线新鲜度 %s %s %s %s", report.Rule.Scope, report.Rule.SpaceID, target, report.Rule.Frequency),
+					name:       fmt.Sprintf("K线新鲜度 %s %s %s", report.Rule.SpaceID, report.Rule.ViewID, report.Rule.Frequency),
 					success:    report.Success,
 					reason:     reason,
 					diagnostic: report.Diagnostic,

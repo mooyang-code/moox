@@ -112,8 +112,8 @@ the normal `HistoryPolicy` fail-closed boundary. Historical data is imported
 only through an explicit `Backfill` request, and a known missing interval is
 repaired only through an explicit `GapRepair` request within the configured
 coverage and lookback limits. Collector does not run a periodic gap scan or
-automatic hole repair. The Monitor canary checks the four Storage Primary/View
-freshness metrics through its 30-second tRPC check cycle, requires two
+automatic hole repair. The Monitor canary checks the three generic Storage View
+input/output freshness metrics through its 30-second tRPC check cycle, requires two
 consecutive stale results before alerting, and uses the crypto 24x7 or stockcn
 trading-calendar/session gate before evaluating freshness. It also checks the
 final 14:59 bucket during the short post-close grace window before treating the

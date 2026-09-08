@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -57,7 +56,6 @@ type Service struct {
 	view      ViewResolver
 	snapshot  SnapshotProvider
 	metrics   DatasetRunObserver
-	kline     *observability.KlineMetrics
 	result    ResultDatasetResolver
 	syncPoint ViewSyncPointReader
 }
@@ -74,7 +72,6 @@ type Options struct {
 	View           ViewResolver
 	Snapshot       SnapshotProvider
 	DatasetMetrics DatasetRunObserver
-	KlineMetrics   *observability.KlineMetrics
 	ResultDataset  ResultDatasetResolver
 	SyncPoints     ViewSyncPointReader
 }
@@ -105,7 +102,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{
 		resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer,
-		view: opts.View, snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, kline: opts.KlineMetrics, result: opts.ResultDataset, syncPoint: opts.SyncPoints,
+		view: opts.View, snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, result: opts.ResultDataset, syncPoint: opts.SyncPoints,
 	}, nil
 }
 
@@ -260,7 +257,7 @@ func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*p
 }
 
 func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowFieldUpsert, result string, committed, accepted bool) {
-	if s == nil || (s.metrics == nil && s.kline == nil) {
+	if s == nil || s.metrics == nil {
 		return
 	}
 	type aggregate struct {
@@ -268,13 +265,7 @@ func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowField
 		rows      uint64
 		watermark time.Time
 	}
-	type klineAggregate struct {
-		observation observability.KlineObservation
-	}
 	groups := make(map[report.DatasetKey]*aggregate)
-	klineGroups := make(map[struct {
-		spaceID, datasetID, subjectID, frequency, seriesTag string
-	}]*klineAggregate)
 	for _, row := range rows {
 		if row == nil || row.GetKey() == nil {
 			continue
@@ -311,25 +302,6 @@ func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowField
 				item.watermark = dataTime
 			}
 		}
-		if !accepted {
-			continue
-		}
-		if s.kline != nil && observability.IsKlineDatasetID(key.GetDatasetId()) && strings.TrimSpace(key.GetSpaceId()) != "" && strings.TrimSpace(key.GetDatasetId()) != "" && strings.TrimSpace(timeSeries.GetSubjectId()) != "" && strings.TrimSpace(timeSeries.GetFreq()) != "" {
-			seriesTag := strings.TrimSpace(timeSeries.GetSeriesTag())
-			if seriesTag == "" {
-				seriesTag = "default"
-			}
-			groupKey := struct {
-				spaceID, datasetID, subjectID, frequency, seriesTag string
-			}{key.GetSpaceId(), key.GetDatasetId(), timeSeries.GetSubjectId(), timeSeries.GetFreq(), seriesTag}
-			item := klineGroups[groupKey]
-			if item == nil {
-				item = &klineAggregate{observation: observability.KlineObservation{SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), SubjectID: timeSeries.GetSubjectId(), Frequency: timeSeries.GetFreq(), SeriesTag: seriesTag, DataTime: dataTime}}
-				klineGroups[groupKey] = item
-			} else if dataTime.After(item.observation.DataTime) {
-				item.observation.DataTime = dataTime
-			}
-		}
 	}
 	finishedAt := time.Now().UTC()
 	if s.metrics != nil {
@@ -343,14 +315,6 @@ func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowField
 			}
 			if err := s.metrics.ObserveRun(observation); err != nil {
 				log.WarnContextf(ctx, "storage dataset metrics observe failed key=%+v result=%s: %v", item.key, result, err)
-			}
-		}
-	}
-	if s.kline != nil && committed && accepted {
-		for _, item := range klineGroups {
-			item.observation.CommittedAt = finishedAt
-			if err := s.kline.ObservePrimary(item.observation); err != nil {
-				log.WarnContextf(ctx, "storage kline metrics observe failed observation=%+v: %v", item.observation, err)
 			}
 		}
 	}

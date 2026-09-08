@@ -66,19 +66,21 @@ masking or being masked by the K-line View or Primary dataset.
 
 ### K-line Freshness
 
-Storage records four bounded per-series K-line gauges after a successful write:
+Storage View records three generic per-series observation gauges. Storage does
+not identify K-line datasets; Monitor applies K-line semantics to configured
+View identities:
 
 | Metric | Labels | Meaning |
 | --- | --- | --- |
-| `moox_storage_kline_last_data_time_seconds` | `space_id,dataset_id,subject_id,freq,series_tag` | Latest committed K-line business `data_time` in Primary |
-| `moox_storage_kline_last_commit_timestamp_seconds` | `space_id,dataset_id,subject_id,freq,series_tag` | UTC wall-clock time of the latest successful Primary commit |
-| `moox_storage_view_kline_last_data_time_seconds` | `space_id,view_id,subject_id,freq,series_tag` | Latest committed K-line business `data_time` in the active View |
-| `moox_storage_view_kline_last_commit_timestamp_seconds` | `space_id,view_id,subject_id,freq,series_tag` | UTC wall-clock time of the latest successful active View commit |
+| `moox_storage_view_dataset_input_last_data_time_seconds` | `space_id,view_id,dataset_id,subject_id,freq,series_tag` | Latest business `data_time` after View routing/filtering and before index write |
+| `moox_storage_view_dataset_output_last_data_time_seconds` | `space_id,view_id,dataset_id,subject_id,freq,series_tag` | Latest business `data_time` successfully committed to the active View |
+| `moox_storage_view_dataset_output_last_commit_timestamp_seconds` | `space_id,view_id,dataset_id,subject_id,freq,series_tag` | UTC wall-clock time of the latest successful active View commit |
 
 `data_time` answers whether the upstream business bar is advancing;
-`commit_timestamp` answers whether the Storage or View write path is still
-advancing. They are not interchangeable, and Primary `dataset_id` is not
-folded into View `view_id`.
+`commit_timestamp` answers whether the View write path is still advancing.
+Monitor uses the active View output `data_time` for freshness and keeps input
+and commit timestamps as diagnostics. A one-period hole is tolerated by the
+configured stale window; Storage does not scan history or trigger backfill.
 
 The Storage and Collector reporters publish through their 30-second tRPC
 metrics timers. Monitor's `trpc.moox.monitor.check_schedule.timer` also runs
