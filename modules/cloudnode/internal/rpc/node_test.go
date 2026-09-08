@@ -89,6 +89,24 @@ func TestGetNodeListRefreshesTimerTriggerReadback(t *testing.T) {
 	assert.Contains(t, stored.Metadata, "timer_actual_enabled")
 }
 
+func TestGetNodeListSkipsTimerReadbackForCollectorSnapshot(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
+		SpaceID: "crypto", NodeID: "timer-node", CloudAccountID: "account-a", PackageID: "pkg", DeploymentID: "deployment-1",
+		NodeType: "scf-event", TriggerType: "timer", Region: "ap-guangzhou", FunctionName: "timer-node",
+		Metadata: `{"biz_type":"market_fetcher","deployment_ready":true,"timer_enabled":true}`,
+	}))
+	fake := &fakeSCFClient{timerInfoSet: true, timerInfo: &tencentscf.TimerTriggerInfo{Name: timerTriggerName, Type: "timer", Cron: "0 */5 * * * * *", Enabled: false, AvailableStatus: "Available"}}
+	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
+
+	rsp, err := svc.GetNodeList(spacecontext.WithSpaceID(context.Background(), "crypto"), &pb.GetNodeListReq{BizType: "market_fetcher", TriggerType: "timer"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetItems(), 1)
+	assert.Equal(t, 0, fake.getCalls, "collector catalog snapshots must not wait for Tencent SCF readback")
+}
+
 func TestExecuteCreateNodeItemCreatesShortLivedFunction(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)

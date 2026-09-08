@@ -21,12 +21,13 @@ import (
 )
 
 const (
-	defaultSCFTimeoutSeconds  = 120
-	scfOperationTimeout       = 5 * time.Minute
-	scfCreateAttemptTimeout   = 4 * time.Minute
-	scfCreateReconcileTimeout = 10 * time.Second
-	timerReadbackInterval     = 5 * time.Minute
-	timerReadbackBatchSize    = 4
+	defaultSCFTimeoutSeconds      = 120
+	scfOperationTimeout           = 5 * time.Minute
+	scfCreateAttemptTimeout       = 4 * time.Minute
+	scfCreateReconcileTimeout     = 10 * time.Second
+	timerReadbackInterval         = 5 * time.Minute
+	timerReadbackBatchSize        = 4
+	timerReadbackMinRequestBudget = time.Minute
 )
 
 func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.GetNodeListRsp, error) {
@@ -39,36 +40,39 @@ func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.
 		return &pb.GetNodeListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	// Tencent API has a per-account request rate limit. GetNodeList is called
-	// by Collector every few seconds, so refreshing all timer nodes here would
-	// turn a read-only listing into a 2*node-count API burst. Refresh a small
-	// oldest-first slice and cache the readback timestamp in node metadata.
+	// by Collector every few seconds, so refreshing timer nodes in the listing
+	// path would turn a read-only snapshot into a blocking SCF API call. The
+	// Collector only needs the catalog identity here; runtime metadata is
+	// refreshed by CloudNode's write path and by an unbounded admin listing.
 	type timerRefreshCandidate struct {
 		index int
 		at    time.Time
 	}
-	now := time.Now().UTC()
 	candidates := make([]timerRefreshCandidate, 0)
-	for index := range nodes {
-		if nodes[index].TriggerType != "timer" {
-			continue
+	if shouldRefreshTimerReadback(ctx, req) {
+		now := time.Now().UTC()
+		for index := range nodes {
+			if nodes[index].TriggerType != "timer" {
+				continue
+			}
+			last, _ := time.Parse(time.RFC3339Nano, metadataString(parseJSONMap(nodes[index].Metadata), "timer_last_readback_at"))
+			if !last.IsZero() && now.Sub(last) < timerReadbackInterval {
+				continue
+			}
+			candidates = append(candidates, timerRefreshCandidate{index: index, at: last})
 		}
-		last, _ := time.Parse(time.RFC3339Nano, metadataString(parseJSONMap(nodes[index].Metadata), "timer_last_readback_at"))
-		if !last.IsZero() && now.Sub(last) < timerReadbackInterval {
-			continue
+		sort.SliceStable(candidates, func(i, j int) bool {
+			if candidates[i].at.IsZero() != candidates[j].at.IsZero() {
+				return candidates[i].at.IsZero()
+			}
+			if candidates[i].at.Equal(candidates[j].at) {
+				return candidates[i].index < candidates[j].index
+			}
+			return candidates[i].at.Before(candidates[j].at)
+		})
+		if len(candidates) > timerReadbackBatchSize {
+			candidates = candidates[:timerReadbackBatchSize]
 		}
-		candidates = append(candidates, timerRefreshCandidate{index: index, at: last})
-	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].at.IsZero() != candidates[j].at.IsZero() {
-			return candidates[i].at.IsZero()
-		}
-		if candidates[i].at.Equal(candidates[j].at) {
-			return candidates[i].index < candidates[j].index
-		}
-		return candidates[i].at.Before(candidates[j].at)
-	})
-	if len(candidates) > timerReadbackBatchSize {
-		candidates = candidates[:timerReadbackBatchSize]
 	}
 	var refreshWG sync.WaitGroup
 	refreshSlots := make(chan struct{}, timerReadbackBatchSize)
@@ -104,6 +108,19 @@ func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.
 		Items:   out,
 		Page:    pageResult(page, size, total),
 	}, nil
+}
+
+func shouldRefreshTimerReadback(ctx context.Context, req *pb.GetNodeListReq) bool {
+	// Collector reconciliation is a control-plane liveness path. It must not
+	// wait for Tencent readback of up to four functions before receiving the
+	// catalog snapshot. The normal admin listing remains the readback path.
+	if req != nil && strings.EqualFold(strings.TrimSpace(req.GetBizType()), "market_fetcher") {
+		return false
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timerReadbackMinRequestBudget {
+		return false
+	}
+	return true
 }
 
 func (s *Service) refreshTimerTriggerMetadata(ctx context.Context, spaceID string, node *store.CloudNode) error {
