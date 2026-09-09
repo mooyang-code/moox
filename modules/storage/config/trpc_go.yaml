@@ -57,7 +57,7 @@ server:
       port: 20303
       network: "*/30 * * * * *"
       protocol: timer
-      timeout: 10000
+      timeout: 60000
     - name: trpc.moox.storage.PrimaryStore.http
       ip: 127.0.0.1
       port: 20201

@@ -73,7 +73,7 @@ describe("cloud node batch API", () => {
       "cloudnode",
       "PreviewSCFFunctions",
       { account_id: "account-1" },
-      { timeout: 180000 }
+      { timeout: 960000 }
     );
     callControl.mockResolvedValueOnce({ created: 1, restored: 0, unchanged: 0, failed: 0, results: [] });
     await importSCFFunctions("account-1", [preview.functions[0].function]);
@@ -84,7 +84,7 @@ describe("cloud node batch API", () => {
         account_id: "account-1",
         functions: [{ region: "ap-guangzhou", namespace: "default", function_name: "moox-fetcher" }]
       },
-      { timeout: 180000 }
+      { timeout: 960000 }
     );
   });
 });

@@ -21,6 +21,13 @@ const (
 // history request is idempotent, while validation and business errors should
 // fail immediately and preserve the original error for the rebuild log.
 func readPrimaryTimeSeriesRows(ctx context.Context, reader TimeSeriesRangeReader, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
+	return readPrimaryTimeSeriesRowsLimited(ctx, nil, reader, req)
+}
+
+// readPrimaryTimeSeriesRowsLimited applies the rebuild limiter to every
+// attempt, including transport retries. This prevents a retry storm from
+// bypassing the serial request spacing used by the normal page walk.
+func readPrimaryTimeSeriesRowsLimited(ctx context.Context, limiter *backfillRequestLimiter, reader TimeSeriesRangeReader, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	if reader == nil {
 		return nil, errors.New("Primary history reader is required")
 	}
@@ -30,6 +37,9 @@ func readPrimaryTimeSeriesRows(ctx context.Context, reader TimeSeriesRangeReader
 	)
 	operation := func() error {
 		attempts++
+		if err := limiter.wait(ctx); err != nil {
+			return backoff.Permanent(err)
+		}
 		var err error
 		response, err = reader.ReadTimeSeriesRows(ctx, req)
 		if err == nil {

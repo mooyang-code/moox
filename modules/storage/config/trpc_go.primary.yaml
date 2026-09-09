@@ -59,7 +59,7 @@ server:
       port: 20303
       network: "*/30 * * * * *"
       protocol: timer
-      timeout: 10000
+      timeout: 60000
 plugins:
   metrics:
     prometheus:

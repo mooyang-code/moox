@@ -7,6 +7,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
@@ -28,6 +29,41 @@ type subjectCatalogClient interface {
 // doing so would acknowledge rows/markers against the wrong View revision.
 var errActiveContractUnavailable = errors.New("active view contract unavailable")
 
+type backfillRequestLimiter struct {
+	mu       sync.Mutex
+	next     time.Time
+	interval time.Duration
+}
+
+func newBackfillRequestLimiter(interval time.Duration) *backfillRequestLimiter {
+	return &backfillRequestLimiter{interval: interval}
+}
+
+func (l *backfillRequestLimiter) wait(ctx context.Context) error {
+	if l == nil || l.interval <= 0 {
+		return nil
+	}
+	l.mu.Lock()
+	now := time.Now()
+	wait := time.Until(l.next)
+	if wait < 0 {
+		wait = 0
+	}
+	l.next = now.Add(wait + l.interval)
+	l.mu.Unlock()
+	if wait == 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func (s *Service) BackfillView(ctx context.Context, spaceID, viewID string, batchSize int) error {
 	return s.BackfillViewWithReader(ctx, spaceID, viewID, batchSize, nil)
 }
@@ -38,6 +74,10 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 }
 
 func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, minimumLookback time.Duration, lookbackPeriods, maxHistoryScanRows uint64) (uint64, error) {
+	return s.backfillViewWithReaderLimited(ctx, spaceID, viewID, batchSize, reader, rangeReader, minimumLookback, lookbackPeriods, maxHistoryScanRows, nil)
+}
+
+func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, minimumLookback time.Duration, lookbackPeriods, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	if batchSize <= 0 {
 		batchSize = 100
 	}
@@ -127,7 +167,7 @@ func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID st
 					})
 				}
 				if reader != nil && len(writes) > 0 {
-					if err := s.enrichBackfillRows(ctx, reader, activeID, nextID, writes); err != nil {
+					if err := s.enrichBackfillRows(ctx, reader, activeID, nextID, writes, limiter); err != nil {
 						return written, err
 					}
 				}
@@ -158,7 +198,7 @@ func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID st
 		if strings.EqualFold(strings.TrimSpace(next.Engine()), "bleve") {
 			log.Printf("storage record View %s/%s starts empty: no Primary history reader", spaceID, viewID)
 		} else if factorResultView {
-			written, err = s.backfillFactorResultHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, minimumLookback, lookbackPeriods, maxHistoryScanRows)
+			written, err = s.backfillFactorResultHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, minimumLookback, lookbackPeriods, maxHistoryScanRows, limiter)
 			if err != nil {
 				return written, err
 			}
@@ -166,7 +206,7 @@ func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID st
 			if reader == nil {
 				return 0, errors.New("Primary field reader is required for a time-series View rebuild")
 			}
-			written, err = s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, minimumLookback, lookbackPeriods, maxHistoryScanRows)
+			written, err = s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, minimumLookback, lookbackPeriods, maxHistoryScanRows, limiter)
 			if err != nil {
 				return written, err
 			}
@@ -182,12 +222,12 @@ func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID st
 	return written, nil
 }
 
-func (s *Service) backfillFactorResultHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, minimumLookback time.Duration, lookbackPeriods, maxHistoryScanRows uint64) (uint64, error) {
+func (s *Service) backfillFactorResultHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, minimumLookback time.Duration, lookbackPeriods, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	if reader == nil || rangeReader == nil {
 		log.Printf("storage factor result View %s/%s starts empty; waiting for Factor output", spaceID, viewID)
 		return 0, nil
 	}
-	written, err := s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, minimumLookback, lookbackPeriods, maxHistoryScanRows)
+	written, err := s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, minimumLookback, lookbackPeriods, maxHistoryScanRows, limiter)
 	if err != nil {
 		return written, err
 	}
@@ -197,7 +237,7 @@ func (s *Service) backfillFactorResultHistory(ctx context.Context, spaceID, view
 	return written, nil
 }
 
-func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, minimumLookback time.Duration, lookbackPeriods, maxHistoryScanRows uint64) (uint64, error) {
+func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, minimumLookback time.Duration, lookbackPeriods, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	if reader == nil && (minimumLookback > 0 || lookbackPeriods > 0) {
 		return 0, errors.New("Primary field reader is required for a time-series View history backfill")
 	}
@@ -221,7 +261,7 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, n
 	if lookbackPeriods > 0 {
 		frequency := viewFrequencyValue(view)
 		if frequency != "" {
-			return s.backfillPrimaryHistoryByPeriods(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, view, nextSchema, auth, frequency, lookbackPeriods, maxHistoryScanRows)
+			return s.backfillPrimaryHistoryByPeriods(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, view, nextSchema, auth, frequency, lookbackPeriods, maxHistoryScanRows, limiter)
 		}
 		return 0, errors.New("time-series View frequency is required for period-based Primary history backfill")
 	}
@@ -239,7 +279,7 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, n
 			if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
 				return written, err
 			}
-			rsp, err := readPrimaryTimeSeriesRows(ctx, rangeReader, &pb.ReadTimeSeriesRowsReq{
+			rsp, err := readPrimaryTimeSeriesRowsLimited(ctx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
 				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), TimeRange: timeRange,
 				Order: pb.SortOrder_SORT_ORDER_ASC, Page: &pb.Page{Page: 1, Size: uint32(batchSize)}, AfterKey: afterKey,
 			})
@@ -261,7 +301,7 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, n
 				}}, Fields: nil})
 			}
 			if len(writes) > 0 && reader != nil {
-				if err := s.enrichBackfillRows(ctx, reader, "", nextID, writes); err != nil {
+				if err := s.enrichBackfillRows(ctx, reader, "", nextID, writes, limiter); err != nil {
 					return written, err
 				}
 			}
@@ -303,7 +343,7 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, n
 // descending so weekends, holidays, and other market gaps do not consume the
 // configured bar budget. The subject catalog constrains one physical scan;
 // Primary rows remain authoritative for series and tag coverage.
-func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, view *pb.View, nextSchema viewindex.ViewIndexSchema, auth *pb.AuthInfo, frequency string, periods, maxHistoryScanRows uint64) (uint64, error) {
+func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, view *pb.View, nextSchema viewindex.ViewIndexSchema, auth *pb.AuthInfo, frequency string, periods, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	// A configured lookback is the target retention for the replacement index,
 	// not an activation gate. Newly-created datasets and recently restarted
 	// collectors may legitimately have fewer bars; publishing the available
@@ -314,41 +354,37 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 	expected := make(map[string]struct{})
 	counts := make(map[string]uint64, len(expected))
 	var selectors []*pb.TimeSeriesSelector
-	if metadata := s.metadataClientSnapshot(); metadata != nil {
-		if catalog, ok := metadata.(subjectCatalogClient); ok {
-			subjects, err := s.listBackfillSubjectCatalog(ctx, catalog, auth, view.GetSpaceId(), view.GetPrimaryDatasetId())
-			if err != nil {
-				return 0, fmt.Errorf("load Primary subject catalog for %s/%s: %w", view.GetSpaceId(), view.GetPrimaryDatasetId(), err)
+	if subjects, catalogAvailable, err := s.loadBackfillSubjectCatalog(ctx, auth, view.GetSpaceId(), view.GetPrimaryDatasetId()); err != nil {
+		return 0, fmt.Errorf("load Primary subject catalog for %s/%s: %w", view.GetSpaceId(), view.GetPrimaryDatasetId(), err)
+	} else if catalogAvailable {
+		if len(subjects) == 0 {
+			// An empty catalog is valid for a dataset that has not produced any
+			// rows yet (for example a newly-created system-metrics dataset).
+			// Probe Primary before failing: empty Primary means there is simply
+			// nothing to backfill, while non-empty Primary falls back to the
+			// authoritative scan rather than activating a partial index.
+			probe, probeErr := readPrimaryTimeSeriesRowsLimited(ctx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
+				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
+				Order: pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: 1},
+			})
+			if probeErr != nil {
+				return 0, fmt.Errorf("probe Primary history for %s/%s: %w", view.GetSpaceId(), view.GetPrimaryDatasetId(), probeErr)
 			}
-			if len(subjects) == 0 {
-				// An empty catalog is valid for a dataset that has not produced any
-				// rows yet (for example a newly-created system-metrics dataset).
-				// Probe Primary before failing: empty Primary means there is simply
-				// nothing to backfill, while non-empty Primary falls back to the
-				// authoritative scan rather than activating a partial index.
-				probe, probeErr := readPrimaryTimeSeriesRows(ctx, rangeReader, &pb.ReadTimeSeriesRowsReq{
-					AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
-					Order: pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: 1},
-				})
-				if probeErr != nil {
-					return 0, fmt.Errorf("probe Primary history for %s/%s: %w", view.GetSpaceId(), view.GetPrimaryDatasetId(), probeErr)
-				}
-				if err := requireSuccess(probe.GetRetInfo()); err != nil {
-					return 0, fmt.Errorf("probe Primary history for %s/%s: %w", view.GetSpaceId(), view.GetPrimaryDatasetId(), err)
-				}
-				if len(probe.GetRows()) == 0 {
-					log.Printf("storage view history backfill has no Primary rows space=%s dataset=%s", view.GetSpaceId(), view.GetPrimaryDatasetId())
-					return 0, nil
-				}
-				log.Printf("storage view history backfill subject catalog is empty; using authoritative Primary scan space=%s dataset=%s", view.GetSpaceId(), view.GetPrimaryDatasetId())
+			if err := requireSuccess(probe.GetRetInfo()); err != nil {
+				return 0, fmt.Errorf("probe Primary history for %s/%s: %w", view.GetSpaceId(), view.GetPrimaryDatasetId(), err)
 			}
-			if len(subjects) > 0 {
-				// The subject-first Primary history index lets us read each bound
-				// subject without repeating a full time-first dataset scan. The helper
-				// discovers all tags for that subject and writes only the configured
-				// latest periods per series.
-				return s.backfillPrimaryHistoryBySubjectCatalog(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, view, nextSchema, auth, frequency, subjects, periods)
+			if len(probe.GetRows()) == 0 {
+				log.Printf("storage view history backfill has no Primary rows space=%s dataset=%s", view.GetSpaceId(), view.GetPrimaryDatasetId())
+				return 0, nil
 			}
+			log.Printf("storage view history backfill subject catalog is empty; using authoritative Primary scan space=%s dataset=%s", view.GetSpaceId(), view.GetPrimaryDatasetId())
+		}
+		if len(subjects) > 0 {
+			// The subject-first Primary history index lets us read each bound
+			// subject without repeating a full time-first dataset scan. The helper
+			// discovers all tags for that subject and writes only the configured
+			// latest periods per series.
+			return s.backfillPrimaryHistoryBySubjectCatalog(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, view, nextSchema, auth, frequency, subjects, periods, limiter)
 		}
 	}
 	useCatalog := len(selectors) > 0
@@ -374,7 +410,7 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 		if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
 			return written, err
 		}
-		rsp, err := readPrimaryTimeSeriesRows(ctx, rangeReader, &pb.ReadTimeSeriesRowsReq{
+		rsp, err := readPrimaryTimeSeriesRowsLimited(ctx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
 			AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), Selectors: selectors,
 			Order: pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: uint32(batchSize)}, AfterKey: afterKey,
 		})
@@ -415,7 +451,7 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 			}}})
 		}
 		if len(writes) > 0 && reader != nil {
-			if err := s.enrichBackfillRows(ctx, reader, "", nextID, writes); err != nil {
+			if err := s.enrichBackfillRows(ctx, reader, "", nextID, writes, limiter); err != nil {
 				return written, fmt.Errorf("enrich Primary history for %s/%s (rows=%d written=%d): %w", spaceID, view.GetPrimaryDatasetId(), len(writes), written, err)
 			}
 		}
@@ -466,11 +502,46 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 	}
 }
 
+func (s *Service) loadBackfillSubjectCatalog(ctx context.Context, auth *pb.AuthInfo, spaceID, datasetID string) ([]string, bool, error) {
+	metadata := s.metadataClientSnapshot()
+	if metadata == nil {
+		return nil, false, nil
+	}
+	catalog, ok := metadata.(subjectCatalogClient)
+	if !ok {
+		return nil, false, nil
+	}
+	subjects, err := s.listBackfillSubjectCatalog(ctx, catalog, auth, spaceID, datasetID)
+	if err != nil {
+		return nil, true, err
+	}
+	return subjects, true, nil
+}
+
+// capacityMaintenanceCatalogReady prevents an optional capacity rebuild from
+// falling back to a million-row time-first Primary scan. A missing catalog is
+// safe to skip here because the active View remains readable; coverage and
+// manual rebuilds retain the authoritative fallback in the normal backfill
+// path above.
+func (s *Service) capacityMaintenanceCatalogReady(ctx context.Context, auth *pb.AuthInfo, view *pb.View) (bool, string) {
+	if view == nil {
+		return false, "subject_catalog_unavailable"
+	}
+	subjects, available, err := s.loadBackfillSubjectCatalog(ctx, auth, view.GetSpaceId(), view.GetPrimaryDatasetId())
+	if err != nil || !available {
+		return false, "subject_catalog_unavailable"
+	}
+	if len(subjects) == 0 {
+		return false, "subject_catalog_empty"
+	}
+	return true, ""
+}
+
 // backfillPrimaryHistoryBySubjectCatalog uses the subject-first Primary
 // history index. It avoids rescanning a multi-million-row dataset for every
 // page while still walking each bound subject to EOF, so quiet subjects and
 // older series tags cannot be mistaken for complete coverage.
-func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, view *pb.View, nextSchema viewindex.ViewIndexSchema, auth *pb.AuthInfo, frequency string, subjects []string, periods uint64) (uint64, error) {
+func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, view *pb.View, nextSchema viewindex.ViewIndexSchema, auth *pb.AuthInfo, frequency string, subjects []string, periods uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	if reader == nil || rangeReader == nil {
 		return 0, errors.New("Primary readers are required for subject-catalog history backfill")
 	}
@@ -482,10 +553,10 @@ func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, sp
 			if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
 				return written, err
 			}
-			rsp, err := readPrimaryTimeSeriesRows(ctx, rangeReader, &pb.ReadTimeSeriesRowsReq{
+			rsp, err := readPrimaryTimeSeriesRowsLimited(ctx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
 				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
 				Selectors: []*pb.TimeSeriesSelector{{SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), SubjectId: subject, Freq: frequency}},
-				Order:     pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: 10000}, AfterKey: afterKey,
+				Order:     pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: uint32(batchSize)}, AfterKey: afterKey,
 			})
 			if err != nil {
 				return written, fmt.Errorf("scan Primary history for %s/%s subject %s: %w", spaceID, view.GetPrimaryDatasetId(), subject, err)
@@ -511,7 +582,7 @@ func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, sp
 				}}})
 			}
 			if len(writes) > 0 {
-				if err := s.enrichBackfillRows(ctx, reader, "", nextID, writes); err != nil {
+				if err := s.enrichBackfillRows(ctx, reader, "", nextID, writes, limiter); err != nil {
 					return written, fmt.Errorf("enrich Primary history for %s/%s subject %s: %w", spaceID, view.GetPrimaryDatasetId(), subject, err)
 				}
 			}
@@ -632,11 +703,16 @@ func (s *Service) listBackfillSubjectCatalog(ctx context.Context, metadata subje
 		market = "swap"
 	}
 	seen := make(map[string]struct{})
+	// The metadata subject market is the broad asset class (for example,
+	// "CRYPTO"), while spot/swap is stored in the subject attributes. Do not
+	// pass the derived instrument type as the SQL market filter: that exact
+	// match returns an empty catalog in production and forces the expensive
+	// time-first Primary scan fallback.
 	for page := uint32(1); ; page++ {
 		if page > 10000 {
 			return nil, errors.New("too many subject pages during View history backfill")
 		}
-		rsp, err := metadata.ListSubjects(ctx, &pb.ListSubjectsReq{AuthInfo: auth, SpaceId: spaceID, Market: market, Page: &pb.Page{Page: page, Size: pageSize}})
+		rsp, err := metadata.ListSubjects(ctx, &pb.ListSubjectsReq{AuthInfo: auth, SpaceId: spaceID, Page: &pb.Page{Page: page, Size: pageSize}})
 		if err != nil {
 			return nil, err
 		}
@@ -645,6 +721,9 @@ func (s *Service) listBackfillSubjectCatalog(ctx context.Context, metadata subje
 		}
 		for _, subject := range rsp.GetSubjects() {
 			if subject == nil || strings.TrimSpace(subject.GetSubjectId()) == "" || strings.EqualFold(strings.TrimSpace(subject.GetStatus()), "deleted") {
+				continue
+			}
+			if market != "" && !backfillSubjectMatchesMarket(subject, market) {
 				continue
 			}
 			seen[strings.TrimSpace(subject.GetSubjectId())] = struct{}{}
@@ -659,6 +738,26 @@ func (s *Service) listBackfillSubjectCatalog(ctx context.Context, metadata subje
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+func backfillSubjectMatchesMarket(subject *pb.Subject, market string) bool {
+	if subject == nil {
+		return false
+	}
+	want := strings.ToLower(strings.TrimSpace(market))
+	if want == "" {
+		return true
+	}
+	attrs := subject.GetAttributes()
+	for _, key := range []string{"instrument_type", "market_type"} {
+		if value := strings.ToLower(strings.TrimSpace(attrs[key])); value != "" {
+			return value == want
+		}
+	}
+	// Older metadata rows may not have instrument_type yet. The canonical
+	// subject IDs still carry the same discriminator, so retain compatibility
+	// without admitting the opposite market into a rebuild.
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(subject.GetSubjectId())), "-"+want)
 }
 
 func buildPeriodHistorySelectors(spaceID, datasetID, frequency string, subjects []string) ([]*pb.TimeSeriesSelector, map[string]struct{}) {
@@ -793,7 +892,7 @@ func backfillSorts(engine string) []*pb.SortSpec {
 	}
 }
 
-func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, activeID, nextID string, writes []viewindex.RowWrite) error {
+func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, activeID, nextID string, writes []viewindex.RowWrite, limiter *backfillRequestLimiter) error {
 	s.mu.RLock()
 	activeSchema := s.schemas[activeID]
 	nextSchema := s.schemas[nextID]
@@ -867,6 +966,9 @@ func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, ac
 				key.DatasetId = datasetID
 				keys = append(keys, key)
 				positions[viewindex.RowKeyID(key)] = index
+			}
+			if err := limiter.wait(ctx); err != nil {
+				return err
 			}
 			rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys, FieldIds: fieldIDs, AttributeKeys: factorAttributeKeys(nextSchema.Columns, datasetID)})
 			if err != nil {

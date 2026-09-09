@@ -77,6 +77,10 @@ type StorageView struct {
 	MaxWorkers               int    `yaml:"max_workers"`
 	Ordering                 string `yaml:"ordering"`
 	MaintenanceCheckInterval string `yaml:"maintenance_check_interval"`
+	// BackfillPageSize bounds each Primary history page during a View rebuild.
+	// Smaller pages reduce the instantaneous point-read and index-write burst.
+	BackfillPageSize        uint32 `yaml:"backfill_page_size"`
+	BackfillRequestInterval string `yaml:"backfill_request_interval"`
 	// RebuildLookback is the wall-clock fallback for legacy Views without a
 	// frequency-specific completed-bar target.
 	RebuildLookback        string                         `yaml:"rebuild_lookback"`
@@ -629,6 +633,12 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if strings.TrimSpace(c.View.MaintenanceCheckInterval) == "" {
 		c.View.MaintenanceCheckInterval = "1m"
+	}
+	if c.View.BackfillPageSize == 0 {
+		c.View.BackfillPageSize = 2000
+	}
+	if strings.TrimSpace(c.View.BackfillRequestInterval) == "" {
+		c.View.BackfillRequestInterval = "100ms"
 	}
 	if c.View.MaxViewFileBytes <= 0 && !c.View.maxViewFileBytesSet {
 		c.View.MaxViewFileBytes = 1 << 30

@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/prometheus/client_golang/prometheus"
+	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -25,6 +28,18 @@ type fakePublisher struct {
 	publishErr error
 	closed     bool
 	onPublish  func()
+}
+
+type blockingGatherer struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *blockingGatherer) Gather() ([]*io_prometheus_client.MetricFamily, error) {
+	g.once.Do(func() { close(g.started) })
+	<-g.release
+	return nil, nil
 }
 
 func validConfig(serviceName string) Config {
@@ -188,6 +203,40 @@ func TestHandlePublishesEventMessage(t *testing.T) {
 	if !ok || report.GetServiceName() != "moox-monitor" || report.GetInstanceId() != "instance-a" || report.GetSequence() != 1 {
 		t.Fatalf("unexpected report: %T %+v", publisher.payloads[0], publisher.payloads[0])
 	}
+}
+
+func TestHandleSkipsOverlappingInvocations(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	publisher := &fakePublisher{}
+	h, err := NewHandlerWithPublisher(validConfig("moox-monitor"), publisher, registry)
+	require.NoError(t, err)
+
+	gatherer := &blockingGatherer{started: make(chan struct{}), release: make(chan struct{})}
+	h.gatherer = gatherer
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- h.Handle(context.Background()) }()
+
+	select {
+	case <-gatherer.started:
+	case <-time.After(time.Second):
+		t.Fatal("first report did not start gathering")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- h.Handle(context.Background()) }()
+	select {
+	case err := <-secondDone:
+		require.ErrorIs(t, err, ErrInFlight)
+	case <-time.After(time.Second):
+		t.Fatal("overlapping report was queued behind the slow report")
+	}
+	require.Empty(t, publisher.events)
+
+	close(gatherer.release)
+	require.NoError(t, <-firstDone)
+	require.Len(t, publisher.events, 1)
+	require.NoError(t, h.Handle(context.Background()))
+	require.Len(t, publisher.events, 2)
 }
 
 func TestHandleReportsPublisherError(t *testing.T) {

@@ -360,6 +360,10 @@ func runViewRole() error {
 	if err != nil {
 		return err
 	}
+	backfillPageSize, backfillRequestInterval, err := storageViewBackfillSettings()
+	if err != nil {
+		return err
+	}
 	maintenancePolicy, err := storageViewMaintenancePolicy()
 	if err != nil {
 		return err
@@ -388,6 +392,8 @@ func runViewRole() error {
 		RebuildIdleChecksConfigured: idleChecksConfigured,
 		Policy:                      maintenancePolicy,
 		MaxPeriodsPerSeries:         maintenancePolicy.MaxPeriodsPerSeries,
+		BackfillPageSize:            backfillPageSize,
+		BackfillRequestInterval:     backfillRequestInterval,
 	}
 	// Bind the listeners before opening/validating historical indexes. View
 	// restoration can still take time on a large deployment; keeping the
@@ -837,6 +843,31 @@ func storageViewRebuildSettings() (time.Duration, time.Duration, int64, uint64, 
 	}
 	return interval, lookback, runtimeConfig.Storage.View.MaxViewFileBytes, runtimeConfig.Storage.View.RebuildMaxPending, runtimeConfig.Storage.View.RebuildIdleChecks,
 		maxPendingConfigured, idleChecksConfigured, nil
+}
+
+func storageViewBackfillSettings() (uint32, time.Duration, error) {
+	const (
+		defaultPageSize        = 2000
+		defaultRequestInterval = 100 * time.Millisecond
+		maxPageSize            = 10000
+	)
+	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
+	if path == "" {
+		return defaultPageSize, defaultRequestInterval, nil
+	}
+	var runtimeConfig storageconfig.RuntimeConfig
+	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
+	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
+		return 0, 0, fmt.Errorf("load storage view backfill config: %w", err)
+	}
+	if runtimeConfig.Storage.View.BackfillPageSize == 0 || runtimeConfig.Storage.View.BackfillPageSize > maxPageSize {
+		return 0, 0, fmt.Errorf("storage view backfill_page_size must be between 1 and %d", maxPageSize)
+	}
+	interval, err := time.ParseDuration(strings.TrimSpace(runtimeConfig.Storage.View.BackfillRequestInterval))
+	if err != nil || interval < 0 {
+		return 0, 0, errors.New("storage view backfill_request_interval must be a non-negative duration")
+	}
+	return runtimeConfig.Storage.View.BackfillPageSize, interval, nil
 }
 
 func envOrDefault(name, fallback string) string {

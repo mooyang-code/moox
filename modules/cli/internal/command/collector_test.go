@@ -1124,6 +1124,39 @@ func TestCollectorInstrumentCanaryEventUsesIndependentSnapshotAction(t *testing.
 	assert.Equal(t, stockInstrumentCanaryShardCount, items[0]["snapshot_shard_count"])
 }
 
+func TestCollectorInstrumentCanaryHasBoundedTotalTimeout(t *testing.T) {
+	started := make(chan struct{}, 4)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer func() {
+		close(release)
+		server.Close()
+	}()
+
+	client := adminclient.New(server.URL)
+	originalHTTPClient := &http.Client{Timeout: 10 * time.Second}
+	client.HTTPClient = originalHTTPClient
+	start := time.Now()
+	err := runCollectorInstrumentCanaryWithControlTimeout(
+		context.Background(), client,
+		collectorPublishOptions{SpaceID: "stockcn", Region: "ap-chengdu"},
+		"instrument-node", 50*time.Millisecond,
+	)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Same(t, originalHTTPClient, client.HTTPClient)
+	require.Eventually(t, func() bool { return len(started) > 0 }, time.Second, 5*time.Millisecond, "instrument canary request did not reach control server")
+	assert.Equal(t, 1, len(started), "a timed-out full snapshot must not be retried")
+	assert.Less(t, time.Since(start), time.Second)
+}
+
 func TestCollectorTimerRestorePatchesOnlyPreviouslyEnabledNodes(t *testing.T) {
 	nodes := []adminclient.CloudNode{
 		{NodeID: "enabled", Metadata: map[string]any{"timer_enabled": true, "timer_cron": "0 1 * * * * *"}},

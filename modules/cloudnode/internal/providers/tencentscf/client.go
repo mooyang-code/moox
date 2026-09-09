@@ -21,7 +21,10 @@ type Client struct {
 	secretKey string
 }
 
-const scfRequestTimeoutSeconds = 360
+// Tencent SCF allows a function to run for up to 900 seconds. Keep the
+// provider request envelope slightly longer so the 900-second function result
+// can still traverse the CloudNode transport before the client gives up.
+const scfRequestTimeoutSeconds = 960
 
 // FunctionRef identifies a Tencent SCF function.
 type FunctionRef struct {

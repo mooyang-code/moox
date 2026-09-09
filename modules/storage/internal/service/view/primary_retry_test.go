@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -36,6 +37,21 @@ func TestReadPrimaryTimeSeriesRowsRetriesTransportFailures(t *testing.T) {
 	}
 	if reader.calls != primaryHistoryReadAttempts {
 		t.Fatalf("calls=%d, want %d", reader.calls, primaryHistoryReadAttempts)
+	}
+}
+
+func TestReadPrimaryTimeSeriesRowsLimitedSpacesTransportRetries(t *testing.T) {
+	reader := &primaryHistoryRetryReader{
+		remainingFailures: 2,
+		err:               errs.New(errs.RetClientConnectFail, "tcp client transport connection pool"),
+	}
+	started := time.Now()
+	response, err := readPrimaryTimeSeriesRowsLimited(context.Background(), newBackfillRequestLimiter(10*time.Millisecond), reader, &pb.ReadTimeSeriesRowsReq{})
+	if err != nil || response == nil {
+		t.Fatalf("limited read with retries = response=%v err=%v", response, err)
+	}
+	if elapsed := time.Since(started); elapsed < 18*time.Millisecond {
+		t.Fatalf("retry spacing elapsed=%s, want at least 18ms", elapsed)
 	}
 }
 

@@ -37,7 +37,7 @@ func TestValidateRouteAllowsStorageDataShardMethodsForPrimary(t *testing.T) {
 }
 
 func TestValidateRouteRejectsUnsafeRoutes(t *testing.T) {
-	valid := Route{ServiceID: "storage-api", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.storage.Storage", TimeoutMS: 1, MaxBodyBytes: 1, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}
+	valid := Route{ServiceID: "storage-api", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Storage", TimeoutMS: 1, MaxBodyBytes: 1, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}
 	tests := []struct {
 		name string
 		edit func(*Route)
@@ -61,7 +61,7 @@ func TestValidateRouteRejectsUnsafeRoutes(t *testing.T) {
 		{name: "leading slash", edit: func(r *Route) { r.ServicePath = "/trpc.moox.Storage" }},
 		{name: "path traversal", edit: func(r *Route) { r.ServicePath = "trpc.moox..Storage" }},
 		{name: "nonpositive timeout", edit: func(r *Route) { r.TimeoutMS = -1 }},
-		{name: "excessive timeout", edit: func(r *Route) { r.TimeoutMS = 120001 }},
+		{name: "excessive timeout", edit: func(r *Route) { r.TimeoutMS = maxTimeoutMS + 1 }},
 		{name: "nonpositive body limit", edit: func(r *Route) { r.MaxBodyBytes = -1 }},
 		{name: "excessive body limit", edit: func(r *Route) { r.MaxBodyBytes = 64<<20 + 1 }},
 	}

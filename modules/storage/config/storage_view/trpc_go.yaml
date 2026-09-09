@@ -45,7 +45,9 @@ server:
       port: 20307
       network: "*/30 * * * * *"
       protocol: timer
-      timeout: 10000
+      # Gathering bounded View metrics can read tens of thousands of series;
+      # keep the 30-second cadence while allowing one report to complete.
+      timeout: 60000
     - name: trpc.moox.storage.view.cleanup.timer
       port: 20308
       network: "*/30 * * * * *"
@@ -174,8 +176,15 @@ storage:
         routes:
           - space_id: crypto
             dataset_ids: ["*"]
+          # Keep legacy crypto_market Views on isolated dynamic durables while
+          # the canonical crypto datasets remain on the static partitions.
+          - space_id: crypto_market
+            dataset_ids: ["*"]
           - space_id: mooxsys
             dataset_ids: [dataset_mooxsys_host_disk, dataset_mooxsys_host_filesystem, dataset_mooxsys_host_network, dataset_mooxsys_host_resource]
+          # Older installations used moox_system for the same host datasets.
+          - space_id: moox_system
+            dataset_ids: ["*"]
           - space_id: stockcn
             dataset_ids: [dataset_stockcn_financial_statement_metric, dataset_stockcn_financial_summary, dataset_stockcn_bond_kline, dataset_stockcn_index_kline, dataset_stockcn_instruments, dataset_stockcn_equity_kline]
           - space_id: stockhk
@@ -190,6 +199,9 @@ storage:
         deliver_policy: new
         max_retry_attempts: -1
     maintenance_check_interval: 1m
+    # Serialize Primary requests during large View rebuilds.
+    backfill_page_size: 2000
+    backfill_request_interval: 100ms
     maintenance_policy_file: config/maintenance.json
     rebuild_lookback: 24h
     rebuild_lookback_periods:

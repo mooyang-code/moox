@@ -78,7 +78,9 @@ export interface SCFImportResponse {
   failed: number;
 }
 
-const scfSyncRequestConfig = { timeout: 180000 };
+// SCF request-response calls may use the full 900s function timeout. Keep
+// the browser-side deadline aligned with the Admin/CloudNode transport budget.
+const scfSyncRequestConfig = { timeout: 960000 };
 
 export interface Page {
   page?: number;

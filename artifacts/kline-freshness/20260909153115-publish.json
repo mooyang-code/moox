@@ -1,0 +1,74 @@
+{
+  "zip_path": "/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/collector/collector-scf-stockcn-dev.zip",
+  "package_id": "moox-collector-stockcn_dev_28e0726d-0be1-4c96-99d3-667f9be89fb5",
+  "cls_topic_id": "c7ff7bb7-622f-43c6-86ac-800552762a2c",
+  "fleet_mode": "updated",
+  "job_id": "node-batch-56ac4617-3b9f-42ac-94d5-10e5996929a7,node-batch-dd13a78e-7323-47e8-9f9e-f3715ecaf66e,node-batch-2d42c281-6d36-41e0-9166-2b7244bf2002,node-batch-1340683e-60a3-4f23-9164-a9f269e5dc6b,node-batch-f6bfd596-53ed-4880-b3fa-db34d9e9cb55,node-batch-72eaa5df-e7e6-459d-953a-097e67ee5d33,node-batch-5c8c6204-0c60-4741-94ad-79957cb79d9e,node-batch-02151e80-8ab9-42c0-b91b-c82bbb67a089,node-batch-e7773b20-c43e-4b4e-8b9f-2cb7c3e15b6c,node-batch-b33d6542-6cfd-43b6-b3b1-6746b627a0c1,node-batch-54ff171f-2fb2-41b5-91f5-cb6af21b0633,node-batch-a5365656-1fb2-4dec-9f45-d667f2c0ebd4,node-batch-85a16e0b-2360-4892-b284-af681201c467,node-batch-135a78a2-eb28-4f18-b9ee-0f93f9a4877c,node-batch-ed490449-11eb-4a51-85ff-bb55e6e23205",
+  "job_ids": [
+    "node-batch-56ac4617-3b9f-42ac-94d5-10e5996929a7",
+    "node-batch-dd13a78e-7323-47e8-9f9e-f3715ecaf66e",
+    "node-batch-2d42c281-6d36-41e0-9166-2b7244bf2002",
+    "node-batch-1340683e-60a3-4f23-9164-a9f269e5dc6b",
+    "node-batch-f6bfd596-53ed-4880-b3fa-db34d9e9cb55",
+    "node-batch-72eaa5df-e7e6-459d-953a-097e67ee5d33",
+    "node-batch-5c8c6204-0c60-4741-94ad-79957cb79d9e",
+    "node-batch-02151e80-8ab9-42c0-b91b-c82bbb67a089",
+    "node-batch-e7773b20-c43e-4b4e-8b9f-2cb7c3e15b6c",
+    "node-batch-b33d6542-6cfd-43b6-b3b1-6746b627a0c1",
+    "node-batch-54ff171f-2fb2-41b5-91f5-cb6af21b0633",
+    "node-batch-a5365656-1fb2-4dec-9f45-d667f2c0ebd4",
+    "node-batch-85a16e0b-2360-4892-b284-af681201c467",
+    "node-batch-135a78a2-eb28-4f18-b9ee-0f93f9a4877c",
+    "node-batch-ed490449-11eb-4a51-85ff-bb55e6e23205"
+  ],
+  "operation": "deploy_nodes",
+  "total_count": 143,
+  "regions": [
+    {
+      "region": "ap-singapore",
+      "cloud_account_id": "tencent-scf",
+      "package_id": "moox-collector-stockcn_dev_02d1657a-9b96-4847-8b42-cb3019cf153b",
+      "cls_logset_id": "d0b62f5c-81ea-489c-bb82-3cff99ae34af",
+      "cls_topic_id": "c7ff7bb7-622f-43c6-86ac-800552762a2c",
+      "job_id": "node-batch-2d42c281-6d36-41e0-9166-2b7244bf2002",
+      "total_count": 31
+    },
+    {
+      "region": "ap-guangzhou",
+      "cloud_account_id": "tencent-scf",
+      "package_id": "moox-collector-stockcn_dev_1be0c336-39ac-4757-b1e4-766582067245",
+      "cls_logset_id": "d0b62f5c-81ea-489c-bb82-3cff99ae34af",
+      "cls_topic_id": "c7ff7bb7-622f-43c6-86ac-800552762a2c",
+      "job_id": "node-batch-72eaa5df-e7e6-459d-953a-097e67ee5d33",
+      "total_count": 11
+    },
+    {
+      "region": "ap-shanghai",
+      "cloud_account_id": "tencent-scf",
+      "package_id": "moox-collector-stockcn_dev_fc5dff75-59c9-4ef8-981a-ee1108999be8",
+      "cls_logset_id": "d0b62f5c-81ea-489c-bb82-3cff99ae34af",
+      "cls_topic_id": "c7ff7bb7-622f-43c6-86ac-800552762a2c",
+      "job_id": "node-batch-e7773b20-c43e-4b4e-8b9f-2cb7c3e15b6c",
+      "total_count": 32
+    },
+    {
+      "region": "ap-beijing",
+      "cloud_account_id": "tencent-scf",
+      "package_id": "moox-collector-stockcn_dev_068ba4b5-72ce-4ba2-828f-9b14e148199d",
+      "cls_logset_id": "d0b62f5c-81ea-489c-bb82-3cff99ae34af",
+      "cls_topic_id": "c7ff7bb7-622f-43c6-86ac-800552762a2c",
+      "job_id": "node-batch-a5365656-1fb2-4dec-9f45-d667f2c0ebd4",
+      "total_count": 32
+    },
+    {
+      "region": "ap-chengdu",
+      "cloud_account_id": "tencent-scf",
+      "package_id": "moox-collector-stockcn_dev_28e0726d-0be1-4c96-99d3-667f9be89fb5",
+      "cls_logset_id": "d0b62f5c-81ea-489c-bb82-3cff99ae34af",
+      "cls_topic_id": "c7ff7bb7-622f-43c6-86ac-800552762a2c",
+      "job_id": "node-batch-ed490449-11eb-4a51-85ff-bb55e6e23205",
+      "total_count": 32
+    }
+  ]
+}
+publish_rc=1

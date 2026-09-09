@@ -143,6 +143,20 @@ func TestNeedsRebuildTriggers(t *testing.T) {
 	}
 }
 
+func TestRevisionRepairIsNotClassifiedAsOptionalCapacityMaintenance(t *testing.T) {
+	view := &pb.View{
+		SpaceId: "crypto", ViewId: "view_crypto_spot_kline_1m", ActiveIndexId: "active",
+		DesiredViewRevision: 2, ActiveViewRevision: 1, KeepDuration: "0",
+	}
+	stats := viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 512}
+	if needsActiveOrRevisionRebuild(view, stats) == false {
+		t.Fatal("revision change did not require repair")
+	}
+	if isCapacityMaintenanceOnly(view, stats, MaintenanceOptions{MaxViewFileBytes: 512}, nil, false, false, true) {
+		t.Fatal("revision repair was classified as optional capacity maintenance")
+	}
+}
+
 func TestPeriodCapacityPolicyIgnoresGlobalCoverageSpan(t *testing.T) {
 	view := &pb.View{
 		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,

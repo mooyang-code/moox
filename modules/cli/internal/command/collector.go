@@ -1785,13 +1785,36 @@ const (
 )
 
 func runCollectorInstrumentCanaryWithExtendedControlTimeout(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, nodeID string) error {
+	timeout := collectorInstrumentCanaryControlTimeout
+	if opts.FetcherConfig != nil && opts.FetcherConfig.InstrumentSnapshotTimeoutSeconds > 0 {
+		// Give the control request a small amount of time beyond the SCF
+		// execution budget so a completed function response is not mistaken
+		// for a control-plane timeout. Tencent SCF caps the function itself at
+		// 900 seconds; the extra minute is only for response propagation.
+		timeout = time.Duration(opts.FetcherConfig.InstrumentSnapshotTimeoutSeconds+60) * time.Second
+	}
+	return runCollectorInstrumentCanaryWithControlTimeout(ctx, client, opts, nodeID, timeout)
+}
+
+// runCollectorInstrumentCanaryWithControlTimeout bounds the whole canary
+// stage, not just each HTTP attempt. Without the stage context, five retries
+// could each wait for the seven-minute HTTP timeout and leave publish blocked
+// for roughly 35 minutes before reporting the same control-plane failure.
+func runCollectorInstrumentCanaryWithControlTimeout(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, nodeID string, timeout time.Duration) error {
 	if client == nil {
 		return fmt.Errorf("control client is required")
 	}
-	previous := client.HTTPClient
-	client.HTTPClient = &http.Client{Timeout: collectorInstrumentCanaryControlTimeout}
-	defer func() { client.HTTPClient = previous }()
-	return runCollectorInstrumentCanary(ctx, client, opts, nodeID)
+	if timeout <= 0 {
+		return fmt.Errorf("instrument canary timeout must be positive")
+	}
+	canaryCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	// Use a request-local client copy. The publish command may reuse the
+	// control client for other stages, and mutating its HTTPClient would race
+	// with those requests or with another canary.
+	canaryClient := *client
+	canaryClient.HTTPClient = &http.Client{Timeout: timeout}
+	return runCollectorInstrumentCanary(canaryCtx, &canaryClient, opts, nodeID)
 }
 
 func runCollectorInstrumentCanaryShard(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, nodeID string, shardIndex int, snapshotAt string) error {
@@ -1806,14 +1829,14 @@ func runCollectorInstrumentCanaryShard(ctx context.Context, client *adminclient.
 			raw, _ := json.Marshal(response)
 			lastErr = fmt.Errorf("returned unsuccessful response: %s", raw)
 		} else {
-			lastErr = err
+			lastErr = fmt.Errorf("invoke node=%s shard=%d/%d attempt=%d: %w", nodeID, shardIndex+1, stockInstrumentCanaryShardCount, attempt, err)
 		}
 		if attempt < stockInstrumentCanaryMaxAttempts {
 			timer := time.NewTimer(2 * time.Second)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return ctx.Err()
+				return fmt.Errorf("instrument_snapshot shard %d/%d retry stopped after attempt %d: %w", shardIndex+1, stockInstrumentCanaryShardCount, attempt, errors.Join(lastErr, ctx.Err()))
 			case <-timer.C:
 			}
 		}
@@ -1826,8 +1849,12 @@ const (
 	// budget. The stock production Instrument Timer is also one full-snapshot
 	// invocation; the shard protocol remains for the shared pipeline and legacy
 	// crypto scheduling, while this canary proves provider merge and activation.
-	stockInstrumentCanaryShardCount  = 1
-	stockInstrumentCanaryMaxAttempts = 5
+	stockInstrumentCanaryShardCount = 1
+	// The full snapshot can take most of the SCF execution budget because it
+	// also registers thousands of metadata subjects. Do not retry a timed-out
+	// request-response invocation: the remote SCF may still be running, and a
+	// second full snapshot would duplicate Storage writes and contend on locks.
+	stockInstrumentCanaryMaxAttempts = 1
 	// Each shard invocation fetches the same complete snapshot before taking
 	// its deterministic slice. Keep the gate bounded without exceeding the
 	// source's per-egress-IP request policy when SCF scales the invoke node.

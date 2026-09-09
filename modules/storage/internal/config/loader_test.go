@@ -28,8 +28,8 @@ func TestStorageConfigRolesAreExplicit(t *testing.T) {
 func TestStorageViewRebuildDefaults(t *testing.T) {
 	cfg := StorageConfig{}
 	cfg.ApplyDefaults()
-	if cfg.View.MaintenanceCheckInterval != "1m" || cfg.View.MaxViewFileBytes != 1<<30 || cfg.View.RebuildMaxPending != 32 || cfg.View.RebuildIdleChecks != 3 || cfg.View.RebuildLookback != "24h" {
-		t.Fatalf("view rebuild defaults = %q/%d/%d/%d/%s", cfg.View.MaintenanceCheckInterval, cfg.View.MaxViewFileBytes, cfg.View.RebuildMaxPending, cfg.View.RebuildIdleChecks, cfg.View.RebuildLookback)
+	if cfg.View.MaintenanceCheckInterval != "1m" || cfg.View.BackfillPageSize != 2000 || cfg.View.BackfillRequestInterval != "100ms" || cfg.View.MaxViewFileBytes != 1<<30 || cfg.View.RebuildMaxPending != 32 || cfg.View.RebuildIdleChecks != 3 || cfg.View.RebuildLookback != "24h" {
+		t.Fatalf("view rebuild defaults = %q/%d/%s/%d/%d/%s", cfg.View.MaintenanceCheckInterval, cfg.View.BackfillPageSize, cfg.View.BackfillRequestInterval, cfg.View.MaxViewFileBytes, cfg.View.RebuildMaxPending, cfg.View.RebuildLookback)
 	}
 	want := map[string]uint64{"1m": 1000, "1h": 1000, "1d": 1000, "default": 1000}
 	for frequency, periods := range want {

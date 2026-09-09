@@ -57,6 +57,11 @@ func registerMetricsReporter(s *server.Server, runtime *Runtime) *report.ModuleM
 	}
 	timer.RegisterHandlerService(service, func(ctx context.Context) error {
 		err := h.Handle(ctx)
+		if errors.Is(err, report.ErrInFlight) {
+			// A slow snapshot is still active. Keep the previous readiness state;
+			// a skipped tick is neither a fresh success nor a new failure.
+			return nil
+		}
 		if runtime != nil {
 			runtime.setMetricsReporterState(err == nil, err)
 		}

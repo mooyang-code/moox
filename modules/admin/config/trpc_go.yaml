@@ -10,14 +10,14 @@ server:
     - opentelemetry
     - prometheus
   # CloudNode SCF inventory scans may inspect many functions across regions.
-  # Keep the Admin BFF envelope longer than the per-deployment 330s route
-  # timeout so the browser receives the completed preview response.
-  timeout: 360000
+  # Keep the Admin BFF envelope aligned with the 900s SCF budget plus transport
+  # headroom used by the CloudNode route.
+  timeout: 960000
   admin:
     ip: 127.0.0.1
     port: 11900
     read_timeout: 3000
-    write_timeout: 360000
+    write_timeout: 960000
   service:
     - name: trpc.moox.gateway.control
       ip: 127.0.0.1
@@ -26,7 +26,7 @@ server:
       protocol: http_no_protocol
       # The control gateway also carries long-running CloudNode previews.
       # Keep its request deadline above the deployment route timeout.
-      timeout: 360000
+      timeout: 960000
     - name: trpc.moox.admin.Health
       ip: 127.0.0.1
       port: 11010

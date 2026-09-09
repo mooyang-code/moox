@@ -89,8 +89,15 @@ storage:
         routes:
           - space_id: crypto
             dataset_ids: ["*"]
+          # Keep legacy crypto_market Views on isolated dynamic durables while
+          # the canonical crypto datasets remain on the static partitions.
+          - space_id: crypto_market
+            dataset_ids: ["*"]
           - space_id: mooxsys
             dataset_ids: [dataset_mooxsys_host_disk, dataset_mooxsys_host_filesystem, dataset_mooxsys_host_network, dataset_mooxsys_host_resource]
+          # Older installations used moox_system for the same host datasets.
+          - space_id: moox_system
+            dataset_ids: ["*"]
           - space_id: stockcn
             dataset_ids: [dataset_stockcn_financial_statement_metric, dataset_stockcn_financial_summary, dataset_stockcn_bond_kline, dataset_stockcn_index_kline, dataset_stockcn_instruments, dataset_stockcn_equity_kline]
           - space_id: stockhk
@@ -105,6 +112,10 @@ storage:
         deliver_policy: new
         max_retry_attempts: -1
     maintenance_check_interval: 1m
+    # Keep history pages and Primary requests serialized during a View rebuild
+    # so a large repair does not burst against Storage.
+    backfill_page_size: 2000
+    backfill_request_interval: 100ms
     # Time-series Views use the completed-bar targets below. Keep this global
     # duration only as a compatibility fallback for legacy Views without freq.
     rebuild_lookback: 24h

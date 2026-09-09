@@ -10,6 +10,10 @@
 
 Storage/Primary/View 不承载 K 线告警语义：Primary 只做通用数据写入，View 只在消费 Primary 变更时按通用 dataset/view/subject/frequency/series 维度上报 input 和 active output watermark；所有 K 线 freshness、交易时段、连续失败/恢复和告警状态只由 Monitor 读取指定 View 的 output 观测判断。Collector 不再做周期 gap audit，不扫描历史桶，不因单分钟缺失触发补采；显式 Backfill/GapRepair 仍按既有 HistoryPolicy 入口执行。Monitor 的 30 秒 reporter/watchdog 是 K 线 freshness 的默认评估节奏，不是所有告警策略的固定周期，也不通过 HTTP `/metrics` 抓取。
 
+**最新运行参数（2026-09-09）：** stockcn 正式发布目标为 `timer_function_count=170`，每个 Kline Group 最多承载 40 个标的（`measured_safe_group_size=40`）。170 个函数是初始固定发布规模，不因公网出口 IP 数量不足而阻断启用；出口探测只作诊断。Provider 按 Group/标的做稳定分散，新浪、腾讯、东方财富等单一接口失败时继续候选链，单标的失败不得阻塞其他标的。Instrument daily Timer 始终是独立的单函数 fleet，不计入 170 个 Kline Timer。
+
+**最新观测边界（2026-09-09）：** 不在 Storage Primary 或公共存储层放置 `observability.IsKlineDatasetID`、Kline 专用指标或告警判断。View 仅在通用事件路由完成和 active index 成功写入两个边界上报 dataset、view、canonical subject、频率、series tag、K 线业务时间及 commit 时间；Monitor 只监控配置指定 View 的 output watermark。短暂的“10:00 有、10:01 缺失、10:02 恢复”不触发告警，只有超过 freshness 窗口才 firing；指标上报经现有 EventBus/Monitor 消费链路完成，不由定时 HTTP `/metrics` 抓取。
+
 **Tech Stack:** Go 1.25、tRPC-Go Timer、Tencent Cloud SCF Go SDK v1.1.0、SQLite/GORM、Storage tRPC、Pebble、CLS、YAML、`httptest`、`testify`。
 
 ---
@@ -21,11 +25,21 @@ Storage/Primary/View 不承载 K 线告警语义：Primary 只做通用数据写
 | 范围 | 状态 | 证据/未完成项 |
 | --- | --- | --- |
 | Task 1 Provider 接入与探测 | 部分完成 | 四路 Provider 的强类型适配、probe 契约和去敏记录已落地；当前真实网络记录中新浪/腾讯有历史 K 线通过证据，东方财富/百度仍未达到生产候选门槛，三交易所三源完整稳定证据尚未形成。当前公共接口只有有界最新页，历史策略先限制在最近 24 小时，长历史待游标分页 Provider。 |
-| Task 2-12 公共框架、Kline/Instrument Pipeline、单 Dataset、HistoryPolicy、可配置 N、SCF Runtime、发布校验、监控 | 源码和本地验证完成，生产部分验收 | 发布/启用不再依赖出口 IP 数量门禁；生产仍须以 Instrument/Kline canary、Timer/Rule 回读、Monitor generic View watermark 和 Storage durable row 作为验收证据。K 线告警不再由 Collector 或 Storage 特殊分支实现。 |
+| Task 2-12 公共框架、Kline/Instrument Pipeline、单 Dataset、HistoryPolicy、可配置 N、SCF Runtime、发布校验、监控 | 源码和本地验证完成，生产部分验收 | 发布/启用不再依赖出口 IP 数量门禁；2026-09-09 已取得真实 Storage View/Reporter/EventBus/Monitor generic View watermark 连续窗口证据，但 Instrument/Kline SCF canary、Timer/Rule 回读和 stockcn Storage durable row 仍未通过。K 线告警不再由 Collector 或 Storage 特殊分支实现。 |
 | Task 13 架构清理与独立 codeCR | 架构清理完成，最新复审发现并已修复两项 Timer 隔离问题 | 旧 `sources.CollectorRegistry`、兼容 Executor、Binance Provider 专用 Storage 写入和并行旧 symbol 入口已删除；最新 codeCR 发现 Instrument Timer 会污染 Kline N 节点、且没有门禁通过后的启用闭环，已补充 `function_mode` 过滤、独立 Instrument egress/readback 和成功后的每日 Timer enable 路径。 |
-| Task 14 灰度发布、历史拉取、E2E、回滚 | 正式发布尝试已中止，仍 NO-GO | 06:37:55 提交的 stockcn publish 运行 59 分 48 秒未返回 summary/`SUCCESS`/canary 结果，控制面只观察到 Instrument Timer 更新；随后已停用 crypto 与残留 stockcn 规则，并关闭 Storage View historical maintenance。当前必须先只读盘点半启用 fleet、复核 Storage readiness，再修复 InvokeFunction/SCF 响应链路后重试；现有 Primary 未推进、View/Monitor 正式证据缺失。 |
+| Task 14 灰度发布、历史拉取、E2E、回滚 | Storage/Monitor 观测门禁通过，SCF/stockcn 仍 NO-GO | 06:37:55 的首次 stockcn publish 无结果；11:28:51 第二次正式提交已在控制面更新 170 个 Kline Timer 和独立 Instrument Timer，但 CLI 运行约 36 分钟仍未返回 summary、`SUCCESS`、canary 结果或 request_id，已中止。13:13:40 的第三次提交已完成 170 个 Timer 和独立 Instrument fleet/job 更新，Instrument canary 在有界 7 分钟阶段预算内返回 `context deadline exceeded`，因此未启用 Rule/Timer；真实 durable row、request_id 和 Kline canary 仍缺失。2026-09-09 已完成正式 Storage release、真实 View Reporter -> EventBus -> Monitor watermark 验收；stockcn Primary/View durable row 与 canary 证据仍缺失。 |
 
-已完成的本地验证包括 Storage、Collector、CLI、CloudNode、Monitor 的对应 `go test -race -count=1`，以及 `crypto`/`stockcn`/`providerprobe` 双入口构建、双入口 SCF 包构建和 `git diff --check`。Collector 全量 race 测试曾出现一次 `httptest` 回退测试的时序性失败，随后该包单独重跑通过；当前改动覆盖的 marketfetch/scfinvoker/serverless/provider/httpclient 与 CLI/CloudNode 目标测试均通过。freshness 方案的 focused race、本地 EventBus/SQLite E2E 和 `make release` 已通过；`make verify` 仍受既有 tradeeventpb deprecated protocol contract 阻断。正式控制面虽可连接，但本轮 publish 未形成可验收结果，故没有独立 Instrument Timer、N 个 Kline Timer、Monitor generic View watermark 或 Storage durable row 的新鲜生产证据。
+已完成的本地验证包括 Storage、Collector、CLI、CloudNode、Monitor 的对应 `go test -race -count=1`，以及 `crypto`/`stockcn`/`providerprobe` 双入口构建、双入口 SCF 包构建和 `git diff --check`。Collector 全量 race 测试曾出现一次 `httptest` 回退测试的时序性失败，随后该包单独重跑通过；当前改动覆盖的 marketfetch/scfinvoker/serverless/provider/httpclient 与 CLI/CloudNode 目标测试均通过。freshness 方案的 focused race、本地 EventBus/SQLite E2E 和 `make release` 已通过；`make verify` 仍受既有 tradeeventpb deprecated protocol contract 阻断。正式控制面虽可连接，但本轮 publish 未形成可验收结果，故没有独立 Instrument Timer、N 个 Kline Timer 或 Storage durable row 的新鲜生产证据。2026-09-09 已补齐 Monitor generic View watermark：Monitor 收到 `storage-view@storage` snapshot，且包含 crypto View 的 input/output/commit family；这只关闭 Monitor/Storage metrics 门禁，不替代 SCF 与 stockcn durable row 验收。
+
+**最新通用观测排障（2026-09-09）：** EventBus/metrics publisher 小消息探针正常；历史 archive consumer 已按停历史任务决定删除。Storage View 完整 metrics 快照约 517 KB，原 10 秒 timer timeout 不足，日志中的 `jetstream publish timeout: context deadline exceeded` 实际是过期的 reporter context，不是 Storage/Monitor 又引入了 K 线特殊逻辑。四份 Storage metrics timer 配置已统一改为 60 秒 timeout，仍每 30 秒触发；正式 Storage release 已部署到 `146.56.196.204`，三角色二进制 SHA256 均为 `34ae37c6161be9fbd352f979aabe6623499ba94cc3baf73ef18e1d2554e63be5`，Monitor 已在 11:22-11:23 连续收到 `storage-view@storage` snapshot 和 crypto View input/output/commit family。Storage/Monitor metrics 门禁已通过；SCF/stockcn durable row 门禁仍未通过。
+
+最新 codeCR 又发现 cron 慢任务会在 `report.Handler` 互斥锁前排队；已增加 `inFlight` 原子门禁并补充并发及恢复测试，确保 30 秒触发与 60 秒单次预算不会累积未完成 goroutine。针对本轮 SCF 发布阻塞，已将 Instrument canary 的 7 分钟超时提升为整个 canary 阶段预算，避免 5 次重试累积约 35 分钟；同时改为 request-local control client，保留 node/shard/attempt 和底层 InvokeFunction 错误上下文。独立 codeCR 复审无 P0/P1；相关 P2 已处理。仍保留 P2 风险：不可取消的自定义 Prometheus `Gather()` 若永久阻塞，单个 Handler 仍需等调用返回或重启恢复，正式窗口必须观察连续周期而不能用本地测试替代。
+
+**最新 SCF 发布结果（2026-09-09）：** 第三次正式命令于 12:34:27 提交，完成了 170 个 Kline Timer 与独立 Instrument Timer 的 fleet/job 更新，写入结果见 `artifacts/kline-freshness/20260909123427-publish.json`；但 13:13:40 的 Instrument canary 返回 `SCF instrument snapshot canary ... context deadline exceeded`，未启用 Rule/Timer，不能视为发布成功。独立 provider probe 显示 Sina 完整目录 57 页、5559 个标的、三交易所覆盖但耗时约 30 秒；EastMoney 当前页数/总量校验失败，Tencent 尚未实现 InstrumentFetcher，故下一步必须让独立 Instrument SCF 使用 900 秒函数预算，并回读真实 SCF 执行/Storage 写入耗时。该结果仍不能证明 Kline 已启用或已写入 Storage。
+
+**后续发布编排要求：** 不再使用一个可能长时间阻塞的 `--enable-stockcn` 聚合命令作为唯一成功信号。下一次发布按“disabled fleet -> job status -> Instrument canary -> Kline canary -> durable row/View/Monitor -> enable Timer/Rule”分阶段执行，并为每阶段保存可重试、脱敏的结果；任何超时或未知结果都保持 disabled，先清理半启用 fleet。
+
+> **最新发布链路修复（2026-09-09）：** codeCR 发现 900 秒 Instrument SCF 预算仍会被 Tencent SDK、CloudNode tRPC、Admin BFF 和 Gateway 的 360 秒 transport timeout 截断；已修复为 provider、CloudNode、Admin BFF、Gateway route 统一 960 秒，并已在 106 正式主机更新相关 Linux binary、配置和 route，回读 route timeout 为 960000。Reporter 重叠 tick 已改为显式 ErrInFlight，Monitor 保留上一轮 readiness，不把跳过误判为新鲜成功。第四次 publish 使用重新编译 CLI，artifact 为 artifacts/kline-freshness/20260909144844-publish.json；最终 canary、durable row 和 Monitor latest 回读完成前仍保持 NO-GO。
 
 ## 1. 已确认范围
 
@@ -37,7 +51,7 @@ Storage/Primary/View 不承载 K 线告警语义：Primary 只做通用数据写
 - `MarketProvider + KlineFetcher + InstrumentFetcher + Spec + Pipeline` 是整个市场采集模块的统一框架，现有 Binance K 线和 Instrument 快照必须一并迁入，不允许只为 A 股新增旁路框架。
 - 建立通用全市场 `InstrumentPipeline`：加密货币和 A 股都通过完整快照维护 Subject、SubjectSymbol 和 DatasetSubject，不再把 `symbol` 当成 Binance 私有数据类型。
 - 从完整快照生成 `ActiveInstrumentSet`，即当前需要采集的全市场有效标的池；文档和接口不再使用含义不直观的 `Universe`。
-- `stockcn.timer_function_count=N` 是发布配置，初始建议值为 200，不写死为 100；每个 Group 对应一个 Timer SCF 函数，Group ID 覆盖 `0..N-1`，不得静默丢弃超出容量的标的。
+- `stockcn.timer_function_count=N` 是发布配置，正式初始值为 170；每个 Group 对应一个 Timer SCF 函数，Group ID 覆盖 `0..N-1`，每个 Group 最多 40 个标的，不得静默丢弃超出容量的标的。
 - Provider 选择按 Group 做稳定、均衡分散，不使用每次请求重新 `rand()` 的无状态随机；Group 内标的只在 fallback 时切换 Provider。
 - 主 Provider 发生超时、限流、协议错误、空响应或无有效闭合 K 线时，同次 SCF 调用切换至候选链中的下一个 Provider。
 - 每个 Kline/Instrument Feed 声明单 IP 的请求并发、节奏、timeout 和 429 冷却；不设置跨全部 SCF 的 Provider 总请求配额。`probe-egress` 只用于观察出口分布，不参与发布或启用决策。
@@ -62,8 +76,8 @@ Storage/Primary/View 不承载 K 线告警语义：Primary 只做通用数据写
 
 以下内容是计划编写时记录的基线，不覆盖本节“执行状态”中的最新结论；其中提到的旧限制，若与后续 Task 的实现相冲突，以实现和验证记录为准。
 
-- Timer 控制面已能按 Dataset Subject 分片，但当前按排序切片而不是固定 Group Hash；每个函数、Environment、Timer Request 和 Executor 都硬限制最多 30 个标的。
-- 当前 `stockcn` 默认函数数是 300，配置层已经支持 `timer_function_count` 和地域自动分配；本计划把数量改为显式可配置 `N`，初始建议 200，并用真实 `ActiveInstrumentSet` 数量和 SCF 压测共同验证每 Group 安全容量。
+- Timer 控制面基线曾按排序切片而不是固定 Group Hash，并在每个函数、Environment、Timer Request 和 Executor 硬限制最多 30 个标的；目标实现改为固定 Group Hash 和每 Group 40 个标的。
+- 当前基线曾使用默认函数数 300、每函数最多 30 个标的；现改为显式配置 `timer_function_count=170`，并以 `measured_safe_group_size=40` 作为每 Group 的容量门槛。仍需用真实 `ActiveInstrumentSet` 数量和 SCF 压测验证容量，不得把 170 或 40 偷换成运行时自动扩缩容。
 - `marketfetch.Executor`、Handler、DNS 日志、Job route、SCF 入口和 Storage 构造仍直接依赖 Binance，不能只加一条 stock 规则上线。
 - 当前弱类型 `sources.Collector`/`CollectorRegistry` 虽按 source/market/data_type 注册，但 Timer Handler 绕过 Registry 直接构造 Binance Kline/Symbol Collector；统一框架必须替换这两个扩展面，不能并存。
 - 旧 Scheduler 曾在新任务无水位时隐式从 `now-1h` 生成 catchup，没有遵循显式 HistoryPolicy；当前模型必须由 `live_only/lookback/since` 决定唯一覆盖下界，缺口修复只接受显式 GapRepair 请求。
@@ -215,8 +229,8 @@ type InstrumentFetcher interface {
 路由固定为 `stockcn_equity_kline_1m_v1`，分片和 Provider 选择分两层完成：
 
 1. `ActiveInstrumentSet` 中每个 Subject 通过 Rendezvous Hash 稳定映射到 `group_id=0..N-1`；增加或删除少量标的只更新 Assignment，不创建或删除函数。只有容量不足并修改发布配置 N 时才重建函数集群，Storage 幂等 RowKey 吸收重新分片产生的小量重复执行。
-2. 一个 Group 固定对应一个 `stockcn` Timer SCF 函数。`required_group_size=ceil(active_subject_count/N)`，Reconciler 必须验证它不超过真实 SCF 压测得到的 `measured_safe_group_size`。初始建议 `N=200`，但配置、测试和验收都不得依赖该常量。
-3. 对 active Provider 生成按权重重复的 provider ring；以 `route_version + trading_date` 旋转 ring 后给 N 个 Group 分配主 Provider。等权时各 Provider 的函数数差值不超过 1；`N=200` 时三源为 67/67/66，四源为 50/50/50/50。
+2. 一个 Group 固定对应一个 `stockcn` Timer SCF 函数。`required_group_size=ceil(active_subject_count/N)`，Reconciler 必须验证它不超过真实 SCF 压测得到的 `measured_safe_group_size=40`。正式初始配置为 `N=170`，但配置、测试和验收仍需覆盖其他 N。
+3. 对 active Provider 生成按权重重复的 provider ring；以 `route_version + trading_date` 旋转 ring 后给 N 个 Group 分配主 Provider。等权时各 Provider 的函数数差值不超过 1；`N=170` 时三源为 57/57/56，四源为 43/43/42/42。
 4. 每个 Group 的第二候选在剩余 Provider 间均衡分散，避免一个主源故障后全部流量涌向同一备用源。交易日内 `candidate_chain` 稳定，不依赖进程内随机种子。
 5. 新浪、腾讯等接口按出口 IP 控制频率，不设置跨全部 SCF 的 Provider 总请求额度。每个函数按 Feed 的 `RateLimitPolicy` 执行本地 token bucket、并发 semaphore 和 429 cooldown；Fetcher 内不得隐藏 HTTP 重试。
 6. 发布后可对目标 Space 的 Timer 函数执行 egress probe，记录结果数、非空 IP 数和去重 IP 数用于诊断；Timer 与 `dataset_stockcn_equity_kline` Rule 的启用只依赖函数/Trigger 回读、Provider canary、Assignment 和 Storage 验证，不再依赖出口 IP 数量。
@@ -621,7 +635,7 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
 - [ ] **Step 1: 写可配置 Group 与 Provider 分布红灯测试**
 
-  断言每个 Subject 通过 Rendezvous Hash 恰好落入 `group_id=0..N-1` 中一个 Group；输入顺序变化不改变结果；增删少量 Subject 不造成全量漂移。以初始配置 `N=200` 验证三个等权 active Kline Feed 的主 Group 分布为 67/67/66，四个等权 Feed 为 50/50/50/50；再使用其他 N 验证任意两个 Provider 的分配数差值不超过 1。第二候选也在其余 Provider 间均衡分散。disabled、shadow、不支持目标交易所或 Feed Spec 不满足 `1m + CompleteOHLCV` 的 Provider 不进入候选链。
+  断言每个 Subject 通过 Rendezvous Hash 恰好落入 `group_id=0..N-1` 中一个 Group；输入顺序变化不改变结果；增删少量 Subject 不造成全量漂移。以正式配置 `N=170` 验证三个等权 active Kline Feed 的主 Group 分布为 57/57/56，四个等权 Feed 为 43/43/42/42；再使用其他 N 验证任意两个 Provider 的分配数差值不超过 1。第二候选也在其余 Provider 间均衡分散。disabled、shadow、不支持目标交易所或 Feed Spec 不满足 `1m + CompleteOHLCV` 的 Provider 不进入候选链。
 
 - [ ] **Step 2: 写限频与 fallback 红灯测试**
 
@@ -883,11 +897,11 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
 - [ ] **Step 1: 写恰好 N Group 的分片红灯测试**
 
-  对 `ActiveInstrumentSet` 和任意合法 `timer_function_count=N` 创建恰好 N 个逻辑 Group 和 N 份 stock assignment；用初始建议值 200 验证 Group ID 覆盖 `0..199`，并用其他 N 防止实现写死。每个 Subject 恰好出现一次，输入顺序变化不改变归属。Group key 和 assignment hash 包含 `market_id + route_id + dataset_id + frequency + instrument_set_version + coverage_start_time`，不包含最终 Provider；route version 变更触发环境更新。函数节点少于或多于配置 N 都返回配置错误，不静默改变目标数。
+  对 `ActiveInstrumentSet` 和任意合法 `timer_function_count=N` 创建恰好 N 个逻辑 Group 和 N 份 stock assignment；用正式配置 `N=170` 验证 Group ID 覆盖 `0..169`，并用其他 N 防止实现写死。每个 Subject 恰好出现一次，输入顺序变化不改变归属。Group key 和 assignment hash 包含 `market_id + route_id + dataset_id + frequency + instrument_set_version + coverage_start_time`，不包含最终 Provider；route version 变更触发环境更新。函数节点少于或多于配置 N 都返回配置错误，不静默改变目标数。
 
 - [ ] **Step 2: 写容量和环境预算红灯测试**
 
-  Reconciler 计算 `required_group_size=ceil(active_subject_count/N)`，并与配置中来自真实压测的 `measured_safe_group_size` 比较。超限直接 NO-GO，不截断 Subject，也不在运行时自动增删函数；运维调整 N 后重新发布。新环境只包含 `group_id`、该 Group 的 SubjectID、主/备 Provider 路由、route/config version、calendar version、`coverage_start_time` 和少量特殊 SubjectSymbol override；普通股票 symbol 在 Adapter 中严格转换，不携带全市场四源映射。移除 stock 路径中每函数/Timer/Executor 固定 30 个标的的限制，改为 stock profile 安全容量；CloudNode 仍按真实 UTF-8 字节校验完整 4KB Environment。
+  Reconciler 计算 `required_group_size=ceil(active_subject_count/N)`，并与配置中来自真实压测的 `measured_safe_group_size=40` 比较。超限直接 NO-GO，不截断 Subject，也不在运行时自动增删函数；运维调整 N 后重新发布。新环境只包含 `group_id`、该 Group 的 SubjectID、主/备 Provider 路由、route/config version、calendar version、`coverage_start_time` 和少量特殊 SubjectSymbol override；普通股票 symbol 在 Adapter 中严格转换，不携带全市场四源映射。每个 Kline Group 的硬容量为 40，CloudNode 仍按真实 UTF-8 字节校验完整 4KB Environment。
 
 - [ ] **Step 3: 写 stock Handler 红灯测试**
 
@@ -900,7 +914,7 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
   go test -run 'TestBuildAssignments.*ConfiguredGroups|TestBuildManagedEnvironment.*Stock|TestSCFRuntime|TestStockCNHandler' ./internal/marketfetch ./internal/serverless/...
   ```
 
-  Expected: FAIL，现有默认值为 300、标的硬上限为 30，公共 SCF Runtime 和 stockcn 入口尚不存在。
+  Expected: FAIL，基线默认值为 300、标的硬上限为 30；目标实现改为公共 SCF Runtime、显式 `N=170` 和每 Group 40 个标的。
 
 - [ ] **Step 5: 提取公共 Handler factory 并建立两个 composition root**
 
@@ -908,7 +922,7 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
 - [ ] **Step 6: 设置按 Group 错峰的交易时段 Timer**
 
-  Timer 配置提供 `stagger_start_second`、`stagger_window_seconds` 和经压测得到的 `max_starts_per_second`；每个 Group 的秒位按 `start + group_id % window` 稳定计算。初始可使用第 5 到 39 秒的 35 秒窗口，`N=200` 时每秒最多 6 个 Group。发布前验证 `ceil(N/window) <= max_starts_per_second`，且最晚 Group 仍有足够时间在下一分钟与 15 秒硬 deadline 前完成。Provider 主 Group 在窗口内均匀分布；CloudNode 创建后必须回读每个函数的 cron、enabled、Message、版本和 `group_id`，不能只信提交成功。
+  Timer 配置提供 `stagger_start_second`、`stagger_window_seconds` 和经压测得到的 `max_starts_per_second`；每个 Group 的秒位按 `start + group_id % window` 稳定计算。初始可使用第 5 到 39 秒的 35 秒窗口，`N=170` 时每秒最多 5 个 Group。发布前验证 `ceil(N/window) <= max_starts_per_second`，且最晚 Group 仍有足够时间在下一分钟与 15 秒硬 deadline 前完成。Provider 主 Group 在窗口内均匀分布；CloudNode 创建后必须回读每个函数的 cron、enabled、Message、版本和 `group_id`，不能只信提交成功。
 
 - [ ] **Step 7: 验证并提交**
 
@@ -962,7 +976,7 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
 - [ ] **Step 2: 写 CLI 可配置函数数与 Feed 配置红灯测试**
 
-  `stockcn.timer_function_count` 必须是显式正整数，初始建议值为 200，但测试还要覆盖其他 N。启用地域按配置自动均衡分配，每地域不超过平台上限 50，且地域分配总和必须恰好等于 N。`stockcn` 允许 route-based Timer 和 stagger；必须配置 Storage target、N 个 Kline Timer 节点、一个独立 Instrument snapshot Timer 节点、`HistoryPolicy`、stock package、`measured_safe_group_size`、错峰容量，以及每个 Kline/Instrument Feed 的单 IP `RateLimitPolicy`。百度 Kline 默认 `mode=shadow`，Instrument 可按 Task 1 证据独立启用。crypto 的函数数和调度策略保持原配置，不被 stock 默认值覆盖。
+  `stockcn.timer_function_count` 必须是显式正整数，正式初始值为 170；测试还要覆盖其他 N。启用地域按配置自动均衡分配，每地域不超过平台上限 50，且地域分配总和必须恰好等于 N。`stockcn` 允许 route-based Timer 和 stagger；必须配置 Storage target、N 个 Kline Timer 节点、一个独立 Instrument snapshot Timer 节点、`HistoryPolicy`、stock package、`measured_safe_group_size=40`、错峰容量，以及每个 Kline/Instrument Feed 的单 IP `RateLimitPolicy`。百度 Kline 默认 `mode=shadow`，Instrument 可按 Task 1 证据独立启用。crypto 的函数数和调度策略保持原配置，不被 stock 默认值覆盖。
 
 - [ ] **Step 3: 运行红灯测试**
 
@@ -1023,6 +1037,12 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 - Modify: `modules/monitor/internal/bootstrap/default_alerts.go`
 - Modify: `modules/storage/internal/observability/view_metrics.go`
 - Modify: `modules/storage/internal/service/view/event_apply.go`
+- Modify: `modules/storage/config/storage_view/trpc_go.yaml`
+- Modify: `modules/storage/config/trpc_go.yaml`
+- Modify: `modules/storage/config/trpc_go.primary.yaml`
+- Modify: `modules/storage/config/trpc_go.node.yaml`
+- Modify: `packages/report/handler.go`
+- Modify: `packages/report/handler_test.go`
 - Modify: `docs/采集任务管理.md`
 - Reference: `docs/superpowers/plans/2026-09-08-kline-freshness-and-gap-audit-removal.md`
 
@@ -1036,7 +1056,11 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 
 - [x] **Step 3: 接入现有 reporter/watchdog**
 
-  K 线 freshness 使用现有 tRPC MetricSnapshot/EventBus/Monitor Consumer 链路，默认 30 秒评估，不新增外部 HTTP `/metrics` 抓取，也不改变其他告警策略的独立调度周期。Collector 的 Feed、fallback、Group 和 egress 指标只做运行诊断，不承担 View freshness 判定。
+  K 线 freshness 使用现有 tRPC MetricSnapshot/EventBus/Monitor Consumer 链路，默认 30 秒评估，不新增外部 HTTP `/metrics` 抓取，也不改变其他告警策略的独立调度周期。Storage metrics reporter 的单次 timer timeout 统一为 60 秒，以覆盖大 View 快照的采集、编码和发布耗时；这不是把告警周期改为 60 秒，也不是 K 线专用配置。Collector 的 Feed、fallback、Group 和 egress 指标只做运行诊断，不承担 View freshness 判定。
+
+- [x] **Step 3.5: 验证通用 reporter timeout 修复**
+
+  已在正式 Storage 主机以部署后的新日志时间为边界观察 11:22-11:23 的连续 reporter 周期；View `moox_storage_report_errors_total=0`，Monitor latest 收到 `storage-view@storage` 的 input/output/commit watermark family 和 crypto View series。11:18-11:20 的旧 timeout 不计入新窗口。
 
 - [x] **Step 4: 覆盖目录失败和标的缺失**
 
@@ -1198,7 +1222,7 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 - [ ] 所有 active A 股恰好映射到配置的 N 个 Group，每个 Subject 只出现一次，`required_group_size=ceil(active_subject_count/N) <= measured_safe_group_size`，没有截断或运行时自动增删函数。
 - [ ] stock 云上实际恰好存在 N 个 Timer 函数，`group_id=0..N-1` 无缺失或重复，地域分配总和、错峰秒位和每个 Trigger 均经 CloudNode 回读验证。
 - [x] 发布后 egress probe 已降级为诊断数据，不再作为 Timer 或 `dataset_stockcn_equity_kline` Rule 的启用门禁。
-- [ ] 三个等权 active Kline Provider 的主 Group 分布差值不超过 1；以 `N=200` 验证 67/67/66，四源为 50/50/50/50，第二候选不会集中到单一 Provider。
+- [ ] 三个等权 active Kline Provider 的主 Group 分布差值不超过 1；以正式 `N=170` 验证 57/57/56，四源为 43/43/42/42，第二候选不会集中到单一 Provider。
 - [ ] 每个 Kline/Instrument Feed 的单 IP 请求节奏、burst、并发、429 冷却和 timeout 来自验证后的 RateLimitPolicy；fallback 重新取得候选 Feed 的本地令牌，不存在跨全部函数的 Provider 总配额 Planner。
 - [ ] 首选源失败时最多一次 fallback，SCF p99 仍小于 12 秒，硬 deadline 小于 15 秒。
 - [ ] 每根 `dataset_stockcn_equity_kline` 只来自一个 Provider，volume 单位为 shares，amount 单位为 CNY，并完整保留来源追溯字段。
@@ -1206,12 +1230,13 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
 - [ ] `live_only/lookback/since` 分别建立正确且持久化的覆盖下界，历史 Backfill 受批次、并发、速率比例和 Provider 历史能力约束，Realtime 始终优先。
 - [ ] 同一 Subject/分钟不会同时进入 Realtime、Backfill 和 GapRepair，单 Dataset 不发生不同 BatchKind 的并发来源覆盖。
 - [ ] Monitor freshness 只在 crypto 24x7 或 stockcn 交易日历/交易时段内判断最新 K 线；历史 Backfill 和已知缺口 GapRepair 均为显式、有界请求，不自动扫描或补洞。
+- [x] Storage View/Primary/Node 的 metrics reporter 每 30 秒触发、单次 timeout 为 60 秒，并在新部署后的至少两个周期成功进入 Monitor；该配置属于通用观测链路，不得下沉为 K 线特殊分支。正式证据：Monitor `storage-view@storage` 在 03:22:00Z、03:22:30Z 接收到 snapshot，View reporter error counter 为 0。
 - [ ] 交易日历过期 fail closed，并在到期前 14 天告警。
 - [ ] stock 与 crypto 都通过 InstrumentPipeline 维护完整快照；一次快照不跨 Provider 拼页，失败不替换旧 `ActiveInstrumentSet`，连续两个完整日快照缺失后才下线标的。
 - [ ] SH/SZ/BSE 普通 symbol 使用实测固定的严格转换，特殊 symbol 来自完整 InstrumentSnapshot 的紧凑 override，不在 SCF 内启发式猜测。
 - [ ] CloudNode 回读 Timer 与 Environment，完整环境小于 4096 bytes。
 - [ ] `crypto` 实时 K 线、Instrument 快照、补采和发布测试全部通过。
-- [ ] 独立 codeCR 无未处理 P0/P1/P2（前序复审无可复现问题；最新复审超时，未计为通过）。
+- [ ] 独立 codeCR 无未处理 P0/P1；当前 P2 仅为 Prometheus `Gather()` 不可取消导致的自定义 Collector 永久阻塞残余风险，需在正式运行窗口通过连续周期观测并记录，不得宣称已由本地测试消除。
 - [ ] Instrument 快照、容量、N 函数、出口 IP 唯一性、单 IP 限频、fallback、历史 Backfill、GapRepair 和回滚均有真实运行证据。
 
 ## 7. 实施顺序与停止条件

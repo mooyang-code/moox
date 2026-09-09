@@ -43,6 +43,15 @@ type primaryHistoryRangeReader struct {
 
 type primaryHistoryFieldReader struct{}
 
+type backfillSubjectCatalogMetadata struct {
+	maintenanceMetadata
+	subjects []*pb.Subject
+}
+
+func (m *backfillSubjectCatalogMetadata) ListSubjects(context.Context, *pb.ListSubjectsReq, ...client.Option) (*pb.ListSubjectsRsp, error) {
+	return &pb.ListSubjectsRsp{RetInfo: successRetInfo(), Subjects: m.subjects, PageResult: &pb.PageResult{HasMore: false}}, nil
+}
+
 func (*primaryHistoryFieldReader) ReadFields(context.Context, *pb.PrimaryReadFieldsReq, ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
 	return &pb.PrimaryReadFieldsRsp{RetInfo: successRetInfo()}, nil
 }
@@ -93,6 +102,65 @@ func TestPeriodBackfillUsesPrimaryInsteadOfCopyingActiveAndReportsRowsWritten(t 
 	}
 	if len(reader.selectors) != 0 {
 		t.Fatalf("period rebuild trusted subject bindings: selectors=%v", reader.selectors)
+	}
+}
+
+func TestBackfillRequestLimiterSerializesStorageRequests(t *testing.T) {
+	limiter := newBackfillRequestLimiter(10 * time.Millisecond)
+	ctx := context.Background()
+	if err := limiter.wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if err := limiter.wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed < 8*time.Millisecond {
+		t.Fatalf("second request started after %s, want at least 8ms", elapsed)
+	}
+}
+
+func TestBackfillSubjectMatchesInstrumentMarket(t *testing.T) {
+	tests := []struct {
+		name    string
+		subject *pb.Subject
+		market  string
+		want    bool
+	}{
+		{name: "instrument attribute", subject: &pb.Subject{SubjectId: "BTC-USDT-SPOT", Attributes: map[string]string{"instrument_type": "spot"}}, market: "spot", want: true},
+		{name: "opposite instrument", subject: &pb.Subject{SubjectId: "BTC-USDT-SWAP", Attributes: map[string]string{"instrument_type": "swap"}}, market: "spot", want: false},
+		{name: "legacy id fallback", subject: &pb.Subject{SubjectId: "BTC-USDT-SWAP"}, market: "swap", want: true},
+		{name: "unknown market is excluded", subject: &pb.Subject{SubjectId: "BTC-USDT"}, market: "spot", want: false},
+		{name: "empty market accepts subject", subject: &pb.Subject{SubjectId: "BTC-USDT"}, market: "", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := backfillSubjectMatchesMarket(tt.subject, tt.market); got != tt.want {
+				t.Fatalf("backfillSubjectMatchesMarket(%q, %q) = %v, want %v", tt.subject.GetSubjectId(), tt.market, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCapacityMaintenanceRequiresSubjectCatalog(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata MetadataClient
+		wantOK   bool
+		wantWhy  string
+	}{
+		{name: "metadata client without subject catalog", metadata: &maintenanceMetadata{}, wantWhy: "subject_catalog_unavailable"},
+		{name: "empty subject catalog", metadata: &backfillSubjectCatalogMetadata{}, wantWhy: "subject_catalog_empty"},
+		{name: "usable subject catalog", metadata: &backfillSubjectCatalogMetadata{subjects: []*pb.Subject{{SubjectId: "BTC-USDT-SPOT", Attributes: map[string]string{"instrument_type": "spot"}}}}, wantOK: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &Service{metadataClient: tt.metadata}
+			ok, reason := svc.capacityMaintenanceCatalogReady(context.Background(), nil, &pb.View{SpaceId: "crypto", PrimaryDatasetId: "dataset_binance_spot_kline_1m"})
+			if ok != tt.wantOK || reason != tt.wantWhy {
+				t.Fatalf("capacityMaintenanceCatalogReady() = (%v, %q), want (%v, %q)", ok, reason, tt.wantOK, tt.wantWhy)
+			}
+		})
 	}
 }
 

@@ -29,11 +29,17 @@ type Publisher interface {
 
 type Connector func(context.Context, Config) (Publisher, error)
 
+// ErrInFlight means a timer tick was skipped because the previous snapshot
+// is still gathering or publishing. Callers should retain the previous
+// health state rather than treating this as a successful fresh report.
+var ErrInFlight = errors.New("metrics report already in flight")
+
 type Handler struct {
 	cfg             Config
 	gatherer        prometheus.Gatherer
 	connector       Connector
 	handleMu        sync.Mutex
+	inFlight        atomic.Bool
 	mu              sync.Mutex
 	client          Publisher
 	sequence        atomic.Uint64
@@ -88,6 +94,15 @@ func newHandler(cfg Config, registerer prometheus.Registerer, gatherer prometheu
 }
 
 func (h *Handler) Handle(ctx context.Context) error {
+	// Cron invokes each tick in a new goroutine. Do not queue a second snapshot
+	// behind a slow gather/publish: the next tick can use the following cadence.
+	// The handle mutex below still serializes publisher state for manual calls
+	// that arrive after the current report has finished.
+	if !h.inFlight.CompareAndSwap(false, true) {
+		return ErrInFlight
+	}
+	defer h.inFlight.Store(false)
+
 	// A handler owns one monotonic report sequence and one reconnectable
 	// publisher. Serializing timer/manual invocations prevents a stale failing
 	// call from invalidating a publisher installed by a concurrent call.
