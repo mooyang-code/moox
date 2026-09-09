@@ -4,9 +4,15 @@
 
 **Goal:** 删除 Collector 中自动周期 gap audit 及其 Storage 读放大路径；Storage 底层只提供通用的 View 数据进入/成功写入观测，不识别 K 线语义；由 Monitor 针对指定 View 判断 K 线业务时间是否持续停更并产生可恢复告警，最后完成正式编译、SCF 发布和 106 主机真实端到端验收。
 
+> **最新方案决策（2026-09-09）：** Storage Primary、Storage 公共读写层和 Collector 都不承载 K 线监控特殊逻辑；不得在这些层判断 dataset 名称、调用 `observability.IsKlineDatasetID` 或维护 K 线专用指标。只有 View 在消费 Primary 变更时，在“事件完成路由/过滤”和“active index 成功写入”两个边界上，按通用 `dataset_id + view_id + subject_id + freq + series_tag` 上报 input/output/commit 观测。K 线语义、交易时段、freshness 窗口、连续失败/恢复和告警状态全部属于 Monitor。
+>
+> **采集与目录边界：** 全市场标的目录是独立的 daily Instrument SCF，每天执行一次完整快照；Sina、Tencent、EastMoney 等 Instrument API 可并行请求并合并为完整结果，单一来源失败时继续使用其他来源，不能用不完整快照替换当前 `ActiveInstrumentSet`。逐标的 K 线由独立的定时 Kline SCF 执行，不要求每个周期重新拉全市场目录；它消费最近一次成功的 active subject 集合，控制面 `/data/subjects` 的最近成功集合作为目录 API 暂时失败时的兜底。少量标的失败、缺失或单一 Provider 报错必须隔离到标的/Provider 候选链，不能阻塞整组或全市场采集。
+>
+> **告警成本与节奏：** 不再周期性扫描历史桶，也不依赖外部 HTTP `/metrics` 抓取来判断告警。现有 reporter/watchdog 的 30 秒周期只是 View 观测进入 Monitor 的传输与评估节奏，不是所有告警策略的统一固定周期；只有 K 线 freshness 默认使用该周期，其他 Monitor check 保留各自的调度配置。告警只比较指定 View 的最新 output `data_time`，允许“10:00 有、10:01 缺、10:02 恢复”，仅连续超过 freshness 窗口才 firing。
+
 > **执行状态（2026-09-09）：** 自动 gap audit 删除、Storage 通用 View input/output/commit 观测、Primary 解耦和 Monitor 指定 View freshness 主链路已实现。最新独立 codeCR 未发现 P0/P1；此前发现的 4 个 P1 已全部处理：无 output 静默、动态 label/series 无界、退市/旧 subject 污染、evaluation interval 被 watchdog 绕过；active/replacement watermark 丢失和 disabled rule 不收敛也已处理。Monitor 现在从 Storage Metadata `ListDatasetSubjects` 分页读取并短缓存 active subject catalog，只对仍 active 的 canonical subject 判定 freshness；metadata 不可用时该组显式失败，不回退为健康。新增的 Monitor E2E 已覆盖 reporter-shaped snapshot -> JetStream -> Monitor latest -> Kline evaluator；完整生产 Storage->Reporter->Monitor->Alert 证据仍未形成，不能写成正式验收。
 
-> **最新运行负载结论（2026-09-09）：** 对上一次中止后的控制面只读盘点发现 `crypto` 的 5 条 Binance 规则仍启用，`stockcn` 的 `builtin-stockcn-kline-1m` 也因中止发生了部分启用；已通过 `DisableTaskRule` 逐条停用，保留历史数据和运行记录。Storage 日志进一步确认拖垮链路的不是已删除的 Collector gap audit，而是 Storage View 的历史 maintenance/backfill：`view_crypto_spot_kline_1m`、`view_mooxsys_service_metrics` 等任务持续做 Primary 历史扫描，出现百万行扫描上限、View series capacity、EventBus publish timeout 和 Collector 到 Storage 的 tRPC timeout。已在真实 Storage 主机持久化 `MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED=1` 并仅重启 `storage-view`；启动日志确认 `historical maintenance disabled`，未删除 Primary/View 数据。当前 stockcn publish 已在关闭上述负载后重新提交，仍必须等待最终 job/canary/readback，不得把“正在更新 fleet”写成正式通过。
+> **最新运行负载结论（2026-09-09）：** 对上一次中止后的控制面只读盘点发现 `crypto` 的 5 条 Binance 规则仍启用，`stockcn` 的 `builtin-stockcn-kline-1m` 也因中止发生了部分启用；已通过 `DisableTaskRule` 逐条停用，保留历史数据和运行记录。Storage 日志进一步确认拖垮链路的不是已删除的 Collector gap audit，而是 Storage View 的历史 maintenance/backfill：`view_crypto_spot_kline_1m`、`view_mooxsys_service_metrics` 等任务持续做 Primary 历史扫描，出现百万行扫描上限、View series capacity、EventBus publish timeout 和 Collector 到 Storage 的 tRPC timeout。已在真实 Storage 主机持久化 `MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED=1` 并仅重启 `storage-view`；启动日志确认 `historical maintenance disabled`，未删除 Primary/View 数据。下一次 stockcn publish 尚未重新提交，必须先完成控制面/Timer/Rule 只读盘点和 Storage readiness 复核；不得把“正在更新 fleet”写成正式通过。
 
 > **最新真实环境证据（2026-09-09 07:45，Asia/Shanghai）：** Storage 按代码 commit `8bc52c941ad796db7d4fc1eb2a974b6e4ece2e99` 发布，Linux Storage 三个 binary hash 一致；部署窗口内 `setup verify-storage --host storage` 已通过，证明 Node/Primary/View `ready`、Schema v10、DataNode `storage-node-0/READY`、20 datasets。随后发现 `MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED` 没有进入 storage-view 进程，已在远端 `config/runtime.env` 持久化为 `1` 并重启；07:42:10 日志确认 historical maintenance disabled，未删除数据，但 NATS consumer 仍有一次 rebind/disconnect，需要后续 readiness 复核。Control `setup deploy-control` 返回 `ready`。
 >
@@ -14,7 +20,7 @@
 
 > **最新独立 codeCR 结论（2026-09-09）：** P1-1：View 没有 output watermark 时不能静默跳过，否则 View route/consumer/写入故障没有 Kline 告警；已改为 `no_observation` 失败。P1-2：六个动态 label 未限长且 GaugeVec 无上限，可能让 Reporter snapshot 超过 100000 samples；已限制单进程观测 series 为 20000、label 为 256 bytes，并由 Monitor 保持 100000 行有界读。P1-3：旧 producer/退市 subject 可能留在 MetricLatest/GaugeVec；已增加 Metadata `ListDatasetSubjects` 分页、active catalog 短缓存、无 active 观测的 stale 计数和 catalog error 显式失败。P1-4：`evaluation_interval` 过去只写 check metadata，实际每 30 秒仍 Evaluate；已在 business freshness reporter 内按 interval 节流，并覆盖测试。P2-1：A/B replacement 写入失败可能掩盖 active A 已成功写入的 output watermark；已提前上报 active 成功部分。P2-2：禁用/删除 Kline rule 后 firing state 可能不恢复；已增加 `disabled`/`no_longer_expected` 收敛。P2-3：本地 E2E 仍是 reporter-shaped snapshot -> JetStream -> Monitor latest -> evaluator，未覆盖同一条真实 Storage View -> Reporter -> EventBus -> Monitor -> notification 闭环；保留为正式验收未完成项。以上结论覆盖代码、符号和触发条件；本地单测不能替代 P2-3 或正式 SCF/Storage readback。
 
-**Architecture:** Storage View 在事件进入并完成路由后上报通用 input watermark，在 active View index 实际成功写入后上报通用 output `data_time` 和 `commit_timestamp`；Storage Primary 不创建、不判断、不维护任何 K 线专用指标。指标标签固定为 `space_id + view_id + dataset_id + subject_id + freq + series_tag`，不使用 provider symbol。服务自身的 tRPC metrics timer 每 30 秒把这些值通过现有 MetricSnapshot/EventBus/Monitor Consumer 写入 latest；Monitor 不抓 HTTP `/metrics`，而是在同一 watchdog 周期读取指定 View 的 output latest，按 `view_id + frequency` 聚合，只对持续超过阈值的标的组告警，input/output 差异仅用于诊断。10:00 有数据、10:01 缺失、10:02 恢复不会触发告警，也不会扫描内部桶缺口。历史 Backfill、显式 GapRepair、HistoryPolicy 和 K 线 Pipeline 合同保留，但 Scheduler 不再自动查询 Storage 触发历史补采。
+**Architecture:** Storage View 消费 Primary 变更，在事件完成路由/过滤后上报通用 input watermark，在 active View index 实际成功写入后上报通用 output `data_time` 和 `commit_timestamp`；Storage Primary、公共 Storage 层和 Collector 不创建、不判断、不维护任何 K 线专用指标。指标标签固定为 `space_id + view_id + dataset_id + subject_id + freq + series_tag`，不使用 provider symbol。服务自身的 tRPC metrics timer 每 30 秒把这些值通过现有 MetricSnapshot/EventBus/Monitor Consumer 写入 latest；Monitor 不抓 HTTP `/metrics`，而是在自身配置的 watchdog 周期读取指定 View 的 output latest，按 `view_id + frequency` 聚合，只对持续超过阈值的标的组告警，input/output/commit 差异仅用于诊断。10:00 有数据、10:01 缺失、10:02 恢复不会触发告警，也不会扫描内部桶缺口；30 秒只是 K 线 freshness 的默认观测/评估周期，不约束其他告警。历史 Backfill、显式 GapRepair、HistoryPolicy 和 K 线 Pipeline 合同保留，但 Scheduler 不再自动查询 Storage 触发历史补采。
 
 **Tech Stack:** Go modules、Prometheus client_golang、tRPC timer、NATS JetStream EventBus、GORM/SQLite、`packages/marketcalendar`、YAML 配置、现有 `moox-cli collector function publish`、Storage ReadTimeSeriesRows/CLI 数据读回。
 
@@ -31,6 +37,7 @@
 7. **交易时段。** crypto 规则全天生效；stockcn 规则只在 `cn_stock` 交易日且 `09:30-11:30` 或 `13:00-15:00` 生效，午休、收盘、周末、节假日不判 stale。日历超出覆盖范围时输出 `calendar_unknown` 并跳过该轮 K 线告警，不伪造健康或失败。
 8. **timer 口径。** K 线 View freshness 继续由 Monitor 现有 30 秒 watchdog/metrics timer 驱动，不新增外部 Prometheus 抓取；这不表示所有告警策略都固定 30 秒，也不把 `/metrics` 当生产告警源。
 9. **生产验收是真实验收。** 本地单测、临时 SQLite、mock EventBus、SCF package build 都不能替代真实 Tencent Cloud publish、CloudNode/SCF readback、SCF -> Primary durable row、View durable row、Monitor latest 和告警状态。没有控制面/腾讯云/106 SSH 凭证时，结论只能是“未完成生产验收”。
+10. **目录与 K 线采集解耦。** 全市场 Instrument 目录每天由独立 SCF 完整刷新；Kline Timer 不因每周期目录 API 失败而清空或阻塞，优先消费最近一次成功的 `ActiveInstrumentSet`，必要时使用控制面 `/data/subjects` 最近成功集合。目录快照允许多 Provider 并行合并，但必须以完整性校验通过的结果替换旧版本；单标的/单 Provider 失败只能触发有界 fallback 或该标的失败，不得阻塞其他标的。
 
 ## 2. 文件责任分解
 
@@ -429,7 +436,7 @@ Expected: working tree 状态、commit、release archive、CLI SHA 记录到脱�
 
 - [x] **Step 3: 先停历史和 crypto 负载，再发布 stockcn。** 控制面已停用 `crypto` 的 5 条 Binance Kline/Instrument 规则，以及上次中止残留的 `stockcn` Kline 规则；Storage 主机已将 `MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED=1` 持久化到 `config/runtime.env`，重启 `storage-view` 后在 07:42:10 日志确认 historical maintenance disabled。该动作只停止运行负载，不删除历史数据；重启后的 NATS rebind/disconnect 仍须在下一轮发布前复核。stockcn 规则只有在后续 publish 的全部门禁通过后才允许重新启用。
 
-- [ ] **Step 4: 用真实控制面提交 stockcn SCF publish。** 本轮已真实提交，但 59 分 48 秒无 summary 后中止；控制面至少出现了 Instrument Timer 更新，不能假设全部 fleet/Rule 状态一致。下一次执行前必须只读回 170 个 Kline Timer、独立 Instrument Timer、每个 job、Timer enabled/assignment 和 Rule 状态，清理半启用状态后再提交；最终仍须确认所有 job `SUCCESS`。
+- [ ] **Step 4: 用真实控制面提交 stockcn SCF publish。** 上一轮已真实提交，但 59 分 48 秒无 summary 后中止；控制面至少出现了 Instrument Timer 更新，不能假设全部 fleet/Rule 状态一致，也不能直接重试。下一次执行前必须只读回 170 个 Kline Timer、独立 Instrument Timer、每个 job、Timer enabled/assignment 和 Rule 状态，先清理半启用状态并复核 Storage readiness，再提交；最终仍须确认所有 job `SUCCESS`。Instrument daily Timer 与 Kline Timer 必须是两个独立 fleet，标的目录失败时 Kline 继续使用最近成功集合，不得在 Kline SCF 内重新拉全市场目录。
 
 ```bash
 ./bin/moox-cli collector function publish submit \
@@ -480,7 +487,7 @@ Acceptance requires canary response `success=true`、真实 provider request、`
 
 实际字段名、Gateway route 和 Storage auth 按 `moox.toml` 既有配置解析；`data rows export` 的 selector range read 默认经过 active View，不能单独作为 Primary durable-row 证据。Primary 必须另外使用 Storage 内部 `storage-view` 身份调用 `ReadTimeSeriesRows` 的历史路由（或同等只读 DataNode history route），View 则使用 Access route 读取 active View；两份 request/response 都保存脱敏 JSON。Primary 和 View 都必须存在相同业务周期的 `data_time`，View 不得只返回旧 active index。
 
-- [ ] **Step 7: 验证通用 View 指标和 Monitor latest。** 未通过正式窗口读回。Monitor SQLite 仍有 stockcn `dataset:collector:dataset_stockcn_equity_kline:1m` 为 `down/尚未上报`；没有本次 SCF 对应的三个通用 View metric family、canonical subject、`freq=1m`、`series_tag` 和 `observed_at` 证据。先修复 SCF 与 View readback，再复核 reporter/EventBus/Monitor 链路。
+- [ ] **Step 7: 验证通用 View 指标和 Monitor latest。** 未通过正式窗口读回。Monitor SQLite 仍有 stockcn `dataset:collector:dataset_stockcn_equity_kline:1m` 为 `down/尚未上报`；没有本次 SCF 对应的三个通用 View metric family、canonical subject、`freq=1m`、`series_tag` 和 `observed_at` 证据。先修复 SCF 与 View readback，再复核 reporter/EventBus/Monitor 链路。K 线判断只能在 Monitor 完成，Storage/Primary/View 侧不得出现 Kline dataset 名称判断或专用告警分支。
 
 ```sql
 SELECT c_metric_name, c_labels_json, c_value, c_observed_at

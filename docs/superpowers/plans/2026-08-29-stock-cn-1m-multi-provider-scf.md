@@ -6,22 +6,26 @@
 
 **Architecture:** 建立 `crypto` 与 `stockcn` 共用的强类型市场采集框架：`MarketProvider` 表示外部数据源身份，同一个 Provider 可同时实现 `KlineFetcher`、`InstrumentFetcher` 等能力；每类 Fetcher 通过 `KlineSpec`、`InstrumentSpec` 描述静态接口规格，通过独立 Pipeline 完成取数、标准化、校验和 Storage 写入。Collector 从完整 `InstrumentSnapshot` 生成当前 `ActiveInstrumentSet`（全市场有效标的池），按发布配置稳定映射到 `N` 个 Kline Timer Group/SCF 函数，再给各 Group 均衡分配主 Provider 与候选链；stockcn 的全市场 Instrument 快照由独立的单函数每日 Timer 执行，不与 Kline Timer 共用触发器或标的环境。每个函数使用独立出口 IP，并执行 Feed 级单 IP 并发、节奏和 429 冷却。两个市场共用 Registry、Fetcher 契约、Pipeline、路由、Storage 和 SCF Runtime，但保留独立二进制、配置和函数集群。
 
+**最新责任边界（2026-09-09）：** 全市场标的目录和逐标的 K 线是两条不同链路。daily Instrument SCF 可并行调用 Sina、Tencent、EastMoney 等目录接口并合并完整快照；某一来源失败时继续使用其他来源，只有完整性校验通过才切换 `ActiveInstrumentSet`，否则保留上一版。Kline Timer 不要求每个周期重新获取全市场目录，消费最近一次成功的 active subject 集合；目录 API 暂时不可用时，以控制面 `/data/subjects` 的最近成功集合兜底。少量标的或单一 Provider 失败只影响该标的并触发有界 fallback，不阻塞其他标的或整组。
+
+Storage/Primary/View 不承载 K 线告警语义：Primary 只做通用数据写入，View 只在消费 Primary 变更时按通用 dataset/view/subject/frequency/series 维度上报 input 和 active output watermark；所有 K 线 freshness、交易时段、连续失败/恢复和告警状态只由 Monitor 读取指定 View 的 output 观测判断。Collector 不再做周期 gap audit，不扫描历史桶，不因单分钟缺失触发补采；显式 Backfill/GapRepair 仍按既有 HistoryPolicy 入口执行。Monitor 的 30 秒 reporter/watchdog 是 K 线 freshness 的默认评估节奏，不是所有告警策略的固定周期，也不通过 HTTP `/metrics` 抓取。
+
 **Tech Stack:** Go 1.25、tRPC-Go Timer、Tencent Cloud SCF Go SDK v1.1.0、SQLite/GORM、Storage tRPC、Pebble、CLS、YAML、`httptest`、`testify`。
 
 ---
 
-## 0. 执行状态（2026-08-31）
+## 0. 执行状态（2026-09-09）
 
 本节是当前执行状态的唯一准据；后续各 Task 中的 checkbox 保留为实施步骤记录，不单独代表已经通过生产验收。
 
 | 范围 | 状态 | 证据/未完成项 |
 | --- | --- | --- |
 | Task 1 Provider 接入与探测 | 部分完成 | 四路 Provider 的强类型适配、probe 契约和去敏记录已落地；当前真实网络记录中新浪/腾讯有历史 K 线通过证据，东方财富/百度仍未达到生产候选门槛，三交易所三源完整稳定证据尚未形成。当前公共接口只有有界最新页，历史策略先限制在最近 24 小时，长历史待游标分页 Provider。 |
-| Task 2-12 公共框架、Kline/Instrument Pipeline、单 Dataset、HistoryPolicy、可配置 N、SCF Runtime、发布校验、监控 | 源码和本地验证完成，生产部分验收 | 发布/启用不再依赖出口 IP 数量门禁；生产仍须以 Instrument/Kline canary、Timer/Rule 回读、Monitor 和 Storage durable row 作为验收证据。 |
+| Task 2-12 公共框架、Kline/Instrument Pipeline、单 Dataset、HistoryPolicy、可配置 N、SCF Runtime、发布校验、监控 | 源码和本地验证完成，生产部分验收 | 发布/启用不再依赖出口 IP 数量门禁；生产仍须以 Instrument/Kline canary、Timer/Rule 回读、Monitor generic View watermark 和 Storage durable row 作为验收证据。K 线告警不再由 Collector 或 Storage 特殊分支实现。 |
 | Task 13 架构清理与独立 codeCR | 架构清理完成，最新复审发现并已修复两项 Timer 隔离问题 | 旧 `sources.CollectorRegistry`、兼容 Executor、Binance Provider 专用 Storage 写入和并行旧 symbol 入口已删除；最新 codeCR 发现 Instrument Timer 会污染 Kline N 节点、且没有门禁通过后的启用闭环，已补充 `function_mode` 过滤、独立 Instrument egress/readback 和成功后的每日 Timer enable 路径。 |
-| Task 14 灰度发布、历史拉取、E2E、回滚 | r48 已正式编译，尚未发布，仍 NO-GO | r48 已完成 Darwin CLI、Linux/amd64 SCF 编译和 SCF package contract；正式控制面凭据/隧道当前不可用，因此没有 r48 package ID、CloudNode 部署、独立 Instrument Timer 回读或新的真实 Storage E2E。r24/r44 历史证据仍不代表当前独立 Timer 架构已验收。 |
+| Task 14 灰度发布、历史拉取、E2E、回滚 | 正式发布尝试已中止，仍 NO-GO | 06:37:55 提交的 stockcn publish 运行 59 分 48 秒未返回 summary/`SUCCESS`/canary 结果，控制面只观察到 Instrument Timer 更新；随后已停用 crypto 与残留 stockcn 规则，并关闭 Storage View historical maintenance。当前必须先只读盘点半启用 fleet、复核 Storage readiness，再修复 InvokeFunction/SCF 响应链路后重试；现有 Primary 未推进、View/Monitor 正式证据缺失。 |
 
-已完成的本地验证包括 Storage、Collector、CLI、CloudNode、Monitor 的对应 `go test -race -count=1`，以及 `crypto`/`stockcn`/`providerprobe` 双入口构建、双入口 SCF 包构建和 `git diff --check`。Collector 全量 race 测试曾出现一次 `httptest` 回退测试的时序性失败，随后该包单独重跑通过；当前改动覆盖的 marketfetch/scfinvoker/serverless/provider/httpclient 与 CLI/CloudNode 目标测试均通过。r48 尚未进入正式控制面，故没有独立 Instrument Timer、N 个 Kline Timer、全节点 egress、Monitor 指标或 Storage durable row 的新鲜生产证据。
+已完成的本地验证包括 Storage、Collector、CLI、CloudNode、Monitor 的对应 `go test -race -count=1`，以及 `crypto`/`stockcn`/`providerprobe` 双入口构建、双入口 SCF 包构建和 `git diff --check`。Collector 全量 race 测试曾出现一次 `httptest` 回退测试的时序性失败，随后该包单独重跑通过；当前改动覆盖的 marketfetch/scfinvoker/serverless/provider/httpclient 与 CLI/CloudNode 目标测试均通过。freshness 方案的 focused race、本地 EventBus/SQLite E2E 和 `make release` 已通过；`make verify` 仍受既有 tradeeventpb deprecated protocol contract 阻断。正式控制面虽可连接，但本轮 publish 未形成可验收结果，故没有独立 Instrument Timer、N 个 Kline Timer、Monitor generic View watermark 或 Storage durable row 的新鲜生产证据。
 
 ## 1. 已确认范围
 
@@ -88,7 +92,8 @@ flowchart LR
   KF --> Router
   Router --> KP["KlinePipeline\nNormalizedKline + 幂等写入"]
   KP --> Dataset["dataset_stockcn_equity_kline\nseries_tag=default + source_provider"]
-  Dataset --> Monitor["Storage 水位 + CLS + Market Canary"]
+  Dataset --> View["Storage View\n通用 input/output watermark"]
+  View --> Monitor["Monitor\n指定 View freshness + 告警"]
 ```
 
 实时请求只读取最近 3 根是网络抖动缓冲，不代表实时链路承担历史导入。SCF 在标准化后必须按当前 HistoryPolicy 的 `coverage_start_time` 和闭合桶过滤；历史数据由独立 Backfill 批次在同一覆盖下界内受控导入。
@@ -1009,62 +1014,44 @@ fields=open,high,low,close,volume,amount,trade_date,close_time,
   git commit -m 'feat(cli): 支持发布stockcn云函数集群'
   ```
 
-### Task 12: 增加交易时段感知的监控与告警
+### Task 12: 通过通用 View 观测实现交易时段感知的监控与告警
 
 **Files:**
 - Modify: `modules/monitor/config/app.yaml:43-90`
-- Modify: `modules/monitor/internal/watchdog/market_canary.go:111-260`
-- Modify: `modules/monitor/internal/watchdog/market_canary_test.go`
-- Modify: `modules/collector/internal/marketfetch/metrics.go`
-- Modify: `modules/collector/internal/marketfetch/metrics_test.go`
-- Modify: `modules/collector/internal/marketfetch/executor.go:350-407`
+- Modify: `modules/monitor/internal/metrics/kline_freshness.go`
+- Modify: `modules/monitor/internal/bootstrap/business_freshness.go`
+- Modify: `modules/monitor/internal/bootstrap/default_alerts.go`
+- Modify: `modules/storage/internal/observability/view_metrics.go`
+- Modify: `modules/storage/internal/service/view/event_apply.go`
 - Modify: `docs/采集任务管理.md`
+- Reference: `docs/superpowers/plans/2026-09-08-kline-freshness-and-gap-audit-removal.md`
 
-- [ ] **Step 1: 写 Canary 红灯测试**
+- [x] **Step 1: 建立通用 View 观测边界**
 
-  交易时段内检查 `dataset_stockcn_equity_kline` 最新应闭合桶；休市和午休显示 idle/healthy；日历过期、无 eligible Kline Feed、最新桶超时、来源字段缺失或 OHLCV 校验失败分别产生明确原因。另检查 Instrument 完整快照的 `snapshot_id/source_provider/complete/fetched_at`、active 数和交易所覆盖；旧快照仍可供 Kline 使用，但超过配置时限必须告警。
+  View 消费 Primary 变更后只上报通用 dataset input/output/commit watermark；input 记录路由/过滤完成，output 只在 active View index 成功写入后推进。Primary、公共 Storage 和 Collector 不判断 K 线 dataset 名称，不调用 Kline 专用观测 API，不扫描历史桶。
 
-- [ ] **Step 2: 写 Group、Feed、函数数与出口 IP 指标红灯测试**
+- [x] **Step 2: 实现 Monitor 指定 View freshness**
 
-  增加 `market_id`、`route_id`、`provider_id`、`feed_kind`、`group_id`、`batch_kind`、`result` 低基数标签；Subject 和 candidate chain 只进结构化日志，不进 Prometheus 标签。日志必须包含预期桶、实际桶、fallback 次数、本地限频等待/拒绝、单 Dataset 写入结果、`instrument_set_version`、expected/actual stock function count，以及 egress probe 的 expected/non-empty/distinct IP 数。测试断言 `group_id` 只允许 `0..N-1`，不能用函数名或公网 IP 制造高基数标签。
+  Monitor 按配置的 `view_id + dataset_id + frequency` 读取 output `data_time`，在 `cn_stock` 交易时段内判断持续停更；crypto 全天判断。允许单分钟 transient hole，只有连续超过 freshness 窗口才 firing，恢复后 resolved。input/commit 只用于诊断，不能代替业务 `data_time`。告警按 group 聚合，subject 只进入有界诊断。
 
-- [ ] **Step 3: 运行红灯测试**
+- [x] **Step 3: 接入现有 reporter/watchdog**
 
-  ```bash
-  cd modules/monitor
-  go test -run 'TestMarketCanary.*StockCN' ./internal/watchdog
-  cd ../collector
-  go test -run 'TestMetrics.*Feed|TestReportResults.*Fallback|TestReportResults.*ConfiguredGroups|TestReportResults.*Egress' ./internal/marketfetch
-  ```
+  K 线 freshness 使用现有 tRPC MetricSnapshot/EventBus/Monitor Consumer 链路，默认 30 秒评估，不新增外部 HTTP `/metrics` 抓取，也不改变其他告警策略的独立调度周期。Collector 的 Feed、fallback、Group 和 egress 指标只做运行诊断，不承担 View freshness 判定。
 
-  Expected: FAIL，Monitor 当前只配置 crypto canary。
+- [x] **Step 4: 覆盖目录失败和标的缺失**
 
-- [ ] **Step 4: 实现五类告警**
+  Instrument 目录由独立 daily SCF 完整刷新；Sina、Tencent、EastMoney 等接口可并行获取并合并，单接口失败时继续使用其他候选，完整性不满足则保留上一版 `ActiveInstrumentSet`。Kline Timer 消费最近成功集合，控制面 `/data/subjects` 作为目录 API 失败时的兜底；少量标的/Provider 失败不得阻塞其他标的或全组。
 
-  - 连续 3 个闭合分钟 `dataset_stockcn_equity_kline` 覆盖率低于 99%，或来源追溯字段不完整。
-  - 某 Provider Feed 在 5 分钟窗口内系统失败率超过 20%、持续 429、限频等待耗尽 deadline，或候选池为空。
-  - 日历距 `valid_through` 少于 14 天或已经过期。
-  - 最新完整 Instrument 快照过期、active 数异常或任一要求交易所为空。
-  - stock 函数数不等于配置 N、Group ID 不完整/重复，或 `required_group_size` 超过安全容量；出口 IP 统计仅作为诊断记录。
+- [x] **Step 5: 完成本地回归，生产验收留给 Task 14**
 
-  阈值放配置，不写死在告警代码。停牌标的从分母中剔除必须有明确 instrument/status 证据，不能仅因空响应自动判停牌。
-
-- [ ] **Step 5: 更新运行文档并提交**
+  已覆盖 transient hole、持续 stale/recovery、View input/output 隔离、stock session/calendar、active subject 目录生命周期和有界告警诊断。正式环境仍必须在 Task 14 证明 SCF -> Primary durable row -> View durable row -> generic View metrics -> Monitor latest/alert state 的真实闭环。
 
   ```bash
-  cd modules/monitor
-  go test -race -count=1 ./internal/watchdog
-  cd ../collector
-  go test -race -count=1 ./internal/marketfetch
-  cd ../..
-  git add modules/monitor/config/app.yaml \
-    modules/monitor/internal/watchdog/market_canary.go \
-    modules/monitor/internal/watchdog/market_canary_test.go \
-    modules/collector/internal/marketfetch/metrics.go \
-    modules/collector/internal/marketfetch/metrics_test.go \
-    modules/collector/internal/marketfetch/executor.go \
-    docs/采集任务管理.md
-  git commit -m 'feat(monitor): 监控A股1m多源采集状态'
+  go test -race -count=1 ./modules/monitor/internal/metrics \
+    ./modules/monitor/internal/bootstrap \
+    ./modules/storage/internal/observability \
+    ./modules/storage/internal/service/view
+  bash scripts/test/e2e/verify-kline-freshness-e2e.sh
   ```
 
 ### Task 13: 完成模块验证、架构清理和独立 codeCR
