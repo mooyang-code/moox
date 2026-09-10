@@ -1,6 +1,20 @@
 package metrics
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
+
+// ViewMetricScope identifies a View whose per-subject output watermark is
+// needed by a configured freshness check. Unconfigured Views remain real data
+// products, but their per-subject health snapshots are not persisted in
+// Monitor.
+type ViewMetricScope struct {
+	SpaceID   string
+	ViewID    string
+	DatasetID string
+	Frequency string
+}
 
 // Keep this list deliberately narrow. The reporter emits a large number of
 // Prometheus runtime metrics; only facts consumed by the health view and
@@ -48,9 +62,7 @@ var healthMetricNames = map[string]struct{}{
 	"moox_storage_outbox_pending_entries":                                      {},
 	"moox_storage_outbox_oldest_age_seconds":                                   {},
 	"moox_storage_view_period_waiting_datasets":                                {},
-	ViewDatasetInputLastDataTimeMetric:                                         {},
 	ViewDatasetOutputLastDataTimeMetric:                                        {},
-	ViewDatasetOutputLastCommitTimestampMetric:                                 {},
 }
 
 func IsHealthMetric(name string) bool {
@@ -88,4 +100,43 @@ func FilterHealthSamples(samples []Sample) []Sample {
 		}
 	}
 	return out
+}
+
+// FilterHealthSamplesForKlineViews keeps ordinary low-cardinality health facts
+// and only the per-subject output watermark families selected by the current
+// K-line freshness rules.
+func FilterHealthSamplesForKlineViews(samples []Sample, scopes []ViewMetricScope) []Sample {
+	if len(samples) == 0 {
+		return samples
+	}
+	allowed := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		key := strings.Join([]string{strings.TrimSpace(scope.SpaceID), strings.TrimSpace(scope.ViewID), strings.TrimSpace(scope.DatasetID), strings.TrimSpace(scope.Frequency)}, "\x00")
+		if strings.TrimSpace(scope.SpaceID) != "" && strings.TrimSpace(scope.ViewID) != "" && strings.TrimSpace(scope.DatasetID) != "" && strings.TrimSpace(scope.Frequency) != "" {
+			allowed[key] = struct{}{}
+		}
+	}
+	out := make([]Sample, 0, len(samples))
+	for _, sample := range samples {
+		if !IsHealthMetric(sample.MetricName) {
+			continue
+		}
+		if sample.MetricName == ViewDatasetOutputLastDataTimeMetric && !viewMetricMatchesScope(sample.Labels, sample.LabelsJSON, allowed) {
+			continue
+		}
+		out = append(out, sample)
+	}
+	return out
+}
+
+func viewMetricMatchesScope(labels map[string]string, rawLabels string, allowed map[string]struct{}) bool {
+	if labels == nil && strings.TrimSpace(rawLabels) != "" {
+		_ = json.Unmarshal([]byte(rawLabels), &labels)
+	}
+	if len(labels) == 0 {
+		return false
+	}
+	key := strings.Join([]string{strings.TrimSpace(labels["space_id"]), strings.TrimSpace(labels["view_id"]), strings.TrimSpace(labels["dataset_id"]), strings.TrimSpace(labels["freq"])}, "\x00")
+	_, ok := allowed[key]
+	return ok
 }

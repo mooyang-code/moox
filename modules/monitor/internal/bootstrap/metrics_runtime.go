@@ -139,7 +139,7 @@ func startObservabilityConsumer(
 			ExternalProducers: map[string]struct{}{
 				"moox_collector_scf": {},
 			},
-		}, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
+		}, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled, klineViewMetricScopes(cfg)),
 		Host: hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
 		Health: func(routeCtx context.Context, message *eventpb.EventMessage, health *observabilitypb.HealthCheckReport) error {
 			if runtime.ObservabilityHealthRoute == nil {
@@ -214,6 +214,7 @@ func metricsObservabilityRoute(
 	moduleMetrics *report.ModuleMetrics,
 	runtime *Runtime,
 	enabled bool,
+	klineScopes []monmetrics.ViewMetricScope,
 ) func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error {
 	return func(ctx context.Context, message *eventpb.EventMessage, metricReport *metricspb.MetricReport) error {
 		if !enabled {
@@ -244,7 +245,7 @@ func metricsObservabilityRoute(
 			monmetrics.RecordIngest(moduleMetrics, "rejected", time.Time{})
 			return observabilityconsumer.Permanent(err)
 		}
-		samples = monmetrics.FilterHealthSamples(samples)
+		samples = monmetrics.FilterHealthSamplesForKlineViews(samples, klineScopes)
 		duplicate, err := messageStore.IsDuplicate(ctx, message.GetEventId())
 		if err != nil || duplicate {
 			return err
@@ -265,6 +266,22 @@ func metricsObservabilityRoute(
 		monmetrics.RecordIngest(moduleMetrics, "success", observed)
 		return nil
 	}
+}
+
+func klineViewMetricScopes(cfg *config.Config) []monmetrics.ViewMetricScope {
+	if cfg == nil || !cfg.KlineFreshness.Enabled {
+		return nil
+	}
+	scopes := make([]monmetrics.ViewMetricScope, 0, len(cfg.KlineFreshness.Rules))
+	for _, rule := range cfg.KlineFreshness.Rules {
+		if !rule.Enabled {
+			continue
+		}
+		scopes = append(scopes, monmetrics.ViewMetricScope{
+			SpaceID: rule.SpaceID, ViewID: rule.ViewID, DatasetID: rule.DatasetID, Frequency: rule.Frequency,
+		})
+	}
+	return scopes
 }
 
 func hostObservabilityRoute(store *hostmetrics.Store, runtime *Runtime, enabled bool) func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {

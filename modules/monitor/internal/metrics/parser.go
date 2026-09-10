@@ -20,9 +20,8 @@ import (
 )
 
 const (
-	// A full Kline snapshot contains four series per subject (Primary/View
-	// data and commit watermarks). Keep enough headroom for the A-share
-	// universe while retaining bounded parsing.
+	// Keep metric snapshots bounded while retaining enough headroom for the
+	// A-share universe. Kline freshness is scoped later to enabled View output.
 	DefaultMaxUncompressedBytes int64 = 16 << 20
 	DefaultMaxCompressedBytes   int64 = 4 << 20
 	DefaultMaxMetricFamilies          = 2000

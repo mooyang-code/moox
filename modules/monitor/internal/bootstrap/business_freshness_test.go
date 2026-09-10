@@ -97,7 +97,6 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
 		for _, row := range []monmetrics.MetricLatest{
 			{SeriesID: "data", MetricName: monmetrics.ViewDatasetOutputLastDataTimeMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
-			{SeriesID: "commit", MetricName: monmetrics.ViewDatasetOutputLastCommitTimestampMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Unix()), ObservedAt: now},
 		} {
 			if err := db.Create(&row).Error; err != nil {
 				t.Fatal(err)

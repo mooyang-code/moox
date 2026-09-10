@@ -43,9 +43,7 @@ func TestMonotonicMetricRecognizesCanonicalModuleNames(t *testing.T) {
 		"moox_strategy_input_watermark_timestamp_seconds",
 		"moox_trade_metrics_errors_total",
 		"moox_archive_metrics_last_error_timestamp_seconds",
-		ViewDatasetInputLastDataTimeMetric,
 		ViewDatasetOutputLastDataTimeMetric,
-		ViewDatasetOutputLastCommitTimestampMetric,
 	} {
 		require.True(t, monotonicMetric(name), name)
 	}
@@ -60,11 +58,7 @@ func TestMetricMessageStoreViewDatasetTimestampsIgnoreOutOfOrderSnapshot(t *test
 	r := metricMessageStoreForTest(t, mgr)
 	newer := time.Unix(200, 0).UTC()
 	report := &metricspb.MetricReport{ServiceName: "storage", InstanceId: "storage@node-a", BootId: "boot-a"}
-	for index, name := range []string{
-		ViewDatasetInputLastDataTimeMetric,
-		ViewDatasetOutputLastDataTimeMetric,
-		ViewDatasetOutputLastCommitTimestampMetric,
-	} {
+	for index, name := range []string{ViewDatasetOutputLastDataTimeMetric} {
 		seriesID := fmt.Sprintf("kline-series-%d", index)
 		_, err := r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: fmt.Sprintf("new-%d", index)}, report, []Sample{{
 			SeriesID: seriesID, ServiceName: report.ServiceName, InstanceID: report.InstanceId, MetricName: name,
@@ -98,20 +92,16 @@ func TestMetricMessageStoreListLatestByMetricNamesIsBoundedAndStable(t *testing.
 		}
 		rows = append(rows,
 			MetricLatest{SeriesID: "unrelated", MetricName: "moox_storage_dataset_output_watermark_timestamp_seconds", LabelsJSON: `{}`, Value: 1},
-			MetricLatest{SeriesID: "view-commit", MetricName: ViewDatasetOutputLastCommitTimestampMetric, LabelsJSON: `{}`, Value: 1},
-			MetricLatest{SeriesID: "view-input", MetricName: ViewDatasetInputLastDataTimeMetric, LabelsJSON: `{}`, Value: 1},
 		)
 		return db.CreateInBatches(&rows, 500).Error
 	})
 	require.NoError(t, err)
 	r := metricMessageStoreForTest(t, mgr)
 	rows, err := r.ListLatestByMetricNames(context.Background(), []string{
-		ViewDatasetInputLastDataTimeMetric,
 		ViewDatasetOutputLastDataTimeMetric,
-		ViewDatasetOutputLastCommitTimestampMetric,
 	}, 0)
 	require.NoError(t, err)
-	require.Len(t, rows, 5002)
+	require.Len(t, rows, 5000)
 	for index := 1; index < len(rows); index++ {
 		previous := rows[index-1]
 		current := rows[index]
@@ -125,12 +115,33 @@ func TestMetricMessageStoreListLatestByMetricNamesIsBoundedAndStable(t *testing.
 	}
 	_, err = r.ListLatestByMetricNames(context.Background(), []string{"not_a_view_dataset_metric"}, 1)
 	require.Error(t, err)
-	_, err = r.ListLatestByMetricNames(context.Background(), []string{ViewDatasetOutputLastDataTimeMetric}, 100001)
+	_, err = r.ListLatestByMetricNames(context.Background(), []string{ViewDatasetOutputLastDataTimeMetric}, 500001)
 	require.Error(t, err)
 
 	query := NewQueryService(r, nil)
 	rows, err = query.ListLatestByMetricNames(context.Background(), []string{ViewDatasetOutputLastDataTimeMetric}, 1)
 	require.Error(t, err)
+}
+
+func TestMetricMessageStoreListLatestByViewScopesFiltersBeforeRead(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	_, err = store.WithDatabase(mgr, func(db *gorm.DB) error {
+		return db.Create([]MetricLatest{
+			{SeriesID: "configured", MetricName: ViewDatasetOutputLastDataTimeMetric, LabelsJSON: `{"space_id":"crypto","view_id":"kline","dataset_id":"binance","subject_id":"BTC","freq":"1m","series_tag":"default"}`, Value: 10, ObservedAt: time.Unix(10, 0).UTC()},
+			{SeriesID: "unconfigured", MetricName: ViewDatasetOutputLastDataTimeMetric, LabelsJSON: `{"space_id":"mooxsys","view_id":"service","dataset_id":"metrics","subject_id":"cpu","freq":"30s","series_tag":"default"}`, Value: 10, ObservedAt: time.Unix(10, 0).UTC()},
+		}).Error
+	})
+	require.NoError(t, err)
+	r := metricMessageStoreForTest(t, mgr)
+	rows, err := r.ListLatestByViewScopes(context.Background(), ViewDatasetOutputLastDataTimeMetric, []ViewMetricScope{{
+		SpaceID: "crypto", ViewID: "kline", DatasetID: "binance", Frequency: "1m",
+	}}, 0)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "configured", rows[0].SeriesID)
 }
 
 func metricMessageStoreForTest(t *testing.T, db *store.Store) *MetricMessageStore {

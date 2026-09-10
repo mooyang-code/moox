@@ -18,9 +18,7 @@ func TestFilterHealthSamplesKeepsBusinessFactsOnly(t *testing.T) {
 		"moox_collector_kline_resample_writes_total",
 		"moox_collector_kline_resample_retries_total",
 		"moox_collector_kline_resample_errors_total",
-		ViewDatasetInputLastDataTimeMetric,
 		ViewDatasetOutputLastDataTimeMetric,
-		ViewDatasetOutputLastCommitTimestampMetric,
 	}
 	drop := []string{
 		"go_gc_duration_seconds",
@@ -39,5 +37,27 @@ func TestFilterHealthSamplesKeepsBusinessFactsOnly(t *testing.T) {
 		if IsHealthMetric(name) {
 			t.Errorf("technical metric %q was retained", name)
 		}
+	}
+}
+
+func TestFilterHealthSamplesForKlineViewsDropsUnconfiguredViewSeries(t *testing.T) {
+	samples := []Sample{
+		{MetricName: ViewDatasetOutputLastDataTimeMetric, Labels: map[string]string{
+			"space_id": "crypto", "view_id": "view_crypto_spot_kline_1m", "dataset_id": "dataset_binance_spot_kline_1m", "subject_id": "BTC-USDT", "freq": "1m", "series_tag": "venue:binance",
+		}},
+		{MetricName: ViewDatasetOutputLastDataTimeMetric, Labels: map[string]string{
+			"space_id": "mooxsys", "view_id": "view_mooxsys_service_metrics", "dataset_id": "dataset_mooxsys_service_metrics", "subject_id": "service/metric", "freq": "30s", "series_tag": "default",
+		}},
+		{MetricName: "moox_storage_outbox_pending_entries"},
+	}
+
+	got := FilterHealthSamplesForKlineViews(samples, []ViewMetricScope{{
+		SpaceID: "crypto", ViewID: "view_crypto_spot_kline_1m", DatasetID: "dataset_binance_spot_kline_1m", Frequency: "1m",
+	}})
+	if len(got) != 2 {
+		t.Fatalf("filtered samples = %+v, want configured View metric and operational metric", got)
+	}
+	if got[0].MetricName != ViewDatasetOutputLastDataTimeMetric || got[1].MetricName != "moox_storage_outbox_pending_entries" {
+		t.Fatalf("filtered samples = %+v", got)
 	}
 }

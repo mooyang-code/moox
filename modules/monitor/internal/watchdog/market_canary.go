@@ -287,6 +287,13 @@ func ResolveCanonicalSubjectID(configured string, active map[string]struct{}) (s
 	if match == "" {
 		return "", fmt.Errorf("subject %q is not active", configured)
 	}
+	// The configured ID is already canonical when it carries an explicit
+	// product suffix. A legacy unsuffixed catalog entry is only a compatibility
+	// validation signal; keep the suffixed ID for the Storage query because the
+	// output series may already have migrated to that identity.
+	if wantSuffix != "" && subjectProductSuffix(match) == "" {
+		return configured, nil
+	}
 	return match, nil
 }
 
