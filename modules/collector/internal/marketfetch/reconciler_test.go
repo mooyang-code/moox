@@ -50,13 +50,15 @@ func (s reconcilerSymbolsStub) ListSubjects(_ context.Context, _ string, dataset
 }
 
 type reconcilerNodesStub struct {
-	nodes       []scfinvoker.Node
-	patches     []*cloudnodepb.NodeRuntimeConfigPatch
-	submits     int
-	listStarted chan struct{}
-	listRelease chan struct{}
-	listOnce    sync.Once
-	submitErr   error
+	nodes         []scfinvoker.Node
+	patches       []*cloudnodepb.NodeRuntimeConfigPatch
+	submits       int
+	listStarted   chan struct{}
+	listRelease   chan struct{}
+	listOnce      sync.Once
+	submitErr     error
+	batchStatuses map[string]cloudnodepb.NodeBatchStatus
+	batchErr      error
 }
 
 func TestRuntimeConfigPatchBatchesRespectCloudNodeLimit(t *testing.T) {
@@ -138,8 +140,89 @@ func TestReconcilerTreatsRuntimeSubmitTimeoutAsRetryPending(t *testing.T) {
 	require.Equal(t, firstPendingSince, secondPendingSince, "retries must preserve the original pending time")
 }
 
-func (s *reconcilerNodesStub) GetRuntimeConfigBatchStatus(context.Context, string, string) (*cloudnodepb.NodeBatchSummary, error) {
+func (s *reconcilerNodesStub) GetRuntimeConfigBatchStatus(_ context.Context, _ string, jobID string) (*cloudnodepb.NodeBatchSummary, error) {
+	if s.batchErr != nil {
+		return nil, s.batchErr
+	}
+	if status, ok := s.batchStatuses[jobID]; ok {
+		return &cloudnodepb.NodeBatchSummary{Status: status}, nil
+	}
 	return &cloudnodepb.NodeBatchSummary{Status: cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_SUCCESS}, nil
+}
+
+func TestReconcilerRecordsCompletedBatchBeforeNextDNSChange(t *testing.T) {
+	metrics := NewMetrics(prometheus.NewRegistry())
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
+	routes := map[string]sources.DNSResolution{"api.binance.com": {IPs: []string{"203.0.113.1"}}}
+	r := &Reconciler{
+		Rules: reconcilerRulesStub{rules: []domain.TaskRule{{SpaceID: "crypto", RuleID: "bars", DataType: "kline", Enabled: true,
+			CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`}}},
+		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}},
+		Nodes:   nodes, DNS: reconcilerDNSStub{routes: routes}, Metrics: metrics,
+	}
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), "submission is not completion")
+	firstAssignment := nodes.patches[0].GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"]
+	routes["api.binance.com"] = sources.DNSResolution{IPs: []string{"203.0.113.2"}}
+	before := time.Now().UTC().Unix()
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.Equal(t, 2, nodes.submits)
+	require.Equal(t, firstAssignment, nodes.patches[0].GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
+	require.GreaterOrEqual(t, testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), float64(before))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
+	require.Positive(t, testutil.ToFloat64(metrics.assignmentPendingSince.WithLabelValues("crypto")))
+}
+
+func TestReconcilerDoesNotRecordIncompleteBatchAsSuccess(t *testing.T) {
+	for _, status := range []cloudnodepb.NodeBatchStatus{
+		cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PENDING,
+		cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING,
+		cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_FAILED,
+		cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PARTIAL,
+		cloudnodepb.NodeBatchStatus(99),
+	} {
+		t.Run(status.String(), func(t *testing.T) {
+			metrics := NewMetrics(prometheus.NewRegistry())
+			metrics.ObserveAssignmentSuccess("crypto", 123)
+			nodes := &reconcilerNodesStub{batchStatuses: map[string]cloudnodepb.NodeBatchStatus{"job-2": status}}
+			r := &Reconciler{Rules: reconcilerRulesStub{}, Symbols: reconcilerSymbolsStub{}, Nodes: nodes, Metrics: metrics}
+			r.setPendingRuntimeJobs([]string{"job-1", "job-2"}, nil, true)
+			_, since := r.pendingRuntimeJobsState()
+			err := r.Reconcile(context.Background(), "crypto")
+			if status == cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PENDING || status == cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING {
+				require.NoError(t, err)
+				_, after := r.pendingRuntimeJobsState()
+				require.Equal(t, since, after)
+				require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
+			} else {
+				require.Error(t, err)
+			}
+			require.Equal(t, float64(123), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")))
+		})
+	}
+}
+
+func TestReconcilerDoesNotRecordUnreadableBatchAsSuccess(t *testing.T) {
+	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.ObserveAssignmentSuccess("crypto", 123)
+	nodes := &reconcilerNodesStub{batchErr: context.DeadlineExceeded}
+	r := &Reconciler{Rules: reconcilerRulesStub{}, Symbols: reconcilerSymbolsStub{}, Nodes: nodes, Metrics: metrics}
+	r.setPendingRuntimeJobs([]string{"job-1"}, nil, true)
+	_, since := r.pendingRuntimeJobsState()
+	require.ErrorIs(t, r.Reconcile(context.Background(), "crypto"), context.DeadlineExceeded)
+	jobs, after := r.pendingRuntimeJobsState()
+	require.Equal(t, []string{"job-1"}, jobs)
+	require.Equal(t, since, after)
+	require.Equal(t, float64(123), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")))
+}
+
+func TestReconcilerDoesNotRecordPartiallySubmittedPlanAsSuccess(t *testing.T) {
+	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.ObserveAssignmentSuccess("crypto", 123)
+	r := &Reconciler{Rules: reconcilerRulesStub{}, Symbols: reconcilerSymbolsStub{}, Nodes: &reconcilerNodesStub{}, Metrics: metrics}
+	r.setPendingRuntimeJobs([]string{"accepted-chunk"}, nil, false)
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.Equal(t, float64(123), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")))
 }
 
 type reconcilerDNSStub struct {

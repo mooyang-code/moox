@@ -68,6 +68,7 @@ type Reconciler struct {
 	pendingJob                    string
 	pendingJobs                   []string
 	pendingSince                  time.Time
+	pendingSubmissionIncomplete   bool
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
@@ -112,8 +113,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 				return r.fail(spaceID, "cloudnode", fmt.Errorf("timer runtime config job %s returned unknown status %s", pendingJob, status.GetStatus().String()))
 			}
 		}
-		r.clearPendingRuntimeJobs()
+		fullySubmitted := r.clearPendingRuntimeJobs()
 		r.observeAssignmentPending(spaceID, false, time.Time{})
+		// A completed batch is successful coordination even if a newer DNS
+		// snapshot immediately requires another batch. Do not wait for a no-op
+		// tick to record progress, or continuously rotating routes starve it.
+		if fullySubmitted && r.Metrics != nil {
+			r.Metrics.ObserveAssignmentSuccess(spaceID, time.Now().UTC().Unix())
+		}
 	}
 	nodes, err := r.Nodes.ListTimerMarketFetchers(ctx, spaceID)
 	if err != nil {
@@ -263,7 +270,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 			// chunks. Track those jobs so the next tick observes them before
 			// retrying the remaining desired state.
 			if len(jobIDs) > 0 {
-				r.setPendingRuntimeJobs(jobIDs, acceptedFingerprints)
+				r.setPendingRuntimeJobs(jobIDs, acceptedFingerprints, false)
 			}
 			if isTimeoutError(submitErr) {
 				pendingSince := r.markSubmitRetryPending()
@@ -283,7 +290,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 			}
 		}
 	}
-	r.setPendingRuntimeJobs(jobIDs, acceptedFingerprints)
+	r.setPendingRuntimeJobs(jobIDs, acceptedFingerprints, true)
 	pendingSince := r.pendingRuntimeSince()
 	if r.Metrics != nil {
 		r.Metrics.ClearAssignmentFailure(spaceID)
@@ -634,10 +641,11 @@ func (r *Reconciler) fail(spaceID, reason string, err error) error {
 	return err
 }
 
-func (r *Reconciler) setPendingRuntimeJobs(jobIDs []string, fingerprints map[string]string) {
+func (r *Reconciler) setPendingRuntimeJobs(jobIDs []string, fingerprints map[string]string, fullySubmitted bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.pendingJobs = append([]string(nil), jobIDs...)
+	r.pendingSubmissionIncomplete = !fullySubmitted
 	r.pendingJob = ""
 	if len(r.pendingJobs) > 0 {
 		r.pendingJob = r.pendingJobs[0]
@@ -654,14 +662,17 @@ func (r *Reconciler) setPendingRuntimeJobs(jobIDs []string, fingerprints map[str
 	}
 }
 
-func (r *Reconciler) clearPendingRuntimeJobs() {
+func (r *Reconciler) clearPendingRuntimeJobs() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	fullySubmitted := !r.pendingSubmissionIncomplete
+	r.pendingSubmissionIncomplete = false
 	r.pendingJobs = nil
 	r.pendingJob = ""
 	r.pendingSince = time.Time{}
 	r.pending = make(map[string]string)
 	r.pendingAt = make(map[string]time.Time)
+	return fullySubmitted
 }
 
 func (r *Reconciler) clearPendingRuntimeJob(jobID string) {
