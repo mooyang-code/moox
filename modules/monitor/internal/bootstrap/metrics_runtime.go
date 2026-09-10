@@ -128,6 +128,11 @@ func startObservabilityConsumer(
 	if cfg.Metrics.Enabled && messageStore == nil {
 		return
 	}
+	consumerCfg, err := observabilityConsumerConfig(cfg.Observability)
+	if err != nil {
+		runtime.setObservabilityIngestState(false, err)
+		return
+	}
 	routes := observabilityconsumer.Routes{
 		Metrics: metricsObservabilityRoute(storage, messageStore, monmetrics.CheckProducerAuthorizer{
 			Checks: runtime.Repositories.Checks,
@@ -175,7 +180,6 @@ func startObservabilityConsumer(
 				}
 				continue
 			}
-			consumerCfg := observabilityconsumer.DefaultConfig()
 			consumer, bindErr := observabilityconsumer.NewConsumer(ctx, js, registry, consumerCfg, routes)
 			if bindErr != nil {
 				_ = js.Close()

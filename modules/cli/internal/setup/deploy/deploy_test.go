@@ -649,6 +649,8 @@ func assertGatewayRegistryUpgrade(t *testing.T, secrets string) {
 func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	home := t.TempDir()
 	deploy := filepath.Join(home, "moox", "prod")
+	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "config"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "config", "monitor-runtime.env"), []byte("MOOX_OBSERVABILITY_DELIVER_POLICY=new\n"), 0o600))
 	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "data"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "data", "caddy"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "secrets"), 0o700))
@@ -709,6 +711,7 @@ func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	require.Contains(t, string(requireFile(t, crontabLog)), `for healthcheck in "$HOME"/moox/*/healthcheck.sh`)
 	require.Contains(t, string(requireFile(t, crontabLog)), `# moox-healthchecks`)
 	require.NoFileExists(t, filepath.Join(deploy, "data", "old.db"))
+	require.Equal(t, "MOOX_OBSERVABILITY_DELIVER_POLICY=new\n", string(requireFile(t, filepath.Join(deploy, "config", "monitor-runtime.env"))))
 	require.FileExists(t, filepath.Join(deploy, "data", "new.db"))
 	require.Equal(t, "account", string(requireFile(t, filepath.Join(deploy, "data", "caddy", "acme-account.json"))))
 	require.Equal(t, "secret", string(requireFile(t, filepath.Join(deploy, "secrets", "keep.env"))))
@@ -721,6 +724,8 @@ func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	// A client can disappear after activation but before finalize. A later setup
 	// must take over without deleting the first transaction's rollback lineage.
 	nextToken := "test-next"
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "config", "monitor-runtime.env"), []byte("MOOX_OBSERVABILITY_DELIVER_POLICY=all\n"), 0o600))
+	require.NoError(t, exec.Command("tar", "-C", archiveDir, "-czf", archive, ".").Run())
 	nextArchive := controlArchivePath(nextToken)
 	defer os.Remove(nextArchive)
 	require.NoError(t, copyFileForTest(archive, nextArchive))
@@ -729,6 +734,7 @@ func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	output, err = next.CombinedOutput()
 	require.NoError(t, err, string(output))
 	require.Equal(t, nextToken+"\n", string(requireFile(t, filepath.Join(deploy, ".control-activation-token"))))
+	require.Equal(t, "MOOX_OBSERVABILITY_DELIVER_POLICY=all\n", string(requireFile(t, filepath.Join(deploy, "config", "monitor-runtime.env"))))
 	require.FileExists(t, filepath.Join(home, "moox", "prod.previous."+nextToken, ".control-activation-token"))
 	require.DirExists(t, filepath.Join(home, "moox", "prod.previous."+activationToken))
 
@@ -737,6 +743,7 @@ func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	output, err = rollbackNext.CombinedOutput()
 	require.NoError(t, err, string(output))
 	require.Equal(t, activationToken+"\n", string(requireFile(t, filepath.Join(deploy, ".control-activation-token"))))
+	require.Equal(t, "MOOX_OBSERVABILITY_DELIVER_POLICY=new\n", string(requireFile(t, filepath.Join(deploy, "config", "monitor-runtime.env"))))
 
 	rollbackFirst := exec.Command("bash", "-c", rollbackControlScript, "moox-rollback-control", activationToken)
 	rollbackFirst.Env = cmd.Env

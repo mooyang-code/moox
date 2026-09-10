@@ -118,6 +118,11 @@ type EventBus struct {
 	TLSEnabled    bool   `toml:"tls_enabled"`
 }
 
+type Observability struct {
+	DeliverPolicy         string `toml:"deliver_policy"`
+	DeliverPolicyExplicit bool   `toml:"-"`
+}
+
 // DNSResolver configures the single Trade node that resolves and probes
 // market API domains for Collector. moox.toml is the source of truth; the
 // CLI renders the Trade-owned subset into Trade's app.yaml at deployment time.
@@ -358,22 +363,23 @@ func DefaultTimerFunctionCount(spaceID string) int {
 }
 
 type Manifest struct {
-	Admin        Admin        `toml:"admin"`
-	TencentCloud TencentCloud `toml:"tencent_cloud"`
-	EventBus     EventBus     `toml:"eventbus"`
-	Paths        Paths        `toml:"paths"`
-	DNSResolver  DNSResolver  `toml:"dns_resolver"`
-	StorageView  StorageView  `toml:"storage_view"`
-	LocalLogs    LocalLogs    `toml:"local_logs"`
-	Notification Notification `toml:"notification"`
-	Factors      FactorSetup  `toml:"factors"`
-	SCFFetcher   SCFFetcher   `toml:"scf_fetcher"`
-	ControlHost  Host         `toml:"control_host"`
-	CompileHost  Host         `toml:"compile_host"`
-	StrategyHost Host         `toml:"strategy_host"`
-	StorageHost  Host         `toml:"storage_host"`
-	ViewHost     Host         `toml:"view_host"`
-	OtherHosts   []Host       `toml:"other_hosts"`
+	Admin         Admin         `toml:"admin"`
+	TencentCloud  TencentCloud  `toml:"tencent_cloud"`
+	EventBus      EventBus      `toml:"eventbus"`
+	Paths         Paths         `toml:"paths"`
+	DNSResolver   DNSResolver   `toml:"dns_resolver"`
+	StorageView   StorageView   `toml:"storage_view"`
+	LocalLogs     LocalLogs     `toml:"local_logs"`
+	Observability Observability `toml:"observability"`
+	Notification  Notification  `toml:"notification"`
+	Factors       FactorSetup   `toml:"factors"`
+	SCFFetcher    SCFFetcher    `toml:"scf_fetcher"`
+	ControlHost   Host          `toml:"control_host"`
+	CompileHost   Host          `toml:"compile_host"`
+	StrategyHost  Host          `toml:"strategy_host"`
+	StorageHost   Host          `toml:"storage_host"`
+	ViewHost      Host          `toml:"view_host"`
+	OtherHosts    []Host        `toml:"other_hosts"`
 }
 
 func (m Manifest) Hosts() []Host {
@@ -538,6 +544,10 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("local_logs", "max_size_mb") {
 		out.LocalLogs.MaxSizeMB = 50
 	}
+	out.Observability.DeliverPolicyExplicit = md.IsDefined("observability", "deliver_policy")
+	if !out.Observability.DeliverPolicyExplicit {
+		out.Observability.DeliverPolicy = "all"
+	}
 	if !md.IsDefined("local_logs", "backup_count") {
 		out.LocalLogs.BackupCount = 5
 	}
@@ -614,6 +624,9 @@ func validate(manifest *Manifest) error {
 	}
 	if manifest.LocalLogs.MaxSizeMB < 1 || manifest.LocalLogs.MaxSizeMB > 10240 {
 		return fmt.Errorf("config_invalid: local_logs.max_size_mb must be between 1 and 10240")
+	}
+	if manifest.Observability.DeliverPolicy != "all" && manifest.Observability.DeliverPolicy != "new" {
+		return fmt.Errorf("config_invalid: observability.deliver_policy must be all or new")
 	}
 	if manifest.LocalLogs.BackupCount < 1 || manifest.LocalLogs.BackupCount > 100 {
 		return fmt.Errorf("config_invalid: local_logs.backup_count must be between 1 and 100")

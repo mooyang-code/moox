@@ -82,6 +82,7 @@ type MetricsConfig struct {
 
 type ObservabilityConfig struct {
 	Enabled                    bool     `yaml:"enabled"`
+	DeliverPolicy              string   `yaml:"deliver_policy"`
 	EventBusURLs               []string `yaml:"eventbus_urls"`
 	CredentialFile             string   `yaml:"credential_file"`
 	BalanceDifferenceThreshold float64  `yaml:"balance_difference_threshold"`
@@ -220,7 +221,7 @@ func Default() *Config {
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
-		Observability:  ObservabilityConfig{Enabled: true, EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
+		Observability:  ObservabilityConfig{Enabled: true, DeliverPolicy: "all", EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
 		MarketCanary:   MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance")}}},
 		MarketHealth:   MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, LowCapacityHeadroom: 2, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
 		KlineFreshness: KlineFreshnessConfig{Enabled: false, EvaluationInterval: 30 * time.Second, MaxSubjectsPerAlert: 20},
@@ -271,6 +272,10 @@ func (c *Config) applyDefaults() {
 	}
 	metricsDefaults := Default().Metrics
 	observabilityDefaults := Default().Observability
+	c.Observability.DeliverPolicy = strings.ToLower(strings.TrimSpace(c.Observability.DeliverPolicy))
+	if c.Observability.DeliverPolicy == "" {
+		c.Observability.DeliverPolicy = observabilityDefaults.DeliverPolicy
+	}
 	if len(c.Observability.EventBusURLs) == 0 {
 		c.Observability.EventBusURLs = observabilityDefaults.EventBusURLs
 	}
@@ -418,6 +423,9 @@ func (c *Config) applyEnv() {
 	if v := strings.TrimSpace(os.Getenv("MOOX_OBSERVABILITY_CREDENTIAL_FILE")); v != "" {
 		c.Observability.CredentialFile = v
 	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_OBSERVABILITY_DELIVER_POLICY")); v != "" {
+		c.Observability.DeliverPolicy = strings.ToLower(v)
+	}
 	if v := strings.TrimSpace(os.Getenv("MOOX_DATASET_HEALTH_POLICY")); v != "" {
 		c.Metrics.DatasetHealthPolicyPath = v
 	}
@@ -448,6 +456,9 @@ func (c *Config) applyEnv() {
 }
 
 func (c *Config) Validate() error {
+	if c.Observability.DeliverPolicy != "all" && c.Observability.DeliverPolicy != "new" {
+		return fmt.Errorf("observability.deliver_policy must be all or new")
+	}
 	if c.Instance.InstanceID == "" {
 		return fmt.Errorf("instance.instance_id must not be empty")
 	}

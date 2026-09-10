@@ -1399,6 +1399,7 @@ func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string)
 		NotificationChannelType:      snapshot.Manifest.Notification.ChannelType,
 		NotificationWebhookURL:       snapshot.Manifest.Notification.WebhookURL,
 		LocalLogs:                    snapshot.Manifest.LocalLogs,
+		Observability:                snapshot.Manifest.Observability,
 		TLSMode:                      setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode),
 		InstallLocalCA:               true,
 	}

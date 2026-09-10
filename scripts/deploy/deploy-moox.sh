@@ -29,6 +29,13 @@ WITH_GATEWAY=1
 BUILD_WEB_ASSETS=1
 RESET_DATA=0
 COMPONENT_OVERLAY=0
+MOOX_OBSERVABILITY_CONFIG_EXPLICIT=0
+if [[ "${MOOX_OBSERVABILITY_DELIVER_POLICY+x}" == "x" ]]; then
+  case "${MOOX_OBSERVABILITY_DELIVER_POLICY}" in
+    all|new) MOOX_OBSERVABILITY_CONFIG_EXPLICIT=1 ;;
+    *) echo "MOOX_OBSERVABILITY_DELIVER_POLICY must be all or new" >&2; exit 2 ;;
+  esac
+fi
 MOOX_SPACE_CONFIG_EXPLICIT=0
 if [[ -n "${MOOX_SPACE_ID:-}" || -n "${MOOX_SPACE_IDS:-}" ]]; then
   MOOX_SPACE_CONFIG_EXPLICIT=1
@@ -1385,6 +1392,7 @@ write_runtime_scripts() {
   # renders the client URL from the deployment's topology and role files.
   cat >"${STAGE_DIR}/config/runtime.env" <<EOF
 MOOX_EVENTBUS_HOST=$(printf '%q' "${MOOX_EVENTBUS_HOST}")
+MOOX_OBSERVABILITY_DELIVER_POLICY=all
 MOOX_EVENTBUS_PORT=$(printf '%q' "${MOOX_EVENTBUS_PORT}")
 MOOX_EVENTBUS_ENABLE_TLS=$(printf '%q' "${MOOX_EVENTBUS_ENABLE_TLS:-0}")
 MOOX_EVENTBUS_NATS_URL=$(printf '%q' "${EVENTBUS_URL_ENV}")
@@ -1398,6 +1406,12 @@ EOF
     printf 'MOOX_SPACE_IDS=%q\n' "${MOOX_SPACE_IDS:-${MOOX_SPACE_ID:-crypto}}" >>"${STAGE_DIR}/config/runtime.env"
   fi
   chmod 0600 "${STAGE_DIR}/config/runtime.env"
+  # Keep explicit policy independent of component overlays and listener config.
+  # An omitted policy leaves the installed value intact; a fresh host uses all.
+  if [[ "${WITH_MONITOR}" -eq 1 && "${MOOX_OBSERVABILITY_CONFIG_EXPLICIT}" -eq 1 ]]; then
+    printf 'MOOX_OBSERVABILITY_DELIVER_POLICY=%q\n' "${MOOX_OBSERVABILITY_DELIVER_POLICY}" >"${STAGE_DIR}/config/monitor-runtime.env"
+    chmod 0600 "${STAGE_DIR}/config/monitor-runtime.env"
+  fi
   if [[ "${WITH_COLLECTOR}" -eq 1 && ( "${COMPONENT_OVERLAY}" -eq 0 || "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 1 ) ]]; then
     # Collector-only overlays preserve the installed EventBus contract. Keep
     # the Collector's market selection in its own durable file so a restart
@@ -1427,6 +1441,16 @@ if [[ -r "${ROOT}/config/collector-runtime.env" ]]; then
   source "${ROOT}/config/collector-runtime.env"
   set +a
 fi
+if [[ -r "${ROOT}/config/monitor-runtime.env" ]]; then
+  set -a
+  source "${ROOT}/config/monitor-runtime.env"
+  set +a
+fi
+MOOX_OBSERVABILITY_DELIVER_POLICY="${MOOX_OBSERVABILITY_DELIVER_POLICY:-all}"
+case "${MOOX_OBSERVABILITY_DELIVER_POLICY}" in
+  all|new) ;;
+  *) echo "MOOX_OBSERVABILITY_DELIVER_POLICY must be all or new" >&2; exit 2 ;;
+esac
 if [[ -r "${ROOT}/config/resources.env" ]]; then
   set -a
   source "${ROOT}/config/resources.env"
@@ -1845,6 +1869,7 @@ elif [[ -r "${HOME}/.config/moox/eventbus/factor-eventbus.yaml" ]]; then
 fi
 
 MONITOR_ENV=(
+  "MOOX_OBSERVABILITY_DELIVER_POLICY=${MOOX_OBSERVABILITY_DELIVER_POLICY}"
   "MOOX_MONITOR_INSTANCE_ID=${MOOX_MONITOR_INSTANCE_ID}"
 	"MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
 )
@@ -4509,7 +4534,7 @@ sync_local_stage() {
         # A component overlay which does not own EventBus must preserve the
         # installed listener contract for the next restart.
         rsync_excludes+=(--exclude '/config/runtime.env')
-        if [[ "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 0 ]]; then
+        if [[ "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 0 && "${MOOX_OBSERVABILITY_CONFIG_EXPLICIT}" -eq 0 ]]; then
           rsync_excludes+=(--exclude '/start.sh' --exclude '/stop.sh' --exclude '/restart.sh' --exclude '/status.sh' --exclude '/healthcheck.sh')
         fi
       fi
@@ -4525,6 +4550,9 @@ sync_local_stage() {
     fi
     if [[ "${component_overlay}" -eq 1 && ( "${WITH_COLLECTOR}" -eq 0 || "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 0 ) ]]; then
       rsync_excludes+=(--exclude '/config/collector-runtime.env')
+    fi
+    if [[ "${WITH_MONITOR}" -eq 0 || "${MOOX_OBSERVABILITY_CONFIG_EXPLICIT}" -eq 0 ]]; then
+      rsync_excludes+=(--exclude '/config/monitor-runtime.env')
     fi
     if [[ "${WITH_FACTOR}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/factor/' --exclude '/bin/moox-factor' --exclude '/bin/moox-factor-cli' --exclude '/bin/moox-factor-run-once')
@@ -4614,7 +4642,7 @@ sync_local_stage() {
       fi
       if [[ "${WITH_EVENTBUS}" -eq 0 ]]; then
         overlay_excludes+=(--exclude='./config/runtime.env')
-        if [[ "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 0 ]]; then
+        if [[ "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 0 && "${MOOX_OBSERVABILITY_CONFIG_EXPLICIT}" -eq 0 ]]; then
           overlay_excludes+=(--exclude='./start.sh' --exclude='./stop.sh' --exclude='./restart.sh' --exclude='./status.sh' --exclude='./healthcheck.sh')
         fi
       fi
@@ -4871,6 +4899,10 @@ sync_remote_stage() {
   ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NODE_ID=${quoted_node_id} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_HOSTAGENT=${quoted_with_hostagent} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_SPACE_CONFIG_EXPLICIT=${quoted_space_config_explicit} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_STORAGE_EVENTBUS_URL=${quoted_storage_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_TRADE_GATEWAY_HEALTH_ADDR=${quoted_trade_gateway_health_addr} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64=${quoted_storage_view_maintenance_policy_b64} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 MOOX_SPACE_CONFIG_EXPLICIT="${MOOX_SPACE_CONFIG_EXPLICIT:-0}"
+MOOX_OBSERVABILITY_CONFIG_EXPLICIT=0
+if [[ "${WITH_MONITOR}" == "1" ]] && tar -tzf "${ARCHIVE}" ./config/monitor-runtime.env >/dev/null 2>&1; then
+  MOOX_OBSERVABILITY_CONFIG_EXPLICIT=1
+fi
 if [[ "${COMPONENT_OVERLAY}" == "1" && "${MOOX_SPACE_CONFIG_EXPLICIT}" == "0" ]] && tar -tzf "${ARCHIVE}" ./config/collector-runtime.env >/dev/null 2>&1; then
   MOOX_SPACE_CONFIG_EXPLICIT=1
 fi
@@ -5290,7 +5322,7 @@ if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
     # A remote component overlay which does not own EventBus must preserve
     # the installed listener contract for the next restart.
     TAR_EXCLUDES+=(--exclude='./config/runtime.env')
-    if [[ "${MOOX_SPACE_CONFIG_EXPLICIT}" == "0" ]]; then
+    if [[ "${MOOX_SPACE_CONFIG_EXPLICIT}" == "0" && "${MOOX_OBSERVABILITY_CONFIG_EXPLICIT}" == "0" ]]; then
       TAR_EXCLUDES+=(--exclude='./start.sh' --exclude='./stop.sh' --exclude='./restart.sh' --exclude='./status.sh' --exclude='./healthcheck.sh')
     fi
   fi

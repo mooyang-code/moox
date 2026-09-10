@@ -12,6 +12,12 @@ public_address = ""
 port = 4222
 tls_enabled = true
 
+# Only all/new are supported. Omit deliver_policy on redeploy to keep the
+# installed policy; a fresh deployment defaults to all. Existing JetStream
+# durable consumers must be migrated explicitly before changing this value.
+[observability]
+# deliver_policy = "all"
+
 # 所有运行时目录使用云磁盘 /data 下的统一根目录。
 [paths]
 deploy_root = "/data/moox"

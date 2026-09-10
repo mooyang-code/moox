@@ -66,6 +66,7 @@ type Options struct {
 	StorageBuildHostRole   string
 	StorageViewPolicy      setupconfig.StorageView
 	LocalLogs              setupconfig.LocalLogs
+	Observability          setupconfig.Observability
 	HealthAuthVersion      string
 	HealthAuthAccessKey    string
 	HealthAuthSecretKey    string
@@ -686,6 +687,10 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 	}
 	command.Env = notificationCommandEnv(command.Env, opts.NotificationChannelType, opts.NotificationWebhookURL)
 	command.Env = localLogCommandEnv(command.Env, opts.LocalLogs)
+	command.Env, err = observabilityCommandEnv(command.Env, opts.Observability)
+	if err != nil {
+		return "", err
+	}
 	if err := command.Run(); err != nil {
 		_ = os.Remove(archive)
 		detail := strings.TrimSpace(packageOutput.String())
@@ -914,6 +919,23 @@ func localLogCommandEnv(base []string, policy setupconfig.LocalLogs) []string {
 		setCommandEnv(base, "MOOX_LOCAL_LOG_MAX_SIZE_MB", strconv.Itoa(policy.MaxSizeMB)),
 		"MOOX_LOCAL_LOG_BACKUP_COUNT", strconv.Itoa(policy.BackupCount),
 	)
+}
+
+func observabilityCommandEnv(base []string, policy setupconfig.Observability) ([]string, error) {
+	const key = "MOOX_OBSERVABILITY_DELIVER_POLICY"
+	env := make([]string, 0, len(base)+1)
+	for _, entry := range base {
+		if !strings.HasPrefix(entry, key+"=") {
+			env = append(env, entry)
+		}
+	}
+	if policy.DeliverPolicyExplicit {
+		if policy.DeliverPolicy != "all" && policy.DeliverPolicy != "new" {
+			return nil, fmt.Errorf("observability.deliver_policy must be all or new")
+		}
+		env = append(env, key+"="+policy.DeliverPolicy)
+	}
+	return env, nil
 }
 
 type StoragePackager struct{}
@@ -1627,6 +1649,13 @@ install_control() {
   rm -rf "$next" "$previous"
   mkdir -p "$next"
   tar -C "$next" -xzf "$archive"
+  # An omitted policy is not a request to reset an installed durable policy.
+  # Explicit package values win; rollback retains the previous runtime file.
+  if [ ! -e "$next/config/monitor-runtime.env" ] && [ -f "$deploy/config/monitor-runtime.env" ]; then
+    mkdir -p "$next/config"
+    cp "$deploy/config/monitor-runtime.env" "$next/config/monitor-runtime.env"
+    chmod 0600 "$next/config/monitor-runtime.env"
+  fi
   # Storage can be installed independently after the control package.  Keep
   # that explicit topology decision across a later control upgrade; the
   # freshly packaged default is zero because the control package cannot know
