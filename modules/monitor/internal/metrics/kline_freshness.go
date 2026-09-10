@@ -14,11 +14,9 @@ import (
 )
 
 const (
-	ViewDatasetInputLastDataTimeMetric         = "moox_storage_view_dataset_input_last_data_time_seconds"
-	ViewDatasetOutputLastDataTimeMetric        = "moox_storage_view_dataset_output_last_data_time_seconds"
-	ViewDatasetOutputLastCommitTimestampMetric = "moox_storage_view_dataset_output_last_commit_timestamp_seconds"
-	KlineDefaultSeriesTag                      = "default"
-	klineFutureTolerance                       = 10 * time.Minute
+	ViewDatasetOutputLastDataTimeMetric = "moox_storage_view_dataset_output_last_data_time_seconds"
+	KlineDefaultSeriesTag               = "default"
+	klineFutureTolerance                = 10 * time.Minute
 )
 
 type KlineFreshnessRule struct {
@@ -44,8 +42,6 @@ type KlineFreshnessReport struct {
 	StaleCount       int
 	ObservedCount    int
 	OldestDataTime   time.Time
-	LatestInputTime  time.Time
-	LatestCommitTime time.Time
 	StaleSubjects    []string
 	ObservedSubjects []string
 }
@@ -78,18 +74,21 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
-	rows, err := e.query.ListLatestByMetricNames(ctx, []string{
-		ViewDatasetInputLastDataTimeMetric,
-		ViewDatasetOutputLastDataTimeMetric,
-		ViewDatasetOutputLastCommitTimestampMetric,
-	}, 0)
+	filters := make([]ViewMetricScope, 0, len(e.rules))
+	for _, rule := range e.rules {
+		if !rule.Enabled {
+			continue
+		}
+		filters = append(filters, ViewMetricScope{SpaceID: rule.SpaceID, ViewID: rule.ViewID, DatasetID: rule.DatasetID, Frequency: rule.Frequency})
+	}
+	rows, err := e.query.ListLatestByViewScopes(ctx, ViewDatasetOutputLastDataTimeMetric, filters, 0)
 	if err != nil {
 		return nil, err
 	}
 
 	observations := make(map[viewObservationIdentity]*viewObservation)
 	for _, row := range rows {
-		identity, kind, err := parseViewDatasetMetric(row.MetricName, row.LabelsJSON)
+		identity, err := parseViewDatasetMetric(row.MetricName, row.LabelsJSON)
 		if err != nil || !isValidKlineFrequency(identity.Frequency) {
 			continue
 		}
@@ -102,19 +101,8 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			item = &viewObservation{identity: identity}
 			observations[identity] = item
 		}
-		switch kind {
-		case viewInputDataTime:
-			if preferMetricSample(item.inputObservedAt, row.ObservedAt, item.inputTime, value) {
-				item.inputTime, item.inputObservedAt, item.hasInput = value, row.ObservedAt, true
-			}
-		case viewOutputDataTime:
-			if preferMetricSample(item.outputObservedAt, row.ObservedAt, item.outputTime, value) {
-				item.outputTime, item.outputObservedAt, item.hasOutput = value, row.ObservedAt, true
-			}
-		case viewOutputCommitTime:
-			if preferMetricSample(item.commitObservedAt, row.ObservedAt, item.commitTime, value) {
-				item.commitTime, item.commitObservedAt, item.hasCommit = value, row.ObservedAt, true
-			}
+		if preferMetricSample(item.outputObservedAt, row.ObservedAt, item.outputTime, value) {
+			item.outputTime, item.outputObservedAt, item.hasOutput = value, row.ObservedAt, true
 		}
 	}
 
@@ -140,6 +128,7 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			observed = append(observed, *item)
 		}
 		activeSubjects := map[string]struct{}(nil)
+		activeObservedSubjects := map[string]struct{}(nil)
 		if strings.TrimSpace(rule.DatasetID) != "" {
 			var catalogErr error
 			activeSubjects, catalogErr = e.query.ActiveDatasetSubjects(ctx, rule.SpaceID, rule.DatasetID)
@@ -150,13 +139,7 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 				continue
 			}
 			if activeSubjects != nil {
-				filtered := observed[:0]
-				for _, item := range observed {
-					if _, ok := activeSubjects[item.identity.SubjectID]; ok {
-						filtered = append(filtered, item)
-					}
-				}
-				observed = filtered
+				observed, activeObservedSubjects = filterObservedByActiveSubjects(observed, activeSubjects, expectedKlineSubjectSuffix(rule.DatasetID))
 			}
 		}
 		if len(observed) == 0 {
@@ -170,21 +153,11 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 
 		staleSubjects := make(map[string]struct{})
 		observedSubjects := make(map[string]struct{})
-		viewOutputLag := false
 		for _, item := range observed {
 			report.ObservedCount++
 			observedSubjects[item.identity.SubjectID] = struct{}{}
 			if report.OldestDataTime.IsZero() || item.outputTime.Before(report.OldestDataTime) {
 				report.OldestDataTime = item.outputTime
-			}
-			if item.hasInput && (report.LatestInputTime.IsZero() || item.inputTime.After(report.LatestInputTime)) {
-				report.LatestInputTime = item.inputTime
-			}
-			if item.hasCommit && (report.LatestCommitTime.IsZero() || item.commitTime.After(report.LatestCommitTime)) {
-				report.LatestCommitTime = item.commitTime
-			}
-			if item.hasInput && item.inputTime.After(item.outputTime) {
-				viewOutputLag = true
 			}
 			if now.Sub(item.outputTime) > rule.StaleAfter {
 				report.StaleCount++
@@ -196,7 +169,7 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		// as no_observation above so a brand-new View remains distinguishable.
 		if activeSubjects != nil {
 			for subjectID := range activeSubjects {
-				if _, ok := observedSubjects[subjectID]; !ok {
+				if _, ok := activeObservedSubjects[subjectID]; !ok {
 					report.StaleCount++
 					staleSubjects[subjectID] = struct{}{}
 				}
@@ -208,8 +181,6 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		switch {
 		case report.Success:
 			report.Reason = "fresh"
-		case viewOutputLag:
-			report.Reason = "view_output_stale"
 		default:
 			report.Reason = "business_data_stale"
 		}
@@ -220,28 +191,104 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 	return reports, nil
 }
 
+// filterObservedByActiveSubjects keeps the metadata catalog authoritative while
+// tolerating a subject identity migration that only adds a market suffix to the
+// View output (for example, OPG-USDT -> OPG-USDT-SPOT). A suffix match is used
+// only when it resolves to one active catalog subject; ambiguous aliases are
+// rejected so a real catalog/data mismatch still raises no_observation.
+func filterObservedByActiveSubjects(observed []viewObservation, active map[string]struct{}, expectedSuffix string) ([]viewObservation, map[string]struct{}) {
+	activeObserved := make(map[string]struct{})
+	aliases := make(map[string][]string, len(active))
+	for subjectID := range active {
+		canonical := canonicalKlineSubjectID(subjectID)
+		aliases[canonical] = append(aliases[canonical], subjectID)
+	}
+
+	selected := make(map[string]viewObservation, len(active))
+	for _, item := range observed {
+		subjectID := strings.TrimSpace(item.identity.SubjectID)
+		if _, ok := active[subjectID]; ok {
+			if !subjectSuffixCompatible(subjectID, expectedSuffix) {
+				continue
+			}
+			if current, exists := selected[subjectID]; !exists || preferMetricSample(current.outputObservedAt, item.outputObservedAt, current.outputTime, item.outputTime) {
+				selected[subjectID] = item
+			}
+			continue
+		}
+		candidates := aliases[canonicalKlineSubjectID(subjectID)]
+		if len(candidates) != 1 {
+			continue
+		}
+		if !subjectSuffixCompatible(subjectID, expectedSuffix) || !subjectSuffixCompatible(candidates[0], expectedSuffix) {
+			continue
+		}
+		canonical := candidates[0]
+		if current, exists := selected[canonical]; !exists || preferMetricSample(current.outputObservedAt, item.outputObservedAt, current.outputTime, item.outputTime) {
+			selected[canonical] = item
+		}
+	}
+	filtered := make([]viewObservation, 0, len(selected))
+	for activeID, item := range selected {
+		filtered = append(filtered, item)
+		activeObserved[activeID] = struct{}{}
+	}
+	return filtered, activeObserved
+}
+
+func expectedKlineSubjectSuffix(datasetID string) string {
+	datasetID = strings.ToLower(strings.TrimSpace(datasetID))
+	if strings.Contains(datasetID, "swap") || strings.Contains(datasetID, "perpetual") {
+		return "SWAP"
+	}
+	if strings.Contains(datasetID, "spot") {
+		return "SPOT"
+	}
+	return ""
+}
+
+func subjectSuffixCompatible(subjectID, expected string) bool {
+	if expected == "" {
+		return true
+	}
+	suffix := subjectProductSuffix(subjectID)
+	return suffix == "" || suffix == expected
+}
+
+func canonicalKlineSubjectID(subjectID string) string {
+	subjectID = strings.TrimSpace(subjectID)
+	upper := strings.ToUpper(subjectID)
+	for _, suffix := range []string{"-SPOT", "-SWAP"} {
+		if strings.HasSuffix(upper, suffix) && len(subjectID) > len(suffix) {
+			return subjectID[:len(subjectID)-len(suffix)]
+		}
+	}
+	return subjectID
+}
+
+func subjectProductSuffix(subjectID string) string {
+	upper := strings.ToUpper(strings.TrimSpace(subjectID))
+	if strings.HasSuffix(upper, "-SPOT") {
+		return "SPOT"
+	}
+	if strings.HasSuffix(upper, "-SWAP") {
+		return "SWAP"
+	}
+	return ""
+}
+
 func KlineFreshnessCheckID(rule KlineFreshnessRule) string {
 	return fmt.Sprintf("kline_freshness:%s:%s:%s", strings.TrimSpace(rule.SpaceID), strings.TrimSpace(rule.ViewID), strings.TrimSpace(rule.Frequency))
 }
-
-type viewMetricKind uint8
-
-const (
-	viewInputDataTime viewMetricKind = iota + 1
-	viewOutputDataTime
-	viewOutputCommitTime
-)
 
 type viewObservationIdentity struct {
 	SpaceID, ViewID, DatasetID, SubjectID, Frequency, SeriesTag string
 }
 
 type viewObservation struct {
-	identity                                            viewObservationIdentity
-	inputTime, outputTime                               time.Time
-	commitTime                                          time.Time
-	inputObservedAt, outputObservedAt, commitObservedAt time.Time
-	hasInput, hasOutput, hasCommit                      bool
+	identity                     viewObservationIdentity
+	outputTime, outputObservedAt time.Time
+	hasOutput                    bool
 }
 
 func preferMetricSample(currentObservedAt, candidateObservedAt, currentValue, candidateValue time.Time) bool {
@@ -254,31 +301,23 @@ func preferMetricSample(currentObservedAt, candidateObservedAt, currentValue, ca
 	return candidateObservedAt.After(currentObservedAt)
 }
 
-func parseViewDatasetMetric(metricName, rawLabels string) (viewObservationIdentity, viewMetricKind, error) {
+func parseViewDatasetMetric(metricName, rawLabels string) (viewObservationIdentity, error) {
 	var labels map[string]string
 	if err := json.Unmarshal([]byte(rawLabels), &labels); err != nil {
-		return viewObservationIdentity{}, 0, err
+		return viewObservationIdentity{}, err
 	}
 	if labels == nil {
-		return viewObservationIdentity{}, 0, fmt.Errorf("labels must be an object")
+		return viewObservationIdentity{}, fmt.Errorf("labels must be an object")
 	}
 	for key := range labels {
 		switch key {
 		case "space_id", "view_id", "dataset_id", "subject_id", "freq", "series_tag":
 		default:
-			return viewObservationIdentity{}, 0, fmt.Errorf("unknown label %q", key)
+			return viewObservationIdentity{}, fmt.Errorf("unknown label %q", key)
 		}
 	}
-	kind := viewMetricKind(0)
-	switch metricName {
-	case ViewDatasetInputLastDataTimeMetric:
-		kind = viewInputDataTime
-	case ViewDatasetOutputLastDataTimeMetric:
-		kind = viewOutputDataTime
-	case ViewDatasetOutputLastCommitTimestampMetric:
-		kind = viewOutputCommitTime
-	default:
-		return viewObservationIdentity{}, 0, fmt.Errorf("unsupported metric %q", metricName)
+	if metricName != ViewDatasetOutputLastDataTimeMetric {
+		return viewObservationIdentity{}, fmt.Errorf("unsupported metric %q", metricName)
 	}
 	identity := viewObservationIdentity{
 		SpaceID: strings.TrimSpace(labels["space_id"]), ViewID: strings.TrimSpace(labels["view_id"]),
@@ -289,9 +328,9 @@ func parseViewDatasetMetric(metricName, rawLabels string) (viewObservationIdenti
 		identity.SeriesTag = KlineDefaultSeriesTag
 	}
 	if identity.SpaceID == "" || identity.ViewID == "" || identity.DatasetID == "" || identity.SubjectID == "" || identity.Frequency == "" {
-		return viewObservationIdentity{}, 0, fmt.Errorf("required view dataset label is empty")
+		return viewObservationIdentity{}, fmt.Errorf("required view dataset label is empty")
 	}
-	return identity, kind, nil
+	return identity, nil
 }
 
 func klineUnixTime(value float64) (time.Time, error) {
@@ -356,7 +395,7 @@ func formatKlineDiagnostic(report KlineFreshnessReport) string {
 		}
 		return value.UTC().Format(time.RFC3339)
 	}
-	return fmt.Sprintf("stale_count=%d observed_count=%d oldest_output_data_time=%s latest_input_data_time=%s latest_commit_time=%s stale_subjects=%s", report.StaleCount, report.ObservedCount, format(report.OldestDataTime), format(report.LatestInputTime), format(report.LatestCommitTime), strings.Join(report.StaleSubjects, ","))
+	return fmt.Sprintf("stale_count=%d observed_count=%d oldest_output_data_time=%s stale_subjects=%s", report.StaleCount, report.ObservedCount, format(report.OldestDataTime), strings.Join(report.StaleSubjects, ","))
 }
 
 func klineMarketSkipReason(rule KlineFreshnessRule, now time.Time) string {

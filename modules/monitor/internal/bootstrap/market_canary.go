@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
@@ -20,6 +21,7 @@ func buildMonitorMarketCanary(
 	ctx context.Context,
 	cfg *config.Config,
 	runtime *Runtime,
+	metricsStorage *monmetrics.StorageAdapter,
 	hook func(context.Context, domain.Check, domain.CheckResult),
 ) (func(context.Context) error, func(context.Context) error, error) {
 	if cfg == nil || !cfg.MarketCanary.Enabled {
@@ -72,6 +74,7 @@ func buildMonitorMarketCanary(
 		}
 		canaries = append(canaries, watchdog.MarketCanary{
 			Reader: reader, AuthInfo: storageauth.Primary("monitor-market-canary"), Config: canaryConfig,
+			ResolveSubjectID: marketCanarySubjectResolver(metricsStorage),
 		})
 	}
 	// Canary identity includes the symbol. When configuration moves from an
@@ -147,6 +150,19 @@ func buildMonitorMarketCanary(
 		return nil
 	}
 	return run, probe, nil
+}
+
+func marketCanarySubjectResolver(storage *monmetrics.StorageAdapter) func(context.Context, string, string, string) (string, error) {
+	if storage == nil {
+		return nil
+	}
+	return func(ctx context.Context, spaceID, datasetID, configured string) (string, error) {
+		active, err := storage.ListActiveDatasetSubjects(ctx, spaceID, datasetID)
+		if err != nil {
+			return "", err
+		}
+		return watchdog.ResolveCanonicalSubjectID(configured, active)
+	}
 }
 
 func firstNonEmptyString(values ...string) string {

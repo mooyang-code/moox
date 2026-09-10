@@ -16,7 +16,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestKlineFreshnessEvaluatorUsesActiveViewOutputAndInputDiagnostics(t *testing.T) {
+func TestKlineFreshnessEvaluatorUsesActiveViewOutput(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
 	query := newViewDatasetQuery(t, []viewDatasetTestSample{
@@ -26,10 +26,8 @@ func TestKlineFreshnessEvaluatorUsesActiveViewOutputAndInputDiagnostics(t *testi
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
 	require.False(t, reports[0].Success)
-	require.Equal(t, "view_output_stale", reports[0].Reason)
+	require.Equal(t, "business_data_stale", reports[0].Reason)
 	require.Equal(t, 1, reports[0].StaleCount)
-	require.Equal(t, now.Add(-30*time.Second), reports[0].LatestInputTime)
-	require.Contains(t, reports[0].Diagnostic, "latest_input_data_time")
 }
 
 func TestKlineFreshnessEvaluatorDoesNotAlertTransientHole(t *testing.T) {
@@ -91,6 +89,49 @@ func TestKlineFreshnessEvaluatorIgnoresRetiredSubjects(t *testing.T) {
 	require.Equal(t, []string{"ETH"}, reports[0].StaleSubjects)
 }
 
+func TestKlineFreshnessEvaluatorMatchesMarketSuffixDuringSubjectMigration(t *testing.T) {
+	now := time.Date(2026, 9, 10, 11, 2, 30, 0, time.UTC)
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
+	query := newViewDatasetQuery(t, []viewDatasetTestSample{{
+		SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "OPG-USDT-SPOT",
+		Output: now.Add(-time.Minute), Commit: now,
+	}})
+	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{
+		{SubjectId: "OPG-USDT", Status: "active"},
+		{SubjectId: "ETH-USDT", Status: "active"},
+	}}
+	query.storage = NewStorageAdapter(nil, metadata, monconfig.MetricsStorageConfig{SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m"})
+
+	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.False(t, reports[0].Success)
+	require.Equal(t, "business_data_stale", reports[0].Reason)
+	require.Equal(t, 1, reports[0].ObservedCount)
+	require.Equal(t, []string{"OPG-USDT-SPOT"}, reports[0].ObservedSubjects)
+	require.Equal(t, []string{"ETH-USDT"}, reports[0].StaleSubjects)
+}
+
+func TestKlineFreshnessEvaluatorRejectsAmbiguousMarketSuffix(t *testing.T) {
+	now := time.Date(2026, 9, 10, 11, 2, 30, 0, time.UTC)
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
+	query := newViewDatasetQuery(t, []viewDatasetTestSample{{
+		SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "OPG-USDT",
+		Output: now.Add(-time.Minute), Commit: now,
+	}})
+	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{
+		{SubjectId: "OPG-USDT-SPOT", Status: "active"},
+		{SubjectId: "OPG-USDT-SWAP", Status: "active"},
+	}}
+	query.storage = NewStorageAdapter(nil, metadata, monconfig.MetricsStorageConfig{SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m"})
+
+	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.False(t, reports[0].Success)
+	require.Equal(t, "no_observation", reports[0].Reason)
+}
+
 func TestKlineFreshnessEvaluatorSkipsStockClosedAndWarmup(t *testing.T) {
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockcn", ViewID: "view", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, StaleAfter: 10 * time.Minute}
 	query := newViewDatasetQuery(t, []viewDatasetTestSample{{SpaceID: "stockcn", ViewID: "view", DatasetID: "dataset", Subject: "600000", Output: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC), Commit: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC)}})
@@ -133,14 +174,8 @@ func newViewDatasetQuery(t *testing.T, samples []viewDatasetTestSample) *QuerySe
 				observedAt = sample.Commit
 			}
 			rows := make([]MetricLatest, 0, 3)
-			if !sample.Input.IsZero() {
-				rows = append(rows, MetricLatest{SeriesID: fmt.Sprintf("input-%d", index), MetricName: ViewDatasetInputLastDataTimeMetric, LabelsJSON: labels, Value: float64(sample.Input.Unix()), ObservedAt: observedAt})
-			}
 			if !sample.Output.IsZero() {
 				rows = append(rows, MetricLatest{SeriesID: fmt.Sprintf("output-%d", index), MetricName: ViewDatasetOutputLastDataTimeMetric, LabelsJSON: labels, Value: float64(sample.Output.Unix()), ObservedAt: observedAt})
-			}
-			if !sample.Commit.IsZero() {
-				rows = append(rows, MetricLatest{SeriesID: fmt.Sprintf("commit-%d", index), MetricName: ViewDatasetOutputLastCommitTimestampMetric, LabelsJSON: labels, Value: float64(sample.Commit.Unix()), ObservedAt: observedAt})
 			}
 			if err := db.Create(&rows).Error; err != nil {
 				return err

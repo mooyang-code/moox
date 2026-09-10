@@ -27,6 +27,46 @@ type tagFilteringCanaryReader struct {
 	request *storagepb.ReadTimeSeriesRowsReq
 }
 
+func TestResolveCanonicalSubjectIDUsesActiveCatalog(t *testing.T) {
+	active := map[string]struct{}{"OPG-USDT-SPOT": {}, "BTC-USDT-SPOT": {}}
+	got, err := ResolveCanonicalSubjectID("OPG-USDT", active)
+	require.NoError(t, err)
+	require.Equal(t, "OPG-USDT-SPOT", got)
+
+	got, err = ResolveCanonicalSubjectID("BTC-USDT-SPOT", active)
+	require.NoError(t, err)
+	require.Equal(t, "BTC-USDT-SPOT", got)
+}
+
+func TestResolveCanonicalSubjectIDRejectsAmbiguousLegacyAlias(t *testing.T) {
+	_, err := ResolveCanonicalSubjectID("BTC-USDT", map[string]struct{}{
+		"BTC-USDT-SPOT": {}, "BTC-USDT-SWAP": {},
+	})
+	require.Error(t, err)
+	_, err = ResolveCanonicalSubjectID("BTC-USDT-SPOT", map[string]struct{}{"BTC-USDT-SWAP": {}})
+	require.Error(t, err)
+}
+
+func TestMarketCanaryResolvesLegacySubjectBeforeRead(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+		marketCanaryRow(now.Add(-2*time.Minute), 100, 10),
+		marketCanaryRow(now.Add(-time.Minute), 101, 12),
+	}}
+	config := MarketCanaryConfig{
+		SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m", SubjectID: "OPG-USDT", Frequency: "1m",
+		SeriesTag: stringPtr("venue:binance"), Freshness: 3 * time.Minute, ReturnThreshold: 0.05,
+	}
+	result := (MarketCanary{
+		Reader: reader, Config: config, Now: func() time.Time { return now },
+		ResolveSubjectID: func(context.Context, string, string, string) (string, error) {
+			return ResolveCanonicalSubjectID("OPG-USDT", map[string]struct{}{"OPG-USDT-SPOT": {}})
+		},
+	}).Run(t.Context())
+	require.True(t, result.Success)
+	require.Equal(t, "OPG-USDT-SPOT", reader.request.GetKeys()[0].GetSubjectId())
+}
+
 func (r *tagFilteringCanaryReader) ReadTimeSeriesRows(_ context.Context, request *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	r.request = request
 	wanted := make(map[string]struct{}, len(request.GetKeys()))

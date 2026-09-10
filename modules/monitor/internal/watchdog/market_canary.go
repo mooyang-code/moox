@@ -46,6 +46,11 @@ type MarketCanary struct {
 	AuthInfo *commonpb.AuthInfo
 	Config   MarketCanaryConfig
 	Now      func() time.Time
+	// ResolveSubjectID lets the monitor use the authoritative metadata catalog
+	// when a legacy canary config contains a symbol instead of the canonical
+	// dataset subject. The resolver is deliberately injected so watchdog does
+	// not depend on a concrete market/provider implementation.
+	ResolveSubjectID func(context.Context, string, string, string) (string, error)
 }
 
 // ErrStorageUnavailable means the monitor could not reach Primary during its
@@ -151,8 +156,14 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		result.ErrorMessage = "invalid_config"
 		return result
 	}
+	resolvedConfig, err := c.resolveConfig(ctx, config)
+	if err != nil {
+		result.ErrorMessage = "subject_catalog_unavailable"
+		return result
+	}
+	config = resolvedConfig
 	if strings.EqualFold(strings.TrimSpace(config.MarketID), "stockcn") || strings.EqualFold(strings.TrimSpace(config.SpaceID), "stockcn") {
-		return c.runStockCN(ctx, result, now)
+		return c.runStockCN(ctx, result, now, config)
 	}
 	storageFrequency, err := canonicalStorageFrequency(config.Frequency)
 	if err != nil {
@@ -223,6 +234,85 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	return result
 }
 
+func (c MarketCanary) resolveConfig(ctx context.Context, config MarketCanaryConfig) (MarketCanaryConfig, error) {
+	if c.ResolveSubjectID == nil {
+		return config, nil
+	}
+	resolved, err := c.ResolveSubjectID(ctx, config.SpaceID, config.DatasetID, config.SubjectID)
+	if err != nil {
+		return MarketCanaryConfig{}, err
+	}
+	config.SubjectID = resolved
+	return config, nil
+}
+
+// ResolveCanonicalSubjectID selects the configured subject when it is active,
+// or an unambiguous canonical subject whose product suffix was omitted by an
+// older config. It intentionally does not know about any market or provider;
+// the active catalog is the source of truth. An ambiguous alias is rejected
+// rather than silently probing the wrong spot/swap series.
+func ResolveCanonicalSubjectID(configured string, active map[string]struct{}) (string, error) {
+	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		return "", fmt.Errorf("subject is empty")
+	}
+	if active == nil {
+		return configured, nil
+	}
+	configuredUpper := strings.ToUpper(configured)
+	for candidate := range active {
+		if strings.ToUpper(strings.TrimSpace(candidate)) == configuredUpper {
+			return candidate, nil
+		}
+	}
+	// An explicit product suffix is intentional. It may still refer to a
+	// legacy catalog entry that omitted the suffix, but must never resolve to
+	// the opposite product (spot versus swap).
+	wantSuffix := subjectProductSuffix(configured)
+	base := subjectAliasBase(configured)
+	var match string
+	for candidate := range active {
+		if subjectAliasBase(candidate) != base {
+			continue
+		}
+		candidateSuffix := subjectProductSuffix(candidate)
+		if wantSuffix != "" && candidateSuffix != "" && candidateSuffix != wantSuffix {
+			continue
+		}
+		if match != "" && match != candidate {
+			return "", fmt.Errorf("subject %q matches multiple active subjects", configured)
+		}
+		match = candidate
+	}
+	if match == "" {
+		return "", fmt.Errorf("subject %q is not active", configured)
+	}
+	return match, nil
+}
+
+func subjectProductSuffix(subject string) string {
+	parts := strings.Split(strings.ToUpper(strings.TrimSpace(subject)), "-")
+	if len(parts) == 0 {
+		return ""
+	}
+	suffix := parts[len(parts)-1]
+	if suffix == "SPOT" || suffix == "SWAP" {
+		return suffix
+	}
+	return ""
+}
+
+func subjectAliasBase(subject string) string {
+	parts := strings.Split(strings.ToUpper(strings.TrimSpace(subject)), "-")
+	if len(parts) > 1 {
+		suffix := parts[len(parts)-1]
+		if suffix == "SPOT" || suffix == "SWAP" {
+			parts = parts[:len(parts)-1]
+		}
+	}
+	return strings.Join(parts, "-")
+}
+
 type stockCalendarFile struct {
 	Timezone      string         `yaml:"timezone"`
 	CoverageStart string         `yaml:"coverage_start"`
@@ -245,8 +335,7 @@ type stockCalendar struct {
 	closed, opened map[string]struct{}
 }
 
-func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult, now time.Time) domain.CheckResult {
-	config := c.Config
+func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult, now time.Time, config MarketCanaryConfig) domain.CheckResult {
 	if strings.TrimSpace(config.CalendarPath) == "" || config.SettleDelay < 0 || config.PostCloseDelay < 0 || config.CalendarWarningLead <= 0 || config.ClosedBarCount <= 0 ||
 		config.ClosedBarMinCoverage <= 0 || config.ClosedBarMinCoverage > 1 {
 		result.ErrorMessage = "invalid_config"
@@ -446,6 +535,11 @@ func (c MarketCanary) ProbeStorageAuth(ctx context.Context) error {
 	if c.Reader == nil || strings.TrimSpace(config.SpaceID) == "" || strings.TrimSpace(config.DatasetID) == "" ||
 		strings.TrimSpace(config.SubjectID) == "" || strings.TrimSpace(config.Frequency) == "" || config.SeriesTag == nil {
 		return fmt.Errorf("invalid market canary configuration")
+	}
+	var err error
+	config, err = c.resolveConfig(ctx, config)
+	if err != nil {
+		return fmt.Errorf("resolve market canary subject: %w", err)
 	}
 	frequency, err := canonicalStorageFrequency(config.Frequency)
 	if err != nil {

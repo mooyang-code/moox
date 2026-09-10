@@ -112,12 +112,10 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 
 	observed := time.Now().UTC().Truncate(time.Millisecond)
 	dataTime := observed.Add(-time.Minute)
-	labels := `space_id="crypto",view_id="view_crypto_spot_kline_1m",dataset_id="dataset_binance_spot_kline_1m",subject_id="OPG-USDT",freq="1m",series_tag="venue:binance"`
+	labels := `space_id="crypto",view_id="view_crypto_spot_kline_1m",dataset_id="dataset_binance_spot_kline_1m",subject_id="OPG-USDT-SPOT",freq="1m",series_tag="venue:binance"`
 	raw := []byte(fmt.Sprintf("# HELP moox_e2e_requests Requests handled.\n# TYPE moox_e2e_requests counter\nmoox_e2e_requests{route=\"read\"} 7\n"+
-		"moox_storage_view_dataset_input_last_data_time_seconds{%s} %d\n"+
-		"moox_storage_view_dataset_output_last_data_time_seconds{%s} %d\n"+
-		"moox_storage_view_dataset_output_last_commit_timestamp_seconds{%s} %d\n", labels, dataTime.Unix(), labels, dataTime.Unix(), labels, observed.Unix()))
-	snapshot := &metricspb.MetricSnapshot{SchemaVersion: 1, CollectionIntervalSeconds: 30, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_NONE, Data: raw, MetricFamilyCount: 4, SampleCount: 4}
+		"moox_storage_view_dataset_output_last_data_time_seconds{%s} %d\n", labels, dataTime.Unix()))
+	snapshot := &metricspb.MetricSnapshot{SchemaVersion: 1, CollectionIntervalSeconds: 30, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_NONE, Data: raw, MetricFamilyCount: 2, SampleCount: 2}
 	publisher, err := events.NewPublisher(eventClient, registry)
 	if err != nil {
 		t.Fatal(err)
@@ -151,8 +149,8 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	if latest.Value != 7 || latest.MessageID != messageID {
 		t.Fatalf("latest=%+v, want value=7 and message=%q", latest, messageID)
 	}
-	if len(access.rows) != 4 {
-		t.Fatalf("storage rows=%d, want four reporter samples", len(access.rows))
+	if len(access.rows) != 2 {
+		t.Fatalf("storage rows=%d, want two reporter samples", len(access.rows))
 	}
 	query := metrics.NewQueryService(messageStore, nil)
 	reports, err := metrics.NewKlineFreshnessEvaluator(query, []metrics.KlineFreshnessRule{{
