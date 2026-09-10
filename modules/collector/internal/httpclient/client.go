@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/jobcontext"
@@ -18,7 +19,14 @@ import (
 )
 
 // HTTPClient issues HTTPS requests using the platform DNS resolver and TLS SNI.
-type HTTPClient struct{ httpClient *http.Client }
+type HTTPClient struct {
+	httpClient *http.Client
+	ipMu       sync.Mutex
+	ipClients  map[string]*http.Client
+	ipOrder    []string
+}
+
+const maxIPClients = 32
 
 const defaultRequestTimeout = 5 * time.Second
 
@@ -202,6 +210,12 @@ func (c *HTTPClient) clientForIP(ip string) *http.Client {
 	if parsed == nil {
 		return nil
 	}
+	ip = parsed.String()
+	c.ipMu.Lock()
+	defer c.ipMu.Unlock()
+	if client := c.ipClients[ip]; client != nil {
+		return client
+	}
 	transport := base.Clone()
 	originalDial := transport.DialContext
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -217,6 +231,19 @@ func (c *HTTPClient) clientForIP(ip string) *http.Client {
 	}
 	client := *c.httpClient
 	client.Transport = transport
+	if c.ipClients == nil {
+		c.ipClients = make(map[string]*http.Client)
+	}
+	// Bound rotated DNS snapshots and release idle sockets on FIFO eviction.
+	// Active requests remain valid while their transport finishes naturally.
+	if len(c.ipOrder) >= maxIPClients {
+		oldest := c.ipOrder[0]
+		c.ipClients[oldest].CloseIdleConnections()
+		delete(c.ipClients, oldest)
+		c.ipOrder = c.ipOrder[1:]
+	}
+	c.ipClients[ip] = &client
+	c.ipOrder = append(c.ipOrder, ip)
 	return &client
 }
 

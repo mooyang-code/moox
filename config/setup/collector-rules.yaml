@@ -10,6 +10,7 @@ rules:
   collect_params:
     provider: binance
     source_id: spot_http
+    instrument_type: spot
     market_type: spot
     symbol_source: exchange
     target_dataset_id: dataset_binance_spot_symbols
@@ -24,6 +25,7 @@ rules:
   collect_params:
     provider: binance
     source_id: swap_http
+    instrument_type: swap
     market_type: swap
     symbol_source: exchange
     target_dataset_id: dataset_binance_swap_symbols
@@ -38,6 +40,7 @@ rules:
   collect_params:
     provider: binance
     source_id: spot_http
+    instrument_type: spot
     market_type: spot
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_spot_symbols
@@ -53,6 +56,7 @@ rules:
   collect_params:
     provider: binance
     source_id: swap_http
+    instrument_type: swap
     market_type: swap
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_swap_symbols
@@ -68,6 +72,7 @@ rules:
   collect_params:
     provider: binance
     source_id: spot_http
+    instrument_type: spot
     market_type: spot
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_spot_symbols
@@ -83,6 +88,7 @@ rules:
   collect_params:
     provider: binance
     source_id: swap_http
+    instrument_type: swap
     market_type: swap
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_swap_symbols

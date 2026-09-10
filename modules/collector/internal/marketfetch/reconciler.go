@@ -50,6 +50,7 @@ type dnsSnapshotter interface {
 // Reconciler is the Collector control-plane loop for static Timer-triggered
 // functions. It never invokes a function; it only submits desired config.
 type Reconciler struct {
+	ResolveSourceID               func(string, string) string
 	ResolveSymbol                 SymbolResolver
 	CompactSymbol                 SymbolResolver
 	Rules                         ruleSource
@@ -842,6 +843,13 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 			continue
 		}
 		marketID, instrumentType := marketIdentity(firstNonEmpty(params.MarketID, rule.SpaceID), params.InstrumentType, params.Target.DatasetID)
+		if instrumentType == "" {
+			instrumentType = defaultInstrumentTypeForMarket(marketID, params.MarketType)
+		}
+		sourceID := params.SourceID
+		if sourceID == "" && r.ResolveSourceID != nil {
+			sourceID = r.ResolveSourceID(params.Provider, instrumentType)
+		}
 		symbolIDs := make([]string, 0, len(subjects))
 		externalSymbols := make(map[string]string, len(subjects))
 		activeSubjectCount := 0
@@ -867,7 +875,7 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 			log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s rule=%s skipped=%d subjects=%s", spaceID, rule.RuleID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
 		}
 		for _, frequency := range params.Collector.Intervals {
-			groups = append(groups, TaskGroup{Provider: params.Provider, MarketType: params.MarketType, MarketID: marketID, InstrumentType: instrumentType, SourceID: params.SourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID, Frequency: frequency, Subjects: symbolIDs, ExternalSymbols: externalSymbols})
+			groups = append(groups, TaskGroup{Provider: params.Provider, MarketType: params.MarketType, MarketID: marketID, InstrumentType: instrumentType, SourceID: sourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID, Frequency: frequency, Subjects: symbolIDs, ExternalSymbols: externalSymbols})
 		}
 	}
 	return mergeGroups(groups), nil

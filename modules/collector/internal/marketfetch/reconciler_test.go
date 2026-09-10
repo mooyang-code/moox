@@ -110,6 +110,27 @@ func (s *reconcilerNodesStub) SubmitRuntimeConfigs(_ context.Context, _ string, 
 	return "job-1", nil
 }
 
+func TestReconcilerResolvesMissingInstrumentIdentity(t *testing.T) {
+	for _, product := range []string{"spot", "swap"} {
+		t.Run(product, func(t *testing.T) {
+			r := &Reconciler{
+				ResolveSourceID: func(provider, instrument string) string { return instrument + "_test" },
+				Rules:           reconcilerRulesStub{rules: []domain.TaskRule{{SpaceID: "crypto", Provider: "binance", MarketType: product, DataType: "kline", CollectParams: `{"symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1H"}`}}},
+				Symbols:         reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbols"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}},
+			}
+			groups, err := r.groups(context.Background(), "crypto")
+			require.NoError(t, err)
+			require.Len(t, groups, 1)
+			require.Equal(t, product, groups[0].InstrumentType)
+			require.Equal(t, product+"_test", groups[0].SourceID)
+			env, err := BuildManagedEnvironment(NodeAssignment{Provider: "binance", MarketType: product, MarketID: groups[0].MarketID, InstrumentType: groups[0].InstrumentType, SourceID: groups[0].SourceID, DatasetID: "bars", Frequency: "1H", Subjects: groups[0].Subjects, ExternalSymbols: groups[0].ExternalSymbols}, nil)
+			require.NoError(t, err)
+			require.Equal(t, product, env["MOOX_MARKET_FETCH_INSTRUMENT_TYPE"])
+			require.Equal(t, product+"_test", env["MOOX_MARKET_FETCH_SOURCE_ID"])
+		})
+	}
+}
+
 func TestReconcilerTreatsRuntimeSubmitTimeoutAsRetryPending(t *testing.T) {
 	rule := domain.TaskRule{
 		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,

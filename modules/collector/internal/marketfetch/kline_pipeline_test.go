@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
@@ -404,6 +405,28 @@ func TestKlinePipelineAcceptsCryptoHourFrequency(t *testing.T) {
 	require.Equal(t, "succeeded", payload.GetStatus())
 	require.Len(t, storage.rows, 1)
 	require.Equal(t, "1h", storage.rows[0].GetKey().GetTimeSeries().GetFreq())
+}
+
+func TestKlinePipelinePassesDNSRoutesToProvider(t *testing.T) {
+	for _, marketType := range []string{"spot", "swap"} {
+		t.Run(marketType, func(t *testing.T) {
+			var observed marketdata.KlineRequest
+			registry := marketdata.NewRegistry()
+			require.NoError(t, registry.Register(pipelineProvider{id: "binance", request: &observed, err: marketdata.ErrNoClosedBar}))
+			router, err := marketdata.NewRouter(registry, 2, nil, nil)
+			require.NoError(t, err)
+			pipeline := &KlinePipeline{Router: router, Storage: &pipelineStorage{}, CandidateChain: []string{"binance"}, SpaceID: "crypto", MarketID: "crypto", ProductType: marketdata.ProductType(marketType), InstrumentType: marketdata.InstrumentType(marketType), DatasetID: "kline"}
+			routes := map[string]sources.DNSResolution{
+				"api.binance.com":  {IPs: []string{"203.0.113.1", "203.0.113.2"}},
+				"fapi.binance.com": {IPs: []string{"203.0.113.3"}},
+			}
+			_, err = pipeline.Execute(context.Background(), Request{BatchID: "dns-hour", BatchKind: domain.BatchKindRealtime, SpaceID: "crypto", DatasetID: "kline", Frequency: "1h", Provider: "binance", MarketType: marketType, DNSRoutes: routes, Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", MarketType: marketType, DataType: "kline", DatasetID: "kline", Frequency: "1h"}}})
+			require.NoError(t, err)
+			require.Equal(t, map[string][]string{"api.binance.com": {"203.0.113.1", "203.0.113.2"}, "fapi.binance.com": {"203.0.113.3"}}, observed.DNSRoutes)
+			observed.DNSRoutes["api.binance.com"][0] = "203.0.113.9"
+			require.Equal(t, "203.0.113.1", routes["api.binance.com"].IPs[0], "provider requests must not share mutable IP slices with the batch")
+		})
+	}
 }
 
 func TestRequestKlineRouteIDUsesCryptoFrequency(t *testing.T) {

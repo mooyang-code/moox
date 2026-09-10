@@ -183,7 +183,15 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				}
 				coverageStart, coverageEnd, historyAsOf = canaryStart, canaryEnd, canaryEnd
 			}
-			fetched, selectedProvider, nextCandidateIndex, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, ProductType: productType, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio}, itemChain, item.CandidateIndex)
+			// Each provider request owns its DNS snapshot, including the IP slices.
+			var dnsRoutes map[string][]string
+			if len(req.DNSRoutes) > 0 {
+				dnsRoutes = make(map[string][]string, len(req.DNSRoutes))
+				for host, route := range req.DNSRoutes {
+					dnsRoutes[host] = append([]string(nil), route.IPs...)
+				}
+			}
+			fetched, selectedProvider, nextCandidateIndex, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, ProductType: productType, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
 			if err != nil {
 				item.CandidateIndex = nextCandidateIndex
 				p.observeFeed(req, selectedProvider, "kline", metricKlineResult(err))

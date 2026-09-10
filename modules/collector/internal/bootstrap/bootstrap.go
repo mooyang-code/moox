@@ -377,9 +377,10 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	runtimes := make([]marketFetchRuntime, 0, len(spaceIDs))
 	for _, spaceID := range spaceIDs {
 		reconciler := &marketfetch.Reconciler{
-			ResolveSymbol: marketwiring.ResolveSymbol,
-			CompactSymbol: marketwiring.CompactSymbol,
-			Rules:         dbm.TaskRules(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
+			ResolveSourceID: marketwiring.DefaultSourceID,
+			ResolveSymbol:   marketwiring.ResolveSymbol,
+			CompactSymbol:   marketwiring.CompactSymbol,
+			Rules:           dbm.TaskRules(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
 			Metrics: metrics, MaxSubjects: 40,
 			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
 			MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
