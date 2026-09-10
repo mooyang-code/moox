@@ -43,7 +43,11 @@ storage:
         durable: storage_view_kline
         routes:
           - space_id: crypto
-            dataset_ids: [dataset_binance_spot_kline_1m]
+            dataset_ids:
+              - dataset_binance_spot_kline_1m
+              - dataset_binance_swap_kline_1m
+              - dataset_spot_kline_1h
+              - dataset_perpetual_kline_1h
         fetch_batch: 4
         max_workers: 2
         max_ack_pending: 16

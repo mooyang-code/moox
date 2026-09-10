@@ -257,7 +257,12 @@ func (p StorageViewConsumerPartition) Datasets() []StorageViewConsumerDataset {
 func (v *StorageView) applyConsumerPartitionDefaults() {
 	if len(v.ConsumerPartitions) == 0 {
 		v.ConsumerPartitions = []StorageViewConsumerPartition{
-			{ID: "kline", Durable: events.StorageViewKlineConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m"}}}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
+			{ID: "kline", Durable: events.StorageViewKlineConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{
+				"dataset_binance_spot_kline_1m",
+				"dataset_binance_swap_kline_1m",
+				"dataset_spot_kline_1h",
+				"dataset_perpetual_kline_1h",
+			}}}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
 			{ID: "factor", Durable: events.StorageViewFactorConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_crypto_spot_kline_1m_factor"}}}, FetchBatch: 16, MaxWorkers: 8, MaxAckPending: 128},
 			{ID: "system_metrics", Durable: events.StorageViewMetricsConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}}}, FetchBatch: 16, MaxWorkers: 4, MaxAckPending: 64},
 			{ID: "misc", Durable: events.StorageViewMiscConsumer, Routes: []StorageViewConsumerRoute{
@@ -384,19 +389,23 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 	if len(durables) != 4 {
 		return fmt.Errorf("storage view consumer topology must define exactly four durables (kline, factor, metrics, misc); got %d", len(durables))
 	}
-	requiredRoutes := map[string]struct {
+	requiredRoutes := []struct {
+		name    string
 		durable string
 		space   string
 		dataset string
 	}{
-		"kline":   {durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_binance_spot_kline_1m"},
-		"factor":  {durable: events.StorageViewFactorConsumer, space: "crypto", dataset: "dataset_crypto_spot_kline_1m_factor"},
-		"metrics": {durable: events.StorageViewMetricsConsumer, space: "mooxsys", dataset: "dataset_mooxsys_service_metrics"},
+		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_binance_spot_kline_1m"},
+		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_binance_swap_kline_1m"},
+		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_spot_kline_1h"},
+		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_perpetual_kline_1h"},
+		{name: "factor", durable: events.StorageViewFactorConsumer, space: "crypto", dataset: "dataset_crypto_spot_kline_1m_factor"},
+		{name: "metrics", durable: events.StorageViewMetricsConsumer, space: "mooxsys", dataset: "dataset_mooxsys_service_metrics"},
 	}
-	for name, required := range requiredRoutes {
+	for _, required := range requiredRoutes {
 		partitionID, ok := routes[required.space+"\x00"+required.dataset]
 		if !ok {
-			return fmt.Errorf("storage view %s route %s/%s is missing", name, required.space, required.dataset)
+			return fmt.Errorf("storage view %s route %s/%s is missing", required.name, required.space, required.dataset)
 		}
 		partitionIndex := -1
 		for i := range v.ConsumerPartitions {
@@ -406,7 +415,7 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 			}
 		}
 		if partitionIndex < 0 || v.ConsumerPartitions[partitionIndex].Durable != required.durable {
-			return fmt.Errorf("storage view %s route %s/%s must use durable %s", name, required.space, required.dataset, required.durable)
+			return fmt.Errorf("storage view %s route %s/%s must use durable %s", required.name, required.space, required.dataset, required.durable)
 		}
 	}
 	return nil
