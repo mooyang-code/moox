@@ -2,7 +2,7 @@
 
 ## 代码职责
 
-- `internal/runtimecomposition` 创建具体行情源，并注入 Handler、Scheduler、Reconciler。
+- `internal/marketwiring` 创建具体行情源，并注入 Handler、Scheduler、Reconciler。
 - `internal/marketfetch` 处理通用采集、路由、存储与 Timer 环境，不导入具体 provider 子包。
 - `internal/sources/binance` 持有 Binance 符号编码、HTTP 协议与来源身份；现货为 `spot_http`，永续为 `swap_http`。
 

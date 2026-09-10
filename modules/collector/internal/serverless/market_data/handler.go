@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
-	"github.com/mooyang-code/moox/modules/collector/internal/runtimecomposition"
 	"github.com/tencentyun/scf-go-lib/cloudfunction"
 	"github.com/tencentyun/scf-go-lib/functioncontext"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -27,7 +27,7 @@ type Handler struct {
 }
 
 func NewHandler() *Handler {
-	return &Handler{NewMarketFetch: runtimecomposition.NewHandler}
+	return &Handler{NewMarketFetch: marketwiring.NewHandler}
 }
 
 func RegisterCloudFunction() {
@@ -84,7 +84,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	}
 	fetch := h.NewMarketFetch
 	if fetch == nil {
-		fetch = runtimecomposition.NewHandler
+		fetch = marketwiring.NewHandler
 	}
 	runtimeHandler := fetch()
 	if runtimeHandler == nil {
@@ -113,7 +113,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		if spaceID == "stockcn" {
 			return marketfetch.StockEgressIdentityProbe(ctx)
 		}
-		return runtimecomposition.EgressProbe(ctx, "binance", "spot")
+		return marketwiring.EgressProbe(ctx, "binance", "spot")
 	default:
 		return failure("unknown_event_type", "unsupported market_data SCF action"), nil
 	}

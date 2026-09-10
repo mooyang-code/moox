@@ -16,11 +16,11 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
-	"github.com/mooyang-code/moox/modules/collector/internal/runtimecomposition"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -377,8 +377,8 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	runtimes := make([]marketFetchRuntime, 0, len(spaceIDs))
 	for _, spaceID := range spaceIDs {
 		reconciler := &marketfetch.Reconciler{
-			ResolveSymbol: runtimecomposition.ResolveSymbol,
-			CompactSymbol: runtimecomposition.CompactSymbol,
+			ResolveSymbol: marketwiring.ResolveSymbol,
+			CompactSymbol: marketwiring.CompactSymbol,
 			Rules:         dbm.TaskRules(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
 			Metrics: metrics, MaxSubjects: 40,
 			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
@@ -391,7 +391,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		}
 		readiness := marketfetch.NewPeriodReadinessService(dbm.TaskInstances(), dbm.PeriodReadiness(), cfg.PeriodReadiness.Grace)
 		invokeScheduler := &marketfetch.Scheduler{
-			ResolveSymbol: runtimecomposition.ResolveSymbol,
+			ResolveSymbol: marketwiring.ResolveSymbol,
 			Rules:         dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
 			// Use the target resolved by discovery rather than the static local
 			// config. Invoke SCFs may run outside the Collector host, so a

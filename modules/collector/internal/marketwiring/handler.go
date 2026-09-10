@@ -1,6 +1,6 @@
-// Package runtimecomposition wires concrete data sources into common collection
+// Package marketwiring wires concrete data sources into common collection
 // pipelines. Neither the scheduler nor marketfetch imports provider adapters.
-package runtimecomposition
+package marketwiring
 
 import (
 	"fmt"
