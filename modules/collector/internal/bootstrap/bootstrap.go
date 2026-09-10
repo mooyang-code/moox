@@ -377,10 +377,11 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	runtimes := make([]marketFetchRuntime, 0, len(spaceIDs))
 	for _, spaceID := range spaceIDs {
 		reconciler := &marketfetch.Reconciler{
-			ResolveSourceID: marketwiring.DefaultSourceID,
-			ResolveSymbol:   marketwiring.ResolveSymbol,
-			CompactSymbol:   marketwiring.CompactSymbol,
-			Rules:           dbm.TaskRules(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
+			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
+			ResolveSourceID:     marketwiring.DefaultSourceID,
+			ResolveSymbol:       marketwiring.ResolveSymbol,
+			CompactSymbol:       marketwiring.CompactSymbol,
+			Rules:               dbm.TaskRules(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
 			Metrics: metrics, MaxSubjects: 40,
 			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
 			MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
@@ -392,8 +393,9 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		}
 		readiness := marketfetch.NewPeriodReadinessService(dbm.TaskInstances(), dbm.PeriodReadiness(), cfg.PeriodReadiness.Grace)
 		invokeScheduler := &marketfetch.Scheduler{
-			ResolveSymbol: marketwiring.ResolveSymbol,
-			Rules:         dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
+			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
+			ResolveSymbol:       marketwiring.ResolveSymbol,
+			Rules:               dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
 			// Use the target resolved by discovery rather than the static local
 			// config. Invoke SCFs may run outside the Collector host, so a
 			// 127.0.0.1 gateway target would point back at the function itself.

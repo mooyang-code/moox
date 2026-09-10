@@ -20,6 +20,101 @@ import (
 
 type reconcilerRulesStub struct{ rules []domain.TaskRule }
 
+func TestDisableBlacklistedTimersHandlesMissingObservation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		metadata map[string]any
+		patch    bool
+	}{
+		{"missing cron", map[string]any{"timer_enabled": true}, true},
+		{"disabled with unknown actual", map[string]any{"timer_enabled": false}, false},
+		{"disabled but actual enabled", map[string]any{"timer_enabled": false, "timer_actual_enabled": true}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			nodes := &reconcilerNodesStub{}
+			r := &Reconciler{Nodes: nodes}
+			submitted, err := r.disableBlacklistedTimers(context.Background(), "crypto", []scfinvoker.Node{{NodeID: "blocked", Metadata: test.metadata}})
+			require.NoError(t, err)
+			require.Equal(t, test.patch, submitted)
+			if test.patch {
+				require.Len(t, nodes.patches, 1)
+				require.Equal(t, "0 * * * * * *", nodes.patches[0].GetTimerCron())
+				require.False(t, nodes.patches[0].GetTimerEnabled())
+			} else {
+				require.Empty(t, nodes.patches)
+			}
+		})
+	}
+}
+
+func TestReconcilerRegionBlacklistMigratesOrPreservesOnCapacityFailure(t *testing.T) {
+	for _, capacity := range []bool{true, false} {
+		t.Run(fmt.Sprint(capacity), func(t *testing.T) {
+			nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "blocked", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"timer_enabled": true, "timer_cron": "0 * * * * * *"}}}}
+			if capacity {
+				nodes.nodes = append(nodes.nodes, scfinvoker.Node{NodeID: "allowed", Region: "ap-singapore", NodeType: "scf-event", TriggerType: "timer"})
+			}
+			r := &Reconciler{
+				SCFRegionBlacklists: map[string][]string{"crypto": {"ap-guangzhou"}},
+				Rules:               reconcilerRulesStub{rules: []domain.TaskRule{{SpaceID: "crypto", RuleID: "bars", DataType: "kline", Enabled: true, CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1h"}`}}},
+				Symbols:             reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}}, Nodes: nodes,
+			}
+			err := r.Reconcile(context.Background(), "crypto")
+			require.NoError(t, err)
+			require.Len(t, nodes.patches, 1)
+			require.Equal(t, "blocked", nodes.patches[0].GetNodeId())
+			require.False(t, nodes.patches[0].GetTimerEnabled())
+			require.Empty(t, nodes.patches[0].GetManagedEnvironment())
+			err = r.Reconcile(context.Background(), "crypto")
+			if !capacity {
+				require.Error(t, err)
+				require.Equal(t, 1, nodes.submits, "capacity failure must not modify allowed timers")
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, nodes.patches, 1)
+			require.Equal(t, "allowed", nodes.patches[0].GetNodeId())
+			require.True(t, nodes.patches[0].GetTimerEnabled())
+		})
+	}
+}
+
+func TestFilterSCFRegionsIsSpaceScoped(t *testing.T) {
+	nodes := []scfinvoker.Node{{NodeID: "invoke", Region: "ap-guangzhou", TriggerType: "invoke"}, {NodeID: "instrument", Region: "ap-guangzhou", TriggerType: "timer", Metadata: map[string]any{"function_mode": "instrument_snapshot"}}, {NodeID: "allowed", Region: "ap-singapore", TriggerType: "timer"}}
+	blacklists := map[string][]string{"crypto": {"ap-guangzhou"}}
+	allowed, blocked := filterSCFRegions(nodes, "crypto", blacklists)
+	require.Len(t, allowed, 1)
+	require.Equal(t, "allowed", allowed[0].NodeID)
+	require.Len(t, blocked, 2)
+	allowed, blocked = filterSCFRegions(nodes, "stockcn", blacklists)
+	require.Equal(t, nodes, allowed)
+	require.Empty(t, blocked)
+}
+
+type reconcilerInstrumentNodesStub struct{ *reconcilerNodesStub }
+
+func (s reconcilerInstrumentNodesStub) ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
+	return nil, nil
+}
+
+func (s reconcilerInstrumentNodesStub) ListInstrumentSnapshotTimers(context.Context, string) ([]scfinvoker.Node, error) {
+	return s.nodes, nil
+}
+
+func TestReconcilerDisablesBlacklistedInstrumentWithoutChangingIdentity(t *testing.T) {
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{
+		{NodeID: "blocked-instrument", Region: "ap-guangzhou", Metadata: map[string]any{"function_mode": "instrument_snapshot", "timer_enabled": true, "timer_cron": "0 0 8 * * * *"}},
+		{NodeID: "allowed-instrument", Region: "ap-singapore", Metadata: map[string]any{"function_mode": "instrument_snapshot", "timer_enabled": true, "timer_cron": "0 0 8 * * * *"}},
+	}}
+	r := &Reconciler{SCFRegionBlacklists: map[string][]string{"crypto": {"ap-guangzhou"}}, Rules: reconcilerRulesStub{}, Symbols: reconcilerSymbolsStub{}, Nodes: reconcilerInstrumentNodesStub{nodes}}
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.Len(t, nodes.patches, 1)
+	require.Equal(t, "blocked-instrument", nodes.patches[0].GetNodeId())
+	require.False(t, nodes.patches[0].GetTimerEnabled())
+	require.Equal(t, "0 0 8 * * * *", nodes.patches[0].GetTimerCron())
+	require.Nil(t, nodes.patches[0].GetManagedEnvironment())
+}
+
 func (s reconcilerRulesStub) ListEnabled(context.Context, string) ([]domain.TaskRule, error) {
 	return append([]domain.TaskRule(nil), s.rules...), nil
 }
@@ -69,6 +164,10 @@ func TestRuntimeConfigPatchBatchesRespectCloudNodeLimit(t *testing.T) {
 	require.Len(t, batches[0], 100)
 	require.Len(t, batches[1], 100)
 	require.Len(t, batches[2], 1)
+}
+
+func (s *reconcilerNodesStub) ListInstrumentSnapshotTimers(context.Context, string) ([]scfinvoker.Node, error) {
+	return nil, nil
 }
 
 func (s *reconcilerNodesStub) ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {

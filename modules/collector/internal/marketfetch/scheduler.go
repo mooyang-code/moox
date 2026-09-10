@@ -38,20 +38,21 @@ type scheduleState struct {
 // applies. It is intentionally a single process timer handler; SQLite unique
 // indexes provide the only idempotency needed by this single-user system.
 type Scheduler struct {
-	ResolveSymbol     SymbolResolver
-	Rules             *store.TaskRuleRepository
-	Instances         *store.TaskInstanceRepository
-	Batches           *store.FetchBatchRepository
-	Retries           *store.FetchRetryRepository
-	Invoker           *scfinvoker.Client
-	Storage           func(string, string, string) (StorageReader, error)
-	StorageTarget     string
-	BatchSize         int
-	InvokeConcurrency int
-	MaxRetryAttempts  int
-	Metrics           *Metrics
-	SpaceID           string
-	Symbols           datasetSource
+	SCFRegionBlacklists map[string][]string
+	ResolveSymbol       SymbolResolver
+	Rules               *store.TaskRuleRepository
+	Instances           *store.TaskInstanceRepository
+	Batches             *store.FetchBatchRepository
+	Retries             *store.FetchRetryRepository
+	Invoker             *scfinvoker.Client
+	Storage             func(string, string, string) (StorageReader, error)
+	StorageTarget       string
+	BatchSize           int
+	InvokeConcurrency   int
+	MaxRetryAttempts    int
+	Metrics             *Metrics
+	SpaceID             string
+	Symbols             datasetSource
 	// InvokeNonRealtimeOnly keeps the Invoke path for instrument snapshots and
 	// bounded catch-up while realtime K-lines run from Timer-triggered nodes.
 	InvokeNonRealtimeOnly bool
@@ -147,6 +148,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		return fmt.Errorf("list timer market fetcher nodes: %w", err)
 	}
 	nodes := append(append([]scfinvoker.Node(nil), invokeNodes...), timerNodes...)
+	nodes, _ = filterSCFRegions(nodes, spaceID, s.SCFRegionBlacklists)
 	sort.Slice(nodes, func(i, j int) bool {
 		if nodes[i].Region != nodes[j].Region {
 			return nodes[i].Region < nodes[j].Region
@@ -339,6 +341,28 @@ func filterInvokeRules(rules []domain.TaskRule) []domain.TaskRule {
 		}
 	}
 	return filtered
+}
+
+func filterSCFRegions(nodes []scfinvoker.Node, spaceID string, blacklists map[string][]string) (allowed, blocked []scfinvoker.Node) {
+	regions := make(map[string]struct{})
+	for space, values := range blacklists {
+		if !strings.EqualFold(strings.TrimSpace(space), strings.TrimSpace(spaceID)) {
+			continue
+		}
+		for _, region := range values {
+			if region = strings.ToLower(strings.TrimSpace(region)); region != "" {
+				regions[region] = struct{}{}
+			}
+		}
+	}
+	for _, node := range nodes {
+		if _, excluded := regions[strings.ToLower(strings.TrimSpace(node.Region))]; excluded {
+			blocked = append(blocked, node)
+		} else {
+			allowed = append(allowed, node)
+		}
+	}
+	return allowed, blocked
 }
 
 func filterNodesByTrigger(nodes []scfinvoker.Node, trigger string) []scfinvoker.Node {

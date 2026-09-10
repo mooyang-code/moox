@@ -39,6 +39,7 @@ type datasetSource interface {
 
 type runtimeConfigClient interface {
 	ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error)
+	ListInstrumentSnapshotTimers(context.Context, string) ([]scfinvoker.Node, error)
 	SubmitRuntimeConfigs(context.Context, string, []*cloudnodepb.NodeRuntimeConfigPatch) (string, error)
 	GetRuntimeConfigBatchStatus(context.Context, string, string) (*cloudnodepb.NodeBatchSummary, error)
 }
@@ -50,6 +51,7 @@ type dnsSnapshotter interface {
 // Reconciler is the Collector control-plane loop for static Timer-triggered
 // functions. It never invokes a function; it only submits desired config.
 type Reconciler struct {
+	SCFRegionBlacklists           map[string][]string
 	ResolveSourceID               func(string, string) string
 	ResolveSymbol                 SymbolResolver
 	CompactSymbol                 SymbolResolver
@@ -130,6 +132,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		return r.fail(spaceID, "cloudnode", fmt.Errorf("list timer market fetchers: %w", err))
 	}
 	r.observeTimerStates(spaceID, nodes)
+	eligibleNodes, blockedNodes := filterSCFRegions(nodes, spaceID, r.SCFRegionBlacklists)
+	var blockedInstrumentNodes []scfinvoker.Node
+	spaceHasBlacklist := false
+	for configuredSpace, regions := range r.SCFRegionBlacklists {
+		if strings.EqualFold(strings.TrimSpace(configuredSpace), spaceID) && len(regions) > 0 {
+			spaceHasBlacklist = true
+		}
+	}
+	if spaceHasBlacklist {
+		instruments, listErr := r.Nodes.ListInstrumentSnapshotTimers(ctx, spaceID)
+		if listErr != nil {
+			return r.fail(spaceID, "cloudnode", fmt.Errorf("list instrument timers: %w", listErr))
+		}
+		_, blockedInstrumentNodes = filterSCFRegions(instruments, spaceID, r.SCFRegionBlacklists)
+	}
+	if submitted, disableErr := r.disableBlacklistedTimers(ctx, spaceID, append(blockedNodes, blockedInstrumentNodes...)); submitted || disableErr != nil {
+		return disableErr
+	}
 	groups, err := r.groups(ctx, spaceID)
 	if err != nil {
 		return r.fail(spaceID, "rules", err)
@@ -164,7 +184,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	// validation. A malformed budget or an individual symbol that cannot fit
 	// must still become a visible Monitor coordination failure.
 	r.observeAssignmentRequirements(spaceID, groups)
-	managedBudget, budgetErr := managedEnvironmentBudget(nodes, managedEnvironmentLimit(stockCN))
+	managedBudget, budgetErr := managedEnvironmentBudget(eligibleNodes, managedEnvironmentLimit(stockCN))
 	if budgetErr != nil {
 		return r.fail(spaceID, "environment", budgetErr)
 	}
@@ -183,7 +203,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	// required shard count exceeds the visible Timer fleet, BuildAssignments
 	// will fail below, but Monitor can still report the exact shortfall instead
 	// of waiting for a generic coordination error.
-	r.observeTimerCapacity(spaceID, nodes, groups, nil)
+	r.observeTimerCapacity(spaceID, eligibleNodes, groups, nil)
 	var assignments []NodeAssignment
 	if stockCN {
 		if len(groups) != 1 {
@@ -202,14 +222,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		if requiredGroupSize > r.MeasuredSafeGroupSize {
 			return r.fail(spaceID, "capacity", fmt.Errorf("stockcn required_group_size %d exceeds measured_safe_group_size %d", requiredGroupSize, r.MeasuredSafeGroupSize))
 		}
-		assignments, err = BuildStockCNAssignmentsWithStagger(groups[0], nodes, r.MeasuredSafeGroupSize, r.stockCNTradingDate(), r.StockCNStagger, r.ExpectedStockCNTimerFunctions)
+		assignments, err = BuildStockCNAssignmentsWithStagger(groups[0], eligibleNodes, r.MeasuredSafeGroupSize, r.stockCNTradingDate(), r.StockCNStagger, r.ExpectedStockCNTimerFunctions)
 	} else {
-		assignments, err = BuildAssignments(groups, nodes, r.maxSubjects())
+		assignments, err = BuildAssignments(groups, eligibleNodes, r.maxSubjects())
 	}
 	if err != nil {
 		return r.fail(spaceID, "capacity", err)
 	}
-	r.observeTimerCapacity(spaceID, nodes, groups, assignments)
+	r.observeTimerCapacity(spaceID, eligibleNodes, groups, assignments)
 	// Publish the complete desired plan before the remote submission. A client
 	// timeout is ambiguous: CloudNode may still have accepted the request, so
 	// Monitor must not reinterpret a temporary HTTP failure as zero capacity.
@@ -313,6 +333,43 @@ func runtimeConfigPatchBatches(patches []*cloudnodepb.NodeRuntimeConfigPatch, ba
 		batches = append(batches, patches[start:end])
 	}
 	return batches
+}
+
+func (r *Reconciler) disableBlacklistedTimers(ctx context.Context, spaceID string, nodes []scfinvoker.Node) (bool, error) {
+	var patches []*cloudnodepb.NodeRuntimeConfigPatch
+	for _, node := range nodes {
+		actualEnabled, actualKnown := node.Metadata["timer_actual_enabled"].(bool)
+		desiredEnabled, desiredKnown := node.Metadata["timer_enabled"].(bool)
+		if desiredKnown && !desiredEnabled && (!actualKnown || !actualEnabled) {
+			continue
+		}
+		cron, _ := node.Metadata["timer_actual_cron"].(string)
+		if strings.TrimSpace(cron) == "" {
+			cron, _ = node.Metadata["timer_cron"].(string)
+		}
+		if strings.TrimSpace(cron) == "" {
+			cron = "0 * * * * * *"
+		}
+		patches = append(patches, &cloudnodepb.NodeRuntimeConfigPatch{NodeId: node.NodeID, TimerEnabled: false, TimerCron: cron})
+	}
+	var jobs []string
+	for _, batch := range runtimeConfigPatchBatches(patches, runtimeConfigBatchSize) {
+		job, err := r.Nodes.SubmitRuntimeConfigs(ctx, spaceID, batch)
+		if err != nil {
+			if len(jobs) > 0 {
+				r.setPendingRuntimeJobs(jobs, nil, false)
+			}
+			return false, r.fail(spaceID, "cloudnode", fmt.Errorf("disable blacklisted timers: %w", err))
+		}
+		jobs = append(jobs, job)
+	}
+	if len(jobs) > 0 {
+		// Disabling prohibited execution is independent from available capacity.
+		// Observe completion before planning any replacement assignments.
+		r.setPendingRuntimeJobs(jobs, nil, false)
+		r.observeAssignmentPending(spaceID, true, time.Now().UTC())
+	}
+	return len(jobs) > 0, nil
 }
 
 func (r *Reconciler) persistAssignments(ctx context.Context, spaceID string, nodes []scfinvoker.Node, assignments []NodeAssignment) error {

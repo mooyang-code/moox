@@ -276,8 +276,9 @@ type FactorSetupItem struct {
 // SCFFetcherSpace describes one separately packaged and deployed source
 // collector fleet. PackageConfigDir is relative to modules/collector/configs.
 type SCFFetcherSpace struct {
-	SpaceID    string `toml:"space_id"`
-	Entrypoint string `toml:"entrypoint"`
+	RegionBlacklist []string `toml:"region_blacklist"`
+	SpaceID         string   `toml:"space_id"`
+	Entrypoint      string   `toml:"entrypoint"`
 	// Market data Timer fleets carry this canonical identity in their static
 	// environment. It is intentionally separate from the legacy crypto
 	// market_type label so a function cannot infer an asset class from a
@@ -972,6 +973,9 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	if cfg == nil {
 		return fmt.Errorf("config_invalid: %s is required", path)
 	}
+	if err := normalizeSCFRegionBlacklist(cfg, path); err != nil {
+		return err
+	}
 	if cfg.PackageConfigDir == "" {
 		cfg.PackageConfigDir = filepath.ToSlash(filepath.Join("scf", cfg.SpaceID))
 	}
@@ -1245,7 +1249,7 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 func normalizeStockCNInstrumentSnapshotConfig(cfg *SCFFetcherSpace, path string) error {
 	if strings.TrimSpace(cfg.InstrumentSnapshotRegion) == "" {
 		for _, region := range cfg.Regions {
-			if region.Enabled {
+			if region.Enabled && !cfg.IsRegionBlacklisted(region.Region) {
 				cfg.InstrumentSnapshotRegion = strings.TrimSpace(region.Region)
 				break
 			}
@@ -1262,7 +1266,7 @@ func normalizeStockCNInstrumentSnapshotConfig(cfg *SCFFetcherSpace, path string)
 			break
 		}
 	}
-	if selected == nil || !selected.Enabled {
+	if selected == nil || !selected.Enabled || cfg.IsRegionBlacklisted(selected.Region) {
 		return fmt.Errorf("config_invalid: %s.instrument_snapshot_region %q must select an enabled region", path, cfg.InstrumentSnapshotRegion)
 	}
 	if strings.TrimSpace(cfg.InstrumentSnapshotCloudAccountID) == "" {
@@ -1302,6 +1306,9 @@ func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 	if cfg == nil {
 		return fmt.Errorf("config_invalid: %s is required", path)
 	}
+	if err := normalizeSCFRegionBlacklist(cfg, path); err != nil {
+		return err
+	}
 	if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stockcn") && cfg.StaggerStartSecond == 0 && cfg.StaggerWindowSeconds == 0 && cfg.StaggerMaxStartsPerSecond == 0 {
 		cfg.StaggerStartSecond = DefaultStockCNStaggerStartSecond
 		cfg.StaggerWindowSeconds = DefaultStockCNStaggerWindowSeconds
@@ -1311,6 +1318,12 @@ func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 	autoRegions := make([]int, 0)
 	enabledRegions := make([]int, 0)
 	for index, region := range cfg.Regions {
+		if cfg.IsRegionBlacklisted(region.Region) {
+			if region.FunctionCount != 0 {
+				return fmt.Errorf("config_invalid: %s region %q is blacklisted but has explicit function_count %d", path, region.Region, region.FunctionCount)
+			}
+			continue
+		}
 		if !region.Enabled {
 			continue
 		}
@@ -1322,6 +1335,9 @@ func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 		explicitTotal += region.FunctionCount
 	}
 	desired := cfg.TimerFunctionCount
+	if len(enabledRegions) == 0 {
+		return fmt.Errorf("config_invalid: %s has no enabled region outside region_blacklist", path)
+	}
 	if desired <= 0 {
 		if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stockcn") {
 			return fmt.Errorf("config_invalid: %s.timer_function_count must be an explicit positive value for stockcn", path)

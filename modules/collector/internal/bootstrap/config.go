@@ -17,16 +17,17 @@ import (
 
 // Config is the root collector control-plane configuration.
 type Config struct {
-	Database        DatabaseConfig        `yaml:"database"`
-	CloudNode       CloudNodeConfig       `yaml:"cloudnode"`
-	Storage         StorageConfig         `yaml:"storage"`
-	StockCN         StockCNConfig         `yaml:"stockcn"`
-	PeriodReadiness PeriodReadinessConfig `yaml:"period_readiness"`
-	KlineResample   KlineResampleConfig   `yaml:"kline_resample"`
-	SysDeploy       SysDeployConfig       `yaml:"sysdeploy"`
-	Health          HealthConfig          `yaml:"health"`
-	DNS             DNSConfig             `yaml:"dns"`
-	DNSResolver     DNSResolverConfig     `yaml:"dns_resolver"`
+	SCFRegionBlacklists map[string][]string   `yaml:"scf_region_blacklists"`
+	Database            DatabaseConfig        `yaml:"database"`
+	CloudNode           CloudNodeConfig       `yaml:"cloudnode"`
+	Storage             StorageConfig         `yaml:"storage"`
+	StockCN             StockCNConfig         `yaml:"stockcn"`
+	PeriodReadiness     PeriodReadinessConfig `yaml:"period_readiness"`
+	KlineResample       KlineResampleConfig   `yaml:"kline_resample"`
+	SysDeploy           SysDeployConfig       `yaml:"sysdeploy"`
+	Health              HealthConfig          `yaml:"health"`
+	DNS                 DNSConfig             `yaml:"dns"`
+	DNSResolver         DNSResolverConfig     `yaml:"dns_resolver"`
 }
 
 // StockCNConfig carries the release-time capacity contract to the Collector

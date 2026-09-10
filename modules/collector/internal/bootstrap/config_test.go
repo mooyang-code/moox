@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+func TestLoadSCFRegionBlacklists(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, "scf_region_blacklists:\n  crypto: [ap-guangzhou]\n  stockcn: [ap-tokyo]\n"))
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{"crypto": {"ap-guangzhou"}, "stockcn": {"ap-tokyo"}}, cfg.SCFRegionBlacklists)
+}
+
 func TestDefaultHealthConfigAndEnvOverride(t *testing.T) {
 	t.Setenv("MOOX_COLLECTOR_HEALTH_ADDR", "127.0.0.1:16012")
 

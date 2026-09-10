@@ -601,6 +601,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, err
 		}
 	}
+	if err := preflightCollectorBlacklistRuntime(ctx, manifest, fetcherConfig); err != nil {
+		return collectorPublishSummary{}, err
+	}
 	serviceGatewayCAFile := ""
 	manifestServiceAuth := false
 	if fetcherConfig != nil {
@@ -701,6 +704,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, fmt.Errorf("stockcn publish requires all equity collector rules disabled; enabled rules: %s", strings.Join(ids, ","))
 		}
 	}
+	if err := disableCollectorBlacklistedTimers(ctx, client, fetcherConfig); err != nil {
+		return collectorPublishSummary{}, err
+	}
 	accounts, err := client.ListCloudAccounts(ctx, "tencent")
 	if err != nil {
 		return collectorPublishSummary{}, err
@@ -797,7 +803,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		var instrumentSnapshotFleet collectorPublishedTimerFleet
 		var hasInstrumentSnapshotFleet bool
 		for _, region := range fetcherConfig.Regions {
-			if !region.Enabled {
+			if !region.Enabled || fetcherConfig.IsRegionBlacklisted(region.Region) {
 				continue
 			}
 			regionOpts := opts
@@ -1127,6 +1133,9 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if fetcherConfig == nil || !strings.EqualFold(fetcherConfig.SpaceID, "stockcn") {
 		return summary, fmt.Errorf("activation requires an enabled stockcn manifest")
 	}
+	if err := preflightCollectorBlacklistRuntime(ctx, manifest, fetcherConfig); err != nil {
+		return summary, err
+	}
 	serviceGatewayCAFile := ""
 	manifestServiceAuth := false
 	if strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
@@ -1165,6 +1174,9 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 		client.ServiceAuth.Caller = "moox-cli"
 		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
 	}
+	if err := disableCollectorBlacklistedTimers(ctx, client, fetcherConfig); err != nil {
+		return summary, err
+	}
 	enabledRules, err := client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "equity")
 	if err != nil {
 		return summary, fmt.Errorf("stockcn activation requires a rule readback: %w", err)
@@ -1181,7 +1193,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	var fleets []collectorPublishedTimerFleet
 	var allTimerNodes []adminclient.CloudNode
 	for _, region := range fetcherConfig.Regions {
-		if !region.Enabled || region.FunctionCount <= 0 {
+		if !region.Enabled || region.FunctionCount <= 0 || fetcherConfig.IsRegionBlacklisted(region.Region) {
 			continue
 		}
 		regionOpts := collectorPublishOptions{
@@ -1324,7 +1336,7 @@ func ensureCollectorSpaceCloudAccounts(
 		return nil
 	}
 	for _, region := range fetcher.Regions {
-		if !region.Enabled {
+		if !region.Enabled || fetcher.IsRegionBlacklisted(region.Region) {
 			continue
 		}
 		if accounts[region.CloudAccountID].AccountID != "" {
@@ -1926,7 +1938,13 @@ func collectorTimerEnablePatches(nodes []adminclient.CloudNode, configs ...setup
 	if windowSeconds <= 0 {
 		windowSeconds = setupconfig.DefaultStockCNStaggerWindowSeconds
 	}
-	ordered := append([]adminclient.CloudNode(nil), nodes...)
+	ordered := make([]adminclient.CloudNode, 0, len(nodes))
+	for _, node := range nodes {
+		if len(configs) > 0 && configs[0].IsRegionBlacklisted(node.Region) {
+			continue
+		}
+		ordered = append(ordered, node)
+	}
 	sort.SliceStable(ordered, func(i, j int) bool {
 		if ordered[i].Region != ordered[j].Region {
 			return ordered[i].Region < ordered[j].Region
@@ -2674,6 +2692,9 @@ func scfCLSIngestHost(host string) string {
 }
 
 func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string) (adminclient.NodeCreateItem, error) {
+	if opts.FetcherConfig != nil && opts.FetcherConfig.IsRegionBlacklisted(opts.Region) {
+		return adminclient.NodeCreateItem{}, fmt.Errorf("SCF region %q is blacklisted for space %q", opts.Region, opts.FetcherConfig.SpaceID)
+	}
 	packageName := defaultFlag(opts.PackageName, "moox-collector")
 	bizType := defaultFlag(opts.BizType, "market_fetcher")
 	if len(opts.JobTypes) > 0 {

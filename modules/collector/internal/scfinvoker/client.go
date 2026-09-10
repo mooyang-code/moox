@@ -87,6 +87,20 @@ func (c *Client) ListTimerMarketFetchers(ctx context.Context, spaceID string) ([
 	return filtered, nil
 }
 
+func (c *Client) ListInstrumentSnapshotTimers(ctx context.Context, spaceID string) ([]Node, error) {
+	nodes, err := c.listMarketFetchers(ctx, spaceID, "timer")
+	if err != nil {
+		return nil, err
+	}
+	filtered := nodes[:0]
+	for _, node := range nodes {
+		if IsInstrumentSnapshotNode(node) {
+			filtered = append(filtered, node)
+		}
+	}
+	return filtered, nil
+}
+
 func (c *Client) listMarketFetchers(ctx context.Context, spaceID, triggerType string) ([]Node, error) {
 	if strings.TrimSpace(spaceID) == "" {
 		return nil, fmt.Errorf("space_id is required")

@@ -67,6 +67,14 @@ func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]by
 	if err != nil {
 		return nil, err
 	}
+	blacklists := make([]mappingField, 0, len(snapshot.Manifest.SCFFetcher.Spaces))
+	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
+		blacklists = append(blacklists, mappingField{space.SpaceID, append([]string{}, space.RegionBlacklist...)})
+	}
+	rendered, err = replaceYAMLMapping(rendered, "scf_region_blacklists", orderedMapping(blacklists...))
+	if err != nil {
+		return nil, err
+	}
 	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
 		if !strings.EqualFold(strings.TrimSpace(space.SpaceID), "stockcn") {
 			continue
