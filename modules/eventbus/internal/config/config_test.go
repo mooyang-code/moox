@@ -59,7 +59,10 @@ func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 	for _, stream := range cfg.Streams {
 		assert.NotEqual(t, "MOOX_METRICS", stream.Name)
 		if stream.Name == "MOOX_OBSERVABILITY" {
-			assert.Equal(t, []string{"moox.event.observability.>"}, stream.Subjects)
+			assert.Equal(t, []string{
+				"moox.event.observability.>",
+				"moox.observability.>",
+			}, stream.Subjects)
 		}
 	}
 }

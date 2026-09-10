@@ -50,7 +50,12 @@ streams:
     # production host; a full historical queue can prevent NATS bootstrap.
     max_bytes: 536870912
   - name: MOOX_OBSERVABILITY
-    subjects: ["moox.event.observability.>"]
+    # Keep the legacy subject while upgrading an existing JetStream store.
+    # NATS refuses to remove a subject that still has persisted messages;
+    # retaining it lets the broker start and expire the old data naturally.
+    subjects:
+      - "moox.event.observability.>"
+      - "moox.observability.>"
     retention: limits
     discard: old
     storage: file
