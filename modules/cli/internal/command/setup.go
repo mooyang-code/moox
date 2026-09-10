@@ -779,6 +779,14 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		if _, err = setupclient.New(control).ApplyStoragePlacement(ctx, host.Name, host.Address); err != nil {
 			return err
 		}
+		// PrepareStoragePlacement clones the control-plane Storage deployment
+		// rows onto the remote Gateway. A control row may intentionally be
+		// disabled while Storage is absent; after this package has passed its
+		// readiness probe, explicitly activate the remote rows as well so the
+		// remote Gateway publishes DataView and PrimaryStore routes.
+		if _, err = setupclient.New(control).ActivateStoragePlacement(ctx, host.Name); err != nil {
+			return err
+		}
 		if err = configureRemoteCollectorStorageTarget(ctx, control, host.Name, host.Address, paths.ControlRoot); err != nil {
 			return err
 		}
