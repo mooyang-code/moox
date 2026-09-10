@@ -28,8 +28,11 @@ type KlineCollector struct {
 
 // NewKlineCollector returns a configured Binance K-line collector for bounded
 // short-lived invocations. It intentionally does not attach a Storage writer.
-func NewKlineCollector() *KlineCollector {
+func NewKlineCollector(clients ...*binanceapi.Client) *KlineCollector {
 	client := newConfiguredClient()
+	if len(clients) > 0 && clients[0] != nil {
+		client = clients[0]
+	}
 	return &KlineCollector{client: client, spotAPI: binanceapi.NewSpotAPI(client), swapAPI: binanceapi.NewSwapAPI(client)}
 }
 

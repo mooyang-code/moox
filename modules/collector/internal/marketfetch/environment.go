@@ -30,12 +30,12 @@ const (
 
 // BuildManagedEnvironment creates only the Collector-owned keys. CloudNode
 // merges them with provider-owned keys such as MOOX_CODE_PACKAGE_ID.
-func BuildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sources.DNSResolution) (map[string]string, error) {
+func BuildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sources.DNSResolution, resolvers ...SymbolResolver) (map[string]string, error) {
 	maxSize := maxManagedEnvironmentSize
 	if isStockCNAssignment(assignment) {
 		maxSize = stockCNMaxManagedEnvironmentSize
 	}
-	return buildManagedEnvironment(assignment, snapshot, maxSize)
+	return buildManagedEnvironment(assignment, snapshot, maxSize, resolvers...)
 }
 
 // ManagedDNSHash returns the short hash embedded in the CloudNode-managed
@@ -45,7 +45,11 @@ func ManagedDNSHash(snapshot map[string]sources.DNSResolution) string {
 	return hash
 }
 
-func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sources.DNSResolution, maxSize int) (map[string]string, error) {
+func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sources.DNSResolution, maxSize int, resolvers ...SymbolResolver) (map[string]string, error) {
+	var resolver SymbolResolver
+	if len(resolvers) > 0 {
+		resolver = resolvers[0]
+	}
 	if maxSize <= 0 {
 		return nil, fmt.Errorf("timer managed environment budget must be positive")
 	}
@@ -87,6 +91,14 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 		}
 		if external == "" {
 			return nil, fmt.Errorf("assignment subject %s has no external symbol", subject)
+		}
+		if resolver != nil {
+			// Only omit a symbol when the same injected codec can reconstruct it
+			// at invocation time. Explicit overrides remain in the environment.
+			defaultSymbol, defaultErr := resolveProviderSymbol(resolver, assignment.Provider, assignment.MarketID, assignment.MarketType, subject, "")
+			if defaultErr == nil && defaultSymbol == external {
+				continue
+			}
 		}
 		symbols[subject] = external
 	}

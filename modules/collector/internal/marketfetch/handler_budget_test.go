@@ -79,7 +79,7 @@ func TestHandlerUsesCommonInstrumentPipelineForCryptoSnapshot(t *testing.T) {
 	storage := &instrumentStorageStub{}
 	h := &Handler{
 		NewStorage: func(string, string, string) (Storage, error) { return storage, nil },
-		NewCryptoInstrumentPipeline: func(InstrumentStorage, marketdata.ProductType) (*InstrumentPipeline, error) {
+		NewInstrumentPipeline: func(InstrumentStorage, string, marketdata.ProductType) (*InstrumentPipeline, error) {
 			return &InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: []string{"binance"}, SpaceID: "crypto", MarketID: "crypto", DatasetID: "dataset_binance_spot_symbols", DataSourceID: "binance", TargetDatasetID: "", RequiredExchanges: []string{"binance"}, MinimumCount: 1}, nil
 		},
 		Now: func() time.Time { return now },

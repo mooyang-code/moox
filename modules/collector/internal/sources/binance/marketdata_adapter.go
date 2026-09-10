@@ -60,10 +60,14 @@ func NewMarketDataAdapter(cfg AdapterConfig) *MarketDataAdapter {
 	}
 }
 
-func (*MarketDataAdapter) Descriptor() marketdata.ProviderDescriptor {
+func (a *MarketDataAdapter) Descriptor() marketdata.ProviderDescriptor {
+	sourceID := "spot_http"
+	if a.defaultProductType == marketdata.ProductSwap {
+		sourceID = "swap_http"
+	}
 	return marketdata.ProviderDescriptor{
 		ID:              "binance",
-		SourceID:        "spot_http",
+		SourceID:        sourceID,
 		DisplayName:     "Binance",
 		Hosts:           []string{"data-api.binance.vision", "api-gcp.binance.com", "api.binance.com", "fapi.binance.com"},
 		ProtocolVariant: "http",
@@ -126,6 +130,15 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 	if productType == "" {
 		productType = a.defaultProductType
 	}
+	if productType != a.defaultProductType {
+		return nil, fmt.Errorf("%w: product %s does not match source %s", marketdata.ErrInvalidRequest, productType, a.Descriptor().SourceID)
+	}
+	sourceID := a.Descriptor().SourceID
+	if req.SourceID != "" && req.SourceID != sourceID {
+		return nil, fmt.Errorf("%w: source %s does not match %s", marketdata.ErrInvalidRequest, req.SourceID, sourceID)
+	}
+	req.SourceID = sourceID
+	req.ProductType = productType
 	instType, err := InstTypeForMarket(string(productType))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", marketdata.ErrInvalidRequest, err)
@@ -133,17 +146,22 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 	if err := validateInstrumentType(productType, req.InstrumentType); err != nil {
 		return nil, err
 	}
+	// Binance interval tokens are case-sensitive. The catalog keeps the
+	// historical 1H spelling for the hourly Spot dataset, while Binance
+	// expects 1h on the wire. Keep the catalog frequency on the persisted row
+	// and normalize only the provider request.
+	providerInterval := normalizeBinanceInterval(req.Frequency)
 
 	params := &sources.CollectParams{
 		InstType:  instType,
 		Symbol:    strings.TrimSpace(req.ProviderSymbol),
 		SubjectID: strings.TrimSpace(req.SubjectID),
-		Interval:  req.Frequency,
+		Interval:  providerInterval,
 		DNSRoutes: marketDataDNSRoutes(req.DNSRoutes),
 	}
 	exchangeKlines, err := a.klineCollector.fetchKlinesOnce(ctx, params, &exchange.KlineRequest{
 		Symbol:    params.Symbol,
-		Interval:  req.Frequency,
+		Interval:  providerInterval,
 		Limit:     req.Limit,
 		StartTime: req.StartTime,
 		EndTime:   req.EndTime,
@@ -166,6 +184,15 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+func normalizeBinanceInterval(frequency string) string {
+	raw := strings.TrimSpace(frequency)
+	parsed, err := marketdata.ParseFrequency(raw)
+	if err != nil {
+		return raw
+	}
+	return string(parsed)
 }
 
 func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req marketdata.InstrumentRequest) (marketdata.InstrumentSnapshot, error) {
@@ -304,6 +331,9 @@ func normalizeMarketDataKline(req marketdata.KlineRequest, kline *market.Kline, 
 	sourceID := strings.TrimSpace(req.SourceID)
 	if sourceID == "" {
 		sourceID = "spot_http"
+		if req.ProductType == marketdata.ProductSwap {
+			sourceID = "swap_http"
+		}
 	}
 	row := marketdata.NormalizedKline{
 		SubjectID:         req.SubjectID,

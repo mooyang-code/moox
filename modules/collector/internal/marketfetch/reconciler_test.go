@@ -583,7 +583,7 @@ func TestReconcilerSplitsLongSubjectsBeforeEnvironmentFailure(t *testing.T) {
 		group.Subjects = append(group.Subjects, subject)
 		group.ExternalSymbols[subject] = strings.TrimSuffix(subject, "-USDT") + "USDT"
 	}
-	groups, err := splitGroupsForEnvironment([]TaskGroup{group}, nil, 30)
+	groups, err := splitGroupsForEnvironment([]TaskGroup{group}, nil, 30, nil)
 	require.NoError(t, err)
 	require.Greater(t, len(groups), 1)
 	for _, split := range groups {

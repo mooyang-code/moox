@@ -57,6 +57,50 @@ func TestMarketDataAdapterFetchesClosedKlineThroughTypedProvider(t *testing.T) {
 	assert.Equal(t, 1234.56, rows[0].AmountCNY)
 }
 
+func TestMarketDataAdapterNormalizesBinanceIntervalWithoutChangingStoredFrequency(t *testing.T) {
+	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
+	collector := NewKlineCollector()
+	collector.fetchKlinePage = func(_ context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+		assert.Equal(t, "1h", params.Interval)
+		assert.Equal(t, "1h", req.Interval)
+		start := now.Add(-2 * time.Hour)
+		return []*exchange.Kline{testExchangeKline(start, start.Add(time.Hour-time.Millisecond), "100", "110", "90", "105", "12", "1234.56")}, nil
+	}
+
+	adapter := NewMarketDataAdapter(AdapterConfig{ProductType: marketdata.ProductSpot, KlineCollector: collector, Now: func() time.Time { return now }})
+	rows, err := adapter.FetchKlines(context.Background(), marketdata.KlineRequest{
+		MarketID: "crypto", ExchangeID: "binance", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot,
+		SubjectID: "BTC-USDT-SPOT", ProviderSymbol: "BTCUSDT", Frequency: "1H", Limit: 1, RequestID: "req-binance-hour",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "1H", rows[0].Frequency)
+}
+
+func TestMarketDataAdapterSupportsSwapHourlyRequestThroughRouter(t *testing.T) {
+	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
+	collector := NewKlineCollector()
+	collector.fetchKlinePage = func(_ context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+		assert.Equal(t, "SWAP", params.InstType)
+		assert.Equal(t, "1h", req.Interval)
+		start := now.Add(-2 * time.Hour)
+		return []*exchange.Kline{testExchangeKline(start, start.Add(time.Hour-time.Millisecond), "100", "110", "90", "105", "12", "1234.56")}, nil
+	}
+	adapter := NewMarketDataAdapter(AdapterConfig{ProductType: marketdata.ProductSwap, KlineCollector: collector, Now: func() time.Time { return now }})
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(adapter))
+	router, err := marketdata.NewRouter(registry, 2, nil, nil)
+	require.NoError(t, err)
+	rows, err := router.FetchKlines(context.Background(), marketdata.KlineRequest{
+		MarketID: "crypto", ExchangeID: "binance", ProductType: marketdata.ProductSwap, InstrumentType: marketdata.InstrumentSwap,
+		SubjectID: "1000BONK-USDT-SWAP", ProviderSymbol: "1000BONKUSDT", SourceID: "swap_http", Frequency: "1H", Limit: 1, RequestID: "req-binance-swap-hour",
+	}, []string{"binance"})
+
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+}
+
 func TestMarketDataAdapterFetchesTypedInstrumentSnapshot(t *testing.T) {
 	snapshotAt := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
 	collector := NewSymbolCollector()

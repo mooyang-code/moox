@@ -1,10 +1,11 @@
-package marketfetch
+package runtimecomposition
 
 import (
 	"fmt"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/bond/eastmoney"
 	bondsina "github.com/mooyang-code/moox/modules/collector/internal/sources/bond/sina"
@@ -20,17 +21,20 @@ import (
 	stockussina "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/sina"
 )
 
-func NewMarketKlinePipeline(storage Storage, marketID string, instrumentType marketdata.InstrumentType, providerID, sourceID string) (*KlinePipeline, error) {
+func NewMarketKlinePipeline(storage marketfetch.Storage, marketID string, instrumentType marketdata.InstrumentType, providerID, sourceID string) (*marketfetch.KlinePipeline, error) {
 	if storage == nil {
 		return nil, fmt.Errorf("market kline storage is required")
 	}
 	marketID = strings.ToLower(strings.TrimSpace(marketID))
 	providerID = strings.ToLower(strings.TrimSpace(providerID))
 	sourceID = strings.ToLower(strings.TrimSpace(sourceID))
+	if sourceID == "" {
+		sourceID = DefaultSourceID(providerID, string(instrumentType))
+	}
 	if marketID == "" || providerID == "" || sourceID == "" {
 		return nil, fmt.Errorf("market, provider and source are required")
 	}
-	if marketID == StockCNSpaceID {
+	if marketID == marketfetch.StockCNSpaceID {
 		if instrumentType == marketdata.InstrumentEquity {
 			return NewStockKlinePipelineForSource(storage, providerID, sourceID)
 		}
@@ -48,13 +52,20 @@ func NewMarketKlinePipeline(storage Storage, marketID string, instrumentType mar
 		return nil, err
 	}
 	datasetID := marketDatasetID(marketID, instrumentType)
-	pipeline := &KlinePipeline{
+	pipeline := &marketfetch.KlinePipeline{
 		Router: router, Storage: storage, CandidateChain: []string{providerID},
 		RouteID: marketID + "_" + string(instrumentType) + "_kline",
 		SpaceID: marketID, MarketID: marketID, InstrumentType: instrumentType,
 		DatasetID: datasetID, SourceID: sourceID,
 	}
-	if marketID == StockCNSpaceID {
+	if marketID == "crypto" {
+		pipeline.DatasetID = ""
+		pipeline.ProductType = marketdata.ProductSpot
+		if instrumentType == marketdata.InstrumentSwap {
+			pipeline.ProductType = marketdata.ProductSwap
+		}
+	}
+	if marketID == marketfetch.StockCNSpaceID {
 		if instrumentType == marketdata.InstrumentIndex {
 			pipeline.ProductType = marketdata.ProductIndex
 		} else {
@@ -69,8 +80,19 @@ func NewMarketKlinePipeline(storage Storage, marketID string, instrumentType mar
 }
 
 func newMarketProvider(marketID string, instrumentType marketdata.InstrumentType, providerID, sourceID string) (marketdata.MarketProvider, error) {
-	if marketID == "crypto" && instrumentType == marketdata.InstrumentSpot && providerID == "binance" && sourceID == "spot_http" {
-		return binance.NewMarketDataAdapter(binance.AdapterConfig{ProductType: marketdata.ProductSpot}), nil
+	if marketID == "crypto" && providerID == "binance" {
+		productType := marketdata.ProductSpot
+		switch instrumentType {
+		case marketdata.InstrumentSpot:
+		case marketdata.InstrumentSwap:
+			productType = marketdata.ProductSwap
+		default:
+			return nil, fmt.Errorf("unsupported crypto instrument source %s/%s", providerID, sourceID)
+		}
+		if sourceID != DefaultSourceID(providerID, string(instrumentType)) {
+			return nil, fmt.Errorf("unsupported crypto %s source %s/%s", instrumentType, providerID, sourceID)
+		}
+		return binance.NewMarketDataAdapter(binance.AdapterConfig{ProductType: productType}), nil
 	}
 	if instrumentType == marketdata.InstrumentConvertibleBond {
 		switch {
@@ -83,7 +105,7 @@ func newMarketProvider(marketID string, instrumentType marketdata.InstrumentType
 		}
 	}
 	if instrumentType == marketdata.InstrumentIndex {
-		if marketID != StockCNSpaceID {
+		if marketID != marketfetch.StockCNSpaceID {
 			return nil, fmt.Errorf("index market %q is unsupported", marketID)
 		}
 		switch {
@@ -132,9 +154,9 @@ func marketDatasetID(marketID string, instrumentType marketdata.InstrumentType) 
 		return "dataset_stockhk_equity_kline"
 	case marketID == "stockus" && instrumentType == marketdata.InstrumentEquity:
 		return "dataset_stockus_equity_kline"
-	case marketID == StockCNSpaceID && instrumentType == marketdata.InstrumentIndex:
+	case marketID == marketfetch.StockCNSpaceID && instrumentType == marketdata.InstrumentIndex:
 		return "dataset_stockcn_index_kline"
-	case marketID == StockCNSpaceID && instrumentType == marketdata.InstrumentConvertibleBond:
+	case marketID == marketfetch.StockCNSpaceID && instrumentType == marketdata.InstrumentConvertibleBond:
 		return "dataset_stockcn_bond_kline"
 	default:
 		return marketID + "_" + string(instrumentType) + "_kline"

@@ -36,16 +36,14 @@ type Handler struct {
 	// mutation details.
 	NewInstrumentPipeline  func(InstrumentStorage, string, marketdata.ProductType) (*InstrumentPipeline, error)
 	NewMarketKlinePipeline func(Storage, string, marketdata.InstrumentType, string, string) (*KlinePipeline, error)
-	// NewCryptoInstrumentPipeline is kept as a narrow test seam for callers that
-	// construct a crypto-only Handler. NewHandler uses NewInstrumentPipeline.
-	NewCryptoInstrumentPipeline func(InstrumentStorage, marketdata.ProductType) (*InstrumentPipeline, error)
-	NewStockKlinePipeline       func(Storage) (*KlinePipeline, error)
-	NewCryptoKlinePipeline      func(Storage, marketdata.ProductType) (*KlinePipeline, error)
-	Now                         func() time.Time
-	Reporter                    ItemReporter
-	CLSReserve                  time.Duration
-	Metrics                     *Metrics
-	MetricsReporter             MetricsReporter
+	NewStockKlinePipeline  func(Storage) (*KlinePipeline, error)
+	ResolveSourceID        func(string, string) string
+	ResolveSymbol          SymbolResolver
+	Now                    func() time.Time
+	Reporter               ItemReporter
+	CLSReserve             time.Duration
+	Metrics                *Metrics
+	MetricsReporter        MetricsReporter
 }
 
 // MetricsReporter is the common one-shot observability sink used by long-lived
@@ -71,8 +69,7 @@ const (
 func NewHandler() *Handler {
 	return &Handler{NewStorage: func(target, market, writeSource string) (Storage, error) {
 		return NewMarketStorageForMarket(target, market, writeSource)
-	}, Publish: publishCompletion, NewInstrumentPipeline: NewMarketInstrumentPipeline, NewCryptoInstrumentPipeline: NewCryptoInstrumentPipeline,
-		NewMarketKlinePipeline: NewMarketKlinePipeline, NewStockKlinePipeline: NewStockKlinePipeline, NewCryptoKlinePipeline: NewCryptoKlinePipeline}
+	}, Publish: publishCompletion}
 }
 
 func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
@@ -109,7 +106,7 @@ func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, n
 		return nil, fmt.Errorf("market fetch handler is nil")
 	}
 	defer h.reportMetrics(ctx)
-	req, storageTarget, err := TimerRequestFromEnv(requestID, nodeID, now)
+	req, storageTarget, err := TimerRequestFromEnv(requestID, nodeID, now, RuntimeResolvers{SourceID: h.ResolveSourceID, Symbol: h.ResolveSymbol})
 	if err != nil {
 		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
 	}
@@ -224,7 +221,10 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 	var payload *marketfetchpb.MarketFetchBatchCompleted
 	if h.Execute != nil {
 		payload, err = h.Execute(budgetCtx, req, storage)
-	} else if req.BatchKind == domain.BatchKindInstrumentSnapshot && (h.NewInstrumentPipeline != nil || h.NewCryptoInstrumentPipeline != nil) {
+	} else if req.BatchKind == domain.BatchKindInstrumentSnapshot {
+		if h.NewInstrumentPipeline == nil {
+			return nil, fmt.Errorf("instrument pipeline factory is not configured")
+		}
 		if len(req.Items) != 1 {
 			return nil, fmt.Errorf("instrument snapshot requires exactly one item")
 		}
@@ -233,13 +233,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 			return nil, fmt.Errorf("instrument snapshot storage does not support active-set operations")
 		}
 		productType := marketdata.ProductType(strings.ToLower(strings.TrimSpace(req.MarketType)))
-		var pipeline *InstrumentPipeline
-		var pipelineErr error
-		if h.NewInstrumentPipeline != nil {
-			pipeline, pipelineErr = h.NewInstrumentPipeline(instrumentStorage, req.SpaceID, productType)
-		} else {
-			pipeline, pipelineErr = h.NewCryptoInstrumentPipeline(instrumentStorage, productType)
-		}
+		pipeline, pipelineErr := h.NewInstrumentPipeline(instrumentStorage, req.SpaceID, productType)
 		if pipelineErr != nil {
 			return nil, pipelineErr
 		}
@@ -274,7 +268,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		stockStorage := &reservedDeadlineStorage{Storage: storage, parent: budgetCtx, timeout: storageTimeout}
 		newPipeline := h.NewStockKlinePipeline
 		if newPipeline == nil {
-			newPipeline = NewStockKlinePipeline
+			return nil, fmt.Errorf("stock kline pipeline factory is not configured")
 		}
 		pipeline, pipelineErr := newPipeline(stockStorage)
 		if pipelineErr != nil {
@@ -282,22 +276,6 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		}
 		pipeline.Now = h.Now
 		pipeline.Metrics = h.Metrics
-		payload, err = pipeline.Execute(workCtx, req)
-	} else if strings.EqualFold(strings.TrimSpace(req.SpaceID), "crypto") ||
-		strings.EqualFold(strings.TrimSpace(req.MarketType), "spot") ||
-		strings.EqualFold(strings.TrimSpace(req.MarketType), "swap") {
-		newPipeline := h.NewCryptoKlinePipeline
-		if newPipeline == nil {
-			newPipeline = NewCryptoKlinePipeline
-		}
-		pipeline, pipelineErr := newPipeline(storage, marketdata.ProductType(strings.ToLower(strings.TrimSpace(req.MarketType))))
-		if pipelineErr != nil {
-			return nil, pipelineErr
-		}
-		pipeline.Now = h.Now
-		pipeline.Metrics = h.Metrics
-		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)
-		defer workCancel()
 		payload, err = pipeline.Execute(workCtx, req)
 	} else {
 		if h.NewMarketKlinePipeline == nil {

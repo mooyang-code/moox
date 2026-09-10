@@ -18,7 +18,7 @@ const (
 	MaxConcurrency     = 64
 	// MaxRealtimeItems bounds the work accepted by one short-lived SCF. The
 	// assignment planner keeps each non-stock function at or below this limit.
-	MaxRealtimeItems = 30
+	MaxRealtimeItems = 40
 	// MaxRealtimeRows is the fixed number of latest K-lines fetched for each
 	// symbol in one realtime SCF request.
 	MaxRealtimeRows = 10

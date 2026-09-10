@@ -1,4 +1,4 @@
-package marketfetch
+package runtimecomposition
 
 import (
 	"context"

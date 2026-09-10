@@ -20,7 +20,11 @@ import (
 // TimerRequestFromEnv turns the static per-function assignment into the same
 // bounded request used by the manual/egress paths. No control-plane request is
 // made from SCF.
-func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request, string, error) {
+func TimerRequestFromEnv(requestID, functionName string, now time.Time, runtimeResolvers ...RuntimeResolvers) (Request, string, error) {
+	var resolvers RuntimeResolvers
+	if len(runtimeResolvers) > 0 {
+		resolvers = runtimeResolvers[0]
+	}
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_PROVIDER")))
 	sourceID := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SOURCE_ID")))
 	marketType := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_MARKET_TYPE")))
@@ -71,7 +75,9 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request
 		return Request{}, "", fmt.Errorf("timer market fetch environment is incomplete")
 	}
 	if sourceID == "" {
-		sourceID = defaultSourceIDForProvider(provider)
+		if resolvers.SourceID != nil {
+			sourceID = resolvers.SourceID(provider, marketType)
+		}
 		if sourceID == "" {
 			return Request{}, "", fmt.Errorf("timer market fetch source_id is required")
 		}
@@ -104,7 +110,7 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request
 	if assignmentHash == "" {
 		assignmentHash = AssignmentHash(provider, marketType, datasetID, frequency, strings.Join(subjects, "|"))
 	}
-	externalSymbols, err := parseExternalSymbols(os.Getenv("MOOX_MARKET_FETCH_SYMBOLS_JSON"), subjects, strings.EqualFold(spaceID, StockCNSpaceID))
+	externalSymbols, err := parseExternalSymbols(os.Getenv("MOOX_MARKET_FETCH_SYMBOLS_JSON"), subjects, spaceID, marketID, marketType, provider, resolvers.Symbol)
 	if err != nil {
 		return Request{}, "", err
 	}
@@ -126,19 +132,6 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request
 func sha256Hex(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
-}
-
-func defaultSourceIDForProvider(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "binance":
-		return "spot_http"
-	case "sina":
-		return "stockcn_minute_http"
-	case "eastmoney", "tencent", "baidu":
-		return "stockcn_http"
-	default:
-		return ""
-	}
 }
 
 func defaultInstrumentTypeForMarket(marketID, marketType string) string {
@@ -186,9 +179,10 @@ func timerGroupIdentity(spaceID string) (int, int, error) {
 	return groupID, groupCount, nil
 }
 
-func parseExternalSymbols(raw string, subjects []string, stockCN bool) (map[string]string, error) {
+func parseExternalSymbols(raw string, subjects []string, spaceID, marketID, marketType, provider string, resolver SymbolResolver) (map[string]string, error) {
 	result := make(map[string]string, len(subjects))
-	if strings.TrimSpace(raw) == "" && !stockCN {
+	stockCN := strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID)
+	if strings.TrimSpace(raw) == "" && !stockCN && resolver == nil {
 		return nil, fmt.Errorf("timer market fetch external symbol mapping is required")
 	}
 	if strings.TrimSpace(raw) != "" {
@@ -200,6 +194,14 @@ func parseExternalSymbols(raw string, subjects []string, stockCN bool) (map[stri
 		external := strings.TrimSpace(result[subject])
 		if stockCN {
 			resolved, err := stockProviderSymbol(subject, external)
+			if err != nil {
+				return nil, err
+			}
+			result[subject] = resolved
+			continue
+		}
+		if resolver != nil {
+			resolved, err := resolveProviderSymbol(resolver, provider, marketID, marketType, subject, external)
 			if err != nil {
 				return nil, err
 			}

@@ -9,6 +9,7 @@ rules:
   creator: moox-setup
   collect_params:
     provider: binance
+    source_id: spot_http
     market_type: spot
     symbol_source: exchange
     target_dataset_id: dataset_binance_spot_symbols
@@ -22,6 +23,7 @@ rules:
   creator: moox-setup
   collect_params:
     provider: binance
+    source_id: swap_http
     market_type: swap
     symbol_source: exchange
     target_dataset_id: dataset_binance_swap_symbols
@@ -35,10 +37,26 @@ rules:
   creator: moox-setup
   collect_params:
     provider: binance
+    source_id: spot_http
     market_type: spot
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_spot_symbols
     target_dataset_id: dataset_binance_spot_kline_1m
+    frequency: 1m
+- space_id: crypto
+  rule_id: builtin-binance-swap-kline-1m
+  data_type: kline
+  provider: binance
+  market_type: swap
+  enabled: true
+  creator: moox-setup
+  collect_params:
+    provider: binance
+    source_id: swap_http
+    market_type: swap
+    symbol_source: dataset
+    symbol_dataset_id: dataset_binance_swap_symbols
+    target_dataset_id: dataset_binance_swap_kline_1m
     frequency: 1m
 - space_id: crypto
   rule_id: builtin-binance-spot-kline-1h
@@ -49,6 +67,7 @@ rules:
   creator: moox-setup
   collect_params:
     provider: binance
+    source_id: spot_http
     market_type: spot
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_spot_symbols
@@ -63,11 +82,12 @@ rules:
   creator: moox-setup
   collect_params:
     provider: binance
+    source_id: swap_http
     market_type: swap
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_swap_symbols
     target_dataset_id: dataset_perpetual_kline_1h
-    frequency: 1h
+    frequency: 1H
 - space_id: stockcn
   rule_id: builtin-stockcn-instrument-1d
   data_type: instrument

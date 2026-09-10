@@ -1,4 +1,4 @@
-package marketfetch
+package runtimecomposition
 
 import (
 	"testing"
@@ -14,7 +14,7 @@ func TestCryptoCompositionRootSupportsMinuteAndHourMarkets(t *testing.T) {
 				pipeline, err := NewCryptoKlinePipeline(timerHandlerStorage{}, product)
 				require.NoError(t, err)
 				require.Empty(t, pipeline.DatasetID)
-				require.Empty(t, pipeline.SourceID)
+				require.Equal(t, string(product)+"_http", pipeline.SourceID)
 				require.Equal(t, []string{"binance"}, pipeline.CandidateChain)
 				require.Equal(t, product, pipeline.ProductType)
 				spec, err := pipeline.Router.NewSession().KlineSpec("binance")

@@ -50,6 +50,8 @@ type dnsSnapshotter interface {
 // Reconciler is the Collector control-plane loop for static Timer-triggered
 // functions. It never invokes a function; it only submits desired config.
 type Reconciler struct {
+	ResolveSymbol                 SymbolResolver
+	CompactSymbol                 SymbolResolver
 	Rules                         ruleSource
 	Symbols                       datasetSource
 	Nodes                         runtimeConfigClient
@@ -170,7 +172,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	// routes can consume the remaining bytes, so split a group further before
 	// checking node capacity instead of retrying the same oversized patch.
 	if !stockCN {
-		groups, err = splitGroupsForEnvironment(groups, dns, r.maxSubjects(), managedBudget)
+		groups, err = splitGroupsForEnvironment(groups, dns, r.maxSubjects(), r.CompactSymbol, managedBudget)
 		if err != nil {
 			return r.fail(spaceID, "environment", err)
 		}
@@ -215,7 +217,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	patches := make([]*cloudnodepb.NodeRuntimeConfigPatch, 0, len(assignments))
 	pendingFingerprints := make(map[string]string, len(assignments))
 	for _, assignment := range assignments {
-		environment, envErr := buildManagedEnvironment(assignment, dns, managedBudget)
+		environment, envErr := buildManagedEnvironment(assignment, dns, managedBudget, r.CompactSymbol)
 		if envErr != nil {
 			return r.fail(spaceID, "environment", envErr)
 		}
@@ -346,7 +348,7 @@ func (r *Reconciler) persistAssignments(ctx context.Context, spaceID string, nod
 	return nil
 }
 
-func splitGroupsForEnvironment(groups []TaskGroup, snapshot map[string]sources.DNSResolution, maxSubjects int, budgets ...int) ([]TaskGroup, error) {
+func splitGroupsForEnvironment(groups []TaskGroup, snapshot map[string]sources.DNSResolution, maxSubjects int, resolver SymbolResolver, budgets ...int) ([]TaskGroup, error) {
 	if maxSubjects <= 0 {
 		return nil, fmt.Errorf("max subjects must be positive")
 	}
@@ -377,7 +379,7 @@ func splitGroupsForEnvironment(groups []TaskGroup, snapshot map[string]sources.D
 				_, err := buildManagedEnvironment(NodeAssignment{
 					Provider: group.Provider, MarketType: group.MarketType, MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag, DatasetID: group.DatasetID,
 					Frequency: group.Frequency, Subjects: chunk, ExternalSymbols: externals, GroupID: environmentGroupCountProbe, GroupCount: environmentGroupCountProbe, Enabled: true,
-				}, snapshot, managedBudget)
+				}, snapshot, managedBudget, resolver)
 				if err == nil {
 					result = append(result, TaskGroup{Provider: group.Provider, MarketType: group.MarketType, MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag, DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: chunk, ExternalSymbols: externals})
 					start += size
@@ -839,6 +841,7 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 			log.WarnContextf(ctx, "skip collection rule=%s: no active subjects for symbol dataset %s", rule.RuleID, params.Source.DatasetID)
 			continue
 		}
+		marketID, instrumentType := marketIdentity(firstNonEmpty(params.MarketID, rule.SpaceID), params.InstrumentType, params.Target.DatasetID)
 		symbolIDs := make([]string, 0, len(subjects))
 		externalSymbols := make(map[string]string, len(subjects))
 		activeSubjectCount := 0
@@ -849,7 +852,7 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 			}
 			activeSubjectCount++
 			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-			external, symbolErr := marketProviderSymbol(params.MarketType, subjectID, subject.ExternalSymbol)
+			external, symbolErr := resolveProviderSymbol(r.ResolveSymbol, params.Provider, marketID, params.MarketType, subjectID, subject.ExternalSymbol)
 			if symbolErr != nil {
 				invalidSubjects = append(invalidSubjects, subjectID)
 				continue
@@ -863,7 +866,6 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		if len(invalidSubjects) > 0 {
 			log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s rule=%s skipped=%d subjects=%s", spaceID, rule.RuleID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
 		}
-		marketID, instrumentType := marketIdentity(params.MarketID, params.InstrumentType, params.Target.DatasetID)
 		for _, frequency := range params.Collector.Intervals {
 			groups = append(groups, TaskGroup{Provider: params.Provider, MarketType: params.MarketType, MarketID: marketID, InstrumentType: instrumentType, SourceID: params.SourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID, Frequency: frequency, Subjects: symbolIDs, ExternalSymbols: externalSymbols})
 		}
@@ -937,10 +939,10 @@ func mergeGroups(groups []TaskGroup) []TaskGroup {
 }
 
 func (r *Reconciler) maxSubjects() int {
-	if r.MaxSubjects > 0 && r.MaxSubjects <= 30 {
+	if r.MaxSubjects > 0 && r.MaxSubjects <= 40 {
 		return r.MaxSubjects
 	}
-	return 30
+	return 40
 }
 
 func (r *Reconciler) shouldPatch(assignment NodeAssignment, nodes []scfinvoker.Node, fingerprint string) bool {

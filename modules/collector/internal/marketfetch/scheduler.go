@@ -38,6 +38,7 @@ type scheduleState struct {
 // applies. It is intentionally a single process timer handler; SQLite unique
 // indexes provide the only idempotency needed by this single-user system.
 type Scheduler struct {
+	ResolveSymbol     SymbolResolver
 	Rules             *store.TaskRuleRepository
 	Instances         *store.TaskInstanceRepository
 	Batches           *store.FetchBatchRepository
@@ -796,7 +797,7 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 				continue
 			}
 			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-			symbol, symbolErr := marketProviderSymbolForMarket(marketID, marketType, subjectID, subject.ExternalSymbol)
+			symbol, symbolErr := resolveProviderSymbol(s.ResolveSymbol, provider, marketID, marketType, subjectID, subject.ExternalSymbol)
 			if symbolErr != nil {
 				log.WarnContextf(ctx, "skip market symbol without valid external symbol subject=%q error=%v", subject.SubjectID, symbolErr)
 				continue
@@ -823,7 +824,7 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 			if subjectID == "" {
 				continue
 			}
-			symbol, symbolErr := marketProviderSymbolForMarket(marketID, marketType, subjectID, "")
+			symbol, symbolErr := resolveProviderSymbol(s.ResolveSymbol, provider, marketID, marketType, subjectID, "")
 			if symbolErr != nil {
 				continue
 			}

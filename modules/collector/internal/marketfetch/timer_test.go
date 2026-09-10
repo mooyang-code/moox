@@ -12,6 +12,7 @@ import (
 func TestTimerRequestFromEnv(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "spot_http")
 	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "spot")
 	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "bars")
 	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
@@ -32,9 +33,16 @@ func TestTimerRequestFromEnv(t *testing.T) {
 	require.Equal(t, []string{"203.0.113.1"}, req.DNSRoutes["api.binance.com"].IPs)
 }
 
+func TestMarketProviderSymbolForCryptoPrefersConfiguredSymbol(t *testing.T) {
+	got, err := marketProviderSymbolForMarket("crypto", "swap", "1000BONK-USDT-SWAP", "CUSTOM")
+	require.NoError(t, err)
+	require.Equal(t, "CUSTOM", got)
+}
+
 func TestTimerRequestFromEnvAllowsUnicodeSubjectNames(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "spot_http")
 	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "spot")
 	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "bars")
 	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
@@ -63,6 +71,7 @@ func TestTimerRequestFromEnvAllowsConfiguredStockGroupAboveThirty(t *testing.T) 
 	require.NoError(t, err)
 	t.Setenv("MOOX_SPACE_ID", StockCNSpaceID)
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "sina")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stockcn_minute_http")
 	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
 	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", StockCNDatasetID)
 	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
@@ -80,6 +89,7 @@ func TestTimerRequestFromEnvAllowsConfiguredStockGroupAboveThirty(t *testing.T) 
 func TestTimerRequestFromEnvDerivesStrictStockSymbolsAndAppliesOverrides(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", StockCNSpaceID)
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "sina")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stockcn_minute_http")
 	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
 	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", StockCNDatasetID)
 	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
@@ -99,6 +109,7 @@ func TestTimerRequestFromEnvDerivesStrictStockSymbolsAndAppliesOverrides(t *test
 func TestTimerRequestFromEnvRejectsStrictStockSymbolMismatch(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", StockCNSpaceID)
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "sina")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stockcn_minute_http")
 	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
 	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", StockCNDatasetID)
 	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
@@ -115,6 +126,7 @@ func TestTimerRequestFromEnvRejectsStrictStockSymbolMismatch(t *testing.T) {
 func TestTimerRequestFromEnvRejectsInvalidStockGroupIdentity(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", StockCNSpaceID)
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "sina")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stockcn_minute_http")
 	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
 	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", StockCNDatasetID)
 	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
@@ -140,6 +152,7 @@ func joinSubjects(subjects []string) string {
 func TestTimerRequestFromEnvMalformedDNSFallsBackToPlatformResolver(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "spot_http")
 	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "spot")
 	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "bars")
 	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
