@@ -656,10 +656,10 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy", "deploy-moox.sh"),
 		"--profile", "control", "--package-only", "--archive", archive,
 		"--target", "localhost", "--dir", opts.ControlRoot, "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
-		// The control deployment is the complete non-trading application stack.
-		// The profile intentionally defaults to a smaller control plane, so make
-		// the requested Factor/Archive components explicit and keep Trade out.
-		"--with-archive", "--with-factor", "--no-trade",
+		// The control deployment is the non-trading application stack. Archive
+		// requires a Storage-side registration key and is deployed separately;
+		// keep it out of this package instead of starting an unauthenticated loop.
+		"--with-factor", "--no-trade", "--no-archive",
 		"--public-host", opts.PublicHost, "--browser-https-port", strconv.Itoa(opts.BrowserPort),
 		"--tls-mode", string(resolveTLSMode(opts.TLSMode, opts.PublicHost)),
 		"--node-id", "control", "--gateway-control-url", "http://127.0.0.1:11000",
