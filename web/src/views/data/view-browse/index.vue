@@ -542,7 +542,10 @@ let rebuildPollDeadline = 0;
 let rebuildPollToken = 0;
 const recordKeyword = ref("");
 const filters = ref<ViewFilterState[]>([]);
-const sortState = reactive<{ fieldName: string; direction: ViewSortDirection }>({ fieldName: "", direction: "" });
+// Time-series previews should answer the operational question first: what is
+// the newest bar?  Without an explicit sort DuckDB returns index order, which
+// can leave the first page showing an old bar even while ingestion is healthy.
+const sortState = reactive<{ fieldName: string; direction: ViewSortDirection }>({ fieldName: "data_time", direction: "desc" });
 const metaLoading = ref(false);
 const contextLoading = ref(false);
 const loading = ref(false);
@@ -879,18 +882,31 @@ async function loadMeta() {
   metaLoading.value = true;
   try {
     const page = { page: 1, size: 1000 };
-    const [viewItems, datasetItems, fieldRsp, factorRsp] = await Promise.all([
+    // Views and Datasets are required to render the first result page. Fields
+    // and Factors only decorate labels and can arrive afterwards; keeping them
+    // out of this critical path avoids making a slow metadata read delay the
+    // actual data query.
+    const [viewItems, datasetItems] = await Promise.all([
       listAllViews(space_id),
-      listAllDatasets(space_id),
-      listFields({ space_id, page }),
-      listFactors({ space_id, page })
+      listAllDatasets(space_id)
     ]);
     views.value = viewItems;
     datasets.value = datasetItems;
-    fields.value = fieldRsp.fields || [];
-    factors.value = factorRsp.factors || [];
     ensureSelectedView();
     await loadViewContext();
+
+    // These requests are intentionally best-effort. A label catalogue outage
+    // must not hide already loaded rows or turn a usable data browser into a
+    // blocking spinner.
+    void Promise.all([listFields({ space_id, page }), listFactors({ space_id, page })])
+      .then(([fieldRsp, factorRsp]) => {
+        if (selectedSpaceId.value !== space_id) return;
+        fields.value = fieldRsp.fields || [];
+        factors.value = factorRsp.factors || [];
+      })
+      .catch(error => {
+        console.warn("加载字段/因子标签失败", error);
+      });
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "加载视图失败");
   } finally {
@@ -984,12 +1000,19 @@ async function loadViewContext() {
 
   contextLoading.value = true;
   try {
-    const columnsRsp = await listViewColumns({ space_id, view_id: view.view_id, page: { page: 1, size: 1000 } });
+    const contextViewId = view.view_id;
+    const datasetColumnsPromise = loadDatasetColumns(space_id, view).catch(error => {
+      console.warn("加载数据集列失败", error);
+    });
+    const columnsRsp = await listViewColumns({ space_id, view_id: contextViewId, page: { page: 1, size: 1000 } });
     viewColumns.value = columnsRsp.columns || [];
-    await loadDatasetColumns(space_id, view);
     resetFilterRows();
     resetSortState();
     await reloadRows();
+    // Dataset columns are only used for labels. Do not keep the data table
+    // behind this second metadata round trip, but still update labels when it
+    // eventually completes for the same View.
+    void datasetColumnsPromise;
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "加载视图上下文失败");
   } finally {
@@ -1002,7 +1025,9 @@ async function loadDatasetColumns(space_id: string, view: View) {
   const results = await Promise.all(
     Array.from(datasetIds).map(dataset_id => listDatasetColumns({ space_id, dataset_id, page: { page: 1, size: 1000 } }))
   );
-  datasetColumns.value = results.flatMap(rsp => rsp.columns || []);
+  if (selectedSpaceId.value === space_id && activeView.value?.view_id === view.view_id) {
+    datasetColumns.value = results.flatMap(rsp => rsp.columns || []);
+  }
 }
 
 async function reloadRows() {

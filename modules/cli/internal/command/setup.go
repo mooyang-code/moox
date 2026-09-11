@@ -52,6 +52,7 @@ type setupDeps struct {
 	browserE2EStorage      func(context.Context, *setupconfig.Snapshot, string, string) (storageBrowserResult, error)
 	e2eEventBus            func(context.Context, *setupconfig.Snapshot) (eventBusE2EResult, error)
 	exportSkillConfig      func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
+	ensureFirewall         func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
 }
 
 func init() {
@@ -85,6 +86,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupBrowserE2EStorageCommand(deps),
 		newSetupE2EEventBusCommand(deps),
 		newSetupExportSkillConfigCommand(deps),
+		newSetupFirewallCommand(deps),
 	)
 	return cmd
 }
@@ -213,6 +215,7 @@ type setupHostChoice struct {
 	Address  string `json:"address"`
 	Port     int    `json:"port"`
 	Username string `json:"username"`
+	Provider string `json:"provider,omitempty"`
 	Role     string `json:"role"`
 }
 
@@ -235,11 +238,11 @@ func newSetupHostsCommand(deps setupDeps) *cobra.Command {
 			case snapshot.Manifest.HasViewHost() && strings.EqualFold(host.Name, snapshot.Manifest.ViewHost.Name):
 				role = "view"
 			}
-			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Role: role})
+			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Provider: host.Provider, Role: role})
 		}
 		if snapshot.Manifest.HasCompileHost() {
 			host := snapshot.Manifest.CompileHost
-			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Role: "compile"})
+			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Provider: host.Provider, Role: "compile"})
 		}
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return fmt.Errorf("config_changed")
@@ -639,6 +642,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.exportSkillConfig == nil {
 		deps.exportSkillConfig = defaults.exportSkillConfig
 	}
+	if deps.ensureFirewall == nil {
+		deps.ensureFirewall = defaults.ensureFirewall
+	}
 	return deps
 }
 
@@ -672,6 +678,7 @@ func defaultSetupDeps() setupDeps {
 		browserE2EStorage:      defaultSetupBrowserE2EStorage,
 		e2eEventBus:            defaultSetupE2EEventBus,
 		exportSkillConfig:      defaultSetupExportSkillConfig,
+		ensureFirewall:         defaultSetupEnsureFirewall,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address)
 			tlsMode := setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode)
@@ -1150,10 +1157,11 @@ func defaultSetupTrustHost(ctx context.Context, snapshot *setupconfig.Snapshot, 
 func defaultSetupDeploy(ctx context.Context, snapshot *setupconfig.Snapshot, resetData bool) error {
 	return runSetupControlDeploySteps(
 		func() error {
-			return ensureSetupControlFirewall(ctx, snapshot)
+			_, err := defaultSetupEnsureFirewall(ctx, snapshot)
+			return err
 		},
 		func() error { return deploySetupControl(ctx, snapshot, resetData) },
-		func() error { return ensureSetupEventBusFirewall(ctx, snapshot) },
+		func() error { return nil },
 	)
 }
 
@@ -1861,6 +1869,10 @@ func clearSetupSecrets(snapshot *setupconfig.Snapshot) {
 	snapshot.Manifest.ViewHost.Password = ""
 	for index := range snapshot.Manifest.OtherHosts {
 		snapshot.Manifest.OtherHosts[index].Password = ""
+	}
+	for address, definition := range snapshot.Manifest.HostCatalog {
+		definition.Password = ""
+		snapshot.Manifest.HostCatalog[address] = definition
 	}
 }
 

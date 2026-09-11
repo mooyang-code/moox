@@ -37,21 +37,23 @@ password = "admin-e2e-password"
 secret_id = "AKID-e2e"
 secret_key = "cloud-e2e-secret"
 [eventbus]
-public_address = "eventbus.example.test"
+host = "192.0.2.10"
 port = 4222
 tls_enabled = true
-[control_host]
-name = "control"
-address = "192.0.2.10"
+[hosts."192.0.2.10"]
 port = 22
 username = "ubuntu"
 password = "control-e2e-password"
-[[other_hosts]]
-name = "compute-1"
-address = "192.0.2.11"
+[hosts."192.0.2.11"]
 port = 22
 username = "ubuntu"
 password = "compute-e2e-password"
+[control_host]
+name = "control"
+host = "192.0.2.10"
+[[other_hosts]]
+name = "compute-1"
+host = "192.0.2.11"
 `)
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 	before, err := os.ReadFile(path)

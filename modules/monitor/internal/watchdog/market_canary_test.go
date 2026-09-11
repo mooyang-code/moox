@@ -53,6 +53,20 @@ func TestResolveCanonicalSubjectIDKeepsExplicitSuffixForLegacyCatalog(t *testing
 	require.Equal(t, "OPG-USDT-SPOT", got)
 }
 
+func TestResolveCanonicalSubjectIDForDatasetUsesProductIdentity(t *testing.T) {
+	active := map[string]struct{}{"BTC-USDT-SPOT": {}, "BTC-USDT-SWAP": {}}
+	got, err := ResolveCanonicalSubjectIDForDataset("BTC-USDT", "dataset_binance_spot_kline_1m", active)
+	require.NoError(t, err)
+	require.Equal(t, "BTC-USDT-SPOT", got)
+
+	got, err = ResolveCanonicalSubjectIDForDataset("BTC-USDT-SPOT", "dataset_binance_spot_kline_1m", map[string]struct{}{"BTC-USDT": {}})
+	require.NoError(t, err)
+	require.Equal(t, "BTC-USDT-SPOT", got)
+
+	_, err = ResolveCanonicalSubjectIDForDataset("BTC-USDT-SWAP", "dataset_binance_spot_kline_1m", map[string]struct{}{"BTC-USDT": {}})
+	require.Error(t, err)
+}
+
 func TestMarketCanaryExplicitSuffixQueriesCanonicalSubjectWithLegacyCatalog(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{

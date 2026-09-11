@@ -35,6 +35,12 @@ type backfillRequestLimiter struct {
 	interval time.Duration
 }
 
+// primaryHistorySubjectReadTimeout bounds one subject's Primary range read.
+// A single unhealthy subject must not hold a replacement View index (and its
+// live delivery acknowledgements) forever; partial history is explicitly
+// allowed when the source cannot answer within the rebuild budget.
+const primaryHistorySubjectReadTimeout = 20 * time.Second
+
 func newBackfillRequestLimiter(interval time.Duration) *backfillRequestLimiter {
 	return &backfillRequestLimiter{interval: interval}
 }
@@ -553,12 +559,21 @@ func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, sp
 			if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
 				return written, err
 			}
-			rsp, err := readPrimaryTimeSeriesRowsLimited(ctx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
+			subjectCtx, cancel := context.WithTimeout(ctx, primaryHistorySubjectReadTimeout)
+			rsp, err := readPrimaryTimeSeriesRowsLimited(subjectCtx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
 				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
 				Selectors: []*pb.TimeSeriesSelector{{SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), SubjectId: subject, Freq: frequency}},
 				Order:     pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: uint32(batchSize)}, AfterKey: afterKey,
 			})
+			cancel()
 			if err != nil {
+				if ctx.Err() != nil {
+					return written, ctx.Err()
+				}
+				if isPrimaryHistoryTimeout(err) {
+					log.Printf("storage view history backfill skipped subject after Primary timeout space=%s view=%s subject=%s: %v", spaceID, viewID, subject, err)
+					break
+				}
 				return written, fmt.Errorf("scan Primary history for %s/%s subject %s: %w", spaceID, view.GetPrimaryDatasetId(), subject, err)
 			}
 			if err := requireSuccess(rsp.GetRetInfo()); err != nil {

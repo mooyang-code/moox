@@ -627,6 +627,20 @@ is_local_target() {
   [[ "${TARGET}" == "localhost" || "${TARGET}" == "127.0.0.1" || "${TARGET}" == "::1" ]]
 }
 
+# The EventBus listener may need a public address for SCF and remote Storage,
+# but control-plane processes on the same deployment host should never hairpin
+# through that public address.  Keep the public URL for credentials and
+# service-directory records, while giving local processes an explicit client
+# URL.  Storage-only profiles have no local EventBus and therefore retain the
+# public URL as their process default.
+if [[ -n "${MOOX_EVENTBUS_LOCAL_URL:-}" ]]; then
+  CONTROL_EVENTBUS_URL_ENV="${MOOX_EVENTBUS_LOCAL_URL}"
+elif [[ "${WITH_EVENTBUS}" == "1" ]]; then
+  CONTROL_EVENTBUS_URL_ENV="${EVENTBUS_SCHEME}://127.0.0.1:${MOOX_EVENTBUS_PORT}"
+else
+  CONTROL_EVENTBUS_URL_ENV="${EVENTBUS_URL_ENV}"
+fi
+
 gateway_ready_at() {
   local root="$1" timestamp nonce body_hash canonical signature auth health_addr
   health_addr=$(gateway_health_addr)
@@ -1396,6 +1410,7 @@ MOOX_OBSERVABILITY_DELIVER_POLICY=all
 MOOX_EVENTBUS_PORT=$(printf '%q' "${MOOX_EVENTBUS_PORT}")
 MOOX_EVENTBUS_ENABLE_TLS=$(printf '%q' "${MOOX_EVENTBUS_ENABLE_TLS:-0}")
 MOOX_EVENTBUS_NATS_URL=$(printf '%q' "${EVENTBUS_URL_ENV}")
+MOOX_EVENTBUS_LOCAL_URL=$(printf '%q' "${CONTROL_EVENTBUS_URL_ENV}")
 MOOX_STORAGE_EVENTBUS_URL=$(printf '%q' "${MOOX_STORAGE_EVENTBUS_URL:-}")
 MOOX_GATEWAY_NODE_ID=$(printf '%q' "${MOOX_GATEWAY_NODE_ID:-}")
 MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=$(printf '%q' "${MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET:-ip://127.0.0.1:11003}")
@@ -1432,6 +1447,9 @@ if [[ -r "${ROOT}/config/components.env" ]]; then
   source "${ROOT}/config/components.env"
 fi
 if [[ -r "${ROOT}/config/runtime.env" ]]; then
+  EVENTBUS_PUBLIC_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-__EVENTBUS_URL__}"
+  EVENTBUS_URL_ENV="${MOOX_EVENTBUS_LOCAL_URL:-${EVENTBUS_PUBLIC_URL_ENV}}"
+  export MOOX_EVENTBUS_NATS_URL="${EVENTBUS_URL_ENV}"
   set -a
   source "${ROOT}/config/runtime.env"
   set +a
@@ -1883,7 +1901,8 @@ if [[ -r "${MONITOR_OBSERVABILITY_CREDENTIAL_FILE}" ]]; then
 fi
 
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
-EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-__EVENTBUS_URL__}"
+EVENTBUS_PUBLIC_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-__EVENTBUS_URL__}"
+EVENTBUS_URL_ENV="${MOOX_EVENTBUS_LOCAL_URL:-${EVENTBUS_PUBLIC_URL_ENV}}"
 MOOX_EVENTBUS_HOST="${MOOX_EVENTBUS_HOST:-__EVENTBUS_HOST__}"
 MOOX_EVENTBUS_PORT="${MOOX_EVENTBUS_PORT:-__EVENTBUS_PORT__}"
 MOOX_EVENTBUS_ENABLE_TLS="${MOOX_EVENTBUS_ENABLE_TLS:-__EVENTBUS_ENABLE_TLS__}"
@@ -2378,7 +2397,7 @@ PY
     --db-path "${ROOT}/data/admin.db" \
     --file "${ROOT}/config/setup/service-deployments.yaml" \
     --node-id "${owner_node}" --public-host "${owner_host}" \
-    --eventbus-nats-url "${MOOX_EVENTBUS_NATS_URL}" \
+    --eventbus-nats-url "${EVENTBUS_PUBLIC_URL_ENV}" \
     --only-services trade_owner >>"${ROOT}/logs/admin/stdout.log" 2>&1
 }
 
@@ -2393,7 +2412,7 @@ start_admin() {
       --file "${ROOT}/config/setup/service-deployments.yaml" \
       --node-id "${MOOX_ADMIN_NODE_ID}" \
       --public-host "${PUBLIC_HOST:-127.0.0.1}" \
-      --eventbus-nats-url "${MOOX_EVENTBUS_NATS_URL}")
+      --eventbus-nats-url "${EVENTBUS_PUBLIC_URL_ENV}")
     if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
       service_seed_args+=(--with-storage-shard)
     else
@@ -2479,7 +2498,7 @@ PY
           --file "${ROOT}/config/setup/service-deployments.yaml" \
           --node-id "${resolver_node}" \
           --public-host "${resolver_public_host}" \
-          --eventbus-nats-url "${MOOX_EVENTBUS_NATS_URL}" \
+          --eventbus-nats-url "${EVENTBUS_PUBLIC_URL_ENV}" \
           --only-services trade_dns_resolver \
           >>"${ROOT}/logs/admin/stdout.log" 2>&1 || {
             echo "Trade DNS resolver service deployment import failed" >&2
@@ -4846,7 +4865,7 @@ sync_remote_stage() {
   scp -p "${archive}" "${TARGET}:${remote_archive}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
-  local quoted_dir quoted_archive quoted_node_id quoted_no_start quoted_component_overlay quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_hostagent quoted_with_web_host quoted_with_admin quoted_with_gateway quoted_reset_data quoted_metrics_storage_metadata_url quoted_eventbus_url quoted_storage_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_trade_gateway_health_addr quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch quoted_local_storage_gateway_target quoted_local_storage_gateway_node_id quoted_storage_view_duckdb_memory_limit quoted_factor_python_workers quoted_factor_view_read_workers quoted_factor_view_read_timeout_ms quoted_control_root quoted_storage_root
+  local quoted_dir quoted_archive quoted_node_id quoted_no_start quoted_component_overlay quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_hostagent quoted_with_web_host quoted_with_admin quoted_with_gateway quoted_reset_data quoted_metrics_storage_metadata_url quoted_eventbus_url quoted_eventbus_local_url quoted_storage_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_trade_gateway_health_addr quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch quoted_local_storage_gateway_target quoted_local_storage_gateway_node_id quoted_storage_view_duckdb_memory_limit quoted_factor_python_workers quoted_factor_view_read_workers quoted_factor_view_read_timeout_ms quoted_control_root quoted_storage_root
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_node_id="$(shell_quote "${NODE_ID}")"
@@ -4869,6 +4888,7 @@ sync_remote_stage() {
   quoted_reset_data="$(shell_quote "${RESET_DATA}")"
   quoted_metrics_metadata_url="$(shell_quote "${METRICS_METADATA_URL}")"
   quoted_eventbus_url="$(shell_quote "${EVENTBUS_URL_ENV}")"
+  quoted_eventbus_local_url="$(shell_quote "${CONTROL_EVENTBUS_URL_ENV}")"
   # Component overlays can omit the Storage profile entirely. Keep the
   # transport variables total in that mode so packaging the selected control
   # component does not fail under `set -u`.
@@ -4896,7 +4916,7 @@ sync_remote_stage() {
   quoted_storage_root="$(shell_quote "${MOOX_STORAGE_ROOT:-}")"
   quoted_space_config_explicit="$(shell_quote "${MOOX_SPACE_CONFIG_EXPLICIT}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NODE_ID=${quoted_node_id} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_HOSTAGENT=${quoted_with_hostagent} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_SPACE_CONFIG_EXPLICIT=${quoted_space_config_explicit} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_STORAGE_EVENTBUS_URL=${quoted_storage_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_TRADE_GATEWAY_HEALTH_ADDR=${quoted_trade_gateway_health_addr} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64=${quoted_storage_view_maintenance_policy_b64} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NODE_ID=${quoted_node_id} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_HOSTAGENT=${quoted_with_hostagent} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_SPACE_CONFIG_EXPLICIT=${quoted_space_config_explicit} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_LOCAL_URL=${quoted_eventbus_local_url} MOOX_STORAGE_EVENTBUS_URL=${quoted_storage_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_TRADE_GATEWAY_HEALTH_ADDR=${quoted_trade_gateway_health_addr} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64=${quoted_storage_view_maintenance_policy_b64} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 MOOX_SPACE_CONFIG_EXPLICIT="${MOOX_SPACE_CONFIG_EXPLICIT:-0}"
 MOOX_OBSERVABILITY_CONFIG_EXPLICIT=0

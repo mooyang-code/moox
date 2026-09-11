@@ -148,7 +148,7 @@ func TestViewDatasetFreshnessIgnoresReplacementFailuresAndMissingIdentity(t *tes
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
 		t.Fatal("replacement write unexpectedly succeeded")
 	}
-	assertViewDatasetInputMetric(t, registry, "BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")
+	assertNoViewDatasetMetric(t, registry)
 	assertNoViewDatasetOutputMetric(t, registry)
 
 	engine.writeErrs = nil
@@ -157,7 +157,7 @@ func TestViewDatasetFreshnessIgnoresReplacementFailuresAndMissingIdentity(t *tes
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
 		t.Fatal("active write unexpectedly succeeded")
 	}
-	assertViewDatasetInputMetric(t, registry, "BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")
+	assertNoViewDatasetMetric(t, registry)
 	assertNoViewDatasetOutputMetric(t, registry)
 
 	engine.writeErrs = nil
@@ -225,38 +225,10 @@ func assertNoViewDatasetMetric(t *testing.T, registry *prometheus.Registry) {
 		t.Fatal(err)
 	}
 	for _, family := range families {
-		if (family.GetName() == "moox_storage_view_dataset_input_last_data_time_seconds" || family.GetName() == "moox_storage_view_dataset_output_last_data_time_seconds") && len(family.GetMetric()) != 0 {
+		if family.GetName() == "moox_storage_view_dataset_output_last_data_time_seconds" && len(family.GetMetric()) != 0 {
 			t.Fatalf("unexpected view dataset metrics: %v", family)
 		}
 	}
-}
-
-func assertViewDatasetInputMetric(t *testing.T, registry *prometheus.Registry, subject, frequency, seriesTag, dataTime string) {
-	t.Helper()
-	want := map[string]string{"space_id": "space", "view_id": "prices_view", "dataset_id": "market_prices", "subject_id": subject, "freq": frequency, "series_tag": seriesTag}
-	families, err := registry.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, family := range families {
-		if family.GetName() != "moox_storage_view_dataset_input_last_data_time_seconds" {
-			continue
-		}
-		for _, metric := range family.GetMetric() {
-			labels := make(map[string]string, len(metric.GetLabel()))
-			for _, label := range metric.GetLabel() {
-				labels[label.GetName()] = label.GetValue()
-			}
-			if reflect.DeepEqual(labels, want) {
-				got := time.Unix(int64(metric.GetGauge().GetValue()), 0).UTC().Format(time.RFC3339)
-				if got != dataTime {
-					t.Fatalf("subject=%s input freshness=%s, want %s", subject, got, dataTime)
-				}
-				return
-			}
-		}
-	}
-	t.Fatalf("view dataset input metric labels=%v not found", want)
 }
 
 func assertNoViewDatasetOutputMetric(t *testing.T, registry *prometheus.Registry) {
@@ -271,7 +243,7 @@ func assertNoViewDatasetOutputMetric(t *testing.T, registry *prometheus.Registry
 func assertNoEmptySubjectDatasetMetric(t *testing.T, registry *prometheus.Registry) {
 	t.Helper()
 	for _, family := range mustGather(t, registry) {
-		if family.GetName() != "moox_storage_view_dataset_input_last_data_time_seconds" && family.GetName() != "moox_storage_view_dataset_output_last_data_time_seconds" {
+		if family.GetName() != "moox_storage_view_dataset_output_last_data_time_seconds" {
 			continue
 		}
 		for _, metric := range family.GetMetric() {

@@ -2,8 +2,8 @@
 # Strictly decoded Binance source configuration.
 app:
   id: "binance"
-  name: "币安交易所"
-  description: "币安现货/合约 K 线与标的采集"
+  name: "加密交易所"
+  description: "加密现货/永续合约 K 线与标的采集"
   type: "market"
 
 api:
@@ -16,7 +16,12 @@ api:
     - "https://api3.binance.com"
     - "https://api4.binance.com"
     - "https://api-gcp.binance.com"
-  swap_base_url: "https://fapi.binance.com"
+  swap_base_urls:
+    - "https://fapi.binance.com"
+    - "https://fapi1.binance.com"
+    - "https://fapi2.binance.com"
+    - "https://fapi3.binance.com"
+    - "https://fapi4.binance.com"
 
 storage:
   bindings:

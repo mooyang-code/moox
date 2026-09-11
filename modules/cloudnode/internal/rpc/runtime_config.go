@@ -120,6 +120,15 @@ func isSupportedTimerCron(cron string) bool {
 	if err != nil || second < 0 || second > 59 {
 		return false
 	}
+	// Hourly market-fetch shards may use a deterministic minute offset to
+	// avoid every SCF invoking at :00. Keep the cadence constrained to one
+	// invocation per hour; only the minute field may be a literal 0..59.
+	if fields[1] != "*" {
+		minute, minuteErr := strconv.Atoi(fields[1])
+		if minuteErr == nil && minute >= 0 && minute <= 59 && strings.Join(fields[2:], " ") == "* * * * *" {
+			return true
+		}
+	}
 	fields[0] = "0"
 	switch strings.Join(fields, " ") {
 	case "0 * * * * * *", "0 */5 * * * * *", "0 */15 * * * * *", "0 */30 * * * * *", "0 0 * * * * *", "0 0 */4 * * * *", "0 0 0 * * * *":

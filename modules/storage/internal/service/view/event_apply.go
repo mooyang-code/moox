@@ -335,11 +335,6 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	if len(writes) == 0 {
 		return nil, nil
 	}
-	// The route/filter decision is complete at this point, but the index write
-	// has not started yet. This is intentionally recorded for replacement
-	// indexes too: input means the active View pipeline received the dataset
-	// event, while output below requires a successful active-index write.
-	s.observeActiveViewDatasetInput(id, datasetID, rows)
 	complete, incomplete := partitionCompleteWrites(schema, writes)
 	if len(incomplete) > 0 {
 		recovered, err := s.recoverMissingRows(ctx, engine, id, schema, datasetID, rows, incomplete)
@@ -355,42 +350,6 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 		return nil, err
 	}
 	return rowsWrittenByIndexKeys(rows, complete, schema.PrimaryDatasetID), nil
-}
-
-func (s *Service) observeActiveViewDatasetInput(indexID, datasetID string, rows []*pb.RowFieldUpsert) {
-	if s == nil || s.metrics == nil || indexID == "" || len(rows) == 0 {
-		return
-	}
-	s.mu.RLock()
-	viewKey, ok := s.indexView[indexID]
-	runtime := s.views[viewKey]
-	view := s.catalogViews[viewKey]
-	s.mu.RUnlock()
-	if !ok || runtime == nil || view == nil {
-		return
-	}
-	spaceID := strings.TrimSpace(view.GetSpaceId())
-	viewID := strings.TrimSpace(view.GetViewId())
-	if spaceID == "" || viewID == "" {
-		return
-	}
-	for _, row := range rows {
-		if row == nil || row.GetKey() == nil || row.GetKey().GetTimeSeries() == nil {
-			continue
-		}
-		timeSeries := row.GetKey().GetTimeSeries()
-		dataTime, err := time.Parse(time.RFC3339Nano, timeSeries.GetDataTime())
-		if err != nil {
-			continue
-		}
-		if err := s.metrics.ObserveViewDatasetInput(observability.ViewDatasetObservation{
-			SpaceID: spaceID, ViewID: viewID, DatasetID: datasetID,
-			SubjectID: timeSeries.GetSubjectId(), Frequency: timeSeries.GetFreq(),
-			SeriesTag: timeSeries.GetSeriesTag(), DataTime: dataTime,
-		}); err != nil {
-			log.Printf("storage view dataset input observation failed space=%s view=%s dataset=%s: %v", spaceID, viewID, datasetID, err)
-		}
-	}
 }
 
 func rowsWrittenByIndexKeys(rows []*pb.RowFieldUpsert, writes []viewindex.RowWrite, primaryDatasetID string) []*pb.RowFieldUpsert {
@@ -485,11 +444,10 @@ func (s *Service) observeViewWatermark(indexID, datasetID string, rows []*pb.Row
 	if frequency != "" && !watermark.IsZero() {
 		s.metrics.ObserveViewOutputWatermark(spaceID, viewID, frequency, watermark)
 	}
-	committedAt := time.Now().UTC()
 	for key, dataTime := range datasetWatermarks {
 		if err := s.metrics.ObserveViewDatasetOutput(observability.ViewDatasetObservation{
 			SpaceID: spaceID, ViewID: viewID, DatasetID: datasetID, SubjectID: key.subjectID,
-			Frequency: key.frequency, SeriesTag: key.seriesTag, DataTime: dataTime, CommittedAt: committedAt,
+			Frequency: key.frequency, SeriesTag: key.seriesTag, DataTime: dataTime,
 		}); err != nil {
 			log.Printf("storage view dataset output observation failed space=%s view=%s dataset=%s subject=%s freq=%s series_tag=%s: %v", spaceID, viewID, datasetID, key.subjectID, key.frequency, key.seriesTag, err)
 		}

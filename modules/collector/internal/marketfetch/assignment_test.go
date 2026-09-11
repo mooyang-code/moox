@@ -476,3 +476,15 @@ func TestCronForFrequency(t *testing.T) {
 	_, err = CronForFrequency("2m")
 	require.Error(t, err)
 }
+
+func TestAssignmentCronStaggersCryptoHourlyShards(t *testing.T) {
+	group := TaskGroup{MarketID: "crypto", Frequency: "1h"}
+	for id, want := range map[int]string{0: "0 0 * * * * *", 1: "0 1 * * * * *", 9: "0 9 * * * * *", 10: "0 0 * * * * *"} {
+		if got := assignmentCron(group, id); got != want {
+			t.Fatalf("group %d cron=%q, want %q", id, got, want)
+		}
+	}
+	if got := assignmentCron(TaskGroup{MarketID: "crypto", Frequency: "1m"}, 3); got != "0 * * * * * *" {
+		t.Fatalf("minute cron=%q", got)
+	}
+}

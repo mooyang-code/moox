@@ -28,7 +28,7 @@ secret_id = ""
 secret_key = ""
 
 [eventbus]
-public_address = ""
+host = "106.53.107.122"
 port = 4222
 tls_enabled = true
 
@@ -42,27 +42,35 @@ storage_root = "/data/moox/storage"
 channel_type = "wecom"
 webhook_url = ""
 
-[control_host]
-name = "control"
-address = ""
+[hosts."106.53.107.122"]
 port = 22
 username = "ubuntu"
 password = ""
+provider = "tencent"
+
+[hosts."43.132.204.177"]
+port = 22
+username = "ubuntu"
+password = ""
+provider = "tencent"
+
+[control_host]
+name = "control"
+host = "106.53.107.122"
 
 [compile_host]
-name = ""
-address = ""
-port = 0
-username = ""
-password = ""
+name = "compile"
+host = "106.53.107.122"
 
 [[other_hosts]]
 name = "compute-1"
-address = ""
-port = 22
-username = "ubuntu"
-password = ""
+host = "43.132.204.177"
 ```
+
+`[hosts."<address>"]` 是唯一的主机凭据目录，集中维护 SSH 端口、账号、密码和可选的
+`provider`（例如 `tencent`）。`control_host`、`storage_host`、`view_host`、
+`strategy_host`、`compile_host` 和 `other_hosts` 只通过 `host = "<address>"` 引用目录；
+EventBus 与 SCF 的 Storage Gateway 地址也使用同一目录，避免在模块配置中复制 IP。
 
 `eventbus` 只包含公网连接事实：SCF 可访问的 IPv4 或 DNS 地址、监听端口和必须开启的
 TLS。用户不填写 EventBus 账号、token、CA 或私钥；MooX 在部署时生成这些材料以及

@@ -48,9 +48,12 @@ storage:
               - dataset_binance_swap_kline_1m
               - dataset_spot_kline_1h
               - dataset_perpetual_kline_1h
-        fetch_batch: 4
-        max_workers: 2
-        max_ack_pending: 16
+        # Keep one worker available per crypto Kline Dataset. The minute
+        # streams are much busier than the hourly streams; with only two
+        # workers they can starve 1h events and make the View appear stale.
+        fetch_batch: 8
+        max_workers: 4
+        max_ack_pending: 64
         ack_wait_ms: 120000
         ordering: dataset
         deliver_policy: new

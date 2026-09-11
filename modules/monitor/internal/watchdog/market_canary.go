@@ -252,6 +252,13 @@ func (c MarketCanary) resolveConfig(ctx context.Context, config MarketCanaryConf
 // the active catalog is the source of truth. An ambiguous alias is rejected
 // rather than silently probing the wrong spot/swap series.
 func ResolveCanonicalSubjectID(configured string, active map[string]struct{}) (string, error) {
+	return ResolveCanonicalSubjectIDForDataset(configured, "", active)
+}
+
+// ResolveCanonicalSubjectIDForDataset applies the dataset's product identity
+// when resolving a legacy unsuffixed catalog entry. This keeps a spot canary
+// from silently selecting a swap subject when both aliases are present.
+func ResolveCanonicalSubjectIDForDataset(configured, datasetID string, active map[string]struct{}) (string, error) {
 	configured = strings.TrimSpace(configured)
 	if configured == "" {
 		return "", fmt.Errorf("subject is empty")
@@ -265,18 +272,30 @@ func ResolveCanonicalSubjectID(configured string, active map[string]struct{}) (s
 			return candidate, nil
 		}
 	}
+	wantSuffix := subjectProductSuffix(configured)
+	expectedSuffix := datasetProductSuffix(datasetID)
+	if wantSuffix != "" && expectedSuffix != "" && wantSuffix != expectedSuffix {
+		return "", fmt.Errorf("subject %q conflicts with dataset %q", configured, datasetID)
+	}
 	// An explicit product suffix is intentional. It may still refer to a
 	// legacy catalog entry that omitted the suffix, but must never resolve to
 	// the opposite product (spot versus swap).
-	wantSuffix := subjectProductSuffix(configured)
 	base := subjectAliasBase(configured)
 	var match string
+	legacyMatch := false
 	for candidate := range active {
 		if subjectAliasBase(candidate) != base {
 			continue
 		}
 		candidateSuffix := subjectProductSuffix(candidate)
+		if candidateSuffix == "" {
+			legacyMatch = true
+			continue
+		}
 		if wantSuffix != "" && candidateSuffix != "" && candidateSuffix != wantSuffix {
+			continue
+		}
+		if wantSuffix == "" && expectedSuffix != "" && candidateSuffix != expectedSuffix {
 			continue
 		}
 		if match != "" && match != candidate {
@@ -284,14 +303,14 @@ func ResolveCanonicalSubjectID(configured string, active map[string]struct{}) (s
 		}
 		match = candidate
 	}
-	if match == "" {
+	if match == "" && !(wantSuffix != "" && legacyMatch) {
 		return "", fmt.Errorf("subject %q is not active", configured)
 	}
 	// The configured ID is already canonical when it carries an explicit
 	// product suffix. A legacy unsuffixed catalog entry is only a compatibility
 	// validation signal; keep the suffixed ID for the Storage query because the
 	// output series may already have migrated to that identity.
-	if wantSuffix != "" && subjectProductSuffix(match) == "" {
+	if wantSuffix != "" && legacyMatch && subjectProductSuffix(match) == "" {
 		return configured, nil
 	}
 	return match, nil
@@ -305,6 +324,20 @@ func subjectProductSuffix(subject string) string {
 	suffix := parts[len(parts)-1]
 	if suffix == "SPOT" || suffix == "SWAP" {
 		return suffix
+	}
+	return ""
+}
+
+func datasetProductSuffix(datasetID string) string {
+	for _, part := range strings.FieldsFunc(strings.ToLower(strings.TrimSpace(datasetID)), func(r rune) bool {
+		return r == '_' || r == '-'
+	}) {
+		switch part {
+		case "spot":
+			return "SPOT"
+		case "swap", "perpetual", "future", "futures":
+			return "SWAP"
+		}
 	}
 	return ""
 }

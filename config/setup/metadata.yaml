@@ -155,7 +155,7 @@ data_sources:
   status: active
 - space_id: crypto
   data_source_id: binance
-  name: 币安
+  name: 加密
   kind: exchange
   market: crypto
   timezone: UTC
@@ -302,48 +302,48 @@ datasets:
 - space_id: crypto
   dataset_id: dataset_binance_spot_symbols
   data_source_id: binance
-  name: 币安现货交易对
+  name: 加密现货交易对
   data_kind: record
   data_node_id: storage-node-0
   keep_duration: '0'
-  status: disabled
+  status: active
   attributes:
     market_type: spot
     storage_model: wide_common_metrics
 - space_id: crypto
   dataset_id: dataset_binance_swap_symbols
   data_source_id: binance
-  name: 币安永续交易对
+  name: 加密永续交易对
   data_kind: record
   data_node_id: storage-node-0
   keep_duration: '0'
-  status: disabled
+  status: active
   attributes:
     market_type: swap
     storage_model: wide_common_metrics
 - space_id: crypto
   dataset_id: dataset_binance_spot_kline_1m
   data_source_id: binance
-  name: 币安现货一分钟行情
+  name: 加密现货一分钟行情
   data_kind: time_series
   data_node_id: storage-node-0
   keep_duration: 720h
   freqs:
   - 1m
-  status: disabled
+  status: active
   attributes:
     market_type: spot
     storage_model: wide_common_metrics
 - space_id: crypto
   dataset_id: dataset_binance_swap_kline_1m
   data_source_id: binance
-  name: 币安永续一分钟行情
+  name: 加密永续一分钟行情
   data_kind: time_series
   data_node_id: storage-node-0
   keep_duration: 720h
   freqs:
   - 1m
-  status: disabled
+  status: active
   attributes:
     market_type: swap
     storage_model: wide_common_metrics
@@ -356,7 +356,7 @@ datasets:
   keep_duration: 4320h
   freqs:
   - 1H
-  status: disabled
+  status: active
   attributes:
     market_type: spot
     source_directories: 现货1小时数据-币对分类|OKX现货1小时数据-币对分类
@@ -369,7 +369,7 @@ datasets:
   keep_duration: 4320h
   freqs:
   - 1H
-  status: disabled
+  status: active
   attributes:
     market_type: swap
     source_directories: 永续合约1小时数据-币对分类|OKX永续合约1小时数据-币对分类
@@ -2766,7 +2766,7 @@ devices:
 views:
 - space_id: crypto
   view_id: view_crypto_spot_kline_1m
-  name: 币安现货分钟行情
+  name: 加密现货分钟行情
   primary_dataset_id: dataset_binance_spot_kline_1m
   dataset_ids:
   - dataset_binance_spot_kline_1m
@@ -2784,7 +2784,7 @@ views:
   status: active
 - space_id: crypto
   view_id: view_crypto_swap_kline_1m
-  name: 币安永续分钟行情
+  name: 加密永续分钟行情
   primary_dataset_id: dataset_binance_swap_kline_1m
   dataset_ids:
   - dataset_binance_swap_kline_1m

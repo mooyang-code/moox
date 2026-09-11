@@ -96,3 +96,15 @@ func TestReadPrimaryTimeSeriesRowsDoesNotRetryKnownBusinessMessageThatLooksTrans
 		t.Fatalf("calls=%d, want 1", reader.calls)
 	}
 }
+
+func TestIsPrimaryHistoryTimeout(t *testing.T) {
+	if !isPrimaryHistoryTimeout(context.DeadlineExceeded) {
+		t.Fatal("context deadline must be treated as a timeout")
+	}
+	if !isPrimaryHistoryTimeout(errors.New("Primary history request failed: client timeout")) {
+		t.Fatal("transport timeout must be treated as a timeout")
+	}
+	if isPrimaryHistoryTimeout(errors.New("invalid history request")) {
+		t.Fatal("business errors must not be treated as timeouts")
+	}
+}

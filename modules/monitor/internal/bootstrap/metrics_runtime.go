@@ -138,6 +138,14 @@ func startObservabilityConsumer(
 			Checks: runtime.Repositories.Checks,
 			ExternalProducers: map[string]struct{}{
 				"moox_collector_scf": {},
+				// Storage and gateway metrics are emitted by internal releases that
+				// may be deployed on a separate host. Their sysdeploy health checks
+				// can be intentionally absent (for example while a remote gateway
+				// is being migrated), but their EventBus credentials are still scoped
+				// to this control plane and must not be dropped from observability.
+				"storage-view": {},
+				"storage-node": {},
+				"moox_gateway": {},
 			},
 		}, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled, klineViewMetricScopes(cfg)),
 		Host: hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
@@ -182,6 +190,15 @@ func startObservabilityConsumer(
 			}
 			consumer, bindErr := observabilityconsumer.NewConsumer(ctx, js, registry, consumerCfg, routes)
 			if bindErr != nil {
+				// DeliverPolicy is immutable for a JetStream durable. A previous
+				// release may have created this shared consumer with the opposite
+				// policy; remove it once so the configured policy can take effect on
+				// the next retry instead of leaving observability permanently stale.
+				if strings.Contains(bindErr.Error(), "conflicts in DeliverPolicy") {
+					if deleteErr := js.DeleteConsumer(ctx, consumerCfg.Stream, consumerCfg.Consumer); deleteErr != nil {
+						log.WarnContextf(ctx, "observability conflicting durable delete failed: %v", deleteErr)
+					}
+				}
 				_ = js.Close()
 				runtime.setObservabilityIngestState(false, bindErr)
 				log.WarnContextf(ctx, "observability durable unavailable: %v", bindErr)

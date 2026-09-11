@@ -54,6 +54,7 @@ type setupCloudAccountSummary struct {
 
 type setupInitSummary struct {
 	Status           string                        `json:"status"`
+	Firewall         setupFirewallSummary          `json:"firewall"`
 	BusinessSpaces   int                           `json:"business_spaces"`
 	BusinessSpaceIDs []string                      `json:"business_space_ids"`
 	Admin            setupclient.ApplyResult       `json:"admin"`
@@ -81,6 +82,20 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
+			// Open the cloud ingress required by every configured public runtime endpoint
+			// before the first Admin/Storage mutation. The operation is idempotent;
+			// keeping its summary in the result makes skipped targets visible to
+			// automation instead of silently reporting a complete initialization.
+			firewall, err := deps.ensureFirewall(cmd.Context(), snapshot)
+			if err != nil {
+				return fmt.Errorf("firewall: %w", err)
+			}
+			if firewall.Status != "" && firewall.Status != "ready" {
+				// Preserve the machine-readable summary even though initialization
+				// must stop before mutating Admin/Storage.
+				_ = writeSetupJSON(cmd, map[string]any{"status": "firewall_incomplete", "firewall": firewall})
+				return fmt.Errorf("firewall_incomplete: status=%s skipped=%d", firewall.Status, firewall.Skipped)
+			}
 			// Fail before mutating Admin/Storage metadata when an internal Caddy
 			// CA is not trusted by the browser machine.
 			if err := ensureSetupBrowserCATrust(cmd.Context(), snapshot); err != nil {
@@ -161,7 +176,7 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 				return fmt.Errorf("config_changed")
 			}
 			return writeSetupJSON(cmd, setupInitSummary{
-				Status: "ready", BusinessSpaces: len(bundle.Spaces), BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
+				Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.Spaces), BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
 				Admin: admin, CloudAccounts: cloudAccounts, AdminState: adminStatus.State, LoginAPI: login.LoginAPI,
 				Metadata: setupInitMetadataCounts{
 					Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,

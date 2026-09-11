@@ -46,9 +46,11 @@ streams:
     replicas: 1
     max_age: 72h
     duplicates: 2m
-    # Keep broker retention below the disk-pressure threshold of the 40 GiB
-    # production host; a full historical queue can prevent NATS bootstrap.
-    max_bytes: 536870912
+    # Storage events include high-cardinality view/metric deliveries. Keep an
+    # 8 GiB cap so a rebuild backlog cannot stall publishers at the old 2 GiB
+    # limit; the 72h age bound and disk-pressure monitoring still provide the
+    # retention guardrail.
+    max_bytes: 8589934592
   - name: MOOX_OBSERVABILITY
     # Keep the legacy subject while upgrading an existing JetStream store.
     # NATS refuses to remove a subject that still has persisted messages;

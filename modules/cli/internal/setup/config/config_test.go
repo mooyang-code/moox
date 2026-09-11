@@ -287,6 +287,12 @@ func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
 	_, err := toml.DecodeFile(filepath.Join("..", "..", "..", "..", "..", "moox.toml.example"), &manifest)
 	require.NoError(t, err)
 	manifest.SCFFetcher.Enabled = true
+	for index := range manifest.SCFFetcher.Spaces {
+		space := &manifest.SCFFetcher.Spaces[index]
+		_, address, ok := findHostDefinition(manifest.HostCatalog, space.StorageGatewayHost)
+		require.True(t, ok)
+		space.StorageRPCGatewayTarget = "ip://" + address + ":11003"
+	}
 	require.NoError(t, validateSCFFetcher(&manifest.SCFFetcher))
 
 	for _, space := range manifest.SCFFetcher.Spaces {
@@ -362,9 +368,14 @@ secret_id = "secret-id"
 secret_key = "secret-key"
 
 [eventbus]
-public_address = "eventbus.example.test"
+host = "192.0.2.10"
 port = 4222
 tls_enabled = true
+
+[hosts."192.0.2.10"]
+port = 22
+username = "ubuntu"
+password = "control-password"
 
 [notification]
 channel_type = "wecom"
@@ -372,10 +383,7 @@ webhook_url = ""
 
 [control_host]
 name = "control"
-address = "192.0.2.10"
-port = 22
-username = "ubuntu"
-password = "control-password"
+host = "192.0.2.10"
 `
 
 func writeManifest(t *testing.T, root, body string, mode os.FileMode) string {
@@ -393,7 +401,7 @@ func TestLoadValidManifest(t *testing.T) {
 	snapshot, err := Load(path, root)
 	require.NoError(t, err)
 	assert.Equal(t, "admin", snapshot.Manifest.Admin.Username)
-	assert.Equal(t, "eventbus.example.test", snapshot.Manifest.EventBus.PublicAddress)
+	assert.Equal(t, "192.0.2.10", snapshot.Manifest.EventBus.PublicAddress)
 	assert.Equal(t, 4222, snapshot.Manifest.EventBus.Port)
 	assert.True(t, snapshot.Manifest.EventBus.TLSEnabled)
 	assert.Equal(t, "ap-guangzhou", snapshot.Manifest.TencentCloud.Region)
@@ -415,23 +423,44 @@ func TestLoadRoleSpecificStorageAndViewHosts(t *testing.T) {
 
 [storage_host]
 name = "storage"
-address = "192.0.2.20"
-port = 22
-username = "ubuntu"
-password = "storage-password"
+host = "192.0.2.20"
 
 [view_host]
 name = "view"
-address = "192.0.2.20"
+host = "192.0.2.20"
+`
+	body = strings.Replace(body, "\n[storage_host]", `
+
+[hosts."192.0.2.20"]
 port = 22
 username = "ubuntu"
-password = "view-password"
-`
+password = "storage-password"
+provider = "Tencent"
+
+[storage_host]`, 1)
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	require.Equal(t, "storage", snapshot.Manifest.StorageHost.Name)
 	require.Equal(t, "view", snapshot.Manifest.ViewHost.Name)
 	require.Equal(t, snapshot.Manifest.StorageHost.Address, snapshot.Manifest.ViewHost.Address)
+	assert.Equal(t, "ubuntu", snapshot.Manifest.StorageHost.Username)
+	assert.Equal(t, "storage-password", snapshot.Manifest.ViewHost.Password)
+	assert.Equal(t, "tencent", snapshot.Manifest.StorageHost.Provider)
+}
+
+func TestLoadResolvesStorageGatewayHostFromSharedCatalog(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+storage_gateway_host = "192.0.2.10"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	require.Len(t, snapshot.Manifest.SCFFetcher.Spaces, 1)
+	assert.Equal(t, "192.0.2.10", snapshot.Manifest.SCFFetcher.Spaces[0].StorageGatewayHost)
+	assert.Equal(t, "ip://192.0.2.10:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StorageRPCGatewayTarget)
 }
 
 func TestValidateRejectsStorageRootOverlapWithControl(t *testing.T) {
@@ -613,12 +642,14 @@ func TestLoadTencentCloudRegion(t *testing.T) {
 
 func TestLoadDefaultsHostPorts(t *testing.T) {
 	root := t.TempDir()
-	body := strings.Replace(validManifest, "port = 22\n", "", 1) + `
-[[other_hosts]]
-name = "compute"
-address = "192.0.2.11"
+	body := validManifest + `
+[hosts."192.0.2.11"]
 username = "ubuntu"
 password = "compute-password"
+
+[[other_hosts]]
+name = "compute"
+host = "192.0.2.11"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
@@ -628,11 +659,13 @@ password = "compute-password"
 
 func TestLoadDNSResolverConfiguration(t *testing.T) {
 	valid := validManifest + `
-[[other_hosts]]
-name = "compute-1"
-address = "43.132.204.177"
+[hosts."43.132.204.177"]
 username = "ubuntu"
 password = "compute-password"
+
+[[other_hosts]]
+name = "compute-1"
+host = "43.132.204.177"
 
 [dns_resolver]
 enabled = true
@@ -682,10 +715,13 @@ domains = ["FAPI.BINANCE.COM.", "api.binance.com"]
 func TestLoadOptionalCompileHost(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
+[hosts."192.0.2.20"]
+username = "builder"
+password = "compile-password"
+
 [compile_host]
 name = "compile"
-address = "192.0.2.20"
-username = "builder"
+host = "192.0.2.20"
 `
 
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
@@ -699,11 +735,13 @@ username = "builder"
 func TestLoadOptionalStrategyHost(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
-[strategy_host]
-name = "strategy"
-address = "192.0.2.21"
+[hosts."192.0.2.21"]
 username = "ubuntu"
 password = "strategy-password"
+
+[strategy_host]
+name = "strategy"
+host = "192.0.2.21"
 `
 
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
@@ -726,12 +764,11 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{name: "missing secret id", body: strings.Replace(validManifest, `secret_id = "secret-id"`, `secret_id = ""`, 1), want: "tencent_cloud.secret_id"},
 		{name: "missing secret key", body: strings.Replace(validManifest, `secret_key = "secret-key"`, `secret_key = ""`, 1), want: "tencent_cloud.secret_key"},
 		{name: "empty region", body: strings.Replace(validManifest, `secret_key = "secret-key"`, "secret_key = \"secret-key\"\nregion = \" \"", 1), want: "tencent_cloud.region"},
-		{name: "missing eventbus address", body: strings.Replace(validManifest, `public_address = "eventbus.example.test"`, `public_address = ""`, 1), want: "eventbus.public_address"},
-		{name: "eventbus address with surrounding whitespace", body: strings.Replace(validManifest, `eventbus.example.test`, ` eventbus.example.test `, 1), want: "eventbus.public_address"},
-		{name: "eventbus address with scheme", body: strings.Replace(validManifest, `eventbus.example.test`, `tls://eventbus.example.test`, 1), want: "eventbus.public_address"},
-		{name: "eventbus address with path", body: strings.Replace(validManifest, `eventbus.example.test`, `eventbus.example.test/nats`, 1), want: "eventbus.public_address"},
-		{name: "eventbus address with port", body: strings.Replace(validManifest, `eventbus.example.test`, `eventbus.example.test:4222`, 1), want: "eventbus.public_address"},
-		{name: "eventbus ipv6 address", body: strings.Replace(validManifest, `eventbus.example.test`, `2001:db8::1`, 1), want: "eventbus.public_address"},
+		{name: "missing eventbus host", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = ""`, 1), want: "eventbus.host"},
+		{name: "eventbus host with scheme", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "tls://192.0.2.10"`, 1), want: "hosts"},
+		{name: "eventbus host with path", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "192.0.2.10/nats"`, 1), want: "hosts"},
+		{name: "eventbus host with port", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "192.0.2.10:4222"`, 1), want: "hosts"},
+		{name: "eventbus ipv6 host", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "2001:db8::1"`, 1), want: "hosts"},
 		{name: "eventbus explicit zero port", body: strings.Replace(validManifest, "port = 4222", "port = 0", 1), want: "eventbus.port"},
 		{name: "eventbus invalid port", body: strings.Replace(validManifest, "port = 4222", "port = 70000", 1), want: "eventbus.port"},
 		{name: "eventbus tls disabled", body: strings.Replace(validManifest, "tls_enabled = true", "tls_enabled = false", 1), want: "eventbus.tls_enabled"},
@@ -739,25 +776,25 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{name: "notification webhook must be a URL", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "not-a-url"`, 1), want: "notification.webhook_url"},
 		{name: "notification webhook must match channel host", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "https://open.feishu.cn/hook"`, 1), want: "notification.webhook_url"},
 		{name: "notification webhook must use approved platform host", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "https://example.invalid/hook"`, 1), want: "notification.webhook_url"},
-		{name: "missing host address", body: strings.Replace(validManifest, `address = "192.0.2.10"`, `address = ""`, 1), want: "control_host.address"},
+		{name: "missing host reference", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = ""`, 1), want: "eventbus.host"},
 		{name: "invalid host name", body: strings.Replace(validManifest, `name = "control"`, `name = "Storage A"`, 1), want: "control_host.name"},
 		{name: "missing compile host address", body: validManifest + `
 [compile_host]
 name = "compile"
-address = ""
-username = "builder"
-password = "password"
-`, want: "compile_host.address"},
+host = "192.0.2.99"
+`, want: "compile_host.host"},
 		{name: "unknown field", body: validManifest + "unexpected = true\n", want: "unknown field"},
-		{name: "invalid port", body: strings.Replace(validManifest, "port = 22", "port = 70000", 1), want: "control_host.port"},
+		{name: "invalid port", body: strings.Replace(validManifest, "port = 22", "port = 70000", 1), want: "hosts"},
 		{
 			name: "duplicate host name",
 			body: validManifest + `
-[[other_hosts]]
-name = "control"
-address = "192.0.2.11"
+[hosts."192.0.2.11"]
 username = "ubuntu"
 password = "password"
+
+[[other_hosts]]
+name = "control"
+host = "192.0.2.11"
 `,
 			want: "duplicate host name",
 		},
@@ -766,9 +803,7 @@ password = "password"
 			body: validManifest + `
 [[other_hosts]]
 name = "compute"
-address = "192.0.2.10"
-username = "ubuntu"
-password = "password"
+host = "192.0.2.10"
 `,
 			want: "duplicate host address",
 		},

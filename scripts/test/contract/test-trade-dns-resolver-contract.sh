@@ -35,21 +35,27 @@ secret_key = "contract-secret-key"
 region = "ap-guangzhou"
 
 [eventbus]
-public_address = "eventbus.example.com"
+host = "192.0.2.10"
 port = 4222
 tls_enabled = true
 
-[control_host]
-name = "control"
-address = "127.0.0.1"
+[hosts."192.0.2.10"]
+port = 22
 username = "ubuntu"
 password = "control-host-password"
 
-[[other_hosts]]
-name = "compute-1"
-address = "43.132.204.177"
+[hosts."43.132.204.177"]
+port = 22
 username = "ubuntu"
 password = "compute-host-password"
+
+[control_host]
+name = "control"
+host = "192.0.2.10"
+
+[[other_hosts]]
+name = "compute-1"
+host = "43.132.204.177"
 
 [dns_resolver]
 enabled = true

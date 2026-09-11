@@ -133,6 +133,10 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 			stages = append(stages, "load-config")
 			return snapshot, nil
 		},
+		ensureFirewall: func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error) {
+			stages = append(stages, "firewall")
+			return setupFirewallSummary{Status: "ready", Targets: 3}, nil
+		},
 		applySpaces: func(_ context.Context, _ *setupconfig.Snapshot, got []setupclient.Space) (setupclient.ApplyResult, error) {
 			stages = append(stages, "admin-apply")
 			require.Equal(t, spaces, got)
@@ -163,6 +167,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 	assert.Equal(t, []string{
 		"load-bundle",
 		"load-config",
+		"firewall",
 		"admin-apply",
 		"admin-status",
 		"cloud-accounts",
@@ -174,6 +179,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 	}, stages)
 	require.JSONEq(t, `{
 		"status":"ready",
+		"firewall":{"status":"ready","targets":3,"rules":0,"skipped":0,"already_open":0,"created":0},
 		"business_spaces":1,
 		"business_space_ids":["crypto"],
 		"admin":{"action":"created","users":0,"secrets":0,"hosts":0,"spaces":1,"spaces_created":1,"spaces_unchanged":0},
@@ -198,6 +204,10 @@ func TestSetupInitStopsAfterAdminFailure(t *testing.T) {
 			stages = append(stages, "load-config")
 			return snapshot, nil
 		},
+		ensureFirewall: func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error) {
+			stages = append(stages, "firewall")
+			return setupFirewallSummary{Status: "ready"}, nil
+		},
 		applySpaces: func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
 			stages = append(stages, "admin-apply")
 			return setupclient.ApplyResult{}, errors.New("setup_conflict")
@@ -205,7 +215,26 @@ func TestSetupInitStopsAfterAdminFailure(t *testing.T) {
 	})
 	cmd.SetArgs([]string{"init", "--storage-host", "compute"})
 	require.ErrorContains(t, cmd.Execute(), "setup_conflict")
-	assert.Equal(t, []string{"load-bundle", "load-config", "admin-apply"}, stages)
+	assert.Equal(t, []string{"load-bundle", "load-config", "firewall", "admin-apply"}, stages)
+}
+
+func TestSetupInitStopsOnPartialFirewall(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	adminApplied := false
+	cmd := newSetupCommand(setupDeps{
+		loadInitBundle: func(string) (setupInitBundle, error) { return setupInitBundle{}, nil },
+		load:           func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		ensureFirewall: func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error) {
+			return setupFirewallSummary{Status: "partial", Targets: 3, Skipped: 1}, nil
+		},
+		applySpaces: func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+			adminApplied = true
+			return setupclient.ApplyResult{}, nil
+		},
+	})
+	cmd.SetArgs([]string{"init", "--storage-host", "compute"})
+	require.ErrorContains(t, cmd.Execute(), "firewall_incomplete")
+	assert.False(t, adminApplied)
 }
 
 type fakeDatasetActivationAPI struct {
@@ -502,6 +531,9 @@ func TestSetupInitJSONDoesNotExposeSecrets(t *testing.T) {
 	cmd := newSetupCommand(setupDeps{
 		loadInitBundle: func(string) (setupInitBundle, error) { return setupInitBundle{}, nil },
 		load:           func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		ensureFirewall: func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error) {
+			return setupFirewallSummary{Status: "ready"}, nil
+		},
 		applySpaces: func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
 			return setupclient.ApplyResult{Action: "unchanged"}, nil
 		},

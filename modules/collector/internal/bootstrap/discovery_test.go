@@ -69,6 +69,11 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	}
 }
 
+func TestPreferLocalServiceGatewayTargetForSameHostControlPlane(t *testing.T) {
+	assert.Equal(t, "http://127.0.0.1:11002", preferLocalServiceGatewayTarget("https://106.53.107.122:11001", "http://127.0.0.1:11002"))
+	assert.Equal(t, "https://gw.example.com:11001", preferLocalServiceGatewayTarget("https://gw.example.com:11001", "https://control.example.com:11002"))
+}
+
 func TestResolveUsesPublicGatewayEndpoints(t *testing.T) {
 	items := map[string]endpoint{
 		"service_gateway": {

@@ -284,7 +284,13 @@ func (s *Store) Close() error {
 func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
 		"_pragma=journal_mode(WAL)",
-		"_pragma=synchronous(OFF)",
+		// Collector persists assignment and readiness state that drives the
+		// market timers.  Synchronous=OFF can leave b-tree pages torn after a
+		// process or host crash, which surfaces later as "database disk image is
+		// malformed" and stops completion events from advancing readiness.
+		// NORMAL keeps WAL throughput while preserving the WAL durability
+		// guarantee needed by this control-plane database.
+		"_pragma=synchronous(NORMAL)",
 		"_pragma=foreign_keys(ON)",
 		"_pragma=busy_timeout(5000)",
 		"_pragma=temp_store(MEMORY)",

@@ -97,3 +97,14 @@ func isRetryablePrimaryHistoryError(err error) bool {
 	}
 	return false
 }
+
+func isPrimaryHistoryTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "deadline exceeded") || strings.Contains(message, "timeout")
+}

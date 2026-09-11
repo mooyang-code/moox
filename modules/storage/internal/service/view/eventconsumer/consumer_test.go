@@ -124,6 +124,38 @@ func TestStartReconnectsClientAfterPersistentBadSubscription(t *testing.T) {
 	}
 }
 
+func TestStartReconnectsClientAfterFetchDisconnect(t *testing.T) {
+	consumer := testConsumer(t, datasetRowsHandlerFunc(func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error {
+		return nil
+	}))
+	consumer.config, _ = consumer.config.withDefaults()
+	consumer.config.ErrorReporter = jetstream.ErrorReporterFunc(func(error) {})
+	var binds atomic.Int32
+	consumer.bind = func(context.Context) (deliveryConsumer, error) {
+		if binds.Add(1) == 1 {
+			return disconnectedDeliveryConsumer{}, nil
+		}
+		return &fakeDeliveryConsumer{}, nil
+	}
+	var reconnects atomic.Int32
+	consumer.reconnect = func(context.Context) error {
+		reconnects.Add(1)
+		return nil
+	}
+	stop, err := consumer.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for reconnects.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	stop()
+	if reconnects.Load() == 0 {
+		t.Fatal("fetch disconnect did not trigger a client reconnect")
+	}
+}
+
 func TestStartClosesSubscriptionBeforeReconnect(t *testing.T) {
 	consumer := testConsumer(t, datasetRowsHandlerFunc(func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error {
 		return nil
@@ -181,6 +213,13 @@ func (badSubscriptionDeliveryConsumer) Fetch(context.Context, int) ([]*jetstream
 	return nil, nats.ErrBadSubscription
 }
 func (badSubscriptionDeliveryConsumer) Close() error { return nil }
+
+type disconnectedDeliveryConsumer struct{}
+
+func (disconnectedDeliveryConsumer) Fetch(context.Context, int) ([]*jetstream.Delivery, error) {
+	return nil, nats.ErrFetchDisconnected
+}
+func (disconnectedDeliveryConsumer) Close() error { return nil }
 
 type orderedBadSubscriptionConsumer struct {
 	closed chan struct{}

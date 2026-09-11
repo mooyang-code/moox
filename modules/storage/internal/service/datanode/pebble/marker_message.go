@@ -26,7 +26,17 @@ func BuildDatasetPeriodCollectedMessage(spaceID string, marker *pb.DatasetPeriod
 		Status: marker.GetStatus(), SubjectIds: normalizedIDs(marker.GetSubjectIds()), FailedSubjects: normalizedIDs(marker.GetFailedSubjects()),
 		CollectedAt: marker.GetCollectedAt(),
 	}
-	eventID := stableMarkerID("dataset-period", spaceID, payload.GetDatasetId(), payload.GetFrequency(), strconv.FormatInt(payload.GetPeriodTime(), 10))
+	// The period identity is not enough to make the marker idempotent: a
+	// collector can retry the same period with a corrected subject/status
+	// payload. Including the canonical payload digest lets that retry coexist
+	// with the earlier marker instead of hitting the marker-store conflict
+	// path forever, while identical payloads still receive the same ID.
+	encodedPayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
+	if err != nil {
+		return nil, "", fmt.Errorf("marshal dataset period marker payload: %w", err)
+	}
+	payloadHash := sha256.Sum256(encodedPayload)
+	eventID := stableMarkerID("dataset-period", spaceID, payload.GetDatasetId(), payload.GetFrequency(), strconv.FormatInt(payload.GetPeriodTime(), 10), hex.EncodeToString(payloadHash[:16]))
 	return buildMarkerMessage(events.DatasetPeriodCollected, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCollectedAt()), payload)
 }
 

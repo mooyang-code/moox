@@ -42,13 +42,14 @@ moox-cli setup init \
 
 `--storage-host` 是已部署 Storage 的主机名，不是 IP 地址。命令按以下顺序执行：
 
-1. 严格解析并校验 Metadata 依赖。
-2. 在 Admin 的同一事务中创建或核对管理员、凭据、主机和业务空间。
-3. 检查 Admin 状态并验证管理台登录。
-4. 在 CloudNode 中创建或逐字段核对这一条 Tencent CloudAccount。
-5. 通过 Storage 主机 SSH 隧道创建或逐字段核对元数据。
-6. 对每个 Dataset 执行就绪检查和 revision CAS 激活。
-7. 再次核对全部 Storage 元数据并输出脱敏 JSON 汇总。
+1. 幂等打开所有已配置运行主机需要的腾讯云入站端口；若有目标无法解析到云实例，初始化会以 `firewall_incomplete` 停止，并报告跳过的目标。
+2. 严格解析并校验 Metadata 依赖。
+3. 在 Admin 的同一事务中创建或核对管理员、凭据、主机和业务空间。
+4. 检查 Admin 状态并验证管理台登录。
+5. 在 CloudNode 中创建或逐字段核对这一条 Tencent CloudAccount。
+6. 通过 Storage 主机 SSH 隧道创建或逐字段核对元数据。
+7. 对每个 Dataset 执行就绪检查和 revision CAS 激活。
+8. 再次核对全部 Storage 元数据并输出脱敏 JSON 汇总。
 
 命令可重复执行。相同资源记为 `unchanged`；已激活且锁定绑定的 Dataset 也记为
 `unchanged`。同 ID 资源字段不一致时返回冲突，不自动覆盖现有配置或数据。

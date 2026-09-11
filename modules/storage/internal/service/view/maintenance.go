@@ -1391,7 +1391,47 @@ func (s *Service) activateViewBuild(ctx context.Context, opts MaintenanceOptions
 	if err != nil {
 		return activationRetry{cause: err}
 	}
+	// A rebuild writes rows directly into the replacement index, so the normal
+	// live-event path does not observe those rows. Publish a bounded watermark
+	// sample after activation; otherwise Monitor can keep reporting no_output
+	// until the next live event arrives (or indefinitely when the durable was
+	// reset during repair).
+	s.observeActivatedViewWatermark(view, indexID)
 	return nil
+}
+
+// observeActivatedViewWatermark refreshes freshness metrics from the newly
+// authoritative index. The query is intentionally bounded and best-effort:
+// activation must not fail merely because the metrics probe is unavailable.
+func (s *Service) observeActivatedViewWatermark(view *pb.View, indexID string) {
+	if s == nil || s.metrics == nil || view == nil || strings.TrimSpace(indexID) == "" {
+		return
+	}
+	if strings.TrimSpace(viewFrequencyValue(view)) == "" || strings.TrimSpace(view.GetPrimaryDatasetId()) == "" {
+		return
+	}
+	engine, err := s.engineFor(indexID)
+	if err != nil {
+		log.Printf("storage view activation metric probe skipped space=%s view=%s index=%s: %v", view.GetSpaceId(), view.GetViewId(), indexID, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, _, err := engine.Query(ctx, indexID, viewindex.QuerySpec{
+		Sorts: []*pb.SortSpec{{FieldName: "data_time", Desc: true}},
+		Order: pb.SortOrder_SORT_ORDER_DESC, Limit: 5000, TotalMode: pb.TotalMode_NONE,
+	})
+	if err != nil {
+		log.Printf("storage view activation metric probe failed space=%s view=%s index=%s: %v", view.GetSpaceId(), view.GetViewId(), indexID, err)
+		return
+	}
+	keys := make([]*pb.RowFieldUpsert, 0, len(rows))
+	for _, row := range rows {
+		if row != nil && row.GetKey() != nil {
+			keys = append(keys, &pb.RowFieldUpsert{Key: row.GetKey()})
+		}
+	}
+	s.observeViewWatermark(indexID, view.GetPrimaryDatasetId(), keys, true)
 }
 
 func (s *Service) readActiveView(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, spaceID, viewID string) (*pb.View, error) {

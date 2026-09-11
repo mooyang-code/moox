@@ -459,7 +459,6 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 	assignments := make([]NodeAssignment, 0, len(timerNodes))
 	nodeIndex := 0
 	for _, group := range normalized {
-		cron, _ := CronForFrequency(group.Frequency)
 		stockGroup := strings.EqualFold(group.MarketType, "equity") && group.DatasetID == StockCNDatasetID
 		for start := 0; start < len(group.Subjects); start += maxSubjects {
 			end := start + maxSubjects
@@ -488,6 +487,7 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 			node := timerNodes[nodeIndex]
 			groupID := nodeIndex
 			nodeIndex++
+			cron := assignmentCron(group, groupID)
 			assignments = append(assignments, NodeAssignment{
 				NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region,
 				Provider: group.Provider, RouteProvider: group.Provider, MarketType: group.MarketType,
@@ -504,6 +504,20 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 	}
 	sort.Slice(assignments, func(i, j int) bool { return assignments[i].NodeID < assignments[j].NodeID })
 	return assignments, nil
+}
+
+// assignmentCron spreads crypto hourly shards across the first ten minutes
+// of the hour. A large fleet otherwise invokes every 1h function at exactly
+// :00, which can exhaust the provider/storage request budget and leave a
+// whole hour missing even though the timer itself is enabled. Minute bars
+// retain their every-minute schedule; other frequencies keep their canonical
+// cadence.
+func assignmentCron(group TaskGroup, groupID int) string {
+	cron, _ := CronForFrequency(group.Frequency)
+	if strings.EqualFold(group.MarketID, "crypto") && strings.EqualFold(group.Frequency, "1h") {
+		return fmt.Sprintf("0 %d * * * * *", groupID%10)
+	}
+	return cron
 }
 
 func eligibleTimerNodes(nodes []scfinvoker.Node) []scfinvoker.Node {

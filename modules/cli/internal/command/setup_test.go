@@ -92,7 +92,7 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"init", "hosts", "validate", "trust-host", "trust-browser", "deploy-control", "deploy-service", "apply", "status", "deploy-storage", "install-storage-watchdog", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "e2e-eventbus", "export-skill-config"} {
+	for _, name := range []string{"init", "hosts", "validate", "trust-host", "trust-browser", "deploy-control", "deploy-service", "apply", "status", "deploy-storage", "install-storage-watchdog", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "e2e-eventbus", "export-skill-config", "firewall"} {
 		require.Contains(t, output.String(), name)
 	}
 	require.Contains(t, output.String(), "render-runtime-config")
@@ -575,6 +575,34 @@ func TestSetupRuntimeFirewallRulesIncludeEventBusAndServicePorts(t *testing.T) {
 	}
 }
 
+func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
+	manifest := setupconfig.Manifest{
+		ControlHost: setupconfig.Host{Name: "control", Address: "203.0.113.8"},
+		StorageHost: setupconfig.Host{Name: "storage", Address: "203.0.113.10"},
+		EventBus:    setupconfig.EventBus{PublicAddress: "203.0.113.8", Port: 4222},
+		DNSResolver: setupconfig.DNSResolver{TradeNode: "compute"},
+		OtherHosts:  []setupconfig.Host{{Name: "compute", Address: "203.0.113.9"}},
+	}
+	targets := setupFirewallTargets(manifest)
+	require.Len(t, targets, 3)
+	ports := func(name string) []string {
+		for _, target := range targets {
+			if target.Host.Name != name {
+				continue
+			}
+			got := make([]string, 0, len(target.Rules))
+			for _, rule := range target.Rules {
+				got = append(got, rule.Ports)
+			}
+			return got
+		}
+		return nil
+	}
+	assert.Contains(t, ports("control"), "4222")
+	assert.Equal(t, []string{"11003"}, ports("storage"))
+	assert.Equal(t, []string{"11003", "11200"}, ports("compute"))
+}
+
 func TestSetupControlDeploymentOpensACMEBeforeDeploy(t *testing.T) {
 	events := []string{}
 	step := func(name string, fail bool) func() error {
@@ -714,24 +742,30 @@ password = "admin-test-password"
 secret_id = "AKID-test-secret"
 secret_key = "cloud-test-secret"
 [eventbus]
-public_address = "eventbus.example.test"
+host = "eventbus.example.test"
 port = 4333
 tls_enabled = true
+[hosts."eventbus.example.test"]
+port = 22
+username = "ubuntu"
+password = "control-ssh-password"
+[hosts."203.0.113.8"]
+port = 22
+username = "ubuntu"
+password = "control-ssh-password"
+[hosts."203.0.113.9"]
+port = 22
+username = "ubuntu"
+password = "other-ssh-password"
 [notification]
 channel_type = "wecom"
 webhook_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
 [control_host]
 name = "control"
-address = "203.0.113.8"
-port = 22
-username = "ubuntu"
-password = "control-ssh-password"
+host = "203.0.113.8"
 [[other_hosts]]
 name = "compute"
-address = "203.0.113.9"
-port = 22
-username = "ubuntu"
-password = "other-ssh-password"
+host = "203.0.113.9"
 `)
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 	snapshot, err := setupconfig.Load(path, dir)

@@ -122,6 +122,17 @@ moox-cli setup status --file ./moox.toml
 moox-cli setup e2e-eventbus --file ./moox.toml
 ```
 
+`setup deploy-control` 会在部署控制面前幂等打开控制面和 EventBus 的腾讯云入站端口。
+完整初始化 `setup init` 还会在写入 Admin/Storage 前幂等打开 Storage Gateway 和 Trade
+Console 所在主机的端口；也可以单独执行：
+
+```bash
+moox-cli setup firewall --file ./moox.toml
+```
+
+该命令只提交 `ACCEPT` 规则，不输出云凭据；Lighthouse 使用实例防火墙，Storage
+部署到 CVM 时自动回退到 VPC 安全组规则。编译主机不运行 MooX 服务，因此不会开放端口。
+
 `[tencent_cloud]` 中的 `secret_id`/`secret_key` 是腾讯云 API 凭据，也用于
 访问 CLS；不要在仓库或部署包中重复保存 SecretKey。CLS Logset/Topic 是初始化后
 由云端生成的资源，不写入 `moox.toml`。启用 CLS 的发布会运行
@@ -253,7 +264,8 @@ moox-cli setup factors --file ./moox.toml
 重复执行时同源文件和同运行契约会报告 unchanged；如果源码或输入/输出/参数契约不同，命令会停止而不会静默覆盖已有因子。修改同一因子的默认 View 或频率后再次执行，会删除此前由 `setup factors` 创建的旧绑定。
 
 `deploy-storage` 同机部署 `storage-primary` 和统一的 `storage-view`，并更新控制面的 Storage 服务
-位置。在 macOS 上发布 Linux Storage 时，CLI 自动通过 `compile_host` 构建 CGO
+位置。主机 SSH 账号、密码、端口和运营商标记统一维护在 `moox.toml` 的
+`[hosts."<address>"]` 中，各角色段只通过 `host` 引用。在 macOS 上发布 Linux Storage 时，CLI 自动通过 `compile_host` 构建 CGO
 二进制后再打包。`setup init` 固定从配置目录读取 `metadata.yaml`，把
 `stockcn`、`crypto` 写入 Admin，把它们和内部 `mooxsys` 元数据写入
 Storage。已有资源逐字段一致时记为 unchanged，不一致时停止且不覆盖。

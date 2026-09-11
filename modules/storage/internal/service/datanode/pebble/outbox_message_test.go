@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestBuildDatasetRowsUpsertedMessageUsesExplicitOuterContract(t *testing.T) {
@@ -35,6 +36,33 @@ func TestBuildDatasetRowsUpsertedMessageUsesExplicitOuterContract(t *testing.T) 
 	}
 	if payload.GetSpaceId() != "crypto" || payload.GetDatasetId() != "spot_kline" || len(payload.GetRows()) != 1 {
 		t.Fatalf("rows.upserted payload = %v", payload)
+	}
+}
+
+func TestBuildDatasetPeriodCollectedMessageChangesIDWhenPayloadChanges(t *testing.T) {
+	base := &pb.DatasetPeriodCollectedMarker{
+		DatasetId: "spot_kline", Frequency: "1m", PeriodTime: 1_725_000_000,
+		Status: "complete", SubjectIds: []string{"BTC-USDT", "ETH-USDT"}, CollectedAt: timestamppb.New(time.Unix(1_725_000_001, 0)),
+	}
+	_, firstID, err := BuildDatasetPeriodCollectedMessage("crypto", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, retryID, err := BuildDatasetPeriodCollectedMessage("crypto", proto.Clone(base).(*pb.DatasetPeriodCollectedMarker))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstID != retryID {
+		t.Fatalf("identical marker IDs differ: %q != %q", firstID, retryID)
+	}
+	changed := proto.Clone(base).(*pb.DatasetPeriodCollectedMarker)
+	changed.Status = "degraded"
+	_, changedID, err := BuildDatasetPeriodCollectedMessage("crypto", changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedID == firstID {
+		t.Fatalf("changed marker reused ID %q", changedID)
 	}
 }
 

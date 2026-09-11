@@ -51,19 +51,23 @@ password = "recognizable-admin-password"
 secret_id = "recognizable-secret-id"
 secret_key = "recognizable-secret-key"
 [eventbus]
-public_address = "eventbus.example.test"
+host = "eventbus.example.test"
 port = 4222
 tls_enabled = true
-[control_host]
-name = "control"
-address = "192.0.2.10"
+[hosts."eventbus.example.test"]
+port = 22
 username = "ubuntu"
 password = "recognizable-control-password"
-[[other_hosts]]
-name = "compute"
-address = "192.0.2.11"
+[hosts."192.0.2.11"]
+port = 22
 username = "ubuntu"
 password = "recognizable-compute-password"
+[control_host]
+name = "control"
+host = "eventbus.example.test"
+[[other_hosts]]
+name = "compute"
+host = "192.0.2.11"
 `
 	path := filepath.Join(root, "moox.toml")
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))

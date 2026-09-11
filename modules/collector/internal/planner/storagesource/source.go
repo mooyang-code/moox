@@ -22,8 +22,14 @@ import (
 const storagePageSize = 500
 
 const (
-	metadataPrimaryTimeout  = time.Second
-	metadataFallbackTimeout = 2 * time.Second
+	// Listing a crypto DatasetSubject set also performs SQLite pagination and
+	// may briefly contend with View maintenance. A one-second deadline caused
+	// healthy Storage calls (typically 1-4s for ~500 symbols) to look like a
+	// network outage, forcing the reconciler onto a stale fallback and needlessly
+	// republishing the entire SCF fleet. Keep the normal gateway bounded, but
+	// allow one complete metadata page to finish before failing over.
+	metadataPrimaryTimeout  = 6 * time.Second
+	metadataFallbackTimeout = 8 * time.Second
 )
 
 type metadataClient interface {
@@ -268,13 +274,32 @@ func (s *DatasetSource) ListSubjects(ctx context.Context, spaceID string, datase
 	if err != nil {
 		return nil, err
 	}
-	symbols, err := s.listSubjectSymbols(ctx, spaceID, dataSourceID)
-	if err != nil {
-		return nil, err
-	}
 	market := ""
 	if dataset, datasetErr := s.GetDataset(ctx, spaceID, datasetID); datasetErr == nil {
 		market = strings.TrimSpace(dataset.Attributes["market_type"])
+	}
+	symbols, err := s.listSubjectSymbols(ctx, spaceID, dataSourceID)
+	if err != nil {
+		// Binance instrument snapshots can temporarily lag or fail while the
+		// DatasetSubject membership is still usable. Keep the active bindings so
+		// the Timer reconciler can derive the Binance wire symbol from the
+		// canonical SubjectID instead of disabling every K-line group.
+		if len(bindings) > 0 && strings.EqualFold(strings.TrimSpace(dataSourceID), "binance") && (strings.EqualFold(market, "spot") || strings.EqualFold(market, "swap")) {
+			return subjectsFromBindings(bindings), nil
+		}
+		return nil, err
+	}
+	if len(bindings) > 0 && strings.EqualFold(strings.TrimSpace(dataSourceID), "binance") && (strings.EqualFold(market, "spot") || strings.EqualFold(market, "swap")) {
+		missing := false
+		for _, binding := range bindings {
+			if binding != nil && isActive(binding.GetStatus()) && strings.TrimSpace(symbols[binding.GetSubjectId()]) == "" {
+				missing = true
+				break
+			}
+		}
+		if missing {
+			return subjectsFromBindings(bindings), nil
+		}
 	}
 	if len(bindings) == 0 && market != "" {
 		filtered, filterErr := s.filterSymbolsByMarket(ctx, spaceID, symbols, market)

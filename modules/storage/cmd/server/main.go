@@ -437,7 +437,7 @@ func runViewRole() error {
 	if err != nil {
 		return err
 	}
-	eventClient, err := jetstream.Connect(trpc.BackgroundContext(), eventConfig)
+	eventClient, err := connectStorageViewEventBus(eventConfig)
 	if err != nil {
 		return err
 	}
@@ -499,6 +499,50 @@ func runViewRole() error {
 		defer stopViewMaintainer()
 	}
 	return <-serveErr
+}
+
+// connectStorageViewEventBus keeps the process alive across a transient
+// control-plane/NATS outage. The watchdog should recover a crashed binary,
+// not repeatedly restart a healthy View while the public EventBus path is
+// reconnecting. Once the connection is established, the normal consumer
+// rebind logic continues to handle later disconnects.
+func connectStorageViewEventBus(config jetstream.Config) (*jetstream.Client, error) {
+	backoff := time.Second
+	for {
+		client, err := jetstream.Connect(trpc.BackgroundContext(), config)
+		if err == nil {
+			return client, nil
+		}
+		if !isTransientStorageViewEventBusError(err) {
+			return nil, err
+		}
+		log.Printf("storage view EventBus unavailable; retrying in %s: %v", backoff, err)
+		time.Sleep(backoff)
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+func isTransientStorageViewEventBusError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"no servers available",
+		"initial nats connection is not ready",
+		"connection refused",
+		"connection reset",
+		"i/o timeout",
+		"context deadline exceeded",
+		"tls handshake timeout",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func storageViewMaintenanceDisabled() bool {

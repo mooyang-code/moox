@@ -161,7 +161,7 @@ func marketCanarySubjectResolver(storage *monmetrics.StorageAdapter) func(contex
 		if err != nil {
 			return "", err
 		}
-		return watchdog.ResolveCanonicalSubjectID(configured, active)
+		return watchdog.ResolveCanonicalSubjectIDForDataset(configured, datasetID, active)
 	}
 }
 

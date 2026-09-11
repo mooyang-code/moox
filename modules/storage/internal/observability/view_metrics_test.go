@@ -32,24 +32,33 @@ func TestViewMetricsRecordFixedOutcomeLabels(t *testing.T) {
 	assert.Equal(t, float64(0), testutil.ToFloat64(metrics.deriveInFlight))
 }
 
-func TestViewMetricsExposeGenericDatasetInputAndOutput(t *testing.T) {
+func TestViewMetricsExposeCoreDatasetOutputOnly(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewViewMetrics(registry)
 	require.NoError(t, err)
 	dataTime := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
-	commitTime := dataTime.Add(time.Second)
 	observation := ViewDatasetObservation{
 		SpaceID: "crypto", ViewID: "prices-view", DatasetID: "market-prices", SubjectID: "BTC-USDT", Frequency: "1m", SeriesTag: "venue:binance",
-		DataTime: dataTime, CommittedAt: commitTime,
+		DataTime: dataTime,
 	}
-	require.NoError(t, metrics.ObserveViewDatasetInput(observation))
 	require.NoError(t, metrics.ObserveViewDatasetOutput(observation))
 	labels := map[string]string{
 		"space_id": "crypto", "view_id": "prices-view", "dataset_id": "market-prices", "subject_id": "BTC-USDT", "freq": "1m", "series_tag": "venue:binance",
 	}
-	assertViewDatasetMetric(t, registry, "moox_storage_view_dataset_input_last_data_time_seconds", labels, float64(dataTime.Unix()))
 	assertViewDatasetMetric(t, registry, "moox_storage_view_dataset_output_last_data_time_seconds", labels, float64(dataTime.Unix()))
-	assertViewDatasetMetric(t, registry, "moox_storage_view_dataset_output_last_commit_timestamp_seconds", labels, float64(commitTime.Unix()))
+	assertNoMetricFamily(t, registry, "moox_storage_view_dataset_input_last_data_time_seconds")
+	assertNoMetricFamily(t, registry, "moox_storage_view_dataset_output_last_commit_timestamp_seconds")
+}
+
+func assertNoMetricFamily(t *testing.T, registry *prometheus.Registry, name string) {
+	t.Helper()
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() == name {
+			t.Fatalf("metric family %q should not be exposed", name)
+		}
+	}
 }
 
 func assertViewDatasetMetric(t *testing.T, registry *prometheus.Registry, name string, wantLabels map[string]string, wantValue float64) {

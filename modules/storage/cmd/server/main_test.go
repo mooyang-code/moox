@@ -92,6 +92,24 @@ func TestStorageEventBusConfigHonorsExplicitReconnectBuffer(t *testing.T) {
 	}
 }
 
+func TestIsTransientStorageViewEventBusError(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  string
+		want bool
+	}{
+		{name: "reconnecting", err: "nats: no servers available for connection", want: true},
+		{name: "timeout", err: "tls handshake timeout", want: true},
+		{name: "auth", err: "nats: authorization violation", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isTransientStorageViewEventBusError(fmt.Errorf("%s", test.err)); got != test.want {
+				t.Fatalf("transient=%t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestStorageViewRebuildSettingsRejectsTooShortInterval(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "storage.yaml")
 	if err := os.WriteFile(path, []byte("storage:\n  view:\n    maintenance_check_interval: 10s\n    max_view_file_bytes: 1048576\n"), 0o600); err != nil {

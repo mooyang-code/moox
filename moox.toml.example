@@ -8,7 +8,7 @@ secret_key = ""
 region = "ap-guangzhou"
 
 [eventbus]
-public_address = ""
+  host = "203.0.113.10"
 port = 4222
 tls_enabled = true
 
@@ -151,7 +151,7 @@ region_blacklist = ["ap-guangzhou"]
 timer_function_count = 44
 # SCF Timer 每次直接访问该 Storage tRPC 地址，不再请求 Collector 配置接口。
 storage_gateway_node_id = "control"
-storage_rpc_gateway_target = "ip://203.0.113.10:11003"
+    storage_gateway_host = "203.0.113.11"
 memory_size = 64
 timeout_seconds = 15
 # Invoke nodes also refresh the full Binance symbol snapshot; give that
@@ -207,7 +207,7 @@ timer_function_count = 170
 # 单个 stockcn Timer 的实测安全 subject 上限，超限时 Collector 拒绝发布。
 measured_safe_group_size = 40
 storage_gateway_node_id = "control"
-storage_rpc_gateway_target = "ip://203.0.113.10:11003"
+    storage_gateway_host = "203.0.113.11"
 memory_size = 64
 timeout_seconds = 15
 # 全市场 Instrument 快照实测约 25 秒；仅 Invoke 辅助函数使用该独立超时。
@@ -249,45 +249,48 @@ display_name = "西南（成都）"
 enabled = true
 function_count = 0
 
+[hosts."203.0.113.10"]
+  port = 22
+  username = "ubuntu"
+  password = ""
+  provider = "tencent"
+
+[hosts."203.0.113.11"]
+  port = 22
+  username = "ubuntu"
+  password = ""
+  provider = "tencent"
+
+[hosts."203.0.113.12"]
+  port = 22
+  username = "ubuntu"
+  password = ""
+  provider = "tencent"
+
 [control_host]
-name = "control"
-address = ""
-port = 0
-username = "ubuntu"
-password = ""
+  name = "control"
+  host = "203.0.113.10"
 # Raw public IPs normally cannot obtain a public ACME certificate. Use the
 # bundled Caddy internal CA in that case; omit this field for host-based auto.
-tls_mode = "auto"
+  tls_mode = "auto"
 
 [storage_host]
-name = ""
-address = ""
-port = 0
-username = ""
-password = ""
-tls_mode = "auto"
+  name = "storage"
+  host = "203.0.113.11"
+  tls_mode = "auto"
 
 [view_host]
-name = ""
-address = ""
-port = 22
-username = ""
-password = ""
-tls_mode = "auto"
+  name = "view"
+  host = "203.0.113.11"
+  tls_mode = "auto"
 
 [compile_host]
-name = ""
-address = ""
-port = 0
-username = ""
-password = ""
+  name = "compile"
+  host = "203.0.113.10"
 
 [[other_hosts]]
-name = "compute-1"
-address = ""
-port = 22
-username = "ubuntu"
-password = ""
+  name = "compute-1"
+  host = "203.0.113.12"
 
 # moox-cli renders the non-sensitive resolver fields below into Trade's
 # config/app.yaml. When enabled, trade_node is also the dedicated Trade

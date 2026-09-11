@@ -341,6 +341,17 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 							bound = nil
 						}
 						reportRebind := true
+						// A fetch can fail with ErrFetchDisconnected while the
+						// shared client still reports Ready after an EventBus
+						// restart. Reconnect before binding a new pull
+						// subscription; otherwise rebind may keep receiving the
+						// stale connection and the partition remains stuck at
+						// MaxAckPending.
+						if errors.Is(fetchErr, nats.ErrFetchDisconnected) || errors.Is(fetchErr, nats.ErrDisconnected) || errors.Is(fetchErr, nats.ErrConnectionClosed) {
+							if err := c.reconnectClient(loopCtx); err != nil {
+								opts.ErrorReporter.Report(fmt.Errorf("reconnect storage view eventbus client: %w", err))
+							}
+						}
 						if errors.Is(fetchErr, nats.ErrBadSubscription) {
 							consecutiveSubscriptionErrors++
 							reportRebind = consecutiveSubscriptionErrors == 1

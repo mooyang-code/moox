@@ -712,7 +712,7 @@ func setupSkillSnapshotWithPath(t *testing.T, space, target, node string) (*setu
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "moox.toml")
-	raw := []byte("[admin]\nusername='admin'\npassword='admin-secret'\n[tencent_cloud]\nsecret_id='AKID-test'\nsecret_key='cloud-secret'\n[eventbus]\npublic_address='eventbus.example.test'\nport=4333\ntls_enabled=true\n[control_host]\nname='control'\naddress='203.0.113.8'\nport=22\nusername='ubuntu'\npassword='ssh-secret'\n")
+	raw := []byte("[admin]\nusername='admin'\npassword='admin-secret'\n[tencent_cloud]\nsecret_id='AKID-test'\nsecret_key='cloud-secret'\n[eventbus]\nhost='203.0.113.8'\nport=4333\ntls_enabled=true\n[hosts.\"203.0.113.8\"]\nport=22\nusername='ubuntu'\npassword='ssh-secret'\n[control_host]\nname='control'\nhost='203.0.113.8'\n")
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 	snapshot, err := setupconfig.Load(path, dir)
 	require.NoError(t, err)

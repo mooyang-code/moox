@@ -79,7 +79,11 @@ func NewRelay(store *pebble.Store, publisher Publisher, opts RelayOptions) (*Rel
 		opts.BatchSize = 100
 	}
 	if opts.PublishTimeout <= 0 {
-		opts.PublishTimeout = 5 * time.Second
+		// A remote DataNode may traverse a low-bandwidth public path to the
+		// control EventBus.  A 1 MiB event can legitimately take several
+		// seconds; timing out at 5s causes an endless retry loop and leaves the
+		// view stale even though the broker is reachable.
+		opts.PublishTimeout = 30 * time.Second
 	}
 	if opts.ProcessedEventCleanupInterval <= 0 {
 		opts.ProcessedEventCleanupInterval = time.Hour

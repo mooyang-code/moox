@@ -44,7 +44,7 @@ func RenderTradeDNSResolverConfigForNode(snapshot *Snapshot, nodeID string, exis
 
 // RenderCollectorDNSResolverConfig replaces only the Collector-owned
 // dns_resolver mapping. The target is derived from the selected other_hosts
-// entry, so the address is never duplicated in moox.toml or source code.
+// entry, whose endpoint itself comes from the shared hosts catalog.
 func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
 	if snapshot == nil {
 		return nil, fmt.Errorf("runtime_config: snapshot is required")

@@ -70,7 +70,7 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 		_ = v // cloudnode RPC address is resolved for runtime deployments; control plane uses admin gateway.
 	}
 	if v := endpointGatewayTarget(active, "service_gateway"); v != "" {
-		deps.ServiceGatewayTarget = v
+		deps.ServiceGatewayTarget = preferLocalServiceGatewayTarget(v, cfg.SysDeploy.AdminGatewayURL)
 	}
 	// Storage clients use the native tRPC listener selected for the Storage
 	// deployment. The active-deployment response contains endpoints from every
@@ -93,6 +93,25 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 		return deps, fmt.Errorf("active %s deployment has no native tRPC target", nativeGateway)
 	}
 	return deps, nil
+}
+
+// preferLocalServiceGatewayTarget avoids sending same-host control-plane
+// calls through the public HTTPS edge. The public address is not hairpin-safe
+// on the control machine, so a healthy local Gateway can otherwise appear as
+// a timeout to Collector (and stall timer reconciliation and EventBus work).
+// Keep remote deployments on the discovered public endpoint.
+func preferLocalServiceGatewayTarget(discovered, adminGatewayURL string) string {
+	discovered = strings.TrimRight(strings.TrimSpace(discovered), "/")
+	admin := normalizeBaseURL(adminGatewayURL)
+	parsed, err := url.Parse(admin)
+	if err != nil || parsed.Hostname() == "" || parsed.Port() != "11002" {
+		return discovered
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+		return discovered
+	}
+	return admin
 }
 
 func isUsableConfiguredStorageTarget(raw string) bool {

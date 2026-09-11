@@ -227,16 +227,23 @@ secret_key = "secret-key"
 region = "ap-guangzhou"
 
 [eventbus]
-public_address = "eventbus.example.test"
+host = "192.0.2.10"
 port = 4222
 tls_enabled = true
 
-[control_host]
-name = "control"
-address = "192.0.2.10"
+[hosts."192.0.2.10"]
 port = 22
 username = "ubuntu"
 password = "password"
+
+[hosts."106.53.107.122"]
+port = 22
+username = "ubuntu"
+password = "password"
+
+[control_host]
+name = "control"
+host = "192.0.2.10"
 
 [scf_fetcher]
 enabled = true
@@ -251,7 +258,7 @@ cos_bucket = "moox-scf-guangzhou-1255382561"
 
 [[scf_fetcher.spaces]]
 space_id = "crypto"
-storage_rpc_gateway_target = "ip://106.53.107.122:11003"
+storage_gateway_host = "106.53.107.122"
 entrypoint = "crypto"
 package_config_dir = "scf/crypto"
 package_name = "moox-collector-crypto-market"
@@ -274,7 +281,7 @@ function_count = 1
 space_id = "stockcn"
 timer_function_count = 1
 measured_safe_group_size = 1
-storage_rpc_gateway_target = "ip://106.53.107.122:11003"
+storage_gateway_host = "106.53.107.122"
 package_config_dir = "scf/stockcn"
 package_name = "moox-collector-stockcn"
 function_prefix = "moox-fetcher-stockcn"

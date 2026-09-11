@@ -15,7 +15,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// ViewMetrics contains only low-cardinality projection and delivery metrics.
+// ViewMetrics contains bounded projection and delivery metrics.
 type ViewMetrics struct {
 	deriveTotal     *prometheus.CounterVec
 	batchDuration   *prometheus.HistogramVec
@@ -44,9 +44,7 @@ type ViewMetrics struct {
 	outboxReconnectAttempts          *prometheus.CounterVec
 	periodWaitingDatasets            *prometheus.GaugeVec
 	viewOutputWatermark              *prometheus.GaugeVec
-	datasetInputLastDataTime         *prometheus.GaugeVec
 	datasetOutputLastDataTime        *prometheus.GaugeVec
-	datasetOutputLastCommitTimestamp *prometheus.GaugeVec
 	readyPublishRetry                *prometheus.CounterVec
 	restoreDuration                  prometheus.Gauge
 	restoreReady                     prometheus.Gauge
@@ -92,32 +90,27 @@ type ViewMetrics struct {
 	pendingDeliveries                map[*jetstream.Delivery]time.Time
 }
 
-// ViewDatasetObservation identifies the data watermark observed while a View
-// routes an upstream Dataset event and after the active index commits it.
-// Storage records this generic contract; Monitor decides whether a given View
-// represents a K-line business stream and whether its watermark is stale.
+// ViewDatasetObservation identifies the data watermark observed after a View
+// successfully applies rows. Storage records this generic contract; Monitor
+// decides whether a given View represents a K-line business stream.
 type ViewDatasetObservation struct {
-	SpaceID     string
-	ViewID      string
-	DatasetID   string
-	SubjectID   string
-	Frequency   string
-	SeriesTag   string
-	DataTime    time.Time
-	CommittedAt time.Time
+	SpaceID   string
+	ViewID    string
+	DatasetID string
+	SubjectID string
+	Frequency string
+	SeriesTag string
+	DataTime  time.Time
 }
 
 type viewDatasetObservationWatermark struct {
-	inputDataTime  float64
 	outputDataTime float64
-	outputCommitAt float64
 }
 
 const (
-	// Keep the three per-series families below the reporter's 100k sample
-	// budget (three samples per identity) while leaving room for crypto and the
-	// full stock universe. Existing identities continue to advance; only a new
-	// identity beyond the cap is rejected.
+	// Bound per-subject output identity cardinality so a malformed or runaway
+	// View cannot exhaust the reporter's sample budget. Monitor further scopes
+	// which View identities are persisted for freshness checks.
 	maxViewDatasetObservationSeries = 20000
 	maxViewDatasetMetricLabelBytes  = 256
 )
@@ -270,17 +263,9 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "output_watermark_timestamp_seconds",
 			Help: "Latest business timestamp successfully committed to an active Storage View.",
 		}, []string{"space_id", "view_id", "freq"}),
-		datasetInputLastDataTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "dataset_input_last_data_time_seconds",
-			Help: "Latest business data time observed after routing an upstream Dataset event into a View.",
-		}, []string{"space_id", "view_id", "dataset_id", "subject_id", "freq", "series_tag"}),
 		datasetOutputLastDataTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "dataset_output_last_data_time_seconds",
 			Help: "Latest business data time successfully committed to an active View index.",
-		}, []string{"space_id", "view_id", "dataset_id", "subject_id", "freq", "series_tag"}),
-		datasetOutputLastCommitTimestamp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "dataset_output_last_commit_timestamp_seconds",
-			Help: "Latest successful active View index commit timestamp.",
 		}, []string{"space_id", "view_id", "dataset_id", "subject_id", "freq", "series_tag"}),
 		readyPublishRetry: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "ready_publish_retry_total",
@@ -402,13 +387,7 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.viewOutputWatermark, err = registerOrReuse(registerer, metrics.viewOutputWatermark); err != nil {
 		return nil, err
 	}
-	if metrics.datasetInputLastDataTime, err = registerOrReuse(registerer, metrics.datasetInputLastDataTime); err != nil {
-		return nil, err
-	}
 	if metrics.datasetOutputLastDataTime, err = registerOrReuse(registerer, metrics.datasetOutputLastDataTime); err != nil {
-		return nil, err
-	}
-	if metrics.datasetOutputLastCommitTimestamp, err = registerOrReuse(registerer, metrics.datasetOutputLastCommitTimestamp); err != nil {
 		return nil, err
 	}
 	if metrics.readyPublishRetry, err = registerOrReuse(registerer, metrics.readyPublishRetry); err != nil {
@@ -435,32 +414,9 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	return metrics, nil
 }
 
-// ObserveViewDatasetInput records a routed Dataset event before the View index
-// write. It is intentionally agnostic to the Dataset's business meaning.
-func (m *ViewMetrics) ObserveViewDatasetInput(observation ViewDatasetObservation) error {
-	labels, err := canonicalViewDatasetLabels(observation, false)
-	if err != nil {
-		return err
-	}
-	m.datasetObservationMu.Lock()
-	defer m.datasetObservationMu.Unlock()
-	key := strings.Join(labels, "\x00")
-	if _, exists := m.datasetObservations[key]; !exists && len(m.datasetObservations) >= maxViewDatasetObservationSeries {
-		return fmt.Errorf("storage view dataset observation series limit exceeded: %d", maxViewDatasetObservationSeries)
-	}
-	state := m.datasetObservations[key]
-	value := timestampSeconds(observation.DataTime)
-	if value > state.inputDataTime {
-		state.inputDataTime = value
-		m.datasetInputLastDataTime.WithLabelValues(labels...).Set(value)
-	}
-	m.datasetObservations[key] = state
-	return nil
-}
-
 // ObserveViewDatasetOutput records a successful active View index commit.
 func (m *ViewMetrics) ObserveViewDatasetOutput(observation ViewDatasetObservation) error {
-	labels, err := canonicalViewDatasetLabels(observation, true)
+	labels, err := canonicalViewDatasetLabels(observation)
 	if err != nil {
 		return err
 	}
@@ -472,20 +428,15 @@ func (m *ViewMetrics) ObserveViewDatasetOutput(observation ViewDatasetObservatio
 	}
 	state := m.datasetObservations[key]
 	dataTime := timestampSeconds(observation.DataTime)
-	commitTime := timestampSeconds(observation.CommittedAt)
 	if dataTime > state.outputDataTime {
 		state.outputDataTime = dataTime
 		m.datasetOutputLastDataTime.WithLabelValues(labels...).Set(dataTime)
-	}
-	if commitTime > state.outputCommitAt {
-		state.outputCommitAt = commitTime
-		m.datasetOutputLastCommitTimestamp.WithLabelValues(labels...).Set(commitTime)
 	}
 	m.datasetObservations[key] = state
 	return nil
 }
 
-func canonicalViewDatasetLabels(observation ViewDatasetObservation, requireCommit bool) ([]string, error) {
+func canonicalViewDatasetLabels(observation ViewDatasetObservation) ([]string, error) {
 	values := []string{
 		strings.TrimSpace(observation.SpaceID), strings.TrimSpace(observation.ViewID),
 		strings.TrimSpace(observation.DatasetID), strings.TrimSpace(observation.SubjectID),
@@ -509,9 +460,6 @@ func canonicalViewDatasetLabels(observation ViewDatasetObservation, requireCommi
 	}
 	if observation.DataTime.IsZero() {
 		return nil, fmt.Errorf("storage view dataset observation data_time is required")
-	}
-	if requireCommit && observation.CommittedAt.IsZero() {
-		return nil, fmt.Errorf("storage view dataset observation committed_at is required")
 	}
 	return values, nil
 }

@@ -47,6 +47,8 @@ func TestSupportedTimerCronAllowsSecondOffsets(t *testing.T) {
 	for _, cron := range []string{
 		"0 * * * * * *",
 		"17 * * * * * *",
+		"0 5 * * * * *",
+		"59 59 * * * * *",
 		"59 */5 * * * * *",
 		"23 0 0 * * * *",
 	} {
@@ -56,6 +58,8 @@ func TestSupportedTimerCronAllowsSecondOffsets(t *testing.T) {
 		"60 * * * * * *",
 		"-1 * * * * * *",
 		"*/5 * * * * * *",
+		"17 5 */2 * * * *",
+		"17 60 * * * * *",
 		"17 */2 * * * * *",
 	} {
 		require.False(t, isSupportedTimerCron(cron), "cron=%q", cron)
