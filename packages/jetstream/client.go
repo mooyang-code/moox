@@ -203,6 +203,8 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 		nats.ReconnectWait(cfg.ReconnectWait),
 		nats.MaxReconnects(cfg.MaxReconnects),
 		nats.ReconnectBufSize(reconnectBuffer),
+		nats.SetCustomDialer(newTrackingDialer(cfg.ConnectTimeout)),
+		nats.PingInterval(20*time.Second),
 	)
 
 	connectCtx := ctx
@@ -242,13 +244,28 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	if res.err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrConnection, res.err)
 	}
-	if res.nc == nil || !res.nc.IsConnected() {
-		status := "unknown"
-		if res.nc != nil {
-			status = res.nc.Status().String()
-			res.nc.Close()
+	if res.nc == nil {
+		return nil, fmt.Errorf("%w: nats connection is nil", ErrConnection)
+	}
+	// RetryOnFailedConnect can return a live Conn while the first handshake is
+	// still RECONNECTING. Closing that Conn is what leaked CLOSE-WAIT sockets
+	// on Host Agent: the reconnect loop dialed again after we already rejected
+	// the client. Wait until CONNECTED or the connect deadline.
+	for !res.nc.IsConnected() {
+		if res.nc.IsClosed() {
+			return nil, fmt.Errorf("%w: initial NATS connection is not ready (status=%s last=%v)", ErrConnection, res.nc.Status(), res.nc.LastError())
 		}
-		return nil, fmt.Errorf("%w: initial NATS connection is not ready (status=%s)", ErrConnection, status)
+		select {
+		case <-connectCtx.Done():
+			status := res.nc.Status().String()
+			lastErr := res.nc.LastError()
+			res.nc.Close()
+			if lastErr != nil {
+				return nil, fmt.Errorf("%w: initial NATS connection is not ready (status=%s last=%v)", ErrConnection, status, lastErr)
+			}
+			return nil, fmt.Errorf("%w: initial NATS connection is not ready (status=%s)", ErrConnection, status)
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 	js, err := res.nc.JetStream()
 	if err != nil {

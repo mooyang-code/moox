@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/collector"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
+	"github.com/mooyang-code/moox/modules/hostagent/internal/eventpublisher"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/identity"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
@@ -189,7 +190,7 @@ func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
 
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: snapshot}
-	a.publisher = &fakeEventPublisher{}
+	a.publisher = &fakeEventPublisher{ready: true}
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	require.NoError(t, err)
@@ -204,7 +205,7 @@ func TestAgent_RunOnce_UsesCollectionCompletionAsOccurredAt(t *testing.T) {
 	a := testAgent(t)
 	var completedAt time.Time
 	a.collector = completionSnapshotCollector{snapshot: testSnapshot(), completedAt: &completedAt}
-	publisher := &fakeEventPublisher{}
+	publisher := &fakeEventPublisher{ready: true}
 	a.publisher = publisher
 
 	_, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
@@ -216,7 +217,7 @@ func TestAgent_RunOnce_UsesCollectionCompletionAsOccurredAt(t *testing.T) {
 func TestAgent_RunOnce_PublishError_ShouldRecordFailure(t *testing.T) {
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
-	a.publisher = &fakeEventPublisher{err: errors.New("publish failed")}
+	a.publisher = &fakeEventPublisher{ready: true, err: errors.New("publish failed")}
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	assert.Error(t, err)
@@ -251,12 +252,28 @@ func TestAgent_RunOnce_EventBusLoadError_ShouldDrop(t *testing.T) {
 
 func TestAgent_EventPublisher_ReusesExistingPublisher(t *testing.T) {
 	a := testAgent(t)
-	publisher := &fakeEventPublisher{}
+	publisher := &fakeEventPublisher{ready: true}
 	a.publisher = publisher
 
 	got, err := a.eventPublisher(context.Background())
 	require.NoError(t, err)
 	assert.Same(t, publisher, got)
+}
+
+func TestAgent_EventPublisher_ReplacesDisconnectedPublisher(t *testing.T) {
+	a := testAgent(t)
+	stale := &fakeEventPublisher{ready: false}
+	replacement := &fakeEventPublisher{ready: true}
+	a.publisher = stale
+	a.newPublisher = func(context.Context) (eventpublisher.Publisher, error) {
+		return replacement, nil
+	}
+
+	got, err := a.eventPublisher(context.Background())
+	require.NoError(t, err)
+	assert.True(t, stale.closed)
+	assert.Same(t, replacement, got)
+	assert.Same(t, replacement, a.publisher)
 }
 
 func TestAgent_RunOnceGuarded_ReleasesRunningFlag(t *testing.T) {

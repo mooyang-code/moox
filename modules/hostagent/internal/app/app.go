@@ -26,6 +26,7 @@ type Agent struct {
 	collector                              snapshotCollector
 	publisherMu                            sync.Mutex
 	publisher                              eventpublisher.Publisher
+	newPublisher                           func(context.Context) (eventpublisher.Publisher, error)
 	hostname, bootID, version              string
 	latestMu                               sync.RWMutex
 	latest                                 *hostmetricpb.HostSnapshot
@@ -120,10 +121,20 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 func (a *Agent) eventPublisher(ctx context.Context) (eventpublisher.Publisher, error) {
 	a.publisherMu.Lock()
 	defer a.publisherMu.Unlock()
-	if a.publisher != nil {
+	if a.publisher != nil && a.publisher.Ready() {
 		return a.publisher, nil
 	}
-	publisher, err := eventpublisher.New(ctx, a.cfg.EventBusConfig, a.id.AgentID)
+	if a.publisher != nil {
+		_ = a.publisher.Close()
+		a.publisher = nil
+	}
+	factory := a.newPublisher
+	if factory == nil {
+		factory = func(ctx context.Context) (eventpublisher.Publisher, error) {
+			return eventpublisher.New(ctx, a.cfg.EventBusConfig, a.id.AgentID)
+		}
+	}
+	publisher, err := factory(ctx)
 	if err != nil {
 		return nil, err
 	}

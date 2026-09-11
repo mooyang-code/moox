@@ -114,6 +114,40 @@ func TestReconnectBufferFlushesPublishAfterServerRestart(t *testing.T) {
 	}
 }
 
+func TestConnectWaitsUntilServerBecomesReady(t *testing.T) {
+	port := reserveTestPort(t)
+	url := fmt.Sprintf("nats://127.0.0.1:%d", port)
+	errCh := make(chan error, 1)
+	var client *Client
+	go func() {
+		c, err := Connect(context.Background(), Config{
+			URLs: []string{url}, Name: "retry-connect-test",
+			ConnectTimeout: 3 * time.Second, ReconnectWait: 50 * time.Millisecond,
+		})
+		client = c
+		errCh <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	srv, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: port, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Start()
+	defer srv.Shutdown()
+	if !srv.ReadyForConnections(5 * time.Second) {
+		t.Fatal("nats server not ready")
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer client.Close()
+	if !client.Ready() {
+		t.Fatal("client was not ready after the broker started")
+	}
+}
+
 func waitForNATSStatus(t *testing.T, connection *nats.Conn, want nats.Status) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

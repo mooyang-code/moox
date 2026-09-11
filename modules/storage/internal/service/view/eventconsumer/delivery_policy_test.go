@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/nats-io/nats.go"
 )
 
 func TestProcessDeliveryUsesClientRetryCountWhenDeliveryCountDoesNotChange(t *testing.T) {
@@ -54,6 +56,68 @@ func TestProcessDeliveryTermsAfterRetryExhaustion(t *testing.T) {
 	}
 	if applies != 1 || terms != 1 {
 		t.Fatalf("applies=%d terms=%d, want 1/1", applies, terms)
+	}
+}
+
+func TestProcessDeliveryStopsAckRetryWhenConnectionClosed(t *testing.T) {
+	consumer := &Consumer{config: Config{}}
+	var acks int
+	delivery := &jetstream.Delivery{Subject: "crypto.kline", DeliveryCount: 1}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := consumer.processDeliveryWithApplyAndActions(ctx, delivery, nil, -1, func(context.Context, *jetstream.Delivery) error {
+		return nil
+	}, deliveryActions{
+		ack: func(context.Context) error {
+			acks++
+			return nats.ErrConnectionClosed
+		},
+		progress: func(context.Context) error { return errors.New("unexpected progress") },
+		term:     func(context.Context) error { return errors.New("unexpected term") },
+	})
+	if err == nil {
+		t.Fatal("closed-connection ack returned nil")
+	}
+	if !errors.Is(err, nats.ErrConnectionClosed) {
+		t.Fatalf("error = %v, want nats.ErrConnectionClosed", err)
+	}
+	if acks != 1 {
+		t.Fatalf("acks = %d, want 1", acks)
+	}
+	if time.Since(started) >= time.Second {
+		t.Fatalf("closed-connection ack retried for %s, want immediate return", time.Since(started))
+	}
+}
+
+func TestProcessDeliveryStopsTermRetryWhenConnectionClosed(t *testing.T) {
+	consumer := &Consumer{config: Config{}}
+	var terms int
+	delivery := &jetstream.Delivery{Subject: "crypto.kline", DeliveryCount: 1}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := consumer.processDeliveryWithApplyAndActions(ctx, delivery, nil, 1, func(context.Context, *jetstream.Delivery) error {
+		return Permanent(errors.New("invalid event"))
+	}, deliveryActions{
+		ack:      func(context.Context) error { return errors.New("unexpected ack") },
+		progress: func(context.Context) error { return errors.New("unexpected progress") },
+		term: func(context.Context) error {
+			terms++
+			return nats.ErrConnectionClosed
+		},
+	})
+	if err == nil {
+		t.Fatal("closed-connection term returned nil")
+	}
+	if !errors.Is(err, nats.ErrConnectionClosed) {
+		t.Fatalf("error = %v, want nats.ErrConnectionClosed", err)
+	}
+	if terms != 1 {
+		t.Fatalf("terms = %d, want 1", terms)
+	}
+	if time.Since(started) >= time.Second {
+		t.Fatalf("closed-connection term retried for %s, want immediate return", time.Since(started))
 	}
 }
 

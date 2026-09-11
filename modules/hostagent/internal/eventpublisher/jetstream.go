@@ -27,7 +27,7 @@ func New(ctx context.Context, configPath, agentID string) (*JetStreamPublisher, 
 		URLs: eventBusConfig.URLs, Name: "moox-host-agent-" + agentID,
 		Username: eventBusConfig.Username, Password: eventBusConfig.EventBusToken,
 		TLSCAFile: eventBusConfig.CAFile, ReconnectBufferBytes: 0,
-		ConnectTimeout: 5 * time.Second, MaxReconnects: -1,
+		ConnectTimeout: 20 * time.Second, MaxReconnects: -1,
 	})
 	if err != nil {
 		return nil, err

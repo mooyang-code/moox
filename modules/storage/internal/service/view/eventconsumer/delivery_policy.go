@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/nats-io/nats.go"
 )
 
 func (c *Consumer) processDeliveryWithPolicy(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int) error {
@@ -129,6 +130,10 @@ func (c *Consumer) processDeliveryBatchWithPolicy(ctx context.Context, deliverie
 						acked[index] = true
 						metrics.ObserveDelivery("ack", "success")
 						continue
+					} else if isStaleDeliveryTransport(ackErr) {
+						metrics.IncAckError()
+						metrics.ObserveDelivery("ack", "error")
+						return ackErr
 					}
 					allAcked = false
 					metrics.IncAckError()
@@ -265,6 +270,13 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 					metrics.IncAckError()
 					metrics.ObserveDelivery("ack", "error")
 					heartbeat.report(ackErr)
+					if isStaleDeliveryTransport(ackErr) {
+						// A closed NATS connection cannot ACK this delivery.
+						// Retrying here occupies MaxAckPending=1 and blocks the
+						// fetch loop from reconnecting. Return so JetStream can
+						// redeliver after AckWait; View upserts are idempotent.
+						return errors.Join(ackErr, heartbeat.err())
+					}
 				}
 				if !sleepDeliveryRetry(ctx, time.Second) {
 					return ctx.Err()
@@ -299,7 +311,7 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 					metrics.IncAckError()
 					metrics.ObserveDelivery("term", "error")
 					heartbeat.report(termErr)
-					if errors.Is(termErr, jetstream.ErrInvalidDelivery) || errors.Is(termErr, jetstream.ErrClosed) {
+					if isStaleDeliveryTransport(termErr) {
 						return errors.Join(err, termErr, heartbeat.err())
 					}
 				}
@@ -329,6 +341,9 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 			metrics.IncInProgressError()
 			metrics.ObserveDelivery("in_progress", "error")
 			heartbeat.report(progressErr)
+			if isStaleDeliveryTransport(progressErr) {
+				return errors.Join(err, progressErr, heartbeat.err())
+			}
 		} else {
 			metrics.ObserveDelivery("in_progress", "success")
 		}
@@ -337,6 +352,14 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 		}
 	}
 	return ctx.Err()
+}
+
+func isStaleDeliveryTransport(err error) bool {
+	return errors.Is(err, nats.ErrConnectionClosed) ||
+		errors.Is(err, nats.ErrDisconnected) ||
+		errors.Is(err, nats.ErrFetchDisconnected) ||
+		errors.Is(err, jetstream.ErrClosed) ||
+		errors.Is(err, jetstream.ErrInvalidDelivery)
 }
 
 func sleepDeliveryRetry(ctx context.Context, delay time.Duration) bool {
