@@ -132,6 +132,8 @@ test-script-contracts:
 test-skill-contracts:
 	bash scripts/build/package-skill_test.sh
 	bash skills/moox/scripts/test-data-query-contract.sh
+	bash skills/moox/scripts/test-hostagent-deploy.sh
+	bash skills/moox/scripts/test-eventbus-credentials-contract.sh
 
 test-script-e2e:
 	@set -e; for script in scripts/test/e2e/*.sh; do bash "$$script"; done

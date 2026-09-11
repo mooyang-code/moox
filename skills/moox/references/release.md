@@ -57,7 +57,9 @@ Source-only developer assets such as build/release/boundary-check scripts, SCF p
 
 For the independent Linux host agent, use `scripts/hostagent-release.sh`. It emits a
 credential-free archive containing both binaries, example config, a user-systemd
-unit, and `SHA256SUMS`; use `scripts/hostagent-deploy.sh user@host archive.tar.gz`
-to install it under the remote user's home directory.
+unit, and `SHA256SUMS`. Install with `scripts/hostagent-deploy.sh user@host archive.tar.gz`
+plus `--eventbus-file`, `--ca-file`, and `--health-auth-file`. After EventBus CA or token
+rotation, follow `references/eventbus-credentials.md` and use `--credentials-only` on every
+Host Agent host; do not treat a binary-only upgrade as credential sync.
 
 After the admin plane is reachable, write and update service host/port/base URL rows through SysDeploy (`t_service_deployments`).

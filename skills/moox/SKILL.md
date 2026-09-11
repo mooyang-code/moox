@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo, operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, Tencent Cloud Lighthouse firewall changes, and control-plane maintenance.
+description: Use when working in the MooX monorepo, operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, Tencent Cloud Lighthouse firewall changes, and control-plane maintenance.
 ---
 
 # MooX Quant Data System
@@ -26,6 +26,7 @@ Host Agent deployment:
 - Build `skills/moox/scripts/hostagent-release.sh` for Linux `amd64` or `arm64`.
 - Deploy with `skills/moox/scripts/hostagent-deploy.sh`; it uses a normal user and `systemctl --user`, never sudo.
 - Provision and rotate EventBus credentials only through `skills/moox/scripts/eventbus-credentials.sh`; release archives and checked-in YAML must remain credential-free.
+- After EventBus CA or role-token rotation, fan-out to every client before treating deploy as done. Follow [`references/eventbus-credentials.md`](references/eventbus-credentials.md). Control `export` does not update Host Agents on other machines.
 
 ## Repository Layout
 
@@ -268,4 +269,7 @@ amd64/arm64. Use `scripts/hostagent-release.sh` and
 `scripts/hostagent-deploy.sh` for rootless user-systemd deployment. EventBus
 credentials are provisioned, exported, and rotated only through Admin using
 `scripts/eventbus-credentials.sh`; do not put tokens or private keys in a
-release archive, command line, or checked-in config.
+release archive, command line, or checked-in config. After CA or role-token
+rotation, follow [`references/eventbus-credentials.md`](references/eventbus-credentials.md)
+and fan-out to every EventBus client: control services, Storage, every Host Agent
+host, and SCF. Control `export` does not update Host Agents on other machines.

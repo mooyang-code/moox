@@ -56,6 +56,34 @@ fi
   exit 1
 }
 
+: >"${HOSTAGENT_TEST_LOG}"
+PATH="${TMP}/bin:${PATH}" bash "${SCRIPT}" user@example --credentials-only \
+  --eventbus-file "${TMP}/eventbus.yaml" \
+  --ca-file "${TMP}/ca.pem"
+if grep -q 'release.tar.gz' "${HOSTAGENT_TEST_LOG}"; then
+  echo "credentials-only deploy uploaded a release archive" >&2
+  exit 1
+fi
+grep -q 'scp .*eventbus.yaml.*eventbus.yaml' "${HOSTAGENT_TEST_LOG}"
+grep -q 'scp .*ca.pem.*ca.pem' "${HOSTAGENT_TEST_LOG}"
+if ! grep -Eq 'test( |\\ )-x' "${HOSTAGENT_TEST_LOG}"; then
+  echo "credentials-only deploy must refuse hosts without an installed Host Agent" >&2
+  exit 1
+fi
+if grep -q 'systemctl\\ --user\\ enable\\ moox-host-agent.service' "${HOSTAGENT_TEST_LOG}"; then
+  echo "credentials-only deploy must not re-enable the unit" >&2
+  exit 1
+fi
+grep -q 'systemctl\\ --user\\ restart\\ moox-host-agent.service' "${HOSTAGENT_TEST_LOG}"
+
+: >"${HOSTAGENT_TEST_LOG}"
+if PATH="${TMP}/bin:${PATH}" bash "${SCRIPT}" user@example --credentials-only \
+  --eventbus-file "${TMP}/eventbus.yaml" --ca-file "${TMP}/ca.pem" \
+  "${TMP}/release.tar.gz" 2>/dev/null; then
+  echo "credentials-only unexpectedly accepted a release archive" >&2
+  exit 1
+fi
+
 bash -n "${SCRIPT}"
 if grep -q 'sudo' "${SCRIPT}"; then
   echo "host-agent deploy must remain rootless" >&2

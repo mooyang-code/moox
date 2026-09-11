@@ -44,6 +44,14 @@ healthcheck.sh
 
 Agent 不得读取、解析、打印、复制或 `source` `moox.toml` 中的密码和密钥。
 
+## EventBus 凭据
+
+服务包禁止打入 EventBus 口令或 CA。发布前确认目标主机 `~/.config/moox/eventbus/` 的
+`ca.pem` 与 control 权威目录指纹一致，且该服务对应的 role YAML 已同步。EventBus CA
+或 token 刚轮换时，先完成 [`eventbus-credentials.md`](eventbus-credentials.md) 的
+fan-out，再 `deploy-service`。只换 ZIP 不会更新远端凭据；`deploy-service` 也不会更新
+其他主机上的 user-systemd Host Agent。
+
 ## 发布命令
 
 ```bash
