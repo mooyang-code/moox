@@ -18,12 +18,19 @@ type SnapshotReader interface {
 	CatalogSnapshot(context.Context) (*domain.CatalogSnapshot, error)
 }
 
+type SnapshotConnection interface {
+	Subscribe(string, nats.MsgHandler) (*nats.Subscription, error)
+	RequestWithContext(context.Context, string, []byte) (*nats.Msg, error)
+	FlushWithContext(context.Context) error
+	MaxPayload() int64
+}
+
 type snapshotResponse struct {
 	Snapshot *domain.CatalogSnapshot `json:"snapshot,omitempty"`
 	Error    string                  `json:"error,omitempty"`
 }
 
-func ServeSnapshots(ctx context.Context, connection *nats.Conn, reader SnapshotReader) (*nats.Subscription, error) {
+func ServeSnapshots(ctx context.Context, connection SnapshotConnection, reader SnapshotReader) (*nats.Subscription, error) {
 	if connection == nil || reader == nil {
 		return nil, fmt.Errorf("catalog server requires a NATS connection and reader")
 	}
@@ -66,7 +73,7 @@ func ServeSnapshots(ctx context.Context, connection *nats.Conn, reader SnapshotR
 	return sub, nil
 }
 
-func FetchSnapshot(ctx context.Context, connection *nats.Conn) (*domain.CatalogSnapshot, error) {
+func FetchSnapshot(ctx context.Context, connection SnapshotConnection) (*domain.CatalogSnapshot, error) {
 	if connection == nil {
 		return nil, fmt.Errorf("catalog client requires a NATS connection")
 	}
