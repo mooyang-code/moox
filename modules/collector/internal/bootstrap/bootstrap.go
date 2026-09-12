@@ -396,10 +396,10 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
 			ResolveSymbol:       marketwiring.ResolveSymbol,
 			Rules:               dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
-			// Use the target resolved by discovery rather than the static local
-			// config. Invoke SCFs may run outside the Collector host, so a
-			// 127.0.0.1 gateway target would point back at the function itself.
-			Invoker: invoker, Storage: marketfetch.NewMarketStorageForMarket, StorageTarget: deps.StorageRPCGatewayTarget,
+			// Local Storage RPC uses the resolved Collector target (private IP
+			// when runtime.env was rewritten). SCF invoke payloads keep the
+			// discovered public native gateway so overseas functions still work.
+			Invoker: invoker, Storage: marketfetch.NewMarketStorageForMarket, StorageTarget: deps.StorageRPCGatewayTarget, InvokeStorageTarget: deps.InvokeStorageRPCGatewayTarget,
 			InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: spaceID, DNSCache: dnsCache,
 			Symbols:               plannerSource,
 			InvokeNonRealtimeOnly: true,

@@ -75,33 +75,34 @@ type collectorPublishOptions struct {
 	AccessToken string
 	SpaceID     string
 	// 后台服务签名鉴权（推荐，取代登录态 AccessToken）
-	ServiceAccessKey        string
-	ServiceSecretKey        string
-	CloudAccountID          string
-	Namespace               string
-	Runtime                 string
-	Handler                 string
-	Region                  string
-	ZipPath                 string
-	PackageName             string
-	PackageType             string
-	BizType                 string
-	NodeType                string
-	TriggerType             string
-	InstrumentSnapshotTimer bool
-	EnableStockCN           bool
-	StorageRPCGatewayTarget string
-	JobTypes                []string
-	Env                     []string
-	Config                  []string
-	EventBusCredentialFile  string
-	NodeCount               int
-	FunctionNamePrefix      string
-	File                    string
-	FetcherConfig           *setupconfig.SCFFetcherSpace
-	CLSSecretID             string
-	CLSSecretKey            string
-	CLSHost                 string
+	ServiceAccessKey               string
+	ServiceSecretKey               string
+	CloudAccountID                 string
+	Namespace                      string
+	Runtime                        string
+	Handler                        string
+	Region                         string
+	ZipPath                        string
+	PackageName                    string
+	PackageType                    string
+	BizType                        string
+	NodeType                       string
+	TriggerType                    string
+	InstrumentSnapshotTimer        bool
+	EnableStockCN                  bool
+	StorageRPCGatewayTarget        string
+	StoragePrivateRPCGatewayTarget string
+	JobTypes                       []string
+	Env                            []string
+	Config                         []string
+	EventBusCredentialFile         string
+	NodeCount                      int
+	FunctionNamePrefix             string
+	File                           string
+	FetcherConfig                  *setupconfig.SCFFetcherSpace
+	CLSSecretID                    string
+	CLSSecretKey                   string
+	CLSHost                        string
 	// In manifest mode these public materials are read from the control host
 	// immediately before a fleet is published. They must not come from the
 	// operator machine, which may still hold an old CA after a control-plane
@@ -667,6 +668,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		opts.Runtime = defaultFlag(fetcherConfig.Runtime, opts.Runtime)
 		opts.FunctionNamePrefix = defaultFlag(fetcherConfig.FunctionPrefix, opts.FunctionNamePrefix)
 		opts.StorageRPCGatewayTarget = defaultFlag(fetcherConfig.StorageRPCGatewayTarget, opts.StorageRPCGatewayTarget)
+		opts.StoragePrivateRPCGatewayTarget = defaultFlag(fetcherConfig.StoragePrivateRPCGatewayTarget, opts.StoragePrivateRPCGatewayTarget)
 		opts.RuntimeServiceKeyID = "collector"
 		opts.RuntimeServiceSecretKey = trustMaterial.CollectorServiceKey
 		if opts.PackageName == "moox-collector" {
@@ -1197,16 +1199,17 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 			continue
 		}
 		regionOpts := collectorPublishOptions{
-			SpaceID:                 fetcherConfig.SpaceID,
-			CloudAccountID:          region.CloudAccountID,
-			Region:                  region.Region,
-			NodeType:                "scf-event",
-			BizType:                 "market_fetcher",
-			TriggerType:             "timer",
-			NodeCount:               region.FunctionCount,
-			FunctionNamePrefix:      fetcherConfig.FunctionPrefix,
-			StorageRPCGatewayTarget: fetcherConfig.StorageRPCGatewayTarget,
-			FetcherConfig:           fetcherConfig,
+			SpaceID:                        fetcherConfig.SpaceID,
+			CloudAccountID:                 region.CloudAccountID,
+			Region:                         region.Region,
+			NodeType:                       "scf-event",
+			BizType:                        "market_fetcher",
+			TriggerType:                    "timer",
+			NodeCount:                      region.FunctionCount,
+			FunctionNamePrefix:             fetcherConfig.FunctionPrefix,
+			StorageRPCGatewayTarget:        fetcherConfig.StorageRPCGatewayTarget,
+			StoragePrivateRPCGatewayTarget: fetcherConfig.StoragePrivateRPCGatewayTarget,
+			FetcherConfig:                  fetcherConfig,
 		}
 		nodes, inspectErr := inspectCollectorFleet(ctx, client, regionOpts)
 		if inspectErr != nil {
@@ -1229,17 +1232,18 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 		return summary, fmt.Errorf("stock Kline fleet has %d nodes; expected %d", len(allTimerNodes), fetcherConfig.TimerFunctionCount)
 	}
 	instrumentOpts := collectorPublishOptions{
-		SpaceID:                 fetcherConfig.SpaceID,
-		CloudAccountID:          fetcherConfig.InstrumentSnapshotCloudAccountID,
-		Region:                  fetcherConfig.InstrumentSnapshotRegion,
-		NodeType:                "scf-event",
-		BizType:                 "market_fetcher",
-		TriggerType:             "timer",
-		InstrumentSnapshotTimer: true,
-		NodeCount:               1,
-		FunctionNamePrefix:      fetcherConfig.InstrumentSnapshotFunctionPrefix,
-		StorageRPCGatewayTarget: fetcherConfig.StorageRPCGatewayTarget,
-		FetcherConfig:           fetcherConfig,
+		SpaceID:                        fetcherConfig.SpaceID,
+		CloudAccountID:                 fetcherConfig.InstrumentSnapshotCloudAccountID,
+		Region:                         fetcherConfig.InstrumentSnapshotRegion,
+		NodeType:                       "scf-event",
+		BizType:                        "market_fetcher",
+		TriggerType:                    "timer",
+		InstrumentSnapshotTimer:        true,
+		NodeCount:                      1,
+		FunctionNamePrefix:             fetcherConfig.InstrumentSnapshotFunctionPrefix,
+		StorageRPCGatewayTarget:        fetcherConfig.StorageRPCGatewayTarget,
+		StoragePrivateRPCGatewayTarget: fetcherConfig.StoragePrivateRPCGatewayTarget,
+		FetcherConfig:                  fetcherConfig,
 	}
 	instrumentNodes, err := inspectCollectorFleet(ctx, client, instrumentOpts)
 	if err != nil {
@@ -1878,7 +1882,7 @@ func collectorInstrumentCanaryEvent(opts collectorPublishOptions, nodeID, batchI
 	return map[string]any{
 		"action":                     "instrument_snapshot",
 		"request_id":                 batchID,
-		"storage_rpc_gateway_target": opts.StorageRPCGatewayTarget,
+		"storage_rpc_gateway_target": collectorStorageRPCGatewayTarget(opts),
 		"data": map[string]any{
 			"batch_id":    batchID,
 			"schedule_id": "deploy-canary-schedule",
@@ -2205,7 +2209,7 @@ func collectorSCFCanaryEvent(opts collectorPublishOptions, nodeID, batchID strin
 	}
 	data := map[string]any{
 		"action":                     "market_fetch",
-		"storage_rpc_gateway_target": opts.StorageRPCGatewayTarget,
+		"storage_rpc_gateway_target": collectorStorageRPCGatewayTarget(opts),
 		"data": map[string]any{
 			"batch_id": batchID,
 			// Completion events are validated against the scheduler's batch
@@ -3012,6 +3016,16 @@ func metadataIntValue(metadata map[string]any, key string) (int, bool) {
 	}
 }
 
+func collectorStorageRPCGatewayTarget(opts collectorPublishOptions) string {
+	public := firstNonEmpty(opts.StorageRPCGatewayTarget, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET"))
+	if tencent.NetworkArea(opts.Region) == "mainland" {
+		if private := strings.TrimSpace(opts.StoragePrivateRPCGatewayTarget); private != "" {
+			return private
+		}
+	}
+	return public
+}
+
 func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...string) (map[string]string, error) {
 	if len(opts.JobTypes) > 0 {
 		return nil, fmt.Errorf("market_fetcher does not consume CloudNode JobItem workloads")
@@ -3061,7 +3075,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	if opts.InstrumentSnapshotTimer {
 		setDefaultEnv(env, "MOOX_MARKET_FETCH_MODE", "instrument_snapshot")
 	}
-	setDefaultEnv(env, "MOOX_STORAGE_RPC_GATEWAY_TARGET", firstNonEmpty(opts.StorageRPCGatewayTarget, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET")))
+	setDefaultEnv(env, "MOOX_STORAGE_RPC_GATEWAY_TARGET", collectorStorageRPCGatewayTarget(opts))
 	gatewayNodeID := firstNonEmpty(fetcher.StorageGatewayNodeID, os.Getenv("MOOX_SCF_STORAGE_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
 	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", gatewayNodeID)
 	setDefaultEnv(env, "MOOX_GATEWAY_TARGET_NODE", gatewayNodeID)

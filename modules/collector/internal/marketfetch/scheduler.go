@@ -47,6 +47,10 @@ type Scheduler struct {
 	Invoker             *scfinvoker.Client
 	Storage             func(string, string, string) (StorageReader, error)
 	StorageTarget       string
+	// InvokeStorageTarget is sent in SCF invoke payloads. Leave empty to reuse
+	// StorageTarget. Collector on a mainland host may talk to Storage over a
+	// private IP while overseas functions still need the public native gateway.
+	InvokeStorageTarget string
 	BatchSize           int
 	InvokeConcurrency   int
 	MaxRetryAttempts    int
@@ -447,7 +451,7 @@ func (s *Scheduler) planOne(ctx context.Context, rule domain.TaskRule, req Reque
 	if err != nil {
 		return false, err
 	}
-	if _, err := marketFetchEvent(req, s.StorageTarget); err != nil {
+	if _, err := marketFetchEvent(req, s.eventStorageTarget()); err != nil {
 		return false, err
 	}
 	now := time.Now().UTC()
@@ -496,7 +500,7 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []s
 		return
 	}
 	for attempt, candidate := range invocationCandidates(node, nodes) {
-		event, err := marketFetchEvent(requestForNode(req, candidate), s.StorageTarget)
+		event, err := marketFetchEvent(requestForNode(req, candidate), s.eventStorageTarget())
 		if err != nil {
 			log.WarnContextf(ctx, "build SCF market fetch failover event failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
 			return
@@ -663,7 +667,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		}
 		req := Request{BatchID: batchID, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
 		raw, _ := json.Marshal(req)
-		if _, err := marketFetchEvent(req, s.StorageTarget); err != nil {
+		if _, err := marketFetchEvent(req, s.eventStorageTarget()); err != nil {
 			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
 			continue
 		}
@@ -693,7 +697,7 @@ func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scf
 		return
 	}
 	for attempt, candidate := range invocationCandidates(node, nodes) {
-		event, err := marketFetchEvent(requestForNode(req, candidate), s.StorageTarget)
+		event, err := marketFetchEvent(requestForNode(req, candidate), s.eventStorageTarget())
 		if err != nil {
 			log.WarnContextf(ctx, "build SCF market fetch retry failover event failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
 			return
@@ -896,6 +900,16 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (s *Scheduler) eventStorageTarget() string {
+	if s == nil {
+		return ""
+	}
+	if target := strings.TrimSpace(s.InvokeStorageTarget); target != "" {
+		return target
+	}
+	return strings.TrimSpace(s.StorageTarget)
 }
 
 func marketFetchEvent(req Request, storageTarget string) (map[string]any, error) {

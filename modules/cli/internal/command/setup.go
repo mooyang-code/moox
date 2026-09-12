@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
@@ -53,6 +55,7 @@ type setupDeps struct {
 	e2eEventBus            func(context.Context, *setupconfig.Snapshot) (eventBusE2EResult, error)
 	exportSkillConfig      func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
 	ensureFirewall         func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
+	ensurePrivateNetwork   func(context.Context, *setupconfig.Snapshot, privatenet.Options, io.Writer) (privatenet.Result, error)
 }
 
 func init() {
@@ -87,6 +90,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupE2EEventBusCommand(deps),
 		newSetupExportSkillConfigCommand(deps),
 		newSetupFirewallCommand(deps),
+		newSetupPrivateNetworkCommand(deps),
 	)
 	return cmd
 }
@@ -645,6 +649,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.ensureFirewall == nil {
 		deps.ensureFirewall = defaults.ensureFirewall
 	}
+	if deps.ensurePrivateNetwork == nil {
+		deps.ensurePrivateNetwork = defaults.ensurePrivateNetwork
+	}
 	return deps
 }
 
@@ -679,6 +686,7 @@ func defaultSetupDeps() setupDeps {
 		e2eEventBus:            defaultSetupE2EEventBus,
 		exportSkillConfig:      defaultSetupExportSkillConfig,
 		ensureFirewall:         defaultSetupEnsureFirewall,
+		ensurePrivateNetwork:   defaultEnsurePrivateNetwork,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address)
 			tlsMode := setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode)

@@ -106,8 +106,11 @@ type apiError struct {
 }
 
 type InstanceBrief struct {
-	InstanceID      string   `json:"InstanceId"`
-	PublicAddresses []string `json:"PublicAddresses"`
+	InstanceID       string   `json:"InstanceId"`
+	InstanceName     string   `json:"InstanceName"`
+	Zone             string   `json:"Zone"`
+	PublicAddresses  []string `json:"PublicAddresses"`
+	PrivateAddresses []string `json:"PrivateAddresses"`
 }
 
 func NewClient(opts ClientOptions) (*Client, error) {
@@ -261,6 +264,114 @@ func sameFirewallRule(left, right FirewallRule) bool {
 		strings.TrimSpace(left.CidrBlock) == strings.TrimSpace(right.CidrBlock) &&
 		strings.TrimSpace(left.IPv6CidrBlock) == strings.TrimSpace(right.IPv6CidrBlock) &&
 		strings.EqualFold(strings.TrimSpace(left.Action), strings.TrimSpace(right.Action))
+}
+
+func (c *Client) ForRegion(region string) *Client {
+	out := *c
+	out.region = strings.TrimSpace(region)
+	return &out
+}
+
+func (c *Client) LookupInstance(ctx context.Context, publicIP string) (CloudInstance, bool, error) {
+	publicIP = strings.TrimSpace(publicIP)
+	if net.ParseIP(publicIP) == nil {
+		return CloudInstance{}, false, fmt.Errorf("invalid public ip: %s", publicIP)
+	}
+	var resp apiResponse
+	if err := c.do(ctx, "DescribeInstances", describeInstancesRequest{
+		Filters: []filter{{Name: "public-ip-address", Values: []string{publicIP}}},
+		Limit:   1,
+	}, &resp); err != nil {
+		return CloudInstance{}, false, err
+	}
+	if len(resp.Response.InstanceSet) == 0 || resp.Response.InstanceSet[0].InstanceID == "" {
+		return CloudInstance{}, false, nil
+	}
+	item := resp.Response.InstanceSet[0]
+	return CloudInstance{
+		Kind: KindLighthouse, Region: c.region, Zone: item.Zone,
+		InstanceID: item.InstanceID, InstanceName: item.InstanceName,
+		PublicIPs: uniqueNonEmpty(item.PublicAddresses), PrivateIPs: uniqueNonEmpty(item.PrivateAddresses),
+	}, true, nil
+}
+
+func (c *Client) AttachCCN(ctx context.Context, ccnID string) error {
+	var resp apiResponse
+	if err := c.do(ctx, "AttachCcn", map[string]string{"CcnId": strings.TrimSpace(ccnID)}, &resp); err != nil {
+		if isAlreadyDoneAPIError(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (c *Client) DescribeCCNAttachments(ctx context.Context) ([]CCNAttachment, error) {
+	var resp struct {
+		Response struct {
+			RequestID              string    `json:"RequestId"`
+			Error                  *apiError `json:"Error,omitempty"`
+			CcnAttachedInstanceSet []struct {
+				CcnID          string        `json:"CcnId"`
+				InstanceID     string        `json:"InstanceId"`
+				InstanceRegion string        `json:"InstanceRegion"`
+				InstanceType   string        `json:"InstanceType"`
+				CidrBlock      flexibleCIDRs `json:"CidrBlock"`
+				State          string        `json:"State"`
+			} `json:"CcnAttachedInstanceSet"`
+		} `json:"Response"`
+	}
+	if err := c.call(ctx, "DescribeCcnAttachedInstances", map[string]any{}, &resp); err != nil {
+		return nil, err
+	}
+	if err := apiCodeMessage(resp.Response.Error); err != nil {
+		return nil, err
+	}
+	out := make([]CCNAttachment, 0, len(resp.Response.CcnAttachedInstanceSet))
+	for _, item := range resp.Response.CcnAttachedInstanceSet {
+		out = append(out, CCNAttachment{
+			CcnID: item.CcnID, InstanceID: item.InstanceID,
+			InstanceRegion: firstNonEmpty(item.InstanceRegion, c.region),
+			InstanceType:   firstNonEmpty(item.InstanceType, "VPC"),
+			CidrBlock:      item.CidrBlock.first, CidrBlocks: item.CidrBlock.all, State: item.State,
+		})
+	}
+	return out, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func (c *Client) call(ctx context.Context, action string, payload, out any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint.String(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	timestamp := c.now().Unix()
+	c.sign(req, action, timestamp, body)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request %s failed: %w", action, err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("request %s returned HTTP %s: %s", action, resp.Status, string(data))
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		return fmt.Errorf("decode %s response: %w", action, err)
+	}
+	return nil
 }
 
 func (c *Client) ResolveInstanceIDByPublicIP(ctx context.Context, publicIP string) (string, error) {

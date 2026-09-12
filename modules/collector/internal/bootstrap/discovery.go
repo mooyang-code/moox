@@ -22,6 +22,11 @@ type Dependencies struct {
 	ServiceGatewayTarget    string
 	ServiceAuth             ServiceAuthConfig
 	StorageRPCGatewayTarget string
+	// InvokeStorageRPCGatewayTarget is the address sent to SCF invoke
+	// payloads. Overseas functions cannot reach a mainland private IP, so this
+	// stays on the discovered public native gateway when an explicit private
+	// target is used for Collector's own Storage RPC.
+	InvokeStorageRPCGatewayTarget string
 }
 
 type retInfo struct {
@@ -51,13 +56,17 @@ type activeDeploymentsRsp struct {
 //
 // Local config remains the fallback so a developer can run collector without admin.
 // When sysdeploy.admin_gateway_url and service auth are configured, active
-// deployment records from t_service_deployments override local defaults.
+// deployment records from t_service_deployments supply the public native
+// gateway used for SCF invoke payloads. An explicit non-loopback
+// storage.gateway_target (including a private IP from runtime.env) is kept for
+// Collector's own Storage RPC.
 func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	deps := Dependencies{
-		AdminGatewayURL:         defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
-		ServiceGatewayTarget:    defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
-		ServiceAuth:             cfg.SysDeploy.ServiceAuth,
-		StorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
+		AdminGatewayURL:               defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
+		ServiceGatewayTarget:          defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
+		ServiceAuth:                   cfg.SysDeploy.ServiceAuth,
+		StorageRPCGatewayTarget:       cfg.Storage.GatewayTarget,
+		InvokeStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
 	}
 	if strings.TrimSpace(cfg.SysDeploy.AdminGatewayURL) == "" {
 		return deps, nil
@@ -81,18 +90,32 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	if nodeID := strings.TrimSpace(cfg.Storage.GatewayNodeID); nodeID != "" {
 		nativeGateway = nodeID + "/" + nativeGateway
 	}
-	if v := endpointTRPCTarget(active, nativeGateway); v != "" {
-		deps.StorageRPCGatewayTarget = v
-	} else if configured := strings.TrimSpace(cfg.Storage.GatewayTarget); configured != "" && isUsableConfiguredStorageTarget(configured) {
-		// A separate Storage host can be registered in SysDeploy before its
-		// native gateway route is fully materialized. Keep the explicit,
-		// validated deployment target as a fail-closed fallback instead of
-		// silently reverting to the local development default.
-		deps.StorageRPCGatewayTarget = configured
-	} else {
+	discovered := strings.TrimSpace(endpointTRPCTarget(active, nativeGateway))
+	configured := strings.TrimSpace(cfg.Storage.GatewayTarget)
+	local, invoke, err := selectStorageRPCTargets(configured, discovered)
+	if err != nil {
 		return deps, fmt.Errorf("active %s deployment has no native tRPC target", nativeGateway)
 	}
+	deps.StorageRPCGatewayTarget = local
+	deps.InvokeStorageRPCGatewayTarget = invoke
 	return deps, nil
+}
+
+func selectStorageRPCTargets(configured, discovered string) (local, invoke string, err error) {
+	configured = strings.TrimSpace(configured)
+	discovered = strings.TrimSpace(discovered)
+	switch {
+	case isUsableConfiguredStorageTarget(configured):
+		local = configured
+	case discovered != "":
+		local = discovered
+	default:
+		return "", "", fmt.Errorf("storage rpc target missing")
+	}
+	if discovered != "" {
+		return local, discovered, nil
+	}
+	return local, local, nil
 }
 
 // preferLocalServiceGatewayTarget avoids sending same-host control-plane

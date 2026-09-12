@@ -143,7 +143,7 @@ func showLogo() {
 	fmt.Println("    🧭 metadata (元数据)   通过服务导入存储元数据")
 	fmt.Println("    📦 storage (存储)      高性能数据读写与 View 重建服务")
 	fmt.Println("    🧮 factor (因子)       清理 Factor durable consumer 历史积压")
-	fmt.Println("    🛠️  ops (云运维)        腾讯云轻量应用服务器防火墙管理")
+	fmt.Println("    🛠️  ops (云运维)        腾讯云防火墙与内网组网")
 	fmt.Println()
 	fmt.Println("📖 使用帮助:")
 	fmt.Println("    📚 查看命令帮助       ./moox-cli --help")

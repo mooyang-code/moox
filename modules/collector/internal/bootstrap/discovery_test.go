@@ -3,10 +3,12 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
-	"github.com/stretchr/testify/assert"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
@@ -148,6 +150,47 @@ func TestResolveFallsBackToExplicitStorageTargetWhenRouteIsIncomplete(t *testing
 		t.Fatal(err)
 	}
 	assert.Equal(t, "ip://storage.example.com:11003", deps.StorageRPCGatewayTarget)
+}
+
+func TestResolvePrefersExplicitPrivateStorageTargetForLocalRPC(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0, "msg": "ok"},
+			"deployment_map": map[string]any{
+				"storage/service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native", "protocol": "trpc", "host": "146.56.196.204", "port": 11003,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := Default()
+	cfg.SysDeploy.AdminGatewayURL = server.URL
+	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
+	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
+	cfg.SysDeploy.ServiceAuth.TargetNode = "control"
+	cfg.Storage.GatewayNodeID = "storage"
+	cfg.Storage.GatewayTarget = "ip://10.206.0.5:11003"
+
+	deps, err := Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, "ip://10.206.0.5:11003", deps.StorageRPCGatewayTarget)
+	assert.Equal(t, "146.56.196.204:11003", deps.InvokeStorageRPCGatewayTarget)
+}
+
+func TestSelectStorageRPCTargets(t *testing.T) {
+	local, invoke, err := selectStorageRPCTargets("ip://10.206.0.5:11003", "146.56.196.204:11003")
+	require.NoError(t, err)
+	assert.Equal(t, "ip://10.206.0.5:11003", local)
+	assert.Equal(t, "146.56.196.204:11003", invoke)
+
+	local, invoke, err = selectStorageRPCTargets("ip://127.0.0.1:11003", "gw.example.com:11003")
+	require.NoError(t, err)
+	assert.Equal(t, "gw.example.com:11003", local)
+	assert.Equal(t, "gw.example.com:11003", invoke)
 }
 
 func TestIsHTTPURL(t *testing.T) {

@@ -175,12 +175,20 @@ Storage metadata, activates ready Datasets, and verifies the result. Never
 construct a filtered YAML file in the Agent context. Use `metadata spaces` and
 `setup metadata-import` only when the user explicitly requests a partial import.
 
+主机已经在腾讯云上之后，内网组网按 `references/private-network.md` 执行，不要把
+该流程塞进 `deploy-control` / `setup init`。
+
 ## Secret Boundary
 
-禁止 Agent 读取或解析 `moox.toml`. In particular, never use `cat moox.toml`,
-`sed moox.toml`, `rg moox.toml`, Python 读取 the file, or `source moox.toml`.
+禁止 Agent 把 `moox.toml` 全文读入对话、复制、打印或 `source`。In particular, never use `cat moox.toml`,
+`sed moox.toml`、`rg moox.toml`，不要把整个文件 Python 读取进对话，or `source moox.toml`。
 Do not copy it into an archive, pipe it through another process, print it, or
-derive shell variables from it. Only `moox-cli setup` may read the manifest.
+derive shell variables from it. Only `moox-cli setup` may read secrets in the manifest.
+
+用户明确要求填写内网 IP 时，按 `references/private-network.md` 只改
+`storage_private_gateway_host`，不要改 EventBus、Caddy、`MOOX_PUBLIC_HOST` 或
+`storage_gateway_host`。改完只回显 space_id 与两个 gateway host，然后执行
+`setup validate`。
 
 The CLI may report typed status codes, host names, and verified fingerprints. It
 must not print Admin passwords, SSH passwords, Tencent SecretId/SecretKey,

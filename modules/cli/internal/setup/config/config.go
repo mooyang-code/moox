@@ -343,6 +343,8 @@ type SCFFetcherSpace struct {
 	StorageGatewayNodeID             string `toml:"storage_gateway_node_id"`
 	StorageGatewayHost               string `toml:"storage_gateway_host"`
 	StorageRPCGatewayTarget          string `toml:"-"`
+	StoragePrivateGatewayHost        string `toml:"storage_private_gateway_host"`
+	StoragePrivateRPCGatewayTarget   string `toml:"-"`
 	MemorySize                       int    `toml:"memory_size"`
 	TimeoutSeconds                   int    `toml:"timeout_seconds"`
 	// InstrumentInvokeTimeoutSeconds is used by Invoke nodes that refresh a
@@ -688,6 +690,14 @@ func resolveManifestReferences(manifest *Manifest) error {
 		}
 		space.StorageGatewayHost = storageHost.Host
 		space.StorageRPCGatewayTarget = "ip://" + net.JoinHostPort(storageHost.Address, "11003")
+		space.StoragePrivateGatewayHost = strings.TrimSpace(space.StoragePrivateGatewayHost)
+		if space.StoragePrivateGatewayHost != "" {
+			ip := net.ParseIP(space.StoragePrivateGatewayHost)
+			if ip == nil || ip.IsLoopback() || !ip.IsPrivate() {
+				return fmt.Errorf("config_invalid: scf_fetcher.spaces[%d].storage_private_gateway_host must be a private IP", index)
+			}
+			space.StoragePrivateRPCGatewayTarget = "ip://" + net.JoinHostPort(space.StoragePrivateGatewayHost, "11003")
+		}
 	}
 	return nil
 }

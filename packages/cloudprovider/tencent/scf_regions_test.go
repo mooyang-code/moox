@@ -26,3 +26,10 @@ func TestSCFRegionsAreCompleteAndUnique(t *testing.T) {
 	require.False(t, IsSCFRegion("na-toronto"))
 	require.False(t, IsSCFRegion("ap-unknown"))
 }
+
+func TestNetworkAreaSplitsMainlandAndOverseas(t *testing.T) {
+	require.Equal(t, "mainland", NetworkArea("ap-nanjing"))
+	require.Equal(t, "mainland", NetworkArea("ap-guangzhou"))
+	require.Equal(t, "overseas", NetworkArea("ap-hongkong"))
+	require.Equal(t, "overseas", NetworkArea("ap-singapore"))
+}

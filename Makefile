@@ -115,6 +115,7 @@ verify-custom-setup:
 	bash scripts/test/contract/test-deploy-moox-storage-profile.sh
 	bash scripts/test/contract/test-deploy-moox-storage-view.sh
 	bash skills/moox/scripts/test-custom-setup-contract.sh
+	bash skills/moox/scripts/test-private-network-contract.sh
 
 test-caddy:
 	bash scripts/test/contract/test-caddy-config.sh
@@ -132,6 +133,8 @@ test-script-contracts:
 test-skill-contracts:
 	bash scripts/build/package-skill_test.sh
 	bash skills/moox/scripts/test-data-query-contract.sh
+	bash skills/moox/scripts/test-custom-setup-contract.sh
+	bash skills/moox/scripts/test-private-network-contract.sh
 	bash skills/moox/scripts/test-hostagent-deploy.sh
 	bash skills/moox/scripts/test-eventbus-credentials-contract.sh
 
