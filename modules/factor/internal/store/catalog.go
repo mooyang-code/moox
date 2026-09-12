@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"gorm.io/gorm"
@@ -45,7 +46,22 @@ func (s *Store) ReplaceCatalogSnapshot(ctx context.Context, snapshot domain.Cata
 	snapshot.Bindings = append([]domain.FactorBinding{}, snapshot.Bindings...)
 	sort.Slice(snapshot.Factors, func(i, j int) bool { return snapshot.Factors[i].FactorID < snapshot.Factors[j].FactorID })
 	sort.Slice(snapshot.Bindings, func(i, j int) bool { return snapshot.Bindings[i].BindingID < snapshot.Bindings[j].BindingID })
-	payload, err := json.Marshal(snapshot)
+	canonical := snapshot
+	canonical.Factors = append([]domain.FactorDef{}, snapshot.Factors...)
+	canonical.Bindings = append([]domain.FactorBinding{}, snapshot.Bindings...)
+	// Local artifact paths and bookkeeping timestamps do not version the catalog.
+	for i := range canonical.Factors {
+		canonical.Factors[i].SourcePath = ""
+		canonical.Factors[i].CreateTime = time.Time{}
+		canonical.Factors[i].ModifyTime = time.Time{}
+	}
+	for i := range canonical.Bindings {
+		canonical.Bindings[i].SourceDataset = ""
+		canonical.Bindings[i].TargetDataset = ""
+		canonical.Bindings[i].CreateTime = time.Time{}
+		canonical.Bindings[i].ModifyTime = time.Time{}
+	}
+	payload, err := json.Marshal(canonical)
 	if err != nil {
 		return false, err
 	}

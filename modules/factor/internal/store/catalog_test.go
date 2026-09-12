@@ -81,6 +81,30 @@ func TestCatalogSnapshotRevisionAndRollback(t *testing.T) {
 	require.Equal(t, before, after)
 }
 
+func TestSnapshotHashIgnoresLocalArtifactMetadata(t *testing.T) {
+	source := catalogStore(t)
+	ctx := context.Background()
+	require.NoError(t, source.Factors().Create(ctx, domain.FactorDef{
+		FactorID: "f", Name: "factor", FactorType: domain.FactorTypeTimeSeries,
+		SourceCode: "source", SourceHash: "hash", InputColumns: []string{}, Outputs: []string{},
+		ParamsJSON: "{}", LookbackPeriods: 1, Status: domain.FactorStatusEnabled,
+	}))
+	snapshot, err := source.CatalogSnapshot(ctx)
+	require.NoError(t, err)
+	replica := catalogStore(t)
+	changed, err := replica.ReplaceCatalogSnapshot(ctx, *snapshot)
+	require.NoError(t, err)
+	require.True(t, changed)
+	snapshot.Factors[0].SourcePath = "/another-host/factors/f.py"
+	snapshot.Factors[0].ModifyTime = time.Now().Add(time.Hour)
+	changed, err = replica.ReplaceCatalogSnapshot(ctx, *snapshot)
+	require.NoError(t, err)
+	require.False(t, changed)
+	snapshot.Factors[0].SourceCode = "different algorithm"
+	_, err = replica.ReplaceCatalogSnapshot(ctx, *snapshot)
+	require.ErrorIs(t, err, ErrCatalogRevisionConflict)
+}
+
 func TestReplaceCatalogSnapshotAtomicAndPreservesManifests(t *testing.T) {
 	s := catalogStore(t)
 	ctx := context.Background()
