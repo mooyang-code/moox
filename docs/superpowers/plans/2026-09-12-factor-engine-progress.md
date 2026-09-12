@@ -51,7 +51,9 @@
 
 - 新增 SubjectBatcher：默认 200ms 窗口、64 条上限、256 条等待队列、单批执行超时 2m，配置由独立 engine 配置加载并严格校验。按 space/View/dataset/frequency/period/物理索引/输入契约/series_tag 分组，保留每条来源身份，不擅自合并不同来源序号。
 - Submit 在实际批次执行成功后才返回成功，队列满时背压；取消和执行失败向调用方返回错误。新增 SubjectHandler 使用公共标的事件解码器，非法消息 TERM，执行失败 RETRY，成功才 ACK。没有复用周期完成标记，不能把一批时序标的完成当作全集完成。
-- 聚合、单标的不等待全集、合同分组、队列有界与取消测试通过。独立审查发现已取消的后续分组仍可能执行，新增确定性失败测试后修复为每组执行前再次过滤取消提交。最终 durable 装配须用现有 Runner 的 IndependentBatch 和有界 BatchSize，不能使用顺序 handler 模式；真正的任务构造、批量回源、周期汇总和程序入口仍待接通。
+- 聚合、单标的不等待全集、合同分组、队列有界与取消测试通过。独立审查发现已取消的后续分组仍可能执行，新增确定性失败测试后修复为每组执行前再次过滤取消提交。真正的任务构造、批量回源、周期汇总和程序入口仍待接通。
+- 新增 NewSubject 实际 durable 装配：复用现有消费者重连生命周期，独立 `factor_source_subject` durable，DeliverNew、无限重投、有限 MaxAckPending。初版 IndependentBatch 存在 Fetch 批次屏障，独立审查重复测试暴露晚到消息不能进入窗口；已改为 MaxBatch 个独立有界单条 pull loop，各自复用 Runner heartbeat/ACK，session 退出取消并等待所有 loop 与批处理器。嵌入式 JetStream 测试先确认 BTC 已投递再发布 ETH，验证两条仍组成一批，执行阻塞期间未 ACK，成功后 ACK 清零。尚未接入最终程序入口。
+- 下一项已确认的集成问题：`taskrunner.clusterPeriodReadGroups` 把 triggerEventID 放在读批次键中，标的事件各自具有不同 ID，会抵消上述聚合。必须分开任务来源身份与可共享读取身份，同时把 input contract/series_tag 的读取约束贯穿任务与 Storage 查询，不能用覆盖原始事件 ID 的办法掩盖问题。
 
 ## 部署调查，不是部署证据
 
