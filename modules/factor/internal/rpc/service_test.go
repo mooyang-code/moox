@@ -125,6 +125,31 @@ func TestDeleteFactorRemovesDefinitionAndArtifacts(t *testing.T) {
 	require.FileExists(t, filepath.Join(cacheDir, "Other.cpython-314.pyc"))
 }
 
+func TestFactorAPIPreservesAndRequiresType(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	svc := NewWithRuntime(db, nil, WithFactorsDir(t.TempDir()))
+	factor := genericFactorPB("typed", "Typed", []string{"value"})
+	for _, value := range []string{"", "unknown"} {
+		factor.FactorType = value
+		rsp, err := svc.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: factor})
+		require.NoError(t, err)
+		require.Contains(t, rsp.GetRetInfo().GetMsg(), "factor_type")
+	}
+	factor.FactorType = domain.FactorTypeCrossSection
+	rsp, err := svc.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: factor})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, domain.FactorTypeCrossSection, rsp.GetFactor().GetFactorType())
+	factor.FactorType = ""
+	updated, err := svc.UpdateFactor(ctx, &factorpb.UpdateFactorReq{Factor: factor})
+	require.NoError(t, err)
+	require.Contains(t, updated.GetRetInfo().GetMsg(), "factor_type")
+	stored, err := db.Factors().Get(ctx, "typed")
+	require.NoError(t, err)
+	require.Equal(t, domain.FactorTypeCrossSection, stored.FactorType)
+}
+
 func TestDeleteFactorReportsStagedArtifactRemovalFailure(t *testing.T) {
 	ctx := context.Background()
 	db := openRPCTestDB(t)
@@ -996,7 +1021,7 @@ func openRPCTestDB(t *testing.T) *store.Store {
 
 func seedRPCFactorAndBinding(t *testing.T, db *store.Store, status string) {
 	t.Helper()
-	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
+	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{FactorType: "timeseries",
 		FactorID: "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
 		LookbackPeriods: 20, Status: status,
@@ -1014,7 +1039,7 @@ func seedRPCFactorDefinition(t *testing.T, db *store.Store, factorID string) {
 
 func seedRPCFactorDefinitionWithStatus(t *testing.T, db *store.Store, factorID, status string) {
 	t.Helper()
-	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
+	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{FactorType: "timeseries",
 		FactorID: factorID, Name: "TestFactor", SourceCode: "x", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"value"}, ParamsJSON: `{}`,
 		LookbackPeriods: 2, Status: status,
@@ -1141,7 +1166,7 @@ func (f *recordingFactorMetadataClient) UpsertDatasetColumn(context.Context, *st
 }
 
 func genericFactorPB(id, name string, outputs []string) *factorpb.FactorDef {
-	return &factorpb.FactorDef{
+	return &factorpb.FactorDef{FactorType: "timeseries",
 		FactorId: id, Name: name, SourceCode: "def compute(df, params): return {}",
 		InputColumns: []string{"close"}, Outputs: outputs, ParamsJson: `{}`,
 		LookbackPeriods: 20, Status: domain.FactorStatusEnabled,

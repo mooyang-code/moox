@@ -9,12 +9,15 @@ import (
 )
 
 const (
-	FactorStatusEnabled  = "enabled"
-	FactorStatusDisabled = "disabled"
+	FactorTypeTimeSeries   = "timeseries"
+	FactorTypeCrossSection = "cross_section"
+	FactorStatusEnabled    = "enabled"
+	FactorStatusDisabled   = "disabled"
 )
 
 // FactorDef is a locally managed factor definition.
 type FactorDef struct {
+	FactorType      string    `gorm:"column:c_factor_type"`
 	FactorID        string    `gorm:"column:c_factor_id;primaryKey"`
 	Name            string    `gorm:"column:c_name"`
 	SourceCode      string    `gorm:"column:c_source_code"`

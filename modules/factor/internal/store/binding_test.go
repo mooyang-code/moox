@@ -75,7 +75,7 @@ func openTestDB(t *testing.T) *gorm.DB {
 }
 
 func testFactor(id, status string) domain.FactorDef {
-	return domain.FactorDef{
+	return domain.FactorDef{FactorType: "timeseries",
 		FactorID: id, Name: "Factor_" + id, SourceCode: "def compute(df, params): return {}",
 		SourceHash: "hash", InputColumns: []string{"close", "funding_rate"},
 		Outputs: []string{"bias_20", "bias_96"}, ParamsJSON: `{"windows":[20,96]}`,

@@ -44,6 +44,9 @@ func (r *FactorRepository) Transaction(ctx context.Context, fn func(*FactorRepos
 
 // Create inserts a new factor definition without replacing existing rows.
 func (r *FactorRepository) Create(ctx context.Context, factor domain.FactorDef) error {
+	if err := domain.ValidateFactorType(factor.FactorType); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	if factor.InputColumns == nil {
 		factor.InputColumns = []string{}
@@ -60,6 +63,9 @@ func (r *FactorRepository) Create(ctx context.Context, factor domain.FactorDef) 
 
 // Update changes definition content. Name, outputs, and lifecycle status are immutable here.
 func (r *FactorRepository) Update(ctx context.Context, factor domain.FactorDef) error {
+	if err := domain.ValidateFactorType(factor.FactorType); err != nil {
+		return err
+	}
 	inputColumnsJSON, err := json.Marshal(factor.InputColumns)
 	if err != nil {
 		return err
@@ -71,6 +77,7 @@ func (r *FactorRepository) Update(ctx context.Context, factor domain.FactorDef) 
 			domain.FactorStatusDisabled,
 		).
 		Updates(map[string]any{
+			"c_factor_type": factor.FactorType,
 			"c_source_code": factor.SourceCode, "c_source_hash": factor.SourceHash,
 			"c_source_path":        factor.SourcePath,
 			"c_input_columns_json": string(inputColumnsJSON), "c_params_json": factor.ParamsJSON,

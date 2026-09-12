@@ -11,6 +11,9 @@ import (
 
 // NormalizeFactorDefinition validates and canonicalizes a factor definition.
 func NormalizeFactorDefinition(factor FactorDef) (FactorDef, error) {
+	if err := ValidateFactorType(factor.FactorType); err != nil {
+		return FactorDef{}, err
+	}
 	factor.FactorID = strings.TrimSpace(factor.FactorID)
 	factor.Name = strings.TrimSpace(factor.Name)
 	factor.SourceCode = strings.TrimSpace(factor.SourceCode)
@@ -43,6 +46,14 @@ func NormalizeFactorDefinition(factor FactorDef) (FactorDef, error) {
 		return FactorDef{}, fmt.Errorf("lookback_periods must be at least 1")
 	}
 	return factor, nil
+}
+
+// ValidateFactorType rejects missing or unsupported execution types.
+func ValidateFactorType(factorType string) error {
+	if factorType != FactorTypeTimeSeries && factorType != FactorTypeCrossSection {
+		return fmt.Errorf("factor_type must be %q or %q", FactorTypeTimeSeries, FactorTypeCrossSection)
+	}
+	return nil
 }
 
 func normalizeColumns(field string, values []string) ([]string, error) {

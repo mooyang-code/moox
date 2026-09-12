@@ -80,7 +80,7 @@ func TestValidateAllEnabledBindingsRejectsPersistedConflict(t *testing.T) {
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
 	factors := store.NewFactorRepository(db)
 	bindings := store.NewBindingRepository(db)
-	require.NoError(t, factors.Create(ctx, domain.FactorDef{
+	require.NoError(t, factors.Create(ctx, domain.FactorDef{FactorType: "timeseries",
 		FactorID: "factor", Name: "Factor", SourceCode: "x", SourceHash: "hash",
 		InputColumns: []string{"close", "volume"}, Outputs: []string{"value"},
 		ParamsJSON: `{}`, LookbackPeriods: 2, Status: domain.FactorStatusEnabled,
@@ -194,7 +194,7 @@ func contractBinding() domain.FactorBinding {
 }
 
 func contractFactor() domain.FactorDef {
-	return domain.FactorDef{FactorID: "factor", InputColumns: []string{"close", "volume"}}
+	return domain.FactorDef{FactorType: "timeseries", FactorID: "factor", InputColumns: []string{"close", "volume"}}
 }
 
 func TestValidateActiveViewInputsRejectsAmbiguousSuffix(t *testing.T) {

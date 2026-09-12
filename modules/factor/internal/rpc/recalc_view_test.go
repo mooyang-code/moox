@@ -22,7 +22,7 @@ func TestRecalcWaitsForSyncPointAndUsesViewReadyExecutor(t *testing.T) {
 	waiter := &recordingViewWaiter{record: func(item string) { mu.Lock(); defer mu.Unlock(); order = append(order, item) }}
 	metadata := &recalcViewMetadataClient{recordingFactorMetadataClient: newRecordingFactorMetadataClient("space", "factor")}
 	db := openRPCTestDB(t)
-	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{FactorID: "factor", Name: "factor", SourceHash: "hash", InputColumns: []string{"close"}, Outputs: []string{"score"}, LookbackPeriods: 1, Status: domain.FactorStatusEnabled}))
+	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{FactorType: "timeseries", FactorID: "factor", Name: "factor", SourceHash: "hash", InputColumns: []string{"close"}, Outputs: []string{"score"}, LookbackPeriods: 1, Status: domain.FactorStatusEnabled}))
 	require.NoError(t, db.Bindings().Upsert(context.Background(), domain.FactorBinding{BindingID: "binding", FactorID: "factor", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "factor_result", ResultViewID: "factor_result_view", Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled}))
 	svc := NewWithRuntime(db, nil, WithMetadataSync(registry.NewMetadataSync(metadata, nil)), WithViewReadyExecutor(executor, waiter))
 	start := time.Date(2026, 8, 9, 1, 0, 0, 0, time.UTC)
@@ -40,7 +40,7 @@ func TestRecalcFailsClosedWhenSourceViewHasNoActiveIndex(t *testing.T) {
 	db := openRPCTestDB(t)
 	metadata := &recalcViewMetadataClientWithoutActiveIndex{recordingFactorMetadataClient: newRecordingFactorMetadataClient("space", "factor")}
 	executor := &recordingViewReadyExecutor{record: func(string) { t.Fatal("executor must not run without an active index") }}
-	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{FactorID: "factor", Name: "factor", SourceHash: "hash", InputColumns: []string{"close"}, Outputs: []string{"score"}, LookbackPeriods: 1, Status: domain.FactorStatusEnabled}))
+	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{FactorType: "timeseries", FactorID: "factor", Name: "factor", SourceHash: "hash", InputColumns: []string{"close"}, Outputs: []string{"score"}, LookbackPeriods: 1, Status: domain.FactorStatusEnabled}))
 	require.NoError(t, db.Bindings().Upsert(context.Background(), domain.FactorBinding{BindingID: "binding", FactorID: "factor", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "factor_result", ResultViewID: "factor_result_view", Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled}))
 	svc := NewWithRuntime(db, nil, WithMetadataSync(registry.NewMetadataSync(metadata, nil)), WithViewReadyExecutor(executor, nil))
 	start := time.Date(2026, 8, 9, 1, 0, 0, 0, time.UTC)

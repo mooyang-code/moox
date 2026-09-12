@@ -7,7 +7,7 @@ import (
 )
 
 func TestNormalizeFactorDefinitionCanonicalizesGenericContract(t *testing.T) {
-	got, err := NormalizeFactorDefinition(FactorDef{
+	got, err := NormalizeFactorDefinition(FactorDef{FactorType: "timeseries",
 		FactorID: " excess-return ", Name: " ExcessReturn ",
 		SourceCode:      " def compute(df, params): return {} ",
 		InputColumns:    []string{" benchmark_return ", "nav", "nav"},
@@ -25,7 +25,7 @@ func TestNormalizeFactorDefinitionCanonicalizesGenericContract(t *testing.T) {
 }
 
 func TestNormalizeFactorDefinitionRejectsInvalidValues(t *testing.T) {
-	valid := FactorDef{
+	valid := FactorDef{FactorType: "timeseries",
 		FactorID: "f", Name: "F", SourceCode: "x",
 		InputColumns: []string{"close"}, Outputs: []string{"value"},
 		ParamsJSON: `{}`, LookbackPeriods: 1,
@@ -59,7 +59,7 @@ func TestNormalizeFactorDefinitionRejectsInvalidValues(t *testing.T) {
 }
 
 func TestNormalizeFactorDefinitionDefaultsEmptyParamsObject(t *testing.T) {
-	got, err := NormalizeFactorDefinition(FactorDef{
+	got, err := NormalizeFactorDefinition(FactorDef{FactorType: "timeseries",
 		FactorID: "f", Name: "F", SourceCode: "x",
 		InputColumns: []string{"close"}, Outputs: []string{"value"},
 		LookbackPeriods: 1,

@@ -25,7 +25,7 @@ func TestImportFactorFileUsesExplicitGenericDefinition(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
 	svc := NewService(store.NewFactorRepository(db), nil, Options{FactorsDir: dir})
-	factor, err := svc.ImportFactorFile(context.Background(), path, ImportOptions{
+	factor, err := svc.ImportFactorFile(context.Background(), path, ImportOptions{FactorType: "timeseries",
 		FactorID: "Bias", InputColumns: []string{"close"}, Outputs: []string{"bias"},
 		ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
 	})
@@ -46,7 +46,7 @@ func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *te
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
 	repo := store.NewFactorRepository(db)
 	svc := NewService(repo, nil, Options{FactorsDir: dir})
-	options := ImportOptions{
+	options := ImportOptions{FactorType: "timeseries",
 		FactorID: "Generic", InputColumns: []string{"value"}, Outputs: []string{"value"},
 		ParamsJSON: `{}`, LookbackPeriods: 2,
 	}
@@ -80,14 +80,14 @@ func TestImportFactorFileRejectsEnabledDefinitionUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
 	repo := store.NewFactorRepository(db)
-	require.NoError(t, repo.Create(context.Background(), domain.FactorDef{
+	require.NoError(t, repo.Create(context.Background(), domain.FactorDef{FactorType: "timeseries",
 		FactorID: "Generic", Name: "Generic", SourceCode: "old", SourceHash: "old",
 		InputColumns: []string{"value"}, Outputs: []string{"value"}, ParamsJSON: `{}`,
 		LookbackPeriods: 2, Status: domain.FactorStatusEnabled,
 	}))
 	svc := NewService(repo, nil, Options{FactorsDir: dir})
 
-	_, err = svc.ImportFactorFile(context.Background(), path, ImportOptions{
+	_, err = svc.ImportFactorFile(context.Background(), path, ImportOptions{FactorType: "timeseries",
 		FactorID: "Generic", InputColumns: []string{"value"}, Outputs: []string{"value"},
 		ParamsJSON: `{"window":2}`, LookbackPeriods: 3,
 	})
@@ -106,7 +106,7 @@ func TestEnsureSourceArtifactsRestoresEnabledFactorAfterDeployReplacement(t *tes
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
 	repo := store.NewFactorRepository(db)
 	source := "def compute(df, params):\n    return df\n"
-	factor, err := domain.NormalizeFactorDefinition(domain.FactorDef{
+	factor, err := domain.NormalizeFactorDefinition(domain.FactorDef{FactorType: "timeseries",
 		FactorID: "Bias", Name: "Bias", SourceCode: source,
 		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
 		LookbackPeriods: 5, Status: domain.FactorStatusEnabled,

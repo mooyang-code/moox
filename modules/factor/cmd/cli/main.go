@@ -21,6 +21,7 @@ type cliConfig struct {
 	File              string
 	CatalogPath       string
 	FactorID          string
+	FactorType        string
 	InputColumns      []string
 	Outputs           []string
 	ParamsJSON        string
@@ -96,6 +97,7 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.StringVar(&cfg.FactorsDir, "factors-dir", cfg.FactorsDir, "factor source directory")
 		fs.StringVar(&cfg.File, "file", "", "single Python factor file")
 		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id")
+		fs.StringVar(&cfg.FactorType, "factor-type", "", "required: timeseries or cross_section")
 		fs.StringVar(&inputColumns, "input-columns", "", "comma-separated input columns")
 		fs.StringVar(&outputs, "outputs", "", "comma-separated output columns")
 		fs.StringVar(&cfg.ParamsJSON, "params-json", "{}", "factor parameter JSON object")

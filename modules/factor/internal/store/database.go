@@ -239,7 +239,7 @@ func (s *Store) factorSchemaTables() ([]string, error) {
 func (s *Store) validateSchemaTables(tables []string) error {
 	expected := map[string][]string{
 		"t_factor_defs": {
-			"c_factor_id", "c_name", "c_source_code", "c_source_hash", "c_source_path",
+			"c_factor_id", "c_name", "c_factor_type", "c_source_code", "c_source_hash", "c_source_path",
 			"c_input_columns_json", "c_outputs_json", "c_params_json", "c_lookback_periods",
 			"c_status", "c_ctime", "c_mtime",
 		},

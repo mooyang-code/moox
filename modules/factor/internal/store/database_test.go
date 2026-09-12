@@ -156,7 +156,7 @@ func TestApplySchemaMigratesPreviousDatasetBindingShape(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.db.Exec(`
 		CREATE TABLE t_factor_defs (
-			c_factor_id TEXT NOT NULL PRIMARY KEY, c_name TEXT NOT NULL, c_source_code TEXT NOT NULL,
+			c_factor_id TEXT NOT NULL PRIMARY KEY, c_name TEXT NOT NULL, c_factor_type TEXT NOT NULL DEFAULT 'timeseries', c_source_code TEXT NOT NULL,
 			c_source_hash TEXT NOT NULL, c_source_path TEXT NOT NULL DEFAULT '', c_input_columns_json TEXT NOT NULL,
 			c_outputs_json TEXT NOT NULL, c_params_json TEXT NOT NULL DEFAULT '{}', c_lookback_periods INTEGER NOT NULL,
 			c_status TEXT NOT NULL DEFAULT 'disabled', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

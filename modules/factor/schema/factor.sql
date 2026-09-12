@@ -3,6 +3,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS t_factor_defs (
     c_factor_id TEXT NOT NULL PRIMARY KEY,
     c_name TEXT NOT NULL,
+    c_factor_type TEXT NOT NULL,
     c_source_code TEXT NOT NULL,
     c_source_hash TEXT NOT NULL,
     c_source_path TEXT NOT NULL DEFAULT '',
@@ -14,6 +15,7 @@ CREATE TABLE IF NOT EXISTS t_factor_defs (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_lookback_periods >= 1),
+    CHECK (c_factor_type IN ('timeseries', 'cross_section')),
     CHECK (c_status IN ('enabled', 'disabled')),
     UNIQUE (c_name)
 );
