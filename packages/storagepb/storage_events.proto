@@ -33,6 +33,22 @@ message ViewPeriodDatasetState {
   repeated string failed_subjects = 3;
 }
 
+// ViewSourceSubjectReady is emitted by the View service after the active
+// index commits a time-series row. It does not assert universe completeness.
+// source_event_id is an identity, never an orderable revision.
+message ViewSourceSubjectReady {
+  string source_view_id = 1;
+  string source_dataset_id = 2;
+  string subject_id = 3;
+  string frequency = 4;
+  int64 period_time = 5;
+  string series_tag = 6;
+  string active_index_id = 7;
+  string input_contract_version = 8;
+  string source_event_id = 9;
+  google.protobuf.Timestamp ready_at = 10;
+}
+
 // ViewSourcePeriodReady marks a source View period as readable by Factor.
 message ViewSourcePeriodReady {
   string source_view_id = 1;

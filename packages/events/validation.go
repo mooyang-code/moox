@@ -175,6 +175,22 @@ func validateDatasetPeriodCollected(message *eventpb.EventMessage, value proto.M
 	return nil
 }
 
+func validateViewSourceSubjectReady(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.ViewSourceSubjectReady)
+	if !ok {
+		return fmt.Errorf("view source subject ready payload has type %T", value)
+	}
+	if err := validateStoragePeriod(message, payload.GetSourceViewId(), payload.GetFrequency(), payload.GetPeriodTime(), "complete", payload.GetReadyAt(), "view source subject ready"); err != nil {
+		return err
+	}
+	for _, identity := range []string{payload.GetSourceDatasetId(), payload.GetSubjectId(), payload.GetActiveIndexId(), payload.GetInputContractVersion(), payload.GetSourceEventId()} {
+		if !validRequiredToken(identity) {
+			return fmt.Errorf("view source subject ready input identity is incomplete")
+		}
+	}
+	return nil
+}
+
 func validateViewSourcePeriodReady(message *eventpb.EventMessage, value proto.Message) error {
 	payload, ok := value.(*storagepb.ViewSourcePeriodReady)
 	if !ok {
