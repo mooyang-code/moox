@@ -34,6 +34,14 @@
 - CLI command 排除已在原工作树复现的 `TestDefaultMetadataUsesUnifiedCryptoMarket` 后通过；这不等于全套无失败。
 - 缓存专项审查发现重建并发写、等待取消、重复无效重建、JSON 类型和主键大小写问题；`6fdc7b3e` 修复上述问题，`3fee129f` 追加修复容量检查遇忙库的问题，独立复核均已关闭。维护期间 `Use` 快速返回 `ErrCacheBusy`，后续回源层必须处理它，不能将其当计算失败。`c2c334c1` 验证等待 gate 期间实际超时不切换。
 
+## 目录和标的事件阶段
+
+- 新增目录启动装配和独立 `catalog_sync_timeout`（默认 10m）；启动必须成功同步，周期协调复用 tRPC timerjob。中间 codeCR 的任务超时耦合及注册错误丢失问题已修复。尚未接入两个最终程序入口。
+- View 行写入原本就不等待采集周期。现已增加 active 写成功后按原始事件/行身份发布 `ViewSourceSubjectReady`，发布失败返回上游，利用 durable delivery 重投恢复；不是新增 DuckDB 事务 outbox。批处理保留每条原事件身份，重投拆批不改变事件 ID。
+- 新增真实 DuckDB 测试，在 publisher 回调内查询并验证刚写入的行；按标的发布测试及竞态测试通过。全套 View 测试中的 `TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit` 因 `audit log=<nil>` 失败，已在未改动的原工作树独立复现；排除这一已确认基线用例后 View 与 eventconsumer 测试通过，不等于全套通过。
+- 标的事件尚未接入引擎消费、缓存失效及微批调度，不能据此宣称实时因子已独立运行。输入契约 hash/version 与逐行可比较数据变更位置仍需在读缓存协议中区分。
+- 标的事件中间审查发现两个未关闭问题：首次构建仅写 B 索引后会 ACK，需要持久待发布记录并在激活后恢复发布；现有 `readIndexRevision` 是 UpdatedAt 的 hash，不能当作可比较的变更序号，标的事件仍缺少持久来源位置。当前发布实现仅覆盖 active 正常写入路径，不得作为完整可靠交付部署。事件 ID 包含物理代际，同一来源在新代际重新就绪时会产生新 ID，后续任务去重须明确这一范围。
+
 ## 部署调查，不是部署证据
 
 - 原 moox.toml 内网 factor-1 为 192.168.0.102，用户 mooyang，SSH 22；外网 control/compile 为 106.53.107.122，用户 ubuntu。
