@@ -36,8 +36,14 @@ type userEntry struct {
 }
 
 type userPermissions struct {
-	Publish   subjectPermission `yaml:"publish"`
-	Subscribe subjectPermission `yaml:"subscribe"`
+	Publish   subjectPermission   `yaml:"publish"`
+	Subscribe subjectPermission   `yaml:"subscribe"`
+	Responses *responsePermission `yaml:"responses"`
+}
+
+type responsePermission struct {
+	MaxMessages int           `yaml:"max_messages"`
+	Expires     time.Duration `yaml:"expires"`
 }
 
 type subjectPermission struct {
@@ -208,11 +214,24 @@ func loadUsersFile(path string) ([]*natsserver.User, error) {
 			return nil, fmt.Errorf("users file contains duplicate username %q", item.Username)
 		}
 		seen[item.Username] = struct{}{}
+		var responses *natsserver.ResponsePermission
+		if permission := item.Permissions.Responses; permission != nil {
+			if permission.MaxMessages <= 0 || permission.Expires <= 0 {
+				return nil, fmt.Errorf("user %q response limits must be positive", item.Username)
+			}
+			responses = &natsserver.ResponsePermission{MaxMsgs: permission.MaxMessages, Expires: permission.Expires}
+		}
+		publishAllow := append([]string(nil), item.Permissions.Publish.Allow...)
+		if responses != nil && len(publishAllow) == 0 {
+			// NATS distinguishes nil (unrestricted) from an empty allow list.
+			publishAllow = []string{}
+		}
 		users = append(users, &natsserver.User{
 			Username: item.Username,
 			Password: item.Password,
 			Permissions: &natsserver.Permissions{
-				Publish:   &natsserver.SubjectPermission{Allow: append([]string(nil), item.Permissions.Publish.Allow...), Deny: append([]string(nil), item.Permissions.Publish.Deny...)},
+				Response:  responses,
+				Publish:   &natsserver.SubjectPermission{Allow: publishAllow, Deny: append([]string(nil), item.Permissions.Publish.Deny...)},
 				Subscribe: &natsserver.SubjectPermission{Allow: append([]string(nil), item.Permissions.Subscribe.Allow...), Deny: append([]string(nil), item.Permissions.Subscribe.Deny...)},
 			},
 		})
