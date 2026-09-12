@@ -18,7 +18,7 @@ import (
 
 func TestImportFactorFileUsesExplicitGenericDefinition(t *testing.T) {
 	dir := t.TempDir()
-	source := "def compute(df, params): return {'bias': df['close']}\n"
+	source := "def compute(df, params, context): return {'bias': df['close']}\n"
 	path := filepath.Join(dir, "Bias.py")
 	require.NoError(t, os.WriteFile(path, []byte(source), 0o644))
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
@@ -40,7 +40,7 @@ func TestImportFactorFileUsesExplicitGenericDefinition(t *testing.T) {
 func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "Generic.py")
-	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params, context): return {'value': df['value']}\n"), 0o644))
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
@@ -60,7 +60,7 @@ func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *te
 	require.Equal(t, "disabled", updated.Status)
 
 	renamedPath := filepath.Join(dir, "Renamed.py")
-	require.NoError(t, os.WriteFile(renamedPath, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
+	require.NoError(t, os.WriteFile(renamedPath, []byte("def compute(df, params, context): return {'value': df['value']}\n"), 0o644))
 	_, err = svc.ImportFactorFile(context.Background(), renamedPath, options)
 	require.ErrorContains(t, err, "must match factor file name")
 
@@ -75,7 +75,7 @@ func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *te
 func TestImportFactorFileRejectsEnabledDefinitionUpdate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "Generic.py")
-	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params, context): return {'value': df['value']}\n"), 0o644))
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
@@ -105,7 +105,7 @@ func TestEnsureSourceArtifactsRestoresEnabledFactorAfterDeployReplacement(t *tes
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
 	repo := store.NewFactorRepository(db)
-	source := "def compute(df, params):\n    return df\n"
+	source := "def compute(df, params, context):\n    return df\n"
 	factor, err := domain.NormalizeFactorDefinition(domain.FactorDef{FactorType: "timeseries",
 		FactorID: "Bias", Name: "Bias", SourceCode: source,
 		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,

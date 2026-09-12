@@ -1,4 +1,4 @@
-def compute(df, params):
+def compute(df, params, context):
     window = int(params.get("window", params.get("n", 0)))
     if window <= 0:
         raise ValueError("Cci requires a positive window")

@@ -1,6 +1,6 @@
 # Python 因子示例
 
-当前公开示例统一实现 `compute(df, params)`，返回包含
+当前公开示例统一实现 `compute(df, params, context)`，返回包含
 `data_time`、`series_tag` 与全部输出列的 `pandas.DataFrame`：
 
 - `timeseries/bias.py`：输入 `close`，按 `params.windows` 输出多个 Bias 列。

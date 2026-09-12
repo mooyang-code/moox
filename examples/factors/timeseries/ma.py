@@ -1,4 +1,4 @@
-def compute(df, params):
+def compute(df, params, context):
     output = df[["data_time", "series_tag"]].copy()
     close = df.groupby("series_tag", sort=False)["close"]
     for raw_window in params["windows"]:

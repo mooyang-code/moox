@@ -8,6 +8,7 @@ type DataFrame struct {
 	Rows       [][]any
 	DataTimes  []time.Time
 	SeriesTags []string
+	SubjectIDs []string
 }
 
 // FactorTask is the self-contained scheduler-to-engine task shape.
@@ -29,11 +30,16 @@ type FactorTask struct {
 	StartTime                   time.Time
 	EndTime                     time.Time
 	LookbackPeriods             int
+	InputContractVersion        string
+	ExpectedSubjects            []string
+	AvailableSubjects           []string
+	MissingSubjects             []string
 	Factor                      FactorSpec
 }
 
 // FactorSpec describes one Python factor module invocation.
 type FactorSpec struct {
+	FactorType   string
 	FactorID     string
 	Name         string
 	SourceHash   string
@@ -45,6 +51,7 @@ type FactorSpec struct {
 
 // FactorResultRow is one output row with its complete time-series identity.
 type FactorResultRow struct {
+	SubjectID string
 	DataTime  time.Time
 	SeriesTag string
 	Values    map[string]any

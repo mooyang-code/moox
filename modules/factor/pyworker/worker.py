@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import importlib.util
 import sys
+from copy import deepcopy
 import traceback
 from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
@@ -66,7 +67,7 @@ class FactorWorker:
             factor = meta.get("factor")
             if not isinstance(factor, dict):
                 raise TypeError("factor must be an object")
-            produced = self.compute_factor(df, factor, target_start, target_end)
+            produced = self.compute_factor(df, factor, target_start, target_end, meta.get("context"))
 
         return encode_json_results(
             meta.get("id", ""), produced,
@@ -92,7 +93,8 @@ class FactorWorker:
                 )
                 with redirect_stdout(stdout), redirect_stderr(stderr):
                     self.ensure_factor_loaded(factor)
-                    produced = self.compute_factor(item_df, factor, item_start, item_end)
+                    produced = self.compute_factor(item_df, factor, item_start, item_end,
+                                                   item.get("context", meta.get("context")))
                 items.append({
                     "task_id": task_id, "binding_id": binding_id, "ok": True,
                     "results": encode_result_rows(produced),
@@ -128,10 +130,17 @@ class FactorWorker:
             ["data_time", "series_tag"], kind="stable"
         ).reset_index(drop=True)
 
-    def compute_factor(self, df, factor, target_start, target_end):
+    def compute_factor(self, df, factor, target_start, target_end, context):
         name = factor.get("name", "")
         if not name:
             raise ValueError("factor name is required")
+        factor_type = factor.get("factor_type")
+        if factor_type not in {"timeseries", "cross_section"}:
+            raise ValueError("factor_type must be timeseries or cross_section")
+        self.validate_context(context, factor_type, df)
+        identity = ["data_time", "series_tag"]
+        if factor_type == "cross_section":
+            identity.append("subject_id")
         inputs = list(factor.get("input_columns", []))
         expected_outputs = list(factor.get("outputs", []))
         params = factor.get("params", {})
@@ -145,12 +154,12 @@ class FactorWorker:
         module = self.factors[name]
         compute = getattr(module, "compute", None)
         if not callable(compute):
-            raise AttributeError(f"{name} must define compute(df, params)")
-        factor_df = df[["data_time", "series_tag", *inputs]].copy(deep=False)
-        produced = compute(factor_df, params)
+            raise AttributeError(f"{name} must define compute(df, params, context)")
+        factor_df = df[list(dict.fromkeys([*identity, *inputs]))].copy(deep=True)
+        produced = compute(factor_df, deepcopy(params), deepcopy(context))
         if not isinstance(produced, pd.DataFrame):
             raise TypeError(f"{name} compute result must be a pandas DataFrame")
-        expected_columns = {"data_time", "series_tag", *expected_outputs}
+        expected_columns = {*identity, *expected_outputs}
         if set(produced.columns) != expected_columns or len(produced.columns) != len(expected_columns):
             raise ValueError(
                 f"{name} outputs mismatch: got={sorted(produced.columns)} "
@@ -163,12 +172,45 @@ class FactorWorker:
         if produced["data_time"].isna().any():
             raise ValueError(f"{name} result contains missing data_time")
         _validate_series_tags(produced["series_tag"])
-        if produced.duplicated(["data_time", "series_tag"]).any():
-            raise ValueError(f"{name} result contains duplicate data_time, series_tag")
+        if factor_type == "cross_section":
+            if any(not isinstance(value, str) or value not in context["available_subjects"]
+                   for value in produced["subject_id"]):
+                raise ValueError(f"{name} result subject is outside the available universe")
+        if produced.duplicated(identity).any():
+            raise ValueError(f"{name} result contains duplicate {', '.join(identity)}")
         return produced[
             (produced["data_time"] >= target_start)
             & (produced["data_time"] < target_end)
-        ].sort_values(["data_time", "series_tag"], kind="stable").reset_index(drop=True)
+        ].sort_values(identity, kind="stable").reset_index(drop=True)
+
+    @staticmethod
+    def validate_context(context, factor_type, df):
+        if not isinstance(context, dict):
+            raise TypeError("execution context must be an object")
+        if not isinstance(context.get("period_time"), int) or context["period_time"] <= 0:
+            raise ValueError("context period_time must be a positive integer")
+        if not isinstance(context.get("frequency"), str) or not context["frequency"]:
+            raise ValueError("context frequency is required")
+        if not isinstance(context.get("input_contract_version"), str):
+            raise ValueError("context input_contract_version is required")
+        if factor_type == "timeseries":
+            if not isinstance(context.get("subject_id"), str) or not context["subject_id"]:
+                raise ValueError("context subject_id is required for timeseries")
+            if "subject_id" in df and any(df["subject_id"] != context["subject_id"]):
+                raise ValueError("timeseries input contains another subject")
+            return
+        for name in ("expected_subjects", "available_subjects", "missing_subjects"):
+            values = context.get(name)
+            if not isinstance(values, list) or any(not isinstance(v, str) or not v for v in values):
+                raise ValueError(f"context {name} must be a list of subjects")
+            if len(values) != len(set(values)):
+                raise ValueError(f"context {name} contains duplicate subjects")
+        expected, available, missing = (set(context[k]) for k in
+                                       ("expected_subjects", "available_subjects", "missing_subjects"))
+        if not expected or available & missing or available | missing != expected:
+            raise ValueError("context subject universe partition is invalid")
+        if "subject_id" not in df or set(df["subject_id"]) != available:
+            raise ValueError("cross_section input does not match the available universe")
 
     def ensure_factor_loaded(self, factor):
         name = factor.get("name", "")

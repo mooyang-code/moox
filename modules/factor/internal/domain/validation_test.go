@@ -9,7 +9,7 @@ import (
 func TestNormalizeFactorDefinitionCanonicalizesGenericContract(t *testing.T) {
 	got, err := NormalizeFactorDefinition(FactorDef{FactorType: "timeseries",
 		FactorID: " excess-return ", Name: " ExcessReturn ",
-		SourceCode:      " def compute(df, params): return {} ",
+		SourceCode:      " def compute(df, params, context): return {} ",
 		InputColumns:    []string{" benchmark_return ", "nav", "nav"},
 		Outputs:         []string{"rolling_rank", "excess_return"},
 		ParamsJSON:      ` { "window": 20 } `,

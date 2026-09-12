@@ -29,10 +29,15 @@ def decode_json_df(meta):
     df = pd.DataFrame(rows, columns=columns)
     df["data_time"] = pd.to_datetime(df["data_time"], format="ISO8601", utc=True)
     _validate_series_tags(df["series_tag"])
-    if df.duplicated(["data_time", "series_tag"]).any():
-        raise ValueError("dataframe contains duplicate data_time, series_tag")
-    if not df.sort_values(["data_time", "series_tag"], kind="stable").index.equals(df.index):
-        raise ValueError("dataframe must be sorted by data_time, series_tag")
+    identity = ["data_time", "series_tag"]
+    if "subject_id" in df:
+        if any(not isinstance(value, str) or not value for value in df["subject_id"]):
+            raise ValueError("dataframe subject_id must be a nonempty string")
+        identity.append("subject_id")
+    if df.duplicated(identity).any():
+        raise ValueError(f"dataframe contains duplicate {', '.join(identity)}")
+    if not df.sort_values(identity, kind="stable").index.equals(df.index):
+        raise ValueError(f"dataframe must be sorted by {', '.join(identity)}")
     return df
 
 
@@ -46,12 +51,13 @@ def encode_json_results(task_id, result, logs=None):
 def encode_result_rows(result):
     return [
         {
+            **({"subject_id": row["subject_id"]} if "subject_id" in result.columns else {}),
             "data_time": row["data_time"].isoformat().replace("+00:00", "Z"),
             "series_tag": row["series_tag"],
             "values": {
                 name: _json_value(row[name])
                 for name in result.columns
-                if name not in {"data_time", "series_tag"}
+                if name not in {"data_time", "series_tag", "subject_id"}
             },
         }
         for _, row in result.iterrows()

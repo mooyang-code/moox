@@ -28,6 +28,10 @@ type TaskScope struct {
 	TriggeredAt                 time.Time
 	StartTime                   time.Time
 	EndTime                     time.Time
+	InputContractVersion        string
+	ExpectedSubjects            []string
+	AvailableSubjects           []string
+	MissingSubjects             []string
 }
 
 func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Task, error) {
@@ -40,7 +44,10 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 	if scope.StartTime.IsZero() || scope.EndTime.IsZero() || !scope.StartTime.Before(scope.EndTime) {
 		return Task{}, errors.New("valid start_time and end_time are required")
 	}
-	if strings.TrimSpace(scope.SubjectID) == "" {
+	if err := domain.ValidateFactorType(factor.FactorType); err != nil {
+		return Task{}, err
+	}
+	if factor.FactorType == domain.FactorTypeTimeSeries && strings.TrimSpace(scope.SubjectID) == "" {
 		return Task{}, errors.New("subject_id is required")
 	}
 	if factor.Status != domain.FactorStatusEnabled {
@@ -63,9 +70,14 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 			SubjectID: scope.SubjectID, Freq: scope.Freq, PeriodTime: scope.PeriodTime,
 			TriggerEventID: scope.TriggerEventID, TriggeredAt: scope.TriggeredAt.UTC(),
 			StartTime: scope.StartTime.UTC(), EndTime: scope.EndTime.UTC(),
-			LookbackPeriods: factor.LookbackPeriods,
+			LookbackPeriods:      factor.LookbackPeriods,
+			InputContractVersion: scope.InputContractVersion,
+			ExpectedSubjects:     append([]string(nil), scope.ExpectedSubjects...),
+			AvailableSubjects:    append([]string(nil), scope.AvailableSubjects...),
+			MissingSubjects:      append([]string(nil), scope.MissingSubjects...),
 			Factor: engine.FactorSpec{
-				FactorID: factor.FactorID, Name: factor.Name, SourceHash: factor.SourceHash,
+				FactorType: factor.FactorType,
+				FactorID:   factor.FactorID, Name: factor.Name, SourceHash: factor.SourceHash,
 				SourcePath: sourcePath, InputColumns: append([]string(nil), factor.InputColumns...),
 				Outputs: append([]string(nil), factor.Outputs...), ParamsJSON: factor.ParamsJSON,
 			},

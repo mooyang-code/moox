@@ -29,7 +29,7 @@ func TestRunImportRejectsEnabledDefinitionUpdate(t *testing.T) {
 	require.NoError(t, db.Close())
 
 	sourcePath := filepath.Join(dir, "Bias.py")
-	require.NoError(t, os.WriteFile(sourcePath, []byte("def compute(df, params): return df\n"), 0o644))
+	require.NoError(t, os.WriteFile(sourcePath, []byte("def compute(df, params, context): return df\n"), 0o644))
 	err = runImport(context.Background(), cliConfig{
 		DBPath: dbPath, FactorsDir: filepath.Join(dir, "factors"), File: sourcePath,
 		FactorID: "Bias", FactorType: "timeseries", InputColumns: []string{"close"}, Outputs: []string{"bias"},
@@ -50,7 +50,7 @@ func TestImportRequiresExplicitFactorType(t *testing.T) {
 		t.Run(factorType, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "Typed.py")
-			require.NoError(t, os.WriteFile(path, []byte("def compute(df, params): return df\n"), 0o644))
+			require.NoError(t, os.WriteFile(path, []byte("def compute(df, params, context): return df\n"), 0o644))
 			cfg := cliConfig{DBPath: filepath.Join(dir, "db"), FactorsDir: filepath.Join(dir, "artifacts"), File: path, FactorID: "Typed", FactorType: factorType, InputColumns: []string{"close"}, Outputs: []string{"value"}, LookbackPeriods: 1}
 			err := runImport(context.Background(), cfg, &bytes.Buffer{})
 			if factorType == "" || factorType == "bad" {
@@ -72,7 +72,7 @@ func TestRunImportCatalogValidatesAllEntriesBeforeMutation(t *testing.T) {
 	dir := t.TempDir()
 	factorsDir := filepath.Join(dir, "factors")
 	require.NoError(t, os.MkdirAll(factorsDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "First.py"), []byte("def compute(df, params):\n    return df\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "First.py"), []byte("def compute(df, params, context):\n    return df\n"), 0o644))
 	catalog := []map[string]any{
 		{"file": "First.py", "factor_type": "timeseries", "factor_id": "First", "input_columns": []string{"close"}, "outputs": []string{"first"}, "lookback_periods": 1},
 		{"file": "Second.py", "factor_type": "timeseries", "factor_id": "second", "input_columns": []string{}, "outputs": []string{"second"}, "lookback_periods": 1},
@@ -97,8 +97,8 @@ func TestRunImportCatalogRollsBackWhenBatchMutationFails(t *testing.T) {
 	dir := t.TempDir()
 	factorsDir := filepath.Join(dir, "factors")
 	require.NoError(t, os.MkdirAll(factorsDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "First.py"), []byte("def compute(df, params):\n    return df\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "Bias.py"), []byte("def compute(df, params):\n    return df\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "First.py"), []byte("def compute(df, params, context):\n    return df\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "Bias.py"), []byte("def compute(df, params, context):\n    return df\n"), 0o644))
 	dbPath := filepath.Join(dir, "factor.db")
 	db, err := store.Open(&store.Options{Path: dbPath})
 	require.NoError(t, err)

@@ -180,8 +180,8 @@ func testBindings() []domain.FactorBinding {
 
 func testFactors() map[string]domain.FactorDef {
 	return map[string]domain.FactorDef{
-		"factor-a": {FactorID: "factor-a", Name: "factor-a", SourceHash: "hash-a", InputColumns: []string{"close"}, Outputs: []string{"score_a"}, Status: domain.FactorStatusEnabled},
-		"factor-b": {FactorID: "factor-b", Name: "factor-b", SourceHash: "hash-b", InputColumns: []string{"close"}, Outputs: []string{"score_b"}, Status: domain.FactorStatusEnabled},
+		"factor-a": {FactorType: domain.FactorTypeTimeSeries, FactorID: "factor-a", Name: "factor-a", SourceHash: "hash-a", InputColumns: []string{"close"}, Outputs: []string{"score_a"}, Status: domain.FactorStatusEnabled},
+		"factor-b": {FactorType: domain.FactorTypeTimeSeries, FactorID: "factor-b", Name: "factor-b", SourceHash: "hash-b", InputColumns: []string{"close"}, Outputs: []string{"score_b"}, Status: domain.FactorStatusEnabled},
 	}
 }
 

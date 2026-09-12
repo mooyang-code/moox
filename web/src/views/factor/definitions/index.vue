@@ -204,7 +204,7 @@ function resetForm() {
     factor_id: "",
     name: "",
     source_code: [
-      "def compute(df, params):",
+      "def compute(df, params, context):",
       "    close = df['close']",
       "    result = df[['data_time', 'series_tag']].copy()",
       "    for window in params['windows']:",

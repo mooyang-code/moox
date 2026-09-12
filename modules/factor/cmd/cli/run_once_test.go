@@ -97,7 +97,7 @@ func TestRunInitAndImport(t *testing.T) {
 	factorsDir := filepath.Join(tmp, "factors")
 	require.NoError(t, os.MkdirAll(factorsDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "Bias.py"), []byte(
-		"def compute(df, params):\n    return {'bias': df['close']}\n",
+		"def compute(df, params, context):\n    return {'bias': df['close']}\n",
 	), 0o644))
 	var out bytes.Buffer
 	require.NoError(t, run(context.Background(), []string{"init", "--db", dbPath}, &out))

@@ -386,7 +386,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 
 	spreadSource := fmt.Sprintf(`import pandas as pd
 
-def compute(df, params):
+def compute(df, params, context):
     left = df[df["series_tag"] == params["left_tag"]][["data_time", %q]]
     right = df[df["series_tag"] == params["right_tag"]][["data_time", %q]]
     joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
@@ -400,7 +400,7 @@ def compute(df, params):
 `, inputFieldID, inputFieldID, inputFieldID+"_left", inputFieldID+"_right")
 	midpointSource := fmt.Sprintf(`import pandas as pd
 
-def compute(df, params):
+def compute(df, params, context):
     left = df[df["series_tag"] == params["left_tag"]][["data_time", %q]]
     right = df[df["series_tag"] == params["right_tag"]][["data_time", %q]]
     joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
@@ -855,7 +855,7 @@ func TestFactorViewReadyTrustsUpstreamEvent(t *testing.T) {
 	factorPath := filepath.Join(factorsDir, "VenueSpread.py")
 	source := []byte(`import pandas as pd
 
-def compute(df, params):
+def compute(df, params, context):
     left = df[df["series_tag"] == params["left_tag"]][["data_time", "close"]]
     right = df[df["series_tag"] == params["right_tag"]][["data_time", "close"]]
     joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
@@ -874,6 +874,7 @@ def compute(df, params):
 		Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond),
 	}, domain.FactorDef{
 		FactorID: "venue-spread", Name: "VenueSpread",
+		FactorType: domain.FactorTypeTimeSeries,
 		SourceHash: hex.EncodeToString(hash[:]), SourcePath: factorPath,
 		InputColumns: []string{"close"}, Outputs: []string{"spread"},
 		ParamsJSON: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +

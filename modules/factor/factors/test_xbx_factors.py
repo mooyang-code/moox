@@ -73,7 +73,7 @@ class XBXFactorTest(unittest.TestCase):
                 params = {"window": 3}
                 if name not in ("Cci", "CirculatingMcap"):
                     params = {"windows": [3]}
-                result = module.compute(frame, params)
+                result = module.compute(frame, params, {})
                 self.assertEqual(len(result), len(frame))
                 self.assertEqual(
                     result[["data_time", "series_tag"]].reset_index(drop=True).to_dict("records"),
@@ -84,7 +84,7 @@ class XBXFactorTest(unittest.TestCase):
 
     def test_bias_follows_xbx_without_subtracting_one(self):
         frame = sample_frame()
-        result = load_factor("Bias").compute(frame, {"windows": [3]})
+        result = load_factor("Bias").compute(frame, {"windows": [3]}, {})
         expected = frame.groupby("series_tag", sort=False)["close"].transform(
             lambda values: values / values.rolling(3, min_periods=1).mean()
         )
@@ -92,7 +92,7 @@ class XBXFactorTest(unittest.TestCase):
 
     def test_biasq_and_volume_quantiles_are_group_local(self):
         frame = sample_frame()
-        biasq = load_factor("BiasQ").compute(frame, {"windows": [3]})
+        biasq = load_factor("BiasQ").compute(frame, {"windows": [3]}, {})
         close_mean = frame.groupby("series_tag", sort=False)["close"].transform(
             lambda values: values.rolling(3, min_periods=1).mean()
         )
@@ -101,7 +101,7 @@ class XBXFactorTest(unittest.TestCase):
         ).transform(lambda values: values.rolling(3, min_periods=1).rank(pct=True))
         pd.testing.assert_series_equal(biasq["bias_q_3"], expected_bias, check_names=False)
 
-        volume = load_factor("VolumeMeanQ").compute(frame, {"windows": [3]})
+        volume = load_factor("VolumeMeanQ").compute(frame, {"windows": [3]}, {})
         mean = frame.groupby("series_tag", sort=False)["volume"].transform(
             lambda values: values.rolling(3, min_periods=1).mean()
         )
@@ -112,7 +112,7 @@ class XBXFactorTest(unittest.TestCase):
 
     def test_cci_and_mcap_match_reference_equations(self):
         frame = sample_frame()
-        cci = load_factor("Cci").compute(frame, {"window": 3})
+        cci = load_factor("Cci").compute(frame, {"window": 3}, {})
         typical = (frame["high"] + frame["low"] + frame["close"]) / 3
         grouped = typical.groupby(frame["series_tag"], sort=False)
         mean = grouped.transform(lambda values: values.rolling(3, min_periods=1).mean())
@@ -123,7 +123,7 @@ class XBXFactorTest(unittest.TestCase):
             cci["cci"], (typical - mean) / (deviation * 0.015), check_names=False
         )
 
-        mcap = load_factor("CirculatingMcap").compute(frame, {})
+        mcap = load_factor("CirculatingMcap").compute(frame, {}, {})
         pd.testing.assert_series_equal(
             mcap["circulating_mcap"], frame["circulating_supply"] * frame["close"], check_names=False
         )
@@ -133,7 +133,7 @@ class XBXFactorTest(unittest.TestCase):
         # Make close-only direction disagree with typical-price direction for
         # one venue row; the reference uses (close + high + low) / 3.
         frame.loc[(frame["series_tag"] == "binance") & (frame["data_time"] == frame["data_time"].min()), "close"] = 5
-        result = load_factor("ZfAbsMean").compute(frame, {"windows": [2]})
+        result = load_factor("ZfAbsMean").compute(frame, {"windows": [2]}, {})
         typical = (frame["close"] + frame["high"] + frame["low"]) / 3
         change = typical.groupby(frame["series_tag"], sort=False).pct_change()
         amplitude = (frame["high"] - frame["low"]) / frame["open"]
@@ -167,7 +167,7 @@ class XBXFactorTest(unittest.TestCase):
         }
         for name, values in expected.items():
             with self.subTest(factor=name):
-                result = load_factor(name).compute(frame, {"windows": [3]})
+                result = load_factor(name).compute(frame, {"windows": [3]}, {})
                 np.testing.assert_allclose(result.iloc[:, 2].to_numpy(), values, equal_nan=True, rtol=1e-12, atol=1e-12)
 
 

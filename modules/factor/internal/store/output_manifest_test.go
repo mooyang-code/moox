@@ -29,7 +29,7 @@ func TestOutputManifestDeleteBefore(t *testing.T) {
 		INSERT INTO t_factor_defs (
 			c_factor_type, c_factor_id, c_name, c_source_code, c_source_hash,
 			c_input_columns_json, c_outputs_json, c_lookback_periods, c_status
-		) VALUES ('timeseries', 'factor', 'factor', 'def compute(df, params): return {}', 'hash', '[]', '[]', 1, 'disabled');
+		) VALUES ('timeseries', 'factor', 'factor', 'def compute(df, params, context): return {}', 'hash', '[]', '[]', 1, 'disabled');
 		INSERT INTO t_factor_bindings (
 			c_binding_id, c_factor_id, c_space_id, c_source_view_id, c_freq,
 			c_subject_mode, c_subjects_json, c_result_dataset_id, c_result_view_id, c_status

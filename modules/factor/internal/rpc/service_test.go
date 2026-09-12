@@ -1167,7 +1167,7 @@ func (f *recordingFactorMetadataClient) UpsertDatasetColumn(context.Context, *st
 
 func genericFactorPB(id, name string, outputs []string) *factorpb.FactorDef {
 	return &factorpb.FactorDef{FactorType: "timeseries",
-		FactorId: id, Name: name, SourceCode: "def compute(df, params): return {}",
+		FactorId: id, Name: name, SourceCode: "def compute(df, params, context): return {}",
 		InputColumns: []string{"close"}, Outputs: outputs, ParamsJson: `{}`,
 		LookbackPeriods: 20, Status: domain.FactorStatusEnabled,
 	}
