@@ -73,6 +73,15 @@ PeriodIdentity = (space_id, source_view_id, frequency, period_time, catalog_revi
 
 ### 3.3 Python 契约
 
+`factor_type` 的唯一权威来源是控制面因子定义表，不是 Python 函数参数、脚本常量或绑定属性。引擎通过版本化目录快照读取定义，在任务创建时固定所用定义版本及类型，不能在执行中途改用最新类型。类型缺失或取值非法时拒绝定义/任务，不根据函数名、输入形状或脚本内容猜测，也不默认补成时序。
+
+```text
+控制面因子定义表（factor_type）
+  → 引擎目录副本（catalog_revision）
+  → 按类型选择触发、准备 df、构造 context、校验输出
+  → Python compute(df, params, context)
+```
+
 ```python
 # 两类因子统一入口，factor_type 由引擎从因子定义表读取。
 def compute(df, params, context):
@@ -80,6 +89,15 @@ def compute(df, params, context):
 ```
 
 `df` 保留原名称和 DataFrame 角色：timeseries 输入是单标的、按时间排序、截至目标周期的历史窗口；cross_section 输入是多标的历史面板，至少包含 `subject_id` 和 `data_time`。`params` 保留算法配置参数，例如窗口长度，不混入引擎执行状态。新增 `context` 提供 `period_time`、`frequency`、`input_contract_version`；时序必填 `subject_id`，截面必填 `expected_subjects`、`available_subjects`、`missing_subjects`。引擎按定义表中的类型校验所需上下文字段，脚本不维护第二份类型声明。
+
+| 内容 | 来源与职责 | 是否传给 Python 函数 |
+|---|---|---|
+| `factor_type` | 定义表中的执行分类，由引擎消费 | 否；不放入 `params` 或 `context` |
+| `df` | 引擎从源 View / 本地缓存准备的输入数据 | 是，第一个参数 |
+| `params` | 绑定配置按因子参数约束校验后的算法参数 | 是，第二个参数 |
+| `context` | 引擎为本次任务生成的周期、标的及输入契约信息 | 是，第三个参数 |
+
+时序和截面脚本都只实现 `compute(df, params, context)`，名称与签名完全一致；差别由输入数据和上下文契约表达。不增加 `compute_timeseries` / `compute_cross_section` 双入口，不保留旧的 `compute(df, params)` 调用回退。引擎与 Python worker 之间的内部任务协议可以携带定义类型供调度和校验使用，但它不是算法函数的参数，也不是脚本可覆盖的类型声明。
 
 截面输出必须包含合法标的身份及声明的输出列，不允许写入宇宙外标的或重复结果键。默认严格完整；允许缺失时显式配置策略并记录参与集合。不自动把现有时序脚本解释为截面脚本。
 
