@@ -53,12 +53,21 @@ func TestGenerationMaintenanceWaitIsCancellableAndUsersFailFast(t *testing.T) {
 	}()
 	<-entered
 	require.ErrorIs(t, g.Use(func(*Database, uint64) error { return nil }), ErrCacheBusy)
-	cancelled, cancel := context.WithCancel(ctx)
-	cancel()
-	rebuildErr := g.Rebuild(cancelled, 1)
+	cancelled, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	rebuilt := make(chan error, 1)
+	go func() { rebuilt <- g.Rebuild(cancelled, 1) }()
+	var rebuildErr error
+	select {
+	case rebuildErr = <-rebuilt:
+	case <-time.After(time.Second):
+		close(release)
+		<-done
+		t.Fatal("maintenance did not cancel while waiting for a cache user")
+	}
 	close(release)
 	require.NoError(t, <-done)
-	require.ErrorIs(t, rebuildErr, context.Canceled)
+	require.ErrorIs(t, rebuildErr, context.DeadlineExceeded)
 	require.NoError(t, g.Use(func(db *Database, epoch uint64) error {
 		require.EqualValues(t, 1, epoch)
 		var id string
