@@ -67,10 +67,7 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 	if sourcePath == "" {
 		sourcePath = filepath.Join(factorsDir, ".versions", "factor", factor.Name, factor.SourceHash, "module.py")
 	}
-	// Bind the catalog incarnation to its immutable output schema and routing.
-	// Factor output edits therefore cannot reuse an earlier manifest owner.
-	ownership, _ := json.Marshal([]any{scope.BindingGeneration, scope.BindingID, scope.SpaceID, scope.SourceViewID, scope.ResultDatasetID, scope.Freq, factor.FactorID, factor.FactorType, factor.Outputs})
-	generation := fmt.Sprintf("%x", sha256.Sum256(ownership))
+	generation := ExecutionGeneration(scope, factor)
 	return Task{
 		FactorTask: engine.FactorTask{
 			TaskID: scope.TaskID, BindingID: scope.BindingID, SpaceID: scope.SpaceID,
@@ -96,4 +93,10 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 		},
 		TriggerType: scope.TriggerType,
 	}, nil
+}
+
+// ExecutionGeneration binds a catalog incarnation to output schema and routing.
+func ExecutionGeneration(scope TaskScope, factor domain.FactorDef) string {
+	ownership, _ := json.Marshal([]any{scope.BindingGeneration, scope.BindingID, scope.SpaceID, scope.SourceViewID, scope.ResultDatasetID, scope.Freq, factor.FactorID, factor.FactorType, factor.Outputs})
+	return fmt.Sprintf("%x", sha256.Sum256(ownership))
 }
