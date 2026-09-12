@@ -52,7 +52,7 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
 
 ## XBX Factor Catalog
 
-The XBX migration is shipped as ordinary MooX `compute(df, params)` modules in
+The XBX migration is shipped as ordinary MooX `compute(df, params, context)` modules in
 `modules/factor/factors/`. There is no `xbx_` prefix and the source files are
 safe to import with the normal CLI. `catalog.json` is the reproducible import
 manifest for all 12 definitions; `import-catalog` creates or updates each
@@ -111,7 +111,7 @@ that column and metadata validation succeeds.
   输入输出，框架不猜测源码依赖，也不隐式请求 OHLCV。
 - `data_time` 与 `series_tag` 是框架注入的系统列，不属于 `input_columns` 或
   `outputs`；tag 是不透明字符串，时间按 RFC3339Nano 往返。
-- Python 入口固定为 `compute(df, params)`；`params` 是 dict，返回 pandas DataFrame
+- Python 入口固定为 `compute(df, params, context)`；`params` 是 dict，返回 pandas DataFrame
   必须含 `data_time`、`series_tag` 和全部 `outputs`，且行身份唯一。
 - `params_json` 必须是 JSON object，`lookback_periods` 按不同 `data_time` 计数，
   不受同一时间点 tag 数量影响。
@@ -145,7 +145,7 @@ that column and metadata validation succeeds.
 - 同一批次中的多个 Factor 只是共享一次 Source View 读取和 Python 调用，计算、校验与
   写回仍彼此独立，不存在执行先后关系。
 
-需要 MA、RSI 等基础算法的复合因子，应由业务在自己的 `compute(df, params)` 中展开完整
+需要 MA、RSI 等基础算法的复合因子，应由业务在自己的 `compute(df, params, context)` 中展开完整
 计算逻辑。即使相同基础算法已经作为另一个 Factor 注册，也不能直接引用其源码或结果。
 系统接受由此产生的少量重复计算，以换取确定的输入快照、简单的并发模型和清晰的故障
 边界。
@@ -153,7 +153,7 @@ that column and metadata validation succeeds.
 ```python
 import pandas
 
-def compute(df, params):
+def compute(df, params, context):
     close = df["close"]
     ma20 = close.rolling(20).mean()
     ma60 = close.rolling(60).mean()
@@ -172,7 +172,7 @@ Factor 服务不会从 Python 源码自动推断或补足这个值。
 ```python
 import pandas
 
-def compute(df, params):
+def compute(df, params, context):
     left = df[df["series_tag"] == params["left_tag"]].set_index("data_time")
     right = df[df["series_tag"] == params["right_tag"]].set_index("data_time")
     joined = left[["close"]].join(right[["close"]], lsuffix="_left", rsuffix="_right")
