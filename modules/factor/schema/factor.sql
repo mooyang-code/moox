@@ -75,6 +75,15 @@ CREATE TRIGGER IF NOT EXISTS factor_catalog_defs_delete AFTER DELETE ON t_factor
 BEGIN UPDATE t_factor_catalog SET c_revision = c_revision + 1, c_snapshot_hash = '' WHERE c_id = 1; END;
 CREATE TRIGGER IF NOT EXISTS factor_catalog_defs_update
 AFTER UPDATE OF c_name, c_factor_type, c_source_code, c_source_hash, c_input_columns_json, c_outputs_json, c_params_json, c_lookback_periods, c_status ON t_factor_defs
+WHEN NEW.c_name IS NOT OLD.c_name
+    OR NEW.c_factor_type IS NOT OLD.c_factor_type
+    OR NEW.c_source_code IS NOT OLD.c_source_code
+    OR NEW.c_source_hash IS NOT OLD.c_source_hash
+    OR NEW.c_input_columns_json IS NOT OLD.c_input_columns_json
+    OR NEW.c_outputs_json IS NOT OLD.c_outputs_json
+    OR NEW.c_params_json IS NOT OLD.c_params_json
+    OR NEW.c_lookback_periods IS NOT OLD.c_lookback_periods
+    OR NEW.c_status IS NOT OLD.c_status
 BEGIN UPDATE t_factor_catalog SET c_revision = c_revision + 1, c_snapshot_hash = '' WHERE c_id = 1; END;
 CREATE TRIGGER IF NOT EXISTS factor_catalog_bindings_insert AFTER INSERT ON t_factor_bindings
 BEGIN UPDATE t_factor_catalog SET c_revision = c_revision + 1, c_snapshot_hash = '' WHERE c_id = 1; END;
@@ -82,6 +91,16 @@ CREATE TRIGGER IF NOT EXISTS factor_catalog_bindings_delete AFTER DELETE ON t_fa
 BEGIN UPDATE t_factor_catalog SET c_revision = c_revision + 1, c_snapshot_hash = '' WHERE c_id = 1; END;
 CREATE TRIGGER IF NOT EXISTS factor_catalog_bindings_update
 AFTER UPDATE OF c_binding_id, c_factor_id, c_space_id, c_source_view_id, c_freq, c_subject_mode, c_subjects_json, c_result_dataset_id, c_result_view_id, c_status ON t_factor_bindings
+WHEN NEW.c_binding_id IS NOT OLD.c_binding_id
+    OR NEW.c_factor_id IS NOT OLD.c_factor_id
+    OR NEW.c_space_id IS NOT OLD.c_space_id
+    OR NEW.c_source_view_id IS NOT OLD.c_source_view_id
+    OR NEW.c_freq IS NOT OLD.c_freq
+    OR NEW.c_subject_mode IS NOT OLD.c_subject_mode
+    OR NEW.c_subjects_json IS NOT OLD.c_subjects_json
+    OR NEW.c_result_dataset_id IS NOT OLD.c_result_dataset_id
+    OR NEW.c_result_view_id IS NOT OLD.c_result_view_id
+    OR NEW.c_status IS NOT OLD.c_status
 BEGIN UPDATE t_factor_catalog SET c_revision = c_revision + 1, c_snapshot_hash = '' WHERE c_id = 1; END;
 
 CREATE TRIGGER IF NOT EXISTS update_factor_bindings_mtime

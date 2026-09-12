@@ -105,6 +105,28 @@ func TestSnapshotHashIgnoresLocalArtifactMetadata(t *testing.T) {
 	require.ErrorIs(t, err, ErrCatalogRevisionConflict)
 }
 
+func TestCatalogRevisionIgnoresUnchangedValues(t *testing.T) {
+	s := catalogStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.db.Exec(`INSERT INTO t_factor_defs
+		(c_factor_id,c_name,c_factor_type,c_source_code,c_source_hash,c_input_columns_json,c_outputs_json,c_lookback_periods)
+		VALUES ('f','factor','timeseries','source','hash','[]','[]',1)`).Error)
+	require.NoError(t, s.db.Exec(`INSERT INTO t_factor_bindings
+		(c_binding_id,c_factor_id,c_space_id,c_source_view_id,c_freq,c_result_dataset_id,c_result_view_id)
+		VALUES ('b','f','s','v','1m','r','rv')`).Error)
+	before, err := s.CatalogSnapshot(ctx)
+	require.NoError(t, err)
+	require.NoError(t, s.db.Exec("UPDATE t_factor_defs SET c_status=c_status, c_name=c_name").Error)
+	require.NoError(t, s.db.Exec("UPDATE t_factor_bindings SET c_status=c_status, c_freq=c_freq").Error)
+	after, err := s.CatalogSnapshot(ctx)
+	require.NoError(t, err)
+	require.Equal(t, before.Revision, after.Revision)
+	require.NoError(t, s.db.Exec("UPDATE t_factor_bindings SET c_freq='5m'").Error)
+	after, err = s.CatalogSnapshot(ctx)
+	require.NoError(t, err)
+	require.Equal(t, before.Revision+1, after.Revision)
+}
+
 func TestReplaceCatalogSnapshotAtomicAndPreservesManifests(t *testing.T) {
 	s := catalogStore(t)
 	ctx := context.Background()
