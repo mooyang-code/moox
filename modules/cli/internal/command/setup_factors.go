@@ -23,6 +23,7 @@ import (
 var factorIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type setupFactorItem struct {
+	FactorType      string
 	FactorID        string
 	Name            string
 	SourceCode      string
@@ -57,28 +58,28 @@ type setupInitFactor interface {
 func defaultSetupFactorItems() []setupconfig.FactorSetupItem {
 	return []setupconfig.FactorSetupItem{
 		{
-			FactorID: "Bias", File: "Bias.py", Name: "Bias",
+			FactorType: "timeseries", FactorID: "Bias", File: "Bias.py", Name: "Bias",
 			InputColumns: []string{"close"}, Outputs: []string{"bias_5", "bias_20"},
 			ParamsJSON: `{"windows":[5,20]}`, LookbackPeriods: 20,
 			SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
 			SubjectMode: "all", Status: "enabled",
 		},
 		{
-			FactorID: "Cci", File: "Cci.py", Name: "Cci",
+			FactorType: "timeseries", FactorID: "Cci", File: "Cci.py", Name: "Cci",
 			InputColumns: []string{"high", "low", "close"}, Outputs: []string{"cci"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
 			SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
 			SubjectMode: "all", Status: "enabled",
 		},
 		{
-			FactorID: "MinMax", File: "MinMax.py", Name: "MinMax",
+			FactorType: "timeseries", FactorID: "MinMax", File: "MinMax.py", Name: "MinMax",
 			InputColumns: []string{"high", "low", "close"}, Outputs: []string{"minmax_20"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
 			SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
 			SubjectMode: "all", Status: "enabled",
 		},
 		{
-			FactorID: "QuoteVolumeMean", File: "QuoteVolumeMean.py", Name: "QuoteVolumeMean",
+			FactorType: "timeseries", FactorID: "QuoteVolumeMean", File: "QuoteVolumeMean.py", Name: "QuoteVolumeMean",
 			InputColumns: []string{"quote_volume"}, Outputs: []string{"quote_volume_mean_20"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
 			SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
@@ -109,6 +110,9 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) ([]setupFa
 	result := make([]setupFactorItem, 0, len(items))
 	seen := make(map[string]struct{}, len(items))
 	for index, item := range items {
+		if item.FactorType != "timeseries" && item.FactorType != "cross_section" {
+			return nil, fmt.Errorf("factors.items[%d].factor_type must be timeseries or cross_section", index)
+		}
 		factorID := strings.TrimSpace(item.FactorID)
 		if !factorIDPattern.MatchString(factorID) {
 			return nil, fmt.Errorf("factors.items[%d].factor_id is invalid", index)
@@ -182,7 +186,8 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) ([]setupFa
 		}
 		hash := sha256.Sum256([]byte(sourceCode))
 		result = append(result, setupFactorItem{
-			FactorID: factorID, Name: name, SourceCode: sourceCode, SourceHash: hex.EncodeToString(hash[:]),
+			FactorType: item.FactorType,
+			FactorID:   factorID, Name: name, SourceCode: sourceCode, SourceHash: hex.EncodeToString(hash[:]),
 			InputColumns: inputColumns, Outputs: outputs, ParamsJSON: params, LookbackPeriods: item.LookbackPeriods,
 			SpaceID: strings.TrimSpace(item.SpaceID), SourceViewID: strings.TrimSpace(item.SourceViewID), Freq: strings.TrimSpace(item.Freq),
 			SubjectMode: subjectMode, Subjects: subjects, Status: status,
@@ -293,6 +298,7 @@ type factorAPIRetInfo struct {
 type factorAPIResponse struct {
 	RetInfo factorAPIRetInfo `json:"ret_info"`
 	Factor  struct {
+		FactorType      string   `json:"factor_type"`
 		FactorID        string   `json:"factor_id"`
 		Name            string   `json:"name"`
 		SourceCode      string   `json:"source_code"`
@@ -352,7 +358,8 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, items []setupFactorItem) 
 		if err != nil {
 			create := factorAPIResponse{}
 			if createErr := r.call(ctx, "CreateFactor", map[string]any{"factor": map[string]any{
-				"factor_id": item.FactorID, "name": item.Name, "source_code": item.SourceCode,
+				"factor_type": item.FactorType,
+				"factor_id":   item.FactorID, "name": item.Name, "source_code": item.SourceCode,
 				"input_columns": item.InputColumns, "outputs": item.Outputs, "params_json": item.ParamsJSON,
 				"lookback_periods": item.LookbackPeriods, "status": "disabled",
 			}}, &create); createErr != nil {
@@ -478,6 +485,7 @@ func (r *remoteSetupFactor) removeObsoleteSetupBindings(ctx context.Context, ite
 }
 
 func sameFactorContract(got struct {
+	FactorType      string   `json:"factor_type"`
 	FactorID        string   `json:"factor_id"`
 	Name            string   `json:"name"`
 	SourceCode      string   `json:"source_code"`
@@ -488,6 +496,9 @@ func sameFactorContract(got struct {
 	LookbackPeriods int      `json:"lookback_periods"`
 	Status          string   `json:"status"`
 }, want setupFactorItem) bool {
+	if got.FactorType != want.FactorType {
+		return false
+	}
 	if got.SourceHash != want.SourceHash || got.Name != want.Name || got.LookbackPeriods != want.LookbackPeriods || !slicesEqual(got.InputColumns, want.InputColumns) || !slicesEqual(got.Outputs, want.Outputs) {
 		return false
 	}

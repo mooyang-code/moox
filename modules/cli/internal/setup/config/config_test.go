@@ -616,6 +616,7 @@ source_dir = "./examples/factors"
 
 [[factors.items]]
 factor_id = "bias"
+factor_type = "timeseries"
 file = "timeseries/bias.py"
 input_columns = ["close"]
 outputs = ["bias_5"]
@@ -640,6 +641,26 @@ func TestLoadDefaultsDisableFactors(t *testing.T) {
 	snapshot, err := Load(writeManifest(t, root, validManifest, 0o600), root)
 	require.NoError(t, err)
 	assert.False(t, snapshot.Manifest.Factors.Enabled)
+}
+
+func TestLoadRejectsInvalidFactorTypeBeforeSetup(t *testing.T) {
+	for _, declaration := range []string{"", "factor_type = \"unknown\""} {
+		root := t.TempDir()
+		body := validManifest + `
+[factors]
+enabled = true
+source_dir = "examples/factors"
+[[factors.items]]
+factor_id = "Bias"
+file = "Bias.py"
+space_id = "crypto"
+source_view_id = "view"
+freq = "1m"
+lookback_periods = 20
+` + declaration + "\n"
+		_, err := Load(writeManifest(t, root, body, 0o600), root)
+		require.ErrorContains(t, err, "factor_type")
+	}
 }
 
 func TestLoadNotificationWebhook(t *testing.T) {

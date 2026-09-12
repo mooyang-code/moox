@@ -8,6 +8,7 @@ describe("factor management contract", () => {
   it("uses explicit generic time-series fields", () => {
     const factor: FactorDef = {
       factor_id: "Bias",
+      factor_type: "timeseries",
       name: "Bias",
       source_code: "def compute(df, params): return {}",
       input_columns: ["nav", "benchmark_return"],
@@ -62,6 +63,13 @@ describe("factor management contract", () => {
   it("uses the period-based runtime contract in the editor", () => {
     expect(factorDefinitionsView).toContain('data-index="lookback_periods"');
     expect(factorDefinitionsView).toContain("return result");
+  });
+
+  it("declares the execution type in the definition editor", () => {
+    expect(factorDefinitionsView).toContain('v-model="form.factor_type"');
+    expect(factorDefinitionsView).toContain('value="timeseries"');
+    expect(factorDefinitionsView).toContain('value="cross_section"');
+    expect(factorDefinitionsView).toContain('factor_type: "timeseries"');
   });
 
   it("keeps source hash and source code in the factor detail drawer", () => {

@@ -415,6 +415,7 @@ def compute(df, params):
 	factorDefs := []*factorpb.FactorDef{
 		{
 			FactorId: factorID, Name: factorName, SourceCode: spreadSource,
+			FactorType:   domain.FactorTypeTimeSeries,
 			InputColumns: []string{inputFieldID}, Outputs: []string{"spread", "rolling_spread"},
 			ParamsJson: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
 				`"output_tag":"venue_pair:binance-okx","window":2}`,
@@ -422,6 +423,7 @@ def compute(df, params):
 		},
 		{
 			FactorId: secondFactorID, Name: secondFactorName, SourceCode: midpointSource,
+			FactorType:   domain.FactorTypeTimeSeries,
 			InputColumns: []string{inputFieldID}, Outputs: []string{"midpoint", "rolling_midpoint"},
 			ParamsJson: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
 				`"output_tag":"venue_pair:binance-okx","window":2}`,

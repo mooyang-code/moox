@@ -64,6 +64,7 @@ source_dir = "./modules/factor/factors"
 
 [[factors.items]]
 factor_id = "Bias"
+factor_type = "timeseries"
 file = "Bias.py"
 name = "Bias"
 input_columns = ["close"]
@@ -78,6 +79,7 @@ status = "enabled"
 
 [[factors.items]]
 factor_id = "Cci"
+factor_type = "timeseries"
 file = "Cci.py"
 name = "Cci"
 input_columns = ["high", "low", "close"]
@@ -92,6 +94,7 @@ status = "enabled"
 
 [[factors.items]]
 factor_id = "MinMax"
+factor_type = "timeseries"
 file = "MinMax.py"
 name = "MinMax"
 input_columns = ["high", "low", "close"]
@@ -106,6 +109,7 @@ status = "enabled"
 
 [[factors.items]]
 factor_id = "QuoteVolumeMean"
+factor_type = "timeseries"
 file = "QuoteVolumeMean.py"
 name = "QuoteVolumeMean"
 input_columns = ["quote_volume"]

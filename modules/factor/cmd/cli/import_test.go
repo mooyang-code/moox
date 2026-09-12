@@ -51,7 +51,7 @@ func TestImportRequiresExplicitFactorType(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "Typed.py")
 			require.NoError(t, os.WriteFile(path, []byte("def compute(df, params): return df\n"), 0o644))
-			cfg := cliConfig{DBPath: filepath.Join(dir, "db"), File: path, FactorID: "Typed", FactorType: factorType, InputColumns: []string{"close"}, Outputs: []string{"value"}, LookbackPeriods: 1}
+			cfg := cliConfig{DBPath: filepath.Join(dir, "db"), FactorsDir: filepath.Join(dir, "artifacts"), File: path, FactorID: "Typed", FactorType: factorType, InputColumns: []string{"close"}, Outputs: []string{"value"}, LookbackPeriods: 1}
 			err := runImport(context.Background(), cfg, &bytes.Buffer{})
 			if factorType == "" || factorType == "bad" {
 				require.ErrorContains(t, err, "factor_type")

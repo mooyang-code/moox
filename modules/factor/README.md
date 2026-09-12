@@ -18,6 +18,7 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
 
 ./bin/moox-factor-cli init --db ./data/factor/factor.db
 ./bin/moox-factor-cli import \
+  --factor-type timeseries \
   --db ./data/factor/factor.db \
   --factors-dir ./factors \
   --file ./factors/Bias.py \
@@ -84,6 +85,7 @@ following example registers the same source with two Bias outputs:
 
 ```bash
 ./bin/moox-factor-cli import \
+  --factor-type timeseries \
   --db ./data/factor/factor.db \
   --factors-dir ./factors \
   --file ./factors/Bias.py \

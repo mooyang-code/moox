@@ -1,0 +1,47 @@
+# Factor 引擎拆分实施进度
+
+## 目标仍未完成
+
+完整目标保持为执行全部拆分计划、独立 Agent 审查、正式环境部署以及实际因子计算验证。下面的基础代码通过不代表引擎拆分、缓存或线上验收完成。
+
+## 工作区
+
+- 实施工作树：`moox/.worktrees/factor-engine-split`，分支 `feature/factor-engine-split`。
+- 基线提交：`de6b22bb`；创建时带入原工作树所有未提交改动的快照，未撤销或提交用户原有改动。
+- 原仓库 `moox.toml` 是主机配置权威位置，未复制到工作树或输出凭证。
+- 后续测试与构建必须在实施工作树运行；依赖 `web/node_modules` 是指向原仓库已安装依赖的软链接，不跟踪提交。
+
+## 已完成的基础子任务
+
+- 因子定义 `factor_type` 必填，domain/schema/store/registry/proto/RPC/导入 CLI 保留类型；实际 catalog 有 12 个时序因子，均显式标注。
+- 公共 setup CLI 的配置读取、CreateFactor 请求、已有契约比较，以及前端表单/reset/API 类型增加 factor_type。
+- 缓存 Config 定义总容量、N、磁盘余量、超时和默认 37m13s；维护回调 gate 验证首次延迟及防重入。尚未接线 tRPC timer，也没有实现 DuckDB 缓存。
+- `05a50bc8` 为类型基础提交；`c07de427` 为缓存配置与运行测试 fixture 提交。后续集成修复单独提交。
+
+## 已获得的验证证据
+
+- Factor 模块 `go test ./...` 通过。
+- inputcache `go test -race ./internal/inputcache` 通过；独立 codeCR 还运行 count=100、race 和 go vet，无已确认问题。构造 gate 前仍须先 Validate 配置。
+- Web 定向 8 测试通过，`npm run build:prod` 通过；有既有 Browserslist/Sass/大 chunk 警告。未做界面运行检查，也未发布 web-host。
+- CLI 定向类型/setup 因子测试及 config 测试通过。
+- CLI 全套曾出现两类失败：新增类型导致 setup_init fixture 缺字段，已修；`TestDefaultMetadataUsesUnifiedCryptoMarket` 的 disabled/active 不匹配，在原工作树独立重现，是现有基线问题，未擅自改动元数据口径。不得报告 CLI 全套通过。
+- 类型独立审查指出 setup/UI 漏传以及配置加载晚校验的问题，已逐项修复并加测试；完整实现之后仍需重新启动最终 codeCR 审查。
+- 类型基础最终 codeCR 复核无剩余阻断；真实导入 catalog 得到 timeseries 12 项。审查发现的 integration 请求漏类型和 CLI 测试污染文件也已修复；integration 仅编译通过，未运行真实环境测试。同 View 混合类型专项测试仍需在后续调度集成补齐。
+- CLI command 排除已在原工作树复现的 `TestDefaultMetadataUsesUnifiedCryptoMarket` 后通过；这不等于全套无失败。
+
+## 部署调查，不是部署证据
+
+- 原 moox.toml 内网 factor-1 为 192.168.0.102，用户 mooyang，SSH 22；外网 control/compile 为 106.53.107.122，用户 ubuntu。
+- 两主机 `ssh -o BatchMode=yes` 均认证失败；现有 CLI SSH 客户端支持从配置取凭据，后续复用其机制，不在日志打印秘密。尚未验证主机架构、磁盘和在线进程。
+- 当前 setup control 包仍显式 `--with-factor`，需要拆掉一体化程序中的 Python/NATS 计算依赖；脚本没有 engine 独立 artifact/lifecycle。
+
+## 紧接着的实施顺序
+
+1. 当前类型集成审查已关闭，后续每个运行行为改动继续独立审查；检查变更仅含本次所有权文件。
+2. 实施 T1 剩余协议：目录版本、绑定 generation、异步回执、心跳、周期身份和公共 View 标的事件；当前只有 factor_type，T1 不能整体标完成。
+3. 实施 T2/T3 两入口、目录快照与版本应用，保证 engine 不开管理端、control 不启动 Python/实时 consumer。
+4. 实施 View 提交后事件/快照读取、按需完整列缓存、tRPC timer 和 N 行文件重建。
+5. 实施统一 compute(df, params, context)、时序微批、截面面板、持久周期跟踪和结果 View 可读 barrier。
+6. 完成补算/UI状态、打包部署脚本、真实 DuckDB/重启/故障测试；独立最终审查后再按 moox.toml 部署内外网并验证新鲜周期计算结果。
+
+当前程序仍是一体化运行方式，不应部署这批基础提交作为最终交付。未删除任何线上数据，未对正式服务执行启停或发布。

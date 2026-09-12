@@ -271,6 +271,7 @@ type FactorSetup struct {
 // source of truth while this block supplies the runtime contract required by
 // FactorMgr and the default source View binding.
 type FactorSetupItem struct {
+	FactorType      string   `toml:"factor_type"`
 	FactorID        string   `toml:"factor_id"`
 	File            string   `toml:"file"`
 	Name            string   `toml:"name"`
@@ -1017,6 +1018,10 @@ func validateFactorSetup(cfg *FactorSetup) error {
 	for index := range cfg.Items {
 		item := &cfg.Items[index]
 		path := fmt.Sprintf("factors.items[%d]", index)
+		item.FactorType = strings.TrimSpace(item.FactorType)
+		if item.FactorType != "timeseries" && item.FactorType != "cross_section" {
+			return fmt.Errorf("config_invalid: %s.factor_type must be timeseries or cross_section", path)
+		}
 		item.FactorID = strings.TrimSpace(item.FactorID)
 		item.File = filepath.ToSlash(filepath.Clean(strings.TrimSpace(item.File)))
 		item.Name = strings.TrimSpace(item.Name)

@@ -252,7 +252,7 @@ timer tick:
 - [ ] UI 增加因子类型和截面缺失策略；展示绑定期望/已应用版本、引擎心跳 stale、补算状态和周期未完成名单。
 - [ ] 引擎离线仍可查看目录；禁止把无心跳显示成正常零任务。补算与实时共享有界资源，避免历史任务耗尽全部实时预算。
 - [ ] 为 API、CLI 和 UI 增加类型、accepted/finished、stale 和 failed 状态测试；从 `modules/factor` 执行 `go test ./internal/rpc`，从 `modules/cli` 执行 `go test ./internal/command`。
-- [ ] 在 `web` 执行 `npx vitest run src/views/factor/__tests__/factor-contract.spec.ts` 与 `npm run build`；人工核查新增控件与原界面一致。
+- [ ] 在 `web` 执行 `npx vitest run src/views/factor/__tests__/factor-contract.spec.ts` 与 `npm run build:prod`；人工核查新增控件与原界面一致。
 - [ ] 提交 `feat(factor): expose engine and recalc progress`。
 
 ### T11：独立打包与部署

@@ -3,9 +3,11 @@ import type { Page, PageResult, RetInfo } from "@/api/storage/types";
 export type FactorStatus = "enabled" | "disabled" | string;
 export type BindingStatus = "enabled" | "disabled" | string;
 export type SubjectMode = "all" | "include" | string;
+export type FactorType = "timeseries" | "cross_section";
 
 export interface FactorDef {
   factor_id: string;
+  factor_type: FactorType;
   name: string;
   source_code: string;
   source_hash?: string;
