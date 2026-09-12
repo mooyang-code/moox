@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
@@ -19,9 +20,10 @@ type Column struct {
 
 // Database is one disposable, immutable-schema generation of a source View.
 type Database struct {
-	db      *sql.DB
-	columns []Column
-	keys    []string
+	db        *sql.DB
+	columns   []Column
+	keys      []string
+	mutations atomic.Uint64
 }
 
 func quoteIdentifier(name string) string {
@@ -41,7 +43,7 @@ func CreateDatabase(ctx context.Context, path string, columns []Column, keys []s
 		}
 		seen[name] = true
 		switch col.Type {
-		case "VARCHAR", "BIGINT", "DOUBLE", "BOOLEAN", "TIMESTAMP_NS", "BLOB", "UBIGINT":
+		case "VARCHAR", "BIGINT", "DOUBLE", "BOOLEAN", "TIMESTAMP_NS", "BLOB", "UBIGINT", "JSON":
 		default:
 			return nil, fmt.Errorf("unsupported cache column type %q", col.Type)
 		}
@@ -55,6 +57,11 @@ func CreateDatabase(ctx context.Context, path string, columns []Column, keys []s
 			return nil, fmt.Errorf("invalid cache primary key %q", key)
 		}
 		keySeen[name] = true
+		for _, column := range columns {
+			if strings.EqualFold(column.Name, key) && column.Name != key {
+				return nil, fmt.Errorf("cache primary key must use exact column name %q", column.Name)
+			}
+		}
 		quotedKeys[i] = quoteIdentifier(key)
 	}
 	defs = append(defs, quoteIdentifier(updatedColumn)+" TIMESTAMP_NS NOT NULL", "PRIMARY KEY ("+strings.Join(quotedKeys, ",")+")")
@@ -110,5 +117,9 @@ func (d *Database) Upsert(ctx context.Context, rows [][]any, updatedAt time.Time
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	d.mutations.Add(1)
+	return nil
 }

@@ -41,3 +41,13 @@ func TestDatabaseRejectsInvalidSchema(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+func TestDatabaseSupportsViewJSONAndRejectsAmbiguousKeyCase(t *testing.T) {
+	ctx := context.Background()
+	db, err := CreateDatabase(ctx, filepath.Join(t.TempDir(), "json.duckdb"), []Column{{"id", "VARCHAR"}, {"payload", "JSON"}}, []string{"id"})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	require.NoError(t, db.Upsert(ctx, [][]any{{"BTC", `{"venue":"A"}`}}, time.Now()))
+	_, err = CreateDatabase(ctx, filepath.Join(t.TempDir(), "case.duckdb"), []Column{{"At", "TIMESTAMP_NS"}}, []string{"at"})
+	require.ErrorContains(t, err, "exact column name")
+}

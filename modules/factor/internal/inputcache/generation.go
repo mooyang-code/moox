@@ -6,26 +6,28 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 )
 
-// Generation protects one View's disposable database. Database pointers must
-// not escape Use; the callback holds a lease until all its operations finish.
+var ErrCacheBusy = errors.New("cache generation is busy")
+
+// Generation serializes database access with maintenance. Cache users fail fast
+// while maintenance runs so the read-through layer can use the source instead.
 type Generation struct {
-	mu     sync.RWMutex
-	change sync.Mutex
-	root   string
-	dir    string
-	db     *Database
-	epoch  uint64
-	closed bool
+	gate        chan struct{}
+	root        string
+	dir         string
+	db          *Database
+	epoch       uint64
+	closed      bool
+	compacted   bool
+	compactedAt uint64
 }
 
 func NewGeneration(ctx context.Context, root string, columns []Column, keys []string) (*Generation, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, err
 	}
-	g := &Generation{root: root}
+	g := &Generation{root: root, gate: make(chan struct{}, 1)}
 	if err := g.ReplaceSchema(ctx, columns, keys); err != nil {
 		return nil, err
 	}
@@ -33,32 +35,52 @@ func NewGeneration(ctx context.Context, root string, columns []Column, keys []st
 }
 
 func (g *Generation) Use(fn func(*Database, uint64) error) error {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
+	select {
+	case g.gate <- struct{}{}:
+		defer func() { <-g.gate }()
+	default:
+		return ErrCacheBusy
+	}
 	if g.db == nil {
 		return fmt.Errorf("cache generation is closed")
 	}
 	return fn(g.db, g.epoch)
 }
 
+func (g *Generation) acquire(ctx context.Context) error {
+	select {
+	case g.gate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-g.gate
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (g *Generation) ReplaceSchema(ctx context.Context, columns []Column, keys []string) error {
-	g.change.Lock()
-	defer g.change.Unlock()
-	return g.replace(ctx, func(path string) (*Database, error) {
-		return CreateDatabase(ctx, path, columns, keys)
-	})
+	if err := g.acquire(ctx); err != nil {
+		return err
+	}
+	defer func() { <-g.gate }()
+	return g.replace(ctx, func(path string) (*Database, error) { return CreateDatabase(ctx, path, columns, keys) })
 }
 
 func (g *Generation) Rebuild(ctx context.Context, keepRows int64) error {
-	g.change.Lock()
-	defer g.change.Unlock()
-	return g.replace(ctx, func(path string) (next *Database, err error) {
-		err = g.Use(func(db *Database, _ uint64) error {
-			next, err = db.Rebuild(ctx, path, keepRows)
-			return err
-		})
-		return next, err
-	})
+	if err := g.acquire(ctx); err != nil {
+		return err
+	}
+	defer func() { <-g.gate }()
+	if g.db == nil {
+		return fmt.Errorf("cache generation is closed")
+	}
+	if err := g.replace(ctx, func(path string) (*Database, error) { return g.db.Rebuild(ctx, path, keepRows) }); err != nil {
+		return err
+	}
+	g.compacted, g.compactedAt = true, g.db.mutations.Load()
+	return nil
 }
 
 func (g *Generation) replace(ctx context.Context, build func(string) (*Database, error)) error {
@@ -74,13 +96,16 @@ func (g *Generation) replace(ctx context.Context, build func(string) (*Database,
 		return errors.Join(err, os.RemoveAll(dir))
 	}
 	if err = ctx.Err(); err != nil {
-		return errors.Join(err, next.Close(), os.RemoveAll(dir))
+		closeErr := next.Close()
+		if closeErr != nil {
+			return errors.Join(err, closeErr)
+		}
+		return errors.Join(err, os.RemoveAll(dir))
 	}
-	g.mu.Lock()
 	old, oldDir := g.db, g.dir
 	g.db, g.dir = next, dir
 	g.epoch++
-	g.mu.Unlock()
+	g.compacted = false
 	if old != nil {
 		if err := old.Close(); err != nil {
 			return err
@@ -91,13 +116,13 @@ func (g *Generation) replace(ctx context.Context, build func(string) (*Database,
 }
 
 func (g *Generation) Close() error {
-	g.change.Lock()
-	defer g.change.Unlock()
+	if err := g.acquire(context.Background()); err != nil {
+		return err
+	}
+	defer func() { <-g.gate }()
 	g.closed = true
-	g.mu.Lock()
 	old, dir := g.db, g.dir
 	g.db = nil
-	g.mu.Unlock()
 	if old == nil {
 		return nil
 	}

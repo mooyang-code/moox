@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"sort"
 
 	"golang.org/x/sys/unix"
 )
@@ -72,7 +73,32 @@ func maintainCapacity(ctx context.Context, cfg Config, generations []*Generation
 	if err != nil {
 		return result, err
 	}
+	type candidate struct {
+		generation *Generation
+		bytes      int64
+	}
+	candidates := []candidate{}
 	for _, generation := range generations {
+		if generation == nil {
+			return result, fmt.Errorf("nil cache generation")
+		}
+		candidateErr := generation.Use(func(db *Database, _ uint64) error {
+			if generation.compacted && generation.compactedAt == db.mutations.Load() {
+				return nil
+			}
+			bytes, err := DirectoryBytes(generation.dir)
+			if err != nil {
+				return err
+			}
+			candidates = append(candidates, candidate{generation, bytes})
+			return nil
+		})
+		if candidateErr != nil {
+			return result, candidateErr
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].bytes > candidates[j].bytes })
+	for _, candidate := range candidates {
 		if result.Bytes <= cfg.MaxBytes {
 			break
 		}
@@ -88,7 +114,7 @@ func maintainCapacity(ctx context.Context, cfg Config, generations []*Generation
 		if remaining < uint64(cfg.MinFreeBytes) || remaining-uint64(cfg.MinFreeBytes) < uint64(result.Bytes) {
 			return result, fmt.Errorf("insufficient disk headroom for cache rebuild")
 		}
-		if err = generation.Rebuild(ctx, cfg.RebuildKeepRows); err != nil {
+		if err = candidate.generation.Rebuild(ctx, cfg.RebuildKeepRows); err != nil {
 			return result, err
 		}
 		result.Rebuilt++
