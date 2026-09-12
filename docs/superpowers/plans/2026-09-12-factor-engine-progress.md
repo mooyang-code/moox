@@ -15,12 +15,16 @@
 
 - 因子定义 `factor_type` 必填，domain/schema/store/registry/proto/RPC/导入 CLI 保留类型；实际 catalog 有 12 个时序因子，均显式标注。
 - 公共 setup CLI 的配置读取、CreateFactor 请求、已有契约比较，以及前端表单/reset/API 类型增加 factor_type。
-- 缓存 Config 定义总容量、N、磁盘余量、超时和默认 37m13s；维护回调 gate 验证首次延迟及防重入。尚未接线 tRPC timer，也没有实现 DuckDB 缓存。
+- 缓存 Config 定义总容量、N、磁盘余量、超时和默认 37m13s；已有 tRPC timer 注册函数、真实 DuckDB 完整行读写、按完整主键分组的历史查询、最近 N 行重建及文件代际管理。尚未接入引擎启动和完整回源覆盖协议。
+- 已有单事务目录快照、版本冲突检查、引擎本机不可变源码准备、NATS 快照请求传输；控制面/引擎独立配置已定义，但程序装配仍未拆分。
+- Python 统一使用 `compute(df, params, context)`，现有脚本和编辑器模板已更新；截面结果逐标的身份已进入校验和写回，缺标默认拒绝。截面调度尚未接入。
+- `23fda150` 增加绑定 incarnation、执行 generation、分代 manifest 和持久化旧 cleanup task；独立审查进行中。跨进程 drain/cleanup/确认仍未实现。
+- EventBus 已支持限时、限次数回复权限，并用真实嵌入式 NATS 验证正常回复和拒绝无关 inbox 发布；凭证生成器与正式 ACL 尚未接入。
 - `05a50bc8` 为类型基础提交；`c07de427` 为缓存配置与运行测试 fixture 提交。后续集成修复单独提交。
 
 ## 已获得的验证证据
 
-- Factor 模块 `go test ./...` 通过。
+- 当前 Factor 模块 `CGO_ENABLED=1 go test ./... -timeout 120s` 通过；引入与 Storage 相同的 DuckDB 驱动后需要 CGO，默认 CGO=0 不能构建缓存包。
 - inputcache `go test -race ./internal/inputcache` 通过；独立 codeCR 还运行 count=100、race 和 go vet，无已确认问题。构造 gate 前仍须先 Validate 配置。
 - Web 定向 8 测试通过，`npm run build:prod` 通过；有既有 Browserslist/Sass/大 chunk 警告。未做界面运行检查，也未发布 web-host。
 - CLI 定向类型/setup 因子测试及 config 测试通过。
@@ -28,6 +32,7 @@
 - 类型独立审查指出 setup/UI 漏传以及配置加载晚校验的问题，已逐项修复并加测试；完整实现之后仍需重新启动最终 codeCR 审查。
 - 类型基础最终 codeCR 复核无剩余阻断；真实导入 catalog 得到 timeseries 12 项。审查发现的 integration 请求漏类型和 CLI 测试污染文件也已修复；integration 仅编译通过，未运行真实环境测试。同 View 混合类型专项测试仍需在后续调度集成补齐。
 - CLI command 排除已在原工作树复现的 `TestDefaultMetadataUsesUnifiedCryptoMarket` 后通过；这不等于全套无失败。
+- 缓存专项审查发现重建并发写、等待取消、重复无效重建、JSON 类型和主键大小写问题；`6fdc7b3e` 已修复并通过竞态测试，等待审查复核。维护期间 `Use` 快速返回 `ErrCacheBusy`，后续回源层必须处理它，不能将其当计算失败。
 
 ## 部署调查，不是部署证据
 
@@ -38,10 +43,10 @@
 ## 紧接着的实施顺序
 
 1. 当前类型集成审查已关闭，后续每个运行行为改动继续独立审查；检查变更仅含本次所有权文件。
-2. 实施 T1 剩余协议：目录版本、绑定 generation、异步回执、心跳、周期身份和公共 View 标的事件；当前只有 factor_type，T1 不能整体标完成。
+2. 完成目录 generation 复核及 T1 剩余协议：异步回执、心跳、周期身份和公共 View 标的事件；T1 不能整体标完成。
 3. 实施 T2/T3 两入口、目录快照与版本应用，保证 engine 不开管理端、control 不启动 Python/实时 consumer。
 4. 实施 View 提交后事件/快照读取、按需完整列缓存、tRPC timer 和 N 行文件重建。
-5. 实施统一 compute(df, params, context)、时序微批、截面面板、持久周期跟踪和结果 View 可读 barrier。
+5. 在统一 Python 契约之上接通时序微批、截面面板、持久周期跟踪和结果 View 可读 barrier。
 6. 完成补算/UI状态、打包部署脚本、真实 DuckDB/重启/故障测试；独立最终审查后再按 moox.toml 部署内外网并验证新鲜周期计算结果。
 
 当前程序仍是一体化运行方式，不应部署这批基础提交作为最终交付。未删除任何线上数据，未对正式服务执行启停或发布。
