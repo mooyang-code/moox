@@ -95,3 +95,19 @@ def compute(df, params, context):
         row.insert(2, "BTC")
     with pytest.raises(ValueError, match="universe"):
         worker.execute_request(meta)
+
+
+def test_cross_section_rejects_missing_subject_before_compute(tmp_path: Path):
+    worker = source_worker(tmp_path, '''
+def compute(df, params, context):
+    raise AssertionError("incomplete universe must not reach the algorithm")
+''')
+    meta = request_meta()
+    meta["factor"].update(factor_type="cross_section", outputs=["rank"])
+    meta["context"] = {**context(), "subject_id": "", "expected_subjects": ["BTC", "ETH"],
+                       "available_subjects": ["BTC"], "missing_subjects": ["ETH"]}
+    meta["df"]["columns"].insert(2, "subject_id")
+    for row in meta["df"]["rows"]:
+        row.insert(2, "BTC")
+    with pytest.raises(ValueError, match="complete expected universe"):
+        worker.execute_request(meta)

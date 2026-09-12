@@ -209,6 +209,8 @@ class FactorWorker:
                                        ("expected_subjects", "available_subjects", "missing_subjects"))
         if not expected or available & missing or available | missing != expected:
             raise ValueError("context subject universe partition is invalid")
+        if missing:
+            raise ValueError("cross_section requires the complete expected universe")
         if "subject_id" not in df or set(df["subject_id"]) != available:
             raise ValueError("cross_section input does not match the available universe")
 
