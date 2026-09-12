@@ -2,6 +2,7 @@ package inputcache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -73,6 +74,10 @@ func maintainCapacity(ctx context.Context, cfg Config, generations []*Generation
 	if err != nil {
 		return result, err
 	}
+	if result.Bytes <= cfg.MaxBytes {
+		result.PauseWrites = false
+		return result, nil
+	}
 	type candidate struct {
 		generation *Generation
 		bytes      int64
@@ -94,6 +99,9 @@ func maintainCapacity(ctx context.Context, cfg Config, generations []*Generation
 			return nil
 		})
 		if candidateErr != nil {
+			if errors.Is(candidateErr, ErrCacheBusy) {
+				continue
+			}
 			return result, candidateErr
 		}
 	}

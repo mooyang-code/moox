@@ -42,3 +42,23 @@ func TestCapacityPausesWhenRebuiltDatabaseStillExceedsBudget(t *testing.T) {
 	require.Zero(t, result.Rebuilt)
 	require.True(t, result.PauseWrites)
 }
+
+func TestCapacityDoesNotTreatActiveUserAsMaintenanceFailure(t *testing.T) {
+	ctx := context.Background()
+	cfg := DefaultConfig()
+	cfg.Dir = t.TempDir()
+	g, err := NewGeneration(ctx, cfg.Dir, []Column{{"id", "VARCHAR"}}, []string{"id"})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, g.Close()) })
+	require.NoError(t, g.Use(func(_ *Database, _ uint64) error {
+		result, err := MaintainCapacity(ctx, cfg, []*Generation{g})
+		require.NoError(t, err)
+		require.False(t, result.PauseWrites)
+		cfg.MaxBytes = 1
+		result, err = MaintainCapacity(ctx, cfg, []*Generation{g})
+		require.NoError(t, err)
+		require.True(t, result.PauseWrites)
+		require.Zero(t, result.Rebuilt)
+		return nil
+	}))
+}
