@@ -41,6 +41,14 @@ func TestBindingGenerationChangesOnlyWithOwnership(t *testing.T) {
 	require.NoError(t, err)
 	generation := bindings[0].BindingGeneration
 	require.NotEmpty(t, generation)
+	takeover := b
+	takeover.BindingID = "different-id"
+	require.ErrorIs(t, s.Bindings().Upsert(ctx, takeover), ErrBindingScopeOccupied)
+	bindings, err = s.Bindings().ListByFactor(ctx, "f")
+	require.NoError(t, err)
+	require.Len(t, bindings, 1)
+	require.Equal(t, b.BindingID, bindings[0].BindingID)
+	require.Equal(t, generation, bindings[0].BindingGeneration)
 	require.NoError(t, s.Bindings().Upsert(ctx, b))
 	bindings, err = s.Bindings().ListByFactor(ctx, "f")
 	require.NoError(t, err)

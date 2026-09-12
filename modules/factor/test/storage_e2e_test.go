@@ -870,7 +870,8 @@ def compute(df, params, context):
 	at := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
 	task, err := taskrunner.BuildTask(taskrunner.TaskScope{
 		TaskID: "view-ready-e2e", TriggerType: "view_ready", SpaceID: "quant",
-		SourceViewID: "prices-view", ResultDatasetID: "spread", SubjectID: "BTC-USDT",
+		BindingGeneration: "e2e-incarnation",
+		SourceViewID:      "prices-view", ResultDatasetID: "spread", SubjectID: "BTC-USDT",
 		Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond),
 	}, domain.FactorDef{
 		FactorID: "venue-spread", Name: "VenueSpread",

@@ -155,16 +155,12 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 			if totalFactors > 1 {
 				currentTaskID = fmt.Sprintf("%s-%d", taskID, taskIndex)
 			}
-			sourceViewID := cfg.ViewID
-			if sourceViewID == "" {
-				sourceViewID = cfg.DatasetID
-			}
-			bindingID := executableBindingID(bindings, factor.FactorID, target, cfg)
-			if bindingID == "" {
-				bindingID = fmt.Sprintf("manual:%s:%s:%s:%s", factor.FactorID, cfg.SpaceID, sourceViewID, cfg.Freq)
+			binding, ok := executableBinding(bindings, factor.FactorID, target, cfg)
+			if !ok {
+				return fmt.Errorf("executable binding not found for factor %s and result %s", factor.FactorID, target)
 			}
 			task, buildErr := taskrunner.BuildTask(taskrunner.TaskScope{
-				TaskID: currentTaskID, BindingID: bindingID,
+				TaskID: currentTaskID, BindingID: binding.BindingID, BindingGeneration: binding.BindingGeneration,
 				TriggerType: "manual", SpaceID: cfg.SpaceID,
 				SourceViewID:  cfg.ViewID,
 				SourceDataset: cfg.DatasetID, TargetDataset: target,
@@ -191,7 +187,7 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	})
 }
 
-func executableBindingID(bindings []domain.FactorBinding, factorID, target string, cfg cliConfig) string {
+func executableBinding(bindings []domain.FactorBinding, factorID, target string, cfg cliConfig) (domain.FactorBinding, bool) {
 	sourceScope := cfg.ViewID
 	if sourceScope == "" {
 		sourceScope = cfg.DatasetID
@@ -207,10 +203,10 @@ func executableBindingID(bindings []domain.FactorBinding, factorID, target strin
 		}
 		if binding.SpaceID == cfg.SpaceID && bindingSource == sourceScope && binding.Freq == cfg.Freq &&
 			binding.FactorID == factorID && bindingTarget == target && domain.BindingAllowsSubject(binding, cfg.SubjectID) {
-			return binding.BindingID
+			return binding, true
 		}
 	}
-	return ""
+	return domain.FactorBinding{}, false
 }
 
 func executableFactorGroups(

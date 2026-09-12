@@ -125,7 +125,7 @@ func TestViewReadyRunnerIsolatesCombinationFailure(t *testing.T) {
 
 func TestViewReadyRunnerClearsSkippedAndUpstreamFailedWithoutRunningThem(t *testing.T) {
 	bindings := periodBindings{rows: []domain.FactorBinding{{
-		BindingID: "binding", FactorID: "factor", SpaceID: "space", SourceViewID: "source_view",
+		BindingID: "binding", BindingGeneration: "incarnation-1", FactorID: "factor", SpaceID: "space", SourceViewID: "source_view",
 		ResultDatasetID: "result", Freq: "1m", SubjectMode: domain.SubjectModeInclude,
 		SubjectsJSON: `["BTC"]`, Status: domain.BindingStatusEnabled,
 	}}}
@@ -147,7 +147,7 @@ func TestViewReadyRunnerClearsSkippedAndUpstreamFailedWithoutRunningThem(t *test
 }
 
 func TestViewReadyRunnerMarksBindingDegradedForAuxiliaryFailure(t *testing.T) {
-	bindings := periodBindings{rows: []domain.FactorBinding{{BindingID: "binding", FactorID: "factor", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "result", Freq: "1m", Status: domain.BindingStatusEnabled}}}
+	bindings := periodBindings{rows: []domain.FactorBinding{{BindingID: "binding", BindingGeneration: "incarnation-1", FactorID: "factor", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "result", Freq: "1m", Status: domain.BindingStatusEnabled}}}
 	storage := new(periodStorageFake)
 	period := time.Date(2026, 8, 10, 4, 0, 0, 0, time.UTC)
 	err := NewViewReadyRunner(bindings, periodFactors{"factor": testFactor("factor")}, new(recordingCombinationRunner), storage, t.TempDir()).Execute(context.Background(), "space", "source-event", &publicstoragepb.ViewSourcePeriodReady{
@@ -182,8 +182,8 @@ func TestViewReadyRunnerRetriesWhileBindingIsPending(t *testing.T) {
 
 func twoPeriodBindings() periodBindings {
 	return periodBindings{rows: []domain.FactorBinding{
-		{BindingID: "b-20-bias20", FactorID: "bias20", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "result", Freq: "1m", Status: domain.BindingStatusEnabled},
-		{BindingID: "b-05-bias5", FactorID: "bias5", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "result", Freq: "1m", Status: domain.BindingStatusEnabled},
+		{BindingID: "b-20-bias20", BindingGeneration: "incarnation-1", FactorID: "bias20", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "result", Freq: "1m", Status: domain.BindingStatusEnabled},
+		{BindingID: "b-05-bias5", BindingGeneration: "incarnation-1", FactorID: "bias5", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "result", Freq: "1m", Status: domain.BindingStatusEnabled},
 	}}
 }
 

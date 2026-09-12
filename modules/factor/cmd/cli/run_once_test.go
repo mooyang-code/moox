@@ -9,9 +9,31 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
 )
+
+func TestManualBindingKeepsIncarnation(t *testing.T) {
+	cfg := cliConfig{SpaceID: "space", ViewID: "source", Freq: "1m", SubjectID: "BTC"}
+	bindings := []domain.FactorBinding{{BindingID: "b", BindingGeneration: "old", FactorID: "f", SpaceID: "space", SourceViewID: "source", ResultDatasetID: "result", Freq: "1m"}}
+	factor := domain.FactorDef{FactorID: "f", FactorType: domain.FactorTypeTimeSeries, SourceHash: "hash", Status: domain.FactorStatusEnabled}
+	factorsDir := t.TempDir()
+	build := func() taskrunner.Task {
+		binding, ok := executableBinding(bindings, "f", "result", cfg)
+		require.True(t, ok)
+		task, err := taskrunner.BuildTask(taskrunner.TaskScope{BindingID: binding.BindingID, BindingGeneration: binding.BindingGeneration, SubjectID: cfg.SubjectID, StartTime: time.Unix(1, 0), EndTime: time.Unix(2, 0)}, factor, factorsDir)
+		require.NoError(t, err)
+		return task
+	}
+	old := build()
+	bindings[0].BindingGeneration = "recreated"
+	next := build()
+	require.NotEqual(t, old.BindingGeneration, next.BindingGeneration)
+	require.NotEqual(t, taskrunner.DeterministicTaskID(old), taskrunner.DeterministicTaskID(next))
+	_, found := executableBinding(nil, "f", "result", cfg)
+	require.False(t, found)
+}
 
 func TestRunOnceLoadsAppConfig(t *testing.T) {
 	runtimeRoot := t.TempDir()

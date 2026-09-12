@@ -11,7 +11,8 @@ import (
 func TestBuildTaskUsesExactlyOneFactor(t *testing.T) {
 	task, err := BuildTask(TaskScope{
 		TaskID: "task-1", TriggerType: "recalc", SpaceID: "crypto",
-		SourceDataset: "bars", TargetDataset: "bars_factor", SubjectID: "BTC",
+		BindingGeneration: "incarnation-1",
+		SourceDataset:     "bars", TargetDataset: "bars_factor", SubjectID: "BTC",
 		Freq: "1m", StartTime: time.Unix(1, 0), EndTime: time.Unix(3, 0),
 	}, domain.FactorDef{
 		FactorType: domain.FactorTypeTimeSeries,
@@ -45,6 +46,13 @@ func TestTaskGenerationVersionsOwnershipAndIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, next.BindingGeneration, reused.BindingGeneration)
 	require.NotEqual(t, DeterministicTaskID(next), DeterministicTaskID(reused))
+	factor.FactorType = domain.FactorTypeCrossSection
+	crossSection, err := BuildTask(scope, factor, "/factor")
+	require.NoError(t, err)
+	require.NotEqual(t, reused.BindingGeneration, crossSection.BindingGeneration)
+	scope.BindingGeneration = ""
+	_, err = BuildTask(scope, factor, "/factor")
+	require.ErrorContains(t, err, "binding generation is required")
 }
 
 func TestBuildTaskRejectsDisabledFactor(t *testing.T) {

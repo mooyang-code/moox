@@ -662,7 +662,8 @@ func TestFactorMutationLifecyclePreventsOldWriteAfterRecalc(t *testing.T) {
 	start := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
 	oldTask, err := taskrunner.BuildTask(taskrunner.TaskScope{
 		TaskID: "old", TriggerType: "recalc",
-		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
+		BindingGeneration: "old-incarnation",
+		SpaceID:           "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
 		SubjectID: "BTC", Freq: "1m", StartTime: start, EndTime: start.Add(time.Nanosecond),
 	}, *factor, t.TempDir())
 	require.NoError(t, err)
@@ -851,6 +852,33 @@ func TestUpsertBindingRejectsInvalidIncludeSubjectsWithoutPersisting(t *testing.
 			require.Empty(t, rows)
 		})
 	}
+}
+
+func TestUpsertBindingRejectsDifferentIDTakingOwnedScope(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	seedRPCFactorDefinition(t, db, "factor")
+	svc := NewWithRuntime(db, nil, WithFactorsDir(t.TempDir()))
+	binding := testBindingPB(domain.SubjectModeAll, `[]`)
+	binding.Status = domain.BindingStatusDisabled
+	rsp, err := svc.UpsertBinding(ctx, &factorpb.UpsertBindingReq{Binding: binding})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	before, err := db.CatalogSnapshot(ctx)
+	require.NoError(t, err)
+	key := store.OutputManifestKey{BindingID: binding.BindingId, BindingGeneration: "old", SubjectID: "BTC", Frequency: "1m", PeriodTime: time.Unix(60, 0)}
+	require.NoError(t, db.OutputManifests().Replace(ctx, key, []string{"old-row"}))
+	binding.BindingId = "takeover"
+	rsp, err = svc.UpsertBinding(ctx, &factorpb.UpsertBindingReq{Binding: binding})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "another ID")
+	after, err := db.CatalogSnapshot(ctx)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	keys, err := db.OutputManifests().Get(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, []string{"old-row"}, keys)
 }
 
 func TestUpsertBindingPersistsCanonicalSubjects(t *testing.T) {

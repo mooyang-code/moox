@@ -173,8 +173,8 @@ func TestViewReadyPipelineFinalReadTimeoutDegradesOnlyFailedSubject(t *testing.T
 
 func testBindings() []domain.FactorBinding {
 	return []domain.FactorBinding{
-		{BindingID: "binding-b", FactorID: "factor-b", SpaceID: "space-a", SourceViewID: "prices-view", ResultDatasetID: "prices-factor", Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled},
-		{BindingID: "binding-a", FactorID: "factor-a", SpaceID: "space-a", SourceViewID: "prices-view", ResultDatasetID: "prices-factor", Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled},
+		{BindingID: "binding-b", BindingGeneration: "incarnation-b", FactorID: "factor-b", SpaceID: "space-a", SourceViewID: "prices-view", ResultDatasetID: "prices-factor", Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled},
+		{BindingID: "binding-a", BindingGeneration: "incarnation-a", FactorID: "factor-a", SpaceID: "space-a", SourceViewID: "prices-view", ResultDatasetID: "prices-factor", Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled},
 	}
 }
 

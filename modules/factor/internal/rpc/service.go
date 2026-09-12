@@ -400,6 +400,12 @@ func (s *Service) UpsertBinding(ctx context.Context, req *factorpb.UpsertBinding
 			"find existing binding %q: %w", binding.BindingID, err,
 		))}, nil
 	}
+	if err := s.bindings.CheckScopeAvailable(ctx, binding); err != nil {
+		if errors.Is(err, store.ErrBindingScopeOccupied) {
+			return &factorpb.UpsertBindingRsp{RetInfo: invalid(err)}, nil
+		}
+		return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}, nil
+	}
 	if s.meta != nil && s.meta.SupportsViews() {
 		if found && (binding.Status == domain.BindingStatusDisabled || binding.Status == domain.BindingStatusCleanupPending) {
 			// A deleted/unavailable Source View must not prevent disabling or
