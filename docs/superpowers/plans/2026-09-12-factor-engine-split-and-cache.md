@@ -14,7 +14,7 @@
 
 1. `moox-factor` 运行在外网，提供定义、绑定、补算受理与状态查询；`moox-factor-engine` 运行在内网，只需出站访问依赖。
 2. 第一版单实例引擎；不实现多节点调度、分布式锁、因子依赖 DAG。
-3. 定义增加 `timeseries` / `cross_section` 类型；lookback 独立配置；现有因子明确标记时序。
+3. 因子定义表增加 `factor_type`，取值为 `timeseries` / `cross_section`；由引擎读取并选择触发方式、准备输入及校验输出。Python 不重复声明类型，也不将其加入函数签名；lookback 独立配置，现有因子明确标记时序。
 4. 时序消费新增的 `ViewSourceSubjectReady`，不等待全部标的；截面消费 `ViewSourcePeriodReady`。
 5. 周期完成跟踪只负责统计预期任务是否终态，不把源周期事件变成时序计算的前置条件。
 6. View 服务虽位于 `modules/storage` 内，但与 Storage Primary 是不同运行职责。源 View 提交后的事件、结果 View 可读事件均由 View 服务发布。
@@ -74,13 +74,12 @@ PeriodIdentity = (space_id, source_view_id, frequency, period_time, catalog_revi
 ### 3.3 Python 契约
 
 ```python
-# timeseries：单标的、按时间排序、截至目标周期的历史窗口
-compute(df, params)
-
-# cross_section：完整历史面板，至少包含 subject_id 和 data_time
-# context 包含 period_time、expected_subjects、available_subjects、missing_subjects
-compute_cross_section(panel, params, context)
+# 两类因子统一入口，factor_type 由引擎从因子定义表读取。
+def compute(df, params, context):
+    ...
 ```
+
+`df` 保留原名称和 DataFrame 角色：timeseries 输入是单标的、按时间排序、截至目标周期的历史窗口；cross_section 输入是多标的历史面板，至少包含 `subject_id` 和 `data_time`。`params` 保留算法配置参数，例如窗口长度，不混入引擎执行状态。新增 `context` 提供 `period_time`、`frequency`、`input_contract_version`；时序必填 `subject_id`，截面必填 `expected_subjects`、`available_subjects`、`missing_subjects`。引擎按定义表中的类型校验所需上下文字段，脚本不维护第二份类型声明。
 
 截面输出必须包含合法标的身份及声明的输出列，不允许写入宇宙外标的或重复结果键。默认严格完整；允许缺失时显式配置策略并记录参与集合。不自动把现有时序脚本解释为截面脚本。
 
@@ -91,13 +90,13 @@ cache:
   enabled: true
   dir: ./data/view-cache
   max_bytes: 21474836480
-  check_interval: 60s
+  check_interval: 37m13s
   rebuild_keep_rows: 100000
   min_free_bytes: 5368709120
   rebuild_timeout: 120s
 ```
 
-以上容量、间隔和 N 是可执行初始示例，不是压测结论。`max_bytes` 是所有缓存文件的总预算；`rebuild_keep_rows` 是每个被选中 View 最多保留的行数。所有值为正；未知键、非法时长、不可写路径启动报错。禁用缓存时保持原回源读取能力。
+以上容量和 N 是可执行初始示例，不是压测结论。检查间隔默认采用 `37m13s`（2233 秒），减少与整分钟、整小时采集任务周期性重合，但不保证完全不碰撞。启动后等待完整间隔再首次检查，不立即触发，不额外引入随机抖动；实现时核对 tRPC timer 的实际调度语义并通过测试验证。`max_bytes` 是所有缓存文件的总预算；`rebuild_keep_rows` 是每个被选中 View 最多保留的行数。所有值为正；未知键、非法时长、不可写路径启动报错。禁用缓存时保持原回源读取能力。
 
 ## 四、任务依赖
 
@@ -179,7 +178,7 @@ T2 + T3 + T9 → T10 补算与控制台 → T11 部署 → T12 验收
 **新增：** `modules/factor/internal/inputcache/{lifecycle,compact}.go`、`internal/bootstrap/cache_timer.go` 及对应测试。
 **修改：** `internal/bootstrap/config.go`、`config/engine.yaml`。
 
-- [ ] 配置测试覆盖 N、容量、间隔、超时非法值；timer 注册沿用 `packages/timerjob` 和 tRPC timer 服务，不另起裸 ticker。
+- [ ] 配置测试覆盖 N、容量、间隔、超时非法值，以及默认 `37m13s` 精确解析为 2233 秒；timer 注册沿用 `packages/timerjob` 和 tRPC timer 服务，不另起裸 ticker。验证启动不立即检查、完整间隔后首次触发及维护防重入。
 - [ ] schema 变化状态机：`active → retired → closed → deleted`；创建新空版本，不 ALTER、不主动回填。新任务禁止引用 retired 文件。
 - [ ] 缓存写入/更新设置本地 `cache_updated_at`；纯读取不刷新；重建复制保留原时间，不把复制行为视为业务更新。
 - [ ] 实现下列限容算法，绑定变量 N 不拼 SQL 值，表名/列名来自受控 schema 标识符编码：
@@ -226,7 +225,8 @@ timer tick:
 
 - [ ] 写测试：周期未终态不执行；严格模式缺标的不计算；显式降级模式返回参与集合；带 lookback 的跨标的面板合法。
 - [ ] 根据固定绑定宇宙读取本地面板，缺口回源，不以另一 consumer 已收到事件作为缓存已就绪证据。
-- [ ] 实现 compute_cross_section 调用和返回校验，拒绝重复主键、宇宙外标的、未知输出列。
+- [ ] 两类因子均调用 `compute(df, params, context)`；更新现有时序脚本和测试，不保留双参数兼容入口或独立截面函数名。引擎从定义表读取 factor_type，分别构造窗口/面板与对应 context，保留 params 作为算法参数。
+- [ ] 测试脚本无类型声明仍可由定义驱动执行，两类输入和上下文均按类型严格校验；截面返回拒绝重复主键、宇宙外标的、未知输出列。
 - [ ] 使用固定 3 标的样本断言 Rank 值及缺失处理；与时序共用资源预算但不共用单标的输入契约。
 - [ ] 执行 `go test ./internal/trigger/...`；在 `modules/factor` 执行 `python3 -m unittest discover -s pyworker -p 'test_*.py'`，使用项目既有 Python 环境。
 - [ ] 提交 `feat(factor): support cross section panel execution`。
@@ -289,6 +289,7 @@ timer tick:
 - [ ] 首次启动与 schema 变化均不主动回填；新增因子已有列无需修改缓存表。
 - [ ] 缓存使用完整 View schema 与列数据，历史窗口不足时正确回源，无旧版本覆盖新版本。
 - [ ] timer 真正使用 tRPC 组件，N 配置生效，无在线 ALTER、无全库周期性清空、无并发删除在用文件。
+- [ ] 默认检查间隔为 `37m13s`，启动等待完整间隔再首次触发；两类因子统一三参数 compute 入口，类型只由定义表管理。
 - [ ] 限容压缩后未保留的数据能触发回源，覆盖证明和 tombstone 不造成错误命中。
 - [ ] 容量软限制、临时双份空间、N 行仍超限及磁盘不足均有可验证退让行为。
 - [ ] 目录版本、任务回执、结果清理清单和周期状态不随输入缓存删除。
