@@ -23,6 +23,7 @@ func TestRoleConfigurationsHaveIndependentStorageAndStrictFields(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, control.Database.Path, engine.Database.Path)
 	require.Equal(t, 2233*time.Second, engine.Cache.CheckInterval)
+	require.Equal(t, 10*time.Minute, engine.CatalogSyncTimeout)
 	_, err = LoadControlConfig(roleConfigFile(t, "engine:\n  python_workers: 64\n"))
 	require.Error(t, err)
 	_, err = LoadControlConfig(roleConfigFile(t, "{}\n---\n{}\n"))
@@ -31,4 +32,6 @@ func TestRoleConfigurationsHaveIndependentStorageAndStrictFields(t *testing.T) {
 	require.ErrorContains(t, err, "rebuild_keep_rows")
 	_, err = LoadEngineApplicationConfig(roleConfigFile(t, "catalog_poll_interval: 0s\n"))
 	require.ErrorContains(t, err, "catalog_poll_interval")
+	_, err = LoadEngineApplicationConfig(roleConfigFile(t, "catalog_sync_timeout: 0s\n"))
+	require.ErrorContains(t, err, "catalog_sync_timeout")
 }

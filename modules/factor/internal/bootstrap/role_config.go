@@ -32,6 +32,7 @@ type EngineApplicationConfig struct {
 	Engine              EngineConfig      `yaml:"engine"`
 	Cache               inputcache.Config `yaml:"cache"`
 	CatalogPollInterval time.Duration     `yaml:"catalog_poll_interval"`
+	CatalogSyncTimeout  time.Duration     `yaml:"catalog_sync_timeout"`
 }
 
 func DefaultControlConfig() *ControlConfig {
@@ -47,7 +48,7 @@ func DefaultEngineApplicationConfig() *EngineApplicationConfig {
 	shared.Engine.FactorsDir = "./data/factor-engine/artifacts"
 	return &EngineApplicationConfig{EngineID: "factor-engine-1", Database: shared.Database,
 		Storage: shared.Storage, EventBus: shared.EventBus, Engine: shared.Engine,
-		Cache: inputcache.DefaultConfig(), CatalogPollInterval: 30 * time.Second}
+		Cache: inputcache.DefaultConfig(), CatalogPollInterval: 30 * time.Second, CatalogSyncTimeout: 10 * time.Minute}
 }
 
 func LoadControlConfig(path string) (*ControlConfig, error) {
@@ -69,8 +70,8 @@ func LoadEngineApplicationConfig(path string) (*EngineApplicationConfig, error) 
 	if err := decodeRoleConfig(path, cfg); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(cfg.EngineID) == "" || cfg.CatalogPollInterval <= 0 {
-		return nil, fmt.Errorf("engine_id and positive catalog_poll_interval are required")
+	if strings.TrimSpace(cfg.EngineID) == "" || cfg.CatalogPollInterval <= 0 || cfg.CatalogSyncTimeout <= 0 {
+		return nil, fmt.Errorf("engine_id and positive catalog_poll_interval/catalog_sync_timeout are required")
 	}
 	if err := validateRoleStorage(cfg.Database, cfg.Storage, cfg.EventBus.URLs); err != nil {
 		return nil, err
