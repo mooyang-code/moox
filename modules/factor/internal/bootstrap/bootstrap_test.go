@@ -91,7 +91,8 @@ func TestTaskValidatorRechecksDefinitionAndBindingScope(t *testing.T) {
 	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
 	ctx := context.Background()
 	factor := domain.FactorDef{
-		FactorID: "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
+		FactorType: domain.FactorTypeTimeSeries,
+		FactorID:   "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
 		LookbackPeriods: 20, Status: domain.FactorStatusEnabled,
 	}
@@ -142,7 +143,8 @@ func TestTaskValidatorPreservesRepositoryAndContextErrors(t *testing.T) {
 		SubjectID: "BTC", Freq: "1m", LookbackPeriods: 20,
 	}}
 	factor := &domain.FactorDef{
-		FactorID: "bias", SourceHash: "hash", InputColumns: []string{"close"},
+		FactorType: domain.FactorTypeTimeSeries,
+		FactorID:   "bias", SourceHash: "hash", InputColumns: []string{"close"},
 		ParamsJSON: `{}`, LookbackPeriods: 20, Status: domain.FactorStatusEnabled,
 	}
 	repositoryErr := errors.New("repository unavailable")
@@ -194,7 +196,8 @@ func TestTaskValidatorTreatsDeletedFactorAsStale(t *testing.T) {
 	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
 	ctx := context.Background()
 	require.NoError(t, db.Factors().Create(ctx, domain.FactorDef{
-		FactorID: "deleted", Name: "Deleted", SourceCode: "x", SourceHash: "hash",
+		FactorType: domain.FactorTypeTimeSeries,
+		FactorID:   "deleted", Name: "Deleted", SourceCode: "x", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"value"}, ParamsJSON: `{}`,
 		LookbackPeriods: 2, Status: domain.FactorStatusEnabled,
 	}))

@@ -192,7 +192,7 @@ func twoPeriodFactors() periodFactors {
 }
 
 func testFactor(id string) domain.FactorDef {
-	return domain.FactorDef{FactorID: id, Name: id, SourceHash: "hash-" + id, InputColumns: []string{"close"}, Outputs: []string{id}, LookbackPeriods: 1, Status: domain.FactorStatusEnabled}
+	return domain.FactorDef{FactorType: domain.FactorTypeTimeSeries, FactorID: id, Name: id, SourceHash: "hash-" + id, InputColumns: []string{"close"}, Outputs: []string{id}, LookbackPeriods: 1, Status: domain.FactorStatusEnabled}
 }
 
 type periodBindings struct{ rows []domain.FactorBinding }

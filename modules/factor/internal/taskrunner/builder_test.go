@@ -14,7 +14,8 @@ func TestBuildTaskUsesExactlyOneFactor(t *testing.T) {
 		SourceDataset: "bars", TargetDataset: "bars_factor", SubjectID: "BTC",
 		Freq: "1m", StartTime: time.Unix(1, 0), EndTime: time.Unix(3, 0),
 	}, domain.FactorDef{
-		FactorID: "bias", Name: "Bias", SourceHash: "h1",
+		FactorType: domain.FactorTypeTimeSeries,
+		FactorID:   "bias", Name: "Bias", SourceHash: "h1",
 		InputColumns: []string{"close", "funding_rate"}, Outputs: []string{"bias"},
 		ParamsJSON: `{}`, LookbackPeriods: 100, Status: domain.FactorStatusEnabled,
 	}, "/factor")
@@ -33,6 +34,6 @@ func TestBuildTaskRejectsInvalidInputs(t *testing.T) {
 func TestBuildTaskRejectsDisabledFactor(t *testing.T) {
 	_, err := BuildTask(TaskScope{
 		SubjectID: "BTC", StartTime: time.Unix(1, 0), EndTime: time.Unix(2, 0),
-	}, domain.FactorDef{FactorID: "f", SourceHash: "hash", Status: domain.FactorStatusDisabled}, "/factor")
+	}, domain.FactorDef{FactorType: domain.FactorTypeTimeSeries, FactorID: "f", SourceHash: "hash", Status: domain.FactorStatusDisabled}, "/factor")
 	require.ErrorContains(t, err, "not enabled")
 }
