@@ -188,9 +188,11 @@ exactly-once，缺口可用 `run-once` 或同步 `RecalcFactor` 修复。
 
 常驻服务把 View 读取与 Python 计算拆成两个独立的有界并发阶段：
 
-- `engine.view_read_workers` 默认 `64`，控制不同 subject 的并行 View 读取；任意读取完成
-  后立即补入下一个 subject，不等待固定批次。
-- `engine.view_read_timeout_ms` 默认 `10000`，控制单次 View RPC；超时任务释放读取槽位并
+- `engine.view_read_workers` 默认 `8`，控制不同 subject 的并行 View 读取；任意读取完成
+  后立即补入下一个 subject，不等待固定批次。不要把默认值调回几十路并发：数百个
+  crypto subject 同时 lookback 会打满 Storage View，表现为 `11003` `i/o timeout`，
+  Factor 输出水位冻结。
+- `engine.view_read_timeout_ms` 默认 `20000`，控制单次 View RPC；超时任务释放读取槽位并
   移到队尾重试一次，不阻塞其他 subject。
 - `engine.python_workers` 默认 `32`，控制全局 Python 计算进程和数据就绪任务并发；启动
   时只预热一个 Python 进程，其余槽位按任务需要惰性启动。

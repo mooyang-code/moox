@@ -26,6 +26,8 @@ EventBus TLS CA、server 证书和每个 NATS role token 是**一份权威材料
 生成与轮换只通过 `skills/moox/scripts/eventbus-credentials.sh`（Admin CLI）。
 不要把 token 或私钥打进 release archive、ZIP、命令行、聊天或 git。
 
+`internal-admin.yaml` 的 `urls` 是控制机回环 `tls://127.0.0.1:4222`。在 Storage 上删 JetStream consumer 时必须 `--eventbus-url tls://<EventBus公网IP>:4222`，见 [`view-catchup.md`](view-catchup.md)。
+
 `rotate --credential <role> --confirm` 会**立刻作废旧 token**。TLS CA 变化时所有客户端的 `ca.pem` 都必须换。
 
 ## 副本清单（漏一项即未完成）

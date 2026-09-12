@@ -64,8 +64,8 @@ type EngineConfig struct {
 const (
 	defaultDatabaseMaxConns  = 1
 	defaultPythonWorkers     = 32
-	defaultViewReadWorkers   = 64
-	defaultViewReadTimeoutMS = 10000
+	defaultViewReadWorkers   = 8
+	defaultViewReadTimeoutMS = 20000
 )
 
 // Load reads YAML config from path and applies factor-specific env overrides.

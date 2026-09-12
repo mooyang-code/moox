@@ -1,6 +1,6 @@
 # moox-cli 运维操作
 
-本文记录 Agent 可以使用的 MooX 队列和 View 自助修复命令。它们只应在对应服务所在的部署主机上执行，并且必须先用 `--dry-run` 确认目标。
+本文记录 Agent 可以使用的 MooX 队列和 View 自助修复命令。它们只应在对应服务所在的部署主机上执行，并且必须先用 `--dry-run` 确认目标。水位停滞的分层诊断、生产路径和 EventBus 地址陷阱见 [`view-catchup.md`](view-catchup.md)。
 
 ## 前置条件
 
@@ -29,7 +29,9 @@ moox-cli factor clear-queue \
 2. 读取 consumer 的 `pending`、`ack_pending`，删除 durable consumer。
 3. 启动 Factor；Factor 会按 `DeliverNew` 重建 consumer，只接收清理完成后的新事件。
 
-该操作不会删除 Factor 定义、结果 View 或 Storage 数据。若只想检查参数，不连接 EventBus：
+该操作不会删除 Factor 定义、结果 View 或 Storage 数据。`--dry-run` 不连接 EventBus，JSON 里的 `pending_before` 恒为 0；真实积压只出现在 `--yes` 的 summary。若 Factor 已在处理当前分钟、但日志是 Storage `:11003` `i/o timeout`，先降 `view_read_workers`（见 `view-catchup.md`），不要反复 `clear-queue`。
+
+只检查参数、不连接 EventBus：
 
 ```bash
 moox-cli factor clear-queue --dry-run
@@ -64,12 +66,17 @@ moox-factor-cli clear-queue --package-root /home/<user>/moox/prod --yes
 
 ```bash
 moox-cli storage repair-view \
-  --storage-conf /home/<user>/moox/prod/storage-view/config/trpc_go.yaml \
-  --package-root /home/<user>/moox/prod \
+  --storage-conf /data/moox/storage/storage/config/storage.yaml \
+  --package-root /data/moox/storage \
   --space-id crypto \
-	--view-id view_crypto_spot_kline_1m_factor \
+  --view-id view_crypto_spot_kline_1m \
+  --consumer storage_view_kline \
+  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
+  --eventbus-url tls://<EventBus公网IP>:4222 \
   --yes
 ```
+
+独立 Storage 主机用上面的 `storage.yaml` 和包根，不要传 `storage-view/config/trpc_go.yaml`。控制机上的 `internal-admin.yaml` 默认 `tls://127.0.0.1:4222`，在 Storage 上必须 `--eventbus-url` 指到 EventBus 公网。四个 crypto kline View 共用 `storage_view_kline`：只在第一个 View 删除 durable，其余 `--reset-consumer=false`。因子 View 用 `--consumer storage_view_factor`。
 
 默认流程：
 
@@ -85,10 +92,13 @@ moox-cli storage repair-view \
 
 ```bash
 moox-cli storage repair-view \
-  --storage-conf /home/<user>/moox/prod/storage-view/config/trpc_go.yaml \
-  --package-root /home/<user>/moox/prod \
+  --storage-conf /data/moox/storage/storage/config/storage.yaml \
+  --package-root /data/moox/storage \
   --space-id crypto \
-	--view-id view_crypto_spot_kline_1m_factor \
+  --view-id view_crypto_spot_kline_1m \
+  --consumer storage_view_kline \
+  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
+  --eventbus-url tls://<EventBus公网IP>:4222 \
   --dry-run
 ```
 
@@ -101,7 +111,7 @@ moox-cli storage repair-view \
 | `--storage-conf` | `MOOX_STORAGE_CONFIG` 或 `config/storage.yaml` | Storage 配置 |
 | `--package-root` | `MOOX_STORAGE_PACKAGE_ROOT` 或配置路径推导值 | `start.sh`/`stop.sh` 所在根目录 |
 | `--stream` | `MOOX_STORAGE` | JetStream stream |
-| `--consumer` | 配置中的分区 durable | Storage View durable consumer；不再使用全局旧 durable |
+| `--consumer` | `storage_view_kline` | 分区 durable；kline 四个行情 View 共用，因子 View 用 `storage_view_factor` |
 | `--deliver-policy` | `new` | 重建 consumer 的投递策略；重放时才使用 `all` |
 | `--credential-file` | Storage/EventBus admin 环境变量 | NATS admin 凭据 |
 | `--eventbus-url` | 凭据文件/环境配置 | 覆盖 EventBus 地址 |
@@ -193,9 +203,9 @@ Storage 服务的时序 View 默认按所有频率回溯 `1000` 根；可在根�
 
 ## Agent 处理顺序
 
-1. 先确认是 Factor durable backlog，还是 Storage View backlog；不要看到结果停滞就直接删除数据。
+1. 按 [`view-catchup.md`](view-catchup.md) 先确认卡在 Primary、View durable、还是 Factor 读超时；不要看到结果停滞就直接删除数据。
 2. 对目标命令执行 `--dry-run`，确认 stream、consumer、Space、View 和 package root。
-3. 优先执行 `factor clear-queue`；只有 View 本身不追赶或需要重新构建时，再执行 `storage repair-view`。
-4. 记录 JSON 中的 pending 数、删除结果、备份路径和重启状态。
-5. 等待新周期事件进入后，再查询 View/Factor 最新 `data_time`；不要用“进程已启动”代替数据已追赶的验收。
+3. Factor 仅在 durable 积压旧周期时 `clear-queue`；View kline 不追赶时 `repair-view`。读超时打满 View 时先降并发，不要循环清队列。
+4. 记录 JSON 中的 pending 数、删除结果、备份路径和重启状态。`repair-view` 在 stop 之后失败时必须把 `storage-view` 拉起来。
+5. 等待新周期事件进入后，再查询 View/Factor 最新 `c_period_time` / `output_watermark`；不要用“进程已启动”代替数据已追赶的验收。
 6. 只有 Source 事件可完整重放、并已确认备份可用时，才升级到 `--reset-view-indexes --deliver-policy=all`。

@@ -110,8 +110,8 @@ grep -Fq 'FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=${HOME}/.config/moo
 grep -Fq 'FACTOR_EVENTBUS_URL_ENV="tls://127.0.0.1:${MOOX_EVENTBUS_PORT:-4222}"' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_EVENTBUS_NATS_URL=${MOOX_FACTOR_EVENTBUS_URL:-${FACTOR_EVENTBUS_URL_ENV}}' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${MOOX_FACTOR_ENGINE_PYTHON_WORKERS:-32}' "${UNPACKED}/start.sh"
-grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS:-64}' "${UNPACKED}/start.sh"
-grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS:-10000}' "${UNPACKED}/start.sh"
+grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS:-8}' "${UNPACKED}/start.sh"
+grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS:-20000}' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers}' "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh"
 grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers}' "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh"
 grep -Fq 'MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target}' "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh"
@@ -167,8 +167,8 @@ EOF
 cmp "${UNPACKED}/expected.argv" "${UNPACKED}/captured.argv"
 
 grep -Fq 'python_workers: 32' "${UNPACKED}/factor/config/app.yaml"
-grep -Fq 'view_read_workers: 64' "${UNPACKED}/factor/config/app.yaml"
-grep -Fq 'view_read_timeout_ms: 10000' "${UNPACKED}/factor/config/app.yaml"
+grep -Fq 'view_read_workers: 8' "${UNPACKED}/factor/config/app.yaml"
+grep -Fq 'view_read_timeout_ms: 20000' "${UNPACKED}/factor/config/app.yaml"
 grep -Fq 'batch_enabled: true' "${UNPACKED}/factor/config/app.yaml"
 ! grep -Fq 'scheduler:' "${UNPACKED}/factor/config/app.yaml"
 

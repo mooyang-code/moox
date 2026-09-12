@@ -76,12 +76,17 @@ frequency 的旧 View 兼容兜底。默认不删 Primary 事实数据；只有�
 
 ```bash
 moox-cli storage repair-view \
-  --storage-conf /data/moox/storage/config/storage.yaml \
+  --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_crypto_spot_kline_1m_factor \
+  --view-id view_crypto_spot_kline_1m \
+  --consumer storage_view_kline \
+  --credential-file /home/ubuntu/.config/moox/eventbus/internal-admin.yaml \
+  --eventbus-url tls://<EventBus公网IP>:4222 \
   --yes
 ```
+
+独立 Storage 主机上的业务配置是 `storage/config/storage.yaml`，不要传 View 的 `trpc_go.yaml`。控制机 `internal-admin.yaml` 的 NATS URL 是回环地址，在 Storage 上必须 `--eventbus-url` 指到 EventBus 公网。四个 crypto kline View 共用 `storage_view_kline`。
 
 默认流程会停止并重启 `storage-view`、删除指定 durable consumer、
 备份 Metadata SQLite，并递增 View desired revision，让服务走正常的 A/B 构建和切换；
@@ -242,6 +247,13 @@ EventBus、CloudNode 和 Collector 固定部署在 `control_host`；Storage 的�
 ```bash
 # 只输出主机名、地址、端口、用户名和角色，不输出密码
 moox-cli setup hosts --file ./moox.toml
+
+# 把 provider=tencent 的主机和 SCF 打进同一云联网，走内网 IP
+moox-cli setup private-network --file ./moox.toml --dry-run
+moox-cli setup private-network --file ./moox.toml --update-scf-gateway
+# 国内函数会改成 Storage 内网 IP；海外函数保持公网。SSH 仍用公网。
+# 组网后填写 storage_private_gateway_host，不要改 storage_gateway_host。
+# 操作说明：skills/moox/references/private-network.md
 
 # --host 必须显式指定 moox.toml 中的主机名
 moox-cli setup deploy-storage --file ./moox.toml --host compute

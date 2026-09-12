@@ -30,7 +30,8 @@ engine:
   worker_path: ./pyworker/worker.py
   factors_dir: ./factors
   python_workers: 32
-  view_read_workers: 64
-  view_read_timeout_ms: 10000
+  # 64 parallel lookbacks overwhelm a busy Storage View and freeze Factor output.
+  view_read_workers: 8
+  view_read_timeout_ms: 20000
   task_timeout_ms: 30000
   batch_enabled: true

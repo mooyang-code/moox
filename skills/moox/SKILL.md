@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo, operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, Tencent Cloud Lighthouse firewall changes, and control-plane maintenance.
+description: Use when working in the MooX monorepo, operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, factor clear-queue, Tencent Cloud Lighthouse firewall changes, CCN/云联网, SCF VPC, 内网组网, private-network, storage_private_gateway_host, and control-plane maintenance.
 ---
 
 # MooX Quant Data System
@@ -85,6 +85,12 @@ Storage `force-rebuild-view`, durable names, defaults, credential lookup, backup
 Never delete a durable consumer or a View index by hand when the corresponding `moox-cli`
 operation is available.
 
+When crypto K-line or Factor watermarks stall, read
+[`references/view-catchup.md`](references/view-catchup.md) first. Measure Primary vs View vs
+Factor separately. A full kline ACK window plus a multi-hour `oldest_pending_event_age` is a
+hung durable, not missing Primary facts. Factor `i/o timeout` to Storage `:11003` with a tiny
+JetStream pending is a View-read stampede, not a reason to keep deleting `factor_view_ready_v1`.
+
 ### Tencent Lighthouse Firewall
 
 When the user provides a Tencent Cloud Lighthouse instance detail URL, use the bundled script to parse the instance ID and call `moox-cli`:
@@ -106,6 +112,15 @@ python3 skills/moox/scripts/tencent_lighthouse_firewall.py add --detail-url '<co
 ```
 
 The script calls `bin/moox-cli` from the repository when present, or `moox-cli` from `PATH`. Tencent credentials should be supplied through `TENCENTCLOUD_SECRET_ID` and `TENCENTCLOUD_SECRET_KEY`; do not echo secrets in final responses or logs.
+
+### Tencent Private Network
+
+When the user asks to join CVM/Lighthouse/SCF into a private network, open
+CCN/云联网, bind SCF VPC, switch Storage RPC to an internal IP, or run
+`setup private-network`, follow
+[`references/private-network.md`](references/private-network.md). Keep
+`storage_gateway_host` public; write only `storage_private_gateway_host`.
+Do not change EventBus, Caddy, or `MOOX_PUBLIC_HOST` to private IPs.
 
 Runtime data can be deleted and rebuilt from `examples/` and service flows. Do not reintroduce standalone acceptance CSV scripts.
 
@@ -248,7 +263,9 @@ When initializing a fresh MooX system, follow
 [`references/custom-setup.md`](references/custom-setup.md) exactly. The user
 creates repository-root `moox.toml` before deployment. The Agent may test only
 whether it exists and must never read, parse, print, copy, or source it outside
-`moox-cli setup`.
+`moox-cli setup`, except the `storage_private_gateway_host` edit in
+[`references/private-network.md`](references/private-network.md) when the user
+explicitly asks to configure private IPs.
 
 Run `validate`, `deploy-control`, `apply`, and `status` in that order. Do not
 ask about Storage until setup is complete and the public login API is verified.
@@ -257,8 +274,9 @@ host, and run `setup deploy-storage`; the four initial Storage processes stay on
 that machine. After Storage is ready, run `setup init --config-dir
 ./config/setup --storage-host <host-name>` to create or verify the
 default Admin spaces and Storage metadata, activate Datasets, and verify the
-result. Keep `moox.toml` unchanged and never parse either its secrets or a
-generated filtered seed in Agent context.
+result. Keep `moox.toml` secrets unchanged and never parse a generated filtered seed
+in Agent context. After Tencent hosts exist, private-network setup is
+[`references/private-network.md`](references/private-network.md).
 
 `t_service_deployments` remains the source of truth for service addresses.
 `/#/ops/storage/nodes` remains the separate PrimaryStore topology and is never
