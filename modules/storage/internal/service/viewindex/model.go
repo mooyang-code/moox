@@ -146,20 +146,21 @@ type TimeSeriesSelector struct {
 }
 
 type QuerySpec struct {
-	Keys         []*pb.RowKey
-	Selectors    []TimeSeriesSelector
-	TimeRange    *pb.TimeRange
-	VersionRange *pb.VersionRange
-	TextQuery    string
-	Groups       []FilterGroup
-	GroupLogical pb.FilterLogical
-	Sorts        []*pb.SortSpec
-	Order        pb.SortOrder
-	Includes     []string
-	AfterKey     *pb.RowKey
-	Offset       int
-	Limit        int
-	TotalMode    pb.TotalMode
+	RowsPerSeries int
+	Keys          []*pb.RowKey
+	Selectors     []TimeSeriesSelector
+	TimeRange     *pb.TimeRange
+	VersionRange  *pb.VersionRange
+	TextQuery     string
+	Groups        []FilterGroup
+	GroupLogical  pb.FilterLogical
+	Sorts         []*pb.SortSpec
+	Order         pb.SortOrder
+	Includes      []string
+	AfterKey      *pb.RowKey
+	Offset        int
+	Limit         int
+	TotalMode     pb.TotalMode
 }
 
 // Engine is the single physical View index contract. Index existence is owned
