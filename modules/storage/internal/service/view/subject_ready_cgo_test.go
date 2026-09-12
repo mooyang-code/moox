@@ -36,13 +36,16 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.NoError(t, svc.AttachActiveView(&pb.View{SpaceId: "space", ViewId: "prices", PrimaryDatasetId: "market_prices", DatasetIds: []string{"market_prices"}, Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema", ActiveColumns: columns, Status: "active"}))
 	row := viewFreshnessRow("BTC", "1m", "venue:test", "2026-09-08T10:04:00Z")
 	payload, err := eventmapper.ToEventRows(&pb.RowsUpserted{SpaceId: "space", DatasetId: "market_prices", Rows: []*pb.RowFieldUpsert{row}})
 	require.NoError(t, err)
 	published := false
 	payload.SourceNodeId, payload.SourceSequence = "node", 1
 	payload.SourceStoreId = "store"
+	message := &eventpb.EventMessage{EventId: "btc-row", SpaceId: "space", SubjectId: "market_prices", OccurredAt: timestamppb.Now()}
+	// The first-build row is journaled without an active index or publisher.
+	require.NoError(t, svc.HandleDatasetRows(ctx, message, payload))
+	require.NoError(t, svc.AttachActiveView(&pb.View{SpaceId: "space", ViewId: "prices", PrimaryDatasetId: "market_prices", DatasetIds: []string{"market_prices"}, Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema", ActiveColumns: columns, Status: "active"}))
 	svc.readyPublisher = subjectPublisherFunc(func(ctx context.Context, _ events.Event, _ proto.Message, _ events.PublishOptions) (*jetstream.PublishAck, error) {
 		rows, err := svc.query(ctx, "prices-a", []*pb.RowKey{row.Key}, nil)
 		require.NoError(t, err)
@@ -51,6 +54,9 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 		published = true
 		return &jetstream.PublishAck{}, nil
 	})
-	require.NoError(t, svc.HandleDatasetRows(ctx, &eventpb.EventMessage{EventId: "btc-row", SpaceId: "space", SubjectId: "market_prices", OccurredAt: timestamppb.Now()}, payload))
+	require.NoError(t, svc.ReplayPendingSubjects(ctx))
+	require.True(t, published)
+	published = false
+	require.NoError(t, svc.HandleDatasetRows(ctx, message, payload))
 	require.True(t, published)
 }

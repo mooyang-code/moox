@@ -237,19 +237,27 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	if opts.Metrics != nil && reader != nil {
 		opts.Metrics.SetConsumerBound(reader())
 	}
-	return func() {
+	stop := func() {
 		stopAll()
 		if opts.Metrics != nil {
 			opts.Metrics.SetConsumerBound(false)
 		}
 		s.mu.Lock()
+		s.readyPublisher = nil
 		s.consumerState = nil
 		s.consumerBound = nil
 		s.consumerStates = make(map[string]func(context.Context) (jetstream.ConsumerState, error))
 		s.consumerBounds = make(map[string]func() bool)
 		s.consumerPartitionByDataset = make(map[datasetRef]string)
 		s.mu.Unlock()
-	}, nil
+	}
+	// Active indexes are restored before the publisher is installed. Drain
+	// persisted readiness even when periodic View maintenance is disabled.
+	if err := s.ReplayPendingSubjects(ctx); err != nil {
+		stop()
+		return nil, fmt.Errorf("restore pending View subject readiness: %w", err)
+	}
+	return stop, nil
 }
 
 func (s *Service) bindDynamicDatasetConsumer(ctx context.Context, client *jetstream.Client, spec dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {

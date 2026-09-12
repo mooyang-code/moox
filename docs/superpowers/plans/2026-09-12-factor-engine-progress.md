@@ -43,6 +43,9 @@
 - 标的事件中间审查发现两个未关闭问题：首次构建仅写 B 索引后会 ACK，需要持久待发布记录并在激活后恢复发布；现有 `readIndexRevision` 是 UpdatedAt 的 hash，不能当作可比较的变更序号，标的事件仍缺少持久来源位置。当前发布实现仅覆盖 active 正常写入路径，不得作为完整可靠交付部署。事件 ID 包含物理代际，同一来源在新代际重新就绪时会产生新 ID，后续任务去重须明确这一范围。
 - 来源位置协议已继续补齐：DataNode 在原子 outbox 批次中写入 `source_node_id/source_store_id/source_sequence`，View 批处理保留并转发，序号只在同一 node/store 内比较。新空库持久生成 store incarnation，普通重启保持，重新创建的库使用不同 incarnation；已存在数据但缺少身份的库直接拒绝启动，不做兼容迁移。源码 ID 和默认 outbox ID 均隔离 store incarnation。复制/回滚旧数据库快照不等于重新建库，不能把这种人工回滚当作普通重启使用。
 - 公共行事件及标的事件都要求完整来源位置，内部待绑定消息不再走公共编码器。新增重启序号、存储实例隔离及重绑拒绝测试，定向竞态测试通过。引擎的任务修订比较和首次构建待发布队列仍未实现，不能据此宣布上述端到端风险均已关闭。
+- 首次构建补发继续实现：B-only 写入成功后，按原始行身份将待发布记录以临时文件、fsync、rename、目录 fsync 持久化，完成后才允许上游 ACK。日志位于 View 根目录 `pending-subjects`，不是可清除的 Factor 输入缓存。激活后及周期维护会确认 active 中该行可读再发布；发布失败保留记录，重启可继续，不重写旧字段值。记录绑定原 schema hash/version 与 primary dataset；当前契约变化或行已超出 View keep_duration 时清除失效记录。相同契约且仍在保留期的缺失行保留等待恢复，不设置任意丢弃 TTL。
+- 本阶段测试覆盖进程对象重建后的补发、发布失败重试、B-only 写入前后顺序、契约变化不误发、并发回放等待及真实 DuckDB 的首次构建补发。View/eventconsumer 测试排除先前独立复现的容量审计基线失败后通过。程序入口与引擎消费仍未接线，不是正式运行验收。
+- 独立复查发现关闭 View 定时维护时启动可能遗漏 journal 回放，已在 StartEventConsumer 安装 publisher 后、返回成功前同步恢复；失败清理消费者并返回启动错误。真实嵌入 JetStream 测试验证不启动维护也能补发并删除记录，定向 race 通过；补充 primary 替换和保留期过期不误发测试，View/eventconsumer 排除上述基线用例后重新通过。独立复核未发现剩余阻断问题，完整系统最终审查仍未进行。
 
 ## 部署调查，不是部署证据
 

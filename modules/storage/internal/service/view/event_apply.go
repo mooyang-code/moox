@@ -199,7 +199,8 @@ func (s *Service) applyDatasetEventWithOrigins(ctx context.Context, spaceID, dat
 			s.observeViewWatermark(indexID, datasetID, writtenRows, false)
 		}
 		if nextID != "" {
-			if _, err := s.applyEventToIndex(ctx, nextID, datasetID, rows); err != nil {
+			nextRows, nextWriteErr := s.applyEventToIndex(ctx, nextID, datasetID, rows)
+			if err := nextWriteErr; err != nil {
 				failedID := nextID
 				failedGeneration := s.indexGenerationOf(failedID)
 				// A live delivery has a short deadline. A timeout while the
@@ -256,6 +257,10 @@ func (s *Service) applyDatasetEventWithOrigins(ctx context.Context, spaceID, dat
 				// durable stream. Once the row is safely written to B it may be
 				// ACKed; reconciliation keeps B non-authoritative until the
 				// replacement is durably READY and activated.
+				if err := s.persistPendingSubjects(ctx, viewKey, nextID, datasetID, nextRows, origins); err != nil {
+					runtime.mu.Unlock()
+					return err
+				}
 				runtime.mu.Unlock()
 				continue
 			}

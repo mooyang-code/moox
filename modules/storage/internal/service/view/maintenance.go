@@ -416,7 +416,7 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 	// Audit persistence is best-effort and must never hold up View state
 	// transitions. Retry terminal log updates before processing the next pass.
 	s.drainRebuildLogRetries(ctx)
-	var firstErr error
+	firstErr := s.ReplayPendingSubjects(ctx)
 	for pageNo := uint32(1); ; pageNo++ {
 		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
 		if err != nil {
@@ -1397,6 +1397,11 @@ func (s *Service) activateViewBuild(ctx context.Context, opts MaintenanceOptions
 	// until the next live event arrives (or indefinitely when the durable was
 	// reset during repair).
 	s.observeActivatedViewWatermark(view, indexID)
+	if err := s.ReplayPendingSubjects(ctx); err != nil {
+		// Activation has committed. The journal retains failed publications
+		// for maintenance retries; a bus failure must not fail this build.
+		log.Printf("storage View pending subject publication after activation failed: %v", err)
+	}
 	return nil
 }
 
