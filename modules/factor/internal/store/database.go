@@ -165,11 +165,11 @@ func (s *Store) validateSchemaTables(tables []string) error {
 			"c_status", "c_ctime", "c_mtime",
 		},
 		"t_factor_bindings": {
-			"c_binding_id", "c_factor_id", "c_space_id", "c_source_view_id", "c_freq",
+			"c_binding_id", "c_binding_generation", "c_factor_id", "c_space_id", "c_source_view_id", "c_freq",
 			"c_subject_mode", "c_subjects_json", "c_result_dataset_id", "c_result_view_id", "c_status", "c_ctime", "c_mtime",
 		},
 		"t_factor_output_manifests": {
-			"c_binding_id", "c_subject_id", "c_frequency", "c_period_time", "c_row_keys_json", "c_updated_at",
+			"c_binding_id", "c_binding_generation", "c_cleanup_task_json", "c_subject_id", "c_frequency", "c_period_time", "c_row_keys_json", "c_updated_at",
 		},
 	}
 	if len(tables) != len(expected) {

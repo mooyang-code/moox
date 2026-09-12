@@ -282,7 +282,8 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		for _, binding := range selected {
 			task, buildErr := taskrunner.BuildTask(taskrunner.TaskScope{
 				BindingID: binding.BindingID, TriggerType: "view_ready", SpaceID: spaceID,
-				SourceViewID: binding.SourceViewID, ResultDatasetID: binding.ResultDatasetID,
+				BindingGeneration: binding.BindingGeneration,
+				SourceViewID:      binding.SourceViewID, ResultDatasetID: binding.ResultDatasetID,
 				SubjectID: subjectID, Freq: binding.Freq, PeriodTime: ready.GetPeriodTime(),
 				TriggerEventID: triggerEventID, TriggeredAt: triggeredAt, StartTime: period, EndTime: periodEnd,
 				ExpectedActiveIndexID:       ready.GetActiveIndexId(),

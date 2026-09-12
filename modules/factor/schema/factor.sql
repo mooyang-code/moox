@@ -31,6 +31,7 @@ CREATE INDEX IF NOT EXISTS idx_factor_defs_status ON t_factor_defs (c_status);
 
 CREATE TABLE IF NOT EXISTS t_factor_bindings (
     c_binding_id TEXT NOT NULL PRIMARY KEY,
+    c_binding_generation TEXT NOT NULL DEFAULT '',
     c_factor_id TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
     c_source_view_id TEXT NOT NULL,
@@ -53,13 +54,16 @@ ON t_factor_bindings (c_space_id, c_source_view_id, c_freq, c_status);
 
 CREATE TABLE IF NOT EXISTS t_factor_output_manifests (
     c_binding_id TEXT NOT NULL,
+    c_binding_generation TEXT NOT NULL DEFAULT '',
+    c_cleanup_task_json TEXT NOT NULL DEFAULT '',
     c_subject_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_period_time INTEGER NOT NULL,
     c_row_keys_json TEXT NOT NULL DEFAULT '[]',
     c_updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_binding_id, c_subject_id, c_frequency, c_period_time)
+    PRIMARY KEY (c_binding_id, c_binding_generation, c_subject_id, c_frequency, c_period_time)
 );
+
 
 CREATE TRIGGER IF NOT EXISTS update_factor_defs_mtime
 AFTER UPDATE ON t_factor_defs
@@ -90,8 +94,9 @@ BEGIN UPDATE t_factor_catalog SET c_revision = c_revision + 1, c_snapshot_hash =
 CREATE TRIGGER IF NOT EXISTS factor_catalog_bindings_delete AFTER DELETE ON t_factor_bindings
 BEGIN UPDATE t_factor_catalog SET c_revision = c_revision + 1, c_snapshot_hash = '' WHERE c_id = 1; END;
 CREATE TRIGGER IF NOT EXISTS factor_catalog_bindings_update
-AFTER UPDATE OF c_binding_id, c_factor_id, c_space_id, c_source_view_id, c_freq, c_subject_mode, c_subjects_json, c_result_dataset_id, c_result_view_id, c_status ON t_factor_bindings
+AFTER UPDATE OF c_binding_id, c_binding_generation, c_factor_id, c_space_id, c_source_view_id, c_freq, c_subject_mode, c_subjects_json, c_result_dataset_id, c_result_view_id, c_status ON t_factor_bindings
 WHEN NEW.c_binding_id IS NOT OLD.c_binding_id
+    OR NEW.c_binding_generation IS NOT OLD.c_binding_generation
     OR NEW.c_factor_id IS NOT OLD.c_factor_id
     OR NEW.c_space_id IS NOT OLD.c_space_id
     OR NEW.c_source_view_id IS NOT OLD.c_source_view_id

@@ -89,10 +89,11 @@ func EncodeJSONBatchRequestMeta(batch *BatchTask, frame *DataFrame) (map[string]
 		factors = append(factors, map[string]any{
 			"context": encodeTaskContext(&task),
 			"task_id": task.TaskID, "binding_id": task.BindingID,
-			"lookback_periods":  task.LookbackPeriods,
-			"target_start_time": task.StartTime.UTC().Format(time.RFC3339Nano),
-			"target_end_time":   task.EndTime.UTC().Format(time.RFC3339Nano),
-			"factor":            factor,
+			"binding_generation": task.BindingGeneration,
+			"lookback_periods":   task.LookbackPeriods,
+			"target_start_time":  task.StartTime.UTC().Format(time.RFC3339Nano),
+			"target_end_time":    task.EndTime.UTC().Format(time.RFC3339Nano),
+			"factor":             factor,
 		})
 	}
 	return map[string]any{

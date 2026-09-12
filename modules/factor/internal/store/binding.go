@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -42,25 +44,31 @@ func (r *BindingRepository) Upsert(ctx context.Context, binding domain.FactorBin
 		var existing domain.FactorBinding
 		err := r.db.WithContext(ctx).Where("c_binding_id = ?", binding.BindingID).First(&existing).Error
 		if err == nil {
+			binding.BindingGeneration = existing.BindingGeneration
+			if binding.FactorID != existing.FactorID || binding.SpaceID != existing.SpaceID || binding.SourceViewID != existing.SourceViewID || binding.Freq != existing.Freq || binding.SubjectMode != existing.SubjectMode || binding.SubjectsJSON != existing.SubjectsJSON || binding.ResultDatasetID != existing.ResultDatasetID || binding.ResultViewID != existing.ResultViewID {
+				binding.BindingGeneration = newBindingGeneration()
+			}
 			return r.db.WithContext(ctx).Model(&domain.FactorBinding{}).
 				Where("c_binding_id = ?", binding.BindingID).
 				Updates(map[string]any{
-					"c_factor_id":         binding.FactorID,
-					"c_space_id":          binding.SpaceID,
-					"c_source_view_id":    binding.SourceViewID,
-					"c_freq":              binding.Freq,
-					"c_subject_mode":      binding.SubjectMode,
-					"c_subjects_json":     binding.SubjectsJSON,
-					"c_result_dataset_id": binding.ResultDatasetID,
-					"c_result_view_id":    binding.ResultViewID,
-					"c_status":            binding.Status,
-					"c_mtime":             binding.ModifyTime,
+					"c_binding_generation": binding.BindingGeneration,
+					"c_factor_id":          binding.FactorID,
+					"c_space_id":           binding.SpaceID,
+					"c_source_view_id":     binding.SourceViewID,
+					"c_freq":               binding.Freq,
+					"c_subject_mode":       binding.SubjectMode,
+					"c_subjects_json":      binding.SubjectsJSON,
+					"c_result_dataset_id":  binding.ResultDatasetID,
+					"c_result_view_id":     binding.ResultViewID,
+					"c_status":             binding.Status,
+					"c_mtime":              binding.ModifyTime,
 				}).Error
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 	}
+	binding.BindingGeneration = newBindingGeneration()
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "c_factor_id"},
@@ -69,6 +77,7 @@ func (r *BindingRepository) Upsert(ctx context.Context, binding domain.FactorBin
 			{Name: "c_freq"},
 		},
 		DoUpdates: clause.AssignmentColumns([]string{
+			"c_binding_generation",
 			"c_binding_id",
 			"c_subject_mode",
 			"c_subjects_json",
@@ -168,6 +177,14 @@ func (r *BindingRepository) Delete(ctx context.Context, bindingID string) error 
 		return gorm.ErrRecordNotFound
 	}
 	return nil
+}
+
+func newBindingGeneration() string {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(value[:])
 }
 
 func normalizeBinding(binding *domain.FactorBinding) {

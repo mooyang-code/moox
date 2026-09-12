@@ -31,6 +31,22 @@ func TestBuildTaskRejectsInvalidInputs(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTaskGenerationVersionsOwnershipAndIdentity(t *testing.T) {
+	scope := TaskScope{BindingID: "b", BindingGeneration: "incarnation-1", SubjectID: "BTC", StartTime: time.Unix(1, 0), EndTime: time.Unix(2, 0)}
+	factor := domain.FactorDef{FactorType: domain.FactorTypeTimeSeries, FactorID: "f", SourceHash: "hash", Status: domain.FactorStatusEnabled, Outputs: []string{"old"}}
+	old, err := BuildTask(scope, factor, "/factor")
+	require.NoError(t, err)
+	factor.Outputs = []string{"new"}
+	next, err := BuildTask(scope, factor, "/factor")
+	require.NoError(t, err)
+	require.NotEqual(t, old.BindingGeneration, next.BindingGeneration)
+	scope.BindingGeneration = "incarnation-2"
+	reused, err := BuildTask(scope, factor, "/factor")
+	require.NoError(t, err)
+	require.NotEqual(t, next.BindingGeneration, reused.BindingGeneration)
+	require.NotEqual(t, DeterministicTaskID(next), DeterministicTaskID(reused))
+}
+
 func TestBuildTaskRejectsDisabledFactor(t *testing.T) {
 	_, err := BuildTask(TaskScope{
 		SubjectID: "BTC", StartTime: time.Unix(1, 0), EndTime: time.Unix(2, 0),

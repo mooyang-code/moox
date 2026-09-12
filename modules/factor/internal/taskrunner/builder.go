@@ -1,7 +1,10 @@
 package taskrunner
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -13,6 +16,7 @@ import (
 type TaskScope struct {
 	TaskID                      string
 	BindingID                   string
+	BindingGeneration           string
 	TriggerType                 string
 	SpaceID                     string
 	SourceViewID                string
@@ -60,10 +64,15 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 	if sourcePath == "" {
 		sourcePath = filepath.Join(factorsDir, ".versions", "factor", factor.Name, factor.SourceHash, "module.py")
 	}
+	// Bind the catalog incarnation to its immutable output schema and routing.
+	// Factor output edits therefore cannot reuse an earlier manifest owner.
+	ownership, _ := json.Marshal([]any{scope.BindingGeneration, scope.BindingID, scope.SpaceID, scope.SourceViewID, scope.ResultDatasetID, scope.Freq, factor.FactorID, factor.Outputs})
+	generation := fmt.Sprintf("%x", sha256.Sum256(ownership))
 	return Task{
 		FactorTask: engine.FactorTask{
 			TaskID: scope.TaskID, BindingID: scope.BindingID, SpaceID: scope.SpaceID,
-			SourceViewID: scope.SourceViewID, ResultDatasetID: scope.ResultDatasetID,
+			BindingGeneration: generation,
+			SourceViewID:      scope.SourceViewID, ResultDatasetID: scope.ResultDatasetID,
 			ExpectedActiveIndexID:       scope.ExpectedActiveIndexID,
 			ExpectedActiveIndexRevision: scope.ExpectedActiveIndexRevision,
 			SourceDataset:               scope.SourceViewID, TargetDataset: scope.ResultDatasetID,

@@ -51,6 +51,15 @@ func (c *Client) WithOutputManifests(manifests OutputManifestStore) *Client {
 	return c
 }
 
+func outputManifestKey(task *engine.FactorTask) store.OutputManifestKey {
+	// Persist the old routing and output definition, not a pointer into the catalog.
+	cleanup := *task
+	cleanup.TaskID, cleanup.TriggerEventID = "", ""
+	cleanup.TriggeredAt = time.Time{}
+	raw, _ := json.Marshal(cleanup)
+	return store.OutputManifestKey{BindingID: task.BindingID, BindingGeneration: task.BindingGeneration, CleanupTaskJSON: string(raw), SubjectID: task.SubjectID, Frequency: task.Freq, PeriodTime: time.Unix(task.PeriodTime, 0).UTC()}
+}
+
 type factorRowKey struct {
 	SpaceID   string `json:"space_id"`
 	DatasetID string `json:"dataset_id"`
@@ -67,7 +76,7 @@ func (c *Client) WriteFactorPatch(ctx context.Context, task *engine.FactorTask, 
 	if c.manifests == nil {
 		return c.writeLegacyFactorPatch(ctx, task, result)
 	}
-	key := store.OutputManifestKey{BindingID: task.BindingID, SubjectID: task.SubjectID, Frequency: task.Freq, PeriodTime: time.Unix(task.PeriodTime, 0).UTC()}
+	key := outputManifestKey(task)
 	previous, err := c.manifests.Get(ctx, key)
 	if err != nil {
 		return 0, fmt.Errorf("load factor output manifest: %w", err)
@@ -149,7 +158,7 @@ func (c *Client) WriteFactorPatches(ctx context.Context, patches []FactorPatch) 
 		} else if currentBatchKey != batchKey {
 			return nil, fmt.Errorf("factor patches must share space, result dataset, subject, frequency and period")
 		}
-		key := store.OutputManifestKey{BindingID: task.BindingID, SubjectID: task.SubjectID, Frequency: task.Freq, PeriodTime: time.Unix(task.PeriodTime, 0).UTC()}
+		key := outputManifestKey(task)
 		previous, err := c.manifests.Get(ctx, key)
 		if err != nil {
 			return nil, fmt.Errorf("load factor output manifest: %w", err)
@@ -327,7 +336,7 @@ func deterministicBatchWriteID(patches []preparedFactorPatch, phase string, rows
 		if patch.task == nil {
 			continue
 		}
-		parts = append(parts, patch.task.TriggerEventID+"\x00"+patch.task.BindingID+"\x00"+patch.task.SubjectID+"\x00"+strconv.FormatInt(patch.task.PeriodTime, 10)+"\x00"+patch.task.Factor.FactorID)
+		parts = append(parts, patch.task.TriggerEventID+"\x00"+patch.task.BindingID+"\x00"+patch.task.BindingGeneration+"\x00"+patch.task.SubjectID+"\x00"+strconv.FormatInt(patch.task.PeriodTime, 10)+"\x00"+patch.task.Factor.FactorID)
 	}
 	sort.Strings(parts)
 	planHash := sha256.Sum256(canonicalWritePlan(rows))
@@ -442,7 +451,7 @@ func protoBytes(message proto.Message) []byte {
 
 func deterministicWriteID(task *engine.FactorTask, phase string, rows []*storagepb.RowFieldUpsert) string {
 	planHash := sha256.Sum256(canonicalWritePlan(rows))
-	sum := sha256.Sum256([]byte(task.TriggerEventID + "\x00" + task.BindingID + "\x00" + task.SubjectID + "\x00" + strconv.FormatInt(task.PeriodTime, 10) + "\x00" + phase + "\x00" + hex.EncodeToString(planHash[:])))
+	sum := sha256.Sum256([]byte(task.TriggerEventID + "\x00" + task.BindingID + "\x00" + task.BindingGeneration + "\x00" + task.SubjectID + "\x00" + strconv.FormatInt(task.PeriodTime, 10) + "\x00" + phase + "\x00" + hex.EncodeToString(planHash[:])))
 	return "factor-" + hex.EncodeToString(sum[:16])
 }
 

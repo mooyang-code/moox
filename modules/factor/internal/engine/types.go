@@ -15,6 +15,7 @@ type DataFrame struct {
 type FactorTask struct {
 	TaskID                      string
 	BindingID                   string
+	BindingGeneration           string
 	SpaceID                     string
 	SourceViewID                string
 	ExpectedActiveIndexID       string

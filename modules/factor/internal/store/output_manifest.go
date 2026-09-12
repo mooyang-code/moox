@@ -16,10 +16,12 @@ import (
 
 // OutputManifestKey identifies one binding/subject output period.
 type OutputManifestKey struct {
-	BindingID  string
-	SubjectID  string
-	Frequency  string
-	PeriodTime time.Time
+	BindingID         string
+	BindingGeneration string
+	CleanupTaskJSON   string
+	SubjectID         string
+	Frequency         string
+	PeriodTime        time.Time
 }
 
 // OutputManifestRepository persists the dynamic RowKeys currently owned by a task.
@@ -32,8 +34,8 @@ func NewOutputManifestRepository(db *gorm.DB) *OutputManifestRepository {
 func (r *OutputManifestRepository) Get(ctx context.Context, key OutputManifestKey) ([]string, error) {
 	var row domain.OutputManifest
 	result := r.db.WithContext(ctx).Where(
-		"c_binding_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_period_time = ?",
-		strings.TrimSpace(key.BindingID), strings.TrimSpace(key.SubjectID), strings.TrimSpace(key.Frequency), key.PeriodTime.UTC().UnixNano(),
+		"c_binding_id = ? AND c_binding_generation = ? AND c_subject_id = ? AND c_frequency = ? AND c_period_time = ?",
+		strings.TrimSpace(key.BindingID), key.BindingGeneration, strings.TrimSpace(key.SubjectID), strings.TrimSpace(key.Frequency), key.PeriodTime.UTC().UnixNano(),
 	).Limit(1).Find(&row)
 	if result.Error != nil {
 		return nil, result.Error
@@ -51,13 +53,22 @@ func (r *OutputManifestRepository) Get(ctx context.Context, key OutputManifestKe
 // ListByBinding returns manifest keys that still own result rows. It is used
 // by the lifecycle cleanup path before a binding is disabled or removed.
 func (r *OutputManifestRepository) ListByBinding(ctx context.Context, bindingID string) ([]OutputManifestKey, error) {
+	return r.list(ctx, r.db.Where("c_binding_id = ?", strings.TrimSpace(bindingID)))
+}
+
+// ListOwned includes removed catalog bindings so restart cleanup can discover them.
+func (r *OutputManifestRepository) ListOwned(ctx context.Context) ([]OutputManifestKey, error) {
+	return r.list(ctx, r.db)
+}
+
+func (r *OutputManifestRepository) list(ctx context.Context, query *gorm.DB) ([]OutputManifestKey, error) {
 	var rows []domain.OutputManifest
-	if err := r.db.WithContext(ctx).Where("c_binding_id = ?", strings.TrimSpace(bindingID)).Order("c_subject_id, c_frequency, c_period_time").Find(&rows).Error; err != nil {
+	if err := query.WithContext(ctx).Order("c_binding_id, c_binding_generation, c_subject_id, c_frequency, c_period_time").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	result := make([]OutputManifestKey, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, OutputManifestKey{BindingID: row.BindingID, SubjectID: row.SubjectID, Frequency: row.Frequency, PeriodTime: time.Unix(0, row.PeriodTime).UTC()})
+		result = append(result, OutputManifestKey{BindingID: row.BindingID, BindingGeneration: row.BindingGeneration, CleanupTaskJSON: row.CleanupTaskJSON, SubjectID: row.SubjectID, Frequency: row.Frequency, PeriodTime: time.Unix(0, row.PeriodTime).UTC()})
 	}
 	return result, nil
 }
@@ -66,8 +77,8 @@ func (r *OutputManifestRepository) Replace(ctx context.Context, key OutputManife
 	normalized := normalizeManifestKeys(keys)
 	if len(normalized) == 0 {
 		return r.db.WithContext(ctx).Where(
-			"c_binding_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_period_time = ?",
-			strings.TrimSpace(key.BindingID), strings.TrimSpace(key.SubjectID), strings.TrimSpace(key.Frequency), key.PeriodTime.UTC().UnixNano(),
+			"c_binding_id = ? AND c_binding_generation = ? AND c_subject_id = ? AND c_frequency = ? AND c_period_time = ?",
+			strings.TrimSpace(key.BindingID), key.BindingGeneration, strings.TrimSpace(key.SubjectID), strings.TrimSpace(key.Frequency), key.PeriodTime.UTC().UnixNano(),
 		).Delete(&domain.OutputManifest{}).Error
 	}
 	raw, err := json.Marshal(normalized)
@@ -75,13 +86,14 @@ func (r *OutputManifestRepository) Replace(ctx context.Context, key OutputManife
 		return err
 	}
 	row := domain.OutputManifest{
+		BindingGeneration: key.BindingGeneration, CleanupTaskJSON: key.CleanupTaskJSON,
 		BindingID: strings.TrimSpace(key.BindingID), SubjectID: strings.TrimSpace(key.SubjectID),
 		Frequency: strings.TrimSpace(key.Frequency), PeriodTime: key.PeriodTime.UTC().UnixNano(),
 		RowKeysJSON: string(raw), UpdatedAt: time.Now().UTC(),
 	}
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "c_binding_id"}, {Name: "c_subject_id"}, {Name: "c_frequency"}, {Name: "c_period_time"}},
-		DoUpdates: clause.AssignmentColumns([]string{"c_row_keys_json", "c_updated_at"}),
+		Columns:   []clause.Column{{Name: "c_binding_id"}, {Name: "c_binding_generation"}, {Name: "c_subject_id"}, {Name: "c_frequency"}, {Name: "c_period_time"}},
+		DoUpdates: clause.AssignmentColumns([]string{"c_row_keys_json", "c_cleanup_task_json", "c_updated_at"}),
 	}).Create(&row).Error
 }
 

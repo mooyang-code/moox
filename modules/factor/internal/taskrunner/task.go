@@ -40,6 +40,7 @@ func DeterministicTaskID(task Task) string {
 	}
 	for _, value := range []string{
 		task.BindingID,
+		task.BindingGeneration,
 		task.SpaceID,
 		task.SourceViewID,
 		task.ExpectedActiveIndexID,
