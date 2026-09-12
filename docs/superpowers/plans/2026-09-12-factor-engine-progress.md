@@ -47,6 +47,12 @@
 - 本阶段测试覆盖进程对象重建后的补发、发布失败重试、B-only 写入前后顺序、契约变化不误发、并发回放等待及真实 DuckDB 的首次构建补发。View/eventconsumer 测试排除先前独立复现的容量审计基线失败后通过。程序入口与引擎消费仍未接线，不是正式运行验收。
 - 独立复查发现关闭 View 定时维护时启动可能遗漏 journal 回放，已在 StartEventConsumer 安装 publisher 后、返回成功前同步恢复；失败清理消费者并返回启动错误。真实嵌入 JetStream 测试验证不启动维护也能补发并删除记录，定向 race 通过；补充 primary 替换和保留期过期不误发测试，View/eventconsumer 排除上述基线用例后重新通过。独立复核未发现剩余阻断问题，完整系统最终审查仍未进行。
 
+## 时序微批调度接入中
+
+- 新增 SubjectBatcher：默认 200ms 窗口、64 条上限、256 条等待队列、单批执行超时 2m，配置由独立 engine 配置加载并严格校验。按 space/View/dataset/frequency/period/物理索引/输入契约/series_tag 分组，保留每条来源身份，不擅自合并不同来源序号。
+- Submit 在实际批次执行成功后才返回成功，队列满时背压；取消和执行失败向调用方返回错误。新增 SubjectHandler 使用公共标的事件解码器，非法消息 TERM，执行失败 RETRY，成功才 ACK。没有复用周期完成标记，不能把一批时序标的完成当作全集完成。
+- 聚合、单标的不等待全集、合同分组、队列有界与取消测试通过。独立审查发现已取消的后续分组仍可能执行，新增确定性失败测试后修复为每组执行前再次过滤取消提交。最终 durable 装配须用现有 Runner 的 IndependentBatch 和有界 BatchSize，不能使用顺序 handler 模式；真正的任务构造、批量回源、周期汇总和程序入口仍待接通。
+
 ## 部署调查，不是部署证据
 
 - 原 moox.toml 内网 factor-1 为 192.168.0.102，用户 mooyang，SSH 22；外网 control/compile 为 106.53.107.122，用户 ubuntu。

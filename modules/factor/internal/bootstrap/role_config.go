@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/inputcache"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"gopkg.in/yaml.v3"
 )
 
@@ -25,14 +26,15 @@ type CatalogBusConfig struct {
 }
 
 type EngineApplicationConfig struct {
-	EngineID            string            `yaml:"engine_id"`
-	Database            DatabaseConfig    `yaml:"database"`
-	Storage             StorageConfig     `yaml:"storage"`
-	EventBus            EventBusConfig    `yaml:"eventbus"`
-	Engine              EngineConfig      `yaml:"engine"`
-	Cache               inputcache.Config `yaml:"cache"`
-	CatalogPollInterval time.Duration     `yaml:"catalog_poll_interval"`
-	CatalogSyncTimeout  time.Duration     `yaml:"catalog_sync_timeout"`
+	EngineID            string                     `yaml:"engine_id"`
+	Database            DatabaseConfig             `yaml:"database"`
+	Storage             StorageConfig              `yaml:"storage"`
+	EventBus            EventBusConfig             `yaml:"eventbus"`
+	Engine              EngineConfig               `yaml:"engine"`
+	Cache               inputcache.Config          `yaml:"cache"`
+	CatalogPollInterval time.Duration              `yaml:"catalog_poll_interval"`
+	CatalogSyncTimeout  time.Duration              `yaml:"catalog_sync_timeout"`
+	SubjectBatch        trigger.SubjectBatchConfig `yaml:"subject_batch"`
 }
 
 func DefaultControlConfig() *ControlConfig {
@@ -48,7 +50,8 @@ func DefaultEngineApplicationConfig() *EngineApplicationConfig {
 	shared.Engine.FactorsDir = "./data/factor-engine/artifacts"
 	return &EngineApplicationConfig{EngineID: "factor-engine-1", Database: shared.Database,
 		Storage: shared.Storage, EventBus: shared.EventBus, Engine: shared.Engine,
-		Cache: inputcache.DefaultConfig(), CatalogPollInterval: 30 * time.Second, CatalogSyncTimeout: 10 * time.Minute}
+		Cache: inputcache.DefaultConfig(), CatalogPollInterval: 30 * time.Second, CatalogSyncTimeout: 10 * time.Minute,
+		SubjectBatch: trigger.DefaultSubjectBatchConfig()}
 }
 
 func LoadControlConfig(path string) (*ControlConfig, error) {
@@ -77,6 +80,9 @@ func LoadEngineApplicationConfig(path string) (*EngineApplicationConfig, error) 
 		return nil, err
 	}
 	if err := cfg.Cache.Validate(); err != nil {
+		return nil, err
+	}
+	if err := cfg.SubjectBatch.Validate(); err != nil {
 		return nil, err
 	}
 	if cfg.Engine.PythonWorkers <= 0 || cfg.Engine.ViewReadWorkers <= 0 || cfg.Engine.TaskTimeoutMS <= 0 || cfg.Engine.ViewReadTimeoutMS <= 0 {
