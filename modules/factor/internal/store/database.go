@@ -106,9 +106,6 @@ func (s *Store) ApplySchema(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return fmt.Errorf("factor schema sql is empty")
 	}
-	if err := s.migrateLegacyBindingSchema(); err != nil {
-		return err
-	}
 	tables, err := s.factorSchemaTables()
 	if err != nil {
 		return err
@@ -238,6 +235,7 @@ func (s *Store) factorSchemaTables() ([]string, error) {
 
 func (s *Store) validateSchemaTables(tables []string) error {
 	expected := map[string][]string{
+		"t_factor_catalog": {"c_id", "c_revision", "c_snapshot_hash"},
 		"t_factor_defs": {
 			"c_factor_id", "c_name", "c_factor_type", "c_source_code", "c_source_hash", "c_source_path",
 			"c_input_columns_json", "c_outputs_json", "c_params_json", "c_lookback_periods",
