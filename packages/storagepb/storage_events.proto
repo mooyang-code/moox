@@ -13,6 +13,12 @@ message DatasetRowsUpserted {
   string dataset_id = 2;
   repeated RowUpsert rows = 3;
   string write_source = 4;
+  // Position assigned in the same durable DataNode outbox batch as the rows.
+  // Sequence is comparable only within (source_node_id, source_store_id).
+  string source_node_id = 5;
+  uint64 source_sequence = 6;
+  // Changes when the underlying DataNode store is recreated.
+  string source_store_id = 7;
 }
 
 // DatasetPeriodCollected marks a terminal collection outcome for every
@@ -47,6 +53,10 @@ message ViewSourceSubjectReady {
   string input_contract_version = 8;
   string source_event_id = 9;
   google.protobuf.Timestamp ready_at = 10;
+  string source_node_id = 11;
+  // Comparable only within (source_node_id, source_store_id), not globally.
+  uint64 source_sequence = 12;
+  string source_store_id = 13;
 }
 
 // ViewSourcePeriodReady marks a source View period as readable by Factor.

@@ -56,7 +56,11 @@ func ToStorageRows(in *sharedpb.DatasetRowsUpserted) (*localpb.RowsUpserted, err
 			return nil, fmt.Errorf("shared row %d identity mismatch", i)
 		}
 	}
-	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(in)
+	// Source positions belong to event processing, not the local row-write
+	// model. Keep strict conversion of the row data without losing provenance
+	// from the original event retained by the caller.
+	rowData := &sharedpb.DatasetRowsUpserted{SpaceId: in.GetSpaceId(), DatasetId: in.GetDatasetId(), Rows: in.GetRows(), WriteSource: in.GetWriteSource()}
+	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(rowData)
 	if err != nil {
 		return nil, fmt.Errorf("marshal shared rows event: %w", err)
 	}

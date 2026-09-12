@@ -130,6 +130,9 @@ func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Mess
 	if len(payload.GetRows()) == 0 {
 		return fmt.Errorf("storage event rows payload is empty")
 	}
+	if !validRequiredToken(payload.GetSourceNodeId()) || !validRequiredToken(payload.GetSourceStoreId()) || payload.GetSourceSequence() == 0 {
+		return fmt.Errorf("storage event source position is required")
+	}
 	if len(payload.GetWriteSource()) > 256 || strings.TrimSpace(payload.GetWriteSource()) != payload.GetWriteSource() {
 		return fmt.Errorf("storage event write_source is invalid")
 	}
@@ -187,6 +190,9 @@ func validateViewSourceSubjectReady(message *eventpb.EventMessage, value proto.M
 		if !validRequiredToken(identity) {
 			return fmt.Errorf("view source subject ready input identity is incomplete")
 		}
+	}
+	if !validRequiredToken(payload.GetSourceNodeId()) || !validRequiredToken(payload.GetSourceStoreId()) || payload.GetSourceSequence() == 0 {
+		return fmt.Errorf("view source subject ready source position is required")
 	}
 	return nil
 }

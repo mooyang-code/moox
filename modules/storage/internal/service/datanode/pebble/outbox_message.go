@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/eventmapper"
@@ -14,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // BuildDatasetRowsUpsertedMessage creates the new governed EventMessage persisted by
@@ -55,28 +57,22 @@ func buildDatasetRowsUpsertedMessage(nodeID, writeSource, eventID, spaceID, data
 	if err != nil {
 		return nil, err
 	}
-	registry, err := events.DefaultRegistry()
+	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(rowPayload)
 	if err != nil {
 		return nil, err
 	}
-	encoded, err := registry.Encode(events.DatasetRowsUpserted, rowPayload, events.PublishOptions{
-		EventID:    eventID,
-		OccurredAt: time.Now().UTC(),
-		SpaceID:    spaceID,
-		SubjectID:  datasetID,
-	})
-	if err != nil {
-		return nil, err
-	}
-	// Keep the node in the call signature so callers continue to make the
-	// producer identity explicit; stable identity is assigned from outboxID.
+	// This is an internal staging envelope, not yet publishable. BindOutboxID
+	// assigns its durable position and validates the complete public contract.
 	_ = nodeID
-	return proto.MarshalOptions{Deterministic: true}.Marshal(encoded.Message)
+	return proto.MarshalOptions{Deterministic: true}.Marshal(&eventpb.EventMessage{EventId: eventID, EventName: events.DatasetRowsUpserted.Name(), EventVersion: events.DatasetRowsUpserted.Version(), SpaceId: spaceID, SubjectId: datasetID, OccurredAt: timestamppb.New(time.Now().UTC()), Payload: payload})
 }
 
 // BindOutboxID assigns the stable transport id after the atomic Pebble batch
 // has reserved its internal outbox id.
-func BindOutboxID(data []byte, nodeID string, outboxID uint64) ([]byte, error) {
+func BindOutboxID(data []byte, nodeID, storeID string, outboxID uint64) ([]byte, error) {
+	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(nodeID) != nodeID || strings.TrimSpace(storeID) == "" || strings.TrimSpace(storeID) != storeID || outboxID == 0 {
+		return nil, fmt.Errorf("storage outbox position requires node and positive sequence")
+	}
 	eventMessage := &eventpb.EventMessage{}
 	if err := proto.Unmarshal(data, eventMessage); err != nil {
 		return nil, fmt.Errorf("unmarshal storage outbox message %d: %w", outboxID, err)
@@ -86,12 +82,33 @@ func BindOutboxID(data []byte, nodeID string, outboxID uint64) ([]byte, error) {
 		return nil, err
 	}
 	if eventMessage.GetEventId() == "outbox-pending" {
-		eventMessage.EventId = "storage-" + token + "-" + strconv.FormatUint(outboxID, 10)
+		eventMessage.EventId = "storage-" + token + "-" + storeID + "-" + strconv.FormatUint(outboxID, 10)
+	}
+	rows := &storagepb.DatasetRowsUpserted{}
+	if err := proto.Unmarshal(eventMessage.GetPayload(), rows); err != nil {
+		return nil, fmt.Errorf("decode outbox rows: %w", err)
+	}
+	if rows.SourceStoreId != "" {
+		if rows.SourceStoreId != storeID || rows.SourceNodeId != nodeID || rows.SourceSequence != outboxID {
+			return nil, fmt.Errorf("cannot rebind an assigned outbox source position")
+		}
+	} else if strings.HasPrefix(eventMessage.EventId, "storage-source-") {
+		// Source-derived dedupe IDs must not cross a recreated DataNode store.
+		eventMessage.EventId += "-" + storeID
+	}
+	rows.SourceNodeId, rows.SourceSequence = nodeID, outboxID
+	rows.SourceStoreId = storeID
+	eventMessage.Payload, err = proto.MarshalOptions{Deterministic: true}.Marshal(rows)
+	if err != nil {
+		return nil, err
 	}
 	if err := validateDatasetRowsUpsertedEvent(eventMessage, ""); err != nil {
 		return nil, fmt.Errorf("validate storage rows.upserted envelope %d: %w", outboxID, err)
 	}
 	if err := validateNewEventID(eventMessage); err != nil {
+		return nil, err
+	}
+	if err := events.DatasetRowsUpserted.Validate(eventMessage, rows); err != nil {
 		return nil, err
 	}
 	return proto.MarshalOptions{Deterministic: true}.Marshal(eventMessage)

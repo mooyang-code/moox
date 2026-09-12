@@ -41,6 +41,8 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 	payload, err := eventmapper.ToEventRows(&pb.RowsUpserted{SpaceId: "space", DatasetId: "market_prices", Rows: []*pb.RowFieldUpsert{row}})
 	require.NoError(t, err)
 	published := false
+	payload.SourceNodeId, payload.SourceSequence = "node", 1
+	payload.SourceStoreId = "store"
 	svc.readyPublisher = subjectPublisherFunc(func(ctx context.Context, _ events.Event, _ proto.Message, _ events.PublishOptions) (*jetstream.PublishAck, error) {
 		rows, err := svc.query(ctx, "prices-a", []*pb.RowKey{row.Key}, nil)
 		require.NoError(t, err)

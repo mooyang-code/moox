@@ -119,7 +119,7 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	defer stop()
 
 	for i, dataset := range []string{"prices_a", "prices_b"} {
-		rowEvent := &storagepb.DatasetRowsUpserted{SpaceId: "quant", DatasetId: dataset, Rows: []*storagepb.RowUpsert{{
+		rowEvent := &storagepb.DatasetRowsUpserted{SourceNodeId: "node", SourceStoreId: "store", SourceSequence: 1, SpaceId: "quant", DatasetId: dataset, Rows: []*storagepb.RowUpsert{{
 			Key:    &storagepb.RowKey{SpaceId: "quant", DatasetId: dataset, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-20T00:00:00Z"}}},
 			Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: float64(100 + i)}}}},
 		}}}

@@ -40,6 +40,8 @@ func TestSubjectReadyAfterCommitRetriesWithStableBatchIdentity(t *testing.T) {
 		payload, err := eventmapper.ToEventRows(&pb.RowsUpserted{SpaceId: "space", DatasetId: "market_prices", Rows: []*pb.RowFieldUpsert{row}})
 		require.NoError(t, err)
 		payload.SpaceId, payload.DatasetId = "space", "market_prices"
+		payload.SourceNodeId, payload.SourceSequence = "node", uint64(len(items)+1)
+		payload.SourceStoreId = "store"
 		items = append(items, eventconsumer.DatasetRowsBatchItem{Message: &eventpb.EventMessage{EventId: subject, SpaceId: "space", SubjectId: "market_prices", OccurredAt: timestamppb.Now()}, Payload: payload})
 	}
 	failure := errors.New("publish failed")
@@ -55,6 +57,8 @@ func TestSubjectReadyAfterCommitRetriesWithStableBatchIdentity(t *testing.T) {
 		require.Equal(t, events.ViewSourceSubjectReady.Name(), event.Name())
 		ready := payload.(*storagepb.ViewSourceSubjectReady)
 		require.Equal(t, "schema:1", ready.InputContractVersion)
+		require.Equal(t, "node", ready.SourceNodeId)
+		require.Equal(t, map[string]uint64{"BTC": 1, "ETH": 2}[ready.SubjectId], ready.SourceSequence)
 		if old := ids[ready.SourceEventId]; old != "" {
 			require.Equal(t, old, opts.EventID)
 		}

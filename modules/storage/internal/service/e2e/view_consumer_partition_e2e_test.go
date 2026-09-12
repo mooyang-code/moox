@@ -122,7 +122,7 @@ func TestViewConsumerPartitionsKeepKlineIndependentFromMetrics(t *testing.T) {
 
 func publishPartitionRow(t *testing.T, ctx context.Context, publisher *events.Publisher, spaceID, datasetID, recordID string) {
 	t.Helper()
-	payload := &storagepb.DatasetRowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: []*storagepb.RowUpsert{{
+	payload := &storagepb.DatasetRowsUpserted{SourceNodeId: "node", SourceStoreId: "store", SourceSequence: 1, SpaceId: spaceID, DatasetId: datasetID, Rows: []*storagepb.RowUpsert{{
 		Key:    &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: recordID, Freq: "1m", DataTime: "2026-07-20T00:00:00Z"}}},
 		Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 1}}}},
 	}}}

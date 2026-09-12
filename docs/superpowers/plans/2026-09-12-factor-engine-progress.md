@@ -41,6 +41,8 @@
 - 新增真实 DuckDB 测试，在 publisher 回调内查询并验证刚写入的行；按标的发布测试及竞态测试通过。全套 View 测试中的 `TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit` 因 `audit log=<nil>` 失败，已在未改动的原工作树独立复现；排除这一已确认基线用例后 View 与 eventconsumer 测试通过，不等于全套通过。
 - 标的事件尚未接入引擎消费、缓存失效及微批调度，不能据此宣称实时因子已独立运行。输入契约 hash/version 与逐行可比较数据变更位置仍需在读缓存协议中区分。
 - 标的事件中间审查发现两个未关闭问题：首次构建仅写 B 索引后会 ACK，需要持久待发布记录并在激活后恢复发布；现有 `readIndexRevision` 是 UpdatedAt 的 hash，不能当作可比较的变更序号，标的事件仍缺少持久来源位置。当前发布实现仅覆盖 active 正常写入路径，不得作为完整可靠交付部署。事件 ID 包含物理代际，同一来源在新代际重新就绪时会产生新 ID，后续任务去重须明确这一范围。
+- 来源位置协议已继续补齐：DataNode 在原子 outbox 批次中写入 `source_node_id/source_store_id/source_sequence`，View 批处理保留并转发，序号只在同一 node/store 内比较。新空库持久生成 store incarnation，普通重启保持，重新创建的库使用不同 incarnation；已存在数据但缺少身份的库直接拒绝启动，不做兼容迁移。源码 ID 和默认 outbox ID 均隔离 store incarnation。复制/回滚旧数据库快照不等于重新建库，不能把这种人工回滚当作普通重启使用。
+- 公共行事件及标的事件都要求完整来源位置，内部待绑定消息不再走公共编码器。新增重启序号、存储实例隔离及重绑拒绝测试，定向竞态测试通过。引擎的任务修订比较和首次构建待发布队列仍未实现，不能据此宣布上述端到端风险均已关闭。
 
 ## 部署调查，不是部署证据
 
