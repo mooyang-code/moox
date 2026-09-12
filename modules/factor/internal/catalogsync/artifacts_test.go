@@ -29,6 +29,10 @@ func TestPrepareArtifactsUsesVerifiedLocalImmutablePaths(t *testing.T) {
 	localAgain, err := PrepareArtifacts(context.Background(), root, snapshot)
 	require.NoError(t, err)
 	require.Equal(t, local, localAgain)
+	missingGeneration := snapshot
+	missingGeneration.Bindings = []domain.FactorBinding{{BindingID: "b", FactorID: "f"}}
+	_, err = PrepareArtifacts(context.Background(), root, missingGeneration)
+	require.Error(t, err)
 	snapshot.Factors = append(snapshot.Factors, domain.FactorDef{FactorID: "bad", Name: "Broken", FactorType: domain.FactorTypeTimeSeries, SourceCode: "changed", SourceHash: "bad"})
 	invalidRoot := filepath.Join(t.TempDir(), "not-created")
 	_, err = PrepareArtifacts(context.Background(), invalidRoot, snapshot)

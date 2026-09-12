@@ -34,7 +34,7 @@ func PrepareArtifacts(ctx context.Context, root string, snapshot domain.CatalogS
 	}
 	bindings := make(map[string]bool, len(snapshot.Bindings))
 	for _, binding := range snapshot.Bindings {
-		if binding.BindingID == "" || bindings[binding.BindingID] || !factors[binding.FactorID] {
+		if binding.BindingID == "" || binding.BindingGeneration == "" || bindings[binding.BindingID] || !factors[binding.FactorID] {
 			return domain.CatalogSnapshot{}, fmt.Errorf("invalid binding identity or factor reference %q", binding.BindingID)
 		}
 		bindings[binding.BindingID] = true
