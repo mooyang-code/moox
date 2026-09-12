@@ -825,12 +825,23 @@ func validateFactorResult(
 	for _, output := range spec.Outputs {
 		expected[output] = struct{}{}
 	}
-	seen := make(map[string]struct{}, len(result.Rows))
+	type resultIdentity struct {
+		Time    int64
+		Tag     string
+		Subject string
+	}
+	seen := make(map[resultIdentity]struct{}, len(result.Rows))
 	for rowIndex, row := range result.Rows {
 		if row.DataTime.Before(startTime) || !row.DataTime.Before(endTime) {
 			return fmt.Errorf("factor result row %d is outside target range", rowIndex)
 		}
-		identity := fmt.Sprintf("%d\x00%s", row.DataTime.UTC().UnixNano(), row.SeriesTag)
+		identity := resultIdentity{Time: row.DataTime.UTC().UnixNano(), Tag: row.SeriesTag}
+		if spec.FactorType == "cross_section" {
+			if strings.TrimSpace(row.SubjectID) == "" {
+				return fmt.Errorf("factor result row %d subject_id is required", rowIndex)
+			}
+			identity.Subject = row.SubjectID
+		}
 		if _, exists := seen[identity]; exists {
 			return fmt.Errorf("duplicate factor result identity data_time=%s series_tag=%q",
 				row.DataTime.UTC().Format(time.RFC3339Nano), row.SeriesTag)

@@ -252,7 +252,11 @@ func buildFactorRows(task *engine.FactorTask, result *engine.FactorResult) ([]*s
 		if resultRow.DataTime.IsZero() {
 			return nil, nil, fmt.Errorf("factor result row %d data_time is required", i)
 		}
-		identity := factorRowKey{SpaceID: task.SpaceID, DatasetID: task.ResultDatasetID, SubjectID: task.SubjectID, Frequency: task.Freq, DataTime: resultRow.DataTime.UTC().Format(time.RFC3339Nano), SeriesTag: resultRow.SeriesTag}
+		subjectID, err := engine.ResultSubject(task, resultRow)
+		if err != nil {
+			return nil, nil, fmt.Errorf("factor result row %d: %w", i, err)
+		}
+		identity := factorRowKey{SpaceID: task.SpaceID, DatasetID: task.ResultDatasetID, SubjectID: subjectID, Frequency: task.Freq, DataTime: resultRow.DataTime.UTC().Format(time.RFC3339Nano), SeriesTag: resultRow.SeriesTag}
 		encoded, _ := json.Marshal(identity)
 		keys = append(keys, string(encoded))
 		row := &storagepb.RowFieldUpsert{Key: toProtoRowKey(identity), Attributes: factorRowAttributesAt(task, computedAt)}
