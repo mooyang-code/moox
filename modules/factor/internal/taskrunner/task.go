@@ -56,6 +56,10 @@ func DeterministicTaskID(task Task) string {
 		write(value)
 	}
 	write("factor:" + factorPayload)
+	if task.TriggerType == "subject_ready" {
+		write("subject-source-event:" + task.TriggerEventID)
+		write("input-contract:" + task.InputContractVersion)
+	}
 	return fmt.Sprintf("ft-%x", h.Sum(nil)[:16])
 }
 

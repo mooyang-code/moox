@@ -39,6 +39,14 @@ type TaskScope struct {
 }
 
 func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Task, error) {
+	if scope.TriggerType == "subject_ready" {
+		if strings.TrimSpace(scope.TriggerEventID) == "" {
+			return Task{}, errors.New("subject task source event is required")
+		}
+		if strings.TrimSpace(scope.InputContractVersion) == "" {
+			return Task{}, errors.New("subject task input contract is required")
+		}
+	}
 	if scope.SourceViewID == "" {
 		scope.SourceViewID = scope.SourceDataset
 	}
