@@ -157,7 +157,7 @@ func parseArgs(args []string) (cliConfig, error) {
 		cfg.FactorIDs = parseStringCSV(factors)
 	case "clear-queue":
 		cfg.Stream = "MOOX_STORAGE"
-		cfg.Consumer = "factor_source_subject"
+		cfg.Consumer = "factor_view_ready_v1"
 		cfg.Timeout = 2 * time.Minute
 		cfg.Restart = true
 		cfg.Service = "factor-engine"

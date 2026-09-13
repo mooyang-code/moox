@@ -273,7 +273,7 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 		!reflect.DeepEqual(readTimeSeriesRoute.GatewayCallers, []string{"admin-gateway", "collector", "factor", "monitor", "archive", "storage-view", "strategy", "moox-skill"}) {
 		t.Fatalf("storage-primary ReadTimeSeriesRows route = %+v", readTimeSeriesRoute)
 	}
-	for _, method := range []string{"ReportDatasetPeriodCollected", "AppendDatasetSyncPoint", "WaitViewSyncPoint", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"} {
+	for _, method := range []string{"ReportCollectorPeriodCompleted", "ReportMergePeriodCompleted", "AppendDatasetSyncPoint", "WaitViewSyncPoint", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"} {
 		if !containsString(primaryRoute.GatewayMethods, method) {
 			t.Fatalf("storage-primary gateway route missing %s: %v", method, primaryRoute.GatewayMethods)
 		}

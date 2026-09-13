@@ -80,11 +80,8 @@ func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, space
 	if err != nil {
 		return CompiledStrategy{}, err
 	}
-	if isSourceReadyEvent(dsl) && (len(binding.Factors) > 0 || len(binding.FactorViewIDs) > 0) {
-		return CompiledStrategy{}, fmt.Errorf("strategy trigger source.ready cannot be used with factor bindings; use factor.ready")
-	}
 	if dsl.Triggers.Schedule != nil && dsl.Triggers.Event == nil && (len(binding.Factors) > 0 || len(binding.FactorViewIDs) > 0) {
-		return CompiledStrategy{}, fmt.Errorf("scheduled strategies with factor bindings require a factor.ready event trigger")
+		return CompiledStrategy{}, fmt.Errorf("scheduled strategies with factor bindings require a ViewDataReady event trigger")
 	}
 	if err := validateFactorAliases(binding.Factors); err != nil {
 		return CompiledStrategy{}, err
@@ -164,18 +161,6 @@ func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, space
 		compiled.SourceView.Frequency = compiled.Data.Bar
 	}
 	return compiled, nil
-}
-
-func isSourceReadyEvent(dsl config.DSL) bool {
-	if dsl.Triggers.Event == nil {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(dsl.Triggers.Event.Name)) {
-	case "viewsourceperiodready", "source.ready", "ready", "event.storage.view.source_period.ready":
-		return true
-	default:
-		return false
-	}
 }
 
 // validateFactorAliases protects the expression namespace from ambiguous

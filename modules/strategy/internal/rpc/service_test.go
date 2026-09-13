@@ -65,7 +65,7 @@ func TestSetRunnerStatusRejectsModernStrategyInstance(t *testing.T) {
 	repo := openRPCStore(t)
 	definition := store.StrategyDefinition{
 		StrategyID: "modern-strategy", StrategyName: "modern", DSLYaml: `name: modern
-triggers: {event: {name: source.ready}}
+triggers: {event: {name: ViewDataReady}}
 data: {bar: 1m, calendar: crypto_24x7}
 rules: {r: {pool: [BTC], score: close, weight: 1}}
 `, CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1),

@@ -13,7 +13,7 @@ eventbus:
   relay_batch_size: 100
   reconnect_interval: 1s
   connect_timeout: 3s
-  consumer_name: strategy_view_factor_ready_v1
+  consumer_name: strategy_view_data_ready_v1
 factor:
   target: ip://127.0.0.1:11003
   target_node: factor

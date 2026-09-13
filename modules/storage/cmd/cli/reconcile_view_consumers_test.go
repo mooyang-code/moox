@@ -85,7 +85,7 @@ func TestDesiredStaticViewConsumerFiltersMatchServerContract(t *testing.T) {
 			t.Fatal(err)
 		}
 		var expected []string
-		for _, event := range []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCollected, events.FactorPeriodComputed, events.DatasetSyncPoint} {
+		for _, event := range []events.Event{events.DatasetRowsUpserted, events.CollectorPeriodCompleted, events.MergePeriodCompleted, events.FactorPeriodComputed, events.DatasetSyncPoint} {
 			filter, err := registry.RenderSubject(event, want.space, want.dataset)
 			if err != nil {
 				t.Fatal(err)

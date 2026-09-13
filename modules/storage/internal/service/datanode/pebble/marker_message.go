@@ -17,27 +17,46 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func BuildDatasetPeriodCollectedMessage(spaceID string, marker *pb.DatasetPeriodCollectedMarker) ([]byte, string, error) {
+func BuildCollectorPeriodCompletedMessage(spaceID string, marker *pb.CollectorPeriodCompletedMarker) ([]byte, string, error) {
 	if marker == nil {
-		return nil, "", invalid("dataset period marker is required")
+		return nil, "", invalid("collector period marker is required")
 	}
-	payload := &storageeventpb.DatasetPeriodCollected{
+	payload := &storageeventpb.CollectorPeriodCompleted{
 		DatasetId: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
-		Status: marker.GetStatus(), SubjectIds: normalizedIDs(marker.GetSubjectIds()), FailedSubjects: normalizedIDs(marker.GetFailedSubjects()),
-		CollectedAt: marker.GetCollectedAt(),
+		Status: marker.GetStatus(), BatchId: marker.GetBatchId(), ConfigSnapshotId: marker.GetConfigSnapshotId(),
+		ExpectedScopeRef: marker.GetExpectedScopeRef(), ExpectedSubjectIds: normalizedIDs(marker.GetExpectedSubjectIds()),
+		FailedSubjects:     normalizedIDs(marker.GetFailedSubjects()),
+		CommittedPositions: eventPositions(marker.GetCommittedPositions()),
+		CollectedAt:        marker.GetCollectedAt(),
 	}
-	// The period identity is not enough to make the marker idempotent: a
-	// collector can retry the same period with a corrected subject/status
-	// payload. Including the canonical payload digest lets that retry coexist
-	// with the earlier marker instead of hitting the marker-store conflict
-	// path forever, while identical payloads still receive the same ID.
 	encodedPayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
 	if err != nil {
-		return nil, "", fmt.Errorf("marshal dataset period marker payload: %w", err)
+		return nil, "", fmt.Errorf("marshal collector period marker payload: %w", err)
 	}
 	payloadHash := sha256.Sum256(encodedPayload)
-	eventID := stableMarkerID("dataset-period", spaceID, payload.GetDatasetId(), payload.GetFrequency(), strconv.FormatInt(payload.GetPeriodTime(), 10), hex.EncodeToString(payloadHash[:16]))
-	return buildMarkerMessage(events.DatasetPeriodCollected, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCollectedAt()), payload)
+	eventID := stableMarkerID("collector-period", spaceID, payload.GetDatasetId(), payload.GetFrequency(), strconv.FormatInt(payload.GetPeriodTime(), 10), hex.EncodeToString(payloadHash[:16]))
+	return buildMarkerMessage(events.CollectorPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCollectedAt()), payload)
+}
+
+func BuildMergePeriodCompletedMessage(spaceID string, marker *pb.MergePeriodCompletedMarker) ([]byte, string, error) {
+	if marker == nil {
+		return nil, "", invalid("merge period marker is required")
+	}
+	payload := &storageeventpb.MergePeriodCompleted{
+		DatasetId: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
+		Status: marker.GetStatus(), BatchId: marker.GetBatchId(), ConfigSnapshotId: marker.GetConfigSnapshotId(),
+		ExpectedScopeRef: marker.GetExpectedScopeRef(), ExpectedSubjectIds: normalizedIDs(marker.GetExpectedSubjectIds()),
+		FailedSubjects:     normalizedIDs(marker.GetFailedSubjects()),
+		CommittedPositions: eventPositions(marker.GetCommittedPositions()),
+		CompletedAt:        marker.GetCompletedAt(),
+	}
+	encodedPayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
+	if err != nil {
+		return nil, "", fmt.Errorf("marshal merge period marker payload: %w", err)
+	}
+	payloadHash := sha256.Sum256(encodedPayload)
+	eventID := stableMarkerID("merge-period", spaceID, payload.GetDatasetId(), payload.GetFrequency(), strconv.FormatInt(payload.GetPeriodTime(), 10), hex.EncodeToString(payloadHash[:16]))
+	return buildMarkerMessage(events.MergePeriodCompleted, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCompletedAt()), payload)
 }
 
 func BuildFactorPeriodComputedMessage(spaceID string, marker *pb.FactorPeriodComputedMarker) ([]byte, string, error) {
@@ -62,12 +81,14 @@ func BuildFactorPeriodComputedMessage(spaceID string, marker *pb.FactorPeriodCom
 		return bindings[i].GetFactorId() < bindings[j].GetFactorId()
 	})
 	payload := &storageeventpb.FactorPeriodComputed{
-		SourceViewId: marker.GetSourceViewId(), ResultDatasetId: marker.GetResultDatasetId(), Frequency: marker.GetFrequency(),
-		PeriodTime: marker.GetPeriodTime(), Status: marker.GetStatus(), Bindings: bindings,
-		ComputedAt: marker.GetComputedAt(), TriggerEventId: marker.GetTriggerEventId(), SourceIndexId: marker.GetSourceIndexId(), SourceIndexRevision: marker.GetSourceIndexRevision(),
+		DatasetId: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
+		Status: marker.GetStatus(), BatchId: marker.GetBatchId(), ConfigSnapshotId: marker.GetConfigSnapshotId(),
+		ExpectedScopeRef: marker.GetExpectedScopeRef(), ExpectedSubjectIds: normalizedIDs(marker.GetExpectedSubjectIds()),
+		Bindings: bindings, CommittedPositions: eventPositions(marker.GetCommittedPositions()),
+		ComputedAt: marker.GetComputedAt(), TriggerEventId: marker.GetTriggerEventId(),
 	}
-	eventID := stableMarkerID("factor-period", spaceID, payload.GetResultDatasetId(), payload.GetTriggerEventId(), strconv.FormatInt(payload.GetPeriodTime(), 10))
-	return buildMarkerMessage(events.FactorPeriodComputed, eventID, spaceID, payload.GetResultDatasetId(), markerTime(payload.GetComputedAt()), payload)
+	eventID := stableMarkerID("factor-period", spaceID, payload.GetDatasetId(), payload.GetTriggerEventId(), strconv.FormatInt(payload.GetPeriodTime(), 10))
+	return buildMarkerMessage(events.FactorPeriodComputed, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetComputedAt()), payload)
 }
 
 func BuildDatasetSyncPointMessage(spaceID string, marker *pb.DatasetSyncPointMarker) ([]byte, string, error) {
@@ -126,6 +147,19 @@ func normalizedIDs(values []string) []string {
 	return out
 }
 
+func eventPositions(values []*pb.CommittedPosition) []*storageeventpb.CommittedPosition {
+	out := make([]*storageeventpb.CommittedPosition, 0, len(values))
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		out = append(out, &storageeventpb.CommittedPosition{
+			NodeId: value.GetNodeId(), StoreId: value.GetStoreId(), Sequence: value.GetSequence(),
+		})
+	}
+	return out
+}
+
 func validateDataNodeMarkerMessage(raw []byte) (*eventpb.EventMessage, error) {
 	message := &eventpb.EventMessage{}
 	if err := proto.Unmarshal(raw, message); err != nil {
@@ -150,7 +184,13 @@ func validateDataNodeMarkerMessage(raw []byte) (*eventpb.EventMessage, error) {
 }
 
 func isDataNodeOutboxEvent(event events.Event) bool {
-	for _, allowed := range []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCollected, events.FactorPeriodComputed, events.DatasetSyncPoint} {
+	for _, allowed := range []events.Event{
+		events.DatasetRowsUpserted,
+		events.CollectorPeriodCompleted,
+		events.MergePeriodCompleted,
+		events.FactorPeriodComputed,
+		events.DatasetSyncPoint,
+	} {
 		if event.Name() == allowed.Name() && event.Version() == allowed.Version() {
 			return true
 		}

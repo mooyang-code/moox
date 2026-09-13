@@ -82,11 +82,11 @@ func (s *Store) AppendDatasetMarker(ctx context.Context, raw []byte) (string, er
 	return message.GetEventId(), nil
 }
 
-func (s *Store) GetFactorPeriodComputedMarker(ctx context.Context, spaceID, resultDatasetID, sourceViewID, triggerEventID string, periodTime int64) (*eventpb.EventMessage, bool, error) {
+func (s *Store) GetFactorPeriodComputedMarker(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (*eventpb.EventMessage, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	key := factorMarkerLookupKey(spaceID, resultDatasetID, sourceViewID, triggerEventID, periodTime)
+	key := factorMarkerLookupKey(spaceID, datasetID, triggerEventID, periodTime)
 	recordKey, closer, err := s.db.Get(key)
 	if errors.Is(err, cpebble.ErrNotFound) {
 		return nil, false, nil
@@ -144,19 +144,18 @@ func factorMarkerIndexKey(message *eventpb.EventMessage) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return factorMarkerLookupKey(message.GetSpaceId(), payload.resultDatasetID, payload.sourceViewID, payload.triggerEventID, payload.periodTime), nil
+	return factorMarkerLookupKey(message.GetSpaceId(), payload.datasetID, payload.triggerEventID, payload.periodTime), nil
 }
 
-func factorMarkerLookupKey(spaceID, resultDatasetID, sourceViewID, triggerEventID string, periodTime int64) []byte {
-	hash := sha256.Sum256([]byte(strings.Join([]string{spaceID, resultDatasetID, sourceViewID, triggerEventID, strconv.FormatInt(periodTime, 10)}, "\x00")))
+func factorMarkerLookupKey(spaceID, datasetID, triggerEventID string, periodTime int64) []byte {
+	hash := sha256.Sum256([]byte(strings.Join([]string{spaceID, datasetID, triggerEventID, strconv.FormatInt(periodTime, 10)}, "\x00")))
 	return []byte(factorMarkerPrefix + hex.EncodeToString(hash[:]))
 }
 
 type factorMarkerIdentity struct {
-	resultDatasetID string
-	sourceViewID    string
-	triggerEventID  string
-	periodTime      int64
+	datasetID      string
+	triggerEventID string
+	periodTime     int64
 }
 
 func eventsRegistry() (*events.Registry, error) { return events.DefaultRegistry() }
@@ -179,6 +178,6 @@ func decodeRawMarker(registry *events.Registry, message *eventpb.EventMessage) (
 		return nil, factorMarkerIdentity{}, fmt.Errorf("unexpected factor marker payload %T", value)
 	}
 	return envelope, factorMarkerIdentity{
-		resultDatasetID: payload.GetResultDatasetId(), sourceViewID: payload.GetSourceViewId(), triggerEventID: payload.GetTriggerEventId(), periodTime: payload.GetPeriodTime(),
+		datasetID: payload.GetDatasetId(), triggerEventID: payload.GetTriggerEventId(), periodTime: payload.GetPeriodTime(),
 	}, nil
 }

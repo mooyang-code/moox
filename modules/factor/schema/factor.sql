@@ -1,19 +1,5 @@
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS t_factor_subject_receipts (
-    c_space_id TEXT NOT NULL,
-    c_event_id TEXT NOT NULL,
-    c_catalog_revision INTEGER NOT NULL,
-    c_period_time INTEGER NOT NULL,
-    c_source_view_id TEXT NOT NULL,
-    c_event_json TEXT NOT NULL,
-    c_outcomes_json TEXT NOT NULL,
-    c_status TEXT NOT NULL,
-    c_updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(c_space_id, c_event_id, c_catalog_revision)
-);
-CREATE INDEX IF NOT EXISTS idx_factor_subject_receipts_period ON t_factor_subject_receipts(c_period_time);
-
 CREATE TABLE IF NOT EXISTS t_factor_subject_runs (
     c_task_id TEXT PRIMARY KEY NOT NULL,
     c_scope_key TEXT NOT NULL,

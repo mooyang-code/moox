@@ -277,10 +277,10 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 		if event.TargetInstanceID != "" && hasCompiledFactorBindings(compiled) {
 			// A timer wake-up has no Factor source/result index provenance. Do not
 			// combine a newly revised source row with an older factor row; the
-			// factor.ready event will evaluate this instance once its generation is
+			// ViewDataReady event will evaluate this instance once its generation is
 			// published. Schedule-only factor strategies are rejected at enable time.
 			if retryErr == nil {
-				retryErr = fmt.Errorf("%w: factor-backed strategy requires factor.ready provenance", input.ErrNotReady)
+				retryErr = fmt.Errorf("%w: factor-backed strategy requires ViewDataReady provenance", input.ErrNotReady)
 			}
 			continue
 		}
@@ -788,10 +788,8 @@ func triggerMatchesDSL(dsl config.DSL, event PeriodReady) bool {
 func canonicalEventName(name string) string {
 	name = strings.TrimSpace(name)
 	switch strings.ToLower(name) {
-	case "viewfactorperiodready", "factor.ready", "event.storage.view.factor_period.ready":
-		return "event.storage.view.factor_period.ready"
-	case "viewsourceperiodready", "source.ready", "ready", "event.storage.view.source_period.ready":
-		return "event.storage.view.source_period.ready"
+	case "viewdataready", "view.data.ready", "ready", "event.storage.view.data.ready":
+		return "event.storage.view.data.ready"
 	default:
 		return name
 	}

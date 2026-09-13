@@ -33,7 +33,7 @@ type recordingExecutor struct {
 	err   error
 }
 
-func (e *recordingExecutor) Execute(context.Context, string, string, *storagepb.ViewSourcePeriodReady) error {
+func (e *recordingExecutor) Execute(context.Context, string, string, *storagepb.ViewDataReady) error {
 	e.calls.Add(1)
 	return e.err
 }
@@ -42,7 +42,7 @@ type blockingExecutor struct {
 	calls atomic.Int32
 }
 
-func (e *blockingExecutor) Execute(ctx context.Context, _ string, _ string, _ *storagepb.ViewSourcePeriodReady) error {
+func (e *blockingExecutor) Execute(ctx context.Context, _ string, _ string, _ *storagepb.ViewDataReady) error {
 	e.calls.Add(1)
 	<-ctx.Done()
 	return ctx.Err()
@@ -86,7 +86,7 @@ func TestConsumerReopensFailedSessionAndRestoresReadiness(t *testing.T) {
 
 func TestViewReadyConsumerConfig(t *testing.T) {
 	ref := viewReadyConsumerConfig(Config{FetchMaxWait: 2 * time.Second, MaxExecutionAttempts: 5})
-	require.Equal(t, events.ViewSourcePeriodReady.Name(), ref.Event.Name())
+	require.Equal(t, events.ViewDataReady.Name(), ref.Event.Name())
 	require.Equal(t, ViewSourceReadyConsumerName, ref.Name)
 	require.Equal(t, 2*time.Second, ref.FetchMaxWait)
 	require.Equal(t, nats.DeliverNewPolicy, ref.DeliverPolicy)
@@ -99,8 +99,8 @@ func TestHandlerExecutesViewReadyEvent(t *testing.T) {
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	readyAt := time.Date(2026, 8, 9, 1, 0, 0, 0, time.UTC)
-	payload := &storagepb.ViewSourcePeriodReady{SourceViewId: "prices-view", Frequency: "1m", PeriodTime: readyAt.Unix(), Status: "complete", ReadyAt: timestamppb.New(readyAt), Datasets: []*storagepb.ViewPeriodDatasetState{{DatasetId: "prices", Status: "complete"}}}
-	encoded, err := registry.Encode(events.ViewSourcePeriodReady, payload, events.PublishOptions{
+	payload := testViewDataReady(readyAt)
+	encoded, err := registry.Encode(events.ViewDataReady, payload, events.PublishOptions{
 		EventID: "ready-1", OccurredAt: readyAt, SpaceID: "quant", SubjectID: "prices-view",
 	})
 	require.NoError(t, err)
@@ -117,12 +117,8 @@ func TestHandlerAcknowledgesNoBindingAndRetriesPendingBinding(t *testing.T) {
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	readyAt := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
-	payload := &storagepb.ViewSourcePeriodReady{
-		SourceViewId: "prices-view", Frequency: "1m", PeriodTime: readyAt.Unix(),
-		Status: "complete", ReadyAt: timestamppb.New(readyAt),
-		Datasets: []*storagepb.ViewPeriodDatasetState{{DatasetId: "prices", Status: "complete"}},
-	}
-	encoded, err := registry.Encode(events.ViewSourcePeriodReady, payload, events.PublishOptions{
+	payload := testViewDataReady(readyAt)
+	encoded, err := registry.Encode(events.ViewDataReady, payload, events.PublishOptions{
 		EventID: "ready-binding-state", OccurredAt: readyAt, SpaceID: "quant", SubjectID: "prices-view",
 	})
 	require.NoError(t, err)
@@ -277,12 +273,7 @@ func encodedViewReadyDelivery(t *testing.T, eventID string) *jetstream.Delivery 
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	readyAt := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
-	payload := &storagepb.ViewSourcePeriodReady{
-		SourceViewId: "prices-view", Frequency: "1m", PeriodTime: readyAt.Unix(),
-		Status: "complete", ReadyAt: timestamppb.New(readyAt),
-		Datasets: []*storagepb.ViewPeriodDatasetState{{DatasetId: "prices", Status: "complete"}},
-	}
-	encoded, err := registry.Encode(events.ViewSourcePeriodReady, payload, events.PublishOptions{
+	encoded, err := registry.Encode(events.ViewDataReady, testViewDataReady(readyAt), events.PublishOptions{
 		EventID: eventID, OccurredAt: readyAt, SpaceID: "quant", SubjectID: "prices-view",
 	})
 	require.NoError(t, err)
@@ -291,5 +282,15 @@ func encodedViewReadyDelivery(t *testing.T, eventID string) *jetstream.Delivery 
 	return &jetstream.Delivery{
 		Subject: encoded.Subject, RawData: raw, RawMessageID: eventID,
 		ContentType: events.ContentType, DeliveryCount: 1,
+	}
+}
+
+func testViewDataReady(readyAt time.Time) *storagepb.ViewDataReady {
+	return &storagepb.ViewDataReady{
+		ViewId: "prices-view", ViewConfigId: "prices-view@1", CompletionEventId: "collector-1",
+		DatasetId: "prices", Status: "complete", VisibleScope: "view:prices-view",
+		Frequency: "1m", PeriodTime: readyAt.Unix(),
+		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 1}},
+		ReadyAt:            timestamppb.New(readyAt),
 	}
 }

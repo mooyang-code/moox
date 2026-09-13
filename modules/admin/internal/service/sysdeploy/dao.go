@@ -302,6 +302,18 @@ func mergeDefaultGatewayRoutes(existingValue, defaultValue any) ([]map[string]an
 }
 
 func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) ([]map[string]any, bool) {
+	changed := false
+	for _, route := range existing {
+		methods, ok := gatewayRouteStrings(route, "gateway_methods")
+		if !ok {
+			continue
+		}
+		rewritten, rewriteChanged := rewriteRetiredStorageGatewayMethods(methods)
+		if rewriteChanged {
+			route["gateway_methods"] = rewritten
+			changed = true
+		}
+	}
 	var defaultRoute map[string]any
 	var defaultMethods []string
 	for _, candidate := range defaults {
@@ -313,10 +325,9 @@ func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) ([]
 		}
 	}
 	if defaultRoute == nil {
-		return existing, false
+		return existing, changed
 	}
 	defaultServicePath := fmt.Sprint(defaultRoute["service_path"])
-	changed := false
 	for _, route := range existing {
 		if fmt.Sprint(route["service_path"]) != defaultServicePath {
 			continue
@@ -516,7 +527,13 @@ func defaultGatewayMethodSubset(defaults []map[string]any, readRoute map[string]
 			continue
 		}
 		candidateMethods, ok := gatewayRouteStrings(candidate, "gateway_methods")
-		if ok && !sameStringSet(candidateMethods, []string{"ReadTimeSeriesRows"}) && containsStringSet(methods, candidateMethods) {
+		if !ok || sameStringSet(candidateMethods, []string{"ReadTimeSeriesRows"}) {
+			continue
+		}
+		if containsStringSet(methods, candidateMethods) {
+			return candidateMethods
+		}
+		if intersectsStringSet(methods, candidateMethods) && len(subtractStringSet(methods, candidateMethods)) > 0 {
 			return candidateMethods
 		}
 	}
@@ -578,6 +595,45 @@ func sameStringValueSet(left, right []string) bool {
 	return containsStringSet(left, right) && containsStringSet(right, left)
 }
 
+func intersectsStringSet(left, right []string) bool {
+	seen := make(map[string]struct{}, len(left))
+	for _, value := range left {
+		seen[value] = struct{}{}
+	}
+	for _, value := range right {
+		if _, ok := seen[value]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func rewriteRetiredStorageGatewayMethods(methods []string) ([]string, bool) {
+	aliases := map[string]string{
+		"ReportDatasetPeriodCollected": "ReportCollectorPeriodCompleted",
+	}
+	out := make([]string, 0, len(methods))
+	seen := make(map[string]struct{}, len(methods))
+	changed := false
+	for _, method := range methods {
+		method = strings.TrimSpace(method)
+		if method == "" {
+			continue
+		}
+		if next, ok := aliases[method]; ok {
+			method = next
+			changed = true
+		}
+		if _, dup := seen[method]; dup {
+			changed = true
+			continue
+		}
+		seen[method] = struct{}{}
+		out = append(out, method)
+	}
+	return out, changed
+}
+
 func containsStringSet(haystack, needles []string) bool {
 	seen := make(map[string]struct{}, len(haystack))
 	for _, value := range haystack {
@@ -618,6 +674,7 @@ func mergeDefaultGatewayMethods(existingValue, defaultValue any) ([]string, bool
 	if json.Unmarshal(existingRaw, &existing) != nil || json.Unmarshal(defaultRaw, &defaults) != nil {
 		return nil, false
 	}
+	existing, changed := rewriteRetiredStorageGatewayMethods(existing)
 	seen := make(map[string]struct{}, len(existing)+len(defaults))
 	for _, method := range existing {
 		method = strings.TrimSpace(method)
@@ -626,10 +683,9 @@ func mergeDefaultGatewayMethods(existingValue, defaultValue any) ([]string, bool
 		}
 	}
 	if _, wildcard := seen["*"]; wildcard {
-		return existing, false
+		return existing, changed
 	}
 	merged := append([]string(nil), existing...)
-	changed := false
 	for _, method := range defaults {
 		method = strings.TrimSpace(method)
 		if method == "" {

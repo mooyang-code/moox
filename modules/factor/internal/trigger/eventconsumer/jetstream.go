@@ -14,7 +14,7 @@ import (
 func viewReadyConsumerConfig(cfg Config) events.ConsumerConfig {
 	return events.ConsumerConfig{
 		Name:       ViewSourceReadyConsumerName,
-		Event:      events.ViewSourcePeriodReady,
+		Event:      events.ViewDataReady,
 		AckWait:    time.Minute,
 		MaxDeliver: -1,
 		// A delayed retry must not occupy the entire durable lane. The runner
@@ -91,7 +91,7 @@ func (c *Consumer) open(ctx context.Context) (natsConsumerSession, error) {
 	runnerCfg := jetstream.RunnerConfig{
 		BatchSize: 1, InProgressInterval: 30 * time.Second,
 		ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
-			log.ErrorContextf(ctx, "factor ViewSourcePeriodReady consumer error: %v", err)
+			log.ErrorContextf(ctx, "factor ViewDataReady consumer error: %v", err)
 		}),
 		ActionReporter: c.progress,
 	}

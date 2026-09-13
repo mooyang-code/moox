@@ -56,7 +56,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	bar := now.Truncate(time.Hour)
 	dsl := `name: external-e2e
 triggers:
-  event: {name: factor.ready}
+  event: {name: ViewDataReady}
 data: {bar: 1h, calendar: crypto_24x7}
 rules:
   rank:
@@ -107,7 +107,7 @@ rules:
 			return 0, nil
 		},
 	}
-	event := trigger.PeriodReady{MessageID: "external-ready", EventName: "factor.ready", SpaceID: "space-e2e", ViewID: "factor", Frequency: "1h", PeriodTime: bar, BarEndTime: bar, Status: "complete"}
+	event := trigger.PeriodReady{MessageID: "external-ready", EventName: "ViewDataReady", SpaceID: "space-e2e", ViewID: "factor", Frequency: "1h", PeriodTime: bar, BarEndTime: bar, Status: "complete"}
 	require.NoError(t, processor.Handle(ctx, event))
 	require.Equal(t, 1, authorizationReads)
 	result, err := repo.LatestResult(ctx, "instance-e2e", session)

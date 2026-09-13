@@ -85,7 +85,9 @@ func InitializeEngine(ctx context.Context, s *server.Server, cfg *EngineApplicat
 	if err != nil {
 		return nil, err
 	}
-	r.consumer, r.stopSubject = consumer, consumer.Close
+	if consumer != nil {
+		r.consumer, r.stopSubject = consumer, consumer.Close
+	}
 	r.Health = health.New("factor-engine", cfg.EngineID, "", "")
 	r.Health.SnapshotFunc = r.snapshot
 	if err = health.Register(s.Service(engineHealthService), r.Health); err != nil {
@@ -146,7 +148,7 @@ func (r *EngineRuntime) snapshot(ctx context.Context) healthz.Response {
 		database = resources.Store.Ping(probe) == nil
 		cancel()
 		python = resources.PythonPool != nil && resources.PythonPool.Status().Ready
-		consumer = r.consumer != nil && r.consumer.Ready() && !r.consumer.Status().Stalled
+		consumer = r.consumer == nil || (r.consumer.Ready() && !r.consumer.Status().Stalled)
 	}
 	rsp := healthz.Base("factor-engine", r.Health.InstanceID, "", "", r.Health.StartedAt, alive && database && python && consumer)
 	rsp.Details = map[string]any{"engine_context": alive, "database": database, "python": python, "subject_consumer": consumer, "execution_scope": "subject-time-series", "cache_integrated": false, "cross_barrier_integrated": false}

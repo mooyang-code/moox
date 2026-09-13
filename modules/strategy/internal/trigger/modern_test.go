@@ -30,7 +30,7 @@ func TestModernCompileFailureDoesNotAcknowledgeReadyEvent(t *testing.T) {
 	now := time.UnixMilli(2_000_000).UTC()
 	dsl := `name: compile-retry
 triggers:
-  event: {name: factor.ready}
+  event: {name: ViewDataReady}
 data: {bar: 1m, calendar: crypto_24x7}
 rules:
   rank:
@@ -55,7 +55,7 @@ rules:
 		},
 		Now: func() time.Time { return now },
 	}
-	event := PeriodReady{MessageID: "compile-retry-ready", EventName: "factor.ready", SpaceID: "space", ViewID: "factor", PeriodTime: now.Add(-time.Minute), Status: "complete"}
+	event := PeriodReady{MessageID: "compile-retry-ready", EventName: "ViewDataReady", SpaceID: "space", ViewID: "factor", PeriodTime: now.Add(-time.Minute), Status: "complete"}
 	if err := p.Handle(context.Background(), event); !errors.Is(err, transient) {
 		t.Fatalf("Handle() error = %v, want compile error", err)
 	}
@@ -81,7 +81,7 @@ func TestScheduledFactorStrategyWaitsForFactorReadyProvenance(t *testing.T) {
 	dsl := `name: scheduled-factor
 triggers:
   schedule: {cron: "@daily"}
-  event: {name: factor.ready}
+  event: {name: ViewDataReady}
 data: {bar: 1d, calendar: crypto_24x7}
 rules:
   rank: {pool: [BTC], score: ma20, select: {top: 1}, weight: "1"}
@@ -98,7 +98,7 @@ rules:
 		Store:  repo,
 		Loader: loader,
 		CompileWithBindings: func(context.Context, config.DSL, string, json.RawMessage) (compiler.CompiledStrategy, error) {
-			return compiler.CompiledStrategy{Data: config.Data{Bar: "1d", Calendar: "crypto_24x7"}, Triggers: config.Triggers{Schedule: &config.Schedule{Cron: "@daily"}, Event: &config.Event{Name: "factor.ready"}}, SourceView: compiler.CompiledView{ID: "source", Frequency: "1d"}, Factors: []compiler.CompiledFactor{{BindingID: "binding", ResultViewID: "factor"}}, Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"factor"}}}, nil
+			return compiler.CompiledStrategy{Data: config.Data{Bar: "1d", Calendar: "crypto_24x7"}, Triggers: config.Triggers{Schedule: &config.Schedule{Cron: "@daily"}, Event: &config.Event{Name: "ViewDataReady"}}, SourceView: compiler.CompiledView{ID: "source", Frequency: "1d"}, Factors: []compiler.CompiledFactor{{BindingID: "binding", ResultViewID: "factor"}}, Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"factor"}}}, nil
 		},
 		Now: func() time.Time { return now },
 	}
@@ -114,7 +114,7 @@ rules:
 		t.Fatal(err)
 	}
 	if processed {
-		t.Fatal("scheduled factor wake must remain retryable until factor.ready provenance arrives")
+		t.Fatal("scheduled factor wake must remain retryable until ViewDataReady provenance arrives")
 	}
 }
 
@@ -137,7 +137,7 @@ func TestModernDSLInstanceProducesTargetResult(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	dsl := `name: demo
 triggers:
-  event: {name: factor.ready}
+  event: {name: ViewDataReady}
 data: {bar: 1m, calendar: crypto_24x7}
 rules:
   rank:
@@ -156,7 +156,7 @@ rules:
 	period := now.Add(-time.Minute).Truncate(time.Minute)
 	loader := fakeInputLoader{value: input.EvaluationInput{SpaceID: "space", StrategyID: "s1", PeriodEnd: period.Format(time.RFC3339Nano), SourceViewID: "source", DataFrequency: "1m", Items: []input.InstrumentInput{{PoolItem: input.PoolItem{InstrumentID: "BTC", SubjectID: "btc"}, Values: map[string]quant.Decimal{"bias": quant.Must("1")}}, {PoolItem: input.PoolItem{InstrumentID: "ETH", SubjectID: "eth"}, Values: map[string]quant.Decimal{"bias": quant.Must("2")}}}}}
 	p := &Processor{Store: repo, Loader: loader, Now: func() time.Time { return now }}
-	if err := p.Handle(context.Background(), PeriodReady{MessageID: "m1", EventName: "factor.ready", SpaceID: "space", ViewID: "factor", Frequency: "1m", PeriodTime: period, Status: "degraded", BindingStatuses: map[string]string{"unrelated": "degraded"}}); err != nil {
+	if err := p.Handle(context.Background(), PeriodReady{MessageID: "m1", EventName: "ViewDataReady", SpaceID: "space", ViewID: "factor", Frequency: "1m", PeriodTime: period, Status: "degraded", BindingStatuses: map[string]string{"unrelated": "degraded"}}); err != nil {
 		t.Fatal(err)
 	}
 	result, err := repo.LatestResult(context.Background(), "i1", session)
@@ -210,7 +210,7 @@ func TestModernEvaluationsAreSerializedAcrossTriggers(t *testing.T) {
 	now := time.UnixMilli(2_000_000).UTC()
 	dsl := `name: serial
 triggers:
-  event: {name: factor.ready}
+  event: {name: ViewDataReady}
 data: {bar: 1m, calendar: crypto_24x7}
 rules:
   rank:
@@ -232,7 +232,7 @@ rules:
 	secondPeriod := now.Add(-time.Minute)
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- p.Handle(context.Background(), PeriodReady{MessageID: "m1", EventName: "factor.ready", SpaceID: "space", ViewID: "source", Frequency: "1m", PeriodTime: firstPeriod})
+		firstDone <- p.Handle(context.Background(), PeriodReady{MessageID: "m1", EventName: "ViewDataReady", SpaceID: "space", ViewID: "source", Frequency: "1m", PeriodTime: firstPeriod})
 	}()
 	select {
 	case <-loader.started:
@@ -241,7 +241,7 @@ rules:
 	}
 	secondDone := make(chan error, 1)
 	go func() {
-		secondDone <- p.Handle(context.Background(), PeriodReady{MessageID: "m2", EventName: "factor.ready", SpaceID: "space", ViewID: "source", Frequency: "1m", PeriodTime: secondPeriod})
+		secondDone <- p.Handle(context.Background(), PeriodReady{MessageID: "m2", EventName: "ViewDataReady", SpaceID: "space", ViewID: "source", Frequency: "1m", PeriodTime: secondPeriod})
 	}()
 	select {
 	case <-loader.secondStarted:

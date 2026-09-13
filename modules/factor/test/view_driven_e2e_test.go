@@ -25,10 +25,7 @@ func TestViewReadyCombinationPeriodChain(t *testing.T) {
 	storage := new(fakePeriodStorage)
 	runner := newBarrierCombinationRunner(2)
 	executor := trigger.NewViewReadyRunner(fakePeriodBindings{items: testBindings()}, fakePeriodFactors{items: testFactors()}, runner, storage, t.TempDir())
-	ready := &publicstoragepb.ViewSourcePeriodReady{
-		SourceViewId: "prices-view", Frequency: "1m", PeriodTime: period.Unix(), Status: "complete",
-		PrimarySubjects: []string{"SOL", "BTC", "ETH"}, ReadyAt: timestamppb.New(period),
-	}
+	ready := viewReady(period, "complete")
 
 	done := make(chan error, 1)
 	go func() { done <- executor.Execute(context.Background(), "space-a", "source-ready-1", ready) }()
@@ -72,10 +69,7 @@ func TestViewReadyCombinationFailureReportsDegradedMarker(t *testing.T) {
 	storage := new(fakePeriodStorage)
 	runner := &immediateCombinationRunner{fail: map[string]error{"ETH/factor-b": errors.New("synthetic factor failure")}}
 	executor := trigger.NewViewReadyRunner(fakePeriodBindings{items: testBindings()}, fakePeriodFactors{items: testFactors()}, runner, storage, t.TempDir())
-	err := executor.Execute(context.Background(), "space-a", "source-ready-degraded", &publicstoragepb.ViewSourcePeriodReady{
-		SourceViewId: "prices-view", Frequency: "1m", PeriodTime: period.Unix(), Status: "complete",
-		PrimarySubjects: []string{"SOL", "BTC", "ETH"}, ReadyAt: timestamppb.New(period),
-	})
+	err := executor.Execute(context.Background(), "space-a", "source-ready-degraded", viewReady(period, "complete"))
 	if err != nil {
 		t.Fatalf("execute degraded ready period: %v", err)
 	}
@@ -102,10 +96,7 @@ func TestViewReadyPipelineOverlapsReadsAndRetriesTimeoutAtTail(t *testing.T) {
 	executor := trigger.NewViewReadyRunner(
 		fakePeriodBindings{items: testBindings()}, fakePeriodFactors{items: testFactors()}, runner, storage, t.TempDir(),
 	)
-	ready := &publicstoragepb.ViewSourcePeriodReady{
-		SourceViewId: "prices-view", Frequency: "1m", PeriodTime: period.Unix(), Status: "complete",
-		PrimarySubjects: []string{"BTC", "ETH", "SOL"}, ReadyAt: timestamppb.New(period),
-	}
+	ready := viewReady(period, "complete")
 	done := make(chan error, 1)
 	go func() { done <- executor.Execute(context.Background(), "space-a", "pipeline-ready-1", ready) }()
 
@@ -149,10 +140,7 @@ func TestViewReadyPipelineFinalReadTimeoutDegradesOnlyFailedSubject(t *testing.T
 	executor := trigger.NewViewReadyRunner(
 		fakePeriodBindings{items: testBindings()}, fakePeriodFactors{items: testFactors()}, runner, storage, t.TempDir(),
 	)
-	err := executor.Execute(context.Background(), "space-a", "pipeline-ready-degraded", &publicstoragepb.ViewSourcePeriodReady{
-		SourceViewId: "prices-view", Frequency: "1m", PeriodTime: period.Unix(), Status: "complete",
-		PrimarySubjects: []string{"BTC", "ETH"}, ReadyAt: timestamppb.New(period),
-	})
+	err := executor.Execute(context.Background(), "space-a", "pipeline-ready-degraded", viewReady(period, "complete"))
 	if err != nil {
 		t.Fatalf("execute degraded pipeline: %v", err)
 	}
@@ -171,10 +159,20 @@ func TestViewReadyPipelineFinalReadTimeoutDegradesOnlyFailedSubject(t *testing.T
 	}
 }
 
+func viewReady(period time.Time, status string) *publicstoragepb.ViewDataReady {
+	return &publicstoragepb.ViewDataReady{
+		ViewId: "prices-view", ViewConfigId: "prices-view@1", CompletionEventId: "ready",
+		DatasetId: "prices", Status: status, VisibleScope: "view:prices-view",
+		Frequency: "1m", PeriodTime: period.Unix(),
+		CommittedPositions: []*publicstoragepb.CommittedPosition{{NodeId: "n", StoreId: "s", Sequence: 1}},
+		ReadyAt:            timestamppb.New(period),
+	}
+}
+
 func testBindings() []domain.FactorBinding {
 	return []domain.FactorBinding{
-		{BindingID: "binding-b", BindingGeneration: "incarnation-b", FactorID: "factor-b", SpaceID: "space-a", SourceViewID: "prices-view", ResultDatasetID: "prices-factor", Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled},
-		{BindingID: "binding-a", BindingGeneration: "incarnation-a", FactorID: "factor-a", SpaceID: "space-a", SourceViewID: "prices-view", ResultDatasetID: "prices-factor", Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled},
+		{BindingID: "binding-b", BindingGeneration: "incarnation-b", FactorID: "factor-b", SpaceID: "space-a", SourceViewID: "prices-view", ResultDatasetID: "prices-factor", Freq: "1m", SubjectMode: domain.SubjectModeInclude, SubjectsJSON: `["BTC","ETH","SOL"]`, Status: domain.BindingStatusEnabled},
+		{BindingID: "binding-a", BindingGeneration: "incarnation-a", FactorID: "factor-a", SpaceID: "space-a", SourceViewID: "prices-view", ResultDatasetID: "prices-factor", Freq: "1m", SubjectMode: domain.SubjectModeInclude, SubjectsJSON: `["BTC","ETH","SOL"]`, Status: domain.BindingStatusEnabled},
 	}
 }
 

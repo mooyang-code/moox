@@ -84,25 +84,29 @@ func TestBuildDatasetRowsUpsertedMessageUsesExplicitOuterContract(t *testing.T) 
 	}
 }
 
-func TestBuildDatasetPeriodCollectedMessageChangesIDWhenPayloadChanges(t *testing.T) {
-	base := &pb.DatasetPeriodCollectedMarker{
+func TestBuildCollectorPeriodCompletedMessageChangesIDWhenPayloadChanges(t *testing.T) {
+	base := &pb.CollectorPeriodCompletedMarker{
 		DatasetId: "spot_kline", Frequency: "1m", PeriodTime: 1_725_000_000,
-		Status: "complete", SubjectIds: []string{"BTC-USDT", "ETH-USDT"}, CollectedAt: timestamppb.New(time.Unix(1_725_000_001, 0)),
+		Status: "complete", BatchId: "batch-1", ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "universe:spot_kline:1m",
+		ExpectedSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
+		CommittedPositions: []*pb.CommittedPosition{{NodeId: "node-1", StoreId: "store", Sequence: 1}},
+		CollectedAt:        timestamppb.New(time.Unix(1_725_000_001, 0)),
 	}
-	_, firstID, err := BuildDatasetPeriodCollectedMessage("crypto", base)
+	_, firstID, err := BuildCollectorPeriodCompletedMessage("crypto", base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, retryID, err := BuildDatasetPeriodCollectedMessage("crypto", proto.Clone(base).(*pb.DatasetPeriodCollectedMarker))
+	_, retryID, err := BuildCollectorPeriodCompletedMessage("crypto", proto.Clone(base).(*pb.CollectorPeriodCompletedMarker))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if firstID != retryID {
 		t.Fatalf("identical marker IDs differ: %q != %q", firstID, retryID)
 	}
-	changed := proto.Clone(base).(*pb.DatasetPeriodCollectedMarker)
+	changed := proto.Clone(base).(*pb.CollectorPeriodCompletedMarker)
 	changed.Status = "degraded"
-	_, changedID, err := BuildDatasetPeriodCollectedMessage("crypto", changed)
+	changed.FailedSubjects = []string{"ETH-USDT"}
+	_, changedID, err := BuildCollectorPeriodCompletedMessage("crypto", changed)
 	if err != nil {
 		t.Fatal(err)
 	}

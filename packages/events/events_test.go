@@ -23,13 +23,12 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.observability.health.check.reported@1",
 		"event.observability.host.snapshot.reported@1",
 		"event.observability.metrics.snapshot.reported@1",
+		"event.storage.collector.period.completed@1",
 		"event.storage.dataset.factor_period.computed@1",
-		"event.storage.dataset.period.collected@1",
 		"event.storage.dataset.rows.upserted@2",
 		"event.storage.dataset.sync_point@1",
-		"event.storage.view.factor_period.ready@1",
-		"event.storage.view.source_period.ready@1",
-		"event.storage.view.source_subject.ready@1",
+		"event.storage.merge.period.completed@1",
+		"event.storage.view.data.ready@1",
 		"event.trade.target.weight_requested@1",
 	}
 	wantOwners := map[string]string{
@@ -38,13 +37,12 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.observability.host.snapshot.reported@1":    "hostagent",
 		"event.observability.metrics.snapshot.reported@1": "service",
 		"event.market.fetch.batch.completed@1":            "collector",
+		"event.storage.collector.period.completed@1":      "storage",
 		"event.storage.dataset.factor_period.computed@1":  "storage",
-		"event.storage.dataset.period.collected@1":        "storage",
 		"event.storage.dataset.rows.upserted@2":           "storage",
 		"event.storage.dataset.sync_point@1":              "storage",
-		"event.storage.view.factor_period.ready@1":        "storage",
-		"event.storage.view.source_period.ready@1":        "storage",
-		"event.storage.view.source_subject.ready@1":       "storage",
+		"event.storage.merge.period.completed@1":          "storage",
+		"event.storage.view.data.ready@1":                 "storage",
 		"event.trade.target.weight_requested@1":           "strategy",
 	}
 	events := registry.Events()
@@ -91,47 +89,38 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 		decode    func([]byte, string, string) (proto.Message, error)
 	}{
 		{
-			name: "dataset period collected", event: DatasetPeriodCollected,
-			payload:   &storagepb.DatasetPeriodCollected{DatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", SubjectIds: []string{"BTC-USDT"}, CollectedAt: now},
+			name: "collector period completed", event: CollectorPeriodCompleted,
+			payload:   validCollectorPeriodCompleted(now),
 			subjectID: "dataset",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
-				_, payload, err := DecodeDatasetPeriodCollected(registry, raw, subject, id)
+				_, payload, err := DecodeCollectorPeriodCompleted(registry, raw, subject, id)
 				return payload, err
 			},
 		},
 		{
-			name: "source view ready", event: ViewSourcePeriodReady,
-			payload:   &storagepb.ViewSourcePeriodReady{SourceViewId: "source-view", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Datasets: []*storagepb.ViewPeriodDatasetState{{DatasetId: "dataset", Status: "complete"}}, PrimarySubjects: []string{"BTC-USDT"}, ReadyAt: now},
-			subjectID: "source-view",
+			name: "merge period completed", event: MergePeriodCompleted,
+			payload:   validMergePeriodCompleted(now),
+			subjectID: "mdataset",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
-				_, payload, err := DecodeViewSourcePeriodReady(registry, raw, subject, id)
+				_, payload, err := DecodeMergePeriodCompleted(registry, raw, subject, id)
 				return payload, err
 			},
 		},
 		{
-			name: "source subject ready", event: ViewSourceSubjectReady,
-			payload:   &storagepb.ViewSourceSubjectReady{SourceViewId: "source-view", SourceDatasetId: "dataset", SubjectId: "BTC-USDT", Frequency: "1m", PeriodTime: 1786032000, InputContractVersion: "contract", SourceEventId: "row-event", ReadyAt: now, SourceNodeId: "node", SourceSequence: 7, SourceStoreId: "store"},
-			subjectID: "source-view",
+			name: "view data ready", event: ViewDataReady,
+			payload:   validViewDataReady(now),
+			subjectID: "view-1",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
-				_, payload, err := DecodeViewSourceSubjectReadyWithContentType(registry, raw, subject, id, ContentType)
+				_, payload, err := DecodeViewDataReady(registry, raw, subject, id)
 				return payload, err
 			},
 		},
 		{
 			name: "factor period computed", event: FactorPeriodComputed,
-			payload:   &storagepb.FactorPeriodComputed{SourceViewId: "source-view", ResultDatasetId: "result-dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}}, ComputedAt: now, TriggerEventId: "source-ready-1"},
-			subjectID: "result-dataset",
+			payload:   validFactorPeriodComputed(now),
+			subjectID: "mdataset",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
 				_, payload, err := DecodeFactorPeriodComputed(registry, raw, subject, id)
-				return payload, err
-			},
-		},
-		{
-			name: "factor view ready", event: ViewFactorPeriodReady,
-			payload:   &storagepb.ViewFactorPeriodReady{SourceViewId: "source-view", ResultViewId: "result-view", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}}, ReadyAt: now},
-			subjectID: "result-view",
-			decode: func(raw []byte, subject, id string) (proto.Message, error) {
-				_, payload, err := DecodeViewFactorPeriodReady(registry, raw, subject, id)
 				return payload, err
 			},
 		},
@@ -257,5 +246,46 @@ func TestLogicalAccountTargetWeightRequestedContract(t *testing.T) {
 	}
 	if _, exists := registry.Lookup("trade.rebalance.requested", 1); exists {
 		t.Fatal("legacy trade rebalance event remains registered")
+	}
+}
+
+func validCollectorPeriodCompleted(now *timestamppb.Timestamp) *storagepb.CollectorPeriodCompleted {
+	return &storagepb.CollectorPeriodCompleted{
+		DatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
+		BatchId: "batch-1", ConfigSnapshotId: "config-1", ExpectedScopeRef: "universe:dataset:1m",
+		ExpectedSubjectIds: []string{"BTC-USDT"},
+		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 1}},
+		CollectedAt:        now,
+	}
+}
+
+func validMergePeriodCompleted(now *timestamppb.Timestamp) *storagepb.MergePeriodCompleted {
+	return &storagepb.MergePeriodCompleted{
+		DatasetId: "mdataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
+		BatchId: "merge-batch-1", ConfigSnapshotId: "merge-config-1", ExpectedScopeRef: "universe:mdataset:1m",
+		ExpectedSubjectIds: []string{"BTC-USDT"},
+		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 2}},
+		CompletedAt:        now,
+	}
+}
+
+func validViewDataReady(now *timestamppb.Timestamp) *storagepb.ViewDataReady {
+	return &storagepb.ViewDataReady{
+		ViewId: "view-1", ViewConfigId: "view-config-1", CompletionEventId: "merge-completed-1",
+		DatasetId: "mdataset", Status: "complete", VisibleScope: "universe:mdataset:1m",
+		Frequency: "1m", PeriodTime: 1786032000,
+		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 2}},
+		ReadyAt:            now,
+	}
+}
+
+func validFactorPeriodComputed(now *timestamppb.Timestamp) *storagepb.FactorPeriodComputed {
+	return &storagepb.FactorPeriodComputed{
+		DatasetId: "mdataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
+		BatchId: "factor-batch-1", ConfigSnapshotId: "factor-config-1", ExpectedScopeRef: "universe:mdataset:1m",
+		ExpectedSubjectIds: []string{"BTC-USDT"},
+		Bindings:           []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}},
+		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 3}},
+		ComputedAt:         now, TriggerEventId: "merge-completed-1",
 	}
 }

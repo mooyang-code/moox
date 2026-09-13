@@ -305,7 +305,7 @@ func (r *InventoryReconciler) consumerSpec(ref datasetRef) (dynamicDatasetConsum
 		return dynamicDatasetConsumerSpec{}, err
 	}
 	filters := make([]string, 0, 4)
-	for _, event := range []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCollected, events.FactorPeriodComputed, events.DatasetSyncPoint} {
+	for _, event := range []events.Event{events.DatasetRowsUpserted, events.CollectorPeriodCompleted, events.MergePeriodCompleted, events.FactorPeriodComputed, events.DatasetSyncPoint} {
 		filter, renderErr := registry.RenderSubject(event, ref.spaceID, ref.datasetID)
 		if renderErr != nil {
 			return dynamicDatasetConsumerSpec{}, fmt.Errorf("render dynamic View consumer filter: %w", renderErr)

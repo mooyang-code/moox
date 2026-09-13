@@ -46,7 +46,7 @@ func newCreateInstanceService(t *testing.T) (*Service, context.Context, *strateg
 	repo := openRPCStore(t)
 	if err := repo.SaveStrategyDefinition(context.Background(), store.StrategyDefinition{
 		StrategyID: "create-strategy", StrategyName: "create", DSLYaml: `name: create
-triggers: {event: {name: source.ready}}
+triggers: {event: {name: ViewDataReady}}
 data: {bar: 1m, calendar: crypto_24x7}
 rules: {r: {pool: [BTC], score: close, weight: 1}}
 `, CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1),

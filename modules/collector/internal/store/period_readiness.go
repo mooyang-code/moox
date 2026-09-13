@@ -447,5 +447,5 @@ func requiredPeriodSpaceID(spaceID string) (string, error) {
 }
 
 func periodEventID(spaceID, datasetID, frequency string, period time.Time) string {
-	return "dataset-period-collected/" + strings.Join([]string{spaceID, datasetID, frequency, period.UTC().Format(time.RFC3339)}, "/")
+	return "collector-period-completed/" + strings.Join([]string{spaceID, datasetID, frequency, period.UTC().Format(time.RFC3339)}, "/")
 }

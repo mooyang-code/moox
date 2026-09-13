@@ -19,7 +19,8 @@ func TestPurgeDatasetEventsDryRunPrintsExactSubjects(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, stdout.String(), `"status":"dry_run"`)
 	require.Contains(t, stdout.String(), "moox.event.storage.dataset.rows.upserted.v2.")
-	require.Contains(t, stdout.String(), "moox.event.storage.dataset.period.collected.v1.")
+	require.Contains(t, stdout.String(), "moox.event.storage.collector.period.completed.v1.")
+	require.Contains(t, stdout.String(), "moox.event.storage.merge.period.completed.v1.")
 	require.Contains(t, stdout.String(), "moox.event.storage.dataset.sync_point.v1.")
 }
 
@@ -28,7 +29,8 @@ func TestDatasetEventSubjectsAreExactAndDatasetScoped(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"moox.event.storage.dataset.rows.upserted.v2.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5zwk4twnfrwkx3nmv2he2ldom",
-		"moox.event.storage.dataset.period.collected.v1.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5zwk4twnfrwkx3nmv2he2ldom",
+		"moox.event.storage.collector.period.completed.v1.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5zwk4twnfrwkx3nmv2he2ldom",
+		"moox.event.storage.merge.period.completed.v1.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5zwk4twnfrwkx3nmv2he2ldom",
 		"moox.event.storage.dataset.factor_period.computed.v1.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5zwk4twnfrwkx3nmv2he2ldom",
 		"moox.event.storage.dataset.sync_point.v1.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5zwk4twnfrwkx3nmv2he2ldom",
 	}, subjects)
@@ -51,7 +53,7 @@ func TestPurgeDatasetEventsCallsPurgeAfterConfirmation(t *testing.T) {
 	purgeDatasetEventSubjects = func(_ context.Context, opts purgeDatasetEventsOptions, subjects []string) error {
 		called = true
 		require.Equal(t, "MOOX_STORAGE", opts.stream)
-		require.Len(t, subjects, 4)
+		require.Len(t, subjects, 5)
 		return nil
 	}
 	var stdout bytes.Buffer

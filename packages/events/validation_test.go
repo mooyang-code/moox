@@ -107,31 +107,36 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 		mutate    func(proto.Message)
 	}{
 		{
-			name: "dataset route", event: DatasetPeriodCollected, subjectID: "dataset",
-			payload: &storagepb.DatasetPeriodCollected{DatasetId: "dataset", Frequency: "1m", PeriodTime: 1, Status: "complete", SubjectIds: []string{"BTC-USDT"}, CollectedAt: now},
-			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCollected).DatasetId = "other" },
+			name: "collector route", event: CollectorPeriodCompleted, subjectID: "dataset",
+			payload: validCollectorPeriodCompleted(now),
+			mutate:  func(value proto.Message) { value.(*storagepb.CollectorPeriodCompleted).DatasetId = "other" },
 		},
 		{
-			name: "dataset failed subject subset", event: DatasetPeriodCollected, subjectID: "dataset",
-			payload: &storagepb.DatasetPeriodCollected{DatasetId: "dataset", Frequency: "1m", PeriodTime: 1, Status: "degraded", SubjectIds: []string{"BTC-USDT"}, FailedSubjects: []string{"BTC-USDT"}, CollectedAt: now},
+			name: "collector failed subject subset", event: CollectorPeriodCompleted, subjectID: "dataset",
+			payload: func() proto.Message {
+				payload := validCollectorPeriodCompleted(now)
+				payload.Status = "degraded"
+				payload.FailedSubjects = []string{"BTC-USDT"}
+				return payload
+			}(),
 			mutate: func(value proto.Message) {
-				value.(*storagepb.DatasetPeriodCollected).FailedSubjects = []string{"ETH-USDT"}
+				value.(*storagepb.CollectorPeriodCompleted).FailedSubjects = []string{"ETH-USDT"}
 			},
 		},
 		{
-			name: "source view aggregate status", event: ViewSourcePeriodReady, subjectID: "source-view",
-			payload: &storagepb.ViewSourcePeriodReady{SourceViewId: "source-view", Frequency: "1m", PeriodTime: 1, Status: "complete", Datasets: []*storagepb.ViewPeriodDatasetState{{DatasetId: "dataset", Status: "complete"}}, ReadyAt: now},
-			mutate:  func(value proto.Message) { value.(*storagepb.ViewSourcePeriodReady).Datasets[0].Status = "degraded" },
+			name: "merge missing positions", event: MergePeriodCompleted, subjectID: "mdataset",
+			payload: validMergePeriodCompleted(now),
+			mutate:  func(value proto.Message) { value.(*storagepb.MergePeriodCompleted).CommittedPositions = nil },
 		},
 		{
-			name: "factor computed trigger", event: FactorPeriodComputed, subjectID: "result-dataset",
-			payload: &storagepb.FactorPeriodComputed{SourceViewId: "source-view", ResultDatasetId: "result-dataset", Frequency: "1m", PeriodTime: 1, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}}, ComputedAt: now, TriggerEventId: "source-ready-1"},
+			name: "factor computed trigger", event: FactorPeriodComputed, subjectID: "mdataset",
+			payload: validFactorPeriodComputed(now),
 			mutate:  func(value proto.Message) { value.(*storagepb.FactorPeriodComputed).TriggerEventId = "" },
 		},
 		{
-			name: "factor view route", event: ViewFactorPeriodReady, subjectID: "result-view",
-			payload: &storagepb.ViewFactorPeriodReady{SourceViewId: "source-view", ResultViewId: "result-view", Frequency: "1m", PeriodTime: 1, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}}, ReadyAt: now},
-			mutate:  func(value proto.Message) { value.(*storagepb.ViewFactorPeriodReady).ResultViewId = "other" },
+			name: "view data ready route", event: ViewDataReady, subjectID: "view-1",
+			payload: validViewDataReady(now),
+			mutate:  func(value proto.Message) { value.(*storagepb.ViewDataReady).ViewId = "other" },
 		},
 		{
 			name: "sync point source", event: DatasetSyncPoint, subjectID: "dataset",
@@ -156,54 +161,22 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 func TestFactorCompletionRequiresSourceHash(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
-	_, err = registry.Encode(
-		FactorPeriodComputed,
-		&storagepb.FactorPeriodComputed{
-			SourceViewId: "source-view", ResultDatasetId: "result-dataset", Frequency: "1m", PeriodTime: 1,
-			Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete"}},
-			ComputedAt: timestamppb.Now(), TriggerEventId: "source-ready-1", SourceIndexId: "source-index-1", SourceIndexRevision: 1,
-		},
-		validationOptions("factor-event-1", "space", "result-dataset"),
-	)
+	payload := validFactorPeriodComputed(timestamppb.Now())
+	payload.Bindings[0].SourceHash = ""
+	_, err = registry.Encode(FactorPeriodComputed, payload, validationOptions("factor-event-1", "space", "mdataset"))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "source_hash is required")
 }
 
-func TestDatasetPeriodCollectedAllowsEmptySubjectIDs(t *testing.T) {
+func TestCollectorPeriodCompletedAllowsEmptySubjectIDs(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
-	payload := &storagepb.DatasetPeriodCollected{
-		DatasetId: "dataset", Frequency: "1H", PeriodTime: 1, Status: "complete", CollectedAt: timestamppb.Now(),
-	}
-	_, err = registry.Encode(DatasetPeriodCollected, payload, validationOptions("event-1", "space", "dataset"))
+	payload := validCollectorPeriodCompleted(timestamppb.Now())
+	payload.ExpectedSubjectIds = nil
+	payload.Frequency = "1H"
+	payload.PeriodTime = 1
+	_, err = registry.Encode(CollectorPeriodCompleted, payload, validationOptions("event-1", "space", "dataset"))
 	require.NoError(t, err)
-}
-
-func TestViewFactorReadyRequiresPairedIndexProvenance(t *testing.T) {
-	registry, err := DefaultRegistry()
-	require.NoError(t, err)
-	base := &storagepb.ViewFactorPeriodReady{
-		SourceViewId: "source-view", ResultViewId: "result-view", Frequency: "1m", PeriodTime: 1,
-		Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}},
-		ReadyAt: timestamppb.Now(), SourceIndexId: "source-index", SourceIndexRevision: 1,
-		ResultIndexId: "result-index", ResultIndexRevision: 2,
-	}
-	_, err = registry.Encode(ViewFactorPeriodReady, base, validationOptions("factor-ready-1", "space", "result-view"))
-	require.NoError(t, err)
-
-	missingResult := proto.Clone(base).(*storagepb.ViewFactorPeriodReady)
-	missingResult.ResultIndexId = ""
-	missingResult.ResultIndexRevision = 0
-	_, err = registry.Encode(ViewFactorPeriodReady, missingResult, validationOptions("factor-ready-2", "space", "result-view"))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "source and result index provenance")
-
-	missingSource := proto.Clone(base).(*storagepb.ViewFactorPeriodReady)
-	missingSource.SourceIndexId = ""
-	missingSource.SourceIndexRevision = 0
-	_, err = registry.Encode(ViewFactorPeriodReady, missingSource, validationOptions("factor-ready-3", "space", "result-view"))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "source and result index provenance")
 }
 
 type semanticValidationPublisher struct {

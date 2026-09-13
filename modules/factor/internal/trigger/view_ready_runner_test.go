@@ -17,15 +17,29 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+func testReady(period time.Time, status, failed string) *publicstoragepb.ViewDataReady {
+	ready := &publicstoragepb.ViewDataReady{
+		ViewId: "source_view", ViewConfigId: "source_view@1", CompletionEventId: "ready",
+		DatasetId: "prices", Status: status, VisibleScope: "view:source_view",
+		Frequency: "1m", PeriodTime: period.Unix(),
+		CommittedPositions: []*publicstoragepb.CommittedPosition{{NodeId: "n", StoreId: "s", Sequence: 1}},
+		ReadyAt:            timestamppb.New(period),
+	}
+	if status == "degraded" {
+		if failed == "" {
+			failed = "degraded"
+		}
+		ready.FailedScopeRef = failed
+	}
+	return ready
+}
+
 func TestViewReadyRunnerRunsSubjectFactorCartesianProduct(t *testing.T) {
 	runner := &blockingCombinationRunner{tasks: make(chan []taskrunner.Task, 1), release: make(chan struct{})}
 	storage := new(periodStorageFake)
 	executor := NewViewReadyRunner(twoPeriodBindings(), twoPeriodFactors(), runner, storage, t.TempDir())
 	period := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
-	ready := &publicstoragepb.ViewSourcePeriodReady{
-		SourceViewId: "source_view", Frequency: "1m", PeriodTime: period.Unix(), Status: "complete",
-		PrimarySubjects: []string{"SOL", "BTC", "ETH"}, ReadyAt: timestamppb.New(period), ActiveIndexRevision: 99,
-	}
+	ready := testReady(period, "complete", "")
 
 	done := make(chan error, 1)
 	go func() { done <- executor.Execute(context.Background(), "space", "source-event", ready) }()
@@ -52,13 +66,10 @@ func TestViewReadyRunnerExecuteSelectedRunsOnlyRequestedFactor(t *testing.T) {
 	storage := new(periodStorageFake)
 	executor := NewViewReadyRunner(twoPeriodBindings(), twoPeriodFactors(), runner, storage, t.TempDir())
 	period := time.Date(2026, 8, 10, 1, 1, 0, 0, time.UTC)
-	ready := &publicstoragepb.ViewSourcePeriodReady{
-		SourceViewId: "source_view", Frequency: "1m", PeriodTime: period.Unix(), Status: "complete",
-		PrimarySubjects: []string{"BTC", "ETH"}, ReadyAt: timestamppb.New(period), ActiveIndexRevision: 1,
-	}
+	ready := testReady(period, "complete", "")
 
-	require.NoError(t, executor.ExecuteSelected(context.Background(), "space", "recalc-event", "bias5", ready))
-	require.Len(t, runner.tasks, 2)
+	require.NoError(t, executor.ExecuteSelected(context.Background(), "space", "selected-event", "bias5", ready))
+	require.Len(t, runner.tasks, 3)
 	for _, task := range runner.tasks {
 		require.Equal(t, "bias5", task.Factor.FactorID)
 	}
@@ -76,7 +87,7 @@ func TestViewReadyRunnerExecutionBudgetScalesWithBindingCount(t *testing.T) {
 		}
 	}
 	runner := NewViewReadyRunner(periodBindings{rows: bindings}, nil, nil, nil, "", WithExecutionUnitTimeout(30*time.Second))
-	budget, err := runner.ExecutionBudget(context.Background(), "space", &publicstoragepb.ViewSourcePeriodReady{SourceViewId: "source_view", Frequency: "1m"})
+	budget, err := runner.ExecutionBudget(context.Background(), "space", &publicstoragepb.ViewDataReady{ViewId: "source_view", Frequency: "1m"})
 	require.NoError(t, err)
 	require.Equal(t, 17*time.Minute+30*time.Second, budget)
 }
@@ -87,13 +98,13 @@ func TestViewReadyRunnerExecutionBudgetScalesWithSubjectsAndWorkers(t *testing.T
 		bindings[i] = domain.FactorBinding{
 			BindingID: fmt.Sprintf("binding-%d", i), FactorID: fmt.Sprintf("factor-%d", i),
 			SpaceID: "space", SourceViewID: "source_view", Freq: "1m", Status: domain.BindingStatusEnabled,
+			SubjectMode: domain.SubjectModeInclude, SubjectsJSON: `["s1","s2","s3","s4","s5","s6","s7","s8","s9","s10"]`,
 		}
 	}
 	runner := NewViewReadyRunner(periodBindings{rows: bindings}, nil, nil, nil, "",
 		WithExecutionUnitTimeout(30*time.Second), WithExecutionParallelism(4), WithBatchExecution(true))
-	budget, err := runner.ExecutionBudget(context.Background(), "space", &publicstoragepb.ViewSourcePeriodReady{
-		SourceViewId: "source_view", Frequency: "1m",
-		PrimarySubjects: []string{"s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10"},
+	budget, err := runner.ExecutionBudget(context.Background(), "space", &publicstoragepb.ViewDataReady{
+		ViewId: "source_view", Frequency: "1m",
 	})
 	require.NoError(t, err)
 	// Batch execution runs 3 subject waves. Each four-factor batch may legally
@@ -106,10 +117,7 @@ func TestViewReadyRunnerIsolatesCombinationFailure(t *testing.T) {
 	storage := new(periodStorageFake)
 	executor := NewViewReadyRunner(twoPeriodBindings(), twoPeriodFactors(), runner, storage, t.TempDir())
 	period := time.Date(2026, 8, 10, 2, 0, 0, 0, time.UTC)
-	err := executor.Execute(context.Background(), "space", "source-event", &publicstoragepb.ViewSourcePeriodReady{
-		SourceViewId: "source_view", Frequency: "1m", PeriodTime: period.Unix(), Status: "complete",
-		PrimarySubjects: []string{"SOL", "BTC", "ETH"}, ReadyAt: timestamppb.New(period),
-	})
+	err := executor.Execute(context.Background(), "space", "source-event", testReady(period, "complete", ""))
 	require.NoError(t, err)
 	require.Len(t, runner.tasks, 6)
 	require.Equal(t, []string{"b-20-bias20/ETH"}, storage.clearedCombinations())
@@ -133,27 +141,20 @@ func TestViewReadyRunnerClearsSkippedAndUpstreamFailedWithoutRunningThem(t *test
 	storage := new(periodStorageFake)
 	period := time.Date(2026, 8, 10, 3, 0, 0, 0, time.UTC)
 	err := NewViewReadyRunner(bindings, periodFactors{"factor": testFactor("factor")}, runner, storage, t.TempDir()).Execute(
-		context.Background(), "space", "source-event", &publicstoragepb.ViewSourcePeriodReady{
-			SourceViewId: "source_view", Frequency: "1m", PeriodTime: period.Unix(), Status: "degraded",
-			PrimarySubjects: []string{"SOL", "BTC", "ETH"}, ReadyAt: timestamppb.New(period),
-			Datasets: []*publicstoragepb.ViewPeriodDatasetState{{DatasetId: "prices", Status: "degraded", FailedSubjects: []string{"BTC"}}},
-		})
+		context.Background(), "space", "source-event", testReady(period, "degraded", "BTC"))
 	require.NoError(t, err)
 	require.Empty(t, runner.tasks)
-	require.Equal(t, []string{"binding/BTC", "binding/ETH", "binding/SOL"}, storage.clearedCombinations())
+	require.Equal(t, []string{"binding/BTC"}, storage.clearedCombinations())
 	state := storage.getMarker().GetBindings()[0]
 	require.Equal(t, []string{"BTC"}, state.GetFailedSubjects())
-	require.Equal(t, []string{"ETH", "SOL"}, state.GetSkippedSubjects())
+	require.Empty(t, state.GetSkippedSubjects())
 }
 
 func TestViewReadyRunnerMarksBindingDegradedForAuxiliaryFailure(t *testing.T) {
 	bindings := periodBindings{rows: []domain.FactorBinding{{BindingID: "binding", BindingGeneration: "incarnation-1", FactorID: "factor", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "result", Freq: "1m", Status: domain.BindingStatusEnabled}}}
 	storage := new(periodStorageFake)
 	period := time.Date(2026, 8, 10, 4, 0, 0, 0, time.UTC)
-	err := NewViewReadyRunner(bindings, periodFactors{"factor": testFactor("factor")}, new(recordingCombinationRunner), storage, t.TempDir()).Execute(context.Background(), "space", "source-event", &publicstoragepb.ViewSourcePeriodReady{
-		SourceViewId: "source_view", Frequency: "1m", PeriodTime: period.Unix(), Status: "degraded",
-		PrimarySubjects: []string{"BTC"}, Datasets: []*publicstoragepb.ViewPeriodDatasetState{{DatasetId: "aux", Status: "degraded", FailedSubjects: []string{"OTHER"}}}, ReadyAt: timestamppb.New(period),
-	})
+	err := NewViewReadyRunner(bindings, periodFactors{"factor": testFactor("factor")}, new(recordingCombinationRunner), storage, t.TempDir()).Execute(context.Background(), "space", "source-event", testReady(period, "degraded", "OTHER"))
 	require.NoError(t, err)
 	require.Equal(t, "degraded", storage.getMarker().GetStatus())
 	require.Equal(t, "degraded", storage.getMarker().GetBindings()[0].GetStatus())
@@ -162,9 +163,7 @@ func TestViewReadyRunnerMarksBindingDegradedForAuxiliaryFailure(t *testing.T) {
 func TestViewReadyRunnerRealtimeNoBindingIsNoop(t *testing.T) {
 	storage := &periodStorageFake{preflightErr: errors.New("result dataset is not found")}
 	executor := NewViewReadyRunner(periodBindings{}, periodFactors{}, new(recordingCombinationRunner), storage, t.TempDir())
-	ready := &publicstoragepb.ViewSourcePeriodReady{
-		SourceViewId: "source_view", Frequency: "1m", PeriodTime: time.Date(2026, 8, 10, 5, 0, 0, 0, time.UTC).Unix(), Status: "complete",
-	}
+	ready := testReady(time.Date(2026, 8, 10, 5, 0, 0, 0, time.UTC), "complete", "")
 	require.NoError(t, executor.Execute(context.Background(), "space", "source-event", ready))
 	require.Nil(t, storage.getMarker())
 	require.ErrorIs(t, executor.ExecuteSelected(context.Background(), "space", "recalc-event", "", ready), ErrNoExecutableBinding)
@@ -173,17 +172,14 @@ func TestViewReadyRunnerRealtimeNoBindingIsNoop(t *testing.T) {
 func TestViewReadyRunnerRetriesWhileBindingIsPending(t *testing.T) {
 	bindings := pendingPeriodBindings{waiting: true}
 	executor := NewViewReadyRunner(bindings, periodFactors{}, new(recordingCombinationRunner), new(periodStorageFake), t.TempDir())
-	ready := &publicstoragepb.ViewSourcePeriodReady{
-		SourceViewId: "source_view", Frequency: "1m",
-		PeriodTime: time.Date(2026, 8, 10, 5, 1, 0, 0, time.UTC).Unix(), Status: "complete",
-	}
+	ready := testReady(time.Date(2026, 8, 10, 5, 1, 0, 0, time.UTC), "complete", "")
 	require.ErrorIs(t, executor.Execute(context.Background(), "space", "source-event", ready), ErrBindingNotReady)
 }
 
 func twoPeriodBindings() periodBindings {
 	return periodBindings{rows: []domain.FactorBinding{
-		{BindingID: "b-20-bias20", BindingGeneration: "incarnation-1", FactorID: "bias20", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "result", Freq: "1m", Status: domain.BindingStatusEnabled},
-		{BindingID: "b-05-bias5", BindingGeneration: "incarnation-1", FactorID: "bias5", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "result", Freq: "1m", Status: domain.BindingStatusEnabled},
+		{BindingID: "b-20-bias20", BindingGeneration: "incarnation-1", FactorID: "bias20", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "result", Freq: "1m", SubjectMode: domain.SubjectModeInclude, SubjectsJSON: `["BTC","ETH","SOL"]`, Status: domain.BindingStatusEnabled},
+		{BindingID: "b-05-bias5", BindingGeneration: "incarnation-1", FactorID: "bias5", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "result", Freq: "1m", SubjectMode: domain.SubjectModeInclude, SubjectsJSON: `["BTC","ETH","SOL"]`, Status: domain.BindingStatusEnabled},
 	}}
 }
 

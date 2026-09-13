@@ -34,7 +34,7 @@ func (h storageEventHandler) Handle(ctx context.Context, delivery *jetstream.Del
 	if h.executor == nil {
 		return h.reject(ctx, delivery, fmt.Errorf("factor View-ready executor is unavailable"))
 	}
-	message, payload, err := events.DecodeViewSourcePeriodReadyWithContentType(
+	message, payload, err := events.DecodeViewDataReadyWithContentType(
 		registry,
 		delivery.RawData,
 		delivery.Subject,
@@ -44,10 +44,10 @@ func (h storageEventHandler) Handle(ctx context.Context, delivery *jetstream.Del
 	if err != nil {
 		return h.reject(ctx, delivery, err)
 	}
-	if message.GetSpaceId() == "" || message.GetEventId() == "" || payload.GetSourceViewId() == "" {
+	if message.GetSpaceId() == "" || message.GetEventId() == "" || payload.GetViewId() == "" {
 		return h.reject(ctx, delivery, fmt.Errorf("storage event payload identity is incomplete"))
 	}
-	log.InfoContextf(ctx, "factor ViewSourcePeriodReady received event_id=%s space_id=%s view_id=%s period=%d", message.GetEventId(), message.GetSpaceId(), payload.GetSourceViewId(), payload.GetPeriodTime())
+	log.InfoContextf(ctx, "factor ViewDataReady received event_id=%s space_id=%s view_id=%s period=%d", message.GetEventId(), message.GetSpaceId(), payload.GetViewId(), payload.GetPeriodTime())
 	executionTimeout, stallThreshold := h.executionTimeout, h.stallThreshold
 	if budgeter, ok := h.executor.(executionBudgeter); ok {
 		budgetLookupTimeout := 30 * time.Second
@@ -73,7 +73,7 @@ func (h storageEventHandler) Handle(ctx context.Context, delivery *jetstream.Del
 	err = h.executor.Execute(executionCtx, message.GetSpaceId(), message.GetEventId(), payload)
 	cancel()
 	if err != nil {
-		log.ErrorContextf(ctx, "factor ViewSourcePeriodReady execution failed event_id=%s space_id=%s view_id=%s period=%d: %v", message.GetEventId(), message.GetSpaceId(), payload.GetSourceViewId(), payload.GetPeriodTime(), err)
+		log.ErrorContextf(ctx, "factor ViewDataReady execution failed event_id=%s space_id=%s view_id=%s period=%d: %v", message.GetEventId(), message.GetSpaceId(), payload.GetViewId(), payload.GetPeriodTime(), err)
 		if errors.Is(err, trigger.ErrNoExecutableBinding) {
 			// A Source View can legitimately outlive its last binding. Do not
 			// block the durable lane on a period that no longer has work.

@@ -99,7 +99,7 @@ services:
         - service_path: trpc.moox.storage.PrimaryStore
           port: 20102
           max_body_bytes: 33554432
-          gateway_methods: [UpsertFields, ReadFields, ReadRecordRows, ReportDatasetPeriodCollected, AppendDatasetSyncPoint, WaitViewSyncPoint, ReportFactorPeriodComputed, GetFactorPeriodComputed]
+          gateway_methods: [UpsertFields, ReadFields, ReadRecordRows, ReportCollectorPeriodCompleted, ReportMergePeriodCompleted, AppendDatasetSyncPoint, WaitViewSyncPoint, ReportFactorPeriodComputed, GetFactorPeriodComputed]
           gateway_callers: [admin-gateway, collector, factor, monitor, archive, storage-view]
         - service_path: trpc.moox.storage.PrimaryStore
           port: 20102

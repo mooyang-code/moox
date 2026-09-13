@@ -73,7 +73,8 @@ func datasetEventSubjects(spaceID, datasetID string) ([]string, error) {
 	}
 	eventTypes := []events.Event{
 		events.DatasetRowsUpserted,
-		events.DatasetPeriodCollected,
+		events.CollectorPeriodCompleted,
+		events.MergePeriodCompleted,
 		events.FactorPeriodComputed,
 		events.DatasetSyncPoint,
 	}

@@ -124,7 +124,17 @@ func periodMessage(eventID string, occurredAt time.Time) *eventpb.EventMessage {
 	return &eventpb.EventMessage{EventId: eventID, SpaceId: "quant", OccurredAt: timestamppb.New(occurredAt.UTC())}
 }
 
-func TestHandleDatasetPeriodCollectedAggregatesTwoDatasetsIdempotently(t *testing.T) {
+func collectorCompleted(dataset, status string, subjects, failed []string, at time.Time, periodTime int64) *storageeventpb.CollectorPeriodCompleted {
+	return &storageeventpb.CollectorPeriodCompleted{
+		DatasetId: dataset, Frequency: "1m", PeriodTime: periodTime, Status: status,
+		BatchId: "batch-" + dataset, ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "universe:" + dataset + ":1m",
+		ExpectedSubjectIds: subjects, FailedSubjects: failed,
+		CommittedPositions: []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 1}},
+		CollectedAt:        timestamppb.New(at),
+	}
+}
+
+func TestHandleCollectorPeriodCompletedAggregatesTwoDatasetsIdempotently(t *testing.T) {
 	metadata := newPeriodMetadataFake()
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(metadata, publisher, &pb.View{
@@ -132,9 +142,7 @@ func TestHandleDatasetPeriodCollectedAggregatesTwoDatasetsIdempotently(t *testin
 	})
 	periodTime := int64(1786032000)
 	firstAt := time.Date(2026, 8, 7, 0, 0, 1, 0, time.UTC)
-	if err := service.HandleDatasetPeriodCollected(context.Background(), periodMessage("fundamentals-ready", firstAt), &storageeventpb.DatasetPeriodCollected{
-		DatasetId: "fundamentals", Frequency: "1m", PeriodTime: periodTime, Status: "complete", SubjectIds: []string{"ETH-USDT"}, CollectedAt: timestamppb.New(firstAt),
-	}); err != nil {
+	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("fundamentals-ready", firstAt), collectorCompleted("fundamentals", "complete", []string{"ETH-USDT"}, nil, firstAt, periodTime)); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.attempts) != 0 {
@@ -143,14 +151,11 @@ func TestHandleDatasetPeriodCollectedAggregatesTwoDatasetsIdempotently(t *testin
 
 	secondAt := firstAt.Add(time.Second)
 	message := periodMessage("prices-ready", secondAt)
-	payload := &storageeventpb.DatasetPeriodCollected{
-		DatasetId: "prices", Frequency: "1m", PeriodTime: periodTime, Status: "degraded",
-		SubjectIds: []string{"ETH-USDT", "BTC-USDT", "BTC-USDT"}, FailedSubjects: []string{"ETH-USDT"}, CollectedAt: timestamppb.New(secondAt),
-	}
-	if err := service.HandleDatasetPeriodCollected(context.Background(), message, payload); err != nil {
+	payload := collectorCompleted("prices", "degraded", []string{"ETH-USDT", "BTC-USDT", "BTC-USDT"}, []string{"ETH-USDT"}, secondAt, periodTime)
+	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.HandleDatasetPeriodCollected(context.Background(), message, payload); err != nil {
+	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload); err != nil {
 		t.Fatalf("idempotent marker retry failed: %v", err)
 	}
 	if len(metadata.states) != 2 || len(publisher.attempts) != 2 || len(publisher.byID) != 1 {
@@ -159,30 +164,23 @@ func TestHandleDatasetPeriodCollectedAggregatesTwoDatasetsIdempotently(t *testin
 	if publisher.attempts[0].opts.EventID != publisher.attempts[1].opts.EventID {
 		t.Fatal("marker retry changed the ready event ID")
 	}
-	ready, ok := publisher.attempts[0].payload.(*storageeventpb.ViewSourcePeriodReady)
-	if !ok || publisher.attempts[0].event.Name() != events.ViewSourcePeriodReady.Name() {
+	ready, ok := publisher.attempts[0].payload.(*storageeventpb.ViewDataReady)
+	if !ok || publisher.attempts[0].event.Name() != events.ViewDataReady.Name() {
 		t.Fatalf("published event=%s payload=%T", publisher.attempts[0].event.Name(), publisher.attempts[0].payload)
 	}
-	if ready.GetSourceViewId() != "source-view" || ready.GetStatus() != "degraded" || len(ready.GetDatasets()) != 2 {
+	if ready.GetViewId() != "source-view" || ready.GetStatus() != "degraded" || ready.GetDatasetId() != "prices" || ready.GetFailedScopeRef() != "ETH-USDT" {
 		t.Fatalf("ready payload=%v", ready)
 	}
-	if ready.GetActiveIndexId() != "" || ready.GetActiveIndexRevision() != 0 {
-		t.Fatalf("source ready leaked physical index provenance id=%q rev=%d", ready.GetActiveIndexId(), ready.GetActiveIndexRevision())
-	}
-	if got := ready.GetPrimarySubjects(); len(got) != 2 || got[0] != "BTC-USDT" || got[1] != "ETH-USDT" {
-		t.Fatalf("primary subjects=%v", got)
-	}
-	if ready.GetDatasets()[0].GetDatasetId() != "prices" || ready.GetDatasets()[1].GetDatasetId() != "fundamentals" {
-		t.Fatalf("dataset order=%v", ready.GetDatasets())
+	if ready.GetViewConfigId() == "" || ready.GetVisibleScope() == "" || len(ready.GetCommittedPositions()) == 0 {
+		t.Fatalf("ready identity incomplete=%v", ready)
 	}
 }
 
-func TestHandleDatasetPeriodCollectedUsesActiveDatasetContractDuringRebuild(t *testing.T) {
+func TestHandleCollectorPeriodCompletedUsesActiveDatasetContractDuringRebuild(t *testing.T) {
 	metadata := newPeriodMetadataFake()
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(metadata, publisher, &pb.View{
 		SpaceId: "quant", ViewId: "source-view", PrimaryDatasetId: "prices",
-		// This is the desired revision while the active index still uses A+B.
 		DatasetIds: []string{"prices"}, ActiveIndexId: "source-view-a",
 	})
 	runtime := service.views[viewRef{spaceID: "quant", viewID: "source-view"}]
@@ -192,10 +190,9 @@ func TestHandleDatasetPeriodCollectedUsesActiveDatasetContractDuringRebuild(t *t
 	runtime.mu.Unlock()
 
 	periodTime := int64(1786032000)
-	message := periodMessage("prices-ready", time.Date(2026, 8, 7, 0, 0, 1, 0, time.UTC))
-	err := service.HandleDatasetPeriodCollected(context.Background(), message, &storageeventpb.DatasetPeriodCollected{
-		DatasetId: "prices", Frequency: "1m", PeriodTime: periodTime, Status: "complete", SubjectIds: []string{"BTC-USDT"},
-	})
+	at := time.Date(2026, 8, 7, 0, 0, 1, 0, time.UTC)
+	message := periodMessage("prices-ready", at)
+	err := service.HandleCollectorPeriodCompleted(context.Background(), message, collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, periodTime))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,14 +200,10 @@ func TestHandleDatasetPeriodCollectedUsesActiveDatasetContractDuringRebuild(t *t
 		t.Fatal("desired dataset contract released source-ready before active auxiliary dataset arrived")
 	}
 
-	// The inverse change must not make the old active index wait for a dataset
-	// that only exists in the desired revision.
 	runtime.mu.Lock()
 	runtime.activeDatasetIDs = []string{"prices"}
 	runtime.mu.Unlock()
-	if err := service.HandleDatasetPeriodCollected(context.Background(), message, &storageeventpb.DatasetPeriodCollected{
-		DatasetId: "prices", Frequency: "1m", PeriodTime: periodTime, Status: "complete", SubjectIds: []string{"BTC-USDT"},
-	}); err != nil {
+	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, periodTime)); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.attempts) != 1 {
@@ -226,9 +219,11 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	occurredAt := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
 	message := periodMessage("factor-marker-1", occurredAt)
 	payload := &storageeventpb.FactorPeriodComputed{
-		SourceViewId: "source-view", ResultDatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
-		Bindings:   []*storageeventpb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "degraded", FailedSubjects: []string{"ETH-USDT"}, SourceHash: "hash-1"}},
-		ComputedAt: timestamppb.New(occurredAt), TriggerEventId: "source-ready-1", SourceIndexId: "source-view-a", SourceIndexRevision: 1,
+		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
+		BatchId: "batch-1", ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "universe:factor:1m", ExpectedSubjectIds: []string{"ETH-USDT"},
+		Bindings:           []*storageeventpb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "degraded", FailedSubjects: []string{"ETH-USDT"}, SourceHash: "hash-1"}},
+		CommittedPositions: []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 2}},
+		ComputedAt:         timestamppb.New(occurredAt), TriggerEventId: "source-ready-1",
 	}
 	if err := service.HandleFactorPeriodComputed(context.Background(), message, payload); err != nil {
 		t.Fatal(err)
@@ -239,15 +234,12 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	if len(publisher.attempts) != 2 || len(publisher.byID) != 1 || publisher.attempts[0].opts.EventID != publisher.attempts[1].opts.EventID {
 		t.Fatalf("publish attempts=%d unique=%d", len(publisher.attempts), len(publisher.byID))
 	}
-	ready, ok := publisher.attempts[0].payload.(*storageeventpb.ViewFactorPeriodReady)
-	if !ok || publisher.attempts[0].event.Name() != events.ViewFactorPeriodReady.Name() {
+	ready, ok := publisher.attempts[0].payload.(*storageeventpb.ViewDataReady)
+	if !ok || publisher.attempts[0].event.Name() != events.ViewDataReady.Name() {
 		t.Fatalf("published event=%s payload=%T", publisher.attempts[0].event.Name(), publisher.attempts[0].payload)
 	}
-	if ready.GetSourceViewId() != "source-view" || ready.GetResultViewId() != "result-view" || ready.GetStatus() != "degraded" || len(ready.GetBindings()) != 1 {
+	if ready.GetViewId() != "result-view" || ready.GetDatasetId() != "factor-results" || ready.GetStatus() != "degraded" || ready.GetFailedScopeRef() != "ETH-USDT" {
 		t.Fatalf("factor ready payload=%v", ready)
-	}
-	if ready.GetSourceIndexId() != "" || ready.GetResultIndexId() != "" || ready.GetSourceIndexRevision() != 0 || ready.GetResultIndexRevision() != 0 {
-		t.Fatalf("factor ready leaked physical index provenance=%v", ready)
 	}
 }
 

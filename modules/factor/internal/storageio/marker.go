@@ -37,7 +37,7 @@ func (c *Client) WaitViewSyncPoint(ctx context.Context, spaceID, viewID, request
 	}
 }
 
-func (c *Client) FactorPeriodComputed(ctx context.Context, spaceID, sourceViewID, triggerEventID string, periodTime int64) (bool, error) {
+func (c *Client) FactorPeriodComputed(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (bool, error) {
 	client, ok := c.access.(interface {
 		GetFactorPeriodComputed(context.Context, *storagepb.GetFactorPeriodComputedReq, ...client.Option) (*storagepb.GetFactorPeriodComputedRsp, error)
 	})
@@ -45,7 +45,7 @@ func (c *Client) FactorPeriodComputed(ctx context.Context, spaceID, sourceViewID
 		return false, fmt.Errorf("storage client does not support factor marker preflight")
 	}
 	rsp, err := client.GetFactorPeriodComputed(ctx, &storagepb.GetFactorPeriodComputedReq{
-		AuthInfo: c.auth, SpaceId: spaceID, SourceViewId: sourceViewID,
+		AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID,
 		TriggerEventId: triggerEventID, PeriodTime: periodTime,
 	})
 	if err != nil {

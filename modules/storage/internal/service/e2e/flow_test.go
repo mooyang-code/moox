@@ -31,8 +31,8 @@ type primaryFieldReader struct {
 
 func exactDatasetEventSubjects(t *testing.T, registry *events.Registry, spaceID, datasetID string) []string {
 	t.Helper()
-	filters := make([]string, 0, 4)
-	for _, event := range []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCollected, events.FactorPeriodComputed, events.DatasetSyncPoint} {
+	filters := make([]string, 0, 5)
+	for _, event := range []events.Event{events.DatasetRowsUpserted, events.CollectorPeriodCompleted, events.MergePeriodCompleted, events.FactorPeriodComputed, events.DatasetSyncPoint} {
 		filter, err := registry.RenderSubject(event, spaceID, datasetID)
 		if err != nil {
 			t.Fatal(err)

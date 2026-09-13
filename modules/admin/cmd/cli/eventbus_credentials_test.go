@@ -165,7 +165,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, yaml, "moox.event.trade.target.weight_requested.v1.>")
 	strategyACL := eventBusACLBlock(yaml, "strategy-eventbus")
 	assert.NotContains(t, strategyACL, "$JS.API.>")
-	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.factor_period.ready.v1.>", "moox.event.storage.view.source_period.ready.v1.>"]}`)
+	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.data.ready.v1.>"]}`)
 	tradeACL := eventBusACLBlock(yaml, "trade-eventbus")
 	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1")
 	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.INFO.*.trade_target_weight_v1")
@@ -174,11 +174,10 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	storageACL := eventBusACLBlock(yaml, "storage-eventbus")
 	for _, subject := range []string{
 		"moox.event.storage.dataset.rows.upserted.v2.>",
-		"moox.event.storage.dataset.period.collected.v1.>",
-		"moox.event.storage.view.source_period.ready.v1.>",
-		"moox.event.storage.view.source_subject.ready.v1.>",
+		"moox.event.storage.collector.period.completed.v1.>",
+		"moox.event.storage.merge.period.completed.v1.>",
 		"moox.event.storage.dataset.factor_period.computed.v1.>",
-		"moox.event.storage.view.factor_period.ready.v1.>",
+		"moox.event.storage.view.data.ready.v1.>",
 		"moox.event.storage.dataset.sync_point.v1.>",
 	} {
 		assert.Contains(t, storageACL, subject)
@@ -250,11 +249,11 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	engineACL := eventBusACLBlock(yaml, "factor-engine-eventbus")
 	assert.Contains(t, engineACL, "password: engine")
 	assert.Contains(t, engineACL, "moox.factor.internal.catalog.snapshot")
-	assert.Contains(t, engineACL, "$JS.API.CONSUMER.INFO.*.factor_source_subject")
-	assert.Contains(t, engineACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_source_subject")
-	assert.Contains(t, engineACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_source_subject")
-	assert.Contains(t, engineACL, "$JS.ACK.MOOX_STORAGE.factor_source_subject.>")
-	assert.NotContains(t, engineACL, "factor_view_ready")
+	assert.Contains(t, engineACL, "$JS.API.CONSUMER.INFO.*.factor_view_ready_v1")
+	assert.Contains(t, engineACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_view_ready_v1")
+	assert.Contains(t, engineACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_view_ready_v1")
+	assert.Contains(t, engineACL, "$JS.ACK.MOOX_STORAGE.factor_view_ready_v1.>")
+	assert.NotContains(t, engineACL, "factor_source_subject")
 	assert.NotContains(t, engineACL, "factor_calc")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, aclLine(engineACL, "subscribe:"))
 	for _, forbidden := range []string{"CONSUMER.CREATE", "CONSUMER.DELETE", "STREAM.NAMES", "$KV.", "moox.event.cloudnode.job.execution"} {
@@ -268,7 +267,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.API")
 		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.ACK")
 		if role == "strategy-eventbus" {
-			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.factor_period.ready.v1.>", "moox.event.storage.view.source_period.ready.v1.>"]}`)
+			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.data.ready.v1.>"]}`)
 		} else if role == "factor-eventbus" {
 			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.factor.internal.catalog.snapshot"]}`)
 		} else {
@@ -330,9 +329,9 @@ func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testi
 	require.NoError(t, err)
 	text := string(raw)
 	assert.Contains(t, text, "moox.event.trade.target.weight_requested.v1.>")
-	assert.Contains(t, text, "moox.event.storage.view.source_subject.ready.v1.>")
+	assert.Contains(t, text, "moox.event.storage.view.data.ready.v1.>")
 	assert.Contains(t, text, "moox.factor.internal.catalog.snapshot")
-	assert.Contains(t, text, "factor_source_subject")
+	assert.Contains(t, text, "factor_view_ready_v1")
 	assert.Contains(t, text, "strategy-token")
 	assert.Contains(t, text, "factor-engine-token")
 	assert.Contains(t, text, "trade-token")
@@ -673,12 +672,12 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	)
 	requirePublishPermissionViolation(
 		t, server.ClientURL(), "factor-engine-eventbus", tokens["factor-engine-eventbus"],
-		"moox.event.storage.view.source_subject.ready.v1.crypto.view",
-		"引擎不得发布 View 标的就绪事件",
+		"moox.event.storage.view.data.ready.v1.crypto.view",
+		"引擎不得发布 View 数据就绪事件",
 	)
 	requirePublishPermissionViolation(
 		t, server.ClientURL(), "factor-eventbus", tokens["factor-eventbus"],
-		"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_source_subject",
+		"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_view_ready_v1",
 		"控制面不得创建引擎 durable",
 	)
 
@@ -690,7 +689,7 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	t.Cleanup(storage.Close)
 	storageJS, err := storage.JetStream()
 	require.NoError(t, err)
-	_, err = storageJS.Publish("moox.event.storage.view.source_subject.ready.v1.crypto.view", []byte("ready"))
+	_, err = storageJS.Publish("moox.event.storage.view.data.ready.v1.crypto.view", []byte("ready"))
 	require.NoError(t, err)
 
 	engineCtx, engineCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -702,8 +701,8 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	require.NoError(t, err)
 	defer engineJS.Close()
 	subjectConsumer, err := engineJS.NewConsumer(engineCtx, jetstream.ConsumerConfig{
-		Stream: "MOOX_STORAGE", Durable: "factor_source_subject",
-		FilterSubject: "moox.event.storage.view.source_subject.ready.v1.>",
+		Stream: "MOOX_STORAGE", Durable: "factor_view_ready_v1",
+		FilterSubject: "moox.event.storage.view.data.ready.v1.>",
 		AckWait:       time.Second, MaxDeliver: 3, MaxAckPending: 8,
 		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
 	})

@@ -40,11 +40,11 @@ type realtimeInventory interface {
 }
 
 type viewReadyExecutor interface {
-	ExecuteSelected(context.Context, string, string, string, *publicstoragepb.ViewSourcePeriodReady) error
+	ExecuteSelected(context.Context, string, string, string, *publicstoragepb.ViewDataReady) error
 }
 
 type viewReadyExecutorWithGate interface {
-	ExecuteSelectedWithGate(context.Context, string, string, string, *publicstoragepb.ViewSourcePeriodReady) error
+	ExecuteSelectedWithGate(context.Context, string, string, string, *publicstoragepb.ViewDataReady) error
 }
 
 type viewSyncWaiter interface {

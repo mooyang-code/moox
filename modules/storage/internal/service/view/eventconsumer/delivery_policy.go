@@ -407,12 +407,18 @@ func (c *Consumer) applyDelivery(ctx context.Context, delivery *jetstream.Delive
 	switch value := payload.(type) {
 	case *storagepb.DatasetRowsUpserted:
 		return c.handler.HandleDatasetRows(ctx, message, value)
-	case *storagepb.DatasetPeriodCollected:
-		handler, ok := c.handler.(DatasetPeriodCollectedHandler)
+	case *storagepb.CollectorPeriodCompleted:
+		handler, ok := c.handler.(CollectorPeriodCompletedHandler)
 		if !ok {
-			return Permanent(errors.New("storage view dataset-period handler is unavailable"))
+			return Permanent(errors.New("storage view collector-period handler is unavailable"))
 		}
-		return handler.HandleDatasetPeriodCollected(ctx, message, value)
+		return handler.HandleCollectorPeriodCompleted(ctx, message, value)
+	case *storagepb.MergePeriodCompleted:
+		handler, ok := c.handler.(MergePeriodCompletedHandler)
+		if !ok {
+			return Permanent(errors.New("storage view merge-period handler is unavailable"))
+		}
+		return handler.HandleMergePeriodCompleted(ctx, message, value)
 	case *storagepb.FactorPeriodComputed:
 		handler, ok := c.handler.(FactorPeriodComputedHandler)
 		if !ok {

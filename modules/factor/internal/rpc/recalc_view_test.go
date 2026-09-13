@@ -72,11 +72,11 @@ type recordingViewReadyExecutor struct {
 	record         func(string)
 }
 
-func (e *recordingViewReadyExecutor) ExecuteSelected(_ context.Context, _, triggerID, factorID string, ready *publicstoragepb.ViewSourcePeriodReady) error {
+func (e *recordingViewReadyExecutor) ExecuteSelected(_ context.Context, _, triggerID, factorID string, _ *publicstoragepb.ViewDataReady) error {
 	e.record("execute")
 	e.triggerIDs = append(e.triggerIDs, triggerID)
 	e.factorIDs = append(e.factorIDs, factorID)
-	e.activeIndexIDs = append(e.activeIndexIDs, ready.GetActiveIndexId())
+	e.activeIndexIDs = append(e.activeIndexIDs, "")
 	return nil
 }
 

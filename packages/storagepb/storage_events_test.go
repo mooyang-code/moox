@@ -37,44 +37,53 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 		new     func() proto.Message
 	}{
 		{
-			name: "dataset period collected",
-			payload: &DatasetPeriodCollected{
+			name: "collector period completed",
+			payload: &CollectorPeriodCompleted{
 				DatasetId: "spot_kline", Frequency: "1m", PeriodTime: 1786032000,
-				Status: "degraded", SubjectIds: []string{"BTC-USDT", "ETH-USDT"},
-				FailedSubjects: []string{"ETH-USDT"}, CollectedAt: now,
+				Status: "degraded", BatchId: "batch-1", ConfigSnapshotId: "config-1",
+				ExpectedScopeRef: "universe:spot_kline:1m", ExpectedSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
+				FailedSubjects: []string{"ETH-USDT"},
+				CommittedPositions: []*CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 9}},
+				CollectedAt:        now,
 			},
-			new: func() proto.Message { return new(DatasetPeriodCollected) },
+			new: func() proto.Message { return new(CollectorPeriodCompleted) },
 		},
 		{
-			name: "view source period ready",
-			payload: &ViewSourcePeriodReady{
-				SourceViewId: "source_view", Frequency: "1m", PeriodTime: 1786032000,
-				Status: "degraded", Datasets: []*ViewPeriodDatasetState{{
-					DatasetId: "spot_kline", Status: "degraded", FailedSubjects: []string{"ETH-USDT"},
-				}}, PrimarySubjects: []string{"BTC-USDT"}, ReadyAt: now,
+			name: "merge period completed",
+			payload: &MergePeriodCompleted{
+				DatasetId: "mdataset_kline", Frequency: "1m", PeriodTime: 1786032000,
+				Status: "complete", BatchId: "merge-1", ConfigSnapshotId: "merge-config",
+				ExpectedScopeRef: "universe:mdataset:1m", ExpectedSubjectIds: []string{"BTC-USDT"},
+				CommittedPositions: []*CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 10}},
+				CompletedAt:        now,
 			},
-			new: func() proto.Message { return new(ViewSourcePeriodReady) },
+			new: func() proto.Message { return new(MergePeriodCompleted) },
+		},
+		{
+			name: "view data ready",
+			payload: &ViewDataReady{
+				ViewId: "view_kline", ViewConfigId: "view-config", CompletionEventId: "merge-1",
+				DatasetId: "mdataset_kline", Status: "complete", VisibleScope: "universe:mdataset:1m",
+				Frequency: "1m", PeriodTime: 1786032000,
+				CommittedPositions: []*CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 10}},
+				ReadyAt:            now,
+			},
+			new: func() proto.Message { return new(ViewDataReady) },
 		},
 		{
 			name: "factor period computed",
 			payload: &FactorPeriodComputed{
-				SourceViewId: "source_view", ResultDatasetId: "factor_result", Frequency: "1m",
-				PeriodTime: 1786032000, Status: "degraded", Bindings: []*FactorBindingPeriodState{{
+				DatasetId: "mdataset_kline", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
+				BatchId: "factor-1", ConfigSnapshotId: "factor-config", ExpectedScopeRef: "universe:mdataset:1m",
+				ExpectedSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
+				Bindings: []*FactorBindingPeriodState{{
 					BindingId: "binding-1", FactorId: "factor-1", Status: "degraded", SourceHash: "hash-1",
 					SkippedSubjects: []string{"ETH-USDT"}, FailedSubjects: []string{"BTC-USDT"},
-				}}, ComputedAt: now, TriggerEventId: "source-ready-1",
+				}},
+				CommittedPositions: []*CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 11}},
+				ComputedAt:         now, TriggerEventId: "merge-1",
 			},
 			new: func() proto.Message { return new(FactorPeriodComputed) },
-		},
-		{
-			name: "view factor period ready",
-			payload: &ViewFactorPeriodReady{
-				SourceViewId: "source_view", ResultViewId: "result_view", Frequency: "1m",
-				PeriodTime: 1786032000, Status: "complete", Bindings: []*FactorBindingPeriodState{{
-					BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1",
-				}}, ReadyAt: now,
-			},
-			new: func() proto.Message { return new(ViewFactorPeriodReady) },
 		},
 		{
 			name:    "dataset sync point",

@@ -12,8 +12,7 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-const ViewFactorReadyConsumerName = "strategy_view_factor_ready_v1"
-const ViewSourceReadyConsumerName = "strategy_view_source_ready_v1"
+const ViewDataReadyConsumerName = "strategy_view_data_ready_v1"
 
 type Config struct {
 	Client        *jetstream.Client
@@ -37,7 +36,7 @@ type Consumer struct {
 
 func New(cfg Config, processor *trigger.Processor) *Consumer {
 	if cfg.ConsumerName == "" {
-		cfg.ConsumerName = ViewFactorReadyConsumerName
+		cfg.ConsumerName = ViewDataReadyConsumerName
 	}
 	if cfg.AckWait <= 0 {
 		cfg.AckWait = 30 * time.Second
@@ -68,52 +67,30 @@ func (c *Consumer) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	factorFilter, err := registry.FamilyPattern(events.ViewFactorPeriodReady)
+	filter, err := registry.FamilyPattern(events.ViewDataReady)
 	if err != nil {
 		return err
 	}
-	sourceFilter, err := registry.FamilyPattern(events.ViewSourcePeriodReady)
+	readyConsumer, err := c.cfg.Client.NewConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: c.cfg.ConsumerName, FilterSubject: filter, AckWait: c.cfg.AckWait, MaxDeliver: c.cfg.MaxDeliver, MaxAckPending: c.cfg.MaxAckPending, FetchMaxWait: c.cfg.FetchMaxWait, DeliverPolicy: nats.DeliverNewPolicy, DeliverDecodeErrors: true})
 	if err != nil {
-		return err
-	}
-	factorConsumer, err := c.cfg.Client.NewConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: c.cfg.ConsumerName, FilterSubject: factorFilter, AckWait: c.cfg.AckWait, MaxDeliver: c.cfg.MaxDeliver, MaxAckPending: c.cfg.MaxAckPending, FetchMaxWait: c.cfg.FetchMaxWait, DeliverPolicy: nats.DeliverNewPolicy, DeliverDecodeErrors: true})
-	if err != nil {
-		return err
-	}
-	sourceName := ViewSourceReadyConsumerName
-	if c.cfg.ConsumerName != ViewFactorReadyConsumerName {
-		sourceName = c.cfg.ConsumerName + "_source"
-	}
-	sourceConsumer, err := c.cfg.Client.NewConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: sourceName, FilterSubject: sourceFilter, AckWait: c.cfg.AckWait, MaxDeliver: c.cfg.MaxDeliver, MaxAckPending: c.cfg.MaxAckPending, FetchMaxWait: c.cfg.FetchMaxWait, DeliverPolicy: nats.DeliverNewPolicy, DeliverDecodeErrors: true})
-	if err != nil {
-		_ = factorConsumer.Close()
 		return err
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	factorRunner := jetstream.NewRunner(factorConsumer, jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
-		return HandleViewFactorPeriodReady(ctx, delivery, c.processor)
-	}), jetstream.RunnerConfig{BatchSize: c.cfg.BatchSize})
-	sourceRunner := jetstream.NewRunner(sourceConsumer, jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+	runner := jetstream.NewRunner(readyConsumer, jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 		return HandleViewPeriodReady(ctx, delivery, c.processor)
 	}), jetstream.RunnerConfig{BatchSize: c.cfg.BatchSize})
 	c.mu.Lock()
-	c.consumers = []*jetstream.Consumer{factorConsumer, sourceConsumer}
-	c.runners = []*jetstream.Runner{factorRunner, sourceRunner}
+	c.consumers = []*jetstream.Consumer{readyConsumer}
+	c.runners = []*jetstream.Runner{runner}
 	c.cancel = cancel
 	c.ready = true
 	c.mu.Unlock()
-	for _, runner := range []*jetstream.Runner{factorRunner, sourceRunner} {
-		go func(runner *jetstream.Runner) {
-			_ = runner.Run(runCtx)
-			// A runner can stop because the broker connection failed or because a
-			// handler returned an unrecoverable error. Do not leave readiness green
-			// after that point: the process must be restarted or repaired before it
-			// can safely claim to consume readiness events.
-			c.mu.Lock()
-			c.ready = false
-			c.mu.Unlock()
-		}(runner)
-	}
+	go func() {
+		_ = runner.Run(runCtx)
+		c.mu.Lock()
+		c.ready = false
+		c.mu.Unlock()
+	}()
 	return nil
 }
 
@@ -142,5 +119,5 @@ func (c *Consumer) Ready() bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.consumers) == 2 && c.cancel != nil && c.ready
+	return len(c.consumers) == 1 && c.cancel != nil && c.ready
 }

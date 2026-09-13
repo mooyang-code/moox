@@ -61,14 +61,26 @@ message CleanupExpiredBucketsRsp {
   uint64 deleted_buckets = 2;
 }
 
-message AppendDatasetPeriodCollectedReq {
+message AppendCollectorPeriodCompletedReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
   string space_id = 3;
-  DatasetPeriodCollectedMarker marker = 4;
+  CollectorPeriodCompletedMarker marker = 4;
 }
 
-message AppendDatasetPeriodCollectedRsp {
+message AppendCollectorPeriodCompletedRsp {
+  common.RetInfo ret_info = 1;
+  string event_id = 2;
+}
+
+message AppendMergePeriodCompletedReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  string space_id = 3;
+  MergePeriodCompletedMarker marker = 4;
+}
+
+message AppendMergePeriodCompletedRsp {
   common.RetInfo ret_info = 1;
   string event_id = 2;
 }
@@ -101,10 +113,9 @@ message GetFactorPeriodComputedMarkerReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
   string space_id = 3;
-  string result_dataset_id = 4;
-  string source_view_id = 5;
-  string trigger_event_id = 6;
-  int64 period_time = 7;
+  string dataset_id = 4;
+  string trigger_event_id = 5;
+  int64 period_time = 6;
 }
 
 message GetFactorPeriodComputedMarkerRsp {
@@ -127,7 +138,8 @@ service DataNodeRuntime {
 // surface so existing DataNode clients remain source compatible while marker
 // writes gain an explicit, narrow internal API.
 service DataNodeMarkerRuntime {
-  rpc AppendDatasetPeriodCollected(AppendDatasetPeriodCollectedReq) returns (AppendDatasetPeriodCollectedRsp);
+  rpc AppendCollectorPeriodCompleted(AppendCollectorPeriodCompletedReq) returns (AppendCollectorPeriodCompletedRsp);
+  rpc AppendMergePeriodCompleted(AppendMergePeriodCompletedReq) returns (AppendMergePeriodCompletedRsp);
   rpc AppendFactorPeriodComputed(AppendFactorPeriodComputedReq) returns (AppendFactorPeriodComputedRsp);
   rpc AppendDatasetSyncPointMarker(AppendDatasetSyncPointMarkerReq) returns (AppendDatasetSyncPointMarkerRsp);
   rpc GetFactorPeriodComputedMarker(GetFactorPeriodComputedMarkerReq) returns (GetFactorPeriodComputedMarkerRsp);

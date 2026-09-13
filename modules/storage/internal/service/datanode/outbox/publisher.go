@@ -82,7 +82,7 @@ func validateDatasetEvent(data []byte) (string, string, error) {
 }
 
 func dataNodeOutboxEvent(event events.Event) bool {
-	for _, allowed := range []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCollected, events.FactorPeriodComputed, events.DatasetSyncPoint} {
+	for _, allowed := range []events.Event{events.DatasetRowsUpserted, events.CollectorPeriodCompleted, events.MergePeriodCompleted, events.FactorPeriodComputed, events.DatasetSyncPoint} {
 		if event.Name() == allowed.Name() && event.Version() == allowed.Version() {
 			return true
 		}

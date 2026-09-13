@@ -32,7 +32,7 @@ require_running_service() {
   kill -0 "${pid}" 2>/dev/null || fail "${name} is not running (pid ${pid})"
 }
 
-# The integration test subscribes to the final ViewFactorPeriodReady event.
+# The integration test subscribes to the final ViewDataReady event.
 # Reuse the running Factor process' EventBus URL and the deployment-generated
 # Factor credentials instead of relying on the checked-in local defaults.
 factor_pid_file="${DEPLOY_ROOT}/run/factor.pid"

@@ -503,13 +503,13 @@ def compute(df, params, context):
 
 	// Bind a modern Strategy instance to the real Factor result View before
 	// emitting the next readiness marker. This keeps the assertion on the
-	// production event path: Storage -> Factor -> ViewFactorPeriodReady ->
+	// production event path: Storage -> Factor -> ViewDataReady ->
 	// Strategy evaluation and target persistence.
 	strategyID := "strategy_factor_" + suffix
 	strategyName := "FactorSpreadSelection_" + suffix
 	dsl := fmt.Sprintf(`name: %s
 triggers:
-  event: {name: ViewFactorPeriodReady}
+  event: {name: ViewDataReady}
 data: {bar: %s, calendar: crypto_24x7}
 rules:
   spread:
@@ -590,7 +590,7 @@ rules:
 		// The Factor EventBus role grants this dedicated durable for the
 		// integration assertion; the production source-ready durable remains
 		// owned by the Factor consumer.
-		Name: "factor_view_ready_e2e", Event: events.ViewFactorPeriodReady,
+		Name: "factor_view_ready_e2e", Event: events.ViewDataReady,
 		AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 16,
 		FetchMaxWait: 500 * time.Millisecond, DeliverPolicy: nats.DeliverAllPolicy,
 	})
@@ -606,19 +606,22 @@ rules:
 		requiredEnv(t, "MOOX_STORAGE_PRIMARY_AUTH_SECRET"),
 		[]byte(collectorAuth.GetAppId()),
 	)
-	reportRsp, reportErr := primary.ReportDatasetPeriodCollected(ctx, &storagepb.ReportDatasetPeriodCollectedReq{
+	reportRsp, reportErr := primary.ReportCollectorPeriodCompleted(ctx, &storagepb.ReportCollectorPeriodCompletedReq{
 		AuthInfo: collectorAuth, SpaceId: spaceID,
-		Marker: &storagepb.DatasetPeriodCollectedMarker{
+		Marker: &storagepb.CollectorPeriodCompletedMarker{
 			DatasetId: sourceID, Frequency: freq, PeriodTime: third.Unix(), Status: "complete",
-			SubjectIds: subjectIDs, CollectedAt: timestamppb.New(time.Now().UTC()),
+			BatchId: "e2e-" + sourceID, ConfigSnapshotId: "e2e", ExpectedScopeRef: sourceID + ":" + freq,
+			ExpectedSubjectIds: subjectIDs,
+			CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "e2e", StoreId: "e2e", Sequence: 1}},
+			CollectedAt:        timestamppb.New(time.Now().UTC()),
 		},
 	})
-	requireStorageOK(t, "PrimaryStore.ReportDatasetPeriodCollected", reportRsp, reportErr)
+	requireStorageOK(t, "PrimaryStore.ReportCollectorPeriodCompleted", reportRsp, reportErr)
 	thirdSourceReadyID := sourceReadyEventID(spaceID, sourceViewID, freq, third.Unix())
 	var computed *storagepb.FactorPeriodComputedMarker
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		computedRsp, computedErr := primary.GetFactorPeriodComputed(ctx, &storagepb.GetFactorPeriodComputedReq{
-			AuthInfo: auth, SpaceId: spaceID, SourceViewId: sourceViewID,
+			AuthInfo: auth, SpaceId: spaceID, DatasetId: resultDatasetID,
 			TriggerEventId: thirdSourceReadyID, PeriodTime: third.Unix(),
 		})
 		assert.NoError(collect, computedErr)
@@ -639,7 +642,7 @@ rules:
 		bindingID: factorID, secondBindingID: secondFactorID,
 	})
 	t.Logf("durable factor marker: status=%s bindings=%v", computed.GetStatus(), computed.GetBindings())
-	var finalReady *eventstoragepb.ViewFactorPeriodReady
+	var finalReady *eventstoragepb.ViewDataReady
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer fetchCancel()
@@ -654,8 +657,8 @@ rules:
 				_ = delivery.Ack(fetchCtx)
 				continue
 			}
-			ready, ok := decoded.Payload.(*eventstoragepb.ViewFactorPeriodReady)
-			if ok && ready.GetResultViewId() == resultViewID && ready.GetFrequency() == freq && ready.GetPeriodTime() == third.Unix() {
+			ready, ok := decoded.Payload.(*eventstoragepb.ViewDataReady)
+			if ok && ready.GetViewId() == resultViewID && ready.GetFrequency() == freq && ready.GetPeriodTime() == third.Unix() {
 				finalReady = ready
 			}
 			_ = delivery.Ack(fetchCtx)
@@ -663,12 +666,9 @@ rules:
 		if finalReady == nil {
 			assert.Fail(collect, "result view ready event not found", "view=%s period=%d", resultViewID, third.Unix())
 		}
-	}, 60*time.Second, 250*time.Millisecond, "result View did not publish ViewFactorPeriodReady")
+	}, 60*time.Second, 250*time.Millisecond, "result View did not publish ViewDataReady")
 	require.NotNil(t, finalReady)
 	require.Equal(t, "complete", finalReady.GetStatus())
-	assertEventCompleteBindingStates(t, finalReady.GetBindings(), map[string]string{
-		bindingID: factorID, secondBindingID: secondFactorID,
-	})
 
 	// Assert the durable path before invoking the manual run-once helper. This
 	// prevents a successful CLI recalculation from masking a broken source-ready
@@ -892,7 +892,7 @@ def compute(df, params, context):
 	storage := &incompleteThenCompleteStorage{at: at}
 	service := taskrunner.NewService(1, storage, python)
 	require.NoError(t, service.Run(context.Background(), task))
-	require.Equal(t, 1, storage.reads, "ViewSourcePeriodReady is the completeness contract")
+	require.Equal(t, 1, storage.reads, "ViewDataReady is the completeness contract")
 	require.Equal(t, 1, storage.writes, "ready input reaches Python/writeback once")
 	require.Len(t, storage.result.Rows, 1)
 	require.Equal(t, "venue_pair:binance-okx", storage.result.Rows[0].SeriesTag)

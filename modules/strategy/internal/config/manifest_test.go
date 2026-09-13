@@ -10,7 +10,7 @@ func validDSLYAML() []byte {
 	return []byte(`name: strategy_demo
 triggers:
   schedule: {cron: "5 * * * *", timezone: UTC}
-  event: {name: ViewFactorPeriodReady}
+  event: {name: ViewDataReady}
 data: {bar: 1h, calendar: crypto_24x7}
 rules:
   momentum:
@@ -45,7 +45,7 @@ func TestDSLAllowsEitherTrigger(t *testing.T) {
 	raw = []byte("name: only_schedule\ntriggers: {schedule: {cron: '@hourly'}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {pool: [BTC], weight: 1}}\n")
 	_, err := Parse(raw)
 	require.NoError(t, err)
-	raw = []byte("name: only_event\ntriggers: {event: {name: source.ready}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {pool: [BTC], weight: 1}}\n")
+	raw = []byte("name: only_event\ntriggers: {event: {name: ViewDataReady}}\ndata: {bar: 1h, calendar: crypto_24x7}\nrules: {r: {pool: [BTC], weight: 1}}\n")
 	_, err = Parse(raw)
 	require.NoError(t, err)
 }

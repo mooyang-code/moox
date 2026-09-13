@@ -292,7 +292,7 @@ func normalizeFrequency(value string) (string, error) {
 
 func supportedEventName(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "viewfactorperiodready", "factor.ready", "event.storage.view.factor_period.ready", "viewsourceperiodready", "ready", "source.ready", "event.storage.view.source_period.ready":
+	case "viewdataready", "view.data.ready", "event.storage.view.data.ready", "ready":
 		return true
 	default:
 		return false

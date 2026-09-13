@@ -151,93 +151,46 @@ func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Mess
 	return nil
 }
 
-func validateDatasetPeriodCollected(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*storagepb.DatasetPeriodCollected)
+func validateCollectorPeriodCompleted(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.CollectorPeriodCompleted)
 	if !ok {
-		return fmt.Errorf("dataset period collected payload has type %T", value)
+		return fmt.Errorf("collector period completed payload has type %T", value)
 	}
-	if err := validateStoragePeriod(message, payload.GetDatasetId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetCollectedAt(), "dataset period collected"); err != nil {
-		return err
-	}
-	subjects, err := validateUniqueTokens(payload.GetSubjectIds(), false, "dataset period collected subject_ids")
-	if err != nil {
-		return err
-	}
-	failed, err := validateUniqueTokens(payload.GetFailedSubjects(), false, "dataset period collected failed_subjects")
-	if err != nil {
-		return err
-	}
-	for subject := range failed {
-		if _, ok := subjects[subject]; !ok {
-			return fmt.Errorf("dataset period collected failed_subject %q is not expected", subject)
-		}
-	}
-	if payload.GetStatus() == "complete" && len(failed) != 0 {
-		return fmt.Errorf("dataset period collected complete status has failed_subjects")
-	}
-	return nil
+	return validatePeriodCompletion(message, periodCompletion{
+		label:               "collector period completed",
+		datasetID:           payload.GetDatasetId(),
+		frequency:           payload.GetFrequency(),
+		periodTime:          payload.GetPeriodTime(),
+		status:              payload.GetStatus(),
+		batchID:             payload.GetBatchId(),
+		configSnapshotID:    payload.GetConfigSnapshotId(),
+		expectedScopeRef:    payload.GetExpectedScopeRef(),
+		expectedSubjectIDs:  payload.GetExpectedSubjectIds(),
+		failedSubjects:      payload.GetFailedSubjects(),
+		committedPositions:  payload.GetCommittedPositions(),
+		timestamp:           payload.GetCollectedAt(),
+	})
 }
 
-func validateViewSourceSubjectReady(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*storagepb.ViewSourceSubjectReady)
+func validateMergePeriodCompleted(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.MergePeriodCompleted)
 	if !ok {
-		return fmt.Errorf("view source subject ready payload has type %T", value)
+		return fmt.Errorf("merge period completed payload has type %T", value)
 	}
-	if err := validateStoragePeriod(message, payload.GetSourceViewId(), payload.GetFrequency(), payload.GetPeriodTime(), "complete", payload.GetReadyAt(), "view source subject ready"); err != nil {
-		return err
-	}
-	for _, identity := range []string{payload.GetSourceDatasetId(), payload.GetSubjectId(), payload.GetInputContractVersion(), payload.GetSourceEventId()} {
-		if !validRequiredToken(identity) {
-			return fmt.Errorf("view source subject ready input identity is incomplete")
-		}
-	}
-	if !validRequiredToken(payload.GetSourceNodeId()) || !validRequiredToken(payload.GetSourceStoreId()) || payload.GetSourceSequence() == 0 {
-		return fmt.Errorf("view source subject ready source position is required")
-	}
-	return nil
-}
-
-func validateViewSourcePeriodReady(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*storagepb.ViewSourcePeriodReady)
-	if !ok {
-		return fmt.Errorf("view source period ready payload has type %T", value)
-	}
-	if err := validateStoragePeriod(message, payload.GetSourceViewId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetReadyAt(), "view source period ready"); err != nil {
-		return err
-	}
-	if len(payload.GetDatasets()) == 0 {
-		return fmt.Errorf("view source period ready datasets are required")
-	}
-	seen := make(map[string]struct{}, len(payload.GetDatasets()))
-	hasDegraded := false
-	for i, state := range payload.GetDatasets() {
-		if state == nil || !validRequiredToken(state.GetDatasetId()) {
-			return fmt.Errorf("view source period ready dataset %d identity is invalid", i)
-		}
-		if _, ok := seen[state.GetDatasetId()]; ok {
-			return fmt.Errorf("view source period ready dataset %q is duplicated", state.GetDatasetId())
-		}
-		seen[state.GetDatasetId()] = struct{}{}
-		if !validCompletionStatus(state.GetStatus()) {
-			return fmt.Errorf("view source period ready dataset %q status %q is invalid", state.GetDatasetId(), state.GetStatus())
-		}
-		failed, err := validateUniqueTokens(state.GetFailedSubjects(), false, fmt.Sprintf("view source period ready dataset %q failed_subjects", state.GetDatasetId()))
-		if err != nil {
-			return err
-		}
-		if state.GetStatus() == "complete" && len(failed) != 0 {
-			return fmt.Errorf("view source period ready complete dataset %q has failed_subjects", state.GetDatasetId())
-		}
-		hasDegraded = hasDegraded || state.GetStatus() == "degraded"
-	}
-	if (payload.GetStatus() == "degraded") != hasDegraded {
-		return fmt.Errorf("view source period ready status does not match datasets")
-	}
-	if (payload.GetActiveIndexId() == "") != (payload.GetActiveIndexRevision() == 0) {
-		return fmt.Errorf("view source period ready active index provenance is incomplete")
-	}
-	_, err := validateUniqueTokens(payload.GetPrimarySubjects(), false, "view source period ready primary_subjects")
-	return err
+	return validatePeriodCompletion(message, periodCompletion{
+		label:               "merge period completed",
+		datasetID:           payload.GetDatasetId(),
+		frequency:           payload.GetFrequency(),
+		periodTime:          payload.GetPeriodTime(),
+		status:              payload.GetStatus(),
+		batchID:             payload.GetBatchId(),
+		configSnapshotID:    payload.GetConfigSnapshotId(),
+		expectedScopeRef:    payload.GetExpectedScopeRef(),
+		expectedSubjectIDs:  payload.GetExpectedSubjectIds(),
+		failedSubjects:      payload.GetFailedSubjects(),
+		committedPositions:  payload.GetCommittedPositions(),
+		timestamp:           payload.GetCompletedAt(),
+	})
 }
 
 func validateFactorPeriodComputed(message *eventpb.EventMessage, value proto.Message) error {
@@ -245,41 +198,122 @@ func validateFactorPeriodComputed(message *eventpb.EventMessage, value proto.Mes
 	if !ok {
 		return fmt.Errorf("factor period computed payload has type %T", value)
 	}
-	if !validRequiredToken(payload.GetSourceViewId()) || !validRequiredToken(payload.GetTriggerEventId()) {
-		return fmt.Errorf("factor period computed source_view_id and trigger_event_id are required")
+	if !validRequiredToken(payload.GetTriggerEventId()) {
+		return fmt.Errorf("factor period computed trigger_event_id is required")
 	}
-	if err := validateStoragePeriod(message, payload.GetResultDatasetId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetComputedAt(), "factor period computed"); err != nil {
+	if err := validatePeriodCompletion(message, periodCompletion{
+		label:               "factor period computed",
+		datasetID:           payload.GetDatasetId(),
+		frequency:           payload.GetFrequency(),
+		periodTime:          payload.GetPeriodTime(),
+		status:              payload.GetStatus(),
+		batchID:             payload.GetBatchId(),
+		configSnapshotID:    payload.GetConfigSnapshotId(),
+		expectedScopeRef:    payload.GetExpectedScopeRef(),
+		expectedSubjectIDs:  payload.GetExpectedSubjectIds(),
+		committedPositions:  payload.GetCommittedPositions(),
+		timestamp:           payload.GetComputedAt(),
+	}); err != nil {
 		return err
 	}
-	// v1 markers written before provenance was introduced may still be queued
-	// in the DataNode outbox. Keep those publishable; all new markers carry a
-	// source index and are held to the stronger source-hash contract.
-	if (payload.GetSourceIndexId() == "") != (payload.GetSourceIndexRevision() == 0) {
-		return fmt.Errorf("factor period computed source index provenance is incomplete")
-	}
-	return validateFactorBindingStates(payload.GetBindings(), payload.GetStatus(), "factor period computed", payload.GetSourceIndexId() != "")
+	return validateFactorBindingStates(payload.GetBindings(), payload.GetStatus(), "factor period computed", true)
 }
 
-func validateViewFactorPeriodReady(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*storagepb.ViewFactorPeriodReady)
+func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.ViewDataReady)
 	if !ok {
-		return fmt.Errorf("view factor period ready payload has type %T", value)
+		return fmt.Errorf("view data ready payload has type %T", value)
 	}
-	if !validRequiredToken(payload.GetSourceViewId()) {
-		return fmt.Errorf("view factor period ready source_view_id is required")
-	}
-	if err := validateStoragePeriod(message, payload.GetResultViewId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetReadyAt(), "view factor period ready"); err != nil {
+	if err := validateStoragePeriod(message, payload.GetViewId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetReadyAt(), "view data ready"); err != nil {
 		return err
 	}
-	hasSourceIndex := payload.GetSourceIndexId() != ""
-	hasResultIndex := payload.GetResultIndexId() != ""
-	if hasSourceIndex != (payload.GetSourceIndexRevision() != 0) || hasResultIndex != (payload.GetResultIndexRevision() != 0) {
-		return fmt.Errorf("view factor period ready index provenance is incomplete")
+	if !validRequiredToken(payload.GetCompletionEventId()) {
+		return fmt.Errorf("view data ready completion_event_id is required")
 	}
-	if hasSourceIndex != hasResultIndex {
-		return fmt.Errorf("view factor period ready source and result index provenance must be provided together")
+	if !validRequiredToken(payload.GetViewConfigId()) {
+		return fmt.Errorf("view data ready view_config_id is required")
 	}
-	return validateFactorBindingStates(payload.GetBindings(), payload.GetStatus(), "view factor period ready", hasSourceIndex)
+	if !validRequiredToken(payload.GetDatasetId()) {
+		return fmt.Errorf("view data ready dataset_id is required")
+	}
+	if !validRequiredToken(payload.GetVisibleScope()) {
+		return fmt.Errorf("view data ready visible_scope is required")
+	}
+	if err := validateCommittedPositions(payload.GetCommittedPositions(), "view data ready"); err != nil {
+		return err
+	}
+	if payload.GetStatus() == "complete" && validRequiredToken(payload.GetFailedScopeRef()) {
+		return fmt.Errorf("view data ready complete status has failed_scope_ref")
+	}
+	if payload.GetStatus() == "degraded" && !validRequiredToken(payload.GetFailedScopeRef()) {
+		return fmt.Errorf("view data ready degraded status requires failed_scope_ref")
+	}
+	return nil
+}
+
+type periodCompletion struct {
+	label              string
+	datasetID          string
+	frequency          string
+	periodTime         int64
+	status             string
+	batchID            string
+	configSnapshotID   string
+	expectedScopeRef   string
+	expectedSubjectIDs []string
+	failedSubjects     []string
+	committedPositions []*storagepb.CommittedPosition
+	timestamp          *timestamppb.Timestamp
+}
+
+func validatePeriodCompletion(message *eventpb.EventMessage, completion periodCompletion) error {
+	if err := validateStoragePeriod(message, completion.datasetID, completion.frequency, completion.periodTime, completion.status, completion.timestamp, completion.label); err != nil {
+		return err
+	}
+	if !validRequiredToken(completion.batchID) {
+		return fmt.Errorf("%s batch_id is required", completion.label)
+	}
+	if !validRequiredToken(completion.configSnapshotID) {
+		return fmt.Errorf("%s config_snapshot_id is required", completion.label)
+	}
+	if !validRequiredToken(completion.expectedScopeRef) {
+		return fmt.Errorf("%s expected_scope_ref is required", completion.label)
+	}
+	subjects, err := validateUniqueTokens(completion.expectedSubjectIDs, false, completion.label+" expected_subject_ids")
+	if err != nil {
+		return err
+	}
+	failed, err := validateUniqueTokens(completion.failedSubjects, false, completion.label+" failed_subjects")
+	if err != nil {
+		return err
+	}
+	for subject := range failed {
+		if _, ok := subjects[subject]; !ok {
+			return fmt.Errorf("%s failed_subject %q is not expected", completion.label, subject)
+		}
+	}
+	if completion.status == "complete" && len(failed) != 0 {
+		return fmt.Errorf("%s complete status has failed_subjects", completion.label)
+	}
+	return validateCommittedPositions(completion.committedPositions, completion.label)
+}
+
+func validateCommittedPositions(positions []*storagepb.CommittedPosition, label string) error {
+	if len(positions) == 0 {
+		return fmt.Errorf("%s committed_positions are required", label)
+	}
+	seen := make(map[string]struct{}, len(positions))
+	for i, position := range positions {
+		if position == nil || !validRequiredToken(position.GetNodeId()) || !validRequiredToken(position.GetStoreId()) || position.GetSequence() == 0 {
+			return fmt.Errorf("%s committed_position %d is incomplete", label, i)
+		}
+		key := position.GetNodeId() + "\x00" + position.GetStoreId()
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("%s committed_position %q/%q is duplicated", label, position.GetNodeId(), position.GetStoreId())
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
 }
 
 func validateDatasetSyncPoint(message *eventpb.EventMessage, value proto.Message) error {

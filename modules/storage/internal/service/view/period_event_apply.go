@@ -33,17 +33,47 @@ type ReadyEventPublisher interface {
 	Publish(context.Context, events.Event, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error)
 }
 
-func (s *Service) HandleDatasetPeriodCollected(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.DatasetPeriodCollected) error {
+type periodCompletionInput struct {
+	datasetID          string
+	frequency          string
+	periodTime         int64
+	status             string
+	expectedSubjectIDs []string
+	failedSubjects     []string
+	expectedScopeRef   string
+	committedPositions []*storageeventpb.CommittedPosition
+}
+
+func (s *Service) HandleCollectorPeriodCompleted(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.CollectorPeriodCompleted) error {
 	if message == nil || payload == nil {
-		return eventconsumer.Permanent(errors.New("dataset period event is empty"))
+		return eventconsumer.Permanent(errors.New("collector period event is empty"))
 	}
+	return s.applyPeriodCompletion(ctx, message, periodCompletionInput{
+		datasetID: payload.GetDatasetId(), frequency: payload.GetFrequency(), periodTime: payload.GetPeriodTime(),
+		status: payload.GetStatus(), expectedSubjectIDs: payload.GetExpectedSubjectIds(), failedSubjects: payload.GetFailedSubjects(),
+		expectedScopeRef: payload.GetExpectedScopeRef(), committedPositions: payload.GetCommittedPositions(),
+	})
+}
+
+func (s *Service) HandleMergePeriodCompleted(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.MergePeriodCompleted) error {
+	if message == nil || payload == nil {
+		return eventconsumer.Permanent(errors.New("merge period event is empty"))
+	}
+	return s.applyPeriodCompletion(ctx, message, periodCompletionInput{
+		datasetID: payload.GetDatasetId(), frequency: payload.GetFrequency(), periodTime: payload.GetPeriodTime(),
+		status: payload.GetStatus(), expectedSubjectIDs: payload.GetExpectedSubjectIds(), failedSubjects: payload.GetFailedSubjects(),
+		expectedScopeRef: payload.GetExpectedScopeRef(), committedPositions: payload.GetCommittedPositions(),
+	})
+}
+
+func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.EventMessage, completion periodCompletionInput) error {
 	metadata, publisher := s.periodDependencies()
 	if metadata == nil || publisher == nil {
 		return errors.New("storage View period dependencies are unavailable")
 	}
-	views := s.activeViewsForDataset(message.GetSpaceId(), payload.GetDatasetId())
+	views := s.activeViewsForDataset(message.GetSpaceId(), completion.datasetID)
 	if len(views) == 0 {
-		managed, err := s.datasetHasActiveView(ctx, message.GetSpaceId(), payload.GetDatasetId())
+		managed, err := s.datasetHasActiveView(ctx, message.GetSpaceId(), completion.datasetID)
 		if err != nil {
 			return err
 		}
@@ -54,9 +84,9 @@ func (s *Service) HandleDatasetPeriodCollected(ctx context.Context, message *eve
 	}
 	for _, view := range views {
 		state := &pb.ViewPeriodDatasetState{
-			SpaceId: message.GetSpaceId(), ViewId: view.GetViewId(), DatasetId: payload.GetDatasetId(), Frequency: payload.GetFrequency(),
-			PeriodTime: payload.GetPeriodTime(), EventId: message.GetEventId(), Status: payload.GetStatus(),
-			SubjectIds: append([]string(nil), payload.GetSubjectIds()...), FailedSubjects: append([]string(nil), payload.GetFailedSubjects()...),
+			SpaceId: message.GetSpaceId(), ViewId: view.GetViewId(), DatasetId: completion.datasetID, Frequency: completion.frequency,
+			PeriodTime: completion.periodTime, EventId: message.GetEventId(), Status: completion.status,
+			SubjectIds: append([]string(nil), completion.expectedSubjectIDs...), FailedSubjects: append([]string(nil), completion.failedSubjects...),
 			OccurredAt: cloneTimestamp(message.GetOccurredAt()),
 		}
 		rsp, err := metadata.UpsertViewPeriodDatasetState(ctx, &pb.UpsertViewPeriodDatasetStateReq{AuthInfo: s.internalAuth(), State: state})
@@ -67,7 +97,7 @@ func (s *Service) HandleDatasetPeriodCollected(ctx context.Context, message *eve
 			return err
 		}
 		statesRsp, err := metadata.ListViewPeriodDatasetStates(ctx, &pb.ListViewPeriodDatasetStatesReq{
-			AuthInfo: s.internalAuth(), SpaceId: message.GetSpaceId(), ViewId: view.GetViewId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
+			AuthInfo: s.internalAuth(), SpaceId: message.GetSpaceId(), ViewId: view.GetViewId(), Frequency: completion.frequency, PeriodTime: completion.periodTime,
 		})
 		if err != nil {
 			return err
@@ -87,20 +117,20 @@ func (s *Service) HandleDatasetPeriodCollected(ctx context.Context, message *eve
 				waiting++
 			}
 		}
-		s.metrics.ObservePeriodWaiting(view.GetViewId(), payload.GetFrequency(), waiting)
-		ready, ok := sourceReadyPayload(view, payload.GetFrequency(), payload.GetPeriodTime(), statesRsp.GetStates(), message.GetOccurredAt())
+		s.metrics.ObservePeriodWaiting(view.GetViewId(), completion.frequency, waiting)
+		ready, ok := viewDataReadyPayload(view, completion, statesRsp.GetStates(), message)
 		if !ok {
 			continue
 		}
-		eventID := stableViewEventID("source-ready", message.GetSpaceId(), view.GetViewId(), payload.GetFrequency(), strconv.FormatInt(payload.GetPeriodTime(), 10))
+		eventID := stableViewEventID("data-ready", message.GetSpaceId(), view.GetViewId(), completion.frequency, strconv.FormatInt(completion.periodTime, 10))
 		occurredAt := message.GetOccurredAt()
 		if ready.GetReadyAt() != nil {
 			occurredAt = ready.GetReadyAt()
 		}
-		if _, err := publisher.Publish(ctx, events.ViewSourcePeriodReady, ready, events.PublishOptions{
+		if _, err := publisher.Publish(ctx, events.ViewDataReady, ready, events.PublishOptions{
 			EventID: eventID, OccurredAt: occurredAt.AsTime().UTC(), SpaceID: message.GetSpaceId(), SubjectID: view.GetViewId(),
 		}); err != nil {
-			s.metrics.ObserveReadyPublishRetry(view.GetViewId(), "source_period_ready")
+			s.metrics.ObserveReadyPublishRetry(view.GetViewId(), "view_data_ready")
 			return err
 		}
 	}
@@ -115,9 +145,9 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 	if publisher == nil {
 		return errors.New("storage View ready publisher is unavailable")
 	}
-	views := s.activeViewsForDataset(message.GetSpaceId(), payload.GetResultDatasetId())
+	views := s.activeViewsForDataset(message.GetSpaceId(), payload.GetDatasetId())
 	if len(views) == 0 {
-		managed, err := s.datasetHasActiveView(ctx, message.GetSpaceId(), payload.GetResultDatasetId())
+		managed, err := s.datasetHasActiveView(ctx, message.GetSpaceId(), payload.GetDatasetId())
 		if err != nil {
 			return err
 		}
@@ -126,22 +156,24 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 		}
 		return nil
 	}
+	var failed []string
+	for _, state := range payload.GetBindings() {
+		if state != nil {
+			failed = append(failed, state.GetFailedSubjects()...)
+		}
+	}
 	for _, view := range views {
-		bindings := make([]*storageeventpb.FactorBindingPeriodState, 0, len(payload.GetBindings()))
-		for _, state := range payload.GetBindings() {
-			if state != nil {
-				bindings = append(bindings, proto.Clone(state).(*storageeventpb.FactorBindingPeriodState))
-			}
+		ready := &storageeventpb.ViewDataReady{
+			ViewId: view.GetViewId(), ViewConfigId: viewConfigID(view), CompletionEventId: message.GetEventId(),
+			DatasetId: payload.GetDatasetId(), Status: payload.GetStatus(), VisibleScope: firstNonEmpty(payload.GetExpectedScopeRef(), "view:"+view.GetViewId()),
+			Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(), FailedScopeRef: degradedScopeRef(payload.GetStatus(), failed),
+			CommittedPositions: cloneCommittedPositions(payload.GetCommittedPositions()), ReadyAt: cloneTimestamp(message.GetOccurredAt()),
 		}
-		ready := &storageeventpb.ViewFactorPeriodReady{
-			SourceViewId: payload.GetSourceViewId(), ResultViewId: view.GetViewId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
-			Status: payload.GetStatus(), Bindings: bindings, ReadyAt: cloneTimestamp(message.GetOccurredAt()),
-		}
-		eventID := stableViewEventID("factor-ready", message.GetEventId(), view.GetViewId())
-		if _, err := publisher.Publish(ctx, events.ViewFactorPeriodReady, ready, events.PublishOptions{
+		eventID := stableViewEventID("data-ready", message.GetEventId(), view.GetViewId())
+		if _, err := publisher.Publish(ctx, events.ViewDataReady, ready, events.PublishOptions{
 			EventID: eventID, OccurredAt: message.GetOccurredAt().AsTime().UTC(), SpaceID: message.GetSpaceId(), SubjectID: view.GetViewId(),
 		}); err != nil {
-			s.metrics.ObserveReadyPublishRetry(view.GetViewId(), "factor_period_ready")
+			s.metrics.ObserveReadyPublishRetry(view.GetViewId(), "view_data_ready")
 			return err
 		}
 	}
@@ -313,17 +345,16 @@ func (s *Service) viewsForDataset(spaceID, datasetID string, includeBuilding boo
 	return result
 }
 
-func sourceReadyPayload(view *pb.View, frequency string, periodTime int64, states []*pb.ViewPeriodDatasetState, occurredAt *timestamppb.Timestamp) (*storageeventpb.ViewSourcePeriodReady, bool) {
+func viewDataReadyPayload(view *pb.View, completion periodCompletionInput, states []*pb.ViewPeriodDatasetState, message *eventpb.EventMessage) (*storageeventpb.ViewDataReady, bool) {
 	byDataset := make(map[string]*pb.ViewPeriodDatasetState, len(states))
 	for _, state := range states {
 		if state != nil {
 			byDataset[state.GetDatasetId()] = state
 		}
 	}
-	datasets := make([]*storageeventpb.ViewPeriodDatasetState, 0, len(view.GetDatasetIds()))
 	status := "complete"
-	var primarySubjects []string
-	readyAt := cloneTimestamp(occurredAt)
+	var failed []string
+	readyAt := cloneTimestamp(message.GetOccurredAt())
 	for _, datasetID := range view.GetDatasetIds() {
 		state := byDataset[datasetID]
 		if state == nil {
@@ -331,21 +362,60 @@ func sourceReadyPayload(view *pb.View, frequency string, periodTime int64, state
 		}
 		if state.GetStatus() == "degraded" {
 			status = "degraded"
+			failed = append(failed, state.GetFailedSubjects()...)
 		}
-		datasets = append(datasets, &storageeventpb.ViewPeriodDatasetState{
-			DatasetId: datasetID, Status: state.GetStatus(), FailedSubjects: uniqueSortedStrings(state.GetFailedSubjects()),
-		})
 		if state.GetOccurredAt() != nil && (readyAt == nil || state.GetOccurredAt().AsTime().After(readyAt.AsTime())) {
 			readyAt = cloneTimestamp(state.GetOccurredAt())
 		}
-		if datasetID == view.GetPrimaryDatasetId() {
-			primarySubjects = append(primarySubjects, state.GetSubjectIds()...)
+	}
+	return &storageeventpb.ViewDataReady{
+		ViewId: view.GetViewId(), ViewConfigId: viewConfigID(view), CompletionEventId: message.GetEventId(),
+		DatasetId: completion.datasetID, Status: status, VisibleScope: firstNonEmpty(completion.expectedScopeRef, "view:"+view.GetViewId()),
+		Frequency: completion.frequency, PeriodTime: completion.periodTime, FailedScopeRef: degradedScopeRef(status, failed),
+		CommittedPositions: cloneCommittedPositions(completion.committedPositions), ReadyAt: readyAt,
+	}, true
+}
+
+func viewConfigID(view *pb.View) string {
+	if view == nil {
+		return ""
+	}
+	if hash := strings.TrimSpace(view.GetActiveViewSchemaHash()); hash != "" {
+		return hash
+	}
+	if view.GetActiveViewRevision() > 0 {
+		return fmt.Sprintf("%s@%d", view.GetViewId(), view.GetActiveViewRevision())
+	}
+	return view.GetViewId()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
 		}
 	}
-	return &storageeventpb.ViewSourcePeriodReady{
-		SourceViewId: view.GetViewId(), Frequency: frequency, PeriodTime: periodTime, Status: status,
-		Datasets: datasets, PrimarySubjects: uniqueSortedStrings(primarySubjects), ReadyAt: readyAt,
-	}, true
+	return ""
+}
+
+func degradedScopeRef(status string, failed []string) string {
+	if status != "degraded" {
+		return ""
+	}
+	if refs := uniqueSortedStrings(failed); len(refs) > 0 {
+		return strings.Join(refs, ",")
+	}
+	return "degraded"
+}
+
+func cloneCommittedPositions(values []*storageeventpb.CommittedPosition) []*storageeventpb.CommittedPosition {
+	out := make([]*storageeventpb.CommittedPosition, 0, len(values))
+	for _, value := range values {
+		if value != nil {
+			out = append(out, proto.Clone(value).(*storageeventpb.CommittedPosition))
+		}
+	}
+	return out
 }
 
 func requireStorageSuccess(operation string, info *pb.RetInfo) error {

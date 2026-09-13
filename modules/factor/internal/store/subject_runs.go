@@ -149,9 +149,6 @@ func (s *Store) PruneSubjectRunsBefore(ctx context.Context, completedBefore int6
 		if err := tx.Where("c_period_time < ?", completedBefore).Delete(&subjectRun{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("c_period_time < ?", completedBefore).Delete(&subjectReceipt{}).Error; err != nil {
-			return err
-		}
 		return tx.Where("c_period_time < ?", completedBefore).Delete(&subjectHead{}).Error
 	})
 }

@@ -21,6 +21,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+type subjectPublisherFunc func(context.Context, events.Event, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error)
+
+func (f subjectPublisherFunc) Publish(ctx context.Context, event events.Event, payload proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
+	return f(ctx, event, payload, opts)
+}
+
 type pendingSubject struct {
 	Space, View, Dataset string
 	Row, Message         []byte
@@ -105,7 +111,7 @@ func TestStartEventConsumerDiscardsLegacyPendingSubjectsWithoutPublishing(t *tes
 	defer client.Close()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	readySubject, err := registry.RenderSubject(events.ViewSourceSubjectReady, "space", "prices_view")
+	readySubject, err := registry.RenderSubject(events.ViewDataReady, "space", "prices_view")
 	require.NoError(t, err)
 	sub, err := nc.SubscribeSync(readySubject)
 	require.NoError(t, err)

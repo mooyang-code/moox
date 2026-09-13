@@ -93,52 +93,58 @@ func DecodeDatasetRowsUpsertedWithContentType(registry *Registry, raw []byte, su
 	return message, storagePayload, nil
 }
 
-// DecodeDatasetPeriodCollected validates and decodes a Dataset completion marker.
-func DecodeDatasetPeriodCollected(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.DatasetPeriodCollected, error) {
-	return DecodeDatasetPeriodCollectedWithContentType(registry, raw, subject, messageID, ContentType)
+// DecodeCollectorPeriodCompleted validates and decodes a collector completion marker.
+func DecodeCollectorPeriodCompleted(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.CollectorPeriodCompleted, error) {
+	return DecodeCollectorPeriodCompletedWithContentType(registry, raw, subject, messageID, ContentType)
 }
 
-// DecodeDatasetPeriodCollectedWithContentType also validates broker content type.
-func DecodeDatasetPeriodCollectedWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.DatasetPeriodCollected, error) {
-	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, DatasetPeriodCollected)
+// DecodeCollectorPeriodCompletedWithContentType also validates broker content type.
+func DecodeCollectorPeriodCompletedWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.CollectorPeriodCompleted, error) {
+	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, CollectorPeriodCompleted)
 	if err != nil {
 		return message, nil, err
 	}
-	storagePayload, ok := payload.(*storagepb.DatasetPeriodCollected)
+	storagePayload, ok := payload.(*storagepb.CollectorPeriodCompleted)
 	if !ok {
-		return message, nil, fmt.Errorf("dataset period collected payload has type %T", payload)
+		return message, nil, fmt.Errorf("collector period completed payload has type %T", payload)
 	}
 	return message, storagePayload, nil
 }
 
-func DecodeViewSourceSubjectReadyWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.ViewSourceSubjectReady, error) {
-	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, ViewSourceSubjectReady)
+// DecodeMergePeriodCompleted validates and decodes a merge completion marker.
+func DecodeMergePeriodCompleted(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.MergePeriodCompleted, error) {
+	return DecodeMergePeriodCompletedWithContentType(registry, raw, subject, messageID, ContentType)
+}
+
+// DecodeMergePeriodCompletedWithContentType also validates broker content type.
+func DecodeMergePeriodCompletedWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.MergePeriodCompleted, error) {
+	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, MergePeriodCompleted)
 	if err != nil {
 		return message, nil, err
 	}
-	ready, ok := payload.(*storagepb.ViewSourceSubjectReady)
+	storagePayload, ok := payload.(*storagepb.MergePeriodCompleted)
 	if !ok {
-		return message, nil, fmt.Errorf("view source subject ready payload has type %T", payload)
+		return message, nil, fmt.Errorf("merge period completed payload has type %T", payload)
+	}
+	return message, storagePayload, nil
+}
+
+// DecodeViewDataReady validates and decodes a View readiness event.
+func DecodeViewDataReady(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.ViewDataReady, error) {
+	return DecodeViewDataReadyWithContentType(registry, raw, subject, messageID, ContentType)
+}
+
+// DecodeViewDataReadyWithContentType also validates broker content type.
+func DecodeViewDataReadyWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.ViewDataReady, error) {
+	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, ViewDataReady)
+	if err != nil {
+		return message, nil, err
+	}
+	ready, ok := payload.(*storagepb.ViewDataReady)
+	if !ok {
+		return message, nil, fmt.Errorf("view data ready payload has type %T", payload)
 	}
 	return message, ready, nil
-}
-
-// DecodeViewSourcePeriodReady validates and decodes a source View readiness event.
-func DecodeViewSourcePeriodReady(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.ViewSourcePeriodReady, error) {
-	return DecodeViewSourcePeriodReadyWithContentType(registry, raw, subject, messageID, ContentType)
-}
-
-// DecodeViewSourcePeriodReadyWithContentType also validates broker content type.
-func DecodeViewSourcePeriodReadyWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.ViewSourcePeriodReady, error) {
-	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, ViewSourcePeriodReady)
-	if err != nil {
-		return message, nil, err
-	}
-	storagePayload, ok := payload.(*storagepb.ViewSourcePeriodReady)
-	if !ok {
-		return message, nil, fmt.Errorf("view source period ready payload has type %T", payload)
-	}
-	return message, storagePayload, nil
 }
 
 // DecodeFactorPeriodComputed validates and decodes a factor completion marker.
@@ -155,24 +161,6 @@ func DecodeFactorPeriodComputedWithContentType(registry *Registry, raw []byte, s
 	storagePayload, ok := payload.(*storagepb.FactorPeriodComputed)
 	if !ok {
 		return message, nil, fmt.Errorf("factor period computed payload has type %T", payload)
-	}
-	return message, storagePayload, nil
-}
-
-// DecodeViewFactorPeriodReady validates and decodes a result View readiness event.
-func DecodeViewFactorPeriodReady(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.ViewFactorPeriodReady, error) {
-	return DecodeViewFactorPeriodReadyWithContentType(registry, raw, subject, messageID, ContentType)
-}
-
-// DecodeViewFactorPeriodReadyWithContentType also validates broker content type.
-func DecodeViewFactorPeriodReadyWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.ViewFactorPeriodReady, error) {
-	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, ViewFactorPeriodReady)
-	if err != nil {
-		return message, nil, err
-	}
-	storagePayload, ok := payload.(*storagepb.ViewFactorPeriodReady)
-	if !ok {
-		return message, nil, fmt.Errorf("view factor period ready payload has type %T", payload)
 	}
 	return message, storagePayload, nil
 }

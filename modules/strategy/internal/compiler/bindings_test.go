@@ -10,7 +10,7 @@ import (
 
 func TestCompileWithBindingsExposesFactorFieldsToBars(t *testing.T) {
 	dsl, err := config.Parse([]byte(`name: ma-cross
-triggers: {event: {name: factor.ready}}
+triggers: {event: {name: ViewDataReady}}
 data: {bar: 1d, calendar: cn_stock}
 rules:
   signal:
@@ -32,20 +32,6 @@ rules:
 	require.Equal(t, "source", compiled.SourceView.ID)
 }
 
-func TestCompileWithBindingsRejectsSourceReadyWithFactorBindings(t *testing.T) {
-	dsl, err := config.Parse([]byte(`name: source-factor
-triggers: {event: {name: source.ready}}
-data: {bar: 1d, calendar: cn_stock}
-rules: {r: {pool: [000001.SZ], score: close, weight: 1}}
-`))
-	require.NoError(t, err)
-	_, err = (Compiler{}).CompileWithBindings(context.Background(), dsl, "space-1", []byte(`{
-  "source_view_id":"source",
-  "factors":[{"factor_id":"ma20","result_view_id":"result","column_name":"ma20"}]
-}`))
-	require.ErrorContains(t, err, "source.ready cannot be used with factor bindings")
-}
-
 func TestCompileWithBindingsRejectsScheduleOnlyFactorStrategy(t *testing.T) {
 	dsl, err := config.Parse([]byte(`name: schedule-factor
 triggers: {schedule: {cron: "@daily"}}
@@ -57,12 +43,12 @@ rules: {r: {pool: [000001.SZ], score: ma20, weight: 1}}
   "source_view_id":"source",
   "factors":[{"factor_id":"ma20","result_view_id":"result","column_name":"ma20"}]
 }`))
-	require.ErrorContains(t, err, "require a factor.ready event trigger")
+	require.ErrorContains(t, err, "require a ViewDataReady event trigger")
 }
 
-func TestCompileWithBindingsAllowsSourceReadyWithoutFactorBindings(t *testing.T) {
+func TestCompileWithBindingsAllowsViewDataReadyWithoutFactorBindings(t *testing.T) {
 	dsl, err := config.Parse([]byte(`name: source-only
-triggers: {event: {name: source.ready}}
+triggers: {event: {name: ViewDataReady}}
 data: {bar: 1d, calendar: cn_stock}
 rules: {r: {pool: [000001.SZ], score: close, weight: 1}}
 `))
@@ -73,7 +59,7 @@ rules: {r: {pool: [000001.SZ], score: close, weight: 1}}
 
 func TestCompileWithBindingsRejectsFrequencyDifferentFromDSLBar(t *testing.T) {
 	dsl, err := config.Parse([]byte(`name: mismatch
-triggers: {event: {name: factor.ready}}
+triggers: {event: {name: ViewDataReady}}
 data: {bar: 1h, calendar: crypto_24x7}
 rules: {r: {pool: [BTC], score: close, weight: 1}}
 `))
@@ -84,7 +70,7 @@ rules: {r: {pool: [BTC], score: close, weight: 1}}
 
 func TestCompileWithBindingsRejectsUndeclaredScalarField(t *testing.T) {
 	dsl, err := config.Parse([]byte(`name: typo
-triggers: {event: {name: factor.ready}}
+triggers: {event: {name: ViewDataReady}}
 data: {bar: 1h, calendar: crypto_24x7}
 rules: {r: {pool: [BTC], score: misspelled_factor, weight: 1}}
 `))
@@ -95,7 +81,7 @@ rules: {r: {pool: [BTC], score: misspelled_factor, weight: 1}}
 
 func TestCompileWithBindingsRejectsAmbiguousFactorAliases(t *testing.T) {
 	dsl, err := config.Parse([]byte(`name: duplicate
-triggers: {event: {name: factor.ready}}
+triggers: {event: {name: ViewDataReady}}
 data: {bar: 1h, calendar: crypto_24x7}
 rules: {r: {pool: [BTC], score: value, weight: 1}}
 `))
@@ -112,7 +98,7 @@ rules: {r: {pool: [BTC], score: value, weight: 1}}
 
 func TestCompileWithBindingsRejectsMultipleResultViews(t *testing.T) {
 	dsl, err := config.Parse([]byte(`name: views
-triggers: {event: {name: factor.ready}}
+triggers: {event: {name: ViewDataReady}}
 data: {bar: 1h, calendar: crypto_24x7}
 rules: {r: {pool: [BTC], score: close, weight: 1}}
 `))
@@ -129,7 +115,7 @@ rules: {r: {pool: [BTC], score: close, weight: 1}}
 
 func TestCompileWithBindingsRejectsFactorAliasShadowingSourceInput(t *testing.T) {
 	dsl, err := config.Parse([]byte(`name: shadow
-triggers: {event: {name: factor.ready}}
+triggers: {event: {name: ViewDataReady}}
 data: {bar: 1h, calendar: crypto_24x7}
 rules: {r: {pool: [BTC], score: value, weight: 1}}
 `))

@@ -6,16 +6,40 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storageg
 
 import "google/protobuf/timestamp.proto";
 
-// DatasetPeriodCollectedMarker is the Storage RPC form of a dataset-period
+message CommittedPosition {
+  string node_id = 1;
+  string store_id = 2;
+  uint64 sequence = 3;
+}
+
+// CollectorPeriodCompletedMarker is the Storage RPC form of a collector-period
 // completion decision. space_id is carried by the containing request.
-message DatasetPeriodCollectedMarker {
+message CollectorPeriodCompletedMarker {
   string dataset_id = 1;
   string frequency = 2;
   int64 period_time = 3;
   string status = 4;
-  repeated string subject_ids = 5;
-  repeated string failed_subjects = 6;
-  google.protobuf.Timestamp collected_at = 7;
+  string batch_id = 5;
+  string config_snapshot_id = 6;
+  string expected_scope_ref = 7;
+  repeated string expected_subject_ids = 8;
+  repeated string failed_subjects = 9;
+  repeated CommittedPosition committed_positions = 10;
+  google.protobuf.Timestamp collected_at = 11;
+}
+
+message MergePeriodCompletedMarker {
+  string dataset_id = 1;
+  string frequency = 2;
+  int64 period_time = 3;
+  string status = 4;
+  string batch_id = 5;
+  string config_snapshot_id = 6;
+  string expected_scope_ref = 7;
+  repeated string expected_subject_ids = 8;
+  repeated string failed_subjects = 9;
+  repeated CommittedPosition committed_positions = 10;
+  google.protobuf.Timestamp completed_at = 11;
 }
 
 message FactorBindingPeriodState {
@@ -29,16 +53,18 @@ message FactorBindingPeriodState {
 
 // FactorPeriodComputedMarker is appended after all result row writes commit.
 message FactorPeriodComputedMarker {
-  string source_view_id = 1;
-  string result_dataset_id = 2;
-  string frequency = 3;
-  int64 period_time = 4;
-  string status = 5;
-  repeated FactorBindingPeriodState bindings = 6;
-  google.protobuf.Timestamp computed_at = 7;
-  string trigger_event_id = 8;
-  string source_index_id = 9;
-  uint64 source_index_revision = 10;
+  string dataset_id = 1;
+  string frequency = 2;
+  int64 period_time = 3;
+  string status = 4;
+  string batch_id = 5;
+  string config_snapshot_id = 6;
+  string expected_scope_ref = 7;
+  repeated string expected_subject_ids = 8;
+  repeated FactorBindingPeriodState bindings = 9;
+  repeated CommittedPosition committed_positions = 10;
+  google.protobuf.Timestamp computed_at = 11;
+  string trigger_event_id = 12;
 }
 
 // DatasetSyncPointMarker orders an import/catchup request after its row writes.
@@ -49,8 +75,8 @@ message DatasetSyncPointMarker {
   string source = 4;
 }
 
-// ViewPeriodDatasetState is the durable per-input state used to aggregate a
-// multi-dataset Source View period.
+// ViewPeriodDatasetState is the durable per-input state used to confirm a
+// View period after a completion marker is applied.
 message ViewPeriodDatasetState {
   string space_id = 1;
   string view_id = 2;

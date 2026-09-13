@@ -717,7 +717,7 @@ func expandStorageViewConsumerRoutes(options *viewservice.EventConsumerOptions, 
 	if err != nil {
 		return err
 	}
-	eventFamilies := []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCollected, events.FactorPeriodComputed, events.DatasetSyncPoint}
+	eventFamilies := []events.Event{events.DatasetRowsUpserted, events.CollectorPeriodCompleted, events.MergePeriodCompleted, events.FactorPeriodComputed, events.DatasetSyncPoint}
 	explicit := make(map[string]struct{})
 	for _, partition := range options.PartitionConfigs {
 		for _, route := range partition.DatasetRoutes {
@@ -788,7 +788,8 @@ func buildStorageViewConsumerOptions(runtimeConfig storageconfig.RuntimeConfig) 
 	}
 	eventFamilies := []events.Event{
 		events.DatasetRowsUpserted,
-		events.DatasetPeriodCollected,
+		events.CollectorPeriodCompleted,
+		events.MergePeriodCompleted,
 		events.FactorPeriodComputed,
 		events.DatasetSyncPoint,
 	}
@@ -1043,8 +1044,11 @@ func (a *dataNodeProxyAdapter) GetNodeState(ctx context.Context, req *pb.GetNode
 func (a *dataNodeProxyAdapter) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
 	return a.proxy.CleanupExpiredBuckets(ctx, req)
 }
-func (a *dataNodeProxyAdapter) AppendDatasetPeriodCollected(ctx context.Context, req *pb.AppendDatasetPeriodCollectedReq) (*pb.AppendDatasetPeriodCollectedRsp, error) {
-	return a.markerProxy.AppendDatasetPeriodCollected(ctx, req)
+func (a *dataNodeProxyAdapter) AppendCollectorPeriodCompleted(ctx context.Context, req *pb.AppendCollectorPeriodCompletedReq) (*pb.AppendCollectorPeriodCompletedRsp, error) {
+	return a.markerProxy.AppendCollectorPeriodCompleted(ctx, req)
+}
+func (a *dataNodeProxyAdapter) AppendMergePeriodCompleted(ctx context.Context, req *pb.AppendMergePeriodCompletedReq) (*pb.AppendMergePeriodCompletedRsp, error) {
+	return a.markerProxy.AppendMergePeriodCompleted(ctx, req)
 }
 func (a *dataNodeProxyAdapter) AppendFactorPeriodComputed(ctx context.Context, req *pb.AppendFactorPeriodComputedReq) (*pb.AppendFactorPeriodComputedRsp, error) {
 	return a.markerProxy.AppendFactorPeriodComputed(ctx, req)

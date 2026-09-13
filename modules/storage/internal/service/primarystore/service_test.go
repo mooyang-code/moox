@@ -48,9 +48,14 @@ func (n *recordingNode) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (
 	return n.read(ctx, req)
 }
 
-func (n *recordingMarkerNode) AppendDatasetPeriodCollected(context.Context, *pb.AppendDatasetPeriodCollectedReq) (*pb.AppendDatasetPeriodCollectedRsp, error) {
-	n.markerCalls = append(n.markerCalls, "dataset")
-	return &pb.AppendDatasetPeriodCollectedRsp{RetInfo: successRetInfo()}, nil
+func (n *recordingMarkerNode) AppendCollectorPeriodCompleted(context.Context, *pb.AppendCollectorPeriodCompletedReq) (*pb.AppendCollectorPeriodCompletedRsp, error) {
+	n.markerCalls = append(n.markerCalls, "collector")
+	return &pb.AppendCollectorPeriodCompletedRsp{RetInfo: successRetInfo()}, nil
+}
+
+func (n *recordingMarkerNode) AppendMergePeriodCompleted(context.Context, *pb.AppendMergePeriodCompletedReq) (*pb.AppendMergePeriodCompletedRsp, error) {
+	n.markerCalls = append(n.markerCalls, "merge")
+	return &pb.AppendMergePeriodCompletedRsp{RetInfo: successRetInfo()}, nil
 }
 
 func (n *recordingMarkerNode) AppendFactorPeriodComputed(context.Context, *pb.AppendFactorPeriodComputedReq) (*pb.AppendFactorPeriodComputedRsp, error) {
@@ -139,15 +144,21 @@ func TestMooxSkillWriteMethodsAreDeniedBeforeDataNodeResolution(t *testing.T) {
 			rsp, callErr := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row}})
 			return rsp.GetRetInfo(), callErr
 		},
-		"ReportDatasetPeriodCollected": func() (*pb.RetInfo, error) {
-			rsp, callErr := svc.ReportDatasetPeriodCollected(context.Background(), &pb.ReportDatasetPeriodCollectedReq{
-				AuthInfo: auth, SpaceId: "space", Marker: &pb.DatasetPeriodCollectedMarker{DatasetId: "dataset"},
+		"ReportCollectorPeriodCompleted": func() (*pb.RetInfo, error) {
+			rsp, callErr := svc.ReportCollectorPeriodCompleted(context.Background(), &pb.ReportCollectorPeriodCompletedReq{
+				AuthInfo: auth, SpaceId: "space", Marker: &pb.CollectorPeriodCompletedMarker{DatasetId: "dataset"},
+			})
+			return rsp.GetRetInfo(), callErr
+		},
+		"ReportMergePeriodCompleted": func() (*pb.RetInfo, error) {
+			rsp, callErr := svc.ReportMergePeriodCompleted(context.Background(), &pb.ReportMergePeriodCompletedReq{
+				AuthInfo: auth, SpaceId: "space", Marker: &pb.MergePeriodCompletedMarker{DatasetId: "dataset"},
 			})
 			return rsp.GetRetInfo(), callErr
 		},
 		"ReportFactorPeriodComputed": func() (*pb.RetInfo, error) {
 			rsp, callErr := svc.ReportFactorPeriodComputed(context.Background(), &pb.ReportFactorPeriodComputedReq{
-				AuthInfo: auth, SpaceId: "space", Marker: &pb.FactorPeriodComputedMarker{ResultDatasetId: "dataset"},
+				AuthInfo: auth, SpaceId: "space", Marker: &pb.FactorPeriodComputedMarker{DatasetId: "dataset"},
 			})
 			return rsp.GetRetInfo(), callErr
 		},
@@ -195,14 +206,14 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	if err != nil || upsert.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("upsert rsp=%v err=%v", upsert, err)
 	}
-	collected, err := svc.ReportDatasetPeriodCollected(context.Background(), &pb.ReportDatasetPeriodCollectedReq{
-		AuthInfo: &pb.AuthInfo{AppId: "collector"}, SpaceId: "space", Marker: &pb.DatasetPeriodCollectedMarker{DatasetId: "dataset"},
+	collected, err := svc.ReportCollectorPeriodCompleted(context.Background(), &pb.ReportCollectorPeriodCompletedReq{
+		AuthInfo: &pb.AuthInfo{AppId: "collector"}, SpaceId: "space", Marker: &pb.CollectorPeriodCompletedMarker{DatasetId: "dataset"},
 	})
 	if err != nil || collected.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("collected rsp=%v err=%v", collected, err)
 	}
 	computed, err := svc.ReportFactorPeriodComputed(context.Background(), &pb.ReportFactorPeriodComputedReq{
-		AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "space", Marker: &pb.FactorPeriodComputedMarker{ResultDatasetId: "dataset"},
+		AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "space", Marker: &pb.FactorPeriodComputedMarker{DatasetId: "dataset"},
 	})
 	if err != nil || computed.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("computed rsp=%v err=%v", computed, err)
@@ -214,7 +225,7 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	if err != nil || syncPoint.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("sync point rsp=%v err=%v", syncPoint, err)
 	}
-	if !reflect.DeepEqual(node.markerCalls, []string{"dataset", "factor", "sync-point"}) {
+	if !reflect.DeepEqual(node.markerCalls, []string{"collector", "factor", "sync-point"}) {
 		t.Fatalf("marker calls=%v", node.markerCalls)
 	}
 }
@@ -248,7 +259,7 @@ func TestFactorResultWritesAllowEngineIdentity(t *testing.T) {
 		require.Equal(t, 1, wrote, appID)
 		computed, markerErr := svc.ReportFactorPeriodComputed(context.Background(), &pb.ReportFactorPeriodComputedReq{
 			AuthInfo: &pb.AuthInfo{AppId: appID}, SpaceId: "space",
-			Marker: &pb.FactorPeriodComputedMarker{ResultDatasetId: "factor_result"},
+			Marker: &pb.FactorPeriodComputedMarker{DatasetId: "factor_result"},
 		})
 		require.NoError(t, markerErr, appID)
 		require.Equal(t, pb.ErrorCode_SUCCESS, computed.GetRetInfo().GetCode(), appID)

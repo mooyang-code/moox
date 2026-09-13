@@ -712,7 +712,7 @@ func resetEventSubjects(registry *events.Registry, viewConfig storageconfig.Stor
 	// This command is intentionally destructive: all View histories, including
 	// record/Bleve histories, are discarded and recreated from the post-reset
 	// stream. There is no compatibility-preservation exception.
-	eventsToPurge := []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCollected, events.FactorPeriodComputed, events.DatasetSyncPoint}
+	eventsToPurge := []events.Event{events.DatasetRowsUpserted, events.CollectorPeriodCompleted, events.MergePeriodCompleted, events.FactorPeriodComputed, events.DatasetSyncPoint}
 	subjects := make(map[string]struct{})
 	for _, partition := range viewConfig.ConsumerPartitions {
 		for _, dataset := range partition.Datasets() {

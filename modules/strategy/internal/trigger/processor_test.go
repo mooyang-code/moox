@@ -67,7 +67,7 @@ func TestProcessorDoesNotExecuteLegacyRunner(t *testing.T) {
 	}
 	loader := &legacyRunnerProbeLoader{}
 	processor := &Processor{Store: repo, Loader: loader, Now: func() time.Time { return time.UnixMilli(2_000) }}
-	event := PeriodReady{MessageID: "legacy-runner-ready", EventName: "event.storage.view.source_period.ready", SpaceID: "space", ViewID: "source", PeriodTime: time.UnixMilli(60_000)}
+	event := PeriodReady{MessageID: "legacy-runner-ready", EventName: "event.storage.view.data.ready", SpaceID: "space", ViewID: "source", PeriodTime: time.UnixMilli(60_000)}
 	if err := processor.Handle(context.Background(), event); err != nil {
 		t.Fatalf("legacy runner event should be acknowledged without execution: %v", err)
 	}
@@ -127,12 +127,12 @@ func TestMarshalTargetEventUsesSessionFenceWithoutOwnerGeneration(t *testing.T) 
 	}
 }
 
-func TestCanonicalEventNameSeparatesSourceAndFactorReady(t *testing.T) {
-	if got := canonicalEventName("source.ready"); got != "event.storage.view.source_period.ready" {
-		t.Fatalf("source.ready canonical name = %q", got)
+func TestCanonicalEventNameMapsViewDataReady(t *testing.T) {
+	if got := canonicalEventName("ViewDataReady"); got != "event.storage.view.data.ready" {
+		t.Fatalf("ViewDataReady canonical name = %q", got)
 	}
-	if got := canonicalEventName("factor.ready"); got != "event.storage.view.factor_period.ready" {
-		t.Fatalf("factor.ready canonical name = %q", got)
+	if got := canonicalEventName("ready"); got != "event.storage.view.data.ready" {
+		t.Fatalf("ready canonical name = %q", got)
 	}
 }
 

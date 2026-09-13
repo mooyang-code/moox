@@ -34,13 +34,24 @@ message PrimaryReadFieldsRsp {
   repeated RowKey existing_keys = 3;
 }
 
-message ReportDatasetPeriodCollectedReq {
+message ReportCollectorPeriodCompletedReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
-  DatasetPeriodCollectedMarker marker = 3;
+  CollectorPeriodCompletedMarker marker = 3;
 }
 
-message ReportDatasetPeriodCollectedRsp {
+message ReportCollectorPeriodCompletedRsp {
+  common.RetInfo ret_info = 1;
+  string event_id = 2;
+}
+
+message ReportMergePeriodCompletedReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  MergePeriodCompletedMarker marker = 3;
+}
+
+message ReportMergePeriodCompletedRsp {
   common.RetInfo ret_info = 1;
   string event_id = 2;
 }
@@ -70,7 +81,7 @@ message AppendDatasetSyncPointRsp {
 message GetFactorPeriodComputedReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
-  string source_view_id = 3;
+  string dataset_id = 3;
   string trigger_event_id = 4;
   int64 period_time = 5;
 }
@@ -105,7 +116,8 @@ service PrimaryStore {
   rpc ReadFields(PrimaryReadFieldsReq) returns (PrimaryReadFieldsRsp);
   rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
   rpc ReadRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);
-  rpc ReportDatasetPeriodCollected(ReportDatasetPeriodCollectedReq) returns (ReportDatasetPeriodCollectedRsp);
+  rpc ReportCollectorPeriodCompleted(ReportCollectorPeriodCompletedReq) returns (ReportCollectorPeriodCompletedRsp);
+  rpc ReportMergePeriodCompleted(ReportMergePeriodCompletedReq) returns (ReportMergePeriodCompletedRsp);
   rpc ReportFactorPeriodComputed(ReportFactorPeriodComputedReq) returns (ReportFactorPeriodComputedRsp);
   rpc AppendDatasetSyncPoint(AppendDatasetSyncPointReq) returns (AppendDatasetSyncPointRsp);
   rpc GetFactorPeriodComputed(GetFactorPeriodComputedReq) returns (GetFactorPeriodComputedRsp);

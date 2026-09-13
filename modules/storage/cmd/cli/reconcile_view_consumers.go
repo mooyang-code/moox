@@ -160,7 +160,7 @@ func desiredStaticViewConsumerFilters(storage storageconfig.StorageConfig) (map[
 		events.StorageViewFactorConsumer:  true,
 		events.StorageViewMetricsConsumer: true,
 	}
-	eventFamilies := []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCollected, events.FactorPeriodComputed, events.DatasetSyncPoint}
+	eventFamilies := []events.Event{events.DatasetRowsUpserted, events.CollectorPeriodCompleted, events.MergePeriodCompleted, events.FactorPeriodComputed, events.DatasetSyncPoint}
 	desired := make(map[string][]string)
 	for _, partition := range storage.View.ConsumerPartitions {
 		if !static[partition.Durable] {

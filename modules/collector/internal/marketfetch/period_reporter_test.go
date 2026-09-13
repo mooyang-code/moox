@@ -14,10 +14,10 @@ import (
 )
 
 type periodReporterFake struct {
-	payloads []*storageeventpb.DatasetPeriodCollected
+	payloads []*storageeventpb.CollectorPeriodCompleted
 }
 
-func (f *periodReporterFake) ReportDatasetPeriodCollected(_ context.Context, _ string, payload *storageeventpb.DatasetPeriodCollected) error {
+func (f *periodReporterFake) ReportCollectorPeriodCompleted(_ context.Context, _ string, payload *storageeventpb.CollectorPeriodCompleted) error {
 	f.payloads = append(f.payloads, payload)
 	return nil
 }
@@ -66,7 +66,7 @@ func TestPeriodReporterRebuildsPayloadWhenSubjectIdsMissing(t *testing.T) {
 	reporter.now = func() time.Time { return period.Add(10 * time.Second) }
 	require.NoError(t, reporter.Flush(context.Background()))
 	require.Len(t, fake.payloads, 1)
-	require.Equal(t, []string{"BTC-USDT"}, fake.payloads[0].GetSubjectIds())
+	require.Equal(t, []string{"BTC-USDT"}, fake.payloads[0].GetExpectedSubjectIds())
 }
 
 func TestPeriodReporterRequiresStorageAndSchema(t *testing.T) {

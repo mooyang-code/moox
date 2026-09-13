@@ -103,7 +103,13 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 		}
 		for period := start; period.Before(end); {
 			triggerEventID := recalcTriggerEventID(requestID, req, period)
-			ready := &publicstoragepb.ViewSourcePeriodReady{SourceViewId: sourceViewID, Frequency: req.GetFreq(), PeriodTime: period.Unix(), Status: "complete", PrimarySubjects: []string{req.GetSubjectId()}, ReadyAt: timestamppb.New(period.UTC())}
+			ready := &publicstoragepb.ViewDataReady{
+				ViewId: sourceViewID, ViewConfigId: sourceViewID, CompletionEventId: triggerEventID,
+				DatasetId: sourceViewID, Status: "complete", VisibleScope: "subject:" + req.GetSubjectId(),
+				Frequency: req.GetFreq(), PeriodTime: period.Unix(),
+				CommittedPositions: []*publicstoragepb.CommittedPosition{{NodeId: "recalc", StoreId: "recalc", Sequence: 1}},
+				ReadyAt:            timestamppb.New(period.UTC()),
+			}
 			if _, indexErr := s.meta.SourceViewActiveIndexID(ctx, req.GetSpaceId(), sourceViewID); indexErr != nil {
 				return &factorpb.RecalcFactorRsp{RetInfo: inner(fmt.Errorf("resolve source View active index: %w", indexErr))}, nil
 			}

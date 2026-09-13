@@ -135,7 +135,7 @@ func Load(path string) (Config, error) {
 		c.EventBus.ConnectTimeout = 3 * time.Second
 	}
 	if c.EventBus.ConsumerName == "" {
-		c.EventBus.ConsumerName = "strategy_view_factor_ready_v1"
+		c.EventBus.ConsumerName = "strategy_view_data_ready_v1"
 	}
 	if c.Factor.AppID == "" {
 		c.Factor.AppID = "strategy"

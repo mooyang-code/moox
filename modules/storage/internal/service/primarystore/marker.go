@@ -13,48 +13,76 @@ import (
 )
 
 type markerDataNodeClient interface {
-	AppendDatasetPeriodCollected(context.Context, *pb.AppendDatasetPeriodCollectedReq) (*pb.AppendDatasetPeriodCollectedRsp, error)
+	AppendCollectorPeriodCompleted(context.Context, *pb.AppendCollectorPeriodCompletedReq) (*pb.AppendCollectorPeriodCompletedRsp, error)
+	AppendMergePeriodCompleted(context.Context, *pb.AppendMergePeriodCompletedReq) (*pb.AppendMergePeriodCompletedRsp, error)
 	AppendFactorPeriodComputed(context.Context, *pb.AppendFactorPeriodComputedReq) (*pb.AppendFactorPeriodComputedRsp, error)
 	AppendDatasetSyncPointMarker(context.Context, *pb.AppendDatasetSyncPointMarkerReq) (*pb.AppendDatasetSyncPointMarkerRsp, error)
 	GetFactorPeriodComputedMarker(context.Context, *pb.GetFactorPeriodComputedMarkerReq) (*pb.GetFactorPeriodComputedMarkerRsp, error)
 }
 
-func (s *Service) ReportDatasetPeriodCollected(ctx context.Context, req *pb.ReportDatasetPeriodCollectedReq) (*pb.ReportDatasetPeriodCollectedRsp, error) {
+func (s *Service) ReportCollectorPeriodCompleted(ctx context.Context, req *pb.ReportCollectorPeriodCompletedReq) (*pb.ReportCollectorPeriodCompletedRsp, error) {
 	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
-		return &pb.ReportDatasetPeriodCollectedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "collector"); err != nil {
-		return &pb.ReportDatasetPeriodCollectedRsp{RetInfo: markerError(err)}, nil
+		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
 	ctx = s.requestContext(ctx)
 	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId())
 	if err != nil {
-		return &pb.ReportDatasetPeriodCollectedRsp{RetInfo: markerError(err)}, nil
+		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
 	markerNode, ok := node.(markerDataNodeClient)
 	if !ok {
-		return &pb.ReportDatasetPeriodCollectedRsp{RetInfo: markerError(errors.New("DataNode marker RPC is unavailable"))}, nil
+		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(errors.New("DataNode marker RPC is unavailable"))}, nil
 	}
 	auth, err := s.signAuth(req.GetAuthInfo())
 	if err != nil {
-		return &pb.ReportDatasetPeriodCollectedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	rsp, err := markerNode.AppendDatasetPeriodCollected(ctx, &pb.AppendDatasetPeriodCollectedReq{AuthInfo: auth, SpaceId: req.GetSpaceId(), Marker: req.GetMarker()})
+	rsp, err := markerNode.AppendCollectorPeriodCompleted(ctx, &pb.AppendCollectorPeriodCompletedReq{AuthInfo: auth, SpaceId: req.GetSpaceId(), Marker: req.GetMarker()})
 	if err != nil {
-		return &pb.ReportDatasetPeriodCollectedRsp{RetInfo: markerError(err)}, nil
+		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
-	return &pb.ReportDatasetPeriodCollectedRsp{RetInfo: rsp.GetRetInfo(), EventId: rsp.GetEventId()}, nil
+	return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: rsp.GetRetInfo(), EventId: rsp.GetEventId()}, nil
+}
+
+func (s *Service) ReportMergePeriodCompleted(ctx context.Context, req *pb.ReportMergePeriodCompletedReq) (*pb.ReportMergePeriodCompletedRsp, error) {
+	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
+		return &pb.ReportMergePeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "factor"); err != nil {
+		return &pb.ReportMergePeriodCompletedRsp{RetInfo: markerError(err)}, nil
+	}
+	ctx = s.requestContext(ctx)
+	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId())
+	if err != nil {
+		return &pb.ReportMergePeriodCompletedRsp{RetInfo: markerError(err)}, nil
+	}
+	markerNode, ok := node.(markerDataNodeClient)
+	if !ok {
+		return &pb.ReportMergePeriodCompletedRsp{RetInfo: markerError(errors.New("DataNode marker RPC is unavailable"))}, nil
+	}
+	auth, err := s.signAuth(req.GetAuthInfo())
+	if err != nil {
+		return &pb.ReportMergePeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rsp, err := markerNode.AppendMergePeriodCompleted(ctx, &pb.AppendMergePeriodCompletedReq{AuthInfo: auth, SpaceId: req.GetSpaceId(), Marker: req.GetMarker()})
+	if err != nil {
+		return &pb.ReportMergePeriodCompletedRsp{RetInfo: markerError(err)}, nil
+	}
+	return &pb.ReportMergePeriodCompletedRsp{RetInfo: rsp.GetRetInfo(), EventId: rsp.GetEventId()}, nil
 }
 
 func (s *Service) ReportFactorPeriodComputed(ctx context.Context, req *pb.ReportFactorPeriodComputedReq) (*pb.ReportFactorPeriodComputedRsp, error) {
 	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
 		return &pb.ReportFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetResultDatasetId(), "factor"); err != nil {
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "factor"); err != nil {
 		return &pb.ReportFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
 	}
 	ctx = s.requestContext(ctx)
-	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetMarker().GetResultDatasetId())
+	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId())
 	if err != nil {
 		return &pb.ReportFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
 	}
@@ -105,21 +133,14 @@ func (s *Service) AppendDatasetSyncPoint(ctx context.Context, req *pb.AppendData
 }
 
 func (s *Service) GetFactorPeriodComputed(ctx context.Context, req *pb.GetFactorPeriodComputedReq) (*pb.GetFactorPeriodComputedRsp, error) {
-	if req == nil || req.GetSpaceId() == "" || req.GetSourceViewId() == "" || req.GetTriggerEventId() == "" || req.GetPeriodTime() <= 0 {
-		return &pb.GetFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, source_view_id, trigger_event_id and period_time are required"))}, nil
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" || req.GetTriggerEventId() == "" || req.GetPeriodTime() <= 0 {
+		return &pb.GetFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id, trigger_event_id and period_time are required"))}, nil
 	}
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.GetFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	if s.result == nil {
-		return &pb.GetFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("factor result dataset resolver is unavailable"))}, nil
-	}
-	resultDatasetID, err := s.result(ctx, req.GetSpaceId(), req.GetSourceViewId())
-	if err != nil {
-		return &pb.GetFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
-	}
 	ctx = s.requestContext(ctx)
-	node, err := s.resolve(ctx, req.GetSpaceId(), resultDatasetID)
+	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
 	if err != nil {
 		return &pb.GetFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
 	}
@@ -132,7 +153,7 @@ func (s *Service) GetFactorPeriodComputed(ctx context.Context, req *pb.GetFactor
 		return &pb.GetFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	rsp, err := markerNode.GetFactorPeriodComputedMarker(ctx, &pb.GetFactorPeriodComputedMarkerReq{
-		AuthInfo: auth, SpaceId: req.GetSpaceId(), ResultDatasetId: resultDatasetID, SourceViewId: req.GetSourceViewId(),
+		AuthInfo: auth, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(),
 		TriggerEventId: req.GetTriggerEventId(), PeriodTime: req.GetPeriodTime(),
 	})
 	if err != nil {

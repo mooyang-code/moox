@@ -25,7 +25,7 @@ func TestRequireExecutionDependenciesFailsForEnabledInstanceWithoutTargets(t *te
 	}
 	session := "session-1"
 	if err := repo.SaveStrategyDefinition(context.Background(), store.StrategyDefinition{
-		StrategyID: "strategy-1", StrategyName: "strategy", DSLYaml: "name: strategy\ntriggers: {event: {name: source.ready}}\ndata: {bar: 1m, calendar: crypto_24x7}\nrules: {r: {pool: [BTC], score: close, weight: 1}}\n",
+		StrategyID: "strategy-1", StrategyName: "strategy", DSLYaml: "name: strategy\ntriggers: {event: {name: ViewDataReady}}\ndata: {bar: 1m, calendar: crypto_24x7}\nrules: {r: {pool: [BTC], score: close, weight: 1}}\n",
 		CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1),
 	}); err != nil {
 		t.Fatal(err)

@@ -11,19 +11,34 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (s *Service) AppendDatasetPeriodCollected(ctx context.Context, req *pb.AppendDatasetPeriodCollectedReq) (*pb.AppendDatasetPeriodCollectedRsp, error) {
+func (s *Service) AppendCollectorPeriodCompleted(ctx context.Context, req *pb.AppendCollectorPeriodCompletedReq) (*pb.AppendCollectorPeriodCompletedRsp, error) {
 	if err := s.validateMarkerRequest(req.GetNodeId(), req.GetSpaceId(), req.GetAuthInfo()); err != nil {
-		return &pb.AppendDatasetPeriodCollectedRsp{RetInfo: markerRetInfo(err)}, nil
+		return &pb.AppendCollectorPeriodCompletedRsp{RetInfo: markerRetInfo(err)}, nil
 	}
-	raw, _, err := pebble.BuildDatasetPeriodCollectedMessage(req.GetSpaceId(), req.GetMarker())
+	raw, _, err := pebble.BuildCollectorPeriodCompletedMessage(req.GetSpaceId(), req.GetMarker())
 	if err == nil {
 		var eventID string
 		eventID, err = s.store.AppendDatasetMarker(ctx, raw)
 		if err == nil {
-			return &pb.AppendDatasetPeriodCollectedRsp{RetInfo: retinfo.Success("success"), EventId: eventID}, nil
+			return &pb.AppendCollectorPeriodCompletedRsp{RetInfo: retinfo.Success("success"), EventId: eventID}, nil
 		}
 	}
-	return &pb.AppendDatasetPeriodCollectedRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	return &pb.AppendCollectorPeriodCompletedRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+}
+
+func (s *Service) AppendMergePeriodCompleted(ctx context.Context, req *pb.AppendMergePeriodCompletedReq) (*pb.AppendMergePeriodCompletedRsp, error) {
+	if err := s.validateMarkerRequest(req.GetNodeId(), req.GetSpaceId(), req.GetAuthInfo()); err != nil {
+		return &pb.AppendMergePeriodCompletedRsp{RetInfo: markerRetInfo(err)}, nil
+	}
+	raw, _, err := pebble.BuildMergePeriodCompletedMessage(req.GetSpaceId(), req.GetMarker())
+	if err == nil {
+		var eventID string
+		eventID, err = s.store.AppendDatasetMarker(ctx, raw)
+		if err == nil {
+			return &pb.AppendMergePeriodCompletedRsp{RetInfo: retinfo.Success("success"), EventId: eventID}, nil
+		}
+	}
+	return &pb.AppendMergePeriodCompletedRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 }
 
 func (s *Service) AppendFactorPeriodComputed(ctx context.Context, req *pb.AppendFactorPeriodComputedReq) (*pb.AppendFactorPeriodComputedRsp, error) {
@@ -60,7 +75,7 @@ func (s *Service) GetFactorPeriodComputedMarker(ctx context.Context, req *pb.Get
 	if err := s.validateMarkerRequest(req.GetNodeId(), req.GetSpaceId(), req.GetAuthInfo()); err != nil {
 		return &pb.GetFactorPeriodComputedMarkerRsp{RetInfo: markerRetInfo(err)}, nil
 	}
-	message, found, err := s.store.GetFactorPeriodComputedMarker(ctx, req.GetSpaceId(), req.GetResultDatasetId(), req.GetSourceViewId(), req.GetTriggerEventId(), req.GetPeriodTime())
+	message, found, err := s.store.GetFactorPeriodComputedMarker(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetTriggerEventId(), req.GetPeriodTime())
 	if err != nil {
 		return &pb.GetFactorPeriodComputedMarkerRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
@@ -85,11 +100,24 @@ func (s *Service) GetFactorPeriodComputedMarker(ctx context.Context, req *pb.Get
 	return &pb.GetFactorPeriodComputedMarkerRsp{
 		RetInfo: retinfo.Success("success"), Found: true, EventId: message.GetEventId(),
 		Marker: &pb.FactorPeriodComputedMarker{
-			SourceViewId: payload.GetSourceViewId(), ResultDatasetId: payload.GetResultDatasetId(), Frequency: payload.GetFrequency(),
-			PeriodTime: payload.GetPeriodTime(), Status: payload.GetStatus(), Bindings: bindings,
-			ComputedAt: payload.GetComputedAt(), TriggerEventId: payload.GetTriggerEventId(), SourceIndexId: payload.GetSourceIndexId(), SourceIndexRevision: payload.GetSourceIndexRevision(),
+			DatasetId: payload.GetDatasetId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
+			Status: payload.GetStatus(), BatchId: payload.GetBatchId(), ConfigSnapshotId: payload.GetConfigSnapshotId(),
+			ExpectedScopeRef: payload.GetExpectedScopeRef(), ExpectedSubjectIds: append([]string(nil), payload.GetExpectedSubjectIds()...),
+			Bindings: bindings, CommittedPositions: markerPositions(payload.GetCommittedPositions()),
+			ComputedAt: payload.GetComputedAt(), TriggerEventId: payload.GetTriggerEventId(),
 		},
 	}, nil
+}
+
+func markerPositions(values []*storageeventpb.CommittedPosition) []*pb.CommittedPosition {
+	out := make([]*pb.CommittedPosition, 0, len(values))
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		out = append(out, &pb.CommittedPosition{NodeId: value.GetNodeId(), StoreId: value.GetStoreId(), Sequence: value.GetSequence()})
+	}
+	return out
 }
 
 func (s *Service) validateMarkerRequest(nodeID, spaceID string, auth *pb.AuthInfo) error {

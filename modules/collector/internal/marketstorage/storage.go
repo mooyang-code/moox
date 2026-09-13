@@ -107,32 +107,36 @@ func (w *storageWriter) UpsertFieldsWithSource(ctx context.Context, rows []*stor
 	})
 }
 
-// ReportDatasetPeriodCollected appends the terminal source-period marker that
-// Storage View uses to publish ViewSourcePeriodReady. Keep this on the common
-// market storage adapter so equity and crypto readiness follow the same path.
-func (w *storageWriter) ReportDatasetPeriodCollected(ctx context.Context, spaceID string, payload *storageeventpb.DatasetPeriodCollected) error {
+// ReportCollectorPeriodCompleted appends the terminal collector-period marker
+// that Storage View uses to publish ViewDataReady.
+func (w *storageWriter) ReportCollectorPeriodCompleted(ctx context.Context, spaceID string, payload *storageeventpb.CollectorPeriodCompleted) error {
 	if w == nil || w.access == nil {
-		return fmt.Errorf("report dataset period collected: storage client is required")
+		return fmt.Errorf("report collector period completed: storage client is required")
 	}
 	spaceID = strings.TrimSpace(spaceID)
 	if spaceID == "" || payload == nil || strings.TrimSpace(payload.GetDatasetId()) == "" || strings.TrimSpace(payload.GetFrequency()) == "" || payload.GetPeriodTime() <= 0 {
-		return fmt.Errorf("report dataset period collected: space_id, dataset, frequency, period_time and payload are required")
+		return fmt.Errorf("report collector period completed: space_id, dataset, frequency, period_time and payload are required")
 	}
-	marker := &storagepb.DatasetPeriodCollectedMarker{
-		DatasetId:      payload.GetDatasetId(),
-		Frequency:      payload.GetFrequency(),
-		PeriodTime:     payload.GetPeriodTime(),
-		Status:         payload.GetStatus(),
-		SubjectIds:     append([]string(nil), payload.GetSubjectIds()...),
-		FailedSubjects: append([]string(nil), payload.GetFailedSubjects()...),
-		CollectedAt:    payload.GetCollectedAt(),
+	positions := make([]*storagepb.CommittedPosition, 0, len(payload.GetCommittedPositions()))
+	for _, position := range payload.GetCommittedPositions() {
+		if position == nil {
+			continue
+		}
+		positions = append(positions, &storagepb.CommittedPosition{NodeId: position.GetNodeId(), StoreId: position.GetStoreId(), Sequence: position.GetSequence()})
+	}
+	marker := &storagepb.CollectorPeriodCompletedMarker{
+		DatasetId: payload.GetDatasetId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
+		Status: payload.GetStatus(), BatchId: payload.GetBatchId(), ConfigSnapshotId: payload.GetConfigSnapshotId(),
+		ExpectedScopeRef: payload.GetExpectedScopeRef(), ExpectedSubjectIds: append([]string(nil), payload.GetExpectedSubjectIds()...),
+		FailedSubjects: append([]string(nil), payload.GetFailedSubjects()...), CommittedPositions: positions,
+		CollectedAt: payload.GetCollectedAt(),
 	}
 	return retryStorage(ctx, func() error {
-		response, err := w.access.ReportDatasetPeriodCollected(ctx, &storagepb.ReportDatasetPeriodCollectedReq{AuthInfo: w.authInfo, SpaceId: spaceID, Marker: marker})
+		response, err := w.access.ReportCollectorPeriodCompleted(ctx, &storagepb.ReportCollectorPeriodCompletedReq{AuthInfo: w.authInfo, SpaceId: spaceID, Marker: marker})
 		if err != nil {
-			return fmt.Errorf("report dataset period collected: %w", err)
+			return fmt.Errorf("report collector period completed: %w", err)
 		}
-		return ensureStorageOK("report dataset period collected", response.GetRetInfo())
+		return ensureStorageOK("report collector period completed", response.GetRetInfo())
 	})
 }
 

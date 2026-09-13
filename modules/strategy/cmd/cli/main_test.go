@@ -10,7 +10,7 @@ import (
 func TestValidateDSL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "strategy.yaml")
 	if err := os.WriteFile(path, []byte(`name: momentum
-triggers: {event: {name: source.ready}}
+triggers: {event: {name: ViewDataReady}}
 data: {bar: 1h, calendar: crypto_24x7}
 rules:
   main: {pool: [BTC-USDT-SPOT], score: close, select: {top: 1}, weight: 1}

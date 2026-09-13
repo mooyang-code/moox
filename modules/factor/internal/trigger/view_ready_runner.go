@@ -2,6 +2,7 @@ package trigger
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -114,7 +115,7 @@ func NewViewReadyRunner(bindings PeriodBindingSource, factors PeriodFactorSource
 // ExecutionBudget returns a conservative upper bound for one source period.
 // Factor batches execute each selected factor sequentially per subject, so a
 // fixed outer deadline must scale with the number of executable bindings.
-func (r *ViewReadyRunner) ExecutionBudget(ctx context.Context, spaceID string, ready *publicstoragepb.ViewSourcePeriodReady) (time.Duration, error) {
+func (r *ViewReadyRunner) ExecutionBudget(ctx context.Context, spaceID string, ready *publicstoragepb.ViewDataReady) (time.Duration, error) {
 	if r == nil || r.bindings == nil || ready == nil {
 		return 0, fmt.Errorf("factor execution budget inputs are required")
 	}
@@ -130,7 +131,7 @@ func (r *ViewReadyRunner) ExecutionBudget(ctx context.Context, spaceID string, r
 	// Every subject-factor pair can consume one full execution unit. Account for
 	// the worker pool so a large universe cannot be cancelled by a budget that
 	// only considered the number of factor definitions.
-	subjectCount := max(1, len(sortedUnique(ready.GetPrimarySubjects())))
+	subjectCount := max(1, len(periodSubjectUniverse(selected, ready)))
 	executionUnits := len(selected) * subjectCount
 	if r.batchExecution {
 		// The task runner groups every selected factor for one subject into one
@@ -147,7 +148,7 @@ func (r *ViewReadyRunner) ExecutionBudget(ctx context.Context, spaceID string, r
 	return time.Duration(waves)*unit + 2*time.Minute, nil
 }
 
-func (r *ViewReadyRunner) Execute(ctx context.Context, spaceID, triggerEventID string, ready *publicstoragepb.ViewSourcePeriodReady) error {
+func (r *ViewReadyRunner) Execute(ctx context.Context, spaceID, triggerEventID string, ready *publicstoragepb.ViewDataReady) error {
 	err := r.ExecuteSelected(ctx, spaceID, triggerEventID, "", ready)
 	if errors.Is(err, ErrNoExecutableBinding) {
 		return nil
@@ -155,19 +156,19 @@ func (r *ViewReadyRunner) Execute(ctx context.Context, spaceID, triggerEventID s
 	return err
 }
 
-func (r *ViewReadyRunner) ExecuteSelected(ctx context.Context, spaceID, triggerEventID, factorID string, ready *publicstoragepb.ViewSourcePeriodReady) error {
+func (r *ViewReadyRunner) ExecuteSelected(ctx context.Context, spaceID, triggerEventID, factorID string, ready *publicstoragepb.ViewDataReady) error {
 	return r.executeSelected(ctx, spaceID, triggerEventID, factorID, ready, true)
 }
 
-func (r *ViewReadyRunner) ExecuteSelectedWithGate(ctx context.Context, spaceID, triggerEventID, factorID string, ready *publicstoragepb.ViewSourcePeriodReady) error {
+func (r *ViewReadyRunner) ExecuteSelectedWithGate(ctx context.Context, spaceID, triggerEventID, factorID string, ready *publicstoragepb.ViewDataReady) error {
 	return r.executeSelected(ctx, spaceID, triggerEventID, factorID, ready, false)
 }
 
-func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerEventID, factorID string, ready *publicstoragepb.ViewSourcePeriodReady, acquireGate bool) error {
+func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerEventID, factorID string, ready *publicstoragepb.ViewDataReady, acquireGate bool) error {
 	if r == nil || r.bindings == nil || r.factors == nil || r.taskRunner == nil || r.storage == nil {
 		return fmt.Errorf("factor View-ready runner dependencies are required")
 	}
-	if ready == nil || spaceID == "" || triggerEventID == "" || ready.GetSourceViewId() == "" || ready.GetFrequency() == "" || ready.GetPeriodTime() <= 0 {
+	if ready == nil || spaceID == "" || triggerEventID == "" || ready.GetViewId() == "" || ready.GetFrequency() == "" || ready.GetPeriodTime() <= 0 {
 		return fmt.Errorf("source-ready event identity is incomplete")
 	}
 	if acquireGate {
@@ -179,11 +180,11 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 	}
 
 	started := time.Now()
-	log.InfoContextf(ctx, "factor View-ready execution start event_id=%s space_id=%s view_id=%s period=%d", triggerEventID, spaceID, ready.GetSourceViewId(), ready.GetPeriodTime())
-	r.periodMetrics.Begin(ready.GetSourceViewId(), ready.GetFrequency())
-	defer r.periodMetrics.End(ready.GetSourceViewId(), ready.GetFrequency())
+	log.InfoContextf(ctx, "factor View-ready execution start event_id=%s space_id=%s view_id=%s period=%d", triggerEventID, spaceID, ready.GetViewId(), ready.GetPeriodTime())
+	r.periodMetrics.Begin(ready.GetViewId(), ready.GetFrequency())
+	defer r.periodMetrics.End(ready.GetViewId(), ready.GetFrequency())
 	if !strings.HasPrefix(triggerEventID, "recalc-") && ready.GetReadyAt() != nil && ready.GetReadyAt().IsValid() {
-		r.periodMetrics.ObserveSourceReady(ready.GetSourceViewId(), ready.GetFrequency(), ready.GetReadyAt().AsTime())
+		r.periodMetrics.ObserveSourceReady(ready.GetViewId(), ready.GetFrequency(), ready.GetReadyAt().AsTime())
 	}
 
 	bindings, err := r.bindings.ListExecutable(ctx)
@@ -194,7 +195,7 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 	if len(selected) == 0 || (factorID != "" && !containsFactor(selected, factorID)) {
 		if factorID == "" && len(selected) == 0 {
 			if readiness, ok := r.bindings.(PeriodBindingReadinessSource); ok {
-				waiting, readinessErr := readiness.HasExecutableOrPending(ctx, spaceID, ready.GetSourceViewId(), ready.GetFrequency())
+				waiting, readinessErr := readiness.HasExecutableOrPending(ctx, spaceID, ready.GetViewId(), ready.GetFrequency())
 				if readinessErr != nil {
 					return fmt.Errorf("check pending factor bindings: %w", readinessErr)
 				}
@@ -208,34 +209,15 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 	if factorID != "" {
 		selected = selectFactorBindings(selected, factorID)
 	}
-	if strings.HasPrefix(triggerEventID, "recalc-") && ready.GetActiveIndexRevision() == 0 {
-		var revision uint64
-		var revisionErr error
-		if revisionReader, ok := r.storage.(PeriodStorageRevisionAt); ok {
-			revision, revisionErr = revisionReader.ActiveViewRevisionAt(ctx, spaceID, ready.GetSourceViewId(), firstSubject(ready.GetPrimarySubjects()), ready.GetFrequency(), "")
-		} else if _, ok := r.storage.(PeriodStorageRevision); ok {
-			return fmt.Errorf("recalc requires fenced storage View revision reader")
-		} else {
-			return fmt.Errorf("recalc requires storage View revision reader")
-		}
-		if revisionErr != nil {
-			return fmt.Errorf("resolve source View revision for recalc: %w", revisionErr)
-		}
-		if revision == 0 {
-			return fmt.Errorf("source View %s has no active revision", ready.GetSourceViewId())
-		}
-		ready.ActiveIndexRevision = revision
-	}
-
-	found, err := r.storage.FactorPeriodComputed(ctx, spaceID, ready.GetSourceViewId(), triggerEventID, ready.GetPeriodTime())
-	if err != nil || found {
-		return err
-	}
 	resultDatasetID := selected[0].ResultDatasetID
 	for _, binding := range selected[1:] {
 		if binding.ResultDatasetID != resultDatasetID {
-			return fmt.Errorf("source view %s has multiple result datasets", ready.GetSourceViewId())
+			return fmt.Errorf("source view %s has multiple result datasets", ready.GetViewId())
 		}
+	}
+	found, err := r.storage.FactorPeriodComputed(ctx, spaceID, resultDatasetID, triggerEventID, ready.GetPeriodTime())
+	if err != nil || found {
+		return err
 	}
 
 	period := time.Unix(ready.GetPeriodTime(), 0).UTC()
@@ -249,7 +231,7 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		groupStatus = "complete"
 	}
 	failedUpstream := failedSubjectSet(ready)
-	subjects := sortedUnique(ready.GetPrimarySubjects())
+	subjects := periodSubjectUniverse(selected, ready)
 
 	states := make(map[string]*storagepb.FactorBindingPeriodState, len(selected))
 	factors := make(map[string]domain.FactorDef, len(selected))
@@ -270,10 +252,22 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 	}
 	expectedActiveIndexRevision := uint64(0)
 	if strings.HasPrefix(triggerEventID, "recalc-") {
-		// Recalculation explicitly probes a current source snapshot. A normal
-		// source-ready event is asynchronous; A/B physical slots stay inside
-		// Storage View and are not pinned from the public event.
-		expectedActiveIndexRevision = ready.GetActiveIndexRevision()
+		var revision uint64
+		var revisionErr error
+		if revisionReader, ok := r.storage.(PeriodStorageRevisionAt); ok {
+			revision, revisionErr = revisionReader.ActiveViewRevisionAt(ctx, spaceID, ready.GetViewId(), firstSubject(subjects), ready.GetFrequency(), "")
+		} else if _, ok := r.storage.(PeriodStorageRevision); ok {
+			return fmt.Errorf("recalc requires fenced storage View revision reader")
+		} else {
+			return fmt.Errorf("recalc requires storage View revision reader")
+		}
+		if revisionErr != nil {
+			return fmt.Errorf("resolve source View revision for recalc: %w", revisionErr)
+		}
+		if revision == 0 {
+			return fmt.Errorf("source View %s has no active revision", ready.GetViewId())
+		}
+		expectedActiveIndexRevision = revision
 	}
 
 	tasks := make([]taskrunner.Task, 0, len(subjects)*len(selected))
@@ -313,7 +307,7 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 	}
 
 	batchCount := uniqueTaskSubjects(tasks)
-	r.periodMetrics.BeginBatches(ready.GetSourceViewId(), ready.GetFrequency(), batchCount)
+	r.periodMetrics.BeginBatches(ready.GetViewId(), ready.GetFrequency(), batchCount)
 	var results []taskrunner.Result
 	defer func() {
 		bySubject := make(map[string]struct {
@@ -333,7 +327,7 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 			if state.failed {
 				status = "degraded"
 			}
-			r.periodMetrics.ObserveBatch(ready.GetSourceViewId(), ready.GetFrequency(), status, 1, state.factors, time.Since(started))
+			r.periodMetrics.ObserveBatch(ready.GetViewId(), ready.GetFrequency(), status, 1, state.factors, time.Since(started))
 		}
 	}()
 	results = r.taskRunner.RunAll(ctx, tasks)
@@ -379,20 +373,23 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		markerStates = append(markerStates, state)
 	}
 	if groupStatus == "degraded" {
-		r.periodMetrics.ObserveDegraded(ready.GetSourceViewId(), ready.GetFrequency())
+		r.periodMetrics.ObserveDegraded(ready.GetViewId(), ready.GetFrequency())
 	}
 	marker := &storagepb.FactorPeriodComputedMarker{
-		SourceViewId: ready.GetSourceViewId(), ResultDatasetId: resultDatasetID,
-		Frequency: ready.GetFrequency(), PeriodTime: ready.GetPeriodTime(), Status: groupStatus,
-		Bindings: markerStates, ComputedAt: timestamppb.Now(), TriggerEventId: triggerEventID,
+		DatasetId: resultDatasetID, Frequency: ready.GetFrequency(), PeriodTime: ready.GetPeriodTime(), Status: groupStatus,
+		BatchId: triggerEventID, ConfigSnapshotId: firstNonEmpty(ready.GetViewConfigId(), "factor"),
+		ExpectedScopeRef: firstNonEmpty(ready.GetVisibleScope(), fmt.Sprintf("%s:%s:%d", resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime())),
+		ExpectedSubjectIds: append([]string(nil), subjects...), Bindings: markerStates,
+		CommittedPositions: cloneEventPositions(ready.GetCommittedPositions()),
+		ComputedAt:         timestamppb.Now(), TriggerEventId: triggerEventID,
 	}
 	if err := r.storage.ReportFactorPeriodComputed(ctx, spaceID, marker); err != nil {
 		log.ErrorContextf(ctx, "factor_view_ready_report_failed event_id=%s space_id=%s source_view_id=%s result_dataset_id=%s freq=%s period_time=%d binding_count=%d subject_count=%d error=%q",
-			triggerEventID, spaceID, ready.GetSourceViewId(), resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime(), len(selected), len(subjects), err.Error())
+			triggerEventID, spaceID, ready.GetViewId(), resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime(), len(selected), len(subjects), err.Error())
 		return err
 	}
 	log.InfoContextf(ctx, "factor_view_ready_done event_id=%s space_id=%s source_view_id=%s result_dataset_id=%s freq=%s period_time=%d binding_count=%d task_count=%d batch_count=%d subject_count=%d status=%s elapsed_ms=%d",
-		triggerEventID, spaceID, ready.GetSourceViewId(), resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime(), len(selected), len(tasks), batchCount, len(subjects), groupStatus, time.Since(started).Milliseconds())
+		triggerEventID, spaceID, ready.GetViewId(), resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime(), len(selected), len(tasks), batchCount, len(subjects), groupStatus, time.Since(started).Milliseconds())
 	return nil
 }
 
@@ -406,10 +403,10 @@ func uniqueTaskSubjects(tasks []taskrunner.Task) int {
 	return len(seen)
 }
 
-func selectPeriodBindings(bindings []domain.FactorBinding, spaceID string, ready *publicstoragepb.ViewSourcePeriodReady) []domain.FactorBinding {
+func selectPeriodBindings(bindings []domain.FactorBinding, spaceID string, ready *publicstoragepb.ViewDataReady) []domain.FactorBinding {
 	selected := make([]domain.FactorBinding, 0, len(bindings))
 	for _, binding := range bindings {
-		if binding.SpaceID != spaceID || binding.SourceViewID != ready.GetSourceViewId() || binding.Freq != ready.GetFrequency() {
+		if binding.SpaceID != spaceID || binding.SourceViewID != ready.GetViewId() || binding.Freq != ready.GetFrequency() {
 			continue
 		}
 		selected = append(selected, binding)
@@ -437,14 +434,69 @@ func selectFactorBindings(bindings []domain.FactorBinding, factorID string) []do
 	return selected
 }
 
-func failedSubjectSet(ready *publicstoragepb.ViewSourcePeriodReady) map[string]struct{} {
+func failedSubjectSet(ready *publicstoragepb.ViewDataReady) map[string]struct{} {
 	failed := make(map[string]struct{})
-	for _, dataset := range ready.GetDatasets() {
-		for _, subjectID := range sortedUnique(dataset.GetFailedSubjects()) {
-			failed[subjectID] = struct{}{}
-		}
+	for _, subjectID := range splitScopeRef(ready.GetFailedScopeRef()) {
+		failed[subjectID] = struct{}{}
 	}
 	return failed
+}
+
+func periodSubjectUniverse(bindings []domain.FactorBinding, ready *publicstoragepb.ViewDataReady) []string {
+	if ready != nil {
+		if subjectID := strings.TrimSpace(strings.TrimPrefix(ready.GetVisibleScope(), "subject:")); strings.HasPrefix(ready.GetVisibleScope(), "subject:") && subjectID != "" {
+			return []string{subjectID}
+		}
+	}
+	var subjects []string
+	for _, binding := range bindings {
+		if binding.SubjectMode != domain.SubjectModeInclude {
+			continue
+		}
+		var listed []string
+		if err := json.Unmarshal([]byte(binding.SubjectsJSON), &listed); err != nil {
+			continue
+		}
+		subjects = append(subjects, listed...)
+	}
+	if ready != nil {
+		subjects = append(subjects, splitScopeRef(ready.GetFailedScopeRef())...)
+	}
+	return sortedUnique(subjects)
+}
+
+func splitScopeRef(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" && part != "degraded" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func cloneEventPositions(values []*publicstoragepb.CommittedPosition) []*storagepb.CommittedPosition {
+	out := make([]*storagepb.CommittedPosition, 0, len(values))
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		out = append(out, &storagepb.CommittedPosition{NodeId: value.GetNodeId(), StoreId: value.GetStoreId(), Sequence: value.GetSequence()})
+	}
+	if len(out) == 0 {
+		out = append(out, &storagepb.CommittedPosition{NodeId: "factor", StoreId: "local", Sequence: 1})
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func combinationKey(bindingID, subjectID string) string { return bindingID + "\x00" + subjectID }

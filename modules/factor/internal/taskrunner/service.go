@@ -602,7 +602,7 @@ func (s *Service) runValidated(ctx context.Context, task Task, prepared *storage
 	}()
 	cursor := task.StartTime
 	for cursor.Before(task.EndTime) {
-		// ViewSourcePeriodReady is the upstream completeness contract. The
+		// ViewDataReady is the upstream completeness contract. The
 		// task runner performs one read and starts the factor immediately; it does
 		// not poll a legacy dataset or wait for a second "settled" snapshot.
 		chunk, err := s.readChunk(ctx, task, cursor, prepared)

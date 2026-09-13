@@ -21,59 +21,45 @@ message DatasetRowsUpserted {
   string source_store_id = 7;
 }
 
-// DatasetPeriodCollected marks a terminal collection outcome for every
-// expected subject in one Dataset period.
-message DatasetPeriodCollected {
+// CommittedPosition identifies one ordered write domain. Sequence is comparable
+// only within (node_id, store_id).
+message CommittedPosition {
+  string node_id = 1;
+  string store_id = 2;
+  uint64 sequence = 3;
+}
+
+// CollectorPeriodCompleted marks a frozen collection set as terminal.
+// complete means every expected subject succeeded; degraded keeps the full
+// expected list and records failures.
+message CollectorPeriodCompleted {
   string dataset_id = 1;
   string frequency = 2;
   int64 period_time = 3;
   string status = 4;
-  repeated string subject_ids = 5;
-  repeated string failed_subjects = 6;
-  google.protobuf.Timestamp collected_at = 7;
+  string batch_id = 5;
+  string config_snapshot_id = 6;
+  string expected_scope_ref = 7;
+  repeated string expected_subject_ids = 8;
+  repeated string failed_subjects = 9;
+  repeated CommittedPosition committed_positions = 10;
+  google.protobuf.Timestamp collected_at = 11;
 }
 
-message ViewPeriodDatasetState {
+// MergePeriodCompleted marks that every expected mdataset object reached a
+// construction terminal state. Successful input commits precede this event.
+message MergePeriodCompleted {
   string dataset_id = 1;
-  string status = 2;
-  repeated string failed_subjects = 3;
-}
-
-// ViewSourceSubjectReady is emitted by the View service after the active
-// index commits a time-series row. It does not assert universe completeness.
-// source_event_id is an identity, never an orderable revision.
-message ViewSourceSubjectReady {
-  string source_view_id = 1;
-  string source_dataset_id = 2;
-  string subject_id = 3;
-  string frequency = 4;
-  int64 period_time = 5;
-  string series_tag = 6;
-  // Physical A/B index IDs are internal to Storage View and must not appear
-  // on this public event. Field 7 is unused.
-  string active_index_id = 7;
-  string input_contract_version = 8;
-  string source_event_id = 9;
-  google.protobuf.Timestamp ready_at = 10;
-  string source_node_id = 11;
-  // Comparable only within (source_node_id, source_store_id), not globally.
-  uint64 source_sequence = 12;
-  string source_store_id = 13;
-}
-
-// ViewSourcePeriodReady marks a source View period as readable by Factor.
-message ViewSourcePeriodReady {
-  string source_view_id = 1;
   string frequency = 2;
   int64 period_time = 3;
   string status = 4;
-  repeated ViewPeriodDatasetState datasets = 5;
-  repeated string primary_subjects = 6;
-  google.protobuf.Timestamp ready_at = 7;
-  // Physical A/B index IDs and per-file write revisions are internal to
-  // Storage View. Fields 8 and 9 are unused.
-  string active_index_id = 8;
-  uint64 active_index_revision = 9;
+  string batch_id = 5;
+  string config_snapshot_id = 6;
+  string expected_scope_ref = 7;
+  repeated string expected_subject_ids = 8;
+  repeated string failed_subjects = 9;
+  repeated CommittedPosition committed_positions = 10;
+  google.protobuf.Timestamp completed_at = 11;
 }
 
 message FactorBindingPeriodState {
@@ -85,37 +71,37 @@ message FactorBindingPeriodState {
   string source_hash = 6;
 }
 
-// FactorPeriodComputed marks all bindings for a result Dataset period as
-// terminal. The result rows precede this event in the same DataNode outbox.
+// FactorPeriodComputed marks all frozen bindings for one Dataset period as
+// terminal. Successful result patches precede this event in the same outbox.
 message FactorPeriodComputed {
-  string source_view_id = 1;
-  string result_dataset_id = 2;
-  string frequency = 3;
-  int64 period_time = 4;
-  string status = 5;
-  repeated FactorBindingPeriodState bindings = 6;
-  google.protobuf.Timestamp computed_at = 7;
-  string trigger_event_id = 8;
-  // Physical A/B index IDs are internal to Storage View. Fields 9 and 10 are unused.
-  string source_index_id = 9;
-  uint64 source_index_revision = 10;
+  string dataset_id = 1;
+  string frequency = 2;
+  int64 period_time = 3;
+  string status = 4;
+  string batch_id = 5;
+  string config_snapshot_id = 6;
+  string expected_scope_ref = 7;
+  repeated string expected_subject_ids = 8;
+  repeated FactorBindingPeriodState bindings = 9;
+  repeated CommittedPosition committed_positions = 10;
+  google.protobuf.Timestamp computed_at = 11;
+  string trigger_event_id = 12;
 }
 
-// ViewFactorPeriodReady marks the factor result View period as readable.
-message ViewFactorPeriodReady {
-  string source_view_id = 1;
-  string result_view_id = 2;
-  string frequency = 3;
-  int64 period_time = 4;
+// ViewDataReady is published by View after a completion marker's required
+// writes are readable in the named View's visible scope.
+message ViewDataReady {
+  string view_id = 1;
+  string view_config_id = 2;
+  string completion_event_id = 3;
+  string dataset_id = 4;
   string status = 5;
-  repeated FactorBindingPeriodState bindings = 6;
-  google.protobuf.Timestamp ready_at = 7;
-  // Physical A/B index IDs and per-file write revisions are internal to
-  // Storage View. Fields 8 through 11 are unused.
-  string source_index_id = 8;
-  string result_index_id = 9;
-  uint64 source_index_revision = 10;
-  uint64 result_index_revision = 11;
+  string visible_scope = 6;
+  string frequency = 7;
+  int64 period_time = 8;
+  string failed_scope_ref = 9;
+  repeated CommittedPosition committed_positions = 10;
+  google.protobuf.Timestamp ready_at = 11;
 }
 
 // DatasetSyncPoint is an ordered import/catchup fence in a Dataset outbox.

@@ -19,7 +19,7 @@ import (
 // Keeping it small lets the readiness state machine remain testable without a
 // live tRPC server.
 type DatasetPeriodReporter interface {
-	ReportDatasetPeriodCollected(context.Context, string, *storageeventpb.DatasetPeriodCollected) error
+	ReportCollectorPeriodCompleted(context.Context, string, *storageeventpb.CollectorPeriodCompleted) error
 }
 
 type PeriodReporter struct {
@@ -29,6 +29,8 @@ type PeriodReporter struct {
 	batchSize       int
 	parentRetention time.Duration
 	itemRetention   int
+	nodeID          string
+	storeID         string
 	now             func() time.Time
 	metrics         *Metrics
 }
@@ -111,10 +113,10 @@ func (r *PeriodReporter) Flush(ctx context.Context) error {
 			}
 			continue
 		}
-		if err := r.storage.ReportDatasetPeriodCollected(ctx, r.spaceID, payload); err != nil {
+		if err := r.storage.ReportCollectorPeriodCompleted(ctx, r.spaceID, payload); err != nil {
 			r.metrics.ObservePeriodReportRetry(report.Readiness.DatasetID, report.Readiness.Frequency)
 			if firstReportErr == nil {
-				firstReportErr = fmt.Errorf("report dataset period collected dataset=%s period=%s: %w", report.Readiness.DatasetID, report.Readiness.PeriodTime.Format(time.RFC3339), err)
+				firstReportErr = fmt.Errorf("report collector period completed dataset=%s period=%s: %w", report.Readiness.DatasetID, report.Readiness.PeriodTime.Format(time.RFC3339), err)
 			}
 			continue
 		}
@@ -169,14 +171,14 @@ func (r *PeriodReporter) Flush(ctx context.Context) error {
 	return nil
 }
 
-func (r *PeriodReporter) payload(ctx context.Context, report domain.PeriodReport) (*storageeventpb.DatasetPeriodCollected, error) {
+func (r *PeriodReporter) payload(ctx context.Context, report domain.PeriodReport) (*storageeventpb.CollectorPeriodCompleted, error) {
 	if report.Readiness.PayloadJSON != "" && report.Readiness.PayloadJSON != "{}" {
-		payload := &storageeventpb.DatasetPeriodCollected{}
+		payload := &storageeventpb.CollectorPeriodCompleted{}
 		if err := protojson.Unmarshal([]byte(report.Readiness.PayloadJSON), payload); err != nil {
 			return nil, fmt.Errorf("decode fixed period payload id=%d: %w", report.Readiness.ID, err)
 		}
-		if len(payload.GetSubjectIds()) > 0 {
-			return payload, nil
+		if len(payload.GetExpectedSubjectIds()) > 0 {
+			return r.completeCollectorPayload(payload, report), nil
 		}
 	}
 	subjects := make([]string, 0, len(report.Items))
@@ -193,15 +195,15 @@ func (r *PeriodReporter) payload(ctx context.Context, report domain.PeriodReport
 	if status == "" {
 		status = domain.PeriodStatusDegraded
 	}
-	payload := &storageeventpb.DatasetPeriodCollected{
-		DatasetId:      report.Readiness.DatasetID,
-		Frequency:      report.Readiness.Frequency,
-		PeriodTime:     report.Readiness.PeriodTime.Unix(),
-		Status:         status,
-		SubjectIds:     subjects,
-		FailedSubjects: failed,
-		CollectedAt:    timestamppb.New(report.Readiness.CollectedAt.UTC()),
-	}
+	payload := r.completeCollectorPayload(&storageeventpb.CollectorPeriodCompleted{
+		DatasetId:          report.Readiness.DatasetID,
+		Frequency:          report.Readiness.Frequency,
+		PeriodTime:         report.Readiness.PeriodTime.Unix(),
+		Status:             status,
+		ExpectedSubjectIds: subjects,
+		FailedSubjects:     failed,
+		CollectedAt:        timestamppb.New(report.Readiness.CollectedAt.UTC()),
+	}, report)
 	raw, err := protojson.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("encode fixed period payload id=%d: %w", report.Readiness.ID, err)
@@ -210,4 +212,30 @@ func (r *PeriodReporter) payload(ctx context.Context, report domain.PeriodReport
 		return nil, fmt.Errorf("persist fixed period payload id=%d: %w", report.Readiness.ID, err)
 	}
 	return payload, nil
+}
+
+func (r *PeriodReporter) completeCollectorPayload(payload *storageeventpb.CollectorPeriodCompleted, report domain.PeriodReport) *storageeventpb.CollectorPeriodCompleted {
+	if payload == nil {
+		payload = &storageeventpb.CollectorPeriodCompleted{}
+	}
+	scope := fmt.Sprintf("%s:%s:%d", report.Readiness.DatasetID, report.Readiness.Frequency, report.Readiness.PeriodTime.Unix())
+	if strings.TrimSpace(payload.GetBatchId()) == "" {
+		payload.BatchId = scope
+	}
+	if strings.TrimSpace(payload.GetConfigSnapshotId()) == "" {
+		payload.ConfigSnapshotId = "collector"
+	}
+	if strings.TrimSpace(payload.GetExpectedScopeRef()) == "" {
+		payload.ExpectedScopeRef = scope
+	}
+	if len(payload.GetCommittedPositions()) == 0 {
+		seq := uint64(report.Readiness.ID)
+		if seq == 0 {
+			seq = 1
+		}
+		payload.CommittedPositions = []*storageeventpb.CommittedPosition{{
+			NodeId: firstNonEmpty(r.nodeID, "collector"), StoreId: firstNonEmpty(r.storeID, "local"), Sequence: seq,
+		}}
+	}
+	return payload
 }

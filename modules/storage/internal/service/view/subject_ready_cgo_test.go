@@ -57,7 +57,11 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 		return &jetstream.PublishAck{}, nil
 	})
 	require.NoError(t, svc.ReplayPendingSubjects(ctx))
-	require.False(t, published, "rebuild leftover journal must not emit subject-ready")
+	require.False(t, published, "rebuild leftover journal must not emit ready events")
 	require.NoError(t, svc.HandleDatasetRows(ctx, message, payload))
-	require.True(t, published)
+	require.False(t, published, "row writes no longer publish subject-ready")
+	rows, err := svc.query(ctx, "prices-a", []*pb.RowKey{row.Key}, nil)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, float64(1), rows[0].GetFields()[0].GetValue().GetDoubleValue())
 }

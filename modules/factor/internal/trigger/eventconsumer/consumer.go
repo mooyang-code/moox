@@ -22,11 +22,11 @@ type Config struct {
 const ViewSourceReadyConsumerName = "factor_view_ready_v1"
 
 type ViewReadyExecutor interface {
-	Execute(context.Context, string, string, *publicstoragepb.ViewSourcePeriodReady) error
+	Execute(context.Context, string, string, *publicstoragepb.ViewDataReady) error
 }
 
 type executionBudgeter interface {
-	ExecutionBudget(context.Context, string, *publicstoragepb.ViewSourcePeriodReady) (time.Duration, error)
+	ExecutionBudget(context.Context, string, *publicstoragepb.ViewDataReady) (time.Duration, error)
 }
 
 type Consumer struct {

@@ -147,8 +147,8 @@ function validateStep() {
   }
   const result = canCombineSelections(selections.filter(Boolean) as BindingSelection[], source);
   if (!result.ok) { bindingReason.value = result.reason || "因子绑定不兼容"; error.value = bindingReason.value; return false; }
-  if (selections.length && !["factor.ready", "viewfactorperiodready", "event.storage.view.factor_period.ready"].includes((dslPreview.value?.eventName || "").trim().toLowerCase())) {
-    error.value = "绑定因子需要 DSL 配置 factor.ready 事件；source.ready 或纯定时触发不能运行因子策略";
+  if (selections.length && !["viewdataready", "view.data.ready", "ready", "event.storage.view.data.ready"].includes((dslPreview.value?.eventName || "").trim().toLowerCase())) {
+    error.value = "绑定因子需要 DSL 配置 ViewDataReady 事件；纯定时触发不能运行因子策略";
     return false;
   }
   return true;

@@ -82,21 +82,18 @@ var (
 	DatasetRowsUpserted = declareEvent("event.storage.dataset.rows.upserted", 2, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetRowsUpserted{}
 	}, validateDatasetRowsUpserted)
-	DatasetPeriodCollected = declareEvent("event.storage.dataset.period.collected", 1, "MOOX_STORAGE", "storage", func() proto.Message {
-		return &storagepb.DatasetPeriodCollected{}
-	}, validateDatasetPeriodCollected)
-	ViewSourceSubjectReady = declareEvent("event.storage.view.source_subject.ready", 1, "MOOX_STORAGE", "storage", func() proto.Message {
-		return &storagepb.ViewSourceSubjectReady{}
-	}, validateViewSourceSubjectReady)
-	ViewSourcePeriodReady = declareEvent("event.storage.view.source_period.ready", 1, "MOOX_STORAGE", "storage", func() proto.Message {
-		return &storagepb.ViewSourcePeriodReady{}
-	}, validateViewSourcePeriodReady)
+	CollectorPeriodCompleted = declareEvent("event.storage.collector.period.completed", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+		return &storagepb.CollectorPeriodCompleted{}
+	}, validateCollectorPeriodCompleted)
+	MergePeriodCompleted = declareEvent("event.storage.merge.period.completed", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+		return &storagepb.MergePeriodCompleted{}
+	}, validateMergePeriodCompleted)
 	FactorPeriodComputed = declareEvent("event.storage.dataset.factor_period.computed", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.FactorPeriodComputed{}
 	}, validateFactorPeriodComputed)
-	ViewFactorPeriodReady = declareEvent("event.storage.view.factor_period.ready", 1, "MOOX_STORAGE", "storage", func() proto.Message {
-		return &storagepb.ViewFactorPeriodReady{}
-	}, validateViewFactorPeriodReady)
+	ViewDataReady = declareEvent("event.storage.view.data.ready", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+		return &storagepb.ViewDataReady{}
+	}, validateViewDataReady)
 	DatasetSyncPoint = declareEvent("event.storage.dataset.sync_point", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetSyncPoint{}
 	}, validateDatasetSyncPoint)

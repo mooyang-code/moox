@@ -8,14 +8,8 @@ import (
 	"strings"
 )
 
-func publishesSourceSubjectReady(view viewRef) bool {
-	// Host/service metrics have no Factor consumer.
-	return view.spaceID != "mooxsys"
-}
-
 // ReplayPendingSubjects discards leftover rebuild journals written by older
-// binaries. Rebuilds never emit ViewSourceSubjectReady; live writes against an
-// active index publish directly.
+// binaries. Subject-ready publishing has been removed.
 func (s *Service) ReplayPendingSubjects(ctx context.Context) error {
 	if s == nil || strings.TrimSpace(s.pendingSubjectsDir) == "" {
 		return nil
