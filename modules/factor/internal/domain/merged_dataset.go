@@ -25,26 +25,26 @@ var publicRowKeys = map[string]struct{}{
 
 // KeyContract is the business row key shared by every source of an mdataset.
 type KeyContract struct {
-	SubjectID      string `json:"subject_id"`
-	Frequency      string `json:"frequency"`
-	PeriodTime     string `json:"period_time"`
-	SeriesTag      string `json:"series_tag"`
-	PeriodBoundary string `json:"period_boundary"`
+	SubjectID      string `json:"subject_id" yaml:"subject_id"`
+	Frequency      string `json:"frequency" yaml:"frequency"`
+	PeriodTime     string `json:"period_time" yaml:"period_time"`
+	SeriesTag      string `json:"series_tag" yaml:"series_tag"`
+	PeriodBoundary string `json:"period_boundary" yaml:"period_boundary"`
 }
 
 // SourceDatasetRef describes one required input Dataset.
 type SourceDatasetRef struct {
-	DatasetID      string   `json:"dataset_id"`
-	Frequency      string   `json:"frequency"`
-	PeriodBoundary string   `json:"period_boundary"`
-	Fields         []string `json:"fields"`
+	DatasetID      string   `json:"dataset_id" yaml:"dataset_id"`
+	Frequency      string   `json:"frequency" yaml:"frequency"`
+	PeriodBoundary string   `json:"period_boundary" yaml:"period_boundary"`
+	Fields         []string `json:"fields" yaml:"fields"`
 }
 
 // FieldMapping is a deterministic source-field to mdataset-field mapping.
 type FieldMapping struct {
-	SourceDatasetID string `json:"source_dataset_id"`
-	SourceField     string `json:"source_field"`
-	TargetField     string `json:"target_field"`
+	SourceDatasetID string `json:"source_dataset_id" yaml:"source_dataset_id"`
+	SourceField     string `json:"source_field" yaml:"source_field"`
+	TargetField     string `json:"target_field" yaml:"target_field"`
 }
 
 // MergedDataset is the control-plane definition of a composite factor Dataset.

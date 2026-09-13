@@ -65,7 +65,7 @@ case "${linux_cgo_target}" in
     linux_cgo_binaries=(moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli)
     ;;
   factor)
-    linux_cgo_binaries=(moox-factor moox-factor-cli moox-factor-engine)
+    linux_cgo_binaries=(moox-factor moox-factor-cli moox-factor-engine moox-factor-merge)
     ;;
   factor-engine)
     linux_cgo_binaries=(moox-factor-engine)

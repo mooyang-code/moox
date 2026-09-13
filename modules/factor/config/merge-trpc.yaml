@@ -1,0 +1,17 @@
+global:
+  namespace: Development
+  env_name: dev
+server:
+  filter: [recovery]
+  service:
+    - name: trpc.moox.factor.merge.Health
+      ip: 127.0.0.1
+      port: 11416
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
+plugins:
+  log:
+    default:
+      - writer: console
+        level: info

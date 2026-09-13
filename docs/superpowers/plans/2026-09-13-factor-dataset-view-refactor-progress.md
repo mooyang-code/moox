@@ -227,4 +227,41 @@ env CGO_ENABLED=1 go test -race ./internal/domain ./internal/store -run 'TestMer
 
 ### 提交
 
-见本提交。
+`193a912c`
+
+## 任务 07：独立 Merge 程序和持久化行聚合
+
+状态：**已完成（代码与定向/回归测试）**。周期账本、部署、真实新周期 E2E、codeCR 仍属任务 08—18。
+
+### 红灯证据
+
+`TestMergeAssembler` 最初因 `Assembler`/`Ledger`/`ApplyArrival` 不存在而无法编译。失败来自目标行为缺失。
+
+### 实现
+
+- 独立 SQLite 账本记录源到达与提交，不与控制面共享数据库
+- 全部必需源字段到齐后按 `<源DatasetID>__<字段>` 提交一次完整输入；重复到达幂等
+- 另一对象缺源不阻塞当前对象；重启后可从账本恢复已到达的源
+- 不完整字段不计入到齐；`merge_mode=custom` 系统零写入
+- 消费源 Dataset 行变更，忽略 `factor_patch`/`input_commit`；成功处理后 ACK
+- 独立进程 `cmd/merge` 通过受权 `CommitInput` 写入 `mdataset_binance_kline_1m`
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/merge -run 'TestMergeAssembler' -count=1
+env CGO_ENABLED=1 go test -race ./internal/merge -run 'TestMergeAssembler' -count=3
+env CGO_ENABLED=1 go test ./internal/merge -count=1
+env CGO_ENABLED=1 go build ./cmd/merge
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- Merge 周期冻结名单、超时 degraded、MergePeriodCompleted 属于任务 08
+- 引擎隔离、时序/截面、前端与正式发布属于 09—18
+
+### 提交
+
+（本提交）
