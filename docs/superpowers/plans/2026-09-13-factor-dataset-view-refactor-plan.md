@@ -74,7 +74,7 @@ ViewReady = (event_id, view_id, view_config_id, completion_event_id,
 
 ### 任务 01：协议与状态身份
 
-**依赖：** 无。  
+**依赖：** 无。
 **文件：** 修改 packages/storagepb/storage_events.proto、packages/events/registry.go、packages/events/validation.go、modules/storage/proto/dataset_markers.proto；新增 packages/events/view_data_ready_test.go。
 
 - [ ] **先写失败用例：** 旧事件注册失败；缺关联事件或写入位置的可读声明校验失败；重复消息保持稳定事件 ID；degraded 不转换成 complete。
@@ -90,7 +90,7 @@ decode(ready); require(completion_event_id != ""); require(dataset_id != ""); re
 
 ### 任务 02：Storage 单 Dataset View 模型
 
-**依赖：** 01。  
+**依赖：** 01。
 **文件：** 修改 modules/storage/proto/metadata.proto、modules/storage/proto/view.proto、modules/storage/schema/metadata.sql、modules/storage/internal/service/view/period_event_apply.go、modules/storage/internal/service/view/build.go；新增 modules/storage/internal/service/view/single_dataset_test.go。
 
 - [ ] **先写失败用例：** 同 Dataset 创建两个不同投影 View 均成功；提交多个来源失败；重建后过滤和字段投影保持一致；删除一个 View 不删除 Dataset 或另一个 View。
@@ -106,7 +106,7 @@ create_view(dataset=A, columns=[close]); create_view(dataset=A, columns=[volume]
 
 ### 任务 03：基础输入提交和字段写权限
 
-**依赖：** 01。  
+**依赖：** 01。
 **文件：** 修改 modules/storage/proto/rows.proto、modules/storage/internal/service/primarystore/、modules/storage/internal/service/datanode/pebble/；新增 modules/storage/internal/service/datanode/pebble/input_commit_test.go。
 
 - [ ] **先写失败用例：** 普通客户端伪造 factor/merge 来源不能越权；并发因子列更新互不覆盖；相同提交重试幂等；基础字段不完整不产生 ready；成功写入但响应丢失后可查询原提交收据。
@@ -122,7 +122,7 @@ commit_input(key, all_required_fields, id); patch_factor(key, owned_columns, bin
 
 ### 任务 04：通用 ViewDataReady 应用屏障
 
-**依赖：** 02、03。  
+**依赖：** 02、03。
 **文件：** 修改 modules/storage/internal/service/view/period_event_apply.go、modules/storage/internal/service/view/eventconsumer/、modules/storage/internal/service/view/build.go；新增 modules/storage/internal/service/view/data_ready.go、data_ready_test.go。
 
 - [ ] **先写失败用例：** 完成标记先到而行未应用不发；两个分区只完成一个不发；过滤范围合法时生成自己的范围通知；重建/重启后不误发；同一完成事件的发布重试保持幂等。
@@ -138,7 +138,7 @@ ready = all(required_positions[p] <= applied_positions[p] for p in required_posi
 
 ### 任务 05：Collector 周期事件改名
 
-**依赖：** 01、03。  
+**依赖：** 01、03。
 **文件：** 修改 modules/collector/internal/marketfetch/period_reporter.go、modules/collector/internal/marketstorage/storage.go、modules/collector/internal/store/period_readiness.go；修改 Storage marker RPC 与事件消费者；新增 modules/collector/internal/marketfetch/collector_completed_test.go。
 
 - [ ] **先写失败用例：** 全成功为 complete；有超时为 degraded 且 SubjectIds 不缩小；重启不改变冻结名单；重复上报不重复创建批次。
@@ -154,7 +154,7 @@ assert(completed.expected_subjects == frozen_subjects); assert(status == complet
 
 ### 任务 06：mdataset 配置与权威边界
 
-**依赖：** 02、03。  
+**依赖：** 02、03。
 **文件：** 修改 modules/factor/schema/factor.sql、modules/factor/internal/domain/、modules/factor/internal/store/；新增 modules/factor/internal/domain/merged_dataset.go、merged_dataset_test.go、modules/factor/internal/store/merged_dataset.go。
 
 - [ ] **先写失败用例：** 不同频率、时间边界不一致、字段前缀冲突拒绝；启用后修改来源拒绝；不同 Dataset 身份不会复用缓存；Storage 创建成功响应丢失后不重复建资源。
@@ -170,7 +170,7 @@ if enabled && input_semantics_changed: reject(); else persist_snapshot(); reconc
 
 ### 任务 07：独立 Merge 程序和持久化行聚合
 
-**依赖：** 05、06。  
+**依赖：** 05、06。
 **文件：** 新增 modules/factor/cmd/merge/main.go、modules/factor/internal/merge/assembler.go、store.go、consumer.go、assembler_test.go；修改 modules/factor/schema/factor.sql。Merge 使用单独运行库，不与控制面共享数据库文件。
 
 - [ ] **先写失败用例：** A 到达不写可计算行，B 到达仅写一次；另一对象缺源不阻塞当前对象；重启恢复 A；重复 B 幂等；不完整字段不计入到齐；custom 模式系统零写入。
@@ -186,7 +186,7 @@ persist_arrival(key, source, fields); if all_required_sources_complete(key): com
 
 ### 任务 08：Merge 周期账本和超时
 
-**依赖：** 07。  
+**依赖：** 07。
 **文件：** 新增 modules/factor/internal/merge/periods.go、periods_test.go、reporter.go；修改 modules/factor/schema/factor.sql。
 
 - [ ] **先写失败用例：** 498 成功和 2 超时保留 500 预期对象；关闭后迟到不改写；标记上报失败可恢复；零对象、全部缺失可明确结束且不伪造输入；多源 Collector 结束不代表 Merge 写入结束。
@@ -202,7 +202,7 @@ freeze(expected); finalize_at_deadline(success, missing); publish_after_all_succ
 
 ### 任务 09：控制面与运行资源彻底隔离
 
-**依赖：** 06。  
+**依赖：** 06。
 **文件：** 修改 modules/factor/cmd/server/main.go、modules/factor/cmd/engine/main.go、modules/factor/internal/bootstrap/、modules/factor/internal/catalogsync/；新增 modules/factor/internal/bootstrap/role_boundary_test.go。
 
 - [ ] **先写失败用例：** 控制面不依赖 Python 也能启动；控制面重启不影响引擎已有任务；漏配置事件可恢复；无授权节点启动失败；关闭过程不会提前关闭仍使用的数据库。
@@ -218,7 +218,7 @@ open_control_without_python(); start_engine_after_snapshot(); stop_admission(); 
 
 ### 任务 10：Dataset 驱动时序触发
 
-**依赖：** 03、07、09。  
+**依赖：** 03、07、09。
 **文件：** 修改 modules/factor/internal/trigger/subject_tasks.go、subject_runner.go、subject_batcher.go、modules/factor/internal/taskrunner/；新增 modules/factor/internal/trigger/dataset_rows_test.go。
 
 - [ ] **先写失败用例：** 因子回写事件不触发；重复源事件仅一个有效任务；两个对象到达不等全集；旧绑定结果提交被拒绝；首次 durable 起点明确，重启恢复积压而非重新 DeliverNew。
@@ -234,7 +234,7 @@ if event.kind != input_commit || !event.input_ready: ignore(); enqueue_once(data
 
 ### 任务 11：Primary 历史读取与统一 Python ABI
 
-**依赖：** 10。  
+**依赖：** 10。
 **文件：** 修改 modules/factor/internal/storageio/、modules/factor/internal/taskrunner/read_pipeline.go、modules/factor/internal/engine/；新增 modules/factor/internal/storageio/dataset_window_test.go。
 
 - [ ] **先写失败用例：** 窗口没有未来行；缺历史明确跳过或失败；JSON/null/整数精度不丢；空对象集合不退化成全量读；Python 错误不写成功输出；截面输出重复键或越界对象拒绝。
@@ -250,7 +250,7 @@ window = read_primary(subjects, end=period, limit=lookback); assert(all(row.time
 
 ### 任务 12：缓存 Dataset 化和惰性回源
 
-**依赖：** 06、11。  
+**依赖：** 06、11。
 **文件：** 修改 modules/factor/internal/inputcache/manager.go、query.go、modules/factor/internal/storageio/；新增 modules/factor/internal/storageio/dataset_cache_test.go。
 
 - [ ] **先写失败用例：** 冷缓存回源一次后命中；删除缓存仍正确；新增输出列新建空代际；两 Dataset 相同 schema 不混用；源确认缺失不会无限重试；半字段缓存不能命中完整输入。
@@ -266,7 +266,7 @@ cache_key=(dataset_id,schema_id); if !covers_required_window: fetch_primary(); f
 
 ### 任务 13：缓存容量维护
 
-**依赖：** 12。  
+**依赖：** 12。
 **文件：** 修改 modules/factor/internal/inputcache/config.go、runtime.go、rebuild.go、manager.go、modules/factor/internal/bootstrap/cache.go；新增 modules/factor/internal/inputcache/capacity_policy_test.go。
 
 - [ ] **先写失败用例：** 模拟时间验证首次不立即清理；多个 Dataset 共用总预算；N 行仍超字节限制退出并降级；旧读者不报文件关闭；构建途中退出后恢复；读取不更新淘汰时间。
@@ -282,7 +282,7 @@ if bytes > max_bytes: rebuild_new_file(newest_n); swap(); drain_old_readers(); d
 
 ### 任务 14：截面计算与通用可读事件
 
-**依赖：** 04、08、09、11。  
+**依赖：** 04、08、09、11。
 **文件：** 修改 modules/factor/internal/trigger/view_ready_runner.go、modules/factor/internal/engine/；新增 modules/factor/internal/trigger/cross_section_test.go。
 
 - [ ] **先写失败用例：** FactorPeriodComputed 对应 Ready 不触发；其他 View/周期不触发；缺少依赖字段拒绝绑定；残缺面板默认跳过；允许降级时失败集合传入上下文且结果带状态。
@@ -298,7 +298,7 @@ if completion.kind != MergePeriodCompleted: ignore(); panel=read_fixed_view_scop
 
 ### 任务 15：因子周期汇总与策略订阅
 
-**依赖：** 08、10、14。  
+**依赖：** 08、10、14。
 **文件：** 新增 modules/factor/internal/trigger/period_barrier.go、period_barrier_test.go；修改 modules/factor/internal/store/、modules/strategy/ 中实际事件消费入口。
 
 - [ ] **先写失败用例：** 先任务后名单仍正确汇总；绑定启停不改变已有周期；缺源不会永远等任务；View 未应用结果时策略不运行；多 View 独立可读；零绑定明确终态；输出提交失败不报 complete。
@@ -314,7 +314,7 @@ terminal = expected_binding_subject_pairs - accounted_pairs == empty; publish_wh
 
 ### 任务 16：补算、启停与状态接口
 
-**依赖：** 09、11、15。  
+**依赖：** 09、11、15。
 **文件：** 修改 modules/factor/proto/、modules/factor/internal/bootstrap/、modules/factor/cmd/cli/；新增 modules/factor/internal/trigger/recalc_test.go。
 
 - [ ] **先写失败用例：** 重复补算请求幂等；取消不产生虚假成功；绑定停用后旧任务不能污染新输出；引擎离线返回受理状态而非本地计算；状态接口区分输入缺失、算法失败和 View 等待。
@@ -330,7 +330,7 @@ accept_job(id, frozen_scope); engine_execute(job); publish_separate_completion(j
 
 ### 任务 17：前端导航和基础资产归并
 
-**依赖：** 02、06、16。  
+**依赖：** 02、06、16。
 **文件：** 修改 web/src/api/modules/system/static-menu.ts、web/src/router/、web/src/api/storage/、web/src/api/factor/；新增 web/tests/data-collection-navigation.spec.ts、factor-dataset-workflow.spec.ts；页面从现有路由映射定位后迁移。
 
 - [ ] **先写失败用例：** 刷新/直达路由可用；基础字段列表不混入因子字段；两个 View 可独立创建删除；system/custom 构造状态清楚；错误/空/加载态完整；桌面与移动无重叠。
@@ -346,7 +346,7 @@ open_collection(); assert(no_top_level_assets); open_dataset(); create_two_views
 
 ### 任务 18：清理、端到端与交付
 
-**依赖：** 01—17。  
+**依赖：** 01—17。
 **文件：** 修改相关模块 README、部署模板、modules/factor/Makefile、web-host/Makefile；新增 modules/factor/internal/integration/dataset_pipeline_test.go、docs/superpowers/plans/2026-09-13-factor-dataset-view-refactor-progress.md。
 
 - [ ] **先写失败用例：** 两来源两对象全链路成功；一个源超时 degraded；杀进程恢复；缓存满退化回源；View 重建期间时序继续；策略不会因结果 Ready 回环触发；所有新程序可独立启动和关闭。
@@ -446,4 +446,3 @@ pnpm run build:prod
 本文是可分阶段执行的重构计划，不是整套实现代码。任务内代码块描述必须满足的操作顺序和断言；具体函数签名沿用现有包接口，在对应任务先定义测试接口后实现，不能把伪代码名称误认为已存在符号。
 
 实施不需要旧系统兼容，但仍需可靠交付和失败恢复。完成单个子系统后可以提交验证，不应提前打开依赖尚未实现的正式消费链路。
-
