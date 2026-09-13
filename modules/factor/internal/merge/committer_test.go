@@ -17,9 +17,10 @@ func TestMergeAssemblerStorageCommitterSendsCompleteRow(t *testing.T) {
 		"dataset_binance_spot_kline_1m__open", "dataset_binance_swap_kline_1m__close",
 	})
 	key := mergeKey("BTC-USDT", time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC))
-	require.NoError(t, committer.CommitInput(context.Background(), stableCommitID(key), key, map[string]float64{
+	_, err := committer.CommitInput(context.Background(), stableCommitID(key), key, map[string]float64{
 		"dataset_binance_spot_kline_1m__open": 1, "dataset_binance_swap_kline_1m__close": 2,
-	}, true))
+	}, true)
+	require.NoError(t, err)
 	require.Equal(t, "moox-merge", fake.req.GetAuthInfo().GetAppId())
 	require.Equal(t, stableCommitID(key), fake.req.GetCommitId())
 	require.Equal(t, "mdataset_binance_kline_1m", fake.req.GetRow().GetKey().GetDatasetId())
@@ -29,7 +30,7 @@ func TestMergeAssemblerStorageCommitterSendsCompleteRow(t *testing.T) {
 
 func TestMergeAssemblerStorageCommitterRejectsUnreadyRow(t *testing.T) {
 	committer := NewStorageCommitter(&fakePrimaryCommit{}, &commonpb.AuthInfo{AppId: "moox-merge"}, "crypto", []string{"open"})
-	err := committer.CommitInput(context.Background(), "id", mergeKey("BTC-USDT", time.Now().UTC()), map[string]float64{"open": 1}, false)
+	_, err := committer.CommitInput(context.Background(), "id", mergeKey("BTC-USDT", time.Now().UTC()), map[string]float64{"open": 1}, false)
 	require.ErrorContains(t, err, "incomplete")
 }
 
@@ -39,5 +40,8 @@ type fakePrimaryCommit struct {
 
 func (f *fakePrimaryCommit) CommitInput(_ context.Context, req *storagepb.PrimaryCommitInputReq, _ ...client.Option) (*storagepb.PrimaryCommitInputRsp, error) {
 	f.req = req
-	return &storagepb.PrimaryCommitInputRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS, Msg: "success"}}, nil
+	return &storagepb.PrimaryCommitInputRsp{
+		RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS, Msg: "success"},
+		Receipt: &storagepb.WriteReceipt{CommitId: req.GetCommitId(), Position: &storagepb.CommittedPosition{NodeId: "node", StoreId: "store", Sequence: 1}},
+	}, nil
 }

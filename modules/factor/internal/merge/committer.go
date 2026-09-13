@@ -30,12 +30,12 @@ func NewStorageCommitter(client primaryCommitClient, auth *commonpb.AuthInfo, sp
 	return &StorageCommitter{client: client, auth: auth, spaceID: spaceID, requiredFields: fields}
 }
 
-func (c *StorageCommitter) CommitInput(ctx context.Context, commitID string, key RowKey, fields map[string]float64, ready bool) error {
+func (c *StorageCommitter) CommitInput(ctx context.Context, commitID string, key RowKey, fields map[string]float64, ready bool) (WriteReceipt, error) {
 	if c == nil || c.client == nil {
-		return fmt.Errorf("merge storage committer is not initialized")
+		return WriteReceipt{}, fmt.Errorf("merge storage committer is not initialized")
 	}
 	if !ready {
-		return fmt.Errorf("merge must not commit incomplete input")
+		return WriteReceipt{}, fmt.Errorf("merge must not commit incomplete input")
 	}
 	row := &storagepb.RowFieldUpsert{
 		Key: &storagepb.RowKey{
@@ -61,14 +61,17 @@ func (c *StorageCommitter) CommitInput(ctx context.Context, commitID string, key
 		AuthInfo: c.auth, CommitId: commitID, RequiredFields: c.requiredFields, Row: row,
 	})
 	if err != nil {
-		return fmt.Errorf("commit mdataset input: %w", err)
+		return WriteReceipt{}, fmt.Errorf("commit mdataset input: %w", err)
 	}
 	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 		msg := strings.TrimSpace(rsp.GetRetInfo().GetMsg())
 		if msg == "" {
 			msg = rsp.GetRetInfo().GetCode().String()
 		}
-		return fmt.Errorf("commit mdataset input: %s", msg)
+		return WriteReceipt{}, fmt.Errorf("commit mdataset input: %s", msg)
 	}
-	return nil
+	pos := rsp.GetReceipt().GetPosition()
+	return WriteReceipt{
+		CommitID: commitID, NodeID: pos.GetNodeId(), StoreID: pos.GetStoreId(), Sequence: pos.GetSequence(),
+	}, nil
 }

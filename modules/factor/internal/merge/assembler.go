@@ -22,7 +22,7 @@ type RowKey struct {
 }
 
 type InputCommitter interface {
-	CommitInput(ctx context.Context, commitID string, key RowKey, fields map[string]float64, ready bool) error
+	CommitInput(ctx context.Context, commitID string, key RowKey, fields map[string]float64, ready bool) (WriteReceipt, error)
 }
 
 type Assembler struct {
@@ -30,6 +30,7 @@ type Assembler struct {
 	def       domain.MergedDataset
 	committer InputCommitter
 	required  map[string][]string
+	periods   *PeriodLedger
 }
 
 func NewAssembler(ledger *Ledger, def domain.MergedDataset, committer InputCommitter) (*Assembler, error) {
@@ -44,6 +45,12 @@ func NewAssembler(ledger *Ledger, def domain.MergedDataset, committer InputCommi
 		required[source.DatasetID] = append([]string(nil), source.Fields...)
 	}
 	return &Assembler{ledger: ledger, def: def, committer: committer, required: required}, nil
+}
+
+func (a *Assembler) SetPeriodLedger(periods *PeriodLedger) {
+	if a != nil {
+		a.periods = periods
+	}
 }
 
 func (a *Assembler) DatasetID() string {
@@ -107,6 +114,21 @@ func (a *Assembler) ApplyArrival(ctx context.Context, key RowKey, sourceDatasetI
 	if !ok {
 		return fmt.Errorf("source dataset %q is not part of mdataset %s", sourceDatasetID, a.def.DatasetID)
 	}
+	if a.periods != nil {
+		period := PeriodKey{DatasetID: key.DatasetID, SnapshotID: key.SnapshotID, Frequency: key.Frequency, PeriodTime: key.PeriodTime}
+		if len(a.def.ObjectSet) > 0 {
+			if err := a.periods.Freeze(ctx, period, a.def.ObjectSet, key.PeriodTime.Add(2*time.Minute)); err != nil {
+				return err
+			}
+		}
+		accepted, err := a.periods.Accepts(ctx, period, key.SubjectID)
+		if err != nil {
+			return err
+		}
+		if !accepted {
+			return nil
+		}
+	}
 	complete := sourceComplete(wanted, fields)
 	if err := a.ledger.SaveArrival(ctx, key, sourceDatasetID, fields, complete); err != nil {
 		return err
@@ -140,10 +162,19 @@ func (a *Assembler) commitIfReady(ctx context.Context, key RowKey) error {
 	if a.committer == nil {
 		return fmt.Errorf("input committer is required")
 	}
-	if err := a.committer.CommitInput(ctx, commitID, key, merged, true); err != nil {
+	receipt, err := a.committer.CommitInput(ctx, commitID, key, merged, true)
+	if err != nil {
 		return err
 	}
-	return a.ledger.RecordCommit(ctx, commitID, key)
+	if err := a.ledger.RecordCommit(ctx, commitID, key); err != nil {
+		return err
+	}
+	if a.periods != nil {
+		return a.periods.NoteCommit(ctx, PeriodKey{
+			DatasetID: key.DatasetID, SnapshotID: key.SnapshotID, Frequency: key.Frequency, PeriodTime: key.PeriodTime,
+		}, key.SubjectID, receipt)
+	}
+	return nil
 }
 
 func sourceComplete(required []string, fields map[string]float64) bool {

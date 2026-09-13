@@ -68,17 +68,30 @@ func run() (err error) {
 	}
 	target := storageio.NormalizeStorageTarget(cfg.Storage.GatewayTarget, "11003")
 	primary := storagepb.NewPrimaryStoreClientProxy(gatewayauth.NewTRPCClientOptions(target, cfg.Storage.GatewayNodeID, credentials)...)
+	auth := mergeAuthInfo()
 	assemblers := make([]*merge.Assembler, 0, len(cfg.Definitions))
+	var periods *merge.PeriodLedger
 	for _, def := range cfg.Definitions {
 		if def.MergeMode != domain.MergeModeSystem {
 			continue
 		}
-		committer := merge.NewStorageCommitter(primary, mergeAuthInfo(), def.SpaceID, targetFields(def))
+		if periods == nil {
+			var periodErr error
+			periods, periodErr = merge.NewPeriodLedger(ledger, merge.NewStoragePeriodReporter(primary, auth, def.SpaceID))
+			if periodErr != nil {
+				return periodErr
+			}
+		}
+		committer := merge.NewStorageCommitter(primary, auth, def.SpaceID, targetFields(def))
 		assembler, assemblerErr := merge.NewAssembler(ledger, def, committer)
 		if assemblerErr != nil {
 			return assemblerErr
 		}
+		assembler.SetPeriodLedger(periods)
 		assemblers = append(assemblers, assembler)
+	}
+	if periods != nil {
+		go runPeriodFinalizer(ctx, periods)
 	}
 	consumer, err := merge.StartRowConsumer(ctx, cfg, merge.NewRowHandler(assemblers...))
 	if err != nil {
@@ -103,6 +116,21 @@ func targetFields(def domain.MergedDataset) []string {
 		fields = append(fields, mapping.TargetField)
 	}
 	return fields
+}
+
+func runPeriodFinalizer(ctx context.Context, periods *merge.PeriodLedger) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		if err := periods.FinalizeDue(ctx, time.Now().UTC()); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "merge period finalize: %v\n", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func mergeAuthInfo() *commonpb.AuthInfo {

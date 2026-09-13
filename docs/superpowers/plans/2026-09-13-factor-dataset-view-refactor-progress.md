@@ -264,4 +264,41 @@ env CGO_ENABLED=1 go build ./cmd/merge
 
 ### 提交
 
+`924929c6`
+
+## 任务 08：Merge 周期账本和超时
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 09—18。
+
+### 红灯证据
+
+`TestMergePeriodLedger` 最初因 `PeriodLedger` 不存在而无法编译。失败来自目标行为缺失。
+
+### 实现
+
+- 周期开始冻结对象名单；部分成功截止后 degraded，失败对象仍在完整预期名单中
+- 关闭后迟到提交不改写终态，不补写缺失对象空行
+- 上报失败可在重启后重试；收据持久化后才报告 `MergePeriodCompleted`
+- 空对象集可明确 complete 结束且不伪造输入行
+- 源 Collector 完成不能代替 Merge 完成
+- `ReportMergePeriodCompleted` 仅接受 merge 调用方
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/merge -run 'TestMergePeriodLedger' -count=1
+env CGO_ENABLED=1 go test -race ./internal/merge -run 'TestMergePeriodLedger|TestMergeAssembler' -count=3
+env CGO_ENABLED=1 go test ./internal/merge -count=1
+env CGO_ENABLED=1 go test ./internal/service/primarystore -count=1
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- 引擎隔离、时序读 Primary、缓存、截面、补算、前端与正式发布属于 09—18
+- mdataset `object_set` 仍需由控制面提供，Merge 才能按配置冻结真实宇宙
+
+### 提交
+
 （本提交）

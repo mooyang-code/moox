@@ -51,7 +51,7 @@ func (s *Service) ReportMergePeriodCompleted(ctx context.Context, req *pb.Report
 	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
 		return &pb.ReportMergePeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "factor"); err != nil {
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "merge"); err != nil {
 		return &pb.ReportMergePeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
 	ctx = s.requestContext(ctx)

@@ -129,12 +129,12 @@ type committedRow struct {
 	fields map[string]float64
 }
 
-func (c *commitRecorder) CommitInput(_ context.Context, commitID string, _ RowKey, fields map[string]float64, ready bool) error {
+func (c *commitRecorder) CommitInput(_ context.Context, commitID string, _ RowKey, fields map[string]float64, ready bool) (WriteReceipt, error) {
 	copied := make(map[string]float64, len(fields))
 	for name, value := range fields {
 		copied[name] = value
 	}
 	c.ids = append(c.ids, commitID)
 	c.rows = append(c.rows, committedRow{ready: ready, fields: copied})
-	return nil
+	return WriteReceipt{CommitID: commitID, NodeID: "test-node", StoreID: "test-store", Sequence: uint64(len(c.ids))}, nil
 }
