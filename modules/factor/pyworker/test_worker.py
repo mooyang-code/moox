@@ -436,7 +436,7 @@ def request_meta():
         "id": "task-1",
         "encoding": "json",
         "context": {"period_time": 1785196800, "frequency": "1m", "subject_id": "BTC",
-                    "input_contract_version": "contract-1"},
+                    "config_snapshot_id": "contract-1"},
         "target_start_time": "2026-07-28T00:00:00.000000001Z",
         "target_end_time": "2026-07-28T00:00:00.000000002Z",
         "factor": {

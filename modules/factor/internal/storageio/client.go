@@ -91,6 +91,7 @@ func (c *Client) activeViewRevision(ctx context.Context, spaceID, viewID, subjec
 // Client wraps Storage Access RPCs.
 type Client struct {
 	access    AccessClient
+	primary   datasetPrimaryReader
 	view      ViewClient
 	manifests OutputManifestStore
 	auth      *commonpb.AuthInfo
@@ -103,8 +104,10 @@ func NewClientWithCredentials(accessTarget, targetNode string, credentials gatew
 	// Storage node and the target-node signature must match that endpoint.
 	target := NormalizeStorageTarget(accessTarget, "11003")
 	options := gatewayauth.NewTRPCClientOptions(target, targetNode, credentials)
+	proxy := storagepb.NewPrimaryStoreClientProxy(options...)
 	return &Client{
-		access:   storagepb.NewPrimaryStoreClientProxy(options...),
+		access:   proxy,
+		primary:  proxy,
 		view:     storagepb.NewDataViewClientProxy(options...),
 		auth:     auth,
 		viewAuth: auth,
@@ -149,11 +152,21 @@ func (c *Client) ReadPeriodChunk(
 	lookbackPeriods int,
 	columns []string,
 ) (*RangeChunk, error) {
-	if key.SourceViewID == "" {
-		key.SourceViewID = key.SourceDataset
-	}
 	if lookbackPeriods < 1 {
 		lookbackPeriods = 1
+	}
+	if usesPrimaryDatasetWindow(key) {
+		chunk, err := c.ReadDatasetWindow(ctx, key, startTime, endTime, lookbackPeriods, columns)
+		if err != nil {
+			return nil, err
+		}
+		if err := RequireDatasetLookback(chunk, lookbackPeriods); err != nil {
+			return nil, nonRetryableRead(err)
+		}
+		return chunk, nil
+	}
+	if key.SourceViewID == "" {
+		key.SourceViewID = key.SourceDataset
 	}
 	rows, periods, complete, indexedTo, err := c.readPeriods(ctx, key, &storagepb.TimeRange{
 		EndTime: endTime.UTC().Format(time.RFC3339Nano),
@@ -192,6 +205,9 @@ func (c *Client) ReadPeriodChunks(
 	ids := uniqueSortedStrings(subjectIDs)
 	if len(ids) == 0 {
 		return map[string]*RangeChunk{}, nil
+	}
+	if usesPrimaryDatasetWindow(key) {
+		return c.readPrimaryPeriodChunks(ctx, key, ids, startTime, endTime, lookbackPeriods, columns)
 	}
 	if key.InputContractVersion != "" {
 		if lookbackPeriods < 1 {

@@ -254,6 +254,9 @@ func (c *Client) ClearFactorOutputs(ctx context.Context, task *engine.FactorTask
 }
 
 func buildFactorRows(task *engine.FactorTask, result *engine.FactorResult) ([]*storagepb.RowFieldUpsert, []string, error) {
+	if err := ValidateDatasetOutputs(task, result); err != nil {
+		return nil, nil, err
+	}
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(result.Rows))
 	keys := make([]string, 0, len(result.Rows))
 	computedAt := time.Now().UTC()

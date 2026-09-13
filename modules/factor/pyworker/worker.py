@@ -191,8 +191,8 @@ class FactorWorker:
             raise ValueError("context period_time must be a positive integer")
         if not isinstance(context.get("frequency"), str) or not context["frequency"]:
             raise ValueError("context frequency is required")
-        if not isinstance(context.get("input_contract_version"), str):
-            raise ValueError("context input_contract_version is required")
+        if not isinstance(context.get("config_snapshot_id"), str):
+            raise ValueError("context config_snapshot_id is required")
         if factor_type == "timeseries":
             if not isinstance(context.get("subject_id"), str) or not context["subject_id"]:
                 raise ValueError("context subject_id is required for timeseries")

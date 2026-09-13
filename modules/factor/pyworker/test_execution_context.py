@@ -20,8 +20,9 @@ def compute(df, params, context):
     assert params == {"window": 2}
     assert context["subject_id"] == "BTC"
     assert context["frequency"] == "1m"
-    assert context["input_contract_version"] == "contract-1"
+    assert context["config_snapshot_id"] == "contract-1"
     assert "factor_type" not in context
+    assert "input_contract_version" not in context
     result = df[["data_time", "series_tag"]].copy()
     result["double"] = df["value"] * 2
     result["triple"] = df["value"] * 3
@@ -37,7 +38,7 @@ def compute(df, params, context):
 
 def context():
     return {"subject_id": "BTC", "frequency": "1m", "period_time": 1785196800,
-            "input_contract_version": "contract-1"}
+            "config_snapshot_id": "contract-1"}
 
 
 def test_old_two_argument_compute_is_not_supported(tmp_path: Path):

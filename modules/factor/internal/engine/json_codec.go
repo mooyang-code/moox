@@ -34,8 +34,8 @@ func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, 
 		"id":                task.TaskID,
 		"encoding":          "json",
 		"space_id":          task.SpaceID,
-		"source_dataset":    task.SourceViewID,
-		"target_dataset":    task.ResultDatasetID,
+		"source_dataset":    firstNonEmpty(task.SourceDataset, task.SourceViewID),
+		"target_dataset":    firstNonEmpty(task.ResultDatasetID, task.TargetDataset),
 		"subject_id":        task.SubjectID,
 		"freq":              task.Freq,
 		"target_start_time": task.StartTime.UTC().Format(time.RFC3339Nano),
@@ -98,8 +98,8 @@ func EncodeJSONBatchRequestMeta(batch *BatchTask, frame *DataFrame) (map[string]
 	}
 	return map[string]any{
 		"id": batch.BatchID, "mode": "batch", "encoding": "json",
-		"space_id": first.SpaceID, "source_dataset": first.SourceViewID,
-		"target_dataset": first.ResultDatasetID, "subject_id": first.SubjectID,
+		"space_id": first.SpaceID, "source_dataset": firstNonEmpty(first.SourceDataset, first.SourceViewID),
+		"target_dataset": firstNonEmpty(first.ResultDatasetID, first.TargetDataset), "subject_id": first.SubjectID,
 		"freq": first.Freq, "target_start_time": first.StartTime.UTC().Format(time.RFC3339Nano),
 		"target_end_time": first.EndTime.UTC().Format(time.RFC3339Nano),
 		"factors":         factors, "df": base,
@@ -162,12 +162,22 @@ func encodeTaskContext(task *FactorTask) map[string]any {
 	}
 	return map[string]any{
 		"period_time": period, "frequency": task.Freq,
-		"input_contract_version": task.InputContractVersion,
-		"subject_id":             task.SubjectID,
-		"expected_subjects":      append([]string{}, task.ExpectedSubjects...),
-		"available_subjects":     append([]string{}, task.AvailableSubjects...),
-		"missing_subjects":       append([]string{}, task.MissingSubjects...),
+		"config_snapshot_id": task.ConfigSnapshotID,
+		"task_id":            task.TaskID,
+		"subject_id":         task.SubjectID,
+		"expected_subjects":  append([]string{}, task.ExpectedSubjects...),
+		"available_subjects": append([]string{}, task.AvailableSubjects...),
+		"missing_subjects":   append([]string{}, task.MissingSubjects...),
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // DecodeJSONBatchResponse validates identities and decodes partial results.

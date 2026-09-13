@@ -370,4 +370,38 @@ env CGO_ENABLED=1 go test -race ./internal/trigger ./internal/store ./internal/b
 
 ### 提交
 
+`721d4f2f`
+
+## 任务 11：Primary 历史读取与统一 Python ABI
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 18。
+
+### 红灯证据
+
+`TestDatasetWindow` 最初因 `ReadDatasetWindow` / `RequireDatasetLookback` / `ValidateDatasetOutputs` 不存在而无法编译。失败来自目标行为缺失。
+
+### 实现
+
+- 时序窗口在 `SourceDataset` 且无 InputContract 时改为 Primary 精确键读取，不再走 View 范围扫描
+- 窗口拒绝未来行；缺历史由 `RequireDatasetLookback` 明确失败；空对象集合不发起 Primary 请求
+- JSON / SQL NULL / int64 精度在 DataFrame 中保留
+- Python context 使用 `config_snapshot_id`，删除 `input_contract_version`；`factor_type` 只在 factor 对象上
+- 截面/时序输出校验越界对象与重复键；Python 错误不写成功输出
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/... -run 'TestDatasetWindow' -count=1
+env CGO_ENABLED=1 go test ./internal/storageio ./internal/engine ./internal/taskrunner ./internal/domain ./internal/trigger -count=1
+env CGO_ENABLED=1 go test -race ./internal/storageio ./internal/engine ./internal/taskrunner -run 'TestDatasetWindow|TestTaskContext|TestEncodeJSON|TestWriteFactorPatch|TestReadPeriod' -count=3
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- 缓存 Dataset 化、容量维护、截面、周期屏障、补算、前端与正式发布属于 12—18
+
+### 提交
+
 （本提交）

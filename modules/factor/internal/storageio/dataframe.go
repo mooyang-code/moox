@@ -98,6 +98,8 @@ func typedValueToAny(value *storagepb.TypedValue) any {
 		return nil
 	}
 	switch value.GetValue().(type) {
+	case *storagepb.TypedValue_NullValue:
+		return nil
 	case *storagepb.TypedValue_IntValue:
 		return value.GetIntValue()
 	case *storagepb.TypedValue_DoubleValue:
