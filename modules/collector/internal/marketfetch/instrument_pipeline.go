@@ -342,7 +342,8 @@ func instrumentFromStorageSymbol(marketID, subjectID, externalSymbol string) mar
 	subjectID = strings.TrimSpace(subjectID)
 	externalSymbol = strings.ToUpper(strings.TrimSpace(externalSymbol))
 	if marketID == "crypto" {
-		parts := strings.Split(strings.ToUpper(subjectID), "-")
+		subjectID = marketdata.CanonicalCryptoSubjectID(subjectID)
+		parts := strings.Split(subjectID, "-")
 		base, quote := "", ""
 		if len(parts) >= 2 {
 			base, quote = parts[0], parts[1]
@@ -463,6 +464,9 @@ func mergeInstrumentSnapshots(snapshots []marketdata.InstrumentSnapshot, marketI
 		}
 		pageCount += snapshot.PageCount
 		for _, instrument := range snapshot.Instruments {
+			if strings.EqualFold(marketID, "crypto") {
+				instrument = marketdata.CanonicalizeCryptoInstrument(instrument)
+			}
 			current, exists := bySubject[instrument.SubjectID]
 			if !exists {
 				bySubject[instrument.SubjectID] = instrument
@@ -720,6 +724,7 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 	}
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(snapshot.Instruments))
 	present := make(map[string]marketdata.Instrument, len(snapshot.Instruments))
+	snapshot = canonicalizeCryptoSnapshot(spaceID, snapshot)
 	sort.Slice(snapshot.Instruments, func(i, j int) bool { return snapshot.Instruments[i].SubjectID < snapshot.Instruments[j].SubjectID })
 	for _, instrument := range snapshot.Instruments {
 		if strings.EqualFold(strings.TrimSpace(instrument.Status), "active") {
@@ -827,6 +832,8 @@ func (p *InstrumentPipeline) persistSnapshotShard(ctx context.Context, fullSnaps
 	// the SCF Invoke budget.
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(snapshot.Instruments))
 	present := make(map[string]marketdata.Instrument, len(snapshot.Instruments))
+	snapshot = canonicalizeCryptoSnapshot(spaceID, snapshot)
+	fullSnapshot = canonicalizeCryptoSnapshot(spaceID, fullSnapshot)
 	for _, instrument := range snapshot.Instruments {
 		if strings.EqualFold(strings.TrimSpace(instrument.Status), "active") {
 			present[instrument.SubjectID] = instrument
@@ -1109,6 +1116,9 @@ func (p *InstrumentPipeline) instrumentRegistration(spaceID, dataSourceID string
 }
 
 func instrumentRegistrationWithMetadata(spaceID, dataSourceID, subjectType, subjectMarket, currency, timezone, instrumentType string, snapshot marketdata.InstrumentSnapshot, instrument marketdata.Instrument) *storagepb.RegisterDataSubjectReq {
+	if strings.EqualFold(strings.TrimSpace(spaceID), "crypto") {
+		instrument = marketdata.CanonicalizeCryptoInstrument(instrument)
+	}
 	attributes := map[string]string{"exchange": instrument.Exchange, "instrument_type": instrumentType, "provider_symbol": instrument.ProviderSymbol, "snapshot_id": snapshot.SnapshotID, "source_provider": snapshot.SourceProvider}
 	status := strings.TrimSpace(instrument.Status)
 	if status == "" {
@@ -1118,6 +1128,9 @@ func instrumentRegistrationWithMetadata(spaceID, dataSourceID, subjectType, subj
 }
 
 func instrumentRecordRow(spaceID, datasetID string, snapshot marketdata.InstrumentSnapshot, instrument marketdata.Instrument) *storagepb.RowFieldUpsert {
+	if strings.EqualFold(strings.TrimSpace(spaceID), "crypto") {
+		instrument = marketdata.CanonicalizeCryptoInstrument(instrument)
+	}
 	fields := make([]*storagepb.FieldValue, 0, 9)
 	if strings.EqualFold(strings.TrimSpace(spaceID), "crypto") {
 		fields = append(fields,
@@ -1199,4 +1212,22 @@ func cloneCounts(input map[string]int) map[string]int {
 		output[key] = value
 	}
 	return output
+}
+
+func canonicalizeCryptoSnapshot(spaceID string, snapshot marketdata.InstrumentSnapshot) marketdata.InstrumentSnapshot {
+	if !strings.EqualFold(strings.TrimSpace(spaceID), "crypto") && !strings.EqualFold(strings.TrimSpace(snapshot.MarketID), "crypto") {
+		return snapshot
+	}
+	instruments := make([]marketdata.Instrument, 0, len(snapshot.Instruments))
+	seen := make(map[string]struct{}, len(snapshot.Instruments))
+	for _, instrument := range snapshot.Instruments {
+		instrument = marketdata.CanonicalizeCryptoInstrument(instrument)
+		if _, exists := seen[instrument.SubjectID]; exists {
+			continue
+		}
+		seen[instrument.SubjectID] = struct{}{}
+		instruments = append(instruments, instrument)
+	}
+	snapshot.Instruments = instruments
+	return snapshot
 }

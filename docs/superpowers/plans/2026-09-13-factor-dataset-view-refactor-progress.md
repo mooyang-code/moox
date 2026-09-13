@@ -123,3 +123,75 @@ go test ./... -count=1   # packages/events
 ### 提交
 
 `3ec84f52`
+
+## 任务 04：通用 ViewDataReady 应用屏障
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 18。
+
+### 红灯证据
+
+`TestViewDataReadyFence` 最初失败于完成标记先到即发布。失败来自目标行为缺失。
+
+### 实现
+
+- 按 View 活动索引代际记录 `(node_id, store_id, sequence)` 应用水位
+- 完成标记先入待发布队列，所需提交位置全部应用到当前索引后才发 ViewDataReady
+- 过滤 View 使用自己的 `visible_scope`；重建切换索引后必须重新确认
+- 同一完成事件发布重试保持稳定 event ID；行应用后回扫待发布项
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/service/view -run 'TestViewDataReadyFence' -count=1
+env CGO_ENABLED=1 go test ./internal/service/view -count=1
+env CGO_ENABLED=1 go test -race ./internal/service/view -run 'TestViewDataReadyFence|TestHandleCollectorPeriodCompleted|TestHandleFactorPeriodComputed' -count=3
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- Merge、引擎隔离、本机部署与真实 E2E 属于 06—18
+
+### 提交
+
+`cc9c6f2c`
+
+## 任务 05：Collector 周期事件与主体 ID 去尾缀
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 18。
+
+### 红灯证据
+
+`modules/collector` 中 `TestCollectorCompleted` 最初失败于：
+
+- `CanonicalCryptoSubjectID("0G-USDT-SPOT")` 仍返回 `0G-USDT-SPOT`
+- 完成事件 `committed_positions` 使用本地占位 `collector/local`，而不是 DataNode outbox 坐标
+
+失败来自目标行为缺失。
+
+### 实现
+
+- 协议与上报逻辑统一为 `CollectorPeriodCompleted`；全成功为 complete，超时为 degraded 且冻结名单不缩小；重启不改已冻结集合；重复 Flush 不新建批次
+- 加密货币数据 ID 去掉 `-SPOT`/`-SWAP`，写入路径使用 `BASE-QUOTE`（例如 `0G-USDT`），不再加后缀
+- 消费 `DatasetRowsUpserted` 时记录真实 `(node_id, store_id, sequence)`，完成事件携带该位置，不再伪造 collector 本地水位
+- 全超时且无行写入时 `committed_positions` 可能为空；Storage 事件校验仍要求非空，该缺口在无写入周期才会出现，成功采集路径已绑定真实位置
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/... -run 'TestCollectorCompleted' -count=1
+env CGO_ENABLED=1 go test -race ./internal/marketfetch ./internal/store ./internal/sources/binance -run 'TestCollectorCompleted|TestPeriodReporter|TestPeriodReadiness' -count=3
+env CGO_ENABLED=1 go test ./internal/marketfetch ./internal/sources/binance ./internal/store ./internal/marketwiring -count=1
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- mdataset 定义、Merge 程序、引擎隔离、前端与正式发布属于 06—18
+- 全超时无写入周期的完成标记仍需 marker 自身 outbox 位置才能通过事件校验
+
+### 提交
+
+`690dcc10`

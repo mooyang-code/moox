@@ -152,6 +152,57 @@ func (r *PeriodReadinessRepository) MarkSubjectSuccessWithFields(ctx context.Con
 	return nil
 }
 
+type storedCommittedPosition struct {
+	NodeID   string `json:"node_id"`
+	StoreID  string `json:"store_id"`
+	Sequence uint64 `json:"sequence"`
+}
+
+// NoteWritePosition records the durable DataNode outbox coordinate for a
+// successful row event. Sequence is kept as the per-(node, store) maximum.
+func (r *PeriodReadinessRepository) NoteWritePosition(ctx context.Context, key domain.PeriodKey, nodeID, storeID string, sequence uint64) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("period readiness repository is not initialized")
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	storeID = strings.TrimSpace(storeID)
+	if key.PeriodTime.IsZero() || nodeID == "" || storeID == "" || sequence == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var parent domain.PeriodReadiness
+		err := tx.Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime.UTC()).First(&parent).Error
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil
+			}
+			return err
+		}
+		merged := mergeStoredCommittedPositions(parent.CommittedPositionsJSON, storedCommittedPosition{NodeID: nodeID, StoreID: storeID, Sequence: sequence})
+		raw, err := json.Marshal(merged)
+		if err != nil {
+			return err
+		}
+		return tx.Model(&parent).Updates(map[string]any{"c_committed_positions_json": string(raw), "c_mtime": time.Now().UTC()}).Error
+	})
+}
+
+func mergeStoredCommittedPositions(raw string, next storedCommittedPosition) []storedCommittedPosition {
+	var current []storedCommittedPosition
+	if strings.TrimSpace(raw) != "" && strings.TrimSpace(raw) != "[]" {
+		_ = json.Unmarshal([]byte(raw), &current)
+	}
+	for i, item := range current {
+		if item.NodeID == next.NodeID && item.StoreID == next.StoreID {
+			if next.Sequence > item.Sequence {
+				current[i].Sequence = next.Sequence
+			}
+			return current
+		}
+	}
+	return append(current, next)
+}
+
 // FinalizeDue atomically moves ready or deadline-expired parents to
 // report_pending and fixes the collection timestamp. The timestamp is fixed
 // before the reporter constructs its payload, so a crash/retry cannot change

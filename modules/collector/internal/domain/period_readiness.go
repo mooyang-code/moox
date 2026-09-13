@@ -20,20 +20,21 @@ const (
 // membership is captured when the row is created; later assignment changes
 // only affect periods that have not been created yet.
 type PeriodReadiness struct {
-	ID          int64     `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID     string    `gorm:"column:c_space_id"`
-	DatasetID   string    `gorm:"column:c_dataset_id"`
-	Frequency   string    `gorm:"column:c_frequency"`
-	WorkType    string    `gorm:"column:c_work_type"`
-	PeriodTime  time.Time `gorm:"column:c_period_time"`
-	DeadlineAt  time.Time `gorm:"column:c_deadline_at"`
-	Status      string    `gorm:"column:c_status"`
-	ReportState string    `gorm:"column:c_report_state"`
-	EventID     string    `gorm:"column:c_event_id"`
-	CollectedAt time.Time `gorm:"column:c_collected_at"`
-	PayloadJSON string    `gorm:"column:c_payload_json"`
-	CreatedAt   time.Time `gorm:"column:c_ctime"`
-	UpdatedAt   time.Time `gorm:"column:c_mtime"`
+	ID                     int64     `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID                string    `gorm:"column:c_space_id"`
+	DatasetID              string    `gorm:"column:c_dataset_id"`
+	Frequency              string    `gorm:"column:c_frequency"`
+	WorkType               string    `gorm:"column:c_work_type"`
+	PeriodTime             time.Time `gorm:"column:c_period_time"`
+	DeadlineAt             time.Time `gorm:"column:c_deadline_at"`
+	Status                 string    `gorm:"column:c_status"`
+	ReportState            string    `gorm:"column:c_report_state"`
+	EventID                string    `gorm:"column:c_event_id"`
+	CollectedAt            time.Time `gorm:"column:c_collected_at"`
+	PayloadJSON            string    `gorm:"column:c_payload_json"`
+	CommittedPositionsJSON string    `gorm:"column:c_committed_positions_json"`
+	CreatedAt              time.Time `gorm:"column:c_ctime"`
+	UpdatedAt              time.Time `gorm:"column:c_mtime"`
 }
 
 func (PeriodReadiness) TableName() string { return "t_period_readiness" }

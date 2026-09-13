@@ -2,6 +2,7 @@ package marketfetch
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -229,13 +230,30 @@ func (r *PeriodReporter) completeCollectorPayload(payload *storageeventpb.Collec
 		payload.ExpectedScopeRef = scope
 	}
 	if len(payload.GetCommittedPositions()) == 0 {
-		seq := uint64(report.Readiness.ID)
-		if seq == 0 {
-			seq = 1
-		}
-		payload.CommittedPositions = []*storageeventpb.CommittedPosition{{
-			NodeId: firstNonEmpty(r.nodeID, "collector"), StoreId: firstNonEmpty(r.storeID, "local"), Sequence: seq,
-		}}
+		payload.CommittedPositions = decodeCommittedPositions(report.Readiness.CommittedPositionsJSON)
 	}
 	return payload
+}
+
+func decodeCommittedPositions(raw string) []*storageeventpb.CommittedPosition {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "{}" || raw == "[]" {
+		return nil
+	}
+	var stored []struct {
+		NodeID   string `json:"node_id"`
+		StoreID  string `json:"store_id"`
+		Sequence uint64 `json:"sequence"`
+	}
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		return nil
+	}
+	positions := make([]*storageeventpb.CommittedPosition, 0, len(stored))
+	for _, item := range stored {
+		if strings.TrimSpace(item.NodeID) == "" || strings.TrimSpace(item.StoreID) == "" || item.Sequence == 0 {
+			continue
+		}
+		positions = append(positions, &storageeventpb.CommittedPosition{NodeId: item.NodeID, StoreId: item.StoreID, Sequence: item.Sequence})
+	}
+	return positions
 }

@@ -14,6 +14,7 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -825,6 +826,9 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 				continue
 			}
 			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
+			if strings.EqualFold(marketID, "crypto") || strings.EqualFold(spaceID, "crypto") {
+				subjectID = marketdata.CanonicalCryptoSubjectID(subjectID)
+			}
 			symbol, symbolErr := resolveProviderSymbol(s.ResolveSymbol, provider, marketID, marketType, subjectID, subject.ExternalSymbol)
 			if symbolErr != nil {
 				log.WarnContextf(ctx, "skip market symbol without valid external symbol subject=%q error=%v", subject.SubjectID, symbolErr)
@@ -851,6 +855,9 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 			subjectID := strings.TrimSpace(membership.GetSubjectId())
 			if subjectID == "" {
 				continue
+			}
+			if strings.EqualFold(marketID, "crypto") || strings.EqualFold(rule.SpaceID, "crypto") {
+				subjectID = marketdata.CanonicalCryptoSubjectID(subjectID)
 			}
 			symbol, symbolErr := resolveProviderSymbol(s.ResolveSymbol, provider, marketID, marketType, subjectID, "")
 			if symbolErr != nil {

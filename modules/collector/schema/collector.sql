@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS t_period_readiness (
     c_event_id TEXT NOT NULL DEFAULT '',
     c_collected_at DATETIME,
     c_payload_json TEXT NOT NULL DEFAULT '{}',
+    c_committed_positions_json TEXT NOT NULL DEFAULT '[]',
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('waiting', 'complete', 'degraded')),

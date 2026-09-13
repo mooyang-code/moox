@@ -67,7 +67,7 @@ func (c *SymbolCollector) filterSymbols(symbols []*exchange.SymbolInfo) []*excha
 	return filtered
 }
 
-func normalizedSubjectID(symbol *exchange.SymbolInfo, market ...string) string {
+func normalizedSubjectID(symbol *exchange.SymbolInfo, _ ...string) string {
 	if symbol == nil {
 		return ""
 	}
@@ -86,28 +86,10 @@ func normalizedSubjectID(symbol *exchange.SymbolInfo, market ...string) string {
 			}
 		}
 	}
-	suffix := ""
-	if len(market) > 0 {
-		switch strings.ToLower(strings.TrimSpace(market[0])) {
-		case "spot":
-			suffix = "SPOT"
-		case "swap", "perpetual", "future", "futures":
-			suffix = "SWAP"
-		}
-	}
-	if suffix == "" {
-		parts := strings.Split(strings.ToUpper(strings.TrimSpace(symbol.Symbol)), "-")
-		if len(parts) >= 3 && (parts[2] == "SPOT" || parts[2] == "SWAP") {
-			suffix = parts[2]
-		}
-	}
 	if base == "" || quote == "" {
 		return strings.ToUpper(strings.TrimSpace(symbol.Symbol))
 	}
-	if suffix == "" {
-		return base + "-" + quote
-	}
-	return base + "-" + quote + "-" + suffix
+	return base + "-" + quote
 }
 
 func externalSymbol(symbol *exchange.SymbolInfo) string {

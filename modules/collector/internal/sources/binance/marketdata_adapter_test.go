@@ -128,7 +128,7 @@ func TestMarketDataAdapterFetchesTypedInstrumentSnapshot(t *testing.T) {
 	assert.Equal(t, snapshotAt.Format(time.RFC3339Nano), snapshot.SnapshotID)
 	assert.Equal(t, map[string]int{"binance": 1}, snapshot.ExchangeCounts)
 	require.Equal(t, []marketdata.Instrument{{
-		SubjectID:       "BTC-USDT-SPOT",
+		SubjectID:       "BTC-USDT",
 		CanonicalSymbol: "BTC-USDT",
 		ProviderSymbol:  "BTCUSDT",
 		Exchange:        "binance",

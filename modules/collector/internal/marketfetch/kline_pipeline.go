@@ -473,6 +473,9 @@ func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, rout
 	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
 		return nil, err
 	}
+	if strings.EqualFold(firstNonEmptyString(p.MarketID, req.SpaceID), "crypto") {
+		bar.SubjectID = marketdata.CanonicalCryptoSubjectID(bar.SubjectID)
+	}
 	seriesTag := strings.TrimSpace(p.SeriesTag)
 	if seriesTag == "" {
 		seriesTag = "venue:" + strings.ToLower(strings.TrimSpace(bar.ProviderID))

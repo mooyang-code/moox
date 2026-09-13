@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/storagepb"
@@ -70,13 +71,14 @@ func (s *PeriodReadinessService) EnsureCurrentAndNext(ctx context.Context, space
 		seedTasks := make([]domain.PeriodTaskSeed, 0, len(groups[key]))
 		seedBySubject := make(map[string]int, len(groups[key]))
 		for _, task := range groups[key] {
+			subjectID := canonicalPeriodSubjectID(spaceID, task.SubjectID)
 			seed := domain.PeriodTaskSeed{
-				TaskID: task.TaskID, SubjectID: task.SubjectID,
+				TaskID: task.TaskID, SubjectID: subjectID,
 				FunctionName:   task.FunctionName,
 				WriteSource:    writeSourceForFunctionName(task.FunctionName),
 				RequiredFields: requiredFieldsJSON(task),
 			}
-			if existing, ok := seedBySubject[task.SubjectID]; ok {
+			if existing, ok := seedBySubject[subjectID]; ok {
 				// Two enabled rules may intentionally cover the same subject. A
 				// readiness item is subject-level, so accept either writer instead
 				// of rejecting the whole dataset group or waiting for one chosen rule.
@@ -84,7 +86,7 @@ func (s *PeriodReadinessService) EnsureCurrentAndNext(ctx context.Context, space
 				seedTasks[existing].WriteSource = ""
 				continue
 			}
-			seedBySubject[task.SubjectID] = len(seedTasks)
+			seedBySubject[subjectID] = len(seedTasks)
 			seedTasks = append(seedTasks, seed)
 		}
 		sort.Slice(seedTasks, func(i, j int) bool { return seedTasks[i].SubjectID < seedTasks[j].SubjectID })
@@ -177,13 +179,25 @@ func (s *PeriodReadinessService) ApplyRows(ctx context.Context, payload *storage
 				fieldIDs = append(fieldIDs, field.GetFieldId())
 			}
 		}
-		if err := s.periods.MarkSubjectSuccessWithFields(ctx, domain.PeriodKey{
+		periodKey := domain.PeriodKey{
 			SpaceID: payload.GetSpaceId(), DatasetID: payload.GetDatasetId(), Frequency: frequency, PeriodTime: dataTime.UTC(),
-		}, key.GetSubjectId(), functionName, writeSource, fieldIDs, dataTime.UTC()); err != nil {
+		}
+		subjectID := canonicalPeriodSubjectID(payload.GetSpaceId(), key.GetSubjectId())
+		if err := s.periods.MarkSubjectSuccessWithFields(ctx, periodKey, subjectID, functionName, writeSource, fieldIDs, dataTime.UTC()); err != nil {
+			return err
+		}
+		if err := s.periods.NoteWritePosition(ctx, periodKey, payload.GetSourceNodeId(), payload.GetSourceStoreId(), payload.GetSourceSequence()); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func canonicalPeriodSubjectID(spaceID, subjectID string) string {
+	if strings.EqualFold(strings.TrimSpace(spaceID), "crypto") {
+		return marketdata.CanonicalCryptoSubjectID(subjectID)
+	}
+	return strings.TrimSpace(subjectID)
 }
 
 func requiredFieldsJSON(task domain.TaskInstance) string {

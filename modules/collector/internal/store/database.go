@@ -121,7 +121,30 @@ func (s *Store) ApplySchema(sql string) error {
 	if err := s.ensurePeriodReadinessWorkTypeColumn(); err != nil {
 		return err
 	}
+	if err := s.ensurePeriodReadinessCommittedPositionsColumn(); err != nil {
+		return err
+	}
 	return s.db.Exec(sql).Error
+}
+
+func (s *Store) ensurePeriodReadinessCommittedPositionsColumn() error {
+	var tableCount int64
+	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, "t_period_readiness").Scan(&tableCount).Error; err != nil {
+		return fmt.Errorf("check period readiness table: %w", err)
+	}
+	if tableCount == 0 {
+		return nil
+	}
+	var count int64
+	if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info('t_period_readiness') WHERE name = ?`, "c_committed_positions_json").Scan(&count).Error; err != nil {
+		return fmt.Errorf("inspect period readiness columns: %w", err)
+	}
+	if count == 0 {
+		if err := s.db.Exec(`ALTER TABLE t_period_readiness ADD COLUMN c_committed_positions_json TEXT NOT NULL DEFAULT '[]'`).Error; err != nil {
+			return fmt.Errorf("add period readiness committed positions column: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) ensurePeriodReadinessWorkTypeColumn() error {
