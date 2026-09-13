@@ -438,4 +438,37 @@ env CGO_ENABLED=1 go test -race ./internal/storageio ./internal/inputcache -run 
 
 ### 提交
 
+`36bdf250`
+
+## 任务 13：缓存容量维护
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 18。
+
+### 红灯证据
+
+`TestCacheCapacityPolicy` 以计划要求的筛选前缀新增用例，锁定默认 2233s 首次延后、多 Dataset 共用目录预算、N 行仍超字节则停填充、旧读者不踩关闭文件、取消重建可恢复、读取不刷新淘汰时间。
+
+### 实现
+
+- 复用已有 DuckDB 维护：`check_interval=2233s`、首次延后、禁止重入
+- 目录总字节含活动/退役/WAL/临时文件，多个 Dataset 共用同一 MaxBytes
+- 超限按本地写入时间保留 N 行并换新文件；重建后仍超限则 `PauseWrites`，不再无限重建
+- 读取窗口不更新 `__moox_cache_updated_at`；取消的重建保留原代际
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/inputcache -run 'TestCacheCapacityPolicy' -count=1
+env CGO_ENABLED=1 go test ./internal/inputcache -count=1
+env CGO_ENABLED=1 go test -race ./internal/inputcache -run 'TestCacheCapacityPolicy' -count=3
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- 截面、周期屏障、补算、前端与正式发布属于 14—18
+
+### 提交
+
 （本提交）
