@@ -62,6 +62,8 @@ type Service struct {
 	idleChecks        map[viewRef]uint32
 	rebuildLogRetry   map[string]pendingRebuildLog
 	maintenanceReady  bool
+	pendingReadyMu    sync.Mutex
+	pendingReady      []pendingViewReady
 }
 
 type pendingRebuildLog struct {
@@ -103,6 +105,7 @@ type viewRuntime struct {
 	buildFailed                    bool
 	buildContext                   context.Context
 	lastCapacityMaintenanceBuildAt time.Time
+	applied                        map[appliedKey]uint64
 }
 
 const (

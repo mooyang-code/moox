@@ -152,6 +152,7 @@ func TestHandleCollectorPeriodCompletedPublishesSingleDatasetIdempotently(t *tes
 	secondAt := otherAt.Add(time.Second)
 	message := periodMessage("prices-ready", secondAt)
 	payload := collectorCompleted("prices", "degraded", []string{"ETH-USDT", "BTC-USDT", "BTC-USDT"}, []string{"ETH-USDT"}, secondAt, periodTime)
+	service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 1)
 	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload); err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +193,7 @@ func TestHandleCollectorPeriodCompletedIgnoresExtraRuntimeDatasets(t *testing.T)
 	periodTime := int64(1786032000)
 	at := time.Date(2026, 8, 7, 0, 0, 1, 0, time.UTC)
 	message := periodMessage("prices-ready", at)
+	service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 1)
 	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, periodTime)); err != nil {
 		t.Fatal(err)
 	}
@@ -207,6 +209,7 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	})
 	occurredAt := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
 	message := periodMessage("factor-marker-1", occurredAt)
+	service.NoteAppliedPosition("quant", "result-view", "result-view-a", "node-a", "store-a", 2)
 	payload := &storageeventpb.FactorPeriodComputed{
 		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
 		BatchId: "batch-1", ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "universe:factor:1m", ExpectedSubjectIds: []string{"ETH-USDT"},

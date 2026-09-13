@@ -122,4 +122,4 @@ go test ./... -count=1   # packages/events
 
 ### 提交
 
-见本任务独立提交。
+`3ec84f52`

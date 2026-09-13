@@ -27,7 +27,11 @@ func (s *Service) HandleDatasetRows(ctx context.Context, message *eventpb.EventM
 	if err != nil {
 		return eventconsumer.Permanent(err)
 	}
-	return s.applyDatasetEvent(ctx, message.GetSpaceId(), message.GetSubjectId(), rowEvent.GetRows())
+	if err := s.applyDatasetEvent(ctx, message.GetSpaceId(), message.GetSubjectId(), rowEvent.GetRows()); err != nil {
+		return err
+	}
+	s.noteAppliedFromPayload(message.GetSpaceId(), payload)
+	return s.FlushViewDataReady(ctx, message.GetSpaceId(), "")
 }
 
 // HandleDatasetRowsBatch merges contiguous rows events for one Dataset before
@@ -62,7 +66,13 @@ func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsu
 	if len(rows) == 0 {
 		return eventconsumer.Permanent(errors.New("storage dataset rows batch has no rows"))
 	}
-	return s.applyDatasetEvent(ctx, spaceID, datasetID, rows)
+	if err := s.applyDatasetEvent(ctx, spaceID, datasetID, rows); err != nil {
+		return err
+	}
+	for _, item := range items {
+		s.noteAppliedFromPayload(spaceID, item.Payload)
+	}
+	return s.FlushViewDataReady(ctx, spaceID, "")
 }
 
 func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {

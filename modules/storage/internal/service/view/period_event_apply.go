@@ -123,14 +123,8 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 			continue
 		}
 		eventID := stableViewEventID("data-ready", message.GetSpaceId(), view.GetViewId(), completion.frequency, strconv.FormatInt(completion.periodTime, 10))
-		occurredAt := message.GetOccurredAt()
-		if ready.GetReadyAt() != nil {
-			occurredAt = ready.GetReadyAt()
-		}
-		if _, err := publisher.Publish(ctx, events.ViewDataReady, ready, events.PublishOptions{
-			EventID: eventID, OccurredAt: occurredAt.AsTime().UTC(), SpaceID: message.GetSpaceId(), SubjectID: view.GetViewId(),
-		}); err != nil {
-			s.metrics.ObserveReadyPublishRetry(view.GetViewId(), "view_data_ready")
+		s.enqueueViewDataReady(view, completion.committedPositions, ready, message, eventID)
+		if err := s.FlushViewDataReady(ctx, message.GetSpaceId(), view.GetViewId()); err != nil {
 			return err
 		}
 	}
@@ -165,15 +159,13 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 	for _, view := range views {
 		ready := &storageeventpb.ViewDataReady{
 			ViewId: view.GetViewId(), ViewConfigId: viewConfigID(view), CompletionEventId: message.GetEventId(),
-			DatasetId: payload.GetDatasetId(), Status: payload.GetStatus(), VisibleScope: firstNonEmpty(payload.GetExpectedScopeRef(), "view:"+view.GetViewId()),
+			DatasetId: payload.GetDatasetId(), Status: payload.GetStatus(), VisibleScope: viewVisibleScope(view, firstNonEmpty(payload.GetExpectedScopeRef(), "view:"+view.GetViewId())),
 			Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(), FailedScopeRef: degradedScopeRef(payload.GetStatus(), failed),
 			CommittedPositions: cloneCommittedPositions(payload.GetCommittedPositions()), ReadyAt: cloneTimestamp(message.GetOccurredAt()),
 		}
 		eventID := stableViewEventID("data-ready", message.GetEventId(), view.GetViewId())
-		if _, err := publisher.Publish(ctx, events.ViewDataReady, ready, events.PublishOptions{
-			EventID: eventID, OccurredAt: message.GetOccurredAt().AsTime().UTC(), SpaceID: message.GetSpaceId(), SubjectID: view.GetViewId(),
-		}); err != nil {
-			s.metrics.ObserveReadyPublishRetry(view.GetViewId(), "view_data_ready")
+		s.enqueueViewDataReady(view, payload.GetCommittedPositions(), ready, message, eventID)
+		if err := s.FlushViewDataReady(ctx, message.GetSpaceId(), view.GetViewId()); err != nil {
 			return err
 		}
 	}
@@ -373,7 +365,7 @@ func viewDataReadyPayload(view *pb.View, completion periodCompletionInput, state
 	}
 	return &storageeventpb.ViewDataReady{
 		ViewId: view.GetViewId(), ViewConfigId: viewConfigID(view), CompletionEventId: message.GetEventId(),
-		DatasetId: completion.datasetID, Status: status, VisibleScope: firstNonEmpty(completion.expectedScopeRef, "view:"+view.GetViewId()),
+		DatasetId: completion.datasetID, Status: status, VisibleScope: viewVisibleScope(view, firstNonEmpty(completion.expectedScopeRef, "view:"+view.GetViewId())),
 		Frequency: completion.frequency, PeriodTime: completion.periodTime, FailedScopeRef: degradedScopeRef(status, failed),
 		CommittedPositions: cloneCommittedPositions(completion.committedPositions), ReadyAt: readyAt,
 	}, true
