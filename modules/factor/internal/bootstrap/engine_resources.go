@@ -92,10 +92,14 @@ func OpenEngineResources(ctx context.Context, cfg *EngineApplicationConfig) (*En
 			return nil, errors.Join(fmt.Errorf("initialize engine input cache: %w", err), db.Close())
 		}
 	}
+	storage := storageio.NewClientWithCredentials(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, credentials, EngineAuthInfo(false)).WithViewAuth(EngineAuthInfo(true)).WithOutputManifests(db.OutputManifests())
+	if cache != nil && cache.Manager != nil {
+		storage = storage.WithDatasetCache(storageio.NewDatasetCache(cache.Manager))
+	}
 	return &EngineResources{
 		Cache:         cache,
 		Store:         db,
-		Storage:       storageio.NewClientWithCredentials(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, credentials, EngineAuthInfo(false)).WithViewAuth(EngineAuthInfo(true)).WithOutputManifests(db.OutputManifests()),
+		Storage:       storage,
 		OperationGate: taskrunner.NewOperationGate(), ctx: runCtx, cancel: cancel, engineConfig: ec,
 	}, nil
 }

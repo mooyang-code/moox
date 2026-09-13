@@ -20,6 +20,7 @@ type periodReadKey struct {
 	filterSourceSeriesTag                                                        bool
 	inputContractVersion                                                         string
 	spaceID, sourceViewID, sourceDataset, subjectID, freq, expectedActiveIndexID string
+	storageSchemaID                                                              string
 	expectedActiveIndexRevision                                                  uint64
 	periodTime                                                                   int64
 	triggerType, triggerEventID                                                  string
@@ -65,6 +66,7 @@ type periodReadBatchKey struct {
 	filterSourceSeriesTag                                                             bool
 	inputContractVersion                                                              string
 	spaceID, sourceViewID, sourceDataset, freq, expectedActiveIndexID, triggerEventID string
+	storageSchemaID                                                                   string
 	expectedActiveIndexRevision                                                       uint64
 	periodTime                                                                        int64
 }
@@ -198,6 +200,7 @@ func clusterPeriodReadGroups(groups []*periodReadGroup) []*periodReadBatch {
 			inputContractVersion: group.key.inputContractVersion,
 			spaceID:              group.key.spaceID, sourceViewID: group.key.sourceViewID, sourceDataset: group.key.sourceDataset,
 			freq: group.key.freq, expectedActiveIndexID: group.key.expectedActiveIndexID,
+			storageSchemaID:             group.key.storageSchemaID,
 			expectedActiveIndexRevision: group.key.expectedActiveIndexRevision,
 			periodTime:                  group.key.periodTime, triggerEventID: group.key.triggerEventID,
 		}
@@ -285,6 +288,7 @@ func (s *Service) runBatchedPeriodReadPipeline(
 					SourceDataset: job.batch.key.sourceDataset, Freq: job.batch.key.freq,
 					ExpectedActiveIndexID:       job.batch.key.expectedActiveIndexID,
 					ExpectedActiveIndexRevision: job.batch.key.expectedActiveIndexRevision,
+					StorageSchemaID:             job.batch.key.storageSchemaID,
 				}
 				if job.batch.key.triggerType == "subject_ready" {
 					key.InputContractVersion = job.batch.key.inputContractVersion
@@ -407,6 +411,7 @@ func (s *Service) readPeriodGroup(ctx context.Context, group *periodReadGroup) (
 		SourceDataset: representative.SourceDataset, SubjectID: representative.SubjectID, Freq: representative.Freq,
 		ExpectedActiveIndexID:       representative.ExpectedActiveIndexID,
 		ExpectedActiveIndexRevision: representative.ExpectedActiveIndexRevision,
+		StorageSchemaID:             representative.StorageSchemaID,
 	}
 	if representative.TriggerType == "subject_ready" {
 		key.InputContractVersion = representative.InputContractVersion
@@ -556,6 +561,7 @@ func buildPeriodReadGroups(tasks []Task) ([]*periodReadGroup, []indexedTask) {
 			subjectID: task.SubjectID, freq: task.Freq, periodTime: task.PeriodTime,
 			expectedActiveIndexID:       task.ExpectedActiveIndexID,
 			expectedActiveIndexRevision: task.ExpectedActiveIndexRevision,
+			storageSchemaID:             task.StorageSchemaID,
 			triggerType:                 task.TriggerType, triggerEventID: task.TriggerEventID,
 			startTime: task.StartTime, endTime: task.EndTime,
 		}

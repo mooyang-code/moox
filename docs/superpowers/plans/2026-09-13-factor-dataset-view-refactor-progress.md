@@ -404,4 +404,38 @@ env CGO_ENABLED=1 go test -race ./internal/storageio ./internal/engine ./interna
 
 ### 提交
 
+`a00215f1`
+
+## 任务 12：缓存 Dataset 化和惰性回源
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 18。
+
+### 红灯证据
+
+`TestDatasetCache` 最初因 `DatasetCache` / `RegisterSchema` 不存在而无法编译。失败来自目标行为缺失。
+
+### 实现
+
+- 缓存身份改为 `SourceKey{SpaceID, DatasetID}` + Storage schema 标识，相同 schema 的不同 Dataset 不混用
+- 冷缓存回源一次后命中；删除缓存键后再次回源得到最新值
+- 新 schema 打开空代际；半字段/空值行不能当作完整输入命中
+- 确认缺失的源键不会无限重试 Primary
+- 引擎 Storage 客户端挂上 DatasetCache；窗口读取携带 `StorageSchemaID`
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/storageio ./internal/inputcache -run 'TestDatasetCache|TestManager' -count=1
+env CGO_ENABLED=1 go test ./internal/storageio ./internal/inputcache ./internal/taskrunner ./internal/trigger ./internal/bootstrap ./internal/engine -count=1
+env CGO_ENABLED=1 go test -race ./internal/storageio ./internal/inputcache -run 'TestDatasetCache|TestManagerContract' -count=3
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- 缓存容量维护、截面、周期屏障、补算、前端与正式发布属于 13—18
+
+### 提交
+
 （本提交）

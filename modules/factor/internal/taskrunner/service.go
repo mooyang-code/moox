@@ -719,6 +719,7 @@ func (s *Service) readChunkColumns(ctx context.Context, task Task, cursor time.T
 			SpaceID: task.SpaceID, SourceViewID: taskSourceView(task), SourceDataset: task.SourceDataset,
 			SubjectID: task.SubjectID, Freq: task.Freq, ExpectedActiveIndexID: task.ExpectedActiveIndexID,
 			ExpectedActiveIndexRevision: task.ExpectedActiveIndexRevision,
+			StorageSchemaID:             task.StorageSchemaID,
 		}
 		if task.TriggerType == "subject_ready" {
 			key.InputContractVersion = task.InputContractVersion

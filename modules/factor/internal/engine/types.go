@@ -40,6 +40,7 @@ type FactorTask struct {
 	LookbackPeriods             int
 	InputContractVersion        string
 	ConfigSnapshotID            string
+	StorageSchemaID             string
 	ExpectedSubjects            []string
 	AvailableSubjects           []string
 	MissingSubjects             []string

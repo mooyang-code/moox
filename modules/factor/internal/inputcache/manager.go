@@ -21,7 +21,7 @@ var (
 	ErrWritesPaused  = errors.New("cache writes are paused")
 )
 
-type SourceKey struct{ SpaceID, ViewID string }
+type SourceKey struct{ SpaceID, DatasetID string }
 
 type managedSource struct {
 	contract   string
@@ -102,8 +102,8 @@ func (m *Manager) Get(ctx context.Context, key SourceKey, contract string, colum
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(key.SpaceID) == "" || strings.TrimSpace(key.ViewID) == "" || strings.TrimSpace(contract) == "" {
-		return nil, errors.New("cache source and contract are required")
+	if strings.TrimSpace(key.SpaceID) == "" || strings.TrimSpace(key.DatasetID) == "" || strings.TrimSpace(contract) == "" {
+		return nil, errors.New("cache dataset and schema identity are required")
 	}
 	if !m.mu.TryLock() {
 		return nil, ErrCacheBusy

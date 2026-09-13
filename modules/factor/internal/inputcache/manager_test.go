@@ -56,7 +56,7 @@ func testManager(t *testing.T) *Manager {
 func TestManagerContractReplacementRejectsStaleHandles(t *testing.T) {
 	m := testManager(t)
 	ctx := context.Background()
-	key := SourceKey{SpaceID: "space/../../", ViewID: "view"}
+	key := SourceKey{SpaceID: "space/../../", DatasetID: "view"}
 	columns := []Column{{"id", "VARCHAR"}}
 	h, err := m.Get(ctx, key, "v1", columns, []string{"id"})
 	require.NoError(t, err)

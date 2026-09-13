@@ -1,4 +1,4 @@
-// Package inputcache owns the engine's disposable View input cache.
+// Package inputcache owns the engine's disposable Dataset input cache.
 package inputcache
 
 import (

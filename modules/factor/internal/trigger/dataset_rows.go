@@ -129,6 +129,7 @@ func (r *DatasetRowsRunner) HandleDatasetRows(ctx context.Context, eventID strin
 				SubjectID: ts.GetSubjectId(), Freq: ts.GetFreq(), PeriodTime: period.Unix(),
 				TriggerEventID: eventID, TriggeredAt: time.Now().UTC(), StartTime: period, EndTime: periodEnd,
 				ConfigSnapshotID: configSnapshotID,
+				StorageSchemaID:  r.storageSchemaID(ctx, datasetID),
 			}, *factor, r.factorsDir)
 			if buildErr != nil {
 				return buildErr
@@ -195,6 +196,17 @@ func (r *DatasetRowsRunner) configSnapshotID(ctx context.Context, datasetID stri
 		return ""
 	}
 	return strings.TrimSpace(def.ConfigSnapshotID)
+}
+
+func (r *DatasetRowsRunner) storageSchemaID(ctx context.Context, datasetID string) string {
+	if r.db == nil || r.db.MergedDatasets() == nil {
+		return ""
+	}
+	def, err := r.db.MergedDatasets().Get(ctx, datasetID)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(def.StorageSchemaID)
 }
 
 func selectDatasetBindings(bindings []domain.FactorBinding, spaceID, datasetID string) []domain.FactorBinding {

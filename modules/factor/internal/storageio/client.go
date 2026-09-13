@@ -50,6 +50,7 @@ type WindowKey struct {
 	Freq                        string
 	ExpectedActiveIndexID       string
 	ExpectedActiveIndexRevision uint64
+	StorageSchemaID             string
 }
 
 // ActiveViewRevision probes DataView once and returns the revision token of
@@ -90,12 +91,13 @@ func (c *Client) activeViewRevision(ctx context.Context, spaceID, viewID, subjec
 
 // Client wraps Storage Access RPCs.
 type Client struct {
-	access    AccessClient
-	primary   datasetPrimaryReader
-	view      ViewClient
-	manifests OutputManifestStore
-	auth      *commonpb.AuthInfo
-	viewAuth  *commonpb.AuthInfo
+	access       AccessClient
+	primary      datasetPrimaryReader
+	view         ViewClient
+	manifests    OutputManifestStore
+	auth         *commonpb.AuthInfo
+	viewAuth     *commonpb.AuthInfo
+	datasetCache *DatasetCache
 }
 
 func NewClientWithCredentials(accessTarget, targetNode string, credentials gatewayauth.Credentials, auth *commonpb.AuthInfo) *Client {
@@ -122,6 +124,15 @@ func (c *Client) WithViewAuth(auth *commonpb.AuthInfo) *Client {
 		return c
 	}
 	c.viewAuth = auth
+	return c
+}
+
+// WithDatasetCache attaches the disposable Dataset+schema cache used by Primary window reads.
+func (c *Client) WithDatasetCache(cache *DatasetCache) *Client {
+	if c == nil {
+		return c
+	}
+	c.datasetCache = cache
 	return c
 }
 
@@ -156,6 +167,15 @@ func (c *Client) ReadPeriodChunk(
 		lookbackPeriods = 1
 	}
 	if usesPrimaryDatasetWindow(key) {
+		if c.datasetCache != nil {
+			chunk, handled, err := c.datasetCache.ReadPeriodChunk(ctx, c, key, startTime, endTime, lookbackPeriods, columns)
+			if err != nil {
+				return nil, err
+			}
+			if handled {
+				return chunk, nil
+			}
+		}
 		chunk, err := c.ReadDatasetWindow(ctx, key, startTime, endTime, lookbackPeriods, columns)
 		if err != nil {
 			return nil, err
@@ -207,6 +227,26 @@ func (c *Client) ReadPeriodChunks(
 		return map[string]*RangeChunk{}, nil
 	}
 	if usesPrimaryDatasetWindow(key) {
+		if c.datasetCache != nil {
+			out := make(map[string]*RangeChunk, len(ids))
+			handledAll := true
+			for _, subjectID := range ids {
+				part := key
+				part.SubjectID = subjectID
+				chunk, handled, err := c.datasetCache.ReadPeriodChunk(ctx, c, part, startTime, endTime, lookbackPeriods, columns)
+				if err != nil {
+					return nil, err
+				}
+				if !handled {
+					handledAll = false
+					break
+				}
+				out[subjectID] = chunk
+			}
+			if handledAll {
+				return out, nil
+			}
+		}
 		return c.readPrimaryPeriodChunks(ctx, key, ids, startTime, endTime, lookbackPeriods, columns)
 	}
 	if key.InputContractVersion != "" {
