@@ -135,6 +135,31 @@ func TestBuildDatasetRowsUpsertedMessageCarriesWriteSource(t *testing.T) {
 	if payload.GetWriteSource() != "scf:market-fetch-1" {
 		t.Fatalf("write_source = %q", payload.GetWriteSource())
 	}
+	if payload.GetWriteKind() != "" {
+		t.Fatalf("generic upsert write_kind = %q", payload.GetWriteKind())
+	}
+}
+
+func TestBuildDatasetRowsUpsertedMessageCarriesWriteKind(t *testing.T) {
+	data, err := BuildDatasetRowsUpsertedMessageWithKind("node-1", "", WriteKindInputCommit, "crypto", "spot_kline", []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "spot_kline", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r1", Version: "v1"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = BindOutboxID(data, "node-1", "store", 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := &eventpb.EventMessage{}
+	if err := proto.Unmarshal(data, message); err != nil {
+		t.Fatal(err)
+	}
+	payload := &storagepb.DatasetRowsUpserted{}
+	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.GetWriteKind() != WriteKindInputCommit {
+		t.Fatalf("write_kind = %q", payload.GetWriteKind())
+	}
 }
 
 func TestPrepareOutboxPublicationIsByteStable(t *testing.T) {

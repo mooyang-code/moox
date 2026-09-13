@@ -184,6 +184,16 @@ func (s *Store) UpsertFieldsEventWithSource(ctx context.Context, rows []*pb.RowF
 }
 
 func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert, sourceEventID string, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) ([]*OutboxEntry, error) {
+	normalizedRows, err := s.normalizeWriteRows(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+	s.outboxMu.Lock()
+	defer s.outboxMu.Unlock()
+	return s.writeFieldsEventLocked(ctx, normalizedRows, sourceEventID, event, nil)
+}
+
+func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpsert) ([]*pb.RowFieldUpsert, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("pebble store is closed")
 	}
@@ -206,8 +216,10 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 		clone.Key = key
 		normalizedRows = append(normalizedRows, clone)
 	}
-	s.outboxMu.Lock()
-	defer s.outboxMu.Unlock()
+	return normalizedRows, nil
+}
+
+func (s *Store) writeFieldsEventLocked(ctx context.Context, normalizedRows []*pb.RowFieldUpsert, sourceEventID string, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error), decorate func(*cpebble.Batch, []*OutboxEntry) error) ([]*OutboxEntry, error) {
 	grouped := groupRowsByDataset(normalizedRows)
 	if sourceEventID != "" {
 		pending := make(map[datasetGroup][]*pb.RowFieldUpsert, len(grouped))
@@ -224,7 +236,7 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 		if len(grouped) == 0 {
 			return nil, nil
 		}
-		normalizedRows = make([]*pb.RowFieldUpsert, 0, len(rows))
+		normalizedRows = make([]*pb.RowFieldUpsert, 0, len(normalizedRows))
 		for _, groupRows := range grouped {
 			normalizedRows = append(normalizedRows, groupRows...)
 		}
@@ -333,6 +345,11 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 				}
 			}
 			nextID++
+		}
+	}
+	if decorate != nil {
+		if err := decorate(batch, entries); err != nil {
+			return nil, err
 		}
 	}
 	if err := batch.Commit(s.writeOptions); err != nil {

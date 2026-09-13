@@ -35,6 +35,15 @@ func (*cleanupNode) ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFiel
 func (*cleanupNode) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	return nil, nil
 }
+func (*cleanupNode) CommitInput(context.Context, *pb.CommitInputReq) (*pb.CommitInputRsp, error) {
+	return nil, nil
+}
+func (*cleanupNode) PatchFactor(context.Context, *pb.PatchFactorReq) (*pb.PatchFactorRsp, error) {
+	return nil, nil
+}
+func (*cleanupNode) LookupWriteReceipt(context.Context, *pb.LookupWriteReceiptReq) (*pb.LookupWriteReceiptRsp, error) {
+	return nil, nil
+}
 func (n *cleanupNode) CleanupExpiredBuckets(_ context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
 	n.request = req
 	return &pb.CleanupExpiredBucketsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
@@ -349,6 +358,15 @@ func (*resolverRuntime) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.
 }
 func (*resolverRuntime) CleanupExpiredBuckets(context.Context, *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
 	return &pb.CleanupExpiredBucketsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
+}
+func (*resolverRuntime) CommitInput(context.Context, *pb.CommitInputReq) (*pb.CommitInputRsp, error) {
+	return &pb.CommitInputRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
+}
+func (*resolverRuntime) PatchFactor(context.Context, *pb.PatchFactorReq) (*pb.PatchFactorRsp, error) {
+	return &pb.PatchFactorRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
+}
+func (*resolverRuntime) LookupWriteReceipt(context.Context, *pb.LookupWriteReceiptReq) (*pb.LookupWriteReceiptRsp, error) {
+	return &pb.LookupWriteReceiptRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
 
 func TestResolveDataNodeUsesActiveDatasetNodeAndTargetOnly(t *testing.T) {

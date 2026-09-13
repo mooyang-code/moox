@@ -1035,6 +1035,15 @@ type dataViewProxyAdapter struct {
 func (a *dataNodeProxyAdapter) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 	return a.proxy.UpsertFields(ctx, req)
 }
+func (a *dataNodeProxyAdapter) CommitInput(ctx context.Context, req *pb.CommitInputReq) (*pb.CommitInputRsp, error) {
+	return a.proxy.CommitInput(ctx, req)
+}
+func (a *dataNodeProxyAdapter) PatchFactor(ctx context.Context, req *pb.PatchFactorReq) (*pb.PatchFactorRsp, error) {
+	return a.proxy.PatchFactor(ctx, req)
+}
+func (a *dataNodeProxyAdapter) LookupWriteReceipt(ctx context.Context, req *pb.LookupWriteReceiptReq) (*pb.LookupWriteReceiptRsp, error) {
+	return a.proxy.LookupWriteReceipt(ctx, req)
+}
 func (a *dataNodeProxyAdapter) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
 	return a.proxy.ReadFields(ctx, req)
 }

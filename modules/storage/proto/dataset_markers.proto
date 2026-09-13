@@ -12,6 +12,13 @@ message CommittedPosition {
   uint64 sequence = 3;
 }
 
+message WriteReceipt {
+  string commit_id = 1;
+  CommittedPosition position = 2;
+  bool input_ready = 3;
+  string write_kind = 4;
+}
+
 // CollectorPeriodCompletedMarker is the Storage RPC form of a collector-period
 // completion decision. space_id is carried by the containing request.
 message CollectorPeriodCompletedMarker {

@@ -19,6 +19,9 @@ message DatasetRowsUpserted {
   uint64 source_sequence = 6;
   // Changes when the underlying DataNode store is recreated.
   string source_store_id = 7;
+  // Write category assigned by Storage from the authorized RPC, not from a
+  // client-supplied write_source string. Empty means a generic field upsert.
+  string write_kind = 8;
 }
 
 // CommittedPosition identifies one ordered write domain. Sequence is comparable

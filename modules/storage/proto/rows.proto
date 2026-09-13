@@ -58,6 +58,8 @@ message RowsUpserted {
   string dataset_id = 2;
   repeated RowFieldUpsert rows = 3;
   string write_source = 4;
+  // Write category assigned by Storage from the authorized RPC.
+  string write_kind = 5;
 }
 
 // Query key views are retained as read-only query contracts. DataNode writes

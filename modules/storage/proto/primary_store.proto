@@ -9,6 +9,43 @@ import "common.proto";
 import "rows.proto";
 import "dataset_markers.proto";
 
+message PrimaryCommitInputReq {
+  common.AuthInfo auth_info = 1;
+  string commit_id = 2;
+  repeated string required_fields = 3;
+  RowFieldUpsert row = 4;
+}
+
+message PrimaryCommitInputRsp {
+  common.RetInfo ret_info = 1;
+  WriteReceipt receipt = 2;
+}
+
+message PrimaryPatchFactorReq {
+  common.AuthInfo auth_info = 1;
+  string commit_id = 2;
+  string binding_version = 3;
+  repeated string owned_fields = 4;
+  RowFieldUpsert row = 5;
+}
+
+message PrimaryPatchFactorRsp {
+  common.RetInfo ret_info = 1;
+  WriteReceipt receipt = 2;
+}
+
+message PrimaryLookupWriteReceiptReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  string commit_id = 4;
+}
+
+message PrimaryLookupWriteReceiptRsp {
+  common.RetInfo ret_info = 1;
+  WriteReceipt receipt = 2;
+}
+
 message PrimaryUpsertFieldsReq {
   common.AuthInfo auth_info = 1;
   repeated RowFieldUpsert rows = 2;
@@ -113,6 +150,9 @@ message WaitViewSyncPointRsp {
 service PrimaryStore {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
   rpc UpsertFields(PrimaryUpsertFieldsReq) returns (PrimaryUpsertFieldsRsp);
+  rpc CommitInput(PrimaryCommitInputReq) returns (PrimaryCommitInputRsp);
+  rpc PatchFactor(PrimaryPatchFactorReq) returns (PrimaryPatchFactorRsp);
+  rpc LookupWriteReceipt(PrimaryLookupWriteReceiptReq) returns (PrimaryLookupWriteReceiptRsp);
   rpc ReadFields(PrimaryReadFieldsReq) returns (PrimaryReadFieldsRsp);
   rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
   rpc ReadRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);

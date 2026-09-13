@@ -168,6 +168,14 @@ func TestMooxSkillWriteMethodsAreDeniedBeforeDataNodeResolution(t *testing.T) {
 			})
 			return rsp.GetRetInfo(), callErr
 		},
+		"CommitInput": func() (*pb.RetInfo, error) {
+			rsp, callErr := svc.CommitInput(context.Background(), &pb.PrimaryCommitInputReq{AuthInfo: auth, CommitId: "commit-1", RequiredFields: []string{"value"}, Row: row})
+			return rsp.GetRetInfo(), callErr
+		},
+		"PatchFactor": func() (*pb.RetInfo, error) {
+			rsp, callErr := svc.PatchFactor(context.Background(), &pb.PrimaryPatchFactorReq{AuthInfo: auth, CommitId: "patch-1", BindingVersion: "bind-1", OwnedFields: []string{"value"}, Row: row})
+			return rsp.GetRetInfo(), callErr
+		},
 	}
 	for name, call := range tests {
 		t.Run(name, func(t *testing.T) {

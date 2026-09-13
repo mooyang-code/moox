@@ -22,6 +22,12 @@ type PrimaryStoreService interface {
 	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
 	UpsertFields(ctx context.Context, req *PrimaryUpsertFieldsReq) (*PrimaryUpsertFieldsRsp, error)
 
+	CommitInput(ctx context.Context, req *PrimaryCommitInputReq) (*PrimaryCommitInputRsp, error)
+
+	PatchFactor(ctx context.Context, req *PrimaryPatchFactorReq) (*PrimaryPatchFactorRsp, error)
+
+	LookupWriteReceipt(ctx context.Context, req *PrimaryLookupWriteReceiptReq) (*PrimaryLookupWriteReceiptRsp, error)
+
 	ReadFields(ctx context.Context, req *PrimaryReadFieldsReq) (*PrimaryReadFieldsRsp, error)
 
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
@@ -49,6 +55,60 @@ func PrimaryStoreService_UpsertFields_Handler(svr interface{}, ctx context.Conte
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(PrimaryStoreService).UpsertFields(ctx, reqbody.(*PrimaryUpsertFieldsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_CommitInput_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PrimaryCommitInputReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).CommitInput(ctx, reqbody.(*PrimaryCommitInputReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_PatchFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PrimaryPatchFactorReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).PatchFactor(ctx, reqbody.(*PrimaryPatchFactorReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_LookupWriteReceipt_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PrimaryLookupWriteReceiptReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).LookupWriteReceipt(ctx, reqbody.(*PrimaryLookupWriteReceiptReq))
 	}
 
 	var rsp interface{}
@@ -231,6 +291,18 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_UpsertFields_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.PrimaryStore/CommitInput",
+			Func: PrimaryStoreService_CommitInput_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/PatchFactor",
+			Func: PrimaryStoreService_PatchFactor_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/LookupWriteReceipt",
+			Func: PrimaryStoreService_LookupWriteReceipt_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.PrimaryStore/ReadFields",
 			Func: PrimaryStoreService_ReadFields_Handler,
 		},
@@ -284,6 +356,15 @@ type UnimplementedPrimaryStore struct{}
 func (s *UnimplementedPrimaryStore) UpsertFields(ctx context.Context, req *PrimaryUpsertFieldsReq) (*PrimaryUpsertFieldsRsp, error) {
 	return nil, errors.New("rpc UpsertFields of service PrimaryStore is not implemented")
 }
+func (s *UnimplementedPrimaryStore) CommitInput(ctx context.Context, req *PrimaryCommitInputReq) (*PrimaryCommitInputRsp, error) {
+	return nil, errors.New("rpc CommitInput of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) PatchFactor(ctx context.Context, req *PrimaryPatchFactorReq) (*PrimaryPatchFactorRsp, error) {
+	return nil, errors.New("rpc PatchFactor of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) LookupWriteReceipt(ctx context.Context, req *PrimaryLookupWriteReceiptReq) (*PrimaryLookupWriteReceiptRsp, error) {
+	return nil, errors.New("rpc LookupWriteReceipt of service PrimaryStore is not implemented")
+}
 func (s *UnimplementedPrimaryStore) ReadFields(ctx context.Context, req *PrimaryReadFieldsReq) (*PrimaryReadFieldsRsp, error) {
 	return nil, errors.New("rpc ReadFields of service PrimaryStore is not implemented")
 }
@@ -322,6 +403,12 @@ func (s *UnimplementedPrimaryStore) WaitViewSyncPoint(ctx context.Context, req *
 type PrimaryStoreClientProxy interface {
 	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
 	UpsertFields(ctx context.Context, req *PrimaryUpsertFieldsReq, opts ...client.Option) (rsp *PrimaryUpsertFieldsRsp, err error)
+
+	CommitInput(ctx context.Context, req *PrimaryCommitInputReq, opts ...client.Option) (rsp *PrimaryCommitInputRsp, err error)
+
+	PatchFactor(ctx context.Context, req *PrimaryPatchFactorReq, opts ...client.Option) (rsp *PrimaryPatchFactorRsp, err error)
+
+	LookupWriteReceipt(ctx context.Context, req *PrimaryLookupWriteReceiptReq, opts ...client.Option) (rsp *PrimaryLookupWriteReceiptRsp, err error)
 
 	ReadFields(ctx context.Context, req *PrimaryReadFieldsReq, opts ...client.Option) (rsp *PrimaryReadFieldsRsp, err error)
 
@@ -365,6 +452,66 @@ func (c *PrimaryStoreClientProxyImpl) UpsertFields(ctx context.Context, req *Pri
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &PrimaryUpsertFieldsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) CommitInput(ctx context.Context, req *PrimaryCommitInputReq, opts ...client.Option) (*PrimaryCommitInputRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/CommitInput")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("CommitInput")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PrimaryCommitInputRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) PatchFactor(ctx context.Context, req *PrimaryPatchFactorReq, opts ...client.Option) (*PrimaryPatchFactorRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/PatchFactor")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("PatchFactor")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PrimaryPatchFactorRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) LookupWriteReceipt(ctx context.Context, req *PrimaryLookupWriteReceiptReq, opts ...client.Option) (*PrimaryLookupWriteReceiptRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/LookupWriteReceipt")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("LookupWriteReceipt")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PrimaryLookupWriteReceiptRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

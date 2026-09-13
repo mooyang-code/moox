@@ -25,3 +25,9 @@ type ConflictError struct{ EventID string }
 func (e ConflictError) Error() string {
 	return fmt.Sprintf("dataset marker event_id %q already exists with a different payload", e.EventID)
 }
+
+type CommitConflictError struct{ CommitID string }
+
+func (e CommitConflictError) Error() string {
+	return fmt.Sprintf("commit_id %q already exists with a different payload", e.CommitID)
+}

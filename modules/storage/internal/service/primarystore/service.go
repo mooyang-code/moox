@@ -140,6 +140,9 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 	if req.GetAuthInfo().GetAppId() == "scf-market-canary" {
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("read-only primary credential"))}, nil
 	}
+	if err := rejectUnauthorizedUpsertSemantics(req.GetRows(), req.GetWriteSource()); err != nil {
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	rows := normalizeStockCNSeriesTags(req.GetRows())
 	ctx = s.requestContext(ctx)
 	if err := validateDatasetWriteOwner(ctx, req.GetAuthInfo(), rows); err != nil {

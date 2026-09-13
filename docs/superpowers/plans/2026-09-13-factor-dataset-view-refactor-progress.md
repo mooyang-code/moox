@@ -80,10 +80,46 @@ pnpm test
 
 ### 尚未解决的依赖
 
-- 完整输入提交与因子列补丁属于任务 03
 - ViewDataReady 多分区 applied 屏障属于任务 04
 - 主体 ID 去尾缀、Merge、引擎隔离与正式发布属于 05—18
 
 ### 提交
 
-见本任务提交号。
+`bd680dee`
+
+## 任务 03：基础输入提交和字段写权限
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 18。
+
+### 红灯证据
+
+`modules/storage` 中 `TestInputCommit` 最初失败于 `input commit is not implemented`。失败来自目标行为缺失。
+
+### 实现
+
+- 新增受权限约束的 `CommitInput` / `PatchFactor` / `LookupWriteReceipt` RPC
+- 完整基础字段与 `moox.input_ready` 原子提交；同 `commit_id` 幂等，冲突重试不改已提交基础内容
+- 因子补丁只能写绑定拥有列，并发补丁互不覆盖，也不能清除 input_ready
+- 变更事件 `write_kind` 由授权 RPC 推导，普通客户端伪造 `write_source=merge|factor` 或系统属性不能越权
+- 成功写入后可按 `commit_id` 查询原收据
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/... -run 'TestInputCommit' -count=1
+env CGO_ENABLED=1 go test -race ./internal/service/datanode/pebble ./internal/service/primarystore ./internal/eventmapper ./internal/service/datanode -count=3
+env CGO_ENABLED=1 go test ./cmd/server ./internal/eventmapper ./test ./internal/service/datanode/pebble ./internal/service/primarystore -count=1
+go test ./... -count=1   # packages/events
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- ViewDataReady 多分区 applied 屏障属于任务 04
+- Collector 周期事件、主体 ID 去尾缀属于任务 05
+- Merge、引擎隔离、本机部署与真实 E2E 属于 06—18
+
+### 提交
+
+见本任务独立提交。

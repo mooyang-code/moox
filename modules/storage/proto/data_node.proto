@@ -9,6 +9,44 @@ import "common.proto";
 import "rows.proto";
 import "dataset_markers.proto";
 
+message CommitInputReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  string commit_id = 3;
+  repeated string required_fields = 4;
+  RowFieldUpsert row = 5;
+}
+
+message CommitInputRsp {
+  common.RetInfo ret_info = 1;
+  WriteReceipt receipt = 2;
+}
+
+message PatchFactorReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  string commit_id = 3;
+  string binding_version = 4;
+  repeated string owned_fields = 5;
+  RowFieldUpsert row = 6;
+}
+
+message PatchFactorRsp {
+  common.RetInfo ret_info = 1;
+  WriteReceipt receipt = 2;
+}
+
+message LookupWriteReceiptReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  string commit_id = 3;
+}
+
+message LookupWriteReceiptRsp {
+  common.RetInfo ret_info = 1;
+  WriteReceipt receipt = 2;
+}
+
 message UpsertFieldsReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
@@ -129,6 +167,9 @@ message GetFactorPeriodComputedMarkerRsp {
 service DataNodeRuntime {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
   rpc UpsertFields(UpsertFieldsReq) returns (UpsertFieldsRsp);
+  rpc CommitInput(CommitInputReq) returns (CommitInputRsp);
+  rpc PatchFactor(PatchFactorReq) returns (PatchFactorRsp);
+  rpc LookupWriteReceipt(LookupWriteReceiptReq) returns (LookupWriteReceiptRsp);
 	rpc ReadFields(ReadFieldsReq) returns (ReadFieldsRsp);
 	rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
 	rpc CleanupExpiredBuckets(CleanupExpiredBucketsReq) returns (CleanupExpiredBucketsRsp);
