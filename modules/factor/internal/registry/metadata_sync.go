@@ -85,9 +85,9 @@ func (s *MetadataSync) SourceViewDatasetIDs(ctx context.Context, spaceID, viewID
 	if err != nil {
 		return nil, err
 	}
-	ids := append([]string(nil), view.GetDatasetIds()...)
-	if view.GetPrimaryDatasetId() != "" {
-		ids = append(ids, view.GetPrimaryDatasetId())
+	ids := []string{}
+	if id := strings.TrimSpace(view.GetDatasetId()); id != "" {
+		ids = []string{id}
 	}
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
@@ -116,7 +116,7 @@ func (s *MetadataSync) ResolveManagedResultIDs(ctx context.Context, spaceID, vie
 	if err != nil {
 		return "", "", err
 	}
-	sourceDatasetID := strings.TrimSpace(view.GetPrimaryDatasetId())
+	sourceDatasetID := strings.TrimSpace(view.GetDatasetId())
 	if sourceDatasetID == "" {
 		return "", "", fmt.Errorf("source View %s/%s has no primary Dataset", spaceID, viewID)
 	}
@@ -158,14 +158,14 @@ func (s *MetadataSync) SyncBindingViews(ctx context.Context, binding domain.Fact
 	if err != nil {
 		return false, err
 	}
-	source, err := s.getDataset(ctx, binding.SpaceID, sourceView.GetPrimaryDatasetId())
+	source, err := s.getDataset(ctx, binding.SpaceID, sourceView.GetDatasetId())
 	if err != nil {
 		return false, err
 	}
 	if err := s.ensureManagedResultDataset(ctx, binding, sourceView, source); err != nil {
 		return false, err
 	}
-	if err := s.copyDatasetSubjects(ctx, binding.SpaceID, sourceView.GetPrimaryDatasetId(), binding.ResultDatasetID); err != nil {
+	if err := s.copyDatasetSubjects(ctx, binding.SpaceID, sourceView.GetDatasetId(), binding.ResultDatasetID); err != nil {
 		return false, err
 	}
 	for _, factor := range factors {
@@ -770,7 +770,7 @@ func (s *MetadataSync) ensureManagedResultView(ctx context.Context, binding doma
 		rsp, createErr := client.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: s.auth, View: &storagepb.View{
 			SpaceId: binding.SpaceID, ViewId: binding.ResultViewID, Name: factorResultViewDisplayName(),
 			Description:      "Factor result View for " + binding.SourceViewID,
-			PrimaryDatasetId: binding.ResultDatasetID, DatasetIds: []string{binding.ResultDatasetID},
+			DatasetId: binding.ResultDatasetID,
 			FilterJson: fmt.Sprintf(`{"freq":%q}`, binding.Freq), KeepDuration: keepDuration, Status: "active",
 			Attributes: factorResultViewAttributes(binding.SourceViewID, binding.ResultViewID, binding.Freq),
 		}})
@@ -782,7 +782,7 @@ func (s *MetadataSync) ensureManagedResultView(ctx context.Context, binding doma
 		}
 		view = rsp.GetView()
 	}
-	if view == nil || view.GetPrimaryDatasetId() != binding.ResultDatasetID || len(view.GetDatasetIds()) != 1 || view.GetDatasetIds()[0] != binding.ResultDatasetID {
+	if view == nil || view.GetDatasetId() != binding.ResultDatasetID {
 		return fmt.Errorf("result view %s/%s has incompatible dataset scope", binding.SpaceID, binding.ResultViewID)
 	}
 	if strings.TrimSpace(view.GetKeepDuration()) != keepDuration {

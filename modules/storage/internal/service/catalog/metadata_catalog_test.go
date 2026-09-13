@@ -148,7 +148,7 @@ func TestCheckDatasetActivationIsReadOnly(t *testing.T) {
 
 func TestRequestViewRebuildReturnsImmediatelyAndPreservesActiveView(t *testing.T) {
 	store := &manualRebuildMetadataStore{view: &pb.View{
-		SpaceId: "space-a", ViewId: "view-a", Name: "视图", PrimaryDatasetId: "dataset-a",
+		SpaceId: "space-a", ViewId: "view-a", Name: "视图", DatasetId: "dataset-a",
 		Status:        "active",
 		ActiveIndexId: "index-a", ActiveViewRevision: 4, DesiredViewRevision: 4,
 	}}
@@ -426,7 +426,7 @@ func TestCreateAndUpdateViewRejectEmbeddedReservedColumns(t *testing.T) {
 			SpaceId:          "space",
 			ViewId:           "view_test",
 			Name:             "测试视图",
-			PrimaryDatasetId: "dataset",
+			DatasetId: "dataset",
 			Columns: []*pb.ViewColumn{
 				nil,
 				{ColumnName: "Series_Tag", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION},

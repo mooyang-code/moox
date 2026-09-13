@@ -112,7 +112,7 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 			}
 		}
 		waiting := 0
-		for _, datasetID := range view.GetDatasetIds() {
+		for _, datasetID := range viewDatasetIDs(view) {
 			if _, exists := seenDatasets[datasetID]; !exists {
 				waiting++
 			}
@@ -317,24 +317,27 @@ func (s *Service) viewsForDataset(spaceID, datasetID string, includeBuilding boo
 			datasetIDs = append([]string(nil), runtime.nextDatasetIDs...)
 			primaryDatasetID = runtime.nextPrimaryDatasetID
 			if len(datasetIDs) == 0 {
-				datasetIDs = append([]string(nil), candidate.view.GetDatasetIds()...)
+				datasetIDs = viewDatasetIDs(candidate.view)
 			}
 		}
 		if !runtime.activeDatasetSet && runtime.active != "" {
-			datasetIDs = append([]string(nil), candidate.view.GetDatasetIds()...)
-			primaryDatasetID = candidate.view.GetPrimaryDatasetId()
+			datasetIDs = viewDatasetIDs(candidate.view)
+			primaryDatasetID = candidate.view.GetDatasetId()
 		}
 		if primaryDatasetID == "" {
-			primaryDatasetID = candidate.view.GetPrimaryDatasetId()
+			primaryDatasetID = candidate.view.GetDatasetId()
 		}
 		runtime.mu.Unlock()
-		if active && containsString(datasetIDs, datasetID) {
+		contractID := strings.TrimSpace(primaryDatasetID)
+		if contractID == "" && len(datasetIDs) > 0 {
+			contractID = strings.TrimSpace(datasetIDs[0])
+		}
+		if active && contractID == datasetID {
 			view := candidate.view
 			// Carry the contract of the index that will receive this event. The
 			// catalog copy may describe a newer desired revision during A/B
 			// rebuild and must not change source-ready aggregation early.
-			view.DatasetIds = datasetIDs
-			view.PrimaryDatasetId = primaryDatasetID
+			view.DatasetId = contractID
 			if activeID != "" {
 				view.ActiveIndexId = activeID
 			}
@@ -355,7 +358,7 @@ func viewDataReadyPayload(view *pb.View, completion periodCompletionInput, state
 	status := "complete"
 	var failed []string
 	readyAt := cloneTimestamp(message.GetOccurredAt())
-	for _, datasetID := range view.GetDatasetIds() {
+	for _, datasetID := range viewDatasetIDs(view) {
 		state := byDataset[datasetID]
 		if state == nil {
 			return nil, false

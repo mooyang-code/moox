@@ -107,6 +107,7 @@ type viewRuntime struct {
 
 const (
 	activeDatasetIDsAttr     = "moox.active_dataset_ids"
+	activeDatasetIDAttr      = "moox.active_dataset_id"
 	activePrimaryDatasetAttr = "moox.active_primary_dataset_id"
 )
 
@@ -121,15 +122,77 @@ func cloneViewAttributes(attrs map[string]string) map[string]string {
 	return clone
 }
 
-func persistedActiveDatasetIDs(view *pb.View) []string {
+func persistedActiveDatasetID(view *pb.View) string {
 	if view == nil {
-		return nil
+		return ""
 	}
-	var ids []string
+	attrs := view.GetAttributes()
+	if id := strings.TrimSpace(attrs[activeDatasetIDAttr]); id != "" {
+		return id
+	}
+	if id := strings.TrimSpace(attrs[activePrimaryDatasetAttr]); id != "" {
+		return id
+	}
+	if raw := strings.TrimSpace(attrs[activeDatasetIDsAttr]); raw != "" {
+		var ids []string
+		if err := json.Unmarshal([]byte(raw), &ids); err == nil {
+			for _, id := range ids {
+				if id = strings.TrimSpace(id); id != "" {
+					return id
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func viewDatasetIDs(view *pb.View) []string {
+	if id := strings.TrimSpace(view.GetDatasetId()); id != "" {
+		return []string{id}
+	}
+	if id := persistedActiveDatasetID(view); id != "" {
+		return []string{id}
+	}
+	return nil
+}
+
+func (s *Service) attachOwnedDatasetMappingLocked(spaceID, datasetID, indexID string) {
+	spaceID = strings.TrimSpace(spaceID)
+	datasetID = strings.TrimSpace(datasetID)
+	indexID = strings.TrimSpace(indexID)
+	if spaceID == "" || datasetID == "" || indexID == "" {
+		return
+	}
+	ref := datasetRef{spaceID: spaceID, datasetID: datasetID}
+	if s.byData[ref] == nil {
+		s.byData[ref] = make(map[string]struct{})
+	}
+	s.byData[ref][indexID] = struct{}{}
+}
+
+func validateAttachedSingleDataset(view *pb.View) error {
+	if view == nil {
+		return errors.New("view is required")
+	}
+	datasetID := strings.TrimSpace(view.GetDatasetId())
+	if datasetID == "" {
+		return errors.New("view dataset_id is required")
+	}
+	if persisted := persistedActiveDatasetID(view); persisted != "" && persisted != datasetID {
+		return errors.New("view must reference exactly one dataset_id")
+	}
 	if raw := strings.TrimSpace(view.GetAttributes()[activeDatasetIDsAttr]); raw != "" {
-		_ = json.Unmarshal([]byte(raw), &ids)
+		var ids []string
+		if err := json.Unmarshal([]byte(raw), &ids); err == nil {
+			for _, id := range ids {
+				id = strings.TrimSpace(id)
+				if id != "" && id != datasetID {
+					return errors.New("view must reference exactly one dataset_id")
+				}
+			}
+		}
 	}
-	return ids
+	return nil
 }
 
 func New(root, authSecret string) (*Service, error) {
@@ -364,7 +427,7 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	if engine == nil {
 		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("view engine %q is unavailable", engineName))}, nil
 	}
-	schema := viewindex.ViewIndexSchema{SpaceID: sch.GetSpaceId(), ViewID: sch.GetViewId(), PrimaryDatasetID: sch.GetPrimaryDatasetId(), ViewVersion: sch.GetViewVersion(), Engine: engineName, Columns: sch.GetColumns(), SchemaHash: sch.GetViewSchemaHash()}
+	schema := viewindex.ViewIndexSchema{SpaceID: sch.GetSpaceId(), ViewID: sch.GetViewId(), PrimaryDatasetID: sch.GetDatasetId(), ViewVersion: sch.GetViewVersion(), Engine: engineName, Columns: sch.GetColumns(), SchemaHash: sch.GetViewSchemaHash()}
 	release, err := s.indexWriteGate(req.GetIndexId()).lock(ctx)
 	if err != nil {
 		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
@@ -417,26 +480,6 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	s.indexEngine[req.GetIndexId()] = engineName
 	s.schemas[req.GetIndexId()] = schema
 	if refreshCatalog {
-		datasetIDs := append([]string(nil), sch.GetDatasetIds()...)
-		seenDatasets := make(map[string]struct{})
-		for _, datasetID := range datasetIDs {
-			if datasetID != "" {
-				seenDatasets[datasetID] = struct{}{}
-			}
-		}
-		for _, column := range sch.GetColumns() {
-			if datasetID := viewColumnDataset(column); datasetID != "" {
-				if _, seen := seenDatasets[datasetID]; !seen {
-					datasetIDs = append(datasetIDs, datasetID)
-					seenDatasets[datasetID] = struct{}{}
-				}
-			}
-		}
-		if schema.PrimaryDatasetID != "" {
-			if _, seen := seenDatasets[schema.PrimaryDatasetID]; !seen {
-				datasetIDs = append(datasetIDs, schema.PrimaryDatasetID)
-			}
-		}
 		columns := make([]*pb.ViewColumn, 0, len(sch.GetColumns()))
 		for _, column := range sch.GetColumns() {
 			if column != nil {
@@ -451,8 +494,7 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 		}
 		catalogView.SpaceId = schema.SpaceID
 		catalogView.ViewId = schema.ViewID
-		catalogView.PrimaryDatasetId = schema.PrimaryDatasetID
-		catalogView.DatasetIds = datasetIDs
+		catalogView.DatasetId = schema.PrimaryDatasetID
 		catalogView.Columns = columns
 		if catalogView.Engine == "" {
 			catalogView.Engine = engineName
@@ -461,26 +503,17 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	}
 	if runtime.active == "" {
 		runtime.next = req.GetIndexId()
-		runtime.nextDatasetIDs = append([]string(nil), sch.GetDatasetIds()...)
-		runtime.nextPrimaryDatasetID = sch.GetPrimaryDatasetId()
+		runtime.nextDatasetIDs = []string{strings.TrimSpace(sch.GetDatasetId())}
+		runtime.nextPrimaryDatasetID = sch.GetDatasetId()
 		runtime.status = "building"
 	} else if runtime.active != req.GetIndexId() {
 		runtime.next = req.GetIndexId()
-		runtime.nextDatasetIDs = append([]string(nil), sch.GetDatasetIds()...)
-		runtime.nextPrimaryDatasetID = sch.GetPrimaryDatasetId()
+		runtime.nextDatasetIDs = []string{strings.TrimSpace(sch.GetDatasetId())}
+		runtime.nextPrimaryDatasetID = sch.GetDatasetId()
 		runtime.status = "building"
 	}
 	s.indexView[req.GetIndexId()] = viewKey
-	for _, column := range sch.GetColumns() {
-		dataset := viewColumnDataset(column)
-		if dataset != "" {
-			ref := datasetRef{spaceID: sch.GetSpaceId(), datasetID: dataset}
-			if s.byData[ref] == nil {
-				s.byData[ref] = make(map[string]struct{})
-			}
-			s.byData[ref][req.GetIndexId()] = struct{}{}
-		}
-	}
+	s.attachOwnedDatasetMappingLocked(sch.GetSpaceId(), sch.GetDatasetId(), req.GetIndexId())
 	s.mu.Unlock()
 	return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Success("success")}, nil
 }
@@ -727,15 +760,8 @@ func (s *Service) datasetHasActiveView(ctx context.Context, spaceID, datasetID s
 			if view == nil || view.GetSpaceId() != spaceID {
 				continue
 			}
-			for _, projected := range view.GetDatasetIds() {
-				if projected == datasetID {
-					return true, nil
-				}
-			}
-			for _, column := range view.GetColumns() {
-				if viewColumnDataset(column) == datasetID {
-					return true, nil
-				}
+			if strings.TrimSpace(view.GetDatasetId()) == datasetID {
+				return true, nil
 			}
 		}
 		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {

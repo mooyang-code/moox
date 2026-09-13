@@ -59,10 +59,13 @@ func (s *MetadataSync) ValidateEnabledBinding(ctx context.Context, binding domai
 	if err := validateViewFrequency(view.GetFilterJson(), binding.Freq); err != nil {
 		return fmt.Errorf("source view %s/%s: %w", binding.SpaceID, binding.SourceViewID, err)
 	}
-	if strings.TrimSpace(view.GetPrimaryDatasetId()) == "" {
-		return fmt.Errorf("source view %s/%s primary_dataset_id is required", binding.SpaceID, binding.SourceViewID)
+	if strings.TrimSpace(view.GetDatasetId()) == "" {
+		return fmt.Errorf("source view %s/%s dataset_id is required", binding.SpaceID, binding.SourceViewID)
 	}
-	for _, datasetID := range view.GetDatasetIds() {
+	for _, datasetID := range []string{strings.TrimSpace(view.GetDatasetId())} {
+		if datasetID == "" {
+			continue
+		}
 		dataset, loadErr := s.getDataset(ctx, binding.SpaceID, datasetID)
 		if loadErr != nil {
 			return fmt.Errorf("load source view dataset %s/%s: %w", binding.SpaceID, datasetID, loadErr)
@@ -172,7 +175,7 @@ func validateLegacyActiveViewProjection(ctx context.Context, client bindingContr
 			return retInfoError("ListViews", rsp.GetRetInfo())
 		}
 		for _, view := range rsp.GetViews() {
-			if view.GetStatus() != "active" || strings.TrimSpace(view.GetActiveIndexId()) == "" || view.GetPrimaryDatasetId() != binding.SourceDataset {
+			if view.GetStatus() != "active" || strings.TrimSpace(view.GetActiveIndexId()) == "" || view.GetDatasetId() != binding.SourceDataset {
 				continue
 			}
 			available := map[string]struct{}{}

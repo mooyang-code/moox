@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '10')
+VALUES ('schema_version', '11')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -53,8 +53,7 @@ CREATE TABLE IF NOT EXISTS t_views (
     c_view_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
     c_description TEXT NOT NULL DEFAULT '',
-    c_primary_dataset_id TEXT NOT NULL,
-    c_dataset_ids_json TEXT NOT NULL DEFAULT '[]',
+    c_dataset_id TEXT NOT NULL,
     c_grain_keys_json TEXT NOT NULL DEFAULT '[]',
     c_filter_json TEXT NOT NULL DEFAULT '{}',
     c_engine TEXT NOT NULL DEFAULT 'duckdb',
@@ -74,13 +73,13 @@ CREATE TABLE IF NOT EXISTS t_views (
     CHECK (c_engine IN ('duckdb', 'bleve')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (c_space_id, c_primary_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE RESTRICT ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_view_id),
     UNIQUE (c_space_id, c_name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_views_space ON t_views (c_space_id, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_views_primary_dataset ON t_views (c_space_id, c_primary_dataset_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_views_dataset ON t_views (c_space_id, c_dataset_id, c_status);
 CREATE INDEX IF NOT EXISTS idx_t_views_revision_pending ON t_views (c_space_id, c_status, c_desired_view_revision, c_active_view_revision);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_views_mtime

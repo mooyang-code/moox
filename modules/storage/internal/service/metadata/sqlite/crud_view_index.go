@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -41,17 +40,14 @@ func mergeViewIndexState(existing *pb.View, item *pb.View, shapeChanged bool) {
 		if item.Attributes == nil {
 			item.Attributes = make(map[string]string)
 		}
-		if value := existing.GetAttributes()["moox.active_dataset_ids"]; value != "" {
-			item.Attributes["moox.active_dataset_ids"] = value
-		} else if raw, marshalErr := json.Marshal(existing.GetDatasetIds()); marshalErr == nil {
-			// Legacy metadata has no active DatasetIds column. Before the
-			// first post-upgrade desired update, the persisted desired set is
-			// the only authoritative representation of the old active shape.
-			item.Attributes["moox.active_dataset_ids"] = string(raw)
+		if value := existing.GetAttributes()["moox.active_dataset_id"]; value != "" {
+			item.Attributes["moox.active_dataset_id"] = value
+		} else if value := existing.GetDatasetId(); value != "" {
+			item.Attributes["moox.active_dataset_id"] = value
 		}
 		if value := existing.GetAttributes()["moox.active_primary_dataset_id"]; value != "" {
 			item.Attributes["moox.active_primary_dataset_id"] = value
-		} else if value := existing.GetPrimaryDatasetId(); value != "" {
+		} else if value := existing.GetDatasetId(); value != "" {
 			item.Attributes["moox.active_primary_dataset_id"] = value
 		}
 		if value := existing.GetAttributes()["moox.columns_explicit"]; value != "" && item.Attributes["moox.columns_explicit"] == "" {
@@ -68,8 +64,7 @@ func mergeViewIndexState(existing *pb.View, item *pb.View, shapeChanged bool) {
 }
 
 func viewIndexShapeChanged(existing *pb.View, next *pb.View) bool {
-	return existing.GetPrimaryDatasetId() != next.GetPrimaryDatasetId() ||
-		!slices.Equal(existing.GetDatasetIds(), next.GetDatasetIds()) ||
+	return existing.GetDatasetId() != next.GetDatasetId() ||
 		!slices.Equal(existing.GetGrainKeys(), next.GetGrainKeys()) ||
 		existing.GetFilterJson() != next.GetFilterJson() ||
 		existing.GetEngine() != next.GetEngine()
@@ -215,17 +210,13 @@ func (s *Store) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndex
 	view.ActiveColumns = cloneViewColumns(columns)
 	view.ActiveSlot = string(ref.Slot)
 	view.ActiveViewSchemaHash = coreviewindex.HashViewIndexSchema(coreviewindex.ViewIndexSchema{
-		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: view.GetPrimaryDatasetId(), ViewVersion: view.GetActiveViewRevision(), Engine: view.GetEngine(), Columns: columns,
+		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: view.GetDatasetId(), ViewVersion: view.GetActiveViewRevision(), Engine: view.GetEngine(), Columns: columns,
 	})
 	if view.Attributes == nil {
 		view.Attributes = make(map[string]string)
 	}
-	activeDatasetIDs, err := json.Marshal(view.GetDatasetIds())
-	if err != nil {
-		return nil, err
-	}
-	view.Attributes["moox.active_dataset_ids"] = string(activeDatasetIDs)
-	view.Attributes["moox.active_primary_dataset_id"] = view.GetPrimaryDatasetId()
+	view.Attributes["moox.active_dataset_id"] = view.GetDatasetId()
+	view.Attributes["moox.active_primary_dataset_id"] = view.GetDatasetId()
 	view.Columns = nil
 	view.IndexBuild = nil
 	raw, err := marshal(view)

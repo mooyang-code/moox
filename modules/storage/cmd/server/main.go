@@ -121,7 +121,7 @@ func runPrimaryRole() error {
 			return nil, "", err
 		}
 		for _, view := range views {
-			if view != nil && view.GetPrimaryDatasetId() == datasetID && view.GetActiveIndexId() != "" {
+			if view != nil && view.GetDatasetId() == datasetID && view.GetActiveIndexId() != "" {
 				return viewProxy, view.GetViewId(), nil
 			}
 		}
@@ -649,9 +649,9 @@ func validateStorageViewConsumerPartitions(ctx context.Context, metadataProxy pb
 			if view == nil {
 				continue
 			}
-			ids := append([]string{}, view.GetDatasetIds()...)
-			if view.GetPrimaryDatasetId() != "" {
-				ids = append(ids, view.GetPrimaryDatasetId())
+			ids := []string{}
+			if view.GetDatasetId() != "" {
+				ids = []string{view.GetDatasetId()}
 			}
 			for _, column := range view.GetColumns() {
 				origin := strings.TrimSpace(column.GetOriginId())

@@ -204,7 +204,7 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 	for _, item := range seed.Views {
 		if _, err := store.UpsertView(ctx, &pb.View{
 			SpaceId: item.SpaceID, ViewId: item.ViewID, Name: item.Name, Description: item.Description,
-			PrimaryDatasetId: item.PrimaryDatasetID, DatasetIds: item.DatasetIDs, GrainKeys: item.GrainKeys,
+			DatasetId: item.PrimaryDatasetID, GrainKeys: item.GrainKeys,
 			FilterJson: item.FilterJSON, Engine: item.Engine, KeepDuration: item.KeepDuration,
 			Status: item.Status,
 		}); err != nil {
@@ -520,8 +520,7 @@ type seedView struct {
 	ViewID           string   `yaml:"view_id"`
 	Name             string   `yaml:"name"`
 	Description      string   `yaml:"description"`
-	PrimaryDatasetID string   `yaml:"primary_dataset_id"`
-	DatasetIDs       []string `yaml:"dataset_ids"`
+	PrimaryDatasetID string   `yaml:"dataset_id"`
 	GrainKeys        []string `yaml:"grain_keys"`
 	FilterJSON       string   `yaml:"filter_json"`
 	Engine           string   `yaml:"engine"`

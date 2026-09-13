@@ -18,9 +18,8 @@ message ViewIndexSchema {
   string engine = 4;
   repeated ViewColumn columns = 5;
   string view_schema_hash = 6;
-  string primary_dataset_id = 7;
-  // dataset_ids is the complete dependency set used while a view is building.
-  repeated string dataset_ids = 8;
+  // dataset_id 是该物理索引所属的唯一数据集。
+  string dataset_id = 7;
 }
 
 enum ViewIndexRowWriteOperation {

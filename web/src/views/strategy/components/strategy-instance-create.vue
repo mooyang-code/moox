@@ -76,7 +76,7 @@ async function loadSourceColumns() {
     form.frequency = form.frequency || dslPreview.value?.bar || "";
     await ensureColumns(source.view_id, spaceId);
     try {
-      const dataset = await getDataset({ space_id: spaceId, dataset_id: source.primary_dataset_id });
+      const dataset = await getDataset({ space_id: spaceId, dataset_id: source.dataset_id });
       if (requestId !== sourceRequest || props.spaceId !== spaceId) return;
       const supported = dataset.dataset?.freqs || [];
       const viewFrequency = freqFromViewFilterJSON(source.filter_json);

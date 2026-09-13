@@ -78,9 +78,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	}
 	for _, view := range seed.Views {
 		require.LessOrEqual(t, utf8.RuneCountInString(view.Name), 10, view.SpaceID+"/"+view.ViewID)
-		for _, datasetID := range view.DatasetIDs {
-			viewCount[view.SpaceID+"/"+datasetID]++
-		}
+		viewCount[view.SpaceID+"/"+view.PrimaryDatasetID]++
 		if view.SpaceID == "crypto" && view.ViewID != "view_crypto_spot_kline_1m" && view.ViewID != "view_crypto_swap_kline_1m" {
 			require.Contains(t, view.FilterJSON, `"freq":"1H"`, view.ViewID)
 		}

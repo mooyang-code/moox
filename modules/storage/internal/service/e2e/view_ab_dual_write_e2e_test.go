@@ -27,7 +27,7 @@ func TestViewABDualWriteKeepsLiveValueAcrossBackfill(t *testing.T) {
 	prepare := func(id string, version uint64) {
 		t.Helper()
 		rsp, err := service.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: id, Schema: &pb.ViewIndexSchema{
-			SpaceId: "quant", ViewId: "ab-view", PrimaryDatasetId: "prices", DatasetIds: []string{"prices"},
+			SpaceId: "quant", ViewId: "ab-view", DatasetId: "prices",
 			ViewVersion: version, Engine: "duckdb", ViewSchemaHash: "schema-" + id, Columns: columns,
 		}})
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -37,13 +37,13 @@ func TestViewABDualWriteKeepsLiveValueAcrossBackfill(t *testing.T) {
 	row := func(at string, value float64) *pb.ViewIndexRowWrite {
 		return &pb.ViewIndexRowWrite{Key: &pb.ViewIndexRowKey{RowKey: &pb.RowKey{SpaceId: "quant", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: at}}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}}}}}
 	}
-	if rsp, err := service.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "ab-a", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "ab-view", PrimaryDatasetId: "prices", DatasetIds: []string{"prices"}, ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-ab-a", Columns: columns}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	if rsp, err := service.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "ab-a", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "ab-view", DatasetId: "prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-ab-a", Columns: columns}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare A: rsp=%v err=%v", rsp, err)
 	}
 	if rsp, err := service.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{AuthInfo: auth, IndexId: "ab-a", Batch: &pb.ViewIndexWriteBatch{ViewRevision: 1, ViewSchemaHash: "schema-ab-a", WriteMode: "LIVE_WRITE", RowWrites: []*pb.ViewIndexRowWrite{row("2026-08-12T00:00:00Z", 100), row("2026-08-12T00:01:00Z", 101)}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write A: rsp=%v err=%v", rsp, err)
 	}
-	if err := service.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: "ab-view", PrimaryDatasetId: "prices", DatasetIds: []string{"prices"}, Engine: "duckdb", ActiveIndexId: "ab-a", ActiveViewRevision: 1, DesiredViewRevision: 1, ActiveViewSchemaHash: "schema-ab-a", ActiveColumns: columns, Status: "active"}); err != nil {
+	if err := service.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: "ab-view", DatasetId: "prices", Engine: "duckdb", ActiveIndexId: "ab-a", ActiveViewRevision: 1, DesiredViewRevision: 1, ActiveViewSchemaHash: "schema-ab-a", ActiveColumns: columns, Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 	prepare("ab-b", 2)

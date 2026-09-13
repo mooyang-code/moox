@@ -112,9 +112,6 @@ func (s *Service) CreateView(ctx context.Context, req *pb.CreateViewReq) (*pb.Cr
 	if err := validateViewColumns(view.GetColumns()); err != nil {
 		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if view.PrimaryDatasetId == "" && len(view.GetDatasetIds()) > 0 {
-		view.PrimaryDatasetId = view.GetDatasetIds()[0]
-	}
 	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
 		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
@@ -145,9 +142,6 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 	}
 	if err := validateViewColumns(view.GetColumns()); err != nil {
 		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if view.PrimaryDatasetId == "" && len(view.GetDatasetIds()) > 0 {
-		view.PrimaryDatasetId = view.GetDatasetIds()[0]
 	}
 	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
 		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
@@ -238,45 +232,30 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 		return errors.New("view is required")
 	}
 	spaceID := strings.TrimSpace(view.GetSpaceId())
-	primaryDatasetID := strings.TrimSpace(view.GetPrimaryDatasetId())
-	if spaceID == "" || primaryDatasetID == "" {
-		return errors.New("space_id and primary_dataset_id are required")
+	datasetID := viewDatasetID(view)
+	if spaceID == "" || datasetID == "" {
+		return errors.New("space_id and dataset_id are required")
 	}
-	datasetIDs := normalizeViewDatasetIDs(primaryDatasetID, view.GetDatasetIds())
-	var primary *pb.Dataset
-	datasets := make([]*pb.Dataset, 0, len(datasetIDs))
-	for idx, datasetID := range datasetIDs {
-		dataset, err := s.metadata.GetDataset(ctx, spaceID, datasetID)
-		if err != nil {
-			return fmt.Errorf("view dataset %s not found: %w", datasetID, err)
-		}
-		datasets = append(datasets, dataset)
-		if idx == 0 {
-			primary = dataset
-		}
+	if err := validateViewReferencesSingleDataset(view); err != nil {
+		return err
 	}
-	if primary == nil {
-		return errors.New("view datasets are required")
+	dataset, err := s.metadata.GetDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		return fmt.Errorf("view dataset %s not found: %w", datasetID, err)
 	}
-	if primary.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES {
+	if dataset.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES {
 		freq, normalizedFilterJSON, err := normalizeTimeSeriesViewFilterJSON(view.GetFilterJson())
 		if err != nil {
 			return err
 		}
-		for _, dataset := range datasets {
-			if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
-				continue
-			}
-			if !datasetSupportsFreq(dataset, freq) {
-				return fmt.Errorf("view dataset %s does not support freq %q", dataset.GetDatasetId(), freq)
-			}
+		if !datasetSupportsFreq(dataset, freq) {
+			return fmt.Errorf("view dataset %s does not support freq %q", dataset.GetDatasetId(), freq)
 		}
 		view.FilterJson = normalizedFilterJSON
 	}
-	view.PrimaryDatasetId = primaryDatasetID
-	view.DatasetIds = datasetIDs
-	view.GrainKeys = defaultViewGrainKeys(primary.GetDataKind())
-	view.Engine = defaultViewEngine(primary.GetDataKind())
+	view.DatasetId = datasetID
+	view.GrainKeys = defaultViewGrainKeys(dataset.GetDataKind())
+	view.Engine = defaultViewEngine(dataset.GetDataKind())
 	return nil
 }
 

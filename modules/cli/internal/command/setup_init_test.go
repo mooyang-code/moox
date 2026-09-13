@@ -445,7 +445,6 @@ func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
 	}
 	canonical := seedView{
 		SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
-		DatasetIDs: []string{"kline"},
 		GrainKeys:  []string{"subject_id", "freq", "data_time", "series_tag"},
 		FilterJSON: `{"freq":"1H"}`,
 		Engine:     "duckdb",
@@ -462,16 +461,7 @@ func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
 				item.PrimaryDatasetID = ""
 				return item
 			}(),
-			want: "primary_dataset_id must be explicit",
-		},
-		{
-			name: "dataset order",
-			view: func() seedView {
-				item := canonical
-				item.DatasetIDs = []string{"kline", "kline"}
-				return item
-			}(),
-			want: "dataset_ids must be canonical",
+			want: "dataset_id must be explicit",
 		},
 		{
 			name: "grain keys",
@@ -519,7 +509,6 @@ func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
 func testCanonicalTimeSeriesView(spaceID, viewID, datasetID, freq string) seedView {
 	return seedView{
 		SpaceID: spaceID, ViewID: viewID, PrimaryDatasetID: datasetID,
-		DatasetIDs: []string{datasetID},
 		GrainKeys:  []string{"subject_id", "freq", "data_time", "series_tag"},
 		FilterJSON: `{"freq":"` + freq + `"}`,
 		Engine:     "duckdb",

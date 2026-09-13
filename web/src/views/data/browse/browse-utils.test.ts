@@ -129,7 +129,7 @@ describe("view factor column labels", () => {
       [],
       [],
       [],
-      { primary_dataset_id: "bin_e0a2079753cf4faf", dataset_ids: ["bin_e0a2079753cf4faf"] }
+      { dataset_id: "bin_e0a2079753cf4faf" }
     );
 
     expect(labels[columnName]).toBe("bias_5");

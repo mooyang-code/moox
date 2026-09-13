@@ -670,11 +670,7 @@ func (s *Store) bumpViewsForDataset(ctx context.Context, spaceID, datasetID stri
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE t_views
 		SET c_desired_view_revision = CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END
-		WHERE c_space_id = ? AND (
-			c_primary_dataset_id = ? OR EXISTS (
-				SELECT 1 FROM json_each(t_views.c_dataset_ids_json) ref WHERE ref.value = ?
-			)
-		)`, spaceID, datasetID, datasetID)
+		WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID)
 	return err
 }
 
@@ -688,11 +684,7 @@ func (s *Store) bumpViewsForField(ctx context.Context, spaceID, fieldID string) 
 			WHERE column_ref.c_space_id = t_views.c_space_id
 			  AND column_ref.c_origin_type = 'field'
 			  AND column_ref.c_origin_id = ?
-			  AND (
-				column_ref.c_dataset_id = t_views.c_primary_dataset_id OR EXISTS (
-					SELECT 1 FROM json_each(t_views.c_dataset_ids_json) ref WHERE ref.value = column_ref.c_dataset_id
-				)
-			  )
+			  AND column_ref.c_dataset_id = t_views.c_dataset_id
 		)`, spaceID, fieldID)
 	return err
 }
@@ -711,5 +703,5 @@ func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetI
 }
 
 func (s *Store) ListViewsByDataset(ctx context.Context, spaceID string, datasetID string) ([]*pb.View, error) {
-	return queryMessages(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_views WHERE (? = '' OR c_space_id = ?) AND (? = '' OR c_primary_dataset_id = ? OR EXISTS (SELECT 1 FROM json_each(c_dataset_ids_json) ref WHERE ref.value = ?)) AND c_status = 'active' ORDER BY c_space_id, c_view_id`, []any{spaceID, spaceID, datasetID, datasetID, datasetID}, func() *pb.View { return &pb.View{} })
+	return queryMessages(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_views WHERE (? = '' OR c_space_id = ?) AND (? = '' OR c_dataset_id = ?) AND c_status = 'active' ORDER BY c_space_id, c_view_id`, []any{spaceID, spaceID, datasetID, datasetID}, func() *pb.View { return &pb.View{} })
 }

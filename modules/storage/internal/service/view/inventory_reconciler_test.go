@@ -49,7 +49,7 @@ func TestDynamicDatasetConsumerIdentityIsStable(t *testing.T) {
 func TestInventoryReconcilerBindsDynamicDatasetAndPublishesRouteReadyOnce(t *testing.T) {
 	metadata := &inventoryMetadataFake{views: []*pb.View{{
 		SpaceId: "crypto", ViewId: "view_spot_kline_derived_4h", Status: "active",
-		PrimaryDatasetId: "dataset_spot_kline_derived_4h", DatasetIds: []string{"dataset_spot_kline_derived_4h"},
+		DatasetId: "dataset_spot_kline_derived_4h",
 		Attributes: map[string]string{routeReadyRequestIDAttribute: "kline-resample-route:rule-1:7"},
 	}}}
 	primary := &syncPointAppenderFake{}
@@ -88,7 +88,7 @@ func TestInventoryReconcilerBindsDynamicDatasetAndPublishesRouteReadyOnce(t *tes
 
 func TestInventoryReconcilerRetriesFailuresWithoutStoppingHealthyBindings(t *testing.T) {
 	metadata := &inventoryMetadataFake{views: []*pb.View{
-		{SpaceId: "crypto", ViewId: "existing_view", Status: "active", PrimaryDatasetId: "existing", DatasetIds: []string{"existing"}},
+		{SpaceId: "crypto", ViewId: "existing_view", Status: "active", DatasetId: "existing"},
 	}}
 	primary := &syncPointAppenderFake{}
 	stopped := 0
@@ -104,7 +104,7 @@ func TestInventoryReconcilerRetriesFailuresWithoutStoppingHealthyBindings(t *tes
 		t.Fatal(err)
 	}
 
-	metadata.views = append(metadata.views, &pb.View{SpaceId: "crypto", ViewId: "failing_view", Status: "active", PrimaryDatasetId: "failing", DatasetIds: []string{"failing"}})
+	metadata.views = append(metadata.views, &pb.View{SpaceId: "crypto", ViewId: "failing_view", Status: "active", DatasetId: "failing"})
 	if err := reconciler.Reconcile(context.Background()); err == nil {
 		t.Fatal("bind failure was not reported")
 	}
@@ -125,7 +125,7 @@ func TestInventoryReconcilerRetriesFailuresWithoutStoppingHealthyBindings(t *tes
 
 func TestInventoryReconcilerRetriesRouteReadyAndStopsRemovedDataset(t *testing.T) {
 	metadata := &inventoryMetadataFake{views: []*pb.View{{
-		SpaceId: "crypto", ViewId: "target_view", Status: "active", PrimaryDatasetId: "target", DatasetIds: []string{"target"},
+		SpaceId: "crypto", ViewId: "target_view", Status: "active", DatasetId: "target",
 		Attributes: map[string]string{routeReadyRequestIDAttribute: "route-1"},
 	}}}
 	primary := &syncPointAppenderFake{err: errors.New("primary unavailable")}
@@ -160,7 +160,7 @@ func TestInventoryReconcilerRetriesRouteReadyAndStopsRemovedDataset(t *testing.T
 }
 
 func TestInventoryReconcilerLeavesExactRoutesOnSharedConsumers(t *testing.T) {
-	metadata := &inventoryMetadataFake{views: []*pb.View{{SpaceId: "crypto", ViewId: "kline_view", Status: "active", PrimaryDatasetId: "dataset_binance_spot_kline_1m", DatasetIds: []string{"dataset_binance_spot_kline_1m"}}}}
+	metadata := &inventoryMetadataFake{views: []*pb.View{{SpaceId: "crypto", ViewId: "kline_view", Status: "active", DatasetId: "dataset_binance_spot_kline_1m"}}}
 	binds := 0
 	reconciler := newInventoryReconcilerForTest(metadata, &syncPointAppenderFake{}, []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m"}}, func(context.Context, dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
 		binds++
@@ -176,8 +176,8 @@ func TestInventoryReconcilerLeavesExactRoutesOnSharedConsumers(t *testing.T) {
 
 func TestInventoryReconcilerHonorsWildcardSpaceAllowList(t *testing.T) {
 	metadata := &inventoryMetadataFake{views: []*pb.View{
-		{SpaceId: "crypto", ViewId: "allowed_view", Status: "active", PrimaryDatasetId: "allowed", DatasetIds: []string{"allowed"}},
-		{SpaceId: "private_space", ViewId: "blocked_view", Status: "active", PrimaryDatasetId: "blocked", DatasetIds: []string{"blocked"}},
+		{SpaceId: "crypto", ViewId: "allowed_view", Status: "active", DatasetId: "allowed"},
+		{SpaceId: "private_space", ViewId: "blocked_view", Status: "active", DatasetId: "blocked"},
 	}}
 	var bound []datasetRef
 	reconciler := newInventoryReconcilerForTest(metadata, &syncPointAppenderFake{}, nil, func(_ context.Context, spec dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
@@ -194,7 +194,7 @@ func TestInventoryReconcilerHonorsWildcardSpaceAllowList(t *testing.T) {
 
 func TestInventoryReconcilerKeepsExactRouteOutsideWildcardSpace(t *testing.T) {
 	metadata := &inventoryMetadataFake{views: []*pb.View{{
-		SpaceId: "mooxsys", ViewId: "metrics_view", Status: "active", PrimaryDatasetId: "dataset_mooxsys_service_metrics", DatasetIds: []string{"dataset_mooxsys_service_metrics"},
+		SpaceId: "mooxsys", ViewId: "metrics_view", Status: "active", DatasetId: "dataset_mooxsys_service_metrics",
 		Attributes: map[string]string{routeReadyRequestIDAttribute: "route-exact"},
 	}}}
 	primary := &syncPointAppenderFake{}
@@ -236,7 +236,7 @@ func TestDynamicConsumerTemplateTreatsMiscExactRoutesAsDynamic(t *testing.T) {
 
 func TestInventoryReconcilerBindsMiscExactRouteOutsideWildcardSpace(t *testing.T) {
 	metadata := &inventoryMetadataFake{views: []*pb.View{{
-		SpaceId: "stockcn", ViewId: "stock_view", Status: "active", PrimaryDatasetId: "stock_kline", DatasetIds: []string{"stock_kline"},
+		SpaceId: "stockcn", ViewId: "stock_view", Status: "active", DatasetId: "stock_kline",
 	}}}
 	template := EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{{
 		Consumer: "storage_view_misc", DatasetRoutes: []DatasetRoute{{SpaceID: "stockcn", DatasetID: "stock_kline"}, {SpaceID: "crypto", DatasetID: "*"}},
@@ -264,7 +264,7 @@ func TestInventoryReconcilerBindsMiscExactRouteOutsideWildcardSpace(t *testing.T
 
 func TestInventoryReconcilerRejectsUnconfiguredMiscExactDataset(t *testing.T) {
 	metadata := &inventoryMetadataFake{views: []*pb.View{{
-		SpaceId: "stockcn", ViewId: "unconfigured_view", Status: "active", PrimaryDatasetId: "unconfigured", DatasetIds: []string{"unconfigured"},
+		SpaceId: "stockcn", ViewId: "unconfigured_view", Status: "active", DatasetId: "unconfigured",
 	}}}
 	template := EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{{
 		Consumer: "storage_view_misc", DatasetRoutes: []DatasetRoute{{SpaceID: "stockcn", DatasetID: "stock_kline"}},

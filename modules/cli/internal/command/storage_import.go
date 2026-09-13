@@ -199,7 +199,7 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 		if err != nil {
 			return storageImportSummary{}, err
 		}
-		if view == nil || !stringSliceContains(view.GetDatasetIds(), opts.DatasetID) {
+		if view == nil || view.GetDatasetId() != opts.DatasetID {
 			return storageImportSummary{}, fmt.Errorf("view %s does not include dataset %s", opts.ViewID, opts.DatasetID)
 		}
 	}

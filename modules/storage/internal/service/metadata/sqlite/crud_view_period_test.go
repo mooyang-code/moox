@@ -12,8 +12,8 @@ import (
 )
 
 func TestViewKeepDurationChangeDoesNotRequireABRebuild(t *testing.T) {
-	existing := &pb.View{PrimaryDatasetId: "prices", DatasetIds: []string{"prices"}, Engine: "duckdb", KeepDuration: "24h"}
-	next := &pb.View{PrimaryDatasetId: "prices", DatasetIds: []string{"prices"}, Engine: "duckdb", KeepDuration: "168h"}
+	existing := &pb.View{DatasetId: "prices", Engine: "duckdb", KeepDuration: "24h"}
+	next := &pb.View{DatasetId: "prices", Engine: "duckdb", KeepDuration: "168h"}
 	if viewIndexShapeChanged(existing, next) {
 		t.Fatal("keep_duration-only change must not trigger an A/B rebuild")
 	}
@@ -200,12 +200,12 @@ func TestUpsertViewRejectsEngineAndPrimaryChangeWithActiveIndex(t *testing.T) {
 	}
 	view.ActiveIndexId = "source-a"
 	view.Engine = "duckdb"
-	view.PrimaryDatasetId = "prices"
+	view.DatasetId = "prices"
 	raw, err := marshal(view)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.ExecContext(ctx, `UPDATE t_views SET c_active_index_id = ?, c_engine = ?, c_primary_dataset_id = ?, c_attrs_json = ? WHERE c_space_id = ? AND c_view_id = ?`, "source-a", "duckdb", "prices", raw, "space", "source-view"); err != nil {
+	if _, err := store.db.ExecContext(ctx, `UPDATE t_views SET c_active_index_id = ?, c_engine = ?, c_dataset_id = ?, c_attrs_json = ? WHERE c_space_id = ? AND c_view_id = ?`, "source-a", "duckdb", "prices", raw, "space", "source-view"); err != nil {
 		t.Fatal(err)
 	}
 	view, err = store.GetView(ctx, "space", "source-view")
@@ -217,15 +217,15 @@ func TestUpsertViewRejectsEngineAndPrimaryChangeWithActiveIndex(t *testing.T) {
 		t.Fatalf("engine change error = %v", err)
 	}
 	view.Engine = "duckdb"
-	view.PrimaryDatasetId = "fundamentals"
-	if _, err := store.UpsertView(ctx, view); err == nil || !strings.Contains(err.Error(), "primary dataset change is unsupported") {
+	view.DatasetId = "fundamentals"
+	if _, err := store.UpsertView(ctx, view); err == nil || !strings.Contains(err.Error(), "dataset change is unsupported") {
 		t.Fatalf("primary change error = %v", err)
 	}
 	unchanged, err := store.GetView(ctx, "space", "source-view")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if unchanged.GetActiveIndexId() != "source-a" || unchanged.GetEngine() != "duckdb" || unchanged.GetPrimaryDatasetId() != "prices" {
+	if unchanged.GetActiveIndexId() != "source-a" || unchanged.GetEngine() != "duckdb" || unchanged.GetDatasetId() != "prices" {
 		t.Fatalf("active view mutated after rejected update: %v", unchanged)
 	}
 }
@@ -344,8 +344,7 @@ func openViewPeriodTestStore(t *testing.T, ctx context.Context) *Store {
 	createTestDataset(t, ctx, store, "prices", "node")
 	createTestDataset(t, ctx, store, "fundamentals", "node")
 	if _, err := store.UpsertView(ctx, &pb.View{
-		SpaceId: "space", ViewId: "source-view", Name: "Source view", PrimaryDatasetId: "prices",
-		DatasetIds: []string{"prices", "fundamentals"}, KeepDuration: "24h",
+		SpaceId: "space", ViewId: "source-view", Name: "Source view", DatasetId: "prices", KeepDuration: "24h",
 	}); err != nil {
 		t.Fatal(err)
 	}

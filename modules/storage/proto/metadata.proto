@@ -72,10 +72,8 @@ message View {
   string name = 3;
   // description 是说明文本。
   string description = 4;
-  // primary_dataset_id 是视图的主数据集，用于默认读路径和主时间轴。
-  string primary_dataset_id = 5;
-  // dataset_ids 是该视图组合的事实数据集 ID 列表。
-  repeated string dataset_ids = 6;
+  // dataset_id 是视图所属的唯一数据集；一个 View 只索引一个 Dataset。
+  string dataset_id = 5;
   // grain_keys 表示视图行粒度键，例如 subject_id、data_time 或 freq。
   repeated string grain_keys = 7;
   // filter_json 是构建视图物化结果时使用的固定过滤条件。

@@ -204,8 +204,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 	}
 	if viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_VIEW_NOT_FOUND || viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, View: &storagepb.View{
-			SpaceId: rule.SpaceID, ViewId: viewID, Name: uniqueResampleDisplayName(params.TargetDatasetID), Description: "Collector生成的K线重采样查询视图", PrimaryDatasetId: params.TargetDatasetID,
-			DatasetIds: []string{params.TargetDatasetID}, GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, FilterJson: fmt.Sprintf(`{"freq":%q}`, targetFreq.Storage),
+			SpaceId: rule.SpaceID, ViewId: viewID, Name: uniqueResampleDisplayName(params.TargetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: params.TargetDatasetID,
 			Engine: "duckdb", KeepDuration: keepDuration, Status: "active", Attributes: map[string]string{"route_ready_request_id": "kline-resample-route:" + rule.RuleID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
 		}})
 		if createErr != nil {
@@ -363,7 +362,7 @@ func validateTargetView(view *storagepb.View, rule domain.TaskRule, params *doma
 	if view == nil {
 		return errors.New("target View is empty")
 	}
-	if view.GetPrimaryDatasetId() != params.TargetDatasetID || len(view.GetDatasetIds()) != 1 || view.GetDatasetIds()[0] != params.TargetDatasetID {
+	if view.GetDatasetId() != params.TargetDatasetID {
 		return errors.New("target View immutable Dataset contract does not match rule")
 	}
 	if view.GetFilterJson() != fmt.Sprintf(`{"freq":%q}`, frequency) || view.GetEngine() != "duckdb" {

@@ -59,7 +59,7 @@ func TestValidateEnabledBindingRejectsSecondaryOnlyView(t *testing.T) {
 	client := validBindingContractClient()
 	client.views = []*storagepb.View{{
 		SpaceId: "crypto", ViewId: "joined", Status: "active",
-		PrimaryDatasetId: "orders", DatasetIds: []string{"spot_kline"},
+		DatasetId: "orders",
 		ActiveIndexId: "index-a",
 		ActiveColumns: []*storagepb.ViewColumn{
 			{ColumnName: "spot_kline.close", OriginId: "spot_kline.close"},
@@ -239,7 +239,7 @@ func validBindingContractClient() *bindingContractFake {
 		},
 		views: []*storagepb.View{{
 			SpaceId: "crypto", ViewId: "spot_kline_view", Status: "active",
-			PrimaryDatasetId: "spot_kline", ActiveIndexId: "index-a",
+			DatasetId: "spot_kline", ActiveIndexId: "index-a",
 			ActiveColumns: []*storagepb.ViewColumn{
 				{ColumnName: "spot_kline.close", OriginId: "spot_kline.close"},
 				{ColumnName: "spot_kline.volume", OriginId: "spot_kline.volume"},

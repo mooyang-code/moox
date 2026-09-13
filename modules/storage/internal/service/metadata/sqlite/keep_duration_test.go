@@ -38,11 +38,10 @@ func TestKeepDurationCovers(t *testing.T) {
 func TestUpsertViewRejectsDatasetWithShorterKeepDuration(t *testing.T) {
 	ctx, store := newKeepDurationStore(t)
 	createKeepDurationDataset(t, ctx, store, "short", "719h")
-	createKeepDurationDataset(t, ctx, store, "long", "721h")
 
 	_, err := store.UpsertView(ctx, &pb.View{
-		SpaceId: "space", ViewId: "view", Name: "View", PrimaryDatasetId: "long",
-		DatasetIds: []string{"long", "short", "short"}, KeepDuration: "720h",
+		SpaceId: "space", ViewId: "view", Name: "View", DatasetId: "short",
+		KeepDuration: "720h",
 	})
 	if !errors.Is(err, ErrDatasetKeepDurationShorterThanView) {
 		t.Fatalf("UpsertView() error = %v, want %v", err, ErrDatasetKeepDurationShorterThanView)
@@ -58,8 +57,8 @@ func TestUpsertViewAllowsCoveredAndPermanentKeepDuration(t *testing.T) {
 	createKeepDurationDataset(t, ctx, store, "permanent", "0")
 
 	for _, view := range []*pb.View{
-		{SpaceId: "space", ViewId: "equal", Name: "Equal", PrimaryDatasetId: "finite", KeepDuration: "720h"},
-		{SpaceId: "space", ViewId: "permanent", Name: "Permanent", PrimaryDatasetId: "permanent", KeepDuration: "0"},
+		{SpaceId: "space", ViewId: "equal", Name: "Equal", DatasetId: "finite", KeepDuration: "720h"},
+		{SpaceId: "space", ViewId: "permanent", Name: "Permanent", DatasetId: "permanent", KeepDuration: "0"},
 	} {
 		if _, err := store.UpsertView(ctx, view); err != nil {
 			t.Fatalf("UpsertView(%s) error = %v", view.GetViewId(), err)
@@ -71,7 +70,7 @@ func TestUpdateDatasetRejectsKeepDurationShorterThanExistingView(t *testing.T) {
 	ctx, store := newKeepDurationStore(t)
 	dataset := createKeepDurationDataset(t, ctx, store, "prices", "720h")
 	if _, err := store.UpsertView(ctx, &pb.View{
-		SpaceId: "space", ViewId: "weekly", Name: "Weekly", PrimaryDatasetId: "prices", KeepDuration: "168h",
+		SpaceId: "space", ViewId: "weekly", Name: "Weekly", DatasetId: "prices", KeepDuration: "168h",
 	}); err != nil {
 		t.Fatal(err)
 	}

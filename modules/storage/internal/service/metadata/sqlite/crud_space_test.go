@@ -54,7 +54,7 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 		INSERT INTO t_dataset_subjects(c_space_id,c_dataset_id,c_subject_id) VALUES ('target','dataset','subject');
 		INSERT INTO t_dataset_columns(c_space_id,c_dataset_id,c_column_name,c_origin_type,c_origin_id,c_value_type)
 			VALUES ('target','dataset','value','field','value','double');
-		INSERT INTO t_views(c_space_id,c_view_id,c_name,c_primary_dataset_id) VALUES ('target','view','View','dataset');
+		INSERT INTO t_views(c_space_id,c_view_id,c_name,c_dataset_id) VALUES ('target','view','View','dataset');
 		INSERT INTO t_view_columns(c_space_id,c_view_id,c_column_name,c_origin_type,c_origin_id,c_value_type)
 			VALUES ('target','view','value','dataset_column','dataset.value','double');
 		INSERT INTO t_view_index_builds(

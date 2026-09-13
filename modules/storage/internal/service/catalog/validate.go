@@ -174,20 +174,30 @@ func validateViewColumns(columns []*pb.ViewColumn) error {
 	return nil
 }
 
-func normalizeViewDatasetIDs(primaryDatasetID string, datasetIDs []string) []string {
-	seen := make(map[string]bool, len(datasetIDs)+1)
-	out := make([]string, 0, len(datasetIDs)+1)
-	add := func(datasetID string) {
-		datasetID = strings.TrimSpace(datasetID)
-		if datasetID == "" || seen[datasetID] {
-			return
+func viewDatasetID(view *pb.View) string {
+	if view == nil {
+		return ""
+	}
+	return strings.TrimSpace(view.GetDatasetId())
+}
+
+func validateViewReferencesSingleDataset(view *pb.View) error {
+	datasetID := viewDatasetID(view)
+	if datasetID == "" {
+		return errors.New("dataset_id is required")
+	}
+	for _, column := range view.GetColumns() {
+		if column == nil || column.GetOriginType() != pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
+			continue
 		}
-		seen[datasetID] = true
-		out = append(out, datasetID)
+		origin := strings.TrimSpace(column.GetOriginId())
+		if origin == "" {
+			continue
+		}
+		originDataset, _, ok := strings.Cut(origin, ".")
+		if ok && originDataset != "" && originDataset != datasetID {
+			return errors.New("view must reference exactly one dataset_id")
+		}
 	}
-	add(primaryDatasetID)
-	for _, datasetID := range datasetIDs {
-		add(datasetID)
-	}
-	return out
+	return nil
 }

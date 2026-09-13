@@ -53,8 +53,7 @@ func TestResolveManagedResultIDsUsesSourceViewIdentity(t *testing.T) {
 			"view_crypto_spot_kline_1m": {
 				SpaceId:          "space",
 				ViewId:           "view_crypto_spot_kline_1m",
-				PrimaryDatasetId: "dataset_binance_spot_kline_1m",
-				DatasetIds:       []string{"dataset_binance_spot_kline_1m"},
+				DatasetId: "dataset_binance_spot_kline_1m",
 			},
 		},
 	}
@@ -70,8 +69,8 @@ func TestResolveManagedResultIDsSeparatesViewsSharingPrimaryDataset(t *testing.T
 	client := &fakeViewMetadataClient{
 		fakeMetadataClient: newFakeMetadataClient(),
 		views: map[string]*storagepb.View{
-			"view_a": {SpaceId: "space", ViewId: "view_a", PrimaryDatasetId: "bars"},
-			"view_b": {SpaceId: "space", ViewId: "view_b", PrimaryDatasetId: "bars"},
+			"view_a": {SpaceId: "space", ViewId: "view_a", DatasetId: "bars"},
+			"view_b": {SpaceId: "space", ViewId: "view_b", DatasetId: "bars"},
 		},
 	}
 	syncer := NewMetadataSync(client, nil)

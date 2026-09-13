@@ -693,11 +693,11 @@ async function listAllViews(spaceId: string) {
 }
 
 function viewUsesLikelyFactorDataset(view: View, datasetById: Map<string, Dataset>) {
-  const dataset = datasetById.get(view.primary_dataset_id);
+  const dataset = datasetById.get(view.dataset_id);
   if (dataset) {
     return isLikelyFactorResultDataset(dataset);
   }
-  return isLikelyFactorResultDatasetId(view.primary_dataset_id);
+  return isLikelyFactorResultDatasetId(view.dataset_id);
 }
 
 async function loadGlobal() {

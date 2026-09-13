@@ -96,11 +96,11 @@ type recalcViewMetadataClient struct{ *recordingFactorMetadataClient }
 type recalcViewMetadataClientWithoutActiveIndex struct{ *recordingFactorMetadataClient }
 
 func (c *recalcViewMetadataClientWithoutActiveIndex) GetView(context.Context, *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
-	return &storagepb.GetViewRsp{RetInfo: success(), View: &storagepb.View{ViewId: "source_view", PrimaryDatasetId: "bars", DatasetIds: []string{"funding", "bars"}}}, nil
+	return &storagepb.GetViewRsp{RetInfo: success(), View: &storagepb.View{ViewId: "source_view", DatasetId: "bars"}}, nil
 }
 
 func (c *recalcViewMetadataClient) GetView(context.Context, *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
-	return &storagepb.GetViewRsp{RetInfo: success(), View: &storagepb.View{ViewId: "source_view", PrimaryDatasetId: "bars", DatasetIds: []string{"funding", "bars"}, ActiveIndexId: "source-view-index-1"}}, nil
+	return &storagepb.GetViewRsp{RetInfo: success(), View: &storagepb.View{ViewId: "source_view", DatasetId: "bars", ActiveIndexId: "source-view-index-1"}}, nil
 }
 func (c *recalcViewMetadataClient) CreateView(context.Context, *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error) {
 	return &storagepb.CreateViewRsp{RetInfo: success()}, nil

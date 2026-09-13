@@ -175,10 +175,10 @@ func waitForConcurrencyRows(t *testing.T, ctx context.Context, service *viewserv
 func prepareConcurrencyView(t *testing.T, ctx context.Context, service *viewservice.Service, auth *pb.AuthInfo, dataset string) {
 	t.Helper()
 	viewID := dataset + "-view"
-	if rsp, err := service.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: viewID, Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: viewID, PrimaryDatasetId: dataset, ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: []*pb.ViewColumn{{ColumnName: "close", OriginId: dataset + ".close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	if rsp, err := service.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: viewID, Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: viewID, DatasetId: dataset, ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: []*pb.ViewColumn{{ColumnName: "close", OriginId: dataset + ".close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare %s: rsp=%v err=%v", dataset, rsp, err)
 	}
-	if err := service.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: viewID, PrimaryDatasetId: dataset, Engine: "duckdb", ActiveIndexId: viewID, ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", ActiveColumns: []*pb.ViewColumn{{ColumnName: "close", OriginId: dataset + ".close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}, Status: "active"}); err != nil {
+	if err := service.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: viewID, DatasetId: dataset, Engine: "duckdb", ActiveIndexId: viewID, ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", ActiveColumns: []*pb.ViewColumn{{ColumnName: "close", OriginId: dataset + ".close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}, Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 }

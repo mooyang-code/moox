@@ -91,7 +91,7 @@ export function buildViewColumnLabels(
   fields: Field[],
   factors: Factor[],
   datasets: Array<Pick<Dataset, "dataset_id" | "name">> = [],
-  view?: Pick<View, "primary_dataset_id" | "dataset_ids"> | null
+  view?: Pick<View, "dataset_id"> | null
 ) {
   const datasetColumnLabels = buildDatasetColumnLabels(datasetColumns, fields, factors);
   const datasetColumnByQualifiedName = new Map<string, DatasetColumn>();
@@ -245,14 +245,9 @@ function readableViewColumnLabel(columnName: string) {
   return systemViewLabels[columnName] || columnName;
 }
 
-function viewDatasetCount(view?: Pick<View, "primary_dataset_id" | "dataset_ids"> | null) {
-  if (!view) return 0;
-  const datasetIds = new Set<string>();
-  if (view.primary_dataset_id) datasetIds.add(view.primary_dataset_id);
-  for (const datasetId of view.dataset_ids || []) {
-    if (datasetId) datasetIds.add(datasetId);
-  }
-  return datasetIds.size;
+function viewDatasetCount(view?: Pick<View, "dataset_id"> | null) {
+  if (!view?.dataset_id) return 0;
+  return 1;
 }
 
 function appendDatasetName(label: string, datasetId: string, datasets: Array<Pick<Dataset, "dataset_id" | "name">>) {

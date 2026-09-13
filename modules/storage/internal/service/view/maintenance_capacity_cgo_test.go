@@ -50,8 +50,8 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 		rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{
 			AuthInfo: auth, IndexId: indexID,
 			Schema: &pb.ViewIndexSchema{
-				SpaceId: viewSchema.SpaceID, ViewId: viewSchema.ViewID, PrimaryDatasetId: viewSchema.PrimaryDatasetID,
-				DatasetIds: []string{"prices"}, ViewVersion: viewSchema.ViewVersion, Engine: viewSchema.Engine,
+				SpaceId: viewSchema.SpaceID, ViewId: viewSchema.ViewID, DatasetId: viewSchema.PrimaryDatasetID,
+				ViewVersion: viewSchema.ViewVersion, Engine: viewSchema.Engine,
 				ViewSchemaHash: schemaHash, Columns: columns,
 			},
 		})
@@ -61,7 +61,7 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 	}
 	prepare("prices-a")
 	if err := svc.AttachActiveView(&pb.View{
-		SpaceId: "space", ViewId: "prices", PrimaryDatasetId: "prices", DatasetIds: []string{"prices"},
+		SpaceId: "space", ViewId: "prices", DatasetId: "prices",
 		Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: schemaHash,
 		Status: "active",
 	}); err != nil {
@@ -92,7 +92,7 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 	}
 
 	metadata := &capacityMaintenanceMetadata{maintenanceMetadata: maintenanceMetadata{view: &pb.View{
-		SpaceId: "space", ViewId: "prices", PrimaryDatasetId: "prices", DatasetIds: []string{"prices"},
+		SpaceId: "space", ViewId: "prices", DatasetId: "prices",
 		Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
 		ActiveViewSchemaHash: schemaHash, ActiveColumns: columns, Columns: columns, FilterJson: `{"freq":"1m"}`, KeepDuration: "24h", Status: "active",
 	}}}

@@ -2767,9 +2767,7 @@ views:
 - space_id: crypto
   view_id: view_crypto_spot_kline_1m
   name: 加密现货分钟行情
-  primary_dataset_id: dataset_binance_spot_kline_1m
-  dataset_ids:
-  - dataset_binance_spot_kline_1m
+  dataset_id: dataset_binance_spot_kline_1m
   grain_keys:
   - subject_id
   - freq
@@ -2785,9 +2783,7 @@ views:
 - space_id: crypto
   view_id: view_crypto_swap_kline_1m
   name: 加密永续分钟行情
-  primary_dataset_id: dataset_binance_swap_kline_1m
-  dataset_ids:
-  - dataset_binance_swap_kline_1m
+  dataset_id: dataset_binance_swap_kline_1m
   grain_keys:
   - subject_id
   - freq
@@ -2800,9 +2796,7 @@ views:
 - space_id: stockcn
   view_id: view_stockcn_equity_kline_1m
   name: A股分钟行情
-  primary_dataset_id: dataset_stockcn_equity_kline
-  dataset_ids:
-  - dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline
   grain_keys:
   - subject_id
   - freq
@@ -2815,9 +2809,7 @@ views:
 - space_id: stockcn
   view_id: view_stockcn_index_kline_1d
   name: 指数行情
-  primary_dataset_id: dataset_stockcn_index_kline
-  dataset_ids:
-  - dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline
   grain_keys:
   - subject_id
   - freq
@@ -2830,9 +2822,7 @@ views:
 - space_id: stockcn
   view_id: view_stockcn_bond_kline_1m
   name: 可转债行情
-  primary_dataset_id: dataset_stockcn_bond_kline
-  dataset_ids:
-  - dataset_stockcn_bond_kline
+  dataset_id: dataset_stockcn_bond_kline
   grain_keys:
   - subject_id
   - freq
@@ -2845,9 +2835,7 @@ views:
 - space_id: stockhk
   view_id: view_stockhk_equity_kline_1d
   name: 港股行情视图
-  primary_dataset_id: dataset_stockhk_equity_kline
-  dataset_ids:
-  - dataset_stockhk_equity_kline
+  dataset_id: dataset_stockhk_equity_kline
   grain_keys:
   - subject_id
   - freq
@@ -2860,9 +2848,7 @@ views:
 - space_id: stockus
   view_id: view_stockus_equity_kline_1d
   name: 美股行情视图
-  primary_dataset_id: dataset_stockus_equity_kline
-  dataset_ids:
-  - dataset_stockus_equity_kline
+  dataset_id: dataset_stockus_equity_kline
   grain_keys:
   - subject_id
   - freq
@@ -2875,9 +2861,7 @@ views:
 - space_id: crypto
   view_id: view_crypto_spot_kline_1h
   name: 加密现货小时行情
-  primary_dataset_id: dataset_spot_kline_1h
-  dataset_ids:
-  - dataset_spot_kline_1h
+  dataset_id: dataset_spot_kline_1h
   grain_keys:
   - subject_id
   - freq
@@ -2890,9 +2874,7 @@ views:
 - space_id: crypto
   view_id: view_crypto_swap_kline_1h
   name: 加密永续小时行情
-  primary_dataset_id: dataset_perpetual_kline_1h
-  dataset_ids:
-  - dataset_perpetual_kline_1h
+  dataset_id: dataset_perpetual_kline_1h
   grain_keys:
   - subject_id
   - freq
@@ -2905,9 +2887,7 @@ views:
 - space_id: mooxsys
   view_id: view_mooxsys_host_resource
   name: 主机资源视图
-  primary_dataset_id: dataset_mooxsys_host_resource
-  dataset_ids:
-  - dataset_mooxsys_host_resource
+  dataset_id: dataset_mooxsys_host_resource
   grain_keys:
   - subject_id
   - freq
@@ -2920,9 +2900,7 @@ views:
 - space_id: mooxsys
   view_id: view_mooxsys_host_fs
   name: 文件系统视图
-  primary_dataset_id: dataset_mooxsys_host_filesystem
-  dataset_ids:
-  - dataset_mooxsys_host_filesystem
+  dataset_id: dataset_mooxsys_host_filesystem
   grain_keys:
   - subject_id
   - freq
@@ -2935,9 +2913,7 @@ views:
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
   name: 主机磁盘视图
-  primary_dataset_id: dataset_mooxsys_host_disk
-  dataset_ids:
-  - dataset_mooxsys_host_disk
+  dataset_id: dataset_mooxsys_host_disk
   grain_keys:
   - subject_id
   - freq
@@ -2950,9 +2926,7 @@ views:
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
   name: 主机网络视图
-  primary_dataset_id: dataset_mooxsys_host_network
-  dataset_ids:
-  - dataset_mooxsys_host_network
+  dataset_id: dataset_mooxsys_host_network
   grain_keys:
   - subject_id
   - freq
@@ -2965,9 +2939,7 @@ views:
 - space_id: mooxsys
   view_id: view_mooxsys_service_metrics
   name: 服务指标视图
-  primary_dataset_id: dataset_mooxsys_service_metrics
-  dataset_ids:
-  - dataset_mooxsys_service_metrics
+  dataset_id: dataset_mooxsys_service_metrics
   grain_keys:
   - subject_id
   - freq

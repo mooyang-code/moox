@@ -15,7 +15,7 @@ func TestViewRebuildLogLifecycleAndSkippedDeduplication(t *testing.T) {
 	if _, err := store.CreateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataSourceId: "source", DataNodeId: "node-a", Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.UpsertView(ctx, &pb.View{SpaceId: "space", ViewId: "source-view", Name: "源视图", PrimaryDatasetId: "dataset", Engine: "duckdb"}); err != nil {
+	if _, err := store.UpsertView(ctx, &pb.View{SpaceId: "space", ViewId: "source-view", Name: "源视图", DatasetId: "dataset", Engine: "duckdb"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,7 +109,7 @@ func TestSeriesCapacitySkippedRebuildLogLifecycle(t *testing.T) {
 	if _, err := store.CreateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataSourceId: "source", DataNodeId: "node-a", Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.UpsertView(ctx, &pb.View{SpaceId: "space", ViewId: "source-view", Name: "源视图", PrimaryDatasetId: "dataset", Engine: "duckdb"}); err != nil {
+	if _, err := store.UpsertView(ctx, &pb.View{SpaceId: "space", ViewId: "source-view", Name: "源视图", DatasetId: "dataset", Engine: "duckdb"}); err != nil {
 		t.Fatal(err)
 	}
 	item, err := store.UpsertSkippedViewRebuildLog(ctx, &pb.ViewRebuildLog{

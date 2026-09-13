@@ -267,9 +267,9 @@ func (r *InventoryReconciler) loadDesired(ctx context.Context) (map[datasetRef]d
 			if view == nil {
 				continue
 			}
-			primaryID := strings.TrimSpace(view.GetPrimaryDatasetId())
+			primaryID := strings.TrimSpace(view.GetDatasetId())
 			requestID := strings.TrimSpace(view.GetAttributes()[routeReadyRequestIDAttribute])
-			for _, datasetID := range viewDatasetIDs(view) {
+			for _, datasetID := range viewConsumerDatasetIDs(view) {
 				ref := datasetRef{spaceID: strings.TrimSpace(view.GetSpaceId()), datasetID: datasetID}
 				if ref.spaceID == "" || ref.datasetID == "" {
 					continue
@@ -449,12 +449,12 @@ func dynamicDatasetConsumerIdentity(miscDurable string, ref datasetRef) (string,
 	return "misc_" + token, strings.TrimSpace(miscDurable) + "_" + durableToken
 }
 
-func viewDatasetIDs(view *pb.View) []string {
+func viewConsumerDatasetIDs(view *pb.View) []string {
 	if view == nil {
 		return nil
 	}
 	set := make(map[string]struct{})
-	for _, datasetID := range append(append([]string(nil), view.GetDatasetIds()...), view.GetPrimaryDatasetId()) {
+	for _, datasetID := range viewDatasetIDs(view) {
 		if datasetID = strings.TrimSpace(datasetID); datasetID != "" {
 			set[datasetID] = struct{}{}
 		}

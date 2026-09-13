@@ -267,11 +267,7 @@ func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb
 func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string, status string, page *pb.Page) ([]*pb.View, *pb.PageResult, error) {
 	var raw []entry
 	if spaceID != "" && datasetID != "" {
-		// Primary dataset hits use the dedicated index; secondary DatasetIDs still need a scan.
 		raw = append(raw, s.listByIndex(indexViewPrimaryDataset, kindView, spaceID, datasetID)...)
-		raw = append(raw, s.list(kindView, func(item entry) bool {
-			return item.SpaceID == spaceID && item.DatasetID != datasetID && containsString(item.DatasetIDs, datasetID)
-		})...)
 		if status != "" {
 			filtered := make([]entry, 0, len(raw))
 			for _, item := range raw {
@@ -285,7 +281,7 @@ func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string,
 		raw = s.list(kindView, func(item entry) bool {
 			return (spaceID == "" || item.SpaceID == spaceID) &&
 				(status == "" || item.Status == status) &&
-				(datasetID == "" || item.DatasetID == datasetID || containsString(item.DatasetIDs, datasetID))
+				(datasetID == "" || item.DatasetID == datasetID)
 		})
 	}
 	items, err := decodeEntries(raw, func() *pb.View { return &pb.View{} })
@@ -897,7 +893,7 @@ func (s *Store) fetchViews(ctx context.Context, out []entry) ([]entry, error) {
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindView, SpaceID: item.GetSpaceId(), ID: item.GetViewId(), DatasetID: item.GetPrimaryDatasetId(), DatasetIDs: item.GetDatasetIds(), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindView, SpaceID: item.GetSpaceId(), ID: item.GetViewId(), DatasetID: item.GetDatasetId(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}

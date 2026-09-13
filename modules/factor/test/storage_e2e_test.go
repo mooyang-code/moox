@@ -335,7 +335,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		AuthInfo: auth,
 		View: &storagepb.View{
 			SpaceId: spaceID, ViewId: sourceViewID, Name: "源视" + displaySuffix,
-			PrimaryDatasetId: sourceID, DatasetIds: []string{sourceID},
+			DatasetId: sourceID,
 			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb",
 			FilterJson: `{"freq":"1m"}`, KeepDuration: "0", Status: "active",
 			Columns: []*storagepb.ViewColumn{

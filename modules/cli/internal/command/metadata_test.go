@@ -156,8 +156,7 @@ func TestBuildMetadataImportCallsCanonicalizesKeepDurations(t *testing.T) {
 			Freqs: []string{"1H"},
 		}},
 		Views: []seedView{{
-			SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
-			DatasetIDs: []string{"kline"}, FilterJSON: `{"freq":"1H"}`, KeepDuration: "4320h",
+			SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline", FilterJSON: `{"freq":"1H"}`, KeepDuration: "4320h",
 		}},
 	})
 	require.NoError(t, err)
@@ -185,15 +184,14 @@ func TestBuildMetadataImportCallsCanonicalizesViewAsStorage(t *testing.T) {
 			Freqs: []string{"1H"},
 		}},
 		Views: []seedView{{
-			SpaceID: "crypto", ViewID: "kline_view", DatasetIDs: []string{"kline", "kline"},
+			SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
 			GrainKeys: []string{"wrong"}, FilterJSON: `{ "freq": "1H" }`, Engine: "pebble",
 			KeepDuration: "1h",
 		}},
 	})
 	require.NoError(t, err)
 	view := calls[1].Request.(*pb.CreateViewReq).GetView()
-	require.Equal(t, "kline", view.GetPrimaryDatasetId())
-	require.Equal(t, []string{"kline"}, view.GetDatasetIds())
+	require.Equal(t, "kline", view.GetDatasetId())
 	require.Equal(t, []string{"subject_id", "freq", "data_time", "series_tag"}, view.GetGrainKeys())
 	require.Equal(t, `{"freq":"1H"}`, view.GetFilterJson())
 	require.Equal(t, "duckdb", view.GetEngine())
@@ -272,8 +270,7 @@ func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 		Factors:         []seedFactor{{SpaceID: "crypto", FactorID: "ma", ValueType: "DOUBLE"}},
 		DatasetColumns:  []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}},
 		Views: []seedView{{
-			SpaceID: "crypto", ViewID: "v1", Name: "View", PrimaryDatasetID: "kline",
-			DatasetIDs: []string{"kline"}, GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
+			SpaceID: "crypto", ViewID: "v1", Name: "View", PrimaryDatasetID: "kline", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
 			FilterJSON: `{"freq":"1m"}`, Engine: "duckdb",
 		}},
 		ViewColumns: []seedViewColumn{{SpaceID: "crypto", ViewID: "v1", ColumnName: "close", OriginType: "DATASET_COLUMN", ValueType: "DOUBLE"}},
@@ -827,7 +824,7 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 		}},
 		Views: []seedView{{
 			SpaceID: "crypto", ViewID: "kline", Name: "行情视图", Description: "默认行情",
-			PrimaryDatasetID: "kline", DatasetIDs: []string{"kline"},
+			PrimaryDatasetID: "kline",
 			GrainKeys:  []string{"subject_id", "freq", "data_time", "series_tag"},
 			FilterJSON: `{"freq":"1H"}`, Engine: "duckdb", KeepDuration: "8760h",
 		}},

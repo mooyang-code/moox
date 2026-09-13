@@ -11,14 +11,14 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestMetadataSchemaV10Contract(t *testing.T) {
+func TestMetadataSchemaV11Contract(t *testing.T) {
 	sql, err := os.ReadFile("metadata.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(sql)
 	for _, want := range []string{
-		"VALUES ('schema_version', '10')",
+		"VALUES ('schema_version', '11')",
 		"CREATE TABLE IF NOT EXISTS t_data_nodes",
 		"c_node_id TEXT NOT NULL",
 		"c_name TEXT NOT NULL",
@@ -37,6 +37,8 @@ func TestMetadataSchemaV10Contract(t *testing.T) {
 		"c_safe_error",
 		"CREATE TABLE IF NOT EXISTS t_view_period_dataset_states",
 		"CREATE TABLE IF NOT EXISTS t_view_sync_points",
+		"c_dataset_id TEXT NOT NULL",
+		"CREATE INDEX IF NOT EXISTS idx_t_views_dataset ON t_views (c_space_id, c_dataset_id, c_status)",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("metadata schema missing %q", want)
@@ -50,6 +52,8 @@ func TestMetadataSchemaV10Contract(t *testing.T) {
 		"c_content_hash",
 		"c_required",
 		"ALTER TABLE",
+		"c_primary_dataset_id",
+		"c_dataset_ids_json",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("metadata schema contains removed schema element %q", forbidden)
@@ -74,7 +78,7 @@ func TestMetadataSchemaV10Contract(t *testing.T) {
 	}
 }
 
-func TestMetadataSchemaV10DDLExecutes(t *testing.T) {
+func TestMetadataSchemaV11DDLExecutes(t *testing.T) {
 	schema, err := os.ReadFile("metadata.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -93,8 +97,8 @@ func TestMetadataSchemaV10DDLExecutes(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "10" {
-		t.Fatalf("persisted schema version = %q, want 10", version)
+	if version != "11" {
+		t.Fatalf("persisted schema version = %q, want 11", version)
 	}
 	var foreignKeysEnabled int
 	if err := db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeysEnabled); err != nil {

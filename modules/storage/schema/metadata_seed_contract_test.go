@@ -18,7 +18,7 @@ type metadataSeedGrainContract struct {
 	Views []struct {
 		SpaceID          string   `yaml:"space_id"`
 		ViewID           string   `yaml:"view_id"`
-		PrimaryDatasetID string   `yaml:"primary_dataset_id"`
+		PrimaryDatasetID string   `yaml:"dataset_id"`
 		GrainKeys        []string `yaml:"grain_keys"`
 	} `yaml:"views"`
 	Devices []struct {

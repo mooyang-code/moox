@@ -508,6 +508,9 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ 
 		if sourceDataset == "" || origin == "" {
 			continue
 		}
+		if owned := strings.TrimSpace(schema.PrimaryDatasetID); owned != "" && sourceDataset != owned {
+			continue
+		}
 		if index := strings.LastIndexByte(origin, '.'); index >= 0 && index+1 < len(origin) {
 			origin = origin[index+1:]
 		}
@@ -670,6 +673,9 @@ func mergeRowAttributes(dst, src map[string]*pb.TypedValue) {
 }
 
 func eventWrites(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.RowFieldUpsert) []viewindex.RowWrite {
+	if owned := strings.TrimSpace(schema.PrimaryDatasetID); owned != "" && datasetID != owned {
+		return nil
+	}
 	columns := make(map[string]string)
 	for _, column := range schema.Columns {
 		if column == nil || viewColumnDataset(column) != datasetID {

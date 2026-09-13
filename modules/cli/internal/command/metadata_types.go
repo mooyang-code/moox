@@ -255,8 +255,7 @@ type seedView struct {
 	ViewID           string   `yaml:"view_id"`
 	Name             string   `yaml:"name"`
 	Description      string   `yaml:"description"`
-	PrimaryDatasetID string   `yaml:"primary_dataset_id"`
-	DatasetIDs       []string `yaml:"dataset_ids"`
+	PrimaryDatasetID string   `yaml:"dataset_id"`
 	GrainKeys        []string `yaml:"grain_keys"`
 	FilterJSON       string   `yaml:"filter_json"`
 	Engine           string   `yaml:"engine"`

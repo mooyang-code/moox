@@ -731,8 +731,7 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			x.GetViewId() == y.GetViewId() &&
 			x.GetName() == y.GetName() &&
 			x.GetDescription() == y.GetDescription() &&
-			x.GetPrimaryDatasetId() == y.GetPrimaryDatasetId() &&
-			slices.Equal(x.GetDatasetIds(), y.GetDatasetIds()) &&
+			x.GetDatasetId() == y.GetDatasetId() &&
 			slices.Equal(x.GetGrainKeys(), y.GetGrainKeys()) &&
 			x.GetFilterJson() == y.GetFilterJson() &&
 			x.GetEngine() == y.GetEngine() &&
@@ -920,7 +919,7 @@ func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {
 }
 
 func (s seedView) toPB() *pb.View {
-	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, PrimaryDatasetId: s.PrimaryDatasetID, DatasetIds: s.DatasetIDs, GrainKeys: s.GrainKeys, FilterJson: s.FilterJSON, Engine: s.Engine, KeepDuration: s.KeepDuration, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, DatasetId: s.PrimaryDatasetID, GrainKeys: s.GrainKeys, FilterJson: s.FilterJSON, Engine: s.Engine, KeepDuration: s.KeepDuration, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedViewColumn) toPB() (*pb.ViewColumn, error) {

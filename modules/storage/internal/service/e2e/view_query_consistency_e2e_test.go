@@ -25,7 +25,7 @@ func TestViewQueryFilterSortPageAndTotalE2E(t *testing.T) {
 		AuthInfo: auth,
 		IndexId:  "prices-view",
 		Schema: &pb.ViewIndexSchema{
-			SpaceId: "quant", ViewId: "prices-view", PrimaryDatasetId: "prices", ViewVersion: 1,
+			SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ViewVersion: 1,
 			Engine: "duckdb", ViewSchemaHash: "schema-1",
 			Columns: []*pb.ViewColumn{
 				{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
@@ -43,7 +43,7 @@ func TestViewQueryFilterSortPageAndTotalE2E(t *testing.T) {
 	if rsp, err := service.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{AuthInfo: auth, IndexId: "prices-view", Batch: &pb.ViewIndexWriteBatch{ViewRevision: 1, ViewSchemaHash: "schema-1", WriteMode: "LIVE_WRITE", RowWrites: rows}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write: rsp=%v err=%v", rsp, err)
 	}
-	if err := service.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: "prices-view", PrimaryDatasetId: "prices", Engine: "duckdb", ActiveIndexId: "prices-view", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", ActiveColumns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT}}, Status: "active"}); err != nil {
+	if err := service.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", ActiveIndexId: "prices-view", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", ActiveColumns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT}}, Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -71,7 +71,7 @@ func TestPeriodBackfillUsesPrimaryInsteadOfCopyingActiveAndReportsRowsWritten(t 
 		SpaceId:          "space",
 		ViewId:           "prices",
 		Engine:           "duckdb",
-		PrimaryDatasetId: "market",
+		DatasetId: "market",
 		FilterJson:       `{"freq":"1m"}`,
 	}
 	metadata := &maintenanceMetadata{view: view}
@@ -156,7 +156,7 @@ func TestCapacityMaintenanceRequiresSubjectCatalog(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := &Service{metadataClient: tt.metadata}
-			ok, reason := svc.capacityMaintenanceCatalogReady(context.Background(), nil, &pb.View{SpaceId: "crypto", PrimaryDatasetId: "dataset_binance_spot_kline_1m"})
+			ok, reason := svc.capacityMaintenanceCatalogReady(context.Background(), nil, &pb.View{SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m"})
 			if ok != tt.wantOK || reason != tt.wantWhy {
 				t.Fatalf("capacityMaintenanceCatalogReady() = (%v, %q), want (%v, %q)", ok, reason, tt.wantOK, tt.wantWhy)
 			}
@@ -166,7 +166,7 @@ func TestCapacityMaintenanceRequiresSubjectCatalog(t *testing.T) {
 
 func TestPeriodBackfillRequiresPrimaryReaderForNewTimeSeriesView(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
-	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", PrimaryDatasetId: "market", FilterJson: `{"freq":"1m"}`}
+	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market", FilterJson: `{"freq":"1m"}`}
 	svc := &Service{
 		engines:      map[string]viewindex.Engine{"duckdb": engine},
 		indexEngine:  map[string]string{"prices-b": "duckdb"},
@@ -182,7 +182,7 @@ func TestPeriodBackfillRequiresPrimaryReaderForNewTimeSeriesView(t *testing.T) {
 func TestPeriodBackfillActivatesWithAvailableHistoryBelowTarget(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
 	view := &pb.View{
-		SpaceId: "space", ViewId: "prices", Engine: "duckdb", PrimaryDatasetId: "market",
+		SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market",
 		FilterJson: `{"freq":"1m"}`,
 	}
 	svc := &Service{
@@ -210,7 +210,7 @@ func TestFactorResultViewMayStartEmptyBeforeFirstFactorPeriod(t *testing.T) {
 		SpaceId:          "space",
 		ViewId:           "factor-result-view",
 		Engine:           "duckdb",
-		PrimaryDatasetId: "factor-results",
+		DatasetId: "factor-results",
 		FilterJson:       `{"freq":"1m"}`,
 		Attributes:       map[string]string{"dataset_role": "factor_result"},
 	}
@@ -218,7 +218,7 @@ func TestFactorResultViewMayStartEmptyBeforeFirstFactorPeriod(t *testing.T) {
 	svc := &Service{
 		engines:      map[string]viewindex.Engine{"duckdb": engine},
 		indexEngine:  map[string]string{"factor-result-view-b": "duckdb"},
-		schemas:      map[string]viewindex.ViewIndexSchema{"factor-result-view-b": {SpaceID: "space", ViewID: view.ViewId, PrimaryDatasetID: view.PrimaryDatasetId, Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema"}},
+		schemas:      map[string]viewindex.ViewIndexSchema{"factor-result-view-b": {SpaceID: "space", ViewID: view.ViewId, PrimaryDatasetID: view.DatasetId, Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema"}},
 		views:        map[viewRef]*viewRuntime{{spaceID: "space", viewID: view.ViewId}: runtime},
 		catalogViews: map[viewRef]*pb.View{{spaceID: "space", viewID: view.ViewId}: view},
 	}
@@ -240,7 +240,7 @@ func TestFactorResultViewBackfillsExistingPrimaryOutput(t *testing.T) {
 		SpaceId:          "space",
 		ViewId:           "factor-result-view",
 		Engine:           "duckdb",
-		PrimaryDatasetId: "factor-results",
+		DatasetId: "factor-results",
 		FilterJson:       `{"freq":"1m"}`,
 		Attributes:       map[string]string{"dataset_role": "factor_result"},
 	}
@@ -253,7 +253,7 @@ func TestFactorResultViewBackfillsExistingPrimaryOutput(t *testing.T) {
 	svc := &Service{
 		engines:      map[string]viewindex.Engine{"duckdb": engine},
 		indexEngine:  map[string]string{"factor-result-view-a": "duckdb", "factor-result-view-b": "duckdb"},
-		schemas:      map[string]viewindex.ViewIndexSchema{"factor-result-view-a": {SpaceID: "space", ViewID: view.ViewId, PrimaryDatasetID: view.PrimaryDatasetId, Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema"}, "factor-result-view-b": {SpaceID: "space", ViewID: view.ViewId, PrimaryDatasetID: view.PrimaryDatasetId, Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema"}},
+		schemas:      map[string]viewindex.ViewIndexSchema{"factor-result-view-a": {SpaceID: "space", ViewID: view.ViewId, PrimaryDatasetID: view.DatasetId, Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema"}, "factor-result-view-b": {SpaceID: "space", ViewID: view.ViewId, PrimaryDatasetID: view.DatasetId, Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema"}},
 		views:        map[viewRef]*viewRuntime{{spaceID: "space", viewID: view.ViewId}: runtime},
 		catalogViews: map[viewRef]*pb.View{{spaceID: "space", viewID: view.ViewId}: view},
 	}

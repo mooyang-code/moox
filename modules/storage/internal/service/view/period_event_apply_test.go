@@ -134,22 +134,22 @@ func collectorCompleted(dataset, status string, subjects, failed []string, at ti
 	}
 }
 
-func TestHandleCollectorPeriodCompletedAggregatesTwoDatasetsIdempotently(t *testing.T) {
+func TestHandleCollectorPeriodCompletedPublishesSingleDatasetIdempotently(t *testing.T) {
 	metadata := newPeriodMetadataFake()
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(metadata, publisher, &pb.View{
-		SpaceId: "quant", ViewId: "source-view", PrimaryDatasetId: "prices", DatasetIds: []string{"prices", "fundamentals"}, ActiveIndexId: "source-view-a",
+		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
 	})
 	periodTime := int64(1786032000)
-	firstAt := time.Date(2026, 8, 7, 0, 0, 1, 0, time.UTC)
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("fundamentals-ready", firstAt), collectorCompleted("fundamentals", "complete", []string{"ETH-USDT"}, nil, firstAt, periodTime)); err != nil {
+	otherAt := time.Date(2026, 8, 7, 0, 0, 1, 0, time.UTC)
+	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("fundamentals-ready", otherAt), collectorCompleted("fundamentals", "complete", []string{"ETH-USDT"}, nil, otherAt, periodTime)); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.attempts) != 0 {
-		t.Fatalf("ready published before every dataset arrived: %d", len(publisher.attempts))
+		t.Fatalf("ready published for an unrelated dataset: %d", len(publisher.attempts))
 	}
 
-	secondAt := firstAt.Add(time.Second)
+	secondAt := otherAt.Add(time.Second)
 	message := periodMessage("prices-ready", secondAt)
 	payload := collectorCompleted("prices", "degraded", []string{"ETH-USDT", "BTC-USDT", "BTC-USDT"}, []string{"ETH-USDT"}, secondAt, periodTime)
 	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload); err != nil {
@@ -158,7 +158,7 @@ func TestHandleCollectorPeriodCompletedAggregatesTwoDatasetsIdempotently(t *test
 	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload); err != nil {
 		t.Fatalf("idempotent marker retry failed: %v", err)
 	}
-	if len(metadata.states) != 2 || len(publisher.attempts) != 2 || len(publisher.byID) != 1 {
+	if len(metadata.states) != 1 || len(publisher.attempts) != 2 || len(publisher.byID) != 1 {
 		t.Fatalf("states=%d publish attempts=%d unique events=%d", len(metadata.states), len(publisher.attempts), len(publisher.byID))
 	}
 	if publisher.attempts[0].opts.EventID != publisher.attempts[1].opts.EventID {
@@ -176,45 +176,34 @@ func TestHandleCollectorPeriodCompletedAggregatesTwoDatasetsIdempotently(t *test
 	}
 }
 
-func TestHandleCollectorPeriodCompletedUsesActiveDatasetContractDuringRebuild(t *testing.T) {
+func TestHandleCollectorPeriodCompletedIgnoresExtraRuntimeDatasets(t *testing.T) {
 	metadata := newPeriodMetadataFake()
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(metadata, publisher, &pb.View{
-		SpaceId: "quant", ViewId: "source-view", PrimaryDatasetId: "prices",
-		DatasetIds: []string{"prices"}, ActiveIndexId: "source-view-a",
+		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
 	})
 	runtime := service.views[viewRef{spaceID: "quant", viewID: "source-view"}]
 	runtime.mu.Lock()
 	runtime.activeDatasetIDs = []string{"prices", "fundamentals"}
+	runtime.activePrimaryDatasetID = "prices"
 	runtime.activeDatasetSet = true
 	runtime.mu.Unlock()
 
 	periodTime := int64(1786032000)
 	at := time.Date(2026, 8, 7, 0, 0, 1, 0, time.UTC)
 	message := periodMessage("prices-ready", at)
-	err := service.HandleCollectorPeriodCompleted(context.Background(), message, collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, periodTime))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(publisher.attempts) != 0 {
-		t.Fatal("desired dataset contract released source-ready before active auxiliary dataset arrived")
-	}
-
-	runtime.mu.Lock()
-	runtime.activeDatasetIDs = []string{"prices"}
-	runtime.mu.Unlock()
 	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, periodTime)); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.attempts) != 1 {
-		t.Fatalf("active dataset contract did not publish ready: attempts=%d", len(publisher.attempts))
+		t.Fatalf("single dataset view should publish without auxiliary sources: attempts=%d", len(publisher.attempts))
 	}
 }
 
 func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(nil, publisher, &pb.View{
-		SpaceId: "quant", ViewId: "result-view", PrimaryDatasetId: "factor-results", DatasetIds: []string{"factor-results"}, ActiveIndexId: "result-view-a",
+		SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results", ActiveIndexId: "result-view-a",
 	})
 	occurredAt := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
 	message := periodMessage("factor-marker-1", occurredAt)
@@ -246,9 +235,9 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 func TestHandleDatasetSyncPointRecordsEveryDependentViewIdempotently(t *testing.T) {
 	metadata := newPeriodMetadataFake()
 	service := newPeriodTestService(metadata, nil,
-		&pb.View{SpaceId: "quant", ViewId: "view-a", DatasetIds: []string{"prices"}, ActiveIndexId: "view-a-index"},
-		&pb.View{SpaceId: "quant", ViewId: "view-b", DatasetIds: []string{"prices", "fundamentals"}, ActiveIndexId: "view-b-index"},
-		&pb.View{SpaceId: "quant", ViewId: "inactive", DatasetIds: []string{"prices"}},
+		&pb.View{SpaceId: "quant", ViewId: "view-a", DatasetId: "prices", ActiveIndexId: "view-a-index"},
+		&pb.View{SpaceId: "quant", ViewId: "view-b", DatasetId: "prices", ActiveIndexId: "view-b-index"},
+		&pb.View{SpaceId: "quant", ViewId: "inactive", DatasetId: "prices"},
 	)
 	occurredAt := time.Date(2026, 8, 7, 0, 2, 0, 0, time.UTC)
 	message := periodMessage("sync-marker-1", occurredAt)
@@ -273,7 +262,7 @@ func TestHandleDatasetSyncPointRecordsEveryDependentViewIdempotently(t *testing.
 func TestHandleDatasetSyncPointRecordsBuildingOnlyView(t *testing.T) {
 	metadata := newPeriodMetadataFake()
 	service := newPeriodTestService(metadata, nil, &pb.View{
-		SpaceId: "quant", ViewId: "building-view", DatasetIds: []string{"prices"},
+		SpaceId: "quant", ViewId: "building-view", DatasetId: "prices",
 	})
 	service.views[viewRef{spaceID: "quant", viewID: "building-view"}].next = "building-index"
 	message := periodMessage("sync-building-1", time.Date(2026, 8, 7, 0, 3, 0, 0, time.UTC))

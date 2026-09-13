@@ -84,7 +84,7 @@ func (c *RPCClient) beginViewSnapshot(ctx context.Context, spaceID string, viewI
 			return nil, err
 		}
 		view := viewRsp.GetView()
-		if view == nil || view.GetPrimaryDatasetId() == "" {
+		if view == nil || view.GetDatasetId() == "" {
 			return nil, fmt.Errorf("storage view %s has no primary dataset", viewID)
 		}
 		indexID := strings.TrimSpace(view.GetActiveIndexId())
@@ -99,7 +99,7 @@ func (c *RPCClient) beginViewSnapshot(ctx context.Context, spaceID string, viewI
 		if frequency == "" {
 			return nil, fmt.Errorf("storage view %s has no frequency", viewID)
 		}
-		selectors, err := c.selectorsForDataset(ctx, spaceID, view.GetPrimaryDatasetId(), frequency)
+		selectors, err := c.selectorsForDataset(ctx, spaceID, view.GetDatasetId(), frequency)
 		if err != nil {
 			return nil, err
 		}
@@ -288,10 +288,10 @@ func (c *RPCClient) ListSubjects(ctx context.Context, spaceID, viewID string) ([
 	if err := retError(view.GetRetInfo()); err != nil {
 		return nil, err
 	}
-	if view.GetView() == nil || view.GetView().GetPrimaryDatasetId() == "" {
+	if view.GetView() == nil || view.GetView().GetDatasetId() == "" {
 		return nil, fmt.Errorf("storage view %s has no primary dataset", viewID)
 	}
-	datasetID := view.GetView().GetPrimaryDatasetId()
+	datasetID := view.GetView().GetDatasetId()
 	var result []input.Subject
 	for page := uint32(1); ; page++ {
 		rsp, listErr := c.Metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{AuthInfo: c.metadataAuth(), SpaceId: spaceID, DatasetId: datasetID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
@@ -391,7 +391,7 @@ func (c *RPCClient) readRows(ctx context.Context, spaceID, viewID string, start,
 		return nil, err
 	}
 	view := viewRsp.GetView()
-	if view == nil || view.GetPrimaryDatasetId() == "" {
+	if view == nil || view.GetDatasetId() == "" {
 		return nil, fmt.Errorf("storage view %s has no primary dataset", viewID)
 	}
 	expectedIndexID := strings.TrimSpace(view.GetActiveIndexId())
@@ -402,7 +402,7 @@ func (c *RPCClient) readRows(ctx context.Context, spaceID, viewID string, start,
 	if frequency == "" {
 		return nil, fmt.Errorf("storage view %s has no frequency", viewID)
 	}
-	selectors, selectorErr := c.selectorsForDataset(ctx, spaceID, view.GetPrimaryDatasetId(), frequency)
+	selectors, selectorErr := c.selectorsForDataset(ctx, spaceID, view.GetDatasetId(), frequency)
 	if selectorErr != nil {
 		return nil, selectorErr
 	}

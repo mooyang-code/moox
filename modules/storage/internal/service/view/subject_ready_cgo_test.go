@@ -32,7 +32,7 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 	auth := &pb.AuthInfo{AppId: "test", AppKey: datanode.ServiceAuthKey("secret", "test")}
 	columns := []*pb.ViewColumn{{OriginId: "market_prices.close", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 	rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "prices-a", Schema: &pb.ViewIndexSchema{
-		SpaceId: "space", ViewId: "prices", PrimaryDatasetId: "market_prices", DatasetIds: []string{"market_prices"}, ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema", Columns: columns,
+		SpaceId: "space", ViewId: "prices", DatasetId: "market_prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema", Columns: columns,
 	}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
@@ -47,7 +47,7 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 	// write against the activated index publishes, and that row is already
 	// queryable inside the publisher callback.
 	require.NoError(t, svc.HandleDatasetRows(ctx, message, payload))
-	require.NoError(t, svc.AttachActiveView(&pb.View{SpaceId: "space", ViewId: "prices", PrimaryDatasetId: "market_prices", DatasetIds: []string{"market_prices"}, Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema", ActiveColumns: columns, Status: "active"}))
+	require.NoError(t, svc.AttachActiveView(&pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "market_prices", Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema", ActiveColumns: columns, Status: "active"}))
 	svc.readyPublisher = subjectPublisherFunc(func(ctx context.Context, _ events.Event, _ proto.Message, _ events.PublishOptions) (*jetstream.PublishAck, error) {
 		rows, err := svc.query(ctx, "prices-a", []*pb.RowKey{row.Key}, nil)
 		require.NoError(t, err)

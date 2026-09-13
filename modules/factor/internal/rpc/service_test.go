@@ -1171,7 +1171,7 @@ func (f *recordingFactorMetadataClient) ListViews(_ context.Context, req *storag
 	}
 	return &storagepb.ListViewsRsp{RetInfo: success(), Views: []*storagepb.View{{
 		SpaceId: req.GetSpaceId(), ViewId: "source_view", Status: "active",
-		PrimaryDatasetId: primaryDatasetID,
+		DatasetId: primaryDatasetID,
 		ActiveIndexId:    "index-a", ActiveColumns: []*storagepb.ViewColumn{
 			{ColumnName: req.GetDatasetId() + ".close", OriginId: req.GetDatasetId() + ".close"},
 		},

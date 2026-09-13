@@ -239,7 +239,7 @@ export function getView(params: { space_id: string; view_id: string }) {
   return callMetadata<typeof params, RetRsp & { view: View }>("GetView", params);
 }
 
-export function listViews(params: { space_id: string; primary_dataset_id?: string; status?: string; page?: Page }) {
+export function listViews(params: { space_id: string; dataset_id?: string; status?: string; page?: Page }) {
   return callMetadata<typeof params, RetRsp & { views: View[]; page_result: PageResult }>("ListViews", params);
 }
 

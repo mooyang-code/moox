@@ -261,7 +261,7 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, n
 		auth = proto.Clone(auth).(*pb.AuthInfo)
 	}
 	s.mu.RUnlock()
-	if view == nil || view.GetPrimaryDatasetId() == "" {
+	if view == nil || view.GetDatasetId() == "" {
 		return 0, errors.New("primary dataset is required for View history backfill")
 	}
 	if lookbackPeriods > 0 {
@@ -286,14 +286,14 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, n
 				return written, err
 			}
 			rsp, err := readPrimaryTimeSeriesRowsLimited(ctx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
-				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), TimeRange: timeRange,
+				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(), TimeRange: timeRange,
 				Order: pb.SortOrder_SORT_ORDER_ASC, Page: &pb.Page{Page: 1, Size: uint32(batchSize)}, AfterKey: afterKey,
 			})
 			if err != nil {
-				return written, fmt.Errorf("scan Primary history for %s/%s: %w", spaceID, view.GetPrimaryDatasetId(), err)
+				return written, fmt.Errorf("scan Primary history for %s/%s: %w", spaceID, view.GetDatasetId(), err)
 			}
 			if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-				return written, fmt.Errorf("scan Primary history for %s/%s: %w", spaceID, view.GetPrimaryDatasetId(), err)
+				return written, fmt.Errorf("scan Primary history for %s/%s: %w", spaceID, view.GetDatasetId(), err)
 			}
 			writes := make([]viewindex.RowWrite, 0, len(rsp.GetRows()))
 			for _, row := range rsp.GetRows() {
@@ -360,8 +360,8 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 	expected := make(map[string]struct{})
 	counts := make(map[string]uint64, len(expected))
 	var selectors []*pb.TimeSeriesSelector
-	if subjects, catalogAvailable, err := s.loadBackfillSubjectCatalog(ctx, auth, view.GetSpaceId(), view.GetPrimaryDatasetId()); err != nil {
-		return 0, fmt.Errorf("load Primary subject catalog for %s/%s: %w", view.GetSpaceId(), view.GetPrimaryDatasetId(), err)
+	if subjects, catalogAvailable, err := s.loadBackfillSubjectCatalog(ctx, auth, view.GetSpaceId(), view.GetDatasetId()); err != nil {
+		return 0, fmt.Errorf("load Primary subject catalog for %s/%s: %w", view.GetSpaceId(), view.GetDatasetId(), err)
 	} else if catalogAvailable {
 		if len(subjects) == 0 {
 			// An empty catalog is valid for a dataset that has not produced any
@@ -370,20 +370,20 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 			// nothing to backfill, while non-empty Primary falls back to the
 			// authoritative scan rather than activating a partial index.
 			probe, probeErr := readPrimaryTimeSeriesRowsLimited(ctx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
-				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
+				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(),
 				Order: pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: 1},
 			})
 			if probeErr != nil {
-				return 0, fmt.Errorf("probe Primary history for %s/%s: %w", view.GetSpaceId(), view.GetPrimaryDatasetId(), probeErr)
+				return 0, fmt.Errorf("probe Primary history for %s/%s: %w", view.GetSpaceId(), view.GetDatasetId(), probeErr)
 			}
 			if err := requireSuccess(probe.GetRetInfo()); err != nil {
-				return 0, fmt.Errorf("probe Primary history for %s/%s: %w", view.GetSpaceId(), view.GetPrimaryDatasetId(), err)
+				return 0, fmt.Errorf("probe Primary history for %s/%s: %w", view.GetSpaceId(), view.GetDatasetId(), err)
 			}
 			if len(probe.GetRows()) == 0 {
-				log.Printf("storage view history backfill has no Primary rows space=%s dataset=%s", view.GetSpaceId(), view.GetPrimaryDatasetId())
+				log.Printf("storage view history backfill has no Primary rows space=%s dataset=%s", view.GetSpaceId(), view.GetDatasetId())
 				return 0, nil
 			}
-			log.Printf("storage view history backfill subject catalog is empty; using authoritative Primary scan space=%s dataset=%s", view.GetSpaceId(), view.GetPrimaryDatasetId())
+			log.Printf("storage view history backfill subject catalog is empty; using authoritative Primary scan space=%s dataset=%s", view.GetSpaceId(), view.GetDatasetId())
 		}
 		if len(subjects) > 0 {
 			// The subject-first Primary history index lets us read each bound
@@ -417,14 +417,14 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 			return written, err
 		}
 		rsp, err := readPrimaryTimeSeriesRowsLimited(ctx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
-			AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), Selectors: selectors,
+			AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(), Selectors: selectors,
 			Order: pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: uint32(batchSize)}, AfterKey: afterKey,
 		})
 		if err != nil {
-			return written, fmt.Errorf("scan Primary history for %s/%s by periods (scanned=%d written=%d): %w", spaceID, view.GetPrimaryDatasetId(), scanned, written, err)
+			return written, fmt.Errorf("scan Primary history for %s/%s by periods (scanned=%d written=%d): %w", spaceID, view.GetDatasetId(), scanned, written, err)
 		}
 		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-			return written, fmt.Errorf("scan Primary history for %s/%s by periods (scanned=%d written=%d): %w", spaceID, view.GetPrimaryDatasetId(), scanned, written, err)
+			return written, fmt.Errorf("scan Primary history for %s/%s by periods (scanned=%d written=%d): %w", spaceID, view.GetDatasetId(), scanned, written, err)
 		}
 		rows := rsp.GetRows()
 		if scanned+uint64(len(rows)) > maxHistoryScanRows {
@@ -458,7 +458,7 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 		}
 		if len(writes) > 0 && reader != nil {
 			if err := s.enrichBackfillRows(ctx, reader, "", nextID, writes, limiter); err != nil {
-				return written, fmt.Errorf("enrich Primary history for %s/%s (rows=%d written=%d): %w", spaceID, view.GetPrimaryDatasetId(), len(writes), written, err)
+				return written, fmt.Errorf("enrich Primary history for %s/%s (rows=%d written=%d): %w", spaceID, view.GetDatasetId(), len(writes), written, err)
 			}
 		}
 		for offset := 0; offset < len(writes); offset += 256 {
@@ -513,6 +513,15 @@ func (s *Service) loadBackfillSubjectCatalog(ctx context.Context, auth *pb.AuthI
 	if metadata == nil {
 		return nil, false, nil
 	}
+	if datasetMetadata, ok := metadata.(MetadataClient); ok {
+		subjects, err := s.listBackfillSubjects(ctx, datasetMetadata, auth, spaceID, datasetID)
+		if err != nil {
+			return nil, true, err
+		}
+		if len(subjects) > 0 {
+			return subjects, true, nil
+		}
+	}
 	catalog, ok := metadata.(subjectCatalogClient)
 	if !ok {
 		return nil, false, nil
@@ -533,7 +542,7 @@ func (s *Service) capacityMaintenanceCatalogReady(ctx context.Context, auth *pb.
 	if view == nil {
 		return false, "subject_catalog_unavailable"
 	}
-	subjects, available, err := s.loadBackfillSubjectCatalog(ctx, auth, view.GetSpaceId(), view.GetPrimaryDatasetId())
+	subjects, available, err := s.loadBackfillSubjectCatalog(ctx, auth, view.GetSpaceId(), view.GetDatasetId())
 	if err != nil || !available {
 		return false, "subject_catalog_unavailable"
 	}
@@ -561,8 +570,8 @@ func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, sp
 			}
 			subjectCtx, cancel := context.WithTimeout(ctx, primaryHistorySubjectReadTimeout)
 			rsp, err := readPrimaryTimeSeriesRowsLimited(subjectCtx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
-				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
-				Selectors: []*pb.TimeSeriesSelector{{SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), SubjectId: subject, Freq: frequency}},
+				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(),
+				Selectors: []*pb.TimeSeriesSelector{{SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(), SubjectId: subject, Freq: frequency}},
 				Order:     pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: uint32(batchSize)}, AfterKey: afterKey,
 			})
 			cancel()
@@ -574,10 +583,10 @@ func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, sp
 					log.Printf("storage view history backfill skipped subject after Primary timeout space=%s view=%s subject=%s: %v", spaceID, viewID, subject, err)
 					break
 				}
-				return written, fmt.Errorf("scan Primary history for %s/%s subject %s: %w", spaceID, view.GetPrimaryDatasetId(), subject, err)
+				return written, fmt.Errorf("scan Primary history for %s/%s subject %s: %w", spaceID, view.GetDatasetId(), subject, err)
 			}
 			if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-				return written, fmt.Errorf("scan Primary history for %s/%s subject %s: %w", spaceID, view.GetPrimaryDatasetId(), subject, err)
+				return written, fmt.Errorf("scan Primary history for %s/%s subject %s: %w", spaceID, view.GetDatasetId(), subject, err)
 			}
 			rows := rsp.GetRows()
 			writes := make([]viewindex.RowWrite, 0, len(rows))
@@ -598,7 +607,7 @@ func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, sp
 			}
 			if len(writes) > 0 {
 				if err := s.enrichBackfillRows(ctx, reader, "", nextID, writes, limiter); err != nil {
-					return written, fmt.Errorf("enrich Primary history for %s/%s subject %s: %w", spaceID, view.GetPrimaryDatasetId(), subject, err)
+					return written, fmt.Errorf("enrich Primary history for %s/%s subject %s: %w", spaceID, view.GetDatasetId(), subject, err)
 				}
 			}
 			for offset := 0; offset < len(writes); offset += 256 {
@@ -931,6 +940,10 @@ func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, ac
 			continue
 		}
 		datasetID := viewColumnDataset(column)
+		owned := strings.TrimSpace(nextSchema.PrimaryDatasetID)
+		if owned != "" && datasetID != owned {
+			continue
+		}
 		source := viewColumnSource(column, datasetID)
 		if datasetID != "" && source != "" {
 			byDataset[datasetID] = append(byDataset[datasetID], requestedField{source: source, target: column.GetColumnName()})
@@ -1189,13 +1202,16 @@ func (s *Service) AttachActiveViewWithGrace(ctx context.Context, view *pb.View, 
 	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" || view.GetActiveIndexId() == "" {
 		return errors.New("active view metadata is required")
 	}
+	if err := validateAttachedSingleDataset(view); err != nil {
+		return err
+	}
 	// A legacy metadata row may describe an in-flight rebuild without the
 	// persisted active contract introduced for A/B views. Falling back to the
-	// desired DatasetIds/PrimaryDatasetId would silently route markers and
+	// desired DatasetIds/DatasetId would silently route markers and
 	// queries to the next revision. Refuse that ambiguous state so startup or
 	// reconciliation surfaces an actionable migration error instead.
 	if view.GetActiveViewRevision() > 0 && view.GetDesiredViewRevision() > view.GetActiveViewRevision() {
-		if len(persistedActiveDatasetIDs(view)) == 0 || strings.TrimSpace(view.GetAttributes()[activePrimaryDatasetAttr]) == "" {
+		if persistedActiveDatasetID(view) == "" {
 			return fmt.Errorf("%w: active view %s/%s is rebuilding without persisted active contract", errActiveContractUnavailable, view.GetSpaceId(), view.GetViewId())
 		}
 	}
@@ -1209,7 +1225,7 @@ func (s *Service) AttachActiveViewWithGrace(ctx context.Context, view *pb.View, 
 	}
 	activePrimaryDatasetID := strings.TrimSpace(view.GetAttributes()[activePrimaryDatasetAttr])
 	if activePrimaryDatasetID == "" {
-		activePrimaryDatasetID = view.GetPrimaryDatasetId()
+		activePrimaryDatasetID = view.GetDatasetId()
 	}
 	schema := viewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: view.GetActiveViewRevision(),
@@ -1264,13 +1280,16 @@ func (s *Service) attachActiveViewLocked(view *pb.View, runtime *viewRuntime, sc
 	// re-attached with the new desired DatasetIds; replacing the snapshot here
 	// would let period markers observe the next revision before activation.
 	if activeChanged || !runtime.activeDatasetSet {
-		runtime.activeDatasetIDs = persistedActiveDatasetIDs(view)
-		if len(runtime.activeDatasetIDs) == 0 {
-			runtime.activeDatasetIDs = append([]string(nil), view.GetDatasetIds()...)
+		runtime.activeDatasetIDs = nil
+		if id := persistedActiveDatasetID(view); id != "" {
+			runtime.activeDatasetIDs = []string{id}
+		}
+		if len(runtime.activeDatasetIDs) == 0 && view.GetDatasetId() != "" {
+			runtime.activeDatasetIDs = []string{view.GetDatasetId()}
 		}
 		runtime.activePrimaryDatasetID = activePrimaryDatasetID
 		if runtime.activePrimaryDatasetID == "" {
-			runtime.activePrimaryDatasetID = view.GetPrimaryDatasetId()
+			runtime.activePrimaryDatasetID = view.GetDatasetId()
 		}
 		runtime.activeDatasetSet = true
 	}
@@ -1294,15 +1313,7 @@ func (s *Service) attachActiveViewLocked(view *pb.View, runtime *viewRuntime, sc
 	}
 	runtime.status = "active"
 	s.indexView[view.GetActiveIndexId()] = viewKey
-	for _, column := range columns {
-		if datasetID := viewColumnDataset(column); datasetID != "" {
-			ref := datasetRef{spaceID: view.GetSpaceId(), datasetID: datasetID}
-			if s.byData[ref] == nil {
-				s.byData[ref] = make(map[string]struct{})
-			}
-			s.byData[ref][view.GetActiveIndexId()] = struct{}{}
-		}
-	}
+	s.attachOwnedDatasetMappingLocked(view.GetSpaceId(), view.GetDatasetId(), view.GetActiveIndexId())
 	// An explicit zero-column projection still owns its Dataset events. Route
 	// those events to the index so rows/markers can be acknowledged without
 	// pretending the mapping is missing; the index write is intentionally a
@@ -1317,10 +1328,7 @@ func (s *Service) attachExplicitEmptyDatasetMappingsLocked(view *pb.View, indexI
 	if view == nil || indexID == "" {
 		return
 	}
-	datasetIDs := append([]string(nil), view.GetDatasetIds()...)
-	if len(datasetIDs) == 0 && view.GetPrimaryDatasetId() != "" {
-		datasetIDs = []string{view.GetPrimaryDatasetId()}
-	}
+	datasetIDs := viewDatasetIDs(view)
 	for _, datasetID := range datasetIDs {
 		if datasetID == "" {
 			continue
@@ -1366,16 +1374,16 @@ func (s *Service) AttachPendingViewBuild(ctx context.Context, view *pb.View) err
 	}
 	hash := build.GetSchemaHash()
 	if hash == "" {
-		hash = viewindex.HashViewIndexSchema(viewindex.ViewIndexSchema{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: version, Engine: engineName, Columns: columns, PrimaryDatasetID: view.GetPrimaryDatasetId()})
+		hash = viewindex.HashViewIndexSchema(viewindex.ViewIndexSchema{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: version, Engine: engineName, Columns: columns, PrimaryDatasetID: view.GetDatasetId()})
 	}
-	physicalSchemaHash := viewindex.HashViewIndexSchema(viewindex.ViewIndexSchema{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: version, Engine: engineName, Columns: columns, PrimaryDatasetID: view.GetPrimaryDatasetId()})
+	physicalSchemaHash := viewindex.HashViewIndexSchema(viewindex.ViewIndexSchema{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: version, Engine: engineName, Columns: columns, PrimaryDatasetID: view.GetDatasetId()})
 	if hash != physicalSchemaHash {
 		return fmt.Errorf("pending view index %q metadata schema hash is stale: build=%q desired=%q", build.GetIndexId(), hash, physicalSchemaHash)
 	}
 	if stats.SchemaHash != physicalSchemaHash {
 		return fmt.Errorf("pending view index %q schema hash mismatch: expected=%q physical=%q", build.GetIndexId(), physicalSchemaHash, stats.SchemaHash)
 	}
-	schema := viewindex.ViewIndexSchema{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: version, Engine: engineName, Columns: columns, SchemaHash: hash, PrimaryDatasetID: view.GetPrimaryDatasetId()}
+	schema := viewindex.ViewIndexSchema{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: version, Engine: engineName, Columns: columns, SchemaHash: hash, PrimaryDatasetID: view.GetDatasetId()}
 	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
 	s.mu.Lock()
 	runtime := s.views[viewKey]
@@ -1400,28 +1408,20 @@ func (s *Service) AttachPendingViewBuild(ctx context.Context, view *pb.View) err
 	s.indexEngine[build.GetIndexId()] = engineName
 	s.schemas[build.GetIndexId()] = schema
 	s.indexView[build.GetIndexId()] = viewKey
-	for _, column := range columns {
-		if datasetID := viewColumnDataset(column); datasetID != "" {
-			ref := datasetRef{spaceID: view.GetSpaceId(), datasetID: datasetID}
-			if s.byData[ref] == nil {
-				s.byData[ref] = make(map[string]struct{})
-			}
-			s.byData[ref][build.GetIndexId()] = struct{}{}
-		}
-	}
+	s.attachOwnedDatasetMappingLocked(view.GetSpaceId(), view.GetDatasetId(), build.GetIndexId())
 	if len(columns) == 0 && view.GetAttributes()[viewColumnsExplicitAttr] == "true" {
 		s.attachExplicitEmptyDatasetMappingsLocked(view, build.GetIndexId())
 	}
 	s.mu.Unlock()
 	if runtime.active == "" {
 		runtime.next = build.GetIndexId()
-		runtime.nextDatasetIDs = append([]string(nil), view.GetDatasetIds()...)
-		runtime.nextPrimaryDatasetID = view.GetPrimaryDatasetId()
+		runtime.nextDatasetIDs = viewDatasetIDs(view)
+		runtime.nextPrimaryDatasetID = view.GetDatasetId()
 		runtime.status = "ready"
 	} else if runtime.active != build.GetIndexId() {
 		runtime.next = build.GetIndexId()
-		runtime.nextDatasetIDs = append([]string(nil), view.GetDatasetIds()...)
-		runtime.nextPrimaryDatasetID = view.GetPrimaryDatasetId()
+		runtime.nextDatasetIDs = viewDatasetIDs(view)
+		runtime.nextPrimaryDatasetID = view.GetDatasetId()
 		runtime.status = "ready"
 	}
 	return nil

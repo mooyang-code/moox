@@ -31,8 +31,8 @@ func (s *Store) ReplaceViewColumns(ctx context.Context, item *pb.View) (*pb.View
 }
 
 func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bool) (*pb.View, error) {
-	if item == nil || item.GetSpaceId() == "" || item.GetViewId() == "" || item.GetName() == "" || item.GetPrimaryDatasetId() == "" {
-		return nil, errors.New("space_id, view_id, name and primary_dataset_id are required")
+	if item == nil || item.GetSpaceId() == "" || item.GetViewId() == "" || item.GetName() == "" || item.GetDatasetId() == "" {
+		return nil, errors.New("space_id, view_id, name and dataset_id are required")
 	}
 	columns := item.GetColumns()
 	next := proto.Clone(item).(*pb.View)
@@ -48,21 +48,17 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bo
 	next.Columns = nil
 	next.IndexBuild = nil
 	next.Status = defaultStatus(next.GetStatus())
-	keepDuration, err := normalizeKeepDuration(next.GetKeepDuration(), s.viewDataKind(ctx, next.GetSpaceId(), next.GetPrimaryDatasetId()))
+	keepDuration, err := normalizeKeepDuration(next.GetKeepDuration(), s.viewDataKind(ctx, next.GetSpaceId(), next.GetDatasetId()))
 	if err != nil {
 		return nil, err
 	}
 	next.KeepDuration = keepDuration
 	if strings.TrimSpace(next.Engine) == "" {
-		next.Engine = s.defaultViewEngine(ctx, next.GetSpaceId(), next.GetPrimaryDatasetId())
+		next.Engine = s.defaultViewEngine(ctx, next.GetSpaceId(), next.GetDatasetId())
 	} else {
 		next.Engine = strings.ToLower(strings.TrimSpace(next.Engine))
 	}
-	if len(next.DatasetIds) == 0 {
-		next.DatasetIds = []string{next.GetPrimaryDatasetId()}
-	}
-	datasetIDs, err := marshalJSON(next.GetDatasetIds())
-	if err != nil {
+	if err := validateSingleViewDataset(next.GetDatasetId()); err != nil {
 		return nil, err
 	}
 	grainKeys, err := marshalJSON(next.GetGrainKeys())
@@ -84,8 +80,7 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bo
 		next.GetSpaceId(),
 		next.GetViewId(),
 		next.GetKeepDuration(),
-		next.GetPrimaryDatasetId(),
-		next.GetDatasetIds(),
+		next.GetDatasetId(),
 	); err != nil {
 		return nil, err
 	}
@@ -97,8 +92,8 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bo
 		if existing.GetEngine() != "" && existing.GetEngine() != next.GetEngine() {
 			return nil, errors.New("active view engine change is unsupported; create a new view")
 		}
-		if existing.GetPrimaryDatasetId() != "" && existing.GetPrimaryDatasetId() != next.GetPrimaryDatasetId() {
-			return nil, errors.New("active view primary dataset change is unsupported; create a new view")
+		if existing.GetDatasetId() != "" && existing.GetDatasetId() != next.GetDatasetId() {
+			return nil, errors.New("active view dataset change is unsupported; create a new view")
 		}
 	}
 	shapeChanged := existing != nil && viewIndexShapeChanged(existing, next)
@@ -108,13 +103,12 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bo
 		return nil, err
 	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_primary_dataset_id, c_dataset_ids_json, c_grain_keys_json, c_filter_json, c_engine, c_keep_duration, c_active_index_id, c_desired_view_revision, c_active_view_revision, c_active_columns_json, c_active_view_schema_hash, c_active_slot, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_dataset_id, c_grain_keys_json, c_filter_json, c_engine, c_keep_duration, c_active_index_id, c_desired_view_revision, c_active_view_revision, c_active_columns_json, c_active_view_schema_hash, c_active_slot, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_view_id) DO UPDATE SET
 			c_name = excluded.c_name,
 			c_description = excluded.c_description,
-			c_primary_dataset_id = excluded.c_primary_dataset_id,
-			c_dataset_ids_json = excluded.c_dataset_ids_json,
+			c_dataset_id = excluded.c_dataset_id,
 			c_grain_keys_json = excluded.c_grain_keys_json,
 			c_filter_json = excluded.c_filter_json,
 			c_engine = excluded.c_engine,
@@ -129,7 +123,7 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bo
 			c_indexed_to = excluded.c_indexed_to,
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json
-	`, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetPrimaryDatasetId(), datasetIDs, grainKeys, defaultJSON(next.GetFilterJson()), next.GetEngine(), next.GetKeepDuration(), next.GetActiveIndexId(), next.GetDesiredViewRevision(), next.GetActiveViewRevision(), activeColumns, next.GetActiveViewSchemaHash(), next.GetActiveSlot(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
+	`, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetDatasetId(), grainKeys, defaultJSON(next.GetFilterJson()), next.GetEngine(), next.GetKeepDuration(), next.GetActiveIndexId(), next.GetDesiredViewRevision(), next.GetActiveViewRevision(), activeColumns, next.GetActiveViewSchemaHash(), next.GetActiveSlot(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}
@@ -235,10 +229,8 @@ func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string,
 		FROM t_views
 		WHERE (? = '' OR c_space_id = ?)
 		  AND (? = '' OR c_status = ?)
-		  AND (? = '' OR c_primary_dataset_id = ? OR EXISTS (
-			  SELECT 1 FROM json_each(c_dataset_ids_json) AS dataset_ref WHERE dataset_ref.value = ?
-		  ))`
-	args := []any{spaceID, spaceID, status, status, datasetID, datasetID, datasetID}
+		  AND (? = '' OR c_dataset_id = ?)`
+	args := []any{spaceID, spaceID, status, status, datasetID, datasetID}
 	items, pageResult, err := queryPagedMessages(ctx, s.queryDB(ctx),
 		`SELECT `+viewWithTimestampsSQL+` `+where+` ORDER BY c_space_id, c_view_id`,
 		`SELECT COUNT(1) `+where,
@@ -365,4 +357,11 @@ func viewOriginSQL(origin pb.ColumnOriginType) string {
 	default:
 		return "dataset_column"
 	}
+}
+
+func validateSingleViewDataset(datasetID string) error {
+	if strings.TrimSpace(datasetID) == "" {
+		return errors.New("dataset_id is required")
+	}
+	return nil
 }

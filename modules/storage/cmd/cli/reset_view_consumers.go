@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -562,7 +561,7 @@ func listResetViewRecords(ctx context.Context, dbPath string) ([]resetViewRecord
 	// A destructive reset must also clear disabled/building/archived rows. They
 	// may still own physical A/B files or an unfinished build even though they
 	// are not currently visible in the active View list.
-	rows, err := db.QueryContext(ctx, `SELECT c_space_id, c_view_id, c_engine, c_active_index_id, c_desired_view_revision, c_primary_dataset_id, c_dataset_ids_json FROM t_views`)
+	rows, err := db.QueryContext(ctx, `SELECT c_space_id, c_view_id, c_engine, c_active_index_id, c_desired_view_revision, c_dataset_id FROM t_views`)
 	if err != nil {
 		return nil, err
 	}
@@ -570,16 +569,10 @@ func listResetViewRecords(ctx context.Context, dbPath string) ([]resetViewRecord
 	var result []resetViewRecord
 	for rows.Next() {
 		var record resetViewRecord
-		var datasetIDs string
-		if err := rows.Scan(&record.SpaceID, &record.ViewID, &record.Engine, &record.ActiveIndexID, &record.DesiredRevision, &record.PrimaryDatasetID, &datasetIDs); err != nil {
+		if err := rows.Scan(&record.SpaceID, &record.ViewID, &record.Engine, &record.ActiveIndexID, &record.DesiredRevision, &record.PrimaryDatasetID); err != nil {
 			return nil, err
 		}
-		if strings.TrimSpace(datasetIDs) != "" {
-			if err := json.Unmarshal([]byte(datasetIDs), &record.DatasetIDs); err != nil {
-				return nil, fmt.Errorf("decode View datasets %s/%s: %w", record.SpaceID, record.ViewID, err)
-			}
-		}
-		if len(record.DatasetIDs) == 0 && record.PrimaryDatasetID != "" {
+		if record.PrimaryDatasetID != "" {
 			record.DatasetIDs = []string{record.PrimaryDatasetID}
 		}
 		if record.Engine == "" {

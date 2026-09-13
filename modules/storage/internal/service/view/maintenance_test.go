@@ -68,8 +68,15 @@ func (m *maintenanceMetadata) GetDataset(_ context.Context, req *pb.GetDatasetRe
 	}
 	return &pb.GetDatasetRsp{RetInfo: successRetInfo(), Dataset: &pb.Dataset{SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), DataKind: kind}}, nil
 }
-func (m *maintenanceMetadata) ListDatasetSubjects(context.Context, *pb.ListDatasetSubjectsReq, ...client.Option) (*pb.ListDatasetSubjectsRsp, error) {
-	return &pb.ListDatasetSubjectsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 1, Size: 1000}}, nil
+func (m *maintenanceMetadata) ListDatasetSubjects(_ context.Context, req *pb.ListDatasetSubjectsReq, _ ...client.Option) (*pb.ListDatasetSubjectsRsp, error) {
+	var items []*pb.DatasetSubject
+	if req.GetDatasetId() == "prices" {
+		items = []*pb.DatasetSubject{
+			{SpaceId: req.GetSpaceId(), DatasetId: "prices", SubjectId: "A"},
+			{SpaceId: req.GetSpaceId(), DatasetId: "prices", SubjectId: "B"},
+		}
+	}
+	return &pb.ListDatasetSubjectsRsp{RetInfo: successRetInfo(), DatasetSubjects: items, PageResult: &pb.PageResult{Page: 1, Size: 1000}}, nil
 }
 func (m *maintenanceMetadata) ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq, ...client.Option) (*pb.ListDatasetColumnsRsp, error) {
 	return &pb.ListDatasetColumnsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 1, Size: 1000}}, nil
@@ -377,7 +384,7 @@ func TestMaintainerCreatesAndActivatesInitialView(t *testing.T) {
 	}
 	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "records", Engine: "bleve",
-		PrimaryDatasetId:    "records",
+		DatasetId:    "records",
 		DesiredViewRevision: 1,
 		Columns: []*pb.ViewColumn{{
 			SpaceId: "space", ViewId: "records", OriginId: "records.title", ColumnName: "records.title",
@@ -416,7 +423,7 @@ func TestRestoreActiveViewsAttachesExistingPhysicalIndex(t *testing.T) {
 	// no indexID -> engine mapping yet; that mapping is created by attach.
 	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 1}}
 	metadata := &maintenanceMetadata{view: &pb.View{
-		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
+		SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices",
 		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
 	}}
 	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err != nil {
@@ -447,7 +454,7 @@ func TestRestoreActiveViewsFailsWhenMetadataActiveIndexIsMissing(t *testing.T) {
 	}
 	svc.engines["bleve"] = &queryEngine{}
 	metadata := &maintenanceMetadata{view: &pb.View{
-		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
+		SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices",
 		ActiveIndexId: "missing-active", ActiveViewRevision: 1, DesiredViewRevision: 1,
 	}}
 	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err == nil || !strings.Contains(err.Error(), "missing") {
@@ -462,7 +469,7 @@ func TestRestoreActiveViewsRejectsPhysicalContractMismatch(t *testing.T) {
 	}
 	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, SchemaHash: "old"}}
 	metadata := &maintenanceMetadata{view: &pb.View{
-		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
+		SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices",
 		ActiveIndexId: "prices-a", ActiveViewRevision: 2, ActiveViewSchemaHash: "new",
 	}}
 	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err == nil || !strings.Contains(err.Error(), "contract mismatch") {
@@ -478,7 +485,7 @@ func TestAttachPendingViewBuildRejectsPhysicalSchemaMismatch(t *testing.T) {
 	column := &pb.ViewColumn{SpaceId: "space", ViewId: "prices", ColumnName: "close", OriginId: "prices.close"}
 	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 2, SchemaHash: "wrong"}}
 	view := &pb.View{
-		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
+		SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices",
 		DesiredViewRevision: 2, Columns: []*pb.ViewColumn{column},
 		IndexBuild: &pb.ViewIndexBuild{IndexId: "prices-b", Engine: "bleve", TargetViewVersion: 2},
 	}
@@ -496,11 +503,11 @@ func TestActivateResponseErrorReadsBackCommittedActiveIndex(t *testing.T) {
 	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
 	const indexID = "records-b"
 	columns := []*pb.ViewColumn{{SpaceId: "space", ViewId: "records", OriginId: "records.title", ColumnName: "records.title"}}
-	prepared, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: indexID, Schema: &pb.ViewIndexSchema{SpaceId: "space", ViewId: "records", PrimaryDatasetId: "records", DatasetIds: []string{"records"}, ViewVersion: 2, Engine: "bleve", ViewSchemaHash: "schema-2", Columns: columns}})
+	prepared, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: indexID, Schema: &pb.ViewIndexSchema{SpaceId: "space", ViewId: "records", DatasetId: "records", ViewVersion: 2, Engine: "bleve", ViewSchemaHash: "schema-2", Columns: columns}})
 	if err != nil || prepared.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare: rsp=%v err=%v", prepared, err)
 	}
-	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "records", PrimaryDatasetId: "records", DatasetIds: []string{"records"}, ActiveIndexId: "records-a", ActiveViewRevision: 1, DesiredViewRevision: 2, Engine: "bleve", ActiveColumns: columns}, activateErr: errors.New("response lost")}
+	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "records", DatasetId: "records", ActiveIndexId: "records-a", ActiveViewRevision: 1, DesiredViewRevision: 2, Engine: "bleve", ActiveColumns: columns}, activateErr: errors.New("response lost")}
 	gotErr := svc.activateViewBuild(ctx, MaintenanceOptions{Metadata: metadata, OwnerID: "storage-view", Grace: time.Hour}, auth, metadata.view, "build-1", indexID, "bleve", 2, "schema-2", columns)
 	if gotErr == nil {
 		t.Fatal("expected activation retry when readback does not commit")
@@ -531,9 +538,8 @@ func TestMaintainerBlocksLegacyInFlightViewWithoutActiveContract(t *testing.T) {
 	// AttachActiveView rather than silently starting a replacement build.
 	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 1}}
 	metadata := &maintenanceMetadata{view: &pb.View{
-		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
+		SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices",
 		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 2,
-		DatasetIds: []string{"prices", "fundamentals"},
 	}}
 	_, err = svc.StartViewMaintainer(context.Background(), MaintenanceOptions{Metadata: metadata, Interval: time.Hour})
 	if !errors.Is(err, errActiveContractUnavailable) {
@@ -547,7 +553,7 @@ func TestMaintainerUsesDatasetKindForTimeSeriesWithoutGrainKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	metadata := &maintenanceMetadata{view: &pb.View{
-		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices", DesiredViewRevision: 1,
+		SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices", DesiredViewRevision: 1,
 		Columns: []*pb.ViewColumn{{SpaceId: "space", ViewId: "prices", OriginId: "prices.close", ColumnName: "prices.close"}},
 	}}
 	stop, err := svc.StartViewMaintainer(context.Background(), MaintenanceOptions{Metadata: metadata, Interval: time.Hour})
@@ -575,7 +581,7 @@ func TestMaintenanceStatsActiveIndexBeforeAttachingIt(t *testing.T) {
 	engine := &queryEngine{statErr: statErr}
 	svc.engines["duckdb"] = engine
 	view := &pb.View{
-		SpaceId: "space", ViewId: "prices", Engine: "duckdb", PrimaryDatasetId: "prices",
+		SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "prices",
 		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
 	}
 	err = svc.maintainView(context.Background(), MaintenanceOptions{}, svc.internalAuth(), view)
@@ -606,7 +612,7 @@ func TestMaintenanceRebuildsMissingPhysicalActiveIndex(t *testing.T) {
 	engine := &queryEngine{stats: viewindex.ViewIndexStats{Exists: false}}
 	svc.engines["duckdb"] = engine
 	metadata := &maintenanceMetadata{view: &pb.View{
-		SpaceId: "space", ViewId: "prices", Engine: "duckdb", PrimaryDatasetId: "prices",
+		SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "prices",
 		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
 	}}
 	err = svc.maintainView(context.Background(), MaintenanceOptions{

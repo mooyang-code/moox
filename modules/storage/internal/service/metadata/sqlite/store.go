@@ -142,7 +142,7 @@ func (s *Store) ValidateSchemaVersion(ctx context.Context) error {
 	return nil
 }
 
-const metadataSchemaVersion = "10"
+const metadataSchemaVersion = "11"
 
 func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	var schemaTableCount int

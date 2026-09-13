@@ -3,7 +3,7 @@ import type { FactorBinding, FactorDef } from "@/api/factor/types";
 import type { View, ViewColumn } from "@/api/storage/types";
 import { buildInputBindings, canCombineSelections, findOutputColumn, normalizeFrequency, validBindings, validateAliasConflicts } from "./bindings";
 
-const source = { space_id: "s", view_id: "price", name: "价格", primary_dataset_id: "d", status: "active" } as View;
+const source = { space_id: "s", view_id: "price", name: "价格", dataset_id: "d", status: "active" } as View;
 const factor = { factor_id: "ma", name: "MA", source_code: "", input_columns: ["close"], outputs: ["ma20"], params_json: "{}", lookback_periods: 20, status: "enabled" } as FactorDef;
 const binding = { binding_id: "b1", factor_id: "ma", space_id: "s", source_view_id: "price", result_dataset_id: "rd", result_view_id: "factor_result", freq: "1h", subject_mode: "all", subjects_json: "{}", status: "enabled" } as FactorBinding;
 

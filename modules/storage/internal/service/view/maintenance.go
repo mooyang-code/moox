@@ -473,6 +473,9 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
 		return nil
 	}
+	if opts.Metadata != nil {
+		s.setMetadataClient(opts.Metadata)
+	}
 	if opts.Policy.MaxPeriodsPerSeries > 0 {
 		resolved := opts.Policy.ResolvePolicy(view.GetSpaceId(), view.GetViewId())
 		opts.MaxViewFileBytes = resolved.MaxViewFileBytes
@@ -571,7 +574,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 				}
 				if runtime != nil {
 					runtime.mu.Lock()
-					primaryChanged := runtime.active == view.GetActiveIndexId() && runtime.activePrimaryDatasetID != "" && view.GetPrimaryDatasetId() != "" && runtime.activePrimaryDatasetID != view.GetPrimaryDatasetId()
+					primaryChanged := runtime.active == view.GetActiveIndexId() && runtime.activePrimaryDatasetID != "" && view.GetDatasetId() != "" && runtime.activePrimaryDatasetID != view.GetDatasetId()
 					runtime.mu.Unlock()
 					if primaryChanged {
 						return errPrimaryDatasetChangeUnsupported
@@ -766,7 +769,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	s.mu.Unlock()
 	schema := viewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: view.GetDesiredViewRevision(),
-		PrimaryDatasetID: view.GetPrimaryDatasetId(), Engine: strings.ToLower(view.GetEngine()), Columns: columns,
+		PrimaryDatasetID: view.GetDatasetId(), Engine: strings.ToLower(view.GetEngine()), Columns: columns,
 	}
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 	indexID := viewindex.InactiveViewIndexID(view.GetSpaceId(), view.GetViewId(), view.GetActiveIndexId())
@@ -822,7 +825,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 		AuthInfo: auth, IndexId: indexID, Engine: schema.Engine,
 		Schema: &pb.ViewIndexSchema{
 			SpaceId: schema.SpaceID, ViewId: schema.ViewID, ViewVersion: schema.ViewVersion,
-			Engine: schema.Engine, Columns: schema.Columns, ViewSchemaHash: schema.SchemaHash, PrimaryDatasetId: schema.PrimaryDatasetID, DatasetIds: append([]string(nil), view.GetDatasetIds()...),
+			Engine: schema.Engine, Columns: schema.Columns, ViewSchemaHash: schema.SchemaHash, DatasetId: schema.PrimaryDatasetID,
 		},
 	})
 	if err != nil || prepared.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -1046,20 +1049,7 @@ func (s *Service) consumerBacklogForView(ctx context.Context, ref viewRef) (uint
 	s.mu.RUnlock()
 	partitionIDs := make(map[string]struct{})
 	if ref != (viewRef{}) && view != nil {
-		datasetIDs := append([]string(nil), view.GetDatasetIds()...)
-		if primary := strings.TrimSpace(view.GetPrimaryDatasetId()); primary != "" {
-			datasetIDs = append(datasetIDs, primary)
-		}
-		// A View may project columns from secondary Datasets even when those
-		// Datasets are not listed in DatasetIds. Include their origin prefix so
-		// every partition that can deliver live changes participates in the
-		// rebuild gate.
-		for _, column := range view.GetColumns() {
-			if datasetID, _, ok := strings.Cut(strings.TrimSpace(column.GetOriginId()), "."); ok && datasetID != "" {
-				datasetIDs = append(datasetIDs, datasetID)
-			}
-		}
-		for _, datasetID := range datasetIDs {
+		for _, datasetID := range viewDatasetIDs(view) {
 			if partitionID := partitionByDataset[datasetRef{spaceID: ref.spaceID, datasetID: strings.TrimSpace(datasetID)}]; partitionID != "" {
 				partitionIDs[partitionID] = struct{}{}
 			}
@@ -1371,7 +1361,7 @@ func (s *Service) activateViewBuild(ctx context.Context, opts MaintenanceOptions
 	if runtime.active != "" {
 		_, _, err = s.switchViewLocked(context.WithoutCancel(ctx), runtime)
 	} else {
-		activePrimary := committed.GetPrimaryDatasetId()
+		activePrimary := committed.GetDatasetId()
 		if raw := committed.GetAttributes()[activePrimaryDatasetAttr]; raw != "" {
 			activePrimary = raw
 		}
@@ -1410,7 +1400,7 @@ func (s *Service) observeActivatedViewWatermark(view *pb.View, indexID string) {
 	if s == nil || s.metrics == nil || view == nil || strings.TrimSpace(indexID) == "" {
 		return
 	}
-	if strings.TrimSpace(viewFrequencyValue(view)) == "" || strings.TrimSpace(view.GetPrimaryDatasetId()) == "" {
+	if strings.TrimSpace(viewFrequencyValue(view)) == "" || strings.TrimSpace(view.GetDatasetId()) == "" {
 		return
 	}
 	engine, err := s.engineFor(indexID)
@@ -1434,7 +1424,7 @@ func (s *Service) observeActivatedViewWatermark(view *pb.View, indexID string) {
 			keys = append(keys, &pb.RowFieldUpsert{Key: row.GetKey()})
 		}
 	}
-	s.observeViewWatermark(indexID, view.GetPrimaryDatasetId(), keys, true)
+	s.observeViewWatermark(indexID, view.GetDatasetId(), keys, true)
 }
 
 func (s *Service) readActiveView(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, spaceID, viewID string) (*pb.View, error) {
@@ -1504,7 +1494,7 @@ func loadDefaultViewColumns(ctx context.Context, metadata MetadataClient, auth *
 	var columns []*pb.ViewColumn
 	for pageNo := uint32(1); ; pageNo++ {
 		rsp, err := metadata.ListDatasetColumns(ctx, &pb.ListDatasetColumnsReq{
-			AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
+			AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(),
 			Page: &pb.Page{Page: pageNo, Size: 1000},
 		})
 		if err != nil {
@@ -1520,7 +1510,7 @@ func loadDefaultViewColumns(ctx context.Context, metadata MetadataClient, auth *
 			columns = append(columns, &pb.ViewColumn{
 				SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), ColumnName: column.GetColumnName(),
 				OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-				OriginId:   view.GetPrimaryDatasetId() + "." + column.GetColumnName(),
+				OriginId:   view.GetDatasetId() + "." + column.GetColumnName(),
 				ValueType:  column.GetValueType(),
 			})
 		}

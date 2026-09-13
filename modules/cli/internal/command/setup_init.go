@@ -488,22 +488,15 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		primaryDatasetID := strings.TrimSpace(item.PrimaryDatasetID)
 		if primaryDatasetID == "" || item.PrimaryDatasetID != primaryDatasetID {
 			return fmt.Errorf(
-				"view %s/%s primary_dataset_id must be explicit and trimmed",
+				"view %s/%s dataset_id must be explicit and trimmed",
 				item.SpaceID,
 				item.ViewID,
 			)
 		}
 		viewKey := setupMetadataKey(item.SpaceID, item.ViewID)
-		allowedDatasets := make(map[string]struct{}, len(item.DatasetIDs)+1)
-		for _, datasetID := range append([]string{item.PrimaryDatasetID}, item.DatasetIDs...) {
-			datasetID = strings.TrimSpace(datasetID)
-			if datasetID == "" {
-				continue
-			}
-			if _, ok := datasets[setupMetadataKey(item.SpaceID, datasetID)]; !ok {
-				return fmt.Errorf("view %s/%s references undefined dataset %q", item.SpaceID, item.ViewID, datasetID)
-			}
-			allowedDatasets[datasetID] = struct{}{}
+		allowedDatasets := map[string]struct{}{primaryDatasetID: {}}
+		if _, ok := datasets[setupMetadataKey(item.SpaceID, primaryDatasetID)]; !ok {
+			return fmt.Errorf("view %s/%s references undefined dataset %q", item.SpaceID, item.ViewID, primaryDatasetID)
 		}
 		if err := validateCanonicalSetupView(item, datasetDefinitions); err != nil {
 			return err
@@ -596,13 +589,6 @@ func validateCanonicalSetupView(view seedView, datasets map[string]seedDataset) 
 	if err != nil {
 		return err
 	}
-	if !slices.Equal(view.DatasetIDs, normalized.DatasetIDs) {
-		return fmt.Errorf(
-			"view %s/%s dataset_ids must be canonical with primary_dataset_id first",
-			view.SpaceID,
-			view.ViewID,
-		)
-	}
 	if !slices.Equal(view.GrainKeys, normalized.GrainKeys) {
 		return fmt.Errorf("view %s/%s grain_keys must be canonical", view.SpaceID, view.ViewID)
 	}
@@ -622,17 +608,13 @@ func validateCanonicalSetupView(view seedView, datasets map[string]seedDataset) 
 
 func canonicalMetadataView(view seedView, datasets map[string]seedDataset) (seedView, error) {
 	primaryDatasetID := strings.TrimSpace(view.PrimaryDatasetID)
-	if primaryDatasetID == "" && len(view.DatasetIDs) > 0 {
-		primaryDatasetID = strings.TrimSpace(view.DatasetIDs[0])
-	}
 	if primaryDatasetID == "" {
-		return seedView{}, fmt.Errorf("view %s/%s primary_dataset_id is required", view.SpaceID, view.ViewID)
+		return seedView{}, fmt.Errorf("view %s/%s dataset_id is required", view.SpaceID, view.ViewID)
 	}
-	normalizedDatasetIDs := canonicalSetupViewDatasetIDs(primaryDatasetID, view.DatasetIDs)
 	primary, ok := datasets[setupMetadataKey(view.SpaceID, primaryDatasetID)]
 	if !ok {
 		return seedView{}, fmt.Errorf(
-			"view %s/%s primary dataset %q must be included in the metadata seed",
+			"view %s/%s dataset %q must be included in the metadata seed",
 			view.SpaceID,
 			view.ViewID,
 			primaryDatasetID,
@@ -640,7 +622,7 @@ func canonicalMetadataView(view seedView, datasets map[string]seedDataset) (seed
 	}
 	dataKind, err := parseDataKind(primary.DataKind)
 	if err != nil {
-		return seedView{}, fmt.Errorf("view %s/%s primary dataset: %w", view.SpaceID, view.ViewID, err)
+		return seedView{}, fmt.Errorf("view %s/%s dataset: %w", view.SpaceID, view.ViewID, err)
 	}
 	grainKeys := []string{"record_id", "version"}
 	engine := "bleve"
@@ -654,32 +636,18 @@ func canonicalMetadataView(view seedView, datasets map[string]seedDataset) (seed
 		if err != nil {
 			return seedView{}, fmt.Errorf("view %s/%s: %w", view.SpaceID, view.ViewID, err)
 		}
-		for _, datasetID := range normalizedDatasetIDs {
-			dataset, exists := datasets[setupMetadataKey(view.SpaceID, datasetID)]
-			if !exists {
-				return seedView{}, fmt.Errorf(
-					"view %s/%s dataset %q must be included in the metadata seed",
-					view.SpaceID,
-					view.ViewID,
-					datasetID,
-				)
-			}
-			if kind, parseErr := parseDataKind(dataset.DataKind); parseErr == nil &&
-				kind == storagepb.DataKind_DATA_KIND_TIME_SERIES &&
-				!setupDatasetSupportsFreq(dataset.Freqs, freq) {
-				return seedView{}, fmt.Errorf(
-					"view %s/%s dataset %s does not support freq %q",
-					view.SpaceID,
-					view.ViewID,
-					datasetID,
-					freq,
-				)
-			}
+		if !setupDatasetSupportsFreq(primary.Freqs, freq) {
+			return seedView{}, fmt.Errorf(
+				"view %s/%s dataset %s does not support freq %q",
+				view.SpaceID,
+				view.ViewID,
+				primaryDatasetID,
+				freq,
+			)
 		}
 		filterJSON = normalizedFilter
 	}
 	view.PrimaryDatasetID = primaryDatasetID
-	view.DatasetIDs = normalizedDatasetIDs
 	view.GrainKeys = grainKeys
 	view.Engine = engine
 	view.FilterJSON = filterJSON
@@ -693,27 +661,6 @@ func setupDatasetSupportsFreq(freqs []string, freq string) bool {
 		}
 	}
 	return false
-}
-
-func canonicalSetupViewDatasetIDs(primaryDatasetID string, datasetIDs []string) []string {
-	seen := make(map[string]struct{}, len(datasetIDs)+1)
-	result := make([]string, 0, len(datasetIDs)+1)
-	add := func(datasetID string) {
-		datasetID = strings.TrimSpace(datasetID)
-		if datasetID == "" {
-			return
-		}
-		if _, ok := seen[datasetID]; ok {
-			return
-		}
-		seen[datasetID] = struct{}{}
-		result = append(result, datasetID)
-	}
-	add(primaryDatasetID)
-	for _, datasetID := range datasetIDs {
-		add(datasetID)
-	}
-	return result
 }
 
 func canonicalSetupTimeSeriesFilter(raw string) (string, string, error) {

@@ -41,11 +41,49 @@ go test ./internal/service/sysdeploy/... ./cmd/cli/... -count=1
 ### 尚未解决的依赖
 
 - Collector 上报的 `committed_positions` 仍可能是本地占位，真实 DataNode outbox 位置绑定属于任务 03/05
-- View 仍按 `dataset_ids[]` 聚合后再发 `ViewDataReady`，单 Dataset 模型属于任务 02
 - ViewDataReady 尚未按多分区 applied 位置做可读屏障，属于任务 04
 - 主体 ID 去 `-SPOT`/`-SWAP` 属于任务 05
 - Merge 程序、mdataset、本机引擎部署与真实 E2E 属于 06—18
 
 ### 提交
 
-见本任务提交号（写入后回填）。
+`1e2ec2c5`
+
+## 任务 02：Storage 单 Dataset View 模型
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 18。
+
+### 红灯证据
+
+`modules/storage` 中 `TestSingleDatasetView` 最初失败于：`multiple source datasets are rejected`（多源列仍被接受）。失败来自目标行为缺失。
+
+### 实现
+
+- View proto/SQL 收敛为唯一 `c_dataset_id` / `dataset_id`；schema 版本 10→11
+- 同 Dataset 可建多个投影 View；列 origin 指向其他 Dataset 时拒绝
+- 删除一个 View 不删除 Dataset 或另一个 View
+- 运行时只按所属 Dataset 路由事件，移除 JOIN/多源 enrich
+- `WaitViewSyncPoint.dataset_ids` 保留为同步点 RPC，不是 View 模型
+- 前端去掉「包含数据集」多选，创建/编辑只提交单个 `dataset_id`
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/... -run 'TestSingleDatasetView' -count=1
+env CGO_ENABLED=1 go test ./internal/service/view ./internal/service/catalog ./internal/service/metadata/sqlite ./schema -count=1
+env CGO_ENABLED=1 go test -race ./internal/service/view ./internal/service/catalog ./internal/service/metadata/sqlite ./schema -count=3
+go test ./internal/command/ -run 'TestSetupInit|TestMetadata|TestDefaultSetup' -count=1
+pnpm test
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- 完整输入提交与因子列补丁属于任务 03
+- ViewDataReady 多分区 applied 屏障属于任务 04
+- 主体 ID 去尾缀、Merge、引擎隔离与正式发布属于 05—18
+
+### 提交
+
+见本任务提交号。
