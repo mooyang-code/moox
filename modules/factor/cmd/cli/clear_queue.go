@@ -50,7 +50,7 @@ func runClearQueue(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	stopped := false
 	started := false
 	if cfg.Restart {
-		if err := runFactorLifecycle(ctx, packageRoot, "stop"); err != nil {
+		if err := runFactorLifecycle(ctx, packageRoot, "stop", cfg.Service); err != nil {
 			return fmt.Errorf("stop Factor: %w", err)
 		}
 		stopped = true
@@ -58,7 +58,7 @@ func runClearQueue(ctx context.Context, cfg cliConfig, out io.Writer) error {
 			if stopped && !started {
 				restartCtx, restartCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer restartCancel()
-				_ = runFactorLifecycle(restartCtx, packageRoot, "start")
+				_ = runFactorLifecycle(restartCtx, packageRoot, "start", cfg.Service)
 			}
 		}()
 	}
@@ -71,7 +71,7 @@ func runClearQueue(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		return fmt.Errorf("clear Factor consumer: %w", err)
 	}
 	if cfg.Restart {
-		if err := runFactorLifecycle(ctx, packageRoot, "start"); err != nil {
+		if err := runFactorLifecycle(ctx, packageRoot, "start", cfg.Service); err != nil {
 			return fmt.Errorf("start Factor: %w", err)
 		}
 		started = true
@@ -173,16 +173,20 @@ func resolveFactorPackageRoot(configured string) string {
 	return ""
 }
 
-func runFactorLifecycleScript(ctx context.Context, packageRoot, action string) error {
+func runFactorLifecycleScript(ctx context.Context, packageRoot, action, service string) error {
 	packageRoot = strings.TrimSpace(packageRoot)
 	if packageRoot == "" {
 		return errors.New("Factor package root is empty; pass --package-root")
+	}
+	service = strings.TrimSpace(service)
+	if service == "" {
+		return errors.New("Factor lifecycle service is empty; pass --service")
 	}
 	script := filepath.Join(packageRoot, action+".sh")
 	if info, err := os.Stat(script); err != nil || info.IsDir() {
 		return fmt.Errorf("Factor lifecycle script is unavailable under %s", packageRoot)
 	}
-	cmd := exec.CommandContext(ctx, script, "factor")
+	cmd := exec.CommandContext(ctx, script, service)
 	cmd.Dir = packageRoot
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard

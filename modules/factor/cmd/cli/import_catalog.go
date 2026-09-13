@@ -16,6 +16,7 @@ import (
 )
 
 type catalogEntry struct {
+	FactorType      string         `json:"factor_type"`
 	File            string         `json:"file"`
 	FactorID        string         `json:"factor_id"`
 	InputColumns    []string       `json:"input_columns"`
@@ -75,7 +76,8 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 			return fmt.Errorf("encode params for %s: %w", entry.FactorID, marshalErr)
 		}
 		factor, normalizeErr := domain.NormalizeFactorDefinition(domain.FactorDef{
-			FactorID: entry.FactorID, Name: factorName,
+			FactorType: entry.FactorType,
+			FactorID:   entry.FactorID, Name: factorName,
 			SourceCode: string(raw), InputColumns: entry.InputColumns, Outputs: entry.Outputs,
 			ParamsJSON: string(paramsJSON), LookbackPeriods: entry.LookbackPeriods,
 			Status: domain.FactorStatusDisabled,
@@ -100,7 +102,8 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		batch = append(batch, registry.BatchImport{
 			Path: filepath.Join(cfg.FactorsDir, entry.File),
 			Options: registry.ImportOptions{
-				FactorID: entry.FactorID, InputColumns: entry.InputColumns, Outputs: entry.Outputs,
+				FactorType: entry.FactorType,
+				FactorID:   entry.FactorID, InputColumns: entry.InputColumns, Outputs: entry.Outputs,
 				ParamsJSON: string(paramsJSON), LookbackPeriods: entry.LookbackPeriods,
 			},
 		})

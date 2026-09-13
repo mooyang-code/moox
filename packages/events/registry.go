@@ -85,6 +85,9 @@ var (
 	DatasetPeriodCollected = declareEvent("event.storage.dataset.period.collected", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetPeriodCollected{}
 	}, validateDatasetPeriodCollected)
+	ViewSourceSubjectReady = declareEvent("event.storage.view.source_subject.ready", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+		return &storagepb.ViewSourceSubjectReady{}
+	}, validateViewSourceSubjectReady)
 	ViewSourcePeriodReady = declareEvent("event.storage.view.source_period.ready", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.ViewSourcePeriodReady{}
 	}, validateViewSourcePeriodReady)

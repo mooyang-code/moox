@@ -27,7 +27,11 @@ func (s *Service) HandleDatasetRows(ctx context.Context, message *eventpb.EventM
 	if err != nil {
 		return eventconsumer.Permanent(err)
 	}
-	return s.applyDatasetEvent(ctx, message.GetSpaceId(), message.GetSubjectId(), rowEvent.GetRows())
+	origins := make(map[*pb.RowFieldUpsert]rowOrigin, len(rowEvent.GetRows()))
+	for _, row := range rowEvent.GetRows() {
+		origins[row] = rowOrigin{message: message, nodeID: payload.GetSourceNodeId(), storeID: payload.GetSourceStoreId(), sequence: payload.GetSourceSequence()}
+	}
+	return s.applyDatasetEventWithOrigins(ctx, message.GetSpaceId(), message.GetSubjectId(), rowEvent.GetRows(), origins)
 }
 
 // HandleDatasetRowsBatch merges contiguous rows events for one Dataset before
@@ -40,6 +44,7 @@ func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsu
 	}
 	spaceID, datasetID := "", ""
 	rows := make([]*pb.RowFieldUpsert, 0)
+	origins := make(map[*pb.RowFieldUpsert]rowOrigin)
 	for index, item := range items {
 		if item.Message == nil || item.Payload == nil {
 			return eventconsumer.Permanent(fmt.Errorf("storage dataset rows batch item %d is empty", index))
@@ -58,14 +63,17 @@ func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsu
 			return eventconsumer.Permanent(err)
 		}
 		rows = append(rows, rowEvent.GetRows()...)
+		for _, row := range rowEvent.GetRows() {
+			origins[row] = rowOrigin{message: item.Message, nodeID: item.Payload.GetSourceNodeId(), storeID: item.Payload.GetSourceStoreId(), sequence: item.Payload.GetSourceSequence()}
+		}
 	}
 	if len(rows) == 0 {
 		return eventconsumer.Permanent(errors.New("storage dataset rows batch has no rows"))
 	}
-	return s.applyDatasetEvent(ctx, spaceID, datasetID, rows)
+	return s.applyDatasetEventWithOrigins(ctx, spaceID, datasetID, rows, origins)
 }
 
-func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
+func (s *Service) applyDatasetEventWithOrigins(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert, origins map[*pb.RowFieldUpsert]rowOrigin) error {
 	s.mu.RLock()
 	ref := datasetRef{spaceID: spaceID, datasetID: datasetID}
 	viewKeys := make(map[viewRef]struct{})
@@ -190,9 +198,9 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		for indexID, writtenRows := range activeWatermarkRows {
 			s.observeViewWatermark(indexID, datasetID, writtenRows, false)
 		}
-		activeWatermarkRows = nil
 		if nextID != "" {
-			if _, err := s.applyEventToIndex(ctx, nextID, datasetID, rows); err != nil {
+			_, nextWriteErr := s.applyEventToIndex(ctx, nextID, datasetID, rows)
+			if err := nextWriteErr; err != nil {
 				failedID := nextID
 				failedGeneration := s.indexGenerationOf(failedID)
 				// A live delivery has a short deadline. A timeout while the
@@ -245,10 +253,10 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 				return activeFailure
 			}
 			if !activeReady && runtime.active == "" {
-				// A from-scratch build is primed directly from the replayed
-				// durable stream. Once the row is safely written to B it may be
-				// ACKed; reconciliation keeps B non-authoritative until the
-				// replacement is durably READY and activated.
+				// A from-scratch rebuild writes B from the durable stream.
+				// ACK after the replacement write. Rebuilds never journal or
+				// emit subject-ready; later live writes on the activated index
+				// publish directly.
 				runtime.mu.Unlock()
 				continue
 			}
@@ -258,6 +266,14 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 				// a crash before build metadata reaches READY cannot lose the row.
 				runtime.mu.Unlock()
 				return fmt.Errorf("replacement view index %q awaits activation", nextID)
+			}
+		}
+		// Complete the replacement write before a publish error can release
+		// runtime.mu; otherwise activation could expose B without this row.
+		for indexID, writtenRows := range activeWatermarkRows {
+			if err := s.publishSubjectReady(ctx, viewKey, indexID, datasetID, writtenRows, origins); err != nil {
+				runtime.mu.Unlock()
+				return err
 			}
 		}
 		runtime.mu.Unlock()

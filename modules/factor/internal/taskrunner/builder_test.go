@@ -11,10 +11,12 @@ import (
 func TestBuildTaskUsesExactlyOneFactor(t *testing.T) {
 	task, err := BuildTask(TaskScope{
 		TaskID: "task-1", TriggerType: "recalc", SpaceID: "crypto",
-		SourceDataset: "bars", TargetDataset: "bars_factor", SubjectID: "BTC",
+		BindingGeneration: "incarnation-1",
+		SourceDataset:     "bars", TargetDataset: "bars_factor", SubjectID: "BTC",
 		Freq: "1m", StartTime: time.Unix(1, 0), EndTime: time.Unix(3, 0),
 	}, domain.FactorDef{
-		FactorID: "bias", Name: "Bias", SourceHash: "h1",
+		FactorType: domain.FactorTypeTimeSeries,
+		FactorID:   "bias", Name: "Bias", SourceHash: "h1",
 		InputColumns: []string{"close", "funding_rate"}, Outputs: []string{"bias"},
 		ParamsJSON: `{}`, LookbackPeriods: 100, Status: domain.FactorStatusEnabled,
 	}, "/factor")
@@ -30,9 +32,32 @@ func TestBuildTaskRejectsInvalidInputs(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTaskGenerationVersionsOwnershipAndIdentity(t *testing.T) {
+	scope := TaskScope{BindingID: "b", BindingGeneration: "incarnation-1", SubjectID: "BTC", StartTime: time.Unix(1, 0), EndTime: time.Unix(2, 0)}
+	factor := domain.FactorDef{FactorType: domain.FactorTypeTimeSeries, FactorID: "f", SourceHash: "hash", Status: domain.FactorStatusEnabled, Outputs: []string{"old"}}
+	old, err := BuildTask(scope, factor, "/factor")
+	require.NoError(t, err)
+	factor.Outputs = []string{"new"}
+	next, err := BuildTask(scope, factor, "/factor")
+	require.NoError(t, err)
+	require.NotEqual(t, old.BindingGeneration, next.BindingGeneration)
+	scope.BindingGeneration = "incarnation-2"
+	reused, err := BuildTask(scope, factor, "/factor")
+	require.NoError(t, err)
+	require.NotEqual(t, next.BindingGeneration, reused.BindingGeneration)
+	require.NotEqual(t, DeterministicTaskID(next), DeterministicTaskID(reused))
+	factor.FactorType = domain.FactorTypeCrossSection
+	crossSection, err := BuildTask(scope, factor, "/factor")
+	require.NoError(t, err)
+	require.NotEqual(t, reused.BindingGeneration, crossSection.BindingGeneration)
+	scope.BindingGeneration = ""
+	_, err = BuildTask(scope, factor, "/factor")
+	require.ErrorContains(t, err, "binding generation is required")
+}
+
 func TestBuildTaskRejectsDisabledFactor(t *testing.T) {
 	_, err := BuildTask(TaskScope{
 		SubjectID: "BTC", StartTime: time.Unix(1, 0), EndTime: time.Unix(2, 0),
-	}, domain.FactorDef{FactorID: "f", SourceHash: "hash", Status: domain.FactorStatusDisabled}, "/factor")
+	}, domain.FactorDef{FactorType: domain.FactorTypeTimeSeries, FactorID: "f", SourceHash: "hash", Status: domain.FactorStatusDisabled}, "/factor")
 	require.ErrorContains(t, err, "not enabled")
 }

@@ -302,7 +302,7 @@ func validDatasetDelivery(t *testing.T) (events.EncodedEvent, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := registry.Encode(events.DatasetRowsUpserted, &storagepb.DatasetRowsUpserted{
+	encoded, err := registry.Encode(events.DatasetRowsUpserted, &storagepb.DatasetRowsUpserted{SourceNodeId: "node", SourceStoreId: "store", SourceSequence: 1,
 		SpaceId: "foo", DatasetId: "bar",
 		Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "foo", DatasetId: "bar", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}},
 	}, events.PublishOptions{EventID: "storage-test-1", OccurredAt: time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC), SpaceID: "foo", SubjectID: "bar"})

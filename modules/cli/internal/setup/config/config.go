@@ -271,6 +271,7 @@ type FactorSetup struct {
 // source of truth while this block supplies the runtime contract required by
 // FactorMgr and the default source View binding.
 type FactorSetupItem struct {
+	FactorType      string   `toml:"factor_type"`
 	FactorID        string   `toml:"factor_id"`
 	File            string   `toml:"file"`
 	Name            string   `toml:"name"`
@@ -690,14 +691,8 @@ func resolveManifestReferences(manifest *Manifest) error {
 		}
 		space.StorageGatewayHost = storageHost.Host
 		space.StorageRPCGatewayTarget = "ip://" + net.JoinHostPort(storageHost.Address, "11003")
-		space.StoragePrivateGatewayHost = strings.TrimSpace(space.StoragePrivateGatewayHost)
-		if space.StoragePrivateGatewayHost != "" {
-			ip := net.ParseIP(space.StoragePrivateGatewayHost)
-			if ip == nil || ip.IsLoopback() || !ip.IsPrivate() {
-				return fmt.Errorf("config_invalid: scf_fetcher.spaces[%d].storage_private_gateway_host must be a private IP", index)
-			}
-			space.StoragePrivateRPCGatewayTarget = "ip://" + net.JoinHostPort(space.StoragePrivateGatewayHost, "11003")
-		}
+		space.StoragePrivateGatewayHost = ""
+		space.StoragePrivateRPCGatewayTarget = ""
 	}
 	return nil
 }
@@ -1017,6 +1012,10 @@ func validateFactorSetup(cfg *FactorSetup) error {
 	for index := range cfg.Items {
 		item := &cfg.Items[index]
 		path := fmt.Sprintf("factors.items[%d]", index)
+		item.FactorType = strings.TrimSpace(item.FactorType)
+		if item.FactorType != "timeseries" && item.FactorType != "cross_section" {
+			return fmt.Errorf("config_invalid: %s.factor_type must be timeseries or cross_section", path)
+		}
 		item.FactorID = strings.TrimSpace(item.FactorID)
 		item.File = filepath.ToSlash(filepath.Clean(strings.TrimSpace(item.File)))
 		item.Name = strings.TrimSpace(item.Name)

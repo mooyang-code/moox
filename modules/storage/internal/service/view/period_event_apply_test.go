@@ -166,11 +166,8 @@ func TestHandleDatasetPeriodCollectedAggregatesTwoDatasetsIdempotently(t *testin
 	if ready.GetSourceViewId() != "source-view" || ready.GetStatus() != "degraded" || len(ready.GetDatasets()) != 2 {
 		t.Fatalf("ready payload=%v", ready)
 	}
-	if ready.GetActiveIndexId() != "source-view-a" {
-		t.Fatalf("source ready index provenance=%q", ready.GetActiveIndexId())
-	}
-	if ready.GetActiveIndexRevision() != 1 {
-		t.Fatalf("source ready index revision provenance=%d", ready.GetActiveIndexRevision())
+	if ready.GetActiveIndexId() != "" || ready.GetActiveIndexRevision() != 0 {
+		t.Fatalf("source ready leaked physical index provenance id=%q rev=%d", ready.GetActiveIndexId(), ready.GetActiveIndexRevision())
 	}
 	if got := ready.GetPrimarySubjects(); len(got) != 2 || got[0] != "BTC-USDT" || got[1] != "ETH-USDT" {
 		t.Fatalf("primary subjects=%v", got)
@@ -249,11 +246,8 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	if ready.GetSourceViewId() != "source-view" || ready.GetResultViewId() != "result-view" || ready.GetStatus() != "degraded" || len(ready.GetBindings()) != 1 {
 		t.Fatalf("factor ready payload=%v", ready)
 	}
-	if ready.GetSourceIndexId() != "source-view-a" || ready.GetResultIndexId() != "result-view-a" {
-		t.Fatalf("factor ready index provenance=%v", ready)
-	}
-	if ready.GetSourceIndexRevision() != 1 || ready.GetResultIndexRevision() != 1 {
-		t.Fatalf("factor ready index revision provenance source=%d result=%d", ready.GetSourceIndexRevision(), ready.GetResultIndexRevision())
+	if ready.GetSourceIndexId() != "" || ready.GetResultIndexId() != "" || ready.GetSourceIndexRevision() != 0 || ready.GetResultIndexRevision() != 0 {
+		t.Fatalf("factor ready leaked physical index provenance=%v", ready)
 	}
 }
 

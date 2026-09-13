@@ -91,7 +91,8 @@ func TestTaskValidatorRechecksDefinitionAndBindingScope(t *testing.T) {
 	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
 	ctx := context.Background()
 	factor := domain.FactorDef{
-		FactorID: "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
+		FactorType: domain.FactorTypeTimeSeries,
+		FactorID:   "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
 		LookbackPeriods: 20, Status: domain.FactorStatusEnabled,
 	}
@@ -104,19 +105,32 @@ func TestTaskValidatorRechecksDefinitionAndBindingScope(t *testing.T) {
 	}
 	require.NoError(t, db.Bindings().Upsert(ctx, binding))
 	validate := newTaskValidator(db.Factors(), db.Bindings())
+	currentBindings, err := db.Bindings().ListExecutable(ctx)
+	require.NoError(t, err)
+	require.Len(t, currentBindings, 1)
 	task := taskrunner.Task{FactorTask: engine.FactorTask{
 		Factor: engine.FactorSpec{
+			FactorType: domain.FactorTypeTimeSeries, Outputs: []string{"bias"},
 			FactorID: "bias", SourceHash: "hash",
 			InputColumns: []string{"close"}, ParamsJSON: `{}`,
 		},
 		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
 		SubjectID: "BTC", Freq: "1m", LookbackPeriods: 20,
 	}}
+	task.BindingID = "bind"
+	task.BindingGeneration = taskrunner.ExecutionGeneration(taskrunner.TaskScope{
+		BindingID: "bind", BindingGeneration: currentBindings[0].BindingGeneration,
+		SpaceID: "crypto", SourceViewID: "bars", ResultDatasetID: "bars_factor", Freq: "1m",
+	}, factor)
 	require.NoError(t, validate(ctx, task))
+
+	binding.SubjectsJSON = `["BTC","ETH"]`
+	require.NoError(t, db.Bindings().Upsert(ctx, binding))
+	require.ErrorIs(t, validate(ctx, task), taskrunner.ErrStaleTask, "old incarnation must not survive a changed universe even when BTC remains included")
 
 	binding.TargetDataset = domain.DefaultBindingTargetID
 	require.NoError(t, db.Bindings().Upsert(ctx, binding))
-	require.NoError(t, validate(ctx, task))
+	require.ErrorIs(t, validate(ctx, task), taskrunner.ErrStaleTask)
 
 	require.NoError(t, db.Factors().SetStatus(ctx, factor.FactorID, domain.FactorStatusDisabled))
 	require.ErrorIs(t, validate(ctx, task), taskrunner.ErrStaleTask)
@@ -128,21 +142,23 @@ func TestTaskValidatorRechecksDefinitionAndBindingScope(t *testing.T) {
 	require.ErrorIs(t, validate(ctx, task), taskrunner.ErrStaleTask)
 
 	task.Factor.ParamsJSON = factor.ParamsJSON
-	task.SubjectID = "ETH"
+	task.SubjectID = "SOL"
 	require.ErrorIs(t, validate(ctx, task), taskrunner.ErrStaleTask)
 }
 
 func TestTaskValidatorPreservesRepositoryAndContextErrors(t *testing.T) {
 	task := taskrunner.Task{FactorTask: engine.FactorTask{
 		Factor: engine.FactorSpec{
-			FactorID: "bias", SourceHash: "hash",
+			FactorType: domain.FactorTypeTimeSeries,
+			FactorID:   "bias", SourceHash: "hash",
 			InputColumns: []string{"close"}, ParamsJSON: `{}`,
 		},
 		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
 		SubjectID: "BTC", Freq: "1m", LookbackPeriods: 20,
 	}}
 	factor := &domain.FactorDef{
-		FactorID: "bias", SourceHash: "hash", InputColumns: []string{"close"},
+		FactorType: domain.FactorTypeTimeSeries,
+		FactorID:   "bias", SourceHash: "hash", InputColumns: []string{"close"},
 		ParamsJSON: `{}`, LookbackPeriods: 20, Status: domain.FactorStatusEnabled,
 	}
 	repositoryErr := errors.New("repository unavailable")
@@ -194,7 +210,8 @@ func TestTaskValidatorTreatsDeletedFactorAsStale(t *testing.T) {
 	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
 	ctx := context.Background()
 	require.NoError(t, db.Factors().Create(ctx, domain.FactorDef{
-		FactorID: "deleted", Name: "Deleted", SourceCode: "x", SourceHash: "hash",
+		FactorType: domain.FactorTypeTimeSeries,
+		FactorID:   "deleted", Name: "Deleted", SourceCode: "x", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"value"}, ParamsJSON: `{}`,
 		LookbackPeriods: 2, Status: domain.FactorStatusEnabled,
 	}))

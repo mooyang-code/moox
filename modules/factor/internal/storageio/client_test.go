@@ -256,6 +256,27 @@ func (f *fakeViewClient) QueryTimeSeriesRows(_ context.Context, req *storagepb.Q
 	return &storagepb.QueryTimeSeriesRowsRsp{RetInfo: ret, Rows: rows, Complete: true}, nil
 }
 
+type pagingRevisionView struct {
+	revisions []uint64
+	pages     [][]*storagepb.TimeSeriesRow
+	reqs      []*storagepb.QueryTimeSeriesRowsReq
+}
+
+func (f *pagingRevisionView) QueryTimeSeriesRows(_ context.Context, req *storagepb.QueryTimeSeriesRowsReq, _ ...client.Option) (*storagepb.QueryTimeSeriesRowsRsp, error) {
+	index := len(f.reqs)
+	f.reqs = append(f.reqs, req)
+	if index >= len(f.pages) {
+		return &storagepb.QueryTimeSeriesRowsRsp{RetInfo: successRet(), Complete: true}, nil
+	}
+	return &storagepb.QueryTimeSeriesRowsRsp{
+		RetInfo:                   successRet(),
+		Rows:                      f.pages[index],
+		Complete:                  true,
+		ServedActiveIndexRevision: f.revisions[index],
+		PageResult:                &commonpb.PageResult{HasMore: index+1 < len(f.pages)},
+	}, nil
+}
+
 func (f *fakeAccessClient) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	f.readReqs = append(f.readReqs, req)
 	var rows []*storagepb.TimeSeriesRow
@@ -279,8 +300,79 @@ func (f *fakeAccessClient) UpsertFields(_ context.Context, req *storagepb.Primar
 	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: successRet()}, nil
 }
 
+func TestReadPeriodChunksUsesInFilterAndSplitsSubjects(t *testing.T) {
+	base := time.Date(2026, 9, 12, 5, 32, 0, 0, time.UTC)
+	view := &fakeViewClient{rows: [][]*storagepb.TimeSeriesRow{{
+		klineRowFor("ETH-USDT-SPOT", base.Add(-time.Minute), 2),
+		klineRowFor("BTC-USDT-SPOT", base.Add(-time.Minute), 1),
+		klineRowFor("ETH-USDT-SPOT", base, 4),
+		klineRowFor("BTC-USDT-SPOT", base, 3),
+	}}}
+	client := &Client{view: view}
+	chunks, err := client.ReadPeriodChunks(context.Background(), WindowKey{
+		SpaceID: "crypto", SourceViewID: "source_view", Freq: "1m",
+	}, []string{"ETH-USDT-SPOT", "BTC-USDT-SPOT", "ETH-USDT-SPOT"}, base, base.Add(time.Minute), 2, []string{"close"})
+	require.NoError(t, err)
+	require.Len(t, view.reqs, 1)
+	cond := view.reqs[0].GetFilter().GetGroups()[0].GetConds()[0]
+	require.Equal(t, "subject_id", cond.GetColumn())
+	require.Equal(t, storagepb.FilterOp_FILTER_OP_IN, cond.GetOp())
+	require.Equal(t, []string{"BTC-USDT-SPOT", "ETH-USDT-SPOT"}, []string{
+		cond.GetValues()[0].GetStringValue(), cond.GetValues()[1].GetStringValue(),
+	})
+	require.True(t, view.reqs[0].GetSorts()[0].GetDesc())
+	require.Equal(t, []time.Time{base}, chunks["BTC-USDT-SPOT"].TargetPeriods)
+	require.Equal(t, []time.Time{base.Add(-time.Minute), base}, chunks["BTC-USDT-SPOT"].Frame.DataTimes)
+	require.Equal(t, []time.Time{base.Add(-time.Minute), base}, chunks["ETH-USDT-SPOT"].Frame.DataTimes)
+	require.Empty(t, chunks["MISSING"])
+}
+
+func TestReadPeriodChunksRejectsMixedLiveMultiPageRevision(t *testing.T) {
+	base := time.Date(2026, 9, 12, 5, 34, 0, 0, time.UTC)
+	view := &pagingRevisionView{
+		revisions: []uint64{11, 22},
+		pages: [][]*storagepb.TimeSeriesRow{
+			{klineRowFor("BTC-USDT-SPOT", base, 2), klineRowFor("ETH-USDT-SPOT", base, 4)},
+			{klineRowFor("BTC-USDT-SPOT", base.Add(-time.Minute), 1), klineRowFor("ETH-USDT-SPOT", base.Add(-time.Minute), 3)},
+		},
+	}
+	client := &Client{view: view}
+	chunks, err := client.ReadPeriodChunks(context.Background(), WindowKey{
+		SpaceID: "crypto", SourceViewID: "source_view", Freq: "1m",
+	}, []string{"BTC-USDT-SPOT", "ETH-USDT-SPOT"}, base, base.Add(time.Minute), 2, []string{"close"})
+	require.ErrorContains(t, err, "revision changed")
+	require.Len(t, view.reqs, 2)
+	require.Zero(t, view.reqs[0].GetExpectedActiveIndexRevision())
+	require.Equal(t, uint64(11), view.reqs[1].GetExpectedActiveIndexRevision())
+	require.Nil(t, chunks)
+}
+
+func TestReadPeriodChunksKeepsCallerRevisionFence(t *testing.T) {
+	base := time.Date(2026, 9, 12, 5, 34, 0, 0, time.UTC)
+	view := &pagingRevisionView{
+		revisions: []uint64{11, 22},
+		pages: [][]*storagepb.TimeSeriesRow{
+			{klineRowFor("BTC-USDT-SPOT", base, 2)},
+			{klineRowFor("BTC-USDT-SPOT", base.Add(-time.Minute), 1)},
+		},
+	}
+	client := &Client{view: view}
+	_, err := client.ReadPeriodChunks(context.Background(), WindowKey{
+		SpaceID: "crypto", SourceViewID: "source_view", Freq: "1m", ExpectedActiveIndexRevision: 11,
+	}, []string{"BTC-USDT-SPOT", "ETH-USDT-SPOT"}, base, base.Add(time.Minute), 2, []string{"close"})
+	require.ErrorContains(t, err, "active View revision changed")
+	require.Len(t, view.reqs, 2)
+	require.Equal(t, uint64(11), view.reqs[1].GetExpectedActiveIndexRevision())
+}
+
 func klineRow(at time.Time, close float64) *storagepb.TimeSeriesRow {
 	return taggedKlineRow(at, "", close)
+}
+
+func klineRowFor(subject string, at time.Time, close float64) *storagepb.TimeSeriesRow {
+	row := klineRow(at, close)
+	row.Key.SubjectId = subject
+	return row
 }
 
 func taggedKlineRow(at time.Time, tag string, close float64) *storagepb.TimeSeriesRow {

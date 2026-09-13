@@ -213,7 +213,7 @@ grep -Fq '"MOOX_MONITOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGE
 grep -Fq '"MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq '"MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq '"MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
-grep -Fq 'reuse EventBus identities and refresh exported endpoints in ${eventbus_credentials_dir}' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'reuse EventBus identities and ensure missing roles in ${eventbus_credentials_dir}' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'preserve EventBus identities after control data reset in ${eventbus_credentials_dir}' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'MOOX_PRESERVE_EXTERNAL_EVENTBUS_CREDENTIALS' "${TMP_ROOT}/unpacked/start.sh"
 ! grep -Fq 'Reuse Collector' "${TMP_ROOT}/unpacked/start.sh"

@@ -386,7 +386,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 
 	spreadSource := fmt.Sprintf(`import pandas as pd
 
-def compute(df, params):
+def compute(df, params, context):
     left = df[df["series_tag"] == params["left_tag"]][["data_time", %q]]
     right = df[df["series_tag"] == params["right_tag"]][["data_time", %q]]
     joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
@@ -400,7 +400,7 @@ def compute(df, params):
 `, inputFieldID, inputFieldID, inputFieldID+"_left", inputFieldID+"_right")
 	midpointSource := fmt.Sprintf(`import pandas as pd
 
-def compute(df, params):
+def compute(df, params, context):
     left = df[df["series_tag"] == params["left_tag"]][["data_time", %q]]
     right = df[df["series_tag"] == params["right_tag"]][["data_time", %q]]
     joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
@@ -415,6 +415,7 @@ def compute(df, params):
 	factorDefs := []*factorpb.FactorDef{
 		{
 			FactorId: factorID, Name: factorName, SourceCode: spreadSource,
+			FactorType:   domain.FactorTypeTimeSeries,
 			InputColumns: []string{inputFieldID}, Outputs: []string{"spread", "rolling_spread"},
 			ParamsJson: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
 				`"output_tag":"venue_pair:binance-okx","window":2}`,
@@ -422,6 +423,7 @@ def compute(df, params):
 		},
 		{
 			FactorId: secondFactorID, Name: secondFactorName, SourceCode: midpointSource,
+			FactorType:   domain.FactorTypeTimeSeries,
 			InputColumns: []string{inputFieldID}, Outputs: []string{"midpoint", "rolling_midpoint"},
 			ParamsJson: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
 				`"output_tag":"venue_pair:binance-okx","window":2}`,
@@ -853,7 +855,7 @@ func TestFactorViewReadyTrustsUpstreamEvent(t *testing.T) {
 	factorPath := filepath.Join(factorsDir, "VenueSpread.py")
 	source := []byte(`import pandas as pd
 
-def compute(df, params):
+def compute(df, params, context):
     left = df[df["series_tag"] == params["left_tag"]][["data_time", "close"]]
     right = df[df["series_tag"] == params["right_tag"]][["data_time", "close"]]
     joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
@@ -868,10 +870,12 @@ def compute(df, params):
 	at := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
 	task, err := taskrunner.BuildTask(taskrunner.TaskScope{
 		TaskID: "view-ready-e2e", TriggerType: "view_ready", SpaceID: "quant",
-		SourceViewID: "prices-view", ResultDatasetID: "spread", SubjectID: "BTC-USDT",
+		BindingGeneration: "e2e-incarnation",
+		SourceViewID:      "prices-view", ResultDatasetID: "spread", SubjectID: "BTC-USDT",
 		Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond),
 	}, domain.FactorDef{
 		FactorID: "venue-spread", Name: "VenueSpread",
+		FactorType: domain.FactorTypeTimeSeries,
 		SourceHash: hex.EncodeToString(hash[:]), SourcePath: factorPath,
 		InputColumns: []string{"close"}, Outputs: []string{"spread"},
 		ParamsJSON: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +

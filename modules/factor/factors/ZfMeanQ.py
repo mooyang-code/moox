@@ -19,7 +19,7 @@ def _names(params, windows):
     return [f"zf_mean_q_{window}" for window in windows]
 
 
-def compute(df, params):
+def compute(df, params, context):
     windows = _windows(params)
     if any(window <= 0 for window in windows):
         raise ValueError("ZfMeanQ windows must be positive")

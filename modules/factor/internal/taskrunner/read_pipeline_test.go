@@ -3,6 +3,7 @@ package taskrunner
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -159,6 +160,63 @@ func (e *subjectBlockingExecutor) Execute(ctx context.Context, task *engine.Fact
 }
 
 func (*subjectBlockingExecutor) Close() error { return nil }
+
+func TestRunAllBatchesSamePeriodSubjectsIntoOneViewRead(t *testing.T) {
+	storage := &batchPeriodReadStorage{chunks: map[string]*storageio.RangeChunk{}}
+	base := time.Date(2026, 9, 12, 5, 32, 0, 0, time.UTC)
+	var tasks []Task
+	for _, subject := range []string{"BTC", "ETH", "SOL"} {
+		storage.chunks[subject] = &storageio.RangeChunk{
+			Frame:         &engine.DataFrame{Columns: []string{"close"}, Rows: [][]any{{1.0}}, DataTimes: []time.Time{base}},
+			TargetPeriods: []time.Time{base}, Complete: true,
+		}
+		for _, factorID := range []string{"bias", "cci"} {
+			task := oneBarTask(subject, base)
+			task.PeriodTime = base.Unix()
+			task.TriggerEventID = "ready-batch"
+			task.Factor.FactorID = factorID
+			tasks = append(tasks, task)
+		}
+	}
+	runner := NewService(8, storage, &fakeExecutor{}, WithViewReadConfig(8, time.Second))
+	for _, result := range runner.RunAll(context.Background(), tasks) {
+		require.NoError(t, result.Err)
+	}
+	require.Equal(t, 1, storage.calls)
+	require.Equal(t, []string{"BTC", "ETH", "SOL"}, storage.lastIDs)
+	require.Equal(t, 0, storage.singleCalls)
+}
+
+type batchPeriodReadStorage struct {
+	calls       int
+	singleCalls int
+	lastIDs     []string
+	chunks      map[string]*storageio.RangeChunk
+}
+
+func (s *batchPeriodReadStorage) ReadRangeChunk(context.Context, storageio.WindowKey, time.Time, time.Time, int, int, []string) (*storageio.RangeChunk, error) {
+	return nil, errors.New("unexpected range read")
+}
+
+func (s *batchPeriodReadStorage) ReadPeriodChunk(context.Context, storageio.WindowKey, time.Time, time.Time, int, []string) (*storageio.RangeChunk, error) {
+	s.singleCalls++
+	return nil, errors.New("unexpected single-subject read")
+}
+
+func (s *batchPeriodReadStorage) ReadPeriodChunks(_ context.Context, _ storageio.WindowKey, subjectIDs []string, _, _ time.Time, _ int, _ []string) (map[string]*storageio.RangeChunk, error) {
+	s.calls++
+	s.lastIDs = append([]string(nil), subjectIDs...)
+	sort.Strings(s.lastIDs)
+	out := make(map[string]*storageio.RangeChunk, len(subjectIDs))
+	for _, id := range subjectIDs {
+		out[id] = s.chunks[id]
+	}
+	return out, nil
+}
+
+func (s *batchPeriodReadStorage) WriteFactorPatch(context.Context, *engine.FactorTask, *engine.FactorResult) (uint64, error) {
+	return 1, nil
+}
 
 func TestRunAllOverlapsNextSubjectReadWithPythonExecution(t *testing.T) {
 	storage := newPipelineReadStorage()

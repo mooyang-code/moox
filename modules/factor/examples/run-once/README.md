@@ -11,6 +11,7 @@ Storage Gateway、source Dataset 与 Factor target Dataset 需要已经可用。
 cd modules/factor
 go run ./cmd/cli init --db ./data/factor/factor.db
 go run ./cmd/cli import \
+  --factor-type timeseries \
   --db ./data/factor/factor.db \
   --factors-dir ./factors \
   --file ./factors/ExcessReturn.py \

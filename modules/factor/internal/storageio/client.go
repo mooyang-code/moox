@@ -39,10 +39,14 @@ type ViewRevisionAtReader interface {
 
 // WindowKey identifies one source time-series scope.
 type WindowKey struct {
+	InputContractVersion        string
+	SourceSeriesTag             string
+	FilterSourceSeriesTag       bool
 	SpaceID                     string
 	SourceViewID                string
 	SourceDataset               string
 	SubjectID                   string
+	SubjectIDs                  []string
 	Freq                        string
 	ExpectedActiveIndexID       string
 	ExpectedActiveIndexRevision uint64
@@ -173,6 +177,144 @@ func (c *Client) ReadPeriodChunk(
 	}, nil
 }
 
+// ReadPeriodChunks reads one lookback window for many subjects in a single
+// descending View query (subject_id IN ...). Distinct data_time values are
+// still capped at lookbackPeriods, so a 1m grid of N subjects costs one scan
+// instead of N per-subject RPCs.
+func (c *Client) ReadPeriodChunks(
+	ctx context.Context,
+	key WindowKey,
+	subjectIDs []string,
+	startTime, endTime time.Time,
+	lookbackPeriods int,
+	columns []string,
+) (map[string]*RangeChunk, error) {
+	ids := uniqueSortedStrings(subjectIDs)
+	if len(ids) == 0 {
+		return map[string]*RangeChunk{}, nil
+	}
+	if key.InputContractVersion != "" {
+		if lookbackPeriods < 1 {
+			lookbackPeriods = 1
+		}
+		if lookbackPeriods > 10000 {
+			return nil, nonRetryableRead(fmt.Errorf("series window lookback exceeds 10000 rows"))
+		}
+		maxSubjects := storagepb.SeriesWindowSubjectLimit(lookbackPeriods, len(uniqueSortedStrings(columns)))
+		if maxSubjects == 0 {
+			return nil, nonRetryableRead(fmt.Errorf("series window exceeds single-subject cell budget"))
+		}
+		if len(ids) > maxSubjects {
+			out := make(map[string]*RangeChunk, len(ids))
+			// Subjects are independent; split oversized requests without paging
+			// any subject's history or weakening its single-statement snapshot.
+			for start := 0; start < len(ids); start += maxSubjects {
+				partKey := key
+				partKey.SubjectID, partKey.SubjectIDs = "", nil
+				part, err := c.ReadPeriodChunks(ctx, partKey, ids[start:min(start+maxSubjects, len(ids))], startTime, endTime, lookbackPeriods, columns)
+				if err != nil {
+					return nil, err
+				}
+				for subject, chunk := range part {
+					out[subject] = chunk
+				}
+			}
+			return out, nil
+		}
+	}
+	if len(ids) == 1 {
+		key.SubjectID = ids[0]
+		key.SubjectIDs = nil
+		chunk, err := c.ReadPeriodChunk(ctx, key, startTime, endTime, lookbackPeriods, columns)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]*RangeChunk{ids[0]: chunk}, nil
+	}
+	if key.SourceViewID == "" {
+		key.SourceViewID = key.SourceDataset
+	}
+	if lookbackPeriods < 1 {
+		lookbackPeriods = 1
+	}
+	key.SubjectID = ""
+	key.SubjectIDs = ids
+	rows, _, complete, indexedTo, err := c.readPeriods(ctx, key, &storagepb.TimeRange{
+		EndTime: endTime.UTC().Format(time.RFC3339Nano),
+	}, storagepb.SortOrder_SORT_ORDER_DESC, lookbackPeriods, columns)
+	if err != nil {
+		return nil, err
+	}
+	bySubject := make(map[string][]*storagepb.TimeSeriesRow, len(ids))
+	for _, row := range rows {
+		subjectID := strings.TrimSpace(row.GetKey().GetSubjectId())
+		if subjectID == "" {
+			continue
+		}
+		bySubject[subjectID] = append(bySubject[subjectID], row)
+	}
+	out := make(map[string]*RangeChunk, len(ids))
+	for _, subjectID := range ids {
+		chunk, chunkErr := rangeChunkFromRows(bySubject[subjectID], columns, startTime, endTime, complete, indexedTo)
+		if chunkErr != nil {
+			return nil, chunkErr
+		}
+		out[subjectID] = chunk
+	}
+	return out, nil
+}
+
+func rangeChunkFromRows(
+	rows []*storagepb.TimeSeriesRow,
+	columns []string,
+	startTime, endTime time.Time,
+	complete bool,
+	indexedTo time.Time,
+) (*RangeChunk, error) {
+	frame, err := RowsToDataFrame(rows, columns)
+	if err != nil {
+		return nil, nonRetryableRead(err)
+	}
+	targetPeriods := make([]time.Time, 0, 1)
+	if frame != nil && len(frame.DataTimes) > 0 {
+		targetPeriods = targetPeriods[:0]
+		seen := make(map[int64]struct{})
+		for _, at := range frame.DataTimes {
+			if at.Before(startTime) || !at.Before(endTime) {
+				continue
+			}
+			nanos := at.UTC().UnixNano()
+			if _, ok := seen[nanos]; ok {
+				continue
+			}
+			seen[nanos] = struct{}{}
+			targetPeriods = append(targetPeriods, at.UTC())
+		}
+	}
+	sort.Slice(targetPeriods, func(i, j int) bool { return targetPeriods[i].Before(targetPeriods[j]) })
+	return &RangeChunk{
+		Frame: frame, TargetPeriods: targetPeriods, Complete: complete, IndexedTo: indexedTo,
+	}, nil
+}
+
+func uniqueSortedStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ExpandEndByPeriods is retained for manual callers; View-ready execution no longer polls it.
 func (c *Client) ExpandEndByPeriods(ctx context.Context, key WindowKey, endTime time.Time, periods int) (*EndExpansion, error) {
 	if key.SourceViewID == "" {
@@ -256,12 +398,20 @@ func (c *Client) readPeriods(
 	periodLimit int,
 	columns []string,
 ) ([]*storagepb.TimeSeriesRow, []time.Time, bool, time.Time, error) {
+	if key.InputContractVersion != "" {
+		return c.readSeriesWindow(ctx, key, timeRange, periodLimit, columns)
+	}
 	if periodLimit <= 0 {
 		return nil, nil, true, time.Time{}, nil
 	}
 	var rows []*storagepb.TimeSeriesRow
 	periods := make([]time.Time, 0, periodLimit)
 	seen := make(map[int64]struct{}, periodLimit+1)
+	bySubject := make(map[string]map[int64]struct{}, len(key.SubjectIDs))
+	exhausted := make(map[string]bool, len(key.SubjectIDs))
+	for _, subject := range key.SubjectIDs {
+		bySubject[subject] = make(map[int64]struct{}, periodLimit)
+	}
 	complete := true
 	var indexedTo time.Time
 	pageKey := key
@@ -294,6 +444,26 @@ func (c *Client) readPeriods(
 				return nil, nil, false, time.Time{}, nonRetryableRead(fmt.Errorf("parse data_time %q: %w", row.GetKey().GetDataTime(), parseErr))
 			}
 			nanos := dataTime.UTC().UnixNano()
+			if len(bySubject) > 0 {
+				subject := row.GetKey().GetSubjectId()
+				seenForSubject, requested := bySubject[subject]
+				if !requested {
+					return nil, nil, false, time.Time{}, nonRetryableRead(fmt.Errorf("unexpected subject %q in bulk View response", subject))
+				}
+				if _, exists := seenForSubject[nanos]; !exists {
+					if len(seenForSubject) == periodLimit {
+						exhausted[subject] = true
+						if len(exhausted) == len(bySubject) {
+							reachedNextPeriod = true
+							break
+						}
+						continue
+					}
+					seenForSubject[nanos] = struct{}{}
+				}
+				rows = append(rows, row)
+				continue
+			}
 			if _, exists := seen[nanos]; !exists {
 				if len(periods) == periodLimit {
 					reachedNextPeriod = true
@@ -318,6 +488,19 @@ func responseHasMore(rsp *storagepb.QueryTimeSeriesRowsRsp, rowCount int) bool {
 	return rowCount == rangeReadPageSize
 }
 
+func subjectIDFilterCond(key WindowKey) *storagepb.FilterCond {
+	ids := uniqueSortedStrings(append(append([]string{}, key.SubjectIDs...), key.SubjectID))
+	values := make([]*storagepb.TypedValue, len(ids))
+	for i, id := range ids {
+		values[i] = stringValue(id)
+	}
+	op := storagepb.FilterOp_FILTER_OP_EQ
+	if len(values) != 1 {
+		op = storagepb.FilterOp_FILTER_OP_IN
+	}
+	return &storagepb.FilterCond{Column: "subject_id", Op: op, Values: values}
+}
+
 func (c *Client) readRowsPage(
 	ctx context.Context,
 	key WindowKey,
@@ -333,7 +516,7 @@ func (c *Client) readRowsPage(
 		ViewId:    key.SourceViewID,
 		TimeRange: timeRange,
 		Filter: &storagepb.FilterSpec{Groups: []*storagepb.FilterGroup{{Conds: []*storagepb.FilterCond{
-			{Column: "subject_id", Op: storagepb.FilterOp_FILTER_OP_EQ, Values: []*storagepb.TypedValue{stringValue(key.SubjectID)}},
+			subjectIDFilterCond(key),
 			{Column: "freq", Op: storagepb.FilterOp_FILTER_OP_EQ, Values: []*storagepb.TypedValue{stringValue(key.Freq)}},
 		}}}},
 		Sorts: []*storagepb.SortSpec{{FieldName: "data_time", Desc: order == storagepb.SortOrder_SORT_ORDER_DESC}},
@@ -346,16 +529,25 @@ func (c *Client) readRowsPage(
 		ExpectedActiveIndexId:       key.ExpectedActiveIndexID,
 		ExpectedActiveIndexRevision: key.ExpectedActiveIndexRevision,
 	}
+	if key.FilterSourceSeriesTag {
+		req.Filter.Groups[0].Conds = append(req.Filter.Groups[0].Conds, &storagepb.FilterCond{
+			Column: "series_tag", Op: storagepb.FilterOp_FILTER_OP_EQ, Values: []*storagepb.TypedValue{stringValue(key.SourceSeriesTag)},
+		})
+	}
 	// TaskRunner owns the two-attempt tail retry policy. Do not add an RPC-level
 	// retry here or one slow subject will retain its read-worker slot.
 	if c.view == nil {
+		ids := uniqueSortedStrings(append(append([]string{}, key.SubjectIDs...), key.SubjectID))
+		if len(ids) != 1 {
+			return nil, nonRetryableRead(fmt.Errorf("batch view read requires DataView"))
+		}
 		legacy, ok := c.access.(interface {
 			ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 		})
 		if !ok {
 			return nil, nonRetryableRead(fmt.Errorf("storage View client is unavailable"))
 		}
-		legacyRsp, legacyErr := legacy.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{AuthInfo: c.auth, SpaceId: key.SpaceID, DatasetId: key.SourceViewID, Selectors: []*storagepb.TimeSeriesSelector{{SpaceId: key.SpaceID, DatasetId: key.SourceViewID, SubjectId: key.SubjectID, Freq: key.Freq}}, TimeRange: timeRange, Order: order, ColumnNames: qualifyDatasetColumns(key.SourceViewID, columns), Page: req.Page})
+		legacyRsp, legacyErr := legacy.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{AuthInfo: c.auth, SpaceId: key.SpaceID, DatasetId: key.SourceViewID, Selectors: []*storagepb.TimeSeriesSelector{{SpaceId: key.SpaceID, DatasetId: key.SourceViewID, SubjectId: ids[0], Freq: key.Freq}}, TimeRange: timeRange, Order: order, ColumnNames: qualifyDatasetColumns(key.SourceViewID, columns), Page: req.Page})
 		if legacyErr != nil {
 			return nil, fmt.Errorf("read time-series rows: %w", legacyErr)
 		}

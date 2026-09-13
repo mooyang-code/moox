@@ -106,9 +106,6 @@ func (s *Store) ApplySchema(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return fmt.Errorf("factor schema sql is empty")
 	}
-	if err := s.migrateLegacyBindingSchema(); err != nil {
-		return err
-	}
 	tables, err := s.factorSchemaTables()
 	if err != nil {
 		return err
@@ -122,83 +119,6 @@ func (s *Store) ApplySchema(sql string) error {
 		return err
 	}
 	return s.validateSchema()
-}
-
-// migrateLegacyBindingSchema upgrades the immediately preceding factor
-// binding shape in place. Older installations used dataset IDs directly;
-// those IDs are retained as migration hints, but enabled legacy bindings are
-// disabled because SQLite cannot infer the corresponding View IDs. The user
-// can rebind them after metadata sync. Unrelated obsolete schemas still fail
-// closed in validateSchemaTables.
-func (s *Store) migrateLegacyBindingSchema() error {
-	var table string
-	if err := s.db.Raw("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 't_factor_bindings'").Scan(&table).Error; err != nil {
-		return fmt.Errorf("inspect factor binding schema: %w", err)
-	}
-	if table == "" {
-		return nil
-	}
-	columns, err := s.tableColumns("t_factor_bindings")
-	if err != nil {
-		return err
-	}
-	if !containsColumn(columns, "c_source_dataset") || !containsColumn(columns, "c_target_dataset") {
-		return nil
-	}
-	var enabled int64
-	if err := s.db.Raw("SELECT COUNT(1) FROM t_factor_bindings WHERE c_status = 'enabled'").Scan(&enabled).Error; err != nil {
-		return err
-	}
-	err = s.db.Transaction(func(tx *gorm.DB) error {
-		const create = `CREATE TABLE t_factor_bindings_migrating (
-			c_binding_id TEXT NOT NULL PRIMARY KEY,
-			c_factor_id TEXT NOT NULL,
-			c_space_id TEXT NOT NULL,
-			c_source_view_id TEXT NOT NULL,
-			c_freq TEXT NOT NULL,
-			c_subject_mode TEXT NOT NULL DEFAULT 'all',
-			c_subjects_json TEXT NOT NULL DEFAULT '[]',
-			c_result_dataset_id TEXT NOT NULL,
-			c_result_view_id TEXT NOT NULL,
-			c_status TEXT NOT NULL DEFAULT 'pending_view',
-			c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			CHECK (c_subject_mode IN ('all', 'include')),
-			CHECK (c_status IN ('pending_view', 'enabled', 'disabled', 'cleanup_pending')),
-			FOREIGN KEY (c_factor_id) REFERENCES t_factor_defs (c_factor_id),
-			UNIQUE (c_factor_id, c_space_id, c_source_view_id, c_freq)
-		)`
-		if err := tx.Exec(create).Error; err != nil {
-			return err
-		}
-		if err := tx.Exec(`INSERT INTO t_factor_bindings_migrating
-			(c_binding_id, c_factor_id, c_space_id, c_source_view_id, c_freq, c_subject_mode, c_subjects_json, c_result_dataset_id, c_result_view_id, c_status, c_ctime, c_mtime)
-			SELECT c_binding_id, c_factor_id, c_space_id, c_source_dataset, c_freq, c_subject_mode, c_subjects_json, c_target_dataset, c_target_dataset,
-			CASE WHEN c_status = 'enabled' THEN 'disabled' ELSE c_status END, c_ctime, c_mtime
-			FROM t_factor_bindings`).Error; err != nil {
-			return err
-		}
-		if err := tx.Exec("DROP TABLE t_factor_bindings").Error; err != nil {
-			return err
-		}
-		if err := tx.Exec("ALTER TABLE t_factor_bindings_migrating RENAME TO t_factor_bindings").Error; err != nil {
-			return err
-		}
-		if err := tx.Exec(`CREATE TABLE t_factor_output_manifests (
-			c_binding_id TEXT NOT NULL, c_subject_id TEXT NOT NULL, c_frequency TEXT NOT NULL,
-			c_period_time INTEGER NOT NULL, c_row_keys_json TEXT NOT NULL DEFAULT '[]',
-			c_updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (c_binding_id, c_subject_id, c_frequency, c_period_time),
-			FOREIGN KEY (c_binding_id) REFERENCES t_factor_bindings(c_binding_id) ON DELETE CASCADE
-		)`).Error; err != nil {
-			return err
-		}
-		return nil
-	})
-	if err == nil && enabled > 0 {
-		log.Warnf("factor schema migrated %d legacy enabled binding(s) to disabled; rebind them to explicit Source/Result Views", enabled)
-	}
-	return err
 }
 
 func (s *Store) tableColumns(table string) ([]string, error) {
@@ -238,17 +158,22 @@ func (s *Store) factorSchemaTables() ([]string, error) {
 
 func (s *Store) validateSchemaTables(tables []string) error {
 	expected := map[string][]string{
+		"t_factor_subject_receipts": {"c_space_id", "c_event_id", "c_catalog_revision", "c_period_time", "c_source_view_id", "c_event_json", "c_outcomes_json", "c_status", "c_updated_at"},
+		"t_factor_subject_runs":     {"c_task_id", "c_scope_key", "c_period_time", "c_task_json", "c_status", "c_error", "c_updated_at"},
+		"t_factor_subject_heads":    {"c_scope_key", "c_task_id", "c_period_time", "c_source_node", "c_source_store", "c_source_sequence", "c_source_event", "c_catalog_revision"},
+		"t_factor_subject_gc":       {"c_id", "c_completed_before"},
+		"t_factor_catalog":          {"c_id", "c_revision", "c_snapshot_hash"},
 		"t_factor_defs": {
-			"c_factor_id", "c_name", "c_source_code", "c_source_hash", "c_source_path",
+			"c_factor_id", "c_name", "c_factor_type", "c_source_code", "c_source_hash", "c_source_path",
 			"c_input_columns_json", "c_outputs_json", "c_params_json", "c_lookback_periods",
 			"c_status", "c_ctime", "c_mtime",
 		},
 		"t_factor_bindings": {
-			"c_binding_id", "c_factor_id", "c_space_id", "c_source_view_id", "c_freq",
+			"c_binding_id", "c_binding_generation", "c_factor_id", "c_space_id", "c_source_view_id", "c_freq",
 			"c_subject_mode", "c_subjects_json", "c_result_dataset_id", "c_result_view_id", "c_status", "c_ctime", "c_mtime",
 		},
 		"t_factor_output_manifests": {
-			"c_binding_id", "c_subject_id", "c_frequency", "c_period_time", "c_row_keys_json", "c_updated_at",
+			"c_source_series_tag", "c_filter_source_series_tag", "c_binding_id", "c_binding_generation", "c_cleanup_task_json", "c_subject_id", "c_frequency", "c_period_time", "c_row_keys_json", "c_updated_at",
 		},
 	}
 	if len(tables) != len(expected) {

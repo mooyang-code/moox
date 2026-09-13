@@ -13,6 +13,12 @@ message DatasetRowsUpserted {
   string dataset_id = 2;
   repeated RowUpsert rows = 3;
   string write_source = 4;
+  // Position assigned in the same durable DataNode outbox batch as the rows.
+  // Sequence is comparable only within (source_node_id, source_store_id).
+  string source_node_id = 5;
+  uint64 source_sequence = 6;
+  // Changes when the underlying DataNode store is recreated.
+  string source_store_id = 7;
 }
 
 // DatasetPeriodCollected marks a terminal collection outcome for every
@@ -33,6 +39,28 @@ message ViewPeriodDatasetState {
   repeated string failed_subjects = 3;
 }
 
+// ViewSourceSubjectReady is emitted by the View service after the active
+// index commits a time-series row. It does not assert universe completeness.
+// source_event_id is an identity, never an orderable revision.
+message ViewSourceSubjectReady {
+  string source_view_id = 1;
+  string source_dataset_id = 2;
+  string subject_id = 3;
+  string frequency = 4;
+  int64 period_time = 5;
+  string series_tag = 6;
+  // Physical A/B index IDs are internal to Storage View and must not appear
+  // on this public event. Field 7 is unused.
+  string active_index_id = 7;
+  string input_contract_version = 8;
+  string source_event_id = 9;
+  google.protobuf.Timestamp ready_at = 10;
+  string source_node_id = 11;
+  // Comparable only within (source_node_id, source_store_id), not globally.
+  uint64 source_sequence = 12;
+  string source_store_id = 13;
+}
+
 // ViewSourcePeriodReady marks a source View period as readable by Factor.
 message ViewSourcePeriodReady {
   string source_view_id = 1;
@@ -42,11 +70,9 @@ message ViewSourcePeriodReady {
   repeated ViewPeriodDatasetState datasets = 5;
   repeated string primary_subjects = 6;
   google.protobuf.Timestamp ready_at = 7;
-  // active_index_id identifies the source View generation that produced this
-  // readiness decision. Consumers may pin reads to this generation.
+  // Physical A/B index IDs and per-file write revisions are internal to
+  // Storage View. Fields 8 and 9 are unused.
   string active_index_id = 8;
-  // active_index_revision identifies the in-place write revision used for the
-  // readiness decision.
   uint64 active_index_revision = 9;
 }
 
@@ -70,9 +96,8 @@ message FactorPeriodComputed {
   repeated FactorBindingPeriodState bindings = 6;
   google.protobuf.Timestamp computed_at = 7;
   string trigger_event_id = 8;
-  // source_index_id is the source View generation used by Factor.
+  // Physical A/B index IDs are internal to Storage View. Fields 9 and 10 are unused.
   string source_index_id = 9;
-  // source_index_revision is the in-place source View revision used by Factor.
   uint64 source_index_revision = 10;
 }
 
@@ -85,13 +110,11 @@ message ViewFactorPeriodReady {
   string status = 5;
   repeated FactorBindingPeriodState bindings = 6;
   google.protobuf.Timestamp ready_at = 7;
-  // source_index_id is carried through Factor computation for causality.
+  // Physical A/B index IDs and per-file write revisions are internal to
+  // Storage View. Fields 8 through 11 are unused.
   string source_index_id = 8;
-  // result_index_id identifies the result View generation containing rows.
   string result_index_id = 9;
-  // source_index_revision is carried through Factor computation for causality.
   uint64 source_index_revision = 10;
-  // result_index_revision identifies the result View write revision containing rows.
   uint64 result_index_revision = 11;
 }
 

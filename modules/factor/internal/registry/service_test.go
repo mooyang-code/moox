@@ -18,14 +18,14 @@ import (
 
 func TestImportFactorFileUsesExplicitGenericDefinition(t *testing.T) {
 	dir := t.TempDir()
-	source := "def compute(df, params): return {'bias': df['close']}\n"
+	source := "def compute(df, params, context): return {'bias': df['close']}\n"
 	path := filepath.Join(dir, "Bias.py")
 	require.NoError(t, os.WriteFile(path, []byte(source), 0o644))
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
 	svc := NewService(store.NewFactorRepository(db), nil, Options{FactorsDir: dir})
-	factor, err := svc.ImportFactorFile(context.Background(), path, ImportOptions{
+	factor, err := svc.ImportFactorFile(context.Background(), path, ImportOptions{FactorType: "timeseries",
 		FactorID: "Bias", InputColumns: []string{"close"}, Outputs: []string{"bias"},
 		ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
 	})
@@ -40,13 +40,13 @@ func TestImportFactorFileUsesExplicitGenericDefinition(t *testing.T) {
 func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "Generic.py")
-	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params, context): return {'value': df['value']}\n"), 0o644))
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
 	repo := store.NewFactorRepository(db)
 	svc := NewService(repo, nil, Options{FactorsDir: dir})
-	options := ImportOptions{
+	options := ImportOptions{FactorType: "timeseries",
 		FactorID: "Generic", InputColumns: []string{"value"}, Outputs: []string{"value"},
 		ParamsJSON: `{}`, LookbackPeriods: 2,
 	}
@@ -60,7 +60,7 @@ func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *te
 	require.Equal(t, "disabled", updated.Status)
 
 	renamedPath := filepath.Join(dir, "Renamed.py")
-	require.NoError(t, os.WriteFile(renamedPath, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
+	require.NoError(t, os.WriteFile(renamedPath, []byte("def compute(df, params, context): return {'value': df['value']}\n"), 0o644))
 	_, err = svc.ImportFactorFile(context.Background(), renamedPath, options)
 	require.ErrorContains(t, err, "must match factor file name")
 
@@ -75,19 +75,19 @@ func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *te
 func TestImportFactorFileRejectsEnabledDefinitionUpdate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "Generic.py")
-	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params, context): return {'value': df['value']}\n"), 0o644))
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
 	repo := store.NewFactorRepository(db)
-	require.NoError(t, repo.Create(context.Background(), domain.FactorDef{
+	require.NoError(t, repo.Create(context.Background(), domain.FactorDef{FactorType: "timeseries",
 		FactorID: "Generic", Name: "Generic", SourceCode: "old", SourceHash: "old",
 		InputColumns: []string{"value"}, Outputs: []string{"value"}, ParamsJSON: `{}`,
 		LookbackPeriods: 2, Status: domain.FactorStatusEnabled,
 	}))
 	svc := NewService(repo, nil, Options{FactorsDir: dir})
 
-	_, err = svc.ImportFactorFile(context.Background(), path, ImportOptions{
+	_, err = svc.ImportFactorFile(context.Background(), path, ImportOptions{FactorType: "timeseries",
 		FactorID: "Generic", InputColumns: []string{"value"}, Outputs: []string{"value"},
 		ParamsJSON: `{"window":2}`, LookbackPeriods: 3,
 	})
@@ -105,8 +105,8 @@ func TestEnsureSourceArtifactsRestoresEnabledFactorAfterDeployReplacement(t *tes
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
 	repo := store.NewFactorRepository(db)
-	source := "def compute(df, params):\n    return df\n"
-	factor, err := domain.NormalizeFactorDefinition(domain.FactorDef{
+	source := "def compute(df, params, context):\n    return df\n"
+	factor, err := domain.NormalizeFactorDefinition(domain.FactorDef{FactorType: "timeseries",
 		FactorID: "Bias", Name: "Bias", SourceCode: source,
 		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
 		LookbackPeriods: 5, Status: domain.FactorStatusEnabled,

@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -275,11 +276,16 @@ func (c bindingOutputCleaner) clearBindingOutputs(ctx context.Context, binding d
 			continue
 		}
 		period := key.PeriodTime.UTC()
-		task := &engine.FactorTask{
-			TaskID: cleanupID + "-" + period.Format(time.RFC3339Nano), BindingID: binding.BindingID,
-			SpaceID: binding.SpaceID, SourceViewID: binding.SourceViewID, ResultDatasetID: binding.ResultDatasetID,
-			SubjectID: key.SubjectID, Freq: key.Frequency, PeriodTime: period.Unix(), TriggerEventID: cleanupID,
-			TriggeredAt: period, Factor: engine.FactorSpec{FactorID: factor.FactorID, Name: factor.Name, SourceHash: factor.SourceHash, Outputs: append([]string(nil), factor.Outputs...)},
+		task := &engine.FactorTask{}
+		if key.CleanupTaskJSON == "" {
+			return fmt.Errorf("manifest %s generation %s lacks cleanup ownership", key.BindingID, key.BindingGeneration)
+		}
+		if err := json.Unmarshal([]byte(key.CleanupTaskJSON), task); err != nil {
+			return fmt.Errorf("decode manifest cleanup ownership: %w", err)
+		}
+		task.TaskID, task.TriggerEventID = cleanupID, cleanupID
+		if task.BindingID != key.BindingID || task.BindingGeneration != key.BindingGeneration || task.SubjectID != key.SubjectID || task.Freq != key.Frequency || task.PeriodTime != key.PeriodTime.Unix() || task.FilterSourceSeriesTag != key.FilterSourceSeriesTag || task.SourceSeriesTag != key.SourceSeriesTag {
+			return fmt.Errorf("manifest cleanup ownership does not match key")
 		}
 		if err := c.storage.ClearFactorOutputs(ctx, task); err != nil {
 			return fmt.Errorf("clear binding %s subject %s period %s: %w", binding.BindingID, key.SubjectID, period.Format(time.RFC3339), err)
@@ -644,6 +650,8 @@ func newTaskValidator(
 			return fmt.Errorf("%w: factor %q source hash changed", taskrunner.ErrStaleTask, factor.FactorID)
 		}
 		if !slices.Equal(factor.InputColumns, task.Factor.InputColumns) ||
+			!slices.Equal(factor.Outputs, task.Factor.Outputs) ||
+			factor.FactorType != task.Factor.FactorType ||
 			factor.ParamsJSON != task.Factor.ParamsJSON ||
 			factor.LookbackPeriods != task.LookbackPeriods {
 			return fmt.Errorf("%w: factor %q definition changed", taskrunner.ErrStaleTask, factor.FactorID)
@@ -663,12 +671,20 @@ func newTaskValidator(
 		for _, binding := range executable {
 			resultMatches := binding.ResultDatasetID == taskResult || binding.ResultDatasetID == ""
 			if binding.FactorID == task.Factor.FactorID &&
-				(task.BindingID == "" || binding.BindingID == task.BindingID) &&
+				binding.BindingID == task.BindingID &&
 				binding.SpaceID == task.SpaceID &&
 				binding.SourceViewID == taskSource &&
 				resultMatches &&
 				binding.Freq == task.Freq &&
 				domain.BindingAllowsSubject(binding, task.SubjectID) {
+				expectedGeneration := taskrunner.ExecutionGeneration(taskrunner.TaskScope{
+					BindingID: binding.BindingID, BindingGeneration: binding.BindingGeneration,
+					SpaceID: binding.SpaceID, SourceViewID: binding.SourceViewID,
+					ResultDatasetID: binding.ResultDatasetID, Freq: binding.Freq,
+				}, *factor)
+				if binding.BindingGeneration == "" || task.BindingGeneration != expectedGeneration {
+					return fmt.Errorf("%w: binding %q execution generation changed", taskrunner.ErrStaleTask, binding.BindingID)
+				}
 				return nil
 			}
 		}

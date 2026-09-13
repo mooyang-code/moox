@@ -2,6 +2,8 @@ package jetstream
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,9 +84,56 @@ func (c *Config) ApplyCredentialFile(path string) error {
 	// The deployment endpoint is supplied by the module config or the
 	// deployment-wide environment. Credential exports on the control host may
 	// deliberately contain its loopback URL, which must not override a remote
-	// service endpoint.
-	if len(c.URLs) == 0 && len(file.URLs) > 0 {
+	// service endpoint. Example YAML loopback URLs must not hide a non-local
+	// role file, which is how intranet engine clients reach the public EventBus.
+	if len(file.URLs) > 0 && (len(c.URLs) == 0 || (allEventBusURLsLoopback(c.URLs) && anyEventBusURLRoutable(file.URLs))) {
 		c.URLs = append([]string(nil), file.URLs...)
 	}
 	return nil
+}
+
+func eventBusURLHost(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(value); err == nil && parsed.Host != "" {
+		return parsed.Hostname()
+	}
+	value = strings.TrimPrefix(strings.TrimPrefix(value, "tls://"), "nats://")
+	host, _, err := net.SplitHostPort(value)
+	if err != nil {
+		return value
+	}
+	return host
+}
+
+func eventBusURLIsLoopback(raw string) bool {
+	switch strings.ToLower(eventBusURLHost(raw)) {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	default:
+		return false
+	}
+}
+
+func allEventBusURLsLoopback(urls []string) bool {
+	if len(urls) == 0 {
+		return true
+	}
+	for _, item := range urls {
+		if strings.TrimSpace(item) == "" || !eventBusURLIsLoopback(item) {
+			return false
+		}
+	}
+	return true
+}
+
+func anyEventBusURLRoutable(urls []string) bool {
+	for _, item := range urls {
+		if strings.TrimSpace(item) != "" && !eventBusURLIsLoopback(item) {
+			return true
+		}
+	}
+	return false
 }

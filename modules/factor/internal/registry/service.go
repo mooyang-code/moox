@@ -26,6 +26,7 @@ type Options struct {
 }
 
 type ImportOptions struct {
+	FactorType      string
 	FactorID        string
 	InputColumns    []string
 	Outputs         []string
@@ -68,6 +69,9 @@ func (s *Service) SaveFactorDefinition(ctx context.Context, factor domain.Factor
 }
 
 func (s *Service) validateDefinitionWrite(ctx context.Context, factor domain.FactorDef) (*domain.FactorDef, error) {
+	if err := domain.ValidateFactorType(factor.FactorType); err != nil {
+		return nil, err
+	}
 	if s.factors == nil {
 		return nil, fmt.Errorf("factor repository is required")
 	}
@@ -350,6 +354,7 @@ func (s *Service) prepareFactorFile(path string, options ImportOptions) (domain.
 		return domain.FactorDef{}, nil, fmt.Errorf("read factor file %s: %w", path, err)
 	}
 	factor := domain.FactorDef{
+		FactorType:      options.FactorType,
 		FactorID:        options.FactorID,
 		Name:            name,
 		SourceCode:      string(raw),

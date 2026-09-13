@@ -416,7 +416,7 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 	// Audit persistence is best-effort and must never hold up View state
 	// transitions. Retry terminal log updates before processing the next pass.
 	s.drainRebuildLogRetries(ctx)
-	var firstErr error
+	firstErr := s.ReplayPendingSubjects(ctx)
 	for pageNo := uint32(1); ; pageNo++ {
 		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
 		if err != nil {
@@ -1395,8 +1395,11 @@ func (s *Service) activateViewBuild(ctx context.Context, opts MaintenanceOptions
 	// live-event path does not observe those rows. Publish a bounded watermark
 	// sample after activation; otherwise Monitor can keep reporting no_output
 	// until the next live event arrives (or indefinitely when the durable was
-	// reset during repair).
+	// reset during repair). Rebuilds never emit subject-ready.
 	s.observeActivatedViewWatermark(view, indexID)
+	if err := s.ReplayPendingSubjects(ctx); err != nil {
+		log.Printf("storage View leftover pending-subject cleanup after activation failed: %v", err)
+	}
 	return nil
 }
 

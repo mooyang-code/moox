@@ -32,12 +32,8 @@ var tradeConsoleGatewayMethods = []string{
 // truth consumed by Monitor and the service gateway.
 func (c *Client) RegisterServiceDeployment(ctx context.Context, nodeID, serviceName, host string) error {
 	canonical, _ := lookupServiceDeployment(serviceName)
-	if canonical == "moox_trade" && strings.TrimSpace(nodeID) != "control" {
-		// Ensure the destination Gateway exists before creating the service and
-		// owner route. Admin rejects deployments for unknown gateway nodes.
-		if err := c.ensureGatewayNodeAt(ctx, nodeID, host, TradeGatewayHTTPSPort); err != nil {
-			return fmt.Errorf("trade_gateway_node_failed: %w", err)
-		}
+	if err := c.ensureRemoteServiceGatewayNode(ctx, nodeID, host, canonical); err != nil {
+		return err
 	}
 	if err := c.registerServiceDeployment(ctx, nodeID, serviceName, host); err != nil {
 		return err
@@ -100,6 +96,9 @@ func (c *Client) registerServiceDeployment(ctx context.Context, nodeID, serviceN
 			deployment.Port = spec.port
 		}
 		if canonical == "moox_trade" && deployment.GetNodeId() != "control" {
+			deployment.ExtraConfig = disableRemoteTradeMonitoring(deployment.GetExtraConfig())
+		}
+		if canonical == "moox_factor_engine" && deployment.GetNodeId() != "control" {
 			deployment.ExtraConfig = disableRemoteTradeMonitoring(deployment.GetExtraConfig())
 		}
 		return c.upsertDeployment(ctx, deployment)
@@ -175,27 +174,30 @@ type serviceDeploymentCatalogEntry struct {
 func lookupServiceDeployment(name string) (string, serviceDeploymentCatalogEntry) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	known := map[string]serviceDeploymentCatalogEntry{
-		"admin":          {canonical: "admin_gateway", kind: "gateway", protocol: "https", scope: "public", port: 9527, healthPort: 11010, public: true, description: "MooX 管理台入口"},
-		"admin_gateway":  {canonical: "admin_gateway", kind: "gateway", protocol: "https", scope: "public", port: 9527, healthPort: 11010, public: true, description: "MooX 管理台入口"},
-		"web-host":       {canonical: "web_host", kind: "frontend", protocol: "https", scope: "public", port: 9527, healthPort: 19527, public: true, description: "MooX 管理台 Web 入口"},
-		"web_host":       {canonical: "web_host", kind: "frontend", protocol: "https", scope: "public", port: 9527, healthPort: 19527, public: true, description: "MooX 管理台 Web 入口"},
-		"eventbus":       {canonical: "eventbus", kind: "eventbus", protocol: "http", scope: "internal", port: 11420, healthPort: 11419, description: "MooX EventBus"},
-		"monitor":        {canonical: "moox_monitor", kind: "monitor", protocol: "http", scope: "internal", port: 11410, healthPort: 11409, description: "MooX Monitor"},
-		"moox_monitor":   {canonical: "moox_monitor", kind: "monitor", protocol: "http", scope: "internal", port: 11410, healthPort: 11409, description: "MooX Monitor"},
-		"gateway":        {canonical: "moox_gateway", kind: "gateway", protocol: "http", scope: "internal", port: 11002, healthPort: 11012, description: "MooX node gateway"},
-		"moox_gateway":   {canonical: "moox_gateway", kind: "gateway", protocol: "http", scope: "internal", port: 11002, healthPort: 11012, description: "MooX node gateway"},
-		"collector":      {canonical: "moox_collector", kind: "collector", protocol: "http", scope: "internal", port: 11402, healthPort: 11412, description: "MooX Collector"},
-		"moox_collector": {canonical: "moox_collector", kind: "collector", protocol: "http", scope: "internal", port: 11402, healthPort: 11412, description: "MooX Collector"},
-		"cloudnode":      {canonical: "moox_cloudnode", kind: "cloudnode", protocol: "http", scope: "internal", port: 11401, healthPort: 11411, description: "MooX CloudNode"},
-		"moox_cloudnode": {canonical: "moox_cloudnode", kind: "cloudnode", protocol: "http", scope: "internal", port: 11401, healthPort: 11411, description: "MooX CloudNode"},
-		"factor":         {canonical: "moox_factor", kind: "factor", protocol: "http", scope: "internal", port: 11404, healthPort: 11414, description: "MooX Factor"},
-		"moox_factor":    {canonical: "moox_factor", kind: "factor", protocol: "http", scope: "internal", port: 11404, healthPort: 11414, description: "MooX Factor"},
-		"strategy":       {canonical: "moox_strategy", kind: "strategy", protocol: "http", scope: "internal", port: 11433, healthPort: 11431, description: "MooX Strategy"},
-		"moox_strategy":  {canonical: "moox_strategy", kind: "strategy", protocol: "http", scope: "internal", port: 11433, healthPort: 11431, description: "MooX Strategy"},
-		"archive":        {canonical: "moox_archive", kind: "archive", protocol: "http", scope: "internal", port: 11416, healthPort: 11416, description: "MooX Archive"},
-		"moox_archive":   {canonical: "moox_archive", kind: "archive", protocol: "http", scope: "internal", port: 11416, healthPort: 11416, description: "MooX Archive"},
-		"hostagent":      {canonical: "moox_hostagent", kind: "hostagent", protocol: "http", scope: "internal", port: 11426, healthPort: 11425, description: "MooX HostAgent"},
-		"moox_hostagent": {canonical: "moox_hostagent", kind: "hostagent", protocol: "http", scope: "internal", port: 11426, healthPort: 11425, description: "MooX HostAgent"},
+		"admin":              {canonical: "admin_gateway", kind: "gateway", protocol: "https", scope: "public", port: 9527, healthPort: 11010, public: true, description: "MooX 管理台入口"},
+		"admin_gateway":      {canonical: "admin_gateway", kind: "gateway", protocol: "https", scope: "public", port: 9527, healthPort: 11010, public: true, description: "MooX 管理台入口"},
+		"web-host":           {canonical: "web_host", kind: "frontend", protocol: "https", scope: "public", port: 9527, healthPort: 19527, public: true, description: "MooX 管理台 Web 入口"},
+		"web_host":           {canonical: "web_host", kind: "frontend", protocol: "https", scope: "public", port: 9527, healthPort: 19527, public: true, description: "MooX 管理台 Web 入口"},
+		"eventbus":           {canonical: "eventbus", kind: "eventbus", protocol: "http", scope: "internal", port: 11420, healthPort: 11419, description: "MooX EventBus"},
+		"monitor":            {canonical: "moox_monitor", kind: "monitor", protocol: "http", scope: "internal", port: 11410, healthPort: 11409, description: "MooX Monitor"},
+		"moox_monitor":       {canonical: "moox_monitor", kind: "monitor", protocol: "http", scope: "internal", port: 11410, healthPort: 11409, description: "MooX Monitor"},
+		"gateway":            {canonical: "moox_gateway", kind: "gateway", protocol: "http", scope: "internal", port: 11002, healthPort: 11012, description: "MooX node gateway"},
+		"moox_gateway":       {canonical: "moox_gateway", kind: "gateway", protocol: "http", scope: "internal", port: 11002, healthPort: 11012, description: "MooX node gateway"},
+		"collector":          {canonical: "moox_collector", kind: "collector", protocol: "http", scope: "internal", port: 11402, healthPort: 11412, description: "MooX Collector"},
+		"moox_collector":     {canonical: "moox_collector", kind: "collector", protocol: "http", scope: "internal", port: 11402, healthPort: 11412, description: "MooX Collector"},
+		"cloudnode":          {canonical: "moox_cloudnode", kind: "cloudnode", protocol: "http", scope: "internal", port: 11401, healthPort: 11411, description: "MooX CloudNode"},
+		"moox_cloudnode":     {canonical: "moox_cloudnode", kind: "cloudnode", protocol: "http", scope: "internal", port: 11401, healthPort: 11411, description: "MooX CloudNode"},
+		"factor":             {canonical: "moox_factor", kind: "factor", protocol: "http", scope: "internal", port: 11404, healthPort: 11414, description: "MooX Factor"},
+		"moox_factor":        {canonical: "moox_factor", kind: "factor", protocol: "http", scope: "internal", port: 11404, healthPort: 11414, description: "MooX Factor"},
+		"factor-engine":      {canonical: "moox_factor_engine", kind: "factor-engine", protocol: "http", scope: "internal", port: FactorEngineHealthPort, healthPort: FactorEngineHealthPort, description: "MooX Factor Engine"},
+		"moox-factor-engine": {canonical: "moox_factor_engine", kind: "factor-engine", protocol: "http", scope: "internal", port: FactorEngineHealthPort, healthPort: FactorEngineHealthPort, description: "MooX Factor Engine"},
+		"moox_factor_engine": {canonical: "moox_factor_engine", kind: "factor-engine", protocol: "http", scope: "internal", port: FactorEngineHealthPort, healthPort: FactorEngineHealthPort, description: "MooX Factor Engine"},
+		"strategy":           {canonical: "moox_strategy", kind: "strategy", protocol: "http", scope: "internal", port: 11433, healthPort: 11431, description: "MooX Strategy"},
+		"moox_strategy":      {canonical: "moox_strategy", kind: "strategy", protocol: "http", scope: "internal", port: 11433, healthPort: 11431, description: "MooX Strategy"},
+		"archive":            {canonical: "moox_archive", kind: "archive", protocol: "http", scope: "internal", port: 11416, healthPort: 11416, description: "MooX Archive"},
+		"moox_archive":       {canonical: "moox_archive", kind: "archive", protocol: "http", scope: "internal", port: 11416, healthPort: 11416, description: "MooX Archive"},
+		"hostagent":          {canonical: "moox_hostagent", kind: "hostagent", protocol: "http", scope: "internal", port: 11426, healthPort: 11425, description: "MooX HostAgent"},
+		"moox_hostagent":     {canonical: "moox_hostagent", kind: "hostagent", protocol: "http", scope: "internal", port: 11426, healthPort: 11425, description: "MooX HostAgent"},
 		// Trade health is loopback-only on dedicated execution nodes. Remote
 		// registrations are monitored through the deployment/SSH acceptance
 		// path rather than advertising an unreachable public /readyz URL.
@@ -222,7 +224,30 @@ func registrationHost(nodeID, host string, public bool) string {
 	return host
 }
 
+func (c *Client) ensureRemoteServiceGatewayNode(ctx context.Context, nodeID, host, canonical string) error {
+	if strings.TrimSpace(nodeID) == "control" {
+		return nil
+	}
+	switch canonical {
+	case "moox_trade":
+		if err := c.ensureGatewayNodeAt(ctx, nodeID, host, TradeGatewayHTTPSPort); err != nil {
+			return fmt.Errorf("trade_gateway_node_failed: %w", err)
+		}
+	case "moox_factor_engine":
+		// Admin CreateServiceDeployment requires a Gateway node row even when
+		// the engine itself is not gateway-fronted. Create a disabled placeholder
+		// only when the node is missing; never rewrite an existing public address.
+		if err := c.ensurePlaceholderGatewayNode(ctx, nodeID, host, FactorEngineHealthPort); err != nil {
+			return fmt.Errorf("factor_engine_gateway_node_failed: %w", err)
+		}
+	}
+	return nil
+}
+
 func registrationExtra(nodeID, host string, spec serviceDeploymentCatalogEntry) string {
+	if spec.kind == "factor-engine" && nodeID != "control" {
+		return `{"monitor_enabled":false,"managed_by":"moox-cli"}`
+	}
 	if spec.healthPort <= 0 {
 		if spec.kind == "trade" && nodeID == "control" {
 			return `{"health_url":"http://127.0.0.1:11210/readyz","health_kind":"readiness","monitor_enabled":true,"managed_by":"moox-cli"}`

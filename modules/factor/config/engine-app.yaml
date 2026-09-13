@@ -1,0 +1,36 @@
+# Incremental subject/time-series engine; cache and cross/barrier are not wired.
+engine_id: factor-engine-1
+database:
+  type: sqlite
+  path: ./data/factor-engine/runtime.db
+  max_idle_conns: 1
+  max_open_conns: 1
+  conn_max_lifetime: 1h
+  conn_max_idle_time: 10m
+storage:
+  gateway_target: ip://127.0.0.1:11003
+  # Required: set the actual Storage gateway node ID before starting the engine.
+  gateway_node_id: ""
+  # Gateway HMAC uses the existing `factor` credential; Storage writes use AppId moox-factor-engine.
+  key_id: factor
+  hmac_key_file: ""
+eventbus:
+  urls: [nats://127.0.0.1:4222]
+  credential_file: ~/.config/moox/eventbus/factor-engine-eventbus.yaml
+  fetch_max_wait: 1s
+  execution_timeout: 15m
+  stall_threshold: 5m
+  max_execution_attempts: 5
+engine:
+  python_bin: python3
+  worker_path: ./pyworker/worker.py
+  factors_dir: ./data/factor-engine/artifacts
+  python_workers: 32
+  view_read_workers: 2
+  view_read_timeout_ms: 20000
+  task_timeout_ms: 30000
+  batch_enabled: true
+cache:
+  enabled: false
+catalog_poll_interval: 30s
+catalog_sync_timeout: 10m

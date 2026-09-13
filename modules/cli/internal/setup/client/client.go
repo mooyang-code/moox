@@ -24,6 +24,7 @@ const (
 	sysDeployRemoteAddress = "127.0.0.1:11109"
 	maxResponseBytes       = 1 << 20
 	TradeGatewayHTTPSPort  = 11001
+	FactorEngineHealthPort = 11415
 )
 
 var storageDeploymentNames = []string{
@@ -533,21 +534,36 @@ func (c *Client) ensureGatewayNode(ctx context.Context, nodeID, host string) err
 	return c.ensureGatewayNodeAt(ctx, nodeID, host, TradeGatewayHTTPSPort)
 }
 
+func (c *Client) ensurePlaceholderGatewayNode(ctx context.Context, nodeID, host string, port int) error {
+	return c.writeGatewayNode(ctx, nodeID, host, port, false, "disabled")
+}
+
 func (c *Client) ensureGatewayNodeAt(ctx context.Context, nodeID, host string, port int) error {
+	return c.writeGatewayNode(ctx, nodeID, host, port, true, "enabled")
+}
+
+func (c *Client) writeGatewayNode(ctx context.Context, nodeID, host string, port int, overwrite bool, createStatus string) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("gateway_node_port_invalid")
+	}
+	createStatus = strings.TrimSpace(createStatus)
+	if createStatus == "" {
+		createStatus = "enabled"
 	}
 	response := &pb.ListGatewayNodesRsp{}
 	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
 		return fmt.Errorf("gateway_node_lookup_failed")
 	}
 	desiredAddress := "https://" + net.JoinHostPort(host, strconv.Itoa(port))
-	node := &pb.GatewayNode{NodeId: nodeID, Name: nodeID, PublicAddress: desiredAddress, Status: "enabled"}
+	node := &pb.GatewayNode{NodeId: nodeID, Name: nodeID, PublicAddress: desiredAddress, Status: createStatus}
 	if len(response.GetNodes()) == 0 {
 		created := &pb.CreateGatewayNodeRsp{}
 		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "CreateGatewayNode", &pb.CreateGatewayNodeReq{Node: node}, created); err != nil || checkRetInfo(created.GetRetInfo()) != nil {
 			return fmt.Errorf("gateway_node_create_failed")
 		}
+		return nil
+	}
+	if !overwrite {
 		return nil
 	}
 	// Preserve operator-managed fields (notably HostId and Name) when
@@ -577,8 +593,14 @@ func (c *Client) upsertDeployment(ctx context.Context, deployment *pb.ServiceDep
 		return nil
 	}
 	response := &pb.CreateServiceDeploymentRsp{}
-	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "CreateServiceDeployment", &pb.CreateServiceDeploymentReq{Deployment: deployment}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "CreateServiceDeployment", &pb.CreateServiceDeploymentReq{Deployment: deployment}, response); err != nil {
 		return fmt.Errorf("deployment_create_failed")
+	}
+	if err := checkRetInfo(response.GetRetInfo()); err != nil {
+		if msg := strings.TrimSpace(response.GetRetInfo().GetMsg()); msg != "" {
+			return fmt.Errorf("deployment_create_failed: %s", msg)
+		}
+		return fmt.Errorf("deployment_create_failed: %w", err)
 	}
 	return nil
 }

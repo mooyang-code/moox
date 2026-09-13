@@ -20,7 +20,7 @@ func TestPythonWorkerPoolRunsSingleFactorWithOutputIdentity(t *testing.T) {
 	factorsDir := t.TempDir()
 	source := []byte(`import pandas as pd
 
-def compute(df, params):
+def compute(df, params, context):
     output = df[["data_time", "series_tag"]].copy()
     output["double"] = df["value"] * params["multiple"]
     return output
@@ -39,9 +39,9 @@ def compute(df, params):
 
 	at := time.Date(2026, 7, 29, 0, 0, 0, 1, time.UTC)
 	result, err := executor.Execute(context.Background(), &FactorTask{
-		TaskID: "executor-test", SubjectID: "BTC-USDT",
+		TaskID: "executor-test", SubjectID: "BTC-USDT", Freq: "1m",
 		StartTime: at, EndTime: at.Add(time.Nanosecond),
-		Factor: FactorSpec{
+		Factor: FactorSpec{FactorType: "timeseries",
 			FactorID: "double", Name: "Double", SourcePath: sourcePath,
 			SourceHash: hex.EncodeToString(hash[:]), InputColumns: []string{"value"},
 			Outputs: []string{"double"}, ParamsJSON: `{"multiple":2}`,
@@ -60,7 +60,7 @@ func TestPythonWorkerPoolBatchKeepsLoadFailureOnOneMember(t *testing.T) {
 	factorsDir := t.TempDir()
 	goodSource := []byte(`import pandas as pd
 
-def compute(df, params):
+def compute(df, params, context):
     output = df[["data_time", "series_tag"]].copy()
     output["double"] = df["value"] * 2
     return output
@@ -85,8 +85,8 @@ def compute(df, params):
 	result, err := executor.ExecuteBatch(context.Background(), &BatchTask{
 		BatchID: "batch-load-test",
 		Tasks: []FactorTask{
-			{TaskID: "good", BindingID: "binding-good", SpaceID: "crypto", SourceViewID: "bars", ResultDatasetID: "good-out", SubjectID: "BTC", Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond), Factor: FactorSpec{FactorID: "good", Name: "Good", SourcePath: goodPath, SourceHash: hex.EncodeToString(goodHash[:]), InputColumns: []string{"value"}, Outputs: []string{"double"}, ParamsJSON: `{}`}},
-			{TaskID: "bad", BindingID: "binding-bad", SpaceID: "crypto", SourceViewID: "bars", ResultDatasetID: "bad-out", SubjectID: "BTC", Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond), Factor: FactorSpec{FactorID: "bad", Name: "Broken", SourcePath: badPath, SourceHash: hex.EncodeToString(badHash[:]), InputColumns: []string{"value"}, Outputs: []string{"double"}, ParamsJSON: `{}`}},
+			{TaskID: "good", BindingID: "binding-good", SpaceID: "crypto", SourceViewID: "bars", ResultDatasetID: "good-out", SubjectID: "BTC", Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond), Factor: FactorSpec{FactorType: "timeseries", FactorID: "good", Name: "Good", SourcePath: goodPath, SourceHash: hex.EncodeToString(goodHash[:]), InputColumns: []string{"value"}, Outputs: []string{"double"}, ParamsJSON: `{}`}},
+			{TaskID: "bad", BindingID: "binding-bad", SpaceID: "crypto", SourceViewID: "bars", ResultDatasetID: "bad-out", SubjectID: "BTC", Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond), Factor: FactorSpec{FactorType: "timeseries", FactorID: "bad", Name: "Broken", SourcePath: badPath, SourceHash: hex.EncodeToString(badHash[:]), InputColumns: []string{"value"}, Outputs: []string{"double"}, ParamsJSON: `{}`}},
 		},
 	}, &DataFrame{Columns: []string{"value"}, Rows: [][]any{{3.0}}, DataTimes: []time.Time{at}, SeriesTags: []string{"venue:binance"}})
 	require.NoError(t, err)
@@ -151,8 +151,8 @@ func TestPythonWorkerPoolDispatchesSameSubjectToFreeWorkers(t *testing.T) {
 	for _, taskID := range []string{"bias-5", "bias-20"} {
 		go func(taskID string) {
 			_, err := executor.Execute(context.Background(), &FactorTask{
-				TaskID: taskID, SubjectID: "BTC-USDT",
-				Factor: FactorSpec{FactorID: taskID, ParamsJSON: "{}"},
+				TaskID: taskID, SubjectID: "BTC-USDT", Freq: "1m",
+				Factor: FactorSpec{FactorType: "timeseries", FactorID: taskID, ParamsJSON: "{}"},
 			}, &DataFrame{})
 			errCh <- err
 		}(taskID)

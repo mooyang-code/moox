@@ -68,6 +68,36 @@ func TestApplyCredentialFilePreservesExplicitEndpoint(t *testing.T) {
 	}
 }
 
+func TestApplyCredentialFileReplacesLoopbackWithRoutableRoleURL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "factor-engine-eventbus.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\nurls:\n  - tls://203.0.113.10:4222\nusername: factor-engine-eventbus\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := Config{URLs: []string{"nats://127.0.0.1:4222"}}
+	if err := config.ApplyCredentialFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.URLs) != 1 || config.URLs[0] != "tls://203.0.113.10:4222" {
+		t.Fatalf("loopback example URL was kept: %+v", config.URLs)
+	}
+}
+
+func TestApplyCredentialFileKeepsMatchingLoopbackRoleURL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "factor-eventbus.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\nurls:\n  - tls://127.0.0.1:4222\nusername: factor-eventbus\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := Config{URLs: []string{"nats://127.0.0.1:4222"}}
+	if err := config.ApplyCredentialFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.URLs) != 1 || config.URLs[0] != "nats://127.0.0.1:4222" {
+		t.Fatalf("local control URL was replaced: %+v", config.URLs)
+	}
+}
+
 func TestApplyCredentialFilePreservesConfiguredCAWhenCredentialOmitsCA(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "storage.yaml")

@@ -88,6 +88,14 @@ func CollectTencentHosts(manifest setupconfig.Manifest) []HostTarget {
 }
 
 func CollectSCFTargets(manifest setupconfig.Manifest) []SCFTarget {
+	return collectSCFTargets(manifest, false)
+}
+
+func CollectSCFRestoreTargets(manifest setupconfig.Manifest) []SCFTarget {
+	return collectSCFTargets(manifest, true)
+}
+
+func collectSCFTargets(manifest setupconfig.Manifest, includeIdle bool) []SCFTarget {
 	if !manifest.SCFFetcher.Enabled {
 		return nil
 	}
@@ -112,13 +120,15 @@ func CollectSCFTargets(manifest setupconfig.Manifest) []SCFTarget {
 		namespace := strings.TrimSpace(space.Namespace)
 		publicNet := strings.ToUpper(strings.TrimSpace(space.PublicNetStatus))
 		for _, region := range space.Regions {
-			if !region.Enabled || region.FunctionCount <= 0 || space.IsRegionBlacklisted(region.Region) {
+			if !includeIdle && (!region.Enabled || region.FunctionCount <= 0 || space.IsRegionBlacklisted(region.Region)) {
 				continue
 			}
 			add(region.Region, namespace, space.FunctionPrefix, publicNet, region.FunctionCount)
 		}
-		if prefix := strings.TrimSpace(space.InstrumentSnapshotFunctionPrefix); prefix != "" && strings.TrimSpace(space.InstrumentSnapshotRegion) != "" && !space.IsRegionBlacklisted(space.InstrumentSnapshotRegion) {
-			add(space.InstrumentSnapshotRegion, namespace, prefix, publicNet, 1)
+		if prefix := strings.TrimSpace(space.InstrumentSnapshotFunctionPrefix); prefix != "" && strings.TrimSpace(space.InstrumentSnapshotRegion) != "" {
+			if includeIdle || !space.IsRegionBlacklisted(space.InstrumentSnapshotRegion) {
+				add(space.InstrumentSnapshotRegion, namespace, prefix, publicNet, 1)
+			}
 		}
 	}
 	out := make([]SCFTarget, 0, len(byRegion))
@@ -172,14 +182,6 @@ func appendUnique(dst []string, value string) []string {
 	return append(dst, value)
 }
 
-func uniqueNonEmpty(values []string) []string {
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		out = appendUnique(out, value)
-	}
-	return out
-}
-
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -189,37 +191,13 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func vpcNameForRegion(region string) string {
-	return "moox-scf-" + strings.TrimSpace(region)
-}
-
-func subnetNameForRegion(region string) string {
-	return vpcNameForRegion(region) + "-a"
-}
-
-func preferredSCFCIDR(region string) string {
-	index := map[string]int{
-		"ap-guangzhou": 80,
-		"ap-shanghai":  81,
-		"ap-beijing":   82,
-		"ap-chengdu":   83,
-		"ap-hongkong":  84,
-		"ap-singapore": 85,
-		"ap-tokyo":     86,
-	}
-	if n, ok := index[strings.ToLower(strings.TrimSpace(region))]; ok {
-		return fmt.Sprintf("10.%d.0.0/16", n)
-	}
-	return ""
-}
-
-func replacePublicIP(value, publicIP, privateIP string) string {
-	publicIP = strings.TrimSpace(publicIP)
-	privateIP = strings.TrimSpace(privateIP)
-	if publicIP == "" || privateIP == "" || !strings.Contains(value, publicIP) {
+func replaceIP(value, from, to string) string {
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" || to == "" || from == to || !strings.Contains(value, from) {
 		return value
 	}
-	return strings.ReplaceAll(value, publicIP, privateIP)
+	return strings.ReplaceAll(value, from, to)
 }
 
 func hostHasRole(host HostTarget, role string) bool {

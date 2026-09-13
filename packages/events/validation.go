@@ -130,6 +130,9 @@ func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Mess
 	if len(payload.GetRows()) == 0 {
 		return fmt.Errorf("storage event rows payload is empty")
 	}
+	if !validRequiredToken(payload.GetSourceNodeId()) || !validRequiredToken(payload.GetSourceStoreId()) || payload.GetSourceSequence() == 0 {
+		return fmt.Errorf("storage event source position is required")
+	}
 	if len(payload.GetWriteSource()) > 256 || strings.TrimSpace(payload.GetWriteSource()) != payload.GetWriteSource() {
 		return fmt.Errorf("storage event write_source is invalid")
 	}
@@ -156,7 +159,7 @@ func validateDatasetPeriodCollected(message *eventpb.EventMessage, value proto.M
 	if err := validateStoragePeriod(message, payload.GetDatasetId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetCollectedAt(), "dataset period collected"); err != nil {
 		return err
 	}
-	subjects, err := validateUniqueTokens(payload.GetSubjectIds(), true, "dataset period collected subject_ids")
+	subjects, err := validateUniqueTokens(payload.GetSubjectIds(), false, "dataset period collected subject_ids")
 	if err != nil {
 		return err
 	}
@@ -171,6 +174,25 @@ func validateDatasetPeriodCollected(message *eventpb.EventMessage, value proto.M
 	}
 	if payload.GetStatus() == "complete" && len(failed) != 0 {
 		return fmt.Errorf("dataset period collected complete status has failed_subjects")
+	}
+	return nil
+}
+
+func validateViewSourceSubjectReady(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.ViewSourceSubjectReady)
+	if !ok {
+		return fmt.Errorf("view source subject ready payload has type %T", value)
+	}
+	if err := validateStoragePeriod(message, payload.GetSourceViewId(), payload.GetFrequency(), payload.GetPeriodTime(), "complete", payload.GetReadyAt(), "view source subject ready"); err != nil {
+		return err
+	}
+	for _, identity := range []string{payload.GetSourceDatasetId(), payload.GetSubjectId(), payload.GetInputContractVersion(), payload.GetSourceEventId()} {
+		if !validRequiredToken(identity) {
+			return fmt.Errorf("view source subject ready input identity is incomplete")
+		}
+	}
+	if !validRequiredToken(payload.GetSourceNodeId()) || !validRequiredToken(payload.GetSourceStoreId()) || payload.GetSourceSequence() == 0 {
+		return fmt.Errorf("view source subject ready source position is required")
 	}
 	return nil
 }

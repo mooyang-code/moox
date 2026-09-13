@@ -48,9 +48,9 @@ func TestMovingAverageExampleFactors(t *testing.T) {
 			require.NoError(t, readErr)
 			hash := sha256.Sum256(source)
 			result, runErr := executor.Execute(context.Background(), &FactorTask{
-				TaskID: "example-" + test.factorID, SubjectID: "BTC-USDT",
+				TaskID: "example-" + test.factorID, SubjectID: "BTC-USDT", Freq: "1m",
 				StartTime: start, EndTime: start.Add(4 * time.Minute),
-				Factor: FactorSpec{
+				Factor: FactorSpec{FactorType: "timeseries",
 					FactorID: test.factorID, Name: test.factorID, SourcePath: sourcePath,
 					SourceHash: hex.EncodeToString(hash[:]), InputColumns: []string{"close"},
 					Outputs: []string{test.output}, ParamsJSON: test.params,
@@ -79,8 +79,8 @@ func TestMovingAverageExampleFactors(t *testing.T) {
 				tags[index] = "venue:binance"
 			}
 			result, runErr := executor.Execute(context.Background(), &FactorTask{
-				TaskID: taskID, SubjectID: "BTC-USDT", StartTime: times[0], EndTime: times[len(times)-1].Add(time.Minute),
-				Factor: FactorSpec{
+				TaskID: taskID, SubjectID: "BTC-USDT", Freq: "1m", StartTime: times[0], EndTime: times[len(times)-1].Add(time.Minute),
+				Factor: FactorSpec{FactorType: "timeseries",
 					FactorID: "sma", Name: "sma", SourcePath: sourcePath,
 					SourceHash: hex.EncodeToString(hash[:]), InputColumns: []string{"close"},
 					Outputs: []string{"sma_20"}, ParamsJSON: `{"windows":[20],"m":1}`,

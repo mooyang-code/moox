@@ -57,6 +57,7 @@ type Store struct {
 	db                      *cpebble.DB
 	writeOptions            *cpebble.WriteOptions
 	nodeID                  string
+	sourceStoreID           string
 	bucketDuration          time.Duration
 	maxEventBytes           int
 	processedEventRetention time.Duration
@@ -82,7 +83,7 @@ func Open(opts Options) (*Store, error) {
 	if strings.TrimSpace(opts.Path) == "" {
 		return nil, errors.New("pebble path is required")
 	}
-	if strings.TrimSpace(opts.NodeID) == "" {
+	if strings.TrimSpace(opts.NodeID) == "" || strings.TrimSpace(opts.NodeID) != opts.NodeID {
 		return nil, errors.New("node_id is required")
 	}
 	if opts.BucketDuration <= 0 {
@@ -98,12 +99,17 @@ func Open(opts Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	sourceStoreID, err := bindSourceStore(db, opts.NodeID)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	writeOptions := cpebble.Sync
 	if opts.DisableSyncWrites {
 		writeOptions = cpebble.NoSync
 	}
 	historyCtx, historyCancel := context.WithCancel(context.Background())
-	return &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, historyCtx: historyCtx, historyCancel: historyCancel, historyBackfilled: make(map[string]bool), historyBackfillStarted: make(map[string]bool)}, nil
+	return &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, historyCtx: historyCtx, historyCancel: historyCancel, historyBackfilled: make(map[string]bool), historyBackfillStarted: make(map[string]bool)}, nil
 }
 
 func (s *Store) Close() error {
@@ -302,7 +308,7 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 				return nil, fmt.Errorf("rows.upserted event identity %s/%s does not match write group %s/%s", eventMessage.GetSpaceId(), eventMessage.GetSubjectId(), group.spaceID, group.datasetID)
 			}
 			id := nextID
-			payload, err = BindOutboxID(payload, s.nodeID, id)
+			payload, err = BindOutboxID(payload, s.nodeID, s.sourceStoreID, id)
 			if err != nil {
 				return nil, err
 			}

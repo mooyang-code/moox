@@ -1,6 +1,12 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+
 	"github.com/mooyang-code/moox/modules/factor/internal/bootstrap"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -10,22 +16,33 @@ import (
 	_ "trpc.group/trpc-go/trpc-log-cls"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
-	"trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/log"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 func main() {
-	ctx := trpc.BackgroundContext()
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() (err error) {
+	app := flag.String("config", "config/app.yaml", "control application config")
+	framework := flag.String("conf", "config/trpc_go.yaml", "control tRPC config")
+	flag.Parse()
+	cfg, err := bootstrap.LoadControlConfig(*app)
+	if err != nil {
+		return err
+	}
+	trpc.ServerConfigPath = *framework
 	s := trpc.NewServer()
 	trpclog.InstallServiceName("factor")
-
-	server, err := bootstrap.Initialize(ctx, s)
+	ctx, cancel := context.WithCancel(trpc.BackgroundContext())
+	defer cancel()
+	runtime, err := bootstrap.InitializeControl(ctx, s, cfg)
 	if err != nil {
-		log.Fatalf("moox-factor 初始化失败: %v", err)
+		return err
 	}
-
-	log.Info("启动 moox-factor tRPC 服务器...")
-	if err := server.Serve(); err != nil {
-		log.Fatalf("moox-factor 服务器出错: %v", err)
-	}
+	defer func() { err = errors.Join(err, runtime.Close()) }()
+	return s.Serve()
 }

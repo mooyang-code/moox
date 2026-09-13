@@ -59,8 +59,8 @@ type Options struct {
 	StorageEventBusCredential        []byte
 	StorageEventBusCA                []byte
 	StorageMetricsEventBusCredential []byte
-	// StorageBuildPassword is used only by the cross-platform Storage build
-	// helper when the configured build host accepts password SSH auth.
+	// StorageBuildPassword is used by the cross-platform Storage/Factor CGO
+	// build helper when the configured compile host accepts password SSH auth.
 	StorageBuildPassword   string
 	StorageBuildHost       string
 	StorageBuildHostRole   string
@@ -456,7 +456,7 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	}
 	if err := transport.Upload(ctx, file, info.Size(), remoteArchive, fs.FileMode(0o600)); err != nil {
 		_ = file.Close()
-		return fmt.Errorf("control_upload_failed")
+		return fmt.Errorf("control_upload_failed: %w", err)
 	}
 	_ = file.Close()
 	defer func() {
@@ -687,6 +687,7 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 	}
 	command.Env = notificationCommandEnv(command.Env, opts.NotificationChannelType, opts.NotificationWebhookURL)
 	command.Env = localLogCommandEnv(command.Env, opts.LocalLogs)
+	command.Env = compileHostCommandEnv(command.Env, opts)
 	command.Env, err = observabilityCommandEnv(command.Env, opts.Observability)
 	if err != nil {
 		return "", err
@@ -919,6 +920,16 @@ func localLogCommandEnv(base []string, policy setupconfig.LocalLogs) []string {
 		setCommandEnv(base, "MOOX_LOCAL_LOG_MAX_SIZE_MB", strconv.Itoa(policy.MaxSizeMB)),
 		"MOOX_LOCAL_LOG_BACKUP_COUNT", strconv.Itoa(policy.BackupCount),
 	)
+}
+
+func compileHostCommandEnv(base []string, opts Options) []string {
+	env := setCommandEnv(base, "MOOX_SSH_PASSWORD", opts.StorageBuildPassword)
+	env = setCommandEnv(env, "MOOX_STORAGE_BUILD_HOST", opts.StorageBuildHost)
+	env = setCommandEnv(env, "MOOX_STORAGE_BUILD_HOST_ROLE", opts.StorageBuildHostRole)
+	if arch := strings.TrimSpace(opts.TargetGOARCH); arch != "" {
+		env = setCommandEnv(env, "MOOX_STORAGE_BUILD_GOARCH", arch)
+	}
+	return env
 }
 
 func observabilityCommandEnv(base []string, policy setupconfig.Observability) ([]string, error) {
@@ -1495,10 +1506,18 @@ install_storage() {
 		# to data delivery and cannot publish to $JS.API.STREAM.INFO.*.
     credential="$HOME/.config/moox/eventbus/internal-admin.yaml"
     [ -r "$credential" ] || { echo storage_view_reset_credential_missing >&2; rollback_failed_install; return 1; }
+    reset_eventbus_url="${MOOX_STORAGE_EVENTBUS_URL:-}"
+    if [ -z "$reset_eventbus_url" ]; then
+      echo storage_view_reset_eventbus_url_missing >&2
+      rollback_failed_install
+      return 1
+    fi
     if ! "$deploy/bin/moox-storage-cli" reset-view-consumers \
       --storage-conf "$deploy/storage/config/storage.yaml" \
       --package-root "$deploy" \
       --credential-file "$credential" \
+      --eventbus-url "$reset_eventbus_url" \
+      --timeout 15m \
       --restart=false --maintenance-lock-held --yes; then
       echo storage_view_reset_failed >&2
       rollback_failed_install

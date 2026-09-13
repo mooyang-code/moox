@@ -18,22 +18,9 @@ func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, 
 	if frame == nil {
 		return nil, fmt.Errorf("data frame is required")
 	}
-	if len(frame.Rows) != len(frame.DataTimes) || len(frame.Rows) != len(frame.SeriesTags) {
-		return nil, fmt.Errorf("data frame row identities must align with rows")
-	}
-	columns := append([]string{"data_time", "series_tag"}, frame.Columns...)
-	rows := make([][]any, 0, len(frame.Rows))
-	for i, values := range frame.Rows {
-		if len(values) != len(frame.Columns) {
-			return nil, fmt.Errorf("data frame row %d has %d values for %d columns", i, len(values), len(frame.Columns))
-		}
-		if err := validateSeriesTag(frame.SeriesTags[i]); err != nil {
-			return nil, fmt.Errorf("data frame row %d: %w", i, err)
-		}
-		row := make([]any, 0, len(columns))
-		row = append(row, frame.DataTimes[i].UTC().Format(time.RFC3339Nano), frame.SeriesTags[i])
-		row = append(row, values...)
-		rows = append(rows, row)
+	data, err := encodeFrameMeta(frame)
+	if err != nil {
+		return nil, err
 	}
 	factor := task.Factor
 	if strings.TrimSpace(factor.FactorID) == "" {
@@ -54,12 +41,14 @@ func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, 
 		"target_start_time": task.StartTime.UTC().Format(time.RFC3339Nano),
 		"target_end_time":   task.EndTime.UTC().Format(time.RFC3339Nano),
 		"factor": map[string]any{
-			"factor_id": factor.FactorID, "name": factor.Name,
+			"factor_type": factor.FactorType,
+			"factor_id":   factor.FactorID, "name": factor.Name,
 			"source_hash": factor.SourceHash, "source_path": factor.SourcePath,
 			"input_columns": factor.InputColumns, "outputs": factor.Outputs,
 			"params": params,
 		},
-		"df": map[string]any{"columns": columns, "rows": rows},
+		"context": encodeTaskContext(task),
+		"df":      data,
 	}, nil
 }
 
@@ -98,11 +87,13 @@ func EncodeJSONBatchRequestMeta(batch *BatchTask, frame *DataFrame) (map[string]
 			return nil, err
 		}
 		factors = append(factors, map[string]any{
+			"context": encodeTaskContext(&task),
 			"task_id": task.TaskID, "binding_id": task.BindingID,
-			"lookback_periods":  task.LookbackPeriods,
-			"target_start_time": task.StartTime.UTC().Format(time.RFC3339Nano),
-			"target_end_time":   task.EndTime.UTC().Format(time.RFC3339Nano),
-			"factor":            factor,
+			"binding_generation": task.BindingGeneration,
+			"lookback_periods":   task.LookbackPeriods,
+			"target_start_time":  task.StartTime.UTC().Format(time.RFC3339Nano),
+			"target_end_time":    task.EndTime.UTC().Format(time.RFC3339Nano),
+			"factor":             factor,
 		})
 	}
 	return map[string]any{
@@ -125,6 +116,7 @@ func encodeFactorMeta(factor FactorSpec) (map[string]any, error) {
 	}
 	return map[string]any{
 		"factor_id": factor.FactorID, "name": factor.Name,
+		"factor_type": factor.FactorType,
 		"source_hash": factor.SourceHash, "source_path": factor.SourcePath,
 		"input_columns": factor.InputColumns, "outputs": factor.Outputs, "params": params,
 	}, nil
@@ -135,6 +127,12 @@ func encodeFrameMeta(frame *DataFrame) (map[string]any, error) {
 		return nil, fmt.Errorf("data frame row identities must align with rows")
 	}
 	columns := append([]string{"data_time", "series_tag"}, frame.Columns...)
+	if len(frame.SubjectIDs) != 0 {
+		if len(frame.SubjectIDs) != len(frame.Rows) {
+			return nil, fmt.Errorf("data frame subject identities must align with rows")
+		}
+		columns = append([]string{"data_time", "series_tag", "subject_id"}, frame.Columns...)
+	}
 	rows := make([][]any, 0, len(frame.Rows))
 	for i, values := range frame.Rows {
 		if len(values) != len(frame.Columns) {
@@ -145,10 +143,31 @@ func encodeFrameMeta(frame *DataFrame) (map[string]any, error) {
 		}
 		row := make([]any, 0, len(columns))
 		row = append(row, frame.DataTimes[i].UTC().Format(time.RFC3339Nano), frame.SeriesTags[i])
+		if len(frame.SubjectIDs) != 0 {
+			if strings.TrimSpace(frame.SubjectIDs[i]) == "" {
+				return nil, fmt.Errorf("data frame row %d subject is required", i)
+			}
+			row = append(row, frame.SubjectIDs[i])
+		}
 		row = append(row, values...)
 		rows = append(rows, row)
 	}
 	return map[string]any{"columns": columns, "rows": rows}, nil
+}
+
+func encodeTaskContext(task *FactorTask) map[string]any {
+	period := task.PeriodTime
+	if period == 0 {
+		period = task.StartTime.Unix()
+	}
+	return map[string]any{
+		"period_time": period, "frequency": task.Freq,
+		"input_contract_version": task.InputContractVersion,
+		"subject_id":             task.SubjectID,
+		"expected_subjects":      append([]string{}, task.ExpectedSubjects...),
+		"available_subjects":     append([]string{}, task.AvailableSubjects...),
+		"missing_subjects":       append([]string{}, task.MissingSubjects...),
+	}
 }
 
 // DecodeJSONBatchResponse validates identities and decodes partial results.
@@ -245,8 +264,9 @@ func DecodeJSONResponse(meta map[string]any) (*FactorResult, error) {
 		if !ok {
 			return nil, fmt.Errorf("factor result row %d values must be an object", i)
 		}
+		subjectID, _ := item["subject_id"].(string)
 		out.Rows = append(out.Rows, FactorResultRow{
-			DataTime: dataTime.UTC(), SeriesTag: seriesTag, Values: values,
+			SubjectID: subjectID, DataTime: dataTime.UTC(), SeriesTag: seriesTag, Values: values,
 		})
 	}
 	return out, nil

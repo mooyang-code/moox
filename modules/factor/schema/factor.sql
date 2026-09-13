@@ -1,8 +1,57 @@
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS t_factor_subject_receipts (
+    c_space_id TEXT NOT NULL,
+    c_event_id TEXT NOT NULL,
+    c_catalog_revision INTEGER NOT NULL,
+    c_period_time INTEGER NOT NULL,
+    c_source_view_id TEXT NOT NULL,
+    c_event_json TEXT NOT NULL,
+    c_outcomes_json TEXT NOT NULL,
+    c_status TEXT NOT NULL,
+    c_updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(c_space_id, c_event_id, c_catalog_revision)
+);
+CREATE INDEX IF NOT EXISTS idx_factor_subject_receipts_period ON t_factor_subject_receipts(c_period_time);
+
+CREATE TABLE IF NOT EXISTS t_factor_subject_runs (
+    c_task_id TEXT PRIMARY KEY NOT NULL,
+    c_scope_key TEXT NOT NULL,
+    c_period_time INTEGER NOT NULL,
+    c_task_json TEXT NOT NULL,
+    c_status TEXT NOT NULL CHECK (c_status IN ('pending', 'complete', 'failed', 'superseded')),
+    c_error TEXT NOT NULL DEFAULT '',
+    c_updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS t_factor_subject_heads (
+    c_scope_key TEXT PRIMARY KEY NOT NULL,
+    c_task_id TEXT NOT NULL,
+    c_period_time INTEGER NOT NULL,
+    c_source_node TEXT NOT NULL,
+    c_source_store TEXT NOT NULL,
+    c_source_sequence TEXT NOT NULL,
+    c_source_event TEXT NOT NULL,
+    c_catalog_revision INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_factor_subject_runs_period ON t_factor_subject_runs(c_period_time, c_status);
+CREATE INDEX IF NOT EXISTS idx_factor_subject_heads_period ON t_factor_subject_heads(c_period_time);
+CREATE TABLE IF NOT EXISTS t_factor_subject_gc (
+    c_id INTEGER PRIMARY KEY CHECK (c_id = 1),
+    c_completed_before INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO t_factor_subject_gc(c_id) VALUES (1);
+
+CREATE TABLE IF NOT EXISTS t_factor_catalog (
+    c_id INTEGER PRIMARY KEY CHECK (c_id = 1),
+    c_revision INTEGER NOT NULL DEFAULT 0 CHECK (c_revision >= 0),
+    c_snapshot_hash TEXT NOT NULL DEFAULT ''
+);
+INSERT OR IGNORE INTO t_factor_catalog (c_id) VALUES (1);
+
 CREATE TABLE IF NOT EXISTS t_factor_defs (
     c_factor_id TEXT NOT NULL PRIMARY KEY,
     c_name TEXT NOT NULL,
+    c_factor_type TEXT NOT NULL,
     c_source_code TEXT NOT NULL,
     c_source_hash TEXT NOT NULL,
     c_source_path TEXT NOT NULL DEFAULT '',
@@ -14,6 +63,7 @@ CREATE TABLE IF NOT EXISTS t_factor_defs (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_lookback_periods >= 1),
+    CHECK (c_factor_type IN ('timeseries', 'cross_section')),
     CHECK (c_status IN ('enabled', 'disabled')),
     UNIQUE (c_name)
 );
@@ -22,6 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_factor_defs_status ON t_factor_defs (c_status);
 
 CREATE TABLE IF NOT EXISTS t_factor_bindings (
     c_binding_id TEXT NOT NULL PRIMARY KEY,
+    c_binding_generation TEXT NOT NULL DEFAULT '',
     c_factor_id TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
     c_source_view_id TEXT NOT NULL,
@@ -43,15 +94,19 @@ CREATE INDEX IF NOT EXISTS idx_factor_bindings_source
 ON t_factor_bindings (c_space_id, c_source_view_id, c_freq, c_status);
 
 CREATE TABLE IF NOT EXISTS t_factor_output_manifests (
+    c_source_series_tag TEXT NOT NULL DEFAULT '',
+    c_filter_source_series_tag INTEGER NOT NULL DEFAULT 0,
     c_binding_id TEXT NOT NULL,
+    c_binding_generation TEXT NOT NULL DEFAULT '',
+    c_cleanup_task_json TEXT NOT NULL DEFAULT '',
     c_subject_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_period_time INTEGER NOT NULL,
     c_row_keys_json TEXT NOT NULL DEFAULT '[]',
     c_updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_binding_id, c_subject_id, c_frequency, c_period_time),
-    FOREIGN KEY (c_binding_id) REFERENCES t_factor_bindings(c_binding_id) ON DELETE CASCADE
+    PRIMARY KEY (c_binding_id, c_binding_generation, c_subject_id, c_frequency, c_period_time, c_filter_source_series_tag, c_source_series_tag)
 );
+
 
 CREATE TRIGGER IF NOT EXISTS update_factor_defs_mtime
 AFTER UPDATE ON t_factor_defs
@@ -60,6 +115,41 @@ WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_factor_defs SET c_mtime = CURRENT_TIMESTAMP WHERE c_factor_id = OLD.c_factor_id;
 END;
+
+CREATE TRIGGER IF NOT EXISTS factor_catalog_defs_insert AFTER INSERT ON t_factor_defs
+BEGIN UPDATE t_factor_catalog SET c_revision = c_revision + 1, c_snapshot_hash = '' WHERE c_id = 1; END;
+CREATE TRIGGER IF NOT EXISTS factor_catalog_defs_delete AFTER DELETE ON t_factor_defs
+BEGIN UPDATE t_factor_catalog SET c_revision = c_revision + 1, c_snapshot_hash = '' WHERE c_id = 1; END;
+CREATE TRIGGER IF NOT EXISTS factor_catalog_defs_update
+AFTER UPDATE OF c_name, c_factor_type, c_source_code, c_source_hash, c_input_columns_json, c_outputs_json, c_params_json, c_lookback_periods, c_status ON t_factor_defs
+WHEN NEW.c_name IS NOT OLD.c_name
+    OR NEW.c_factor_type IS NOT OLD.c_factor_type
+    OR NEW.c_source_code IS NOT OLD.c_source_code
+    OR NEW.c_source_hash IS NOT OLD.c_source_hash
+    OR NEW.c_input_columns_json IS NOT OLD.c_input_columns_json
+    OR NEW.c_outputs_json IS NOT OLD.c_outputs_json
+    OR NEW.c_params_json IS NOT OLD.c_params_json
+    OR NEW.c_lookback_periods IS NOT OLD.c_lookback_periods
+    OR NEW.c_status IS NOT OLD.c_status
+BEGIN UPDATE t_factor_catalog SET c_revision = c_revision + 1, c_snapshot_hash = '' WHERE c_id = 1; END;
+CREATE TRIGGER IF NOT EXISTS factor_catalog_bindings_insert AFTER INSERT ON t_factor_bindings
+BEGIN UPDATE t_factor_catalog SET c_revision = c_revision + 1, c_snapshot_hash = '' WHERE c_id = 1; END;
+CREATE TRIGGER IF NOT EXISTS factor_catalog_bindings_delete AFTER DELETE ON t_factor_bindings
+BEGIN UPDATE t_factor_catalog SET c_revision = c_revision + 1, c_snapshot_hash = '' WHERE c_id = 1; END;
+CREATE TRIGGER IF NOT EXISTS factor_catalog_bindings_update
+AFTER UPDATE OF c_binding_id, c_binding_generation, c_factor_id, c_space_id, c_source_view_id, c_freq, c_subject_mode, c_subjects_json, c_result_dataset_id, c_result_view_id, c_status ON t_factor_bindings
+WHEN NEW.c_binding_id IS NOT OLD.c_binding_id
+    OR NEW.c_binding_generation IS NOT OLD.c_binding_generation
+    OR NEW.c_factor_id IS NOT OLD.c_factor_id
+    OR NEW.c_space_id IS NOT OLD.c_space_id
+    OR NEW.c_source_view_id IS NOT OLD.c_source_view_id
+    OR NEW.c_freq IS NOT OLD.c_freq
+    OR NEW.c_subject_mode IS NOT OLD.c_subject_mode
+    OR NEW.c_subjects_json IS NOT OLD.c_subjects_json
+    OR NEW.c_result_dataset_id IS NOT OLD.c_result_dataset_id
+    OR NEW.c_result_view_id IS NOT OLD.c_result_view_id
+    OR NEW.c_status IS NOT OLD.c_status
+BEGIN UPDATE t_factor_catalog SET c_revision = c_revision + 1, c_snapshot_hash = '' WHERE c_id = 1; END;
 
 CREATE TRIGGER IF NOT EXISTS update_factor_bindings_mtime
 AFTER UPDATE ON t_factor_bindings

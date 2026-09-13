@@ -173,15 +173,15 @@ func TestViewReadyPipelineFinalReadTimeoutDegradesOnlyFailedSubject(t *testing.T
 
 func testBindings() []domain.FactorBinding {
 	return []domain.FactorBinding{
-		{BindingID: "binding-b", FactorID: "factor-b", SpaceID: "space-a", SourceViewID: "prices-view", ResultDatasetID: "prices-factor", Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled},
-		{BindingID: "binding-a", FactorID: "factor-a", SpaceID: "space-a", SourceViewID: "prices-view", ResultDatasetID: "prices-factor", Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled},
+		{BindingID: "binding-b", BindingGeneration: "incarnation-b", FactorID: "factor-b", SpaceID: "space-a", SourceViewID: "prices-view", ResultDatasetID: "prices-factor", Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled},
+		{BindingID: "binding-a", BindingGeneration: "incarnation-a", FactorID: "factor-a", SpaceID: "space-a", SourceViewID: "prices-view", ResultDatasetID: "prices-factor", Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled},
 	}
 }
 
 func testFactors() map[string]domain.FactorDef {
 	return map[string]domain.FactorDef{
-		"factor-a": {FactorID: "factor-a", Name: "factor-a", SourceHash: "hash-a", InputColumns: []string{"close"}, Outputs: []string{"score_a"}, Status: domain.FactorStatusEnabled},
-		"factor-b": {FactorID: "factor-b", Name: "factor-b", SourceHash: "hash-b", InputColumns: []string{"close"}, Outputs: []string{"score_b"}, Status: domain.FactorStatusEnabled},
+		"factor-a": {FactorType: domain.FactorTypeTimeSeries, FactorID: "factor-a", Name: "factor-a", SourceHash: "hash-a", InputColumns: []string{"close"}, Outputs: []string{"score_a"}, Status: domain.FactorStatusEnabled},
+		"factor-b": {FactorType: domain.FactorTypeTimeSeries, FactorID: "factor-b", Name: "factor-b", SourceHash: "hash-b", InputColumns: []string{"close"}, Outputs: []string{"score_b"}, Status: domain.FactorStatusEnabled},
 	}
 }
 

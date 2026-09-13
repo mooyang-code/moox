@@ -74,3 +74,25 @@ func TestFactorRepositoryDeleteRemovesDefinition(t *testing.T) {
 	require.Error(t, err)
 	require.Error(t, repo.Delete(context.Background(), factor.FactorID))
 }
+
+func TestFactorRepositoryTypeRoundTripAndValidation(t *testing.T) {
+	repo := NewFactorRepository(openTestDB(t))
+	ctx := context.Background()
+	factor := testFactor("typed", domain.FactorStatusDisabled)
+	for _, value := range []string{"", "unknown"} {
+		factor.FactorType = value
+		require.ErrorContains(t, repo.Create(ctx, factor), "factor_type")
+	}
+	factor.FactorType = domain.FactorTypeCrossSection
+	require.NoError(t, repo.Create(ctx, factor))
+	got, err := repo.Get(ctx, factor.FactorID)
+	require.NoError(t, err)
+	require.Equal(t, domain.FactorTypeCrossSection, got.FactorType)
+	factor.FactorType = domain.FactorTypeTimeSeries
+	require.NoError(t, repo.Update(ctx, factor))
+	rows, _, err := repo.List(ctx, FactorFilter{})
+	require.NoError(t, err)
+	require.Equal(t, domain.FactorTypeTimeSeries, rows[0].FactorType)
+	factor.FactorType = ""
+	require.ErrorContains(t, repo.Update(ctx, factor), "factor_type")
+}

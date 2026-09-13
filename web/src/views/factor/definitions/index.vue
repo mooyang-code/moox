@@ -30,6 +30,9 @@
         <template #columns>
           <a-table-column title="因子ID" data-index="factor_id" :width="150" />
           <a-table-column title="模块名" data-index="name" :width="130" />
+          <a-table-column title="因子类型" :width="110">
+            <template #cell="{ record }">{{ factorTypeLabel(record.factor_type) }}</template>
+          </a-table-column>
           <a-table-column title="输入列" :width="180" :ellipsis="true" :tooltip="true">
             <template #cell="{ record }">{{ record.input_columns.join(", ") }}</template>
           </a-table-column>
@@ -105,6 +108,12 @@
         <a-form-item field="name" label="Python 模块名" required>
           <a-input v-model="form.name" :disabled="editing" placeholder="Bias" />
         </a-form-item>
+        <a-form-item field="factor_type" label="因子类型" required>
+          <a-select v-model="form.factor_type">
+            <a-option value="timeseries">时序因子</a-option>
+            <a-option value="cross_section">截面因子</a-option>
+          </a-select>
+        </a-form-item>
         <a-form-item field="status" label="状态">
           <a-select v-model="form.status" disabled>
             <a-option value="enabled">已启用</a-option>
@@ -155,6 +164,7 @@ const outputTags = ref<string[]>(["bias_20"]);
 
 const form = reactive<FactorDef>({
   factor_id: "",
+  factor_type: "timeseries",
   name: "",
   source_code: "",
   input_columns: ["close"],
@@ -165,6 +175,10 @@ const form = reactive<FactorDef>({
 });
 
 const modalTitle = computed(() => (editing.value ? "编辑因子" : "新增因子"));
+
+function factorTypeLabel(type: string) {
+  return ({ timeseries: "时序因子", cross_section: "截面因子" } as Record<string, string>)[type] || type;
+}
 
 async function load() {
   loading.value = true;
@@ -190,7 +204,7 @@ function resetForm() {
     factor_id: "",
     name: "",
     source_code: [
-      "def compute(df, params):",
+      "def compute(df, params, context):",
       "    close = df['close']",
       "    result = df[['data_time', 'series_tag']].copy()",
       "    for window in params['windows']:",
@@ -203,6 +217,7 @@ function resetForm() {
     outputs: ["bias_20"],
     params_json: `{"windows":[20]}`,
     lookback_periods: 200,
+    factor_type: "timeseries",
     status: "disabled"
   });
   inputTags.value = ["close"];

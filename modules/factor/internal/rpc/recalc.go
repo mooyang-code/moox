@@ -104,11 +104,9 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 		for period := start; period.Before(end); {
 			triggerEventID := recalcTriggerEventID(requestID, req, period)
 			ready := &publicstoragepb.ViewSourcePeriodReady{SourceViewId: sourceViewID, Frequency: req.GetFreq(), PeriodTime: period.Unix(), Status: "complete", PrimarySubjects: []string{req.GetSubjectId()}, ReadyAt: timestamppb.New(period.UTC())}
-			activeIndexID, indexErr := s.meta.SourceViewActiveIndexID(ctx, req.GetSpaceId(), sourceViewID)
-			if indexErr != nil {
+			if _, indexErr := s.meta.SourceViewActiveIndexID(ctx, req.GetSpaceId(), sourceViewID); indexErr != nil {
 				return &factorpb.RecalcFactorRsp{RetInfo: inner(fmt.Errorf("resolve source View active index: %w", indexErr))}, nil
 			}
-			ready.ActiveIndexId = activeIndexID
 			// A Result View is the complete output of its Source View. The
 			// executor validates the requested factor under the operation gate,
 			// then recalculates the whole group for a coherent result snapshot.
@@ -164,7 +162,8 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 				TaskID:      fmt.Sprintf("recalc-%d-%d", time.Now().UnixNano(), taskIndex),
 				TriggerType: "recalc", SpaceID: req.GetSpaceId(),
 				BindingID: item.BindingID, SourceViewID: req.GetSourceDataset(), ResultDatasetID: targetDataset,
-				SubjectID: req.GetSubjectId(), Freq: req.GetFreq(),
+				BindingGeneration: item.BindingGeneration,
+				SubjectID:         req.GetSubjectId(), Freq: req.GetFreq(),
 				PeriodTime: start.Unix(), TriggerEventID: fmt.Sprintf("recalc-%d", start.UnixNano()), TriggeredAt: time.Now().UTC(),
 				StartTime: start, EndTime: end,
 			}, factor, s.factorsDir)
@@ -227,8 +226,9 @@ func legacyRecalcRequestID(req *factorpb.RecalcFactorReq) string {
 }
 
 type recalcBindingFactor struct {
-	BindingID string
-	Factor    domain.FactorDef
+	BindingID         string
+	BindingGeneration string
+	Factor            domain.FactorDef
 }
 
 func (s *Service) recalcFactorGroups(ctx context.Context, req *factorpb.RecalcFactorReq) (map[string][]recalcBindingFactor, error) {
@@ -264,7 +264,7 @@ func (s *Service) recalcFactorGroups(ctx context.Context, req *factorpb.RecalcFa
 			continue
 		}
 		target := binding.ResultDatasetID
-		groups[target] = append(groups[target], recalcBindingFactor{BindingID: binding.BindingID, Factor: *factor})
+		groups[target] = append(groups[target], recalcBindingFactor{BindingID: binding.BindingID, BindingGeneration: binding.BindingGeneration, Factor: *factor})
 		seen[binding.FactorID] = struct{}{}
 	}
 	if len(groups) == 0 {

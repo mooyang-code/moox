@@ -29,6 +29,7 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.storage.dataset.sync_point@1",
 		"event.storage.view.factor_period.ready@1",
 		"event.storage.view.source_period.ready@1",
+		"event.storage.view.source_subject.ready@1",
 		"event.trade.target.weight_requested@1",
 	}
 	wantOwners := map[string]string{
@@ -43,6 +44,7 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.storage.dataset.sync_point@1":              "storage",
 		"event.storage.view.factor_period.ready@1":        "storage",
 		"event.storage.view.source_period.ready@1":        "storage",
+		"event.storage.view.source_subject.ready@1":       "storage",
 		"event.trade.target.weight_requested@1":           "strategy",
 	}
 	events := registry.Events()
@@ -103,6 +105,15 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 			subjectID: "source-view",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
 				_, payload, err := DecodeViewSourcePeriodReady(registry, raw, subject, id)
+				return payload, err
+			},
+		},
+		{
+			name: "source subject ready", event: ViewSourceSubjectReady,
+			payload:   &storagepb.ViewSourceSubjectReady{SourceViewId: "source-view", SourceDatasetId: "dataset", SubjectId: "BTC-USDT", Frequency: "1m", PeriodTime: 1786032000, InputContractVersion: "contract", SourceEventId: "row-event", ReadyAt: now, SourceNodeId: "node", SourceSequence: 7, SourceStoreId: "store"},
+			subjectID: "source-view",
+			decode: func(raw []byte, subject, id string) (proto.Message, error) {
+				_, payload, err := DecodeViewSourceSubjectReadyWithContentType(registry, raw, subject, id, ContentType)
 				return payload, err
 			},
 		},
@@ -181,7 +192,7 @@ func TestRegistryEventsReturnsCopy(t *testing.T) {
 
 func TestDatasetRowsRoundTrip(t *testing.T) {
 	registry, _ := DefaultRegistry()
-	payload := &storagepb.DatasetRowsUpserted{
+	payload := &storagepb.DatasetRowsUpserted{SourceNodeId: "node", SourceStoreId: "store", SourceSequence: 1,
 		SpaceId: "space", DatasetId: "dataset",
 		Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{
 			SpaceId: "space", DatasetId: "dataset",

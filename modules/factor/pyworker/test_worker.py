@@ -196,7 +196,7 @@ def test_execute_batch_shares_frame_and_isolates_factor_errors(tmp_path: Path):
     other = factors_dir / "Other.py"
     other.write_text(
         "import pandas as pd\n\n"
-        "def compute(df, params):\n"
+        "def compute(df, params, context):\n"
         "    result = df[[\"data_time\", \"series_tag\"]].copy()\n"
         "    result[\"double\"] = df[\"value\"] + 10\n"
         "    result[\"triple\"] = df[\"value\"] + 20\n"
@@ -235,7 +235,7 @@ def test_execute_batch_applies_each_members_lookback_window(tmp_path: Path):
     count = factors_dir / "Count.py"
     count.write_text(
         "import pandas as pd\n\n"
-        "def compute(df, params):\n"
+        "def compute(df, params, context):\n"
         "    result = df[[\"data_time\", \"series_tag\"]].copy()\n"
         "    result[\"double\"] = len(df)\n"
         "    result[\"triple\"] = len(df)\n"
@@ -250,6 +250,7 @@ def test_execute_batch_applies_each_members_lookback_window(tmp_path: Path):
     ]
     meta = {
         "id": "batch-lookback", "mode": "batch",
+        "context": request_meta()["context"],
         "target_start_time": "2026-07-28T00:00:00.000000003Z",
         "target_end_time": "2026-07-28T00:00:00.000000004Z",
         "df": {"columns": ["data_time", "series_tag", "value"], "rows": rows},
@@ -258,6 +259,7 @@ def test_execute_batch_applies_each_members_lookback_window(tmp_path: Path):
     raw = count.read_bytes()
     factor = {
         "name": "Count", "input_columns": ["value"],
+        "factor_type": "timeseries",
         "outputs": ["double", "triple"], "params": {},
         "source_path": str(count), "source_hash": hashlib.sha256(raw).hexdigest(),
     }
@@ -355,7 +357,7 @@ def test_execute_rejects_legacy_signal_only_module(tmp_path: Path):
     load_factor(worker, factors_dir / "Legacy.py", "Legacy")
     meta = request_meta()
     meta["factor"]["name"] = "Legacy"
-    with pytest.raises(AttributeError, match=r"must define compute\(df, params\)"):
+    with pytest.raises(AttributeError, match=r"must define compute\(df, params, context\)"):
         worker.execute_request(meta)
 
 
@@ -405,7 +407,7 @@ result["triple"] = df["value"] * 3
 return result
 """.strip()
     (factors_dir / "Generic.py").write_text(
-        f"import pandas as pd\n\ndef compute(df, params):\n"
+        f"import pandas as pd\n\ndef compute(df, params, context):\n"
         + "\n".join(f"    {line}" for line in body.splitlines())
         + "\n",
         encoding="utf-8",
@@ -433,9 +435,12 @@ def request_meta():
     return {
         "id": "task-1",
         "encoding": "json",
+        "context": {"period_time": 1785196800, "frequency": "1m", "subject_id": "BTC",
+                    "input_contract_version": "contract-1"},
         "target_start_time": "2026-07-28T00:00:00.000000001Z",
         "target_end_time": "2026-07-28T00:00:00.000000002Z",
         "factor": {
+            "factor_type": "timeseries",
             "name": "Generic",
             "input_columns": ["value"],
             "outputs": ["double", "triple"],

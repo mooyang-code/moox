@@ -10,16 +10,54 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func TestSourcePositionSurvivesDataNodeRestart(t *testing.T) {
+	ctx := context.Background()
+	options := Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"}
+	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_IntValue{IntValue: 1}}}}}
+	var first []byte
+	for attempt := 0; attempt < 2; attempt++ {
+		s, err := Open(options)
+		require.NoError(t, err)
+		_, err = s.UpsertFieldsEvent(ctx, []*pb.RowFieldUpsert{row}, func(space, dataset string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+			return BuildDatasetRowsUpsertedMessage("node", space, dataset, rows)
+		})
+		require.NoError(t, err)
+		entries, err := s.ListOutbox(ctx, 0, 10)
+		require.NoError(t, err)
+		require.Len(t, entries, attempt+1)
+		if attempt == 0 {
+			first = append([]byte(nil), entries[0].Data...)
+		} else {
+			require.Equal(t, first, entries[0].Data)
+		}
+		for _, entry := range entries {
+			message := new(eventpb.EventMessage)
+			require.NoError(t, proto.Unmarshal(entry.Data, message))
+			payload := new(storagepb.DatasetRowsUpserted)
+			require.NoError(t, proto.Unmarshal(message.Payload, payload))
+			require.Equal(t, "node", payload.SourceNodeId)
+			require.Equal(t, s.sourceStoreID, payload.SourceStoreId)
+			require.Contains(t, message.EventId, s.sourceStoreID)
+			require.Equal(t, entry.ID, payload.SourceSequence)
+		}
+		if attempt == 1 {
+			require.Greater(t, entries[1].ID, entries[0].ID)
+		}
+		require.NoError(t, s.Close())
+	}
+}
 
 func TestBuildDatasetRowsUpsertedMessageUsesExplicitOuterContract(t *testing.T) {
 	data, err := BuildDatasetRowsUpsertedMessage("node-1", "crypto", "spot_kline", []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "spot_kline", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r1", Version: "v1"}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err = BindOutboxID(data, "node-1", 7)
+	data, err = BindOutboxID(data, "node-1", "store", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +74,13 @@ func TestBuildDatasetRowsUpsertedMessageUsesExplicitOuterContract(t *testing.T) 
 	}
 	if payload.GetSpaceId() != "crypto" || payload.GetDatasetId() != "spot_kline" || len(payload.GetRows()) != 1 {
 		t.Fatalf("rows.upserted payload = %v", payload)
+	}
+	if payload.GetSourceNodeId() != "node-1" || payload.GetSourceSequence() != 7 {
+		t.Fatalf("source position = %s/%d", payload.GetSourceNodeId(), payload.GetSourceSequence())
+	}
+	replayed, err := BindOutboxID(data, "node-1", "store", 7)
+	if err != nil || string(replayed) != string(data) {
+		t.Fatalf("same outbox position changed on retry: %v", err)
 	}
 }
 
@@ -71,7 +116,7 @@ func TestBuildDatasetRowsUpsertedMessageCarriesWriteSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err = BindOutboxID(data, "node-1", 8)
+	data, err = BindOutboxID(data, "node-1", "store", 8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,9 +163,25 @@ func TestPrepareOutboxPublicationIsByteStable(t *testing.T) {
 }
 
 func TestBindOutboxIDRejectsInvalidEnvelope(t *testing.T) {
-	if _, err := BindOutboxID([]byte("not-protobuf"), "foo", 42); err == nil {
+	if _, err := BindOutboxID([]byte("not-protobuf"), "foo", "store", 42); err == nil {
 		t.Fatal("BindOutboxID() error = nil, want invalid envelope rejection")
 	}
+}
+
+func TestSourceDerivedEventIDIsScopedToStoreIncarnation(t *testing.T) {
+	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}}
+	staged, err := BuildDatasetRowsUpsertedMessageForSource("node", "input", "s", "d", rows)
+	require.NoError(t, err)
+	first, err := BindOutboxID(staged, "node", "first-store", 1)
+	require.NoError(t, err)
+	second, err := BindOutboxID(staged, "node", "second-store", 1)
+	require.NoError(t, err)
+	require.NotEqual(t, mustEvent(t, first).EventId, mustEvent(t, second).EventId)
+	replay, err := BindOutboxID(first, "node", "first-store", 1)
+	require.NoError(t, err)
+	require.Equal(t, first, replay)
+	_, err = BindOutboxID(first, "node", "second-store", 1)
+	require.ErrorContains(t, err, "rebind")
 }
 
 func TestValidateNewEventIDRejectsPlaceholder(t *testing.T) {

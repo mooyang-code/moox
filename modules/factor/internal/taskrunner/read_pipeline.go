@@ -11,10 +11,14 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type periodReadKey struct {
+	sourceSeriesTag                                                              string
+	filterSourceSeriesTag                                                        bool
+	inputContractVersion                                                         string
 	spaceID, sourceViewID, sourceDataset, subjectID, freq, expectedActiveIndexID string
 	expectedActiveIndexRevision                                                  uint64
 	periodTime                                                                   int64
@@ -51,6 +55,29 @@ type readOutcome struct {
 	err   error
 }
 
+type batchPeriodStorageIO interface {
+	ReadPeriodChunks(context.Context, storageio.WindowKey, []string, time.Time, time.Time, int, []string) (map[string]*storageio.RangeChunk, error)
+}
+
+type periodReadBatchKey struct {
+	triggerType                                                                       string
+	sourceSeriesTag                                                                   string
+	filterSourceSeriesTag                                                             bool
+	inputContractVersion                                                              string
+	spaceID, sourceViewID, sourceDataset, freq, expectedActiveIndexID, triggerEventID string
+	expectedActiveIndexRevision                                                       uint64
+	periodTime                                                                        int64
+}
+
+type periodReadBatch struct {
+	key      periodReadBatchKey
+	groups   []*periodReadGroup
+	start    time.Time
+	end      time.Time
+	lookback int
+	columns  []string
+}
+
 func (s *Service) runPeriodReadPipeline(
 	ctx context.Context,
 	groups []*periodReadGroup,
@@ -58,6 +85,10 @@ func (s *Service) runPeriodReadPipeline(
 	results []Result,
 ) {
 	if len(groups) == 0 {
+		return
+	}
+	if batcher, ok := s.storage.(batchPeriodStorageIO); ok {
+		s.runBatchedPeriodReadPipeline(ctx, batcher, groups, prepared, results)
 		return
 	}
 	readWorkers := min(max(1, s.viewReadWorkers), len(groups))
@@ -154,6 +185,207 @@ func (s *Service) runPeriodReadPipeline(
 	readers.Wait()
 }
 
+func clusterPeriodReadGroups(groups []*periodReadGroup) []*periodReadBatch {
+	index := make(map[periodReadBatchKey]*periodReadBatch)
+	out := make([]*periodReadBatch, 0)
+	for _, group := range groups {
+		if group == nil {
+			continue
+		}
+		key := periodReadBatchKey{
+			triggerType:     group.key.triggerType,
+			sourceSeriesTag: group.key.sourceSeriesTag, filterSourceSeriesTag: group.key.filterSourceSeriesTag,
+			inputContractVersion: group.key.inputContractVersion,
+			spaceID:              group.key.spaceID, sourceViewID: group.key.sourceViewID, sourceDataset: group.key.sourceDataset,
+			freq: group.key.freq, expectedActiveIndexID: group.key.expectedActiveIndexID,
+			expectedActiveIndexRevision: group.key.expectedActiveIndexRevision,
+			periodTime:                  group.key.periodTime, triggerEventID: group.key.triggerEventID,
+		}
+		// Subject events have distinct delivery identities but can share a source
+		// snapshot read. Never rewrite their task identities for this optimization.
+		if group.key.triggerType == "subject_ready" && group.key.inputContractVersion != "" {
+			key.triggerEventID = ""
+		}
+		batch := index[key]
+		if batch != nil && key.inputContractVersion != "" && storagepb.SeriesWindowSubjectLimit(max(1, batch.lookback, group.lookbackPeriods), len(mergeReadColumns(batch.columns, group.columns))) == 0 {
+			batch = nil
+		}
+		if batch == nil {
+			batch = &periodReadBatch{
+				key: key, start: group.startTime, end: group.endTime, lookback: group.lookbackPeriods,
+			}
+			index[key] = batch
+			out = append(out, batch)
+		}
+		if group.startTime.Before(batch.start) {
+			batch.start = group.startTime
+		}
+		if group.endTime.After(batch.end) {
+			batch.end = group.endTime
+		}
+		if group.lookbackPeriods > batch.lookback {
+			batch.lookback = group.lookbackPeriods
+		}
+		batch.groups = append(batch.groups, group)
+		batch.columns = mergeReadColumns(batch.columns, group.columns)
+	}
+	return out
+}
+
+func (s *Service) runBatchedPeriodReadPipeline(
+	ctx context.Context,
+	batcher batchPeriodStorageIO,
+	groups []*periodReadGroup,
+	prepared chan<- preparedBatch,
+	results []Result,
+) {
+	batches := clusterPeriodReadGroups(groups)
+	if len(batches) == 0 {
+		return
+	}
+	readWorkers := min(max(1, s.viewReadWorkers), len(batches))
+	readCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type batchJob struct {
+		batch      *periodReadBatch
+		attempt    int
+		generation int
+	}
+	type batchOutcome struct {
+		job    batchJob
+		chunks map[string]*storageio.RangeChunk
+		err    error
+	}
+	jobs := make(chan batchJob)
+	outcomes := make(chan batchOutcome, readWorkers)
+	var readers sync.WaitGroup
+	for range readWorkers {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for job := range jobs {
+				if err := readCtx.Err(); err != nil {
+					outcomes <- batchOutcome{job: job, err: err}
+					continue
+				}
+				started := time.Now()
+				attemptCtx, attemptCancel := context.WithTimeout(readCtx, s.viewReadTimeout)
+				if err := attemptCtx.Err(); err != nil {
+					attemptCancel()
+					outcomes <- batchOutcome{job: job, err: err}
+					continue
+				}
+				subjectIDs := make([]string, 0, len(job.batch.groups))
+				for _, group := range job.batch.groups {
+					subjectIDs = append(subjectIDs, group.key.subjectID)
+				}
+				key := storageio.WindowKey{
+					SourceSeriesTag: job.batch.key.sourceSeriesTag, FilterSourceSeriesTag: job.batch.key.filterSourceSeriesTag,
+					SpaceID: job.batch.key.spaceID, SourceViewID: job.batch.key.sourceViewID,
+					SourceDataset: job.batch.key.sourceDataset, Freq: job.batch.key.freq,
+					ExpectedActiveIndexID:       job.batch.key.expectedActiveIndexID,
+					ExpectedActiveIndexRevision: job.batch.key.expectedActiveIndexRevision,
+				}
+				if job.batch.key.triggerType == "subject_ready" {
+					key.InputContractVersion = job.batch.key.inputContractVersion
+				}
+				chunks, err := batcher.ReadPeriodChunks(
+					attemptCtx, key, subjectIDs, job.batch.start, job.batch.end,
+					job.batch.lookback, append([]string(nil), job.batch.columns...),
+				)
+				attemptCancel()
+				log.InfoContextf(readCtx, "factor_view_read_batch_done space_id=%s source_view_id=%s freq=%s period_time=%d subject_count=%d lookback_periods=%d attempt=%d result=%s elapsed_ms=%d column_count=%d",
+					job.batch.key.spaceID, job.batch.key.sourceViewID, job.batch.key.freq, job.batch.key.periodTime,
+					len(subjectIDs), job.batch.lookback, job.attempt, viewReadResult(err), time.Since(started).Milliseconds(), len(job.batch.columns))
+				outcomes <- batchOutcome{job: job, chunks: chunks, err: err}
+			}
+		}()
+	}
+
+	pending := append([]*periodReadBatch(nil), batches...)
+	inflight := 0
+	ctxDone := ctx.Done()
+	for len(pending) > 0 || inflight > 0 {
+		var dispatch chan<- batchJob
+		var next batchJob
+		if len(pending) > 0 && inflight < readWorkers && ctx.Err() == nil {
+			batch := pending[0]
+			next = batchJob{batch: batch, attempt: batch.groups[0].attempt + 1, generation: batch.groups[0].generation + 1}
+			dispatch = jobs
+		}
+		select {
+		case dispatch <- next:
+			pending = pending[1:]
+			for _, group := range next.batch.groups {
+				group.attempt = next.attempt
+				group.generation = next.generation
+			}
+			inflight++
+		case outcome := <-outcomes:
+			inflight--
+			batch := outcome.job.batch
+			stale := false
+			for _, group := range batch.groups {
+				if group.terminal || outcome.job.generation != group.generation {
+					stale = true
+					break
+				}
+			}
+			if stale {
+				continue
+			}
+			if ctx.Err() != nil {
+				for _, group := range batch.groups {
+					s.failReadGroup(group, ctx.Err(), results)
+				}
+				continue
+			}
+			if outcome.err != nil {
+				if shouldRetryRead(ctx, outcome.err) && outcome.job.attempt < 2 {
+					log.WarnContextf(ctx, "factor_view_read_batch_retry space_id=%s source_view_id=%s freq=%s period_time=%d attempt=%d retry_position=tail error=%q",
+						batch.key.spaceID, batch.key.sourceViewID, batch.key.freq, batch.key.periodTime, outcome.job.attempt, outcome.err.Error())
+					pending = append(pending, batch)
+					continue
+				}
+				for _, group := range batch.groups {
+					s.failReadGroup(group, outcome.err, results)
+				}
+				continue
+			}
+			for _, group := range batch.groups {
+				if group.terminal {
+					continue
+				}
+				chunk := outcome.chunks[group.key.subjectID]
+				if chunk == nil {
+					s.failReadGroup(group, fmt.Errorf("view read missing subject %s", group.key.subjectID), results)
+					continue
+				}
+				select {
+				case prepared <- preparedBatch{members: append([]indexedTask(nil), group.members...), shared: chunk}:
+				case <-ctx.Done():
+					for _, member := range group.members {
+						results[member.index].Err = ctx.Err()
+						s.finishPendingTask()
+					}
+				}
+				group.terminal = true
+			}
+		case <-ctxDone:
+			cancel()
+			for _, batch := range pending {
+				for _, group := range batch.groups {
+					s.failReadGroup(group, ctx.Err(), results)
+				}
+			}
+			pending = nil
+			ctxDone = nil
+		}
+	}
+	close(jobs)
+	readers.Wait()
+}
+
 func viewReadResult(err error) string {
 	if err == nil {
 		return "success"
@@ -170,10 +402,14 @@ func viewReadResult(err error) string {
 func (s *Service) readPeriodGroup(ctx context.Context, group *periodReadGroup) (*storageio.RangeChunk, error) {
 	representative := group.members[0].task
 	key := storageio.WindowKey{
+		SourceSeriesTag: representative.SourceSeriesTag, FilterSourceSeriesTag: representative.FilterSourceSeriesTag,
 		SpaceID: representative.SpaceID, SourceViewID: taskSourceView(representative),
 		SourceDataset: representative.SourceDataset, SubjectID: representative.SubjectID, Freq: representative.Freq,
 		ExpectedActiveIndexID:       representative.ExpectedActiveIndexID,
 		ExpectedActiveIndexRevision: representative.ExpectedActiveIndexRevision,
+	}
+	if representative.TriggerType == "subject_ready" {
+		key.InputContractVersion = representative.InputContractVersion
 	}
 	if periodReader, ok := s.storage.(periodStorageIO); ok {
 		return periodReader.ReadPeriodChunk(
@@ -314,7 +550,9 @@ func buildPeriodReadGroups(tasks []Task) ([]*periodReadGroup, []indexedTask) {
 			continue
 		}
 		key := periodReadKey{
-			spaceID: task.SpaceID, sourceViewID: taskSourceView(task), sourceDataset: task.SourceDataset,
+			sourceSeriesTag: task.SourceSeriesTag, filterSourceSeriesTag: task.FilterSourceSeriesTag,
+			inputContractVersion: task.InputContractVersion,
+			spaceID:              task.SpaceID, sourceViewID: taskSourceView(task), sourceDataset: task.SourceDataset,
 			subjectID: task.SubjectID, freq: task.Freq, periodTime: task.PeriodTime,
 			expectedActiveIndexID:       task.ExpectedActiveIndexID,
 			expectedActiveIndexRevision: task.ExpectedActiveIndexRevision,
@@ -322,6 +560,9 @@ func buildPeriodReadGroups(tasks []Task) ([]*periodReadGroup, []indexedTask) {
 			startTime: task.StartTime, endTime: task.EndTime,
 		}
 		group := groupsByKey[key]
+		if group != nil && key.inputContractVersion != "" && storagepb.SeriesWindowSubjectLimit(max(1, group.lookbackPeriods, task.LookbackPeriods), len(mergeReadColumns(group.columns, task.Factor.InputColumns))) == 0 {
+			group = nil
+		}
 		if group == nil {
 			group = &periodReadGroup{key: key, startTime: task.StartTime, endTime: task.EndTime, lookbackPeriods: task.LookbackPeriods}
 			groupsByKey[key] = group
@@ -338,21 +579,24 @@ func buildPeriodReadGroups(tasks []Task) ([]*periodReadGroup, []indexedTask) {
 			}
 		}
 		group.members = append(group.members, member)
-	}
-	for _, group := range groups {
-		columnSet := make(map[string]struct{})
-		for _, member := range group.members {
-			for _, column := range member.task.Factor.InputColumns {
-				if column = strings.TrimSpace(column); column != "" {
-					columnSet[column] = struct{}{}
-				}
-			}
-		}
-		group.columns = make([]string, 0, len(columnSet))
-		for column := range columnSet {
-			group.columns = append(group.columns, column)
-		}
-		sort.Strings(group.columns)
+		group.columns = mergeReadColumns(group.columns, task.Factor.InputColumns)
 	}
 	return groups, singles
+}
+
+func mergeReadColumns(left, right []string) []string {
+	set := make(map[string]struct{}, len(left)+len(right))
+	for _, columns := range [][]string{left, right} {
+		for _, column := range columns {
+			if column = strings.TrimSpace(column); column != "" {
+				set[column] = struct{}{}
+			}
+		}
+	}
+	result := make([]string, 0, len(set))
+	for column := range set {
+		result = append(result, column)
+	}
+	sort.Strings(result)
+	return result
 }

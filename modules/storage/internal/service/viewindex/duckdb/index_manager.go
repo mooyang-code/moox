@@ -824,6 +824,9 @@ func normalizeColumnValue(value any, valueType pb.FieldValueType, mode viewindex
 }
 
 func (m *IndexManager) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
+	if spec.RowsPerSeries < 0 || (spec.RowsPerSeries > 0 && (spec.Limit != 0 || spec.Offset != 0 || len(spec.Sorts) != 0 || spec.Order == pb.SortOrder_SORT_ORDER_DESC || spec.AfterKey != nil || spec.TotalMode != pb.TotalMode_NONE)) {
+		return nil, 0, fmt.Errorf("series window requires positive row count and no pagination, custom sort or exact total")
+	}
 	var err error
 	if ctx, err = duckDBContext(ctx); err != nil {
 		return nil, 0, err
@@ -863,17 +866,31 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 	}
 	selectColumns = append(selectColumns, projected...)
 	sort.Strings(selectColumns[4:])
-	query := "SELECT " + joinQuoted(selectColumns) + " FROM view_rows" + where
-	query += orderSQL(spec.Sorts, spec.Order, columns)
-	limit := spec.Limit
-	if limit <= 0 {
-		limit = 1000
+	projections := make([]string, len(selectColumns))
+	for i, name := range selectColumns {
+		projections[i] = quote(name)
+		// Avoid the driver's JSON -> interface{} conversion, which rounds
+		// numbers through float64 and collapses JSON null into SQL NULL.
+		if columns[name] == pb.FieldValueType_FIELD_VALUE_TYPE_JSON {
+			projections[i] = "CAST(" + quote(name) + " AS VARCHAR) AS " + quote(name)
+		}
 	}
-	if spec.Offset < 0 {
-		spec.Offset = 0
+	query := "SELECT " + strings.Join(projections, ",") + " FROM view_rows" + where
+	if spec.RowsPerSeries > 0 {
+		query += " QUALIFY ROW_NUMBER() OVER (PARTITION BY subject_id, freq, series_tag ORDER BY data_time DESC) <= ? ORDER BY subject_id, freq, series_tag, data_time ASC"
+		args = append(args, spec.RowsPerSeries)
+	} else {
+		query += orderSQL(spec.Sorts, spec.Order, columns)
+		limit := spec.Limit
+		if limit <= 0 {
+			limit = 1000
+		}
+		if spec.Offset < 0 {
+			spec.Offset = 0
+		}
+		query += " LIMIT ? OFFSET ?"
+		args = append(args, limit, spec.Offset)
 	}
-	query += " LIMIT ? OFFSET ?"
-	args = append(args, limit, spec.Offset)
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -905,7 +922,7 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 				continue
 			}
 			if value == nil {
-				if len(spec.Includes) == 0 {
+				if len(spec.Includes) == 0 && spec.RowsPerSeries == 0 {
 					continue
 				}
 				row.Fields = append(row.Fields, &pb.FieldValue{FieldId: name, Value: &pb.TypedValue{

@@ -89,9 +89,12 @@ func isAlreadyDoneAPIError(err error) bool {
 		"alreadyattached",
 		"ccnattached",
 		"ccnalreadyattached",
+		"ccnnotattached",
+		"not attached",
 		"resourceinuse",
 		"alreadyexists",
 		"已关联",
+		"未关联",
 	} {
 		if strings.Contains(text, token) {
 			return true

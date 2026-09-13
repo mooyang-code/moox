@@ -1,4 +1,4 @@
-def compute(df, params):
+def compute(df, params, context):
     window = int(params["window"])
     typical = (df["high"] + df["low"] + df["close"]) / 3
     grouped = typical.groupby(df["series_tag"], sort=False)

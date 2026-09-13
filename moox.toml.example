@@ -64,6 +64,7 @@ source_dir = "./modules/factor/factors"
 
 [[factors.items]]
 factor_id = "Bias"
+factor_type = "timeseries"
 file = "Bias.py"
 name = "Bias"
 input_columns = ["close"]
@@ -78,6 +79,7 @@ status = "enabled"
 
 [[factors.items]]
 factor_id = "Cci"
+factor_type = "timeseries"
 file = "Cci.py"
 name = "Cci"
 input_columns = ["high", "low", "close"]
@@ -92,6 +94,7 @@ status = "enabled"
 
 [[factors.items]]
 factor_id = "MinMax"
+factor_type = "timeseries"
 file = "MinMax.py"
 name = "MinMax"
 input_columns = ["high", "low", "close"]
@@ -106,6 +109,7 @@ status = "enabled"
 
 [[factors.items]]
 factor_id = "QuoteVolumeMean"
+factor_type = "timeseries"
 file = "QuoteVolumeMean.py"
 name = "QuoteVolumeMean"
 input_columns = ["quote_volume"]
@@ -152,10 +156,8 @@ timer_function_count = 44
 # SCF Timer 每次直接访问该 Storage tRPC 地址，不再请求 Collector 配置接口。
 storage_gateway_node_id = "control"
 storage_gateway_host = "203.0.113.11"
-# 公网 Storage RPC，海外 SCF（香港/新加坡/东京）继续用它。
-# 组网完成后填写 Storage 内网 IP；国内 SCF 走内网，海外仍用上面的公网地址。
-# 不要把 storage_gateway_host 改成内网 IP（同一 Space 可能同时覆盖国内和海外地域）。
-storage_private_gateway_host = "10.0.0.5"
+# SCF 统一走公网 Storage RPC。不要把 storage_gateway_host 改成内网 IP。
+# 主机与 SCF 一律走公网 Storage RPC。不要填写 storage_private_gateway_host。
 memory_size = 64
 timeout_seconds = 15
 # Invoke nodes also refresh the full Binance symbol snapshot; give that
@@ -212,10 +214,8 @@ timer_function_count = 170
 measured_safe_group_size = 40
 storage_gateway_node_id = "control"
 storage_gateway_host = "203.0.113.11"
-# 公网 Storage RPC，海外 SCF（香港/新加坡/东京）继续用它。
-# 组网完成后填写 Storage 内网 IP；国内 SCF 走内网，海外仍用上面的公网地址。
-# 不要把 storage_gateway_host 改成内网 IP（同一 Space 可能同时覆盖国内和海外地域）。
-storage_private_gateway_host = "10.0.0.5"
+# 主机与 SCF 一律走公网 Storage RPC。不要把 storage_gateway_host 改成内网 IP。
+# 不要填写 storage_private_gateway_host。
 memory_size = 64
 timeout_seconds = 15
 # 全市场 Instrument 快照实测约 25 秒；仅 Invoke 辅助函数使用该独立超时。
@@ -257,10 +257,9 @@ display_name = "西南（成都）"
 enabled = true
 function_count = 0
 
-# 腾讯云主机将 provider 设为 tencent。跨地域 CVM 与轻量、以及各地域 SCF
-# 通过 `moox-cli setup private-network --file ./moox.toml` 打通国内/海外云联网。
-# SSH 和控制台入口仍用下面的公网地址。组网完成后填写
-# storage_private_gateway_host，不要改 storage_gateway_host。
+# 腾讯云主机将 provider 设为 tencent。主机与 SCF 一律走上面的
+# storage_gateway_host 公网 IP，不要创建云联网，不要绑 CCN/VPC。
+# SSH 和控制台入口仍用下面的公网地址。不要填写 storage_private_gateway_host。
 # 操作说明见 skills/moox/references/private-network.md。
 [hosts."203.0.113.10"]
   port = 22

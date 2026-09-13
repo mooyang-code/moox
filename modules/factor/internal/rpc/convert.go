@@ -9,6 +9,7 @@ import (
 
 func factorToPB(f domain.FactorDef) *factorpb.FactorDef {
 	return &factorpb.FactorDef{
+		FactorType:      f.FactorType,
 		FactorId:        f.FactorID,
 		Name:            f.Name,
 		SourceCode:      f.SourceCode,
@@ -28,6 +29,7 @@ func factorFromPB(pb *factorpb.FactorDef) domain.FactorDef {
 		return domain.FactorDef{}
 	}
 	return domain.FactorDef{
+		FactorType:      pb.GetFactorType(),
 		FactorID:        pb.GetFactorId(),
 		Name:            pb.GetName(),
 		SourceCode:      pb.GetSourceCode(),

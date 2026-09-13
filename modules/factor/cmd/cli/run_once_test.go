@@ -9,9 +9,31 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
 )
+
+func TestManualBindingKeepsIncarnation(t *testing.T) {
+	cfg := cliConfig{SpaceID: "space", ViewID: "source", Freq: "1m", SubjectID: "BTC"}
+	bindings := []domain.FactorBinding{{BindingID: "b", BindingGeneration: "old", FactorID: "f", SpaceID: "space", SourceViewID: "source", ResultDatasetID: "result", Freq: "1m"}}
+	factor := domain.FactorDef{FactorID: "f", FactorType: domain.FactorTypeTimeSeries, SourceHash: "hash", Status: domain.FactorStatusEnabled}
+	factorsDir := t.TempDir()
+	build := func() taskrunner.Task {
+		binding, ok := executableBinding(bindings, "f", "result", cfg)
+		require.True(t, ok)
+		task, err := taskrunner.BuildTask(taskrunner.TaskScope{BindingID: binding.BindingID, BindingGeneration: binding.BindingGeneration, SubjectID: cfg.SubjectID, StartTime: time.Unix(1, 0), EndTime: time.Unix(2, 0)}, factor, factorsDir)
+		require.NoError(t, err)
+		return task
+	}
+	old := build()
+	bindings[0].BindingGeneration = "recreated"
+	next := build()
+	require.NotEqual(t, old.BindingGeneration, next.BindingGeneration)
+	require.NotEqual(t, taskrunner.DeterministicTaskID(old), taskrunner.DeterministicTaskID(next))
+	_, found := executableBinding(nil, "f", "result", cfg)
+	require.False(t, found)
+}
 
 func TestRunOnceLoadsAppConfig(t *testing.T) {
 	runtimeRoot := t.TempDir()
@@ -97,14 +119,14 @@ func TestRunInitAndImport(t *testing.T) {
 	factorsDir := filepath.Join(tmp, "factors")
 	require.NoError(t, os.MkdirAll(factorsDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "Bias.py"), []byte(
-		"def compute(df, params):\n    return {'bias': df['close']}\n",
+		"def compute(df, params, context):\n    return {'bias': df['close']}\n",
 	), 0o644))
 	var out bytes.Buffer
 	require.NoError(t, run(context.Background(), []string{"init", "--db", dbPath}, &out))
 	out.Reset()
 	require.NoError(t, run(context.Background(), []string{
 		"import", "--db", dbPath, "--factors-dir", factorsDir,
-		"--file", filepath.Join(factorsDir, "Bias.py"), "--factor-id", "Bias",
+		"--file", filepath.Join(factorsDir, "Bias.py"), "--factor-id", "Bias", "--factor-type", "timeseries",
 		"--input-columns", "close", "--outputs", "bias", "--params-json", "{}",
 		"--lookback-periods", "20",
 	}, &out))

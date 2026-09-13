@@ -18,6 +18,7 @@ message FactorDef {
   string status = 9;
   string created_at = 10;
   string updated_at = 11;
+  string factor_type = 12;
 }
 
 message FactorBinding {

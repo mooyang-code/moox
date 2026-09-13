@@ -2,18 +2,38 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // BindingRepository persists factor bindings.
 type BindingRepository struct {
 	db *gorm.DB
+}
+
+var ErrBindingScopeOccupied = errors.New("binding scope belongs to another ID; delete its binding before creating a replacement")
+
+// CheckScopeAvailable rejects identity takeover before callers perform external
+// side effects. The database unique constraint also protects concurrent writes.
+func (r *BindingRepository) CheckScopeAvailable(ctx context.Context, binding domain.FactorBinding) error {
+	normalizeBinding(&binding)
+	var count int64
+	err := r.db.WithContext(ctx).Model(&domain.FactorBinding{}).
+		Where("c_factor_id = ? AND c_space_id = ? AND c_source_view_id = ? AND c_freq = ? AND c_binding_id <> ?", binding.FactorID, binding.SpaceID, binding.SourceViewID, binding.Freq, binding.BindingID).
+		Count(&count).Error
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return ErrBindingScopeOccupied
+	}
+	return nil
 }
 
 // BindingFilter describes a paginated binding query.
@@ -30,10 +50,14 @@ func NewBindingRepository(db *gorm.DB) *BindingRepository {
 	return &BindingRepository{db: db}
 }
 
-// Upsert inserts or updates a binding by its natural scope key.
+// Upsert inserts or updates a binding by ID. A different ID cannot take over
+// an occupied natural scope; callers must finish explicit deletion first.
 func (r *BindingRepository) Upsert(ctx context.Context, binding domain.FactorBinding) error {
 	now := time.Now().UTC()
 	normalizeBinding(&binding)
+	if err := r.CheckScopeAvailable(ctx, binding); err != nil {
+		return err
+	}
 	if binding.CreateTime.IsZero() {
 		binding.CreateTime = now
 	}
@@ -42,42 +66,32 @@ func (r *BindingRepository) Upsert(ctx context.Context, binding domain.FactorBin
 		var existing domain.FactorBinding
 		err := r.db.WithContext(ctx).Where("c_binding_id = ?", binding.BindingID).First(&existing).Error
 		if err == nil {
+			binding.BindingGeneration = existing.BindingGeneration
+			if binding.FactorID != existing.FactorID || binding.SpaceID != existing.SpaceID || binding.SourceViewID != existing.SourceViewID || binding.Freq != existing.Freq || binding.SubjectMode != existing.SubjectMode || binding.SubjectsJSON != existing.SubjectsJSON || binding.ResultDatasetID != existing.ResultDatasetID || binding.ResultViewID != existing.ResultViewID {
+				binding.BindingGeneration = newBindingGeneration()
+			}
 			return r.db.WithContext(ctx).Model(&domain.FactorBinding{}).
 				Where("c_binding_id = ?", binding.BindingID).
 				Updates(map[string]any{
-					"c_factor_id":         binding.FactorID,
-					"c_space_id":          binding.SpaceID,
-					"c_source_view_id":    binding.SourceViewID,
-					"c_freq":              binding.Freq,
-					"c_subject_mode":      binding.SubjectMode,
-					"c_subjects_json":     binding.SubjectsJSON,
-					"c_result_dataset_id": binding.ResultDatasetID,
-					"c_result_view_id":    binding.ResultViewID,
-					"c_status":            binding.Status,
-					"c_mtime":             binding.ModifyTime,
+					"c_binding_generation": binding.BindingGeneration,
+					"c_factor_id":          binding.FactorID,
+					"c_space_id":           binding.SpaceID,
+					"c_source_view_id":     binding.SourceViewID,
+					"c_freq":               binding.Freq,
+					"c_subject_mode":       binding.SubjectMode,
+					"c_subjects_json":      binding.SubjectsJSON,
+					"c_result_dataset_id":  binding.ResultDatasetID,
+					"c_result_view_id":     binding.ResultViewID,
+					"c_status":             binding.Status,
+					"c_mtime":              binding.ModifyTime,
 				}).Error
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 	}
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{
-			{Name: "c_factor_id"},
-			{Name: "c_space_id"},
-			{Name: "c_source_view_id"},
-			{Name: "c_freq"},
-		},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"c_binding_id",
-			"c_subject_mode",
-			"c_subjects_json",
-			"c_result_dataset_id",
-			"c_result_view_id",
-			"c_status",
-			"c_mtime",
-		}),
-	}).Create(&binding).Error
+	binding.BindingGeneration = newBindingGeneration()
+	return r.db.WithContext(ctx).Create(&binding).Error
 }
 
 // ListExecutable returns bindings whose binding and factor are both enabled.
@@ -168,6 +182,14 @@ func (r *BindingRepository) Delete(ctx context.Context, bindingID string) error 
 		return gorm.ErrRecordNotFound
 	}
 	return nil
+}
+
+func newBindingGeneration() string {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(value[:])
 }
 
 func normalizeBinding(binding *domain.FactorBinding) {

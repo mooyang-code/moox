@@ -63,7 +63,7 @@ func (c *Consumer) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
-	if c.executor == nil {
+	if c.executor == nil && c.openSession == nil {
 		return errors.New("factor View-ready executor is required")
 	}
 	if c.openSession == nil {

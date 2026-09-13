@@ -464,7 +464,7 @@ storage_gateway_host = "192.0.2.10"
 	assert.Empty(t, snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
 }
 
-func TestLoadResolvesStoragePrivateGatewayHost(t *testing.T) {
+func TestLoadIgnoresStoragePrivateGatewayHost(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
 
@@ -475,11 +475,11 @@ storage_private_gateway_host = "10.206.0.5"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
-	assert.Equal(t, "10.206.0.5", snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateGatewayHost)
-	assert.Equal(t, "ip://10.206.0.5:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
+	assert.Equal(t, "ip://192.0.2.10:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StorageRPCGatewayTarget)
+	assert.Empty(t, snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
 }
 
-func TestLoadRejectsPublicStoragePrivateGatewayHost(t *testing.T) {
+func TestLoadIgnoresPublicStoragePrivateGatewayHost(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
 
@@ -488,8 +488,9 @@ space_id = "crypto"
 storage_gateway_host = "192.0.2.10"
 storage_private_gateway_host = "192.0.2.10"
 `
-	_, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.ErrorContains(t, err, "storage_private_gateway_host")
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Empty(t, snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
 }
 
 func TestValidateRejectsStorageRootOverlapWithControl(t *testing.T) {
@@ -616,6 +617,7 @@ source_dir = "./examples/factors"
 
 [[factors.items]]
 factor_id = "bias"
+factor_type = "timeseries"
 file = "timeseries/bias.py"
 input_columns = ["close"]
 outputs = ["bias_5"]
@@ -640,6 +642,26 @@ func TestLoadDefaultsDisableFactors(t *testing.T) {
 	snapshot, err := Load(writeManifest(t, root, validManifest, 0o600), root)
 	require.NoError(t, err)
 	assert.False(t, snapshot.Manifest.Factors.Enabled)
+}
+
+func TestLoadRejectsInvalidFactorTypeBeforeSetup(t *testing.T) {
+	for _, declaration := range []string{"", "factor_type = \"unknown\""} {
+		root := t.TempDir()
+		body := validManifest + `
+[factors]
+enabled = true
+source_dir = "examples/factors"
+[[factors.items]]
+factor_id = "Bias"
+file = "Bias.py"
+space_id = "crypto"
+source_view_id = "view"
+freq = "1m"
+lookback_periods = 20
+` + declaration + "\n"
+		_, err := Load(writeManifest(t, root, body, 0o600), root)
+		require.ErrorContains(t, err, "factor_type")
+	}
 }
 
 func TestLoadNotificationWebhook(t *testing.T) {

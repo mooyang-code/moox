@@ -111,6 +111,18 @@ func DecodeDatasetPeriodCollectedWithContentType(registry *Registry, raw []byte,
 	return message, storagePayload, nil
 }
 
+func DecodeViewSourceSubjectReadyWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.ViewSourceSubjectReady, error) {
+	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, ViewSourceSubjectReady)
+	if err != nil {
+		return message, nil, err
+	}
+	ready, ok := payload.(*storagepb.ViewSourceSubjectReady)
+	if !ok {
+		return message, nil, fmt.Errorf("view source subject ready payload has type %T", payload)
+	}
+	return message, ready, nil
+}
+
 // DecodeViewSourcePeriodReady validates and decodes a source View readiness event.
 func DecodeViewSourcePeriodReady(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.ViewSourcePeriodReady, error) {
 	return DecodeViewSourcePeriodReadyWithContentType(registry, raw, subject, messageID, ContentType)

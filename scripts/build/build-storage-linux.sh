@@ -59,6 +59,22 @@ case "${target_goarch}" in
   *) die "unsupported storage build architecture: ${target_goarch}" ;;
 esac
 target_goarch_q="$(shell_quote "${target_goarch}")"
+linux_cgo_target="${MOOX_LINUX_CGO_TARGET:-storage}"
+case "${linux_cgo_target}" in
+  storage)
+    linux_cgo_binaries=(moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli)
+    ;;
+  factor)
+    linux_cgo_binaries=(moox-factor moox-factor-cli moox-factor-engine)
+    ;;
+  factor-engine)
+    linux_cgo_binaries=(moox-factor-engine)
+    ;;
+  *)
+    die "unsupported linux CGO build target: ${linux_cgo_target}"
+    ;;
+esac
+linux_cgo_target_q="$(shell_quote "${linux_cgo_target}")"
 
 rsync_ssh="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o UserKnownHostsFile=${known_hosts_q}"
 ssh_args=(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o "UserKnownHostsFile=${KNOWN_HOSTS_PATH}")
@@ -134,13 +150,13 @@ run_rsync -az --delete \
   -e "${rsync_ssh}" \
   "${ROOT}/" "${remote}:${REMOTE_ROOT}/"
 
-echo "==> build storage on ${name} (${version})"
+echo "==> build ${linux_cgo_target} on ${name} (${version})"
 run_ssh "${remote}" \
-  "cd ${remote_root_q} && if ! command -v go >/dev/null 2>&1; then for go_bin in \"\$HOME\"/.local/go*/bin; do if [ -x \"\$go_bin/go\" ]; then export PATH=\"\$go_bin:\$PATH\"; break; fi; done; fi && command -v go >/dev/null 2>&1 || { echo 'Go is not installed on storage build host' >&2; exit 1; } && GOFLAGS=-buildvcs=false VERSION=${version_q} GIT_COMMIT=${git_commit_q} CGO_ENABLED=1 TARGET_GOOS=linux TARGET_GOARCH=${target_goarch_q} bash ./scripts/build/build.sh storage"
+  "cd ${remote_root_q} && if ! command -v go >/dev/null 2>&1; then for go_bin in \"\$HOME\"/.local/go*/bin; do if [ -x \"\$go_bin/go\" ]; then export PATH=\"\$go_bin:\$PATH\"; break; fi; done; fi && command -v go >/dev/null 2>&1 || { echo 'Go is not installed on storage build host' >&2; exit 1; } && GOFLAGS=-buildvcs=false VERSION=${version_q} GIT_COMMIT=${git_commit_q} CGO_ENABLED=1 TARGET_GOOS=linux TARGET_GOARCH=${target_goarch_q} bash ./scripts/build/build.sh ${linux_cgo_target_q}"
 
 mkdir -p "${BIN_DIR}"
-echo "==> download Linux Storage binaries from ${name}"
-for binary in moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli; do
+echo "==> download Linux ${linux_cgo_target} binaries from ${name}"
+for binary in "${linux_cgo_binaries[@]}"; do
   # Use scp for the large remote artifacts. The rsync daemon on some build
   # hosts leaves a remote single-file pull open after the payload is complete;
   # scp closes the SSH channel reliably and is sufficient for these immutable
@@ -177,8 +193,8 @@ for binary in moox-storage-primary moox-storage-node moox-storage-view moox-stor
   mv "${local_tmp}" "${BIN_DIR}/${binary}"
 done
 
-for binary in moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli; do
+for binary in "${linux_cgo_binaries[@]}"; do
   [[ -s "${BIN_DIR}/${binary}" ]] || die "remote build did not return ${binary}"
 done
 
-echo "==> Linux Storage binaries built on ${name} and downloaded to ${BIN_DIR}"
+echo "==> Linux ${linux_cgo_target} binaries built on ${name} and downloaded to ${BIN_DIR}"

@@ -57,7 +57,7 @@ func TestCollectTencentHostsAndSCFTargets(t *testing.T) {
 	assert.Equal(t, 33, regions["ap-chengdu"].FunctionCount)
 }
 
-func TestBuildPlanUsesCCNForMixedLighthouseAndCVM(t *testing.T) {
+func TestBuildPlanDoesNotCreatePrivateNetwork(t *testing.T) {
 	plan := BuildPlan(Options{CCNName: DefaultCCNName}, []ResolvedHost{
 		{HostTarget: HostTarget{Name: "control", Address: "106.53.107.122", Roles: []string{"control"}}, Instance: tencent.CloudInstance{Kind: tencent.KindLighthouse, Region: "ap-guangzhou", InstanceID: "lhins-1", PrivateIPs: []string{"10.0.1.12"}}, CidrBlock: "10.0.0.0/16"},
 		{HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"storage"}}, Instance: tencent.CloudInstance{Kind: tencent.KindCVM, Region: "ap-hongkong", InstanceID: "ins-1", VpcID: "vpc-storage", SubnetID: "subnet-storage", PrivateIPs: []string{"10.1.2.8"}}, CidrBlock: "10.1.0.0/16"},
@@ -65,53 +65,52 @@ func TestBuildPlanUsesCCNForMixedLighthouseAndCVM(t *testing.T) {
 		{Region: "ap-hongkong", Namespace: "default", Prefixes: []string{"moox-fetcher-crypto-binance"}, PublicNetStatus: "ENABLE"},
 		{Region: "ap-singapore", Namespace: "default", Prefixes: []string{"moox-fetcher-crypto-binance"}, PublicNetStatus: "ENABLE"},
 	}, []string{"11003"})
-	require.True(t, plan.NeedCCN)
-	require.True(t, plan.NeedOverseasCCN)
+	require.False(t, plan.NeedCCN)
+	require.False(t, plan.NeedOverseasCCN)
 	require.False(t, plan.NeedMainlandCCN)
-	require.Equal(t, DefaultCCNName+"-global", plan.OverseasCCN)
-	require.Equal(t, "10.1.2.8", plan.Recommended.StoragePrivateIP)
-	require.Equal(t, "ip://10.1.2.8:11003", plan.Recommended.SCFGatewayTarget)
-	var hk, sg PlannedSCFBind
-	for _, bind := range plan.SCF {
-		if bind.Region == "ap-hongkong" {
-			hk = bind
-		}
-		if bind.Region == "ap-singapore" {
-			sg = bind
-		}
-	}
-	assert.Equal(t, "vpc-storage", hk.VpcID)
-	assert.Equal(t, "subnet-storage", hk.SubnetID)
-	assert.Equal(t, "moox-scf-ap-singapore", sg.VpcName)
-	assert.NotEmpty(t, sg.SCFTarget.Region)
-	require.Len(t, plan.VPCs, 1)
-	assert.Equal(t, "ap-singapore", plan.VPCs[0].Region)
-	assert.Equal(t, "overseas", plan.VPCs[0].Area)
+	require.Empty(t, plan.VPCs)
+	require.Empty(t, plan.SCF)
+	require.Equal(t, "146.56.196.204", plan.Recommended.StoragePublicIP)
+	require.Equal(t, "ip://146.56.196.204:11003", plan.Recommended.SCFGatewayTarget)
+	require.Contains(t, strings.Join(plan.Recommended.Notes, "\n"), "公网")
 }
 
-func TestBuildPlanSplitsMainlandAndOverseasCCN(t *testing.T) {
-	plan := BuildPlan(Options{}, []ResolvedHost{
+func TestBuildPlanRestoreKeepsSCFWithoutVPC(t *testing.T) {
+	plan := BuildPlan(Options{RestoreSCFPublic: true}, []ResolvedHost{
 		{HostTarget: HostTarget{Name: "control", Address: "106.53.107.122", Roles: []string{"control"}}, Instance: tencent.CloudInstance{Kind: tencent.KindLighthouse, Region: "ap-guangzhou", PrivateIPs: []string{"10.1.12.13"}}, CidrBlock: "10.1.0.0/16"},
 		{HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"storage"}}, Instance: tencent.CloudInstance{Kind: tencent.KindCVM, Region: "ap-nanjing", VpcID: "vpc-storage", SubnetID: "subnet-storage", PrivateIPs: []string{"10.206.0.5"}}, CidrBlock: "10.206.0.0/16"},
 	}, []SCFTarget{
 		{Region: "ap-guangzhou", Namespace: "default", Prefixes: []string{"moox-fetcher-stockcn"}},
 		{Region: "ap-singapore", Namespace: "default", Prefixes: []string{"moox-fetcher-crypto-binance"}},
 	}, []string{"11003"})
-	require.True(t, plan.NeedMainlandCCN)
-	require.False(t, plan.NeedOverseasCCN, "a single overseas SCF vpc does not need its own ccn")
+	require.False(t, plan.NeedCCN)
+	require.Empty(t, plan.VPCs)
 	assert.Equal(t, "mainland", plan.Recommended.StorageArea)
-	assert.Contains(t, plan.CIDRsByArea["mainland"], "10.206.0.0/16")
-	var gz, sg PlannedSCFBind
+	require.Len(t, plan.SCF, 2)
 	for _, bind := range plan.SCF {
-		if bind.Region == "ap-guangzhou" {
-			gz = bind
-		}
-		if bind.Region == "ap-singapore" {
-			sg = bind
-		}
+		assert.Empty(t, bind.VpcID)
+		assert.Empty(t, bind.SubnetID)
 	}
-	assert.Equal(t, "mainland", gz.Area)
-	assert.Equal(t, "overseas", sg.Area)
+}
+
+func TestApplyDryRunRestoreListsFunctions(t *testing.T) {
+	fake := &fakeCloud{
+		functions: []tencent.SCFFunction{
+			{Region: "ap-shanghai", Namespace: "default", FunctionName: "moox-fetcher-stockcn-ap-shanghai-0"},
+			{Region: "ap-shanghai", Namespace: "default", FunctionName: "moox-fetcher-stockcn-ap-shanghai-1"},
+		},
+	}
+	plan := BuildPlan(Options{RestoreSCFPublic: true}, []ResolvedHost{
+		{HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"storage"}}, Instance: tencent.CloudInstance{Kind: tencent.KindCVM, Region: "ap-nanjing", PrivateIPs: []string{"10.206.0.5"}}, CidrBlock: "10.206.0.0/16"},
+	}, []SCFTarget{{Region: "ap-shanghai", Namespace: "default", Prefixes: []string{"moox-fetcher-stockcn"}, PublicNetStatus: "ENABLE"}}, []string{"11003"})
+	result, err := Apply(context.Background(), fake, Options{DryRun: true, RestoreSCFPublic: true, HomeRegion: "ap-guangzhou"}, plan, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "dry_run", result.Status)
+	assert.Zero(t, fake.updateSCF)
+	assert.Zero(t, fake.detachVPC)
+	require.Len(t, result.Actions, 2)
+	assert.Equal(t, "scf-restore-public", result.Actions[1].Kind)
+	assert.Contains(t, result.Actions[1].Detail, "functions=2")
 }
 
 func TestApplyDryRunDoesNotMutateCloud(t *testing.T) {
@@ -127,40 +126,40 @@ func TestApplyDryRunDoesNotMutateCloud(t *testing.T) {
 	assert.Zero(t, fake.updateSCF)
 }
 
-func TestApplyAcceptsLighthousePendingCCN(t *testing.T) {
-	fake := &fakeCloud{
-		lighthouse: []tencent.CCNAttachment{{
-			CcnID: "ccn-1", InstanceID: "vpc-lh", InstanceRegion: "ap-guangzhou",
-			InstanceType: "VPC", CidrBlock: "10.1.0.0/16", CidrBlocks: []string{"10.1.0.0/16"},
-			State: "PENDING",
-		}},
-	}
+func TestApplyDoesNotCreateCCN(t *testing.T) {
+	fake := &fakeCloud{}
 	plan := BuildPlan(Options{}, []ResolvedHost{
 		{HostTarget: HostTarget{Name: "control", Address: "106.53.107.122", Roles: []string{"control"}}, Instance: tencent.CloudInstance{Kind: tencent.KindLighthouse, Region: "ap-guangzhou", PrivateIPs: []string{"10.1.12.13"}}, CidrBlock: "10.1.0.0/16"},
 		{HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"storage"}}, Instance: tencent.CloudInstance{Kind: tencent.KindCVM, Region: "ap-nanjing", VpcID: "vpc-storage", SecurityGroupIDs: []string{"sg-1"}, PrivateIPs: []string{"10.206.0.5"}}, CidrBlock: "10.206.0.0/16"},
 	}, nil, []string{"11003"})
 	result, err := Apply(context.Background(), fake, Options{HomeRegion: "ap-guangzhou"}, plan, nil)
 	require.NoError(t, err)
-	assert.Equal(t, 1, fake.acceptCCN)
-	assert.Contains(t, result.Plan.CIDRsByArea["mainland"], "10.1.0.0/16")
+	assert.Equal(t, "public_only", result.Status)
+	assert.Zero(t, fake.ensureCCN)
+	assert.Zero(t, fake.attachVPC)
+	assert.Zero(t, fake.acceptCCN)
+	assert.Zero(t, fake.updateSCF)
 }
 
 func TestApplyRetriesSCFUpdating(t *testing.T) {
 	fake := &fakeCloud{
 		updateErrs: 1,
-		vpcs:       map[string]tencent.VpcInfo{"ap-shanghai/moox-scf-ap-shanghai": {VpcID: "vpc-scf", CidrBlock: "10.81.0.0/16", Region: "ap-shanghai"}},
-		subnets:    map[string]tencent.SubnetInfo{"ap-shanghai/vpc-scf/moox-scf-ap-shanghai-a": {SubnetID: "subnet-scf", VpcID: "vpc-scf"}},
-		zones:      map[string][]string{"ap-shanghai": {"ap-shanghai-1"}},
 		functions:  []tencent.SCFFunction{{Region: "ap-shanghai", Namespace: "default", FunctionName: "moox-fetcher-stockcn-ap-shanghai-0"}},
-		function:   tencent.SCFFunction{Namespace: "default", FunctionName: "moox-fetcher-stockcn-ap-shanghai-0"},
+		function: tencent.SCFFunction{
+			Namespace: "default", FunctionName: "moox-fetcher-stockcn-ap-shanghai-0",
+			VpcID: "vpc-scf", SubnetID: "subnet-scf",
+			Environment: map[string]string{"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://10.206.0.5:11003"},
+		},
 	}
-	plan := BuildPlan(Options{}, []ResolvedHost{
+	plan := BuildPlan(Options{RestoreSCFPublic: true}, []ResolvedHost{
 		{HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"storage"}}, Instance: tencent.CloudInstance{Kind: tencent.KindCVM, Region: "ap-nanjing", InstanceID: "ins-1", VpcID: "vpc-storage", SecurityGroupIDs: []string{"sg-1"}, PrivateIPs: []string{"10.206.0.5"}}, CidrBlock: "10.206.0.0/16"},
 	}, []SCFTarget{{Region: "ap-shanghai", Namespace: "default", Prefixes: []string{"moox-fetcher-stockcn"}, PublicNetStatus: "ENABLE"}}, []string{"11003"})
-	result, err := Apply(context.Background(), fake, Options{HomeRegion: "ap-guangzhou"}, plan, nil)
+	result, err := Apply(context.Background(), fake, Options{HomeRegion: "ap-guangzhou", RestoreSCFPublic: true, UnbindSCFVPC: true}, plan, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.SCFUpdated)
 	assert.Equal(t, 2, fake.updateSCF)
+	assert.Equal(t, "ip://146.56.196.204:11003", fake.lastEnv["MOOX_STORAGE_RPC_GATEWAY_TARGET"])
+	assert.Empty(t, fake.lastVPC)
 }
 
 func TestIsRetryableSCFUpdate(t *testing.T) {
@@ -168,29 +167,102 @@ func TestIsRetryableSCFUpdate(t *testing.T) {
 	assert.False(t, isRetryableSCFUpdate(fmt.Errorf("InvalidParameterValue: FunctionName")))
 }
 
-func TestApplyBindsSCFAndCreatesCCN(t *testing.T) {
+func TestApplyRestoresPublicGatewayAndUnbindsVPC(t *testing.T) {
 	fake := &fakeCloud{
-		vpcs:      map[string]tencent.VpcInfo{"ap-singapore/moox-scf-ap-singapore": {VpcID: "vpc-scf", CidrBlock: "10.85.0.0/16", Region: "ap-singapore"}},
-		subnets:   map[string]tencent.SubnetInfo{"ap-singapore/vpc-scf/moox-scf-ap-singapore-a": {SubnetID: "subnet-scf", VpcID: "vpc-scf"}},
-		zones:     map[string][]string{"ap-singapore": {"ap-singapore-1"}},
-		functions: []tencent.SCFFunction{{Region: "ap-singapore", Namespace: "default", FunctionName: "moox-fetcher-crypto-binance-ap-singapore-0"}},
-		function:  tencent.SCFFunction{Namespace: "default", FunctionName: "moox-fetcher-crypto-binance-ap-singapore-0", Environment: map[string]string{"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://146.56.196.204:11003"}},
+		functions: []tencent.SCFFunction{{Region: "ap-shanghai", Namespace: "default", FunctionName: "moox-fetcher-stockcn-ap-shanghai-0"}},
+		function: tencent.SCFFunction{
+			Namespace: "default", FunctionName: "moox-fetcher-stockcn-ap-shanghai-0",
+			VpcID: "vpc-scf", SubnetID: "subnet-scf", Region: "ap-shanghai",
+			Environment: map[string]string{"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://10.206.0.5:11003"},
+		},
 	}
-	plan := BuildPlan(Options{UpdateSCFGateway: true}, []ResolvedHost{
-		{HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"storage"}}, Instance: tencent.CloudInstance{Kind: tencent.KindCVM, Region: "ap-hongkong", InstanceID: "ins-1", VpcID: "vpc-storage", SecurityGroupIDs: []string{"sg-1"}, PrivateIPs: []string{"10.1.2.8"}}, CidrBlock: "10.1.0.0/16"},
-	}, []SCFTarget{{Region: "ap-singapore", Namespace: "default", Prefixes: []string{"moox-fetcher-crypto-binance"}, PublicNetStatus: "ENABLE"}}, []string{"11003"})
-	result, err := Apply(context.Background(), fake, Options{HomeRegion: "ap-guangzhou", UpdateSCFGateway: true}, plan, nil)
+	plan := BuildPlan(Options{RestoreSCFPublic: true}, []ResolvedHost{
+		{HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"storage"}}, Instance: tencent.CloudInstance{Kind: tencent.KindCVM, Region: "ap-nanjing", InstanceID: "ins-1", VpcID: "vpc-storage", PrivateIPs: []string{"10.206.0.5"}}, CidrBlock: "10.206.0.0/16"},
+	}, []SCFTarget{{Region: "ap-shanghai", Namespace: "default", Prefixes: []string{"moox-fetcher-stockcn"}, PublicNetStatus: "ENABLE"}}, []string{"11003"})
+	require.Empty(t, plan.VPCs)
+	result, err := Apply(context.Background(), fake, Options{HomeRegion: "ap-guangzhou", RestoreSCFPublic: true, UnbindSCFVPC: true}, plan, nil)
 	require.NoError(t, err)
-	assert.Equal(t, 1, fake.ensureCCN)
-	assert.Equal(t, 2, fake.attachVPC)
+	assert.Zero(t, fake.ensureCCN)
+	assert.Equal(t, "scf_public_restored", result.Status)
 	assert.Equal(t, 1, result.SCFUpdated)
-	require.NotEmpty(t, fake.lastEnv)
-	assert.Equal(t, "ip://10.1.2.8:11003", fake.lastEnv["MOOX_STORAGE_RPC_GATEWAY_TARGET"])
+	assert.Equal(t, "ip://146.56.196.204:11003", fake.lastEnv["MOOX_STORAGE_RPC_GATEWAY_TARGET"])
+	assert.Empty(t, fake.lastVPC)
+	assert.Empty(t, fake.lastSubnet)
+	assert.Equal(t, 1, fake.detachVPC)
+	require.NotEmpty(t, result.Actions)
+	assert.Equal(t, "scf-restore-public", result.Actions[0].Kind)
+	assert.Equal(t, "ccn-detach", result.Actions[len(result.Actions)-1].Kind)
+}
+
+func TestApplyRestoreDoesNotDetachHostVPC(t *testing.T) {
+	fake := &fakeCloud{
+		functions: []tencent.SCFFunction{{Region: "ap-hongkong", Namespace: "default", FunctionName: "moox-fetcher-crypto-binance-ap-hongkong-0"}},
+		function: tencent.SCFFunction{
+			Namespace: "default", FunctionName: "moox-fetcher-crypto-binance-ap-hongkong-0",
+			VpcID: "vpc-compute", SubnetID: "subnet-compute", Region: "ap-hongkong",
+			Environment: map[string]string{"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://10.206.0.5:11003"},
+		},
+	}
+	plan := BuildPlan(Options{RestoreSCFPublic: true}, []ResolvedHost{
+		{HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"storage"}}, Instance: tencent.CloudInstance{Kind: tencent.KindCVM, Region: "ap-nanjing", InstanceID: "ins-storage", VpcID: "vpc-storage", PrivateIPs: []string{"10.206.0.5"}}, CidrBlock: "10.206.0.0/16"},
+		{HostTarget: HostTarget{Name: "compute-1", Address: "43.132.204.177", Roles: []string{"compute-1"}}, Instance: tencent.CloudInstance{Kind: tencent.KindCVM, Region: "ap-hongkong", InstanceID: "ins-compute", VpcID: "vpc-compute", PrivateIPs: []string{"172.19.32.13"}}, CidrBlock: "172.19.32.0/24"},
+	}, []SCFTarget{{Region: "ap-hongkong", Namespace: "default", Prefixes: []string{"moox-fetcher-crypto-binance"}, PublicNetStatus: "ENABLE"}}, []string{"11003"})
+	result, err := Apply(context.Background(), fake, Options{HomeRegion: "ap-guangzhou", RestoreSCFPublic: true, UnbindSCFVPC: true}, plan, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.SCFUpdated)
+	assert.Empty(t, fake.lastVPC)
+	assert.Zero(t, fake.detachVPC)
+	var skipped bool
+	for _, action := range result.Actions {
+		if action.Kind == "ccn-detach" && action.Status == "skipped" {
+			skipped = true
+		}
+	}
+	assert.True(t, skipped)
+}
+
+func TestCollectSCFRestoreTargetsIncludesIdleAndBlacklistedRegions(t *testing.T) {
+	manifest := setupconfig.Manifest{
+		SCFFetcher: setupconfig.SCFFetcher{
+			Enabled: true,
+			Spaces: []setupconfig.SCFFetcherSpace{
+				{
+					SpaceID: "crypto", FunctionPrefix: "moox-fetcher-crypto-binance",
+					PublicNetStatus: "ENABLE", RegionBlacklist: []string{"ap-guangzhou"},
+					Regions: []setupconfig.SCFFetcherRegion{
+						{Region: "ap-hongkong", Enabled: true, FunctionCount: 40},
+						{Region: "ap-guangzhou", Enabled: true, FunctionCount: 11},
+						{Region: "ap-shanghai", Enabled: false, FunctionCount: 0},
+					},
+				},
+			},
+		},
+	}
+	active := CollectSCFTargets(manifest)
+	regions := map[string]struct{}{}
+	for _, item := range active {
+		regions[item.Region] = struct{}{}
+	}
+	_, hasGZ := regions["ap-guangzhou"]
+	_, hasSH := regions["ap-shanghai"]
+	assert.False(t, hasGZ)
+	assert.False(t, hasSH)
+	assert.Contains(t, regions, "ap-hongkong")
+
+	restore := CollectSCFRestoreTargets(manifest)
+	restoreRegions := map[string]struct{}{}
+	for _, item := range restore {
+		restoreRegions[item.Region] = struct{}{}
+	}
+	assert.Contains(t, restoreRegions, "ap-guangzhou")
+	assert.Contains(t, restoreRegions, "ap-shanghai")
+	assert.Contains(t, restoreRegions, "ap-hongkong")
 }
 
 type fakeCloud struct {
 	ensureCCN  int
 	attachVPC  int
+	detachVPC  int
 	acceptCCN  int
 	updateSCF  int
 	updateErrs int
@@ -200,6 +272,8 @@ type fakeCloud struct {
 	functions  []tencent.SCFFunction
 	function   tencent.SCFFunction
 	lastEnv    map[string]string
+	lastVPC    string
+	lastSubnet string
 	lighthouse []tencent.CCNAttachment
 }
 
@@ -218,6 +292,13 @@ func (f *fakeCloud) ListCCNAttachments(context.Context, string, string) ([]tence
 }
 func (f *fakeCloud) AttachVPC(context.Context, string, string, string, string) error {
 	f.attachVPC++
+	return nil
+}
+func (f *fakeCloud) FindCCN(context.Context, string, string) (tencent.CCNInfo, bool, error) {
+	return tencent.CCNInfo{CcnID: "ccn-1", Name: DefaultCCNName}, true, nil
+}
+func (f *fakeCloud) DetachVPC(context.Context, string, string, string, string) error {
+	f.detachVPC++
 	return nil
 }
 func (f *fakeCloud) AcceptCCN(context.Context, string, string, string, string, string) error {
@@ -258,8 +339,10 @@ func (f *fakeCloud) ListSCF(context.Context, string, string, []string) ([]tencen
 func (f *fakeCloud) GetSCF(context.Context, string, string, string) (tencent.SCFFunction, error) {
 	return f.function, nil
 }
-func (f *fakeCloud) UpdateSCF(_ context.Context, _, _, _, _, _, _ string, env map[string]string) error {
+func (f *fakeCloud) UpdateSCF(_ context.Context, _, _, _, vpcID, subnetID, _ string, env map[string]string) error {
 	f.updateSCF++
+	f.lastVPC = vpcID
+	f.lastSubnet = subnetID
 	f.lastEnv = env
 	if f.updateErrs > 0 {
 		f.updateErrs--
@@ -268,7 +351,7 @@ func (f *fakeCloud) UpdateSCF(_ context.Context, _, _, _, _, _, _ string, env ma
 	return nil
 }
 
-func TestPlannedProbesMainlandAndOverseas(t *testing.T) {
+func TestPlannedProbesUsePublicIPs(t *testing.T) {
 	hosts := []ResolvedHost{
 		{HostTarget: HostTarget{Name: "control", Address: "106.53.107.122", Roles: []string{"control"}}, Instance: tencent.CloudInstance{PrivateIPs: []string{"10.1.12.13"}}, Area: "mainland"},
 		{HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"storage"}}, Instance: tencent.CloudInstance{PrivateIPs: []string{"10.206.0.5"}}, Area: "mainland"},
@@ -286,25 +369,14 @@ func TestPlannedProbesMainlandAndOverseas(t *testing.T) {
 		}
 	}
 	assert.Equal(t, "open", controlToStorage.Expect)
-	assert.True(t, controlToStorage.SameArea)
-	assert.Equal(t, "closed", computeToStorage.Expect)
-	assert.False(t, computeToStorage.SameArea)
-	assert.NoError(t, MainlandProbesFailed([]Probe{{SameArea: true, Expect: "open", Status: "open"}}))
-	assert.Error(t, MainlandProbesFailed([]Probe{{From: "control", To: "storage", Port: "11003", SameArea: true, Expect: "open", Status: "closed"}}))
+	assert.Equal(t, "146.56.196.204", controlToStorage.PublicIP)
+	assert.Equal(t, "open", computeToStorage.Expect)
+	assert.Equal(t, "146.56.196.204", computeToStorage.PublicIP)
+	assert.NoError(t, PublicProbesFailed([]Probe{{Expect: "open", Status: "open"}}))
+	assert.Error(t, PublicProbesFailed([]Probe{{From: "control", To: "storage", Port: "11003", Expect: "open", Status: "closed"}}))
 }
 
-func TestCCNAcceptIdentityForcesVPC(t *testing.T) {
-	typ, id, skip := ccnAcceptIdentity(tencent.CCNAttachment{InstanceID: "lhins-a7yikq89", InstanceType: "LIGHTHOUSE"})
-	assert.True(t, skip)
-	assert.Empty(t, typ)
-	assert.Empty(t, id)
-	typ, id, skip = ccnAcceptIdentity(tencent.CCNAttachment{InstanceID: "vpc-lgg9zeq5", InstanceType: "LIGHTHOUSE"})
-	assert.False(t, skip)
-	assert.Equal(t, "VPC", typ)
-	assert.Equal(t, "vpc-lgg9zeq5", id)
-}
-
-func TestReplacePublicIP(t *testing.T) {
-	assert.Equal(t, "ip://10.1.2.8:11003", replacePublicIP("ip://146.56.196.204:11003", "146.56.196.204", "10.1.2.8"))
+func TestReplacePrivateIPWithPublic(t *testing.T) {
+	assert.Equal(t, "ip://146.56.196.204:11003", replaceIP("ip://10.1.2.8:11003", "10.1.2.8", "146.56.196.204"))
 	assert.True(t, strings.Contains(PrivateServicePorts(4222)[0], "4222"))
 }

@@ -7,10 +7,32 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
+
+// MaxTimeSeriesLookback matches the Storage single-series window RPC bound.
+const MaxTimeSeriesLookback = storagepb.SeriesWindowMaxRowsPerSubject
+
+func ValidateFactorReadLimit(factor FactorDef) error {
+	if factor.FactorType == FactorTypeTimeSeries && factor.LookbackPeriods > MaxTimeSeriesLookback {
+		return fmt.Errorf("timeseries lookback_periods must not exceed %d", MaxTimeSeriesLookback)
+	}
+	columns := make(map[string]struct{}, len(factor.InputColumns))
+	for _, column := range factor.InputColumns {
+		columns[strings.TrimSpace(column)] = struct{}{}
+	}
+	if factor.FactorType == FactorTypeTimeSeries && storagepb.SeriesWindowSubjectLimit(max(1, factor.LookbackPeriods), len(columns)) == 0 {
+		return fmt.Errorf("timeseries lookback and input columns exceed the single-subject cell budget")
+	}
+	return nil
+}
 
 // NormalizeFactorDefinition validates and canonicalizes a factor definition.
 func NormalizeFactorDefinition(factor FactorDef) (FactorDef, error) {
+	if err := ValidateFactorType(factor.FactorType); err != nil {
+		return FactorDef{}, err
+	}
 	factor.FactorID = strings.TrimSpace(factor.FactorID)
 	factor.Name = strings.TrimSpace(factor.Name)
 	factor.SourceCode = strings.TrimSpace(factor.SourceCode)
@@ -42,7 +64,18 @@ func NormalizeFactorDefinition(factor FactorDef) (FactorDef, error) {
 	if factor.LookbackPeriods < 1 {
 		return FactorDef{}, fmt.Errorf("lookback_periods must be at least 1")
 	}
+	if err := ValidateFactorReadLimit(factor); err != nil {
+		return FactorDef{}, err
+	}
 	return factor, nil
+}
+
+// ValidateFactorType rejects missing or unsupported execution types.
+func ValidateFactorType(factorType string) error {
+	if factorType != FactorTypeTimeSeries && factorType != FactorTypeCrossSection {
+		return fmt.Errorf("factor_type must be %q or %q", FactorTypeTimeSeries, FactorTypeCrossSection)
+	}
+	return nil
 }
 
 func normalizeColumns(field string, values []string) ([]string, error) {

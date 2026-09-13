@@ -16,7 +16,7 @@ func TestValidateDatasetEventRejectsInvalidEnvelopeAndPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := registry.Encode(events.DatasetRowsUpserted, &storagepb.DatasetRowsUpserted{
+	encoded, err := registry.Encode(events.DatasetRowsUpserted, &storagepb.DatasetRowsUpserted{SourceNodeId: "node", SourceStoreId: "store", SourceSequence: 1,
 		SpaceId: "space", DatasetId: "dataset",
 		Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}},
 	}, events.PublishOptions{EventID: "event-1", OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "dataset"})
@@ -38,7 +38,7 @@ func TestValidateDatasetEventRejectsInvalidEnvelopeAndPayload(t *testing.T) {
 		{name: "empty payload", mutate: func(message *eventpb.EventMessage) { message.Payload = nil }},
 		{name: "invalid occurred at", mutate: func(message *eventpb.EventMessage) { message.OccurredAt = timestamppb.New(time.Unix(1<<62, 0)) }},
 		{name: "payload identity mismatch", mutate: func(message *eventpb.EventMessage) {
-			message.Payload, _ = proto.Marshal(&storagepb.DatasetRowsUpserted{SpaceId: "other", DatasetId: "dataset", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "other", DatasetId: "dataset", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}}})
+			message.Payload, _ = proto.Marshal(&storagepb.DatasetRowsUpserted{SourceNodeId: "node", SourceStoreId: "store", SourceSequence: 1, SpaceId: "other", DatasetId: "dataset", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "other", DatasetId: "dataset", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}}})
 		}},
 	}
 	for _, tt := range tests {

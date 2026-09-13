@@ -219,6 +219,63 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	}
 }
 
+func TestFactorResultWritesAllowEngineIdentity(t *testing.T) {
+	wrote := 0
+	node := &recordingMarkerNode{recordingNode: &recordingNode{
+		write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+			wrote++
+			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
+		},
+	}}
+	svc, err := New(Options{
+		Node: node,
+		Snapshot: func() metadata.RequestSnapshot {
+			return factorResultSnapshot{}
+		},
+	})
+	require.NoError(t, err)
+	row := &pb.RowFieldUpsert{
+		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "factor_result", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "row", Version: "1"}}},
+		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}},
+	}
+	for _, appID := range []string{"factor", "moox-factor", "moox-factor-engine"} {
+		wrote = 0
+		upsert, upsertErr := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+			AuthInfo: &pb.AuthInfo{AppId: appID}, Rows: []*pb.RowFieldUpsert{row},
+		})
+		require.NoError(t, upsertErr, appID)
+		require.Equal(t, pb.ErrorCode_SUCCESS, upsert.GetRetInfo().GetCode(), appID)
+		require.Equal(t, 1, wrote, appID)
+		computed, markerErr := svc.ReportFactorPeriodComputed(context.Background(), &pb.ReportFactorPeriodComputedReq{
+			AuthInfo: &pb.AuthInfo{AppId: appID}, SpaceId: "space",
+			Marker: &pb.FactorPeriodComputedMarker{ResultDatasetId: "factor_result"},
+		})
+		require.NoError(t, markerErr, appID)
+		require.Equal(t, pb.ErrorCode_SUCCESS, computed.GetRetInfo().GetCode(), appID)
+	}
+	denied, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "collector"}, Rows: []*pb.RowFieldUpsert{row},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NO_PERMISSION, denied.GetRetInfo().GetCode())
+	require.Contains(t, denied.GetRetInfo().GetMsg(), "writable only by Factor")
+}
+
+type factorResultSnapshot struct{}
+
+func (factorResultSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
+	return &pb.Dataset{
+		SpaceId: spaceID, DatasetId: datasetID,
+		Attributes: map[string]string{"dataset_role": "factor_result"},
+	}, true
+}
+
+func (factorResultSnapshot) GetDataNode(string) (*pb.DataNode, bool) { return nil, false }
+
+func (factorResultSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	return nil, &pb.PageResult{}, nil
+}
+
 func TestPrimaryRangeReadsRequireCallerAuthorization(t *testing.T) {
 	svc, err := New(Options{
 		Node: &recordingNode{

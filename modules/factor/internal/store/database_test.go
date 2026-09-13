@@ -150,13 +150,13 @@ func TestApplySchemaRejectsLookbackRowsDatabase(t *testing.T) {
 	require.ErrorContains(t, err, "fresh database")
 }
 
-func TestApplySchemaMigratesPreviousDatasetBindingShape(t *testing.T) {
+func TestApplySchemaRejectsPreviousDatasetBindingShape(t *testing.T) {
 	db, err := Open(&Options{Path: filepath.Join(t.TempDir(), "factor.db")})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.db.Exec(`
 		CREATE TABLE t_factor_defs (
-			c_factor_id TEXT NOT NULL PRIMARY KEY, c_name TEXT NOT NULL, c_source_code TEXT NOT NULL,
+			c_factor_id TEXT NOT NULL PRIMARY KEY, c_name TEXT NOT NULL, c_factor_type TEXT NOT NULL DEFAULT 'timeseries', c_source_code TEXT NOT NULL,
 			c_source_hash TEXT NOT NULL, c_source_path TEXT NOT NULL DEFAULT '', c_input_columns_json TEXT NOT NULL,
 			c_outputs_json TEXT NOT NULL, c_params_json TEXT NOT NULL DEFAULT '{}', c_lookback_periods INTEGER NOT NULL,
 			c_status TEXT NOT NULL DEFAULT 'disabled', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -174,10 +174,5 @@ func TestApplySchemaMigratesPreviousDatasetBindingShape(t *testing.T) {
 		INSERT INTO t_factor_bindings(c_binding_id,c_factor_id,c_space_id,c_source_dataset,c_freq,c_subjects_json,c_target_dataset)
 		VALUES ('binding','factor','space','prices','1m','[]','factor-results');
 	`).Error)
-	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
-	var sourceView, resultView, status string
-	require.NoError(t, db.db.Raw("SELECT c_source_view_id, c_result_view_id, c_status FROM t_factor_bindings WHERE c_binding_id = 'binding'").Row().Scan(&sourceView, &resultView, &status))
-	require.Equal(t, "prices", sourceView)
-	require.Equal(t, "factor-results", resultView)
-	require.Equal(t, "disabled", status)
+	require.ErrorContains(t, db.ApplySchema(factorschema.AllSQL()), "fresh database")
 }

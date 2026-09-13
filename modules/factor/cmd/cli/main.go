@@ -21,6 +21,7 @@ type cliConfig struct {
 	File              string
 	CatalogPath       string
 	FactorID          string
+	FactorType        string
 	InputColumns      []string
 	Outputs           []string
 	ParamsJSON        string
@@ -40,6 +41,7 @@ type cliConfig struct {
 	CredentialFile    string
 	EventBusURL       string
 	PackageRoot       string
+	Service           string
 	Timeout           time.Duration
 	Yes               bool
 	DryRun            bool
@@ -96,6 +98,7 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.StringVar(&cfg.FactorsDir, "factors-dir", cfg.FactorsDir, "factor source directory")
 		fs.StringVar(&cfg.File, "file", "", "single Python factor file")
 		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id")
+		fs.StringVar(&cfg.FactorType, "factor-type", "", "required: timeseries or cross_section")
 		fs.StringVar(&inputColumns, "input-columns", "", "comma-separated input columns")
 		fs.StringVar(&outputs, "outputs", "", "comma-separated output columns")
 		fs.StringVar(&cfg.ParamsJSON, "params-json", "{}", "factor parameter JSON object")
@@ -154,15 +157,17 @@ func parseArgs(args []string) (cliConfig, error) {
 		cfg.FactorIDs = parseStringCSV(factors)
 	case "clear-queue":
 		cfg.Stream = "MOOX_STORAGE"
-		cfg.Consumer = "factor_view_ready_v1"
+		cfg.Consumer = "factor_source_subject"
 		cfg.Timeout = 2 * time.Minute
 		cfg.Restart = true
+		cfg.Service = "factor-engine"
 		fs := newFlagSet("clear-queue")
 		fs.StringVar(&cfg.Stream, "stream", cfg.Stream, "JetStream stream")
 		fs.StringVar(&cfg.Consumer, "consumer", cfg.Consumer, "durable Factor consumer")
 		fs.StringVar(&cfg.CredentialFile, "credential-file", "", "NATS admin credential file")
 		fs.StringVar(&cfg.EventBusURL, "eventbus-url", "", "NATS URL override")
-		fs.StringVar(&cfg.PackageRoot, "package-root", "", "MooX deployment root containing restart.sh")
+		fs.StringVar(&cfg.PackageRoot, "package-root", "", "engine or control deployment root containing start.sh")
+		fs.StringVar(&cfg.Service, "service", cfg.Service, "lifecycle service name passed to start.sh/stop.sh")
 		fs.DurationVar(&cfg.Timeout, "timeout", cfg.Timeout, "overall operation timeout")
 		fs.BoolVar(&cfg.Yes, "yes", false, "confirm clearing the durable consumer")
 		fs.BoolVar(&cfg.DryRun, "dry-run", false, "validate the operation without changing the consumer or restarting Factor")
