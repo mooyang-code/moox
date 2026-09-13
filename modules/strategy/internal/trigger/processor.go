@@ -55,6 +55,9 @@ type PeriodReady struct {
 	// A strategy may safely evaluate a pool that does not intersect skipped
 	// subjects, while failed subjects must never be treated as ready.
 	BindingStates map[string]BindingPeriodState
+	// CompletionKind is the registered completion event associated with a
+	// ViewDataReady. Factor-backed strategies wait for FactorPeriodComputed.
+	CompletionKind string
 	// TargetInstanceID is set by the in-process timer so one scheduled job
 	// cannot accidentally evaluate every enabled instance. Event-driven ready
 	// notifications leave it empty and fan out to all matching instances.
@@ -256,6 +259,9 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 			}
 		}
 		if event.EventName != "strategy.schedule" && (len(compiled.Factors) > 0 || len(compiled.Dependencies.FactorResultViewIDs) > 0) && !dependsOnEvent(compiled, event) {
+			continue
+		}
+		if event.EventName != "strategy.schedule" && !acceptsFactorResultReady(compiled, event) {
 			continue
 		}
 		if hasCompiledFactorBindings(compiled) && indexProvenanceIsPartial(event) {
@@ -1185,6 +1191,18 @@ func bindingStateAffectsPool(factor compiler.CompiledFactor, state BindingPeriod
 		}
 	}
 	return false
+}
+
+func acceptsFactorResultReady(compiled compiler.CompiledStrategy, event PeriodReady) bool {
+	factorBacked := hasCompiledFactorBindings(compiled) || len(compiled.Dependencies.FactorResultViewIDs) > 0
+	if !factorBacked {
+		return true
+	}
+	kind := strings.TrimSpace(event.CompletionKind)
+	if kind == "" {
+		return true
+	}
+	return kind == events.FactorPeriodComputed.Name()
 }
 
 func dependsOnEvent(compiled compiler.CompiledStrategy, event PeriodReady) bool {

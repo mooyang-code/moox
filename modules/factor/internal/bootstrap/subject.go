@@ -12,14 +12,14 @@ import (
 )
 
 // StartEngineSubject consumes DatasetRowsUpserted input commits for bound mdatasets.
-func StartEngineSubject(ctx context.Context, cfg *EngineApplicationConfig, db *store.Store, runner trigger.CombinationTaskRunner, _ *taskrunner.OperationGate) (*eventconsumer.RowsConsumer, error) {
+func StartEngineSubject(ctx context.Context, cfg *EngineApplicationConfig, db *store.Store, runner trigger.CombinationTaskRunner, _ *taskrunner.OperationGate, barrier *trigger.PeriodBarrier) (*eventconsumer.RowsConsumer, error) {
 	if cfg == nil || db == nil || runner == nil {
 		return nil, fmt.Errorf("engine subject consumer dependencies are required")
 	}
 	if len(cfg.EventBus.URLs) == 0 {
 		return nil, nil
 	}
-	handler := trigger.NewDatasetRowsRunner(db.Bindings(), db.Factors(), runner, db, cfg.Engine.FactorsDir)
+	handler := trigger.NewDatasetRowsRunner(db.Bindings(), db.Factors(), runner, db, cfg.Engine.FactorsDir).WithPeriodBarrier(barrier)
 	filters, err := boundDatasetRowFilters(ctx, db)
 	if err != nil {
 		return nil, err

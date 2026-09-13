@@ -510,4 +510,38 @@ env CGO_ENABLED=1 go test ./internal/service/view -run 'TestHandle|TestViewDataR
 
 ### 提交
 
+`88612056`
+
+## 任务 15：因子周期汇总与策略订阅
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 18。
+
+### 红灯证据
+
+`TestFactorPeriodBarrier` 最初失败于冻结名单前到达的任务不会发布 FactorPeriodComputed，以及输入 ViewDataReady 仍会被因子策略接受。失败来自目标行为缺失。
+
+### 实现
+
+- 新增周期账本：冻结绑定×对象集合，容纳早到的时序终态，缺源记为 missing_input，输出收据确认后才发布 FactorPeriodComputed
+- 绑定启停不改变已冻结周期；零绑定立即给出明确终态；清理不得越过最新已报告周期的重放窗口
+- 引擎时序/截面共享同一账本；截面不再单独把 Merge 就绪当成因子周期完成
+- 读取因子结果 View 的策略只接受 `completion_kind=FactorPeriodComputed` 的 ViewDataReady
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/... -run 'TestFactorPeriodBarrier' -count=1
+env CGO_ENABLED=1 go test ./internal/trigger ./internal/bootstrap ./internal/store ./schema ./internal/rpc ./internal/taskrunner -count=1
+env CGO_ENABLED=1 go test -race ./internal/trigger ./internal/bootstrap -count=3
+go test ./... -count=1   # modules/strategy
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- 因子写回仍走 `UpsertFields`，账本目前用任务来源/Merge 提交位置作为收据占位；补算、前端与正式发布属于 16—18
+
+### 提交
+
 （本提交）

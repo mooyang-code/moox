@@ -30,10 +30,18 @@ type DatasetRowsRunner struct {
 	taskRunner CombinationTaskRunner
 	db         *store.Store
 	factorsDir string
+	barrier    *PeriodBarrier
 }
 
 func NewDatasetRowsRunner(bindings PeriodBindingSource, factors PeriodFactorSource, tasks CombinationTaskRunner, db *store.Store, factorsDir string) *DatasetRowsRunner {
 	return &DatasetRowsRunner{bindings: bindings, factors: factors, taskRunner: tasks, db: db, factorsDir: factorsDir}
+}
+
+func (r *DatasetRowsRunner) WithPeriodBarrier(barrier *PeriodBarrier) *DatasetRowsRunner {
+	if r != nil {
+		r.barrier = barrier
+	}
+	return r
 }
 
 func DatasetRowsDeliverPolicy(existing *nats.ConsumerInfo) nats.DeliverPolicy {
@@ -162,6 +170,9 @@ func (r *DatasetRowsRunner) HandleDatasetRows(ctx context.Context, eventID strin
 				return completeErr
 			}
 		}
+		if err := r.recordPeriodOutcome(ctx, result); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -207,6 +218,35 @@ func (r *DatasetRowsRunner) storageSchemaID(ctx context.Context, datasetID strin
 		return ""
 	}
 	return strings.TrimSpace(def.StorageSchemaID)
+}
+
+func (r *DatasetRowsRunner) recordPeriodOutcome(ctx context.Context, result taskrunner.Result) error {
+	if r == nil || r.barrier == nil {
+		return nil
+	}
+	task := result.Task.FactorTask
+	datasetID := firstNonEmpty(task.ResultDatasetID, task.SourceDataset, task.SourceViewID)
+	snapshotID := firstNonEmpty(task.ConfigSnapshotID, r.configSnapshotID(ctx, datasetID), "-")
+	status := PairComplete
+	if result.Err != nil {
+		status = PairFailed
+	}
+	outcome := PairOutcome{BindingID: task.BindingID, SubjectID: task.SubjectID, Status: status}
+	if status == PairComplete {
+		outcome.Receipt = WriteReceipt{
+			CommitID: firstNonEmpty(task.TaskID, task.SourceEventID),
+			NodeID:   firstNonEmpty(task.SourceNodeID, "factor-engine"),
+			StoreID:  firstNonEmpty(task.SourceStoreID, "patch"),
+			Sequence: task.SourceSequence,
+		}
+		if outcome.Receipt.Sequence == 0 {
+			outcome.Receipt.Sequence = 1
+		}
+	}
+	return r.barrier.Record(ctx, PeriodKey{
+		SpaceID: task.SpaceID, DatasetID: datasetID, SnapshotID: snapshotID,
+		Frequency: task.Freq, PeriodTime: task.PeriodTime,
+	}, outcome)
 }
 
 func selectDatasetBindings(bindings []domain.FactorBinding, spaceID, datasetID string) []domain.FactorBinding {

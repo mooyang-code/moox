@@ -161,6 +161,20 @@ func TestDependsOnEventOnlyMatchesDeclaredViews(t *testing.T) {
 	}
 }
 
+func TestAcceptsFactorResultReadyIgnoresInputViewReady(t *testing.T) {
+	compiled := compiler.CompiledStrategy{Factors: []compiler.CompiledFactor{{BindingID: "b", ResultViewID: "factor"}}, Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"factor"}}}
+	if acceptsFactorResultReady(compiled, PeriodReady{ViewID: "factor", CompletionKind: events.MergePeriodCompleted.Name()}) {
+		t.Fatal("input ViewDataReady must not run factor-backed strategies")
+	}
+	if !acceptsFactorResultReady(compiled, PeriodReady{ViewID: "factor", CompletionKind: events.FactorPeriodComputed.Name()}) {
+		t.Fatal("result ViewDataReady must run factor-backed strategies")
+	}
+	bare := compiler.CompiledStrategy{SourceView: compiler.CompiledView{ID: "source"}}
+	if !acceptsFactorResultReady(bare, PeriodReady{ViewID: "source", CompletionKind: events.MergePeriodCompleted.Name()}) {
+		t.Fatal("strategies without factor Views may consume input readiness")
+	}
+}
+
 func TestBindingEventSourceMismatchRejectsStaleReadyEvent(t *testing.T) {
 	compiled := compiler.CompiledStrategy{Factors: []compiler.CompiledFactor{{BindingID: "binding", ResultViewID: "factor-view", SourceHash: "hash-a"}}}
 	event := PeriodReady{ViewID: "factor-view", BindingStates: map[string]BindingPeriodState{

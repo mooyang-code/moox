@@ -192,6 +192,17 @@ func (s *Store) validateSchemaTables(tables []string) error {
 		"t_factor_merged_dataset_snapshots": {
 			"c_snapshot_id", "c_dataset_id", "c_config_json", "c_input_semantics_hash", "c_ctime",
 		},
+		"t_factor_period_barriers": {
+			"c_space_id", "c_dataset_id", "c_snapshot_id", "c_frequency", "c_period_time",
+			"c_batch_id", "c_scope_ref", "c_frozen", "c_status", "c_report_state",
+			"c_bindings_json", "c_expected_json", "c_failed_json", "c_mtime",
+		},
+		"t_factor_period_pairs": {
+			"c_space_id", "c_dataset_id", "c_snapshot_id", "c_frequency", "c_period_time",
+			"c_binding_id", "c_subject_id", "c_state", "c_receipt_confirmed",
+			"c_commit_id", "c_node_id", "c_store_id", "c_sequence", "c_mtime",
+		},
+		"t_factor_period_gc": {"c_id", "c_completed_before"},
 	}
 	if len(tables) != len(expected) {
 		return fmt.Errorf("factor database uses an obsolete schema; create a fresh database")
@@ -210,6 +221,17 @@ func (s *Store) validateSchemaTables(tables []string) error {
 		}
 	}
 	return nil
+}
+
+// WithTx runs fn inside a Factor SQLite transaction.
+func (s *Store) WithTx(ctx context.Context, fn func(*gorm.DB) error) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("factor database is not open")
+	}
+	if fn == nil {
+		return fmt.Errorf("factor transaction is required")
+	}
+	return s.db.WithContext(ctx).Transaction(fn)
 }
 
 // Ping verifies that the database is available.

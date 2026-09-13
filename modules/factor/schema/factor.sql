@@ -177,3 +177,57 @@ CREATE TABLE IF NOT EXISTS t_factor_merged_dataset_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_factor_merged_dataset_snapshots_dataset
 ON t_factor_merged_dataset_snapshots (c_dataset_id, c_ctime);
+
+CREATE TABLE IF NOT EXISTS t_factor_period_barriers (
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_snapshot_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_period_time INTEGER NOT NULL,
+    c_batch_id TEXT NOT NULL,
+    c_scope_ref TEXT NOT NULL DEFAULT '',
+    c_frozen INTEGER NOT NULL DEFAULT 0,
+    c_status TEXT NOT NULL DEFAULT 'open',
+    c_report_state TEXT NOT NULL DEFAULT 'waiting',
+    c_bindings_json TEXT NOT NULL DEFAULT '[]',
+    c_expected_json TEXT NOT NULL DEFAULT '[]',
+    c_failed_json TEXT NOT NULL DEFAULT '[]',
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_dataset_id, c_snapshot_id, c_frequency, c_period_time),
+    CHECK (c_frozen IN (0, 1)),
+    CHECK (c_status IN ('open', 'complete', 'degraded')),
+    CHECK (c_report_state IN ('waiting', 'reported'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_factor_period_barriers_period
+ON t_factor_period_barriers (c_period_time, c_report_state);
+
+CREATE TABLE IF NOT EXISTS t_factor_period_pairs (
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_snapshot_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_period_time INTEGER NOT NULL,
+    c_binding_id TEXT NOT NULL,
+    c_subject_id TEXT NOT NULL,
+    c_state TEXT NOT NULL,
+    c_receipt_confirmed INTEGER NOT NULL DEFAULT 0,
+    c_commit_id TEXT NOT NULL DEFAULT '',
+    c_node_id TEXT NOT NULL DEFAULT '',
+    c_store_id TEXT NOT NULL DEFAULT '',
+    c_sequence INTEGER NOT NULL DEFAULT 0,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_dataset_id, c_snapshot_id, c_frequency, c_period_time, c_binding_id, c_subject_id),
+    CHECK (c_state IN ('pending', 'complete', 'failed', 'skipped', 'missing_input')),
+    CHECK (c_receipt_confirmed IN (0, 1))
+);
+
+CREATE INDEX IF NOT EXISTS idx_factor_period_pairs_period
+ON t_factor_period_pairs (c_period_time, c_state);
+
+CREATE TABLE IF NOT EXISTS t_factor_period_gc (
+    c_id INTEGER PRIMARY KEY CHECK (c_id = 1),
+    c_completed_before INTEGER NOT NULL DEFAULT 0
+);
+
+INSERT OR IGNORE INTO t_factor_period_gc (c_id) VALUES (1);

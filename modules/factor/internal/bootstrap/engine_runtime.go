@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/catalogsync"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/health"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -82,14 +83,18 @@ func InitializeEngine(ctx context.Context, s *server.Server, cfg *EngineApplicat
 	if err = resources.StartCompute(); err != nil {
 		return nil, err
 	}
-	consumer, err := StartEngineSubject(resources.Context(), cfg, resources.Store, resources.Runner, resources.OperationGate)
+	barrier, err := trigger.NewPeriodBarrier(resources.Store, resources.Storage)
+	if err != nil {
+		return nil, err
+	}
+	consumer, err := StartEngineSubject(resources.Context(), cfg, resources.Store, resources.Runner, resources.OperationGate, barrier)
 	if err != nil {
 		return nil, err
 	}
 	if consumer != nil {
 		r.consumer, r.stopSubject = consumer, consumer.Close
 	}
-	viewConsumer, err := StartEngineViewReady(resources.Context(), cfg, resources.Store, resources.Runner, resources.Storage, resources.OperationGate)
+	viewConsumer, err := StartEngineViewReady(resources.Context(), cfg, resources.Store, resources.Runner, resources.Storage, resources.OperationGate, barrier)
 	if err != nil {
 		return nil, err
 	}

@@ -42,6 +42,7 @@ func processViewDataReady(ctx context.Context, message *eventpb.EventMessage, pa
 		ViewID: payload.GetViewId(), SourceViewID: payload.GetViewId(), Frequency: payload.GetFrequency(),
 		PeriodTime: storagePeriod, StoragePeriodTime: storagePeriod, BarEndTime: period.BarEnd,
 		Status: payload.GetStatus(), ReadyViewIDs: []string{payload.GetViewId()},
+		CompletionKind: payload.GetCompletionKind(),
 	})
 }
 

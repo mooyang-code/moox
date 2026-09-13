@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/observability"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
@@ -70,6 +71,8 @@ type ViewReadyRunner struct {
 	executionUnitTimeout time.Duration
 	executionParallelism int
 	batchExecution       bool
+	barrier              *PeriodBarrier
+	catalog              *store.Store
 }
 
 type Option func(*ViewReadyRunner)
@@ -108,6 +111,14 @@ func WithBatchExecution(enabled bool) Option {
 
 func WithViewColumns(source ViewColumnSource) Option {
 	return func(r *ViewReadyRunner) { r.viewColumns = source }
+}
+
+func WithPeriodBarrier(barrier *PeriodBarrier) Option {
+	return func(r *ViewReadyRunner) { r.barrier = barrier }
+}
+
+func WithCatalogStore(db *store.Store) Option {
+	return func(r *ViewReadyRunner) { r.catalog = db }
 }
 
 func NewViewReadyRunner(bindings PeriodBindingSource, factors PeriodFactorSource, runner CombinationTaskRunner, storage PeriodStorage, factorsDir string, opts ...Option) *ViewReadyRunner {
@@ -209,6 +220,9 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		return fmt.Errorf("list executable factor bindings: %w", err)
 	}
 	selected := selectPeriodBindings(bindings, spaceID, ready)
+	if err := r.freezePeriod(ctx, spaceID, triggerEventID, ready, mergePeriodBindings(selected, selectDatasetBindings(bindings, spaceID, ready.GetDatasetId()))); err != nil {
+		return err
+	}
 	if len(selected) == 0 || (factorID != "" && !containsFactor(selected, factorID)) {
 		if factorID == "" && len(selected) == 0 {
 			if readiness, ok := r.bindings.(PeriodBindingReadinessSource); ok {
@@ -433,10 +447,18 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 	if groupStatus == "degraded" {
 		r.periodMetrics.ObserveDegraded(ready.GetViewId(), ready.GetFrequency())
 	}
+	if err := r.recordCrossSectionOutcomes(ctx, spaceID, triggerEventID, ready, selected, subjects, failedUpstream, tasks, terminal); err != nil {
+		return err
+	}
+	if r.barrier != nil && !strings.HasPrefix(triggerEventID, "recalc-") {
+		log.InfoContextf(ctx, "factor_view_ready_done event_id=%s space_id=%s source_view_id=%s result_dataset_id=%s freq=%s period_time=%d binding_count=%d task_count=%d batch_count=%d subject_count=%d status=%s elapsed_ms=%d",
+			triggerEventID, spaceID, ready.GetViewId(), resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime(), len(selected), len(tasks), batchCount, len(subjects), groupStatus, time.Since(started).Milliseconds())
+		return nil
+	}
 	marker := &storagepb.FactorPeriodComputedMarker{
 		DatasetId: resultDatasetID, Frequency: ready.GetFrequency(), PeriodTime: ready.GetPeriodTime(), Status: groupStatus,
 		BatchId: triggerEventID, ConfigSnapshotId: firstNonEmpty(ready.GetViewConfigId(), "factor"),
-		ExpectedScopeRef: firstNonEmpty(ready.GetVisibleScope(), fmt.Sprintf("%s:%s:%d", resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime())),
+		ExpectedScopeRef:   firstNonEmpty(ready.GetVisibleScope(), fmt.Sprintf("%s:%s:%d", resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime())),
 		ExpectedSubjectIds: append([]string(nil), subjects...), Bindings: markerStates,
 		CommittedPositions: cloneEventPositions(ready.GetCommittedPositions()),
 		ComputedAt:         timestamppb.Now(), TriggerEventId: triggerEventID,
@@ -691,4 +713,152 @@ func firstSubject(values []string) string {
 		return ""
 	}
 	return values[0]
+}
+
+func mergePeriodBindings(parts ...[]domain.FactorBinding) []domain.FactorBinding {
+	seen := make(map[string]struct{})
+	out := make([]domain.FactorBinding, 0)
+	for _, part := range parts {
+		for _, binding := range part {
+			if _, ok := seen[binding.BindingID]; ok {
+				continue
+			}
+			seen[binding.BindingID] = struct{}{}
+			out = append(out, binding)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].BindingID < out[j].BindingID })
+	return out
+}
+
+func (r *ViewReadyRunner) freezePeriod(ctx context.Context, spaceID, triggerEventID string, ready *publicstoragepb.ViewDataReady, bindings []domain.FactorBinding) error {
+	if r == nil || r.barrier == nil || ready == nil || strings.HasPrefix(triggerEventID, "recalc-") {
+		return nil
+	}
+	datasetID := strings.TrimSpace(ready.GetDatasetId())
+	if datasetID == "" && len(bindings) > 0 {
+		datasetID = bindingDatasetID(bindings[0])
+	}
+	if datasetID == "" {
+		return nil
+	}
+	snapshotID := r.configSnapshotID(ctx, datasetID)
+	if snapshotID == "" {
+		snapshotID = firstNonEmpty(ready.GetViewConfigId(), "factor")
+	}
+	frozen := make([]FrozenBinding, 0, len(bindings))
+	subjects := periodSubjectUniverse(bindings, ready)
+	for _, binding := range bindings {
+		factor, err := r.factors.Get(ctx, binding.FactorID)
+		if err != nil || factor == nil {
+			continue
+		}
+		allowed, _ := partitionBindingSubjects(binding, subjects)
+		if len(allowed) == 0 {
+			allowed = append([]string(nil), subjects...)
+		}
+		frozen = append(frozen, FrozenBinding{
+			BindingID: binding.BindingID, FactorID: binding.FactorID, FactorType: factor.FactorType,
+			SourceHash: factor.SourceHash, Subjects: allowed,
+		})
+	}
+	return r.barrier.Freeze(ctx, FreezeSpec{
+		Key: PeriodKey{
+			SpaceID: spaceID, DatasetID: datasetID, SnapshotID: snapshotID,
+			Frequency: ready.GetFrequency(), PeriodTime: ready.GetPeriodTime(),
+		},
+		ExpectedSubjects: subjects,
+		FailedSubjects:   splitScopeRef(ready.GetFailedScopeRef()),
+		Bindings:         frozen,
+		BatchID:          firstNonEmpty(ready.GetCompletionEventId(), triggerEventID),
+		ScopeRef:         firstNonEmpty(ready.GetVisibleScope(), fmt.Sprintf("%s:%s:%d", datasetID, ready.GetFrequency(), ready.GetPeriodTime())),
+	})
+}
+
+func (r *ViewReadyRunner) recordCrossSectionOutcomes(ctx context.Context, spaceID, triggerEventID string, ready *publicstoragepb.ViewDataReady, selected []domain.FactorBinding, subjects []string, failedUpstream map[string]struct{}, tasks []taskrunner.Task, terminal map[string]taskrunner.Result) error {
+	if r == nil || r.barrier == nil || ready == nil || strings.HasPrefix(triggerEventID, "recalc-") {
+		return nil
+	}
+	datasetID := strings.TrimSpace(ready.GetDatasetId())
+	snapshotID := r.configSnapshotID(ctx, datasetID)
+	if snapshotID == "" {
+		snapshotID = firstNonEmpty(ready.GetViewConfigId(), "factor")
+	}
+	key := PeriodKey{
+		SpaceID: spaceID, DatasetID: datasetID, SnapshotID: snapshotID,
+		Frequency: ready.GetFrequency(), PeriodTime: ready.GetPeriodTime(),
+	}
+	receipt := receiptFromReady(ready)
+	ran := make(map[string]struct{}, len(tasks))
+	for _, task := range tasks {
+		ran[task.BindingID] = struct{}{}
+		result, ok := terminal[combinationKey(task.BindingID, task.SubjectID)]
+		status := PairComplete
+		if !ok || result.Err != nil {
+			status = PairFailed
+		}
+		ids := task.AvailableSubjects
+		if task.SubjectID != "" {
+			ids = []string{task.SubjectID}
+		}
+		for _, subjectID := range ids {
+			outcome := PairOutcome{BindingID: task.BindingID, SubjectID: subjectID, Status: status}
+			if status == PairComplete {
+				outcome.Receipt = receipt
+			}
+			if err := r.barrier.Record(ctx, key, outcome); err != nil {
+				return err
+			}
+		}
+		for _, subjectID := range task.MissingSubjects {
+			if err := r.barrier.Record(ctx, key, PairOutcome{BindingID: task.BindingID, SubjectID: subjectID, Status: PairMissingInput}); err != nil {
+				return err
+			}
+		}
+	}
+	for _, binding := range selected {
+		if _, ok := ran[binding.BindingID]; ok {
+			continue
+		}
+		allowed, skipped := partitionBindingSubjects(binding, subjects)
+		for _, subjectID := range skipped {
+			if err := r.barrier.Record(ctx, key, PairOutcome{BindingID: binding.BindingID, SubjectID: subjectID, Status: PairSkipped}); err != nil {
+				return err
+			}
+		}
+		for _, subjectID := range allowed {
+			status := PairSkipped
+			if _, failed := failedUpstream[subjectID]; failed {
+				status = PairMissingInput
+			}
+			if err := r.barrier.Record(ctx, key, PairOutcome{BindingID: binding.BindingID, SubjectID: subjectID, Status: status}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (r *ViewReadyRunner) configSnapshotID(ctx context.Context, datasetID string) string {
+	if r == nil || r.catalog == nil || r.catalog.MergedDatasets() == nil || strings.TrimSpace(datasetID) == "" {
+		return ""
+	}
+	def, err := r.catalog.MergedDatasets().Get(ctx, datasetID)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(def.ConfigSnapshotID)
+}
+
+func receiptFromReady(ready *publicstoragepb.ViewDataReady) WriteReceipt {
+	if ready == nil {
+		return WriteReceipt{NodeID: "factor-engine", StoreID: "patch", Sequence: 1}
+	}
+	if positions := ready.GetCommittedPositions(); len(positions) > 0 && positions[0] != nil {
+		return WriteReceipt{
+			CommitID: firstNonEmpty(ready.GetCompletionEventId()),
+			NodeID:   positions[0].GetNodeId(), StoreID: positions[0].GetStoreId(), Sequence: positions[0].GetSequence(),
+		}
+	}
+	return WriteReceipt{CommitID: ready.GetCompletionEventId(), NodeID: "factor-engine", StoreID: "patch", Sequence: 1}
 }

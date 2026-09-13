@@ -20,6 +20,7 @@ func StartEngineViewReady(
 	runner trigger.CombinationTaskRunner,
 	storage *storageio.Client,
 	gate *taskrunner.OperationGate,
+	barrier *trigger.PeriodBarrier,
 ) (*eventconsumer.Consumer, error) {
 	if cfg == nil || db == nil || runner == nil || storage == nil {
 		return nil, fmt.Errorf("engine View-ready consumer dependencies are required")
@@ -32,6 +33,8 @@ func StartEngineViewReady(
 		trigger.WithExecutionUnitTimeout(time.Duration(cfg.Engine.TaskTimeoutMS)*time.Millisecond),
 		trigger.WithExecutionParallelism(cfg.Engine.PythonWorkers),
 		trigger.WithBatchExecution(cfg.Engine.BatchEnabled),
+		trigger.WithPeriodBarrier(barrier),
+		trigger.WithCatalogStore(db),
 	)
 	consumer := eventconsumer.New(eventconsumer.Config{
 		URLs: cfg.EventBus.URLs, FetchMaxWait: cfg.EventBus.FetchMaxWait,
