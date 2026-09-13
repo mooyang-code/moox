@@ -16,7 +16,8 @@ type Options struct {
 	SkipProbe        bool
 	ProbeOnly        bool
 	RewriteRuntime   bool
-	UpdateSCFGateway bool
+	RestoreSCFPublic bool
+	UnbindSCFVPC     bool
 }
 
 type ResolvedHost struct {
@@ -90,27 +91,15 @@ func BuildPlan(opts Options, hosts []ResolvedHost, scf []SCFTarget, ports []stri
 		Hosts: hosts, Ports: ports, CIDRsByArea: map[string][]string{"mainland": {}, "overseas": {}},
 		Recommended: RecommendedConfig{Hosts: []map[string]any{}},
 	}
-	usedCIDRs := make([]string, 0)
-	vpcByRegion := map[string]ResolvedHost{}
-	networks := map[string]map[string]struct{}{"mainland": {}, "overseas": {}}
 
 	for i := range plan.Hosts {
 		host := &plan.Hosts[i]
 		host.Area = tencent.NetworkArea(host.Instance.Region)
-		if host.Instance.Kind == tencent.KindLighthouse {
-			networks[host.Area]["lighthouse:"+host.Instance.Region] = struct{}{}
-			if host.CidrBlock == "" && len(host.Instance.PrivateIPs) > 0 {
-				host.CidrBlock = tencent.InferPrivateCIDR(host.Instance.PrivateIPs[0])
-			}
-		}
-		if host.Instance.Kind == tencent.KindCVM && host.Instance.VpcID != "" {
-			networks[host.Area]["vpc:"+host.Instance.Region+"/"+host.Instance.VpcID] = struct{}{}
-			if _, ok := vpcByRegion[host.Instance.Region]; !ok || hostHasRole(host.HostTarget, "storage") {
-				vpcByRegion[host.Instance.Region] = *host
-			}
+		if host.CidrBlock == "" && len(host.Instance.PrivateIPs) > 0 {
+			host.CidrBlock = tencent.InferPrivateCIDR(host.Instance.PrivateIPs[0])
 		}
 		if host.CidrBlock != "" {
-			usedCIDRs = appendUnique(usedCIDRs, host.CidrBlock)
+			plan.CIDRs = appendUnique(plan.CIDRs, host.CidrBlock)
 			plan.CIDRsByArea[host.Area] = appendUnique(plan.CIDRsByArea[host.Area], host.CidrBlock)
 		}
 		privateIP := ""
@@ -126,74 +115,25 @@ func BuildPlan(opts Options, hosts []ResolvedHost, scf []SCFTarget, ports []stri
 			plan.Recommended.StoragePublicIP = host.Address
 			plan.Recommended.StoragePrivateIP = privateIP
 			plan.Recommended.StorageArea = host.Area
-			if privateIP != "" {
-				plan.Recommended.SCFGatewayTarget = "ip://" + privateIP + ":11003"
+			if host.Address != "" {
+				plan.Recommended.SCFGatewayTarget = "ip://" + host.Address + ":11003"
 			}
 		}
 	}
 
-	if opts.SkipSCF {
-		scf = nil
-	}
-	for _, target := range scf {
-		area := tencent.NetworkArea(target.Region)
-		bind := PlannedSCFBind{SCFTarget: target, Area: area}
-		if reused, ok := vpcByRegion[target.Region]; ok && reused.Instance.VpcID != "" {
-			bind.VpcID = reused.Instance.VpcID
-			bind.SubnetID = reused.Instance.SubnetID
-			bind.VpcName = reused.Instance.VpcID
-			plan.SCF = append(plan.SCF, bind)
-			networks[area]["vpc:"+target.Region+"/"+reused.Instance.VpcID] = struct{}{}
-			continue
+	if opts.RestoreSCFPublic {
+		for _, target := range scf {
+			plan.SCF = append(plan.SCF, PlannedSCFBind{SCFTarget: target, Area: tencent.NetworkArea(target.Region)})
 		}
-		cidr, err := tencent.FirstNonOverlappingCIDR(preferredSCFCIDR(target.Region), usedCIDRs, 80, 20)
-		if err != nil {
-			cidr = preferredSCFCIDR(target.Region)
-		}
-		if cidr != "" {
-			usedCIDRs = appendUnique(usedCIDRs, cidr)
-			plan.CIDRsByArea[area] = appendUnique(plan.CIDRsByArea[area], cidr)
-		}
-		plan.VPCs = append(plan.VPCs, PlannedVPC{
-			Region: target.Region, Area: area, Name: vpcNameForRegion(target.Region), CidrBlock: cidr,
-			Reason: "scf region has no existing CVM vpc; create dedicated vpc and attach to same-area ccn",
-		})
-		networks[area]["vpc:"+target.Region+"/"+vpcNameForRegion(target.Region)] = struct{}{}
-		bind.VpcName = vpcNameForRegion(target.Region)
-		plan.SCF = append(plan.SCF, bind)
 	}
 
-	plan.CIDRs = usedCIDRs
-	plan.NeedMainlandCCN = len(networks["mainland"]) > 1
-	plan.NeedOverseasCCN = len(networks["overseas"]) > 1
-	plan.NeedCCN = plan.NeedMainlandCCN || plan.NeedOverseasCCN
-	if plan.NeedCCN {
+	if publicIP := strings.TrimSpace(plan.Recommended.StoragePublicIP); publicIP != "" {
 		plan.Recommended.Notes = append(plan.Recommended.Notes,
-			"国内与海外必须使用两张云联网：账号未开通跨境流量白名单时，不能把南京 Storage 和香港/新加坡/东京放进同一张 CCN。",
-		)
-	}
-	if plan.Recommended.StoragePrivateIP != "" && plan.Recommended.StorageArea == "mainland" {
-		plan.Recommended.Notes = append(plan.Recommended.Notes,
-			"国内 SCF（广州/上海/北京/成都）绑定 VPC 后，可把 storage_gateway_host 改成 Storage 内网 IP "+plan.Recommended.StoragePrivateIP+"。",
-			"香港/新加坡/东京 SCF 在开通跨境云联网前继续走 Storage 公网 IP。",
+			"主机与 SCF 一律走 Storage 公网 IP "+publicIP+"，不再创建云联网或使用内网 IP。",
 		)
 	}
 	plan.Recommended.Notes = append(plan.Recommended.Notes,
 		"不会调用 ModifyInstancesVpcAttribute，因此不会重启现有机器。SSH 和控制台入口继续使用公网 IP。",
 	)
 	return plan
-}
-
-func ccnNameForArea(plan Plan, area string) string {
-	if area == "overseas" {
-		return plan.OverseasCCN
-	}
-	return plan.MainlandCCN
-}
-
-func hostAreaCIDRs(plan Plan, area string) []string {
-	if cidrs := plan.CIDRsByArea[area]; len(cidrs) > 0 {
-		return cidrs
-	}
-	return nil
 }

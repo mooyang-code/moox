@@ -212,7 +212,7 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		var revision uint64
 		var revisionErr error
 		if revisionReader, ok := r.storage.(PeriodStorageRevisionAt); ok {
-			revision, revisionErr = revisionReader.ActiveViewRevisionAt(ctx, spaceID, ready.GetSourceViewId(), firstSubject(ready.GetPrimarySubjects()), ready.GetFrequency(), ready.GetActiveIndexId())
+			revision, revisionErr = revisionReader.ActiveViewRevisionAt(ctx, spaceID, ready.GetSourceViewId(), firstSubject(ready.GetPrimarySubjects()), ready.GetFrequency(), "")
 		} else if _, ok := r.storage.(PeriodStorageRevision); ok {
 			return fmt.Errorf("recalc requires fenced storage View revision reader")
 		} else {
@@ -271,9 +271,8 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 	expectedActiveIndexRevision := uint64(0)
 	if strings.HasPrefix(triggerEventID, "recalc-") {
 		// Recalculation explicitly probes a current source snapshot. A normal
-		// source-ready event is asynchronous and its write watermark is already
-		// stale by the time the Factor worker starts; the active index ID still
-		// fences A/B cutovers without rejecting ordinary live writes.
+		// source-ready event is asynchronous; A/B physical slots stay inside
+		// Storage View and are not pinned from the public event.
 		expectedActiveIndexRevision = ready.GetActiveIndexRevision()
 	}
 
@@ -286,7 +285,6 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 				SourceViewID:      binding.SourceViewID, ResultDatasetID: binding.ResultDatasetID,
 				SubjectID: subjectID, Freq: binding.Freq, PeriodTime: ready.GetPeriodTime(),
 				TriggerEventID: triggerEventID, TriggeredAt: triggeredAt, StartTime: period, EndTime: periodEnd,
-				ExpectedActiveIndexID:       ready.GetActiveIndexId(),
 				ExpectedActiveIndexRevision: expectedActiveIndexRevision,
 			}, factors[binding.BindingID], r.factorsDir)
 			if buildErr != nil {
@@ -387,8 +385,6 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		SourceViewId: ready.GetSourceViewId(), ResultDatasetId: resultDatasetID,
 		Frequency: ready.GetFrequency(), PeriodTime: ready.GetPeriodTime(), Status: groupStatus,
 		Bindings: markerStates, ComputedAt: timestamppb.Now(), TriggerEventId: triggerEventID,
-		SourceIndexId:       ready.GetActiveIndexId(),
-		SourceIndexRevision: ready.GetActiveIndexRevision(),
 	}
 	if err := r.storage.ReportFactorPeriodComputed(ctx, spaceID, marker); err != nil {
 		log.ErrorContextf(ctx, "factor_view_ready_report_failed event_id=%s space_id=%s source_view_id=%s result_dataset_id=%s freq=%s period_time=%d binding_count=%d subject_count=%d error=%q",

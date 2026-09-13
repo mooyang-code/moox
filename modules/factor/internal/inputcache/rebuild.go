@@ -13,18 +13,21 @@ func (d *Database) Rebuild(ctx context.Context, path string, keepRows int64) (_ 
 		return nil, fmt.Errorf("cache rebuild row limit must be positive")
 	}
 	columns := make([]string, 0, len(d.columns)+1)
+	readColumns := make([]string, 0, len(d.columns)+1)
 	marks := make([]string, 0, len(d.columns)+1)
 	for _, col := range d.columns {
 		columns = append(columns, quoteIdentifier(col.Name))
+		readColumns = append(readColumns, cacheReadColumn(col))
 		marks = append(marks, "?")
 	}
 	columns = append(columns, quoteIdentifier(updatedColumn))
+	readColumns = append(readColumns, quoteIdentifier(updatedColumn))
 	marks = append(marks, "?")
 	order := []string{quoteIdentifier(updatedColumn) + " DESC"}
 	for _, key := range d.keys {
 		order = append(order, quoteIdentifier(key))
 	}
-	rows, err := d.db.QueryContext(ctx, "SELECT "+strings.Join(columns, ",")+" FROM cached_rows ORDER BY "+strings.Join(order, ",")+" LIMIT ?", keepRows)
+	rows, err := d.db.QueryContext(ctx, "SELECT "+strings.Join(readColumns, ",")+" FROM cached_rows ORDER BY "+strings.Join(order, ",")+" LIMIT ?", keepRows)
 	if err != nil {
 		return nil, err
 	}
@@ -56,6 +59,9 @@ func (d *Database) Rebuild(ctx context.Context, path string, keepRows int64) (_ 
 		}
 		if err = rows.Scan(dest...); err != nil {
 			return nil, err
+		}
+		for i, column := range d.columns {
+			values[i] = cacheParameter(column.Type, values[i])
 		}
 		if _, err = stmt.ExecContext(ctx, values...); err != nil {
 			return nil, err

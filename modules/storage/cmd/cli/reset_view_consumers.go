@@ -26,6 +26,12 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// JetStream management APIs on a busy MOOX_STORAGE stream can exceed the
+// client default 5s request timeout. Purge and consumer delete must share this
+// longer bound so a reset cannot stop Storage and then fail with deadline
+// exceeded before the queue is cleared.
+const resetJetStreamRequestTimeout = 2 * time.Minute
+
 type resetViewConsumersOptions struct {
 	storageConf, packageRoot, stream, credentialFile, eventBusURL  string
 	timeout, lookback                                              time.Duration
@@ -615,7 +621,7 @@ func preflightResetEventBus(ctx context.Context, opts resetViewConsumersOptions,
 		return err
 	}
 	defer nc.Close()
-	js, err := nc.JetStream()
+	js, err := nc.JetStream(nats.MaxWait(resetJetStreamRequestTimeout))
 	if err != nil {
 		return err
 	}
@@ -663,7 +669,7 @@ func resetStorageViewConsumers(ctx context.Context, opts resetViewConsumersOptio
 		return false, err
 	}
 	defer nc.Close()
-	js, err := nc.JetStream()
+	js, err := nc.JetStream(nats.MaxWait(resetJetStreamRequestTimeout))
 	if err != nil {
 		return false, err
 	}

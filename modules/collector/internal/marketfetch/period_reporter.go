@@ -175,7 +175,9 @@ func (r *PeriodReporter) payload(ctx context.Context, report domain.PeriodReport
 		if err := protojson.Unmarshal([]byte(report.Readiness.PayloadJSON), payload); err != nil {
 			return nil, fmt.Errorf("decode fixed period payload id=%d: %w", report.Readiness.ID, err)
 		}
-		return payload, nil
+		if len(payload.GetSubjectIds()) > 0 {
+			return payload, nil
+		}
 	}
 	subjects := make([]string, 0, len(report.Items))
 	failed := make([]string, 0)

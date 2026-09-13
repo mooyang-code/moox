@@ -199,7 +199,7 @@ func (s *Service) applyDatasetEventWithOrigins(ctx context.Context, spaceID, dat
 			s.observeViewWatermark(indexID, datasetID, writtenRows, false)
 		}
 		if nextID != "" {
-			nextRows, nextWriteErr := s.applyEventToIndex(ctx, nextID, datasetID, rows)
+			_, nextWriteErr := s.applyEventToIndex(ctx, nextID, datasetID, rows)
 			if err := nextWriteErr; err != nil {
 				failedID := nextID
 				failedGeneration := s.indexGenerationOf(failedID)
@@ -253,14 +253,10 @@ func (s *Service) applyDatasetEventWithOrigins(ctx context.Context, spaceID, dat
 				return activeFailure
 			}
 			if !activeReady && runtime.active == "" {
-				// A from-scratch build is primed directly from the replayed
-				// durable stream. Once the row is safely written to B it may be
-				// ACKed; reconciliation keeps B non-authoritative until the
-				// replacement is durably READY and activated.
-				if err := s.persistPendingSubjects(ctx, viewKey, nextID, datasetID, nextRows, origins); err != nil {
-					runtime.mu.Unlock()
-					return err
-				}
+				// A from-scratch rebuild writes B from the durable stream.
+				// ACK after the replacement write. Rebuilds never journal or
+				// emit subject-ready; later live writes on the activated index
+				// publish directly.
 				runtime.mu.Unlock()
 				continue
 			}

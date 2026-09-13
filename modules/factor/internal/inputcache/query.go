@@ -25,7 +25,7 @@ func (d *Database) ReadWindow(ctx context.Context, query WindowQuery) ([][]any, 
 	columns := make([]string, len(d.columns))
 	for i, col := range d.columns {
 		known[col.Name] = col.Type
-		columns[i] = quoteIdentifier(col.Name)
+		columns[i] = cacheReadColumn(col)
 	}
 	if known[query.TimeColumn] != "TIMESTAMP_NS" {
 		return nil, fmt.Errorf("cache window time column must be TIMESTAMP_NS")
@@ -60,7 +60,7 @@ func (d *Database) ReadWindow(ctx context.Context, query WindowQuery) ([][]any, 
 		marks := make([]string, len(values))
 		for i, value := range values {
 			marks[i] = "?"
-			args = append(args, value)
+			args = append(args, cacheParameter(known[name], value))
 		}
 		conditions = append(conditions, quoteIdentifier(name)+" IN ("+strings.Join(marks, ",")+")")
 	}

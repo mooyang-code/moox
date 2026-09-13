@@ -1015,6 +1015,20 @@ build_core_binaries() {
   fi
 
   log "build core binaries (${TARGET_GOOS}/${TARGET_GOARCH})"
+  local host_cli="${MOOX_CLI:-}"
+  local cross_cgo=0
+  if [[ "${TARGET_GOOS}" != "${HOST_GOOS}" || "${TARGET_GOARCH}" != "${HOST_GOARCH}" ]]; then
+    if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_FACTOR}" -eq 1 ]]; then
+      cross_cgo=1
+    fi
+  fi
+  if [[ "${cross_cgo}" -eq 1 && -z "${host_cli}" ]]; then
+    host_cli="${ROOT}/bin/moox-cli.host"
+    log "preserve host moox-cli for compile-host CGO builds"
+    TARGET_GOOS="${HOST_GOOS}" TARGET_GOARCH="${HOST_GOARCH}" \
+      "${ROOT}/scripts/build/build.sh" cli
+    install -m 0755 "${ROOT}/bin/moox-cli" "${host_cli}"
+  fi
   local cross_storage=0
   if [[ "${WITH_STORAGE}" -eq 1 ]] &&
     [[ "${TARGET_GOOS}" != "${HOST_GOOS}" || "${TARGET_GOARCH}" != "${HOST_GOARCH}" ]]; then
@@ -1022,9 +1036,7 @@ build_core_binaries() {
     [[ "${TARGET_GOARCH}" == amd64 ]] || fail "cross-platform Storage build supports only linux/amd64"
     cross_storage=1
     log "cross build detected; build CGO-enabled Storage on compile host"
-    TARGET_GOOS="${HOST_GOOS}" TARGET_GOARCH="${HOST_GOARCH}" \
-      "${ROOT}/scripts/build/build.sh" cli
-    "${ROOT}/scripts/build/build-storage-linux.sh"
+    MOOX_CLI="${host_cli}" "${ROOT}/scripts/build/build-storage-linux.sh"
   fi
 
   if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 || "${WITH_HOSTAGENT}" -eq 1 ]]; then
@@ -1052,8 +1064,15 @@ build_core_binaries() {
       "${ROOT}/scripts/build/build.sh" collector
   fi
   if [[ "${WITH_FACTOR}" -eq 1 ]]; then
-    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-      "${ROOT}/scripts/build/build.sh" factor
+    if [[ "${TARGET_GOOS}" != "${HOST_GOOS}" || "${TARGET_GOARCH}" != "${HOST_GOARCH}" ]]; then
+      [[ "${TARGET_GOOS}" == linux ]] || fail "cross-platform Factor build supports only Linux targets"
+      [[ "${TARGET_GOARCH}" == amd64 ]] || fail "cross-platform Factor build supports only linux/amd64"
+      log "cross build detected; build CGO-enabled Factor on compile host"
+      MOOX_CLI="${host_cli}" MOOX_LINUX_CGO_TARGET=factor "${ROOT}/scripts/build/build-storage-linux.sh"
+    else
+      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+        "${ROOT}/scripts/build/build.sh" factor
+    fi
   fi
   if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
@@ -1867,10 +1886,11 @@ FACTOR_ENV=(
   "MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"
   "MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}"
   "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor/factor.db}"
+  "MOOX_FACTOR_ARTIFACTS_DIR=${MOOX_FACTOR_ARTIFACTS_DIR:-${ROOT}/factor/factors}"
   "MOOX_FACTOR_ENGINE_WORKER_PATH=${MOOX_FACTOR_ENGINE_WORKER_PATH:-${ROOT}/factor/pyworker/worker.py}"
 	"MOOX_FACTOR_ENGINE_FACTORS_DIR=${MOOX_FACTOR_ENGINE_FACTORS_DIR:-${ROOT}/factor/factors}"
 	"MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${MOOX_FACTOR_ENGINE_PYTHON_WORKERS:-32}"
-	"MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS:-8}"
+	"MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS:-2}"
 	"MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS:-20000}"
 	"MOOX_EVENTBUS_NATS_URL=${MOOX_FACTOR_EVENTBUS_URL:-${FACTOR_EVENTBUS_URL_ENV}}"
 	  "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime"
@@ -1914,25 +1934,6 @@ if [[ -r "${STORAGE_EVENTBUS_CREDENTIAL_FILE}" ]]; then
 fi
 export MOOX_EVENTBUS_NATS_URL="${EVENTBUS_URL_ENV}" MOOX_EVENTBUS_HOST MOOX_EVENTBUS_PORT MOOX_EVENTBUS_ENABLE_TLS
 METRICS_EVENTBUS_URL_ENV="${MOOX_METRICS_EVENTBUS_URL:-}"
-
-ensure_factor_python() {
-  local venv="${ROOT}/data/factor/venv"
-  local python_bin="${MOOX_FACTOR_ENGINE_PYTHON_BIN:-}"
-  if [[ -z "${python_bin}" ]]; then
-    if [[ ! -x "${venv}/bin/python" ]]; then
-      python3 -m venv "${venv}"
-    fi
-    python_bin="${venv}/bin/python"
-  fi
-  if ! "${python_bin}" - <<'PY' >/dev/null 2>&1; then
-import numpy  # noqa: F401
-import pandas  # noqa: F401
-PY
-    "${python_bin}" -m pip install --upgrade pip
-    "${python_bin}" -m pip install -r "${ROOT}/factor/pyworker/runtime-requirements.txt"
-  fi
-  FACTOR_ENV+=("MOOX_FACTOR_ENGINE_PYTHON_BIN=${python_bin}")
-}
 
 nats_endpoint() {
   local url="$1"
@@ -2513,7 +2514,8 @@ PY
     for credential_name in ca.pem server.pem server-key.pem users.yaml internal-admin.yaml \
       archive-eventbus.yaml cloudnode-eventbus.yaml cloudnode-worker.yaml \
       hostagent-publisher.yaml market-fetch-publisher.yaml metrics-publisher.yaml \
-      collector-market-fetch-consumer.yaml factor-eventbus.yaml monitor-observability.yaml \
+      collector-market-fetch-consumer.yaml factor-eventbus.yaml factor-engine-eventbus.yaml \
+      monitor-observability.yaml \
       storage-eventbus.yaml strategy-eventbus.yaml trade-eventbus.yaml; do
       [[ -s "${eventbus_credentials_dir}/${credential_name}" ]] || eventbus_credentials_complete=0
     done
@@ -2543,7 +2545,13 @@ PY
           }
       fi
     elif [[ "${eventbus_credentials_complete}" -eq 1 ]]; then
-      echo "reuse EventBus identities and refresh exported endpoints in ${eventbus_credentials_dir}"
+      echo "reuse EventBus identities and ensure missing roles in ${eventbus_credentials_dir}"
+      "${ROOT}/bin/moox-admin-cli" eventbus-credentials ensure \
+        --db-path "${ROOT}/data/admin.db" \
+        --encryption-key-file "${encryption_key_file}" \
+        --node-id "${MOOX_ADMIN_NODE_ID}" \
+        >>"${ROOT}/logs/admin/stdout.log" 2>&1 ||
+        { echo "EventBus credential provisioning failed" >&2; exit 1; }
     else
       mkdir -p "${eventbus_credentials_dir}"
       "${ROOT}/bin/moox-admin-cli" eventbus-credentials ensure \
@@ -2665,8 +2673,15 @@ start_factor() {
     echo "Factor requires MOOX_STORAGE_PRIMARY_AUTH_SECRET" >&2
     exit 1
   }
+  local factor_db="${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor/factor.db}"
+  local factor_schema_mark
+  factor_schema_mark="$(dirname "${factor_db}")/schema.control-split"
+  if [[ ! -f "${factor_schema_mark}" ]]; then
+    rm -f "${factor_db}" "${factor_db}-wal" "${factor_db}-shm"
+    mkdir -p "$(dirname "${factor_db}")"
+    : >"${factor_schema_mark}"
+  fi
   wait_factor_nats
-  ensure_factor_python
   gateway_service_env_for factor
   runtime_identity_env moox_factor "${ROOT}/factor/config/app.yaml"
   start_service "factor" "${ROOT}/factor" \

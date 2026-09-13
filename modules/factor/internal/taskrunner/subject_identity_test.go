@@ -34,3 +34,21 @@ func TestBuildSubjectTaskRequiresSourceIdentity(t *testing.T) {
 	_, err = BuildTask(scope, factor, "/factors")
 	require.ErrorContains(t, err, "input contract")
 }
+
+func TestBuildTaskPreservesExplicitEmptySourceSeries(t *testing.T) {
+	scope := TaskScope{BindingGeneration: "generation", SubjectID: "BTC", StartTime: time.Unix(60, 0), EndTime: time.Unix(120, 0)}
+	factor := domain.FactorDef{FactorType: domain.FactorTypeTimeSeries, Status: domain.FactorStatusEnabled, SourceHash: "hash"}
+	unfiltered, err := BuildTask(scope, factor, "/factors")
+	require.NoError(t, err)
+	scope.FilterSourceSeriesTag = true
+	empty, err := BuildTask(scope, factor, "/factors")
+	require.NoError(t, err)
+	require.True(t, empty.FilterSourceSeriesTag)
+	require.Empty(t, empty.SourceSeriesTag)
+	require.NotEqual(t, DeterministicTaskID(unfiltered), DeterministicTaskID(empty))
+	scope.SourceSeriesTag = "venue:test"
+	named, err := BuildTask(scope, factor, "/factors")
+	require.NoError(t, err)
+	require.Equal(t, "venue:test", named.SourceSeriesTag)
+	require.NotEqual(t, DeterministicTaskID(empty), DeterministicTaskID(named))
+}

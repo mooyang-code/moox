@@ -71,11 +71,14 @@ func TestNetworkClientEnsureCCNReusesExisting(t *testing.T) {
 	}
 }
 
-func TestNetworkClientAttachVPCToCCNTreatsAlreadyAttachedAsSuccess(t *testing.T) {
+func TestNetworkClientDetachVPCFromCCNTreatsNotAttachedAsSuccess(t *testing.T) {
 	client := newTestNetworkClient(t, func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"Response":{"Error":{"Code":"UnsupportedOperation.CcnAttached","Message":"already attached"}}}`))
+		if r.Header.Get("X-TC-Action") != "DetachCcnInstances" {
+			t.Fatalf("action = %s", r.Header.Get("X-TC-Action"))
+		}
+		_, _ = w.Write([]byte(`{"Response":{"Error":{"Code":"UnsupportedOperation.CcnNotAttached","Message":"not attached"}}}`))
 	})
-	if err := client.AttachVPCToCCN(context.Background(), "ccn-moox", "ap-hongkong", "vpc-storage"); err != nil {
+	if err := client.DetachVPCFromCCN(context.Background(), "ccn-moox", "ap-shanghai", "vpc-scf"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -120,6 +123,29 @@ func TestNetworkClientUpdateSCFNetworkSendsVpcAndPublicNet(t *testing.T) {
 	}
 	if _, ok := payload["Environment"]; ok {
 		t.Fatal("environment must be omitted when not requested")
+	}
+}
+
+func TestNetworkClientUpdateSCFNetworkSendsEmptyVpcToUnbind(t *testing.T) {
+	var payload map[string]any
+	client := newTestNetworkClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(`{"Response":{"RequestId":"req-scf"}}`))
+	})
+	if err := client.UpdateSCFNetwork(context.Background(), "default", "moox-fetcher-1", "", "", "ENABLE", map[string]string{
+		"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://146.56.196.204:11003",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	vpc, _ := payload["VpcConfig"].(map[string]any)
+	if vpc["VpcId"] != "" || vpc["SubnetId"] != "" {
+		t.Fatalf("unbind vpc payload = %#v", payload["VpcConfig"])
 	}
 }
 

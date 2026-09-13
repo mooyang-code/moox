@@ -21,7 +21,7 @@ EventBus TLS CA、server 证书和每个 NATS role token 是**一份权威材料
 控制主机（默认 `/home/ubuntu/.config/moox/eventbus/`，mode `0600`/`0700`）：
 
 - `ca.pem`、`server.pem`、`server-key.pem`、`users.yaml`
-- 每个 role 一份 YAML：`hostagent-publisher.yaml`、`storage-eventbus.yaml`、`trade-eventbus.yaml`、`strategy-eventbus.yaml`、`factor-eventbus.yaml`、`monitor-observability.yaml`、`archive-eventbus.yaml`、`cloudnode-eventbus.yaml`、`cloudnode-worker.yaml`、`market-fetch-publisher.yaml`、`collector-market-fetch-consumer.yaml`、`metrics-publisher.yaml`、`internal-admin.yaml`
+- 每个 role 一份 YAML：`hostagent-publisher.yaml`、`storage-eventbus.yaml`、`trade-eventbus.yaml`、`strategy-eventbus.yaml`、`factor-eventbus.yaml`、`factor-engine-eventbus.yaml`、`monitor-observability.yaml`、`archive-eventbus.yaml`、`cloudnode-eventbus.yaml`、`cloudnode-worker.yaml`、`market-fetch-publisher.yaml`、`collector-market-fetch-consumer.yaml`、`metrics-publisher.yaml`、`internal-admin.yaml`
 
 生成与轮换只通过 `skills/moox/scripts/eventbus-credentials.sh`（Admin CLI）。
 不要把 token 或私钥打进 release archive、ZIP、命令行、聊天或 git。
@@ -38,7 +38,8 @@ EventBus TLS CA、server 证书和每个 NATS role token 是**一份权威材料
 | Control 包内 Host Agent | `~/.config/moox/eventbus/hostagent-publisher.yaml` + `ca.pem` | `deploy-control` |
 | **其他主机 user-systemd Host Agent** | `~/.config/moox/hostagent/eventbus.yaml` + `ca.pem` | **`hostagent-deploy.sh`（可 `--credentials-only`）**；**不被** `deploy-control` / `deploy-service` 覆盖 |
 | Storage（常在独立主机） | `~/.config/moox/eventbus/storage-eventbus.yaml` + `ca.pem` | `setup deploy-storage`（从 control 拷贝） |
-| Trade / Strategy / Factor / Monitor / Archive / CloudNode | 该主机 `~/.config/moox/eventbus/<role>.yaml` + `ca.pem` | 对应 `deploy-service` 或该主机的 control 包启动路径 |
+| Trade / Strategy / Factor 控制面 / Monitor / Archive / CloudNode | 该主机 `~/.config/moox/eventbus/<role>.yaml` + `ca.pem` | 对应 `deploy-service` 或该主机的 control 包启动路径 |
+| Factor 计算引擎 | 内网主机 `~/.config/moox/eventbus/factor-engine-eventbus.yaml` + `ca.pem` | `package-factor-engine.sh` 后 `setup deploy-service`；role 文件走公网 EventBus URL |
 | Collector SCF / CloudNode worker SCF | 函数环境 `MOOX_EVENTBUS_NATS_URL/USERNAME/PASSWORD` 与 `MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64` | **重新发布 SCF 包**；禁止 `MOOX_EVENTBUS_NATS_TLS_CA_FILE` |
 
 Host Agent 在 compute 节点上是独立 rootless 安装。只发布 Storage/Trade 二进制或只 `export` control，**香港/其他 CVM 上的 Host Agent 会继续用旧 CA 和旧 token**。
@@ -83,4 +84,4 @@ Host Agent 在 compute 节点上是独立 rootless 安装。只发布 Storage/Tr
 
 - 把 token/私钥写进 argv、`SSHPASS` 以外的日志、git、skill 测试夹具以外的仓库文件。
 - 为修连通性关闭 TLS 校验或改用 `nats://` 公网明文。
-- 把 EventBus URL 改成内网 IP。证书 SAN 是公网 IP，TLS 校验会失败。
+- 把 EventBus URL 改成内网 IP。证书 SAN 是公网 IP，TLS 校验会失败。SCF 必须继续用公网 `tls://<公网>:4222`，见 `private-network.md`。

@@ -33,7 +33,6 @@ type Service struct {
 	indexView                  map[string]viewRef
 	authSecret                 string
 	pendingSubjectsDir         string
-	pendingSubjectsGate        *indexWriteGate
 	primaryAuth                *pb.AuthInfo
 	primary                    FieldReader
 	mu                         sync.RWMutex

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os/exec"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -140,23 +141,43 @@ func handleFixtureConn(raw net.Conn, cfg *xssh.ServerConfig) {
 func handleFixtureSession(channel xssh.Channel, requests <-chan *xssh.Request) {
 	defer channel.Close()
 	for request := range requests {
-		if request.Type != "subsystem" {
-			_ = request.Reply(false, nil)
-			continue
-		}
-		var subsystem struct{ Name string }
-		if xssh.Unmarshal(request.Payload, &subsystem) != nil || subsystem.Name != "sftp" {
-			_ = request.Reply(false, nil)
-			continue
-		}
-		_ = request.Reply(true, nil)
-		server, err := sftp.NewServer(channel)
-		if err != nil {
+		switch request.Type {
+		case "exec":
+			var execReq struct{ Command string }
+			if xssh.Unmarshal(request.Payload, &execReq) != nil || !strings.HasPrefix(execReq.Command, "'mv' '-f' ") {
+				_ = request.Reply(false, nil)
+				continue
+			}
+			_ = request.Reply(true, nil)
+			cmd := exec.Command("sh", "-c", execReq.Command)
+			cmd.Stdout = channel
+			cmd.Stderr = channel.Stderr()
+			exit := uint32(0)
+			if err := cmd.Run(); err != nil {
+				exit = 1
+				if ee, ok := err.(*exec.ExitError); ok {
+					exit = uint32(ee.ExitCode())
+				}
+			}
+			_, _ = channel.SendRequest("exit-status", false, xssh.Marshal(struct{ Status uint32 }{Status: exit}))
 			return
+		case "subsystem":
+			var subsystem struct{ Name string }
+			if xssh.Unmarshal(request.Payload, &subsystem) != nil || subsystem.Name != "sftp" {
+				_ = request.Reply(false, nil)
+				continue
+			}
+			_ = request.Reply(true, nil)
+			server, err := sftp.NewServer(channel)
+			if err != nil {
+				return
+			}
+			_ = server.Serve()
+			_ = server.Close()
+			return
+		default:
+			_ = request.Reply(false, nil)
 		}
-		_ = server.Serve()
-		_ = server.Close()
-		return
 	}
 }
 
@@ -266,4 +287,25 @@ func TestUploadInstallsFileAtomically(t *testing.T) {
 	matches, err := filepath.Glob(destination + ".next-*")
 	require.NoError(t, err)
 	assert.Empty(t, matches)
+}
+
+func TestUploadReplacesExistingFile(t *testing.T) {
+	fixture := startSSHFixture(t)
+	knownHosts := knownHostsFile(t)
+	require.NoError(t, TrustHost(context.Background(), fixture.target, xssh.FingerprintSHA256(fixture.publicKey), Options{KnownHostsPath: knownHosts}))
+	client, err := Dial(context.Background(), fixture.target, fixture.password, Options{KnownHostsPath: knownHosts})
+	require.NoError(t, err)
+	defer client.Close()
+
+	destination := filepath.Join(t.TempDir(), "ca.pem")
+	require.NoError(t, os.WriteFile(destination, []byte("old-ca"), 0o600))
+	payload := "new-ca"
+	require.NoError(t, client.Upload(context.Background(), strings.NewReader(payload), int64(len(payload)), destination, 0o600))
+
+	contents, err := os.ReadFile(destination)
+	require.NoError(t, err)
+	assert.Equal(t, payload, string(contents))
+	info, err := os.Stat(destination)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }

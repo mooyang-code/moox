@@ -92,7 +92,7 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"init", "hosts", "validate", "trust-host", "trust-browser", "deploy-control", "deploy-service", "apply", "status", "deploy-storage", "install-storage-watchdog", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "e2e-eventbus", "export-skill-config", "firewall", "private-network"} {
+	for _, name := range []string{"init", "hosts", "validate", "trust-host", "trust-browser", "deploy-control", "deploy-service", "build-linux", "apply", "status", "deploy-storage", "install-storage-watchdog", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "e2e-eventbus", "export-skill-config", "firewall", "private-network"} {
 		require.Contains(t, output.String(), name)
 	}
 	require.Contains(t, output.String(), "render-runtime-config")
@@ -507,6 +507,17 @@ func TestControlDeployOptionsUsesConfiguredStorageGatewayHost(t *testing.T) {
 	opts := controlDeployOptions(snapshot, "/repo")
 	require.Equal(t, "ip://146.56.196.204:11003", opts.LocalStorageRPCGatewayTarget)
 	require.Equal(t, "storage", opts.LocalStorageGatewayNodeID)
+}
+
+func TestControlDeployOptionsPassCompileHost(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	snapshot.Manifest.CompileHost = setupconfig.Host{
+		Name: "compile", Address: "203.0.113.10", Port: 22, Username: "builder", Password: "compile-ssh-password",
+	}
+	opts := controlDeployOptions(snapshot, "/repo")
+	require.Equal(t, "compile-ssh-password", opts.StorageBuildPassword)
+	require.Equal(t, "compile", opts.StorageBuildHost)
+	require.Equal(t, "compile", opts.StorageBuildHostRole)
 }
 
 func TestEventBusFirewallIPResolvesDNSWithoutChangingAdvertisedAddress(t *testing.T) {

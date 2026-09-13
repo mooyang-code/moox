@@ -866,7 +866,16 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 	}
 	selectColumns = append(selectColumns, projected...)
 	sort.Strings(selectColumns[4:])
-	query := "SELECT " + joinQuoted(selectColumns) + " FROM view_rows" + where
+	projections := make([]string, len(selectColumns))
+	for i, name := range selectColumns {
+		projections[i] = quote(name)
+		// Avoid the driver's JSON -> interface{} conversion, which rounds
+		// numbers through float64 and collapses JSON null into SQL NULL.
+		if columns[name] == pb.FieldValueType_FIELD_VALUE_TYPE_JSON {
+			projections[i] = "CAST(" + quote(name) + " AS VARCHAR) AS " + quote(name)
+		}
+	}
+	query := "SELECT " + strings.Join(projections, ",") + " FROM view_rows" + where
 	if spec.RowsPerSeries > 0 {
 		query += " QUALIFY ROW_NUMBER() OVER (PARTITION BY subject_id, freq, series_tag ORDER BY data_time DESC) <= ? ORDER BY subject_id, freq, series_tag, data_time ASC"
 		args = append(args, spec.RowsPerSeries)
@@ -913,7 +922,7 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 				continue
 			}
 			if value == nil {
-				if len(spec.Includes) == 0 {
+				if len(spec.Includes) == 0 && spec.RowsPerSeries == 0 {
 					continue
 				}
 				row.Fields = append(row.Fields, &pb.FieldValue{FieldId: name, Value: &pb.TypedValue{

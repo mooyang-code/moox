@@ -188,9 +188,13 @@ func secureKnownHostsPath(path string, create bool) (string, error) {
 }
 
 func dialContext(ctx context.Context, address string, config *xssh.ClientConfig, timeout time.Duration) (*xssh.Client, error) {
-	raw, err := (&net.Dialer{Timeout: timeout}).DialContext(ctx, "tcp", address)
+	raw, err := (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, err
+	}
+	if tcp, ok := raw.(*net.TCPConn); ok {
+		_ = tcp.SetKeepAlive(true)
+		_ = tcp.SetKeepAlivePeriod(30 * time.Second)
 	}
 	deadline := time.Now().Add(timeout)
 	_ = raw.SetDeadline(deadline)
@@ -268,7 +272,7 @@ func (t *transport) Upload(ctx context.Context, src io.Reader, size int64, dst s
 	}
 	client, err := sftp.NewClient(t.client)
 	if err != nil {
-		return fmt.Errorf("ssh_upload_failed")
+		return fmt.Errorf("ssh_upload_failed: %w", err)
 	}
 	defer closeSFTPClient(client)
 	suffix := make([]byte, 8)
@@ -278,7 +282,7 @@ func (t *transport) Upload(ctx context.Context, src io.Reader, size int64, dst s
 	temporary := dst + ".next-" + hex.EncodeToString(suffix)
 	file, err := client.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 	if err != nil {
-		return fmt.Errorf("ssh_upload_failed")
+		return fmt.Errorf("ssh_upload_failed: %w", err)
 	}
 	fileOpen := true
 	removeTemporary := true
@@ -291,7 +295,10 @@ func (t *transport) Upload(ctx context.Context, src io.Reader, size int64, dst s
 		}
 	}()
 	written, err := io.Copy(file, &contextReader{ctx: ctx, reader: io.LimitReader(src, size+1)})
-	if err != nil || written != size {
+	if err != nil {
+		return fmt.Errorf("ssh_upload_failed: %w", err)
+	}
+	if written != size {
 		return fmt.Errorf("ssh_upload_failed")
 	}
 	if err := file.Chmod(mode.Perm()); err != nil {
@@ -302,10 +309,16 @@ func (t *transport) Upload(ctx context.Context, src io.Reader, size int64, dst s
 	}
 	fileOpen = false
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("ssh_upload_failed")
+		return fmt.Errorf("ssh_upload_failed: %w", err)
 	}
-	if err := client.Rename(temporary, dst); err != nil {
-		return fmt.Errorf("ssh_upload_failed")
+	// OpenSSH SFTP rename refuses to replace an existing file. `mv -f` replaces
+	// in place so a failed install cannot delete the previous secret first.
+	result, err := t.Run(ctx, []string{"mv", "-f", temporary, dst}, nil)
+	if err != nil {
+		if result.ExitCode != 0 {
+			return fmt.Errorf("ssh_upload_failed")
+		}
+		return fmt.Errorf("ssh_upload_failed: %w", err)
 	}
 	removeTemporary = false
 	return nil

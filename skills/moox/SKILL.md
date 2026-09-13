@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo, operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, factor clear-queue, Tencent Cloud Lighthouse firewall changes, CCN/云联网, SCF VPC, 内网组网, private-network, storage_private_gateway_host, and control-plane maintenance.
+description: Use when working in the MooX monorepo, operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, factor clear-queue, Tencent Cloud Lighthouse firewall changes, CCN/云联网, CCN 费用, SCF 公网, SCF VPC, restore-scf-public, 内网组网, private-network, storage_private_gateway_host, MOOX_STORAGE_RPC_GATEWAY_TARGET, and control-plane maintenance.
 ---
 
 # MooX Quant Data System
@@ -115,12 +115,13 @@ The script calls `bin/moox-cli` from the repository when present, or `moox-cli` 
 
 ### Tencent Private Network
 
-When the user asks to join CVM/Lighthouse/SCF into a private network, open
-CCN/云联网, bind SCF VPC, switch Storage RPC to an internal IP, or run
-`setup private-network`, follow
-[`references/private-network.md`](references/private-network.md). Keep
-`storage_gateway_host` public; write only `storage_private_gateway_host`.
-Do not change EventBus, Caddy, or `MOOX_PUBLIC_HOST` to private IPs.
+**主机与 SCF 通信一律走公网。** Do not create CCN, bind functions to VPC, or
+rewrite host runtimes to private Storage IPs. When the user mentions 云联网,
+SCF VPC, CCN 费用, restore-scf-public, 内网组网, or `setup private-network`,
+follow [`references/private-network.md`](references/private-network.md). Keep
+`storage_gateway_host` and EventBus `tls://<公网>:4222` public. Ignore
+`storage_private_gateway_host`. Do not change Caddy or `MOOX_PUBLIC_HOST` to
+private IPs.
 
 Runtime data can be deleted and rebuilt from `examples/` and service flows. Do not reintroduce standalone acceptance CSV scripts.
 
@@ -263,9 +264,9 @@ When initializing a fresh MooX system, follow
 [`references/custom-setup.md`](references/custom-setup.md) exactly. The user
 creates repository-root `moox.toml` before deployment. The Agent may test only
 whether it exists and must never read, parse, print, copy, or source it outside
-`moox-cli setup`, except the `storage_private_gateway_host` edit in
-[`references/private-network.md`](references/private-network.md) when the user
-explicitly asks to configure private IPs.
+`moox-cli setup`, except the `storage_gateway_host` confirmation in
+[`references/private-network.md`](references/private-network.md) when checking
+that Storage RPC stays on the public IP.
 
 Run `validate`, `deploy-control`, `apply`, and `status` in that order. Do not
 ask about Storage until setup is complete and the public login API is verified.
@@ -275,8 +276,8 @@ that machine. After Storage is ready, run `setup init --config-dir
 ./config/setup --storage-host <host-name>` to create or verify the
 default Admin spaces and Storage metadata, activate Datasets, and verify the
 result. Keep `moox.toml` secrets unchanged and never parse a generated filtered seed
-in Agent context. After Tencent hosts exist, private-network setup is
-[`references/private-network.md`](references/private-network.md).
+in Agent context. After Tencent hosts exist, public-IP communication is
+[`references/private-network.md`](references/private-network.md); 主机与 SCF 通信一律走公网.
 
 `t_service_deployments` remains the source of truth for service addresses.
 `/#/ops/storage/nodes` remains the separate PrimaryStore topology and is never

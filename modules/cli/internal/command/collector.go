@@ -2441,7 +2441,10 @@ type collectorProbeReport struct {
 func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*collectorProbeReport, error) {
 	controlURL := strings.TrimSpace(opts.ControlURL)
 	if controlURL == "" {
-		return nil, fmt.Errorf("--control-url is required")
+		if strings.TrimSpace(opts.File) == "" {
+			return nil, fmt.Errorf("--control-url is required")
+		}
+		return probeCollectorEgressViaControlHost(ctx, opts)
 	}
 	spaceID := defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID"))
 	if spaceID == "" {
@@ -2469,6 +2472,70 @@ func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*col
 		return nil, fmt.Errorf("no active market_fetcher SCF nodes are available for egress probe")
 	}
 	return probeCollectorEgressNodes(ctx, client, eligible, stockCN, expectedCount)
+}
+
+func probeCollectorEgressViaControlHost(ctx context.Context, opts collectorProbeOptions) (*collectorProbeReport, error) {
+	spaceID := defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID"))
+	if spaceID == "" {
+		return nil, fmt.Errorf("--space-id is required")
+	}
+	absFile, err := filepath.Abs(strings.TrimSpace(opts.File))
+	if err != nil {
+		return nil, fmt.Errorf("config_invalid: resolve moox.toml path")
+	}
+	snapshot, err := setupconfig.Load(absFile, filepath.Dir(absFile))
+	if err != nil {
+		return nil, err
+	}
+	defer clearSetupSecrets(snapshot)
+	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	if err != nil {
+		return nil, err
+	}
+	defer control.Close()
+	controlRoot := snapshot.Manifest.Paths.Resolved().ControlRoot
+	region := strings.TrimSpace(opts.Region)
+	result, runErr := control.Run(ctx, []string{"bash", "-lc", `set -euo pipefail
+control_root="$1"
+space_id="$2"
+region="$3"
+set -a
+. "${control_root}/secrets/gateway-moox-cli.env"
+set +a
+cli="${control_root}/bin/moox-cli"
+if [[ -n "${region}" ]]; then
+  exec "${cli}" collector function probe-egress --control-url http://127.0.0.1:11002 --space-id "${space_id}" --region "${region}"
+fi
+exec "${cli}" collector function probe-egress --control-url http://127.0.0.1:11002 --space-id "${space_id}"
+`, "moox-probe-egress", controlRoot, spaceID, region}, nil)
+	stdout := strings.TrimSpace(result.Stdout)
+	report := &collectorProbeReport{}
+	if stdout != "" {
+		if err := json.Unmarshal([]byte(stdout), report); err != nil {
+			start := strings.LastIndex(stdout, "{")
+			end := strings.LastIndex(stdout, "}")
+			if start >= 0 && end > start {
+				_ = json.Unmarshal([]byte(stdout[start:end+1]), report)
+			}
+		}
+	}
+	if runErr != nil {
+		detail := strings.TrimSpace(result.Stderr)
+		if detail == "" {
+			detail = strings.TrimSpace(result.Stdout)
+		}
+		if len(detail) > 400 {
+			detail = detail[:400]
+		}
+		if report != nil && len(report.Results) > 0 {
+			return report, fmt.Errorf("control host probe-egress failed: %s", detail)
+		}
+		if detail == "" {
+			return report, fmt.Errorf("control host probe-egress failed")
+		}
+		return report, fmt.Errorf("control host probe-egress failed: %s", detail)
+	}
+	return report, nil
 }
 
 func probeCollectorEgressNodes(ctx context.Context, client *adminclient.Client, eligible []adminclient.CloudNode, stockCN bool, expectedCount int) (*collectorProbeReport, error) {
@@ -3017,13 +3084,9 @@ func metadataIntValue(metadata map[string]any, key string) (int, bool) {
 }
 
 func collectorStorageRPCGatewayTarget(opts collectorPublishOptions) string {
-	public := firstNonEmpty(opts.StorageRPCGatewayTarget, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET"))
-	if tencent.NetworkArea(opts.Region) == "mainland" {
-		if private := strings.TrimSpace(opts.StoragePrivateRPCGatewayTarget); private != "" {
-			return private
-		}
-	}
-	return public
+	// SCF always uses the public Storage gateway. Private/CCN targets stay on
+	// the host Collector runtime and must not be published into function env.
+	return firstNonEmpty(opts.StorageRPCGatewayTarget, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET"))
 }
 
 func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...string) (map[string]string, error) {

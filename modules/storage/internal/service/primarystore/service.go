@@ -225,6 +225,24 @@ func rejectMooxSkillWrite(auth *pb.AuthInfo) error {
 	return nil
 }
 
+func isFactorAppID(appID string) bool {
+	switch strings.ToLower(strings.TrimSpace(appID)) {
+	case "factor", "moox-factor", "moox-factor-engine":
+		return true
+	default:
+		return false
+	}
+}
+
+func isOwnedAppID(appID, owner string) bool {
+	appID = strings.ToLower(strings.TrimSpace(appID))
+	owner = strings.ToLower(strings.TrimSpace(owner))
+	if appID == owner || appID == "moox-"+owner {
+		return true
+	}
+	return owner == "factor" && isFactorAppID(appID)
+}
+
 func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*pb.RowFieldUpsert) error {
 	snapshot := metadata.RequestSnapshotFromContext(ctx)
 	if snapshot == nil {
@@ -249,7 +267,7 @@ func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*p
 			continue
 		}
 		appID := strings.ToLower(strings.TrimSpace(auth.GetAppId()))
-		if appID != "factor" && appID != "moox-factor" {
+		if !isFactorAppID(appID) {
 			return fmt.Errorf("dataset %s/%s is writable only by Factor", key.spaceID, key.datasetID)
 		}
 	}

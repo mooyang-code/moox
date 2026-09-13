@@ -19,21 +19,23 @@ func newSetupPrivateNetworkCommand(deps setupDeps) *cobra.Command {
 
 func newPrivateNetworkCommand(use string, deps setupDeps) *cobra.Command {
 	var file, ccnName, probeRegions string
-	var dryRun, skipSCF, skipHosts, skipProbe, probeOnly, rewriteRuntime, updateGateway bool
+	var dryRun, skipSCF, skipHosts, skipProbe, probeOnly, rewriteRuntime, updateGateway, restorePublic bool
 	cmd := &cobra.Command{
 		Use:   use,
-		Short: "打通腾讯云主机与 SCF 的内网",
-		Long: `读取 moox.toml 中 provider=tencent 的主机，查询其 VPC/子网/内网 IP，
-必要时创建云联网并绑定各地域 SCF VPC，使 Control、Storage、Compute 和 SCF 走内网通信。
+		Short: "腾讯云主机与 SCF 一律走公网；不再创建云联网",
+		Long: `读取 moox.toml 中 provider=tencent 的主机。容器与主机之间一律使用公网 IP，
+不再创建云联网、不再给 SCF 绑定 VPC。
 
-不会调用 ModifyInstancesVpcAttribute，因此不会停机迁移现有 CVM。
-SSH 和控制台入口继续使用公网 IP。
+可用 --restore-scf-public 把存量函数网关改回公网并解绑 VPC。
+可用 --rewrite-runtime 把主机 runtime.env 中的 Storage RPC 改回公网 IP。
+
+SSH 和控制台入口继续使用公网 IP。不会调用 ModifyInstancesVpcAttribute。
 
 示例：
   moox-cli setup private-network --file ./moox.toml --dry-run
-  moox-cli setup private-network --file ./moox.toml
-  moox-cli ops tencent private-network --file ./moox.toml --skip-scf
-  moox-cli setup private-network --file ./moox.toml --ccn-name moox-private-network`,
+  moox-cli setup private-network --file ./moox.toml --restore-scf-public --dry-run
+  moox-cli setup private-network --file ./moox.toml --restore-scf-public
+  moox-cli setup private-network --file ./moox.toml --rewrite-runtime --skip-probe`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			snapshot, err := deps.load(file)
@@ -41,6 +43,12 @@ SSH 和控制台入口继续使用公网 IP。
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
+			if restorePublic || updateGateway {
+				restorePublic = true
+				skipSCF = false
+				skipHosts = true
+				skipProbe = true
+			}
 			opts := privatenet.Options{
 				HomeRegion:       snapshot.Manifest.TencentCloud.Region,
 				CCNName:          strings.TrimSpace(ccnName),
@@ -50,7 +58,8 @@ SSH 和控制台入口继续使用公网 IP。
 				SkipProbe:        skipProbe,
 				ProbeOnly:        probeOnly,
 				RewriteRuntime:   rewriteRuntime,
-				UpdateSCFGateway: updateGateway,
+				RestoreSCFPublic: restorePublic,
+				UnbindSCFVPC:     restorePublic,
 			}
 			if strings.TrimSpace(probeRegions) != "" {
 				opts.ProbeRegions = splitCSV(probeRegions)
@@ -69,12 +78,13 @@ SSH 和控制台入口继续使用公网 IP。
 	cmd.Flags().StringVar(&ccnName, "ccn-name", privatenet.DefaultCCNName, "云联网名称，已存在则复用")
 	cmd.Flags().StringVar(&probeRegions, "probe-regions", "", "额外探测地域，逗号分隔；默认含广州/香港/上海/北京/成都/新加坡/东京")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只发现拓扑并输出计划，不调用写 API")
-	cmd.Flags().BoolVar(&skipSCF, "skip-scf", false, "只处理 CVM/轻量主机，不绑定 SCF VPC")
-	cmd.Flags().BoolVar(&skipHosts, "skip-hosts", false, "跳过主机安全组/轻量防火墙（仍会解析主机内网 IP）")
-	cmd.Flags().BoolVar(&skipProbe, "skip-probe", false, "跳过 SSH 内网端口探测")
-	cmd.Flags().BoolVar(&probeOnly, "probe-only", false, "只探测内网连通性和运行时公网 IP 引用，不调用写 API")
-	cmd.Flags().BoolVar(&rewriteRuntime, "rewrite-runtime", false, "把国内主机 runtime.env 中的 Storage RPC 公网 IP 改成内网 IP 并重启 Collector")
-	cmd.Flags().BoolVar(&updateGateway, "update-scf-gateway", false, "把已绑定 VPC 的函数环境变量中的 Storage 公网 IP 替换为内网 IP")
+	cmd.Flags().BoolVar(&skipSCF, "skip-scf", true, "不给 SCF 建 VPC/绑 CCN；SCF 统一走公网")
+	cmd.Flags().BoolVar(&skipHosts, "skip-hosts", true, "跳过主机安全组/轻量防火墙")
+	cmd.Flags().BoolVar(&skipProbe, "skip-probe", false, "跳过 SSH 公网端口探测")
+	cmd.Flags().BoolVar(&probeOnly, "probe-only", false, "只探测公网连通性，不调用写 API")
+	cmd.Flags().BoolVar(&rewriteRuntime, "rewrite-runtime", false, "把主机 runtime.env 中的 Storage RPC 改回公网 IP 并重启 Collector")
+	cmd.Flags().BoolVar(&updateGateway, "update-scf-gateway", false, "已废弃，等价于 --restore-scf-public")
+	cmd.Flags().BoolVar(&restorePublic, "restore-scf-public", false, "把 SCF Storage 网关改回公网 IP，并解除函数 VPC/CCN")
 	return cmd
 }
 
@@ -91,6 +101,11 @@ func defaultEnsurePrivateNetwork(ctx context.Context, snapshot *setupconfig.Snap
 		return privatenet.Result{}, fmt.Errorf("private-network: no hosts with provider=tencent")
 	}
 	scf := privatenet.CollectSCFTargets(snapshot.Manifest)
+	if opts.RestoreSCFPublic {
+		scf = privatenet.CollectSCFRestoreTargets(snapshot.Manifest)
+	} else if opts.SkipSCF {
+		scf = nil
+	}
 	if opts.HomeRegion == "" {
 		opts.HomeRegion = snapshot.Manifest.TencentCloud.Region
 	}
@@ -125,9 +140,6 @@ func defaultEnsurePrivateNetwork(ctx context.Context, snapshot *setupconfig.Snap
 	if err != nil {
 		return privatenet.Result{}, err
 	}
-	if opts.SkipSCF {
-		scf = nil
-	}
 	plan := privatenet.BuildPlan(opts, resolved, scf, privatenet.PrivateServicePorts(snapshot.Manifest.EventBus.Port))
 	result := privatenet.Result{Plan: plan, RecommendedConfig: plan.Recommended, Status: "ready"}
 	if !opts.ProbeOnly {
@@ -140,7 +152,7 @@ func defaultEnsurePrivateNetwork(ctx context.Context, snapshot *setupconfig.Snap
 		result.DryRun = false
 		result.Status = "probe_only"
 	}
-	if opts.DryRun || opts.SkipProbe {
+	if opts.DryRun || (!shouldRunPrivateNetworkProbes(opts) && !shouldRewritePublicStorageRPC(opts)) {
 		return result, nil
 	}
 	exec := func(ctx context.Context, publicIP, script string) (string, error) {
@@ -159,21 +171,26 @@ func defaultEnsurePrivateNetwork(ctx context.Context, snapshot *setupconfig.Snap
 		}
 		return out.Stdout, nil
 	}
-	eventBusPort := ""
-	if snapshot.Manifest.EventBus.Port > 0 {
-		eventBusPort = fmt.Sprintf("%d", snapshot.Manifest.EventBus.Port)
-	}
-	probes := privatenet.PlannedProbes(result.Plan.Hosts, eventBusPort)
-	result.Probes = privatenet.RunHostProbes(applyCtx, exec, result.Plan.Hosts, probes)
-	result.RuntimeConfigHits = privatenet.InspectPublicIPRefs(applyCtx, exec, result.Plan.Hosts)
-	if probeErr := privatenet.MainlandProbesFailed(result.Probes); probeErr != nil {
-		result.Status = "probe_failed"
-		if stderr != nil {
-			fmt.Fprintln(stderr, probeErr.Error())
+	if shouldRunPrivateNetworkProbes(opts) {
+		eventBusPort := ""
+		if snapshot.Manifest.EventBus.Port > 0 {
+			eventBusPort = fmt.Sprintf("%d", snapshot.Manifest.EventBus.Port)
 		}
-		return result, nil
+		probes := privatenet.PlannedProbes(result.Plan.Hosts, eventBusPort)
+		result.Probes = privatenet.RunHostProbes(applyCtx, exec, result.Plan.Hosts, probes)
+		result.RuntimeConfigHits = privatenet.InspectPublicIPRefs(applyCtx, exec, result.Plan.Hosts)
+		if probeErr := privatenet.PublicProbesFailed(result.Probes); probeErr != nil {
+			result.Status = "probe_failed"
+			if stderr != nil {
+				fmt.Fprintln(stderr, probeErr.Error())
+			}
+			if !shouldRewritePublicStorageRPC(opts) {
+				return result, nil
+			}
+		}
 	}
-	if opts.RewriteRuntime {
+	if shouldRewritePublicStorageRPC(opts) {
+		result.Plan.Hosts = appendMissingFactorHosts(result.Plan.Hosts, snapshot)
 		if err := rewriteMainlandStorageRPC(applyCtx, exec, result, stderr); err != nil {
 			result.Status = "rewrite_failed"
 			return result, err
@@ -183,26 +200,90 @@ func defaultEnsurePrivateNetwork(ctx context.Context, snapshot *setupconfig.Snap
 	return result, nil
 }
 
+func shouldRunPrivateNetworkProbes(opts privatenet.Options) bool {
+	return !opts.DryRun && !opts.SkipProbe
+}
+
+func shouldRewritePublicStorageRPC(opts privatenet.Options) bool {
+	return opts.RewriteRuntime && !opts.DryRun
+}
+
+func isFactorRewriteHost(host privatenet.ResolvedHost) bool {
+	if strings.Contains(strings.ToLower(host.Name), "factor") {
+		return true
+	}
+	for _, role := range host.Roles {
+		if strings.Contains(strings.ToLower(role), "factor") {
+			return true
+		}
+	}
+	return false
+}
+
+func appendMissingFactorHosts(hosts []privatenet.ResolvedHost, snapshot *setupconfig.Snapshot) []privatenet.ResolvedHost {
+	if snapshot == nil {
+		return hosts
+	}
+	seen := map[string]struct{}{}
+	for _, host := range hosts {
+		if address := strings.TrimSpace(host.Address); address != "" {
+			seen[address] = struct{}{}
+		}
+	}
+	for _, host := range snapshot.Manifest.Hosts() {
+		if !strings.Contains(strings.ToLower(strings.TrimSpace(host.Name)), "factor") {
+			continue
+		}
+		address := strings.TrimSpace(host.Address)
+		if address == "" {
+			address = strings.TrimSpace(host.Host)
+		}
+		if address == "" {
+			continue
+		}
+		if _, ok := seen[address]; ok {
+			continue
+		}
+		seen[address] = struct{}{}
+		hosts = append(hosts, privatenet.ResolvedHost{
+			HostTarget: privatenet.HostTarget{Name: host.Name, Address: address, Roles: []string{host.Name}},
+		})
+	}
+	return hosts
+}
+
 func rewriteMainlandStorageRPC(ctx context.Context, exec func(context.Context, string, string) (string, error), result privatenet.Result, stderr io.Writer) error {
 	publicIP := strings.TrimSpace(result.RecommendedConfig.StoragePublicIP)
 	privateIP := strings.TrimSpace(result.RecommendedConfig.StoragePrivateIP)
 	if publicIP == "" || privateIP == "" {
 		return fmt.Errorf("private-network: storage public/private ip missing")
 	}
-	controlIP := ""
+	rewrote := false
 	for _, host := range result.Plan.Hosts {
 		if privatenetHostHasRole(host, "control") {
-			controlIP = host.Address
-			break
+			if err := rewriteControlCollectorStorageRPC(ctx, exec, host.Address, privateIP, publicIP, stderr); err != nil {
+				return err
+			}
+			rewrote = true
+		}
+		if isFactorRewriteHost(host) {
+			if err := rewriteFactorEngineStorageRPC(ctx, exec, host.Address, privateIP, publicIP, stderr); err != nil {
+				return err
+			}
+			rewrote = true
 		}
 	}
-	if controlIP == "" {
-		return fmt.Errorf("private-network: control host missing")
+	if !rewrote {
+		return fmt.Errorf("private-network: no control or factor host to rewrite")
 	}
+	return nil
+}
+
+func rewriteControlCollectorStorageRPC(ctx context.Context, exec func(context.Context, string, string) (string, error), controlIP, privateIP, publicIP string, stderr io.Writer) error {
 	script := fmt.Sprintf(`set -euo pipefail
 envfile=/data/moox/prod/config/runtime.env
 test -f "$envfile"
-cp -a "$envfile" "$envfile.pre-private-net"
+cp -a "$envfile" "$envfile.pre-public-net"
 python3 -c 'import pathlib,sys
 p=pathlib.Path("/data/moox/prod/config/runtime.env")
 text=p.read_text()
@@ -220,19 +301,70 @@ cd /data/moox/prod
 ./start.sh collector
 pid=$(cat /data/moox/prod/run/collector.pid)
 tr "\0" "\n" < /proc/$pid/environ | grep "^MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET=" || true
-`, publicIP, privateIP)
+`, privateIP, publicIP)
 	if stderr != nil {
-		fmt.Fprintf(stderr, "rewrite control storage rpc %s -> %s and restart collector\n", publicIP, privateIP)
+		fmt.Fprintf(stderr, "rewrite control storage rpc %s -> %s and restart collector\n", privateIP, publicIP)
 	}
 	stdout, err := exec(ctx, controlIP, script)
 	if stderr != nil && strings.TrimSpace(stdout) != "" {
 		fmt.Fprintln(stderr, strings.TrimSpace(stdout))
 	}
 	if err != nil {
-		return fmt.Errorf("rewrite runtime: %w", err)
+		return fmt.Errorf("rewrite collector runtime: %w", err)
 	}
-	if !strings.Contains(stdout, "ip://"+privateIP+":11003") {
-		return fmt.Errorf("collector did not pick up private storage rpc target")
+	if !strings.Contains(stdout, "ip://"+publicIP+":11003") {
+		return fmt.Errorf("collector did not pick up public storage rpc target")
+	}
+	return nil
+}
+
+func rewriteFactorEngineStorageRPC(ctx context.Context, exec func(context.Context, string, string) (string, error), hostIP, privateIP, publicIP string, stderr io.Writer) error {
+	script := fmt.Sprintf(`set -euo pipefail
+rewritten=0
+for envfile in "$HOME/.config/moox/factor-engine/runtime.env" "$HOME/moox/factor-engine/config/runtime.env"; do
+  if test -f "$envfile"; then
+    cp -a "$envfile" "$envfile.pre-public-net"
+    python3 -c 'import pathlib,sys
+p=pathlib.Path(sys.argv[3])
+text=p.read_text()
+old="ip://"+sys.argv[1]+":11003"
+new="ip://"+sys.argv[2]+":11003"
+if old in text:
+    p.write_text(text.replace(old,new,1))
+    print("rewrote "+old+" -> "+new+" in "+str(p))
+elif new in text:
+    print("already "+new+" in "+str(p))
+else:
+    raise SystemExit("storage rpc target "+old+" not found in "+str(p))
+' %s %s "$envfile"
+    rewritten=1
+  fi
+done
+test "$rewritten" = 1
+start=""
+for candidate in "$HOME/moox/factor-engine/start.sh"; do
+  if test -x "$candidate"; then
+    start="$candidate"
+    break
+  fi
+done
+test -n "$start"
+"$start"
+pid=$(cat "$(dirname "$start")/run/factor-engine.pid")
+tr "\0" "\n" < /proc/$pid/environ | grep "^MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=" || true
+`, privateIP, publicIP)
+	if stderr != nil {
+		fmt.Fprintf(stderr, "rewrite factor-engine storage rpc %s -> %s on %s\n", privateIP, publicIP, hostIP)
+	}
+	stdout, err := exec(ctx, hostIP, script)
+	if stderr != nil && strings.TrimSpace(stdout) != "" {
+		fmt.Fprintln(stderr, strings.TrimSpace(stdout))
+	}
+	if err != nil {
+		return fmt.Errorf("rewrite factor-engine runtime: %w", err)
+	}
+	if !strings.Contains(stdout, "ip://"+publicIP+":11003") {
+		return fmt.Errorf("factor-engine did not pick up public storage rpc target")
 	}
 	return nil
 }

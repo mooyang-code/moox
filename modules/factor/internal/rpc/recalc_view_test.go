@@ -34,6 +34,7 @@ func TestRecalcWaitsForSyncPointAndUsesViewReadyExecutor(t *testing.T) {
 	require.Len(t, executor.triggerIDs, 2)
 	require.Equal(t, []string{"", ""}, executor.factorIDs)
 	require.NotEqual(t, executor.triggerIDs[0], executor.triggerIDs[1])
+	require.Equal(t, []string{"", ""}, executor.activeIndexIDs, "recalc must not pin a physical A/B slot")
 }
 
 func TestRecalcFailsClosedWhenSourceViewHasNoActiveIndex(t *testing.T) {
@@ -65,15 +66,17 @@ func TestRecalcRejectsTimesOutsideStoragePeriodBoundaries(t *testing.T) {
 }
 
 type recordingViewReadyExecutor struct {
-	triggerIDs []string
-	factorIDs  []string
-	record     func(string)
+	triggerIDs     []string
+	factorIDs      []string
+	activeIndexIDs []string
+	record         func(string)
 }
 
-func (e *recordingViewReadyExecutor) ExecuteSelected(_ context.Context, _, triggerID, factorID string, _ *publicstoragepb.ViewSourcePeriodReady) error {
+func (e *recordingViewReadyExecutor) ExecuteSelected(_ context.Context, _, triggerID, factorID string, ready *publicstoragepb.ViewSourcePeriodReady) error {
 	e.record("execute")
 	e.triggerIDs = append(e.triggerIDs, triggerID)
 	e.factorIDs = append(e.factorIDs, factorID)
+	e.activeIndexIDs = append(e.activeIndexIDs, ready.GetActiveIndexId())
 	return nil
 }
 

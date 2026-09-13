@@ -38,6 +38,9 @@ message QueryTimeSeriesRowsReq {
   // time_range 是左闭右开时间范围。
   TimeRange time_range = 5;
   // column_names 是要返回的列名；为空时返回 View 默认列。
+  // In rows_per_series mode, empty means every business column with explicit
+  // NULL values; response columns contains the locked source schema and TS keys.
+  // All series windows are bounded to 500000 cells including four TS key columns.
   repeated string column_names = 6;
   // filter 是结构化过滤条件。
   FilterSpec filter = 7;
@@ -57,6 +60,10 @@ message QueryTimeSeriesRowsReq {
   // by the caller. A mismatch means the same active index was updated in
   // place, so the caller must restart instead of mixing generations.
   uint64 expected_active_index_revision = 13;
+  // Nonzero selects a single-snapshot window per explicit subject/frequency/tag.
+  // Requires selectors, an end time, and no paging, limit, sorting or exact total.
+  uint32 rows_per_series = 14;
+  string expected_input_contract_version = 15;
 }
 
 // QueryTimeSeriesRowsRsp 表示时序 View 数据查询结果。
@@ -74,6 +81,8 @@ message QueryTimeSeriesRowsRsp {
   bool complete = 7;
   // served_active_index_revision is the write revision used for this page.
   uint64 served_active_index_revision = 8;
+  string served_active_index_id = 9;
+  string served_input_contract_version = 10;
 }
 
 // SearchRecordRowsReq 表示搜索记录 View 数据。

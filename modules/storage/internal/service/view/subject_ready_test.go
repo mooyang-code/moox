@@ -56,6 +56,7 @@ func TestSubjectReadyAfterCommitRetriesWithStableBatchIdentity(t *testing.T) {
 		require.Equal(t, engine.writes["prices-index"], engine.writes["prices-next"], "publish failure must not bypass the replacement write")
 		require.Equal(t, events.ViewSourceSubjectReady.Name(), event.Name())
 		ready := payload.(*storagepb.ViewSourceSubjectReady)
+		require.Empty(t, ready.GetActiveIndexId(), "A/B physical slots stay inside View")
 		require.Equal(t, "schema:1", ready.InputContractVersion)
 		require.Equal(t, "node", ready.SourceNodeId)
 		require.Equal(t, map[string]uint64{"BTC": 1, "ETH": 2}[ready.SubjectId], ready.SourceSequence)

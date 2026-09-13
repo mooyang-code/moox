@@ -59,6 +59,7 @@ func LoadControlConfig(path string) (*ControlConfig, error) {
 	if err := decodeRoleConfig(path, cfg); err != nil {
 		return nil, err
 	}
+	cfg.applyEnv()
 	if strings.TrimSpace(cfg.ArtifactsDir) == "" {
 		return nil, fmt.Errorf("control artifacts_dir is required")
 	}
@@ -71,6 +72,9 @@ func LoadControlConfig(path string) (*ControlConfig, error) {
 func LoadEngineApplicationConfig(path string) (*EngineApplicationConfig, error) {
 	cfg := DefaultEngineApplicationConfig()
 	if err := decodeRoleConfig(path, cfg); err != nil {
+		return nil, err
+	}
+	if err := cfg.applyEnv(); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(cfg.EngineID) == "" || cfg.CatalogPollInterval <= 0 || cfg.CatalogSyncTimeout <= 0 {
@@ -107,6 +111,73 @@ func validateRoleStorage(database DatabaseConfig, storage StorageConfig, urls []
 		}
 	}
 	return (&Config{Storage: storage}).validateStorageTargets()
+}
+
+func (c *ControlConfig) applyEnv() {
+	applyDatabaseEnv(&c.Database)
+	applyStorageEnv(&c.Storage)
+	applyCatalogBusEnv(&c.EventBus)
+	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_ARTIFACTS_DIR")); v != "" {
+		c.ArtifactsDir = v
+	} else if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_ENGINE_FACTORS_DIR")); v != "" {
+		c.ArtifactsDir = v
+	}
+}
+
+func (c *EngineApplicationConfig) applyEnv() error {
+	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_ENGINE_DB_PATH")); v != "" {
+		c.Database.Path = v
+	}
+	applyStorageEnv(&c.Storage)
+	if v, ok := os.LookupEnv("MOOX_EVENTBUS_NATS_URL"); ok {
+		c.EventBus.URLs = splitEventBusURLs(v)
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE")); v != "" {
+		c.EventBus.CredentialFile = v
+	} else if v := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_CREDENTIAL_FILE")); v != "" {
+		c.EventBus.CredentialFile = v
+	}
+	shared := &Config{Engine: c.Engine}
+	if err := shared.applyEnv(); err != nil {
+		return err
+	}
+	c.Engine = shared.Engine
+	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_ENGINE_ID")); v != "" {
+		c.EngineID = v
+	}
+	return nil
+}
+
+func applyDatabaseEnv(c *DatabaseConfig) {
+	if v := os.Getenv("MOOX_FACTOR_DB_PATH"); v != "" {
+		c.Path = v
+	}
+}
+
+func applyStorageEnv(c *StorageConfig) {
+	if v := os.Getenv("MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET"); v != "" {
+		c.GatewayTarget = v
+	}
+	if v := os.Getenv("MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID"); v != "" {
+		c.GatewayNodeID = v
+	}
+	if v := os.Getenv("MOOX_FACTOR_STORAGE_RPC_KEY_ID"); v != "" {
+		c.KeyID = v
+	}
+	if v := os.Getenv("MOOX_FACTOR_STORAGE_RPC_HMAC_KEY_FILE"); v != "" {
+		c.HMACKeyFile = v
+	}
+}
+
+func applyCatalogBusEnv(c *CatalogBusConfig) {
+	if v, ok := os.LookupEnv("MOOX_EVENTBUS_NATS_URL"); ok {
+		c.URLs = splitEventBusURLs(v)
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE")); v != "" {
+		c.CredentialFile = v
+	} else if v := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_CREDENTIAL_FILE")); v != "" {
+		c.CredentialFile = v
+	}
 }
 
 func decodeRoleConfig(path string, target any) error {

@@ -110,7 +110,7 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 		},
 		{
 			name: "source subject ready", event: ViewSourceSubjectReady,
-			payload:   &storagepb.ViewSourceSubjectReady{SourceViewId: "source-view", SourceDatasetId: "dataset", SubjectId: "BTC-USDT", Frequency: "1m", PeriodTime: 1786032000, ActiveIndexId: "index", InputContractVersion: "contract", SourceEventId: "row-event", ReadyAt: now, SourceNodeId: "node", SourceSequence: 7, SourceStoreId: "store"},
+			payload:   &storagepb.ViewSourceSubjectReady{SourceViewId: "source-view", SourceDatasetId: "dataset", SubjectId: "BTC-USDT", Frequency: "1m", PeriodTime: 1786032000, InputContractVersion: "contract", SourceEventId: "row-event", ReadyAt: now, SourceNodeId: "node", SourceSequence: 7, SourceStoreId: "store"},
 			subjectID: "source-view",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
 				_, payload, err := DecodeViewSourceSubjectReadyWithContentType(registry, raw, subject, id, ContentType)

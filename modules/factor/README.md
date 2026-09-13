@@ -1,17 +1,17 @@
 # MooX Factor
 
-> scalar `series_tag`、单任务单 Factor 与 `lookback_periods` 已完成代码切换；
-> 生产发布与真实跨模块 E2E 验收仍按
-> [实施计划](../../docs/superpowers/plans/2026-07-29-factor-runtime-correctness-hardening.md)
-> 执行。
+`moox-factor` 是外网控制面：因子定义、绑定、目录快照与 FactorMgr。
+`moox-factor-engine` 是内网计算引擎：消费 `ViewSourceSubjectReady`、运行 Python worker、写回因子结果。
+控制面不启动 Python 计算依赖；引擎通过 NATS request-reply 拉取版本化目录。
 
-Factor 是面向个人量化的单实例时序因子服务。它只持久化因子定义与数据集绑定；
-实时触发和计算任务都保存在进程内，不提供持久化调度、运行历史或异步进度。
+实时计算走标的就绪事件，不在控制面进程内执行。缓存与截面调度尚未接入生产配置，
+引擎示例将 `cache.enabled` 保持为 `false`。
 
 ## Build And Run
 
 ```bash
 ./scripts/build/build.sh factor
+./scripts/build/build.sh factor-engine
 
 # 服务端启动方式保持不变
 ./bin/moox-factor
@@ -43,9 +43,9 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
   --start-time 2026-07-26T00:00:00Z \
   --end-time 2026-07-27T00:00:00Z
 
-# 清理历史 ViewSourcePeriodReady 积压（仅删除 durable consumer，不删除数据）
+# 清理引擎 durable 积压（默认 factor_source_subject，重启内网 factor-engine）
 ./bin/moox-factor-cli clear-queue \
-  --package-root /home/ubuntu/moox/prod \
+  --package-root /data/moox/factor-engine \
   --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
   --yes
 ```
@@ -190,10 +190,10 @@ exactly-once，缺口可用 `run-once` 或同步 `RecalcFactor` 修复。
 
 常驻服务把 View 读取与 Python 计算拆成两个独立的有界并发阶段：
 
-- `engine.view_read_workers` 默认 `8`，控制不同 subject 的并行 View 读取；任意读取完成
-  后立即补入下一个 subject，不等待固定批次。不要把默认值调回几十路并发：数百个
-  crypto subject 同时 lookback 会打满 Storage View，表现为 `11003` `i/o timeout`，
-  Factor 输出水位冻结。
+- `engine.view_read_workers` 默认 `2`，控制不同 subject 的并行 View 读取；任意读取完成
+  后立即补入下一个 subject，不等待固定批次。约 500 个 crypto subject 时，8 路 lookback
+  仍会把 Storage View / DuckDB 打满，表现为 `11003` `i/o timeout`、源 K 线 period-ready
+  大量 failed、Factor 跳分钟。不要把默认值调回 8 或几十路。
 - `engine.view_read_timeout_ms` 默认 `20000`，控制单次 View RPC；超时任务释放读取槽位并
   移到队尾重试一次，不阻塞其他 subject。
 - `engine.python_workers` 默认 `32`，控制全局 Python 计算进程和数据就绪任务并发；启动

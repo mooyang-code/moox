@@ -16,12 +16,14 @@ import (
 
 // OutputManifestKey identifies one binding/subject output period.
 type OutputManifestKey struct {
-	BindingID         string
-	BindingGeneration string
-	CleanupTaskJSON   string
-	SubjectID         string
-	Frequency         string
-	PeriodTime        time.Time
+	SourceSeriesTag       string
+	FilterSourceSeriesTag bool
+	BindingID             string
+	BindingGeneration     string
+	CleanupTaskJSON       string
+	SubjectID             string
+	Frequency             string
+	PeriodTime            time.Time
 }
 
 // OutputManifestRepository persists the dynamic RowKeys currently owned by a task.
@@ -36,7 +38,7 @@ func (r *OutputManifestRepository) Get(ctx context.Context, key OutputManifestKe
 	result := r.db.WithContext(ctx).Where(
 		"c_binding_id = ? AND c_binding_generation = ? AND c_subject_id = ? AND c_frequency = ? AND c_period_time = ?",
 		strings.TrimSpace(key.BindingID), key.BindingGeneration, strings.TrimSpace(key.SubjectID), strings.TrimSpace(key.Frequency), key.PeriodTime.UTC().UnixNano(),
-	).Limit(1).Find(&row)
+	).Where("c_filter_source_series_tag = ? AND c_source_series_tag = ?", key.FilterSourceSeriesTag, key.SourceSeriesTag).Limit(1).Find(&row)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -68,7 +70,7 @@ func (r *OutputManifestRepository) list(ctx context.Context, query *gorm.DB) ([]
 	}
 	result := make([]OutputManifestKey, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, OutputManifestKey{BindingID: row.BindingID, BindingGeneration: row.BindingGeneration, CleanupTaskJSON: row.CleanupTaskJSON, SubjectID: row.SubjectID, Frequency: row.Frequency, PeriodTime: time.Unix(0, row.PeriodTime).UTC()})
+		result = append(result, OutputManifestKey{SourceSeriesTag: row.SourceSeriesTag, FilterSourceSeriesTag: row.FilterSourceSeriesTag, BindingID: row.BindingID, BindingGeneration: row.BindingGeneration, CleanupTaskJSON: row.CleanupTaskJSON, SubjectID: row.SubjectID, Frequency: row.Frequency, PeriodTime: time.Unix(0, row.PeriodTime).UTC()})
 	}
 	return result, nil
 }
@@ -79,22 +81,41 @@ func (r *OutputManifestRepository) Replace(ctx context.Context, key OutputManife
 		return r.db.WithContext(ctx).Where(
 			"c_binding_id = ? AND c_binding_generation = ? AND c_subject_id = ? AND c_frequency = ? AND c_period_time = ?",
 			strings.TrimSpace(key.BindingID), key.BindingGeneration, strings.TrimSpace(key.SubjectID), strings.TrimSpace(key.Frequency), key.PeriodTime.UTC().UnixNano(),
-		).Delete(&domain.OutputManifest{}).Error
+		).Where("c_filter_source_series_tag = ? AND c_source_series_tag = ?", key.FilterSourceSeriesTag, key.SourceSeriesTag).Delete(&domain.OutputManifest{}).Error
 	}
 	raw, err := json.Marshal(normalized)
 	if err != nil {
 		return err
 	}
 	row := domain.OutputManifest{
+		SourceSeriesTag: key.SourceSeriesTag, FilterSourceSeriesTag: key.FilterSourceSeriesTag,
 		BindingGeneration: key.BindingGeneration, CleanupTaskJSON: key.CleanupTaskJSON,
 		BindingID: strings.TrimSpace(key.BindingID), SubjectID: strings.TrimSpace(key.SubjectID),
 		Frequency: strings.TrimSpace(key.Frequency), PeriodTime: key.PeriodTime.UTC().UnixNano(),
 		RowKeysJSON: string(raw), UpdatedAt: time.Now().UTC(),
 	}
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "c_binding_id"}, {Name: "c_binding_generation"}, {Name: "c_subject_id"}, {Name: "c_frequency"}, {Name: "c_period_time"}},
-		DoUpdates: clause.AssignmentColumns([]string{"c_row_keys_json", "c_cleanup_task_json", "c_updated_at"}),
-	}).Create(&row).Error
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var peers []domain.OutputManifest
+		if err := tx.Where("c_binding_id = ? AND c_binding_generation = ? AND c_subject_id = ? AND c_frequency = ? AND c_period_time = ?", row.BindingID, row.BindingGeneration, row.SubjectID, row.Frequency, row.PeriodTime).
+			Where("c_filter_source_series_tag != ? OR c_source_series_tag != ?", key.FilterSourceSeriesTag, key.SourceSeriesTag).Find(&peers).Error; err != nil {
+			return err
+		}
+		for _, peer := range peers {
+			var owned []string
+			if err := json.Unmarshal([]byte(peer.RowKeysJSON), &owned); err != nil {
+				return err
+			}
+			for _, output := range owned {
+				if slices.Contains(normalized, output) {
+					return domain.ErrOutputOwnershipConflict
+				}
+			}
+		}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "c_binding_id"}, {Name: "c_binding_generation"}, {Name: "c_subject_id"}, {Name: "c_frequency"}, {Name: "c_period_time"}, {Name: "c_filter_source_series_tag"}, {Name: "c_source_series_tag"}},
+			DoUpdates: clause.AssignmentColumns([]string{"c_row_keys_json", "c_cleanup_task_json", "c_updated_at"}),
+		}).Create(&row).Error
+	})
 }
 
 // DeleteBefore bounds the manifest table without touching current output

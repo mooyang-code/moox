@@ -1395,12 +1395,10 @@ func (s *Service) activateViewBuild(ctx context.Context, opts MaintenanceOptions
 	// live-event path does not observe those rows. Publish a bounded watermark
 	// sample after activation; otherwise Monitor can keep reporting no_output
 	// until the next live event arrives (or indefinitely when the durable was
-	// reset during repair).
+	// reset during repair). Rebuilds never emit subject-ready.
 	s.observeActivatedViewWatermark(view, indexID)
 	if err := s.ReplayPendingSubjects(ctx); err != nil {
-		// Activation has committed. The journal retains failed publications
-		// for maintenance retries; a bus failure must not fail this build.
-		log.Printf("storage View pending subject publication after activation failed: %v", err)
+		log.Printf("storage View leftover pending-subject cleanup after activation failed: %v", err)
 	}
 	return nil
 }

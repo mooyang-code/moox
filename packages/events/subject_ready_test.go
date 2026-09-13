@@ -11,11 +11,12 @@ import (
 
 func TestSubjectReadinessRequiresComparableSourcePosition(t *testing.T) {
 	message := &eventpb.EventMessage{SubjectId: "view"}
-	payload := &storagepb.ViewSourceSubjectReady{SourceViewId: "view", SourceDatasetId: "dataset", SubjectId: "BTC", Frequency: "1m", PeriodTime: 100, ActiveIndexId: "index", InputContractVersion: "contract", SourceEventId: "event", ReadyAt: timestamppb.Now()}
+	payload := &storagepb.ViewSourceSubjectReady{SourceViewId: "view", SourceDatasetId: "dataset", SubjectId: "BTC", Frequency: "1m", PeriodTime: 100, InputContractVersion: "contract", SourceEventId: "event", ReadyAt: timestamppb.Now()}
 	require.ErrorContains(t, validateViewSourceSubjectReady(message, payload), "source position")
 	payload.SourceNodeId = "node"
 	require.ErrorContains(t, validateViewSourceSubjectReady(message, payload), "source position")
 	payload.SourceSequence = 1
 	payload.SourceStoreId = "store"
 	require.NoError(t, validateViewSourceSubjectReady(message, payload))
+	require.Empty(t, payload.GetActiveIndexId())
 }

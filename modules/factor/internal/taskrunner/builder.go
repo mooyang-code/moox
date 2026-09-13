@@ -14,6 +14,13 @@ import (
 )
 
 type TaskScope struct {
+	CatalogRevision             int64
+	SourceNodeID                string
+	SourceStoreID               string
+	SourceSequence              uint64
+	SourceEventID               string
+	SourceSeriesTag             string
+	FilterSourceSeriesTag       bool
 	TaskID                      string
 	BindingID                   string
 	BindingGeneration           string
@@ -59,6 +66,9 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 	if err := domain.ValidateFactorType(factor.FactorType); err != nil {
 		return Task{}, err
 	}
+	if err := domain.ValidateFactorReadLimit(factor); err != nil {
+		return Task{}, err
+	}
 	if factor.FactorType == domain.FactorTypeTimeSeries && strings.TrimSpace(scope.SubjectID) == "" {
 		return Task{}, errors.New("subject_id is required")
 	}
@@ -78,6 +88,10 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 	generation := ExecutionGeneration(scope, factor)
 	return Task{
 		FactorTask: engine.FactorTask{
+			CatalogRevision: scope.CatalogRevision,
+			SourceNodeID:    scope.SourceNodeID, SourceStoreID: scope.SourceStoreID,
+			SourceSequence: scope.SourceSequence, SourceEventID: scope.SourceEventID,
+			SourceSeriesTag: scope.SourceSeriesTag, FilterSourceSeriesTag: scope.FilterSourceSeriesTag,
 			TaskID: scope.TaskID, BindingID: scope.BindingID, SpaceID: scope.SpaceID,
 			BindingGeneration: generation,
 			SourceViewID:      scope.SourceViewID, ResultDatasetID: scope.ResultDatasetID,

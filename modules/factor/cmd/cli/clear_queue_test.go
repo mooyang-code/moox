@@ -14,7 +14,8 @@ func TestParseClearQueueDefaults(t *testing.T) {
 	cfg, err := parseArgs([]string{"clear-queue", "--yes"})
 	require.NoError(t, err)
 	require.Equal(t, "MOOX_STORAGE", cfg.Stream)
-	require.Equal(t, "factor_view_ready_v1", cfg.Consumer)
+	require.Equal(t, "factor_source_subject", cfg.Consumer)
+	require.Equal(t, "factor-engine", cfg.Service)
 	require.Equal(t, 2*time.Minute, cfg.Timeout)
 	require.True(t, cfg.Restart)
 	require.True(t, cfg.Yes)
@@ -31,14 +32,14 @@ func TestClearQueueDryRunDoesNotTouchConsumerOrLifecycle(t *testing.T) {
 		t.Fatal("dry-run must not connect to NATS")
 		return clearQueueSummary{}, nil
 	}
-	runFactorLifecycle = func(context.Context, string, string) error {
+	runFactorLifecycle = func(context.Context, string, string, string) error {
 		t.Fatal("dry-run must not restart Factor")
 		return nil
 	}
 
 	var out bytes.Buffer
 	err := runClearQueue(context.Background(), cliConfig{
-		Stream: "MOOX_STORAGE", Consumer: "factor_view_ready_v1", Timeout: time.Minute, DryRun: true,
+		Stream: "MOOX_STORAGE", Consumer: "factor_source_subject", Timeout: time.Minute, DryRun: true,
 	}, &out)
 	require.NoError(t, err)
 	var result struct {
@@ -58,20 +59,21 @@ func TestClearQueueStopsDeletesAndStartsFactor(t *testing.T) {
 		runFactorLifecycle = oldLifecycle
 	})
 	var calls []string
-	runFactorLifecycle = func(_ context.Context, _ string, action string) error {
+	runFactorLifecycle = func(_ context.Context, _ string, action, service string) error {
+		require.Equal(t, "factor-engine", service)
 		calls = append(calls, action)
 		return nil
 	}
 	deleteFactorQueueConsumer = func(_ context.Context, opts factorQueueConsumerOptions) (clearQueueSummary, error) {
 		require.Equal(t, "MOOX_STORAGE", opts.Stream)
-		require.Equal(t, "factor_view_ready_v1", opts.Consumer)
+		require.Equal(t, "factor_source_subject", opts.Consumer)
 		calls = append(calls, "delete")
 		return clearQueueSummary{Stream: opts.Stream, Consumer: opts.Consumer, Deleted: true, Pending: 12, AckPending: 1}, nil
 	}
 
 	var out bytes.Buffer
 	err := runClearQueue(context.Background(), cliConfig{
-		Stream: "MOOX_STORAGE", Consumer: "factor_view_ready_v1", Timeout: time.Minute,
+		Stream: "MOOX_STORAGE", Consumer: "factor_source_subject", Service: "factor-engine", Timeout: time.Minute,
 		PackageRoot: t.TempDir(), Yes: true, Restart: true,
 	}, &out)
 	require.NoError(t, err)

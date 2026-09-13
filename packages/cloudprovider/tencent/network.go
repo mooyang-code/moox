@@ -606,6 +606,32 @@ func (c *NetworkClient) AttachVPCToCCN(ctx context.Context, ccnID, vpcRegion, vp
 	return nil
 }
 
+func (c *NetworkClient) DetachVPCFromCCN(ctx context.Context, ccnID, vpcRegion, vpcID string) error {
+	var resp struct {
+		Response struct {
+			Error *apiError `json:"Error,omitempty"`
+		} `json:"Response"`
+	}
+	if err := c.do(ctx, "vpc", vpcVersion, "DetachCcnInstances", map[string]any{
+		"CcnId": ccnID,
+		"Instances": []map[string]string{{
+			"InstanceId": vpcID, "InstanceRegion": vpcRegion, "InstanceType": "VPC",
+		}},
+	}, &resp); err != nil {
+		if isAlreadyDoneAPIError(err) {
+			return nil
+		}
+		return err
+	}
+	if err := apiCodeMessage(resp.Response.Error); err != nil {
+		if isAlreadyDoneAPIError(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 func (c *NetworkClient) AcceptCCNAttach(ctx context.Context, ccnID, instanceRegion, instanceType, instanceID string) error {
 	var resp struct {
 		Response struct {

@@ -26,6 +26,9 @@ func (s *Service) publishSubjectReady(ctx context.Context, view viewRef, indexID
 	if len(origins) == 0 {
 		return nil
 	}
+	if !publishesSourceSubjectReady(view) {
+		return nil
+	}
 	s.mu.RLock()
 	schema := s.schemas[indexID]
 	publisher := s.readyPublisher
@@ -49,7 +52,7 @@ func (s *Service) publishSubjectReady(ctx context.Context, view viewRef, indexID
 			return fmt.Errorf("source subject readiness time: %w", err)
 		}
 		contract := schema.SchemaHash + ":" + strconv.FormatUint(schema.ViewVersion, 10)
-		eventID := stableViewEventID("source-subject-ready", view.spaceID, view.viewID, indexID, contract, datasetID, position.nodeID, position.storeID, strconv.FormatUint(position.sequence, 10), origin.GetEventId(), key.GetSubjectId(), key.GetFreq(), key.GetDataTime(), key.GetSeriesTag())
+		eventID := stableViewEventID("source-subject-ready", view.spaceID, view.viewID, contract, datasetID, position.nodeID, position.storeID, strconv.FormatUint(position.sequence, 10), origin.GetEventId(), key.GetSubjectId(), key.GetFreq(), key.GetDataTime(), key.GetSeriesTag())
 		if _, exists := seen[eventID]; exists {
 			continue
 		}
@@ -58,7 +61,7 @@ func (s *Service) publishSubjectReady(ctx context.Context, view viewRef, indexID
 		ready := &storagepb.ViewSourceSubjectReady{
 			SourceViewId: view.viewID, SourceDatasetId: datasetID, SubjectId: key.GetSubjectId(),
 			Frequency: key.GetFreq(), PeriodTime: period.Unix(), SeriesTag: key.GetSeriesTag(),
-			ActiveIndexId: indexID, InputContractVersion: contract, SourceEventId: origin.GetEventId(), ReadyAt: readyAt,
+			InputContractVersion: contract, SourceEventId: origin.GetEventId(), ReadyAt: readyAt,
 			SourceNodeId: position.nodeID, SourceSequence: position.sequence,
 			SourceStoreId: position.storeID,
 		}

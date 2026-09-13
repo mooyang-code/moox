@@ -118,7 +118,7 @@ binary_names=(
   moox-web-host
   moox-cloudnode moox-cloudnode-cli
   moox-collector moox-collector-cli
-  moox-factor moox-factor-cli
+  moox-factor moox-factor-cli moox-factor-engine
   moox-strategy moox-strategy-cli
   moox-trade moox-trade-cli
   moox-monitor moox-monitor-cli

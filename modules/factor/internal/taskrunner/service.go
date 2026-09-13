@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/packages/report"
@@ -266,7 +267,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 		batchID := "factor-batch-" + valid[0].task.TaskID
 		started := time.Now()
 		for _, member := range valid {
-			logBatchMemberStart(ctx, member.task.FactorTask, batchID)
+			logBatchMemberStart(ctx, member.task, batchID)
 		}
 		log.InfoContextf(ctx, "factor_batch_start batch_id=%s subject_id=%s factor_count=%d batch_factor_count=%d", batchID, valid[0].task.SubjectID, len(valid), len(valid))
 		batchStatus := "complete"
@@ -274,6 +275,9 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 		for _, member := range valid {
 			task := member.task.FactorTask
 			var err error
+			if member.task.TriggerType == "subject_ready" {
+				err = fmt.Errorf("subject-ready target is missing: subject=%s period=%d", task.SubjectID, task.PeriodTime)
+			}
 			if member.task.TriggerType == "view_ready" {
 				_, err = s.storage.WriteFactorPatch(ctx, &task, &engine.FactorResult{})
 				if err != nil {
@@ -288,7 +292,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 			if member.task.TriggerType == "view_ready" {
 				emptyWriteCount++
 			}
-			logBatchMemberDone(ctx, task, batchID, "empty", 0, nil, time.Since(started))
+			logBatchMemberDone(ctx, member.task, batchID, "empty", 0, nil, time.Since(started))
 			s.observeDatasetRun(ctx, report.DatasetObservation{
 				Key:    report.DatasetKey{SpaceID: task.SpaceID, DatasetID: taskResultDataset(member.task), Freq: task.Freq},
 				Result: "empty", FinishedAt: time.Now().UTC(),
@@ -324,7 +328,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 	batchTask := &engine.BatchTask{BatchID: batchID, Tasks: batchTasks}
 	started := time.Now()
 	for _, task := range batchTasks {
-		logBatchMemberStart(ctx, task, batchID)
+		logBatchMemberStart(ctx, byTaskID[task.TaskID].task, batchID)
 	}
 	log.InfoContextf(ctx, "factor_batch_start batch_id=%s subject_id=%s factor_count=%d batch_factor_count=%d", batchID, batchTasks[0].SubjectID, len(batchTasks), len(batchTasks))
 	var batchResult *engine.BatchResult
@@ -417,7 +421,9 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 
 	if len(preparedOutputs) > 0 {
 		rowsWritten := make([]uint64, len(preparedOutputs))
+		writeIndividually := true
 		if batchWriter, ok := s.storage.(storageio.FactorBatchWriter); ok && len(preparedOutputs) > 1 {
+			writeIndividually = false
 			patches := make([]storageio.FactorPatch, 0, len(preparedOutputs))
 			for _, output := range preparedOutputs {
 				task := output.task
@@ -428,6 +434,9 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 				var err error
 				rowsWritten, err = batchWriter.WriteFactorPatches(ctx, patches)
 				if err != nil {
+					if errors.Is(err, domain.ErrOutputOwnershipConflict) {
+						return engine.NonRetryableError{Err: err}
+					}
 					s.observeStorageWriteFailure(err)
 					return engine.RetryableError{Err: err}
 				}
@@ -436,24 +445,33 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 				}
 				return nil
 			})
-			if writeErr != nil {
+			if errors.Is(writeErr, domain.ErrOutputOwnershipConflict) {
+				// Isolate deterministic ownership failures to their binding. The
+				// batch write intent can be safely revisited through single writes.
+				writeIndividually = true
+				rowsWritten = make([]uint64, len(preparedOutputs))
+			} else if writeErr != nil {
 				for _, output := range preparedOutputs {
 					s.setBatchErrorAudit(ctx, output.member, results, batchID, started, writeErr)
 				}
 				batchStatus = "degraded"
 			} else {
 				for index, output := range preparedOutputs {
-					s.recordBatchPatchSuccess(ctx, output.task, batchID, rowsWritten[index], batch.shared.TargetPeriods, started)
+					s.recordBatchPatchSuccess(ctx, byTaskID[output.task.TaskID].task, batchID, rowsWritten[index], batch.shared.TargetPeriods, started)
 					writeFactorCount++
 				}
 			}
-		} else {
+		}
+		if writeIndividually {
 			for index, output := range preparedOutputs {
 				output := output
 				writeErr := s.withRetry(ctx, func() error {
 					var err error
 					rowsWritten[index], err = s.storage.WriteFactorPatch(ctx, &output.task, output.result)
 					if err != nil {
+						if errors.Is(err, domain.ErrOutputOwnershipConflict) {
+							return engine.NonRetryableError{Err: err}
+						}
 						s.observeStorageWriteFailure(err)
 						return engine.RetryableError{Err: err}
 					}
@@ -464,7 +482,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 					batchStatus = "degraded"
 					continue
 				}
-				s.recordBatchPatchSuccess(ctx, output.task, batchID, rowsWritten[index], batch.shared.TargetPeriods, started)
+				s.recordBatchPatchSuccess(ctx, byTaskID[output.task.TaskID].task, batchID, rowsWritten[index], batch.shared.TargetPeriods, started)
 				writeFactorCount++
 			}
 		}
@@ -472,8 +490,9 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 	log.InfoContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d batch_factor_count=%d status=%s elapsed_ms=%d batch_elapsed_ms=%d python_execute_calls=%d write_factor_count=%d", batchID, batchTasks[0].SubjectID, len(batchTasks), len(batchTasks), batchStatus, time.Since(started).Milliseconds(), time.Since(started).Milliseconds(), pythonExecuteCalls, writeFactorCount)
 }
 
-func (s *Service) recordBatchPatchSuccess(ctx context.Context, task engine.FactorTask, batchID string, rowsWritten uint64, periods []time.Time, started time.Time) {
-	logBatchMemberDone(ctx, task, batchID, "succeeded", rowsWritten, nil, time.Since(started))
+func (s *Service) recordBatchPatchSuccess(ctx context.Context, member Task, batchID string, rowsWritten uint64, periods []time.Time, started time.Time) {
+	task := member.FactorTask
+	logBatchMemberDone(ctx, member, batchID, "succeeded", rowsWritten, nil, time.Since(started))
 	observation := report.DatasetObservation{
 		Key:    report.DatasetKey{SpaceID: task.SpaceID, DatasetID: taskResultDataset(Task{FactorTask: task}), Freq: task.Freq},
 		Result: "success", Rows: rowsWritten, FinishedAt: time.Now().UTC(),
@@ -527,24 +546,24 @@ func (s *Service) setBatchErrorAudit(ctx context.Context, member indexedTask, re
 	if !started.IsZero() {
 		elapsed = time.Since(started)
 	}
-	logBatchMemberDone(ctx, task, batchID, "failed", 0, err, elapsed)
+	logBatchMemberDone(ctx, member.task, batchID, "failed", 0, err, elapsed)
 	s.observeDatasetRun(ctx, report.DatasetObservation{
 		Key:    report.DatasetKey{SpaceID: task.SpaceID, DatasetID: taskResultDataset(member.task), Freq: task.Freq},
 		Result: "error", FinishedAt: time.Now().UTC(),
 	})
 }
 
-func logBatchMemberStart(ctx context.Context, task engine.FactorTask, batchID string) {
-	t := Task{FactorTask: task, TriggerType: "view_ready"}
-	log.InfoContextf(ctx, "factor_task_start task_id=%s binding_id=%s batch_id=%s trigger_type=view_ready space_id=%s source_view_id=%s result_dataset_id=%s subject_id=%s freq=%s start_time=%s end_time=%s factor_id=%s",
-		task.TaskID, task.BindingID, batchID, task.SpaceID, taskSourceView(t), taskResultDataset(t), task.SubjectID, task.Freq,
+func logBatchMemberStart(ctx context.Context, t Task, batchID string) {
+	task := t.FactorTask
+	log.InfoContextf(ctx, "factor_task_start task_id=%s binding_id=%s batch_id=%s trigger_type=%s space_id=%s source_view_id=%s result_dataset_id=%s subject_id=%s freq=%s start_time=%s end_time=%s factor_id=%s",
+		task.TaskID, task.BindingID, batchID, t.TriggerType, task.SpaceID, taskSourceView(t), taskResultDataset(t), task.SubjectID, task.Freq,
 		task.StartTime.UTC().Format(time.RFC3339Nano), task.EndTime.UTC().Format(time.RFC3339Nano), task.Factor.FactorID)
 }
 
-func logBatchMemberDone(ctx context.Context, task engine.FactorTask, batchID, status string, rows uint64, err error, elapsed time.Duration) {
-	t := Task{FactorTask: task, TriggerType: "view_ready"}
-	log.InfoContextf(ctx, "factor_task_done task_id=%s binding_id=%s batch_id=%s trigger_type=view_ready space_id=%s source_view_id=%s result_dataset_id=%s subject_id=%s freq=%s start_time=%s end_time=%s factor_id=%s chunk_count=1 rows_written=%d status=%s task_elapsed_ms=%d error=%q",
-		task.TaskID, task.BindingID, batchID, task.SpaceID, taskSourceView(t), taskResultDataset(t), task.SubjectID, task.Freq,
+func logBatchMemberDone(ctx context.Context, t Task, batchID, status string, rows uint64, err error, elapsed time.Duration) {
+	task := t.FactorTask
+	log.InfoContextf(ctx, "factor_task_done task_id=%s binding_id=%s batch_id=%s trigger_type=%s space_id=%s source_view_id=%s result_dataset_id=%s subject_id=%s freq=%s start_time=%s end_time=%s factor_id=%s chunk_count=1 rows_written=%d status=%s task_elapsed_ms=%d error=%q",
+		task.TaskID, task.BindingID, batchID, t.TriggerType, task.SpaceID, taskSourceView(t), taskResultDataset(t), task.SubjectID, task.Freq,
 		task.StartTime.UTC().Format(time.RFC3339Nano), task.EndTime.UTC().Format(time.RFC3339Nano), task.Factor.FactorID,
 		rows, status, elapsed.Milliseconds(), errorString(err))
 }
@@ -592,6 +611,10 @@ func (s *Service) runValidated(ctx context.Context, task Task, prepared *storage
 			return runErr
 		}
 		if chunk == nil || len(chunk.TargetPeriods) == 0 {
+			if task.TriggerType == "subject_ready" {
+				runErr = fmt.Errorf("subject-ready target is missing: subject=%s period=%d", task.SubjectID, task.PeriodTime)
+				return runErr
+			}
 			// An acknowledged period can legitimately have no readable rows (for
 			// example a degraded subject or a filtered-out correction). Treat that
 			// as an empty result and run the normal write plan so the previous
@@ -640,6 +663,9 @@ func (s *Service) runValidated(ctx context.Context, task Task, prepared *storage
 			}
 			rowsWritten, err := s.storage.WriteFactorPatch(ctx, &chunkTask, result)
 			if err != nil {
+				if errors.Is(err, domain.ErrOutputOwnershipConflict) {
+					return engine.NonRetryableError{Err: err}
+				}
 				s.observeStorageWriteFailure(err)
 				return engine.RetryableError{Err: err}
 			}
@@ -689,9 +715,13 @@ func (s *Service) readChunkColumns(ctx context.Context, task Task, cursor time.T
 		defer cancel()
 		var readErr error
 		key := storageio.WindowKey{
+			SourceSeriesTag: task.SourceSeriesTag, FilterSourceSeriesTag: task.FilterSourceSeriesTag,
 			SpaceID: task.SpaceID, SourceViewID: taskSourceView(task), SourceDataset: task.SourceDataset,
 			SubjectID: task.SubjectID, Freq: task.Freq, ExpectedActiveIndexID: task.ExpectedActiveIndexID,
 			ExpectedActiveIndexRevision: task.ExpectedActiveIndexRevision,
+		}
+		if task.TriggerType == "subject_ready" {
+			key.InputContractVersion = task.InputContractVersion
 		}
 		if periodReader, ok := s.storage.(periodStorageIO); ok && task.PeriodTime > 0 {
 			chunk, readErr = periodReader.ReadPeriodChunk(

@@ -186,7 +186,7 @@ func (s *Service) validateMarkerCaller(auth *pb.AuthInfo, spaceID, datasetID, ow
 		return markerPermissionError{err}
 	}
 	appID := strings.ToLower(strings.TrimSpace(auth.GetAppId()))
-	if owner != "" && appID != owner && appID != "moox-"+owner {
+	if owner != "" && !isOwnedAppID(appID, owner) {
 		return markerPermissionError{fmt.Errorf("%s marker requires %s caller", owner, owner)}
 	}
 	return nil

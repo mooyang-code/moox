@@ -1,5 +1,46 @@
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS t_factor_subject_receipts (
+    c_space_id TEXT NOT NULL,
+    c_event_id TEXT NOT NULL,
+    c_catalog_revision INTEGER NOT NULL,
+    c_period_time INTEGER NOT NULL,
+    c_source_view_id TEXT NOT NULL,
+    c_event_json TEXT NOT NULL,
+    c_outcomes_json TEXT NOT NULL,
+    c_status TEXT NOT NULL,
+    c_updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(c_space_id, c_event_id, c_catalog_revision)
+);
+CREATE INDEX IF NOT EXISTS idx_factor_subject_receipts_period ON t_factor_subject_receipts(c_period_time);
+
+CREATE TABLE IF NOT EXISTS t_factor_subject_runs (
+    c_task_id TEXT PRIMARY KEY NOT NULL,
+    c_scope_key TEXT NOT NULL,
+    c_period_time INTEGER NOT NULL,
+    c_task_json TEXT NOT NULL,
+    c_status TEXT NOT NULL CHECK (c_status IN ('pending', 'complete', 'failed', 'superseded')),
+    c_error TEXT NOT NULL DEFAULT '',
+    c_updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS t_factor_subject_heads (
+    c_scope_key TEXT PRIMARY KEY NOT NULL,
+    c_task_id TEXT NOT NULL,
+    c_period_time INTEGER NOT NULL,
+    c_source_node TEXT NOT NULL,
+    c_source_store TEXT NOT NULL,
+    c_source_sequence TEXT NOT NULL,
+    c_source_event TEXT NOT NULL,
+    c_catalog_revision INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_factor_subject_runs_period ON t_factor_subject_runs(c_period_time, c_status);
+CREATE INDEX IF NOT EXISTS idx_factor_subject_heads_period ON t_factor_subject_heads(c_period_time);
+CREATE TABLE IF NOT EXISTS t_factor_subject_gc (
+    c_id INTEGER PRIMARY KEY CHECK (c_id = 1),
+    c_completed_before INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO t_factor_subject_gc(c_id) VALUES (1);
+
 CREATE TABLE IF NOT EXISTS t_factor_catalog (
     c_id INTEGER PRIMARY KEY CHECK (c_id = 1),
     c_revision INTEGER NOT NULL DEFAULT 0 CHECK (c_revision >= 0),
@@ -53,6 +94,8 @@ CREATE INDEX IF NOT EXISTS idx_factor_bindings_source
 ON t_factor_bindings (c_space_id, c_source_view_id, c_freq, c_status);
 
 CREATE TABLE IF NOT EXISTS t_factor_output_manifests (
+    c_source_series_tag TEXT NOT NULL DEFAULT '',
+    c_filter_source_series_tag INTEGER NOT NULL DEFAULT 0,
     c_binding_id TEXT NOT NULL,
     c_binding_generation TEXT NOT NULL DEFAULT '',
     c_cleanup_task_json TEXT NOT NULL DEFAULT '',
@@ -61,7 +104,7 @@ CREATE TABLE IF NOT EXISTS t_factor_output_manifests (
     c_period_time INTEGER NOT NULL,
     c_row_keys_json TEXT NOT NULL DEFAULT '[]',
     c_updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_binding_id, c_binding_generation, c_subject_id, c_frequency, c_period_time)
+    PRIMARY KEY (c_binding_id, c_binding_generation, c_subject_id, c_frequency, c_period_time, c_filter_source_series_tag, c_source_series_tag)
 );
 
 

@@ -49,6 +49,8 @@ message ViewSourceSubjectReady {
   string frequency = 4;
   int64 period_time = 5;
   string series_tag = 6;
+  // Physical A/B index IDs are internal to Storage View and must not appear
+  // on this public event. Field 7 is unused.
   string active_index_id = 7;
   string input_contract_version = 8;
   string source_event_id = 9;
@@ -68,11 +70,9 @@ message ViewSourcePeriodReady {
   repeated ViewPeriodDatasetState datasets = 5;
   repeated string primary_subjects = 6;
   google.protobuf.Timestamp ready_at = 7;
-  // active_index_id identifies the source View generation that produced this
-  // readiness decision. Consumers may pin reads to this generation.
+  // Physical A/B index IDs and per-file write revisions are internal to
+  // Storage View. Fields 8 and 9 are unused.
   string active_index_id = 8;
-  // active_index_revision identifies the in-place write revision used for the
-  // readiness decision.
   uint64 active_index_revision = 9;
 }
 
@@ -96,9 +96,8 @@ message FactorPeriodComputed {
   repeated FactorBindingPeriodState bindings = 6;
   google.protobuf.Timestamp computed_at = 7;
   string trigger_event_id = 8;
-  // source_index_id is the source View generation used by Factor.
+  // Physical A/B index IDs are internal to Storage View. Fields 9 and 10 are unused.
   string source_index_id = 9;
-  // source_index_revision is the in-place source View revision used by Factor.
   uint64 source_index_revision = 10;
 }
 
@@ -111,13 +110,11 @@ message ViewFactorPeriodReady {
   string status = 5;
   repeated FactorBindingPeriodState bindings = 6;
   google.protobuf.Timestamp ready_at = 7;
-  // source_index_id is carried through Factor computation for causality.
+  // Physical A/B index IDs and per-file write revisions are internal to
+  // Storage View. Fields 8 through 11 are unused.
   string source_index_id = 8;
-  // result_index_id identifies the result View generation containing rows.
   string result_index_id = 9;
-  // source_index_revision is carried through Factor computation for causality.
   uint64 source_index_revision = 10;
-  // result_index_revision identifies the result View write revision containing rows.
   uint64 result_index_revision = 11;
 }
 

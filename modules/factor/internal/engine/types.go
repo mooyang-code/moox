@@ -13,6 +13,13 @@ type DataFrame struct {
 
 // FactorTask is the self-contained scheduler-to-engine task shape.
 type FactorTask struct {
+	CatalogRevision             int64
+	SourceNodeID                string
+	SourceStoreID               string
+	SourceSequence              uint64
+	SourceEventID               string
+	SourceSeriesTag             string
+	FilterSourceSeriesTag       bool
 	TaskID                      string
 	BindingID                   string
 	BindingGeneration           string

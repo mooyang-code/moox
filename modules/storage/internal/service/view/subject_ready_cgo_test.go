@@ -43,7 +43,9 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 	payload.SourceNodeId, payload.SourceSequence = "node", 1
 	payload.SourceStoreId = "store"
 	message := &eventpb.EventMessage{EventId: "btc-row", SpaceId: "space", SubjectId: "market_prices", OccurredAt: timestamppb.Now()}
-	// The first-build row is journaled without an active index or publisher.
+	// Rebuild writes never journal or emit subject-ready. Only a later live
+	// write against the activated index publishes, and that row is already
+	// queryable inside the publisher callback.
 	require.NoError(t, svc.HandleDatasetRows(ctx, message, payload))
 	require.NoError(t, svc.AttachActiveView(&pb.View{SpaceId: "space", ViewId: "prices", PrimaryDatasetId: "market_prices", DatasetIds: []string{"market_prices"}, Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema", ActiveColumns: columns, Status: "active"}))
 	svc.readyPublisher = subjectPublisherFunc(func(ctx context.Context, _ events.Event, _ proto.Message, _ events.PublishOptions) (*jetstream.PublishAck, error) {
@@ -55,8 +57,7 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 		return &jetstream.PublishAck{}, nil
 	})
 	require.NoError(t, svc.ReplayPendingSubjects(ctx))
-	require.True(t, published)
-	published = false
+	require.False(t, published, "rebuild leftover journal must not emit subject-ready")
 	require.NoError(t, svc.HandleDatasetRows(ctx, message, payload))
 	require.True(t, published)
 }

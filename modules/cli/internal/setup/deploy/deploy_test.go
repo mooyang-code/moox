@@ -268,6 +268,33 @@ exit 2
 	require.Equal(t, "package", string(requireFile(t, archive)))
 }
 
+func TestCommandPackagerPassesCompileHostSSH(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts", "deploy"), 0o700))
+	script := `#!/bin/sh
+set -eu
+test "$MOOX_SSH_PASSWORD" = compile-build-password
+test "$MOOX_STORAGE_BUILD_HOST" = compile
+test "$MOOX_STORAGE_BUILD_HOST_ROLE" = compile
+test "$MOOX_STORAGE_BUILD_GOARCH" = amd64
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --archive ]; then printf package >"$2"; exit 0; fi
+  shift
+done
+exit 2
+`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy", "deploy-moox.sh"), []byte(script), 0o700))
+
+	archive, err := (CommandPackager{}).Package(context.Background(), Options{
+		RepositoryRoot: root, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64",
+		EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222, EventBusTLSEnabled: true,
+		StorageBuildPassword: "compile-build-password", StorageBuildHost: "compile", StorageBuildHostRole: "compile",
+	})
+	require.NoError(t, err)
+	defer os.Remove(archive)
+	require.Equal(t, "package", string(requireFile(t, archive)))
+}
+
 func TestStorageDeploysAllComponentsAsOneUnit(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1039,6 +1066,8 @@ func TestRemoteInstallerScriptsParse(t *testing.T) {
 	require.Contains(t, installStorageScript, `"$deploy/start.sh" 8>&-`, "storage services must not inherit the deployment maintenance lock")
 	require.Contains(t, installStorageScript, `reset_view_data="$2"`, "view reset must be an explicit installer flag")
 	require.Contains(t, installStorageScript, `moox-storage-cli" reset-view-consumers`, "view reset must run before the new Storage process starts")
+	require.Contains(t, installStorageScript, `--eventbus-url "$reset_eventbus_url"`, "view reset must override loopback EventBus credentials on a separate Storage host")
+	require.Contains(t, installStorageScript, `storage_view_reset_eventbus_url_missing`, "view reset must fail closed when the public EventBus URL is missing")
 	require.Contains(t, installStorageScript, `--maintenance-lock-held --yes`, "view reset must reuse the installer's maintenance lock")
 	require.Contains(t, installStorageScript, `credential="$HOME/.config/moox/eventbus/internal-admin.yaml"`, "view reset must use JetStream management credentials")
 	require.Contains(t, rollbackStorageScript, `"$deploy.maintenance.lock"`, "storage rollback must serialize with watchdogs")

@@ -7,6 +7,7 @@ storage_subjects=(
   'moox.event.storage.dataset.rows.upserted.v2.>'
   'moox.event.storage.dataset.period.collected.v1.>'
   'moox.event.storage.view.source_period.ready.v1.>'
+  'moox.event.storage.view.source_subject.ready.v1.>'
   'moox.event.storage.dataset.factor_period.computed.v1.>'
   'moox.event.storage.view.factor_period.ready.v1.>'
   'moox.event.storage.dataset.sync_point.v1.>'

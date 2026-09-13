@@ -65,7 +65,7 @@ func EngineActivation(gate *taskrunner.OperationGate, ownership OwnershipReader,
 			if err := json.Unmarshal([]byte(key.CleanupTaskJSON), &task); err != nil {
 				return fmt.Errorf("decode retired output ownership: %w", err)
 			}
-			if task.BindingID != key.BindingID || task.BindingGeneration == "" || task.BindingGeneration != key.BindingGeneration || task.SubjectID != key.SubjectID || task.Freq != key.Frequency || task.PeriodTime != key.PeriodTime.Unix() {
+			if task.BindingID != key.BindingID || task.BindingGeneration == "" || task.BindingGeneration != key.BindingGeneration || task.SubjectID != key.SubjectID || task.Freq != key.Frequency || task.PeriodTime != key.PeriodTime.Unix() || task.FilterSourceSeriesTag != key.FilterSourceSeriesTag || task.SourceSeriesTag != key.SourceSeriesTag {
 				return fmt.Errorf("retired output ownership does not match manifest")
 			}
 			retired = append(retired, &task)

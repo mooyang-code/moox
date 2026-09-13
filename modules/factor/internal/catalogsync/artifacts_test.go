@@ -29,6 +29,12 @@ func TestPrepareArtifactsUsesVerifiedLocalImmutablePaths(t *testing.T) {
 	localAgain, err := PrepareArtifacts(context.Background(), root, snapshot)
 	require.NoError(t, err)
 	require.Equal(t, local, localAgain)
+	snapshot.Factors[0].LookbackPeriods = domain.MaxTimeSeriesLookback + 1
+	_, err = PrepareArtifacts(context.Background(), root, snapshot)
+	require.ErrorContains(t, err, "lookback_periods must not exceed")
+	snapshot.Factors[0].LookbackPeriods = domain.MaxTimeSeriesLookback
+	_, err = PrepareArtifacts(context.Background(), root, snapshot)
+	require.NoError(t, err)
 	missingGeneration := snapshot
 	missingGeneration.Bindings = []domain.FactorBinding{{BindingID: "b", FactorID: "f"}}
 	_, err = PrepareArtifacts(context.Background(), root, missingGeneration)

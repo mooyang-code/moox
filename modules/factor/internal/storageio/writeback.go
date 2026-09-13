@@ -57,7 +57,7 @@ func outputManifestKey(task *engine.FactorTask) store.OutputManifestKey {
 	cleanup.TaskID, cleanup.TriggerEventID = "", ""
 	cleanup.TriggeredAt = time.Time{}
 	raw, _ := json.Marshal(cleanup)
-	return store.OutputManifestKey{BindingID: task.BindingID, BindingGeneration: task.BindingGeneration, CleanupTaskJSON: string(raw), SubjectID: task.SubjectID, Frequency: task.Freq, PeriodTime: time.Unix(task.PeriodTime, 0).UTC()}
+	return store.OutputManifestKey{SourceSeriesTag: task.SourceSeriesTag, FilterSourceSeriesTag: task.FilterSourceSeriesTag, BindingID: task.BindingID, BindingGeneration: task.BindingGeneration, CleanupTaskJSON: string(raw), SubjectID: task.SubjectID, Frequency: task.Freq, PeriodTime: time.Unix(task.PeriodTime, 0).UTC()}
 }
 
 type factorRowKey struct {

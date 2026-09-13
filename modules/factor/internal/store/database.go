@@ -158,7 +158,11 @@ func (s *Store) factorSchemaTables() ([]string, error) {
 
 func (s *Store) validateSchemaTables(tables []string) error {
 	expected := map[string][]string{
-		"t_factor_catalog": {"c_id", "c_revision", "c_snapshot_hash"},
+		"t_factor_subject_receipts": {"c_space_id", "c_event_id", "c_catalog_revision", "c_period_time", "c_source_view_id", "c_event_json", "c_outcomes_json", "c_status", "c_updated_at"},
+		"t_factor_subject_runs":     {"c_task_id", "c_scope_key", "c_period_time", "c_task_json", "c_status", "c_error", "c_updated_at"},
+		"t_factor_subject_heads":    {"c_scope_key", "c_task_id", "c_period_time", "c_source_node", "c_source_store", "c_source_sequence", "c_source_event", "c_catalog_revision"},
+		"t_factor_subject_gc":       {"c_id", "c_completed_before"},
+		"t_factor_catalog":          {"c_id", "c_revision", "c_snapshot_hash"},
 		"t_factor_defs": {
 			"c_factor_id", "c_name", "c_factor_type", "c_source_code", "c_source_hash", "c_source_path",
 			"c_input_columns_json", "c_outputs_json", "c_params_json", "c_lookback_periods",
@@ -169,7 +173,7 @@ func (s *Store) validateSchemaTables(tables []string) error {
 			"c_subject_mode", "c_subjects_json", "c_result_dataset_id", "c_result_view_id", "c_status", "c_ctime", "c_mtime",
 		},
 		"t_factor_output_manifests": {
-			"c_binding_id", "c_binding_generation", "c_cleanup_task_json", "c_subject_id", "c_frequency", "c_period_time", "c_row_keys_json", "c_updated_at",
+			"c_source_series_tag", "c_filter_source_series_tag", "c_binding_id", "c_binding_generation", "c_cleanup_task_json", "c_subject_id", "c_frequency", "c_period_time", "c_row_keys_json", "c_updated_at",
 		},
 	}
 	if len(tables) != len(expected) {

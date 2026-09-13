@@ -109,8 +109,13 @@ grep -Fq 'FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=' "${UNPACKED}/star
 grep -Fq 'FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=${HOME}/.config/moox/eventbus/factor-eventbus.yaml")' "${UNPACKED}/start.sh"
 grep -Fq 'FACTOR_EVENTBUS_URL_ENV="tls://127.0.0.1:${MOOX_EVENTBUS_PORT:-4222}"' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_EVENTBUS_NATS_URL=${MOOX_FACTOR_EVENTBUS_URL:-${FACTOR_EVENTBUS_URL_ENV}}' "${UNPACKED}/start.sh"
+grep -Fq 'MOOX_FACTOR_ARTIFACTS_DIR=${MOOX_FACTOR_ARTIFACTS_DIR:-${ROOT}/factor/factors}' "${UNPACKED}/start.sh"
+if awk '/^start_factor\(\)/,/^start_strategy\(\)/' "${UNPACKED}/start.sh" | grep -q ensure_factor_python; then
+  echo "control start_factor still installs Python compute dependencies" >&2
+  exit 1
+fi
 grep -Fq 'MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${MOOX_FACTOR_ENGINE_PYTHON_WORKERS:-32}' "${UNPACKED}/start.sh"
-grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS:-8}' "${UNPACKED}/start.sh"
+grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS:-2}' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS:-20000}' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers}' "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh"
 grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers}' "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh"
@@ -166,10 +171,8 @@ BTC-USDT
 EOF
 cmp "${UNPACKED}/expected.argv" "${UNPACKED}/captured.argv"
 
-grep -Fq 'python_workers: 32' "${UNPACKED}/factor/config/app.yaml"
-grep -Fq 'view_read_workers: 8' "${UNPACKED}/factor/config/app.yaml"
-grep -Fq 'view_read_timeout_ms: 20000' "${UNPACKED}/factor/config/app.yaml"
-grep -Fq 'batch_enabled: true' "${UNPACKED}/factor/config/app.yaml"
+grep -Fq 'artifacts_dir: ./factors' "${UNPACKED}/factor/config/app.yaml"
+! grep -Fq 'python_workers:' "${UNPACKED}/factor/config/app.yaml"
 ! grep -Fq 'scheduler:' "${UNPACKED}/factor/config/app.yaml"
 
 mv "${UNPACKED}/python-runtime" "${UNPACKED}/python-runtime.missing"

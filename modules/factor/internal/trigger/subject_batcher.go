@@ -69,9 +69,8 @@ func (b *SubjectBatcher) Submit(ctx context.Context, event SubjectEvent) error {
 	if ctx == nil {
 		return fmt.Errorf("subject submission context is required")
 	}
-	p := event.Ready
-	if event.SpaceID == "" || event.EventID == "" || p.GetSourceViewId() == "" || p.GetSourceDatasetId() == "" || p.GetSubjectId() == "" || p.GetFrequency() == "" || p.GetPeriodTime() <= 0 || p.GetActiveIndexId() == "" || p.GetInputContractVersion() == "" || p.GetSourceEventId() == "" || p.GetSourceNodeId() == "" || p.GetSourceStoreId() == "" || p.GetSourceSequence() == 0 {
-		return fmt.Errorf("subject readiness identity is incomplete")
+	if err := validateSubjectEvent(event); err != nil {
+		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -81,7 +80,7 @@ func (b *SubjectBatcher) Submit(ctx context.Context, event SubjectEvent) error {
 		return ErrSubjectBatcherStopped
 	default:
 	}
-	event.Ready = proto.Clone(p).(*storagepb.ViewSourceSubjectReady)
+	event.Ready = proto.Clone(event.Ready).(*storagepb.ViewSourceSubjectReady)
 	item := subjectSubmission{ctx: ctx, event: event, done: make(chan error, 1)}
 	select {
 	case <-ctx.Done():
@@ -135,8 +134,8 @@ func (b *SubjectBatcher) Run(ctx context.Context) error {
 }
 
 type subjectBatchKey struct {
-	space, view, dataset, frequency, index, contract, tag string
-	period                                                int64
+	space, view, dataset, frequency, contract, tag string
+	period                                         int64
 }
 
 func (b *SubjectBatcher) runGroups(ctx context.Context, items []subjectSubmission) {
@@ -148,7 +147,7 @@ func (b *SubjectBatcher) runGroups(ctx context.Context, items []subjectSubmissio
 			continue
 		}
 		p := item.event.Ready
-		key := subjectBatchKey{item.event.SpaceID, p.SourceViewId, p.SourceDatasetId, p.Frequency, p.ActiveIndexId, p.InputContractVersion, p.SeriesTag, p.PeriodTime}
+		key := subjectBatchKey{item.event.SpaceID, p.SourceViewId, p.SourceDatasetId, p.Frequency, p.InputContractVersion, p.SeriesTag, p.PeriodTime}
 		if _, exists := groups[key]; !exists {
 			order = append(order, key)
 		}

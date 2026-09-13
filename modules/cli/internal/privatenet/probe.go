@@ -9,13 +9,12 @@ import (
 type Probe struct {
 	From       string   `json:"from"`
 	To         string   `json:"to"`
-	PrivateIP  string   `json:"private_ip,omitempty"`
+	PublicIP   string   `json:"public_ip,omitempty"`
 	Port       string   `json:"port,omitempty"`
 	Area       string   `json:"area,omitempty"`
 	Expect     string   `json:"expect,omitempty"`
 	Status     string   `json:"status"`
 	Detail     string   `json:"detail,omitempty"`
-	SameArea   bool     `json:"same_area,omitempty"`
 	ConfigHits []string `json:"config_hits,omitempty"`
 }
 
@@ -34,25 +33,13 @@ func PlannedProbes(hosts []ResolvedHost, eventBusPort string) []Probe {
 	out := make([]Probe, 0)
 	for _, from := range hosts {
 		for _, to := range hosts {
-			if from.Address == to.Address {
+			if from.Address == to.Address || strings.TrimSpace(to.Address) == "" {
 				continue
-			}
-			privateIP := ""
-			if len(to.Instance.PrivateIPs) > 0 {
-				privateIP = to.Instance.PrivateIPs[0]
-			}
-			if privateIP == "" {
-				continue
-			}
-			same := from.Area != "" && from.Area == to.Area
-			expect := "closed"
-			if same {
-				expect = "open"
 			}
 			for _, port := range listenerPorts(to, eventBusPort) {
 				out = append(out, Probe{
-					From: from.Name, To: to.Name, PrivateIP: privateIP, Port: port,
-					Area: from.Area + "->" + to.Area, Expect: expect, SameArea: same,
+					From: from.Name, To: to.Name, PublicIP: to.Address, Port: port,
+					Area: from.Area + "->" + to.Area, Expect: "open",
 				})
 			}
 		}
@@ -71,7 +58,7 @@ func RunHostProbes(ctx context.Context, exec func(context.Context, string, strin
 			probes[i].Status = "skipped"
 			continue
 		}
-		script := fmt.Sprintf(`if timeout 5 bash -c "true >/dev/tcp/%s/%s"; then echo open; else echo closed; fi`, probe.PrivateIP, probe.Port)
+		script := fmt.Sprintf(`if timeout 5 bash -c "true >/dev/tcp/%s/%s"; then echo open; else echo closed; fi`, probe.PublicIP, probe.Port)
 		stdout, err := exec(ctx, fromIP, script)
 		stdout = strings.TrimSpace(stdout)
 		if err == nil && strings.HasPrefix(stdout, "open") {
@@ -108,10 +95,10 @@ func InspectPublicIPRefs(ctx context.Context, exec func(context.Context, string,
 	return out
 }
 
-func MainlandProbesFailed(probes []Probe) error {
+func PublicProbesFailed(probes []Probe) error {
 	failed := make([]string, 0)
 	for _, probe := range probes {
-		if !probe.SameArea || probe.Expect != "open" {
+		if probe.Expect != "open" {
 			continue
 		}
 		if probe.Status != "open" {
@@ -121,5 +108,5 @@ func MainlandProbesFailed(probes []Probe) error {
 	if len(failed) == 0 {
 		return nil
 	}
-	return fmt.Errorf("private-network probe failed: %s", strings.Join(failed, "; "))
+	return fmt.Errorf("public-network probe failed: %s", strings.Join(failed, "; "))
 }

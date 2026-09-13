@@ -201,7 +201,7 @@ func TestCollectorTimerEnvironmentOmitsControlPlaneCredentials(t *testing.T) {
 	assert.NotContains(t, env, "MOOX_SERVICE_GATEWAY_CA_PEM_B64")
 }
 
-func TestCollectorEnvironmentUsesPrivateStorageTargetForMainlandSCF(t *testing.T) {
+func TestCollectorEnvironmentUsesPublicStorageTargetForAllSCF(t *testing.T) {
 	t.Setenv("MOOX_CLS_SECRET_ID", "cls-id")
 	t.Setenv("MOOX_CLS_SECRET_KEY", "cls-key")
 	opts := collectorPublishOptions{
@@ -209,14 +209,12 @@ func TestCollectorEnvironmentUsesPrivateStorageTargetForMainlandSCF(t *testing.T
 		StorageRPCGatewayTarget:        "ip://146.56.196.204:11003",
 		StoragePrivateRPCGatewayTarget: "ip://10.206.0.5:11003",
 	}
-	opts.Region = "ap-guangzhou"
-	env, err := collectorFunctionEnvironment(opts, "pkg-timer")
-	require.NoError(t, err)
-	assert.Equal(t, "ip://10.206.0.5:11003", env["MOOX_STORAGE_RPC_GATEWAY_TARGET"])
-	opts.Region = "ap-hongkong"
-	env, err = collectorFunctionEnvironment(opts, "pkg-timer")
-	require.NoError(t, err)
-	assert.Equal(t, "ip://146.56.196.204:11003", env["MOOX_STORAGE_RPC_GATEWAY_TARGET"])
+	for _, region := range []string{"ap-guangzhou", "ap-shanghai", "ap-hongkong", "ap-singapore"} {
+		opts.Region = region
+		env, err := collectorFunctionEnvironment(opts, "pkg-timer")
+		require.NoError(t, err)
+		assert.Equal(t, "ip://146.56.196.204:11003", env["MOOX_STORAGE_RPC_GATEWAY_TARGET"], region)
+	}
 }
 
 func TestCollectorInvokeMarketFetcherKeepsEventBusButOmitsHTTPSCAs(t *testing.T) {

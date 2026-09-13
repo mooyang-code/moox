@@ -36,6 +36,7 @@ crypto 行情 View 至少有：`view_crypto_spot_kline_1m`、`view_crypto_swap_k
 - 把 EventBus token、HMAC、`internal-admin.yaml` 打进命令行、日志或聊天
 - 用 `--reset-view-indexes` / `force-rebuild-view` 当常规追平
 - 只重启 View 就宣布 kline 已追平（InProgress 心跳僵尸重启后仍可能立刻再占满 ACK 窗口）
+- 给重建补发 `ViewSourceSubjectReady` 或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）
 
 ## Storage View：kline 分区挂死
 
@@ -45,7 +46,7 @@ crypto 行情 View 至少有：`view_crypto_spot_kline_1m`、`view_crypto_swap_k
 - `storage_view_kline` 的 `partition_lag_messages` 等于 `max_ack_pending`（常见 64）
 - `oldest_pending_event_age_seconds` 与水位停滞时长同量级
 - ACK 计数不涨，但 `in_progress` 仍在增加
-- misc / metrics 分区仍在刷 `mooxsys`（分区隔离，不能把 kline 停滞归因于 host metrics）
+- misc / metrics 分区仍在刷 `mooxsys`。分区隔离挡不住同进程的 `pending-subjects` fsync；旧二进制 from-scratch 重建 metrics 时会把 kline ACK 窗口一起占满
 
 这是 durable 被未完成投递占满，不是“没数据”。四个 crypto kline View **共用** `storage_view_kline`。
 
@@ -77,8 +78,8 @@ moox-cli storage repair-view \
 | 现象 | 判断 | 动作 |
 |---|---|---|
 | `factor_view_ready_v1` `pending` 很大，且在算很旧的 `period_time` | durable 积压 | `moox-cli factor clear-queue --dry-run` 后 `--yes`（在 **控制面** `/data/moox/prod`） |
-| `pending` 很小（甚至 1），`period_time` 已是当前分钟，但大量 `11003` `i/o timeout` / `factor_view_read_retry` | View 读并发把 DuckDB 打满 | **不要**指望再清一次队列就能好。降 `MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS`（默认 8）后重启 Factor |
-| Factor Primary/View 水位随 `last_success` 前进 | 已在追 | 等当前 period 跑完；一根 1m × 数百 subject 在 8 并发下可能要几分钟 |
+| `pending` 很小（甚至 1），`period_time` 已是当前分钟，但大量 `11003` `i/o timeout` / `factor_view_read_retry` | View 读并发把 DuckDB 打满 | **不要**指望再清一次队列就能好。同一周期应对所有 subject **一次** `IN` 查询（日志 `factor_view_read_batch_done`）。若仍是逐标的 `factor_view_read_done`，说明跑的是旧二进制。`view_read_workers` 只约束不同 source View/周期，不要再调到 8+ |
+| Factor Primary/View 水位随 `last_success` 前进 | 已在追 | 等当前 period 跑完；批量读之后一根 1m 应在秒到几十秒级，而不是按标的累加几分钟 |
 
 `clear-queue --dry-run` **不连 EventBus**，JSON 里的 `pending_before` 恒为 0，不能当积压证据。`--yes` 的 summary 才有真实 pending。
 

@@ -251,11 +251,11 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		s.consumerPartitionByDataset = make(map[datasetRef]string)
 		s.mu.Unlock()
 	}
-	// Active indexes are restored before the publisher is installed. Drain
-	// persisted readiness even when periodic View maintenance is disabled.
+	// Discard leftover rebuild journals from older binaries. Rebuilds never
+	// emit subject-ready from this directory.
 	if err := s.ReplayPendingSubjects(ctx); err != nil {
 		stop()
-		return nil, fmt.Errorf("restore pending View subject readiness: %w", err)
+		return nil, fmt.Errorf("discard leftover View subject journals: %w", err)
 	}
 	return stop, nil
 }

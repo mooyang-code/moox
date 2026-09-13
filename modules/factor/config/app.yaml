@@ -1,8 +1,6 @@
 database:
   type: sqlite
   path: ./data/factor/factor.db
-  # Factor tasks run concurrently, but SQLite must use one connection to
-  # serialize manifest writes and avoid WAL corruption under burst load.
   max_idle_conns: 1
   max_open_conns: 1
   conn_max_lifetime: 1h
@@ -18,20 +16,5 @@ eventbus:
   urls:
     - nats://127.0.0.1:4222
   credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml
-  fetch_max_wait: 1s
-  # The hard deadline stays above the engine's legal multi-factor budget.
-  # Readiness degrades earlier so the local watchdog can restart a real stall.
-  execution_timeout: 15m
-  stall_threshold: 5m
-  max_execution_attempts: 5
 
-engine:
-  python_bin: python3
-  worker_path: ./pyworker/worker.py
-  factors_dir: ./factors
-  python_workers: 32
-  # 64 parallel lookbacks overwhelm a busy Storage View and freeze Factor output.
-  view_read_workers: 8
-  view_read_timeout_ms: 20000
-  task_timeout_ms: 30000
-  batch_enabled: true
+artifacts_dir: ./factors

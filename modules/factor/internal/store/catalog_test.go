@@ -59,6 +59,29 @@ func TestCatalogSnapshotDoesNotMixConcurrentCommit(t *testing.T) {
 	require.Equal(t, "new", after.Bindings[0].SpaceID)
 }
 
+func TestCatalogRevisionAdvancesAfterEmptyBootstrap(t *testing.T) {
+	s := catalogStore(t)
+	ctx := context.Background()
+	changed, err := s.ReplaceCatalogSnapshot(ctx, domain.CatalogSnapshot{Revision: 1})
+	require.NoError(t, err)
+	require.True(t, changed)
+	before, err := s.CatalogSnapshot(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, before.Revision)
+	require.Empty(t, before.Factors)
+	require.NoError(t, s.Factors().Create(ctx, domain.FactorDef{
+		FactorID: "bias", Name: "Bias", FactorType: domain.FactorTypeTimeSeries,
+		SourceCode: "def compute(df, params, context):\n    return df\n", SourceHash: "hash",
+		InputColumns: []string{"close"}, Outputs: []string{"bias_20"}, ParamsJSON: "{}",
+		LookbackPeriods: 20, Status: domain.FactorStatusDisabled,
+	}))
+	after, err := s.CatalogSnapshot(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, after.Revision)
+	require.Len(t, after.Factors, 1)
+	require.Equal(t, "bias", after.Factors[0].FactorID)
+}
+
 func TestCatalogSnapshotRevisionAndRollback(t *testing.T) {
 	s := catalogStore(t)
 	ctx := context.Background()

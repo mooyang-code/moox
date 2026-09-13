@@ -226,6 +226,19 @@ moox-cli setup deploy-service \
   --package ./release/moox-admin-linux-amd64.zip
 ```
 
+内网因子引擎使用独立打包入口，必须部署到单独目录，不要覆盖控制面或 Storage 的 `start.sh`：
+
+```bash
+./scripts/build/package-factor-engine.sh \
+  --output ./release/moox-factor-engine-linux-amd64.zip
+moox-cli setup deploy-service \
+  --file ./moox.toml \
+  --host compute \
+  --service factor-engine \
+  --package ./release/moox-factor-engine-linux-amd64.zip \
+  --deploy-dir /data/moox/factor-engine
+```
+
 发布成功后，CLI 会以幂等方式把服务写入 Admin 的 `t_service_deployments`。
 Monitor 会从该目录同步系统服务检查，因此服务总览无需再手工创建服务记录。
 
@@ -248,11 +261,11 @@ EventBus、CloudNode 和 Collector 固定部署在 `control_host`；Storage 的�
 # 只输出主机名、地址、端口、用户名和角色，不输出密码
 moox-cli setup hosts --file ./moox.toml
 
-# 把 provider=tencent 的主机和 SCF 打进同一云联网，走内网 IP
+# 腾讯云主机与 SCF 一律走 Storage 公网 IP，不再创建云联网
 moox-cli setup private-network --file ./moox.toml --dry-run
-moox-cli setup private-network --file ./moox.toml --update-scf-gateway
-# 国内函数会改成 Storage 内网 IP；海外函数保持公网。SSH 仍用公网。
-# 组网后填写 storage_private_gateway_host，不要改 storage_gateway_host。
+moox-cli setup private-network --file ./moox.toml --restore-scf-public
+# 已有函数会改回公网网关并解绑 VPC。SSH 仍用公网。
+# 不要填写 storage_private_gateway_host，不要改 storage_gateway_host。
 # 操作说明：skills/moox/references/private-network.md
 
 # --host 必须显式指定 moox.toml 中的主机名

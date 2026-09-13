@@ -159,7 +159,7 @@ func validateDatasetPeriodCollected(message *eventpb.EventMessage, value proto.M
 	if err := validateStoragePeriod(message, payload.GetDatasetId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetCollectedAt(), "dataset period collected"); err != nil {
 		return err
 	}
-	subjects, err := validateUniqueTokens(payload.GetSubjectIds(), true, "dataset period collected subject_ids")
+	subjects, err := validateUniqueTokens(payload.GetSubjectIds(), false, "dataset period collected subject_ids")
 	if err != nil {
 		return err
 	}
@@ -186,7 +186,7 @@ func validateViewSourceSubjectReady(message *eventpb.EventMessage, value proto.M
 	if err := validateStoragePeriod(message, payload.GetSourceViewId(), payload.GetFrequency(), payload.GetPeriodTime(), "complete", payload.GetReadyAt(), "view source subject ready"); err != nil {
 		return err
 	}
-	for _, identity := range []string{payload.GetSourceDatasetId(), payload.GetSubjectId(), payload.GetActiveIndexId(), payload.GetInputContractVersion(), payload.GetSourceEventId()} {
+	for _, identity := range []string{payload.GetSourceDatasetId(), payload.GetSubjectId(), payload.GetInputContractVersion(), payload.GetSourceEventId()} {
 		if !validRequiredToken(identity) {
 			return fmt.Errorf("view source subject ready input identity is incomplete")
 		}

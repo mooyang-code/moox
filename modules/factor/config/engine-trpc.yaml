@@ -1,0 +1,28 @@
+global:
+  namespace: Development
+  env_name: dev
+server:
+  filter: [recovery]
+  service:
+    - name: trpc.moox.factor.engine.Health
+      ip: 127.0.0.1
+      port: 11415
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
+    - name: trpc.moox.factor.engine.catalog.timer
+      network: "* * * * * *"
+      protocol: timer
+      timeout: 600000
+    # Configure this service when cache.enabled is supported and enabled.
+    # The job gates maintenance at cache.check_interval (default 37m13s).
+    # Keep this timeout at least as large as cache.rebuild_timeout.
+    # - name: trpc.moox.factor.engine.cache.timer
+    #   network: "* * * * * *"
+    #   protocol: timer
+    #   timeout: 120000
+plugins:
+  log:
+    default:
+      - writer: console
+        level: info

@@ -169,6 +169,16 @@ func TestFactorCompletionRequiresSourceHash(t *testing.T) {
 	require.Contains(t, err.Error(), "source_hash is required")
 }
 
+func TestDatasetPeriodCollectedAllowsEmptySubjectIDs(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	payload := &storagepb.DatasetPeriodCollected{
+		DatasetId: "dataset", Frequency: "1H", PeriodTime: 1, Status: "complete", CollectedAt: timestamppb.Now(),
+	}
+	_, err = registry.Encode(DatasetPeriodCollected, payload, validationOptions("event-1", "space", "dataset"))
+	require.NoError(t, err)
+}
+
 func TestViewFactorReadyRequiresPairedIndexProvenance(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)

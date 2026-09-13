@@ -64,7 +64,7 @@ type EngineConfig struct {
 const (
 	defaultDatabaseMaxConns  = 1
 	defaultPythonWorkers     = 32
-	defaultViewReadWorkers   = 8
+	defaultViewReadWorkers   = 2
 	defaultViewReadTimeoutMS = 20000
 )
 

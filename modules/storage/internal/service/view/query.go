@@ -52,6 +52,9 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if err := s.authorize(req.GetAuthInfo()); err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
+	if req.GetRowsPerSeries() > 0 {
+		return s.querySeriesWindow(ctx, req)
+	}
 	if len(req.GetSelectors()) == 0 && req.GetTimeRange() == nil && req.GetFilter() == nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("query predicate is required"))}, nil
 	}

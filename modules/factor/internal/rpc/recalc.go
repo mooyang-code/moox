@@ -104,11 +104,9 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 		for period := start; period.Before(end); {
 			triggerEventID := recalcTriggerEventID(requestID, req, period)
 			ready := &publicstoragepb.ViewSourcePeriodReady{SourceViewId: sourceViewID, Frequency: req.GetFreq(), PeriodTime: period.Unix(), Status: "complete", PrimarySubjects: []string{req.GetSubjectId()}, ReadyAt: timestamppb.New(period.UTC())}
-			activeIndexID, indexErr := s.meta.SourceViewActiveIndexID(ctx, req.GetSpaceId(), sourceViewID)
-			if indexErr != nil {
+			if _, indexErr := s.meta.SourceViewActiveIndexID(ctx, req.GetSpaceId(), sourceViewID); indexErr != nil {
 				return &factorpb.RecalcFactorRsp{RetInfo: inner(fmt.Errorf("resolve source View active index: %w", indexErr))}, nil
 			}
-			ready.ActiveIndexId = activeIndexID
 			// A Result View is the complete output of its Source View. The
 			// executor validates the requested factor under the operation gate,
 			// then recalculates the whole group for a coherent result snapshot.

@@ -39,3 +39,22 @@ func TestRoleConfigurationsHaveIndependentStorageAndStrictFields(t *testing.T) {
 	_, err = LoadEngineApplicationConfig(roleConfigFile(t, "catalog_sync_timeout: 0s\n"))
 	require.ErrorContains(t, err, "catalog_sync_timeout")
 }
+
+func TestRoleConfigurationsApplyProcessEnvironment(t *testing.T) {
+	t.Setenv("MOOX_FACTOR_DB_PATH", "/tmp/control-catalog.db")
+	t.Setenv("MOOX_FACTOR_ENGINE_FACTORS_DIR", "/tmp/control-artifacts")
+	t.Setenv("MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID", "storage-from-env")
+	t.Setenv("MOOX_FACTOR_ENGINE_DB_PATH", "/tmp/engine-runtime.db")
+	t.Setenv("MOOX_FACTOR_ENGINE_ID", "engine-from-env")
+	control, err := LoadControlConfig(roleConfigFile(t, "{}"))
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/control-catalog.db", control.Database.Path)
+	require.Equal(t, "/tmp/control-artifacts", control.ArtifactsDir)
+	require.Equal(t, "storage-from-env", control.Storage.GatewayNodeID)
+	engine, err := LoadEngineApplicationConfig(roleConfigFile(t, "{}"))
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/engine-runtime.db", engine.Database.Path)
+	require.Equal(t, "engine-from-env", engine.EngineID)
+	require.Equal(t, "/tmp/control-artifacts", engine.Engine.FactorsDir)
+	require.Equal(t, "storage-from-env", engine.Storage.GatewayNodeID)
+}

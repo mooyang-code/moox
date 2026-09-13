@@ -59,8 +59,8 @@ func defaultSetupFactorItems() []setupconfig.FactorSetupItem {
 	return []setupconfig.FactorSetupItem{
 		{
 			FactorType: "timeseries", FactorID: "Bias", File: "Bias.py", Name: "Bias",
-			InputColumns: []string{"close"}, Outputs: []string{"bias_5", "bias_20"},
-			ParamsJSON: `{"windows":[5,20]}`, LookbackPeriods: 20,
+			InputColumns: []string{"close"}, Outputs: []string{"bias_20"},
+			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
 			SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
 			SubjectMode: "all", Status: "enabled",
 		},

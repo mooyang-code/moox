@@ -27,6 +27,9 @@ func PrepareArtifacts(ctx context.Context, root string, snapshot domain.CatalogS
 		if err := domain.ValidateFactorType(factor.FactorType); err != nil {
 			return domain.CatalogSnapshot{}, err
 		}
+		if err := domain.ValidateFactorReadLimit(factor); err != nil {
+			return domain.CatalogSnapshot{}, err
+		}
 		sum := sha256.Sum256([]byte(factor.SourceCode))
 		if factor.SourceCode == "" || hex.EncodeToString(sum[:]) != factor.SourceHash {
 			return domain.CatalogSnapshot{}, fmt.Errorf("factor %q source hash mismatch", factor.FactorID)

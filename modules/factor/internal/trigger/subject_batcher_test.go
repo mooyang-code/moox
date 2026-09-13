@@ -133,6 +133,34 @@ func TestSubjectBatcherRejectsInvalidConfigurationAndEvents(t *testing.T) {
 	require.Error(t, b.Run(context.Background()))
 }
 
+func TestSubjectBatcherDoesNotSplitOnPhysicalIndexSlot(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	entered := make(chan []SubjectEvent, 1)
+	b, err := NewSubjectBatcher(SubjectBatchConfig{Window: time.Second, MaxBatch: 2, QueueCapacity: 4, ExecutionTimeout: time.Second}, func(_ context.Context, batch []SubjectEvent) error {
+		entered <- batch
+		return nil
+	})
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+	slotB := subjectEvent("ETH")
+	slotB.Ready.ActiveIndexId = "index-b"
+	results := make(chan error, 2)
+	go func() { results <- b.Submit(ctx, subjectEvent("BTC")) }()
+	go func() { results <- b.Submit(ctx, slotB) }()
+	select {
+	case batch := <-entered:
+		require.Len(t, batch, 2)
+	case <-ctx.Done():
+		t.Fatal("physical A/B slots must not split a logical batch")
+	}
+	require.NoError(t, <-results)
+	require.NoError(t, <-results)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
 func TestSubjectBatcherSkipsGroupCancelledWhileEarlierGroupExecutes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -150,7 +178,7 @@ func TestSubjectBatcherSkipsGroupCancelledWhileEarlierGroupExecutes(t *testing.T
 	secondCtx, cancelSecond := context.WithCancel(ctx)
 	defer cancelSecond()
 	other := subjectEvent("ETH")
-	other.Ready.ActiveIndexId = "index-b"
+	other.Ready.InputContractVersion = "schema:2"
 	first := subjectSubmission{ctx: ctx, event: subjectEvent("BTC"), done: make(chan error, 1)}
 	second := subjectSubmission{ctx: secondCtx, event: other, done: make(chan error, 1)}
 	done := make(chan struct{})

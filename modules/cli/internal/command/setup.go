@@ -78,6 +78,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupTrustBrowserCommand(deps),
 		newSetupDeployCommand(deps),
 		newSetupDeployServiceCommand(deps),
+		newSetupBuildLinuxCommand(deps),
 		newSetupRenderRuntimeConfigCommand(deps),
 		newSetupApplyCommand(deps),
 		newSetupStatusCommand(deps),
@@ -1427,6 +1428,11 @@ func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string)
 		TLSMode:                      setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode),
 		InstallLocalCA:               true,
 	}
+	if snapshot.Manifest.HasCompileHost() {
+		options.StorageBuildPassword = snapshot.Manifest.CompileHost.Password
+		options.StorageBuildHost = snapshot.Manifest.CompileHost.Name
+		options.StorageBuildHostRole = "compile"
+	}
 	// The Trade execution host is an explicit placement, independent of the
 	// optional DNS resolver workload. A deployment may disable market-domain
 	// probing while Strategy still needs the authenticated ownership Gateway.
@@ -1461,6 +1467,14 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 		// loopback; external callers must use the authenticated trade_owner
 		// Gateway route.
 		tradeConsoleBindAddress = "127.0.0.1"
+	}
+	if isFactorEngineService(service) {
+		if err := requireDedicatedFactorEngineDeployDir(deployDir); err != nil {
+			return setupdeploy.ServiceResult{}, err
+		}
+		if err := syncFactorEngineRuntimeFromControl(ctx, snapshot, transport, host); err != nil {
+			return setupdeploy.ServiceResult{}, err
+		}
 	}
 	result, err := setupdeploy.Service(ctx, transport, setupdeploy.ServiceOptions{
 		PackagePath: packagePath, ServiceName: service, DeployDir: deployDir,

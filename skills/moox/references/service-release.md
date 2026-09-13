@@ -29,6 +29,13 @@ healthcheck.sh
   --output ./release/moox-admin-linux-amd64.zip
 ```
 
+内网因子引擎：
+
+```bash
+./scripts/build/package-factor-engine.sh \
+  --output ./release/moox-factor-engine-linux-amd64.zip
+```
+
 ## 前置条件
 
 - 用户维护且权限为 `0600` 的 `moox.toml`。
@@ -71,6 +78,17 @@ fan-out，再 `deploy-service`。只换 ZIP 不会更新远端凭据；`deploy-s
   --service storage-primary \
   --package ./release/moox-storage-primary-linux-amd64.zip \
   --deploy-dir /data/moox/storage
+```
+
+因子引擎必须使用独立目录，避免覆盖 Storage 或控制面包的 `start.sh`：
+
+```bash
+./bin/moox-cli setup deploy-service \
+  --file ./moox.toml \
+  --host compute \
+  --service factor-engine \
+  --package ./release/moox-factor-engine-linux-amd64.zip \
+  --deploy-dir /data/moox/factor-engine
 ```
 
 ## 发布流程

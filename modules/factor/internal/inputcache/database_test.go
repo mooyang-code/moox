@@ -51,3 +51,59 @@ func TestDatabaseSupportsViewJSONAndRejectsAmbiguousKeyCase(t *testing.T) {
 	_, err = CreateDatabase(ctx, filepath.Join(t.TempDir(), "case.duckdb"), []Column{{"At", "TIMESTAMP_NS"}}, []string{"at"})
 	require.ErrorContains(t, err, "exact column name")
 }
+
+func TestDatabaseUnsignedValuesSurviveEveryCachePath(t *testing.T) {
+	ctx := context.Background()
+	db, err := CreateDatabase(ctx, filepath.Join(t.TempDir(), "unsigned.duckdb"),
+		[]Column{{"id", "UBIGINT"}, {"at", "TIMESTAMP_NS"}, {"value", "UBIGINT"}}, []string{"id", "at"})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	max := ^uint64(0)
+	require.NoError(t, db.Upsert(ctx, [][]any{{max, at, max}, {uint64(0), at, uint64(1)}}, at))
+	query := WindowQuery{TimeColumn: "at", Through: at, Lookback: 1, Filters: map[string][]any{"id": {max}}}
+	rows, err := db.ReadWindow(ctx, query)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, max, rows[0][0])
+	require.Equal(t, max, rows[0][2])
+	next, err := db.Rebuild(ctx, filepath.Join(t.TempDir(), "next.duckdb"), 2)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, next.Close()) })
+	rows, err = next.ReadWindow(ctx, query)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, max, rows[0][2])
+	require.NoError(t, next.DeleteKeys(ctx, [][]any{{max, at}}))
+	rows, err = next.ReadWindow(ctx, query)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	query.Filters["id"] = []any{uint64(0)}
+	rows, err = next.ReadWindow(ctx, query)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+}
+
+func TestDatabaseJSONReadAndRebuildPreserveNumberText(t *testing.T) {
+	ctx := context.Background()
+	db, err := CreateDatabase(ctx, filepath.Join(t.TempDir(), "json-window.duckdb"), []Column{{"id", "VARCHAR"}, {"at", "TIMESTAMP_NS"}, {"payload", "JSON"}}, []string{"id", "at"})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	const payload = `{"large":18446744073709551615,"decimal":0.12345678901234567890123456789}`
+	require.NoError(t, db.Upsert(ctx, [][]any{{"BTC", at, payload}, {"ETH", at, nil}, {"SOL", at, "null"}}, at))
+	query := WindowQuery{TimeColumn: "at", Through: at, Lookback: 1}
+	check := func(database *Database) {
+		rows, err := database.ReadWindow(ctx, query)
+		require.NoError(t, err)
+		require.Len(t, rows, 3)
+		require.Equal(t, payload, rows[0][2])
+		require.Nil(t, rows[1][2])
+		require.Equal(t, "null", rows[2][2])
+	}
+	check(db)
+	next, err := db.Rebuild(ctx, filepath.Join(t.TempDir(), "next.duckdb"), 3)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, next.Close()) })
+	check(next)
+}

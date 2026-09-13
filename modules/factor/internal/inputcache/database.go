@@ -113,6 +113,9 @@ func (d *Database) Upsert(ctx context.Context, rows [][]any, updatedAt time.Time
 	defer stmt.Close()
 	for _, row := range rows {
 		values := append(append([]any(nil), row...), updatedAt.UTC())
+		for i, column := range d.columns {
+			values[i] = cacheParameter(column.Type, values[i])
+		}
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
 			return err
 		}
