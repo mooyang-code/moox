@@ -255,6 +255,7 @@ timer tick:
 - [ ] 写测试：周期未终态不执行；严格模式缺标的不计算；显式降级模式返回参与集合；带 lookback 的跨标的面板合法。
 - [ ] 根据固定绑定宇宙读取本地面板，缺口回源，不以另一 consumer 已收到事件作为缓存已就绪证据。
 - [ ] 两类因子均调用 `compute(df, params, context)`；更新现有时序脚本和测试，不保留双参数兼容入口或独立截面函数名。引擎从定义表读取 factor_type，分别构造窗口/面板与对应 context，保留 params 作为算法参数。
+- [ ] 增加类型权威性测试：定义缺少或包含非法 `factor_type` 时拒绝受理；脚本常量不能覆盖定义类型；传入算法函数的 `params`、`context` 不注入 `factor_type`。目录类型更新不改变已创建任务固定的定义版本及类型。
 - [ ] 测试脚本无类型声明仍可由定义驱动执行，两类输入和上下文均按类型严格校验；截面返回拒绝重复主键、宇宙外标的、未知输出列。
 - [ ] 使用固定 3 标的样本断言 Rank 值及缺失处理；与时序共用资源预算但不共用单标的输入契约。
 - [ ] 执行 `go test ./internal/trigger/...`；在 `modules/factor` 执行 `python3 -m unittest discover -s pyworker -p 'test_*.py'`，使用项目既有 Python 环境。
