@@ -26,11 +26,13 @@
 | 时序消费 ViewSourceSubjectReady | 时序消费 Storage 发布的复合 Dataset 变更 |
 | 时序历史窗口读取源 View | 读取复合 Dataset 的 Primary 时序数据 |
 | View 聚合多个 Dataset | Merge 构造复合 Dataset，View 仅维护单 Dataset 索引 |
-| 缓存跟随 View schema/revision | 缓存跟随 Dataset schema 与输入契约 |
+| 缓存跟随 View schema/revision | 缓存按 Dataset 身份与 schema 标识隔离 |
 | 因子输出单独组织为另一结果 Dataset | 基础输入与因子输出分字段写入同一 mdataset |
 | 独立数据资产入口 | 基础数据管理归入数据采集，派生数据归属对应业务模块 |
 
-不再为时序计算建设 ViewSourceSubjectReady 的发布、重建补发和消费链路。ViewSourcePeriodReady 保留源输入可读语义，不能再承担多 Dataset 聚合职责。
+不再为时序计算建设 ViewSourceSubjectReady 的发布、重建补发和消费链路。原 ViewSourcePeriodReady 与 ViewFactorPeriodReady 统一替换为 ViewDataReady；原 DatasetPeriodCollected 改名为 CollectorPeriodCompleted。旧名称仅在本节说明替代关系，不作为目标协议保留。
+
+删除独立的 input_contract_version 字段，不另建输入版本体系。输入语义由启用后不可变的 mdataset 定义确定；任务引用不可变配置快照或配置版本，缓存使用 Dataset 身份与 Storage schema 标识。
 
 ## 3. 整体架构
 
@@ -53,7 +55,7 @@ Collector --> 基础 Dataset（Storage Primary）
                    |                  |
           Storage 行变更          View 自动维护索引
                    |                  |
-          时序因子引擎         ViewSourcePeriodReady
+          时序因子引擎         ViewDataReady（输入）
                    |                  |
                    |             截面因子引擎
                    |                  |
@@ -61,7 +63,7 @@ Collector --> 基础 Dataset（Storage Primary）
                                           |
                           mdataset --> View 应用结果
                                           |
-                               结果可读事件 --> 策略
+                          ViewDataReady（结果） --> 策略
 ```
 
 Merge 与因子引擎是独立程序，可以部署在同一内网机器，但必须能够独立启停。Storage 与 View 负责持久化和查询，不执行用户因子算法。
@@ -89,11 +91,12 @@ Merge 与因子引擎是独立程序，可以部署在同一内网机器，但�
 | merge_mode | system 或 custom |
 | source_field_mapping | 源字段到目标基础字段的确定性映射 |
 | required_sources | 每行必须到齐的数据源；第一版默认所有关联源均必需 |
-| input_contract_version | 输入来源、键规则及基础字段语义的版本 |
 | factor_bindings | 应用于该 Dataset 的因子绑定集合 |
 | default_view | 自动创建的默认查询索引 |
 
 字段分为公共行键、基础输入字段、因子输出字段及受系统管理的输入状态。实际字段类型和 schema 以 Storage 元数据为权威；控制面保存构造及计算配置，通过 Storage 接口管理实际 schema，不复制第二份独立权威 schema。
+
+mdataset 启用后，不允许原地改变源 Dataset 集合、业务行键和基础字段映射等输入语义；此类变化创建新的 mdataset，Dataset 标识不复用于不同输入定义。不能仅凭 schema 相同认定输入含义相同。因子绑定和输出列可以按配置流程更新，运行中任务固定使用其配置快照，旧任务不得覆盖新绑定结果。
 
 公共行键建议为 `subject_id + frequency + period_time + series_tag`，具体编码统一使用 Storage 的时序键协议。“数据 ID”指这个业务行键，不是 NATS 消息 ID。
 
@@ -130,7 +133,7 @@ View 不进行多源 JOIN、字段加工或数据聚合。一个 Dataset 可有�
 
 处理步骤：
 
-1. 校验源 Dataset、业务键、必需字段与输入契约。
+1. 按固定构造配置校验源 Dataset、业务键和必需字段。
 2. 记录该行已到达的数据源及输入内容，等待状态必须持久化或能够从可靠日志恢复。
 3. 同一对象、同一周期的所有必需源到齐后，一次提交完整基础字段及系统输入就绪状态。
 4. Storage 提交成功后产生可重放的变更事件。
@@ -161,7 +164,7 @@ View 不进行多源 JOIN、字段加工或数据聚合。一个 Dataset 可有�
 引擎仅订阅被有效绑定引用的 mdataset 变更，不订阅所有基础 Dataset，也不依赖源 View。
 
 1. 验证事件属于基础输入提交且该行输入已就绪。
-2. 按输入契约、频率及计算窗口进行短窗口微批。
+2. 按 Dataset、兼容的配置快照、频率及计算窗口进行短窗口微批。
 3. 读取本地缓存，缺失部分批量回源读取 mdataset Primary。
 4. 按对象形成截至当前周期的历史窗口，不读取未来数据。
 5. 运行时序因子，将结果作为字段级更新写回同一 mdataset。
@@ -175,13 +178,13 @@ View 不进行多源 JOIN、字段加工或数据聚合。一个 Dataset 可有�
 
 变更事件必须包含可验证的变更字段和写入类别等信息，引擎只接受完整基础输入提交。因子输出变化不能再次启动时序任务；不能仅凭普通客户端可任意填写的来源字符串防循环。
 
-同一源提交的重复消息形成相同任务身份。任务身份包含 Dataset、业务键、输入契约、绑定版本等信息；处理完成后重投不重复生效。补算使用独立任务身份和明确输出版本，不能让旧任务覆盖新绑定结果。
+同一源提交的重复消息形成相同任务身份。任务身份包含 Dataset、业务键、固定配置快照及绑定版本等信息，不另设输入版本字段；处理完成后重投不重复生效。补算使用独立任务身份和明确输出版本，不能让旧任务覆盖新绑定结果。
 
 ### 6.3 截面计算
 
 截面绑定指定 mdataset 下的一个源 View，该 View 必须包含算法所需基础字段和明确的对象范围。不同过滤范围的 View 表示不同截面对象集，不得因删除行或增加过滤条件而静默改变已有计算批次。
 
-截面引擎消费 ViewSourcePeriodReady，读取固定周期、固定输入契约的面板，再写回所属 mdataset 的因子输出列。
+截面引擎消费关联 MergePeriodCompleted 的 ViewDataReady，读取固定周期、固定配置快照对应的面板，再写回所属 mdataset 的因子输出列。关联 FactorPeriodComputed 的结果可读通知不能再次触发截面计算。
 
 默认仅 complete 输入周期允许计算。允许剔除缺失对象等降级方式必须在因子定义或受校验的绑定策略中显式声明，不能默认以残缺全集计算。
 
@@ -196,7 +199,7 @@ def compute(df, params, context):
 
 - df：时序为单对象历史窗口；截面为同周期对象面板。
 - params：绑定参数。
-- context：只读执行上下文，例如目标周期、输入契约和任务标识，不重复定义 factor_type。
+- context：只读执行上下文，例如目标周期、配置快照标识和任务标识，不重复定义 factor_type，也不引入独立输入版本字段。
 
 输入字段通过绑定映射，使算法无需硬编码源 Dataset 前缀。输出按定义声明的字段与类型校验；时序写当前对象当前周期，截面输出必须携带唯一对象键，禁止写出绑定对象集之外的行。
 
@@ -207,13 +210,18 @@ def compute(df, params, context):
 | 事件或逻辑状态 | 责任方 | 含义 |
 |---|---|---|
 | DatasetRowsUpserted | Storage | 数据或字段更新已提交，包含可靠变更身份 |
-| DatasetPeriodCollected | Collector 经 Storage 可靠发布 | 基础 Dataset 的冻结采集集合已终态 |
-| 复合输入周期完成标记 | Merge 经 Storage 可靠发布 | mdataset 预期对象的构造已全部终态 |
-| ViewSourcePeriodReady | View 模块 | 所属 Dataset 的本周期输入已按该 View 范围应用并可读 |
+| CollectorPeriodCompleted | Collector 经 Storage 可靠发布 | 基础 Dataset 的冻结采集集合已终态 |
+| MergePeriodCompleted | Merge 经 Storage 可靠发布 | mdataset 预期对象的构造已全部终态，成功输入已提交 |
 | FactorPeriodComputed | 引擎汇总后经 Storage 可靠发布 | 固定绑定集合及对象集合的计算任务已全部终态 |
-| ViewFactorPeriodReady | View 模块 | 目标因子结果写入已在对应 View 应用，可以提供查询 |
+| ViewDataReady | View 模块 | 关联完成事件指定的数据已在指定 View 中应用并可读 |
 
 View 不再聚合 N 个 Dataset 的完成标记，只验证其唯一所属 Dataset 的输入或结果提交位置。底层即使代码位于 Storage 模块，View 就绪事件的业务发布责任仍属于 View。
+
+CollectorPeriodCompleted 和 MergePeriodCompleted 按业务责任方命名，即使经 Storage 可靠发布也不改变事件名称。Completed 表示预期集合全部终态，并不保证全部成功，必须结合 complete/degraded 状态理解。
+
+ViewDataReady 是通用索引事件，不表示整个 View 的全部数据都已就绪，也不限定周期型数据。载荷至少明确 view_id、dataset_id、关联完成事件 ID、数据范围或批次身份、状态和就绪时间；周期型数据另带频率与周期。它关联的通用完成标记描述写入位置与目标范围，View 不执行因子逻辑，也不汇总业务任务终态。
+
+源输入和因子结果复用同一个 ViewDataReady 名称，通过关联完成事件区分。消费者必须匹配目标 View、完成事件及配置批次，不能把任意 ViewDataReady 当成自己的触发信号。
 
 周期标记必须携带稳定批次身份、配置版本、预期对象集引用、失败集合和足以证明提交应用完成的写入位置。跨分区或数据节点时不能用某一个队列的顺序代表全部数据；应等待所有相关提交位置应用完成。
 
@@ -223,6 +231,8 @@ View 不再聚合 N 个 Dataset 的完成标记，只验证其唯一所属 Datas
 
 同一 Dataset 下的多个 View 独立确认可读。仅基础字段的 View 不发布声称因子列可读的结果通知。所有 Ready 事件保留 complete/degraded 区别，策略显式决定是否接受降级结果。
 
+读取 View 的策略等待关联目标 FactorPeriodComputed 的 ViewDataReady；直接读取 Primary 的消费者可使用 FactorPeriodComputed，但该事件必须保证成功结果已经提交。统一事件名称并不删除“写入完成不等于索引可读”的屏障。
+
 ## 8. 本地 DuckDB 缓存
 
 ### 8.1 内容与有效性
@@ -231,9 +241,9 @@ View 不再聚合 N 个 Dataset 的完成标记，只验证其唯一所属 Datas
 
 缓存可保留完整 Dataset 列结构，但命中判断和数据复用仅针对已就绪的基础字段；因子输出列不作为计算输入，不依赖缓存中的输出列值。回源读取完整基础输入投影，避免部分字段被误判为完整缓存。
 
-Dataset schema 或输入契约变化时，旧缓存代际失效，新建对应结构的空 DuckDB，不主动回填。新增因子若新增输出列导致 Dataset schema 变化，也走同一代际替换规则。
+Storage Dataset schema 标识变化时，旧缓存代际失效，新建对应结构的空 DuckDB，不主动回填。输入语义变化创建新的 mdataset，其缓存按新 Dataset 身份单独创建。新增因子若新增输出列导致 Dataset schema 变化，也走同一代际替换规则，不维护独立输入版本字段。
 
-历史不变后无需历史修正序列和自动失效传播；仍需验证业务键、输入就绪状态及契约。缓存缺少历史窗口时回源，不能仅以总行数证明窗口完整；确认源不存在的数据不能无限重试。
+历史不变后无需历史修正序列和自动失效传播；仍需验证 Dataset 身份、schema、业务键及输入就绪状态。缓存缺少历史窗口时回源，不能仅以总行数证明窗口完整；确认源不存在的数据不能无限重试。
 
 ### 8.2 容量与重建
 
@@ -279,7 +289,7 @@ View 作为数据集详情中的“索引”页签管理，可创建多个不同
 - Storage 写成功但响应丢失：使用稳定提交身份重试，不能产生新的计算批次。
 - 因子引擎重启：恢复 durable 和任务账本，已完成输出幂等确认，未完成任务继续执行。
 - View 重建：不触发时序重算；源输入/结果 Ready 必须等活动索引真实可读，不能由回填写入冒充。
-- View 过滤或输入契约变化：新计算批次使用新配置身份，旧批次不静默套用新对象集。
+- View 过滤变化：新计算批次使用新配置身份，旧批次不静默套用新对象集；输入语义变化创建新的 mdataset。
 - 超时和失败：明确区分缺源、缺历史、算法失败、写入失败、View 未追平，不统一显示为成功 Ready。
 
 监控至少包含 Merge 待聚合对象数、缺源集合、构造耗时、时序触发延迟、截面等待耗时、任务成功/失败/跳过数、View 应用滞后、缓存命中率、回源量、目录字节数和缓存重建失败。
@@ -303,6 +313,8 @@ View 作为数据集详情中的“索引”页签管理，可创建多个不同
 - 因子回写不触发自身，两个因子并发写不同列不互相覆盖。
 - 消息重投、写入响应丢失、Merge/引擎重启不会漏任务或重复生效。
 - 截面只在目标输入面板可读后开始，策略只在指定因子结果可读后开始。
+- ViewDataReady 通过关联完成事件区分输入和结果，结果通知不会再次触发截面计算，不相关周期或 View 的通知不会误触发消费者。
+- 删除独立输入版本字段后，变更输入来源或字段映射必须创建新 mdataset；缓存和旧任务不会跨 Dataset 身份复用。
 - View 重建不影响时序计算，重建后的 Ready 不绕过真实数据应用进度。
 - schema 变化新建空缓存，容量重建不在线 ALTER，缓存完全删除后计算仍可回源完成。
 - 外网控制面与内网 Merge/引擎独立部署，正式验收区分单测、模拟事件和真实新周期计算。
