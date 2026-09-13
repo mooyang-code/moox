@@ -63,6 +63,14 @@ func DeterministicTaskID(task Task) string {
 		write("subject-source-event:" + task.TriggerEventID)
 		write("input-contract:" + task.InputContractVersion)
 	}
+	if task.TriggerType == "dataset_rows" {
+		datasetID := strings.TrimSpace(task.SourceDataset)
+		if datasetID == "" {
+			datasetID = strings.TrimSpace(task.ResultDatasetID)
+		}
+		write("dataset:" + datasetID)
+		write("config-snapshot:" + strings.TrimSpace(task.ConfigSnapshotID))
+	}
 	return fmt.Sprintf("ft-%x", h.Sum(nil)[:16])
 }
 

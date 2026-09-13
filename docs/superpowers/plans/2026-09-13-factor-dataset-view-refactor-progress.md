@@ -301,4 +301,73 @@ env CGO_ENABLED=1 go test ./internal/service/primarystore -count=1
 
 ### 提交
 
+`cb007ebf`
+
+## 任务 09：控制面与运行资源彻底隔离
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 10—18。
+
+### 红灯证据
+
+角色边界行为此前已部分存在；本任务用 `TestRoleBoundary` 固化：控制面无 Python、独立数据库、缺网关节点拒绝启动、漏快照可从 SQLite 恢复、关闭先停准入再释放库。
+
+### 实现
+
+- 控制面 `InitializeControl` 不启动 Python 与实时消费者
+- 控制/引擎/Merge 使用独立 SQLite 路径与凭据
+- 缺 `gateway_node_id` 时拒绝打开资源
+- 引擎关闭顺序为 cancel → 停消费者 → 停目录同步 → 关闭 SQLite
+- 控制面重启后目录快照仍可从同一 catalog 库恢复
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/bootstrap -run 'TestRoleBoundary' -count=1
+env CGO_ENABLED=1 go test -race ./internal/bootstrap -run 'TestRoleBoundary' -count=3
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- 时序改读 mdataset Primary、缓存、截面、补算、前端与正式发布属于 10—18
+
+### 提交
+
+`b182476b`
+
+## 任务 10：Dataset 驱动时序触发
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 18。
+
+### 红灯证据
+
+`TestDatasetRowsTrigger` 最初因 `NewDatasetRowsRunner` / `DatasetRowsDeliverPolicy` 不存在而无法编译。失败来自目标行为缺失。
+
+### 实现
+
+- 引擎只消费 `write_kind=input_commit` 且 `moox.input_ready=true` 的 `DatasetRowsUpserted`
+- 因子回写 `factor_patch`、未绑定 Dataset、未就绪行和过期 `moox.binding_version` 均忽略
+- 任务身份按 Dataset、业务键、配置快照和绑定代际确定；重复源事件与重启后账本不重复执行
+- 两个对象独立入队，不等待全集
+- 删除任务身份对 InputContract/ActiveIndex 的依赖；账本 scope 改为 Dataset + 快照
+- 首次 durable 使用 `DeliverNew`；已有 durable 保留原投递策略与积压
+- `StartEngineSubject` 启动 Dataset 行消费者，不再返回空 stub
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/trigger -run 'TestDatasetRowsTrigger' -count=1
+env CGO_ENABLED=1 go test -race ./internal/trigger ./internal/store ./internal/bootstrap -run 'TestDatasetRowsTrigger|TestSubjectAdmission|TestRoleBoundary|TestInitializeEngine' -count=3
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- Primary 历史窗口读取与 Python ABI 属于任务 11
+- 缓存、截面、周期屏障、补算、前端与正式发布属于 12—18
+
+### 提交
+
 （本提交）

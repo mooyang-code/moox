@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
@@ -40,10 +41,24 @@ type subjectHead struct {
 func (subjectHead) TableName() string { return "t_factor_subject_heads" }
 
 func subjectTaskScope(task engine.FactorTask) (string, error) {
-	if task.TaskID == "" || task.BindingID == "" || task.BindingGeneration == "" || task.SpaceID == "" || task.SourceViewID == "" || task.SubjectID == "" || task.Freq == "" || task.PeriodTime <= 0 || task.InputContractVersion == "" || !task.FilterSourceSeriesTag || task.CatalogRevision <= 0 || task.SourceNodeID == "" || task.SourceStoreID == "" || task.SourceSequence == 0 || task.SourceEventID == "" {
+	datasetID := strings.TrimSpace(task.SourceDataset)
+	if datasetID == "" {
+		datasetID = strings.TrimSpace(task.ResultDatasetID)
+	}
+	if datasetID == "" {
+		datasetID = strings.TrimSpace(task.SourceViewID)
+	}
+	snapshot := strings.TrimSpace(task.ConfigSnapshotID)
+	if snapshot == "" {
+		snapshot = strings.TrimSpace(task.InputContractVersion)
+	}
+	if snapshot == "" {
+		snapshot = "-"
+	}
+	if task.TaskID == "" || task.BindingID == "" || task.BindingGeneration == "" || task.SpaceID == "" || datasetID == "" || task.SubjectID == "" || task.Freq == "" || task.PeriodTime <= 0 || task.CatalogRevision <= 0 || task.SourceNodeID == "" || task.SourceStoreID == "" || task.SourceSequence == 0 || task.SourceEventID == "" {
 		return "", fmt.Errorf("subject task provenance is incomplete")
 	}
-	raw, err := json.Marshal([]any{task.BindingID, task.BindingGeneration, task.SpaceID, task.SourceViewID, task.InputContractVersion, task.SubjectID, task.Freq, task.PeriodTime, task.SourceSeriesTag})
+	raw, err := json.Marshal([]any{task.BindingID, task.BindingGeneration, task.SpaceID, datasetID, snapshot, task.SubjectID, task.Freq, task.PeriodTime, task.SourceSeriesTag})
 	if err != nil {
 		return "", err
 	}

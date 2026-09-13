@@ -40,6 +40,7 @@ type TaskScope struct {
 	StartTime                   time.Time
 	EndTime                     time.Time
 	InputContractVersion        string
+	ConfigSnapshotID            string
 	ExpectedSubjects            []string
 	AvailableSubjects           []string
 	MissingSubjects             []string
@@ -103,6 +104,7 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 			StartTime: scope.StartTime.UTC(), EndTime: scope.EndTime.UTC(),
 			LookbackPeriods:      factor.LookbackPeriods,
 			InputContractVersion: scope.InputContractVersion,
+			ConfigSnapshotID:     scope.ConfigSnapshotID,
 			ExpectedSubjects:     append([]string(nil), scope.ExpectedSubjects...),
 			AvailableSubjects:    append([]string(nil), scope.AvailableSubjects...),
 			MissingSubjects:      append([]string(nil), scope.MissingSubjects...),

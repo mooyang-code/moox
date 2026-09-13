@@ -39,6 +39,7 @@ type FactorTask struct {
 	EndTime                     time.Time
 	LookbackPeriods             int
 	InputContractVersion        string
+	ConfigSnapshotID            string
 	ExpectedSubjects            []string
 	AvailableSubjects           []string
 	MissingSubjects             []string
