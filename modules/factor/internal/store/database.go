@@ -41,6 +41,7 @@ type Store struct {
 	factors   *FactorRepository
 	bindings  *BindingRepository
 	manifests *OutputManifestRepository
+	merged    *MergedDatasetRepository
 }
 
 // Options configures the Factor SQLite store.
@@ -69,6 +70,7 @@ func Open(opts *Options) (*Store, error) {
 	s.factors = NewFactorRepository(db)
 	s.bindings = NewBindingRepository(db)
 	s.manifests = NewOutputManifestRepository(db)
+	s.merged = NewMergedDatasetRepository(db)
 	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Factor SQLite 数据库: %s", dbPath)
 	return s, nil
@@ -96,6 +98,14 @@ func (s *Store) OutputManifests() *OutputManifestRepository {
 		return nil
 	}
 	return s.manifests
+}
+
+// MergedDatasets returns the composite Dataset definition repository.
+func (s *Store) MergedDatasets() *MergedDatasetRepository {
+	if s == nil {
+		return nil
+	}
+	return s.merged
 }
 
 // ApplySchema applies schema SQL during service startup.
@@ -158,10 +168,10 @@ func (s *Store) factorSchemaTables() ([]string, error) {
 
 func (s *Store) validateSchemaTables(tables []string) error {
 	expected := map[string][]string{
-		"t_factor_subject_runs":     {"c_task_id", "c_scope_key", "c_period_time", "c_task_json", "c_status", "c_error", "c_updated_at"},
-		"t_factor_subject_heads":    {"c_scope_key", "c_task_id", "c_period_time", "c_source_node", "c_source_store", "c_source_sequence", "c_source_event", "c_catalog_revision"},
-		"t_factor_subject_gc":       {"c_id", "c_completed_before"},
-		"t_factor_catalog":          {"c_id", "c_revision", "c_snapshot_hash"},
+		"t_factor_subject_runs":  {"c_task_id", "c_scope_key", "c_period_time", "c_task_json", "c_status", "c_error", "c_updated_at"},
+		"t_factor_subject_heads": {"c_scope_key", "c_task_id", "c_period_time", "c_source_node", "c_source_store", "c_source_sequence", "c_source_event", "c_catalog_revision"},
+		"t_factor_subject_gc":    {"c_id", "c_completed_before"},
+		"t_factor_catalog":       {"c_id", "c_revision", "c_snapshot_hash"},
 		"t_factor_defs": {
 			"c_factor_id", "c_name", "c_factor_type", "c_source_code", "c_source_hash", "c_source_path",
 			"c_input_columns_json", "c_outputs_json", "c_params_json", "c_lookback_periods",
@@ -173,6 +183,14 @@ func (s *Store) validateSchemaTables(tables []string) error {
 		},
 		"t_factor_output_manifests": {
 			"c_source_series_tag", "c_filter_source_series_tag", "c_binding_id", "c_binding_generation", "c_cleanup_task_json", "c_subject_id", "c_frequency", "c_period_time", "c_row_keys_json", "c_updated_at",
+		},
+		"t_factor_merged_datasets": {
+			"c_dataset_id", "c_space_id", "c_frequency", "c_key_contract_json", "c_object_set_json", "c_sources_json",
+			"c_merge_mode", "c_field_mappings_json", "c_enabled", "c_config_snapshot_id", "c_input_semantics_hash",
+			"c_storage_resource_state", "c_storage_schema_id", "c_ctime", "c_mtime",
+		},
+		"t_factor_merged_dataset_snapshots": {
+			"c_snapshot_id", "c_dataset_id", "c_config_json", "c_input_semantics_hash", "c_ctime",
 		},
 	}
 	if len(tables) != len(expected) {

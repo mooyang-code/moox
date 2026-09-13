@@ -194,4 +194,37 @@ env CGO_ENABLED=1 go test ./internal/marketfetch ./internal/sources/binance ./in
 
 ### 提交
 
-`690dcc10`
+`6ebea25b`
+
+## 任务 06：mdataset 配置与权威边界
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 18。
+
+### 红灯证据
+
+`TestMergedDatasetDefinition` 最初因类型与仓库方法不存在而无法编译；补齐 API 后，启用后改来源被拒绝于输入语义校验。失败来自目标行为缺失。
+
+### 实现
+
+- 保存来源、键规则、对象集、`merge_mode`、`<源DatasetID>__<字段>` 映射及不可变配置快照
+- 不同频率、周期边界或字段目标冲突拒绝；启用后拒绝改变输入语义
+- 缓存身份包含 Dataset ID 与 Storage schema，相同 schema 的不同 Dataset 不共享
+- Storage 资源按 Dataset ID 幂等对账，已创建则不再重复 Ensure
+- 示例定义将 `dataset_binance_spot_kline_1m` 与 `dataset_binance_swap_kline_1m` 合并为 `mdataset_binance_kline_1m`
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/... -run 'TestMergedDatasetDefinition' -count=1
+env CGO_ENABLED=1 go test -race ./internal/domain ./internal/store -run 'TestMergedDatasetDefinition' -count=3
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- Merge 程序、引擎隔离、前端与正式发布属于 07—18
+
+### 提交
+
+见本提交。

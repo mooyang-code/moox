@@ -144,3 +144,36 @@ WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_factor_bindings SET c_mtime = CURRENT_TIMESTAMP WHERE c_binding_id = OLD.c_binding_id;
 END;
+
+-- Composite factor Datasets are defined here; Storage remains the schema authority.
+CREATE TABLE IF NOT EXISTS t_factor_merged_datasets (
+    c_dataset_id TEXT NOT NULL PRIMARY KEY,
+    c_space_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_key_contract_json TEXT NOT NULL,
+    c_object_set_json TEXT NOT NULL,
+    c_sources_json TEXT NOT NULL,
+    c_merge_mode TEXT NOT NULL,
+    c_field_mappings_json TEXT NOT NULL,
+    c_enabled INTEGER NOT NULL DEFAULT 0,
+    c_config_snapshot_id TEXT NOT NULL DEFAULT '',
+    c_input_semantics_hash TEXT NOT NULL,
+    c_storage_resource_state TEXT NOT NULL DEFAULT 'pending',
+    c_storage_schema_id TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_merge_mode IN ('system', 'custom')),
+    CHECK (c_storage_resource_state IN ('pending', 'created', 'failed'))
+);
+
+CREATE TABLE IF NOT EXISTS t_factor_merged_dataset_snapshots (
+    c_snapshot_id TEXT NOT NULL PRIMARY KEY,
+    c_dataset_id TEXT NOT NULL,
+    c_config_json TEXT NOT NULL,
+    c_input_semantics_hash TEXT NOT NULL,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (c_dataset_id) REFERENCES t_factor_merged_datasets (c_dataset_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_factor_merged_dataset_snapshots_dataset
+ON t_factor_merged_dataset_snapshots (c_dataset_id, c_ctime);
