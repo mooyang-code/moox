@@ -30,7 +30,7 @@ func TestRecalcWaitsForSyncPointAndUsesViewReadyExecutor(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 0, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	require.Equal(t, []string{"wait", "execute", "execute"}, order)
-	require.Equal(t, []string{"bars", "funding"}, waiter.datasetIDs)
+	require.Equal(t, []string{"bars"}, waiter.datasetIDs)
 	require.Len(t, executor.triggerIDs, 2)
 	require.Equal(t, []string{"", ""}, executor.factorIDs)
 	require.NotEqual(t, executor.triggerIDs[0], executor.triggerIDs[1])

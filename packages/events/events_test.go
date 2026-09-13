@@ -272,7 +272,8 @@ func validMergePeriodCompleted(now *timestamppb.Timestamp) *storagepb.MergePerio
 func validViewDataReady(now *timestamppb.Timestamp) *storagepb.ViewDataReady {
 	return &storagepb.ViewDataReady{
 		ViewId: "view-1", ViewConfigId: "view-config-1", CompletionEventId: "merge-completed-1",
-		DatasetId: "mdataset", Status: "complete", VisibleScope: "universe:mdataset:1m",
+		CompletionKind: MergePeriodCompleted.Name(),
+		DatasetId:      "mdataset", Status: "complete", VisibleScope: "universe:mdataset:1m",
 		Frequency: "1m", PeriodTime: 1786032000,
 		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 2}},
 		ReadyAt:            now,

@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/report"
 	publicstoragepb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -105,7 +106,8 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 			triggerEventID := recalcTriggerEventID(requestID, req, period)
 			ready := &publicstoragepb.ViewDataReady{
 				ViewId: sourceViewID, ViewConfigId: sourceViewID, CompletionEventId: triggerEventID,
-				DatasetId: sourceViewID, Status: "complete", VisibleScope: "subject:" + req.GetSubjectId(),
+				CompletionKind: events.MergePeriodCompleted.Name(),
+				DatasetId:      sourceViewID, Status: "complete", VisibleScope: "subject:" + req.GetSubjectId(),
 				Frequency: req.GetFreq(), PeriodTime: period.Unix(),
 				CommittedPositions: []*publicstoragepb.CommittedPosition{{NodeId: "recalc", StoreId: "recalc", Sequence: 1}},
 				ReadyAt:            timestamppb.New(period.UTC()),

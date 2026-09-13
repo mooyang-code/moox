@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
 	publicstoragepb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -20,7 +21,8 @@ import (
 func testReady(period time.Time, status, failed string) *publicstoragepb.ViewDataReady {
 	ready := &publicstoragepb.ViewDataReady{
 		ViewId: "source_view", ViewConfigId: "source_view@1", CompletionEventId: "ready",
-		DatasetId: "prices", Status: status, VisibleScope: "view:source_view",
+		CompletionKind: events.MergePeriodCompleted.Name(),
+		DatasetId:      "prices", Status: status, VisibleScope: "view:source_view",
 		Frequency: "1m", PeriodTime: period.Unix(),
 		CommittedPositions: []*publicstoragepb.CommittedPosition{{NodeId: "n", StoreId: "s", Sequence: 1}},
 		ReadyAt:            timestamppb.New(period),
@@ -46,13 +48,14 @@ func TestViewReadyRunnerRunsSubjectFactorCartesianProduct(t *testing.T) {
 	tasks := <-runner.tasks
 	got := make([]string, 0, len(tasks))
 	for _, task := range tasks {
-		got = append(got, task.SubjectID+"/"+task.Factor.FactorID)
+		got = append(got, task.Factor.FactorID)
 		require.Equal(t, taskrunner.DeterministicTaskID(task), task.TaskID)
+		require.Empty(t, task.SubjectID)
+		require.Equal(t, []string{"BTC", "ETH", "SOL"}, task.ExpectedSubjects)
+		require.Equal(t, "complete", task.InputStatus)
 		require.Zero(t, task.ExpectedActiveIndexRevision, "live View writes must not fence a view-ready read")
 	}
-	require.Equal(t, []string{
-		"BTC/bias5", "BTC/bias20", "ETH/bias5", "ETH/bias20", "SOL/bias5", "SOL/bias20",
-	}, got)
+	require.Equal(t, []string{"bias5", "bias20"}, got)
 	require.Nil(t, storage.getMarker(), "marker must wait for every combination to become terminal")
 
 	close(runner.release)
@@ -69,10 +72,9 @@ func TestViewReadyRunnerExecuteSelectedRunsOnlyRequestedFactor(t *testing.T) {
 	ready := testReady(period, "complete", "")
 
 	require.NoError(t, executor.ExecuteSelected(context.Background(), "space", "selected-event", "bias5", ready))
-	require.Len(t, runner.tasks, 3)
-	for _, task := range runner.tasks {
-		require.Equal(t, "bias5", task.Factor.FactorID)
-	}
+	require.Len(t, runner.tasks, 1)
+	require.Equal(t, "bias5", runner.tasks[0].Factor.FactorID)
+	require.Empty(t, runner.tasks[0].SubjectID)
 	marker := storage.getMarker()
 	require.Len(t, marker.GetBindings(), 1)
 	require.Equal(t, "bias5", marker.GetBindings()[0].GetFactorId())
@@ -87,7 +89,9 @@ func TestViewReadyRunnerExecutionBudgetScalesWithBindingCount(t *testing.T) {
 		}
 	}
 	runner := NewViewReadyRunner(periodBindings{rows: bindings}, nil, nil, nil, "", WithExecutionUnitTimeout(30*time.Second))
-	budget, err := runner.ExecutionBudget(context.Background(), "space", &publicstoragepb.ViewDataReady{ViewId: "source_view", Frequency: "1m"})
+	budget, err := runner.ExecutionBudget(context.Background(), "space", &publicstoragepb.ViewDataReady{
+		ViewId: "source_view", Frequency: "1m", CompletionKind: events.MergePeriodCompleted.Name(),
+	})
 	require.NoError(t, err)
 	require.Equal(t, 17*time.Minute+30*time.Second, budget)
 }
@@ -104,7 +108,7 @@ func TestViewReadyRunnerExecutionBudgetScalesWithSubjectsAndWorkers(t *testing.T
 	runner := NewViewReadyRunner(periodBindings{rows: bindings}, nil, nil, nil, "",
 		WithExecutionUnitTimeout(30*time.Second), WithExecutionParallelism(4), WithBatchExecution(true))
 	budget, err := runner.ExecutionBudget(context.Background(), "space", &publicstoragepb.ViewDataReady{
-		ViewId: "source_view", Frequency: "1m",
+		ViewId: "source_view", Frequency: "1m", CompletionKind: events.MergePeriodCompleted.Name(),
 	})
 	require.NoError(t, err)
 	// Batch execution runs 3 subject waves. Each four-factor batch may legally
@@ -113,14 +117,14 @@ func TestViewReadyRunnerExecutionBudgetScalesWithSubjectsAndWorkers(t *testing.T
 }
 
 func TestViewReadyRunnerIsolatesCombinationFailure(t *testing.T) {
-	runner := &recordingCombinationRunner{fail: map[string]error{"b-20-bias20\x00ETH": errors.New("python failed")}}
+	runner := &recordingCombinationRunner{fail: map[string]error{"b-20-bias20\x00": errors.New("python failed")}}
 	storage := new(periodStorageFake)
 	executor := NewViewReadyRunner(twoPeriodBindings(), twoPeriodFactors(), runner, storage, t.TempDir())
 	period := time.Date(2026, 8, 10, 2, 0, 0, 0, time.UTC)
 	err := executor.Execute(context.Background(), "space", "source-event", testReady(period, "complete", ""))
 	require.NoError(t, err)
-	require.Len(t, runner.tasks, 6)
-	require.Equal(t, []string{"b-20-bias20/ETH"}, storage.clearedCombinations())
+	require.Len(t, runner.tasks, 2)
+	require.Equal(t, []string{"b-20-bias20/"}, storage.clearedCombinations())
 	marker := storage.getMarker()
 	require.Equal(t, "degraded", marker.GetStatus())
 	require.Equal(t, 1, storage.markerCount())
@@ -128,7 +132,7 @@ func TestViewReadyRunnerIsolatesCombinationFailure(t *testing.T) {
 	require.Equal(t, "complete", marker.GetBindings()[0].GetStatus())
 	require.Equal(t, "b-20-bias20", marker.GetBindings()[1].GetBindingId())
 	require.Equal(t, "degraded", marker.GetBindings()[1].GetStatus())
-	require.Equal(t, []string{"ETH"}, marker.GetBindings()[1].GetFailedSubjects())
+	require.Equal(t, []string{"BTC", "ETH", "SOL"}, marker.GetBindings()[1].GetFailedSubjects())
 }
 
 func TestViewReadyRunnerClearsSkippedAndUpstreamFailedWithoutRunningThem(t *testing.T) {
@@ -140,21 +144,21 @@ func TestViewReadyRunnerClearsSkippedAndUpstreamFailedWithoutRunningThem(t *test
 	runner := new(recordingCombinationRunner)
 	storage := new(periodStorageFake)
 	period := time.Date(2026, 8, 10, 3, 0, 0, 0, time.UTC)
-	err := NewViewReadyRunner(bindings, periodFactors{"factor": testFactor("factor")}, runner, storage, t.TempDir()).Execute(
+	err := NewViewReadyRunner(bindings, periodFactors{"factor": testCrossSectionFactor("factor")}, runner, storage, t.TempDir()).Execute(
 		context.Background(), "space", "source-event", testReady(period, "degraded", "BTC"))
 	require.NoError(t, err)
 	require.Empty(t, runner.tasks)
 	require.Equal(t, []string{"binding/BTC"}, storage.clearedCombinations())
 	state := storage.getMarker().GetBindings()[0]
-	require.Equal(t, []string{"BTC"}, state.GetFailedSubjects())
-	require.Empty(t, state.GetSkippedSubjects())
+	require.Equal(t, []string{"BTC"}, state.GetSkippedSubjects())
+	require.Empty(t, state.GetFailedSubjects())
 }
 
 func TestViewReadyRunnerMarksBindingDegradedForAuxiliaryFailure(t *testing.T) {
 	bindings := periodBindings{rows: []domain.FactorBinding{{BindingID: "binding", BindingGeneration: "incarnation-1", FactorID: "factor", SpaceID: "space", SourceViewID: "source_view", ResultDatasetID: "result", Freq: "1m", Status: domain.BindingStatusEnabled}}}
 	storage := new(periodStorageFake)
 	period := time.Date(2026, 8, 10, 4, 0, 0, 0, time.UTC)
-	err := NewViewReadyRunner(bindings, periodFactors{"factor": testFactor("factor")}, new(recordingCombinationRunner), storage, t.TempDir()).Execute(context.Background(), "space", "source-event", testReady(period, "degraded", "OTHER"))
+	err := NewViewReadyRunner(bindings, periodFactors{"factor": testCrossSectionFactor("factor")}, new(recordingCombinationRunner), storage, t.TempDir()).Execute(context.Background(), "space", "source-event", testReady(period, "degraded", "OTHER"))
 	require.NoError(t, err)
 	require.Equal(t, "degraded", storage.getMarker().GetStatus())
 	require.Equal(t, "degraded", storage.getMarker().GetBindings()[0].GetStatus())
@@ -184,11 +188,15 @@ func twoPeriodBindings() periodBindings {
 }
 
 func twoPeriodFactors() periodFactors {
-	return periodFactors{"bias5": testFactor("bias5"), "bias20": testFactor("bias20")}
+	return periodFactors{"bias5": testCrossSectionFactor("bias5"), "bias20": testCrossSectionFactor("bias20")}
 }
 
 func testFactor(id string) domain.FactorDef {
 	return domain.FactorDef{FactorType: domain.FactorTypeTimeSeries, FactorID: id, Name: id, SourceHash: "hash-" + id, InputColumns: []string{"close"}, Outputs: []string{id}, LookbackPeriods: 1, Status: domain.FactorStatusEnabled}
+}
+
+func testCrossSectionFactor(id string) domain.FactorDef {
+	return domain.FactorDef{FactorType: domain.FactorTypeCrossSection, FactorID: id, Name: id, SourceHash: "hash-" + id, InputColumns: []string{"close"}, Outputs: []string{id}, LookbackPeriods: 1, Status: domain.FactorStatusEnabled}
 }
 
 type periodBindings struct{ rows []domain.FactorBinding }

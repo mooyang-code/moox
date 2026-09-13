@@ -16,14 +16,15 @@ import (
 
 const engineHealthService = "trpc.moox.factor.engine.Health"
 
-// EngineRuntime runs the subject/time-series path only. Cache and cross/barrier
-// execution are not integrated and must not be advertised as available.
+// EngineRuntime runs timeseries DatasetRows and cross-section ViewDataReady consumers.
 type EngineRuntime struct {
 	Resources      *EngineResources
 	Health         *health.State
 	consumer       realtimeStatus
+	viewConsumer   realtimeStatus
 	cancel         context.CancelFunc
 	stopSubject    func() error
+	stopView       func() error
 	stopCatalog    func() error
 	closeResources func() error
 	once           sync.Once
@@ -74,7 +75,7 @@ func InitializeEngine(ctx context.Context, s *server.Server, cfg *EngineApplicat
 	if err != nil {
 		return nil, err
 	}
-	r.stopCatalog, err = StartEngineCatalog(resources.Context(), s, cfg, resources.Store, subjectOnlyActivation(activate))
+	r.stopCatalog, err = StartEngineCatalog(resources.Context(), s, cfg, resources.Store, typedCatalogActivation(activate))
 	if err != nil {
 		return nil, err
 	}
@@ -87,6 +88,13 @@ func InitializeEngine(ctx context.Context, s *server.Server, cfg *EngineApplicat
 	}
 	if consumer != nil {
 		r.consumer, r.stopSubject = consumer, consumer.Close
+	}
+	viewConsumer, err := StartEngineViewReady(resources.Context(), cfg, resources.Store, resources.Runner, resources.Storage, resources.OperationGate)
+	if err != nil {
+		return nil, err
+	}
+	if viewConsumer != nil {
+		r.viewConsumer, r.stopView = viewConsumer, viewConsumer.Close
 	}
 	r.Health = health.New("factor-engine", cfg.EngineID, "", "")
 	r.Health.SnapshotFunc = r.snapshot
@@ -101,11 +109,11 @@ func InitializeEngine(ctx context.Context, s *server.Server, cfg *EngineApplicat
 	return r, nil
 }
 
-func subjectOnlyActivation(activate catalogsync.Activation) catalogsync.Activation {
+func typedCatalogActivation(activate catalogsync.Activation) catalogsync.Activation {
 	return func(ctx context.Context, previous, next domain.CatalogSnapshot, commit func() error) error {
 		for _, factor := range next.Factors {
-			if factor.FactorType != domain.FactorTypeTimeSeries {
-				return fmt.Errorf("engine subject-only runtime cannot activate factor %q of type %q", factor.FactorID, factor.FactorType)
+			if err := domain.ValidateFactorType(factor.FactorType); err != nil {
+				return fmt.Errorf("engine cannot activate factor %q: %w", factor.FactorID, err)
 			}
 		}
 		return activate(ctx, previous, next, commit)
@@ -123,6 +131,9 @@ func (r *EngineRuntime) Close() error {
 		}
 		if r.stopSubject != nil {
 			r.err = errors.Join(r.err, r.stopSubject())
+		}
+		if r.stopView != nil {
+			r.err = errors.Join(r.err, r.stopView())
 		}
 		if r.stopCatalog != nil {
 			r.err = errors.Join(r.err, r.stopCatalog())
@@ -142,15 +153,16 @@ func (r *EngineRuntime) snapshot(ctx context.Context) healthz.Response {
 	defer r.mu.RUnlock()
 	resources := r.Resources
 	alive := !r.closed && resources != nil && resources.Context().Err() == nil
-	database, python, consumer := false, false, false
+	database, python, consumer, viewReady := false, false, false, false
 	if alive {
 		probe, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
 		database = resources.Store.Ping(probe) == nil
 		cancel()
 		python = resources.PythonPool != nil && resources.PythonPool.Status().Ready
 		consumer = r.consumer == nil || (r.consumer.Ready() && !r.consumer.Status().Stalled)
+		viewReady = r.viewConsumer == nil || (r.viewConsumer.Ready() && !r.viewConsumer.Status().Stalled)
 	}
-	rsp := healthz.Base("factor-engine", r.Health.InstanceID, "", "", r.Health.StartedAt, alive && database && python && consumer)
-	rsp.Details = map[string]any{"engine_context": alive, "database": database, "python": python, "subject_consumer": consumer, "execution_scope": "subject-time-series", "cache_integrated": false, "cross_barrier_integrated": false}
+	rsp := healthz.Base("factor-engine", r.Health.InstanceID, "", "", r.Health.StartedAt, alive && database && python && consumer && viewReady)
+	rsp.Details = map[string]any{"engine_context": alive, "database": database, "python": python, "subject_consumer": consumer, "view_ready_consumer": viewReady, "execution_scope": "timeseries-and-cross-section", "cache_integrated": resources != nil && resources.Cache != nil, "cross_barrier_integrated": r.viewConsumer != nil}
 	return rsp
 }

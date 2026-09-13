@@ -45,6 +45,7 @@ type TaskScope struct {
 	ExpectedSubjects            []string
 	AvailableSubjects           []string
 	MissingSubjects             []string
+	InputStatus                 string
 }
 
 func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Task, error) {
@@ -110,6 +111,7 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 			ExpectedSubjects:     append([]string(nil), scope.ExpectedSubjects...),
 			AvailableSubjects:    append([]string(nil), scope.AvailableSubjects...),
 			MissingSubjects:      append([]string(nil), scope.MissingSubjects...),
+			InputStatus:          scope.InputStatus,
 			Factor: engine.FactorSpec{
 				FactorType: factor.FactorType,
 				FactorID:   factor.FactorID, Name: factor.Name, SourceHash: factor.SourceHash,

@@ -18,6 +18,7 @@ func TestEngineRuntimeCloseOrderAndFailureCleanup(t *testing.T) {
 	r := &EngineRuntime{Health: health.New("factor-engine", "test", "", ""),
 		cancel:         func() { calls = append(calls, "cancel") },
 		stopSubject:    func() error { calls = append(calls, "subject"); return failure },
+		stopView:       func() error { calls = append(calls, "view"); return nil },
 		stopCatalog:    func() error { calls = append(calls, "catalog"); return nil },
 		closeResources: func() error { calls = append(calls, "resources"); return nil },
 	}
@@ -27,7 +28,7 @@ func TestEngineRuntimeCloseOrderAndFailureCleanup(t *testing.T) {
 			t.Fatal("lost close error")
 		}
 	}
-	if !reflect.DeepEqual(calls, []string{"cancel", "subject", "catalog", "resources"}) {
+	if !reflect.DeepEqual(calls, []string{"cancel", "subject", "view", "catalog", "resources"}) {
 		t.Fatalf("close order: %v", calls)
 	}
 	if r.Health.Ready() {
@@ -50,21 +51,22 @@ func TestEngineRuntimeRejectsUnsupportedConfiguration(t *testing.T) {
 	}
 }
 
-func TestSubjectOnlyActivationRejectsCrossBeforeCommit(t *testing.T) {
+func TestTypedCatalogActivationAcceptsTimeSeriesAndCrossSection(t *testing.T) {
 	called := false
-	activate := subjectOnlyActivation(func(_ context.Context, _, _ domain.CatalogSnapshot, commit func() error) error {
+	activate := typedCatalogActivation(func(_ context.Context, _, _ domain.CatalogSnapshot, commit func() error) error {
 		called = true
 		return commit()
 	})
-	for _, kind := range []string{domain.FactorTypeCrossSection, ""} {
-		err := activate(context.Background(), domain.CatalogSnapshot{}, domain.CatalogSnapshot{Factors: []domain.FactorDef{{FactorID: "test", FactorType: kind}}}, func() error { t.Fatal("committed unsupported catalog"); return nil })
-		if err == nil || called {
-			t.Fatal("accepted unsupported catalog")
-		}
+	err := activate(context.Background(), domain.CatalogSnapshot{}, domain.CatalogSnapshot{Factors: []domain.FactorDef{{FactorID: "bad", FactorType: ""}}}, func() error { t.Fatal("committed unsupported catalog"); return nil })
+	if err == nil || called {
+		t.Fatal("accepted missing factor type")
 	}
-	err := activate(context.Background(), domain.CatalogSnapshot{}, domain.CatalogSnapshot{Factors: []domain.FactorDef{{FactorID: "test", FactorType: domain.FactorTypeTimeSeries}}}, func() error { return nil })
-	if err != nil || !called {
-		t.Fatalf("TS activation: %v", err)
+	for _, kind := range []string{domain.FactorTypeTimeSeries, domain.FactorTypeCrossSection} {
+		called = false
+		err = activate(context.Background(), domain.CatalogSnapshot{}, domain.CatalogSnapshot{Factors: []domain.FactorDef{{FactorID: "test", FactorType: kind}}}, func() error { return nil })
+		if err != nil || !called {
+			t.Fatalf("%s activation: %v", kind, err)
+		}
 	}
 }
 

@@ -41,6 +41,7 @@ func TestViewDataReadyContract(t *testing.T) {
 		ViewId:             "view-1",
 		ViewConfigId:       "view-config-1",
 		CompletionEventId:  "merge-completed-1",
+		CompletionKind:     MergePeriodCompleted.Name(),
 		DatasetId:          "mdataset_kline_1m",
 		Status:             "complete",
 		VisibleScope:       "universe:crypto:usdt",
@@ -56,6 +57,7 @@ func TestViewDataReadyContract(t *testing.T) {
 			mutate func(*storagepb.ViewDataReady)
 		}{
 			{name: "completion_event_id", mutate: func(v *storagepb.ViewDataReady) { v.CompletionEventId = "" }},
+			{name: "completion_kind", mutate: func(v *storagepb.ViewDataReady) { v.CompletionKind = "" }},
 			{name: "view_id", mutate: func(v *storagepb.ViewDataReady) { v.ViewId = "" }},
 			{name: "dataset_id", mutate: func(v *storagepb.ViewDataReady) { v.DatasetId = "" }},
 			{name: "committed_positions", mutate: func(v *storagepb.ViewDataReady) { v.CommittedPositions = nil }},

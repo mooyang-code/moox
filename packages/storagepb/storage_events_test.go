@@ -63,7 +63,8 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 			name: "view data ready",
 			payload: &ViewDataReady{
 				ViewId: "view_kline", ViewConfigId: "view-config", CompletionEventId: "merge-1",
-				DatasetId: "mdataset_kline", Status: "complete", VisibleScope: "universe:mdataset:1m",
+				CompletionKind: "event.storage.merge.period.completed",
+				DatasetId:      "mdataset_kline", Status: "complete", VisibleScope: "universe:mdataset:1m",
 				Frequency: "1m", PeriodTime: 1786032000,
 				CommittedPositions: []*CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 10}},
 				ReadyAt:            now,

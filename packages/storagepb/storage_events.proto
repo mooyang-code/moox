@@ -105,6 +105,9 @@ message ViewDataReady {
   string failed_scope_ref = 9;
   repeated CommittedPosition committed_positions = 10;
   google.protobuf.Timestamp ready_at = 11;
+  // Registered completion event name this readiness is associated with, such as
+  // event.storage.merge.period.completed or event.storage.dataset.factor_period.computed.
+  string completion_kind = 12;
 }
 
 // DatasetSyncPoint is an ordered import/catchup fence in a Dataset outbox.

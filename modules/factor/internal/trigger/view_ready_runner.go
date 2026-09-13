@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/observability"
 	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
 	publicstoragepb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -21,6 +22,7 @@ import (
 
 var ErrNoExecutableBinding = errors.New("no executable factor binding for source View period")
 var ErrBindingNotReady = errors.New("factor binding is not ready for source View period")
+var ErrMissingBindingInputs = errors.New("source view is missing required factor inputs")
 
 type PeriodBindingSource interface {
 	ListExecutable(context.Context) ([]domain.FactorBinding, error)
@@ -52,11 +54,16 @@ type PeriodStorageRevisionAt interface {
 	ActiveViewRevisionAt(context.Context, string, string, string, string, string) (uint64, error)
 }
 
+type ViewColumnSource interface {
+	Columns(context.Context, string, string) ([]string, error)
+}
+
 type ViewReadyRunner struct {
 	bindings             PeriodBindingSource
 	factors              PeriodFactorSource
 	taskRunner           CombinationTaskRunner
 	storage              PeriodStorage
+	viewColumns          ViewColumnSource
 	factorsDir           string
 	operationGate        *taskrunner.OperationGate
 	periodMetrics        *observability.PeriodMetrics
@@ -99,6 +106,10 @@ func WithBatchExecution(enabled bool) Option {
 	return func(r *ViewReadyRunner) { r.batchExecution = enabled }
 }
 
+func WithViewColumns(source ViewColumnSource) Option {
+	return func(r *ViewReadyRunner) { r.viewColumns = source }
+}
+
 func NewViewReadyRunner(bindings PeriodBindingSource, factors PeriodFactorSource, runner CombinationTaskRunner, storage PeriodStorage, factorsDir string, opts ...Option) *ViewReadyRunner {
 	r := &ViewReadyRunner{
 		bindings: bindings, factors: factors, taskRunner: runner, storage: storage,
@@ -118,6 +129,9 @@ func NewViewReadyRunner(bindings PeriodBindingSource, factors PeriodFactorSource
 func (r *ViewReadyRunner) ExecutionBudget(ctx context.Context, spaceID string, ready *publicstoragepb.ViewDataReady) (time.Duration, error) {
 	if r == nil || r.bindings == nil || ready == nil {
 		return 0, fmt.Errorf("factor execution budget inputs are required")
+	}
+	if !acceptsCrossSectionReady("", ready) {
+		return 0, nil
 	}
 	bindings, err := r.bindings.ListExecutable(ctx)
 	if err != nil {
@@ -171,6 +185,9 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 	if ready == nil || spaceID == "" || triggerEventID == "" || ready.GetViewId() == "" || ready.GetFrequency() == "" || ready.GetPeriodTime() <= 0 {
 		return fmt.Errorf("source-ready event identity is incomplete")
 	}
+	if !acceptsCrossSectionReady(triggerEventID, ready) {
+		return nil
+	}
 	if acquireGate {
 		releaseOperation, gateErr := r.operationGate.AcquireContext(ctx)
 		if gateErr != nil {
@@ -209,6 +226,24 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 	if factorID != "" {
 		selected = selectFactorBindings(selected, factorID)
 	}
+	states := make(map[string]*storagepb.FactorBindingPeriodState, len(selected))
+	factors := make(map[string]domain.FactorDef, len(selected))
+	cross := make([]domain.FactorBinding, 0, len(selected))
+	for _, binding := range selected {
+		factor, loadErr := r.factors.Get(ctx, binding.FactorID)
+		if loadErr != nil {
+			return fmt.Errorf("load factor %s: %w", binding.FactorID, loadErr)
+		}
+		if factor.FactorType != domain.FactorTypeCrossSection {
+			continue
+		}
+		factors[binding.BindingID] = *factor
+		cross = append(cross, binding)
+	}
+	selected = cross
+	if len(selected) == 0 || (factorID != "" && !containsFactor(selected, factorID)) {
+		return ErrNoExecutableBinding
+	}
 	resultDatasetID := selected[0].ResultDatasetID
 	for _, binding := range selected[1:] {
 		if binding.ResultDatasetID != resultDatasetID {
@@ -232,15 +267,12 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 	}
 	failedUpstream := failedSubjectSet(ready)
 	subjects := periodSubjectUniverse(selected, ready)
+	viewColumns, err := r.loadViewColumns(ctx, spaceID, ready.GetViewId())
+	if err != nil {
+		return err
+	}
 
-	states := make(map[string]*storagepb.FactorBindingPeriodState, len(selected))
-	factors := make(map[string]domain.FactorDef, len(selected))
 	for _, binding := range selected {
-		factor, loadErr := r.factors.Get(ctx, binding.FactorID)
-		if loadErr != nil {
-			return fmt.Errorf("load factor %s: %w", binding.FactorID, loadErr)
-		}
-		factors[binding.BindingID] = *factor
 		status := "complete"
 		if groupStatus == "degraded" {
 			status = "degraded"
@@ -270,40 +302,62 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		expectedActiveIndexRevision = revision
 	}
 
-	tasks := make([]taskrunner.Task, 0, len(subjects)*len(selected))
-	for _, subjectID := range subjects {
-		for _, binding := range selected {
-			task, buildErr := taskrunner.BuildTask(taskrunner.TaskScope{
-				BindingID: binding.BindingID, TriggerType: "view_ready", SpaceID: spaceID,
-				BindingGeneration: binding.BindingGeneration,
-				SourceViewID:      binding.SourceViewID, ResultDatasetID: binding.ResultDatasetID,
-				SubjectID: subjectID, Freq: binding.Freq, PeriodTime: ready.GetPeriodTime(),
-				TriggerEventID: triggerEventID, TriggeredAt: triggeredAt, StartTime: period, EndTime: periodEnd,
-				ExpectedActiveIndexRevision: expectedActiveIndexRevision,
-			}, factors[binding.BindingID], r.factorsDir)
-			if buildErr != nil {
-				return buildErr
-			}
-			task.TaskID = taskrunner.DeterministicTaskID(task)
-			state := states[binding.BindingID]
-			if !domain.BindingAllowsSubject(binding, subjectID) {
-				if clearErr := r.clearOutputs(ctx, &task.FactorTask); clearErr != nil {
-					return fmt.Errorf("clear excluded subject outputs: %w", clearErr)
-				}
-				state.SkippedSubjects = append(state.SkippedSubjects, subjectID)
-				state.Status = "degraded"
-				continue
-			}
-			if _, failed := failedUpstream[subjectID]; failed {
-				if clearErr := r.clearOutputs(ctx, &task.FactorTask); clearErr != nil {
-					return fmt.Errorf("clear failed input outputs: %w", clearErr)
-				}
-				state.FailedSubjects = append(state.FailedSubjects, subjectID)
-				state.Status = "degraded"
-				continue
-			}
-			tasks = append(tasks, task)
+	tasks := make([]taskrunner.Task, 0, len(selected))
+	for _, binding := range selected {
+		factor := factors[binding.BindingID]
+		state := states[binding.BindingID]
+		if missing := missingViewInputs(viewColumns, factor.InputColumns); len(missing) > 0 {
+			return fmt.Errorf("%w: %s", ErrMissingBindingInputs, strings.Join(missing, ","))
 		}
+		allowed, skipped := partitionBindingSubjects(binding, subjects)
+		state.SkippedSubjects = append(state.SkippedSubjects, skipped...)
+		available, missing := splitAvailableSubjects(allowed, failedUpstream)
+		allowDegraded := domain.FactorAllowsDegraded(factor)
+		if groupStatus == "degraded" && !allowDegraded {
+			state.SkippedSubjects = append(state.SkippedSubjects, allowed...)
+			state.Status = "degraded"
+			if clearErr := r.clearPanelOutputs(ctx, spaceID, triggerEventID, triggeredAt, period, periodEnd, expectedActiveIndexRevision, ready, binding, factor, allowed); clearErr != nil {
+				return clearErr
+			}
+			continue
+		}
+		if len(available) == 0 {
+			state.SkippedSubjects = append(state.SkippedSubjects, allowed...)
+			state.Status = "degraded"
+			if clearErr := r.clearPanelOutputs(ctx, spaceID, triggerEventID, triggeredAt, period, periodEnd, expectedActiveIndexRevision, ready, binding, factor, allowed); clearErr != nil {
+				return clearErr
+			}
+			continue
+		}
+		if len(missing) > 0 {
+			state.FailedSubjects = append(state.FailedSubjects, missing...)
+			state.Status = "degraded"
+			if clearErr := r.clearPanelOutputs(ctx, spaceID, triggerEventID, triggeredAt, period, periodEnd, expectedActiveIndexRevision, ready, binding, factor, missing); clearErr != nil {
+				return clearErr
+			}
+		}
+		inputStatus := groupStatus
+		if inputStatus == "" {
+			inputStatus = "complete"
+		}
+		task, buildErr := taskrunner.BuildTask(taskrunner.TaskScope{
+			BindingID: binding.BindingID, TriggerType: "view_ready", SpaceID: spaceID,
+			BindingGeneration: binding.BindingGeneration,
+			SourceViewID:      binding.SourceViewID, ResultDatasetID: binding.ResultDatasetID,
+			Freq: binding.Freq, PeriodTime: ready.GetPeriodTime(),
+			TriggerEventID: triggerEventID, TriggeredAt: triggeredAt, StartTime: period, EndTime: periodEnd,
+			ExpectedActiveIndexRevision: expectedActiveIndexRevision,
+			ConfigSnapshotID:            firstNonEmpty(ready.GetViewConfigId()),
+			ExpectedSubjects:            append([]string(nil), allowed...),
+			AvailableSubjects:           append([]string(nil), available...),
+			MissingSubjects:             append([]string(nil), missing...),
+			InputStatus:                 inputStatus,
+		}, factor, r.factorsDir)
+		if buildErr != nil {
+			return buildErr
+		}
+		task.TaskID = taskrunner.DeterministicTaskID(task)
+		tasks = append(tasks, task)
 	}
 
 	batchCount := uniqueTaskSubjects(tasks)
@@ -349,7 +403,11 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 			return fmt.Errorf("clear failed factor outputs: %w", clearErr)
 		}
 		state := states[task.BindingID]
-		state.FailedSubjects = append(state.FailedSubjects, task.SubjectID)
+		if task.SubjectID != "" {
+			state.FailedSubjects = append(state.FailedSubjects, task.SubjectID)
+		} else {
+			state.FailedSubjects = append(state.FailedSubjects, task.AvailableSubjects...)
+		}
 		state.Status = "degraded"
 	}
 	if strings.HasPrefix(triggerEventID, "recalc-") {
@@ -396,11 +454,114 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 func uniqueTaskSubjects(tasks []taskrunner.Task) int {
 	seen := make(map[string]struct{}, len(tasks))
 	for _, task := range tasks {
-		if strings.TrimSpace(task.SubjectID) != "" {
-			seen[task.SubjectID] = struct{}{}
+		if subjectID := strings.TrimSpace(task.SubjectID); subjectID != "" {
+			seen[subjectID] = struct{}{}
+			continue
+		}
+		for _, subjectID := range task.ExpectedSubjects {
+			if subjectID = strings.TrimSpace(subjectID); subjectID != "" {
+				seen[subjectID] = struct{}{}
+			}
 		}
 	}
 	return len(seen)
+}
+
+func acceptsCrossSectionReady(triggerEventID string, ready *publicstoragepb.ViewDataReady) bool {
+	if strings.HasPrefix(triggerEventID, "recalc-") {
+		return true
+	}
+	return ready != nil && ready.GetCompletionKind() == events.MergePeriodCompleted.Name()
+}
+
+func (r *ViewReadyRunner) loadViewColumns(ctx context.Context, spaceID, viewID string) ([]string, error) {
+	if r == nil || r.viewColumns == nil {
+		return nil, nil
+	}
+	columns, err := r.viewColumns.Columns(ctx, spaceID, viewID)
+	if err != nil {
+		return nil, fmt.Errorf("load source view columns: %w", err)
+	}
+	return columns, nil
+}
+
+func missingViewInputs(columns, inputs []string) []string {
+	if columns == nil {
+		return nil
+	}
+	available := make(map[string]struct{}, len(columns)*2)
+	for _, column := range columns {
+		column = strings.TrimSpace(column)
+		if column == "" {
+			continue
+		}
+		available[column] = struct{}{}
+		if _, suffix, ok := strings.Cut(column, "."); ok {
+			available[suffix] = struct{}{}
+		}
+		if _, suffix, ok := strings.Cut(column, "__"); ok {
+			available[suffix] = struct{}{}
+		}
+	}
+	var missing []string
+	for _, input := range inputs {
+		if _, ok := available[input]; !ok {
+			missing = append(missing, input)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+func partitionBindingSubjects(binding domain.FactorBinding, subjects []string) (allowed, skipped []string) {
+	for _, subjectID := range subjects {
+		if domain.BindingAllowsSubject(binding, subjectID) {
+			allowed = append(allowed, subjectID)
+			continue
+		}
+		skipped = append(skipped, subjectID)
+	}
+	return allowed, skipped
+}
+
+func splitAvailableSubjects(subjects []string, failed map[string]struct{}) (available, missing []string) {
+	for _, subjectID := range subjects {
+		if _, ok := failed[subjectID]; ok {
+			missing = append(missing, subjectID)
+			continue
+		}
+		available = append(available, subjectID)
+	}
+	return available, missing
+}
+
+func (r *ViewReadyRunner) clearPanelOutputs(
+	ctx context.Context,
+	spaceID, triggerEventID string,
+	triggeredAt, period, periodEnd time.Time,
+	revision uint64,
+	ready *publicstoragepb.ViewDataReady,
+	binding domain.FactorBinding,
+	factor domain.FactorDef,
+	subjects []string,
+) error {
+	for _, subjectID := range subjects {
+		task, err := taskrunner.BuildTask(taskrunner.TaskScope{
+			BindingID: binding.BindingID, TriggerType: "view_ready", SpaceID: spaceID,
+			BindingGeneration: binding.BindingGeneration,
+			SourceViewID:      binding.SourceViewID, ResultDatasetID: binding.ResultDatasetID,
+			SubjectID: subjectID, Freq: binding.Freq, PeriodTime: ready.GetPeriodTime(),
+			TriggerEventID: triggerEventID, TriggeredAt: triggeredAt, StartTime: period, EndTime: periodEnd,
+			ExpectedActiveIndexRevision: revision,
+		}, factor, r.factorsDir)
+		if err != nil {
+			return err
+		}
+		if clearErr := r.clearOutputs(ctx, &task.FactorTask); clearErr != nil {
+			return fmt.Errorf("clear factor outputs: %w", clearErr)
+		}
+	}
+	return nil
 }
 
 func selectPeriodBindings(bindings []domain.FactorBinding, spaceID string, ready *publicstoragepb.ViewDataReady) []domain.FactorBinding {

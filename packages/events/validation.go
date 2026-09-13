@@ -242,6 +242,9 @@ func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) e
 	if !validRequiredToken(payload.GetVisibleScope()) {
 		return fmt.Errorf("view data ready visible_scope is required")
 	}
+	if err := validateViewCompletionKind(payload.GetCompletionKind()); err != nil {
+		return err
+	}
 	if err := validateCommittedPositions(payload.GetCommittedPositions(), "view data ready"); err != nil {
 		return err
 	}
@@ -433,6 +436,15 @@ func validateStorageWriteKind(kind string) error {
 
 func validCompletionStatus(status string) bool {
 	return status == "complete" || status == "degraded"
+}
+
+func validateViewCompletionKind(kind string) error {
+	switch kind {
+	case CollectorPeriodCompleted.Name(), MergePeriodCompleted.Name(), FactorPeriodComputed.Name():
+		return nil
+	default:
+		return fmt.Errorf("view data ready completion_kind is invalid")
+	}
 }
 
 func validateMarketFetchBatchCompleted(message *eventpb.EventMessage, value proto.Message) error {

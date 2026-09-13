@@ -288,7 +288,8 @@ func encodedViewReadyDelivery(t *testing.T, eventID string) *jetstream.Delivery 
 func testViewDataReady(readyAt time.Time) *storagepb.ViewDataReady {
 	return &storagepb.ViewDataReady{
 		ViewId: "prices-view", ViewConfigId: "prices-view@1", CompletionEventId: "collector-1",
-		DatasetId: "prices", Status: "complete", VisibleScope: "view:prices-view",
+		CompletionKind: events.MergePeriodCompleted.Name(),
+		DatasetId:      "prices", Status: "complete", VisibleScope: "view:prices-view",
 		Frequency: "1m", PeriodTime: readyAt.Unix(),
 		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 1}},
 		ReadyAt:            timestamppb.New(readyAt),

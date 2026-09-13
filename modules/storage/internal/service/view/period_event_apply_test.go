@@ -172,6 +172,9 @@ func TestHandleCollectorPeriodCompletedPublishesSingleDatasetIdempotently(t *tes
 	if ready.GetViewId() != "source-view" || ready.GetStatus() != "degraded" || ready.GetDatasetId() != "prices" || ready.GetFailedScopeRef() != "ETH-USDT" {
 		t.Fatalf("ready payload=%v", ready)
 	}
+	if ready.GetCompletionKind() != events.CollectorPeriodCompleted.Name() {
+		t.Fatalf("completion_kind=%q", ready.GetCompletionKind())
+	}
 	if ready.GetViewConfigId() == "" || ready.GetVisibleScope() == "" || len(ready.GetCommittedPositions()) == 0 {
 		t.Fatalf("ready identity incomplete=%v", ready)
 	}
@@ -232,6 +235,9 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	}
 	if ready.GetViewId() != "result-view" || ready.GetDatasetId() != "factor-results" || ready.GetStatus() != "degraded" || ready.GetFailedScopeRef() != "ETH-USDT" {
 		t.Fatalf("factor ready payload=%v", ready)
+	}
+	if ready.GetCompletionKind() != events.FactorPeriodComputed.Name() {
+		t.Fatalf("completion_kind=%q", ready.GetCompletionKind())
 	}
 }
 

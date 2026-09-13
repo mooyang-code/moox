@@ -33,8 +33,8 @@ func TestViewReadyCombinationPeriodChain(t *testing.T) {
 	if got := runner.activeCount(); got != 2 {
 		t.Fatalf("active combinations = %d, want 2", got)
 	}
-	if got := runner.startedCombinations(); !equalStrings(sortedStrings(got), []string{"BTC/factor-a", "BTC/factor-b"}) {
-		t.Fatalf("first concurrent combinations = %v, want both BTC factors", got)
+	if got := runner.startedCombinations(); !equalStrings(sortedStrings(got), []string{"/factor-a", "/factor-b"}) {
+		t.Fatalf("first concurrent combinations = %v, want both cross-section panels", got)
 	}
 	if storage.markerCount() != 0 {
 		t.Fatal("marker published before all combination tasks were terminal")
@@ -44,7 +44,7 @@ func TestViewReadyCombinationPeriodChain(t *testing.T) {
 		t.Fatalf("execute ready period: %v", err)
 	}
 
-	wantOrder := []string{"BTC/factor-a", "BTC/factor-b", "ETH/factor-a", "ETH/factor-b", "SOL/factor-a", "SOL/factor-b"}
+	wantOrder := []string{"/factor-a", "/factor-b"}
 	if got := runner.plannedCombinations(); !equalStrings(got, wantOrder) {
 		t.Fatalf("combination plan = %v, want %v", got, wantOrder)
 	}
@@ -59,84 +59,64 @@ func TestViewReadyCombinationPeriodChain(t *testing.T) {
 	if err := executor.Execute(context.Background(), "space-a", "source-ready-1", ready); err != nil {
 		t.Fatalf("redelivered ready period: %v", err)
 	}
-	if got := len(runner.plannedCombinations()); got != 6 {
-		t.Fatalf("redelivery planned %d combinations, want 6 total", got)
+	if got := len(runner.plannedCombinations()); got != 2 {
+		t.Fatalf("redelivery planned %d combinations, want 2 total", got)
 	}
 }
 
 func TestViewReadyCombinationFailureReportsDegradedMarker(t *testing.T) {
 	period := time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)
 	storage := new(fakePeriodStorage)
-	runner := &immediateCombinationRunner{fail: map[string]error{"ETH/factor-b": errors.New("synthetic factor failure")}}
+	runner := &immediateCombinationRunner{fail: map[string]error{"/factor-b": errors.New("synthetic factor failure")}}
 	executor := trigger.NewViewReadyRunner(fakePeriodBindings{items: testBindings()}, fakePeriodFactors{items: testFactors()}, runner, storage, t.TempDir())
 	err := executor.Execute(context.Background(), "space-a", "source-ready-degraded", viewReady(period, "complete"))
 	if err != nil {
 		t.Fatalf("execute degraded ready period: %v", err)
 	}
-	if len(runner.tasks) != 6 {
-		t.Fatalf("executed combinations = %d, want all 6", len(runner.tasks))
+	if len(runner.tasks) != 2 {
+		t.Fatalf("executed combinations = %d, want both panels", len(runner.tasks))
 	}
 	marker := storage.lastMarker()
 	if storage.markerCount() != 1 || marker.GetStatus() != "degraded" {
 		t.Fatalf("marker = %+v, want one degraded marker", marker)
 	}
-	if got := marker.GetBindings()[1].GetFailedSubjects(); !equalStrings(got, []string{"ETH"}) {
-		t.Fatalf("factor-b failed subjects = %v, want [ETH]", got)
+	if got := marker.GetBindings()[1].GetFailedSubjects(); !equalStrings(got, []string{"BTC", "ETH", "SOL"}) {
+		t.Fatalf("factor-b failed subjects = %v, want panel universe", got)
 	}
-	if got := storage.clearedCombinations(); !equalStrings(got, []string{"ETH/factor-b"}) {
-		t.Fatalf("cleared combinations = %v, want only failed ETH/factor-b", got)
+	if got := storage.clearedCombinations(); !equalStrings(got, []string{"/factor-b"}) {
+		t.Fatalf("cleared combinations = %v, want only failed factor-b panel", got)
 	}
 }
 
-func TestViewReadyPipelineOverlapsReadsAndRetriesTimeoutAtTail(t *testing.T) {
+func TestViewReadyPipelineReadsFixedPanel(t *testing.T) {
 	period := time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC)
-	storage := newPipelinePeriodStorage("ETH")
-	exec := &pipelineFactorExecutor{entered: make(chan string, 8), releaseBTC: make(chan struct{})}
-	runner := taskrunner.NewService(2, storage, exec, taskrunner.WithViewReadConfig(1, 20*time.Millisecond))
+	storage := newPipelinePeriodStorage("")
+	exec := &pipelineFactorExecutor{entered: make(chan string, 8), releaseBTC: closedSignal()}
+	runner := taskrunner.NewService(2, storage, exec, taskrunner.WithViewReadConfig(2, 200*time.Millisecond), taskrunner.WithBatchExecution(false))
 	executor := trigger.NewViewReadyRunner(
 		fakePeriodBindings{items: testBindings()}, fakePeriodFactors{items: testFactors()}, runner, storage, t.TempDir(),
 	)
-	ready := viewReady(period, "complete")
-	done := make(chan error, 1)
-	go func() { done <- executor.Execute(context.Background(), "space-a", "pipeline-ready-1", ready) }()
-
-	for range 2 {
-		subject := <-exec.entered
-		if subject != "BTC" && subject != "SOL" {
-			t.Fatalf("first Python task subject = %s, want a ready non-timeout subject", subject)
-		}
-	}
-	if !eventually(time.Second, func() bool {
-		return equalStrings(storage.readOrder(), []string{"BTC", "ETH", "SOL", "ETH"})
-	}) {
-		t.Fatalf("View read order = %v, want BTC, ETH timeout, SOL, ETH retry", storage.readOrder())
-	}
-	if storage.markerCount() != 0 {
-		t.Fatal("marker published before blocked BTC Python tasks completed")
-	}
-	close(exec.releaseBTC)
-	if err := <-done; err != nil {
-		t.Fatalf("execute pipelined ready period: %v", err)
-	}
-	if calls, items := exec.batchStats(); calls != 3 || items != 6 {
-		t.Fatalf("batch executions = %d/%d, want 3 successful subject batches and 6 factor members", calls, items)
+	if err := executor.Execute(context.Background(), "space-a", "pipeline-ready-1", viewReady(period, "complete")); err != nil {
+		t.Fatalf("execute panel ready period: %v", err)
 	}
 	if storage.markerCount() != 1 || storage.lastMarker().GetStatus() != "complete" {
 		t.Fatalf("factor marker = %+v, want one complete marker", storage.lastMarker())
 	}
-	if got := storage.writtenCombinations(); !equalStrings(got, []string{
-		"BTC/factor-a", "BTC/factor-b", "ETH/factor-a", "ETH/factor-b", "SOL/factor-a", "SOL/factor-b",
-	}) {
+	if got := storage.writtenCombinations(); !equalStrings(got, []string{"/factor-a", "/factor-b"}) {
 		t.Fatalf("written combinations = %v", got)
+	}
+	reads := storage.readOrder()
+	if len(reads) != 6 {
+		t.Fatalf("View read count = %d (%v), want 6 panel members", len(reads), reads)
 	}
 }
 
-func TestViewReadyPipelineFinalReadTimeoutDegradesOnlyFailedSubject(t *testing.T) {
+func TestViewReadyPipelineReadTimeoutDegradesPanel(t *testing.T) {
 	period := time.Date(2026, 8, 10, 15, 0, 0, 0, time.UTC)
 	storage := newPipelinePeriodStorage("ETH")
 	storage.alwaysTimeout = true
-	runner := taskrunner.NewService(2, storage, &pipelineFactorExecutor{entered: make(chan string, 8), releaseBTC: closedSignal()},
-		taskrunner.WithViewReadConfig(1, 10*time.Millisecond))
+	runner := taskrunner.NewService(1, storage, &pipelineFactorExecutor{entered: make(chan string, 8), releaseBTC: closedSignal()},
+		taskrunner.WithViewReadConfig(1, 10*time.Millisecond), taskrunner.WithBatchExecution(false))
 	executor := trigger.NewViewReadyRunner(
 		fakePeriodBindings{items: testBindings()}, fakePeriodFactors{items: testFactors()}, runner, storage, t.TempDir(),
 	)
@@ -148,21 +128,16 @@ func TestViewReadyPipelineFinalReadTimeoutDegradesOnlyFailedSubject(t *testing.T
 	if marker.GetStatus() != "degraded" {
 		t.Fatalf("marker status = %s, want degraded", marker.GetStatus())
 	}
-	if got := storage.clearedCombinations(); !equalStrings(got, []string{"ETH/factor-a", "ETH/factor-b"}) {
-		t.Fatalf("cleared combinations = %v", got)
-	}
-	if got := storage.writtenCombinations(); !equalStrings(got, []string{"BTC/factor-a", "BTC/factor-b"}) {
-		t.Fatalf("written combinations = %v", got)
-	}
-	if got := storage.readOrder(); !equalStrings(got, []string{"BTC", "ETH", "ETH"}) {
-		t.Fatalf("read order = %v, want ETH retried once", got)
+	if got := storage.writtenCombinations(); len(got) != 0 {
+		t.Fatalf("written combinations = %v, want none after panel read timeout", got)
 	}
 }
 
 func viewReady(period time.Time, status string) *publicstoragepb.ViewDataReady {
 	return &publicstoragepb.ViewDataReady{
 		ViewId: "prices-view", ViewConfigId: "prices-view@1", CompletionEventId: "ready",
-		DatasetId: "prices", Status: status, VisibleScope: "view:prices-view",
+		CompletionKind: "event.storage.merge.period.completed",
+		DatasetId:      "prices", Status: status, VisibleScope: "view:prices-view",
 		Frequency: "1m", PeriodTime: period.Unix(),
 		CommittedPositions: []*publicstoragepb.CommittedPosition{{NodeId: "n", StoreId: "s", Sequence: 1}},
 		ReadyAt:            timestamppb.New(period),
@@ -178,8 +153,8 @@ func testBindings() []domain.FactorBinding {
 
 func testFactors() map[string]domain.FactorDef {
 	return map[string]domain.FactorDef{
-		"factor-a": {FactorType: domain.FactorTypeTimeSeries, FactorID: "factor-a", Name: "factor-a", SourceHash: "hash-a", InputColumns: []string{"close"}, Outputs: []string{"score_a"}, Status: domain.FactorStatusEnabled},
-		"factor-b": {FactorType: domain.FactorTypeTimeSeries, FactorID: "factor-b", Name: "factor-b", SourceHash: "hash-b", InputColumns: []string{"close"}, Outputs: []string{"score_b"}, Status: domain.FactorStatusEnabled},
+		"factor-a": {FactorType: domain.FactorTypeCrossSection, FactorID: "factor-a", Name: "factor-a", SourceHash: "hash-a", InputColumns: []string{"close"}, Outputs: []string{"score_a"}, LookbackPeriods: 1, Status: domain.FactorStatusEnabled},
+		"factor-b": {FactorType: domain.FactorTypeCrossSection, FactorID: "factor-b", Name: "factor-b", SourceHash: "hash-b", InputColumns: []string{"close"}, Outputs: []string{"score_b"}, LookbackPeriods: 1, Status: domain.FactorStatusEnabled},
 	}
 }
 
@@ -375,13 +350,7 @@ func (p *pipelineFactorExecutor) Execute(ctx context.Context, task *engine.Facto
 			return nil, ctx.Err()
 		}
 	}
-	values := make(map[string]any, len(task.Factor.Outputs))
-	for _, output := range task.Factor.Outputs {
-		values[output] = 1.0
-	}
-	return &engine.FactorResult{Rows: []engine.FactorResultRow{{
-		DataTime: frame.DataTimes[0], SeriesTag: frame.SeriesTags[0], Values: values,
-	}}}, nil
+	return panelFactorResult(task, frame), nil
 }
 
 func (p *pipelineFactorExecutor) ExecuteBatch(ctx context.Context, batch *engine.BatchTask, frame *engine.DataFrame) (*engine.BatchResult, error) {
@@ -402,15 +371,9 @@ func (p *pipelineFactorExecutor) ExecuteBatch(ctx context.Context, batch *engine
 	p.mu.Unlock()
 	items := make([]engine.BatchItemResult, 0, len(batch.Tasks))
 	for _, task := range batch.Tasks {
-		values := make(map[string]any, len(task.Factor.Outputs))
-		for _, output := range task.Factor.Outputs {
-			values[output] = 1.0
-		}
 		items = append(items, engine.BatchItemResult{
 			TaskID: task.TaskID, BindingID: task.BindingID,
-			Result: &engine.FactorResult{Rows: []engine.FactorResultRow{{
-				DataTime: frame.DataTimes[0], SeriesTag: frame.SeriesTags[0], Values: values,
-			}}},
+			Result: panelFactorResult(&task, frame),
 		})
 	}
 	return &engine.BatchResult{BatchID: batch.BatchID, Items: items}, nil
@@ -423,6 +386,22 @@ func (p *pipelineFactorExecutor) batchStats() (int, int) {
 }
 
 func (*pipelineFactorExecutor) Close() error { return nil }
+
+func panelFactorResult(task *engine.FactorTask, frame *engine.DataFrame) *engine.FactorResult {
+	result := &engine.FactorResult{Rows: make([]engine.FactorResultRow, 0, len(frame.Rows))}
+	for index := range frame.Rows {
+		values := make(map[string]any, len(task.Factor.Outputs))
+		for _, output := range task.Factor.Outputs {
+			values[output] = 1.0
+		}
+		row := engine.FactorResultRow{DataTime: frame.DataTimes[index], SeriesTag: frame.SeriesTags[index], Values: values}
+		if index < len(frame.SubjectIDs) {
+			row.SubjectID = frame.SubjectIDs[index]
+		}
+		result.Rows = append(result.Rows, row)
+	}
+	return result
+}
 
 func closedSignal() chan struct{} {
 	ch := make(chan struct{})

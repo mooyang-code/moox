@@ -42,6 +42,7 @@ type periodCompletionInput struct {
 	failedSubjects     []string
 	expectedScopeRef   string
 	committedPositions []*storageeventpb.CommittedPosition
+	completionKind     string
 }
 
 func (s *Service) HandleCollectorPeriodCompleted(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.CollectorPeriodCompleted) error {
@@ -52,6 +53,7 @@ func (s *Service) HandleCollectorPeriodCompleted(ctx context.Context, message *e
 		datasetID: payload.GetDatasetId(), frequency: payload.GetFrequency(), periodTime: payload.GetPeriodTime(),
 		status: payload.GetStatus(), expectedSubjectIDs: payload.GetExpectedSubjectIds(), failedSubjects: payload.GetFailedSubjects(),
 		expectedScopeRef: payload.GetExpectedScopeRef(), committedPositions: payload.GetCommittedPositions(),
+		completionKind: events.CollectorPeriodCompleted.Name(),
 	})
 }
 
@@ -63,6 +65,7 @@ func (s *Service) HandleMergePeriodCompleted(ctx context.Context, message *event
 		datasetID: payload.GetDatasetId(), frequency: payload.GetFrequency(), periodTime: payload.GetPeriodTime(),
 		status: payload.GetStatus(), expectedSubjectIDs: payload.GetExpectedSubjectIds(), failedSubjects: payload.GetFailedSubjects(),
 		expectedScopeRef: payload.GetExpectedScopeRef(), committedPositions: payload.GetCommittedPositions(),
+		completionKind: events.MergePeriodCompleted.Name(),
 	})
 }
 
@@ -159,7 +162,8 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 	for _, view := range views {
 		ready := &storageeventpb.ViewDataReady{
 			ViewId: view.GetViewId(), ViewConfigId: viewConfigID(view), CompletionEventId: message.GetEventId(),
-			DatasetId: payload.GetDatasetId(), Status: payload.GetStatus(), VisibleScope: viewVisibleScope(view, firstNonEmpty(payload.GetExpectedScopeRef(), "view:"+view.GetViewId())),
+			CompletionKind: events.FactorPeriodComputed.Name(),
+			DatasetId:      payload.GetDatasetId(), Status: payload.GetStatus(), VisibleScope: viewVisibleScope(view, firstNonEmpty(payload.GetExpectedScopeRef(), "view:"+view.GetViewId())),
 			Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(), FailedScopeRef: degradedScopeRef(payload.GetStatus(), failed),
 			CommittedPositions: cloneCommittedPositions(payload.GetCommittedPositions()), ReadyAt: cloneTimestamp(message.GetOccurredAt()),
 		}
@@ -365,7 +369,8 @@ func viewDataReadyPayload(view *pb.View, completion periodCompletionInput, state
 	}
 	return &storageeventpb.ViewDataReady{
 		ViewId: view.GetViewId(), ViewConfigId: viewConfigID(view), CompletionEventId: message.GetEventId(),
-		DatasetId: completion.datasetID, Status: status, VisibleScope: viewVisibleScope(view, firstNonEmpty(completion.expectedScopeRef, "view:"+view.GetViewId())),
+		CompletionKind: firstNonEmpty(completion.completionKind, message.GetEventName()),
+		DatasetId:      completion.datasetID, Status: status, VisibleScope: viewVisibleScope(view, firstNonEmpty(completion.expectedScopeRef, "view:"+view.GetViewId())),
 		Frequency: completion.frequency, PeriodTime: completion.periodTime, FailedScopeRef: degradedScopeRef(status, failed),
 		CommittedPositions: cloneCommittedPositions(completion.committedPositions), ReadyAt: readyAt,
 	}, true

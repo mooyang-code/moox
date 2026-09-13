@@ -709,6 +709,64 @@ func (s *Service) readChunk(ctx context.Context, task Task, cursor time.Time, pr
 }
 
 func (s *Service) readChunkColumns(ctx context.Context, task Task, cursor time.Time, columns []string) (*storageio.RangeChunk, error) {
+	if task.Factor.FactorType == domain.FactorTypeCrossSection {
+		subjects := task.AvailableSubjects
+		if len(subjects) == 0 {
+			subjects = task.ExpectedSubjects
+		}
+		return s.readCrossSectionPanel(ctx, task, cursor, columns, subjects)
+	}
+	return s.readSubjectPeriodChunk(ctx, task, cursor, columns)
+}
+
+func (s *Service) readCrossSectionPanel(ctx context.Context, task Task, cursor time.Time, columns []string, subjects []string) (*storageio.RangeChunk, error) {
+	panel := &storageio.RangeChunk{Complete: true}
+	frame := &engine.DataFrame{Columns: append([]string(nil), columns...)}
+	for _, subjectID := range subjects {
+		subjectTask := task
+		subjectTask.SubjectID = subjectID
+		chunk, err := s.readSubjectPeriodChunk(ctx, subjectTask, cursor, columns)
+		if err != nil {
+			return nil, err
+		}
+		if chunk == nil || chunk.Frame == nil || len(chunk.Frame.Rows) == 0 {
+			panel.Complete = false
+			continue
+		}
+		panel.TargetPeriods = append(panel.TargetPeriods, chunk.TargetPeriods...)
+		if chunk.IndexedTo.After(panel.IndexedTo) {
+			panel.IndexedTo = chunk.IndexedTo
+		}
+		if !chunk.Complete {
+			panel.Complete = false
+		}
+		for index, row := range chunk.Frame.Rows {
+			frame.Rows = append(frame.Rows, row)
+			if index < len(chunk.Frame.DataTimes) {
+				frame.DataTimes = append(frame.DataTimes, chunk.Frame.DataTimes[index])
+			} else {
+				frame.DataTimes = append(frame.DataTimes, cursor)
+			}
+			if index < len(chunk.Frame.SeriesTags) {
+				frame.SeriesTags = append(frame.SeriesTags, chunk.Frame.SeriesTags[index])
+			} else {
+				frame.SeriesTags = append(frame.SeriesTags, "")
+			}
+			subject := subjectID
+			if index < len(chunk.Frame.SubjectIDs) && strings.TrimSpace(chunk.Frame.SubjectIDs[index]) != "" {
+				subject = chunk.Frame.SubjectIDs[index]
+			}
+			frame.SubjectIDs = append(frame.SubjectIDs, subject)
+		}
+	}
+	if len(frame.Rows) == 0 {
+		return panel, nil
+	}
+	panel.Frame = frame
+	return panel, nil
+}
+
+func (s *Service) readSubjectPeriodChunk(ctx context.Context, task Task, cursor time.Time, columns []string) (*storageio.RangeChunk, error) {
 	var chunk *storageio.RangeChunk
 	err := s.withRetry(ctx, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, s.viewReadTimeout)

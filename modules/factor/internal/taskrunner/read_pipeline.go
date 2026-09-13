@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -550,7 +551,7 @@ func buildPeriodReadGroups(tasks []Task) ([]*periodReadGroup, []indexedTask) {
 	singles := make([]indexedTask, 0)
 	for index, task := range tasks {
 		member := indexedTask{index: index, task: task}
-		if task.PeriodTime <= 0 {
+		if task.PeriodTime <= 0 || task.Factor.FactorType == domain.FactorTypeCrossSection {
 			singles = append(singles, member)
 			continue
 		}

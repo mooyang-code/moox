@@ -44,6 +44,7 @@ type FactorTask struct {
 	ExpectedSubjects            []string
 	AvailableSubjects           []string
 	MissingSubjects             []string
+	InputStatus                 string
 	Factor                      FactorSpec
 }
 

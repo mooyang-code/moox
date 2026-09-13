@@ -471,4 +471,43 @@ env CGO_ENABLED=1 go test -race ./internal/inputcache -run 'TestCacheCapacityPol
 
 ### 提交
 
+`7cf58d75`
+
+## 任务 14：截面计算与通用可读事件
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 18。
+
+### 红灯证据
+
+`TestCrossSectionReady` 最初失败于 FactorPeriodComputed 对应的 ViewDataReady 仍会调度截面任务。失败来自目标行为缺失。
+
+### 实现
+
+- `ViewDataReady.completion_kind` 记录关联完成事件种类
+- 截面只消费 `completion_kind=MergePeriodCompleted`（或 `recalc-` 补算触发）的 ViewDataReady
+- 每个截面绑定一个面板任务，不再做主体×因子笛卡尔积
+- 默认拒绝 degraded 面板；`params.allow_degraded=true` 时才计算残缺面板，并把失败集合放入任务上下文
+- 引擎启动独立 ViewDataReady 消费者；时序仍只走 DatasetRows
+- Recalc 同步点改为单 Dataset View 的 `dataset_id`
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/... -run 'TestCrossSectionReady' -count=1
+env CGO_ENABLED=1 go test ./internal/trigger/... ./internal/bootstrap ./internal/engine ./internal/taskrunner ./internal/rpc ./test -count=1
+env CGO_ENABLED=1 go test -race ./internal/trigger/... ./internal/bootstrap ./internal/engine ./internal/taskrunner ./internal/rpc -count=3
+go test ./... -count=1   # packages/events
+env CGO_ENABLED=1 go test ./internal/service/view -run 'TestHandle|TestViewDataReady|TestPeriod' -count=1
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- 因子周期汇总屏障属于任务 15；截面 runner 仍会在截面任务结束后立即上报 FactorPeriodComputed
+- 因子写回仍走 `UpsertFields` + `write_source=factor`，尚未统一 `PatchFactor`
+- 补算、前端与正式发布属于 16—18
+
+### 提交
+
 （本提交）

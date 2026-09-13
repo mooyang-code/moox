@@ -37,6 +37,16 @@ func (FactorDef) TableName() string {
 	return "t_factor_defs"
 }
 
+// FactorAllowsDegraded reports whether a definition explicitly permits incomplete panels.
+func FactorAllowsDegraded(factor FactorDef) bool {
+	var params map[string]any
+	if json.Unmarshal([]byte(factor.ParamsJSON), &params) != nil {
+		return false
+	}
+	allowed, _ := params["allow_degraded"].(bool)
+	return allowed
+}
+
 // BindingAllowsSubject reports whether a binding applies to one subject.
 func BindingAllowsSubject(binding FactorBinding, subjectID string) bool {
 	if binding.SubjectMode == "" || binding.SubjectMode == SubjectModeAll {

@@ -168,6 +168,7 @@ func encodeTaskContext(task *FactorTask) map[string]any {
 		"expected_subjects":  append([]string{}, task.ExpectedSubjects...),
 		"available_subjects": append([]string{}, task.AvailableSubjects...),
 		"missing_subjects":   append([]string{}, task.MissingSubjects...),
+		"input_status":       task.InputStatus,
 	}
 }
 
