@@ -166,6 +166,9 @@ func TestAcceptsFactorResultReadyIgnoresInputViewReady(t *testing.T) {
 	if acceptsFactorResultReady(compiled, PeriodReady{ViewID: "factor", CompletionKind: events.MergePeriodCompleted.Name()}) {
 		t.Fatal("input ViewDataReady must not run factor-backed strategies")
 	}
+	if acceptsFactorResultReady(compiled, PeriodReady{ViewID: "factor"}) {
+		t.Fatal("factor ViewDataReady without completion_kind must not run factor-backed strategies")
+	}
 	if !acceptsFactorResultReady(compiled, PeriodReady{ViewID: "factor", CompletionKind: events.FactorPeriodComputed.Name()}) {
 		t.Fatal("result ViewDataReady must run factor-backed strategies")
 	}

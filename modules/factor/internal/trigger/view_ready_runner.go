@@ -788,7 +788,6 @@ func (r *ViewReadyRunner) recordCrossSectionOutcomes(ctx context.Context, spaceI
 		SpaceID: spaceID, DatasetID: datasetID, SnapshotID: snapshotID,
 		Frequency: ready.GetFrequency(), PeriodTime: ready.GetPeriodTime(),
 	}
-	receipt := receiptFromReady(ready)
 	ran := make(map[string]struct{}, len(tasks))
 	for _, task := range tasks {
 		ran[task.BindingID] = struct{}{}
@@ -804,7 +803,9 @@ func (r *ViewReadyRunner) recordCrossSectionOutcomes(ctx context.Context, spaceI
 		for _, subjectID := range ids {
 			outcome := PairOutcome{BindingID: task.BindingID, SubjectID: subjectID, Status: status}
 			if status == PairComplete {
-				outcome.Receipt = receipt
+				if patch, ok := collapseFactorWrite(result.Write); ok {
+					outcome.Receipt = patch
+				}
 			}
 			if err := r.barrier.Record(ctx, key, outcome); err != nil {
 				return err
@@ -848,17 +849,4 @@ func (r *ViewReadyRunner) configSnapshotID(ctx context.Context, datasetID string
 		return ""
 	}
 	return strings.TrimSpace(def.ConfigSnapshotID)
-}
-
-func receiptFromReady(ready *publicstoragepb.ViewDataReady) WriteReceipt {
-	if ready == nil {
-		return WriteReceipt{NodeID: "factor-engine", StoreID: "patch", Sequence: 1}
-	}
-	if positions := ready.GetCommittedPositions(); len(positions) > 0 && positions[0] != nil {
-		return WriteReceipt{
-			CommitID: firstNonEmpty(ready.GetCompletionEventId()),
-			NodeID:   positions[0].GetNodeId(), StoreID: positions[0].GetStoreId(), Sequence: positions[0].GetSequence(),
-		}
-	}
-	return WriteReceipt{CommitID: ready.GetCompletionEventId(), NodeID: "factor-engine", StoreID: "patch", Sequence: 1}
 }

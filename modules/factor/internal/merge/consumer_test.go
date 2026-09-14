@@ -10,6 +10,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMergeAssemblerConsumesCollectorMarkersToFreeze(t *testing.T) {
+	assembler, commits := openAssembler(t, domain.MergeModeSystem)
+	ledger, _ := openPeriodLedger(t)
+	assembler.SetPeriodLedger(ledger)
+	handler := NewRowHandler(assembler)
+	period := time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC)
+	require.NoError(t, handler.HandleCollectorCompleted(context.Background(), &storagepb.CollectorPeriodCompleted{
+		DatasetId: "dataset_binance_spot_kline_1m", Frequency: "1m", PeriodTime: period.Unix(),
+		ExpectedSubjectIds: []string{"BTC-USDT"},
+	}))
+	require.NoError(t, handler.HandleCollectorCompleted(context.Background(), &storagepb.CollectorPeriodCompleted{
+		DatasetId: "dataset_binance_swap_kline_1m", Frequency: "1m", PeriodTime: period.Unix(),
+		ExpectedSubjectIds: []string{"BTC-USDT"},
+	}))
+	require.NoError(t, handler.HandleDatasetRows(context.Background(), sourceRows("dataset_binance_spot_kline_1m", "BTC-USDT", period, completeKlineFields("spot"))))
+	require.NoError(t, handler.HandleDatasetRows(context.Background(), sourceRows("dataset_binance_swap_kline_1m", "BTC-USDT", period, completeKlineFields("swap"))))
+	require.Equal(t, []string{stableCommitID(mergeKey("BTC-USDT", period))}, commits.ids)
+	require.NoError(t, handler.HandleDatasetRows(context.Background(), sourceRows("dataset_binance_spot_kline_1m", "ETH-USDT", period, completeKlineFields("spot"))))
+	require.NoError(t, handler.HandleDatasetRows(context.Background(), sourceRows("dataset_binance_swap_kline_1m", "ETH-USDT", period, completeKlineFields("swap"))))
+	require.Equal(t, []string{stableCommitID(mergeKey("BTC-USDT", period))}, commits.ids)
+}
+
 func TestMergeAssemblerConsumesSourceRowsAndCommitsOnce(t *testing.T) {
 	handler, commits := openRowHandler(t, domain.MergeModeSystem)
 	period := time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC)

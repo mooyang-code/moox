@@ -124,9 +124,9 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 			},
 		},
 		{
-			name: "merge missing positions", event: MergePeriodCompleted, subjectID: "mdataset",
+			name: "merge incomplete position", event: MergePeriodCompleted, subjectID: "mdataset",
 			payload: validMergePeriodCompleted(now),
-			mutate:  func(value proto.Message) { value.(*storagepb.MergePeriodCompleted).CommittedPositions = nil },
+			mutate:  func(value proto.Message) { value.(*storagepb.MergePeriodCompleted).CommittedPositions[0].Sequence = 0 },
 		},
 		{
 			name: "factor computed trigger", event: FactorPeriodComputed, subjectID: "mdataset",

@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS t_merge_source_completions (
     c_dataset_id TEXT NOT NULL,
     c_source_dataset_id TEXT NOT NULL,
     c_period_time DATETIME NOT NULL,
+    c_expected_json TEXT NOT NULL DEFAULT '[]',
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (c_dataset_id, c_source_dataset_id, c_period_time)
 );

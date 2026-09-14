@@ -2,6 +2,7 @@ package view
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -22,8 +23,8 @@ func TestViewDataReadyFenceWaitsUntilRowsApplied(t *testing.T) {
 	payload.CommittedPositions = []*storageeventpb.CommittedPosition{
 		{NodeId: "node-a", StoreId: "store-a", Sequence: 7},
 	}
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload); err != nil {
-		t.Fatalf("unapplied completion should be retained, not fail hard: %v", err)
+	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload); !errors.Is(err, ErrViewDataReadyPending) {
+		t.Fatalf("unapplied completion should retry until rows are applied, got %v", err)
 	}
 	if len(publisher.attempts) != 0 {
 		t.Fatal("ViewDataReady published before committed rows were applied")
@@ -51,8 +52,8 @@ func TestViewDataReadyFenceRequiresEveryPartition(t *testing.T) {
 		{NodeId: "node-b", StoreId: "store-b", Sequence: 9},
 	}
 	service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 4)
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-2", at), payload); err != nil {
-		t.Fatal(err)
+	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-2", at), payload); !errors.Is(err, ErrViewDataReadyPending) {
+		t.Fatalf("partial apply should retry, got %v", err)
 	}
 	if len(publisher.attempts) != 0 {
 		t.Fatal("ViewDataReady published with one partition still unapplied")
@@ -107,8 +108,8 @@ func TestViewDataReadyFenceRebuildDoesNotFalsePublish(t *testing.T) {
 	runtime.active = "source-view-b"
 	runtime.mu.Unlock()
 	service.catalogViews[viewRef{spaceID: "quant", viewID: "source-view"}].ActiveIndexId = "source-view-b"
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-4", at), payload); err != nil {
-		t.Fatal(err)
+	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-4", at), payload); !errors.Is(err, ErrViewDataReadyPending) {
+		t.Fatalf("rebuild switched index generation must retry, got %v", err)
 	}
 	if len(publisher.attempts) != 0 {
 		t.Fatal("rebuild switched index generation must not inherit old applied positions")
@@ -140,5 +141,41 @@ func TestViewDataReadyFencePublishRetryIsIdempotent(t *testing.T) {
 	}
 	if len(publisher.attempts) != 2 || len(publisher.byID) != 1 {
 		t.Fatalf("idempotent retry attempts=%d unique=%d", len(publisher.attempts), len(publisher.byID))
+	}
+}
+
+func TestViewDataReadySurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	metadata := newPeriodMetadataFake()
+	firstPublisher := newReadyPublisherFake()
+	first := newPeriodTestService(metadata, firstPublisher, &pb.View{
+		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
+	})
+	if err := first.OpenReadyFence(dir); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC)
+	payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, 1786032300)
+	payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 12}}
+	if err := first.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-restart", at), payload); !errors.Is(err, ErrViewDataReadyPending) {
+		t.Fatalf("expected pending ready, got %v", err)
+	}
+	if len(firstPublisher.attempts) != 0 {
+		t.Fatal("ready published before restart")
+	}
+
+	secondPublisher := newReadyPublisherFake()
+	second := newPeriodTestService(metadata, secondPublisher, &pb.View{
+		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
+	})
+	if err := second.OpenReadyFence(dir); err != nil {
+		t.Fatal(err)
+	}
+	second.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 12)
+	if err := second.FlushViewDataReady(context.Background(), "quant", "source-view"); err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPublisher.byID) != 1 {
+		t.Fatalf("ready after restart unique=%d", len(secondPublisher.byID))
 	}
 }

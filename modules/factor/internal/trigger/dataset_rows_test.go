@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/mooyang-code/moox/packages/events"
@@ -19,6 +21,38 @@ import (
 )
 
 const testMergedDataset = "mdataset_binance_kline_1m"
+
+func TestDatasetRowsBarrierUsesPatchReceiptNotInputPosition(t *testing.T) {
+	barrier, reports := openPeriodBarrier(t)
+	runner := &DatasetRowsRunner{barrier: barrier}
+	at := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	key := PeriodKey{
+		SpaceID: "crypto", DatasetID: testMergedDataset, SnapshotID: "snap",
+		Frequency: "1m", PeriodTime: at.Unix(),
+	}
+	require.NoError(t, barrier.Freeze(context.Background(), FreezeSpec{
+		Key: key, ExpectedSubjects: []string{"BTC-USDT"},
+		Bindings: []FrozenBinding{testFrozenBinding("bias5", "bias5", domain.FactorTypeTimeSeries, []string{"BTC-USDT"})},
+		BatchID:  "merge-1",
+	}))
+	task := taskrunner.Task{FactorTask: engine.FactorTask{
+		BindingID: "bias5", SubjectID: "BTC-USDT", SpaceID: "crypto", ResultDatasetID: testMergedDataset,
+		ConfigSnapshotID: "snap", Freq: "1m", PeriodTime: at.Unix(),
+		SourceNodeID: "input-node", SourceStoreID: "input-store", SourceSequence: 99,
+	}}
+	require.NoError(t, runner.recordPeriodOutcome(context.Background(), taskrunner.Result{Task: task}))
+	require.Empty(t, reports.markers)
+
+	require.NoError(t, runner.recordPeriodOutcome(context.Background(), taskrunner.Result{
+		Task: task,
+		Write: storageio.FactorWrite{Rows: 1, Receipts: []storageio.WriteReceipt{{
+			CommitID: "patch-1", NodeID: "patch-node", StoreID: "patch-store", Sequence: 41,
+		}}},
+	}))
+	require.Len(t, reports.markers, 1)
+	require.Equal(t, "patch-node", reports.markers[0].GetCommittedPositions()[0].GetNodeId())
+	require.EqualValues(t, 41, reports.markers[0].GetCommittedPositions()[0].GetSequence())
+}
 
 func TestDatasetRowsTriggerIgnoresFactorPatch(t *testing.T) {
 	runner := new(recordingCombinationRunner)

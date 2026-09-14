@@ -64,6 +64,9 @@ type Service struct {
 	maintenanceReady  bool
 	pendingReadyMu    sync.Mutex
 	pendingReady      []pendingViewReady
+	readyFenceDir     string
+	appliedFenceMu    sync.Mutex
+	appliedFence      map[appliedFenceKey]uint64
 }
 
 type pendingRebuildLog struct {
@@ -235,6 +238,11 @@ func New(root, authSecret string) (*Service, error) {
 		idleChecks:                 make(map[viewRef]uint32),
 		rebuildLogRetry:            make(map[string]pendingRebuildLog),
 		metrics:                    observability.DefaultViewMetrics,
+		readyFenceDir:              filepath.Join(root, "view-data-ready"),
+		appliedFence:               make(map[appliedFenceKey]uint64),
+	}
+	if err := service.loadReadyFence(); err != nil {
+		return nil, err
 	}
 	return service, nil
 }

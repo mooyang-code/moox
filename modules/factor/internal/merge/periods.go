@@ -87,6 +87,7 @@ type sourceCompletionRow struct {
 	DatasetID       string    `gorm:"column:c_dataset_id;primaryKey"`
 	SourceDatasetID string    `gorm:"column:c_source_dataset_id;primaryKey"`
 	PeriodTime      time.Time `gorm:"column:c_period_time;primaryKey"`
+	ExpectedJSON    string    `gorm:"column:c_expected_json"`
 	ModifiedAt      time.Time `gorm:"column:c_mtime"`
 }
 
@@ -170,18 +171,62 @@ func (l *PeriodLedger) NoteCommit(ctx context.Context, key PeriodKey, subjectID 
 	}).Error
 }
 
-func (l *PeriodLedger) NoteCollectorCompleted(ctx context.Context, datasetID, sourceDatasetID string, periodTime time.Time) error {
+func (l *PeriodLedger) NoteCollectorCompleted(ctx context.Context, datasetID, sourceDatasetID string, periodTime time.Time, expected []string) error {
 	if l == nil {
 		return fmt.Errorf("merge period ledger is not initialized")
 	}
+	raw, err := json.Marshal(uniquePreserve(expected))
+	if err != nil {
+		return err
+	}
 	row := sourceCompletionRow{
 		DatasetID: strings.TrimSpace(datasetID), SourceDatasetID: strings.TrimSpace(sourceDatasetID),
-		PeriodTime: periodTime.UTC(), ModifiedAt: time.Now().UTC(),
+		PeriodTime: periodTime.UTC(), ExpectedJSON: string(raw), ModifiedAt: time.Now().UTC(),
 	}
 	if row.DatasetID == "" || row.SourceDatasetID == "" {
 		return fmt.Errorf("dataset_id and source dataset_id are required")
 	}
-	return l.store.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error
+	return l.store.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "c_dataset_id"}, {Name: "c_source_dataset_id"}, {Name: "c_period_time"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{"c_expected_json", "c_mtime"}),
+	}).Create(&row).Error
+}
+
+func (l *PeriodLedger) CollectorUniverse(ctx context.Context, datasetID string, sourceIDs []string, periodTime time.Time) ([]string, bool, error) {
+	if l == nil {
+		return nil, false, fmt.Errorf("merge period ledger is not initialized")
+	}
+	if len(sourceIDs) == 0 {
+		return nil, false, nil
+	}
+	var rows []sourceCompletionRow
+	if err := l.store.db.WithContext(ctx).Where(
+		"c_dataset_id = ? AND c_period_time = ?", strings.TrimSpace(datasetID), periodTime.UTC(),
+	).Find(&rows).Error; err != nil {
+		return nil, false, err
+	}
+	bySource := make(map[string][]string, len(rows))
+	for _, row := range rows {
+		var expected []string
+		if strings.TrimSpace(row.ExpectedJSON) != "" {
+			if err := json.Unmarshal([]byte(row.ExpectedJSON), &expected); err != nil {
+				return nil, false, err
+			}
+		}
+		bySource[row.SourceDatasetID] = expected
+	}
+	for _, sourceID := range sourceIDs {
+		if _, ok := bySource[sourceID]; !ok {
+			return nil, false, nil
+		}
+	}
+	var universe []string
+	for _, sourceID := range sourceIDs {
+		universe = append(universe, bySource[sourceID]...)
+	}
+	return uniquePreserve(universe), true, nil
 }
 
 func (l *PeriodLedger) Accepts(ctx context.Context, key PeriodKey, subjectID string) (bool, error) {
@@ -195,8 +240,17 @@ func (l *PeriodLedger) Accepts(ctx context.Context, key PeriodKey, subjectID str
 	if period.Status != "waiting" {
 		return false, nil
 	}
-	_ = subjectID
-	return true, nil
+	expected := decodeExpected(period.ExpectedJSON)
+	if len(expected) == 0 {
+		return false, nil
+	}
+	subjectID = strings.TrimSpace(subjectID)
+	for _, id := range expected {
+		if id == subjectID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (l *PeriodLedger) Finalize(ctx context.Context, key PeriodKey, now time.Time) error {
@@ -264,7 +318,7 @@ func (l *PeriodLedger) Finalize(ctx context.Context, key PeriodKey, now time.Tim
 		DatasetID: period.DatasetID, Frequency: period.Frequency, SnapshotID: period.SnapshotID,
 		BatchID: period.BatchID, ScopeRef: "universe:" + period.DatasetID + ":" + period.Frequency,
 		Status: period.Status, PeriodTime: period.PeriodTime, ExpectedSubjectIDs: expected, FailedSubjects: failed,
-		Positions: collapseReceipts(period, subjects),
+		Positions: collapseReceipts(subjects),
 	}
 	if err := l.reporter.Report(ctx, marker); err != nil {
 		return err
@@ -318,7 +372,7 @@ func (l *PeriodLedger) closePending(ctx context.Context, key PeriodKey, now time
 	).Updates(map[string]any{"c_state": "missing", "c_mtime": now.UTC()}).Error
 }
 
-func collapseReceipts(period periodRow, subjects []periodSubjectRow) []WriteReceipt {
+func collapseReceipts(subjects []periodSubjectRow) []WriteReceipt {
 	type posKey struct{ node, store string }
 	best := map[posKey]WriteReceipt{}
 	for _, subject := range subjects {
@@ -331,11 +385,7 @@ func collapseReceipts(period periodRow, subjects []periodSubjectRow) []WriteRece
 		}
 	}
 	if len(best) == 0 {
-		seq := uint64(period.ID)
-		if seq == 0 {
-			seq = 1
-		}
-		return []WriteReceipt{{NodeID: "merge-ledger", StoreID: "periods", Sequence: seq}}
+		return nil
 	}
 	out := make([]WriteReceipt, 0, len(best))
 	for _, receipt := range best {

@@ -1200,7 +1200,7 @@ func acceptsFactorResultReady(compiled compiler.CompiledStrategy, event PeriodRe
 	}
 	kind := strings.TrimSpace(event.CompletionKind)
 	if kind == "" {
-		return true
+		return false
 	}
 	return kind == events.FactorPeriodComputed.Name()
 }

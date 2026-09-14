@@ -257,6 +257,10 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		stop()
 		return nil, fmt.Errorf("discard leftover View subject journals: %w", err)
 	}
+	if err := s.FlushViewDataReady(ctx, "", ""); err != nil && !errors.Is(err, ErrViewDataReadyPending) {
+		stop()
+		return nil, fmt.Errorf("replay persisted ViewDataReady: %w", err)
+	}
 	return stop, nil
 }
 

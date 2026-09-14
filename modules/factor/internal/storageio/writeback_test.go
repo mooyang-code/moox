@@ -10,7 +10,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWriteFactorPatchAllowsFactorToCreateNewSeriesTag(t *testing.T) {
+func TestWriteFactorPatchUsesAuthorizedPatchRPC(t *testing.T) {
+	access := &fakeAccessClient{}
+	client := (&Client{access: access}).WithOutputManifests(&memoryManifest{})
+	at := time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC)
+	write, err := client.WriteFactorReceipts(context.Background(), &engine.FactorTask{
+		TaskID: "task-1", BindingID: "binding-1", BindingGeneration: "gen-1",
+		SpaceID: "crypto", ResultDatasetID: "mdataset_binance_kline_1m",
+		SubjectID: "BTC-USDT", Freq: "1m", PeriodTime: at.Unix(),
+		Factor: engine.FactorSpec{FactorID: "bias5", SourceHash: "hash", Outputs: []string{"value"}},
+	}, &engine.FactorResult{Rows: []engine.FactorResultRow{{
+		DataTime: at, Values: map[string]any{"value": 1.25},
+	}}})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, write.Rows)
+	require.Empty(t, access.writeReqs)
+	require.Len(t, access.patchReqs, 1)
+	req := access.patchReqs[0]
+	require.Equal(t, "gen-1", req.GetBindingVersion())
+	require.Equal(t, []string{"bias5__value"}, req.GetOwnedFields())
+	require.Equal(t, "bias5__value", req.GetRow().GetFields()[0].GetFieldId())
+	require.Len(t, write.Receipts, 1)
+	require.Equal(t, "node-a", write.Receipts[0].NodeID)
+	require.Equal(t, "store-a", write.Receipts[0].StoreID)
+	require.EqualValues(t, 1, write.Receipts[0].Sequence)
+}
+
+func TestWriteFactorPatchWritesSeriesTagAndAttributes(t *testing.T) {
 	access := &fakeAccessClient{}
 	client := &Client{access: access}
 	at := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
@@ -26,7 +52,9 @@ func TestWriteFactorPatchAllowsFactorToCreateNewSeriesTag(t *testing.T) {
 	}}})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, written)
-	row := access.writeReqs[0].GetRows()[0]
+	require.Empty(t, access.writeReqs)
+	require.Len(t, access.patchReqs, 1)
+	row := access.patchReqs[0].GetRow()
 	require.Equal(t, at.Format(time.RFC3339Nano), row.GetKey().GetTimeSeries().GetDataTime())
 	require.Equal(t, "venue_pair:binance-okx", row.GetKey().GetTimeSeries().GetSeriesTag())
 	require.Equal(t, "venue-spread", row.GetAttributes()["factor.id"].GetStringValue())
@@ -51,15 +79,15 @@ func TestWriteFactorPatchClearsDynamicManifestRows(t *testing.T) {
 	task.TriggerEventID = "ready-3"
 	_, err = client.WriteFactorPatch(context.Background(), task, &engine.FactorResult{})
 	require.NoError(t, err)
-	require.Len(t, access.writeReqs, 4)
-	require.Equal(t, "A", access.writeReqs[1].GetRows()[0].GetKey().GetTimeSeries().GetSeriesTag())
-	require.Equal(t, "B", access.writeReqs[2].GetRows()[0].GetKey().GetTimeSeries().GetSeriesTag())
-	require.Equal(t, "B", access.writeReqs[3].GetRows()[0].GetKey().GetTimeSeries().GetSeriesTag())
-	require.Equal(t, "factor__value", access.writeReqs[3].GetRows()[0].GetFields()[0].GetFieldId())
+	require.Len(t, access.patchReqs, 4)
+	require.Equal(t, "A", access.patchReqs[1].GetRow().GetKey().GetTimeSeries().GetSeriesTag())
+	require.Equal(t, "B", access.patchReqs[2].GetRow().GetKey().GetTimeSeries().GetSeriesTag())
+	require.Equal(t, "B", access.patchReqs[3].GetRow().GetKey().GetTimeSeries().GetSeriesTag())
+	require.Equal(t, "factor__value", access.patchReqs[3].GetRow().GetFields()[0].GetFieldId())
 	require.Empty(t, manifests.keys)
 }
 
-func TestWriteFactorPatchesMergesFactorsIntoOneStorageWrite(t *testing.T) {
+func TestWriteFactorPatchesIssuesAuthorizedPatchPerFactor(t *testing.T) {
 	access := &fakeAccessClient{}
 	manifests := &mapManifest{values: make(map[store.OutputManifestKey][]string)}
 	client := (&Client{access: access}).WithOutputManifests(manifests)
@@ -84,10 +112,12 @@ func TestWriteFactorPatchesMergesFactorsIntoOneStorageWrite(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, []uint64{1, 1}, counts)
-	require.Len(t, access.writeReqs, 1)
-	require.Len(t, access.writeReqs[0].GetRows(), 1)
-	require.Len(t, access.writeReqs[0].GetRows()[0].GetFields(), 2)
-	require.Equal(t, "bias", access.writeReqs[0].GetRows()[0].GetAttributes()["factor.id"].GetStringValue())
+	require.Empty(t, access.writeReqs)
+	require.Len(t, access.patchReqs, 2)
+	require.Equal(t, "bias__value", access.patchReqs[0].GetRow().GetFields()[0].GetFieldId())
+	require.Equal(t, "sma__value", access.patchReqs[1].GetRow().GetFields()[0].GetFieldId())
+	require.Equal(t, []string{"bias__value"}, access.patchReqs[0].GetOwnedFields())
+	require.Equal(t, []string{"sma__value"}, access.patchReqs[1].GetOwnedFields())
 	require.Len(t, manifests.values, 2)
 }
 

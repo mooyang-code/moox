@@ -68,6 +68,10 @@ func Open(opts Options) (*Ledger, error) {
 		_ = closeGorm(db)
 		return nil, fmt.Errorf("apply merge schema: %w", err)
 	}
+	if err := ensureSourceCompletionExpectedColumn(db); err != nil {
+		_ = closeGorm(db)
+		return nil, err
+	}
 	return &Ledger{db: db}, nil
 }
 
@@ -134,6 +138,20 @@ func (l *Ledger) RecordCommit(ctx context.Context, commitID string, key RowKey) 
 		ModifiedAt: time.Now().UTC(),
 	}
 	return l.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error
+}
+
+func ensureSourceCompletionExpectedColumn(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("merge database is required")
+	}
+	var count int
+	if err := db.Raw(`SELECT COUNT(*) FROM pragma_table_info('t_merge_source_completions') WHERE name = 'c_expected_json'`).Scan(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	return db.Exec(`ALTER TABLE t_merge_source_completions ADD COLUMN c_expected_json TEXT NOT NULL DEFAULT '[]'`).Error
 }
 
 func closeGorm(db *gorm.DB) error {

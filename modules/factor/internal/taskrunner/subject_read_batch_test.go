@@ -99,7 +99,8 @@ func TestSubjectReadyMissingTargetCannotSucceed(t *testing.T) {
 	results := runner.RunAll(context.Background(), []Task{task})
 	require.Len(t, results, 1)
 	require.ErrorContains(t, results[0].Err, "subject-ready target is missing")
-	require.ErrorContains(t, runner.runValidated(context.Background(), task, &storageio.RangeChunk{Frame: &engine.DataFrame{}}), "subject-ready target is missing")
+	_, err := runner.runValidated(context.Background(), task, &storageio.RangeChunk{Frame: &engine.DataFrame{}})
+	require.ErrorContains(t, err, "subject-ready target is missing")
 }
 
 func TestSourceSeriesConstraintsSeparateReadGroups(t *testing.T) {

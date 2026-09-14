@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
 
 // Task is a task-runner-owned executable task.
@@ -83,6 +84,7 @@ func encodeTaskIDParts(parts ...string) string {
 }
 
 type Result struct {
-	Task Task
-	Err  error
+	Task  Task
+	Err   error
+	Write storageio.FactorWrite
 }

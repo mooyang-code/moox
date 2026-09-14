@@ -93,11 +93,17 @@ func run() (err error) {
 	if periods != nil {
 		go runPeriodFinalizer(ctx, periods)
 	}
-	consumer, err := merge.StartRowConsumer(ctx, cfg, merge.NewRowHandler(assemblers...))
+	handler := merge.NewRowHandler(assemblers...)
+	consumer, err := merge.StartRowConsumer(ctx, cfg, handler)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, consumer.Close()) }()
+	collector, err := merge.StartCollectorConsumer(ctx, cfg, handler)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, collector.Close()) }()
 	state := health.New("factor-merge", cfg.MergeID, "", "")
 	state.SetReady(true)
 	if err := health.Register(s.Service(mergeHealthService), state); err != nil {

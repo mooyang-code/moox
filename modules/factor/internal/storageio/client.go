@@ -15,9 +15,9 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-// AccessClient is the Storage Access RPC subset used by factor.
+// AccessClient is the Storage Access RPC subset used by factor writes.
 type AccessClient interface {
-	UpsertFields(ctx context.Context, req *storagepb.PrimaryUpsertFieldsReq, opts ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
+	PatchFactor(ctx context.Context, req *storagepb.PrimaryPatchFactorReq, opts ...client.Option) (*storagepb.PrimaryPatchFactorRsp, error)
 }
 
 type ViewClient interface {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
@@ -237,7 +238,7 @@ func (r *blockingCombinationRunner) RunAll(_ context.Context, tasks []taskrunner
 	<-r.release
 	results := make([]taskrunner.Result, len(copied))
 	for index := range copied {
-		results[index] = taskrunner.Result{Task: copied[index]}
+		results[index] = taskrunner.Result{Task: copied[index], Write: testFactorWrite()}
 	}
 	return results
 }
@@ -254,9 +255,19 @@ func (r *recordingCombinationRunner) RunAll(_ context.Context, tasks []taskrunne
 	r.mu.Unlock()
 	results := make([]taskrunner.Result, len(tasks))
 	for index, task := range tasks {
-		results[index] = taskrunner.Result{Task: task, Err: r.fail[combinationKey(task.BindingID, task.SubjectID)]}
+		result := taskrunner.Result{Task: task, Err: r.fail[combinationKey(task.BindingID, task.SubjectID)]}
+		if result.Err == nil {
+			result.Write = testFactorWrite()
+		}
+		results[index] = result
 	}
 	return results
+}
+
+func testFactorWrite() storageio.FactorWrite {
+	return storageio.FactorWrite{Rows: 1, Receipts: []storageio.WriteReceipt{{
+		CommitID: "test-patch", NodeID: "n", StoreID: "s", Sequence: 1,
+	}}}
 }
 
 type periodStorageFake struct {

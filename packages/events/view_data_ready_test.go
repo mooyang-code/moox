@@ -60,7 +60,9 @@ func TestViewDataReadyContract(t *testing.T) {
 			{name: "completion_kind", mutate: func(v *storagepb.ViewDataReady) { v.CompletionKind = "" }},
 			{name: "view_id", mutate: func(v *storagepb.ViewDataReady) { v.ViewId = "" }},
 			{name: "dataset_id", mutate: func(v *storagepb.ViewDataReady) { v.DatasetId = "" }},
-			{name: "committed_positions", mutate: func(v *storagepb.ViewDataReady) { v.CommittedPositions = nil }},
+			{name: "committed_positions", mutate: func(v *storagepb.ViewDataReady) {
+				v.CommittedPositions = []*storagepb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 0}}
+			}},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {

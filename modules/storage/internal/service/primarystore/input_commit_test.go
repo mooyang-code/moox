@@ -134,6 +134,35 @@ func TestInputCommitAuthorizedMergeAndFactorDoNotClobber(t *testing.T) {
 	}
 }
 
+func TestPatchFactorAcceptsEngineAppID(t *testing.T) {
+	node, err := datanode.NewService(datanode.Options{NodeID: "node-a", AuthSecret: "node-secret", Pebble: pebble.Options{NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = node.Close() })
+	svc, err := New(Options{Node: node, AuthSigner: func(auth *pb.AuthInfo) (*pb.AuthInfo, error) {
+		return &pb.AuthInfo{AppId: auth.GetAppId(), AppKey: datanode.ServiceAuthKey("node-secret", auth.GetAppId())}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := inputCommitRow("BNB-USDT", map[string]float64{"ma": 4.1})
+	upsert, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "moox-factor-engine"}, WriteSource: "factor",
+		Rows: []*pb.RowFieldUpsert{row},
+	})
+	if err != nil || upsert.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
+		t.Fatalf("engine upsert rsp=%v err=%v", upsert, err)
+	}
+	patch, err := svc.PatchFactor(context.Background(), &pb.PrimaryPatchFactorReq{
+		AuthInfo: &pb.AuthInfo{AppId: "moox-factor-engine"}, CommitId: "patch-engine", BindingVersion: "bind-ma-1",
+		OwnedFields: []string{"ma"}, Row: row,
+	})
+	if err != nil || patch.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || patch.GetReceipt().GetPosition().GetSequence() == 0 {
+		t.Fatalf("engine patch rsp=%v err=%v", patch, err)
+	}
+}
+
 func inputCommitRow(subject string, fields map[string]float64) *pb.RowFieldUpsert {
 	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "mdataset_crypto_kline_1m", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 		SubjectId: subject, Freq: "1m", DataTime: "2026-09-13T16:00:00Z",

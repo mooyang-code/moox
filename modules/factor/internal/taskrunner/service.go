@@ -26,6 +26,14 @@ type StorageIO interface {
 	WriteFactorPatch(context.Context, *engine.FactorTask, *engine.FactorResult) (uint64, error)
 }
 
+func writeFactorOutput(storage StorageIO, ctx context.Context, task *engine.FactorTask, result *engine.FactorResult) (storageio.FactorWrite, error) {
+	if writer, ok := storage.(storageio.FactorReceiptWriter); ok {
+		return writer.WriteFactorReceipts(ctx, task, result)
+	}
+	rows, err := storage.WriteFactorPatch(ctx, task, result)
+	return storageio.FactorWrite{Rows: rows}, err
+}
+
 type periodStorageIO interface {
 	ReadPeriodChunk(context.Context, storageio.WindowKey, time.Time, time.Time, int, []string) (*storageio.RangeChunk, error)
 }
@@ -148,6 +156,11 @@ func (s *Service) run(ctx context.Context, task Task) error {
 }
 
 func (s *Service) runWithPeriodRead(ctx context.Context, task Task, prepared *storageio.RangeChunk) error {
+	_, err := s.runWithPeriodReadWrite(ctx, task, prepared)
+	return err
+}
+
+func (s *Service) runWithPeriodReadWrite(ctx context.Context, task Task, prepared *storageio.RangeChunk) (storageio.FactorWrite, error) {
 	release := func() {}
 	if s.factorGate != nil {
 		release = s.factorGate.AcquireRun(task.Factor.FactorID)
@@ -155,7 +168,7 @@ func (s *Service) runWithPeriodRead(ctx context.Context, task Task, prepared *st
 	defer release()
 	if s.taskValidator != nil {
 		if err := s.taskValidator(ctx, task); err != nil {
-			return err
+			return storageio.FactorWrite{}, err
 		}
 	}
 	return s.runValidated(ctx, task, prepared)
@@ -420,9 +433,9 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 	}
 
 	if len(preparedOutputs) > 0 {
-		rowsWritten := make([]uint64, len(preparedOutputs))
+		writes := make([]storageio.FactorWrite, len(preparedOutputs))
 		writeIndividually := true
-		if batchWriter, ok := s.storage.(storageio.FactorBatchWriter); ok && len(preparedOutputs) > 1 {
+		if receiptBatch, ok := s.storage.(storageio.FactorReceiptBatchWriter); ok && len(preparedOutputs) > 1 {
 			writeIndividually = false
 			patches := make([]storageio.FactorPatch, 0, len(preparedOutputs))
 			for _, output := range preparedOutputs {
@@ -432,7 +445,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 			}
 			writeErr := s.withRetry(ctx, func() error {
 				var err error
-				rowsWritten, err = batchWriter.WriteFactorPatches(ctx, patches)
+				writes, err = receiptBatch.WriteFactorReceiptsBatch(ctx, patches)
 				if err != nil {
 					if errors.Is(err, domain.ErrOutputOwnershipConflict) {
 						return engine.NonRetryableError{Err: err}
@@ -440,16 +453,14 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 					s.observeStorageWriteFailure(err)
 					return engine.RetryableError{Err: err}
 				}
-				if len(rowsWritten) != len(patches) {
-					return engine.RetryableError{Err: fmt.Errorf("factor batch writer returned %d counts for %d patches", len(rowsWritten), len(patches))}
+				if len(writes) != len(patches) {
+					return engine.RetryableError{Err: fmt.Errorf("factor batch writer returned %d counts for %d patches", len(writes), len(patches))}
 				}
 				return nil
 			})
 			if errors.Is(writeErr, domain.ErrOutputOwnershipConflict) {
-				// Isolate deterministic ownership failures to their binding. The
-				// batch write intent can be safely revisited through single writes.
 				writeIndividually = true
-				rowsWritten = make([]uint64, len(preparedOutputs))
+				writes = make([]storageio.FactorWrite, len(preparedOutputs))
 			} else if writeErr != nil {
 				for _, output := range preparedOutputs {
 					s.setBatchErrorAudit(ctx, output.member, results, batchID, started, writeErr)
@@ -457,7 +468,48 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 				batchStatus = "degraded"
 			} else {
 				for index, output := range preparedOutputs {
-					s.recordBatchPatchSuccess(ctx, byTaskID[output.task.TaskID].task, batchID, rowsWritten[index], batch.shared.TargetPeriods, started)
+					results[output.member.index].Write = writes[index]
+					s.recordBatchPatchSuccess(ctx, byTaskID[output.task.TaskID].task, batchID, writes[index].Rows, batch.shared.TargetPeriods, started)
+					writeFactorCount++
+				}
+			}
+		} else if batchWriter, ok := s.storage.(storageio.FactorBatchWriter); ok && len(preparedOutputs) > 1 {
+			writeIndividually = false
+			patches := make([]storageio.FactorPatch, 0, len(preparedOutputs))
+			for _, output := range preparedOutputs {
+				task := output.task
+				result := output.result
+				patches = append(patches, storageio.FactorPatch{Task: &task, Result: result})
+			}
+			writeErr := s.withRetry(ctx, func() error {
+				counts, err := batchWriter.WriteFactorPatches(ctx, patches)
+				if err != nil {
+					if errors.Is(err, domain.ErrOutputOwnershipConflict) {
+						return engine.NonRetryableError{Err: err}
+					}
+					s.observeStorageWriteFailure(err)
+					return engine.RetryableError{Err: err}
+				}
+				if len(counts) != len(patches) {
+					return engine.RetryableError{Err: fmt.Errorf("factor batch writer returned %d counts for %d patches", len(counts), len(patches))}
+				}
+				for i, count := range counts {
+					writes[i] = storageio.FactorWrite{Rows: count}
+				}
+				return nil
+			})
+			if errors.Is(writeErr, domain.ErrOutputOwnershipConflict) {
+				writeIndividually = true
+				writes = make([]storageio.FactorWrite, len(preparedOutputs))
+			} else if writeErr != nil {
+				for _, output := range preparedOutputs {
+					s.setBatchErrorAudit(ctx, output.member, results, batchID, started, writeErr)
+				}
+				batchStatus = "degraded"
+			} else {
+				for index, output := range preparedOutputs {
+					results[output.member.index].Write = writes[index]
+					s.recordBatchPatchSuccess(ctx, byTaskID[output.task.TaskID].task, batchID, writes[index].Rows, batch.shared.TargetPeriods, started)
 					writeFactorCount++
 				}
 			}
@@ -466,8 +518,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 			for index, output := range preparedOutputs {
 				output := output
 				writeErr := s.withRetry(ctx, func() error {
-					var err error
-					rowsWritten[index], err = s.storage.WriteFactorPatch(ctx, &output.task, output.result)
+					write, err := writeFactorOutput(s.storage, ctx, &output.task, output.result)
 					if err != nil {
 						if errors.Is(err, domain.ErrOutputOwnershipConflict) {
 							return engine.NonRetryableError{Err: err}
@@ -475,6 +526,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 						s.observeStorageWriteFailure(err)
 						return engine.RetryableError{Err: err}
 					}
+					writes[index] = write
 					return nil
 				})
 				if writeErr != nil {
@@ -482,7 +534,8 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 					batchStatus = "degraded"
 					continue
 				}
-				s.recordBatchPatchSuccess(ctx, byTaskID[output.task.TaskID].task, batchID, rowsWritten[index], batch.shared.TargetPeriods, started)
+				results[output.member.index].Write = writes[index]
+				s.recordBatchPatchSuccess(ctx, byTaskID[output.task.TaskID].task, batchID, writes[index].Rows, batch.shared.TargetPeriods, started)
 				writeFactorCount++
 			}
 		}
@@ -529,7 +582,9 @@ func (s *Service) runMembersIndividually(ctx context.Context, members []indexedT
 					return
 				}
 			}
-			results[member.index].Err = s.runWithPeriodRead(ctx, member.task, prepared)
+			write, err := s.runWithPeriodReadWrite(ctx, member.task, prepared)
+			results[member.index].Write = write
+			results[member.index].Err = err
 		}()
 	}
 	wg.Wait()
@@ -568,16 +623,17 @@ func logBatchMemberDone(ctx context.Context, t Task, batchID, status string, row
 		rows, status, elapsed.Milliseconds(), errorString(err))
 }
 
-func (s *Service) runValidated(ctx context.Context, task Task, prepared *storageio.RangeChunk) error {
+func (s *Service) runValidated(ctx context.Context, task Task, prepared *storageio.RangeChunk) (storageio.FactorWrite, error) {
 	if s == nil || s.storage == nil || s.exec == nil {
-		return errors.New("task runner dependencies are required")
+		return storageio.FactorWrite{}, errors.New("task runner dependencies are required")
 	}
 	if task.StartTime.IsZero() || task.EndTime.IsZero() || !task.StartTime.Before(task.EndTime) {
-		return errors.New("valid start_time and end_time are required")
+		return storageio.FactorWrite{}, errors.New("valid start_time and end_time are required")
 	}
 	started := time.Now()
 	chunks := 0
 	var runErr error
+	var written storageio.FactorWrite
 	log.InfoContextf(ctx, "factor_task_start task_id=%s trigger_type=%s space_id=%s source_view_id=%s result_dataset_id=%s subject_id=%s freq=%s start_time=%s end_time=%s factor_id=%s",
 		task.TaskID, task.TriggerType, task.SpaceID, taskSourceView(task), taskResultDataset(task),
 		task.SubjectID, task.Freq, task.StartTime.UTC().Format(time.RFC3339Nano),
@@ -602,29 +658,24 @@ func (s *Service) runValidated(ctx context.Context, task Task, prepared *storage
 	}()
 	cursor := task.StartTime
 	for cursor.Before(task.EndTime) {
-		// ViewDataReady is the upstream completeness contract. The
-		// task runner performs one read and starts the factor immediately; it does
-		// not poll a legacy dataset or wait for a second "settled" snapshot.
 		chunk, err := s.readChunk(ctx, task, cursor, prepared)
 		if err != nil {
 			runErr = err
-			return runErr
+			return storageio.FactorWrite{}, runErr
 		}
 		if chunk == nil || len(chunk.TargetPeriods) == 0 {
 			if task.TriggerType == "subject_ready" {
 				runErr = fmt.Errorf("subject-ready target is missing: subject=%s period=%d", task.SubjectID, task.PeriodTime)
-				return runErr
+				return storageio.FactorWrite{}, runErr
 			}
-			// An acknowledged period can legitimately have no readable rows (for
-			// example a degraded subject or a filtered-out correction). Treat that
-			// as an empty result and run the normal write plan so the previous
-			// manifest is cleared instead of leaving stale factor values visible.
 			if task.TriggerType == "view_ready" {
-				if _, clearErr := s.storage.WriteFactorPatch(ctx, &task.FactorTask, &engine.FactorResult{}); clearErr != nil {
+				clearWrite, clearErr := writeFactorOutput(s.storage, ctx, &task.FactorTask, &engine.FactorResult{})
+				if clearErr != nil {
 					s.observeStorageWriteFailure(clearErr)
 					runErr = clearErr
-					return clearErr
+					return storageio.FactorWrite{}, clearErr
 				}
+				written.Receipts = append(written.Receipts, clearWrite.Receipts...)
 			}
 			s.observeDatasetRun(ctx, report.DatasetObservation{
 				Key: report.DatasetKey{
@@ -632,16 +683,14 @@ func (s *Service) runValidated(ctx context.Context, task Task, prepared *storage
 				},
 				Result: "empty", FinishedAt: time.Now().UTC(),
 			})
-			return nil
+			return written, nil
 		}
 		var result *engine.FactorResult
+		var chunkWrite storageio.FactorWrite
 		runErr = s.withRetry(ctx, func() error {
 			chunkTask := task.FactorTask
 			chunkTask.StartTime = chunk.TargetPeriods[0]
 			chunkTask.EndTime = chunk.TargetPeriods[len(chunk.TargetPeriods)-1].Add(time.Nanosecond)
-			// Manual range runs have no source period identity. Give each chunk
-			// its own manifest/write identity so a later chunk cannot clear the
-			// rows written by an earlier chunk.
 			if chunkTask.PeriodTime == 0 {
 				chunkTask.PeriodTime = chunk.TargetPeriods[0].Unix()
 			}
@@ -653,15 +702,11 @@ func (s *Service) runValidated(ctx context.Context, task Task, prepared *storage
 				}
 				return engine.RetryableError{Err: err}
 			}
-			// The Python contract receives lookback rows as context and may
-			// return values for that full window. Only rows in this task's target
-			// range belong to the current period write; historical rows must not
-			// fail validation or overwrite an earlier period's manifest.
 			result = filterTargetResult(result, chunkTask.StartTime, chunkTask.EndTime)
 			if err := validateFactorResult(task.Factor, chunkTask.StartTime, chunkTask.EndTime, result); err != nil {
 				return engine.NonRetryableError{Err: err}
 			}
-			rowsWritten, err := s.storage.WriteFactorPatch(ctx, &chunkTask, result)
+			write, err := writeFactorOutput(s.storage, ctx, &chunkTask, result)
 			if err != nil {
 				if errors.Is(err, domain.ErrOutputOwnershipConflict) {
 					return engine.NonRetryableError{Err: err}
@@ -669,13 +714,14 @@ func (s *Service) runValidated(ctx context.Context, task Task, prepared *storage
 				s.observeStorageWriteFailure(err)
 				return engine.RetryableError{Err: err}
 			}
+			chunkWrite = write
 			observation := report.DatasetObservation{
 				Key: report.DatasetKey{
 					SpaceID: task.SpaceID, DatasetID: taskResultDataset(task), Freq: task.Freq,
 				},
-				Result: "success", Rows: rowsWritten, FinishedAt: time.Now().UTC(),
+				Result: "success", Rows: write.Rows, FinishedAt: time.Now().UTC(),
 			}
-			if rowsWritten == 0 {
+			if write.Rows == 0 {
 				observation.Result = "empty"
 			} else {
 				watermark := maxTime(chunk.TargetPeriods)
@@ -686,19 +732,17 @@ func (s *Service) runValidated(ctx context.Context, task Task, prepared *storage
 			return nil
 		})
 		if runErr != nil {
-			return runErr
+			return storageio.FactorWrite{}, runErr
 		}
+		written.Rows += chunkWrite.Rows
+		written.Receipts = append(written.Receipts, chunkWrite.Receipts...)
 		chunks++
-		// View-ready/recalc tasks represent exactly one period. The chunk may
-		// contain several series tags for that period; advancing by one
-		// nanosecond and reading again would see an empty tail and clear the
-		// values we just wrote.
 		if task.PeriodTime > 0 {
-			return nil
+			return written, nil
 		}
 		cursor = chunk.TargetPeriods[len(chunk.TargetPeriods)-1].Add(time.Nanosecond)
 	}
-	return nil
+	return written, nil
 }
 
 func (s *Service) readChunk(ctx context.Context, task Task, cursor time.Time, prepared *storageio.RangeChunk) (*storageio.RangeChunk, error) {

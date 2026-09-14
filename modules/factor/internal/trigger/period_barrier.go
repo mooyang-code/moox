@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
@@ -469,6 +470,21 @@ func frozenAllowsPair(tx *gorm.DB, key PeriodKey, bindingID, subjectID string) (
 		}
 	}
 	return false, true, nil
+}
+
+func collapseFactorWrite(write storageio.FactorWrite) (WriteReceipt, bool) {
+	var best WriteReceipt
+	ok := false
+	for _, receipt := range write.Receipts {
+		if strings.TrimSpace(receipt.NodeID) == "" || strings.TrimSpace(receipt.StoreID) == "" || receipt.Sequence == 0 {
+			continue
+		}
+		if !ok || receipt.Sequence > best.Sequence {
+			best = WriteReceipt{CommitID: receipt.CommitID, NodeID: receipt.NodeID, StoreID: receipt.StoreID, Sequence: receipt.Sequence}
+			ok = true
+		}
+	}
+	return best, ok
 }
 
 func applyReceipt(row *periodPairRow, receipt WriteReceipt) {

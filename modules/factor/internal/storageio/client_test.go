@@ -197,17 +197,17 @@ func TestWriteFactorPatchUsesResultIdentityAndWritesExplicitNullCells(t *testing
 	}})
 	require.NoError(t, err)
 	require.EqualValues(t, 3, rowsWritten)
-	require.Len(t, access.writeReqs, 1)
-	require.Len(t, access.writeReqs[0].GetRows(), 3)
-	require.Equal(t, "venue:binance", access.writeReqs[0].GetRows()[1].GetKey().GetTimeSeries().GetSeriesTag())
-	require.Equal(t, "factor-a", access.writeReqs[0].GetRows()[0].GetAttributes()["factor.id"].GetStringValue())
-	require.Equal(t, "hash-a", access.writeReqs[0].GetRows()[0].GetAttributes()["factor.source_hash"].GetStringValue())
-	nullField := fieldByID(t, access.writeReqs[0].GetRows()[0], "Bias_20")
+	require.Empty(t, access.writeReqs)
+	require.Len(t, access.patchReqs, 3)
+	require.Equal(t, "venue:binance", access.patchReqs[1].GetRow().GetKey().GetTimeSeries().GetSeriesTag())
+	require.Equal(t, "factor-a", access.patchReqs[0].GetRow().GetAttributes()["factor.id"].GetStringValue())
+	require.Equal(t, "hash-a", access.patchReqs[0].GetRow().GetAttributes()["factor.source_hash"].GetStringValue())
+	nullField := fieldByID(t, access.patchReqs[0].GetRow(), "Bias_20")
 	require.Equal(t, storagepb.NullValue_NULL_VALUE_NULL, nullField.GetValue().GetNullValue())
-	require.Len(t, access.writeReqs[0].GetRows()[1].GetFields(), 2)
-	require.Len(t, access.writeReqs[0].GetRows()[2].GetFields(), 2)
-	require.Equal(t, storagepb.NullValue_NULL_VALUE_NULL, fieldByID(t, access.writeReqs[0].GetRows()[2], "Bias_20").GetValue().GetNullValue())
-	require.Equal(t, storagepb.NullValue_NULL_VALUE_NULL, fieldByID(t, access.writeReqs[0].GetRows()[2], "Cci_14").GetValue().GetNullValue())
+	require.Len(t, access.patchReqs[1].GetRow().GetFields(), 2)
+	require.Len(t, access.patchReqs[2].GetRow().GetFields(), 2)
+	require.Equal(t, storagepb.NullValue_NULL_VALUE_NULL, fieldByID(t, access.patchReqs[2].GetRow(), "Bias_20").GetValue().GetNullValue())
+	require.Equal(t, storagepb.NullValue_NULL_VALUE_NULL, fieldByID(t, access.patchReqs[2].GetRow(), "Cci_14").GetValue().GetNullValue())
 }
 
 func TestWriteFactorPatchRejectsMissingOutput(t *testing.T) {
@@ -233,6 +233,7 @@ type fakeAccessClient struct {
 	servedIndexedTo []string
 	readReqs        []*storagepb.ReadTimeSeriesRowsReq
 	writeReqs       []*storagepb.PrimaryUpsertFieldsReq
+	patchReqs       []*storagepb.PrimaryPatchFactorReq
 }
 
 type fakeViewClient struct {
@@ -298,6 +299,19 @@ func (f *fakeAccessClient) ReadTimeSeriesRows(_ context.Context, req *storagepb.
 func (f *fakeAccessClient) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	f.writeReqs = append(f.writeReqs, req)
 	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: successRet()}, nil
+}
+
+func (f *fakeAccessClient) PatchFactor(_ context.Context, req *storagepb.PrimaryPatchFactorReq, _ ...client.Option) (*storagepb.PrimaryPatchFactorRsp, error) {
+	f.patchReqs = append(f.patchReqs, req)
+	seq := uint64(len(f.patchReqs))
+	return &storagepb.PrimaryPatchFactorRsp{
+		RetInfo: successRet(),
+		Receipt: &storagepb.WriteReceipt{
+			CommitId:  req.GetCommitId(),
+			Position:  &storagepb.CommittedPosition{NodeId: "node-a", StoreId: "store-a", Sequence: seq},
+			WriteKind: "factor_patch",
+		},
+	}, nil
 }
 
 func TestReadPeriodChunksUsesInFilterAndSplitsSubjects(t *testing.T) {
@@ -440,12 +454,12 @@ func (f *pagedAccessClient) ReadTimeSeriesRows(
 	}, nil
 }
 
-func (f *pagedAccessClient) UpsertFields(
+func (f *pagedAccessClient) PatchFactor(
 	context.Context,
-	*storagepb.PrimaryUpsertFieldsReq,
+	*storagepb.PrimaryPatchFactorReq,
 	...client.Option,
-) (*storagepb.PrimaryUpsertFieldsRsp, error) {
-	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: successRet()}, nil
+) (*storagepb.PrimaryPatchFactorRsp, error) {
+	return &storagepb.PrimaryPatchFactorRsp{RetInfo: successRet()}, nil
 }
 
 func distinctTimes(values []time.Time) []time.Time {

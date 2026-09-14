@@ -233,14 +233,8 @@ func (r *DatasetRowsRunner) recordPeriodOutcome(ctx context.Context, result task
 	}
 	outcome := PairOutcome{BindingID: task.BindingID, SubjectID: task.SubjectID, Status: status}
 	if status == PairComplete {
-		outcome.Receipt = WriteReceipt{
-			CommitID: firstNonEmpty(task.TaskID, task.SourceEventID),
-			NodeID:   firstNonEmpty(task.SourceNodeID, "factor-engine"),
-			StoreID:  firstNonEmpty(task.SourceStoreID, "patch"),
-			Sequence: task.SourceSequence,
-		}
-		if outcome.Receipt.Sequence == 0 {
-			outcome.Receipt.Sequence = 1
+		if receipt, ok := collapseFactorWrite(result.Write); ok {
+			outcome.Receipt = receipt
 		}
 	}
 	return r.barrier.Record(ctx, PeriodKey{

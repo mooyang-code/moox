@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	writeKindInputCommit = "input_commit"
-	writeKindFactorPatch = "factor_patch"
-	rowConsumerName      = "factor_merge_rows_v1"
+	writeKindInputCommit  = "input_commit"
+	writeKindFactorPatch  = "factor_patch"
+	rowConsumerName       = "factor_merge_rows_v1"
+	collectorConsumerName = "factor_merge_collector_v1"
 )
 
 // RowHandler routes source Dataset row events onto the assemblers that own them.
@@ -67,6 +68,42 @@ func (h *RowHandler) HandleDatasetRows(ctx context.Context, payload *storagepb.D
 		}
 	}
 	return nil
+}
+
+func (h *RowHandler) HandleCollectorCompleted(ctx context.Context, payload *storagepb.CollectorPeriodCompleted) error {
+	if h == nil || payload == nil {
+		return nil
+	}
+	assemblers := h.bySource[strings.TrimSpace(payload.GetDatasetId())]
+	if len(assemblers) == 0 {
+		return nil
+	}
+	period := time.Unix(payload.GetPeriodTime(), 0).UTC()
+	for _, assembler := range assemblers {
+		if err := assembler.NoteCollectorCompleted(ctx, payload.GetDatasetId(), period, payload.GetExpectedSubjectIds()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *RowHandler) HandleCollectorDelivery(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+	if delivery == nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: jetstream.ErrInvalidDelivery}
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
+	}
+	_, payload, err := events.DecodeCollectorPeriodCompletedWithContentType(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+	if err != nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("merge collector event rejected: %w", err)}
+	}
+	if err := h.HandleCollectorCompleted(ctx, payload); err != nil {
+		log.ErrorContextf(ctx, "merge collector complete failed dataset=%s: %v", payload.GetDatasetId(), err)
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: time.Second, Err: err}
+	}
+	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
 
 func (h *RowHandler) Handle(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
@@ -139,6 +176,59 @@ func StartRowConsumer(ctx context.Context, cfg ProcessConfig, handler *RowHandle
 	return &RowConsumer{client: client, consumer: consumer, runner: runner}, nil
 }
 
+type collectorDeliveryHandler struct {
+	inner *RowHandler
+}
+
+func (h collectorDeliveryHandler) Handle(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+	return h.inner.HandleCollectorDelivery(ctx, delivery)
+}
+
+func StartCollectorConsumer(ctx context.Context, cfg ProcessConfig, handler *RowHandler) (*RowConsumer, error) {
+	if handler == nil {
+		return nil, fmt.Errorf("merge row handler is required")
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return nil, err
+	}
+	filters, err := collectorFilters(registry, cfg)
+	if err != nil {
+		return nil, err
+	}
+	clientCfg := jetstream.ConfigFromEnv(append([]string(nil), cfg.EventBus.URLs...), "moox-merge")
+	if strings.TrimSpace(cfg.EventBus.CredentialFile) != "" {
+		if err := clientCfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.EventBus.CredentialFile)); err != nil {
+			return nil, err
+		}
+	}
+	client, err := jetstream.Connect(ctx, clientCfg)
+	if err != nil {
+		return nil, err
+	}
+	consumer, err := events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
+		Name: collectorConsumerName, Stream: events.CollectorPeriodCompleted.Stream(), FilterSubjects: filters,
+		AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 16, FetchMaxWait: cfg.EventBus.FetchMaxWait,
+		DeliverPolicy: nats.DeliverNewPolicy, DeliverDecodeErrors: true,
+	})
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	runner := jetstream.NewRunner(consumer, collectorDeliveryHandler{inner: handler}, jetstream.RunnerConfig{
+		BatchSize: 1, InProgressInterval: 30 * time.Second,
+		ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
+			log.ErrorContextf(ctx, "merge collector consumer error: %v", err)
+		}),
+	})
+	go func() {
+		if runErr := runner.Run(ctx); runErr != nil && ctx.Err() == nil {
+			log.ErrorContextf(ctx, "merge collector consumer stopped: %v", runErr)
+		}
+	}()
+	return &RowConsumer{client: client, consumer: consumer, runner: runner}, nil
+}
+
 func (c *RowConsumer) Close() error {
 	if c == nil {
 		return nil
@@ -171,6 +261,28 @@ func sourceFilters(registry *events.Registry, cfg ProcessConfig) ([]string, erro
 	}
 	if len(filters) == 0 {
 		return nil, fmt.Errorf("merge source dataset filters are required")
+	}
+	return filters, nil
+}
+
+func collectorFilters(registry *events.Registry, cfg ProcessConfig) ([]string, error) {
+	seen := map[string]struct{}{}
+	var filters []string
+	for _, def := range cfg.Definitions {
+		for _, source := range def.Sources {
+			subject, err := registry.RenderSubject(events.CollectorPeriodCompleted, def.SpaceID, source.DatasetID)
+			if err != nil {
+				return nil, err
+			}
+			if _, ok := seen[subject]; ok {
+				continue
+			}
+			seen[subject] = struct{}{}
+			filters = append(filters, subject)
+		}
+	}
+	if len(filters) == 0 {
+		return nil, fmt.Errorf("merge collector dataset filters are required")
 	}
 	return filters, nil
 }

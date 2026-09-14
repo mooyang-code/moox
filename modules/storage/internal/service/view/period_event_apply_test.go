@@ -108,6 +108,7 @@ func newPeriodTestService(metadata PeriodMetadataClient, publisher ReadyEventPub
 		views:          make(map[viewRef]*viewRuntime),
 		catalogViews:   make(map[viewRef]*pb.View),
 		indexRevision:  make(map[string]uint64),
+		appliedFence:   make(map[appliedFenceKey]uint64),
 		periodMetadata: metadata,
 		readyPublisher: publisher,
 	}

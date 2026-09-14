@@ -117,7 +117,11 @@ func (a *Assembler) ApplyArrival(ctx context.Context, key RowKey, sourceDatasetI
 	if a.periods != nil {
 		period := PeriodKey{DatasetID: key.DatasetID, SnapshotID: key.SnapshotID, Frequency: key.Frequency, PeriodTime: key.PeriodTime}
 		if len(a.def.ObjectSet) > 0 {
-			if err := a.periods.Freeze(ctx, period, a.def.ObjectSet, key.PeriodTime.Add(2*time.Minute)); err != nil {
+			deadline, err := periodFreezeDeadline(key.PeriodTime, key.Frequency)
+			if err != nil {
+				return err
+			}
+			if err := a.periods.Freeze(ctx, period, a.def.ObjectSet, deadline); err != nil {
 				return err
 			}
 		}
@@ -175,6 +179,46 @@ func (a *Assembler) commitIfReady(ctx context.Context, key RowKey) error {
 		}, key.SubjectID, receipt)
 	}
 	return nil
+}
+
+func periodFreezeDeadline(periodTime time.Time, frequency string) (time.Time, error) {
+	end, err := domain.NextPeriod(periodTime.UTC(), frequency)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return end.Add(2 * time.Minute), nil
+}
+
+func (a *Assembler) NoteCollectorCompleted(ctx context.Context, sourceDatasetID string, periodTime time.Time, expected []string) error {
+	if a == nil || a.periods == nil {
+		return nil
+	}
+	if err := a.periods.NoteCollectorCompleted(ctx, a.DatasetID(), sourceDatasetID, periodTime, expected); err != nil {
+		return err
+	}
+	if len(a.def.ObjectSet) > 0 {
+		return nil
+	}
+	universe, ready, err := a.periods.CollectorUniverse(ctx, a.DatasetID(), a.SourceDatasetIDs(), periodTime)
+	if err != nil || !ready {
+		return err
+	}
+	deadline, err := periodFreezeDeadline(periodTime, firstNonEmpty(a.def.Frequency, "1m"))
+	if err != nil {
+		return err
+	}
+	return a.periods.Freeze(ctx, PeriodKey{
+		DatasetID: a.DatasetID(), SnapshotID: a.SnapshotID(), Frequency: firstNonEmpty(a.def.Frequency, "1m"), PeriodTime: periodTime.UTC(),
+	}, universe, deadline)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func sourceComplete(required []string, fields map[string]float64) bool {

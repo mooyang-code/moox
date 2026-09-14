@@ -9,6 +9,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMergeAssemblerFreezesFromCollectorUniverseAfterPeriodEnd(t *testing.T) {
+	assembler, commits := openAssembler(t, domain.MergeModeSystem)
+	ledger, reports := openPeriodLedger(t)
+	assembler.SetPeriodLedger(ledger)
+	period := time.Date(2026, 9, 13, 16, 0, 0, 0, time.UTC)
+	require.NoError(t, assembler.NoteCollectorCompleted(context.Background(), "dataset_binance_spot_kline_1m", period, []string{"BTC-USDT", "ETH-USDT"}))
+	require.Empty(t, reports.markers)
+	require.NoError(t, assembler.NoteCollectorCompleted(context.Background(), "dataset_binance_swap_kline_1m", period, []string{"BTC-USDT"}))
+	key := mergeKey("BTC-USDT", period)
+	require.NoError(t, assembler.ApplyArrival(context.Background(), key, "dataset_binance_spot_kline_1m", completeKlineFields("spot")))
+	require.NoError(t, assembler.ApplyArrival(context.Background(), key, "dataset_binance_swap_kline_1m", completeKlineFields("swap")))
+	require.Equal(t, []string{stableCommitID(key)}, commits.ids)
+	late := mergeKey("SOL-USDT", period)
+	require.NoError(t, assembler.ApplyArrival(context.Background(), late, "dataset_binance_spot_kline_1m", completeKlineFields("spot")))
+	require.NoError(t, assembler.ApplyArrival(context.Background(), late, "dataset_binance_swap_kline_1m", completeKlineFields("swap")))
+	require.Equal(t, []string{stableCommitID(key)}, commits.ids, "subjects outside the frozen collector universe must be dropped")
+	deadline, err := periodFreezeDeadline(period, "1m")
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, 9, 13, 16, 3, 0, 0, time.UTC), deadline)
+	hourDeadline, err := periodFreezeDeadline(period, "1h")
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, 9, 13, 17, 2, 0, 0, time.UTC), hourDeadline)
+}
+
 func TestMergeAssemblerWaitsForAllSourcesBeforeCommit(t *testing.T) {
 	assembler, commits := openAssembler(t, domain.MergeModeSystem)
 	key := mergeKey("BTC-USDT", time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC))

@@ -130,6 +130,9 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 		if err := s.FlushViewDataReady(ctx, message.GetSpaceId(), view.GetViewId()); err != nil {
 			return err
 		}
+		if s.pendingReadyContains(eventID) {
+			return ErrViewDataReadyPending
+		}
 	}
 	return nil
 }
@@ -171,6 +174,9 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 		s.enqueueViewDataReady(view, payload.GetCommittedPositions(), ready, message, eventID)
 		if err := s.FlushViewDataReady(ctx, message.GetSpaceId(), view.GetViewId()); err != nil {
 			return err
+		}
+		if s.pendingReadyContains(eventID) {
+			return ErrViewDataReadyPending
 		}
 	}
 	return nil

@@ -64,15 +64,15 @@ func TestMergePeriodLedgerEndsEmptyUniverseWithoutFakeInput(t *testing.T) {
 	require.Equal(t, "complete", reports.markers[0].Status)
 	require.Empty(t, reports.markers[0].ExpectedSubjectIDs)
 	require.Empty(t, reports.markers[0].FailedSubjects)
-	require.NotEmpty(t, reports.markers[0].Positions)
+	require.Empty(t, reports.markers[0].Positions)
 }
 
 func TestMergePeriodLedgerCollectorCompleteIsNotMergeComplete(t *testing.T) {
 	ledger, reports := openPeriodLedger(t)
 	key := periodKey(time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC))
 	require.NoError(t, ledger.Freeze(context.Background(), key, []string{"AAA-USDT"}, time.Date(2026, 9, 13, 16, 7, 0, 0, time.UTC)))
-	require.NoError(t, ledger.NoteCollectorCompleted(context.Background(), key.DatasetID, "dataset_binance_spot_kline_1m", key.PeriodTime))
-	require.NoError(t, ledger.NoteCollectorCompleted(context.Background(), key.DatasetID, "dataset_binance_swap_kline_1m", key.PeriodTime))
+	require.NoError(t, ledger.NoteCollectorCompleted(context.Background(), key.DatasetID, "dataset_binance_spot_kline_1m", key.PeriodTime, []string{"AAA-USDT"}))
+	require.NoError(t, ledger.NoteCollectorCompleted(context.Background(), key.DatasetID, "dataset_binance_swap_kline_1m", key.PeriodTime, []string{"AAA-USDT"}))
 	require.Empty(t, reports.markers)
 }
 

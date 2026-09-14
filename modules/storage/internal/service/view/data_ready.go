@@ -29,6 +29,16 @@ func (s *Service) NoteAppliedPosition(spaceID, viewID, indexID, nodeID, storeID 
 	if s == nil || strings.TrimSpace(spaceID) == "" || strings.TrimSpace(viewID) == "" || strings.TrimSpace(indexID) == "" || strings.TrimSpace(nodeID) == "" || strings.TrimSpace(storeID) == "" || sequence == 0 {
 		return
 	}
+	key := appliedFenceKey{spaceID: spaceID, viewID: viewID, indexID: indexID, nodeID: nodeID, storeID: storeID}
+	s.appliedFenceMu.Lock()
+	if s.appliedFence == nil {
+		s.appliedFence = make(map[appliedFenceKey]uint64)
+	}
+	if sequence > s.appliedFence[key] {
+		s.appliedFence[key] = sequence
+	}
+	s.appliedFenceMu.Unlock()
+	_ = s.persistAppliedFence()
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()
@@ -40,9 +50,9 @@ func (s *Service) NoteAppliedPosition(spaceID, viewID, indexID, nodeID, storeID 
 	if runtime.applied == nil {
 		runtime.applied = make(map[appliedKey]uint64)
 	}
-	key := appliedKey{indexID: indexID, nodeID: nodeID, storeID: storeID}
-	if current := runtime.applied[key]; sequence > current {
-		runtime.applied[key] = sequence
+	applied := appliedKey{indexID: indexID, nodeID: nodeID, storeID: storeID}
+	if current := runtime.applied[applied]; sequence > current {
+		runtime.applied[applied] = sequence
 	}
 }
 
@@ -75,11 +85,14 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 			}
 			remaining = append(remaining, item)
 			s.restorePending(remaining)
+			if persistErr := s.persistPendingReady(); persistErr != nil {
+				return persistErr
+			}
 			return err
 		}
 	}
 	s.restorePending(remaining)
-	return nil
+	return s.persistPendingReady()
 }
 
 func (s *Service) enqueueViewDataReady(view *pb.View, required []*storagepb.CommittedPosition, payload *storagepb.ViewDataReady, message *eventpb.EventMessage, eventID string) {
@@ -105,6 +118,7 @@ func (s *Service) enqueueViewDataReady(view *pb.View, required []*storagepb.Comm
 		}
 	}
 	s.pendingReady = append(s.pendingReady, item)
+	_ = s.persistPendingReadyLocked()
 }
 
 func (s *Service) restorePending(items []pendingViewReady) {
@@ -125,33 +139,44 @@ func (s *Service) restorePending(items []pendingViewReady) {
 			s.pendingReady = append(s.pendingReady, item)
 		}
 	}
+	_ = s.persistPendingReadyLocked()
+}
+
+func (s *Service) persistPendingReady() error {
+	if s == nil {
+		return nil
+	}
+	s.pendingReadyMu.Lock()
+	defer s.pendingReadyMu.Unlock()
+	return s.persistPendingReadyLocked()
 }
 
 func (s *Service) positionsApplied(view *pb.View, required []*storagepb.CommittedPosition) bool {
-	if view == nil || len(required) == 0 {
+	if view == nil {
 		return false
+	}
+	if len(required) == 0 {
+		return true
 	}
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}]
 	s.mu.RUnlock()
-	if runtime == nil {
-		return false
+	indexID := view.GetActiveIndexId()
+	if runtime != nil {
+		runtime.mu.Lock()
+		if runtime.active != "" {
+			indexID = runtime.active
+		}
+		runtime.mu.Unlock()
 	}
-	runtime.mu.Lock()
-	indexID := runtime.active
-	applied := runtime.applied
-	runtime.mu.Unlock()
 	if indexID == "" {
-		indexID = view.GetActiveIndexId()
-	}
-	if indexID == "" || applied == nil {
 		return false
 	}
 	for _, position := range required {
 		if position == nil || position.GetNodeId() == "" || position.GetStoreId() == "" || position.GetSequence() == 0 {
 			return false
 		}
-		if applied[appliedKey{indexID: indexID, nodeID: position.GetNodeId(), storeID: position.GetStoreId()}] < position.GetSequence() {
+		if s.appliedSequence(view.GetSpaceId(), view.GetViewId(), indexID, position.GetNodeId(), position.GetStoreId()) < position.GetSequence() {
 			return false
 		}
 	}

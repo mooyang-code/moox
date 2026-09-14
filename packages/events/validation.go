@@ -160,18 +160,18 @@ func validateCollectorPeriodCompleted(message *eventpb.EventMessage, value proto
 		return fmt.Errorf("collector period completed payload has type %T", value)
 	}
 	return validatePeriodCompletion(message, periodCompletion{
-		label:               "collector period completed",
-		datasetID:           payload.GetDatasetId(),
-		frequency:           payload.GetFrequency(),
-		periodTime:          payload.GetPeriodTime(),
-		status:              payload.GetStatus(),
-		batchID:             payload.GetBatchId(),
-		configSnapshotID:    payload.GetConfigSnapshotId(),
-		expectedScopeRef:    payload.GetExpectedScopeRef(),
-		expectedSubjectIDs:  payload.GetExpectedSubjectIds(),
-		failedSubjects:      payload.GetFailedSubjects(),
-		committedPositions:  payload.GetCommittedPositions(),
-		timestamp:           payload.GetCollectedAt(),
+		label:              "collector period completed",
+		datasetID:          payload.GetDatasetId(),
+		frequency:          payload.GetFrequency(),
+		periodTime:         payload.GetPeriodTime(),
+		status:             payload.GetStatus(),
+		batchID:            payload.GetBatchId(),
+		configSnapshotID:   payload.GetConfigSnapshotId(),
+		expectedScopeRef:   payload.GetExpectedScopeRef(),
+		expectedSubjectIDs: payload.GetExpectedSubjectIds(),
+		failedSubjects:     payload.GetFailedSubjects(),
+		committedPositions: payload.GetCommittedPositions(),
+		timestamp:          payload.GetCollectedAt(),
 	})
 }
 
@@ -181,18 +181,18 @@ func validateMergePeriodCompleted(message *eventpb.EventMessage, value proto.Mes
 		return fmt.Errorf("merge period completed payload has type %T", value)
 	}
 	return validatePeriodCompletion(message, periodCompletion{
-		label:               "merge period completed",
-		datasetID:           payload.GetDatasetId(),
-		frequency:           payload.GetFrequency(),
-		periodTime:          payload.GetPeriodTime(),
-		status:              payload.GetStatus(),
-		batchID:             payload.GetBatchId(),
-		configSnapshotID:    payload.GetConfigSnapshotId(),
-		expectedScopeRef:    payload.GetExpectedScopeRef(),
-		expectedSubjectIDs:  payload.GetExpectedSubjectIds(),
-		failedSubjects:      payload.GetFailedSubjects(),
-		committedPositions:  payload.GetCommittedPositions(),
-		timestamp:           payload.GetCompletedAt(),
+		label:              "merge period completed",
+		datasetID:          payload.GetDatasetId(),
+		frequency:          payload.GetFrequency(),
+		periodTime:         payload.GetPeriodTime(),
+		status:             payload.GetStatus(),
+		batchID:            payload.GetBatchId(),
+		configSnapshotID:   payload.GetConfigSnapshotId(),
+		expectedScopeRef:   payload.GetExpectedScopeRef(),
+		expectedSubjectIDs: payload.GetExpectedSubjectIds(),
+		failedSubjects:     payload.GetFailedSubjects(),
+		committedPositions: payload.GetCommittedPositions(),
+		timestamp:          payload.GetCompletedAt(),
 	})
 }
 
@@ -205,17 +205,17 @@ func validateFactorPeriodComputed(message *eventpb.EventMessage, value proto.Mes
 		return fmt.Errorf("factor period computed trigger_event_id is required")
 	}
 	if err := validatePeriodCompletion(message, periodCompletion{
-		label:               "factor period computed",
-		datasetID:           payload.GetDatasetId(),
-		frequency:           payload.GetFrequency(),
-		periodTime:          payload.GetPeriodTime(),
-		status:              payload.GetStatus(),
-		batchID:             payload.GetBatchId(),
-		configSnapshotID:    payload.GetConfigSnapshotId(),
-		expectedScopeRef:    payload.GetExpectedScopeRef(),
-		expectedSubjectIDs:  payload.GetExpectedSubjectIds(),
-		committedPositions:  payload.GetCommittedPositions(),
-		timestamp:           payload.GetComputedAt(),
+		label:              "factor period computed",
+		datasetID:          payload.GetDatasetId(),
+		frequency:          payload.GetFrequency(),
+		periodTime:         payload.GetPeriodTime(),
+		status:             payload.GetStatus(),
+		batchID:            payload.GetBatchId(),
+		configSnapshotID:   payload.GetConfigSnapshotId(),
+		expectedScopeRef:   payload.GetExpectedScopeRef(),
+		expectedSubjectIDs: payload.GetExpectedSubjectIds(),
+		committedPositions: payload.GetCommittedPositions(),
+		timestamp:          payload.GetComputedAt(),
 	}); err != nil {
 		return err
 	}
@@ -306,7 +306,7 @@ func validatePeriodCompletion(message *eventpb.EventMessage, completion periodCo
 
 func validateCommittedPositions(positions []*storagepb.CommittedPosition, label string) error {
 	if len(positions) == 0 {
-		return fmt.Errorf("%s committed_positions are required", label)
+		return nil
 	}
 	seen := make(map[string]struct{}, len(positions))
 	for i, position := range positions {

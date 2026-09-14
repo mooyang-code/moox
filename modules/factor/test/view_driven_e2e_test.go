@@ -214,6 +214,7 @@ func (r *barrierCombinationRunner) RunAll(_ context.Context, tasks []taskrunner.
 				r.mu.Unlock()
 				<-r.release
 				results[index].Task = tasks[index]
+				results[index].Write = testFactorWrite()
 				r.mu.Lock()
 				r.active--
 				r.mu.Unlock()
@@ -261,9 +262,19 @@ func (r *immediateCombinationRunner) RunAll(_ context.Context, tasks []taskrunne
 	r.tasks = append(r.tasks, tasks...)
 	results := make([]taskrunner.Result, len(tasks))
 	for index, task := range tasks {
-		results[index] = taskrunner.Result{Task: task, Err: r.fail[task.SubjectID+"/"+task.Factor.FactorID]}
+		result := taskrunner.Result{Task: task, Err: r.fail[task.SubjectID+"/"+task.Factor.FactorID]}
+		if result.Err == nil {
+			result.Write = testFactorWrite()
+		}
+		results[index] = result
 	}
 	return results
+}
+
+func testFactorWrite() storageio.FactorWrite {
+	return storageio.FactorWrite{Rows: 1, Receipts: []storageio.WriteReceipt{{
+		CommitID: "test-patch", NodeID: "n", StoreID: "s", Sequence: 1,
+	}}}
 }
 
 type fakePeriodStorage struct {
