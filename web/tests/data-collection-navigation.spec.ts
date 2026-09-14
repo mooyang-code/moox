@@ -1,0 +1,114 @@
+import { expect, test, type Route } from "@playwright/test";
+import { installE2ESession } from "./e2e-session";
+
+const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: "success" }, ...data });
+
+async function mockGateway(route: Route) {
+  const method = route.request().url().split("/").pop();
+  if (method === "GetUserInfo") {
+    return route.fulfill({
+      json: ok({ user_info: { user_id: "e2e", username: "reviewer", nickname: "Reviewer", role: 3, status: 1 } })
+    });
+  }
+  if (method === "ListSpaces") {
+    return route.fulfill({
+      json: ok({
+        spaces: [{ space_id: "crypto", name: "加密货币", owner: "e2e", status: "active" }],
+        page_result: { page: 1, size: 20, total: 1, has_more: false }
+      })
+    });
+  }
+  if (method === "ListDatasets") {
+    return route.fulfill({
+      json: ok({
+        datasets: [
+          {
+            space_id: "crypto",
+            dataset_id: "dataset_binance_spot_kline_1m",
+            name: "现货K线",
+            status: "active",
+            attributes: { owner_module: "collector", dataset_role: "raw_collection" }
+          }
+        ],
+        page_result: { page: 1, size: 20, total: 1, has_more: false }
+      })
+    });
+  }
+  if (method === "ListViews") {
+    return route.fulfill({ json: ok({ views: [], page_result: { page: 1, size: 20, total: 0, has_more: false } }) });
+  }
+  if (method === "ListFields") {
+    return route.fulfill({
+      json: ok({
+        fields: [{ space_id: "crypto", field_id: "close", name: "收盘价", status: "active" }],
+        page_result: { page: 1, size: 20, total: 1, has_more: false }
+      })
+    });
+  }
+  if (method === "ListFieldGroups") {
+    return route.fulfill({
+      json: ok({
+        field_groups: [{ space_id: "crypto", group_id: "market", name: "市场数据", status: "active" }],
+        field_counts: { market: 1 },
+        total_field_count: 1,
+        ungrouped_field_count: 0,
+        page_result: { page: 1, size: 200, total: 1, has_more: false }
+      })
+    });
+  }
+  return route.fulfill({ json: ok() });
+}
+
+test.beforeEach(async ({ page }) => {
+  await installE2ESession(page, "crypto");
+  await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, mockGateway);
+});
+
+test("data collection owns base assets and has no top-level data assets menu", async ({ page }) => {
+  await page.goto("/#/home");
+  await expect(page.getByRole("heading", { name: "量化系统驾驶舱" })).toBeVisible();
+  await expect(page.getByText("数据资产", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("数据采集", { exact: true })).toBeVisible();
+
+  await page.goto("/#/data/sources");
+  await expect(page.getByRole("heading", { name: "数据源" })).toBeVisible();
+  await page.goto("/#/data/subjects");
+  await expect(page.getByRole("heading", { name: "数据对象" })).toBeVisible();
+  await page.goto("/#/data/fields");
+  await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
+  await page.goto("/#/collector/rules");
+  await expect(page.getByLabel("采集任务")).toBeVisible();
+  await page.goto("/#/collector/data-management");
+  await expect(page.getByLabel("基础数据集")).toBeVisible();
+});
+
+test("refresh and direct routes stay available for collection pages", async ({ page }) => {
+  await page.goto("/#/data/fields");
+  await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
+  await page.goto("/#/collector/data-management");
+  await expect(page.getByLabel("基础数据集")).toBeVisible();
+  await expect(page.getByText("数据视图", { exact: true })).toHaveCount(0);
+});
+
+test("desktop and mobile collection toolbars do not overlap", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/#/data/fields");
+  const search = page.getByPlaceholder("搜索字段 ID、中文名或描述");
+  const create = page.getByRole("button", { name: "新建字段" });
+  const [searchBox, createBox] = await Promise.all([search.boundingBox(), create.boundingBox()]);
+  expect(searchBox && createBox).toBeTruthy();
+  expect((createBox?.x || 0) + 8).toBeGreaterThan((searchBox?.x || 0) + (searchBox?.width || 0));
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/#/data/fields");
+  const mobileSearch = page.getByPlaceholder("搜索字段 ID、中文名或描述");
+  const mobileCreate = page.getByRole("button", { name: "新建字段" });
+  await expect(mobileSearch).toBeVisible();
+  await expect(mobileCreate).toBeVisible();
+  const [ms, mc] = await Promise.all([mobileSearch.boundingBox(), mobileCreate.boundingBox()]);
+  const searchBottom = (ms?.y || 0) + (ms?.height || 0);
+  const createTop = mc?.y || 0;
+  expect(createTop + 1).toBeGreaterThanOrEqual(searchBottom - 4);
+});

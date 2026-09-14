@@ -95,7 +95,9 @@ export function validateDatasetId(value: string | undefined, maxLength = 50) {
   const id = (value || "").trim();
   const error = validateLowerSnakeId(id, maxLength);
   if (error) return error;
-  if (!id.startsWith("dataset_")) return "Dataset ID 必须以 dataset_ 开头";
+  if (!id.startsWith("dataset_") && !id.startsWith("mdataset_")) {
+    return "Dataset ID 必须以 dataset_ 或 mdataset_ 开头";
+  }
   return "";
 }
 

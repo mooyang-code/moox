@@ -42,16 +42,39 @@ export interface EngineStatus {
   python_workers: number;
   active_tasks: number;
   pending_tasks: number;
+  desired_revision?: number;
+  applied_revision?: number;
+  engine_id?: string;
+  engine_last_seen?: string;
 }
 
 export interface RecalcFactorReq {
   factor_id?: string;
   space_id: string;
-  source_dataset: string;
+  source_dataset?: string;
   subject_id: string;
   freq: string;
   start_time: string;
   end_time: string;
+  request_id?: string;
+  source_view_id?: string;
+  sync_request_id?: string;
+}
+
+export interface RecalcFactorRsp {
+  ret_info: RetInfo;
+  job_id: string;
+  status: string;
+}
+
+export interface RecalcJob {
+  job_id: string;
+  request_id?: string;
+  status: string;
+  failure_class?: string;
+  error?: string;
+  binding_id?: string;
+  binding_generation?: string;
 }
 
 export type FactorRetRsp<T extends object = Record<string, never>> = T & { ret_info: RetInfo };

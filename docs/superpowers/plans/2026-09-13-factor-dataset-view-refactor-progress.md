@@ -576,7 +576,50 @@ env CGO_ENABLED=1 go build ./cmd/server ./cmd/engine ./cmd/cli ./cmd/merge
 
 ### 尚未解决的依赖
 
-- 因子写回仍走 `UpsertFields`；前端导航与正式发布属于 17—18
+- 因子写回仍走 `UpsertFields`；正式发布与真实新周期 E2E 属于任务 18
+
+### 提交
+
+`b9990ca7`
+
+## 任务 17：前端导航和基础资产归并
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 18。
+
+### 红灯证据
+
+`pnpm exec playwright test tests/data-collection-navigation.spec.ts` 最初失败于：
+
+- 顶层仍有「数据资产」，数据采集下没有基础数据集入口
+- `/collector/data-management` 仍是「数据视图 / 数据集合」双 Tab，缺少 `aria-label="基础数据集"`
+- 数据集详情没有「索引」页签，无法独立创建/删除同一 Dataset 的两个 View
+- `/factor/datasets`、`/factor/construct`、`/factor/tasks` 路由不存在
+
+失败来自目标行为缺失，不是编译环境缺失。
+
+### 实现
+
+- 删除顶层「数据资产」菜单；数据源、采集对象、基础字段、采集任务、基础数据集归入数据采集
+- 因子计算增加复合因子数据集、构造配置、计算任务及补算；补算只受理异步 job，不在浏览器跑 Python
+- 数据集详情「索引」页签支持同一 Dataset 多个单源 View；锁定 dataset 选择器；删除 View 不删除 Dataset
+- 创建数据集后自动创建默认 View；跨接口失败可在详情/构造页「重试恢复」
+- 列定义展示基础字段 / 因子输出归属
+
+### 验证命令与结果
+
+```text
+pnpm exec playwright test tests/data-collection-navigation.spec.ts tests/factor-dataset-workflow.spec.ts
+pnpm test
+pnpm run check:menu
+pnpm run check:data-browse
+pnpm run build:prod
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- 因子写回仍走 `UpsertFields`；清理旧事件、独立构建、codeCR、本机引擎部署与真实新周期 E2E 属于任务 18
 
 ### 提交
 

@@ -8,7 +8,9 @@ import type {
   ListBindingsRsp,
   ListFactorsReq,
   ListFactorsRsp,
-  RecalcFactorReq
+  RecalcFactorReq,
+  RecalcFactorRsp,
+  RecalcJob
 } from "./types";
 
 export async function createFactorDef(factor: FactorDef) {
@@ -56,7 +58,15 @@ export function deleteFactorBinding(binding_id: string) {
 }
 
 export function recalcFactor(params: RecalcFactorReq) {
-  return callFactor<RecalcFactorReq, FactorRetRsp>("RecalcFactor", params);
+  return callFactor<RecalcFactorReq, RecalcFactorRsp>("RecalcFactor", params);
+}
+
+export function cancelRecalcJob(job_id: string) {
+  return callFactor<{ job_id: string }, FactorRetRsp>("CancelRecalcJob", { job_id });
+}
+
+export function getRecalcJob(job_id: string) {
+  return callFactor<{ job_id: string }, FactorRetRsp<RecalcJob>>("GetRecalcJob", { job_id });
 }
 
 export function getEngineStatus() {

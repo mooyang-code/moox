@@ -66,6 +66,9 @@ describe("Dataset lifecycle page contract", () => {
     expect(source).toContain("必须绑定一个 DataNode");
     expect(source).toContain("首次激活后绑定永久锁定");
     expect(source).toContain("系统不做数据迁移");
+    expect(source).toContain('title="索引"');
+    expect(source).toContain("ensureDefaultView");
+    expect(source).toContain("重试恢复");
   });
 
   it("uses the lifecycle RPC names and exact CAS payloads", async () => {

@@ -18,8 +18,9 @@ describe("dataKindOptions", () => {
 });
 
 describe("validateDatasetId", () => {
-  it("requires the dataset_ type prefix", () => {
+  it("requires the dataset_ or mdataset_ type prefix", () => {
     expect(validateDatasetId("dataset_stockcn_equity_kline")).toBe("");
+    expect(validateDatasetId("mdataset_binance_kline_1m")).toBe("");
     expect(validateDatasetId("stockcn_equity_kline")).toContain("dataset_");
   });
 });

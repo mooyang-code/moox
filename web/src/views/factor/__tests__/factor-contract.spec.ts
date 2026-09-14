@@ -22,15 +22,17 @@ describe("factor management contract", () => {
     expect(factor.lookback_periods).toBe(100);
   });
 
-  it("uses synchronous half-open range recalc", () => {
+  it("accepts async recalc jobs with a request id", () => {
     const request: RecalcFactorReq = {
       space_id: "crypto",
-      source_dataset: "bars",
+      request_id: "recalc-1",
+      source_view_id: "view_binance_kline_1m",
       subject_id: "BTC-USDT",
       freq: "1m",
       start_time: "2026-07-26T00:00:00Z",
       end_time: "2026-07-27T00:00:00Z"
     };
+    expect(request.request_id).toBe("recalc-1");
     expect(new Date(request.start_time).getTime()).toBeLessThan(new Date(request.end_time).getTime());
   });
 

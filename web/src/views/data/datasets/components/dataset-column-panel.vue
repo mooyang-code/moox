@@ -30,6 +30,9 @@
             {{ optionLabel(datasetColumnOriginOptions, record.origin_type) }}
           </template>
         </a-table-column>
+        <a-table-column title="字段归属" :width="110">
+          <template #cell="{ record }">{{ fieldOwnershipLabel(record) }}</template>
+        </a-table-column>
         <a-table-column title="来源ID" data-index="origin_id" :width="180" />
         <a-table-column title="值类型" :width="110">
           <template #cell="{ record }">
@@ -118,6 +121,7 @@ import {
   statusOptions,
   validateChineseDisplayName
 } from "@/views/data/shared/metadata-utils";
+import { fieldOwnershipLabel } from "@/views/data/shared/module-attribution";
 
 defineOptions({ name: "DatasetColumnPanel" });
 

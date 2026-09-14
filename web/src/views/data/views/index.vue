@@ -51,11 +51,14 @@
           <a-table-column title="更新时间" :width="180">
             <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
           </a-table-column>
-          <a-table-column title="操作" :width="120" align="center" :fixed="'right'">
+          <a-table-column title="操作" :width="180" align="center" :fixed="'right'">
             <template #cell="{ record }">
               <a-space>
                 <a-button size="mini" type="text" @click="openColumns(record)">列</a-button>
                 <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
+                <a-popconfirm content="删除该索引不会删除所属数据集，确认继续？" @ok="removeView(record)">
+                  <a-button size="mini" type="text" status="danger">删除</a-button>
+                </a-popconfirm>
               </a-space>
             </template>
           </a-table-column>
@@ -74,7 +77,7 @@
         <a-form-item field="description" label="描述">
           <a-textarea v-model="form.description" :auto-size="{ minRows: 3, maxRows: 5 }" />
         </a-form-item>
-        <a-form-item field="dataset_id" label="数据集" required>
+        <a-form-item v-if="!lockedDatasetId" field="dataset_id" label="数据集" required>
           <a-select v-model="form.dataset_id" allow-search placeholder="选择数据集">
             <a-option v-for="item in selectableDatasets" :key="item.dataset_id" :value="item.dataset_id">
               {{ item.name }} ({{ item.dataset_id }})
@@ -260,6 +263,9 @@ const visibleRows = computed(() =>
   })
 );
 const datasets = ref<Dataset[]>([]);
+const lockedDatasetId = computed(() =>
+  props.allowedPrimaryDatasetIds?.length === 1 ? props.allowedPrimaryDatasetIds[0] : ""
+);
 const selectableDatasets = computed(() =>
   datasets.value.filter(item => {
     const matchedByAllowedId = allowedPrimaryDatasetIdSet.value.size > 0 && allowedPrimaryDatasetIdSet.value.has(item.dataset_id);
@@ -371,12 +377,22 @@ async function listAllViews(spaceId: string) {
   const views: View[] = [];
   const size = 500;
   for (let pageNo = 1; ; pageNo += 1) {
-    const rsp = await listViews({ space_id: spaceId, page: { page: pageNo, size } });
+    const rsp = await listViews({
+      space_id: spaceId,
+      dataset_id: lockedDatasetId.value || undefined,
+      page: { page: pageNo, size }
+    });
     views.push(...(rsp.views || []));
     if (!rsp.page_result?.has_more || (rsp.views || []).length === 0) {
       return views;
     }
   }
+}
+
+async function removeView(record: View) {
+  await updateView({ ...record, status: "deleted" });
+  Message.success("视图已删除");
+  await load();
 }
 
 function viewUsesLikelyFactorDataset(view: View) {
@@ -408,6 +424,9 @@ function resetForm() {
 function openCreate() {
   editing.value = false;
   resetForm();
+  if (lockedDatasetId.value) {
+    form.dataset_id = lockedDatasetId.value;
+  }
   visible.value = true;
 }
 

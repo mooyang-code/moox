@@ -47,7 +47,6 @@ function assertNotVisible(name) {
   assert(!staticMenu.includes(`"${name}", "${name}"`), `${name} must not be a visible static-menu entry`);
 }
 
-const dataAssets = findDirectory("data-assets");
 const dataCollection = findDirectory("compute-collector");
 const factorCompute = findDirectory("factor-compute");
 const trading = findDirectory("trading");
@@ -55,15 +54,15 @@ const ops = findDirectory("ops");
 
 assert(zhCN.includes('["compute-collector"]: "数据采集"'), "compute-collector zh-CN label must be 数据采集");
 assert(zhCN.includes('["factor-definitions"]: "因子定义"'), "factor-definitions zh-CN label must be 因子定义");
-assert(zhCN.includes('["collector-data-management"]: "数据管理"'), "collector-data-management zh-CN label must be 数据管理");
-assert(zhCN.includes('["collector-datasets"]: "数据集合"'), "collector-datasets zh-CN label must be 数据集合");
-assert(zhCN.includes('["collector-views"]: "数据视图"'), "collector-views zh-CN label must be 数据视图");
-assert(zhCN.includes('["factor-results"]: "因子结果"'), "factor-results zh-CN label must be 因子结果");
+assert(zhCN.includes('["collector-data-management"]: "基础数据集"'), "collector-data-management zh-CN label must be 基础数据集");
+assert(zhCN.includes('["data-fields"]: "基础字段"'), "data-fields zh-CN label must be 基础字段");
+assert(zhCN.includes('["factor-datasets"]: "复合因子数据集"'), "factor-datasets zh-CN label must be 复合因子数据集");
+assert(zhCN.includes('["factor-construct"]: "构造配置"'), "factor-construct zh-CN label must be 构造配置");
+assert(zhCN.includes('["factor-tasks"]: "计算任务"'), "factor-tasks zh-CN label must be 计算任务");
 
-assert(dataAssets.parentId === "0", "data-assets must remain a root menu");
-assert(dataAssets.path === "/data/sources", "data-assets default path must be /data/sources");
+assertNotVisible("data-assets");
 assert(dataCollection.parentId === "0", "compute-collector must be a root menu");
-assert(dataCollection.path === "/collector/data-management", "compute-collector default path must be /collector/data-management");
+assert(dataCollection.path === "/data/sources", "compute-collector default path must be /data/sources");
 assert(factorCompute.parentId === "0", "factor-compute must be a root menu");
 assert(factorCompute.sort > dataCollection.sort, "factor-compute must appear after data collection");
 assert(factorCompute.sort < trading.sort, "factor-compute must appear before trading");
@@ -86,7 +85,7 @@ assert(
 assert(staticMenu.includes('svgIcon: "experiment"'), "factor icon must be unique");
 assert(staticMenu.includes('svgIcon: "mind-mapping"'), "strategy icon must be unique");
 assert(!staticMenu.includes('menu("0600", "06", "/ops/service-monitor"'), "legacy service monitor must not remain visible");
-for (const path of [
+for (const retired of [
   "/settings/service-deployments",
   "/data/datasets",
   "/data/factors",
@@ -108,15 +107,17 @@ for (const path of [
   "/ops/ssh-sessions",
   "/ops/storage/archive"
 ]) {
-  assert(!routes.includes(`path: "${path}"`), `retired route ${path} must be absent`);
+  assert(!routes.includes(`path: "${retired}"`), `retired route ${retired} must be absent`);
 }
 
 const dataSources = findMenu("data-sources");
 const dataSubjects = findMenu("data-subjects");
 const dataFields = findMenu("data-fields");
-assert(dataSources.parentId === dataAssets.id, "data-sources must be under data-assets");
-assert(dataSubjects.parentId === dataAssets.id, "data-subjects must be under data-assets");
-assert(dataFields.parentId === dataAssets.id, "data-fields must be under data-assets");
+assert(dataSources.parentId === dataCollection.id, "data-sources must be under data collection");
+assert(dataSubjects.parentId === dataCollection.id, "data-subjects must be under data collection");
+assert(dataFields.parentId === dataCollection.id, "data-fields must be under data collection");
+assert(dataSources.sort < dataSubjects.sort, "data sources must appear before subjects");
+assert(dataSubjects.sort < dataFields.sort, "subjects must appear before base fields");
 
 const collectorDataManagement = findMenu("collector-data-management");
 const collectorRules = findMenu("collector-rules");
@@ -125,17 +126,28 @@ assert(collectorDataManagement.parentId === dataCollection.id, "collector-data-m
 assert(collectorDataManagement.path === "/collector/data-management", "collector-data-management path must be canonical");
 assert(collectorRules.parentId === dataCollection.id, "collector-rules must be under data collection");
 assert(collectorCloudnodes.parentId === dataCollection.id, "collector-cloudnodes must be under data collection");
-assert(collectorDataManagement.sort < collectorRules.sort, "data management must appear before collection rules");
+assert(dataFields.sort < collectorRules.sort, "base fields must appear before collection rules");
+assert(collectorRules.sort < collectorDataManagement.sort, "collection rules must appear before base datasets");
 assert(!staticMenu.includes('menu("0304"'), "task instances must not remain a separate visible menu");
 assert(!staticMenu.includes('menu("0302"'), "code packages must not remain a separate visible menu");
 
 const factorDefinitions = findMenu("factor-definitions");
+const factorDatasets = findMenu("factor-datasets");
+const factorConstruct = findMenu("factor-construct");
 const factorBindings = findMenu("factor-bindings");
-const factorResults = findMenu("factor-results");
+const factorTasks = findMenu("factor-tasks");
 assert(factorDefinitions.parentId === factorCompute.id, "factor-definitions must be under factor compute");
+assert(factorDatasets.parentId === factorCompute.id, "factor-datasets must be under factor compute");
+assert(factorConstruct.parentId === factorCompute.id, "factor-construct must be under factor compute");
 assert(factorBindings.parentId === factorCompute.id, "factor-bindings must be under factor compute");
-assert(factorResults.parentId === factorCompute.id, "factor-results must be under factor compute");
-assert(factorBindings.sort < factorResults.sort, "factor results must appear after factor bindings");
+assert(factorTasks.parentId === factorCompute.id, "factor-tasks must be under factor compute");
+assert(factorDefinitions.sort < factorDatasets.sort, "factor datasets must appear after definitions");
+assert(factorDatasets.sort < factorConstruct.sort, "construct must appear after factor datasets");
+assert(factorConstruct.sort < factorBindings.sort, "bindings must appear after construct");
+assert(factorBindings.sort < factorTasks.sort, "tasks must appear after bindings");
+assert(routes.includes('path: "/factor/datasets"'), "factor datasets route must exist");
+assert(routes.includes('path: "/factor/construct"'), "factor construct route must exist");
+assert(routes.includes('path: "/factor/tasks"'), "factor tasks route must exist");
 
 assertNotVisible("data-modeling");
 assertNotVisible("data-mgmt");
@@ -147,5 +159,6 @@ assertNotVisible("data-view-list");
 assertNotVisible("data-view-browse");
 assertNotVisible("collector-datasets");
 assertNotVisible("collector-views");
+assertNotVisible("factor-results");
 
 console.log("menu structure ok");

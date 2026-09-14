@@ -211,12 +211,26 @@
       <a-alert v-if="activeDataset?.binding_locked" type="info" show-icon>
         当前 Dataset 已锁定 DataNode 绑定。锁定后不支持更换节点，系统不会迁移已有数据。
       </a-alert>
+      <a-alert v-if="defaultViewFailed" type="warning" show-icon>
+        默认索引创建失败，可重试恢复。
+        <a-button size="mini" type="text" @click="retryDefaultView">重试恢复</a-button>
+      </a-alert>
       <a-tabs default-active-key="columns">
         <a-tab-pane key="columns" title="列定义">
           <DatasetColumnPanel :space-id="selectedSpaceId" :dataset-id="activeDataset?.dataset_id || ''" />
         </a-tab-pane>
         <a-tab-pane key="subjects" title="对象绑定">
           <DatasetSubjectPanel :space-id="selectedSpaceId" :dataset-id="activeDataset?.dataset_id || ''" />
+        </a-tab-pane>
+        <a-tab-pane key="indexes" title="索引">
+          <ViewDefinitions
+            v-if="activeDataset"
+            embedded
+            :allowed-primary-dataset-ids="[activeDataset.dataset_id]"
+            :owner-module="props.ownerModule"
+            :view-role="indexViewRole"
+            :managed-by="props.managedBy"
+          />
         </a-tab-pane>
       </a-tabs>
     </a-drawer>
@@ -241,6 +255,8 @@ import type { DataNode, DataSource, Dataset, DatasetActivationCheck, DatasetMuta
 import { useSpaceStore } from "@/store/modules/space";
 import DatasetColumnPanel from "./components/dataset-column-panel.vue";
 import DatasetSubjectPanel from "./components/dataset-subject-panel.vue";
+import ViewDefinitions from "@/views/data/views/index.vue";
+import { ensureDefaultView } from "./default-view";
 import {
   applyPageResult,
   dataKindOptions,
@@ -258,7 +274,8 @@ import {
   datasetMatchesAttribution,
   mergeDatasetAttribution,
   type DatasetRole,
-  type OwnerModule
+  type OwnerModule,
+  type ViewRole
 } from "@/views/data/shared/module-attribution";
 import { RequestGate } from "@/utils/request-gate";
 
@@ -272,6 +289,7 @@ const props = withDefaults(
     filterOwnerModules?: OwnerModule[];
     filterDatasetRoles?: DatasetRole[];
     includeUnowned?: boolean;
+    includeDatasetIdPrefix?: string;
     managedBy?: string;
   }>(),
   {
@@ -281,6 +299,7 @@ const props = withDefaults(
     filterOwnerModules: undefined,
     filterDatasetRoles: undefined,
     includeUnowned: false,
+    includeDatasetIdPrefix: "",
     managedBy: undefined
   }
 );
@@ -293,16 +312,24 @@ const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const rows = ref<Dataset[]>([]);
 const visibleRows = computed(() =>
-  rows.value.filter(item =>
-    datasetMatchesAttribution(item, {
+  rows.value.filter(item => {
+    if (props.includeDatasetIdPrefix && item.dataset_id.startsWith(props.includeDatasetIdPrefix)) {
+      return true;
+    }
+    return datasetMatchesAttribution(item, {
       ownerModules: props.filterOwnerModules,
       datasetRoles: props.filterDatasetRoles,
       includeUnowned: props.includeUnowned
-    })
-  )
+    });
+  })
 );
 const hasAttributionFilter = computed(() =>
-  Boolean(props.filterOwnerModules?.length || props.filterDatasetRoles?.length || props.includeUnowned)
+  Boolean(
+    props.filterOwnerModules?.length ||
+      props.filterDatasetRoles?.length ||
+      props.includeUnowned ||
+      props.includeDatasetIdPrefix
+  )
 );
 const dataSources = ref<DataSource[]>([]);
 const dataNodes = ref<DataNode[]>([]);
@@ -356,6 +383,11 @@ const rebindNodeId = ref("");
 const rebindLoading = ref(false);
 const rebindError = ref("");
 const rebindNodes = computed(() => activeDataNodes.value.filter(item => item.node_id !== rebindDataset.value?.data_node_id));
+const defaultViewFailedIds = ref<string[]>([]);
+const indexViewRole = computed<ViewRole>(() => (props.ownerModule === "factor" ? "analysis" : "collection_browse"));
+const defaultViewFailed = computed(() =>
+  Boolean(activeDataset.value && defaultViewFailedIds.value.includes(activeDataset.value.dataset_id))
+);
 
 function queryValue(value: unknown) {
   return typeof value === "string" ? value : Array.isArray(value) ? String(value[0] || "") : "";
@@ -563,11 +595,49 @@ async function submit() {
     return;
   }
   const payload = buildDatasetPayload(spaceId);
-  if (editing.value) await updateDataset(payload);
-  else await createDataset(payload as Dataset);
-  Message.success("数据集已保存");
+  if (editing.value) {
+    await updateDataset(payload);
+    Message.success("数据集已保存");
+  } else {
+    const created = (await createDataset(payload as Dataset)) || (payload as Dataset);
+    try {
+      await ensureDefaultView(created, {
+        ownerModule: props.ownerModule,
+        viewRole: indexViewRole.value,
+        managedBy: props.managedBy
+      });
+      defaultViewFailedIds.value = defaultViewFailedIds.value.filter(id => id !== created.dataset_id);
+      Message.success("数据集已保存，并已创建默认索引");
+    } catch {
+      markDefaultViewFailed(created.dataset_id);
+      Message.warning("数据集已保存，默认索引创建失败，可在数据集配置中重试");
+    }
+  }
   visible.value = false;
   await load();
+}
+
+function markDefaultViewFailed(datasetId: string) {
+  if (!defaultViewFailedIds.value.includes(datasetId)) {
+    defaultViewFailedIds.value = [...defaultViewFailedIds.value, datasetId];
+  }
+}
+
+async function retryDefaultView() {
+  const dataset = activeDataset.value;
+  if (!dataset) return;
+  try {
+    await ensureDefaultView(dataset, {
+      ownerModule: props.ownerModule,
+      viewRole: indexViewRole.value,
+      managedBy: props.managedBy
+    });
+    defaultViewFailedIds.value = defaultViewFailedIds.value.filter(id => id !== dataset.dataset_id);
+    Message.success("默认索引已恢复");
+  } catch (error) {
+    markDefaultViewFailed(dataset.dataset_id);
+    Message.error(errorMessage(error, "默认索引恢复失败"));
+  }
 }
 
 function replaceRow(dataset: Dataset) {

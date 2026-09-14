@@ -6,7 +6,7 @@
         <h1>从这里开始你的量化数据栈</h1>
         <p>
           MOOX 把行情采集、时序存储、因子计算与宽表查询串成一条链路。
-          先创建一个<strong>空间</strong>，所有数据资产与采集配置都在空间内隔离管理。
+          先创建一个<strong>空间</strong>，所有采集配置与计算资源都在空间内隔离管理。
         </p>
         <a-button type="primary" status="success" size="large" @click="go('/settings/spaces')"> 创建第一个空间 </a-button>
       </div>
@@ -101,7 +101,7 @@
               :key="item.name"
               class="freshness-row"
               :class="`tone-${item.tone}`"
-              @click="go('/collector/data-management?tab=views&viewTab=browse')"
+              @click="go('/collector/data-management?datasetTab=browse')"
             >
               <span>
                 <strong>{{ item.name }}</strong>
@@ -343,9 +343,9 @@ const spaceLoadGate = new RequestGate();
 const pipeline = [
   { key: "sources", stage: "01", label: "数据源", color: "#3b6fd9", path: "/data/sources" },
   { key: "rules", stage: "02", label: "采集规则", color: "#0d9488", path: "/collector/rules" },
-  { key: "datasets", stage: "03", label: "数据集合", color: "#059669", path: "/collector/data-management?tab=datasets" },
+  { key: "datasets", stage: "03", label: "基础数据集", color: "#059669", path: "/collector/data-management" },
   { key: "factors", stage: "04", label: "因子定义", color: "#c026d3", path: "/factor/definitions" },
-  { key: "views", stage: "05", label: "数据视图", color: "#ea580c", path: "/collector/data-management?tab=views" },
+  { key: "views", stage: "05", label: "构造配置", color: "#ea580c", path: "/factor/construct" },
   { key: "accounts", stage: "06", label: "执行账户", color: "#b45309", path: "/trading/accounts" }
 ];
 
@@ -353,14 +353,14 @@ const workflowLinks = [
   {
     title: "K 线浏览",
     description: "检查最新 bar 是否入库",
-    path: "/collector/data-management?tab=views&viewTab=browse",
+    path: "/collector/data-management?datasetTab=browse",
     icon: "K",
     tint: "rgba(59, 111, 217, 12%)"
   },
   {
-    title: "视图查询",
-    description: "查看数据集合生成的视图",
-    path: "/collector/data-management?tab=views&viewTab=browse",
+    title: "索引查询",
+    description: "查看基础数据集上的索引",
+    path: "/collector/data-management",
     icon: "Q",
     tint: "rgba(234, 88, 12, 12%)"
   },
@@ -372,21 +372,21 @@ const workflowLinks = [
     tint: "rgba(13, 148, 136, 12%)"
   },
   {
-    title: "数据集合",
+    title: "基础数据集",
     description: "定义采集写入的数据契约",
-    path: "/collector/data-management?tab=datasets",
+    path: "/collector/data-management",
     icon: "D",
     tint: "rgba(5, 150, 105, 12%)"
   },
-  { title: "因子结果", description: "查看因子计算写回结果", path: "/factor/results", icon: "F", tint: "rgba(192, 38, 211, 12%)" },
+  { title: "因子结果", description: "查看因子计算写回结果", path: "/factor/datasets", icon: "F", tint: "rgba(192, 38, 211, 12%)" },
   { title: "执行账户", description: "账户余额与下单通道", path: "/trading/accounts", icon: "A", tint: "rgba(180, 83, 9, 12%)" }
 ];
 
 const setupSteps = [
-  { title: "创建空间", description: "空间是数据资产、采集与交易的隔离边界，管理台所有请求都带空间上下文。" },
-  { title: "登记数据资产", description: "配置数据源、数据对象、字段，再到数据采集里定义数据集合与视图。" },
+  { title: "创建空间", description: "空间是采集、计算与交易的隔离边界，管理台所有请求都带空间上下文。" },
+  { title: "登记基础数据", description: "在数据采集中配置数据源、采集对象、基础字段和基础数据集。" },
   { title: "启动采集链路", description: "collector 按规则展开任务，经 cloudnode 下发到云节点执行写入。" },
-  { title: "查询与因子", description: "用数据视图浏览 K 线；因子模块自动写回独立结果数据集合。" }
+  { title: "查询与因子", description: "用数据集索引浏览 K 线；因子输出写回同一复合数据集。" }
 ];
 
 const nodesTotal = ref<number | null>(null);
@@ -405,7 +405,7 @@ const healthBreakdown = computed(() => [
   { key: "collector", label: "采集任务健康", score: 16, max: 20, tone: "warn", note: "7 个任务需要处理" },
   { key: "nodes", label: "云节点登记", score: 15, max: 15, tone: "ok", note: "已登记云函数节点" },
   { key: "services", label: "服务部署健康", score: 14, max: 15, tone: "ok", note: "核心服务已启用" },
-  { key: "assets", label: "数据资产完整度", score: 8, max: 10, tone: "ok", note: "Dataset / View 已配置" },
+  { key: "assets", label: "基础数据完整度", score: 8, max: 10, tone: "ok", note: "Dataset / View 已配置" },
   { key: "trade", label: "执行账户状态", score: 8, max: 10, tone: "ok", note: "5 / 6 账户可用" }
 ]);
 
@@ -434,7 +434,7 @@ const dashboardKpis = computed(() => [
     note: "最新 K 线延迟",
     delta: "APT-USDT",
     tone: "ok",
-    path: "/collector/data-management?tab=views&viewTab=browse"
+    path: "/collector/data-management?datasetTab=browse"
   },
   {
     key: "tasks",
@@ -491,7 +491,7 @@ const incidentItems = [
     title: "factor.momentum 今日未刷新",
     meta: "因子结果延迟 48m",
     action: "打开结果",
-    path: "/factor/results",
+    path: "/factor/datasets",
     tone: "danger"
   },
   {
