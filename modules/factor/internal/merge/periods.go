@@ -152,23 +152,27 @@ func (l *PeriodLedger) NoteCommit(ctx context.Context, key PeriodKey, subjectID 
 		return fmt.Errorf("subject_id is required")
 	}
 	period, err := l.loadPeriod(ctx, key)
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil
-		}
+	if err != nil && err != gorm.ErrRecordNotFound {
 		return err
 	}
-	if period.Status != "waiting" {
+	if err == nil && period.Status != "waiting" {
 		return nil
 	}
 	now := time.Now().UTC()
-	return l.store.db.WithContext(ctx).Model(&periodSubjectRow{}).Where(
-		"c_dataset_id = ? AND c_snapshot_id = ? AND c_frequency = ? AND c_period_time = ? AND c_subject_id = ? AND c_state = ?",
-		key.DatasetID, key.SnapshotID, key.Frequency, key.PeriodTime.UTC(), subjectID, "pending",
-	).Updates(map[string]any{
-		"c_state": "success", "c_commit_id": receipt.CommitID, "c_node_id": receipt.NodeID,
-		"c_store_id": receipt.StoreID, "c_sequence": receipt.Sequence, "c_mtime": now,
-	}).Error
+	row := periodSubjectRow{
+		DatasetID: key.DatasetID, SnapshotID: key.SnapshotID, Frequency: key.Frequency, PeriodTime: key.PeriodTime.UTC(),
+		SubjectID: subjectID, State: "success", CommitID: receipt.CommitID, NodeID: receipt.NodeID,
+		StoreID: receipt.StoreID, Sequence: receipt.Sequence, ModifiedAt: now,
+	}
+	return l.store.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "c_dataset_id"}, {Name: "c_snapshot_id"}, {Name: "c_frequency"},
+			{Name: "c_period_time"}, {Name: "c_subject_id"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"c_state", "c_commit_id", "c_node_id", "c_store_id", "c_sequence", "c_mtime",
+		}),
+	}).Create(&row).Error
 }
 
 func (l *PeriodLedger) NoteCollectorCompleted(ctx context.Context, datasetID, sourceDatasetID string, periodTime time.Time, expected []string) error {

@@ -9,6 +9,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMergeAssemblerKeepsCommitReceiptsArrivingBeforeCollectorFreeze(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(Options{Path: dir + "/merge.db"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	commits := &commitRecorder{}
+	assembler, err := NewAssembler(store, spotSwapDefinition(domain.MergeModeSystem), commits)
+	require.NoError(t, err)
+	reports := &reportRecorder{}
+	ledger, err := NewPeriodLedger(store, reports)
+	require.NoError(t, err)
+	assembler.SetPeriodLedger(ledger)
+	period := time.Date(2026, 9, 13, 16, 0, 0, 0, time.UTC)
+	key := mergeKey("BTC-USDT", period)
+	require.NoError(t, assembler.ApplyArrival(context.Background(), key, "dataset_binance_spot_kline_1m", completeKlineFields("spot")))
+	require.NoError(t, assembler.ApplyArrival(context.Background(), key, "dataset_binance_swap_kline_1m", completeKlineFields("swap")))
+	require.Equal(t, []string{stableCommitID(key)}, commits.ids)
+	require.NoError(t, assembler.NoteCollectorCompleted(context.Background(), "dataset_binance_spot_kline_1m", period, []string{"BTC-USDT"}))
+	require.NoError(t, assembler.NoteCollectorCompleted(context.Background(), "dataset_binance_swap_kline_1m", period, []string{"BTC-USDT"}))
+	periodKey := PeriodKey{DatasetID: key.DatasetID, SnapshotID: key.SnapshotID, Frequency: key.Frequency, PeriodTime: period}
+	require.NoError(t, ledger.Finalize(context.Background(), periodKey, period.Add(3*time.Minute)))
+	require.Len(t, reports.markers, 1)
+	require.Equal(t, "complete", reports.markers[0].Status)
+	require.Equal(t, []string{"BTC-USDT"}, reports.markers[0].ExpectedSubjectIDs)
+	require.Empty(t, reports.markers[0].FailedSubjects)
+	require.Equal(t, []WriteReceipt{{
+		CommitID: stableCommitID(key), NodeID: "test-node", StoreID: "test-store", Sequence: 1,
+	}}, reports.markers[0].Positions)
+}
+
 func TestMergeAssemblerFreezesFromCollectorUniverseAfterPeriodEnd(t *testing.T) {
 	assembler, commits := openAssembler(t, domain.MergeModeSystem)
 	ledger, reports := openPeriodLedger(t)

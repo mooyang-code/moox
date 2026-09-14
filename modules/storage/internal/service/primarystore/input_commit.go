@@ -32,9 +32,6 @@ func (s *Service) CommitInput(ctx context.Context, req *pb.PrimaryCommitInputReq
 	}
 	rows := normalizeStockCNSeriesTags([]*pb.RowFieldUpsert{req.GetRow()})
 	ctx = s.requestContext(ctx)
-	if err := validateDatasetWriteOwner(ctx, req.GetAuthInfo(), rows); err != nil {
-		return &pb.PrimaryCommitInputRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	if err := validateRow(ctx, rows[0], s.validate); err != nil {
 		return &pb.PrimaryCommitInputRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}

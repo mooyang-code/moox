@@ -36,6 +36,29 @@ func TestWriteFactorPatchUsesAuthorizedPatchRPC(t *testing.T) {
 	require.EqualValues(t, 1, write.Receipts[0].Sequence)
 }
 
+func TestWriteFactorPatchMultiRowCommitIDHasNoSlash(t *testing.T) {
+	access := &fakeAccessClient{}
+	client := (&Client{access: access}).WithOutputManifests(&memoryManifest{})
+	at := time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC)
+	_, err := client.WriteFactorReceipts(context.Background(), &engine.FactorTask{
+		TaskID: "task-panel", BindingID: "binding-1", BindingGeneration: "gen-1",
+		SpaceID: "crypto", ResultDatasetID: "mdataset_binance_kline_1m",
+		SubjectID: "BTC-USDT", Freq: "1m", PeriodTime: at.Unix(),
+		Factor: engine.FactorSpec{FactorID: "bias5", SourceHash: "hash", Outputs: []string{"value"}},
+	}, &engine.FactorResult{Rows: []engine.FactorResultRow{
+		{DataTime: at, SeriesTag: "venue:binance", Values: map[string]any{"value": 1.0}},
+		{DataTime: at, SeriesTag: "venue:okx", Values: map[string]any{"value": 2.0}},
+	}})
+	require.NoError(t, err)
+	require.Len(t, access.patchReqs, 2)
+	for _, req := range access.patchReqs {
+		require.NotEmpty(t, req.GetCommitId())
+		require.NotContains(t, req.GetCommitId(), "/")
+		require.NotContains(t, req.GetCommitId(), "\x00")
+	}
+	require.NotEqual(t, access.patchReqs[0].GetCommitId(), access.patchReqs[1].GetCommitId())
+}
+
 func TestWriteFactorPatchWritesSeriesTagAndAttributes(t *testing.T) {
 	access := &fakeAccessClient{}
 	client := &Client{access: access}

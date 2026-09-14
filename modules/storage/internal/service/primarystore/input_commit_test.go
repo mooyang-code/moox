@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -131,6 +132,39 @@ func TestInputCommitAuthorizedMergeAndFactorDoNotClobber(t *testing.T) {
 	}
 	if !got.GetRows()[0].GetAttributes()["moox.input_ready"].GetBoolValue() {
 		t.Fatal("factor patch cleared input_ready")
+	}
+}
+
+func TestCommitInputAllowsMergeOnFactorResultDataset(t *testing.T) {
+	node, err := datanode.NewService(datanode.Options{NodeID: "node-a", AuthSecret: "node-secret", Pebble: pebble.Options{NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = node.Close() })
+	svc, err := New(Options{
+		Node: node,
+		Snapshot: func() metadata.RequestSnapshot {
+			return factorResultSnapshot{}
+		},
+		AuthSigner: func(auth *pb.AuthInfo) (*pb.AuthInfo, error) {
+			return &pb.AuthInfo{AppId: auth.GetAppId(), AppKey: datanode.ServiceAuthKey("node-secret", auth.GetAppId())}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := inputCommitRow("BTC-USDT", map[string]float64{"close": 4})
+	commit, err := svc.CommitInput(context.Background(), &pb.PrimaryCommitInputReq{
+		AuthInfo: &pb.AuthInfo{AppId: "moox-merge"}, CommitId: "commit-mdataset", RequiredFields: []string{"close"}, Row: row,
+	})
+	if err != nil || commit.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || commit.GetReceipt().GetPosition().GetSequence() == 0 {
+		t.Fatalf("merge commit on factor_result dataset rsp=%v err=%v", commit, err)
+	}
+	denied, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "moox-merge"}, Rows: []*pb.RowFieldUpsert{row},
+	})
+	if err != nil || denied.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
+		t.Fatalf("merge generic upsert must stay denied rsp=%v err=%v", denied, err)
 	}
 }
 

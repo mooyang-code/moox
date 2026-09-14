@@ -378,7 +378,7 @@ func (c *Client) writeRows(ctx context.Context, commitID string, rows []*storage
 		}
 		rowCommitID := commitID
 		if len(rows) > 1 {
-			rowCommitID = fmt.Sprintf("%s/%d", commitID, index)
+			rowCommitID = fmt.Sprintf("%s-%d", commitID, index)
 		}
 		rsp, err := c.access.PatchFactor(ctx, &storagepb.PrimaryPatchFactorReq{
 			AuthInfo: c.auth, CommitId: rowCommitID, BindingVersion: bindingVersion,
