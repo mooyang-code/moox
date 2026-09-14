@@ -13,9 +13,11 @@ View, and concrete factor output columns; enabling a Runner re-verifies those
 identifiers without selecting replacements. It is not a persisted period-input
 snapshot and does not make the mutable Storage index replayable.
 
-`ViewFactorPeriodReady` is the runtime trigger. The event identifies a
-completed Factor result View period, carries per-binding terminal states, and
-includes the source/result active-index IDs used for that computation.
+`ViewDataReady` associated with `FactorPeriodComputed` is the runtime trigger.
+The event identifies a completed Factor result View period, carries per-binding
+terminal states, and includes the dataset / visible scope used for that computation.
+Input `ViewDataReady` associated with `MergePeriodCompleted` must not run
+factor-backed strategies.
 Strategy evaluates a Runner only when every binding referenced by that Runner
 is complete; an unrelated degraded binding in the same View does not block it.
 The compiler requires all factor outputs to share one Result View. The Storage

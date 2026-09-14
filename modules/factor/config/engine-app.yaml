@@ -1,4 +1,4 @@
-# Incremental subject/time-series engine; cache and cross/barrier are not wired.
+# Timeseries consumes DatasetRowsUpserted; cross-section consumes MergePeriodCompleted ViewDataReady.
 engine_id: factor-engine-1
 database:
   type: sqlite

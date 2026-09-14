@@ -79,6 +79,15 @@ func LoadProcessConfig(path string) (ProcessConfig, error) {
 	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID")); v != "" {
 		cfg.Storage.GatewayNodeID = v
 	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_RPC_KEY_ID")); v != "" {
+		cfg.Storage.KeyID = v
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_RPC_HMAC_KEY_FILE")); v != "" {
+		cfg.Storage.HMACKeyFile = v
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE")); v != "" {
+		cfg.EventBus.CredentialFile = v
+	}
 	if v, ok := os.LookupEnv("MOOX_EVENTBUS_NATS_URL"); ok && strings.TrimSpace(v) != "" {
 		cfg.EventBus.URLs = strings.Split(v, ",")
 	}

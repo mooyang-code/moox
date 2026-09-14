@@ -96,7 +96,7 @@ active 索引不会被删除。NATS 删除 consumer 需要 EventBus internal-adm
 
 ### Factor 队列积压清理
 
-当 Factor 因历史 `ViewSourcePeriodReady` 事件积压而长期重算旧周期时，可在部署根目录执行：
+当 Factor 因历史 `ViewDataReady` 或 `DatasetRowsUpserted` 事件积压而长期重算旧周期时，可在部署根目录执行：
 
 ```bash
 moox-cli factor clear-queue \

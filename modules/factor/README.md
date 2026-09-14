@@ -1,10 +1,13 @@
 # MooX Factor
 
-`moox-factor` 是外网控制面：因子定义、绑定、目录快照与 FactorMgr。
-`moox-factor-engine` 是内网计算引擎：消费 `ViewSourceSubjectReady`、运行 Python worker、写回因子结果。
-控制面不启动 Python 计算依赖；引擎通过 NATS request-reply 拉取版本化目录。
+`moox-factor` 是外网控制面：因子定义、绑定、mdataset 构造配置、目录快照与 FactorMgr。
+`moox-factor-merge` 消费基础 Dataset 行，把完整输入提交到复合 mdataset。
+`moox-factor-engine` 在计算节点运行 Python worker：时序消费 `DatasetRowsUpserted`
+（`write_kind=input_commit` 且 `input_ready`），截面消费关联 `MergePeriodCompleted`
+的 `ViewDataReady`，再把绑定拥有的因子列写回同一 mdataset。
+控制面不启动 Python 计算依赖，也不启动实时消费者；引擎通过 NATS request-reply 拉取版本化目录。
 
-实时计算走标的就绪事件，不在控制面进程内执行。缓存与截面调度尚未接入生产配置，
+实时计算不在控制面进程内执行。缓存是可丢弃的本机优化，计算正确性不依赖缓存；
 引擎示例将 `cache.enabled` 保持为 `false`。
 
 ## Build And Run
@@ -12,9 +15,12 @@
 ```bash
 ./scripts/build/build.sh factor
 ./scripts/build/build.sh factor-engine
+./scripts/build/build.sh factor-merge
 
-# 服务端启动方式保持不变
+# 控制面、Merge、引擎分别启动，互不连带旧单体消费者
 ./bin/moox-factor
+./bin/moox-factor-merge
+./bin/moox-factor-engine
 
 ./bin/moox-factor-cli init --db ./data/factor/factor.db
 ./bin/moox-factor-cli import \
@@ -43,7 +49,7 @@
   --start-time 2026-07-26T00:00:00Z \
   --end-time 2026-07-27T00:00:00Z
 
-# 清理引擎 durable 积压（默认 factor_source_subject，重启内网 factor-engine）
+# 清理引擎 durable 积压（默认 factor_view_ready_v1；时序队列为 factor_dataset_rows_v1）
 ./bin/moox-factor-cli clear-queue \
   --package-root /data/moox/factor-engine \
   --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
@@ -120,8 +126,8 @@ that column and metadata validation succeeds.
   计算。
 - 手动补算使用 `[start_time, end_time)`；超过 2000 个目标 period 时自动分 chunk，
   不会拆开同一时间点的 tag cohort。
-- `run-once` 和 `RecalcFactor` 都只执行适用于当前 source、freq、subject 的 enabled binding，
-  并按 binding 的 `target_dataset` 分组写回。
+- `run-once` 执行适用于当前 source、freq、subject 的 enabled binding，并按 binding
+  的结果 Dataset 分组写回。控制面 `RecalcFactor` 只受理异步 job，由引擎执行。
 - Python 输出可以产生与输入不同的 tag，例如 `venue_pair:binance-okx`；数值只能是
   有限数值或 `null`。
 - `null` 会显式清除对应单元格的旧值，不影响同一行的其他因子列。
@@ -137,12 +143,11 @@ that column and metadata validation succeeds.
 
 系统中注册的每个 Factor 都必须是独立、无外部因子依赖的计算单元：
 
-- Factor 只能读取当前 binding 的 Source View 中由 `input_columns` 声明的原始字段；
-- Factor 不能引用、动态加载或等待另一个已注册 Factor，也不能读取其他 Factor 的结果
-  Dataset；
+- Factor 只能读取当前 binding 所属 mdataset 中由 `input_columns` 声明的字段；
+- Factor 不能引用、动态加载或等待另一个已注册 Factor，也不能覆盖其他绑定的输出列；
 - Factor 服务不解析因子之间的依赖关系，不提供 Factor DAG、拓扑调度、中间结果复用或
   跨因子版本协调；
-- 同一批次中的多个 Factor 只是共享一次 Source View 读取和 Python 调用，计算、校验与
+- 同一批次中的多个 Factor 只是共享一次 mdataset 读取和 Python 调用，计算、校验与
   写回仍彼此独立，不存在执行先后关系。
 
 需要 MA、RSI 等基础算法的复合因子，应由业务在自己的 `compute(df, params, context)` 中展开完整
@@ -183,10 +188,12 @@ def compute(df, params, context):
     })
 ```
 
-实时 Consumer 只消费 Storage View 发出的 `ViewSourcePeriodReady`，在本周期计算和
-结果 marker 提交后才 ACK。事件本身是周期完成通知，Factor 不再等待额外的 settle
-窗口或重复读取。进程在执行中断时由 durable consumer 重投；个人项目不追求跨服务
-exactly-once，缺口可用 `run-once` 或同步 `RecalcFactor` 修复。
+时序 Consumer 只消费 Storage 发布的 `DatasetRowsUpserted`：`write_kind=input_commit`
+且行已 `input_ready`。`factor_patch` 写回不得再次触发时序。截面 Consumer 只消费
+关联 `MergePeriodCompleted` 的 `ViewDataReady`；关联 `FactorPeriodComputed` 的结果
+Ready 不得再开新截面。策略只在因子结果 View 可读时消费 `ViewDataReady`。
+进程在执行中断时由 durable consumer 重投；缺口用 `run-once` 或控制面受理、引擎异步
+执行的 Recalc 修复，补算完成不发布直播 `FactorPeriodComputed`。
 
 常驻服务把 View 读取与 Python 计算拆成两个独立的有界并发阶段：
 

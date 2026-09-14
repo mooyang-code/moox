@@ -623,4 +623,45 @@ pnpm run build:prod
 
 ### 提交
 
+`76b7d77e`
+
+## 任务 18：清理、端到端与交付
+
+状态：**代码与定向/契约测试已完成**。独立 codeCR、本机引擎正式发布、真实新周期 E2E 尚未验收。
+
+### 红灯证据
+
+`modules/factor` 中 `TestDatasetPipeline/independent_programs_and_docs` 最初失败于 README 仍包含 `ViewSourceSubjectReady`，且未记录 `moox-factor-merge`。失败来自目标行为缺失，不是编译环境缺失。
+
+### 实现
+
+- 新增 `TestDatasetPipeline`：两来源两对象 Merge、超时 degraded、杀进程恢复、缓存满暂停写入、View 重建不挡时序、时序/截面/策略不回环
+- 清理当前运行时文档与配置中的旧事件名；独立构建 control / engine / merge
+- 新增 `moox-factor-merge` 打包与启停脚本，部署包不含凭证和 Python
+- Merge 配置读取运行时环境变量（DB、Storage gateway、EventBus、HMAC）
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/... -run 'TestDatasetPipeline' -count=1
+env CGO_ENABLED=1 go test -race ./internal/merge ./internal/integration -count=3
+bash scripts/test/contract/test-build-factor-engine.sh
+bash scripts/test/contract/test-build-factor-merge.sh
+bash scripts/test/contract/test-deploy-moox-factor-merge.sh
+./scripts/build/build.sh factor-engine
+./scripts/build/build.sh factor-merge
+./scripts/build/build.sh factor
+```
+
+上述命令均 PASS。`go test -race ./internal/store -count=3` 仍会因 `openTestDB` 内存库 `c_name` UNIQUE 冲突失败，属既有问题，不计入本任务回归。
+
+### 尚未解决的依赖
+
+- 因子写回仍走 `UpsertFields`，尚未统一 `PatchFactor`
+- 独立 codeCR、本机引擎/Merge 正式发布、真实新周期 E2E 尚未执行
+- 全超时且无行写入时 Merge `committed_positions` 可能为空
+- 生产 mdataset `object_set` 仍需控制面提供，否则 Freeze 不会自动发生
+
+### 提交
+
 （本提交）

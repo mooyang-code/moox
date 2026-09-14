@@ -70,6 +70,9 @@ case "${linux_cgo_target}" in
   factor-engine)
     linux_cgo_binaries=(moox-factor-engine)
     ;;
+  factor-merge)
+    linux_cgo_binaries=(moox-factor-merge)
+    ;;
   *)
     die "unsupported linux CGO build target: ${linux_cgo_target}"
     ;;

@@ -36,7 +36,7 @@ crypto 行情 View 至少有：`view_crypto_spot_kline_1m`、`view_crypto_swap_k
 - 把 EventBus token、HMAC、`internal-admin.yaml` 打进命令行、日志或聊天
 - 用 `--reset-view-indexes` / `force-rebuild-view` 当常规追平
 - 只重启 View 就宣布 kline 已追平（InProgress 心跳僵尸重启后仍可能立刻再占满 ACK 窗口）
-- 给重建补发 `ViewSourceSubjectReady` 或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）
+- 给重建补发行级就绪事件或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。时序只消费 mdataset 的 `DatasetRowsUpserted`，重建窗口漏掉的标的靠之后的 live 输入提交或显式 Recalc
 
 ## Storage View：kline 分区挂死
 
