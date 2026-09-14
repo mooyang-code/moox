@@ -544,4 +544,40 @@ go test ./... -count=1   # modules/strategy
 
 ### 提交
 
+`82125c77`
+
+## 任务 16：补算、启停与状态接口
+
+状态：**已完成（代码与定向/回归测试）**。部署、真实新周期 E2E、codeCR 仍属任务 18。
+
+### 红灯证据
+
+`TestRecalcTask` 最初失败于控制面 `RecalcFactor` 仍尝试本机计算（`recalc queue is not implemented` / 同步 `taskRunner.Run`）。失败来自目标行为缺失。
+
+### 实现
+
+- 控制面只 `Accept` 异步补算任务，返回 `job_id`/`status`；取消与查询走 `CancelRecalcJob`/`GetRecalcJob`
+- 任务身份包含 Dataset、对象、周期范围、绑定快照与 request_id；重复请求幂等；取消不会变成成功
+- 绑定停用后旧 generation 不能写入新输出；引擎离线时控制面仍受理
+- 状态区分 `missing_input` / `algorithm_failure` / `view_waiting`
+- 引擎经内部 NATS 认领并执行独立 `recalc` 批次，不发布 `FactorPeriodComputed`；心跳写入 desired/applied
+- CLI 增加 `recalc` / `recalc-cancel` / `recalc-status`，不在控制面启动 Python
+
+### 验证命令与结果
+
+```text
+env CGO_ENABLED=1 go test ./internal/... -run 'TestRecalcTask' -count=1
+env CGO_ENABLED=1 go test ./internal/trigger ./internal/rpc ./internal/bootstrap ./internal/store ./schema ./cmd/cli -count=1
+env CGO_ENABLED=1 go test -race ./internal/trigger ./internal/bootstrap -count=3
+env CGO_ENABLED=1 go build ./cmd/server ./cmd/engine ./cmd/cli ./cmd/merge
+```
+
+上述命令均 PASS。
+
+### 尚未解决的依赖
+
+- 因子写回仍走 `UpsertFields`；前端导航与正式发布属于 17—18
+
+### 提交
+
 （本提交）

@@ -231,3 +231,37 @@ CREATE TABLE IF NOT EXISTS t_factor_period_gc (
 );
 
 INSERT OR IGNORE INTO t_factor_period_gc (c_id) VALUES (1);
+
+CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
+    c_job_id TEXT NOT NULL PRIMARY KEY,
+    c_request_id TEXT NOT NULL,
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL DEFAULT '',
+    c_source_view_id TEXT NOT NULL,
+    c_subject_id TEXT NOT NULL,
+    c_freq TEXT NOT NULL,
+    c_factor_id TEXT NOT NULL DEFAULT '',
+    c_binding_id TEXT NOT NULL DEFAULT '',
+    c_binding_generation TEXT NOT NULL DEFAULT '',
+    c_start_time INTEGER NOT NULL,
+    c_end_time INTEGER NOT NULL,
+    c_status TEXT NOT NULL,
+    c_failure_class TEXT NOT NULL DEFAULT '',
+    c_error TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (c_request_id),
+    CHECK (c_status IN ('accepted', 'running', 'succeeded', 'failed', 'cancelled')),
+    CHECK (c_failure_class IN ('', 'missing_input', 'algorithm_failure', 'view_waiting'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_factor_recalc_jobs_status
+ON t_factor_recalc_jobs (c_status, c_mtime);
+
+CREATE TABLE IF NOT EXISTS t_factor_engine_status (
+    c_engine_id TEXT NOT NULL PRIMARY KEY,
+    c_desired_revision INTEGER NOT NULL DEFAULT 0,
+    c_applied_revision INTEGER NOT NULL DEFAULT 0,
+    c_last_seen DATETIME,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

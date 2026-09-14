@@ -26,6 +26,7 @@ type EngineRuntime struct {
 	cancel         context.CancelFunc
 	stopSubject    func() error
 	stopView       func() error
+	stopRecalc     func() error
 	stopCatalog    func() error
 	closeResources func() error
 	once           sync.Once
@@ -101,6 +102,11 @@ func InitializeEngine(ctx context.Context, s *server.Server, cfg *EngineApplicat
 	if viewConsumer != nil {
 		r.viewConsumer, r.stopView = viewConsumer, viewConsumer.Close
 	}
+	executor := trigger.NewLocalRecalcExecutor(resources.Store.Bindings(), resources.Store.Factors(), resources.Runner, cfg.Engine.FactorsDir, resources.OperationGate)
+	r.stopRecalc, err = StartEngineRecalc(resources.Context(), cfg, resources.Store, executor)
+	if err != nil {
+		return nil, err
+	}
 	r.Health = health.New("factor-engine", cfg.EngineID, "", "")
 	r.Health.SnapshotFunc = r.snapshot
 	if err = health.Register(s.Service(engineHealthService), r.Health); err != nil {
@@ -139,6 +145,9 @@ func (r *EngineRuntime) Close() error {
 		}
 		if r.stopView != nil {
 			r.err = errors.Join(r.err, r.stopView())
+		}
+		if r.stopRecalc != nil {
+			r.err = errors.Join(r.err, r.stopRecalc())
 		}
 		if r.stopCatalog != nil {
 			r.err = errors.Join(r.err, r.stopCatalog())

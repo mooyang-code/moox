@@ -6,17 +6,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/report"
-	publicstoragepb "github.com/mooyang-code/moox/packages/storagepb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorReq) (*factorpb.RecalcFactorRsp, error) {
@@ -52,141 +49,103 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 	if requestID == "" {
 		return &factorpb.RecalcFactorRsp{RetInfo: invalid(fmt.Errorf("request_id is required"))}, nil
 	}
-	if s.viewReadyExecutor != nil {
-		// Recalc is a result-period operation, not a best-effort fire-and-forget
-		// call. Validate the requested binding before entering the shared
-		// executor so a typo cannot return SUCCESS without writing a marker.
-		executable, listErr := s.bindings.ListExecutable(ctx)
-		if listErr != nil {
-			return &factorpb.RecalcFactorRsp{RetInfo: inner(listErr)}, nil
-		}
-		matching := 0
-		for _, binding := range executable {
-			if binding.SpaceID != req.GetSpaceId() || binding.SourceViewID != sourceViewID || binding.Freq != req.GetFreq() || !domain.BindingAllowsSubject(binding, req.GetSubjectId()) {
-				continue
-			}
-			if req.GetFactorId() == "" || binding.FactorID == req.GetFactorId() {
-				matching++
-			}
-		}
-		if matching == 0 {
-			return &factorpb.RecalcFactorRsp{RetInfo: invalid(fmt.Errorf("no executable factor binding for source_view_id=%s freq=%s subject_id=%s", sourceViewID, req.GetFreq(), req.GetSubjectId()))}, nil
-		}
-		if req.GetSyncRequestId() != "" {
-			if s.meta == nil || s.viewSyncWaiter == nil {
-				return &factorpb.RecalcFactorRsp{RetInfo: inner(fmt.Errorf("View sync-point waiter is not configured"))}, nil
-			}
-			datasetIDs, resolveErr := s.meta.SourceViewDatasetIDs(ctx, req.GetSpaceId(), sourceViewID)
-			if resolveErr != nil {
-				return &factorpb.RecalcFactorRsp{RetInfo: inner(resolveErr)}, nil
-			}
-			if waitErr := s.viewSyncWaiter.WaitViewSyncPoint(ctx, req.GetSpaceId(), sourceViewID, req.GetSyncRequestId(), datasetIDs); waitErr != nil {
-				return &factorpb.RecalcFactorRsp{RetInfo: inner(waitErr)}, nil
-			}
-		}
-		if _, parseErr := domain.ParseFrequency(req.GetFreq()); parseErr != nil {
-			return &factorpb.RecalcFactorRsp{RetInfo: invalid(parseErr)}, nil
-		}
-		var releaseOperation func()
-		var gatedExecutor viewReadyExecutorWithGate
-		if s.operationGate != nil {
-			gatedExecutor, _ = s.viewReadyExecutor.(viewReadyExecutorWithGate)
-			if gatedExecutor != nil {
-				releaseOperation, err = s.operationGate.AcquireContext(ctx)
-				if err != nil {
-					return &factorpb.RecalcFactorRsp{RetInfo: inner(err)}, nil
-				}
-				defer releaseOperation()
-			}
-		}
-		if s.meta == nil {
-			return &factorpb.RecalcFactorRsp{RetInfo: inner(fmt.Errorf("View metadata is required for recalc provenance"))}, nil
-		}
-		for period := start; period.Before(end); {
-			triggerEventID := recalcTriggerEventID(requestID, req, period)
-			ready := &publicstoragepb.ViewDataReady{
-				ViewId: sourceViewID, ViewConfigId: sourceViewID, CompletionEventId: triggerEventID,
-				CompletionKind: events.MergePeriodCompleted.Name(),
-				DatasetId:      sourceViewID, Status: "complete", VisibleScope: "subject:" + req.GetSubjectId(),
-				Frequency: req.GetFreq(), PeriodTime: period.Unix(),
-				CommittedPositions: []*publicstoragepb.CommittedPosition{{NodeId: "recalc", StoreId: "recalc", Sequence: 1}},
-				ReadyAt:            timestamppb.New(period.UTC()),
-			}
-			if _, indexErr := s.meta.SourceViewActiveIndexID(ctx, req.GetSpaceId(), sourceViewID); indexErr != nil {
-				return &factorpb.RecalcFactorRsp{RetInfo: inner(fmt.Errorf("resolve source View active index: %w", indexErr))}, nil
-			}
-			// A Result View is the complete output of its Source View. The
-			// executor validates the requested factor under the operation gate,
-			// then recalculates the whole group for a coherent result snapshot.
-			var executeErr error
-			if gatedExecutor != nil {
-				// A Result View is an atomic factor group. A factor-specific
-				// request selects and validates the requested binding above, but
-				// execution must still refresh every sibling binding so the output
-				// snapshot cannot mix generations.
-				executeErr = gatedExecutor.ExecuteSelectedWithGate(ctx, req.GetSpaceId(), triggerEventID, "", ready)
-			} else {
-				executeErr = s.viewReadyExecutor.ExecuteSelected(ctx, req.GetSpaceId(), triggerEventID, "", ready)
-			}
-			if executeErr != nil {
-				return &factorpb.RecalcFactorRsp{RetInfo: inner(executeErr)}, nil
-			}
-			if req.GetFactorId() != "" {
-				stillEnabled, checkErr := s.hasRecalcBinding(ctx, req.GetSpaceId(), sourceViewID, req.GetFreq(), req.GetSubjectId(), req.GetFactorId())
-				if checkErr != nil {
-					return &factorpb.RecalcFactorRsp{RetInfo: inner(checkErr)}, nil
-				}
-				if !stillEnabled {
-					return &factorpb.RecalcFactorRsp{RetInfo: conflict(fmt.Errorf("factor binding %s was disabled during recalc", req.GetFactorId()))}, nil
-				}
-			}
-			next, nextErr := domain.NextPeriod(period, req.GetFreq())
-			if nextErr != nil {
-				return &factorpb.RecalcFactorRsp{RetInfo: invalid(nextErr)}, nil
-			}
-			period = next
-		}
-		return &factorpb.RecalcFactorRsp{RetInfo: success()}, nil
+	executable, listErr := s.bindings.ListExecutable(ctx)
+	if listErr != nil {
+		return &factorpb.RecalcFactorRsp{RetInfo: inner(listErr)}, nil
 	}
-	if s.taskRunner == nil {
-		return &factorpb.RecalcFactorRsp{RetInfo: inner(fmt.Errorf("recalc task runner is not configured"))}, nil
+	matches := make([]domain.FactorBinding, 0, 1)
+	for index := range executable {
+		binding := executable[index]
+		if binding.SpaceID != req.GetSpaceId() || binding.Freq != req.GetFreq() || !domain.BindingAllowsSubject(binding, req.GetSubjectId()) {
+			continue
+		}
+		source := firstNonEmptyRPC(binding.SourceViewID, binding.SourceDataset)
+		if source != sourceViewID && source != req.GetSourceDataset() {
+			continue
+		}
+		if req.GetFactorId() != "" && binding.FactorID != req.GetFactorId() {
+			continue
+		}
+		matches = append(matches, binding)
 	}
-	groups, err := s.recalcFactorGroups(ctx, req)
+	if len(matches) == 0 {
+		return &factorpb.RecalcFactorRsp{RetInfo: invalid(fmt.Errorf("no executable factor binding for source_view_id=%s freq=%s subject_id=%s", sourceViewID, req.GetFreq(), req.GetSubjectId()))}, nil
+	}
+	if req.GetSyncRequestId() != "" {
+		if s.meta == nil || s.viewSyncWaiter == nil {
+			return &factorpb.RecalcFactorRsp{RetInfo: inner(fmt.Errorf("View sync-point waiter is not configured"))}, nil
+		}
+		datasetIDs, resolveErr := s.meta.SourceViewDatasetIDs(ctx, req.GetSpaceId(), sourceViewID)
+		if resolveErr != nil {
+			return &factorpb.RecalcFactorRsp{RetInfo: inner(resolveErr)}, nil
+		}
+		if waitErr := s.viewSyncWaiter.WaitViewSyncPoint(ctx, req.GetSpaceId(), sourceViewID, req.GetSyncRequestId(), datasetIDs); waitErr != nil {
+			return &factorpb.RecalcFactorRsp{RetInfo: inner(waitErr)}, nil
+		}
+	}
+	if _, parseErr := domain.ParseFrequency(req.GetFreq()); parseErr != nil {
+		return &factorpb.RecalcFactorRsp{RetInfo: invalid(parseErr)}, nil
+	}
+	if s.meta != nil && s.meta.SupportsViews() {
+		if _, indexErr := s.meta.SourceViewActiveIndexID(ctx, req.GetSpaceId(), sourceViewID); indexErr != nil {
+			return &factorpb.RecalcFactorRsp{RetInfo: inner(fmt.Errorf("resolve source View active index: %w", indexErr))}, nil
+		}
+	}
+	recalc, err := s.recalcService()
 	if err != nil {
-		return &factorpb.RecalcFactorRsp{RetInfo: invalid(err)}, nil
+		return &factorpb.RecalcFactorRsp{RetInfo: inner(err)}, nil
 	}
-	targets := make([]string, 0, len(groups))
-	for targetDataset := range groups {
-		targets = append(targets, targetDataset)
-	}
-	sort.Strings(targets)
-	taskIndex := 0
-	for _, targetDataset := range targets {
-		factors := groups[targetDataset]
-		for _, item := range factors {
-			factor := item.Factor
-			taskIndex++
-			task, buildErr := taskrunner.BuildTask(taskrunner.TaskScope{
-				TaskID:      fmt.Sprintf("recalc-%d-%d", time.Now().UnixNano(), taskIndex),
-				TriggerType: "recalc", SpaceID: req.GetSpaceId(),
-				BindingID: item.BindingID, SourceViewID: req.GetSourceDataset(), ResultDatasetID: targetDataset,
-				BindingGeneration: item.BindingGeneration,
-				SubjectID:         req.GetSubjectId(), Freq: req.GetFreq(),
-				PeriodTime: start.Unix(), TriggerEventID: fmt.Sprintf("recalc-%d", start.UnixNano()), TriggeredAt: time.Now().UTC(),
-				StartTime: start, EndTime: end,
-			}, factor, s.factorsDir)
-			if buildErr != nil {
-				return &factorpb.RecalcFactorRsp{RetInfo: invalid(buildErr)}, nil
-			}
-			if runErr := s.taskRunner.Run(ctx, task); runErr != nil {
-				if errors.Is(runErr, taskrunner.ErrStaleTask) {
-					return &factorpb.RecalcFactorRsp{RetInfo: conflict(runErr)}, nil
-				}
-				return &factorpb.RecalcFactorRsp{RetInfo: inner(runErr)}, nil
-			}
+	var accepted trigger.RecalcJob
+	for index, binding := range matches {
+		jobRequestID := requestID
+		if len(matches) > 1 {
+			jobRequestID = requestID + "/" + binding.BindingID
+		}
+		job, acceptErr := recalc.Accept(ctx, trigger.RecalcSpec{
+			RequestID: jobRequestID, SpaceID: req.GetSpaceId(), DatasetID: firstNonEmptyRPC(binding.ResultDatasetID, req.GetSourceDataset()),
+			SourceViewID: sourceViewID, SubjectID: req.GetSubjectId(), Frequency: req.GetFreq(), FactorID: firstNonEmptyRPC(req.GetFactorId(), binding.FactorID),
+			BindingID: binding.BindingID, BindingGeneration: binding.BindingGeneration, StartTime: start, EndTime: end,
+		})
+		if acceptErr != nil {
+			return &factorpb.RecalcFactorRsp{RetInfo: inner(acceptErr)}, nil
+		}
+		if index == 0 {
+			accepted = job
 		}
 	}
-	return &factorpb.RecalcFactorRsp{RetInfo: success()}, nil
+	return &factorpb.RecalcFactorRsp{RetInfo: success(), JobId: accepted.JobID, Status: accepted.Status}, nil
+}
+
+func (s *Service) CancelRecalcJob(ctx context.Context, req *factorpb.CancelRecalcJobReq) (*factorpb.CancelRecalcJobRsp, error) {
+	recalc, err := s.recalcService()
+	if err != nil {
+		return &factorpb.CancelRecalcJobRsp{RetInfo: inner(err)}, nil
+	}
+	if err := recalc.Cancel(ctx, req.GetJobId()); err != nil {
+		if errors.Is(err, trigger.ErrRecalcJobNotFound) {
+			return &factorpb.CancelRecalcJobRsp{RetInfo: notFound(err)}, nil
+		}
+		return &factorpb.CancelRecalcJobRsp{RetInfo: inner(err)}, nil
+	}
+	return &factorpb.CancelRecalcJobRsp{RetInfo: success()}, nil
+}
+
+func (s *Service) GetRecalcJob(ctx context.Context, req *factorpb.GetRecalcJobReq) (*factorpb.GetRecalcJobRsp, error) {
+	recalc, err := s.recalcService()
+	if err != nil {
+		return &factorpb.GetRecalcJobRsp{RetInfo: inner(err)}, nil
+	}
+	job, err := recalc.Get(ctx, req.GetJobId())
+	if err != nil {
+		if errors.Is(err, trigger.ErrRecalcJobNotFound) {
+			return &factorpb.GetRecalcJobRsp{RetInfo: notFound(err)}, nil
+		}
+		return &factorpb.GetRecalcJobRsp{RetInfo: inner(err)}, nil
+	}
+	return &factorpb.GetRecalcJobRsp{
+		RetInfo: success(), JobId: job.JobID, RequestId: job.RequestID, Status: job.Status,
+		FailureClass: job.FailureClass, Error: job.Error, BindingId: job.BindingID, BindingGeneration: job.BindingGeneration,
+	}, nil
 }
 
 func validateRecalcPeriodRange(start, end time.Time, frequency string) error {
@@ -202,86 +161,12 @@ func validateRecalcPeriodRange(start, end time.Time, frequency string) error {
 	return nil
 }
 
-func (s *Service) hasRecalcBinding(ctx context.Context, spaceID, sourceViewID, freq, subjectID, factorID string) (bool, error) {
-	bindings, err := s.bindings.ListExecutable(ctx)
-	if err != nil {
-		return false, err
-	}
-	for _, binding := range bindings {
-		if binding.SpaceID == spaceID && binding.SourceViewID == sourceViewID && binding.Freq == freq && binding.FactorID == factorID && domain.BindingAllowsSubject(binding, subjectID) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func recalcTriggerEventID(requestID string, req *factorpb.RecalcFactorReq, period time.Time) string {
-	parts := []string{requestID}
-	if req != nil {
-		parts = append(parts, req.GetSpaceId(), req.GetSourceViewId(), req.GetFreq(), req.GetSubjectId(), req.GetFactorId())
-	}
-	parts = append(parts, period.UTC().Format(time.RFC3339Nano))
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return "recalc-" + hex.EncodeToString(sum[:16])
-}
-
 func legacyRecalcRequestID(req *factorpb.RecalcFactorReq) string {
 	if req == nil {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(req.GetFactorId() + "\x00" + req.GetSpaceId() + "\x00" + req.GetSourceDataset() + "\x00" + req.GetSubjectId() + "\x00" + req.GetFreq() + "\x00" + req.GetStartTime() + "\x00" + req.GetEndTime()))
 	return "legacy-" + hex.EncodeToString(sum[:16])
-}
-
-type recalcBindingFactor struct {
-	BindingID         string
-	BindingGeneration string
-	Factor            domain.FactorDef
-}
-
-func (s *Service) recalcFactorGroups(ctx context.Context, req *factorpb.RecalcFactorReq) (map[string][]recalcBindingFactor, error) {
-	bindings, err := s.bindings.ListExecutable(ctx)
-	if err != nil {
-		return nil, err
-	}
-	groups := map[string][]recalcBindingFactor{}
-	seen := map[string]struct{}{}
-	for _, binding := range bindings {
-		if binding.SpaceID != req.GetSpaceId() ||
-			binding.SourceViewID != req.GetSourceDataset() ||
-			binding.Freq != req.GetFreq() {
-			continue
-		}
-		if !domain.BindingAllowsSubject(binding, req.GetSubjectId()) {
-			continue
-		}
-		if req.GetFactorId() != "" && binding.FactorID != req.GetFactorId() {
-			continue
-		}
-		if _, ok := seen[binding.FactorID]; ok {
-			continue
-		}
-		factor, loadErr := s.factors.Get(ctx, binding.FactorID)
-		if loadErr != nil {
-			return nil, fmt.Errorf("load factor %s: %w", binding.FactorID, loadErr)
-		}
-		if factor.Status != domain.FactorStatusEnabled {
-			if req.GetFactorId() != "" {
-				return nil, fmt.Errorf("factor %s is not enabled", factor.FactorID)
-			}
-			continue
-		}
-		target := binding.ResultDatasetID
-		groups[target] = append(groups[target], recalcBindingFactor{BindingID: binding.BindingID, BindingGeneration: binding.BindingGeneration, Factor: *factor})
-		seen[binding.FactorID] = struct{}{}
-	}
-	if len(groups) == 0 {
-		if req.GetFactorId() != "" {
-			return nil, fmt.Errorf("factor %s has no executable binding for the requested source", req.GetFactorId())
-		}
-		return nil, fmt.Errorf("no executable factors for the requested source")
-	}
-	return groups, nil
 }
 
 func parseRequiredRecalcTime(name, raw string) (time.Time, error) {
@@ -293,4 +178,17 @@ func parseRequiredRecalcTime(name, raw string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("%s %q must be RFC3339", name, raw)
 	}
 	return value.UTC(), nil
+}
+
+func firstNonEmptyRPC(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func notFound(err error) *commonpb.RetInfo {
+	return &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND, Msg: err.Error()}
 }

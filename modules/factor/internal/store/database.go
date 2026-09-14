@@ -203,6 +203,14 @@ func (s *Store) validateSchemaTables(tables []string) error {
 			"c_commit_id", "c_node_id", "c_store_id", "c_sequence", "c_mtime",
 		},
 		"t_factor_period_gc": {"c_id", "c_completed_before"},
+		"t_factor_recalc_jobs": {
+			"c_job_id", "c_request_id", "c_space_id", "c_dataset_id", "c_source_view_id",
+			"c_subject_id", "c_freq", "c_factor_id", "c_binding_id", "c_binding_generation",
+			"c_start_time", "c_end_time", "c_status", "c_failure_class", "c_error", "c_ctime", "c_mtime",
+		},
+		"t_factor_engine_status": {
+			"c_engine_id", "c_desired_revision", "c_applied_revision", "c_last_seen", "c_mtime",
+		},
 	}
 	if len(tables) != len(expected) {
 		return fmt.Errorf("factor database uses an obsolete schema; create a fresh database")

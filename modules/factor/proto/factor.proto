@@ -117,6 +117,23 @@ message RecalcFactorReq {
 }
 message RecalcFactorRsp {
   common.RetInfo ret_info = 1;
+  string job_id = 2;
+  string status = 3;
+}
+
+message CancelRecalcJobReq { string job_id = 1; }
+message CancelRecalcJobRsp { common.RetInfo ret_info = 1; }
+
+message GetRecalcJobReq { string job_id = 1; }
+message GetRecalcJobRsp {
+  common.RetInfo ret_info = 1;
+  string job_id = 2;
+  string request_id = 3;
+  string status = 4;
+  string failure_class = 5;
+  string error = 6;
+  string binding_id = 7;
+  string binding_generation = 8;
 }
 
 message GetEngineStatusReq {}
@@ -125,6 +142,10 @@ message GetEngineStatusRsp {
   int32 python_workers = 2;
   int32 active_tasks = 3;
   int32 pending_tasks = 4;
+  int64 desired_revision = 5;
+  int64 applied_revision = 6;
+  string engine_id = 7;
+  string engine_last_seen = 8;
 }
 
 service FactorMgr {
@@ -138,5 +159,7 @@ service FactorMgr {
   rpc ListBindings(ListBindingsReq) returns (ListBindingsRsp);
   rpc DeleteBinding(DeleteBindingReq) returns (DeleteBindingRsp);
   rpc RecalcFactor(RecalcFactorReq) returns (RecalcFactorRsp);
+  rpc CancelRecalcJob(CancelRecalcJobReq) returns (CancelRecalcJobRsp);
+  rpc GetRecalcJob(GetRecalcJobReq) returns (GetRecalcJobRsp);
   rpc GetEngineStatus(GetEngineStatusReq) returns (GetEngineStatusRsp);
 }

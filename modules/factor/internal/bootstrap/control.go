@@ -7,11 +7,12 @@ import (
 	"sync"
 	"time"
 
-	factorobservability "github.com/mooyang-code/moox/modules/factor/internal/observability"
 	"github.com/mooyang-code/moox/modules/factor/internal/health"
+	factorobservability "github.com/mooyang-code/moox/modules/factor/internal/observability"
 	factorsvc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
@@ -29,6 +30,7 @@ type ControlRuntime struct {
 	Health         *health.State
 	cancel         context.CancelFunc
 	stopCatalog    func() error
+	stopRecalc     func() error
 	waitReconcile  func()
 	closeResources func() error
 	once           sync.Once
@@ -79,6 +81,14 @@ func InitializeControl(ctx context.Context, s *server.Server, cfg *ControlConfig
 	if err != nil {
 		return nil, err
 	}
+	recalc, err := trigger.NewRecalcService(resources.Store, nil)
+	if err != nil {
+		return nil, err
+	}
+	r.stopRecalc, err = StartControlRecalc(resources.Context(), cfg.EventBus, recalc)
+	if err != nil {
+		return nil, err
+	}
 	credentials, err := gatewayauth.ResolveCredentials(cfg.Storage.KeyID, cfg.Storage.HMACKeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("load control storage credentials: %w", err)
@@ -96,6 +106,7 @@ func InitializeControl(ctx context.Context, s *server.Server, cfg *ControlConfig
 		factorsvc.WithOperationGate(taskrunner.NewOperationGate()),
 		factorsvc.WithBindingOutputCleaner(bindingOutputCleaner{storage: storage, manifests: resources.Store.OutputManifests()}),
 		factorsvc.WithBindingSchemaCleaner(resources.Metadata),
+		factorsvc.WithRecalc(recalc),
 	)
 	registered := false
 	for _, name := range []string{"trpc.moox.factor.FactorMgr", "trpc.moox.factor.FactorMgr.trpc"} {
@@ -159,6 +170,9 @@ func (r *ControlRuntime) Close() error {
 		}
 		if r.waitReconcile != nil {
 			r.waitReconcile()
+		}
+		if r.stopRecalc != nil {
+			r.err = errors.Join(r.err, r.stopRecalc())
 		}
 		if r.stopCatalog != nil {
 			r.err = errors.Join(r.err, r.stopCatalog())

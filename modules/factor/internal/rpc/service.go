@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/pyruntime/moduleregistry"
@@ -118,6 +119,10 @@ func WithBindingSchemaCleaner(cleaner bindingSchemaCleaner) Option {
 	return func(s *Service) { s.schemaCleaner = cleaner }
 }
 
+func WithRecalc(svc *trigger.RecalcService) Option {
+	return func(s *Service) { s.recalc = svc }
+}
+
 // Service implements FactorMgr.
 type Service struct {
 	factors           *store.FactorRepository
@@ -134,6 +139,9 @@ type Service struct {
 	outputCleaner     bindingOutputCleaner
 	schemaCleaner     bindingSchemaCleaner
 	operationGate     *taskrunner.OperationGate
+	recalc            *trigger.RecalcService
+	db                *store.Store
+	recalcMu          sync.Mutex
 	mutationMu        sync.Mutex
 	removeStage       func(*factorArtifactStage) error
 }
@@ -141,6 +149,7 @@ type Service struct {
 // NewWithRuntime creates a FactorMgr service with an optional task runner.
 func NewWithRuntime(persistence *store.Store, runner taskRunnerRuntime, opts ...Option) *Service {
 	s := &Service{
+		db:         persistence,
 		factors:    persistence.Factors(),
 		bindings:   persistence.Bindings(),
 		taskRunner: runner,
@@ -749,7 +758,7 @@ func (s *Service) refreshRealtimeInventory(ctx context.Context) {
 	}
 }
 
-func (s *Service) GetEngineStatus(context.Context, *factorpb.GetEngineStatusReq) (*factorpb.GetEngineStatusRsp, error) {
+func (s *Service) GetEngineStatus(ctx context.Context, _ *factorpb.GetEngineStatusReq) (*factorpb.GetEngineStatusRsp, error) {
 	rsp := &factorpb.GetEngineStatusRsp{RetInfo: success()}
 	if s.taskRunner != nil {
 		status := s.taskRunner.Status()
@@ -757,7 +766,48 @@ func (s *Service) GetEngineStatus(context.Context, *factorpb.GetEngineStatusReq)
 		rsp.ActiveTasks = int32(status.ActiveTasks)
 		rsp.PendingTasks = int32(status.PendingTasks)
 	}
+	recalc, err := s.recalcService()
+	if err != nil {
+		return rsp, nil
+	}
+	if s.taskRunner == nil {
+		if pending, countErr := recalc.CountByStatus(ctx, trigger.RecalcAccepted); countErr == nil {
+			rsp.PendingTasks = int32(pending)
+		}
+		if running, countErr := recalc.CountByStatus(ctx, trigger.RecalcRunning); countErr == nil {
+			rsp.ActiveTasks = int32(running)
+		}
+	}
+	heartbeat, err := recalc.LatestHeartbeat(ctx)
+	if err == nil && strings.TrimSpace(heartbeat.EngineID) != "" {
+		rsp.EngineId = heartbeat.EngineID
+		rsp.DesiredRevision = heartbeat.DesiredRevision
+		rsp.AppliedRevision = heartbeat.AppliedRevision
+		if heartbeat.LastSeen != nil {
+			rsp.EngineLastSeen = heartbeat.LastSeen.UTC().Format(time.RFC3339Nano)
+		}
+	}
 	return rsp, nil
+}
+
+func (s *Service) recalcService() (*trigger.RecalcService, error) {
+	if s.recalc != nil {
+		return s.recalc, nil
+	}
+	if s.db == nil {
+		return nil, fmt.Errorf("recalc store is not configured")
+	}
+	s.recalcMu.Lock()
+	defer s.recalcMu.Unlock()
+	if s.recalc != nil {
+		return s.recalc, nil
+	}
+	svc, err := trigger.NewRecalcService(s.db, nil)
+	if err != nil {
+		return nil, err
+	}
+	s.recalc = svc
+	return svc, nil
 }
 
 func (s *Service) normalizeFactor(pb *factorpb.FactorDef) (domain.FactorDef, error) {

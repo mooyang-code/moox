@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -15,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRecalcWaitsForSyncPointAndUsesViewReadyExecutor(t *testing.T) {
+func TestRecalcWaitsForSyncPointWithoutLocalExecute(t *testing.T) {
 	var mu sync.Mutex
 	var order []string
 	executor := &recordingViewReadyExecutor{record: func(item string) { mu.Lock(); defer mu.Unlock(); order = append(order, item) }}
@@ -29,12 +30,10 @@ func TestRecalcWaitsForSyncPointAndUsesViewReadyExecutor(t *testing.T) {
 	rsp, err := svc.RecalcFactor(context.Background(), &factorpb.RecalcFactorReq{RequestId: "request-1", SyncRequestId: "import-1", FactorId: "factor", SpaceId: "space", SourceViewId: "source_view", SubjectId: "BTC", Freq: "1m", StartTime: start.Format(time.RFC3339Nano), EndTime: start.Add(2 * time.Minute).Format(time.RFC3339Nano)})
 	require.NoError(t, err)
 	require.EqualValues(t, 0, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-	require.Equal(t, []string{"wait", "execute", "execute"}, order)
+	require.Equal(t, []string{"wait"}, order)
 	require.Equal(t, []string{"bars"}, waiter.datasetIDs)
-	require.Len(t, executor.triggerIDs, 2)
-	require.Equal(t, []string{"", ""}, executor.factorIDs)
-	require.NotEqual(t, executor.triggerIDs[0], executor.triggerIDs[1])
-	require.Equal(t, []string{"", ""}, executor.activeIndexIDs, "recalc must not pin a physical A/B slot")
+	require.Empty(t, executor.triggerIDs)
+	require.Equal(t, trigger.RecalcAccepted, rsp.GetStatus())
 }
 
 func TestRecalcFailsClosedWhenSourceViewHasNoActiveIndex(t *testing.T) {
@@ -97,6 +96,12 @@ type recalcViewMetadataClientWithoutActiveIndex struct{ *recordingFactorMetadata
 
 func (c *recalcViewMetadataClientWithoutActiveIndex) GetView(context.Context, *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
 	return &storagepb.GetViewRsp{RetInfo: success(), View: &storagepb.View{ViewId: "source_view", DatasetId: "bars"}}, nil
+}
+func (c *recalcViewMetadataClientWithoutActiveIndex) CreateView(context.Context, *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error) {
+	return &storagepb.CreateViewRsp{RetInfo: success()}, nil
+}
+func (c *recalcViewMetadataClientWithoutActiveIndex) UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
+	return &storagepb.UpsertViewColumnRsp{RetInfo: success()}, nil
 }
 
 func (c *recalcViewMetadataClient) GetView(context.Context, *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {

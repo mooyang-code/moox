@@ -39,6 +39,10 @@ type FactorMgrService interface {
 
 	RecalcFactor(ctx context.Context, req *RecalcFactorReq) (*RecalcFactorRsp, error)
 
+	CancelRecalcJob(ctx context.Context, req *CancelRecalcJobReq) (*CancelRecalcJobRsp, error)
+
+	GetRecalcJob(ctx context.Context, req *GetRecalcJobReq) (*GetRecalcJobRsp, error)
+
 	GetEngineStatus(ctx context.Context, req *GetEngineStatusReq) (*GetEngineStatusRsp, error)
 }
 
@@ -222,6 +226,42 @@ func FactorMgrService_RecalcFactor_Handler(svr interface{}, ctx context.Context,
 	return rsp, nil
 }
 
+func FactorMgrService_CancelRecalcJob_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CancelRecalcJobReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).CancelRecalcJob(ctx, reqbody.(*CancelRecalcJobReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_GetRecalcJob_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetRecalcJobReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).GetRecalcJob(ctx, reqbody.(*GetRecalcJobReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func FactorMgrService_GetEngineStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetEngineStatusReq{}
 	filters, err := f(req)
@@ -286,6 +326,14 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: FactorMgrService_RecalcFactor_Handler,
 		},
 		{
+			Name: "/trpc.moox.factor.FactorMgr/CancelRecalcJob",
+			Func: FactorMgrService_CancelRecalcJob_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/GetRecalcJob",
+			Func: FactorMgrService_GetRecalcJob_Handler,
+		},
+		{
 			Name: "/trpc.moox.factor.FactorMgr/GetEngineStatus",
 			Func: FactorMgrService_GetEngineStatus_Handler,
 		},
@@ -333,6 +381,12 @@ func (s *UnimplementedFactorMgr) DeleteBinding(ctx context.Context, req *DeleteB
 func (s *UnimplementedFactorMgr) RecalcFactor(ctx context.Context, req *RecalcFactorReq) (*RecalcFactorRsp, error) {
 	return nil, errors.New("rpc RecalcFactor of service FactorMgr is not implemented")
 }
+func (s *UnimplementedFactorMgr) CancelRecalcJob(ctx context.Context, req *CancelRecalcJobReq) (*CancelRecalcJobRsp, error) {
+	return nil, errors.New("rpc CancelRecalcJob of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) GetRecalcJob(ctx context.Context, req *GetRecalcJobReq) (*GetRecalcJobRsp, error) {
+	return nil, errors.New("rpc GetRecalcJob of service FactorMgr is not implemented")
+}
 func (s *UnimplementedFactorMgr) GetEngineStatus(ctx context.Context, req *GetEngineStatusReq) (*GetEngineStatusRsp, error) {
 	return nil, errors.New("rpc GetEngineStatus of service FactorMgr is not implemented")
 }
@@ -364,6 +418,10 @@ type FactorMgrClientProxy interface {
 	DeleteBinding(ctx context.Context, req *DeleteBindingReq, opts ...client.Option) (rsp *DeleteBindingRsp, err error)
 
 	RecalcFactor(ctx context.Context, req *RecalcFactorReq, opts ...client.Option) (rsp *RecalcFactorRsp, err error)
+
+	CancelRecalcJob(ctx context.Context, req *CancelRecalcJobReq, opts ...client.Option) (rsp *CancelRecalcJobRsp, err error)
+
+	GetRecalcJob(ctx context.Context, req *GetRecalcJobReq, opts ...client.Option) (rsp *GetRecalcJobRsp, err error)
 
 	GetEngineStatus(ctx context.Context, req *GetEngineStatusReq, opts ...client.Option) (rsp *GetEngineStatusRsp, err error)
 }
@@ -571,6 +629,46 @@ func (c *FactorMgrClientProxyImpl) RecalcFactor(ctx context.Context, req *Recalc
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &RecalcFactorRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) CancelRecalcJob(ctx context.Context, req *CancelRecalcJobReq, opts ...client.Option) (*CancelRecalcJobRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/CancelRecalcJob")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("CancelRecalcJob")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CancelRecalcJobRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) GetRecalcJob(ctx context.Context, req *GetRecalcJobReq, opts ...client.Option) (*GetRecalcJobRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/GetRecalcJob")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("GetRecalcJob")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetRecalcJobRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

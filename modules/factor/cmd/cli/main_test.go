@@ -7,6 +7,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestParseRecalcAcceptsWithoutPythonFlags(t *testing.T) {
+	cfg, err := parseArgs([]string{
+		"recalc", "--request-id", "req-1", "--space", "crypto", "--dataset", "bars",
+		"--subject", "BTC-USDT", "--freq", "1m",
+		"--start-time", "2026-07-26T00:00:00Z", "--end-time", "2026-07-26T01:00:00Z",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "recalc", cfg.Command)
+	require.Equal(t, "req-1", cfg.RequestID)
+	require.Equal(t, time.Hour, cfg.EndTime.Sub(cfg.StartTime))
+	require.Equal(t, "./data/factor-control/catalog.db", cfg.DBPath)
+}
+
 func TestParseRunOnceRange(t *testing.T) {
 	cfg, err := parseArgs([]string{
 		"run-once", "--config", "/opt/moox/factor/config/app.yaml",

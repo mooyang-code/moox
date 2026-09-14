@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -717,8 +718,9 @@ func TestFactorMutationLifecyclePreventsOldWriteAfterRecalc(t *testing.T) {
 		EndTime:   start.Add(time.Minute).Format(time.RFC3339Nano),
 	})
 	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_SUCCESS, recalcRsp.GetRetInfo().GetCode())
-	require.Equal(t, []float64{1, 2}, storage.values())
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, recalcRsp.GetRetInfo().GetCode(), recalcRsp.GetRetInfo().GetMsg())
+	require.Equal(t, trigger.RecalcAccepted, recalcRsp.GetStatus())
+	require.Equal(t, []float64{1}, storage.values())
 }
 
 func TestSetFactorStatusEnableReconciliationFailureRemainsNonExecutable(t *testing.T) {
@@ -768,7 +770,7 @@ func TestSetFactorStatusRejectsInvalidStatusWithoutMutationOrSync(t *testing.T) 
 	require.Zero(t, metadata.targetCalls)
 }
 
-func TestRecalcFactorRunsSynchronousRange(t *testing.T) {
+func TestRecalcFactorAcceptsWithoutLocalCompute(t *testing.T) {
 	db := openRPCTestDB(t)
 	seedRPCFactorAndBinding(t, db, domain.FactorStatusEnabled)
 	runner := &fakeRPCTaskRunner{}
@@ -779,9 +781,13 @@ func TestRecalcFactorRunsSynchronousRange(t *testing.T) {
 		StartTime: "2026-07-26T00:00:00Z", EndTime: "2026-07-26T01:00:00Z",
 	})
 	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Len(t, runner.tasks, 1)
-	require.Equal(t, time.Hour, runner.tasks[0].EndTime.Sub(runner.tasks[0].StartTime))
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	require.NotEmpty(t, rsp.GetJobId())
+	require.Equal(t, trigger.RecalcAccepted, rsp.GetStatus())
+	require.Empty(t, runner.tasks)
+	got, err := svc.GetRecalcJob(context.Background(), &factorpb.GetRecalcJobReq{JobId: rsp.GetJobId()})
+	require.NoError(t, err)
+	require.Equal(t, trigger.RecalcAccepted, got.GetStatus())
 }
 
 func TestRecalcRejectsMissingOrInvalidRange(t *testing.T) {
@@ -797,7 +803,7 @@ func TestRecalcRejectsMissingOrInvalidRange(t *testing.T) {
 	}
 }
 
-func TestRecalcFactorReportsStaleTaskAsConflict(t *testing.T) {
+func TestRecalcFactorAcceptsEvenIfLocalRunnerWouldBeStale(t *testing.T) {
 	db := openRPCTestDB(t)
 	seedRPCFactorAndBinding(t, db, domain.FactorStatusEnabled)
 	svc := NewWithRuntime(
@@ -811,8 +817,8 @@ func TestRecalcFactorReportsStaleTaskAsConflict(t *testing.T) {
 		StartTime: "2026-07-26T00:00:00Z", EndTime: "2026-07-26T01:00:00Z",
 	})
 	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode())
-	require.Contains(t, rsp.GetRetInfo().GetMsg(), "stale")
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	require.Equal(t, trigger.RecalcAccepted, rsp.GetStatus())
 }
 
 func TestRecalcHonorsBindingSubjectScope(t *testing.T) {
@@ -915,6 +921,28 @@ func testBindingPB(mode, subjectsJSON string) *factorpb.FactorBinding {
 		SourceDataset: "source", Freq: "1m", SubjectMode: mode,
 		SubjectsJson: subjectsJSON, TargetDataset: "target",
 	}
+}
+
+func TestGetEngineStatusReportsAcceptedJobsAndHeartbeat(t *testing.T) {
+	db := openRPCTestDB(t)
+	svc := NewWithRuntime(db, nil)
+	recalc, err := trigger.NewRecalcService(db, nil)
+	require.NoError(t, err)
+	_, err = recalc.Accept(context.Background(), trigger.RecalcSpec{
+		RequestID: "status-1", SpaceID: "space", SourceViewID: "view", SubjectID: "BTC", Frequency: "1m",
+		StartTime: time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC), EndTime: time.Date(2026, 9, 13, 12, 1, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.NoError(t, recalc.Heartbeat(context.Background(), "factor-engine-1", 4, 4))
+	rsp, err := svc.GetEngineStatus(context.Background(), &factorpb.GetEngineStatusReq{})
+	require.NoError(t, err)
+	require.Zero(t, rsp.GetPythonWorkers())
+	require.EqualValues(t, 1, rsp.GetPendingTasks())
+	require.EqualValues(t, 0, rsp.GetActiveTasks())
+	require.Equal(t, "factor-engine-1", rsp.GetEngineId())
+	require.EqualValues(t, 4, rsp.GetDesiredRevision())
+	require.EqualValues(t, 4, rsp.GetAppliedRevision())
+	require.NotEmpty(t, rsp.GetEngineLastSeen())
 }
 
 func TestGetEngineStatusReportsWorkerAndTaskCounts(t *testing.T) {
@@ -1171,8 +1199,8 @@ func (f *recordingFactorMetadataClient) ListViews(_ context.Context, req *storag
 	}
 	return &storagepb.ListViewsRsp{RetInfo: success(), Views: []*storagepb.View{{
 		SpaceId: req.GetSpaceId(), ViewId: "source_view", Status: "active",
-		DatasetId: primaryDatasetID,
-		ActiveIndexId:    "index-a", ActiveColumns: []*storagepb.ViewColumn{
+		DatasetId:     primaryDatasetID,
+		ActiveIndexId: "index-a", ActiveColumns: []*storagepb.ViewColumn{
 			{ColumnName: req.GetDatasetId() + ".close", OriginId: req.GetDatasetId() + ".close"},
 		},
 	}}}, nil

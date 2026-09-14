@@ -35,6 +35,8 @@ type cliConfig struct {
 	EndTime           time.Time
 	FactorIDs         []string
 	TaskID            string
+	JobID             string
+	RequestID         string
 	FactorSourcePaths map[string]string
 	Stream            string
 	Consumer          string
@@ -69,6 +71,12 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return runImportCatalog(ctx, cfg, out)
 	case "run-once":
 		return runOnce(ctx, cfg, out)
+	case "recalc":
+		return runRecalc(ctx, cfg, out)
+	case "recalc-cancel":
+		return runRecalcCancel(ctx, cfg, out)
+	case "recalc-status":
+		return runRecalcStatus(ctx, cfg, out)
 	case "clear-queue":
 		return runClearQueue(ctx, cfg, out)
 	default:
@@ -155,6 +163,49 @@ func parseArgs(args []string) (cliConfig, error) {
 			return cliConfig{}, errors.New("--start-time must be before --end-time")
 		}
 		cfg.FactorIDs = parseStringCSV(factors)
+	case "recalc":
+		cfg.DBPath = "./data/factor-control/catalog.db"
+		var startTime, endTime string
+		fs := newFlagSet("recalc")
+		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor control sqlite database")
+		fs.StringVar(&cfg.RequestID, "request-id", "", "idempotent recalc request id")
+		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id")
+		fs.StringVar(&cfg.SpaceID, "space", "", "space id")
+		fs.StringVar(&cfg.DatasetID, "dataset", "", "source dataset or view id")
+		fs.StringVar(&cfg.ViewID, "view-id", "", "source View id (defaults to dataset id)")
+		fs.StringVar(&cfg.SubjectID, "subject", "", "subject id")
+		fs.StringVar(&cfg.Freq, "freq", "", "frequency")
+		fs.StringVar(&startTime, "start-time", "", "inclusive start time RFC3339")
+		fs.StringVar(&endTime, "end-time", "", "exclusive end time RFC3339")
+		if err := fs.Parse(args[1:]); err != nil {
+			return cliConfig{}, err
+		}
+		var err error
+		if cfg.StartTime, err = time.Parse(time.RFC3339Nano, startTime); err != nil {
+			return cliConfig{}, fmt.Errorf("parse --start-time: %w", err)
+		}
+		if cfg.EndTime, err = time.Parse(time.RFC3339Nano, endTime); err != nil {
+			return cliConfig{}, fmt.Errorf("parse --end-time: %w", err)
+		}
+		if !cfg.StartTime.Before(cfg.EndTime) {
+			return cliConfig{}, errors.New("--start-time must be before --end-time")
+		}
+	case "recalc-cancel":
+		cfg.DBPath = "./data/factor-control/catalog.db"
+		fs := newFlagSet("recalc-cancel")
+		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor control sqlite database")
+		fs.StringVar(&cfg.JobID, "job-id", "", "recalc job id")
+		if err := fs.Parse(args[1:]); err != nil {
+			return cliConfig{}, err
+		}
+	case "recalc-status":
+		cfg.DBPath = "./data/factor-control/catalog.db"
+		fs := newFlagSet("recalc-status")
+		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor control sqlite database")
+		fs.StringVar(&cfg.JobID, "job-id", "", "recalc job id")
+		if err := fs.Parse(args[1:]); err != nil {
+			return cliConfig{}, err
+		}
 	case "clear-queue":
 		cfg.Stream = "MOOX_STORAGE"
 		cfg.Consumer = "factor_view_ready_v1"
