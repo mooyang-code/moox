@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,16 +27,35 @@ type datasetRegistry interface {
 
 // RealtimeInventory owns Factor's expected output Dataset+Frequency snapshot.
 type RealtimeInventory struct {
-	source   bindingSource
-	registry datasetRegistry
+	source        bindingSource
+	registry      datasetRegistry
+	acceptedTypes []string
 
 	mu          sync.Mutex
 	dirty       bool
 	lastRefresh time.Time
 }
 
-func NewRealtimeInventory(source bindingSource, registry datasetRegistry) *RealtimeInventory {
-	return &RealtimeInventory{source: source, registry: registry, dirty: true}
+type InventoryOption func(*RealtimeInventory)
+
+func WithAcceptedFactorTypes(types ...string) InventoryOption {
+	copied := append([]string(nil), types...)
+	return func(inventory *RealtimeInventory) {
+		if inventory == nil {
+			return
+		}
+		inventory.acceptedTypes = copied
+	}
+}
+
+func NewRealtimeInventory(source bindingSource, registry datasetRegistry, opts ...InventoryOption) *RealtimeInventory {
+	inventory := &RealtimeInventory{source: source, registry: registry, dirty: true}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(inventory)
+		}
+	}
+	return inventory
 }
 
 func (i *RealtimeInventory) MarkDirty() {
@@ -72,6 +92,9 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 	}
 	expected := make(map[report.DatasetKey]time.Duration)
 	for _, binding := range bindings {
+		if !inventoryAccepts(i.acceptedTypes, binding.FactorType) {
+			continue
+		}
 		freq := strings.TrimSpace(binding.Freq)
 		interval, err := parseFrequency(freq)
 		if err != nil || interval <= 0 {
@@ -110,6 +133,13 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 	i.lastRefresh = time.Now().UTC()
 	i.dirty = false
 	return nil
+}
+
+func inventoryAccepts(acceptedTypes []string, factorType string) bool {
+	if len(acceptedTypes) == 0 {
+		return true
+	}
+	return slices.Contains(acceptedTypes, strings.TrimSpace(factorType))
 }
 
 func parseFrequency(raw string) (time.Duration, error) {

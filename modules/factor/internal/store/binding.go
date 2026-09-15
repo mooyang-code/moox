@@ -94,12 +94,17 @@ func (r *BindingRepository) Upsert(ctx context.Context, binding domain.FactorBin
 	return r.db.WithContext(ctx).Create(&binding).Error
 }
 
+type executableBindingRow struct {
+	domain.FactorBinding
+	Type string `gorm:"column:c_factor_type"`
+}
+
 // ListExecutable returns bindings whose binding and factor are both enabled.
 func (r *BindingRepository) ListExecutable(ctx context.Context) ([]domain.FactorBinding, error) {
-	var rows []domain.FactorBinding
+	var rows []executableBindingRow
 	err := r.db.WithContext(ctx).
 		Table("t_factor_bindings AS b").
-		Select("b.*").
+		Select("b.*, f.c_factor_type").
 		Joins("JOIN t_factor_defs AS f ON f.c_factor_id = b.c_factor_id").
 		Where("b.c_status = ? AND f.c_status = ?",
 			domain.BindingStatusEnabled,
@@ -107,8 +112,13 @@ func (r *BindingRepository) ListExecutable(ctx context.Context) ([]domain.Factor
 		).
 		Order("b.c_space_id, b.c_source_view_id, b.c_freq, b.c_factor_id").
 		Scan(&rows).Error
-	hydrateLegacyBindings(rows)
-	return rows, err
+	out := make([]domain.FactorBinding, len(rows))
+	for i, row := range rows {
+		out[i] = row.FactorBinding
+		out[i].FactorType = strings.TrimSpace(row.Type)
+	}
+	hydrateLegacyBindings(out)
+	return out, err
 }
 
 // HasExecutableOrPending reports whether an enabled factor still has work

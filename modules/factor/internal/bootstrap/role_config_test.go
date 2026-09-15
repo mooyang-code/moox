@@ -38,6 +38,8 @@ func TestRoleConfigurationsHaveIndependentStorageAndStrictFields(t *testing.T) {
 	require.ErrorContains(t, err, "catalog_poll_interval")
 	_, err = LoadEngineApplicationConfig(roleConfigFile(t, "catalog_sync_timeout: 0s\n"))
 	require.ErrorContains(t, err, "catalog_sync_timeout")
+	_, err = LoadEngineApplicationConfig(roleConfigFile(t, "definitions:\n  - dataset_id: mdataset_binance_kline_1m\n"))
+	require.NoError(t, err)
 }
 
 func TestRoleConfigurationsApplyProcessEnvironment(t *testing.T) {

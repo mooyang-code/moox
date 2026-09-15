@@ -35,6 +35,7 @@ type EngineApplicationConfig struct {
 	CatalogPollInterval time.Duration              `yaml:"catalog_poll_interval"`
 	CatalogSyncTimeout  time.Duration              `yaml:"catalog_sync_timeout"`
 	SubjectBatch        trigger.SubjectBatchConfig `yaml:"subject_batch"`
+	Definitions         any                        `yaml:"definitions"`
 }
 
 func DefaultControlConfig() *ControlConfig {

@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -65,6 +66,16 @@ func TestSubjectOnlyActivationRejectsCrossBeforeCommit(t *testing.T) {
 	err := activate(context.Background(), domain.CatalogSnapshot{}, domain.CatalogSnapshot{Factors: []domain.FactorDef{{FactorID: "test", FactorType: domain.FactorTypeTimeSeries}}}, func() error { return nil })
 	if err != nil || !called {
 		t.Fatalf("TS activation: %v", err)
+	}
+}
+
+func TestEngineTRPCConfigIncludesMetricsTimer(t *testing.T) {
+	raw, err := os.ReadFile("../../config/engine-trpc.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), engineMetricsTimerService) {
+		t.Fatalf("engine-trpc.yaml missing %s", engineMetricsTimerService)
 	}
 }
 

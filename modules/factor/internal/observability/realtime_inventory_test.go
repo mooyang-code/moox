@@ -46,6 +46,24 @@ func TestRealtimeInventoryUsesExecutableBindingTargets(t *testing.T) {
 	}, registry.items)
 }
 
+func TestRealtimeInventoryKeepsOnlyAcceptedFactorTypes(t *testing.T) {
+	source := &bindingSourceStub{rows: []domain.FactorBinding{
+		{BindingID: "ts", SpaceID: "crypto", ResultDatasetID: "mdataset_binance_kline_1m", Freq: "1m", FactorType: domain.FactorTypeTimeSeries},
+		{BindingID: "xs", SpaceID: "crypto", ResultDatasetID: "cross_factor", Freq: "1m", FactorType: domain.FactorTypeCrossSection},
+	}}
+	control := &factorRegistryStub{}
+	require.NoError(t, NewRealtimeInventory(source, control, WithAcceptedFactorTypes(domain.FactorTypeCrossSection)).Refresh(context.Background()))
+	require.Equal(t, []report.DatasetExpectation{
+		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "cross_factor", Freq: "1m"}, Interval: time.Minute},
+	}, control.items)
+
+	engine := &factorRegistryStub{}
+	require.NoError(t, NewRealtimeInventory(source, engine, WithAcceptedFactorTypes(domain.FactorTypeTimeSeries)).Refresh(context.Background()))
+	require.Equal(t, []report.DatasetExpectation{
+		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "mdataset_binance_kline_1m", Freq: "1m"}, Interval: time.Minute},
+	}, engine.items)
+}
+
 func TestRealtimeInventoryInvalidFreqRetainsPreviousSnapshot(t *testing.T) {
 	source := &bindingSourceStub{rows: []domain.FactorBinding{
 		{BindingID: "valid", SpaceID: "crypto", TargetDataset: "bars_factor", Freq: "1m"},

@@ -28,6 +28,7 @@ type FactorBinding struct {
 	ResultViewID      string    `gorm:"column:c_result_view_id"`
 	SourceDataset     string    `gorm:"-"`
 	TargetDataset     string    `gorm:"-"`
+	FactorType        string    `gorm:"-" json:"-"`
 	Status            string    `gorm:"column:c_status"`
 	CreateTime        time.Time `gorm:"column:c_ctime"`
 	ModifyTime        time.Time `gorm:"column:c_mtime"`

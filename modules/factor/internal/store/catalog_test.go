@@ -123,6 +123,21 @@ func TestSnapshotHashIgnoresLocalArtifactMetadata(t *testing.T) {
 	changed, err = replica.ReplaceCatalogSnapshot(ctx, *snapshot)
 	require.NoError(t, err)
 	require.False(t, changed)
+	if len(snapshot.Bindings) == 0 {
+		snapshot.Bindings = []domain.FactorBinding{{
+			BindingID: "b", FactorID: "f", SpaceID: "s", SourceViewID: "v", Freq: "1m",
+			SubjectMode: domain.SubjectModeAll, SubjectsJSON: "[]",
+			ResultDatasetID: "r", ResultViewID: "rv", Status: domain.BindingStatusEnabled,
+		}}
+		changed, err = replica.ReplaceCatalogSnapshot(ctx, domain.CatalogSnapshot{Revision: snapshot.Revision + 1, Factors: snapshot.Factors, Bindings: snapshot.Bindings})
+		require.NoError(t, err)
+		require.True(t, changed)
+		snapshot.Revision++
+	}
+	snapshot.Bindings[0].FactorType = domain.FactorTypeTimeSeries
+	changed, err = replica.ReplaceCatalogSnapshot(ctx, *snapshot)
+	require.NoError(t, err)
+	require.False(t, changed)
 	snapshot.Factors[0].SourceCode = "different algorithm"
 	_, err = replica.ReplaceCatalogSnapshot(ctx, *snapshot)
 	require.ErrorIs(t, err, ErrCatalogRevisionConflict)

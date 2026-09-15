@@ -36,6 +36,34 @@ func TestListExecutableExcludesDisabledFactor(t *testing.T) {
 	rows, err = NewBindingRepository(db).ListExecutable(context.Background())
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
+	require.Equal(t, domain.FactorTypeTimeSeries, rows[0].FactorType)
+}
+
+func TestListExecutablePopulatesFactorType(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, NewFactorRepository(db).Create(context.Background(), testFactor("bias", domain.FactorStatusEnabled)))
+	cross := testFactor("rank", domain.FactorStatusEnabled)
+	cross.FactorType = domain.FactorTypeCrossSection
+	require.NoError(t, NewFactorRepository(db).Create(context.Background(), cross))
+	repo := NewBindingRepository(db)
+	require.NoError(t, repo.Upsert(context.Background(), domain.FactorBinding{
+		BindingID: "bind-bias", FactorID: "bias", SpaceID: "crypto",
+		SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+		SubjectsJSON: "[]", TargetDataset: "bars_factor", Status: domain.BindingStatusEnabled,
+	}))
+	require.NoError(t, repo.Upsert(context.Background(), domain.FactorBinding{
+		BindingID: "bind-rank", FactorID: "rank", SpaceID: "crypto",
+		SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+		SubjectsJSON: "[]", TargetDataset: "rank_factor", Status: domain.BindingStatusEnabled,
+	}))
+	rows, err := repo.ListExecutable(context.Background())
+	require.NoError(t, err)
+	got := map[string]string{}
+	for _, row := range rows {
+		got[row.FactorID] = row.FactorType
+	}
+	require.Equal(t, domain.FactorTypeTimeSeries, got["bias"])
+	require.Equal(t, domain.FactorTypeCrossSection, got["rank"])
 }
 
 func TestListByFactorIncludesDisabledBindings(t *testing.T) {
