@@ -75,6 +75,12 @@ export function viewDisplayName(view?: Pick<View, "view_id" | "name"> | null) {
   return view.name || view.view_id || "";
 }
 
+export function viewBoundDatasetId(
+  view?: Pick<View, "dataset_id" | "primary_dataset_id"> | null
+) {
+  return (view?.dataset_id || view?.primary_dataset_id || "").trim();
+}
+
 export function viewModeFromPrimaryDataset(
   datasets: Array<Pick<Dataset, "dataset_id" | "data_kind">>,
   primaryDatasetId?: string
@@ -91,7 +97,7 @@ export function buildViewColumnLabels(
   fields: Field[],
   factors: Factor[],
   datasets: Array<Pick<Dataset, "dataset_id" | "name">> = [],
-  view?: Pick<View, "primary_dataset_id" | "dataset_ids"> | null
+  view?: Pick<View, "dataset_id" | "primary_dataset_id" | "dataset_ids"> | null
 ) {
   const datasetColumnLabels = buildDatasetColumnLabels(datasetColumns, fields, factors);
   const datasetColumnByQualifiedName = new Map<string, DatasetColumn>();
@@ -245,10 +251,11 @@ function readableViewColumnLabel(columnName: string) {
   return systemViewLabels[columnName] || columnName;
 }
 
-function viewDatasetCount(view?: Pick<View, "primary_dataset_id" | "dataset_ids"> | null) {
+function viewDatasetCount(view?: Pick<View, "dataset_id" | "primary_dataset_id" | "dataset_ids"> | null) {
   if (!view) return 0;
   const datasetIds = new Set<string>();
-  if (view.primary_dataset_id) datasetIds.add(view.primary_dataset_id);
+  const boundId = viewBoundDatasetId(view);
+  if (boundId) datasetIds.add(boundId);
   for (const datasetId of view.dataset_ids || []) {
     if (datasetId) datasetIds.add(datasetId);
   }
@@ -319,7 +326,7 @@ function isOriginType(value: unknown, name: string, alias: number) {
 }
 
 function isTimeSeriesDataKind(value: unknown) {
-  return value === "DATA_KIND_TIME_SERIES" || value === 2;
+  return value === "DATA_KIND_TIME_SERIES" || value === "time_series" || value === 2;
 }
 
 function typedFilterValue(value: string, valueType: FieldValueType): TypedValue {

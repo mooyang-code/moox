@@ -108,8 +108,8 @@ function datasetSupportsFreq(dataset: Dataset, freq: string) {
   return (dataset.freqs || []).some(item => item.trim() === freq);
 }
 
-function isTimeSeriesDataKind(value?: Dataset["data_kind"]) {
-  return value === "DATA_KIND_TIME_SERIES" || value === 2;
+function isTimeSeriesDataKind(value?: Dataset["data_kind"] | string | number) {
+  return value === "DATA_KIND_TIME_SERIES" || value === "time_series" || value === 2;
 }
 
 function jsonText(value?: string) {

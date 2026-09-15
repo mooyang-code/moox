@@ -263,6 +263,7 @@ import { useUserInfoStore } from "@/store/modules/user-info";
 import { listDataSources, listDatasets, listFactors, listSubjects, listViews } from "@/api/storage/metadata";
 import type { Dataset, PageResult, View } from "@/api/storage/types";
 import { pageResultTotal, statusLabel } from "@/views/data/shared/metadata-utils";
+import { viewBoundDatasetId } from "@/views/data/view-browse/view-browse-utils";
 import {
   datasetMatchesAttribution,
   isLikelyFactorResultDataset,
@@ -693,11 +694,12 @@ async function listAllViews(spaceId: string) {
 }
 
 function viewUsesLikelyFactorDataset(view: View, datasetById: Map<string, Dataset>) {
-  const dataset = datasetById.get(view.primary_dataset_id);
+  const datasetId = viewBoundDatasetId(view);
+  const dataset = datasetById.get(datasetId);
   if (dataset) {
     return isLikelyFactorResultDataset(dataset);
   }
-  return isLikelyFactorResultDatasetId(view.primary_dataset_id);
+  return isLikelyFactorResultDatasetId(datasetId);
 }
 
 async function loadGlobal() {

@@ -44,6 +44,7 @@ import type { LogicalAccount } from "@/api/trade/types";
 import { parseDSL, requiredFactorFields } from "@/views/strategy/dsl";
 import { buildInputBindings, canCombineSelections, findOutputColumn, normalizeFrequency, validBindings, validateAliasConflicts, type BindingSelection } from "@/views/strategy/bindings";
 import { freqFromViewFilterJSON } from "@/views/data/views/view-form-utils";
+import { viewBoundDatasetId } from "@/views/data/view-browse/view-browse-utils";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import type { Strategy } from "@/api/strategy-types";
 
@@ -76,7 +77,7 @@ async function loadSourceColumns() {
     form.frequency = form.frequency || dslPreview.value?.bar || "";
     await ensureColumns(source.view_id, spaceId);
     try {
-      const dataset = await getDataset({ space_id: spaceId, dataset_id: source.primary_dataset_id });
+      const dataset = await getDataset({ space_id: spaceId, dataset_id: viewBoundDatasetId(source) });
       if (requestId !== sourceRequest || props.spaceId !== spaceId) return;
       const supported = dataset.dataset?.freqs || [];
       const viewFrequency = freqFromViewFilterJSON(source.filter_json);

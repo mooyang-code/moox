@@ -33,7 +33,9 @@
           <a-table-column title="视图ID" data-index="view_id" :width="170" />
           <a-table-column title="中文名" data-index="name" :width="160" />
           <a-table-column title="引擎" data-index="engine" :width="100" />
-          <a-table-column title="主数据集" data-index="primary_dataset_id" :width="150" />
+          <a-table-column title="主数据集" :width="150">
+            <template #cell="{ record }">{{ viewBoundDatasetId(record) || "-" }}</template>
+          </a-table-column>
           <a-table-column title="频率" :width="90">
             <template #cell="{ record }">{{ viewFreqLabel(record) }}</template>
           </a-table-column>
@@ -197,6 +199,7 @@ import {
   freqOptionsForPrimaryDataset,
   removePrimaryFromIncludes
 } from "./view-form-utils";
+import { viewBoundDatasetId } from "@/views/data/view-browse/view-browse-utils";
 
 defineOptions({ name: "DataViews" });
 
@@ -247,9 +250,10 @@ const hasDatasetAttributionFilter = computed(() =>
 const datasetById = computed(() => new Map(datasets.value.map(item => [item.dataset_id, item])));
 const visibleRows = computed(() =>
   rows.value.filter(item => {
+    const boundDatasetId = viewBoundDatasetId(item);
     const matchedByDataset =
-      allowedPrimaryDatasetIdSet.value.size > 0 && allowedPrimaryDatasetIdSet.value.has(item.primary_dataset_id);
-    if (!matchedByDataset && excludedPrimaryDatasetIdSet.value.has(item.primary_dataset_id)) {
+      allowedPrimaryDatasetIdSet.value.size > 0 && allowedPrimaryDatasetIdSet.value.has(boundDatasetId);
+    if (!matchedByDataset && excludedPrimaryDatasetIdSet.value.has(boundDatasetId)) {
       return false;
     }
     if (props.excludeLikelyFactorDatasets && !matchedByDataset && viewUsesLikelyFactorDataset(item)) {
@@ -332,10 +336,10 @@ const form = reactive<ViewForm>({
 
 const modalTitle = computed(() => (editing.value ? "编辑视图" : "新增视图"));
 const primaryDataset = computed(() => datasets.value.find(item => item.dataset_id === form.primary_dataset_id));
-const primaryFreqOptions = computed(() => freqOptionsForPrimaryDataset(datasets.value, form.primary_dataset_id));
+const primaryFreqOptions = computed(() => freqOptionsForPrimaryDataset(datasets.value, form.primary_dataset_id || ""));
 const isTimeSeriesPrimaryDataset = computed(() => isTimeSeriesDataKind(primaryDataset.value?.data_kind));
 const includedDatasetOptions = computed(() =>
-  availableIncludedDatasets(selectableDatasets.value, form.primary_dataset_id, form.view_freq || "")
+  availableIncludedDatasets(selectableDatasets.value, form.primary_dataset_id || "", form.view_freq || "")
 );
 
 async function loadDatasets() {
@@ -395,11 +399,12 @@ async function listAllViews(spaceId: string) {
 }
 
 function viewUsesLikelyFactorDataset(view: View) {
-  const dataset = datasetById.value.get(view.primary_dataset_id);
+  const datasetId = viewBoundDatasetId(view);
+  const dataset = datasetById.value.get(datasetId);
   if (dataset) {
     return isLikelyFactorResultDataset(dataset);
   }
-  return isLikelyFactorResultDatasetId(view.primary_dataset_id);
+  return isLikelyFactorResultDatasetId(datasetId);
 }
 
 function resetForm() {
@@ -431,7 +436,8 @@ function openEdit(record: View) {
   editing.value = true;
   Object.assign(form, {
     ...record,
-    dataset_ids: (record.dataset_ids || []).filter(datasetId => datasetId !== record.primary_dataset_id),
+    dataset_ids: (record.dataset_ids || []).filter(datasetId => datasetId !== viewBoundDatasetId(record)),
+    primary_dataset_id: viewBoundDatasetId(record),
     grain_keys: record.grain_keys || [],
     filter_json: jsonText(record.filter_json),
     view_freq: freqFromViewFilterJSON(record.filter_json)
@@ -481,6 +487,7 @@ async function submit() {
     view_id: form.view_id,
     name: form.name,
     description: form.description,
+    dataset_id: form.primary_dataset_id,
     primary_dataset_id: form.primary_dataset_id,
     dataset_ids: datasetIds,
     grain_keys: defaultViewGrainKeys(datasets.value, form.primary_dataset_id),
@@ -610,7 +617,7 @@ function onPageSizeChange(pageSize: number) {
 }
 
 function syncIncludedDatasets() {
-  const next = removePrimaryFromIncludes(form.primary_dataset_id, form.dataset_ids || []);
+  const next = removePrimaryFromIncludes(form.primary_dataset_id || "", form.dataset_ids || []);
   const allowed = new Set(includedDatasetOptions.value.map(item => item.dataset_id));
   const filtered = next.filter(datasetId => allowed.has(datasetId));
   if (filtered.join("|") !== (form.dataset_ids || []).join("|")) {

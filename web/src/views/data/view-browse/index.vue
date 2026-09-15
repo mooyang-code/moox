@@ -437,6 +437,7 @@ import {
   normalizeKlineLimit,
   type KlineChartRecord,
   viewDisplayName,
+  viewBoundDatasetId,
   viewModeFromPrimaryDataset,
   type ViewFilterOperator,
   type ViewFilterState,
@@ -496,8 +497,9 @@ const visibleViews = computed(() => {
   const allowedPrimary = new Set(allowedPrimaryDatasetIds.filter(Boolean));
   const excludedPrimary = new Set((props.excludedPrimaryDatasetIds || []).filter(Boolean));
   return views.value.filter(view => {
-    const matchedByDataset = allowedPrimary.size > 0 && allowedPrimary.has(view.primary_dataset_id);
-    if (!matchedByDataset && excludedPrimary.has(view.primary_dataset_id)) {
+    const boundDatasetId = viewBoundDatasetId(view);
+    const matchedByDataset = allowedPrimary.size > 0 && allowedPrimary.has(boundDatasetId);
+    if (!matchedByDataset && excludedPrimary.has(boundDatasetId)) {
       return false;
     }
     if (props.excludeLikelyFactorDatasets && !matchedByDataset && viewUsesLikelyFactorDataset(view)) {
@@ -594,15 +596,15 @@ const filterOperatorSymbols: Record<ViewFilterOperator, string> = {
 };
 
 const activeView = computed(() => visibleViews.value.find(item => item.view_id === activeViewId.value));
-const primaryDataset = computed(() => datasets.value.find(item => item.dataset_id === activeView.value?.primary_dataset_id));
+const primaryDataset = computed(() => datasets.value.find(item => item.dataset_id === viewBoundDatasetId(activeView.value)));
 const currentDatasetName = computed(() => {
   const dataset = primaryDataset.value;
   if (!dataset) return "-";
   return dataset.name || dataset.dataset_id;
 });
-const currentDatasetId = computed(() => activeView.value?.primary_dataset_id || "-");
+const currentDatasetId = computed(() => viewBoundDatasetId(activeView.value) || "-");
 
-const mode = computed(() => viewModeFromPrimaryDataset(datasets.value, activeView.value?.primary_dataset_id));
+const mode = computed(() => viewModeFromPrimaryDataset(datasets.value, viewBoundDatasetId(activeView.value)));
 const modeText = computed(() => {
   if (mode.value === "time_series") return "时序视图 / DuckDB";
   if (mode.value === "record") return "记录视图 / Bleve";
@@ -939,11 +941,12 @@ async function listAllDatasets(spaceId: string) {
 }
 
 function viewUsesLikelyFactorDataset(view: View) {
-  const dataset = datasetById.value.get(view.primary_dataset_id);
+  const datasetId = viewBoundDatasetId(view);
+  const dataset = datasetById.value.get(datasetId);
   if (dataset) {
     return isLikelyFactorResultDataset(dataset);
   }
-  return isLikelyFactorResultDatasetId(view.primary_dataset_id);
+  return isLikelyFactorResultDatasetId(datasetId);
 }
 
 function ensureSelectedView() {
@@ -1021,7 +1024,7 @@ async function loadViewContext() {
 }
 
 async function loadDatasetColumns(space_id: string, view: View) {
-  const datasetIds = new Set([view.primary_dataset_id, ...(view.dataset_ids || [])].filter(Boolean));
+  const datasetIds = new Set([viewBoundDatasetId(view), ...(view.dataset_ids || [])].filter(Boolean));
   const results = await Promise.all(
     Array.from(datasetIds).map(dataset_id => listDatasetColumns({ space_id, dataset_id, page: { page: 1, size: 1000 } }))
   );
@@ -1151,7 +1154,7 @@ function resetFilterRows() {
 }
 
 function createFilterState(option?: FilterFieldOption): ViewFilterState {
-  const isStockCNKline = activeView.value?.primary_dataset_id === "dataset_stockcn_equity_kline";
+  const isStockCNKline = viewBoundDatasetId(activeView.value) === "dataset_stockcn_equity_kline";
   return {
     fieldName: option?.value || "",
     operator: option?.value === "series_tag" ? "eq" : "contains",

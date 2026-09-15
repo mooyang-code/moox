@@ -254,7 +254,8 @@ export interface View {
   view_id: string;
   name: string;
   description?: string;
-  primary_dataset_id: string;
+  dataset_id?: string;
+  primary_dataset_id?: string;
   dataset_ids?: string[];
   grain_keys?: string[];
   filter_json?: string;
