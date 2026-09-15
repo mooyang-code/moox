@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -27,6 +28,7 @@ func TestMergeProcessConfigHonorsRuntimeEnv(t *testing.T) {
 	require.Equal(t, "/tmp/gateway-merge.key", cfg.Storage.HMACKeyFile)
 	require.Equal(t, "/tmp/factor-merge-eventbus.yaml", cfg.EventBus.CredentialFile)
 	require.Equal(t, []string{"tls://eventbus.example:4222"}, cfg.EventBus.URLs)
+	require.Equal(t, 10*time.Second, cfg.EventBus.FetchMaxWait)
 }
 
 func TestMergeAssemblerLoadsExampleSpotSwapDefinition(t *testing.T) {
@@ -39,4 +41,5 @@ func TestMergeAssemblerLoadsExampleSpotSwapDefinition(t *testing.T) {
 	require.Equal(t, "dataset_binance_spot_kline_1m", cfg.Definitions[0].Sources[0].DatasetID)
 	require.Equal(t, "dataset_binance_swap_kline_1m", cfg.Definitions[0].Sources[1].DatasetID)
 	require.Contains(t, cfg.Definitions[0].FieldMappings[0].TargetField, "__")
+	require.Empty(t, cfg.Definitions[0].UniverseSource)
 }

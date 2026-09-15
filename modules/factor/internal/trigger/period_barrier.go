@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/report"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -178,8 +180,22 @@ func (b *PeriodBarrier) Freeze(ctx context.Context, spec FreezeSpec) error {
 		for _, subject := range failed {
 			failedSet[subject] = struct{}{}
 		}
+		var existingPairs []periodPairRow
+		if err := tx.Where(periodBarrierWhere(spec.Key)).Find(&existingPairs).Error; err != nil {
+			return err
+		}
+		keep := make(map[string]struct{}, len(existingPairs))
+		for _, current := range existingPairs {
+			if current.State != PairPending {
+				keep[current.BindingID+"\x00"+current.SubjectID] = struct{}{}
+			}
+		}
+		pairs := make([]periodPairRow, 0, len(bindings)*8)
 		for _, binding := range bindings {
 			for _, subject := range binding.Subjects {
+				if _, ok := keep[binding.BindingID+"\x00"+subject]; ok {
+					continue
+				}
 				pair := periodPairRow{
 					SpaceID: spec.Key.SpaceID, DatasetID: spec.Key.DatasetID, SnapshotID: spec.Key.SnapshotID,
 					Frequency: spec.Key.Frequency, PeriodTime: spec.Key.PeriodTime,
@@ -188,26 +204,19 @@ func (b *PeriodBarrier) Freeze(ctx context.Context, spec FreezeSpec) error {
 				if _, ok := failedSet[subject]; ok {
 					pair.State = PairMissingInput
 				}
-				var current periodPairRow
-				err := tx.Where(periodPairWhere(spec.Key, binding.BindingID, subject)).Take(&current).Error
-				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-					return err
-				}
-				if err == nil && current.State != PairPending {
-					continue
-				}
-				if err := tx.Clauses(clause.OnConflict{
-					Columns: []clause.Column{
-						{Name: "c_space_id"}, {Name: "c_dataset_id"}, {Name: "c_snapshot_id"},
-						{Name: "c_frequency"}, {Name: "c_period_time"}, {Name: "c_binding_id"}, {Name: "c_subject_id"},
-					},
-					DoUpdates: clause.AssignmentColumns([]string{"c_state"}),
-				}).Create(&pair).Error; err != nil {
-					return err
-				}
+				pairs = append(pairs, pair)
 			}
 		}
-		return nil
+		if len(pairs) == 0 {
+			return nil
+		}
+		return tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{
+				{Name: "c_space_id"}, {Name: "c_dataset_id"}, {Name: "c_snapshot_id"},
+				{Name: "c_frequency"}, {Name: "c_period_time"}, {Name: "c_binding_id"}, {Name: "c_subject_id"},
+			},
+			DoUpdates: clause.AssignmentColumns([]string{"c_state"}),
+		}).CreateInBatches(pairs, 200).Error
 	})
 	if err != nil {
 		return err
@@ -314,6 +323,45 @@ func (b *PeriodBarrier) ConfirmReceipt(ctx context.Context, key PeriodKey, bindi
 	return b.CloseIfReady(ctx, key)
 }
 
+func (b *PeriodBarrier) hasUnreportedFrozen(ctx context.Context, key PeriodKey) (bool, error) {
+	if b == nil {
+		return false, fmt.Errorf("factor period barrier is not initialized")
+	}
+	if err := key.validate(); err != nil {
+		return false, err
+	}
+	interval, err := report.ParseDatasetFrequency(key.Frequency)
+	if err != nil || interval <= 0 {
+		interval = time.Minute
+	}
+	cutoff := key.PeriodTime - int64(interval/time.Second)
+	var n int64
+	err = b.db.WithTx(ctx, func(tx *gorm.DB) error {
+		return tx.Model(&periodBarrierRow{}).Where(
+			"c_space_id = ? AND c_dataset_id = ? AND c_snapshot_id = ? AND c_frequency = ? AND c_frozen = ? AND c_report_state = ? AND c_period_time <> ? AND c_period_time >= ?",
+			key.SpaceID, key.DatasetID, key.SnapshotID, key.Frequency, 1, "waiting", key.PeriodTime, cutoff,
+		).Count(&n).Error
+	})
+	return n > 0, err
+}
+
+func (b *PeriodBarrier) hasLaterPeriod(ctx context.Context, key PeriodKey) (bool, error) {
+	if b == nil {
+		return false, fmt.Errorf("factor period barrier is not initialized")
+	}
+	if err := key.validate(); err != nil {
+		return false, err
+	}
+	var n int64
+	err := b.db.WithTx(ctx, func(tx *gorm.DB) error {
+		return tx.Model(&periodBarrierRow{}).Where(
+			"c_space_id = ? AND c_dataset_id = ? AND c_snapshot_id = ? AND c_frequency = ? AND c_period_time > ?",
+			key.SpaceID, key.DatasetID, key.SnapshotID, key.Frequency, key.PeriodTime,
+		).Count(&n).Error
+	})
+	return n > 0, err
+}
+
 func (b *PeriodBarrier) CloseIfReady(ctx context.Context, key PeriodKey) error {
 	if b == nil {
 		return fmt.Errorf("factor period barrier is not initialized")
@@ -373,6 +421,120 @@ func (b *PeriodBarrier) CloseIfReady(ctx context.Context, key PeriodKey) error {
 		return reportErr
 	}
 	return nil
+}
+
+func (b *PeriodBarrier) abandonEmptyBindingLedgers(ctx context.Context) error {
+	return b.db.WithTx(ctx, func(tx *gorm.DB) error {
+		return tx.Model(&periodBarrierRow{}).
+			Where("c_frozen = ? AND c_report_state = ? AND (c_bindings_json = ? OR TRIM(c_bindings_json) = ?)", 1, "waiting", "[]", "").
+			Update("c_report_state", "reported").Error
+	})
+}
+
+func (b *PeriodBarrier) CloseWaiting(ctx context.Context) error {
+	if b == nil {
+		return fmt.Errorf("factor period barrier is not initialized")
+	}
+	if err := b.abandonEmptyBindingLedgers(ctx); err != nil {
+		return err
+	}
+	if err := b.ExpirePending(ctx, time.Now().UTC()); err != nil {
+		return err
+	}
+	var keys []PeriodKey
+	err := b.db.WithTx(ctx, func(tx *gorm.DB) error {
+		var rows []periodBarrierRow
+		if err := tx.Where("c_frozen = ? AND c_report_state = ?", 1, "waiting").Order("c_period_time").Find(&rows).Error; err != nil {
+			return err
+		}
+		keys = make([]PeriodKey, 0, len(rows))
+		for _, row := range rows {
+			if strings.TrimSpace(row.BindingsJSON) == "" || row.BindingsJSON == "[]" {
+				if err := tx.Model(&periodBarrierRow{}).Where(periodBarrierWhere(PeriodKey{
+					SpaceID: row.SpaceID, DatasetID: row.DatasetID, SnapshotID: row.SnapshotID,
+					Frequency: row.Frequency, PeriodTime: row.PeriodTime,
+				})).Update("c_report_state", "reported").Error; err != nil {
+					return err
+				}
+				continue
+			}
+			keys = append(keys, PeriodKey{
+				SpaceID: row.SpaceID, DatasetID: row.DatasetID, SnapshotID: row.SnapshotID,
+				Frequency: row.Frequency, PeriodTime: row.PeriodTime,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	var first error
+	for _, key := range keys {
+		if err := b.CloseIfReady(ctx, key); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func (b *PeriodBarrier) ExpirePending(ctx context.Context, now time.Time) error {
+	if b == nil {
+		return fmt.Errorf("factor period barrier is not initialized")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	var keys []PeriodKey
+	err := b.db.WithTx(ctx, func(tx *gorm.DB) error {
+		var rows []periodBarrierRow
+		if err := tx.Where("c_frozen = ? AND c_report_state = ?", 1, "waiting").Order("c_period_time").Find(&rows).Error; err != nil {
+			return err
+		}
+		cutoff := now.Unix()
+		for _, row := range rows {
+			key := PeriodKey{
+				SpaceID: row.SpaceID, DatasetID: row.DatasetID, SnapshotID: row.SnapshotID,
+				Frequency: row.Frequency, PeriodTime: row.PeriodTime,
+			}
+			if cutoff <= periodPendingDeadline(key) {
+				continue
+			}
+			if err := tx.Model(&periodPairRow{}).Where(periodBarrierWhere(key)).Where("c_state = ?", PairPending).
+				Update("c_state", PairMissingInput).Error; err != nil {
+				return err
+			}
+			keys = append(keys, key)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	var first error
+	for _, key := range keys {
+		if err := b.CloseIfReady(ctx, key); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func periodPendingDeadline(key PeriodKey) int64 {
+	interval, err := report.ParseDatasetFrequency(key.Frequency)
+	if err != nil || interval <= 0 {
+		interval = time.Minute
+	}
+	// Strategy ValidUntil is two bars after bar end (period+3m on 1m). Report
+	// FactorPeriodComputed at period+2m so the result can still be committed.
+	return key.PeriodTime + int64((2 * interval) / time.Second)
+}
+
+func periodCatchupFreezeDeadline(key PeriodKey) int64 {
+	interval, err := report.ParseDatasetFrequency(key.Frequency)
+	if err != nil || interval <= 0 {
+		interval = time.Minute
+	}
+	return key.PeriodTime + int64((interval + 14*time.Minute) / time.Second)
 }
 
 func (b *PeriodBarrier) PruneClosedBefore(ctx context.Context, cutoff int64) error {
@@ -546,20 +708,33 @@ func buildFactorPeriodMarker(key PeriodKey, row periodBarrierRow, bindings []Fro
 		return nil, err
 	}
 	byBinding := make(map[string][]periodPairRow)
-	positions := make([]*storagepb.CommittedPosition, 0, len(pairs))
-	seenPos := make(map[string]struct{})
+	bestPos := make(map[string]*storagepb.CommittedPosition)
 	for _, pair := range pairs {
 		byBinding[pair.BindingID] = append(byBinding[pair.BindingID], pair)
-		if pair.ReceiptConfirmed != 1 || strings.TrimSpace(pair.NodeID) == "" || strings.TrimSpace(pair.StoreID) == "" || pair.Sequence == 0 {
+		nodeID := strings.TrimSpace(pair.NodeID)
+		storeID := strings.TrimSpace(pair.StoreID)
+		if pair.ReceiptConfirmed != 1 || nodeID == "" || storeID == "" || pair.Sequence == 0 {
 			continue
 		}
-		token := pair.NodeID + "\x00" + pair.StoreID + "\x00" + fmt.Sprint(pair.Sequence)
-		if _, ok := seenPos[token]; ok {
+		token := nodeID + "\x00" + storeID
+		if current, ok := bestPos[token]; ok && pair.Sequence <= current.GetSequence() {
 			continue
 		}
-		seenPos[token] = struct{}{}
-		positions = append(positions, &storagepb.CommittedPosition{NodeId: pair.NodeID, StoreId: pair.StoreID, Sequence: pair.Sequence})
+		bestPos[token] = &storagepb.CommittedPosition{NodeId: nodeID, StoreId: storeID, Sequence: pair.Sequence}
 	}
+	positions := make([]*storagepb.CommittedPosition, 0, len(bestPos))
+	for _, position := range bestPos {
+		positions = append(positions, position)
+	}
+	sort.Slice(positions, func(i, j int) bool {
+		if positions[i].GetNodeId() != positions[j].GetNodeId() {
+			return positions[i].GetNodeId() < positions[j].GetNodeId()
+		}
+		if positions[i].GetStoreId() != positions[j].GetStoreId() {
+			return positions[i].GetStoreId() < positions[j].GetStoreId()
+		}
+		return positions[i].GetSequence() < positions[j].GetSequence()
+	})
 	states := make([]*storagepb.FactorBindingPeriodState, 0, len(bindings))
 	status := "complete"
 	for _, binding := range bindings {
@@ -589,7 +764,7 @@ func buildFactorPeriodMarker(key PeriodKey, row periodBarrierRow, bindings []Fro
 	return &storagepb.FactorPeriodComputedMarker{
 		DatasetId: key.DatasetID, Frequency: key.Frequency, PeriodTime: key.PeriodTime, Status: status,
 		BatchId: row.BatchID, ConfigSnapshotId: key.SnapshotID, ExpectedScopeRef: scope,
-		ExpectedSubjectIds: expected, Bindings: states, CommittedPositions: positions,
+		UniverseSubjectIds: expected, Bindings: states, CommittedPositions: positions,
 		ComputedAt: timestamppb.Now(), TriggerEventId: row.BatchID,
 	}, nil
 }

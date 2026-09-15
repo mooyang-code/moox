@@ -111,17 +111,22 @@ func (r *BindingRepository) ListExecutable(ctx context.Context) ([]domain.Factor
 	return rows, err
 }
 
-// HasExecutableOrPending reports whether an enabled factor still has work
-// waiting for this source View. It closes the small window where a source-ready
-// marker can arrive while a pending binding is being promoted by the
-// reconciler: the marker must be retried, not acknowledged and lost.
+// HasExecutableOrPending reports whether a cross-section factor still has work
+// waiting for this source View. Time-series bindings share the same View but
+// execute from DatasetRows; they must not keep ViewDataReady in the retry loop.
+// Pending cross-section bindings still retry so a marker is not lost while the
+// reconciler promotes them.
 func (r *BindingRepository) HasExecutableOrPending(ctx context.Context, spaceID, sourceViewID, freq string) (bool, error) {
 	var count int64
 	err := r.db.WithContext(ctx).
 		Table("t_factor_bindings AS b").
 		Joins("JOIN t_factor_defs AS f ON f.c_factor_id = b.c_factor_id").
 		Where("b.c_space_id = ? AND b.c_source_view_id = ? AND b.c_freq = ?", spaceID, sourceViewID, freq).
-		Where("b.c_status IN ? AND f.c_status = ?", []string{domain.BindingStatusEnabled, domain.BindingStatusPendingView}, domain.FactorStatusEnabled).
+		Where("b.c_status IN ? AND f.c_status = ? AND f.c_factor_type = ?",
+			[]string{domain.BindingStatusEnabled, domain.BindingStatusPendingView},
+			domain.FactorStatusEnabled,
+			domain.FactorTypeCrossSection,
+		).
 		Count(&count).Error
 	return count > 0, err
 }

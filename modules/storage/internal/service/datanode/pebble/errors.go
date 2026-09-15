@@ -20,6 +20,15 @@ func invalidf(format string, args ...any) error {
 
 func ValidationErrorFor(message string) error { return invalid(message) }
 
+// ErrUnsupportedOutboxEvent marks a persisted outbox payload whose event
+// contract is no longer published. The relay drops these entries so a retired
+// type cannot block DatasetRowsUpserted or the current period markers.
+var ErrUnsupportedOutboxEvent = errors.New("unsupported outbox event")
+
+func IsUnsupportedOutboxEvent(err error) bool {
+	return errors.Is(err, ErrUnsupportedOutboxEvent)
+}
+
 type ConflictError struct{ EventID string }
 
 func (e ConflictError) Error() string {

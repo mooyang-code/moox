@@ -33,8 +33,8 @@ message CommittedPosition {
 }
 
 // CollectorPeriodCompleted marks a frozen collection set as terminal.
-// complete means every expected subject succeeded; degraded keeps the full
-// expected list and records failures.
+// complete means every universe subject succeeded; degraded keeps the full
+// universe list and records failures.
 message CollectorPeriodCompleted {
   string dataset_id = 1;
   string frequency = 2;
@@ -43,13 +43,13 @@ message CollectorPeriodCompleted {
   string batch_id = 5;
   string config_snapshot_id = 6;
   string expected_scope_ref = 7;
-  repeated string expected_subject_ids = 8;
+  repeated string universe_subject_ids = 8;
   repeated string failed_subjects = 9;
   repeated CommittedPosition committed_positions = 10;
   google.protobuf.Timestamp collected_at = 11;
 }
 
-// MergePeriodCompleted marks that every expected mdataset object reached a
+// MergePeriodCompleted marks that every universe mdataset object reached a
 // construction terminal state. Successful input commits precede this event.
 message MergePeriodCompleted {
   string dataset_id = 1;
@@ -59,7 +59,7 @@ message MergePeriodCompleted {
   string batch_id = 5;
   string config_snapshot_id = 6;
   string expected_scope_ref = 7;
-  repeated string expected_subject_ids = 8;
+  repeated string universe_subject_ids = 8;
   repeated string failed_subjects = 9;
   repeated CommittedPosition committed_positions = 10;
   google.protobuf.Timestamp completed_at = 11;
@@ -84,7 +84,7 @@ message FactorPeriodComputed {
   string batch_id = 5;
   string config_snapshot_id = 6;
   string expected_scope_ref = 7;
-  repeated string expected_subject_ids = 8;
+  repeated string universe_subject_ids = 8;
   repeated FactorBindingPeriodState bindings = 9;
   repeated CommittedPosition committed_positions = 10;
   google.protobuf.Timestamp computed_at = 11;
@@ -108,6 +108,12 @@ message ViewDataReady {
   // Registered completion event name this readiness is associated with, such as
   // event.storage.merge.period.completed or event.storage.dataset.factor_period.computed.
   string completion_kind = 12;
+  // Period completions copy the frozen object universe so consumers can lock
+  // the same membership without a second MergePeriodCompleted subscription.
+  repeated string universe_subject_ids = 13;
+  // FactorPeriodComputed copies per-binding terminal states so strategies can
+  // decide whether a degraded aggregate is still usable for their pool.
+  repeated FactorBindingPeriodState bindings = 14;
 }
 
 // DatasetSyncPoint is an ordered import/catchup fence in a Dataset outbox.

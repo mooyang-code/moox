@@ -172,7 +172,7 @@ func TestCollectorPeriodCompletedAllowsEmptySubjectIDs(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
 	payload := validCollectorPeriodCompleted(timestamppb.Now())
-	payload.ExpectedSubjectIds = nil
+	payload.UniverseSubjectIds = nil
 	payload.Frequency = "1H"
 	payload.PeriodTime = 1
 	_, err = registry.Encode(CollectorPeriodCompleted, payload, validationOptions("event-1", "space", "dataset"))

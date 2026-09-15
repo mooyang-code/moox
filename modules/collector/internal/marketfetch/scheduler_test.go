@@ -2,9 +2,13 @@ package marketfetch
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
@@ -199,6 +203,141 @@ func TestExpandRuleAllowsUnicodeSubjectNames(t *testing.T) {
 	}
 }
 
+func TestPriorityCryptoMinuteItemsSelectsBTCAndETHOnOneMinute(t *testing.T) {
+	items := []domain.CollectionItem{
+		{SubjectID: "AAA-USDT", DatasetID: "spot_bars"},
+		{SubjectID: "BTC-USDT", DatasetID: "spot_bars"},
+		{SubjectID: "ETH-USDT", DatasetID: "spot_bars"},
+		{SubjectID: "BTC-USDT", DatasetID: "swap_bars"},
+	}
+	got := priorityCryptoMinuteItems(items, "1m")
+	require.Equal(t, []string{"BTC-USDT", "ETH-USDT", "BTC-USDT"}, []string{got[0].SubjectID, got[1].SubjectID, got[2].SubjectID})
+	require.Equal(t, []string{"spot_bars", "spot_bars", "swap_bars"}, []string{got[0].DatasetID, got[1].DatasetID, got[2].DatasetID})
+	require.Empty(t, priorityCryptoMinuteItems(items, "1h"))
+}
+
+func TestTickInvokesPriorityCryptoMinuteWhenTimersOwnRealtime(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	rule := domain.TaskRule{
+		SpaceID: "crypto", RuleID: "binance_spot_kline", DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m"}`,
+		Enabled:       true,
+	}
+	require.NoError(t, db.TaskRules().Create(ctx, rule))
+	invoker := &recordingMarketFetchInvoker{
+		timerNodes: []scfinvoker.Node{{NodeID: "timer-1", FunctionName: "fn-timer-1", Region: "ap-hongkong", TriggerType: "timer"}},
+	}
+	now := time.Date(2026, 9, 15, 3, 12, 8, 0, time.UTC)
+	scheduler := &Scheduler{
+		Rules:                 db.TaskRules(),
+		Instances:             db.TaskInstances(),
+		Batches:               db.FetchBatches(),
+		Invoker:               invoker,
+		InvokeNonRealtimeOnly: true,
+		SpaceID:               "crypto",
+		Now:                   func() time.Time { return now },
+		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{
+			{SubjectID: "AAA-USDT", ExternalSymbol: "AAAUSDT", Status: "active"},
+			{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
+			{SubjectID: "ETH-USDT", ExternalSymbol: "ETHUSDT", Status: "active"},
+		}},
+	}
+	require.NoError(t, scheduler.Tick(ctx, "crypto"))
+	require.Eventually(t, func() bool { return len(invoker.snapshot()) == 2 }, 2*time.Second, 10*time.Millisecond)
+	require.ElementsMatch(t, []string{"BTC-USDT", "ETH-USDT"}, invokedSubjectIDs(invoker.snapshot()))
+	for _, invoke := range invoker.snapshot() {
+		require.Equal(t, "timer-1", invoke.nodeID)
+		require.Equal(t, "market_fetch", invoke.event["action"])
+		require.Empty(t, invoke.event["Type"])
+		data, ok := invoke.event["data"].(map[string]any)
+		require.True(t, ok)
+		items, ok := data["items"].([]any)
+		require.True(t, ok)
+		require.Len(t, items, 1)
+		item, ok := items[0].(map[string]any)
+		require.True(t, ok)
+		require.EqualValues(t, 2, item["bar_limit"])
+	}
+	require.NoError(t, scheduler.Tick(ctx, "crypto"))
+	require.Never(t, func() bool { return len(invoker.snapshot()) > 2 }, 200*time.Millisecond, 20*time.Millisecond)
+}
+
+func TestTickDoesNotDuplicatePriorityWhenInvokeOwnsRealtime(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	rule := domain.TaskRule{
+		SpaceID: "crypto", RuleID: "binance_spot_kline", DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m"}`,
+		Enabled:       true,
+	}
+	require.NoError(t, db.TaskRules().Create(ctx, rule))
+	invoker := &recordingMarketFetchInvoker{
+		invokeNodes: []scfinvoker.Node{{NodeID: "invoke-1", FunctionName: "fn-invoke-1", Region: "ap-hongkong", TriggerType: "invoke"}},
+		timerNodes:  []scfinvoker.Node{{NodeID: "timer-1", FunctionName: "fn-timer-1", Region: "ap-hongkong", TriggerType: "timer"}},
+	}
+	now := time.Date(2026, 9, 15, 3, 12, 8, 0, time.UTC)
+	scheduler := &Scheduler{
+		Rules:     db.TaskRules(),
+		Instances: db.TaskInstances(),
+		Batches:   db.FetchBatches(),
+		Invoker:   invoker,
+		SpaceID:   "crypto",
+		Now:       func() time.Time { return now },
+		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{
+			{SubjectID: "AAA-USDT", ExternalSymbol: "AAAUSDT", Status: "active"},
+			{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
+			{SubjectID: "ETH-USDT", ExternalSymbol: "ETHUSDT", Status: "active"},
+		}},
+	}
+	require.NoError(t, scheduler.Tick(ctx, "crypto"))
+	require.Eventually(t, func() bool { return len(invoker.snapshot()) > 0 }, 2*time.Second, 10*time.Millisecond)
+	require.Never(t, func() bool {
+		for _, invoke := range invoker.snapshot() {
+			if invoke.nodeID == "invoke-1" {
+				return true
+			}
+		}
+		return false
+	}, 200*time.Millisecond, 20*time.Millisecond)
+	require.Equal(t, []string{"AAA-USDT", "BTC-USDT", "ETH-USDT"}, invokedSubjectIDs(invoker.snapshot()))
+	for _, invoke := range invoker.snapshot() {
+		require.Equal(t, "timer-1", invoke.nodeID)
+	}
+}
+
+func TestTickPrefersInvokeNodesForPriorityCryptoMinute(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	rule := domain.TaskRule{
+		SpaceID: "crypto", RuleID: "binance_spot_kline", DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m"}`,
+		Enabled:       true,
+	}
+	require.NoError(t, db.TaskRules().Create(ctx, rule))
+	invoker := &recordingMarketFetchInvoker{
+		invokeNodes: []scfinvoker.Node{{NodeID: "invoke-1", FunctionName: "fn-invoke-1", Region: "ap-hongkong", TriggerType: "invoke"}},
+		timerNodes:  []scfinvoker.Node{{NodeID: "timer-1", FunctionName: "fn-timer-1", Region: "ap-hongkong", TriggerType: "timer"}},
+	}
+	now := time.Date(2026, 9, 15, 3, 12, 8, 0, time.UTC)
+	scheduler := &Scheduler{
+		Rules:                 db.TaskRules(),
+		Instances:             db.TaskInstances(),
+		Batches:               db.FetchBatches(),
+		Invoker:               invoker,
+		InvokeNonRealtimeOnly: true,
+		SpaceID:               "crypto",
+		Now:                   func() time.Time { return now },
+		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{
+			{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
+		}},
+	}
+	require.NoError(t, scheduler.Tick(ctx, "crypto"))
+	require.Eventually(t, func() bool { return len(invoker.snapshot()) == 1 }, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, "invoke-1", invoker.snapshot()[0].nodeID)
+	require.Equal(t, []string{"BTC-USDT"}, invokedSubjectIDs(invoker.snapshot()))
+}
+
 func TestExpandRuleSkipsMalformedSnapshotSubjects(t *testing.T) {
 	scheduler := &Scheduler{
 		SpaceID: "crypto",
@@ -233,6 +372,52 @@ func ruleIDs(rules []domain.TaskRule) []string {
 	ids := make([]string, 0, len(rules))
 	for _, rule := range rules {
 		ids = append(ids, rule.RuleID)
+	}
+	return ids
+}
+
+type recordedInvoke struct {
+	nodeID string
+	event  map[string]any
+}
+
+type recordingMarketFetchInvoker struct {
+	mu          sync.Mutex
+	invokeNodes []scfinvoker.Node
+	timerNodes  []scfinvoker.Node
+	invokes     []recordedInvoke
+}
+
+func (r *recordingMarketFetchInvoker) ListMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
+	return append([]scfinvoker.Node(nil), r.invokeNodes...), nil
+}
+
+func (r *recordingMarketFetchInvoker) ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
+	return append([]scfinvoker.Node(nil), r.timerNodes...), nil
+}
+
+func (r *recordingMarketFetchInvoker) Invoke(_ context.Context, _, nodeID string, event map[string]any, _ cloudnodepb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.invokes = append(r.invokes, recordedInvoke{nodeID: nodeID, event: event})
+	return scfinvoker.InvocationResult{RequestID: "req-1"}, nil
+}
+
+func (r *recordingMarketFetchInvoker) snapshot() []recordedInvoke {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]recordedInvoke(nil), r.invokes...)
+}
+
+func invokedSubjectIDs(invokes []recordedInvoke) []string {
+	ids := make([]string, 0, len(invokes))
+	for _, invoke := range invokes {
+		data, _ := invoke.event["data"].(map[string]any)
+		items, _ := data["items"].([]any)
+		for _, item := range items {
+			fields, _ := item.(map[string]any)
+			ids = append(ids, strings.TrimSpace(fmt.Sprint(fields["subject_id"])))
+		}
 	}
 	return ids
 }

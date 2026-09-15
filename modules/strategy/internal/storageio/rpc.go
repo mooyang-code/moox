@@ -175,6 +175,53 @@ func (s *viewSnapshot) HistoryPeriods(ctx context.Context, spaceID, viewID, _ st
 	return result, nil
 }
 
+func (s *viewSnapshot) RestrictSelectors(items []input.PoolItem) {
+	if s == nil || len(items) == 0 {
+		return
+	}
+	byID := make(map[string]string, len(items))
+	byCanonical := make(map[string]string, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item.SubjectID)
+		if id == "" {
+			continue
+		}
+		byID[id] = id
+		byCanonical[stripCryptoVenueSuffix(id)] = id
+	}
+	if len(byID) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for viewID, selectors := range s.selectors {
+		filtered := make([]*storagepb.TimeSeriesSelector, 0, len(byID))
+		seen := make(map[string]struct{}, len(byID))
+		for _, selector := range selectors {
+			if selector == nil {
+				continue
+			}
+			poolID, ok := byID[selector.GetSubjectId()]
+			if !ok {
+				poolID, ok = byCanonical[stripCryptoVenueSuffix(selector.GetSubjectId())]
+			}
+			if !ok {
+				continue
+			}
+			if _, dup := seen[poolID]; dup {
+				continue
+			}
+			seen[poolID] = struct{}{}
+			selector.SubjectId = poolID
+			selector.SeriesTag = nil
+			filtered = append(filtered, selector)
+		}
+		if len(filtered) > 0 {
+			s.selectors[viewID] = filtered
+		}
+	}
+}
+
 func (s *viewSnapshot) readPinnedRows(ctx context.Context, spaceID, viewID string, start, end time.Time) ([]ViewRow, error) {
 	s.mu.Lock()
 	requireComplete := s.requireComplete[viewID]
@@ -331,7 +378,7 @@ func (c *RPCClient) ListSubjects(ctx context.Context, spaceID, viewID string) ([
 		// permanently unavailable market.
 		return c.listCatalogSubjects(ctx, spaceID, datasetID)
 	}
-	return result, nil
+	return canonicalizeMergedCatalogSubjects(datasetID, result), nil
 }
 
 func (c *RPCClient) ReadPeriod(ctx context.Context, spaceID, viewID string, period time.Time) ([]ViewRow, error) {
@@ -538,7 +585,7 @@ func (c *RPCClient) selectorsForDataset(ctx context.Context, spaceID, datasetID,
 	if len(selectors) == 0 {
 		return nil, fmt.Errorf("%w: view dataset %s has no active subjects or catalog entries", input.ErrNotReady, datasetID)
 	}
-	return selectors, nil
+	return canonicalizeMergedSelectors(datasetID, selectors), nil
 }
 
 func (c *RPCClient) subjectSeriesTag(ctx context.Context, spaceID, subjectID string) (string, error) {
@@ -586,6 +633,7 @@ func (c *RPCClient) listCatalogSubjects(ctx context.Context, spaceID, datasetID 
 			break
 		}
 	}
+	result = canonicalizeMergedCatalogSubjects(datasetID, result)
 	if len(result) == 0 {
 		return nil, fmt.Errorf("%w: view dataset %s has no active subjects or catalog entries", input.ErrNotReady, datasetID)
 	}
@@ -705,6 +753,66 @@ func retErrorForView(info *commonpb.RetInfo, viewID string) error {
 		}
 	}
 	return fmt.Errorf("%w: storage rpc %s: %s", input.ErrStaleViewSnapshot, info.GetCode().String(), info.GetMsg())
+}
+
+func canonicalizeMergedCatalogSubjects(datasetID string, subjects []input.Subject) []input.Subject {
+	if !isMergedDatasetID(datasetID) {
+		return subjects
+	}
+	out := make([]input.Subject, 0, len(subjects))
+	seen := make(map[string]struct{}, len(subjects))
+	for _, subject := range subjects {
+		id := stripCryptoVenueSuffix(subject.SubjectID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		subject.SubjectID = id
+		subject.InstrumentID = id
+		subject.SeriesTag = ""
+		out = append(out, subject)
+	}
+	return out
+}
+
+func canonicalizeMergedSelectors(datasetID string, selectors []*storagepb.TimeSeriesSelector) []*storagepb.TimeSeriesSelector {
+	if !isMergedDatasetID(datasetID) {
+		return selectors
+	}
+	out := make([]*storagepb.TimeSeriesSelector, 0, len(selectors))
+	seen := make(map[string]struct{}, len(selectors))
+	for _, selector := range selectors {
+		if selector == nil {
+			continue
+		}
+		id := stripCryptoVenueSuffix(selector.GetSubjectId())
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		selector.SubjectId = id
+		selector.SeriesTag = nil
+		out = append(out, selector)
+	}
+	return out
+}
+
+func isMergedDatasetID(datasetID string) bool {
+	return strings.HasPrefix(strings.TrimSpace(datasetID), "mdataset_")
+}
+
+func stripCryptoVenueSuffix(subjectID string) string {
+	value := strings.TrimSpace(subjectID)
+	for _, suffix := range []string{"-SPOT", "-SWAP"} {
+		value = strings.TrimSuffix(value, suffix)
+	}
+	return value
 }
 
 func firstNonEmpty(values ...string) string {

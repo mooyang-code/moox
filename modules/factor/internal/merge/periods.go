@@ -37,7 +37,7 @@ type PeriodMarker struct {
 	ScopeRef           string
 	Status             string
 	PeriodTime         time.Time
-	ExpectedSubjectIDs []string
+	UniverseSubjectIDs []string
 	FailedSubjects     []string
 	Positions          []WriteReceipt
 }
@@ -110,7 +110,7 @@ func (l *PeriodLedger) Freeze(ctx context.Context, key PeriodKey, expected []str
 	if strings.TrimSpace(key.DatasetID) == "" || strings.TrimSpace(key.SnapshotID) == "" || strings.TrimSpace(key.Frequency) == "" || key.PeriodTime.IsZero() || deadline.IsZero() {
 		return fmt.Errorf("period identity and deadline are required")
 	}
-	universe := uniquePreserve(expected)
+	universe := canonicalizeUniverseSubjects(expected)
 	raw, err := json.Marshal(universe)
 	if err != nil {
 		return err
@@ -179,7 +179,7 @@ func (l *PeriodLedger) NoteCollectorCompleted(ctx context.Context, datasetID, so
 	if l == nil {
 		return fmt.Errorf("merge period ledger is not initialized")
 	}
-	raw, err := json.Marshal(uniquePreserve(expected))
+	raw, err := json.Marshal(canonicalizeUniverseSubjects(expected))
 	if err != nil {
 		return err
 	}
@@ -226,11 +226,21 @@ func (l *PeriodLedger) CollectorUniverse(ctx context.Context, datasetID string, 
 			return nil, false, nil
 		}
 	}
-	var universe []string
-	for _, sourceID := range sourceIDs {
-		universe = append(universe, bySource[sourceID]...)
+	return intersectUniverse(bySource, sourceIDs), true, nil
+}
+
+func (l *PeriodLedger) Frozen(ctx context.Context, key PeriodKey) (bool, error) {
+	if l == nil {
+		return false, fmt.Errorf("merge period ledger is not initialized")
 	}
-	return uniquePreserve(universe), true, nil
+	_, err := l.loadPeriod(ctx, key)
+	if err == gorm.ErrRecordNotFound {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (l *PeriodLedger) Accepts(ctx context.Context, key PeriodKey, subjectID string) (bool, error) {
@@ -241,16 +251,13 @@ func (l *PeriodLedger) Accepts(ctx context.Context, key PeriodKey, subjectID str
 		}
 		return false, err
 	}
-	if period.Status != "waiting" {
-		return false, nil
-	}
 	expected := decodeExpected(period.ExpectedJSON)
 	if len(expected) == 0 {
 		return false, nil
 	}
-	subjectID = strings.TrimSpace(subjectID)
+	subjectID = canonicalUniverseSubjectID(subjectID)
 	for _, id := range expected {
-		if id == subjectID {
+		if canonicalUniverseSubjectID(id) == subjectID {
 			return true, nil
 		}
 	}
@@ -321,7 +328,7 @@ func (l *PeriodLedger) Finalize(ctx context.Context, key PeriodKey, now time.Tim
 	marker := PeriodMarker{
 		DatasetID: period.DatasetID, Frequency: period.Frequency, SnapshotID: period.SnapshotID,
 		BatchID: period.BatchID, ScopeRef: "universe:" + period.DatasetID + ":" + period.Frequency,
-		Status: period.Status, PeriodTime: period.PeriodTime, ExpectedSubjectIDs: expected, FailedSubjects: failed,
+		Status: period.Status, PeriodTime: period.PeriodTime, UniverseSubjectIDs: expected, FailedSubjects: failed,
 		Positions: collapseReceipts(subjects),
 	}
 	if err := l.reporter.Report(ctx, marker); err != nil {
@@ -421,6 +428,47 @@ func uniquePreserve(values []string) []string {
 	return out
 }
 
+func canonicalUniverseSubjectID(subjectID string) string {
+	value := strings.ToUpper(strings.TrimSpace(subjectID))
+	for _, suffix := range []string{"-SPOT", "-SWAP"} {
+		value = strings.TrimSuffix(value, suffix)
+	}
+	return value
+}
+
+func canonicalizeUniverseSubjects(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		id := canonicalUniverseSubjectID(value)
+		if id == "" {
+			continue
+		}
+		out = append(out, id)
+	}
+	return uniquePreserve(out)
+}
+
+func intersectUniverse(bySource map[string][]string, sourceIDs []string) []string {
+	if len(sourceIDs) == 0 {
+		return nil
+	}
+	universe := canonicalizeUniverseSubjects(bySource[sourceIDs[0]])
+	for _, sourceID := range sourceIDs[1:] {
+		allowed := make(map[string]struct{}, len(bySource[sourceID]))
+		for _, id := range canonicalizeUniverseSubjects(bySource[sourceID]) {
+			allowed[id] = struct{}{}
+		}
+		filtered := make([]string, 0, len(universe))
+		for _, id := range universe {
+			if _, ok := allowed[id]; ok {
+				filtered = append(filtered, id)
+			}
+		}
+		universe = filtered
+	}
+	return universe
+}
+
 func decodeExpected(raw string) []string {
 	if strings.TrimSpace(raw) == "" {
 		return nil
@@ -429,7 +477,7 @@ func decodeExpected(raw string) []string {
 	if err := json.Unmarshal([]byte(raw), &values); err != nil {
 		return nil
 	}
-	return uniquePreserve(values)
+	return canonicalizeUniverseSubjects(values)
 }
 
 func stablePeriodBatchID(key PeriodKey) string {

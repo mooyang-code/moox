@@ -121,6 +121,41 @@ func TestProcessDeliveryStopsTermRetryWhenConnectionClosed(t *testing.T) {
 	}
 }
 
+func TestProcessDeliveryAcksDeferredApplyWithoutRetry(t *testing.T) {
+	consumer := &Consumer{config: Config{}}
+	var applies, acks, progress, terms int
+	delivery := &jetstream.Delivery{Subject: "crypto.mdataset", DeliveryCount: 1}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := consumer.processDeliveryWithApplyAndActions(ctx, delivery, nil, -1, func(context.Context, *jetstream.Delivery) error {
+		applies++
+		return Deferred(errors.New("view data ready waiting for applied positions"))
+	}, deliveryActions{
+		ack: func(context.Context) error {
+			acks++
+			return nil
+		},
+		progress: func(context.Context) error {
+			progress++
+			return nil
+		},
+		term: func(context.Context) error {
+			terms++
+			return errors.New("unexpected term")
+		},
+	})
+	if err != nil {
+		t.Fatalf("deferred apply should ACK and return nil, got %v", err)
+	}
+	if applies != 1 || acks != 1 || progress != 0 || terms != 0 {
+		t.Fatalf("applies=%d acks=%d progress=%d terms=%d, want 1/1/0/0", applies, acks, progress, terms)
+	}
+	if time.Since(started) >= time.Second {
+		t.Fatalf("deferred apply retried for %s, want immediate ACK", time.Since(started))
+	}
+}
+
 func TestProcessDeliveryKeepsPermanentEventPendingByDefault(t *testing.T) {
 	consumer := &Consumer{config: Config{}}
 	ctx, cancel := context.WithCancel(context.Background())

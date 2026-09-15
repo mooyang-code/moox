@@ -206,6 +206,38 @@ func TestRequiredBindingsReadyUsesOnlyCompiledBindings(t *testing.T) {
 	}
 }
 
+func TestRequiredBindingsReadyRejectsFactorComputedDegradedWithoutStatuses(t *testing.T) {
+	compiled := compiler.CompiledStrategy{Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"view_binance_kline_1m"}}}
+	if requiredBindingsReady(compiled, PeriodReady{Status: "degraded", CompletionKind: events.MergePeriodCompleted.Name()}) {
+		t.Fatal("merge degraded ViewDataReady must not run factor-backed strategies via binding readiness")
+	}
+	if requiredBindingsReady(compiled, PeriodReady{Status: "degraded", CompletionKind: events.FactorPeriodComputed.Name()}) {
+		t.Fatal("factor computed ViewDataReady must not evaluate degraded results without binding statuses")
+	}
+}
+
+func TestRequiredBindingsReadyFactorComputedUsesBindingStatesWhenFactorsTrimmed(t *testing.T) {
+	compiled := compiler.CompiledStrategy{
+		SourceView:   compiler.CompiledView{ID: "view_binance_kline_1m"},
+		Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"view_binance_kline_1m"}},
+	}
+	event := PeriodReady{
+		ViewID: "view_binance_kline_1m", Status: "degraded", CompletionKind: events.FactorPeriodComputed.Name(),
+		BindingStatuses: map[string]string{"binding-1": "degraded"},
+		BindingStates: map[string]BindingPeriodState{
+			"binding-1": {Status: "degraded", SkippedSubjects: []string{"ETH-USDT"}},
+		},
+	}
+	pool := []input.InstrumentInput{{PoolItem: input.PoolItem{InstrumentID: "BTC-USDT", SubjectID: "BTC-USDT"}}}
+	if !requiredBindingsReady(compiled, event, pool) {
+		t.Fatal("trimmed factor plan must still accept skipped subjects outside the evaluated pool")
+	}
+	event.BindingStates["binding-1"] = BindingPeriodState{Status: "degraded", FailedSubjects: []string{"BTC-USDT"}}
+	if requiredBindingsReady(compiled, event, pool) {
+		t.Fatal("trimmed factor plan must reject a failed subject in the evaluated pool")
+	}
+}
+
 func TestRequiredBindingsReadyAllowsSkippedOnlyBindingState(t *testing.T) {
 	compiled := compiler.CompiledStrategy{InstrumentPool: config.InstrumentPoolRule{Include: []string{"BTC"}}, Factors: []compiler.CompiledFactor{{BindingID: "binding-required"}}}
 	event := PeriodReady{Status: "degraded", BindingStatuses: map[string]string{"binding-required": "degraded"}, BindingStates: map[string]BindingPeriodState{

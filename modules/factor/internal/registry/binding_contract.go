@@ -205,50 +205,18 @@ func validateLegacyActiveViewProjection(ctx context.Context, client bindingContr
 }
 
 func validateActiveViewInputs(view *storagepb.View, inputs []string) error {
-	exact := make(map[string]map[string]struct{})
-	suffix := make(map[string]map[string]struct{})
+	available := make([]string, 0, len(view.GetActiveColumns()))
 	for _, column := range view.GetActiveColumns() {
-		identity := strings.TrimSpace(column.GetColumnName())
-		if identity == "" {
-			identity = strings.TrimSpace(column.GetOriginId())
-		}
-		if identity == "" {
-			continue
-		}
 		name := strings.TrimSpace(column.GetColumnName())
 		if name == "" {
-			continue
+			name = strings.TrimSpace(column.GetOriginId())
 		}
-		if exact[name] == nil {
-			exact[name] = make(map[string]struct{})
-		}
-		exact[name][identity] = struct{}{}
-		if _, nameSuffix, ok := strings.Cut(name, "."); ok {
-			if suffix[nameSuffix] == nil {
-				suffix[nameSuffix] = make(map[string]struct{})
-			}
-			suffix[nameSuffix][identity] = struct{}{}
+		if name != "" {
+			available = append(available, name)
 		}
 	}
-	for _, input := range inputs {
-		if len(exact[input]) > 0 {
-			if !strings.Contains(input, ".") && len(exact[input]) > 1 {
-				return fmt.Errorf("source view %s input %s is ambiguous; use a qualified column", view.GetViewId(), input)
-			}
-			continue
-		}
-		if strings.Contains(input, ".") {
-			return fmt.Errorf("source view %s active schema is missing input %s", view.GetViewId(), input)
-		}
-		// Unqualified inputs are mapped back from dataset-qualified View
-		// columns during read. Reject a suffix shared by multiple datasets so
-		// the binding cannot be enabled only to fail on every execution.
-		if len(suffix[input]) > 1 {
-			return fmt.Errorf("source view %s input %s is ambiguous; use a qualified column", view.GetViewId(), input)
-		}
-		if len(suffix[input]) == 0 {
-			return fmt.Errorf("source view %s active schema is missing input %s", view.GetViewId(), input)
-		}
+	if _, err := domain.MapPythonInputColumns(inputs, available); err != nil {
+		return fmt.Errorf("source view %s active schema is missing input %s", view.GetViewId(), strings.TrimSpace(err.Error()))
 	}
 	return nil
 }

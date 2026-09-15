@@ -14,6 +14,9 @@ const (
 	MergeModeSystem = "system"
 	MergeModeCustom = "custom"
 
+	UniverseSourceCollector  = "collector"
+	UniverseSourceMembership = "membership"
+
 	StorageResourcePending = "pending"
 	StorageResourceCreated = "created"
 	StorageResourceFailed  = "failed"
@@ -59,6 +62,7 @@ type MergedDataset struct {
 	Sources              []SourceDatasetRef `json:"sources" gorm:"-"`
 	SourcesJSON          string             `json:"-" gorm:"column:c_sources_json"`
 	MergeMode            string             `json:"merge_mode" gorm:"column:c_merge_mode"`
+	UniverseSource       string             `json:"universe_source" gorm:"-"`
 	FieldMappings        []FieldMapping     `json:"field_mappings" gorm:"-"`
 	FieldMappingsJSON    string             `json:"-" gorm:"column:c_field_mappings_json"`
 	Enabled              bool               `json:"enabled" gorm:"column:c_enabled"`
@@ -105,6 +109,9 @@ func ValidateMergedDataset(def MergedDataset) error {
 	}
 	if def.MergeMode != MergeModeSystem && def.MergeMode != MergeModeCustom {
 		return fmt.Errorf("merge_mode must be system or custom")
+	}
+	if err := validateUniverseSource(def.UniverseSource); err != nil {
+		return err
 	}
 	if err := validateKeyContract(def.KeyContract); err != nil {
 		return err
@@ -261,6 +268,15 @@ func DecodeMergedDataset(def MergedDataset) (MergedDataset, error) {
 	return def, nil
 }
 
+func validateUniverseSource(source string) error {
+	switch strings.TrimSpace(source) {
+	case "", UniverseSourceCollector, UniverseSourceMembership:
+		return nil
+	default:
+		return fmt.Errorf("universe_source must be collector or membership")
+	}
+}
+
 func validateKeyContract(contract KeyContract) error {
 	for _, value := range []string{contract.SubjectID, contract.Frequency, contract.PeriodTime, contract.SeriesTag, contract.PeriodBoundary} {
 		if strings.TrimSpace(value) == "" {
@@ -290,4 +306,90 @@ func validateFieldName(name string) error {
 func isPublicRowKey(field string) bool {
 	_, ok := publicRowKeys[strings.TrimSpace(field)]
 	return ok
+}
+
+// PreferredMappedSource returns the first configured source Dataset, which is
+// the default Python-facing short-name mapping for a merged Dataset.
+func PreferredMappedSource(def MergedDataset) string {
+	if len(def.Sources) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(def.Sources[0].DatasetID)
+}
+
+// ExpandPythonInputs maps algorithm short names onto physical mdataset fields.
+// Qualified names are kept. When preferredSource is empty, a known mdataset
+// falls back to its first Merge source.
+func ExpandPythonInputs(datasetID, preferredSource string, requested []string) ([]string, error) {
+	preferredSource = strings.TrimSpace(preferredSource)
+	if preferredSource == "" {
+		preferredSource = defaultPreferredMappedSource(datasetID)
+	}
+	out := make([]string, 0, len(requested))
+	for _, req := range requested {
+		req = strings.TrimSpace(req)
+		if req == "" {
+			return nil, fmt.Errorf("input column is required")
+		}
+		if strings.Contains(req, "__") || strings.Contains(req, ".") || preferredSource == "" {
+			out = append(out, req)
+			continue
+		}
+		out = append(out, MappedSourceField(preferredSource, req))
+	}
+	return out, nil
+}
+
+func defaultPreferredMappedSource(datasetID string) string {
+	switch strings.TrimSpace(datasetID) {
+	case "mdataset_binance_kline_1m":
+		return "dataset_binance_spot_kline_1m"
+	default:
+		return ""
+	}
+}
+
+// MapPythonInputColumns resolves requested Python column names against a
+// physical schema. Exact names win; otherwise the first listed suffix match
+// after "__" or "." is used so spot/swap dual fields stay deterministic.
+func MapPythonInputColumns(requested, available []string) ([]string, error) {
+	physical := make([]string, len(requested))
+	for i, req := range requested {
+		resolved, err := mapPythonInputColumn(strings.TrimSpace(req), available)
+		if err != nil {
+			return nil, err
+		}
+		physical[i] = resolved
+	}
+	return physical, nil
+}
+
+func mapPythonInputColumn(requested string, available []string) (string, error) {
+	if requested == "" {
+		return "", fmt.Errorf("input column is required")
+	}
+	for _, col := range available {
+		if strings.TrimSpace(col) == requested {
+			return requested, nil
+		}
+	}
+	if strings.Contains(requested, ".") || strings.Contains(requested, "__") {
+		return "", fmt.Errorf("%s", requested)
+	}
+	for _, col := range available {
+		if columnFieldSuffix(strings.TrimSpace(col)) == requested {
+			return strings.TrimSpace(col), nil
+		}
+	}
+	return "", fmt.Errorf("%s", requested)
+}
+
+func columnFieldSuffix(name string) string {
+	if i := strings.LastIndex(name, "__"); i >= 0 && i+2 < len(name) {
+		return name[i+2:]
+	}
+	if i := strings.LastIndex(name, "."); i >= 0 && i+1 < len(name) {
+		return name[i+1:]
+	}
+	return name
 }

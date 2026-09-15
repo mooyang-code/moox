@@ -37,6 +37,7 @@ type datasetSpec struct {
 	ConfigSnapshotID string                    `yaml:"config_snapshot_id"`
 	KeyContract      domain.KeyContract        `yaml:"key_contract"`
 	ObjectSet        []string                  `yaml:"object_set"`
+	UniverseSource   string                    `yaml:"universe_source"`
 	Sources          []domain.SourceDatasetRef `yaml:"sources"`
 	FieldMappings    []domain.FieldMapping     `yaml:"field_mappings"`
 }
@@ -127,6 +128,6 @@ func (s datasetSpec) toDomain() domain.MergedDataset {
 	return domain.MergedDataset{
 		DatasetID: s.DatasetID, SpaceID: s.SpaceID, Frequency: s.Frequency, MergeMode: s.MergeMode,
 		ConfigSnapshotID: s.ConfigSnapshotID, KeyContract: s.KeyContract, ObjectSet: append([]string(nil), s.ObjectSet...),
-		Sources: append([]domain.SourceDatasetRef(nil), s.Sources...), FieldMappings: append([]domain.FieldMapping(nil), s.FieldMappings...),
+		UniverseSource: s.UniverseSource, Sources: append([]domain.SourceDatasetRef(nil), s.Sources...), FieldMappings: append([]domain.FieldMapping(nil), s.FieldMappings...),
 	}
 }

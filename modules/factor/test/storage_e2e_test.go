@@ -611,7 +611,7 @@ rules:
 		Marker: &storagepb.CollectorPeriodCompletedMarker{
 			DatasetId: sourceID, Frequency: freq, PeriodTime: third.Unix(), Status: "complete",
 			BatchId: "e2e-" + sourceID, ConfigSnapshotId: "e2e", ExpectedScopeRef: sourceID + ":" + freq,
-			ExpectedSubjectIds: subjectIDs,
+			UniverseSubjectIds: subjectIDs,
 			CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "e2e", StoreId: "e2e", Sequence: 1}},
 			CollectedAt:        timestamppb.New(time.Now().UTC()),
 		},

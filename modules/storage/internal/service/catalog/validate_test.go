@@ -11,7 +11,20 @@ import (
 func TestValidateDatasetIDAllowsFiftyCharacters(t *testing.T) {
 	require.NoError(t, validateDatasetID("dataset_a"+strings.Repeat("b", 41)))
 	require.Error(t, validateDatasetID("dataset_a"+strings.Repeat("b", 42)))
-	require.ErrorContains(t, validateDatasetID("a"+strings.Repeat("b", 49)), "must start with dataset_")
+	require.ErrorContains(t, validateDatasetID("a"+strings.Repeat("b", 49)), "must start with dataset_ or mdataset_")
+}
+
+func TestValidateDatasetIDAllowsMergedPrefix(t *testing.T) {
+	require.NoError(t, validateDatasetID("mdataset_binance_kline_1m"))
+	require.ErrorContains(t, validateDatasetID("xdataset_binance_kline_1m"), "must start with dataset_ or mdataset_")
+}
+
+func TestValidateViewColumnNameAllowsMergedDataset(t *testing.T) {
+	require.NoError(t, validateViewColumnName(&pb.ViewColumn{
+		ColumnName: "mdataset_binance_kline_1m.dataset_binance_spot_kline_1m__open",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		OriginId:   "mdataset_binance_kline_1m.dataset_binance_spot_kline_1m__open",
+	}))
 }
 
 func TestValidateViewIDAllowsFiftyCharacters(t *testing.T) {

@@ -102,7 +102,7 @@ func (s *Service) GetFactorPeriodComputedMarker(ctx context.Context, req *pb.Get
 		Marker: &pb.FactorPeriodComputedMarker{
 			DatasetId: payload.GetDatasetId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
 			Status: payload.GetStatus(), BatchId: payload.GetBatchId(), ConfigSnapshotId: payload.GetConfigSnapshotId(),
-			ExpectedScopeRef: payload.GetExpectedScopeRef(), ExpectedSubjectIds: append([]string(nil), payload.GetExpectedSubjectIds()...),
+			ExpectedScopeRef: payload.GetExpectedScopeRef(), UniverseSubjectIds: append([]string(nil), payload.GetUniverseSubjectIds()...),
 			Bindings: bindings, CommittedPositions: markerPositions(payload.GetCommittedPositions()),
 			ComputedAt: payload.GetComputedAt(), TriggerEventId: payload.GetTriggerEventId(),
 		},

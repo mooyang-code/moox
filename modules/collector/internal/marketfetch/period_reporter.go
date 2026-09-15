@@ -176,9 +176,8 @@ func (r *PeriodReporter) payload(ctx context.Context, report domain.PeriodReport
 	if report.Readiness.PayloadJSON != "" && report.Readiness.PayloadJSON != "{}" {
 		payload := &storageeventpb.CollectorPeriodCompleted{}
 		if err := protojson.Unmarshal([]byte(report.Readiness.PayloadJSON), payload); err != nil {
-			return nil, fmt.Errorf("decode fixed period payload id=%d: %w", report.Readiness.ID, err)
-		}
-		if len(payload.GetExpectedSubjectIds()) > 0 {
+			// Unreadable snapshots are rebuilt from period item rows.
+		} else if len(payload.GetUniverseSubjectIds()) > 0 {
 			return r.completeCollectorPayload(payload, report), nil
 		}
 	}
@@ -201,7 +200,7 @@ func (r *PeriodReporter) payload(ctx context.Context, report domain.PeriodReport
 		Frequency:          report.Readiness.Frequency,
 		PeriodTime:         report.Readiness.PeriodTime.Unix(),
 		Status:             status,
-		ExpectedSubjectIds: subjects,
+		UniverseSubjectIds: subjects,
 		FailedSubjects:     failed,
 		CollectedAt:        timestamppb.New(report.Readiness.CollectedAt.UTC()),
 	}, report)

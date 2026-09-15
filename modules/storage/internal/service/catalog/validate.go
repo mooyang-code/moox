@@ -46,8 +46,11 @@ func defaultViewEngine(kind pb.DataKind) string {
 }
 
 func validateDatasetID(datasetID string) error {
+	if strings.HasPrefix(datasetID, "mdataset_") {
+		return validateLowerSnakeID("dataset_id", datasetID, 50)
+	}
 	if !strings.HasPrefix(datasetID, "dataset_") {
-		return errors.New("dataset_id must start with dataset_")
+		return errors.New("dataset_id must start with dataset_ or mdataset_")
 	}
 	return validateLowerSnakeID("dataset_id", datasetID, 50)
 }

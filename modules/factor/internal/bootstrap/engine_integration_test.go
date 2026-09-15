@@ -61,6 +61,10 @@ func TestInitializeEngineConnectsCatalogPythonAndConsumer(t *testing.T) {
 	cfg.Engine.PythonBin = "python3"
 	cfg.Engine.WorkerPath = filepath.Join("..", "..", "pyworker", "worker.py")
 	cfg.Engine.FactorsDir = t.TempDir()
+	example, err := LoadEngineApplicationConfig("../../config/engine-app.yaml")
+	require.NoError(t, err)
+	cfg.Specs = example.Specs
+	cfg.Definitions = example.Definitions
 	runtime, err := InitializeEngine(ctx, s, cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })

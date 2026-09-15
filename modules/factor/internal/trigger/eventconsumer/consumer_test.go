@@ -285,6 +285,25 @@ func encodedViewReadyDelivery(t *testing.T, eventID string) *jetstream.Delivery 
 	}
 }
 
+func TestRunUntilCancelledRestartsAfterError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var runs atomic.Int32
+	var logged atomic.Int32
+	err := runUntilCancelled(ctx, 10*time.Millisecond, func(context.Context) error {
+		if runs.Add(1) == 1 {
+			return errors.New("in-progress delivery: context deadline exceeded")
+		}
+		cancel()
+		return nil
+	}, func(error) {
+		logged.Add(1)
+	})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, runs.Load(), int32(2))
+	require.Equal(t, int32(1), logged.Load())
+}
+
 func testViewDataReady(readyAt time.Time) *storagepb.ViewDataReady {
 	return &storagepb.ViewDataReady{
 		ViewId: "prices-view", ViewConfigId: "prices-view@1", CompletionEventId: "collector-1",

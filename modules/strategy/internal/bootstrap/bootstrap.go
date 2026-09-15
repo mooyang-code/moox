@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -402,7 +403,8 @@ func connectEventBus(ctx context.Context, cfg Config) (*jetstream.Client, error)
 
 func newStorageReader(cfg Config) *storageio.RPCClient {
 	credentials := gatewayauth.CredentialsFromEnv()
-	options := rpcOptions(cfg.Storage.Target, cfg.Storage.TargetNode, credentials, cfg.Storage.Timeout)
+	target, node := storageGatewayEndpoint(cfg)
+	options := storageRPCOptions(target, node, credentials, cfg.Storage.Timeout)
 	return &storageio.RPCClient{
 		Metadata: storagepb.NewMetadataClientProxy(options...),
 		DataView: storagepb.NewDataViewClientProxy(options...),
@@ -426,7 +428,8 @@ func newCompilerFactory(cfg Config) func(string) *compiler.Compiler {
 	return func(spaceID string) *compiler.Compiler {
 		credentials := gatewayauth.CredentialsFromEnv()
 		factorOptions := rpcOptions(cfg.Factor.Target, cfg.Factor.TargetNode, credentials, cfg.Factor.Timeout)
-		storageOptions := rpcOptions(cfg.Storage.Target, cfg.Storage.TargetNode, credentials, cfg.Storage.Timeout)
+		storageTarget, storageNode := storageGatewayEndpoint(cfg)
+		storageOptions := storageRPCOptions(storageTarget, storageNode, credentials, cfg.Storage.Timeout)
 		factorClient := &factorio.RPCClient{Proxy: factorpb.NewFactorMgrClientProxy(factorOptions...)}
 		storageClient := &storageio.RPCClient{
 			SpaceID:  spaceID,
@@ -444,9 +447,32 @@ func rpcOptions(target, targetNode string, credentials gatewayauth.Credentials, 
 	if envNode := gatewayauth.ServiceGatewayNodeID(); envNode != "" {
 		targetNode = envNode
 	}
-	options := gatewayauth.NewTRPCClientOptions(target, targetNode, credentials)
+	return appendTimeout(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials), timeout)
+}
+
+// storageGatewayEndpoint prefers the Storage node's native gateway. Control
+// injects MOOX_SERVICE_GATEWAY_TARGET / MOOX_GATEWAY_TARGET_NODE for local
+// FactorMgr, and those must not pin Metadata/GetView to a stale control-side
+// storage-primary replica.
+func storageGatewayEndpoint(cfg Config) (string, string) {
+	target := strings.TrimSpace(cfg.Storage.Target)
+	node := strings.TrimSpace(cfg.Storage.TargetNode)
+	if value := strings.TrimSpace(os.Getenv("MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET")); value != "" {
+		target = value
+	}
+	if value := strings.TrimSpace(os.Getenv("MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID")); value != "" {
+		node = value
+	}
+	return target, node
+}
+
+func storageRPCOptions(target, targetNode string, credentials gatewayauth.Credentials, timeout time.Duration) []client.Option {
+	return appendTimeout(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials), timeout)
+}
+
+func appendTimeout(options []client.Option, timeout time.Duration) []client.Option {
 	if timeout > 0 {
-		options = append(options, client.WithTimeout(timeout))
+		return append(options, client.WithTimeout(timeout))
 	}
 	return options
 }

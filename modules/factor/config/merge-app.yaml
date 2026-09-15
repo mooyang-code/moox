@@ -9,7 +9,7 @@ storage:
 eventbus:
   urls: [nats://127.0.0.1:4222]
   credential_file: ~/.config/moox/eventbus/factor-merge-eventbus.yaml
-  fetch_max_wait: 1s
+  fetch_max_wait: 10s
 definitions:
   - dataset_id: mdataset_binance_kline_1m
     space_id: crypto

@@ -2,6 +2,8 @@ package merge
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,14 +17,15 @@ func TestMergeAssemblerConsumesCollectorMarkersToFreeze(t *testing.T) {
 	ledger, _ := openPeriodLedger(t)
 	assembler.SetPeriodLedger(ledger)
 	handler := NewRowHandler(assembler)
+	handler.Now = mergeTestNow
 	period := time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC)
 	require.NoError(t, handler.HandleCollectorCompleted(context.Background(), &storagepb.CollectorPeriodCompleted{
 		DatasetId: "dataset_binance_spot_kline_1m", Frequency: "1m", PeriodTime: period.Unix(),
-		ExpectedSubjectIds: []string{"BTC-USDT"},
+		UniverseSubjectIds: []string{"BTC-USDT"},
 	}))
 	require.NoError(t, handler.HandleCollectorCompleted(context.Background(), &storagepb.CollectorPeriodCompleted{
 		DatasetId: "dataset_binance_swap_kline_1m", Frequency: "1m", PeriodTime: period.Unix(),
-		ExpectedSubjectIds: []string{"BTC-USDT"},
+		UniverseSubjectIds: []string{"BTC-USDT"},
 	}))
 	require.NoError(t, handler.HandleDatasetRows(context.Background(), sourceRows("dataset_binance_spot_kline_1m", "BTC-USDT", period, completeKlineFields("spot"))))
 	require.NoError(t, handler.HandleDatasetRows(context.Background(), sourceRows("dataset_binance_swap_kline_1m", "BTC-USDT", period, completeKlineFields("swap"))))
@@ -67,10 +70,44 @@ func TestMergeAssemblerDoesNotAckWhenApplyFails(t *testing.T) {
 	require.Error(t, handler.HandleDatasetRows(context.Background(), payload))
 }
 
+func TestMergeRunUntilCancelledRestartsAfterError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var runs atomic.Int32
+	var logged atomic.Int32
+	err := runUntilCancelled(ctx, 10*time.Millisecond, func(context.Context) error {
+		if runs.Add(1) == 1 {
+			return errors.New("apply handler result: context deadline exceeded")
+		}
+		cancel()
+		return nil
+	}, func(error) {
+		logged.Add(1)
+	})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, runs.Load(), int32(2))
+	require.Equal(t, int32(1), logged.Load())
+}
+
+func TestMergeRowHandlerSkipsExpiredArrivals(t *testing.T) {
+	handler, commits := openRowHandler(t, domain.MergeModeSystem)
+	period := time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC)
+	handler.Now = func() time.Time { return period.Add(2 * time.Minute) }
+	require.NoError(t, handler.HandleDatasetRows(context.Background(), sourceRows("dataset_binance_spot_kline_1m", "BTC-USDT", period, completeKlineFields("spot"))))
+	require.NoError(t, handler.HandleDatasetRows(context.Background(), sourceRows("dataset_binance_swap_kline_1m", "BTC-USDT", period, completeKlineFields("swap"))))
+	require.Empty(t, commits.ids)
+}
+
 func openRowHandler(t *testing.T, mode string) (*RowHandler, *commitRecorder) {
 	t.Helper()
 	assembler, commits := openAssembler(t, mode)
-	return NewRowHandler(assembler), commits
+	handler := NewRowHandler(assembler)
+	handler.Now = mergeTestNow
+	return handler, commits
+}
+
+func mergeTestNow() time.Time {
+	return time.Date(2026, 9, 13, 16, 6, 0, 0, time.UTC)
 }
 
 func sourceRows(datasetID, subject string, period time.Time, fields map[string]float64) *storagepb.DatasetRowsUpserted {

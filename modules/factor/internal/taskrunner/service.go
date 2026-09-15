@@ -749,7 +749,14 @@ func (s *Service) readChunk(ctx context.Context, task Task, cursor time.Time, pr
 	if prepared != nil {
 		return projectRangeChunk(prepared, task.Factor.InputColumns)
 	}
-	return s.readChunkColumns(ctx, task, cursor, task.Factor.InputColumns)
+	chunk, err := s.readChunkColumns(ctx, task, cursor, physicalReadColumns(task, task.Factor.InputColumns))
+	if err != nil {
+		return nil, err
+	}
+	if chunk == nil {
+		return nil, nil
+	}
+	return projectRangeChunk(chunk, task.Factor.InputColumns)
 }
 
 func (s *Service) readChunkColumns(ctx context.Context, task Task, cursor time.Time, columns []string) (*storageio.RangeChunk, error) {
@@ -857,8 +864,16 @@ func projectRangeChunk(chunk *storageio.RangeChunk, columns []string) (*storagei
 	if chunk.Frame == nil {
 		return projected, nil
 	}
-	indexes := make([]int, len(columns))
-	for index, column := range columns {
+	if len(chunk.Frame.Columns) == 0 {
+		projected.Frame = chunk.Frame
+		return projected, nil
+	}
+	physical, err := domain.MapPythonInputColumns(columns, chunk.Frame.Columns)
+	if err != nil {
+		return nil, fmt.Errorf("shared View read is missing factor input column %q", strings.TrimSpace(err.Error()))
+	}
+	indexes := make([]int, len(physical))
+	for index, column := range physical {
 		indexes[index] = -1
 		for sourceIndex, sourceColumn := range chunk.Frame.Columns {
 			if sourceColumn == column {
@@ -867,7 +882,7 @@ func projectRangeChunk(chunk *storageio.RangeChunk, columns []string) (*storagei
 			}
 		}
 		if indexes[index] < 0 {
-			return nil, fmt.Errorf("shared View read is missing factor input column %q", column)
+			return nil, fmt.Errorf("shared View read is missing factor input column %q", columns[index])
 		}
 	}
 	frame := &engine.DataFrame{
@@ -887,6 +902,23 @@ func projectRangeChunk(chunk *storageio.RangeChunk, columns []string) (*storagei
 	}
 	projected.Frame = frame
 	return projected, nil
+}
+
+func physicalReadColumns(task Task, columns []string) []string {
+	expanded, err := domain.ExpandPythonInputs(firstNonEmpty(task.SourceDataset, task.ResultDatasetID), task.PreferredSourceDataset, columns)
+	if err != nil {
+		return append([]string(nil), columns...)
+	}
+	return expanded
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func taskSourceView(task Task) string {

@@ -449,23 +449,39 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 		normalized = append(normalized, group)
 	}
 	sort.Slice(normalized, func(i, j int) bool { return groupKey(normalized[i]) < groupKey(normalized[j]) })
+	planned := make([][][]string, len(normalized))
 	needed := 0
-	for _, group := range normalized {
-		needed += (len(group.Subjects) + maxSubjects - 1) / maxSubjects
+	for index, group := range normalized {
+		subjects := group.Subjects
+		if isCryptoKlineGroup(group) {
+			subjects = pinPriorityCryptoSubjects(subjects)
+		}
+		planned[index] = splitSubjectChunks(subjects, maxSubjects)
+		needed += len(planned[index])
 	}
 	if needed > len(timerNodes) {
 		return nil, fmt.Errorf("timer assignment capacity insufficient: %d Timer nodes are required for the configured dataset/frequency shards, but only %d are available; increase the Timer SCF fleet", needed, len(timerNodes))
 	}
+	spare := len(timerNodes) - needed
+	for _, index := range cryptoSpareAllocationOrder(normalized) {
+		if spare <= 0 {
+			break
+		}
+		group := normalized[index]
+		chunks := planCryptoSubjectChunks(group.Subjects, maxSubjects, spare)
+		extra := len(chunks) - len(planned[index])
+		if extra > spare {
+			continue
+		}
+		spare -= extra
+		needed += extra
+		planned[index] = chunks
+	}
 	assignments := make([]NodeAssignment, 0, len(timerNodes))
 	nodeIndex := 0
-	for _, group := range normalized {
+	for index, group := range normalized {
 		stockGroup := strings.EqualFold(group.MarketType, "equity") && group.DatasetID == StockCNDatasetID
-		for start := 0; start < len(group.Subjects); start += maxSubjects {
-			end := start + maxSubjects
-			if end > len(group.Subjects) {
-				end = len(group.Subjects)
-			}
-			subjects := append([]string(nil), group.Subjects[start:end]...)
+		for _, subjects := range planned[index] {
 			hashParts := make([]string, 0, len(subjects))
 			externals := make(map[string]string, len(subjects))
 			for _, subject := range subjects {
@@ -504,6 +520,153 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 	}
 	sort.Slice(assignments, func(i, j int) bool { return assignments[i].NodeID < assignments[j].NodeID })
 	return assignments, nil
+}
+
+var priorityCryptoSubjects = []string{"BTC-USDT", "ETH-USDT"}
+
+func isCryptoKlineGroup(group TaskGroup) bool {
+	if strings.EqualFold(strings.TrimSpace(group.MarketID), "crypto") {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(group.MarketType)) {
+	case "spot", "swap":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCryptoKlineAssignment(assignment NodeAssignment) bool {
+	return isCryptoKlineGroup(TaskGroup{MarketType: assignment.MarketType, MarketID: assignment.MarketID})
+}
+
+func cryptoSpareAllocationOrder(groups []TaskGroup) []int {
+	indexes := make([]int, 0, len(groups))
+	for index, group := range groups {
+		if isCryptoKlineGroup(group) {
+			indexes = append(indexes, index)
+		}
+	}
+	sort.SliceStable(indexes, func(i, j int) bool {
+		left, right := groups[indexes[i]], groups[indexes[j]]
+		leftRank, rightRank := cryptoFrequencySpareRank(left.Frequency), cryptoFrequencySpareRank(right.Frequency)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		return groupKey(left) < groupKey(right)
+	})
+	return indexes
+}
+
+func cryptoFrequencySpareRank(freq string) int {
+	switch strings.ToLower(strings.TrimSpace(freq)) {
+	case "1m":
+		return 0
+	case "5m":
+		return 1
+	case "15m":
+		return 2
+	case "30m":
+		return 3
+	case "1h":
+		return 10
+	default:
+		return 50
+	}
+}
+
+func pinPriorityCryptoSubjects(subjects []string) []string {
+	if len(subjects) == 0 {
+		return subjects
+	}
+	present := make(map[string]struct{}, len(subjects))
+	for _, subject := range subjects {
+		present[subject] = struct{}{}
+	}
+	out := make([]string, 0, len(subjects))
+	seen := make(map[string]struct{}, len(priorityCryptoSubjects))
+	for _, subject := range priorityCryptoSubjects {
+		if _, ok := present[subject]; !ok {
+			continue
+		}
+		out = append(out, subject)
+		seen[subject] = struct{}{}
+	}
+	for _, subject := range subjects {
+		if _, ok := seen[subject]; ok {
+			continue
+		}
+		out = append(out, subject)
+	}
+	return out
+}
+
+func splitSubjectChunks(subjects []string, maxSubjects int) [][]string {
+	if maxSubjects <= 0 || len(subjects) == 0 {
+		return nil
+	}
+	chunks := make([][]string, 0, (len(subjects)+maxSubjects-1)/maxSubjects)
+	for start := 0; start < len(subjects); start += maxSubjects {
+		end := start + maxSubjects
+		if end > len(subjects) {
+			end = len(subjects)
+		}
+		chunks = append(chunks, append([]string(nil), subjects[start:end]...))
+	}
+	return chunks
+}
+
+func planCryptoSubjectChunks(subjects []string, maxSubjects, spare int) [][]string {
+	remaining := pinPriorityCryptoSubjects(subjects)
+	solos := make([][]string, 0, len(priorityCryptoSubjects))
+	for _, subject := range priorityCryptoSubjects {
+		if spare <= 0 || !cryptoGroupHasNonPriority(remaining) {
+			break
+		}
+		index := indexOfSubject(remaining, subject)
+		if index < 0 {
+			continue
+		}
+		candidate := append(append([]string{}, remaining[:index]...), remaining[index+1:]...)
+		oldTotal := len(solos) + (len(remaining)+maxSubjects-1)/maxSubjects
+		newTotal := len(solos) + 1
+		if len(candidate) > 0 {
+			newTotal += (len(candidate) + maxSubjects - 1) / maxSubjects
+		}
+		extra := newTotal - oldTotal
+		if extra > spare {
+			continue
+		}
+		spare -= extra
+		solos = append(solos, []string{subject})
+		remaining = candidate
+	}
+	if len(remaining) == 0 {
+		return solos
+	}
+	return append(solos, splitSubjectChunks(remaining, maxSubjects)...)
+}
+
+func cryptoGroupHasNonPriority(subjects []string) bool {
+	priority := make(map[string]struct{}, len(priorityCryptoSubjects))
+	for _, subject := range priorityCryptoSubjects {
+		priority[subject] = struct{}{}
+	}
+	for _, subject := range subjects {
+		if _, ok := priority[subject]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
+func indexOfSubject(subjects []string, want string) int {
+	for index, subject := range subjects {
+		if subject == want {
+			return index
+		}
+	}
+	return -1
 }
 
 // assignmentCron spreads crypto hourly shards across the first ten minutes

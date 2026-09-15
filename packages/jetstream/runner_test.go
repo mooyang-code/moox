@@ -78,6 +78,67 @@ func runnerDelivery(actions *[]string, errs map[string]error) *Delivery {
 	}
 }
 
+func TestRunnerContinuesAfterAckReconnectBufferExceeded(t *testing.T) {
+	var actions []string
+	ctx, cancel := context.WithCancel(context.Background())
+	first := runnerDelivery(&actions, map[string]error{"ack": nats.ErrReconnectBufExceeded})
+	second := runnerDelivery(&actions, nil)
+	second.ackFn = func(context.Context) error {
+		actions = append(actions, "ack")
+		cancel()
+		return nil
+	}
+	consumer := &runnerFakeConsumer{batches: [][]*Delivery{{first}, {second}}}
+	if err := NewRunner(consumer, &runnerFakeHandler{result: HandlerResult{Decision: ACK}}, RunnerConfig{}).Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v, want nil after ack reconnect buffer exceeded", err)
+	}
+	if len(actions) < 2 || actions[0] != "ack" || actions[len(actions)-1] != "ack" {
+		t.Fatalf("actions = %v, want ack then ack", actions)
+	}
+}
+
+func TestRunnerContinuesAfterReconnectBufferExceeded(t *testing.T) {
+	var actions []string
+	ctx, cancel := context.WithCancel(context.Background())
+	delivery := runnerDelivery(&actions, nil)
+	delivery.ackFn = func(context.Context) error {
+		actions = append(actions, "ack")
+		cancel()
+		return nil
+	}
+	consumer := &runnerFakeConsumer{
+		batches: [][]*Delivery{nil, {delivery}},
+		errs:    []error{nats.ErrReconnectBufExceeded},
+	}
+	if err := NewRunner(consumer, &runnerFakeHandler{result: HandlerResult{Decision: ACK}}, RunnerConfig{}).Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v, want nil after reconnect buffer exceeded", err)
+	}
+	if len(actions) != 1 || actions[0] != "ack" {
+		t.Fatalf("actions = %v, want [ack]", actions)
+	}
+}
+
+func TestRunnerContinuesAfterFetchDisconnected(t *testing.T) {
+	var actions []string
+	ctx, cancel := context.WithCancel(context.Background())
+	delivery := runnerDelivery(&actions, nil)
+	delivery.ackFn = func(context.Context) error {
+		actions = append(actions, "ack")
+		cancel()
+		return nil
+	}
+	consumer := &runnerFakeConsumer{
+		batches: [][]*Delivery{nil, {delivery}},
+		errs:    []error{nats.ErrFetchDisconnected},
+	}
+	if err := NewRunner(consumer, &runnerFakeHandler{result: HandlerResult{Decision: ACK}}, RunnerConfig{}).Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v, want nil after fetch disconnect", err)
+	}
+	if len(actions) != 1 || actions[0] != "ack" {
+		t.Fatalf("actions = %v, want [ack]", actions)
+	}
+}
+
 func TestRunnerACK(t *testing.T) {
 	var actions []string
 	ctx, cancel := context.WithCancel(context.Background())
@@ -246,12 +307,20 @@ func TestErrorReporterReportsFetchTransportError(t *testing.T) {
 func TestErrorReporterReportsInProgressTransportError(t *testing.T) {
 	progressErr := errors.New("in-progress connection failed")
 	var actions []string
-	delivery := runnerDelivery(&actions, map[string]error{"progress": progressErr})
+	first := runnerDelivery(&actions, map[string]error{"progress": progressErr})
+	second := runnerDelivery(&actions, nil)
 	var reported []error
+	handled := 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	err := NewRunner(
-		&runnerFakeConsumer{batches: [][]*Delivery{{delivery}}},
+		&runnerFakeConsumer{batches: [][]*Delivery{{first}, {second}}},
 		DeliveryHandlerFunc(func(context.Context, *Delivery) HandlerResult {
+			handled++
 			time.Sleep(5 * time.Millisecond)
+			if handled >= 2 {
+				cancel()
+			}
 			return HandlerResult{Decision: ACK}
 		}),
 		RunnerConfig{
@@ -260,12 +329,15 @@ func TestErrorReporterReportsInProgressTransportError(t *testing.T) {
 				reported = append(reported, err)
 			}),
 		},
-	).Run(context.Background())
-	if !errors.Is(err, progressErr) {
-		t.Fatalf("Run() error = %v, want in-progress error", err)
+	).Run(ctx)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want keepalive failure to stay non-fatal", err)
 	}
-	if len(reported) != 1 || !errors.Is(reported[0], progressErr) {
-		t.Fatalf("reported = %v, want in-progress error once", reported)
+	if handled != 2 {
+		t.Fatalf("handled = %d, want the durable loop to continue after in-progress failure", handled)
+	}
+	if len(reported) == 0 || !errors.Is(reported[0], progressErr) {
+		t.Fatalf("reported = %v, want in-progress error", reported)
 	}
 }
 

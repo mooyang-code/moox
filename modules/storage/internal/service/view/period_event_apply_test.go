@@ -129,7 +129,7 @@ func collectorCompleted(dataset, status string, subjects, failed []string, at ti
 	return &storageeventpb.CollectorPeriodCompleted{
 		DatasetId: dataset, Frequency: "1m", PeriodTime: periodTime, Status: status,
 		BatchId: "batch-" + dataset, ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "universe:" + dataset + ":1m",
-		ExpectedSubjectIds: subjects, FailedSubjects: failed,
+		UniverseSubjectIds: subjects, FailedSubjects: failed,
 		CommittedPositions: []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 1}},
 		CollectedAt:        timestamppb.New(at),
 	}
@@ -179,6 +179,16 @@ func TestHandleCollectorPeriodCompletedPublishesSingleDatasetIdempotently(t *tes
 	if ready.GetViewConfigId() == "" || ready.GetVisibleScope() == "" || len(ready.GetCommittedPositions()) == 0 {
 		t.Fatalf("ready identity incomplete=%v", ready)
 	}
+	got := uniqueSortedStrings(append([]string(nil), ready.GetUniverseSubjectIds()...))
+	want := uniqueSortedStrings([]string{"BTC-USDT", "ETH-USDT"})
+	if len(got) != len(want) {
+		t.Fatalf("universe_subject_ids=%v", ready.GetUniverseSubjectIds())
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("universe_subject_ids=%v", ready.GetUniverseSubjectIds())
+		}
+	}
 }
 
 func TestHandleCollectorPeriodCompletedIgnoresExtraRuntimeDatasets(t *testing.T) {
@@ -216,7 +226,7 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	service.NoteAppliedPosition("quant", "result-view", "result-view-a", "node-a", "store-a", 2)
 	payload := &storageeventpb.FactorPeriodComputed{
 		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
-		BatchId: "batch-1", ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "universe:factor:1m", ExpectedSubjectIds: []string{"ETH-USDT"},
+		BatchId: "batch-1", ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "universe:factor:1m", UniverseSubjectIds: []string{"ETH-USDT"},
 		Bindings:           []*storageeventpb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "degraded", FailedSubjects: []string{"ETH-USDT"}, SourceHash: "hash-1"}},
 		CommittedPositions: []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 2}},
 		ComputedAt:         timestamppb.New(occurredAt), TriggerEventId: "source-ready-1",
@@ -239,6 +249,89 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	}
 	if ready.GetCompletionKind() != events.FactorPeriodComputed.Name() {
 		t.Fatalf("completion_kind=%q", ready.GetCompletionKind())
+	}
+	if got := ready.GetUniverseSubjectIds(); len(got) != 1 || got[0] != "ETH-USDT" {
+		t.Fatalf("factor universe_subject_ids=%v", got)
+	}
+	if len(ready.GetBindings()) != 1 || ready.GetBindings()[0].GetBindingId() != "binding-1" || ready.GetBindings()[0].GetStatus() != "degraded" {
+		t.Fatalf("factor bindings=%v", ready.GetBindings())
+	}
+}
+
+func TestHandleFactorPeriodComputedEmptyPositionsDoesNotPublishReady(t *testing.T) {
+	publisher := newReadyPublisherFake()
+	service := newPeriodTestService(nil, publisher, &pb.View{
+		SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results", ActiveIndexId: "result-view-a",
+	})
+	occurredAt := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
+	payload := &storageeventpb.FactorPeriodComputed{
+		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
+		UniverseSubjectIds: []string{"ETH-USDT"},
+		Bindings:           []*storageeventpb.FactorBindingPeriodState{{BindingId: "binding-1", Status: "degraded", SkippedSubjects: []string{"ETH-USDT"}}},
+	}
+	if err := service.HandleFactorPeriodComputed(context.Background(), periodMessage("factor-empty", occurredAt), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(publisher.attempts) != 0 {
+		t.Fatalf("empty committed positions published ViewDataReady: %d", len(publisher.attempts))
+	}
+}
+
+func TestHandleMergePeriodCompletedEmptyPositionsDoesNotPublishReady(t *testing.T) {
+	metadata := newPeriodMetadataFake()
+	publisher := newReadyPublisherFake()
+	service := newPeriodTestService(metadata, publisher, &pb.View{
+		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
+	})
+	at := time.Date(2026, 9, 13, 16, 0, 0, 0, time.UTC)
+	payload := &storageeventpb.MergePeriodCompleted{
+		DatasetId: "prices", Frequency: "1m", PeriodTime: at.Unix(), Status: "degraded",
+		UniverseSubjectIds: []string{"BTC-USDT"}, FailedSubjects: []string{"BTC-USDT"},
+	}
+	if err := service.HandleMergePeriodCompleted(context.Background(), periodMessage("merge-empty", at), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(publisher.attempts) != 0 {
+		t.Fatalf("empty merge positions published ViewDataReady: %d", len(publisher.attempts))
+	}
+}
+
+func TestHandleCollectorPeriodCompletedFilteredViewOmitsObjectUniverse(t *testing.T) {
+	metadata := newPeriodMetadataFake()
+	publisher := newReadyPublisherFake()
+	service := newPeriodTestService(metadata, publisher, &pb.View{
+		SpaceId: "quant", ViewId: "spot-view", DatasetId: "prices", ActiveIndexId: "spot-a", FilterJson: `{"market":"spot"}`,
+	})
+	service.NoteAppliedPosition("quant", "spot-view", "spot-a", "node-a", "store-a", 1)
+	at := time.Date(2026, 9, 13, 16, 2, 0, 0, time.UTC)
+	payload := collectorCompleted("prices", "complete", []string{"BTC-USDT", "ETH-USDT"}, nil, at, at.Unix())
+	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("spot-ready", at), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(publisher.attempts) != 1 {
+		t.Fatalf("filtered ready attempts=%d", len(publisher.attempts))
+	}
+	ready := publisher.attempts[0].payload.(*storageeventpb.ViewDataReady)
+	if len(ready.GetUniverseSubjectIds()) != 0 {
+		t.Fatalf("object-filtered View must not copy the full completion universe: %v", ready.GetUniverseSubjectIds())
+	}
+}
+
+func TestHandleCollectorPeriodCompletedFreqFilterKeepsObjectUniverse(t *testing.T) {
+	metadata := newPeriodMetadataFake()
+	publisher := newReadyPublisherFake()
+	service := newPeriodTestService(metadata, publisher, &pb.View{
+		SpaceId: "quant", ViewId: "kline-view", DatasetId: "prices", ActiveIndexId: "kline-a", FilterJson: `{"freq":"1m"}`,
+	})
+	service.NoteAppliedPosition("quant", "kline-view", "kline-a", "node-a", "store-a", 1)
+	at := time.Date(2026, 9, 13, 16, 2, 0, 0, time.UTC)
+	payload := collectorCompleted("prices", "complete", []string{"BTC-USDT", "ETH-USDT"}, nil, at, at.Unix())
+	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("kline-ready", at), payload); err != nil {
+		t.Fatal(err)
+	}
+	ready := publisher.attempts[0].payload.(*storageeventpb.ViewDataReady)
+	if got := ready.GetUniverseSubjectIds(); len(got) != 2 || got[0] != "BTC-USDT" || got[1] != "ETH-USDT" {
+		t.Fatalf("freq-only filter should keep the completion universe: %v", got)
 	}
 }
 

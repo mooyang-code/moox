@@ -2514,7 +2514,7 @@ PY
     for credential_name in ca.pem server.pem server-key.pem users.yaml internal-admin.yaml \
       archive-eventbus.yaml cloudnode-eventbus.yaml cloudnode-worker.yaml \
       hostagent-publisher.yaml market-fetch-publisher.yaml metrics-publisher.yaml \
-      collector-market-fetch-consumer.yaml factor-eventbus.yaml factor-engine-eventbus.yaml \
+      collector-market-fetch-consumer.yaml factor-eventbus.yaml factor-engine-eventbus.yaml factor-merge-eventbus.yaml \
       monitor-observability.yaml \
       storage-eventbus.yaml strategy-eventbus.yaml trade-eventbus.yaml; do
       [[ -s "${eventbus_credentials_dir}/${credential_name}" ]] || eventbus_credentials_complete=0
@@ -3895,7 +3895,7 @@ prepare_stage() {
   (umask 077; printf '%s\n' "${gateway_service_secret}" >"${STAGE_DIR}/secrets/gateway-service.key")
   command -v openssl >/dev/null 2>&1 || fail "openssl is required to derive Gateway service credentials"
   local caller derived_secret
-  for caller in collector factor monitor archive storage-view storage-primary strategy trade cloudnode moox-cli moox-skill; do
+  for caller in collector factor merge monitor archive storage-view storage-primary strategy trade cloudnode moox-cli moox-skill; do
     derived_secret=$(printf 'moox-gateway-service-v1:%s' "${caller}" | openssl dgst -sha256 -hmac "${gateway_service_secret}" -r | awk '{print $1}')
     [[ -n "${derived_secret}" ]] || fail "failed to derive Gateway credential for ${caller}"
     (umask 077; printf '%s\n' "${derived_secret}" >"${STAGE_DIR}/secrets/gateway-${caller}.key")
@@ -3947,7 +3947,7 @@ prepare_stage() {
     chmod 0600 "${STAGE_DIR}/secrets/storage-internal-auth.env"
   fi
   cat >"${STAGE_DIR}/secrets/gateway-credentials.json" <<'EOF'
-{"version":1,"credentials":[{"key_id":"moox-gateway-service","caller":"admin-gateway","secret_file":"gateway-service.key"},{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"factor","caller":"factor","secret_file":"gateway-factor.key"},{"key_id":"monitor","caller":"monitor","secret_file":"gateway-monitor.key"},{"key_id":"archive","caller":"archive","secret_file":"gateway-archive.key"},{"key_id":"storage-view","caller":"storage-view","secret_file":"gateway-storage-view.key"},{"key_id":"storage-primary","caller":"storage-primary","secret_file":"gateway-storage-primary.key"},{"key_id":"strategy","caller":"strategy","secret_file":"gateway-strategy.key"},{"key_id":"trade","caller":"trade","secret_file":"gateway-trade.key"},{"key_id":"cloudnode","caller":"cloudnode","secret_file":"gateway-cloudnode.key"},{"key_id":"moox-cli","caller":"moox-cli","secret_file":"gateway-moox-cli.key"},{"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"}]}
+{"version":1,"credentials":[{"key_id":"moox-gateway-service","caller":"admin-gateway","secret_file":"gateway-service.key"},{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"factor","caller":"factor","secret_file":"gateway-factor.key"},{"key_id":"merge","caller":"merge","secret_file":"gateway-merge.key"},{"key_id":"monitor","caller":"monitor","secret_file":"gateway-monitor.key"},{"key_id":"archive","caller":"archive","secret_file":"gateway-archive.key"},{"key_id":"storage-view","caller":"storage-view","secret_file":"gateway-storage-view.key"},{"key_id":"storage-primary","caller":"storage-primary","secret_file":"gateway-storage-primary.key"},{"key_id":"strategy","caller":"strategy","secret_file":"gateway-strategy.key"},{"key_id":"trade","caller":"trade","secret_file":"gateway-trade.key"},{"key_id":"cloudnode","caller":"cloudnode","secret_file":"gateway-cloudnode.key"},{"key_id":"moox-cli","caller":"moox-cli","secret_file":"gateway-moox-cli.key"},{"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moox-skill.key"}]}
 EOF
   python3 - "${STAGE_DIR}/secrets/gateway-credentials.json" "${STAGE_DIR}/secrets" <<'PY'
 import json, os, re, sys
@@ -4754,7 +4754,7 @@ sync_local_stage() {
     fi
   fi
   if [[ "${component_overlay}" -eq 0 || "${WITH_GATEWAY}" -eq 1 ]]; then
-    for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-trade.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key "${STAGE_DIR}"/secrets/gateway-moox-skill.key; do
+    for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-merge.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-trade.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key "${STAGE_DIR}"/secrets/gateway-moox-skill.key; do
       credential_path="${deploy_dir}/secrets/$(basename "${credential_file}")"
       if [[ "${component_overlay}" -eq 1 ]] && gateway_key_file_is_retainable "${credential_path}"; then
         chmod 0600 "${credential_path}"

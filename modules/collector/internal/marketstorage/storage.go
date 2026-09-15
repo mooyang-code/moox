@@ -127,7 +127,7 @@ func (w *storageWriter) ReportCollectorPeriodCompleted(ctx context.Context, spac
 	marker := &storagepb.CollectorPeriodCompletedMarker{
 		DatasetId: payload.GetDatasetId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
 		Status: payload.GetStatus(), BatchId: payload.GetBatchId(), ConfigSnapshotId: payload.GetConfigSnapshotId(),
-		ExpectedScopeRef: payload.GetExpectedScopeRef(), ExpectedSubjectIds: append([]string(nil), payload.GetExpectedSubjectIds()...),
+		ExpectedScopeRef: payload.GetExpectedScopeRef(), UniverseSubjectIds: append([]string(nil), payload.GetUniverseSubjectIds()...),
 		FailedSubjects: append([]string(nil), payload.GetFailedSubjects()...), CommittedPositions: positions,
 		CollectedAt: payload.GetCollectedAt(),
 	}

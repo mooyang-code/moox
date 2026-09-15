@@ -20,7 +20,7 @@ func TestCollectorCompletedAllSuccessIsComplete(t *testing.T) {
 	require.Len(t, fake.payloads, 1)
 	payload := fake.payloads[0]
 	require.Equal(t, "complete", payload.GetStatus())
-	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, payload.GetExpectedSubjectIds())
+	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, payload.GetUniverseSubjectIds())
 	require.Empty(t, payload.GetFailedSubjects())
 	require.Equal(t, period.Unix(), payload.GetPeriodTime())
 	require.NotEmpty(t, payload.GetBatchId())
@@ -32,7 +32,7 @@ func TestCollectorCompletedTimeoutKeepsFullSubjectSet(t *testing.T) {
 	require.Len(t, fake.payloads, 1)
 	payload := fake.payloads[0]
 	require.Equal(t, "degraded", payload.GetStatus())
-	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, payload.GetExpectedSubjectIds())
+	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, payload.GetUniverseSubjectIds())
 	require.Equal(t, []string{"ETH-USDT"}, payload.GetFailedSubjects())
 }
 
@@ -64,7 +64,7 @@ func TestCollectorCompletedRestartDoesNotChangeFrozenSet(t *testing.T) {
 	reporter.now = func() time.Time { return period.Add(10 * time.Second) }
 	require.NoError(t, reporter.Flush(context.Background()))
 	require.Len(t, fake.payloads, 1)
-	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, fake.payloads[0].GetExpectedSubjectIds())
+	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, fake.payloads[0].GetUniverseSubjectIds())
 }
 
 func TestCollectorCompletedDuplicateReportDoesNotCreateNewBatch(t *testing.T) {

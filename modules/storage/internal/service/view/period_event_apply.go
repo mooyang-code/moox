@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -38,7 +39,7 @@ type periodCompletionInput struct {
 	frequency          string
 	periodTime         int64
 	status             string
-	expectedSubjectIDs []string
+	universeSubjectIDs []string
 	failedSubjects     []string
 	expectedScopeRef   string
 	committedPositions []*storageeventpb.CommittedPosition
@@ -51,7 +52,7 @@ func (s *Service) HandleCollectorPeriodCompleted(ctx context.Context, message *e
 	}
 	return s.applyPeriodCompletion(ctx, message, periodCompletionInput{
 		datasetID: payload.GetDatasetId(), frequency: payload.GetFrequency(), periodTime: payload.GetPeriodTime(),
-		status: payload.GetStatus(), expectedSubjectIDs: payload.GetExpectedSubjectIds(), failedSubjects: payload.GetFailedSubjects(),
+		status: payload.GetStatus(), universeSubjectIDs: payload.GetUniverseSubjectIds(), failedSubjects: payload.GetFailedSubjects(),
 		expectedScopeRef: payload.GetExpectedScopeRef(), committedPositions: payload.GetCommittedPositions(),
 		completionKind: events.CollectorPeriodCompleted.Name(),
 	})
@@ -63,7 +64,7 @@ func (s *Service) HandleMergePeriodCompleted(ctx context.Context, message *event
 	}
 	return s.applyPeriodCompletion(ctx, message, periodCompletionInput{
 		datasetID: payload.GetDatasetId(), frequency: payload.GetFrequency(), periodTime: payload.GetPeriodTime(),
-		status: payload.GetStatus(), expectedSubjectIDs: payload.GetExpectedSubjectIds(), failedSubjects: payload.GetFailedSubjects(),
+		status: payload.GetStatus(), universeSubjectIDs: payload.GetUniverseSubjectIds(), failedSubjects: payload.GetFailedSubjects(),
 		expectedScopeRef: payload.GetExpectedScopeRef(), committedPositions: payload.GetCommittedPositions(),
 		completionKind: events.MergePeriodCompleted.Name(),
 	})
@@ -89,7 +90,7 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 		state := &pb.ViewPeriodDatasetState{
 			SpaceId: message.GetSpaceId(), ViewId: view.GetViewId(), DatasetId: completion.datasetID, Frequency: completion.frequency,
 			PeriodTime: completion.periodTime, EventId: message.GetEventId(), Status: completion.status,
-			SubjectIds: append([]string(nil), completion.expectedSubjectIDs...), FailedSubjects: append([]string(nil), completion.failedSubjects...),
+			SubjectIds: append([]string(nil), completion.universeSubjectIDs...), FailedSubjects: append([]string(nil), completion.failedSubjects...),
 			OccurredAt: cloneTimestamp(message.GetOccurredAt()),
 		}
 		rsp, err := metadata.UpsertViewPeriodDatasetState(ctx, &pb.UpsertViewPeriodDatasetStateReq{AuthInfo: s.internalAuth(), State: state})
@@ -131,7 +132,7 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 			return err
 		}
 		if s.pendingReadyContains(eventID) {
-			return ErrViewDataReadyPending
+			return eventconsumer.Deferred(ErrViewDataReadyPending)
 		}
 	}
 	return nil
@@ -169,6 +170,8 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 			DatasetId:      payload.GetDatasetId(), Status: payload.GetStatus(), VisibleScope: viewVisibleScope(view, firstNonEmpty(payload.GetExpectedScopeRef(), "view:"+view.GetViewId())),
 			Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(), FailedScopeRef: degradedScopeRef(payload.GetStatus(), failed),
 			CommittedPositions: cloneCommittedPositions(payload.GetCommittedPositions()), ReadyAt: cloneTimestamp(message.GetOccurredAt()),
+			UniverseSubjectIds: viewUniverseSubjectIDs(view, payload.GetUniverseSubjectIds()),
+			Bindings:           cloneFactorBindingStates(payload.GetBindings()),
 		}
 		eventID := stableViewEventID("data-ready", message.GetEventId(), view.GetViewId())
 		s.enqueueViewDataReady(view, payload.GetCommittedPositions(), ready, message, eventID)
@@ -176,7 +179,7 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 			return err
 		}
 		if s.pendingReadyContains(eventID) {
-			return ErrViewDataReadyPending
+			return eventconsumer.Deferred(ErrViewDataReadyPending)
 		}
 	}
 	return nil
@@ -379,7 +382,35 @@ func viewDataReadyPayload(view *pb.View, completion periodCompletionInput, state
 		DatasetId:      completion.datasetID, Status: status, VisibleScope: viewVisibleScope(view, firstNonEmpty(completion.expectedScopeRef, "view:"+view.GetViewId())),
 		Frequency: completion.frequency, PeriodTime: completion.periodTime, FailedScopeRef: degradedScopeRef(status, failed),
 		CommittedPositions: cloneCommittedPositions(completion.committedPositions), ReadyAt: readyAt,
+		UniverseSubjectIds: viewUniverseSubjectIDs(view, completion.universeSubjectIDs),
 	}, true
+}
+
+func viewUniverseSubjectIDs(view *pb.View, universe []string) []string {
+	if viewFilterRestrictsSubjects(view.GetFilterJson()) {
+		return nil
+	}
+	return uniqueSortedStrings(universe)
+}
+
+func viewFilterRestrictsSubjects(filterJSON string) bool {
+	raw := strings.TrimSpace(filterJSON)
+	if raw == "" {
+		return false
+	}
+	var filter map[string]any
+	if json.Unmarshal([]byte(raw), &filter) != nil {
+		return true
+	}
+	for key := range filter {
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "freq", "frequency":
+			continue
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 func viewConfigID(view *pb.View) string {
@@ -419,6 +450,16 @@ func cloneCommittedPositions(values []*storageeventpb.CommittedPosition) []*stor
 	for _, value := range values {
 		if value != nil {
 			out = append(out, proto.Clone(value).(*storageeventpb.CommittedPosition))
+		}
+	}
+	return out
+}
+
+func cloneFactorBindingStates(values []*storageeventpb.FactorBindingPeriodState) []*storageeventpb.FactorBindingPeriodState {
+	out := make([]*storageeventpb.FactorBindingPeriodState, 0, len(values))
+	for _, value := range values {
+		if value != nil {
+			out = append(out, proto.Clone(value).(*storageeventpb.FactorBindingPeriodState))
 		}
 	}
 	return out

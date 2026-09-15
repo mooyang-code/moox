@@ -46,6 +46,7 @@ type TaskScope struct {
 	AvailableSubjects           []string
 	MissingSubjects             []string
 	InputStatus                 string
+	PreferredSourceDataset      string
 }
 
 func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Task, error) {
@@ -62,6 +63,12 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 	}
 	if scope.ResultDatasetID == "" {
 		scope.ResultDatasetID = scope.TargetDataset
+	}
+	if scope.SourceDataset == "" {
+		scope.SourceDataset = scope.SourceViewID
+	}
+	if scope.TargetDataset == "" {
+		scope.TargetDataset = scope.ResultDatasetID
 	}
 	if scope.StartTime.IsZero() || scope.EndTime.IsZero() || !scope.StartTime.Before(scope.EndTime) {
 		return Task{}, errors.New("valid start_time and end_time are required")
@@ -100,18 +107,19 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 			SourceViewID:      scope.SourceViewID, ResultDatasetID: scope.ResultDatasetID,
 			ExpectedActiveIndexID:       scope.ExpectedActiveIndexID,
 			ExpectedActiveIndexRevision: scope.ExpectedActiveIndexRevision,
-			SourceDataset:               scope.SourceViewID, TargetDataset: scope.ResultDatasetID,
+			SourceDataset:               scope.SourceDataset, TargetDataset: scope.TargetDataset,
 			SubjectID: scope.SubjectID, Freq: scope.Freq, PeriodTime: scope.PeriodTime,
 			TriggerEventID: scope.TriggerEventID, TriggeredAt: scope.TriggeredAt.UTC(),
 			StartTime: scope.StartTime.UTC(), EndTime: scope.EndTime.UTC(),
-			LookbackPeriods:      factor.LookbackPeriods,
-			InputContractVersion: scope.InputContractVersion,
-			ConfigSnapshotID:     scope.ConfigSnapshotID,
-			StorageSchemaID:      scope.StorageSchemaID,
-			ExpectedSubjects:     append([]string(nil), scope.ExpectedSubjects...),
-			AvailableSubjects:    append([]string(nil), scope.AvailableSubjects...),
-			MissingSubjects:      append([]string(nil), scope.MissingSubjects...),
-			InputStatus:          scope.InputStatus,
+			LookbackPeriods:        factor.LookbackPeriods,
+			InputContractVersion:   scope.InputContractVersion,
+			ConfigSnapshotID:       scope.ConfigSnapshotID,
+			StorageSchemaID:        scope.StorageSchemaID,
+			ExpectedSubjects:       append([]string(nil), scope.ExpectedSubjects...),
+			AvailableSubjects:      append([]string(nil), scope.AvailableSubjects...),
+			MissingSubjects:        append([]string(nil), scope.MissingSubjects...),
+			InputStatus:            scope.InputStatus,
+			PreferredSourceDataset: scope.PreferredSourceDataset,
 			Factor: engine.FactorSpec{
 				FactorType: factor.FactorType,
 				FactorID:   factor.FactorID, Name: factor.Name, SourceHash: factor.SourceHash,

@@ -88,7 +88,7 @@ func TestBuildCollectorPeriodCompletedMessageChangesIDWhenPayloadChanges(t *test
 	base := &pb.CollectorPeriodCompletedMarker{
 		DatasetId: "spot_kline", Frequency: "1m", PeriodTime: 1_725_000_000,
 		Status: "complete", BatchId: "batch-1", ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "universe:spot_kline:1m",
-		ExpectedSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
+		UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
 		CommittedPositions: []*pb.CommittedPosition{{NodeId: "node-1", StoreId: "store", Sequence: 1}},
 		CollectedAt:        timestamppb.New(time.Unix(1_725_000_001, 0)),
 	}

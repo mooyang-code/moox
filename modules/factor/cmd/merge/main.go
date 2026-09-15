@@ -69,6 +69,8 @@ func run() (err error) {
 	target := storageio.NormalizeStorageTarget(cfg.Storage.GatewayTarget, "11003")
 	primary := storagepb.NewPrimaryStoreClientProxy(gatewayauth.NewTRPCClientOptions(target, cfg.Storage.GatewayNodeID, credentials)...)
 	auth := mergeAuthInfo()
+	metadata := storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(target, cfg.Storage.GatewayNodeID, credentials)...)
+	subjects := merge.NewMetadataSubjectLister(metadata, auth)
 	assemblers := make([]*merge.Assembler, 0, len(cfg.Definitions))
 	var periods *merge.PeriodLedger
 	for _, def := range cfg.Definitions {
@@ -88,6 +90,7 @@ func run() (err error) {
 			return assemblerErr
 		}
 		assembler.SetPeriodLedger(periods)
+		assembler.SetSubjectLister(subjects)
 		assemblers = append(assemblers, assembler)
 	}
 	if periods != nil {

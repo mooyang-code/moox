@@ -45,7 +45,7 @@ type Scheduler struct {
 	Instances           *store.TaskInstanceRepository
 	Batches             *store.FetchBatchRepository
 	Retries             *store.FetchRetryRepository
-	Invoker             *scfinvoker.Client
+	Invoker             MarketFetchInvoker
 	Storage             func(string, string, string) (StorageReader, error)
 	StorageTarget       string
 	// InvokeStorageTarget is sent in SCF invoke payloads. Leave empty to reuse
@@ -90,6 +90,13 @@ const (
 	defaultBatchCompletionDeadline     = 70 * time.Second
 	instrumentSnapshotCompletionWindow = 6 * time.Minute
 )
+
+// MarketFetchInvoker is the CloudNode list/invoke surface used by the scheduler.
+type MarketFetchInvoker interface {
+	ListMarketFetchers(ctx context.Context, spaceID string) ([]scfinvoker.Node, error)
+	ListTimerMarketFetchers(ctx context.Context, spaceID string) ([]scfinvoker.Node, error)
+	Invoke(ctx context.Context, spaceID, nodeID string, event map[string]any, invokeType cloudnodepb.ScfInvokeType) (scfinvoker.InvocationResult, error)
+}
 
 func batchCompletionDeadline(kind domain.BatchKind) time.Duration {
 	if kind == domain.BatchKindInstrumentSnapshot {
@@ -228,8 +235,16 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			state := s.planStates[stateKey]
 			frequencyFingerprint := taskFingerprint(frequencyTaskIDs, rule.CollectParams)
 			if s.InvokeNonRealtimeOnly && isKlineRule(rule) {
+				priorityNodes := invokeNodes
+				if len(priorityNodes) == 0 {
+					priorityNodes = ruleNodes
+				}
+				if err := s.dispatchPriorityCryptoMinute(ctx, spaceID, rule, items, frequency, target, priorityNodes); err != nil {
+					return err
+				}
 				// Keep the TaskInstance inventory while realtime K-line execution is
-				// owned by Timer-triggered functions.
+				// owned by Timer-triggered functions. Priority BTC/ETH still get a
+				// one-item invoke so they are not starved inside a 40-subject timer.
 				s.planStates[stateKey] = scheduleState{fingerprint: frequencyFingerprint}
 				continue
 			}
@@ -445,6 +460,63 @@ func collectionItemTaskID(spaceID, ruleID string, item domain.CollectionItem, fr
 	}
 	spec := domain.TaskSpec{RouteID: stableRouteID(item.MarketType, item.DatasetID, frequency), Provider: item.Provider, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency}
 	return domain.StableTaskID(spaceID, ruleID, spec)
+}
+
+func priorityCryptoMinuteItems(items []domain.CollectionItem, frequency string) []domain.CollectionItem {
+	if !strings.EqualFold(strings.TrimSpace(frequency), "1m") {
+		return nil
+	}
+	priority := make(map[string]struct{}, len(priorityCryptoSubjects))
+	for _, subject := range priorityCryptoSubjects {
+		priority[subject] = struct{}{}
+	}
+	selected := make([]domain.CollectionItem, 0, len(priorityCryptoSubjects))
+	for _, item := range items {
+		if _, ok := priority[strings.ToUpper(strings.TrimSpace(item.SubjectID))]; !ok {
+			continue
+		}
+		selected = append(selected, item)
+	}
+	return selected
+}
+
+func (s *Scheduler) dispatchPriorityCryptoMinute(ctx context.Context, spaceID string, rule domain.TaskRule, items []domain.CollectionItem, frequency string, target time.Time, nodes []scfinvoker.Node) error {
+	if s == nil || s.Batches == nil || len(nodes) == 0 {
+		return nil
+	}
+	selected := priorityCryptoMinuteItems(items, frequency)
+	if len(selected) == 0 {
+		return nil
+	}
+	dnsRoutes := s.dnsSnapshot(ctx)
+	for index, item := range selected {
+		item.TaskID = collectionItemTaskID(spaceID, rule.RuleID, item, frequency)
+		item.TargetDataTime = target.Format(time.RFC3339Nano)
+		item.Frequency = frequency
+		// Limit 1 is usually the still-open minute at :00, which Binance then
+		// rejects as "no closed bar". Two bars keep the last closed minute
+		// without dumping a 10-bar history page into Merge.
+		item.BarLimit = 2
+		node := nodes[index%len(nodes)]
+		scheduleID := fmt.Sprintf("%s:%s:%s:priority:%s", rule.RuleID, frequency, target.Format(time.RFC3339Nano), item.SubjectID)
+		batchKind := batchKindForRule(rule)
+		batchID := stableID(spaceID, scheduleID, string(batchKind), item.DatasetID, "1")
+		syncPointID := stableID(spaceID, scheduleID, string(batchKind), item.DatasetID, "write")
+		batchProvider, batchMarketType := normalizedBatchIdentity(item, rule)
+		req := Request{
+			BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: 0,
+			SpaceID: spaceID, MarketID: item.MarketID, InstrumentType: item.InstrumentType, DatasetID: item.DatasetID,
+			Frequency: frequency, Provider: batchProvider, SourceID: item.SourceID, MarketType: batchMarketType,
+			Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes,
+			Items: []domain.CollectionItem{item},
+		}
+		if created, err := s.planOne(ctx, rule, req, node, nodes); err != nil {
+			return err
+		} else if created {
+			log.InfoContextf(ctx, "priority_crypto_minute_planned subject=%s dataset=%s frequency=%s target=%s node=%s", item.SubjectID, item.DatasetID, frequency, target.UTC().Format(time.RFC3339), node.FunctionName)
+		}
+	}
+	return nil
 }
 
 func (s *Scheduler) planOne(ctx context.Context, rule domain.TaskRule, req Request, node scfinvoker.Node, nodes []scfinvoker.Node) (bool, error) {

@@ -133,6 +133,7 @@ storage:
             dataset_ids:
               - dataset_binance_spot_kline_1m
               - dataset_binance_swap_kline_1m
+              - mdataset_binance_kline_1m
               - dataset_spot_kline_1h
               - dataset_perpetual_kline_1h
         # Keep one worker available per crypto Kline Dataset. The minute

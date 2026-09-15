@@ -50,6 +50,35 @@ func TestMergedDatasetDefinitionMapsPrefixedSourceFields(t *testing.T) {
 	require.Equal(t, "subject_id", MappedSourceField("dataset_binance_spot_kline_1m", "subject_id"))
 }
 
+func TestExpandPythonInputsPrefersFirstMergedSource(t *testing.T) {
+	def := validSpotSwapMergedDataset()
+	got, err := ExpandPythonInputs(def.DatasetID, PreferredMappedSource(def), []string{"close", "volume"})
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"dataset_binance_spot_kline_1m__close",
+		"dataset_binance_spot_kline_1m__volume",
+	}, got)
+	qualified, err := ExpandPythonInputs(def.DatasetID, "", []string{"dataset_binance_swap_kline_1m__close"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"dataset_binance_swap_kline_1m__close"}, qualified)
+}
+
+func TestMapPythonInputColumnsPrefersFirstAvailableSuffix(t *testing.T) {
+	physical, err := MapPythonInputColumns([]string{"close", "volume"}, []string{
+		"dataset_binance_spot_kline_1m__close",
+		"dataset_binance_swap_kline_1m__close",
+		"dataset_binance_spot_kline_1m__volume",
+		"dataset_binance_swap_kline_1m__volume",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"dataset_binance_spot_kline_1m__close",
+		"dataset_binance_spot_kline_1m__volume",
+	}, physical)
+	_, err = MapPythonInputColumns([]string{"missing"}, []string{"dataset_binance_spot_kline_1m__close"})
+	require.Error(t, err)
+}
+
 func validSpotSwapMergedDataset() MergedDataset {
 	spot := "dataset_binance_spot_kline_1m"
 	swap := "dataset_binance_swap_kline_1m"
@@ -77,6 +106,12 @@ func validSpotSwapMergedDataset() MergedDataset {
 		}
 	}
 	return def
+}
+
+func TestMergedDatasetDefinitionRejectsUnknownUniverseSource(t *testing.T) {
+	def := validSpotSwapMergedDataset()
+	def.UniverseSource = "union"
+	require.ErrorContains(t, ValidateMergedDataset(def), "universe_source")
 }
 
 func TestMergedDatasetDefinitionRequiresValidSpotSwapExample(t *testing.T) {

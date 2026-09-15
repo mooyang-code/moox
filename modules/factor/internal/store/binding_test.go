@@ -38,6 +38,35 @@ func TestListExecutableExcludesDisabledFactor(t *testing.T) {
 	require.Len(t, rows, 1)
 }
 
+func TestHasExecutableOrPendingIgnoresTimeSeriesBindings(t *testing.T) {
+	db := openTestDB(t)
+	factors := NewFactorRepository(db)
+	bindings := NewBindingRepository(db)
+	require.NoError(t, factors.Create(context.Background(), testFactor("bias", domain.FactorStatusEnabled)))
+	require.NoError(t, bindings.Upsert(context.Background(), domain.FactorBinding{
+		BindingID: "bind-bias", FactorID: "bias", SpaceID: "crypto",
+		SourceViewID: "view_kline", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+		SubjectsJSON: "[]", ResultDatasetID: "mdataset", ResultViewID: "view_kline",
+		Status: domain.BindingStatusEnabled,
+	}))
+	waiting, err := bindings.HasExecutableOrPending(context.Background(), "crypto", "view_kline", "1m")
+	require.NoError(t, err)
+	require.False(t, waiting)
+
+	cs := testFactor("cs", domain.FactorStatusEnabled)
+	cs.FactorType = domain.FactorTypeCrossSection
+	require.NoError(t, factors.Create(context.Background(), cs))
+	require.NoError(t, bindings.Upsert(context.Background(), domain.FactorBinding{
+		BindingID: "bind-cs", FactorID: "cs", SpaceID: "crypto",
+		SourceViewID: "view_kline", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+		SubjectsJSON: "[]", ResultDatasetID: "mdataset", ResultViewID: "view_kline",
+		Status: domain.BindingStatusPendingView,
+	}))
+	waiting, err = bindings.HasExecutableOrPending(context.Background(), "crypto", "view_kline", "1m")
+	require.NoError(t, err)
+	require.True(t, waiting)
+}
+
 func TestListByFactorIncludesDisabledBindings(t *testing.T) {
 	db := openTestDB(t)
 	require.NoError(t, NewFactorRepository(db).Create(context.Background(), testFactor("bias", domain.FactorStatusEnabled)))

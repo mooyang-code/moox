@@ -135,7 +135,10 @@ func (r *Runner) Run(ctx context.Context) error {
 			if isNormalStop(ctx, fetchErr) {
 				return nil
 			}
-			if errors.Is(fetchErr, nats.ErrTimeout) || isDecodeOnly(fetchErr) {
+			if isRetryableFetchErr(fetchErr) {
+				if waitErr := waitRetryableFetch(ctx, fetchErr); waitErr != nil {
+					return nil
+				}
 				continue
 			}
 			if fetchErr != nil {
@@ -157,7 +160,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		if isNormalStop(ctx, fetchErr) {
 			return nil
 		}
-		if fetchErr != nil && !isDecodeOnly(fetchErr) && !errors.Is(fetchErr, nats.ErrTimeout) {
+		if fetchErr != nil && !isRetryableFetchErr(fetchErr) {
 			wrappedFetchErr := fmt.Errorf("fetch deliveries: %w", fetchErr)
 			r.report(wrappedFetchErr)
 			batchErr = errors.Join(batchErr, wrappedFetchErr)
@@ -177,10 +180,16 @@ func (r *Runner) handleSequentialBatch(ctx context.Context, deliveries []*Delive
 		result, inProgressErr, actionErr := r.handle(ctx, delivery)
 		if inProgressErr != nil {
 			r.report(inProgressErr)
-			batchErr = errors.Join(batchErr, inProgressErr)
 		}
 		if actionErr != nil {
-			batchErr = errors.Join(batchErr, actionErr)
+			if isRetryableFetchErr(actionErr) {
+				r.report(actionErr)
+				if waitErr := waitRetryableFetch(ctx, actionErr); waitErr != nil {
+					return nil
+				}
+			} else {
+				batchErr = errors.Join(batchErr, actionErr)
+			}
 		}
 		if result.Decision == RETRY {
 			// Keep this fetched batch together. A later fetch may still overtake
@@ -208,7 +217,7 @@ func (r *Runner) handleIndependentBatch(ctx context.Context, deliveries []*Deliv
 		handlers[index] = func() error {
 			_, inProgressErr, actionErr := r.handle(ctx, delivery)
 			inProgressErrs[index] = inProgressErr
-			perDeliveryErrs[index] = errors.Join(inProgressErr, actionErr)
+			perDeliveryErrs[index] = actionErr
 			return nil
 		}
 	}
@@ -220,7 +229,11 @@ func (r *Runner) handleIndependentBatch(ctx context.Context, deliveries []*Deliv
 			r.report(inProgressErrs[index])
 		}
 		if deliveryErr != nil {
-			batchErr = errors.Join(batchErr, fmt.Errorf("delivery %d: %w", index, deliveryErr))
+			if isRetryableFetchErr(deliveryErr) {
+				r.report(deliveryErr)
+			} else {
+				batchErr = errors.Join(batchErr, fmt.Errorf("delivery %d: %w", index, deliveryErr))
+			}
 		}
 	}
 	if waitErr != nil {
@@ -318,6 +331,24 @@ func isNormalStop(ctx context.Context, err error) bool {
 		return true
 	}
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrClosed)
+}
+
+func isRetryableFetchErr(err error) bool {
+	return errors.Is(err, nats.ErrTimeout) || errors.Is(err, nats.ErrFetchDisconnected) || errors.Is(err, nats.ErrReconnectBufExceeded) || isDecodeOnly(err)
+}
+
+func waitRetryableFetch(ctx context.Context, err error) error {
+	if !errors.Is(err, nats.ErrReconnectBufExceeded) {
+		return nil
+	}
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func isDecodeOnly(err error) bool {

@@ -170,14 +170,28 @@ export MOOX_HEALTH_AUTH_VERSION="${MOOX_HEALTH_AUTH_VERSION:-moox-health-v1}"
 export MOOX_HEALTH_AUTH_ACCESS_KEY
 export MOOX_HEALTH_AUTH_SECRET_KEY
 
-(
-  cd "${ROOT}"
-  nohup "${ROOT}/bin/moox-factor-engine" \
-    -config=config/engine-app.yaml \
-    -conf=config/engine-trpc.yaml \
-    </dev/null >>"${LOG_FILE}" 2>&1 &
-  echo $! >"${PID_FILE}"
-)
+cd "${ROOT}"
+python3 - "${ROOT}" "${LOG_FILE}" "${PID_FILE}" <<'PY'
+import os
+import subprocess
+import sys
+
+root, log_path, pid_path = sys.argv[1], sys.argv[2], sys.argv[3]
+os.chdir(root)
+os.makedirs(os.path.dirname(log_path), exist_ok=True)
+os.makedirs(os.path.dirname(pid_path), exist_ok=True)
+with open(log_path, "ab") as log:
+    proc = subprocess.Popen(
+        [os.path.join(root, "bin/moox-factor-engine"), "-config=config/engine-app.yaml", "-conf=config/engine-trpc.yaml"],
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+with open(pid_path, "w", encoding="ascii") as fh:
+    fh.write(str(proc.pid))
+PY
 sleep 1
 pid="$(cat "${PID_FILE}")"
 if ! ps -p "${pid}" >/dev/null 2>&1; then

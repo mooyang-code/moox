@@ -48,6 +48,21 @@ func TestMergedDatasetDefinitionReconcileStorageIsIdempotentAfterLostResponse(t 
 	require.Equal(t, "schema-ohlcv", again.StorageSchemaID)
 }
 
+func TestMergedDatasetEnableKeepsConfiguredSnapshotID(t *testing.T) {
+	repo := openMergedDatasetRepo(t)
+	def := validSpotSwapStoreDataset()
+	require.NoError(t, repo.Save(context.Background(), def))
+	require.NoError(t, repo.EnableSnapshot(context.Background(), def.DatasetID, "snap-1"))
+	got, err := repo.Get(context.Background(), def.DatasetID)
+	require.NoError(t, err)
+	require.True(t, got.Enabled)
+	require.Equal(t, "snap-1", got.ConfigSnapshotID)
+	require.NoError(t, repo.EnableSnapshot(context.Background(), def.DatasetID, "snap-1"))
+	again, err := repo.Get(context.Background(), def.DatasetID)
+	require.NoError(t, err)
+	require.Equal(t, "snap-1", again.ConfigSnapshotID)
+}
+
 func TestMergedDatasetDefinitionPersistsImmutableSnapshot(t *testing.T) {
 	repo := openMergedDatasetRepo(t)
 	def := validSpotSwapStoreDataset()

@@ -19,7 +19,7 @@
 ### 实现
 
 - 定义 `CollectorPeriodCompleted`、`MergePeriodCompleted`、`ViewDataReady`
-- 统一完成标记：`batch_id`、`config_snapshot_id`、`dataset_id`、可读 `expected_scope_ref` + `expected_subject_ids`、状态、`committed_positions`
+- 统一完成标记：`batch_id`、`config_snapshot_id`、`dataset_id`、可读 `expected_scope_ref` + `universe_subject_ids`、状态、`committed_positions`
 - `ViewDataReady` 关联 `completion_event_id`、`view_id`、`view_config_id`、dataset 范围与提交位置
 - 删除 `DatasetPeriodCollected`、`ViewSourceSubjectReady`、`ViewSourcePeriodReady`、`ViewFactorPeriodReady` 及全部调用方，不留别名
 - Storage marker RPC 同步为 `Report/AppendCollectorPeriodCompleted` 与 `Report/AppendMergePeriodCompleted`
@@ -627,7 +627,7 @@ pnpm run build:prod
 
 ## 任务 18：清理、端到端与交付
 
-状态：**代码与定向/契约测试已完成**。独立 codeCR、本机引擎正式发布、真实新周期 E2E 尚未验收。
+状态：**已完成（代码、定向/契约测试、独立 codeCR、本机引擎/Merge 发布、真实新周期 E2E）**。codeCR 范围 `77073922` / `4019faac`；随后 overlay 了空位置屏障与 Binding 门，并补种引擎 mdataset catalog。工作区相对 HEAD 仍有未提交改动，本轮未 commit / push。
 
 ### 红灯证据
 
@@ -655,13 +655,43 @@ bash scripts/test/contract/test-deploy-moox-factor-merge.sh
 
 上述命令均 PASS。`go test -race ./internal/store -count=3` 仍会因 `openTestDB` 内存库 `c_name` UNIQUE 冲突失败，属既有问题，不计入本任务回归。
 
+### codeCR
+
+- `34a963d6..0088a0fa`：**BLOCK**（引擎 `UpsertFields`、屏障收据、View 水位、Merge 宇宙）
+- `0088a0fa..77073922`：**BLOCK**（Freeze 前丢收据、多行 `commit_id` 含 `/`、mdataset `CommitInput` 被拒）
+- `77073922..4019faac`：**PASS**。生产顺序下收据可保留；`PatchFactor` commit_id 不含 `/`；Merge 可对共享 mdataset `CommitInput`，通用 Upsert 仍拒绝。剩余 Important：崩溃窗口丢收据、空 position 屏障、mapped 基列未自动建表。
+
+### 正式发布与真实新周期 E2E（2026-09-15）
+
+验收门槛：独立 codeCR Ready；本机发布 `moox-factor-engine` / `moox-factor-merge`；真实 1m 周期走通采集 → Merge `CommitInput` → 时序 `PatchFactor` → `FactorPeriodComputed` → `ViewDataReady` → 策略每周期只写一行。
+
+现网 overlay（CST）：
+
+- storage-view `146.56.196.204` `/data/moox/storage/bin/moox-storage-view` sha256 `7fbc19988f9f839eab7e4893c81f508fd07e87eca6fc5e32eaf86713d8109998`，pid 2147738，含 `writeFenceRequiresPositions` / `FactorBindingPeriodState`
+- strategy `106.53.107.122` `/data/moox/prod/bin/moox-strategy` sha256 `8963ed643b47faf345a891742ba45f8aa30e5beb56395b67253fcf63e65ee9c4`，pid 3701199
+- 本机 merge pid 52222 sha256 `9ed510397de120cf4ed8552759d2176bc945487a9753d07a762176eca5ccfffd`，consumer 仍为 `factor_merge_rows_v1`
+- 本机 engine pid 65252，`t_factor_merged_datasets` 已种 `mdataset_binance_kline_1m` / `snap-1` / enabled=1；时序 consumer 仍为 `factor_dataset_rows_v1`，日志 `trigger_type=dataset_rows`
+
+compile→本机 gzip/scp 曾因 180s 超时失败；改 rsync 后完成 overlay，现网 sha 与符号核验通过。
+
+样本周期 `2026-09-15T06:48:00Z`（bar_end `06:49:00Z`）及后续连续周期：
+
+- Merge：BTC/ETH 的 spot+swap arrival `c_complete=1` 后才 `CommitInput`，收据 `(storage-node-0, EGDAONV25MIQHQDAJY42RJCBMI, sequence>0)`
+- 引擎：BTC 11 个 binding pair 全部 `complete` 且收据确认；barrier `degraded/reported`（宇宙 662 主体，alts `missing_input`）
+- View `view_binance_kline_1m` 周期状态 event_id 与引擎 barrier `c_batch_id` 一致（例如 06:48 `storage-marker-3ef4eff98a7e856047ebb42f255a31a4`），即 `FactorPeriodComputed` 发布的 ViewDataReady
+- 策略实例 `factor-result-e2e-instance-20260914`：`created_at>=2026-09-15T06:37:52Z` 后 `06:49`–`06:57` 各恰好 1 行，`targets=[{BTC-USDT,1}]`，`valid_until=bar_end+4m`
+
+两来源两对象可核算样本仍由 `TestDatasetPipeline` 覆盖；现网 E2E 策略池为 BTC-USDT，ETH 仅验证 Merge 双源提交。
+
 ### 尚未解决的依赖
 
-- 因子写回仍走 `UpsertFields`，尚未统一 `PatchFactor`
-- 独立 codeCR、本机引擎/Merge 正式发布、真实新周期 E2E 尚未执行
-- 全超时且无行写入时 Merge `committed_positions` 可能为空
-- 生产 mdataset `object_set` 仍需控制面提供，否则 Freeze 不会自动发生
+- EventBus 仍缺 `factor-merge-eventbus` 角色；引擎 `nats: permissions violation` 出现在 `moox.factor.internal.recalc.heartbeat`，不挡 DatasetRows
+- 崩溃窗口下 `RecordCommit` 成功但 `NoteCommit` 失败会丢收据
+- MetadataSync 不自动建 mapped 基列，新环境 `CommitInput` 可能被 schema 拦住
+- 全市场 1m 宇宙 Freeze 后大量 alts `missing_input`：根因是 Freeze 使用现货∪合约并集，而 `CommitInput` 仍要求双源；已改为各源 `universe_subject_ids` 交集，单边标的不再进入 mdataset
+- 策略偶发 `VIEW_NOT_READY` 索引代际变化，重试后仍每周期只写一行
+- codeCR overlay 与引擎 catalog 补种尚未提交
 
 ### 提交
 
-（本提交）
+`4019faac`

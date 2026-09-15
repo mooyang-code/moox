@@ -123,7 +123,8 @@ func (r *Relay) Start(ctx context.Context) {
 			for {
 				if err := r.flush(ctx); err != nil {
 					r.report(err)
-					// Keep the failed entry for the next poll. There is no skip path.
+					// Keep a failed publish for the next poll. Unsupported
+					// legacy payloads are dropped inside flush instead.
 					select {
 					case <-time.After(r.options.PollInterval):
 					case <-r.stop:
@@ -203,6 +204,11 @@ func (r *Relay) flush(ctx context.Context) error {
 	for _, entry := range entries {
 		data, err := r.store.PrepareOutboxPublication(ctx, entry.ID, time.Now().UTC())
 		if err != nil {
+			if pebble.IsUnsupportedOutboxEvent(err) {
+				log.Printf("storage outbox dropping unsupported event %d: %v", entry.ID, err)
+				confirmed = append(confirmed, entry.ID)
+				continue
+			}
 			if len(confirmed) > 0 {
 				err = errors.Join(err, r.cleanupConfirmed(ctx, confirmed))
 			}

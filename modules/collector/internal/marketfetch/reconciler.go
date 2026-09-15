@@ -422,6 +422,9 @@ func splitGroupsForEnvironment(groups []TaskGroup, snapshot map[string]sources.D
 	const environmentGroupCountProbe = 999999
 	for _, group := range groups {
 		subjects := normalizeSubjects(group.Subjects)
+		if isCryptoKlineGroup(group) {
+			subjects = pinPriorityCryptoSubjects(subjects)
+		}
 		if len(subjects) == 0 {
 			result = append(result, group)
 			continue

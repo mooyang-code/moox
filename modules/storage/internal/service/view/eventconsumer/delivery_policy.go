@@ -257,10 +257,16 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 		if c.config.Lease != nil {
 			c.config.Lease.Release()
 		}
-		if err == nil {
+		if err == nil || IsDeferred(err) {
 			// Applying an event is deliberately separate from ACK retry:
 			// an ACK transport failure must never repeat an already successful
-			// index write.
+			// index write. Deferred apply is already persisted (ViewDataReady
+			// waiting for row positions); ACK so later dataset-queue rows can
+			// satisfy the fence instead of blocking behind this marker.
+			if IsDeferred(err) {
+				log.Printf("storage view delivery deferred ack after %v: consumer=%s event_id=%s subject=%s",
+					err, delivery.Consumer, delivery.RawMessageID, delivery.Subject)
+			}
 			for ctx.Err() == nil {
 				if ackErr := actions.ack(ctx); ackErr == nil {
 					metrics.ObserveDelivery("ack", "success")
@@ -384,6 +390,25 @@ func Permanent(err error) error {
 
 func IsPermanent(err error) bool {
 	var target permanentDeliveryError
+	return errors.As(err, &target)
+}
+
+type deferredDeliveryError struct{ error }
+
+func (d deferredDeliveryError) Unwrap() error { return d.error }
+
+// Deferred marks work that is already persisted and must not occupy the
+// dataset queue. The consumer ACKs so later row deliveries can satisfy the
+// ViewDataReady applied-position fence.
+func Deferred(err error) error {
+	if err == nil {
+		return nil
+	}
+	return deferredDeliveryError{err}
+}
+
+func IsDeferred(err error) bool {
+	var target deferredDeliveryError
 	return errors.As(err, &target)
 }
 

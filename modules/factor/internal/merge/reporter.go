@@ -40,7 +40,7 @@ func (r *StoragePeriodReporter) Report(ctx context.Context, marker PeriodMarker)
 		Marker: &storagepb.MergePeriodCompletedMarker{
 			DatasetId: marker.DatasetID, Frequency: marker.Frequency, PeriodTime: marker.PeriodTime.UTC().Unix(),
 			Status: marker.Status, BatchId: marker.BatchID, ConfigSnapshotId: marker.SnapshotID,
-			ExpectedScopeRef: marker.ScopeRef, ExpectedSubjectIds: append([]string(nil), marker.ExpectedSubjectIDs...),
+			ExpectedScopeRef: marker.ScopeRef, UniverseSubjectIds: append([]string(nil), marker.UniverseSubjectIDs...),
 			FailedSubjects: append([]string(nil), marker.FailedSubjects...), CommittedPositions: positions,
 			CompletedAt: timestamppb.New(time.Now().UTC()),
 		},

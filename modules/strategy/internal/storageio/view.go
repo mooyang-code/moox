@@ -49,6 +49,10 @@ type SnapshotProvenanceReader interface {
 	ViewProvenance(string) (string, uint64, bool)
 }
 
+type viewSelectorRestrictor interface {
+	RestrictSelectors([]input.PoolItem)
+}
+
 type Loader struct{ Reader ViewReader }
 
 // ListSubjects implements trigger.SubjectDirectoryLoader without widening the
@@ -102,7 +106,7 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 	reader := l.Reader
 	var pinned ViewReader
 	var snapshotErr error
-	if len(expected) > 0 {
+	if expected != nil {
 		if snapshotReader, ok := l.Reader.(ViewSnapshotReaderWithIndexes); ok {
 			pinned, snapshotErr = snapshotReader.BeginViewSnapshotAt(ctx, runner.SpaceID, viewIDs, expected)
 		} else {
@@ -120,6 +124,9 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 	subjects, err := reader.ListSubjects(ctx, runner.SpaceID, compiled.SourceView.ID)
 	if err != nil {
 		return input.EvaluationInput{}, fmt.Errorf("%w: list subjects: %v", input.ErrNotReady, err)
+	}
+	if restrictor, ok := reader.(viewSelectorRestrictor); ok && compiled.InstrumentPool.IncludeSet {
+		restrictor.RestrictSelectors(poolItemsForInclude(subjects, compiled.InstrumentPool.Include))
 	}
 	if resolve != nil {
 		rulePools, poolIDs, resolveErr := resolve(subjects, period)
@@ -164,6 +171,9 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 	if pool.Err != nil {
 		return input.EvaluationInput{}, pool.Err
 	}
+	if restrictor, ok := reader.(viewSelectorRestrictor); ok {
+		restrictor.RestrictSelectors(pool.Items)
+	}
 	rowsByInstrument := make(map[string]input.InstrumentInput, len(pool.Items))
 	sourceRowsPresent := make(map[string]bool, len(pool.Items))
 	subjectToInstrument := make(map[string]string, len(pool.Items))
@@ -198,14 +208,7 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 			// bound Factor columns so a stale/unscoped result column cannot
 			// masquerade as a valid subject-scoped factor.
 			if viewID == compiled.SourceView.ID {
-				for column, raw := range row.Values {
-					parsed, parseErr := quant.Parse(raw)
-					if parseErr == nil {
-						item.Values[column] = parsed
-					}
-				}
-			}
-			if viewID == compiled.SourceView.ID {
+				copySourceColumns(item.Values, row.Values)
 				sourceRowsPresent[instrumentID] = true
 			}
 			for _, factor := range compiled.Factors {
@@ -275,12 +278,7 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 					continue
 				}
 				if viewID == compiled.SourceView.ID {
-					for column, raw := range row.Values {
-						parsed, parseErr := quant.Parse(raw)
-						if parseErr == nil {
-							item.PreviousValues[column] = parsed
-						}
-					}
+					copySourceColumns(item.PreviousValues, row.Values)
 				}
 				for _, factor := range compiled.Factors {
 					if factor.ResultViewID != viewID {
@@ -673,4 +671,66 @@ func ruleAppliesToInstrument(compiled compiler.CompiledStrategy, pool config.Poo
 		return false
 	}
 	return true
+}
+
+func poolItemsForInclude(subjects []input.Subject, include []string) []input.PoolItem {
+	wanted := make(map[string]struct{}, len(include))
+	for _, id := range include {
+		if id = strings.ToUpper(strings.TrimSpace(id)); id != "" {
+			wanted[id] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return nil
+	}
+	items := make([]input.PoolItem, 0, len(wanted))
+	seen := make(map[string]struct{}, len(wanted))
+	for _, subject := range subjects {
+		instrumentID := strings.ToUpper(strings.TrimSpace(subject.InstrumentID))
+		if _, ok := wanted[instrumentID]; !ok {
+			continue
+		}
+		subjectID := strings.TrimSpace(subject.SubjectID)
+		if subjectID == "" {
+			continue
+		}
+		if _, ok := seen[subjectID]; ok {
+			continue
+		}
+		seen[subjectID] = struct{}{}
+		items = append(items, input.PoolItem{InstrumentID: subject.InstrumentID, SubjectID: subjectID, SeriesTag: subject.SeriesTag})
+	}
+	return items
+}
+
+func copySourceColumns(dst map[string]quant.Decimal, src map[string]string) {
+	if dst == nil {
+		return
+	}
+	names := make([]string, 0, len(src))
+	for name := range src {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, column := range names {
+		parsed, err := quant.Parse(src[column])
+		if err != nil {
+			continue
+		}
+		dst[column] = parsed
+		if short := mergedSourceShortName(column); short != "" {
+			if _, exists := dst[short]; !exists {
+				dst[short] = parsed
+			}
+		}
+	}
+}
+
+func mergedSourceShortName(column string) string {
+	column = strings.TrimSpace(column)
+	index := strings.LastIndex(column, "__")
+	if index <= 0 || index+2 >= len(column) {
+		return ""
+	}
+	return column[index+2:]
 }

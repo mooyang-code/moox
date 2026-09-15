@@ -24,7 +24,7 @@ func BuildCollectorPeriodCompletedMessage(spaceID string, marker *pb.CollectorPe
 	payload := &storageeventpb.CollectorPeriodCompleted{
 		DatasetId: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
 		Status: marker.GetStatus(), BatchId: marker.GetBatchId(), ConfigSnapshotId: marker.GetConfigSnapshotId(),
-		ExpectedScopeRef: marker.GetExpectedScopeRef(), ExpectedSubjectIds: normalizedIDs(marker.GetExpectedSubjectIds()),
+		ExpectedScopeRef: marker.GetExpectedScopeRef(), UniverseSubjectIds: normalizedIDs(marker.GetUniverseSubjectIds()),
 		FailedSubjects:     normalizedIDs(marker.GetFailedSubjects()),
 		CommittedPositions: eventPositions(marker.GetCommittedPositions()),
 		CollectedAt:        marker.GetCollectedAt(),
@@ -45,7 +45,7 @@ func BuildMergePeriodCompletedMessage(spaceID string, marker *pb.MergePeriodComp
 	payload := &storageeventpb.MergePeriodCompleted{
 		DatasetId: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
 		Status: marker.GetStatus(), BatchId: marker.GetBatchId(), ConfigSnapshotId: marker.GetConfigSnapshotId(),
-		ExpectedScopeRef: marker.GetExpectedScopeRef(), ExpectedSubjectIds: normalizedIDs(marker.GetExpectedSubjectIds()),
+		ExpectedScopeRef: marker.GetExpectedScopeRef(), UniverseSubjectIds: normalizedIDs(marker.GetUniverseSubjectIds()),
 		FailedSubjects:     normalizedIDs(marker.GetFailedSubjects()),
 		CommittedPositions: eventPositions(marker.GetCommittedPositions()),
 		CompletedAt:        marker.GetCompletedAt(),
@@ -83,7 +83,7 @@ func BuildFactorPeriodComputedMessage(spaceID string, marker *pb.FactorPeriodCom
 	payload := &storageeventpb.FactorPeriodComputed{
 		DatasetId: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
 		Status: marker.GetStatus(), BatchId: marker.GetBatchId(), ConfigSnapshotId: marker.GetConfigSnapshotId(),
-		ExpectedScopeRef: marker.GetExpectedScopeRef(), ExpectedSubjectIds: normalizedIDs(marker.GetExpectedSubjectIds()),
+		ExpectedScopeRef: marker.GetExpectedScopeRef(), UniverseSubjectIds: normalizedIDs(marker.GetUniverseSubjectIds()),
 		Bindings: bindings, CommittedPositions: eventPositions(marker.GetCommittedPositions()),
 		ComputedAt: marker.GetComputedAt(), TriggerEventId: marker.GetTriggerEventId(),
 	}
@@ -171,7 +171,7 @@ func validateDataNodeMarkerMessage(raw []byte) (*eventpb.EventMessage, error) {
 	}
 	event, ok := registry.Lookup(message.GetEventName(), message.GetEventVersion())
 	if !ok || !isDataNodeOutboxEvent(event) {
-		return nil, invalidf("unsupported DataNode outbox event %s@%d", message.GetEventName(), message.GetEventVersion())
+		return nil, fmt.Errorf("%w: %s@%d", ErrUnsupportedOutboxEvent, message.GetEventName(), message.GetEventVersion())
 	}
 	subject, err := registry.RenderSubject(event, message.GetSpaceId(), message.GetSubjectId())
 	if err != nil {

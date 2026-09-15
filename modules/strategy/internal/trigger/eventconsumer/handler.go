@@ -2,6 +2,7 @@ package eventconsumer
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
@@ -37,13 +38,43 @@ func processViewDataReady(ctx context.Context, message *eventpb.EventMessage, pa
 	if periodErr != nil {
 		period = input.PeriodBoundaries{StorageStart: storagePeriod, BarEnd: storagePeriod, PreviousStart: storagePeriod}
 	}
+	statuses, states := periodReadyBindings(payload)
 	return processPeriod(ctx, processor, trigger.PeriodReady{
 		MessageID: message.GetEventId(), EventName: message.GetEventName(), SpaceID: message.GetSpaceId(),
 		ViewID: payload.GetViewId(), SourceViewID: payload.GetViewId(), Frequency: payload.GetFrequency(),
 		PeriodTime: storagePeriod, StoragePeriodTime: storagePeriod, BarEndTime: period.BarEnd,
 		Status: payload.GetStatus(), ReadyViewIDs: []string{payload.GetViewId()},
 		CompletionKind: payload.GetCompletionKind(),
+		BindingStatuses: statuses, BindingStates: states,
 	})
+}
+
+func periodReadyBindings(payload *storagepb.ViewDataReady) (map[string]string, map[string]trigger.BindingPeriodState) {
+	if payload == nil || len(payload.GetBindings()) == 0 {
+		return nil, nil
+	}
+	statuses := make(map[string]string, len(payload.GetBindings()))
+	states := make(map[string]trigger.BindingPeriodState, len(payload.GetBindings()))
+	for _, binding := range payload.GetBindings() {
+		if binding == nil {
+			continue
+		}
+		id := strings.TrimSpace(binding.GetBindingId())
+		if id == "" {
+			continue
+		}
+		statuses[id] = binding.GetStatus()
+		states[id] = trigger.BindingPeriodState{
+			Status:          binding.GetStatus(),
+			SkippedSubjects: append([]string(nil), binding.GetSkippedSubjects()...),
+			FailedSubjects:  append([]string(nil), binding.GetFailedSubjects()...),
+			SourceHash:      binding.GetSourceHash(),
+		}
+	}
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	return statuses, states
 }
 
 func processPeriod(ctx context.Context, processor *trigger.Processor, period trigger.PeriodReady) jetstream.HandlerResult {

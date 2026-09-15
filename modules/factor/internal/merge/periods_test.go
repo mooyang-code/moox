@@ -21,12 +21,12 @@ func TestMergePeriodLedgerKeepsFrozenUniverseOnPartialTimeout(t *testing.T) {
 	require.Len(t, reports.markers, 1)
 	marker := reports.markers[0]
 	require.Equal(t, "degraded", marker.Status)
-	require.Equal(t, expected, marker.ExpectedSubjectIDs)
+	require.Equal(t, expected, marker.UniverseSubjectIDs)
 	require.Equal(t, []string{"DDD-USDT", "EEE-USDT"}, marker.FailedSubjects)
 	require.NotEmpty(t, marker.Positions)
 }
 
-func TestMergePeriodLedgerRejectsLateArrivalAfterClose(t *testing.T) {
+func TestMergePeriodLedgerAcceptsLateArrivalAfterCloseWithoutRewritingReport(t *testing.T) {
 	ledger, reports := openPeriodLedger(t)
 	key := periodKey(time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC))
 	require.NoError(t, ledger.Freeze(context.Background(), key, []string{"AAA-USDT", "BBB-USDT"}, time.Date(2026, 9, 13, 16, 7, 0, 0, time.UTC)))
@@ -34,7 +34,10 @@ func TestMergePeriodLedgerRejectsLateArrivalAfterClose(t *testing.T) {
 	require.NoError(t, ledger.Finalize(context.Background(), key, time.Date(2026, 9, 13, 16, 8, 0, 0, time.UTC)))
 	accepted, err := ledger.Accepts(context.Background(), key, "BBB-USDT")
 	require.NoError(t, err)
-	require.False(t, accepted)
+	require.True(t, accepted, "late dual-source rows must still CommitInput for the engine 15m window")
+	outside, err := ledger.Accepts(context.Background(), key, "ZZZ-USDT")
+	require.NoError(t, err)
+	require.False(t, outside)
 	require.NoError(t, ledger.NoteCommit(context.Background(), key, "BBB-USDT", testReceipt(9)))
 	require.Len(t, reports.markers, 1)
 	require.Equal(t, []string{"BBB-USDT"}, reports.markers[0].FailedSubjects)
@@ -62,9 +65,24 @@ func TestMergePeriodLedgerEndsEmptyUniverseWithoutFakeInput(t *testing.T) {
 	require.NoError(t, ledger.Finalize(context.Background(), key, time.Date(2026, 9, 13, 16, 8, 0, 0, time.UTC)))
 	require.Len(t, reports.markers, 1)
 	require.Equal(t, "complete", reports.markers[0].Status)
-	require.Empty(t, reports.markers[0].ExpectedSubjectIDs)
+	require.Empty(t, reports.markers[0].UniverseSubjectIDs)
 	require.Empty(t, reports.markers[0].FailedSubjects)
 	require.Empty(t, reports.markers[0].Positions)
+}
+
+func TestMergePeriodLedgerCollectorUniverseIsInnerJoin(t *testing.T) {
+	ledger, _ := openPeriodLedger(t)
+	period := time.Date(2026, 9, 15, 6, 48, 0, 0, time.UTC)
+	require.NoError(t, ledger.NoteCollectorCompleted(context.Background(), "mdataset_binance_kline_1m", "dataset_binance_spot_kline_1m", period, []string{"BTC-USDT-SPOT", "ETH-USDT"}))
+	universe, ready, err := ledger.CollectorUniverse(context.Background(), "mdataset_binance_kline_1m", []string{"dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m"}, period)
+	require.NoError(t, err)
+	require.False(t, ready)
+	require.Empty(t, universe)
+	require.NoError(t, ledger.NoteCollectorCompleted(context.Background(), "mdataset_binance_kline_1m", "dataset_binance_swap_kline_1m", period, []string{"BTC-USDT-SWAP", "SOL-USDT"}))
+	universe, ready, err = ledger.CollectorUniverse(context.Background(), "mdataset_binance_kline_1m", []string{"dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m"}, period)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Equal(t, []string{"BTC-USDT"}, universe)
 }
 
 func TestMergePeriodLedgerCollectorCompleteIsNotMergeComplete(t *testing.T) {

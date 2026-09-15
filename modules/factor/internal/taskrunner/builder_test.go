@@ -8,6 +8,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBuildTaskPreservesMergedSourceDataset(t *testing.T) {
+	task, err := BuildTask(TaskScope{
+		TaskID: "task-1", TriggerType: "dataset_rows", SpaceID: "crypto",
+		BindingGeneration: "incarnation-1",
+		SourceViewID:      "view_binance_kline_1m",
+		SourceDataset:     "mdataset_binance_kline_1m",
+		ResultDatasetID:   "mdataset_binance_kline_1m",
+		TargetDataset:     "mdataset_binance_kline_1m",
+		SubjectID:         "BTC-USDT",
+		Freq:              "1m", StartTime: time.Unix(1, 0), EndTime: time.Unix(3, 0),
+	}, domain.FactorDef{
+		FactorType: domain.FactorTypeTimeSeries,
+		FactorID:   "bias", Name: "Bias", SourceHash: "h1",
+		InputColumns: []string{"close"}, Outputs: []string{"bias"},
+		ParamsJSON: `{}`, LookbackPeriods: 20, Status: domain.FactorStatusEnabled,
+	}, "/factor")
+	require.NoError(t, err)
+	require.Equal(t, "mdataset_binance_kline_1m", task.SourceDataset)
+	require.Equal(t, "view_binance_kline_1m", task.SourceViewID)
+	require.Equal(t, "mdataset_binance_kline_1m", task.ResultDatasetID)
+}
+
 func TestBuildTaskUsesExactlyOneFactor(t *testing.T) {
 	task, err := BuildTask(TaskScope{
 		TaskID: "task-1", TriggerType: "recalc", SpaceID: "crypto",

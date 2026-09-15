@@ -73,6 +73,7 @@ type ViewReadyRunner struct {
 	batchExecution       bool
 	barrier              *PeriodBarrier
 	catalog              *store.Store
+	now                  func() time.Time
 }
 
 type Option func(*ViewReadyRunner)
@@ -121,6 +122,21 @@ func WithCatalogStore(db *store.Store) Option {
 	return func(r *ViewReadyRunner) { r.catalog = db }
 }
 
+func WithNow(now func() time.Time) Option {
+	return func(r *ViewReadyRunner) {
+		if now != nil {
+			r.now = now
+		}
+	}
+}
+
+func (r *ViewReadyRunner) clock() time.Time {
+	if r != nil && r.now != nil {
+		return r.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
 func NewViewReadyRunner(bindings PeriodBindingSource, factors PeriodFactorSource, runner CombinationTaskRunner, storage PeriodStorage, factorsDir string, opts ...Option) *ViewReadyRunner {
 	r := &ViewReadyRunner{
 		bindings: bindings, factors: factors, taskRunner: runner, storage: storage,
@@ -149,6 +165,20 @@ func (r *ViewReadyRunner) ExecutionBudget(ctx context.Context, spaceID string, r
 		return 0, fmt.Errorf("list executable factor bindings for budget: %w", err)
 	}
 	selected := selectPeriodBindings(bindings, spaceID, ready)
+	if r.factors != nil {
+		cross := make([]domain.FactorBinding, 0, len(selected))
+		for _, binding := range selected {
+			factor, loadErr := r.factors.Get(ctx, binding.FactorID)
+			if loadErr != nil {
+				return 0, fmt.Errorf("load factor %s for budget: %w", binding.FactorID, loadErr)
+			}
+			if factor.FactorType != domain.FactorTypeCrossSection {
+				continue
+			}
+			cross = append(cross, binding)
+		}
+		selected = cross
+	}
 	unit := r.executionUnitTimeout
 	if unit <= 0 {
 		unit = 30 * time.Second
@@ -220,11 +250,28 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		return fmt.Errorf("list executable factor bindings: %w", err)
 	}
 	selected := selectPeriodBindings(bindings, spaceID, ready)
-	if err := r.freezePeriod(ctx, spaceID, triggerEventID, ready, mergePeriodBindings(selected, selectDatasetBindings(bindings, spaceID, ready.GetDatasetId()))); err != nil {
-		return err
+	if factorID != "" {
+		selected = selectFactorBindings(selected, factorID)
 	}
-	if len(selected) == 0 || (factorID != "" && !containsFactor(selected, factorID)) {
-		if factorID == "" && len(selected) == 0 {
+	factors := make(map[string]domain.FactorDef, len(selected))
+	cross := make([]domain.FactorBinding, 0, len(selected))
+	series := make([]domain.FactorBinding, 0, len(selected))
+	for _, binding := range selected {
+		factor, loadErr := r.factors.Get(ctx, binding.FactorID)
+		if loadErr != nil {
+			return fmt.Errorf("load factor %s: %w", binding.FactorID, loadErr)
+		}
+		switch factor.FactorType {
+		case domain.FactorTypeCrossSection:
+			factors[binding.BindingID] = *factor
+			cross = append(cross, binding)
+		case domain.FactorTypeTimeSeries:
+			factors[binding.BindingID] = *factor
+			series = append(series, binding)
+		}
+	}
+	if len(cross) == 0 && len(series) == 0 {
+		if factorID == "" {
 			if readiness, ok := r.bindings.(PeriodBindingReadinessSource); ok {
 				waiting, readinessErr := readiness.HasExecutableOrPending(ctx, spaceID, ready.GetViewId(), ready.GetFrequency())
 				if readinessErr != nil {
@@ -237,27 +284,25 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		}
 		return ErrNoExecutableBinding
 	}
-	if factorID != "" {
-		selected = selectFactorBindings(selected, factorID)
-	}
-	states := make(map[string]*storagepb.FactorBindingPeriodState, len(selected))
-	factors := make(map[string]domain.FactorDef, len(selected))
-	cross := make([]domain.FactorBinding, 0, len(selected))
-	for _, binding := range selected {
-		factor, loadErr := r.factors.Get(ctx, binding.FactorID)
-		if loadErr != nil {
-			return fmt.Errorf("load factor %s: %w", binding.FactorID, loadErr)
+	if len(cross) == 0 && factorID == "" {
+		if readiness, ok := r.bindings.(PeriodBindingReadinessSource); ok {
+			waiting, readinessErr := readiness.HasExecutableOrPending(ctx, spaceID, ready.GetViewId(), ready.GetFrequency())
+			if readinessErr != nil {
+				return fmt.Errorf("check pending factor bindings: %w", readinessErr)
+			}
+			if waiting {
+				return ErrBindingNotReady
+			}
 		}
-		if factor.FactorType != domain.FactorTypeCrossSection {
-			continue
-		}
-		factors[binding.BindingID] = *factor
-		cross = append(cross, binding)
 	}
-	selected = cross
-	if len(selected) == 0 || (factorID != "" && !containsFactor(selected, factorID)) {
+	freezeBindings := mergePeriodBindings(series, cross)
+	if err := r.freezePeriod(ctx, spaceID, triggerEventID, ready, freezeBindings); err != nil {
+		return err
+	}
+	if len(cross) == 0 {
 		return ErrNoExecutableBinding
 	}
+	selected = cross
 	resultDatasetID := selected[0].ResultDatasetID
 	for _, binding := range selected[1:] {
 		if binding.ResultDatasetID != resultDatasetID {
@@ -285,7 +330,7 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 	if err != nil {
 		return err
 	}
-
+	states := make(map[string]*storagepb.FactorBindingPeriodState, len(selected))
 	for _, binding := range selected {
 		status := "complete"
 		if groupStatus == "degraded" {
@@ -459,7 +504,7 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		DatasetId: resultDatasetID, Frequency: ready.GetFrequency(), PeriodTime: ready.GetPeriodTime(), Status: groupStatus,
 		BatchId: triggerEventID, ConfigSnapshotId: firstNonEmpty(ready.GetViewConfigId(), "factor"),
 		ExpectedScopeRef:   firstNonEmpty(ready.GetVisibleScope(), fmt.Sprintf("%s:%s:%d", resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime())),
-		ExpectedSubjectIds: append([]string(nil), subjects...), Bindings: markerStates,
+		UniverseSubjectIds: append([]string(nil), subjects...), Bindings: markerStates,
 		CommittedPositions: cloneEventPositions(ready.GetCommittedPositions()),
 		ComputedAt:         timestamppb.Now(), TriggerEventId: triggerEventID,
 	}
@@ -598,15 +643,6 @@ func selectPeriodBindings(bindings []domain.FactorBinding, spaceID string, ready
 	return selected
 }
 
-func containsFactor(bindings []domain.FactorBinding, factorID string) bool {
-	for _, binding := range bindings {
-		if binding.FactorID == factorID {
-			return true
-		}
-	}
-	return false
-}
-
 func selectFactorBindings(bindings []domain.FactorBinding, factorID string) []domain.FactorBinding {
 	selected := make([]domain.FactorBinding, 0, len(bindings))
 	for _, binding := range bindings {
@@ -629,6 +665,9 @@ func periodSubjectUniverse(bindings []domain.FactorBinding, ready *publicstorage
 	if ready != nil {
 		if subjectID := strings.TrimSpace(strings.TrimPrefix(ready.GetVisibleScope(), "subject:")); strings.HasPrefix(ready.GetVisibleScope(), "subject:") && subjectID != "" {
 			return []string{subjectID}
+		}
+		if ids := sortedUnique(ready.GetUniverseSubjectIds()); len(ids) > 0 {
+			return ids
 		}
 	}
 	var subjects []string
@@ -742,12 +781,39 @@ func (r *ViewReadyRunner) freezePeriod(ctx context.Context, spaceID, triggerEven
 	if datasetID == "" {
 		return nil
 	}
-	snapshotID := r.configSnapshotID(ctx, datasetID)
-	if snapshotID == "" {
-		snapshotID = firstNonEmpty(ready.GetViewConfigId(), "factor")
+	snapshotID, err := r.ledgerSnapshotID(ctx, datasetID)
+	if err != nil {
+		return err
+	}
+	subjects := periodSubjectUniverse(bindings, ready)
+	if len(bindings) == 0 || len(subjects) == 0 {
+		return nil
+	}
+	key := PeriodKey{
+		SpaceID: spaceID, DatasetID: datasetID, SnapshotID: snapshotID,
+		Frequency: ready.GetFrequency(), PeriodTime: ready.GetPeriodTime(),
+	}
+	if r.clock().Unix() > periodCatchupFreezeDeadline(key) {
+		log.InfoContextf(ctx, "factor skip stale catch-up freeze dataset=%s freq=%s period=%d", datasetID, ready.GetFrequency(), ready.GetPeriodTime())
+		return nil
+	}
+	outstanding, err := r.barrier.hasUnreportedFrozen(ctx, key)
+	if err != nil {
+		return err
+	}
+	if outstanding {
+		log.InfoContextf(ctx, "factor skip freeze while earlier period is open dataset=%s freq=%s period=%d", datasetID, ready.GetFrequency(), ready.GetPeriodTime())
+		return nil
+	}
+	later, err := r.barrier.hasLaterPeriod(ctx, key)
+	if err != nil {
+		return err
+	}
+	if later {
+		log.InfoContextf(ctx, "factor skip catch-up freeze behind later ledger dataset=%s freq=%s period=%d", datasetID, ready.GetFrequency(), ready.GetPeriodTime())
+		return nil
 	}
 	frozen := make([]FrozenBinding, 0, len(bindings))
-	subjects := periodSubjectUniverse(bindings, ready)
 	for _, binding := range bindings {
 		factor, err := r.factors.Get(ctx, binding.FactorID)
 		if err != nil || factor == nil {
@@ -763,12 +829,8 @@ func (r *ViewReadyRunner) freezePeriod(ctx context.Context, spaceID, triggerEven
 		})
 	}
 	return r.barrier.Freeze(ctx, FreezeSpec{
-		Key: PeriodKey{
-			SpaceID: spaceID, DatasetID: datasetID, SnapshotID: snapshotID,
-			Frequency: ready.GetFrequency(), PeriodTime: ready.GetPeriodTime(),
-		},
+		Key:              key,
 		ExpectedSubjects: subjects,
-		FailedSubjects:   splitScopeRef(ready.GetFailedScopeRef()),
 		Bindings:         frozen,
 		BatchID:          firstNonEmpty(ready.GetCompletionEventId(), triggerEventID),
 		ScopeRef:         firstNonEmpty(ready.GetVisibleScope(), fmt.Sprintf("%s:%s:%d", datasetID, ready.GetFrequency(), ready.GetPeriodTime())),
@@ -780,9 +842,9 @@ func (r *ViewReadyRunner) recordCrossSectionOutcomes(ctx context.Context, spaceI
 		return nil
 	}
 	datasetID := strings.TrimSpace(ready.GetDatasetId())
-	snapshotID := r.configSnapshotID(ctx, datasetID)
-	if snapshotID == "" {
-		snapshotID = firstNonEmpty(ready.GetViewConfigId(), "factor")
+	snapshotID, err := r.ledgerSnapshotID(ctx, datasetID)
+	if err != nil {
+		return err
 	}
 	key := PeriodKey{
 		SpaceID: spaceID, DatasetID: datasetID, SnapshotID: snapshotID,
@@ -840,13 +902,25 @@ func (r *ViewReadyRunner) recordCrossSectionOutcomes(ctx context.Context, spaceI
 	return nil
 }
 
-func (r *ViewReadyRunner) configSnapshotID(ctx context.Context, datasetID string) string {
+func (r *ViewReadyRunner) ledgerSnapshotID(ctx context.Context, datasetID string) (string, error) {
+	snapshotID, err := r.configSnapshotID(ctx, datasetID)
+	if err != nil {
+		return "", err
+	}
+	return ledgerSnapshotID(snapshotID), nil
+}
+
+func (r *ViewReadyRunner) configSnapshotID(ctx context.Context, datasetID string) (string, error) {
 	if r == nil || r.catalog == nil || r.catalog.MergedDatasets() == nil || strings.TrimSpace(datasetID) == "" {
-		return ""
+		return "", nil
 	}
 	def, err := r.catalog.MergedDatasets().Get(ctx, datasetID)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return strings.TrimSpace(def.ConfigSnapshotID)
+	return strings.TrimSpace(def.ConfigSnapshotID), nil
+}
+
+func ledgerSnapshotID(catalogID string) string {
+	return firstNonEmpty(strings.TrimSpace(catalogID), "-")
 }

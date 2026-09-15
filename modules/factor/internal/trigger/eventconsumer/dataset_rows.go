@@ -52,11 +52,30 @@ func StartDatasetRows(ctx context.Context, cfg Config, handler *trigger.DatasetR
 		}),
 	})
 	go func() {
-		if runErr := ingress.runner.Run(runCtx); runErr != nil && runCtx.Err() == nil {
-			log.ErrorContextf(runCtx, "factor dataset rows consumer stopped: %v", runErr)
-		}
+		_ = runUntilCancelled(runCtx, time.Second, ingress.runner.Run, func(err error) {
+			log.ErrorContextf(runCtx, "factor dataset rows consumer stopped: %v", err)
+		})
 	}()
 	return ingress, nil
+}
+
+func runUntilCancelled(ctx context.Context, delay time.Duration, run func(context.Context) error, onErr func(error)) error {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	for ctx.Err() == nil {
+		err := run(ctx)
+		if ctx.Err() != nil {
+			return nil
+		}
+		if err != nil && onErr != nil {
+			onErr(err)
+		}
+		if !sleepConsumer(ctx, delay) {
+			return nil
+		}
+	}
+	return nil
 }
 
 func (c *RowsConsumer) Ready() bool {

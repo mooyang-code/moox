@@ -3,6 +3,7 @@ package marketfetch
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
@@ -285,6 +286,107 @@ func TestBuildStockCNAssignmentsKeepsPublishedFleetWhenActiveInstrumentSetIsSmal
 		assigned += len(assignment.Subjects)
 	}
 	require.Equal(t, len(subjects), assigned)
+}
+
+func TestBuildAssignmentsPinsPriorityCryptoSubjectsFirst(t *testing.T) {
+	subjects := []string{"AAA-USDT", "BTC-USDT", "ETH-USDT", "ZZZ-USDT"}
+	externals := map[string]string{"AAA-USDT": "AAAUSDT", "BTC-USDT": "BTCUSDT", "ETH-USDT": "ETHUSDT", "ZZZ-USDT": "ZZZUSDT"}
+	nodes := []scfinvoker.Node{
+		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "n2", NodeType: "scf-event", TriggerType: "timer"},
+	}
+	assignments, err := BuildAssignments([]TaskGroup{{
+		Provider: "binance", MarketType: "spot", MarketID: "crypto", DatasetID: "bars", Frequency: "1m",
+		Subjects: subjects, ExternalSymbols: externals,
+	}}, nodes, 2)
+	require.NoError(t, err)
+	byGroup := map[int][]string{}
+	for _, assignment := range assignments {
+		if assignment.Enabled {
+			byGroup[assignment.GroupID] = assignment.Subjects
+		}
+	}
+	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, byGroup[0])
+	require.Equal(t, []string{"AAA-USDT", "ZZZ-USDT"}, byGroup[1])
+}
+
+func TestBuildAssignmentsGivesPriorityCryptoADedicatedTimerWhenSpare(t *testing.T) {
+	subjects := make([]string, 0, 41)
+	externals := make(map[string]string, 41)
+	subjects = append(subjects, "AAA-USDT", "BTC-USDT", "ETH-USDT")
+	externals["AAA-USDT"] = "AAAUSDT"
+	externals["BTC-USDT"] = "BTCUSDT"
+	externals["ETH-USDT"] = "ETHUSDT"
+	for i := 0; i < 38; i++ {
+		subject := fmt.Sprintf("T%02d-USDT", i)
+		subjects = append(subjects, subject)
+		externals[subject] = strings.ReplaceAll(subject, "-", "")
+	}
+	nodes := make([]scfinvoker.Node, 0, 4)
+	for i := 0; i < 4; i++ {
+		nodes = append(nodes, scfinvoker.Node{NodeID: fmt.Sprintf("n%d", i), NodeType: "scf-event", TriggerType: "timer"})
+	}
+	assignments, err := BuildAssignments([]TaskGroup{{
+		Provider: "binance", MarketType: "spot", MarketID: "crypto", DatasetID: "bars", Frequency: "1m",
+		Subjects: subjects, ExternalSymbols: externals,
+	}}, nodes, 30)
+	require.NoError(t, err)
+	byGroup := map[int][]string{}
+	enabled := 0
+	for _, assignment := range assignments {
+		if !assignment.Enabled {
+			continue
+		}
+		enabled++
+		byGroup[assignment.GroupID] = assignment.Subjects
+	}
+	require.Equal(t, 4, enabled)
+	require.Equal(t, []string{"BTC-USDT"}, byGroup[0])
+	require.Equal(t, []string{"ETH-USDT"}, byGroup[1])
+	require.NotContains(t, byGroup[2], "BTC-USDT")
+	require.NotContains(t, byGroup[2], "ETH-USDT")
+	require.Contains(t, byGroup[2], "AAA-USDT")
+	require.NotContains(t, byGroup[3], "BTC-USDT")
+	require.NotContains(t, byGroup[3], "ETH-USDT")
+}
+
+func TestBuildAssignmentsPrefersMinuteDedicatedTimersOverHourly(t *testing.T) {
+	subjects := make([]string, 0, 41)
+	externals := make(map[string]string, 41)
+	subjects = append(subjects, "AAA-USDT", "BTC-USDT", "ETH-USDT")
+	externals["AAA-USDT"] = "AAAUSDT"
+	externals["BTC-USDT"] = "BTCUSDT"
+	externals["ETH-USDT"] = "ETHUSDT"
+	for i := 0; i < 38; i++ {
+		subject := fmt.Sprintf("T%02d-USDT", i)
+		subjects = append(subjects, subject)
+		externals[subject] = strings.ReplaceAll(subject, "-", "")
+	}
+	nodes := make([]scfinvoker.Node, 0, 5)
+	for i := 0; i < 5; i++ {
+		nodes = append(nodes, scfinvoker.Node{NodeID: fmt.Sprintf("n%d", i), NodeType: "scf-event", TriggerType: "timer"})
+	}
+	assignments, err := BuildAssignments([]TaskGroup{
+		{Provider: "binance", MarketType: "spot", MarketID: "crypto", DatasetID: "bars_1h", Frequency: "1h", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "spot", MarketID: "crypto", DatasetID: "bars_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+	}, nodes, 30)
+	require.NoError(t, err)
+	minuteSolos := 0
+	hourSolos := 0
+	for _, assignment := range assignments {
+		if !assignment.Enabled || len(assignment.Subjects) != 1 {
+			continue
+		}
+		switch assignment.Frequency {
+		case "1m":
+			minuteSolos++
+			require.Equal(t, "BTC-USDT", assignment.Subjects[0])
+		case "1h":
+			hourSolos++
+		}
+	}
+	require.Equal(t, 1, minuteSolos, "the single spare timer must isolate 1m BTC, not 1h")
+	require.Zero(t, hourSolos)
 }
 
 func TestBuildAssignmentsKeepsCryptoSpareTimersDisabled(t *testing.T) {

@@ -31,6 +31,7 @@ type DatasetRowsRunner struct {
 	db         *store.Store
 	factorsDir string
 	barrier    *PeriodBarrier
+	now        func() time.Time
 }
 
 func NewDatasetRowsRunner(bindings PeriodBindingSource, factors PeriodFactorSource, tasks CombinationTaskRunner, db *store.Store, factorsDir string) *DatasetRowsRunner {
@@ -42,6 +43,20 @@ func (r *DatasetRowsRunner) WithPeriodBarrier(barrier *PeriodBarrier) *DatasetRo
 		r.barrier = barrier
 	}
 	return r
+}
+
+func (r *DatasetRowsRunner) WithNow(now func() time.Time) *DatasetRowsRunner {
+	if r != nil {
+		r.now = now
+	}
+	return r
+}
+
+func (r *DatasetRowsRunner) clock() time.Time {
+	if r != nil && r.now != nil {
+		return r.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func DatasetRowsDeliverPolicy(existing *nats.ConsumerInfo) nats.DeliverPolicy {
@@ -90,7 +105,10 @@ func (r *DatasetRowsRunner) HandleDatasetRows(ctx context.Context, eventID strin
 		return nil
 	}
 	catalogRevision := r.catalogRevision(ctx)
-	configSnapshotID := r.configSnapshotID(ctx, datasetID)
+	configSnapshotID, err := r.configSnapshotID(ctx, datasetID)
+	if err != nil {
+		return err
+	}
 	tasks := make([]taskrunner.Task, 0, len(payload.GetRows())*len(selected))
 	for _, row := range payload.GetRows() {
 		if !rowInputReady(row) {
@@ -103,6 +121,9 @@ func (r *DatasetRowsRunner) HandleDatasetRows(ctx context.Context, eventID strin
 		period, err := parseDatasetRowTime(ts.GetDataTime())
 		if err != nil {
 			return err
+		}
+		if r.clock().Unix() > periodPendingDeadline(PeriodKey{Frequency: ts.GetFreq(), PeriodTime: period.Unix()}) {
+			continue
 		}
 		periodEnd, err := domain.NextPeriod(period, ts.GetFreq())
 		if err != nil {
@@ -132,9 +153,10 @@ func (r *DatasetRowsRunner) HandleDatasetRows(ctx context.Context, eventID strin
 				SourceSequence: payload.GetSourceSequence(), SourceEventID: eventID,
 				SourceSeriesTag: ts.GetSeriesTag(), FilterSourceSeriesTag: strings.TrimSpace(ts.GetSeriesTag()) != "",
 				BindingID: binding.BindingID, BindingGeneration: binding.BindingGeneration,
-				TriggerType: datasetRowsTriggerType, SpaceID: spaceID,
+				TriggerType: datasetRowsTriggerType, SpaceID: spaceID, SourceViewID: binding.SourceViewID,
 				SourceDataset: datasetID, TargetDataset: datasetID, ResultDatasetID: firstNonEmpty(binding.ResultDatasetID, datasetID),
-				SubjectID: ts.GetSubjectId(), Freq: ts.GetFreq(), PeriodTime: period.Unix(),
+				PreferredSourceDataset: r.preferredMappedSource(ctx, datasetID),
+				SubjectID:              ts.GetSubjectId(), Freq: ts.GetFreq(), PeriodTime: period.Unix(),
 				TriggerEventID: eventID, TriggeredAt: time.Now().UTC(), StartTime: period, EndTime: periodEnd,
 				ConfigSnapshotID: configSnapshotID,
 				StorageSchemaID:  r.storageSchemaID(ctx, datasetID),
@@ -198,15 +220,15 @@ func (r *DatasetRowsRunner) catalogRevision(ctx context.Context) int64 {
 	return snapshot.Revision
 }
 
-func (r *DatasetRowsRunner) configSnapshotID(ctx context.Context, datasetID string) string {
+func (r *DatasetRowsRunner) configSnapshotID(ctx context.Context, datasetID string) (string, error) {
 	if r.db == nil || r.db.MergedDatasets() == nil {
-		return ""
+		return "", nil
 	}
 	def, err := r.db.MergedDatasets().Get(ctx, datasetID)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return strings.TrimSpace(def.ConfigSnapshotID)
+	return strings.TrimSpace(def.ConfigSnapshotID), nil
 }
 
 func (r *DatasetRowsRunner) storageSchemaID(ctx context.Context, datasetID string) string {
@@ -220,13 +242,32 @@ func (r *DatasetRowsRunner) storageSchemaID(ctx context.Context, datasetID strin
 	return strings.TrimSpace(def.StorageSchemaID)
 }
 
+func (r *DatasetRowsRunner) preferredMappedSource(ctx context.Context, datasetID string) string {
+	if r.db == nil || r.db.MergedDatasets() == nil {
+		return ""
+	}
+	def, err := r.db.MergedDatasets().Get(ctx, datasetID)
+	if err != nil {
+		return ""
+	}
+	return domain.PreferredMappedSource(def)
+}
+
 func (r *DatasetRowsRunner) recordPeriodOutcome(ctx context.Context, result taskrunner.Result) error {
 	if r == nil || r.barrier == nil {
 		return nil
 	}
 	task := result.Task.FactorTask
 	datasetID := firstNonEmpty(task.ResultDatasetID, task.SourceDataset, task.SourceViewID)
-	snapshotID := firstNonEmpty(task.ConfigSnapshotID, r.configSnapshotID(ctx, datasetID), "-")
+	snapshotID := strings.TrimSpace(task.ConfigSnapshotID)
+	if snapshotID == "" {
+		id, err := r.configSnapshotID(ctx, datasetID)
+		if err != nil {
+			return err
+		}
+		snapshotID = id
+	}
+	snapshotID = ledgerSnapshotID(snapshotID)
 	status := PairComplete
 	if result.Err != nil {
 		status = PairFailed

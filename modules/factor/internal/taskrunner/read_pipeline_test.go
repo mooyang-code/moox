@@ -69,6 +69,23 @@ func TestPreparedTaskProjectsAtComputeTime(t *testing.T) {
 	require.Same(t, shared, prepared.shared)
 }
 
+func TestProjectRangeChunkMapsMergedSourceFieldsToPythonNames(t *testing.T) {
+	chunk := &storageio.RangeChunk{Frame: &engine.DataFrame{
+		Columns: []string{
+			"dataset_binance_spot_kline_1m__close",
+			"dataset_binance_swap_kline_1m__close",
+			"dataset_binance_spot_kline_1m__volume",
+		},
+		Rows: [][]any{{101.0, 202.0, 10.0}},
+	}}
+
+	projected, err := projectRangeChunk(chunk, []string{"close", "volume"})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"close", "volume"}, projected.Frame.Columns)
+	require.Equal(t, [][]any{{101.0, 10.0}}, projected.Frame.Rows)
+}
+
 type pipelineReadStorage struct {
 	mu          sync.Mutex
 	started     []string

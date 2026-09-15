@@ -90,11 +90,13 @@ func testDatasetPipelineTimeout(t *testing.T) {
 	require.Equal(t, []string{"ETH-USDT"}, reports.markers[0].FailedSubjects)
 	accepted, err := periods.Accepts(context.Background(), periodKey, "ETH-USDT")
 	require.NoError(t, err)
-	require.False(t, accepted)
+	require.True(t, accepted, "late dual-source rows may still CommitInput after merge report")
 	eth := pipelineKey("ETH-USDT", period)
 	require.NoError(t, assembler.ApplyArrival(context.Background(), eth, "dataset_binance_spot_kline_1m", completeKline()))
 	require.NoError(t, assembler.ApplyArrival(context.Background(), eth, "dataset_binance_swap_kline_1m", completeKline()))
-	require.Len(t, commits.ids, 1, "timed-out subject must not produce a partial input row")
+	require.Len(t, commits.ids, 2)
+	require.Len(t, reports.markers, 1)
+	require.Equal(t, []string{"ETH-USDT"}, reports.markers[0].FailedSubjects)
 }
 
 func testDatasetPipelineRestart(t *testing.T) {
@@ -128,8 +130,8 @@ func testDatasetPipelineCacheFull(t *testing.T) {
 func testDatasetPipelineViewRebuild(t *testing.T) {
 	db := openPipelineStore(t)
 	runner := new(recordingRunner)
-	rows := trigger.NewDatasetRowsRunner(db.Bindings(), db.Factors(), runner, db, t.TempDir())
 	period := time.Date(2026, 9, 14, 1, 4, 0, 0, time.UTC)
+	rows := trigger.NewDatasetRowsRunner(db.Bindings(), db.Factors(), runner, db, t.TempDir()).WithNow(func() time.Time { return period.Add(30 * time.Second) })
 	require.NoError(t, rows.HandleDatasetRows(context.Background(), "merge-rebuild", readyRows("BTC-USDT", period)))
 	require.Len(t, runner.tasks, 1)
 	require.Zero(t, runner.tasks[0].ExpectedActiveIndexRevision, "timeseries must not fence a View rebuild generation")
@@ -138,8 +140,8 @@ func testDatasetPipelineViewRebuild(t *testing.T) {
 func testDatasetPipelineComputeAndStrategy(t *testing.T) {
 	db := openPipelineStore(t)
 	tsRunner := new(recordingRunner)
-	rows := trigger.NewDatasetRowsRunner(db.Bindings(), db.Factors(), tsRunner, db, t.TempDir())
 	period := time.Date(2026, 9, 14, 1, 3, 0, 0, time.UTC)
+	rows := trigger.NewDatasetRowsRunner(db.Bindings(), db.Factors(), tsRunner, db, t.TempDir()).WithNow(func() time.Time { return period.Add(30 * time.Second) })
 	require.NoError(t, rows.HandleDatasetRows(context.Background(), "merge-btc", readyRows("BTC-USDT", period)))
 	require.NoError(t, rows.HandleDatasetRows(context.Background(), "merge-eth", readyRows("ETH-USDT", period)))
 	require.Len(t, tsRunner.tasks, 2)

@@ -12,6 +12,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestFactorPeriodBarrierAggregatesEarlyTasksAfterFreeze(t *testing.T) {
@@ -37,10 +38,14 @@ func TestFactorPeriodBarrierAggregatesEarlyTasksAfterFreeze(t *testing.T) {
 	require.Len(t, reports.markers, 1)
 	marker := reports.markers[0]
 	require.Equal(t, "complete", marker.GetStatus())
-	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, marker.GetExpectedSubjectIds())
+	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, marker.GetUniverseSubjectIds())
 	require.Equal(t, "merge-1", marker.GetBatchId())
 	require.Len(t, marker.GetBindings(), 1)
 	require.Equal(t, "complete", marker.GetBindings()[0].GetStatus())
+	require.Len(t, marker.GetCommittedPositions(), 1)
+	require.Equal(t, "n", marker.GetCommittedPositions()[0].GetNodeId())
+	require.Equal(t, "s", marker.GetCommittedPositions()[0].GetStoreId())
+	require.EqualValues(t, 2, marker.GetCommittedPositions()[0].GetSequence())
 }
 
 func TestFactorPeriodBarrierIgnoresBindingChangeAfterFreeze(t *testing.T) {
@@ -87,7 +92,7 @@ func TestFactorPeriodBarrierDoesNotWaitForeverForMissingSource(t *testing.T) {
 	require.Len(t, reports.markers, 1)
 	marker := reports.markers[0]
 	require.Equal(t, "degraded", marker.GetStatus())
-	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, marker.GetExpectedSubjectIds())
+	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, marker.GetUniverseSubjectIds())
 	require.Equal(t, []string{"ETH-USDT"}, marker.GetBindings()[0].GetSkippedSubjects())
 }
 
@@ -121,7 +126,7 @@ func TestFactorPeriodBarrierZeroBindingsPublishesTerminal(t *testing.T) {
 	require.Len(t, reports.markers, 1)
 	require.Equal(t, "complete", reports.markers[0].GetStatus())
 	require.Empty(t, reports.markers[0].GetBindings())
-	require.Equal(t, []string{"BTC-USDT"}, reports.markers[0].GetExpectedSubjectIds())
+	require.Equal(t, []string{"BTC-USDT"}, reports.markers[0].GetUniverseSubjectIds())
 }
 
 func TestFactorPeriodBarrierIndependentViewsShareOneDatasetCompletion(t *testing.T) {
@@ -160,6 +165,71 @@ func TestFactorPeriodBarrierPruneKeepsReplayWindow(t *testing.T) {
 		Receipt: WriteReceipt{CommitID: "late", NodeID: "n", StoreID: "s", Sequence: 1},
 	}))
 	require.Len(t, reports.markers, 2, "pruned periods must not resurrect completions")
+}
+
+func TestFactorPeriodBarrierExpiresStalePendingAsMissingInput(t *testing.T) {
+	barrier, reports := openPeriodBarrier(t)
+	period := time.Date(2026, 9, 13, 10, 8, 0, 0, time.UTC)
+	key := testBarrierKey(period)
+	require.NoError(t, barrier.Freeze(context.Background(), FreezeSpec{
+		Key:              key,
+		ExpectedSubjects: []string{"BTC-USDT", "ETH-USDT"},
+		Bindings:         []FrozenBinding{testFrozenBinding("bias5", "bias5", domain.FactorTypeTimeSeries, []string{"BTC-USDT", "ETH-USDT"})},
+		BatchID:          "merge-expire",
+	}))
+	require.NoError(t, barrier.Record(context.Background(), key, PairOutcome{
+		BindingID: "bias5", SubjectID: "BTC-USDT", Status: PairComplete,
+		Receipt: WriteReceipt{CommitID: "btc", NodeID: "n", StoreID: "s", Sequence: 1},
+	}))
+	require.Empty(t, reports.markers, "ETH is still pending inside the merge deadline")
+
+	require.NoError(t, barrier.ExpirePending(context.Background(), period.Add(time.Minute)))
+	require.Empty(t, reports.markers, "ETH is still pending inside the two-bar report window")
+
+	require.NoError(t, barrier.ExpirePending(context.Background(), period.Add(2*time.Minute)))
+	require.Empty(t, reports.markers, "the two-bar report deadline itself must still wait for in-flight rows")
+
+	require.NoError(t, barrier.ExpirePending(context.Background(), period.Add(2*time.Minute+time.Second)))
+	require.Len(t, reports.markers, 1)
+	require.Equal(t, "degraded", reports.markers[0].GetStatus())
+	require.Equal(t, []string{"ETH-USDT"}, reports.markers[0].GetBindings()[0].GetSkippedSubjects())
+}
+
+func TestFactorPeriodBarrierCloseWaitingAbandonsEmptyBindings(t *testing.T) {
+	barrier, reports := openPeriodBarrier(t)
+	key := testBarrierKey(time.Date(2026, 9, 13, 10, 9, 0, 0, time.UTC))
+	require.NoError(t, barrier.Freeze(context.Background(), FreezeSpec{
+		Key: key, ExpectedSubjects: []string{"BTC-USDT"}, Bindings: nil, BatchID: "merge-empty-wait",
+	}))
+	require.Len(t, reports.markers, 1)
+	require.NoError(t, barrier.db.WithTx(context.Background(), func(tx *gorm.DB) error {
+		return tx.Model(&periodBarrierRow{}).Where(periodBarrierWhere(key)).Update("c_report_state", "waiting").Error
+	}))
+	require.NoError(t, barrier.CloseWaiting(context.Background()))
+	require.Len(t, reports.markers, 1, "empty-binding catch-up ledgers must not retry invalid FactorPeriodComputed payloads")
+}
+
+func TestPeriodBarrierSkipFreezeIgnoresStaleOpenLedgers(t *testing.T) {
+	barrier, _ := openPeriodBarrier(t)
+	ctx := context.Background()
+	stale := testBarrierKey(time.Date(2026, 9, 14, 11, 16, 0, 0, time.UTC))
+	require.NoError(t, barrier.Freeze(ctx, FreezeSpec{
+		Key: stale, ExpectedSubjects: []string{"BTC-USDT"},
+		Bindings: []FrozenBinding{testFrozenBinding("bias5", "bias5", domain.FactorTypeTimeSeries, []string{"BTC-USDT"})},
+		BatchID:  "merge-stale",
+	}))
+
+	current := stale
+	current.PeriodTime = stale.PeriodTime + 5*60
+	outstanding, err := barrier.hasUnreportedFrozen(ctx, current)
+	require.NoError(t, err)
+	require.False(t, outstanding, "a zombie ledger several bars behind must not block the current freeze")
+
+	adjacent := stale
+	adjacent.PeriodTime = stale.PeriodTime + 60
+	outstanding, err = barrier.hasUnreportedFrozen(ctx, adjacent)
+	require.NoError(t, err)
+	require.True(t, outstanding, "the immediately previous open bar must still skip freeze-ahead")
 }
 
 func TestFactorPeriodBarrierStrategyWaitsForResultViewReady(t *testing.T) {

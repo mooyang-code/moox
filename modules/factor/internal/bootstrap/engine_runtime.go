@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -70,6 +71,9 @@ func InitializeEngine(ctx context.Context, s *server.Server, cfg *EngineApplicat
 			err = errors.Join(err, r.Close())
 		}
 	}()
+	if err = SeedMergedDatasets(resources.Context(), resources.Store, cfg.Definitions); err != nil {
+		return nil, err
+	}
 	if err = registerEngineCache(s, resources.Cache); err != nil {
 		return nil, err
 	}
@@ -88,6 +92,23 @@ func InitializeEngine(ctx context.Context, s *server.Server, cfg *EngineApplicat
 	if err != nil {
 		return nil, err
 	}
+	if err = barrier.CloseWaiting(resources.Context()); err != nil {
+		log.ErrorContextf(resources.Context(), "retry waiting factor period reports: %v", err)
+	}
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-resources.Context().Done():
+				return
+			case <-ticker.C:
+				if waitErr := barrier.CloseWaiting(resources.Context()); waitErr != nil {
+					log.ErrorContextf(resources.Context(), "retry waiting factor period reports: %v", waitErr)
+				}
+			}
+		}
+	}()
 	consumer, err := StartEngineSubject(resources.Context(), cfg, resources.Store, resources.Runner, resources.OperationGate, barrier)
 	if err != nil {
 		return nil, err

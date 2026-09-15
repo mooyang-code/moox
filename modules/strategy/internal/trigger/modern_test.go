@@ -262,3 +262,242 @@ rules:
 		t.Fatalf("loader calls = %d, want 2 serialized evaluations", calls)
 	}
 }
+
+func TestHandleRetriesLivePeriodInsideFourBarValidity(t *testing.T) {
+	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 15, 3, 44, 17, 0, time.UTC)
+	dsl := `name: factor-result-e2e
+triggers:
+  event: {name: ViewDataReady}
+data: {bar: 1m, calendar: crypto_24x7}
+rules:
+  rank:
+    pool: [BTC-USDT]
+    score: close
+    select: {top: 1}
+    weight: "1"
+`
+	if err := repo.SaveStrategyDefinition(context.Background(), store.StrategyDefinition{StrategyID: "s1", StrategyName: "factor-result-e2e", DSLYaml: dsl, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	session := "session-e2e"
+	if err := repo.CreateInstance(context.Background(), store.StrategyInstance{
+		InstanceID: "i1", StrategyID: "s1", SpaceID: "crypto",
+		InputBindingsJSON: json.RawMessage(`{"source_view_id":"view_binance_kline_1m","frequency":"1m","factor_view_ids":["view_binance_kline_1m"]}`),
+		Enabled:           true, SessionID: &session, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	period := time.Date(2026, 9, 15, 3, 41, 0, 0, time.UTC)
+	loader := &recordingIndexedLoader{err: input.ErrNotReady}
+	compiled := compiler.CompiledStrategy{
+		Data:         config.Data{Bar: "1m", Calendar: "crypto_24x7"},
+		Triggers:     config.Triggers{Event: &config.Event{Name: "ViewDataReady"}},
+		SourceView:   compiler.CompiledView{ID: "view_binance_kline_1m", Frequency: "1m", Status: "active"},
+		Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"view_binance_kline_1m"}},
+	}
+	p := &Processor{
+		Store:  repo,
+		Loader: loader,
+		CompileWithBindings: func(context.Context, config.DSL, string, json.RawMessage) (compiler.CompiledStrategy, error) {
+			return compiled, nil
+		},
+		Now: func() time.Time { return now },
+	}
+	event := PeriodReady{
+		MessageID: "live-factor-ready", EventName: "ViewDataReady", SpaceID: "crypto",
+		ViewID: "view_binance_kline_1m", SourceViewID: "view_binance_kline_1m", Frequency: "1m",
+		PeriodTime: period, Status: "degraded", CompletionKind: "event.storage.dataset.factor_period.computed",
+	}
+	if err := p.Handle(context.Background(), event); !errors.Is(err, input.ErrNotReady) {
+		t.Fatalf("live period must remain retryable, got %v", err)
+	}
+	if loader.calls != 1 {
+		t.Fatalf("live period loaded rows %d times", loader.calls)
+	}
+}
+
+func TestHandleAcknowledgesExpiredPeriodWithoutRetry(t *testing.T) {
+	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 15, 3, 25, 0, 0, time.UTC)
+	dsl := `name: factor-result-e2e
+triggers:
+  event: {name: ViewDataReady}
+data: {bar: 1m, calendar: crypto_24x7}
+rules:
+  rank:
+    pool: [BTC-USDT]
+    score: close
+    select: {top: 1}
+    weight: "1"
+`
+	if err := repo.SaveStrategyDefinition(context.Background(), store.StrategyDefinition{StrategyID: "s1", StrategyName: "factor-result-e2e", DSLYaml: dsl, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	session := "session-e2e"
+	if err := repo.CreateInstance(context.Background(), store.StrategyInstance{
+		InstanceID: "i1", StrategyID: "s1", SpaceID: "crypto",
+		InputBindingsJSON: json.RawMessage(`{"source_view_id":"view_binance_kline_1m","frequency":"1m","factor_view_ids":["view_binance_kline_1m"]}`),
+		Enabled:           true, SessionID: &session, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	period := time.Date(2026, 9, 15, 3, 8, 0, 0, time.UTC)
+	loader := &recordingIndexedLoader{err: input.ErrNotReady}
+	compiled := compiler.CompiledStrategy{
+		Data:         config.Data{Bar: "1m", Calendar: "crypto_24x7"},
+		Triggers:     config.Triggers{Event: &config.Event{Name: "ViewDataReady"}},
+		SourceView:   compiler.CompiledView{ID: "view_binance_kline_1m", Frequency: "1m", Status: "active"},
+		Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"view_binance_kline_1m"}},
+	}
+	p := &Processor{
+		Store:  repo,
+		Loader: loader,
+		CompileWithBindings: func(context.Context, config.DSL, string, json.RawMessage) (compiler.CompiledStrategy, error) {
+			return compiled, nil
+		},
+		Now: func() time.Time { return now },
+	}
+	event := PeriodReady{
+		MessageID: "expired-factor-ready", EventName: "ViewDataReady", SpaceID: "crypto",
+		ViewID: "view_binance_kline_1m", SourceViewID: "view_binance_kline_1m", Frequency: "1m",
+		PeriodTime: period, Status: "degraded", CompletionKind: "event.storage.dataset.factor_period.computed",
+	}
+	if err := p.Handle(context.Background(), event); err != nil {
+		t.Fatalf("expired period must be acknowledged, got %v", err)
+	}
+	if loader.calls != 0 {
+		t.Fatalf("expired period loaded rows %d times", loader.calls)
+	}
+	processed, err := repo.IsProcessed(context.Background(), event.MessageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !processed {
+		t.Fatal("expired ViewDataReady must be marked processed so the consumer can catch up")
+	}
+}
+
+func TestFactorViewDataReadyWithoutIndexUsesActiveSnapshot(t *testing.T) {
+	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	dsl := `name: factor-result-e2e
+triggers:
+  event: {name: ViewDataReady}
+data: {bar: 1m, calendar: crypto_24x7}
+rules:
+  rank:
+    pool: [BTC-USDT]
+    score: close
+    select: {top: 1}
+    weight: "1"
+`
+	if err := repo.SaveStrategyDefinition(context.Background(), store.StrategyDefinition{StrategyID: "s1", StrategyName: "factor-result-e2e", DSLYaml: dsl, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	session := "session-e2e"
+	if err := repo.CreateInstance(context.Background(), store.StrategyInstance{
+		InstanceID: "i1", StrategyID: "s1", SpaceID: "crypto",
+		InputBindingsJSON: json.RawMessage(`{"source_view_id":"view_binance_kline_1m","frequency":"1m","factor_view_ids":["view_binance_kline_1m"]}`),
+		Enabled:           true, SessionID: &session, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	period := now.Add(-time.Minute).Truncate(time.Minute)
+	loader := &recordingIndexedLoader{value: input.EvaluationInput{
+		SpaceID: "crypto", StrategyID: "s1", PeriodEnd: period.Format(time.RFC3339Nano),
+		SourceViewID: "view_binance_kline_1m", DataFrequency: "1m",
+		Items: []input.InstrumentInput{{
+			PoolItem: input.PoolItem{InstrumentID: "BTC-USDT", SubjectID: "BTC-USDT"},
+			Values:   map[string]quant.Decimal{"close": quant.Must("1")},
+		}},
+	}}
+	compiled := compiler.CompiledStrategy{
+		Data:         config.Data{Bar: "1m", Calendar: "crypto_24x7"},
+		Triggers:     config.Triggers{Event: &config.Event{Name: "ViewDataReady"}},
+		SourceView:   compiler.CompiledView{ID: "view_binance_kline_1m", Frequency: "1m", Status: "active"},
+		Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"view_binance_kline_1m"}},
+	}
+	var diags []error
+	p := &Processor{
+		Store:  repo,
+		Loader: loader,
+		CompileWithBindings: func(context.Context, config.DSL, string, json.RawMessage) (compiler.CompiledStrategy, error) {
+			return compiled, nil
+		},
+		Now:        func() time.Time { return now },
+		Diagnostic: func(err error) { diags = append(diags, err) },
+	}
+	merge := PeriodReady{
+		MessageID: "merge-ready", EventName: "ViewDataReady", SpaceID: "crypto",
+		ViewID: "view_binance_kline_1m", SourceViewID: "view_binance_kline_1m", Frequency: "1m",
+		PeriodTime: period, Status: "degraded", CompletionKind: "event.storage.merge.period.completed",
+	}
+	if err := p.Handle(context.Background(), merge); err != nil {
+		t.Fatal(err)
+	}
+	if loader.calls != 0 {
+		t.Fatalf("merge ViewDataReady loaded rows %d times", loader.calls)
+	}
+	if _, err := repo.LatestResult(context.Background(), "i1", session); err == nil {
+		t.Fatal("input ViewDataReady must not produce a factor-backed result")
+	}
+	factorReady := PeriodReady{
+		MessageID: "factor-ready", EventName: "ViewDataReady", SpaceID: "crypto",
+		ViewID: "view_binance_kline_1m", SourceViewID: "view_binance_kline_1m", Frequency: "1m",
+		PeriodTime: period, Status: "complete", CompletionKind: "event.storage.dataset.factor_period.computed",
+	}
+	if err := p.Handle(context.Background(), factorReady); err != nil {
+		t.Fatalf("factor ViewDataReady without index provenance: %v diags=%v", err, diags)
+	}
+	if loader.calls != 1 {
+		t.Fatalf("factor ViewDataReady loaded rows %d times diags=%v", loader.calls, diags)
+	}
+	if loader.expected != nil && len(loader.expected) != 0 {
+		t.Fatalf("expected indexes = %#v, want active snapshot", loader.expected)
+	}
+	if _, err := repo.LatestResult(context.Background(), "i1", session); err != nil {
+		t.Fatalf("factor result was not committed: %v diags=%v", err, diags)
+	}
+}
+
+type recordingIndexedLoader struct {
+	value    input.EvaluationInput
+	expected map[string]string
+	err      error
+	calls    int
+}
+
+func (l *recordingIndexedLoader) Load(context.Context, domain.StrategyRunner, compiler.CompiledStrategy, time.Time) (input.EvaluationInput, error) {
+	return input.EvaluationInput{}, errors.New("Load must not be used when LoadPeriodAt is available")
+}
+
+func (l *recordingIndexedLoader) LoadPeriodAt(_ context.Context, _ domain.StrategyRunner, _ compiler.CompiledStrategy, _, _ time.Time, expected map[string]string) (input.EvaluationInput, error) {
+	l.calls++
+	l.expected = expected
+	if l.err != nil {
+		return input.EvaluationInput{}, l.err
+	}
+	return l.value, nil
+}

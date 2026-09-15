@@ -253,7 +253,7 @@ func validCollectorPeriodCompleted(now *timestamppb.Timestamp) *storagepb.Collec
 	return &storagepb.CollectorPeriodCompleted{
 		DatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
 		BatchId: "batch-1", ConfigSnapshotId: "config-1", ExpectedScopeRef: "universe:dataset:1m",
-		ExpectedSubjectIds: []string{"BTC-USDT"},
+		UniverseSubjectIds: []string{"BTC-USDT"},
 		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 1}},
 		CollectedAt:        now,
 	}
@@ -263,7 +263,7 @@ func validMergePeriodCompleted(now *timestamppb.Timestamp) *storagepb.MergePerio
 	return &storagepb.MergePeriodCompleted{
 		DatasetId: "mdataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
 		BatchId: "merge-batch-1", ConfigSnapshotId: "merge-config-1", ExpectedScopeRef: "universe:mdataset:1m",
-		ExpectedSubjectIds: []string{"BTC-USDT"},
+		UniverseSubjectIds: []string{"BTC-USDT"},
 		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 2}},
 		CompletedAt:        now,
 	}
@@ -284,7 +284,7 @@ func validFactorPeriodComputed(now *timestamppb.Timestamp) *storagepb.FactorPeri
 	return &storagepb.FactorPeriodComputed{
 		DatasetId: "mdataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
 		BatchId: "factor-batch-1", ConfigSnapshotId: "factor-config-1", ExpectedScopeRef: "universe:mdataset:1m",
-		ExpectedSubjectIds: []string{"BTC-USDT"},
+		UniverseSubjectIds: []string{"BTC-USDT"},
 		Bindings:           []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}},
 		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 3}},
 		ComputedAt:         now, TriggerEventId: "merge-completed-1",

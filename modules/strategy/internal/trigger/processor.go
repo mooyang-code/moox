@@ -150,6 +150,13 @@ type Processor struct {
 	Now               func() time.Time
 }
 
+const (
+	// MergePeriodCompleted is published at NextPeriod+2m, which equals two
+	// bars after bar end. Keep results writable for four bars so View indexing
+	// and FactorPeriodComputed can still commit.
+	strategyResultValidityBars = 4
+)
+
 func (p *Processor) reportDiagnostic(err error) {
 	if p != nil && err != nil && p.Diagnostic != nil {
 		p.Diagnostic(err)
@@ -217,6 +224,10 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 			}
 		}
 		if !triggerMatchesDSL(dsl, event) {
+			continue
+		}
+		if validUntil, validUntilErr := input.AdvanceBarEnd(dsl.Data.Calendar, dsl.Data.Bar, instanceBarEnd, strategyResultValidityBars); validUntilErr == nil && !validUntil.After(p.now().UTC()) {
+			p.reportDiagnostic(fmt.Errorf("instance %s skip expired period %s: %w", instance.InstanceID, instanceBarEnd.UTC().Format(time.RFC3339), store.ErrResultExpired))
 			continue
 		}
 		// Expression compilation is performed when the instance is enabled
@@ -405,14 +416,14 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 				return rulePools, poolIDs, nil
 			})
 		} else if indexed, ok := p.Loader.(IndexedPeriodInputLoader); ok {
-			if event.TargetInstanceID == "" && len(expectedIndexesMap) == 0 {
-				if retryErr == nil {
-					retryErr = fmt.Errorf("%w: View-ready event has no index provenance", input.ErrLegacyProvenance)
-				}
-				continue
-			}
 			if event.TargetInstanceID != "" {
-				expectedIndexesMap = nil // scheduled jobs intentionally use the active snapshot
+				// Scheduled jobs pin the Storage-active snapshot and keep the
+				// source-coverage gate. ViewDataReady without index IDs still
+				// uses an empty (non-nil) map so the current bar is not dropped
+				// just because Merge left the universe incomplete.
+				expectedIndexesMap = nil
+			} else if len(expectedIndexesMap) == 0 {
+				expectedIndexesMap = map[string]string{}
 			}
 			evaluated, err = indexed.LoadPeriodAt(ctx, runner, loadCompiled, period, instanceStorage.UTC(), expectedIndexesMap)
 		} else if periodLoader, ok := p.Loader.(PeriodInputLoader); ok {
@@ -512,7 +523,7 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 				continue
 			}
 		}
-		validUntil, validUntilErr := input.AdvanceBarEnd(dsl.Data.Calendar, dsl.Data.Bar, period, 2)
+		validUntil, validUntilErr := input.AdvanceBarEnd(dsl.Data.Calendar, dsl.Data.Bar, period, strategyResultValidityBars)
 		if validUntilErr != nil {
 			p.reportDiagnostic(fmt.Errorf("instance %s validity: %w", instance.InstanceID, validUntilErr))
 			if retryErr == nil {
@@ -637,7 +648,6 @@ func trimCompiledInput(compiled *compiler.CompiledStrategy, dsl config.DSL) {
 	}
 	compiled.Rules = rules
 	if len(compiled.Factors) == 0 {
-		compiled.Dependencies.FactorResultViewIDs = nil
 		return
 	}
 	factors := make([]compiler.CompiledFactor, 0, len(compiled.Factors))
@@ -1145,10 +1155,32 @@ func requiredBindingsReady(compiled compiler.CompiledStrategy, event PeriodReady
 		// A degraded result View that this strategy does not reference must not
 		// veto evaluation. Source View events are different: they carry the
 		// actual market-row readiness for the whole input and remain strict.
+		if event.CompletionKind == events.FactorPeriodComputed.Name() {
+			return factorComputedBindingsReady(event, scopedPools...)
+		}
 		if event.ViewID != "" && event.ViewID != compiled.SourceView.ID {
 			return true
 		}
 		return event.Status == "" || event.Status == "complete"
+	}
+	return true
+}
+
+func factorComputedBindingsReady(event PeriodReady, pools ...[]input.InstrumentInput) bool {
+	if len(event.BindingStatuses) == 0 {
+		return event.Status == "" || event.Status == "complete"
+	}
+	for id, status := range event.BindingStatuses {
+		if status == "complete" {
+			continue
+		}
+		state, ok := event.BindingStates[id]
+		if !ok || (len(state.FailedSubjects) == 0 && len(state.SkippedSubjects) == 0) {
+			return false
+		}
+		if bindingStateAffectsPool(compiler.CompiledFactor{BindingID: id}, state, pools...) {
+			return false
+		}
 	}
 	return true
 }

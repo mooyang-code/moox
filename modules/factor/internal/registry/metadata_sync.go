@@ -108,9 +108,9 @@ func (s *MetadataSync) SourceViewActiveIndexID(ctx context.Context, spaceID, vie
 	return indexID, nil
 }
 
-// ResolveManagedResultIDs resolves the source View's primary Dataset before
-// deriving managed result object IDs. This keeps result names readable and
-// stable when the source View uses the canonical "view_" prefix.
+// ResolveManagedResultIDs returns the source View and its unique Dataset so
+// factor outputs are patched back into the same objects instead of a derived
+// `_factor` Dataset/View.
 func (s *MetadataSync) ResolveManagedResultIDs(ctx context.Context, spaceID, viewID string) (string, string, error) {
 	view, err := s.getView(ctx, spaceID, viewID)
 	if err != nil {
@@ -120,7 +120,7 @@ func (s *MetadataSync) ResolveManagedResultIDs(ctx context.Context, spaceID, vie
 	if sourceDatasetID == "" {
 		return "", "", fmt.Errorf("source View %s/%s has no primary Dataset", spaceID, viewID)
 	}
-	return ResultDatasetForView(sourceDatasetID, viewID), ResultViewForView(sourceDatasetID, viewID), nil
+	return sourceDatasetID, strings.TrimSpace(view.GetViewId()), nil
 }
 
 // SyncBindingViews ensures the managed result Dataset/View and desired output
@@ -378,6 +378,9 @@ func (s *MetadataSync) syncTargetDatasetAfterFactorMetadata(ctx context.Context,
 }
 
 func (s *MetadataSync) copyDatasetSubjects(ctx context.Context, spaceID string, sourceDataset string, targetDataset string) error {
+	if strings.TrimSpace(sourceDataset) == strings.TrimSpace(targetDataset) {
+		return nil
+	}
 	lister, ok := s.client.(datasetSubjectLister)
 	if !ok {
 		return nil
@@ -605,6 +608,9 @@ func (s *MetadataSync) getView(ctx context.Context, spaceID, viewID string) (*st
 }
 
 func (s *MetadataSync) ensureManagedResultDataset(ctx context.Context, binding domain.FactorBinding, sourceView *storagepb.View, source *storagepb.Dataset) error {
+	if source != nil && strings.TrimSpace(binding.ResultDatasetID) == strings.TrimSpace(source.GetDatasetId()) {
+		return validateTargetDataset(source, binding.SpaceID, binding.ResultDatasetID)
+	}
 	attrs := factorResultViewAttributes(binding.SourceViewID, binding.ResultViewID, binding.Freq)
 	existing, found, err := s.findDataset(ctx, binding.SpaceID, binding.ResultDatasetID)
 	if err != nil {
@@ -762,16 +768,20 @@ func (s *MetadataSync) ensureManagedResultView(ctx context.Context, binding doma
 	if err != nil {
 		return err
 	}
+	sameView := strings.TrimSpace(binding.ResultViewID) == strings.TrimSpace(binding.SourceViewID)
 	if !found {
+		if sameView {
+			return fmt.Errorf("result view %s/%s not found", binding.SpaceID, binding.ResultViewID)
+		}
 		client, clientErr := s.viewClient()
 		if clientErr != nil {
 			return clientErr
 		}
 		rsp, createErr := client.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: s.auth, View: &storagepb.View{
 			SpaceId: binding.SpaceID, ViewId: binding.ResultViewID, Name: factorResultViewDisplayName(),
-			Description:      "Factor result View for " + binding.SourceViewID,
-			DatasetId: binding.ResultDatasetID,
-			FilterJson: fmt.Sprintf(`{"freq":%q}`, binding.Freq), KeepDuration: keepDuration, Status: "active",
+			Description: "Factor result View for " + binding.SourceViewID,
+			DatasetId:   binding.ResultDatasetID,
+			FilterJson:  fmt.Sprintf(`{"freq":%q}`, binding.Freq), KeepDuration: keepDuration, Status: "active",
 			Attributes: factorResultViewAttributes(binding.SourceViewID, binding.ResultViewID, binding.Freq),
 		}})
 		if createErr != nil {
@@ -785,7 +795,7 @@ func (s *MetadataSync) ensureManagedResultView(ctx context.Context, binding doma
 	if view == nil || view.GetDatasetId() != binding.ResultDatasetID {
 		return fmt.Errorf("result view %s/%s has incompatible dataset scope", binding.SpaceID, binding.ResultViewID)
 	}
-	if strings.TrimSpace(view.GetKeepDuration()) != keepDuration {
+	if !sameView && strings.TrimSpace(view.GetKeepDuration()) != keepDuration {
 		updater, ok := s.client.(viewUpdater)
 		if !ok {
 			return fmt.Errorf("storage metadata client does not support View updates")
@@ -828,8 +838,10 @@ func (s *MetadataSync) ensureManagedResultView(ctx context.Context, binding doma
 			}
 		}
 	}
-	if err := s.reconcileManagedResultDatasetKeep(ctx, binding, keepDuration); err != nil {
-		return err
+	if !sameView {
+		if err := s.reconcileManagedResultDatasetKeep(ctx, binding, keepDuration); err != nil {
+			return err
+		}
 	}
 	return nil
 }

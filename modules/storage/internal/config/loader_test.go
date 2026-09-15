@@ -115,7 +115,7 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 		t.Fatalf("ValidateConsumerPartitions() error = %v", err)
 	}
 	klineDatasets := partitions[0].Datasets()
-	wantKlineDatasets := []string{"dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m", "dataset_spot_kline_1h", "dataset_perpetual_kline_1h"}
+	wantKlineDatasets := []string{"dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m", "mdataset_binance_kline_1m", "dataset_spot_kline_1h", "dataset_perpetual_kline_1h"}
 	if partitions[0].ID != "kline" || partitions[0].Durable != "storage_view_kline" || len(klineDatasets) != len(wantKlineDatasets) {
 		t.Fatalf("kline partition = %+v", partitions[0])
 	}
@@ -161,10 +161,27 @@ func TestStorageViewConsumerPartitionsRequireAllCryptoKlineRoutes(t *testing.T) 
 	kline.Routes[0].DatasetIDs = []string{
 		"dataset_binance_spot_kline_1m",
 		"dataset_binance_swap_kline_1m",
+		"mdataset_binance_kline_1m",
 		"dataset_perpetual_kline_1h",
 	}
 	if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err == nil || !strings.Contains(err.Error(), "dataset_spot_kline_1h") {
 		t.Fatalf("missing hourly kline route was accepted or wrong error: %v", err)
+	}
+}
+
+func TestStorageViewConsumerPartitionsRequireMergedKlineRoute(t *testing.T) {
+	var cfg RuntimeConfig
+	cfg.ApplyDefaults()
+	kline := &cfg.Storage.View.ConsumerPartitions[0]
+	ids := make([]string, 0, len(kline.Routes[0].DatasetIDs))
+	for _, id := range kline.Routes[0].DatasetIDs {
+		if id != "mdataset_binance_kline_1m" {
+			ids = append(ids, id)
+		}
+	}
+	kline.Routes[0].DatasetIDs = ids
+	if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err == nil || !strings.Contains(err.Error(), "mdataset_binance_kline_1m") {
+		t.Fatalf("missing merged kline route was accepted or wrong error: %v", err)
 	}
 }
 
@@ -195,7 +212,7 @@ func TestStorageViewConsumerPartitionsRejectInvalidDurableName(t *testing.T) {
 
 func TestStorageViewConsumerPartitionsAllowFutureConfiguredDatasets(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "kline", Durable: "storage_view_kline", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m", "dataset_spot_kline_1h", "dataset_perpetual_kline_1h", "future_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "kline", Durable: "storage_view_kline", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m", "mdataset_binance_kline_1m", "dataset_spot_kline_1h", "dataset_perpetual_kline_1h", "future_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 		{ID: "factor", Durable: "storage_view_factor", SpaceID: "crypto", DatasetIDs: []string{"dataset_crypto_spot_kline_1m_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 		{ID: "system_metrics", Durable: "storage_view_metrics", SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 		{ID: "misc", Durable: "storage_view_misc", SpaceID: "crypto", DatasetIDs: []string{"other"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},

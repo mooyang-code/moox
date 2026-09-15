@@ -847,6 +847,33 @@ func (s *Store) OutboxStats(ctx context.Context) (OutboxStats, error) {
 	return stats, nil
 }
 
+// InsertOutboxPayloadForTest writes raw EventMessage bytes without validating
+// the current outbox contract. Tests use it to stage retired event types.
+func (s *Store) InsertOutboxPayloadForTest(raw []byte) (uint64, error) {
+	if len(raw) == 0 {
+		return 0, errors.New("outbox payload is required")
+	}
+	s.outboxMu.Lock()
+	defer s.outboxMu.Unlock()
+	nextID, err := s.nextOutboxID()
+	if err != nil {
+		return 0, err
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	if err := batch.Set([]byte(outboxKey(nextID)), raw, s.writeOptions); err != nil {
+		return 0, err
+	}
+	if err := s.setNextOutboxID(batch, nextID+1); err != nil {
+		return 0, err
+	}
+	if err := batch.Commit(s.writeOptions); err != nil {
+		return 0, err
+	}
+	s.noteOutboxCommitted(1, time.Now().UTC())
+	return nextID, nil
+}
+
 func (s *Store) DeleteOutbox(ctx context.Context, ids []uint64) error {
 	if err := ctx.Err(); err != nil {
 		return err

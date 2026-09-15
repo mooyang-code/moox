@@ -73,6 +73,39 @@ func TestLoaderAcceptsCompleteNonEmptyPool(t *testing.T) {
 	}
 }
 
+func TestLoaderAliasesMergedSourceShortNames(t *testing.T) {
+	reader := loaderReader{
+		subjects: []input.Subject{{SubjectID: "BTC-USDT", InstrumentID: "BTC-USDT", Exchange: "binance", Active: true}},
+		history:  map[string]int{"BTC-USDT": 3},
+		rows: map[string][]ViewRow{
+			"source": {{
+				InstrumentID: "BTC-USDT", SubjectID: "BTC-USDT", DataTime: time.Unix(60, 0),
+				Values: map[string]string{
+					"dataset_binance_spot_kline_1m__close": "101.5",
+					"dataset_binance_swap_kline_1m__close": "102.5",
+				},
+			}},
+		},
+	}
+	compiled := compiler.CompiledStrategy{
+		SpaceID: "space", SourceView: compiler.CompiledView{ID: "source", Frequency: "1m"},
+		InstrumentPool: config.InstrumentPoolRule{Exchanges: []string{"binance"}, MinHistoryPeriods: 2},
+	}
+	got, err := (Loader{Reader: reader}).Load(context.Background(), domain.StrategyRunner{SpaceID: "space", StrategyID: "strategy"}, compiled, time.Unix(60, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) != 1 {
+		t.Fatalf("loaded items = %d", len(got.Items))
+	}
+	if got.Items[0].Values["close"].String() != "101.5" {
+		t.Fatalf("close alias = %v, want spot close 101.5", got.Items[0].Values["close"])
+	}
+	if got.Items[0].Values["dataset_binance_swap_kline_1m__close"].String() != "102.5" {
+		t.Fatalf("physical swap close missing: %+v", got.Items[0].Values)
+	}
+}
+
 func TestLoaderScopesFactorReadinessToRulePoolAndBindingSubjects(t *testing.T) {
 	compiled := compiler.CompiledStrategy{
 		Rules: []compiler.CompiledRule{

@@ -10,6 +10,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBuildManagedEnvironmentPinsPriorityCryptoSubjectsFirst(t *testing.T) {
+	assignment := NodeAssignment{
+		Provider: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot",
+		SourceID: "spot_http", DatasetID: "bars", Frequency: "1m", Enabled: true,
+		Subjects: []string{"AAA-USDT", "BTC-USDT", "ETH-USDT", "ZZZ-USDT"},
+		ExternalSymbols: map[string]string{
+			"AAA-USDT": "AAAUSDT", "BTC-USDT": "BTCUSDT", "ETH-USDT": "ETHUSDT", "ZZZ-USDT": "ZZZUSDT",
+		},
+	}
+	env, err := BuildManagedEnvironment(assignment, nil)
+	require.NoError(t, err)
+	require.Equal(t, "BTC-USDT|ETH-USDT|AAA-USDT|ZZZ-USDT", env["MOOX_MARKET_FETCH_SUBJECTS"])
+}
+
 func TestBuildManagedEnvironmentCanonicalizesDNS(t *testing.T) {
 	assignment := NodeAssignment{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", SeriesTag: "cn-equity", DatasetID: "bars", Frequency: "1m", Subjects: []string{"ETH-USDT", "BTC-USDT"}, ExternalSymbols: map[string]string{"ETH-USDT": "ETHUSDT", "BTC-USDT": "BTCUSDT"}, Enabled: true, AssignmentHash: "abc"}
 	env, err := BuildManagedEnvironment(assignment, map[string]sources.DNSResolution{

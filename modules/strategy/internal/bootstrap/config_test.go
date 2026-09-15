@@ -201,3 +201,14 @@ func TestLoadTradeGatewayUsesDedicatedOverrides(t *testing.T) {
 		t.Fatalf("wrong Trade dependency: %+v", cfg.Trade)
 	}
 }
+
+func TestStorageGatewayEndpointPrefersLocalStorageNode(t *testing.T) {
+	t.Setenv("MOOX_SERVICE_GATEWAY_TARGET", "ip://127.0.0.1:11003")
+	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
+	t.Setenv("MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET", "ip://146.56.196.204:11003")
+	t.Setenv("MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID", "storage")
+	target, node := storageGatewayEndpoint(Config{Storage: RPCConfig{Target: "ip://127.0.0.1:11003", TargetNode: "storage-gateway"}})
+	if target != "ip://146.56.196.204:11003" || node != "storage" {
+		t.Fatalf("storage gateway endpoint = %s %s", target, node)
+	}
+}

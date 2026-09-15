@@ -168,7 +168,7 @@ func validateCollectorPeriodCompleted(message *eventpb.EventMessage, value proto
 		batchID:            payload.GetBatchId(),
 		configSnapshotID:   payload.GetConfigSnapshotId(),
 		expectedScopeRef:   payload.GetExpectedScopeRef(),
-		expectedSubjectIDs: payload.GetExpectedSubjectIds(),
+		universeSubjectIDs: payload.GetUniverseSubjectIds(),
 		failedSubjects:     payload.GetFailedSubjects(),
 		committedPositions: payload.GetCommittedPositions(),
 		timestamp:          payload.GetCollectedAt(),
@@ -189,7 +189,7 @@ func validateMergePeriodCompleted(message *eventpb.EventMessage, value proto.Mes
 		batchID:            payload.GetBatchId(),
 		configSnapshotID:   payload.GetConfigSnapshotId(),
 		expectedScopeRef:   payload.GetExpectedScopeRef(),
-		expectedSubjectIDs: payload.GetExpectedSubjectIds(),
+		universeSubjectIDs: payload.GetUniverseSubjectIds(),
 		failedSubjects:     payload.GetFailedSubjects(),
 		committedPositions: payload.GetCommittedPositions(),
 		timestamp:          payload.GetCompletedAt(),
@@ -213,7 +213,7 @@ func validateFactorPeriodComputed(message *eventpb.EventMessage, value proto.Mes
 		batchID:            payload.GetBatchId(),
 		configSnapshotID:   payload.GetConfigSnapshotId(),
 		expectedScopeRef:   payload.GetExpectedScopeRef(),
-		expectedSubjectIDs: payload.GetExpectedSubjectIds(),
+		universeSubjectIDs: payload.GetUniverseSubjectIds(),
 		committedPositions: payload.GetCommittedPositions(),
 		timestamp:          payload.GetComputedAt(),
 	}); err != nil {
@@ -266,7 +266,7 @@ type periodCompletion struct {
 	batchID            string
 	configSnapshotID   string
 	expectedScopeRef   string
-	expectedSubjectIDs []string
+	universeSubjectIDs []string
 	failedSubjects     []string
 	committedPositions []*storagepb.CommittedPosition
 	timestamp          *timestamppb.Timestamp
@@ -285,7 +285,7 @@ func validatePeriodCompletion(message *eventpb.EventMessage, completion periodCo
 	if !validRequiredToken(completion.expectedScopeRef) {
 		return fmt.Errorf("%s expected_scope_ref is required", completion.label)
 	}
-	subjects, err := validateUniqueTokens(completion.expectedSubjectIDs, false, completion.label+" expected_subject_ids")
+	subjects, err := validateUniqueTokens(completion.universeSubjectIDs, false, completion.label+" universe_subject_ids")
 	if err != nil {
 		return err
 	}
@@ -295,7 +295,7 @@ func validatePeriodCompletion(message *eventpb.EventMessage, completion periodCo
 	}
 	for subject := range failed {
 		if _, ok := subjects[subject]; !ok {
-			return fmt.Errorf("%s failed_subject %q is not expected", completion.label, subject)
+			return fmt.Errorf("%s failed_subject %q is not in universe_subject_ids", completion.label, subject)
 		}
 	}
 	if completion.status == "complete" && len(failed) != 0 {

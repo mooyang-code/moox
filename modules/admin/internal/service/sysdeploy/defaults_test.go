@@ -273,10 +273,13 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 		!reflect.DeepEqual(readTimeSeriesRoute.GatewayCallers, []string{"admin-gateway", "collector", "factor", "monitor", "archive", "storage-view", "strategy", "moox-skill"}) {
 		t.Fatalf("storage-primary ReadTimeSeriesRows route = %+v", readTimeSeriesRoute)
 	}
-	for _, method := range []string{"ReportCollectorPeriodCompleted", "ReportMergePeriodCompleted", "AppendDatasetSyncPoint", "WaitViewSyncPoint", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"} {
+	for _, method := range []string{"ReportCollectorPeriodCompleted", "ReportMergePeriodCompleted", "CommitInput", "PatchFactor", "AppendDatasetSyncPoint", "WaitViewSyncPoint", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"} {
 		if !containsString(primaryRoute.GatewayMethods, method) {
 			t.Fatalf("storage-primary gateway route missing %s: %v", method, primaryRoute.GatewayMethods)
 		}
+	}
+	if !containsString(primaryRoute.GatewayCallers, "merge") {
+		t.Fatalf("storage-primary gateway route missing merge caller: %v", primaryRoute.GatewayCallers)
 	}
 	for i := range storageExtra.GatewayRoutes {
 		if storageExtra.GatewayRoutes[i].ServicePath == "trpc.moox.storage.DataShard" {

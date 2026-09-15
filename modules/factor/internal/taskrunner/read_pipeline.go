@@ -420,12 +420,12 @@ func (s *Service) readPeriodGroup(ctx context.Context, group *periodReadGroup) (
 	if periodReader, ok := s.storage.(periodStorageIO); ok {
 		return periodReader.ReadPeriodChunk(
 			ctx, key, group.startTime, group.endTime,
-			group.lookbackPeriods, append([]string(nil), group.columns...),
+			group.lookbackPeriods, physicalReadColumns(representative, group.columns),
 		)
 	}
 	return s.storage.ReadRangeChunk(
 		ctx, key, group.startTime, group.endTime,
-		group.lookbackPeriods, maxTargetRowsPerChunk, append([]string(nil), group.columns...),
+		group.lookbackPeriods, maxTargetRowsPerChunk, physicalReadColumns(representative, group.columns),
 	)
 }
 

@@ -29,7 +29,7 @@ message CollectorPeriodCompletedMarker {
   string batch_id = 5;
   string config_snapshot_id = 6;
   string expected_scope_ref = 7;
-  repeated string expected_subject_ids = 8;
+  repeated string universe_subject_ids = 8;
   repeated string failed_subjects = 9;
   repeated CommittedPosition committed_positions = 10;
   google.protobuf.Timestamp collected_at = 11;
@@ -43,7 +43,7 @@ message MergePeriodCompletedMarker {
   string batch_id = 5;
   string config_snapshot_id = 6;
   string expected_scope_ref = 7;
-  repeated string expected_subject_ids = 8;
+  repeated string universe_subject_ids = 8;
   repeated string failed_subjects = 9;
   repeated CommittedPosition committed_positions = 10;
   google.protobuf.Timestamp completed_at = 11;
@@ -67,7 +67,7 @@ message FactorPeriodComputedMarker {
   string batch_id = 5;
   string config_snapshot_id = 6;
   string expected_scope_ref = 7;
-  repeated string expected_subject_ids = 8;
+  repeated string universe_subject_ids = 8;
   repeated FactorBindingPeriodState bindings = 9;
   repeated CommittedPosition committed_positions = 10;
   google.protobuf.Timestamp computed_at = 11;

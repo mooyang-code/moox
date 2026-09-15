@@ -84,11 +84,19 @@ func TestDatasetRowsTriggerIgnoresUnreadyInput(t *testing.T) {
 	require.Empty(t, runner.tasks)
 }
 
+func TestDatasetRowsTriggerSkipsExpiredPeriods(t *testing.T) {
+	runner := new(recordingCombinationRunner)
+	executor := newDatasetRowsHarness(t, runner, nil)
+	executor.now = func() time.Time { return time.Date(2026, 9, 13, 4, 20, 0, 0, time.UTC) }
+	require.NoError(t, executor.HandleDatasetRows(context.Background(), "event-expired", readyRowsEvent("BTC-USDT")))
+	require.Empty(t, runner.tasks, "input commits older than the 2m pending window must not start timeseries tasks")
+}
+
 func TestDatasetRowsTriggerDedupesDuplicateSourceEvent(t *testing.T) {
 	runner := new(recordingCombinationRunner)
 	db := openDatasetRowsStore(t)
 	factorsDir := t.TempDir()
-	executor := NewDatasetRowsRunner(db.Bindings(), db.Factors(), runner, db, factorsDir)
+	executor := NewDatasetRowsRunner(db.Bindings(), db.Factors(), runner, db, factorsDir).WithNow(datasetRowsTestClock())
 	payload := readyRowsEvent("BTC-USDT")
 	require.NoError(t, executor.HandleDatasetRows(context.Background(), "event-1", payload))
 	require.Len(t, runner.tasks, 1)
@@ -100,12 +108,13 @@ func TestDatasetRowsTriggerDedupesDuplicateSourceEvent(t *testing.T) {
 	require.Empty(t, runner.tasks[0].InputContractVersion)
 	require.Equal(t, testMergedDataset, runner.tasks[0].SourceDataset)
 	require.Equal(t, testMergedDataset, runner.tasks[0].ResultDatasetID)
+	require.Equal(t, "view_binance_kline_1m", runner.tasks[0].SourceViewID)
 
 	require.NoError(t, executor.HandleDatasetRows(context.Background(), "event-1", payload))
 	require.Len(t, runner.tasks, 1)
 
 	restarted := new(recordingCombinationRunner)
-	again := NewDatasetRowsRunner(db.Bindings(), db.Factors(), restarted, db, factorsDir)
+	again := NewDatasetRowsRunner(db.Bindings(), db.Factors(), restarted, db, factorsDir).WithNow(datasetRowsTestClock())
 	require.NoError(t, again.HandleDatasetRows(context.Background(), "event-1", payload))
 	require.Empty(t, restarted.tasks)
 }
@@ -133,6 +142,25 @@ func TestDatasetRowsTriggerRejectsStaleBindingVersion(t *testing.T) {
 		Value: &publicstoragepb.TypedValue_StringValue{StringValue: "old-binding"},
 	}
 	require.NoError(t, executor.HandleDatasetRows(context.Background(), "event-stale", payload))
+	require.Empty(t, runner.tasks)
+}
+
+func TestDatasetRowsTriggerRetriesWhenMergedDatasetMissing(t *testing.T) {
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "engine.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
+	factor := testFactor("bias5")
+	factor.SourceCode = "def compute(df, params, context):\n    return df"
+	require.NoError(t, db.Factors().Create(context.Background(), factor))
+	require.NoError(t, db.Bindings().Upsert(context.Background(), domain.FactorBinding{
+		BindingID: "binding-bias5", FactorID: "bias5", SpaceID: "crypto",
+		SourceViewID: "view_binance_kline_1m", ResultDatasetID: testMergedDataset, ResultViewID: "view_binance_kline_1m",
+		Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled,
+	}))
+	runner := new(recordingCombinationRunner)
+	executor := NewDatasetRowsRunner(db.Bindings(), db.Factors(), runner, db, t.TempDir()).WithNow(datasetRowsTestClock())
+	require.Error(t, executor.HandleDatasetRows(context.Background(), "event-missing-snap", readyRowsEvent("BTC-USDT")))
 	require.Empty(t, runner.tasks)
 }
 
@@ -228,7 +256,11 @@ func newDatasetRowsHarness(t *testing.T, runner CombinationTaskRunner, db *store
 	if db == nil {
 		db = openDatasetRowsStore(t)
 	}
-	return NewDatasetRowsRunner(db.Bindings(), db.Factors(), runner, db, t.TempDir())
+	return NewDatasetRowsRunner(db.Bindings(), db.Factors(), runner, db, t.TempDir()).WithNow(datasetRowsTestClock())
+}
+
+func datasetRowsTestClock() func() time.Time {
+	return freezeClock(time.Date(2026, 9, 13, 4, 1, 0, 0, time.UTC))
 }
 
 func openDatasetRowsStore(t *testing.T) *store.Store {
@@ -242,10 +274,36 @@ func openDatasetRowsStore(t *testing.T) *store.Store {
 	require.NoError(t, db.Factors().Create(context.Background(), factor))
 	require.NoError(t, db.Bindings().Upsert(context.Background(), domain.FactorBinding{
 		BindingID: "binding-bias5", FactorID: "bias5", SpaceID: "crypto",
-		SourceViewID: testMergedDataset, ResultDatasetID: testMergedDataset, ResultViewID: "view_binance_kline_1m",
+		SourceViewID: "view_binance_kline_1m", ResultDatasetID: testMergedDataset, ResultViewID: "view_binance_kline_1m",
 		Freq: "1m", SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled,
 	}))
+	require.NoError(t, db.MergedDatasets().Save(context.Background(), testMergedDatasetDef()))
+	require.NoError(t, db.MergedDatasets().Enable(context.Background(), testMergedDataset))
 	return db
+}
+
+func testMergedDatasetDef() domain.MergedDataset {
+	spot := "dataset_binance_spot_kline_1m"
+	swap := "dataset_binance_swap_kline_1m"
+	fields := []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num"}
+	def := domain.MergedDataset{
+		DatasetID: testMergedDataset, SpaceID: "crypto", Frequency: "1m", MergeMode: domain.MergeModeSystem,
+		KeyContract: domain.KeyContract{
+			SubjectID: "subject_id", Frequency: "frequency", PeriodTime: "period_time", SeriesTag: "series_tag", PeriodBoundary: "close",
+		},
+		Sources: []domain.SourceDatasetRef{
+			{DatasetID: spot, Frequency: "1m", PeriodBoundary: "close", Fields: append([]string(nil), fields...)},
+			{DatasetID: swap, Frequency: "1m", PeriodBoundary: "close", Fields: append([]string(nil), fields...)},
+		},
+	}
+	for _, source := range def.Sources {
+		for _, field := range source.Fields {
+			def.FieldMappings = append(def.FieldMappings, domain.FieldMapping{
+				SourceDatasetID: source.DatasetID, SourceField: field, TargetField: domain.MappedSourceField(source.DatasetID, field),
+			})
+		}
+	}
+	return def
 }
 
 func readyRowsEvent(subjects ...string) *publicstoragepb.DatasetRowsUpserted {

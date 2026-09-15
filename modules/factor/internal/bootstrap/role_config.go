@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/inputcache"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"gopkg.in/yaml.v3"
@@ -25,6 +26,19 @@ type CatalogBusConfig struct {
 	CredentialFile string   `yaml:"credential_file"`
 }
 
+type engineDatasetSpec struct {
+	DatasetID        string                    `yaml:"dataset_id"`
+	SpaceID          string                    `yaml:"space_id"`
+	Frequency        string                    `yaml:"frequency"`
+	MergeMode        string                    `yaml:"merge_mode"`
+	ConfigSnapshotID string                    `yaml:"config_snapshot_id"`
+	KeyContract      domain.KeyContract        `yaml:"key_contract"`
+	ObjectSet        []string                  `yaml:"object_set"`
+	UniverseSource   string                    `yaml:"universe_source"`
+	Sources          []domain.SourceDatasetRef `yaml:"sources"`
+	FieldMappings    []domain.FieldMapping     `yaml:"field_mappings"`
+}
+
 type EngineApplicationConfig struct {
 	EngineID            string                     `yaml:"engine_id"`
 	Database            DatabaseConfig             `yaml:"database"`
@@ -35,6 +49,8 @@ type EngineApplicationConfig struct {
 	CatalogPollInterval time.Duration              `yaml:"catalog_poll_interval"`
 	CatalogSyncTimeout  time.Duration              `yaml:"catalog_sync_timeout"`
 	SubjectBatch        trigger.SubjectBatchConfig `yaml:"subject_batch"`
+	Specs               []engineDatasetSpec        `yaml:"definitions"`
+	Definitions         []domain.MergedDataset     `yaml:"-"`
 }
 
 func DefaultControlConfig() *ControlConfig {
@@ -95,7 +111,43 @@ func LoadEngineApplicationConfig(path string) (*EngineApplicationConfig, error) 
 	if strings.TrimSpace(cfg.Engine.PythonBin) == "" || strings.TrimSpace(cfg.Engine.WorkerPath) == "" || strings.TrimSpace(cfg.Engine.FactorsDir) == "" {
 		return nil, fmt.Errorf("engine Python paths are required")
 	}
+	if err := cfg.decodeMergedDatasetDefinitions(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+func (c *EngineApplicationConfig) decodeMergedDatasetDefinitions() error {
+	if c == nil {
+		return fmt.Errorf("engine merged dataset definitions are required")
+	}
+	c.Definitions = c.Definitions[:0]
+	for _, spec := range c.Specs {
+		def := spec.toDomain()
+		if len(def.FieldMappings) == 0 {
+			for _, source := range def.Sources {
+				for _, field := range source.Fields {
+					def.FieldMappings = append(def.FieldMappings, domain.FieldMapping{
+						SourceDatasetID: source.DatasetID, SourceField: field,
+						TargetField: domain.MappedSourceField(source.DatasetID, field),
+					})
+				}
+			}
+		}
+		if err := domain.ValidateMergedDataset(def); err != nil {
+			return err
+		}
+		c.Definitions = append(c.Definitions, def)
+	}
+	return nil
+}
+
+func (s engineDatasetSpec) toDomain() domain.MergedDataset {
+	return domain.MergedDataset{
+		DatasetID: s.DatasetID, SpaceID: s.SpaceID, Frequency: s.Frequency, MergeMode: s.MergeMode,
+		ConfigSnapshotID: s.ConfigSnapshotID, KeyContract: s.KeyContract, ObjectSet: append([]string(nil), s.ObjectSet...),
+		UniverseSource: s.UniverseSource, Sources: append([]domain.SourceDatasetRef(nil), s.Sources...), FieldMappings: append([]domain.FieldMapping(nil), s.FieldMappings...),
+	}
 }
 
 func validateRoleStorage(database DatabaseConfig, storage StorageConfig, urls []string) error {

@@ -50,22 +50,22 @@ func TestResolveManagedResultIDsUsesSourceViewIdentity(t *testing.T) {
 	client := &fakeViewMetadataClient{
 		fakeMetadataClient: newFakeMetadataClient(),
 		views: map[string]*storagepb.View{
-			"view_crypto_spot_kline_1m": {
-				SpaceId:          "space",
-				ViewId:           "view_crypto_spot_kline_1m",
-				DatasetId: "dataset_binance_spot_kline_1m",
+			"view_binance_kline_1m": {
+				SpaceId:   "crypto",
+				ViewId:    "view_binance_kline_1m",
+				DatasetId: "mdataset_binance_kline_1m",
 			},
 		},
 	}
 	datasetID, viewID, err := NewMetadataSync(client, nil).ResolveManagedResultIDs(
-		context.Background(), "space", "view_crypto_spot_kline_1m",
+		context.Background(), "crypto", "view_binance_kline_1m",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "dataset_crypto_spot_kline_1m_factor", datasetID)
-	require.Equal(t, "view_crypto_spot_kline_1m_factor", viewID)
+	require.Equal(t, "mdataset_binance_kline_1m", datasetID)
+	require.Equal(t, "view_binance_kline_1m", viewID)
 }
 
-func TestResolveManagedResultIDsSeparatesViewsSharingPrimaryDataset(t *testing.T) {
+func TestResolveManagedResultIDsReusesDatasetAcrossViews(t *testing.T) {
 	client := &fakeViewMetadataClient{
 		fakeMetadataClient: newFakeMetadataClient(),
 		views: map[string]*storagepb.View{
@@ -78,8 +78,53 @@ func TestResolveManagedResultIDsSeparatesViewsSharingPrimaryDataset(t *testing.T
 	require.NoError(t, err)
 	secondDataset, secondView, err := syncer.ResolveManagedResultIDs(context.Background(), "space", "view_b")
 	require.NoError(t, err)
-	require.NotEqual(t, firstDataset, secondDataset)
-	require.NotEqual(t, firstView, secondView)
+	require.Equal(t, "bars", firstDataset)
+	require.Equal(t, "bars", secondDataset)
+	require.Equal(t, "view_a", firstView)
+	require.Equal(t, "view_b", secondView)
+}
+
+func TestSyncBindingViewsReusesSourceDatasetAndView(t *testing.T) {
+	datasetID := "mdataset_binance_kline_1m"
+	viewID := "view_binance_kline_1m"
+	client := &fakeViewMetadataClient{
+		fakeMetadataClient: newFakeMetadataClient(),
+		views: map[string]*storagepb.View{
+			viewID: {
+				SpaceId: "crypto", ViewId: viewID, DatasetId: datasetID, Status: "active",
+				ActiveIndexId: "index-1", FilterJson: `{"freq":"1m"}`, KeepDuration: "24h",
+				ActiveViewRevision: 1, DesiredViewRevision: 1,
+				ActiveColumns: []*storagepb.ViewColumn{
+					{ColumnName: "dataset_binance_spot_kline_1m__close", OriginId: "dataset_binance_spot_kline_1m__close"},
+					{ColumnName: "dataset_binance_swap_kline_1m__close", OriginId: "dataset_binance_swap_kline_1m__close"},
+				},
+			},
+		},
+	}
+	client.datasets[datasetID] = &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: datasetID, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
+		Status: "active", BindingLocked: true, Freqs: []string{"1m"}, KeepDuration: "24h",
+		Attributes: map[string]string{"dataset_role": "merged_factor"},
+	}
+	binding := domain.FactorBinding{
+		BindingID: "bias-kline", FactorID: "bias", SpaceID: "crypto",
+		SourceViewID: viewID, ResultDatasetID: datasetID, ResultViewID: viewID,
+		Freq: "1m", Status: domain.BindingStatusEnabled,
+	}
+	factor := domain.FactorDef{
+		FactorID: "bias", Name: "Bias", FactorType: domain.FactorTypeTimeSeries,
+		InputColumns: []string{"close"}, Outputs: []string{"bias_20"},
+		LookbackPeriods: 20, Status: domain.FactorStatusEnabled,
+	}
+
+	ready, err := NewMetadataSync(client, nil).SyncBindingViews(context.Background(), binding, []domain.FactorDef{factor})
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Empty(t, client.createdDatasets)
+	require.Empty(t, client.updatedDatasets)
+	require.Empty(t, client.boundSubjects)
+	require.Equal(t, []string{"bias__bias_20"}, client.upsertedColumnNames())
+	require.Equal(t, "merged_factor", client.datasets[datasetID].GetAttributes()["dataset_role"])
 }
 
 func TestResultViewReadyWaitsForDesiredRevision(t *testing.T) {
@@ -223,6 +268,7 @@ type fakeMetadataClient struct {
 	subjects             map[string][]*storagepb.DatasetSubject
 	upsertedColumns      []*storagepb.DatasetColumn
 	updatedDatasets      []*storagepb.Dataset
+	createdDatasets      []*storagepb.Dataset
 	boundSubjects        []*storagepb.DatasetSubject
 	createdFactors       []*storagepb.Factor
 	updatedFactors       []*storagepb.Factor
@@ -249,7 +295,15 @@ func (f *fakeViewMetadataClient) GetView(_ context.Context, req *storagepb.GetVi
 	return &storagepb.GetViewRsp{RetInfo: successRet(), View: view}, nil
 }
 
-func (f *fakeViewMetadataClient) UpsertViewColumn(_ context.Context, _ *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
+func (f *fakeViewMetadataClient) UpsertViewColumn(_ context.Context, req *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
+	column := req.GetColumn()
+	if column != nil {
+		view := f.views[column.GetViewId()]
+		if view != nil {
+			view.ActiveColumns = append(view.ActiveColumns, column)
+			f.views[column.GetViewId()] = view
+		}
+	}
 	return &storagepb.UpsertViewColumnRsp{RetInfo: successRet()}, nil
 }
 
@@ -294,6 +348,7 @@ func (f *fakeMetadataClient) GetFactor(_ context.Context, req *storagepb.GetFact
 }
 
 func (f *fakeMetadataClient) CreateDataset(_ context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
+	f.createdDatasets = append(f.createdDatasets, req.GetDataset())
 	f.datasets[req.GetDataset().GetDatasetId()] = req.GetDataset()
 	return &storagepb.CreateDatasetRsp{RetInfo: successRet()}, nil
 }

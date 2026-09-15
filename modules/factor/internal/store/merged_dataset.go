@@ -66,20 +66,32 @@ func (r *MergedDatasetRepository) Save(ctx context.Context, def domain.MergedDat
 }
 
 func (r *MergedDatasetRepository) Enable(ctx context.Context, datasetID string) error {
+	return r.EnableSnapshot(ctx, datasetID, "")
+}
+
+func (r *MergedDatasetRepository) EnableSnapshot(ctx context.Context, datasetID, snapshotID string) error {
 	current, err := r.Get(ctx, datasetID)
 	if err != nil {
 		return err
 	}
-	if current.Enabled && strings.TrimSpace(current.ConfigSnapshotID) != "" {
-		return nil
+	currentSnapshot := strings.TrimSpace(current.ConfigSnapshotID)
+	wanted := strings.TrimSpace(snapshotID)
+	if current.Enabled && currentSnapshot != "" {
+		if wanted == "" || wanted == currentSnapshot {
+			return nil
+		}
+		return fmt.Errorf("mdataset %s already enabled with snapshot %s", datasetID, currentSnapshot)
 	}
 	raw, err := json.Marshal(current)
 	if err != nil {
 		return err
 	}
-	sum := sha256.Sum256(append(append([]byte(current.DatasetID), 0), raw...))
+	if wanted == "" {
+		sum := sha256.Sum256(append(append([]byte(current.DatasetID), 0), raw...))
+		wanted = hex.EncodeToString(sum[:16])
+	}
 	snapshot := domain.MergedDatasetSnapshot{
-		SnapshotID: hex.EncodeToString(sum[:16]), DatasetID: current.DatasetID,
+		SnapshotID: wanted, DatasetID: current.DatasetID,
 		ConfigJSON: string(raw), InputSemanticsHash: current.InputSemanticsHash,
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

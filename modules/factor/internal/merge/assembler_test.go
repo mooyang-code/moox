@@ -32,7 +32,7 @@ func TestMergeAssemblerKeepsCommitReceiptsArrivingBeforeCollectorFreeze(t *testi
 	require.NoError(t, ledger.Finalize(context.Background(), periodKey, period.Add(3*time.Minute)))
 	require.Len(t, reports.markers, 1)
 	require.Equal(t, "complete", reports.markers[0].Status)
-	require.Equal(t, []string{"BTC-USDT"}, reports.markers[0].ExpectedSubjectIDs)
+	require.Equal(t, []string{"BTC-USDT"}, reports.markers[0].UniverseSubjectIDs)
 	require.Empty(t, reports.markers[0].FailedSubjects)
 	require.Equal(t, []WriteReceipt{{
 		CommitID: stableCommitID(key), NodeID: "test-node", StoreID: "test-store", Sequence: 1,
@@ -61,6 +61,114 @@ func TestMergeAssemblerFreezesFromCollectorUniverseAfterPeriodEnd(t *testing.T) 
 	hourDeadline, err := periodFreezeDeadline(period, "1h")
 	require.NoError(t, err)
 	require.Equal(t, time.Date(2026, 9, 13, 17, 2, 0, 0, time.UTC), hourDeadline)
+}
+
+func TestMergeAssemblerFreezesInnerCollectorUniverse(t *testing.T) {
+	assembler, commits := openAssembler(t, domain.MergeModeSystem)
+	ledger, reports := openPeriodLedger(t)
+	assembler.SetPeriodLedger(ledger)
+	period := time.Date(2026, 9, 15, 6, 48, 0, 0, time.UTC)
+	require.NoError(t, assembler.NoteCollectorCompleted(context.Background(), "dataset_binance_spot_kline_1m", period, []string{"BTC-USDT", "ETH-USDT"}))
+	require.NoError(t, assembler.NoteCollectorCompleted(context.Background(), "dataset_binance_swap_kline_1m", period, []string{"BTC-USDT"}))
+	btc := mergeKey("BTC-USDT", period)
+	eth := mergeKey("ETH-USDT", period)
+	require.NoError(t, assembler.ApplyArrival(context.Background(), btc, "dataset_binance_spot_kline_1m", completeKlineFields("spot")))
+	require.NoError(t, assembler.ApplyArrival(context.Background(), btc, "dataset_binance_swap_kline_1m", completeKlineFields("swap")))
+	require.NoError(t, assembler.ApplyArrival(context.Background(), eth, "dataset_binance_spot_kline_1m", completeKlineFields("spot")))
+	require.NoError(t, assembler.ApplyArrival(context.Background(), eth, "dataset_binance_swap_kline_1m", completeKlineFields("swap")))
+	require.Equal(t, []string{stableCommitID(btc)}, commits.ids, "spot-only symbols must not enter the inner mdataset universe")
+	periodKey := PeriodKey{DatasetID: btc.DatasetID, SnapshotID: btc.SnapshotID, Frequency: btc.Frequency, PeriodTime: period}
+	acceptedETH, err := ledger.Accepts(context.Background(), periodKey, "ETH-USDT")
+	require.NoError(t, err)
+	require.False(t, acceptedETH)
+	require.NoError(t, ledger.Finalize(context.Background(), periodKey, period.Add(3*time.Minute)))
+	require.Len(t, reports.markers, 1)
+	require.Equal(t, "complete", reports.markers[0].Status)
+	require.Equal(t, []string{"BTC-USDT"}, reports.markers[0].UniverseSubjectIDs)
+	require.Empty(t, reports.markers[0].FailedSubjects)
+}
+
+func TestMergeAssemblerFreezesInnerMembershipUniverse(t *testing.T) {
+	assembler, commits := openAssembler(t, domain.MergeModeSystem)
+	assembler.def.UniverseSource = domain.UniverseSourceMembership
+	ledger, reports := openPeriodLedger(t)
+	assembler.SetPeriodLedger(ledger)
+	assembler.SetSubjectLister(mapSubjectLister{
+		"dataset_binance_spot_kline_1m": {"BTC-USDT-SPOT", "ETH-USDT"},
+		"dataset_binance_swap_kline_1m": {"BTC-USDT-SWAP"},
+	})
+	period := time.Date(2026, 9, 15, 6, 48, 0, 0, time.UTC)
+	btc := mergeKey("BTC-USDT", period)
+	eth := mergeKey("ETH-USDT", period)
+	require.NoError(t, assembler.ApplyArrival(context.Background(), btc, "dataset_binance_spot_kline_1m", completeKlineFields("spot")))
+	require.NoError(t, assembler.ApplyArrival(context.Background(), btc, "dataset_binance_swap_kline_1m", completeKlineFields("swap")))
+	require.NoError(t, assembler.ApplyArrival(context.Background(), eth, "dataset_binance_spot_kline_1m", completeKlineFields("spot")))
+	require.NoError(t, assembler.ApplyArrival(context.Background(), eth, "dataset_binance_swap_kline_1m", completeKlineFields("swap")))
+	require.Equal(t, []string{stableCommitID(btc)}, commits.ids, "membership freeze must inner-join ListDatasetSubjects")
+	periodKey := PeriodKey{DatasetID: btc.DatasetID, SnapshotID: btc.SnapshotID, Frequency: btc.Frequency, PeriodTime: period}
+	require.NoError(t, ledger.Finalize(context.Background(), periodKey, period.Add(3*time.Minute)))
+	require.Len(t, reports.markers, 1)
+	require.Equal(t, "complete", reports.markers[0].Status)
+	require.Equal(t, []string{"BTC-USDT"}, reports.markers[0].UniverseSubjectIDs)
+}
+
+func TestMergeAssemblerCommitsFrozenUniverseAfterPeriodClose(t *testing.T) {
+	assembler, commits := openAssembler(t, domain.MergeModeSystem)
+	ledger, reports := openPeriodLedger(t)
+	assembler.SetPeriodLedger(ledger)
+	period := time.Date(2026, 9, 15, 1, 39, 0, 0, time.UTC)
+	require.NoError(t, assembler.NoteCollectorCompleted(context.Background(), "dataset_binance_spot_kline_1m", period, []string{"BTC-USDT"}))
+	require.NoError(t, assembler.NoteCollectorCompleted(context.Background(), "dataset_binance_swap_kline_1m", period, []string{"BTC-USDT"}))
+	periodKey := PeriodKey{DatasetID: "mdataset_binance_kline_1m", SnapshotID: "snap-1", Frequency: "1m", PeriodTime: period}
+	require.NoError(t, ledger.Finalize(context.Background(), periodKey, period.Add(3*time.Minute)))
+	require.Len(t, reports.markers, 1)
+	require.Equal(t, []string{"BTC-USDT"}, reports.markers[0].FailedSubjects)
+
+	key := mergeKey("BTC-USDT", period)
+	require.NoError(t, assembler.ApplyArrival(context.Background(), key, "dataset_binance_spot_kline_1m", completeKlineFields("spot")))
+	require.NoError(t, assembler.ApplyArrival(context.Background(), key, "dataset_binance_swap_kline_1m", completeKlineFields("swap")))
+	require.Equal(t, []string{stableCommitID(key)}, commits.ids)
+	require.Len(t, reports.markers, 1, "late CommitInput must not rewrite MergePeriodCompleted")
+}
+
+func TestMergeAssemblerCanonicalizesSpotSwapSubjectSuffixes(t *testing.T) {
+	assembler, commits := openAssembler(t, domain.MergeModeSystem)
+	period := time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC)
+	require.NoError(t, assembler.ApplyArrival(context.Background(), mergeKey("BTC-USDT-SPOT", period), "dataset_binance_spot_kline_1m", completeKlineFields("spot")))
+	require.Empty(t, commits.ids)
+	require.NoError(t, assembler.ApplyArrival(context.Background(), mergeKey("BTC-USDT-SWAP", period), "dataset_binance_swap_kline_1m", completeKlineFields("swap")))
+	want := mergeKey("BTC-USDT", period)
+	require.Equal(t, []string{stableCommitID(want)}, commits.ids)
+}
+
+func TestMergeAssemblerReplaysPeriodReceiptAfterCommitRecorded(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(Options{Path: dir + "/merge.db"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	commits := &commitRecorder{}
+	assembler, err := NewAssembler(store, spotSwapDefinition(domain.MergeModeSystem), commits)
+	require.NoError(t, err)
+	reports := &reportRecorder{}
+	ledger, err := NewPeriodLedger(store, reports)
+	require.NoError(t, err)
+	assembler.SetPeriodLedger(ledger)
+	period := time.Date(2026, 9, 13, 16, 0, 0, 0, time.UTC)
+	key := mergeKey("BTC-USDT", period)
+	require.NoError(t, assembler.ApplyArrival(context.Background(), key, "dataset_binance_spot_kline_1m", completeKlineFields("spot")))
+	require.NoError(t, assembler.ApplyArrival(context.Background(), key, "dataset_binance_swap_kline_1m", completeKlineFields("swap")))
+	require.Len(t, commits.ids, 1)
+	require.NoError(t, store.db.Exec("DELETE FROM t_merge_period_subjects").Error)
+	require.NoError(t, assembler.commitIfReady(context.Background(), key))
+	require.Len(t, commits.ids, 1, "already committed rows must not CommitInput again")
+	periodKey := PeriodKey{DatasetID: key.DatasetID, SnapshotID: key.SnapshotID, Frequency: key.Frequency, PeriodTime: period}
+	subjects, err := ledger.loadSubjects(context.Background(), periodKey)
+	require.NoError(t, err)
+	require.Len(t, subjects, 1)
+	require.Equal(t, "success", subjects[0].State)
+	require.Equal(t, "test-node", subjects[0].NodeID)
+	require.Equal(t, "test-store", subjects[0].StoreID)
+	require.EqualValues(t, 1, subjects[0].Sequence)
 }
 
 func TestMergeAssemblerWaitsForAllSourcesBeforeCommit(t *testing.T) {
@@ -171,6 +279,12 @@ func spotSwapDefinition(mode string) domain.MergedDataset {
 		}
 	}
 	return def
+}
+
+type mapSubjectLister map[string][]string
+
+func (m mapSubjectLister) ListActiveDatasetSubjects(_ context.Context, _, datasetID string) ([]string, error) {
+	return append([]string(nil), m[datasetID]...), nil
 }
 
 type commitRecorder struct {

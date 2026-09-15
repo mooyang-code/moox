@@ -25,12 +25,17 @@ type InputCommitter interface {
 	CommitInput(ctx context.Context, commitID string, key RowKey, fields map[string]float64, ready bool) (WriteReceipt, error)
 }
 
+type DatasetSubjectLister interface {
+	ListActiveDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]string, error)
+}
+
 type Assembler struct {
 	ledger    *Ledger
 	def       domain.MergedDataset
 	committer InputCommitter
 	required  map[string][]string
 	periods   *PeriodLedger
+	subjects  DatasetSubjectLister
 }
 
 func NewAssembler(ledger *Ledger, def domain.MergedDataset, committer InputCommitter) (*Assembler, error) {
@@ -50,6 +55,12 @@ func NewAssembler(ledger *Ledger, def domain.MergedDataset, committer InputCommi
 func (a *Assembler) SetPeriodLedger(periods *PeriodLedger) {
 	if a != nil {
 		a.periods = periods
+	}
+}
+
+func (a *Assembler) SetSubjectLister(lister DatasetSubjectLister) {
+	if a != nil {
+		a.subjects = lister
 	}
 }
 
@@ -98,7 +109,7 @@ func (a *Assembler) TargetFields() []string {
 
 func (a *Assembler) rowKey(subjectID, frequency, seriesTag string, periodTime time.Time) RowKey {
 	return RowKey{
-		DatasetID: a.DatasetID(), SnapshotID: a.SnapshotID(), SubjectID: subjectID,
+		DatasetID: a.DatasetID(), SnapshotID: a.SnapshotID(), SubjectID: canonicalCryptoSubjectID(a.SpaceID(), subjectID),
 		Frequency: frequency, PeriodTime: periodTime.UTC(), SeriesTag: seriesTag,
 	}
 }
@@ -107,6 +118,7 @@ func (a *Assembler) ApplyArrival(ctx context.Context, key RowKey, sourceDatasetI
 	if a == nil {
 		return fmt.Errorf("merge assembler is not initialized")
 	}
+	key.SubjectID = canonicalCryptoSubjectID(a.SpaceID(), key.SubjectID)
 	if a.def.MergeMode == domain.MergeModeCustom {
 		return nil
 	}
@@ -116,14 +128,8 @@ func (a *Assembler) ApplyArrival(ctx context.Context, key RowKey, sourceDatasetI
 	}
 	if a.periods != nil {
 		period := PeriodKey{DatasetID: key.DatasetID, SnapshotID: key.SnapshotID, Frequency: key.Frequency, PeriodTime: key.PeriodTime}
-		if len(a.def.ObjectSet) > 0 {
-			deadline, err := periodFreezeDeadline(key.PeriodTime, key.Frequency)
-			if err != nil {
-				return err
-			}
-			if err := a.periods.Freeze(ctx, period, a.def.ObjectSet, deadline); err != nil {
-				return err
-			}
+		if err := a.ensurePeriodUniverse(ctx, period, key.Frequency); err != nil {
+			return err
 		}
 		accepted, err := a.periods.Accepts(ctx, period, key.SubjectID)
 		if err != nil {
@@ -142,8 +148,11 @@ func (a *Assembler) ApplyArrival(ctx context.Context, key RowKey, sourceDatasetI
 
 func (a *Assembler) commitIfReady(ctx context.Context, key RowKey) error {
 	done, err := a.ledger.HasCommit(ctx, key)
-	if err != nil || done {
+	if err != nil {
 		return err
+	}
+	if done {
+		return a.replayPeriodCommit(ctx, key)
 	}
 	arrivals, complete, err := a.ledger.LoadArrivals(ctx, key)
 	if err != nil {
@@ -170,15 +179,33 @@ func (a *Assembler) commitIfReady(ctx context.Context, key RowKey) error {
 	if err != nil {
 		return err
 	}
-	if err := a.ledger.RecordCommit(ctx, commitID, key); err != nil {
+	if err := a.notePeriodCommit(ctx, key, receipt); err != nil {
 		return err
 	}
-	if a.periods != nil {
-		return a.periods.NoteCommit(ctx, PeriodKey{
-			DatasetID: key.DatasetID, SnapshotID: key.SnapshotID, Frequency: key.Frequency, PeriodTime: key.PeriodTime,
-		}, key.SubjectID, receipt)
+	return a.ledger.RecordCommit(ctx, commitID, key, receipt)
+}
+
+func (a *Assembler) notePeriodCommit(ctx context.Context, key RowKey, receipt WriteReceipt) error {
+	if a == nil || a.periods == nil {
+		return nil
 	}
-	return nil
+	return a.periods.NoteCommit(ctx, PeriodKey{
+		DatasetID: key.DatasetID, SnapshotID: key.SnapshotID, Frequency: key.Frequency, PeriodTime: key.PeriodTime,
+	}, key.SubjectID, receipt)
+}
+
+func (a *Assembler) replayPeriodCommit(ctx context.Context, key RowKey) error {
+	if a == nil || a.periods == nil {
+		return nil
+	}
+	receipt, ok, err := a.ledger.LookupCommit(ctx, key)
+	if err != nil || !ok {
+		return err
+	}
+	if strings.TrimSpace(receipt.NodeID) == "" || strings.TrimSpace(receipt.StoreID) == "" || receipt.Sequence == 0 {
+		return nil
+	}
+	return a.notePeriodCommit(ctx, key, receipt)
 }
 
 func periodFreezeDeadline(periodTime time.Time, frequency string) (time.Time, error) {
@@ -189,8 +216,63 @@ func periodFreezeDeadline(periodTime time.Time, frequency string) (time.Time, er
 	return end.Add(2 * time.Minute), nil
 }
 
+func (a *Assembler) usesMembershipUniverse() bool {
+	return a != nil && strings.EqualFold(strings.TrimSpace(a.def.UniverseSource), domain.UniverseSourceMembership)
+}
+
+func (a *Assembler) ensurePeriodUniverse(ctx context.Context, period PeriodKey, frequency string) error {
+	if a == nil || a.periods == nil {
+		return nil
+	}
+	if len(a.def.ObjectSet) > 0 {
+		deadline, err := periodFreezeDeadline(period.PeriodTime, frequency)
+		if err != nil {
+			return err
+		}
+		return a.periods.Freeze(ctx, period, a.def.ObjectSet, deadline)
+	}
+	if !a.usesMembershipUniverse() {
+		return nil
+	}
+	return a.freezeMembershipUniverse(ctx, period, frequency)
+}
+
+func (a *Assembler) freezeMembershipUniverse(ctx context.Context, period PeriodKey, frequency string) error {
+	if a.subjects == nil {
+		return fmt.Errorf("membership universe requires ListDatasetSubjects")
+	}
+	frozen, err := a.periods.Frozen(ctx, period)
+	if err != nil || frozen {
+		return err
+	}
+	for _, source := range a.def.Sources {
+		ids, err := a.subjects.ListActiveDatasetSubjects(ctx, a.SpaceID(), source.DatasetID)
+		if err != nil {
+			return err
+		}
+		if err := a.periods.NoteCollectorCompleted(ctx, a.DatasetID(), source.DatasetID, period.PeriodTime, ids); err != nil {
+			return err
+		}
+	}
+	universe, ready, err := a.periods.CollectorUniverse(ctx, a.DatasetID(), a.SourceDatasetIDs(), period.PeriodTime)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return fmt.Errorf("membership universe is incomplete")
+	}
+	deadline, err := periodFreezeDeadline(period.PeriodTime, frequency)
+	if err != nil {
+		return err
+	}
+	return a.periods.Freeze(ctx, period, universe, deadline)
+}
+
 func (a *Assembler) NoteCollectorCompleted(ctx context.Context, sourceDatasetID string, periodTime time.Time, expected []string) error {
 	if a == nil || a.periods == nil {
+		return nil
+	}
+	if a.usesMembershipUniverse() {
 		return nil
 	}
 	if err := a.periods.NoteCollectorCompleted(ctx, a.DatasetID(), sourceDatasetID, periodTime, expected); err != nil {
@@ -219,6 +301,14 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func canonicalCryptoSubjectID(spaceID, subjectID string) string {
+	value := strings.TrimSpace(subjectID)
+	if !strings.EqualFold(strings.TrimSpace(spaceID), "crypto") {
+		return value
+	}
+	return canonicalUniverseSubjectID(value)
 }
 
 func sourceComplete(required []string, fields map[string]float64) bool {

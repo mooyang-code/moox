@@ -3,6 +3,7 @@ package merge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,6 +40,9 @@ type commitRow struct {
 	PeriodTime time.Time `gorm:"column:c_period_time"`
 	SeriesTag  string    `gorm:"column:c_series_tag"`
 	Status     string    `gorm:"column:c_status"`
+	NodeID     string    `gorm:"column:c_node_id"`
+	StoreID    string    `gorm:"column:c_store_id"`
+	Sequence   uint64    `gorm:"column:c_sequence"`
 	ModifiedAt time.Time `gorm:"column:c_mtime"`
 }
 
@@ -69,6 +73,10 @@ func Open(opts Options) (*Ledger, error) {
 		return nil, fmt.Errorf("apply merge schema: %w", err)
 	}
 	if err := ensureSourceCompletionExpectedColumn(db); err != nil {
+		_ = closeGorm(db)
+		return nil, err
+	}
+	if err := ensureCommitReceiptColumns(db); err != nil {
 		_ = closeGorm(db)
 		return nil, err
 	}
@@ -131,13 +139,55 @@ func (l *Ledger) HasCommit(ctx context.Context, key RowKey) (bool, error) {
 	return count > 0, err
 }
 
-func (l *Ledger) RecordCommit(ctx context.Context, commitID string, key RowKey) error {
+func (l *Ledger) RecordCommit(ctx context.Context, commitID string, key RowKey, receipt WriteReceipt) error {
 	row := commitRow{
 		CommitID: commitID, DatasetID: key.DatasetID, SnapshotID: key.SnapshotID, SubjectID: key.SubjectID,
 		Frequency: key.Frequency, PeriodTime: key.PeriodTime.UTC(), SeriesTag: key.SeriesTag, Status: "committed",
+		NodeID: strings.TrimSpace(receipt.NodeID), StoreID: strings.TrimSpace(receipt.StoreID), Sequence: receipt.Sequence,
 		ModifiedAt: time.Now().UTC(),
 	}
 	return l.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error
+}
+
+func (l *Ledger) LookupCommit(ctx context.Context, key RowKey) (WriteReceipt, bool, error) {
+	var row commitRow
+	err := l.db.WithContext(ctx).Where(
+		"c_dataset_id = ? AND c_snapshot_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_period_time = ? AND c_series_tag = ?",
+		key.DatasetID, key.SnapshotID, key.SubjectID, key.Frequency, key.PeriodTime.UTC(), key.SeriesTag,
+	).Take(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return WriteReceipt{}, false, nil
+	}
+	if err != nil {
+		return WriteReceipt{}, false, err
+	}
+	return WriteReceipt{CommitID: row.CommitID, NodeID: row.NodeID, StoreID: row.StoreID, Sequence: row.Sequence}, true, nil
+}
+
+func ensureCommitReceiptColumns(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("merge database is required")
+	}
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{name: "c_node_id", ddl: "ALTER TABLE t_merge_commits ADD COLUMN c_node_id TEXT NOT NULL DEFAULT ''"},
+		{name: "c_store_id", ddl: "ALTER TABLE t_merge_commits ADD COLUMN c_store_id TEXT NOT NULL DEFAULT ''"},
+		{name: "c_sequence", ddl: "ALTER TABLE t_merge_commits ADD COLUMN c_sequence INTEGER NOT NULL DEFAULT 0"},
+	} {
+		var count int
+		if err := db.Raw(`SELECT COUNT(*) FROM pragma_table_info('t_merge_commits') WHERE name = ?`, column.name).Scan(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			continue
+		}
+		if err := db.Exec(column.ddl).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureSourceCompletionExpectedColumn(db *gorm.DB) error {

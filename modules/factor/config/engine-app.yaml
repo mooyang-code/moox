@@ -17,7 +17,7 @@ storage:
 eventbus:
   urls: [nats://127.0.0.1:4222]
   credential_file: ~/.config/moox/eventbus/factor-engine-eventbus.yaml
-  fetch_max_wait: 1s
+  fetch_max_wait: 10s
   execution_timeout: 15m
   stall_threshold: 5m
   max_execution_attempts: 5
@@ -34,3 +34,24 @@ cache:
   enabled: false
 catalog_poll_interval: 30s
 catalog_sync_timeout: 10m
+definitions:
+  - dataset_id: mdataset_binance_kline_1m
+    space_id: crypto
+    frequency: 1m
+    merge_mode: system
+    config_snapshot_id: snap-1
+    key_contract:
+      subject_id: subject_id
+      frequency: frequency
+      period_time: period_time
+      series_tag: series_tag
+      period_boundary: close
+    sources:
+      - dataset_id: dataset_binance_spot_kline_1m
+        frequency: 1m
+        period_boundary: close
+        fields: [open, high, low, close, volume, quote_volume, trade_num]
+      - dataset_id: dataset_binance_swap_kline_1m
+        frequency: 1m
+        period_boundary: close
+        fields: [open, high, low, close, volume, quote_volume, trade_num]

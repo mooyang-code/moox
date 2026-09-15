@@ -66,7 +66,7 @@ func TestPeriodReporterRebuildsPayloadWhenSubjectIdsMissing(t *testing.T) {
 	reporter.now = func() time.Time { return period.Add(10 * time.Second) }
 	require.NoError(t, reporter.Flush(context.Background()))
 	require.Len(t, fake.payloads, 1)
-	require.Equal(t, []string{"BTC-USDT"}, fake.payloads[0].GetExpectedSubjectIds())
+	require.Equal(t, []string{"BTC-USDT"}, fake.payloads[0].GetUniverseSubjectIds())
 }
 
 func TestPeriodReporterRequiresStorageAndSchema(t *testing.T) {

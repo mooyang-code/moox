@@ -62,6 +62,9 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 		}
 	}
 	subjects := normalizeSubjects(assignment.Subjects)
+	if isCryptoKlineAssignment(assignment) {
+		subjects = pinPriorityCryptoSubjects(subjects)
+	}
 	if !isStockCNAssignment(assignment) && len(subjects) > MaxRealtimeItems {
 		return nil, fmt.Errorf("assignment contains %d subjects; maximum is %d", len(subjects), MaxRealtimeItems)
 	}

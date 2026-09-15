@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
@@ -23,8 +24,12 @@ func TestViewDataReadyFenceWaitsUntilRowsApplied(t *testing.T) {
 	payload.CommittedPositions = []*storageeventpb.CommittedPosition{
 		{NodeId: "node-a", StoreId: "store-a", Sequence: 7},
 	}
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload); !errors.Is(err, ErrViewDataReadyPending) {
+	err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload)
+	if !errors.Is(err, ErrViewDataReadyPending) {
 		t.Fatalf("unapplied completion should retry until rows are applied, got %v", err)
+	}
+	if !eventconsumer.IsDeferred(err) {
+		t.Fatalf("unapplied completion must be deferred so the dataset queue can apply rows, got %v", err)
 	}
 	if len(publisher.attempts) != 0 {
 		t.Fatal("ViewDataReady published before committed rows were applied")

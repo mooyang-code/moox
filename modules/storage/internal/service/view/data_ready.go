@@ -74,6 +74,9 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 			remaining = append(remaining, item)
 			continue
 		}
+		if item.payload != nil && writeFenceRequiresPositions(item.payload.GetCompletionKind()) && !hasUsableCommittedPositions(item.required) {
+			continue
+		}
 		view := s.viewSnapshot(item.spaceID, item.viewID)
 		if view == nil || !s.positionsApplied(view, item.required) {
 			remaining = append(remaining, item)
@@ -97,6 +100,9 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 
 func (s *Service) enqueueViewDataReady(view *pb.View, required []*storagepb.CommittedPosition, payload *storagepb.ViewDataReady, message *eventpb.EventMessage, eventID string) {
 	if view == nil || payload == nil || message == nil || strings.TrimSpace(eventID) == "" {
+		return
+	}
+	if writeFenceRequiresPositions(payload.GetCompletionKind()) && !hasUsableCommittedPositions(required) {
 		return
 	}
 	occurredAt := message.GetOccurredAt()
@@ -230,6 +236,19 @@ func (s *Service) readyPublisherLocked() ReadyEventPublisher {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.readyPublisher
+}
+
+func writeFenceRequiresPositions(kind string) bool {
+	return kind == events.FactorPeriodComputed.Name() || kind == events.MergePeriodCompleted.Name()
+}
+
+func hasUsableCommittedPositions(required []*storagepb.CommittedPosition) bool {
+	for _, position := range required {
+		if position != nil && strings.TrimSpace(position.GetNodeId()) != "" && strings.TrimSpace(position.GetStoreId()) != "" && position.GetSequence() != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func viewVisibleScope(view *pb.View, fallback string) string {

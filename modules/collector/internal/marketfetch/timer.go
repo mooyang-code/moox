@@ -93,6 +93,9 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time, runtimeR
 		return Request{}, "", err
 	}
 	subjects := normalizeSubjects(strings.Split(os.Getenv("MOOX_MARKET_FETCH_SUBJECTS"), "|"))
+	if isCryptoKlineGroup(TaskGroup{MarketType: marketType, MarketID: marketID}) {
+		subjects = pinPriorityCryptoSubjects(subjects)
+	}
 	if len(subjects) == 0 {
 		return Request{}, "", fmt.Errorf("timer market fetch subjects must contain at least one value")
 	}

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/health"
@@ -77,6 +78,19 @@ func TestEngineExampleLoads(t *testing.T) {
 	}
 	if cfg.Cache.Enabled {
 		t.Fatal("example enables unsupported cache")
+	}
+	if cfg.EventBus.FetchMaxWait != 10*time.Second {
+		t.Fatalf("example fetch_max_wait = %s, want 10s", cfg.EventBus.FetchMaxWait)
+	}
+	if len(cfg.Definitions) != 1 {
+		t.Fatalf("example definitions = %d, want 1", len(cfg.Definitions))
+	}
+	def := cfg.Definitions[0]
+	if def.DatasetID != "mdataset_binance_kline_1m" || def.ConfigSnapshotID != "snap-1" {
+		t.Fatalf("example merged dataset = %s snap=%s", def.DatasetID, def.ConfigSnapshotID)
+	}
+	if len(def.Sources) != 2 || len(def.FieldMappings) == 0 {
+		t.Fatalf("example sources=%d mappings=%d", len(def.Sources), len(def.FieldMappings))
 	}
 }
 

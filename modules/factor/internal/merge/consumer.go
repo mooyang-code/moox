@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/nats-io/nats.go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -23,6 +24,7 @@ const (
 // RowHandler routes source Dataset row events onto the assemblers that own them.
 type RowHandler struct {
 	bySource map[string][]*Assembler
+	Now      func() time.Time
 }
 
 func NewRowHandler(assemblers ...*Assembler) *RowHandler {
@@ -36,6 +38,23 @@ func NewRowHandler(assemblers ...*Assembler) *RowHandler {
 		}
 	}
 	return handler
+}
+
+func (h *RowHandler) now() time.Time {
+	if h != nil && h.Now != nil {
+		return h.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func arrivalStillLive(period time.Time, freq string, now time.Time) bool {
+	interval, err := report.ParseDatasetFrequency(freq)
+	if err != nil || interval <= 0 {
+		interval = time.Minute
+	}
+	// Collector fires at the next bar (period+interval). Strategy ValidUntil is
+	// period+2*interval. Apply only while the result could still be committed.
+	return now.UTC().Before(period.UTC().Add(2 * interval))
 }
 
 func (h *RowHandler) HandleDatasetRows(ctx context.Context, payload *storagepb.DatasetRowsUpserted) error {
@@ -59,6 +78,9 @@ func (h *RowHandler) HandleDatasetRows(ctx context.Context, payload *storagepb.D
 		if err != nil {
 			return err
 		}
+		if !arrivalStillLive(period, ts.GetFreq(), h.now()) {
+			continue
+		}
 		fields := numericFields(row.GetFields())
 		for _, assembler := range assemblers {
 			key := assembler.rowKey(ts.GetSubjectId(), ts.GetFreq(), ts.GetSeriesTag(), period)
@@ -80,7 +102,7 @@ func (h *RowHandler) HandleCollectorCompleted(ctx context.Context, payload *stor
 	}
 	period := time.Unix(payload.GetPeriodTime(), 0).UTC()
 	for _, assembler := range assemblers {
-		if err := assembler.NoteCollectorCompleted(ctx, payload.GetDatasetId(), period, payload.GetExpectedSubjectIds()); err != nil {
+		if err := assembler.NoteCollectorCompleted(ctx, payload.GetDatasetId(), period, payload.GetUniverseSubjectIds()); err != nil {
 			return err
 		}
 	}
@@ -129,6 +151,7 @@ type RowConsumer struct {
 	client   *jetstream.Client
 	consumer *events.Consumer
 	runner   *jetstream.Runner
+	cancel   context.CancelFunc
 }
 
 func StartRowConsumer(ctx context.Context, cfg ProcessConfig, handler *RowHandler) (*RowConsumer, error) {
@@ -162,18 +185,19 @@ func StartRowConsumer(ctx context.Context, cfg ProcessConfig, handler *RowHandle
 		_ = client.Close()
 		return nil, err
 	}
+	runCtx, cancel := context.WithCancel(ctx)
 	runner := jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{
 		BatchSize: 1, InProgressInterval: 30 * time.Second,
 		ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
-			log.ErrorContextf(ctx, "merge row consumer error: %v", err)
+			log.ErrorContextf(runCtx, "merge row consumer error: %v", err)
 		}),
 	})
 	go func() {
-		if runErr := runner.Run(ctx); runErr != nil && ctx.Err() == nil {
-			log.ErrorContextf(ctx, "merge row consumer stopped: %v", runErr)
-		}
+		_ = runUntilCancelled(runCtx, time.Second, runner.Run, func(err error) {
+			log.ErrorContextf(runCtx, "merge row consumer stopped: %v", err)
+		})
 	}()
-	return &RowConsumer{client: client, consumer: consumer, runner: runner}, nil
+	return &RowConsumer{client: client, consumer: consumer, runner: runner, cancel: cancel}, nil
 }
 
 type collectorDeliveryHandler struct {
@@ -215,23 +239,60 @@ func StartCollectorConsumer(ctx context.Context, cfg ProcessConfig, handler *Row
 		_ = client.Close()
 		return nil, err
 	}
+	runCtx, cancel := context.WithCancel(ctx)
 	runner := jetstream.NewRunner(consumer, collectorDeliveryHandler{inner: handler}, jetstream.RunnerConfig{
 		BatchSize: 1, InProgressInterval: 30 * time.Second,
 		ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
-			log.ErrorContextf(ctx, "merge collector consumer error: %v", err)
+			log.ErrorContextf(runCtx, "merge collector consumer error: %v", err)
 		}),
 	})
 	go func() {
-		if runErr := runner.Run(ctx); runErr != nil && ctx.Err() == nil {
-			log.ErrorContextf(ctx, "merge collector consumer stopped: %v", runErr)
-		}
+		_ = runUntilCancelled(runCtx, time.Second, runner.Run, func(err error) {
+			log.ErrorContextf(runCtx, "merge collector consumer stopped: %v", err)
+		})
 	}()
-	return &RowConsumer{client: client, consumer: consumer, runner: runner}, nil
+	return &RowConsumer{client: client, consumer: consumer, runner: runner, cancel: cancel}, nil
+}
+
+func runUntilCancelled(ctx context.Context, delay time.Duration, run func(context.Context) error, onErr func(error)) error {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	for ctx.Err() == nil {
+		err := run(ctx)
+		if ctx.Err() != nil {
+			return nil
+		}
+		if err != nil && onErr != nil {
+			onErr(err)
+		}
+		if !sleepConsumer(ctx, delay) {
+			return nil
+		}
+	}
+	return nil
+}
+
+func sleepConsumer(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func (c *RowConsumer) Close() error {
 	if c == nil {
 		return nil
+	}
+	if c.cancel != nil {
+		c.cancel()
 	}
 	var consumerErr error
 	if c.consumer != nil {

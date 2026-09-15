@@ -3,7 +3,6 @@ package registry
 import (
 	"context"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -197,29 +196,28 @@ func contractFactor() domain.FactorDef {
 	return domain.FactorDef{FactorType: "timeseries", FactorID: "factor", InputColumns: []string{"close", "volume"}}
 }
 
-func TestValidateActiveViewInputsRejectsAmbiguousSuffix(t *testing.T) {
-	view := &storagepb.View{ViewId: "source", ActiveColumns: []*storagepb.ViewColumn{
-		{ColumnName: "prices.close", OriginId: "prices.close"}, {ColumnName: "adjusted.close", OriginId: "adjusted.close"},
+func TestValidateActiveViewInputsMapsMergedSourceSuffix(t *testing.T) {
+	view := &storagepb.View{ViewId: "view_binance_kline_1m", ActiveColumns: []*storagepb.ViewColumn{
+		{ColumnName: "dataset_binance_spot_kline_1m__close", OriginId: "dataset_binance_spot_kline_1m__close"},
+		{ColumnName: "dataset_binance_swap_kline_1m__close", OriginId: "dataset_binance_swap_kline_1m__close"},
+		{ColumnName: "dataset_binance_spot_kline_1m__volume", OriginId: "dataset_binance_spot_kline_1m__volume"},
+		{ColumnName: "dataset_binance_swap_kline_1m__volume", OriginId: "dataset_binance_swap_kline_1m__volume"},
 	}}
-	err := validateActiveViewInputs(view, []string{"close"})
-	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
-		t.Fatalf("validateActiveViewInputs() error = %v, want ambiguous input", err)
+	if err := validateActiveViewInputs(view, []string{"close", "volume"}); err != nil {
+		t.Fatalf("short names should map onto the first listed source columns: %v", err)
 	}
-	if err := validateActiveViewInputs(view, []string{"prices.close"}); err != nil {
-		t.Fatalf("qualified input should be accepted: %v", err)
+	if err := validateActiveViewInputs(view, []string{"dataset_binance_swap_kline_1m__close"}); err != nil {
+		t.Fatalf("qualified mapped field should be accepted: %v", err)
 	}
-	if err := validateActiveViewInputs(&storagepb.View{ViewId: "single", ActiveColumns: []*storagepb.ViewColumn{{ColumnName: "prices.close", OriginId: "prices.close"}}}, []string{"close"}); err != nil {
-		t.Fatalf("a duplicated column/origin alias should count once: %v", err)
+	if err := validateActiveViewInputs(view, []string{"missing"}); err == nil {
+		t.Fatal("missing short names must still fail")
 	}
 	viewWithRuntimeAlias := &storagepb.View{ViewId: "runtime", ActiveColumns: []*storagepb.ViewColumn{
-		{ColumnName: "close", OriginId: "prices.close"},
-		{ColumnName: "adjusted_close", OriginId: "adjusted.close"},
+		{ColumnName: "close", OriginId: "dataset_binance_spot_kline_1m__close"},
+		{ColumnName: "dataset_binance_swap_kline_1m__close", OriginId: "dataset_binance_swap_kline_1m__close"},
 	}}
 	if err := validateActiveViewInputs(viewWithRuntimeAlias, []string{"close"}); err != nil {
-		t.Fatalf("exact runtime column should win over a provenance suffix: %v", err)
-	}
-	if err := validateActiveViewInputs(viewWithRuntimeAlias, []string{"prices.close"}); err == nil {
-		t.Fatal("provenance-only qualified name must not be accepted as a runtime column")
+		t.Fatalf("exact runtime column should win over a mapped suffix: %v", err)
 	}
 }
 

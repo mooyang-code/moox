@@ -85,7 +85,8 @@ Merge 与因子引擎是独立程序，可以部署在同一内网机器，但�
 | 配置 | 含义 |
 |---|---|
 | dataset_id | Storage 中唯一的数据集标识 |
-| object_set | 目标对象集 |
+| object_set | 可选的显式目标对象集；未配置时由各源宇宙交集冻结 |
+| universe_source | `collector`（默认，时序）或 `membership`（`ListDatasetSubjects`） |
 | frequency / key_contract | 频率、周期边界及业务行键约定 |
 | source_datasets | 关联的基础 Dataset，可以有多个 |
 | merge_mode | system 或 custom |
@@ -145,7 +146,7 @@ View 不进行多源 JOIN、字段加工或数据聚合。一个 Dataset 可有�
 
 ### 5.2 对象集与周期终态
 
-每个周期固定 mdataset 的预期对象集和构造配置版本，不能随着源事件到达动态缩小名单。默认使用 mdataset 配置的对象集，而不是成功数据的交集。
+每个周期固定 mdataset 的预期对象集和构造配置版本，不能随着源事件到达动态缩小名单。时序源以各源 `CollectorPeriodCompleted.universe_subject_ids` 的交集（canonical 对象 ID）作为本周期宇宙，非时序源以各源已激活 `ListDatasetSubjects` 的交集为准；配置了 `object_set` 时改用该配置。宇宙包含采集失败但仍属于交集的对象，不是成功行的交集。只存在于部分源的对象不进入 mdataset，也不记为缺失；交集内对象仍须所有配置源到齐后一次 `CommitInput`。
 
 每个预期对象最终为成功或缺失终态。截止时间到达后，将剩余等待项记录为缺失，该周期为 degraded；全部成功才为 complete。
 

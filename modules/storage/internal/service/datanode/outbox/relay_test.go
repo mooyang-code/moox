@@ -89,6 +89,52 @@ func (p *retryDuplicatePublisher) PublishMessageWithAck(ctx context.Context, dat
 	return &jetstream.PublishAck{Duplicate: p.calls > 1}, nil
 }
 
+func TestRelayDropsUnsupportedLegacyOutboxEventsAndPublishesTheRest(t *testing.T) {
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	legacy, err := proto.Marshal(&eventpb.EventMessage{
+		EventId: "legacy-period-collected", EventName: "event.storage.dataset.period.collected", EventVersion: 1,
+		SpaceId: "crypto", SubjectId: "dataset_binance_spot_kline_1m",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InsertOutboxPayloadForTest(legacy); err != nil {
+		t.Fatal(err)
+	}
+	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
+	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	publisher := &testPublisher{}
+	relay, err := NewRelay(store, publisher, RelayOptions{BatchSize: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := relay.flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(publisher.values) != 1 {
+		t.Fatalf("published %d events, want 1 valid rows.upserted", len(publisher.values))
+	}
+	published := &eventpb.EventMessage{}
+	if err := proto.Unmarshal(publisher.values[0], published); err != nil {
+		t.Fatal(err)
+	}
+	if published.GetEventName() != "event.storage.dataset.rows.upserted" {
+		t.Fatalf("published event %q, want rows.upserted", published.GetEventName())
+	}
+	entries, err := store.ListOutbox(context.Background(), 0, 10)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("remaining outbox=%v err=%v", entries, err)
+	}
+}
+
 func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
 	if err != nil {
