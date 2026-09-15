@@ -16,17 +16,17 @@
 - 每个 View 只索引一个 Dataset；Dataset 可有多个 View。View 不聚合数据、不触发因子计算；重建由用户手动发起 A/B。
 - 时序因子按输入 Dataset 完整行变更触发并写独立结果 Dataset；截面因子等待 PANEL Dataset 周期完成再批量计算。
 - 因子输入缓存按 Dataset 身份和 schema 隔离；DuckDB 容量受限，37m13s 定时检查并以新文件保留配置的最近 N 行，不在线 ALTER 或主动回填。
-- 本轮仅整理计划，不编码、不启停服务、不创建或删除线上资源、不部署。
+- 本轮仅修改计划文档并运行已存在的本地定向测试以校准现状；不编码、不启停服务、不创建或删除线上资源、不部署。
 
-日期：2026-09-16。主工作树源码基线为 `feature/mooyang` 的 `8afaaa60d724862cc652bb9491fc4c3257af838a`，后续 `2c7147f8`、`8f410f3c`、`ff232883` 是计划文档提交。唯一实施候选工作树为 `.worktrees/final-binance-spot-factor`，分支 `feature/final-binance-spot-factor@d5498de8`；截至本轮，仍有未提交的 Storage、Proto、events 与 Merge 改动，必须在该处增量审查，不得从主工作树复制第二份实现。
+日期：2026-09-16。主工作树当前为 `feature/mooyang@6adfae2b`；功能源码基线仍是 `8afaaa60d724862cc652bb9491fc4c3257af838a`，其后的 `2c7147f8`、`8f410f3c`、`ff232883`、`dd57486d`、`e02022ef`、`6adfae2b` 均为本计划盘点/修订提交。唯一实施候选工作树为 `.worktrees/final-binance-spot-factor`，分支 `feature/final-binance-spot-factor@d5498de8`；截至本轮，仍有未提交的 Storage、Proto、events、Collector 与 Merge 改动，必须在该处增量审查，不得从主工作树复制第二份实现。
 
-候选工作树现有实现已超出前一版盘点：快照内容复用、请求幂等冲突、freshness、周期冻结和查询；`ReportPeriod`、成功状态、`DatasetPeriodCompleted` outbox；Primary 根据 request-scoped Metadata snapshot 验证 Dataset 生产 owner/task、字段注册及字段写入权，并从 active required columns 推导 required fields；Primary 公共 RPC 已移除调用方自报的 `required_fields`，DataNode 内部 `CommitInput` 仅接受 `storage-primary`；Merge 调用方已同步移除该参数。周期 deadline 已进入 BeginDatasetPeriod 契约，Pebble deadline index、到期 missing 收敛及 tRPC timer 已加入。候选工作树其后又增加 Collector 局部输入提交改造：`TimerRequestFromEnv` 生成实时目标 `target_data_time`，请求校验要求 realtime Kline item 带目标周期；`KlinePipeline` 仅对 `data_time` 精确匹配目标周期的行调用 `CommitInput`，其他返回 bars 仍走 bulk Upsert；`storageWriter.CommitInput` 已转发 Storage Primary 认证请求。`TestRealtimeKlinePipelineCommitsOnlyTheTargetBar` 和 `TestRequestValidateRequiresTargetDataTimeForRealtimeKlines` 定向测试通过。Collector 全量市场周期尚未接入：Reconciler 仍未在分片前调用全量 `PutSubjectSnapshot` / `BeginDatasetPeriod`，旧 realtime test fixtures 也未全部补齐新必填目标时间。截至 2026-09-16，本轮复验 `modules/collector/internal/marketfetch` 的 `env CGO_ENABLED=1 go test ./internal/marketfetch -count=1` 仍有 7 个测试失败：`TestHandlerWiresMetricsIntoCommonStockKlinePipeline`、`TestKlinePipelineSharesInvocationBreakerAcrossThirtySubjectsAndKeepsFallbackWithinDeadline`、`TestKlinePipelineRejectsRealtimeBarsInsideSettleWindow`、`TestKlinePipelineDoesNotFallbackAcrossBoundSources`、`TestKlinePipelinePersistsBoundProviderAndSourceIdentity`、`TestKlinePipelinePassesDNSRoutesToProvider/spot`、`TestKlinePipelinePassesDNSRoutesToProvider/swap`，失败原因均为 fixture 未设置 `target_data_time`。后续首项应按测试真实语义补齐目标时间，或将历史/补洞场景改成对应 batch kind；不得放宽 realtime 校验。
+候选工作树现有实现已超出前一版盘点：快照内容复用、请求幂等冲突、freshness、周期冻结和查询；`ReportPeriod`、成功状态、`DatasetPeriodCompleted` outbox；Primary 根据 request-scoped Metadata snapshot 验证 Dataset 生产 owner/task、字段注册及字段写入权，并从 active required columns 推导 required fields；Primary 公共 RPC 已移除调用方自报的 `required_fields`，DataNode 内部 `CommitInput` 仅接受 `storage-primary`；Merge 调用方已同步移除该参数。周期 deadline 已进入 BeginDatasetPeriod 契约，Pebble deadline index、到期 missing 收敛及 tRPC timer 已加入。Collector 局部输入提交已有 `TimerRequestFromEnv` 生成实时目标 `target_data_time`、realtime 请求校验、仅对 `data_time` 精确匹配目标周期的行调用 `CommitInput`，其他返回 bars 仍走 bulk Upsert；`storageWriter` 已增加带认证信息的 DatasetPeriod RPC adapter，并保留 `CommitInput` 能力穿过 reserved deadline wrapper。`TestRealtimeKlinePipelineCommitsOnlyTheTargetBar`、`TestRequestValidateRequiresTargetDataTimeForRealtimeKlines` 和 adapter 认证测试均通过。本轮只为盘点执行了 `cd modules/collector && env CGO_ENABLED=1 go test ./internal/marketfetch ./internal/marketstorage ./internal/marketwiring -count=1`，三个 package 均通过。Collector 全量市场周期仍未接入：Reconciler 尚未在分片前调用全量 `PutSubjectSnapshot` / `BeginDatasetPeriod`；SCF 不能代替它冻结全市场名单。Factor 与 web 尚无该候选分支改动，Merge/Storage 当前未提交改动仍需独立审查。后续首项不再是修 realtime fixtures，而是为 Reconciler 的完整 universe 冻结补测试，再实现 Storage snapshot/period client 接入；不得放宽 realtime 校验。
 
-此前候选工作树的定向验证记录为：`packages/events: go test ./... -count=1`、`packages/storagepb: go test ./... -count=1`、`modules/storage: go test ./internal/bootstrap ./internal/service/datanode/... ./internal/service/primarystore/... ./cmd/server/... -count=1`、`modules/storage/internal/service/metadata/sqlite: go test ./internal/service/metadata/sqlite -run '^TestDatasetProducerContractAndColumnOwnershipRoundTrip$' -count=1`、`modules/merge: go test ./internal/merge ./cmd/server -count=1` 均通过。Storage 全模块测试当前观察到两处失败：`internal/bootstrap/metadata/TestDefaultViewInventory` 的 View 清单预期差异，以及 `internal/service/e2e/TestSeriesTagPrimaryEventActiveViewAndBackfillFlow` 的空 selector 返回行数差异；尚未在干净基线复现，不能定性为本次回归或既有失败。上述测试通过记录为先前运行结果，本轮未重跑，不能据此声称候选分支整体通过。
+此前候选工作树的定向验证记录为：`packages/events: go test ./... -count=1`、`packages/storagepb: go test ./... -count=1`、`modules/storage: go test ./internal/bootstrap ./internal/service/datanode/... ./internal/service/primarystore/... ./cmd/server/... -count=1`、`modules/storage/internal/service/metadata/sqlite: go test ./internal/service/metadata/sqlite -run '^TestDatasetProducerContractAndColumnOwnershipRoundTrip$' -count=1`、`modules/merge: go test ./internal/merge ./cmd/server -count=1` 均通过。Storage 全模块测试此前观察到两处失败：`internal/bootstrap/metadata/TestDefaultViewInventory` 的 View 清单预期差异，以及 `internal/service/e2e/TestSeriesTagPrimaryEventActiveViewAndBackfillFlow` 的空 selector 返回行数差异；尚未在干净基线复现，不能定性为本次回归或既有失败。Storage 全模块及 Merge/Storage 完整回归本轮未重跑。Collector 三个受影响 package 已在本轮重新验证通过。上述历史通过记录不等于候选分支整体通过。
 
 最近还修正了 Primary 周期路由的 principal 别名判断：`collector` 与 Metadata owner `moox-collector` 应按既有 `sameApplicationPrincipal` 规则视为同一应用主体。先将测试 fixture 改为不同别名并确认 RED，再接入别名比较后目标测试 GREEN。该修复后的 `primarystore` 全包与 race 尚未重跑，因此后续执行从重跑开始，不把单个目标测试通过扩写成全包通过。
 
-这些源码和定向测试只说明局部路径存在，不代表完整任务验收。Collector、Factor Engine 与 Merge 的 Dataset 快照/周期生产链路仍未接通；Storage 原子状态、deadline 竞争/恢复、View 连续应用位置及跨模块消费者语义仍需独立审查。全模块验证、前端验证、独立 codeCR、正式部署和真实 Binance E2E 均未完成。主工作树存在用户未提交文件 `artifacts/storage-datanode-release-sha256.txt`、`modules/cli/tools/`、`web/test-results/`，后续不得覆盖或暂存它们。本轮仅更新本计划，不修改实现代码、启动服务或部署；文中所有任务复选框表示尚未完成端到端验收，不因局部代码存在而勾选。
+这些源码和定向测试只说明局部路径存在，不代表完整任务验收。Collector、Factor Engine 与 Merge 的 Dataset 快照/周期生产链路仍未接通；Storage 原子状态、deadline 竞争/恢复、View 连续应用位置及跨模块消费者语义仍需独立审查。全模块验证、前端验证、独立 codeCR、正式部署和真实 Binance E2E 均未完成。主工作树存在用户未提交文件 `artifacts/storage-datanode-release-sha256.txt`、`modules/cli/tools/`、`web/test-results/`，后续不得覆盖或暂存它们。本轮只更新本计划并重跑 Collector 三个定向 package；没有改实现代码、启停服务或部署。文中所有任务复选框表示尚未完成端到端验收，不因局部代码存在而勾选。
 
 ## 1. 唯一执行口径
 
@@ -82,32 +82,34 @@
 
 | 已核对入口 | 现状 | 实施决策 |
 |---|---|---|
-| web/src/api/modules/system/static-menu.ts:54 | 数据采集与因子菜单已归并 | 保留结构，补功能，不重做搬菜单 |
+| web/src/api/modules/system/static-menu.ts:51-79 | 没有“数据资产”顶层菜单；数据源、数据对象、基础字段、采集任务、基础 Dataset 已在“数据采集”下，因子仍是独立菜单 | 保留现有入口，统一“采集对象/字段管理”用语；把缺失能力与数据边界补齐，不重做搬菜单 |
 | web/src/views/collector/datasets/index.vue:3 | 按 owner/role 过滤基础数据，复用浏览组件 | 保留，补快照和标准化导航 |
 | web/src/views/data/datasets/index.vue:191 | 列、对象、索引页及默认 View 重试已有 | 增加 subject 快照与完整性，不重建详情框架 |
 | web/src/api/storage/metadata.ts:234；views/data/views/index.vue:54 | 重建 RPC 已封装，操作列尚无重建按钮 | 接入确认、状态、日志和失败重试 |
-| web/src/views/factor/bindings/index.vue:36；tasks/index.vue:21 | 仍以 source_view_id 为核心 | 改 Dataset 输入/独立输出/任务范围 |
+| web/src/views/factor/bindings/index.vue:7-18,35-68,82-120,170-245；web/src/views/factor/tasks/index.vue:21-43,77-115 | 绑定和补算仍以 Source View 选择任务范围；结果与策略也保留 View 耦合 | 同步改为 input Dataset/output Factor Dataset；View 只作为独立 Dataset 查询索引，策略明确引用输入/结果 Dataset 或其 View |
 | config/setup/collector-rules.yaml:33 | 默认现货 1m 写 dataset_binance_spot_kline_1m | 验收 RAW 优先引用该真实配置，不新建重复采集 |
 | modules/cli/internal/command/setup_factors.go:56 | 默认因子仍绑定原始 View，无默认截面 | 与新任务配置一起更改 seed |
 | modules/merge/config/merge-app.yaml:13；modules/factor/config/engine-app.yaml:37 | 默认是 spot+swap mdataset 链 | 本次新增明确现货原始+因子验收配置，不混用两套默认链 |
 | scripts/build/build.sh:117；scripts/build/package-factor-engine.sh:49 | 独立 control/engine/merge 打包已有 | 复用并回归发布契约 |
 | modules/factor/internal/integration/dataset_pipeline_test.go:25、82 | 有路由模拟测试，recordingRunner/假 Storage | 保留为快速测试，另补真实组件和数值 E2E |
 
-View 的 index_build.snapshot_end 是索引构建进度，不是 Dataset subject_snapshot；前端不能把二者混为同一个“快照状态”。
+前端“数据资产”大部分已在“数据采集”内，不应再做一次机械迁移。尚需明确的边界：`web/src/views/data/datasets/components/dataset-column-panel.vue:65` 允许 FIELD/FACTOR/SYSTEM 列来源，基础采集 Dataset 必须限制为允许的基础字段；`web/src/views/data/import/index.vue:172,338-376` 是不在菜单中的直达 CSV 导入页，目前不按 owner/role 限定 Dataset 并直接 `UpsertFields`，必须纳入采集工作台或明确限制为基础 Dataset/字段并衔接完整行提交契约；Dataset owner/role 主要在前端基于 attributes 过滤，列表 API 缺少服务端筛选，不能把 UI 过滤当作写入授权；`module-attribution.ts:78` 对未知归属默认显示基础字段，应改为显式 unknown/不可编辑；`metadata.ts` 与 browse helper 还接受 `primary_dataset_id` 旧别名，目标统一为单一 `dataset_id` 后删除别名。已有 `data-collection-navigation.spec.ts`、`data-management.test.ts`、`factor-dataset-workflow.spec.ts` 应扩展“基础页不编辑因子输出”“CSV 不写因子 Dataset”与 API payload 契约断言。View 的 `index_build.snapshot_end` 是索引构建进度，不是 Dataset subject_snapshot；前端不能把二者混为同一个“快照状态”。
 
 ### 2.3 因子引擎的复用与旧语义
 
 | 入口 | 当前状态 | 计划处理 |
 |---|---|---|
-| modules/factor/internal/bootstrap/engine_runtime.go:29 | 独立 engine 已启动行变更和 ViewDataReady 消费 | 复用进程/资源边界，只替换目标消费协议 |
-| modules/factor/internal/registry/metadata_sync.go:111；internal/rpc/service.go:829；internal/store/binding.go:183 | 绑定仍以 source_view_id 为入口并把输入/结果身份混用；result_dataset_id 虽已存在，尚未形成独立输入/输出契约 | T05 显式保存 input_dataset_id/output_dataset_id；View 只作为可选查询索引，不再替代 Dataset 身份 |
+| modules/factor/cmd/server/main.go:29-47；internal/bootstrap/control.go:61-140；cmd/engine/main.go:24-42；internal/bootstrap/engine_runtime.go:29-63,65-164 | 控制面已不跑 Python；Engine 有独立入口并持有 Storage/Python，但仍同时启动 DatasetRows 和 ViewDataReady consumer，缓存 enabled 仍被启动校验拒绝 | 复用双进程，不重做拆分；切开目录/任务受理和内网计算职责，替换错误 consumer/配置边界 |
+| modules/factor/internal/registry/metadata_sync.go:111-184；internal/rpc/service.go:399-445,829；internal/store/binding.go:183；schema/factor.sql:37-77；proto/factor.proto:9-39,106-137 | 持久绑定是 `SourceViewID`/`ResultDatasetID`/`ResultViewID`；domain 的 Dataset/type 部分是 transient；metadata sync 仍把因子结果写回源 View 所属 Dataset | T05 显式保存 input/output Dataset 和任务快照；Factor 输出是独立 Factor-owned Dataset，不与 RAW 共写；View 仅为该 Dataset 的可选查询索引 |
 | modules/factor/internal/trigger/dataset_rows.go:87 | 已过滤 input_commit，factor_patch 不自触发 | 复用过滤和幂等，接入 RAW 完整提交 |
-| modules/factor/internal/storageio/dataset_window.go:25 | 已有 Primary 精确键窗口读取 | 复用，补完整度/预算和输出 Dataset 场景 |
-| modules/factor/internal/trigger/view_ready_runner.go:503、537 | 仍依赖 MergePeriodCompleted 类型的 ViewDataReady | T09 改 Dataset 完成及 Primary 面板，不另建平行截面引擎 |
+| modules/factor/internal/storageio/writeback.go:95-118,152-247,293-333,363-395 | 主结果写回仍使用 PatchFactor/PrimaryPatchFactor，未通过 Storage 所有的完整输出行提交 | T06 改为输出 Dataset 的受控完整 `CommitInput`，required fields 由 Storage metadata 契约推导 |
+| modules/factor/internal/storageio/dataset_window.go:25；internal/taskrunner/read_pipeline.go:407-430；internal/storageio/client.go:155-187 | 有 Primary 窗口读取，但 TaskRunner 在 Dataset 与 View 查询之间按旧 input contract 分流 | 复用 Primary window reader；TS 读单 subject history，XS 直接批读 PANEL/mdataset Primary，不经过 View |
+| modules/factor/internal/trigger/view_ready_runner.go:206-230,248-315,317-420,503,537 | 截面任务仍由 ViewDataReady 选 binding 并读取 View/period marker | T09 仅用 Storage `DatasetPeriodCompleted` 驱动目标 PANEL；ViewDataReady 只通知索引可读 |
 | modules/factor/schema/factor.sql:181 | 本地 barrier/pairs 保存周期完成 | 保留执行明细，将 Dataset 完整性权威移到 KV |
-| modules/factor/internal/bootstrap/engine_resources.go:86；modules/factor/internal/inputcache/ | Go-owned DuckDB read-through、代际切换及容量维护已有 | T07 先验证真实查询入口确实命中，再复用现有实现，不另造缓存模块 |
-| modules/factor/internal/bootstrap/engine_runtime.go:47；modules/factor/config/engine-trpc.yaml:21 | `cache.enabled=true` 仍被启动校验拒绝，容量 Timer 配置仍关闭 | T07 修通注入和 37m13s Timer 后再启用；仅改默认 YAML 不算完成 |
-| modules/factor/pyworker/worker.py:133；factors/catalog.json:1 | 三参数 ABI 已实现，内置 12 个因子皆时序 | 保留 ABI，新增明确截面 Rank 定义及测试 |
+| modules/factor/internal/bootstrap/engine_resources.go:86；internal/inputcache/{manager.go,config.go,capacity.go,rebuild.go,generation.go}；internal/storageio/dataset_cache.go:40-53,121-183 | 已有按 Space+Dataset 隔离、schema 变更新代、DuckDB 读穿、容量计量、按更新时间保留 N 行与原子代际切换设施，但生产读取没有 `RegisterSchema` 调用，当前没证明查询会命中缓存 | T07 把受管理 Dataset schema/generation 接进生产 reader，先证明冷缓存回源及随后命中，再解除 runtime 拒绝 |
+| modules/factor/internal/bootstrap/engine_runtime.go:47-53；modules/factor/config/engine-app.yaml:33-36；engine-trpc.yaml:21-27；internal/inputcache/config.go:11-30,54-82 | `cache.enabled=true` 仍被启动校验拒绝、Timer 配置关闭；默认参数已有 37m13s、keep 100k、容量 20GiB/5GiB headroom，首次检查延迟一个 interval | T07 保留确定的 37m13s 周期，确认 prime 秒级错峰和首次运行行为后接入 Timer；只改 YAML 不算完成 |
+| modules/factor/internal/domain/factor.go:11-33；pyworker/worker.py:133-215；factors/catalog.json:1 | 定义已有 factor type/inputs/outputs/params/lookback；Python ABI 已是 `compute(df, params, context)`，但截面缺新定义/完整测试 | 保留 ABI，factor_type 留在定义/registry，由引擎选择单 subject 或多 subject 面板 |
+| modules/factor/internal/rpc/recalc.go:19-117；internal/bootstrap/recalc.go:13-42,44-120；internal/store/subject_runs.go:43-196 | Control SQLite 已持久受理补算，Engine claim/report 并有 subject run ledger；补算请求仍按 Source View 过滤 | 复用现有账本与 claim/report；改为 Dataset 输入输出和独立 run identity，不得重开实时 Dataset period |
 | modules/merge/internal/merge/assembler.go:149；consumer.go:60 | 多源前缀映射和 CommitInput 已实现，但 consumer 当前忽略 `write_kind=input_commit` | 复用 assembler/ledger；按显式输入 Dataset 允许 Collector/Factor 完整提交事件，防止 PANEL 自触发 |
 
 仓库 setup 默认规则存在不等于实际环境已经启用；本轮没有读取线上生效配置。真实验收前必须查询规则状态和新数据，不能据示例配置宣称采集运行。
@@ -126,7 +128,7 @@ View 的 index_build.snapshot_end 是索引构建进度，不是 Dataset subject
 - 币安实时 Timer 的完整 Kline universe 在 `modules/collector/internal/marketfetch/reconciler.go:153` 的 `Reconciler.Reconcile` 中通过 `groups()` 构造；`groups()` 从启用的采集规则读取源 symbol Dataset 的 active subject，再按目标 Kline Dataset 与 frequency 归并、去重，见 `reconciler.go:872-941,967-1006`。周期快照应写到规则的目标 Kline Dataset，而不是 symbol/source Dataset。
 - 必须在 Reconciler 得到完整目标 Dataset/frequency subject 集之后、`splitGroupsForEnvironment` 和 `BuildAssignments` 产生分片之前，提交全量 `PutSubjectSnapshot` 并 `BeginDatasetPeriod`。这保证每个周期只冻结一次全市场范围；snapshot 与 Begin 重试必须幂等，Storage 暂不可用时不得继续发布一个未冻结的实时分配。
 - 不要把这两个调用放进单个 Timer SCF。Timer 环境变量 `MOOX_MARKET_FETCH_SUBJECTS` 只包含分给该实例的 shard；在 SCF 内首次 Begin 会把局部 shard 错误冻结成全市场宇宙。Collector 当前 Scheduler 配置为 `InvokeNonRealtimeOnly: true`（`bootstrap/bootstrap.go:395-406`），且 Reconciler 由协调 timer 周期调用（`bootstrap/bootstrap.go:508-519`）；实时接入优先落在 Reconciler，而不是误把 invoke Scheduler 当成 Binance 全市场实时入口。
-- `KlinePipeline.Execute` 可为一个 subject 拉回多根 bar，候选工作树已有“仅目标 `data_time` 行调用 `CommitInput`、其他 bars bulk Upsert”的局部实现（`kline_pipeline.go`、`contracts.go`）；成功仍依赖 Storage 已 Begin 的目标周期、完整 required fields 和 authenticated principal。当前全量快照/周期 Begin 尚未接入，旧 realtime fixture 仍缺目标时间并导致 `marketfetch` 全包失败。继续实施时，先按上文修复 fixtures 并重跑；之后再打通 Reconciler 全量名单、SCF 分片与 Storage freeze，并验证目标行缺失、仅返回邻近历史 bar、认证失败和缺字段都不会记成功。不得将 lookback/gap-repair bar 错记为当前周期成功。
+- `KlinePipeline.Execute` 可为一个 subject 拉回多根 bar，候选工作树已有“仅目标 `data_time` 行调用 `CommitInput`、其他 bars bulk Upsert”的局部实现（`kline_pipeline.go`、`contracts.go`）；成功仍依赖 Storage 已 Begin 的目标周期、完整 required fields 和 authenticated principal。此前缺少 `target_data_time` 的 realtime fixture 已修正，本轮 marketfetch/marketstorage/marketwiring 定向套件通过。全量快照/周期 Begin 尚未接入，下一步应打通 Reconciler 全量名单、SCF 分片与 Storage freeze，并验证目标行缺失、仅返回邻近历史 bar、认证失败和缺字段都不会记成功。不得将 lookback/gap-repair bar 错记为当前周期成功。
 - 采集重试中的临时失败不是周期终态。只在现有 completion flow 判定重试耗尽/永久失败后调用 `ReportPeriod(failed)`；没有成功提交且没有终态失败报告的 subject 由 Storage deadline finalizer 归为 `missing`。不可在每次 transient fetch failure 时提前报告 failed。
 - Collector 旧 SQLite `PeriodReadinessService`、`PeriodReporter` 和 `CollectorPeriodCompleted` 是另一套完整性账本/通知。只有确认 View、Merge、Factor/策略消费者都已切换到 Storage 的 `DatasetPeriodCompleted` 后，才能停掉旧账本的完整性裁决和旧完成事件；采集 TaskInstance、`MarketFetchBatchCompleted`、重试及运行诊断继续保留，它们不属于 Dataset 完整性权威。
 - 新测试落点至少包含：`modules/collector/internal/marketfetch/reconciler_test.go`（完整集合在分片前冻结、重复 Reconcile 幂等、空/失效 symbol catalog 不生成空快照）、`kline_pipeline_test.go`（精确目标行、响应只有邻近历史行、批量历史仍保留）、`completion_test.go`（只有终态失败上报）及 `marketwiring/handler_integration_test.go`（实际 Binance spot 组合路径）。
@@ -227,11 +229,14 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 依赖 T01/T02。修改 modules/factor/internal/domain/、store/、proto/、catalogsync/、registry/metadata_sync.go、schema/factor.sql。
 
 - [ ] 在现有 factor binding/schema/proto 中显式分离 input_dataset_id、output_dataset_id、因子绑定、固定 subject 过滤、频率和配置快照；具体入口包括 modules/factor/internal/rpc/service.go、internal/store/binding.go、internal/registry/metadata_sync.go、schema/factor.sql、proto/factor.proto。
+- [ ] 将 Factor Dataset 建模为 Storage 的普通 Dataset：由一个 Factor production task 独占写入，字段来自该任务包含的 factor definitions，成员来自任务固定的输入快照/显式过滤；一个输出 Dataset 可承载多个因子列。Dataset 关联与计算任务关联分开存储，不能再用 Source View 表达输入数据源。
+- [ ] 多基础 Dataset 的组合归属 MDataset 定义而非 Factor Dataset：TS 第一版使用一个 RAW 输入 Dataset 和一个独立 TS 输出 Dataset；XS 使用一个已构造好的 PANEL/MDataset 输入 Dataset 与一个独立 CS 输出 Dataset。多个基础来源的对齐、交集和列前缀由 MDataset producer 完成，不在 Factor Python 中隐式 Join。
 - [ ] 输入输出不同，依赖图无环；第一版一个输出 Dataset 一个生产任务，任务内多个因子。
 - [ ] 启用后输入语义不可原地改，改变来源/行键/映射创建新 Dataset；配置更新不能让旧任务覆盖新结果。
 - [ ] 持久化 task generation/config snapshot，使输入 Dataset、字段映射、因子参数或输出列变化后旧执行无法写入新输出；实时周期终态不可被重新打开。
 - [ ] 在输出数据到来前建立输出周期名单：TS 从输入 Dataset 冻结快照应用任务过滤，Merge 从各源快照标准化后取交集，XS 从 PANEL 快照派生；先 PutSubjectSnapshot + BeginDatasetPeriod，再接受该周期结果行。成功行不能决定预期名单。
 - [ ] 测试多任务一引擎、创建失败恢复、孤立资源重试、绑定启停及越权写入。
+- [ ] Control/Engine RPC、catalog payload、Web DTO、Strategy 绑定和 Recalc 请求一并去除 SourceViewID 作为计算身份的用法；View ID 仅保留在查询/浏览配置。为 RAW→TS、PANEL→CS 两条关系加序列化/回读测试，验证旧输入快照和旧 generation 的运行不能写新 Dataset。
 
 ### T05b. 控制面与计算引擎部署职责
 
@@ -241,6 +246,8 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 - [ ] 控制面测试证明它无需 Python worker、不订阅实时计算 durable，仅维护定义/绑定/任务受理、目录发布和状态查询。
 - [ ] 引擎测试证明其不注册 FactorMgr，只按已授权任务同步目录并订阅输入 Dataset；引擎→EventBus/Storage/控制面的连接采用内网出站，正式配置不得要求外网 Gateway 回连内网。
 - [ ] 验证 durable consumer 的 stream/filter/durable 名称和首次启动策略；重启从持久 ack 位置恢复，不使用 DeliverNew 重放/跳过历史。
+- [ ] 明确控制面/引擎对 catalog 的权威与同步方向：Control 持有定义/绑定并发布 revision；Engine 启动先同步目录再启消费，revision 落后或配置缺失时不得以旧任务输出；队列事件只携带任务变更/调度信号，不复制第二份权威目录数据库。
+- [ ] Engine 对 EventBus、Storage、Control 的网络连接由内网发起；Control Gateway 只连接外网本机 control RPC，不要求从外网入站访问 Engine。验证非必要监听端口关闭、凭据按服务角色最小化。
 - [ ] 分别构建/打包 control、engine；配置、Python runtime、缓存目录和密钥隔离。密钥只由部署环境注入，不进入仓库或发布包。
 - [ ] 该任务是对既有进程拆分的边界补齐，不代表外网控制面、内网引擎已部署或在线。
 
@@ -253,17 +260,21 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 - [ ] lookback 读 Primary，微批按 Dataset/频率/窗口组合，限制对象数、行数、字段数和并发。
 - [ ] Python 保留 compute(df, params, context)，factor_type 在定义中；保留现有 Bias 数学口径。
 - [ ] 把完整因子结果行作为 output Dataset 的受控 CommitInput 提交，由 Storage 从任务契约推导必需字段并原子记成功；不能沿用旧同 Dataset PatchFactor 作为新输出主链。缺历史和算法失败通过 ReportPeriod 报终态，不能丢 subject。
+- [ ] 全量 binding/consumer 切到独立输出 Dataset 后，删除同 Dataset `PatchFactor` 计算写回和对应的 `factor_patch` 输入分支，避免留下第二种结果权威或兼容路径；仅保留确实仍由非因子管理用途调用的通用 Storage patch API。
 - [ ] 测试重复事件、早于周期完成的行、无未来数据、输出不回环、崩溃重试和完整字段要求。
+- [ ] 保留既有 subject run ledger 作为执行明细/重试协助，不让它取代 Storage Dataset period 权威；补算用独立 run identity，不能重开实时周期或覆写不同 task generation 的最新输出。
 
 ### T07. 复用缓存并修正身份
 
 依赖 T06。修改 modules/factor/internal/inputcache/、storageio/、bootstrap/cache.go。
 
 - [ ] 复用既有代际/文件锁/重建实现，验证实际读数入口已接缓存，而非仅有单测工具。
-- [ ] Dataset ID/schema 隔离，全量基础投影命中；不使用 View revision。
+- [ ] 从 Storage metadata 获取输入 Dataset 的字段类型/必需投影/schema generation 并在生产 reader 调用 `RegisterSchema`；同一 Dataset 的 schema generation 变更即废弃旧缓存、创建结构匹配的新空 DuckDB，不在线 ALTER。因子新增只依赖已有字段时不改表结构。
+- [ ] Dataset ID/schema 隔离，全量基础投影命中；不使用 View revision 或 Factor binding 数量决定缓存列集合。
 - [ ] 冷缓存不预填，schema 变更新空库，完整性不足回 Primary，源确认缺失不无限循环。
 - [ ] 真实 read-through 与故障降级测试通过后移除 engine_runtime.go 的 cache enabled 拒绝条件；默认开启与否不代替能力验收。
 - [ ] Timer interval 固定为 37m13s（2233 秒）且启动后延迟首次检查；超限时用新 DuckDB 文件保留 `cache_updated_at DESC, stable_business_key` 最近 N 行，原子切换并等旧读者释放后删除旧代际。预算统计活动库、退役库、临时文件和 WAL；空间不足或新库仍超限时停止缓存写入并回 Primary。
+- [ ] 配置 `rebuild_keep_rows=N`；重建 N 行仅保留最近缓存，不声明完整覆盖区间。覆盖不足、过期、缺窗口或容量退化均必须回源 Primary 补齐，不能返回静默截断窗口。
 - [ ] 测试大整数/JSON/null、读者排空、跨 Dataset 隔离、cache disabled、重建失败和目录残留。
 
 ### T08. 聚合原始与时序结果
@@ -271,8 +282,11 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 依赖 T04/T05/T06。复用 modules/merge 独立 Go 模块、cmd/server 和 internal/merge/{assembler,consumer,periods,subjects,reporter}.go，替换名单来源；禁止在 modules/factor 下新建 cmd/merge。
 
 - [ ] 聚合任务输入 RAW + TS，GetPeriodSubjects 标准化后求交集；按 1m 周期调度器在行事件到来前 BeginDatasetPeriod 冻结 PANEL 宇宙，不再等 CollectorPeriodCompleted。consumer 当前忽略 `write_kind=input_commit`，需按已配置输入 Dataset 放行 RAW/TS 完整提交，同时拒绝无关 Dataset 并防止读取 PANEL 自身输出形成回环。
+- [ ] MDataset 定义必须声明多个输入 Dataset、统一 frequency/business key、字段映射和 universe 来源；系统 merge 开启时按标准 subject_id 自动匹配，多个来源字段名用原 Dataset ID 前缀（例如 `raw_dataset_id__close`、`factor_dataset_id__bias_20`）避免碰撞；未配置系统 merge 时转给用户自定义 processor，不能假装已自动聚合。
+- [ ] 配置校验拒绝不同 frequency、period boundary 或 business key 的输入；映射后同一标准字段多源冲突必须显式配置优先级/拒绝，不采用最后写入覆盖。
 - [ ] RAW 全市场与 TS 三标的相交只得三标的；其中 TS 某 subject 失败不从交集消失。
 - [ ] 一 subject 同周期所有源完整后一次 CommitInput(PANEL)；持久化部分到达状态。交集以快照为准而非成功行：双上市对象即使 TS 或某源失败仍留在 expected 中并最终 missing；只在单边上市的对象不在交集中。
+- [ ] PANEL 字段与对象快照在建任务/启用时可预览：字段由输入 Dataset 声明列及前缀映射确定；对象宇宙为每个输入 period snapshot 的 canonical subject 交集，绝不从已到达成功行反推或删减。
 - [ ] system/custom 仍可选，外部使用“聚合数据集”，不暴露 MergePeriodCompleted。
 - [ ] 测试缺快照与空快照差异、同源冲突、先 TS 后 RAW、重复、重启和截止缺失。
 
@@ -285,6 +299,7 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 - [ ] Primary 按固定周期和冻结 snapshot 批量读完整面板，验证对象范围、字段与 period boundary；优先复用现有 ReadPeriodChunks 类批量接口，不逐 subject 打回源 RPC；不等源 View。
 - [ ] 因子 Python ABI 仍为 `compute(df, params, context)`；`factor_type=cross_section` 由定义表/registry 决定传入多 subject 面板。Rank 使用降序 dense rank，相同值同名次；输出唯一 subject 键到 CS，不在 Python 函数名或参数中重复声明类型。
 - [ ] CS 预期名单固定继承目标面板规则；全部输出提交后由 Storage 发布完成。
+- [ ] 所有截面任务切到 DatasetPeriodCompleted 后删除 `factor_view_ready_v1` 对计算调度的消费及其旧 ViewDataReady→binding 路径；ViewDataReady 仍由 View 发布给结果查询/策略读者，不再是计算引擎触发器。
 - [ ] 测试无关 Dataset 事件、重复完成、并列/非有限值、输出越界、结果不自触发。
 
 ### T10. View 手动 A/B 与通用可读
@@ -298,16 +313,20 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 - [ ] 不能把“已见最大 sequence”直接当“连续已应用”：先查明每个 `(space, view, index, node, store)` sequence 的生成与投递是否保证严格连续有序；无此保证时改为连续水位或持久化洞集合，加入先收到 N+1、后收到 N 的恢复测试。
 - [ ] 测试 View 重建不影响时序/截面，旧 schema 不声称新字段可读，多 View 独立范围。
 
-### T11. 前端数据资产归并
+### T11. 数据采集资产与因子工作台整理
 
 依赖 T04/T05/T10。修改既有 static-menu、Dataset/subject/因子页面与 API，不另建平行管理站点。
 
-- [ ] 数据采集下整合数据源、采集标的及标准化、基础字段、采集任务、基础 Dataset。
+- [ ] “数据资产”内容不重新机械搬迁：数据源、数据对象、基础字段、采集任务、基础 Dataset 现已在“数据采集”菜单。将对象/字段文案统一为“采集对象/字段管理”，确认空间切换和菜单可见性；保留独立“因子”区用于派生任务与结果。`/data/import` 虽不在菜单但能直达，必须明确归属与权限，不留下采集体系外的基础数据写入入口。
 - [ ] 因子模块管理任务与派生 Dataset，Dataset 详情提供上下游链接，不强制新增图形 DAG。
 - [ ] 详情呈现数据、字段、标的快照、周期完整性、失败 subject、View 索引；“沿用快照”“无快照”“合法空”可区分。
 - [ ] 配置输入输出/参数/映射，创建默认 View 复用幂等资源流程；保存失败给出明确原因。
 - [ ] 重建按钮先展示差异和操作范围，再触发已有 A/B；状态、失败、重试和轮询完善。
+- [ ] 基础 Dataset 的列编辑禁止增加 Factor/System 输出列；归属未知的字段显示 unknown 并只读，不默认伪装为基础字段。CSV import 入口按 RAW/import role 与 FIELD 来源过滤候选 Dataset/字段，并拒绝通过 Gateway API 直接写 Factor-owned Dataset；如它属于基础导入路径，写入必须接 Storage 完整提交/period contract，否则禁用此入口，不保留绕过路径。
+- [ ] 增加服务端 owner_module/dataset_role 查询过滤或后端写入鉴权；现有前端 attributes 过滤只用于显示，不能视为权限边界。补 API payload 契约测试覆盖错误 Space、错误 owner、非基础字段和跨 Dataset 写入。
+- [ ] 因子绑定、补算和策略引用一起从 Source View 驱动改为 input/output Dataset 驱动；View 只作为属于单个 Dataset 的浏览索引，默认 View 创建继续幂等。
 - [ ] 新增页面/路由 Vitest 与 Playwright：直达刷新、空/加载/错误态、桌面与移动、权限和跨 space。
+- [ ] 扩展已有 `data-collection-navigation.spec.ts`、`data-management.test.ts`、`factor-dataset-workflow.spec.ts`：断言没有“数据资产”顶层入口、数据采集子页稳定可达、基础字段页不暴露因子列、CSV 不可写 Factor Dataset、Factor binding 显示 RAW→TS/PANEL→CS 明确输入输出和各自 View。
 - [ ] 不机械删除原资产页面全部代码，复用已实现的管理组件和功能。
 
 ### T12. 预热与启用边界
@@ -344,7 +363,7 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 2. T02 完成 Pebble 快照 API 与 Primary/DataNode 鉴权路由；随后 T03 将完整行、subject 成功、事件 outbox 和 Dataset 周期状态打通。
 3. T04 接入 Collector 快照同步及完整 K 线提交；T05/T05b 完成输入输出 Dataset 模型和进程授权边界。
 4. T06 时序计算输出独立 Dataset；T07 启用并验证本地 DuckDB；T08 把 RAW 与 TS 聚合为 PANEL；T09 由 PANEL 完成事件触发 XS 并写独立 CS。
-5. T10 改造 View 手动 A/B 与可读 fence；T11 优化数据资产 UI；T12 准备验收配置和历史窗口；T13 本地/正式环境验证、独立 codeCR 与交付。
+5. T10 改造 View 手动 A/B 与可读 fence；T11 补齐数据采集资产边界并迁移 Factor 工作台契约；T12 准备验收配置和历史窗口；T13 本地/正式环境验证、独立 codeCR 与交付。
 
 共享代码所有权：Storage proto 与 `packages/storagepb` 由单一实现者先完成；Pebble 快照与周期状态由同一 Storage 实现者连续修改；Collector、Factor、Merge 只能在协议固定后并行，且不能同时修改共享生成代码。Merge 必须继续位于 `modules/merge` 独立模块，不要新建 `modules/factor/internal/merge`。View/UI 可在协议冻结后并行，但手动重建 RPC 的语义由 Storage owner 定义。
 
@@ -506,4 +525,4 @@ Collector → RAW spot Dataset ──DatasetRowsUpserted──> 内网 Factor En
 
 编码阶段创建 `docs/superpowers/plans/2026-09-16-binance-spot-factor-progress.md`，逐任务记录复用路径、改动文件、红/绿测试命令、审查结论、提交 SHA、部署证据和剩余风险。完成定义不是“代码合并”或“文档复选框全勾”：Storage 通用周期能力、输入输出分离、真实 Collector→TS→PANEL→XS→View 链路、独立 codeCR、正式发布以及 3 个新分钟数值核对都需分别有证据。
 
-本轮只整理计划，没有编码、测试、启停服务、创建线上资源或部署。计划完成仅代表执行拆解完成，不代表任何目标功能已实现或正式环境已验收。
+本轮只整理计划并运行 Collector 三个定向 package 测试；没有编码、启停服务、创建线上资源或部署。计划完成仅代表执行拆解完成，不代表任何目标功能已实现或正式环境已验收。
