@@ -8,9 +8,21 @@
 
 **Tech Stack:** Go 多模块、tRPC、Protobuf、Pebble KV、JetStream、DuckDB、Python、Vue/TypeScript、Vitest/Playwright。
 
-日期：2026-09-16。主工作树源码基线为 `feature/mooyang` 的 `8afaaa60d724862cc652bb9491fc4c3257af838a`，后续 `2c7147f8`、`8f410f3c` 是计划文档提交。当前唯一实施候选工作树为 `.worktrees/final-binance-spot-factor`，分支 `feature/final-binance-spot-factor@d5498de8`，其父提交 `aadbc2db` 已实现 Pebble 快照基础能力。截至本轮只读核对，该候选工作树已有未提交实现：Pebble 快照复用、request 幂等、freshness、周期冻结；`ReportPeriod`、周期成功状态与 `DatasetPeriodCompleted` outbox；完整输入提交时原子更新成功状态；DataNode 周期 RPC、Primary owner 鉴权/路由及 server 注册；对应 Proto 和生成代码。新增/更新测试覆盖空快照、报告幂等、成功提交与事件、Storage Primary 调用链。以下定向验证当前通过：`packages/events: go test ./... -count=1`、`packages/storagepb: go test ./... -count=1`、`modules/storage: go test ./internal/service/datanode/... ./internal/service/primarystore/... ./cmd/server/... -count=1`。这只证明上述包级路径通过，不代表 Storage 全模块、Collector、Factor、Merge、Web、真实 NATS 或端到端通过；全模块验证、独立 codeCR 和部署均未完成。
+## Global Constraints
 
-候选工作树未提交代码必须保留并在继续时增量审查；不得从 `feature/mooyang` 再复制一份实现。仍未接通 Collector/Merge/Factor 的业务调用方；Storage 尚未从受管理 schema/任务契约推导必需字段，周期 deadline timer/超时收敛也未完成。主工作树存在用户未提交文件 `artifacts/storage-datanode-release-sha256.txt`、`modules/cli/tools/`、`web/test-results/`，后续不得覆盖或暂存它们。本轮仅更新计划文档，没有修改实现代码、启动服务或部署；“已有”仅表示源码存在且上述定向测试通过，不表示已验收可上线。
+- 新系统无需历史兼容；协议、数据结构和代码可按本计划直接重构，不保留旧事件别名或兼容分支。
+- 业务对象统一使用 `subject` / `subject_id` / `subject_ids`；生产任务由 Storage 元数据和已认证 principal 授权。
+- Storage 磁盘 KV 是 Dataset 快照、周期状态和可靠发布记录的权威存储；不能用内存或另一份 SQLite 账本替代。
+- 每个 View 只索引一个 Dataset；Dataset 可有多个 View。View 不聚合数据、不触发因子计算；重建由用户手动发起 A/B。
+- 时序因子按输入 Dataset 完整行变更触发并写独立结果 Dataset；截面因子等待 PANEL Dataset 周期完成再批量计算。
+- 因子输入缓存按 Dataset 身份和 schema 隔离；DuckDB 容量受限，37m13s 定时检查并以新文件保留配置的最近 N 行，不在线 ALTER 或主动回填。
+- 本轮仅整理计划，不编码、不启停服务、不创建或删除线上资源、不部署。
+
+日期：2026-09-16。主工作树源码基线为 `feature/mooyang` 的 `8afaaa60d724862cc652bb9491fc4c3257af838a`，后续 `2c7147f8`、`8f410f3c`、`ff232883` 是计划文档提交。唯一实施候选工作树为 `.worktrees/final-binance-spot-factor`，分支 `feature/final-binance-spot-factor@d5498de8`；截至本轮，仍有未提交的 Storage、Proto、events 与 Merge 改动，必须在该处增量审查，不得从主工作树复制第二份实现。
+
+候选工作树现有实现已超出前一版盘点：快照内容复用、请求幂等冲突、freshness、周期冻结和查询；`ReportPeriod`、成功状态、`DatasetPeriodCompleted` outbox；Primary 根据 request-scoped Metadata snapshot 验证 Dataset 生产 owner/task、字段注册及字段写入权，并从 active required columns 推导 required fields；Primary 公共 RPC 已移除调用方自报的 `required_fields`，DataNode 内部 `CommitInput` 仅接受 `storage-primary`；Merge 调用方已同步移除该参数。周期 deadline 已进入 BeginDatasetPeriod 契约，Pebble deadline index、到期 missing 收敛及 tRPC timer 已加入。当前候选工作树定向验证记录为：`packages/events: go test ./... -count=1`、`packages/storagepb: go test ./... -count=1`、`modules/storage: go test ./internal/bootstrap ./internal/service/datanode/... ./internal/service/primarystore/... ./cmd/server/... -count=1`、`modules/storage/internal/service/metadata/sqlite: go test ./internal/service/metadata/sqlite -run '^TestDatasetProducerContractAndColumnOwnershipRoundTrip$' -count=1`、`modules/merge: go test ./internal/merge ./cmd/server -count=1` 均通过。Storage 全模块测试当前观察到两处失败：`internal/bootstrap/metadata/TestDefaultViewInventory` 的 View 清单预期差异，以及 `internal/service/e2e/TestSeriesTagPrimaryEventActiveViewAndBackfillFlow` 的空 selector 返回行数差异；尚未在干净基线复现，不能定性为本次回归或既有失败。
+
+这些源码和定向测试只说明局部路径存在，不代表完整任务验收。Collector、Factor Engine 与 Merge 的 Dataset 快照/周期生产链路仍未接通；Storage 原子状态、deadline 竞争/恢复、View 连续应用位置及跨模块消费者语义仍需独立审查。全模块验证、前端验证、独立 codeCR、正式部署和真实 Binance E2E 均未完成。主工作树存在用户未提交文件 `artifacts/storage-datanode-release-sha256.txt`、`modules/cli/tools/`、`web/test-results/`，后续不得覆盖或暂存它们。本轮仅更新本计划，不修改实现代码、启动服务或部署；文中所有任务复选框表示尚未完成端到端验收，不因局部代码存在而勾选。
 
 ## 1. 唯一执行口径
 
@@ -49,7 +61,7 @@
 
 | 已核对入口 | 现状 | 实施决策 |
 |---|---|---|
-| modules/storage/internal/service/datanode/pebble/input_commit.go:63、70、98；modules/storage/internal/service/primarystore/input_commit.go:46 | CommitInput 有完整字段检查，数据、outbox、幂等收据同批写入；但必需字段由调用方 request 提供，尚不能作为可信成功判据 | 复用原 KV batch；Storage 改从已授权生产任务/schema 取 required fields，并同批写 subject success 与完成状态 |
+| modules/storage/internal/service/datanode/pebble/input_commit.go；modules/storage/internal/service/primarystore/input_commit.go | 候选工作树已有完整字段检查、KV 状态/outbox 路径；Primary 已改为从 request-scoped Metadata snapshot 验证生产 owner、字段注册/写入权并推导 required fields，公共 RPC 不再接受调用方 required_fields | 审查 Metadata snapshot 时效/分页、字段 alias、空值及并发配置变化；证明数据、成功状态、周期完成与 outbox 原子边界，并覆盖所有生产者调用方 |
 | modules/collector/internal/marketfetch/period_readiness.go:95、186、217 | TaskInstance 形成名单，Collector 消费写事件确认成功 | 用 Storage 快照和提交成功状态替代完整性权威；保留采集任务诊断 |
 | modules/collector/internal/store/period_readiness.go:26 | 每周期 SQLite 冻结名单 | 停止作为 Dataset 权威，不新建第二套相同账本 |
 | modules/collector/internal/marketfetch/period_reporter.go:217 | 部分快照引用为占位字符串 | 替换为真实可解析的 KV snapshot_id |
@@ -60,7 +72,7 @@
 | modules/storage/internal/service/view/data_ready.go:28、59、85；ready_fence.go:41、74、94、163 | 已有通用事件及持久 fence；当前 fence 记录每条流的最大 sequence 并以 `applied >= required` 判定，尚未证明连续前缀已应用 | 更换输入协议；先确认底层每条流严格有序且无洞，否则改为 contiguous watermark/洞集合；再验证新周期提交位置 |
 | modules/storage/internal/service/view/period_event_apply.go:130、177 | 仍接生产方专用完成 | 改为统一 Dataset 完成入口 |
 
-在 `feature/mooyang` 源码基线中，PutSubjectSnapshot、GetPeriodSubjects、DatasetPeriodCompleted 尚未形成目标实现。候选工作树已在 Pebble、DataNode 和 Primary 层实现快照/周期 RPC 基础链路及部分原子状态、完成事件路径，因此 T01/T02 不应从头重写：先审查现有未提交差异和生成代码，再通过失败测试补齐协议语义、权限边界、deadline、并发/重启行为。T03 仍未完成，尤其必需字段仍需改为由受管理 schema/生产任务契约推导，deadline timer、过期周期终态与完整失败收敛尚未打通。现有 RPC 也尚无 Collector、Merge、Factor 调用者；不能把 Storage 局部测试通过误认为 Dataset 成员/周期能力已端到端交付。
+在 `feature/mooyang` 源码基线中，PutSubjectSnapshot、GetPeriodSubjects、DatasetPeriodCompleted 尚未形成目标实现。候选工作树已在 Pebble、DataNode 和 Primary 层实现快照/周期 RPC、required-field 权威推导、周期 deadline finalizer 与部分原子状态/完成事件路径，因此 T01/T02/T03 不应从头重写：先审查现有未提交差异和生成代码，再以失败测试补齐协议语义、权限边界、deadline、并发/重启行为。候选工作树目前已加入 5 秒 tRPC timer 和 Pebble deadline index；仍需证明 deadline 与成功提交/ReportPeriod 的竞争不会重复终态、定时器重启可恢复、空周期和异常索引正确处理。现有 RPC 尚无 Collector、Factor 调用者，Merge 只改了 CommitInput 参数调用；不能把 Storage 局部测试通过误认为 Dataset 成员/周期能力已端到端交付。
 
 ### 2.2 前端、默认配置与部署现状
 
@@ -168,14 +180,14 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 
 ### T03. 原子成功状态与增量完成
 
-依赖 T02。修改 `modules/storage/internal/service/datanode/pebble/input_commit.go`、候选工作树已有的 `period_state.go`、现有 outbox writer 及对应测试；不要再新建一套与 `period_state.go` 重复的状态模块，只有确认单文件职责已过载后才拆分。候选工作树已部分把时序 `CommitInput` 与周期成员校验、成功状态和 `DatasetPeriodCompleted` outbox 纳入同一持久化路径，并实现缺失/失败 `ReportPeriod` 基础能力；这些未提交实现尚不等于本任务完成，尤其 required fields 权威来源、截止 timer、终态竞争与端到端生产者接入仍待实现和验证。
+依赖 T02。修改 `modules/storage/internal/service/datanode/pebble/input_commit.go`、候选工作树已有的 `period_state.go`、`period_deadline.go`、现有 outbox writer 及对应测试；不要再新建一套重复的周期状态模块，只有确认职责已过载后才拆分。候选工作树已实现/接入部分原子 `CommitInput`、生产者 owner/schema 字段权威校验、`ReportPeriod` missing/failed 基础能力、deadline 索引和超时 finalizer。新增 `TestFinalizeDueDatasetPeriodsMarksUnfinishedSubjectsMissing`、Storage Primary 身份校验及 Metadata 持久化测试已通过；这些未提交实现仍不等于本任务完成，终态并发/重启验证、完成事件位置与 View 连续应用 fence、全部生产者接入及全模块测试仍待完成。
 
 - [ ] 扩展现有同 KV batch：数据 + subject 成功状态 + 待发布记录；不订阅自身字段广播，不要求成功二次 RPC。
-- [ ] 从 CommitInput RPC 移除调用方声明的 required_fields，必需字段改由受 Storage 管理的 Dataset schema + producer task 字段所有权推导；不能由客户端提交缩减字段集伪造完整成功。RAW、TS、PANEL、CS 都走同一受控完整提交路径。
+- [ ] （候选分支已移除 Primary 公共 RPC 的 required_fields，并从 Metadata snapshot 验证 Dataset owner/task、列注册和 writer_app_id，推导 active required columns；）确认 RAW、TS、PANEL、CS 的正式 Metadata 都配置完整生产 owner/task、required 列和 writer 权限，并通过各自生产者做端到端拒绝/成功验证。
 - [ ] 按 subject 去重更新 succeeded/missing/failed；串行化或事务保护读旧状态到写新状态，原子 batch 本身不是并发计数锁。
 - [ ] ReportPeriod 仅报告 missing/failed；禁止覆盖已成功或重开终态周期。
 - [ ] terminal period 的迟到 CommitInput 只记诊断并拒绝状态改写；新计算/显式补算必须有独立运行身份，不重开实时 period。
-- [ ] 最后一项终态触发 CompletePeriod，周期状态与完成事件原子保存；timer 处理截止及重试，不每次全量扫数据。
+- [ ] 最后一项终态触发 CompletePeriod，周期状态与完成事件原子保存；候选分支已有按 deadline index 扫描到期项的 5 秒 timer 和超时 missing finalizer，仍需验证成功/失败/超时并发竞争、重启持久恢复、批量上限和 timer 错误可观测性，不每次全量扫描 Dataset。
 - [ ] 分开配置成员快照等待超时、输入数据截止和计算执行超时；无适用 snapshot 时只记录等待/告警，不把 period 伪造成空集合 complete。
 - [ ] Dataset 的 `data_node_id` 是周期状态权威归属；Primary 必须将成员、CommitInput 与 ReportPeriod 路由到同一 owner，错误 owner 拒绝。当前不设计跨 DataNode 成功汇总；只有 Dataset 改为跨节点分片时才扩展此协议。
 - [ ] 测试响应丢失、重复/并发写、数据缺列、owner 路由错误、状态已提交但发布失败；View 侧对每条相关有序流分别等待连续应用位置，不能比较不同流的单个最大序号。
