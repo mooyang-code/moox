@@ -22,6 +22,8 @@
 
 候选工作树现有实现已超出前一版盘点：快照内容复用、请求幂等冲突、freshness、周期冻结和查询；`ReportPeriod`、成功状态、`DatasetPeriodCompleted` outbox；Primary 根据 request-scoped Metadata snapshot 验证 Dataset 生产 owner/task、字段注册及字段写入权，并从 active required columns 推导 required fields；Primary 公共 RPC 已移除调用方自报的 `required_fields`，DataNode 内部 `CommitInput` 仅接受 `storage-primary`；Merge 调用方已同步移除该参数。周期 deadline 已进入 BeginDatasetPeriod 契约，Pebble deadline index、到期 missing 收敛及 tRPC timer 已加入。当前候选工作树定向验证记录为：`packages/events: go test ./... -count=1`、`packages/storagepb: go test ./... -count=1`、`modules/storage: go test ./internal/bootstrap ./internal/service/datanode/... ./internal/service/primarystore/... ./cmd/server/... -count=1`、`modules/storage/internal/service/metadata/sqlite: go test ./internal/service/metadata/sqlite -run '^TestDatasetProducerContractAndColumnOwnershipRoundTrip$' -count=1`、`modules/merge: go test ./internal/merge ./cmd/server -count=1` 均通过。Storage 全模块测试当前观察到两处失败：`internal/bootstrap/metadata/TestDefaultViewInventory` 的 View 清单预期差异，以及 `internal/service/e2e/TestSeriesTagPrimaryEventActiveViewAndBackfillFlow` 的空 selector 返回行数差异；尚未在干净基线复现，不能定性为本次回归或既有失败。
 
+最近还修正了 Primary 周期路由的 principal 别名判断：`collector` 与 Metadata owner `moox-collector` 应按既有 `sameApplicationPrincipal` 规则视为同一应用主体。先将测试 fixture 改为不同别名并确认 RED，再接入别名比较后目标测试 GREEN。该修复后的 `primarystore` 全包与 race 尚未重跑，因此后续执行从重跑开始，不把单个目标测试通过扩写成全包通过。
+
 这些源码和定向测试只说明局部路径存在，不代表完整任务验收。Collector、Factor Engine 与 Merge 的 Dataset 快照/周期生产链路仍未接通；Storage 原子状态、deadline 竞争/恢复、View 连续应用位置及跨模块消费者语义仍需独立审查。全模块验证、前端验证、独立 codeCR、正式部署和真实 Binance E2E 均未完成。主工作树存在用户未提交文件 `artifacts/storage-datanode-release-sha256.txt`、`modules/cli/tools/`、`web/test-results/`，后续不得覆盖或暂存它们。本轮仅更新本计划，不修改实现代码、启动服务或部署；文中所有任务复选框表示尚未完成端到端验收，不因局部代码存在而勾选。
 
 ## 1. 唯一执行口径
@@ -72,7 +74,7 @@
 | modules/storage/internal/service/view/data_ready.go:28、59、85；ready_fence.go:41、74、94、163 | 已有通用事件及持久 fence；当前 fence 记录每条流的最大 sequence 并以 `applied >= required` 判定，尚未证明连续前缀已应用 | 更换输入协议；先确认底层每条流严格有序且无洞，否则改为 contiguous watermark/洞集合；再验证新周期提交位置 |
 | modules/storage/internal/service/view/period_event_apply.go:130、177 | 仍接生产方专用完成 | 改为统一 Dataset 完成入口 |
 
-在 `feature/mooyang` 源码基线中，PutSubjectSnapshot、GetPeriodSubjects、DatasetPeriodCompleted 尚未形成目标实现。候选工作树已在 Pebble、DataNode 和 Primary 层实现快照/周期 RPC、required-field 权威推导、周期 deadline finalizer 与部分原子状态/完成事件路径，因此 T01/T02/T03 不应从头重写：先审查现有未提交差异和生成代码，再以失败测试补齐协议语义、权限边界、deadline、并发/重启行为。候选工作树目前已加入 5 秒 tRPC timer 和 Pebble deadline index；仍需证明 deadline 与成功提交/ReportPeriod 的竞争不会重复终态、定时器重启可恢复、空周期和异常索引正确处理。现有 RPC 尚无 Collector、Factor 调用者，Merge 只改了 CommitInput 参数调用；不能把 Storage 局部测试通过误认为 Dataset 成员/周期能力已端到端交付。
+在 `feature/mooyang` 源码基线中，PutSubjectSnapshot、GetPeriodSubjects、DatasetPeriodCompleted 尚未形成目标实现。候选工作树已在 Pebble、DataNode 和 Primary 层实现快照/周期 RPC、required-field 权威推导、周期 deadline finalizer 与部分原子状态/完成事件路径，因此 T01/T02/T03 不应从头重写：先审查现有未提交差异和生成代码，再以失败测试补齐协议语义、权限边界、deadline、并发/重启行为。候选工作树目前已加入 5 秒 tRPC timer 和 Pebble deadline index；仍需证明 deadline 与成功提交/ReportPeriod 的竞争不会重复终态、定时器重启可恢复、空周期和异常索引正确处理。现有 RPC 尚无 Collector、Factor 调用者，Merge 只改了 CommitInput 参数调用；不能把 Storage 局部测试通过误认为 Dataset subject 快照/周期能力已端到端交付。
 
 ### 2.2 前端、默认配置与部署现状
 
@@ -114,6 +116,18 @@ View 的 index_build.snapshot_end 是索引构建进度，不是 Dataset subject
 - modules/collector/internal/sources/binance/symbol_identity.go:9 的 ProviderSymbol 是交易所请求符号转换，不是通用跨 Dataset 标准化。不能直接拿去充当用户映射系统。
 - modules/factor/test/storage_e2e_test.go 与 scripts/test/e2e/test-factor-storage-e2e.sh 属于合成数据/旧消费者链路；脚本要求部署服务且有可选重启，不覆盖真实 Binance Collector、独立 Engine、Merge 或目标 XS 链路。不得在盘点阶段执行，也不能把它们当成本次 E2E 证明。
 - web/package.json 已有 test、check:menu、check:data-browse、build:prod；复用既有构建与测试体系。
+
+### 2.5 Collector 周期快照的真实接入点
+
+这部分是执行时容易接错的边界，按当前候选源码固定：
+
+- 币安实时 Timer 的完整 Kline universe 在 `modules/collector/internal/marketfetch/reconciler.go:153` 的 `Reconciler.Reconcile` 中通过 `groups()` 构造；`groups()` 从启用的采集规则读取源 symbol Dataset 的 active subject，再按目标 Kline Dataset 与 frequency 归并、去重，见 `reconciler.go:872-941,967-1006`。周期快照应写到规则的目标 Kline Dataset，而不是 symbol/source Dataset。
+- 必须在 Reconciler 得到完整目标 Dataset/frequency subject 集之后、`splitGroupsForEnvironment` 和 `BuildAssignments` 产生分片之前，提交全量 `PutSubjectSnapshot` 并 `BeginDatasetPeriod`。这保证每个周期只冻结一次全市场范围；snapshot 与 Begin 重试必须幂等，Storage 暂不可用时不得继续发布一个未冻结的实时分配。
+- 不要把这两个调用放进单个 Timer SCF。Timer 环境变量 `MOOX_MARKET_FETCH_SUBJECTS` 只包含分给该实例的 shard；在 SCF 内首次 Begin 会把局部 shard 错误冻结成全市场宇宙。Collector 当前 Scheduler 配置为 `InvokeNonRealtimeOnly: true`（`bootstrap/bootstrap.go:395-406`），且 Reconciler 由协调 timer 周期调用（`bootstrap/bootstrap.go:508-519`）；实时接入优先落在 Reconciler，而不是误把 invoke Scheduler 当成 Binance 全市场实时入口。
+- `KlinePipeline.Execute` 可为一个 subject 拉回多根 bar，最后统一调用 `UpsertFields[WithSource]`（`kline_pipeline.go:206-275`）；现有“返回覆盖区间内任意 bar 即 success”的判定不能直接作为该周期 CommitInput 的成功证明。实时提交必须从返回行中选出 `data_time` 精确等于已 Begin 的目标周期、且满足完整必需字段的一行，再调用 `CommitInput`；其他历史/补洞行继续走原批量 Upsert 路径，不得把 lookback 或 gap-repair bar 错记为当前周期成功。
+- 采集重试中的临时失败不是周期终态。只在现有 completion flow 判定重试耗尽/永久失败后调用 `ReportPeriod(failed)`；没有成功提交且没有终态失败报告的 subject 由 Storage deadline finalizer 归为 `missing`。不可在每次 transient fetch failure 时提前报告 failed。
+- Collector 旧 SQLite `PeriodReadinessService`、`PeriodReporter` 和 `CollectorPeriodCompleted` 是另一套完整性账本/通知。只有确认 View、Merge、Factor/策略消费者都已切换到 Storage 的 `DatasetPeriodCompleted` 后，才能停掉旧账本的完整性裁决和旧完成事件；采集 TaskInstance、`MarketFetchBatchCompleted`、重试及运行诊断继续保留，它们不属于 Dataset 完整性权威。
+- 新测试落点至少包含：`modules/collector/internal/marketfetch/reconciler_test.go`（完整集合在分片前冻结、重复 Reconcile 幂等、空/失效 symbol catalog 不生成空快照）、`kline_pipeline_test.go`（精确目标行、响应只有邻近历史行、批量历史仍保留）、`completion_test.go`（只有终态失败上报）及 `marketwiring/handler_integration_test.go`（实际 Binance spot 组合路径）。
 
 ## 3. 可复现的验收拓扑
 
@@ -188,18 +202,22 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 - [ ] ReportPeriod 仅报告 missing/failed；禁止覆盖已成功或重开终态周期。
 - [ ] terminal period 的迟到 CommitInput 只记诊断并拒绝状态改写；新计算/显式补算必须有独立运行身份，不重开实时 period。
 - [ ] 最后一项终态触发 CompletePeriod，周期状态与完成事件原子保存；候选分支已有按 deadline index 扫描到期项的 5 秒 timer 和超时 missing finalizer，仍需验证成功/失败/超时并发竞争、重启持久恢复、批量上限和 timer 错误可观测性，不每次全量扫描 Dataset。
-- [ ] 分开配置成员快照等待超时、输入数据截止和计算执行超时；无适用 snapshot 时只记录等待/告警，不把 period 伪造成空集合 complete。
-- [ ] Dataset 的 `data_node_id` 是周期状态权威归属；Primary 必须将成员、CommitInput 与 ReportPeriod 路由到同一 owner，错误 owner 拒绝。当前不设计跨 DataNode 成功汇总；只有 Dataset 改为跨节点分片时才扩展此协议。
+- [ ] 分开配置 subject 快照等待超时、输入数据截止和计算执行超时；无适用 snapshot 时只记录等待/告警，不把 period 伪造成空集合 complete。
+- [ ] Dataset 的 `data_node_id` 是周期状态权威归属；Primary 必须将 subject 状态、CommitInput 与 ReportPeriod 路由到同一 owner，错误 owner 拒绝。当前不设计跨 DataNode 成功汇总；只有 Dataset 改为跨节点分片时才扩展此协议。
 - [ ] 测试响应丢失、重复/并发写、数据缺列、owner 路由错误、状态已提交但发布失败；View 侧对每条相关有序流分别等待连续应用位置，不能比较不同流的单个最大序号。
 
 ### T04. Collector 和标准化
 
-依赖 T02/T03。修改 modules/collector/internal/marketfetch/{instrument_pipeline.go,period_readiness.go,period_reporter.go,kline_pipeline.go}、internal/marketstorage/storage.go、internal/marketdata/subject.go；在 modules/storage/internal/service/metadata/sqlite/crud_subject.go 及对应 proto/API 增加通用标准化映射管理；增加 Storage 成员 RPC client 和领域测试。
+依赖 T02/T03。修改 `modules/collector/internal/marketfetch/{instrument_pipeline.go,reconciler.go,reconciler_test.go,period_readiness.go,period_reporter.go,kline_pipeline.go,kline_pipeline_test.go,completion.go,completion_test.go}`、`modules/collector/internal/marketstorage/storage.go`、`modules/collector/internal/marketdata/subject.go`；在 `modules/storage/internal/service/metadata/sqlite/crud_subject.go` 及对应 proto/API 增加通用标准化映射管理；增加 Storage snapshot/period RPC client 和领域测试。按 §2.5 的 Reconciler→SCF→Storage 实际链路接入，不在单个 Timer shard 中冻结全集。
 
-- [ ] 市场列表定时获取；变化写全量，未变化复用原 snapshot 并更新同步成功时间，失败保留旧快照并告警。
-- [ ] 每个 1m 周期在任何行写入前调用 BeginDatasetPeriod 固定 RAW snapshot；将 K 线从普通 UpsertFields 改为 Storage 授权的完整 CommitInput。Collector 不再消费自己的 DatasetRowsUpserted 事件来推导成功或提交位置；SQLite 仅保留采集调度/诊断所需状态，不再作为 Dataset 完整性权威。
+- [ ] 市场/交易品种列表定时获取并写入 symbol source Dataset；失败保留最后有效 source 集合并告警，不能写空集合。Reconciler 从活跃 source subject 解析 canonical subject，按目标基础 Kline Dataset + frequency 生成全量 `subject_ids`；快照写入目标 Kline Dataset。集合变化写新全量快照，不变时沿用 snapshot_id 并更新同步 freshness。
+- [ ] 在任何实时目标行写入、Timer shard 发布之前，按 `TaskGroup{target Dataset, frequency}` 调用 `PutSubjectSnapshot` 与 `BeginDatasetPeriod` 冻结完整 RAW snapshot。目标周期必须使用全链路统一的 UTC period boundary；不因 Reconcile 重复、Collector 重启或部署重试而重新冻结不同名单。
+- [ ] Kline Pipeline 明确区分实时目标周期提交与历史/补洞批量写入：仅当返回数据包含目标 `data_time` 的完整行时，对该 subject 调用 Storage 授权的 `CommitInput`；漏掉目标行即不能以其他历史 bar 宣告本周期成功。额外历史 bar 可走既有批量 Upsert，不写入当前周期成功状态。
+- [ ] Collector 不再消费自己的 `DatasetRowsUpserted` 事件推导成功或提交位置。`ReportPeriod` 只接收重试耗尽/永久终态的 failed subject；暂时错误保留重试，deadline 到期由 Storage 生成 missing。SQLite 仅保留采集调度、TaskInstance 与诊断所需状态，不再作为 Dataset 完整性权威。
+- [ ] 完成消费者切换后停用本地 `PeriodReadinessService` / `PeriodReporter` 的 Dataset 完整性裁决及旧 `CollectorPeriodCompleted` 发布；先确认 View/Merge/Factor/策略不再依赖旧事件。采集批次完成、重试、指标和 TaskInstance 仍继续工作。
 - [ ] source_scope + raw_subject_id → canonical_subject_id，保留类型、交易所、计价信息；启用前预览冲突。
 - [ ] 测试冻结前退市排除、冻结后缺数据记 missing、全市场 API 失败不写空列表。
+- [ ] 测试 Reconcile 分片前快照完整性、SCF 不自行 Begin、同周期重试幂等、target period 精确行提交、仅终态失败上报，以及历史 Upsert 不污染当前周期终态。
 - [ ] 同一源多个品种归一冲突拒绝；当前 ProviderSymbol 继续仅服务交易所请求。
 
 ### T05. 任务配置与输出隔离
@@ -411,7 +429,7 @@ bash scripts/test/contract/test-release-contract.sh
 
 ### 7.2 资源与拓扑
 
-以 BTC、ETH、SOL 三个资产做功能验收。预检必须从实际 Binance spot active 列表及映射配置解析每个 raw_subject_id 和 canonical_subject_id；若某项未激活、无映射或有歧义，就停止并明确列出，不能静默换 symbol 或靠删 `-SPOT/-SWAP` 后缀猜 ID。RAW 仍保持完整现货市场成员快照，三标过滤只作用于验收计算任务。
+以 BTC、ETH、SOL 三个资产做功能验收。预检必须从实际 Binance spot active 列表及映射配置解析每个 raw_subject_id 和 canonical_subject_id；若某项未激活、无映射或有歧义，就停止并明确列出，不能静默换 symbol 或靠删 `-SPOT/-SWAP` 后缀猜 ID。RAW 仍保持完整现货 subject 快照，三标过滤只作用于验收计算任务。
 
 ```text
 Collector → RAW spot Dataset ──DatasetRowsUpserted──> 内网 Factor Engine
@@ -457,7 +475,7 @@ Collector → RAW spot Dataset ──DatasetRowsUpserted──> 内网 Factor En
 | 场景 | 必须结果 |
 |---|---|
 | Collector 市场列表获取失败 | 保留最后有效快照并告警；不能写空快照 |
-| 成员集合未变化 | 沿用已有快照 ID；不生成重复全量快照 |
+| subject 集合未变化 | 沿用已有快照 ID；不生成重复全量快照 |
 | 无适用历史快照 | 阻止启动该周期并给出可观测原因；不当作空集合 |
 | 合法空快照 | 明确固定空快照，并可产生空集 complete 终态 |
 | 快照写成功但响应丢失 | 同 request_id 重试返回同快照，不重复创建 |
