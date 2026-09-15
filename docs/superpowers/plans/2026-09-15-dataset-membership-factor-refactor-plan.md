@@ -4,11 +4,11 @@
 
 **目标：** 将成员快照、数据完整性和周期完成提升为 Storage Dataset 通用能力，统一对象身份，分离时序与截面输出，保留手动触发的 View A/B 重建。
 
-**架构：** 生产者在周期开始登记成员，Storage 保存不可变全量快照与显式周期引用并发布 DatasetPeriodCompleted；时序读取输入 Dataset 写独立结果，聚合按源周期成员交集构造 mdataset，截面按其完成事件读取 Primary。View 只作为单 Dataset 的查询子索引。
+**架构：** 生产者定期同步标的列表，有变化时保存生效全量快照，无变化时沿用。Storage 在周期启动时固定快照引用，在完整数据提交时直接持久化标的成功状态，并发布 DatasetPeriodCompleted；时序读取输入 Dataset 写独立结果，聚合按源周期标的交集构造 mdataset，截面按其完成事件读取 Primary。View 只作为单 Dataset 的查询子索引。
 
-**技术栈：** Go 多模块、tRPC、Protobuf、NATS JetStream、Storage Primary、SQLite 元数据/运行账本、DuckDB 本机缓存、Python、Vue/TypeScript、Vitest/Playwright。
+**技术栈：** Go 多模块、tRPC、Protobuf、NATS JetStream、现有 Storage 磁盘 KV、DuckDB 本机缓存、Python、Vue/TypeScript、Vitest/Playwright。标的快照、周期和标的状态复用现有 KV，不额外引入 SQLite；其他模块既有数据库不因此无关重写。
 
-**日期：** 2026-09-15。状态：待执行；未验收任何代码任务。
+**日期：** 2026-09-15 创建，2026-09-16 按最新讨论修订。状态：待执行；未验收任何代码任务。
 
 ## 1. 基线与替代关系
 
@@ -22,7 +22,8 @@
 | Merge 等 Collector 完成事件确定交集 | 周期开始读取源 Dataset 的已冻结成员快照确定交集 |
 | 去掉 -SPOT/-SWAP 作为统一标准 | 用户配置标准对象映射，保留原始身份并校验冲突 |
 | schema 变化自动重建 View | 仅提示受影响字段差异，用户手动触发现有 A/B 重建 |
-| 每周期存全量成员或直接向前猜测继承 | 每周期显式引用不可变全量快照；不变时复用，有增删时新全量 |
+| 每周期强制写不变标记 | 有变化写生效全量，未更新周期自动沿用最近生效快照；实际运行周期固定引用 |
+| 成功写入后再带收据上报成功 | Storage 在完整提交路径内直接记录成功，额外接口仅报告缺失/失败 |
 
 新项目无需兼容旧协议和数据。但不得删除与本任务无关的用户改动或线上资源。实施开始重新检查工作树、分支与实际入口；当前存在的缓存、引擎、周期账本优先验证复用，不按文件名盲目新建第二套实现。
 
@@ -30,19 +31,21 @@
 
 ### 2.1 Dataset 成员模型
 
-每个 Dataset 有成员存储能力。时序 Dataset 每个频率、每个业务周期必须显式登记成员快照。非时序 Dataset 可使用已激活成员版本；参与周期聚合时必须固定其对应版本，不能边计算边读最新成员。
+每个 Dataset 有标的存储能力。协议统一使用 subject、subject_id、subject_ids、subject_snapshot 和 snapshot_id；不以 members 或 universe 表示同一业务集合。下文“成员快照”是历史中文称呼，均指 subject_snapshot；items 仅指批量结果项。
+
+Collector 定期获取明确范围的全市场标的列表（交易所、现货/合约、市场状态等），有变化才保存新全量快照；不变只更新同步成功时间。时序周期未写新快照时，解析生效时间不晚于该周期的最近快照。周期开始处理时持久化 snapshot_id，后续更新不改变该周期。非时序 Dataset 使用已激活版本，参与聚合时也固定版本。
 
 ```text
 09:00  FULL       snapshot=S1  [BTC, ETH]
-09:01  UNCHANGED  snapshot=S1
-09:02  UNCHANGED  snapshot=S1
+09:01  无新快照，沿用 S1
+09:02  无新快照，沿用 S1
 09:03  FULL       snapshot=S2  [BTC, ETH, SOL]
-09:04  UNCHANGED  snapshot=S2
+09:04  无新快照，沿用 S2
 ```
 
-UNCHANGED 是明确引用，不是缺记录时默认继承。查询直接解析 snapshot_id，不逐周期回溯链；首个周期必须登记全量。即使空集合也有合法快照。全量存储没有增删差量链，有变化就生成新的完整集合。
+不要求每周期写 UNCHANGED 标记。未运行周期通过生效时间索引查找最近快照，已运行周期直接使用固定引用，不逐周期回溯链。没有任何适用历史快照时阻塞，不能当空集合；获取列表失败保留旧快照并告警，不能把接口失败变成空列表。记录最近同步成功时间，对持续过期告警。显式空集合仍是合法快照。
 
-快照不可变；同周期相同提交幂等，不同名单拒绝。已结束周期不能受迟到成员、后续退市或映射规则变化影响。快照清理按引用关系执行，不能删掉仍被后续周期使用的早期全量。
+快照不可变；已冻结周期相同引用幂等，冲突拒绝。快照清理保护周期引用，也保护仍能被后续周期沿用的最新生效快照及保留范围所需前驱；不能仅因暂时没有周期引用就删除。后续退市或映射变化不改变已启动周期。
 
 ### 2.2 生产责任和完成判断
 
@@ -56,22 +59,32 @@ UNCHANGED 是明确引用，不是缺记录时默认继承。查询直接解析 
                                       → DatasetPeriodCompleted
 ```
 
-成员缺失不能解释为空集合。未登记超时属于阻塞/错误，不发伪造的完整周期事件。零成员已登记可明确完成。成功状态必须证明对应必需字段已经提交；缺失和失败保留在原始预期名单中。
+没有适用历史快照时阻塞，超时不发伪造完整事件；仅本周期没有更新应正常沿用。合法空快照可明确完成。成功状态由完整提交路径确认；缺失和失败保留在原始预期名单中。
 
 ### 2.3 通用接口草案
 
 以下为实施时需映射到现有 Protobuf/RPC 的语义接口，不表示当前已存在：
 
 ```text
-RegisterPeriodMembers(dataset, frequency, period, producer,
-                      request_id, full_members | reuse_snapshot_id)
-GetPeriodMembers(dataset, frequency, period, page_cursor)
-ReportPeriodItems(dataset, frequency, period, producer,
-                  request_id, terminal_items_with_commit_receipts)
+PutSubjectSnapshot(dataset_id, frequency, effective_period, request_id, subject_ids)
+GetPeriodSubjects(dataset_id, frequency, period, page_cursor)
+ReportPeriod(dataset_id, frequency, period, request_id, items)
 GetDatasetPeriod(dataset, frequency, period)
 ```
 
-成员登记返回 snapshot_id 与固定周期身份；沿用必须引用同 Dataset、兼容频率及成员语义的已存在快照。周期配置固定必需输出字段及截止策略。状态报告必须验证对象属于快照、生产者权限和提交收据；不允许调用者用一个 all_done=true 绕过校验。
+PutSubjectSnapshot 返回 snapshot_id；GetPeriodSubjects 只解析或读取，不暗中启动所有被查询的周期。任务启动路径负责原子固定周期引用。沿用限定同 Dataset、频率及兼容语义。producer 从认证身份与 Dataset 生产任务配置确定，不由调用方任意指定。
+
+ReportPeriod.items 每项仅包含 subject_id、status（missing 或 failed）及 reason。正常成功写入不再二次上报，也不要求对外暴露 commit_id。Storage 在完整提交时检查冻结成员和必需字段，直接记录成功；多次部分字段更新须直到全部必需输出完成才记录成功，不能收到任意字段变化就计数。周期固定所需输出和截止策略。
+
+### 2.3.1 磁盘 KV 与增量汇总
+
+逻辑键包括 subject_snapshot/{dataset}/{snapshot_id}、period/{dataset}/{freq}/{period}、subject_state/{dataset}/{freq}/{period}/{subject_id}，实际编码沿用现有 KV 规范。快照内容与生效索引、周期引用、状态及发布记录均持久化，内存只作加速。
+
+同一个 KV 实例内，将完整业务数据、标的成功状态及待发布记录放入一个原子写批次。Storage 不订阅自己的 NATS 字段变更来确认成功。不跨 Primary 和另一 SQLite 假装原子事务，也不承诺跨节点原子写。
+
+周期增量维护 expected、succeeded、missing、failed。更新状态时按完整业务键去重；在串行化或事务保护下仅首次终态转换增加计数，单独使用原子批量写不能防止并发重复计数。全部预期标的终态时调用 CompletePeriod，原子保存完成状态和待发布事件。每次只处理本次标的，不全量扫描周期数据；timer 处理截止、恢复和重试。
+
+若 Dataset 跨 KV 实例或节点，本地提交同时保存可重放的内部状态记录，由周期归属节点幂等汇总；不是让 Storage 自订阅外部字段广播。汇总按各自有序域收集成功提交位置，View 的 WaitApplied 必须等所有相关流连续应用，不能用跨流单个最大序号判断。重复状态或乱序报告不得把成功改成失败，也不能重新打开已终态周期。
 
 ### 2.4 对象映射与交集
 
@@ -116,11 +129,11 @@ View 一对一关联 Dataset，Dataset 可有多个 View。字段差异只检测
 
 **依赖：** 01
 
-**文件范围：** modules/storage/schema/metadata.sql；新增 modules/storage/internal/service/metadata/sqlite/crud_dataset_membership.go、crud_dataset_membership_test.go。
+**文件范围：** modules/storage/internal/service/datanode/pebble/；新增 subject_snapshot.go、subject_snapshot_test.go 及周期键编码文件，复用现有 KV 路由与持久化接口。
 
-- [ ] 添加定向失败测试：首周期不变但无快照拒绝；空集合可冻结；相同名单可复用；不同频率不误引用；已冻结周期冲突提交失败。
+- [ ] 添加定向失败测试：无生效快照时阻塞；未更新周期沿用最近快照；空集合合法；不同频率不误引用；已固定周期不受后续更新影响；关库重开恢复内容与引用。
 - [ ] 运行该包测试，确认失败断言确实对应缺失行为，记录红灯结果；编译工具缺失不算有效红灯。
-- [ ] 实现：建立快照头、成员明细、周期引用。成员排序去重并计算集合摘要；原始对象映射信息和标准化规则身份纳入快照语义，不能只对标准 ID 做 hash。频率独立，保存全量或引用已有全量。
+- [ ] 实现：在现有 KV 建立快照头、标的明细、生效时间索引和周期引用。排序去重并计算摘要，原始映射与规则身份纳入语义；有变化保存全量，无变化无需周期标记，不新增 SQLite 存储。
 - [ ] 重跑定向测试和触及模块回归；持久化/并发任务增加进程退出、重放及 race 测试。
 - [ ] 检查协议与调用方一致，记录验收证据；执行暂存差异检查，独立提交本任务范围。
 
@@ -130,9 +143,9 @@ View 一对一关联 Dataset，Dataset 可有多个 View。字段差异只检测
 
 **文件范围：** modules/storage/internal/service/catalog/；modules/storage/internal/service/metadata/；新增 membership API 与测试文件。
 
-- [ ] 添加定向失败测试：无权调用拒绝；未登记不自动继承；大名单分页完整且顺序稳定；两生产者并发冲突只有一个成功；未来周期补录不改变旧周期。
+- [ ] 添加定向失败测试：无权调用拒绝；有适用快照可继承、无快照阻塞；分页稳定；并发固定周期引用一致；补录或未来快照不改变已启动周期；普通查询不启动周期。
 - [ ] 运行该包测试，确认失败断言确实对应缺失行为，记录红灯结果；编译工具缺失不算有效红灯。
-- [ ] 实现：实现分页读取完整成员、登记全量、显式沿用、查询未登记/已冻结；只有 Dataset 授权生产者可以登记。快照与周期引用原子创建，响应丢失重试返回同一记录。
+- [ ] 实现：实现 PutSubjectSnapshot、GetPeriodSubjects 和周期状态查询；认证映射生产身份。任务启动显式固定解析出的引用，响应丢失重试恢复原记录。RPC 使用现有 KV 归属路由，不另存一份成员权威库。
 - [ ] 重跑定向测试和触及模块回归；持久化/并发任务增加进程退出、重放及 race 测试。
 - [ ] 检查协议与调用方一致，记录验收证据；执行暂存差异检查，独立提交本任务范围。
 
@@ -144,7 +157,7 @@ View 一对一关联 Dataset，Dataset 可有多个 View。字段差异只检测
 
 - [ ] 添加定向失败测试：仅行数相等不能成功；越界对象拒绝；半字段不算完整；写成功响应丢失幂等恢复；不同因子列互不覆盖。
 - [ ] 运行该包测试，确认失败断言确实对应缺失行为，记录红灯结果；编译工具缺失不算有效红灯。
-- [ ] 实现：验证成员范围、必需字段及生产任务身份；完整行提交返回可靠收据。生产者报告成功时必须关联真实提交；缺失/失败无需伪造空行。允许一个任务内多个因子列按补丁写入，但只有全部必需输出完成才确认对象成功。
+- [ ] 实现：验证标的范围、必需字段和认证生产身份；完整数据、subject 成功状态、待发布记录在同 KV 原子提交，不需要成功二次 RPC 或自订阅。多因子补丁只在必需输出齐全后记成功；ReportPeriod 仅受理 missing/failed。以串行化或事务保护并发状态转换，重复写入不重复计数。
 - [ ] 重跑定向测试和触及模块回归；持久化/并发任务增加进程退出、重放及 race 测试。
 - [ ] 检查协议与调用方一致，记录验收证据；执行暂存差异检查，独立提交本任务范围。
 
@@ -152,11 +165,11 @@ View 一对一关联 Dataset，Dataset 可有多个 View。字段差异只检测
 
 **依赖：** 04
 
-**文件范围：** 新增 modules/storage/internal/service/catalog/dataset_period.go；modules/storage/internal/service/metadata/sqlite/ 周期账本；Storage outbox 与测试。
+**文件范围：** 新增 modules/storage/internal/service/catalog/dataset_period.go；modules/storage/internal/service/datanode/pebble/ 的 period_state.go、period_state_test.go；Storage outbox 与测试。
 
 - [ ] 添加定向失败测试：对象终态早到与晚到都正确；完成事件先于数据提交不可能；发布失败重启重试；零成员明确 complete；全部失败仍带原名单；无成员快照超时返回明确阻塞而非伪造完整事件。
 - [ ] 运行该包测试，确认失败断言确实对应缺失行为，记录红灯结果；编译工具缺失不算有效红灯。
-- [ ] 实现：Storage 汇总冻结成员与对象终态，持久化完成状态和可靠发布意图；全部成功 complete，有缺失/失败 degraded。截止策略由登记配置明确，超时扫描不能把未登记名单当空名单。成功提交位置收集齐才发布 DatasetPeriodCompleted。
+- [ ] 实现：KV 增量记录标的终态和周期计数，最后一个终态到达时尝试 CompletePeriod；全部成功 complete，否则 degraded。成功位置由写入路径内部记录，不接受伪造成功上报。多节点采用本地可靠状态记录、固定汇总归属和去重应用；完成及发布意图在汇总 KV 原子写。timer 只处理超时/恢复，不重复扫全周期行。
 - [ ] 重跑定向测试和触及模块回归；持久化/并发任务增加进程退出、重放及 race 测试。
 - [ ] 检查协议与调用方一致，记录验收证据；执行暂存差异检查，独立提交本任务范围。
 
@@ -172,7 +185,7 @@ View 一对一关联 Dataset，Dataset 可有多个 View。字段差异只检测
 - [ ] 重跑定向测试和触及模块回归；持久化/并发任务增加进程退出、重放及 race 测试。
 - [ ] 检查协议与调用方一致，记录验收证据；执行暂存差异检查，独立提交本任务范围。
 
-### 07. Collector 提前登记成员
+### 07. Collector 定期同步全市场标的
 
 **依赖：** 03、05、06
 
@@ -180,7 +193,7 @@ View 一对一关联 Dataset，Dataset 可有多个 View。字段差异只检测
 
 - [ ] 添加定向失败测试：冻结前退市不入名单；冻结后退市记缺失；单纯采集失败不得减少成员；漏一个周期登记不能自动继承；重启沿用相同快照。
 - [ ] 运行该包测试，确认失败断言确实对应缺失行为，记录红灯结果；编译工具缺失不算有效红灯。
-- [ ] 实现：在周期任务启动前按生效成员登记全量或显式沿用，采集成功/失败调用 Storage 通用接口；去掉 Collector 自有完成事件权威。保留运行明细和采集监控，不复制 Dataset 周期账本。
+- [ ] 实现：提供指定市场范围的全量标的获取能力，定时比较并通过 PutSubjectSnapshot 写变化全量，不变只记录同步成功时间。周期启动解析并固定快照，采集完整写入自动记成功，仅缺失/失败调用 ReportPeriod。获取失败保留旧快照并告警；去掉 Collector 自有数据完整性权威。
 - [ ] 重跑定向测试和触及模块回归；持久化/并发任务增加进程退出、重放及 race 测试。
 - [ ] 检查协议与调用方一致，记录验收证据；执行暂存差异检查，独立提交本任务范围。
 
@@ -204,7 +217,7 @@ View 一对一关联 Dataset，Dataset 可有多个 View。字段差异只检测
 
 - [ ] 添加定向失败测试：只有现货/只有合约不入交集且不记 missing；双上市预期成员采集失败仍入交集并最终缺失；一个快照未登记不是空交集；交集为空可明确完成；规则/快照固定。
 - [ ] 运行该包测试，确认失败断言确实对应缺失行为，记录红灯结果；编译工具缺失不算有效红灯。
-- [ ] 实现：通过 Storage 周期成员接口读取各源同周期快照，标准化后取交集，登记 mdataset 周期成员。不再等待采集完成事件确定名单；metadata 尚无周期快照时重试。原 collector/membership 配置适配成成员登记来源，不让两个运行协议并存。
+- [ ] 实现：通过 GetPeriodSubjects 解析各源生效快照，标准化后取交集，必要时 PutSubjectSnapshot 保存 mdataset 新全量并固定输出周期引用。不等采集完成；仅无适用历史快照才等待，同周期没更新可正常沿用。原 collector/membership 配置仅作为上游快照来源，不保留两套完整性协议。
 - [ ] 重跑定向测试和触及模块回归；持久化/并发任务增加进程退出、重放及 race 测试。
 - [ ] 检查协议与调用方一致，记录验收证据；执行暂存差异检查，独立提交本任务范围。
 
@@ -345,54 +358,56 @@ View 一对一关联 Dataset，Dataset 可有多个 View。字段差异只检测
 ### 成员快照复用
 
 ```text
-register_period(P, Full(M)):
-    normalize_and_validate(M)
-    transaction:
-        existing = lookup_period(P)
-        if existing: require_same_content_and_producer(existing)
-        else:
-            S = create_or_reuse_immutable_snapshot(M)
-            insert_period(P, snapshot=S, frozen=true)
+PutSubjectSnapshot(scope, effective_period, subjects):
+    validate(subjects)
+    kv_batch: save immutable snapshot and effective index
 
-register_period(P, Reuse(S)):
-    require(S exists and belongs_to_same_scope)
-    atomically_insert_or_verify_identical_period_reference(P, S)
+StartPeriod(scope, period):
+    if frozen reference exists: return it
+    snapshot = latest effective snapshot at or before period
+    require(snapshot exists)
+    serialize: persist snapshot reference unless already frozen
 ```
 
-不允许用“查询最近快照失败则空集合”或“周期未登记则沿用”替代显式写入。
+允许未更新周期沿用最近生效快照，不允许把查询失败当空集合。StartPeriod 是内部周期准入操作的建议名称，不要求新增外部 RPC；普通 GetPeriodSubjects 查询不启动周期。
 
 ### 聚合
 
 ```text
-snapshots = get_each_source_period_members(P)
+snapshots = GetPeriodSubjects(each_source, P)
 if any snapshot missing:
-    wait_with_deadline_and_error_state()
+    RetryOrTimeout()
 else:
     expected = intersection(normalize_each_source(snapshots))
-    register_output_period(expected)
+    PutSubjectSnapshot(output, P, expected) if changed
+    StartPeriod(output, P)
     for subject in expected:
         if all_required_source_rows_complete(subject):
-            commit_complete_output_once(subject)
+            CommitInput(subject)
         elif deadline_reached:
-            report_missing(subject)
+            ReportPeriod(items=[{subject_id, status: missing}])
 ```
 
 ### Dataset 完成
 
 ```text
-require(period_members_frozen)
-require(all expected members have valid terminal states)
-require(all success states reference committed required output)
-persist_completion_and_reliable_publish_intent_atomically()
-publish DatasetPeriodCompleted with stable identity
+CommitInput(subject):
+    serialize state transition
+    kv_batch: data + success state + pending events
+    advance local counters or durable cross-node aggregation
+
+CompletePeriod():
+    require(frozen subjects and all terminal)
+    kv_batch: final period state + completion event
+    publish DatasetPeriodCompleted with stable identity
 ```
 
 ### View 可读
 
 ```text
 on DatasetPeriodCompleted:
-    persist_pending_receipt()
-    wait_until_all_required_positions_applied_in_active_view()
+    SavePending()
+    WaitApplied()
     require(selected_fields_compatible && relevant_scope_readable)
     publish ViewDataReady(completion_event_id, view_id, scope)
 ```
@@ -442,7 +457,7 @@ pnpm exec playwright test tests/dataset-membership.spec.ts tests/view-manual-reb
 | 成员写入成功、响应丢失 | 同 request_id 恢复同快照与周期引用 |
 | 周期中途退市 | 当前冻结成员不删除，缺失明确终态 |
 | 新周期退市已生效 | 新快照删除该对象，交集重新计算 |
-| 一源周期快照缺失 | 等待/超时错误，不能当空集合 |
+| 一源本周期未更新快照 | 沿用最近生效快照；无适用历史快照才等待/超时，不能当空集合 |
 | 同一源映射碰撞 | 明确拒绝，不覆盖 |
 | 所有源有快照但交集为空 | 登记合法空快照，明确完成 |
 | 聚合只到一个源后重启 | 恢复部分到达状态，不提交半行 |
@@ -459,7 +474,7 @@ pnpm exec playwright test tests/dataset-membership.spec.ts tests/view-manual-reb
 以下为本计划建议的第一版落地规则，不新增通用复杂框架：
 
 - 成员未就绪的等待截止、输入行截止及任务执行超时分别配置，不共用一个含混 timeout。
-- 启用生产任务时先登记其将处理的周期成员，再准入该周期数据；先到事件可靠暂存或延迟重试，禁止 ACK 后遗忘。
+- 启用周期任务时先解析最近生效快照并固定引用，再准入数据；无需每周期重复登记。先到事件可靠暂存或延迟重试，禁止 ACK 后遗忘。
 - 实时与补算隔离：第一版显式补算写新结果 Dataset，避免改写已经完成的实时周期。
 - 已终态周期迟到数据记录诊断，不自动重开；历史修正不在范围内。
 - 一输出 Dataset 一生产任务，成员接口授权由 Storage 强制验证。
