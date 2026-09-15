@@ -4,19 +4,27 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/factor/internal/catalogsync"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/health"
+	factorobservability "github.com/mooyang-code/moox/modules/factor/internal/observability"
+	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/report"
+	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
 const engineHealthService = "trpc.moox.factor.engine.Health"
+const engineMetricsTimerService = "trpc.moox.factor.engine.metrics.timer"
 
 // EngineRuntime runs timeseries DatasetRows and cross-section ViewDataReady consumers.
 type EngineRuntime struct {
@@ -43,8 +51,8 @@ func validateEngineRuntime(s *server.Server, cfg *EngineApplicationConfig) error
 	if cfg.Cache.Enabled {
 		return errors.New("engine cache integration is not implemented; cache.enabled must be false")
 	}
-	if s.Service(engineHealthService) == nil || s.Service(catalogTimerService) == nil {
-		return errors.New("engine health and catalog timer services are required")
+	if s.Service(engineHealthService) == nil || s.Service(catalogTimerService) == nil || s.Service(engineMetricsTimerService) == nil {
+		return errors.New("engine health, catalog timer and metrics timer services are required")
 	}
 	for _, name := range []string{"trpc.moox.factor.FactorMgr", "trpc.moox.factor.FactorMgr.trpc"} {
 		if s.Service(name) != nil {
@@ -85,7 +93,21 @@ func InitializeEngine(ctx context.Context, s *server.Server, cfg *EngineApplicat
 	if err != nil {
 		return nil, err
 	}
-	if err = resources.StartCompute(); err != nil {
+	ensureEngineMetricsIdentity(cfg)
+	datasetMetrics, err := report.NewDatasetMetrics(prometheus.DefaultRegisterer, "factor_engine")
+	if err != nil {
+		return nil, fmt.Errorf("initialize engine dataset metrics: %w", err)
+	}
+	inventory := factorobservability.NewRealtimeInventory(
+		resources.Store.Bindings(),
+		datasetMetrics,
+		factorobservability.WithAcceptedFactorTypes(domain.FactorTypeTimeSeries),
+	)
+	if err := inventory.Refresh(ctx); err != nil {
+		return nil, fmt.Errorf("initialize engine realtime dataset inventory: %w", err)
+	}
+	registerNamedMetricsReporter(s, inventory, "factor_engine", "moox_factor_engine", engineMetricsTimerService)
+	if err = resources.StartCompute(taskrunner.WithDatasetMetrics(datasetMetrics)); err != nil {
 		return nil, err
 	}
 	barrier, err := trigger.NewPeriodBarrier(resources.Store, resources.Storage)
@@ -149,6 +171,18 @@ func typedCatalogActivation(activate catalogsync.Activation) catalogsync.Activat
 			}
 		}
 		return activate(ctx, previous, next, commit)
+	}
+}
+
+func ensureEngineMetricsIdentity(cfg *EngineApplicationConfig) {
+	if strings.TrimSpace(os.Getenv("MOOX_INSTANCE_ID")) == "" {
+		_ = os.Setenv("MOOX_INSTANCE_ID", "moox_factor_engine")
+	}
+	if strings.TrimSpace(os.Getenv("MOOX_NODE_ID")) == "" && cfg != nil && strings.TrimSpace(cfg.EngineID) != "" {
+		_ = os.Setenv("MOOX_NODE_ID", strings.TrimSpace(cfg.EngineID))
+	}
+	if strings.TrimSpace(os.Getenv("MOOX_BOOT_ID")) == "" {
+		_ = os.Setenv("MOOX_BOOT_ID", uuid.NewString())
 	}
 }
 

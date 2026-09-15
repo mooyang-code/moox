@@ -176,3 +176,29 @@ func TestApplySchemaRejectsPreviousDatasetBindingShape(t *testing.T) {
 	`).Error)
 	require.ErrorContains(t, db.ApplySchema(factorschema.AllSQL()), "fresh database")
 }
+
+func TestApplySchemaAllowsUnusedLegacyTablesAndCreatesMissingOnes(t *testing.T) {
+	db, err := Open(&Options{Path: filepath.Join(t.TempDir(), "factor.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.db.Exec(`
+		CREATE TABLE t_factor_defs (
+			c_factor_id TEXT NOT NULL PRIMARY KEY, c_name TEXT NOT NULL, c_factor_type TEXT NOT NULL DEFAULT 'timeseries', c_source_code TEXT NOT NULL,
+			c_source_hash TEXT NOT NULL, c_source_path TEXT NOT NULL DEFAULT '', c_input_columns_json TEXT NOT NULL,
+			c_outputs_json TEXT NOT NULL, c_params_json TEXT NOT NULL DEFAULT '{}', c_lookback_periods INTEGER NOT NULL,
+			c_status TEXT NOT NULL DEFAULT 'disabled', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE t_factor_subject_receipts (
+			c_space_id TEXT NOT NULL,
+			c_event_id TEXT NOT NULL
+		);
+	`).Error)
+	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
+	var receipts int
+	require.NoError(t, db.db.Raw(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 't_factor_subject_receipts'`).Scan(&receipts).Error)
+	require.Equal(t, 1, receipts)
+	var barriers int
+	require.NoError(t, db.db.Raw(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 't_factor_period_barriers'`).Scan(&barriers).Error)
+	require.Equal(t, 1, barriers)
+}

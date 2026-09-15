@@ -437,6 +437,10 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 		}
 		enabledSeries = append(enabledSeries, rows...)
 	}
+	currentBoots, err := b.Metrics.Catalog().CurrentBootIDs(ctx, now)
+	if err != nil {
+		return nil, err
+	}
 	values := make(map[datasetKey]datasetValues, len(enabledSeries))
 	for _, series := range enabledSeries {
 		labels, err := datasetLabels(series.LabelsJSON)
@@ -454,6 +458,9 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			return nil, err
 		}
 		if enabled.Value <= 0 {
+			continue
+		}
+		if bootID := currentBoots[monmetrics.ReporterInstanceKey(series.ServiceName, series.InstanceID)]; !metricSampleFromBoot(enabled.MessageID, bootID) {
 			continue
 		}
 		key := datasetKey{
@@ -698,6 +705,15 @@ func datasetModuleFromMetric(metricName string) string {
 		return ""
 	}
 	return module
+}
+
+func metricSampleFromBoot(messageID, bootID string) bool {
+	messageID = strings.TrimSpace(messageID)
+	bootID = strings.TrimSpace(bootID)
+	if messageID == "" || bootID == "" {
+		return true
+	}
+	return strings.HasPrefix(messageID, bootID+"-") || messageID == bootID
 }
 
 func datasetLabels(raw string) (map[string]string, error) {

@@ -22,7 +22,8 @@ var factorFilePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*\.py$`)
 
 // Options controls registry source import behavior.
 type Options struct {
-	FactorsDir string
+	FactorsDir          string
+	AcceptedFactorTypes []string
 }
 
 type ImportOptions struct {
@@ -159,6 +160,9 @@ func (s *Service) ValidateAllEnabledBindings(ctx context.Context) error {
 			return fmt.Errorf("list enabled factors: %w", err)
 		}
 		for _, factor := range factors {
+			if !s.acceptsFactorType(factor.FactorType) {
+				continue
+			}
 			if err := s.ValidateEnabledBindingsForFactor(ctx, factor); err != nil {
 				return fmt.Errorf("factor %q: %w", factor.FactorID, err)
 			}
@@ -190,6 +194,9 @@ func (s *Service) ReconcileAllEnabledBindings(ctx context.Context) error {
 			return fmt.Errorf("list enabled factors for metadata reconciliation: %w", err)
 		}
 		for _, factor := range factors {
+			if !s.acceptsFactorType(factor.FactorType) {
+				continue
+			}
 			bindings, err := s.bindings.ListByFactor(ctx, factor.FactorID)
 			if err != nil {
 				return fmt.Errorf("list factor %q bindings: %w", factor.FactorID, err)
@@ -223,6 +230,13 @@ func NewService(factors *store.FactorRepository, meta *MetadataSync, opts Option
 		opts.FactorsDir = "./factors"
 	}
 	return &Service{factors: factors, meta: meta, opts: opts, publisher: moduleregistry.NewSourcePublisher(filepath.Join(opts.FactorsDir, ".versions"))}
+}
+
+func (s *Service) acceptsFactorType(factorType string) bool {
+	if s == nil || len(s.opts.AcceptedFactorTypes) == 0 {
+		return true
+	}
+	return slices.Contains(s.opts.AcceptedFactorTypes, factorType)
 }
 
 // EnsureSourceArtifacts reconstructs immutable Python modules from the

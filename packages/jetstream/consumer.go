@@ -168,7 +168,7 @@ func (c *Client) BindConsumer(ctx context.Context, cfg ConsumerConfig) (*Consume
 	if err != nil {
 		return nil, classifyConsumerError("inspect consumer", err)
 	}
-	if !consumerFiltersEqual(info.Config.FilterSubject, info.Config.FilterSubjects, cfg) || info.Config.AckPolicy != nats.AckExplicitPolicy {
+	if !consumerFiltersCompatible(info.Config.FilterSubject, info.Config.FilterSubjects, cfg) || info.Config.AckPolicy != nats.AckExplicitPolicy {
 		return nil, fmt.Errorf("%w: consumer %s/%s filter or ack policy differs", ErrConsumerConfigConflict, cfg.Stream, cfg.Durable)
 	}
 	if err := contextErr(ctx, "before consumer binding"); err != nil {
@@ -338,13 +338,54 @@ func consumerFiltersEqual(actualSubject string, actualSubjects []string, expecte
 	return actual.FilterSubject == expected.FilterSubject && slices.Equal(actual.FilterSubjects, expected.FilterSubjects)
 }
 
+// consumerFiltersCompatible reports whether an existing durable already
+// receives every subject the caller asked for. Extra historical filters are
+// kept; missing expected filters still conflict because JetStream cannot
+// widen FilterSubjects in place.
+func consumerFiltersCompatible(actualSubject string, actualSubjects []string, expected ConsumerConfig) bool {
+	if consumerFiltersEqual(actualSubject, actualSubjects, expected) {
+		return true
+	}
+	actual := ConsumerConfig{
+		FilterSubject:  actualSubject,
+		FilterSubjects: append([]string(nil), actualSubjects...),
+	}
+	if err := normalizeConsumerFilters(&actual); err != nil {
+		return false
+	}
+	if err := normalizeConsumerFilters(&expected); err != nil {
+		return false
+	}
+	have := make(map[string]struct{}, len(actual.FilterSubjects)+1)
+	if actual.FilterSubject != "" {
+		have[actual.FilterSubject] = struct{}{}
+	}
+	for _, filter := range actual.FilterSubjects {
+		have[filter] = struct{}{}
+	}
+	need := make([]string, 0, len(expected.FilterSubjects)+1)
+	if expected.FilterSubject != "" {
+		need = append(need, expected.FilterSubject)
+	}
+	need = append(need, expected.FilterSubjects...)
+	if len(need) == 0 {
+		return false
+	}
+	for _, filter := range need {
+		if _, ok := have[filter]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func reconcileConsumerConfig(ctx context.Context, js nats.JetStreamContext, stream, durable string, info *nats.ConsumerInfo, cfg ConsumerConfig) error {
 	if info == nil {
 		return fmt.Errorf("%w: consumer info is empty", ErrInvalidConsumer)
 	}
 	actual := info.Config
 	var conflicts []string
-	if !consumerFiltersEqual(actual.FilterSubject, actual.FilterSubjects, cfg) {
+	if !consumerFiltersCompatible(actual.FilterSubject, actual.FilterSubjects, cfg) {
 		conflicts = append(conflicts, "FilterSubjects")
 	}
 	if actual.DeliverPolicy != cfg.DeliverPolicy {

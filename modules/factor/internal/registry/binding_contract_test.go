@@ -106,6 +106,14 @@ func TestValidateAllEnabledBindingsRejectsPersistedConflict(t *testing.T) {
 
 	err = svc.ValidateAllEnabledBindings(ctx)
 	require.ErrorContains(t, err, "also targeted")
+
+	control := NewService(
+		factors,
+		NewMetadataSync(validBindingContractClient(), nil),
+		Options{FactorsDir: t.TempDir(), AcceptedFactorTypes: []string{domain.FactorTypeCrossSection}},
+	).WithBindings(bindings)
+	require.NoError(t, control.ValidateAllEnabledBindings(ctx))
+	require.NoError(t, control.ReconcileAllEnabledBindings(ctx))
 }
 
 func TestValidateEnabledBindingRejectsInvalidLocalContractWithoutRemoteCall(t *testing.T) {

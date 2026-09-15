@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -68,6 +69,16 @@ func TestTypedCatalogActivationAcceptsTimeSeriesAndCrossSection(t *testing.T) {
 		if err != nil || !called {
 			t.Fatalf("%s activation: %v", kind, err)
 		}
+	}
+}
+
+func TestEngineTRPCConfigIncludesMetricsTimer(t *testing.T) {
+	raw, err := os.ReadFile("../../config/engine-trpc.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), engineMetricsTimerService) {
+		t.Fatalf("engine-trpc.yaml missing %s", engineMetricsTimerService)
 	}
 }
 

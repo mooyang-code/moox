@@ -155,8 +155,8 @@ export function optionLabel<T extends string | number>(options: SelectOption<T>[
   return matched?.label || String(value);
 }
 
-export function isTimeSeriesDataKind(value?: DataKind) {
-  return value === "DATA_KIND_TIME_SERIES" || value === 2;
+export function isTimeSeriesDataKind(value?: DataKind | string | number) {
+  return value === "DATA_KIND_TIME_SERIES" || value === "time_series" || value === 2;
 }
 
 export type ViewRebuildKind = "time_series" | "record" | "missing";

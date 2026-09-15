@@ -123,7 +123,7 @@ func (r *EngineResources) Cancel()                  { r.cancel() }
 
 // StartCompute must follow successful catalog activation. On failure, callers
 // still own the resources and must drain catalog jobs before closing them.
-func (r *EngineResources) StartCompute() error {
+func (r *EngineResources) StartCompute(extra ...taskrunner.Option) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
@@ -151,11 +151,13 @@ func (r *EngineResources) StartCompute() error {
 		return errors.Join(err, workers.Close())
 	}
 	r.PythonPool = workers
-	r.Runner = taskrunner.NewService(cfg.PythonWorkers, r.Storage, workers,
+	opts := []taskrunner.Option{
 		taskrunner.WithBatchExecution(cfg.BatchEnabled),
 		taskrunner.WithViewReadConfig(cfg.ViewReadWorkers, time.Duration(cfg.ViewReadTimeoutMS)*time.Millisecond),
 		taskrunner.WithTaskValidator(newTaskValidator(r.Store.Factors(), r.Store.Bindings())),
-	)
+	}
+	opts = append(opts, extra...)
+	r.Runner = taskrunner.NewService(cfg.PythonWorkers, r.Storage, workers, opts...)
 	return nil
 }
 

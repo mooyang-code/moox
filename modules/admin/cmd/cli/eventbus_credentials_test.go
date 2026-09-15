@@ -5,6 +5,9 @@ import (
 	"context"
 	"fmt"
 	"github.com/glebarez/sqlite"
+	"github.com/google/uuid"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -18,6 +21,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
@@ -55,6 +59,40 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if count != 17 {
 		t.Fatalf("eventbus records=%d, want 17", count)
 	}
+}
+
+func TestEventBusCredentialsEnsureAdoptsLegacyMergeToken(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "admin.db")
+	keyPath := filepath.Join(dir, "key")
+	require.NoError(t, os.WriteFile(keyPath, []byte("test-encryption-key-for-eventbus"), 0o600))
+	require.NoError(t, applySchema(dbPath, adminschema.AdminSQL()))
+	seedEventBusDeployment(t, dbPath)
+	require.NoError(t, loadCLIKey(dbPath, keyPath))
+	db, err := openAdminCLIDB(dbPath)
+	require.NoError(t, err)
+	secretDAO := dao.NewSecretDAO(db)
+	require.NoError(t, secretDAO.Create(trpc.BackgroundContext(), &model.Secret{
+		SpaceID: "mooxsys", SecretID: uuid.New().String(), Name: "EventBus merge-eventbus",
+		Description: "legacy merge token", Category: "eventbus", Provider: "moox_eventbus",
+		SecretType: "token", KeyID: "eventbus_factor_merge", SecretValue: "legacy-merge-token",
+		ExtraConfig: `{}`, Status: "active",
+	}))
+	closeAdminCLIDB(db)
+
+	require.NoError(t, runEventBusCredentialsCommand(
+		[]string{"eventbus-credentials", "ensure", "--db-path", dbPath, "--encryption-key-file", keyPath, "--node-id", "gateway-node-1"},
+		&bytes.Buffer{}, &bytes.Buffer{},
+	))
+
+	require.NoError(t, loadCLIKey(dbPath, keyPath))
+	db, err = openAdminCLIDB(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { closeAdminCLIDB(db) })
+	rows, err := listEventbus(dao.NewSecretDAO(db), trpc.BackgroundContext())
+	require.NoError(t, err)
+	require.Equal(t, "legacy-merge-token", rows["eventbus_factor_merge"].SecretValue)
+	require.Equal(t, "legacy-merge-token", rows[eventBusKeys["merge-eventbus"]].SecretValue)
 }
 
 func TestEventBusCredentialsExportAndRotate(t *testing.T) {
@@ -182,6 +220,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		"moox.event.storage.merge.period.completed.v1.>",
 		"moox.event.storage.dataset.factor_period.computed.v1.>",
 		"moox.event.storage.view.data.ready.v1.>",
+		"moox.event.storage.view.source_subject.ready.v1.>",
 		"moox.event.storage.dataset.sync_point.v1.>",
 	} {
 		assert.Contains(t, storageACL, subject)
@@ -246,7 +285,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, yaml, "factor-engine-eventbus")
 	assert.Contains(t, yaml, "merge-eventbus")
 	assert.Equal(t, `publish: {allow: []}`, aclLine(factorACL, "publish:"))
-	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "moox.factor.internal.catalog.snapshot"]}`, aclLine(factorACL, "subscribe:"))
+	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "moox.factor.internal.catalog.snapshot", "moox.factor.internal.recalc.>"]}`, aclLine(factorACL, "subscribe:"))
 	assert.Equal(t, `responses: {max_messages: 1, expires: 10s}`, aclLine(factorACL, "responses:"))
 	assert.NotContains(t, factorACL, "factor_calc")
 	assert.NotContains(t, factorACL, "factor_view_ready")
@@ -258,11 +297,18 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, engineACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_view_ready_v1")
 	assert.Contains(t, engineACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_view_ready_v1")
 	assert.Contains(t, engineACL, "$JS.ACK.MOOX_STORAGE.factor_view_ready_v1.>")
+	assert.Contains(t, engineACL, "$JS.API.CONSUMER.INFO.*.factor_source_subject")
+	assert.Contains(t, engineACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_source_subject")
+	assert.Contains(t, engineACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_source_subject.>")
+	assert.Contains(t, engineACL, "$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.factor_source_subject")
+	assert.Contains(t, engineACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_source_subject")
+	assert.Contains(t, engineACL, "$JS.ACK.MOOX_STORAGE.factor_source_subject.>")
 	assert.Contains(t, engineACL, "$JS.API.CONSUMER.INFO.*.factor_dataset_rows_v1")
 	assert.Contains(t, engineACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_dataset_rows_v1")
 	assert.Contains(t, engineACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_dataset_rows_v1")
 	assert.Contains(t, engineACL, "$JS.ACK.MOOX_STORAGE.factor_dataset_rows_v1.>")
-	assert.NotContains(t, engineACL, "factor_source_subject")
+	assert.Contains(t, engineACL, "moox.factor.internal.recalc.>")
+	assert.Contains(t, engineACL, "moox.event.observability.metrics.snapshot.reported.v1.>")
 	assert.NotContains(t, engineACL, "factor_calc")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, aclLine(engineACL, "subscribe:"))
 	mergeACL := eventBusACLBlock(yaml, "merge-eventbus")
@@ -291,7 +337,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		if role == "strategy-eventbus" {
 			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.data.ready.v1.>"]}`)
 		} else if role == "factor-eventbus" {
-			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.factor.internal.catalog.snapshot"]}`)
+			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.factor.internal.catalog.snapshot", "moox.factor.internal.recalc.>"]}`)
 		} else {
 			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>"]}`)
 		}
@@ -353,8 +399,10 @@ func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testi
 	text := string(raw)
 	assert.Contains(t, text, "moox.event.trade.target.weight_requested.v1.>")
 	assert.Contains(t, text, "moox.event.storage.view.data.ready.v1.>")
+	assert.Contains(t, text, "moox.event.storage.view.source_subject.ready.v1.>")
 	assert.Contains(t, text, "moox.factor.internal.catalog.snapshot")
 	assert.Contains(t, text, "factor_view_ready_v1")
+	assert.Contains(t, text, "factor_source_subject")
 	assert.Contains(t, text, "factor_dataset_rows_v1")
 	assert.Contains(t, text, "merge_rows_v1")
 	assert.Contains(t, text, "merge_collector_v1")
@@ -553,6 +601,9 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 			"moox.event.observability.metrics.snapshot.reported.v1.mooxsys.trade/instance-1",
 			"moox.event.observability.health.check.reported.v1.mooxsys.trade/instance-1",
 		},
+		"factor-engine-eventbus": {
+			"moox.event.observability.metrics.snapshot.reported.v1.mooxsys.moox_factor_engine/instance-1",
+		},
 	} {
 		publisher, connectErr := nats.Connect(
 			server.ClientURL(),
@@ -718,6 +769,8 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	require.NoError(t, err)
 	_, err = storageJS.Publish("moox.event.storage.view.data.ready.v1.crypto.view", []byte("ready"))
 	require.NoError(t, err)
+	_, err = storageJS.Publish("moox.event.storage.view.source_subject.ready.v1.crypto.view", []byte("subject-ready"))
+	require.NoError(t, err)
 
 	engineCtx, engineCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer engineCancel()
@@ -735,6 +788,14 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	})
 	require.NoError(t, err)
 	require.NoError(t, subjectConsumer.Close())
+	sourceSubjectConsumer, err := engineJS.NewConsumer(engineCtx, jetstream.ConsumerConfig{
+		Stream: "MOOX_STORAGE", Durable: "factor_source_subject",
+		FilterSubject: "moox.event.storage.view.source_subject.ready.v1.>",
+		AckWait:       time.Second, MaxDeliver: 3, MaxAckPending: 8,
+		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
+	})
+	require.NoError(t, err)
+	require.NoError(t, sourceSubjectConsumer.Close())
 	rowsConsumer, err := engineJS.NewConsumer(engineCtx, jetstream.ConsumerConfig{
 		Stream: "MOOX_STORAGE", Durable: "factor_dataset_rows_v1",
 		FilterSubject: "moox.event.storage.dataset.rows.upserted.v2.>",

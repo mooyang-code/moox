@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/health"
 	factorobservability "github.com/mooyang-code/moox/modules/factor/internal/observability"
 	factorsvc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
@@ -49,7 +50,7 @@ func validateControlRuntime(s *server.Server, cfg *ControlConfig) error {
 	if s.Service("trpc.moox.factor.FactorMgr") == nil && s.Service("trpc.moox.factor.FactorMgr.trpc") == nil {
 		return errors.New("control FactorMgr service is required")
 	}
-	for _, name := range []string{engineHealthService, catalogTimerService, cacheTimerService} {
+	for _, name := range []string{engineHealthService, catalogTimerService, cacheTimerService, engineMetricsTimerService} {
 		if s.Service(name) != nil {
 			return fmt.Errorf("control must not configure engine service %s", name)
 		}
@@ -154,7 +155,11 @@ func controlRealtimeInventory(s *server.Server, resources *ControlResources) *fa
 	if _, err := report.NewDatasetModuleObserver(datasetMetrics, moduleMetrics, "calculate", "factor-calculation"); err != nil {
 		return nil
 	}
-	inventory := factorobservability.NewRealtimeInventory(resources.Store.Bindings(), datasetMetrics)
+	inventory := factorobservability.NewRealtimeInventory(
+		resources.Store.Bindings(),
+		datasetMetrics,
+		factorobservability.WithAcceptedFactorTypes(domain.FactorTypeCrossSection),
+	)
 	registerMetricsReporter(s, inventory)
 	return inventory
 }

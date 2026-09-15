@@ -5,7 +5,9 @@ import {
   buildKlineChartRecords,
   buildViewColumnLabels,
   buildViewFilterExprs,
-  exactSeriesTagFromFilters
+  exactSeriesTagFromFilters,
+  viewBoundDatasetId,
+  viewModeFromPrimaryDataset
 } from "../view-browse/view-browse-utils";
 
 describe("timeSeriesRowsToTableRows", () => {
@@ -133,5 +135,31 @@ describe("view factor column labels", () => {
     );
 
     expect(labels[columnName]).toBe("bias_5");
+  });
+});
+
+describe("viewBoundDatasetId", () => {
+  it("reads dataset_id from live storage JSON when primary_dataset_id is absent", () => {
+    const view = { dataset_id: "dataset_spot_kline_1h" };
+    expect(viewBoundDatasetId(view)).toBe("dataset_spot_kline_1h");
+    expect(
+      viewModeFromPrimaryDataset(
+        [{ dataset_id: "dataset_spot_kline_1h", data_kind: "DATA_KIND_TIME_SERIES" }],
+        viewBoundDatasetId(view)
+      )
+    ).toBe("time_series");
+  });
+
+  it("falls back to primary_dataset_id for older view payloads", () => {
+    expect(viewBoundDatasetId({ primary_dataset_id: "mdataset_binance_kline_1m" })).toBe("mdataset_binance_kline_1m");
+  });
+
+  it("treats SQL time_series data_kind as a time-series dataset", () => {
+    expect(
+      viewModeFromPrimaryDataset(
+        [{ dataset_id: "mdataset_binance_kline_1m", data_kind: "time_series" as never }],
+        "mdataset_binance_kline_1m"
+      )
+    ).toBe("time_series");
   });
 });

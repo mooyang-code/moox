@@ -30,6 +30,9 @@ func (engineStartupCatalog) CatalogSnapshot(context.Context) (*domain.CatalogSna
 // Real NATS, replica SQLite and Python; tRPC registration is captured without
 // listening on fixed ports. This verifies startup wiring, not factor writeback.
 func TestInitializeEngineConnectsCatalogPythonAndConsumer(t *testing.T) {
+	t.Setenv("MOOX_INSTANCE_ID", "moox_factor_engine")
+	t.Setenv("MOOX_NODE_ID", "engine-test")
+	t.Setenv("MOOX_BOOT_ID", "engine-boot-test")
 	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "engine-test")
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "engine-test-secret")
 	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "engine-health-test")
@@ -49,9 +52,10 @@ func TestInitializeEngineConnectsCatalogPythonAndConsumer(t *testing.T) {
 	_, err = catalogsync.ServeSnapshots(ctx, nc, engineStartupCatalog{})
 	require.NoError(t, err)
 	s := &server.Server{}
-	healthService, catalogService := &engineRegisteredService{}, &engineRegisteredService{}
+	healthService, catalogService, metricsService := &engineRegisteredService{}, &engineRegisteredService{}, &engineRegisteredService{}
 	s.AddService(engineHealthService, healthService)
 	s.AddService(catalogTimerService, catalogService)
+	s.AddService(engineMetricsTimerService, metricsService)
 	cfg := DefaultEngineApplicationConfig()
 	cfg.Cache.Enabled = false
 	cfg.Storage.GatewayNodeID = "storage-test"

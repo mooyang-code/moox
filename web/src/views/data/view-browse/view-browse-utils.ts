@@ -75,6 +75,10 @@ export function viewDisplayName(view?: Pick<View, "view_id" | "name"> | null) {
   return view.name || view.view_id || "";
 }
 
+export function viewBoundDatasetId(view?: { dataset_id?: string; primary_dataset_id?: string } | null) {
+  return (view?.dataset_id || view?.primary_dataset_id || "").trim();
+}
+
 export function viewModeFromPrimaryDataset(
   datasets: Array<Pick<Dataset, "dataset_id" | "data_kind">>,
   primaryDatasetId?: string
@@ -314,7 +318,7 @@ function isOriginType(value: unknown, name: string, alias: number) {
 }
 
 function isTimeSeriesDataKind(value: unknown) {
-  return value === "DATA_KIND_TIME_SERIES" || value === 2;
+  return value === "DATA_KIND_TIME_SERIES" || value === "time_series" || value === 2;
 }
 
 function typedFilterValue(value: string, valueType: FieldValueType): TypedValue {

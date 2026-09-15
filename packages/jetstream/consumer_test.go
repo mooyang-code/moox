@@ -221,6 +221,61 @@ func TestNewConsumerAcceptsExistingFiltersInDifferentOrder(t *testing.T) {
 	defer consumer.Close()
 }
 
+func TestNewConsumerAcceptsSupersetFilterSubjects(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	_, err := client.js.AddConsumer("TEST", &nats.ConsumerConfig{
+		Name: "superset-filters", Durable: "superset-filters",
+		FilterSubjects: []string{"moox.test.alpha.>", "moox.test.beta.>", "moox.test.gamma.>"},
+		AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8,
+		DeliverPolicy: nats.DeliverAllPolicy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConsumerConfig("superset-filters")
+	cfg.FilterSubject = ""
+	cfg.FilterSubjects = []string{"moox.test.alpha.>", "moox.test.beta.>"}
+	consumer, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+	info, err := client.js.ConsumerInfo("TEST", "superset-filters")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Config.FilterSubjects) != 3 {
+		t.Fatalf("durable filters = %v, want the existing superset kept", info.Config.FilterSubjects)
+	}
+}
+
+func TestNewConsumerRejectsMissingFilterSubjects(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	_, err := client.js.AddConsumer("TEST", &nats.ConsumerConfig{
+		Name: "subset-filters", Durable: "subset-filters",
+		FilterSubjects: []string{"moox.test.alpha.>"},
+		AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8,
+		DeliverPolicy: nats.DeliverAllPolicy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConsumerConfig("subset-filters")
+	cfg.FilterSubject = ""
+	cfg.FilterSubjects = []string{"moox.test.alpha.>", "moox.test.beta.>"}
+	if _, err := client.NewConsumer(context.Background(), cfg); !errors.Is(err, ErrConsumerConfigConflict) {
+		t.Fatalf("error = %v, want conflict", err)
+	}
+}
+
 func TestNewConsumerRejectsAmbiguousFilterConfiguration(t *testing.T) {
 	cfg := testConsumerConfig("ambiguous-filters")
 	cfg.FilterSubjects = []string{"moox.test.alpha.>", "moox.test.beta.>"}

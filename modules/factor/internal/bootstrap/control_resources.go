@@ -60,7 +60,10 @@ func OpenControlResources(ctx context.Context, cfg *ControlConfig) (*ControlReso
 	runCtx, cancel := context.WithCancel(ctx)
 	metadata := registry.NewMetadataSync(newMetadataClient(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, credentials), factorAuthInfo())
 	r := &ControlResources{Store: db, Metadata: metadata, ctx: runCtx, cancel: cancel}
-	r.Registry = registry.NewService(db.Factors(), metadata, registry.Options{FactorsDir: cfg.ArtifactsDir}).WithBindings(db.Bindings())
+	r.Registry = registry.NewService(db.Factors(), metadata, registry.Options{
+		FactorsDir:          cfg.ArtifactsDir,
+		AcceptedFactorTypes: []string{domain.FactorTypeCrossSection},
+	}).WithBindings(db.Bindings())
 	if err := r.Registry.EnsureSourceArtifacts(runCtx); err != nil {
 		return nil, errors.Join(fmt.Errorf("restore control source artifacts: %w", err), r.Close())
 	}

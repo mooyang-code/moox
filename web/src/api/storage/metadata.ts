@@ -239,8 +239,12 @@ export function getView(params: { space_id: string; view_id: string }) {
   return callMetadata<typeof params, RetRsp & { view: View }>("GetView", params);
 }
 
-export function listViews(params: { space_id: string; dataset_id?: string; status?: string; page?: Page }) {
-  return callMetadata<typeof params, RetRsp & { views: View[]; page_result: PageResult }>("ListViews", params);
+export function listViews(params: { space_id: string; dataset_id?: string; primary_dataset_id?: string; status?: string; page?: Page }) {
+  const { primary_dataset_id, dataset_id, ...rest } = params;
+  return callMetadata<typeof rest & { dataset_id?: string }, RetRsp & { views: View[]; page_result: PageResult }>("ListViews", {
+    ...rest,
+    ...(dataset_id || primary_dataset_id ? { dataset_id: dataset_id || primary_dataset_id } : {})
+  });
 }
 
 export async function upsertViewColumn(view_column: ViewColumn) {

@@ -58,6 +58,7 @@ func (s *Store) ReplaceCatalogSnapshot(ctx context.Context, snapshot domain.Cata
 	for i := range canonical.Bindings {
 		canonical.Bindings[i].SourceDataset = ""
 		canonical.Bindings[i].TargetDataset = ""
+		canonical.Bindings[i].FactorType = ""
 		canonical.Bindings[i].CreateTime = time.Time{}
 		canonical.Bindings[i].ModifyTime = time.Time{}
 	}

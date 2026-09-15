@@ -125,6 +125,44 @@ func (c *MetricCatalog) ListServicesForAt(ctx context.Context, serviceNames []st
 	return rows, nil
 }
 
+// ReporterInstanceKey identifies one logical reporter process across boots.
+func ReporterInstanceKey(serviceName, instanceID string) string {
+	return strings.TrimSpace(serviceName) + "\x00" + strings.TrimSpace(instanceID)
+}
+
+// CurrentBootIDs returns the newest-ctime boot that is still reporting for each
+// logical reporter instance. Older FactorMgr copies can keep publishing for days
+// after a restart; dataset inventory must follow the current boot, not last_seen.
+func (c *MetricCatalog) CurrentBootIDs(ctx context.Context, now time.Time) (map[string]string, error) {
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	cutoff := now.UTC().Add(-c.NoDataAfter())
+	var rows []MetricService
+	if err := c.messageStore.db.WithContext(ctx).
+		Where("c_last_seen_at >= ?", cutoff).
+		Order("c_ctime DESC, c_id DESC").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		bootID := strings.TrimSpace(row.BootID)
+		if bootID == "" {
+			continue
+		}
+		key := ReporterInstanceKey(row.ServiceName, row.InstanceID)
+		if _, exists := out[key]; exists {
+			continue
+		}
+		out[key] = bootID
+	}
+	return out, nil
+}
+
 func (c *MetricCatalog) markServicesStale(rows []MetricService) {
 	c.markServicesStaleAt(rows, time.Now().UTC())
 }

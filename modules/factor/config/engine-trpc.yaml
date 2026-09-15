@@ -14,6 +14,10 @@ server:
       network: "* * * * * *"
       protocol: timer
       timeout: 600000
+    - name: trpc.moox.factor.engine.metrics.timer
+      network: "*/30 * * * * *"
+      protocol: timer
+      timeout: 10000
     # Configure this service when cache.enabled is supported and enabled.
     # The job gates maintenance at cache.check_interval (default 37m13s).
     # Keep this timeout at least as large as cache.rebuild_timeout.

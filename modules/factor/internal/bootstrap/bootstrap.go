@@ -382,17 +382,21 @@ func validateStartupFactorContracts(ctx context.Context, validator startupContra
 }
 
 func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler) {
+	registerNamedMetricsReporter(s, inventory, "factor", "moox_factor", "trpc.moox.factor.metrics.timer")
+}
+
+func registerNamedMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler, module, serviceName, timerService string) {
 	if s == nil {
 		return
 	}
-	h, err := report.NewHandler(report.DefaultConfig("factor", "moox_factor"))
+	h, err := report.NewHandler(report.DefaultConfig(module, serviceName))
 	if err != nil {
-		log.Warnf("factor metrics reporter disabled: %v", err)
+		log.Warnf("%s metrics reporter disabled: %v", module, err)
 		return
 	}
-	service := s.Service("trpc.moox.factor.metrics.timer")
+	service := s.Service(timerService)
 	if service == nil {
-		log.Warn("factor metrics timer service is not configured, skip register")
+		log.Warnf("%s metrics timer service is not configured, skip register", timerService)
 		return
 	}
 	timer.RegisterHandlerService(service, metricsTimerHandler(inventory, h, time.Now))

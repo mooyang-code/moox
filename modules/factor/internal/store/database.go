@@ -121,7 +121,7 @@ func (s *Store) ApplySchema(sql string) error {
 		return err
 	}
 	if len(tables) > 0 {
-		if err := s.validateSchemaTables(tables); err != nil {
+		if err := s.validateSchemaTables(tables, false); err != nil {
 			return err
 		}
 	}
@@ -153,7 +153,7 @@ func (s *Store) validateSchema() error {
 	if err != nil {
 		return err
 	}
-	return s.validateSchemaTables(tables)
+	return s.validateSchemaTables(tables, true)
 }
 
 func (s *Store) factorSchemaTables() ([]string, error) {
@@ -166,7 +166,7 @@ func (s *Store) factorSchemaTables() ([]string, error) {
 	return tables, nil
 }
 
-func (s *Store) validateSchemaTables(tables []string) error {
+func (s *Store) validateSchemaTables(tables []string, requireAll bool) error {
 	expected := map[string][]string{
 		"t_factor_subject_runs":  {"c_task_id", "c_scope_key", "c_period_time", "c_task_json", "c_status", "c_error", "c_updated_at"},
 		"t_factor_subject_heads": {"c_scope_key", "c_task_id", "c_period_time", "c_source_node", "c_source_store", "c_source_sequence", "c_source_event", "c_catalog_revision"},
@@ -212,20 +212,23 @@ func (s *Store) validateSchemaTables(tables []string) error {
 			"c_engine_id", "c_desired_revision", "c_applied_revision", "c_last_seen", "c_mtime",
 		},
 	}
-	if len(tables) != len(expected) {
-		return fmt.Errorf("factor database uses an obsolete schema; create a fresh database")
-	}
+	present := make(map[string]struct{}, len(tables))
 	for _, table := range tables {
-		want, ok := expected[table]
-		if !ok {
-			return fmt.Errorf("factor database uses an obsolete schema; create a fresh database")
+		present[table] = struct{}{}
+	}
+	for name, want := range expected {
+		if _, ok := present[name]; !ok {
+			if requireAll {
+				return fmt.Errorf("factor database missing table %s; create a fresh database", name)
+			}
+			continue
 		}
 		var columns []string
-		if err := s.db.Raw("SELECT name FROM pragma_table_info(?) ORDER BY cid", table).Scan(&columns).Error; err != nil {
-			return fmt.Errorf("inspect factor schema table %s: %w", table, err)
+		if err := s.db.Raw("SELECT name FROM pragma_table_info(?) ORDER BY cid", name).Scan(&columns).Error; err != nil {
+			return fmt.Errorf("inspect factor schema table %s: %w", name, err)
 		}
 		if strings.Join(columns, "\x00") != strings.Join(want, "\x00") {
-			return fmt.Errorf("factor database table %s uses an obsolete schema; create a fresh database", table)
+			return fmt.Errorf("factor database table %s uses an obsolete schema; create a fresh database", name)
 		}
 	}
 	return nil
