@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 多模块、tRPC、Protobuf、Pebble KV、JetStream、DuckDB、Python、Vue/TypeScript、Vitest/Playwright。
 
-日期：2026-09-16。源码基线为 `feature/mooyang` 上的 `8afaaa60d724862cc652bb9491fc4c3257af838a`（其后 `2c7147f8` 仅提交本计划）。另有隔离分支 `feature/final-binance-spot-factor@aadbc2db`，已包含 Pebble 快照存储的局部实现，但尚未接入 RPC、Collector/Merge 或周期成功汇总，也未完成独立 codeCR。执行前必须明确以该分支继续，或从源码基线重新应用；禁止同时保留两份实现。本轮未运行功能测试、未检查线上版本；“已有”仅表示源码存在，不表示已验证可上线。
+日期：2026-09-16。主工作树源码基线为 `feature/mooyang` 的 `8afaaa60d724862cc652bb9491fc4c3257af838a`，后续 `2c7147f8`、`8f410f3c` 是计划文档提交。当前唯一实施候选工作树为 `.worktrees/final-binance-spot-factor`，分支 `feature/final-binance-spot-factor@d5498de8`，其父提交 `aadbc2db` 已实现 Pebble 快照基础能力。该候选工作树现有未提交改动还包括快照相同成员复用、`request_id` 幂等、同步 freshness、`BeginDatasetPeriod` 命名，以及 Storage/Primary 周期协议与 `DatasetPeriodCompleted` 的 Proto 草案和生成代码；它们尚未接入 RPC handler、鉴权、Collector/Merge、周期成功汇总或 outbox 发布。上一轮在 Proto 草案变更前通过了 `go test ./internal/service/datanode/pebble -run '^TestSubjectSnapshot' -count=1` 和该目录完整测试；Proto 生成后未重新验证，因此不代表当前候选工作树整体通过。全模块测试和独立 codeCR 均未验证。后续实施应只从这个候选工作树继续，先审查并稳定现存未提交改动，禁止从 `feature/mooyang` 再复制一份实现。当前主工作树已有用户未提交文件，保持原样。本轮只整理计划，不继续编码、启动服务或部署；“已有”仅表示源码存在，不表示已验证可上线。
 
 ## 1. 唯一执行口径
 
@@ -55,10 +55,10 @@
 | modules/storage/proto/metadata.proto:75 | View 已为单 dataset_id | 复用模型，补一 Dataset 多 View 回归，不重复改协议 |
 | modules/storage/internal/service/metadata/sqlite/crud_view_rebuild.go:17 | 已有手动请求 | 复用 UI/RPC 请求入口 |
 | modules/storage/internal/service/view/maintenance.go:658、669、785 | coverage/schema/容量仍可自动申请重建 | 限制新任务准入，保留已授权任务恢复 |
-| modules/storage/internal/service/view/data_ready.go:59、85；ready_fence.go:163 | 已有通用事件及持久 fence | 更换输入协议，复用等待与恢复，验证新周期提交位置 |
+| modules/storage/internal/service/view/data_ready.go:28、59、85；ready_fence.go:41、74、94、163 | 已有通用事件及持久 fence；当前 fence 记录每条流的最大 sequence 并以 `applied >= required` 判定，尚未证明连续前缀已应用 | 更换输入协议；先确认底层每条流严格有序且无洞，否则改为 contiguous watermark/洞集合；再验证新周期提交位置 |
 | modules/storage/internal/service/view/period_event_apply.go:130、177 | 仍接生产方专用完成 | 改为统一 Dataset 完成入口 |
 
-在 `feature/mooyang` 源码基线中，PutSubjectSnapshot、GetPeriodSubjects、DatasetPeriodCompleted 尚未形成目标实现。隔离分支 `aadbc2db` 仅已有 Pebble 内部快照保存、按生效时间读取和固定周期引用；它没有对外 RPC、生产者授权、周期成功状态或完成事件。无论从哪个分支执行，T02 都必须先核对并复用这段实现，再补齐完整链路；不能把内部 KV 方法误认为已交付 Dataset 成员接口。
+在 `feature/mooyang` 源码基线中，PutSubjectSnapshot、GetPeriodSubjects、DatasetPeriodCompleted 尚未形成目标实现。候选工作树的 `aadbc2db` 已有 Pebble 内部快照保存、按生效时间读取和固定周期引用；其未提交改动进一步实现同成员快照复用、请求幂等、freshness，并新增 RPC/事件 Proto 草案与生成代码。后者仍没有 RPC handler、Primary/DataNode 路由、生产者鉴权、周期成功状态、原子完成判定或 outbox 发布。实施 T01/T02 时必须先 review 这些未提交改动、验证生成代码与现有协议兼容关系，再补齐完整链路；不能把 Proto 定义或内部 KV 方法误认为已交付 Dataset 成员接口。
 
 ### 2.2 前端、默认配置与部署现状
 
@@ -261,6 +261,7 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 - [ ] 实时索引写入继续；受影响字段删改仅标记差异，不静默修复或返回虚假成功通知。
 - [ ] 未选择的新字段不算失配；失败保留 A，用户手动重试，切换后旧读者退出再删 A。
 - [ ] 消费统一 Dataset 完成，WaitApplied 等所有相关有序流的连续应用进度；不能比较一个跨流最大序号。
+- [ ] 不能把“已见最大 sequence”直接当“连续已应用”：先查明每个 `(space, view, index, node, store)` sequence 的生成与投递是否保证严格连续有序；无此保证时改为连续水位或持久化洞集合，加入先收到 N+1、后收到 N 的恢复测试。
 - [ ] 测试 View 重建不影响时序/截面，旧 schema 不声称新字段可读，多 View 独立范围。
 
 ### T11. 前端数据资产归并
@@ -313,7 +314,7 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 
 共享代码所有权：Storage proto 与 `packages/storagepb` 由单一实现者先完成；Pebble 快照与周期状态由同一 Storage 实现者连续修改；Collector、Factor、Merge 只能在协议固定后并行，且不能同时修改共享生成代码。Merge 必须继续位于 `modules/merge` 独立模块，不要新建 `modules/factor/internal/merge`。View/UI 可在协议冻结后并行，但手动重建 RPC 的语义由 Storage owner 定义。
 
-执行分支起点需先解决：`feature/final-binance-spot-factor@aadbc2db` 包含未审查的 Pebble 快照基础实现；若选它继续，先将本计划更新同步到该分支并验证已有测试，再在其上增量实现。若选 `feature/mooyang` 基线，则只从该分支实现一次。不要在两条分支各自继续相同的 Storage 改动后再合并冲突版本。
+执行分支起点已指定为 `.worktrees/final-binance-spot-factor` 的 `feature/final-binance-spot-factor@d5498de8`。开工第一步不是重写 T01/T02，而是对该工作树现存未提交的 KV、Proto 和生成代码做独立核对，确认工作区文件清单及定向测试结果，再在这一处增量实现。主工作树 `feature/mooyang` 只作为源代码基线，不再平行实现同一 Storage 功能；禁止 cherry-pick/复制另一份未经审查的相同实现。当前用户要求先不编码，因此上述分支选择只固定未来执行入口，不授权本轮继续实现。
 
 阻断条件：找不到有效历史 snapshot、生产任务与 principal 无法建立唯一授权映射、Storage 无法从受管理 schema 推导必需字段、事件位置无法可靠对应 Dataset owner、部署版本/有效配置不能确定时，先补设计或部署调查，不以空集合、调用方自报字段或 `SKIP` 假装成功。
 
@@ -388,6 +389,7 @@ bash scripts/test/contract/test-release-contract.sh
 ### 7.1 只读预检
 
 - [ ] 记录目标环境当前服务版本、Storage DataNode/Gateway、EventBus Stream、有效 Collector rule、当前消费者 durable 和部署根；配置值可记摘要，凭据只记 secret 名称，不输出 secret。
+- [ ] Admin 的 `ListServiceDeployments` 只证明部署登记，不证明进程存活；在确认目标主机和部署根后，使用该机 `healthcheck.sh factor-engine`（本机 `/readyz`）验证 Engine。健康检查前不得把未知 IP 当作目标，也不得用 `setup status` 代替实时状态。
 - [ ] 通过正式环境 API/CLI 确认 RAW 的 Dataset ID、字段 schema、1m period boundary、series_tag、实际激活现货 subject 和至少 20 根连续 K 线。仓库 `collector-rules.yaml` 模板不能证明线上已启用。
 - [ ] 确认 RAW 当前生产者 principal 与目标 Dataset owner；确认 event subject/ACL 放行 Collector、Merge、Factor Engine 各自所需操作。
 - [ ] 查询 TS/PANEL/CS、View 和任务 ID 是否冲突；存在同名但 schema/owner 不一致的资源时停止，不覆盖、不删除。
@@ -432,6 +434,7 @@ Collector → RAW spot Dataset ──DatasetRowsUpserted──> 内网 Factor En
 
 - [ ] 本地 Linux 目标构建与包校验通过，记录 `moox-factor`、`moox-factor-engine`、`moox-merge`、web-host 产物 SHA 和 Python runtime 版本。
 - [ ] 正式部署后核对进程角色、版本 SHA、生效配置摘要、NATS durable ACK/lag、Storage 数据和服务健康；engine 进程在内网机本地运行。
+- [ ] 只读预检与数据验收脚本不得调用部署脚本；`scripts/deploy/factor-engine/start.sh` 含 stop/kill/mkdir/launch 等副作用，不可作为健康探测手段。
 - [ ] 新启动 codeCR subagent 对完整差异做最终只读审查；主 Agent 核实每个发现，修复后重跑受影响测试和发布包校验。
 - [ ] 交付报告写明实际执行的命令、测试级别、3 个周期的证据索引、性能结果、未覆盖范围及风险；不包含 secret。
 
