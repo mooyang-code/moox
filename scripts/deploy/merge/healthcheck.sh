@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVICE="${1:-factor-merge}"
+SERVICE="${1:-merge}"
 case "${SERVICE}" in
-  factor-merge|moox-factor-merge|moox_factor_merge) ;;
+  merge|moox-merge|moox_merge) ;;
   *)
     echo "unsupported service ${SERVICE}" >&2
     exit 2
@@ -21,8 +21,8 @@ load_env_file() {
 }
 
 load_env_file "${ROOT}/config/runtime.env"
-load_env_file "${HOME}/.config/moox/factor-merge/runtime.env"
-SECRETS_DIR="${MOOX_FACTOR_MERGE_SECRETS_DIR:-${HOME}/.config/moox/factor-merge}"
+load_env_file "${HOME}/.config/moox/merge/runtime.env"
+SECRETS_DIR="${MOOX_MERGE_SECRETS_DIR:-${HOME}/.config/moox/merge}"
 if [[ -r "${SECRETS_DIR}/health-auth.env" ]]; then
   load_env_file "${SECRETS_DIR}/health-auth.env"
 fi
@@ -31,14 +31,14 @@ fi
   exit 1
 }
 
-PID_FILE="${ROOT}/run/factor-merge.pid"
+PID_FILE="${ROOT}/run/merge.pid"
 [[ -f "${PID_FILE}" ]] || {
-  echo "factor-merge is not running" >&2
+  echo "merge is not running" >&2
   exit 1
 }
 pid="$(cat "${PID_FILE}")"
 ps -p "${pid}" >/dev/null 2>&1 || {
-  echo "factor-merge pid ${pid} is not running" >&2
+  echo "merge pid ${pid} is not running" >&2
   exit 1
 }
 

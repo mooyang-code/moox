@@ -114,13 +114,14 @@ done < <(rg -n '^type [A-Za-z0-9_]*Publisher struct' \
 	modules --glob '**/eventconsumer/*.go' --glob '!**/*_test.go' || true)
 
 # Delivery and ACK policy belong to an eventconsumer transport adapter, not to
-# the owner-domain handler. Collector taskrunner and Storage observability are
-# explicit transport/telemetry exceptions rather than domain handlers.
+# the owner-domain handler. Collector taskrunner, Merge consumers, and Storage
+# observability are explicit transport/telemetry exceptions rather than domain handlers.
 while IFS= read -r match; do
 	violations+=("${match}: JetStream delivery policy must stay inside an eventconsumer transport package")
 done < <(rg -n 'jetstream\.(Delivery|HandlerResult)' modules \
 	--glob '*.go' --glob '!**/*_test.go' --glob '!**/eventconsumer/**' \
 	--glob '!modules/collector/internal/taskrunner/**' \
+	--glob '!modules/merge/internal/merge/**' \
 	--glob '!modules/storage/internal/observability/**' || true)
 
 # packages/events is the sole owner of event names, streams, and subject
@@ -144,6 +145,7 @@ current_event_docs=(
 	modules/archive/README.md
 	modules/factor/README.md
 	modules/factor/docs/realtime-verification.md
+	modules/merge/README.md
 	modules/trade/README.md
 )
 while IFS= read -r match; do

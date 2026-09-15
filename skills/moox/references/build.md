@@ -20,6 +20,7 @@ make check-boundaries
 - `moox-host-agent` (Linux amd64/arm64 builds only)
 - `moox-host-agent-cli` (Linux amd64/arm64 builds only)
 - `moox-factor`
+- `moox-merge`
 - `moox-trade`
 
 The default `moox-storage` binary builds the full storage service, including Access, PrimaryStore, view building, text indexing, and archive services.

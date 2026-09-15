@@ -14,7 +14,7 @@ while IFS= read -r module_path; do
   }
 done < <(awk '/^use \(/ {on=1; next} on && /^\)/ {exit} on {gsub(/^[[:space:]]*\.\//, ""); if (length) print}' go.work)
 
-[[ "${workspace_count}" -eq 53 ]] || {
+[[ "${workspace_count}" -eq 54 ]] || {
   echo "unexpected go.work module count: ${workspace_count}" >&2
   exit 1
 }
@@ -23,7 +23,7 @@ grep -Fq '分布在 `modules/`、`packages/` 和仓库根级运行模块中' doc
 ! grep -Fq 'internal/services/' docs/架构总览.md
 ! grep -Fq 'proto/gen/' docs/架构总览.md
 
-for module in gateway strategy archive; do
+for module in gateway strategy archive merge; do
   grep -Fq "[${module}](./${module}/)" modules/README.md
 done
 grep -Fq '因子定义、调度和 Python worker 计算' modules/README.md

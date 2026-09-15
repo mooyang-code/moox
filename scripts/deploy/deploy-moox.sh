@@ -2514,7 +2514,7 @@ PY
     for credential_name in ca.pem server.pem server-key.pem users.yaml internal-admin.yaml \
       archive-eventbus.yaml cloudnode-eventbus.yaml cloudnode-worker.yaml \
       hostagent-publisher.yaml market-fetch-publisher.yaml metrics-publisher.yaml \
-      collector-market-fetch-consumer.yaml factor-eventbus.yaml factor-engine-eventbus.yaml factor-merge-eventbus.yaml \
+      collector-market-fetch-consumer.yaml factor-eventbus.yaml factor-engine-eventbus.yaml merge-eventbus.yaml \
       monitor-observability.yaml \
       storage-eventbus.yaml strategy-eventbus.yaml trade-eventbus.yaml; do
       [[ -s "${eventbus_credentials_dir}/${credential_name}" ]] || eventbus_credentials_complete=0

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/merge/internal/domain"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 )

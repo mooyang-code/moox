@@ -17,8 +17,8 @@ import (
 const (
 	writeKindInputCommit  = "input_commit"
 	writeKindFactorPatch  = "factor_patch"
-	rowConsumerName       = "factor_merge_rows_v1"
-	collectorConsumerName = "factor_merge_collector_v1"
+	rowConsumerName       = "merge_rows_v1"
+	collectorConsumerName = "merge_collector_v1"
 )
 
 // RowHandler routes source Dataset row events onto the assemblers that own them.

@@ -11,7 +11,7 @@
 
 ## Live Check
 
-1. 启动 EventBus、Storage、Collector、`moox-factor-merge` 与 `moox-factor-engine`。
+1. 启动 EventBus、Storage、Collector、`moox-merge` 与 `moox-factor-engine`。
 2. 等待基础 Dataset 行到达后 Merge 提交完整输入，Storage 发布 `DatasetRowsUpserted`
    （`write_kind=input_commit`）。
 3. 确认时序任务完成；`factor_patch` 写回不得再次触发时序。

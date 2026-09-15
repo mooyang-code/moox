@@ -3,15 +3,15 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/build/package-factor-merge.sh --output FILE [--binary PATH] [--skip-build]
+Usage: scripts/build/package-merge.sh --output FILE [--binary PATH] [--skip-build]
 
-Assemble a deploy-service ZIP for moox-factor-merge. The package contains the
+Assemble a deploy-service ZIP for moox-merge. The package contains the
 merge binary, merge configs and lifecycle scripts. Credentials are never included.
 EOF
 }
 
 die() {
-  printf 'package-factor-merge: %s\n' "$1" >&2
+  printf 'package-merge: %s\n' "$1" >&2
   exit 1
 }
 
@@ -60,27 +60,27 @@ if [[ "${skip_build}" -eq 0 ]]; then
     if [[ ! -x "${ROOT}/bin/moox-cli" ]]; then
       bash "${ROOT}/scripts/build/build.sh" cli
     fi
-    CONFIG="${config}" MOOX_LINUX_CGO_TARGET=factor-merge \
+    CONFIG="${config}" MOOX_LINUX_CGO_TARGET=merge \
       bash "${ROOT}/scripts/build/build-storage-linux.sh"
   else
     TARGET_GOOS="${target_goos}" TARGET_GOARCH="${target_goarch}" \
-      bash "${ROOT}/scripts/build/build.sh" factor-merge
+      bash "${ROOT}/scripts/build/build.sh" merge
   fi
-  binary="${binary:-${ROOT}/bin/moox-factor-merge}"
+  binary="${binary:-${ROOT}/bin/moox-merge}"
 fi
-[[ -n "${binary}" ]] || binary="${ROOT}/bin/moox-factor-merge"
+[[ -n "${binary}" ]] || binary="${ROOT}/bin/moox-merge"
 [[ -f "${binary}" && -x "${binary}" ]] || die "merge binary is missing: ${binary}"
 
-stage="$(mktemp -d "${TMPDIR:-/tmp}/moox-factor-merge-pkg.XXXXXX")"
+stage="$(mktemp -d "${TMPDIR:-/tmp}/moox-merge-pkg.XXXXXX")"
 cleanup() { rm -rf -- "${stage}"; }
 trap cleanup EXIT
 
 mkdir -p "${stage}/bin" "${stage}/config"
-install -m 0755 "${binary}" "${stage}/bin/moox-factor-merge"
-install -m 0644 "${ROOT}/modules/factor/config/merge-app.yaml" "${stage}/config/merge-app.yaml"
-install -m 0644 "${ROOT}/modules/factor/config/merge-trpc.yaml" "${stage}/config/merge-trpc.yaml"
-install -m 0755 "${ROOT}/scripts/deploy/factor-merge/start.sh" "${stage}/start.sh"
-install -m 0755 "${ROOT}/scripts/deploy/factor-merge/stop.sh" "${stage}/stop.sh"
-install -m 0755 "${ROOT}/scripts/deploy/factor-merge/healthcheck.sh" "${stage}/healthcheck.sh"
+install -m 0755 "${binary}" "${stage}/bin/moox-merge"
+install -m 0644 "${ROOT}/modules/merge/config/merge-app.yaml" "${stage}/config/merge-app.yaml"
+install -m 0644 "${ROOT}/modules/merge/config/merge-trpc.yaml" "${stage}/config/merge-trpc.yaml"
+install -m 0755 "${ROOT}/scripts/deploy/merge/start.sh" "${stage}/start.sh"
+install -m 0755 "${ROOT}/scripts/deploy/merge/stop.sh" "${stage}/stop.sh"
+install -m 0755 "${ROOT}/scripts/deploy/merge/healthcheck.sh" "${stage}/healthcheck.sh"
 
 bash "${ROOT}/scripts/build/package-service.sh" --service-dir "${stage}" --output "${output}"

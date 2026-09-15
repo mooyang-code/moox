@@ -1,6 +1,6 @@
-merge_id: factor-merge-1
+merge_id: merge-1
 database:
-  path: ./data/factor-merge/merge.db
+  path: ./data/merge/merge.db
 storage:
   gateway_target: ip://127.0.0.1:11003
   gateway_node_id: ""
@@ -8,7 +8,7 @@ storage:
   hmac_key_file: ""
 eventbus:
   urls: [nats://127.0.0.1:4222]
-  credential_file: ~/.config/moox/eventbus/factor-merge-eventbus.yaml
+  credential_file: ~/.config/moox/eventbus/merge-eventbus.yaml
   fetch_max_wait: 10s
 definitions:
   - dataset_id: mdataset_binance_kline_1m

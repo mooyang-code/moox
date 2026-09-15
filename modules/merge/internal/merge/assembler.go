@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/merge/internal/domain"
 )
 
 type RowKey struct {

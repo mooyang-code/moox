@@ -10,7 +10,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/catalogsync"
 	"github.com/mooyang-code/moox/modules/factor/internal/health"
-	"github.com/mooyang-code/moox/modules/factor/internal/merge"
 	"github.com/mooyang-code/moox/packages/jetstream/testkit"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
@@ -60,10 +59,8 @@ func TestRoleBoundaryKeepsIndependentDatabases(t *testing.T) {
 	control := DefaultControlConfig()
 	engine := DefaultEngineApplicationConfig()
 	require.NotEqual(t, control.Database.Path, engine.Database.Path)
-	cfg, err := merge.LoadProcessConfig(filepath.Join("..", "..", "config", "merge-app.yaml"))
-	require.NoError(t, err)
-	require.NotEqual(t, control.Database.Path, cfg.Database.Path)
-	require.NotEqual(t, engine.Database.Path, cfg.Database.Path)
+	require.NotEqual(t, control.Database.Path, "./data/merge/merge.db")
+	require.NotEqual(t, engine.Database.Path, "./data/merge/merge.db")
 }
 
 func TestRoleBoundaryControlRestartDoesNotTouchEngineStore(t *testing.T) {

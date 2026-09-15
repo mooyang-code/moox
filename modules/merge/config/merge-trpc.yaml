@@ -4,7 +4,7 @@ global:
 server:
   filter: [recovery]
   service:
-    - name: trpc.moox.factor.merge.Health
+    - name: trpc.moox.merge.Health
       ip: 127.0.0.1
       port: 11416
       network: tcp

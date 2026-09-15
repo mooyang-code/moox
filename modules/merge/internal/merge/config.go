@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/merge/internal/domain"
 	"gopkg.in/yaml.v3"
 )
 
@@ -57,8 +57,8 @@ func LoadProcessConfig(path string) (ProcessConfig, error) {
 		return ProcessConfig{}, err
 	}
 	cfg := ProcessConfig{
-		MergeID:  "factor-merge-1",
-		Database: DatabaseConfig{Path: "./data/factor-merge/merge.db"},
+		MergeID:  "merge-1",
+		Database: DatabaseConfig{Path: "./data/merge/merge.db"},
 		Storage:  StorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "merge"},
 		EventBus: EventBusConfig{URLs: []string{"nats://127.0.0.1:4222"}, FetchMaxWait: time.Second},
 	}
@@ -71,22 +71,22 @@ func LoadProcessConfig(path string) (ProcessConfig, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return ProcessConfig{}, fmt.Errorf("merge config must contain exactly one YAML document")
 	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_MERGE_DB_PATH")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("MOOX_MERGE_DB_PATH")); v != "" {
 		cfg.Database.Path = v
 	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("MOOX_MERGE_STORAGE_RPC_GATEWAY_TARGET")); v != "" {
 		cfg.Storage.GatewayTarget = v
 	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("MOOX_MERGE_STORAGE_RPC_GATEWAY_NODE_ID")); v != "" {
 		cfg.Storage.GatewayNodeID = v
 	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_RPC_KEY_ID")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("MOOX_MERGE_STORAGE_RPC_KEY_ID")); v != "" {
 		cfg.Storage.KeyID = v
 	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_RPC_HMAC_KEY_FILE")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("MOOX_MERGE_STORAGE_RPC_HMAC_KEY_FILE")); v != "" {
 		cfg.Storage.HMACKeyFile = v
 	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("MOOX_MERGE_EVENTBUS_CREDENTIAL_FILE")); v != "" {
 		cfg.EventBus.CredentialFile = v
 	}
 	if v, ok := os.LookupEnv("MOOX_EVENTBUS_NATS_URL"); ok && strings.TrimSpace(v) != "" {

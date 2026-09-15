@@ -21,9 +21,9 @@ grep -Eq '^linux\|amd64\|1\|build .*moox-factor-engine ./cmd/engine$' "${BUILD_R
 
 rm "${BUILD_RECORD}"
 bash "${tmp}/scripts/build/build.sh" factor
-test "$(wc -l <"${BUILD_RECORD}" | tr -d ' ')" = 4
+test "$(wc -l <"${BUILD_RECORD}" | tr -d ' ')" = 3
 grep -Eq '^linux\|amd64\|1\|build .*moox-factor ./cmd/server$' "${BUILD_RECORD}"
 grep -Eq '^linux\|amd64\|1\|build .*moox-factor-cli ./cmd/cli$' "${BUILD_RECORD}"
 grep -Eq '^linux\|amd64\|1\|build .*moox-factor-engine ./cmd/engine$' "${BUILD_RECORD}"
-grep -Eq '^linux\|amd64\|1\|build .*moox-factor-merge ./cmd/merge$' "${BUILD_RECORD}"
+! grep -Fq 'moox-merge' "${BUILD_RECORD}"
 echo "factor engine build routing contract passed"

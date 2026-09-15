@@ -59,7 +59,7 @@ type Ledger struct {
 func Open(opts Options) (*Ledger, error) {
 	path := opts.Path
 	if strings.TrimSpace(path) == "" {
-		path = "./data/factor-merge/merge.db"
+		path = "./data/merge/merge.db"
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create merge database directory: %w", err)

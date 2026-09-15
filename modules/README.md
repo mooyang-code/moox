@@ -16,7 +16,8 @@ MooX 后端 Go 模块目录，由仓库根目录 `go.work` 统一管理。各模
 | [eventbus](./eventbus/) | `moox-eventbus` | 统一 NATS JetStream broker、Stream/KV 拓扑与只读管理面 |
 | [hostagent](./hostagent/) | `moox-host-agent`、`moox-host-agent-cli` | Linux amd64/arm64 主机 CPU、内存、文件系统、磁盘和网络采集 |
 | [cli](./cli/) | `moox-cli` | 命令行工具（元数据/数据导入、Doctor 手工诊断、运维辅助） |
-| [factor](./factor/) | `moox-factor` | 因子定义、调度和 Python worker 计算，结果写回 Storage |
+| [factor](./factor/) | `moox-factor`、`moox-factor-engine` | 因子定义、调度和 Python worker 计算，结果写回 Storage |
+| [merge](./merge/) | `moox-merge` | 复合 Dataset 合并服务，独立于 Factor |
 | [strategy](./strategy/) | `moox-strategy` | 策略包、实时运行、回测、组合目标和绩效查询 |
 | [archive](./archive/) | `moox-archive` | Storage Journal、Parquet 月分区、COS 副本和恢复 |
 
@@ -59,6 +60,7 @@ make build
 ./scripts/build/build.sh trade
 ./scripts/build/build.sh cli
 ./scripts/build/build.sh factor
+./scripts/build/build.sh merge
 ./scripts/build/build.sh strategy
 ./scripts/build/build.sh archive
 ./scripts/build/build.sh monitor

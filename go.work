@@ -16,6 +16,7 @@ use (
 	./modules/gateway
 	./modules/hostagent
 	./modules/hostagent/proto/hostagentgen
+	./modules/merge
 	./modules/monitor
 	./modules/monitor/proto/monitorgen
 	./modules/storage

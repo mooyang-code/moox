@@ -86,7 +86,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.FileExists(t, filepath.Join(exportDir, "collector-market-fetch-consumer.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "factor-eventbus.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "factor-engine-eventbus.yaml"))
-	assert.FileExists(t, filepath.Join(exportDir, "factor-merge-eventbus.yaml"))
+	assert.FileExists(t, filepath.Join(exportDir, "merge-eventbus.yaml"))
 	strategyCredential := filepath.Join(exportDir, "strategy-eventbus.yaml")
 	assert.FileExists(t, strategyCredential)
 	info, err := os.Stat(strategyCredential)
@@ -102,7 +102,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		"archive-eventbus.yaml":       "tls://203.0.113.10:4222",
 		"factor-eventbus.yaml":        "tls://127.0.0.1:4222",
 		"factor-engine-eventbus.yaml": "tls://203.0.113.10:4222",
-		"factor-merge-eventbus.yaml":  "tls://203.0.113.10:4222",
+		"merge-eventbus.yaml":         "tls://203.0.113.10:4222",
 	} {
 		credential, loadErr := jetstream.LoadCredentialFile(filepath.Join(exportDir, name))
 		require.NoError(t, loadErr, name)
@@ -121,7 +121,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		"collector-market-fetch-consumer": "consumer",
 		"factor-eventbus":                 "h",
 		"factor-engine-eventbus":          "engine",
-		"factor-merge-eventbus":           "merge",
+		"merge-eventbus":                  "merge",
 		"strategy-eventbus":               "i",
 		"archive-eventbus":                "j",
 		"trade-eventbus":                  "k",
@@ -146,7 +146,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		"collector-market-fetch-consumer": "consumer",
 		"factor-eventbus":                 "h",
 		"factor-engine-eventbus":          "engine",
-		"factor-merge-eventbus":           "merge",
+		"merge-eventbus":                  "merge",
 		"archive-eventbus":                "j",
 		"strategy-eventbus":               "i",
 		"trade-eventbus":                  "k",
@@ -244,7 +244,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.NotContains(t, consumerACL, "$JS.API.>")
 	factorACL := eventBusACLBlock(yaml, "factor-eventbus")
 	assert.Contains(t, yaml, "factor-engine-eventbus")
-	assert.Contains(t, yaml, "factor-merge-eventbus")
+	assert.Contains(t, yaml, "merge-eventbus")
 	assert.Equal(t, `publish: {allow: []}`, aclLine(factorACL, "publish:"))
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "moox.factor.internal.catalog.snapshot"]}`, aclLine(factorACL, "subscribe:"))
 	assert.Equal(t, `responses: {max_messages: 1, expires: 10s}`, aclLine(factorACL, "responses:"))
@@ -265,16 +265,16 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.NotContains(t, engineACL, "factor_source_subject")
 	assert.NotContains(t, engineACL, "factor_calc")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, aclLine(engineACL, "subscribe:"))
-	mergeACL := eventBusACLBlock(yaml, "factor-merge-eventbus")
+	mergeACL := eventBusACLBlock(yaml, "merge-eventbus")
 	assert.Contains(t, mergeACL, "password: merge")
-	assert.Contains(t, mergeACL, "$JS.API.CONSUMER.INFO.*.factor_merge_rows_v1")
-	assert.Contains(t, mergeACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_merge_rows_v1")
-	assert.Contains(t, mergeACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_merge_rows_v1")
-	assert.Contains(t, mergeACL, "$JS.ACK.MOOX_STORAGE.factor_merge_rows_v1.>")
-	assert.Contains(t, mergeACL, "$JS.API.CONSUMER.INFO.*.factor_merge_collector_v1")
-	assert.Contains(t, mergeACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_merge_collector_v1")
-	assert.Contains(t, mergeACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_merge_collector_v1")
-	assert.Contains(t, mergeACL, "$JS.ACK.MOOX_STORAGE.factor_merge_collector_v1.>")
+	assert.Contains(t, mergeACL, "$JS.API.CONSUMER.INFO.*.merge_rows_v1")
+	assert.Contains(t, mergeACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.merge_rows_v1")
+	assert.Contains(t, mergeACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.merge_rows_v1")
+	assert.Contains(t, mergeACL, "$JS.ACK.MOOX_STORAGE.merge_rows_v1.>")
+	assert.Contains(t, mergeACL, "$JS.API.CONSUMER.INFO.*.merge_collector_v1")
+	assert.Contains(t, mergeACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.merge_collector_v1")
+	assert.Contains(t, mergeACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.merge_collector_v1")
+	assert.Contains(t, mergeACL, "$JS.ACK.MOOX_STORAGE.merge_collector_v1.>")
 	assert.NotContains(t, mergeACL, "factor_view_ready_v1")
 	assert.NotContains(t, mergeACL, "factor_dataset_rows_v1")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, aclLine(mergeACL, "subscribe:"))
@@ -339,7 +339,7 @@ func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testi
 		"collector-market-fetch-consumer.yaml": "token: collector-token\n",
 		"factor-eventbus.yaml":                 "token: factor-token\n",
 		"factor-engine-eventbus.yaml":          "token: factor-engine-token\n",
-		"factor-merge-eventbus.yaml":           "token: factor-merge-token\n",
+		"merge-eventbus.yaml":                  "token: merge-token\n",
 		"strategy-eventbus.yaml":               "token: strategy-token\n",
 		"trade-eventbus.yaml":                  "token: trade-token\n",
 	}
@@ -356,11 +356,11 @@ func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testi
 	assert.Contains(t, text, "moox.factor.internal.catalog.snapshot")
 	assert.Contains(t, text, "factor_view_ready_v1")
 	assert.Contains(t, text, "factor_dataset_rows_v1")
-	assert.Contains(t, text, "factor_merge_rows_v1")
-	assert.Contains(t, text, "factor_merge_collector_v1")
+	assert.Contains(t, text, "merge_rows_v1")
+	assert.Contains(t, text, "merge_collector_v1")
 	assert.Contains(t, text, "strategy-token")
 	assert.Contains(t, text, "factor-engine-token")
-	assert.Contains(t, text, "factor-merge-token")
+	assert.Contains(t, text, "merge-token")
 	assert.Contains(t, text, "trade-token")
 }
 
@@ -744,13 +744,13 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, rowsConsumer.Close())
 	mergeJS, err := jetstream.Connect(engineCtx, jetstream.Config{
-		URLs: []string{server.ClientURL()}, Name: "factor-merge-auth-e2e",
-		Username: "factor-merge-eventbus", Password: tokens["factor-merge-eventbus"],
+		URLs: []string{server.ClientURL()}, Name: "merge-auth-e2e",
+		Username: "merge-eventbus", Password: tokens["merge-eventbus"],
 	})
 	require.NoError(t, err)
 	defer mergeJS.Close()
 	mergeRows, err := mergeJS.NewConsumer(engineCtx, jetstream.ConsumerConfig{
-		Stream: "MOOX_STORAGE", Durable: "factor_merge_rows_v1",
+		Stream: "MOOX_STORAGE", Durable: "merge_rows_v1",
 		FilterSubject: "moox.event.storage.dataset.rows.upserted.v2.crypto.dataset_binance_spot_kline_1m",
 		AckWait:       time.Second, MaxDeliver: 3, MaxAckPending: 8,
 		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
@@ -758,7 +758,7 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, mergeRows.Close())
 	mergeCollector, err := mergeJS.NewConsumer(engineCtx, jetstream.ConsumerConfig{
-		Stream: "MOOX_STORAGE", Durable: "factor_merge_collector_v1",
+		Stream: "MOOX_STORAGE", Durable: "merge_collector_v1",
 		FilterSubject: "moox.event.storage.collector.period.completed.v1.crypto.dataset_binance_spot_kline_1m",
 		AckWait:       time.Second, MaxDeliver: 3, MaxAckPending: 8,
 		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
@@ -766,7 +766,7 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, mergeCollector.Close())
 	requirePublishPermissionViolation(
-		t, server.ClientURL(), "factor-merge-eventbus", tokens["factor-merge-eventbus"],
+		t, server.ClientURL(), "merge-eventbus", tokens["merge-eventbus"],
 		"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_view_ready_v1",
 		"Merge 不得创建引擎 durable",
 	)

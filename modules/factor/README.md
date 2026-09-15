@@ -1,7 +1,7 @@
 # MooX Factor
 
 `moox-factor` 是外网控制面：因子定义、绑定、mdataset 构造配置、目录快照与 FactorMgr。
-`moox-factor-merge` 消费基础 Dataset 行，把完整输入提交到复合 mdataset。
+复合 mdataset 的行合并由独立服务 `moox-merge` 完成（见 `modules/merge`），不是 Factor 模块的一部分。
 `moox-factor-engine` 在计算节点运行 Python worker：时序消费 `DatasetRowsUpserted`
 （`write_kind=input_commit` 且 `input_ready`），截面消费关联 `MergePeriodCompleted`
 的 `ViewDataReady`，再把绑定拥有的因子列写回同一 mdataset。
@@ -15,11 +15,11 @@
 ```bash
 ./scripts/build/build.sh factor
 ./scripts/build/build.sh factor-engine
-./scripts/build/build.sh factor-merge
+./scripts/build/build.sh merge
 
-# 控制面、Merge、引擎分别启动，互不连带旧单体消费者
+# 控制面、独立 Merge、引擎分别启动
 ./bin/moox-factor
-./bin/moox-factor-merge
+./bin/moox-merge
 ./bin/moox-factor-engine
 
 ./bin/moox-factor-cli init --db ./data/factor/factor.db

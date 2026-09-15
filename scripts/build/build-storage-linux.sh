@@ -65,13 +65,13 @@ case "${linux_cgo_target}" in
     linux_cgo_binaries=(moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli)
     ;;
   factor)
-    linux_cgo_binaries=(moox-factor moox-factor-cli moox-factor-engine moox-factor-merge)
+    linux_cgo_binaries=(moox-factor moox-factor-cli moox-factor-engine)
     ;;
   factor-engine)
     linux_cgo_binaries=(moox-factor-engine)
     ;;
-  factor-merge)
-    linux_cgo_binaries=(moox-factor-merge)
+  merge)
+    linux_cgo_binaries=(moox-merge)
     ;;
   *)
     die "unsupported linux CGO build target: ${linux_cgo_target}"

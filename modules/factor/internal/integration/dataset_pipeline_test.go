@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/inputcache"
-	"github.com/mooyang-code/moox/modules/factor/internal/merge"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
@@ -25,9 +24,6 @@ import (
 
 func TestDatasetPipeline(t *testing.T) {
 	t.Run("independent_programs_and_docs", testDatasetPipelineDocsAndClose)
-	t.Run("two_sources_two_subjects", testDatasetPipelineTwoSources)
-	t.Run("source_timeout_degraded", testDatasetPipelineTimeout)
-	t.Run("kill_and_recover", testDatasetPipelineRestart)
 	t.Run("cache_full_falls_back", testDatasetPipelineCacheFull)
 	t.Run("view_rebuild_does_not_block_timeseries", testDatasetPipelineViewRebuild)
 	t.Run("timeseries_cross_section_strategy", testDatasetPipelineComputeAndStrategy)
@@ -41,73 +37,19 @@ func testDatasetPipelineDocsAndClose(t *testing.T) {
 	require.NotContains(t, text, "ViewSourceSubjectReady")
 	require.NotContains(t, text, "ViewSourcePeriodReady")
 	require.NotContains(t, text, "ViewFactorPeriodReady")
-	require.Contains(t, text, "moox-factor-merge")
+	require.NotContains(t, text, "moox-factor-merge")
+	require.NotContains(t, text, "cmd/merge")
+	require.Contains(t, text, "moox-merge")
 	require.Contains(t, text, "moox-factor-engine")
 	require.Contains(t, text, "DatasetRowsUpserted")
 	require.Contains(t, text, "ViewDataReady")
 	require.DirExists(t, filepath.Join(root, "cmd", "server"))
 	require.DirExists(t, filepath.Join(root, "cmd", "engine"))
-	require.DirExists(t, filepath.Join(root, "cmd", "merge"))
+	require.NoDirExists(t, filepath.Join(root, "cmd", "merge"))
 
-	ledger, err := merge.Open(merge.Options{Path: filepath.Join(t.TempDir(), "merge.db")})
-	require.NoError(t, err)
-	require.NoError(t, ledger.Close())
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "control.db")})
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
-}
-
-func testDatasetPipelineTwoSources(t *testing.T) {
-	assembler, commits, _ := openPipelineAssembler(t, t.TempDir())
-	period := time.Date(2026, 9, 14, 1, 0, 0, 0, time.UTC)
-	btc := pipelineKey("BTC-USDT", period)
-	eth := pipelineKey("ETH-USDT", period)
-	require.NoError(t, assembler.ApplyArrival(context.Background(), btc, "dataset_binance_spot_kline_1m", completeKline()))
-	require.NoError(t, assembler.ApplyArrival(context.Background(), eth, "dataset_binance_spot_kline_1m", completeKline()))
-	require.Empty(t, commits.ids)
-	require.NoError(t, assembler.ApplyArrival(context.Background(), btc, "dataset_binance_swap_kline_1m", completeKline()))
-	require.NoError(t, assembler.ApplyArrival(context.Background(), eth, "dataset_binance_swap_kline_1m", completeKline()))
-	require.Len(t, commits.ids, 2)
-	require.True(t, commits.ready[0] && commits.ready[1])
-}
-
-func testDatasetPipelineTimeout(t *testing.T) {
-	assembler, commits, ledger := openPipelineAssembler(t, t.TempDir())
-	reports := new(pipelineReporter)
-	periods, err := merge.NewPeriodLedger(ledger, reports)
-	require.NoError(t, err)
-	assembler.SetPeriodLedger(periods)
-	period := time.Date(2026, 9, 14, 1, 1, 0, 0, time.UTC)
-	key := pipelineKey("BTC-USDT", period)
-	periodKey := merge.PeriodKey{DatasetID: key.DatasetID, SnapshotID: key.SnapshotID, Frequency: key.Frequency, PeriodTime: period}
-	require.NoError(t, periods.Freeze(context.Background(), periodKey, []string{"BTC-USDT", "ETH-USDT"}, period.Add(time.Minute)))
-	require.NoError(t, assembler.ApplyArrival(context.Background(), key, "dataset_binance_spot_kline_1m", completeKline()))
-	require.NoError(t, assembler.ApplyArrival(context.Background(), key, "dataset_binance_swap_kline_1m", completeKline()))
-	require.Len(t, commits.ids, 1)
-	require.NoError(t, periods.Finalize(context.Background(), periodKey, period.Add(2*time.Minute)))
-	require.Len(t, reports.markers, 1)
-	require.Equal(t, "degraded", reports.markers[0].Status)
-	require.Equal(t, []string{"ETH-USDT"}, reports.markers[0].FailedSubjects)
-	accepted, err := periods.Accepts(context.Background(), periodKey, "ETH-USDT")
-	require.NoError(t, err)
-	require.True(t, accepted, "late dual-source rows may still CommitInput after merge report")
-	eth := pipelineKey("ETH-USDT", period)
-	require.NoError(t, assembler.ApplyArrival(context.Background(), eth, "dataset_binance_spot_kline_1m", completeKline()))
-	require.NoError(t, assembler.ApplyArrival(context.Background(), eth, "dataset_binance_swap_kline_1m", completeKline()))
-	require.Len(t, commits.ids, 2)
-	require.Len(t, reports.markers, 1)
-	require.Equal(t, []string{"ETH-USDT"}, reports.markers[0].FailedSubjects)
-}
-
-func testDatasetPipelineRestart(t *testing.T) {
-	dir := t.TempDir()
-	first, _, _ := openPipelineAssembler(t, dir)
-	period := time.Date(2026, 9, 14, 1, 2, 0, 0, time.UTC)
-	key := pipelineKey("BTC-USDT", period)
-	require.NoError(t, first.ApplyArrival(context.Background(), key, "dataset_binance_spot_kline_1m", completeKline()))
-	second, commits, _ := openPipelineAssembler(t, dir)
-	require.NoError(t, second.ApplyArrival(context.Background(), key, "dataset_binance_swap_kline_1m", completeKline()))
-	require.Len(t, commits.ids, 1)
 }
 
 func testDatasetPipelineCacheFull(t *testing.T) {
@@ -191,37 +133,6 @@ func (p *pipelinePeriodStorage) ClearFactorOutputs(context.Context, *engine.Fact
 	return nil
 }
 
-type commitRecorder struct {
-	ids   []string
-	ready []bool
-}
-
-func (c *commitRecorder) CommitInput(_ context.Context, commitID string, _ merge.RowKey, _ map[string]float64, ready bool) (merge.WriteReceipt, error) {
-	c.ids = append(c.ids, commitID)
-	c.ready = append(c.ready, ready)
-	return merge.WriteReceipt{CommitID: commitID, NodeID: "n", StoreID: "s", Sequence: uint64(len(c.ids))}, nil
-}
-
-type pipelineReporter struct {
-	markers []merge.PeriodMarker
-}
-
-func (r *pipelineReporter) Report(_ context.Context, marker merge.PeriodMarker) error {
-	r.markers = append(r.markers, marker)
-	return nil
-}
-
-func openPipelineAssembler(t *testing.T, dir string) (*merge.Assembler, *commitRecorder, *merge.Ledger) {
-	t.Helper()
-	ledger, err := merge.Open(merge.Options{Path: filepath.Join(dir, "merge.db")})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ledger.Close() })
-	commits := &commitRecorder{}
-	assembler, err := merge.NewAssembler(ledger, pipelineDefinition(), commits)
-	require.NoError(t, err)
-	return assembler, commits, ledger
-}
-
 func openPipelineStore(t *testing.T) *store.Store {
 	t.Helper()
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "engine.db")})
@@ -250,10 +161,12 @@ func openPipelineStore(t *testing.T) *store.Store {
 		SourceViewID: "view_binance_kline_1m", ResultDatasetID: "mdataset_binance_kline_1m", ResultViewID: "view_binance_kline_1m",
 		Freq: "1m", SubjectMode: domain.SubjectModeInclude, SubjectsJSON: `["BTC-USDT","ETH-USDT"]`, Status: domain.BindingStatusEnabled,
 	}))
+	require.NoError(t, db.MergedDatasets().Save(context.Background(), pipelineMergedDataset()))
+	require.NoError(t, db.MergedDatasets().Enable(context.Background(), "mdataset_binance_kline_1m"))
 	return db
 }
 
-func pipelineDefinition() domain.MergedDataset {
+func pipelineMergedDataset() domain.MergedDataset {
 	spot := "dataset_binance_spot_kline_1m"
 	swap := "dataset_binance_swap_kline_1m"
 	fields := []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num"}
@@ -276,17 +189,6 @@ func pipelineDefinition() domain.MergedDataset {
 		}
 	}
 	return def
-}
-
-func pipelineKey(subject string, period time.Time) merge.RowKey {
-	return merge.RowKey{
-		DatasetID: "mdataset_binance_kline_1m", SnapshotID: "snap-1", SubjectID: subject,
-		Frequency: "1m", PeriodTime: period.UTC(), SeriesTag: "default",
-	}
-}
-
-func completeKline() map[string]float64 {
-	return map[string]float64{"open": 1, "high": 2, "low": 0.5, "close": 1.5, "volume": 10, "quote_volume": 20, "trade_num": 3}
 }
 
 func readyRows(subject string, period time.Time) *publicstoragepb.DatasetRowsUpserted {

@@ -2,21 +2,21 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
-TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-factor-merge-pkg.XXXXXX")"
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-merge-pkg.XXXXXX")"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
 STAGE="${TMP_ROOT}/service"
 mkdir -p "${STAGE}/bin" "${STAGE}/config"
-printf '#!/usr/bin/env bash\nexit 0\n' >"${STAGE}/bin/moox-factor-merge"
-chmod +x "${STAGE}/bin/moox-factor-merge"
-cp "${ROOT}/modules/factor/config/merge-app.yaml" "${STAGE}/config/merge-app.yaml"
-cp "${ROOT}/modules/factor/config/merge-trpc.yaml" "${STAGE}/config/merge-trpc.yaml"
-cp "${ROOT}/scripts/deploy/factor-merge/start.sh" "${STAGE}/start.sh"
-cp "${ROOT}/scripts/deploy/factor-merge/stop.sh" "${STAGE}/stop.sh"
-cp "${ROOT}/scripts/deploy/factor-merge/healthcheck.sh" "${STAGE}/healthcheck.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' >"${STAGE}/bin/moox-merge"
+chmod +x "${STAGE}/bin/moox-merge"
+cp "${ROOT}/modules/merge/config/merge-app.yaml" "${STAGE}/config/merge-app.yaml"
+cp "${ROOT}/modules/merge/config/merge-trpc.yaml" "${STAGE}/config/merge-trpc.yaml"
+cp "${ROOT}/scripts/deploy/merge/start.sh" "${STAGE}/start.sh"
+cp "${ROOT}/scripts/deploy/merge/stop.sh" "${STAGE}/stop.sh"
+cp "${ROOT}/scripts/deploy/merge/healthcheck.sh" "${STAGE}/healthcheck.sh"
 chmod +x "${STAGE}/start.sh" "${STAGE}/stop.sh" "${STAGE}/healthcheck.sh"
 
-OUTPUT="${TMP_ROOT}/moox-factor-merge.zip"
+OUTPUT="${TMP_ROOT}/moox-merge.zip"
 bash "${ROOT}/scripts/build/package-service.sh" --service-dir "${STAGE}" --output "${OUTPUT}"
 [[ "$(stat -f '%Lp' "${OUTPUT}" 2>/dev/null || stat -c '%a' "${OUTPUT}")" == "600" ]]
 
@@ -24,7 +24,7 @@ UNPACKED="${TMP_ROOT}/unpacked"
 mkdir -p "${UNPACKED}"
 unzip -q "${OUTPUT}" -d "${UNPACKED}"
 for path in \
-  bin/moox-factor-merge \
+  bin/moox-merge \
   config/merge-app.yaml \
   config/merge-trpc.yaml \
   start.sh \
@@ -43,9 +43,9 @@ for blocked in data logs run secrets certs pyworker python-runtime; do
   fi
 done
 
-grep -Fq 'credential_file: ~/.config/moox/eventbus/factor-merge-eventbus.yaml' "${UNPACKED}/config/merge-app.yaml"
-grep -Fq 'factor-merge-eventbus.yaml' "${UNPACKED}/start.sh"
-grep -Fq 'MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE' "${UNPACKED}/start.sh"
+grep -Fq 'credential_file: ~/.config/moox/eventbus/merge-eventbus.yaml' "${UNPACKED}/config/merge-app.yaml"
+grep -Fq 'merge-eventbus.yaml' "${UNPACKED}/start.sh"
+grep -Fq 'MOOX_MERGE_EVENTBUS_CREDENTIAL_FILE' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_EVENTBUS_NATS_URL' "${UNPACKED}/start.sh"
 grep -Fq 'credential_eventbus_url' "${UNPACKED}/start.sh"
 ! grep -Fq 'python3 -m venv' "${UNPACKED}/start.sh"
@@ -59,13 +59,13 @@ bash -n "${UNPACKED}/start.sh"
 bash -n "${UNPACKED}/stop.sh"
 bash -n "${UNPACKED}/healthcheck.sh"
 
-PACKAGER="${ROOT}/scripts/build/package-factor-merge.sh"
+PACKAGER="${ROOT}/scripts/build/package-merge.sh"
 bash -n "${PACKAGER}"
 grep -Fq 'scripts/build/package-service.sh' "${PACKAGER}"
-grep -Fq 'modules/factor/config/merge-app.yaml' "${PACKAGER}"
-grep -Fq 'scripts/deploy/factor-merge/start.sh' "${PACKAGER}"
-grep -Fq 'MOOX_LINUX_CGO_TARGET=factor-merge' "${PACKAGER}"
+grep -Fq 'modules/merge/config/merge-app.yaml' "${PACKAGER}"
+grep -Fq 'scripts/deploy/merge/start.sh' "${PACKAGER}"
+grep -Fq 'MOOX_LINUX_CGO_TARGET=merge' "${PACKAGER}"
 grep -Fq 'scripts/build/build-storage-linux.sh' "${PACKAGER}"
 ! grep -Eq 'secrets|certs' "${PACKAGER}"
 
-echo "factor merge package contract passed"
+echo "merge package contract passed"

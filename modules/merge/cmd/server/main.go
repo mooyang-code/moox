@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/health"
-	"github.com/mooyang-code/moox/modules/factor/internal/merge"
-	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/modules/merge/internal/domain"
+	"github.com/mooyang-code/moox/modules/merge/internal/health"
+	"github.com/mooyang-code/moox/modules/merge/internal/merge"
+	"github.com/mooyang-code/moox/modules/merge/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -25,7 +25,7 @@ import (
 
 const (
 	mergeAppID         = "moox-merge"
-	mergeHealthService = "trpc.moox.factor.merge.Health"
+	mergeHealthService = "trpc.moox.merge.Health"
 )
 
 func main() {
@@ -51,7 +51,7 @@ func run() (err error) {
 	}
 	trpc.ServerConfigPath = *framework
 	s := trpc.NewServer()
-	trpclog.InstallServiceName("factor-merge")
+	trpclog.InstallServiceName("merge")
 	if s.Service(mergeHealthService) == nil {
 		return errors.New("merge health service is required")
 	}
@@ -107,7 +107,7 @@ func run() (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, collector.Close()) }()
-	state := health.New("factor-merge", cfg.MergeID, "", "")
+	state := health.New("merge", cfg.MergeID, "", "")
 	state.SetReady(true)
 	if err := health.Register(s.Service(mergeHealthService), state); err != nil {
 		return err
@@ -143,7 +143,7 @@ func runPeriodFinalizer(ctx context.Context, periods *merge.PeriodLedger) {
 }
 
 func mergeAuthInfo() *commonpb.AuthInfo {
-	auth := &commonpb.AuthInfo{AppId: mergeAppID, Operator: mergeAppID, RequestId: fmt.Sprintf("factor-merge-%d", time.Now().UnixNano())}
+	auth := &commonpb.AuthInfo{AppId: mergeAppID, Operator: mergeAppID, RequestId: fmt.Sprintf("merge-%d", time.Now().UnixNano())}
 	if secret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"); strings.TrimSpace(secret) != "" {
 		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
 	}

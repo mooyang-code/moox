@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PID_FILE="${ROOT}/run/factor-merge.pid"
+PID_FILE="${ROOT}/run/merge.pid"
 if [[ ! -f "${PID_FILE}" ]]; then
   exit 0
 fi
