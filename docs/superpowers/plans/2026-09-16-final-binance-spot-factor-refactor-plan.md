@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 多模块、tRPC、Protobuf、Pebble KV、JetStream、DuckDB、Python、Vue/TypeScript、Vitest/Playwright。
 
-日期：2026-09-16。原始盘点基线为 `feature/mooyang@8afaaa60d724862cc652bb9491fc4c3257af838a`，其后的 `2c7147f8` 仅提交旧计划。当前计划位于隔离分支 `feature/final-binance-spot-factor`：HEAD 为 `d5498de8`，父提交为 `aadbc2db`。刷新本计划时，该 worktree 已有 130 个已跟踪文件修改及 13 个未跟踪文件；其中包含本重构的未审查实现尝试，不能据此把任何任务标记为完成。执行前必须先完成 T00，逐文件识别、保全并验证这些改动，再决定如何继续；禁止 reset、checkout、clean、覆盖或重复实现。本轮按用户要求只更新计划，不继续修改业务代码、不运行测试、不启停或部署服务。“已有”只表示源码或工作树中可见，不表示通过测试、review 或正式环境验收。
+日期：2026-09-16。原始源码盘点基线为 `feature/mooyang@8afaaa60d724862cc652bb9491fc4c3257af838a`；当前隔离分支为 `feature/final-binance-spot-factor`。实现尝试所在提交为 `d5498de8`（父提交 `aadbc2db`）；当前 HEAD `54027eeb` 只更新了本计划文档，源码差异仍是 130 个已跟踪文件修改及 13 个未跟踪文件。它们包含本重构的未审查实现尝试，不能据此把任何任务标记为完成。执行前必须先完成 T00，逐文件识别、保全并验证这些改动，再决定如何继续；禁止 reset、checkout、clean、覆盖或重复实现。本轮仅按要求整理计划和进行只读审计，没有修改业务代码、启停服务或部署；下文记录了只读定向测试结果。“已有”只表示源码或工作树中可见，不表示通过 codeCR 或正式环境验收。
 
 ## 1. 唯一执行口径
 
@@ -119,7 +119,7 @@ View 的 index_build.snapshot_end 是索引构建进度，不是 Dataset subject
 
 ### 2.5 计划刷新时点的代码审计结论
 
-以下是对当前隔离 worktree（包括尚未提交的实现尝试）的只读核对结果。它们是开工前的风险清单，不代表当前实现已通过验证；对应任务完成前必须加回归测试并由执行 Agent 重新核实：
+以下是对当前隔离 worktree（以 `d5498de8` 为代码差异基线，包括尚未提交的实现尝试）的只读核对结果。它们是开工前的风险清单，不代表当前实现已通过独立 codeCR 或正式环境验收；对应任务完成前必须加回归测试并由执行 Agent 重新核实：
 
 | 优先级 | 现状与影响 | 执行要求 |
 |---|---|---|
@@ -129,9 +129,25 @@ View 的 index_build.snapshot_end 是索引构建进度，不是 Dataset subject
 | P1 | `GetPeriodSubjects` RPC 目前一次返回整个 subject 列表，没有稳定分页。 | T01/T02 增加 snapshot 锚定、稳定排序的 opaque cursor/page size/next cursor；重试不得换快照，禁止以不稳定 offset 扫描动态名单。 |
 | P1 | Pebble 周期记录把全部成功 subject、terminal items 和 report receipts 放在一个 JSON 记录；每次成功需重写增长中的周期对象，且快照/周期/receipt 尚无完整保留与 GC 设计。 | T03 按 subject 或固定块持久化状态并增量维护计数；定义幂等窗口、outbox、活动周期和可继承快照的保留边界，再实现有界 GC。不能为降写放大牺牲原子幂等。 |
 | P0 | Merge 当前跳过 `write_kind=input_commit`，所以新的完整提交事件不能驱动其组装；名单还可能在首条到达时查询实时 active subjects，并仍消费旧 Collector 完成协议。 | T08 只接受配置的 RAW/TS 输入完整提交，按周期冻结的各源 snapshot 计算 canonical subject 交集；缺 snapshot 是等待/错误，不是空集。行到齐才一次 CommitInput，缺源到 deadline 则 missing，禁止残缺计算。 |
-| P1 | Merge 周期账本的源完成键未统一包含 frequency；现有 assembler 对 terminal period 的迟到 arrival 处理也需核验，存在晚到提交覆盖或错误关联风险。 | T08 所有键必须含 output/source Dataset、frequency、period、snapshot/config identity；频率错配拒绝。终态后迟到事件只记可观测诊断，不写 arrival、不提交、不重开周期。 |
+| P0 | Merge 没有为输出 Dataset 调用 PutSubjectSnapshot/BeginDatasetPeriod，真实 Storage CommitInput 会因周期未开始而拒绝；现有测试使用 fake committer，未覆盖这条真实链路。 | T08 在处理行之前先冻结 PANEL 预期名单并开始 Storage 周期；补真实 Storage RPC 集成测试，不能以 assembler 单测替代。 |
+| P0 | Merge `Accepts` 不检查本地周期终态，现有测试 `TestMergePeriodLedgerAcceptsLateArrivalAfterCloseWithoutRewritingReport` 反而断言关闭后仍接受迟到行；`NoteCommit` 对终态静默返回，可能留下已发布 missing 但又写入数据的矛盾。 | T08 修改为终态后拒绝 arrival/commit，只发诊断；更正旧测试语义并覆盖 deadline 后事件、重启和并发迟到。 |
+| P1 | Merge 来源完成账本键缺 frequency、snapshot/config identity；membership 首行路径读取实时 active subjects，缺 source snapshot 与合法空 snapshot 也可能混淆。默认 canonicalization 仍启发式删除 `-SPOT/-SWAP`。 | T08 使用源 Dataset + frequency + period + snapshot/config identity 的冻结输入；各源快照齐备后标准化求交集。映射缺失/冲突要显式失败，不用实时名单、成功行交集或后缀猜测。 |
+| P1 | Merge custom 模式目前是 no-op，测试明确断言不提交；计划要求的自定义构造路径仍需遵守业务键、字段归属、幂等和终态报告。 | T08 定义 custom 程序的受控 Storage 提交与完成契约；system merge 未显式启用时不得静默 fallback。 |
+| P1 | Collector 同名单刷新直接返回，且 request_id 由内容/生效周期确定，可能导致 Storage 的独立 freshness 不更新；标准化映射缺失时还会回退 provider subject。 | T04 分离不可变 snapshot 与同步 freshness 的写入语义；缺映射/冲突必须拒绝启用或报告，不能把 provider symbol 当 canonical ID。 |
+| P1 | metadata `UpdateDataset` 将部分更新后的对象整体序列化，未保留新加的 production owner/task 属性；普通描述更新可能清空生产契约。列更新也没有冻结 WriterAppId。 | T01/T03 明确 metadata merge/update 语义；Begin 冻结 owner、required fields/types/writers 和 schema identity。增加部分更新不丢字段、周期中途变更只影响后续周期的测试。 |
+| P1 | `DatasetPeriodCompleted` 当前 schema/validator 要求携带完整 missing/failed subject ID 列表，事件随市场规模增长；`GetDatasetPeriod` 也返回完整终态 ID，缺独立分页明细接口。 | T01 改成有界汇总事件和周期摘要；subject 明细通过稳定分页 API 查询。事件只带 snapshot 引用、计数/状态和所需提交位置，不携带全量 subject 或失败列表。 |
+| P1 | Factor 输入/输出 Dataset RPC 改造尚未收敛：编译仍引用被删除的旧 View/Result 字段；trigger 测试夹具仍使用旧字段，事件到 task 的新映射没有通过回归。 | T05/T06 先统一 proto/domain/store/registry/RPC 的 input_dataset_id/output_dataset_id，再更新 fixtures。禁止为通过测试恢复旧字段或兼容别名。 |
 
-T00 负责重新确认以上问题仍成立或已由现有未提交代码解决。任何一项若已实现，必须以定向测试和 diff 证据标记为“已实现、待 review/验证”，不可静默删出执行清单。
+周期状态的持久化结构还需要单独解决：当前一条 JSON KV 保存全部 succeeded IDs、terminal items 和 report receipts，每次 CommitInput 都重写扩大的周期记录并扫描终态；尚未发现 snapshot、period、request receipt 的完整保留/GC。T03 必须拆分 subject 状态或固定块并增量维护汇总，定义活动周期、幂等窗口、待发布 outbox、最新可继承快照及边界前驱的保留规则，再实现有界清理。原子幂等和恢复能力不能为降低写放大而牺牲。
+
+只读验证记录（均为本地结果，不代表正式发布或端到端通过）：
+
+- `packages/events`、`packages/storagepb` 全包测试通过；Storage DataNode/Pebble、PrimaryStore、SQLite metadata、View consumer/View、bootstrap 和 `cmd/server` 的定向测试通过。`modules/storage` 全模块结果仍需后续单独跑全量并解释基线差异。
+- Collector 的 `internal/marketfetch`、`internal/marketstorage`、`internal/marketdata`、`internal/marketwiring` 定向测试通过；Merge `internal/merge` 测试通过，但其中迟到行测试通过的是与目标契约相反的行为，必须按上表修正测试和实现。
+- Factor `env CGO_ENABLED=1 go test ./... -run '^$' -count=1` 当前不能编译：RPC converter 与 integration test 仍访问已移除的 SourceView/ResultView/ResultDataset 旧属性。`internal/trigger` 的 `TestDatasetRowsTriggerDedupesDuplicateSourceEvent` 与 `TestDatasetRowsTriggerDoesNotWaitForUniverse` 当前得到 0 个任务而非预期 1 个；需修正新 input Dataset 语义及测试夹具后重跑。
+- Storage、Collector、Merge 的上述通过结果只覆盖定向包，不是所有模块回归。当前尚未完成独立 `codeCR`；此前因审查 agent 槽位已满未能启动。不得将这些检查记为最终审查。
+
+T00 负责在实际编码开始前重新确认以上问题仍成立或已由现有未提交代码解决，并核对测试是否因后续变更而漂移。任何一项若已实现，必须以定向测试和 diff 证据标记为“已实现、待 review/验证”，不可静默删出执行清单；上述只读盘点不等同于 T00 的完整执行验收。
 
 ## 3. 可复现的验收拓扑
 
@@ -518,4 +534,4 @@ Collector → RAW spot Dataset ──DatasetRowsUpserted──> 内网 Factor En
 
 编码阶段创建 `docs/superpowers/plans/2026-09-16-binance-spot-factor-progress.md`，逐任务记录复用路径、改动文件、红/绿测试命令、审查结论、提交 SHA、部署证据和剩余风险。完成定义不是“代码合并”或“文档复选框全勾”：Storage 通用周期能力、输入输出分离、真实 Collector→TS→PANEL→XS→View 链路、独立 codeCR、正式发布以及 3 个新分钟数值核对都需分别有证据。
 
-本次计划刷新只修改本计划文档；计划编辑开始前隔离 worktree 有 130 个已跟踪文件修改及 13 个未跟踪文件，另增加本文档 1 个修改。既有源码改动均未在本轮回滚或覆盖，也不能视为验收通过。此轮不继续编码、不运行测试、不启停服务、不创建线上资源、不部署。计划完成只代表执行拆解清楚，不代表任何目标功能已实现或正式环境已验收。
+本次计划刷新只修改本计划文档；编辑前隔离 worktree 有 130 个已跟踪源码文件修改及 13 个未跟踪文件，均未在本轮回滚或覆盖。完成只读审计和文中列出的定向本地测试，但未修改业务代码、未运行正式环境操作、未创建线上资源、未部署，也未完成独立 codeCR。计划完成只代表执行拆解清楚，不代表任何目标功能已实现或正式环境已验收。
