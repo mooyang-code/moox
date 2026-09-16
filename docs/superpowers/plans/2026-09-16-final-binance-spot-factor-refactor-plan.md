@@ -1,6 +1,6 @@
 # 最终改造执行计划：Dataset 周期能力与币安现货 1m 因子链路
 
-> **For agentic workers:** 实施时使用 `subagent-driven-development` 或 `executing-plans` 逐任务推进；严格先做 T00，协议先落定再分工，最终代码审查必须使用新启动的 `codeCR`。本次仅更新计划，不授权本轮编码、服务启停或部署。
+> **For agentic workers:** 实施时使用 `subagent-driven-development` 或 `executing-plans` 逐任务推进；严格先做 T00，协议先落定再分工，最终代码审查必须使用新启动的 `codeCR`。本轮只做只读审计和计划文档整理，不编码、不启停服务、不部署。
 
 **Goal:** 在现有代码上补齐 Dataset 标的快照与周期完成、优化数据资产管理、重构因子计算输入输出，最终交付真实币安现货 1m 的时序因子、聚合和截面结果。
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 多模块、tRPC、Protobuf、Pebble KV、JetStream、DuckDB、Python、Vue/TypeScript、Vitest/Playwright。
 
-日期：2026-09-16。原始源码盘点基线为 `feature/mooyang@8afaaa60d724862cc652bb9491fc4c3257af838a`；当前隔离分支为 `feature/final-binance-spot-factor`。实现尝试所在提交为 `d5498de8`（父提交 `aadbc2db`）；当前 HEAD `54027eeb` 只更新了本计划文档，源码差异仍是 130 个已跟踪文件修改及 13 个未跟踪文件。它们包含本重构的未审查实现尝试，不能据此把任何任务标记为完成。执行前必须先完成 T00，逐文件识别、保全并验证这些改动，再决定如何继续；禁止 reset、checkout、clean、覆盖或重复实现。本轮仅按要求整理计划和进行只读审计，没有修改业务代码、启停服务或部署；下文记录了只读定向测试结果。“已有”只表示源码或工作树中可见，不表示通过 codeCR 或正式环境验收。
+日期：2026-09-16。原始源码盘点基线为 `feature/mooyang@8afaaa60d724862cc652bb9491fc4c3257af838a`；当前隔离分支为 `feature/final-binance-spot-factor`。当前 HEAD 为 `7867dfa0`；`d5498de8`、`54027eeb`、`7867dfa0` 是连续的计划文档提交，不是实现代码提交。代码基线为 `aadbc2db`（其中已有 Pebble 内部 subject snapshot 基础实现）；在本轮开始时，工作树另有 140 个已跟踪文件修改和 15 个未跟踪文件，具体归属尚未逐文件确认。它们可能包含本重构的实现尝试，但在完成 T00、逐文件审阅并验证前，不把它们视作已完成实现。执行前必须保全这些改动、识别生成代码和无关文件，再决定如何继续；禁止 reset、checkout、clean、覆盖或重复实现。本轮只修改本计划文档并进行只读审计，没有修改业务代码、启停服务或部署。文中的定向测试结果是此前记录的本地证据，实施前仍须按 T00 重跑；“已有”只表示源码或工作树中可见，不表示通过 codeCR 或正式环境验收。
 
 ## 1. 唯一执行口径
 
@@ -63,18 +63,17 @@ ListDatasetPeriodItems(dataset_id, frequency, period, state_filter, page_size, p
 
 | 已核对入口 | 现状 | 实施决策 |
 |---|---|---|
-| modules/storage/internal/service/datanode/pebble/input_commit.go:63、70、98；modules/storage/internal/service/primarystore/input_commit.go:46 | CommitInput 有完整字段检查，数据、outbox、幂等收据同批写入；但必需字段由调用方 request 提供，尚不能作为可信成功判据 | 复用原 KV batch；Storage 改从已授权生产任务/schema 取 required fields，并同批写 subject success 与完成状态 |
-| modules/collector/internal/marketfetch/period_readiness.go:95、186、217 | TaskInstance 形成名单，Collector 消费写事件确认成功 | 用 Storage 快照和提交成功状态替代完整性权威；保留采集任务诊断 |
+| modules/storage/internal/service/datanode/pebble/input_commit.go；modules/storage/internal/service/primarystore/input_commit.go | 当前工作树候选已将数据、outbox、收据和周期成功状态放进 Pebble batch，并加入 deadline 检查；但 DataNode RPC 仍接收调用方 `required_fields`，周期也未冻结完整生产契约 | 保留原子提交骨架；移除调用方定义成功标准的入口，在 Begin 冻结 owner/task/schema/required fields/writers，后续提交只按该快照验证 |
+| modules/collector/internal/marketfetch/period_readiness.go；period_snapshot.go | 旧 SQLite 周期 readiness 与新的 Storage snapshot reconciler 并存；候选 reconciler 已可分页读取、冻结 Storage 周期 | T04 逐步移除 SQLite 对 Dataset 完整性的权威职责；SQLite 只留采集调度/诊断所需信息，验证同名刷新和 freshness |
 | modules/collector/internal/store/period_readiness.go:26 | 每周期 SQLite 冻结名单 | 停止作为 Dataset 权威，不新建第二套相同账本 |
-| modules/collector/internal/marketfetch/period_reporter.go:217 | 部分快照引用为占位字符串 | 替换为真实可解析的 KV snapshot_id |
+| modules/collector/internal/marketfetch/period_reporter.go | 旧 `CollectorPeriodCompleted` reporter 仍构造带占位 scope/config 的专用事件；新周期主链应由 Storage 从 CommitInput/ReportPeriod 终态发布通用事件 | T04 迁移调用方后删除旧专用事件 reporter/消费链，避免双重完整性权威 |
 | packages/storagepb/storage_events.proto:38、54、79 | Collector/Merge/Factor 专用完成事件仍活跃 | 原子切换生产者/消费者到 DatasetPeriodCompleted |
 | modules/storage/proto/metadata.proto:75 | View 已为单 dataset_id | 复用模型，补一 Dataset 多 View 回归，不重复改协议 |
 | modules/storage/internal/service/metadata/sqlite/crud_view_rebuild.go:17 | 已有手动请求 | 复用 UI/RPC 请求入口 |
 | modules/storage/internal/service/view/maintenance.go:658、669、785 | coverage/schema/容量仍可自动申请重建 | 限制新任务准入，保留已授权任务恢复 |
-| modules/storage/internal/service/view/data_ready.go:59、85；ready_fence.go:163 | 已有通用事件及持久 fence | 更换输入协议，复用等待与恢复，验证新周期提交位置 |
-| modules/storage/internal/service/view/period_event_apply.go:130、177 | 仍接生产方专用完成 | 改为统一 Dataset 完成入口 |
+| modules/storage/internal/service/view/data_ready.go；ready_fence.go；period_event_apply.go | 当前候选已接 `DatasetPeriodCompleted`，按相关写入位置 fence 后发布摘要 `ViewDataReady`；旧生产方完成处理器仍并存 | 保留并验证新通用路径；迁移完成后删除旧 handler，确保 View 不枚举全市场 subject，仅按事件位置确认索引可读 |
 
-在 `feature/mooyang` 源码基线中，PutSubjectSnapshot、GetPeriodSubjects、DatasetPeriodCompleted 尚未形成目标实现。隔离分支 `aadbc2db` 仅已有 Pebble 内部快照保存、按生效时间读取和固定周期引用；它没有对外 RPC、生产者授权、周期成功状态或完成事件。无论从哪个分支执行，T02 都必须先核对并复用这段实现，再补齐完整链路；不能把内部 KV 方法误认为已交付 Dataset 成员接口。
+在 `feature/mooyang` 源码基线及当前代码基线 `aadbc2db` 中，只有 Pebble 内部 subject 快照基础实现，没有完整的 Storage RPC/周期状态链路。当前隔离工作树未提交候选已补出 snapshot/period RPC、稳定游标分页、周期终态和 `DatasetPeriodCompleted`→ViewDataReady 链路及测试；这些仍是待 T00 逐文件复核、测试/codeCR 的候选实现，不能重复造一套，也不能仅因存在就视为交付。
 
 ### 2.2 前端、默认配置与部署现状
 
@@ -98,11 +97,11 @@ View 的 index_build.snapshot_end 是索引构建进度，不是 Dataset subject
 | 入口 | 当前状态 | 计划处理 |
 |---|---|---|
 | modules/factor/internal/bootstrap/engine_runtime.go:29 | 独立 engine 已启动行变更和 ViewDataReady 消费 | 复用进程/资源边界，只替换目标消费协议 |
-| modules/factor/internal/registry/metadata_sync.go:111；internal/rpc/service.go:829；internal/store/binding.go:183 | 绑定仍以 source_view_id 为入口并把输入/结果身份混用；result_dataset_id 虽已存在，尚未形成独立输入/输出契约 | T05 显式保存 input_dataset_id/output_dataset_id；View 只作为可选查询索引，不再替代 Dataset 身份 |
-| modules/factor/internal/trigger/dataset_rows.go:87 | 已过滤 input_commit，factor_patch 不自触发 | 复用过滤和幂等，接入 RAW 完整提交 |
+| modules/factor/proto/factor.proto:24；internal/domain/binding.go:16；internal/rpc/convert.go:45；internal/rpc/service.go:829；internal/store/binding.go:183 | proto/domain 已改为 input/output Dataset，但 RPC converter/service/recalc 仍引用已删除旧字段/API，Factor 编译失败；`normalizeBinding` 还会覆盖请求 output，重新按 input 派生 result Dataset/View | T05 收敛 proto/domain/store/registry/RPC/recalc 与测试夹具；保留用户明确选择的 output Dataset，不派生/要求 Result View；不得恢复旧字段别名 |
+| modules/factor/internal/trigger/dataset_rows.go:87；internal/storageio/client.go:18；internal/storageio/writeback.go:383 | 时序行触发器已有 input_commit 筛选，但写回仍只用旧 PatchFactor，尚未建 output snapshot/period、调用 CommitInput 或接收结果周期完成 | T06 将结果写入独立 output Dataset 的受控 CommitInput，并新增输出不回环、结果周期完整度与重复事件测试 |
 | modules/factor/internal/storageio/dataset_window.go:25 | 已有 Primary 精确键窗口读取 | 复用，补完整度/预算和输出 Dataset 场景 |
-| modules/factor/internal/trigger/view_ready_runner.go:503、537 | 仍依赖 MergePeriodCompleted 类型的 ViewDataReady | T09 改 Dataset 完成及 Primary 面板，不另建平行截面引擎 |
-| modules/factor/schema/factor.sql:181 | 本地 barrier/pairs 保存周期完成 | 保留执行明细，将 Dataset 完整性权威移到 KV |
+| modules/factor/internal/trigger/view_ready_runner.go:503、537、634 | 截面仍消费 MergePeriodCompleted 类型的 ViewDataReady，并将 input Dataset 与 ready.ViewId 比较；Dataset ID 与 View ID 不同时不会选择 binding | T09 改为只按 input_dataset_id 消费 DatasetPeriodCompleted，按冻结 PANEL snapshot 从 Primary 批量读面板，不等待源 View |
+| modules/factor/schema/factor.sql:181、237；modules/factor/internal/trigger/recalc.go:48 | 本地 barrier/pairs 仍保存执行细节；recalc 表已有 input/output Dataset 列，但 GORM model 仍映射旧 dataset/source_view 列 | T05/T06 同步 SQL 与 GORM model；保留任务运行明细，将 Dataset 完整性权威移到 Storage KV |
 | modules/factor/internal/bootstrap/engine_resources.go:86；modules/factor/internal/inputcache/ | Go-owned DuckDB read-through、代际切换及容量维护已有 | T07 先验证真实查询入口确实命中，再复用现有实现，不另造缓存模块 |
 | modules/factor/internal/bootstrap/engine_runtime.go:47；modules/factor/config/engine-trpc.yaml:21 | `cache.enabled=true` 仍被启动校验拒绝，容量 Timer 配置仍关闭 | T07 修通注入和 37m13s Timer 后再启用；仅改默认 YAML 不算完成 |
 | modules/factor/pyworker/worker.py:133；factors/catalog.json:1 | 三参数 ABI 已实现，内置 12 个因子皆时序 | 保留 ABI，新增明确截面 Rank 定义及测试 |
@@ -119,33 +118,33 @@ View 的 index_build.snapshot_end 是索引构建进度，不是 Dataset subject
 
 ### 2.5 计划刷新时点的代码审计结论
 
-以下是对当前隔离 worktree（以 `d5498de8` 为代码差异基线，包括尚未提交的实现尝试）的只读核对结果。它们是开工前的风险清单，不代表当前实现已通过独立 codeCR 或正式环境验收；对应任务完成前必须加回归测试并由执行 Agent 重新核实：
+以下是对当前隔离 worktree（代码基线 `aadbc2db` 加上未提交工作树差异；不包含后续仅修改计划文档的提交）的只读核对结果。它们是开工前的风险清单，不代表当前实现已通过独立 codeCR 或正式环境验收；对应任务完成前必须加回归测试并由执行 Agent 重新核实：
 
 | 优先级 | 现状与影响 | 执行要求 |
 |---|---|---|
-| P0 | `DatasetPeriodCompleted` 已注册并能由 Pebble 周期状态写入 outbox，但 View consumer 的 subject filter、订阅、dispatch、inventory reconcile 和 apply handler 尚未接入该事件。Storage 发出它不会自然产生 `ViewDataReady`。 | T01/T10 必须补齐从 Storage outbox 到 ViewDataReady 的完整链路；事件不携带整份大 subject 集合，只带 `snapshot_id`、汇总状态/计数与完成位置，View 用稳定分页接口恢复 subject IDs。 |
-| P0 | `CommitInput` 只验证周期仍是 running，没有在 `deadline_unix` 到期时同步终结。deadline timer 延迟期间的最后一条迟到行仍可能把周期算成 complete。 | T03 在同一 `outboxMu` 临界区内比较 deadline；过期时原子登记剩余 missing、写 degraded 完成状态和 outbox，并拒绝新 commit。覆盖 deadline 前、恰好到期、到期后及与 timer 并发。 |
+| P0 | 当前候选已将 `DatasetPeriodCompleted` 接入 Storage View filter、dispatcher、inventory 和 handler；handler 发布带 snapshot/计数/positions 的 ViewDataReady，并等 fence 追平。定向 Storage/View 测试通过，但旧 Collector/Merge/Factor 专用完成事件仍在订阅。 | T00 复核候选完整 diff；T10 覆盖 durable 恢复、多个有序流、重试和故障注入；迁移后删除旧处理器。View 只等待提交位置，不需要按 snapshot 分页取全集 subject。 |
+| P0 | 当前候选 `CommitInput` 已在 `outboxMu` 下对比 `deadline_unix`，过期时先终结周期再拒绝迟到写入，周期终态/outbox 同批持久化；focused tests 已覆盖边界。尚无独立 race 与 timer 积压/进程恢复验收。 | T00 重跑 deadline tests；T03 补并发 CommitInput/finalizer race、timer 积压、崩溃恢复和 outbox relay 集成测试，不能把“代码有检查”当作已交付。 |
 | P1 | Begin 周期目前冻结 snapshot、production task 和 mapping revision，但未冻结 owner、必需字段、字段类型/writer、schema revision/hash；Commit 仍可能读取可变元数据。 | T02/T03 冻结不可变 production contract 身份及其内容，不增加 `input_contract_version`；中途元数据变更只作用于未来周期，当前周期的授权与完整成功标准不变。 |
-| P1 | `GetPeriodSubjects` RPC 目前一次返回整个 subject 列表，没有稳定分页。 | T01/T02 增加 snapshot 锚定、稳定排序的 opaque cursor/page size/next cursor；重试不得换快照，禁止以不稳定 offset 扫描动态名单。 |
-| P1 | Pebble 周期记录把全部成功 subject、terminal items 和 report receipts 放在一个 JSON 记录；每次成功需重写增长中的周期对象，且快照/周期/receipt 尚无完整保留与 GC 设计。 | T03 按 subject 或固定块持久化状态并增量维护计数；定义幂等窗口、outbox、活动周期和可继承快照的保留边界，再实现有界 GC。不能为降写放大牺牲原子幂等。 |
+| P1 | 当前候选已提供 snapshot 固定的游标分页 GetPeriodSubjects 与终态 ListDatasetPeriodItems；但 Pebble 每页仍解码整个快照 JSON，周期详情也整体加载/排序，网络响应有界不代表磁盘 IO 和内存有界。 | T02/T03 保留稳定 opaque cursor；将 snapshot subjects、周期终态明细改为按 subject 或固定块存储，使每页真实有界读取；定义并实现快照、周期、receipt/outbox 的保留与 GC。 |
+| P1 | Pebble 周期记录仍把全部成功 subject、terminal items 和 report receipts 放在一个 JSON 记录；每次提交需要读取、修改、重写增长中的对象，并扫描成功集合。快照也仍存完整 JSON ID 列表，相关 Key 缺保留/GC。 | T03 按 subject 或固定大小块持久化状态并增量维护计数；定义活动周期、幂等窗口、待发布 outbox、最新可继承快照及边界前驱的保留规则，再实现有界 GC。不能为降写放大牺牲原子幂等。 |
 | P0 | Merge 当前跳过 `write_kind=input_commit`，所以新的完整提交事件不能驱动其组装；名单还可能在首条到达时查询实时 active subjects，并仍消费旧 Collector 完成协议。 | T08 只接受配置的 RAW/TS 输入完整提交，按周期冻结的各源 snapshot 计算 canonical subject 交集；缺 snapshot 是等待/错误，不是空集。行到齐才一次 CommitInput，缺源到 deadline 则 missing，禁止残缺计算。 |
 | P0 | Merge 没有为输出 Dataset 调用 PutSubjectSnapshot/BeginDatasetPeriod，真实 Storage CommitInput 会因周期未开始而拒绝；现有测试使用 fake committer，未覆盖这条真实链路。 | T08 在处理行之前先冻结 PANEL 预期名单并开始 Storage 周期；补真实 Storage RPC 集成测试，不能以 assembler 单测替代。 |
 | P0 | Merge `Accepts` 不检查本地周期终态，现有测试 `TestMergePeriodLedgerAcceptsLateArrivalAfterCloseWithoutRewritingReport` 反而断言关闭后仍接受迟到行；`NoteCommit` 对终态静默返回，可能留下已发布 missing 但又写入数据的矛盾。 | T08 修改为终态后拒绝 arrival/commit，只发诊断；更正旧测试语义并覆盖 deadline 后事件、重启和并发迟到。 |
 | P1 | Merge 来源完成账本键缺 frequency、snapshot/config identity；membership 首行路径读取实时 active subjects，缺 source snapshot 与合法空 snapshot 也可能混淆。默认 canonicalization 仍启发式删除 `-SPOT/-SWAP`。 | T08 使用源 Dataset + frequency + period + snapshot/config identity 的冻结输入；各源快照齐备后标准化求交集。映射缺失/冲突要显式失败，不用实时名单、成功行交集或后缀猜测。 |
 | P1 | Merge custom 模式目前是 no-op，测试明确断言不提交；计划要求的自定义构造路径仍需遵守业务键、字段归属、幂等和终态报告。 | T08 定义 custom 程序的受控 Storage 提交与完成契约；system merge 未显式启用时不得静默 fallback。 |
-| P1 | Collector 同名单刷新直接返回，且 request_id 由内容/生效周期确定，可能导致 Storage 的独立 freshness 不更新；标准化映射缺失时还会回退 provider subject。 | T04 分离不可变 snapshot 与同步 freshness 的写入语义；缺映射/冲突必须拒绝启用或报告，不能把 provider symbol 当 canonical ID。 |
+| P0 | Collector 候选已有名单读取、标准化、Storage 快照冻结和分页读取；但名单相同直接返回不刷新 freshness，映射缺失仍接受 provider SubjectID；bootstrap 当前先 `scheduler.Tick()` 再 `Reconcile()`，priority realtime 任务可能在周期 Begin 前写入。旧 SQLite readiness/reporter 也仍活跃。 | T04 分离快照内容与同步 freshness；映射缺失/冲突拒绝启用；确保快照 reconciler 完成 Begin 后才允许 scheduler/realtime Invoke，测试首个 tick、并发退市与冻结前后语义；之后停用旧完成 reporter。 |
 | P1 | metadata `UpdateDataset` 将部分更新后的对象整体序列化，未保留新加的 production owner/task 属性；普通描述更新可能清空生产契约。列更新也没有冻结 WriterAppId。 | T01/T03 明确 metadata merge/update 语义；Begin 冻结 owner、required fields/types/writers 和 schema identity。增加部分更新不丢字段、周期中途变更只影响后续周期的测试。 |
-| P1 | `DatasetPeriodCompleted` 当前 schema/validator 要求携带完整 missing/failed subject ID 列表，事件随市场规模增长；`GetDatasetPeriod` 也返回完整终态 ID，缺独立分页明细接口。 | T01 改成有界汇总事件和周期摘要；subject 明细通过稳定分页 API 查询。事件只带 snapshot 引用、计数/状态和所需提交位置，不携带全量 subject 或失败列表。 |
+| P1 | `DatasetPeriodCompleted` 当前已是有界汇总事件，候选也已加分页终态查询；但旧 Collector/Merge/Factor 完成事件仍携带 universe/失败对象列表，View legacy ready payload 还保留这些字段。 | T01/T04/T08/T09/T10 在所有生产者切换后清理旧专用事件、validator、handler 和无用的全量字段，确保通用周期通知不会因市场规模线性膨胀。 |
 | P1 | Factor 输入/输出 Dataset RPC 改造尚未收敛：编译仍引用被删除的旧 View/Result 字段；trigger 测试夹具仍使用旧字段，事件到 task 的新映射没有通过回归。 | T05/T06 先统一 proto/domain/store/registry/RPC 的 input_dataset_id/output_dataset_id，再更新 fixtures。禁止为通过测试恢复旧字段或兼容别名。 |
 
-周期状态的持久化结构还需要单独解决：当前一条 JSON KV 保存全部 succeeded IDs、terminal items 和 report receipts，每次 CommitInput 都重写扩大的周期记录并扫描终态；尚未发现 snapshot、period、request receipt 的完整保留/GC。T03 必须拆分 subject 状态或固定块并增量维护汇总，定义活动周期、幂等窗口、待发布 outbox、最新可继承快照及边界前驱的保留规则，再实现有界清理。原子幂等和恢复能力不能为降低写放大而牺牲。
+周期状态的持久化结构仍需单独解决：当前候选一条 JSON KV 保存全部 succeeded IDs、terminal items 和 report receipts，每次 CommitInput 都读取/重写增长中的周期记录；分页读也会先解码整份快照或周期 map。尚未发现 snapshot、period、request receipt 的完整保留/GC。T03 必须拆分 subject 状态或固定块并增量维护汇总，定义活动周期、幂等窗口、待发布 outbox、最新可继承快照及边界前驱的保留规则，再实现有界清理。原子幂等和恢复能力不能为降低写放大而牺牲。
 
 只读验证记录（均为本地结果，不代表正式发布或端到端通过）：
 
-- `packages/events`、`packages/storagepb` 全包测试通过；Storage DataNode/Pebble、PrimaryStore、SQLite metadata、View consumer/View、bootstrap 和 `cmd/server` 的定向测试通过。`modules/storage` 全模块结果仍需后续单独跑全量并解释基线差异。
-- Collector 的 `internal/marketfetch`、`internal/marketstorage`、`internal/marketdata`、`internal/marketwiring` 定向测试通过；Merge `internal/merge` 测试通过，但其中迟到行测试通过的是与目标契约相反的行为，必须按上表修正测试和实现。
-- Factor `env CGO_ENABLED=1 go test ./... -run '^$' -count=1` 当前不能编译：RPC converter 与 integration test 仍访问已移除的 SourceView/ResultView/ResultDataset 旧属性。`internal/trigger` 的 `TestDatasetRowsTriggerDedupesDuplicateSourceEvent` 与 `TestDatasetRowsTriggerDoesNotWaitForUniverse` 当前得到 0 个任务而非预期 1 个；需修正新 input Dataset 语义及测试夹具后重跑。
-- Storage、Collector、Merge 的上述通过结果只覆盖定向包，不是所有模块回归。当前尚未完成独立 `codeCR`；此前因审查 agent 槽位已满未能启动。不得将这些检查记为最终审查。
+- 当前候选 `modules/storage` 定向回归通过：`env CGO_ENABLED=1 go test ./internal/service/datanode/pebble ./internal/service/datanode ./internal/service/primarystore ./internal/service/view/eventconsumer ./internal/service/view ./internal/bootstrap ./cmd/server -count=1`；`packages/events` 的 `go test ./... -count=1` 通过。尚未跑 Storage 全模块与 `-race`。
+- 此前记录的 Collector `internal/marketfetch`、`internal/marketstorage`、`internal/marketdata`、`internal/marketwiring` 定向测试及 Merge `internal/merge` 测试通过；Merge 仍有 `TestMergePeriodLedgerAcceptsLateArrivalAfterCloseWithoutRewritingReport` 与目标终态拒绝语义相反，必须修正。
+- 本轮实测 Factor 编译失败：`cd modules/factor && env CGO_ENABLED=1 go test ./... -run '^$' -count=1`；`internal/rpc/convert.go` 仍使用旧 SourceView/ResultDataset/ResultView/SourceDataset/TargetDataset 字段，`internal/integration/dataset_pipeline_test.go` 仍引用旧 ResultViewID。另实测 `go test ./internal/trigger -run 'TestDatasetRowsTrigger(DedupesDuplicateSourceEvent|DoesNotWaitForUniverse)' -count=1` 失败：两个测试均得到 0 个任务，预期 1 个。
+- Storage、Collector、Merge 上述通过结果只覆盖定向包，不是全模块回归。当前候选尚未完成独立 `codeCR`，也没有正式环境验证；不得将局部测试或生成代码视作最终审查。
 
 T00 负责在实际编码开始前重新确认以上问题仍成立或已由现有未提交代码解决，并核对测试是否因后续变更而漂移。任何一项若已实现，必须以定向测试和 diff 证据标记为“已实现、待 review/验证”，不可静默删出执行清单；上述只读盘点不等同于 T00 的完整执行验收。
 
@@ -209,7 +208,7 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 - [ ] 定义 PutSubjectSnapshot、BeginDatasetPeriod、GetPeriodSubjects、CommitInput、ReportPeriod、GetDatasetPeriod、ListDatasetPeriodItems；扩展 Dataset/生产任务元数据，保存唯一 production owner、频率、完整提交所需字段及字段所有权。Storage 将已认证 principal 映射到该 owner，不接受请求自报 producer 字符串；`data_node_id` 仅是存储路由，不得误当业务生产者身份。当前 Dataset 有单一 data_node_id owner，第一版以所属 DataNode KV 作为该 Dataset 周期状态的唯一权威，不先造跨 DataNode 汇总层。
 - [ ] PutSubjectSnapshot 包含 dataset_id、frequency、生效周期、request_id、subject_ids 及标准化映射引用；BeginDatasetPeriod 原子冻结当期适用 snapshot_id 且重试幂等；GetPeriodSubjects 只查询，不隐式创建/冻结周期。GetDatasetPeriod 返回周期汇总，ListDatasetPeriodItems 分页返回 subject 终态和原因。
 - [ ] `DatasetPeriodCompleted` 是 Storage 对任意 Dataset 的周期终态事件，携带真实 snapshot_id、周期、状态/计数及成功写入位置；它不是 View 已可读事件，也不携带全量 subject 或失败明细。View 消费它并确认索引追平后，由 View 模块发布 `ViewDataReady(completion_event_id, view_id, dataset_id, scope)`。因子截面直接消费输入 mdataset 的 `DatasetPeriodCompleted`，策略若查 View 则消费对应 `ViewDataReady`，两种就绪语义不得混用。
-- [ ] View 的事件消费链路必须完整接入该事件：Storage subject filter、consumer subscription、delivery dispatch、handler、inventory reconciliation、fence 持久化及恢复。以 `snapshot_id` 分页恢复冻结 subject 列表，避免把大量 subject 放入事件；事件所带每个相关有序写入位置必须分别连续应用后，才能发布 ViewDataReady。
+- [ ] View 的事件消费链路必须完整接入该事件：Storage subject filter、consumer subscription、delivery dispatch、handler、inventory reconciliation、fence 持久化及恢复。View 不需要重读全集 subject；以事件中的相关有序写入位置分别确认连续应用后，才能发布 ViewDataReady。`GetPeriodSubjects` 分页供 UI、Merge、因子任务等确实需要成员集合的调用方使用。
 - [ ] 测试旧事件无注册、缺字段拒绝、不同 Dataset/周期不误关联、重复发布 ID 稳定；更新生成代码和全部调用方。
 - [ ] 删除伪 scope 引用、input_contract_version 和旧专用完成协议，不保留兼容别名。
 
@@ -221,6 +220,7 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 - [ ] 无变化不写逐周期 UNCHANGED；BeginDatasetPeriod 内部操作串行固定引用，查询只读。业务进程必须在首行写入前显式开始周期，不能把第一条数据的到达时间当作成员冻结时间。
 - [ ] 未有快照阻塞、合法空快照可完成；更新不改变已运行周期，迟到生效记录不回写固定引用。
 - [ ] `GetPeriodSubjects` 分页锚定已解析的 `snapshot_id`，subject ID 稳定排序，opaque cursor 不暴露内部 KV key；同一 cursor 重放返回同一页，下一页不得切换快照。合法空快照返回 `found=true` 和空页，未找到快照不能与空快照混同。
+- [ ] Pebble 的实际分页读取也必须有界：成员使用有序 KV key 或不可变固定大小块存储；每页只读 page size 加一个 lookahead，不允许每次先反序列化整份 snapshot subject JSON 再切片。
 - [ ] 测试关库重开、稳定分页、同请求重试、并发 Put/Freeze、同名单不重复存储、不同名单创建新快照、跨频率隔离。
 - [ ] GC 同时保护周期引用、活动任务引用、最新可继承快照和保留范围边界前驱。
 
@@ -232,6 +232,7 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 - [ ] 从 CommitInput RPC 移除调用方声明的 required_fields，必需字段改由受 Storage 管理的 Dataset schema + producer task 字段所有权推导；不能由客户端提交缩减字段集伪造完整成功。RAW、TS、PANEL、CS 都走同一受控完整提交路径。
 - [ ] Begin 时冻结 production contract：认证 owner/producer task、输出字段 ID/类型/writer、完整成功条件、schema revision 或 content hash。`input_contract_version` 不增加；后续 CommitInput 按周期冻结的 contract 校验，当前元数据变更仅影响后续周期。
 - [ ] 按 subject 去重更新 succeeded/missing/failed；串行化或事务保护读旧状态到写新状态，原子 batch 本身不是并发计数锁。
+- [ ] `ListDatasetPeriodItems` 按 stable cursor 直接读取选定状态的 KV 范围/固定块，不先加载并排序全周期所有 item；摘要计数以增量值维护。
 - [ ] ReportPeriod 仅报告 missing/failed；禁止覆盖已成功或重开终态周期。
 - [ ] terminal period 的迟到新 CommitInput 只记诊断并拒绝状态改写；deadline 前已成功的相同 `commit_id` 在响应丢失后重放仍返回原 receipt。新计算/显式补算必须有独立运行身份，不重开实时 period。
 - [ ] 最后一项终态触发 CompletePeriod，周期状态与完成事件原子保存；timer 处理截止及重试，不每次全量扫数据。每次 CommitInput 都在同一 `outboxMu` 临界区比较当前时刻与周期 deadline；达到 deadline 时先原子将未终态 subject 标为 missing、完成 degraded 并写 outbox，然后拒绝该迟到 commit。不能依赖 timer 准时运行来保证截止语义。
@@ -246,6 +247,7 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 
 - [ ] 市场列表定时获取；变化写全量，未变化复用原 snapshot 并更新同步成功时间，失败保留旧快照并告警。
 - [ ] 每个 1m 周期在任何行写入前调用 BeginDatasetPeriod 固定 RAW snapshot；将 K 线从普通 UpsertFields 改为 Storage 授权的完整 CommitInput。Collector 不再消费自己的 DatasetRowsUpserted 事件来推导成功或提交位置；SQLite 仅保留采集调度/诊断所需状态，不再作为 Dataset 完整性权威。
+- [ ] 启动与每个新周期都必须先完成 Storage snapshot reconcile / Begin，再开放 scheduler 的实时任务调用；当前 bootstrap 存在 `scheduler.Tick()` 早于 `Reconcile()` 的顺序，修正或加入显式 readiness gate，避免首根 K 线先于周期冻结而被 Storage 拒绝。
 - [ ] source_scope + raw_subject_id → canonical_subject_id，保留类型、交易所、计价信息；启用前预览冲突。
 - [ ] 测试冻结前退市排除、冻结后缺数据记 missing、全市场 API 失败不写空列表。
 - [ ] 同一源多个品种归一冲突拒绝；当前 ProviderSymbol 继续仅服务交易所请求。
@@ -255,6 +257,7 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 依赖 T01/T02。修改 modules/factor/internal/domain/、store/、proto/、catalogsync/、registry/metadata_sync.go、schema/factor.sql。
 
 - [ ] 在现有 factor binding/schema/proto 中显式分离 input_dataset_id、output_dataset_id、因子绑定、固定 subject 过滤、频率和配置快照；具体入口包括 modules/factor/internal/rpc/service.go、internal/store/binding.go、internal/registry/metadata_sync.go、schema/factor.sql、proto/factor.proto。
+- [ ] RPC `normalizeBinding` 必须尊重调用方明确选择的 output_dataset_id，仅验证它归属/字段/权限正确，不得按 input Dataset 重算覆盖，也不得派生 Result View。同步重构 recalc 的 proto/domain/SQLite 列映射；验收包括“显式 output 原样持久化”和空库 Accept/Get/Run。
 - [ ] 因子定义保存 `factor_type`（timeseries/cross_section）、输入字段、输出字段和 Python 入口名；类型由控制面目录与引擎读取，不塞入 `compute` 函数名或调用参数。因子结果 Dataset 明确字段 schema、subject 规则、所含因子定义及其输入基础/聚合 Dataset；View 仍是一 Dataset 的字段/数据范围子索引，不是因子 Dataset 的多源面板。
 - [ ] 输入输出不同，依赖图无环；第一版一个输出 Dataset 一个生产任务，任务内多个因子。
 - [ ] 启用后输入语义不可原地改，改变来源/行键/映射创建新 Dataset；配置更新不能让旧任务覆盖新结果。
@@ -378,7 +381,7 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 
 共享代码所有权：Storage proto 与 `packages/storagepb` 由单一实现者先完成；Pebble 快照与周期状态由同一 Storage 实现者连续修改；Collector、Factor、Merge 只能在协议固定后并行，且不能同时修改共享生成代码。Merge 必须继续位于 `modules/merge` 独立模块，不要新建 `modules/factor/internal/merge`。View/UI 可在协议冻结后并行，但手动重建 RPC 的语义由 Storage owner 定义。
 
-执行分支默认是当前 `feature/final-binance-spot-factor` 隔离 worktree。其 HEAD `d5498de8` 的父提交 `aadbc2db` 已含 Pebble 快照基础实现，而 worktree 又含大量未提交实现尝试；T00 必须先审阅这些差异并原地增量修正。`feature/mooyang@8afaaa60` 只作为旧源码盘点参考，不要再从它复制第二套实现。需要另开 worktree 时，先完整保全并清点现有 diff，再明确只由一个分支持有 Storage/Collector/Merge 改动。
+执行分支默认是当前 `feature/final-binance-spot-factor` 隔离 worktree。当前 HEAD `7867dfa0` 是计划文档提交；其上游代码基线 `aadbc2db` 已含 Pebble 快照基础实现，当前 worktree 另有未提交源码差异。T00 必须先审阅这些差异并原地增量修正。`feature/mooyang@8afaaa60` 只作为旧源码盘点参考，不要再从它复制第二套实现。需要另开 worktree 时，先完整保全并清点现有 diff，再明确只由一个分支持有 Storage/Collector/Merge 改动。
 
 阻断条件：找不到有效历史 snapshot、生产任务与 principal 无法建立唯一授权映射、Storage 无法从受管理 schema 推导必需字段、事件位置无法可靠对应 Dataset owner、部署版本/有效配置不能确定时，先补设计或部署调查，不以空集合、调用方自报字段或 `SKIP` 假装成功。
 
@@ -534,4 +537,4 @@ Collector → RAW spot Dataset ──DatasetRowsUpserted──> 内网 Factor En
 
 编码阶段创建 `docs/superpowers/plans/2026-09-16-binance-spot-factor-progress.md`，逐任务记录复用路径、改动文件、红/绿测试命令、审查结论、提交 SHA、部署证据和剩余风险。完成定义不是“代码合并”或“文档复选框全勾”：Storage 通用周期能力、输入输出分离、真实 Collector→TS→PANEL→XS→View 链路、独立 codeCR、正式发布以及 3 个新分钟数值核对都需分别有证据。
 
-本次计划刷新只修改本计划文档；编辑前隔离 worktree 有 130 个已跟踪源码文件修改及 13 个未跟踪文件，均未在本轮回滚或覆盖。完成只读审计和文中列出的定向本地测试，但未修改业务代码、未运行正式环境操作、未创建线上资源、未部署，也未完成独立 codeCR。计划完成只代表执行拆解清楚，不代表任何目标功能已实现或正式环境已验收。
+本轮开始时隔离 worktree 有 140 个已跟踪文件修改和 15 个未跟踪文件；这些源码改动均未在本轮回滚、覆盖或暂存。本轮只整理执行计划和核对当前分支/工作树状态，未修改业务代码、未运行正式环境操作、未创建线上资源、未部署，也未完成独立 codeCR。计划完成只代表执行拆解清楚，不代表任何目标功能已实现或正式环境已验收。
