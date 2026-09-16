@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 多模块、tRPC、Protobuf、Pebble KV、JetStream、DuckDB、Python、Vue/TypeScript、Vitest/Playwright。
 
-日期：2026-09-16。原始源码盘点基线为 `feature/mooyang@8afaaa60d724862cc652bb9491fc4c3257af838a`；当前隔离分支为 `feature/final-binance-spot-factor`。当前 HEAD 为 `7867dfa0`；`d5498de8`、`54027eeb`、`7867dfa0` 是连续的计划文档提交，不是实现代码提交。代码基线为 `aadbc2db`（其中已有 Pebble 内部 subject snapshot 基础实现）；在本轮开始时，工作树另有 140 个已跟踪文件修改和 15 个未跟踪文件，具体归属尚未逐文件确认。它们可能包含本重构的实现尝试，但在完成 T00、逐文件审阅并验证前，不把它们视作已完成实现。执行前必须保全这些改动、识别生成代码和无关文件，再决定如何继续；禁止 reset、checkout、clean、覆盖或重复实现。本轮只修改本计划文档并进行只读审计，没有修改业务代码、启停服务或部署。文中的定向测试结果是此前记录的本地证据，实施前仍须按 T00 重跑；“已有”只表示源码或工作树中可见，不表示通过 codeCR 或正式环境验收。
+日期：2026-09-16。原始源码盘点基线为 `feature/mooyang@8afaaa60d724862cc652bb9491fc4c3257af838a`；当前隔离分支为 `feature/final-binance-spot-factor`。本轮计划修订前审计到的 HEAD 是 `7867dfa0`；`d5498de8`、`54027eeb`、`7867dfa0` 和后续仅更新计划文档的提交均不是实现代码提交。代码基线为 `aadbc2db`（其中已有 Pebble 内部 subject snapshot 基础实现）；在本轮开始时，工作树另有 140 个已跟踪文件修改和 15 个未跟踪文件，具体归属尚未逐文件确认。它们可能包含本重构的实现尝试，但在完成 T00、逐文件审阅并验证前，不把它们视作已完成实现。执行前必须保全这些改动、识别生成代码和无关文件，再决定如何继续；禁止 reset、checkout、clean、覆盖或重复实现。本轮只修改本计划文档并进行只读审计，没有修改业务代码、启停服务或部署。文中的定向测试结果是此前记录的本地证据，实施前仍须按 T00 重跑；“已有”只表示源码或工作树中可见，不表示通过 codeCR 或正式环境验收。
 
 ## 1. 唯一执行口径
 
@@ -381,7 +381,7 @@ PANEL 的输入映射必须使用真实 RAW/TS ID 前缀，CS 将 TS 前缀的 b
 
 共享代码所有权：Storage proto 与 `packages/storagepb` 由单一实现者先完成；Pebble 快照与周期状态由同一 Storage 实现者连续修改；Collector、Factor、Merge 只能在协议固定后并行，且不能同时修改共享生成代码。Merge 必须继续位于 `modules/merge` 独立模块，不要新建 `modules/factor/internal/merge`。View/UI 可在协议冻结后并行，但手动重建 RPC 的语义由 Storage owner 定义。
 
-执行分支默认是当前 `feature/final-binance-spot-factor` 隔离 worktree。当前 HEAD `7867dfa0` 是计划文档提交；其上游代码基线 `aadbc2db` 已含 Pebble 快照基础实现，当前 worktree 另有未提交源码差异。T00 必须先审阅这些差异并原地增量修正。`feature/mooyang@8afaaa60` 只作为旧源码盘点参考，不要再从它复制第二套实现。需要另开 worktree 时，先完整保全并清点现有 diff，再明确只由一个分支持有 Storage/Collector/Merge 改动。
+执行分支默认是当前 `feature/final-binance-spot-factor` 隔离 worktree。计划修订前 HEAD `7867dfa0` 及本次计划更新提交只包含文档；源码比较基线 `aadbc2db` 已含 Pebble 快照基础实现，工作树另有未提交源码差异。T00 必须先审阅这些差异并原地增量修正。`feature/mooyang@8afaaa60` 只作为旧源码盘点参考，不要再从它复制第二套实现。需要另开 worktree 时，先完整保全并清点现有 diff，再明确只由一个分支持有 Storage/Collector/Merge 改动。
 
 阻断条件：找不到有效历史 snapshot、生产任务与 principal 无法建立唯一授权映射、Storage 无法从受管理 schema 推导必需字段、事件位置无法可靠对应 Dataset owner、部署版本/有效配置不能确定时，先补设计或部署调查，不以空集合、调用方自报字段或 `SKIP` 假装成功。
 
