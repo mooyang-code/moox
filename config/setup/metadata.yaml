@@ -1105,6 +1105,94 @@ fields:
   sort_order: 10
   status: active
 
+# Canonical prefixed fields for the optional merged Binance Kline Dataset.
+# The mdataset stores source values under dataset-id prefixes to avoid
+# collisions while keeping the metadata contract explicit.
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_spot_kline_1m__open
+  name: 现货开盘价（合并）
+  value_type: double
+  status: active
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_spot_kline_1m__high
+  name: 现货最高价（合并）
+  value_type: double
+  status: active
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_spot_kline_1m__low
+  name: 现货最低价（合并）
+  value_type: double
+  status: active
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_spot_kline_1m__close
+  name: 现货收盘价（合并）
+  value_type: double
+  status: active
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_spot_kline_1m__volume
+  name: 现货成交量（合并）
+  value_type: double
+  status: active
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_spot_kline_1m__quote_volume
+  name: 现货报价量（合并）
+  value_type: double
+  status: active
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_spot_kline_1m__trade_num
+  name: 现货成交笔数（合并）
+  value_type: double
+  status: active
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_swap_kline_1m__open
+  name: 永续开盘价（合并）
+  value_type: double
+  status: active
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_swap_kline_1m__high
+  name: 永续最高价（合并）
+  value_type: double
+  status: active
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_swap_kline_1m__low
+  name: 永续最低价（合并）
+  value_type: double
+  status: active
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_swap_kline_1m__close
+  name: 永续收盘价（合并）
+  value_type: double
+  status: active
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_swap_kline_1m__volume
+  name: 永续成交量（合并）
+  value_type: double
+  status: active
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_swap_kline_1m__quote_volume
+  name: 永续报价量（合并）
+  value_type: double
+  status: active
+- space_id: crypto
+  group_id: quote
+  field_id: dataset_binance_swap_kline_1m__trade_num
+  name: 永续成交笔数（合并）
+  value_type: double
+  status: active
+
 - space_id: mooxsys
   field_id: host_agent_id
   name: Host agent ID

@@ -32,6 +32,7 @@ type Service struct {
 }
 
 type scfProvisioner interface {
+	EnsureNamespace(context.Context, string, string) error
 	GetFunction(context.Context, tencentscf.FunctionRef) (*tencentscf.FunctionInfo, error)
 	CreateFunction(context.Context, tencentscf.CreateFunctionRequest) (*tencentscf.CreateFunctionResponse, error)
 	DeleteFunction(context.Context, tencentscf.FunctionRef) error

@@ -22,14 +22,14 @@ func newPrivateNetworkCommand(use string, deps setupDeps) *cobra.Command {
 	var dryRun, skipSCF, skipHosts, skipProbe, probeOnly, rewriteRuntime, updateGateway, restorePublic bool
 	cmd := &cobra.Command{
 		Use:   use,
-		Short: "腾讯云主机与 SCF 一律走公网；不再创建云联网",
-		Long: `读取 moox.toml 中 provider=tencent 的主机。容器与主机之间一律使用公网 IP，
-不再创建云联网、不再给 SCF 绑定 VPC。
+		Short: "发现主机与 SCF 的分地域网络路径（不创建云联网）",
+		Long: `读取 moox.toml 中 provider=tencent 的主机，发现 Storage 所在地域、VPC、子网和私网地址，
+输出同地域 SCF 私网、跨地域公网的推荐路径。默认只读，不创建云联网。
 
-可用 --restore-scf-public 把存量函数网关改回公网并解绑 VPC。
-可用 --rewrite-runtime 把主机 runtime.env 中的 Storage RPC 改回公网 IP。
+可用 --restore-scf-public 清理仍指向旧私网网关的存量函数（迁移/回滚用途）。
+可用 --rewrite-runtime 把主机 runtime.env 中的 Storage RPC 重写为公网地址。
 
-SSH 和控制台入口继续使用公网 IP。不会调用 ModifyInstancesVpcAttribute。
+			SSH 和控制台入口继续使用公网 IP。不会调用 ModifyInstancesVpcAttribute。
 
 示例：
   moox-cli setup private-network --file ./moox.toml --dry-run
@@ -78,7 +78,7 @@ SSH 和控制台入口继续使用公网 IP。不会调用 ModifyInstancesVpcAtt
 	cmd.Flags().StringVar(&ccnName, "ccn-name", privatenet.DefaultCCNName, "云联网名称，已存在则复用")
 	cmd.Flags().StringVar(&probeRegions, "probe-regions", "", "额外探测地域，逗号分隔；默认含广州/香港/上海/北京/成都/新加坡/东京")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只发现拓扑并输出计划，不调用写 API")
-	cmd.Flags().BoolVar(&skipSCF, "skip-scf", true, "不给 SCF 建 VPC/绑 CCN；SCF 统一走公网")
+	cmd.Flags().BoolVar(&skipSCF, "skip-scf", true, "跳过存量 SCF 网络修改（默认只生成路由计划）")
 	cmd.Flags().BoolVar(&skipHosts, "skip-hosts", true, "跳过主机安全组/轻量防火墙")
 	cmd.Flags().BoolVar(&skipProbe, "skip-probe", false, "跳过 SSH 公网端口探测")
 	cmd.Flags().BoolVar(&probeOnly, "probe-only", false, "只探测公网连通性，不调用写 API")
@@ -103,8 +103,6 @@ func defaultEnsurePrivateNetwork(ctx context.Context, snapshot *setupconfig.Snap
 	scf := privatenet.CollectSCFTargets(snapshot.Manifest)
 	if opts.RestoreSCFPublic {
 		scf = privatenet.CollectSCFRestoreTargets(snapshot.Manifest)
-	} else if opts.SkipSCF {
-		scf = nil
 	}
 	if opts.HomeRegion == "" {
 		opts.HomeRegion = snapshot.Manifest.TencentCloud.Region

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -43,6 +44,35 @@ func setCollectorCLSTestCredentials(t *testing.T) {
 	if os.Getenv("MOOX_CLS_SECRET_KEY") == "" {
 		t.Setenv("MOOX_CLS_SECRET_KEY", "test-cls-key")
 	}
+}
+
+func TestValidateSCFPublishOverrideCapacityIncludesOtherSpaces(t *testing.T) {
+	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{SCFFetcher: setupconfig.SCFFetcher{
+		TencentLimits: setupconfig.TencentSCFLimits{
+			MaxNamespacesPerRegion:       5,
+			MaxFunctionsPerNamespace:     50,
+			MaxBurstConcurrencyPerMinute: 500,
+		},
+		Spaces: []setupconfig.SCFFetcherSpace{
+			{SpaceID: "crypto", Namespace: "default", Regions: []setupconfig.SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 24}}},
+			{SpaceID: "other", Namespace: "default", Regions: []setupconfig.SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 24}}},
+		},
+	}}}
+	require.NoError(t, validateSCFPublishOverrideCapacity(snapshot, "crypto", "ap-guangzhou", 24))
+	require.ErrorContains(t, validateSCFPublishOverrideCapacity(snapshot, "crypto", "ap-guangzhou", 25), "above max_functions_per_namespace")
+}
+
+func TestValidateSCFPublishOverrideCanRepairOriginalQuotaOverflow(t *testing.T) {
+	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{SCFFetcher: setupconfig.SCFFetcher{
+		TencentLimits: setupconfig.TencentSCFLimits{MaxNamespacesPerRegion: 5, MaxFunctionsPerNamespace: 50},
+		Spaces: []setupconfig.SCFFetcherSpace{
+			{SpaceID: "crypto", Namespace: "default", Regions: []setupconfig.SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 25}}},
+			{SpaceID: "other", Namespace: "default", Regions: []setupconfig.SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 24}}},
+		},
+	}}}
+	// The declared plan is 51 including two Invoke canaries, but an explicit
+	// single-region rollout can shrink crypto to 24 and fit the quota.
+	require.NoError(t, validateSCFPublishOverrideCapacity(snapshot, "crypto", "ap-singapore", 24))
 }
 
 func TestSCFCLSIngestHostUsesPublicEndpoint(t *testing.T) {
@@ -657,6 +687,43 @@ func TestBuildCollectorCreateNodeItemUsesManagedShortLivedConfiguration(t *testi
 	assert.NotContains(t, item.Environment, "MOOX_COLLECTOR_JOB_TYPES")
 }
 
+func TestApplyCollectorStorageRouteUsesPrivateVPCForSameRegion(t *testing.T) {
+	route := privatenet.SCFStorageRoute{
+		Region: "ap-nanjing", SameRegion: true, Network: "vpc",
+		Target: "ip://10.206.0.5:11003", VpcID: "vpc-storage", SubnetID: "subnet-storage",
+	}
+	opts := applyCollectorStorageRoute(collectorPublishOptions{Region: "ap-nanjing"}, map[string]privatenet.SCFStorageRoute{"ap-nanjing": route}, &setupconfig.SCFFetcherSpace{StorageRPCGatewayTarget: "ip://146.56.196.204:11003"}, false)
+	assert.Equal(t, "ip://10.206.0.5:11003", opts.StorageRPCGatewayTarget)
+	assert.Equal(t, "vpc-storage", opts.StorageVPCID)
+	assert.Equal(t, "subnet-storage", opts.StorageSubnetID)
+	assert.True(t, opts.StorageRouteResolved)
+	item := mustBuildCollectorCreateNodeItem(t, opts, "pkg")
+	assert.Equal(t, "vpc-storage", item.Config["vpc_id"])
+	assert.Equal(t, "subnet-storage", item.Config["subnet_id"])
+	assert.Equal(t, "ip://10.206.0.5:11003", item.Environment["MOOX_STORAGE_RPC_GATEWAY_TARGET"])
+}
+
+func TestApplyCollectorStorageRouteUsesPublicForCrossRegion(t *testing.T) {
+	route := privatenet.SCFStorageRoute{Region: "ap-hongkong", Network: "public", Target: "ip://146.56.196.204:11003"}
+	opts := applyCollectorStorageRoute(collectorPublishOptions{Region: "ap-hongkong"}, map[string]privatenet.SCFStorageRoute{"ap-hongkong": route}, &setupconfig.SCFFetcherSpace{StorageRPCGatewayTarget: "ip://146.56.196.204:11003"}, false)
+	assert.Equal(t, "ip://146.56.196.204:11003", opts.StorageRPCGatewayTarget)
+	assert.True(t, opts.StorageRouteResolved)
+	item := mustBuildCollectorCreateNodeItem(t, opts, "pkg")
+	assert.NotContains(t, item.Config, "vpc_id")
+	assert.NotContains(t, item.Config, "subnet_id")
+	assert.Equal(t, "true", item.Config["clear_vpc"])
+}
+
+func TestOrderCollectorPublishRegionsStorageFirst(t *testing.T) {
+	input := []setupconfig.SCFFetcherRegion{
+		{Region: "ap-hongkong"}, {Region: "ap-nanjing"}, {Region: "ap-singapore"},
+	}
+	ordered := orderCollectorPublishRegions(input, "ap-nanjing", true)
+	require.Equal(t, []string{"ap-nanjing", "ap-hongkong", "ap-singapore"}, []string{ordered[0].Region, ordered[1].Region, ordered[2].Region})
+	// Ordering must not mutate the manifest slice used for subsequent commands.
+	assert.Equal(t, "ap-hongkong", input[0].Region)
+}
+
 func TestBuildCollectorFleetCreateItemsAreUniqueAndDeepCloned(t *testing.T) {
 	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
 	items, err := buildCollectorFleetCreateItems(collectorPublishOptions{
@@ -709,6 +776,15 @@ func TestSelectCollectorFleetNodesKeepsEmptySlotsForFleetExpansion(t *testing.T)
 	require.Len(t, selected, 50)
 	assert.Equal(t, "fleet-0", selected[0].NodeID)
 	assert.Empty(t, selected[1].NodeID)
+}
+
+func TestSelectCollectorFleetNodesDoesNotReuseOtherNamespace(t *testing.T) {
+	nodes := []adminclient.CloudNode{
+		{NodeID: "old-0", Namespace: "default", TriggerType: "timer", BizType: "data_collector", Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(0)}},
+	}
+	selected, err := selectCollectorFleetNodesForTrigger(nodes, "fleet", "data_collector", 1, "timer", "crypto")
+	require.NoError(t, err)
+	assert.Empty(t, selected)
 }
 
 func TestSelectCollectorFleetNodesRequiresUniqueCompleteIndexes(t *testing.T) {

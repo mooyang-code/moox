@@ -127,6 +127,17 @@ status = "enabled"
 [scf_fetcher]
 enabled = false
 
+# 腾讯云 SCF 默认配额参考（按账号/地域；购买套餐或工单调整后以实时账号配额为准）。
+# 发布器按 max_functions_per_namespace 校验每个地域/命名空间的函数总数（含 Invoke/快照辅助函数），
+# 未列出的地域并发内存不作假设，正式发布前应通过腾讯云 API/控制台核对。
+[scf_fetcher.tencent_limits]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+max_burst_concurrency_per_minute = 500
+total_concurrency_memory_mb_by_region = { ap-guangzhou = 128000, ap-shanghai = 128000, ap-beijing = 128000, ap-chengdu = 128000, ap-hongkong = 128000, ap-singapore = 64000, ap-tokyo = 64000, na-siliconvalley = 64000, eu-frankfurt = 64000, ap-shanghai-fsi = 64000, ap-shenzhen-fsi = 64000 }
+reference_url = "https://cloud.tencent.com/document/product/583/11637"
+reference_checked_at = "2026-09-17"
+
 [scf_fetcher.cloud_account]
 account_id = "tencent-scf"
 account_name = "Tencent SCF"
@@ -144,10 +155,12 @@ provider_id = "binance"
 source_id = "spot_http"
 package_config_dir = "scf/market_data"
 package_name = "moox-collector-market-data-crypto"
-namespace = "default"
+# 每个 Space 使用独立 namespace，避免不同 Space 共享 Tencent SCF 的函数配额；首次发布时
+# CloudNode 会在目标地域幂等创建该命名空间。
+namespace = "crypto"
 runtime = "Go1"
 function_prefix = "moox-fetcher-crypto-binance"
-# crypto 必须使用公网出口；禁止将采集函数发布或调度到黑名单地域。
+# crypto 需要公网出口访问交易所；Storage 数据面由 CLI 按地域自动选择私网或公网。
 public_net_status = "ENABLE"
 region_blacklist = ["ap-guangzhou"]
 # 黑名单按 Space 生效，不影响其他 Space 或广州 CLS 日志存储。
@@ -156,8 +169,10 @@ timer_function_count = 44
 # SCF Timer 每次直接访问该 Storage tRPC 地址，不再请求 Collector 配置接口。
 storage_gateway_node_id = "control"
 storage_gateway_host = "203.0.113.11"
-# SCF 统一走公网 Storage RPC。不要把 storage_gateway_host 改成内网 IP。
-# 主机与 SCF 一律走公网 Storage RPC。不要填写 storage_private_gateway_host。
+# storage_gateway_host 是跨地域回源和故障回退地址；同地域 SCF 会自动使用
+# storage_private_gateway_host 与 Storage VPC/子网。不要手工把私网地址写入公网字段。
+# 可选：填写 Storage 当前私网 IP 作为提示；CLI 仍以腾讯云实例发现结果为准。
+# storage_private_gateway_host = "10.0.0.5"
 memory_size = 64
 timeout_seconds = 15
 # Invoke nodes also refresh the full Binance symbol snapshot; give that
@@ -176,13 +191,14 @@ max_retry_attempts = 3
 retry_delays = ["5s", "30s", "2m"]
 stagger_enabled = false
 
+# 发布器会先完整占满 Storage 所在地域的 function_count，完成 canary/回读后再处理其他地域。
 [[scf_fetcher.spaces.regions]]
 region = "ap-singapore"
 display_name = "亚太东南（新加坡）"
 enabled = true
 function_count = 44
 
-[[scf_fetcher.spaces.regions]]
+    [[scf_fetcher.spaces.regions]]
 region = "ap-guangzhou"
 display_name = "华南地区（广州，已禁用）"
 enabled = false
@@ -199,7 +215,8 @@ source_binding_mode = "deterministic"
 package_config_dir = "scf/stockcn"
 package_name = "moox-collector-stockcn"
 cls_cloud_account_id = "tencent-scf"
-namespace = "default"
+# 与 crypto 隔离 namespace；Timer 与发布辅助函数合计受配额约束。
+namespace = "stockcn"
 runtime = "Go1"
 function_prefix = "moox-fetcher-stockcn"
 # Full stock Instrument snapshot: one independent daily Timer SCF.
@@ -214,8 +231,7 @@ timer_function_count = 170
 measured_safe_group_size = 40
 storage_gateway_node_id = "control"
 storage_gateway_host = "203.0.113.11"
-# 主机与 SCF 一律走公网 Storage RPC。不要把 storage_gateway_host 改成内网 IP。
-# 不要填写 storage_private_gateway_host。
+# Storage 同地域的 SCF 自动使用私网 VPC 路径；跨地域自动回退到 storage_gateway_host。
 memory_size = 64
 timeout_seconds = 15
 # 全市场 Instrument 快照实测约 25 秒；仅 Invoke 辅助函数使用该独立超时。
@@ -233,6 +249,7 @@ max_retry_attempts = 3
 retry_delays = ["5s", "30s", "2m"]
 stagger_enabled = false
 
+# 发布器会先完整占满 Storage 所在地域的 function_count，完成 canary/回读后再处理其他地域。
 [[scf_fetcher.spaces.regions]]
 region = "ap-guangzhou"
 display_name = "华南（广州）"
@@ -257,9 +274,9 @@ display_name = "西南（成都）"
 enabled = true
 function_count = 0
 
-# 腾讯云主机将 provider 设为 tencent。主机与 SCF 一律走上面的
-# storage_gateway_host 公网 IP，不要创建云联网，不要绑 CCN/VPC。
-# SSH 和控制台入口仍用下面的公网地址。不要填写 storage_private_gateway_host。
+# 腾讯云主机将 provider 设为 tencent。CLI 会从 storage_host 发现 Storage 的
+# 地域、VPC、子网和私网地址；同地域 SCF 绑定该 VPC，跨地域不创建 CCN 而走
+# storage_gateway_host。SSH 和控制台入口仍使用主机公网地址。
 # 操作说明见 skills/moox/references/private-network.md。
 [hosts."203.0.113.10"]
   port = 22

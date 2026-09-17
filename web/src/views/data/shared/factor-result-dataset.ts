@@ -7,9 +7,8 @@ type FactorBindingLike = {
 
 export function factorResultDataset(sourceDataset: string) {
   const source = sourceDataset.trim().toLowerCase();
-  // Factor bindings expose the source View through the source_dataset field.
-  // Use its primary Dataset-style ID for the managed result name while
-  // keeping real Dataset IDs unchanged.
+  // Dataset IDs are already canonical storage identities; preserve them when
+  // deriving a managed result name for callers that need a default.
   const base = source.startsWith("view_") ? source.slice("view_".length) : source;
   const datasetBase = base.startsWith("dataset_") ? base : `dataset_${base}`;
   const candidate = `${datasetBase}_factor`;

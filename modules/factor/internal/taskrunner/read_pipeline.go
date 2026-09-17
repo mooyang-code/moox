@@ -607,3 +607,25 @@ func mergeReadColumns(left, right []string) []string {
 	sort.Strings(result)
 	return result
 }
+
+func sortedUniqueSubjects(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			seen[value] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for value := range seen {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func crossSectionScopeKey(task Task) string {
+	if task.Factor.FactorType != domain.FactorTypeCrossSection {
+		return task.SubjectID
+	}
+	return strings.Join(sortedUniqueSubjects(append(append([]string(nil), task.AvailableSubjects...), task.ExpectedSubjects...)), "\x00")
+}

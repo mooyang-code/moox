@@ -108,6 +108,7 @@ type apiError struct {
 type InstanceBrief struct {
 	InstanceID       string   `json:"InstanceId"`
 	InstanceName     string   `json:"InstanceName"`
+	InstanceState    string   `json:"InstanceState"`
 	Zone             string   `json:"Zone"`
 	PublicAddresses  []string `json:"PublicAddresses"`
 	PrivateAddresses []string `json:"PrivateAddresses"`
@@ -290,9 +291,28 @@ func (c *Client) LookupInstance(ctx context.Context, publicIP string) (CloudInst
 	item := resp.Response.InstanceSet[0]
 	return CloudInstance{
 		Kind: KindLighthouse, Region: c.region, Zone: item.Zone,
-		InstanceID: item.InstanceID, InstanceName: item.InstanceName,
+		InstanceID: item.InstanceID, InstanceName: item.InstanceName, State: item.InstanceState,
 		PublicIPs: uniqueNonEmpty(item.PublicAddresses), PrivateIPs: uniqueNonEmpty(item.PrivateAddresses),
 	}, true, nil
+}
+
+// RebootInstance requests a hard reboot for a Lighthouse instance. The
+// Lighthouse API has a separate action from CVM's RebootInstances, but the
+// operation is intentionally exposed with the same narrow contract used by
+// setup recovery commands.
+func (c *Client) RebootInstance(ctx context.Context, instanceID string) (string, error) {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return "", fmt.Errorf("instance id is required")
+	}
+	var resp apiResponse
+	if err := c.do(ctx, "RebootInstances", map[string]any{"InstanceIds": []string{instanceID}}, &resp); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(resp.Response.RequestID) == "" {
+		return "", fmt.Errorf("reboot instance %s returned empty request id", instanceID)
+	}
+	return resp.Response.RequestID, nil
 }
 
 func (c *Client) AttachCCN(ctx context.Context, ccnID string) error {

@@ -42,6 +42,30 @@ func TestSetupPrivateNetworkDryRunJSON(t *testing.T) {
 	require.NotContains(t, stdout.String(), "AKID-test-secret")
 }
 
+func TestSetupSCFNetworkPlanCommandPrintsResolvedRoutes(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	plan := privatenet.SCFRoutePlan{Routes: []privatenet.SCFStorageRoute{
+		{Region: "ap-guangzhou", Network: "public", Target: "ip://203.0.113.9:11003"},
+		{Region: "ap-nanjing", Network: "vpc", SameRegion: true, Target: "ip://10.0.0.5:11003"},
+	}}
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		resolveSCFRoutes: func(_ context.Context, got *setupconfig.Snapshot, region string) (privatenet.SCFRoutePlan, error) {
+			require.Equal(t, snapshot, got)
+			require.Equal(t, "ap-nanjing", region)
+			return plan, nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"scf-network-plan", "--file", "moox.toml", "--region", "ap-nanjing"})
+	require.NoError(t, cmd.Execute())
+	var got privatenet.SCFRoutePlan
+	require.NoError(t, json.Unmarshal(output.Bytes(), &got))
+	require.Len(t, got.Routes, 1)
+	require.Equal(t, "ip://10.0.0.5:11003", got.Routes[0].Target)
+}
+
 func TestSetupPrivateNetworkRestorePublicFlag(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	snapshot.Manifest.ControlHost.Provider = "tencent"

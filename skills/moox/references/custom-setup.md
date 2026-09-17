@@ -175,8 +175,9 @@ Storage metadata, activates ready Datasets, and verifies the result. Never
 construct a filtered YAML file in the Agent context. Use `metadata spaces` and
 `setup metadata-import` only when the user explicitly requests a partial import.
 
-主机已经在腾讯云上之后，公网通信约定按 `references/private-network.md` 执行，不要把
-该流程塞进 `deploy-control` / `setup init`。主机与 SCF 通信一律走公网，不要创建云联网，不要把函数绑进 CCN。
+主机已经在腾讯云上之后，按 `references/private-network.md` 执行分地域路由发现。`setup init`
+会在写入 Admin/Metadata 前生成 `scf_routes`；后续 `collector function publish` 优先发布
+Storage 同地域并绑定其 VPC/子网，跨地域不创建 CCN 而走公网回退。
 
 ## Secret Boundary
 
@@ -185,9 +186,10 @@ construct a filtered YAML file in the Agent context. Use `metadata spaces` and
 Do not copy it into an archive, pipe it through another process, print it, or
 derive shell variables from it. Only `moox-cli setup` may read secrets in the manifest.
 
-不要填写 `storage_private_gateway_host`。Storage、EventBus、Caddy、`MOOX_PUBLIC_HOST`
-一律保持公网。SCF 和主机 Collector / 因子引擎都走 `storage_gateway_host` 公网。
-确认后只回显 space_id 与 `storage_gateway_host`，然后执行 `setup validate`。
+`storage_gateway_host` 是跨地域/故障回退地址，`storage_private_gateway_host` 是可选私网
+提示。Storage 数据面是否使用私网由 CLI 按地域和实例 VPC/子网自动决定；EventBus、Caddy、
+`MOOX_PUBLIC_HOST` 仍按各自协议和证书配置，不因 Storage 路由改变。
+确认后只回显 space_id 与网关路径摘要，然后执行 `setup validate`。
 
 The CLI may report typed status codes, host names, and verified fingerprints. It
 must not print Admin passwords, SSH passwords, Tencent SecretId/SecretKey,

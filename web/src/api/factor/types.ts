@@ -51,6 +51,10 @@ export interface EngineStatus {
 export interface RecalcFactorReq {
   factor_id?: string;
   space_id: string;
+  /** Input dataset used by the engine for recalculation. */
+  input_dataset_id?: string;
+  /** Optional output dataset override; binding output is used when omitted. */
+  output_dataset_id?: string;
   source_dataset?: string;
   subject_id: string;
   freq: string;

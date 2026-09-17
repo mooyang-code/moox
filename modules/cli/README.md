@@ -261,12 +261,14 @@ EventBus、CloudNode 和 Collector 固定部署在 `control_host`；Storage 的�
 # 只输出主机名、地址、端口、用户名和角色，不输出密码
 moox-cli setup hosts --file ./moox.toml
 
-# 腾讯云主机与 SCF 一律走 Storage 公网 IP，不再创建云联网
+# 发现 Storage 地域并生成 SCF 同地域私网、跨地域公网路由计划（只读）
+moox-cli setup scf-network-plan --file ./moox.toml
 moox-cli setup private-network --file ./moox.toml --dry-run
-moox-cli setup private-network --file ./moox.toml --restore-scf-public
-# 已有函数会改回公网网关并解绑 VPC。SSH 仍用公网。
-# 不要填写 storage_private_gateway_host，不要改 storage_gateway_host。
+# private-network 会输出主机拓扑和同一份路由计划；默认不创建 CCN、不修改主机。
 # 操作说明：skills/moox/references/private-network.md
+
+# 发布时先完整占满 Storage 同地域配置的节点数，再发布其他地域；同地域绑定 VPC/子网
+moox-cli collector function publish submit --file ./moox.toml --space-id crypto --same-region-first
 
 # --host 必须显式指定 moox.toml 中的主机名
 moox-cli setup deploy-storage --file ./moox.toml --host compute

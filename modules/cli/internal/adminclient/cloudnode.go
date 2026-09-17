@@ -111,6 +111,7 @@ type CloudNode struct {
 	CloudAccountID string         `json:"cloud_account_id"`
 	PackageID      string         `json:"package_id"`
 	Region         string         `json:"region"`
+	Namespace      string         `json:"namespace"`
 	NodeType       string         `json:"node_type"`
 	TriggerType    string         `json:"trigger_type"`
 	BizType        string         `json:"biz_type"`

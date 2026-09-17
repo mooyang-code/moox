@@ -439,6 +439,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		FunctionName: firstString(node.FunctionName, node.NodeID),
 		Namespace:    firstString(node.Namespace, "default"),
 	}
+	if err := client.EnsureNamespace(ctx, ref.Region, ref.Namespace); err != nil {
+		return fmt.Errorf("ensure SCF namespace %s in %s: %w", ref.Namespace, ref.Region, err)
+	}
 	unlockFunction := lockSCFFunction(ref)
 	defer unlockFunction()
 	info, err := client.GetFunction(ctx, ref)
@@ -499,6 +502,8 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		COSObject:              strings.TrimPrefix(pkg.COSPath, "/"),
 		Type:                   firstString(config["function_type"], "Event"),
 		PublicNetStatus:        desiredSCFPublicNetStatus(effectiveConfig),
+		VpcID:                  strings.TrimSpace(effectiveConfig["vpc_id"]),
+		SubnetID:               strings.TrimSpace(effectiveConfig["subnet_id"]),
 	})
 	createCancel()
 	if err != nil {
@@ -712,6 +717,9 @@ func (s *Service) updateSCFFunctionCode(
 		Timeout:                configInt64(desiredConfig, "timeout", 0),
 		MaxInstanceConcurrency: configInt64(desiredConfig, "max_instance_concurrency", 0),
 		PublicNetStatus:        desiredSCFPublicNetStatus(desiredConfig),
+		VpcID:                  strings.TrimSpace(desiredConfig["vpc_id"]),
+		SubnetID:               strings.TrimSpace(desiredConfig["subnet_id"]),
+		ClearVPC:               desiredSCFClearVPC(desiredConfig),
 		ClearNativeCLS:         true,
 	}); err != nil {
 		return fmt.Errorf("update scf function %s configuration: %w", ref.FunctionName, err)
@@ -754,6 +762,15 @@ func verifySCFFunctionConfiguration(info *tencentscf.FunctionInfo, desiredConfig
 	if expected := desiredSCFPublicNetStatus(desiredConfig); expected != "" && !strings.EqualFold(info.PublicNetStatus, expected) {
 		return fmt.Errorf("scf function %s public_net_status=%q; expected %q", functionName, info.PublicNetStatus, expected)
 	}
+	if expected := strings.TrimSpace(desiredConfig["vpc_id"]); expected != "" && info.VpcID != expected {
+		return fmt.Errorf("scf function %s vpc_id=%q; expected %q", functionName, info.VpcID, expected)
+	}
+	if expected := strings.TrimSpace(desiredConfig["subnet_id"]); expected != "" && info.SubnetID != expected {
+		return fmt.Errorf("scf function %s subnet_id=%q; expected %q", functionName, info.SubnetID, expected)
+	}
+	if desiredSCFClearVPC(desiredConfig) && (strings.TrimSpace(info.VpcID) != "" || strings.TrimSpace(info.SubnetID) != "") {
+		return fmt.Errorf("scf function %s remains attached to vpc_id=%q subnet_id=%q; expected unbound", functionName, info.VpcID, info.SubnetID)
+	}
 	for key, expected := range desiredEnvironment {
 		if actual, ok := info.Environment[key]; !ok || actual != expected {
 			return fmt.Errorf("scf function %s environment %q does not match desired configuration", functionName, key)
@@ -766,13 +783,25 @@ func desiredSCFPublicNetStatus(config map[string]string) string {
 	return strings.ToUpper(strings.TrimSpace(config["public_net_status"]))
 }
 
+func desiredSCFClearVPC(config map[string]string) bool {
+	return strings.EqualFold(strings.TrimSpace(config["clear_vpc"]), "true")
+}
+
 func reconcileSCFPublicNetwork(ctx context.Context, client scfProvisioner, ref tencentscf.FunctionRef, info *tencentscf.FunctionInfo, desiredConfig map[string]string) error {
 	expected := desiredSCFPublicNetStatus(desiredConfig)
-	if expected == "" || info == nil || strings.EqualFold(info.PublicNetStatus, expected) {
+	expectedVPC := strings.TrimSpace(desiredConfig["vpc_id"])
+	expectedSubnet := strings.TrimSpace(desiredConfig["subnet_id"])
+	clearVPC := desiredSCFClearVPC(desiredConfig)
+	publicMismatch := expected != "" && (info == nil || !strings.EqualFold(info.PublicNetStatus, expected))
+	vpcMismatch := (expectedVPC != "" && (info == nil || info.VpcID != expectedVPC || info.SubnetID != expectedSubnet)) ||
+		(clearVPC && info != nil && (strings.TrimSpace(info.VpcID) != "" || strings.TrimSpace(info.SubnetID) != ""))
+	if info == nil || (!publicMismatch && !vpcMismatch) {
 		return nil
 	}
 	if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
 		FunctionRef: ref, Environment: info.Environment, PublicNetStatus: expected,
+		VpcID: expectedVPC, SubnetID: expectedSubnet,
+		ClearVPC: clearVPC,
 	}); err != nil {
 		return fmt.Errorf("update scf function %s public network: %w", ref.FunctionName, err)
 	}

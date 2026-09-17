@@ -359,7 +359,7 @@ func (t *transport) Run(ctx context.Context, argv []string, stdin io.Reader) (Re
 	}
 	session, err := t.client.NewSession()
 	if err != nil {
-		return Result{}, fmt.Errorf("ssh_command_failed")
+		return Result{}, fmt.Errorf("ssh_command_failed: %w", err)
 	}
 	defer session.Close()
 	var stdout, stderr bytes.Buffer
@@ -385,7 +385,7 @@ func (t *transport) Run(ctx context.Context, argv []string, stdin io.Reader) (Re
 		if errors.As(err, &exitErr) {
 			result.ExitCode = exitErr.ExitStatus()
 		}
-		return result, fmt.Errorf("ssh_command_failed")
+		return result, fmt.Errorf("ssh_command_failed: %w", err)
 	}
 }
 

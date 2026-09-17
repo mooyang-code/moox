@@ -88,7 +88,7 @@ func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bundle.Spaces, 4)
 	require.NotEmpty(t, bundle.Calls)
-	require.Len(t, bundle.Datasets, 19)
+	require.Len(t, bundle.Datasets, 20)
 	assert.Contains(t, bundle.Datasets, seedDataset{
 		SpaceID:      "stockcn",
 		DatasetID:    "dataset_stockcn_instruments",

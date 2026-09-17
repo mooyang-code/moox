@@ -72,7 +72,39 @@ func TestBuildPlanDoesNotCreatePrivateNetwork(t *testing.T) {
 	require.Empty(t, plan.SCF)
 	require.Equal(t, "146.56.196.204", plan.Recommended.StoragePublicIP)
 	require.Equal(t, "ip://146.56.196.204:11003", plan.Recommended.SCFGatewayTarget)
+	require.Len(t, plan.SCFRoutes, 2)
+	assert.Equal(t, "vpc", plan.SCFRoutes[0].Network)
+	assert.Equal(t, "public", plan.SCFRoutes[1].Network)
 	require.Contains(t, strings.Join(plan.Recommended.Notes, "\n"), "公网")
+}
+
+func TestBuildSCFStorageRouteSelectsPrivateOnlyForSameRegion(t *testing.T) {
+	storage := ResolvedHost{
+		HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"storage"}},
+		Instance:   tencent.CloudInstance{Region: "ap-nanjing", Zone: "ap-nanjing-3", VpcID: "vpc-storage", SubnetID: "subnet-storage", PrivateIPs: []string{"10.206.0.5"}},
+	}
+	private := BuildSCFStorageRoute(storage, "ap-nanjing")
+	assert.True(t, private.SameRegion)
+	assert.Equal(t, "vpc", private.Network)
+	assert.Equal(t, "ip://10.206.0.5:11003", private.Target)
+	assert.Equal(t, "vpc-storage", private.VpcID)
+
+	public := BuildSCFStorageRoute(storage, "ap-hongkong")
+	assert.False(t, public.SameRegion)
+	assert.Equal(t, "public", public.Network)
+	assert.Equal(t, "ip://146.56.196.204:11003", public.Target)
+	assert.Empty(t, public.VpcID)
+}
+
+func TestBuildSCFStorageRouteFallsBackWhenPrivateMetadataIncomplete(t *testing.T) {
+	route := BuildSCFStorageRoute(ResolvedHost{
+		HostTarget: HostTarget{Address: "203.0.113.9"},
+		Instance:   tencent.CloudInstance{Region: "ap-guangzhou", PrivateIPs: []string{"10.0.0.8"}, VpcID: "vpc-only"},
+	}, "ap-guangzhou")
+	assert.True(t, route.SameRegion)
+	assert.Equal(t, "public", route.Network)
+	assert.Equal(t, "ip://203.0.113.9:11003", route.Target)
+	assert.Contains(t, route.Reason, "no complete private")
 }
 
 func TestBuildPlanRestoreKeepsSCFWithoutVPC(t *testing.T) {
@@ -134,7 +166,7 @@ func TestApplyDoesNotCreateCCN(t *testing.T) {
 	}, nil, []string{"11003"})
 	result, err := Apply(context.Background(), fake, Options{HomeRegion: "ap-guangzhou"}, plan, nil)
 	require.NoError(t, err)
-	assert.Equal(t, "public_only", result.Status)
+	assert.Equal(t, "routing_only", result.Status)
 	assert.Zero(t, fake.ensureCCN)
 	assert.Zero(t, fake.attachVPC)
 	assert.Zero(t, fake.acceptCCN)

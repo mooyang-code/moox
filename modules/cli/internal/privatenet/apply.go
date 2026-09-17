@@ -89,7 +89,12 @@ func Apply(ctx context.Context, cloud Cloud, opts Options, plan Plan, stderr io.
 			}
 			return result, nil
 		}
-		record("public-only", "storage", plan.Recommended.SCFGatewayTarget, "planned", false)
+		for _, route := range plan.SCFRoutes {
+			record("scf-route", route.Region, route.Network+" "+route.Target+" ("+route.Reason+")", "planned", false)
+		}
+		if len(plan.SCFRoutes) == 0 {
+			record("storage-route", "storage", plan.Recommended.SCFGatewayTarget, "planned", false)
+		}
 		return result, nil
 	}
 
@@ -100,7 +105,7 @@ func Apply(ctx context.Context, cloud Cloud, opts Options, plan Plan, stderr io.
 		return result, nil
 	}
 
-	result.Status = "public_only"
+	result.Status = "routing_only"
 	result.Plan = plan
 	result.RecommendedConfig = plan.Recommended
 	return result, nil

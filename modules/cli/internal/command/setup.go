@@ -56,6 +56,7 @@ type setupDeps struct {
 	exportSkillConfig      func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
 	ensureFirewall         func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
 	ensurePrivateNetwork   func(context.Context, *setupconfig.Snapshot, privatenet.Options, io.Writer) (privatenet.Result, error)
+	resolveSCFRoutes       func(context.Context, *setupconfig.Snapshot, string) (privatenet.SCFRoutePlan, error)
 }
 
 func init() {
@@ -83,6 +84,13 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupApplyCommand(deps),
 		newSetupStatusCommand(deps),
 		newSetupDeployStorageCommand(deps),
+		newSetupRebootHostCommand(deps),
+		newSetupRestartHostCommand(deps),
+		newSetupHostDiagnosticsCommand(deps),
+		newSetupPurgeEventBusCommand(deps),
+		newSetupInspectSCFCommand(deps),
+		newSetupAttachSCFVPCCommand(deps),
+		newSetupInvokeSCFCommand(deps),
 		newSetupInstallStorageWatchdogCommand(deps),
 		newSetupMetadataImportCommand(deps),
 		newSetupVerifyStorageCommand(deps),
@@ -92,7 +100,416 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupExportSkillConfigCommand(deps),
 		newSetupFirewallCommand(deps),
 		newSetupPrivateNetworkCommand(deps),
+		newSetupSCFNetworkPlanCommand(deps),
 	)
+	return cmd
+}
+
+// newSetupInspectSCFCommand reads a single Tencent SCF function without
+// exposing credentials or the function's full environment. It is used by
+// deployment validation to prove the accepted VPC/subnet and Storage target.
+func newSetupInspectSCFCommand(deps setupDeps) *cobra.Command {
+	var file, region, namespace, functionName string
+	cmd := &cobra.Command{
+		Use:   "inspect-scf",
+		Short: "检查腾讯云函数网络配置",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			snapshot, err := deps.load(file)
+			if err != nil {
+				return err
+			}
+			defer clearSetupSecrets(snapshot)
+			region = strings.TrimSpace(region)
+			if region == "" {
+				region = snapshot.Manifest.TencentCloud.Region
+			}
+			namespace = firstNonEmpty(namespace, "default")
+			if strings.TrimSpace(functionName) == "" {
+				return fmt.Errorf("--function is required")
+			}
+			network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{
+				SecretID:  snapshot.Manifest.TencentCloud.SecretID,
+				SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
+				Region:    region,
+			})
+			if err != nil {
+				return err
+			}
+			fn, err := network.ForRegion(region).GetSCFFunction(cmd.Context(), namespace, strings.TrimSpace(functionName))
+			if err != nil {
+				return err
+			}
+			envTarget := ""
+			if fn.Environment != nil {
+				envTarget = fn.Environment["MOOX_STORAGE_RPC_GATEWAY_TARGET"]
+			}
+			return writeSetupJSON(cmd, map[string]any{
+				"region": region, "namespace": namespace, "function": functionName,
+				"status": fn.Status, "vpc_id": fn.VpcID, "subnet_id": fn.SubnetID,
+				"public_net_status": fn.PublicNetStatus,
+				"storage_target":    envTarget,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&region, "region", "", "SCF 地域")
+	cmd.Flags().StringVar(&namespace, "namespace", "default", "SCF 命名空间")
+	cmd.Flags().StringVar(&functionName, "function", "", "SCF 函数名")
+	_ = cmd.MarkFlagRequired("function")
+	return cmd
+}
+
+// newSetupAttachSCFVPCCommand updates one canary function in place. This is
+// kept as a setup diagnostic rather than part of the normal fleet publisher so
+// an operator can validate the VPC route without waiting for the control-plane
+// rollout to finish.
+func newSetupAttachSCFVPCCommand(deps setupDeps) *cobra.Command {
+	var file, region, namespace, functionName, vpcID, subnetID string
+	cmd := &cobra.Command{
+		Use:   "attach-scf-vpc",
+		Short: "为腾讯云函数绑定 VPC 子网",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			snapshot, err := deps.load(file)
+			if err != nil {
+				return err
+			}
+			defer clearSetupSecrets(snapshot)
+			region = firstNonEmpty(strings.TrimSpace(region), snapshot.Manifest.TencentCloud.Region)
+			namespace = firstNonEmpty(strings.TrimSpace(namespace), "default")
+			if strings.TrimSpace(functionName) == "" || strings.TrimSpace(vpcID) == "" || strings.TrimSpace(subnetID) == "" {
+				return fmt.Errorf("--function, --vpc-id and --subnet-id are required")
+			}
+			network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{
+				SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey, Region: region,
+			})
+			if err != nil {
+				return err
+			}
+			fn, err := network.ForRegion(region).GetSCFFunction(cmd.Context(), namespace, functionName)
+			if err != nil {
+				return err
+			}
+			status := firstNonEmpty(fn.PublicNetStatus, "ENABLE")
+			if err := network.ForRegion(region).UpdateSCFNetwork(cmd.Context(), namespace, functionName, vpcID, subnetID, status, fn.Environment); err != nil {
+				return err
+			}
+			updated, err := network.ForRegion(region).GetSCFFunction(cmd.Context(), namespace, functionName)
+			if err != nil {
+				return err
+			}
+			return writeSetupJSON(cmd, map[string]any{"region": region, "namespace": namespace, "function": functionName, "status": updated.Status, "vpc_id": updated.VpcID, "subnet_id": updated.SubnetID, "public_net_status": updated.PublicNetStatus})
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&region, "region", "", "SCF 地域")
+	cmd.Flags().StringVar(&namespace, "namespace", "default", "SCF 命名空间")
+	cmd.Flags().StringVar(&functionName, "function", "", "SCF 函数名")
+	cmd.Flags().StringVar(&vpcID, "vpc-id", "", "VPC ID")
+	cmd.Flags().StringVar(&subnetID, "subnet-id", "", "子网 ID")
+	_ = cmd.MarkFlagRequired("function")
+	_ = cmd.MarkFlagRequired("vpc-id")
+	_ = cmd.MarkFlagRequired("subnet-id")
+	return cmd
+}
+
+// newSetupInvokeSCFCommand invokes a single function directly through SCF's
+// control API. It is useful for connectivity proof when the optional
+// CloudNode control service is temporarily unavailable.
+func newSetupInvokeSCFCommand(deps setupDeps) *cobra.Command {
+	var file, region, namespace, functionName, eventJSON string
+	cmd := &cobra.Command{
+		Use:   "invoke-scf",
+		Short: "直接调用腾讯云函数",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			snapshot, err := deps.load(file)
+			if err != nil {
+				return err
+			}
+			defer clearSetupSecrets(snapshot)
+			region = firstNonEmpty(strings.TrimSpace(region), snapshot.Manifest.TencentCloud.Region)
+			namespace = firstNonEmpty(strings.TrimSpace(namespace), "default")
+			if strings.TrimSpace(functionName) == "" {
+				return fmt.Errorf("--function is required")
+			}
+			var event any = map[string]any{"action": "market_fetch", "space_id": "crypto", "subject_id": "BTC-USDT"}
+			if strings.TrimSpace(eventJSON) != "" {
+				if err := json.Unmarshal([]byte(eventJSON), &event); err != nil {
+					return fmt.Errorf("event json invalid: %w", err)
+				}
+			}
+			network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey, Region: region})
+			if err != nil {
+				return err
+			}
+			result, err := network.ForRegion(region).InvokeSCF(cmd.Context(), namespace, functionName, event)
+			if err != nil {
+				return err
+			}
+			return writeSetupJSON(cmd, map[string]any{"region": region, "namespace": namespace, "function": functionName, "request_id": result.RequestID, "result": result.Result, "log": result.Log})
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&region, "region", "", "SCF 地域")
+	cmd.Flags().StringVar(&namespace, "namespace", "default", "SCF 命名空间")
+	cmd.Flags().StringVar(&functionName, "function", "", "SCF 函数名")
+	cmd.Flags().StringVar(&eventJSON, "event", "", "JSON 事件；缺省为 crypto BTC-USDT market_fetch")
+	_ = cmd.MarkFlagRequired("function")
+	return cmd
+}
+
+// newSetupRebootHostCommand provides a narrowly-scoped recovery operation for
+// an unresponsive Tencent CVM. It resolves the host's actual region before
+// issuing RebootInstances, because the setup manifest's home region may differ
+// from the Storage region.
+func newSetupRebootHostCommand(deps setupDeps) *cobra.Command {
+	var file, hostName string
+	cmd := &cobra.Command{
+		Use:   "reboot-host",
+		Short: "重启无响应的腾讯云主机",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			snapshot, err := deps.load(file)
+			if err != nil {
+				return err
+			}
+			defer clearSetupSecrets(snapshot)
+			host, err := findSetupHost(snapshot.Manifest, hostName)
+			if err != nil {
+				return err
+			}
+			if !strings.EqualFold(strings.TrimSpace(host.Provider), "tencent") {
+				return fmt.Errorf("reboot_host_provider_unsupported")
+			}
+			network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{
+				SecretID:  snapshot.Manifest.TencentCloud.SecretID,
+				SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
+				Region:    snapshot.Manifest.TencentCloud.Region,
+			})
+			if err != nil {
+				return err
+			}
+			lighthouse, lighthouseErr := cloudtencent.NewClient(cloudtencent.ClientOptions{
+				SecretID:  snapshot.Manifest.TencentCloud.SecretID,
+				SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
+				Region:    snapshot.Manifest.TencentCloud.Region,
+			})
+			if lighthouseErr != nil {
+				return lighthouseErr
+			}
+			cloud := privatenet.TencentCloud{Network: network, Lighthouse: lighthouse}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
+			defer cancel()
+			instance, err := cloud.LookupHost(ctx, host.Address, cloudtencent.DefaultProbeRegions)
+			if err != nil {
+				return fmt.Errorf("reboot host lookup: %w", err)
+			}
+			var requestID string
+			switch instance.Kind {
+			case cloudtencent.KindLighthouse:
+				requestID, err = lighthouse.ForRegion(instance.Region).RebootInstance(ctx, instance.InstanceID)
+			case cloudtencent.KindCVM:
+				cvm, cvmErr := cloudtencent.NewCVMClient(cloudtencent.ClientOptions{
+					SecretID:  snapshot.Manifest.TencentCloud.SecretID,
+					SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
+					Region:    instance.Region,
+				})
+				if cvmErr != nil {
+					return cvmErr
+				}
+				requestID, err = cvm.RebootInstance(ctx, instance.InstanceID)
+			default:
+				return fmt.Errorf("reboot_host_kind_unsupported")
+			}
+			if err != nil {
+				return fmt.Errorf("reboot %s: %w", host.Name, err)
+			}
+			return writeSetupJSON(cmd, map[string]any{
+				"status": "reboot_requested", "host": host.Name,
+				"instance_id": instance.InstanceID, "region": instance.Region,
+				"zone": instance.Zone, "request_id": requestID,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&hostName, "host", "", "目标主机名称")
+	_ = cmd.MarkFlagRequired("host")
+	return cmd
+}
+
+// newSetupRestartHostCommand is intentionally separate from deployment. It is
+// useful after an interrupted remote rollout, where the binaries are still
+// intact but the supervisor was left stopped.
+func newSetupRestartHostCommand(deps setupDeps) *cobra.Command {
+	var file, hostName, service string
+	cmd := &cobra.Command{
+		Use:   "restart-host",
+		Short: "启动远端部署服务",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			snapshot, err := deps.load(file)
+			if err != nil {
+				return err
+			}
+			defer clearSetupSecrets(snapshot)
+			host, err := findSetupHost(snapshot.Manifest, hostName)
+			if err != nil {
+				return err
+			}
+			transport, err := dialSetupHost(cmd.Context(), host)
+			if err != nil {
+				return err
+			}
+			defer transport.Close()
+			paths := snapshot.Manifest.Paths.Resolved()
+			root := paths.DeployRoot
+			if strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+				root = paths.ControlRoot
+			} else if snapshot.Manifest.HasStorageHost() && strings.EqualFold(host.Name, snapshot.Manifest.StorageHost.Name) {
+				root = paths.StorageRoot
+			}
+			result, err := transport.Run(cmd.Context(), []string{
+				"sh", "-lc",
+				`set -eu
+root="$1"
+service="$2"
+if [ ! -x "$root/start.sh" ]; then
+  echo "missing start script at $root/start.sh" >&2
+  ls -ld "$root" "$root/start.sh" 2>&1 || true
+  exit 2
+fi
+if [ -n "$service" ]; then
+  "$root/start.sh" "$service"
+else
+  "$root/start.sh"
+fi
+`, "moox-restart-host", root, strings.TrimSpace(service),
+			}, nil)
+			if err != nil {
+				detail := strings.TrimSpace(result.Stderr)
+				if detail == "" {
+					detail = strings.TrimSpace(result.Stdout)
+				}
+				if len(detail) > 512 {
+					detail = detail[len(detail)-512:]
+				}
+				if detail != "" {
+					return fmt.Errorf("restart_host_failed: %s", detail)
+				}
+				return fmt.Errorf("restart_host_failed: %v", err)
+			}
+			return writeSetupJSON(cmd, map[string]any{"host": hostName, "service": service, "status": "started"})
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&hostName, "host", "control", "主机名称")
+	cmd.Flags().StringVar(&service, "service", "", "仅启动指定服务；留空启动默认服务")
+	return cmd
+}
+
+func newSetupHostDiagnosticsCommand(deps setupDeps) *cobra.Command {
+	var file, hostName string
+	cmd := &cobra.Command{
+		Use:   "host-diagnostics",
+		Short: "检查远端主机磁盘和服务进程",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			snapshot, err := deps.load(file)
+			if err != nil {
+				return err
+			}
+			defer clearSetupSecrets(snapshot)
+			host, err := findSetupHost(snapshot.Manifest, hostName)
+			if err != nil {
+				return err
+			}
+			transport, err := dialSetupHost(cmd.Context(), host)
+			if err != nil {
+				return err
+			}
+			defer transport.Close()
+			paths := snapshot.Manifest.Paths.Resolved()
+			root := paths.DeployRoot
+			if strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+				root = paths.ControlRoot
+			} else if snapshot.Manifest.HasStorageHost() && strings.EqualFold(host.Name, snapshot.Manifest.StorageHost.Name) {
+				root = paths.StorageRoot
+			}
+			result, err := transport.Run(cmd.Context(), []string{"sh", "-lc", `set -eu
+root="$1"
+printf 'df:\n'
+df -h "$root" /
+printf 'processes:\n'
+ps -eo pid,stat,cmd | grep -E 'moox-|caddy' | grep -v grep || true
+printf 'sizes:\n'
+du -xh --max-depth=2 "$root/data" "$root/logs" 2>/dev/null | sort -h | tail -40 || true
+printf 'staged archives:\n'
+ls -lh /tmp/moox-control-*.tar.gz /tmp/moox-storage-*.tar.gz 2>/dev/null || true
+printf 'recent service errors:\n'
+for name in cloudnode eventbus collector factor gateway storage storage-primary storage-view storage-node; do
+  for log in "$root/logs/$name/stdout.log" "$root/logs/$name/stderr.log" "$root/logs/$name.log"; do
+    if [ -f "$log" ]; then echo "--- $log"; tail -30 "$log"; fi
+  done
+done
+`, "moox-host-diagnostics", root}, nil)
+			if err != nil {
+				return fmt.Errorf("host_diagnostics_failed: %v", err)
+			}
+			return writeSetupJSON(cmd, map[string]any{"host": host.Name, "root": root, "diagnostics": result.Stdout})
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&hostName, "host", "control", "主机名称")
+	return cmd
+}
+
+// newSetupPurgeEventBusCommand clears only the local JetStream payloads on a
+// control host. The current environment is pre-production and the event bus
+// data is rebuildable; this is the minimal recovery action when NATS refuses
+// to create streams because its filesystem is full.
+func newSetupPurgeEventBusCommand(deps setupDeps) *cobra.Command {
+	var file, hostName string
+	cmd := &cobra.Command{
+		Use:   "purge-eventbus-data",
+		Short: "清理控制面 EventBus 可重建数据",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			snapshot, err := deps.load(file)
+			if err != nil {
+				return err
+			}
+			defer clearSetupSecrets(snapshot)
+			host, err := findSetupHost(snapshot.Manifest, hostName)
+			if err != nil {
+				return err
+			}
+			transport, err := dialSetupHost(cmd.Context(), host)
+			if err != nil {
+				return err
+			}
+			defer transport.Close()
+			root := snapshot.Manifest.Paths.Resolved().DeployRoot
+			if strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+				root = snapshot.Manifest.Paths.Resolved().ControlRoot
+			}
+			result, err := transport.Run(cmd.Context(), []string{"sh", "-lc", `set -eu
+root="$1"
+if [ ! -x "$root/stop.sh" ]; then echo stop_script_missing >&2; exit 1; fi
+# Stop every control-plane writer before unlinking SQLite/WAL files. This
+# command is intentionally destructive and is only for rebuildable preprod
+# state; callers must explicitly restart the host afterwards.
+"$root/stop.sh" >/dev/null
+rm -rf "$root/data/eventbus/jetstream"
+mkdir -p "$root/data/eventbus/jetstream"
+# Collector and archive-state are rebuildable control-plane state in this
+# pre-production environment; remove them only after all writers are stopped.
+rm -rf "$root/data/collector" "$root/data/archive-state"
+mkdir -p "$root/data/collector" "$root/data/archive-state"
+df -h "$root" | tail -1
+`, "moox-purge-eventbus-data", root}, nil)
+			if err != nil {
+				return fmt.Errorf("purge_eventbus_data_failed: %v", err)
+			}
+			return writeSetupJSON(cmd, map[string]any{"host": host.Name, "status": "purged", "disk": strings.TrimSpace(result.Stdout)})
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&hostName, "host", "control", "主机名称")
 	return cmd
 }
 
@@ -653,6 +1070,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.ensurePrivateNetwork == nil {
 		deps.ensurePrivateNetwork = defaults.ensurePrivateNetwork
 	}
+	if deps.resolveSCFRoutes == nil {
+		deps.resolveSCFRoutes = defaults.resolveSCFRoutes
+	}
 	return deps
 }
 
@@ -688,6 +1108,7 @@ func defaultSetupDeps() setupDeps {
 		exportSkillConfig:      defaultSetupExportSkillConfig,
 		ensureFirewall:         defaultSetupEnsureFirewall,
 		ensurePrivateNetwork:   defaultEnsurePrivateNetwork,
+		resolveSCFRoutes:       resolveSCFRoutePlan,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address)
 			tlsMode := setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode)

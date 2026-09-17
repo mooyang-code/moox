@@ -61,8 +61,16 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 			require.Equal(t, []string{"1m"}, dataset.Freqs)
 			require.Equal(t, "stockcn", dataset.DataSourceID)
 		}
-		if dataset.SpaceID == "crypto" && dataset.DatasetID != "dataset_binance_spot_symbols" && dataset.DatasetID != "dataset_binance_swap_symbols" && dataset.DatasetID != "dataset_binance_spot_kline_1m" && dataset.DatasetID != "dataset_binance_swap_kline_1m" {
-			require.Equal(t, []string{"1H"}, dataset.Freqs, dataset.DatasetID)
+		if dataset.SpaceID == "crypto" {
+			switch dataset.DatasetID {
+			case "dataset_binance_spot_symbols", "dataset_binance_swap_symbols", "dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m":
+				// Binance 1m source datasets and their symbol records use their
+				// own granularities.
+			case "mdataset_binance_kline_1m":
+				require.Equal(t, []string{"1m"}, dataset.Freqs, dataset.DatasetID)
+			default:
+				require.Equal(t, []string{"1H"}, dataset.Freqs, dataset.DatasetID)
+			}
 		}
 		if dataset.SpaceID == "crypto" {
 			switch dataset.DatasetID {
@@ -79,8 +87,15 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	for _, view := range seed.Views {
 		require.LessOrEqual(t, utf8.RuneCountInString(view.Name), 10, view.SpaceID+"/"+view.ViewID)
 		viewCount[view.SpaceID+"/"+view.PrimaryDatasetID]++
-		if view.SpaceID == "crypto" && view.ViewID != "view_crypto_spot_kline_1m" && view.ViewID != "view_crypto_swap_kline_1m" {
-			require.Contains(t, view.FilterJSON, `"freq":"1H"`, view.ViewID)
+		if view.SpaceID == "crypto" {
+			switch view.ViewID {
+			case "view_crypto_spot_kline_1m", "view_crypto_swap_kline_1m":
+				// Source 1m views.
+			case "view_binance_kline_1m":
+				require.Contains(t, view.FilterJSON, `"freq":"1m"`, view.ViewID)
+			default:
+				require.Contains(t, view.FilterJSON, `"freq":"1H"`, view.ViewID)
+			}
 		}
 	}
 	for _, column := range seed.ViewColumns {
@@ -108,7 +123,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		"dataset_stockcn_index_kline",
 		"dataset_stockcn_instruments",
 	}, datasetsBySpace["stockcn"])
-	require.Equal(t, []string{"dataset_binance_spot_kline_1m", "dataset_binance_spot_symbols", "dataset_binance_swap_kline_1m", "dataset_binance_swap_symbols", "dataset_perpetual_kline_1h", "dataset_spot_kline_1h"}, datasetsBySpace["crypto"])
+	require.Equal(t, []string{"dataset_binance_spot_kline_1m", "dataset_binance_spot_symbols", "dataset_binance_swap_kline_1m", "dataset_binance_swap_symbols", "dataset_perpetual_kline_1h", "dataset_spot_kline_1h", "mdataset_binance_kline_1m"}, datasetsBySpace["crypto"])
 }
 
 func TestDefaultSetupBundleDefinesStockCNInstrumentsLikeSymbolDatasets(t *testing.T) {

@@ -176,6 +176,32 @@ func (c *CVMClient) EnsureSecurityGroupRule(ctx context.Context, publicIP string
 	return nil
 }
 
+// RebootInstance requests a hard reboot for a CVM instance. The operation is
+// intentionally exposed separately from firewall management so recovery
+// tooling can reboot an unhealthy host after resolving its actual region.
+func (c *CVMClient) RebootInstance(ctx context.Context, instanceID string) (string, error) {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return "", fmt.Errorf("instance id is required")
+	}
+	var response struct {
+		Response struct {
+			RequestID string    `json:"RequestId"`
+			Error     *apiError `json:"Error,omitempty"`
+		} `json:"Response"`
+	}
+	if err := c.do(ctx, "cvm", cvmVersion, "RebootInstances", c.endpointFor("cvm"), map[string]any{
+		"InstanceIds": []string{instanceID},
+		"StopType":    "HARD",
+	}, &response); err != nil {
+		return "", err
+	}
+	if response.Response.Error != nil {
+		return "", fmt.Errorf("%s: %s", response.Response.Error.Code, response.Response.Error.Message)
+	}
+	return response.Response.RequestID, nil
+}
+
 func coversCVMRule(existing, wanted vpcSecurityGroupPolicy) bool {
 	if !strings.EqualFold(strings.TrimSpace(existing.Action), strings.TrimSpace(wanted.Action)) {
 		return false

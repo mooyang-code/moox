@@ -22,8 +22,11 @@
         <a-form-item label="请求 ID" required>
           <a-input v-model="form.request_id" placeholder="请求 ID" />
         </a-form-item>
-        <a-form-item label="源视图">
-          <a-input v-model="form.source_view_id" placeholder="源视图" />
+        <a-form-item label="输入数据集" required>
+          <a-input v-model="form.input_dataset_id" placeholder="输入数据集" />
+        </a-form-item>
+        <a-form-item label="输出数据集">
+          <a-input v-model="form.output_dataset_id" placeholder="输出数据集（可选，默认绑定输出）" />
         </a-form-item>
         <a-form-item label="对象" required>
           <a-input v-model="form.subject_id" placeholder="对象" />
@@ -76,7 +79,8 @@ const engineStatus = ref<EngineStatus>({
 });
 const form = reactive({
   request_id: "",
-  source_view_id: "",
+  input_dataset_id: "",
+  output_dataset_id: "",
   subject_id: "",
   freq: "",
   start_time: "",
@@ -98,8 +102,8 @@ async function loadStatus() {
 
 async function submit() {
   const spaceId = spaceStore.requireSpaceId();
-  if (!form.request_id || !form.subject_id || !form.freq || !form.start_time || !form.end_time) {
-    Message.warning("请补全请求 ID、对象、频率和时间范围");
+  if (!form.request_id || !form.input_dataset_id || !form.subject_id || !form.freq || !form.start_time || !form.end_time) {
+    Message.warning("请补全请求 ID、输入数据集、对象、频率和时间范围");
     return;
   }
   submitting.value = true;
@@ -107,7 +111,8 @@ async function submit() {
     const rsp = await recalcFactor({
       space_id: spaceId,
       request_id: form.request_id,
-      source_view_id: form.source_view_id,
+      input_dataset_id: form.input_dataset_id,
+      output_dataset_id: form.output_dataset_id || undefined,
       subject_id: form.subject_id,
       freq: form.freq,
       start_time: form.start_time,

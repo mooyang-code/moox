@@ -41,6 +41,7 @@
 ## 运维
 
 * [管理台 HTTPS 与证书](运维/管理台HTTPS与证书.md)
+* [SCF 与 Storage 分地域网络部署](运维/SCF与Storage分地域网络部署.md)
 * [Node Gateway 运维手册](ops/node-gateway.md)
 * [MooX EventBus 运维](运维/MooX-EventBus运维.md)
 * [MooX 指标监控](运维/MooX指标监控.md)

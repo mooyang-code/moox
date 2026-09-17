@@ -25,6 +25,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
+	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
@@ -92,11 +93,16 @@ type collectorPublishOptions struct {
 	EnableStockCN                  bool
 	StorageRPCGatewayTarget        string
 	StoragePrivateRPCGatewayTarget string
+	StorageVPCID                   string
+	StorageSubnetID                string
+	StorageRouteResolved           bool
+	SameRegionFirst                bool
 	JobTypes                       []string
 	Env                            []string
 	Config                         []string
 	EventBusCredentialFile         string
 	NodeCount                      int
+	NodeCountExplicit              bool
 	FunctionNamePrefix             string
 	File                           string
 	FetcherConfig                  *setupconfig.SCFFetcherSpace
@@ -298,6 +304,7 @@ var collectorFunctionPublishSubmitCmd = &cobra.Command{
 	Short: "上传并提交数据采集器云函数 fleet 发布任务",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		collectorPublishFlags.NodeCountExplicit = cmd.Flags().Changed("node-count")
 		summary, err := publishCollectorFunction(cmd.Context(), collectorPublishFlags)
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
@@ -333,6 +340,7 @@ type collectorPublishSummary struct {
 	Operation      string                          `json:"operation"`
 	TotalCount     int                             `json:"total_count"`
 	StockCNEnabled bool                            `json:"stockcn_enabled,omitempty"`
+	StorageRoutes  []privatenet.SCFStorageRoute    `json:"storage_routes,omitempty"`
 	Regions        []collectorPublishRegionSummary `json:"regions,omitempty"`
 }
 
@@ -444,6 +452,7 @@ func init() {
 	submitFlags.StringVar(&collectorPublishFlags.NodeType, "node-type", "scf-event", "cloud node type")
 	submitFlags.StringVar(&collectorPublishFlags.TriggerType, "trigger-type", "timer", "SCF trigger type: timer or invoke")
 	submitFlags.BoolVar(&collectorPublishFlags.EnableStockCN, "enable-stockcn", false, "通过全部 stockcn 发布门禁后启用正式 Kline Timer 和规则")
+	submitFlags.BoolVar(&collectorPublishFlags.SameRegionFirst, "same-region-first", true, "先完整占满 Storage 同地域配置的节点数，再发布其他地域；同地域函数使用私网网关")
 	submitFlags.StringVar(&collectorPublishFlags.StorageRPCGatewayTarget, "storage-rpc-gateway-target", "", "SCF 固定访问的 Storage tRPC 地址")
 	submitFlags.StringArrayVar(&collectorPublishFlags.Env, "env", nil, "SCF environment variable as KEY=VALUE")
 	submitFlags.StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "cloudnode node runtime config as KEY=VALUE; not written into SCF package config.yaml")
@@ -579,17 +588,48 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if err != nil {
 		return collectorPublishSummary{}, err
 	}
+	if manifest != nil && fetcherConfig != nil {
+		// Cross-Space SCF quota is a publication-plan invariant. Keep ordinary
+		// read-only manifest consumers usable, but fail before any upload or
+		// CloudNode mutation when the complete plan exceeds Tencent's quota. A
+		// deliberate single-region override is validated against the overridden
+		// plan instead of the superseded manifest count.
+		if opts.NodeCountExplicit && strings.TrimSpace(opts.Region) != "" {
+			if err := validateSCFPublishOverrideCapacity(manifest, fetcherConfig.SpaceID, opts.Region, opts.NodeCount); err != nil {
+				return collectorPublishSummary{}, err
+			}
+		} else if err := setupconfig.ValidateSCFCapacities(&manifest.Manifest.SCFFetcher, manifest.Manifest.SCFFetcher.TencentLimits); err != nil {
+			return collectorPublishSummary{}, fmt.Errorf("validate SCF publication quota: %w", err)
+		}
+	}
 	if opts.Region == "" && fetcherConfig == nil {
 		return collectorPublishSummary{}, fmt.Errorf("--region is required")
 	}
 	if opts.EnableStockCN && (fetcherConfig == nil || !strings.EqualFold(fetcherConfig.SpaceID, "stockcn")) {
 		return collectorPublishSummary{}, fmt.Errorf("--enable-stockcn requires a stockcn manifest deployment")
 	}
+	manifestFunctionLimit := maxCollectorPublishNodeCount
+	if manifest != nil && fetcherConfig != nil && manifest.Manifest.SCFFetcher.TencentLimits.MaxFunctionsPerNamespace > 0 {
+		// A manifest deployment is constrained by the configured Tencent SCF
+		// per-namespace quota. The larger command-line guard remains for the
+		// ad-hoc zip mode, which has no manifest quota reference.
+		manifestFunctionLimit = manifest.Manifest.SCFFetcher.TencentLimits.MaxFunctionsPerNamespace
+	}
 	if fetcherConfig == nil && (opts.NodeCount <= 0 || opts.NodeCount > maxCollectorPublishNodeCount) {
 		return collectorPublishSummary{}, fmt.Errorf(
 			"--node-count must be between 1 and %d",
 			maxCollectorPublishNodeCount,
 		)
+	}
+	storageTargetExplicit := strings.TrimSpace(opts.StorageRPCGatewayTarget) != ""
+	var storageRoutePlan privatenet.SCFRoutePlan
+	var storageRoutes map[string]privatenet.SCFStorageRoute
+	if fetcherConfig != nil && manifest != nil && manifest.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(manifest.Manifest.StorageHost.Provider), "tencent") {
+		storageRoutePlan, err = resolveSCFRoutePlan(ctx, manifest, opts.Region)
+		if err != nil {
+			return collectorPublishSummary{}, err
+		}
+		storageRoutes = routeMap(storageRoutePlan)
 	}
 	// A manifest deployment must build the package from the authoritative
 	// control-plane trust material below. Accepting an operator-supplied zip
@@ -666,9 +706,17 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		opts.collectorPackageOptions.PackageConfigDir = fetcherConfig.PackageConfigDir
 		opts.Namespace = defaultFlag(fetcherConfig.Namespace, opts.Namespace)
 		opts.Runtime = defaultFlag(fetcherConfig.Runtime, opts.Runtime)
-		opts.FunctionNamePrefix = defaultFlag(fetcherConfig.FunctionPrefix, opts.FunctionNamePrefix)
-		opts.StorageRPCGatewayTarget = defaultFlag(fetcherConfig.StorageRPCGatewayTarget, opts.StorageRPCGatewayTarget)
-		opts.StoragePrivateRPCGatewayTarget = defaultFlag(fetcherConfig.StoragePrivateRPCGatewayTarget, opts.StoragePrivateRPCGatewayTarget)
+		opts.FunctionNamePrefix = defaultFlag(opts.FunctionNamePrefix, fetcherConfig.FunctionPrefix)
+		// An explicit CLI target is an intentional per-release override (used by
+		// canaries and private-network validation); fall back to the manifest only
+		// when the operator did not provide one.
+		if !storageTargetExplicit {
+			// The per-region route is selected below after Storage placement has
+			// been discovered. Keep the manifest's public gateway as the final
+			// fallback when discovery is unavailable.
+			opts.StorageRPCGatewayTarget = ""
+		}
+		opts.StoragePrivateRPCGatewayTarget = defaultFlag(opts.StoragePrivateRPCGatewayTarget, fetcherConfig.StoragePrivateRPCGatewayTarget)
 		opts.RuntimeServiceKeyID = "collector"
 		opts.RuntimeServiceSecretKey = trustMaterial.CollectorServiceKey
 		if opts.PackageName == "moox-collector" {
@@ -786,6 +834,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	}
 
 	summary := collectorPublishSummary{ZipPath: zipPath}
+	if len(storageRoutePlan.Routes) > 0 {
+		summary.StorageRoutes = append([]privatenet.SCFStorageRoute(nil), storageRoutePlan.Routes...)
+	}
 	upload := func(regionOpts collectorPublishOptions) (string, error) {
 		response, uploadErr := client.UploadPackage(ctx, adminclient.UploadPackageRequest{
 			PackageName: defaultFlag(regionOpts.PackageName, "moox-collector"), Version: defaultFlag(regionOpts.Version, "dev"),
@@ -804,14 +855,72 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		var publishedTimerFleets []collectorPublishedTimerFleet
 		var instrumentSnapshotFleet collectorPublishedTimerFleet
 		var hasInstrumentSnapshotFleet bool
-		for _, region := range fetcherConfig.Regions {
+		regions := append([]setupconfig.SCFFetcherRegion(nil), fetcherConfig.Regions...)
+		if strings.TrimSpace(opts.Region) != "" {
+			// A manifest publish with --region is a deliberate single-region
+			// rollout. It is useful for validating a new SCF/VPC placement without
+			// touching every enabled regional fleet. If the region is not yet in
+			// the manifest, inherit the first configured cloud account and use the
+			// requested node count (the caller must pass --node-count explicitly).
+			selected := make([]setupconfig.SCFFetcherRegion, 0, 1)
+			for _, region := range regions {
+				if strings.EqualFold(strings.TrimSpace(region.Region), strings.TrimSpace(opts.Region)) {
+					selected = append(selected, region)
+					break
+				}
+			}
+			if len(selected) == 0 {
+				accountID := ""
+				for _, region := range regions {
+					if strings.TrimSpace(region.CloudAccountID) != "" {
+						accountID = region.CloudAccountID
+						break
+					}
+				}
+				if !opts.NodeCountExplicit {
+					return summary, fmt.Errorf("--node-count is required when --region %s is not present in the manifest", opts.Region)
+				}
+				selected = append(selected, setupconfig.SCFFetcherRegion{Region: opts.Region, Enabled: true, FunctionCount: opts.NodeCount, CloudAccountID: accountID})
+			}
+			regions = selected
+		}
+		if opts.SameRegionFirst && len(storageRoutePlan.Routes) > 0 {
+			storageRegion := strings.ToLower(strings.TrimSpace(storageRoutePlan.Storage.Instance.Region))
+			regions = orderCollectorPublishRegions(regions, storageRegion, true)
+		}
+		// Regional publication is deliberately synchronous. The Storage region is
+		// sorted first; its Invoke canary and the complete configured Timer fleet
+		// must finish (including readback) before this loop can reach any other
+		// region. This keeps as much write traffic as possible on the private path.
+		for _, region := range regions {
 			if !region.Enabled || fetcherConfig.IsRegionBlacklisted(region.Region) {
 				continue
 			}
 			regionOpts := opts
 			regionOpts.Region = region.Region
 			regionOpts.NodeCount = region.FunctionCount
+			if strings.TrimSpace(opts.Region) != "" && opts.NodeCountExplicit {
+				regionOpts.NodeCount = opts.NodeCount
+			}
+			if manifest != nil && opts.NodeCountExplicit {
+				if err := validateSCFPublishOverrideCapacity(manifest, fetcherConfig.SpaceID, regionOpts.Region, regionOpts.NodeCount); err != nil {
+					return summary, err
+				}
+			}
+			regionNodeLimit := manifestFunctionLimit
+			if fetcherConfig != nil {
+				// Every active regional publication also creates one Invoke
+				// canary. stockcn's snapshot region gets one more Timer.
+				regionNodeLimit--
+				if strings.EqualFold(fetcherConfig.SpaceID, "stockcn") && strings.EqualFold(strings.TrimSpace(regionOpts.Region), strings.TrimSpace(fetcherConfig.InstrumentSnapshotRegion)) {
+					regionNodeLimit--
+				}
+			}
+			if regionNodeLimit < 1 || regionOpts.NodeCount <= 0 || regionOpts.NodeCount > regionNodeLimit {
+				return summary, fmt.Errorf("--node-count for region %s must be between 1 and %d after publisher auxiliary functions", regionOpts.Region, regionNodeLimit)
+			}
 			regionOpts.CloudAccountID = region.CloudAccountID
+			regionOpts = applyCollectorStorageRoute(regionOpts, storageRoutes, fetcherConfig, storageTargetExplicit)
 			account, ok := accountsByID[regionOpts.CloudAccountID]
 			if !ok || account.IsDeleted {
 				return summary, fmt.Errorf("Tencent cloud account %q for region %s not found", regionOpts.CloudAccountID, regionOpts.Region)
@@ -919,6 +1028,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			instrumentOpts.FunctionNamePrefix = fetcherConfig.InstrumentSnapshotFunctionPrefix
 			instrumentOpts.TriggerType = "timer"
 			instrumentOpts.InstrumentSnapshotTimer = true
+			instrumentOpts = applyCollectorStorageRoute(instrumentOpts, storageRoutes, fetcherConfig, storageTargetExplicit)
 			instrumentPackageID, uploadErr := upload(instrumentOpts)
 			if uploadErr != nil {
 				return summary, fmt.Errorf("upload stock instrument snapshot package: %w", uploadErr)
@@ -1135,6 +1245,14 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if fetcherConfig == nil || !strings.EqualFold(fetcherConfig.SpaceID, "stockcn") {
 		return summary, fmt.Errorf("activation requires an enabled stockcn manifest")
 	}
+	var storageRoutes map[string]privatenet.SCFStorageRoute
+	if manifest != nil && manifest.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(manifest.Manifest.StorageHost.Provider), "tencent") {
+		plan, routeErr := resolveSCFRoutePlan(ctx, manifest, "")
+		if routeErr != nil {
+			return summary, routeErr
+		}
+		storageRoutes = routeMap(plan)
+	}
 	if err := preflightCollectorBlacklistRuntime(ctx, manifest, fetcherConfig); err != nil {
 		return summary, err
 	}
@@ -1211,6 +1329,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 			StoragePrivateRPCGatewayTarget: fetcherConfig.StoragePrivateRPCGatewayTarget,
 			FetcherConfig:                  fetcherConfig,
 		}
+		regionOpts = applyCollectorStorageRoute(regionOpts, storageRoutes, fetcherConfig, false)
 		nodes, inspectErr := inspectCollectorFleet(ctx, client, regionOpts)
 		if inspectErr != nil {
 			return summary, fmt.Errorf("inspect stock Kline fleet in %s: %w", region.Region, inspectErr)
@@ -1245,6 +1364,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 		StoragePrivateRPCGatewayTarget: fetcherConfig.StoragePrivateRPCGatewayTarget,
 		FetcherConfig:                  fetcherConfig,
 	}
+	instrumentOpts = applyCollectorStorageRoute(instrumentOpts, storageRoutes, fetcherConfig, false)
 	instrumentNodes, err := inspectCollectorFleet(ctx, client, instrumentOpts)
 	if err != nil {
 		return summary, fmt.Errorf("inspect stock Instrument Timer: %w", err)
@@ -1393,6 +1513,46 @@ func validateCollectorZipLogging(zipPath, _ string) error {
 func loadCollectorSCFFetcherConfig(path, spaceID string) (*setupconfig.SCFFetcherSpace, error) {
 	fetcher, _, err := loadCollectorSCFFetcherConfigSnapshot(path, spaceID)
 	return fetcher, err
+}
+
+// validateSCFPublishOverrideCapacity rechecks the complete manifest quota
+// budget after a deliberate --region/--node-count override. The normal config
+// loader validates the declared counts, but an override is a new plan and must
+// not bypass other Space or auxiliary-function usage in the same namespace.
+func validateSCFPublishOverrideCapacity(snapshot *setupconfig.Snapshot, spaceID, region string, nodeCount int) error {
+	if snapshot == nil || nodeCount < 1 {
+		return nil
+	}
+	scf := snapshot.Manifest.SCFFetcher
+	scf.Spaces = append([]setupconfig.SCFFetcherSpace(nil), scf.Spaces...)
+	foundSpace, foundRegion := false, false
+	for index := range scf.Spaces {
+		space := &scf.Spaces[index]
+		space.Regions = append([]setupconfig.SCFFetcherRegion(nil), space.Regions...)
+		if !strings.EqualFold(strings.TrimSpace(space.SpaceID), strings.TrimSpace(spaceID)) {
+			continue
+		}
+		foundSpace = true
+		for regionIndex := range space.Regions {
+			if strings.EqualFold(strings.TrimSpace(space.Regions[regionIndex].Region), strings.TrimSpace(region)) {
+				space.Regions[regionIndex].Enabled = true
+				space.Regions[regionIndex].FunctionCount = nodeCount
+				foundRegion = true
+				break
+			}
+		}
+		if !foundRegion {
+			space.Regions = append(space.Regions, setupconfig.SCFFetcherRegion{Region: region, Enabled: true, FunctionCount: nodeCount})
+		}
+		break
+	}
+	if !foundSpace {
+		return fmt.Errorf("scf publish override: space %q is not in manifest", spaceID)
+	}
+	if err := setupconfig.ValidateSCFCapacities(&scf, scf.TencentLimits); err != nil {
+		return fmt.Errorf("scf publish override exceeds Tencent quota: %w", err)
+	}
+	return nil
 }
 
 func loadCollectorSCFFetcherConfigSnapshot(path, spaceID string) (*setupconfig.SCFFetcherSpace, *setupconfig.Snapshot, error) {
@@ -1561,6 +1721,7 @@ func inspectCollectorFleet(
 		defaultFlag(opts.BizType, "market_fetcher"),
 		opts.NodeCount,
 		defaultFlag(opts.TriggerType, "timer"),
+		defaultFlag(opts.Namespace, "default"),
 	)
 	if err != nil {
 		return nil, err
@@ -2798,6 +2959,18 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if status != "" {
 		config["public_net_status"] = status
 	}
+	if opts.StorageRouteResolved {
+		if strings.TrimSpace(opts.StorageVPCID) != "" && strings.TrimSpace(opts.StorageSubnetID) != "" {
+			config["vpc_id"] = strings.TrimSpace(opts.StorageVPCID)
+			config["subnet_id"] = strings.TrimSpace(opts.StorageSubnetID)
+		} else {
+			delete(config, "vpc_id")
+			delete(config, "subnet_id")
+			config["clear_vpc"] = "true"
+		}
+	} else {
+		delete(config, "clear_vpc")
+	}
 	triggerType := defaultFlag(opts.TriggerType, "timer")
 	effectiveTimeoutSeconds := defaultInt(fetcher.TimeoutSeconds, 15)
 	spaceID := firstNonEmpty(opts.SpaceID, fetcher.SpaceID, opts.collectorPackageOptions.SpaceID)
@@ -2992,10 +3165,14 @@ func cloneCollectorStringMap(source map[string]string) map[string]string {
 }
 
 func selectCollectorFleetNodes(nodes []adminclient.CloudNode, prefix string, bizType string, expected int) ([]adminclient.CloudNode, error) {
-	return selectCollectorFleetNodesForTrigger(nodes, prefix, bizType, expected, "")
+	return selectCollectorFleetNodesForTrigger(nodes, prefix, bizType, expected, "", "")
 }
 
-func selectCollectorFleetNodesForTrigger(nodes []adminclient.CloudNode, prefix string, bizType string, expected int, triggerType string) ([]adminclient.CloudNode, error) {
+func selectCollectorFleetNodesForTrigger(nodes []adminclient.CloudNode, prefix string, bizType string, expected int, triggerType string, namespace ...string) ([]adminclient.CloudNode, error) {
+	expectedNamespace := ""
+	if len(namespace) > 0 {
+		expectedNamespace = strings.TrimSpace(namespace[0])
+	}
 	indexed := make([]adminclient.CloudNode, expected)
 	found := make([]bool, expected)
 	count := 0
@@ -3024,6 +3201,12 @@ func selectCollectorFleetNodesForTrigger(nodes []adminclient.CloudNode, prefix s
 				node.TriggerType,
 				expectedTrigger,
 			)
+		}
+		if expectedNamespace != "" && !strings.EqualFold(defaultFlag(node.Namespace, "default"), expectedNamespace) {
+			// A stable function prefix may have been used by another Space or
+			// namespace. Do not update it in place: SCF identity includes the
+			// namespace, so this deployment must create its own fleet.
+			continue
 		}
 		count++
 		if index < 0 || index >= expected {
@@ -3084,9 +3267,47 @@ func metadataIntValue(metadata map[string]any, key string) (int, bool) {
 }
 
 func collectorStorageRPCGatewayTarget(opts collectorPublishOptions) string {
-	// SCF always uses the public Storage gateway. Private/CCN targets stay on
-	// the host Collector runtime and must not be published into function env.
+	// The publisher selects a private target for same-region SCF functions and
+	// a public target for cross-region functions. Explicit CLI/environment
+	// overrides remain available for diagnostics and controlled canaries.
 	return firstNonEmpty(opts.StorageRPCGatewayTarget, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET"))
+}
+
+func applyCollectorStorageRoute(opts collectorPublishOptions, routes map[string]privatenet.SCFStorageRoute, fetcher *setupconfig.SCFFetcherSpace, explicit bool) collectorPublishOptions {
+	if explicit {
+		return opts
+	}
+	route, ok := routes[strings.ToLower(strings.TrimSpace(opts.Region))]
+	if !ok {
+		if fetcher != nil {
+			opts.StorageRPCGatewayTarget = fetcher.StorageRPCGatewayTarget
+		}
+		return opts
+	}
+	opts.StorageRPCGatewayTarget = route.Target
+	opts.StoragePrivateRPCGatewayTarget = ""
+	opts.StorageVPCID = route.VpcID
+	opts.StorageSubnetID = route.SubnetID
+	opts.StorageRouteResolved = true
+	return opts
+}
+
+// orderCollectorPublishRegions keeps the regional rollout deterministic while
+// placing Storage's region first. The caller publishes each returned region
+// synchronously, so completing this first item is the gate before any public
+// cross-region fleet is touched.
+func orderCollectorPublishRegions(regions []setupconfig.SCFFetcherRegion, storageRegion string, first bool) []setupconfig.SCFFetcherRegion {
+	out := append([]setupconfig.SCFFetcherRegion(nil), regions...)
+	storageRegion = strings.ToLower(strings.TrimSpace(storageRegion))
+	if !first || storageRegion == "" {
+		return out
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		iSame := strings.EqualFold(strings.TrimSpace(out[i].Region), storageRegion)
+		jSame := strings.EqualFold(strings.TrimSpace(out[j].Region), storageRegion)
+		return iSame && !jSame
+	})
+	return out
 }
 
 func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...string) (map[string]string, error) {

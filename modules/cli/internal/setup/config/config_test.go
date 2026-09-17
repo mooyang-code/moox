@@ -12,6 +12,120 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTencentSCFLimitsNormalizeDefaults(t *testing.T) {
+	limits := TencentSCFLimits{}
+	limits.normalize()
+
+	assert.Equal(t, DefaultSCFMaxNamespacesPerRegion, limits.MaxNamespacesPerRegion)
+	assert.Equal(t, DefaultSCFMaxFunctionsPerNamespace, limits.MaxFunctionsPerNamespace)
+	assert.Equal(t, DefaultSCFMaxBurstConcurrencyPerMinute, limits.MaxBurstConcurrencyPerMinute)
+	assert.Equal(t, 128000, limits.TotalConcurrencyMemoryMBByRegion["ap-guangzhou"])
+	assert.Equal(t, 64000, limits.TotalConcurrencyMemoryMBByRegion["ap-singapore"])
+	assert.Equal(t, "https://cloud.tencent.com/document/product/583/11637", limits.ReferenceURL)
+}
+
+func TestTencentSCFLimitsNormalizeMergesRegionOverrides(t *testing.T) {
+	limits := TencentSCFLimits{TotalConcurrencyMemoryMBByRegion: map[string]int{
+		" AP-NANJING ": 96000,
+		"ap-guangzhou": 256000,
+	}}
+	limits.normalize()
+
+	assert.Equal(t, 96000, limits.TotalConcurrencyMemoryMBByRegion["ap-nanjing"])
+	assert.Equal(t, 256000, limits.TotalConcurrencyMemoryMBByRegion["ap-guangzhou"])
+	assert.Equal(t, 64000, limits.TotalConcurrencyMemoryMBByRegion["ap-tokyo"])
+}
+
+func TestTencentSCFLimitsRejectInvalidRegionMemory(t *testing.T) {
+	limits := TencentSCFLimits{
+		MaxNamespacesPerRegion:       5,
+		MaxFunctionsPerNamespace:     50,
+		MaxBurstConcurrencyPerMinute: 500,
+		TotalConcurrencyMemoryMBByRegion: map[string]int{
+			"ap-unknown": 64000,
+		},
+	}
+	require.ErrorContains(t, limits.validate("scf_fetcher.tencent_limits"), "unsupported region")
+}
+
+func TestResolveSCFTimerFunctionCountsUsesConfiguredFunctionLimit(t *testing.T) {
+	cfg := SCFFetcherSpace{
+		SpaceID: "crypto", TimerFunctionCount: 3,
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true},
+			{Region: "ap-singapore", Enabled: true},
+		},
+	}
+	require.NoError(t, resolveSCFTimerFunctionCountsWithLimit(&cfg, "scf", 2))
+	assert.Equal(t, 1, cfg.Regions[0].FunctionCount)
+	assert.Equal(t, 2, cfg.Regions[1].FunctionCount)
+
+	cfg.TimerFunctionCount = 5
+	cfg.Regions[0].FunctionCount = 0
+	cfg.Regions[1].FunctionCount = 0
+	require.ErrorContains(t, resolveSCFTimerFunctionCountsWithLimit(&cfg, "scf", 2), "available Timer capacity")
+}
+
+func TestResolveSCFTimerFunctionCountsReservesInvokeBeforeAutoAllocation(t *testing.T) {
+	cfg := SCFFetcherSpace{
+		SpaceID: "crypto", TimerFunctionCount: 60,
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true},
+			{Region: "ap-singapore", Enabled: true},
+		},
+	}
+	require.NoError(t, resolveSCFTimerFunctionCountsWithCapacities(&cfg, "scf", 50, nil))
+	assert.Equal(t, 11, cfg.Regions[0].FunctionCount)
+	assert.Equal(t, 49, cfg.Regions[1].FunctionCount)
+}
+
+func TestValidateSCFCapacitiesReservesPublisherAuxiliaries(t *testing.T) {
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
+		SpaceID: "crypto", Namespace: "default",
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50}},
+	}}}
+	limits := defaultTencentSCFLimits()
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "including publisher auxiliaries")
+
+	cfg.Spaces[0].Regions[0].FunctionCount = 49
+	require.NoError(t, ValidateSCFCapacities(cfg, limits))
+
+	cfg.Spaces = append(cfg.Spaces, SCFFetcherSpace{
+		SpaceID: "other", Namespace: "default",
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
+	})
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_functions_per_namespace")
+}
+
+func TestValidateSCFCapacitiesCountsBuiltinDefaultNamespace(t *testing.T) {
+	limits := defaultTencentSCFLimits()
+	cfg := &SCFFetcher{}
+	for index := 0; index < 4; index++ {
+		cfg.Spaces = append(cfg.Spaces, SCFFetcherSpace{
+			SpaceID: fmt.Sprintf("space-%d", index), Namespace: fmt.Sprintf("custom-%d", index),
+			Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
+		})
+	}
+	require.NoError(t, ValidateSCFCapacities(cfg, limits))
+	cfg.Spaces = append(cfg.Spaces, SCFFetcherSpace{
+		SpaceID: "space-4", Namespace: "custom-4",
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
+	})
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_namespaces_per_region")
+}
+
+func TestValidateSCFRejectsSharedNamespaceAutoAllocation(t *testing.T) {
+	cfg := &SCFFetcher{
+		Enabled:      true,
+		CloudAccount: SCFFetcherCloudAccount{AccountID: "a", AccountName: "a", CredentialSecretID: "s", AppID: "app", COSRegion: "ap-guangzhou", COSBucket: "bucket"},
+		Spaces: []SCFFetcherSpace{
+			{SpaceID: "crypto", Namespace: "shared", Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 0}}},
+			{SpaceID: "stockcn", Namespace: "shared", Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1}}},
+		},
+	}
+	require.ErrorContains(t, validateSCFSharedNamespaceAutoAllocation(cfg), "shared by multiple Spaces")
+}
+
 func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T) {
 	base := func() SCFFetcher {
 		return SCFFetcher{
@@ -36,6 +150,16 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 		err := validateSCFFetcher(&cfg)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "at least one enabled region")
+	})
+
+	t.Run("rejects shared namespace before per-space auto allocation", func(t *testing.T) {
+		cfg := base()
+		cfg.Spaces[0].Regions[0].FunctionCount = 0
+		cfg.Spaces = append(cfg.Spaces, SCFFetcherSpace{
+			SpaceID: "stockcn", Namespace: cfg.Spaces[0].Namespace,
+			Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1}},
+		})
+		require.ErrorContains(t, validateSCFFetcher(&cfg), "shared by multiple Spaces")
 	})
 
 	t.Run("caps invocation concurrency at the executor bound", func(t *testing.T) {
@@ -246,11 +370,11 @@ func TestResolveSCFTimerFunctionCountsRequiresExplicitStockN(t *testing.T) {
 
 func TestValidateSCFFetcherRequiresMeasuredSafeGroupSizeForStock(t *testing.T) {
 	base := SCFFetcherSpace{
-		SpaceID: "stockcn", TimerFunctionCount: 200, MemorySize: 64, TimeoutSeconds: 15,
+		SpaceID: "stockcn", TimerFunctionCount: 192, MemorySize: 64, TimeoutSeconds: 15,
 		MeasuredSafeGroupSize: 30, StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
 		RealtimeBatchSize: 10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
 		HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50, CloudAccountID: "gz"}, {Region: "ap-shanghai", Enabled: true, FunctionCount: 50, CloudAccountID: "sh"}, {Region: "ap-beijing", Enabled: true, FunctionCount: 50, CloudAccountID: "bj"}, {Region: "ap-chengdu", Enabled: true, FunctionCount: 50, CloudAccountID: "cd"}},
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 48, CloudAccountID: "gz"}, {Region: "ap-shanghai", Enabled: true, FunctionCount: 48, CloudAccountID: "sh"}, {Region: "ap-beijing", Enabled: true, FunctionCount: 48, CloudAccountID: "bj"}, {Region: "ap-chengdu", Enabled: true, FunctionCount: 48, CloudAccountID: "cd"}},
 	}
 	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
 
@@ -314,16 +438,16 @@ func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
 func TestValidateSCFFetcherDefaultsAndBoundsStockCNInstrumentInvokeTimeout(t *testing.T) {
 	base := SCFFetcherSpace{
 		SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 15,
-		TimerFunctionCount:      200,
+		TimerFunctionCount:      192,
 		MeasuredSafeGroupSize:   30,
 		StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
 		RealtimeBatchSize:       10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
 		HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
 		Regions: []SCFFetcherRegion{
-			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50, CloudAccountID: "gz"},
-			{Region: "ap-shanghai", Enabled: true, FunctionCount: 50, CloudAccountID: "sh"},
-			{Region: "ap-beijing", Enabled: true, FunctionCount: 50, CloudAccountID: "bj"},
-			{Region: "ap-chengdu", Enabled: true, FunctionCount: 50, CloudAccountID: "cd"},
+			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 48, CloudAccountID: "gz"},
+			{Region: "ap-shanghai", Enabled: true, FunctionCount: 48, CloudAccountID: "sh"},
+			{Region: "ap-beijing", Enabled: true, FunctionCount: 48, CloudAccountID: "bj"},
+			{Region: "ap-chengdu", Enabled: true, FunctionCount: 48, CloudAccountID: "cd"},
 		},
 	}
 	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
@@ -338,15 +462,15 @@ func TestValidateSCFFetcherDefaultsAndBoundsStockCNInstrumentInvokeTimeout(t *te
 func TestValidateSCFFetcherDefaultsIndependentStockInstrumentTimer(t *testing.T) {
 	base := SCFFetcherSpace{
 		SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 15,
-		TimerFunctionCount: 200, MeasuredSafeGroupSize: 30,
+		TimerFunctionCount: 192, MeasuredSafeGroupSize: 30,
 		StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
 		RealtimeBatchSize:       10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
 		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
 		Regions: []SCFFetcherRegion{
-			{Region: "ap-shanghai", Enabled: true, FunctionCount: 50, CloudAccountID: "tencent-scf-shanghai"},
-			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50, CloudAccountID: "tencent-scf-guangzhou"},
-			{Region: "ap-beijing", Enabled: true, FunctionCount: 50, CloudAccountID: "tencent-scf-beijing"},
-			{Region: "ap-chengdu", Enabled: true, FunctionCount: 50, CloudAccountID: "tencent-scf-chengdu"},
+			{Region: "ap-shanghai", Enabled: true, FunctionCount: 48, CloudAccountID: "tencent-scf-shanghai"},
+			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 48, CloudAccountID: "tencent-scf-guangzhou"},
+			{Region: "ap-beijing", Enabled: true, FunctionCount: 48, CloudAccountID: "tencent-scf-beijing"},
+			{Region: "ap-chengdu", Enabled: true, FunctionCount: 48, CloudAccountID: "tencent-scf-chengdu"},
 		},
 	}
 
@@ -464,7 +588,7 @@ storage_gateway_host = "192.0.2.10"
 	assert.Empty(t, snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
 }
 
-func TestLoadIgnoresStoragePrivateGatewayHost(t *testing.T) {
+func TestLoadResolvesStoragePrivateGatewayHost(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
 
@@ -476,10 +600,10 @@ storage_private_gateway_host = "10.206.0.5"
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	assert.Equal(t, "ip://192.0.2.10:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StorageRPCGatewayTarget)
-	assert.Empty(t, snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
+	assert.Equal(t, "ip://10.206.0.5:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
 }
 
-func TestLoadIgnoresPublicStoragePrivateGatewayHost(t *testing.T) {
+func TestLoadAcceptsPublicStoragePrivateGatewayHostAsConfiguredValue(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
 
@@ -490,7 +614,7 @@ storage_private_gateway_host = "192.0.2.10"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
-	assert.Empty(t, snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
+	assert.Equal(t, "ip://192.0.2.10:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
 }
 
 func TestValidateRejectsStorageRootOverlapWithControl(t *testing.T) {

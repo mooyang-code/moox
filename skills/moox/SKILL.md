@@ -115,13 +115,14 @@ The script calls `bin/moox-cli` from the repository when present, or `moox-cli` 
 
 ### Tencent Private Network
 
-**主机与 SCF 通信一律走公网。** Do not create CCN, bind functions to VPC, or
-rewrite host runtimes to private Storage IPs. When the user mentions 云联网,
-SCF VPC, CCN 费用, restore-scf-public, 内网组网, or `setup private-network`,
-follow [`references/private-network.md`](references/private-network.md). Keep
-`storage_gateway_host` and EventBus `tls://<公网>:4222` public. Ignore
-`storage_private_gateway_host`. Do not change Caddy or `MOOX_PUBLIC_HOST` to
-private IPs.
+Storage routing is regional. Before SCF publication,
+run `moox-cli setup scf-network-plan --file ./moox.toml`: same-region SCF uses
+Storage's discovered VPC/subnet/private IP, while cross-region SCF uses the
+configured public gateway. Do not create CCN. Keep `public_net_status=ENABLE`
+when the function must reach public market providers. Follow
+[`references/private-network.md`](references/private-network.md) for the full
+decision table, canary order and evidence requirements. Do not change Caddy or
+`MOOX_PUBLIC_HOST` to private IPs.
 
 Runtime data can be deleted and rebuilt from `examples/` and service flows. Do not reintroduce standalone acceptance CSV scripts.
 
@@ -276,8 +277,9 @@ that machine. After Storage is ready, run `setup init --config-dir
 ./config/setup --storage-host <host-name>` to create or verify the
 default Admin spaces and Storage metadata, activate Datasets, and verify the
 result. Keep `moox.toml` secrets unchanged and never parse a generated filtered seed
-in Agent context. After Tencent hosts exist, public-IP communication is
-[`references/private-network.md`](references/private-network.md); 主机与 SCF 通信一律走公网.
+in Agent context. After Tencent hosts exist, resolve the Storage placement and
+apply the regional SCF route rules in
+[`references/private-network.md`](references/private-network.md).
 
 `t_service_deployments` remains the source of truth for service addresses.
 `/#/ops/storage/nodes` remains the separate PrimaryStore topology and is never

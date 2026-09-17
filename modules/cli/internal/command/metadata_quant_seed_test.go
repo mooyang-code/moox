@@ -62,6 +62,7 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 		"dataset_binance_swap_symbols",
 		"dataset_binance_spot_kline_1m",
 		"dataset_binance_swap_kline_1m",
+		"mdataset_binance_kline_1m",
 		"dataset_spot_kline_1h",
 		"dataset_perpetual_kline_1h",
 	}, datasetIDs)
@@ -79,18 +80,27 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 	require.ElementsMatch(t, []string{
 		"view_crypto_spot_kline_1m",
 		"view_crypto_swap_kline_1m",
+		"view_binance_kline_1m",
 		"view_crypto_spot_kline_1h",
 		"view_crypto_swap_kline_1h",
 	}, viewIDs)
 	for _, item := range seed.Datasets {
 		require.Equal(t, "storage-node-0", item.DataNodeID, item.DatasetID)
 		require.NotEmpty(t, item.KeepDuration, item.DatasetID)
-		require.Equal(t, "disabled", item.Status, item.DatasetID)
+		if item.SpaceID == "crypto" {
+			require.Equal(t, "active", item.Status, item.DatasetID)
+		} else {
+			require.Equal(t, "disabled", item.Status, item.DatasetID)
+		}
 		if item.SpaceID == "mooxsys" && item.DatasetID == "dataset_mooxsys_service_metrics" {
 			require.Equal(t, "24h", item.KeepDuration)
 		}
-		if item.SpaceID == "crypto" && item.DatasetID != "dataset_binance_spot_symbols" && item.DatasetID != "dataset_binance_swap_symbols" && item.DatasetID != "dataset_binance_spot_kline_1m" && item.DatasetID != "dataset_binance_swap_kline_1m" {
-			require.Equal(t, "crypto", item.DataSourceID, item.DatasetID)
+		if item.SpaceID == "crypto" {
+			if item.DatasetID == "mdataset_binance_kline_1m" {
+				require.Equal(t, "binance", item.DataSourceID, item.DatasetID)
+			} else if item.DatasetID != "dataset_binance_spot_symbols" && item.DatasetID != "dataset_binance_swap_symbols" && item.DatasetID != "dataset_binance_spot_kline_1m" && item.DatasetID != "dataset_binance_swap_kline_1m" {
+				require.Equal(t, "crypto", item.DataSourceID, item.DatasetID)
+			}
 		}
 	}
 	for _, item := range seed.Views {

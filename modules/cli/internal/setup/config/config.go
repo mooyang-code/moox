@@ -67,6 +67,15 @@ const (
 	DefaultStockCNStaggerMaxStartsPerSecond = 6
 )
 
+const (
+	// Tencent SCF publishes these as the default account quotas. Keep them in
+	// the manifest so release planning does not depend on a hidden allocator
+	// constant. An account or namespace may have purchased higher quotas.
+	DefaultSCFMaxNamespacesPerRegion       = 5
+	DefaultSCFMaxFunctionsPerNamespace     = 50
+	DefaultSCFMaxBurstConcurrencyPerMinute = 500
+)
+
 // Paths controls where setup-cli installs the control and Storage packages.
 // Storage may be deployed to a separate host with a different mount layout,
 // so StorageRoot is independently validated as an absolute safe path.
@@ -251,12 +260,107 @@ type SCFFetcherCloudAccount struct {
 	COSBucket          string `toml:"cos_bucket"`
 }
 
+// TencentSCFLimits records the Tencent Cloud SCF default quotas relevant to
+// function publication. Tencent may raise these values for an account or
+// namespace, so they are configuration references rather than a substitute
+// for a live quota query.
+type TencentSCFLimits struct {
+	MaxNamespacesPerRegion           int            `toml:"max_namespaces_per_region"`
+	MaxFunctionsPerNamespace         int            `toml:"max_functions_per_namespace"`
+	MaxBurstConcurrencyPerMinute     int            `toml:"max_burst_concurrency_per_minute"`
+	TotalConcurrencyMemoryMBByRegion map[string]int `toml:"total_concurrency_memory_mb_by_region"`
+	ReferenceURL                     string         `toml:"reference_url"`
+	ReferenceCheckedAt               string         `toml:"reference_checked_at"`
+}
+
+func defaultTencentSCFLimits() TencentSCFLimits {
+	return TencentSCFLimits{
+		MaxNamespacesPerRegion:       DefaultSCFMaxNamespacesPerRegion,
+		MaxFunctionsPerNamespace:     DefaultSCFMaxFunctionsPerNamespace,
+		MaxBurstConcurrencyPerMinute: DefaultSCFMaxBurstConcurrencyPerMinute,
+		TotalConcurrencyMemoryMBByRegion: map[string]int{
+			"ap-guangzhou":     128000,
+			"ap-shanghai":      128000,
+			"ap-beijing":       128000,
+			"ap-chengdu":       128000,
+			"ap-hongkong":      128000,
+			"ap-singapore":     64000,
+			"ap-tokyo":         64000,
+			"na-siliconvalley": 64000,
+			"eu-frankfurt":     64000,
+			"ap-shanghai-fsi":  64000,
+			"ap-shenzhen-fsi":  64000,
+		},
+		ReferenceURL:       "https://cloud.tencent.com/document/product/583/11637",
+		ReferenceCheckedAt: "2026-09-17",
+	}
+}
+
+func (l *TencentSCFLimits) normalize() {
+	if l == nil {
+		return
+	}
+	defaults := defaultTencentSCFLimits()
+	if l.MaxNamespacesPerRegion == 0 {
+		l.MaxNamespacesPerRegion = defaults.MaxNamespacesPerRegion
+	}
+	if l.MaxFunctionsPerNamespace == 0 {
+		l.MaxFunctionsPerNamespace = defaults.MaxFunctionsPerNamespace
+	}
+	if l.MaxBurstConcurrencyPerMinute == 0 {
+		l.MaxBurstConcurrencyPerMinute = defaults.MaxBurstConcurrencyPerMinute
+	}
+	if strings.TrimSpace(l.ReferenceURL) == "" {
+		l.ReferenceURL = defaults.ReferenceURL
+	}
+	if strings.TrimSpace(l.ReferenceCheckedAt) == "" {
+		l.ReferenceCheckedAt = defaults.ReferenceCheckedAt
+	}
+	if l.TotalConcurrencyMemoryMBByRegion == nil {
+		l.TotalConcurrencyMemoryMBByRegion = defaults.TotalConcurrencyMemoryMBByRegion
+		return
+	}
+	normalized := make(map[string]int, len(defaults.TotalConcurrencyMemoryMBByRegion)+len(l.TotalConcurrencyMemoryMBByRegion))
+	for region, memory := range defaults.TotalConcurrencyMemoryMBByRegion {
+		normalized[region] = memory
+	}
+	for region, memory := range l.TotalConcurrencyMemoryMBByRegion {
+		region = strings.ToLower(strings.TrimSpace(region))
+		if region != "" {
+			normalized[region] = memory
+		}
+	}
+	l.TotalConcurrencyMemoryMBByRegion = normalized
+}
+
+func (l TencentSCFLimits) validate(path string) error {
+	if l.MaxNamespacesPerRegion < 1 {
+		return fmt.Errorf("config_invalid: %s.max_namespaces_per_region must be positive", path)
+	}
+	if l.MaxFunctionsPerNamespace < 1 {
+		return fmt.Errorf("config_invalid: %s.max_functions_per_namespace must be positive", path)
+	}
+	if l.MaxBurstConcurrencyPerMinute < 0 {
+		return fmt.Errorf("config_invalid: %s.max_burst_concurrency_per_minute must not be negative", path)
+	}
+	for region, memory := range l.TotalConcurrencyMemoryMBByRegion {
+		if !supportedSCFRegion(region) {
+			return fmt.Errorf("config_invalid: %s.total_concurrency_memory_mb_by_region contains unsupported region %q", path, region)
+		}
+		if memory <= 0 {
+			return fmt.Errorf("config_invalid: %s.total_concurrency_memory_mb_by_region[%q] must be positive", path, region)
+		}
+	}
+	return nil
+}
+
 // SCFFetcher is the manifest container for independent, space-scoped SCF
 // fleets. A function may only consume tasks from its configured space.
 type SCFFetcher struct {
-	Enabled      bool                   `toml:"enabled"`
-	CloudAccount SCFFetcherCloudAccount `toml:"cloud_account"`
-	Spaces       []SCFFetcherSpace      `toml:"spaces"`
+	Enabled       bool                   `toml:"enabled"`
+	CloudAccount  SCFFetcherCloudAccount `toml:"cloud_account"`
+	TencentLimits TencentSCFLimits       `toml:"tencent_limits"`
+	Spaces        []SCFFetcherSpace      `toml:"spaces"`
 }
 
 // FactorSetup describes the local Python factors and their default View
@@ -682,17 +786,35 @@ func resolveManifestReferences(manifest *Manifest) error {
 	for index := range manifest.SCFFetcher.Spaces {
 		space := &manifest.SCFFetcher.Spaces[index]
 		space.StorageGatewayHost = strings.TrimSpace(space.StorageGatewayHost)
-		if space.StorageGatewayHost == "" {
+		if space.StorageGatewayHost != "" {
+			storageHost, err := lookup(fmt.Sprintf("scf_fetcher.spaces[%d]", index), space.StorageGatewayHost)
+			if err != nil {
+				return err
+			}
+			space.StorageGatewayHost = storageHost.Host
+			space.StorageRPCGatewayTarget = "ip://" + net.JoinHostPort(storageHost.Address, "11003")
+		}
+		space.StoragePrivateGatewayHost = strings.TrimSpace(space.StoragePrivateGatewayHost)
+		if space.StoragePrivateGatewayHost == "" {
 			continue
 		}
-		storageHost, err := lookup(fmt.Sprintf("scf_fetcher.spaces[%d]", index), space.StorageGatewayHost)
-		if err != nil {
-			return err
+		privateAddress := space.StoragePrivateGatewayHost
+		if net.ParseIP(privateAddress) == nil {
+			if _, address, ok := findHostDefinition(manifest.HostCatalog, privateAddress); ok {
+				privateAddress = address
+			} else {
+				resolved, resolveErr := net.LookupIP(privateAddress)
+				if resolveErr != nil || len(resolved) == 0 {
+					return fmt.Errorf("config_invalid: resolve scf_fetcher.spaces[%d].storage_private_gateway_host: %w", index, resolveErr)
+				}
+				privateAddress = resolved[0].String()
+			}
 		}
-		space.StorageGatewayHost = storageHost.Host
-		space.StorageRPCGatewayTarget = "ip://" + net.JoinHostPort(storageHost.Address, "11003")
-		space.StoragePrivateGatewayHost = ""
-		space.StoragePrivateRPCGatewayTarget = ""
+		if net.ParseIP(privateAddress) == nil {
+			return fmt.Errorf("config_invalid: scf_fetcher.spaces[%d].storage_private_gateway_host must resolve to an IP", index)
+		}
+		space.StoragePrivateGatewayHost = privateAddress
+		space.StoragePrivateRPCGatewayTarget = "ip://" + net.JoinHostPort(privateAddress, "11003")
 	}
 	return nil
 }
@@ -1063,8 +1185,15 @@ func validateFactorSetup(cfg *FactorSetup) error {
 }
 
 func validateSCFFetcher(cfg *SCFFetcher) error {
-	if cfg == nil || !cfg.Enabled {
+	if cfg == nil {
 		return nil
+	}
+	cfg.TencentLimits.normalize()
+	if !cfg.Enabled {
+		return nil
+	}
+	if err := cfg.TencentLimits.validate("scf_fetcher.tencent_limits"); err != nil {
+		return err
 	}
 	account := &cfg.CloudAccount
 	account.AccountID = strings.TrimSpace(account.AccountID)
@@ -1083,6 +1212,9 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 		return fmt.Errorf("config_invalid: scf_fetcher.spaces must not be empty when enabled")
 	}
 	seenSpaces := make(map[string]struct{}, len(cfg.Spaces))
+	if err := validateSCFSharedNamespaceAutoAllocation(cfg); err != nil {
+		return err
+	}
 	for index := range cfg.Spaces {
 		spaceID := strings.TrimSpace(cfg.Spaces[index].SpaceID)
 		if spaceID == "" {
@@ -1102,7 +1234,7 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 			region.COSBucket = account.COSBucket
 		}
 		cfg.Spaces[index].SpaceID = spaceID
-		if err := validateSCFFetcherSpace(&cfg.Spaces[index], fmt.Sprintf("scf_fetcher.spaces[%d]", index)); err != nil {
+		if err := validateSCFFetcherSpaceWithLimits(&cfg.Spaces[index], fmt.Sprintf("scf_fetcher.spaces[%d]", index), cfg.TencentLimits); err != nil {
 			return err
 		}
 	}
@@ -1119,9 +1251,109 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 	return nil
 }
 
+// Automatic regional allocation is performed per Space. Sharing a namespace
+// between Spaces would make each allocator unaware of the other's fixed and
+// auxiliary functions, so a locally feasible allocation could still exceed
+// the aggregate Tencent quota. Require explicit counts for that uncommon
+// layout instead of silently producing an invalid plan.
+func validateSCFSharedNamespaceAutoAllocation(cfg *SCFFetcher) error {
+	owners := make(map[string][]int)
+	for index, space := range cfg.Spaces {
+		namespace := strings.ToLower(strings.TrimSpace(space.Namespace))
+		if namespace == "" {
+			namespace = "default"
+		}
+		owners[namespace] = append(owners[namespace], index)
+	}
+	for namespace, indexes := range owners {
+		if len(indexes) < 2 {
+			continue
+		}
+		for _, index := range indexes {
+			for _, region := range cfg.Spaces[index].Regions {
+				if region.Enabled && region.FunctionCount == 0 {
+					return fmt.Errorf("config_invalid: scf namespace %q is shared by multiple Spaces; automatic function allocation requires dedicated namespaces or explicit function_count values", namespace)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateSCFCapacities accounts for every function the manifest publisher
+// creates for each Space/region/namespace: Timer functions, one Invoke canary
+// per active region and the optional stock Instrument snapshot Timer. Tencent's
+// function quota applies to that aggregate, not only to timer_function_count.
+func ValidateSCFCapacities(cfg *SCFFetcher, limits TencentSCFLimits) error {
+	if cfg == nil {
+		return nil
+	}
+	limits.normalize()
+	type regionNamespace struct {
+		region    string
+		namespace string
+	}
+	namespaces := make(map[string]map[string]struct{})
+	functions := make(map[regionNamespace]int)
+	for _, space := range cfg.Spaces {
+		namespace := strings.ToLower(strings.TrimSpace(space.Namespace))
+		if namespace == "" {
+			namespace = "default"
+		}
+		for _, region := range space.Regions {
+			if !region.Enabled || region.FunctionCount <= 0 || space.IsRegionBlacklisted(region.Region) {
+				continue
+			}
+			regionCode := strings.ToLower(strings.TrimSpace(region.Region))
+			if namespaces[regionCode] == nil {
+				namespaces[regionCode] = make(map[string]struct{})
+			}
+			// Tencent provides the built-in default namespace in every region;
+			// custom namespaces consume the remaining regional quota slots.
+			namespaces[regionCode]["default"] = struct{}{}
+			key := regionNamespace{region: regionCode, namespace: namespace}
+			namespaces[regionCode][namespace] = struct{}{}
+			// The standard publisher creates one Invoke canary in addition to
+			// the configured Timer fleet for each active Space/region pair.
+			functions[key] += region.FunctionCount + 1
+		}
+		if snapshotRegion := strings.ToLower(strings.TrimSpace(space.InstrumentSnapshotRegion)); snapshotRegion != "" {
+			if !space.IsRegionBlacklisted(snapshotRegion) {
+				if namespaces[snapshotRegion] == nil {
+					namespaces[snapshotRegion] = make(map[string]struct{})
+				}
+				namespaces[snapshotRegion]["default"] = struct{}{}
+				key := regionNamespace{region: snapshotRegion, namespace: namespace}
+				namespaces[snapshotRegion][namespace] = struct{}{}
+				functions[key]++
+			}
+		}
+	}
+	for region, regionNamespaces := range namespaces {
+		if len(regionNamespaces) > limits.MaxNamespacesPerRegion {
+			return fmt.Errorf("config_invalid: scf region %s uses %d namespaces, above max_namespaces_per_region %d", region, len(regionNamespaces), limits.MaxNamespacesPerRegion)
+		}
+	}
+	for key, count := range functions {
+		if count > limits.MaxFunctionsPerNamespace {
+			return fmt.Errorf("config_invalid: scf region %s namespace %s uses %d functions including publisher auxiliaries, above max_functions_per_namespace %d", key.region, key.namespace, count, limits.MaxFunctionsPerNamespace)
+		}
+	}
+	return nil
+}
+
 func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
+	limits := defaultTencentSCFLimits()
+	return validateSCFFetcherSpaceWithLimits(cfg, path, limits)
+}
+
+func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits TencentSCFLimits) error {
 	if cfg == nil {
 		return fmt.Errorf("config_invalid: %s is required", path)
+	}
+	limits.normalize()
+	if err := limits.validate("scf_fetcher.tencent_limits"); err != nil {
+		return err
 	}
 	if err := normalizeSCFRegionBlacklist(cfg, path); err != nil {
 		return err
@@ -1345,8 +1577,8 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	enabledRegions := 0
 	for i := range cfg.Regions {
 		region := strings.TrimSpace(cfg.Regions[i].Region)
-		if region == "" || cfg.Regions[i].FunctionCount < 0 || cfg.Regions[i].FunctionCount > 50 || (cfg.Regions[i].Enabled && strings.TrimSpace(cfg.Regions[i].CloudAccountID) == "") {
-			return fmt.Errorf("config_invalid: %s.regions[%d] region and function_count 0..50 are required (0 enables automatic allocation)", path, i)
+		if region == "" || cfg.Regions[i].FunctionCount < 0 || cfg.Regions[i].FunctionCount > limits.MaxFunctionsPerNamespace || (cfg.Regions[i].Enabled && strings.TrimSpace(cfg.Regions[i].CloudAccountID) == "") {
+			return fmt.Errorf("config_invalid: %s.regions[%d] region and function_count 0..%d are required (0 enables automatic allocation)", path, i, limits.MaxFunctionsPerNamespace)
 		}
 		if !supportedSCFRegion(region) {
 			return fmt.Errorf("config_invalid: %s.regions[%d] region %q is not supported", path, i, region)
@@ -1372,7 +1604,11 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	if enabledRegions == 0 {
 		return fmt.Errorf("config_invalid: %s.regions must contain at least one enabled region", path)
 	}
-	if err := resolveSCFTimerFunctionCounts(cfg, path); err != nil {
+	reserved := map[string]int{}
+	if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stockcn") && strings.TrimSpace(cfg.InstrumentSnapshotRegion) != "" {
+		reserved[strings.ToLower(strings.TrimSpace(cfg.InstrumentSnapshotRegion))] = 1
+	}
+	if err := resolveSCFTimerFunctionCountsWithCapacities(cfg, path, limits.MaxFunctionsPerNamespace, reserved); err != nil {
 		return err
 	}
 	if cfg.CLSCloudAccountID == "" {
@@ -1453,8 +1689,26 @@ func normalizeStockCNInstrumentSnapshotConfig(cfg *SCFFetcherSpace, path string)
 }
 
 func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
+	return resolveSCFTimerFunctionCountsWithLimit(cfg, path, DefaultSCFMaxFunctionsPerNamespace)
+}
+
+func resolveSCFTimerFunctionCountsWithLimit(cfg *SCFFetcherSpace, path string, maxFunctionsPerRegion int) error {
+	// This helper is retained for package-level callers that only want the
+	// historical Timer allocator. Manifest validation uses the capacity-aware
+	// path below and reserves publisher auxiliaries explicitly.
+	return resolveSCFTimerFunctionCountsWithCapacities(cfg, path, maxFunctionsPerRegion+1, nil)
+}
+
+// resolveSCFTimerFunctionCountsWithCapacities allocates Timer functions while
+// reserving the publisher-created auxiliary functions for each region. The
+// reserved map currently contains the stock Instrument snapshot (one extra
+// Timer); every active region also reserves one Invoke in this function.
+func resolveSCFTimerFunctionCountsWithCapacities(cfg *SCFFetcherSpace, path string, maxFunctionsPerNamespace int, reservedByRegion map[string]int) error {
 	if cfg == nil {
 		return fmt.Errorf("config_invalid: %s is required", path)
+	}
+	if maxFunctionsPerNamespace < 1 {
+		return fmt.Errorf("config_invalid: max_functions_per_namespace must be positive")
 	}
 	if err := normalizeSCFRegionBlacklist(cfg, path); err != nil {
 		return err
@@ -1463,6 +1717,11 @@ func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 		cfg.StaggerStartSecond = DefaultStockCNStaggerStartSecond
 		cfg.StaggerWindowSeconds = DefaultStockCNStaggerWindowSeconds
 		cfg.StaggerMaxStartsPerSecond = DefaultStockCNStaggerMaxStartsPerSecond
+	}
+	regionCapacity := func(region string) int {
+		capacity := maxFunctionsPerNamespace - 1 // one Invoke canary
+		capacity -= reservedByRegion[strings.ToLower(strings.TrimSpace(region))]
+		return capacity
 	}
 	explicitTotal := 0
 	autoRegions := make([]int, 0)
@@ -1476,6 +1735,9 @@ func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 		}
 		if !region.Enabled {
 			continue
+		}
+		if regionCapacity(region.Region) < 1 {
+			return fmt.Errorf("config_invalid: %s region %q has no Timer capacity after publisher auxiliary functions", path, region.Region)
 		}
 		enabledRegions = append(enabledRegions, index)
 		if region.FunctionCount == 0 {
@@ -1515,16 +1777,21 @@ func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 		if remaining < len(autoRegions) {
 			return fmt.Errorf("config_invalid: %s timer_function_count %d cannot assign at least one function to each automatic region", path, desired)
 		}
-		if remaining > len(autoRegions)*50 {
-			return fmt.Errorf("config_invalid: %s timer_function_count %d exceeds the 50-function-per-region limit for %d automatic regions", path, desired, len(autoRegions))
+		capacity := 0
+		for _, index := range autoRegions {
+			capacity += regionCapacity(cfg.Regions[index].Region)
 		}
-		allocateSCFAutoRegionCounts(cfg, autoRegions, remaining)
+		if remaining > capacity {
+			return fmt.Errorf("config_invalid: %s timer_function_count %d exceeds the available Timer capacity %d after publisher auxiliary functions", path, desired, capacity+explicitTotal)
+		}
+		allocateSCFAutoRegionCountsWithCapacities(cfg, autoRegions, remaining, regionCapacity)
 	}
 	actualTotal := 0
 	for _, index := range enabledRegions {
 		count := cfg.Regions[index].FunctionCount
-		if count < 1 || count > 50 {
-			return fmt.Errorf("config_invalid: %s.regions[%d] automatic function_count resolved to %d; each enabled region must receive 1..50 functions", path, index, count)
+		capacity := regionCapacity(cfg.Regions[index].Region)
+		if count < 1 || count > capacity {
+			return fmt.Errorf("config_invalid: %s.regions[%d] automatic function_count resolved to %d; Timer capacity is 1..%d after publisher auxiliary functions", path, index, count, capacity)
 		}
 		actualTotal += count
 	}
@@ -1540,6 +1807,14 @@ func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 // domestic regions remain a fallback for quota or availability constraints.
 // Every configured automatic region still receives at least one function.
 func allocateSCFAutoRegionCounts(cfg *SCFFetcherSpace, autoRegions []int, remaining int) {
+	allocateSCFAutoRegionCountsWithLimit(cfg, autoRegions, remaining, DefaultSCFMaxFunctionsPerNamespace)
+}
+
+func allocateSCFAutoRegionCountsWithLimit(cfg *SCFFetcherSpace, autoRegions []int, remaining, maxFunctionsPerRegion int) {
+	allocateSCFAutoRegionCountsWithCapacities(cfg, autoRegions, remaining, func(string) int { return maxFunctionsPerRegion })
+}
+
+func allocateSCFAutoRegionCountsWithCapacities(cfg *SCFFetcherSpace, autoRegions []int, remaining int, capacity func(string) int) {
 	groups := [][]int{autoRegions}
 	if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "crypto") {
 		overseas := make([]int, 0, len(autoRegions))
@@ -1562,16 +1837,33 @@ func allocateSCFAutoRegionCounts(cfg *SCFFetcherSpace, autoRegions []int, remain
 		for _, later := range groups[groupIndex+1:] {
 			laterRegionCount += len(later)
 		}
-		capacity := len(group) * 50
-		assign := remaining - laterRegionCount
-		if assign > capacity {
-			assign = capacity
+		groupCapacity := 0
+		for _, index := range group {
+			groupCapacity += capacity(cfg.Regions[index].Region)
 		}
-		base, extra := assign/len(group), assign%len(group)
-		for order, index := range group {
-			cfg.Regions[index].FunctionCount = base
-			if order < extra {
+		assign := remaining - laterRegionCount
+		if assign > groupCapacity {
+			assign = groupCapacity
+		}
+		for _, index := range group {
+			cfg.Regions[index].FunctionCount = 1
+		}
+		remainingExtra := assign - len(group)
+		for remainingExtra > 0 {
+			progress := false
+			for _, index := range group {
+				if cfg.Regions[index].FunctionCount >= capacity(cfg.Regions[index].Region) {
+					continue
+				}
 				cfg.Regions[index].FunctionCount++
+				remainingExtra--
+				progress = true
+				if remainingExtra == 0 {
+					break
+				}
+			}
+			if !progress {
+				break
 			}
 		}
 		remaining -= assign

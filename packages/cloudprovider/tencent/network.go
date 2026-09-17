@@ -38,6 +38,7 @@ type CloudInstance struct {
 	Zone             string   `json:"zone,omitempty"`
 	InstanceID       string   `json:"instance_id"`
 	InstanceName     string   `json:"instance_name,omitempty"`
+	State            string   `json:"state,omitempty"`
 	VpcID            string   `json:"vpc_id,omitempty"`
 	SubnetID         string   `json:"subnet_id,omitempty"`
 	PublicIPs        []string `json:"public_ips,omitempty"`
@@ -242,6 +243,7 @@ func (c *NetworkClient) LookupCVMByEIP(ctx context.Context, publicIP string) (Cl
 type cvmInstance struct {
 	InstanceID         string   `json:"InstanceId"`
 	InstanceName       string   `json:"InstanceName"`
+	InstanceState      string   `json:"InstanceState"`
 	PrivateIPAddresses []string `json:"PrivateIpAddresses"`
 	PublicIPAddresses  []string `json:"PublicIpAddresses"`
 	SecurityGroupIDs   []string `json:"SecurityGroupIds"`
@@ -259,7 +261,7 @@ func cloudInstanceFromCVM(region string, item cvmInstance) CloudInstance {
 	privateIPs := uniqueNonEmpty(append(item.PrivateIPAddresses, item.VirtualPrivateCloud.PrivateIPAddresses...))
 	return CloudInstance{
 		Kind: KindCVM, Region: region, Zone: item.Placement.Zone,
-		InstanceID: item.InstanceID, InstanceName: item.InstanceName,
+		InstanceID: item.InstanceID, InstanceName: item.InstanceName, State: item.InstanceState,
 		VpcID: item.VirtualPrivateCloud.VpcID, SubnetID: item.VirtualPrivateCloud.SubnetID,
 		PublicIPs: uniqueNonEmpty(item.PublicIPAddresses), PrivateIPs: privateIPs,
 		SecurityGroupIDs: uniqueNonEmpty(item.SecurityGroupIDs),

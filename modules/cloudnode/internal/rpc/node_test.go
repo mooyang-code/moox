@@ -333,6 +333,19 @@ func TestExecuteRuntimeConfigSkipsUnchangedEnvironmentUpdate(t *testing.T) {
 	require.Empty(t, fake.configured, "unchanged managed environment must not call UpdateFunctionConfiguration")
 }
 
+func TestReconcileSCFPublicNetworkClearsPreviousVPC(t *testing.T) {
+	fake := &fakeSCFClient{}
+	info := &tencentscf.FunctionInfo{Status: "Active", VpcID: "vpc-old", SubnetID: "subnet-old", Environment: map[string]string{}}
+	err := reconcileSCFPublicNetwork(context.Background(), fake, tencentscf.FunctionRef{
+		Region: "ap-hongkong", Namespace: "collector", FunctionName: "collector-ap-hongkong-0",
+	}, info, map[string]string{"clear_vpc": "true", "public_net_status": "ENABLE"})
+	require.NoError(t, err)
+	require.Len(t, fake.configured, 1)
+	assert.True(t, fake.configured[0].ClearVPC)
+	assert.Empty(t, fake.configured[0].VpcID)
+	assert.Empty(t, fake.configured[0].SubnetID)
+}
+
 type fakeSCFClient struct {
 	mu                   sync.Mutex
 	getResults           []fakeSCFGetResult
@@ -351,6 +364,8 @@ type fakeSCFClient struct {
 	inventory            []tencentscf.DiscoveryFunction
 	inventoryRegion      string
 }
+
+func (f *fakeSCFClient) EnsureNamespace(context.Context, string, string) error { return nil }
 
 func (f *fakeSCFClient) ListFunctionInventory(_ context.Context, region string) ([]tencentscf.DiscoveryFunction, error) {
 	if f.inventoryRegion != "" && f.inventoryRegion != region {
