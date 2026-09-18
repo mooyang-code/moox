@@ -71,6 +71,17 @@ export function buildSubjectDataIds(datasetSubjects: DatasetSubject[], subjects:
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
+export function buildSubjectDataIdsFromRows(rows: TimeSeriesRow[]): BrowseDataId[] {
+  const subjectIDs = new Set<string>();
+  for (const row of rows) {
+    const subjectID = row.key?.subject_id?.trim();
+    if (subjectID) subjectIDs.add(subjectID);
+  }
+  return [...subjectIDs]
+    .sort((a, b) => a.localeCompare(b))
+    .map(id => ({ id, name: id, description: "" }));
+}
+
 export function displayDataIdText(item: BrowseDataId) {
   return item.id;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DatasetColumn, ViewColumn } from "@/api/storage/types";
-import { buildTimeSeriesBrowseSelector, sortBrowseTableRows, timeSeriesRowsToTableRows } from "./browse-utils";
+import { buildSubjectDataIdsFromRows, buildTimeSeriesBrowseSelector, sortBrowseTableRows, timeSeriesRowsToTableRows } from "./browse-utils";
 import {
   buildKlineChartRecords,
   buildViewColumnLabels,
@@ -57,6 +57,22 @@ describe("timeSeriesRowsToTableRows", () => {
     expect(buildTimeSeriesBrowseSelector("crypto", "dataset_spot_kline_1h", "BTC-USDT", "1H", "", false)).not.toHaveProperty(
       "series_tag"
     );
+  });
+});
+
+describe("buildSubjectDataIdsFromRows", () => {
+  it("discovers real subject IDs when dataset bindings are unavailable", () => {
+    expect(
+      buildSubjectDataIdsFromRows([
+        { key: { subject_id: "BTC-USDT" } },
+        { key: { subject_id: "ETH-USDT" } },
+        { key: { subject_id: "BTC-USDT" } },
+        { key: { subject_id: "" } }
+      ])
+    ).toEqual([
+      { id: "BTC-USDT", name: "BTC-USDT", description: "" },
+      { id: "ETH-USDT", name: "ETH-USDT", description: "" }
+    ]);
   });
 });
 

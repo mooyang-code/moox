@@ -328,15 +328,18 @@ import {
   listDatasetSubjects,
   listFactors,
   listFields,
-  listSubjects
+  listSubjects,
+  listViews
 } from "@/api/storage/metadata";
 import { readRecordRows, readTimeSeriesRows } from "@/api/storage/access";
+import { queryTimeSeriesRows } from "@/api/storage/view";
 import type { Dataset, DatasetColumn, Factor, Field, PageResult, RecordRow, SortOrder } from "@/api/storage/types";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import { datasetMatchesAttribution, type DatasetRole, type OwnerModule } from "@/views/data/shared/module-attribution";
 import { useSpaceStore } from "@/store/modules/space";
 import {
   adaptiveColumnWidth,
+  buildSubjectDataIdsFromRows,
   buildTimeSeriesBrowseSelector,
   buildColumnLabels,
   buildSubjectDataIds,
@@ -572,6 +575,29 @@ async function loadTimeSeriesDataIds(space_id: string, dataset_id: string) {
     listSubjects({ space_id, page: { page: 1, size: 1000 } })
   ]);
   dataIds.value = buildSubjectDataIds(bindRsp.dataset_subjects || [], subjectRsp.subjects || []);
+  if (dataIds.value.length > 0) return;
+
+  // Some deployed collectors have real rows and an active View, but their
+  // dataset_subject metadata was reset. Discover IDs from the live View so
+  // the data browser can still select and read actual data.
+  try {
+    const viewRsp = await listViews({ space_id, dataset_id, status: "active", page: { page: 1, size: 100 } });
+    const view = (viewRsp.views || []).find(item => item.dataset_id === dataset_id && item.status === "active");
+    if (!view?.view_id) return;
+    const end = new Date();
+    const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+    const rowRsp = await queryTimeSeriesRows({
+      space_id,
+      view_id: view.view_id,
+      time_range: { start_time: start.toISOString(), end_time: end.toISOString() },
+      sorts: [{ field_name: "data_time", desc: true }],
+      page: { page: 1, size: DATA_BROWSE_PREVIEW_LIMIT },
+      total_mode: "NONE"
+    });
+    dataIds.value = buildSubjectDataIdsFromRows(rowRsp.rows || []);
+  } catch (error) {
+    console.warn("failed to discover dataset subjects from active view", { space_id, dataset_id, error });
+  }
 }
 
 async function selectDataId(dataId: string) {
