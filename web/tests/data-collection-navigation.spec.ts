@@ -26,6 +26,7 @@ async function mockGateway(route: Route) {
             space_id: "crypto",
             dataset_id: "dataset_binance_spot_kline_1m",
             name: "现货K线",
+            data_kind: "DATA_KIND_RECORD",
             status: "active",
             attributes: { owner_module: "collector", dataset_role: "raw_collection" }
           }
@@ -53,6 +54,27 @@ async function mockGateway(route: Route) {
         total_field_count: 1,
         ungrouped_field_count: 0,
         page_result: { page: 1, size: 200, total: 1, has_more: false }
+      })
+    });
+  }
+  if (method === "ListDatasetColumns") {
+    return route.fulfill({
+      json: ok({
+        columns: [{ column_name: "close", origin_type: "DATASET_COLUMN_ORIGIN_TYPE_FIELD", origin_id: "close" }],
+        page_result: { page: 1, size: 20, total: 1, has_more: false }
+      })
+    });
+  }
+  if (method === "ReadRecordRows") {
+    return route.fulfill({
+      json: ok({
+        rows: [
+          {
+            key: { record_id: "BTCUSDT", version: "2026-09-18T00:00:00Z" },
+            fields: [{ field_id: "close", value: { double_value: 123.45 } }]
+          }
+        ],
+        page_result: { page: 1, size: 25, total: 1, has_more: false }
       })
     });
   }
@@ -90,6 +112,18 @@ test("refresh and direct routes stay available for collection pages", async ({ p
   await page.goto("/#/collector/data-management");
   await expect(page.getByLabel("基础数据集")).toBeVisible();
   await expect(page.getByText("数据视图", { exact: true })).toHaveCount(0);
+});
+
+test("keeps the dataset definition and data browse tabs visible", async ({ page }) => {
+  await page.goto("/#/collector/data-management");
+
+  await expect(page.getByText("集合定义", { exact: true })).toBeVisible();
+  await expect(page.getByText("查看数据", { exact: true })).toBeVisible();
+  await page.getByText("查看数据", { exact: true }).click();
+
+  await expect(page.getByText("记录数据", { exact: true })).toBeVisible();
+  await expect(page.getByText("BTCUSDT", { exact: true })).toBeVisible();
+  await expect(page.getByText("123.45", { exact: true })).toBeVisible();
 });
 
 test("desktop and mobile collection toolbars do not overlap", async ({ page }) => {

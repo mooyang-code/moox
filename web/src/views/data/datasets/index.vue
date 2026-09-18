@@ -3,7 +3,9 @@
     <div class="moox-inner">
       <div class="page-head">
         <div class="page-head__title">
-          <h2>{{ props.pageTitle }}</h2>
+          <slot name="page-title">
+            <h2>{{ props.pageTitle }}</h2>
+          </slot>
           <a-tooltip
             v-model:popup-visible="bindingInfoVisible"
             content="数据集必须绑定一个 DataNode；首次激活后绑定永久锁定。激活前才可以更换 DataNode，系统不做数据迁移。
