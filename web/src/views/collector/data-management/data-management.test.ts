@@ -39,6 +39,20 @@ describe("collector data management workbench", () => {
     );
   });
 
+  it("uses the shared ViewBrowse and KlineModal workflow for every browse tab", () => {
+    const datasets = fs.readFileSync(path.resolve(__dirname, "../datasets/index.vue"), "utf8");
+    const viewBrowse = fs.readFileSync(path.resolve(__dirname, "../../data/view-browse/index.vue"), "utf8");
+    const normalized = normalizeSource(datasets);
+
+    expect(normalized).toContain("<ViewBrowse");
+    expect(datasets).toContain(":view-owner-modules=\"['collector']\"");
+    expect(datasets).toContain(":view-roles=\"['collection_browse']\"");
+    expect(datasets).toContain(":include-unowned=\"true\"");
+    expect(normalized).not.toContain("<DatasetBrowse");
+    expect(viewBrowse).toContain("<KlineModal");
+    expect(viewBrowse).toContain('@click="openKlineModal"');
+  });
+
   it("exposes only the unified data-management route for datasets", () => {
     const menu = fs.readFileSync(path.resolve(__dirname, "../../../api/modules/system/static-menu.ts"), "utf8");
     const routes = fs.readFileSync(path.resolve(__dirname, "../../../router/route.ts"), "utf8");

@@ -26,7 +26,8 @@ async function mockGateway(route: Route) {
             space_id: "crypto",
             dataset_id: "dataset_binance_spot_kline_1m",
             name: "现货K线",
-            data_kind: "DATA_KIND_RECORD",
+            data_kind: "DATA_KIND_TIME_SERIES",
+            freqs: ["1m"],
             status: "active",
             attributes: { owner_module: "collector", dataset_role: "raw_collection" }
           }
@@ -36,7 +37,22 @@ async function mockGateway(route: Route) {
     });
   }
   if (method === "ListViews") {
-    return route.fulfill({ json: ok({ views: [], page_result: { page: 1, size: 20, total: 0, has_more: false } }) });
+    return route.fulfill({
+      json: ok({
+        views: [
+          {
+            space_id: "crypto",
+            view_id: "view_binance_spot_kline_1m",
+            name: "现货K线视图",
+            dataset_id: "dataset_binance_spot_kline_1m",
+            status: "active",
+            active_index_id: "index-a",
+            attributes: { owner_module: "collector", view_role: "collection_browse" }
+          }
+        ],
+        page_result: { page: 1, size: 20, total: 1, has_more: false }
+      })
+    });
   }
   if (method === "ListFields") {
     return route.fulfill({
@@ -65,13 +81,40 @@ async function mockGateway(route: Route) {
       })
     });
   }
-  if (method === "ReadRecordRows") {
+  if (method === "ListViewColumns") {
+    return route.fulfill({
+      json: ok({
+        columns: [
+          { column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
+          { column_name: "high", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
+          { column_name: "low", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
+          { column_name: "close", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
+          { column_name: "volume", value_type: "FIELD_VALUE_TYPE_DOUBLE" }
+        ],
+        page_result: { page: 1, size: 20, total: 5, has_more: false }
+      })
+    });
+  }
+  if (method === "QueryTimeSeriesRows") {
     return route.fulfill({
       json: ok({
         rows: [
           {
-            key: { record_id: "BTCUSDT", version: "2026-09-18T00:00:00Z" },
-            fields: [{ field_id: "close", value: { double_value: 123.45 } }]
+            key: {
+              space_id: "crypto",
+              dataset_id: "dataset_binance_spot_kline_1m",
+              subject_id: "BTC-USDT",
+              freq: "1m",
+              data_time: "2026-09-18T06:57:00Z",
+              series_tag: "venue:binance"
+            },
+            fields: [
+              { field_id: "open", value: { double_value: 123.4 } },
+              { field_id: "high", value: { double_value: 124.0 } },
+              { field_id: "low", value: { double_value: 123.0 } },
+              { field_id: "close", value: { double_value: 123.45 } },
+              { field_id: "volume", value: { double_value: 12.3 } }
+            ]
           }
         ],
         page_result: { page: 1, size: 25, total: 1, has_more: false }
@@ -121,9 +164,17 @@ test("keeps the dataset definition and data browse tabs visible", async ({ page 
   await expect(page.getByText("查看数据", { exact: true })).toBeVisible();
   await page.getByText("查看数据", { exact: true }).click();
 
-  await expect(page.getByText("记录数据", { exact: true })).toBeVisible();
-  await expect(page.getByText("BTCUSDT", { exact: true })).toBeVisible();
+  await expect(page.getByText("时序视图 / DuckDB", { exact: true })).toBeVisible();
+  await expect(page.getByText("BTC-USDT", { exact: true })).toBeVisible();
   await expect(page.getByText("123.45", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "K线", exact: true })).toBeVisible();
+
+  const subjectFilter = page.locator(".filter-item").filter({ hasText: "数据ID" }).locator("input");
+  const seriesFilter = page.locator(".filter-item").filter({ hasText: "序列标签" }).locator("input");
+  await subjectFilter.fill("BTC-USDT");
+  await seriesFilter.fill("venue:binance");
+  await page.getByRole("button", { name: "K线", exact: true }).click();
+  await expect(page.getByText("BTC-USDT K线", { exact: true })).toBeVisible();
 });
 
 test("desktop and mobile collection toolbars do not overlap", async ({ page }) => {

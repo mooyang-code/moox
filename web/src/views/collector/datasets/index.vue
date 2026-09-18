@@ -15,18 +15,19 @@
         </a-tabs>
       </template>
     </DatasetDefinitions>
-    <DatasetBrowse
+    <ViewBrowse
       v-else
-      :dataset-owner-modules="['collector']"
-      :dataset-roles="['raw_collection', 'import']"
+      :view-owner-modules="['collector']"
+      :view-roles="['collection_browse']"
       :include-unowned="true"
+      empty-description="暂无可浏览的采集视图"
     >
       <template #page-title>
         <a-tabs :active-key="activeTab" type="rounded" size="small" class="collector-subtabs" @change="syncRoute">
           <a-tab-pane v-for="tab in tabs" :key="tab.key" :title="tab.label" />
         </a-tabs>
       </template>
-    </DatasetBrowse>
+    </ViewBrowse>
   </div>
 </template>
 
@@ -34,7 +35,7 @@
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import DatasetDefinitions from "@/views/data/datasets/index.vue";
-import DatasetBrowse from "@/views/data/browse/index.vue";
+import ViewBrowse from "@/views/data/view-browse/index.vue";
 
 defineOptions({ name: "CollectorDatasets" });
 
