@@ -157,6 +157,17 @@ test("refresh and direct routes stay available for collection pages", async ({ p
   await expect(page.getByText("数据视图", { exact: true })).toHaveCount(0);
 });
 
+test("groups cloud nodes under collection tasks and redirects the legacy route", async ({ page }) => {
+  await page.goto("/#/collector/rules?tab=executors");
+  await expect(page.getByLabel("采集任务")).toBeVisible();
+  await expect(page.getByText("执行器", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "云节点" })).toBeVisible();
+
+  await page.goto("/#/collector/cloudnodes");
+  await expect(page).toHaveURL(/#\/collector\/rules\?tab=executors/);
+  await expect(page.getByText("执行器", { exact: true })).toBeVisible();
+});
+
 test("keeps the dataset definition and data browse tabs visible", async ({ page }) => {
   await page.goto("/#/collector/data-management");
 

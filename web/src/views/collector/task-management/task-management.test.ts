@@ -5,16 +5,30 @@ import { describe, expect, it } from "vitest";
 const normalizeSource = (source: string) => source.replace(/\s+/g, "").replace(/'/g, '"');
 
 describe("collector task management workbench", () => {
-  it("combines collection rules and task instances in one ordered tab surface", () => {
+  it("combines collection rules, task instances, and executors in one ordered tab surface", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     const normalized = normalizeSource(source);
-    const positions = ["采集规则", "任务实例"].map(label => normalized.indexOf(`label:"${label}"`));
+    const positions = ["采集规则", "任务实例", "执行器"].map(label => normalized.indexOf(`label:"${label}"`));
 
     expect(source).toContain("PageTitleTabs");
     expect(source).toContain('aria-label="采集任务"');
     expect(positions.every(position => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
-    expect(normalized).toContain('typeCollectorTaskTab="rules"|"instances"');
+    expect(normalized).toContain('executors:CloudNode');
+    expect(normalized).toContain('typeCollectorTaskTab="rules"|"instances"|"executors"');
+  });
+
+  it("redirects the legacy cloud-node entry into the executor tab", () => {
+    const menu = fs.readFileSync(path.resolve(__dirname, "../../../api/modules/system/static-menu.ts"), "utf8");
+    const routes = fs.readFileSync(path.resolve(__dirname, "../../../router/route.ts"), "utf8");
+    const home = fs.readFileSync(path.resolve(__dirname, "../../home/home.vue"), "utf8");
+    const normalizedMenu = normalizeSource(menu);
+    const normalizedRoutes = normalizeSource(routes);
+
+    expect(normalizedMenu).not.toContain('menu("0301"');
+    expect(normalizedRoutes).toContain('path:"/collector/cloudnodes"');
+    expect(normalizedRoutes).toContain('path:"/collector/rules",query:{...to.query,tab:"executors"}');
+    expect(home).toContain('path: "/collector/rules?tab=executors"');
   });
 
   it("keeps one visible menu and removes the retired task URL", () => {

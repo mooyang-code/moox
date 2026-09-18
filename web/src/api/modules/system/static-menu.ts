@@ -68,15 +68,6 @@ export const systemMenu = [
     "collector/data-management/index",
     5
   ),
-  menu(
-    "0301",
-    "03",
-    "/collector/cloudnodes",
-    "collector-cloudnodes",
-    "collector-cloudnodes",
-    "collector/cloud-node/cloud-node",
-    6
-  ),
 
   directory("0240", "0", "/factor/definitions", "factor-compute", "factor-compute", 3, { svgIcon: "experiment", icon: "" }),
   menu("024001", "0240", "/factor/definitions", "factor-definitions", "factor-definitions", "factor/definitions/index", 1),

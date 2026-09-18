@@ -464,7 +464,7 @@ const dashboardKpis = computed(() => [
     note: nodesNote.value,
     delta: "已登记",
     tone: "neutral",
-    path: "/collector/cloudnodes"
+    path: "/collector/rules?tab=executors"
   },
   {
     key: "services",
