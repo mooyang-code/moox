@@ -2,9 +2,6 @@
   <div class="moox-page">
     <a-spin :loading="loading">
       <div class="moox-inner">
-        <div class="page-head">
-          <h2>云节点</h2>
-        </div>
         <a-space class="cloud-node-action-bar" wrap>
           <a-button type="primary" status="success" @click="onBatchAdd" :disabled="batchChangeProcessing">
             <template #icon><icon-plus-circle /></template>

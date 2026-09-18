@@ -182,8 +182,8 @@ describe("page layout standards", () => {
     ]);
     expect(cloudNodes).not.toContain('class="cloud-node-toolbar"');
     expect(cloudNodes).not.toContain(".moox-inner .a-row");
-    expectStrictOrder(cloudNodes, ["<h2>云节点</h2>", cloudNodeActions, cloudNodeFilters, "<a-table"]);
-    expectMargin(cloudNodes, ".page-head", "margin-bottom", 8);
+    expect(cloudNodes).not.toContain("<h2>云节点</h2>");
+    expectStrictOrder(cloudNodes, [cloudNodeActions, cloudNodeFilters, "<a-table"]);
     const toolbarRule = cloudNodes.match(/\.cloud-node-action-bar\s*,\s*\.cloud-node-filter-bar\s*\{([^}]*)\}/);
     expect(toolbarRule).not.toBeNull();
     const toolbarDeclarations = toolbarRule?.[1] || "";

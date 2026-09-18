@@ -161,7 +161,7 @@ test("groups cloud nodes under collection tasks and redirects the legacy route",
   await page.goto("/#/collector/rules?tab=executors");
   await expect(page.getByLabel("采集任务")).toBeVisible();
   await expect(page.getByText("执行器", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "云节点" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "云节点" })).toHaveCount(0);
 
   await page.goto("/#/collector/cloudnodes");
   await expect(page).toHaveURL(/#\/collector\/rules\?tab=executors/);
