@@ -343,7 +343,7 @@ const spaceLoadGate = new RequestGate();
 const pipeline = [
   { key: "sources", stage: "01", label: "数据源", color: "#3b6fd9", path: "/data/sources" },
   { key: "rules", stage: "02", label: "采集规则", color: "#0d9488", path: "/collector/rules" },
-  { key: "datasets", stage: "03", label: "基础数据集", color: "#059669", path: "/collector/data-management" },
+  { key: "datasets", stage: "03", label: "数据集管理", color: "#059669", path: "/collector/data-management" },
   { key: "factors", stage: "04", label: "因子定义", color: "#c026d3", path: "/factor/definitions" },
   { key: "views", stage: "05", label: "构造配置", color: "#ea580c", path: "/factor/construct" },
   { key: "accounts", stage: "06", label: "执行账户", color: "#b45309", path: "/trading/accounts" }
@@ -359,7 +359,7 @@ const workflowLinks = [
   },
   {
     title: "索引查询",
-    description: "查看基础数据集上的索引",
+    description: "查看数据集上的索引",
     path: "/collector/data-management",
     icon: "Q",
     tint: "rgba(234, 88, 12, 12%)"
@@ -372,7 +372,7 @@ const workflowLinks = [
     tint: "rgba(13, 148, 136, 12%)"
   },
   {
-    title: "基础数据集",
+    title: "数据集管理",
     description: "定义采集写入的数据契约",
     path: "/collector/data-management",
     icon: "D",
@@ -384,7 +384,7 @@ const workflowLinks = [
 
 const setupSteps = [
   { title: "创建空间", description: "空间是采集、计算与交易的隔离边界，管理台所有请求都带空间上下文。" },
-  { title: "登记基础数据", description: "在数据采集中配置数据源、采集对象、基础字段和基础数据集。" },
+  { title: "登记数据集", description: "在数据采集中配置数据源、采集对象、基础字段和数据集。" },
   { title: "启动采集链路", description: "collector 按规则展开任务，经 cloudnode 下发到云节点执行写入。" },
   { title: "查询与因子", description: "用数据集索引浏览 K 线；因子输出写回同一复合数据集。" }
 ];

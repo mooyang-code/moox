@@ -10,8 +10,8 @@ describe("collector data management workbench", () => {
     const normalized = normalizeSource(source);
 
     expect(source).toContain("PageTitleTabs");
-    expect(source).toContain('aria-label="基础数据集"');
-    expect(normalized).toContain('{key:"datasets",label:"基础数据集"}');
+    expect(source).toContain('aria-label="数据集管理"');
+    expect(normalized).toContain('{key:"datasets",label:"数据集管理"}');
     expect(source).not.toContain("数据视图");
     expect(source).not.toContain("<CollectorViews");
     expect(source).toContain("<CollectorDatasets");

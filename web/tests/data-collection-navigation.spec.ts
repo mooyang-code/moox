@@ -144,7 +144,7 @@ test("data collection owns base assets and has no top-level data assets menu", a
   await page.goto("/#/collector/rules");
   await expect(page.getByLabel("采集任务")).toBeVisible();
   await page.goto("/#/collector/data-management");
-  await expect(page.getByLabel("基础数据集")).toBeVisible();
+  await expect(page.getByLabel("数据集管理")).toBeVisible();
 });
 
 test("refresh and direct routes stay available for collection pages", async ({ page }) => {
@@ -153,7 +153,7 @@ test("refresh and direct routes stay available for collection pages", async ({ p
   await page.reload();
   await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
   await page.goto("/#/collector/data-management");
-  await expect(page.getByLabel("基础数据集")).toBeVisible();
+  await expect(page.getByLabel("数据集管理")).toBeVisible();
   await expect(page.getByText("数据视图", { exact: true })).toHaveCount(0);
 });
 

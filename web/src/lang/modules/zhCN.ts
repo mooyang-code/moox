@@ -48,7 +48,7 @@ export default {
     ["data-browse"]: "数据浏览",
     ["data-import"]: "数据导入",
     ["compute-collector"]: "数据采集",
-    ["collector-data-management"]: "基础数据集",
+    ["collector-data-management"]: "数据集管理",
     ["collector-datasets"]: "数据集合",
     ["collector-views"]: "数据视图",
     ["collector-cloudnodes"]: "云节点",

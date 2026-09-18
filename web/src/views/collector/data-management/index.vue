@@ -1,7 +1,7 @@
 <template>
   <div class="moox-page data-management-page">
     <div class="moox-inner">
-      <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="基础数据集" />
+      <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="数据集管理" />
 
       <section class="management-content">
         <CollectorDatasets />
@@ -16,7 +16,7 @@ import CollectorDatasets from "@/views/collector/datasets/index.vue";
 
 defineOptions({ name: "CollectorDataManagement" });
 
-const tabs = [{ key: "datasets", label: "基础数据集" }] as const;
+const tabs = [{ key: "datasets", label: "数据集管理" }] as const;
 const activeTab = "datasets";
 </script>
 
