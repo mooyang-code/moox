@@ -394,6 +394,10 @@ go test -race -count=1 ./...
 
 ## 6. C 阶段：受限离线 Bar 成交模拟
 
+**范围澄清（2026-09-18）：** 本节仅指“已录制决策的成交模拟”，不支持直接拿新策略重新计算历史因子，因此不是完整历史回测。新增的加密现货历史回测设计见 [加密现货历史回测第一版设计](../specs/2026-09-18-crypto-spot-backtest-design.md)。两者可复用基础代码，但历史回测不以完成 C 或已有在线工件为前提；本节不扩张为回测实施授权。
+
+本节使用 `recorded_time_strict_next_open`：按实际 evaluated_at 进入执行，开盘必须严格晚于提交时间。历史回测另用 `bar_close_next_open_zero_latency`：允许同时间戳按 CLOSE→DECIDE→SUBMIT→OPEN 的事件顺序成交。不得把后者用于真实录制决策而提前成交，也不得把本节“仅回放输入、不重算 Factor”限制套到历史回测。最终文档中 `next_open_full_fill` 只表示成交形态，报告还必须记录上述独立 timing_model。
+
 本阶段只有在 A/B 已交付且确有历史模拟需求时启动。它不是多市场通用回测引擎。
 
 ### C0. 第一版固定范围
@@ -471,6 +475,7 @@ go test -count=1 ./...
 **文件**
 
 - 新增：`modules/trade/internal/replay/clock.go`、`marketdata.go`、`next_open.go`、`runtime.go`、对应测试。
+- 修改：`modules/trade/internal/infra/store/target_receipt.go`、`target.go` 及 Store/Tx 时钟装配；两层目标过期校验当前直接用 time.Now，需共用实例级业务钟，线上默认真实时间、离线注入历史钟；不得从事件输入接收 now 或删除最终校验。增加历史窗口接受、到期边界拒绝、线上默认不变的 SQLite 测试。
 - 新增：`modules/trade/internal/application/target/accept.go`、`accept_test.go`，从实际 eventconsumer 中提取可复用目标接受逻辑。
 - 修改：`modules/trade/internal/eventconsumer/target.go`，保留事件解码、鉴权/信封校验和 ACK/NAK/TERM 映射。
 - 按需要修改：`internal/application/target/weight_resolver.go`、`executor.go`、`internal/application/order/service.go`、`internal/execution/paper/decider.go`，统一注入已有 Now 及必要的 ID source。
