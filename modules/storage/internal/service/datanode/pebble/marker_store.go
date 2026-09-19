@@ -34,6 +34,8 @@ func (s *Store) AppendDatasetMarker(ctx context.Context, raw []byte) (string, er
 	if err != nil {
 		return "", err
 	}
+	s.datasetWriteMu.RLock()
+	defer s.datasetWriteMu.RUnlock()
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
 

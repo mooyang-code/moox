@@ -64,7 +64,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.CollectionTask,
 		return err
 	}
 	attrs := map[string]string{
-		"owner_module": "collector", "managed_by": "collector", "market_type": strings.ToLower(rule.MarketType),
+		"owner_module": "collector", "managed_by": "collector", "collector_task_id": rule.TaskID, "market_type": strings.ToLower(rule.MarketType),
 		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result", "resample_task_id": rule.TaskID,
 		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": source.DataSourceID,
 		"source_freq": params.SourceFrequency, "source_series_tag": params.SourceSeriesTag,
@@ -205,7 +205,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.CollectionTask,
 	if viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_VIEW_NOT_FOUND || viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, View: &storagepb.View{
 			SpaceId: rule.SpaceID, ViewId: viewID, Name: uniqueResampleDisplayName(params.TargetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: params.TargetDatasetID,
-			Engine: "duckdb", KeepDuration: keepDuration, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": rule.TaskID, "route_ready_request_id": "kline-resample-route:" + rule.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
+			Engine: "duckdb", FilterJson: fmt.Sprintf(`{"freq":%q}`, targetFreq.Storage), KeepDuration: keepDuration, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": rule.TaskID, "route_ready_request_id": "kline-resample-route:" + rule.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
 		}})
 		if createErr != nil {
 			return createErr

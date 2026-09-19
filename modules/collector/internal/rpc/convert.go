@@ -12,6 +12,13 @@ import (
 
 func toPBTask(task domain.CollectionTask) *pb.CollectionTask {
 	enabled := task.Enabled
+	resultStatus := "active"
+	switch task.PrepareState {
+	case domain.PrepareStatePending, domain.PrepareStateWaitingView:
+		resultStatus = "pending"
+	case domain.PrepareStateError:
+		resultStatus = "error"
+	}
 	return &pb.CollectionTask{
 		SpaceId:       task.SpaceID,
 		TaskId:        task.TaskID,
@@ -27,7 +34,7 @@ func toPBTask(task domain.CollectionTask) *pb.CollectionTask {
 		ModifyTime:    formatTime(task.ModifyTime),
 		PrepareState:  string(task.PrepareState),
 		LastError:     task.LastError,
-		Result:        &pb.TaskResult{ResultName: "采集结果", ViewId: task.ResultViewID, Status: "active", DataKind: taskResultDataKind(task.DataType)},
+		Result:        &pb.TaskResult{ResultName: "采集结果", ViewId: task.ResultViewID, Status: resultStatus, DataKind: taskResultDataKind(task.DataType)},
 	}
 }
 

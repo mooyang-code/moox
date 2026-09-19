@@ -118,7 +118,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if resultMetadataErr != nil {
 		return nil, fmt.Errorf("initialize collector result metadata client: %w", resultMetadataErr)
 	}
-	resultManager := collectorresult.NewManager(resultMetadata.Client, resultMetadata.Auth)
+	resultManager := collectorresult.NewManagerWithCleaner(resultMetadata.Client, resultMetadata.Primary, resultMetadata.Auth)
 	if err := ensureTaskResultMetadata(ctx, dbm.Tasks(), resultManager, cfg.Storage.ResultDataNodeID); err != nil {
 		return nil, fmt.Errorf("initialize collector task results: %w", err)
 	}
@@ -206,8 +206,29 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.CollectionTaskRep
 			// Dataset. The generic result manager must not claim that Dataset as a
 			// raw collection result.
 			if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
-				ids := collectorresult.ResultIDs(task.SpaceID, task.TaskID)
+				params, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+				if parseErr != nil {
+					return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, parseErr)
+				}
+				targetFrequency, frequencyErr := collectorresample.ParseFixedFrequency(params.TargetFrequency)
+				if frequencyErr != nil {
+					return fmt.Errorf("parse task %s/%s target frequency: %w", task.SpaceID, task.TaskID, frequencyErr)
+				}
+				ids := collectorresult.ResultIDsWithFrequency(task.SpaceID, task.TaskID, targetFrequency.Slug)
 				needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != collectorresample.DefaultTargetViewID(ids.DatasetID)
+				// A pre-task-owned deployment may have persisted the resample
+				// result under the unsuffixed/base identity. Once the task is
+				// upgraded, remove that old result if it is still owned by this
+				// task; otherwise it becomes an unreachable physical orphan.
+				if needsUpdate && strings.TrimSpace(task.ResultDatasetID) != "" {
+					oldIDs := collectorresult.IDs{DatasetID: task.ResultDatasetID, ViewID: task.ResultViewID}
+					if strings.TrimSpace(oldIDs.ViewID) == "" {
+						oldIDs.ViewID = "view_" + strings.TrimPrefix(oldIDs.DatasetID, "dataset_")
+					}
+					if err := manager.DeleteForTask(ctx, task.SpaceID, task.TaskID, oldIDs); err != nil {
+						return fmt.Errorf("retire old task %s/%s result: %w", task.SpaceID, task.TaskID, err)
+					}
+				}
 				task.ResultDatasetID = ids.DatasetID
 				task.ResultViewID = collectorresample.DefaultTargetViewID(ids.DatasetID)
 				rawParams := map[string]any{}

@@ -8,15 +8,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSourceStoreRejectsUnidentifiedExistingData(t *testing.T) {
+func TestSourceStoreMigratesUnidentifiedExistingData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "store")
 	require.NoError(t, ensureLayout(path))
 	db, err := cpebble.Open(path, &cpebble.Options{})
 	require.NoError(t, err)
 	require.NoError(t, db.Set([]byte("existing"), []byte("data"), cpebble.Sync))
 	require.NoError(t, db.Close())
-	_, err = Open(Options{Path: path, NodeID: "node"})
-	require.ErrorContains(t, err, "no source identity")
+	store, err := Open(Options{Path: path, NodeID: "node"})
+	require.NoError(t, err)
+	require.NotEmpty(t, store.sourceStoreID)
+	require.NoError(t, store.Close())
+	reopened, err := Open(Options{Path: path, NodeID: "node"})
+	require.NoError(t, err)
+	require.Equal(t, store.sourceStoreID, reopened.sourceStoreID)
+	require.NoError(t, reopened.Close())
 }
 
 func TestSourceStoreIncarnationAndNodeBinding(t *testing.T) {

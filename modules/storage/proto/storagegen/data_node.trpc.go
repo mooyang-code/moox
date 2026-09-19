@@ -204,6 +204,48 @@ func RegisterDataNodeRuntimeService(s server.Service, svr DataNodeRuntimeService
 	}
 }
 
+// DataNodeDatasetAdminRuntimeService defines service.
+type DataNodeDatasetAdminRuntimeService interface {
+	DeleteDatasetRows(ctx context.Context, req *DeleteDatasetRowsReq) (*DeleteDatasetRowsRsp, error)
+}
+
+func DataNodeDatasetAdminRuntimeService_DeleteDatasetRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteDatasetRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodeDatasetAdminRuntimeService).DeleteDatasetRows(ctx, reqbody.(*DeleteDatasetRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// DataNodeDatasetAdminRuntimeServer_ServiceDesc descriptor for server.RegisterService.
+var DataNodeDatasetAdminRuntimeServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.storage.DataNodeDatasetAdminRuntime",
+	HandlerType: ((*DataNodeDatasetAdminRuntimeService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.storage.DataNodeDatasetAdminRuntime/DeleteDatasetRows",
+			Func: DataNodeDatasetAdminRuntimeService_DeleteDatasetRows_Handler,
+		},
+	},
+}
+
+// RegisterDataNodeDatasetAdminRuntimeService registers service.
+func RegisterDataNodeDatasetAdminRuntimeService(s server.Service, svr DataNodeDatasetAdminRuntimeService) {
+	if err := s.Register(&DataNodeDatasetAdminRuntimeServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("DataNodeDatasetAdminRuntime register error:%v", err))
+	}
+}
+
 // DataNodeMarkerRuntimeService defines service.
 type DataNodeMarkerRuntimeService interface {
 	AppendCollectorPeriodCompleted(ctx context.Context, req *AppendCollectorPeriodCompletedReq) (*AppendCollectorPeriodCompletedRsp, error)
@@ -411,6 +453,12 @@ func (s *UnimplementedDataNodeRuntime) CleanupExpiredBuckets(ctx context.Context
 	return nil, errors.New("rpc CleanupExpiredBuckets of service DataNodeRuntime is not implemented")
 }
 
+type UnimplementedDataNodeDatasetAdminRuntime struct{}
+
+func (s *UnimplementedDataNodeDatasetAdminRuntime) DeleteDatasetRows(ctx context.Context, req *DeleteDatasetRowsReq) (*DeleteDatasetRowsRsp, error) {
+	return nil, errors.New("rpc DeleteDatasetRows of service DataNodeDatasetAdminRuntime is not implemented")
+}
+
 type UnimplementedDataNodeMarkerRuntime struct{}
 
 func (s *UnimplementedDataNodeMarkerRuntime) AppendCollectorPeriodCompleted(ctx context.Context, req *AppendCollectorPeriodCompletedReq) (*AppendCollectorPeriodCompletedRsp, error) {
@@ -602,6 +650,40 @@ func (c *DataNodeRuntimeClientProxyImpl) CleanupExpiredBuckets(ctx context.Conte
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CleanupExpiredBucketsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// DataNodeDatasetAdminRuntimeClientProxy defines service client proxy
+type DataNodeDatasetAdminRuntimeClientProxy interface {
+	DeleteDatasetRows(ctx context.Context, req *DeleteDatasetRowsReq, opts ...client.Option) (rsp *DeleteDatasetRowsRsp, err error)
+}
+
+type DataNodeDatasetAdminRuntimeClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewDataNodeDatasetAdminRuntimeClientProxy = func(opts ...client.Option) DataNodeDatasetAdminRuntimeClientProxy {
+	return &DataNodeDatasetAdminRuntimeClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *DataNodeDatasetAdminRuntimeClientProxyImpl) DeleteDatasetRows(ctx context.Context, req *DeleteDatasetRowsReq, opts ...client.Option) (*DeleteDatasetRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeDatasetAdminRuntime/DeleteDatasetRows")
+	msg.WithCalleeServiceName(DataNodeDatasetAdminRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodeDatasetAdminRuntime")
+	msg.WithCalleeMethod("DeleteDatasetRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteDatasetRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

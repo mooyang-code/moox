@@ -88,6 +88,8 @@ func (s *Store) CommitInput(ctx context.Context, in InputCommit) (*WriteReceipt,
 	if err != nil {
 		return nil, err
 	}
+	s.datasetWriteMu.RLock()
+	defer s.datasetWriteMu.RUnlock()
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
 	if existing, body, err := s.loadReceiptLocked(in.CommitID); err != nil {
@@ -152,6 +154,8 @@ func (s *Store) PatchFactor(ctx context.Context, in FactorPatch) (*WriteReceipt,
 	if err != nil {
 		return nil, err
 	}
+	s.datasetWriteMu.RLock()
+	defer s.datasetWriteMu.RUnlock()
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
 	if existing, body, err := s.loadReceiptLocked(in.CommitID); err != nil {
@@ -227,8 +231,8 @@ func (s *Store) loadReceiptLocked(commitID string) (*WriteReceipt, []byte, error
 	fingerprint := append([]byte(nil), body...)
 	_ = closer.Close()
 	return &WriteReceipt{
-		CommitID: stored.CommitID,
-		Position: WritePosition{NodeID: stored.NodeID, StoreID: stored.StoreID, Sequence: stored.Sequence},
+		CommitID:   stored.CommitID,
+		Position:   WritePosition{NodeID: stored.NodeID, StoreID: stored.StoreID, Sequence: stored.Sequence},
 		InputReady: stored.InputReady,
 		WriteKind:  stored.WriteKind,
 	}, fingerprint, nil

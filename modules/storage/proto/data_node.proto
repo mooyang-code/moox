@@ -99,6 +99,18 @@ message CleanupExpiredBucketsRsp {
   uint64 deleted_buckets = 2;
 }
 
+message DeleteDatasetRowsReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  string space_id = 3;
+  string dataset_id = 4;
+}
+
+message DeleteDatasetRowsRsp {
+  common.RetInfo ret_info = 1;
+  uint64 deleted_ranges = 2;
+}
+
 message AppendCollectorPeriodCompletedReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
@@ -173,6 +185,12 @@ service DataNodeRuntime {
 	rpc ReadFields(ReadFieldsReq) returns (ReadFieldsRsp);
 	rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
 	rpc CleanupExpiredBuckets(CleanupExpiredBucketsReq) returns (CleanupExpiredBucketsRsp);
+}
+
+// DataNodeDatasetAdminRuntime is a narrow destructive surface used by
+// PrimaryStore after a caller has passed dataset/task ownership checks.
+service DataNodeDatasetAdminRuntime {
+  rpc DeleteDatasetRows(DeleteDatasetRowsReq) returns (DeleteDatasetRowsRsp);
 }
 
 // DataNodeMarkerRuntime is kept separate from the legacy DataNodeRuntime

@@ -61,6 +61,7 @@ type Store struct {
 	bucketDuration          time.Duration
 	maxEventBytes           int
 	processedEventRetention time.Duration
+	datasetWriteMu          sync.RWMutex
 	outboxMu                sync.Mutex
 	outboxPending           atomic.Int64
 	outboxRevision          atomic.Uint64
@@ -184,6 +185,8 @@ func (s *Store) UpsertFieldsEventWithSource(ctx context.Context, rows []*pb.RowF
 }
 
 func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert, sourceEventID string, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) ([]*OutboxEntry, error) {
+	s.datasetWriteMu.RLock()
+	defer s.datasetWriteMu.RUnlock()
 	normalizedRows, err := s.normalizeWriteRows(ctx, rows)
 	if err != nil {
 		return nil, err
@@ -462,7 +465,16 @@ func (s *Store) hasProcessedSourceEvent(sourceEventID string, group datasetGroup
 
 func processedSourceEventKey(sourceEventID string, group datasetGroup) []byte {
 	hash := sha256.Sum256([]byte(sourceEventID + "\x00" + group.spaceID + "\x00" + group.datasetID))
-	return []byte(processedEventPrefix + hex.EncodeToString(hash[:]))
+	key := []byte(processedEventPrefix)
+	key = appendRawPart(key, []byte(group.spaceID))
+	key = appendRawPart(key, []byte(group.datasetID))
+	return appendRawPart(key, []byte(hex.EncodeToString(hash[:])))
+}
+
+func processedDatasetEventPrefix(spaceID, datasetID string) []byte {
+	key := []byte(processedEventPrefix)
+	key = appendRawPart(key, []byte(spaceID))
+	return appendRawPart(key, []byte(datasetID))
 }
 
 func processedSourceEventTimeKey(createdAt time.Time, markerKey []byte) []byte {

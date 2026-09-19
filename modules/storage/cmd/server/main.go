@@ -103,6 +103,7 @@ func runPrimaryRole() error {
 		opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
 		return &dataNodeProxyAdapter{
 			proxy:        pb.NewDataNodeRuntimeClientProxy(opts...),
+			adminProxy:   pb.NewDataNodeDatasetAdminRuntimeClientProxy(opts...),
 			markerProxy:  pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
 			historyProxy: pb.NewDataNodeHistoryRuntimeClientProxy(opts...),
 		}
@@ -933,6 +934,7 @@ func newDataNodeResolver(snapshotProvider func() metadata.RequestSnapshot, newPr
 			opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
 			return &dataNodeProxyAdapter{
 				proxy:        pb.NewDataNodeRuntimeClientProxy(opts...),
+				adminProxy:   pb.NewDataNodeDatasetAdminRuntimeClientProxy(opts...),
 				markerProxy:  pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
 				historyProxy: pb.NewDataNodeHistoryRuntimeClientProxy(opts...),
 			}
@@ -1016,6 +1018,7 @@ func normalizeServiceTarget(raw string) (string, error) {
 
 type dataNodeProxyAdapter struct {
 	proxy        pb.DataNodeRuntimeClientProxy
+	adminProxy   pb.DataNodeDatasetAdminRuntimeClientProxy
 	markerProxy  pb.DataNodeMarkerRuntimeClientProxy
 	historyProxy pb.DataNodeHistoryRuntimeClientProxy
 }
@@ -1052,6 +1055,12 @@ func (a *dataNodeProxyAdapter) GetNodeState(ctx context.Context, req *pb.GetNode
 }
 func (a *dataNodeProxyAdapter) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
 	return a.proxy.CleanupExpiredBuckets(ctx, req)
+}
+func (a *dataNodeProxyAdapter) DeleteDatasetRows(ctx context.Context, req *pb.DeleteDatasetRowsReq) (*pb.DeleteDatasetRowsRsp, error) {
+	if a == nil || a.adminProxy == nil {
+		return nil, errors.New("DataNode dataset admin runtime is unavailable")
+	}
+	return a.adminProxy.DeleteDatasetRows(ctx, req)
 }
 func (a *dataNodeProxyAdapter) AppendCollectorPeriodCompleted(ctx context.Context, req *pb.AppendCollectorPeriodCompletedReq) (*pb.AppendCollectorPeriodCompletedRsp, error) {
 	return a.markerProxy.AppendCollectorPeriodCompleted(ctx, req)
@@ -1130,6 +1139,7 @@ func runDataNodeRole() error {
 		return errors.New("DataNode listener is not configured")
 	}
 	pb.RegisterDataNodeRuntimeService(listener, svc)
+	pb.RegisterDataNodeDatasetAdminRuntimeService(listener, svc)
 	pb.RegisterDataNodeMarkerRuntimeService(listener, svc)
 	pb.RegisterDataNodeHistoryRuntimeService(listener, svc)
 	if err := storagebootstrap.RegisterMetricsReporter(s, "node"); err != nil {

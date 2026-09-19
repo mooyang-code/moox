@@ -18,6 +18,24 @@ async function mockGateway(route: Route) {
       })
     });
   }
+  if (method === "GetTaskList") {
+    return route.fulfill({
+      json: ok({
+        tasks: [
+          {
+            space_id: "crypto",
+            task_id: "task-binance-spot-kline-1m",
+            task_name: "Binance 现货 K 线 1m",
+            data_type: "kline",
+            provider: "binance",
+            result: { result_name: "采集结果", view_id: "view_binance_spot_kline_1m", status: "active", data_kind: "time_series" },
+            enabled: true
+          }
+        ],
+        page: { page: 1, size: 20, total: 1, has_more: false }
+      })
+    });
+  }
   if (method === "ListDatasets") {
     return route.fulfill({
       json: ok({
@@ -141,10 +159,10 @@ test("data collection owns base assets and has no top-level data assets menu", a
   await expect(page.getByRole("heading", { name: "数据对象" })).toBeVisible();
   await page.goto("/#/data/fields");
   await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
-  await page.goto("/#/collector/rules");
+  await page.goto("/#/collector/tasks");
   await expect(page.getByLabel("采集任务")).toBeVisible();
-  await page.goto("/#/collector/data-management");
-  await expect(page.getByLabel("数据集管理")).toBeVisible();
+  await page.goto("/#/collector/tasks?tab=results");
+  await expect(page.getByText("采集结果", { exact: true })).toBeVisible();
 });
 
 test("refresh and direct routes stay available for collection pages", async ({ page }) => {
@@ -152,28 +170,23 @@ test("refresh and direct routes stay available for collection pages", async ({ p
   await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
-  await page.goto("/#/collector/data-management");
-  await expect(page.getByLabel("数据集管理")).toBeVisible();
-  await expect(page.getByText("数据视图", { exact: true })).toHaveCount(0);
+  await page.goto("/#/collector/tasks?tab=results");
+  await expect(page.getByRole("heading", { name: "Binance 现货 K 线 1m" })).toBeVisible();
 });
 
 test("groups cloud nodes under collection tasks and redirects the legacy route", async ({ page }) => {
-  await page.goto("/#/collector/rules?tab=executors");
+  await page.goto("/#/collector/tasks?tab=executors");
   await expect(page.getByLabel("采集任务")).toBeVisible();
   await expect(page.getByText("执行器", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "云节点" })).toHaveCount(0);
 
   await page.goto("/#/collector/cloudnodes");
-  await expect(page).toHaveURL(/#\/collector\/rules\?tab=executors/);
+  await expect(page).toHaveURL(/#\/collector\/tasks\?tab=executors/);
   await expect(page.getByText("执行器", { exact: true })).toBeVisible();
 });
 
-test("keeps the dataset definition and data browse tabs visible", async ({ page }) => {
-  await page.goto("/#/collector/data-management");
-
-  await expect(page.getByText("集合定义", { exact: true })).toBeVisible();
-  await expect(page.getByText("查看数据", { exact: true })).toBeVisible();
-  await page.getByText("查看数据", { exact: true }).click();
+test("shows task-owned real data and the K-line modal", async ({ page }) => {
+  await page.goto("/#/collector/tasks?tab=results");
 
   await expect(page.getByText("时序视图 / DuckDB", { exact: true })).toBeVisible();
   await expect(page.getByText("BTC-USDT", { exact: true })).toBeVisible();

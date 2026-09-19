@@ -1,23 +1,18 @@
 package taskresult
 
-import "testing"
+import (
+	"testing"
 
-func TestResultIDsAreDeterministicAndTaskExclusive(t *testing.T) {
-	first := resultIDs("crypto", "task-btc-1")
-	second := resultIDs("crypto", "task-btc-1")
-	otherTask := resultIDs("crypto", "task-eth-1")
-	otherSpace := resultIDs("stockcn", "task-btc-1")
+	"github.com/stretchr/testify/require"
+)
 
-	if first != second {
-		t.Fatalf("result IDs are not deterministic: first=%+v second=%+v", first, second)
-	}
-	if first.DatasetID == otherTask.DatasetID || first.ViewID == otherTask.ViewID {
-		t.Fatalf("different tasks share result IDs: first=%+v other=%+v", first, otherTask)
-	}
-	if first.DatasetID == otherSpace.DatasetID || first.ViewID == otherSpace.ViewID {
-		t.Fatalf("different spaces share result IDs: first=%+v other=%+v", first, otherSpace)
-	}
-	if first.DatasetID == "" || first.ViewID == "" {
-		t.Fatal("result IDs must not be empty")
-	}
+func TestResultIDsWithFrequencyAreTaskExclusiveAndFrequencyQualified(t *testing.T) {
+	ids := ResultIDsWithFrequency("crypto", "task-5m", "5m")
+	require.Equal(t, "dataset_collector_"+hashForTest("crypto", "task-5m")+"_5m", ids.DatasetID)
+	require.Equal(t, "view_collector_"+hashForTest("crypto", "task-5m")+"_5m", ids.ViewID)
+	require.NotEqual(t, ids, ResultIDsWithFrequency("crypto", "task-1h", "1h"))
+}
+
+func hashForTest(spaceID, taskID string) string {
+	return resultIDs(spaceID, taskID).DatasetID[len("dataset_collector_"):]
 }

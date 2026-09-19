@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,6 +56,7 @@ func TestValidateTargetDatasetChecksImmutableLineageAndPlacement(t *testing.T) {
 	want := map[string]string{
 		"owner_module":          "collector",
 		"managed_by":            "collector",
+		"collector_task_id":     "rule-5m",
 		"market_type":           "spot",
 		"storage_model":         "wide_common_metrics",
 		"dataset_role":          "kline_resample_result",
@@ -92,4 +94,9 @@ func TestValidateTargetDatasetChecksImmutableLineageAndPlacement(t *testing.T) {
 	monthly := proto.Clone(dataset).(*storagepb.Dataset)
 	monthly.Freqs = []string{"5M"}
 	require.ErrorContains(t, validateTargetDataset(monthly, want, "5m", "crypto", "storage-node-0"), "does not enable frequency")
+}
+
+func TestPrepareTargetViewContractUsesFrequencyFilter(t *testing.T) {
+	view := &storagepb.View{DatasetId: "dataset_spot_kline_derived_5m", FilterJson: `{"freq":"5m"}`, Engine: "duckdb", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}}
+	require.NoError(t, validateTargetView(view, domain.CollectionTask{}, &domain.CollectParams{TargetDatasetID: "dataset_spot_kline_derived_5m"}, "5m"))
 }

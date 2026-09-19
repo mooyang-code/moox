@@ -39,7 +39,20 @@ func bindSourceStore(db *cpebble.DB, node string) (string, error) {
 		return "", iterErr
 	}
 	if hasData {
-		return "", fmt.Errorf("DataNode store has data but no source identity; recreate the store")
+		// Stores created before source-position incarnation metadata was
+		// introduced have valid rows but no identity key. Assigning a fresh
+		// identity is safe: there is no prior identity to preserve, and future
+		// events will now carry a stable incarnation. Do not delete or rewrite
+		// the existing data during this migration.
+		identity.Node, identity.ID = node, rand.Text()
+		data, err = json.Marshal(identity)
+		if err != nil {
+			return "", err
+		}
+		if err := db.Set(key, data, cpebble.Sync); err != nil {
+			return "", err
+		}
+		return identity.ID, nil
 	}
 	identity.Node, identity.ID = node, rand.Text()
 	data, err = json.Marshal(identity)

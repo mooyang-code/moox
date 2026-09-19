@@ -39,8 +39,9 @@ type ResampleViewSyncWaiter interface {
 }
 
 type ResampleMetadataClient struct {
-	Client storagepb.MetadataClientProxy
-	Auth   *storagepb.AuthInfo
+	Client  storagepb.MetadataClientProxy
+	Primary storagepb.PrimaryStoreClientProxy
+	Auth    *storagepb.AuthInfo
 }
 
 type storageWriter struct {
@@ -70,7 +71,7 @@ func NewResampleMetadataClient(accessTarget, instType string) (*ResampleMetadata
 	}
 	target := normalizeStorageTarget(accessTarget, "11003")
 	options := gatewayauth.NewTRPCClientOptions(target, collectorStorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
-	return &ResampleMetadataClient{Client: storagepb.NewMetadataClientProxy(options...), Auth: storageAuthInfo(binding)}, nil
+	return &ResampleMetadataClient{Client: storagepb.NewMetadataClientProxy(options...), Primary: storagepb.NewPrimaryStoreClientProxy(options...), Auth: storageAuthInfo(binding)}, nil
 }
 
 func NewResampleStorage(accessTarget, instType, writeSource string) (ResampleStorage, error) {

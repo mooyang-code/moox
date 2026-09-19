@@ -36,6 +36,7 @@ func ServiceAuthKey(secret, appID string) string {
 }
 
 var _ pb.DataNodeRuntimeService = (*Service)(nil)
+var _ pb.DataNodeDatasetAdminRuntimeService = (*Service)(nil)
 var _ pb.DataNodeHistoryRuntimeService = (*Service)(nil)
 
 func NewService(opts Options) (*Service, error) {
@@ -175,8 +176,8 @@ func protoWriteReceipt(in *pebble.WriteReceipt) *pb.WriteReceipt {
 		return nil
 	}
 	return &pb.WriteReceipt{
-		CommitId: in.CommitID,
-		Position: &pb.CommittedPosition{NodeId: in.Position.NodeID, StoreId: in.Position.StoreID, Sequence: in.Position.Sequence},
+		CommitId:   in.CommitID,
+		Position:   &pb.CommittedPosition{NodeId: in.Position.NodeID, StoreId: in.Position.StoreID, Sequence: in.Position.Sequence},
 		InputReady: in.InputReady,
 		WriteKind:  in.WriteKind,
 	}
@@ -259,6 +260,23 @@ func (s *Service) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpi
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
 	return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Success("success"), DeletedBuckets: deleted}, nil
+}
+
+func (s *Service) DeleteDatasetRows(ctx context.Context, req *pb.DeleteDatasetRowsReq) (*pb.DeleteDatasetRowsRsp, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" {
+		return &pb.DeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
+		return &pb.DeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.DeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	deleted, err := s.store.DeleteDatasetRows(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return &pb.DeleteDatasetRowsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	}
+	return &pb.DeleteDatasetRowsRsp{RetInfo: retinfo.Success("success"), DeletedRanges: deleted}, nil
 }
 
 func (s *Service) validateAuth(auth *pb.AuthInfo) error {

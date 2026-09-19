@@ -394,6 +394,8 @@ func (s *Store) backfillHistoryIndex(cacheKey, spaceID, datasetID string) {
 	// View Maintainer observes each dataset as it completes.
 	s.historyBackfillMu.Lock()
 	defer s.historyBackfillMu.Unlock()
+	s.datasetWriteMu.RLock()
+	defer s.datasetWriteMu.RUnlock()
 	err := s.backfillHistoryIndexSync(s.historyContext(), spaceID, datasetID)
 	s.historyMu.Lock()
 	if err == nil {

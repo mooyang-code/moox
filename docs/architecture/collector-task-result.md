@@ -9,7 +9,7 @@ Collector 对用户只暴露“采集任务”和“采集结果”。一个任�
 1. 创建任务时由 Collector 根据 `space_id + "\\0" + task_id` 的 SHA-256 前 16 位生成结果身份。
 2. Collector 创建并激活内部 Dataset，创建默认浏览 View，再写入任务表。
 3. 任务执行器只写入任务对应的结果 Dataset；用户不需要知道 Dataset ID。
-4. 删除任务时先删除任务运行记录，再由用户选择保留结果，或物理删除结果 View 和 Dataset。
+4. 删除任务时先停用并清理任务运行记录，再由用户选择保留结果，或物理删除结果 View、Dataset 元数据及其 DataNode 中的行数据与历史索引。
 
 ## 接口与数据表
 
@@ -26,7 +26,7 @@ Collector RPC 使用 `GetTaskList`、`GetTaskDetail`、`CreateTask`、`UpdateTas
 
 ## 失败补偿
 
-结果资源创建必须在任务行写入前完成。后续校验或任务写入失败时，Collector 调用结果管理器删除刚创建的 View/Dataset。重复创建使用确定性 ID，因此是幂等的。删除结果时按 View 后 Dataset 的顺序执行。
+结果资源创建必须在任务行写入前完成。后续校验或任务写入失败时，Collector 只补偿本次新创建的 View/Dataset，不删除已有任务结果。重复创建使用确定性 ID，因此是幂等的。物理删除先清理 DataNode 行数据与索引，再按 View 后 Dataset 元数据顺序执行。
 
 ## 发布验证
 

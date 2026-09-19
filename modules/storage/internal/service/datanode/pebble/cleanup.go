@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	cpebble "github.com/cockroachdb/pebble"
@@ -26,6 +27,8 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 	// completion marker would permanently bless stale history.
 	s.historyBackfillMu.Lock()
 	defer s.historyBackfillMu.Unlock()
+	s.datasetWriteMu.Lock()
+	defer s.datasetWriteMu.Unlock()
 	before := beforeBucket.UTC().Format(canonicalTimeLayout)
 	batch := s.db.NewBatch()
 	defer batch.Close()
@@ -145,6 +148,110 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 		s.compactAsync(seriesCompactPrefix, nextPrefix(seriesCompactPrefix))
 	}
 	return uint64(len(buckets)), nil
+}
+
+// DeleteDatasetRows physically removes every row and materialized history
+// index belonging to one Dataset. Metadata deletion alone is insufficient:
+// Pebble keys are intentionally independent from the metadata SQLite store.
+func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string) (uint64, error) {
+	if s == nil || s.db == nil {
+		return 0, errors.New("pebble store is closed")
+	}
+	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
+		return 0, invalid("space_id and dataset_id are required")
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	// Stop history backfill and all writes while the dataset ranges are
+	// removed. Otherwise a concurrent write could repopulate the result after
+	// the metadata object has been deleted.
+	s.historyBackfillMu.Lock()
+	defer s.historyBackfillMu.Unlock()
+	s.datasetWriteMu.Lock()
+	defer s.datasetWriteMu.Unlock()
+	s.outboxMu.Lock()
+	defer s.outboxMu.Unlock()
+
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	ranges := make([][2][]byte, 0, 6)
+	for _, namespace := range []byte{fieldNamespace, attributeNamespace} {
+		for _, rowKind := range []byte{timeSeriesKind, recordKind} {
+			prefix := []byte{namespace, rowKind}
+			prefix = appendRawPart(prefix, []byte(spaceID))
+			prefix = appendRawPart(prefix, []byte(datasetID))
+			upper := nextPrefix(prefix)
+			if err := batch.DeleteRange(prefix, upper, s.writeOptions); err != nil {
+				return 0, err
+			}
+			ranges = append(ranges, [2][]byte{prefix, upper})
+		}
+	}
+	for _, namespace := range []byte{historyNamespace, seriesHistoryNamespace} {
+		prefix := []byte{namespace, timeSeriesKind}
+		prefix = appendRawPart(prefix, []byte(spaceID))
+		prefix = appendRawPart(prefix, []byte(datasetID))
+		upper := nextPrefix(prefix)
+		if err := batch.DeleteRange(prefix, upper, s.writeOptions); err != nil {
+			return 0, err
+		}
+		ranges = append(ranges, [2][]byte{prefix, upper})
+	}
+	// Source-event dedupe keys are dataset-scoped. Remove both the marker and
+	// its time index so recreating the same task can process the same source
+	// event again without a silent no-op.
+	processedPrefix := processedDatasetEventPrefix(spaceID, datasetID)
+	processedUpper := nextPrefix(processedPrefix)
+	processedKeys := make(map[string]struct{})
+	processedIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: processedPrefix, UpperBound: processedUpper})
+	if err != nil {
+		return 0, err
+	}
+	for valid := processedIter.First(); valid; valid = processedIter.Next() {
+		processedKeys[string(processedIter.Key())] = struct{}{}
+	}
+	if iterErr := processedIter.Error(); iterErr != nil {
+		_ = processedIter.Close()
+		return 0, iterErr
+	}
+	if err := processedIter.Close(); err != nil {
+		return 0, err
+	}
+	if len(processedKeys) > 0 {
+		if err := batch.DeleteRange(processedPrefix, processedUpper, s.writeOptions); err != nil {
+			return 0, err
+		}
+		processedTimeIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(processedEventTimePrefix), UpperBound: nextPrefix([]byte(processedEventTimePrefix))})
+		if err != nil {
+			return 0, err
+		}
+		for valid := processedTimeIter.First(); valid; valid = processedTimeIter.Next() {
+			if _, ok := processedKeys[string(processedTimeIter.Value())]; ok {
+				if err := batch.Delete(processedTimeIter.Key(), s.writeOptions); err != nil {
+					_ = processedTimeIter.Close()
+					return 0, err
+				}
+			}
+		}
+		if iterErr := processedTimeIter.Error(); iterErr != nil {
+			_ = processedTimeIter.Close()
+			return 0, iterErr
+		}
+		if err := processedTimeIter.Close(); err != nil {
+			return 0, err
+		}
+	}
+	if err := batch.Delete(historyMaterializedMarker(spaceID, datasetID), s.writeOptions); err != nil {
+		return 0, err
+	}
+	if err := batch.Commit(s.writeOptions); err != nil {
+		return 0, err
+	}
+	for _, bounds := range ranges {
+		s.compactAsync(bounds[0], bounds[1])
+	}
+	return uint64(len(ranges) + 1), nil
 }
 
 func decodePhysicalParts(data []byte) ([]string, bool) {

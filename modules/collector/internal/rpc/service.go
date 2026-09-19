@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -53,6 +54,7 @@ type Service struct {
 	defaultResampleSettleDelay time.Duration
 	resultManager              *taskresult.Manager
 	resultDataNodeID           string
+	createTaskMu               sync.Mutex
 }
 
 const defaultResampleSettleDelay = 10 * time.Second
@@ -177,6 +179,11 @@ func (s *Service) GetTaskDetail(ctx context.Context, req *pb.GetTaskDetailReq) (
 
 // CreateTask creates a collection task through the independent collector service.
 func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.CreateTaskRsp, error) {
+	// Result metadata is task-exclusive. Serialize the local check/provision/
+	// insert sequence so two UI retries cannot compensate resources provisioned
+	// by the winning request.
+	s.createTaskMu.Lock()
+	defer s.createTaskMu.Unlock()
 	rule := normalizeCollectionTask(fromPBTask(req.GetTask()))
 	if strings.TrimSpace(rule.TaskName) == "" {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_name is required")}, nil
@@ -213,11 +220,16 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 		}
 	}
 	var resultIDs taskresult.IDs
+	var cleanupResult func(context.Context) error
 	if strings.EqualFold(strings.TrimSpace(rule.DataType), "kline_resample") {
 		// Resample results use the same task-exclusive identity, but their
 		// Dataset/View must be created by resample.Preparer with source lineage.
 		// Do not provision them through the generic raw-collection manager.
-		resultIDs = taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
+		targetFrequency, frequencyErr := collectorresample.ParseFixedFrequency(params.TargetFrequency)
+		if frequencyErr != nil {
+			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, frequencyErr.Error())}, nil
+		}
+		resultIDs = taskresult.ResultIDsWithFrequency(rule.SpaceID, rule.TaskID, targetFrequency.Slug)
 		rule.ResultDatasetID = resultIDs.DatasetID
 		rule.ResultViewID = collectorresample.DefaultTargetViewID(resultIDs.DatasetID)
 		rule.CollectParams = setTaskResultDatasetID(rule.CollectParams, resultIDs.DatasetID)
@@ -230,7 +242,7 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured")}, nil
 		}
 		var err error
-		resultIDs, err = s.resultManager.Ensure(ctx, rule.SpaceID, rule.TaskID, rule.DataType, rule.MarketType, taskresult.Config{DataNodeID: dataNodeID, KeepDuration: keepDuration, Description: description, DataSourceID: rule.Provider, Frequency: firstTaskFrequency(params)})
+		resultIDs, cleanupResult, err = s.resultManager.EnsureWithCleanup(ctx, rule.SpaceID, rule.TaskID, rule.DataType, rule.MarketType, taskresult.Config{DataNodeID: dataNodeID, KeepDuration: keepDuration, Description: description, DataSourceID: rule.Provider, Frequency: firstTaskFrequency(params)})
 		if err != nil {
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
@@ -238,16 +250,27 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 		rule.CollectParams = setTaskResultDatasetID(rule.CollectParams, resultIDs.DatasetID)
 	}
 	if err := s.validateCollectionTaskDatasets(ctx, rule); err != nil {
-		if s.resultManager != nil && !strings.EqualFold(strings.TrimSpace(rule.DataType), "kline_resample") {
-			_ = s.resultManager.Delete(ctx, rule.SpaceID, resultIDs)
+		if cleanupResult != nil {
+			if cleanupErr := cleanupResult(ctx); cleanupErr != nil {
+				log.ErrorContextf(ctx, "[Collector] cleanup uncommitted task result failed: %v", cleanupErr)
+			}
 		}
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if err := s.ruleRepo.Create(ctx, rule); err != nil {
-		if s.resultManager != nil && !strings.EqualFold(strings.TrimSpace(rule.DataType), "kline_resample") {
-			_ = s.resultManager.Delete(ctx, rule.SpaceID, resultIDs)
-		}
 		log.ErrorContextf(ctx, "[Collector] create task rule failed: %v", err)
+		// A second process may still win the same task-id race. Preserve the
+		// winner's result resources; cleanup remains appropriate for a distinct
+		// conflict such as a duplicate task name.
+		preserveResult := false
+		if existing, lookupErr := s.ruleRepo.GetByTaskID(ctx, rule.SpaceID, rule.TaskID); lookupErr == nil && existing != nil {
+			preserveResult = true
+		}
+		if cleanupResult != nil && !preserveResult {
+			if cleanupErr := cleanupResult(ctx); cleanupErr != nil {
+				log.ErrorContextf(ctx, "[Collector] cleanup uncommitted task result failed: %v", cleanupErr)
+			}
+		}
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	s.refreshRealtimeInventory(ctx)
@@ -348,6 +371,19 @@ func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskReq) (*pb.De
 	if err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, err.Error())}, nil
 	}
+	var resultIDs taskresult.IDs
+	if req.GetDeleteResultData() {
+		if s.resultManager == nil {
+			return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured; task remains enabled for retry")}, nil
+		}
+		resultIDs, err = collectionTaskResultIDs(*task)
+		if err != nil {
+			return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		}
+		if err := s.resultManager.ValidateOwnedForTask(ctx, spaceID, taskID, resultIDs); err != nil {
+			return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("delete task result preflight failed; task remains enabled: %v", err))}, nil
+		}
+	}
 	if err := s.ruleRepo.SetEnabled(ctx, spaceID, taskID, false); err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -355,14 +391,7 @@ func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskReq) (*pb.De
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	if req.GetDeleteResultData() {
-		if s.resultManager == nil {
-			return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured; task remains disabled for retry")}, nil
-		}
-		ids := taskresult.IDs{DatasetID: task.ResultDatasetID, ViewID: task.ResultViewID}
-		if ids.DatasetID == "" || ids.ViewID == "" {
-			ids = taskresult.ResultIDs(spaceID, taskID)
-		}
-		if err := s.resultManager.DeleteForTask(ctx, spaceID, taskID, ids); err != nil {
+		if err := s.resultManager.DeleteForTask(ctx, spaceID, taskID, resultIDs); err != nil {
 			return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("delete task result failed; task remains disabled for retry: %v", err))}, nil
 		}
 	}
@@ -642,10 +671,29 @@ func normalizeCollectionTask(rule domain.CollectionTask) domain.CollectionTask {
 	if strings.TrimSpace(rule.CollectParams) == "" {
 		rule.CollectParams = "{}"
 	}
-	if params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType); err == nil && strings.TrimSpace(params.TargetDatasetID) == "" {
-		rule.CollectParams = setTaskResultDatasetID(rule.CollectParams, taskresult.ResultIDs(rule.SpaceID, rule.TaskID).DatasetID)
+	if !strings.EqualFold(strings.TrimSpace(rule.DataType), "kline_resample") {
+		if params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType); err == nil && strings.TrimSpace(params.TargetDatasetID) == "" {
+			rule.CollectParams = setTaskResultDatasetID(rule.CollectParams, taskresult.ResultIDs(rule.SpaceID, rule.TaskID).DatasetID)
+		}
 	}
 	return rule
+}
+
+func collectionTaskResultIDs(task domain.CollectionTask) (taskresult.IDs, error) {
+	if !strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+		return taskresult.ResultIDs(task.SpaceID, task.TaskID), nil
+	}
+	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	if err != nil {
+		return taskresult.IDs{}, err
+	}
+	frequency, err := collectorresample.ParseFixedFrequency(params.TargetFrequency)
+	if err != nil {
+		return taskresult.IDs{}, err
+	}
+	ids := taskresult.ResultIDsWithFrequency(task.SpaceID, task.TaskID, frequency.Slug)
+	ids.ViewID = collectorresample.DefaultTargetViewID(ids.DatasetID)
+	return ids, nil
 }
 
 func setTaskResultDatasetID(raw, datasetID string) string {

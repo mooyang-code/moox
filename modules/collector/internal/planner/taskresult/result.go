@@ -19,16 +19,36 @@ type IDs struct {
 }
 
 func resultIDs(spaceID, taskID string) IDs {
+	return resultIDsWithSuffix(spaceID, taskID, "")
+}
+
+func resultIDsWithSuffix(spaceID, taskID, suffix string) IDs {
 	digest := sha256.Sum256([]byte(spaceID + "\x00" + taskID))
-	suffix := hex.EncodeToString(digest[:])[:16]
+	hashSuffix := hex.EncodeToString(digest[:])[:16]
+	datasetID := "dataset_collector_" + hashSuffix
+	if suffix = strings.ToLower(strings.TrimSpace(suffix)); suffix != "" {
+		datasetID += "_" + suffix
+	}
 	return IDs{
-		DatasetID: "dataset_collector_" + suffix,
-		ViewID:    "view_collector_" + suffix,
+		DatasetID: datasetID,
+		ViewID: "view_collector_" + hashSuffix + func() string {
+			if suffix == "" {
+				return ""
+			}
+			return "_" + suffix
+		}(),
 	}
 }
 
 // ResultIDs returns the stable metadata identities for a task result.
 func ResultIDs(spaceID, taskID string) IDs { return resultIDs(spaceID, taskID) }
+
+// ResultIDsWithFrequency returns stable task-exclusive identities for a
+// frequency-specific derived result. The suffix is expected to be the
+// canonical lower-case frequency slug (for example, 5m or 4h).
+func ResultIDsWithFrequency(spaceID, taskID, frequencySlug string) IDs {
+	return resultIDsWithSuffix(spaceID, taskID, frequencySlug)
+}
 
 type metadataAPI interface {
 	GetDataset(context.Context, *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error)
@@ -78,7 +98,20 @@ func (p metadataProxy) ActivateDataset(ctx context.Context, req *storagepb.Activ
 
 type Manager struct {
 	metadata metadataAPI
+	cleaner  datasetRowsCleaner
 	auth     *storagepb.AuthInfo
+}
+
+type datasetRowsCleaner interface {
+	DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error)
+}
+
+type primaryDatasetRowsCleaner struct {
+	client storagepb.PrimaryStoreClientProxy
+}
+
+func (c primaryDatasetRowsCleaner) DeleteDatasetRows(ctx context.Context, req *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
+	return c.client.DeleteDatasetRows(ctx, req)
 }
 
 func NewManager(client storagepb.MetadataClientProxy, auth *storagepb.AuthInfo) *Manager {
@@ -86,6 +119,13 @@ func NewManager(client storagepb.MetadataClientProxy, auth *storagepb.AuthInfo) 
 		return nil
 	}
 	return &Manager{metadata: metadataProxy{client: client}, auth: auth}
+}
+
+func NewManagerWithCleaner(client storagepb.MetadataClientProxy, cleaner storagepb.PrimaryStoreClientProxy, auth *storagepb.AuthInfo) *Manager {
+	if client == nil || cleaner == nil || auth == nil {
+		return nil
+	}
+	return &Manager{metadata: metadataProxy{client: client}, cleaner: primaryDatasetRowsCleaner{client: cleaner}, auth: auth}
 }
 
 func NewManagerWithAPI(metadata metadataAPI, auth *storagepb.AuthInfo) *Manager {
@@ -176,6 +216,71 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		return IDs{}, err
 	}
 	return ids, nil
+}
+
+// EnsureWithCleanup provisions a raw result and returns a compensating action
+// for callers that have not yet committed the owning task row. Existing
+// task-owned resources are never removed by that action.
+func (m *Manager) EnsureWithCleanup(ctx context.Context, spaceID, taskID, dataType, marketType string, cfg Config) (IDs, func(context.Context) error, error) {
+	ids := resultIDs(spaceID, taskID)
+	datasetExists, viewExists, err := m.resultMetadataState(ctx, spaceID, ids)
+	if err != nil {
+		return IDs{}, nil, err
+	}
+	ensured, err := m.Ensure(ctx, spaceID, taskID, dataType, marketType, cfg)
+	if err != nil {
+		return IDs{}, nil, err
+	}
+	cleanup := func(cleanupCtx context.Context) error {
+		if viewExists && datasetExists {
+			return nil
+		}
+		if !viewExists {
+			view, deleteErr := m.metadata.DeleteView(cleanupCtx, &storagepb.DeleteViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ensured.ViewID})
+			if deleteErr != nil || (view != nil && view.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && view.GetRetInfo().GetCode() != storagepb.ErrorCode_VIEW_NOT_FOUND && view.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
+				return metadataError("cleanup result view", deleteErr, retInfoViewDelete(view))
+			}
+		}
+		if !datasetExists {
+			if m.cleaner != nil {
+				physical, cleanErr := m.cleaner.DeleteDatasetRows(cleanupCtx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ensured.DatasetID})
+				if cleanErr != nil || physical == nil || !resultDeleteAccepted(physical.GetRetInfo()) {
+					return metadataError("cleanup result dataset rows", cleanErr, func() *storagepb.RetInfo {
+						if physical == nil {
+							return nil
+						}
+						return physical.GetRetInfo()
+					}())
+				}
+			}
+			dataset, deleteErr := m.metadata.DeleteDataset(cleanupCtx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ensured.DatasetID})
+			if deleteErr != nil || (dataset != nil && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
+				return metadataError("cleanup result dataset", deleteErr, retInfoDatasetDelete(dataset))
+			}
+		}
+		return nil
+	}
+	return ensured, cleanup, nil
+}
+
+func (m *Manager) resultMetadataState(ctx context.Context, spaceID string, ids IDs) (bool, bool, error) {
+	dataset, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+	if err != nil {
+		return false, false, err
+	}
+	datasetExists := dataset != nil && dataset.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS
+	if dataset != nil && !datasetExists && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND {
+		return false, false, metadataError("get result dataset", nil, dataset.GetRetInfo())
+	}
+	view, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
+	if err != nil {
+		return false, false, err
+	}
+	viewExists := view != nil && view.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS
+	if view != nil && !viewExists && view.GetRetInfo().GetCode() != storagepb.ErrorCode_VIEW_NOT_FOUND && view.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND {
+		return false, false, metadataError("get result view", nil, view.GetRetInfo())
+	}
+	return datasetExists, viewExists, nil
 }
 
 func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID string, kind storagepb.DataKind) error {
@@ -335,6 +440,17 @@ func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 	if m == nil || m.metadata == nil || m.auth == nil {
 		return fmt.Errorf("task result metadata manager is not configured")
 	}
+	if m.cleaner != nil {
+		physical, err := m.cleaner.DeleteDatasetRows(ctx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+		if err != nil || physical == nil || !resultDeleteAccepted(physical.GetRetInfo()) {
+			return metadataError("delete result dataset rows", err, func() *storagepb.RetInfo {
+				if physical == nil {
+					return nil
+				}
+				return physical.GetRetInfo()
+			}())
+		}
+	}
 	view, err := m.metadata.DeleteView(ctx, &storagepb.DeleteViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
 	if err != nil || (view != nil && view.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && view.GetRetInfo().GetCode() != storagepb.ErrorCode_VIEW_NOT_FOUND && view.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
 		return metadataError("delete result view", err, retInfoViewDelete(view))
@@ -346,16 +462,43 @@ func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 	return nil
 }
 
+func resultDeleteAccepted(info *storagepb.RetInfo) bool {
+	if info == nil {
+		return false
+	}
+	switch info.GetCode() {
+	case storagepb.ErrorCode_SUCCESS, storagepb.ErrorCode_DATASET_NOT_FOUND, storagepb.ErrorCode_NOT_FOUND:
+		return true
+	default:
+		return false
+	}
+}
+
 // DeleteForTask verifies Collector ownership before deleting metadata. The
 // deterministic Dataset ID prevents a malformed task row from targeting an
 // unrelated result, while the ownership check protects the View side too.
 func (m *Manager) DeleteForTask(ctx context.Context, spaceID, taskID string, ids IDs) error {
+	if err := m.ValidateOwnedForTask(ctx, spaceID, taskID, ids); err != nil {
+		return err
+	}
+	return m.Delete(ctx, spaceID, ids)
+}
+
+// ValidateOwnedForTask performs the destructive-delete ownership checks
+// without changing Storage state. Callers can use it before deleting local
+// runtime records so a rejected delete remains fully retryable.
+func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID string, ids IDs) error {
+	if m == nil || m.metadata == nil || m.auth == nil {
+		return fmt.Errorf("task result metadata manager is not configured")
+	}
 	if strings.TrimSpace(taskID) == "" {
 		return fmt.Errorf("task_id is required")
 	}
-	expected := resultIDs(spaceID, taskID)
-	if ids.DatasetID != expected.DatasetID {
-		return fmt.Errorf("result dataset %s is not owned by task %s", ids.DatasetID, taskID)
+	base := resultIDs(spaceID, taskID).DatasetID
+	deterministicID := ids.DatasetID == base || strings.HasPrefix(ids.DatasetID, base+"_")
+	expectedViewID := "view_" + strings.TrimPrefix(ids.DatasetID, "dataset_")
+	if ids.ViewID != expectedViewID {
+		return fmt.Errorf("result view %s is not owned by task %s", ids.ViewID, taskID)
 	}
 	dataset, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
@@ -365,6 +508,12 @@ func (m *Manager) DeleteForTask(ctx context.Context, spaceID, taskID string, ids
 		if dataset.GetDataset() == nil || !ownedByTask(dataset.GetDataset().GetAttributes(), taskID) {
 			return fmt.Errorf("result dataset %s is not owned by task %s", ids.DatasetID, taskID)
 		}
+	} else if !deterministicID {
+		// Legacy resample tasks could persist a user-selected result ID. Such
+		// results remain deletable only when the persisted ownership marker is
+		// present; a missing object must not turn an arbitrary ID into a delete
+		// target.
+		return fmt.Errorf("legacy result dataset %s is not verifiably owned by task %s", ids.DatasetID, taskID)
 	}
 	view, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
 	if err != nil {
@@ -374,8 +523,10 @@ func (m *Manager) DeleteForTask(ctx context.Context, spaceID, taskID string, ids
 		if view.GetView() == nil || !ownedByTask(view.GetView().GetAttributes(), taskID) {
 			return fmt.Errorf("result view %s is not owned by task %s", ids.ViewID, taskID)
 		}
+	} else if !deterministicID {
+		return fmt.Errorf("legacy result view %s is not verifiably owned by task %s", ids.ViewID, taskID)
 	}
-	return m.Delete(ctx, spaceID, ids)
+	return nil
 }
 
 func nonEmptyFrequency(kind storagepb.DataKind, frequency string) []string {
