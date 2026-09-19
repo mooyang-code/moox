@@ -104,6 +104,7 @@ type Manager struct {
 
 type datasetRowsCleaner interface {
 	DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error)
+	RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq) (*storagepb.PrimaryRestoreDatasetRowsRsp, error)
 }
 
 type primaryDatasetRowsCleaner struct {
@@ -112,6 +113,10 @@ type primaryDatasetRowsCleaner struct {
 
 func (c primaryDatasetRowsCleaner) DeleteDatasetRows(ctx context.Context, req *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
 	return c.client.DeleteDatasetRows(ctx, req)
+}
+
+func (c primaryDatasetRowsCleaner) RestoreDatasetRows(ctx context.Context, req *storagepb.PrimaryRestoreDatasetRowsReq) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
+	return c.client.RestoreDatasetRows(ctx, req)
 }
 
 func NewManager(client storagepb.MetadataClientProxy, auth *storagepb.AuthInfo) *Manager {
@@ -182,6 +187,17 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		return IDs{}, metadataError("get result dataset", nil, get.GetRetInfo())
 	} else if !ownedByTask(get.GetDataset().GetAttributes(), taskID) {
 		return IDs{}, fmt.Errorf("result dataset %s is owned by another task", ids.DatasetID)
+	}
+	if createdDataset && m.cleaner != nil {
+		restored, restoreErr := m.cleaner.RestoreDatasetRows(ctx, &storagepb.PrimaryRestoreDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+		if restoreErr != nil || restored == nil || restored.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			return IDs{}, metadataError("restore result dataset rows", restoreErr, func() *storagepb.RetInfo {
+				if restored == nil {
+					return nil
+				}
+				return restored.GetRetInfo()
+			}())
+		}
 	}
 	if err := m.ensureColumns(ctx, spaceID, ids.DatasetID, ids.ViewID, kind); err != nil {
 		if createdDataset {
@@ -440,7 +456,10 @@ func ownedByTask(attributes map[string]string, taskID string) bool {
 	// Older resample results used resample_task_id before all Collector
 	// results were normalized to collector_task_id. Keep that result lineage
 	// verifiable so bootstrap migration and explicit deletion remain safe.
-	return attributes["collector_task_id"] == trimmedTaskID || attributes["resample_task_id"] == trimmedTaskID
+	if strings.TrimSpace(attributes["collector_task_id"]) != "" {
+		return attributes["collector_task_id"] == trimmedTaskID
+	}
+	return attributes["resample_task_id"] == trimmedTaskID
 }
 
 func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
@@ -511,10 +530,12 @@ func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID stri
 	if err != nil {
 		return fmt.Errorf("get result dataset ownership: %w", err)
 	}
+	datasetOwned := false
 	if dataset != nil && dataset.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
 		if dataset.GetDataset() == nil || !ownedByTask(dataset.GetDataset().GetAttributes(), taskID) {
 			return fmt.Errorf("result dataset %s is not owned by task %s", ids.DatasetID, taskID)
 		}
+		datasetOwned = true
 	} else if !deterministicID {
 		// Legacy resample tasks could persist a user-selected result ID. Such
 		// results remain deletable only when the persisted ownership marker is
@@ -527,7 +548,11 @@ func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID stri
 		return fmt.Errorf("get result view ownership: %w", err)
 	}
 	if view != nil && view.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
-		if view.GetView() == nil || !ownedByTask(view.GetView().GetAttributes(), taskID) {
+		if view.GetView() == nil {
+			return fmt.Errorf("result view %s is not owned by task %s", ids.ViewID, taskID)
+		}
+		viewAttrs := view.GetView().GetAttributes()
+		if !ownedByTask(viewAttrs, taskID) && !(datasetOwned && view.GetView().GetDatasetId() == ids.DatasetID && strings.TrimSpace(viewAttrs["owner_module"]) == "") {
 			return fmt.Errorf("result view %s is not owned by task %s", ids.ViewID, taskID)
 		}
 	} else if !deterministicID {

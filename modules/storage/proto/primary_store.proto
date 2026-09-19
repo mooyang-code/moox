@@ -82,6 +82,16 @@ message PrimaryDeleteDatasetRowsRsp {
   uint64 deleted_ranges = 2;
 }
 
+message PrimaryRestoreDatasetRowsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+}
+
+message PrimaryRestoreDatasetRowsRsp {
+  common.RetInfo ret_info = 1;
+}
+
 message ReportCollectorPeriodCompletedReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
@@ -166,6 +176,7 @@ service PrimaryStore {
   rpc LookupWriteReceipt(PrimaryLookupWriteReceiptReq) returns (PrimaryLookupWriteReceiptRsp);
   rpc ReadFields(PrimaryReadFieldsReq) returns (PrimaryReadFieldsRsp);
   rpc DeleteDatasetRows(PrimaryDeleteDatasetRowsReq) returns (PrimaryDeleteDatasetRowsRsp);
+  rpc RestoreDatasetRows(PrimaryRestoreDatasetRowsReq) returns (PrimaryRestoreDatasetRowsRsp);
   rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
   rpc ReadRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);
   rpc ReportCollectorPeriodCompleted(ReportCollectorPeriodCompletedReq) returns (ReportCollectorPeriodCompletedRsp);

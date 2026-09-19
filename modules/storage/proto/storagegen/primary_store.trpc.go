@@ -32,6 +32,8 @@ type PrimaryStoreService interface {
 
 	DeleteDatasetRows(ctx context.Context, req *PrimaryDeleteDatasetRowsReq) (*PrimaryDeleteDatasetRowsRsp, error)
 
+	RestoreDatasetRows(ctx context.Context, req *PrimaryRestoreDatasetRowsReq) (*PrimaryRestoreDatasetRowsRsp, error)
+
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
 
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error)
@@ -147,6 +149,24 @@ func PrimaryStoreService_DeleteDatasetRows_Handler(svr interface{}, ctx context.
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(PrimaryStoreService).DeleteDatasetRows(ctx, reqbody.(*PrimaryDeleteDatasetRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_RestoreDatasetRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PrimaryRestoreDatasetRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).RestoreDatasetRows(ctx, reqbody.(*PrimaryRestoreDatasetRowsReq))
 	}
 
 	var rsp interface{}
@@ -331,6 +351,10 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_DeleteDatasetRows_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.PrimaryStore/RestoreDatasetRows",
+			Func: PrimaryStoreService_RestoreDatasetRows_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows",
 			Func: PrimaryStoreService_ReadTimeSeriesRows_Handler,
 		},
@@ -395,6 +419,9 @@ func (s *UnimplementedPrimaryStore) ReadFields(ctx context.Context, req *Primary
 func (s *UnimplementedPrimaryStore) DeleteDatasetRows(ctx context.Context, req *PrimaryDeleteDatasetRowsReq) (*PrimaryDeleteDatasetRowsRsp, error) {
 	return nil, errors.New("rpc DeleteDatasetRows of service PrimaryStore is not implemented")
 }
+func (s *UnimplementedPrimaryStore) RestoreDatasetRows(ctx context.Context, req *PrimaryRestoreDatasetRowsReq) (*PrimaryRestoreDatasetRowsRsp, error) {
+	return nil, errors.New("rpc RestoreDatasetRows of service PrimaryStore is not implemented")
+}
 func (s *UnimplementedPrimaryStore) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error) {
 	return nil, errors.New("rpc ReadTimeSeriesRows of service PrimaryStore is not implemented")
 }
@@ -440,6 +467,8 @@ type PrimaryStoreClientProxy interface {
 	ReadFields(ctx context.Context, req *PrimaryReadFieldsReq, opts ...client.Option) (rsp *PrimaryReadFieldsRsp, err error)
 
 	DeleteDatasetRows(ctx context.Context, req *PrimaryDeleteDatasetRowsReq, opts ...client.Option) (rsp *PrimaryDeleteDatasetRowsRsp, err error)
+
+	RestoreDatasetRows(ctx context.Context, req *PrimaryRestoreDatasetRowsReq, opts ...client.Option) (rsp *PrimaryRestoreDatasetRowsRsp, err error)
 
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
 
@@ -581,6 +610,26 @@ func (c *PrimaryStoreClientProxyImpl) DeleteDatasetRows(ctx context.Context, req
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &PrimaryDeleteDatasetRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) RestoreDatasetRows(ctx context.Context, req *PrimaryRestoreDatasetRowsReq, opts ...client.Option) (*PrimaryRestoreDatasetRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/RestoreDatasetRows")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("RestoreDatasetRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PrimaryRestoreDatasetRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

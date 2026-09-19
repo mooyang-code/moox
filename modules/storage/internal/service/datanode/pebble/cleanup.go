@@ -10,6 +10,7 @@ import (
 	"time"
 
 	cpebble "github.com/cockroachdb/pebble"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"google.golang.org/protobuf/proto"
 )
@@ -322,6 +323,14 @@ func (s *Store) stageDatasetAuxiliaryCleanup(batch *cpebble.Batch, spaceID, data
 		belongs := stored.SpaceID == spaceID && stored.DatasetID == datasetID
 		if stored.SpaceID == "" && stored.DatasetID == "" {
 			belongs = sequenceDataset[stored.Sequence]
+			if !belongs {
+				inferredSpace, inferredDataset, inferErr := s.receiptDataset(strings.TrimPrefix(string(receiptIter.Key()), writeReceiptPrefix), stored.WriteKind)
+				if inferErr != nil {
+					_ = receiptIter.Close()
+					return 0, inferErr
+				}
+				belongs = inferredSpace == spaceID && inferredDataset == datasetID
+			}
 		}
 		if !belongs {
 			continue
@@ -391,6 +400,36 @@ func (s *Store) stageDatasetAuxiliaryCleanup(batch *cpebble.Batch, spaceID, data
 		}
 	}
 	return len(matchingOutbox), nil
+}
+
+// receiptDataset recovers ownership for receipts written before SpaceID and
+// DatasetID were added to the persisted receipt. The fingerprint retains the
+// original RowFieldUpsert, so this also works after the relay has removed the
+// corresponding outbox entry.
+func (s *Store) receiptDataset(commitID, writeKind string) (string, string, error) {
+	data, closer, err := s.db.Get([]byte(writeReceiptBodyPref + commitID))
+	if errors.Is(err, cpebble.ErrNotFound) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	body := append([]byte(nil), data...)
+	if err := closer.Close(); err != nil {
+		return "", "", err
+	}
+	row := &pb.RowFieldUpsert{}
+	if writeKind == WriteKindFactorPatch {
+		wrapper := &pb.RowFieldUpsert{}
+		if err := proto.Unmarshal(body, wrapper); err != nil || len(wrapper.GetFields()) != 1 || wrapper.GetFields()[0].GetValue() == nil {
+			return "", "", nil
+		}
+		body = wrapper.GetFields()[0].GetValue().GetBytesValue()
+	}
+	if err := proto.Unmarshal(body, row); err != nil || row.GetKey() == nil {
+		return "", "", nil
+	}
+	return row.GetKey().GetSpaceId(), row.GetKey().GetDatasetId(), nil
 }
 
 // RestoreDatasetRows clears the deletion tombstone when a new task recreates
