@@ -205,7 +205,7 @@ func (c *Client) EnableCollectionTask(ctx context.Context, spaceID, taskID strin
 
 // DisableTask disables a task without deleting its runtime history. It is
 // used to roll back an activation when the Timer assignment/readback gate
-// fails after rule enablement.
+// fails after collection-task enablement.
 func (c *Client) DisableTask(ctx context.Context, spaceID, taskID string) error {
 	var response struct {
 		RetInfo retInfo `json:"ret_info"`
@@ -217,6 +217,24 @@ func (c *Client) DisableTask(ctx context.Context, spaceID, taskID string) error 
 	}
 	if !isRetInfoSuccess(response.RetInfo.Code) {
 		return fmt.Errorf("DisableTask rejected: %s", response.RetInfo.Msg)
+	}
+	return nil
+}
+
+// DeleteTask removes a collection task. When deleteResultData is true the
+// Collector performs its ownership check and removes the task-exclusive
+// result View, Dataset, and physical rows before deleting the task record.
+func (c *Client) DeleteTask(ctx context.Context, spaceID, taskID string, deleteResultData bool) error {
+	var response struct {
+		RetInfo retInfo `json:"ret_info"`
+	}
+	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/DeleteTask", map[string]any{
+		"space_id": spaceID, "task_id": taskID, "delete_result_data": deleteResultData,
+	}, &response); err != nil {
+		return fmt.Errorf("DeleteTask: %w", err)
+	}
+	if !isRetInfoSuccess(response.RetInfo.Code) {
+		return fmt.Errorf("DeleteTask rejected: %s", response.RetInfo.Msg)
 	}
 	return nil
 }

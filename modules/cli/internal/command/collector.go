@@ -1097,13 +1097,13 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if opts.EnableStockCN {
 				// Enable the rule before the Timer fleet. Collector assignment is
 				// reconciled from the active rule, so waiting for assignments while
-				// the rule is still disabled can never become ready.
+				// the collection task is still disabled can never become ready.
 				if err := ensureStockCNKlineRule(ctx, client, fetcherConfig.SpaceID); err != nil {
 					return summary, rollbackActivation(fmt.Errorf("enable stock Kline rule: %w", err))
 				}
 				enabledRules, ruleErr := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID, "equity")
 				if ruleErr != nil {
-					return summary, rollbackActivation(fmt.Errorf("verify stock Kline rule enabled: %w", ruleErr))
+					return summary, rollbackActivation(fmt.Errorf("verify stock Kline task enabled: %w", ruleErr))
 				}
 				found := false
 				for _, rule := range enabledRules {
@@ -1113,7 +1113,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 					}
 				}
 				if !found {
-					return summary, rollbackActivation(fmt.Errorf("stock Kline rule enable was not confirmed by control-plane readback"))
+					return summary, rollbackActivation(fmt.Errorf("stock Kline task enable was not confirmed by control-plane readback"))
 				}
 				if err := waitCollectorTimerFleetsAssigned(ctx, client, publishedTimerFleets); err != nil {
 					return summary, rollbackActivation(fmt.Errorf("verify stock Kline assignments after rule enable: %w", err))
@@ -1301,7 +1301,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if err != nil {
 		return summary, fmt.Errorf("stockcn activation requires a rule readback: %w", err)
 	}
-	// An interrupted activation can leave the target rule enabled after its
+	// An interrupted activation can leave the target collection task enabled after its
 	// Timer fleet rollback. Treat that state as resumable; unrelated equity
 	// rules still block activation to avoid changing another workflow.
 	for _, rule := range enabledRules {
@@ -1391,7 +1391,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	}
 	enabledRules, err = client.ListEnabledTasks(ctx, fetcherConfig.SpaceID, "equity")
 	if err != nil {
-		return summary, rollbackActivation(fmt.Errorf("verify stock Kline rule enabled: %w", err))
+		return summary, rollbackActivation(fmt.Errorf("verify stock Kline task enabled: %w", err))
 	}
 	for _, rule := range enabledRules {
 		if rule.TaskID == summary.TaskID && rule.Enabled {
@@ -1424,7 +1424,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 			return summary, nil
 		}
 	}
-	return summary, rollbackActivation(fmt.Errorf("stock Kline rule enable was not confirmed by control-plane readback"))
+	return summary, rollbackActivation(fmt.Errorf("stock Kline task enable was not confirmed by control-plane readback"))
 }
 
 func ensureStockCNKlineRule(ctx context.Context, client *adminclient.Client, spaceID string) error {

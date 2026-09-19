@@ -89,7 +89,7 @@ func Open(opts *Options) (*Store, error) {
 	return s, nil
 }
 
-// Tasks returns the task rule repository.
+// Tasks returns the collection task repository.
 func (s *Store) Tasks() *CollectionTaskRepository {
 	if s == nil {
 		return nil
@@ -138,21 +138,6 @@ func (s *Store) ApplySchema(sql string) error {
 	if err := s.rejectLegacySchema(); err != nil {
 		return err
 	}
-	// The schema is also applied to an existing Collector database during a
-	// rolling deploy. SQLite executes the schema as one batch, so add the new
-	// assignment column before the batch reaches its dependent index.
-	if err := s.ensureTaskInstanceFunctionColumn(); err != nil {
-		return err
-	}
-	if err := s.ensureTaskInstanceSourceColumn(); err != nil {
-		return err
-	}
-	if err := s.ensurePeriodReadinessWorkTypeColumn(); err != nil {
-		return err
-	}
-	if err := s.ensurePeriodReadinessCommittedPositionsColumn(); err != nil {
-		return err
-	}
 	return s.db.Exec(sql).Error
 }
 
@@ -169,100 +154,29 @@ func (s *Store) rejectLegacySchema() error {
 			return fmt.Errorf("inspect legacy collector table %s: %w", table, err)
 		}
 		if count > 0 {
-			return fmt.Errorf("legacy Collector table %s detected; run collector task purge/reset before starting the new task model", table)
+			return fmt.Errorf("collector schema reset required: legacy task rule table found (%s)", table)
 		}
 	}
-	return nil
-}
-
-func (s *Store) ensurePeriodReadinessCommittedPositionsColumn() error {
-	var tableCount int64
-	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, "t_period_readiness").Scan(&tableCount).Error; err != nil {
-		return fmt.Errorf("check period readiness table: %w", err)
-	}
-	if tableCount == 0 {
-		return nil
-	}
-	var count int64
-	if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info('t_period_readiness') WHERE name = ?`, "c_committed_positions_json").Scan(&count).Error; err != nil {
-		return fmt.Errorf("inspect period readiness columns: %w", err)
-	}
-	if count == 0 {
-		if err := s.db.Exec(`ALTER TABLE t_period_readiness ADD COLUMN c_committed_positions_json TEXT NOT NULL DEFAULT '[]'`).Error; err != nil {
-			return fmt.Errorf("add period readiness committed positions column: %w", err)
+	for table, columns := range map[string][]string{
+		"t_collector_tasks":          {"c_task_name", "c_result_dataset_id", "c_result_view_id"},
+		"t_collector_task_instances": {"c_instance_id", "c_task_id", "c_function_name", "c_source_id"},
+		"t_period_readiness":         {"c_work_type", "c_committed_positions_json"},
+	} {
+		var tableCount int64
+		if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&tableCount).Error; err != nil {
+			return fmt.Errorf("inspect collector table %s: %w", table, err)
 		}
-	}
-	return nil
-}
-
-func (s *Store) ensurePeriodReadinessWorkTypeColumn() error {
-	var tableCount int64
-	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, "t_period_readiness").Scan(&tableCount).Error; err != nil {
-		return fmt.Errorf("check period readiness table: %w", err)
-	}
-	if tableCount == 0 {
-		return nil
-	}
-	var count int64
-	if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info('t_period_readiness') WHERE name = ?`, "c_work_type").Scan(&count).Error; err != nil {
-		return fmt.Errorf("inspect period readiness columns: %w", err)
-	}
-	if count == 0 {
-		if err := s.db.Exec(`ALTER TABLE t_period_readiness ADD COLUMN c_work_type TEXT NOT NULL DEFAULT 'collection'`).Error; err != nil {
-			return fmt.Errorf("add period readiness work type column: %w", err)
+		if tableCount == 0 {
+			continue
 		}
-	}
-	return nil
-}
-
-func (s *Store) ensureTaskInstanceFunctionColumn() error {
-	var tableCount int64
-	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, "t_collector_task_instances").Scan(&tableCount).Error; err != nil {
-		return fmt.Errorf("check task instance table: %w", err)
-	}
-	if tableCount == 0 {
-		return nil
-	}
-	rows, err := s.db.Raw("PRAGMA table_info(t_collector_task_instances)").Rows()
-	if err != nil {
-		return fmt.Errorf("inspect task instance columns: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid, notNull, primaryKey int
-		var name, columnType string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return fmt.Errorf("scan task instance column: %w", err)
-		}
-		if name == "c_function_name" {
-			return nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("inspect task instance columns: %w", err)
-	}
-	if err := s.db.Exec(`ALTER TABLE t_collector_task_instances ADD COLUMN c_function_name TEXT NOT NULL DEFAULT ''`).Error; err != nil {
-		return fmt.Errorf("add task instance function column: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) ensureTaskInstanceSourceColumn() error {
-	var tableCount int64
-	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, "t_collector_task_instances").Scan(&tableCount).Error; err != nil {
-		return fmt.Errorf("check task instance table for source: %w", err)
-	}
-	if tableCount == 0 {
-		return nil
-	}
-	var count int64
-	if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info('t_collector_task_instances') WHERE name = ?`, "c_source_id").Scan(&count).Error; err != nil {
-		return fmt.Errorf("inspect task instance source column: %w", err)
-	}
-	if count == 0 {
-		if err := s.db.Exec(`ALTER TABLE t_collector_task_instances ADD COLUMN c_source_id TEXT NOT NULL DEFAULT ''`).Error; err != nil {
-			return fmt.Errorf("add task instance source column: %w", err)
+		for _, column := range columns {
+			var columnCount int64
+			if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&columnCount).Error; err != nil {
+				return fmt.Errorf("inspect collector schema %s.%s: %w", table, column, err)
+			}
+			if columnCount == 0 {
+				return fmt.Errorf("collector schema reset required: current task schema is incomplete (%s.%s missing)", table, column)
+			}
 		}
 	}
 	return nil

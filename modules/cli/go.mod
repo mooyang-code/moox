@@ -7,6 +7,7 @@ replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../stor
 replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/proto/admingen
 
 require (
+	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/cloudprovider v0.0.0-00010101000000-000000000000
@@ -15,6 +16,7 @@ require (
 	github.com/pkg/sftp v1.13.10
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.11.1
+	gorm.io/gorm v1.31.2
 	golang.org/x/crypto v0.50.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v2 v2.4.0

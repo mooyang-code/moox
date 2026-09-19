@@ -359,7 +359,7 @@ const workflowLinks = [
   },
   {
     title: "索引查询",
-    description: "查看数据集上的索引",
+    description: "查看采集结果上的索引",
     path: "/collector/tasks?tab=results",
     icon: "Q",
     tint: "rgba(234, 88, 12, 12%)"
@@ -390,9 +390,9 @@ const workflowLinks = [
 
 const setupSteps = [
   { title: "创建空间", description: "空间是采集、计算与交易的隔离边界，管理台所有请求都带空间上下文。" },
-  { title: "登记数据集", description: "在数据采集中配置数据源、采集对象、基础字段和数据集。" },
-  { title: "启动采集链路", description: "collector 按规则展开任务，经 cloudnode 下发到云节点执行写入。" },
-  { title: "查询与因子", description: "用数据集索引浏览 K 线；因子输出写回同一复合数据集。" }
+  { title: "创建采集任务", description: "在数据采集中配置数据源、采集对象、基础字段和任务结果。" },
+  { title: "启动采集链路", description: "collector 按采集任务展开执行，经 cloudnode 下发到云节点写入结果。" },
+  { title: "查询与因子", description: "用采集结果索引浏览 K 线；因子输出写回复合结果。" }
 ];
 
 const nodesTotal = ref<number | null>(null);
@@ -447,7 +447,7 @@ const dashboardKpis = computed(() => [
     label: "今日采集任务",
     value: fmt(counts.tasks ?? 443),
     unit: "",
-    note: "规则展开实例",
+    note: "任务展开实例",
     delta: "运行中 18",
     tone: "neutral",
     path: "/collector/tasks?tab=instances"

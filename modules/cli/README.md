@@ -14,6 +14,7 @@ moox-cli storage reset-view-consumers ... # 删除全部 View durable/消息/索
 moox-cli factor clear-queue ...     # 清空 Factor durable consumer 历史积压并重启 Factor
 moox-cli data rows export ...       # 导出行数据
 moox-cli collector function ...     # 采集 SCF 代码包打包/发布/部署辅助
+moox-cli collector task purge ...   # 预览或重置 Collector 任务运行数据（默认只读）
 moox-cli ops tencent lighthouse ... # 腾讯云 Lighthouse 防火墙规则
 moox-cli setup ...                  # 初始化控制面、发布服务包、部署 Storage、导入元数据
 ```

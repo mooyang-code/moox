@@ -152,7 +152,7 @@ func (s *Service) GetTaskList(ctx context.Context, req *pb.GetTaskListReq) (*pb.
 		PageSize:   size,
 	})
 	if err != nil {
-		log.ErrorContextf(ctx, "[Collector] list task rules failed: %v", err)
+		log.ErrorContextf(ctx, "[Collector] list collection tasks failed: %v", err)
 		return &pb.GetTaskListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	out := make([]*pb.CollectionTask, 0, len(tasks))
@@ -258,7 +258,7 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if err := s.ruleRepo.Create(ctx, rule); err != nil {
-		log.ErrorContextf(ctx, "[Collector] create task rule failed: %v", err)
+		log.ErrorContextf(ctx, "[Collector] create collection task failed: %v", err)
 		// A second process may still win the same task-id race. Preserve the
 		// winner's result resources; cleanup remains appropriate for a distinct
 		// conflict such as a duplicate task name.
@@ -336,7 +336,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	}
 	updated, err := s.ruleRepo.UpdateByTaskID(ctx, spaceID, ruleID, rule)
 	if err != nil {
-		log.ErrorContextf(ctx, "[Collector] update task rule failed: %v", err)
+		log.ErrorContextf(ctx, "[Collector] update collection task failed: %v", err)
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	s.refreshRealtimeInventory(ctx)
@@ -352,7 +352,7 @@ func (s *Service) DisableTask(ctx context.Context, req *pb.DisableTaskReq) (*pb.
 		return &pb.DisableTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_id is required")}, nil
 	}
 	if err := s.ruleRepo.SetEnabled(ctx, req.GetSpaceId(), req.GetTaskId(), false); err != nil {
-		log.ErrorContextf(ctx, "[Collector] disable task rule failed: %v", err)
+		log.ErrorContextf(ctx, "[Collector] disable collection task failed: %v", err)
 		return &pb.DisableTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	s.refreshRealtimeInventory(ctx)
@@ -499,13 +499,13 @@ func (s *Service) StartKlineResampleBackfill(ctx context.Context, req *pb.StartK
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, err.Error())}, nil
 	}
 	if !strings.EqualFold(rule.DataType, "kline_resample") {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "rule is not kline_resample")}, nil
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task is not kline_resample")}, nil
 	}
 	if !rule.Enabled {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "rule is disabled")}, nil
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task is disabled")}, nil
 	}
 	if rule.PrepareState != domain.PrepareStateReady {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("rule is not ready (prepare_state=%s)", rule.PrepareState))}, nil
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task is not ready (prepare_state=%s)", rule.PrepareState))}, nil
 	}
 	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
 	if err != nil {

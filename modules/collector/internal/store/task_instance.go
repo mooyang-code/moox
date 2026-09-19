@@ -104,12 +104,52 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 	if len(instances) == 0 {
 		return nil
 	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return r.upsertManyTx(ctx, tx, instances)
+	})
+}
+
+func (r *TaskInstanceRepository) upsertManyTx(ctx context.Context, db *gorm.DB, instances []domain.TaskInstance) error {
 	spaceID := instances[0].SpaceID
-	taskIDs := make([]string, 0, len(instances))
+	parentIDs := make([]string, 0, len(instances))
 	for _, instance := range instances {
 		if instance.SpaceID != spaceID {
 			return fmt.Errorf("task instances must belong to one space")
 		}
+		parentIDs = append(parentIDs, instance.CollectionTaskID)
+	}
+	parentIDs = uniqueNonEmptyStrings(parentIDs)
+	if len(parentIDs) > 0 {
+		var parentTableRows int64
+		if err := db.Raw("SELECT count(*) FROM t_collector_tasks").Scan(&parentTableRows).Error; err != nil {
+			return fmt.Errorf("inspect collection task state before persisting instances: %w", err)
+		}
+		if parentTableRows == 0 {
+			parentIDs = nil
+		}
+	}
+	if len(parentIDs) > 0 {
+		var enabledParents []string
+		if err := db.Raw("SELECT c_task_id FROM t_collector_tasks WHERE c_space_id = ? AND c_task_id IN ? AND c_enabled = ?", spaceID, parentIDs, true).Scan(&enabledParents).Error; err != nil {
+			return fmt.Errorf("check collection task state before persisting instances: %w", err)
+		}
+		allowed := make(map[string]struct{}, len(enabledParents))
+		for _, taskID := range enabledParents {
+			allowed[taskID] = struct{}{}
+		}
+		filtered := instances[:0]
+		for _, instance := range instances {
+			if _, ok := allowed[instance.CollectionTaskID]; ok {
+				filtered = append(filtered, instance)
+			}
+		}
+		instances = filtered
+		if len(instances) == 0 {
+			return nil
+		}
+	}
+	taskIDs := make([]string, 0, len(instances))
+	for _, instance := range instances {
 		taskIDs = append(taskIDs, instance.TaskID)
 	}
 	var existingRows []domain.TaskInstance
@@ -122,7 +162,7 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 			end = len(taskIDs)
 		}
 		var rows []domain.TaskInstance
-		if err := r.db.WithContext(ctx).
+		if err := db.WithContext(ctx).
 			Where("c_space_id = ? AND c_instance_id IN ?", spaceID, taskIDs[start:end]).
 			Find(&rows).Error; err != nil {
 			return err
@@ -164,7 +204,7 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 		}
 		changed[i].ModifyTime = now
 	}
-	upsert := r.db.WithContext(ctx).Clauses(clause.OnConflict{
+	upsert := db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_instance_id"}},
 		DoUpdates: clause.Assignments(map[string]any{
 			"c_task_id":     clause.Expr{SQL: "excluded.c_task_id"},

@@ -106,6 +106,19 @@ func TestTaskInstanceRepositoryTracksSCFAssignmentAndStorageWrite(t *testing.T) 
 	assert.Zero(t, updated)
 }
 
+func TestTaskInstanceUpsertSkipsParentTaskDisabledDuringDelete(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, s.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task-disabled", TaskName: "Disabled", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: false, CollectParams: `{}`}))
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+		SpaceID: "crypto", TaskID: "instance-disabled", CollectionTaskID: "task-disabled", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", CreateTime: now,
+	}}))
+	_, total, err := s.TaskInstances().List(ctx, TaskInstanceFilter{SpaceID: "crypto", CollectionTaskID: "task-disabled"})
+	require.NoError(t, err)
+	require.Zero(t, total)
+}
+
 func TestTaskInstanceRepositoryMatchesCanonicalStorageFrequency(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()

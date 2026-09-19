@@ -36,6 +36,18 @@ func resultNotFound() *storagepb.RetInfo {
 	return &storagepb.RetInfo{Code: storagepb.ErrorCode_NOT_FOUND}
 }
 
+func TestResultDeleteAcceptedIsIdempotent(t *testing.T) {
+	for _, code := range []storagepb.ErrorCode{
+		storagepb.ErrorCode_SUCCESS,
+		storagepb.ErrorCode_DATASET_NOT_FOUND,
+		storagepb.ErrorCode_VIEW_NOT_FOUND,
+		storagepb.ErrorCode_NOT_FOUND,
+	} {
+		require.True(t, resultDeleteAccepted(&storagepb.RetInfo{Code: code}), "code=%s", code)
+	}
+	require.False(t, resultDeleteAccepted(&storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR}))
+}
+
 func (f *resultMetadataFake) GetDataset(_ context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
 	dataset := f.datasets[req.GetDatasetId()]
 	if dataset == nil {

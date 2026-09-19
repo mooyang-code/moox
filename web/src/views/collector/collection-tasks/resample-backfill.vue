@@ -10,11 +10,12 @@
   >
     <template #title>K 线重采样历史回填</template>
     <a-alert v-if="activeBackfill" type="info" :show-icon="true" :closable="false">
-      规则正在回填：{{ activeBackfill.requestId }}，已登记 {{ activeBackfill.participants }} 个标的。
-      下一桶：{{ activeBackfill.nextBucket || "等待调度" }}
+      采集任务正在回填：{{ activeBackfill.requestId }}，已登记 {{ activeBackfill.participants }} 个标的。 下一桶：{{
+        activeBackfill.nextBucket || "等待调度"
+      }}
     </a-alert>
     <a-form layout="vertical" :model="form">
-      <a-form-item label="规则">
+      <a-form-item label="采集任务">
         <a-input :model-value="ruleId" disabled />
       </a-form-item>
       <a-form-item label="目标周期">
@@ -105,7 +106,7 @@ function close() {
 async function start() {
   errorMessage.value = "";
   if (!props.spaceId || !props.ruleId || !form.start || !form.end) {
-    errorMessage.value = "空间、规则和 UTC 时间范围不能为空";
+    errorMessage.value = "空间、采集任务和 UTC 时间范围不能为空";
     return;
   }
   if (!bucketCount.value) {
@@ -152,4 +153,3 @@ async function cancel() {
   margin-top: 12px;
 }
 </style>
-

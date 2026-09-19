@@ -32,7 +32,7 @@ type Config struct {
 
 // StockCNConfig carries the release-time capacity contract to the Collector
 // reconciler. It is rendered from moox.toml; zero values fail closed when a
-// stockcn rule is selected rather than silently choosing a default fleet.
+// stockcn collection task is selected rather than silently choosing a default fleet.
 type StockCNConfig struct {
 	ExpectedTimerFunctionCount int `yaml:"expected_timer_function_count"`
 	MeasuredSafeGroupSize      int `yaml:"measured_safe_group_size"`

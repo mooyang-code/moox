@@ -90,16 +90,16 @@ func (r *CollectionTaskRepository) ListEnabledAll(ctx context.Context, limit int
 }
 
 // GetByTaskID returns a task by its business id within a space.
-func (r *CollectionTaskRepository) GetByTaskID(ctx context.Context, spaceID string, ruleID string) (*domain.CollectionTask, error) {
-	var rule domain.CollectionTask
-	q := r.db.WithContext(ctx).Where("c_task_id = ?", ruleID)
+func (r *CollectionTaskRepository) GetByTaskID(ctx context.Context, spaceID string, taskID string) (*domain.CollectionTask, error) {
+	var task domain.CollectionTask
+	q := r.db.WithContext(ctx).Where("c_task_id = ?", taskID)
 	if strings.TrimSpace(spaceID) != "" {
 		q = q.Where("c_space_id = ?", strings.TrimSpace(spaceID))
 	}
-	if err := q.First(&rule).Error; err != nil {
+	if err := q.First(&task).Error; err != nil {
 		return nil, err
 	}
-	return &rule, nil
+	return &task, nil
 }
 
 // Create inserts a new collection task.
@@ -151,7 +151,7 @@ func (r *CollectionTaskRepository) SetPrepareState(ctx context.Context, spaceID,
 		return fmt.Errorf("space_id and task_id are required")
 	}
 	if !state.Valid() {
-		return fmt.Errorf("invalid task rule prepare state: %s", state)
+		return fmt.Errorf("invalid collection task prepare state: %s", state)
 	}
 	result := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
 		Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ?", strings.TrimSpace(spaceID), strings.TrimSpace(ruleID), "kline_resample").

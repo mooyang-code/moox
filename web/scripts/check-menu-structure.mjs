@@ -7,6 +7,14 @@ const root = path.resolve(scriptDir, "..");
 const staticMenu = fs.readFileSync(path.join(root, "src/api/modules/system/static-menu.ts"), "utf8");
 const routes = fs.readFileSync(path.join(root, "src/router/route.ts"), "utf8");
 const zhCN = fs.readFileSync(path.join(root, "src/lang/modules/zhCN.ts"), "utf8");
+const collectorTaskWorkbench = fs.readFileSync(path.join(root, "src/views/collector/task-management/index.vue"), "utf8");
+const collectorTaskUI = [
+  collectorTaskWorkbench,
+  fs.readFileSync(path.join(root, "src/views/collector/collection-tasks/collection-tasks.vue"), "utf8"),
+  fs.readFileSync(path.join(root, "src/views/collector/collection-tasks/resample-backfill.vue"), "utf8"),
+  fs.readFileSync(path.join(root, "src/views/collector/task-instances/task-instances.vue"), "utf8"),
+  fs.readFileSync(path.join(root, "src/views/home/home.vue"), "utf8")
+].join("\n");
 
 function assert(condition, message) {
   if (!condition) {
@@ -123,10 +131,28 @@ const collectorTasks = findMenu("collector-tasks");
 assert(collectorTasks.parentId === dataCollection.id, "collector-tasks must be under data collection");
 assert(collectorTasks.path === "/collector/tasks", "collector-tasks path must be canonical");
 assert(dataFields.sort < collectorTasks.sort, "base fields must appear before collection tasks");
+assert(routes.includes('path: "/collector/tasks"'), "collector tasks route must exist");
+const collectorTabOrder = ["采集任务", "任务实例", "执行器", "采集结果"].map(label =>
+  collectorTaskWorkbench.indexOf(`label: "${label}"`)
+);
+assert(
+  collectorTabOrder.every(position => position >= 0),
+  "collector task workbench must expose all four tabs"
+);
+assert(
+  collectorTabOrder.every((position, index) => index === 0 || position > collectorTabOrder[index - 1]),
+  "collector task tabs must stay ordered"
+);
 assert(!staticMenu.includes("collector-data-management"), "collector-data-management must not be visible");
 assert(!staticMenu.includes("collector-rules"), "collector-rules must not be visible");
 assert(!staticMenu.includes('menu("0304"'), "task instances must not remain a separate visible menu");
 assert(!staticMenu.includes('menu("0302"'), "code packages must not remain a separate visible menu");
+for (const hiddenLabel of ["数据集管理", "集合定义", "基础数据集"]) {
+  assert(!collectorTaskUI.includes(hiddenLabel), `collector task UI must not expose ${hiddenLabel}`);
+}
+for (const hiddenLabel of ["规则正在回填", "按规则展开任务", "数据集"]) {
+  assert(!collectorTaskUI.includes(hiddenLabel), `collector task UI must not expose ${hiddenLabel}`);
+}
 
 const factorDefinitions = findMenu("factor-definitions");
 const factorDatasets = findMenu("factor-datasets");

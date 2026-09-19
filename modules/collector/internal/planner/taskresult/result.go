@@ -543,7 +543,18 @@ func resultDeleteAccepted(info *storagepb.RetInfo) bool {
 	if info == nil {
 		return false
 	}
-	return info.GetCode() == storagepb.ErrorCode_SUCCESS
+	// Physical deletion is intentionally idempotent. A retry after the
+	// previous request committed may observe an already removed result; that
+	// state is equivalent to success for the task deletion workflow.
+	switch info.GetCode() {
+	case storagepb.ErrorCode_SUCCESS,
+		storagepb.ErrorCode_DATASET_NOT_FOUND,
+		storagepb.ErrorCode_VIEW_NOT_FOUND,
+		storagepb.ErrorCode_NOT_FOUND:
+		return true
+	default:
+		return false
+	}
 }
 
 // DeleteForTask verifies Collector ownership before deleting metadata. The

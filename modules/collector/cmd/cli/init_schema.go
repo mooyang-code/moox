@@ -43,7 +43,7 @@ func runInitCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 	dbPath := defaultInitDBPath
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
 	seedFile := ""
-	fs.StringVar(&seedFile, "seed-file", seedFile, "built-in Collector rule seed YAML")
+	fs.StringVar(&seedFile, "seed-file", seedFile, "built-in Collector task seed YAML")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func seedRules(dbPath string, seedFile string) (ruleseed.SeedSummary, error) {
 	}
 	db, err := store.Open(&store.Options{Path: dbPath})
 	if err != nil {
-		return ruleseed.SeedSummary{}, fmt.Errorf("open database for rule seed: %w", err)
+		return ruleseed.SeedSummary{}, fmt.Errorf("open database for task seed: %w", err)
 	}
 	defer db.Close()
 	summary, err := ruleseed.SeedMissing(context.Background(), db.Tasks(), rules)

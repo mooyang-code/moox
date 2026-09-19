@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/schema"
+	"github.com/stretchr/testify/require"
 )
 
 func TestInitializeDoesNotCreateSchema(t *testing.T) {
@@ -80,6 +81,18 @@ func TestApplySchemaRejectsLegacyRuleTable(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "t_collector_task_rules") {
 		t.Fatalf("ApplySchema() error = %v, want legacy table diagnostic", err)
 	}
+}
+
+func TestApplySchemaRejectsIncompleteCurrentTaskSchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "collector.db")
+	mgr, err := Open(&Options{Path: dbPath})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.db.Exec(`CREATE TABLE t_collector_tasks (c_id INTEGER PRIMARY KEY, c_task_id TEXT NOT NULL)`).Error)
+	err = mgr.ApplySchema(schema.AllSQL())
+	require.Error(t, err)
+	require.ErrorContains(t, err, "collector schema reset required")
+	require.ErrorContains(t, err, "c_task_name missing")
 }
 
 func TestDeleteTaskRuntimeRemovesEmptyReadinessParents(t *testing.T) {

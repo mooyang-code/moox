@@ -42,7 +42,7 @@ type CollectionTask struct {
 	ModifyTime        time.Time                  `gorm:"column:c_mtime"`
 }
 
-// TableName returns the Collector task rule table.
+// TableName returns the Collector collection-task table.
 func (r *CollectionTask) TableName() string {
 	return "t_collector_tasks"
 }

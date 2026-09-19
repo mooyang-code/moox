@@ -112,7 +112,7 @@
         <a-descriptions-item label="市场类型">{{ detailData.MarketType || "-" }}</a-descriptions-item>
         <a-descriptions-item label="数据类型">{{ detailData.DataType || "-" }}</a-descriptions-item>
         <a-descriptions-item label="周期">{{ detailData.Frequency || "-" }}</a-descriptions-item>
-        <a-descriptions-item label="数据集">{{ detailData.DatasetID || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="结果对象">{{ detailData.DatasetID ? "已关联" : "-" }}</a-descriptions-item>
         <a-descriptions-item label="标的ID">{{ detailData.SubjectID || "-" }}</a-descriptions-item>
         <a-descriptions-item label="写入源">{{ detailData.FunctionName || "未分配" }}</a-descriptions-item>
         <a-descriptions-item label="交易标的">

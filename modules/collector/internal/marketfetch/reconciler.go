@@ -895,7 +895,7 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 	for _, rule := range rules {
 		params, parseErr := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
 		if parseErr != nil {
-			// A malformed or temporarily unavailable rule must not prevent the
+			// A malformed or temporarily unavailable collection task must not prevent the
 			// other market/frequency groups from being reconciled. Scheduler.Tick
 			// already treats rules independently; keep the Timer control plane
 			// consistent with that behavior.

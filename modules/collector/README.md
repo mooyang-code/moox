@@ -78,7 +78,7 @@ SCF 包通过腾讯云 API 查询 `moox/moox-application` 资源并写入真实 
 ## 运行与配置
 
 - CollectMgr HTTP：`:11402`。
-- 管理台 Rule API：`/api/admin/collectmgr/{Method}`。
+- 管理台 Collection Task API：`/api/admin/collectmgr/{Method}`。
 - Collector 调 CloudNode：`GetNodeList(trigger_type=timer)`、受管 Runtime Config Batch；
   `InvokeFunction` 只供缺口补采、探针和人工 E2E；stockcn 全市场标的快照由独立的每日 Instrument Timer SCF 执行。
 - EventBus：`moox.event.market.fetch.batch.completed.v1.*` 仅供有界 Invoke Completion，实时 Timer 不依赖它。
