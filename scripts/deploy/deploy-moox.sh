@@ -2146,7 +2146,7 @@ init_collector_schema() {
 		cd "${ROOT}/collector"
 		"${ROOT}/bin/moox-collector-cli" init \
 			--db-path ../data/collector/moox_collector.db \
-			--seed-file ../config/setup/collector-rules.yaml \
+			--seed-file ../config/setup/collection-tasks.yaml \
 			>> "${ROOT}/logs/collector/stdout.log" 2>&1
 	)
 }

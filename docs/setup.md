@@ -20,7 +20,7 @@ HTTPS，并配置健康检查以维持 Caddy 运行和自动续期。公网 IP/D
 | `metadata.yaml` | `moox-cli setup init` | Admin 业务空间和 Storage 元数据 |
 | `dataset-health-policy.yaml` | Monitor | 实时 Dataset 健康策略 |
 | `service-deployments.yaml` | Admin CLI | 默认服务部署清单 |
-| `collector-rules.yaml` | Collector CLI | 默认行情采集规则 |
+| `collection-tasks.yaml` | Collector CLI | 默认行情采集任务 |
 
 `setup init` 只读取固定文件名 `metadata.yaml`，不会扫描或合并目录中的其他 YAML；
 其他模块各自读取对应的职责专属文件。

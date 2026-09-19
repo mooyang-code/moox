@@ -25,7 +25,7 @@ for contract in \
   }
 done
 grep -q 'config/setup/dataset-health-policy.yaml' "${ROOT}/scripts/deploy/deploy-moox.sh"
-grep -q 'config/setup/collector-rules.yaml' "${ROOT}/scripts/deploy/deploy-moox.sh"
+grep -q 'config/setup/collection-tasks.yaml' "${ROOT}/scripts/deploy/deploy-moox.sh"
 
 unfrozen="--no-""frozen-lockfile"
 floating_statik="statik@""latest"
@@ -96,7 +96,7 @@ for path in \
   'config/setup/metadata.yaml' \
   'config/setup/dataset-health-policy.yaml' \
   'config/setup/service-deployments.yaml' \
-  'config/setup/collector-rules.yaml'; do
+  'config/setup/collection-tasks.yaml'; do
   test -f "${release}/${path}" || {
     echo "release is missing default setup file: ${path}" >&2
     exit 1
