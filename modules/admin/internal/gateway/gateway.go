@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -236,6 +237,12 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		writeRequestBodyError(w, err)
 		return
 	}
+	if isSpaceScopedService(serviceID) {
+		if err := validateSpaceScopedBody(r.Header.Get("X-Space-Id"), body); err != nil {
+			writeForwardError(ctx, w, err, nil)
+			return
+		}
+	}
 	if storageFacade {
 		body, err = storageBFFBody(serviceID, body)
 		if err != nil {
@@ -304,11 +311,49 @@ func isTradeOwnerOnlyMethod(serviceID, method string) bool {
 
 func isSpaceScopedService(serviceID string) bool {
 	switch canonicalAdminSegment(serviceID) {
-	case "tradeconsole", "strategy", "strategymgr", "mooxstrategy":
+	case "tradeconsole", "strategy", "strategymgr", "mooxstrategy", "collectmgr", "collector":
 		return true
 	default:
 		return false
 	}
+}
+
+// validateSpaceScopedBody prevents a caller from authenticating one space in
+// the header while placing another space in a nested protobuf-JSON request.
+// Collector requests use both top-level and nested space_id fields.
+func validateSpaceScopedBody(header string, body []byte) error {
+	header = strings.TrimSpace(header)
+	if header == "" || len(strings.TrimSpace(string(body))) == 0 {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(body, &value); err != nil {
+		return fmt.Errorf("invalid space-scoped request body: %w", err)
+	}
+	var walk func(any) error
+	walk = func(item any) error {
+		switch node := item.(type) {
+		case map[string]any:
+			for key, child := range node {
+				if strings.EqualFold(key, "space_id") || strings.EqualFold(key, "spaceId") {
+					if value, ok := child.(string); ok && strings.TrimSpace(value) != "" && strings.TrimSpace(value) != header {
+						return fmt.Errorf("space_id %q does not match X-Space-Id %q", value, header)
+					}
+				}
+				if err := walk(child); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for _, child := range node {
+				if err := walk(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return walk(value)
 }
 
 func (hr *HTTPRouter) authorizeSpaceRequest(ctx context.Context, r *http.Request, method string) error {

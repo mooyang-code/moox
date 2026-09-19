@@ -1,5 +1,5 @@
 export type CollectorRuleInput = {
-  dataType: "kline" | "symbol" | "kline_resample";
+  dataType: "kline" | "instrument" | "kline_resample";
   exchange: string;
   market: "spot" | "swap";
   datasetId: string;
@@ -96,7 +96,7 @@ export function buildCollectorRuleParams(input: CollectorRuleInput): Record<stri
     throw new Error("请输入采集频率");
   }
 
-  if (input.dataType === "symbol") {
+  if (input.dataType === "instrument") {
     return {
       provider: exchange,
       market_type: input.market,

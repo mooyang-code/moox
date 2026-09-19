@@ -20,7 +20,7 @@ Collector RPC 使用 `GetTaskList`、`GetTaskDetail`、`CreateTask`、`UpdateTas
 - `c_result_dataset_id`：Collector 内部写入目标。
 - `c_result_view_id`：结果页默认浏览 View。
 
-`c_result_ownership` 已移除。结果是否物理删除只属于一次删除操作的用户选择，不再作为任务的持久状态。
+结果是否物理删除只属于一次删除操作的用户选择，不作为任务的持久状态。
 
 执行实例使用 `c_task_id` 表示父任务，使用 `c_instance_id` 表示单个执行实例，避免两个含义不同的 Task ID 混用。Storage 内部仍使用 `dataset_id`、`t_datasets` 和 Metadata RPC，这是模块边界内的技术字段。
 

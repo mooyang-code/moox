@@ -91,10 +91,10 @@ func StableTaskID(spaceID string, taskID string, spec TaskSpec) string {
 
 // StableResampleTaskID includes the selected source series because a target
 // subject can otherwise be backed by multiple venue streams.
-func StableResampleTaskID(spaceID string, ruleID string, spec TaskSpec, sourceSeriesTag string) string {
+func StableResampleTaskID(spaceID string, taskID string, spec TaskSpec, sourceSeriesTag string) string {
 	parts := []string{
 		spaceID,
-		ruleID,
+		taskID,
 		spec.Provider,
 		spec.MarketType,
 		spec.DataType,

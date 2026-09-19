@@ -161,7 +161,7 @@
           </a-radio-group>
         </a-form-item>
 
-        <a-form-item v-if="addForm.data_type === 'kline_resample'" label="源 K 线数据集" required>
+        <a-form-item v-if="addForm.data_type === 'kline_resample'" label="源 K 线结果" required>
           <a-select
             v-model="datasetIdValue"
             placeholder="请选择已激活的数据来源"
@@ -170,7 +170,7 @@
             :disabled="title === '修改采集任务'"
           >
             <a-option v-for="dataset in availableDatasets" :key="dataset.dataset_id" :value="dataset.dataset_id">
-              {{ dataset.name || dataset.dataset_id }} ({{ dataset.dataset_id }})
+              {{ dataset.name || "源 K 线结果" }}
             </a-option>
           </a-select>
         </a-form-item>
@@ -215,7 +215,7 @@
             :disabled="title === '修改采集任务'"
           >
             <a-option v-for="dataset in availableSymbolDatasets" :key="dataset.dataset_id" :value="dataset.dataset_id">
-              {{ dataset.name || dataset.dataset_id }} ({{ dataset.dataset_id }})
+              {{ dataset.name || "标的来源" }}
             </a-option>
           </a-select>
         </a-form-item>
@@ -449,7 +449,7 @@ const availableDatasets = computed(() => {
 const availableSymbolDatasets = computed(() => {
   if (!addForm.value.data_source) return [];
   return activeDatasets.value.filter(dataset =>
-    datasetMatchesCollector(dataset, addForm.value.data_source, "symbol", marketValue.value)
+    datasetMatchesCollector(dataset, addForm.value.data_source, "instrument", marketValue.value)
   );
 });
 
@@ -546,7 +546,7 @@ const formatJSON = (value: any) => JSON.stringify(normalizeObject(value), null, 
 const resampleSummary = (record: TaskConfig) => {
   if (record.data_type !== "kline_resample") return "";
   const params = normalizeObject(record.collect_params);
-  return `${String(params.source_dataset_id || "-")} ${String(params.source_frequency || "-")} -> ${String(params.target_dataset_id || "-")} ${String(params.target_frequency || "-")}`;
+  return `源 ${String(params.source_frequency || "-")} → 目标 ${String(params.target_frequency || "-")}`;
 };
 
 // 格式化时间为本地时间格式
@@ -706,7 +706,7 @@ const parseStrictRuleParams = (raw: string): CollectorRuleInput => {
   if (!isRecord(params)) {
     throw new Error("规则参数不是当前支持的结构");
   }
-  const dataType = params.source_dataset_id ? "kline_resample" : String(params.symbol_source) === "exchange" ? "symbol" : "kline";
+  const dataType = params.source_dataset_id ? "kline_resample" : String(params.symbol_source) === "exchange" ? "instrument" : "kline";
   const exchange = String(params.provider || "").trim();
   const market = params.market_type;
   const sourceDatasetId = String(params.source_dataset_id || "").trim();
@@ -730,7 +730,7 @@ const parseStrictRuleParams = (raw: string): CollectorRuleInput => {
       settleDelayMS
     };
   }
-  if (dataType !== "kline" && dataType !== "symbol") {
+  if (dataType !== "kline" && dataType !== "instrument") {
     throw new Error("规则数据类型无效");
   }
   if (!exchange || (market !== "spot" && market !== "swap") || !scheduleInterval) {
@@ -828,7 +828,7 @@ const handleOk = async (): Promise<boolean> => {
 
     if (
       addForm.value.data_type !== "kline" &&
-      addForm.value.data_type !== "symbol" &&
+      addForm.value.data_type !== "instrument" &&
       addForm.value.data_type !== "kline_resample"
     ) {
       Message.error("不支持的数据类型");

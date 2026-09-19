@@ -24,7 +24,7 @@ name as a Prometheus metric name.
 
 The expected realtime dataset registry is derived from business configuration:
 
-- Collector includes every enabled scheduled K-line rule and every configured
+- Collector includes every enabled scheduled K-line task and every configured
   frequency. The `live` execution hint does not change monitoring inventory;
   disabled, symbol, and record datasets are excluded.
 - Factor includes a target dataset and frequency only while both its binding
@@ -78,7 +78,7 @@ View identities:
 Monitor uses the active View output `data_time` for freshness. A one-period
 hole is tolerated by the configured stale window; Storage does not scan history
 or trigger backfill. Per-subject output metrics are persisted only for Views
-with an enabled K-line freshness rule; aggregate View/runtime metrics remain
+with an enabled K-line freshness task; aggregate View/runtime metrics remain
 available for operational diagnosis.
 
 The Storage and Collector reporters publish through their 30-second tRPC
@@ -99,7 +99,7 @@ either one automatically.
 
 ## K-line Resample Monitoring
 
-For a `kline_resample` rule, inspect the rule's target Dataset and the matching
+For a `kline_resample` task, inspect the task's target Dataset and the matching
 `TaskInstance` result JSON. The durable task state should move between
 `idle`, `running`, and (only while source data is temporarily unavailable)
 `waiting_source`; `last_success_bucket`, `realtime_next_bucket`, and

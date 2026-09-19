@@ -61,7 +61,7 @@ export async function cancelKlineResampleBackfill(
 
 export async function getKlineResampleBackfillStatus(
   spaceId: string,
-  ruleId: string,
+  taskId: string,
   requestId = ""
 ): Promise<ResampleBackfillSummary | null> {
   let response: {
@@ -82,7 +82,7 @@ export async function getKlineResampleBackfillStatus(
     response = await callControl<{ space_id: string; task_id: string; request_id?: string }, typeof response>(
       "collectmgr",
       "GetKlineResampleBackfill",
-      { space_id: spaceId, task_id: ruleId, request_id: requestId }
+      { space_id: spaceId, task_id: taskId, request_id: requestId }
     );
   } catch (error) {
     if (error instanceof Error && /backfill request not found/i.test(error.message)) return null;

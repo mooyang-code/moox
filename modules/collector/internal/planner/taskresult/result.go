@@ -146,6 +146,7 @@ type Config struct {
 	Description  string
 	DataSourceID string
 	Frequency    string
+	Frequencies  []string
 }
 
 func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketType string, cfg Config) (IDs, error) {
@@ -177,7 +178,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	if get.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || get.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := m.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: m.auth, Dataset: &storagepb.Dataset{
 			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: resultDataSourceID(cfg.DataSourceID), DataNodeId: cfg.DataNodeID,
-			Name: resultName(spaceID, taskID), Description: cfg.Description, DataKind: kind, Status: "draft", KeepDuration: keep, Freqs: nonEmptyFrequency(kind, cfg.Frequency), Attributes: attrs,
+			Name: resultName(spaceID, taskID), Description: cfg.Description, DataKind: kind, Status: "draft", KeepDuration: keep, Freqs: nonEmptyFrequency(kind, cfg.Frequency, cfg.Frequencies), Attributes: attrs,
 		}})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return IDs{}, metadataError("create result dataset", createErr, retInfoDataset(created))
@@ -188,50 +189,83 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	} else if !ownedByTask(get.GetDataset().GetAttributes(), taskID) {
 		return IDs{}, fmt.Errorf("result dataset %s is owned by another task", ids.DatasetID)
 	}
-	if createdDataset && m.cleaner != nil {
-		restored, restoreErr := m.cleaner.RestoreDatasetRows(ctx, &storagepb.PrimaryRestoreDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
-		if restoreErr != nil || restored == nil || restored.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-			return IDs{}, metadataError("restore result dataset rows", restoreErr, func() *storagepb.RetInfo {
-				if restored == nil {
-					return nil
-				}
-				return restored.GetRetInfo()
-			}())
+	cleanupCreated := func(original error) (IDs, error) {
+		if !createdDataset {
+			return IDs{}, original
 		}
+		if cleanupErr := m.cleanupCreatedDataset(ctx, spaceID, ids.DatasetID); cleanupErr != nil {
+			return IDs{}, fmt.Errorf("%w; cleanup newly-created result failed: %v", original, cleanupErr)
+		}
+		return IDs{}, original
 	}
 	if err := m.ensureColumns(ctx, spaceID, ids.DatasetID, ids.ViewID, kind); err != nil {
-		if createdDataset {
-			_, _ = m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
-		}
-		return IDs{}, err
+		return cleanupCreated(err)
 	}
 	check, err := m.metadata.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
-		return IDs{}, fmt.Errorf("check result dataset activation: %w", err)
+		return cleanupCreated(fmt.Errorf("check result dataset activation: %w", err))
 	}
 	if check.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || !check.GetReady() {
-		return IDs{}, metadataError("check result dataset activation", nil, check.GetRetInfo())
+		return cleanupCreated(metadataError("check result dataset activation", nil, check.GetRetInfo()))
 	}
 	get, err = m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
-		return IDs{}, err
+		return cleanupCreated(fmt.Errorf("get result dataset: %w", err))
 	}
 	if get.GetDataset() == nil {
-		return IDs{}, metadataError("get result dataset", nil, nil)
+		return cleanupCreated(metadataError("get result dataset", nil, nil))
 	}
 	if get.GetDataset().GetStatus() != "active" {
 		activated, activateErr := m.metadata.ActivateDataset(ctx, &storagepb.ActivateDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID, ExpectedRevision: get.GetDataset().GetRevision()})
 		if activateErr != nil || activated == nil || activated.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-			return IDs{}, metadataError("activate result dataset", activateErr, retInfoActivate(activated))
+			return cleanupCreated(metadataError("activate result dataset", activateErr, retInfoActivate(activated)))
 		}
 	}
-	if err := m.ensureView(ctx, spaceID, taskID, ids, kind, keep, cfg.Frequency); err != nil {
-		if createdDataset {
-			_, _ = m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+	// CreateDataset intentionally starts disabled. Restore must run only after
+	// activation because Primary resolves the DataNode from active metadata.
+	// For an existing result this also clears a prior physical-delete tombstone
+	// before the next collection batch is allowed to write.
+	if m.cleaner != nil {
+		restored, restoreErr := m.cleaner.RestoreDatasetRows(ctx, &storagepb.PrimaryRestoreDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+		if restoreErr != nil || restored == nil || restored.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			return cleanupCreated(metadataError("restore result dataset rows", restoreErr, func() *storagepb.RetInfo {
+				if restored == nil {
+					return nil
+				}
+				return restored.GetRetInfo()
+			}()))
 		}
-		return IDs{}, err
+	}
+	if err := m.ensureView(ctx, spaceID, taskID, ids, kind, keep, cfg.Frequency, cfg.Frequencies); err != nil {
+		return cleanupCreated(err)
 	}
 	return ids, nil
+}
+
+func (m *Manager) cleanupCreatedDataset(ctx context.Context, spaceID, datasetID string) error {
+	// A newly-created Dataset is disabled until the activation step. Remove its
+	// metadata first so compensation also works when activation never happened;
+	// the collector has not published any rows before Ensure returns.
+	dataset, err := m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err == nil && dataset != nil && (dataset.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS || dataset.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || dataset.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND) {
+		return nil
+	}
+	if m.cleaner != nil {
+		physical, err := m.cleaner.DeleteDatasetRows(ctx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: datasetID})
+		if err != nil || physical == nil || !resultDeleteAccepted(physical.GetRetInfo()) {
+			return metadataError("delete newly-created result dataset rows", err, func() *storagepb.RetInfo {
+				if physical == nil {
+					return nil
+				}
+				return physical.GetRetInfo()
+			}())
+		}
+	}
+	dataset, err = m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil || (dataset != nil && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
+		return metadataError("delete newly-created result dataset", err, retInfoDatasetDelete(dataset))
+	}
+	return nil
 }
 
 // EnsureWithCleanup provisions a raw result and returns a compensating action
@@ -307,7 +341,20 @@ func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID 
 		{"open", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"high", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"low", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"close", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"quote_volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"trade_num", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT},
 	}
 	if kind == storagepb.DataKind_DATA_KIND_RECORD {
-		fields = nil
+		fields = []struct {
+			name string
+			kind storagepb.FieldValueType
+		}{
+			{"symbol", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING}, {"external_symbol", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+			{"base_asset", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING}, {"quote_asset", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+			{"status", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING}, {"min_qty", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+			{"max_qty", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"tick_size", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+			{"lot_size", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"security_code", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+			{"provider_symbol", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING}, {"exchange", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+			{"instrument_name", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING}, {"instrument_status", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+			{"snapshot_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING}, {"source_provider", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+			{"fetched_at", storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME},
+		}
 	} else {
 		fields = append(fields,
 			struct {
@@ -399,7 +446,7 @@ func resultColumnDisplayName(name string) string {
 	return "结果字段"
 }
 
-func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids IDs, kind storagepb.DataKind, keep, frequency string) error {
+func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids IDs, kind storagepb.DataKind, keep, frequency string, frequencies []string) error {
 	get, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
 	if err != nil {
 		return fmt.Errorf("get result view: %w", err)
@@ -414,8 +461,12 @@ func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids ID
 			engine, grain = "bleve", []string{"subject_id", "version"}
 		}
 		filterJSON := ""
-		if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
+		resultFrequencies := normalizeFrequencies(frequencies, frequency)
+		if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES && len(resultFrequencies) > 0 {
 			encoded, _ := json.Marshal(map[string]string{"freq": strings.TrimSpace(frequency)})
+			if strings.TrimSpace(frequency) == "" {
+				encoded, _ = json.Marshal(map[string]string{"freq": resultFrequencies[0]})
+			}
 			filterJSON = string(encoded)
 		}
 		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultName(spaceID, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, FilterJson: filterJSON, KeepDuration: keep, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": taskID}}})
@@ -492,12 +543,7 @@ func resultDeleteAccepted(info *storagepb.RetInfo) bool {
 	if info == nil {
 		return false
 	}
-	switch info.GetCode() {
-	case storagepb.ErrorCode_SUCCESS, storagepb.ErrorCode_DATASET_NOT_FOUND, storagepb.ErrorCode_NOT_FOUND:
-		return true
-	default:
-		return false
-	}
+	return info.GetCode() == storagepb.ErrorCode_SUCCESS
 }
 
 // DeleteForTask verifies Collector ownership before deleting metadata. The
@@ -561,11 +607,37 @@ func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID stri
 	return nil
 }
 
-func nonEmptyFrequency(kind storagepb.DataKind, frequency string) []string {
-	if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES && strings.TrimSpace(frequency) != "" {
-		return []string{strings.TrimSpace(frequency)}
+func nonEmptyFrequency(kind storagepb.DataKind, frequency string, frequencies ...[]string) []string {
+	if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
+		if len(frequencies) > 0 {
+			return normalizeFrequencies(frequencies[0], frequency)
+		}
+		return normalizeFrequencies(nil, frequency)
 	}
 	return nil
+}
+
+func normalizeFrequencies(frequencies []string, fallback string) []string {
+	values := make([]string, 0, len(frequencies)+1)
+	for _, frequency := range frequencies {
+		frequency = strings.TrimSpace(frequency)
+		if frequency != "" && !containsString(values, frequency) {
+			values = append(values, frequency)
+		}
+	}
+	if len(values) == 0 && strings.TrimSpace(fallback) != "" {
+		values = append(values, strings.TrimSpace(fallback))
+	}
+	return values
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func firstNonEmpty(values ...string) string {

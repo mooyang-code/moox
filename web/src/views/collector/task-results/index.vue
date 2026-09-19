@@ -11,7 +11,7 @@
           <section v-if="activeTask" class="result-context">
             <div>
               <h3>{{ activeTask.task_name || activeTask.task_id }}</h3>
-              <span>{{ activeTask.result?.status === "active" ? "结果可用" : "结果准备中" }}</span>
+              <span>{{ resultStatusLabel(activeTask.result?.status) }}</span>
             </div>
             <a-tag :color="activeTask.enabled === false || activeTask.enabled === 'false' ? 'orange' : 'green'">
               {{ activeTask.enabled === false || activeTask.enabled === "false" ? "任务已停用" : "任务运行中" }}
@@ -36,6 +36,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { Message } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
 import { listCollectorTasks, type CollectorTask } from "@/api/collector";
@@ -48,23 +49,46 @@ const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const loading = ref(false);
 const tasks = ref<CollectorTask[]>([]);
 const activeTaskId = ref(String(route.query.resultTask || ""));
-const results = computed(() => tasks.value.filter(task => task.result?.view_id));
+// Keep tasks whose result View is still being prepared visible. The backend
+// owns the result identity before asynchronous resample preparation completes,
+// so hiding these tasks would make the preparation/error states unreachable.
+const results = computed(() => tasks.value);
 const activeTask = computed(() => results.value.find(task => task.task_id === activeTaskId.value) || results.value[0]);
+let loadSequence = 0;
 
 async function load() {
-  if (!selectedSpaceId.value) return;
+  const spaceId = selectedSpaceId.value;
+  const sequence = ++loadSequence;
+  if (!spaceId) {
+    tasks.value = [];
+    activeTaskId.value = "";
+    return;
+  }
   loading.value = true;
   try {
-    tasks.value = await listCollectorTasks(selectedSpaceId.value);
+    const nextTasks = await listCollectorTasks(spaceId);
+    if (sequence !== loadSequence || spaceId !== selectedSpaceId.value) return;
+    tasks.value = nextTasks;
     if (!results.value.some(task => task.task_id === activeTaskId.value)) activeTaskId.value = results.value[0]?.task_id || "";
+  } catch (error) {
+    if (sequence === loadSequence) {
+      tasks.value = [];
+      Message.error(error instanceof Error ? error.message : "加载采集结果失败");
+    }
   } finally {
-    loading.value = false;
+    if (sequence === loadSequence) loading.value = false;
   }
 }
 
 function onTaskChange(value: string | number) {
   activeTaskId.value = String(value);
   void router.replace({ path: "/collector/tasks", query: { tab: "results", resultTask: activeTaskId.value } });
+}
+
+function resultStatusLabel(status?: string) {
+  if (status === "active") return "结果可用";
+  if (status === "error") return "结果异常";
+  return "结果准备中";
 }
 
 watch(selectedSpaceId, load, { immediate: true });

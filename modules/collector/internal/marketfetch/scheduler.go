@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/mooyang-code/moox/packages/report"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -64,13 +66,13 @@ type Scheduler struct {
 	DNSCache              interface {
 		Snapshot() map[string]sources.DNSResolution
 	}
-	Now                  func() time.Time
-	mu                   sync.Mutex
-	lastTaskID string
-	lastCleanup          time.Time
-	planStates           map[string]scheduleState
-	ruleFingerprints     map[string]string
-	invokeSem            chan struct{}
+	Now              func() time.Time
+	mu               sync.Mutex
+	lastTaskID       string
+	lastCleanup      time.Time
+	planStates       map[string]scheduleState
+	ruleFingerprints map[string]string
+	invokeSem        chan struct{}
 }
 
 // fullInstrumentSnapshotShards keeps stockcn's large metadata registration
@@ -141,6 +143,25 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	if err != nil {
 		return fmt.Errorf("list enabled collection tasks: %w", err)
 	}
+	activeTaskIDs := make(map[string]struct{}, len(allRules))
+	for _, task := range allRules {
+		activeTaskIDs[task.TaskID] = struct{}{}
+	}
+	for key := range s.planStates {
+		if taskID, _, ok := strings.Cut(key, "\x00"); ok {
+			if _, exists := activeTaskIDs[taskID]; !exists {
+				delete(s.planStates, key)
+			}
+		}
+	}
+	for taskID := range s.ruleFingerprints {
+		if _, exists := activeTaskIDs[taskID]; !exists {
+			delete(s.ruleFingerprints, taskID)
+		}
+	}
+	if _, exists := activeTaskIDs[s.lastTaskID]; !exists {
+		s.lastTaskID = ""
+	}
 	// Local collector jobs (for example kline_resample) are driven by their
 	// own timer workers. The market-fetch scheduler only owns cloud-invoked
 	// collection tasks.
@@ -209,6 +230,13 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				ruleFingerprintParts = append(ruleFingerprintParts, item.TaskID+"\x00"+rule.CollectParams)
 			}
 			if s.Instances != nil {
+				enabled, enabledErr := s.taskEnabled(ctx, spaceID, rule.TaskID)
+				if enabledErr != nil {
+					return fmt.Errorf("check collection task before persisting instances: %w", enabledErr)
+				}
+				if !enabled {
+					continue
+				}
 				instances := make([]domain.TaskInstance, 0, len(items))
 				for _, item := range items {
 					taskID := collectionItemTaskID(spaceID, rule.TaskID, item, frequency)
@@ -520,6 +548,13 @@ func (s *Scheduler) dispatchPriorityCryptoMinute(ctx context.Context, spaceID st
 }
 
 func (s *Scheduler) planOne(ctx context.Context, rule domain.CollectionTask, req Request, node scfinvoker.Node, nodes []scfinvoker.Node) (bool, error) {
+	enabled, err := s.taskEnabled(ctx, req.SpaceID, rule.TaskID)
+	if err != nil {
+		return false, fmt.Errorf("check collection task before planning: %w", err)
+	}
+	if !enabled {
+		return false, nil
+	}
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return false, err
@@ -532,7 +567,7 @@ func (s *Scheduler) planOne(ctx context.Context, rule domain.CollectionTask, req
 		now = s.Now().UTC()
 	}
 	batch := &domain.BatchInvocation{SpaceID: req.SpaceID, BatchID: req.BatchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: req.ShardIndex, TaskID: rule.TaskID, DatasetID: req.DatasetID, Frequency: req.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: 1, RequestJSON: string(raw), PlannedCount: len(req.Items), PlannedAt: &now, DeadlineAt: timePtr(now.Add(batchCompletionDeadline(req.BatchKind)))}
-	created, err := s.Batches.CreatePlanned(ctx, batch)
+	created, err := s.Batches.CreatePlannedForEnabledTask(ctx, batch)
 	if err != nil {
 		return false, err
 	}
@@ -541,7 +576,7 @@ func (s *Scheduler) planOne(ctx context.Context, rule domain.CollectionTask, req
 	}
 	// Planning is the durable part of the timer tick. Invocation is bounded by
 	// a small semaphore so a slow control plane cannot block the next rule.
-	go s.dispatchPlanned(req, node, nodes)
+	go s.dispatchPlanned(req, rule.TaskID, node, nodes)
 	return true, nil
 }
 
@@ -557,7 +592,7 @@ func rotateRulesAfter(rules []domain.CollectionTask, lastTaskID string) []domain
 	return rules
 }
 
-func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []scfinvoker.Node) {
+func (s *Scheduler) dispatchPlanned(req Request, taskID string, node scfinvoker.Node, nodes []scfinvoker.Node) {
 	if s.invokeSem == nil {
 		s.invokeSem = make(chan struct{}, 20)
 	}
@@ -573,6 +608,10 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []s
 		return
 	}
 	for attempt, candidate := range invocationCandidates(node, nodes) {
+		enabled, err := s.taskEnabled(ctx, req.SpaceID, taskID)
+		if err != nil || !enabled {
+			return
+		}
 		event, err := marketFetchEvent(requestForNode(req, candidate), s.eventStorageTarget())
 		if err != nil {
 			log.WarnContextf(ctx, "build SCF market fetch failover event failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
@@ -598,6 +637,20 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []s
 		return
 	}
 	log.WarnContextf(ctx, "SCF market fetch invoke exhausted failover batch=%s original_node=%s", req.BatchID, node.NodeID)
+}
+
+func (s *Scheduler) taskEnabled(ctx context.Context, spaceID, taskID string) (bool, error) {
+	if s == nil || s.Rules == nil {
+		return false, errors.New("collection task repository is not initialized")
+	}
+	task, err := s.Rules.GetByTaskID(ctx, spaceID, taskID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return task != nil && task.Enabled, nil
 }
 
 // realtimeBatchSize makes one minute's work fan out to the current SCF fleet
@@ -716,6 +769,14 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		return err
 	}
 	for index, retry := range items {
+		enabled, enabledErr := s.taskEnabled(ctx, spaceID, retry.TaskID)
+		if enabledErr != nil {
+			return enabledErr
+		}
+		if !enabled {
+			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
+			continue
+		}
 		maxAttempts := s.MaxRetryAttempts
 		if maxAttempts <= 0 {
 			maxAttempts = envInt("MOOX_FETCH_MAX_RETRY_ATTEMPTS", 3)
@@ -745,7 +806,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 			continue
 		}
 		batch := &domain.BatchInvocation{SpaceID: spaceID, BatchID: batchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: index, TaskID: retry.TaskID, DatasetID: item.DatasetID, Frequency: item.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: retry.Attempt + 1, RequestJSON: string(raw), PlannedCount: 1, PlannedAt: &now, DeadlineAt: timePtr(now.Add(batchCompletionDeadline(req.BatchKind)))}
-		created, err := s.Batches.CreatePlanned(ctx, batch)
+		created, err := s.Batches.CreatePlannedForEnabledTask(ctx, batch)
 		if err != nil {
 			return err
 		}

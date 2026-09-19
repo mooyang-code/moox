@@ -165,10 +165,27 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		}}
 	}
 	if !stockCN && len(groups) == 0 {
-		// A transient/empty symbol catalog must not turn into a destructive
-		// zero-assignment patch. Keep the last known-good Timer fleet running and
-		// let the next reconciliation retry the catalog.
-		log.WarnContextf(ctx, "collector SCF timer reconciliation kept existing assignments space=%s: no usable kline groups", spaceID)
+		activeTasks, listErr := r.Rules.ListEnabled(ctx, spaceID)
+		if listErr != nil {
+			return r.fail(spaceID, "rules", fmt.Errorf("list enabled tasks before disabling timers: %w", listErr))
+		}
+		if len(activeTasks) > 0 {
+			// An enabled task with an empty/unavailable subject catalog is a
+			// transient data condition. Keep the last known-good Timer fleet so a
+			// catalog blip does not stop collection.
+			log.WarnContextf(ctx, "collector SCF timer reconciliation kept existing assignments space=%s: enabled tasks have no usable kline groups", spaceID)
+			return nil
+		}
+		// There is no longer a valid task-owned universe. Disable the existing
+		// Timer assignments so a deleted task cannot continue collecting while
+		// the next reconciliation waits for a fresh catalog.
+		if submitted, disableErr := r.disableBlacklistedTimers(ctx, spaceID, nodes); submitted || disableErr != nil {
+			return disableErr
+		}
+		if r.Instances != nil {
+			_ = r.Instances.ReplaceMarketFetchAssignments(ctx, spaceID, nil, nil)
+		}
+		log.InfoContextf(ctx, "collector SCF timer reconciliation disabled assignments space=%s: no usable kline groups", spaceID)
 		return nil
 	}
 	dns := map[string]sources.DNSResolution(nil)

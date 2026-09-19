@@ -194,9 +194,15 @@ storage:
           - space_id: moox_system
             dataset_ids: ["*"]
           - space_id: stockcn
+            dataset_ids: ["*"]
+          - space_id: stockcn
             dataset_ids: [dataset_stockcn_financial_statement_metric, dataset_stockcn_financial_summary, dataset_stockcn_bond_kline, dataset_stockcn_index_kline, dataset_stockcn_instruments, dataset_stockcn_equity_kline]
           - space_id: stockhk
+            dataset_ids: ["*"]
+          - space_id: stockhk
             dataset_ids: [dataset_stockhk_equity_kline]
+          - space_id: stockus
+            dataset_ids: ["*"]
           - space_id: stockus
             dataset_ids: [dataset_stockus_equity_kline]
         fetch_batch: 4

@@ -74,6 +74,41 @@ func (r *FetchBatchRepository) CreatePlanned(ctx context.Context, batch *domain.
 	return result.RowsAffected == 1, result.Error
 }
 
+// CreatePlannedForEnabledTask makes the task-enabled check and batch insert a
+// single SQLite transaction. DeleteTask disables the task before clearing
+// runtime rows, so a planner racing that operation cannot recreate a batch
+// after the delete has committed.
+func (r *FetchBatchRepository) CreatePlannedForEnabledTask(ctx context.Context, batch *domain.BatchInvocation) (bool, error) {
+	if batch == nil {
+		return false, gorm.ErrInvalidData
+	}
+	created := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var enabled bool
+		if err := tx.Raw("SELECT c_enabled FROM t_collector_tasks WHERE c_space_id = ? AND c_task_id = ?", strings.TrimSpace(batch.SpaceID), strings.TrimSpace(batch.TaskID)).Scan(&enabled).Error; err != nil {
+			return err
+		}
+		if !enabled {
+			return nil
+		}
+		now := time.Now().UTC()
+		if batch.PlannedAt == nil {
+			batch.PlannedAt = &now
+		}
+		if batch.CreateTime.IsZero() {
+			batch.CreateTime = now
+		}
+		batch.ModifyTime = now
+		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(batch)
+		if result.Error != nil {
+			return result.Error
+		}
+		created = result.RowsAffected == 1
+		return nil
+	})
+	return created, err
+}
+
 func (r *FetchBatchRepository) Get(ctx context.Context, spaceID, batchID string) (*domain.BatchInvocation, error) {
 	var batch domain.BatchInvocation
 	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_batch_id = ?", spaceID, batchID).First(&batch).Error; err != nil {

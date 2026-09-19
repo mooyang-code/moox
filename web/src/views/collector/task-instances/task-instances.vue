@@ -26,7 +26,7 @@
           :data="instanceList"
           :bordered="{ cell: true }"
           :loading="loading"
-          :scroll="{ x: 1350 }"
+          :scroll="{ x: 1650 }"
           :pagination="paginationConfig"
           @page-change="onPageChange"
           @page-size-change="onPageSizeChange"

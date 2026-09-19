@@ -46,6 +46,12 @@ func (s *Store) DeleteTaskRuntime(ctx context.Context, spaceID, taskID string) e
 				return err
 			}
 		}
+		// A readiness parent without items can otherwise be interpreted by the
+		// finalizer as an already-complete period. Runtime deletion must remove
+		// those empty snapshots before the task row is deleted.
+		if err := tx.Exec(`DELETE FROM t_period_readiness WHERE c_space_id = ? AND NOT EXISTS (SELECT 1 FROM t_period_readiness_items WHERE c_readiness_id = t_period_readiness.c_id)`, spaceID).Error; err != nil {
+			return err
+		}
 		return nil
 	})
 }
@@ -129,6 +135,9 @@ func (s *Store) ApplySchema(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return fmt.Errorf("collector schema sql is empty")
 	}
+	if err := s.rejectLegacySchema(); err != nil {
+		return err
+	}
 	// The schema is also applied to an existing Collector database during a
 	// rolling deploy. SQLite executes the schema as one batch, so add the new
 	// assignment column before the batch reaches its dependent index.
@@ -145,6 +154,25 @@ func (s *Store) ApplySchema(sql string) error {
 		return err
 	}
 	return s.db.Exec(sql).Error
+}
+
+// rejectLegacySchema deliberately fails closed for the pre-task model. There
+// is no safe in-place migration for a running Collector because the old rule
+// and instance identities have different meanings from the new task/instance
+// identities. Operators must use the documented purge/reset procedure before
+// starting this binary against an existing database.
+func (s *Store) rejectLegacySchema() error {
+	legacyTables := []string{"t_collector_task_rules"}
+	for _, table := range legacyTables {
+		var count int64
+		if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count).Error; err != nil {
+			return fmt.Errorf("inspect legacy collector table %s: %w", table, err)
+		}
+		if count > 0 {
+			return fmt.Errorf("legacy Collector table %s detected; run collector task purge/reset before starting the new task model", table)
+		}
+	}
+	return nil
 }
 
 func (s *Store) ensurePeriodReadinessCommittedPositionsColumn() error {

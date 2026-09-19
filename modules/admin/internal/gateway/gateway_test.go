@@ -158,10 +158,10 @@ func TestGatewayServiceScopeClassificationProtectsInternalTradeOwnerAndStrategyB
 	assert.True(t, isInternalTradeService("trade_owner"))
 	assert.True(t, isInternalTradeService("trade-owner"))
 	assert.False(t, isInternalTradeService("trade_console"))
-	for _, serviceID := range []string{"trade_console", "strategy", "strategymgr", "moox_strategy"} {
+	for _, serviceID := range []string{"trade_console", "strategy", "strategymgr", "moox_strategy", "collectmgr"} {
 		assert.True(t, isSpaceScopedService(serviceID), serviceID)
 	}
-	assert.False(t, isSpaceScopedService("collector"))
+	assert.True(t, isSpaceScopedService("collector"))
 }
 
 func TestTradeConsoleDoesNotExposeStrategyOwnershipFencingToBrowser(t *testing.T) {

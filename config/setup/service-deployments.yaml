@@ -78,7 +78,7 @@ services:
       health_kind: readiness
       monitor_enabled: true
       max_body_bytes: 33554432
-      gateway_methods: [CreateSpace, UpdateSpace, GetSpace, ListSpaces, CreateView, UpdateView, RequestViewRebuild, UpsertViewColumn, ListViewRebuildLogs, CreateDataSource, UpdateDataSource, GetDataSource, ListDataSources, UpsertSubject, UpsertSubjectSymbol, RegisterDataSubject, ListSubjectSymbols, CreateDataset, UpdateDataset, BindDatasetSubject, StageDatasetSubjectSet, ActivateDatasetSubjectSet, CreateFieldGroup, UpdateFieldGroup, GetFieldGroup, ListFieldGroups, CreateField, UpdateField, GetField, ListFields, BatchUpdateFields, DeleteFieldGroup, CreateFactor, UpdateFactor, GetFactor, ListFactors, UpsertDatasetColumn, ListDatasetColumns, GetDataNode, ListDataNodes, UpdateDataNode, DeleteDataNode, CheckDatasetActivation, ActivateDataset, RebindDatasetDataNode, RegisterArchiveFile, ListArchiveFiles]
+      gateway_methods: [CreateSpace, UpdateSpace, GetSpace, ListSpaces, CreateView, UpdateView, DeleteView, RequestViewRebuild, UpsertViewColumn, ListViewRebuildLogs, CreateDataSource, UpdateDataSource, GetDataSource, ListDataSources, UpsertSubject, UpsertSubjectSymbol, RegisterDataSubject, ListSubjectSymbols, CreateDataset, UpdateDataset, DeleteDataset, BindDatasetSubject, StageDatasetSubjectSet, ActivateDatasetSubjectSet, CreateFieldGroup, UpdateFieldGroup, GetFieldGroup, ListFieldGroups, CreateField, UpdateField, GetField, ListFields, BatchUpdateFields, DeleteFieldGroup, CreateFactor, UpdateFactor, GetFactor, ListFactors, UpsertDatasetColumn, ListDatasetColumns, GetDataNode, ListDataNodes, UpdateDataNode, DeleteDataNode, CheckDatasetActivation, ActivateDataset, RebindDatasetDataNode, RegisterArchiveFile, ListArchiveFiles]
       gateway_callers: [admin-gateway, collector, factor, monitor, archive, moox-cli, storage-view]
       gateway_routes:
         - service_path: trpc.moox.storage.Metadata
@@ -99,7 +99,7 @@ services:
         - service_path: trpc.moox.storage.PrimaryStore
           port: 20102
           max_body_bytes: 33554432
-          gateway_methods: [UpsertFields, ReadFields, ReadRecordRows, ReportCollectorPeriodCompleted, ReportMergePeriodCompleted, CommitInput, PatchFactor, AppendDatasetSyncPoint, WaitViewSyncPoint, ReportFactorPeriodComputed, GetFactorPeriodComputed]
+          gateway_methods: [UpsertFields, ReadFields, ReadRecordRows, DeleteDatasetRows, RestoreDatasetRows, ReportCollectorPeriodCompleted, ReportMergePeriodCompleted, CommitInput, PatchFactor, AppendDatasetSyncPoint, WaitViewSyncPoint, ReportFactorPeriodComputed, GetFactorPeriodComputed]
           gateway_callers: [admin-gateway, collector, factor, merge, monitor, archive, storage-view]
         - service_path: trpc.moox.storage.PrimaryStore
           port: 20102

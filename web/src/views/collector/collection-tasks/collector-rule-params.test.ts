@@ -71,7 +71,7 @@ describe("buildCollectorRuleParams", () => {
   it("builds a full exchange Symbol snapshot contract", () => {
     expect(
       buildCollectorRuleParams({
-        dataType: "symbol",
+        dataType: "instrument",
         exchange: "binance",
         market: "spot",
         datasetId: "dataset_binance_spot_symbols",
@@ -153,7 +153,7 @@ describe("datasetMatchesCollector", () => {
       true
     );
     expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: "DATA_KIND_RECORD" }, "binance", "kline")).toBe(false);
-    expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: 1 }, "binance", "symbol")).toBe(true);
+    expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: 1 }, "binance", "instrument")).toBe(true);
   });
 
   it("filters datasets by market type and requested frequency", () => {

@@ -196,6 +196,9 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.CollectionTaskRep
 		return fmt.Errorf("task result metadata dependencies are not configured")
 	}
 	for page := 1; ; page++ {
+		// Provision the result identity for disabled tasks too. A disabled task
+		// can be enabled later without requiring an operator-only metadata repair;
+		// the scheduler still considers only enabled tasks for execution.
 		tasks, total, err := repo.List(ctx, store.TaskFilter{Page: page, PageSize: store.MaxEnabledTasks})
 		if err != nil {
 			return fmt.Errorf("list collector tasks: %w", err)
@@ -260,6 +263,7 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.CollectionTaskRep
 				Description:  task.Description,
 				DataSourceID: task.Provider,
 				Frequency:    taskResultFrequency(*params),
+				Frequencies:  append([]string(nil), params.Collector.Intervals...),
 			})
 			if ensureErr != nil {
 				return fmt.Errorf("ensure task %s/%s result: %w", task.SpaceID, task.TaskID, ensureErr)

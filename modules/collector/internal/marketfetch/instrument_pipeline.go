@@ -725,12 +725,13 @@ func (p *InstrumentPipeline) persistSnapshot(ctx context.Context, snapshot marke
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(snapshot.Instruments))
 	present := make(map[string]marketdata.Instrument, len(snapshot.Instruments))
 	snapshot = canonicalizeCryptoSnapshot(spaceID, snapshot)
+	writeDatasetID := firstNonEmptyString(targetDatasetID, datasetID)
 	sort.Slice(snapshot.Instruments, func(i, j int) bool { return snapshot.Instruments[i].SubjectID < snapshot.Instruments[j].SubjectID })
 	for _, instrument := range snapshot.Instruments {
 		if strings.EqualFold(strings.TrimSpace(instrument.Status), "active") {
 			present[instrument.SubjectID] = instrument
 		}
-		rows = append(rows, instrumentRecordRow(spaceID, datasetID, snapshot, instrument))
+		rows = append(rows, instrumentRecordRow(spaceID, writeDatasetID, snapshot, instrument))
 	}
 	for start := 0; start < len(rows); start += instrumentStorageRowsPerBatch {
 		end := start + instrumentStorageRowsPerBatch
@@ -834,11 +835,12 @@ func (p *InstrumentPipeline) persistSnapshotShard(ctx context.Context, fullSnaps
 	present := make(map[string]marketdata.Instrument, len(snapshot.Instruments))
 	snapshot = canonicalizeCryptoSnapshot(spaceID, snapshot)
 	fullSnapshot = canonicalizeCryptoSnapshot(spaceID, fullSnapshot)
+	writeDatasetID := firstNonEmptyString(targetDatasetID, datasetID)
 	for _, instrument := range snapshot.Instruments {
 		if strings.EqualFold(strings.TrimSpace(instrument.Status), "active") {
 			present[instrument.SubjectID] = instrument
 		}
-		rows = append(rows, instrumentRecordRow(spaceID, datasetID, snapshot, instrument))
+		rows = append(rows, instrumentRecordRow(spaceID, writeDatasetID, snapshot, instrument))
 	}
 	for start := 0; start < len(rows); start += instrumentStorageRowsPerBatch {
 		end := start + instrumentStorageRowsPerBatch
