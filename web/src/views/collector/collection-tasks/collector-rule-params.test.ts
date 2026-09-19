@@ -4,7 +4,7 @@ import {
   buildCollectorRuleRequest,
   datasetMatchesCollector,
   normalizeCollectorRule
-} from "./collector-rule-params";
+} from "./collection-task-params";
 
 describe("buildCollectorRuleParams", () => {
   it("builds a kline resample contract from a source Dataset", () => {

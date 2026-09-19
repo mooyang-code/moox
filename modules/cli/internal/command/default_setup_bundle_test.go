@@ -172,7 +172,7 @@ func TestDefaultSetupBundleDefinesStockCNInstrumentsLikeSymbolDatasets(t *testin
 func TestDefaultSetupBundleUsesOnlyFixedFiles(t *testing.T) {
 	for _, name := range []string{
 		"metadata.yaml",
-		"collector-rules.yaml",
+		"collection-tasks.yaml",
 		"dataset-health-policy.yaml",
 		"service-deployments.yaml",
 	} {

@@ -1,5 +1,5 @@
 import { callControl } from "@/api/admin/http";
-import type { ResampleBackfillSummary } from "@/views/collector/collector-rules/resample-backfill";
+import type { ResampleBackfillSummary } from "@/views/collector/collection-tasks/resample-backfill";
 
 export interface KlineResampleBackfillRequest {
   space_id: string;

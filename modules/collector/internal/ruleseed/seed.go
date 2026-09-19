@@ -1,4 +1,4 @@
-// Package ruleseed loads and safely applies the built-in Collector rule bundle.
+// Package ruleseed loads and safely applies the built-in Collector task bundle.
 package ruleseed
 
 import (
@@ -16,11 +16,11 @@ import (
 	"gorm.io/gorm"
 )
 
-type ruleSeed struct {
-	Rules []ruleSeedItem `yaml:"rules"`
+type taskSeed struct {
+	Tasks []taskSeedItem `yaml:"tasks"`
 }
 
-type ruleSeedItem struct {
+type taskSeedItem struct {
 	SpaceID       string         `yaml:"space_id"`
 	TaskID        string         `yaml:"task_id"`
 	TaskName      string         `yaml:"task_name"`
@@ -33,18 +33,18 @@ type ruleSeedItem struct {
 	CollectParams map[string]any `yaml:"collect_params"`
 }
 
-// SeedSummary reports missing-only rule application results.
+// SeedSummary reports missing-only task application results.
 type SeedSummary struct {
 	Created   int
 	Unchanged int
 }
 
-// Load reads and validates a Collector rule bundle.
+// Load reads and validates a Collector task bundle.
 func Load(r io.Reader) ([]domain.CollectionTask, error) {
-	return loadRuleSeed(r)
+	return loadTaskSeed(r)
 }
 
-// LoadFile reads and validates a Collector rule bundle from disk.
+// LoadFile reads and validates a Collector task bundle from disk.
 func LoadFile(path string) ([]domain.CollectionTask, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, fmt.Errorf("seed file path is required")
@@ -57,45 +57,45 @@ func LoadFile(path string) ([]domain.CollectionTask, error) {
 	return Load(file)
 }
 
-func loadRuleSeed(r io.Reader) ([]domain.CollectionTask, error) {
+func loadTaskSeed(r io.Reader) ([]domain.CollectionTask, error) {
 	if r == nil {
 		return nil, fmt.Errorf("seed reader is required")
 	}
 	decoder := yaml.NewDecoder(r)
 	decoder.KnownFields(true)
-	var seed ruleSeed
+	var seed taskSeed
 	if err := decoder.Decode(&seed); err != nil {
-		return nil, fmt.Errorf("decode rule seed: %w", err)
+		return nil, fmt.Errorf("decode task seed: %w", err)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return nil, fmt.Errorf("decode rule seed: multiple YAML documents are not supported")
+			return nil, fmt.Errorf("decode task seed: multiple YAML documents are not supported")
 		}
-		return nil, fmt.Errorf("decode rule seed: %w", err)
+		return nil, fmt.Errorf("decode task seed: %w", err)
 	}
-	if len(seed.Rules) == 0 {
-		return nil, fmt.Errorf("rule seed must contain at least one rule")
+	if len(seed.Tasks) == 0 {
+		return nil, fmt.Errorf("task seed must contain at least one task")
 	}
 
-	rules := make([]domain.CollectionTask, 0, len(seed.Rules))
-	seen := make(map[string]struct{}, len(seed.Rules))
-	for index, item := range seed.Rules {
-		rule, err := validateRuleSeedItem(item)
+	tasks := make([]domain.CollectionTask, 0, len(seed.Tasks))
+	seen := make(map[string]struct{}, len(seed.Tasks))
+	for index, item := range seed.Tasks {
+		task, err := validateTaskSeedItem(item)
 		if err != nil {
-			return nil, fmt.Errorf("rules[%d]: %w", index, err)
+			return nil, fmt.Errorf("tasks[%d]: %w", index, err)
 		}
-		key := rule.SpaceID + "\x00" + rule.TaskID
+		key := task.SpaceID + "\x00" + task.TaskID
 		if _, exists := seen[key]; exists {
-			return nil, fmt.Errorf("rules[%d]: duplicate rule %s/%s", index, rule.SpaceID, rule.TaskID)
+			return nil, fmt.Errorf("tasks[%d]: duplicate task %s/%s", index, task.SpaceID, task.TaskID)
 		}
 		seen[key] = struct{}{}
-		rules = append(rules, rule)
+		tasks = append(tasks, task)
 	}
-	return rules, nil
+	return tasks, nil
 }
 
-func validateRuleSeedItem(item ruleSeedItem) (domain.CollectionTask, error) {
+func validateTaskSeedItem(item taskSeedItem) (domain.CollectionTask, error) {
 	spaceID := strings.TrimSpace(item.SpaceID)
 	ruleID := strings.TrimSpace(item.TaskID)
 	dataType := strings.ToLower(strings.TrimSpace(item.DataType))
@@ -119,7 +119,7 @@ func validateRuleSeedItem(item ruleSeedItem) (domain.CollectionTask, error) {
 		return domain.CollectionTask{}, fmt.Errorf("collect_params: %w", err)
 	}
 	if params.Provider != provider || params.MarketType != marketType || params.Collector.DataType != dataType {
-		return domain.CollectionTask{}, fmt.Errorf("collect_params provider, market_type and data_type must match rule fields")
+		return domain.CollectionTask{}, fmt.Errorf("collect_params provider, market_type and data_type must match task fields")
 	}
 	canonical, err := json.Marshal(params)
 	if err != nil {
@@ -143,7 +143,7 @@ func validateRuleSeedItem(item ruleSeedItem) (domain.CollectionTask, error) {
 // deliberately left untouched so a user disable or edit survives redeploy.
 func SeedMissing(ctx context.Context, repo *store.CollectionTaskRepository, rules []domain.CollectionTask) (SeedSummary, error) {
 	if repo == nil {
-		return SeedSummary{}, fmt.Errorf("task rule repository is required")
+		return SeedSummary{}, fmt.Errorf("task repository is required")
 	}
 	var summary SeedSummary
 	for _, rule := range rules {
@@ -153,11 +153,11 @@ func SeedMissing(ctx context.Context, repo *store.CollectionTaskRepository, rule
 			summary.Unchanged++
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			if err := repo.Create(ctx, rule); err != nil {
-				return summary, fmt.Errorf("create rule %s/%s: %w", rule.SpaceID, rule.TaskID, err)
+				return summary, fmt.Errorf("create task %s/%s: %w", rule.SpaceID, rule.TaskID, err)
 			}
 			summary.Created++
 		default:
-			return summary, fmt.Errorf("check rule %s/%s: %w", rule.SpaceID, rule.TaskID, err)
+			return summary, fmt.Errorf("check task %s/%s: %w", rule.SpaceID, rule.TaskID, err)
 		}
 	}
 	return summary, nil

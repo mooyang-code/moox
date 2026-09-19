@@ -37,7 +37,7 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	t.Cleanup(func() { _ = dbm.Close() })
 	require.NoError(t, dbm.ApplySchema(collectorschema.AllSQL()))
 
-	rules, err := ruleseed.LoadFile(filepath.Join("..", "..", "..", "config", "setup", "collector-rules.yaml"))
+	rules, err := ruleseed.LoadFile(filepath.Join("..", "..", "..", "config", "setup", "collection-tasks.yaml"))
 	require.NoError(t, err)
 	summary, err := ruleseed.SeedMissing(ctx, dbm.Tasks(), rules)
 	require.NoError(t, err)

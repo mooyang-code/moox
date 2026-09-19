@@ -17,7 +17,7 @@ import (
 
 const MaxEnabledTasks = 1000
 
-// TaskFilter describes rule list filters.
+// TaskFilter describes collection task list filters.
 type TaskFilter struct {
 	SpaceID    string
 	DataType   string
@@ -29,7 +29,7 @@ type TaskFilter struct {
 	PageSize   int
 }
 
-// CollectionTaskRepository persists collection rules.
+// CollectionTaskRepository persists collection tasks.
 type CollectionTaskRepository struct {
 	db *gorm.DB
 }
@@ -39,7 +39,7 @@ func NewCollectionTaskRepository(db *gorm.DB) *CollectionTaskRepository {
 	return &CollectionTaskRepository{db: db}
 }
 
-// List returns rules matching filters.
+// List returns tasks matching filters.
 func (r *CollectionTaskRepository) List(ctx context.Context, filter TaskFilter) ([]domain.CollectionTask, int64, error) {
 	q := r.applyFilter(r.db.WithContext(ctx).Model(&domain.CollectionTask{}), filter)
 	var total int64
@@ -54,7 +54,7 @@ func (r *CollectionTaskRepository) List(ctx context.Context, filter TaskFilter) 
 	return rules, total, nil
 }
 
-// ListEnabled returns enabled rules in one space.
+// ListEnabled returns enabled tasks in one space.
 func (r *CollectionTaskRepository) ListEnabled(ctx context.Context, spaceID string) ([]domain.CollectionTask, error) {
 	var rules []domain.CollectionTask
 	err := r.db.WithContext(ctx).
@@ -63,17 +63,17 @@ func (r *CollectionTaskRepository) ListEnabled(ctx context.Context, spaceID stri
 		Limit(MaxEnabledTasks + 1).
 		Find(&rules).Error
 	if err == nil && len(rules) > MaxEnabledTasks {
-		return nil, fmt.Errorf("enabled task rule count exceeds limit %d", MaxEnabledTasks)
+		return nil, fmt.Errorf("enabled task count exceeds limit %d", MaxEnabledTasks)
 	}
 	return rules, err
 }
 
-// ListEnabledAll returns the complete enabled rule inventory. It fails rather
+// ListEnabledAll returns the complete enabled task inventory. It fails rather
 // than returning a truncated snapshot because observability reconciliation must
 // never publish a partial expected set.
 func (r *CollectionTaskRepository) ListEnabledAll(ctx context.Context, limit int) ([]domain.CollectionTask, error) {
 	if limit <= 0 || limit > MaxEnabledTasks {
-		return nil, fmt.Errorf("enabled task rule limit must be between 1 and %d", MaxEnabledTasks)
+		return nil, fmt.Errorf("enabled task limit must be between 1 and %d", MaxEnabledTasks)
 	}
 	var rules []domain.CollectionTask
 	if err := r.db.WithContext(ctx).
@@ -84,12 +84,12 @@ func (r *CollectionTaskRepository) ListEnabledAll(ctx context.Context, limit int
 		return nil, err
 	}
 	if len(rules) > limit {
-		return nil, fmt.Errorf("enabled task rule count exceeds limit %d", limit)
+		return nil, fmt.Errorf("enabled task count exceeds limit %d", limit)
 	}
 	return rules, nil
 }
 
-// GetByTaskID returns a rule by its business id within a space.
+// GetByTaskID returns a task by its business id within a space.
 func (r *CollectionTaskRepository) GetByTaskID(ctx context.Context, spaceID string, ruleID string) (*domain.CollectionTask, error) {
 	var rule domain.CollectionTask
 	q := r.db.WithContext(ctx).Where("c_task_id = ?", ruleID)
@@ -102,7 +102,7 @@ func (r *CollectionTaskRepository) GetByTaskID(ctx context.Context, spaceID stri
 	return &rule, nil
 }
 
-// Create inserts a new collector rule.
+// Create inserts a new collection task.
 func (r *CollectionTaskRepository) Create(ctx context.Context, rule domain.CollectionTask) error {
 	now := time.Now().UTC()
 	if strings.TrimSpace(rule.TaskName) == "" {
@@ -122,17 +122,17 @@ func (r *CollectionTaskRepository) Create(ctx context.Context, rule domain.Colle
 // ListResampleByPrepareStates returns bounded preparation work in stable order.
 func (r *CollectionTaskRepository) ListResampleByPrepareStates(ctx context.Context, states []domain.CollectionTaskPrepareState, limit int) ([]domain.CollectionTask, error) {
 	if limit <= 0 || limit > MaxEnabledTasks {
-		return nil, fmt.Errorf("resample prepare rule limit must be between 1 and %d", MaxEnabledTasks)
+		return nil, fmt.Errorf("resample prepare task limit must be between 1 and %d", MaxEnabledTasks)
 	}
 	values := make([]string, 0, len(states))
 	for _, state := range states {
 		if !state.Valid() {
-			return nil, fmt.Errorf("invalid task rule prepare state: %s", state)
+			return nil, fmt.Errorf("invalid task prepare state: %s", state)
 		}
 		values = append(values, string(state))
 	}
 	if len(values) == 0 {
-		return nil, fmt.Errorf("at least one task rule prepare state is required")
+		return nil, fmt.Errorf("at least one task prepare state is required")
 	}
 	var rules []domain.CollectionTask
 	err := r.db.WithContext(ctx).
@@ -165,7 +165,7 @@ func (r *CollectionTaskRepository) SetPrepareState(ctx context.Context, spaceID,
 	return nil
 }
 
-// UpdateByTaskID updates an existing collector rule.
+// UpdateByTaskID updates an existing collection task.
 func (r *CollectionTaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, ruleID string, rule domain.CollectionTask) (*domain.CollectionTask, error) {
 	if strings.TrimSpace(rule.ResultDatasetID) == "" || strings.TrimSpace(rule.ResultViewID) == "" || strings.TrimSpace(rule.TaskName) == "" {
 		existing, err := r.GetByTaskID(ctx, spaceID, ruleID)
@@ -211,7 +211,7 @@ func (r *CollectionTaskRepository) UpdateByTaskID(ctx context.Context, spaceID s
 	return r.GetByTaskID(ctx, spaceID, ruleID)
 }
 
-// SetEnabled changes a rule enabled flag.
+// SetEnabled changes a task enabled flag.
 func (r *CollectionTaskRepository) SetEnabled(ctx context.Context, spaceID string, ruleID string, enabled bool) error {
 	updates := map[string]any{"c_enabled": enabled, "c_mtime": time.Now().UTC()}
 	if enabled {

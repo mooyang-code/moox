@@ -138,12 +138,6 @@ export const staticRoutes = [
         meta: { title: "collector-cloudnodes" }
       },
       {
-        path: "/collector/rules",
-        name: "collector-rules",
-        redirect: (to: RedirectLocation) => ({ path: "/collector/tasks", query: to.query }),
-        meta: { title: "collector-tasks" }
-      },
-      {
         path: "/collector/tasks",
         name: "collector-tasks",
         component: () => import("@/views/collector/task-management/index.vue"),

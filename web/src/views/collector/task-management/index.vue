@@ -16,7 +16,7 @@
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
-import CollectionRules from "@/views/collector/collector-rules/collector-rules.vue";
+import CollectionTasks from "@/views/collector/collection-tasks/collection-tasks.vue";
 import TaskInstances from "@/views/collector/task-instances/task-instances.vue";
 import CloudNode from "@/views/collector/cloud-node/cloud-node.vue";
 import TaskResults from "@/views/collector/task-results/index.vue";
@@ -37,7 +37,7 @@ const activeTab = ref<CollectorTaskTab>(normalizeTab(route.query.tab));
 const activeComponent = computed(
   () =>
     ({
-      tasks: CollectionRules,
+      tasks: CollectionTasks,
       instances: TaskInstances,
       executors: CloudNode,
       results: TaskResults

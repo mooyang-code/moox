@@ -1,5 +1,5 @@
-# Built-in Collector rules. This file contains no cloud credentials or node data.
-rules:
+# Built-in Collector tasks. This file contains no cloud credentials or node data.
+tasks:
 - space_id: crypto
   task_id: builtin-binance-spot-symbols-1h
   task_name: Binance 现货标的 1H

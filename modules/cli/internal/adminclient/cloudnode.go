@@ -137,17 +137,17 @@ type CollectionTaskSummary struct {
 	Enabled    bool   `json:"enabled"`
 }
 
-// CreateTask creates a disabled rule through the Collector control plane.
+// CreateTask creates a disabled task through the Collector control plane.
 // Callers should enable it only after their deployment-specific gates pass.
-func (c *Client) CreateTask(ctx context.Context, spaceID, ruleID, dataType, provider, marketType, creator string, collectParams map[string]any) error {
+func (c *Client) CreateTask(ctx context.Context, spaceID, taskID, dataType, provider, marketType, creator string, collectParams map[string]any) error {
 	var response struct {
 		RetInfo retInfo `json:"ret_info"`
 		TaskID  string  `json:"task_id"`
 	}
 	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/CreateTask", map[string]any{
-		"rule": map[string]any{
+		"task": map[string]any{
 			"space_id":       spaceID,
-			"task_id":        ruleID,
+			"task_id":        taskID,
 			"data_type":      dataType,
 			"provider":       provider,
 			"market_type":    marketType,
@@ -161,39 +161,39 @@ func (c *Client) CreateTask(ctx context.Context, spaceID, ruleID, dataType, prov
 	if !isRetInfoSuccess(response.RetInfo.Code) {
 		return fmt.Errorf("CreateTask rejected: %s", response.RetInfo.Msg)
 	}
-	if strings.TrimSpace(response.TaskID) != "" && response.TaskID != ruleID {
-		return fmt.Errorf("CreateTask returned task_id %q, expected %q", response.TaskID, ruleID)
+	if strings.TrimSpace(response.TaskID) != "" && response.TaskID != taskID {
+		return fmt.Errorf("CreateTask returned task_id %q, expected %q", response.TaskID, taskID)
 	}
 	return nil
 }
 
-// EnableCollectionTask preserves the server's canonical rule definition and only
+// EnableCollectionTask preserves the server's canonical task definition and only
 // changes its enabled state. This keeps coverage and dataset fields under the
 // control plane rather than reconstructing them in an operator command.
-func (c *Client) EnableCollectionTask(ctx context.Context, spaceID, ruleID string) error {
+func (c *Client) EnableCollectionTask(ctx context.Context, spaceID, taskID string) error {
 	var detail struct {
 		RetInfo retInfo        `json:"ret_info"`
-		Rule    map[string]any `json:"rule"`
+		Task    map[string]any `json:"task"`
 	}
 	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskDetail", map[string]any{
-		"space_id": spaceID, "task_id": ruleID,
+		"space_id": spaceID, "task_id": taskID,
 	}, &detail); err != nil {
 		return fmt.Errorf("GetTaskDetail: %w", err)
 	}
 	if !isRetInfoSuccess(detail.RetInfo.Code) {
 		return fmt.Errorf("GetTaskDetail rejected: %s", detail.RetInfo.Msg)
 	}
-	if len(detail.Rule) == 0 {
-		return fmt.Errorf("GetTaskDetail returned no rule")
+	if len(detail.Task) == 0 {
+		return fmt.Errorf("GetTaskDetail returned no task")
 	}
-	detail.Rule["space_id"] = spaceID
-	detail.Rule["task_id"] = ruleID
-	detail.Rule["enabled"] = true
+	detail.Task["space_id"] = spaceID
+	detail.Task["task_id"] = taskID
+	detail.Task["enabled"] = true
 	var updated struct {
 		RetInfo retInfo `json:"ret_info"`
 	}
 	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/UpdateTask", map[string]any{
-		"space_id": spaceID, "task_id": ruleID, "rule": detail.Rule,
+		"space_id": spaceID, "task_id": taskID, "task": detail.Task,
 	}, &updated); err != nil {
 		return fmt.Errorf("UpdateTask: %w", err)
 	}
@@ -203,15 +203,15 @@ func (c *Client) EnableCollectionTask(ctx context.Context, spaceID, ruleID strin
 	return nil
 }
 
-// DisableTask disables a rule without deleting its runtime history. It is
+// DisableTask disables a task without deleting its runtime history. It is
 // used to roll back an activation when the Timer assignment/readback gate
 // fails after rule enablement.
-func (c *Client) DisableTask(ctx context.Context, spaceID, ruleID string) error {
+func (c *Client) DisableTask(ctx context.Context, spaceID, taskID string) error {
 	var response struct {
 		RetInfo retInfo `json:"ret_info"`
 	}
 	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/DisableTask", map[string]any{
-		"space_id": spaceID, "task_id": ruleID,
+		"space_id": spaceID, "task_id": taskID,
 	}, &response); err != nil {
 		return fmt.Errorf("DisableTask: %w", err)
 	}
@@ -222,14 +222,14 @@ func (c *Client) DisableTask(ctx context.Context, spaceID, ruleID string) error 
 }
 
 // ListEnabledTasks is a narrow control-plane read used by fail-closed
-// publication gates. It pages explicitly so a stale enabled rule cannot be
+// publication gates. It pages explicitly so a stale enabled task cannot be
 // hidden behind the default page size.
 func (c *Client) ListEnabledTasks(ctx context.Context, spaceID, marketType string) ([]CollectionTaskSummary, error) {
 	var result []CollectionTaskSummary
 	for page := 1; page <= 100; page++ {
 		var response struct {
-			RetInfo retInfo           `json:"ret_info"`
-			Rules   []CollectionTaskSummary `json:"rules"`
+			RetInfo retInfo                 `json:"ret_info"`
+			Tasks   []CollectionTaskSummary `json:"tasks"`
 			Page    struct {
 				HasMore bool `json:"has_more"`
 			} `json:"page"`
@@ -243,7 +243,7 @@ func (c *Client) ListEnabledTasks(ctx context.Context, spaceID, marketType strin
 		if !isRetInfoSuccess(response.RetInfo.Code) {
 			return nil, fmt.Errorf("GetTaskList rejected: %s", response.RetInfo.Msg)
 		}
-		result = append(result, response.Rules...)
+		result = append(result, response.Tasks...)
 		if !response.Page.HasMore {
 			return result, nil
 		}

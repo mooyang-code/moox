@@ -195,44 +195,78 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.CollectionTaskRep
 	if repo == nil || manager == nil {
 		return fmt.Errorf("task result metadata dependencies are not configured")
 	}
-	tasks, _, err := repo.List(ctx, store.TaskFilter{Page: 1, PageSize: store.MaxEnabledTasks})
-	if err != nil {
-		return fmt.Errorf("list collector tasks: %w", err)
-	}
-	for _, task := range tasks {
-		params, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
-		if parseErr != nil {
-			return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, parseErr)
-		}
-		ids, ensureErr := manager.Ensure(ctx, task.SpaceID, task.TaskID, task.DataType, task.MarketType, collectorresult.Config{
-			DataNodeID:   dataNodeID,
-			Description:  task.Description,
-			DataSourceID: task.Provider,
-			Frequency:    taskResultFrequency(*params),
-		})
-		if ensureErr != nil {
-			return fmt.Errorf("ensure task %s/%s result: %w", task.SpaceID, task.TaskID, ensureErr)
-		}
-		needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != ids.ViewID
-		task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
-		rawParams := map[string]any{}
-		if err := json.Unmarshal([]byte(task.CollectParams), &rawParams); err != nil {
-			return fmt.Errorf("decode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
-		}
-		if rawParams["target_dataset_id"] != ids.DatasetID {
-			rawParams["target_dataset_id"] = ids.DatasetID
-			needsUpdate = true
-		}
-		if !needsUpdate {
-			continue
-		}
-		encoded, err := json.Marshal(rawParams)
+	for page := 1; ; page++ {
+		tasks, total, err := repo.List(ctx, store.TaskFilter{Page: page, PageSize: store.MaxEnabledTasks})
 		if err != nil {
-			return fmt.Errorf("encode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
+			return fmt.Errorf("list collector tasks: %w", err)
 		}
-		task.CollectParams = string(encoded)
-		if _, err := repo.UpdateByTaskID(ctx, task.SpaceID, task.TaskID, task); err != nil {
-			return fmt.Errorf("persist task %s/%s result: %w", task.SpaceID, task.TaskID, err)
+		for _, task := range tasks {
+			// Resample targets have a stricter immutable lineage contract and are
+			// provisioned by resample.Preparer after it has resolved the source
+			// Dataset. The generic result manager must not claim that Dataset as a
+			// raw collection result.
+			if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+				ids := collectorresult.ResultIDs(task.SpaceID, task.TaskID)
+				needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != collectorresample.DefaultTargetViewID(ids.DatasetID)
+				task.ResultDatasetID = ids.DatasetID
+				task.ResultViewID = collectorresample.DefaultTargetViewID(ids.DatasetID)
+				rawParams := map[string]any{}
+				if err := json.Unmarshal([]byte(task.CollectParams), &rawParams); err != nil {
+					return fmt.Errorf("decode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
+				}
+				if rawParams["target_dataset_id"] != ids.DatasetID {
+					rawParams["target_dataset_id"] = ids.DatasetID
+					needsUpdate = true
+				}
+				if needsUpdate {
+					encoded, err := json.Marshal(rawParams)
+					if err != nil {
+						return fmt.Errorf("encode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
+					}
+					task.CollectParams = string(encoded)
+					if _, err := repo.UpdateByTaskID(ctx, task.SpaceID, task.TaskID, task); err != nil {
+						return fmt.Errorf("persist task %s/%s result: %w", task.SpaceID, task.TaskID, err)
+					}
+				}
+				continue
+			}
+			params, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+			if parseErr != nil {
+				return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, parseErr)
+			}
+			ids, ensureErr := manager.Ensure(ctx, task.SpaceID, task.TaskID, task.DataType, task.MarketType, collectorresult.Config{
+				DataNodeID:   dataNodeID,
+				Description:  task.Description,
+				DataSourceID: task.Provider,
+				Frequency:    taskResultFrequency(*params),
+			})
+			if ensureErr != nil {
+				return fmt.Errorf("ensure task %s/%s result: %w", task.SpaceID, task.TaskID, ensureErr)
+			}
+			needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != ids.ViewID
+			task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
+			rawParams := map[string]any{}
+			if err := json.Unmarshal([]byte(task.CollectParams), &rawParams); err != nil {
+				return fmt.Errorf("decode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
+			}
+			if rawParams["target_dataset_id"] != ids.DatasetID {
+				rawParams["target_dataset_id"] = ids.DatasetID
+				needsUpdate = true
+			}
+			if !needsUpdate {
+				continue
+			}
+			encoded, err := json.Marshal(rawParams)
+			if err != nil {
+				return fmt.Errorf("encode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
+			}
+			task.CollectParams = string(encoded)
+			if _, err := repo.UpdateByTaskID(ctx, task.SpaceID, task.TaskID, task); err != nil {
+				return fmt.Errorf("persist task %s/%s result: %w", task.SpaceID, task.TaskID, err)
+			}
+		}
+		if int64(page*store.MaxEnabledTasks) >= total || len(tasks) == 0 {
+			break
 		}
 	}
 	return nil

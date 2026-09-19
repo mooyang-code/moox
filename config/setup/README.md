@@ -8,7 +8,7 @@
 | `metadata.yaml` | `moox-cli setup init` | Admin 业务 Space 与 Storage 元数据 |
 | `dataset-health-policy.yaml` | Monitor | 实时 Dataset 健康阈值 |
 | `service-deployments.yaml` | Admin 部署导入 | 默认服务和 RPC 端点 |
-| `collector-rules.yaml` | Collector | 默认采集规则 |
+| `collection-tasks.yaml` | Collector | 默认采集任务 |
 
 `metadata.yaml` 的业务 Space 包含 `stockcn`、`stockhk`、`stockus` 和 `crypto`。`mooxsys` 带
 `attributes.scope: internal`，只进入 Storage，不显示在管理台业务空间选择器中。

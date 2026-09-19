@@ -751,7 +751,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			for _, rule := range enabledRules {
 				ids = append(ids, rule.TaskID)
 			}
-			return collectorPublishSummary{}, fmt.Errorf("stockcn publish requires all equity collector rules disabled; enabled rules: %s", strings.Join(ids, ","))
+			return collectorPublishSummary{}, fmt.Errorf("stockcn publish requires all equity collection tasks disabled; enabled tasks: %s", strings.Join(ids, ","))
 		}
 	}
 	if err := disableCollectorBlacklistedTimers(ctx, client, fetcherConfig); err != nil {
@@ -1306,7 +1306,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	// rules still block activation to avoid changing another workflow.
 	for _, rule := range enabledRules {
 		if rule.TaskID != summary.TaskID {
-			return summary, fmt.Errorf("stockcn activation requires no unrelated equity collector rules enabled; enabled rule: %s", rule.TaskID)
+			return summary, fmt.Errorf("stockcn activation requires no unrelated equity collection tasks enabled; enabled task: %s", rule.TaskID)
 		}
 	}
 

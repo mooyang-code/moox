@@ -52,7 +52,7 @@ type BucketStorage struct {
 }
 
 // ProcessBucket performs one complete target bucket operation.
-func (s BucketStorage) ProcessBucket(ctx context.Context, spec RuleSpec, subjectID string, start, end time.Time) (Result, bool, error) {
+func (s BucketStorage) ProcessBucket(ctx context.Context, spec TaskSpec, subjectID string, start, end time.Time) (Result, bool, error) {
 	if s.Primary == nil {
 		return Result{}, false, fmt.Errorf("resample Primary storage is required")
 	}
@@ -128,7 +128,7 @@ func resultRow(result Result) *storagepb.RowFieldUpsert {
 	}
 }
 
-func resultRowWithSpec(result Result, spec RuleSpec) *storagepb.RowFieldUpsert {
+func resultRowWithSpec(result Result, spec TaskSpec) *storagepb.RowFieldUpsert {
 	row := resultRow(result)
 	row.Attributes["resample_task_id"] = stringValue(spec.TaskID)
 	row.Attributes["source_dataset_id"] = stringValue(spec.SourceDatasetID)

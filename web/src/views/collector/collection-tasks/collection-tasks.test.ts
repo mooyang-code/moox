@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 describe("collector resample rule workbench", () => {
   it("keeps resample configuration and backfill in the existing rule surface", () => {
-    const source = fs.readFileSync(path.resolve(__dirname, "collector-rules.vue"), "utf8");
+    const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
     const backfill = fs.readFileSync(path.resolve(__dirname, "resample-backfill.vue"), "utf8");
     expect(source).toContain("kline_resample");
     expect(source).toContain("ResampleBackfillDialog");

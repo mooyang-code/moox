@@ -160,7 +160,7 @@ func (s *Service) GetTaskList(ctx context.Context, req *pb.GetTaskListReq) (*pb.
 	return &pb.GetTaskListRsp{RetInfo: retOK(), Tasks: out, Page: pageResult(page, size, total)}, nil
 }
 
-// GetTaskDetail returns a single collector rule.
+// GetTaskDetail returns a single collection task.
 func (s *Service) GetTaskDetail(ctx context.Context, req *pb.GetTaskDetailReq) (*pb.GetTaskDetailRsp, error) {
 	if strings.TrimSpace(req.GetSpaceId()) == "" {
 		return &pb.GetTaskDetailRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
@@ -175,7 +175,7 @@ func (s *Service) GetTaskDetail(ctx context.Context, req *pb.GetTaskDetailReq) (
 	return &pb.GetTaskDetailRsp{RetInfo: retOK(), Task: toPBTask(*rule)}, nil
 }
 
-// CreateTask creates a collector rule through the independent collector service.
+// CreateTask creates a collection task through the independent collector service.
 func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.CreateTaskRsp, error) {
 	rule := normalizeCollectionTask(fromPBTask(req.GetTask()))
 	if strings.TrimSpace(rule.TaskName) == "" {
@@ -212,21 +212,41 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 			description = strings.TrimSpace(resultConfig.GetDescription())
 		}
 	}
-	if s.resultManager == nil {
-		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured")}, nil
+	var resultIDs taskresult.IDs
+	if strings.EqualFold(strings.TrimSpace(rule.DataType), "kline_resample") {
+		// Resample results use the same task-exclusive identity, but their
+		// Dataset/View must be created by resample.Preparer with source lineage.
+		// Do not provision them through the generic raw-collection manager.
+		resultIDs = taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
+		rule.ResultDatasetID = resultIDs.DatasetID
+		rule.ResultViewID = collectorresample.DefaultTargetViewID(resultIDs.DatasetID)
+		rule.CollectParams = setTaskResultDatasetID(rule.CollectParams, resultIDs.DatasetID)
+		params, err = domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+		if err != nil {
+			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		}
+	} else {
+		if s.resultManager == nil {
+			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured")}, nil
+		}
+		var err error
+		resultIDs, err = s.resultManager.Ensure(ctx, rule.SpaceID, rule.TaskID, rule.DataType, rule.MarketType, taskresult.Config{DataNodeID: dataNodeID, KeepDuration: keepDuration, Description: description, DataSourceID: rule.Provider, Frequency: firstTaskFrequency(params)})
+		if err != nil {
+			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
+		rule.ResultDatasetID, rule.ResultViewID = resultIDs.DatasetID, resultIDs.ViewID
+		rule.CollectParams = setTaskResultDatasetID(rule.CollectParams, resultIDs.DatasetID)
 	}
-	ids, err := s.resultManager.Ensure(ctx, rule.SpaceID, rule.TaskID, rule.DataType, rule.MarketType, taskresult.Config{DataNodeID: dataNodeID, KeepDuration: keepDuration, Description: description, DataSourceID: rule.Provider, Frequency: firstTaskFrequency(params)})
-	if err != nil {
-		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-	}
-	rule.ResultDatasetID, rule.ResultViewID = ids.DatasetID, ids.ViewID
-	rule.CollectParams = setTaskResultDatasetID(rule.CollectParams, ids.DatasetID)
 	if err := s.validateCollectionTaskDatasets(ctx, rule); err != nil {
-		_ = s.resultManager.Delete(ctx, rule.SpaceID, ids)
+		if s.resultManager != nil && !strings.EqualFold(strings.TrimSpace(rule.DataType), "kline_resample") {
+			_ = s.resultManager.Delete(ctx, rule.SpaceID, resultIDs)
+		}
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if err := s.ruleRepo.Create(ctx, rule); err != nil {
-		_ = s.resultManager.Delete(ctx, rule.SpaceID, ids)
+		if s.resultManager != nil && !strings.EqualFold(strings.TrimSpace(rule.DataType), "kline_resample") {
+			_ = s.resultManager.Delete(ctx, rule.SpaceID, resultIDs)
+		}
 		log.ErrorContextf(ctx, "[Collector] create task rule failed: %v", err)
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -234,7 +254,7 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 	return &pb.CreateTaskRsp{RetInfo: retOK(), TaskId: rule.TaskID}, nil
 }
 
-// UpdateTask updates a collector rule through the independent collector service.
+// UpdateTask updates a collection task through the independent collector service.
 func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.UpdateTaskRsp, error) {
 	spaceID := strings.TrimSpace(req.GetSpaceId())
 	ruleID := strings.TrimSpace(req.GetTaskId())
@@ -300,7 +320,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	return &pb.UpdateTaskRsp{RetInfo: retOK(), Task: toPBTask(*updated)}, nil
 }
 
-// DisableTask disables a collector rule without deleting runtime history.
+// DisableTask disables a collection task without deleting runtime history.
 func (s *Service) DisableTask(ctx context.Context, req *pb.DisableTaskReq) (*pb.DisableTaskRsp, error) {
 	if strings.TrimSpace(req.GetSpaceId()) == "" {
 		return &pb.DisableTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
@@ -328,23 +348,23 @@ func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskReq) (*pb.De
 	if err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, err.Error())}, nil
 	}
-	if req.GetDeleteResultData() && s.resultManager == nil {
-		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured")}, nil
-	}
-	if req.GetDeleteResultData() {
-		ids := taskresult.IDs{DatasetID: task.ResultDatasetID, ViewID: task.ResultViewID}
-		if ids.DatasetID == "" || ids.ViewID == "" {
-			ids = taskresult.ResultIDs(spaceID, taskID)
-		}
-		if err := s.resultManager.Delete(ctx, spaceID, ids); err != nil {
-			return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-	}
 	if err := s.ruleRepo.SetEnabled(ctx, spaceID, taskID, false); err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	if err := s.persistence.DeleteTaskRuntime(ctx, spaceID, taskID); err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
+	if req.GetDeleteResultData() {
+		if s.resultManager == nil {
+			return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured; task remains disabled for retry")}, nil
+		}
+		ids := taskresult.IDs{DatasetID: task.ResultDatasetID, ViewID: task.ResultViewID}
+		if ids.DatasetID == "" || ids.ViewID == "" {
+			ids = taskresult.ResultIDs(spaceID, taskID)
+		}
+		if err := s.resultManager.DeleteForTask(ctx, spaceID, taskID, ids); err != nil {
+			return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("delete task result failed; task remains disabled for retry: %v", err))}, nil
+		}
 	}
 	if err := s.ruleRepo.DeleteByTaskID(ctx, spaceID, taskID); err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
@@ -405,7 +425,7 @@ func (s *Service) GetTaskInstanceList(ctx context.Context, req *pb.GetTaskInstan
 	return &pb.GetTaskInstanceListRsp{RetInfo: retOK(), Instances: out, Page: pageResult(page, size, total)}, nil
 }
 
-// GetDataTypeConfigs returns the currently supported collector rule data types.
+// GetDataTypeConfigs returns the currently supported collection task data types.
 func (s *Service) GetDataTypeConfigs(ctx context.Context, req *pb.GetDataTypeConfigsReq) (*pb.GetDataTypeConfigsRsp, error) {
 	jobDefinitions := jobs.ListJobDefinitions()
 	configs := make([]*pb.DataTypeConfig, 0, len(jobDefinitions))

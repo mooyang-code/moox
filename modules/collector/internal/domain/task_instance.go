@@ -44,8 +44,8 @@ type TaskSpec struct {
 type TaskInstance struct {
 	ID               int        `gorm:"column:c_id;primaryKey;autoIncrement"`
 	SpaceID          string     `gorm:"column:c_space_id"`
-	TaskID          string     `gorm:"column:c_instance_id"`
-	CollectionTaskID string    `gorm:"column:c_task_id"`
+	TaskID           string     `gorm:"column:c_instance_id"`
+	CollectionTaskID string     `gorm:"column:c_task_id"`
 	Provider         string     `gorm:"column:c_provider"`
 	MarketType       string     `gorm:"column:c_market_type"`
 	DataType         string     `gorm:"column:c_data_type"`
@@ -69,15 +69,15 @@ func (i *TaskInstance) TableName() string {
 	return "t_collector_task_instances"
 }
 
-// StableTaskID creates an idempotent task ID for a rule/object/interval.
-func StableTaskID(spaceID string, ruleID string, spec TaskSpec) string {
+// StableTaskID creates an idempotent execution instance ID for a task/object/interval.
+func StableTaskID(spaceID string, taskID string, spec TaskSpec) string {
 	routeID := strings.TrimSpace(spec.RouteID)
 	if routeID == "" {
 		routeID = strings.Join([]string{spec.MarketType, spec.DataType, spec.DatasetID, spec.Frequency}, ":")
 	}
 	parts := []string{
 		spaceID,
-		ruleID,
+		taskID,
 		routeID,
 		spec.MarketType,
 		spec.DataType,

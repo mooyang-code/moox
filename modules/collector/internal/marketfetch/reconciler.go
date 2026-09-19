@@ -872,7 +872,7 @@ func assignmentMetricKey(datasetID, frequency string) string {
 func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, error) {
 	rules, err := r.Rules.ListEnabled(ctx, spaceID)
 	if err != nil {
-		return nil, fmt.Errorf("list enabled collection rules: %w", err)
+		return nil, fmt.Errorf("list enabled collection tasks: %w", err)
 	}
 	groups := make([]TaskGroup, 0)
 	for _, rule := range rules {
@@ -882,7 +882,7 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 			// other market/frequency groups from being reconciled. Scheduler.Tick
 			// already treats rules independently; keep the Timer control plane
 			// consistent with that behavior.
-			log.WarnContextf(ctx, "skip collection rule=%s during timer reconciliation: parse rule: %v", rule.TaskID, parseErr)
+			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: parse task: %v", rule.TaskID, parseErr)
 			continue
 		}
 		if params.Collector.DataType != "kline" {
@@ -890,16 +890,16 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		}
 		dataset, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Source.DatasetID)
 		if datasetErr != nil {
-			log.WarnContextf(ctx, "skip collection rule=%s during timer reconciliation: get symbol dataset %s: %v", rule.TaskID, params.Source.DatasetID, datasetErr)
+			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: get symbol dataset %s: %v", rule.TaskID, params.Source.DatasetID, datasetErr)
 			continue
 		}
 		subjects, subjectErr := r.Symbols.ListSubjects(ctx, spaceID, params.Source.DatasetID, dataset.DataSourceID)
 		if subjectErr != nil {
-			log.WarnContextf(ctx, "skip collection rule=%s during timer reconciliation: list symbol dataset %s: %v", rule.TaskID, params.Source.DatasetID, subjectErr)
+			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: list symbol dataset %s: %v", rule.TaskID, params.Source.DatasetID, subjectErr)
 			continue
 		}
 		if len(subjects) == 0 {
-			log.WarnContextf(ctx, "skip collection rule=%s: no active subjects for symbol dataset %s", rule.TaskID, params.Source.DatasetID)
+			log.WarnContextf(ctx, "skip collection task=%s: no active subjects for symbol dataset %s", rule.TaskID, params.Source.DatasetID)
 			continue
 		}
 		marketID, instrumentType := marketIdentity(firstNonEmpty(params.MarketID, rule.SpaceID), params.InstrumentType, params.Target.DatasetID)

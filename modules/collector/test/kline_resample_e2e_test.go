@@ -108,7 +108,7 @@ func TestKlineResamplePipelineE2E(t *testing.T) {
 	}
 	sourceFreq, _ := resample.ParseFixedFrequency("1m")
 	targetFreq, _ := resample.ParseFixedFrequency("5m")
-	spec := resample.RuleSpec{TaskID: rule.TaskID, SpaceID: rule.SpaceID, SourceDatasetID: "dataset_binance_spot_kline_1m", SourceFrequency: sourceFreq, SourceSeriesTag: "venue:binance", TargetDatasetID: "dataset_spot_kline_resample_5m", TargetFrequency: targetFreq, Alignment: resample.AlignmentEpochUTC}
+	spec := resample.TaskSpec{TaskID: rule.TaskID, SpaceID: rule.SpaceID, SourceDatasetID: "dataset_binance_spot_kline_1m", SourceFrequency: sourceFreq, SourceSeriesTag: "venue:binance", TargetDatasetID: "dataset_spot_kline_resample_5m", TargetFrequency: targetFreq, Alignment: resample.AlignmentEpochUTC}
 	result, wrote, err := (&resample.BucketStorage{Primary: primary}).ProcessBucket(ctx, spec, "BTC", start, start.Add(5*time.Minute))
 	require.NoError(t, err)
 	require.True(t, wrote)

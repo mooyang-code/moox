@@ -139,11 +139,11 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	dnsRoutes := s.dnsSnapshot(ctx)
 	allRules, err := s.Rules.ListEnabled(ctx, spaceID)
 	if err != nil {
-		return fmt.Errorf("list enabled collection rules: %w", err)
+		return fmt.Errorf("list enabled collection tasks: %w", err)
 	}
 	// Local collector jobs (for example kline_resample) are driven by their
 	// own timer workers. The market-fetch scheduler only owns cloud-invoked
-	// collection rules.
+	// collection tasks.
 	rules := filterMarketFetchRules(allRules)
 	invokeRules := filterInvokeRules(rules)
 	rules = rotateRulesAfter(rules, s.lastTaskID)
@@ -185,7 +185,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		}
 		items, frequencies, err := s.expandRule(ctx, rule)
 		if err != nil {
-			log.WarnContextf(ctx, "skip invalid collection rule=%s: %v", rule.TaskID, err)
+			log.WarnContextf(ctx, "skip invalid collection task=%s: %v", rule.TaskID, err)
 			continue
 		}
 		ruleNodes := timerNodes
@@ -193,7 +193,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			ruleNodes = invokeNodes
 		}
 		if len(ruleNodes) == 0 {
-			log.WarnContextf(ctx, "skip collection rule=%s: no nodes for trigger type", rule.TaskID)
+			log.WarnContextf(ctx, "skip collection task=%s: no nodes for trigger type", rule.TaskID)
 			continue
 		}
 		activeTaskIDs := make([]string, 0, len(items)*len(frequencies))

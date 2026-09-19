@@ -485,22 +485,22 @@ func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
 }
 
 func TestDefaultStockCNCollectorRulesRequireExplicitActivation(t *testing.T) {
-	content, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "config", "setup", "collector-rules.yaml"))
+	content, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml"))
 	require.NoError(t, err)
 	var bundle struct {
-		Rules []struct {
+		Tasks []struct {
 			SpaceID string `yaml:"space_id"`
 			TaskID  string `yaml:"task_id"`
 			Enabled bool   `yaml:"enabled"`
-		} `yaml:"rules"`
+		} `yaml:"tasks"`
 	}
 	require.NoError(t, yaml.Unmarshal(content, &bundle))
 	seen := map[string]bool{}
-	for _, rule := range bundle.Rules {
-		if rule.SpaceID != "stockcn" {
+	for _, task := range bundle.Tasks {
+		if task.SpaceID != "stockcn" {
 			continue
 		}
-		seen[rule.TaskID] = rule.Enabled
+		seen[task.TaskID] = task.Enabled
 	}
 	assert.Contains(t, seen, "builtin-stockcn-instrument-1d")
 	assert.Contains(t, seen, "builtin-stockcn-kline-1m")

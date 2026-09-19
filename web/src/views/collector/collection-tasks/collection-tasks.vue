@@ -41,18 +41,14 @@
           @page-size-change="onPageSizeChange"
         >
           <template #columns>
-            <a-table-column title="任务 ID" data-index="task_id" :width="150">
+            <a-table-column title="任务名称" data-index="task_name" :width="260">
               <template #cell="{ record }">
-                <a-link @click="onViewDetails(record)">{{ record.task_id }}</a-link>
-              </template>
-            </a-table-column>
-            <a-table-column title="数据类型" data-index="data_type" :width="260">
-              <template #cell="{ record }">
-                <div>{{ record.task_name || record.task_id }}</div>
+                <a-link @click="onViewDetails(record)">{{ record.task_name || record.task_id }}</a-link>
                 <small class="resample-summary">{{ record.data_type }}</small>
                 <small v-if="record.data_type === 'kline_resample'" class="resample-summary">{{ resampleSummary(record) }}</small>
               </template>
             </a-table-column>
+            <a-table-column title="数据类型" data-index="data_type" :width="120" />
             <a-table-column title="数据源" data-index="data_source" :width="120"></a-table-column>
             <a-table-column title="创建时间" :width="160">
               <template #cell="{ record }">
@@ -320,7 +316,7 @@ import {
   datasetMatchesCollector,
   normalizeCollectorRule,
   type CollectorRuleInput
-} from "./collector-rule-params";
+} from "./collection-task-params";
 import ResampleBackfillDialog from "./resample-backfill.vue";
 import { getKlineResampleBackfillStatus } from "@/api/collector";
 import type { ResampleBackfillSummary } from "./resample-backfill";

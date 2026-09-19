@@ -40,7 +40,7 @@ describe("page toolbar cleanup contract", () => {
     const forbiddenToolbarMarkers: Record<string, string[]> = {
       "collector/cloud-node/cloud-node.vue": ['@click="reset"'],
       "collector/cloud-node/function-package-manage.vue": ['@click="resetSearch"'],
-      "collector/collector-rules/collector-rules.vue": ['@click="reset"'],
+      "collector/collection-tasks/collection-tasks.vue": ['@click="reset"'],
       "collector/task-instances/task-instances.vue": ['@click="reset"'],
       "container/ssh-hosts/ssh-hosts.vue": ['@click="reset"'],
       "data/datasets/index.vue": ['<a-button :disabled="!selectedSpaceId" @click="load">'],

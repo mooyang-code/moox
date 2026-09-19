@@ -41,7 +41,7 @@ describe("collector task management workbench", () => {
     expect(normalizedMenu).not.toContain('menu("0304"');
     expect(normalizedRoutes).toContain('component:()=>import("@/views/collector/task-management/index.vue")');
     expect(normalizedRoutes).toContain('path:"/collector/tasks"');
-    expect(normalizedRoutes).toContain('path:"/collector/rules"');
+    expect(normalizedRoutes).not.toContain('path:"/collector/rules"');
   });
 
   it("removes the standalone package page and keeps package management on cloud nodes", () => {
@@ -59,7 +59,7 @@ describe("collector task management workbench", () => {
   });
 
   it("places the create action in the collection rule search row", () => {
-    const rules = fs.readFileSync(path.resolve(__dirname, "../collector-rules/collector-rules.vue"), "utf8");
+    const rules = fs.readFileSync(path.resolve(__dirname, "../collection-tasks/collection-tasks.vue"), "utf8");
     const firstToolbarEnd = rules.indexOf("</a-space>");
     const tableStart = rules.indexOf("<a-table");
     const createPosition = rules.indexOf("<span>新建任务</span>");
@@ -72,7 +72,7 @@ describe("collector task management workbench", () => {
   });
 
   it("clears both Dataset selections when the collector market changes", () => {
-    const rules = fs.readFileSync(path.resolve(__dirname, "../collector-rules/collector-rules.vue"), "utf8");
+    const rules = fs.readFileSync(path.resolve(__dirname, "../collection-tasks/collection-tasks.vue"), "utf8");
     const watcherStart = rules.indexOf("watch(\n  [");
     const watcher = rules.slice(watcherStart, rules.indexOf("onMounted(() =>", watcherStart));
 

@@ -54,7 +54,7 @@ func TestBucketStorageProcessBucketIsIdempotentBySourceHash(t *testing.T) {
 		rows = append(rows, &storagepb.RowFieldValues{Key: rowKey("s", "src", "BTC", "1m", at, "venue:binance"), Fields: fields})
 	}
 	fake := &fakePrimary{rows: rows}
-	spec := RuleSpec{TaskID: "r", SpaceID: "s", SourceDatasetID: "src", SourceFrequency: freq1, SourceSeriesTag: "venue:binance", TargetDatasetID: "dataset_spot_kline_derived_5m", TargetFrequency: freq5, Alignment: AlignmentEpochUTC}
+	spec := TaskSpec{TaskID: "r", SpaceID: "s", SourceDatasetID: "src", SourceFrequency: freq1, SourceSeriesTag: "venue:binance", TargetDatasetID: "dataset_spot_kline_derived_5m", TargetFrequency: freq5, Alignment: AlignmentEpochUTC}
 	result, wrote, err := (&BucketStorage{Primary: fake}).ProcessBucket(context.Background(), spec, "BTC", start, end)
 	if err != nil || !wrote {
 		t.Fatalf("first process = %#v/%v/%v", result, wrote, err)
@@ -72,7 +72,7 @@ func TestBucketStorageRejectsOversizedSourceWindow(t *testing.T) {
 	freq1, _ := ParseFixedFrequency("1m")
 	freq5, _ := ParseFixedFrequency("5m")
 	start := time.Unix(300, 0).UTC()
-	spec := RuleSpec{SpaceID: "s", SourceDatasetID: "src", SourceFrequency: freq1, TargetDatasetID: "target", TargetFrequency: freq5}
+	spec := TaskSpec{SpaceID: "s", SourceDatasetID: "src", SourceFrequency: freq1, TargetDatasetID: "target", TargetFrequency: freq5}
 	_, _, err := (&BucketStorage{Primary: &fakePrimary{}, MaxSourceKeys: 4}).ProcessBucket(context.Background(), spec, "BTC", start, start.Add(freq5.Duration))
 	if err == nil || !strings.Contains(err.Error(), "max_source_keys=4") {
 		t.Fatalf("expected max_source_keys error, got %v", err)

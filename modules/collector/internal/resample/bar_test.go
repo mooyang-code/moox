@@ -21,7 +21,7 @@ func TestExpectedSourceTimesEnumeratesHalfOpenWindow(t *testing.T) {
 
 func TestBarsAggregatesCompleteSourceWindowAndSortsRows(t *testing.T) {
 	start := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
-	spec := testRuleSpec(t, "1m", "4m")
+	spec := testTaskSpec(t, "1m", "4m")
 	rows := []SourceBar{
 		testSourceBar(start.Add(2*time.Minute), 110, 112, 95, 98, 3, 300, 4),
 		testSourceBar(start, 100, 110, 90, 105, 1, 100, 2),
@@ -51,7 +51,7 @@ func TestBarsAggregatesCompleteSourceWindowAndSortsRows(t *testing.T) {
 
 func TestBarsAggregatesThirtyMinuteBarsIntoNinetyMinutes(t *testing.T) {
 	start := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
-	spec := testRuleSpec(t, "30m", "90m")
+	spec := testTaskSpec(t, "30m", "90m")
 	rows := []SourceBar{
 		testSourceBar(start, 10, 12, 9, 11, 1, 10, 2),
 		testSourceBar(start.Add(30*time.Minute), 11, 15, 10, 14, 2, 20, 3),
@@ -75,7 +75,7 @@ func TestBarsAggregatesThirtyMinuteBarsIntoNinetyMinutes(t *testing.T) {
 
 func TestBarsSourceHashIsOrderIndependentAndChangesWithSourceValue(t *testing.T) {
 	start := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
-	spec := testRuleSpec(t, "1m", "2m")
+	spec := testTaskSpec(t, "1m", "2m")
 	first := testSourceBar(start, 100, 110, 90, 105, 1, 100, 2)
 	second := testSourceBar(start.Add(time.Minute), 105, 115, 100, 110, 2, 210, 3)
 
@@ -94,7 +94,7 @@ func TestBarsSourceHashIsOrderIndependentAndChangesWithSourceValue(t *testing.T)
 
 func TestBarsRejectsIncompleteOrMismatchedSourceKeys(t *testing.T) {
 	start := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
-	spec := testRuleSpec(t, "1m", "3m")
+	spec := testTaskSpec(t, "1m", "3m")
 	valid := []SourceBar{
 		testSourceBar(start, 1, 2, 0.5, 1.5, 1, 1, 1),
 		testSourceBar(start.Add(time.Minute), 1.5, 2, 1, 1.8, 1, 1, 1),
@@ -126,7 +126,7 @@ func TestBarsRejectsIncompleteOrMismatchedSourceKeys(t *testing.T) {
 
 func TestBarsRejectsMissingInvalidOrOverflowingFields(t *testing.T) {
 	start := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
-	spec := testRuleSpec(t, "1m", "2m")
+	spec := testTaskSpec(t, "1m", "2m")
 	valid := []SourceBar{
 		testSourceBar(start, 1, 2, 0.5, 1.5, 1, 1, 1),
 		testSourceBar(start.Add(time.Minute), 1.5, 2, 1, 1.8, 1, 1, 1),
@@ -155,7 +155,7 @@ func TestBarsRejectsMissingInvalidOrOverflowingFields(t *testing.T) {
 
 func TestBarsRejectsWindowThatIsNotOneAlignedTargetBucket(t *testing.T) {
 	start := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
-	spec := testRuleSpec(t, "1m", "4m")
+	spec := testTaskSpec(t, "1m", "4m")
 	rows := []SourceBar{
 		testSourceBar(start, 1, 2, 0.5, 1.5, 1, 1, 1),
 		testSourceBar(start.Add(time.Minute), 1.5, 2, 1, 1.8, 1, 1, 1),
@@ -169,19 +169,19 @@ func TestBarsRejectsWindowThatIsNotOneAlignedTargetBucket(t *testing.T) {
 	require.Error(t, err)
 }
 
-func testRuleSpec(t *testing.T, sourceRaw, targetRaw string) RuleSpec {
+func testTaskSpec(t *testing.T, sourceRaw, targetRaw string) TaskSpec {
 	t.Helper()
 	source := mustFrequency(t, sourceRaw)
 	target := mustFrequency(t, targetRaw)
-	return RuleSpec{
-		TaskID: "rule-1",
-		SpaceID:          "crypto",
-		SourceDatasetID:  "dataset_binance_spot_kline_1m",
-		SourceFrequency:  source,
-		SourceSeriesTag:  "venue:binance",
-		TargetDatasetID:  "dataset_spot_kline_derived_" + target.Slug,
-		TargetFrequency:  target,
-		Alignment:        AlignmentEpochUTC,
+	return TaskSpec{
+		TaskID:          "rule-1",
+		SpaceID:         "crypto",
+		SourceDatasetID: "dataset_binance_spot_kline_1m",
+		SourceFrequency: source,
+		SourceSeriesTag: "venue:binance",
+		TargetDatasetID: "dataset_spot_kline_derived_" + target.Slug,
+		TargetFrequency: target,
+		Alignment:       AlignmentEpochUTC,
 	}
 }
 

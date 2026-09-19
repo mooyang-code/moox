@@ -20,8 +20,8 @@ type initResult struct {
 	Action         string `json:"action"`
 	Status         string `json:"status"`
 	DBPath         string `json:"db_path"`
-	RulesCreated   int    `json:"rules_created"`
-	RulesUnchanged int    `json:"rules_unchanged"`
+	TasksCreated   int    `json:"tasks_created"`
+	TasksUnchanged int    `json:"tasks_unchanged"`
 }
 
 func isInitCommand(args []string) bool {
@@ -64,8 +64,8 @@ func runInitCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		result.RulesCreated = summary.Created
-		result.RulesUnchanged = summary.Unchanged
+		result.TasksCreated = summary.Created
+		result.TasksUnchanged = summary.Unchanged
 	}
 	return json.NewEncoder(stdout).Encode(result)
 }

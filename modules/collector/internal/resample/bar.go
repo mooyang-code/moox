@@ -15,16 +15,16 @@ import (
 
 const AlignmentEpochUTC = "epoch_utc"
 
-// RuleSpec is the immutable input/output contract required by Bars.
-type RuleSpec struct {
-	TaskID string
-	SpaceID          string
-	SourceDatasetID  string
-	SourceFrequency  FixedFrequency
-	SourceSeriesTag  string
-	TargetDatasetID  string
-	TargetFrequency  FixedFrequency
-	Alignment        string
+// TaskSpec is the immutable input/output contract required by Bars.
+type TaskSpec struct {
+	TaskID          string
+	SpaceID         string
+	SourceDatasetID string
+	SourceFrequency FixedFrequency
+	SourceSeriesTag string
+	TargetDatasetID string
+	TargetFrequency FixedFrequency
+	Alignment       string
 }
 
 // SourceBar is one decoded source K-line. Pointer fields preserve whether a
@@ -93,8 +93,8 @@ func ExpectedSourceTimes(start, end time.Time, source FixedFrequency) ([]time.Ti
 }
 
 // Bars validates and aggregates one complete source window into one target K-line.
-func Bars(spec RuleSpec, subjectID string, start, end time.Time, rows []SourceBar) (Result, error) {
-	if err := validateRuleSpec(spec); err != nil {
+func Bars(spec TaskSpec, subjectID string, start, end time.Time, rows []SourceBar) (Result, error) {
+	if err := validateTaskSpec(spec); err != nil {
 		return Result{}, err
 	}
 	if subjectID == "" {
@@ -162,9 +162,9 @@ func Bars(spec RuleSpec, subjectID string, start, end time.Time, rows []SourceBa
 	return result, nil
 }
 
-func validateRuleSpec(spec RuleSpec) error {
+func validateTaskSpec(spec TaskSpec) error {
 	if spec.TaskID == "" || spec.SpaceID == "" || spec.SourceDatasetID == "" || spec.SourceSeriesTag == "" || spec.TargetDatasetID == "" {
-		return fmt.Errorf("resample rule identity, source, target, and series tag are required")
+		return fmt.Errorf("resample task identity, source, target, and series tag are required")
 	}
 	if spec.SourceDatasetID == spec.TargetDatasetID {
 		return fmt.Errorf("source and target Dataset IDs must differ")
@@ -181,15 +181,15 @@ func validateRuleSpec(spec RuleSpec) error {
 	return nil
 }
 
-func validateSourceBar(spec RuleSpec, subjectID string, expectedTime time.Time, row *SourceBar) error {
+func validateSourceBar(spec TaskSpec, subjectID string, expectedTime time.Time, row *SourceBar) error {
 	if row.SpaceID != spec.SpaceID || row.DatasetID != spec.SourceDatasetID {
-		return fmt.Errorf("source Dataset key does not match rule")
+		return fmt.Errorf("source Dataset key does not match task")
 	}
 	if row.SubjectID != subjectID {
 		return fmt.Errorf("source subject does not match claim")
 	}
 	if row.Frequency != spec.SourceFrequency.Storage {
-		return fmt.Errorf("source frequency does not match rule")
+		return fmt.Errorf("source frequency does not match task")
 	}
 	if row.SeriesTag != spec.SourceSeriesTag {
 		return fmt.Errorf("source series tag does not match rule")

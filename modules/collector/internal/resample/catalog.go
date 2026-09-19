@@ -205,7 +205,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.CollectionTask,
 	if viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_VIEW_NOT_FOUND || viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, View: &storagepb.View{
 			SpaceId: rule.SpaceID, ViewId: viewID, Name: uniqueResampleDisplayName(params.TargetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: params.TargetDatasetID,
-			Engine: "duckdb", KeepDuration: keepDuration, Status: "active", Attributes: map[string]string{"route_ready_request_id": "kline-resample-route:" + rule.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
+			Engine: "duckdb", KeepDuration: keepDuration, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": rule.TaskID, "route_ready_request_id": "kline-resample-route:" + rule.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
 		}})
 		if createErr != nil {
 			return createErr

@@ -26,9 +26,9 @@ type resampleRuleSubjectSource interface {
 	ListResampleSubjectsForRule(context.Context, string, string, string, string) ([]domain.DatasetSubject, error)
 }
 
-// PlanRule expands a ready rule into one durable TaskInstance per active source
+// PlanTask expands a ready task into one durable TaskInstance per active source
 // subject. It is idempotent and never deletes target data for removed subjects.
-func PlanRule(ctx context.Context, source subjectSource, instances *store.TaskInstanceRepository, rule domain.CollectionTask, now time.Time) error {
+func PlanTask(ctx context.Context, source subjectSource, instances *store.TaskInstanceRepository, rule domain.CollectionTask, now time.Time) error {
 	if source == nil || instances == nil {
 		return fmt.Errorf("resample planner dependencies are required")
 	}
@@ -75,5 +75,11 @@ func PlanRule(ctx context.Context, source subjectSource, instances *store.TaskIn
 	if err := instances.UpsertMany(ctx, instancesToWrite); err != nil {
 		return fmt.Errorf("upsert resample task instances: %w", err)
 	}
-	return instances.DeactivateMissingResampleRuleInstances(ctx, rule.SpaceID, rule.TaskID, activeIDs)
+	return instances.DeactivateMissingResampleTaskInstances(ctx, rule.SpaceID, rule.TaskID, activeIDs)
+}
+
+// PlanRule is retained for the resample worker's internal callers during the
+// naming migration; new code should call PlanTask.
+func PlanRule(ctx context.Context, source subjectSource, instances *store.TaskInstanceRepository, task domain.CollectionTask, now time.Time) error {
+	return PlanTask(ctx, source, instances, task, now)
 }

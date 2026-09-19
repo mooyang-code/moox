@@ -184,7 +184,7 @@ services:
     gateway_enabled: true
     scope: internal
     status: active
-    description: 独立采集管理服务，承载采集规则、任务实例和 planner
+    description: 独立采集管理服务，承载采集任务、任务实例和 planner
     extra_config:
       health_url: http://127.0.0.1:11412/readyz
       health_kind: readiness

@@ -470,7 +470,7 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 		failResampleClaim(parent, instances, claim, "active bucket is missing")
 		return
 	}
-	spec := RuleSpec{TaskID: claim.Instance.TaskID, SpaceID: claim.Instance.SpaceID, SourceDatasetID: params.SourceDatasetID, SourceFrequency: sourceFreq, SourceSeriesTag: params.SourceSeriesTag, TargetDatasetID: params.TargetDatasetID, TargetFrequency: targetFreq, Alignment: params.Alignment}
+	spec := TaskSpec{TaskID: claim.Instance.TaskID, SpaceID: claim.Instance.SpaceID, SourceDatasetID: params.SourceDatasetID, SourceFrequency: sourceFreq, SourceSeriesTag: params.SourceSeriesTag, TargetDatasetID: params.TargetDatasetID, TargetFrequency: targetFreq, Alignment: params.Alignment}
 	if cfg.WorkerMaxSourceKeys > 0 {
 		sourceTimes, countErr := ExpectedSourceTimes(bucket, bucket.Add(targetFreq.Duration), sourceFreq)
 		if countErr != nil {

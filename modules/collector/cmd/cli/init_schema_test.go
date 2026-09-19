@@ -47,7 +47,7 @@ func TestRunInitCommandAppliesCollectorSchema(t *testing.T) {
 func TestRunInitCommandSeedsBuiltInRules(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
 	seedPath := filepath.Join(t.TempDir(), "rules.yaml")
-	if err := os.WriteFile(seedPath, []byte("rules:\n- space_id: crypto\n  task_id: builtin-rule\n  data_type: instrument\n  provider: binance\n  market_type: spot\n  enabled: true\n  collect_params:\n    provider: binance\n    market_type: spot\n    symbol_source: exchange\n    target_dataset_id: dataset_binance_spot_symbols\n    frequency: 1h\n"), 0o600); err != nil {
+	if err := os.WriteFile(seedPath, []byte("tasks:\n- space_id: crypto\n  task_id: builtin-task\n  data_type: instrument\n  provider: binance\n  market_type: spot\n  enabled: true\n  collect_params:\n    provider: binance\n    market_type: spot\n    symbol_source: exchange\n    target_dataset_id: dataset_binance_spot_symbols\n    frequency: 1h\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
@@ -57,19 +57,19 @@ func TestRunInitCommandSeedsBuiltInRules(t *testing.T) {
 	}
 	var result initResult
 	assert.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
-	assert.Equal(t, 1, result.RulesCreated)
-	assert.Equal(t, 0, result.RulesUnchanged)
+	assert.Equal(t, 1, result.TasksCreated)
+	assert.Equal(t, 0, result.TasksUnchanged)
 	stdout.Reset()
 	if err := runInitCommand([]string{"init", "--db-path", dbPath, "--seed-file", seedPath}, &stdout, &stderr); err != nil {
 		t.Fatalf("second runInitCommand() error = %v", err)
 	}
 	assert.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
-	assert.Equal(t, 0, result.RulesCreated)
-	assert.Equal(t, 1, result.RulesUnchanged)
+	assert.Equal(t, 0, result.TasksCreated)
+	assert.Equal(t, 1, result.TasksUnchanged)
 	mgr, err := store.Open(&store.Options{Path: dbPath})
 	assert.NoError(t, err)
 	defer mgr.Close()
-	rule, err := mgr.Tasks().GetByTaskID(context.Background(), "crypto", "builtin-rule")
+	rule, err := mgr.Tasks().GetByTaskID(context.Background(), "crypto", "builtin-task")
 	assert.NoError(t, err)
 	assert.True(t, rule.Enabled)
 }

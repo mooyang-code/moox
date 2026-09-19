@@ -346,6 +346,38 @@ func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 	return nil
 }
 
+// DeleteForTask verifies Collector ownership before deleting metadata. The
+// deterministic Dataset ID prevents a malformed task row from targeting an
+// unrelated result, while the ownership check protects the View side too.
+func (m *Manager) DeleteForTask(ctx context.Context, spaceID, taskID string, ids IDs) error {
+	if strings.TrimSpace(taskID) == "" {
+		return fmt.Errorf("task_id is required")
+	}
+	expected := resultIDs(spaceID, taskID)
+	if ids.DatasetID != expected.DatasetID {
+		return fmt.Errorf("result dataset %s is not owned by task %s", ids.DatasetID, taskID)
+	}
+	dataset, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+	if err != nil {
+		return fmt.Errorf("get result dataset ownership: %w", err)
+	}
+	if dataset != nil && dataset.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
+		if dataset.GetDataset() == nil || !ownedByTask(dataset.GetDataset().GetAttributes(), taskID) {
+			return fmt.Errorf("result dataset %s is not owned by task %s", ids.DatasetID, taskID)
+		}
+	}
+	view, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
+	if err != nil {
+		return fmt.Errorf("get result view ownership: %w", err)
+	}
+	if view != nil && view.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
+		if view.GetView() == nil || !ownedByTask(view.GetView().GetAttributes(), taskID) {
+			return fmt.Errorf("result view %s is not owned by task %s", ids.ViewID, taskID)
+		}
+	}
+	return m.Delete(ctx, spaceID, ids)
+}
+
 func nonEmptyFrequency(kind storagepb.DataKind, frequency string) []string {
 	if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES && strings.TrimSpace(frequency) != "" {
 		return []string{strings.TrimSpace(frequency)}
