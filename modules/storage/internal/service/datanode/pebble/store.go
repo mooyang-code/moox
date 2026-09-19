@@ -21,6 +21,7 @@ import (
 
 const (
 	outboxPrefix             = "__outbox/"
+	datasetDeletedPrefix     = "__dataset_deleted/"
 	processedEventPrefix     = "__processed_event/"
 	processedEventTimePrefix = "__processed_event_time/"
 	metaNextID               = "__meta/next_outbox_id"
@@ -224,6 +225,15 @@ func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpser
 
 func (s *Store) writeFieldsEventLocked(ctx context.Context, normalizedRows []*pb.RowFieldUpsert, sourceEventID string, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error), decorate func(*cpebble.Batch, []*OutboxEntry) error) ([]*OutboxEntry, error) {
 	grouped := groupRowsByDataset(normalizedRows)
+	for group := range grouped {
+		deleted, err := s.isDatasetDeleted(group.spaceID, group.datasetID)
+		if err != nil {
+			return nil, err
+		}
+		if deleted {
+			return nil, ErrDatasetDeleted
+		}
+	}
 	if sourceEventID != "" {
 		pending := make(map[datasetGroup][]*pb.RowFieldUpsert, len(grouped))
 		for group, groupRows := range grouped {

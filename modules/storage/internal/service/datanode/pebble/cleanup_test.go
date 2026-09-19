@@ -4,8 +4,10 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestDeleteDatasetRowsRemovesRowsAndHistoryWithoutTouchingOtherDataset(t *testing.T) {
@@ -57,7 +59,65 @@ func TestDeleteDatasetRowsClearsSourceEventDedupe(t *testing.T) {
 	if _, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.RestoreDatasetRows(context.Background(), "s", "delete-me"); err != nil {
+		t.Fatal(err)
+	}
 	if entries, err := store.UpsertFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "source-event-1", build); err != nil || len(entries) != 1 {
 		t.Fatalf("recreated source write entries=%d err=%v", len(entries), err)
+	}
+}
+
+func TestDeleteDatasetRowsTombstoneBlocksWritesUntilRestore(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "s", DatasetId: "delete-me", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}
+	if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{row}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{row}); err != ErrDatasetDeleted {
+		t.Fatalf("write after delete err=%v, want ErrDatasetDeleted", err)
+	}
+	if err := store.RestoreDatasetRows(context.Background(), "s", "delete-me"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{row}); err != nil {
+		t.Fatalf("write after restore: %v", err)
+	}
+}
+
+func TestDeleteDatasetRowsRemovesReceiptsMarkersAndOutbox(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	key := &pb.RowKey{SpaceId: "s", DatasetId: "delete-me", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
+	if _, err := store.CommitInput(context.Background(), InputCommit{CommitID: "receipt-1", RequiredFields: []string{"close"}, Row: &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}, WriteKind: WriteKindInputCommit}); err != nil {
+		t.Fatal(err)
+	}
+	marker, _, err := BuildCollectorPeriodCompletedMessage("s", &pb.CollectorPeriodCompletedMarker{DatasetId: "delete-me", Frequency: "1m", PeriodTime: 1, Status: "complete", BatchId: "batch-1", ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "scope-1", CollectedAt: timestamppb.New(time.Unix(1, 0))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendDatasetMarker(context.Background(), marker); err != nil {
+		t.Fatal(err)
+	}
+	if entries, err := store.ListOutbox(context.Background(), 0, 20); err != nil || len(entries) != 2 {
+		t.Fatalf("outbox before cleanup entries=%d err=%v", len(entries), err)
+	}
+	if _, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LookupWriteReceipt(context.Background(), "receipt-1"); err == nil {
+		t.Fatal("write receipt survived dataset deletion")
+	}
+	if entries, err := store.ListOutbox(context.Background(), 0, 20); err != nil || len(entries) != 0 {
+		t.Fatalf("outbox after cleanup entries=%d err=%v", len(entries), err)
 	}
 }

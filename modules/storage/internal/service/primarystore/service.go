@@ -186,6 +186,17 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 			s.observeTimeSeriesRows(ctx, rows, "error", false, false)
 			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, fmt.Errorf("partial success after %d rows: %w", len(keys), err)), Keys: keys}, nil
 		}
+		if adminNode, ok := node.(datasetAdminDataNodeClient); ok {
+			restored, restoreErr := adminNode.RestoreDatasetRows(ctx, &pb.RestoreDatasetRowsReq{AuthInfo: auth, SpaceId: group.spaceID, DatasetId: group.datasetID})
+			if restoreErr != nil {
+				s.observeTimeSeriesRows(ctx, rows, "error", false, false)
+				return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: restore %s/%s: %w", len(keys), group.spaceID, group.datasetID, restoreErr)), Keys: keys}, nil
+			}
+			if restored.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+				s.observeTimeSeriesRows(ctx, rows, "error", false, false)
+				return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(restored.GetRetInfo().GetCode(), fmt.Errorf("partial success after %d rows: restore %s/%s: %s", len(keys), group.spaceID, group.datasetID, restored.GetRetInfo().GetMsg())), Keys: keys}, nil
+			}
+		}
 		rsp, err := node.UpsertFields(ctx, &pb.UpsertFieldsReq{AuthInfo: auth, Rows: rows, SourceEventId: req.GetSourceEventId(), WriteSource: req.GetWriteSource()})
 		if err != nil {
 			s.observeTimeSeriesRows(ctx, rows, "error", false, false)

@@ -279,6 +279,22 @@ func (s *Service) DeleteDatasetRows(ctx context.Context, req *pb.DeleteDatasetRo
 	return &pb.DeleteDatasetRowsRsp{RetInfo: retinfo.Success("success"), DeletedRanges: deleted}, nil
 }
 
+func (s *Service) RestoreDatasetRows(ctx context.Context, req *pb.RestoreDatasetRowsReq) (*pb.RestoreDatasetRowsRsp, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" {
+		return &pb.RestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
+		return &pb.RestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.RestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if err := s.store.RestoreDatasetRows(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
+		return &pb.RestoreDatasetRowsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	}
+	return &pb.RestoreDatasetRowsRsp{RetInfo: retinfo.Success("success")}, nil
+}
+
 func (s *Service) validateAuth(auth *pb.AuthInfo) error {
 	if !s.requireAuth {
 		return nil

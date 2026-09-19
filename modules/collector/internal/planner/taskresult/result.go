@@ -433,7 +433,14 @@ func resultName(spaceID, taskID string) string {
 }
 
 func ownedByTask(attributes map[string]string, taskID string) bool {
-	return attributes["owner_module"] == "collector" && attributes["collector_task_id"] == strings.TrimSpace(taskID)
+	if attributes["owner_module"] != "collector" {
+		return false
+	}
+	trimmedTaskID := strings.TrimSpace(taskID)
+	// Older resample results used resample_task_id before all Collector
+	// results were normalized to collector_task_id. Keep that result lineage
+	// verifiable so bootstrap migration and explicit deletion remain safe.
+	return attributes["collector_task_id"] == trimmedTaskID || attributes["resample_task_id"] == trimmedTaskID
 }
 
 func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {

@@ -1062,6 +1062,12 @@ func (a *dataNodeProxyAdapter) DeleteDatasetRows(ctx context.Context, req *pb.De
 	}
 	return a.adminProxy.DeleteDatasetRows(ctx, req)
 }
+func (a *dataNodeProxyAdapter) RestoreDatasetRows(ctx context.Context, req *pb.RestoreDatasetRowsReq) (*pb.RestoreDatasetRowsRsp, error) {
+	if a == nil || a.adminProxy == nil {
+		return nil, errors.New("DataNode dataset admin runtime is unavailable")
+	}
+	return a.adminProxy.RestoreDatasetRows(ctx, req)
+}
 func (a *dataNodeProxyAdapter) AppendCollectorPeriodCompleted(ctx context.Context, req *pb.AppendCollectorPeriodCompletedReq) (*pb.AppendCollectorPeriodCompletedRsp, error) {
 	return a.markerProxy.AppendCollectorPeriodCompleted(ctx, req)
 }

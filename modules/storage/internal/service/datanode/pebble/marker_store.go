@@ -36,6 +36,13 @@ func (s *Store) AppendDatasetMarker(ctx context.Context, raw []byte) (string, er
 	}
 	s.datasetWriteMu.RLock()
 	defer s.datasetWriteMu.RUnlock()
+	deleted, err := s.isDatasetDeleted(message.GetSpaceId(), message.GetSubjectId())
+	if err != nil {
+		return "", err
+	}
+	if deleted {
+		return "", ErrDatasetDeleted
+	}
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
 

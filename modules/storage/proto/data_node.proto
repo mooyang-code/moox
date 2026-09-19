@@ -111,6 +111,17 @@ message DeleteDatasetRowsRsp {
   uint64 deleted_ranges = 2;
 }
 
+message RestoreDatasetRowsReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  string space_id = 3;
+  string dataset_id = 4;
+}
+
+message RestoreDatasetRowsRsp {
+  common.RetInfo ret_info = 1;
+}
+
 message AppendCollectorPeriodCompletedReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
@@ -191,6 +202,7 @@ service DataNodeRuntime {
 // PrimaryStore after a caller has passed dataset/task ownership checks.
 service DataNodeDatasetAdminRuntime {
   rpc DeleteDatasetRows(DeleteDatasetRowsReq) returns (DeleteDatasetRowsRsp);
+  rpc RestoreDatasetRows(RestoreDatasetRowsReq) returns (RestoreDatasetRowsRsp);
 }
 
 // DataNodeMarkerRuntime is kept separate from the legacy DataNodeRuntime

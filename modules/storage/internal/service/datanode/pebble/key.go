@@ -37,6 +37,11 @@ func appendRawPart(dst []byte, value []byte) []byte {
 	return append(dst, 0, 0)
 }
 
+func datasetDeletedKey(spaceID, datasetID string) []byte {
+	key := appendRawPart([]byte(datasetDeletedPrefix), []byte(spaceID))
+	return appendRawPart(key, []byte(datasetID))
+}
+
 func rowParts(key *pb.RowKey, bucketDuration time.Duration) (kind byte, parts [][]byte, err error) {
 	if key == nil || key.GetSpaceId() == "" || key.GetDatasetId() == "" {
 		return 0, nil, invalid("row key space_id and dataset_id are required")

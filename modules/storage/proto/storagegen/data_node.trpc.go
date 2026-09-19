@@ -207,6 +207,8 @@ func RegisterDataNodeRuntimeService(s server.Service, svr DataNodeRuntimeService
 // DataNodeDatasetAdminRuntimeService defines service.
 type DataNodeDatasetAdminRuntimeService interface {
 	DeleteDatasetRows(ctx context.Context, req *DeleteDatasetRowsReq) (*DeleteDatasetRowsRsp, error)
+
+	RestoreDatasetRows(ctx context.Context, req *RestoreDatasetRowsReq) (*RestoreDatasetRowsRsp, error)
 }
 
 func DataNodeDatasetAdminRuntimeService_DeleteDatasetRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -227,6 +229,24 @@ func DataNodeDatasetAdminRuntimeService_DeleteDatasetRows_Handler(svr interface{
 	return rsp, nil
 }
 
+func DataNodeDatasetAdminRuntimeService_RestoreDatasetRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RestoreDatasetRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodeDatasetAdminRuntimeService).RestoreDatasetRows(ctx, reqbody.(*RestoreDatasetRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // DataNodeDatasetAdminRuntimeServer_ServiceDesc descriptor for server.RegisterService.
 var DataNodeDatasetAdminRuntimeServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.DataNodeDatasetAdminRuntime",
@@ -235,6 +255,10 @@ var DataNodeDatasetAdminRuntimeServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.DataNodeDatasetAdminRuntime/DeleteDatasetRows",
 			Func: DataNodeDatasetAdminRuntimeService_DeleteDatasetRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataNodeDatasetAdminRuntime/RestoreDatasetRows",
+			Func: DataNodeDatasetAdminRuntimeService_RestoreDatasetRows_Handler,
 		},
 	},
 }
@@ -458,6 +482,9 @@ type UnimplementedDataNodeDatasetAdminRuntime struct{}
 func (s *UnimplementedDataNodeDatasetAdminRuntime) DeleteDatasetRows(ctx context.Context, req *DeleteDatasetRowsReq) (*DeleteDatasetRowsRsp, error) {
 	return nil, errors.New("rpc DeleteDatasetRows of service DataNodeDatasetAdminRuntime is not implemented")
 }
+func (s *UnimplementedDataNodeDatasetAdminRuntime) RestoreDatasetRows(ctx context.Context, req *RestoreDatasetRowsReq) (*RestoreDatasetRowsRsp, error) {
+	return nil, errors.New("rpc RestoreDatasetRows of service DataNodeDatasetAdminRuntime is not implemented")
+}
 
 type UnimplementedDataNodeMarkerRuntime struct{}
 
@@ -659,6 +686,8 @@ func (c *DataNodeRuntimeClientProxyImpl) CleanupExpiredBuckets(ctx context.Conte
 // DataNodeDatasetAdminRuntimeClientProxy defines service client proxy
 type DataNodeDatasetAdminRuntimeClientProxy interface {
 	DeleteDatasetRows(ctx context.Context, req *DeleteDatasetRowsReq, opts ...client.Option) (rsp *DeleteDatasetRowsRsp, err error)
+
+	RestoreDatasetRows(ctx context.Context, req *RestoreDatasetRowsReq, opts ...client.Option) (rsp *RestoreDatasetRowsRsp, err error)
 }
 
 type DataNodeDatasetAdminRuntimeClientProxyImpl struct {
@@ -684,6 +713,26 @@ func (c *DataNodeDatasetAdminRuntimeClientProxyImpl) DeleteDatasetRows(ctx conte
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &DeleteDatasetRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodeDatasetAdminRuntimeClientProxyImpl) RestoreDatasetRows(ctx context.Context, req *RestoreDatasetRowsReq, opts ...client.Option) (*RestoreDatasetRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeDatasetAdminRuntime/RestoreDatasetRows")
+	msg.WithCalleeServiceName(DataNodeDatasetAdminRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodeDatasetAdminRuntime")
+	msg.WithCalleeMethod("RestoreDatasetRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RestoreDatasetRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

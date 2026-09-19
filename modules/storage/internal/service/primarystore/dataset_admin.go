@@ -12,6 +12,7 @@ import (
 
 type datasetAdminDataNodeClient interface {
 	DeleteDatasetRows(context.Context, *pb.DeleteDatasetRowsReq) (*pb.DeleteDatasetRowsRsp, error)
+	RestoreDatasetRows(context.Context, *pb.RestoreDatasetRowsReq) (*pb.RestoreDatasetRowsRsp, error)
 }
 
 // DeleteDatasetRows removes the physical rows before Metadata deletes the
@@ -32,7 +33,7 @@ func (s *Service) DeleteDatasetRows(ctx context.Context, req *pb.PrimaryDeleteDa
 		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, errors.New("dataset not found"))}, nil
 	}
 	attrs := dataset.GetAttributes()
-	if strings.TrimSpace(attrs["owner_module"]) != "collector" || strings.TrimSpace(attrs["collector_task_id"]) == "" {
+	if strings.TrimSpace(attrs["owner_module"]) != "collector" || (strings.TrimSpace(attrs["collector_task_id"]) == "" && strings.TrimSpace(attrs["resample_task_id"]) == "") {
 		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("dataset is not a Collector task result"))}, nil
 	}
 	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetDatasetId(), "collector"); err != nil {

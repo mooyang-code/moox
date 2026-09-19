@@ -3,11 +3,15 @@ package pebble
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
 	cpebble "github.com/cockroachdb/pebble"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"google.golang.org/protobuf/proto"
 )
 
 // CleanupExpiredBuckets deletes only time-series field/attribute keys older
@@ -245,13 +249,187 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 	if err := batch.Delete(historyMaterializedMarker(spaceID, datasetID), s.writeOptions); err != nil {
 		return 0, err
 	}
+	deletedOutbox, err := s.stageDatasetAuxiliaryCleanup(batch, spaceID, datasetID)
+	if err != nil {
+		return 0, err
+	}
+	// Keep a persistent tombstone in the same atomic batch as the physical
+	// cleanup. A writer that was already admitted before this lock was taken
+	// can no longer publish after the delete commits.
+	if err := batch.Set(datasetDeletedKey(spaceID, datasetID), []byte("1"), s.writeOptions); err != nil {
+		return 0, err
+	}
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return 0, err
 	}
 	for _, bounds := range ranges {
 		s.compactAsync(bounds[0], bounds[1])
 	}
+	if deletedOutbox > 0 {
+		s.noteOutboxDeleted(deletedOutbox)
+	}
 	return uint64(len(ranges) + 1), nil
+}
+
+// stageDatasetAuxiliaryCleanup removes state that is not part of the normal
+// row prefixes. These records are part of the result's physical ownership:
+// replay receipts, marker records/indexes, and pending relay messages must not
+// survive a task result deletion.
+func (s *Store) stageDatasetAuxiliaryCleanup(batch *cpebble.Batch, spaceID, datasetID string) (int, error) {
+	matchingOutbox := make(map[string]struct{})
+	sequenceDataset := make(map[uint64]bool)
+	outboxIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(outboxPrefix), UpperBound: nextPrefix([]byte(outboxPrefix))})
+	if err != nil {
+		return 0, err
+	}
+	for valid := outboxIter.First(); valid; valid = outboxIter.Next() {
+		id, parseErr := strconv.ParseUint(strings.TrimPrefix(string(outboxIter.Key()), outboxPrefix), 10, 64)
+		if parseErr != nil {
+			continue
+		}
+		message := &eventpb.EventMessage{}
+		if proto.Unmarshal(outboxIter.Value(), message) != nil {
+			continue
+		}
+		belongs := message.GetSpaceId() == spaceID && message.GetSubjectId() == datasetID
+		sequenceDataset[id] = belongs
+		if belongs {
+			key := append([]byte(nil), outboxIter.Key()...)
+			if err := batch.Delete(key, s.writeOptions); err != nil {
+				_ = outboxIter.Close()
+				return 0, err
+			}
+			matchingOutbox[string(key)] = struct{}{}
+		}
+	}
+	if iterErr := outboxIter.Error(); iterErr != nil {
+		_ = outboxIter.Close()
+		return 0, iterErr
+	}
+	if err := outboxIter.Close(); err != nil {
+		return 0, err
+	}
+
+	receiptIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(writeReceiptPrefix), UpperBound: nextPrefix([]byte(writeReceiptPrefix))})
+	if err != nil {
+		return 0, err
+	}
+	for valid := receiptIter.First(); valid; valid = receiptIter.Next() {
+		stored := persistedReceipt{}
+		if json.Unmarshal(receiptIter.Value(), &stored) != nil {
+			continue
+		}
+		belongs := stored.SpaceID == spaceID && stored.DatasetID == datasetID
+		if stored.SpaceID == "" && stored.DatasetID == "" {
+			belongs = sequenceDataset[stored.Sequence]
+		}
+		if !belongs {
+			continue
+		}
+		commitID := strings.TrimPrefix(string(receiptIter.Key()), writeReceiptPrefix)
+		if err := batch.Delete(receiptIter.Key(), s.writeOptions); err != nil {
+			_ = receiptIter.Close()
+			return 0, err
+		}
+		if err := batch.Delete([]byte(writeReceiptBodyPref+commitID), s.writeOptions); err != nil {
+			_ = receiptIter.Close()
+			return 0, err
+		}
+	}
+	if iterErr := receiptIter.Error(); iterErr != nil {
+		_ = receiptIter.Close()
+		return 0, iterErr
+	}
+	if err := receiptIter.Close(); err != nil {
+		return 0, err
+	}
+
+	markerKeys := make(map[string]struct{})
+	markerIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(markerRecordPrefix), UpperBound: nextPrefix([]byte(markerRecordPrefix))})
+	if err != nil {
+		return 0, err
+	}
+	for valid := markerIter.First(); valid; valid = markerIter.Next() {
+		message := &eventpb.EventMessage{}
+		if proto.Unmarshal(markerIter.Value(), message) != nil || message.GetSpaceId() != spaceID || message.GetSubjectId() != datasetID {
+			continue
+		}
+		key := append([]byte(nil), markerIter.Key()...)
+		markerKeys[string(key)] = struct{}{}
+		if err := batch.Delete(key, s.writeOptions); err != nil {
+			_ = markerIter.Close()
+			return 0, err
+		}
+	}
+	if iterErr := markerIter.Error(); iterErr != nil {
+		_ = markerIter.Close()
+		return 0, iterErr
+	}
+	if err := markerIter.Close(); err != nil {
+		return 0, err
+	}
+	if len(markerKeys) > 0 {
+		factorIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(factorMarkerPrefix), UpperBound: nextPrefix([]byte(factorMarkerPrefix))})
+		if err != nil {
+			return 0, err
+		}
+		for valid := factorIter.First(); valid; valid = factorIter.Next() {
+			if _, ok := markerKeys[string(factorIter.Value())]; !ok {
+				continue
+			}
+			if err := batch.Delete(factorIter.Key(), s.writeOptions); err != nil {
+				_ = factorIter.Close()
+				return 0, err
+			}
+		}
+		if iterErr := factorIter.Error(); iterErr != nil {
+			_ = factorIter.Close()
+			return 0, iterErr
+		}
+		if err := factorIter.Close(); err != nil {
+			return 0, err
+		}
+	}
+	return len(matchingOutbox), nil
+}
+
+// RestoreDatasetRows clears the deletion tombstone when a new task recreates
+// the deterministic result Dataset ID. It intentionally does not restore any
+// old rows; callers must create the metadata object first and then write new
+// data through the PrimaryStore.
+func (s *Store) RestoreDatasetRows(ctx context.Context, spaceID, datasetID string) error {
+	if s == nil || s.db == nil {
+		return errors.New("pebble store is closed")
+	}
+	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
+		return invalid("space_id and dataset_id are required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.historyBackfillMu.Lock()
+	defer s.historyBackfillMu.Unlock()
+	s.datasetWriteMu.Lock()
+	defer s.datasetWriteMu.Unlock()
+	s.outboxMu.Lock()
+	defer s.outboxMu.Unlock()
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	if err := batch.Delete(datasetDeletedKey(spaceID, datasetID), s.writeOptions); err != nil {
+		return err
+	}
+	return batch.Commit(s.writeOptions)
+}
+
+func (s *Store) isDatasetDeleted(spaceID, datasetID string) (bool, error) {
+	value, closer, err := s.db.Get(datasetDeletedKey(spaceID, datasetID))
+	if errors.Is(err, cpebble.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return len(value) > 0, closer.Close()
 }
 
 func decodePhysicalParts(data []byte) ([]string, bool) {

@@ -32,6 +32,8 @@ type WritePosition struct {
 
 type WriteReceipt struct {
 	CommitID   string
+	SpaceID    string
+	DatasetID  string
 	Position   WritePosition
 	InputReady bool
 	WriteKind  string
@@ -53,6 +55,8 @@ type FactorPatch struct {
 
 type persistedReceipt struct {
 	CommitID   string `json:"commit_id"`
+	SpaceID    string `json:"space_id,omitempty"`
+	DatasetID  string `json:"dataset_id,omitempty"`
 	NodeID     string `json:"node_id"`
 	StoreID    string `json:"store_id"`
 	Sequence   uint64 `json:"sequence"`
@@ -108,7 +112,7 @@ func (s *Store) CommitInput(ctx context.Context, in InputCommit) (*WriteReceipt,
 			return errors.New("input commit requires one outbox position")
 		}
 		receipt = &WriteReceipt{
-			CommitID:   in.CommitID,
+			CommitID: in.CommitID, SpaceID: normalized[0].GetKey().GetSpaceId(), DatasetID: normalized[0].GetKey().GetDatasetId(),
 			Position:   WritePosition{NodeID: s.nodeID, StoreID: s.sourceStoreID, Sequence: entries[0].ID},
 			InputReady: true,
 			WriteKind:  WriteKindInputCommit,
@@ -174,7 +178,7 @@ func (s *Store) PatchFactor(ctx context.Context, in FactorPatch) (*WriteReceipt,
 			return errors.New("factor patch requires one outbox position")
 		}
 		receipt = &WriteReceipt{
-			CommitID:   in.CommitID,
+			CommitID: in.CommitID, SpaceID: normalized[0].GetKey().GetSpaceId(), DatasetID: normalized[0].GetKey().GetDatasetId(),
 			Position:   WritePosition{NodeID: s.nodeID, StoreID: s.sourceStoreID, Sequence: entries[0].ID},
 			InputReady: false,
 			WriteKind:  WriteKindFactorPatch,
@@ -232,6 +236,8 @@ func (s *Store) loadReceiptLocked(commitID string) (*WriteReceipt, []byte, error
 	_ = closer.Close()
 	return &WriteReceipt{
 		CommitID:   stored.CommitID,
+		SpaceID:    stored.SpaceID,
+		DatasetID:  stored.DatasetID,
 		Position:   WritePosition{NodeID: stored.NodeID, StoreID: stored.StoreID, Sequence: stored.Sequence},
 		InputReady: stored.InputReady,
 		WriteKind:  stored.WriteKind,
@@ -240,7 +246,7 @@ func (s *Store) loadReceiptLocked(commitID string) (*WriteReceipt, []byte, error
 
 func persistReceipt(batch *cpebble.Batch, opts *cpebble.WriteOptions, receipt *WriteReceipt, fingerprint []byte) error {
 	payload, err := json.Marshal(persistedReceipt{
-		CommitID: receipt.CommitID, NodeID: receipt.Position.NodeID, StoreID: receipt.Position.StoreID,
+		CommitID: receipt.CommitID, SpaceID: receipt.SpaceID, DatasetID: receipt.DatasetID, NodeID: receipt.Position.NodeID, StoreID: receipt.Position.StoreID,
 		Sequence: receipt.Position.Sequence, InputReady: receipt.InputReady, WriteKind: receipt.WriteKind,
 	})
 	if err != nil {
